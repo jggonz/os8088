@@ -18,7 +18,7 @@ left the icon, so an extension a package DECLARES (54.6) resolved to an app
 slot whose `assoc_glyph` was still the unresolved sentinel - and
 `assoc_compose` draws that as the BARE PAGE. On the shipped apps disk the
 programs are in `APPS/` and their documents are in `MEDIA/` (19.2), so
-`DEMO.HTM`, `GUIDE.TEX` and `PAPER.TEX` drew blank pages until `APPS/` had
+`BROWSER.HTM`, `GUIDE.TEX` and `PAPER.TEX` drew blank pages until `APPS/` had
 been browsed and the harvest had read `BROWSER.O88` and `TEXPAD.O88`.
 
 `MOD` never showed it: Tracker is one of the four whose glyph os88mini.py
@@ -102,7 +102,7 @@ MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/apps360.img"
 S = os88sym.linear
-NAPP = 12                       # ASSOC_NAPP
+NAPP = 16                       # ASSOC_NAPP
 DECLARED = ("BROWSER", "TEXPAD")
 PARK = (320, 190)               # the pointer is DRAWN, over the window like
                                 # anything else - it only has to be in the

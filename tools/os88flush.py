@@ -117,6 +117,14 @@ class Entry(object):
         return "<Entry %s %s %d>" % (self.path, "dir" if self.is_dir else "file", self.size)
 
 
+def numbered(name, n):
+    """NAME.EXT -> its n'th numbered save, cut to 8.3 the way benchlib's
+    bl_numname cuts it: VIDDISK.TXT, 10 -> VIDDIS10.TXT."""
+    base, dot, ext = name.partition(".")
+    digits = str(n)
+    return base[:8 - len(digits)] + digits + dot + ext
+
+
 class Volume(object):
     """A FAT12/FAT16 volume, read on the HOST out of a flat sector image.
 
@@ -254,6 +262,34 @@ class Volume(object):
     def names(self, path=""):
         """Just the paths, for an `assert 'NOTES.TXT' in ...`."""
         return [e.path for e in self.walk(path)]
+
+    def latest(self, path):
+        """The newest of a NUMBERED report's saves, or None.
+
+        A bench built with BL_NUMBERED (tests/benchlib.inc) writes NAME.EXT as
+        NAME1.EXT, NAME2.EXT ... - the first not on the disk - so a field run
+        of several passes needs no renaming between them. This answers the
+        highest-numbered one, and the plain name when there is none, so a test
+        reads the report it just made whichever way the bench was built.
+        """
+        parts = [p for p in path.replace("\\", "/").split("/") if p]
+        folder = "/".join(parts[:-1])
+        have = {e.name.upper() for e in self.listdir(folder) if not e.is_dir}
+        best = parts[-1].upper() if parts[-1].upper() in have else None
+        for n in range(1, 100):
+            if numbered(parts[-1], n).upper() in have:
+                best = numbered(parts[-1], n)
+        if best is None:
+            return None
+        return "/".join(parts[:-1] + [best])
+
+    def read_latest(self, path):
+        """read() of latest(path) - raises naming the plain name if none."""
+        got = self.latest(path)
+        if got is None:
+            raise FlushError("%s: no file '%s' (nor a numbered save of it)"
+                             % (self.name, path))
+        return self.read(got)
 
     def read(self, path):
         """A file's exact bytes, truncated to the size in its directory entry.
@@ -450,6 +486,34 @@ class Flush(object):
                 os.unlink(tmp)
             except OSError:
                 pass
+
+
+def vhd_volume(path, part=0):
+    """Partition PART of a fixed-disk image (a flat VHD, footer and all), as a
+    Volume - the hard-disk twin of `Flush.volume`, which reads floppies.
+
+    Read it AFTER the instance is closed: MartyPC writes the image in place,
+    and a read taken while it runs can see a FAT that is still in flight.
+    """
+    with open(path, "rb") as f:
+        img = f.read()
+    if img[:2] == b"\xDA\xBE":
+        # A SEAGATE ST11 layout (tools/os88hdd.py --st11): the card's
+        # parameter record - DA BE, cylinders big-endian, heads, sectors -
+        # is in physical cylinder 0, which it hides, so the BIOS's sector 0
+        # (the MBR, and what every partition LBA counts from) is cylinder 1
+        _, heads, spt = struct.unpack_from(">HBB", img, 2)
+        if not heads or not spt:
+            raise FlushError("%s: an ST11 record with %d heads and %d "
+                             "sectors" % (path, heads, spt))
+        img = img[heads * spt * SECTOR:]
+    if len(img) < SECTOR or img[510:512] != b"\x55\xaa":
+        raise FlushError("%s: no partition table" % path)
+    ent = 446 + part * 16
+    lba = struct.unpack_from("<I", img, ent + 8)[0]
+    if not img[ent + 4] or not lba:
+        raise FlushError("%s: partition %d is empty" % (path, part))
+    return Volume(img[lba * SECTOR:], "%s partition %d" % (path, part))
 
 
 def _fmt_entry(e):

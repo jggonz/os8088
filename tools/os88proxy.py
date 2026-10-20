@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A reformatting HTTP proxy for the os8088 browser (docs/PROXY-PLAN.md).
+"""A reformatting HTTP proxy for the os8088 browser (docs/plans/completed/PROXY-PLAN.md).
 
 It runs on the OWNER'S machine - Windows, macOS or Linux, python3 and the
 standard library and nothing else - terminates TLS, and hands os8088 a page
@@ -35,7 +35,8 @@ a package manager is one that stops working on the machine it was installed on.
   python3 tools/os88proxy.py --render URL        # what os8088 would receive
   python3 tools/os88proxy.py --cost URL          # ...and what it costs to draw
 
-On os8088: Browser > Open Location, type `<host>:8088` and press Return.
+On os8088: in the Browser, File > Open Location..., type `<host>:8088` and
+press Return.
 """
 import argparse
 import base64
@@ -2949,9 +2950,9 @@ class Proxy(object):
         # links on one line, one of them the word `Reddit` - and the field
         # pressed the one that reads like the sign-in and got the front page,
         # which while logged out is a login wall that renders as nothing. The
-        # guest's hit-test is not at fault: `br_hitofs` maps the column
-        # through `br_lmap`, which the PAINTER fills, so a click lands on the
-        # link it is over. The label was the fault.
+        # guest's hit-test is not at fault: `br_hitofs` re-runs the PAINTER's
+        # own line walk (`br_build`) to the clicked cell, so a click lands on
+        # the link it is over. The label was the fault.
 
         stat = ("%d pages served, %s in, %s out, up %s"
                 % (self.served, human(self.bytes_in), human(self.bytes_out),
@@ -4174,7 +4175,7 @@ def serve(opts):
     httpd.proxy = proxy
     where = opts.advertise or guess_address()
     say("os88proxy %s serving on %s:%d" % (VERSION, opts.bind, opts.port))
-    say("on os8088:  Browser > Open Location  ->  %s:%d" % (where, opts.port))
+    say("on os8088:  Browser, File > Open Location...  ->  %s:%d" % (where, opts.port))
     say("page budget %d bytes, %d columns, first-class: %s"
         % (opts.budget, opts.cols, ", ".join(s.name for s in SITES)))
     if os.name == "nt":

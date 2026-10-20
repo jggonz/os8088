@@ -1,0 +1,27 @@
+--- a/crates/marty_core/src/devices/fdc/controller.rs
++++ b/crates/marty_core/src/devices/fdc/controller.rs
+@@ -1457,8 +1457,23 @@
+         self.log_cmd(Command::CalibrateDrive, "command_calibrate_drive", &log_str);
+ 
+         // Set up Calibrate operation
++        //
++        // os8088: ONE interrupt, at completion - which is what a 765 raises
++        // for a RECALIBRATE and what operation_seek already sends. Upstream
++        // raised a second one HERE, at command time, so every recalibrate
++        // cost the guest two IRQ6s against the BIOS's one WAIT_INT. The spare
++        // one leaves the BDA's working-interrupt flag (0040:003E bit 7) SET,
++        // so the NEXT int 13h's wait returns at once and the BIOS polls the
++        // result phase while the transfer is still running: its 5-tick RQM
++        // timeout then answers 80h for any transfer that takes longer, which
++        // is every multi-sector read that waits most of a revolution for its
++        // first sector. A reset clears the calibrated bits, so the retry
++        // recalibrates and is poisoned again - three strikes, every time,
++        // under GLaBIOS. The IBM 27 OCT 82 ROM sees the same stale flag and
++        // survives it (it seeks first, and its result wait outlasts a
++        // revolution), so there it is silent - the accounting is still one
++        // interrupt out of step, which is not a machine anyone owns.
+         self.op_charge(seek_us, true);
+-        self.send_interrupt = true;
+         self.operation = Operation::Calibrate;
+         self.last_command = Command::CalibrateDrive;
+         Continuation::ContinueAsOperation

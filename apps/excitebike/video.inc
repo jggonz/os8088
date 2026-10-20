@@ -1,0 +1,696 @@
+; Fullscreen bracket, loading screen, adapter art and the Wave 1 placeholder
+; scene (SPEC.md 102.1, 102.2).  VGA runs FSXM_VGA0D (320x200x16 planar,
+; 8 pixels a byte a plane); CGA runs FSXM_CGA320.  One 40x25 tile layout on
+; both.  Nothing here writes a pixel twice in a frame loop - the placeholder is
+; drawn once, each tile a run of byte moves, each plane once (the game's scroll
+; engine replaces this in Wave 2).
+;
+; Cycle notes (8088, 4.77 MHz): a VGA tile is 4 planes x 8 `movsb` + `add` +
+; `loop` = ~1,250 clk, the whole 960-tile grid ~1.2M clk (0.25 s, once); a CGA
+; tile is 4 x (`movsw`,`lodsw`,store,`add`) = ~330 clk.  The art part's LZ4
+; expansion is ~40 clk a byte: 13 KB is 0.1 s at load, never in a frame.
+
+; -----------------------------------------------------------------------------
+; xb_launch - the desktop side of Enter / Alt+Enter / a click on START
+; -----------------------------------------------------------------------------
+xb_launch:
+    cmp byte [xb_frontplay], 0
+    je .out
+    mov byte [xb_error], XB_ERR_NONE
+    mov byte [xb_nomem], 0
+    mov bx, [xb_win]
+    xor ax, ax
+    call OSAPI_WM_TIMER
+    mov bx, [xb_win]
+    mov ax, xb_fullscreen
+    mov cx, FSXF_FASTTICK
+    call OSAPI_FSX_RUN
+    ; Back on the desktop the kernel repaints every window whole.  The splash
+    ; claim never left, so that repaint is memory-to-glass and the heap is
+    ; exactly where it was before the visit.
+    mov bx, [xb_win]
+    mov ax, 1
+    call OSAPI_WM_TIMER
+.out: ret
+
+; -----------------------------------------------------------------------------
+; xb_fullscreen - the bracket proc.  DS = CS = our segment, ES = KERNEL_SEG.
+; -----------------------------------------------------------------------------
+xb_fullscreen:
+    cld
+    OS88_ALTENTER_SEED
+    ; Let the chord that got us here release before a BIOS video mode call can
+    ; mask its break.  The wait is the bracket's, never the scheduler's.
+.release:
+    mov al, KSC_ENTER
+    call OSAPI_KEY_DOWN
+    jnc .mode
+    mov al, FSXW_FRAME
+    call OSAPI_FSX_WAIT
+    jmp .release
+.mode:
+    mov bx, [xb_win]
+    call OSAPI_FSX_CAPS
+    mov byte [xb_cga], 0
+    mov byte [xb_herc], 0
+    mov word [xb_wcols], XB_COLS
+    mov word [xb_xlo], XB_EDGE      ; a bike shows from 22 pixels off the left edge to 22 off the right:
+    mov word [xb_xspan], XB_COLS * 8 + XB_EDGE - 1   ; the clipping blitters draw the part that is on (SPEC.md 102.7.4)
+    mov word [xa_ahead], XA_AHEAD
+    mov word [xb_xoff], 0
+    mov al, FSXM_VGA0D
+    cmp dl, VID_VGA
+    je .set
+    inc byte [xb_cga]
+    mov al, FSXM_CGA320
+    cmp dl, VID_HERC
+    jne .set
+    inc byte [xb_herc]                      ; Hercules: the CGA back end's shape at two card pixels a
+    mov al, FSXM_HERC                       ; game pixel (SPEC.md 102.7); 45 columns of 16 pixels
+    mov word [xb_wcols], XH_COLS
+    mov word [xb_xspan], XH_COLS * 8 + XB_EDGE - 1
+    mov word [xa_ahead], XA_AHEAD + (XH_COLS - XB_COLS) * 8
+    mov word [xb_xoff], 4                   ; the 40-cell menus sit two cells in from the left
+.set:
+    push ds
+    pop es
+    mov di, xb_fsi
+    call OSAPI_FSX_MODE
+    jc xb_fsmodefail
+    mov byte [xb_fs], 1
+    mov byte [xb_gshift], 3
+    mov word [xb_cell], 1
+    cmp byte [xb_cga], 0
+    je .shifted
+    mov byte [xb_gshift], 4
+    mov word [xb_cell], 2
+.shifted:
+    cmp byte [xb_herc], 0
+    je .cleared
+    call xh_crtc                    ; show 200 lines, not 348 (herc.inc)
+.cleared:
+    call xb_screen_clear
+    call xb_loading                ; resident bitmap: up before the first disk read
+    call xb_gfx_load
+    jc xb_fsassetfail
+    call xb_font_copy
+    call xb_race_open              ; back end: dictionaries, sprites (CF: refused)
+    jc xb_fsassetfail
+    call xb_gfx_free               ; ...and nothing reads the art part after it (xb_font_copy)
+    call xu_start                  ; the sound: FM claim or the speaker (audio.inc)
+    cmp byte [xb_noflow], 0
+    jne .raw
+    call xb_game                   ; the menus and the races (flow.inc)
+    call xb_race_close
+    jmp xb_fsdone
+.raw:
+    mov al, [xb_track]             ; the harness's raw loop: the course, then the race
+    call xb_track_load             ; the course: sets the theme
+    jc .rawfail
+    call xb_palette
+    call xb_race_begin
+    call xu_race_begin
+    call xb_race                   ; the scroll test track, until Esc / Alt+Enter
+    call xb_race_close
+    jmp xb_fsdone
+.rawfail:
+    call xb_race_close
+    jmp xb_fsassetfail
+xb_fsmodefail:
+    mov byte [xb_error], XB_ERR_MODE
+    ret
+xb_fsassetfail:
+    mov byte [xb_error], XB_ERR_FILES
+    cmp byte [xb_nomem], 0          ; a refused CLAIM is a machine with too little memory, not a missing
+    je xb_fsdone                    ; file: the two get different sentences (SPEC.md 102.8.3)
+    mov byte [xb_error], XB_ERR_MEM
+xb_fsdone:
+    call xu_close
+    call xb_spr_free
+    call xb_gfx_free
+    mov bx, xb_tseg                 ; the harness's claim, if a harness made one (game.inc)
+    call xb_freeseg
+    mov byte [xb_fs], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; the screen, cleared once: 4 planes of 8,000 bytes (VGA) or both CGA banks
+; -----------------------------------------------------------------------------
+xb_screen_clear:
+    SAVE
+    mov es, [xb_fsi+FSI_SEG]
+    xor di, di
+    xor ax, ax
+    mov cx, 8192                    ; CGA: 16 KB
+    cmp byte [xb_herc], 0
+    je .notherc
+    mov cx, 16384                   ; Hercules: 32 KB, four banks
+    jmp .clear
+.notherc:
+    cmp byte [xb_cga], 0
+    jne .clear
+    mov dx, 3c4h
+    mov ax, 0f02h                   ; map mask: all four planes
+    out dx, ax
+    xor ax, ax
+    mov cx, 4000                    ; 8,000 bytes a plane
+.clear:
+    rep stosw
+    RESTORE
+    ret
+
+; -----------------------------------------------------------------------------
+; the loading screen: two centred lines from glyph rows compiled into the
+; package (exbtables.inc), so it needs no file and no claim
+; -----------------------------------------------------------------------------
+xb_loading:
+    mov si, exb_ld_0
+    mov al, 10
+    call xb_ld_line
+    mov si, exb_ld_1
+    mov al, 12
+    call xb_ld_line
+    ret
+
+; SI = a string of glyph indices ending 255 (254 = a blank cell), AL = tile row
+xb_ld_line:
+    SAVE
+    mov es, [xb_fsi+FSI_SEG]
+    xor ah, ah
+    mov cx, 320
+    cmp byte [xb_herc], 0
+    je .rowb
+    mov cx, 180                     ; a tile row is two 90-byte rows of four scan lines
+.rowb:
+    mul cx
+    mov di, ax                      ; row * a tile row's bytes
+    xor cx, cx
+    mov bx, si
+.len:
+    cmp byte [bx], 255
+    je .measured
+    inc bx
+    inc cx
+    jmp .len
+.measured:
+    mov ax, 40
+    sub ax, cx
+    shr ax, 1                       ; first column, centred
+    cmp byte [xb_cga], 0
+    je .col
+    shl ax, 1
+.col:
+    add di, ax
+    add di, [xb_xoff]
+.char:
+    lodsb
+    cmp al, 255
+    je .out
+    cmp al, 254
+    je .blank
+    xor ah, ah
+    push si
+    mov cl, 3
+    shl ax, cl
+    add ax, exb_ld_v
+    xchg si, ax
+    cmp byte [xb_cga], 0
+    je .src
+    call xb_ld_wide                 ; CGA and Hercules: the 2-bit cell, made from the 1-bit one
+.src:
+    call xb_glyph
+    pop si
+.blank:
+    add di, [xb_cell]
+    jmp .char
+.out:
+    RESTORE
+    ret
+
+; DS:SI = a 1-bit loading glyph (8 bytes) -> SI = the same glyph at two bits a pixel, ink 3
+; (a set bit is 11, the leftmost in bits 15-14 of a big-endian word: the compiler's
+; cga_font_glyph), in xb_ldglyph - which is what the CGA and the Hercules both draw, so
+; the package carries the 1-bit set alone.  Preserves everything else.
+xb_ld_wide:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, xb_ldglyph
+    mov ch, 8
+.row:
+    lodsb
+    mov cl, 8
+.bit:
+    shl dx, 1
+    shl dx, 1
+    shl al, 1
+    jnc .z
+    or dl, 3
+.z:
+    dec cl
+    jnz .bit
+    xchg dh, dl
+    mov [bx], dx
+    inc bx
+    inc bx
+    dec ch
+    jnz .row
+    mov si, xb_ldglyph
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; one 8x8 glyph, DS:SI -> ES:DI (8 bytes VGA planar-all / 16 bytes CGA 2bpp);
+; DI is left where it was
+xb_glyph:
+    cmp byte [xb_cga], 0
+    jne .cga
+%rep 8
+    movsb
+    add di, 39
+%endrep
+    sub di, 320
+    ret
+.cga:
+    cmp byte [xb_herc], 0           ; (the VGA's path above pays nothing for the Hercules)
+    jne .herc
+%rep 4
+    movsw                           ; the even line
+    lodsw
+    mov [es:di+1ffeh], ax           ; the odd line, in the second bank
+    add di, 78
+%endrep
+    sub di, 320
+    ret
+.herc:
+%rep 2
+    movsw                           ; scan line 0 of the bank row
+    lodsw
+    mov [es:di+1ffeh], ax           ; 1, 2 and 3: the other three banks
+    lodsw
+    mov [es:di+3ffeh], ax
+    lodsw
+    mov [es:di+5ffeh], ax
+    add di, 88
+%endrep
+    sub di, 180
+    ret
+
+; DS:SI = an ASCII string, AL = tile row, AH = tile column.  Lower case folds
+; to upper; the font is the compiled 64 glyphs ASCII 32..95 (xb_font).
+xb_puts:
+    SAVE
+    push ax
+    mov es, [xb_fsi+FSI_SEG]
+    pop ax
+    mov bl, ah
+    xor bh, bh
+    xor ah, ah
+    mov cx, 320
+    cmp byte [xb_herc], 0
+    je .rowb
+    mov cx, 180
+.rowb:
+    mul cx
+    mov di, ax
+    cmp byte [xb_cga], 0
+    je .col
+    shl bx, 1
+.col:
+    add di, bx
+    add di, [xb_xoff]
+.char:
+    lodsb
+    or al, al
+    jz .out
+    cmp al, 'a'
+    jb .fold
+    cmp al, 'z'
+    ja .fold
+    sub al, 32
+.fold:
+    sub al, 32
+    cmp al, 64
+    jb .known
+    xor al, al
+.known:
+    xor ah, ah
+    push si
+    mov cl, [xb_gshift]
+    shl ax, cl
+    add ax, xb_font
+    mov si, ax
+    call xb_glyph
+    pop si
+    add di, [xb_cell]
+    jmp .char
+.out:
+    RESTORE
+    ret
+
+; -----------------------------------------------------------------------------
+; the adapter's game art: its PART of this package (SPEC.md 102.10), read in the
+; bracket under the loading screen, and the record directory out of it
+;
+; The bytes are this package's own file, expanded by the kernel's bounded
+; decoder to exactly the row's length, so the magic, length and checksum the
+; EXB?.GFX FILES carried against a stale or damaged pair have nothing left to
+; catch. A refused CLAIM sets [xb_nomem] (xb_partget), which is what tells
+; `NOT ENOUGH MEMORY` from `CANNOT LOAD THE RACE`.
+; -----------------------------------------------------------------------------
+xb_gfx_load:
+    SAVE
+    mov al, XB_P_GFXV
+    cmp byte [xb_cga], 0
+    je .pick
+    mov al, XB_P_GFXC
+    cmp byte [xb_herc], 0
+    je .pick
+    mov al, XB_P_GFXH
+.pick:
+    call xb_partget
+    jc .bad
+    mov [xb_gfxseg], dx
+    ; the record directory: 10 offsets
+    mov cx, 10
+    mov si, 12
+    mov di, xb_recs
+    push ds
+    pop es                          ; ES = package for the stores
+    push ds
+    mov ds, dx
+.rec:
+    lodsw                           ; offset
+    add si, 2                       ; skip the length word
+    stosw
+    loop .rec
+    pop ds
+    RESTORE
+    clc
+    ret
+.bad:
+    RESTORE
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; xb_partget - claim, read and expand part AL into a claim of its own
+; out: CF=0, DX = the claim, the part's `len` bytes at offset 0, CX = len;
+;      CF=1 = not had - and [xb_nomem] = 1 when it was the CLAIM refused
+; clobbers: AX, BX, CX, DX, SI, DI, ES
+;
+; EVERY ROW IS OP_SELF (SPEC.md 102.10, 20.12.9.1), so this is the standard's
+; op_fetch less what this package does not need - and less its TOAST, which is
+; the reason it is here: the game art is read inside the fsx bracket after the
+; mode is set, where a toast's menu-bar draw is a drawing slot SPEC.md 53.7
+; forbids, and both callers already say what failed in their own words. The
+; arithmetic is op_fetch's to the letter (SPEC.md 20.12.7.4): the read starts
+; on the cluster at or below the part and lands R = roundup512(len - packed)
+; up the claim, so the stream expands DOWN onto the claim's base and the
+; decoder's writer never overtakes its reader, and then the claim is shrunk
+; to the part. op_clbget, op_read and the cursor it keeps are the standard's.
+; -----------------------------------------------------------------------------
+xb_partget:
+    call op_row                     ; SI -> the row, AX kept
+    call op_clbget                  ; [op_clb] = bytes a cluster, asked once
+    jc .no
+    mov ax, [si+OP_R_OFF]
+    mov dx, ax
+    mov cl, 9
+    shl ax, cl
+    mov cl, 7
+    shr dx, cl                      ; DX:AX = the part's byte offset
+    mov bx, [op_clb]
+    dec bx
+    and bx, ax                      ; BX = the head slack (a multiple of 512)
+    sub ax, bx
+    sbb dx, 0
+    mov [op_off], ax
+    mov [op_off+2], dx
+    mov ax, [si+OP_R_ZKB]           ; the PACKED length (OP_COMP | OP_LAZY)
+    add ax, bx
+    mov [op_want], ax               ; ...which must all arrive
+    mov word [op_want+2], 0
+    mov cx, [op_clb]
+    dec cx
+    add ax, cx
+    not cx
+    and ax, cx                      ; the read, in whole clusters
+    mov cl, 4
+    shr ax, cl
+    mov [op_cap], ax                ; ...in paragraphs, as op_read counts
+    xchg ax, di
+    mov ax, [si+OP_R_LEN]
+    sub ax, [si+OP_R_ZKB]
+    add ax, 511
+    and ax, 0FE00h                  ; R: a disk read lands here, so a sector
+    mov cl, 4                       ; multiple (every disk-visible base is
+    shr ax, cl                      ; 512-byte aligned)
+    push ax
+    add ax, di
+    add ax, 63
+    mov cl, 6
+    shr ax, cl                      ; KB: R + the read
+    call OSAPI_MEM_CLAIM            ; DX = the base
+    pop ax
+    jc .nomem
+    add ax, dx
+    mov [op_rdseg], ax              ; the read lands R up the claim
+    push si
+    push bx
+    push dx
+    call op_read                    ; CF=1: not read, or short
+    pop dx
+    pop bx
+    pop si
+    jc .free
+    mov cl, 4
+    shr bx, cl
+    add bx, [op_rdseg]              ; BX = the stream's own segment
+    push si
+    push dx
+    mov cx, [si+OP_R_ZKB]           ; CX = the packed length
+    mov al, [op_table + OP_T_FMT]   ; the format, read before DS moves
+    mov es, dx                      ; ES:DI = the claim's base
+    mov dx, [si+OP_R_LEN]
+    push ds
+    mov ds, bx
+    xor bx, bx                      ; BX:DX = the exact output
+    xor si, si
+    xor di, di
+    call OSAPI_DECOMP
+    pop ds
+    pop dx
+    pop si
+    jc .free
+    mov cx, [si+OP_R_LEN]
+    mov ax, cx
+    add ax, 1023
+    rcr ax, 1
+    push cx
+    mov cl, 9
+    shr ax, cl                      ; KB the part keeps
+    call OSAPI_MEM_REGROW           ; a shrink: in place, DX unchanged
+    pop cx
+    clc
+    ret
+.free:
+    call OSAPI_MEM_FREE
+    jmp short .no
+.nomem:
+    mov byte [xb_nomem], 1
+.no:
+    stc
+    ret
+
+xb_gfx_free:
+    push bx
+    mov bx, xb_gfxseg
+    call xb_freeseg
+    pop bx
+    ret
+
+; BX = the address of a word holding a claim's segment (0 = none): free it, zero the word.
+; Preserves every register.
+xb_freeseg:
+    push dx
+    mov dx, [bx]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [bx], 0
+.out:
+    pop dx
+    ret
+
+; the font record -> xb_font: 64 glyphs, one 8-byte 1-bit row set (VGA) or a
+; 16-byte 2-bit set (CGA), so text is a run of moves with DS = our segment.  The
+; PAL record follows it there (VGA 244 bytes, CGA and Hercules 38), and [xb_pal]
+; is that copy's offset in OUR segment, so the palette, the banner flash and the
+; loaders read it with DS as it is, and the art claim can be handed back once the back end is built
+; (xb_fullscreen): nothing after xb_race_open reads the art part.
+xb_font_copy:
+    SAVE
+    push ds
+    pop es
+    mov di, xb_font
+    mov si, [xb_recs+EXBR_FONT*2]
+    mov cx, 512
+    mov dx, 244
+    cmp byte [xb_cga], 0
+    je .copy
+    mov cx, 1024
+    mov dx, 38
+.copy:
+    mov bx, [xb_recs+EXBR_PAL*2]
+    mov [xb_pal], di
+    add [xb_pal], cx
+    push ds
+    mov ds, [xb_gfxseg]
+    rep movsb
+    mov si, bx
+    mov cx, dx
+    rep movsb
+    pop ds
+    RESTORE
+    ret
+
+; -----------------------------------------------------------------------------
+; palette: VGA - an identity attribute map (pixel n = DAC n) and the current
+; theme's 16 colours; CGA - the intensity/palette register of the profile
+; -----------------------------------------------------------------------------
+xb_palette:
+    SAVE
+    cmp byte [xb_cga], 0
+    jne .cga
+    mov dx, 3dah
+    in al, dx                       ; reset the attribute flip-flop
+    mov dx, 3c0h
+    mov cx, 16
+    xor al, al
+.atc:
+    out dx, al                      ; index n ...
+    out dx, al                      ; ... = n
+    inc al
+    loop .atc
+    mov al, 20h                     ; palette address source back on the CPU
+    out dx, al
+    mov al, [xb_theme]
+    mov ah, 48
+    mul ah
+    add ax, [xb_pal]
+    mov si, ax
+    mov dx, 3c8h
+    xor al, al
+    out dx, al
+    inc dx
+    mov cx, 48
+.dac:
+    lodsb
+    out dx, al
+    loop .dac
+    mov byte [xb_bfl], 0            ; the DAC is the theme's own again
+    jmp .out
+.cga:
+    cmp byte [xb_herc], 0
+    jne .out                        ; a Hercules has no palette register (and 3D9h may be a colour card's)
+    mov bl, [xb_profile]
+    xor bh, bh
+    add bx, [xb_pal]
+    mov al, [bx+32]                 ; the 3D9h value of the profile
+    mov dx, 3d9h
+    out dx, al
+.out:
+    RESTORE
+    ret
+
+; -----------------------------------------------------------------------------
+; xb_banner - the BANNER FLASH (plan section 4.4: a DAC rewrite, not new art).  While the lap flash or
+; GO! runs, DAC 13 - the blue of the banner plates and pennants (and the arrows) - alternates with the
+; theme's orange (slot 12) every 8 steps, and is the theme's own again when it ends.  VGA only: the
+; CGA and the Hercules have no palette to rewrite (a 3D9h flip would repaint the whole screen).
+; Priced (counted from the code): the quiet frame is `cmp` + `mov` + `or` + `jz` + `cmp` with three memory
+; operands = ~80-100 clk; a change adds six push/pop pairs, a `mul`, three `lodsb` and four `out` = a few
+; hundred clk, plus a wait bounded at 400 reads of 3DAh for a blanking interval (normally under one
+; scan line, ~32 us), so that the DAC write is not made mid-scan-out (clone VGAs sparkle on that).
+; That is ~19 times in a 2.5 s flash.  The colour change itself still lands from the beam's line down,
+; so for one 18 ms frame the plates above it may show the old colour - a strobe, and the point of the effect.
+; -----------------------------------------------------------------------------
+xb_banner:
+    cmp byte [xb_cga], 0
+    jne .out
+    xor bl, bl
+    mov ax, [xb_flash]
+    or ax, ax
+    jz .have
+    test al, 8
+    jz .have
+    inc bl
+.have:
+    cmp bl, [xb_bfl]
+    je .out
+    mov [xb_bfl], bl
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov al, [xb_theme]
+    mov cl, 48
+    mul cl                          ; AX = theme * 48
+    add ax, [xb_pal]
+    add ax, 13 * 3                  ; normal: the theme's slot 13 ...
+    or bl, bl
+    jz .rd
+    sub ax, 3                       ; ... flashed: its slot 12
+.rd:
+    mov si, ax
+    lodsb
+    mov bl, al
+    lodsb
+    mov bh, al
+    lodsb
+    mov cl, al                      ; the three components, so the writes below are back to back
+    mov dx, 3dah
+    push cx
+    mov cx, 400                     ; bounded: wait for a blanking interval (bit 0) - some clone VGAs
+.bl:                                ; sparkle on a DAC write made while they are scanning out
+    in al, dx
+    test al, 1
+    loopz .bl
+    pop cx
+    mov dx, 3c8h
+    mov al, 13
+    out dx, al
+    inc dx
+    mov al, bl
+    out dx, al
+    mov al, bh
+    out dx, al
+    mov al, cl
+    out dx, al
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; C: the next of the five course themes (VGA) or the other CGA profile
+xb_palette_next:
+    cmp byte [xb_cga], 0
+    jne .cga
+    inc byte [xb_theme]
+    cmp byte [xb_theme], 5
+    jb .apply
+    mov byte [xb_theme], 0
+    jmp .apply
+.cga:
+    xor byte [xb_profile], 1
+.apply:
+    jmp xb_palette
+

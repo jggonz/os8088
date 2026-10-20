@@ -48,6 +48,7 @@ carries, and it reproduces the defect on the first chord.
 import argparse
 import os
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -132,44 +133,60 @@ def main(argv):
         base = seg << 4
         A_SEG = base + _moff("pt_segdo")
         A_RECT = base + _moff("pt_rect")
-        m.bp_exec(A_SEG, A_RECT)
-        t0 = m.status()["cycles"]
+
+        # THE WALK, READ AT THE STOPS THEMSELVES. `pt_wx`/`pt_tox` are only
+        # true while the guest is stopped inside pt_segdo, so the read has to
+        # happen there - which is what `on_hit` is for (it runs on the pump's
+        # thread, before the resume, and its answer is filed with the stop it
+        # belongs to).
+        #
+        # It was a hand-rolled pump, and the hazard it carried is worth naming
+        # because the symptom is not "a count is out": a stop reported twice
+        # reads the SAME pt_wx/pt_tox again, appends a chord whose end point is
+        # the previous chord's start, and that chord fails `(ex,ey) != (tox,toy)`
+        # - so the row reports the WALK stepping an axis it never stepped.
+        # An intermittent false FAIL, on a row whose whole subject is ink
+        # landing where the hand did not go. `bp_trace` dedupes on the
+        # server's stop sequence, so one stop is one record.
+        st = {"nr": 0, "cur": None}
+        chords = []
+
+        def at_stop(mm, rec):
+            if rec["addr"] == A_RECT:
+                st["nr"] += 1
+                return None
+            if mm.read(_boff(seg, "pt_noscr"), 1)[0]:
+                return None                 # the deferred canvas replaying
+            here = (_sw(_bss(mm, seg, "pt_wx")), _sw(_bss(mm, seg, "pt_wy")),
+                    _sw(_bss(mm, seg, "pt_tox")), _sw(_bss(mm, seg, "pt_toy")))
+            if st["cur"]:
+                chords.append(st["cur"] + (here[0], here[1], st["nr"]))
+            st["nr"] = 0
+            st["cur"] = here
+            return here
+
         per = REPORT_MS * HZ / 1000.0
-        nxt, end = t0 + per, t0 + per * (REPORTS + 5)
-        sent, nr, cur, chords = 0, 0, None, []
-        m.run()
-        while True:
-            st = m.status()
-            now = st["cycles"]
-            if now >= end:
-                break
-            if st["state"] == "breakpoint":
-                ip = (m.regs()["cs"] << 4) + m.regs()["ip"]
-                if ip == A_SEG:
-                    if m.read(_boff(seg, "pt_noscr"), 1)[0]:
-                        m.run()                 # the deferred canvas replaying
-                        continue                # (42.8.8), not the live walk
-                    here = (_sw(_bss(m, seg, "pt_wx")), _sw(_bss(m, seg, "pt_wy")),
-                            _sw(_bss(m, seg, "pt_tox")), _sw(_bss(m, seg, "pt_toy")))
-                    if cur:
-                        chords.append(cur + (here[0], here[1], nr))
-                    nr = 0
-                    cur = here
-                elif ip == A_RECT:
-                    nr += 1
-                m.run()
-            if now >= nxt and sent < REPORTS:
-                # +/-1 px of wobble on a straight drag: the smallest deviation
-                # a hand can have, so any excursion in the ink is this code's.
-                m.mouse(dx=(1 if (sent & 1) else -1), dy=DY, l=True)
-                sent += 1
-                nxt = now + per
+        with os88marty.bp_trace(m, A_SEG, A_RECT, on_hit=at_stop) as tr:
+            t0 = m.status()["cycles"]
+            nxt, end = t0 + per, t0 + per * (REPORTS + 5)
+            sent = 0
+            while True:
+                now = m.status()["cycles"]
+                if now >= end:
+                    break
+                if now >= nxt and sent < REPORTS:
+                    # +/-1 px of wobble on a straight drag: the smallest
+                    # deviation a hand can have, so any excursion in the ink is
+                    # this code's.
+                    m.mouse(dx=(1 if (sent & 1) else -1), dy=DY, l=True)
+                    sent += 1
+                    nxt = now + per
+                time.sleep(0.002)           # the pump owns the stops; this
+                                            # thread only keeps the schedule
         # `cur` is the chord still being walked when the window closed - its
         # bar counts are a partial tally, not a wrong one. Only a chord CLOSED
         # by the next pt_segdo hit has been counted to the end, so the one in
         # flight is dropped rather than asserted on.
-        m.breakpoints([])
-        m.run()
         mo._edge(False)
         os88marty.settle(m)
 

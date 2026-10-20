@@ -1,0 +1,11 @@
+# The OSAPI_* surface the DOS box's INT 21h core can reach that is NOT a
+# file-system slot, and what docs/plans/KERN-DOS-PLAN.md does about each.
+# tests/unit/t_dosseam.py is the gate; the FILE-SYSTEM half has no registry
+# and is a hard zero (SPEC.md 96.4.1, 96.4.2).
+#
+#   <slot>  <what kern_dos does about it>
+#
+OSAPI_DRV_CALL   the packet driver (SPEC.md 96.23), which KERN-DOS-PLAN 10 does not carry - a future phase may bring a thinner DOS-side one (its 12 question 7)
+OSAPI_MOUSE      INT 33h's packets (SPEC.md 96.16). kern_dos carries kernel/mouse.inc's mouse third and neither its cursor nor its keyboard (KERN-DOS-PLAN 6.1 lever 2)
+OSAPI_MEM_CLAIM  the COPY buffer and the sorted DIR listing, behind DHK_CLAIM (SPEC.md 96.44.6). kern_dos binds NEITHER hook: the program owns everything above the floor, so a zero cell means there is no heap in this host - dsh_bufget takes the arena arm it always took there, and dsh_sbuild takes the refusal exit it already had, which lists a DIR in directory order as real DOS does
+OSAPI_MEM_FREE   the other half of DHK_CLAIM's pair, behind DHK_FREE (SPEC.md 96.44.6). Unreachable for the same reason and by the same zero: only the host that CLAIMED can be asked to free, and [dsh_cpheap] is decided once at the get

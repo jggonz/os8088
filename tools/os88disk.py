@@ -7,6 +7,7 @@
                              --boot BOOTHD.bin --kernel KERNEL.bin [...]
     python3 tools/os88disk.py --verify IMG
     python3 tools/os88disk.py --verify-hdd HDD.img
+    python3 tools/os88disk.py --retarget HDD.img --geometry [C/]H/S -o OUT.img
 
 The image is a canonical DOS FAT floppy (SPEC.md section 19): boot sector
 with a full BPB (OEM "MSDOS5.0", boot signature 0x29, fixed serial
@@ -15,8 +16,10 @@ first entry is the volume label (attr 0x08 -- the kernel filters it, so
 package indices start at 0), then one attr-0x20 entry per package in
 argument order with its exact byte size (never padded -- the loader's
 truncation guard depends on it) and fixed timestamps (date 0x5C21 =
-2026-01-01, time 0). File data is allocated contiguously from cluster 2 in
-argument order; every field is fixed, so rebuilds are byte-identical.
+2026-01-01, time 0). Each file's data is one contiguous chain, laid down in
+argument order and kept off cylinder boundaries it need not cross, with free
+gaps left where that takes them (SPEC.md 19.3.1, `cyl_pack`); every field is
+fixed, so rebuilds are byte-identical.
 Directory display names are the host filenames (8.3, uppercased).
 
 Geometries: 1440 (1.44MB, FAT12), 1200 (1.2MB 5.25" HD, FAT12), 720 (720KB
@@ -72,14 +75,56 @@ drive folder on the RUNCPM disk holds 78 (SPEC.md 71.3).
 """
 import argparse
 import os
+import hashlib
 import struct
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from os88pkg import PKG_FMT       # noqa: E402 - the format byte (SPEC.md 20.2.0)
+
 SECTOR = 512
-MAX_FILES = 32                # kernel listing cap (SPEC.md section 19)
+def _listing_cap():
+    """DSK_NENT, READ OUT OF THE KERNEL rather than restated here.
+
+    It was `MAX_FILES = 32` with a comment pointing at SPEC.md section 19, and
+    that is a MIRROR of a kernel constant in a host tool - the class of bug
+    `tests/unit/t_mirror.py` exists for.  When DSK_NENT doubled, this file went
+    on refusing a 60-file disk the kernel would have listed perfectly well, and
+    the message it refused with named a number that was no longer true.
+
+    Parsed rather than imported, because this tool must keep working on a tree
+    with no assembler: the fallback is the value the kernel shipped with, which
+    is wrong in the SAFE direction (it refuses a disk that would have worked
+    rather than building one the kernel cannot list).
+
+    **AND IT IS PER-KERNEL SINCE SPEC.md 22.6.2** - 64 on kern_big, 32 on
+    kern_small, which has no DOS box to list a DOS directory for.  So the
+    file holds two `DSK_NENT equ` lines behind a `%ifndef KERN_SMALL` and
+    this returns BOTH, kern_big's first, because that is the default every
+    caller wants and `--kern-small` is what selects the other.  Returning
+    the smaller for every disk would refuse a 40-file kern_big folder the
+    kernel lists perfectly well, which is the exact bug the paragraph above
+    is about.
+    """
+    import re as _re
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "..", "kernel", "dskwin.inc")
+    try:
+        with open(src) as f:
+            m = _re.findall(r"^DSK_NENT\s+equ\s+(\d+)", f.read(), _re.M)
+        if m:
+            return int(m[0]), int(m[-1])
+    except OSError:
+        pass
+    return 32, 32
+
+
+MAX_FILES, SMALL_FILES = _listing_cap()   # kernel listing cap, big and small
+                                          # (SPEC.md section 19, 25.8.1)
 VOL_LABEL = b"OS8088APPS "    # 11 bytes, BS_VolLab == root label entry
 SYS_LABEL = b"OS8088SYS  "    # ...and what a --boot/--kernel disk is called
-VOL_ID = 0x88000888           # fixed serial -> deterministic images
+VOL_ID = 0x88000888           # the FALLBACK serial, and the value every
+                              # os8088 volume used to carry. See vol_id().
 FIXED_DATE = 0x5C21           # 2026-01-01 in FAT date encoding
 FIXED_TIME = 0x0000
 NAME_CHARS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
@@ -119,6 +164,31 @@ def fatcap(size, cap):
                 return spc, max(n2, 1)
         spc *= 2
     fail(f"no cluster size brings a {size}KB volume under a {cap}-sector FAT")
+
+
+def spcfat(size, spc):
+    """(spc, fatsz) for `size` at `spc` sectors a cluster - the smallest FAT
+    that covers the cluster count it leaves (SPEC.md 19.3.2).
+
+    `GEOMETRY` stays the IBM table and every recipe that does not ask keeps
+    it. What this is for is the 360KB SYSTEM disk, which takes 512-byte
+    clusters to win back the half-cluster of slack each of its files pays:
+    the FAT grows 2 -> 3 sectors, the data area moves to LBA 14, and IBM DOS
+    3.30 reads the result correctly because it takes SecPerClus and FATSz16
+    from the boot sector (docs/reports/CLUSTER-SIZE-2026-10-17.md). Growing
+    the FAT can only shrink the cluster count, so the first FAT that covers
+    its own clusters is the answer. Past DSK_FAT_SECS (9) is refused, as
+    mount rule 10 would refuse it.
+    """
+    if spc not in (1, 2, 4, 8, 16, 32, 64):
+        fail(f"--spc {spc}: a power of two from 1 to 64 (mount rule 4)")
+    _, _, tot, _, _, root_ent, _ = GEOMETRY[size]
+    for fatsz in range(1, 10):
+        lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
+        if (((lay.nclus + 2) * 3 + 1) // 2 + SECTOR - 1) // SECTOR <= fatsz:
+            return spc, fatsz
+    fail(f"--spc {spc}: a {size}KB volume needs more than a 9-sector FAT, "
+         "which mount rule 10 refuses on a floppy")
 
 
 GEOMETRY = {
@@ -174,16 +244,39 @@ def validate_o88(path: str) -> bytes:
     magic, = struct.unpack_from("<H", data, 0)
     if magic != 0x384F:
         fail(f"{path}: bad magic 0x{magic:04X} (not a .o88 package)")
-    if data[2] != 3:
-        fail(f"{path}: format version {data[2]}; this is the v3 toolchain "
-             "(rebuild the package)")
+    if data[2] != PKG_FMT:
+        fail(f"{path}: format version {data[2]}; this toolchain writes "
+             f"{PKG_FMT} (rebuild the package, SPEC.md 20.2.0)")
     parts = bool(data[3] & 4)          # flags bit 2 (SPEC.md 20.12)
     if len(data) > 0xFFFF and not parts:
         fail(f"{path}: {len(data)} bytes overflows the 16-bit size field")
+    comp = bool(data[3] & 8)           # flags bit 3 (SPEC.md 20.13)
     image = struct.unpack_from("<H", data, 8)[0]
-    if not 32 <= image <= len(data):
+    lo = 32 if comp else max(32, len(data))
+    if not 32 <= image <= (0xFFFF if comp else len(data)):
         fail(f"{path}: header image size {image} out of range")
-    if image != len(data) and not parts:
+    link = struct.unpack_from("<H", data, 4)[0]
+    if comp and parts:
+        # A PARTED PACKAGE WITH A PACKED IMAGE (SPEC.md 20.13.8): the file is
+        # longer than the image (the parts) and the image's own stream is
+        # SHORTER, and the link word is that stream's length - the one place
+        # the kernel can learn it. ld_check_hdr's ladder, host side.
+        if not 32 < link < image or link > len(data):
+            fail(f"{path}: flags bits 2 and 3 with a packed-image length of "
+                 f"{link} - it must lie between the header and the image "
+                 f"({image}) and inside the {len(data)}-byte file")
+    elif link:
+        fail(f"{path}: link word {link:#06x} on a package that is not parted "
+             "and packed - it must be 0 (SPEC.md 20.2)")
+    elif comp:
+        # COMPRESSED: `image` keeps meaning the UNPACKED bytes, so the file is
+        # SHORTER than it by design (SPEC.md 20.13.2) - which is the very case
+        # the truncated-file guard below refuses without the bit.
+        if image <= len(data):
+            fail(f"{path}: flags bit 3 is set but the image ({image}) is not "
+                 f"bigger than the file ({len(data)}) - a compressed package "
+                 "that saved nothing should have been shipped uncompressed")
+    elif image != len(data) and not parts:
         fail(f"{path}: header image size {image} != file size {len(data)}; "
              "a v3 package has no relocation table (run os88pkg.py first)")
     # WITH flags bit 2 the file is longer than the image ON PURPOSE and the
@@ -285,6 +378,11 @@ def fat_get(buf: bytes, fat12: bool, n: int) -> int:
 
 
 KERNEL_NAME = b"KERNEL  SYS"   # the kernel, as a file (SPEC.md 19.3)
+HDBOOT_NAME = b"BOOTHD  SYS"   # ...and the hard-disk boot sector built with
+                               # it, which the installer reads (SPEC.md 52.10.16)
+HMA_NAME    = b"COLDHMA SYS"   # ...and the HMA image cut from it, which
+                               # XMEM.DRV reads (docs/plans/HMA-PLAN.md)
+CFG_NAME    = b"SYSTEM  CFG"   # the Control Panel's settings (SPEC.md 51.5)
 
 # Directory attributes. A system disk hides the things that are the KERNEL's
 # business and nobody else's, from DOS and from os8088's own file manager
@@ -296,28 +394,41 @@ A_HIDDEN = 0x02
 A_SYS    = 0x04
 A_ARCH   = 0x20
 A_SYSTEM = A_RDONLY | A_HIDDEN | A_SYS      # KERNEL.SYS and every *.DRV
-A_LOCKED = A_RDONLY | A_ARCH                # visible, but not yours to delete
+# ...and what the same two classes are on a HARD DISK (--hdd), which is what
+# os8088's own installer writes them as (SPEC.md 52.10.15): OSAPI_FILE_WRITE_SYS
+# creates hidden + system and the commit ORs archive, OSAPI_FILE_WRITE creates
+# archive and nothing else. NEITHER is read-only, and that is not a nicety -
+# see sys_attr.
+A_HDDSYS = A_HIDDEN | A_SYS | A_ARCH
 
 
 ASC_NAME  = b"ASSOC   DAT"   # SPEC.md 54.7: the volume's icon + assoc cache
 ASC_MAGIC = b"OS88AC"
-ASC_VER   = 1
+ASC_VER   = 2                # rows carry the glyph column (SPEC.md 54.3.2);
+                             # the ONLY version the kernel reads - it
+                             # dropped version 1 in kernel size pass 5, so
+                             # any other byte here is a cold cache
 ASC_HDR   = 16
-ASC_ROW   = 80               # stem 8 + size 2 + cluster 2 + 4 rsvd + icon 64
+ASC_ROW   = 88               # stem 8 + size 2 + cluster 2 + 4 rsvd + icon 64
+                             # + document glyph 8
 ASC_ROWICO  = 16             # the icon's offset inside a row
+ASC_ROWGLY  = 80             # ...and the glyph's: the eight bytes the package
+                             # SHIPS (flags bit 5, at 112 in its file), or
+                             # all zero = it ships none and the kernel
+                             # reduces the icon (SPEC.md 54.3)
 ASC_ROWCLUS = 10             # the folder the program lives in (0 = root),
                              # patched in after cluster assignment (SPEC.md
                              # 54.7.1) - it costs the file nothing, the row
                              # having reserved six bytes since it was written
-ASC_NAPP  = 32
-ASC_NEXT  = 24
+ASC_NAPP  = 55               # kernel/assoc.inc: what fits ASC_KB = 5
+ASC_NEXT  = 64
 
 # The kernel's own built-in association stems (kernel/assoc.inc assoc_stem).
 # Mirrored here ONLY to order the rows, so that if the cap ever bites it is an
 # icon row that is lost and never an association. Being out of date costs a
 # cached icon, never correctness - which is why it is a plain list and not a
 # generated one.
-ASC_DEFAULT_STEMS = (b"PAINT", b"NOTEPAD", b"TRACKER", b"ARTFUL")
+ASC_DEFAULT_STEMS = (b"PAINT", b"NOTEPAD", b"TRACKER", b"ARTFUL", b"DOS")
 
 
 def build_assoc(groups):
@@ -340,17 +451,22 @@ def build_assoc(groups):
 
     An iconless package still gets a row, holding 64 zero bytes - the all-zero
     "no icon" sentinel the kernel already understands, so caching the ABSENCE
-    saves that read too.
+    saves that read too. The glyph column is the same shape one field along
+    (SPEC.md 54.3.2): a package that SHIPS its document glyph (flags bit 5)
+    has it copied here so a cache HIT still wears it, and one that does not
+    carries eight zero bytes, which the kernel reads as "reduce the icon".
     """
     cand, exts = [], []
     for key in groups:
         for name11, body, _ in groups[key]:
             if name11[8:11] != b"O88":
                 continue
-            if len(body) < 32 or body[0:2] != b"O8" or body[2] != 3:
+            if len(body) < 32 or body[0:2] != b"O8" or body[2] != PKG_FMT:
                 continue
             flags = body[3]
             icon = body[32:96] if flags & 1 and len(body) >= 96 else bytes(64)
+            glyph = (body[112:120] if flags & 0x20 and flags & 3 == 3
+                     and len(body) >= 128 else bytes(8))
             decl = []
             if flags & 2:                       # a header declaration (54.6)
                 base = 96 if flags & 1 else 32
@@ -362,7 +478,7 @@ def build_assoc(groups):
             stem = name11[0:8]
             known = stem.rstrip() in ASC_DEFAULT_STEMS
             cand.append((not (decl or known), stem, len(body) & 0xFFFF,
-                         icon, decl, key))
+                         icon, glyph, decl, key))
     # stable: the ordering key is only the association flag, so argument order
     # survives inside each half and a rebuild is byte-identical
     cand.sort(key=lambda c: c[0])
@@ -380,9 +496,9 @@ def build_assoc(groups):
               file=sys.stderr)
         cand = cand[:ASC_NAPP]
     apps, rowdirs = [], []
-    for _, stem, size, icon, decl, key in cand:
+    for _, stem, size, icon, glyph, decl, key in cand:
         idx = len(apps)
-        apps.append((stem, size, icon))
+        apps.append((stem, size, icon, glyph))
         rowdirs.append(key)
         for e in decl:
             if len(exts) < ASC_NEXT:
@@ -392,11 +508,12 @@ def build_assoc(groups):
     buf = bytearray(ASC_HDR + ASC_ROW * len(apps) + 4 * len(exts))
     buf[0:6] = ASC_MAGIC
     buf[6], buf[7], buf[8] = ASC_VER, len(apps), len(exts)
-    for i, (stem, size, icon) in enumerate(apps):
+    for i, (stem, size, icon, glyph) in enumerate(apps):
         o = ASC_HDR + i * ASC_ROW
         buf[o:o + 8] = stem
         struct.pack_into("<H", buf, o + 8, size)
         buf[o + ASC_ROWICO:o + ASC_ROWICO + 64] = icon
+        buf[o + ASC_ROWGLY:o + ASC_ROWGLY + 8] = glyph
     eo = ASC_HDR + ASC_ROW * len(apps)
     for i, (e, ix) in enumerate(exts):
         buf[eo + 4 * i:eo + 4 * i + 3] = e
@@ -404,40 +521,141 @@ def build_assoc(groups):
     return buf, rowdirs
 
 
-def sys_attr(name11: bytes, boot: bool) -> int:
+def sys_attr(name11: bytes, boot: bool, hdd: bool = False) -> int:
     """An entry's attributes. Only a SYSTEM disk locks anything down: a
     data disk is the user's and everything on it is an ordinary file.
 
     The rule is by EXTENSION so it needs no maintenance as drivers are added:
-    a `.DRV` on the boot disk is kernel machinery and disappears, anything
-    else is visible but read-only, because the boot disk holds nothing a user
-    should be deleting by accident. SYSTEM.CFG is not here - the kernel
-    creates that one itself, and stamps it the same way (SPEC.md 51.5).
+    a `.DRV` on the boot disk is kernel machinery and disappears, and so does
+    KERNEL.SYS (build() stamps that one itself) and BOOTHD.SYS, the hard-disk
+    boot sector that goes with it (SPEC.md 52.10.16), and COLDHMA.SYS, the
+    HMA image cut from it (docs/plans/HMA-PLAN.md) - by NAME, each being the
+    one file of its kind.
 
-    It is by DISK and by name, never by directory: TASKMGR.O88 moved from the
-    boot disk's root into SYSTEM/ (SPEC.md 28.3) and is the same file it was,
-    so the stamp follows it rather than staying behind with the folder it
-    left."""
+    **SYSTEM.CFG on a boot disk is stamped as the kernel would have made it**
+    (SPEC.md 19.6's table): hidden + system + archive, and NOT read-only.
+    This used to leave it out on the grounds that the kernel creates that file
+    itself - true of a disk nobody ships one on, and false of every disk that
+    does (`make emu`, `make usb-emu`, the gate disks). dskw_write_sys stamps
+    hidden + system only on a CREATE and keeps the old attribute on a replace,
+    so a plain host-built file stayed plain through every save: listed in the
+    Disk window, deletable, and unlike every SYSTEM.CFG the kernel writes. On
+    a DATA disk it stays an ordinary file - a hidden one there is SPEC.md
+    51.5.1's litter, which nothing inside os8088 can list or delete.
+
+    **EVERYTHING ELSE IS AN ORDINARY FILE, on the boot disk too** (SPEC.md
+    19.6). It used to be read-only + archive - "the boot disk holds nothing a
+    user should be deleting by accident" - and that was the wrong owner: the
+    packages in APPS/ and GAMES/, SYSTEM/DOS/'s tools, the faces and the
+    manual are the user's to delete when they rework their own system disk,
+    and a lock on them stopped a hard-disk upgrade dead (SPEC.md 52.10.15.1).
+    Only what would unboot the disk is locked.
+
+    **A HARD DISK's system files are not read-only either** (`hdd`, SPEC.md
+    52.10.15.1): it is stamped exactly as os8088's own installer would have
+    written it, so a host-built volume and an installed one cannot be told
+    apart. The read-only stamp is what stopped a keep-install there - the
+    kernel's replace refuses a read-only entry (`dskw_pmask`) and forgives it
+    only on a file already wearing hidden + system (19.6.2), so the first
+    ordinary file the walk reached answered FERR_PROT: a VIDDEMO disk stopped
+    on `ARCHIVO.F88` with the new kernel already committed."""
     if name11 == ASC_NAME:
         return A_HIDDEN | A_SYS     # the kernel rewrites it, so not read-only
     if not boot:
         return A_ARCH
-    return A_SYSTEM if name11.endswith(b"DRV") else A_LOCKED
+    if name11 == CFG_NAME:
+        return A_HIDDEN | A_SYS | A_ARCH    # dskw_write_sys's create + commit
+    if not (name11.endswith(b"DRV") or name11 in (HDBOOT_NAME, HMA_NAME)):
+        return A_ARCH
+    return A_HDDSYS if hdd else A_SYSTEM
 
 
-def dirent(name11: bytes, attr: int, clus: int, size: int) -> bytes:
+# THE COMPRESSION HINT (docs/plans/O88-COMPRESSION-PLAN.md 15). A FAT12/16 entry is
+# 32 bytes and os8088 writes only six of its fields, so these four are zeroed
+# on create and never read: +12 (NT case flags), +13 (creation tenths) and
+# +20..21, which SPEC.md 19.1 already documents as "FstClusHI - FAT32-only per
+# spec, ignored". The directory sector is read anyway, so knowing that a file
+# is compressed - and how big it expands to - costs NO extra I/O at mount, per
+# listing or per entry, which is what lets a listing stay exactly as fast as it
+# was.
+#
+# **IT IS A CACHE AND THE FILE'S OWN 'CZ' HEADER IS THE AUTHORITY.** A foreign
+# tool that rewrites the entry may drop these bytes; a missing hint reads as
+# "not compressed", and if that were TRUSTED the kernel would hand an
+# application compressed bytes. So the read path checks the header too.
+CZ_HINT = 0x5A                     # +12: a value a conformant FAT writer never
+                                   # puts there, so it cannot be forged by
+                                   # luck - AND THE FORMAT RIDES IN IT, so
+                                   # 0x5A is LZ4 and 0x5B is LZB (SPEC.md
+                                   # 20.14.2.4). The kernel's capacity
+                                   # decision happens before any data I/O and
+                                   # the two formats get different answers
+                                   # there, so a hint that could not tell them
+                                   # apart would have to read the file - the
+                                   # one thing this hint exists to avoid
+CZ_H_MARK, CZ_H_HI, CZ_H_LO = 12, 13, 20
+
+
+def dirent(name11: bytes, attr: int, clus: int, size: int,
+           body: bytes = None) -> bytes:
     e = bytearray(32)
     e[0:11] = name11
     e[11] = attr
     # NT byte 0, CrtTimeTenth 0; every timestamp fixed for determinism.
     struct.pack_into("<HHH", e, 14, FIXED_TIME, FIXED_DATE, FIXED_DATE)
     struct.pack_into("<HHHHI", e, 20, 0, FIXED_TIME, FIXED_DATE, clus, size)
+    if body is not None and len(body) >= 8 and body[:2] == b"CZ" \
+            and body[3] == 0 and body[2] in (0, 1):
+        n = int.from_bytes(body[4:8], "little")
+        if n >= (1 << 24):
+            fail(f"{name11!r}: a compressed file expands to {n} bytes and the "
+                 "directory hint carries 24 bits")
+        e[CZ_H_MARK] = CZ_HINT + body[2]    # ...the mark, PLUS the format
+        e[CZ_H_HI] = n >> 16
+        struct.pack_into("<H", e, CZ_H_LO, n & 0xFFFF)
     return bytes(e)
+
+
+def vol_id(content: bytes) -> int:
+    """BS_VolID for a volume holding `content` - DERIVED, not pinned.
+
+    **THIS IS THE ONLY THING THAT TELLS TWO os8088 DISKS APART.** SPEC.md
+    18.8.2's `dsk_bpb_sig` signs LBA 0 and nothing else, and SPEC.md 18.95's
+    sector cache and SPEC.md 18.8's FAT window are both keyed on that
+    signature - so two volumes whose boot sectors are byte-identical are one
+    volume as far as the running machine is concerned. Swap one for the other
+    and every cached sector, the FAT window included, stays valid against a
+    platter it did not come from: the listing is the old disk's, a file
+    "cannot be read", and a write puts the old disk's FAT onto the new one.
+
+    A fixed serial made every non-bootable disk of a geometry identical -
+    MEASURED, 23 of them signing 0x2D68 - which on a 360KB machine is every
+    data floppy the project ships. 18.8.2 called that residual "accepted
+    deliberately" on the grounds that "a full mount re-validates"; the full
+    mount does re-read LBA 0 and does bypass the cache, and it re-reads 512
+    bytes that are the same 512 bytes, so the re-validation could never have
+    caught it. The ground was wrong when it was written, not made wrong later.
+
+    Deriving it from the volume's own bytes keeps the property the pin was
+    for - the same inputs build the same image, byte for byte - and drops the
+    one it never should have had. The digest is over the FAT, the root
+    directory and the data area, which is the whole volume EXCEPT this sector,
+    so there is no circularity to resolve.
+
+    Two volumes with identical content get the same serial, which is correct:
+    they are the same disk, and nothing on the machine could act on a
+    difference that does not exist.
+    """
+    d = hashlib.sha256(content).digest()
+    v = struct.unpack("<I", d[:4])[0]
+    return v or VOL_ID                           # 0 is a legal serial but
+                                                 # reads as "unset" to tools
 
 
 def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
                 lay: Layout, code: bytes = None, label: bytes = None,
-                hidden: int = 0, drvnum: int = 0, ksecs: int = 0) -> bytes:
+                hidden: int = 0, drvnum: int = 0, ksecs: int = 0,
+                volid: int = None) -> bytes:
     """One BPB, three uses. `code` is os8088's own 512-byte boot sector -
     boot/boot.asm's on a floppy, boot/boothd.asm's under --hdd: either way
     its first three bytes are already EB 3C 90 and bytes 62.. are its
@@ -472,7 +690,8 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     struct.pack_into("<I", bs, 28, hidden)      # BPB_HiddSec
     bs[36] = drvnum                             # BS_DrvNum
     bs[38] = 0x29                               # BS_BootSig
-    struct.pack_into("<I", bs, 39, VOL_ID)      # BS_VolID
+    struct.pack_into("<I", bs, 39,
+                     VOL_ID if volid is None else volid)   # BS_VolID
     bs[43:54] = label or VOL_LABEL              # BS_VolLab
     bs[54:62] = b"FAT12   " if lay.fat12 else b"FAT16   "
     if not code:
@@ -504,14 +723,143 @@ def hdd_layout(tot: int) -> Layout:
     fail(f"no FAT16 layout fits {tot} sectors")
 
 
-def hdd_chs(lba: int) -> bytes:
-    """LBA as the 3-byte CHS field of a partition entry, under the fixed
-    --hdd geometry. Never clamped: 65 cylinders is far inside CHS range,
-    and the two columns agreeing IS the contract (SPEC.md 80.1) - a BIOS
-    booting this image derives its virtual geometry from these fields."""
-    c, r = divmod(lba, HDD_SPT * HDD_HEADS)
-    h, s = divmod(r, HDD_SPT)
+def hdd_chs(lba: int, heads: int = HDD_HEADS, spt: int = HDD_SPT) -> bytes:
+    """LBA as the 3-byte CHS field of a partition entry, under a geometry -
+    the fixed --hdd one unless --retarget says otherwise. Never clamped: the
+    build's 65 cylinders is far inside CHS range and hdd_retarget refuses a
+    cylinder past 1023 before calling this. The two columns agreeing IS the
+    contract (SPEC.md 80.1) - a BIOS booting this image derives its virtual
+    geometry from these fields."""
+    c, r = divmod(lba, spt * heads)
+    h, s = divmod(r, spt)
     return bytes([h, ((s + 1) & 0x3F) | ((c >> 2) & 0xC0), c & 0xFF])
+
+
+def chs_lba(field: bytes, heads: int, spt: int) -> int:
+    """The inverse: a partition entry's 3-byte CHS field as an LBA under a
+    geometry, for --verify-hdd's agreement test."""
+    h = field[0]
+    s = field[1] & 0x3F
+    c = ((field[1] & 0xC0) << 2) | field[2]
+    return (c * heads + h) * spt + (s - 1)
+
+
+def parse_geometry(text: str):
+    """'HEADS/SPT' or 'CYLS/HEADS/SPT' -> (cyls or None, heads, spt).
+    ValueError, never sys.exit: the imager catches this and goes back to
+    its prompt."""
+    parts = text.strip().replace("x", "/").replace("X", "/").split("/")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        raise ValueError(f"geometry {text!r}: want HEADS/SPT, digits only")
+    if len(nums) == 2:
+        cyls, (heads, spt) = None, nums
+    elif len(nums) == 3:
+        cyls, heads, spt = nums
+    else:
+        raise ValueError(f"geometry {text!r}: want HEADS/SPT or C/H/S")
+    if not 1 <= heads <= 255:
+        raise ValueError(f"heads {heads}: int 13h carries 1..255")
+    if not 1 <= spt <= 63:
+        raise ValueError(f"sectors per track {spt}: int 13h carries 1..63")
+    if cyls is not None and not 1 <= cyls <= 65535:
+        raise ValueError(f"cylinders {cyls}: a drive's own count is a word")
+    return cyls, heads, spt
+
+
+def hdd_retarget(img: bytes, heads: int, spt: int) -> bytes:
+    """SPEC.md 80.5: rewrite the ten bytes of a --hdd image that name a
+    geometry - each partition entry's two CHS columns and the volume's
+    BPB_SecPerTrk/BPB_NumHeads - to `heads` x `spt`, and nothing else. The
+    LBA layout does not move: a ROM that reports this geometry (an XTIDE
+    card, say) then divides every LBA the same way the writer did, which is
+    field note 33's invariant with the imager as the writer.
+
+    ValueError on anything but a well-formed --hdd image whose table and
+    volumes already agree: this is for images this tool built, and a
+    foreign disk is refused rather than quietly rewritten. Cylinders are
+    never clamped - a partition whose last sector needs cylinder 1024 or
+    more under the new shape is refused, since the field cannot carry it."""
+    parse_geometry(f"{heads}/{spt}")             # the same range rules
+    if len(img) < 2 * SECTOR or len(img) % SECTOR:
+        raise ValueError("not a sector-multiple image of at least 2 sectors")
+    if img[510:512] != b"\x55\xaa":
+        raise ValueError("sector 0 carries no boot signature: not an MBR")
+    out = bytearray(img)
+    nsec = len(img) // SECTOR
+    touched = 0
+    for i in range(4):
+        o = HP_TBL + i * 16
+        ent = img[o:o + 16]
+        typ = ent[4]
+        lba, cnt = struct.unpack("<II", ent[8:16])
+        if not typ and not cnt:
+            continue
+        if not cnt or lba + cnt > nsec:
+            raise ValueError(f"partition {i}: {cnt} sectors at LBA {lba} "
+                             f"does not lie inside the {nsec}-sector image")
+        v = lba * SECTOR
+        bs = img[v:v + SECTOR]
+        if bs[510:512] != b"\x55\xaa":
+            raise ValueError(f"partition {i}: no boot record at LBA {lba}")
+        hid, = struct.unpack_from("<I", bs, 28)
+        bspt, bheads = struct.unpack_from("<HH", bs, 24)
+        if hid != lba:
+            raise ValueError(f"partition {i}: the volume says it starts at "
+                             f"LBA {hid} and the table at {lba}")
+        if not bspt or not bheads:
+            raise ValueError(f"partition {i}: the volume's BPB has no "
+                             "geometry to retarget")
+        for name, field, want in (("start", ent[1:4], lba),
+                                  ("end", ent[5:8], lba + cnt - 1)):
+            if chs_lba(field, bheads, bspt) != want:
+                raise ValueError(f"partition {i}: the {name} CHS column and "
+                                 f"the LBA column disagree under the "
+                                 f"volume's own {bheads}x{bspt}; not an "
+                                 "image this tool built")
+        last = lba + cnt - 1
+        if last // (heads * spt) > 1023:
+            raise ValueError(f"partition {i}: its last sector, LBA {last}, "
+                             f"needs cylinder {last // (heads * spt)} under "
+                             f"{heads}x{spt} and the CHS field stops at 1023")
+        out[o + 1:o + 4] = hdd_chs(lba, heads, spt)
+        out[o + 5:o + 8] = hdd_chs(last, heads, spt)
+        struct.pack_into("<HH", out, v + 24, spt, heads)
+        touched += 1
+    if not touched:
+        raise ValueError("no partition in the table")
+    return bytes(out)
+
+
+def retarget(args) -> int:
+    """`--retarget IMG --geometry HEADS/SPT -o OUT`: the dd user's form of
+    what the imager does in memory (SPEC.md 80.5). A leading cylinder count
+    is accepted so a C/H/S line can be pasted whole; it is checked against
+    the image - the card must HOLD the image under that geometry - and not
+    written anywhere, because nothing on the disk names a cylinder count."""
+    try:
+        with open(args.retarget, "rb") as f:
+            img = f.read()
+    except OSError as e:
+        fail(f"cannot read {args.retarget}: {e}")
+    try:
+        cyls, heads, spt = parse_geometry(args.geometry)
+        if cyls is not None and cyls * heads * spt < len(img) // SECTOR:
+            raise ValueError(f"{cyls}/{heads}/{spt} is {cyls * heads * spt} "
+                             f"sectors and the image is {len(img) // SECTOR}")
+        out = hdd_retarget(img, heads, spt)
+    except ValueError as e:
+        fail(f"retarget {args.retarget}: {e}")
+    try:
+        with open(args.output, "wb") as f:
+            f.write(out)
+    except OSError as e:
+        fail(f"cannot write {args.output}: {e}")
+    print(f"os88disk: {args.output}: {args.retarget} retargeted to "
+          f"{heads} heads x {spt} sectors per track"
+          + (f" ({cyls} cylinders)" if cyls else ""))
+    return 0
 
 
 def read_data_file(path: str) -> bytes:
@@ -586,6 +934,78 @@ def read_blob(path: str, what: str) -> bytes:
         fail(f"cannot read {what} {path}: {e}")
 
 
+def cyl_pack(seq, size, secs, first, lay, cyl, base, pinned, group,
+             budget=0):
+    """`seq` reordered, and gaps put in it, so that a chain crosses no
+    CYLINDER it did not have to (SPEC.md 19.3.1).
+
+    A read of a file is one int 13h per cylinder it touches (SPEC.md 18.91),
+    so a 14-sector file on an 18-sector cylinder that starts four sectors from
+    the end costs two calls where it could cost one - about a revolution, every
+    time it is loaded, and chance does that ~70% of the time. Such a chain is
+    put on the cylinder boundary instead, two ways, both moving it by less than
+    the cylinder it would have wasted:
+
+    - FILL the gap in front of it exactly with later chains from the SAME
+      FOLDER (so a folder's files stay together), earliest preferred; or
+    - PAD it: leave the gap free. A free cluster in the middle of a volume is
+      as standard as one at the end and holds as much, so this is the free
+      space moved rather than spent - up to `budget` clusters of it, taken in
+      `seq` order, so what comes first in the order is paid for first.
+
+    Directories and anything `pinned` stay where `seq` put them. A
+    `("p", n)` item in the answer is n clusters left free.
+    """
+    out, todo = [], list(seq)
+    pos = first                                  # the next free cluster
+    lba = lambda c: base + lay.data_lba + (c - 2) * lay.spc
+
+    # ONLY AN EXACT FILL HELPS: a chain that crosses needlessly stops doing so
+    # only if it starts on the cylinder boundary, so a part-filled gap moves
+    # it and fixes nothing - and spends small chains a later gap could use.
+    # Subset sum over the gap, earliest chains preferred.
+    def gap_at(at):
+        """Clusters to the next cylinder - or 0 when a cluster straddles that
+        boundary (a hard disk's 4-sector cluster on a 1,008-sector cylinder),
+        where no fill or pad can land a chain on it."""
+        left = cyl - lba(at) % cyl
+        return 0 if left % lay.spc else left // lay.spc
+
+    def exact_fill(it, at):
+        gap = gap_at(at)
+        best = {0: []}
+        for c in todo:
+            if pinned(c) or group(c) != group(it) or size(c) > gap:
+                continue
+            for got, use in list(best.items()):
+                n = got + size(c)
+                if n <= gap and n not in best:
+                    best[n] = use + [c]
+        return best.get(gap, []) if gap else []
+
+    def needless(it, at):
+        n = secs(it)                    # what a READ touches, not the cluster
+        off = lba(at) % cyl
+        return -(-(off + n) // cyl) > -(-n // cyl)
+
+    while todo:
+        it = todo.pop(0)
+        if not pinned(it) and needless(it, pos):
+            fill = exact_fill(it, pos)
+            for c in fill:
+                todo.remove(c)
+                out.append(c)
+                pos += size(c)
+            gap = gap_at(pos)
+            if not fill and 0 < gap <= budget:
+                out.append(("p", gap))
+                pos += gap
+                budget -= gap
+        out.append(it)
+        pos += size(it)
+    return out
+
+
 def build(args) -> int:
     mbr = b""
     if args.hdd:
@@ -599,10 +1019,28 @@ def build(args) -> int:
         if len(mbr) != HP_TBL:
             fail(f"{args.mbr} is {len(mbr)} bytes, not {HP_TBL}")
         spt, heads, tot, media = HDD_SPT, HDD_HEADS, HDD_PSECS, 0xF8
+        hcyls, hbase, htot = HDD_CYLS, HDD_BASE, HDD_TOT
+        if args.geometry:
+            # A GEOMETRY OF ITS OWN (the demo video disks, an ST-238R on an
+            # ST11R): the partition from the MBR's own track to the end, as
+            # drivers/hdd/part.inc and tools/os88hdd.py lay one out, capped
+            # at the kernel's 65,535-sector volume on a track boundary
+            try:
+                hcyls, heads, spt = parse_geometry(args.geometry)
+            except ValueError as e:
+                fail(str(e))
+            if hcyls is None:
+                fail("--hdd --geometry wants C/H/S")
+            hbase, htot = spt, hcyls * heads * spt
+            tot = htot - hbase
+            if tot > 65535:
+                tot = (65535 // spt) * spt
     else:
         spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
         if args.fatcap:
             spc, fatsz = fatcap(args.size, args.fatcap)
+        elif args.spc:
+            spc, fatsz = spcfat(args.size, args.spc)
 
     # --- the system disk (SPEC.md 19.3) --------------------------------------
     # The kernel is an ordinary FILE, KERNEL.SYS, allocated FIRST and
@@ -662,6 +1100,7 @@ def build(args) -> int:
         ensure(folder_key(folder))
 
     raw_paths = set(args.raw)
+    argpos: dict = {}                            # (folder, index) -> argument
     for arg in args.packages:
         folder, path = split_spec(arg)
         key = folder_key(folder) if folder else ""
@@ -677,6 +1116,7 @@ def build(args) -> int:
             data = read_data_file(path)
         nclusters = (len(data) + lay.cluster_bytes - 1) // lay.cluster_bytes
         groups[key].append((name11, data, nclusters))
+        argpos[(key, len(groups[key]) - 1)] = len(argpos)
 
     # Root order: every folder first, in first-appearance order, then the
     # root-level packages. Only a TOP-LEVEL folder costs a root entry; a
@@ -710,23 +1150,31 @@ def build(args) -> int:
                      f"{key or 'the root'}")
             taken[n] = None
 
+    # ...and WHICH kernel is asked, since SPEC.md 22.6.2 made DSK_NENT
+    # per-build: a disk written for kern_small is listed by a 32-entry
+    # listing and one written for kern_big by a 64-entry one. The cap is the
+    # kernel's number either way - neither is restated here - and the four
+    # recipes that pass `--kern-small` are exactly the four that pass
+    # `--fatcap 2`, which is the same build saying the same thing about its
+    # other disk constant.
+    cap = SMALL_FILES if args.kern_small else MAX_FILES
     for key in dirs:
         shown = len(kids[key]) + sum(
             1 for n, _, _ in groups[key]
-            if not sys_attr(n, bool(boot)) & A_HIDDEN)
-        if shown > MAX_FILES and not args.deep_folders:
+            if not sys_attr(n, bool(boot), args.hdd) & A_HIDDEN)
+        if shown > cap and not args.deep_folders:
             fail(f"{shown} listed entries in folder {key}; the kernel "
-                 f"lists at most {MAX_FILES} per directory (--deep-folders "
+                 f"lists at most {cap} per directory (--deep-folders "
                  f"if this folder is a data store the file API walks, not "
                  f"one the Disk window shows)")
     # MAX_FILES is a DISPLAY cap, so only what the kernel would list counts
     # against it: a hidden system file (SPEC.md 19.6) never takes a listing
     # slot. It still takes a directory slot, which is the second check.
     shown = len(root_dirs) + sum(1 for n, _, _ in root_files
-                                 if not sys_attr(n, bool(boot)) & A_HIDDEN)
-    if shown > MAX_FILES:
+                                 if not sys_attr(n, bool(boot), args.hdd) & A_HIDDEN)
+    if shown > cap:
         fail(f"{shown} listed root entries; the kernel lists "
-             f"at most {MAX_FILES} per directory")
+             f"at most {cap} per directory")
 
     # A folder's own directory is a cluster chain like any other file: two
     # link entries ('.', '..'), one entry per subfolder, and its files,
@@ -752,6 +1200,11 @@ def build(args) -> int:
                         // lay.cluster_bytes) for k in dirs}
 
     files = [f for k in dirs for f in groups[k]] + root_files
+    # Each file's place on the COMMAND LINE, which is where its chain goes
+    # (below). ASSOC.DAT was named by nobody and is placed on its own terms.
+    forder = [argpos[(k, i)] for k in dirs for i in range(len(groups[k]))] \
+        + [argpos.get(("", i), len(argpos)) for i in range(len(root_files))]
+    fdir = [k for k in dirs for _ in groups[k]] + [""] * len(root_files)
     kclus = (len(kern) + lay.cluster_bytes - 1) // lay.cluster_bytes
     need = sum(n for _, _, n in files) + sum(dir_nclus.values()) + kclus
     if need > lay.nclus:
@@ -771,25 +1224,102 @@ def build(args) -> int:
     nxt += kclus
 
     # Then the directory chains, contiguously and in root order, so a folder's
-    # listing is one seek away from the root's.
+    # listing is one seek away from the root's - and then the file chains,
+    # contiguous in ARGUMENT order, or round-robin interleaved under
+    # --scramble (legally fragmented).
+    #
+    # **ARGUMENT order, not folder order** (SPEC.md 19.3.1): where a chain sits
+    # is the only thing about a FAT volume a builder is free to choose, and
+    # the boot is what it is worth choosing for. The boot reads the kernel,
+    # the root, the drivers this machine detects and \AUTOSTRT, and nothing
+    # else - and folder order put the drivers AFTER every package, so a Sound
+    # Blaster machine's boot went cylinder 0 -> 46 -> 47 -> 10 on a 720KB disk
+    # for a 13-sector file. Named first on the command line ($(DRIVERS) is,
+    # SOUND.DRV and HDD.DRV leading it), they land beside the directories. The
+    # directory ENTRIES keep their order either way: this moves data, never a
+    # name, so the volume reads the same to every FAT implementation.
+    #
+    # **EXCEPT ASSOC.DAT, WHICH GOES AS EARLY AS IT CAN WITHOUT STRADDLING A
+    # TRACK** (SPEC.md 54.7.5). The mount reads it on every volume switch
+    # (asc_use), straight after the root directory, and SPEC.md 18.95's
+    # read-ahead fills a miss to the END OF THE TRACK - so a file inside one
+    # track is exactly one int 13h, and one that crosses a track boundary is
+    # two, the second dragging in a whole track of whatever follows. Last in
+    # the root it was also the LAST chain on the disk, cylinder 34 of a 360KB
+    # apps floppy, so every mount paid a seek across the disk and back for it.
+    # The candidates are the boundaries the layout already has - before the
+    # directory chains (on a disk with no kernel, the root directory's own
+    # track), after them, then after each file - and the first that holds it
+    # wins, so nothing is padded and every other chain stays contiguous. None
+    # holding it keeps the old place, last.
     dir_chains = {}
-    for k in dirs:
-        dir_chains[k] = list(range(nxt, nxt + dir_nclus[k]))
-        nxt += dir_nclus[k]
-
-    # Then the file chains: contiguous in argument order, or round-robin
-    # interleaved under --scramble (legally fragmented).
     chains = [[] for _ in files]
+    asc_i = next((i for i, f in enumerate(files)
+                  if f[0] == ASC_NAME and f in root_files), None)
     if args.scramble:
+        for k in dirs:
+            dir_chains[k] = list(range(nxt, nxt + dir_nclus[k]))
+            nxt += dir_nclus[k]
         while any(len(c) < f[2] for c, f in zip(chains, files)):
             for c, f in zip(chains, files):
                 if len(c) < f[2]:
                     c.append(nxt)
                     nxt += 1
     else:
-        for c, f in zip(chains, files):
-            c.extend(range(nxt, nxt + f[2]))
-            nxt += f[2]
+        seq = [("d", k) for k in dirs] + [
+            ("f", i) for i in sorted(range(len(files)), key=forder.__getitem__)
+            if i != asc_i]
+        size = lambda it: (dir_nclus[it[1]] if it[0] == "d" else
+                           it[1] if it[0] == "p" else files[it[1]][2])
+        asc_fits = False
+        if asc_i is not None:
+            asecs = files[asc_i][2] * lay.spc
+            on_track = lambda c: ((lay.data_lba + (c - 2) * lay.spc) // spt ==
+                                  (lay.data_lba + (c - 2) * lay.spc
+                                   + asecs - 1) // spt)
+            at = len(seq)
+            start = nxt
+            for pos in [0] + list(range(len(dirs), len(seq) + 1)):
+                start = nxt + sum(size(it) for it in seq[:pos])
+                if on_track(start):
+                    at = pos
+                    asc_fits = True
+                    break
+            seq.insert(at, ("f", asc_i))
+        if not args.no_pack:
+            # Half the free space may go on gaps, first come first served in
+            # the order above, so the boot set is paid for before anything
+            # else and the volume still ends in one run of free clusters.
+            nsecs = lambda it: (len(files[it[1]][1]) + SECTOR - 1) // SECTOR
+            pack = lambda pin: cyl_pack(seq, size, nsecs, nxt, lay,
+                                        spt * heads,
+                                        hbase if args.hdd else 0,
+                                        pinned=pin,
+                                        group=lambda it: fdir[it[1]],
+                                        budget=(lay.nclus - need) // 2)
+            packed = pack(lambda it: it[0] == "d" or it[1] == asc_i)
+            # Pinning ASSOC.DAT holds it in its place in the ORDER, not on
+            # the disk: a fill or a pad ahead of it slides it by that gap,
+            # which can put the one track chosen above across two. Check
+            # again, and if it moved off, pack once more with everything
+            # ahead of it held too - no gap can then land in front of it, so
+            # it starts exactly where the check above put it.
+            if asc_fits:
+                ai = packed.index(("f", asc_i))
+                if not on_track(nxt + sum(size(it) for it in packed[:ai])):
+                    ahead = set(seq[:at])
+                    packed = pack(lambda it: it[0] == "d" or
+                                  it[1] == asc_i or it in ahead)
+            seq = packed
+        for it in seq:
+            chain = list(range(nxt, nxt + size(it)))
+            nxt += size(it)
+            if it[0] == "p":
+                continue
+            if it[0] == "d":
+                dir_chains[it[1]] = chain
+            else:
+                chains[it[1]] = chain
 
     # PASS 2 of ASSOC.DAT (SPEC.md 54.7.1): the folder each program lives in,
     # now that the directory chains exist. `asc` is a bytearray and `files`
@@ -838,8 +1368,8 @@ def build(args) -> int:
             slot += 1
         for i, (name11, body, _) in enumerate(groups[k]):
             off = (slot + i) * 32
-            raw[off:off + 32] = dirent(name11, sys_attr(name11, boot),
-                                       chains[at + i][0], len(body))
+            raw[off:off + 32] = dirent(name11, sys_attr(name11, boot, args.hdd),
+                                       chains[at + i][0], len(body), body)
         at += len(groups[k])
         put(dir_chains[k], bytes(raw))
 
@@ -848,7 +1378,8 @@ def build(args) -> int:
     slot = 1                                     # kernel filters it, so the
     if boot:                                     # first listed entry is 0
         root[slot * 32:(slot + 1) * 32] = dirent(
-            KERNEL_NAME, A_SYSTEM, kchain[0], len(kern))
+            KERNEL_NAME, A_HDDSYS if args.hdd else A_SYSTEM, kchain[0],
+            len(kern))
         slot += 1
     for k in root_dirs:
         root[slot * 32:(slot + 1) * 32] = dirent(
@@ -857,17 +1388,20 @@ def build(args) -> int:
     for i, (name11, body, _) in enumerate(root_files):
         chain = chains[len(files) - len(root_files) + i]
         root[slot * 32:(slot + 1) * 32] = dirent(
-            name11, sys_attr(name11, boot), chain[0], len(body))
+            name11, sys_attr(name11, boot, args.hdd), chain[0], len(body), body)
         slot += 1
 
+    # THE SERIAL IS DERIVED FROM WHAT IS ON THE VOLUME (vol_id): it is the
+    # only field that tells two os8088 disks of one geometry apart, and the
+    # machine's whole swap detector is a signature over this sector.
+    body = bytes(fat.buf + fat.buf + root + data_area)
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
                                   media, lay, boot, label,
-                                  hidden=HDD_BASE if args.hdd else 0,
+                                  hidden=hbase if args.hdd else 0,
                                   drvnum=0x80 if args.hdd else 0,
-                                  ksecs=ksecs if args.hdd else 0))
-    image += fat.buf + fat.buf                   # FAT2 = FAT1
-    image += root
-    image += data_area
+                                  ksecs=ksecs if args.hdd else 0,
+                                  volid=vol_id(body)))
+    image += body
     assert len(image) == tot * SECTOR
 
     if args.hdd:
@@ -879,15 +1413,16 @@ def build(args) -> int:
         sec0[0:HP_TBL] = mbr
         ent = bytearray(16)
         ent[0] = 0x80                            # active
-        ent[1:4] = hdd_chs(HDD_BASE)
+        ent[1:4] = hdd_chs(hbase, heads, spt)
         ent[4] = 0x04                            # FAT16 under 32MB
-        ent[5:8] = hdd_chs(HDD_BASE + HDD_PSECS - 1)
-        struct.pack_into("<I", ent, 8, HDD_BASE)
-        struct.pack_into("<I", ent, 12, HDD_PSECS)
+        ent[5:8] = hdd_chs(hbase + tot - 1, heads, spt)
+        struct.pack_into("<I", ent, 8, hbase)
+        struct.pack_into("<I", ent, 12, tot)
         sec0[HP_TBL:HP_TBL + 16] = ent
         sec0[510:512] = b"\x55\xAA"
-        image = bytes(sec0) + bytes((HDD_BASE - 1) * SECTOR) + bytes(image)
-        assert len(image) == HDD_TOT * SECTOR
+        image = bytes(sec0) + bytes((hbase - 1) * SECTOR) + bytes(image)
+        image += bytes((htot - hbase - tot) * SECTOR)  # (past the cap)
+        assert len(image) == htot * SECTOR
 
     try:
         with open(args.output, "wb") as f:
@@ -895,8 +1430,8 @@ def build(args) -> int:
     except OSError as e:
         fail(f"cannot write {args.output}: {e}")
 
-    geom = (f"{HDD_CYLS}/{HDD_HEADS}/{HDD_SPT} hdd, partition at LBA "
-            f"{HDD_BASE} for {HDD_PSECS} sectors" if args.hdd
+    geom = (f"{hcyls}/{heads}/{spt} hdd, partition at LBA "
+            f"{hbase} for {tot} sectors" if args.hdd
             else f"{args.size}KB, {spt} spt")
     print(f"os88disk: {args.output} ({geom}, "
           f"{lay.type_name}) {len(files)} file(s)"
@@ -1006,6 +1541,29 @@ def verify_hdd(path: str) -> int:
             errors.append(f"partition {idx}: BPB_BytsPerSec {bps} != 512")
             continue
 
+        # SPEC.md 80.5: the entry's CHS columns must describe the sectors the
+        # volume's own BPB geometry says they are - the MBR reads by the
+        # column and the boot record divides by the BPB, and a disk on which
+        # the two disagree is field note 33's. An entry whose end is past
+        # cylinder 1023 cannot say, and is skipped rather than failed.
+        bspt, bheads = struct.unpack_from("<HH", bs, 24)
+        ent = img[(base * SECTOR) + 446 + idx * 16:(base * SECTOR) + 446 + idx * 16 + 16]
+        if bspt and bheads:
+            for name, field, want in (("start", ent[1:4], plba),
+                                      ("end", ent[5:8], plba + pcnt - 1)):
+                if want // (bheads * bspt) > 1023:
+                    continue
+                got = chs_lba(field, bheads, bspt)
+                if got != want:
+                    errors.append(f"partition {idx}: {name} CHS column is "
+                                  f"LBA {got} under the volume's own "
+                                  f"{bheads}x{bspt}, the LBA column says "
+                                  f"{want}")
+        else:
+            errors.append(f"partition {idx}: BPB_SecPerTrk/BPB_NumHeads "
+                          f"{bspt}/{bheads} - the boot record divides by "
+                          "these (SPEC.md 52.10.2)")
+
         def psec(n, count=1):
             a = o + n * SECTOR
             return img[a:a + SECTOR * count]
@@ -1063,7 +1621,7 @@ def verify_hdd(path: str) -> int:
                     d += psec(data_lba + (c - 2) * spc, spc)
                     c = ent(f1, c)
                     guard += 1
-            subs = []
+            subs, names = [], set()
             for i in range(0, len(d), 32):
                 e = d[i:i + 32]
                 if not e or e[0] == 0:
@@ -1080,6 +1638,11 @@ def verify_hdd(path: str) -> int:
                 clus, = struct.unpack_from("<H", e, 26)
                 size, = struct.unpack_from("<I", e, 28)
                 full = path_ + nm + ("." + ex if ex else "")
+                if e[0:11] in names:
+                    # two entries, one name: every lookup finds the first
+                    # and the second's clusters are unreachable by name
+                    errors.append(f"{full}: DUPLICATE NAME in {path_}")
+                names.add(e[0:11])
                 if attr & 0x10:
                     if clus:
                         chain(clus, full + "/ (dir)")
@@ -1253,7 +1816,18 @@ def verify(path: str) -> int:
             clus_hi, = struct.unpack_from("<H", e, 20)
             clus, = struct.unpack_from("<H", e, 26)
             size, = struct.unpack_from("<I", e, 28)
-            if clus_hi:
+            if CZ_HINT <= e[CZ_H_MARK] <= CZ_HINT + 1:  # ...either format
+                # ...not FstClusHI at all: the COMPRESSION HINT (SPEC.md
+                # 20.14.1) writes its low word there and its high byte at +13,
+                # which is why the note below has to test the mark first - a
+                # deliberate field reported as an anomaly is a note nobody
+                # reads by the fourth file.
+                unpacked = clus_hi | (e[CZ_H_HI] << 16)
+                if unpacked <= size:
+                    note(f"{name}: compression hint says it expands to "
+                         f"{unpacked} and the file is {size} - the kernel "
+                         "refuses that as FERR_IO")
+            elif clus_hi:
                 note(f"{name}: nonzero FstClusHI {clus_hi:#x} ignored "
                      "(FAT32-only field; the kernel ignores it too)")
             if attr & 0x10:
@@ -1295,6 +1869,11 @@ def main() -> int:
                          "sectors-per-cluster to get there (SPEC.md 51.0): "
                          "what lets kern_small, whose DSK_FAT_SECS is 2, "
                          "still read a 720KB or 1.44MB disk")
+    ap.add_argument("--spc", type=int, default=0, metavar="N",
+                    help="format with N sectors a cluster instead of the "
+                         "geometry's IBM standard, and the smallest FAT that "
+                         "covers the result (SPEC.md 19.3.2): what gives the "
+                         "360KB system disk 512-byte clusters")
     ap.add_argument("--size", type=int, choices=(1440, 1200, 720, 360),
                     help="disk size in KB: 1440 (18 spt), 1200 (15 spt, "
                          "5.25\" HD), 720 or 360 (9 spt; 80 and 40 "
@@ -1318,6 +1897,10 @@ def main() -> int:
                          "path must also appear as a positional; this flag "
                          "only says which of them skips the check. Nothing "
                          "shipped uses it (--scramble's precedent)")
+    ap.add_argument("--no-pack", action="store_true",
+                    help="lay chains out in argument order exactly, without "
+                    "moving a small one ahead to keep a larger one inside a "
+                    "cylinder (SPEC.md 19.3.1) - the A/B for the packer")
     ap.add_argument("--scramble", action="store_true",
                     help="fragment cluster chains round-robin (test only)")
     ap.add_argument("--verify-hdd", metavar="IMG",
@@ -1328,6 +1911,21 @@ def main() -> int:
                          "cannot")
     ap.add_argument("--verify", metavar="IMG",
                     help="structural fsck of an existing image (no build)")
+    ap.add_argument("--retarget", metavar="IMG",
+                    help="rewrite a --hdd image's partition-entry CHS "
+                         "columns and BPB heads/spt to --geometry, into "
+                         "-o (SPEC.md 80.5): the LBA layout does not move. "
+                         "For a card whose ROM reports its OWN geometry "
+                         "(an XTIDE CompactFlash) rather than deriving one "
+                         "from the table. Needs --geometry and -o")
+    ap.add_argument("--geometry", metavar="[C/]H/S",
+                    help="with --retarget: heads/sectors-per-track, or a "
+                         "whole C/H/S line - the cylinders are checked "
+                         "against the image's size and written nowhere. "
+                         "With --hdd: the C/H/S to BUILD for, the partition "
+                         "from the MBR's track to the end (an ST-238R on an "
+                         "ST11R is 613/4/26: tools/os88hdd.py --wrap adds "
+                         "the card's hidden cylinder and a VHD footer)")
     ap.add_argument("--boot", metavar="BOOT.bin",
                     help="os8088's own 512-byte boot sector: makes this a "
                          "bootable SYSTEM disk (needs --kernel)")
@@ -1338,6 +1936,10 @@ def main() -> int:
                     help="create this folder even if no file names it "
                          "(repeatable); each component an 8.3 stem with no "
                          "extension, '/' between them for a nested one")
+    ap.add_argument("--kern-small", action="store_true",
+                    help="this disk is for kern_small, whose listing holds "
+                         "DSK_NENT = 32 entries rather than kern_big's 64 "
+                         "(SPEC.md 22.6.2). Goes with --fatcap 2")
     ap.add_argument("--deep-folders", action="store_true",
                     help="allow more than the kernel's 32-entry LISTING cap "
                          "in a subfolder (never the root): the Disk window "
@@ -1358,6 +1960,14 @@ def main() -> int:
                          "folder above it too")
     args = ap.parse_args()
 
+    if args.retarget or (args.geometry and not args.hdd):
+        if not (args.retarget and args.geometry and args.output):
+            ap.error("--retarget needs --geometry and -o")
+        if args.size or args.scramble or args.packages or args.folder \
+                or args.dir_slots or args.verify or args.verify_hdd \
+                or args.hdd:
+            ap.error("--retarget takes only --geometry and -o")
+        return retarget(args)
     if args.verify_hdd:
         if args.output or args.size or args.scramble or args.packages \
                 or args.folder or args.dir_slots or args.verify or args.hdd:
@@ -1370,6 +1980,9 @@ def main() -> int:
         return verify(args.verify)
     if args.size and args.hdd:
         ap.error("--size and --hdd are mutually exclusive")
+    if args.spc and (args.fatcap or args.hdd):
+        ap.error("--spc takes neither --fatcap nor --hdd: each chooses the "
+                 "cluster size")
     if not args.output or not (args.size or args.hdd):
         ap.error("-o and --size (or --hdd) are required to build")
     return build(args)

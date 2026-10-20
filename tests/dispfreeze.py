@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The field's freeze: a straddling window over a Disk window, then a click
-(docs/DUAL-DISPLAY-VGA.md 8(11))
+(docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))
 
     make && python3 tests/dispfreeze.py
 
@@ -18,9 +18,16 @@ The verdict is the BIOS tick at 0040:006C. It is the same test 8(8) used and
 it is the only one that distinguishes a freeze from a slow repaint: a frozen
 machine's tick does not advance, and every debug read still answers.
 """
-import sys, time
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import sys
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 
 from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
                       VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
@@ -55,18 +62,18 @@ def ui_passes(m, secs=2.0):
     on it, and that misreading cost this investigation two rounds. ui_task's
     step 0 READS [ui_rebootq] every pass, so a memory breakpoint on that byte
     is a pass counter; it is a DATA access, so unlike an exec breakpoint it
-    cannot fire on the 8088's prefetch."""
-    m.breakpoints([{"type": "mem", "addr": S("ui_rebootq")}])
-    n, t0 = 0, time.time()
-    while time.time() - t0 < secs:
-        if m.status()["state"] == "breakpoint":
-            n += 1
-            m.run()
-        else:
-            time.sleep(0.005)
-    m.breakpoints([])
-    m.run()
-    return n
+    cannot fire on the 8088's prefetch.
+
+    The pump is `bp_trace`'s, which counts the server's own stop sequence: the
+    hand-rolled one this replaces called every `"breakpoint"` it polled a pass,
+    including the stop it had just resumed past when the resume had not landed
+    by the next round trip. That could not flip THIS verdict - the freeze arm
+    is `n == 0` and a duplicate needs a real pass to duplicate - but the number
+    beside it is read as a rate, and a pass the machine did not make is not
+    one."""
+    with os88marty.bp_trace(m, {"type": "mem", "addr": S("ui_rebootq")}) as tr:
+        os88marty.pace(m, secs)         # the window is GUEST time
+    return tr.n
 
 
 def alive(m, label, secs=1.2, floor=[0]):
@@ -109,7 +116,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     bx, by, bw, bh = dispcp.win_rect(m, S, disk)
     dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "NOTEPAD.O88",
                       card=pri)
-    time.sleep(2)
+    os88marty.ui_done(m, "Note Pad to open")
     wins = dispcp.win_list(m, S)
     print("windows:", [(s,) + dispcp.win_rect(m, S, s) for s in wins])
     if len(wins) < 2:

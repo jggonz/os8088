@@ -1,9 +1,9 @@
 ; =============================================================================
-; The browser's NETWORK half - docs/NET-STACK-PLAN.md stage D
+; The browser's NETWORK half - docs/plans/completed/NET-STACK-PLAN.md stage D
 ;
 ; SPEC.md 62.11's socket verbs, an HTTP/1.0 GET, and the page handed to the
 ; parser that already existed. The rendering half of this application needed
-; no change at all to gain a network, which is the claim docs/BROWSER-PLAN.md
+; no change at all to gain a network, which is the claim docs/plans/completed/BROWSER-PLAN.md
 ; made when it kept fetching out of the layout work entirely.
 ;
 ; --- THE WORKER OWNS THE FETCH, AND MAY NOT OWN THE MEMORY -------------------
@@ -11,17 +11,29 @@
 ; verb is non-blocking (netpkg.inc), so the division is forced and is the
 ; right one anyway:
 ;
-;   the UI task  claims the three buffers and starts the fetch (br_go), out of
-;                a menu command, a Return in the location bar, or a form's
+;   the UI task  claims the SOURCE buffer and starts the fetch (br_go), out
+;                of a menu command, a Return in the location bar, or a form's
 ;                Submit - all of which already run with the gfx lock held
 ;   the worker   opens, polls, sends the request, drains the reply into the
-;                source claim, and then parses and repaints under the lock
+;                source claim, and posts a wake
+;   the UI task  cuts the source to the page and claims the other three
+;                buffers from its size (br_netclaim, SPEC.md 71.14)
+;   the worker   parses and repaints under the lock
 ;
-; **THE SOURCE CLAIM IS KEPT UNTIL THE NEXT LOAD**, where a file load frees it
-; the moment the parse is done (br_load). That is not an oversight: freeing it
-; is OSAPI_MEM_FREE and the worker may not make the call. It costs BR_MAXKB
-; held while a network page is on screen, and it is given back by br_free_all
-; at the start of whatever is loaded next.
+; ...and a FRAMESET goes round once more (SPEC.md 71.15): its children are
+; drained into the page's own buffers, which were cut to the frameset's size,
+; so the worker posts [br_fin] = 4 instead of fetching the first child, the UI
+; task frees the document and line table, regrows the source to BR_MAXKB and
+; claims the two again from it (br_frameclaim - the link arena is KEPT, the
+; queued frame srcs live there), and answers 5, on which br_nstep starts the
+; first child. [br_fin] is 0 draining, 1 the page is in and the UI task owes
+; its claims, 2 claimed - parse, 3 parsing (br_abort waits that one out), 4
+; the UI task owes a frameset's re-claim, 5 re-claimed - start the first child.
+;
+; **THE SOURCE CLAIM IS KEPT UNTIL THE NEXT LOAD**, as a file load keeps it:
+; File > Save As writes it. It is claimed at BR_MAXKB and cut to the page's own
+; size by br_netclaim, and given back by br_free_all at the start of whatever
+; is loaded next.
 ;
 ; --- WHAT IS AND IS NOT PARSED ------------------------------------------------
 ; The status line's CODE is read, because 404 and 200 are different pages and
@@ -33,11 +45,10 @@
 ; to BR_MAXKB for no gain.
 ;
 ; No chunked encoding: HTTP/1.0 is what this asks for and a 1.0 server answers
-; with a length or a close. No redirects yet - a 301 shows its own body, which
-; every server writes as a link, so the page says where it went and a click
-; will follow it once links do.
+; with a length or a close. 301/302/303/307/308 retain only Location and reuse
+; the same claims for at most three hops.
 ;
-; EVERYTHING OFF THE WIRE IS HOSTILE (docs/NET-STACK-PLAN.md 8.5). The only
+; EVERYTHING OFF THE WIRE IS HOSTILE (docs/plans/completed/NET-STACK-PLAN.md 8.5). The only
 ; thing this trusts a server about is how many bytes it just handed over, and
 ; that is bounded by the capacity passed to NETV_RECV.
 ; =============================================================================
@@ -58,17 +69,10 @@ BN_ERR      equ 7                   ; finished, and it did not work
 
 BR_HOSTMAX  equ 64                  ; matches netpkg.inc's NET_HOSTMAX field
 BR_PATHMAX  equ 96
-BR_REQMAX   equ 76 + BR_PATHMAX + BR_HOSTMAX
-                                    ; **DERIVED FROM THE PIECES**, br_nsline's
-                                    ; reason one buffer along: it was a literal
-                                    ; 200 against a request that composes 4 +
-                                    ; path + 17 + host + 55 = 234 at the limits
-                                    ; br_split already enforces, so a long path
-                                    ; on a long host ran 34 bytes into
-                                    ; br_nsline - which br_status then rewrote
-                                    ; with the state, cutting the request's own
-                                    ; tail off before .send ever put it on the
-                                    ; wire
+BR_REQMAX   equ BR_PATHMAX + BR_HOSTMAX + BR_URLMAX + 180
+                                    ; path + host + the 159-byte POST body and
+                                    ; 180 bytes for the longest request line and
+                                    ; headers; both request forms share br_rxb.
 BR_CHUNK    equ 512                 ; one NETV_RECV, well under NET_SKMAX
 
 ; -----------------------------------------------------------------------------
@@ -86,6 +90,15 @@ br_hire:
     call OSAPI_TASK_SPAWN
     jc .out
     mov byte [br_spawn], 1
+    ; ...AND THE WORKER MAY BE RESTARTED (SPEC.md 66.6.2). Hiring one
+    ; would otherwise pin the region for ever - task_spawn wrote our
+    ; segment into that worker's frame before its first instruction:
+    ; br_nstep banks a generation and every store is guarded on it, so a fetch
+    ; abandoned by a restart writes nothing - which is br_abort's own design.
+    ; The kernel restarts a worker only where it PARKS, which for us is
+    ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
+    ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
+    OS88_WORKER_RESTARTABLE br_worker
 .out:
     pop bx
     pop ax
@@ -181,6 +194,10 @@ br_go:
 .abort:
     call br_abort
 .free:
+    mov al, [br_post]
+    mov [br_reqpost], al
+    mov byte [br_post], 0
+    mov word [br_nmsg], 0
     call br_split                   ; the URL into host, port and path
     jc .badurl
     push si
@@ -199,25 +216,42 @@ br_go:
                                     ; (clicking in it, which is how this was
                                     ; reported). One draw at the one place the
                                     ; text changes, which is here
-    call br_free_all
-    call br_claim
-    jc .nomem
-    mov word [br_nmsg], 0           ; ...and a new fetch owns the state line, so
+    mov byte [br_keep], 0           ; **A FETCH THAT CANNOT GET PAST ITS FIRST
+    call net_find                   ; STEP KEEPS THE PAGE.** br_free_all used
+    jc .keep                        ; to run here unconditionally, so with no
+    jnz .fresh                      ; link driver (or no partner on the cable)
+.keep:                              ; the worker's .open failed a tick later
+    inc byte [br_keep]              ; under a page still DRAWN but no longer
+    jmp short .claimed              ; held: no scroll, dead links. Asked here,
+.fresh:                             ; the page and its buffers stay; the fetch
+    call br_free_all                ; still starts and fails in the worker as
+    mov ax, BR_MAXKB                ; before, so the state line, the promise
+    call br_srcclaim                ; and its withdrawal are unchanged - and
+    jc .nomem                       ; [br_keep] makes the worker refuse even
+.claimed:                           ; if a driver appears in between, since
+                                    ; it may not take the OLD page's source
+    mov byte [br_frameappend], 0
+    mov byte [br_framecount], 0
+    mov byte [br_frameidx], 0
+    mov byte [br_framecut], 0
+    cmp byte [br_nopush], 0         ; the history, unless this trip IS
+    jne .nohist                     ; the history: Back, Forward and Reload all
+    cmp byte [br_keep], 0           ; ...or the page is KEPT, which is not a
+    jne .nohist                     ; new place either
+    call br_hpush                   ; come through here and none of them is a
+.nohist:                            ; new place (BROWSER-PLAN 5)
+    xor ax, ax
+    mov [br_nmsg], ax               ; ...and a new fetch owns the state line, so
                                     ; last time's verdict goes: without this a
                                     ; `Saved` would survive into the next page
                                     ; and be shown again when it finished
-    cmp byte [br_nopush], 0         ; ...and the history, unless this trip IS
-    jne .nohist                     ; the history: Back, Forward and Reload all
-    call br_hpush                   ; come through here and none of them is a
-.nohist:                            ; new place (BROWSER-PLAN 5)
-    mov word [br_nlen], 0
-    mov word [br_code], 0
-    mov byte [br_trunc], 0          ; ...the CUT flag, which br_parse clears on
-                                    ; a file load and nothing cleared on this
-                                    ; path, so one truncated page would have
-                                    ; reported every page after it as cut
-    mov word [br_hcol], 0           ; ...and the HEADER scan's own two, which
-    mov byte [br_hstate], 0         ; are per-fetch as much as the count is:
+    mov [br_fin], al                ; ...the hand-over (SPEC.md 71.14)
+    call br_hreset                  ; ...the per-fetch header state, and the
+                                    ; CUT flag, which br_parse clears on a file
+                                    ; load and nothing cleared on this path, so
+                                    ; one truncated page would have reported
+                                    ; every page after it as cut
+    mov [br_redirs], al
                                     ; [br_hcol] only ever counts up, so it sat
                                     ; at 12 after the first reply's status line
                                     ; and every byte of every later fetch was
@@ -225,13 +259,13 @@ br_go:
                                     ; code was read for the FIRST page of the
                                     ; session and no other
     mov byte [br_nstate], BN_OPEN
-    push ax                         ; ...AND THE PROMISE IS WITHDRAWN HERE, at
-    push bx                         ; the transition and UNCONDITIONALLY, not
+                                    ; ...AND THE PROMISE IS WITHDRAWN HERE, at
+                                    ; the transition and UNCONDITIONALLY, not
     mov bx, [br_win]                ; by re-reading [br_nstate] on the way out
     xor al, al                      ; (SPEC.md 71.11). BX IS THE WINDOW and is
     call OSAPI_WM_SAVEU             ; not optional: without it wm_saveu's own
-    pop bx                          ; bounds check refuses the call and the
-    pop ax                          ; withdrawal silently does not happen -
+                                    ; bounds check refuses the call and the
+                                    ; withdrawal silently does not happen -
                                     ; SPEC.md 11.96.11.4's guard earning its
                                     ; keep a second time, and the reason this
                                     ; is not `whatever BX held`.
@@ -250,13 +284,15 @@ br_go:
     call br_toolbar                 ; the strip, because br_hpush above has
     jmp short .out                  ; just moved what Back and Forward may do
 .badurl:
+    mov si, [br_nmsg]
+    or si, si
+    jnz .say
     mov si, br_s_badurl
     jmp short .say
 .nomem:
     mov si, br_s_nomem
 .say:
-    mov [br_nmsg], si
-    mov byte [br_nstate], BN_ERR
+    call br_errst                   ; the refusal, said
     call br_promise                 ; **THIS TAIL IS A THIRD SETTLE** (SPEC.md
                                     ; 71.11). A `https://` URL, an empty host
                                     ; or a refused claim lands here with the
@@ -269,70 +305,11 @@ br_go:
                                     ; session: every raise repaints instead of
                                     ; restoring. BN_ERR is already stored, so
                                     ; br_promise's own state test re-states it
-    call br_status
 .out:                               ; ...and NOTHING here. The withdrawal is
-                                    ; above, at the transition; the two other
+    jmp br_pop6                     ; above, at the transition; the two other
                                     ; ways a fetch settles own the set, and the
                                     ; paths that never start one leave a
                                     ; promise that was already true untouched
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; br_claim - the three buffers a page needs, claimed on the UI TASK
-; out: CF=1 = one of them was refused, and br_free_all has undone the others
-;
-; The same FOUR br_load takes, at the ceiling rather than at a size, because a
-; server's Content-Length is a claim by a stranger and the page has not arrived
-; yet. The fourth is br_lnkclaim's and is a routine for exactly the reason this
-; comment used to say three. A refusal here is an ordinary outcome on a small machine
-; (SPEC.md 50.5) and is reported, not fatal.
-; -----------------------------------------------------------------------------
-br_claim:
-    push ax
-    push bx
-    push dx
-    mov ax, BR_MAXKB
-    mov [br_srckb], ax
-    call OSAPI_MEM_CLAIM
-    jc .fail
-    mov [br_srcseg], dx
-    mov ax, [br_srckb]
-    mov bx, BR_DOCMUL
-    mul bx
-    add ax, BR_DOCSLK
-    cmp ax, BR_DOCMAX
-    jbe .dok
-    mov ax, BR_DOCMAX
-.dok:
-    mov [br_dockb], ax
-    call OSAPI_MEM_CLAIM
-    jc .fail
-    mov [br_docseg], dx
-    mov ax, BR_LINEKB
-    call OSAPI_MEM_CLAIM
-    jc .fail
-    mov [br_lseg], dx
-    call br_lnkclaim                ; ...and the link arena, which this path
-                                    ; did NOT claim - so every page off the
-                                    ; WIRE had its anchors rendered as plain
-                                    ; text while a page opened from a floppy
-                                    ; linked perfectly (BROWSER-PLAN 6)
-    clc
-    jmp short .out
-.fail:
-    call br_free_all
-    stc
-.out:
-    pop dx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; br_split - a URL at DS:SI into br_host, br_port and br_path
@@ -352,32 +329,34 @@ br_split:
     push dx
     push si
     push di
-    mov word [br_port], 80
-    mov di, br_scheme               ; https:// ?
-    call br_pfx
-    jc .nohttps
-    stc
-    jmp .out
-.nohttps:
-    mov di, br_scheme2              ; http:// - stepped over if present
-    call br_pfx
+    push es
+    push ds                         ; br_hrefpfx reads ES:SI - the link
+    pop es                          ; resolver's, so one case-blind prefix
+    mov word [br_port], 80          ; test serves both
+    mov bx, br_s_schemes            ; https:// ?
+    call br_hrefpfx
+    jnc .https                      ; ...refused by name (SPEC.md 71.2)
+    mov bx, br_s_scheme             ; http:// - stepped over if present
+    call br_hrefpfx
     jc .host                        ; ...NOT present: SI is already the host
-    add si, 7                       ; ...present: past it. br_pfx answers CF=0
-.host:                              ; for a MATCH and does not advance SI
+    add si, 7                       ; ...present: past it. br_hrefpfx answers
+.host:                              ; CF=0 for a MATCH and does not advance SI
     mov di, br_host
     mov cx, BR_HOSTMAX-1
-.hloop:
-    mov al, [si]
-    or al, al
-    jz .hend
-    cmp al, '/'
+.hloop:                             ; the terminators are asked FIRST, so the
+    mov al, [si]                    ; one count test below is both the loop's
+    or al, al                       ; bound and the too-long verdict (apps
+    jz .hend                        ; size pass 2: it was a LOOP and then the
+    cmp al, '/'                     ; same three tests again after it)
     je .hend
     cmp al, ':'
     je .colon
+    jcxz .long
     mov [di], al
     inc di
     inc si
-    loop .hloop
+    dec cx
+    jmp .hloop
 .hend:
     mov byte [di], 0
     cmp di, br_host
@@ -386,31 +365,28 @@ br_split:
 .colon:
     mov byte [di], 0
     inc si
-    mov word [br_port], 0
+    xor ax, ax                      ; the port, accumulated in AX
+    mov cx, 10
 .pd:
     mov bl, [si]
-    cmp bl, '0'
-    jb .pdone
-    cmp bl, '9'
+    sub bl, '0'                     ; one unsigned compare is '0'..'9'
+    cmp bl, 9
     ja .pdone
     inc si
-    mov ax, [br_port]
-    mov cx, 10
     mul cx
-    sub bl, '0'
     xor bh, bh
     add ax, bx
-    mov [br_port], ax
     jmp short .pd
 .pdone:
-    cmp word [br_port], 0
-    jne .path
-    mov word [br_port], 80
+    or ax, ax
+    jnz .port
+    mov al, 80                      ; `:` with no digits, or 0: the default
+.port:
+    mov [br_port], ax
 .path:
     mov di, br_path
     mov cx, BR_PATHMAX-1
-    mov al, [si]
-    cmp al, '/'
+    cmp byte [si], '/'
     je .ploop
     mov byte [di], '/'              ; a bare host is its root, which is what
     inc di                          ; every browser and every user assumes
@@ -419,64 +395,26 @@ br_split:
     mov al, [si]
     or al, al
     jz .pend
+    jcxz .long
     mov [di], al
     inc di
     inc si
-    loop .ploop
+    dec cx
+    jmp .ploop
 .pend:
     mov byte [di], 0
     clc
     jmp short .out
+.https:                             ; ...and the NAME is said: this answered
+    mov word [br_nmsg], br_s_nohttps ; br_go's catch-all `Not an http URL`
+    jmp short .bad                  ; for a typed https://, where a clicked
+                                    ; link said the promised words
+.long:
+    mov word [br_nmsg], br_s_urltoo
 .bad:
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- br_pfx - does DS:SI start with the NUL prefix at DS:DI? (case-blind) ----
-; out: CF=0 yes. SI is NOT advanced - the caller decides by how much.
-br_pfx:
-    push ax
-    push bx
-    push si
-    push di
-.c:
-    mov bl, [di]
-    or bl, bl
-    jz .yes
-    mov al, [si]
-    or al, al
-    jz .no
-    cmp al, 'A'
-    jb .cmp
-    cmp al, 'Z'
-    ja .cmp
-    add al, 32
-.cmp:
-    cmp al, bl
-    jne .no
-    inc si
-    inc di
-    jmp short .c
-.yes:
-    pop di
-    pop si
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop di
-    pop si
-    pop bx
-    pop ax
-    stc
-    ret
+    jmp br_pop7
 
 ; =============================================================================
 ; THE WORKER
@@ -520,7 +458,17 @@ br_nstep:
     cmp al, BN_HEAD
     je .drain
     cmp al, BN_BODY
-    je .drain
+    jne .out
+    mov al, [br_fin]                ; ...past the drain (SPEC.md 71.14):
+    or al, al                       ; 0 still draining, 1 waiting for the UI
+    jz .drain                       ; task's claims, 2 claimed - parse; 4
+    cmp al, 4                       ; waiting for the UI task's frameset
+    je .kick                        ; re-claim, 5 re-claimed - start the first
+    cmp al, 5                       ; child (SPEC.md 71.15)
+    je .framestart
+    dec al
+    jz .kick                        ; the wake was refused or not yet served
+    call br_finish
     jmp .out
 
 .open:
@@ -529,12 +477,10 @@ br_nstep:
                                     ; cable, RAMDISK.DRV shares the second, and
                                     ; net_find asks each for NETV_IDENT
     jc .nodrv                       ; (apps/os88sock.inc, SPEC.md 20.11.1)
-    mov bh, NET_CLASS
-    mov bl, NETV_STATE
-    call OSAPI_DRV_CALL
-    jc .nodrv
-    test al, NSTF_SOCK
-    jz .nolink
+    jz .nolink                      ; ...and NETV_STATE's NSTF_SOCK with it,
+                                    ; which is OS88SOCK_STATE's half
+    cmp byte [br_keep], 0           ; br_go found none and KEPT the page, so
+    jne .nodrv                      ; there is no source claim of this fetch's
     mov bh, NET_CLASS
     mov bl, NETV_OPEN
     mov si, br_host
@@ -570,7 +516,7 @@ br_nstep:
 .up:
     call br_gchk
     jc .out
-    call br_req                     ; compose GET ... into br_reqb
+    call br_req                     ; compose the bounded request into br_reqb
     mov word [br_sent], 0
     mov byte [br_nstate], BN_SEND
     jmp .redraw
@@ -619,8 +565,31 @@ br_nstep:
     jnz .out                        ; closing, and there is still data behind
     call br_gchk
     jc .out
-    call br_finish
-    jmp short .out
+    call br_hclose
+    mov ax, [br_code]               ; **A REDIRECT IS DECIDED HERE, BEFORE THE
+    cmp ax, 301                     ; HAND-OVER** (SPEC.md 71.15): the source
+    je .redirect                    ; is still the BR_MAXKB ceiling and nothing
+    cmp ax, 302                     ; else has been claimed, so a hop neither
+    je .redirect                    ; leaks a claim nor drains its target into
+    cmp ax, 303                     ; one cut to the redirect body's size - and
+    je .redirect                    ; a 301 with no body at all, which is what
+    cmp ax, 307                     ; most servers send, is followed rather
+    je .redirect                    ; than reported `Empty reply` below
+    cmp ax, 308
+    je .redirect
+    mov ax, [br_nlen]               ; **THE PAGE HAS ARRIVED, AND ITS SIZE IS
+    mov [br_srclen], ax             ; A FACT** (SPEC.md 71.14): hand it to the
+    or ax, ax                       ; UI task, which cuts the source to it and
+    jz .empty                       ; claims the other three buffers from it -
+    mov byte [br_fin], 1            ; a worker may not (SPEC.md 20.6 rule 7).
+                                    ; The state stays BN_BODY, IN FLIGHT, so a
+.kick:                              ; navigation in the gap drops this fetch
+    mov bx, [br_win]                ; as it always did. Posted again on every
+    call OSAPI_WM_WAKE              ; pass until answered: a wake into a full
+    jmp short .out                  ; ring is refused, and the slot says kick
+.empty:                             ; again
+    mov si, br_s_empty
+    jmp short .fail
 
 .retry:
     cmp ax, NETE_BUSY
@@ -633,19 +602,94 @@ br_nstep:
     mov [br_nmsg], si
     mov byte [br_nstate], BN_ERR
     call br_hclose
+.failchild:                         ; ...and a CHILD that failed closes the
+    cmp byte [br_frameappend], 0    ; page whole - the table it was a row of,
+    je .redraw                      ; D_END, the frameset's title, bar and
+    call OSAPI_GFX_LOCK             ; base back (br_frameclose) - under the
+    call br_gchk                    ; lock br_go runs under, so a navigation
+    jc .failun                      ; in the gap cannot have freed beneath it
+    call br_frameclose
+.failun:
+    call OSAPI_GFX_UNLOCK
 .redraw:
     call br_nshow
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop7
+
+.redirect:                          ; 301/302/303/307/308, AX = the code.
+    cmp byte [br_redirurl], 0       ; Decided UNDER THE LOCK br_go runs under,
+    je .redirbad                    ; the way br_finish decides .page: a
+    cmp byte [br_redirs], 3         ; navigation that waited on it has dropped
+    jae .redirmany                  ; this fetch and owns the bar now, so the
+    inc byte [br_redirs]            ; generation is asked again before
+    cmp ax, 307                     ; br_resolve writes it. 301/302/303 after
+    jae .redirsame                  ; a POST become a GET (SPEC.md 71.17); 307
+    mov byte [br_reqpost], 0        ; and 308 keep the method, which is what
+.redirsame:                         ; they are for
+    mov si, br_redirurl
+    push ds
+    pop es                          ; br_resolve reads ES:SI...
+    call OSAPI_GFX_LOCK             ; ...and may paint its refusal (br_errst)
+    call br_gchk
+    jc .redirunlock
+    call br_resolve
+    jc .redirrefused
+    mov si, br_loc                  ; br_ubuf IS the bar's LN_BUF, so its
+    call os88line_resync            ; LN_LEN and LN_CAR follow the new text
+    mov si, br_ubuf
+    call br_split
+    jc .redirunbad
+    call br_hreset                  ; per-fetch header state, as br_go sets it
+    mov byte [br_nstate], BN_OPEN   ; ...and the source claim stands at its
+.redirunlock:                       ; ceiling for the target
+    call OSAPI_GFX_UNLOCK
+    jmp .out
+.redirrefused:                      ; https: and too-long said why themselves
+    call OSAPI_GFX_UNLOCK           ; and stored BN_ERR; a `#frag` refuses
+    cmp byte [br_nstate], BN_ERR    ; silently, and left in BN_BODY it would
+    je .failchild                   ; drain the closed handle and say `Link
+    mov si, br_s_redirbad           ; lost` about a redirect it declined
+    jmp .fail
+.redirunbad:
+    call OSAPI_GFX_UNLOCK
+.redirbad:
+    mov si, br_s_redirbad
+    jmp .fail
+.redirmany:
+    mov si, br_s_redirect
+    jmp .fail
+
+.framestart:                        ; [br_fin] = 5: the UI task has re-claimed
+    call OSAPI_GFX_LOCK             ; the page buffers at the ceiling
+    call br_gchk                    ; (br_frameclaim, SPEC.md 71.15), and the
+    jc .frameun                     ; first child starts the way br_finish
+    call br_framefetch              ; starts the others - under the lock br_go
+    mov byte [br_fin], 0            ; runs under, so a navigation in the gap
+    cmp byte [br_nstate], BN_ERR    ; cannot free beneath it; 0 for the
+    jne .frameun                    ; child's own drain
+    call br_frameclose              ; a refused first child closes the page
+.frameun:                           ; whole, as a refused later one does
+    call OSAPI_GFX_UNLOCK
+    cmp byte [br_nstate], BN_ERR
+    jne .out
+    jmp .redraw
 
 ; --- br_qstat - NETV_STATUS on our handle. out AH = state, CX = readable ----
+; --- br_hreset - a reply's header state back to its start; AX = 0 out ---------
+; A fetch (br_go), a redirect hop and a frame child each carried this run of
+; stores inline (apps size pass 2).
+br_hreset:
+    xor ax, ax
+    mov [br_nlen], ax
+    mov [br_code], ax
+    mov [br_trunc], al
+    mov [br_hcol], ax
+    mov [br_hstate], al
+    mov [br_lstate], al
+    mov [br_redirlen], ax
+    mov [br_redirurl], al
+    ret
+
 br_qstat:
     mov al, [br_hnd]
     mov bh, NET_CLASS
@@ -668,10 +712,20 @@ br_qstat:
 ; -----------------------------------------------------------------------------
 br_abort:
     push ax
-    inc byte [br_gen]
+    inc byte [br_gen]               ; FIRST, and the order is the handshake:
+    mov ax, [br_srclen]             ; ...then a parse in progress is STOPPED
+    mov word [br_srclen], 0         ; - every bound br_parse tests is this
+.parse:                             ; word - and waited for, because the
+    cmp byte [br_fin], 3            ; caller frees its buffers next (SPEC.md
+    jne .parsed                     ; 71.14). br_finish stores 3 before it
+    call OSAPI_TASK_YIELD           ; checks the generation, so a worker that
+    jmp short .parse                ; has not got there yet finds itself
+.parsed:                            ; superseded and never starts
+    mov [br_srclen], ax             ; back: br_load reads it as the file's size
     call br_hclose
-    mov byte [br_nstate], BN_IDLE
-    mov word [br_nmsg], 0
+    xor ax, ax
+    mov [br_nstate], al             ; BN_IDLE
+    mov [br_nmsg], ax
     pop ax
     ret
 
@@ -681,23 +735,19 @@ br_abort:
 br_gchk:
     push ax
     mov al, [br_gen]
-    cmp al, [br_gen0]
-    je .ok
-    pop ax
-    stc
-    ret
-.ok:
-    pop ax
-    clc
+    sub al, [br_gen0]               ; 0 = still this pass's fetch
+    cmp al, 1                       ; borrows exactly when it is 0...
+    cmc                             ; ...so CF=1 is "it moved". Every caller
+    pop ax                          ; reads CF and nothing else
     ret
 
 ; --- br_hclose - give the handle back, whatever happened --------------------
 br_hclose:
     push ax
     push bx
-    cmp byte [br_hnd], 0
-    je .out
     mov al, [br_hnd]
+    or al, al
+    jz .out
     mov bh, NET_CLASS
     mov bl, NETV_CLOSE
     call OSAPI_DRV_CALL
@@ -708,7 +758,7 @@ br_hclose:
     ret
 
 ; -----------------------------------------------------------------------------
-; br_req - compose the request into br_reqb, and set br_reqn
+; br_req - compose GET or POST into br_reqb, and set br_reqn
 ;
 ; HTTP/1.0 and `Connection: close`, which together are the whole reason this
 ; needs no chunked decoder: a 1.0 server ends a response by closing, and
@@ -721,24 +771,70 @@ br_req:
     push di
     mov di, br_reqb
     mov bx, br_reqb + BR_REQMAX - 1 ; the last byte br_rputs may write, set
-                                    ; ONCE for all five pieces: the size above
+                                    ; ONCE for every piece: the size above
                                     ; is derived and correct, and this is what
                                     ; keeps a longer User-Agent from quietly
                                     ; making it wrong again
     mov si, br_s_get
-    call br_rputs
+    cmp byte [br_reqpost], 0
+    je .line
+    mov si, br_r_post
+.line:
+    call br_rputs                   ; the method
     mov si, br_path
     call br_rputs
     mov si, br_s_http
     call br_rputs
     mov si, br_host
     call br_rputs
+    cmp byte [br_reqpost], 0
+    je .gettail
+    mov si, br_r_posttail
+    call br_rputs
+    mov ax, [br_un]
+    call br_rputdec
+    mov si, br_r_endbody
+    call br_rputs
+    mov si, br_url
+    call br_rputs
+    jmp short .finish
+.gettail:
     mov si, br_s_tail
     call br_rputs
+.finish:
     sub di, br_reqb
     mov [br_reqn], di
     pop di
     pop si
+    pop bx
+    pop ax
+    ret
+
+; The body is at most 159 bytes, so three decimal digits cover its exact length.
+; The request bound above includes this field and the existing body staging.
+br_rputdec:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
+    push ax
+    push bx
+    push cx
+    push dx
+    xor cx, cx
+    mov bx, 10
+.digits:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .digits
+.emit:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop .emit
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -849,6 +945,9 @@ br_hdrb:
     push ax
     push bx
     push cx
+    push dx
+    push si
+    push di
     cmp word [br_hcol], 12
     jae .eol
     cmp word [br_hcol], 9
@@ -875,6 +974,7 @@ br_hdrb:
     je .cr
     cmp al, 10
     je .lf
+    call br_locbyte
     mov byte [br_hstate], 0         ; any other byte breaks the run
     jmp short .out
 .cr:
@@ -886,6 +986,7 @@ br_hdrb:
     mov byte [br_hstate], 3
     jmp short .out
 .lf:
+    mov byte [br_lstate], 0
     cmp byte [br_hstate], 3
     je .blank
     cmp byte [br_hstate], 1
@@ -898,6 +999,63 @@ br_hdrb:
 .blank:
     mov byte [br_nstate], BN_BODY   ; ...and everything after this is the page
 .out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Recognise "Location:" at the start of a line while the bytes pass.  Only its
+; value survives; retaining a 160-byte general header line would buy nothing.
+br_locbyte:
+    push ax
+    push bx
+    push cx
+    push si
+    mov bl, [br_lstate]
+    cmp bl, 0FFh
+    je .out
+    cmp bl, 9
+    jae .value
+    xor bh, bh
+    mov cl, al
+    cmp cl, 'A'
+    jb .cmp
+    cmp cl, 'Z'
+    ja .cmp
+    or cl, 0x20
+.cmp:
+    cmp cl, [br_s_location+bx]
+    jne .miss
+    inc byte [br_lstate]
+    cmp byte [br_lstate], 9
+    jne .out
+    mov word [br_redirlen], 0
+    mov byte [br_redirurl], 0
+    jmp .out
+.value:
+    cmp bl, 9
+    jne .store
+    cmp al, ' '
+    ja .first
+    jmp short .out
+.first:
+    inc byte [br_lstate]
+.store:
+    mov bx, [br_redirlen]
+    cmp bx, BR_UBUF-1
+    jae .out
+    mov [br_redirurl+bx], al
+    inc bx
+    mov [br_redirlen], bx
+    mov byte [br_redirurl+bx], 0
+    jmp .out
+.miss:
+    mov byte [br_lstate], 0FFh
+.out:
+    pop si
     pop cx
     pop bx
     pop ax
@@ -909,7 +1067,9 @@ br_hdrb:
 ; Runs on the WORKER, which is legal for everything it does: the parse and the
 ; layout touch only claimed memory, and the draw takes the gfx lock the way any
 ; background painter does (SPEC.md 20.6 rule 3). What it may NOT do is free the
-; source claim - see the file header.
+; source claim - see the file header. Nor may it own the buffers' LIFETIME:
+; [br_fin] = 3 says "parsing", and br_abort stops the parse and waits on it
+; before a navigation frees what the parse writes into (SPEC.md 71.14).
 ; -----------------------------------------------------------------------------
 br_finish:
     push ax
@@ -918,18 +1078,93 @@ br_finish:
     push dx
     push si
     push di
-    call br_hclose
-    mov ax, [br_nlen]
-    mov [br_srclen], ax
-    or ax, ax
-    jz .empty
+    mov byte [br_fin], 3            ; main's page-buffer ownership handshake
+    call br_gchk
+    jc .drop                        ; (a redirect never gets here: br_nstep's
+                                    ; .maybeend follows it before the hand-over)
+.page:
     mov al, [br_trunc]              ; br_take's ceiling, BANKED ACROSS THE
     push ax                         ; PARSE: br_parse clears the flag on its
     call br_parse                   ; way in and br_flushbuf may set it again,
     pop ax                          ; so the two truncations are one answer
+    mov byte [br_fin], 0            ; ...over: a waiting UI task may free now
+    call OSAPI_GFX_LOCK             ; and the rest is decided UNDER THE LOCK,
+    call br_gchk                    ; which br_go runs under: a navigation
+    jc .nodraw                      ; during the parse dropped this page, and
+                                    ; it must not store BN_DONE over the new
+                                    ; fetch's BN_OPEN or label its history
     or al, [br_trunc]
-    jz .notrunc
-    mov word [br_nmsg], br_s_trunc  ; ...and a page that was CUT says so, which
+    or [br_framecut], al
+    cmp byte [br_frameappend], 0
+    jne .framechild
+    cmp byte [br_framecount], 0
+    je .parsed
+    cmp byte [br_framecut], 0
+    jne .parsed                     ; a cut frameset cannot be safely composed
+    push es                         ; (CX, SI and DI: .out restores them)
+    push ds
+    pop es
+    mov si, br_ptitle
+    mov di, br_frametitle
+    mov cx, BR_TITMAX
+    rep movsb
+    mov si, br_ubuf                 ; ...and the frameset's own URL, which the
+    mov di, br_frameurl             ; children overwrite in the bar and
+    mov cx, BR_UBUF                 ; br_frameclose puts back
+    rep movsb
+    pop es
+    mov word [br_doclen], 0         ; frame order is rebuilt from queue metadata
+    mov byte [br_factive], 0
+    mov byte [br_frameappend], 1
+    mov byte [br_frameidx], 0
+    mov byte [br_fin], 4            ; **THE CHILDREN NEED THE PAGE BUFFERS AT
+    call OSAPI_GFX_UNLOCK           ; THE CEILING** (SPEC.md 71.15): the source
+    mov bx, [br_win]                ; was cut to the frameset's own size and
+    call OSAPI_WM_WAKE              ; the document claimed from it, so the
+    jmp .out                        ; first child was cut at a kilobyte - and a
+                                    ; worker may not claim. The UI task
+                                    ; re-claims on this wake (br_frameclaim)
+                                    ; and answers 5; br_nstep .framestart
+                                    ; fetches the first child
+.frameleave:
+    cmp byte [br_nstate], BN_ERR
+    jne .frameun
+    call br_frameclose              ; a refused child closes the page whole
+.frameun:
+    call OSAPI_GFX_UNLOCK           ; **THE HOLD TAKEN AT .page COMES OFF
+    cmp byte [br_nstate], BN_ERR    ; HERE**: both frame legs left through
+    jne .out                        ; .out with it held, and the next lock on
+    call br_nshow                   ; either task spun for ever. A refused
+    jmp .out                        ; child is said once the hold is off -
+                                    ; br_nshow takes the lock itself
+.framechild:
+    cmp byte [br_framecut], 0
+    jne .framedone                  ; stop fetching after the document ceiling
+    mov bx, [br_doclen]
+    or bx, bx
+    jz .noend
+    dec bx
+    mov es, [br_docseg]
+    cmp byte [es:bx], D_END
+    jne .noend
+    dec word [br_doclen]            ; remove this fragment's D_END
+.noend:
+    mov al, [br_frameidx]
+    cmp al, [br_framecount]
+    jae .framedone
+    call br_framefetch
+    jmp .frameleave
+.framedone:
+    call br_frameclose
+.parsed:
+    mov ax, br_s_trunc              ; ...and a page that was CUT says so, which
+    cmp byte [br_framecut], 0
+    jne .warn
+    mov ax, br_s_linklim
+    cmp byte [br_linklimited], 0
+    je .notrunc
+.warn:
+    mov [br_nmsg], ax
 .notrunc:                           ; is SPEC.md 47 rule 3: the state line is
                                     ; the only place it can, and `Ready` under
                                     ; an article that stops mid-sentence reads
@@ -943,18 +1178,17 @@ br_finish:
     call br_hlabel                  ; an unconditional overwrite
 .notit:
     mov byte [br_nstate], BN_DONE
-    call OSAPI_GFX_LOCK
     call br_promise                 ; ...and the page is standing still again
     mov si, [br_win]
-    mov word [br_cols], 0           ; force br_measure to relayout: the page
+    xor ax, ax                      ; (br_measure keeps AX)
+    mov [br_cols], ax               ; force br_measure to relayout: the page
                                     ; changed under a band whose width did not
-    call br_measure
-    mov word [br_top], 0
-    mov word [br_ptop], 0
-    call br_layout                  ; ...and the LAYOUT runs whether or not we
-                                    ; draw: br_paint measures but does not lay
-                                    ; out, so a reveal after a skipped frame
-                                    ; would paint a stale line table
+    call br_measure                 ; ...and THAT is the layout, run whether
+    mov [br_top], ax                ; or not we draw: br_paint measures but
+    mov [br_ptop], ax               ; does not lay out, so a reveal after a
+                                    ; skipped frame would paint a stale line
+                                    ; table. (A br_layout call followed here
+                                    ; and laid the page out a SECOND time.)
     mov bx, [br_win]
     call OSAPI_WM_CLIP_SET          ; **A BACKGROUND PAINTER ARMS A REGION OR
     jc .nodraw                      ; PAINTS OVER THE WINDOW ON TOP OF IT**
@@ -982,18 +1216,211 @@ br_finish:
                                     ; here rather than joining it
 .nodraw:
     call OSAPI_GFX_UNLOCK
+.out:
+    jmp br_pop6
+.drop:                              ; superseded before the parse began: the
+    mov byte [br_fin], 0            ; buffers may already be gone. Only the
+    jmp short .out                  ; worker sets 1, so 0 cannot hide a hand-over
+
+; -----------------------------------------------------------------------------
+; br_netclaim - the UI task's half of the hand-over (SPEC.md 71.14)
+; Called from br_onwake when the worker has drained a page and set [br_fin] = 1.
+; Cuts the source claim to the page and claims the document, the line table and
+; the link arena from that size, then hands back to the worker with
+; [br_fin] = 2. A refusal is the BN_ERR br_go used to give for the same claims.
+; All registers preserved.
+; -----------------------------------------------------------------------------
+br_netclaim:
+    push ax
+    push cx
+    push dx
+    cmp byte [br_frameappend], 0
+    jne .claimed                     ; keep the existing page claims for frames
+    mov ax, [br_srclen]             ; br_load's own sizing: KB, plus one
+    mov cl, 10
+    shr ax, cl
+    inc ax
+    mov dx, [br_srcseg]
+    call OSAPI_MEM_REGROW           ; a SHRINK, which always succeeds in place
+    jc .keep                        ; ...and if it did not, the ceiling stands
+    mov [br_srcseg], dx
+    mov [br_srckb], ax
+.keep:
+    call br_claimrest
+    jc .nomem
+.claimed:
+    mov byte [br_fin], 2            ; the worker parses on its next pass
     jmp short .out
-.empty:
-    mov si, br_s_empty
-    mov [br_nmsg], si
+.nomem:
+    mov word [br_nmsg], br_s_nomem
     mov byte [br_nstate], BN_ERR
     call br_nshow
 .out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; Reuse the source and socket for one queued frame. br_frameidx is the next
+; link-arena entry; no frame-sized allocation or retained response is needed.
+br_framefetch:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    ; Restore the base URL of the frameset before resolving relative srcs.
+    push ds
+    pop es
+    mov si, br_framehost            ; host and path are ONE run on both
+    mov di, br_host                 ; sides, so one copy
+    mov cx, BR_HOSTMAX + BR_PATHMAX
+    rep movsb
+    xor bx, bx
+    mov bl, [br_frameidx]
+    mov al, [br_frameurls+bx]
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    mov si, [br_lnkoff+bx]
+    mov es, [br_lnkseg]
+    mov bx, br_s_schemes
+    call br_hrefpfx
+    jnc .failed                     ; HTTPS cannot be fetched by this stack
+    call br_resolve
+    jc .failed
+    ; Save this frame's resolved base URL once in the existing link arena.
+    ; Every anchor in the frame can then keep its short source href.
+    mov dx, 0FFFFh                      ; no room in the arena: no base
+    mov ax, [br_upos]
+    inc ax                              ; include the terminating NUL
+    mov bx, [br_lnkw]
+    add ax, bx
+    cmp ax, [br_linkcap]
+    jae .base
+    mov cx, [br_upos]
+    inc cx
+    mov si, br_ubuf
+    mov dx, bx                          ; DX = where the base lands
+    mov di, bx
+    mov es, [br_lnkseg]
+    cld
+    rep movsb
+    mov [br_lnkw], di
+    push ds
+    pop es
+.base:
+    xor bx, bx
+    mov bl, [br_frameidx]
+    shl bx, 1
+    mov [br_framebaseoff+bx], dx
+    mov al, [br_frameidx]
+    mov [br_framecurrent], al
+    mov si, br_ubuf
+    call br_split
+    jc .failed
+    xor bx, bx
+    mov bl, [br_frameidx]
+    mov ah, [br_frameflags+bx]
+    test ah, 2                      ; horizontal frames share a table row
+    jz .fullwidth
+    cmp byte [br_factive], 0
+    jne .tableopen
+    mov al, D_TAB1
+    call br_put
+    mov byte [br_factive], 1
+.tableopen:
+    test ah, 1
+    jz .cell
+    mov al, D_ROW
+    call br_put
+.cell:
+    mov al, D_CELL
+    call br_put
+    jmp .markers
+.fullwidth:
+    cmp byte [br_factive], 0
+    je .rule
+    mov al, D_TAB0
+    call br_put
+    mov byte [br_factive], 0
+.rule:
+    mov al, D_HR
+    call br_put
+.markers:
+    call br_flushbuf
+    call br_hreset
+    mov [br_redirs], al             ; AL = 0, br_hreset's
+    inc byte [br_frameidx]
+    mov byte [br_nstate], BN_OPEN
+    jmp .out
+.failed:
+    mov word [br_nmsg], br_s_framebad
+    mov byte [br_nstate], BN_ERR    ; said by the caller, once its hold is off
+.out:
+    pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; br_frameclose - the last child is in (or one was refused): close the page
+; in:  the worker, gfx lock held, [br_frameappend] = 1
+; out: the document ended, the frameset's title, host, path and bar back,
+;      [br_frameappend] = 0; all registers preserved
+;
+; ONE TAIL FOR BOTH ENDINGS. The children resolve into br_ubuf - the bar's own
+; LN_BUF - and br_split writes br_host/br_path from it, so after the last one
+; all three described the LAST CHILD: Reload re-fetched that child alone with
+; the frameset gone, a top-level relative link resolved against its directory,
+; and the bar's LN_LEN was the length of whatever text came before. And a child
+; that FAILED left the table it was a row of open and its own title in the
+; caption. The frameset's own four are banked at .page's frameset entry and
+; put back here, whichever way the children ended.
+; -----------------------------------------------------------------------------
+br_frameclose:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    cmp byte [br_factive], 0
+    je .end
+    mov al, D_TAB0
+    call br_put
+    mov byte [br_factive], 0
+.end:
+    mov al, D_END
+    call br_put
+    call br_flushbuf
+    mov byte [br_frameappend], 0
+    push ds
+    pop es
+    cld
+    mov si, br_frametitle
+    mov di, br_ptitle
+    mov cx, BR_TITMAX
+    rep movsb
+    mov si, br_framehost            ; host and path are ONE run on both
+    mov di, br_host                 ; sides, so one copy
+    mov cx, BR_HOSTMAX + BR_PATHMAX
+    rep movsb
+    mov si, br_frameurl
+    mov di, br_ubuf
+    mov cx, BR_UBUF
+    rep movsb
+    mov si, br_loc                  ; br_ubuf IS the bar's LN_BUF, so its
+    call os88line_resync            ; LN_LEN and LN_CAR follow the text
+    pop es
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -1028,7 +1455,13 @@ br_nshow:
 ; ONE OPAQUE font_run, space-padded to a fixed width (SPEC.md 6.1): it changes
 ; on every state edge of a fetch and a fill-then-letter pair would blank it
 ; each time.
+;
+; br_errst is the refusal's own door: SI = the message, the state BN_ERR, and
+; then the report. On the UI task only - it draws without taking the lock.
 ; -----------------------------------------------------------------------------
+br_errst:
+    mov [br_nmsg], si
+    mov byte [br_nstate], BN_ERR
 br_status:
     push ax
     push bx
@@ -1036,6 +1469,7 @@ br_status:
     push dx
     push si
     push di
+    push es
     mov bl, [br_nstate]
     xor bh, bh
     shl bx, 1
@@ -1067,29 +1501,20 @@ br_status:
     jmp .len
 .lend:
     pop si
+    push ds                         ; the string ops write through ES, which
+    pop es                          ; is not ours on either task
+    cld
     mov di, br_nsline
     cmp bx, cx
     jbe .pad
     mov bx, cx                      ; longer than the field: it is clipped, and
 .pad:                               ; the pad is then empty
     sub cx, bx                      ; CX = the spaces in front
-    jcxz .text
     mov al, ' '
-.sp:
-    mov [di], al
-    inc di
-    loop .sp
-.text:
+    rep stosb
     mov cx, bx                      ; ...then the state itself
-    jcxz .term
-.copy:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .copy
-.term:
-    mov byte [di], 0
+    rep movsb
+    mov [di], ch                    ; ...and its NUL (CX is 0 after the rep)
     mov cx, [br_spen]               ; 8-aligned by br_srect, so this takes
     mov dx, [br_tby]                ; font_run's single-store path and never
     add dx, (BR_TBH - 8) / 2        ; blanks - os88line's own finding, and this
@@ -1097,24 +1522,21 @@ br_status:
                                     ; The pen y is the BUTTON LABEL's, so the
                                     ; state sits on their baseline
     mov si, br_nsline
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop7
 
 br_s_get:    db 'GET ', 0
+br_r_post:   db 'POST ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.0', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.4', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
-br_scheme:   db 'https://', 0
-br_scheme2:  db 'http://', 0
+br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.4', 13, 10
+               db 'Connection: close', 13, 10
+               db 'Content-Type: application/x-www-form-urlencoded', 13, 10
+               db 'Content-Length: ', 0
+br_r_endbody: db 13, 10, 13, 10, 0
 
 br_nnames:   dw br_s_ready, br_s_look, br_s_conn, br_s_asking
              dw br_s_read, br_s_read, br_s_ready, br_s_fail
@@ -1131,4 +1553,9 @@ br_s_lost:   db 'Link lost', 0
 br_s_empty:  db 'Empty reply', 0
 br_s_badurl: db 'Not an http URL', 0
 br_s_trunc:  db 'Page truncated', 0
+br_s_location: db 'location:', 0
+br_s_redirect: db 'Too many redirects', 0
+br_s_redirbad: db 'Redirect failed', 0
+br_s_framebad: db 'Frame URL invalid', 0
+br_s_linklim: db 'Links limited', 0
 br_s_nomem:  db 'Not enough memory', 0

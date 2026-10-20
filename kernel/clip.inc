@@ -72,7 +72,7 @@ CLIP_MAXKB equ 32               ; the ceiling, KB. Not arbitrary: the largest
                                 ; which is what the length check compares
 
 ; -----------------------------------------------------------------------------
-; clip_put - replace the clipboard's contents (API slot 0x0320)
+; clip_put - replace the clipboard's contents (API slot 0x0268)
 ;
 ; in:       ES:SI = the text, CX = its length in bytes. CX = 0 EMPTIES the
 ;           clipboard, which is a real operation and not an error
@@ -88,13 +88,7 @@ CLIP_MAXKB equ 32               ; the ceiling, KB. Not arbitrary: the largest
 ; an X stub would have reached the package's image and nothing else.
 ; -----------------------------------------------------------------------------
 clip_put:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
     push ds
     push es
     mov bp, es                  ; bank the caller's segment: the copy runs
@@ -122,16 +116,21 @@ clip_put:
                                 ; overwritten and a regrow would need both
                                 ; blocks free at once to preserve them
     mov bx, MEM_K_CLIP
+%ifdef OS88_COMPACT
     push word [mem_pinseg]      ; THE SOURCE IS PINNED ACROSS THE CLAIM (SPEC.md
     mov [mem_pinseg], bp        ; 66.3 rule 5): the caller's text is very
-    call mem_claim              ; often a document claim that is itself
-    pop word [mem_pinseg]       ; movable, this claim can compact, and the
-                                ; copy of its segment in BP is on OUR stack -
-                                ; a stale one no relocation proc can repair
+%endif                          ; often a document claim that is itself
+    call mem_claim              ; movable, this claim can compact, and the
+%ifdef OS88_COMPACT
+    pop word [mem_pinseg]       ; copy of its segment in BP is on OUR stack -
+%endif                          ; a stale one no relocation proc can repair.
+                                ; kern_small moves nothing (SPEC.md 66.0), so
+                                ; there is no window to pin against
     jc .toobig                  ; clip_drop already emptied it
     mov [clip_seg], dx
     mov [clip_kb], al           ; ...while AX still holds the size, so no bank
                                 ; is needed round the call below
+%ifdef OS88_COMPACT
     mov ax, clip_reloc          ; ...and MOVABLE (SPEC.md 66.5.6): one word,
                                 ; read immediately before each copy, and a
                                 ; claim that outlives the app that filled it -
@@ -143,25 +142,23 @@ clip_put:
                                 ; is the worked example that cost SPEC.md
                                 ; 66.5.6.2 a shipped defect
     call COLD_SEG:mmf_mem_movable
+%endif                          ; ...and nothing moves on kern_small (66.0)
 .room:
     mov [clip_bytes], cx        ; while DS is still ours
     mov es, [clip_seg]
     mov ds, bp                  ; DS:SI = the caller's text, ES:DI = the claim
-    xor di, di
-    cld                         ; SPEC.md 1: every string op sets it
-    rep movsb                   ; DS is the caller's for four more instructions
+    xor di, di                  ; (DF = 0 is the contract on entry, SPEC.md 1
+    rep movsb                   ; rule 3 - no `cld`)                   ; DS is the caller's for four more instructions
                                 ; - .out's own `pop ds` restores the entry bank
                                 ; and nothing between reads it, the two pops
                                 ; addressing SS and kret_bp being a run of pops
                                 ; and a ret. Do not re-add a `push cs / pop ds`
                                 ; here: it wrote a register nobody read
-    jmp short .ok
-.empty:
-    call clip_drop
-.ok:                            ; both of these are the CF=0 answer, so one
-    clc                         ; `clc` serves them; `.toobig` still enters at
-    jmp short .out              ; its own `stc` below
-.toobig:
+    jmp short .out              ; CF = 0: `xor di, di` cleared it and REP
+.empty:                         ; MOVSB writes no flag
+    call clip_drop              ; ...and CF = 0 out of clip_drop too (its
+    jmp short .out              ; header says so); `.toobig` enters at its
+.toobig:                        ; own `stc` below
     stc
 .out:
     pop es                      ; POP touches no flags, so the answer above
@@ -169,7 +166,7 @@ clip_put:
     jmp kret_bp
 
 ; -----------------------------------------------------------------------------
-; clip_get - copy the clipboard into the caller's buffer (API slot 0x0328)
+; clip_get - copy the clipboard into the caller's buffer (API slot 0x026E)
 ;
 ; in:       ES:DI = the destination, CX = its capacity in bytes
 ; out:      CF = 1 the clipboard is empty (AX = CX = 0); CF = 0 with
@@ -183,11 +180,10 @@ clip_put:
 ; corrupted anything.
 ; -----------------------------------------------------------------------------
 clip_get:
-    push bx
-    push dx
-    push si
-    push di
-    push ds
+    push si                     ; NO BX OR DX BANK: nothing below writes
+    push di                     ; either - clip_size spends AX alone and the
+    push ds                     ; copy CX/SI/DI - so the pair pushed for
+                                ; nobody (kernel size pass 10: 4 bytes)
     call clip_size              ; the slot below IS this test: it answers
     jc .empty                   ; CF=1 with AX=0 when empty and CF=0 with the
                                 ; length otherwise, which is the pair of facts
@@ -199,7 +195,6 @@ clip_get:
     push cx
     mov ds, [clip_seg]          ; DS:SI = the clipboard, ES:DI the caller's
     xor si, si
-    cld
     rep movsb                   ; AX is untouched from clip_size to the ret,
                                 ; so the whole length rides out unbanked; and
                                 ; DS stays the clipboard's for three more
@@ -207,9 +202,8 @@ clip_get:
                                 ; writes a flag, and .out's own `pop ds` is
                                 ; two lines down. A `push cs / pop ds` here
                                 ; wrote a register nobody read
-    pop cx
-    clc
-    jmp short .out
+    pop cx                      ; CF = 0 from the `xor si, si` above: neither
+    jmp short .out              ; `rep movsb` nor a pop writes a flag
 .empty:
     xor cx, cx
     stc
@@ -217,12 +211,10 @@ clip_get:
     pop ds
     pop di
     pop si
-    pop dx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
-; clip_size - how much text the clipboard holds (API slot 0x0330)
+; clip_size - how much text the clipboard holds (API slot 0x0274)
 ;
 ; in:       nothing
 ; out:      CF = 1 and AX = 0 when it is empty; else CF = 0 and AX = the
@@ -247,8 +239,9 @@ clip_size:
 
 ; -----------------------------------------------------------------------------
 ; clip_drop - give the block back and forget it (module-internal)
-; in:  nothing; out: nothing (every register preserved; the FLAGS are not -
-;      see the `ret` below, which is where the two call sites are audited)
+; in:  nothing; out: CF = 0 (every register preserved; the other flags are
+;      not - see the `ret` below, which is where the two call sites are
+;      audited)
 ; -----------------------------------------------------------------------------
 clip_drop:
     push ax
@@ -280,12 +273,15 @@ clip_drop:
                                 ; clip_put and neither reads the flags - the
                                 ; first is followed by `mov bx,MEM_K_CLIP` and
                                 ; a mem_claim that sets CF itself, the second
-                                ; (.empty) falls into .ok's `clc`. The
-                                ; contract line above is the whole contract,
-                                ; this proc being module-internal
+                                ; (.empty) RETURNS this CF = 0 as clip_put's
+                                ; answer - both paths end on OR or XOR, which
+                                ; clear it. The contract line above is the
+                                ; whole contract, this proc being
+                                ; module-internal
 
 section .text
 
+%ifdef OS88_COMPACT
 ; clip_reloc - the compactor moved the clipboard (SPEC.md 66.2). One word:
 ; clip_put and clip_get each load it immediately before their rep movsb, and
 ; nothing derives anything from it.
@@ -301,10 +297,11 @@ clip_reloc:
                                 ; clip_reloc; and the clipboard holds at most
                                 ; one claim at a time (clip_drop frees before
                                 ; clip_put claims), so there is never a second
-                                ; record naming this proc. dsk_dseg_reloc is
-                                ; the one proc that runs for blocks it does
-                                ; not own and it keeps its scan; this is not
+                                ; record naming this proc. mem_region_reloc is
+                                ; the one walk that runs for blocks it does
+                                ; not own and it scans by VALUE; this is not
                                 ; that
+%endif                          ; OS88_COMPACT
 
 section .bss
 ; All three arrive zeroed, which IS an empty clipboard - the boot image's

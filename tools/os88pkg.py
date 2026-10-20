@@ -27,17 +27,36 @@ kernel into its data on the first paint. Any failure exits 1 with a message
 on stderr; OUT.o88 is not written on failure.
 """
 import argparse
+import os
 import struct
 import sys
 
 HEADER_SIZE = 32
 MAGIC = 0x384F            # 'O','8' little-endian
-VERSION = 3
+PKG_FMT = 10              # the format byte, and it is the API TABLE'S
+                          # (SPEC.md 20.2.0): mirrors kernel/loader.inc and
+                          # apps/os88api.inc, held by tests/unit/t_mirror.py
+VERSION = PKG_FMT
 ENTRY_MIN = 0x20          # first byte after the header
 ENTRY_MIN_ICON = 0x60     # first byte after the embedded icon (flags bit 0)
 ICON_END = 96             # header (32) + icon block (64)
 ASSOC_SIZE = 16           # the association block (SPEC.md 54.6), flags bit 1
 ASSOC_MAXN = 5            # ...holding a count byte and up to five extensions
+GLYPH_SIZE = 16           # the document-glyph block (SPEC.md 54.3.2), flags
+GLYPH_ROWS = 8            # bit 5: eight glyph bytes, one a row, then eight
+                          # reserved - sixteen so the clear prefix stays a
+                          # multiple of 16 (SPEC.md 20.13.1)
+PKG_GLYPH_BIT = 0x20      # ...and the bit itself
+STIK_SIZE = 192           # the STICKY APP CARD (SPEC.md 110.12), flags bit 7:
+STIK_BIT = 0x80           # 'SA', version, 0, a 24-byte name, a 36-byte
+STIK_MAGIC = b"SA"        # description and a 32x32 picture (128 bytes),
+STIK_VER = 1              # after the rest of the clear prefix
+STIK_NAME = (4, 24)       # (offset, field size) - NUL-padded, so the text is
+STIK_DESC = (28, 36)      # at most one byte shorter than the field
+OP_SECMAX = 1920          # apps/os88parts.inc's: the carve's ceiling in
+                          # sectors, packed and unpacked (SPEC.md 20.12.11)
+OP_PARTMAX = 0xFE00       # ...and ONE part's: op_size rounds a row's length
+                          # up to a sector in a word and refuses the carry
 APP_MAX_SIZE = 0xF000     # image + bss budget: 60KB (one segment's worth -
                           # the region is a heap claim, so the real limit is
                           # also whatever the heap has contiguous)
@@ -58,8 +77,18 @@ PART_ROW = 8               # kind(1) flags(1) off(2, 512-byte units)
 PART_ALIGN = 512           # every part starts on a 512-byte boundary in the
                            # file - see the layout comment in main()
 PK_SEG, PK_ASSET = 0, 1
-OPF_XMS, OPF_ZERO, OPF_OPT, OPF_LAZY = 1, 2, 4, 8
-OPF_ALL = OPF_XMS | OPF_ZERO | OPF_OPT | OPF_LAZY
+OPF_XMS, OPF_ZERO, OPF_OPT, OPF_LAZY, OPF_COMP = 1, 2, 4, 8, 16
+OPF_FETCHED = 32                # RUNTIME ONLY (SPEC.md 20.12.7.4): op_fetch
+                                # sets it and op_drop clears it, so a row that
+                                # arrived with it set would read as a part
+                                # already in memory. It is deliberately NOT in
+                                # OPF_ALL, which is what refuses it here.
+OPF_ALL = OPF_XMS | OPF_ZERO | OPF_OPT | OPF_LAZY | OPF_COMP
+PART_FMT_AT = PARTS_HDR - 1     # the table's reserved byte, which is the
+                                # FORMAT the OP_COMP rows use (SPEC.md
+                                # 20.12.7). It is the package's own scope, so
+                                # a compressed PART needs nothing of the
+                                # header's flags and nothing of the kernel's
 
 
 def fail(msg: str) -> None:
@@ -97,6 +126,36 @@ def main() -> int:
                     help="flat binary assembled at org 0")
     ap.add_argument("-o", "--output", metavar="OUT.o88", required=True,
                     help="package file to write on success")
+    ap.add_argument("--compress", metavar="FMT", nargs="?", const="lz4",
+                    choices=("lz4", "lzb", "none"), default=None,
+                    help="compress the image, unpacked by the loader "
+                         "(docs/plans/O88-COMPRESSION-PLAN.md 7). The header, icon "
+                         "and association block stay in the CLEAR - the mount "
+                         "reads them from the first sector and must not have "
+                         "to decompress to harvest an icon. `image` keeps "
+                         "meaning the UNPACKED size, which is what the loader "
+                         "sizes the region from; the file becomes shorter "
+                         "than it, which flags bit 3 is what permits")
+    ap.add_argument("--compress-if", metavar="FMT", dest="compress_if",
+                    choices=("lz4", "lzb", "none"), default=None,
+                    help="...the same thing, SOFTLY: compress when it pays "
+                         "and is safe, and write the package PLAIN with a "
+                         "line saying why when it does not. This is what a "
+                         "FLEET-WIDE flag needs - `make PKGZ=lz4` compresses "
+                         "two dozen packages and a few of them are legitimately "
+                         "better off plain - where --compress above stays "
+                         "strict, because there the refusal is the answer to a "
+                         "question somebody asked")
+    ap.add_argument("--part-compress", metavar="FMT", dest="part_compress",
+                    choices=("lz4", "lzb"), default="lz4",
+                    help="the format an OP_COMP part uses (SPEC.md 20.12.7), "
+                         "default lz4. WHICH parts is the package's own "
+                         "decision - the flag is on the row - and this only "
+                         "says how. It is written into the part table's own "
+                         "format byte, so a compressed PART is independent of "
+                         "whether the IMAGE is compressed - and both may be: "
+                         "the image's packed length then rides the link word "
+                         "(SPEC.md 20.13.8)")
     ap.add_argument("--part", metavar="PART.bin", action="append", default=[],
                     help="append a part after the image, 512-aligned, and "
                          "fill its row in the package's own part table. One "
@@ -117,8 +176,10 @@ def main() -> int:
     if version != VERSION:
         fail(f"bad version {version} (want {VERSION}; rebuild against the "
              "v3 os88api.inc)")
-    if flags & 0xF8:
-        fail(f"flags 0x{flags:02X} has reserved bits set (bits 3-7 must be 0)")
+    if flags & 0x18:
+        fail(f"flags 0x{flags:02X} has reserved bits set (bits 3-4 are this "
+             f"tool's to set; bit 6 is OS88_F_DESK, SPEC.md 11.103.9, and "
+             f"bit 7 OS88_F_STIK, SPEC.md 110.12)")
     if link != 0:
         fail(f"bad link base 0x{link:04X}: a v3 package links at org 0")
     if a[12:15] != DISPATCH:
@@ -167,6 +228,40 @@ def main() -> int:
             if ext == b"O88":
                 fail("association: O88 cannot be declared - a package is "
                      "never opened through an association")
+    # The document glyph (SPEC.md 54.3.2) follows the association block: the
+    # 8x8 a document of this program wears, shipped rather than reduced out
+    # of the icon. It wants BOTH bits in front of it - a glyph for the
+    # documents of a program with no icon, or one that declares nothing,
+    # has no consumer - and it may not be blank, because all-zero is the
+    # kernel's UNRESOLVED sentinel and would silently mean 'reduce after all'.
+    if flags & PKG_GLYPH_BIT:
+        if flags & 3 != 3:
+            fail(f"flags 0x{flags:02X}: bit 5 (a shipped document glyph) needs "
+                 f"bits 0 and 1 beside it - an icon to stand in for and a "
+                 f"declaration to name the documents (SPEC.md 54.3.2)")
+        glyph_base = entry_min
+        entry_min = glyph_base + GLYPH_SIZE
+        if image < entry_min:
+            fail(f"flags bit 5 set but the image is {image} bytes; the "
+                 f"document-glyph block needs at least {entry_min}")
+        if not any(a[glyph_base:glyph_base + GLYPH_ROWS]):
+            fail("the document glyph is all zero - that is the UNRESOLVED "
+                 "sentinel (SPEC.md 54.2), so the kernel would reduce the icon "
+                 "after all. Draw one, or clear flags bit 5")
+        if any(a[glyph_base + GLYPH_ROWS:glyph_base + GLYPH_SIZE]):
+            fail("the document-glyph block's eight reserved bytes must be 0")
+    # The Sticky App card (SPEC.md 110.12) follows whatever of the above the
+    # flags declare - so it is the LAST block of the clear prefix, and every
+    # reader that already knew the prefix finds its own blocks where they were.
+    if flags & STIK_BIT:
+        stik_base = entry_min
+        entry_min = stik_base + STIK_SIZE
+        if image < entry_min:
+            fail(f"flags bit 7 set but the image is {image} bytes; the "
+                 f"Sticky App card needs at least {entry_min}")
+        msg = stik_card_problem(a[stik_base:entry_min])
+        if msg:
+            fail(f"the Sticky App card at +{stik_base}: {msg}")
     if not (entry_min <= entry < image):
         fail(f"entry +0x{entry:04X} outside [0x{entry_min:04X}, "
              f"0x{image:04X})")
@@ -178,13 +273,31 @@ def main() -> int:
              f"icon needs at least {ICON_END}")
 
     out = bytearray(a)
+    if args.compress and args.compress_if:
+        fail("--compress and --compress-if are the same decision taken two "
+             "ways; give one")
+    zfmt, zsoft = None, False
+    if args.compress and args.compress != "none":
+        zfmt = args.compress
+    elif args.compress_if and args.compress_if != "none":
+        zfmt, zsoft = args.compress_if, True
     table, rows = find_parts(a, image, flags)
+    timage = out                            # where report_parts reads the table
     if table is None:
         if args.part:
             fail("--part given but the image carries no 'O88PARTS' table - "
                  "bracket one with OS88_PARTS_BEGIN (SPEC.md 20.12.3)")
+        if zfmt:
+            z = compress_image(out, image, bss, flags, zfmt, soft=zsoft)
+            if z is not None:
+                out = z
     else:
-        lay_out_parts(out, table, rows, args.part)
+        lay_out_parts(out, table, rows, args.part, args.part_compress)
+        if zfmt:
+            z = compress_parted(out, image, bss, flags, table, rows, zfmt,
+                                soft=zsoft)
+            if z is not None:
+                out, timage = z
 
     try:
         with open(args.output, "wb") as f:
@@ -192,13 +305,284 @@ def main() -> int:
     except OSError as e:
         fail(f"cannot write {args.output}: {e}")
 
+    flags = out[3]                          # compress_image may have set bits
     icon = "yes" if flags & 1 else "no"
     assoc = a[assoc_base] if flags & 2 else 0
+    glyph = "shipped" if flags & PKG_GLYPH_BIT else "reduced"
     print(f"os88pkg: {name!r} entry=+0x{entry:04X} image={image} bss={bss} "
-          f"icon={icon} assoc={assoc} -> {args.output}")
+          f"icon={icon} assoc={assoc} glyph={glyph} -> {args.output}")
     if table is not None:
-        report_parts(out, table, rows, args.part)
+        report_parts(timage, table, rows, args.part)
     return 0
+
+
+# --- compression (docs/plans/O88-COMPRESSION-PLAN.md 7, 12.5) ----------------------
+# The bytes the MOUNT reads stay in the clear. SPEC.md 18.3 step 4 harvests an
+# icon out of a file's first sector and SPEC.md 54.6's association block sits
+# beside it, so a compressed package still answers both without a decoder -
+# which is what makes this change invisible to disk_mount, dsk_synth and the
+# Disk window all at once.
+PKG_COMP_BIT   = 0x08           # flags bit 3: the image is compressed
+PKG_COMP_FMT   = 0x10           # flags bit 4: 0 = LZ4, 1 = LZB
+                                # ...and NO MARGIN CONSTANT any more: the
+                                # loader reads the file at roundup512(image -
+                                # file) and the stream's own raw tail is what
+                                # makes that enough (SPEC.md 20.13.7).
+                                # os88lz.in_place_margin asserts it below
+
+
+def roundup(v: int, n: int) -> int:
+    return (v + n - 1) // n * n
+
+
+def clear_prefix(flags: int) -> int:
+    """bytes at the front that must NOT be compressed - everything the mount
+    reads out of the first sector without opening the file."""
+    n = ICON_END if flags & 1 else HEADER_SIZE
+    if flags & 2:
+        n += ASSOC_SIZE
+    if flags & PKG_GLYPH_BIT:
+        n += GLYPH_SIZE         # SPEC.md 54.3.2: the mount reads it too
+    if flags & STIK_BIT:
+        n += STIK_SIZE          # SPEC.md 110.12: and so does the Sticky Apps
+    return n                    # menu
+
+
+def stik_card_at(flags: int) -> int:
+    """where the Sticky App card starts: the clear prefix WITHOUT it."""
+    return clear_prefix(flags & ~STIK_BIT)
+
+
+def stik_card_problem(card: bytes):
+    """None when `card` (192 bytes) is a card the kernel's menu takes, else
+    why not - the SAME tests kernel/stikmenu.inc makes, so a package this
+    passes is listed and one it refuses would have been skipped."""
+    if len(card) != STIK_SIZE:
+        return f"{len(card)} bytes, not {STIK_SIZE}"
+    if card[0:2] != STIK_MAGIC or card[2] != STIK_VER or card[3] != 0:
+        return "it does not start 'SA', 1, 0"
+    for what, (off, size) in (("name", STIK_NAME), ("description", STIK_DESC)):
+        field = card[off:off + size]
+        if 0 not in field:
+            return f"the {what} fills its {size} bytes with no NUL"
+        text = field[:field.index(0)]
+        if any(not 0x20 <= b <= 0x7E for b in text):
+            return f"the {what} has a byte that is not printable ASCII"
+        if any(field[len(text):]):
+            return f"the {what} has bytes after its NUL"
+        if what == "name" and not text:
+            return "the name is empty"
+    return None
+
+
+def compress_image(out: bytearray, image: int, bss: int, flags: int,
+                   fmt: str, soft: bool = False, packer=None):
+    """Compress a package's image in place, or answer None.
+
+    `soft` is what a FLEET-WIDE flag needs and `--compress` deliberately does
+    not have: `make PKGZ=lz4` compresses two dozen packages and three of them
+    are legitimately better off plain (parts, a file that grows, a layout that
+    would make the loader claim more), so a refusal there has to be a line of
+    output and not a stopped build. A per-package `--compress` stays STRICT,
+    because there the refusal is the answer to a question somebody asked.
+
+    `packer` swaps the ENCODER and nothing else - the refusals, the clear
+    prefix, the flag bits and the in-place arithmetic all stay this function's.
+    tests/lzcomp.py passes `os88lz.lzb_compress_machine` so that what the 8088
+    is expected to write is derived from ONE statement of the rule rather than
+    from a second copy of it in a test (SPEC.md 22.22.1).
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import os88lz
+
+    def refuse(msg):
+        if soft:
+            print(f"os88pkg: NOT compressed: {msg}")
+            return None
+        fail(msg)
+
+    if flags & 4:
+        fail("internal: a package with parts is packed by compress_parted, "
+             "which lays the parts out first (SPEC.md 20.13.8)")
+    if flags & (PKG_COMP_BIT | PKG_COMP_FMT):
+        return refuse(f"flags 0x{flags:02X} already has a compression bit set")
+    if len(out) != image:
+        fail(f"internal: file is {len(out)} bytes and image is {image}")
+
+    fid = os88lz.LZ4 if fmt == "lz4" else os88lz.LZB
+    pre = clear_prefix(flags)
+    body = bytes(out[pre:])
+    z = packer(body) if packer else os88lz.compress(body, fid)
+    if z is None:
+        return refuse("the packer made nothing smaller of this image")
+    if os88lz.decompress(z, fid, len(body)) != body:
+        fail(f"{fmt} did not round-trip this image - tools/os88lz.py is the "
+             "reference the kernel copies, so this is a bug there, not here")
+
+    packed = pre + len(z)
+    if packed >= image:
+        return refuse(
+            f"{fmt} makes this image LARGER ({packed} vs {image} bytes). "
+            "Ship it uncompressed: the loader would spend cycles to read "
+            "more sectors, which is the trade upside down")
+    margin = os88lz.in_place_margin(body, fid, packed=z)
+    if margin:
+        fail(f"{fmt} needs {margin} bytes of in-place margin - a stream with "
+             "a tail needs none (SPEC.md 20.13.7), so os88lz.py's cut is "
+             "wrong and this is a bug there")
+
+    # THE IN-PLACE LAYOUT HAS TO FIT THE REGION THE LOADER WAS GOING TO CLAIM
+    # ANYWAY, and this side is what guarantees it - which is the whole reason
+    # SPEC.md 21 step 4 needs no change at all. The loader reads the file at
+    # R = roundup512(image - file) so it can expand downwards; if that does
+    # not fit, the answer is to ship this package UNCOMPRESSED rather than to
+    # make every launch on the machine claim a bigger region.
+    r = roundup(image - packed, 512)
+    if r + packed > roundup(image + bss, 512):
+        return refuse(
+            f"{fmt} saves {image - packed} bytes but its in-place layout "
+            f"needs {r + packed} of the {roundup(image + bss, 512)}-byte "
+            "region, so the loader would have to claim more. Ship it "
+            "uncompressed - a package this marginal was not going to save a "
+            "sector anyway")
+
+    new = bytearray(out[:pre]) + z
+    new[3] = flags | PKG_COMP_BIT | (PKG_COMP_FMT if fid == os88lz.LZB else 0)
+    print(f"os88pkg: compressed {fmt}: image {image} -> file {packed} bytes "
+          f"({packed / image:.1%}), {pre} clear")
+    return new
+
+
+def compress_parted(out: bytearray, image: int, bss: int, flags: int,
+                    table: int, rows: int, fmt: str, soft: bool = False):
+    """Pack the IMAGE of a package with parts (SPEC.md 20.13.8), or answer None.
+
+    `out` is the image with its parts already laid out behind it by
+    lay_out_parts, the first at roundup512(image). Packing the image moves
+    where the parts can start - and their offsets live in the table INSIDE
+    the image being packed, which is the circularity that kept this refused.
+    It is a fixed point and not a paradox: only the TABLE's `off` words move,
+    every part moves by the same whole number of sectors, so the parts' bytes
+    never change and a packed table differs from the last guess by a few
+    bytes. So: guess the base off one pack, then pack again at each base
+    until the packed image fits in front of it. The base only ever RISES, so
+    it stops; where it would oscillate it settles on the larger, which fits
+    by construction (the stream is then followed by padding).
+
+    THE KERNEL HAS TO BE TOLD THE PACKED LENGTH, because with parts the file
+    is not the image: it rides the LINK word (+4), which is zero on every
+    other package and which ld_hdr_ok lets through only beside flags bits 2
+    AND 3. Everything else is compress_image's rule - the clear prefix, the
+    format bits, the in-place margin and the region it must fit - and a
+    pack that saves no SECTOR is declined: the parts would not move, so the
+    file would not shrink, and every launch would pay the decode for nothing.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import os88lz
+
+    def refuse(msg):
+        if soft:
+            print(f"os88pkg: NOT compressed: {msg}")
+            return None
+        fail(msg)
+
+    if flags & (PKG_COMP_BIT | PKG_COMP_FMT):
+        return refuse(f"flags 0x{flags:02X} already has a compression bit set")
+    fid = os88lz.LZ4 if fmt == "lz4" else os88lz.LZB
+    pre = clear_prefix(flags)
+    base0 = roundup(image, PART_ALIGN)
+    filed = []
+    for i in range(rows):
+        o = table + PARTS_HDR + PART_ROW * i + 2
+        poff = struct.unpack_from("<H", out, o)[0]
+        if poff:
+            filed.append((o, poff))
+
+    def pack(delta):
+        img = bytearray(out[:image])
+        for o, poff in filed:
+            struct.pack_into("<H", img, o, poff + delta)
+        body = bytes(img[pre:])
+        z = os88lz.compress(body, fid)
+        if os88lz.decompress(z, fid, len(body)) != body:
+            fail(f"{fmt} did not round-trip this image - tools/os88lz.py is "
+                 "the reference the kernel copies, so this is a bug there")
+        return img, body, z
+
+    img, body, z = pack(0)
+    if pre + len(z) >= image:
+        return refuse(f"{fmt} makes this image no smaller")
+    delta = (roundup(pre + len(z), PART_ALIGN) - base0) // PART_ALIGN
+    if delta >= 0:
+        return refuse(f"{fmt} packs this image to {pre + len(z)} bytes, which "
+                      f"still starts the parts at sector {base0 // PART_ALIGN}: "
+                      "the file would not shrink and every launch would pay "
+                      "the decode")
+    while True:
+        img, body, z = pack(delta)
+        packed = pre + len(z)
+        if roundup(packed, PART_ALIGN) <= base0 + delta * PART_ALIGN:
+            break
+        delta += 1
+        if delta >= 0:
+            return refuse(f"{fmt} saves no sector of this image once its "
+                          "part table is packed with it")
+    margin = os88lz.in_place_margin(body, fid, packed=z)
+    if margin:
+        fail(f"{fmt} needs {margin} bytes of in-place margin - a stream with "
+             "a tail needs none (SPEC.md 20.13.7), so os88lz.py's cut is "
+             "wrong and this is a bug there")
+    r = roundup(image - packed, 512)
+    if r + packed > roundup(image + bss, 512):
+        return refuse(
+            f"{fmt} saves {image - packed} bytes but its in-place layout "
+            f"needs {r + packed} of the {roundup(image + bss, 512)}-byte "
+            "region, so the loader would have to claim more")
+    base = base0 + delta * PART_ALIGN
+    new = bytearray(img[:pre]) + z
+    new[3] = flags | PKG_COMP_BIT | (PKG_COMP_FMT if fid == os88lz.LZB else 0)
+    struct.pack_into("<H", new, 4, packed)        # LD_H_LINK: the packed image
+    new.extend(b"\xE5" * (base - len(new)))       # padding is poison (above)
+    new.extend(out[base0:])
+    print(f"os88pkg: compressed {fmt}: image {image} -> {packed} bytes "
+          f"({packed / image:.1%}), {pre} clear; parts {-delta} sector(s) "
+          f"earlier, file {len(out)} -> {len(new)}")
+    return new, img
+
+
+def image_unwrap(blob: bytes) -> bytes:
+    """A shipped `.o88` back to the IMAGE the loader will run.
+
+    THE FILE STOPPED BEING THE IMAGE when compression shipped (SPEC.md 20.13),
+    and every host-side gate that reads `build/*.o88` has to say which of the
+    two it means. A gate comparing what is on a floppy against what the build
+    produced wants the FILE; one checking a size field, a layout or an
+    assembly against its source wants the IMAGE, and this is how it gets it.
+    Returns `blob` unchanged when the package is not compressed, so a caller
+    never has to ask first.
+    """
+    if len(blob) < HEADER_SIZE:
+        return blob
+    flags = blob[3]
+    if not flags & PKG_COMP_BIT:
+        return blob
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import os88lz
+    image = struct.unpack_from("<H", blob, 8)[0]
+    pre = clear_prefix(flags & ~(PKG_COMP_BIT | PKG_COMP_FMT))
+    fid = os88lz.LZB if flags & PKG_COMP_FMT else os88lz.LZ4
+    end = len(blob)
+    out = bytearray(blob[:pre])
+    out[3] = flags & ~(PKG_COMP_BIT | PKG_COMP_FMT)
+    if flags & 4:
+        # WITH PARTS the stream ends where the LINK word says (SPEC.md
+        # 20.13.8), and what is returned is the IMAGE alone: the parts are
+        # still read out of the FILE at the table's offsets, which name
+        # sectors of the packed file. The link word goes back to zero, so the
+        # header is a plain parted image's - which is what it describes now.
+        end = struct.unpack_from("<H", blob, 4)[0]
+        out[4:6] = b"\0\0"
+    return bytes(out) + os88lz.decompress(blob[pre:end], fid, image - pre)
 
 
 # --- parts (SPEC.md 20.12) ---------------------------------------------------
@@ -228,8 +612,9 @@ def find_parts(a: bytes, image: int, flags: int):
              "neither is safe to fill in")
     at = hits[0]
     n = a[at + PARTS_HDR - 2]
-    if a[at + PARTS_HDR - 1] != 0:
-        fail("the part table's reserved byte is not 0")
+    if a[at + PART_FMT_AT] != 0:
+        fail("the part table's format byte is not 0 - this tool writes it "
+             "(SPEC.md 20.12.7) and a package lays it out as zero")
     if not 1 <= n <= 64:
         fail(f"the part table declares {n} parts; 1..64")
     end = at + PARTS_HDR + PART_ROW * n
@@ -238,7 +623,38 @@ def find_parts(a: bytes, image: int, flags: int):
     return at, n
 
 
-def lay_out_parts(out: bytearray, table: int, rows: int, parts) -> None:
+def compress_part(i: int, body: bytes, fmt: str):
+    """(the stream, its length) for an OP_COMP row - or a hard refusal.
+
+    STRICT, like --compress and unlike --compress-if: the flag is on a row the
+    package's author wrote, so a part that does not pay is an error rather than
+    a line of output. The two refusals are the image's (SPEC.md 20.13.4)
+    measured against a PART: it has to get smaller, and it has to round-trip
+    through the reference decoder. It expands in place with no margin, as
+    every stream does (SPEC.md 20.13.7), and that is asserted rather than
+    measured.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import os88lz
+    fid = os88lz.LZ4 if fmt == "lz4" else os88lz.LZB
+    z = os88lz.compress(body, fid)
+    if os88lz.decompress(z, fid, len(body)) != body:
+        fail(f"part {i}: {fmt} did not round-trip - tools/os88lz.py is the "
+             "reference the kernel copies, so this is a bug there, not here")
+    if len(z) >= len(body):
+        fail(f"part {i}: {fmt} makes it LARGER ({len(z)} vs {len(body)} "
+             "bytes). Take OP_COMP off the row: the launch would spend cycles "
+             "to read more sectors, which is the trade upside down")
+    if os88lz.in_place_margin(body, fid, packed=z):
+        fail(f"part {i}: the stream needs an in-place margin, which a stream "
+             "with a tail cannot (SPEC.md 20.13.7) - a bug in os88lz.py")
+    print(f"os88pkg: part {i} compressed {fmt}: {len(body)} -> {len(z)} bytes "
+          f"({len(z) / len(body):.1%})")
+    return z, len(z)
+
+
+def lay_out_parts(out: bytearray, table: int, rows: int, parts,
+                  part_fmt: str = "lz4") -> None:
     """Append each part 512-aligned and fill its row.
 
     THE ROWS AND THE PAYLOADS ARE NOT ONE LIST: a row with no file bytes
@@ -246,7 +662,7 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts) -> None:
     row and not the i'th row.
     """
     filed = []
-    seen_xms = seen_lazy = False
+    seen_xms = seen_lazy = seen_comp = False
     for i in range(rows):
         off = table + PARTS_HDR + PART_ROW * i
         kind, pflags, poff, plen, pzkb = struct.unpack_from("<BBHHH", out, off)
@@ -305,6 +721,27 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts) -> None:
                  "one read the carve exists to be reads it anyway (SPEC.md "
                  "20.12.4)")
 
+        if pflags & OPF_COMP:
+            if pflags & OPF_ZERO:
+                fail(f"part {i}: OP_COMP on a scratch part. There are no file "
+                     "bytes to compress, and its zkb word is the KB it asks "
+                     "for (SPEC.md 20.12.7)")
+            # OP_COMP with OP_LAZY was REFUSED here and is the common case
+            # (SPEC.md 20.12.7.4). Every lazy row in the tree is a compressed
+            # stream; the ones that shipped before this each grew a packer and
+            # an expander outside the standard. The zkb word is shared in TIME
+            # now - the packed length until op_fetch runs, the segment after -
+            # and op_drop puts the packed length back out of the row's shadow
+            # word (SPEC.md 20.12.7.4.1: words after the rows, which this tool
+            # never walks), so a dropped part can be fetched again.
+            if pflags & OPF_XMS:
+                fail(f"part {i}: OP_COMP with OP_XMS. The span above 1MB is "
+                     "staged through a transient conventional buffer a chunk "
+                     "at a time, and a stream cannot be expanded a chunk at a "
+                     "time - the parts up there are stored plain (SPEC.md "
+                     "20.12.7)")
+            seen_comp = True
+
         if pflags & OPF_XMS:
             seen_xms = True
         elif not pflags & OPF_ZERO and not pflags & OPF_LAZY and seen_xms:
@@ -332,10 +769,49 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts) -> None:
         body = read_file(next(it))
         if not body:
             fail(f"part {i}: the payload is empty")
-        if len(body) > 0xFFFF:
+        if len(body) > OP_PARTMAX:
             fail(f"part {i}: {len(body)} bytes. A part is reached through a "
-                 "SEGMENT, so it is addressed by a 16-bit offset and 65,535 "
-                 "is the ceiling (SPEC.md 20.12)")
+                 "SEGMENT, so it is addressed by a 16-bit offset, and op_size "
+                 "rounds its length up to a whole sector in a word - so "
+                 f"{OP_PARTMAX:,} is the ceiling. An asset bigger than that is "
+                 "two adjacent rows: plain rows sit back to back in the carve "
+                 "(SPEC.md 20.12, 20.12.11)")
+        # A PART THAT IS ITSELF A PACKAGE IMAGE has one extra rule, and it is
+        # checked here rather than left to fail at launch. SPEC.md 20.12.10's
+        # re-home hands the kernel `image + bss` as the bytes available at the
+        # part, and the kernel refuses the part's own header fields past that
+        # (20.12.10.4) - so the bss has to SHIP INSIDE the part, exactly as a
+        # driver's does (51.1.2), because ld_start jumps to step 8 and never
+        # to step 7 on that path and so never zeroes it. An unpadded part is a
+        # package that loads and then writes its bss over whatever follows it
+        # in the carve.
+        #
+        # RECOGNISED, NOT DECLARED: nothing on the command line says "this
+        # part is a program", and nothing needs to - a part beginning 'O8'
+        # with version 3 is one, and a part that is not one matches neither
+        # byte. So the rule reaches every future consumer for free, and the
+        # one shape it cannot help is a part that is compressed (its length
+        # here is the UNPACKED figure, which is the one the rule is about, so
+        # it works there too).
+        if len(body) >= 12 and body[:2] == b"O8" and body[2] == PKG_FMT:
+            pimg, pbss = struct.unpack_from("<HH", body, 8)
+            if pimg + pbss != len(body):
+                fail(f"part {i} is a v3 package image (SPEC.md 20.12.10) and "
+                     f"its header says image {pimg} + bss {pbss} = "
+                     f"{pimg + pbss}, but the file is {len(body)} bytes. A "
+                     "part is not zeroed by the loader - ld_start jumps to "
+                     "step 8 and not step 7 - so its bss must SHIP INSIDE it "
+                     "(SPEC.md 51.1.2's rule, one format along). Pad the "
+                     "source with `times OS88_BSS_SIZE db 0` after "
+                     "OS88_IMAGE_END" + ("" if pimg + pbss <= len(body) else
+                     ", or the part is TRUNCATED"))
+        # ...and OP_COMP is where the disk bytes stop being the memory bytes.
+        # STRICT, like --compress and unlike --compress-if: a row carrying the
+        # flag is a decision the package's author wrote down, so a part that
+        # does not pay is an error and not a line of output (SPEC.md 20.12.7).
+        unpacked, packed = len(body), len(body)
+        if pflags & OPF_COMP:
+            body, packed = compress_part(i, body, part_fmt)
         # PADDING IS POISON, NOT ZERO. These are bytes no part declares and
         # nothing is meant to read, so a stub that strays into one - a length
         # rounded up to a sector, a run started a cluster early - has to
@@ -344,17 +820,24 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts) -> None:
         pad = (-len(out)) % PART_ALIGN
         out.extend(b"\xE5" * pad)
         off = table + PARTS_HDR + PART_ROW * i
-        struct.pack_into("<HH", out, off + 2, len(out) // PART_ALIGN, len(body))
+        # `len` STAYS THE UNPACKED FIGURE. It is what op_size cuts the claim
+        # from, so a machine that cannot fit the part is still told before a
+        # sector is read - which is the third thing the whole parts design
+        # exists for. `zkb` takes the packed one.
+        struct.pack_into("<HH", out, off + 2, len(out) // PART_ALIGN, unpacked)
+        if pflags & OPF_COMP:
+            struct.pack_into("<H", out, off + 6, packed)
         laid.append((i, pflags, len(out) // PART_ALIGN,
                      (len(body) + PART_ALIGN - 1) // PART_ALIGN))
         out.extend(body)
 
-    # THE RUN AND THE SPAN ARE EACH BOUNDED AT 128 SECTORS, and the bound is
-    # the standard's own arithmetic rather than any machine's memory: op_size
-    # refuses a carve of 64KB or more ("Parts do not fit", everywhere) because
-    # op_cap is a word with the head slack added to it, and op_xload climbs
-    # the OP_XMS span through `shl ax, 9` in a word, so a span of 128 sectors
-    # reads as 0 bytes and 180 as 26,624 (apps/os88parts.inc). A package past
+    # THE RUN AND THE SPAN ARE EACH BOUNDED, and each bound is the standard's
+    # own arithmetic rather than any machine's memory. op_size refuses a carve
+    # of OP_SECMAX sectors or more ("Parts do not fit", everywhere) because
+    # op_cap counts the read in a word of PARAGRAPHS with the head slack in
+    # it (SPEC.md 20.12.11 - it was a word of BYTES, and the bound was 128).
+    # op_xload still climbs the OP_XMS span through `shl ax, 9` in a word, so
+    # a span of 128 sectors reads as 0 bytes and 180 as 26,624. A package past
     # either bound builds, ships, and fails at launch with a toast that blames
     # the machine - so refuse it HERE, where the author is. The OP_XMS rows
     # are counted in the carve too: where there is no store they fall back
@@ -363,16 +846,34 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts) -> None:
         return rows_[-1][2] + rows_[-1][3] - rows_[0][2] if rows_ else 0
     carve = [r for r in laid if not r[1] & OPF_LAZY]
     span = [r for r in laid if r[1] & OPF_XMS]
-    if extent(carve) >= 128:
+    if extent(carve) >= OP_SECMAX:
         fail(f"the carved run is {extent(carve)} sectors (parts "
              f"{carve[0][0]}..{carve[-1][0]}, OP_XMS rows included - they "
              "fall back into the carve on a machine with no store). op_size "
-             "refuses 128 or more: the carve plus a cluster has to fit one "
-             "WORD (SPEC.md 20.12.4)")
+             f"refuses {OP_SECMAX} or more: the carve plus a cluster has to "
+             "fit one WORD of paragraphs (SPEC.md 20.12.11)")
     if extent(span) >= 128:
         fail(f"the OP_XMS span is {extent(span)} sectors (parts "
              f"{span[0][0]}..{span[-1][0]}). op_xload walks it in a WORD of "
              "bytes, so 128 sectors is its ceiling too (SPEC.md 20.12.4)")
+
+    # ...AND THE UNPACKED CARVE IS BOUNDED THE SAME WAY, on the other side.
+    # op_size cuts the CLAIM from the unpacked lengths and refuses OP_SECMAX
+    # sectors there too - so a package whose parts compress from 70KB to 40KB passes
+    # the disk bound above and fails at launch without this (SPEC.md 20.12.7).
+    if seen_comp:
+        usecs = 0
+        for i in range(rows):
+            off = table + PARTS_HDR + PART_ROW * i
+            _, pf, po, pl, _ = struct.unpack_from("<BBHHH", out, off)
+            if po and not pf & OPF_LAZY:
+                usecs += (pl + PART_ALIGN - 1) // PART_ALIGN
+        if usecs >= OP_SECMAX:
+            fail(f"the carve UNPACKS to {usecs} sectors. op_size refuses "
+                 f"{OP_SECMAX} or more on that side too - the claim is cut from the "
+                 "unpacked lengths, and compressing a part makes the file "
+                 "smaller without making the memory smaller (SPEC.md 20.12.7)")
+        out[table + PART_FMT_AT] = (0 if part_fmt == "lz4" else 1)
 
 
 def report_parts(out: bytes, table: int, rows: int, parts) -> None:
@@ -382,11 +883,16 @@ def report_parts(out: bytes, table: int, rows: int, parts) -> None:
         kind, pflags, poff, plen, pzkb = struct.unpack_from("<BBHHH", out, off)
         what = "SEGMENT" if kind == PK_SEG else "ASSET  "
         tag = "".join(c for c, b in (("X", OPF_XMS), ("Z", OPF_ZERO),
-                                     ("O", OPF_OPT), ("L", OPF_LAZY))
+                                     ("O", OPF_OPT), ("L", OPF_LAZY),
+                                     ("C", OPF_COMP))
                       if pflags & b) or "-"
         if pflags & OPF_ZERO:
             print(f"os88pkg:   part {i} {what} {tag:4} scratch {pzkb}K, "
                   f"no file bytes")
+        elif pflags & OPF_COMP:
+            print(f"os88pkg:   part {i} {what} {tag:5} sector {poff} "
+                  f"len {plen} from {pzkb} packed  <- {parts[fi]}")
+            fi += 1
         else:
             print(f"os88pkg:   part {i} {what} {tag:4} sector {poff} "
                   f"len {plen}  <- {parts[fi]}")

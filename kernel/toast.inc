@@ -6,11 +6,11 @@
 ; applications had each re-rolled their own and no two agreed about where it
 ; went, how long it lived or who erased it.
 ;
-; It is NOT ui_note (SPEC.md 54.4.1). That is a WINDOW, for a failure the user
-; has to acknowledge, and it stays until it is dismissed. This is for an
-; operation that just finished, usually successfully, that nobody needs to
-; acknowledge - so it says its piece and goes away on its own. A notice you
-; can miss is not a notice; a toast you have to dismiss is a dialog.
+; It was NOT ui_note (SPEC.md 54.4.1), the notice WINDOW a failure the user
+; had to acknowledge once raised - and since kernel size pass 4 there is no
+; ui_note: a failed launch (the Task Manager's, the Wire zone's, a document's
+; program not found) is a toast like any other verdict, says its piece and
+; goes away on its own.
 ;
 ; **IT LIVES IN THE MENU BAR, IN THE CLOCK'S FIELD** (SPEC.md 59.8) - and
 ; that placement is the whole design rather than a decoration. Two properties
@@ -94,7 +94,19 @@ TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; 40 while this borrowed the menus segment's
                                 ; 50, and shortening it is what made the move
                                 ; safe: every message in the tree was revised
-                                ; to fit rather than left to truncate
+                                ; to fit rather than left to truncate.
+                                ;
+                                ; **AND THAT SENTENCE WAS A CLAIM ABOUT A TREE
+                                ; THAT NOTHING HELD** (SPEC.md 59.10). A 286
+                                ; showed `Hibernation file is from` - the cut
+                                ; landing on the word that carries the meaning
+                                ; - and the sweep behind it found TWENTY-ONE
+                                ; over the cap in six files, ten of them in
+                                ; `HIBER.DRV`, which is a MODULE and was never
+                                ; walked. `tests/unit/t_toast.py` is the gate
+                                ; now: it reads this very `equ` rather than
+                                ; carrying a copy, and `tests/toastlong.txt`
+                                ; is the ratchet its false positives live in
 TOAST_TICKS equ 55              ; ~3.0 s at 18.2 Hz: long enough to read eight
                                 ; words on a 4.77MHz machine, short enough
                                 ; that it is gone before it becomes furniture
@@ -135,7 +147,7 @@ toast_scn:   dw 0               ; and how many cells it takes there - 0 meaning
                                 ; drv_boot, before any init routine of ours
 
 ; -----------------------------------------------------------------------------
-; toast_show - say one line in the menu bar for a few seconds (API 0x0380)
+; toast_show - say one line in the menu bar for a few seconds (API 0x02AA)
 ; in:       ES:SI = a NUL string, CX = ticks to live (0 = TOAST_TICKS)
 ; out:      CF = 0 taken, CF = 1 refused - and NOTHING refuses today, the
 ;           widget interlock below having been the only one. The flag stays in
@@ -175,12 +187,10 @@ toast_scn:   dw 0               ; and how many cells it takes there - 0 meaning
 ; rep-less movsb is ~475 clocks, ~100 us against a 55 ms tick.
 ; -----------------------------------------------------------------------------
 toast_show:
-    push ax
-    push bx                     ; BX is not spent here - it is pushed to make
-    push cx                     ; ax..di the shared epilogue ladder's own run,
-    push dx                     ; which is what kret_di wants (+1 here buys 4
-    push si                     ; at the exit)
-    push di
+    call kent_di                ; = push ax/bx/cx/dx/si/di. BX is not spent
+                                ; here - it is banked to make ax..di the
+                                ; shared epilogue ladder's own run, which is
+                                ; what kret_di wants
     pushf
     cli
     cld                         ; the copy below is `es lodsb`, and OSAPI_SLOT
@@ -397,54 +407,6 @@ toast_arm:
     ret
 
 ; -----------------------------------------------------------------------------
-; toast_gapend - the gap's right edge as the EYE sees it: the cell the clock's
-;                first GLYPH lands in (SPEC.md 59.9.1)
-; in:       nothing
-; out:      AX = that cell, in the MENUS segment's coordinates - so it is
-;           [menu_bn] plus however many of the clock field's cells are the
-;           leading spaces menu_draw_clock right-aligns the line with
-; clobbers: nothing but AX (flags)
-;
-; The clock's field is a fixed 25 cells and the line in it is NOT: clk_fmt
-; answers 18..24 glyphs (12-hour mode drops the hour's leading zero, seconds
-; are a setting), which menu_draw_clock right-aligns by leading spaces. So the
-; field's left edge is where the clock's ROOM starts and up to seven cells of
-; white follow it before anything is drawn - and centring a strip on the room
-; puts it visibly left of centre, because the eye measures to the `J` of `Jul`.
-;
-; clk_fmt is cheap enough to ask twice per bar paint: clk_snapshot reads the
-; kernel's own RAM shadows of the clock (IRQ0 keeps those; SPEC.md 37), so
-; there is no port I/O and no chip access here at all.
-; -----------------------------------------------------------------------------
-toast_gapend:
-    push cx                     ; NO `push bx`: this routine's body never names
-    push dx                     ; BX, menu_clkcells is "clobbers: CX (the shift
-    push si                     ; count), flags" and clk_fmt pushes ax/bx/dx and
-                                ; pops all three - so the published contract
-                                ; "clobbers: nothing but AX (flags)" holds
-                                ; without the bank
-    call menu_clkcells          ; the field, in whole cells - menu_draw_clock's
-    mov dx, ax                  ; own arithmetic, and now literally it
-    call clk_fmt                ; SI = the live line, CX = its length (37) -
-                                ; which this used to walk the string for
-    mov ax, dx                  ; AX = the leading spaces = the cells of the
-    sub ax, cx                  ; field that are blank before the first glyph.
-    jns .pad                    ; CLAMP THE RESULT, not the input - toast_place
-    xor ax, ax                  ; makes the identical move on the identical
-.pad:                           ; quantities forty lines down. A line wider
-                                ; than its field cannot happen, but a negative
-                                ; pad would put the gap's end LEFT of the
-                                ; segment. `jns` where the old clamp was
-                                ; unsigned: both operands are cell counts
-                                ; (menu_clkcells <= MENU_CLKC-1, clk_fmt
-                                ; 18..24), so |dx-cx| cannot approach 32768
-    add ax, [menu_bn]
-    pop si
-    pop dx
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
 ; toast_place - decide where the strip goes: the GAP, or the clock's field
 ;               (SPEC.md 59.9)
 ; in:       nothing. Called from menu_bar_text after the menus are composed,
@@ -466,7 +428,7 @@ toast_gapend:
 ;
 ; **CENTRED means the strip's MIDPOINT on the gap's midpoint**, not its left
 ; edge at the gap's start - and the gap's right end is the clock's first GLYPH
-; rather than its field (toast_gapend, 59.9.1). Half the slack goes at each
+; rather than its field (.gapend below, 59.9.1). Half the slack goes at each
 ; end; `shr` floors, so an odd cell lands on the right. Left-aligned it reads
 ; as a tail on the menus - another menu title, at the exact pen a fifth one
 ; would have had - and right-aligned it reads as a prefix to the clock. Centred
@@ -511,8 +473,8 @@ toast_place:
                                 ; ONCE: three sites below address it, at 4
                                 ; bytes each against 2 for a register, and BX
                                 ; is free until `mov bx, dx` at `.set` - after
-                                ; the last of them. toast_gapend preserves BX
-                                ; (it does not name it at all)
+                                ; the last of them. the .gapend step keeps BX
+                                ; (.gapend does not name it at all)
     mov dx, [menu_bn]           ; **DX = ONE PAST THE LAST CELL THE STRIP MAY
                                 ; TAKE**, which is the end of the segment -
                                 ; and that already accounts for SPEC.md 12.8's
@@ -539,7 +501,42 @@ toast_place:
                                 ; is still said in full and still covers neither
                                 ; a menu title nor the widget
 
-    call toast_gapend           ; --- and CENTRED on what the EYE sees, which
+    ; --- .gapend: the gap's right edge as the EYE sees it, the cell the
+    ; clock's first GLYPH lands in (SPEC.md 59.9.1) - [menu_bn], which DX
+    ; already holds, plus however many of the clock field's cells are the
+    ; leading spaces menu_draw_clock right-aligns the line with. It was the
+    ; routine toast_gapend until size pass 9, this its one caller; in line it
+    ; banks two registers instead of three and adds [menu_bn] from DX.
+    ;
+    ; The clock's field is a fixed 25 cells and the line in it is NOT: clk_fmt
+    ; answers 18..24 glyphs (12-hour mode drops the hour's leading zero, seconds
+    ; are a setting), which menu_draw_clock right-aligns by leading spaces. So the
+    ; field's left edge is where the clock's ROOM starts and up to seven cells of
+    ; white follow it before anything is drawn - and centring a strip on the room
+    ; puts it visibly left of centre, because the eye measures to the `J` of `Jul`.
+    ;
+    ; clk_fmt is cheap enough to ask twice per bar paint: clk_snapshot reads the
+    ; kernel's own RAM shadows of the clock (IRQ0 keeps those; SPEC.md 37), so
+    ; there is no port I/O and no chip access here at all.
+    push cx                     ; menu_clkcells clobbers CX (the shift count),
+    push dx                     ; and clk_fmt answers SI and CX
+    call menu_clkcells          ; the field, in whole cells - menu_draw_clock's
+    mov dx, ax                  ; own arithmetic, and now literally it
+    call clk_fmt                ; SI = the live line, CX = its length
+    mov ax, dx                  ; AX = the leading spaces = the cells of the
+    sub ax, cx                  ; field that are blank before the first glyph.
+    jns .pad                    ; CLAMP THE RESULT, not the input - the move
+    xor ax, ax                  ; below makes the identical move on the
+.pad:                           ; identical quantities. A line wider than its
+                                ; field cannot happen, but a negative pad would
+                                ; put the gap's end LEFT of the segment. `jns`:
+                                ; both operands are cell counts (menu_clkcells
+                                ; <= MENU_CLKC-1, clk_fmt 18..24), so |dx-cx|
+                                ; cannot approach 32768
+    pop dx
+    pop cx
+    add ax, dx                  ; ...past [menu_bn]
+                                ; --- and CENTRED on what the EYE sees, which
     cmp byte [fpg_on], 0        ; is the clock's first GLYPH and not its field's
     je .eye                     ; left edge (SPEC.md 59.9.1). gapend's answer is
     cmp ax, dx                  ; [menu_bn] PLUS the leading spaces, so clamping
@@ -577,10 +574,11 @@ toast_place:
 ; -----------------------------------------------------------------------------
 toast_pass:
     push ax
-    cmp byte [toast_want], 0
-    jne .up
-    cmp byte [toast_on], 0
-    je .chk
+    mov ax, [toast_on]          ; AL = on, AH = want - the adjacent pair the
+    or ah, ah                   ; %if beside them pins, read in ONE load where
+    jnz .up                     ; it was two compares against memory (kernel
+    or al, al                   ; size pass 10: 3 bytes)
+    jz .chk
     mov ax, [ticks]
     sub ax, [toast_die]
     js .chk                     ; MODULAR arithmetic between two free-running
@@ -592,9 +590,10 @@ toast_pass:
 .chk:                           ; ...and FALLS INTO the test, where it used to
                                 ; step over `.up` with a `jmp short`. `.up` is
                                 ; at the foot of the routine now
-    cmp byte [toast_dirty], 0
-    je .out
-    mov byte [toast_dirty], 0
+    mov al, 0                   ; take-and-clear in ONE exchange, where it
+    xchg al, [toast_dirty]      ; was a compare and a separate store - and a
+    or al, al                   ; set landing between those two (toast_kill
+    jz .out                     ; from a pre-empting task) is no longer lost
 .draw:
     mov byte [menu_bdirty], 1   ; the DOWN edges' half of toast_arm's flag
                                 ; (SPEC.md 59.9) - an expiry above, and

@@ -159,13 +159,13 @@ int ovl_intern(int slot, int line)
         msg[0] = 0;
         lm_cat(msg, "string is ");
         lm_catn(msg, lm_sbwant);
-        lm_cat(msg, " bytes; the cap is 255 (WEAVE-SPEC 2.7)");
+        lm_cat(msg, " bytes; the cap is 255");
         lm_perr(slot, line, msg);
         return 0;
     }
     if (lm_sbn == 0) {
         lm_perr(slot, line,
-                "empty string: an atom is 1..255 bytes (WEAVE-SPEC 2.7)");
+                "empty string: an atom is 1..255 bytes");
         return 0;
     }
     len = (unsigned) lm_sbn;
@@ -194,7 +194,7 @@ int ovl_intern(int slot, int line)
     if (free_ + len > LM_ATTXTMAX) {
         lm_perrn(slot, line, "the string pool is ", (int) (free_ + len),
                  " bytes; this machine packs 6144 - the pool is staged in "
-                 "the pack claim (WEAVE-SPEC 11.4)");
+                 "the pack claim");
         return 0;
     }
     for (k = 0; k < (int) len; k++)

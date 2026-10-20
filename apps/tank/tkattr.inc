@@ -4,9 +4,11 @@
 ; THE ATTRACT WINDOW (SPEC.md 85.10). This is the WINDOWED half of the game
 ; and the only part of it that draws with the kernel's own slots - the game
 ; itself is past SPEC.md 53.7's fence and owns every pixel. So it is also
-; where OSAPI_GFX_LINIT and OSAPI_GFX_LSTEP (SPEC.md 5.6.7) finally get a
-; consumer in this package: the logo's gleam is two resumable walks chasing
-; each other along a stroke that never lifts.
+; where SPEC.md 5.6.7's resumable walk finally gets a consumer in this
+; package: the logo's gleam is two resumable walks chasing each other along a
+; stroke that never lifts. It reached it as OSAPI_GFX_LINIT/LSTEP and reaches
+; it as apps/os88gfx.inc's `gfxe_winit`/`gfxe_wstep` now (SPEC.md 5.12.7) -
+; the same arithmetic over the same block, in this package's own image.
 ;
 ; ONE CLOSED LOOP A GLYPH (SPEC.md 85.10.1). The lettering is an OUTLINED
 ; heavy geometric face - the letters drawn as their own edges with empty
@@ -303,8 +305,10 @@ tk_cur_init:
     mov bx, [tk_e1y]
     mov cx, [tk_e2x]
     mov dx, [tk_e2y]
-    call OSAPI_GFX_LINIT
+    call gfxe_winit                 ; SPEC.md 5.12.5: the block is ours
     ret
+
+TK_PTMAX    equ 64              ; the point list the letter cursors step into
 
 ; tk_cur_next - move cursor SI onto the next segment its direction gives
 tk_cur_next:
@@ -363,11 +367,11 @@ tk_cur_adv:
     mov [tk_cn], ax
     mov al, [tk_cink]
     call OSAPI_SET_COLOR
-    push ds
-    pop es
-    mov di, si
-    mov cx, [tk_cn]
-    call OSAPI_GFX_LSTEP
+    push si                         ; SPEC.md 5.12.5: the walk is ours, and
+    mov di, si                      ; gfxe_wstep clobbers SI where the slot it
+    mov cx, [tk_cn]                 ; replaces preserved everything
+    call gfxe_wstep
+    pop si
     mov ax, [tk_cn]
     add [si + TKC_PIX], ax
     sub [tk_cadv], ax
@@ -377,7 +381,10 @@ tk_cur_adv:
     call tk_cur_next
     jmp short .more
 .out:
-    ret
+    push si                         ; ...and ONE arrival for the whole wake,
+    call gfxe_pput                  ; where this used to spend one a SEGMENT.
+    pop si                          ; The ink is [tk_cink] throughout, set once
+    ret                             ; at entry, so the batch is legal
 
 ; -----------------------------------------------------------------------------
 ; tk_lgarm - both gaps to the bottom-left of the cell [tk_lgi] is on
@@ -396,32 +403,12 @@ tk_lgarm:
     push di
     push es
     call tk_lgcell
-    xor bx, bx                      ; --- the forward half, segments 0..e-1 ---
-    xor cx, cx
-.f:
-    cmp cx, [tk_lge]
-    jae .fd
-    mov ax, cx
-    xor dl, dl
-    call tk_lgseg
-    call tk_seglen
-    add bx, ax
-    inc cx
-    jmp short .f
-.fd:
+    xor cx, cx                      ; --- the forward half, segments 0..e-1 ---
+    mov di, [tk_lge]
+    call tk_lgsum
     mov [tk_lgflen], bx
-    xor bx, bx                      ; --- and the backward half, e..np-1 -----
-.b:
-    cmp cx, [tk_lgnp]
-    jae .bd
-    mov ax, cx
-    xor dl, dl
-    call tk_lgseg
-    call tk_seglen
-    add bx, ax
-    inc cx
-    jmp short .b
-.bd:
+    mov di, [tk_lgnp]               ; --- and the backward half, e..np-1 -----
+    call tk_lgsum
     mov [tk_lgblen], bx
 
     mov si, tk_curfh                ; the two that lay the moving ink...
@@ -440,10 +427,27 @@ tk_lgarm:
     pop ax
     ret
 
+; tk_lgsum - BX = the walk length of the current glyph's segments CX..DI-1,
+;            and CX = DI.  clobbers AX, DX
+tk_lgsum:
+    xor bx, bx
+.s:
+    cmp cx, di
+    jae .d
+    mov ax, cx
+    xor dl, dl
+    call tk_lgseg
+    call tk_seglen
+    add bx, ax
+    inc cx
+    jmp short .s
+.d:
+    ret
+
 ; tk_lgpair - arm the forward cursor SI and the backward cursor DI
 ;
 ; DI IS BANKED IN MEMORY and not in the register, because tk_cur_init ends in
-; OSAPI_GFX_LINIT and hands it the block in ES:DI - so the first init below
+; `gfxe_winit` and hands it the block in DI - so the first init below
 ; leaves DI pointing at the FORWARD cursor. The backward one then never got a
 ; length or a step, and only one gap ever moved.
 tk_lgpair:
@@ -532,18 +536,19 @@ tk_logo_full:
     mov bx, [tk_e1y]
     mov cx, [tk_e2x]
     mov dx, [tk_e2y]
-    xor si, si
-    call OSAPI_GFX_LINE
-    pop dx
-    pop cx
-    inc cx
-    jmp short .whole
+    mov di, tk_lgwk                 ; SPEC.md 85.10.4: a whole segment is a
+    call gfxe_wline                 ; walk of its full length, and the whole
+    pop dx                          ; LOGO goes up in one arrival - the list
+    pop cx                          ; commits itself when it fills, so what
+    inc cx                          ; used to be one far call a segment is now
+    jmp short .whole                ; a handful for the figure
 .next:
     inc word [tk_lgi]
     mov ax, [tk_lgi]
     cmp ax, TK_LGCELLS
     jb .cell
 .done:
+    call gfxe_pput                  ; the whole logo, in ONE arrival
     pop ax
     mov [tk_at_prog], ax
     pop ax
@@ -609,10 +614,8 @@ tk_band_text:
     add ax, cx
     mov si, tk_hsn
     add si, ax
-    mov al, [si]
-    mov [di], al
-    mov al, [si+1]
-    mov [di+1], al
+    mov ax, [si]
+    mov [di], ax
     mov al, [si+2]
     mov [di+2], al
     add di, 3
@@ -625,7 +628,7 @@ tk_band_text:
     mov ax, [si]
     mov dx, [si+2]
     mov di, tk_numbuf
-    call tk_utoa
+    call dec_u32
     mov si, tk_numbuf
     call tk_strlen                  ; CX = its digits
     pop di
@@ -684,11 +687,7 @@ tk_band_full:
     mov bx, TK_BANDY
     mov ax, [tk_at_scr]
 .r:
-    push ax
-    push cx
-    call tk_band_row
-    pop cx
-    pop ax
+    call tk_band_row                ; ...which keeps every register
     inc ax
     cmp ax, TK_NLIST
     jb .w
@@ -878,16 +877,14 @@ tk_at_left:
 
 ; -----------------------------------------------------------------------------
 ; tk_at_step - one wake of the attract animation. Lock NOT held on entry.
+; CLOBBERS EVERY REGISTER: tk_worker is its only caller and keeps nothing
+; across it.
 ; -----------------------------------------------------------------------------
 tk_at_step:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     call OSAPI_GFX_LOCK             ; **THE LOCK FIRST, THEN THE QUESTION**
+    cmp byte [tk_atstale], 0        ; a bracket has run since the last paint,
+    jne .unlock                     ; and the walk buffers are tk_kx's bytes
+                                    ; until tk_paint re-arms them (85.10.5)
     cmp byte [tk_abon], 0           ; ...and the credits are the same question:
     jne .unlock                     ; while they are up the UI task owns the
                                     ; content, and tk_abdismiss repaints the
@@ -942,8 +939,8 @@ tk_at_step:
     mov bx, [tk_e1y]
     mov cx, [tk_e2x]
     mov dx, [tk_e2y]
-    xor si, si
-    call OSAPI_GFX_LINE
+    mov di, tk_lgwk                 ; SPEC.md 85.10.4, as above
+    call gfxe_wline
     inc word [tk_at_pseg]
     mov ax, [tk_at_pseg]
     cmp ax, [tk_lgnp]
@@ -954,9 +951,11 @@ tk_at_step:
 .dgo:
     pop cx
     loop .dseg
-    jmp .scroll
-.done:
+    call gfxe_pput                  ; this step's segments, in ONE arrival
+    jmp .scroll                     ; (SPEC.md 85.10.4) - it used to be one
+.done:                              ; far call each
     pop cx
+    call gfxe_pput
     mov byte [tk_at_glow], 1        ; the outline is whole: the gaps take over
     mov word [tk_lgi], 0
     call tk_lgarm
@@ -1009,15 +1008,7 @@ tk_at_step:
     mov [tk_at_blt], al
     call tk_at_play
 .unlock:
-    call OSAPI_GFX_UNLOCK
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    call OSAPI_GFX_UNLOCK           ; a FAR cell: called, never jumped to
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1059,6 +1050,15 @@ tk_hire:
     call OSAPI_TASK_SPAWN
     jc .nope
     mov byte [tk_hired], 1
+    ; ...AND THE WORKER MAY BE RESTARTED (SPEC.md 66.6.2). Hiring one
+    ; would otherwise pin the region for ever - task_spawn wrote our
+    ; segment into that worker's frame before its first instruction:
+    ; a game loop: every value it reads is a static the move carries, and a
+    ; restart costs one frame.
+    ; The kernel restarts a worker only where it PARKS, which for us is
+    ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
+    ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
+    OS88_WORKER_RESTARTABLE tk_worker
 .nope:
     pop bx
     pop ax

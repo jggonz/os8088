@@ -1,0 +1,17 @@
+# EXCITEBIKE sound effects: original short records, composed for this project.
+# One effect a line:   name  priority  (frames hz) (frames hz) ...
+# `frames` is in 60 Hz game steps (1..255), `hz` 0 = a rest, otherwise 19..6208.
+# Higher priority pre-empts lower; equal priority restarts.  The order of the
+# names below is the effect id order the guest sees (exbsnd.inc).
+#
+# name         pri  notes
+crash            9  (2 900) (2 760) (2 620) (3 500) (3 400) (4 300) (6 220) (8 160)
+land_soft        6  (2 180) (2 140) (3 100)
+land_hard        7  (3 150) (2 0) (3 110) (3 80) (4 60)
+bump             3  (1 260) (1 200)
+takeoff          4  (2 300) (2 380) (3 480) (3 620)
+overheat         5  (6 880) (6 660) (6 880) (6 660) (6 880) (6 660)
+lap              5  (3 660) (3 880) (3 1320) (6 1760)
+# READY 3, 2, 1 are 60 steps each and GO! is the 181st: the beeps sit on them
+start_light      8  (10 440) (50 0) (10 440) (50 0) (10 440) (50 0) (24 880)
+pause            2  (3 520) (2 0) (3 390)

@@ -27,11 +27,12 @@ import os
 import re
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, "tools")
+import os88build as _B
 import os88marty as M
 from os88mouse import Mouse
+import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -39,8 +40,28 @@ MACHINE = ARGS[0] if ARGS else "os8088_5150_cga_gla"
 # THE BUILD'S OWN RATE (13.10.5.4), because case C's expectation INVERTS on it:
 # at 0 the view must not move mid-drag and at n>0 it must. A gate that only
 # knew the rate-0 answer would pass a build that had stopped tracking at all.
+
+
+def _buildnum(path, name, env, default):
+    """The constant THIS BUILD was assembled with, not a default typed here.
+
+    `--rate=` used to default to 0, which was the shipped value and stopped
+    being it when 13.10.5.4.1's 8086 column was measured: the row then asserted
+    "the view did not move" against a kernel whose rate is 1 and went red for a
+    change that was correct. A gate's expectation has to come from the build.
+    The knob wins over the source, exactly as tests/sbrate286.py does it.
+    """
+    for d in os.environ.get(env, "").replace("-D", " ").split():
+        k, _, v = d.partition("=")
+        if k == name and v:
+            return int(v, 0)
+    m = re.search(r"^%define\s+" + name + r"\s+(\d+)", open(path).read(), re.M)
+    return int(m.group(1)) if m else default
+
+
 RATE = int(next((a.split("=")[1] for a in sys.argv[1:]
-                 if a.startswith("--rate=")), "0"))
+                 if a.startswith("--rate=")),
+                str(_buildnum("kernel/files.inc", "FM_SBRATE", "OS88_DEFINES", 0))))
 SHOT = next((a.split("=")[1] for a in sys.argv[1:]
              if a.startswith("--shot=")), None)
 W_FLAGS, W_X, W_Y, W_W, W_H = 0, 2, 4, 6, 8
@@ -137,7 +158,7 @@ FS_SCRL_OFS = int(re.search(r"^FS_SCRL\s+equ\s+(\d+)", src, re.M).group(1))
 # maps onto ONE row of travel, so a drag the length of it moves the view by a
 # row and a drag most of the way moves it by nothing - which is a correct bar
 # and a useless gate. This disk makes the thumb small and the range long.
-DISK = "build/thumbdisk.img"
+DISK = _B.at("build/thumbdisk.img")
 if not os.path.exists(DISK):
     os.makedirs("build/thumbsrc", exist_ok=True)
     names = []
@@ -155,8 +176,7 @@ with M.launch("build/os8088-360.img", apps=DISK,
     mono = m.video()["type"] in ("cga", "mda", "herc")
     print(f"== {MACHINE} : the thumb drag (SPEC.md 13.10.5) ==")
 
-    vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
-    mo.dblclick(vw - 40, 80)                # zone 1 = B:, the 30-file disk
+    mo.dblclick(*os88geom.drive_pt(m, "B"))     # B:, the 30-file disk
                                             # above (zone 0 is A:, whose root
                                             # lists six things and cannot make
                                             # a thumb worth dragging)
@@ -183,7 +203,7 @@ with M.launch("build/os8088-360.img", apps=DISK,
     was = scrl(m)
     mo.to(cx, top + h // 2)
     mo._edge(True)
-    time.sleep(0.8)
+    M.pace(m, 0.8)
     check("a press on the thumb does not PAGE", scrl(m) == was,
           f"(FS_SCRL {scrl(m)}, was {was})")
     check("...and the gesture is live", dragon(m) == 1)
@@ -196,7 +216,7 @@ with M.launch("build/os8088-360.img", apps=DISK,
     # (pos 24 of 25 on the 30-file disk, measured), where the bottom row
     # clamps the wanted top AT the travel and the commit is exactly total-fit
     mo.to(cx, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     after_pos = dragpos(m)
     blk2 = ksb(m)
     t2 = thumb(blk2)
@@ -223,11 +243,11 @@ with M.launch("build/os8088-360.img", apps=DISK,
 
     # --- D: x is never read ------------------------------------------------
     mo.to(cx - 150, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     check("x is never read: 150px off the bar is the same pos",
           dragpos(m) == after_pos, f"({dragpos(m)} vs {after_pos})")
     mo.to(cx + 60, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     check("...on the other side too", dragpos(m) == after_pos,
           f"({dragpos(m)} vs {after_pos})")
 

@@ -82,3 +82,69 @@ _cw_memmove:
     pop bp
     ret                             ; cdecl: the CALLER pops the arguments
 
+
+; -----------------------------------------------------------------------------
+; cw_farput  - void cw_farput(const void *src, unsigned seg, unsigned off,
+;                             unsigned n)
+; cw_farswap - void cw_farswap(void *p, unsigned seg, unsigned off, unsigned n)
+;
+; UNDO'S TWO MOVERS (SPEC.md 73.12.4). The snapshot lives in a heap claim of
+; its own, because the document is 8,000 bytes and the segment has not got a
+; second copy of it to spare - and C cannot write `es:`, so os88_poke() would
+; be two near calls a byte, ~0.2 s for a snapshot on the target. These are a
+; `rep movsb` and a byte exchange loop.
+;
+; cw_farput copies n bytes from DS:src to seg:off - taking the snapshot.
+; cw_farswap EXCHANGES n bytes between DS:p and seg:off, which is the whole of
+; Undo and of undoing an Undo: the snapshot becomes the present and the
+; present becomes the snapshot, so a second Undo is a Redo for nothing.
+;
+; cdecl like cw_memmove above, ES loaded and put back the same way, DF left
+; clear.
+; -----------------------------------------------------------------------------
+_cw_farput:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push cx
+    mov si, [bp+4]                  ; src, in DS
+    mov es, [bp+6]                  ; the claim
+    mov di, [bp+8]
+    mov cx, [bp+10]
+    cld
+    rep movsb
+    pop cx
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+_cw_farswap:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push cx
+    mov si, [bp+4]                  ; p, in DS
+    mov es, [bp+6]
+    mov di, [bp+8]
+    mov cx, [bp+10]
+    jcxz .done
+    cld
+.swap:
+    mov al, [es:di]
+    xchg al, [si]
+    stosb
+    inc si
+    loop .swap
+.done:
+    pop cx
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret

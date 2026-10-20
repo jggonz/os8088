@@ -37,14 +37,21 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
-sys.path.insert(0, "/home/user/os8088/tests/lptlink")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests/lptlink"))
 import dispcp                                          # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import partner as P                                    # noqa: E402
+import os88build                                       # noqa: E402
 
 S = os88sym.linear
 
@@ -53,7 +60,9 @@ NET_ROW = 4                        # ...last since the reorder (SPEC.md 31.1)
 DRVR_SZ, DRVR_SEG = 16, 2
 CP_I0Y, CP_IROWH, CP_IDRV = 6, 14, 2
 CP_RX, CP_DBY1, CP_DROWH = 96, 20, 26
-PORT = 8089
+PORT = 0        # an EPHEMERAL port, read back off the socket: a fixed 8089
+                # collided with tests/brrace.py's server on a shared box and
+                # the row died on bind before booting anything
 PATH = "/net.htm"
 
 PAGE = (b"<html><head><title>Over the wire</title></head><body>\r\n"
@@ -80,6 +89,7 @@ class Server(threading.Thread):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.s.bind(("127.0.0.1", PORT))
+        self.port = self.s.getsockname()[1]
         self.s.listen(2)
         self.request = None
 
@@ -109,7 +119,7 @@ def main():
     a = ap.parse_args()
 
     fails = []
-    img = os.path.getsize("build/browser.bin")
+    img = os.path.getsize(os88build.at("build/browser.bin"))
     # THE DISK IS BUILT FROM THE PACKAGE AND CAN BE OLDER THAN IT. That is not
     # hypothetical: this test's first real run drove a browser two commits
     # behind, reported `no such host` for a URL the bar was holding correctly,
@@ -122,7 +132,7 @@ def main():
                  "binary and blamed the browser)")
     srv = Server()
     srv.start()
-    url = "http://127.0.0.1:%d%s" % (PORT, PATH)
+    url = "http://127.0.0.1:%d%s" % (srv.port, PATH)
     say("http server on %s, %d byte page" % (url, len(PAGE)))
 
     box = P.SocketBox()

@@ -23,7 +23,7 @@ built `.o88`'s header byte +15 (SPEC.md 8.7.2), against `stkdepth.py`'s deepest
 chain from that worker's entry plus SPEC.md 8.7's 64-byte interrupt floor.
 The bar is **1.25x**, which is not a round number - it is the thinnest margin
 the tree already accepts, Frotz's 384 over a 240-byte chain
-(docs/STACK-SLOTS-PLAN.md 12), so nothing shipping has to move to pass and
+(docs/plans/completed/STACK-SLOTS-PLAN.md 12), so nothing shipping has to move to pass and
 anything thinner than the worst thing here is new.
 
 TWO THINGS IT DELIBERATELY DOES NOT DO.
@@ -40,6 +40,7 @@ TWO THINGS IT DELIBERATELY DOES NOT DO.
     reported, not silently skipped.  A skip that nobody sees is how a gate
     stops being one.
 """
+import concurrent.futures
 import glob
 import os
 import re
@@ -54,7 +55,7 @@ TOOL = os.path.join(ROOT, "tools", "stkdepth.py")
 BUILD = os.environ.get("OS88_BUILD", os.path.join(ROOT, "build"))
 
 # SPEC.md 8.7's interrupt floor, from the worst real machine measured
-# (docs/STACK-SLOTS-PLAN.md 7.1), and the thinnest margin the tree accepts.
+# (docs/plans/completed/STACK-SLOTS-PLAN.md 7.1), and the thinnest margin the tree accepts.
 FLOOR = 64
 BAR = 1.25
 
@@ -67,16 +68,50 @@ SPAWN = re.compile(r"^\s*call\s+OSAPI_TASK_SPAWN\b")
 ENTRY = re.compile(r"^\s*mov\s+ax\s*,\s*([A-Za-z_][\w]*)\s*(?:;.*)?$")
 
 
+INCLUDE = re.compile(r'^\s*%include\s+"([^"]+)"')
+
+
+def sources_of(path):
+    """The .asm and every file it %includes, transitively, that lives in its
+    own directory - the files that ASSEMBLE INTO THIS IMAGE.
+
+    Not "every .inc beside the .asm", which is what this read until
+    PIXELSTEIN: apps/pixelstein/ holds TWO images - pxstein.asm, the loader
+    that is PXSTEIN.O88, and pxgame.asm, part 0, which is where the worker
+    is spawned (pxwin.inc). A directory walk found px_worker for the loader
+    too, stkdepth.py walked the loader's listing for a routine it does not
+    contain and printed 0, and the loader's header (OS88_STACK_DEFAULT, 384)
+    passed at "0 + 64 in 384" while the header the kernel actually reads -
+    part 0's, OS88_STACK_256 - was never looked at. The include tree is what
+    the assembler sees, so it is what this reads.
+    """
+    here = os.path.dirname(path)
+    out, todo = [], [path]
+    while todo:
+        f = todo.pop(0)
+        if f in out or not os.path.exists(f):
+            continue
+        out.append(f)
+        for ln in open(f, errors="replace"):
+            m = INCLUDE.match(ln.split(";")[0])
+            if not m:
+                continue
+            cand = os.path.join(here, m.group(1))
+            if os.path.exists(cand) and os.path.dirname(os.path.abspath(cand)) == \
+               os.path.abspath(here):
+                todo.append(cand)
+    return out
+
+
 def worker_of(path):
     """The near entry the package hands OSAPI_TASK_SPAWN, or None.
 
     The spawn is not always in the top-level .asm: TANK's is in tkattr.inc and
     BROWSER's in brnet.inc, and a gate that read only the .asm sized neither
-    and said nothing - so every .inc beside the .asm is read too, the .asm
-    first.
+    and said nothing - so every .inc the .asm assembles is read too (its
+    include tree, sources_of), the .asm first.
     """
-    here = os.path.dirname(path)
-    files = [path] + sorted(p for p in glob.glob(os.path.join(here, "*.inc")))
+    files = sources_of(path)
     for f in files:
         lines = open(f, errors="replace").read().splitlines()
         for i, ln in enumerate(lines):
@@ -89,26 +124,112 @@ def worker_of(path):
     return None
 
 
+CCWORKER = re.compile(r"^\s*%define\s+CC_HAS_WORKER\b")
+
+
+def c_worker(path):
+    """Does this package's shim declare a C worker (SPEC.md 73)?
+
+    A C package never writes `call OSAPI_TASK_SPAWN` itself: it calls
+    os88_task_spawn(), whose body is _os88_task_spawn in apps/cc/os88thunk.asm,
+    and its worker root is cc_worker in apps/cc/crt0.asm. So the scan above
+    finds nothing and `spawns` answers no, and paccman, cword, runcpm, weave
+    and the C64 were all skipped here WITHOUT BEING COUNTED - which is the
+    thing this file's own header calls "how a gate stops being one".
+
+    They are NAMED rather than measured, and that is deliberate. The chain
+    below a compiler-emitted root runs through the L### labels SmallerC emits
+    and tools/stkdepth.py's linear walk stops at the first `ret` it meets in
+    one, so the number it prints for cc_worker is a FLOOR and not a maximum -
+    14 bytes for a package whose composed chain is 118. A gate that passed on
+    that floor would be worse than one that skips, so what each C package's
+    worker stack is really sized by is its own MEASURED water mark
+    (tests/paccman.py reads the worker's slice after thousands of frames and
+    asserts it against OS88_STACK_256). This function exists so the summary
+    says which packages those are.
+    """
+    for ln in open(path, errors="replace"):
+        if CCWORKER.match(ln.split(";")[0]):
+            return True
+    return False
+
+
 def spawns(path):
-    """Does any source of this package call OSAPI_TASK_SPAWN at all?"""
-    here = os.path.dirname(path)
-    for f in [path] + glob.glob(os.path.join(here, "*.inc")):
+    """Does any source of this IMAGE call OSAPI_TASK_SPAWN at all?"""
+    for f in sources_of(path):
         for ln in open(f, errors="replace"):
             if SPAWN.match(ln.split(";")[0]):
                 return True
     return False
 
 
-def declared(o88):
-    """The class byte out of the BUILT package, not out of the source."""
-    with open(o88, "rb") as f:
+def built_of(asm):
+    """The built file whose header the kernel reads the class out of: the
+    package's `.o88`, or - for an image that is a PART of one and has no
+    `.o88` of its own (SPEC.md 20.12.10: PIXELSTEIN's pxgame.asm is part 0
+    of PXSTEIN.O88, and the kernel reads byte +15 off the segment the
+    instance was re-homed onto, kernel/instance.inc) - its `.bin`, which
+    carries the same 32-byte header at offset 0 because os88pkg.py
+    validates and never relocates."""
+    stem = os.path.splitext(os.path.basename(asm))[0]
+    for ext in (".o88", ".bin"):
+        p = os.path.join(BUILD, stem + ext)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def declared(built):
+    """The class byte out of the BUILT image, not out of the source."""
+    with open(built, "rb") as f:
         hdr = f.read(32)
     if len(hdr) < 32:
         return None
     return CLASS_BYTES.get(hdr[H_CLASS], 384)
 
 
-def depth(asm, root):
+def listing_of(built):
+    """The listing and map the BUILD kept beside this image, or None.
+
+    The Makefile's STKLST writes build/<stem>.lst and .map in the same nasm
+    run as build/<stem>.bin, so walking them walks exactly the assembly that
+    ships - with its own -D flags, which a second assembly here did not have -
+    and costs no assembly at all. They must be from THAT run: a .bin rebuilt by
+    a rule without STKLST leaves an older listing behind, and a listing more
+    than a second older than its .bin is not used.
+    """
+    stem = os.path.join(BUILD, os.path.splitext(os.path.basename(built))[0])
+    binf = stem + ".bin"
+    lst, mp = stem + ".lst", stem + ".map"
+    try:
+        tb = os.path.getmtime(binf)
+        if min(os.path.getmtime(lst), os.path.getmtime(mp)) < tb - 1.0:
+            return None
+    except OSError:
+        return None
+    return stem
+
+
+def walk_listing(prefix, root):
+    """depth()'s answer off the BUILD's listing, in this process.
+
+    The same three calls tools/stkdepth.py's main() makes - symbols, routines,
+    deepest - without the interpreter launch per package and without the
+    report of pushes a chain did not need, which main() prints for a person
+    and this gate never read. A root the listing does not carry is the same
+    refusal main() makes, so a worker found in the wrong image still fails.
+    """
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import stkdepth
+    rout = stkdepth.routines(prefix + ".lst",
+                             stkdepth.symbols(prefix + ".map"))[0]
+    if root not in rout:
+        return None, ("%s.lst does not assemble a routine named %s"
+                      % (prefix, root))
+    return stkdepth.deepest(rout, root, (), ())[0], None
+
+
+def depth(asm, root, prefix=None):
     """stkdepth.py's deepest chain from `root`, in bytes."""
     # drivers/net is on the path for ftpd and Telnet: netpkg.inc is the socket
     # ABI they include from the DRIVER's tree (SPEC.md 72), so a package's own
@@ -119,12 +240,16 @@ def depth(asm, root):
     # what a package includes; this list has to keep up with it, and the
     # failure when it does not is "nasm failed: unable to open include file",
     # which this gate reports rather than skipping (a package whose depth
-    # cannot be measured is one the gate is not watching).
+    # cannot be measured is one the gate is not watching). drivers/sound is
+    # MIDIRack's: sndpkg.inc is SOUND.DRV's FM verbs (SPEC.md 34.12), the
+    # same shape as netpkg.inc.
     r = subprocess.run([sys.executable, TOOL, asm, "-I", os.path.join(ROOT, "apps"),
                         "-I", BUILD, "-I", os.path.dirname(asm),
                         "-I", os.path.join(ROOT, "drivers", "net"),
                         "-I", os.path.join(ROOT, "drivers", "ramdisk"),
-                        "--from", root],
+                        "-I", os.path.join(ROOT, "drivers", "sound"),
+                        "--from", root]
+                       + (["--listing", prefix] if prefix else []),
                        capture_output=True, text=True, cwd=ROOT, timeout=900)
     m = re.search(r"^== %s: (\d+) bytes ==" % re.escape(root), r.stdout, re.M)
     if not m:
@@ -132,21 +257,40 @@ def depth(asm, root):
     return int(m.group(1)), None
 
 
+# The row's registry entry declares this many (tests/suite.py, Row.cpus): the
+# budget charges a row its CPU divided by its declared width, so the two must
+# move together. Each walk is a whole nasm assembly of one package plus the
+# walker over its listing - ~0.9s apiece, twenty-four of them - and every one
+# is independent of the others.
+JOBS = 4
+
+
 def main():
-    rows, unfound, unbuilt = [], [], []
+    rows, unfound, unbuilt, cpkgs = [], [], [], []
+    todo = []
     for asm in sorted(glob.glob(os.path.join(ROOT, "apps", "*", "*.asm"))):
         app = os.path.basename(os.path.dirname(asm))
         root = worker_of(asm)
         if root is None:
             if spawns(asm):
                 unfound.append(app)      # a spawner this scan could not size
+            elif c_worker(asm):
+                cpkgs.append(app)        # a C worker: named, see c_worker()
             continue                     # no worker: nothing to size
-        o88 = os.path.join(BUILD, "%s.o88" % os.path.splitext(os.path.basename(asm))[0])
-        if not os.path.exists(o88):
+        o88 = built_of(asm)
+        if o88 is None:
             unbuilt.append(app)
             continue
-        cls = declared(o88)
-        got, why = depth(asm, root)
+        todo.append((app, asm, root, declared(o88), listing_of(o88)))
+    # The build's listing where there is one (walked in-process, in worker
+    # PROCESSES because the walk is Python and a thread pool would hold the
+    # GIL), and a second assembly where there is not.
+    with concurrent.futures.ProcessPoolExecutor(max_workers=JOBS) as ex:
+        futs = [ex.submit(walk_listing, t[4], t[2]) if t[4]
+                else ex.submit(depth, t[1], t[2]) for t in todo]
+        walked = [f.result() for f in futs]
+    assembled = [t[0] for t in todo if not t[4]]
+    for (app, asm, root, cls, _), (got, why) in zip(todo, walked):
         if got is None:
             unfound.append("%s (%s): %s" % (app, root, why))
             continue
@@ -172,6 +316,14 @@ def main():
             want="none thinner than %.2fx" % BAR)
 
     worst = min(rows, key=lambda r: r[4]) if rows else None
+    if cpkgs:
+        print("t_stkclass: %d C package(s) declare a worker and are sized by "
+              "their own measured water mark, not here: %s"
+              % (len(cpkgs), ", ".join(cpkgs)))
+    if assembled:
+        print("t_stkclass: %d package(s) had no build listing and were "
+              "assembled again - give their Makefile rule $(STKLST): %s"
+              % (len(assembled), ", ".join(assembled)))
     print("t_stkclass: %d worker%s measured%s, thinnest %s"
           % (len(rows), "" if len(rows) == 1 else "s",
              (", %d package(s) not built" % len(unbuilt)) if unbuilt else "",

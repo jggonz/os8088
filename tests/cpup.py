@@ -23,7 +23,6 @@ data, so "the panel still works at all" is a real assertion here and not a
 formality.
 """
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88marty as M
@@ -131,14 +130,14 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     up_t, up_o = lit(glyph(other)), lit(glyph(was))
     mo.to(*target)
     mo._edge(True)
-    time.sleep(0.8)
+    M.settle(m)                             # the next read is PIXELS
     held_t, held_o = lit(glyph(other)), lit(glyph(was))
     check("the held row's glyph draws PRESSED", held_t != up_t,
           f"({up_t} lit upright, {held_t} held)")
     check("...and the OTHER row's does not move", held_o == up_o,
           f"({held_o} lit, was {up_o})")
     mo.to(w[0] + 20, target[1], l=True)     # slide off, STILL HELD
-    time.sleep(1.2)
+    M.settle(m)
     check("...and it comes back UP when the pointer slides off",
           lit(glyph(other)) == up_t,
           f"({lit(glyph(other))} lit, upright is {up_t})")
@@ -148,9 +147,9 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # --- A: press the row, slide off the pane, release --------------------
     mo.to(*target)
     mo._edge(True)
-    time.sleep(0.7)
+    M.pace(m, 0.7)
     mo.to(w[0] + 20, target[1], l=True)     # l=True: STILL HELD, into the
-    time.sleep(1.0)                         # item list on the left
+    M.pace(m, 1.0)                          # item list on the left
     mo._edge(False)
     M.settle(m)
     check("a slide-off release does NOT change the mode", coop(m) == was,
@@ -159,9 +158,9 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # --- B: press it, release on the OTHER row ----------------------------
     mo.to(*target)
     mo._edge(True)
-    time.sleep(0.7)
+    M.pace(m, 0.7)
     mo.to(*row_pt(w, was), l=True)
-    time.sleep(1.0)
+    M.pace(m, 1.0)
     mo._edge(False)
     M.settle(m)
     check("released on the OTHER row, nothing fires", coop(m) == was,
@@ -170,7 +169,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # --- C: press AND release on it ---------------------------------------
     mo.to(*target)
     mo._edge(True)
-    time.sleep(0.7)
+    M.pace(m, 0.7)
     mo._edge(False)
     M.settle(m)
     check("press-and-release ON the row DOES change it", coop(m) == other,

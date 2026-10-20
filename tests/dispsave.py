@@ -93,7 +93,7 @@ def main(argv):
     ap.add_argument("--swap", action="store_true",
                     help="make the MONO card the primary after extending. On "
                          "a VGA+Hercules machine that is the mixed-depth case "
-                         "with teeth (docs/DUAL-DISPLAY-VGA.md 4.3): the cache "
+                         "with teeth (docs/plans/completed/DUAL-DISPLAY-VGA.md 4.3): the cache "
                          "is sized from one display and gfx_save writes with "
                          "the planes of another, so a 1-plane primary and a "
                          "4-plane secondary is a buffer sized x1 written x4. "
@@ -186,7 +186,7 @@ def main(argv):
         say("wm_su_segs[%d] = 0x%04X after being covered" % (back, seg))
 
         # ...and the cache was SIZED FOR THE DISPLAY IT IS ON, not for whichever
-        # one happens to be current (docs/DUAL-DISPLAY-VGA.md 4.3). gfx_save
+        # one happens to be current (docs/plans/completed/DUAL-DISPLAY-VGA.md 4.3). gfx_save
         # takes GFXDENTER, so it writes with the planes of the display the rect
         # is on, while wm_su_flay used to size the claim from [vid_planes_w] -
         # the primary's, every hook restoring it. Same number on any machine

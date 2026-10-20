@@ -42,7 +42,7 @@
 #   (2) tools/cc8086.py         -> strict 8086, or REFUSE (SPEC.md 73.6, 67.10)
 #   (3) nasm -f bin             one assembly, no linker: the shim %includes
 #                               apps/cc/crt0.asm and build/cword.gen.asm
-#   (4) tools/os88ovl.py        cut CWORD.OVL off the end (SPEC.md 73.14)
+#   (4) tools/os88ovl.py        cut the overlay off the end (SPEC.md 73.14)
 #   (5) tools/os88pkg.py        validate the 32-byte header and stamp it
 #   (6) tools/os88disk.py       FAT12, three geometries (CLAUDE.md), --verify
 #
@@ -116,25 +116,25 @@ python3 tools/cc8086.py $BUILD/cword.raw.asm -o $BUILD/cword.gen.asm
 nasm -f bin -w+error -I apps/ -I $BUILD/ -o $BUILD/cword.bin apps/cword/cword.asm
 
 # (4) THE OVERLAY CUT (SPEC.md 73.14). Everything from `.modc` on is code that
-#     must not ship inside CWORD.O88: it becomes CWORD.OVL, a file beside it,
-#     read into a heap claim the first time a dialog, a file command or one of
-#     the utilities is asked for. os88ovl.py finds the boundary in the image
-#     size word the header already carries, so the layout lives in one place -
-#     and os88pkg.py then refuses a package whose header and file disagree,
-#     which is what stops this step being skippable.
+#     is not part of the package's IMAGE: it is cut off and handed back to
+#     os88pkg.py as PART 0 of CWORD.O88 (SPEC.md 73.14.2), which op_load reads
+#     into a claim of its own at launch. os88ovl.py finds the boundary in the
+#     image size word the header already carries, so the layout lives in one
+#     place - and os88pkg.py then refuses a package whose header and file
+#     disagree, which is what stops this step being skippable.
 python3 tools/os88ovl.py $BUILD/cword.bin -o $BUILD/CWORD.OVL \
 	--trim $BUILD/cword.trim.bin
 
 # (5) and (6) - the ordinary package pipeline, which does not know this was C.
-python3 tools/os88pkg.py $BUILD/cword.trim.bin -o $BUILD/cword.o88
+python3 tools/os88pkg.py $BUILD/cword.trim.bin -o $BUILD/cword.o88 \
+	--part-compress lz4 --part $BUILD/CWORD.OVL
 
 # Three geometries, as every shipped image is built (CLAUDE.md): 1.44MB and
 # 720KB are what QEMU gets, 360KB is what an 86Box XT or a real one takes. The
-# module rides beside the package on every one of them: a disk with CWORD.O88
-# and no CWORD.OVL is a program whose menus all refuse, politely (SPEC.md 47).
-python3 tools/os88disk.py -o $BUILD/cword.img    --size 1440 $BUILD/cword.o88 $BUILD/CWORD.OVL
-python3 tools/os88disk.py -o $BUILD/cword720.img --size 720  $BUILD/cword.o88 $BUILD/CWORD.OVL
-python3 tools/os88disk.py -o $BUILD/cword360.img --size 360  $BUILD/cword.o88 $BUILD/CWORD.OVL
+# module is inside CWORD.O88, so the package is one file on every one of them.
+python3 tools/os88disk.py -o $BUILD/cword.img    --size 1440 $BUILD/cword.o88
+python3 tools/os88disk.py -o $BUILD/cword720.img --size 720  $BUILD/cword.o88
+python3 tools/os88disk.py -o $BUILD/cword360.img --size 360  $BUILD/cword.o88
 python3 tools/os88disk.py --verify $BUILD/cword.img
 python3 tools/os88disk.py --verify $BUILD/cword720.img
 python3 tools/os88disk.py --verify $BUILD/cword360.img

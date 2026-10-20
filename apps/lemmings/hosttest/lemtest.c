@@ -11,7 +11,7 @@
  * apps/lemmings/hosttest/fixture/ - two levels, one style, the real string band
  * - so it needs no network fetch and no original data, which is what makes
  * `make lemmings` buildable on a tree that has never run tools/getlemmings.py
- * (SPEC.md 92.12).
+ * (SPEC.md 114.12).
  *
  * WHAT IT CHECKS, and each one stops the build:
  *
@@ -334,15 +334,15 @@ int os88_toast(const char *text, int ticks)
     return 0;
 }
 
-int os88_fsx_caps(void *win, unsigned char *kind)
+int os88_fsx_caps(void *win, int *kind)
 {
     (void)win;
-    *kind = (unsigned char)h_vidkind;
+    *kind = h_vidkind;
     return h_caps;
 }
 /* THE BRACKET IS DRIVEN AND NOT REFUSED. A stub that answers -1 measures the
  * refusal path, which is LESSONS.md 7's first harness trap: os88_fsx_run()
- * CALLS os88_fsx_main() the way the kernel does, os88_fsx_mode() answers a
+ * CALLS the entry it is handed the way the kernel does, os88_fsx_mode() answers a
  * modelled FSI, and os88_fsx_key() replays a scripted key list so the loop
  * runs a bounded number of ticks and leaves. h_fsx_refuse turns the refusal
  * back on for the one row that is about it. */
@@ -355,33 +355,41 @@ static int h_fsx_keyn;
 static int h_fsx_keyi;
 static int h_fullscreen;
 
-int os88_fsx_run(void *w, int f)
+int os88_fsx_run(void (*entry)(void), void *w, int f)
 {
     (void)f;
+    (void)w;
     if (h_fsx_refuse)
         return -1;
     h_fsx_runs++;
     h_fsx_ticks = 0;
     h_fsx_keyi = 0;
-    os88_fsx_main(w);
+    entry();
     return 0;
 }
 
-int os88_fsx_mode(int id, struct os88_fsi *f)
+static void h_fsi_w(unsigned char *f, int o, unsigned v)
 {
+    f[o] = (unsigned char)(v & 0xFF);
+    f[o + 1] = (unsigned char)(v >> 8);
+}
+
+int os88_fsx_mode(int id, void *fsi)
+{
+    unsigned char *f = (unsigned char *)fsi;
+
     if (h_fsx_refuse || (h_caps & (1 << id)) == 0)
         return -1;
-    f->seg = 0xA000;
-    f->w = (id == OS88_FSXM_HERC) ? 720 : 320;
-    f->h = (id == OS88_FSXM_HERC) ? 348 : 200;
-    f->stride = 40;
-    f->flags = 2;
-    f->bpp = 4;
-    f->banks = 1;
-    f->pages = 1;
-    f->bstep = 0;
-    f->mode = (unsigned char)id;
-    f->rsvd = 0;
+    memset(f, 0, OS88_FSI_SIZE);
+    h_fsi_w(f, OS88_FSI_SEG, 0xA000);
+    h_fsi_w(f, OS88_FSI_W, (id == OS88_FSXM_HERC) ? 720 : 320);
+    h_fsi_w(f, OS88_FSI_H, (id == OS88_FSXM_HERC) ? 348 : 200);
+    h_fsi_w(f, OS88_FSI_STRIDE, 40);
+    f[OS88_FSI_FLAGS] = 2;
+    f[OS88_FSI_BPP] = 4;
+    f[OS88_FSI_BANKS] = 1;
+    f[OS88_FSI_PAGES] = 1;
+    f[OS88_FSI_MODE] = (unsigned char)id;
     return 0;
 }
 
@@ -1218,7 +1226,7 @@ int main(void)
      *
      * (2) AND THIS KEYSTROKE HAS NOTHING TO RECORD. It merely opens the preview
      * screen. In the original an access code is issued on COMPLETING a level,
-     * and SPEC.md 92.8's Save Progress cell says of the refusing case that "the
+     * and SPEC.md 114.8's Save Progress cell says of the refusing case that "the
      * session is played and the result is shown, and nothing is recorded" -
      * recording belongs to the RESULT, which is wave 4's postview. The build
      * that advanced lem_prog[] here credited a level nobody had played: "Save
@@ -1241,7 +1249,7 @@ int main(void)
         fail("Play wrote the progress file with the gfx lock held");
     if (lem_prog[0] != -1)
         fail("Play credited a level that has not been played - progress is "
-             "recorded by the RESULT (SPEC.md 92.8), not by opening the "
+             "recorded by the RESULT (SPEC.md 114.8), not by opening the "
              "preview screen");
     if (lem_progwrite)
         fail("Play posted a progress WRITE for a level that has not been "
@@ -1403,7 +1411,7 @@ int main(void)
     lem_savable = ovl_progress_read();
 
     /* ======================================================================
-     * WAVE 2: THE RASTER (SPEC.md 92.4)
+     * WAVE 2: THE RASTER (SPEC.md 114.4)
      *
      * Everything above is about the launcher's glass. Everything here is about
      * the LEVEL's, and it is driven against hosttest/lemraster.c's model of
@@ -1420,7 +1428,7 @@ int main(void)
     lem_sel = 0;
 
     /* --- the claims, and MEM_MAX ------------------------------------------
-     * SPEC.md 92.6.1: claim RECORDS are a budget too, MEM_MAX is 20 on a
+     * SPEC.md 114.6.1: claim RECORDS are a budget too, MEM_MAX is 20 on a
      * kern_small machine and it is SYSTEM-WIDE. */
     if (!lem_level_load(0))
         fail("the level's banks did not load off the fixture");
@@ -1428,7 +1436,7 @@ int main(void)
            "arithmetic the refusal quotes is %d KB\n",
            h_claims_now, h_claims_peak, h_mem_kb_used, H_MEM_KB, lem_need_kb());
     if (h_claims_peak > 6)
-        fail("more than six claim records - SPEC.md 92.6.1 says three on a "
+        fail("more than six claim records - SPEC.md 114.6.1 says three on a "
              "VGA and five on the two 1bpp adapters, and MEM_MAX is 20 on a "
              "kern_small machine SYSTEM-WIDE");
     if (lem_need_kb() != h_mem_kb_used)
@@ -1508,7 +1516,7 @@ int main(void)
     }
     h_r_reset();
     lem_frame_panel();
-    /* THE PANEL AND A WORD BEFORE THE 25-SECOND WAIT (SPEC.md 92.7.1
+    /* THE PANEL AND A WORD BEFORE THE 25-SECOND WAIT (SPEC.md 114.7.1
      * conclusion 2). Inside the bracket nothing can be said - every kernel
      * slot is refused - so LOADING is lettered in the game's own font, on the
      * panel, before the compose starts, and taken down with the first frame.
@@ -1577,7 +1585,7 @@ int main(void)
                "written twice (must be 0), worst %d cells moved in %d "
                "lem_r_rect calls\n",
                h_r_pixels, worst, wcells, wrects);
-        /* THE CALL COUNT IS A COST (SPEC.md 92.7.1: 137 us of cdecl against
+        /* THE CALL COUNT IS A COST (SPEC.md 114.7.1: 137 us of cdecl against
          * 153 us a plot inside one call), so the erase coalesces RUNS of one
          * colour out of the minimap's shadow. A cell per call would be 38. */
         if (wrects > 24)
@@ -1610,7 +1618,7 @@ int main(void)
     /* THE C HAS TO BELIEVE IT TOO, and until this round it did not: the arm
      * set the RASTER's kind and left lem_kind_id() answering VGA, so the
      * "CGA" frame ran C that thought it was on a VGA. Nothing depended on it
-     * while lemdraw.c never asked which card it was on; §92.4.4 rule 5's
+     * while lemdraw.c never asked which card it was on; §114.4.4 rule 5's
      * minimap class and lem_frame_panel()'s scroll guard both ask now, and
      * this arm caught the second of them the hour it was written. */
     h_caps = (1 << OS88_FSXM_CGA320);
@@ -1683,7 +1691,7 @@ int main(void)
     }
 
     /* --- the bracket runs, and the launch refuses OUTSIDE it ---------------
-     * SPEC.md 92.5: everything that can refuse happens in a window, because a
+     * SPEC.md 114.5: everything that can refuse happens in a window, because a
      * kernel toast in a foreign mode paints desktop geometry into the game's
      * framebuffer. */
     /* IT IS DEFERRED TO THE WAKE, and that is the largest of the four errands
@@ -1710,7 +1718,7 @@ int main(void)
     os88_onkey(13, 0, lem_win);
     if (h_reads != 0)
         fail("a launch keystroke read a file - ~131 KB of band with the gfx "
-             "lock HELD, which is SPEC.md 92.6's first table row put back one "
+             "lock HELD, which is SPEC.md 114.6's first table row put back one "
              "callback along");
     if (h_fsx_runs != 0)
         fail("a launch keystroke entered SPEC.md 53's bracket straight out of "

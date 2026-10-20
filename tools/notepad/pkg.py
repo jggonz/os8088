@@ -3,7 +3,7 @@
 #
 # The core of tools/notepad: everything else here builds on these two answers.
 #
-# WHY IT LOOKS LIKE THIS. docs/NOTEPAD-NOTES.md 6.3 is a probe that computed
+# WHY IT LOOKS LIKE THIS. docs/plans/completed/NOTEPAD-NOTES.md 6.3 is a probe that computed
 # its field addresses from the size of the wrong binary and reported plausible
 # garbage - len=59587, vrows=10546 - rather than an error. Both answers below
 # are therefore SELF-VALIDATING rather than derived:
@@ -22,6 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import os88marty as M                                       # noqa: E402
+from os88pkg import PKG_FMT                                 # noqa: E402
 
 CPU_HZ = 4772727.0          # 4.77MHz 8088 - the machine every figure is in
 
@@ -29,7 +30,7 @@ CPU_HZ = 4772727.0          # 4.77MHz 8088 - the machine every figure is in
 def ms(cycles):
     """Guest cycles as milliseconds on the target machine.
 
-    docs/NOTEPAD-NOTES.md 6.4: MartyPC here runs the guest at whatever
+    docs/plans/completed/NOTEPAD-NOTES.md 6.4: MartyPC here runs the guest at whatever
     multiple of real time the host manages, so WALL time means nothing and
     the cycle count means everything. Convert, never measure.
     """
@@ -93,7 +94,7 @@ class Lab:
 
         A package is loaded on a paragraph boundary off the top of the heap
         (SPEC.md 20.1/50.3), so the scan is over paragraphs and the match is
-        'O8' + version 3 + the 16-byte name field. Returns the LAST hit: the
+        'O8' + PKG_FMT + the 16-byte name field. Returns the LAST hit: the
         heap hands regions out downward, so a second instance of the same
         package sits below the first and is the one most recently launched.
         """
@@ -106,7 +107,7 @@ class Lab:
             except Exception:
                 continue
             for i in range(0, len(data) - 32, 16):
-                if data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == 3:
+                if data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == PKG_FMT:
                     if bytes(data[i + 16:i + 32]).split(b"\0")[0] == name:
                         hits.append(base + i // 16)
         if not hits:
@@ -129,7 +130,7 @@ class Lab:
     def cycles(self):
         return self.m.status()["cycles"]
 
-    # -- the check that closes docs/NOTEPAD-NOTES.md 6.3 ---------------------
+    # -- the check that closes docs/plans/completed/NOTEPAD-NOTES.md 6.3 ---------------------
     def verify(self, bin_path):
         """Guest memory against the built image, byte for byte.
 

@@ -2,7 +2,7 @@
 # =============================================================================
 # lab.py - Note Pad on the bench: price a keystroke, and say where it went
 #
-# The instrument docs/NOTEPAD-NOTES.md 5.1 was found with, and the one its
+# The instrument docs/plans/completed/NOTEPAD-NOTES.md 5.1 was found with, and the one its
 # remaining open reports should be picked up with. It drives a headless
 # MartyPC through tools/os88marty.py, so every figure is a GUEST CYCLE COUNT
 # on a cycle-accurate 4.77MHz 8088 and nothing here reads a wall clock.
@@ -31,7 +31,7 @@
 #   cmp /tmp/x.bin build/npbench.bin
 #
 # ...and then `lab.py verify`, which checks the guest against the same binary.
-# Skipping that is docs/NOTEPAD-NOTES.md 6.3, and it has been skipped twice.
+# Skipping that is docs/plans/completed/NOTEPAD-NOTES.md 6.3, and it has been skipped twice.
 # =============================================================================
 import argparse
 import os
@@ -155,7 +155,7 @@ def cmd_press(args):
 def cmd_click(args):
     """Price a click - a raise, a scroll-bar hit, a caret placement.
 
-    docs/NOTEPAD-NOTES.md 5.3: bringing Note Pad to the front was reported as
+    docs/plans/completed/NOTEPAD-NOTES.md 5.3: bringing Note Pad to the front was reported as
     pausing about half a second, and SPEC.md 11.90 says an UNOBSCURED raise
     should cost a title bar and nothing else - so the first thing to establish
     is whether the window was covered at all.

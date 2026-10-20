@@ -36,6 +36,7 @@ trigger that fired too rarely would let the primitive draw through an armed
 clip region, which is a corrupted repaint and not a slow one.
 """
 import argparse
+import tempfile
 import hashlib
 import os
 import subprocess
@@ -44,6 +45,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
+import os88fixture                                       # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -65,11 +67,11 @@ def moff(name):
     """Every equate in the package, from nasm's own [map]."""
     if not _MAP:
         src = os.path.join(ROOT, "tests", "spantest", "spantest.asm")
-        tmp, mp = "/tmp/os88_spantest_map.asm", "/tmp/os88_spantest.map"
+        tmp, mp = tempfile.gettempdir() + "/os88_spantest_map.asm", tempfile.gettempdir() + "/os88_spantest.map"
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
         subprocess.check_call(["nasm", "-f", "bin", "-I",
                                os.path.join(ROOT, "apps") + os.sep,
-                               "-o", "/dev/null", tmp])
+                               "-o", tmp + ".bin", tmp])
         for ln in open(mp):                 # "<vaddr> <raddr> <name>", HEX
             f = ln.split()
             if len(f) == 3:
@@ -89,11 +91,14 @@ def main(argv):
     ap.add_argument("--apps", default="build/spantest.img")
     a = ap.parse_args(argv)
     os.chdir(ROOT)
-    if a.apps == "build/spantest.img" and not os.path.exists(a.apps):
-        subprocess.check_call(["make", "spantest"])   # on demand, like fmtest:
-                                                      # nothing in `all` builds
-                                                      # a package that ships on
-                                                      # no disk
+    if a.apps == "build/spantest.img":
+        # On demand, like fmtest: nothing in `all` builds a package that ships
+
+        # on no disk. os88fixture.need is the same `make`, and it does NOTHING
+        # when the runner has
+        # already built the artefact (Row(wants=...) and os88test's prebuild).
+        # That is what lets this row drop builds=True and share the lane.
+        os88fixture.need(a.apps)
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
         os88marty.settle(m)
         mo = os88mouse.Mouse(marty=m)

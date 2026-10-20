@@ -1,9 +1,9 @@
 ; =============================================================================
 ; stkdiag.inc - what an INTERRUPT costs on a task stack, measured by the
-;               machine itself (docs/STACK-SLOTS-PLAN.md).  `make STKDIAG=1`
+;               machine itself (docs/plans/completed/STACK-SLOTS-PLAN.md).  `make STKDIAG=1`
 ;               ONLY.
 ;
-; docs/STACK-SLOTS-PLAN.md 2 priced the interrupt floor at 82 of 384 bytes and
+; docs/plans/completed/STACK-SLOTS-PLAN.md 2 priced the interrupt floor at 82 of 384 bytes and
 ; found that 50 of those are the ROM's `int 08h` handler running on whichever
 ; task stack it interrupted - measured under QEMU, by an A/B between two
 ; kernels. Two things make that number unsafe to build on:
@@ -11,12 +11,13 @@
 ;   * it is SeaBIOS's, and every ROM is different. The whole point of the
 ;     number is to size a task slice on a 5150, an XT clone and a 386, and
 ;     QEMU is none of them.
-;   * docs/KERNEL-MEMORY.md's "Task stacks" says the opposite - that SeaBIOS
-;     services its interrupt entries on an internal stack of its own, so the
-;     only foreign frames a slice carries under `make test` are ours. If that
-;     were true the 82 would be nearly all ours and the +46 QEMU-to-5150
-;     correction quoted beside it would be a second, independent adder. It
-;     cannot be both.
+;   * docs/KERNEL-MEMORY.md's "Task stacks" used to say the opposite - that
+;     SeaBIOS services its interrupt entries on an internal stack of its own,
+;     so the only foreign frames a slice carries under `make test` are ours -
+;     beside a "+46 QEMU-to-5150" adder. If that were true the 82 would be
+;     nearly all ours and the adder a second, independent term. It could not
+;     be both, and this knob settled it (docs/plans/completed/STACK-SLOTS-PLAN.md 9):
+;     SeaBIOS's chain is 56 bytes ON OUR STACK, the IBM ROM's is 36.
 ;
 ; So this asks the question from INSIDE, where the answer is exact and needs no
 ; second kernel: a sentinel is written into the free bytes below SP, the ROM is
@@ -213,7 +214,7 @@ sd_slice_base:
 ; What it reports is the WHOLE chain - our `pushf`, the far call's own return
 ; frame, the ROM's handler, and anything that nested inside it because a real
 ; BIOS `sti`s before int 1Ch. That is deliberate: it is what the A/B in
-; docs/STACK-SLOTS-PLAN.md 2 removed, so the two numbers answer the same
+; docs/plans/completed/STACK-SLOTS-PLAN.md 2 removed, so the two numbers answer the same
 ; question and can be compared.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------

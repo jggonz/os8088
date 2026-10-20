@@ -1,0 +1,185 @@
+{
+ "answers": [],
+ "attr": 7,
+ "attrs_rle": [
+  [
+   2000,
+   7
+  ]
+ ],
+ "bells": 0,
+ "chars_rle": [
+  [
+   1,
+   94
+  ],
+  [
+   38,
+   32
+  ],
+  [
+   1,
+   109
+  ],
+  [
+   124,
+   32
+  ],
+  [
+   1,
+   66
+  ],
+  [
+   4,
+   32
+  ],
+  [
+   1,
+   67
+  ],
+  [
+   399,
+   32
+  ],
+  [
+   1,
+   85
+  ],
+  [
+   79,
+   32
+  ],
+  [
+   1,
+   49
+  ],
+  [
+   74,
+   32
+  ],
+  [
+   1,
+   76
+  ],
+  [
+   9,
+   32
+  ],
+  [
+   1,
+   82
+  ],
+  [
+   15,
+   32
+  ],
+  [
+   1,
+   49
+  ],
+  [
+   7,
+   32
+  ],
+  [
+   1,
+   49
+  ],
+  [
+   60,
+   32
+  ],
+  [
+   1,
+   49
+  ],
+  [
+   69,
+   32
+  ],
+  [
+   1,
+   68
+  ],
+  [
+   150,
+   32
+  ],
+  [
+   1,
+   80
+  ],
+  [
+   159,
+   32
+  ],
+  [
+   1,
+   78
+  ],
+  [
+   159,
+   32
+  ],
+  [
+   1,
+   103
+  ],
+  [
+   38,
+   32
+  ],
+  [
+   1,
+   71
+  ],
+  [
+   120,
+   32
+  ],
+  [
+   1,
+   60
+  ],
+  [
+   78,
+   32
+  ],
+  [
+   1,
+   62
+  ],
+  [
+   320,
+   32
+  ],
+  [
+   1,
+   118
+  ],
+  [
+   78,
+   32
+  ],
+  [
+   1,
+   64
+  ]
+ ],
+ "cols": 80,
+ "cursor": [
+  0,
+  40
+ ],
+ "cursor_visible": true,
+ "end_state": "GROUND",
+ "glyphs": 21,
+ "name": "cursor",
+ "raw_sha256": "e18f43a7b404578d99b758589a05fc77f4e2632d2bfe84705c187384a9baa48c",
+ "rows": 25,
+ "scrolls": 0,
+ "stream_bytes": 249,
+ "stream_sha256": "cc45c578f02748929d8481c7cdcfbd6d7e643e2024845f4acb01c8268ea93f17",
+ "what": "Cursor movement: CUP, HVP, CUU/CUD/CUF/CUB, CNL/CPL, CHA, and the clamps at all four edges. Every landing is marked with a letter, so a parser that lands one cell out is visible as a letter in the wrong cell rather than as a number in a log.",
+ "zmodem_at": null
+}

@@ -31,10 +31,17 @@ script anyway - it is the whole arrangement in one run, and it is the control
 that says the KERNEL-SIDE state is right when the glass is not.
 """
 import sys
-import time
+import tempfile
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 
 from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
                       VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
@@ -95,7 +102,8 @@ def main():
         dispcp.set_primary(m, mo, S, os88marty.settle, slot, card=sec)
         report(m, "...and the HERCULES made primary", cards)
         dispcp.close_panel(m, mo, S, os88marty.settle, card=sec)
-        time.sleep(2)
+        os88marty.settle(m, card=sec)   # report() counts pixels on both
+        os88marty.settle(m, card=pri)
         report(m, "panel closed", cards)
 
         # --- and a DRAG must not put the dock on the second monitor --------
@@ -127,8 +135,8 @@ def main():
 
         for c in cards:
             w, h, d = m.fbuf(card=c)
-            os88marty.write_png_rgb("/tmp/herc1-card%d.png" % c, w, h, d)
-        print("  PNGs in /tmp/herc1-card*.png")
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/herc1-card%d.png" % c, w, h, d)
+        print("  PNGs in %s/herc1-card*.png" % tempfile.gettempdir())
         return 1 if n else 0
     return 0
 

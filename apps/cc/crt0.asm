@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/cc/crt0.asm
 ;
-; The prologue of a C package (SPEC.md 73.2, 67.4): the section layout, the
+; The prologue of a C package (SPEC.md 73.2, 73.4): the section layout, the
 ; 32-byte header with its dispatcher, the entry trampoline the loader calls,
 ; and one trampoline per window callback. It %includes apps/cc/os88thunk.asm,
 ; so including this file is the whole of "link against the C runtime".
@@ -49,7 +49,7 @@
 ; exactly like a truncated file.
 ;
 ; So a C package does not use OS88_HEADER / OS88_IMAGE_END. It uses the pair
-; below, which have the same field layout, the same magic, the same version 3
+; below, which have the same field layout, the same magic, the same PKG_FMT
 ; and the same dispatcher bytes, and differ in exactly one thing: the image
 ; size is an ABSOLUTE LABEL rather than a difference. With `.text start=0` and
 ; every other section chained to it by `follows=`, a label's value IS its
@@ -165,7 +165,7 @@
 ; task 0's, which lives above .lowbss and nowhere near a slice.
 ;
 ; It was the literal 384 with nothing comparing it to the kernel's SCH_STACK -
-; docs/STACK-SLOTS-PLAN.md 12.4 found it while surveying the packages. Taking
+; docs/plans/completed/STACK-SLOTS-PLAN.md 12.4 found it while surveying the packages. Taking
 ; the SDK's copy puts it under tests/unit/t_mirror.py, which compares every
 ; name defined in more than one file and needed nobody to remember it.
 ;
@@ -175,6 +175,49 @@ CC_OVDEPTH  equ 16
 
 %ifndef CC_PKG_NAME
   %fatal "cc/crt0.asm: define CC_PKG_NAME (e.g. %define CC_PKG_NAME 'CWORD') before including this file"
+%endif
+
+; --- THE OVERLAY AS A PART (SPEC.md 73.14.2) ---------------------------------
+; CC_OVL_PART puts the module INSIDE <NAME>.O88, as the last row of the parts
+; table (SPEC.md 20.12), instead of in a <NAME>.OVL beside it. Two arms:
+;
+;   CC_OVL_PART              EAGER: an OP_SEG row in the carve, read by op_load
+;                            at launch with every other eager part - one read,
+;                            and the launch refuses if the RAM is not there
+;   CC_OVL_PART CC_OVL_LAZY  LAZY: an OP_SEG|OP_LAZY row, fetched by op_fetch
+;                            the first time an ovl_* function is called -
+;                            today's on-demand load, out of the package's own
+;                            file
+;
+; ...and CC_OVL_PLAIN takes OP_COMP off the row, for a module LZ4 does not
+; shrink (os88pkg.py refuses an OP_COMP part that grows). Without CC_OVL_PART
+; nothing below changes by a byte: the <NAME>.OVL file, its stamp and its
+; three refusals are exactly what every unconverted package ships.
+;
+; THE MAKEFILE HAS TO AGREE, and it cannot disagree silently: CC_PACKAGE's
+; fifth argument `part` appends the cut module as the LAST --part, and
+; os88pkg.py refuses a --part count that is not the table's file-backed rows.
+%ifdef CC_OVL_PART
+  %ifndef CC_HAS_OVL
+    %fatal "CC_OVL_PART without CC_HAS_OVL: there is no overlay to carry"
+  %endif
+  %define CC_HAS_PARTS              ; the overlay IS a part: the header bit,
+                                    ; op_load at entry and the standard's bss
+  %ifndef CC_OVL_LAZY
+    %define CC_OVL_EAGER
+  %endif
+%else
+  %ifdef CC_OVL_LAZY
+    %fatal "CC_OVL_LAZY without CC_OVL_PART: only an overlay part is fetched"
+  %endif
+%endif
+%ifdef CC_OVL_LAZY
+; THE LAZY ARM KEEPS NO SEGMENT WORD OF ITS OWN. op_fetch banks a fetched
+; part's base in its row's zkb (SPEC.md 20.12.7.4) and op_seg reads it from
+; there, so a second copy here would be a second word for the relocation proc
+; to keep in step with the first. Every `[cc_ovseg]` below - the binder, the
+; thunk's retf, the relocation proc - IS that row word.
+  %define cc_ovseg (cc_ovrow + OP_R_ZKB)
 %endif
 
 ; --- the layout, pinned by SPEC.md 73.2 ---------------------------------------
@@ -218,6 +261,9 @@ section .modc   follows=.data   align=1 vstart=0
 %ifdef CC_ASSOC
   %assign CC_FLAGS CC_FLAGS | 2
 %endif
+%ifdef CC_DOCGLYPH
+  %assign CC_FLAGS CC_FLAGS | 32    ; bit 5: a shipped document glyph
+%endif                              ; (SPEC.md 54.3.2)
 %ifdef CC_HAS_PARTS
   %assign CC_FLAGS CC_FLAGS | 4     ; bit 2: the FILE is longer than the image
 %endif                              ; on purpose (SPEC.md 20.12.1)
@@ -232,7 +278,7 @@ section .modc   follows=.data   align=1 vstart=0
 ; =============================================================================
 section .text
     db 'O', '8'                     ; +0  magic (word 0x384F)
-    db 3                            ; +2  format version 3: segment-per-package
+    db PKG_FMT                      ; +2  format version (SPEC.md 20.2.0)
     db CC_FLAGS                     ; +3  flags: bit 0 an embedded icon
                                     ;     follows, bit 1 a 16-byte association
                                     ;     block follows it (SPEC.md 54.6).
@@ -320,6 +366,20 @@ section .text
     OS88_ASSOC16_END                ; asserts <= 5 and pads to exactly 16
 %endif
 
+%ifdef CC_DOCGLYPH
+; The optional shipped DOCUMENT GLYPH (SPEC.md 54.3.2): the 8x8 a document of
+; this program wears inside its page, shipped rather than reduced out of the
+; icon - for an icon that is a line drawing, which the 2x2 majority reduction
+; empties. It needs BOTH an icon and an association block in front of it, and
+; the SDK's bracket asserts that. The shim names the file, as it names the
+; icon:
+;     %define CC_DOCGLYPH "myapp/myglyph.inc"
+; and that file is eight db bytes, one a row, bit 7 = leftmost, 1 = ink.
+    OS88_DOCGLYPH8                  ; asserts offset 112
+%include CC_DOCGLYPH
+    OS88_DOCGLYPH8_END              ; asserts eight bytes and pads to 16
+%endif
+
 ; =============================================================================
 ; THE ENTRY TRAMPOLINE (SPEC.md 20.2, 21 step 8)
 ;
@@ -349,7 +409,12 @@ cc_entry:
                                     ; refusal has already toasted its reason,
                                     ; and the loader unwinds the region
 %endif
-    call _os88_main                 ; C: void *os88_main(void). It creates the
+%ifdef CC_OVL_PART
+    call cc_ovinit                  ; bind an eager module, or bank the home a
+                                    ; lazy one is fetched from (CC_IMAGE_END
+                                    ; emits it: it is cut from the table)
+%endif
+    call _os88_main                ; C: void *os88_main(void). It creates the
                                     ; window with os88_wm_create() - which is
                                     ; lock-free - and returns it; 0 = abort.
                                     ; It must NOT show, draw or spawn: the
@@ -358,24 +423,33 @@ cc_entry:
                                     ; OSAPI_TASK_SPAWN would simply refuse
     mov bx, ax                      ; BX = the window, which is the whole of
     mov [cc_win], ax                ; the answer. Banked too, for cc_worker
+    or ax, ax
+    jz .noreg                       ; os88_main() refused: there is nothing to
+                                    ; declare and the loader is about to unwind
+    push ax                         ; --- AND OUR REGION IS MOVABLE (SPEC.md
+    push bx                         ; 66.6.1) ---
+    push dx                         ; DX is the instance index on entry
+    mov dx, cs
+    mov ax, cc_regreloc
+    call OSAPI_MEM_MOVABLE          ; a refusal is not worth reporting: it can
+    pop dx                          ; only mean the region is not ours, which
+    pop bx                          ; cannot happen from here, and the cost is
+    pop ax                          ; a compaction that achieves less
+.noreg:
     pop es
     pop di
     pop si
-    or bx, bx                       ; CF LAST, and after the pops: `pop`
-    jz .abort                       ; writes no flags, so either order works -
-    clc                             ; pinning one removes the question (73.4)
-    ret
-.abort:
-    stc
-    ret
+    cmp bx, 1                       ; CF LAST, and after the pops: `pop`
+    ret                             ; writes no flags, so either order works -
+                                    ; pinning one removes the question (73.4).
+                                    ; The borrow IS the answer: CF = 1 exactly
+                                    ; when BX < 1, i.e. no window - abort
 %ifdef CC_HAS_PARTS
 .partsno:
-    pop es                          ; op_load refused; the C never ran, so
-    pop di                          ; there is nothing of ours to unwind and
-    pop si                          ; the loader gives the region back
-    stc
-    ret
-%endif
+    xor bx, bx                      ; op_load refused; the C never ran, so
+    jmp short .noreg                ; there is nothing of ours to unwind, the
+                                    ; loader gives the region back, and BX = 0
+%endif                              ; is the abort the pops above end in
 
 ; =============================================================================
 ; THE WINDOW CALLBACKS
@@ -415,8 +489,8 @@ cc_paint:
 ; cc_onkey - W_ONKEY (SPEC.md 11)
 ; in:  AL = the ASCII code, AH = the scan code, SI = the window; lock held
 ; out: nothing
-; The two halves of AX are moved into BX first, because building the second
-; C argument destroys the register the first one is still in.
+; The scan code is moved into BX first, because building the first C
+; argument in AX destroys the half the second one is still in.
 ; -----------------------------------------------------------------------------
 cc_onkey:
     push bx
@@ -426,12 +500,10 @@ cc_onkey:
     push di
     push es
     cld
-    mov bx, ax                      ; BL = ascii, BH = scan
     push si                         ; arg 3: void *win
-    mov al, bh
-    mov ah, 0
-    push ax                         ; arg 2: int scan
-    mov al, bl
+    mov bl, ah
+    mov bh, 0
+    push bx                         ; arg 2: int scan
     mov ah, 0
     push ax                         ; arg 1: int ascii
     call _os88_onkey
@@ -617,13 +689,9 @@ cc_onclose:
     pop dx
     pop cx
     pop bx
-    or ax, ax                       ; ...and only now, with nothing left to
-    jz .refuse                      ; restore, is FLAGS the answer
-    clc
-    ret
-.refuse:
-    stc
-    ret
+    cmp ax, 1                       ; ...and only now, with nothing left to
+    ret                             ; restore, is FLAGS the answer: the borrow
+                                    ; is CF = 1 exactly when AX = 0 - refused
 %endif
 
 %ifdef CC_HAS_ONWAKE
@@ -660,6 +728,49 @@ cc_onwake:
     ret
 %endif
 
+%ifdef CC_HAS_ONMOVE
+; -----------------------------------------------------------------------------
+; cc_onmove - THE HEAP COMPACTOR MOVED ONE OF YOUR CLAIMS (SPEC.md 66.2),
+; installed by os88_mem_movable().
+;
+; NOT A WINDOW CALLBACK, and the difference matters: it is dispatched from
+; inside mem_reloc_call, in the middle of a compaction, on whatever task asked
+; for the memory that could not be found. So SPEC.md 66.3 rule 3 binds the C on
+; the other side of it - the handler MAY NOT claim, free, yield, draw, or touch
+; a file - and it is not a suggestion, because the walk's own map is what it
+; would be re-entering.
+;
+; It preserves AX as well, which no window callback has to: a relocation proc
+; is called between two instructions of somebody else's routine rather than
+; from a dispatch loop, and SPEC.md 66.3 says every register.
+;
+; in:  BX = the base segment it WAS at, DX = the base it is at NOW; DS = CS =
+;      ours, ES = KERNEL_SEG. The bytes have already moved.
+; out: nothing; every register preserved
+; -----------------------------------------------------------------------------
+cc_onmove:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cld
+    push dx                         ; arg 2: unsigned now
+    push bx                         ; arg 1: unsigned was
+    call _os88_onmove
+    add sp, 4
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 %ifdef CC_HAS_MENUS
 ; -----------------------------------------------------------------------------
 ; cc_oncmd - AM_ONCMD, a pick from one of your menus (SPEC.md 12.2)
@@ -677,12 +788,10 @@ cc_oncmd:
     push di
     push es
     cld
-    mov bx, ax                      ; BL = item, BH = menu
     push si                         ; arg 3: void *win
-    mov al, bh
-    mov ah, 0
-    push ax                         ; arg 2: int menu
-    mov al, bl
+    mov bl, ah                      ; BL = menu, out of AX's way
+    mov bh, 0
+    push bx                         ; arg 2: int menu
     mov ah, 0
     push ax                         ; arg 1: int item
     call _os88_oncmd
@@ -713,53 +822,6 @@ cc_about:
     cld
     push si
     call _os88_about
-    add sp, 2
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-%endif
-
-%ifdef CC_HAS_FSX
-; -----------------------------------------------------------------------------
-; cc_fsxentry - THE EXCLUSIVE BRACKET'S ENTRY (SPEC.md 53.1), handed to
-; OSAPI_FSX_RUN by os88_fsx_run(). The kernel calls it through wm_pkgcall -
-; SI = the window ptr, DS = CS = this segment, ES = KERNEL_SEG - so it is an
-; ordinary near proc with a near ret, exactly a W_ONKEY's environment, and it
-; is a TRAMPOLINE rather than a raw C function pointer for the reason every
-; other callback here is one: the offset the kernel is given must be a label
-; nasm can name, and a C function that the shim never declared would be an
-; external reference naming itself. %define CC_HAS_FSX and write
-;
-;     void os88_fsx_main(void *win)
-;
-; and the two halves cannot drift - a %define with no C behind it is an nasm
-; error, and C with no %define is a function the kernel never calls.
-;
-; IT DOES NOT RETURN UNTIL THE GAME IS OVER. fsx_run is a bracket, not a
-; latch: everything the app does with the machine happens inside this call,
-; and the desktop comes back when it rets (SPEC.md 53.6).
-;
-; The gfx lock is HELD throughout - fsx_run was called from a callback that
-; holds it, and it is what keeps the mouse ISR off the screen while the mode
-; is foreign. So the rules of a callback still apply: never take the lock,
-; never call OSAPI_TASK_ALIVE, and every kernel DRAWING slot is refused until
-; this returns (53.1). What is legal is the file API, the sound grants this
-; instance already holds, and the fsx slots themselves.
-; -----------------------------------------------------------------------------
-cc_fsxentry:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    cld
-    push si                         ; arg 1: void *win
-    call _os88_fsx_main
     add sp, 2
     pop es
     pop di
@@ -803,25 +865,19 @@ cc_onfile:
     push di
     push es
     cld
-    push ax                         ; the mode, across the copy
-    push cx                         ; ...and the size, both halves
-    push dx
-    mov ax, KERNEL_SEG
-    mov es, ax                      ; ES = where the name lives, stated
-    mov bx, 0
-.cp:
-    mov al, [es:bx+di]              ; [bx+di] - a legal 8086 base+index, and
-    mov [cc_fname+bx], al           ; the store is DS: ours
-    or al, al
+    mov bx, KERNEL_SEG              ; AL is the mode and CX/DX the size: the
+    mov es, bx                      ; copy goes through AH and BX and leaves
+    xor bx, bx                      ; all three where they are. ES = where the
+.cp:                                ; name lives, stated
+    mov ah, [es:bx+di]              ; [bx+di] - a legal 8086 base+index, and
+    mov [cc_fname+bx], ah           ; the store is DS: ours
+    or ah, ah
     jz .copied
     inc bx
     cmp bx, 12
     jb .cp
     mov byte [cc_fname+12], 0       ; 12 characters and no NUL: terminate it
 .copied:
-    pop dx
-    pop cx
-    pop ax                          ; AL = the mode again
     push si                         ; arg 5: void *win
     push dx                         ; arg 4: unsigned size_hi
     push cx                         ; arg 3: unsigned size_lo
@@ -869,9 +925,11 @@ cc_onfile:
 ; -----------------------------------------------------------------------------
 cc_worker:
     cld
+%ifdef CC_HAS_OVL
     mov [cc_wksp], sp               ; the top of THIS task's 384-byte slice,
                                     ; which is how cc_iswk answers "am I the
                                     ; worker" without a kernel call - see it
+%endif
     push word [cc_win]              ; arg 1: void *win, banked by cc_entry
     call _os88_worker               ; C: it must never return
     add sp, 2                       ; ...but if it does:
@@ -883,6 +941,7 @@ cc_worker:
     jmp short .park
 %endif
 
+%ifdef CC_HAS_OVL
 ; -----------------------------------------------------------------------------
 ; cc_iswk - is this the worker task?
 ; out: CF=1 on the worker, CF=0 on the UI task. Preserves every register.
@@ -901,6 +960,8 @@ cc_worker:
 ; worker never exits. Every UI-task overlay load would then be refused, which
 ; presents as a feature that works until the app spawns a worker and never
 ; again.
+;
+; Assembled only under CC_HAS_OVL, with cc_wksp: cc_ovneed is its one caller.
 ; -----------------------------------------------------------------------------
 cc_iswk:
     push ax
@@ -920,7 +981,6 @@ cc_iswk:
     clc
     ret
 
-%ifdef CC_HAS_OVL
 ; =============================================================================
 ; THE OVERLAY (SPEC.md 73.14)
 ;
@@ -943,8 +1003,8 @@ cc_iswk:
 ; call through a shim. This file owns only what cannot be generated - the load,
 ; the stamp check, the binding and the refusal.
 ;
-; THE FOUR WORDS OF STATE, and why the stamp is two of them: WORD.OVL and
-; WORD.O88 are separate files on a floppy, so a rebuilt package beside a stale
+; THE FOUR WORDS OF STATE, and why the stamp is two of them: CWORD.OVL and
+; CWORD.O88 are separate files on a floppy, so a rebuilt package beside a stale
 ; module is a thing a user can produce with a file copy. The module carries the
 ; two sizes it was built with; both change under almost any edit to either
 ; half; and the check costs four bytes and one compare. It catches a stale
@@ -957,12 +1017,20 @@ section .modc
 ; +0 of the module, because tools/os88ovl.py cuts here and the loader below
 ; reads these two words before it believes anything else in the file.
 cc_modc_beg:
+%ifndef CC_OVL_PART
     dw cc_modc_end                  ; the module's own size...
     dw cc_image_end                 ; ...and the resident image it was built
                                     ;    with. Both are absolute labels: .modc
                                     ;    is vstart=0 so the first IS a size,
                                     ;    and .text starts at 0 so the second is
                                     ;    the resident file's length.
+%endif                              ; NO STAMP ON A PART (SPEC.md 73.14.2): it
+                                    ; caught a stale PAIR of files, and a part
+                                    ; is bytes of the package's own file - the
+                                    ; table that locates it is in the image it
+                                    ; was built with. A compressed part is
+                                    ; still checked: op_unpack/op_fetch refuse
+                                    ; a stream that does not decode to `len`
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -986,6 +1054,82 @@ cc_ovneed:
                                     ; for one task. The rule is the simple one
                                     ; - overlay code is UI-task code - and it
                                     ; is enforced HERE, at the only door in
+%ifdef CC_OVL_EAGER
+    ret                             ; CF=0, cc_iswk's: op_load read the module
+                                    ; at launch and cc_ovinit bound it, so on
+                                    ; this arm the door is the worker gate and
+                                    ; nothing else (SPEC.md 73.14.2)
+%elifdef CC_OVL_LAZY
+    test byte [cc_ovrow+OP_R_FLAG], OP_FETCHED
+    jz .fetch                       ; the row's own flag says whether it is
+    ret                             ; here; `test` cleared CF
+.fetch:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    ; GO HOME FOR IT (SPEC.md 73.14.2.2). op_fetch reads the part out of the
+    ; package's FILE by name, and a name resolves in the folder the instance
+    ; stands in - which the file dialog, and a document launch's goto, move
+    ; (SPEC.md 19.2.1). So the fetch stands where we were launched from and
+    ; comes back: PiXEL's bracket (SPEC.md 106.5), QM on both legs because
+    ; nothing lists either folder. A <NAME>.OVL beside the package had the
+    ; same hole, and it was a refusal in every menu of a program whose
+    ; document lived in another folder (73.12's WELCOME.RTF rule).
+    call OSAPI_FILE_HERE            ; DX = where the instance stands, BL = its
+    push dx                         ; drive: banked for the way back
+    push bx
+    xor cx, cx                      ; CX = 0: we did not move
+    cmp dx, [cc_ovhome]
+    jne .go
+    cmp bl, [cc_ovhvol]
+    je .home
+.go:
+    mov dx, [cc_ovhome]
+    mov bl, [cc_ovhvol]
+    call OSAPI_FILE_GOTO_QM         ; clobbers AX, and CX/SI/DI on a
+    jc .nohome                      ; redirected volume (SPEC.md 62.9.1)
+    mov cx, 1                       ; ...so the flag is set AFTER it
+.home:
+    push cx
+    mov al, cc_ovidx
+    call op_fetch                   ; claims, reads, expands; toasts a refusal
+    pop cx
+    pop bx
+    pop dx
+    pushf                           ; op_fetch's answer, across the way back
+    jcxz .stay
+    call OSAPI_FILE_GOTO_QM         ; CF unread: a refused return moved nothing
+.stay:                              ; and leaves us home, which reads the same
+    popf                            ; as any other stand the dialog can leave
+    jc .refused
+    mov dx, [cc_ovseg]              ; the row's word: the claim's base
+    call cc_ovbind                  ; the vectors are addresses until this runs
+    mov ax, cc_ovreloc              ; ...and NOW it may move (SPEC.md 66.2).
+    call OSAPI_MEM_MOVABLE          ; A refusal leaves it pinned: no unwind
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.nohome:
+    pop bx                          ; the program's disk is not where it was:
+    pop dx                          ; GOTO_QM moved nothing, so there is no
+    mov si, op_s_disk               ; way back to take - only the reason
+    call op_say
+.refused:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx                          ; ...and on into .nowk below: the %else
+%else                               ; body between is not assembled here
     cmp word [cc_ovseg], 0
     je .load
     clc                             ; already in: the common path
@@ -1002,7 +1146,22 @@ cc_ovneed:
     mov cl, 10                      ; not divide a section-relative label, and
     shr ax, cl                      ; a build that fails on arithmetic is a
     mov di, ax                      ; worse trade than four instructions
-    call OSAPI_MEM_CLAIM            ; AX = KB; out DX = the segment
+    call OSAPI_MEM_CLAIM_HI         ; AX = KB; out DX = the segment. FROM THE
+                                    ; TOP (SPEC.md 50.3.2), because this
+                                    ; block's base IS A CS and that is the
+                                    ; rule's own first clause. It was the low
+                                    ; door for as long as overlays have
+                                    ; existed, which put the single largest
+                                    ; pinned block on the machine in the middle
+                                    ; of the arena for the program's whole life
+                                    ; - CWORD.OVL is 18,565 bytes, bigger than
+                                    ; every kernel module put together, and
+                                    ; SPEC.md 50.3's own words for what that
+                                    ; does are "one long-lived data claim
+                                    ; landing mid-heap permanently splits the
+                                    ; space a package can be loaded into". It
+                                    ; is 50.3.2.1's defect one layer out from
+                                    ; the two driver images that section fixed
     jc .nomem
     mov [cc_ovseg], dx
     mov es, dx
@@ -1022,6 +1181,16 @@ cc_ovneed:
     cmp word [es:2], cc_image_end   ; ...and the image it was built beside
     jne .stale
     call cc_ovbind                  ; the vectors are addresses until this runs
+    mov dx, [cc_ovseg]              ; ...and NOW it may move (SPEC.md 66.2):
+    mov ax, cc_ovreloc              ; not before, because the read above is an
+    call OSAPI_MEM_MOVABLE          ; ES:BX into it and OSAPI_FILE_READ claims.
+                                    ; A refusal leaves it pinned, which is what
+                                    ; it was yesterday, so there is nothing to
+                                    ; unwind - and it is not thrown away
+                                    ; either: MC_RLOC is readable from outside
+                                    ; with tools/heapmap.py, which is how
+                                    ; SPEC.md 66.5.6.2's silent refusal was
+                                    ; caught
     pop es
     pop di
     pop si
@@ -1056,6 +1225,7 @@ cc_ovneed:
     pop dx
     pop cx
     pop bx
+%endif  ; the three arms of cc_ovneed
 .nowk:
     xor ax, ax                      ; the refused call's return value: 0. A C
     stc                             ; function that can be refused answers a
@@ -1126,8 +1296,35 @@ cc_ovthunk:
 ;
 ; Both are generated by tools/cc8086.py, contiguous, and walked here, so
 ; adding a function to either side is no change to this file.
+;
+; cc_ovreloc is the same routine with the new base stored first, and it is the
+; RELOCATION PROC the overlay claim is declared with (SPEC.md 66.2): BX = the
+; base it was at, DX = the base it is at now, every register preserved because
+; cc_ovbind preserves them and this adds one store. Four bytes, by falling
+; through.
+;
+; WHY THE OVERLAY IS SAFE TO MOVE, which is not obvious and is not luck. The
+; general refusal in SPEC.md 66.6 is "every saved CS on every stack", and an
+; overlay has exactly one way to put its CS on one: the `call far` into
+; cc_ovthunk below. That thunk DISCARDS it (`pop dx ... discarded rather than
+; stashed`) and re-reads [cc_ovseg] after the call to build the `retf`, at
+; every level of the nest - so the return goes to wherever the module is NOW,
+; and a move that happened inside the resident routine is invisible to it. The
+; property was written for a different reason, that there is only one module;
+; it is what makes this declaration free.
+;
+; Nothing else holds the segment. A resident routine calling INTO the module
+; goes through cc_ovm_*, which this routine re-stamps; the module calling
+; another module function is a NEAR call; and a worker never enters at all
+; (cc_ovneed's first instruction).
 ; -----------------------------------------------------------------------------
-cc_ovbind:
+%ifndef CC_OVL_EAGER
+cc_ovreloc:                         ; ON THE LAZY ARM [cc_ovseg] IS THE PART
+    mov [cc_ovseg], dx              ; ROW'S zkb (the %define at the top), so
+%endif                              ; this one store keeps op_seg, op_drop and
+cc_ovbind:                          ; the thunk's retf in step - there is no
+                                    ; second copy (SPEC.md 73.14.2.1). The
+                                    ; eager arm's proc is cc_ovcarve
     push ax
     push bx
     mov ax, [cc_ovseg]
@@ -1152,13 +1349,75 @@ cc_ovbind:
     pop ax
     ret
 
-section .data
+; THE THREE REFUSALS, AND EVERY ONE OF THEM USED TO BE CUT OFF THE GLASS.
+; OSAPI_TOAST copies TOAST_MAX = 24 characters (kernel/toast.inc:85) and
+; TRUNCATES what is longer rather than refusing it, so with a 6-character
+; package name the three strings below were 32, 30 and 38 characters and what
+; the reader saw was `Not enough memory for A`, `APPLE2.OVL is not on thi` and
+; `APPLE2.OVL does not matc` - the consequence, in all three, in the half that
+; was cut. Nothing was checking, which is why it shipped in the SDK every C
+; package in the tree shares.
+;
+; They are rewritten to the SHAPE the cap allows rather than trimmed by eye,
+; AND THE SHAPE IS SIZED FROM THE NAME FIELD AND NOT FROM THIS TREE'S NAMES.
+; The header above %fatals a CC_PKG_NAME longer than 15, and every package
+; author reading docs/C-TOOLCHAIN.md is told 15 is legal - so 15 is the number
+; the arithmetic has to hold, and `len(prose) + 15 (+ 4 for the `.OVL`)`:
+;
+;     `No <NAME>.OVL`      3 + 15 + 4 = 22 of 24
+;     `No RAM: <NAME>`     8 + 15     = 23 of 24
+;     `Old <NAME>.OVL`     4 + 15 + 4 = 23 of 24
+;
+; The first draft of this fix sized the other two by the longest name in the
+; tree instead - `No RAM for <NAME>.OVL` (11 + name + 4) and `<NAME>.OVL is
+; stale` (name + 17) hold only 9 and 11 characters of name - which is a cap
+; nothing states and nothing enforces, and would have failed a legally-named
+; C package inside somebody else's build. A shared SDK's message is sized by
+; its own field.
+;
+; And that is a GATE rather than a comment: tests/unit/t_mirror.py - a
+; FAST-tier row, so every `make` runs it - reads these literals out of this
+; file, TOAST_MAX out of kernel/toast.inc and the `%fatal` cap out of the
+; header above, and requires all three to fit a name of the full cap AND
+; every `%define CC_PKG_NAME` in the tree. It is deliberately not in
+; apps/apple2/build.sh, where it was written: that script runs only for `make
+; apple2`, an on-demand C target outside `all` and outside `make test-full`,
+; so the one edit the gate exists to catch - lengthening a literal here -
+; would not have run it.
+%ifndef CC_OVL_PART                ; ...and a PART has none of the three: its
+section .data                       ; refusals are the parts standard's own
 cc_ovfile:  db CC_PKG_NAME, '.OVL', 0
-cc_ovm_mem: db 'Not enough memory for ', CC_PKG_NAME, '.OVL', 0
-cc_ovm_gone:db CC_PKG_NAME, '.OVL is not on this disk', 0
-cc_ovm_stale: db CC_PKG_NAME, '.OVL does not match this program', 0
+cc_ovm_mem: db 'No RAM: ', CC_PKG_NAME, 0
+cc_ovm_gone:db 'No ', CC_PKG_NAME, '.OVL', 0
+cc_ovm_stale: db 'Old ', CC_PKG_NAME, '.OVL', 0
 section .text
+%endif                              ; (op_s_*, apps/os88partsbody.inc)
 %endif  ; CC_HAS_OVL
+
+; -----------------------------------------------------------------------------
+; cc_regreloc - OUR REGION moved. BX = the base it WAS at, DX = where it is now.
+;
+; A package's own code needs no relocation - every near offset in it survives a
+; move untouched - and every word that NAMES the region is the kernel's, which
+; mem_region_reloc puts right. So for a C package with no overlay this is a
+; `ret`, and it exists because SPEC.md 66.2 requires a proc: opting in and
+; naming nothing is the one shape the kernel cannot tell from opting in and
+; forgetting.
+;
+; WITH AN OVERLAY IT IS NOT A NO-OP, and cc_ovbind was already exactly it.
+; Its `.res` loop writes the LIVE CS into cc_ovv_* - the far vectors the
+; overlay calls BACK through - and inside a relocation proc CS is the region's
+; NEW base (mem_reloc_call dispatches a region's holder at [MC_SEG], which
+; mem_cp_run has already updated). Its `.m` loop rewrites the overlay's own
+; vectors from [cc_ovseg], which a region move does not touch, so it costs a
+; few stores and is right either way.
+; -----------------------------------------------------------------------------
+%ifdef CC_HAS_OVL
+cc_regreloc equ cc_ovbind
+%else
+cc_regreloc:
+    ret
+%endif
 
 %ifdef CC_HAS_PARTS
 ; =============================================================================
@@ -1194,17 +1453,62 @@ section .text
 %macro CC_PARTS_BEGIN 1
 section .data
     OS88_PARTS_BEGIN %1
+  %define CC_PARTS_DECLARED         ; ...so CC_IMAGE_END writes no table of
+%endmacro                           ; its own for CC_OVL_PART (73.14.2)
+
+; CC_OVL_ROW - THE OVERLAY'S ROW (SPEC.md 73.14.2), for a package that has a
+; table of its own: write it as the LAST row, and count it in CC_PARTS_BEGIN.
+; A package whose overlay is its only part writes nothing - CC_IMAGE_END
+; emits a one-row table for it. LAST because CC_PACKAGE appends the cut
+; module as the last --part, and because a lazy row must follow every eager
+; one anyway (os88pkg.py refuses the other order).
+;
+; OP_SEG because it is code the package far-calls, and it is the CS of every
+; ovl_* function (SPEC.md 20.12.4). cc_ovrow/cc_ovidx are ASSEMBLER symbols,
+; not preprocessor ones, because cc_ovneed and cc_ovthunk name them long
+; before the table is written.
+%macro CC_OVL_ROW 0
+  %ifndef CC_OVL_PART
+    %error "CC_OVL_ROW without CC_OVL_PART: define it in the shim, before crt0.asm"
+  %endif
+  %ifdef CC_OVL_ROWED
+    %error "CC_OVL_ROW twice: there is one overlay"
+  %endif
+  %define CC_OVL_ROWED
+  %assign CC_OVL_IDX OS88_PART_N
+cc_ovrow:
+cc_ovidx equ OS88_PART_N
+  %ifdef CC_OVL_LAZY
+    %ifdef CC_OVL_PLAIN
+      OS88_PART OP_SEG, OP_LAZY
+    %else
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP
+    %endif
+  %else
+    %ifdef CC_OVL_PLAIN
+      OS88_PART OP_SEG
+    %else
+      OS88_PART OP_SEG, OP_COMP
+    %endif
+  %endif
 %endmacro
 %macro CC_PARTS_END 0
-    OS88_PARTS_END
+    OS88_PARTS_END_TABLE            ; the table's closing checks, in .data...
 section .text
-%endmacro
+    OS88_PARTS_CODE                 ; ...and the CODE over here, which is the
+                                    ; other half of what OS88_PARTS_END does
+                                    ; for an assembly package. It is emitted
+                                    ; AFTER the table on purpose (SPEC.md
+                                    ; 20.12.9): the gates inside it are
+                                    ; derived from the rows above
+%endmacro                           ; (the lazy-part thunks are gated on the
+                                    ; table inside os88thunk.asm, which is
+                                    ; assembled after it - see CC_IMAGE_END)
 %endif  ; CC_HAS_PARTS
 
-; =============================================================================
-; THE API BRIDGE
-; =============================================================================
-%include "cc/os88thunk.asm"
+; THE API BRIDGE, apps/cc/os88thunk.asm, is NOT included here: CC_IMAGE_END
+; includes it, after the compiled C, so that it can assemble only the thunks
+; the C names (SPEC.md 73.9.1).
 
 ; =============================================================================
 ; DATA
@@ -1240,7 +1544,9 @@ cc_tpl:
 ; cc_ovneed turns it into the KB it claims. It is initialised DATA rather than
 ; an equ because `%if` cannot compare a section-relative label to a constant
 ; (SPEC.md 73.2, the same reason there is no assembly-time size assertion).
-cc_ovsize:  dw cc_modc_end
+%ifndef CC_OVL_PART                ; (a part is sized by its ROW's `len`,
+cc_ovsize:  dw cc_modc_end          ; which os88pkg.py fills in)
+%endif
 %endif
 
 ; =============================================================================
@@ -1253,27 +1559,39 @@ cc_bss_beg:
 cc_win:     resw 1                  ; the window os88_main() returned. Banked
                                     ; because cc_worker has no argument of its
                                     ; own and OSAPI_TASK_ALIVE needs one
-cc_ferr:    resw 1                  ; the FERR_* of the last file call, read
-                                    ; back by os88_ferr()
+                                    ; (cc_ferr and cc_assoc are os88thunk.asm's
+                                    ; now, reserved only with a thunk that
+                                    ; uses them)
+%ifdef CC_HAS_FDLG
 cc_fname:   resb 13                 ; the file dialog's chosen name, copied out
-                                    ; of KERNEL_SEG before the C sees it
-cc_assoc:   resb 11                 ; os88_assoc_set()'s space-padded block:
-                                    ; 3 extension bytes then 8 stem bytes
+%endif                              ; of KERNEL_SEG before the C sees it
+%ifdef CC_HAS_OVL
 cc_wksp:    resw 1                  ; SP at the top of the worker's stack
                                     ; slice, 0 until one is spawned. cc_iswk
                                     ; compares against it. Defined whether or
                                     ; not this package HAS a worker, so the
-                                    ; test needs no %ifdef of its own
+                                    ; test needs no %ifdef of its own - but
+                                    ; only with an overlay, cc_iswk's one
+%endif                              ; caller
 %ifdef CC_HAS_PARTS
 cc_parts_bss: resb OP_BSS           ; the parts standard's own words, which an
                                     ; assembly package puts past its image and
                                     ; a C package puts here (OP_BSS_AT above)
 %endif
 %ifdef CC_HAS_OVL
+%ifndef CC_OVL_LAZY                 ; (the lazy arm's is the row's own word)
 cc_ovseg:   resw 1                  ; the claim the module was read into,
                                     ; 0 = not loaded yet (SPEC.md 73.14)
+%else
+cc_ovhome:  resw 1                  ; the folder the package was launched
+                                    ; from: where a lazy fetch stands to read
+                                    ; the package's own file (its drive is
+%endif                              ; cc_ovhvol, last, being a byte)
 cc_ovrsp:   resw 1                  ; and the return stash cc_ovthunk keeps -
 cc_ovrst:   resw CC_OVDEPTH         ; see it for why a global LIFO is safe
+%ifdef CC_OVL_LAZY
+cc_ovhvol:  resb 1                  ; cc_ovhome's drive
+%endif
 %endif
 
 section .text                       ; leave the assembler in .text - the next
@@ -1302,6 +1620,77 @@ section .text                       ; leave the assembler in .text - the next
 ; that is guaranteed to run after the compiled C's last `.data` byte.
 ; -----------------------------------------------------------------------------
 %macro CC_IMAGE_END 0
+section .text
+%ifdef CC_OVL_PART
+  ; --- THE OVERLAY'S PART (SPEC.md 73.14.2) --------------------------------
+  ; HERE, after the compiled C, for two reasons: a package whose overlay is
+  ; its only part needs a table and has not written one, and the C's use set
+  ; is in scope - so a package that never asks os88_part_lazyok() does not
+  ; carry op_lazyok (SPEC.md 20.12.9.2).
+  %ifndef CC_PARTS_DECLARED
+    %ifndef CC_U__os88_part_lazyok
+      %define OP_NO_LAZYOK
+    %endif
+    CC_PARTS_BEGIN 1
+      CC_OVL_ROW
+    CC_PARTS_END
+  %endif
+  %ifndef CC_OVL_ROWED
+    %error "CC_OVL_PART: the parts table has no CC_OVL_ROW - write one as its LAST row"
+  %else
+    %if CC_OVL_IDX != OS88_PART_N - 1
+      %error "CC_OVL_ROW must be the LAST row of the table: CC_PACKAGE appends the module as the last --part"
+    %endif
+  %endif
+
+; cc_ovinit - cc_entry's, after op_load and before any C (SPEC.md 73.14.2).
+; Preserves nothing cc_entry needs: it banks SI, DI and ES itself.
+cc_ovinit:
+  %ifdef CC_OVL_EAGER
+    mov al, cc_ovidx                ; op_load has read and expanded it: bind
+    call op_seg                     ; the vectors to where it landed, once
+    mov [cc_ovseg], ax
+    call cc_ovbind
+    %if OS88_PART_N == 1
+    ; THE CARVE IS THE OVERLAY AND NOTHING ELSE, so it may move: nothing but
+    ; [op_base] and the vectors names it (cc_ovthunk's retf re-reads
+    ; [cc_ovseg], SPEC.md 73.14). A carve that also holds the package's OWN
+    ; parts stays pinned - the C may have banked os88_part_seg() of one
+    ; (C64's and the Apple II's ROM do), and only the package can say it has
+    ; not. It was claimed top-down by op_claim (SPEC.md 20.12.10.8), so a
+    ; pinned one is at least not in the middle of the arena.
+    mov dx, [op_base]
+    mov ax, cc_ovcarve
+    call OSAPI_MEM_MOVABLE          ; a refusal leaves it pinned: no unwind
+    %endif
+  %else
+    call OSAPI_FILE_HERE            ; the LAZY arm: where we were launched
+    mov [cc_ovhome], dx             ; from, which is where <NAME>.O88 is and
+    mov [cc_ovhvol], bl             ; so where every fetch reads (cc_ovneed)
+  %endif
+    ret
+  %ifdef CC_OVL_EAGER
+    %if OS88_PART_N == 1
+; cc_ovcarve - the eager carve's RELOCATION PROC (SPEC.md 66.2): BX = where it
+; was, DX = where it is. Re-derives the module's segment through op_seg - the
+; slack in front of it is the read's, and op_seg is the one place that knows
+; it - and re-stamps the vectors. Every register preserved.
+cc_ovcarve:
+    mov [op_base], dx
+    push ax
+    mov al, cc_ovidx
+    call op_seg                     ; AX only, and touches no heap
+    mov [cc_ovseg], ax
+    pop ax
+    jmp cc_ovbind
+    %endif
+  %endif
+%endif
+%define CC_THUNK_GATED              ; THE API BRIDGE, here and not at the top:
+%include "cc/os88thunk.asm"         ; the compiled C has been read, so its use
+                                    ; set (tools/cc8086.py's CC_U_ defines) is
+                                    ; in scope and only the thunks it names are
+                                    ; assembled (SPEC.md 73.9.1)
 section .bss
 cc_bss_end:
 %ifdef CC_HAS_OVL

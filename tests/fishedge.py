@@ -35,7 +35,7 @@ the other configuration.
 Nothing here is timed, so the guest's speed does not matter - but it is a
 MartyPC row because Hercules is (docs/TESTING.md).
 """
-import sys, os, re, time, argparse, subprocess, tempfile
+import sys, os, re, argparse, subprocess, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -93,14 +93,16 @@ def offsets(names):
 def start_sea(m):
     os88marty.no_saver(m)                       # a boot settles for long enough
     m.key("Escape")                             # to trip the IDLE saver, and a
-    time.sleep(0.5)                             # blanked screen is not a start
+    os88marty.pace(m, 0.5)                      # blanked screen is not a start
     m.write(m.sym("ss_modes"), bytes([SEA]))    # sea life, and only it
     m.write(m.sym("ss_secs"), b"\xff")          # one long turn: no re-pick
     m.write(m.sym("ss_idle"), b"\x1c\x00")      # ~1.5s of idle
     m.key("Space")
-    t = time.time()
-    while time.time() - t < 90 and m.read(m.sym("blk_sv"), 1)[0] != 1:
-        time.sleep(0.2)
+    try:
+        os88marty.until(m, lambda mm: mm.read(mm.sym("blk_sv"), 1)[0] == 1,
+                        "the saver to start", poll=0.2, limit=90)
+    except os88marty.MartyError:
+        pass                                    # ...and the next line says so
     if m.read(m.sym("blk_sv"), 1)[0] != 1:
         return None
     return int.from_bytes(m.read(m.sym("ss_row") + 2, 2), "little")

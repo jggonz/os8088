@@ -63,7 +63,6 @@ import argparse
 import hashlib
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -200,7 +199,7 @@ def main(argv):
             cur = m.read(S("vid_cur"), 1)[0]
         except KeyError as e:
             sys.exit("dispcheck: no symbol %s - a kern_small kernel has none "
-                     "of this, by design (docs/KERN-SPLIT-PLAN.md)" % e)
+                     "of this, by design (docs/history/KERN-SPLIT-PLAN.md)" % e)
         say("vid_kind=%d vid_avail=%02X vid_ndisp=%d vid_cur=%d"
             % (kind, avail, ndisp, cur))
         if avail != 0x06:
@@ -230,7 +229,7 @@ def main(argv):
         # `tools/os88geom.py`'s checker could not see it either, because it
         # compares written-down copies and this was an expression. So it comes
         # from the mirror now, like the other 267 copies the checker does
-        # watch (docs/HANDOFF-SOAK-FINDINGS.md A2).
+        # watch.
         NWORD, VX, CTXSZ = VID_CTX_W, VID_CTX_VX // 2, VID_CTX_SZ
         run = (S("vid_tseg") - S("vid_seg")) // 2 + 1
         if run != NWORD:
@@ -455,8 +454,8 @@ def main(argv):
         def push(dx, dy, n=14):
             for _ in range(n):
                 mo.m.mouse(dx, dy)
-                time.sleep(0.12)
-            time.sleep(0.4)
+                os88marty.pace(m, 0.12)
+            os88marty.pace(m, 0.4)
             return mo.where()[:2]
 
         # The dead zone is the rows the TALLER display has and the shorter
@@ -540,7 +539,7 @@ def main(argv):
             dest = (ctx[1][VX] + ctx[1][CW] // 2, ctx[1][VX + 1] + 60)
             mo.to(*grab)
             mo.m.mouse(0, 0, l=True)
-            time.sleep(0.3)
+            os88marty.pace(m, 0.3)
             cx0, cy0 = mo.where()[:2]
             for _ in range(24):                 # walk it across, button DOWN
                 dx = max(-100, min(100, dest[0] - cx0))
@@ -548,7 +547,7 @@ def main(argv):
                 if dx == 0 and dy == 0:
                     break
                 mo.m.mouse(dx, dy, l=True)
-                time.sleep(0.14)
+                os88marty.pace(m, 0.14)
                 cx0, cy0 = mo.where()[:2]
             mo.m.mouse(0, 0)                    # release
             os88marty.settle(m, card=gate_card)

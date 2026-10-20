@@ -60,7 +60,8 @@ def main():
     # knob kernel while $OS88_DEFINES is unset is a different complaint from
     # a VBR that disagrees, and os88sym says which in one sentence. Reading
     # the map unchecked would report it as this row's failure instead.
-    heap = os88sym.equates()["HEAP_SEG"]
+    eq = os88sym.equates()       # the BLOB's segment: HEAP_SEG, lifted by
+    heap = eq.get("BLOB_SEG_AT", eq["HEAP_SEG"])   # BLOB_LIFT (SPEC.md 2.10.3)
     off = os88sym.syms()["spl_fseg"]
 
     # boothd.asm loads the blob address twice (a `mov reg, imm16` each) and
@@ -76,7 +77,7 @@ def main():
     for what, pat in want:
         check(pat in d, "the VBR carries %s = %04X"
                         % (what, int.from_bytes(pat[-2:], "little")),
-              "SPEC.md 52.10.2.1: build/kernel.bin's map says HEAP_SEG %04X "
+              "SPEC.md 52.10.2.1: build/kernel.bin's map says BLOB_SEG_AT %04X "
               "and spl_fseg %04X, and the volume boot record in build/ does "
               "not agree. The two were built from different define sets - "
               "`make` after changing a knob, and check the boothd.bin recipe "

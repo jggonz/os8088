@@ -9,7 +9,7 @@ net, and the right thing for a window that is about to draw. It ran at the TOP
 of the routine, before the occlusion walk, so a window that is visible but
 WHOLLY COVERED destroyed its cache and was told two calls later that there was
 nothing to draw. Every app with a background painter did it on every poll,
-which docs/SAVEUNDER-LIVE-PLAN.md 3.1 measured as the single thing defeating
+which docs/plans/completed/SAVEUNDER-LIVE-PLAN.md 3.1 measured as the single thing defeating
 the whole save-under proposal - and costed as a rework of every candidate app.
 It is a reorder in one place, +6 bytes.
 
@@ -32,7 +32,7 @@ THE SUBJECT IS THE TASK MANAGER ON ITS PERFORMANCE VIEW, and that is chosen
 rather than convenient: its worker arms a clip every TM_INT whether or not it
 has anything to draw, which is 3.1's own worked example of the shape.
 """
-import os, sys
+import os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88geom, os88sym, dispcp, dispcorner, dispapps
@@ -58,31 +58,47 @@ def zord(m):
     return list(m.read(S("wm_zord"), max(n, 1)))[:n]
 
 
+def guest_secs(m, secs):
+    """Let `secs` of GUEST time pass with the machine free-running.
+
+    Not `advance()`: that ends PAUSED and returns early at a breakpoint, so
+    inside a `bp_trace` block it both cuts its own window short and hands the
+    pump a stop the body meant to skip past. Here the guest simply runs and
+    the pump does its own resuming."""
+    end = m.status()["cycles"] + int(secs * os88marty.GUEST_HZ)
+    while m.status()["cycles"] < end:
+        time.sleep(0.005)
+
+
 def drops(m, ours, frames=110, rounds=POLLS):
     """Run `rounds` worker intervals with wm_su_drop armed; count the calls
-    whose BX is OUR window, and the calls for anybody else."""
-    m.bp_exec("wm_su_drop")
-    at = m.sym("wm_su_drop")
-    mine, other = 0, 0
-    for _ in range(rounds):
-        m.run()
-        for _ in range(40):
-            if not m.stopped():
-                m.advance(frames=frames // 8)
-            if not m.stopped():
-                continue
-            r = m.regs()
-            here = ((r["cs"] & 0xFFFF) << 4) + (r["ip"] & 0xFFFF)
-            if here != at:
-                break
-            if (r["bx"] & 0xFFFF) == ours:
-                mine += 1
-            else:
-                other += 1
-            m.run()
-    m.breakpoints([])
-    m.run()
-    return mine, other
+    whose BX is OUR window, and the calls for anybody else.
+
+    BX IS ONLY TRUE AT THE STOP, so it is read there - `on_hit` runs on the
+    pump's thread with the guest still stopped, and its answer is filed with
+    the stop it belongs to.
+
+    This was a hand-rolled pump and it did not sample what it says. `stopped()`
+    is true at a PAUSE as well as at a breakpoint, and `advance()` ends paused
+    - so the round's own advance satisfied the test below it, the IP read there
+    was the pause point rather than `wm_su_drop`, and the `!= at` arm broke the
+    inner loop on the FIRST advance every time. Each round sampled one eighth
+    of its window (`frames // 8`) instead of forty of them, and the whole row
+    ran on 104 frames where it meant 880. Under-sampling is invisible in a
+    green run and points the wrong way in a red one: PARTIAL asserts the drops
+    are NOT zero, so the shortfall reads as the kernel failing to drop.
+    """
+    got = {"mine": 0, "other": 0}
+
+    def whose(mm, rec):
+        if (rec["regs"]["bx"] & 0xFFFF) == ours:
+            got["mine"] += 1
+        else:
+            got["other"] += 1
+
+    with os88marty.bp_trace(m, "wm_su_drop", regs=True, on_hit=whose):
+        guest_secs(m, rounds * frames / 60.0)
+    return got["mine"], got["other"]
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",

@@ -45,10 +45,37 @@ MS_OPT_KB  equ 600                  ; chosen so NOTHING here can grant it: a
                                     ; make this row report the MACHINE rather
                                     ; than the mechanism
 
+; MSEG_COMP=1 puts OP_COMP on parts 0 and 2 (SPEC.md 20.12.7), and nothing
+; else about this package changes - which is the point of building it both
+; ways from one source. The MIX is what is being tested: part 0 is the FIRST
+; row, so its expansion starts at the very base of the carve; part 2 is in the
+; MIDDLE, so a plain row is expanded past on each side; and parts 1 and 5 are
+; plain, so they take op_unpack's `move it down` arm. All seven of ms_partchk's
+; assertions then have to come out identical to the uncompressed build, which
+; is a stronger statement than any new check would be.
+%ifdef MSEG_COMP
+  %define MS_ZF OP_COMP
+%else
+  %define MS_ZF 0
+%endif
+
+; MSEG_LZC=1 puts OP_COMP on part 6, the LAZY one, and on nothing else
+; (SPEC.md 20.12.7.4) - the fixture for tests/mseglzslack.py, which fetches it
+; off a volume whose clusters are bigger than a sector and measures what the
+; session keeps (SPEC.md 88.10.4.1). A separate define and not MSEG_COMP's,
+; so MSEG_COMP's rows keep testing a PLAIN lazy part 6 - fetch, drop, fetch
+; again - beside their compressed eager ones; a compressed lazy part's re-fetch
+; is the shadow's (SPEC.md 20.12.7.4.1) and tests/pxparts.py is its gate.
+%ifdef MSEG_LZC
+  %define MS_LF OP_COMP
+%else
+  %define MS_LF 0
+%endif
+
     OS88_PARTS_BEGIN MS_PARTS
-      OS88_PART OP_SEG                  ; 0 code
+      OS88_PART OP_SEG, MS_ZF           ; 0 code
       OS88_PART OP_SEG                  ; 1 code
-      OS88_PART OP_ASSET                ; 2 data - and `kind` changes NOTHING
+      OS88_PART OP_ASSET, MS_ZF         ; 2 data - and `kind` changes NOTHING
                                         ;   about how it is claimed or read
                                         ;   here, which is deliberate: it is
                                         ;   the package's own note about what
@@ -71,7 +98,7 @@ MS_OPT_KB  equ 600                  ; chosen so NOTHING here can grant it: a
                                         ;   because os88pkg.py requires it:
                                         ;   the span that goes up has to be
                                         ;   contiguous
-      OS88_PART OP_SEG, OP_LAZY         ; 6 NOT CLAIMED AND NOT READ AT LOAD.
+      OS88_PART OP_SEG, OP_LAZY | MS_LF ; 6 NOT CLAIMED AND NOT READ AT LOAD.
                                         ;   op_size steps over its row, so it
                                         ;   is in no total and outside the
                                         ;   carve, and op_fetch claims and
@@ -537,15 +564,16 @@ ms_r_seg:  db '0000', 0
 ; began at 1,024: aligned on BOTH geometries, so the arithmetic the 360KB row
 ; exists for never ran and the row passed without testing it.
 ;
-; SEVEN sectors puts the first part at 3,584, which is 512 past a 1KB cluster
-; (as five and three were: the rule is an ODD number of sectors).
+; NINE sectors puts the first part at 4,608, which is 512 past a 1KB cluster
+; (as seven, five and three were: the rule is an ODD number of sectors). Seven
+; ran out when the parts body took os88_rseq (SPEC.md 18.4.8.1).
 ; tests/multiseg.py asserts the slack is non-zero at 360 and zero at 1440, so
 ; this cannot quietly stop being true.
 ;
 ; If the code ever outgrows it, `times` goes negative and NASM says so - which
 ; is the right failure: somebody has to pick the next odd multiple and check
 ; the row still means something.
-    times 3584 - ($ - $$) db 0
+    times 4608 - ($ - $$) db 0
 
     OS88_BSS OP_BSS + MS_BSS
     OS88_IMAGE_END

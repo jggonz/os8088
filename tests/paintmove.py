@@ -27,12 +27,19 @@ Three assertions, and the third is the one a memory dump cannot make:
      and a stale one produces a plausible-looking wrong picture rather than a
      crash.
 """
-import sys, os, time, hashlib, argparse, subprocess, tempfile
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import sys, os, hashlib, argparse, subprocess, tempfile
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
+import os88fixture                                       # noqa: E402
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
-MC_SIZE, MEM_MAX = 10, 32
+MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 PKG_HEAPFRAG, PKG_PAINT = "HEAPFRAG.O88", "PAINT.O88"
 
 
@@ -100,12 +107,55 @@ def uncovered(m, S, win, prefer_title=False):
     return None
 
 
+def park(mo, m):
+    """Put the POINTER somewhere neither capture is looking.
+
+    The arrow is drawn into the framebuffer, so it is part of any picture
+    compared - and the two captures below are taken after different gestures,
+    so it is somewhere different in each. tests/sheetmove.py failed on exactly
+    that and the difference was six pixels wide. Bottom-left of the desktop is
+    clear of every window these rows open.
+    """
+    mo.to(5, 195)
+    os88marty.settle(m)
+
+
 def pkg_seg(m, S, title):
     for w in os88geom.windows(m, S):
         if w.title.startswith(title):
             raw = m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2)
             return u16(raw), w
     return None, None
+
+
+def heapfrag_ran(m, S):
+    """HEAPFRAG's suite has RETURNED, and the compaction it posts has landed.
+
+    The suite runs inside its first W_PAINT with the gfx lock held, so the
+    screen is stillest exactly while it works and a settle alone returns
+    mid-run. [hf_done] is set as the run starts, the lock comes free when the
+    paint that ran it returns, and [hf_woke] is the posted pass arriving.
+    """
+    seg, _ = pkg_seg(m, S, "Heap")
+    if not seg:
+        return False
+    img = u16(m.read(seg * 16 + 8, 2))
+    b = m.read(seg * 16 + img, 48)
+    done, posted, woke = b[28], b[46], b[47]      # heapfrag.asm's bss table
+    locked = m.read(S("gfx_lock_flag"), 1)[0]
+    return bool(done and not locked and (woke or not posted))
+
+
+def opened(m, S, title):
+    """Wait for a package's window, then for the claims it makes to land."""
+    try:
+        os88marty.until(m, lambda _: pkg_seg(m, S, title)[0],
+                        "%s's window" % title, poll=0.3, limit=60)
+    except os88marty.MartyError as e:
+        print("  (%s)" % e)             # the row's own check says the rest
+        return
+    os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
+                      what="%s's claims" % title)
 
 
 def main():
@@ -120,8 +170,14 @@ def main():
     # the symbols below come from the SOURCE. The offsets then miss by a few
     # bytes and [pt_base] reads as garbage, which looks exactly like the heap
     # corruption this row exists to catch. Make is the dependency graph; ask it.
-    subprocess.run(["make", "build/heapfrag360.img"], check=True,
-                   capture_output=True)
+    # THE SAME `make`, AND IT DOES NOTHING once the runner has built the
+    # artefact: Row(wants=...) declares it and os88test's prebuild builds
+    # it before any row starts. That is what lets this row drop
+    # builds=True and share the emulator lane.
+    os88fixture.need("build/heapfrag360.img")
+    # has
+        # already built the artefact (Row(wants=...) and os88test's prebuild).
+        # That is what lets this row drop builds=True and share the lane.
     with os88marty.launch("build/os8088-360.img", apps="build/heapfrag360.img",
                           machine=a.machine, boot=False) as m:
         m.run()
@@ -155,7 +211,9 @@ def main():
 
         # --- heapfrag first, so it owns the floor of the arena --------------
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
-        time.sleep(22)
+        os88marty.until(m, lambda _: heapfrag_ran(m, S),
+                        "heapfrag's suite and its posted pass", poll=0.5,
+                        limit=120)
         os88marty.settle(m)
         hf_seg, hf_win = pkg_seg(m, S, "Heap")
         print("heapfrag at %04x" % (hf_seg or 0))
@@ -163,7 +221,7 @@ def main():
         # --- then Paint, which lands ABOVE it -------------------------------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_PAINT)
-        time.sleep(6)
+        opened(m, S, "Paint")
         os88marty.settle(m)
         pt_seg, pt_win = pkg_seg(m, S, "Paint")
         if pt_seg is None:
@@ -205,6 +263,7 @@ def main():
         # pt_geom would recompute, so it must survive a move unchanged
         d0 = [(u16(rows0, i * 2) - cbase) & 0xFFFF for i in range(nrows)]
         h0 = hashlib.md5(m.read(cbase * 16, canvas[1] * 16)).hexdigest()
+        park(mo, m)
         shot0 = m.vram("cga")
         print("canvas [pt_base]=%04x %dKB rows=%d  md5 %s"
               % (cbase, canvas[1] // 64, nrows, h0[:12]))
@@ -232,9 +291,29 @@ def main():
         # --- and run it again, whose big claim forces the compaction --------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_HEAPFRAG)
-        time.sleep(22)
+        os88marty.until(m, lambda _: heapfrag_ran(m, S),
+                        "heapfrag's suite and its posted pass", poll=0.5,
+                        limit=120)
         os88marty.settle(m)
 
+        # **PAINT'S OWN SEGMENT IS RE-RESOLVED, because the compaction this
+        # row just forced is exactly the thing that moves it.** `pt_seg` was
+        # banked before the second HEAPFRAG opened, and `mine()` matches a
+        # claim's OWNER against it - so a Paint whose region moved owns
+        # nothing as far as that banked number is concerned, and the row
+        # printed `Paint now holds []` and failed check 1 with
+        # `[pt_base] names no claim Paint holds`.
+        #
+        # It is the sharpest possible false alarm here: checks 2 to 5 all
+        # PASSED in the same run - the canvas moved 5600 -> 3880, the
+        # contents survived to the md5, the row table followed, the undo
+        # delta was right and the repaint was identical - so the feature
+        # worked perfectly and the row said it had not. tests/kdhdd.py's
+        # box_state is the same correction one package along.
+        pt_seg2, _ = pkg_seg(m, S, "Paint")
+        if pt_seg2 is not None and pt_seg2 != pt_seg:
+            print("Paint's own region moved %04x -> %04x" % (pt_seg, pt_seg2))
+            pt_seg = pt_seg2
         after = mine(claims(m, S), pt_seg)
         print("Paint now holds %s"
               % ["%04x/%dKB" % (b, p // 64) for b, p, _, r in after])
@@ -271,11 +350,24 @@ def main():
         # --- raise Paint: the repaint is what reads pt_rowseg ---------------
         mo.click(pt_win.x + 60, pt_win.y + 9)
         os88marty.settle(m)
+        park(mo, m)
         shot1 = m.vram("cga")
 
         def band(v):
+            """The window's content rectangle, ONE BYTE PER PIXEL.
+
+            m.vram() answers a row per scanline and a BYTE per pixel - the
+            colour index, not packed bits - so the slice is x directly. It
+            said `x // 8` for a year, which against a 640-wide frame compared
+            the leftmost (cx1-cx0)/8 PIXELS of each row instead of this
+            window: a strip of desktop that is identical in both captures
+            whatever the window does. The assertion below was therefore green
+            by construction. Found while writing tests/sheetmove.py, which
+            failed on it the other way round - the strip it happened to
+            compare had a window in one capture and desktop in the other.
+            """
             _, _, rows = v
-            return b"".join(bytes(rows[y][cx0 // 8:cx1 // 8])
+            return b"".join(bytes(rows[y][cx0:cx1])
                             for y in range(cy0, min(cy1, len(rows))))
 
         same = band(shot0) == band(shot1)

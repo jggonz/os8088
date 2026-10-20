@@ -9,14 +9,15 @@ content box, which is what this window did before the dirty mask and the
 scrolled log.
 """
 import subprocess
+import tempfile
 import sys
-import time
 
 sys.path.insert(0, 'tools')
 sys.path.insert(0, 'tests')
 import dispcp                                          # noqa: E402
 import ethernet as eth                                 # noqa: E402
 import os88sym                                         # noqa: E402
+import os88build                                       # noqa: E402
 import importlib.util
 import os88qemu                                              # noqa: E402
 
@@ -41,8 +42,9 @@ def boot():
     import os
     if os.path.exists("build/qemu.pid"):
         try:
-            os.kill(int(open("build/qemu.pid").read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open("build/qemu.pid").read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in ("build/qmp.sock", "build/qemu.pid"):
@@ -58,6 +60,21 @@ def boot():
     if r.returncode:
         sys.exit("boot failed:\n" + r.stdout + r.stderr)
     return G.Qemu(SOCK), eth.Mouse()
+
+
+def log_state(m):
+    """fd_st .. fd_lognext (os88_image_end + 42 .. + 53, apps/ftpd/ftpd.asm)
+    out of the package's own bss - tests/ftpd.py's read_state, widened."""
+    for i in reversed(dispcp.win_list(m, S)):
+        w = dispcp.win_rect(m, S, i)[2]
+        if w not in (G.FD_W, G.FD_W_SNAP):
+            continue
+        r = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
+        seg = dispcp._u16(r, 22)
+        o88 = open(os88build.at("build/ftpd.o88"), "rb").read()
+        img = o88[8] | (o88[9] << 8)
+        return m.readseg(seg, img + 42, 12)
+    return None
 
 
 def session(tag):
@@ -80,19 +97,30 @@ def session(tag):
     buf = io.BytesIO()
     f.retrbinary("RETR FTPHELLO.TXT", buf.write)
     f.quit()
-    time.sleep(3.0)
+    # the log's last lines are staged by the worker and committed by the UI
+    # task on a wake, so "done" is the server's own bytes gone still - fd_st
+    # to fd_lognext, the handshake [fd_req] and the dirty mask among them -
+    # with the UI idle beside them. GUEST seconds (tests/os88qemu.py); the old
+    # three-second pause is the ceiling
+    os88qemu.quiesce(m, lambda: (log_state(m), os88qemu.ui_idle(m, S)),
+                     secs=0.5, limit=3.0, what="the FTP log")
     fx, fy = G.ftp_win(m)
     mo.click(*G.ro_box(fx, fy))          # a tick: one 12px box
-    time.sleep(2.0)
+    os88qemu.ui_done(m, S, cap=2.0, what="the Read Only box")
     # RAW PIXELS, cropped to the WINDOW - a PNG's bytes differ for reasons
     # that are not pixels, and the menu bar carries a clock that moves between
     # two runs minutes apart.
-    out = "/tmp/%s.ppm" % tag
+    out = tempfile.gettempdir() + "/%s.ppm" % tag
     subprocess.run(["python3", "tools/qmp.py", SOCK,
                     'screendump %s' % out], check=True, capture_output=True)
     rect = G.ftp_win(m)
+    try:
+        pid = int(open("build/qemu.pid").read().strip())
+    except (OSError, ValueError):
+        pid = None
     m.quit()
-    time.sleep(1.0)
+    if pid:
+        os88qemu.gone(pid)          # a host wait: the process, not a guess
     return crop(out, rect)
 
 

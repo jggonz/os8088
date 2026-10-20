@@ -45,7 +45,7 @@
  * WHAT WAVES 2 AND 3 ARE. The Z80 (rcz80.inc), the movers (rcmem.inc), the
  * slice driver in os88_onwake, the boot state machine - the banner, the
  * measured clock estimate, then main.c's loop: CCPHEAD, _PatchCPM, DRI's CCP
- * copied to 0xE400 out of the 2KB claim it was read into at launch,
+ * copied to 0xE400 out of the package's own part, in memory since launch,
  * AUTOEXEC.TXT poked into its command buffer, C = DSKByte, PC = CCPaddr, run;
  * a warm boot (BIOS WBOOT, BDOS 0, ^C at the prompt, a disk error) is that
  * lap again, and BIOS BOOT (EXIT.COM) or HALT is main.c's exit: "\r\n" and
@@ -285,28 +285,17 @@ static unsigned rc_zseg;                     /* the 64KB Z80 RAM claim */
                                               * while the task table is full) */
 #define RC_M_DEAD    5                       /* the worker is closing us */
 static int rc_mode = RC_M_CLOCK;
-static unsigned rc_ccpseg;                   /* the 2KB CCP claim (SPEC.md
-                                              * 74.3): CCP-DR.60K, read ONCE
-                                              * at launch from the launch
-                                              * folder, before any folder
-                                              * move, and copied to 0xE400 on
-                                              * every warm boot */
-static unsigned rc_ccplen;                   /* bytes read: 0 = no CCP */
-static unsigned char rc_axbuf[126];          /* AUTOEXEC.TXT's first 125 bytes
-                                              * (main.c 128), cut at the
-                                              * first control character and
-                                              * NUL-ended: read ONCE at
-                                              * launch (os88_main), poked on
-                                              * every boot (rc_boot) */
-static unsigned rc_axlen;                    /* ...its length: 0 = none */
+/* THE CCP rides at the head of the module, the package's one part
+ * (RC_CCP_PART/RC_CCP_OFF, SPEC.md 74.3): op_load put it in the carve at
+ * launch and it is copied to 0xE400 on every warm boot. Its segment is ASKED
+ * each time (os88_part_seg) and never banked, because the carve MOVES (crt0's
+ * cc_ovcarve re-binds the module and knows of no word here). */
 static int rc_slice_n;                       /* control transfers a slice */
 static unsigned rc_sl_fast;                  /* slices in a row that took no
                                               * tick: the length adapts */
 
 /* --- console helpers, console.h's shape: _puthex16 is lowercase (tohex) --- */
 static char rc_num[8];
-static char rc_msg[64];                      /* a toast being built (the
-                                              * launch refusals, Alt+C) */
 static void rc_puthex16(unsigned w)
 {
     int i;
@@ -331,13 +320,14 @@ static void rc_putdec(unsigned n)
  * it by. */
 static void rc_banner(void)
 {
-    rc_puts("\033[2J\033[H");                /* _clrscr (abstraction_runvt.h) */
-    rc_puts("  CP/M Emulator v" RC_VERSION " by Marcelo Dantas\r\n");
-    rc_puts("      Built Jul 21 2026 - 20:43:19\r\n");   /* upstream e698e8a */
-    rc_puts("----------------------------------------\r\n");
-    rc_puts("CPU is ");
-    rc_puts("8086 native");                  /* CPU_IS: not cpu1.h's 'Model 1' */
-    rc_puts("\r\n");
+    rc_puts("\033[2J\033[H"                  /* _clrscr (abstraction_runvt.h) */
+            "  CP/M Emulator v" RC_VERSION " by Marcelo Dantas\r\n"
+            "      Built Jul 21 2026 - 20:43:19\r\n"     /* upstream e698e8a */
+            "----------------------------------------\r\n"
+            "CPU is "
+            "8086 native"                    /* CPU_IS: not cpu1.h's 'Model 1' */
+            "\r\n");                        /* ONE call: the lines are one
+                                              * literal */
     /* Z80estimateClock() prints its two lines here - measured in slices
      * (rc_clock_step), so the rest of the banner follows from there */
 }
@@ -348,14 +338,12 @@ static int ovl_banner2(void)                 /* module code (SPEC.md 73.14):
 {
     rc_puts("BIOS at 0x");
     rc_puthex16(RC_BIOSJMPPAGE);
-    rc_puts(" - ");
-    rc_puts("BDOS at 0x");
+    rc_puts(" - BDOS at 0x");
     rc_puthex16(RC_BDOSJMPPAGE);
-    rc_puts("\r\n");
-    rc_puts("BIOS/BDOS using interrupt handoff method\r\n");   /* INT_HANDOFF */
-    rc_puts("CCP " RC_CCPNAME " at 0x");
+    rc_puts("\r\nBIOS/BDOS using interrupt handoff method\r\n"  /* INT_HANDOFF */
+            "CCP " RC_CCPNAME " at 0x");
     rc_puthex16(RC_CCPADDR);
-    rc_puts("\r\n");
+    rc_crlf();
     return 1;
 }
 
@@ -398,11 +386,11 @@ static int rc_clk_started;                   /* t0 taken: the first slice ran */
 static unsigned rc_u32_hi, rc_u32_lo;        /* the accumulator */
 static void rc_u32_add(unsigned hi, unsigned lo)
 {
-    unsigned l = (rc_u32_lo + lo) & 0xFFFF;
+    unsigned l = RC_W(rc_u32_lo + lo);
     if (l < rc_u32_lo)
         rc_u32_hi++;
     rc_u32_lo = l;
-    rc_u32_hi = (rc_u32_hi + hi) & 0xFFFF;
+    rc_u32_hi = RC_W(rc_u32_hi + hi);
 }
 /* the accumulator >= (hi,lo)? */
 static int rc_u32_ge(unsigned hi, unsigned lo)
@@ -415,8 +403,8 @@ static void rc_u32_sub(unsigned hi, unsigned lo)
 {
     if (rc_u32_lo < lo)
         rc_u32_hi--;
-    rc_u32_lo = (rc_u32_lo - lo) & 0xFFFF;
-    rc_u32_hi = (rc_u32_hi - hi) & 0xFFFF;
+    rc_u32_lo = RC_W(rc_u32_lo - lo);
+    rc_u32_hi = RC_W(rc_u32_hi - hi);
 }
 /* the accumulator, in decimal, through the terminal: powers of ten as word
  * pairs, each subtracted while it fits */
@@ -487,7 +475,7 @@ static int rc_clock_step(void)
         rc_u32_add(RC_CLK_TS_HI, RC_CLK_TS_LO);
     {
         unsigned ts_hi = rc_u32_hi, ts_lo = rc_u32_lo;
-        unsigned ms = dt * 55;               /* 18.2 Hz: 54.9 ms a tick */
+        unsigned ms = rc_x55(dt);            /* 18.2 Hz: 54.9 ms a tick */
         unsigned q, cnt;
         rc_putdec32();
         rc_puts(" T-states in ");
@@ -522,8 +510,8 @@ static int rc_clock_step(void)
 /* ==========================================================================
  * THE COMMAND PROCESSOR: main.c's `while (TRUE)` loop, 110-140, one lap per
  * boot. CCPHEAD; _PatchCPM; Status = 0; the CCP copied into place (main.c
- * _RamLoad(CCPname, CCPaddr) - here out of the claim it was read into at
- * launch, so a warm boot costs no disk); AUTOEXEC.TXT POKED on EVERY boot
+ * _RamLoad(CCPname, CCPaddr) - here out of the package's part, which
+ * op_load put in the carve at launch, so a warm boot costs no disk); AUTOEXEC.TXT POKED on EVERY boot
  * (BOOTONLY is FALSE upstream, globals.h 305) - its first 125 bytes at
  * CCPaddr+8, cut at the first control character, a NUL after it and its
  * length at CCPaddr+7, which is where the DRI CCP keeps its command buffer,
@@ -537,44 +525,26 @@ static int rc_clock_step(void)
  * nothing: the launch folder is outside CP/M's A\0..P\F, so no CP/M program
  * can change AUTOEXEC.TXT during the session, and 'read on every boot' and
  * 'read once, poke every boot' are the same observable behaviour here. A
- * warm boot is therefore a 2KB claim-to-claim copy and no disk at all, which
- * is what lets rc_slice run the CCP's prompt in the same slice.
- * 'Unable to load CP/M CCP.' is main.c 118's text for a missing CCP; upstream
- * breaks out of the loop and exits - here the machine goes idle instead
- * (SPEC.md 74: the window stays so the message can be read; the close box
- * ends it, and Alt+L still loads a .COM).
+ * warm boot is therefore a 2KB part-to-claim copy and no disk at all, which
+ * is what lets rc_slice run the CCP's prompt in the same slice. main.c 118's
+ * 'Unable to load CP/M CCP.' has no case here: the CCP is inside the
+ * package's part (SPEC.md 74.3), so a launch that has a window has the CCP.
  * ========================================================================*/
 static void rc_boot(void)
 {
     rc_puts(RC_CCPHEAD);
-    if (!ovl_patch_cpm()) {                  /* cold: IOBYTE and DSKByte too.
-                                              * THE MODULE'S GATE (SPEC.md
-                                              * 71): the disk layer's per-
-                                              * command half is RUNCPM.OVL,
-                                              * loaded by this first call
-                                              * from the launch folder; when
-                                              * it cannot be, no CP/M can run
-                                              * - the fact on the terminal
-                                              * (the reason is cc_ovneed's
-                                              * toast), the window kept up
-                                              * to show it, as for the CCP */
-        rc_puts("Unable to load RUNCPM.OVL.\r\nCPU halted.\r\n");
-        rc_mode = RC_M_IDLE;
-        return;
-    }
+    ovl_patch_cpm();                         /* cold: IOBYTE and DSKByte too.
+                                              * The module is an eager part
+                                              * (SPEC.md 73.14.2), in memory
+                                              * since launch: this is the UI
+                                              * task, so it cannot refuse */
     rc_status = RC_ST_RUNNING;
     rc_con_reset();                          /* no line half-edited, no error
                                               * waiting: a warm boot */
-    if (rc_ccplen == 0) {
-        rc_puts("Unable to load CP/M CCP.\r\nCPU halted.\r\n");
-        rc_mode = RC_M_IDLE;
-        return;
-    }
-    rc_zzcopy_in(RC_CCPADDR, rc_ccpseg, 0, rc_ccplen);
-    if (rc_axlen) {                          /* AUTOEXEC.TXT, from the cache */
-        rc_zcopy_in(RC_CCPADDR + 8, rc_axbuf, rc_axlen + 1);
-        rc_wr(RC_CCPADDR + 7, rc_axlen);
-    }
+    rc_zzcopy_in(RC_CCPADDR, os88_part_seg(RC_CCP_PART), RC_CCP_OFF, RC_CCPSIZE);
+                                             /* AUTOEXEC.TXT with it:
+                                              * rc_ax_load poked it into the
+                                              * part, once */
     rc_z.pc = 0;                             /* Z80reset() */
     rc_z.iff = 0;
     rc_z.i = rc_z.r = 0;
@@ -602,7 +572,7 @@ static void rc_program_end(void)
                                               * - the file slots are legal:
                                               * this is the wake, no lock */
     if (rc_status == RC_ST_EXIT) {
-        rc_puts("\r\n");
+        rc_crlf();
         rc_mode = RC_M_EXIT;
         return;
     }
@@ -657,7 +627,7 @@ static int rc_slice(void)
 }
 
 /* ==========================================================================
- * THE DEBUG LOADER (docs/RUNCPM-PORT-PLAN.md wave 2): Alt+L asks for a name
+ * THE DEBUG LOADER (docs/plans/completed/RUNCPM-PORT-PLAN.md wave 2): Alt+L asks for a name
  * on the terminal, reads NAME.COM from the floppy into the Z80 claim and
  * runs it at 0100h the way the CCP would: page zero patched, C = the
  * disk/user byte, SP under the CCP with 0000 on top so a RET warm-boots. It
@@ -708,8 +678,9 @@ static int  rc_ldmode;
  * non-empty ring until the NEXT keystroke. */
 static void rc_ld_back(void)
 {
-    rc_mode = (rc_ldprev == RC_M_BLOCKED && rc_khead != rc_ktail)
-              ? RC_M_RUN : rc_ldprev;
+    rc_mode = rc_ldprev;
+    if (rc_mode == RC_M_BLOCKED && rc_khead != rc_ktail)
+        rc_mode = RC_M_RUN;
 }
 
 static void rc_run_program(void)
@@ -742,6 +713,11 @@ static unsigned rc_zoff512(void)
 
 /* rc_ax_load - AUTOEXEC.TXT, ONCE, at launch, from the launch folder (main.c
  * _RamLoad(AUTOEXEC, cmd, 125): the first 125 bytes of a file of ANY size).
+ * WHERE IT GOES: main.c pokes it into the CCP's own command buffer - +7 the
+ * length, +8 the text and a NUL - after every _RamLoad of the CCP; here the
+ * CCP is copied out of its claim on every boot, so the poke is made ONCE,
+ * INTO THE PART'S COPY, and every boot's copy carries it: the same bytes at
+ * CCPaddr+7.. on every lap, with no buffer of its own and no poke a boot.
  * OSAPI_FILE_READ answers FERR_BIG and reads NOTHING when the file is larger
  * than the buffer (decided from the directory entry, os88api.inc 0x0128), so
  * a 125-byte read would silently ignore any AUTOEXEC.TXT over 125 bytes; the
@@ -749,25 +725,24 @@ static unsigned rc_zoff512(void)
  * 512-aligned and rewritten by everything that follows - the Z80 claim's
  * TPA, at the loader's own landing (rc_zoff512) with the TPA up to the CCP
  * as the capacity (~57KB: a file over that is FERR_BIG and ignored, stated
- * in SPEC.md 74) - and the first 125 bytes come out into rc_axbuf, cut at
- * the first control character. Called before the clock code, before any
+ * in SPEC.md 74) - and the first 125 bytes, cut at
+ * the first control character, go into the CCP's copy in the part. Called before the clock code, before any
  * folder move; the bytes left in the TPA are cleared. */
 static void rc_ax_load(void)
 {
-    unsigned n, off = rc_zoff512(), blen;
+    unsigned n, off = rc_zoff512(), blen = 0;
     n = os88_file_read_seg("AUTOEXEC.TXT", rc_zseg + (off >> 4), RC_CCPADDR - off);
-    rc_axlen = 0;
-    if (n == 0)
-        return;
-    blen = n > 125 ? 125 : n;
-    rc_zcopy_out(rc_axbuf, off, blen);
-    rc_zfill(off, 0, n);
-    n = blen;
-    blen = 0;
-    while (blen < n && rc_axbuf[blen] > 31)
+    while (blen < n && blen < 125 && rc_rd(off + blen) > 31)
         blen++;
-    rc_axbuf[blen] = 0;
-    rc_axlen = blen;
+    if (blen) {                              /* main.c: the poke, cut at the
+                                              * first control character */
+        unsigned ccp = os88_part_seg(RC_CCP_PART);   /* asked AFTER
+                                              * the read, never banked */
+        rc_zzcopy_out(ccp, RC_CCP_OFF + 8, off, blen);
+        os88_poke(ccp, RC_CCP_OFF + 8 + blen, 0);
+        os88_poke(ccp, RC_CCP_OFF + 7, blen);
+    }
+    rc_zfill(off, 0, n);
 }
 
 static int ovl_load_go(void)                 /* module code: 0 = the module
@@ -817,7 +792,7 @@ static void ovl_load_key(int c)
         }
         rc_ldmode = RC_LD_LOAD;              /* os88_onwake: ovl_load_go() */
     } else if (c == 27) {
-        rc_puts("\r\n");
+        rc_crlf();
         rc_ldmode = 0;
         rc_ld_back();
     } else if (c == 8 || c == 127) {
@@ -848,8 +823,12 @@ static int rc_wants_wake(void)
 {
     if (rc_abt)
         return 0;                            /* paused under the About panel */
-    return rc_mode == RC_M_CLOCK || rc_mode == RC_M_RUN ||
-           rc_mode == RC_M_EXIT || rc_ldmode == RC_LD_LOAD;
+    if (rc_mode == RC_M_CLOCK || rc_mode == RC_M_RUN ||
+        rc_mode == RC_M_EXIT || rc_ldmode == RC_LD_LOAD)
+        return 1;                            /* as BRANCHES: SmallerC builds a
+                                              * returned || as a flag value a
+                                              * term (setcc, cbw, test) */
+    return 0;
 }
 
 /* ==========================================================================
@@ -869,9 +848,11 @@ void os88_onwake(void *win)
                                               * re-kicks (rcabout.c) */
     if (rc_ldmode == RC_LD_LOAD) {
         rc_ldmode = 0;
-        if (!ovl_load_go())                  /* the floppy, with no lock held */
-            rc_ld_back();                    /* the module refused: as typed
-                                              * nothing (the toast says why) */
+        ovl_load_go();                       /* the floppy, with no lock held.
+                                              * Its 0 was "the module
+                                              * refused", which an eager
+                                              * part cannot on the UI task
+                                              * (SPEC.md 74.3.1) */
     } else if (rc_mode == RC_M_CLOCK || rc_mode == RC_M_RUN) {
         /* THE SLICE LENGTH ADAPTS to the machine it runs on: os88_cpu() set
          * the first guess, and from there a slice that ends inside the tick
@@ -938,8 +919,17 @@ void os88_onwake(void *win)
          * full - is transient, and RC_M_EXIT keeps wanting the wake until
          * it takes. */
         os88_gfx_lock();
-        if (os88_task_spawn(win) == 0)
+        if (os88_task_spawn(win) == 0) {
             rc_mode = RC_M_DEAD;
+            /* ...and the 64KB region stays movable (SPEC.md 66.6.2): the
+             * worker's whole loop is `if (rc_mode == RC_M_DEAD) close;
+             * task_alive; sleep`, every value a static, so a restart at the
+             * park inside os88_task_alive() costs one poll. This package is
+             * the largest single tenant on the machine and it is hired only
+             * on the way out, so the window in which the pin would apply is
+             * exactly the window in which the memory is most wanted. */
+            os88_task_restartable(1);
+        }
         os88_gfx_unlock();
     }
     if (rc_wants_wake())
@@ -1019,7 +1009,7 @@ void os88_paint(void *win)
 #define RC_SCAN_ALT_F 0x21
 #define RC_SCAN_ALT_L 0x26
 #define RC_SCAN_ALT_C 0x2E                  /* the flush counters, toasted
-                                             * (docs/RUNCPM-PORT-PLAN.md
+                                             * (docs/plans/completed/RUNCPM-PORT-PLAN.md
                                              * 'Verification': calls / cells /
                                              * scrolls since the last press) */
 /* the keys without an ASCII code, by scan code, and what a VT100 sends for
@@ -1054,16 +1044,14 @@ static void rc_key_vt(int scan)
  * nothing until pressed. Module code (once per press). */
 static int ovl_dbg_counters(void)
 {
-    os88_strcpy(rc_msg, "gfx ", sizeof(rc_msg));
-    os88_utoa(rc_n_calls, rc_num);
-    os88_strcpy(rc_msg + os88_strlen(rc_msg), rc_num, 6);
-    os88_strcpy(rc_msg + os88_strlen(rc_msg), "/", 2);
-    os88_utoa(rc_n_cells, rc_num);
-    os88_strcpy(rc_msg + os88_strlen(rc_msg), rc_num, 6);
-    os88_strcpy(rc_msg + os88_strlen(rc_msg), " scr ", 6);
-    os88_utoa(rc_n_scroll, rc_num);
-    os88_strcpy(rc_msg + os88_strlen(rc_msg), rc_num, 6);
-    os88_toast(rc_msg, 0);
+    os88_strcpy(rc_tmsg, "gfx ", sizeof(rc_tmsg));
+    rc_tcatu(rc_n_calls);
+    rc_tcat("/");
+    rc_tcatu(rc_n_cells);
+    rc_tcat(" scr ");                        /* <= 20 characters so far: the
+                                              * last number fits rc_tmsg */
+    rc_tcatu(rc_n_scroll);
+    os88_toast(rc_tmsg, 0);
     rc_n_calls = rc_n_cells = rc_n_scroll = 0;
     return 1;
 }
@@ -1082,8 +1070,14 @@ void os88_onkey(int ascii, int scan, void *win)
         ovl_dbg_counters();
         return;
     }
-    if (ascii == 0 && scan == RC_SCAN_ALT_F) {
-        /* OSAPI_FULLSCREEN paints SYNCHRONOUSLY inside the slot (kernel/
+    if (ascii == 0 && (scan == RC_SCAN_ALT_F || scan == OS88_SCAN_ENTER)) {
+        /* ...AND ALT+ENTER IS THE SAME DOOR (SPEC.md 11.2.1.1), under the
+         * name every other console window on every other machine uses. It
+         * costs nothing that Alt+F does not: `ascii == 0` is what separates
+         * it from the plain Enter the CP/M console below wants, and CP/M
+         * cannot see an Alt chord at all.
+         *
+         * OSAPI_FULLSCREEN paints SYNCHRONOUSLY inside the slot (kernel/
          * wm.inc wm_fullscreen: wm_raise whole on enter, wm_paint_all on
          * exit), so os88_paint has ALREADY run nested here, whole, for the
          * new geometry, and the shadow describes the new glass when this
@@ -1169,42 +1163,41 @@ void os88_about(void *win)
 }
 
 /* os88_main - the entry (SPEC.md 20.2): claims first, then the window. The
- * launch requirement is CLAIMS, not KB: the 64KB Z80 RAM and the 2KB CCP
- * claim must be had, and a refusal quotes what was asked and what there is
- * (SPEC.md 74). */
+ * launch requirement is CLAIMS, not KB: the 64KB Z80 RAM must be had, and a
+ * refusal quotes what was asked and what there is (SPEC.md 74). The CCP and
+ * the module were the parts standard's to claim, before this ran. */
+
 void *os88_main(void)
 {
     void *win;
 
+    /* ARM THE KEY-STATE MAP, once, and throw the answer away (SPEC.md 9.7).
+     * The kernel does not latch Alt+Enter until something has asked for that
+     * map, so without this the chord os88_onkey tests for above is silently
+     * dead - no XT BIOS enqueues the combination for int 16h to carry
+     * (SPEC.md 9.7.1). Here rather than in a callback: arming CLEARS the map,
+     * which from a callback would erase a make os88_onkey has already seen. */
+    os88_key_down(OS88_SCAN_ALT);
+
+
     rc_zseg = os88_mem_claim(64);
     if (rc_zseg == 0) {
-        /* a toast is 24 characters (SPEC.md 59, TOAST_MAX) and menu.inc
-         * truncates silently: "RunCPM: 64KB? nnnnn KB" is 14 + up to 5 + 3
-         * = 22 at most, and quotes what was asked and what there is */
-        os88_strcpy(rc_msg, "RunCPM: 64KB? ", sizeof(rc_msg));
-        os88_utoa(os88_mem_largest_kb(), rc_num);
-        os88_strcpy(rc_msg + os88_strlen(rc_msg), rc_num, 6);
-        os88_strcpy(rc_msg + os88_strlen(rc_msg), " KB", 4);
-        os88_toast(rc_msg, 0);
+        /* the refusal, toasted with what was asked and what there is: a
+         * toast is 24 characters (SPEC.md 59, TOAST_MAX) and menu.inc
+         * truncates silently - "RunCPM: 64KB? nnnnn KB" is 14 + up to 5 + 3
+         * = 22 at most. Its one caller since the CCP's 2KB claim went
+         * (SPEC.md 74.3.1), so it is here and not a function */
+        os88_strcpy(rc_tmsg, "RunCPM: 64KB? ", sizeof(rc_tmsg));
+        rc_tcatu(os88_mem_largest_kb());
+        rc_tcat(" KB");
+        os88_toast(rc_tmsg, 0);
         return 0;
     }
     rc_z.seg = rc_zseg;
-    /* the CCP: a 2KB claim, and CCP-DR.60K read into it NOW - from the
-     * launch folder, before any folder move (SPEC.md 74.3), the way an .OVL
-     * would be. The claim's base is KB-aligned, so the _seg read is legal.
-     * A missing file is not a refused launch: main.c prints 'Unable to load
-     * CP/M CCP.' on the terminal (rc_boot), and this port keeps the window
-     * up to show it. */
-    rc_ccpseg = os88_mem_claim(2);
-    if (rc_ccpseg == 0) {
-        os88_strcpy(rc_msg, "RunCPM: 2KB? ", sizeof(rc_msg));
-        os88_utoa(os88_mem_largest_kb(), rc_num);
-        os88_strcpy(rc_msg + os88_strlen(rc_msg), rc_num, 6);
-        os88_strcpy(rc_msg + os88_strlen(rc_msg), " KB", 4);
-        os88_toast(rc_msg, 0);
-        return 0;
-    }
-    rc_ccplen = os88_file_read_seg(RC_CCPNAME, rc_ccpseg, RC_CCPSIZE);
+    /* the CCP is already here: at the head of the module's part, read by
+     * op_load before os88_main ran (SPEC.md 74.3) - one carve, one read,
+     * and a launch without the RAM for it was refused there, in the
+     * standard's words */
     rc_ax_load();                           /* AUTOEXEC.TXT, once, from here */
     rc_term_init();
     rc_banner();

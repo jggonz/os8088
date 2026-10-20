@@ -497,7 +497,7 @@ static void lm_paint_empty(void)
      * the sentence is worth. */
     lm_row(0, "LOOM - no project open.");
     lm_row(2, "File > Open Project... opens a .WML; a double-click on a .WML");
-    lm_row(3, "or a .WJS opens its project directly (WEAVE-SPEC 1.5, 11.2).");
+    lm_row(3, "or a .WJS opens its project directly.");
 }
 
 /* lm_repaint - draw the content.
@@ -709,14 +709,14 @@ void os88_onfile(int mode, const char *name, unsigned size_lo,
          * not two (apps/weave/wload.c's "two ways in, one decision", said
          * about creating instead of opening). */
         if (!ovl_newproj(name)) {
-            lm_say("LOOM.OVL is missing; a project cannot be created.");
+            lm_say("LOOM could not load its overlay; a project cannot be created.");
             lm_repaint(win, 1);
             return;
         }
         name = lm_argname;
     }
     if (!ovl_openproj(win, name))
-        lm_say("LOOM.OVL is missing; a project cannot be opened.");
+        lm_say("LOOM could not load its overlay; a project cannot be opened.");
     lm_repaint(win, 1);                 /* over the LAST state - see lm_repaint */
 }
 
@@ -727,7 +727,7 @@ void os88_about(void *win)
      * LOOM.OVL draws nothing at all here and leaves the window alone - which
      * is the honest degradation, and it is why the answer is tested. */
     if (!ovl_about())
-        lm_say("LOOM.OVL is missing; About cannot be shown.");
+        lm_say("LOOM could not load its overlay; About cannot be shown.");
     lm_repaint(win, 1);
 }
 

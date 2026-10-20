@@ -34,13 +34,18 @@ tk_cmd_play:
 ; out: near ret; the kernel restores the desktop
 ; -----------------------------------------------------------------------------
 tk_fsx_main:
-    push ds
+    mov byte [tk_atstale], 1        ; tk_ktabs is about to write over the
+    push ds                         ; attract window's walk buffers (85.10.5)
     pop es
     mov di, tk_fsi
     mov al, [tk_fsxm]
     call OSAPI_FSX_MODE
     jc .out                         ; refused: the desktop is untouched and
                                     ; the bracket ends without drawing
+    OS88_ALTENTER_SEED              ; the Alt+Enter (or Enter) that got us here
+                                    ; is still held, and .keys' read is a
+                                    ; LEVEL one: without this the first poll
+                                    ; takes that hold as the press that leaves
     mov al, [tk_want]
     mov [tk_back], al
     call tk_bindraster
@@ -50,10 +55,11 @@ tk_fsx_main:
     call tk_ridgesetup
     call tk_glyphs
     call tk_clearall
-    mov byte [tk_par], 0
-    mov byte [tk_quit], 0
-    mov byte [tk_over], 0
-    cmp byte [tk_lives], 0          ; A FINISHED GAME STARTS A NEW ONE (SPEC.md
+    xor al, al
+    mov [tk_par], al
+    mov [tk_quit], al
+    mov [tk_over], al
+    cmp [tk_lives], al              ; A FINISHED GAME STARTS A NEW ONE (SPEC.md
     jne .keep                       ; 85.6). Only 'N' ever wrote tk_lives back,
     call tk_newgame                 ; so Play after a GAME OVER ran with an
 .keep:                              ; empty bar: the first hit found 0 and the
@@ -162,26 +168,32 @@ tk_steps:
 ; tk_bindraster - point the two indirect calls at this bracket's backend
 ; -----------------------------------------------------------------------------
 tk_bindraster:
-    cmp byte [tk_back], TKB_MODEX
-    jne .cga
-    mov word [tk_lineproc], tk_line_modex
-    mov word [tk_elineproc], tk_eline_modex
+    mov si, tk_lp_modex
+    xor di, di                      ; Mode X erases by STORING ink 0: nothing
     mov word [tk_hrunproc], tk_hrun_modex
     mov word [tk_glyphproc], tk_glyph_modex
-    ret
-.cga:
-    cmp byte [tk_back], TKB_CGA
-    jne .herc
-    mov word [tk_lineproc], tk_line_cga
-    mov word [tk_elineproc], tk_eline_cga
+    mov byte [tk_kshift], 2
+    cmp byte [tk_back], TKB_MODEX
+    je .copy
+    mov si, tk_lp_cga
+    mov di, tk_ef_cga
     mov word [tk_hrunproc], tk_hrun_cga
     mov word [tk_glyphproc], tk_glyph_cga
-    ret
-.herc:
-    mov word [tk_lineproc], tk_line_herc
-    mov word [tk_elineproc], tk_eline_herc
+    cmp byte [tk_back], TKB_CGA
+    je .copy
+    mov si, tk_lp_herc
+    mov di, tk_ef_herc
     mov word [tk_hrunproc], tk_hrun_herc
     mov word [tk_glyphproc], tk_glyph_herc
+    mov byte [tk_kshift], 3
+.copy:                              ; the walk trio, and the bytes the halo
+    mov [tk_eftab], di              ; flips in it (SPEC.md 85.8.1.1)
+    mov ax, [si]
+    mov [tk_lsh], ax
+    mov ax, [si+2]
+    mov [tk_lst], ax
+    mov ax, [si+4]
+    mov [tk_lvt], ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -202,6 +214,11 @@ tk_clearall:
     mov di, tk_spans1
     mov cx, TK_MAXROW
     rep stosw
+    mov di, tk_tmc                  ; every template key stale, so the first
+    mov cx, TK_NTM * 2              ; frame draws the whole panel (85.3.5)
+    mov ax, 0xFFFF
+    rep stosw
+    mov byte [tk_rtm_on], 0         ; ...and no ridge in the template (85.3.8)
     mov es, [tk_tseg]
     cmp byte [tk_back], TKB_MODEX
     jne .flat
@@ -218,6 +235,17 @@ tk_clearall:
     mov cx, TK_SHSEG / 2
     xor ax, ax
     rep stosw
+    cmp byte [tk_tmpl], 0
+    je .fr
+%ifdef APP_SMALL
+    call tk_tmreset                 ; ...and the template's store emptied to
+%else                               ; match it (SPEC.md 85.3.5.1) - where the
+    mov es, [tk_tmseg]              ; shipped build zeroes the second buffer
+    xor di, di
+    mov cx, TK_SHSEG / 2
+    rep stosw
+%endif
+.fr:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -236,6 +264,15 @@ tk_input:
     push cx
     push dx
 .keys:
+    call os88alt_edge               ; ALT+ENTER LEAVES, exactly as F does
+    jc .quit                        ; (SPEC.md 11.2.1.1). It cannot arrive
+                                    ; through the int 16h below - no XT BIOS
+                                    ; enqueues the combination (9.7.1) - and a
+                                    ; bracket dispatches no events (53.1), so
+                                    ; the key-state map is what carries it.
+                                    ; ABOVE tk_ient_key deliberately, unlike
+                                    ; Esc and F: a chord is not a character a
+                                    ; name prompt can ever want
     mov ah, 1
     int 0x16
     jz .held
@@ -253,21 +290,15 @@ tk_input:
 .free:
     cmp al, 27                      ; Esc
     je .quit
-    cmp al, 'f'
-    je .quit
-    cmp al, 'F'
-    je .quit
     cmp al, ' '
     je .fire
+    or al, 0x20                     ; either case: only F, P and N fold onto
+    cmp al, 'f'                     ; the three letters below
+    je .quit
     cmp al, 'p'
     je .pause
-    cmp al, 'P'
-    je .pause
     cmp al, 'n'
-    je .new
-    cmp al, 'N'
     jne .keys
-.new:
     mov byte [tk_over], 0
     call tk_newgame
     call tk_startround
@@ -294,15 +325,15 @@ tk_input:
 ; tk_pmove spends, once per simulation step, so the two halves of a duel move
 ; on the same clock on every machine.
 .held:
-    mov byte [tk_kturn], 0
-    mov word [tk_kdrv], 0
+    xor bx, bx                      ; BL = the turn a step, and nothing held
+    mov [tk_kturn], bl
+    mov [tk_kdrv], bx
     cmp byte [tk_over], 0           ; nothing to drive once it is over
     jne .done
     cmp byte [tk_pause], 0
     jne .done
     cmp byte [tk_dead], 0           ; no driving while the screen is cracked
     jne .done
-    xor bl, bl                      ; BL = the turn a step
     mov al, KSC_LEFT
     call OSAPI_KEY_DOWN
     jnc .a1
@@ -802,17 +833,12 @@ tk_shell:
     mov byte [tk_otype + bx], OT_FREE
     ret
 .alive:
-    call tk_shellwall               ; scenery stops a shell, whoever fired it
-    jc .gone
+    call tk_shellwall               ; scenery stops a shell, whoever fired it,
+    jc .gone                        ; and it leaves [tk_hx]/[tk_hz] on the shell
     mov si, [tk_sl]
     cmp byte [tk_otype + si], OT_ESHELL
     je .theirs
     ; --- ours: does it meet a tank? ---------------------------------------
-    mov bx, [tk_sl2]
-    mov ax, [tk_ox + bx]
-    mov [tk_hx], ax
-    mov ax, [tk_oz + bx]
-    mov [tk_hz], ax
     xor bx, bx
     mov cx, TK_NOBJ
 .t:
@@ -839,11 +865,6 @@ tk_shell:
     ret
 .theirs:
     ; --- theirs: does it meet us? ------------------------------------------
-    mov bx, [tk_sl2]
-    mov ax, [tk_ox + bx]
-    mov [tk_hx], ax
-    mov ax, [tk_oz + bx]
-    mov [tk_hz], ax
     mov ax, [tk_px]
     mov [tk_tx], ax
     mov ax, [tk_pz]
@@ -974,8 +995,7 @@ tk_tankai:
     call tk_sincos
     mov [tk_osin], ax
     mov [tk_ocos], bx
-
-    mov ax, [tk_osin]               ; cross = sin*dz - cos*dx
+                                    ; cross = sin*dz - cos*dx
     mov bx, [tk_adz]
     MUL14
     mov cx, ax
@@ -1358,9 +1378,7 @@ tk_addtank:
     mov [tk_rrange], ax             ; outside the draw distance of nothing and
     mov al, [tk_ra2]                ; inside it by enough to be seen coming
     call tk_sincos
-    mov [tk_osin], ax
     mov [tk_ocos], bx
-    mov ax, [tk_osin]
     mov bx, [tk_rrange]
     MUL14
     add ax, [tk_px]
@@ -1393,16 +1411,19 @@ tk_newgame:
     push ax
     push bx
     push cx
+    push dx
     push si
-    mov word [tk_frames], 0
-    mov word [tk_score], 0
-    mov word [tk_score+2], 0
+    push di
+    xor ax, ax
+    mov [tk_frames], ax
+    mov [tk_score], ax
+    mov [tk_score+2], ax
     mov byte [tk_lives], TK_LIVES
-    mov word [tk_ntank], 0          ; the difficulty curve starts again with
-    mov byte [tk_dead], 0           ; the game, not with the round (85.6.3)
-    mov word [tk_px], 0
-    mov word [tk_pz], 0
-    mov byte [tk_pa], 0
+    mov [tk_ntank], ax              ; the difficulty curve starts again with
+    mov [tk_dead], al               ; the game, not with the round (85.6.3)
+    mov [tk_px], ax
+    mov [tk_pz], ax
+    mov [tk_pa], al
     xor si, si                      ; the scenery, scattered over the torus
     mov cx, TK_NSTAT
 .s:
@@ -1415,11 +1436,34 @@ tk_newgame:
     mov [tk_otype + si], al
     mov bx, si
     shl bx, 1
+    ; A JITTERED GRID, NOT A UNIFORM SCATTER (SPEC.md 85.6.6.3): slot s takes
+    ; column s & 3 of four 2,048-unit columns and row s >> 2 of three
+    ; 2,731-unit rows, and lands in the middle half of its cell. Neighbours
+    ; are then never nearer than 1,025 units, and no view can hold the
+    ; cluster a uniform draw put in one in six games.
     call OSAPI_RAND
-    and ax, TK_WMASK
+    and ax, 1023
+    add ax, 512
+    mov dx, si                      ; DX = the column, i
+    and dx, 3
+    mov dh, dl                      ; i x 2048 = i << 11
+    xor dl, dl
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    add ax, dx
     mov [tk_ox + bx], ax
     call OSAPI_RAND
-    and ax, TK_WMASK
+    mov dx, 1366                    ; 0..1365, with no divide: the high word
+    mul dx                          ; of rand x 1366
+    mov di, dx
+    add di, 683                     ; DI = the jitter within the row
+    mov ax, si                      ; j = s >> 2
+    shr ax, 1
+    shr ax, 1
+    mov dx, 2731
+    mul dx                          ; AX = j x 2731
+    add ax, di
     mov [tk_oz + bx], ax
     mov ax, [tk_ox + bx]            ; ...AND NOT ON TOP OF THE PLAYER (SPEC.md
     sub ax, [tk_px]                 ; 85.6.6). A box test, like tk_blocked's
@@ -1445,13 +1489,18 @@ tk_newgame:
                                             ; a bad one
     mov byte [tk_oa + si], 0
     inc si
-    loop .s
+    dec cx                          ; the body outgrew `loop`'s reach
+    jz .placed
+    jmp .s
+.placed:
     mov cx, TK_NOBJ - TK_NSTAT      ; ...and no movers yet
 .m:
     mov byte [tk_otype + si], OT_FREE
     inc si
     loop .m
+    pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -1459,9 +1508,10 @@ tk_newgame:
 
 tk_startround:
     push ax
-    mov byte [tk_dead], 0
-    mov byte [tk_spawn], 0
-    mov byte [tk_pause], 0          ; ...AND A ROUND IS NEVER PAUSED. It is
+    xor al, al
+    mov [tk_dead], al
+    mov [tk_spawn], al
+    mov [tk_pause], al              ; ...AND A ROUND IS NEVER PAUSED. It is
                                     ; here rather than at each entry because
                                     ; there are two: the bracket's own, and
                                     ; 'N' inside it - and 'N' did not clear it,
@@ -1489,7 +1539,12 @@ tk_render:
     inc word [tk_frames]            ; the only instrumentation in here, and
     call tk_camsetup                ; tests/tank.py is what reads it
     call tk_r_begin
-    call tk_ridge
+    cmp byte [tk_tmpl], 0           ; the static panel, kept current in the
+    je .nt                          ; template (SPEC.md 85.3.5) - AFTER the
+    call tk_tmupdate                ; clear, which has just copied the old
+.nt:                                ; template over last frame's runs
+    call tk_ridge_tm                ; the ridge: template while the heading
+                                    ; holds, dynamic while it turns (85.3.8)
     mov al, OT_CUBE
     call tk_drawtype
     mov al, OT_PYR
@@ -1510,64 +1565,60 @@ tk_render:
 ;
 ; Nothing here is a screen constant. The three viewports are 320x240, 320x200
 ; and 640x200, and a panel laid out in one of them is off the edge of another.
+; Clobbers CX, SI, DI, BP (tk_tmlayout's); keeps AX, BX, DX.
 ; -----------------------------------------------------------------------------
 tk_hud_layout:
     push ax
     push bx
     push dx
-    mov ax, [tk_vw]                 ; the horizontal and vertical scales the
-    mov bx, 8                       ; small fixed tables below are drawn at,
-    mul bx                          ; in eighths
-    mov bx, 320
-    xor dx, dx
-    div bx
-    mov [tk_hsx], ax
-    mov ax, [tk_vh]
-    mov bx, 8
+    mov si, tk_hlay                 ; every place below is a dimension of the
+.l:                                 ; viewport times a constant over another
+    lodsw
+    or ax, ax
+    jz .done
+    xchg ax, bx
+    mov ax, [bx]                    ; AX = tk_vw or tk_vh
+    mov bl, [si]
+    xor bh, bh
     mul bx
-    mov bx, 200
-    xor dx, dx
-    div bx
-    mov [tk_hsy], ax
-
-    mov ax, [tk_vw]
-    shr ax, 1
-    mov [tk_rcx], ax                ; the radar, centred over the gunsight
-    mov ax, [tk_vh]
-    mov bx, 16
-    mul bx
-    mov bx, 100
-    xor dx, dx
-    div bx
-    mov [tk_rcy], ax
-    mov ax, [tk_vh]
-    mov bx, 12
-    mul bx
-    mov bx, 100
-    xor dx, dx
-    div bx
-    mov [tk_rr], ax
-
-    mov ax, [tk_vw]                 ; the score, right of the radar and
-    mov bx, 62                      ; 8-aligned so a glyph is whole bytes
-    mul bx
-    mov bx, 100
-    xor dx, dx
-    div bx
-    and al, 0xF8
-    mov [tk_txx], ax
-    mov ax, [tk_vh]
-    mov bx, 4
-    mul bx
-    mov bx, 100
-    xor dx, dx
-    div bx
-    mov [tk_txy], ax
+    div word [si+1]
+    mov bx, [si+3]
+    mov [bx], ax
+    add si, 5
+    jmp short .l
+.done:
+    and byte [tk_txx], 0xF8         ; the score 8-aligned, so a glyph is whole
+    mov ax, [tk_vw]                 ; bytes; and the radar centred over the
+    shr ax, 1                       ; gunsight
+    mov [tk_rcx], ax
     call tk_rimpoints
+    call tk_tmlayout                ; ...and the template's six rectangles
     pop dx
     pop bx
     pop ax
     ret
+
+; tk_hud_layout's table: dw the dimension, db times, dw over, dw into
+tk_hlay:
+    dw tk_vw
+    db 8
+    dw 320, tk_hsx                  ; the horizontal and vertical scales the
+    dw tk_vh                        ; small fixed tables below are drawn at,
+    db 8                            ; in eighths
+    dw 200, tk_hsy
+    dw tk_vh                        ; the radar's centre row...
+    db 16
+    dw 100, tk_rcy
+    dw tk_vh                        ; ...and radius
+    db 12
+    dw 100, tk_rr
+    dw tk_vw                        ; the score, right of the radar
+    db 62
+    dw 100, tk_txx
+    dw tk_vh
+    db 4
+    dw 100, tk_txy
+    dw 0
 
 ; tk_hscale - AX = a table coordinate; out AX = it, in this viewport's pixels
 ; BL = 0 horizontal, 1 vertical
@@ -1592,26 +1643,35 @@ tk_hscaley:
 
 ; -----------------------------------------------------------------------------
 ; tk_drawtab - a table of segments, scaled, about an origin
-; in:  SI = the table (dx1,dy1,dx2,dy2 words, 0x7FFF ends it),
+; in:  SI = the table (dx1,dy1,dx2,dy2 signed BYTES, TK_TEND ends it),
 ;      [tk_tox]/[tk_toy] = the origin
+;
+; BYTES and not words: every shape is within a byte of its origin (the crack
+; once its coordinates are halved - see tk_crackdraw), the tables are half the
+; size, and on the 8088 a byte and a cbw cost what a word read does.
 ; -----------------------------------------------------------------------------
+TK_TEND equ -128
 tk_drawtab:
 .s:
-    cmp word [si], 0x7FFF
+    mov al, [si]
+    cmp al, TK_TEND
     je .done
-    mov ax, [si]
+    cbw
     call tk_hscalex
     add ax, [tk_tox]
     mov [tk_ex1], ax
-    mov ax, [si+2]
+    mov al, [si+1]
+    cbw
     call tk_hscaley
     add ax, [tk_toy]
     mov [tk_ey1], ax
-    mov ax, [si+4]
+    mov al, [si+2]
+    cbw
     call tk_hscalex
     add ax, [tk_tox]
     mov [tk_ex2], ax
-    mov ax, [si+6]
+    mov al, [si+3]
+    cbw
     call tk_hscaley
     add ax, [tk_toy]
     mov [tk_ey2], ax
@@ -1628,17 +1688,47 @@ tk_drawtab:
     call tk_seg
 .nx:
     pop si
-    add si, 8
+    add si, 4
     jmp short .s
 .done:
     ret
 
 ; -----------------------------------------------------------------------------
 ; tk_hud - the panel, the gunsight, and the cracks
+;
+; TWO SHAPES (SPEC.md 85.3.5). On the shadow backends the STATIC panel lives in
+; the TEMPLATE and tk_tmupdate has already kept it current, so a frame draws
+; only what moves: the sweep and the blips. Mode X has no template and draws
+; the whole panel every frame, which is what every frame did before.
 ; -----------------------------------------------------------------------------
 tk_hud:
+    cmp byte [tk_tmpl], 0
+    je .full
+    mov al, TKI_HUD
+    call tk_setink
+    jmp tk_radar_dyn
+.full:
     call tk_lockon                  ; SPEC.md 85.6.5.7, and it must run before
-    mov al, TKI_MARK                ; the ink is set: tk_besttarget is under it
+    call tk_sightdraw               ; the sight is drawn: it picks the table
+    call tk_rim
+    call tk_radar_dyn
+    mov al, TKI_HUD
+    call tk_setink
+    call tk_scores
+    call tk_livesbar
+    call tk_rangescan
+    call tk_rangedraw
+    cmp byte [tk_dead], 0
+    je .done
+    call tk_crackdraw               ; the glass, on the way out
+.done:
+    ret
+
+; tk_sightdraw - the open sight, or the SAME EIGHT segments closed on a target
+; (85.6.5.7): tk_drawtab draws the identical number of identical runs either
+; way, so a lock costs the frame nothing
+tk_sightdraw:
+    mov al, TKI_MARK
     call tk_setink
     mov ax, [tk_vcx]
     mov [tk_tox], ax
@@ -1646,40 +1736,41 @@ tk_hud:
     mov [tk_toy], ax
     mov si, tk_t_sight
     cmp byte [tk_locked], 0
-    je .sight
-    mov si, tk_t_lock               ; ...the SAME EIGHT segments, moved: a lock
-.sight:                             ; costs the frame nothing
-    call tk_drawtab
+    je .s
+    mov si, tk_t_lock
+.s:
+    jmp tk_drawtab
 
-    mov al, TKI_HUD
-    call tk_setink
-    call tk_radar
-    call tk_scores
-    call tk_livesbar
-    call tk_range
-
-    cmp byte [tk_dead], 0
-    je .done
-    mov al, TKI_MARK                ; the glass, on the way out
+; tk_crackdraw - the cracked glass, about the point of aim. Its table is
+; stored HALVED - it reaches 150 across, past a byte - and every coordinate in
+; it is even, so doubling both scales for the length of the draw lays exactly
+; the pixels the whole-sized table did
+tk_crackdraw:
+    mov al, TKI_MARK
     call tk_setink
     mov ax, [tk_vcx]
     mov [tk_tox], ax
     mov ax, [tk_vcy]
     mov [tk_toy], ax
     mov si, tk_t_crack
+    shl word [tk_hsx], 1
+    shl word [tk_hsy], 1
     call tk_drawtab
-.done:
+    shr word [tk_hsx], 1
+    shr word [tk_hsy], 1
     ret
 
 ; -----------------------------------------------------------------------------
-; tk_radar - the rim, the sweep, and a blip per tank
+; tk_rim - the dial's rim: sixteen segments that never move, so on a shadow
+;          backend they are drawn ONCE, into the template (85.3.5)
+; tk_radar_dyn - the sweep and a blip per tank: what moves, every frame
 ;
 ; THE BLIP COSTS NOTHING TO PLACE. An enemy's position in CAMERA space is
 ; already its position on the radar - x across, z up the dial - so the radar
 ; is the same transform the renderer just did, at a different scale, and
 ; needs no bearing and no arctangent.
 ; -----------------------------------------------------------------------------
-tk_radar:
+tk_rim:
     mov al, TKI_RADAR               ; the rim is the dial's furniture and the
     call tk_setink                  ; sweep is what moves on it
     xor bx, bx
@@ -1710,7 +1801,9 @@ tk_radar:
     add bx, 2
     pop cx
     loop .rim
+    ret
 
+tk_radar_dyn:
     mov al, TKI_HUD
     call tk_setink
     mov al, [tk_sweep]              ; the sweep: a narrow wedge, as the
@@ -1831,7 +1924,7 @@ tk_scores:
     mov ax, [tk_hiscore]
     mov dx, [tk_hiscore+2]
     mov di, tk_numbuf
-    call tk_utoa
+    call dec_u32
     call tk_numpos
     mov si, tk_numbuf
     call tk_text
@@ -1844,7 +1937,7 @@ tk_scores:
     mov ax, [tk_score]
     mov dx, [tk_score+2]
     mov di, tk_numbuf
-    call tk_utoa
+    call dec_u32
     call tk_numpos
     add dx, 10
     mov si, tk_numbuf
@@ -1896,7 +1989,10 @@ tk_livesbar:
 
 ; ENEMY IN RANGE: a tank in front of us and inside a shell's reach. It is the
 ; arcade's own cue and it is the difference between hunting and being hunted.
-tk_range:
+; The SCAN and the DRAW are two routines because the template keys on the
+; answer (85.3.5): the text is lettered when the answer changes, not per frame.
+tk_rangescan:
+    mov byte [tk_inrange], 0
     xor bx, bx
     mov cx, TK_NOBJ
 .o:
@@ -1923,6 +2019,20 @@ tk_range:
     jg .n
     pop bx
     pop cx
+    mov byte [tk_inrange], 1
+    ret
+.n:
+    pop bx
+    add bx, 2
+    pop cx
+    loop .o
+    ret
+
+tk_rangedraw:
+    cmp byte [tk_inrange], 0
+    je .o
+    mov al, TKI_HUD
+    call tk_setink
     mov cx, 8                       ; LEFT, where the 1983 port puts it: this
                                     ; is fourteen cells of text and the dial
                                     ; is 48 wide about the centre, so anything
@@ -1933,13 +2043,844 @@ tk_range:
     add dx, 4
     mov si, tk_s_range
     call tk_text
+.o:
     ret
-.n:
+
+; =============================================================================
+; THE HUD TEMPLATE (SPEC.md 85.3.5) - the two shadow backends only
+;
+; The panel used to be drawn every frame, and measured at 61-67 ms of every
+; Hercules frame - two fifths of a typical one - for a picture that changes
+; on a hit, a kill, a lock and never otherwise. So the static panel lives in a
+; second 16,000-byte buffer, the TEMPLATE, right after the shadow in the same
+; claim, and the per-row clear that used to store zeros over last frame's runs
+; copies the template's bytes instead. The shadow is therefore always the
+; template plus this frame's dynamic drawing, by induction, and the six
+; static items cost the frame nothing until one of them CHANGES.
+;
+; An item is a KEY, a RECTANGLE and a DRAW routine. Once a frame every key is
+; compared with its cache; on a change the rectangle is zeroed in the
+; template, the item is drawn into the template through the ordinary walks
+; (with the span marks sent to a set nobody reads), the rectangle is copied
+; template -> shadow, and the rectangle is marked into this frame's spans so
+; the blit carries it. Rectangles rather than the drawing's own spans because
+; a life LOST leaves nothing to mark: the pixels that must reach the glass are
+; the ones no longer drawn.
+; =============================================================================
+
+; tk_tmupdate - keep the six items current. Runs right after tk_r_begin, so
+;               the clear has already copied the OLD template over last
+;               frame's runs and the shadow holds nothing dynamic yet.
+tk_tmupdate:
+    call tk_lockon                  ; -> [tk_locked], the sight's key
+    call tk_rangescan               ; -> [tk_inrange], the range line's key
+    mov ax, 1                       ; the rim: keyed on a constant, so it is
+    xor dx, dx                      ; drawn once a bracket
+    xor bp, bp
+    call tk_tmitem
+    mov al, [tk_locked]
+    xor ah, ah
+    xor dx, dx
+    mov bp, 1
+    call tk_tmitem
+    mov al, [tk_lives]
+    xor ah, ah
+    xor dx, dx
+    mov bp, 2
+    call tk_tmitem
+    mov ax, [tk_score]              ; the low words: a kill is +1000, which
+    mov dx, [tk_hiscore]            ; cannot leave a low word where it was
+    mov bp, 3
+    call tk_tmitem
+    mov al, [tk_inrange]
+    xor ah, ah
+    xor dx, dx
+    mov bp, 4
+    call tk_tmitem
+    mov al, [tk_dead]               ; cracked or not: the count is not the key
+    or al, al
+    jz .cr
+    mov al, 1
+.cr:
+    xor ah, ah
+    xor dx, dx
+    mov bp, 5
+    call tk_tmitem
+    ret
+
+; The items, in key order: what each draws into the template when asked. The
+; seventh is the ridge (85.3.8), which keeps its own state and is here only so
+; that an item whose rectangle it crosses can have it drawn again.
+TK_NTM equ 7
+tk_tmproc:
+    dw tk_rim, tk_sightdraw, tk_tm_lives, tk_tm_scores, tk_rangedraw, tk_tm_crack
+    dw tk_tm_ridge
+
+tk_tm_lives:
+    mov al, TKI_HUD
+    call tk_setink
+    jmp tk_livesbar
+tk_tm_scores:
+    mov al, TKI_HUD
+    call tk_setink
+    jmp tk_scores
+tk_tm_crack:
+    cmp byte [tk_dead], 0
+    je .o
+    jmp tk_crackdraw
+.o:
+    ret
+
+; tk_tmitem - one item: redraw it if its key moved
+; in:  DX:AX = the key, BP = the item (0..TK_NTM-1).  clobbers everything
+tk_tmitem:
+    mov di, bp
+    shl di, 1
+    shl di, 1
+    add di, tk_tmc
+    cmp ax, [di]
+    jne .redo
+    cmp dx, [di+2]
+    je .same
+.redo:
+    mov [di], ax
+    mov [di+2], dx
+    call tk_tmrect
+    push bp                         ; the movers count words in BP
+    call tk_tmzero
+    pop bp
+%ifndef APP_SMALL
+    mov ax, [tk_tmseg]              ; the walks draw into the TEMPLATE...
+    mov [tk_tseg], ax
+%endif                              ; ...or, on the small build, into the
+    mov ax, [tk_spcur]              ; SHADOW, which in this window IS the
+    mov [tk_tmsave], ax             ; template (SPEC.md 85.3.5.1)
+    mov word [tk_spcur], tk_spjunk  ; - and mark a set nobody reads
+    ; EVERY ITEM WHOSE RECTANGLE MEETS THIS ONE IS DRAWN AGAIN, this one
+    ; included: the zero above took their pixels inside it with it. The
+    ; crack's rectangle holds the whole sight, which is how the sight was
+    ; first seen to vanish at the start of every game - the crack item,
+    ; drawing nothing, had just zeroed it.
+    mov al, [ds:tk_tmovl + bp]      ; DS, SPELLED: a BP operand addresses SS
+    mov [tk_tmbits], al             ; by default, and SS is the kernel's
+    mov [tk_tmcur], si              ; the rectangle, for a redraw that can
+    push bp                         ; limit itself to it (the ridge's). The
+    call tk_tmdrawset               ; walks keep nothing, BP included, and
+    pop bp                          ; BP is the item: without this the copy
+    mov word [tk_tmcur], 0          ; below ran a garbage rectangle for ever
+    mov ax, [tk_tmsave]
+    mov [tk_spcur], ax
+%ifdef APP_SMALL
+    call tk_tmrect                  ; THE STORE, rebuilt over the rectangle's
+    push bp                         ; rows - and no copy, because the drawing
+    push si                         ; landed in the shadow already (85.3.5.1)
+    mov ax, [si]
+    mov bx, [si+2]
+    call tk_tmenc
+    pop si
+    pop bp
+%else
+    mov ax, [tk_shseg]
+    mov [tk_tseg], ax
+    call tk_tmrect
+    push bp
+    call tk_tmcopy                  ; the rectangle, template -> shadow
+    pop bp
+    call tk_tmrect
+%endif
+    call tk_tmmark                  ; ...and the rectangle into this frame's
+.same:                              ; spans, so the blit carries it
+    ret
+
+; tk_tmrect - SI -> item BP's rectangle
+tk_tmrect:
+    mov si, bp
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, tk_tmr
+    ret
+
+; tk_tmoverlap - the intersection matrix, once a bracket: bit j of byte i is
+;                set when rectangles i and j share a row AND a byte
+tk_tmoverlap:
+    xor bp, bp
+.i:
+    mov byte [ds:tk_tmovl + bp], 0  ; DS, SPELLED - see tk_tmitem
+    xor bx, bx                      ; BX = j
+    mov dl, 1                       ; DL = bit j
+.j:
+    mov si, bp
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, tk_tmr                  ; SI = rect i
+    mov di, bx
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    add di, tk_tmr                  ; DI = rect j
+    mov ax, [si]                    ; rows: r0_i <= r1_j and r0_j <= r1_i
+    cmp ax, [di+2]
+    jg .no
+    mov ax, [di]
+    cmp ax, [si+2]
+    jg .no
+    mov ax, [si+4]                  ; bytes, the same way
+    cmp ax, [di+6]
+    jg .no
+    mov ax, [di+4]
+    cmp ax, [si+6]
+    jg .no
+    or [ds:tk_tmovl + bp], dl
+.no:
+    shl dl, 1
+    inc bx
+    cmp bx, TK_NTM
+    jb .j
+    inc bp
+    cmp bp, TK_NTM
+    jb .i
+    ret
+
+; tk_tmdrawset - draw every item whose bit is set in [tk_tmbits], into
+;                whatever tk_tseg/tk_spcur point at. Bit j is tk_tmproc[j].
+tk_tmdrawset:
+    xor bx, bx
+.j:
+    shr byte [tk_tmbits], 1
+    jnc .nj
+    push bx
+    call [tk_tmproc + bx]
     pop bx
+.nj:
     add bx, 2
-    pop cx
-    loop .o
+    cmp bx, TK_NTM * 2
+    jb .j
     ret
+
+; =============================================================================
+; THE RIDGE IN THE TEMPLATE, WHILE THE HEADING HOLDS (SPEC.md 85.3.8)
+;
+; The ridge is at infinity and moves only when the camera turns, and it cost
+; 26 ms of a 97 ms Hercules frame to draw every frame. It cannot be a plain
+; item: its rectangle is the whole width by seventy rows, and zeroing, copying
+; and blitting that on every turn would cost more than drawing it. So it keeps
+; its OWN span set - what it actually lit in the template - and the rule is
+; the heading: the frame after a turn stops, the ridge is drawn into the
+; template over those runs; the frame a turn starts, it is taken out again
+; and drawn into the shadow as every frame once did. A frame in the middle of
+; a turn costs exactly what it did; a still one costs no ridge at all.
+; =============================================================================
+tk_ridge_full:                      ; the whole width, at the LIVE heading
+    mov al, [tk_pa]
+    mov [tk_rpa_draw], al
+tk_ridge_wide:                      ; ...and the same width at whatever heading
+    xor ax, ax                      ; [tk_rpa_draw] already names
+    mov [tk_rx0], ax
+    mov ax, [tk_vw]
+    dec ax
+    mov [tk_rx1], ax
+    jmp tk_ridge
+
+tk_ridge_tm:
+    cmp byte [tk_tmpl], 0
+    je tk_ridge_full                ; Mode X: every frame, as before
+%ifdef APP_SMALL
+    cmp word [tk_tmcap], TKT_RIDGEMIN
+    jb tk_ridge_full                ; ...and so does a pool too small to hold
+                                    ; the ridge beside the panel (85.3.5.1):
+                                    ; refusing it here is what keeps the PANEL
+                                    ; in the template on the 128KB machine
+%endif
+    mov al, [tk_pa]
+    mov ah, [tk_rpa_last]
+    mov [tk_rpa_last], al
+    cmp al, ah
+    jne .moving
+    cmp byte [tk_rtm_on], 0         ; SETTLED: the same heading as last frame
+    je .settle
+    cmp al, [tk_rpa_tm]
+    je .done                        ; ...and the template already has it
+.settle:
+    mov [tk_rpa_tm], al
+    call tk_rdg_out                 ; the old ridge out; its runs in tk_spans2
+    call tk_rdg_touch               ; -> [tk_tmbits]: the items on those runs
+    push ds
+    pop es
+    mov di, tk_sprdg                ; the new ridge records its own runs
+    mov cx, TK_RBROWS
+    mov ax, 0x00FF
+    cld
+    rep stosw
+%ifndef APP_SMALL
+    mov ax, [tk_tmseg]              ; the ridge draws into the TEMPLATE, or on
+    mov [tk_tseg], ax               ; the small build into the SHADOW, which in
+%endif                              ; this window is the template (85.3.5.1)
+    mov ax, [tk_spcur]
+    mov [tk_tmsave], ax
+    mov ax, [tk_rbd]
+    mov [tk_spcur], ax
+    call tk_ridge_full
+    mov word [tk_spcur], tk_spjunk
+    call tk_tmdrawset               ; the items the zero took, drawn again
+    mov ax, [tk_tmsave]
+    mov [tk_spcur], ax
+%ifndef APP_SMALL
+    mov ax, [tk_shseg]
+    mov [tk_tseg], ax
+%endif
+    mov byte [tk_rtm_on], 1
+%ifdef APP_SMALL
+    call tk_tmencband               ; the band's rows back into the store
+%endif
+    call tk_rdg_union               ; tk_spans2 = the old runs and the new
+    jmp tk_rdg_apply                ; template -> shadow over them, marked
+.moving:
+    cmp byte [tk_rtm_on], 0
+    je .dyn
+    call tk_rdg_out                 ; MOVING: the template must hold no ridge
+    call tk_rdg_touch
+%ifndef APP_SMALL
+    mov ax, [tk_tmseg]
+    mov [tk_tseg], ax
+%endif
+    mov ax, [tk_spcur]
+    mov [tk_tmsave], ax
+    mov word [tk_spcur], tk_spjunk
+    call tk_tmdrawset
+    mov ax, [tk_tmsave]
+    mov [tk_spcur], ax
+%ifndef APP_SMALL
+    mov ax, [tk_shseg]
+    mov [tk_tseg], ax
+%endif
+    mov byte [tk_rtm_on], 0
+%ifdef APP_SMALL
+    call tk_tmencband               ; ...and the band without it in the store
+%endif
+    call tk_rdg_apply
+.dyn:
+    jmp tk_ridge_full               ; into the shadow, as every frame once did
+.done:
+    ret
+
+; tk_tm_ridge - the ridge as an ITEM: drawn again when another item's zero
+;               took some of it, and only across that item's rectangle
+;
+; IT DRAWS AT [tk_rpa_tm], NOT AT [tk_pa] (85.3.8.1). What the zero took out was
+; the TEMPLATE's ridge, so the template's heading is what has to go back. The
+; two agree on nearly every frame and part on exactly one: tk_tmupdate runs
+; BEFORE tk_ridge_tm, so where an item's key and the heading both move this ran
+; with the NEW heading while [tk_sprdg] still described the old one - and
+; tk_rdg_out then zeroed the old runs, leaving what this drew outside them
+; uncleared, unmarked and unstored. A detached ridge segment in the background,
+; one frame's turn out of step, for the rest of the bracket.
+tk_tm_ridge:
+    cmp byte [tk_rtm_on], 0
+    je .o
+    mov al, [tk_rpa_tm]
+    mov [tk_rpa_draw], al
+    mov si, [tk_tmcur]
+    or si, si
+    jnz .part
+    jmp tk_ridge_wide
+.part:
+    mov cl, [tk_kshift]
+    mov ax, [si+4]
+    shl ax, cl
+    mov [tk_rx0], ax
+    mov ax, [si+6]
+    inc ax
+    shl ax, cl
+    dec ax
+    mov [tk_rx1], ax
+    jmp tk_ridge
+.o:
+    ret
+
+; EVERY PASS BELOW RUNS OVER THE RIDGE'S BAND ALONE - rectangle 6's rows, the
+; tallest peak the table holds above the horizon - and not the viewport's 200.
+; The first build ran them full height and a transition frame spent 30 ms in
+; span-array loops before it drew a pixel.
+;
+; tk_rdg_band - SI -> tk_spans2 at the band's first row, DI -> tk_sprdg there,
+;               BX -> tk_rowoff there, CX = the band's rows, DX = its first row
+tk_rdg_band:
+    mov dx, [tk_tmr + 48]
+    mov cx, [tk_tmr + 50]
+    sub cx, dx
+    inc cx
+    mov bx, dx
+    shl bx, 1
+    mov si, bx
+    add si, [tk_rb2]
+    mov di, bx
+    add di, [tk_rbd]
+    add bx, tk_rowoff
+    ret
+
+; tk_rdg_out - the template's ridge, if it has one, taken out: its runs are
+;              copied to tk_spans2 and zeroed in the template; else tk_spans2's
+;              band is armed empty
+tk_rdg_out:
+    call tk_rdg_band
+    push ds
+    pop es
+    cld
+    cmp byte [tk_rtm_on], 0
+    je .empty
+    push cx
+    push bx
+    push di
+    xchg si, di                     ; tk_sprdg -> tk_spans2, the band
+    rep movsw
+    pop si                          ; SI = tk_sprdg at the band
+    pop bx
+    pop bp                          ; BP = its rows
+    jmp tk_tmzruns
+.empty:
+    mov di, si
+    mov ax, 0x00FF
+    rep stosw
+    ret
+
+; tk_tmzruns - zero the template over the runs of SI, BP rows, BX -> tk_rowoff
+;              (the SHADOW on the small build - see tk_tmzero)
+tk_tmzruns:
+%ifdef APP_SMALL
+    mov es, [tk_shseg]
+%else
+    mov es, [tk_tmseg]
+%endif
+    cld
+.r:
+    lodsw
+    cmp al, ah
+    ja .n
+    and al, 0xFE
+    or ah, 1
+    sub ah, al
+    shr ah, 1
+    mov cl, ah
+    xor ch, ch
+    inc cx
+    xor ah, ah
+    mov di, [bx]
+    add di, ax
+    xor ax, ax
+    rep stosw
+.n:
+    inc bx
+    inc bx
+    dec bp
+    jnz .r
+    ret
+
+%ifndef APP_SMALL
+; tk_tmcpruns - template -> shadow over the runs of SI, BP rows, BX -> tk_rowoff
+tk_tmcpruns:
+    mov es, [tk_shseg]
+    cld
+.r:
+    lodsw
+    cmp al, ah
+    ja .n
+    and al, 0xFE
+    or ah, 1
+    sub ah, al
+    shr ah, 1
+    mov cl, ah
+    xor ch, ch
+    inc cx
+    xor ah, ah
+    mov di, [bx]
+    add di, ax
+    push si
+    mov si, di
+    push ds
+    mov ds, [tk_tmseg]
+    rep movsw
+    pop ds
+    pop si
+.n:
+    inc bx
+    inc bx
+    dec bp
+    jnz .r
+    ret
+%endif
+
+; tk_rdg_touch - [tk_tmbits] = the six panel items whose rectangle meets a
+;                run of tk_spans2 inside the band: the ones a zero over it took
+tk_rdg_touch:
+    mov byte [tk_tmbits], 0
+    xor bp, bp
+    mov dl, 1
+.i:
+    mov si, bp
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, tk_tmr                  ; SI = the rectangle
+    mov ax, [si]                    ; its rows, clipped to the band
+    cmp ax, [tk_tmr + 48]
+    jge .r0
+    mov ax, [tk_tmr + 48]
+.r0:
+    mov cx, [si+2]
+    cmp cx, [tk_tmr + 50]
+    jle .r1
+    mov cx, [tk_tmr + 50]
+.r1:
+    sub cx, ax
+    jl .ni                          ; no row in common
+    inc cx                          ; CX = rows
+    mov bx, ax
+    shl bx, 1
+    add bx, [tk_rb2]                ; BX = the run of the first such row
+    mov al, [si+4]                  ; AL = byte0, AH = byte1
+    mov ah, [si+6]
+.r:
+    cmp [bx], ah                    ; lo > byte1 (or empty): no
+    ja .nr
+    push ax
+    mov al, [bx+1]
+    cmp al, [bx]
+    jb .nx                          ; lo > hi: empty
+    cmp al, [si+4]                  ; hi < byte0: no
+    jb .nx
+    pop ax
+    or [tk_tmbits], dl
+    jmp short .ni
+.nx:
+    pop ax
+.nr:
+    inc bx
+    inc bx
+    loop .r
+.ni:
+    shl dl, 1
+    inc bp
+    cmp bp, TK_NTM - 1              ; the six panel items, not the ridge
+    jb .i
+    ret
+
+; tk_rdg_union - tk_spans2 = its runs widened by tk_sprdg's, over the band
+tk_rdg_union:
+    call tk_rdg_band
+    xchg si, di                     ; tk_rdg_merge widens DI's runs by SI's
+    jmp short tk_rdg_merge
+
+; tk_rdg_apply - template -> shadow over tk_spans2's band runs, and those runs
+;                into this frame's span set so the blit carries them. THE COPY
+;                IS THE SHIPPED BUILD'S ONLY: 85.3.5.1 puts the drawing in the
+;                shadow to begin with, so there the mark is all that is left
+tk_rdg_apply:
+    call tk_rdg_band
+%ifndef APP_SMALL
+    push cx
+    push dx
+    push si
+    mov bp, cx
+    call tk_tmcpruns
+    pop si                          ; SI = tk_spans2 at the band
+    pop di                          ; DI = the band's first row...
+    shl di, 1
+    add di, [tk_spcur]              ; ...in this frame's set
+    pop cx
+%else
+    mov di, dx                      ; DI = the band's first row...
+    shl di, 1
+    add di, [tk_spcur]              ; ...in this frame's set
+%endif
+; tk_rdg_merge - DI's CX runs widened by SI's, a row at a time
+tk_rdg_merge:
+    mov ax, [si]
+    cmp al, [di]
+    jae .l
+    mov [di], al
+.l:
+    cmp ah, [di+1]
+    jbe .h
+    mov [di+1], ah
+.h:
+    inc si
+    inc si
+    inc di
+    inc di
+    loop tk_rdg_merge
+    ret
+
+; A RECTANGLE is four words: row0, row1, byte0, byte1, all inclusive and all
+; clamped to the viewport by tk_tmreg. The byte pair is rounded out to whole
+; WORDS by the two movers, as the clear and the blit round theirs.
+tk_tmzero:                          ; zero it - in the template, or on the
+%ifdef APP_SMALL                    ; small build in the SHADOW, which in the
+    mov es, [tk_shseg]              ; template's own window IS the template
+%else
+    mov es, [tk_tmseg]
+%endif
+    mov dx, [si+4]
+    and dl, 0xFE
+    mov bp, [si+6]
+    or bp, 1
+    sub bp, dx
+    shr bp, 1
+    inc bp                          ; BP = words a row
+    mov di, [si]
+    shl di, 1                       ; DI = the row-offset index
+    mov cx, [si+2]
+    sub cx, [si]
+    inc cx                          ; CX = rows
+    jle .done                       ; ...and none is none, not 65,536
+    cld
+.r:
+    push cx
+    push di
+    mov di, [tk_rowoff + di]
+    add di, dx
+    mov cx, bp
+    xor ax, ax
+    rep stosw
+    pop di
+    add di, 2
+    pop cx
+    loop .r
+.done:
+    ret
+
+%ifndef APP_SMALL
+tk_tmcopy:                          ; template -> shadow, the same rectangle
+    push ds
+    mov es, [tk_shseg]
+    mov dx, [si+4]
+    and dl, 0xFE
+    mov bp, [si+6]
+    or bp, 1
+    sub bp, dx
+    shr bp, 1
+    inc bp
+    mov di, [si]
+    shl di, 1
+    mov cx, [si+2]
+    sub cx, [si]
+    inc cx
+    jle .done
+    mov ds, [tk_tmseg]
+    cld
+.r:
+    push cx
+    push di
+    mov di, [cs:tk_rowoff + di]
+    add di, dx
+    mov si, di                      ; the same offset in both halves
+    mov cx, bp
+    rep movsw
+    pop di
+    add di, 2
+    pop cx
+    loop .r
+.done:
+    pop ds
+    ret
+%endif
+
+tk_tmmark:                          ; the rectangle into [tk_spcur]
+    mov bx, [si]
+    shl bx, 1
+    add bx, [tk_spcur]
+    mov cx, [si+2]
+    sub cx, [si]
+    inc cx
+    jle .done
+    mov dx, [si+4]                  ; DL = byte0
+    mov dh, [si+6]                  ; DH = byte1
+.r:
+    cmp [bx], dl
+    jbe .l
+    mov [bx], dl
+.l:
+    cmp [bx+1], dh
+    jae .h
+    mov [bx+1], dh
+.h:
+    add bx, 2
+    loop .r
+.done:
+    ret
+
+; tk_tmreg - store one rectangle, clamped to the viewport
+; in: SI -> the rectangle, AX = row0, BX = row1, CX = x0, DX = x1 (pixels)
+tk_tmreg:
+    push dx
+    push cx
+    mov cx, [tk_vh]
+    call tk_clamp
+    mov [si], ax
+    xchg ax, bx
+    call tk_clamp
+    mov [si+2], ax
+    mov cx, [tk_vw]
+    pop ax                          ; x0
+    call tk_clamp
+    pop bx                          ; x1
+    xchg ax, bx
+    call tk_clamp
+    mov cl, [tk_kshift]
+    shr ax, cl
+    mov [si+6], ax
+    shr bx, cl
+    mov [si+4], bx
+    ret
+
+; tk_clamp - AX into 0..CX-1
+tk_clamp:
+    or ax, ax
+    jns .p
+    xor ax, ax
+.p:
+    cmp ax, cx
+    jl .ok
+    mov ax, cx
+    dec ax
+.ok:
+    ret
+
+; tk_tmlayout - the six rectangles, from the panel's own layout
+tk_tmlayout:
+    ; the rim: rcy +- rr, rcx +- rr, a pixel of slack
+    mov si, tk_tmr
+    mov ax, [tk_rcy]
+    sub ax, [tk_rr]
+    dec ax
+    mov bx, [tk_rcy]
+    add bx, [tk_rr]
+    inc bx
+    mov cx, [tk_rcx]
+    sub cx, [tk_rr]
+    dec cx
+    mov dx, [tk_rcx]
+    add dx, [tk_rr]
+    inc dx
+    call tk_tmreg
+    ; the sight: tk_t_sight reaches +-34 vertically and +-46 across
+    mov ax, 34
+    call tk_hscaley
+    mov bp, ax
+    mov ax, 46
+    call tk_hscalex
+    mov di, ax
+    mov ax, [tk_vcy]
+    sub ax, bp
+    dec ax
+    mov bx, [tk_vcy]
+    add bx, bp
+    inc bx
+    mov cx, [tk_vcx]
+    sub cx, di
+    dec cx
+    mov dx, [tk_vcx]
+    add dx, di
+    inc dx
+    mov si, tk_tmr + 8
+    call tk_tmreg
+    ; the lives: tk_livesbar's origins, and tk_t_life's +-6 by -4
+    mov ax, 4
+    call tk_hscaley
+    mov bp, ax
+    mov ax, 6
+    call tk_hscalex
+    mov di, ax
+    mov ax, [tk_txy]
+    add ax, 26
+    sub ax, bp
+    dec ax
+    mov bx, [tk_txy]
+    add bx, 27
+    mov cx, [tk_txx]
+    add cx, 24
+    sub cx, di
+    dec cx
+    mov dx, [tk_txx]
+    add dx, 24 + 18 * (TK_LIVES - 1)
+    add dx, di
+    inc dx
+    mov si, tk_tmr + 16
+    call tk_tmreg
+    ; the scores: two lines of twelve cells at txx/txy
+    mov ax, [tk_txy]
+    mov bx, ax
+    add bx, 18
+    mov cx, [tk_txx]
+    mov dx, cx
+    add dx, 12 * 8 - 1
+    mov si, tk_tmr + 24
+    call tk_tmreg
+    ; ENEMY IN RANGE: fourteen cells at x = 8, four rows under the dial's centre
+    mov ax, [tk_rcy]
+    add ax, 4
+    mov bx, ax
+    add bx, 8
+    mov cx, 8
+    mov dx, 8 + 14 * 8 - 1
+    mov si, tk_tmr + 32
+    call tk_tmreg
+    ; the crack: tk_t_crack reaches -58..72 down and -150..132 across
+    mov ax, 58
+    call tk_hscaley
+    mov bp, ax
+    mov ax, 72
+    call tk_hscaley
+    mov bx, [tk_vcy]
+    add bx, ax
+    inc bx
+    mov ax, [tk_vcy]
+    sub ax, bp
+    dec ax
+    push ax
+    push bx
+    mov ax, 150
+    call tk_hscalex
+    mov bp, ax
+    mov ax, 132
+    call tk_hscalex
+    mov dx, [tk_vcx]
+    add dx, ax
+    inc dx
+    mov cx, [tk_vcx]
+    sub cx, bp
+    dec cx
+    pop bx
+    pop ax
+    mov si, tk_tmr + 40
+    call tk_tmreg
+    ; the ridge's band (85.3.8): the tallest peak the table holds, scaled,
+    ; above the horizon, the whole width - for the matrix only
+    mov ax, TK_RIDGEPK              ; tkridge.inc's tallest, assembled
+    mul word [tk_ridgek]
+    mov al, ah                      ; AX = the tallest peak in rows
+    mov ah, dl
+    mov bx, [tk_vcy]
+    inc bx
+    mov dx, bx
+    sub dx, ax
+    sub dx, 2
+    mov ax, dx                      ; AX = row0, BX = row1
+    xor cx, cx
+    mov dx, [tk_vw]
+    dec dx
+    mov si, tk_tmr + 48
+    call tk_tmreg
+    mov ax, [tk_tmr + 48]           ; THE BAND'S OWN SPAN ARRAYS (85.3.9): two
+    shl ax, 1                       ; bases that put row0 at their first entry,
+    mov bx, tk_spans2               ; so an absolute row still indexes them
+    sub bx, ax
+    mov [tk_rb2], bx
+    mov bx, tk_sprdg
+    sub bx, ax
+    mov [tk_rbd], bx
+    jmp tk_tmoverlap
 
 ; =============================================================================
 ; Text in a foreign mode (SPEC.md 85.7)
@@ -2035,24 +2976,14 @@ tk_glyph:
     pop cx
 
     push cx                         ; --- the span rows and the address -----
-    push dx
     mov bx, cx
-    mov cl, 3
-    cmp byte [tk_back], TKB_HERC
-    je .k
-    mov cl, 2
-.k:
-    shr bx, cl
+    mov cl, [tk_kshift]             ; 3 on Hercules, where a cell is one byte,
+    shr bx, cl                      ; and 2 on the two where it is two
     mov [tk_gcol], bx               ; the first byte of every row
-    mov al, 1
-    cmp byte [tk_back], TKB_HERC
-    je .w
-    mov al, 2
-.w:
+    mov al, 3
+    sub al, cl
     add bl, al
-    dec bl
     mov [tk_gcol2], bx              ; ...and the last
-    pop dx
     pop cx
 
     push cx
@@ -2060,32 +2991,24 @@ tk_glyph:
     shl bx, 1
     add bx, [tk_spcur]
     mov cx, 8
-    mov ax, [tk_gcol]
+    mov al, [tk_gcol]               ; AL = the first byte, AH = the last
+    mov ah, [tk_gcol2]
 .sp:
     cmp [bx], al
     jbe .s1
     mov [bx], al
 .s1:
-    push ax
-    mov ax, [tk_gcol2]
-    cmp [bx+1], al
+    cmp [bx+1], ah
     jae .s2
-    mov [bx+1], al
+    mov [bx+1], ah
 .s2:
-    pop ax
     add bx, 2
     loop .sp
     pop cx
 
-    mov ax, dx                      ; DI = tbase + y*80 + the first byte
-    push cx
-    mov cl, 4
-    shl ax, cl
-    mov di, ax
-    shl ax, 1
-    shl ax, 1
-    add di, ax
-    pop cx
+    mov di, dx                      ; DI = tbase + y*80 + the first byte
+    shl di, 1
+    mov di, [tk_rowoff + di]
     add di, [tk_tbase]
     add di, [tk_gcol]
     mov es, [tk_tseg]
@@ -2178,48 +3101,11 @@ tk_glyph_modex:
     ret
 
 ; -----------------------------------------------------------------------------
-; tk_utoa - DX:AX in decimal at ES... no: at DS:DI, NUL-terminated
+; dec_u32 - DX:AX in decimal at DS:DI, NUL-terminated (apps/os88dec.inc)
 ; tk_strlen - SI = string; out CX = its length
 ; -----------------------------------------------------------------------------
-tk_utoa:
-    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in BP
-    push ax
-    push bx
-    push dx
-    push si
-    push di
-    push bp
-    xor bp, bp
-    mov bx, 10
-.d:
-    push ax
-    mov ax, dx
-    xor dx, dx
-    div bx                          ; AX = the high quotient
-    mov si, ax
-    pop ax
-    div bx                          ; AX = the low quotient, DX = the digit
-    push dx
-    inc bp
-    mov dx, si
-    mov si, ax
-    or si, dx
-    jnz .d
-.p:
-    pop ax
-    add al, '0'
-    mov [di], al
-    inc di
-    dec bp
-    jnz .p
-    mov byte [di], 0
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop bx
-    pop ax
-    ret
+%define DEC_U32                     ; dec_u32 (SPEC.md 20.5.2) was tk_utoa
+%include "os88dec.inc"
 
 tk_strlen:
     push si
@@ -2276,56 +3162,57 @@ tk_rimpoints:
 ; in 320x200 units, scaled to the live viewport by tk_drawtab. 0x7FFF ends one.
 ; =============================================================================
 tk_t_sight:                         ; the arcade's gunsight: two stalks and a
-    dw    0, -34,    0, -12         ; bracket either side of the point of aim
-    dw    0,  12,    0,  34
-    dw  -46, -10,  -34, -10
-    dw  -34, -10,  -34,  10
-    dw  -46,  10,  -34,  10
-    dw   46, -10,   34, -10
-    dw   34, -10,   34,  10
-    dw   46,  10,   34,  10
-    dw 0x7FFF
+    db    0, -34,    0, -12         ; bracket either side of the point of aim
+    db    0,  12,    0,  34
+    db  -46, -10,  -34, -10
+    db  -34, -10,  -34,  10
+    db  -46,  10,  -34,  10
+    db   46, -10,   34, -10
+    db   34, -10,   34,  10
+    db   46,  10,   34,  10
+    db TK_TEND
 
 tk_t_lock:                          ; ...and CLOSED on a target (85.6.5.7).
-    dw    0, -34,    0, -14         ; EIGHT SEGMENTS, the same eight, of the
-    dw    0,  14,    0,  34         ; same lengths - so the sight snapping shut
-    dw  -(TK_BOXPX+12), -10,  -TK_BOXPX, -10        ; is free: tk_drawtab draws
-    dw  -TK_BOXPX, -10,  -TK_BOXPX,  10             ; the identical number of
-    dw  -(TK_BOXPX+12),  10,  -TK_BOXPX,  10        ; identical-length runs and
-    dw   TK_BOXPX+12, -10,   TK_BOXPX, -10          ; the frame a lock lands in
-    dw   TK_BOXPX, -10,   TK_BOXPX,  10             ; costs what every other
-    dw   TK_BOXPX+12,  10,   TK_BOXPX,  10          ; frame costs
-    dw 0x7FFF                       ; THE INNER EDGE IS TK_BOXPX AND NOT A
+    db    0, -34,    0, -14         ; EIGHT SEGMENTS, the same eight, of the
+    db    0,  14,    0,  34         ; same lengths - so the sight snapping shut
+    db  -(TK_BOXPX+12), -10,  -TK_BOXPX, -10        ; is free: tk_drawtab draws
+    db  -TK_BOXPX, -10,  -TK_BOXPX,  10             ; the identical number of
+    db  -(TK_BOXPX+12),  10,  -TK_BOXPX,  10        ; identical-length runs and
+    db   TK_BOXPX+12, -10,   TK_BOXPX, -10          ; the frame a lock lands in
+    db   TK_BOXPX, -10,   TK_BOXPX,  10             ; costs what every other
+    db   TK_BOXPX+12,  10,   TK_BOXPX,  10          ; frame costs
+    db TK_TEND                      ; THE INNER EDGE IS TK_BOXPX AND NOT A
                                     ; DRAWING CHOICE: it is the box the gun
                                     ; corrects inside, derived in tank.asm and
                                     ; asserted against TK_BOXQ there, so what
                                     ; the player is told to aim inside is the
                                     ; same number the gun tests
 
-tk_t_crack:                         ; the glass, when they get you first
-    dw    0,   0,  -40, -30
-    dw  -40, -30,  -92, -18
-    dw  -92, -18, -150, -58
-    dw    0,   0,   36, -46
-    dw   36, -46,   62, -12
-    dw   62, -12,  132, -42
-    dw    0,   0,  -26,  42
-    dw  -26,  42,  -72,  72
-    dw    0,   0,   30,  52
-    dw   30,  52,   92,  44
-    dw 0x7FFF
+%define TKH(a, b, c, d) (a) // 2, (b) // 2, (c) // 2, (d) // 2
+tk_t_crack:                         ; the glass, when they get you first - HALF
+    db TKH(    0,   0,  -40, -30)   ; sized, every coordinate even, and drawn
+    db TKH(  -40, -30,  -92, -18)   ; at twice the scale (tk_crackdraw)
+    db TKH(  -92, -18, -150, -58)
+    db TKH(    0,   0,   36, -46)
+    db TKH(   36, -46,   62, -12)
+    db TKH(   62, -12,  132, -42)
+    db TKH(    0,   0,  -26,  42)
+    db TKH(  -26,  42,  -72,  72)
+    db TKH(    0,   0,   30,  52)
+    db TKH(   30,  52,   92,  44)
+    db TK_TEND
 
 tk_t_blip:
-    dw   -3,   0,    3,   0
-    dw    0,  -3,    0,   3
-    dw 0x7FFF
+    db   -3,   0,    3,   0
+    db    0,  -3,    0,   3
+    db TK_TEND
 
 tk_t_life:                          ; a tank, four pixels tall
-    dw   -6,   0,    6,   0
-    dw   -6,   0,   -6,  -4
-    dw    6,   0,    6,  -4
-    dw   -3,  -4,    3,  -4
-    dw 0x7FFF
+    db   -6,   0,    6,   0
+    db   -6,   0,   -6,  -4
+    db    6,   0,    6,  -4
+    db   -3,  -4,    3,  -4
+    db TK_TEND
 
 tk_nibtabs:
 %include "tknib.inc"
@@ -2417,8 +3304,9 @@ tk_golets:
     mov si, tk_goseg
     xor bp, bp
 .seg:
-    cmp byte [si], 0FFh
-    je .out
+    cmp bp, TK_GONSEG               ; BP is the segment's number anyway, and a
+    je .out                         ; register compare is cheaper than a
+                                    ; terminator byte read (tkover.inc)
     call tk_gooff                   ; BP's own direction and distance, scaled
     mov ax, [si]                    ; by what is left of the journey
     call tk_gopt
@@ -2432,7 +3320,11 @@ tk_golets:
     mov bx, [tk_ey1]
     mov cx, [tk_ex2]
     mov dx, [tk_ey2]
+    push si                         ; tk_seg keeps nothing (SPEC.md 85.3.4)
+    push bp
     call tk_seg
+    pop bp
+    pop si
     add si, 4
     inc bp
     jmp short .seg
@@ -2465,12 +3357,14 @@ tk_gohalo:
     mov si, tk_haloout
 .go:
     mov [tk_hset], si
-    mov al, TKI_MASK                ; not a colour: every bit of one pixel
-    call tk_setink
-    mov ax, [tk_lineproc]
-    mov [tk_lsave], ax
-    mov ax, [tk_elineproc]
-    mov [tk_lineproc], ax
+    mov al, TKI_MASK                ; not a colour: every bit of one pixel, or
+    call tk_setink                  ; on Mode X the ink 0 its STORE erases with
+    cmp byte [tk_back], TKB_MODEX
+    je .walks
+    not word [tk_ink8]              ; ...and on the two that OR, its complement:
+    not word [tk_pat3]              ; ink8, pat0, pat3 and inkpat become holes
+    call tk_eflip                   ; in bytes of ones, and the walks ROTATE and
+.walks:                             ; AND them in (SPEC.md 85.8.1.1)
 .pass:
     mov si, [tk_hset]
     mov ax, [si]
@@ -2483,9 +3377,8 @@ tk_gohalo:
     call tk_golets
     jmp short .pass
 .done:
-    mov ax, [tk_lsave]
-    mov [tk_lineproc], ax
-.out:
+    call tk_eflip                   ; the drawing bytes back: the swap undoes
+.out:                               ; itself, and Mode X has nothing to swap
     pop si
     ret
 
@@ -2508,6 +3401,11 @@ tk_haloout:
 ; segments arrive from forty places with nothing stored: 37 is coprime with
 ; 256 so the headings never repeat, and the distance walks a different cycle
 ; so two segments on the same bearing still start apart.
+;
+; LANDED IS NO OFFSET, and it is the frame that pays most for one: the settled
+; GAME OVER draws the forty segments five times over (85.8.1's four halo
+; passes and the letters), every one of them at [tk_goq] = 0, and the bearing,
+; the three multiplies and the two products were all to arrive at zero.
 ; -----------------------------------------------------------------------------
 tk_gooff:
     push ax
@@ -2515,12 +3413,15 @@ tk_gooff:
     push cx
     push dx
     push si
+    mov ax, [tk_goq]
+    or ax, ax
+    jz .flat
     mov ax, bp
     mov bl, 37
     mul bl
-    call tk_sincos                  ; AX = sin, BX = cos
-    mov [tk_osin], ax
-    mov [tk_ocos], bx
+    call tk_sincos                  ; AX = sin, BX = cos - kept in registers,
+    mov cx, ax                      ; CX = sin, where they went through memory
+    mov si, bx                      ; SI = cos, and came back twice
     mov ax, bp                      ; 200 + (53n mod 128) units away
     mov bl, 53
     mul bl
@@ -2529,14 +3430,16 @@ tk_gooff:
     mul word [tk_goq]               ; ...of which this much is left
     mov al, ah
     mov ah, dl
-    mov bx, ax
-    mov [tk_gok], bx
-    mov ax, [tk_ocos]
+    mov bx, ax                      ; BX = k, which MUL14 keeps
+    mov ax, si
     MUL14
     mov [tk_gdx], ax
-    mov ax, [tk_osin]
-    mov bx, [tk_gok]
+    mov ax, cx
     MUL14
+    jmp short .gdy
+.flat:
+    mov [tk_gdx], ax                ; AX = 0
+.gdy:
     mov [tk_gdy], ax
     pop si
     pop dx
@@ -2611,7 +3514,7 @@ tk_goprompt:
     mov ax, [tk_score]
     mov dx, [tk_score+2]
     mov di, tk_numbuf
-    call tk_utoa
+    call dec_u32
     mov si, tk_s_score              ; "SCORE" and the number, as one run
     mov di, tk_wbuf
     call tk_strcpy

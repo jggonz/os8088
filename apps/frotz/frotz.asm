@@ -15,9 +15,9 @@
 ;
 ; What it takes from Frotz is the SHAPE: Windows Frotz is a real windowed
 ; application with menus, a status line, styles, sound and cover art, not a
-; terminal in a box. docs/FROTZ-PLAN.md is the design record.
+; terminal in a box. docs/plans/completed/FROTZ-PLAN.md is the design record.
 ;
-; THE THREE DECISIONS THAT SHAPE EVERYTHING (docs/FROTZ-PLAN.md 3, 4, 5):
+; THE THREE DECISIONS THAT SHAPE EVERYTHING (docs/plans/completed/FROTZ-PLAN.md 3, 4, 5):
 ;
 ;  - **The whole story is resident. There is no paging.** int 13h costs ~400ms
 ;    on the target machine whatever it moves (PERFORMANCE.md), and one turn of
@@ -60,6 +60,20 @@
 %define SB_RATE 0               ; RATE 0 (13.10.5.4): a scrollback step
 %endif                          ; re-letters rows out of the ring
 ZF_SBRATE   equ SB_RATE
+; ...AND A 286 GETS 2 (13.10.5.4.1): the ring's rows are re-lettered, and a
+; machine three to four times the target's can afford them nine times a
+; second where the target cannot afford them at all.
+%ifndef SB_RATE286
+%define SB_RATE286 2
+%endif
+ZF_SBRATE286 equ SB_RATE286
+; ...AND THE PAUSE COMMIT (13.10.5.4.2): a one-shot re-armed on every movement
+; fires only after this many ticks of stillness, which reaches a bar the RATE
+; cannot. No tier pair - half a second is half a second on any machine.
+%ifndef SB_IDLE
+%define SB_IDLE 9
+%endif
+ZF_SBIDLE   equ SB_IDLE
 %endif
 
     OS88_HEADER 'FROTZ', zf_entry, 3, OS88_STACK_384    ; bit0 = icon, bit1 = association block
@@ -214,11 +228,19 @@ zf_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr, CF=1 = window table full
     jc .out
     mov [zf_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
 
     mov si, zf_menus
     call OSAPI_MENU_SET             ; preserves every register AND the flags
-    mov si, zf_about
-    call OSAPI_ABOUT_SET
+    mov si, zf_abouth               ; the HANDLER (SPEC.md 12.2). This passed the
+    call OSAPI_ABOUT_SET            ; string 'Frotz' for as long as the app had
+                                    ; existed, so About Frotz far-called five
+                                    ; letters as code
     mov al, 1
     call OSAPI_WM_SIZABLE           ; re-wrap on drag
     push cx                         ; ...and the floor is DECLARED now (SPEC.md
@@ -233,6 +255,9 @@ zf_entry:
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
+    mov ax, zf_ontimer              ; 13.10.5.4.2's PAUSE commit - FIRST of the
+    call OSAPI_WM_ONTIMER           ; three, because the `sbb al, al` below
+                                    ; captures OSAPI_WM_ONDRAG's OWN CF
     mov ax, zf_onup                 ; SPEC.md 13.10.6.4: the THUMB's alone.
     call OSAPI_WM_ONMOUSEUP         ; zwin6.inc's v6 input poll owns a gesture
     mov ax, zf_ondrag               ; that cannot be live at the same time as a
@@ -361,6 +386,32 @@ zf_copyname:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; zf_pop7 .. zf_pop3 - ONE shared epilogue for the procs that push in the
+; house order (ax, bx, cx, dx, si, di, es) and pop it back: a proc that saved
+; the last N of those ends `jmp zf_popN` instead of N pops and a ret. Forty-odd
+; procs end this way, so the ladder is written once instead of forty times.
+;
+; A JUMP, NOT A CALL: it costs no stack, so no worker's deepest chain gets a
+; byte deeper (SPEC.md 8.7.4), and pops do not touch the flags, so a CF the
+; proc returns survives it. It costs a jump (15 clocks) on the way out, which
+; is why ONLY THE COLD PROCS take it - the dispatch, the memory reads, the
+; text decoder and the per-character output keep their own pops.
+; -----------------------------------------------------------------------------
+zf_pop7:
+    pop es
+zf_pop6:
+    pop di
+zf_pop5:
+    pop si
+zf_pop4:
+    pop dx
+zf_pop3:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; zf_paint - W_PAINT (SPEC.md 11)
 ; in:  SI = window ptr; the gfx lock is HELD and the content is already white
@@ -372,7 +423,7 @@ zf_copyname:
 ;
 ;   no story        the splash: what this is, and how to open one
 ;   loading         a one-line notice; zi_load owns the screen
-;   running         zw_paint / zw6_paint repaints from the scrollback
+;   running         zw_paint repaints from the scrollback
 ; =============================================================================
 ; -----------------------------------------------------------------------------
 ; zf_onwake - W_ONWAKE: open the story we were launched on (SPEC.md 54.10/74.1)
@@ -433,11 +484,7 @@ zf_paint:
 .done:
     pop si
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zf_hire - make sure this instance owns its worker, and say nothing when it
@@ -495,6 +542,8 @@ zf_onkey:
     push dx
     push di
 
+    call zf_unabout                 ; a key that takes the About card down
+    jc .out                         ; does nothing else
     cmp byte [zf_state], ZFS_RUN
     jne .out
 
@@ -507,10 +556,11 @@ zf_onkey:
 
     call zi_putkey                  ; into the ring; the worker consumes it
     call zi_service                 ; a posted @save/@restore, if any
-    call zi_script_flush            ; and SCRIPT.TXT catches up. The worker
-                                    ; buffers the transcript because it may not
-                                    ; touch a file slot; this is the UI task,
-                                    ; so this is where it reaches the disk
+    cmp al, 13                      ; and on RETURN - once a command, not once
+    jne .out                        ; a letter - SCRIPT.TXT catches up. The
+    call zi_script_flush            ; worker buffers the transcript because it
+                                    ; may not touch a file slot; this is the UI
+                                    ; task, so this is where it reaches the disk
     jmp .out
 .pgup:
     mov ax, -1
@@ -521,11 +571,7 @@ zf_onkey:
     call zw_scrollpage
 .out:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; =============================================================================
 ; zf_onclick - W_ONCLICK
@@ -539,6 +585,8 @@ zf_onclick:
     push bx
     push cx
     push dx
+    call zf_unabout                 ; ...and so does a click
+    jc .out
     cmp byte [zf_state], ZFS_RUN
     jne .out
 %ifdef OS88UI_SBDRAG
@@ -553,11 +601,7 @@ zf_onclick:
 %endif
     call zw_click
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 %ifdef OS88UI_SBDRAG
 ; -----------------------------------------------------------------------------
@@ -575,7 +619,21 @@ zf_ondrag:
     push dx
     cmp byte [zf_state], ZFS_RUN
     jne zf_sbd_out
+    call os88ui_sbdragging          ; 13.10.5.4.2: asked HERE as well as inside
+    jc zf_sbd_out                   ; zw_sbtrack, because the timer wants the
+    mov bx, si                      ; window and only a LIVE drag may arm one
+    mov ax, ZF_SBIDLE               ; - every movement pushes the one-shot out,
+    call OSAPI_WM_TIMER             ; which is what makes it an idle detector
     call zw_sbtrack                 ; DX is still the pointer's y
+    jmp short zf_sbd_out
+zf_ontimer:                         ; the thumb has been STILL for ZF_SBIDLE
+    push ax                         ; ticks; 13.9 disarms before this runs and
+    push bx                         ; this does not re-arm, so a pause is ONE
+    push cx                         ; commit however long it lasts
+    push dx
+    cmp byte [zf_state], ZFS_RUN
+    jne zf_sbd_out
+    call zw_sbpause
     jmp short zf_sbd_out
 zf_onup:
     push ax
@@ -584,13 +642,12 @@ zf_onup:
     push dx
     cmp byte [zf_state], ZFS_RUN
     jne zf_sbd_out
+    mov bx, si                      ; the pause timer must not outlive the
+    xor ax, ax                      ; gesture it belongs to (13.10.5.4.2)
+    call OSAPI_WM_TIMER
     call zw_sbcommit                ; the release COMMITS, unconditionally
 zf_sbd_out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 %endif
 
 ; =============================================================================
@@ -655,23 +712,79 @@ zf_oncmd:
 .open:
     call zi_open_dlg
     jmp .out
-.save:
-    mov byte [zf_req], ZREQ_SAVE    ; the menu can start one too, not just @save
-    call zi_service
-    jmp .out
+.save:                              ; ONLY the story's own @save: the image
+    cmp byte [zf_req], ZREQ_SAVE    ; the dialog writes is what @save staged,
+    jne .out                        ; and at any other moment there is none -
+    call zi_service                 ; the item is greyed then (zf_menufix),
+    jmp .out                        ; and this answers a pick that raced it
 .restore:
-    mov byte [zf_req], ZREQ_RESTORE
+    cmp byte [zf_req], ZREQ_RESTORE ; ...and the same for @restore, which is
+    jne .out                        ; the only thing that applies what is read
     call zi_service
     jmp .out
 .script:
-    xor byte [zf_script], 1
-    call zi_script_flush            ; turning it OFF must land what is buffered;
-                                    ; turning it on costs one empty write
+    cmp byte [zf_state], ZFS_RUN    ; stream 2 needs a story to write into the
+    jne .out                        ; header of, and a buffer to fill: both
+    cmp word [zi_scrseg], 0         ; greyed otherwise (zf_menufix)
+    je .out
+    xor byte [zt_s2on], 1           ; THE stream 2 the story's own SCRIPT and
+    call zt_flag2                   ; @output_stream turn on - Flags 2 bit 0
+                                    ; and the item's label follow it
+    call zi_script_flush            ; turning it OFF must land what is buffered
+                                    ; (and with nothing new it writes nothing)
 .out:
     pop di
     pop dx
     pop cx
     pop bx
+    ret
+
+; =============================================================================
+; zf_menufix - point the File and Story items at what is TRUE now (SPEC.md 47)
+; in:  nothing; out: nothing; preserves every register
+;
+; Save Game and Restore Game act on a save the STORY is in the middle of: the
+; worker stages @save's image (or waits to parse @restore's) and posts
+; [zf_req], and the dialog is the second half of that. At any other moment
+; there is nothing to write and nothing would apply what was read, so the
+; items are greyed - with what to do instead, which the grey cannot say.
+; Transcript is stream 2 itself, labelled with what picking it will do, and
+; greyed with no story or no buffer.
+;
+; Callable from EITHER task: it reads bytes and stores near words in our own
+; image, and the kernel reads the strings only when the pull-down is drawn.
+; Called wherever one of the three facts changes: zi_request (the worker, at
+; the post and again at the answer), zt_f2sync (stream 2, from the menu, an
+; opcode or the story writing Flags 2 - every one of them is a Flags 2 store)
+; and zi_load.
+; -----------------------------------------------------------------------------
+zf_menufix:
+    push ax
+    mov ax, zf_it_save0
+    cmp byte [zf_req], ZREQ_SAVE
+    jne .s
+    mov ax, zf_it_save
+.s:
+    mov [zf_i_file + 2 * ZF_F_SAVE], ax
+    mov ax, zf_it_rest0
+    cmp byte [zf_req], ZREQ_RESTORE
+    jne .r
+    mov ax, zf_it_rest
+.r:
+    mov [zf_i_file + 2 * ZF_F_RESTORE], ax
+    mov ax, zf_it_script0           ; no story
+    cmp byte [zf_state], ZFS_RUN
+    jne .t
+    mov ax, zf_it_scrnr             ; a story, but no buffer to write
+    cmp word [zi_scrseg], 0
+    je .t
+    mov ax, zf_it_script            ; Start
+    cmp byte [zt_s2on], 0
+    je .t
+    mov ax, zf_it_scroff            ; Stop
+.t:
+    mov [zf_i_story + 2 * ZF_S_SCRIPT], ax
+    pop ax
     ret
 
 ; =============================================================================
@@ -713,11 +826,24 @@ zf_abouth:
     jmp .loop
 .done:
     mov byte [zf_showabout], 1      ; the next key or click repaints the story
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp zf_pop5
+
+; -----------------------------------------------------------------------------
+; zf_unabout - take the About card down, if it is up
+; in:  SI = window ptr; gfx lock held (a key or click callback)
+; out: CF = 1 it was up, and this event was spent repainting what it covered;
+;      clobbers AL
+; -----------------------------------------------------------------------------
+zf_unabout:
+    cmp byte [zf_showabout], 0      ; CF = 0 whatever the byte is
+    je .out
+    mov byte [zf_showabout], 0
+    mov al, CWHITE                  ; zf_paint wants the content white, which
+    call OSAPI_SET_COLOR            ; is what the kernel hands a W_PAINT
+    call zw_clear
+    call zf_paint
+    stc
+.out:
     ret
 
 ; =============================================================================
@@ -752,12 +878,16 @@ zf_splash:
     add dx, ZF_LEAD
     jmp .loop
 .done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov si, [zf_why]                ; ...and why the last story did not open,
+    or si, si                       ; under the lines that say what to do -
+    jz .out                         ; so a repaint keeps it, and it is never
+    add dx, ZF_LEAD                 ; hard against the title bar or drawn
+    mov cx, bx                      ; into a text window with no story in it
+    add cx, 12
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+.out:
+    jmp zf_pop5
 
 ; =============================================================================
 ; Data: the window template, the menu set, the strings
@@ -779,15 +909,19 @@ ZF_S_SCRIPT  equ 0
 zf_name:     db 'Frotz', 0
 zf_ttl:      db 'Frotz', 0
 zf_m_file:   db 'File', 0
-zf_i_file:   dw zf_it_open, zf_it_save, zf_it_rest
+zf_i_file:   dw zf_it_open, zf_it_save0, zf_it_rest0  ; zf_menufix's
 zf_it_open:  db 'Open Story...', 0
 zf_it_save:  db 'Save Game...', 0
 zf_it_rest:  db 'Restore Game...', 0
+zf_it_save0: db MENU_DIS, 'Save Game (type SAVE)', 0
+zf_it_rest0: db MENU_DIS, 'Restore (type RESTORE)', 0
 zf_m_story:  db 'Story', 0
-zf_i_story:  dw zf_it_script
-zf_it_script: db 'Transcript', 0
+zf_i_story:  dw zf_it_script0
+zf_it_script: db 'Start Transcript', 0
+zf_it_scroff: db 'Stop Transcript', 0
+zf_it_script0: db MENU_DIS, 'Start Transcript', 0
+zf_it_scrnr: db MENU_DIS, 'Transcript (NoRam)', 0
 
-zf_about:    db 'Frotz', 0
 
 zf_abt_lines:
     dw zf_a1, zf_a2, zf_a3, zf_a4, zf_a5, zf_a6, zf_a7, zf_a8, 0

@@ -33,6 +33,7 @@ the VRAM route rather than the rendered one, and would be answering a
 different question (39.3's banking) at the same time.
 """
 import argparse
+import tempfile
 import os
 import struct
 import sys
@@ -44,11 +45,77 @@ sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
 import dispapps                                              # noqa: E402
 
+# The two primitives a canvas can arrive through: gfx_blit4 on a colour
+# adapter, gfx_blit1 on a one-bit one since SPEC.md 42.23 made Paint's canvas
+# match the screen. `gfx_blit1_x` is the BODY - the thunk is a far shim and
+# the arguments are the caller's at both, in the same registers.
+BLITS = ("gfx_blit4", "gfx_blit1_x")
+
 if os.environ.get("NOPLANE"):
     os88sym.default_defines("NOPLANE")      # the knob kernel is a DIFFERENT
                                             # kernel and every address here
                                             # has to be asked for with it
 S = os88sym.linear
+
+
+def wide_blit(m, gesture, wide, syms=BLITS, limit=300.0, regs=False,
+              at_hit=None):
+    """Run `gesture` and answer the FIRST blit at least `wide` pixels across.
+
+        hit = blitpair.wide_blit(m, lambda: mo.dblclick(rx, ry), iw)
+        ox, oy = hit[0], hit[1]          # ...where Paint put its canvas
+
+    Answers `(ax, bx, cx, dx)` - the primitive's own arguments, so the origin
+    and the size both come out of the call rather than out of a guess - or
+    None if no such blit arrived. `regs=True` answers the whole register set
+    instead, for a caller that wants more than the four.
+
+    `at_hit(m, regs)` is called AT the matching stop, before the guest is
+    resumed, for anything that is only readable there. Three rows need it and
+    all three want the same thing: Paint's own segment, off the API stub's
+    saved DS at `[ss:sp+2]`, which is the one place the harness is stopped
+    inside a call Paint made. A word on the guest's stack is gone a
+    microsecond after the resume, so this cannot be done by the caller
+    afterwards - `wide_blit` returning the registers is not enough.
+
+    WHY IT IS HERE AND NOT COPIED. Five rows carried this same twelve lines
+    (`paintdraw`, `paintfill`, `paintsu`, `blitpair`, and `paintrow` in a
+    variant), each spelled slightly differently, and every one of them had
+    the same two properties: it armed a breakpoint and then drove the mouse
+    with nothing pumping it, and it took the FIRST wide enough call and
+    stopped caring. The first of those is why it needed converting at all -
+    a guest stopped at a breakpoint publishes no `mouse_btn`, so os88mouse
+    cannot prove the click it is making, and these worked only because the
+    click is decoded before the blit is reached. The second is the reason
+    the disarm below is not an optimisation: `gfx_blit4` on a picture that
+    dithers is one call per RUN, so leaving it armed after the answer is in
+    stops the guest thousands of times for nothing.
+
+    WHY THE HEIGHT IS NOT ASKED FOR. The load path emits one `iw x 1` call
+    per row through this same primitive, so which shape arrives first depends
+    on the picture and the adapter. Requiring both dimensions found no such
+    call at all, and asserting the height as the canvas's reported "the
+    canvas is 466x1 and the picture 466x110 - Paint cropped it" about a Paint
+    that had cropped nothing. Ask the ORIGIN here and the size from Paint.
+    """
+    found = []
+
+    def grab(mm, rec):
+        r = rec["regs"]
+        if not found and r["cx"] >= wide:
+            if at_hit is not None:
+                at_hit(mm, r)           # ...whatever is only true HERE
+            found.append(r if regs else (r["ax"], r["bx"], r["cx"], r["dx"]))
+            mm.breakpoints([])          # ...and let the rest run at speed
+        return None
+
+    with os88marty.bp_trace(m, *syms, regs=True, on_hit=grab) as tr:
+        gesture()
+        # STAY IN THE BLOCK: the gesture returns when the click is decoded and
+        # the launch it starts has not begun. See BpTrace.until.
+        tr.until(lambda: bool(found), "a blit at least %d wide" % wide,
+                 limit=limit, required=False)
+    return found[0] if found else None
 
 
 def gif_pixels(path):
@@ -108,26 +175,41 @@ def gif_pixels(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/blitpair.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/blitpair.img")
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: SPEC.md 42.23.6's "
                          "colour derivation of build/OS8088.GIF)")
     a = ap.parse_args()
 
-    # SPEC.md 42.23.6's colour derivation, and THE ROW IS LOOKED UP BY THE
-    # NAME IT WAS GIVEN rather than by a constant. tests/paintpack.py builds
-    # the disk itself and runs this file as a subprocess, so a name hardcoded
-    # here disagrees with whatever the caller put on it - which is what
-    # happened: `'OS8088.GIF' is not in this folder - it lists
+    # **THE TWO-COLOUR LOGO, not SPEC.md 42.23.6's colour derivation**, and
+    # this row is the one place in the paint family where that distinction
+    # decides the answer. THE ROW IS STILL LOOKED UP BY THE NAME IT WAS GIVEN
+    # rather than by a constant, which is the other half of the same history:
+    # tests/paintpack.py builds the disk itself and runs this file as a
+    # subprocess, so a name hardcoded here disagrees with whatever the caller
+    # put on it - `'OS8088.GIF' is not in this folder - it lists
     # ['..', 'OS88COL.GIF']`, out of a disk paintpack had just built
-    # correctly. The pixels are identical either way (two unused colour-table
-    # entries), so this file's own claim - that the logo is two colours, so
-    # 39.4 sends every pixel to a solid class - is untouched.
+    # correctly.
+    #
+    # The fix for THAT was to default to `dispapps.colour_gif()`, on the
+    # reasoning that *"the pixels are identical either way (two unused
+    # colour-table entries)"*. The pixel INDICES are; the colours are not.
+    # colour_gif prepends its two entries deliberately - it has to, or the
+    # file stays one bit deep and Paint takes a 1bpp canvas, which is the
+    # planar rows' whole subject - so every pixel of the derived file is drawn
+    # in 0xAA0000 or 0x0000AA, and SPEC.md 39.4 reduces BOTH to the same class
+    # on a 1bpp adapter. This row then compared a solid canvas against an
+    # alternating file and read 20,327 differing pixels of 51,260, which is
+    # indistinguishable from the decoder bug it exists to catch and was filed
+    # as a pre-existing failure.
+    #
+    # So: the logo itself. It is two colours, 39.4 sends each to a solid
+    # class, and the docstring at the top of this file is true again.
     if a.gif is None:
-        a.gif = dispapps.colour_gif()
+        a.gif = os.path.join(HERE, "..", "build", "OS8088.GIF")
 
-    if a.apps == "/tmp/blitpair.img":
+    if a.apps == tempfile.gettempdir() + "/blitpair.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 
@@ -171,37 +253,50 @@ def main():
         # The geometry is ASKED rather than computed: the canvas x depends on
         # the window template and the adapter, and a rect this test guessed
         # would be a second opinion about where Paint put its picture.
-        m.bp_exec("gfx_blit4")
-        mo.dblclick(rx, ry)
-        # The CANVAS, not a palette swatch or an icon: the first blit as wide
-        # as the picture. Which call that is depends on the adapter and on
-        # whether Paint is holding four planes, so it is asked rather than
-        # assumed.
-        r = None
-        for _ in range(200):
-            if not m.wait_stop(limit=300.0):
-                break
-            r = m.regs()
-            if r["cx"] >= iw:
-                break
-            m.bp_exec("gfx_blit4")
-            m.run()
-            r = None
+        # **EITHER PRIMITIVE** (SPEC.md 5.4.2.5, 42.23). This waited on
+        # `gfx_blit4` alone, and since a one-bit canvas reaches `gfx_blit1`
+        # on a 1bpp adapter that call never comes: the row spent its whole
+        # budget and reported "Paint never blitted a canvas", about a Paint
+        # that had drawn the picture perfectly. The question here is whether
+        # the canvas ARRIVED, not which primitive carried it, and the two
+        # take the same arguments in the same registers - so both are armed
+        # and the first wide enough wins.
+        # WHERE THE CANVAS IS: the first blit as wide as the picture, out of
+        # `wide_blit` above - which is where the twelve lines this used to be
+        # now live, together with the two things they encode and the reason
+        # the click has to be inside a trace.
+        r = wide_blit(m, lambda: mo.dblclick(rx, ry), iw, regs=True)
         if r is None:
-            sys.exit("blitpair: Paint never blitted a canvas through gfx_blit4")
+            sys.exit("blitpair: Paint never blitted a canvas through %s"
+                     % " or ".join(BLITS))
         x, y, bw, bh = r["ax"], r["bx"], r["cx"], r["dx"]
         print("   blit x=%d y=%d w=%d h=%d" % (x, y, bw, bh))
         m.bp_exec()
         m.run()
-        time.sleep(6)
+        # the rest of the load: the drive going quiet here, and the rows it
+        # blits after the first going still in the settle below - this was a
+        # blind six guest seconds in front of that settle
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="the picture to finish loading")
         mo.to(4, 4)
         os88marty.settle(m)
         w, h, fb = m.fbuf(card=0)
+        # **THE CANVAS'S SIZE COMES FROM PAINT**, not from a blit's CX and DX.
+        # SPEC.md 42.6.5 letterboxes a picture the heap cannot hold, and a
+        # cropped canvas compared against a whole file is two different things
+        # - so this has to be asked, and [pt_cw]/[pt_ch] are where Paint keeps
+        # the answer.
+        pseg = pkg[1] if (pkg := dispapps.pkg_seg(m, 0)) else None
+        if pseg is None:
+            sys.exit("blitpair: Paint's window is gone - nothing to ask")
+        cv = dispapps.words(m, pseg, "paint", ("pt_cw", "pt_ch"))
 
-    if (bw, bh) != (iw, ih):
-        sys.exit("blitpair: the canvas is %dx%d and the picture %dx%d - "
-                 "Paint cropped it, so this row is comparing two things"
-                 % (bw, bh, iw, ih))
+    if (cv["pt_cw"], cv["pt_ch"]) != (iw, ih):
+        sys.exit("blitpair: the canvas is %dx%d and the picture %dx%d - Paint "
+                 "letterboxed it (SPEC.md 42.6.5), so this row would be "
+                 "comparing two things"
+                 % (cv["pt_cw"], cv["pt_ch"], iw, ih))
+    bh = ih
     bad = [(c, rw)
            for rw in range(bh) for c in range(bw)
            if (fb[((y + rw) * w + x + c) * 3] < 128) != (px[rw * iw + c] == 1)]

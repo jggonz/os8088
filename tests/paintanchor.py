@@ -32,10 +32,9 @@ wrong rather than merely absent:
             else here would see it.
 """
 import argparse
+import tempfile
 import os
 import sys
-import threading
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -139,32 +138,30 @@ def main(argv):
         before = _grab(m, cx0 + 2, cy0 + 2, v0[0], v0[1])
         if os.environ.get("SHOTS"):
             fw, fh, fb = m.fbuf(card=0)
-            os88marty.write_png_rgb("/tmp/anchor-before.png", fw, fh, fb)
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/anchor-before.png", fw, fh, fb)
 
         wr = dispcp.win_rect(m, S, pw)
         gx, gy = wr[0] + wr[2] - 8, wr[1] + wr[3] - 8
-        rects, done = [], []
-        m.bp_exec(base + pm["pt_blit"])
-        threading.Thread(target=lambda: (
-            time.sleep(1.0),
-            mo.drag(gx, gy, gx - 60, gy - 40),
-            done.append(1)), daemon=True).start()
-        t0, quiet = time.time(), None
-        while time.time() - t0 < 300.0:
-            st = m.status()
-            if st.get("state", "running") != "running":
-                rects.append(tuple(_s16(_bss(m, seg, n)) for n in
-                                   ("pt_rx1", "pt_ry1", "pt_rx2", "pt_ry2")))
-                quiet = time.time()
-                m.run()
-                continue
-            if done and quiet and time.time() - quiet > 4.0:
-                break
-            if done and quiet is None and time.time() - t0 > 40.0:
-                break
-            time.sleep(0.05)
-        m.breakpoints([])
-        m.run()
+        # THE RECT pt_blit WAS HANDED, read at every entry. The value is only
+        # true INSIDE the routine, so it cannot be read from out here - which
+        # is what `on_hit` is for, and why this loop used to be a hand-rolled
+        # pump with the drag on a daemon thread. The drag is ordinary code
+        # now; the daemon is the pump.
+        #
+        # ONE BEHAVIOURAL DIFFERENCE, and it is in this row's favour: the old
+        # loop counted a stop as anything "not running", so `advance` and
+        # `pause` from the driving thread were recorded as pt_blit entries
+        # that never happened - each one appending a rect read at a moment the
+        # routine was not on. bp_trace counts `breakpoint` alone (its own
+        # block comment has the account), so a spurious EMPTY rect can no
+        # longer sneak into the assertion below and pass it.
+        def rect(mm, rec):
+            return tuple(_s16(_bss(m, seg, n)) for n in
+                         ("pt_rx1", "pt_ry1", "pt_rx2", "pt_ry2"))
+
+        with os88marty.bp_trace(m, base + pm["pt_blit"], on_hit=rect) as tr:
+            mo.drag(gx, gy, gx - 60, gy - 40)
+        rects = [h["hit"] for h in tr.hits]
         os88marty.settle(m)
         mo.to(4, 4)
         os88marty.settle(m)
@@ -177,7 +174,7 @@ def main(argv):
         after = _grab(m, cx0 + 2, cy0 + 2, v1[0], v1[1])
         if os.environ.get("SHOTS"):
             fw, fh, fb = m.fbuf(card=0)
-            os88marty.write_png_rgb("/tmp/anchor-after.png", fw, fh, fb)
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/anchor-after.png", fw, fh, fb)
         vac = (_grab(m, cx0 + v1[0] + 8, cy0 + 2, 8, v1[1])
                if v1[0] < v0[0] else None)
         wr1 = dispcp.win_rect(m, S, pw)

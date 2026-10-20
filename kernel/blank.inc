@@ -128,11 +128,10 @@ SSV_BUSY    equ 4               ; may your image be freed? Out: CF = 1 = no,
 ; reads as a decision, rather than as a zero somebody has to go and confirm.
 ; -----------------------------------------------------------------------------
 blk_t0      dw 0                ; [ticks] when the current idle period began
-blk_on      db 0                ; is the desktop off the glass right now? TRUE
-                                ; FOR BOTH ANSWERS - a gated signal and a
-                                ; running animation are the same thing to
-                                ; blk_wake, which is what keeps SPEC.md 64.2's
-                                ; whole input rule one test
+                                ; [blk_on] - is the desktop off the glass
+                                ; right now? - is in viddet.inc, the byte
+                                ; after [spl_live], so fpg_arm asks both in
+                                ; one word (kernel size pass 12)
 blk_act     db 0                ; mou_isr saw a packet; the UI task spends it
 
 ; -----------------------------------------------------------------------------
@@ -148,16 +147,23 @@ blk_act     db 0                ; mou_isr saw a packet; the UI task spends it
 ; [ss_mins] is the one that does work on both: zero disables the whole feature,
 ; animation and blanker alike, and everything else is the idle period.
 ; -----------------------------------------------------------------------------
+; **THE CARRY ARGUMENT ABOVE IS kern_big's** (kernel size pass 13): kern_small
+; reads and writes no SYSTEM.CFG at all (SPEC.md 51.5) and has no saver page,
+; so nothing there ever named these three bytes - its [ss_idle] keeps its
+; resting BLK_IDLE for ever - and they are kern_big's with the rest of ss_pub.
+%ifdef KERN_BIG
 ss_pub:
 ss_modes    db SS_M_ALL         ; which modes the picker may choose from
 ss_secs     db 30               ; seconds one mode runs before another is
                                 ; picked - the whole point of a screen saver
                                 ; being that nothing sits still
 ss_mins     db SS_MINS          ; minutes of idle before it starts; 0 = never
-%ifdef KERN_BIG
 ss_post     db 0                ; the settings window changed something and
                                 ; the UI task owes it work (SPEC.md 79.7)
-%endif
+%else
+            db 0                ; PARITY on kern_small (kernel size pass 13):
+%endif                          ; three bytes out here would leave wm_clip_rows
+                                ; and ui_task at an odd shift
 
 ss_idle     dw BLK_IDLE         ; [ss_mins] in TICKS, which is the unit
                                 ; blk_pass compares in. Derived, by
@@ -244,10 +250,12 @@ ss_row:
 blk_wake:
     push ax                     ; ONE bank, and ONE exit. AX is banked because
     mov ax, [ticks]             ; this routine's contract is flags and nothing
-    mov [blk_t0], ax            ; else: ui.inc calls it mid-keystroke, between
-    xor al, al                  ; int 16h's peek and its fetch, and fsx_restore
-    cmp [blk_on], al            ; from inside its own saved frame. The idle
-    je .out                     ; period restarts here, lit or dark - this is
+    mov [blk_t0], ax            ; else: ui.inc calls it HOLDING THE KEYSTROKE -
+    xor al, al                  ; int 16h has already fetched it (SPEC.md 9.7.1
+    cmp [blk_on], al            ; moved the fetch above this call so the latch's
+    je .out                     ; arm could share it) - and fsx_restore from
+                                ; inside its own saved frame. The idle period
+                                ; restarts here, lit or dark - this is
                                 ; the only place it is set outside boot.
                                 ;
                                 ; AL = 0 IS THREE THINGS AT ONCE: blk_set's
@@ -391,10 +399,20 @@ blk_pass:
 ; THE ANIMATION IS TRIED FIRST AND THE BLANKER IS WHAT HAPPENS WHEN IT CANNOT
 ; RUN (SPEC.md 79.1). Every refusal ss_start_x can answer - no mode ticked, no
 ; system disk, no heap, a missing or malformed SAVER.DRV - arrives here as
-; CF = 1 and falls through to the walk below, which is what this file did
-; before there was an overlay. Nothing is said to the user, because nothing
-; here is the user's to fix and a toast on a machine nobody is sitting at is a
-; message nobody reads (SPEC.md 79.8).
+; CF = 1 and walks from display 0, which is what this file did before there
+; was an overlay. Nothing is said to the user, because nothing here is the
+; user's to fix and a toast on a machine nobody is sitting at is a message
+; nobody reads (SPEC.md 79.8).
+;
+; **AND A SESSION STILL WALKS - IT JUST STARTS AT DISPLAY 1** (SPEC.md
+; 79.1.1). CF = 0 used to return without gating anything, which is right on
+; the one-display machine it was written for and leaves a two-monitor machine
+; with one tube saved and the other showing a frozen desktop until morning -
+; the precise failure the header below this one says the walk exists to
+; prevent. The saver draws on the PRIMARY and only there (it sizes itself from
+; OSAPI_VIDEO, which answers the primary and says so, SPEC.md 39.2.1), so the
+; primary is the one display whose signal has to stay on and every other one
+; is gated exactly as the blanker gates it.
 ;
 ; THE ARROW COMES OFF THE GLASS FOR A SESSION AND NOT FOR A BLANK, and that
 ; asymmetry is the whole difference between the two answers. A gated signal
@@ -413,39 +431,64 @@ blk_pass:
 ; every card but the bracket's for the same reason from the other end.
 ;
 ; No lock is taken and none is needed: this writes I/O ports and never touches
-; a framebuffer, and vid_seq1_blank owns the one access that has to be atomic.
+; a framebuffer, and vid_ac_pal owns the one access that has to be atomic.
 ; -----------------------------------------------------------------------------
 blk_set:
     mov [blk_on], al
-%ifdef KERN_BIG
-    call COLD_SEG:ssf_set       ; the ANIMATION first (SPEC.md 79.1). CF = 0
-    jnc .done                   ; means the overlay has the glass, so the
-%endif                          ; video signal must stay ON
     push ax
 %ifdef KERN_BIG                 ; CX is the loop's and the loop is KERN_BIG's:
     push cx                     ; the %else arm below names no CX, and blk_one
                                 ; tail-jumps into vid_bk, which banks ax/es/dx
                                 ; and never writes it
-    mov cl, [vid_ndisp]         ; NO `push di`: this routine's body never names
-    xor ch, ch                  ; DI either, and the bank was a leftover from
-.d:                             ; before 25448be converted this site off
-    mov al, ch                  ; vid_ctx_ptr (whose DI IS an output).
+    xor ch, ch                  ; NO `push di`: this routine's body never names
+                                ; DI either, and the bank was a leftover from
+                                ; before 25448be converted this site off
+                                ; vid_ctx_ptr (whose DI IS an output).
+    call COLD_SEG:ssf_set       ; the ANIMATION first (SPEC.md 79.1). CF = 1
+    jc .walk                    ; is every refusal, and gates every card from
+                                ; display 0 exactly as this file always did.
+    inc ch                      ; CF = 0 IS NOT "NOTHING TO GATE" (SPEC.md
+                                ; 79.1.1). The overlay has the PRIMARY and is
+                                ; drawing on it, so display 0's signal must
+                                ; stay on - but the saver sizes itself from
+                                ; OSAPI_VIDEO, which answers the primary and
+                                ; says so (39.2.1), so on an EXTENDED desktop
+                                ; every other tube keeps the frozen desktop it
+                                ; had, lit, all night. That is the exact thing
+                                ; this file's header says the walk exists to
+                                ; prevent, and the animation arm was skipping
+                                ; the walk outright. So the saver's own
+                                ; display is the ONE that stays lit, and this
+                                ; is vid_fsx_enter's "every card but the
+                                ; bracket's" (39.18) reached from the other
+                                ; end. Display 0 BY NAME and not a search:
+                                ; the primary is at the virtual origin and is
+                                ; banked as display 0 by construction
+                                ; (vid_disp_init, 39.19.2)
+.walk:
+    mov cl, [vid_ndisp]
+    cmp ch, cl                  ; A WHILE, WHERE THIS WAS A DO-WHILE. The
+    jae .pop                    ; old form rested on [vid_ndisp] never being
+                                ; 0; the animation arm above starts at 1, so
+                                ; a ONE-display machine running the saver
+                                ; must do nothing at all rather than hand
+                                ; vid_kind_of an out-of-range display
+.d:
+    mov al, ch
     call vid_kind_of            ; vid_kind_of banks its own (`push di / call
     call blk_one                ; vid_ctx_ptr / ... / pop di`), and blk_one
-    inc ch                      ; reaches only vid_bk, vid_ac_pal and
-    cmp ch, cl                  ; vid_seq1_blank, none of which writes DI
-    jb .d                       ; a do-while: [vid_ndisp] is never 0, and a
-                                ; kernel that made it 0 would still do one -
-                                ; which is why this counts UP and not down: a
+    inc ch                      ; reaches only vid_bk and vid_ac_pal,
+    cmp ch, cl                  ; neither of which writes DI
+    jb .d                       ; ...and it counts UP and not down: a
                                 ; `dec cl` from 0 would run 255 more passes
                                 ; handing vid_kind_of an out-of-range display
+.pop:
     pop cx
 %else
     mov al, [vid_kind]          ; kern_small is single-display by construction
     call blk_one                ; - vidsel.inc's whole multi-display half is
 %endif                          ; inside one %ifdef KERN_BIG
     pop ax
-.done:
     ret
 
 ; in: AL = VID_* kind. [blk_on] has already been written, and says which way.
@@ -499,10 +542,14 @@ section .cold
 ; which fails structurally rather than proportionally, in the one place in
 ; this file that can multiply at all. SS_MAXMIN is what a word of ticks holds.
 ;
-; Both builds: the period is a setting on kern_small too (see ss_pub).
+; kern_big's ALONE now: its three callers - SYSTEM.CFG's reader
+; (through wm_cbd), ss_set_x and the blanker's wake - are all kern_big's,
+; and kern_small, which reads no SYSTEM.CFG and has no saver, keeps [ss_idle]
+; at its resting BLK_IDLE for ever (kernel size pass 13, -23 there).
 ; -----------------------------------------------------------------------------
 SS_MAXMIN   equ 59              ; 59 x 1092 = 64,428, inside a word
 
+%ifdef KERN_BIG
 ss_mins2idle:
     push ax
     push dx
@@ -524,8 +571,13 @@ ss_mins2idle:
     pop dx
     pop ax
     ret
+%else
+    nop                         ; PARITY, never executed (kernel size pass 13):
+                                ; an odd 23 out of kern_small's .cold would put
+                                ; dsk_xfer and the FAT walk at an odd shift
+%endif
+%ifdef KERN_BIG                 ; ...and the saver's own entries, below
 
-%ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
 ; ss_call - one verb into the overlay (module internal)
 ; in:  AL = SSV_*, every other register that verb's own argument
@@ -612,11 +664,32 @@ ss_start_x:
     stc                         ; the refusal, set BEFORE the branch so that
     je .out                     ; the two ways out share one `ret`. `stc`
                                 ; writes no ZF, so the compare still reads
-    call KERNEL_SEG:cw_gfx_lock
+    ; ...AND A WINDOW THAT ASKED FOR QUIET IS A REFUSAL TOO (SPEC.md 79.10):
+    ; blank instead. WF_QUIET, set through OSAPI_WM_QUIET by a program working
+    ; in the background - FTPD while it serves. A session draws on the UI task
+    ; a frame a pass, and that is the task such a program's disk half runs on;
+    ; a gated signal costs nothing. A free record is all zeros (wm_destroy),
+    ; so the walk needs no used-bit test, and it runs once a SESSION, not once
+    ; a frame. Written here and not as ss_quiet, its one caller, and walked by
+    ; the POINTER against its end rather than by a count, so the `jb` that
+    ; keeps going is also the CF = 0 that falls out (kernel size pass 12)
+    push bx
+    mov bx, wm_wins + W_FLAGS + 1
+.q:
+    test byte [bx], WF_QUIET >> 8
+    stc                         ; `stc` writes no ZF: the test still reads
+    jnz .qx
+    add bx, WIN_SIZE
+    cmp bx, wm_wins + W_FLAGS + 1 + MAX_WIN * WIN_SIZE
+    jb .q                       ; ...and falling out of it is CF = 0
+.qx:
+    pop bx
+    jc .out
+    call ct_cw_gfx_lock
     mov al, SSV_START
     call ss_open
     pushf                       ; the verdict, banked across the unlock, whose
-    call KERNEL_SEG:cw_gfx_unlock   ; contract is "clobbers: flags"
+    call ct_cw_gfx_unlock           ; contract is "clobbers: flags"
     popf
 .out:
     ret
@@ -664,11 +737,12 @@ ss_start_x:
 ss_stop_x:
     mov al, SSV_STOP
     call ss_call
-    call KERNEL_SEG:cw_gfx_lock
+    call ct_cw_gfx_lock
     call KERNEL_SEG:cw_blk_relit
-    call KERNEL_SEG:cw_gfx_unlock
-    jmp short ss_reap_x         ; ...and the image goes back, if nothing else
-                                ; has a use for it (SPEC.md 79.8)
+    call ct_cw_gfx_unlock       ; ...and FALLS INTO ss_reap_x: the image goes
+                                ; back, if nothing else has a use for it
+                                ; (SPEC.md 79.8)
+.fall:
 
 ; -----------------------------------------------------------------------------
 ; ss_reap_x - give the image back if nothing is using it (SPEC.md 79.8)
@@ -696,6 +770,9 @@ ss_stop_x:
 ; outside one.
 ; -----------------------------------------------------------------------------
 ss_reap_x:
+%if ss_reap_x - ss_stop_x.fall != 0
+%error "blank: ss_stop_x falls into ss_reap_x, so nothing may sit between them"
+%endif
     push ax
     push bx
     cmp word [ss_row+DRVR_SEG], 0
@@ -842,14 +919,9 @@ ssf_frame:      cmp byte [blk_sv], 0    ; blk_pass's gate, on this side of the
                                 ; and the only caller is here
 .none:
                 retf
-ssf_cfg:        mov al, SSV_CFG ; ss_cfg_x was a two-instruction wrapper with
-                call ss_open    ; exactly ONE caller - this - and it is named
-                retf            ; in no dw table, no OSAPI slot and nowhere in
-                                ; SPEC.md, unlike ss_set_x/ss_start_x/
-                                ; ss_stop_x. So it is this routine's own two
-                                ; instructions now. ctrl.inc:2399's `call
-                                ; COLD_SEG:ssf_cfg` is the external entry and
-                                ; does not move
+; (ssf_cfg - `mov al, SSV_CFG / call ss_open / retf` - went in kernel size
+; pass 13: its one caller, the Control Panel's saver button, makes the two
+; instructions itself through CTRL.DRV's CPXC hop)
 %endif
 
 section .text

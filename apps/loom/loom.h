@@ -376,6 +376,39 @@ extern int           lm_evline[LM_MAXEV];
 extern int           lm_nev;
 
 /* ============================================================================
+ * THE PHASE STORE - four passes' private tables, laid over one another.
+ *
+ * ovl_pack runs its passes strictly one after another (lmwrite.c): the WML
+ * pass, the script's collect, the sheet, the sprites, the script's code
+ * generation, the resolve, the write. Four of them keep tables in bss that
+ * nothing outside the pass reads - the WML pass's one-element attribute
+ * table, the sheet's formula source and RPN buffer, the sprite reader's row
+ * offsets, and the code generator's locals and loop stack - and every one of
+ * those is FILLED BEFORE IT IS READ inside the pass that owns it. A pass that
+ * relied on a table arriving zeroed would already be wrong on the second Pack
+ * of a session, which finds the first one's bytes there. So the four phases
+ * share one base, and 2,032 bytes of resident bss become 768 (the WML pass's,
+ * the largest).
+ *
+ * IT IS DONE IN THE ASSEMBLY AND NOT AS A C UNION, and the reason is
+ * measured: SmallerC does not fold a label and a member offset, so every
+ * access through a union member - even one at offset 0 - loses the indexed
+ * addressing the plain array gets. A union of four structs cost +1,202 bytes
+ * of code for its 1,264 of bss; one union per slot +521 for 960. So each C
+ * declaration below stays the plain array it was, the code compiles exactly
+ * as it did, and apps/loom/lmpool.py - the pass that already runs over this
+ * package's compiled assembly - reads the line below and lays the named
+ * reservations from one base, refusing if a name is not a plain .bss array.
+ * The declarations each carry "PHASE STORE" so a reader of the file sees it.
+ *
+ * WHAT WOULD BREAK IT: a pass reading another pass's table - a later pass
+ * reading what an earlier one left - or one pass running inside another.
+ * Neither happens today; a new table that crosses passes stays off the line.
+ *
+ * lmpool share: lmw_anoff lmw_avoff lmw_aline lmw_anlen lmw_avlen lmw_valbuf | lmc_loctok lmc_locdecl lmc_brkn lmc_contn lmc_contat lmc_brk lmc_cont | lm_fxbuf lms_fsrc | lms_rowoff
+ * ==========================================================================*/
+
+/* ============================================================================
  * THE COMPILERS - the overlay's tenants (WEAVE-SPEC 1.2's LOOM.OVL list, in
  * its order: the WML compiler, the WJS compiler, the FX pre-compiler, the
  * atom interner, the bundle writer).
@@ -413,9 +446,9 @@ int ovl_pack(void);
 /* ============================================================================
  * THE SEAM TO LOOM.WPV (WEAVE-SPEC 1.2.4)
  *
- * apps/loom/lmpv.inc's five routines. The module is a SECOND RESIDENT SEGMENT
- * holding WEAVE's flow walk and WEAVE's component painter, read once when
- * Preview is first opened; apps/weave/wpvabi.inc is the contract and
+ * apps/loom/lmpv.inc's two routines. The module is a SECOND RESIDENT SEGMENT
+ * holding WEAVE's flow walk and WEAVE's component painter, PART 0 of
+ * LOOM.O88, fetched once when Preview is first opened; apps/weave/wpvabi.inc is the contract and
  * apps/weave/wpvabi.h its C side, guarded in both assemblies.
  *
  * lpv_call() answers 0 with no module bound, which is the same "it did not
@@ -424,10 +457,10 @@ int ovl_pack(void);
  * ==========================================================================*/
 unsigned lpv_call(unsigned verb, unsigned a, unsigned b, unsigned c);
 void     lpv_bindmod(unsigned seg);     /* 0 = forget it */
-int      lpv_kb(void);                  /* the claim, in KB: image + bss */
-unsigned lpv_bytes(void);               /* WPV_SIZE, to check the read */
-int      lpv_stamp(unsigned seg);       /* 0 ok, 1 not ours/truncated,
-                                         * 2 stale (ABI, size or bss) */
+int      w_partfetch(int part);         /* a lazy part, from HOME: 0 / -1
+                                         * (apps/weave/wfetch.inc) */
+#define LM_WPVPART 0                    /* the module's row in the parts
+                                         * table (apps/loom/loom.asm) */
 
 /* ============================================================================
  * THE IDE'S OWN STATE

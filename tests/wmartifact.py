@@ -7,10 +7,13 @@
     python3 tests/wmartifact.py --part seam           # needs the dual machine
 
 Both were found while testing SPEC.md 65's Calculator and both are the window
-manager's; docs/WM-ARTIFACTS.md is the report and carries the measurements
+manager's; docs/history/WM-ARTIFACTS.md is the report and carries the measurements
 this script produces. It is written so that a reader who suspects the package
-can throw the package away: part 1 opens `hello`, which draws one greeting and
-nothing else, and part 2 drags a DISK WINDOW, which is the kernel's own.
+can throw the package away: part 1 opens `calc`, which draws a keypad and then
+stops - no worker and no clock, which cal_entry states by taking OSAPI_WM_SAVEU
+- and part 2 drags a DISK WINDOW, which is the kernel's own. It was `hello`
+until that package came off the apps disk (SPEC.md 27.0); what part 1 needs is
+a window that does not move on its own, and that is the property Calc declares.
 
 WHAT MAKES EITHER OF THEM VISIBLE IS THE COMPARISON, and it is the thing most
 likely to be missing from a failed reproduction. Neither artifact is visible
@@ -42,7 +45,6 @@ THREE MORE WAYS TO MISS THEM, all of which cost time here:
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -83,11 +85,10 @@ def full_repaint(m):
     """Make the GUEST repaint, and leave the machine paused."""
     m.cmd(cmd="run")
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(200):
-        time.sleep(0.05)
-        if m.read(S("cp_dirty"), 1)[0] == 0:
-            break
-    else:
+    try:                                # a GUEST-time budget
+        os88marty.until(m, lambda _: m.read(S("cp_dirty"), 1)[0] == 0,
+                        "ui_task to drain [cp_dirty]", poll=0.05, limit=10.0)
+    except os88marty.MartyError:
         raise RuntimeError("ui_task never drained [cp_dirty]")
     os88marty.settle(m)
     m.cmd(cmd="pause")
@@ -132,13 +133,30 @@ def row_of(m, name):
 
 
 def name_at(m, row):
-    e = m.read(S("disk_dir") + row * DSK_DE_STRIDE, DSK_DE_STRIDE)
-    return e.split(b"\0")[0].decode("latin-1").strip()
+    return dispcp.listing(m, S)[row][0]
 
 
 def last_clickable_row(m, wx, wy, skip=None):
-    """The highest-numbered listing row whose centre is still on the screen."""
-    n = u16(m.read(S("disk_nfiles"), 2))
+    """The highest-numbered listing row whose centre is still on the screen.
+
+    **IT ASKS THE WINDOW, NOT THE GLOBALS**, and both halves of that had gone
+    stale at once. `disk_dir` and `dsk_icoix` are GONE - there is no global
+    listing any more, a listing is written where its CALLER keeps a store
+    (kernel/dskwin.inc, docs/plans/LISTING-HOME-PLAN.md 13) - so `name_at`
+    could only ever raise on a symbol that no longer exists. And
+    `[disk_nfiles]` survives but is the MOUNT SNAPSHOT's count, which SPEC.md
+    18.9's quiet mount deliberately leaves at 0 with `[dsk_lstale]` raised: a
+    perfectly ordinary state after anything that moved the volume without
+    navigating, and the one this row reaches. Reading it here answered "this
+    folder is empty" about a window with seven rows on the glass, and the row
+    died on `no clickable row in this window`.
+
+    `dispcp.listing` is the answer to the only question either of these asks -
+    what is the user looking at - and it prefers the acting Disk window's own
+    FS_VSEG cache for exactly that reason. It is the same move
+    `tests/ascabsorb.py` and `tests/icostore.py` took; this row was missed.
+    """
+    n = len(dispcp.listing(m, S))
     h = u16(m.read(S("vid_h"), 2))
     for r in range(n - 1, -1, -1):
         if r == skip:
@@ -199,13 +217,12 @@ def part_shadow(machine):
             fails.append("the control is not clean: %d px with no package "
                          "open at all" % len(base))
 
-        row = row_of(m, "HELLO.O88")
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "HELLO.O88")
-        time.sleep(2)
+        row = row_of(m, "CALC.O88")
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
         os88marty.settle(m)
         slot = dispcp.win_list(m, S)[-1]
         hx, hy, hw, hh = dispcp.win_rect(m, S, slot)
-        print("\n   HELLO.O88 (row %d) opened at (%d,%d) %dx%d"
+        print("\n   CALC.O88 (row %d) opened at (%d,%d) %dx%d"
               % (row, hx, hy, hw, hh))
         u = under(m, hx, hy + hh, slot)
         print("   its frame's bottom-left shadow pixel is (%d,%d), over %s"
@@ -246,7 +263,7 @@ def part_shadow(machine):
         # about whatever happens to be under that spot.
         mo.drag(hx + hw // 2, hy + TITLE_H // 2, hx + hw // 2 + 96,
                 hy + TITLE_H // 2 + 40)
-        time.sleep(1)
+        os88marty.pace(m, 1)
         os88marty.settle(m)
         hx2, hy2, hw2, hh2 = dispcp.win_rect(m, S, slot)
         print("\n   dragged to (%d,%d): its corner is now (%d,%d)"
@@ -262,13 +279,13 @@ def part_shadow(machine):
         # ...and is it still there once the window has gone?
         dispcp.win_rect(m, S, slot)
         mo.click(hx2 + 8, hy2 + TITLE_H // 2)          # the close box
-        time.sleep(1)
+        os88marty.pace(m, 1)
         os88marty.settle(m)
         got3 = diff(m, card, "...after the package was closed")
         if got3:
             fails.append("closing the package left %d px behind" % len(got3))
 
-        # A SECOND PACKAGE, so the answer is not about `hello`. Which one is
+        # A SECOND PACKAGE, so the answer is not about `calc`. Which one is
         # whatever the WINDOW can reach: a CGA Disk window shows ~7 rows of a
         # ten-package folder, and a row below the fold cannot be clicked -
         # os88mouse says so rather than clicking into the desktop, which is
@@ -276,7 +293,6 @@ def part_shadow(machine):
         row = last_clickable_row(m, wx, wy, skip=row)
         nm2 = name_at(m, row)
         dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, row)
-        time.sleep(2)
         os88marty.settle(m)
         slot = dispcp.win_list(m, S)[-1]
         rx, ry, rw, rh = dispcp.win_rect(m, S, slot)
@@ -309,7 +325,7 @@ def part_seam():
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
-        time.sleep(1)
+        os88marty.pace(m, 1)
         os88marty.settle(m)
         pw = u16(m.read(S("vid_pw"), 2))
         vw = u16(m.read(S("vid_w"), 2))
@@ -337,7 +353,6 @@ def part_seam():
         print("\n   dragging the Disk window at (%d,%d) %dx%d across the seam"
               % (dx, dy, dw, dh))
         mo.drag(dx + dw // 2, dy + TITLE_H // 2, pw + 210, 60)
-        time.sleep(2)
         os88marty.settle(m)
         dx1, dy1, dw1, dh1 = dispcp.win_rect(m, S, slot)
         print("   it is now at (%d,%d) %dx%d - origin %s the seam"
@@ -356,7 +371,6 @@ def part_seam():
         # one-off.
         dx2, dy2, dw2, dh2 = dispcp.win_rect(m, S, slot)
         mo.drag(dx2 + dw2 // 2, dy2 + TITLE_H // 2, pw - 120, 60)
-        time.sleep(2)
         os88marty.settle(m)
         dx3, dy3, _, _ = dispcp.win_rect(m, S, slot)
         print("\n   dragged back to (%d,%d)" % (dx3, dy3))
@@ -386,7 +400,7 @@ def main():
         for f in fails:
             print("  - " + f)
         sys.exit(1)
-    print("wmartifact: both artifacts measured; docs/WM-ARTIFACTS.md is the "
+    print("wmartifact: both artifacts measured; docs/history/WM-ARTIFACTS.md is the "
           "report")
 
 

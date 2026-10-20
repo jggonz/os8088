@@ -112,7 +112,46 @@
 #define CW_A_BOLD      1                /* cw_att[] bits. They are the app's, */
 #define CW_A_ITAL      2                /* not Opus's - the mapping onto      */
 #define CW_A_ULINE     4                /* CW_CHP_* happens in ovl_attr_now()  */
-#define CW_A_ALL       7
+#define CW_A_WUL      8                 /* word underline    (Ctrl-W) */
+#define CW_A_DUL     16                 /* double underline  (Ctrl-D) */
+#define CW_A_SCAP    32                 /* small caps        (Ctrl-K) */
+#define CW_A_HID     64                 /* hidden text                */
+#define CW_A_CHP    127                 /* every character bit        */
+#define CW_A_ALL     127                /* every bit the writer carries */
+
+/* --- the paragraph-format dictionary --------------------------------------
+ * Paragraph formatting lives on the paragraph MARK: a '\n' carries, in its
+ * cw_att[] byte, an index into this dictionary (apps/cword/cword.c says why).
+ * It is here and not in cword.c because the reader makes entries and the
+ * writer reads them, and this file is what the host harness compiles. */
+#define CW_PAP_MAX   64                 /* unique paragraph formats. Word's own
+                                         * dictionary is 256; 64 x 4 bytes is
+                                         * what this ceiling affords, and the
+                                         * 65th unique format is a refusal with
+                                         * a reason rather than a silent
+                                         * flattening (SPEC.md 47) */
+#define CW_AL_LEFT    0
+#define CW_AL_CENTER  1
+#define CW_AL_RIGHT   2
+#define CW_AL_JUST    3
+
+/* The dictionary, four parallel byte arrays rather than an array of structs
+ * so that a careless assignment cannot become a `rep movsb`. */
+unsigned char cw_pap_al[CW_PAP_MAX];    /* CW_AL_*                     */
+unsigned char cw_pap_sp[CW_PAP_MAX];    /* 0 single, 1 one-and-a-half,
+                                                * 2 double                    */
+unsigned char cw_pap_op[CW_PAP_MAX];    /* space before the paragraph  */
+unsigned char cw_pap_li[CW_PAP_MAX];    /* left indent, in cells       */
+signed char   cw_pap_fi[CW_PAP_MAX];    /* first line, relative to it  */
+unsigned char cw_pap_ri[CW_PAP_MAX];    /* right indent                */
+int cw_pap_n = 1;                       /* entry 0 is the default and
+                                                * is never reclaimed          */
+int cw_pap_now;                         /* the PAP new paragraphs get. NOT
+                                         * `cw_pap`: cwrtfio.c owns that name
+                                         * for the RTF reader's property
+                                         * record, and one translation unit
+                                         * means one namespace (SPEC.md 73.1) */
+
 
 char          cw_buf[CW_DOC_MAX];       /* the text */
 unsigned char cw_att[CW_DOC_MAX];       /* its formatting, one byte a character */
@@ -204,20 +243,57 @@ void cw_doc_clear(void)
     cw_trunc = 0;
 }
 
+/* ==========================================================================
+ * THE PARAGRAPH DICTIONARY
+ *
+ * ovl_pap_find() is the only way an entry is made, and it DEDUPLICATES: a
+ * document where every paragraph is left-aligned and unindented uses one
+ * entry, which is what keeps a 64-entry dictionary sufficient for a real
+ * document rather than a toy one.
+ * ========================================================================*/
+
+/* out: the index of an entry with these properties, making one if needed, or
+ * -1 if the dictionary is full - a refusal the caller reports (SPEC.md 47). */
+int ovl_pap_find(int al, int sp, int op, int li, int fi, int ri)
+{
+    int i;
+
+    for (i = 0; i < cw_pap_n; i++) {
+        if (cw_pap_al[i] == al && cw_pap_sp[i] == sp && cw_pap_op[i] == op &&
+            cw_pap_li[i] == li && cw_pap_fi[i] == fi && cw_pap_ri[i] == ri)
+            return i;
+    }
+    if (cw_pap_n >= CW_PAP_MAX)
+        return -1;
+    i = cw_pap_n;
+    cw_pap_al[i] = (unsigned char)al;
+    cw_pap_sp[i] = (unsigned char)sp;
+    cw_pap_op[i] = (unsigned char)op;
+    cw_pap_li[i] = (unsigned char)li;
+    cw_pap_fi[i] = (signed char)fi;
+    cw_pap_ri[i] = (unsigned char)ri;
+    cw_pap_n++;
+    return i;
+}
+
 /* ovl_attr_now - the editor attribute the reader's CHP currently means.
  *
- * This is the ONE place Opus's character properties and cword's three
- * formatting bits meet, and it is a narrowing that is stated rather than
- * implied: bold and italic are two of the ten flags in the CHP flag word,
- * underline is any non-zero kul (cword draws one rule, so kulSingle, kulWord,
- * kulDouble and kulDotted all arrive as one underline), and the other seven
- * flags, the font, the size, the colour and the super/subscript are READ AND
- * DISCARDED. They are parsed - the records above hold them, correctly - so
- * adding a renderer for one is a change in cword.c and not here. */
+ * This is the ONE place Opus's character properties and cword's seven
+ * formatting bits meet. Bold, italic, small caps and hidden are four of the
+ * ten flags in the CHP flag word; the underline is the kul byte, and cword
+ * draws three of Word's four kinds - single, word and double - so kulDotted
+ * arrives as a single rule. The other flags, the font, the size, the colour
+ * and the super/subscript are READ AND DISCARDED. They are parsed - the
+ * records above hold them, correctly - so adding a renderer for one is a
+ * change in cword.c and not here.
+ *
+ * It used to fold every underline into one and drop small caps and hidden
+ * text, so a document saved and opened again had lost them (SPEC.md 73.12.4). */
 int ovl_attr_now(void)
 {
     int a;
     int g;
+    int k;
 
     a = 0;
     g = ovl_pw_get(cw_chp, CW_CHP_O_GRPF);
@@ -225,9 +301,80 @@ int ovl_attr_now(void)
         a = a | CW_A_BOLD;
     if (g & CW_CHP_F_ITALIC)
         a = a | CW_A_ITAL;
-    if (cw_chp[CW_CHP_O_KUL] != CW_KUL_NONE)
+    if (g & CW_CHP_F_SMALLCAPS)
+        a = a | CW_A_SCAP;
+    if (g & CW_CHP_F_VANISH)
+        a = a | CW_A_HID;
+    k = cw_chp[CW_CHP_O_KUL];
+    if (k == CW_KUL_WORD)
+        a = a | CW_A_WUL;
+    else if (k == CW_KUL_DOUBLE)
+        a = a | CW_A_DUL;
+    else if (k != CW_KUL_NONE)
         a = a | CW_A_ULINE;
     return a;
+}
+
+/* ovl_tw2c - twips to the ruler's cells (1/10 inch = 144 twips), rounded to
+ * the nearest and SIGNED: a first-line indent is negative for a hanging one.
+ * The word arrives as 16 bits from ovl_pw_get(), which is 0..65535 on the
+ * build host and the same bits on the target; the OR below sign-extends it on
+ * the host and changes nothing on the 8088, where an int is those 16 bits. */
+int ovl_tw2c(int v)
+{
+    if (v & 0x8000)
+        v = v | ~0x7FFF;
+    if (v < 0)
+        return 0 - ((72 - v) / 144);
+    return (v + 72) / 144;
+}
+
+/* ovl_pap_now - the dictionary entry the reader's PAP currently means, which
+ * is what a paragraph mark read from the file carries. The mapping is the
+ * writer's below, run backwards: \qc \qr \qj, a line height over 1.75 lines
+ * is double and over 1.25 one and a half, any space before is Word's Open
+ * Space, and the three indents are rounded to the ruler's cells. A dictionary
+ * that is full answers entry 0 rather than refusing the file: the text is
+ * kept and the paragraph is flush left, which is visible rather than silent. */
+int ovl_pap_now(void)
+{
+    int al;
+    int sl;
+    int sp;
+    int li;
+    int fi;
+    int ri;
+    int i;
+
+    al = cw_pap[CW_PAP_O_JC];
+    if (al > CW_AL_JUST)
+        al = CW_AL_LEFT;
+    sl = ovl_pw_get(cw_pap, CW_PAP_O_DYALINE);
+    if (sl & 0x8000)
+        sl = 0 - (sl | ~0x7FFF);        /* \sl-480 is "exactly 480" */
+    sp = 0;
+    if (sl > 420)
+        sp = 2;
+    else if (sl > 300)
+        sp = 1;
+    li = ovl_tw2c(ovl_pw_get(cw_pap, CW_PAP_O_DXALEFT));
+    fi = ovl_tw2c(ovl_pw_get(cw_pap, CW_PAP_O_DXALEFT1));
+    ri = ovl_tw2c(ovl_pw_get(cw_pap, CW_PAP_O_DXARIGHT));
+    if (li < 0)
+        li = 0;
+    if (li > 120)
+        li = 120;
+    if (ri < 0)
+        ri = 0;
+    if (ri > 120)
+        ri = 120;
+    if (fi < 0 - li)
+        fi = 0 - li;
+    if (fi > 120)
+        fi = 120;
+    i = ovl_pap_find(al, sp, ovl_pw_get(cw_pap, CW_PAP_O_DYABEFORE) != 0,
+                     li, fi, ri);
+    return (i < 0) ? 0 : i;
 }
 
 /* ovl_put - append one character in the current formatting.
@@ -242,12 +389,12 @@ void ovl_put(int c, int a)
     cw_buf[cw_len] = (char)c;
     /* A PARAGRAPH MARK CARRIES A PARAGRAPH FORMAT, NOT CHARACTER BITS
      * (apps/cword/cword.c): its attribute byte is an index into the format
-     * dictionary. Everything this reader can express about a paragraph is
-     * still the default one, so the mark gets index 0 - and the alternative,
-     * leaving the character formatting there, would be read back as a
-     * dictionary index and centre a paragraph because the word before it
+     * dictionary, and the entry is the one the reader's PAP means at the mark
+     * - which is where Word's RTF puts a paragraph's properties in force. The
+     * alternative, leaving the character formatting there, would be read back
+     * as a dictionary index and centre a paragraph because the word before it
      * happened to be bold. */
-    cw_att[cw_len] = (unsigned char)((c == '\n') ? 0 : a);
+    cw_att[cw_len] = (unsigned char)((c == '\n') ? ovl_pap_now() : a);
     cw_len++;
 }
 
@@ -726,6 +873,7 @@ int ovl_rtf_parse(int n)
         return CW_RTF_NOTRTF;
 
     cw_doc_clear();
+    cw_pap_n = 1;                       /* a new document, a new dictionary */
     ovl_zero(cw_ris, CW_CB_RIS);
     ovl_zero(cw_dop, CW_CB_DOP);
     ovl_pard();
@@ -782,6 +930,10 @@ int ovl_rtf_parse(int n)
             continue;                   /* the model holds printable ASCII */
         ovl_put(c, ovl_attr_now());
     }
+
+    /* ...and the last paragraph, which has no mark of its own: it takes the
+     * typing format, and the format in force at the end of the file is its. */
+    cw_pap_now = ovl_pap_now();
 
     if (cw_trunc)
         rc = CW_RTF_TRUNC;
@@ -845,6 +997,72 @@ void ovl_emitnum(int v)
     }
 }
 
+/* ovl_ukind - which of Word's underlines an attribute byte wears, as the
+ * kul code the file carries. A character can hold more than one of the three
+ * bits - Format Character has a box for each - and RTF has one underline, so
+ * the writer picks the most distinct: double, then word, then single. */
+int ovl_ukind(int a)
+{
+    if (a & CW_A_DUL)
+        return CW_KUL_DOUBLE;
+    if (a & CW_A_WUL)
+        return CW_KUL_WORD;
+    if (a & CW_A_ULINE)
+        return CW_KUL_SINGLE;
+    return CW_KUL_NONE;
+}
+
+/* ovl_emitkw - a control word and a number, e.g. "\li720". */
+void ovl_emitkw(const char *kw, int v)
+{
+    ovl_emit(kw);
+    ovl_emitnum(v);
+}
+
+/* ovl_emit_pap - the paragraph properties of dictionary entry p, after a
+ * \pard so that nothing carries over from the paragraph before. The order
+ * and the numbers are tools/os88rtf.py's, so a file it generates and a file
+ * this saves are the same shape: an indent is in the ruler's cells of 1/10
+ * inch, 144 twips each; one and a half lines is \sl360 and double \sl480;
+ * Word's Open Space is 12 points before, \sb240. */
+void ovl_emit_pap(int p)
+{
+    ovl_emit("\\pard");
+    if (cw_pap_al[p] == CW_AL_CENTER)
+        ovl_emit("\\qc");
+    else if (cw_pap_al[p] == CW_AL_RIGHT)
+        ovl_emit("\\qr");
+    else if (cw_pap_al[p] == CW_AL_JUST)
+        ovl_emit("\\qj");
+    if (cw_pap_li[p] != 0)
+        ovl_emitkw("\\li", cw_pap_li[p] * 144);
+    if (cw_pap_fi[p] != 0)
+        ovl_emitkw("\\fi", cw_pap_fi[p] * 144);
+    if (cw_pap_ri[p] != 0)
+        ovl_emitkw("\\ri", cw_pap_ri[p] * 144);
+    if (cw_pap_sp[p] == 1)
+        ovl_emit("\\sl360");
+    else if (cw_pap_sp[p] == 2)
+        ovl_emit("\\sl480");
+    if (cw_pap_op[p] != 0)
+        ovl_emit("\\sb240");
+    ovl_emitc(' ');
+}
+
+/* ovl_para_pap - the dictionary entry of the paragraph that starts at s: the
+ * one its mark carries, or the typing format for a last paragraph with no
+ * mark. Each call walks only its own paragraph, so the writer stays one pass. */
+int ovl_para_pap(int s)
+{
+    int j;
+
+    for (j = s; j < cw_len; j++) {
+        if (cw_buf[j] == '\n')
+            return (cw_att[j] < CW_PAP_MAX) ? cw_att[j] : 0;
+    }
+    return (cw_pap_now < CW_PAP_MAX) ? cw_pap_now : 0;
+}
+
 /* ovl_rtf_build - write the document into cw_rtf.
  *
  * The header is the smallest one a reader can rely on: the version and
@@ -855,6 +1073,14 @@ void ovl_emitnum(int v)
  * again here, so the file cword writes and the file cword reads agree by
  * construction.
  *
+ * EVERY FORMAT THE EDITOR CAN SET IS WRITTEN (SPEC.md 73.12.4): the seven
+ * character attributes, and each paragraph's alignment, line spacing, space
+ * before and three indents - a \pard and the properties wherever the format
+ * CHANGES from one paragraph to the next. It used to write bold, italic and
+ * one underline only, so a document saved and opened again came back with
+ * every paragraph flush left and its word underline, double underline, small
+ * caps and hidden text gone.
+ *
  * out: the byte count, or -1 if the document does not fit CW_RTF_MAX. The
  *      caller must refuse the save on -1 and say so - a truncated RTF file is
  *      unreadable, where a refusal costs nothing. */
@@ -864,32 +1090,41 @@ int ovl_rtf_build(void)
     int a;
     int cur;
     int c;
+    int k;
+    int pcur;
+    int p;
 
     cw_rtfn = 0;
     cw_ovf  = 0;
 
     ovl_emit("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fmodern os8088 8x8;}}\r\n");
 
-    ovl_emit("\\paperw");
-    ovl_emitnum(ovl_rrb_w(CW_IRRB_PAPERW));
-    ovl_emit("\\paperh");
-    ovl_emitnum(ovl_rrb_w(CW_IRRB_PAPERH));
-    ovl_emit("\\margl");
-    ovl_emitnum(ovl_rrb_w(CW_IRRB_MARGL));
-    ovl_emit("\\margr");
-    ovl_emitnum(ovl_rrb_w(CW_IRRB_MARGR));
-    ovl_emit("\\margt");
-    ovl_emitnum(ovl_rrb_w(CW_IRRB_MARGT));
-    ovl_emit("\\margb");
-    ovl_emitnum(ovl_rrb_w(CW_IRRB_MARGB));
-    ovl_emit("\\deftab");
-    ovl_emitnum(ovl_rrb_w(CW_IRRB_DEFTAB));
-    ovl_emit("\r\n\\pard\\plain\\f0\\fs");
-    ovl_emitnum(ovl_rrb_w(CW_IRRB_FS));
+    ovl_emitkw("\\paperw", ovl_rrb_w(CW_IRRB_PAPERW));
+    ovl_emitkw("\\paperh", ovl_rrb_w(CW_IRRB_PAPERH));
+    ovl_emitkw("\\margl", ovl_rrb_w(CW_IRRB_MARGL));
+    ovl_emitkw("\\margr", ovl_rrb_w(CW_IRRB_MARGR));
+    ovl_emitkw("\\margt", ovl_rrb_w(CW_IRRB_MARGT));
+    ovl_emitkw("\\margb", ovl_rrb_w(CW_IRRB_MARGB));
+    ovl_emitkw("\\deftab", ovl_rrb_w(CW_IRRB_DEFTAB));
+    ovl_emitkw("\r\n\\pard\\plain\\f0\\fs", ovl_rrb_w(CW_IRRB_FS));
     ovl_emit("\r\n");
 
     cur = 0;
-    for (i = 0; i < cw_len; i++) {
+    pcur = 0;                           /* entry 0 is what \pard means */
+    for (i = 0; i <= cw_len; i++) {
+        /* A PARAGRAPH STARTS HERE: say its format if it is not the one in
+         * force. i == cw_len is the empty paragraph after a final mark, and
+         * the empty document - whose format is still the typing one. */
+        if (i == 0 || cw_buf[i - 1] == '\n') {
+            p = ovl_para_pap(i);
+            if (p != pcur) {
+                ovl_emit_pap(p);
+                pcur = p;
+            }
+        }
+        if (i == cw_len)
+            break;
+
         /* A PARAGRAPH MARK'S ATTRIBUTE BYTE IS NOT CHARACTER FORMATTING. It
          * is an index into the paragraph-format dictionary (apps/cword/cword.c
          * - Word's own arrangement, where paragraph properties live on the
@@ -907,8 +1142,21 @@ int ovl_rtf_build(void)
             ovl_emit((a & CW_A_BOLD) ? "\\b " : "\\b0 ");
         if ((a & CW_A_ITAL) != (cur & CW_A_ITAL))
             ovl_emit((a & CW_A_ITAL) ? "\\i " : "\\i0 ");
-        if ((a & CW_A_ULINE) != (cur & CW_A_ULINE))
-            ovl_emit((a & CW_A_ULINE) ? "\\ul " : "\\ulnone ");
+        k = ovl_ukind(a);
+        if (k != ovl_ukind(cur)) {
+            if (k == CW_KUL_DOUBLE)
+                ovl_emit("\\uldb ");
+            else if (k == CW_KUL_WORD)
+                ovl_emit("\\ulw ");
+            else if (k == CW_KUL_SINGLE)
+                ovl_emit("\\ul ");
+            else
+                ovl_emit("\\ulnone ");
+        }
+        if ((a & CW_A_SCAP) != (cur & CW_A_SCAP))
+            ovl_emit((a & CW_A_SCAP) ? "\\scaps " : "\\scaps0 ");
+        if ((a & CW_A_HID) != (cur & CW_A_HID))
+            ovl_emit((a & CW_A_HID) ? "\\v " : "\\v0 ");
         cur = a;
 
         c = (unsigned char)cw_buf[i];
@@ -923,13 +1171,17 @@ int ovl_rtf_build(void)
 
     /* Close what is open, then the document group. Turning the attributes off
      * explicitly is not needed - the '}' ends their scope - but a reader that
-     * concatenates files is a real thing, and three keywords cost nine bytes. */
+     * concatenates files is a real thing, and the keywords cost a few bytes. */
     if (cur & CW_A_BOLD)
         ovl_emit("\\b0 ");
     if (cur & CW_A_ITAL)
         ovl_emit("\\i0 ");
-    if (cur & CW_A_ULINE)
+    if (ovl_ukind(cur) != CW_KUL_NONE)
         ovl_emit("\\ulnone ");
+    if (cur & CW_A_SCAP)
+        ovl_emit("\\scaps0 ");
+    if (cur & CW_A_HID)
+        ovl_emit("\\v0 ");
     ovl_emit("\r\n}\r\n");
 
     if (cw_ovf)

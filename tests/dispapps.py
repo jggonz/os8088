@@ -22,6 +22,7 @@ package header's image size, so a moved word is an error here rather than a
 plausible number nobody attributes.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
@@ -29,8 +30,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import os88build                                            # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
+import os88pkg
+import os88parts                                              # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 import os88geom                                             # noqa: E402
@@ -60,6 +64,13 @@ def _map(app, defines=()):
     if key in _MAPS:
         return _MAPS[key]
     src = os.path.join(ROOT, "apps", app, app + ".asm")
+    if not os.path.exists(src):
+        # ...or a package under tests/, which is where everything that does
+        # NOT ship lives (CLAUDE.md's Layout). tests/facetest is the first
+        # such caller: it asks apps/os88type.inc what typefaces the machine
+        # has, and the answer is four bytes of its bss rather than anything a
+        # screendump can be read for.
+        src = os.path.join(ROOT, "tests", app, app + ".asm")
     # PER PROCESS, and that is not tidiness. These were "/tmp/os88_<app>.map"
     # flat, so two rows of the suite mapping the same package at once wrote
     # each other's file - and `os88test.py --marty-jobs 3` runs exactly that.
@@ -69,12 +80,13 @@ def _map(app, defines=()):
     # offsets came from a half-written map. Every one of those points at the
     # package under test rather than at the harness.
     tag = app + "".join("_" + d.lstrip("-D") for d in defines)
-    tmp = "/tmp/os88_%s_map_%d.asm" % (tag, os.getpid())
-    mp = "/tmp/os88_%s_%d.map" % (tag, os.getpid())
+    tmp = tempfile.gettempdir() + "/os88_%s_map_%d.asm" % (tag, os.getpid())
+    mp = tempfile.gettempdir() + "/os88_%s_%d.map" % (tag, os.getpid())
     open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
     inc = ["-I", os.path.join(ROOT, "apps") + os.sep,
            "-I", os.path.join(ROOT, "apps", app) + os.sep,
-           "-I", os.path.join(ROOT, "drivers", "net") + os.sep]
+           "-I", os.path.join(ROOT, "tests") + os.sep,
+           "-I", os.path.join(ROOT, "drivers", "net") + os.sep,
                                         # apps/telnet and apps/ftpd include
                                         # netpkg.inc from the driver that
                                         # publishes the socket surface, which
@@ -82,7 +94,29 @@ def _map(app, defines=()):
                                         # too. Harmless for every other app -
                                         # nasm only reaches a -I when an
                                         # %include misses
-    bn = "/tmp/os88_%s_%d.bin" % (tag, os.getpid())
+           "-I", os.path.join(ROOT, "build") + os.sep]
+                                        # A C PACKAGE'S SHIM %includes THE
+                                        # COMPILED C out of build/ (SPEC.md
+                                        # 73.1: `%include "paccman.gen.asm"`),
+                                        # so without this every C package -
+                                        # paccman, cword, runcpm, weave, c64 -
+                                        # fails to map at all. tests/paccman.py
+                                        # is the row that needs it; it calls
+                                        # _map('paccman') directly, the way
+                                        # tests/alertbtn.py calls _map('paint').
+                                        # The generated file is a build
+                                        # product, so a tree that has not run
+                                        # `make <pkg>` still cannot map it and
+                                        # the caller gets nasm's own message
+                                        # saying which file is missing.
+                                        #
+                                        # LAST OF THE FOUR, deliberately: it
+                                        # is the only search path that holds
+                                        # BUILD PRODUCTS, so a generated file
+                                        # that happened to share a name with a
+                                        # source include must never be the one
+                                        # nasm finds first.
+    bn = tempfile.gettempdir() + "/os88_%s_%d.bin" % (tag, os.getpid())
     r = subprocess.run(["nasm", "-f", "bin", "-w+error"] + inc + list(defines) +
                        ["-o", bn, tmp],
                        capture_output=True, text=True)
@@ -101,8 +135,10 @@ def _map(app, defines=()):
             os.unlink(f)
         except OSError:
             pass
-    if "os88_image_end" not in out:
+    if "os88_image_end" not in out and "cc_image_end" not in out:
         sys.exit("dispapps: %s's map has no os88_image_end" % app)
+    if "os88_image_end" not in out:     # a C package: apps/cc/crt0.asm names
+        out["os88_image_end"] = out["cc_image_end"]     # the same byte this
     # **THE MAP DESCRIBES THE SOURCE; THE GUEST IS RUNNING THE IMAGE.** If
     # build/ is behind the tree, every offset below is right for a layout the
     # machine does not have - and what comes back is not an error, it is
@@ -115,11 +151,40 @@ def _map(app, defines=()):
     # build/kernel.bin - and packages had no equivalent. This is it.
     # os88pkg.py validates and stamps without changing a byte, so the
     # comparison is exact rather than a size test.
+    # **THE FILE IS NO LONGER THE IMAGE** (SPEC.md 20.13.5,
+    # docs/plans/O88-COMPRESSION-PLAN.md): `PKGZ ?= lz4`, so every shipped
+    # `.o88` on disk is
+    # a compressed CONTAINER and the bytes nasm emitted are inside it.
+    # Comparing the file against a fresh assembly therefore compares 11,758
+    # bytes with 14,935 and reports "build/ is BEHIND THE TREE" about a
+    # perfectly current one - which is a WRONG DIAGNOSIS of a right check, and
+    # it took 41 rows down in one soak because every graphical row imports
+    # this. `image_unwrap` is the rule that plan states for exactly this
+    # shape: a host-side check about a size, the bss arithmetic or an
+    # assembly wants the IMAGE, never the file.
+    #
+    # ...and through `os88build.at`, because under a frozen run the shipped
+    # packages are in the run's own tree (docs/plans/SOAK-PARALLEL.md 14.2) and
+    # `build/` may hold another build's.
     sub = os.path.join("build", "smallapp") if defines else "build"
-    o88 = os.path.join(ROOT, sub,
-                       {"solitaire": "solitair"}.get(app, app) + ".o88")
+    o88 = os88build.at("%s/%s.o88"
+                       % (sub, {"solitaire": "solitair"}.get(app, app)))
+    if not os.path.isabs(o88):
+        o88 = os.path.join(ROOT, o88)
+    #
+    # ...AND A PART IS NOT THE IMAGE EITHER (SPEC.md 88.10.4). Clear Skies'
+    # image is a LOADER now: it reads the parts and hands its identity to
+    # part 0, which is what `apps/skies/skies.asm` assembles to. So a package
+    # whose image declares parts is compared against the PART, or this reports
+    # "build/ is BEHIND THE TREE" about a current tree for the second time in
+    # this routine's life - the same wrong diagnosis of the same right check,
+    # one container further in. RECOGNISED AND NOT DECLARED: the image says so
+    # itself, so nothing here holds a list of which packages are parted.
     try:
-        built = open(o88, "rb").read()
+        raw = open(o88, "rb").read()
+        built = os88pkg.image_unwrap(raw)
+        if os88parts.table_at(built) is not None:
+            built = os88parts.part_bytes(raw, 0)
         fresh = open(bn, "rb").read()
     except OSError as e:
         sys.exit("dispapps: cannot compare %s against the tree (%s) - run "
@@ -131,24 +196,57 @@ def _map(app, defines=()):
             except OSError:
                 pass
     if built != fresh:
-        sys.exit("dispapps: %s is %d bytes and apps/%s/%s.asm assembles to "
-                 "%d - build/ is BEHIND THE TREE, so every bss offset this "
-                 "returns describes a layout the guest does not have. Run "
-                 "`make%s`." % (o88, len(built), app, app, len(fresh),
-                                " && make smallapps" if defines else ""))
+        sys.exit("dispapps: %s holds a %d-byte image and %s assembles to %d - "
+                 "build/ is BEHIND THE TREE, so every bss offset this returns "
+                 "describes a layout the guest does not have. Run `make%s`."
+                 % (o88, len(built), os.path.relpath(src, ROOT), len(fresh),
+                    " && make smallapps" if defines else ""))
     _MAPS[key] = out
     return out
 
 
-def colour_gif(src="build/OS8088.GIF", dst="/tmp/OS88COL.GIF"):
+def skies_port(m, seg, mp, want):
+    """The ROW in Clear Skies' location list whose name contains `want`.
+
+    A location's RECORD lives in the world overlay now (SPEC.md 88.10.5), so
+    only the loaded world has one and walking `cs_ports` for a name finds
+    exactly one place. `cs_apnames` is the resident half - nine name pointers,
+    which is what the launcher's own drop-down reads - so that is what a row
+    looking for NYC-JFK asks.
+
+    POKE `cs_apnow` WITH THE ANSWER, not `cs_airport`: picking a place is
+    setting the row, and cs_cmd_fly turns the row into a world on its way into
+    the bracket. A poked `cs_airport` names a record the overlay does not hold.
+    """
+    n = int.from_bytes(m.readseg(seg, mp["cs_drport"] + 10, 2), "little")
+    for i in range(n):
+        at = int.from_bytes(m.readseg(seg, mp["cs_apnames"] + 2 * i, 2),
+                            "little")
+        nm = ""
+        while True:
+            c = m.readseg(seg, at + len(nm), 1)[0]
+            if not c:
+                break
+            nm += chr(c)
+        if want in nm:
+            return i, nm
+    return None, None
+
+
+def colour_gif(src="build/OS8088.GIF", dst=tempfile.gettempdir() + "/OS88COL.GIF"):
     """`src` with a FOUR-entry colour table, so SPEC.md 42.23.6 keeps it 4bpp.
 
-    **Every pixel is identical** - the two entries the image uses keep their
-    indices and their colours, and two unused ones are appended - so any row
-    whose oracle is "the canvas against the file" is unaffected. What changes
-    is the one bit `pt_fmtpick` reads: 42.23.6 opens a picture whose colour
-    table has two entries ONE BIT DEEP, on any adapter, and `build/OS8088.GIF`
-    turns out to have exactly two.
+    **Every pixel INDEX is identical, and what the indices mean is not** - the
+    two new entries go in FIRST, so the picture's own pair moves to 2 and 3
+    and every pixel is drawn in one of the two new colours. That is what makes
+    the file colour, and the file has to be colour or `pt_fmtpick` takes a
+    1bpp canvas and the planar rows have no subject. What it reads is one bit:
+    42.23.6 opens a picture whose colour table has two entries ONE BIT DEEP,
+    on any adapter, and `build/OS8088.GIF` turns out to have exactly two.
+
+    **A row whose oracle is "the 1bpp canvas equals the file's own bitmap"
+    therefore CANNOT use this** - see the note at the insertion below, which
+    is what `blitpair` cost. Those rows want `build/OS8088.GIF` itself.
 
     That is correct for that file and it left the tree with no COLOUR picture
     at all - so `paintrow` and `paintback`, whose whole subject is the
@@ -179,6 +277,27 @@ def colour_gif(src="build/OS8088.GIF", dst="/tmp/OS88COL.GIF"):
         shutil.copyfile(sp, dst)            # already colour: nothing to do
         return dst
     d[10] = (pk & 0xF8) | 1                 # 2 << 1 = four entries
+    # **PREPENDED, AND THAT IS THE POINT, so the paragraph above is wrong in
+    # the one way that matters and is corrected here rather than tidied.** The
+    # table starts at offset 13, so this inserts BEFORE the two entries the
+    # image uses: indices 0 and 1 - the only ones any pixel carries - become
+    # the two new colours, and the picture's own pair moves to 2 and 3. The
+    # INDICES are untouched; what they mean is not.
+    #
+    # That is what makes the file colour, which is the whole purpose: with the
+    # original black and white still at 0 and 1 the picture reduces to one bit
+    # again, `pt_fmtpick` calls it colourless and Paint takes a 1bpp canvas -
+    # measured, `paintrow` and `paintplan` then report *"no gfx_blitp - the
+    # canvas is not planar"*, which is those rows losing their subject.
+    #
+    # **SO IT IS NOT A DROP-IN FOR OS8088.GIF, and a row whose oracle is "the
+    # 1bpp canvas equals the file's own bitmap" must not use it**: on a 1bpp
+    # adapter SPEC.md 39.4 reduces 0xAA0000 and 0x0000AA to the SAME class, so
+    # the canvas is solid where the file alternates. `tests/blitpair.py` was
+    # pointed here and read 20,327 differing pixels of 51,260 - which looks
+    # exactly like the decoder bug it exists to catch, and was filed as a
+    # pre-existing failure. It takes
+    # build/OS8088.GIF itself now, and says why.
     d[13:13] = bytes([0xAA, 0x00, 0x00,     # ...two of them unused by the
                       0x00, 0x00, 0xAA])    # image, and genuinely colours
     open(dst, "wb").write(bytes(d))
@@ -202,18 +321,47 @@ def bss_off(app, name, small=False):
     return m[name] - m["os88_image_end"]
 
 
+def sym(app, name, small=False):
+    """A package symbol's NEAR offset inside its own segment.
+
+    Packages are assembled at org 0 and never relocated (§20), so the map
+    value IS the offset - which is exactly what `Marty.readseg(pseg, ...)`
+    wants, where `bss_off` above answers the bss-RELATIVE one for callers
+    that go through `img_size`. Both are here because a row reaching for the
+    wrong one gets plausible rubbish rather than an error.
+
+    `small=True` maps the `-DAPP_SMALL` build, WHICH IS A DIFFERENT LAYOUT.
+    """
+    m = _map(app, ("-DAPP_SMALL",) if small else ())
+    if name not in m:
+        sys.exit("dispapps: %s has no symbol %s%s"
+                 % (app, name, " in the APP_SMALL build" if small else ""))
+    return m[name]
+
+
 def img_size(app, small=False):
-    """The package's image size, which is where its bss starts."""
+    """The package's image size, which is where its bss starts.
+
+    **`image` AT +8 IS THE UNPACKED SIZE ON BOTH CONTAINERS** (SPEC.md
+    20.13.5), so `n != len(d)` is not a layout check any more - it is how a
+    COMPRESSED package looks, and `PKGZ ?= lz4` makes that every shipped one.
+    The check is kept, against the unwrapped image, because it is still worth
+    something: a header whose +8 disagrees with the bytes it describes is a
+    layout that has moved. It just has to be told what the bytes are first.
+    """
     sub = os.path.join("build", "smallapp") if small else "build"
-    p = os.path.join(ROOT, sub, {"solitaire": "solitair"}.get(app, app)
-                     + ".o88")
-    d = open(p, "rb").read()
-    if d[:2] != b"O8":
+    p = os88build.at("%s/%s.o88" % (sub.replace(os.sep, "/"),
+                                    {"solitaire": "solitair"}.get(app, app)))
+    if not os.path.isabs(p):
+        p = os.path.join(ROOT, p)
+    raw = open(p, "rb").read()
+    if raw[:2] != b"O8":
         sys.exit("dispapps: %s is not a package image" % p)
+    d = os88pkg.image_unwrap(raw)
     n = int.from_bytes(d[8:10], "little")       # +8 = image size (SPEC.md 20.2)
     if n != len(d):
-        sys.exit("dispapps: %s says image=%d but is %d bytes - the header "
-                 "layout has moved" % (p, n, len(d)))
+        sys.exit("dispapps: %s says image=%d and unwraps to %d bytes - the "
+                 "header layout has moved" % (p, n, len(d)))
     return n
 
 
@@ -263,7 +411,7 @@ def main(argv):
              "solitaire": ["sol_cw", "sol_ch", "sol_pitch", "sol_taby",
                            "sol_bpp"],
              "missile": ["mc_mono", "mc_ecoarse", "mc_expfr", "mc_caps"],
-             "piano": ["pn_kby2", "pn_bky2", "pn_wlbl", "pn_blbl"]}
+             "piano": ["pn_kby2", "pn_bky2"]}
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
         mo = os88mouse.Mouse(marty=m)
         if dispfit.kind(m) != VID_VGA:
@@ -330,11 +478,12 @@ def main(argv):
                     break
             if got is None:
                 w, h, d = m.fbuf()
-                os88marty.write_png_rgb("/tmp/dispapps-stuck.png", w, h, d)
-                sys.exit("dispapps: %s did not open - windows %r, see "
-                         "/tmp/dispapps-stuck.png"
+                stuck = os.path.join(tempfile.gettempdir(),
+                                     "dispapps-stuck.png")
+                os88marty.write_png_rgb(stuck, w, h, d)
+                sys.exit("dispapps: %s did not open - windows %r, see %s"
                          % (app, [(i, dispcp.win_rect(m, S, i))
-                                  for i in dispcp.win_list(m, S)]))
+                                  for i in dispcp.win_list(m, S)], stuck))
             segs[app] = got[1]
             slots[app] = got[0]
             say("%s: segment %04x" % (app, got[1]))

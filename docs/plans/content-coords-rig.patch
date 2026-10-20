@@ -1,0 +1,2527 @@
+diff --git a/apps/os88api.inc b/apps/os88api.inc
+index c4c20089..6172a1e7 100644
+--- a/apps/os88api.inc
++++ b/apps/os88api.inc
+@@ -206,6 +206,33 @@ CWHITE    equ 15
+ %define OSAPI_GFX_FILL_GRAY KERNEL_SEG:0x0048   ; AX=x1, BX=y1, CX=x2, DX=y2 (50% dither)
+ %define OSAPI_GFX_XOR_RECT  KERNEL_SEG:0x0050   ; AX=x1, BX=y1, CX=x2, DX=y2
+ %define OSAPI_GFX_XOR_FILL  KERNEL_SEG:0x0058   ; AX=x1, BX=y1, CX=x2, DX=y2
++%ifdef DCPROTO                  ; docs/plans/CONTENT-COORDS-PLAN.md's rig: the
++PKGF_CREL equ 0x40              ; CONTENT cells, coordinates from the content
++%define OSAPI_CGFX_HLINE     KERNEL_SEG:0x0467  ; box's top-left and cut to it
++%define OSAPI_CGFX_VLINE     KERNEL_SEG:0x046E
++%define OSAPI_CGFX_FILL      KERNEL_SEG:0x0475
++%define OSAPI_CGFX_FRAME     KERNEL_SEG:0x047C
++%define OSAPI_CGFX_FILL_GRAY KERNEL_SEG:0x0483
++%define OSAPI_CGFX_XOR_RECT  KERNEL_SEG:0x048A
++%define OSAPI_CGFX_XOR_FILL  KERNEL_SEG:0x0491
++%define OSAPI_CFONT_CHAR_XPARENT KERNEL_SEG:0x0498
++%define OSAPI_CFONT_STR_XPARENT  KERNEL_SEG:0x049F
++%define OSAPI_CFONT_RUN      KERNEL_SEG:0x04A6
++%define OSAPI_CGFX_BLIT1     KERNEL_SEG:0x04AD
++%define OSAPI_CGFX_BLIT4     KERNEL_SEG:0x04B3
++%define OSAPI_CGFX_PIXEL     KERNEL_SEG:0x04B9
++%define OSAPI_CGFX_FILL_PAT  KERNEL_SEG:0x04C0
++%define OSAPI_CGFX_SCROLL    KERNEL_SEG:0x04C7
++%define OSAPI_CICON_DRAW     KERNEL_SEG:0x04CE
++%define OSAPI_CGFX_SAVE      KERNEL_SEG:0x04D5
++%define OSAPI_CGFX_REST      KERNEL_SEG:0x04DC
++%define OSAPI_CWM_CLIP_TEST  KERNEL_SEG:0x04E3
++%define OSAPI_CWM_DAMAGE     KERNEL_SEG:0x04EA
++%define OSAPI_CMOUSE         KERNEL_SEG:0x04F1
++%define OSAPI_CGFX_BLITP     KERNEL_SEG:0x04F8
++%define OSAPI_CWM_CONTENT    KERNEL_SEG:0x04FE
++%define OSAPI_CWM_CLIP_SET   KERNEL_SEG:0x0502
++%endif
+ ; --- TEXT, and READ THIS BEFORE PICKING ONE (SPEC.md 6.6) --------------------
+ ; OSAPI_FONT_RUN is the one you want. It draws the background and the glyph in
+ ; ONE pass, so no pixel is written twice and no cell is ever momentarily blank.
+@@ -3207,10 +3234,15 @@ PKG_FMT equ 8
+                             ; about whole-word addresses (SPEC.md 20.2)
+     db 'O', '8'             ; +0  magic (word 0x384F)
+     db PKG_FMT              ; +2  format version: segment-per-package, this table
++    %ifdef OS88_CONTENT     ; the CONTENT-COORDS rig: the package says so
++      %define OS88_HDRCREL PKGF_CREL
++    %else
++      %define OS88_HDRCREL 0
++    %endif
+     %if %0 >= 3
+-    db %3                   ; +3  flags (bit 0 = embedded icon)
++    db (%3) | OS88_HDRCREL  ; +3  flags (bit 0 = embedded icon)
+     %else
+-    db 0                    ; +3  flags
++    db OS88_HDRCREL         ; +3  flags
+     %endif
+     dw 0                    ; +4  link base: 0, and the loader checks it
+     dw (%2) - $$            ; +6  entry offset
+@@ -5462,3 +5494,61 @@ FSIF_BANKED equ 4
+     db %2
+     times 8 - %%slen db ' '
+ %endmacro
++
++; ---- the CONTENT-COORDS rig's SDK switch: a package that defines
++; OS88_CONTENT before this file gets the content cells under the old names,
++; so every shared include it pulls in is converted with it.
++%ifdef DCPROTO
++%ifdef OS88_CONTENT
++%undef OSAPI_GFX_HLINE
++%define OSAPI_GFX_HLINE OSAPI_CGFX_HLINE
++%undef OSAPI_GFX_VLINE
++%define OSAPI_GFX_VLINE OSAPI_CGFX_VLINE
++%undef OSAPI_GFX_FILL
++%define OSAPI_GFX_FILL OSAPI_CGFX_FILL
++%undef OSAPI_GFX_FRAME
++%define OSAPI_GFX_FRAME OSAPI_CGFX_FRAME
++%undef OSAPI_GFX_FILL_GRAY
++%define OSAPI_GFX_FILL_GRAY OSAPI_CGFX_FILL_GRAY
++%undef OSAPI_GFX_XOR_RECT
++%define OSAPI_GFX_XOR_RECT OSAPI_CGFX_XOR_RECT
++%undef OSAPI_GFX_XOR_FILL
++%define OSAPI_GFX_XOR_FILL OSAPI_CGFX_XOR_FILL
++%undef OSAPI_FONT_CHAR_XPARENT
++%define OSAPI_FONT_CHAR_XPARENT OSAPI_CFONT_CHAR_XPARENT
++%undef OSAPI_FONT_STR_XPARENT
++%define OSAPI_FONT_STR_XPARENT OSAPI_CFONT_STR_XPARENT
++%undef OSAPI_FONT_RUN
++%define OSAPI_FONT_RUN OSAPI_CFONT_RUN
++%undef OSAPI_GFX_BLIT1
++%define OSAPI_GFX_BLIT1 OSAPI_CGFX_BLIT1
++%undef OSAPI_GFX_BLIT4
++%define OSAPI_GFX_BLIT4 OSAPI_CGFX_BLIT4
++%undef OSAPI_GFX_PIXEL
++%define OSAPI_GFX_PIXEL OSAPI_CGFX_PIXEL
++%undef OSAPI_GFX_FILL_PAT
++%define OSAPI_GFX_FILL_PAT OSAPI_CGFX_FILL_PAT
++%undef OSAPI_GFX_SCROLL
++%define OSAPI_GFX_SCROLL OSAPI_CGFX_SCROLL
++%undef OSAPI_ICON_DRAW
++%define OSAPI_ICON_DRAW OSAPI_CICON_DRAW
++%undef OSAPI_GFX_SAVE
++%define OSAPI_GFX_SAVE OSAPI_CGFX_SAVE
++%undef OSAPI_GFX_REST
++%define OSAPI_GFX_REST OSAPI_CGFX_REST
++%undef OSAPI_WM_CLIP_TEST
++%define OSAPI_WM_CLIP_TEST OSAPI_CWM_CLIP_TEST
++%undef OSAPI_WM_DAMAGE
++%define OSAPI_WM_DAMAGE OSAPI_CWM_DAMAGE
++%undef OSAPI_WM_CLIP_SET
++%define OSAPI_WM_CLIP_SET OSAPI_CWM_CLIP_SET
++%undef OSAPI_MOUSE
++%define OSAPI_MOUSE OSAPI_CMOUSE
++%undef OSAPI_GFX_BLITP
++%define OSAPI_GFX_BLITP OSAPI_CGFX_BLITP
++%ifndef DCB_BREAK                ; the rig's negative control
++%undef OSAPI_WM_CONTENT
++%define OSAPI_WM_CONTENT OSAPI_CWM_CONTENT
++%endif
++%endif
++%endif
+diff --git a/kernel/dcproto.inc b/kernel/dcproto.inc
+new file mode 100644
+index 00000000..28122b4c
+--- /dev/null
++++ b/kernel/dcproto.inc
+@@ -0,0 +1,503 @@
++; =============================================================================
++; os8088 - dcproto.inc
++;
++; PROTOTYPE ONLY - docs/plans/CONTENT-COORDS-PLAN.md's measuring rig. Never
++; built by default: everything here is inside %ifdef DCPROTO, and nothing that
++; ships defines it. It exists so the plan's cycle and byte figures are
++; MEASURED against a real body rather than counted off a listing.
++;
++; THE DRAWING CONTEXT (DC). Four words: the content origin of the window whose
++; callback is running, and its content box's last column and row in CONTENT
++; coordinates. wm_pkgcall sets them for a package whose header carries
++; PKGF_CREL and stacks the caller's around the callback; the CONTENT cells
++; below read them. The SCREEN cells are untouched, and so is every kernel
++; caller, which reaches the primitives by near call and never meets a cell.
++; =============================================================================
++
++%ifdef DCPROTO
++section .text
++
++
++dc_ox       dw 0                ; .text WITH initialisers: read by the first
++dc_oy       dw 0                ; content cell a package ever calls, which can
++dc_w1       dw 0x7FFF           ; be from its entry proc before any callback
++dc_h1       dw 0x7FFF           ; has set them
++dc_tgt      dw 0                ; the blit shape's target (BP is an INPUT there)
++dc_tw       dw 0                ; the text shape's run width
++
++; -----------------------------------------------------------------------------
++; dc_set - the DC := window SI's content box
++; in:  SI = window record (KERNEL_SEG). DS anything.
++; out: nothing; every register and DS preserved, flags clobbered
++; -----------------------------------------------------------------------------
++dc_set:
++    push ds
++    push cs
++    pop ds
++    push ax
++    push bx
++    push cx
++    push dx
++    mov bx, si
++    call wm_content             ; AX = content left, DX = top
++    mov [dc_ox], ax
++    mov [dc_oy], dx
++    call wm_geom                ; CX = width, DX = height
++    dec cx
++    mov [dc_w1], cx
++    dec dx
++    mov [dc_h1], dx
++    pop dx
++    pop cx
++    pop bx
++    pop ax
++    pop ds
++    ret
++
++; -----------------------------------------------------------------------------
++; dc_ptxl - a click's CX/DX into window SI's content coordinates, IF its owner
++;           asked for them (header PKGF_CREL). DS = KERNEL_SEG.
++; -----------------------------------------------------------------------------
++dc_ptxl:
++    cmp word [si+W_SEG], 0
++    je .out
++    push es
++    mov es, [si+W_SEG]
++    test byte [es:3], PKGF_CREL
++    pop es
++    jz .out
++    push ax
++    push bx
++    push dx
++    mov bx, si
++    call wm_content             ; AX = ox, DX = oy
++    sub cx, ax
++    mov ax, dx
++    pop dx
++    sub dx, ax
++    pop bx
++    pop ax
++.out:
++    ret
++
++; -----------------------------------------------------------------------------
++; THE CONTENT CELLS' SHAPES. A cell is `push bp / mov bp, target / jmp shape`
++; (OSAPI_XCELL's seven bytes); the shape switches DS, cuts the arguments to the
++; content box, adds the origin, calls the target, restores and retf's.
++; -----------------------------------------------------------------------------
++
++; RECT: AX = x1, BX = y1, CX = x2, DX = y2 - clipped exactly to the box
++dcs_rect:
++    push ds
++    push cs
++    pop ds
++    push ax
++    push bx
++    push cx
++    push dx
++    or ax, ax
++    js .fa
++.ra:
++    or bx, bx
++    js .fb
++.rb:
++    cmp cx, [dc_w1]
++    jg .fc
++.rc:
++    cmp dx, [dc_h1]
++    jg .fd
++.rd:
++    cmp ax, cx
++    jg dcs_rect.o4
++    cmp bx, dx
++    jg dcs_rect.o4
++    add ax, [dc_ox]
++    add cx, [dc_ox]
++    add bx, [dc_oy]
++    add dx, [dc_oy]
++    call bp
++.o4:
++    pop dx
++    pop cx
++    pop bx
++    pop ax
++    pop ds
++    pop bp
++    retf
++.fa:
++    xor ax, ax
++    jmp short .ra
++.fb:
++    xor bx, bx
++    jmp short .rb
++.fc:
++    mov cx, [dc_w1]
++    jmp short .rc
++.fd:
++    mov dx, [dc_h1]
++    jmp short .rd
++
++; HLINE: AX = x1, BX = x2, DX = y
++dcs_hline:
++    push ds
++    push cs
++    pop ds
++    push ax
++    push bx
++    push cx
++    push dx
++    cmp dx, [dc_h1]
++    ja dcs_rect.o4                 ; unsigned: above the box OR below it
++    or ax, ax
++    js .fa
++.ra:
++    cmp bx, [dc_w1]
++    jg .fb
++.rb:
++    cmp ax, bx
++    jg dcs_rect.o4
++    add ax, [dc_ox]
++    add bx, [dc_ox]
++    add dx, [dc_oy]
++    call bp
++    jmp short dcs_rect.o4
++.fa:
++    xor ax, ax
++    jmp short .ra
++.fb:
++    mov bx, [dc_w1]
++    jmp short .rb
++
++; VLINE: AX = x, BX = y1, DX = y2
++dcs_vline:
++    push ds
++    push cs
++    pop ds
++    push ax
++    push bx
++    push cx
++    push dx
++    cmp ax, [dc_w1]
++    ja dcs_rect.o4
++    or bx, bx
++    js .fa
++.ra:
++    cmp dx, [dc_h1]
++    jg .fb
++.rb:
++    cmp bx, dx
++    jg dcs_rect.o4
++    add ax, [dc_ox]
++    add bx, [dc_oy]
++    add dx, [dc_oy]
++    call bp
++    jmp short dcs_rect.o4
++.fa:
++    xor bx, bx
++    jmp short .ra
++.fb:
++    mov dx, [dc_h1]
++    jmp short .rb
++
++; TEXT: CX = x, DX = y, the rest the target's. A run's extent is the target's
++; to measure, so the box is ARMED as a one-fragment region when nothing is,
++; and the target's own region test cuts the run (whole cells, SPEC.md 11.3).
++; dcs_txt keeps the caller's ES (a SLOT target); dcs_txtx is api_x's shape,
++; ES = the caller's DS for an X target.
++dcs_txt:                        ; font_char: one 8 x 8 cell
++    push ds
++    push cs
++    pop ds
++    mov word [dc_tw], 8
++    call dcs_tcore
++    pop ds
++    pop bp
++    retf
++dcs_txtx:                       ; font_str / font_run: a NUL string at DS:SI
++    push ds
++    push es
++    push ds
++    pop es                      ; ES:SI = the caller's string (api_x's shape)
++    push cs
++    pop ds
++    push ax
++    push cx
++    push di
++    mov di, si
++    xor al, al
++    mov cx, 0FFFFh
++    repne scasb                 ; DF = 0 is the contract (SPEC.md 1)
++    not cx
++    dec cx                      ; CX = the string's length
++    shl cx, 1
++    shl cx, 1
++    shl cx, 1
++    mov [dc_tw], cx             ; ...its extent in pixels
++    pop di
++    pop cx
++    pop ax
++    call dcs_tcore
++dcs_txend:
++    pop es
++    pop ds
++    pop bp
++    retf
++dcs_ico:                        ; an icon record: no extent to hand, so armed
++    push ds
++    push es
++    push ds
++    pop es
++    push cs
++    pop ds
++    mov word [dc_tw], 0FFFFh
++    call dcs_tcore
++    jmp short dcs_txend
++; dcs_tcore - CX/DX content, [dc_tw] the run's width. WHOLLY INSIDE the box
++; (the case every in-box caller is): translated and drawn, nothing armed.
++; Straddling: the box armed as a one-fragment region for the call, so the
++; target's own whole-cell test cuts it.
++dcs_tcore:
++    push cx
++    push dx
++    or cx, cx
++    js .cut
++    or dx, dx
++    js .cut
++    push cx
++    add cx, [dc_tw]
++    jc .cutp                    ; (an icon's 0FFFFh, or a wrap)
++    dec cx
++    cmp cx, [dc_w1]
++    pop cx
++    jg .cut
++    push dx
++    add dx, 7
++    cmp dx, [dc_h1]
++    pop dx
++    jg .cut
++    add cx, [dc_ox]
++    add dx, [dc_oy]
++    call bp
++    pop dx
++    pop cx
++    ret
++.cutp:
++    pop cx
++.cut:
++    add cx, [dc_ox]
++    add dx, [dc_oy]
++    cmp word [wm_clip_n], 0
++    jne .armed
++    call dc_arm
++    call bp
++    mov word [wm_clip_n], 0     ; MOV writes no flags: the target's CF rides
++    pop dx
++    pop cx
++    ret
++.armed:
++    call bp
++    pop dx
++    pop cx
++    ret
++
++; dc_arm - wm_clip_tab := the DC's box, one fragment, and the deferred
++; cursor hide spent (an armed region skips GFXCLIP's own). Every register
++; preserved.
++dc_arm:
++    call cur_unlazy
++    push ax
++    mov ax, [dc_ox]
++    mov [wm_clip_tab+WCR_X1], ax
++    add ax, [dc_w1]
++    mov [wm_clip_tab+WCR_X2], ax
++    mov ax, [dc_oy]
++    mov [wm_clip_tab+WCR_Y1], ax
++    add ax, [dc_h1]
++    mov [wm_clip_tab+WCR_Y2], ax
++    mov word [wm_clip_n], 1
++    pop ax
++    ret
++
++; BLIT: AX = x, BX = y, CX = w, DX = h, BP = stride, ES:SI = the source - the
++; cell is `push bp / call dcs_blit / dw target` (six bytes), because BP is an
++; input. Wholly inside the box: drawn as given. Straddling: the box armed for
++; the call, exactly as the text shape does.
++dcs_blit:                       ; STKBALANCE-OK: pops the cell's return address - it IS the target word's address
++    pop bp
++    push ax
++    mov ax, [cs:bp]
++    mov [cs:dc_tgt], ax
++    pop ax
++    pop bp                      ; the caller's BP: the stride
++    push ds
++    push cs
++    pop ds
++    push ax
++    push bx
++    or ax, ax
++    js .cut
++    or bx, bx
++    js .cut
++    push ax
++    add ax, cx
++    dec ax
++    cmp ax, [dc_w1]
++    pop ax
++    jg .cut
++    push bx
++    add bx, dx
++    dec bx
++    cmp bx, [dc_h1]
++    pop bx
++    jg .cut
++    add ax, [dc_ox]
++    add bx, [dc_oy]
++    call word [dc_tgt]
++    jmp short .out
++.cut:
++    add ax, [dc_ox]
++    add bx, [dc_oy]
++    cmp word [wm_clip_n], 0
++    jne .armed
++    call dc_arm
++    call word [dc_tgt]
++    mov word [wm_clip_n], 0
++    jmp short .out
++.armed:
++    call word [dc_tgt]
++.out:
++    pop bx
++    pop ax
++    pop ds
++    retf
++
++
++; PIXEL: CX = x, DX = y
++dcs_pt:
++    push ds
++    push cs
++    pop ds
++    push ax
++    push bx
++    push cx
++    push dx
++    cmp cx, [dc_w1]
++    ja dcs_rect.o4
++    cmp dx, [dc_h1]
++    ja dcs_rect.o4
++    add cx, [dc_ox]
++    add dx, [dc_oy]
++    call bp
++    jmp dcs_rect.o4
++
++; RECT, X-type (the target reads caller data through ES): ES = caller's DS
++dcs_rectx:
++    push ds
++    push es
++    push ds
++    pop es
++    push cs
++    pop ds
++    push ax
++    push bx
++    push cx
++    push dx
++    or ax, ax
++    jns .a
++    xor ax, ax
++.a: or bx, bx
++    jns .b
++    xor bx, bx
++.b: cmp cx, [dc_w1]
++    jle .c
++    mov cx, [dc_w1]
++.c: cmp dx, [dc_h1]
++    jle .d
++    mov dx, [dc_h1]
++.d: cmp ax, cx
++    jg .none
++    cmp bx, dx
++    jg .none
++    add ax, [dc_ox]
++    add cx, [dc_ox]
++    add bx, [dc_oy]
++    add dx, [dc_oy]
++    call bp
++.none:
++    pop dx
++    pop cx
++    pop bx
++    pop ax
++    pop es
++    pop ds
++    pop bp
++    retf
++
++; RECT, TRANSLATED ONLY - a rect that is a QUESTION or a buffer's shape
++; (CLIP_TEST, SAVE, REST): cutting it would change the answer or the layout
++dcs_rectt:
++    push ds
++    push cs
++    pop ds
++    push ax
++    push bx
++    push cx
++    push dx
++    add ax, [dc_ox]
++    add cx, [dc_ox]
++    add bx, [dc_oy]
++    add dx, [dc_oy]
++    call bp
++    jmp dcs_rect.o4
++
++; RECT OUT (WM_DAMAGE): the answer comes back in content coordinates
++dcs_rout:
++    push ds
++    push cs
++    pop ds
++    call bp
++    pushf
++    sub ax, [dc_ox]
++    sub cx, [dc_ox]
++    sub bx, [dc_oy]
++    sub dx, [dc_oy]
++    popf
++    pop ds
++    pop bp
++    retf
++
++; POINT OUT (MOUSE): CX/DX back relative to the DC's origin
++dcs_pout:
++    push ds
++    push cs
++    pop ds
++    call bp
++    pushf
++    sub cx, [dc_ox]
++    sub dx, [dc_oy]
++    popf
++    pop ds
++    pop bp
++    retf
++
++
++; SELECT (WM_CLIP_SET): the region is armed for window BX and, if anything of
++; it shows, the DC becomes BX's - what a WORKER needs, having no dispatch to
++; set one. CF is the answer, as the screen cell's.
++dcs_sel:
++    push ds
++    push cs
++    pop ds
++    call bp
++    jc .out
++    push si
++    mov si, bx
++    call dc_set
++    pop si
++    clc
++.out:
++    pop ds
++    pop bp
++    retf
++
++%endif ; DCPROTO
+diff --git a/kernel/kernel.asm b/kernel/kernel.asm
+index 85e3129c..c8365da8 100644
+--- a/kernel/kernel.asm
++++ b/kernel/kernel.asm
+@@ -1450,6 +1450,19 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
+     call COLD_SEG:%1
+     retf
+ %endmacro
++%ifdef DCPROTO                      ; docs/plans/CONTENT-COORDS-PLAN.md's rig
++PKGF_CREL   equ 0x40
++%macro OSAPI_DCELL 2                ; 7 bytes: a content cell
++    push bp
++    mov bp, %1
++    jmp strict near %2
++%endmacro
++%macro OSAPI_DBCELL 1               ; 6 bytes: a content BLIT cell
++    push bp
++    call dcs_blit
++    dw %1
++%endmacro
++%endif
+ 
+ ; ---- the INLINE cells (SPEC.md 20.3): THE CELL IS THE ROUTINE ---------------
+ ; Fifteen routines were ONE memory access and a `ret` - a getter, a setter or
+@@ -3006,6 +3019,34 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
+                                   ;          size once, at the close or when
+                                   ;          the UI unlocks. kern_big; the
+                                   ;          small door refuses
++%ifdef DCPROTO
++    OSAPI_DCELL gfx_hline, dcs_hline     ; 0x0467 CONTENT cells (the rig)
++    OSAPI_DCELL gfx_vline, dcs_vline     ; 0x046E
++    OSAPI_DCELL gfx_fill, dcs_rect       ; 0x0475
++    OSAPI_DCELL gfx_frame, dcs_rect      ; 0x047C
++    OSAPI_DCELL gfx_fill_gray, dcs_rect  ; 0x0483
++    OSAPI_DCELL gfx_xor_rect, dcs_rect   ; 0x048A
++    OSAPI_DCELL gfx_xor_fill, dcs_rect   ; 0x0491
++    OSAPI_DCELL font_char, dcs_txt       ; 0x0498
++    OSAPI_DCELL font_str_x, dcs_txtx     ; 0x049F
++    OSAPI_DCELL font_run_x, dcs_txtx     ; 0x04A6
++    OSAPI_DBCELL gfx_blit1               ; 0x04AD
++    OSAPI_DBCELL gfx_blit4               ; 0x04B3
++    OSAPI_DCELL gfx_pixel, dcs_pt        ; 0x04B9
++    OSAPI_DCELL osapi_gfx_fill_pat, dcs_rectx ; 0x04C0
++    OSAPI_DCELL gfx_scroll, dcs_rect     ; 0x04C7
++    OSAPI_DCELL icon_draw_x, dcs_ico     ; 0x04CE
++    OSAPI_DCELL api_gfx_save, dcs_rectt  ; 0x04D5
++    OSAPI_DCELL api_gfx_rest, dcs_rectt  ; 0x04DC
++    OSAPI_DCELL wm_clip_test, dcs_rectt  ; 0x04E3
++    OSAPI_DCELL wm_damage, dcs_rout      ; 0x04EA
++    OSAPI_DCELL osapi_mouse, dcs_pout    ; 0x04F1
++    OSAPI_DBCELL gfx_blitp               ; 0x04F8
++    xor ax, ax                           ; 0x04FE WM_CONTENT: the origin of a
++    cwd                                  ;        content coordinate is (0,0)
++    retf
++    OSAPI_DCELL wm_clip_set, dcs_sel     ; 0x0502 WM_CLIP_SET: and SELECT
++%endif
+ osapi_table_end:                  ; 0x0467 today (0x05A8 before pass 4's
+                                   ; renumber). 0x0467 was OSAPI_VOL_TAKE for
+                                   ; one cycle and never shipped: it is
+@@ -3027,7 +3068,12 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
+ %if OSAPI_TABLE_OFF != 0x0010
+ %error "os8088 API jump table must start at offset 0x0010"
+ %endif
+-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 98*6 + 6*3 + 6 + 12*5 + 3*6
++%ifdef DCPROTO
++ %assign DCPROTO_LEN 20*7 + 3*6 + 4
++%else
++ %assign DCPROTO_LEN 0
++%endif
++%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 98*6 + 6*3 + 6 + 12*5 + 3*6 + DCPROTO_LEN
+ %error "os8088 API jump table must be exactly 0x0457 bytes: 43 SLOT (8), 11 XCELL (7), 98 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
+ %endif
+ 
+@@ -5039,6 +5085,7 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
+                               ; (SPEC.md 59.8), so it no longer defers to that
+                               ; widget and the order here is subject, not need
+ %include "ui.inc"
++%include "dcproto.inc"          ; the CONTENT-COORDS rig, DCPROTO only
+ %include "apps.inc"
+ %include "assoc.inc"          ; file type associations (SPEC.md 54): the
+                               ; tables and the icon composition. BEFORE
+diff --git a/kernel/ui.inc b/kernel/ui.inc
+index 97fc8fcb..67687f18 100644
+--- a/kernel/ui.inc
++++ b/kernel/ui.inc
+@@ -316,6 +316,9 @@ ui_task:
+     mov bp, [si + W_ONMOUSEUP]
+     or bp, bp
+     jz .mup_done                ; the package never asked for releases, which
++%ifdef DCPROTO
++    call dc_ptxl
++%endif
+     call ui_bill                ; is every shipped package today
+ .mup_done:                      ; ONE unlock for all three species
+     call gfx_unlock
+@@ -494,6 +497,9 @@ ui_task:
+ %endif
+     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
+     push si                     ; BANKED: the handler may clobber SI (SPEC.md
++%ifdef DCPROTO
++    call dc_ptxl
++%endif
+     call ui_bill              ; 12.2) and ui_bill/wm_pkgcall do not save it,
+     pop si                      ; so without this the arm below named whatever
+                                 ; the handler left - 0 lost the release, and
+@@ -1128,6 +1134,9 @@ ui_arm_trk:                     ; ui_task tests [ui_armw] before calling
+     jz .ret                     ; the package never asked for tracking, which
+                                 ; is every shipped package but Calculator
+     call gfx_lock
++%ifdef DCPROTO
++    call dc_ptxl
++%endif
+     call ui_bill
+     jmp gfx_unlock
+ .ret:
+@@ -1334,6 +1343,9 @@ ui_rdown:                       ; CX = press x, DX = press y, loaded by
+     jz .ctxwin
+     call gfx_lock               ; W_ONCLICK's environment exactly - CX = x,
+ .bill:                          ; DX = y, SI = window, billed to the owning
++%ifdef DCPROTO
++    call dc_ptxl
++%endif
+     call ui_bill                ; instance (CX/DX survived wm_hit/wm_top)
+ .ctx_done:                      ; and NOTHING ELSE sees this press: a package
+     jmp gfx_unlock              ; that takes the right button owns it whole,
+diff --git a/kernel/wm.inc b/kernel/wm.inc
+index d8cb086c..09ab7ff2 100644
+--- a/kernel/wm.inc
++++ b/kernel/wm.inc
+@@ -401,7 +401,12 @@ wm_pkgcall:
+                                 ; (SPEC.md 66.6.1), and the push reads it from
+                                 ; DS, so the segment costs no register here at
+                                 ; all - AX and BX are the CALLBACK's
++%ifdef DCPROTO
++    test byte [3], PKGF_CREL    ; the package's own header: content coords?
++    jnz .crel
++%endif
+     call far [es:si+W_DISP]     ; ...and off to its dispatcher
++.back:
+     push cs                     ; DS IS THE PACKAGE'S at the return, and `.out`
+     pop ds                      ; below restores the caller's, so borrowing it
+     call COLD_SEG:wm_nest_pop_x ; for two instructions costs nothing. ES is no
+@@ -411,6 +416,22 @@ wm_pkgcall:
+                                 ; brackets its `dec` and `push cs`/`pop ds`
+                                 ; writes none
+     jmp short .out
++%ifdef DCPROTO
++.crel:                          ; the rig: stack the caller's DC, set this
++    push word [es:dc_ox]        ; window's, dispatch, put the caller's back.
++    push word [es:dc_oy]        ; POP writes no flags, so the callback's CF
++    push word [es:dc_w1]        ; still rides out
++    push word [es:dc_h1]
++    call dc_set
++.crelgo:
++    call far [es:si+W_DISP]
++.crelret:
++    pop word [cs:dc_h1]
++    pop word [cs:dc_w1]
++    pop word [cs:dc_oy]
++    pop word [cs:dc_ox]
++    jmp short .back
++%endif
+ .near:
+     call COLD_SEG:wm_cbd        ; a kernel window: DS is already ours, and BP
+                                 ; is a COLD offset (SPEC.md 2.6.3)
+diff --git a/tests/dcrig/build.sh b/tests/dcrig/build.sh
+new file mode 100644
+index 00000000..2ea1e4e3
+--- /dev/null
++++ b/tests/dcrig/build.sh
+@@ -0,0 +1,53 @@
++#!/bin/sh
++# tests/dcrig/build.sh - docs/plans/CONTENT-COORDS-PLAN.md's measuring rig.
++#
++# Builds the PROTOTYPE kernel (kernel/dcproto.inc, -DDCPROTO) and its 360KB
++# system disk into build/proto/ - a private tree, so build/ is never touched -
++# and the B: disk the three drivers boot: the bench package in both variants,
++# Piano and Calc stock / flipped (-DOS88_CONTENT, source unchanged) / cleaned
++# (the stock source with tests/dcrig/<pkg>.diff applied - the clean-up IS the
++# diff), Piano's negative control, and TameGram stock / cleaned.
++#
++#   sh tests/dcrig/build.sh
++#   python3 tests/dcrig/dcbench.py     # a call, screen against content
++#   python3 tests/dcrig/dcflip.py      # stock against flipped, bit for bit
++#   python3 tests/dcrig/dcpaint.py     # a whole first paint
++#   python3 tests/dcrig/dcksec.py      # the three kernels' sections, stock vs rig
++#
++# NOTHING HERE IS A SUITE ROW and none of it may become one as it stands: it
++# all needs the rig kernel, which nothing that ships builds.
++set -e
++cd "$(dirname "$0")/../.."
++P=build/proto
++mkdir -p $P
++# os88kz.py's second pass runs $NASM as ONE word, so a define rides a wrapper
++W=$(pwd)/$P/nasm-dc
++printf '#!/bin/sh\nexec nasm -DDCPROTO "$@"\n' > "$W"
++chmod +x "$W"
++# NOOVLCHK: the blit cell is near-called and ends in retf, api_rs's shape,
++# which os88ovlchk allows by name and not for a prototype
++make -j3 BUILD=$P NASM="$W" NOOVLCHK=1 $P/os8088-360.img
++
++A="nasm -f bin -w+error -DDCPROTO -I apps/"
++$A -DDCB_CREL -o $P/dcbench.bin tests/dcrig/dcbench.asm
++$A -o $P/dcbenchs.bin tests/dcrig/dcbench.asm
++for p in piano calc tamegram; do
++    $A -o $P/$p.bin apps/$p/$p.asm
++done
++$A -DOS88_CONTENT -o $P/pianoc.bin apps/piano/piano.asm
++$A -DOS88_CONTENT -o $P/calcc.bin apps/calc/calc.asm
++$A -DOS88_CONTENT -DDCB_BREAK -o $P/pianob.bin apps/piano/piano.asm
++mkdir -p $P/src
++for p in piano calc tamegram; do
++    cp apps/$p/$p.asm $P/src/$p.asm
++    patch -s $P/src/$p.asm tests/dcrig/$p.diff
++done
++$A -DOS88_CONTENT -o $P/pianoc2.bin $P/src/piano.asm
++$A -DOS88_CONTENT -o $P/calcc2.bin $P/src/calc.asm
++$A -DOS88_CONTENT -o $P/tgc2.bin $P/src/tamegram.asm
++L=""
++for b in dcbench dcbenchs piano pianoc pianob pianoc2 calc calcc calcc2 tamegram tgc2; do
++    python3 tools/os88pkg.py --compress-if=lz4 $P/$b.bin -o $P/$b.o88
++    L="$L $P/$b.o88"
++done
++python3 tools/os88disk.py -o $P/dcb360.img --size 360 $L
+diff --git a/tests/dcrig/calc.diff b/tests/dcrig/calc.diff
+new file mode 100644
+index 00000000..1e92e1ef
+--- /dev/null
++++ b/tests/dcrig/calc.diff
+@@ -0,0 +1,120 @@
++--- apps/calc/calc.asm
+++++ calc.asm
++@@ -1,4 +1,11 @@
++ ; =============================================================================
+++; CONTENT-COORDS RIG COPY - docs/plans/CONTENT-COORDS-PLAN.md 3.5. NOT SHIPPED.
+++; apps/calc/calc.asm with its origin arithmetic taken out, assembled with
+++; -DDCPROTO -DOS88_CONTENT against the rig SDK by tests/dcrig/build.sh. Its
+++; size against the stock build is the plan's measurement of what Calc gives
+++; back; tests/dcrig/dcflip.py proves it draws the same pixels.
+++; =============================================================================
+++; =============================================================================
++ ; os8088 - apps/calc/calc.asm
++ ;
++ ; Calculator, the sixteenth package (SPEC.md 65). A four-function desk
++@@ -378,9 +385,6 @@
++     push cx
++     push dx
++     mov bx, [cal_win]
++-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
++-    mov [cal_ox], ax
++-    mov [cal_oy], dx
++     call OSAPI_WM_GEOM              ; CX = content width, DX = content height
++     mov [cal_ch], dx
++ %ifdef CALF_HIST
++@@ -466,8 +470,6 @@
++ %endif
++ .put:                               ; AX = x1, DX = y1, CL = width - 1, CH =
++     mov bx, cal_rc                  ; height - 1
++-    add ax, [cal_ox]
++-    add dx, [cal_oy]
++     mov [bx+0], ax
++     mov [bx+2], dx
++     push cx
++@@ -500,7 +502,6 @@
++ ; -----------------------------------------------------------------------------
++ cal_hit:
++     mov ax, dx
++-    sub ax, [cal_oy]
++     sub ax, CAL_KEY_Y0              ; y within the keypad, signed
++     jl .none
++     cmp ax, CAL_KEY_ROWS * CAL_KEY_PIT
++@@ -509,7 +510,6 @@
++     div bl
++     mov bh, al                      ; BH = the row
++     mov ax, cx
++-    sub ax, [cal_ox]
++     sub ax, CAL_KEY_X0
++     jl .none
++     cmp ax, CAL_KEY_COLS * (CAL_BTN_W + CAL_BTN_HG)
++@@ -970,8 +970,8 @@
++     push dx
++     mov al, CWHITE
++     call OSAPI_SET_COLOR
++-    mov ax, [cal_ox]
++-    mov bx, [cal_oy]
+++    xor ax, ax
+++    xor bx, bx
++     mov cx, ax
++     add cx, CAL_CW - 1
++     mov dx, bx
++@@ -999,8 +999,8 @@
++                                     ; shadows, so the next emit must be whole
++     mov al, CBLACK
++     call OSAPI_SET_COLOR
++-    mov ax, [cal_ox]                ; the display well
++-    mov bx, [cal_oy]
+++    xor ax, ax
+++    xor bx, bx
++     mov cx, ax
++     mov dx, bx
++     add ax, CAL_DISP_X1
++@@ -1223,8 +1223,8 @@
++ 
++     mov al, CLGRAY                  ; the separator: a 50% dither, which is the
++     call OSAPI_SET_COLOR            ; dotted rule this OS's model draws (39.4)
++-    mov si, [cal_ox]
++-    mov di, [cal_oy]
+++    xor si, si
+++    xor di, di
++     lea ax, [si+CAL_DISP_X1]
++     lea bx, [di+CAL_HDR_RULE]
++     lea cx, [si+CAL_DISP_X2]
++@@ -1327,10 +1327,9 @@
++     mov dl, CAL_ROW_H
++     mul dl
++     add ax, CAL_HIST_Y0
++-    add ax, [cal_oy]
++     xchg dx, ax                     ; DX = the row's y
++     pop ax
++-    mov cx, [cal_ox]
+++    xor cx, cx
++     add cx, CAL_HROW_X
++     add ax, CAL_R_HIST + 1          ; the HELD row is drawn held, so a repaint
++     cmp ax, [cal_down]              ; mid-gesture agrees with [cal_down] the
++@@ -1455,9 +1454,8 @@
++     mov cl, 3
++     shl dx, cl                      ; the pen: the field's, plus 8 per cell
++     add ax, dx
++-    add ax, [cal_ox]
++     xchg cx, ax
++-    mov dx, [cal_oy]
+++    xor dx, dx
++     add dx, CAL_TXT_Y
++     add si, bx
++     mov ax, CBLACK + CWHITE * 256
++@@ -2079,12 +2077,12 @@
++ 
++     mov dl, CAL_ROW_H               ; the band, x-aligned by construction -
++     mul dl                          ; OSAPI_WM_SNAP keeps the content origin on
++-    mov bx, [cal_oy]                ; a byte and both edges are multiples of 8
+++    xor bx, bx
++     add bx, CAL_HIST_Y0
++     mov dx, bx
++     add dx, ax
++     dec dx
++-    mov ax, [cal_ox]
+++    xor ax, ax
++     add ax, CAL_HROW_X
++     mov cx, ax
++     add cx, CAL_HROW_N * 8 - 1
+diff --git a/tests/dcrig/dcbench.asm b/tests/dcrig/dcbench.asm
+new file mode 100644
+index 00000000..39dd6140
+--- /dev/null
++++ b/tests/dcrig/dcbench.asm
+@@ -0,0 +1,244 @@
++; =============================================================================
++; os8088 - tests/dcrig/dcbench.asm
++;
++; DCBENCH: the measuring package for docs/plans/CONTENT-COORDS-PLAN.md. It is
++; built ONLY against that plan's prototype kernel (kernel/dcproto.inc, the
++; DCPROTO rig) and ships nowhere.
++;
++; One W_PAINT draws the SAME pixels twice over for each primitive priced -
++; once through the shipped SCREEN cell with the screen coordinates already in
++; registers, once through the rig's CONTENT cell with content coordinates -
++; each as eight (or four) back-to-back calls with nothing between them but the
++; register loads the call needs. tests/dcbench.py arms a breakpoint on each
++; cell and reads MartyPC's cycle counter at every hit: the gap between two
++; consecutive hits on one cell is one whole call, so the two gaps' difference
++; IS what the content cell costs over the screen cell.
++;
++; Built twice: with DCB_CREL the header carries PKGF_CREL and wm_pkgcall sets
++; the drawing context around every callback; without it, it does not and the
++; content cells are not called at all. The pair prices the per-callback DC
++; setup (`dcbench.py` times wm_pkgcall to the package's dispatcher).
++; =============================================================================
++
++%include "os88api.inc"
++
++%ifdef DCB_CREL
++    OS88_HEADER 'DCBENCH', db_entry, PKGF_CREL
++%else
++    OS88_HEADER 'DCBENCHS', db_entry
++%endif
++
++DB_X        equ 16              ; the content point everything is drawn at
++DB_Y        equ 16
++
++db_entry:
++    push si
++    mov si, db_tpl
++    call OSAPI_WM_CREATE
++    jc .out
++    OS88_REGION_MOVABLE
++.out:
++    pop si
++    ret
++
++; -----------------------------------------------------------------------------
++; db_paint - W_PAINT. SI = window. The drawing is the measurement.
++; -----------------------------------------------------------------------------
++db_paint:
++    mov bx, si
++    call OSAPI_WM_CONTENT       ; AX = ox, DX = oy (the rig leaves it screen)
++    mov [db_ox], ax
++    mov [db_oy], dx
++    mov al, CBLACK
++    call OSAPI_SET_COLOR
++%ifdef DCB_CREL
++    ; --- FILL: 8 x 8 at (16,16), eight times each ---------------------------
++    mov ax, [db_ox]
++    add ax, DB_X
++    mov bx, [db_oy]
++    add bx, DB_Y
++    mov cx, ax
++    add cx, 7
++    mov dx, bx
++    add dx, 7
++    call OSAPI_GFX_FILL
++    call OSAPI_GFX_FILL
++    call OSAPI_GFX_FILL
++    call OSAPI_GFX_FILL
++    call OSAPI_GFX_FILL
++    call OSAPI_GFX_FILL
++    call OSAPI_GFX_FILL
++    call OSAPI_GFX_FILL
++    mov ax, DB_X
++    mov bx, DB_Y
++    mov cx, DB_X + 7
++    mov dx, DB_Y + 7
++    call OSAPI_CGFX_FILL
++    call OSAPI_CGFX_FILL
++    call OSAPI_CGFX_FILL
++    call OSAPI_CGFX_FILL
++    call OSAPI_CGFX_FILL
++    call OSAPI_CGFX_FILL
++    call OSAPI_CGFX_FILL
++    call OSAPI_CGFX_FILL
++    ; --- HLINE: 64 px at y = 30, eight times each ----------------------------
++    mov ax, [db_ox]
++    add ax, DB_X
++    mov bx, ax
++    add bx, 63
++    mov dx, [db_oy]
++    add dx, 30
++    call OSAPI_GFX_HLINE
++    call OSAPI_GFX_HLINE
++    call OSAPI_GFX_HLINE
++    call OSAPI_GFX_HLINE
++    call OSAPI_GFX_HLINE
++    call OSAPI_GFX_HLINE
++    call OSAPI_GFX_HLINE
++    call OSAPI_GFX_HLINE
++    mov ax, DB_X
++    mov bx, DB_X + 63
++    mov dx, 30
++    call OSAPI_CGFX_HLINE
++    call OSAPI_CGFX_HLINE
++    call OSAPI_CGFX_HLINE
++    call OSAPI_CGFX_HLINE
++    call OSAPI_CGFX_HLINE
++    call OSAPI_CGFX_HLINE
++    call OSAPI_CGFX_HLINE
++    call OSAPI_CGFX_HLINE
++    ; --- FONT_RUN: eight cells at (16,40), four times each -------------------
++    mov cx, [db_ox]
++    add cx, DB_X
++    mov dx, [db_oy]
++    add dx, 40
++    mov si, db_s8
++    mov ax, (CWHITE << 8) | CBLACK
++    call OSAPI_FONT_RUN
++    call OSAPI_FONT_RUN
++    call OSAPI_FONT_RUN
++    call OSAPI_FONT_RUN
++    mov cx, DB_X
++    mov dx, 40
++    call OSAPI_CFONT_RUN
++    call OSAPI_CFONT_RUN
++    call OSAPI_CFONT_RUN
++    call OSAPI_CFONT_RUN
++    ; --- BLIT1: a 16 x 8 band at (16,56), four times each --------------------
++    push ds
++    pop es
++    mov si, db_band
++    mov bp, 2
++    mov ax, [db_ox]
++    add ax, DB_X
++    mov bx, [db_oy]
++    add bx, 56
++    mov cx, 16
++    mov dx, 8
++    call OSAPI_GFX_BLIT1
++    call OSAPI_GFX_BLIT1
++    call OSAPI_GFX_BLIT1
++    call OSAPI_GFX_BLIT1
++    mov ax, DB_X
++    mov bx, 56
++    call OSAPI_CGFX_BLIT1
++    call OSAPI_CGFX_BLIT1
++    call OSAPI_CGFX_BLIT1
++    call OSAPI_CGFX_BLIT1
++    ; --- FONT_CHAR_XPARENT: one glyph at (16,72), eight times each ----------
++    mov cx, [db_ox]
++    add cx, DB_X
++    mov dx, [db_oy]
++    add dx, 72
++    mov al, 'W'
++    call OSAPI_FONT_CHAR_XPARENT
++    call OSAPI_FONT_CHAR_XPARENT
++    call OSAPI_FONT_CHAR_XPARENT
++    call OSAPI_FONT_CHAR_XPARENT
++    call OSAPI_FONT_CHAR_XPARENT
++    call OSAPI_FONT_CHAR_XPARENT
++    call OSAPI_FONT_CHAR_XPARENT
++    call OSAPI_FONT_CHAR_XPARENT
++    mov cx, DB_X
++    mov dx, 72
++    call OSAPI_CFONT_CHAR_XPARENT
++    call OSAPI_CFONT_CHAR_XPARENT
++    call OSAPI_CFONT_CHAR_XPARENT
++    call OSAPI_CFONT_CHAR_XPARENT
++    call OSAPI_CFONT_CHAR_XPARENT
++    call OSAPI_CFONT_CHAR_XPARENT
++    call OSAPI_CFONT_CHAR_XPARENT
++    call OSAPI_CFONT_CHAR_XPARENT
++    ; --- FRAME: 40 x 20 at (100,16), eight times each -----------------------
++    mov ax, [db_ox]
++    add ax, 100
++    mov bx, [db_oy]
++    add bx, 16
++    mov cx, ax
++    add cx, 39
++    mov dx, bx
++    add dx, 19
++    call OSAPI_GFX_FRAME
++    call OSAPI_GFX_FRAME
++    call OSAPI_GFX_FRAME
++    call OSAPI_GFX_FRAME
++    call OSAPI_GFX_FRAME
++    call OSAPI_GFX_FRAME
++    call OSAPI_GFX_FRAME
++    call OSAPI_GFX_FRAME
++    mov ax, 100
++    mov bx, 16
++    mov cx, 139
++    mov dx, 35
++    call OSAPI_CGFX_FRAME
++    call OSAPI_CGFX_FRAME
++    call OSAPI_CGFX_FRAME
++    call OSAPI_CGFX_FRAME
++    call OSAPI_CGFX_FRAME
++    call OSAPI_CGFX_FRAME
++    call OSAPI_CGFX_FRAME
++    call OSAPI_CGFX_FRAME
++    ; --- ...and the CUT cases, once each, for the record ---------------------
++    mov ax, -4                  ; a fill hanging 4 px off the content's left
++    mov bx, DB_Y + 80
++    mov cx, 11
++    mov dx, DB_Y + 87
++    call OSAPI_CGFX_FILL
++    mov cx, -12                 ; a run starting 12 px off the content's left
++    mov dx, 120
++    mov si, db_s8
++    mov ax, (CWHITE << 8) | CBLACK
++    call OSAPI_CFONT_RUN
++    ; --- ...and the SAME two spills through the SCREEN cells, 30 rows down,
++    ; which is what a package that got its arithmetic wrong does today ------
++    mov ax, [db_ox]
++    sub ax, 4
++    mov bx, [db_oy]
++    add bx, DB_Y + 110
++    mov cx, ax
++    add cx, 15
++    mov dx, bx
++    add dx, 7
++    call OSAPI_GFX_FILL
++    mov cx, [db_ox]
++    sub cx, 12
++    mov dx, [db_oy]
++    add dx, 150
++    mov si, db_s8
++    mov ax, (CWHITE << 8) | CBLACK
++    call OSAPI_FONT_RUN
++%endif
++    ret
++
++db_tpl:
++    dw 120, 120, 320, 180
++    dw db_ttl, db_paint, 0, 0
++db_ttl:     db 'DCBench', 0
++db_s8:      db 'ABCDEFGH', 0
++db_band:    times 8 db 0xAA, 0x55
++
++    OS88_BSS 4
++    OS88_IMAGE_END
++
++db_ox       equ os88_image_end + 0
++db_oy       equ os88_image_end + 2
+diff --git a/tests/dcrig/dcbench.py b/tests/dcrig/dcbench.py
+new file mode 100644
+index 00000000..7227c749
+--- /dev/null
++++ b/tests/dcrig/dcbench.py
+@@ -0,0 +1,126 @@
++#!/usr/bin/env python3
++"""dcbench - what a CONTENT cell costs over a SCREEN cell, on a 4.77 MHz 8088.
++
++docs/plans/CONTENT-COORDS-PLAN.md's measurement, and NOT a suite row: it needs
++the plan's prototype kernel (kernel/dcproto.inc, built with -DDCPROTO into
++build/proto/) and the two DCBENCH packages, none of which ships. The plan's
++appendix has the commands that build them.
++
++It opens DCBENCH (header PKGF_CREL) from B:, whose one W_PAINT draws the same
++pixels through the shipped SCREEN cell and through the rig's CONTENT cell, as
++back-to-back runs of identical calls. A breakpoint on each cell records
++MartyPC's cycle counter at every hit; the gap between two consecutive hits on
++one cell is one whole call (cell, primitive and return), so the two medians'
++difference is the content cell's price. It then opens DCBENCHS (no PKGF_CREL)
++and prices wm_pkgcall's drawing-context bracket from its own labels.
++
++    sh tests/dcrig/build.sh && python3 tests/dcrig/dcbench.py [--machine NAME]
++"""
++import argparse, os, statistics, sys
++
++ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
++sys.path.insert(0, os.path.join(ROOT, "tools"))
++os.environ.setdefault("OS88_BUILD", "build/proto")
++os.environ.setdefault("OS88_DEFINES", "DCPROTO")
++import os88sym                                         # noqa: E402
++os88sym._SHIPPED_DEFS = os88sym._SHIPPED_DEFS + ("DCPROTO",)   # not a knob
++import os88marty, os88ui                               # noqa: E402
++
++KSEG = 0x60
++CELLS = [("FILL 8x8", 0x0038, 0x0475, 8, "gfx_fill"),
++         ("HLINE 64px", 0x0028, 0x0467, 8, "gfx_hline"),
++         ("FONT_RUN 8 cells", 0x01E5, 0x04A6, 4, "font_run_x"),
++         ("BLIT1 16x8", 0x0320, 0x04AD, 4, "gfx_blit1"),
++         ("FONT_CHAR 1 cell", 0x0060, 0x0498, 8, "font_char"),
++         ("FRAME 40x20", 0x0040, 0x047C, 8, "gfx_frame")]
++
++
++def gaps(hits, addr):
++    cyc = [h["cycles"] for h in hits if h["addr"] == addr]
++    return cyc, [b - a for a, b in zip(cyc, cyc[1:])]
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--machine", default="os8088_5150_cga")
++    a = ap.parse_args()
++    sysimg = os.path.join(ROOT, "build/proto/os8088-360.img")
++    apps = os.path.join(ROOT, "build/proto/dcb360.img")
++    with os88ui.boot(sysimg, apps=apps, machine=a.machine) as ui:
++        m = ui.m
++        tg = []
++        for _, s, c, _n, ent in CELLS:
++            tg += [(KSEG << 4) + s, (KSEG << 4) + c, ent]
++        with os88marty.bp_trace(m, *tg) as tr:
++            ui.path("B:/DCBENCH.O88")
++            last = (KSEG << 4) + CELLS[-1][2]
++            tr.until(lambda: sum(1 for h in tr.hits if h["addr"] == last)
++                     >= CELLS[-1][3], "every bench call", 600)
++        hits = tr.hits
++        ui.settle()
++        w = ui.window("DCBench")
++        ox, oy = w.x + 1, w.y + os88ui.geom.TITLE_H
++        _w, _h, rows = m.vram()
++
++        def lit(x1, y1, x2, y2):
++            return sum(rows[y][x] for y in range(y1, y2 + 1)
++                       for x in range(x1, x2 + 1))
++        # left of the content: the frame's border column (ox-1) and three
++        # columns of desktop beyond it, for each of the four spills
++        print("SPILL ZONES (lit pixels in the 4 columns left of the content; "
++              "untouched = border + desktop dither):")
++        for tag, y in (("content FILL at x=-4 ", oy + 96),
++                       ("screen  FILL at ox-4", oy + 126),
++                       ("content RUN at x=-12", oy + 120),
++                       ("screen  RUN at ox-12", oy + 150)):
++            print("   %s  rows %d..%d: %d of 32 lit" % (tag, y, y + 7,
++                                                   lit(ox - 4, y, ox - 1, y + 7)))
++            for yy in range(y, y + 8):
++                print("      " + "".join("#" if rows[yy][x] else "." for x in range(ox - 16, ox + 16)))
++        print("machine %s, %d hits" % (a.machine, len(hits)))
++        print("%-18s %9s %9s %8s" % ("call", "screen", "content", "extra"))
++        def prolog(cell, ent):
++            out = []
++            for i, h in enumerate(hits):
++                if h["addr"] == cell:
++                    nx = next((y for y in hits[i + 1:] if y["name"] == ent), None)
++                    if nx:
++                        out.append(nx["cycles"] - h["cycles"])
++            return out
++        for name, s, c, n, ent in CELLS:
++            ps = prolog((KSEG << 4) + s, ent)
++            pc = prolog((KSEG << 4) + c, ent)
++            print("   %-18s cell -> %s entry: screen %s  content %s" % (name, ent, ps, pc))
++        for name, s, c, n, ent in CELLS:
++            _, gs = gaps(hits, (KSEG << 4) + s)
++            _, gc = gaps(hits, (KSEG << 4) + c)
++            gs, gc = gs[:n - 1], gc[:n - 1]
++            ms, mc = statistics.median(gs), statistics.median(gc)
++            print("%-18s %9d %9d %+8d   (%+.1f%%)  screen %s content %s"
++                  % (name, ms, mc, mc - ms, 100.0 * (mc - ms) / ms, gs, gc))
++        # --- the per-callback bracket: wm_pkgcall's DC arm -----------------
++        pts = ["wm_pkgcall", "wm_pkgcall.crel", "wm_pkgcall.crelgo",
++               "wm_pkgcall.crelret", "wm_pkgcall.back"]
++        ui.close(ui.window("DCBench"))
++        with os88marty.bp_trace(m, *pts) as tr2:
++            ui.path("B:/DCBENCH.O88")
++            tr2.until(lambda: tr2.count("wm_pkgcall.back") >= 1,
++                      "a CREL dispatch", 300)
++        h = tr2.hits
++        for i, x in enumerate(h):
++            if x["name"] == "wm_pkgcall.crel":
++                seq = h[i:i + 3]
++                if [y["name"] for y in seq] == ["wm_pkgcall.crel",
++                                                "wm_pkgcall.crelgo",
++                                                "wm_pkgcall.crelret"]:
++                    nxt = next((y for y in h[i + 3:]
++                                if y["name"] == "wm_pkgcall.back"), None)
++                    print("DC bracket: set %d cycles (push x4 + dc_set),"
++                          " restore %s cycles (pop x4 + jmp)"
++                          % (seq[1]["cycles"] - seq[0]["cycles"],
++                             nxt["cycles"] - seq[2]["cycles"] if nxt else "?"))
++                    break
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/dcrig/dccount.py b/tests/dcrig/dccount.py
+new file mode 100644
+index 00000000..709efc63
+--- /dev/null
++++ b/tests/dcrig/dccount.py
+@@ -0,0 +1,30 @@
++import os, sys, collections
++ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
++sys.path.insert(0, os.path.join(ROOT, "tools"))
++os.environ.setdefault("OS88_BUILD", "build/proto")
++os.environ.setdefault("OS88_DEFINES", "DCPROTO")
++import os88sym
++os88sym._SHIPPED_DEFS = os88sym._SHIPPED_DEFS + ("DCPROTO",)
++import os88marty, os88ui
++CELLS = {0x467: "HLINE", 0x46E: "VLINE", 0x475: "FILL", 0x47C: "FRAME", 0x483: "FILL_GRAY",
++         0x48A: "XOR_RECT", 0x491: "XOR_FILL", 0x498: "FCHAR", 0x49F: "FSTR", 0x4A6: "FRUN",
++         0x4AD: "BLIT1", 0x4B3: "BLIT4", 0x4B9: "PIXEL", 0x4C0: "FILL_PAT", 0x4C7: "SCROLL",
++         0x4CE: "ICON", 0x4D5: "SAVE", 0x4DC: "REST", 0x4E3: "CLIP_TEST", 0x4EA: "DAMAGE",
++         0x4F1: "MOUSE", 0x4F8: "BLITP", 0x4FE: "WM_CONTENT", 0x502: "CLIP_SET"}
++with os88ui.boot(os.path.join(ROOT, "build/proto/os8088-360.img"),
++                 apps=os.path.join(ROOT, "build/proto/dcb360.img")) as ui:
++    for f, t in (("PIANOC2.O88", "Piano"), ("CALCC2.O88", "Calculator")):
++        tg = [0x600 + a for a in CELLS] + ["wm_draw_win.uncharged"]
++        with os88marty.bp_trace(ui.m, *tg) as tr:
++            ui.path("B:/" + f)
++            ui.wait_window(t)
++            def done():
++                hs = tr.hits
++                k = next((i for i, h in enumerate(hs) if h["addr"] - 0x600 in CELLS), None)
++                return k is not None and any(h["name"] == "wm_draw_win.uncharged" for h in hs[k:])
++            tr.until(done, "paint", 300)
++        c = collections.Counter(CELLS.get(h["addr"] - 0x600, h["name"]) for h in tr.hits)
++        print(f, sum(v for k, v in c.items() if k in CELLS.values()), dict(c))
++        ui.settle()
++        ui.close(ui.window(t))
++        ui.settle()
+diff --git a/tests/dcrig/dccsurvey.py b/tests/dcrig/dccsurvey.py
+new file mode 100644
+index 00000000..0e10e12a
+--- /dev/null
++++ b/tests/dcrig/dccsurvey.py
+@@ -0,0 +1,26 @@
++import os, re, sys, collections
++root = sys.argv[1]
++draw = re.compile(r"\bos88_(gfx_(?:pixel|points|hline|vline|fill|frame|fill_gray|xor_rect|xor_fill|fill_pat|scroll|blit1|blit4|blitp)|font_(?:run|char_xparent|str_xparent))\s*\(")
++cont = re.compile(r"\bos88_wm_content\s*\(")
++geom = re.compile(r"\bos88_wm_geom\s*\(")
++clip = re.compile(r"\bos88_wm_clip_set\s*\(")
++tot = collections.Counter()
++for e in sorted(os.listdir(os.path.join(root, 'apps'))):
++    p = os.path.join(root, 'apps', e)
++    if not os.path.isdir(p) or e == 'cc':
++        continue
++    c = collections.Counter(); n = cn = g = cl = 0
++    for dp, dn, fn in os.walk(p):
++        for f in fn:
++            if f.endswith(('.c', '.h')):
++                t = open(os.path.join(dp, f), errors='replace').read()
++                t = re.sub(r"/\*.*?\*/", "", t, flags=re.S)
++                t = re.sub(r"//.*", "", t)
++                for m in draw.finditer(t):
++                    c[m.group(1)] += 1
++                cn += len(cont.findall(t)); g += len(geom.findall(t)); cl += len(clip.findall(t))
++    n = sum(c.values())
++    if n or cn:
++        print("%-12s draw=%4d content=%3d geom=%3d clipset=%2d %s" % (e, n, cn, g, cl, dict(c)))
++        tot.update(c)
++print(sum(tot.values()), dict(tot))
+diff --git a/tests/dcrig/dcflip.py b/tests/dcrig/dcflip.py
+new file mode 100644
+index 00000000..809b5bea
+--- /dev/null
++++ b/tests/dcrig/dcflip.py
+@@ -0,0 +1,135 @@
++#!/usr/bin/env python3
++"""dcflip - does a package FLIPPED to content coordinates draw the same pixels?
++
++docs/plans/CONTENT-COORDS-PLAN.md's migration claim, measured: a package
++assembled with `-DOS88_CONTENT` against the rig SDK (apps/os88api.inc under
++DCPROTO) reaches the CONTENT cells under its old slot names, wm_pkgcall sets
++its drawing context, WM_CONTENT answers (0,0) and clicks arrive content-
++relative - so its source is UNCHANGED and every `+ origin` it does adds zero.
++This opens each STOCK package and its flipped twin on the rig kernel, reads
++the window's content off the 1bpp framebuffer after open and after each
++scripted click, and compares the two bit for bit.
++
++NOT a suite row: it needs build/proto (the rig) and the B: disk the plan's
++appendix builds.   sh tests/dcrig/build.sh && python3 tests/dcrig/dcflip.py
++"""
++import os, sys
++ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
++sys.path.insert(0, os.path.join(ROOT, "tools"))
++os.environ.setdefault("OS88_BUILD", "build/proto")
++os.environ.setdefault("OS88_DEFINES", "DCPROTO")
++import os88sym                                         # noqa: E402
++os88sym._SHIPPED_DEFS = os88sym._SHIPPED_DEFS + ("DCPROTO",)
++import os88marty, os88ui                               # noqa: E402
++
++# (stock file, flipped file, window title, clicks as CONTENT offsets)
++# PIANOC/CALCC are the SDK switch alone (source unchanged); PIANOC2/CALCC2
++# are the same with the origin arithmetic taken out (plan 3.2); PIANOB is the
++# negative control - flipped, but WM_CONTENT left answering the SCREEN origin,
++# so every coordinate is offset twice and must NOT match.
++PC = [(30, 100), (150, 100), (60, 60)]
++CC = [(20, 60), (60, 60), (100, 90), (20, 120)]
++PAIRS = [("PIANO.O88", "PIANOB.O88", "Piano", [(30, 100)]),
++         ("PIANO.O88", "PIANOC.O88", "Piano", PC),
++         ("PIANO.O88", "PIANOC2.O88", "Piano", PC),
++         ("CALC.O88", "CALCC.O88", "Calc", CC),
++         ("CALC.O88", "CALCC2.O88", "Calc", CC),
++         ("TAMEGRAM.O88", "TAMEGRAM.O88", "TameGram", []),   # its own noise
++         ("TAMEGRAM.O88", "TGC2.O88", "TameGram", []),
++         ]
++if len(sys.argv) > 1:
++    PAIRS = [p for p in PAIRS if p[1] in sys.argv[1:]]
++
++
++BAND = 32
++MBAR_H = 20
++
++
++def outside(ui, w):
++    """A BAND px ring round the window's frame and shadow - below the menu bar
++    and on no other window, so what is compared is desktop the package may
++    not touch, and nothing else that changes between two runs."""
++    wid, hgt, rows = ui.m.vram()
++    others = [o for o in ui.windows() if o.visible and o.i != w.i]
++
++    def keep(x, y):
++        if y < MBAR_H or y >= hgt or x < 0 or x >= wid:
++            return False
++        if w.x <= x <= w.x + w.w and w.y <= y <= w.y + w.h:
++            return False
++        return not any(o.x <= x <= o.x + o.w and o.y <= y <= o.y + o.h
++                       for o in others)
++    return [tuple(rows[y][x] for x in range(w.x - BAND, w.x + w.w + BAND + 1)
++                  if keep(x, y))
++            for y in range(w.y - BAND, w.y + w.h + BAND + 1)]
++
++
++def grab(ui, w):
++    """The window's frame rect, as rows of bits, off the CGA framebuffer."""
++    wid, hgt, rows = ui.m.vram()
++    x1, y1, x2, y2 = w.x, w.y, w.x + w.w - 1, w.y + w.h - 1
++    out = []
++    for y in range(y1, y2 + 1):
++        r = rows[y]
++        out.append(tuple(r[x] for x in range(x1, x2 + 1)))
++    return out
++
++
++ANIMATED = {"TameGram": 28}         # title -> the static band's height
++
++
++def run_one(ui, fname, title, clicks):
++    ui.path("B:/" + fname)
++    w = ui.wait_window(title)
++    if title in ANIMATED:
++        # A GAME: its worker never stops drawing, so there is no settled
++        # frame. Run a fixed span of guest time, stop, and compare the
++        # static band (the HUD) and the desktop round the window - the
++        # matrix under it is random by design.
++        ui.m.advance(frames=120)
++        w = ui.window(title)
++        wid, hgt, rows = ui.m.vram()
++        cy = w.y + os88ui.geom.TITLE_H
++        band = [tuple(rows[y][w.x:w.x + w.w]) for y in range(cy, cy + ANIMATED[title])]
++        o = outside(ui, w)
++        ui.m.run()
++        ui.close(ui.window(title))
++        ui.settle()
++        return (w.x, w.y, w.w, w.h), [band], [o]
++    ui.settle()
++    w = ui.window(title)
++    pics = [grab(ui, w)]
++    outs = [outside(ui, w)]
++    cx, cy = w.x + 1, w.y + os88ui.geom.TITLE_H
++    for (dx, dy) in clicks:
++        ui.mo.click(cx + dx, cy + dy)
++        ui.settle()
++        pics.append(grab(ui, ui.window(title)))
++        outs.append(outside(ui, ui.window(title)))
++    ui.close(ui.window(title))
++    ui.settle()
++    return (w.x, w.y, w.w, w.h), pics, outs
++
++
++def main():
++    sysimg = os.path.join(ROOT, "build/proto/os8088-360.img")
++    apps = os.path.join(ROOT, "build/proto/dcb360.img")
++    bad = 0
++    with os88ui.boot(sysimg, apps=apps) as ui:
++        for stock, flip, title, clicks in PAIRS:
++            g0, a, oa = run_one(ui, stock, title, clicks)
++            g1, b, ob = run_one(ui, flip, title, clicks)
++            for i, (p, q) in enumerate(zip(a, b)):
++                diff = sum(1 for r0, r1 in zip(p, q) for u, v in zip(r0, r1) if u != v)
++                odiff = sum(1 for r0, r1 in zip(oa[i], ob[i]) for u, v in zip(r0, r1) if u != v)
++                lit = sum(sum(r) for r in p)
++                tag = "open" if i == 0 else "click %d %s" % (i, clicks[i - 1])
++                print("%-6s %-10s %-16s geom %s/%s  lit %6d  differing %d  outside the window %d"
++                      % (title, flip, tag, g0, g1, lit, diff, odiff))
++                bad += diff != 0 or g0 != g1
++    print("FLIP IDENTICAL" if not bad else "FLIP DIFFERS (%d)" % bad)
++    return 1 if bad else 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tests/dcrig/dcksec.py b/tests/dcrig/dcksec.py
+new file mode 100644
+index 00000000..92f0a8f3
+--- /dev/null
++++ b/tests/dcrig/dcksec.py
+@@ -0,0 +1,39 @@
++"""Section sizes of kern_big / kern_small / kern_emu, stock against the DCPROTO rig.
++
++Re-assembles kernel/kernel.asm with -DKERNSIZE (kernsize.py's own `ks:` line)
++for each variant. Generated includes come from build/ (big), build/smallk/
++(small) and build/emuk/ (emu) when present.
++"""
++import os, re, subprocess, sys, tempfile
++ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
++VAR = {"big": (["-DKERN_BIG"], "build"),
++       "small": (["-DKERN_SMALL"], "build/smallk"),
++       "emu": (["-DKERN_BIG", "-DKERN_EMU"], "build/emuk")}
++
++def ks(defs, bdir):
++    fd, out = tempfile.mkstemp(suffix=".bin", dir=os.path.join(ROOT, "build", "proto"))
++    os.close(fd)
++    b = os.path.join(ROOT, bdir)
++    if not os.path.isdir(b):
++        b = os.path.join(ROOT, "build")
++    cmd = ["nasm", "-f", "bin", "-w+error", "-w-error=user", "-DKERNSIZE",
++           "-I", "kernel/", "-I", "apps/", "-I", b + "/", *defs,
++           "-DKZIP", "-DKZ_SECS=0", "-DKZ_RPARA=0", "-DKZ_NBLK=1", "-DKZ_HEADSEC=9",
++           "-o", out, "kernel/kernel.asm"]
++    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
++    os.unlink(out)
++    if r.returncode:
++        return None, r.stderr.strip().splitlines()[-3:]
++    m = re.search(r"\bks: (.*?)(?: \[|$)", r.stderr, re.M)
++    return dict((k, int(v)) for k, _, v in (p.partition("=") for p in m.group(1).split())), None
++
++for name, (defs, bdir) in VAR.items():
++    a, ea = ks(defs, bdir)
++    b, eb = ks(defs + ["-DDCPROTO"], bdir)
++    if ea or eb:
++        print(name, "FAILED", ea, eb)
++        continue
++    keys = [k for k in a if a[k] != b.get(k)]
++    print("%-6s %s" % (name, "  ".join("%s %d->%d (%+d)" % (k, a[k], b[k], b[k] - a[k]) for k in keys)))
++    if len(sys.argv) > 1:
++        print("       stock:", a)
+diff --git a/tests/dcrig/dcorigest.py b/tests/dcrig/dcorigest.py
+new file mode 100644
+index 00000000..83ef69ed
+--- /dev/null
++++ b/tests/dcrig/dcorigest.py
+@@ -0,0 +1,67 @@
++"""Estimate the origin arithmetic in every package (CONTENT-COORDS-PLAN 3.1).
++
++For each package: the WM_CONTENT/WM_GEOM call sites, the memory words the
++content origin is banked into (the first `mov [X], ax` / `mov [X], dx` within
++eight lines after a WM_CONTENT call), and every OTHER instruction that names
++one of those words - each an `add/sub/mov reg, [X]` of 4 bytes (3 for the
++accumulator's `mov ax, [X]`, 5 with a segment prefix).
++"""
++import os, re, sys, collections
++root = sys.argv[1]
++call = re.compile(r"^\s*(?:[\w.]+:\s*)?call\s+(?:far\s+)?OSAPI_(WM_CONTENT|WM_GEOM)\b")
++store = re.compile(r"^\s*mov\s+(?:word\s+)?\[(?:cs:|ds:)?\s*([A-Za-z_][\w.]*)\s*\]\s*,\s*(ax|dx)\b", re.I)
++
++def files(p):
++    if os.path.isdir(p):
++        for dp, dn, fn in os.walk(p):
++            for f in fn:
++                if f.endswith(('.asm', '.inc')):
++                    yield os.path.join(dp, f)
++    else:
++        yield p
++
++tot = collections.Counter()
++rows = []
++for base in ['apps', 'drivers', 'tests']:
++    for e in sorted(os.listdir(os.path.join(root, base))):
++        p = os.path.join(root, base, e)
++        if not (os.path.isdir(p) or e.endswith('.inc')):
++            continue
++        texts = {}
++        for f in files(p):
++            texts[f] = [re.sub(r";.*", "", l) for l in open(f, errors='replace').read().split('\n')]
++        ncont = ngeom = 0
++        orig = set()
++        for f, ls in texts.items():
++            for i, l in enumerate(ls):
++                m = call.match(l)
++                if not m:
++                    continue
++                if m.group(1) == 'WM_CONTENT':
++                    ncont += 1
++                    for j in range(i + 1, min(i + 9, len(ls))):
++                        if re.match(r"^\s*(?:[\w.]+:\s*)?(call|ret|jmp)\b", ls[j]):
++                            break
++                        s = store.match(ls[j])
++                        if s:
++                            orig.add(s.group(1))
++                else:
++                    ngeom += 1
++        refs = 0; byt = 0
++        if orig:
++            pat = re.compile(r"\[(?:cs:|ds:|es:)?\s*(%s)\s*(?:[+-][^\]]*)?\]" % "|".join(map(re.escape, orig)))
++            for f, ls in texts.items():
++                for l in ls:
++                    if pat.search(l) and not store.match(l):
++                        refs += 1
++                        byt += 3 if re.match(r"^\s*mov\s+ax\s*,", l) else (5 if re.search(r"\[(cs|es):", l) else 4)
++        if ncont or ngeom:
++            # a WM_CONTENT site: `mov bx, si` 2 + call 5 = 7; the two stores 7
++            site = ncont * 7 + ngeom * 5 + len(orig) * 3
++            rows.append((base + '/' + e, ncont, ngeom, ','.join(sorted(orig))[:40], refs, byt, site))
++            tot[base + 'refs'] += refs; tot[base + 'b'] += byt; tot[base + 'site'] += site
++            tot[base + 'n'] += 1
++for r in rows:
++    print("%-26s content %2d geom %2d  vars %-40s refs %4d ~%5d B  sites ~%4d B" % r)
++for b in ['apps', 'drivers', 'tests']:
++    print(b, tot[b + 'n'], 'packages, refs', tot[b + 'refs'], 'ref bytes', tot[b + 'b'], 'site bytes', tot[b + 'site'])
+diff --git a/tests/dcrig/dcpaint.py b/tests/dcrig/dcpaint.py
+new file mode 100644
+index 00000000..2e09080b
+--- /dev/null
++++ b/tests/dcrig/dcpaint.py
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python3
++"""dcpaint - what content coordinates cost a WHOLE paint, package by package.
++
++docs/plans/CONTENT-COORDS-PLAN.md: tests/dcbench.py prices one call; this
++prices what a user waits for. Each package is opened from B: on the rig kernel
++(build/proto) and the cycles from wm_draw_win's `.paint` to its `.uncharged`
++- the W_PAINT dispatch, the drawing context's bracket on a content package,
++and every primitive the paint calls - are read off MartyPC's counter. The
++STOCK package, its FLIPPED twin (-DOS88_CONTENT, source unchanged) and its
++CLEANED twin (origin arithmetic taken out) are timed in turn.
++
++NOT a suite row.   sh tests/dcrig/build.sh && python3 tests/dcrig/dcpaint.py
++"""
++import os, sys
++ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
++sys.path.insert(0, os.path.join(ROOT, "tools"))
++os.environ.setdefault("OS88_BUILD", "build/proto")
++os.environ.setdefault("OS88_DEFINES", "DCPROTO")
++import os88sym                                         # noqa: E402
++os88sym._SHIPPED_DEFS = os88sym._SHIPPED_DEFS + ("DCPROTO",)
++import os88marty, os88ui                               # noqa: E402
++
++REPS = 4      # IRQ0 lands in a ~150 ms paint two or three times: take the MIN
++RUNS = [("Piano", ["PIANO.O88", "PIANOC.O88", "PIANOC2.O88"]),
++        ("Calc", ["CALC.O88", "CALCC.O88", "CALCC2.O88"])]
++
++
++def paint_cycles(ui, fname, title):
++    """The package's OWN first paint: the `.paint` hit whose DI is its window
++    record (the Disk window repaints on the same double-click, and a span
++    that does not ask which window it timed timed that one)."""
++    with os88marty.bp_trace(ui.m, "wm_draw_win.paint", "wm_draw_win.uncharged",
++                            regs=True) as tr:
++        ui.path("B:/" + fname)
++        w = ui.wait_window(title)
++        ptr = ui._S("wm_wins") - 0x600 + w.i * os88ui.geom.WIN_SIZE  # linear -> offset
++
++        def mine():
++            hs = tr.hits
++            for i, h in enumerate(hs):
++                if h["name"] == "wm_draw_win.paint" and \
++                        (h.get("regs", {}).get("di", -1) & 0xFFFF) == ptr:
++                    return any(x["name"] == "wm_draw_win.uncharged"
++                               for x in hs[i + 1:])
++            return False
++        tr.until(mine, "the package's own paint", 300)
++    hs = tr.hits
++    for i, h in enumerate(hs):
++        if h["name"] == "wm_draw_win.paint" and (h["regs"].get("di", -1) & 0xFFFF) == ptr:
++            e = next(x for x in hs[i + 1:] if x["name"] == "wm_draw_win.uncharged")
++            return e["cycles"] - h["cycles"]
++    return None
++
++
++def main():
++    sysimg = os.path.join(ROOT, "build/proto/os8088-360.img")
++    apps = os.path.join(ROOT, "build/proto/dcb360.img")
++    with os88ui.boot(sysimg, apps=apps) as ui:
++        for title, files in RUNS:
++            base = None
++            for f in files:
++                cs = []
++                for _ in range(REPS):
++                    cs.append(paint_cycles(ui, f, title))
++                    ui.settle()
++                    ui.close(ui.window(title))
++                    ui.settle()
++                c = min(cs)
++                base = base or c
++                print("%-6s %-12s W_PAINT min %8d cycles  %7.2f ms  %+.1f%%   all %s"
++                      % (title, f, c, c / 4772.727, 100.0 * (c - base) / base, cs))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/dcrig/dcsurvey.py b/tests/dcrig/dcsurvey.py
+new file mode 100644
+index 00000000..d87aaf81
+--- /dev/null
++++ b/tests/dcrig/dcsurvey.py
+@@ -0,0 +1,43 @@
++import os, re, sys, collections
++root = sys.argv[1]
++DRAW = ["GFX_PIXEL","GFX_HLINE","GFX_VLINE","GFX_FILL","GFX_FRAME","GFX_FILL_GRAY","GFX_XOR_RECT","GFX_XOR_FILL",
++ "FONT_CHAR_XPARENT","FONT_STR_XPARENT","FONT_RUN","ICON_DRAW","GFX_BLIT1","GFX_BLIT4","GFX_BLITP","GFX_SCROLL",
++ "GFX_SAVE","GFX_REST","GFX_SPANS","GFX_FILL_PAT","GFX_POINTS","GFX_LINE"]
++GEOM = ["WM_CONTENT","WM_GEOM","WM_CLIP_SET","WM_CLIP_TEST","WM_CLIP_CLEAR"]
++pat = re.compile(r"^\s*(?:[\w.]+:\s*)?call\s+(?:far\s+)?OSAPI_([A-Z0-9_]+)", re.M)
++
++def scantext(t, c):
++    t = re.sub(r";.*", "", t)
++    for m in pat.finditer(t):
++        c[m.group(1)] += 1
++
++def scan(p):
++    c = collections.Counter()
++    if os.path.isdir(p):
++        for dp, dn, fn in os.walk(p):
++            for f in fn:
++                if f.endswith(('.asm', '.inc')):
++                    scantext(open(os.path.join(dp, f), errors='replace').read(), c)
++    else:
++        scantext(open(p, errors='replace').read(), c)
++    return c
++
++rows = []
++tot = collections.Counter()
++for base in ['apps', 'tests', 'drivers']:
++    for e in sorted(os.listdir(os.path.join(root, base))):
++        p = os.path.join(root, base, e)
++        if not (os.path.isdir(p) or e.endswith('.inc') or (base == 'tests' and e.endswith('.asm'))):
++            continue
++        c = scan(p)
++        d = sum(c[k] for k in DRAW)
++        g = sum(c[k] for k in GEOM)
++        if d or g:
++            rows.append((base + '/' + e, d, c['WM_CONTENT'], c['WM_GEOM'], c['WM_CLIP_SET'], c['GFX_LOCK'],
++                         ' '.join(f"{k}:{c[k]}" for k in DRAW if c[k])))
++            for k in DRAW + GEOM + ['GFX_LOCK']:
++                tot[(base, k)] += c[k]
++for r in rows:
++    print("%-30s draw=%4d content=%3d geom=%3d clipset=%2d lock=%3d  %s" % r)
++for base in ['apps', 'tests', 'drivers']:
++    print(base, sum(tot[(base, k)] for k in DRAW), {k: tot[(base, k)] for k in DRAW + GEOM + ['GFX_LOCK'] if tot[(base, k)]})
+diff --git a/tests/dcrig/piano.diff b/tests/dcrig/piano.diff
+new file mode 100644
+index 00000000..668c4f91
+--- /dev/null
++++ b/tests/dcrig/piano.diff
+@@ -0,0 +1,476 @@
++--- apps/piano/piano.asm
+++++ piano.asm
++@@ -1,4 +1,11 @@
++ ; =============================================================================
+++; CONTENT-COORDS RIG COPY - docs/plans/CONTENT-COORDS-PLAN.md 3.5. NOT SHIPPED.
+++; apps/piano/piano.asm with its origin arithmetic taken out, assembled with
+++; -DDCPROTO -DOS88_CONTENT against the rig SDK by tests/dcrig/build.sh. Its
+++; size against the stock build is the plan's measurement of what Piano gives
+++; back; tests/dcrig/dcflip.py proves it draws the same pixels.
+++; =============================================================================
+++; =============================================================================
++ ; os8088 - apps/piano/piano.asm
++ ;
++ ; Piano, the fifth software package (SPEC.md 36): a colorful playable piano
++@@ -257,10 +264,9 @@
++ ; [pn_abon] already 0 this draws exactly them and no card.
++ ; -----------------------------------------------------------------------------
++ pn_paint:
++-    push ax                         ; the three pn_org writes; every painter
++-    push bx                         ; below keeps every register
++-    push dx
++-    call pn_org
+++    push ax                         ; every painter below keeps every
+++    push bx                         ; register; this proc's callers rely on
+++    push dx                         ; it keeping these three too
++     call pn_draw_viewer
++     call pn_draw_btns
++     call pn_draw_keys
++@@ -276,18 +282,6 @@
++     pop ax
++     ret
++ 
++-; -----------------------------------------------------------------------------
++-; pn_org - stash the content origin every pn_c* helper adds (internal)
++-; in:  SI = the window
++-; out: [pn_ox]/[pn_oy] and AX/DX = the content's left/top; BX = SI
++-;
++-; Six handlers fetched it with the same four instructions; this is them once.
++-; -----------------------------------------------------------------------------
++-pn_org:
++-    mov bx, si
++-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
++-    mov [pn_ox], ax
++-    mov [pn_oy], dx
++ pn_ret:                             ; OS88_REGION_MOVABLE's proc: any `ret`
++     ret
++ 
++@@ -312,7 +306,6 @@
++     push di
++     call pn_abdismiss               ; the credits are up: this click is spent
++     jc .out                         ; taking them down
++-    call pn_pt                      ; -> content-relative click, origin stashed
++ 
++     ; --- the keyboard ----------------------------------------------------------
++     cmp dx, PN_KB_Y1
++@@ -409,9 +402,6 @@
++     mov al, [pn_wnote+bx]           ; a black one: a semitone above the white
++     inc ax                          ; key it sits on
++ .play:
++-    push ax
++-    call pn_org
++-    pop ax
++     call pn_note
++ .out:
++ pn_pop6:                            ; ...pn_onclick and pn_onup leave by here
++@@ -444,9 +434,8 @@
++ ; below needs no range check - only an order that matches the declaration.
++ ; -----------------------------------------------------------------------------
++ pn_oncmd:
++-    push ax                         ; pn_org returns in AX/DX
+++    push ax
++     call pn_abdismiss               ; a menu pick takes the credits down first,
++-    call pn_org                     ; and then does what it says
++     pop ax
++     inc ax                          ; Play: item + 1
++     or ah, ah
++@@ -572,13 +561,13 @@
++     mov bx, PN_ROW1_Y
++     mov cx, PN_CONT_W-3
++     mov dx, PN_ROW1_Y+PN_BTN_H-1
++-    call pn_cfill
+++    call OSAPI_GFX_FILL
++     mov al, CBLACK
++     call OSAPI_SET_COLOR
++     mov si, [pn_msg]
++     mov cx, PN_MSG_X
++     mov dx, PN_ROW1_Y+4
++-    call pn_cstr
+++    call OSAPI_FONT_STR_XPARENT
++     pop si
++     pop dx
++     pop cx
++@@ -829,7 +818,7 @@
++     mov bx, PN_KB_Y1
++     lea cx, [di+18]
++     mov dx, [pn_kby2]
++-    call pn_cframe
+++    call OSAPI_GFX_FRAME
++     mov ax, bp                      ; AH = highlight state
++     mov al, CWHITE
++     test ah, 1
++@@ -843,7 +832,7 @@
++     lea cx, [di+17]
++     mov dx, [pn_kby2]
++     dec dx
++-    call pn_cfill
+++    call OSAPI_GFX_FILL
++     mov ax, bp                      ; the map letter: CBLUE, CWHITE when lit
++     mov al, CBLUE
++     test ah, 1
++@@ -857,7 +846,7 @@
++     lea cx, [di+5]
++     mov dx, [pn_kby2]               ; the letter rides PN_WLBL_UP above the
++     sub dx, PN_WLBL_UP              ; key's foot, wherever that is
++-    call pn_cchar
+++    call OSAPI_FONT_CHAR_XPARENT
++     mov bx, bp                      ; re-draw the black keys overlapping
++     xor bh, bh                      ; this white key: the ones on slots idx-1
++     dec bx                          ; and idx, where there are any - and
++@@ -906,7 +895,7 @@
++     mov bx, PN_KB_Y1
++     lea cx, [di+9]
++     mov dx, [pn_bky2]
++-    call pn_cfill
+++    call OSAPI_GFX_FILL
++     mov ax, bp
++     or ah, ah
++     jz .letter
++@@ -918,7 +907,7 @@
++     lea cx, [di+8]
++     mov dx, [pn_bky2]
++     dec dx
++-    call pn_cfill
+++    call OSAPI_GFX_FILL
++ .letter:
++     mov al, CWHITE
++     call OSAPI_SET_COLOR
++@@ -929,7 +918,7 @@
++     inc cx
++     mov dx, [pn_bky2]
++     sub dx, PN_BLBL_UP
++-    call pn_cchar
+++    call OSAPI_FONT_CHAR_XPARENT
++     pop bp
++     pop di
++     pop dx
++@@ -958,19 +947,19 @@
++     mov bx, PN_VW_Y1
++     mov cx, PN_VW_X2
++     mov dx, PN_VW_Y2
++-    call pn_cframe
+++    call OSAPI_GFX_FRAME
++     call pn_inkw
++     mov ax, PN_VW_X1+1
++     mov bx, PN_VW_Y1+1
++     mov cx, PN_VW_X2-1
++     mov dx, PN_VW_Y2-1
++-    call pn_cfill
+++    call OSAPI_GFX_FILL
++     call pn_inkk
++     mov dx, 16                      ; staff lines at y 16/22/28/34/40
++ .staff:
++     mov ax, PN_ST_X1
++     mov bx, PN_ST_X2
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++     add dx, 6
++     cmp dx, 46
++     jb .staff
++@@ -1154,7 +1143,7 @@
++ .lx:
++     lea ax, [bp+2]
++     mov dx, 46
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++ .d:
++     call pn_inkb
++     lea ax, [bp+5]                  ; the dot: 4x3 at (colx+5, y-1)
++@@ -1163,7 +1152,7 @@
++     mov bx, dx
++     dec bx
++     inc dx
++-    call pn_cfill
+++    call OSAPI_GFX_FILL
++ .s:
++     cmp byte [pn_vsh], 0
++     je .r
++@@ -1175,16 +1164,16 @@
++     sub bx, 3
++     inc dx
++     inc dx
++-    call pn_cvline
+++    call OSAPI_GFX_VLINE
++     inc ax
++     inc ax
++-    call pn_cvline
+++    call OSAPI_GFX_VLINE
++     mov ax, bp                      ; hlines colx..colx+4 at y-2 and y+1
++     lea bx, [bp+4]
++     sub dx, 4
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++     add dx, 3
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++ .r:
++     ret
++ 
++@@ -1206,18 +1195,18 @@
++     cmp di, PN_VCOLS-1
++     jb .lmid
++     dec bx
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++     call pn_inkb
++     mov ax, PN_VW_X2
++     mov bx, ax
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++     jmp short .d
++ .lmid:
++     cmp byte [pn_vshow+di+1], 1
++     jne .lh
++     dec bx
++ .lh:
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++ .d:
++     call pn_inkw
++     lea ax, [bp+5]
++@@ -1228,25 +1217,25 @@
++     mov bx, dx
++     dec bx
++     inc dx
++-    call pn_cfill
+++    call OSAPI_GFX_FILL
++     jmp short .s
++ .online:                            ; centred on a staff line: the rows above
++     lea bx, [bp+8]                  ; and below white, its own row the line's
++     dec dx                          ; black - which ends at x 213, inside the
++-    call pn_chline                  ; last column's dot
+++    call OSAPI_GFX_HLINE                  ; last column's dot
++     add dx, 2
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++     dec dx
++     call pn_inkk
++     cmp di, PN_VCOLS-1
++     jb .blk
++     mov bx, PN_ST_X2
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++     call pn_inkw
++     mov ax, PN_ST_X2+1
++     lea bx, [bp+8]
++ .blk:
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++ .s:
++     cmp byte [pn_vsh], 0
++     je pn_vsrub.r
++@@ -1261,9 +1250,9 @@
++     mov dx, [pn_vyc]
++     dec dx
++     dec dx
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++     add dx, 3
++-    call pn_chline
+++    call OSAPI_GFX_HLINE
++     mov cx, [pn_vrs]                ; vline colx+1: the staff row it crosses,
++     cmp byte [pn_vstp], 0           ; or - for a C#4 - row 46, which is the
++     jne .v1                         ; ledger's of the column before if that
++@@ -1303,20 +1292,21 @@
++     dec dx
++     cmp dx, bx
++     jl .na
++-    call pn_cvline
+++    call OSAPI_GFX_VLINE
++ .na:
++     pop dx
++     mov bx, cx                      ; below it
++     inc bx
++     cmp bx, dx
++     jg .nb
++-    call pn_cvline
+++    call OSAPI_GFX_VLINE
++ .nb:
++     call pn_inkk
++     mov bx, cx
++     mov dx, cx
++ .all:
++-    jmp pn_cvline
+++    call OSAPI_GFX_VLINE
+++    ret
++ 
++ ; pn_inkw / pn_inkk / pn_inkb - the pen white / black / blue, AX kept (the
++ ; viewer's erases change pen a dozen times; this is 3 bytes a change)
++@@ -1351,7 +1341,6 @@
++     or ax, ax
++     jz .out
++     xchg di, ax
++-    call pn_pt                  ; CX/DX content-relative
++     call pn_bhit
++     push ax
++     xor al, al                  ; upright FIRST whatever happens: a cancel
++@@ -1377,7 +1366,6 @@
++     or ax, ax
++     jz .out
++     xchg di, ax
++-    call pn_pt
++     call pn_bhit
++     xor ah, ah
++     cmp ax, di
++@@ -1393,19 +1381,6 @@
++     pop ax
++     ret
++ 
++-; -----------------------------------------------------------------------------
++-; pn_pt - a SCREEN point to a content-relative one (internal)
++-; in:  CX = x, DX = y, SI = the window
++-; out: CX/DX content-relative, [pn_ox]/[pn_oy] stashed; AX, BX clobbered
++-; -----------------------------------------------------------------------------
++-pn_pt:
++-    push dx
++-    call pn_org
++-    pop dx
++-    sub cx, ax
++-    sub dx, [pn_oy]
++-    ret
++-
++ ; --- SPEC.md 13.8: the five buttons, ONE description --------------------------
++ ; They were five literal argument sets in the painter against five bands of
++ ; literals in pn_onclick - two descriptions of one row of buttons, agreeing by
++@@ -1435,7 +1410,7 @@
++     dw OS88UI_INK | (CGREEN << 8)
++     dw OS88UI_INK | (CMAGENTA << 8)
++     dw OS88UI_INK | (CRED << 8)
++-    OS88UI_BTNREC pn_btrec, 0, pn_blabels, pn_bflags, PN_NBTN
+++    OS88UI_BTNREC pn_btrec, pn_brc, pn_blabels, pn_bflags, PN_NBTN
++ ; Which button is DRAWN pressed, 1-based, 0 = none - and it IS the record's
++ ; OS88UI_BT_DOWN, so os88ui_btn folds the pressed look in itself and a W_PAINT
++ ; mid-gesture agrees with it for free (SPEC.md 13.8). Under OS88UI_NOGEST the
++@@ -1464,34 +1439,8 @@
++ ; -----------------------------------------------------------------------------
++ pn_btn1:
++     push bx
++-    push cx
++-    push si
++-    push ax
++-    xor ah, ah
++-    xchg bx, ax
++-    dec bx
++-    mov cl, 3
++-    shl bx, cl                      ; BX = the entry's offset, (AL-1)*8
++-    lea si, [pn_brc+bx]
++-    neg bx
++-    add bx, pn_brect
++-    mov [pn_btrec+OS88UI_BT_RECTS], bx
++-    mov bx, pn_brect
++-    mov cx, 2                       ; two corners, each (x, y) + the origin
++-.corner:
++-    lodsw
++-    add ax, [pn_ox]
++-    mov [bx], ax
++-    lodsw
++-    add ax, [pn_oy]
++-    mov [bx+2], ax
++-    add bx, 4
++-    loop .corner
++-    pop ax
++     mov bx, pn_btrec
++     call os88ui_btn                 ; AL = the index PLUS ONE, as it takes
++-    pop si
++-    pop cx
++     pop bx
++     ret
++ 
++@@ -1557,7 +1506,7 @@
++     mov si, pn_l_songs
++     mov cx, 2
++     mov dx, PN_ROW2_Y+4
++-    call pn_cstr
+++    call OSAPI_FONT_STR_XPARENT
++     mov al, 3
++ .each2:
++     call pn_btn1
++@@ -1570,88 +1519,6 @@
++     pop ax
++     ret
++ 
++-; -----------------------------------------------------------------------------
++-; content-relative drawing helpers: add the stashed origin, call the API,
++-; restore. All preserve every register.
++-; -----------------------------------------------------------------------------
++-pn_cfill:                           ; AX=x1 BX=y1 CX=x2 DX=y2 (color set)
++-    push ax
++-    push bx
++-    push cx
++-    push dx
++-    add ax, [pn_ox]
++-    add cx, [pn_ox]
++-    add bx, [pn_oy]
++-    add dx, [pn_oy]
++-    call OSAPI_GFX_FILL
++-    pop dx
++-    pop cx
++-    pop bx
++-    pop ax
++-    ret
++-
++-pn_cframe:                          ; AX=x1 BX=y1 CX=x2 DX=y2 (color set)
++-    push ax
++-    push bx
++-    push cx
++-    push dx
++-    add ax, [pn_ox]
++-    add cx, [pn_ox]
++-    add bx, [pn_oy]
++-    add dx, [pn_oy]
++-    call OSAPI_GFX_FRAME
++-    pop dx
++-    pop cx
++-    pop bx
++-    pop ax
++-    ret
++-
++-pn_chline:                          ; AX=x1 BX=x2 DX=y (color set)
++-    push ax
++-    push bx
++-    push dx
++-    add ax, [pn_ox]
++-    add bx, [pn_ox]
++-    add dx, [pn_oy]
++-    call OSAPI_GFX_HLINE
++-    pop dx
++-    pop bx
++-    pop ax
++-    ret
++-
++-pn_cvline:                          ; AX=x BX=y1 DX=y2 (color set)
++-    push ax
++-    push bx
++-    push dx
++-    add ax, [pn_ox]
++-    add bx, [pn_oy]
++-    add dx, [pn_oy]
++-    call OSAPI_GFX_VLINE
++-    pop dx
++-    pop bx
++-    pop ax
++-    ret
++-
++-pn_cchar:                           ; AL=char CX=x DX=y (color set)
++-    push cx
++-    push dx
++-    add cx, [pn_ox]
++-    add dx, [pn_oy]
++-    call OSAPI_FONT_CHAR_XPARENT
++-    pop dx
++-    pop cx
++-    ret
++-
++-pn_cstr:                            ; SI=string CX=x DX=y (color set)
++-    push cx
++-    push dx
++-    add cx, [pn_ox]
++-    add dx, [pn_oy]
++-    call OSAPI_FONT_STR_XPARENT
++-    pop dx
++-    pop cx
++-    ret
++-
++ ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
++ ; =============================================================================
++ ; 'About Piano' - the credit card (SPEC.md 12.2, 20.5.1)
+diff --git a/tests/dcrig/tamegram.diff b/tests/dcrig/tamegram.diff
+new file mode 100644
+index 00000000..50fb2150
+--- /dev/null
++++ b/tests/dcrig/tamegram.diff
+@@ -0,0 +1,210 @@
++--- apps/tamegram/tamegram.asm
+++++ tamegram.asm
++@@ -1,4 +1,11 @@
++ ; =============================================================================
+++; CONTENT-COORDS RIG COPY - docs/plans/CONTENT-COORDS-PLAN.md 3.5. NOT SHIPPED.
+++; apps/tamegram/tamegram.asm with its origin arithmetic taken out, assembled with
+++; -DDCPROTO -DOS88_CONTENT against the rig SDK by tests/dcrig/build.sh. Its
+++; size against the stock build is the plan's measurement of what TameGram gives
+++; back; tests/dcrig/dcflip.py proves it draws the same pixels.
+++; =============================================================================
+++; =============================================================================
++ ; os8088 - apps/tamegram/tamegram.asm
++ ;
++ ; TameGram, the thirteenth software package (SPEC.md 49): a four-direction,
++@@ -356,9 +363,6 @@
++     push ds
++     pop es
++     mov bx, si
++-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
++-    mov [tg_ox], ax
++-    mov [tg_oy], dx
++     call OSAPI_WM_GEOM              ; CX = content w, DX = content h
++     pushf
++     mov [tg_cwid], cx
++@@ -1268,7 +1272,7 @@
++     dec cx
++     mov dx, [tg_chgt]
++     dec dx
++-    call tg_fillc
+++    call OSAPI_GFX_FILL
++     call tg_draw_hud
++     call tg_draw_board
++     cmp byte [tg_mode], TG_M_PAUSE  ; PLAY or PAUSE: the piece is on screen
++@@ -1283,129 +1287,6 @@
++     jmp os88ui_about_d              ; content box it reads for itself
++ 
++ ; -----------------------------------------------------------------------------
++-; tg_clampc - clamp a content rect to the content box, then add the origin
++-; in:  AX/BX/CX/DX = x1/y1/x2/y2, inclusive, in content coords
++-; out: CF = 1 nothing is left to draw; else AX/BX/CX/DX are screen coords
++-;
++-; The one place this module turns its own rects into the screen's, and the
++-; reason it exists is SPEC.md 11.3: the gfx_* primitives clip to the SCREEN,
++-; not to a window, and W_PAINT runs with no clip region armed. A rect that is
++-; one row too tall therefore paints over the window below us rather than
++-; being trimmed. Comparisons are SIGNED - a content coordinate can be
++-; negative, and an unsigned test would read -1 as 65,535 and pass it.
++-; -----------------------------------------------------------------------------
++-tg_clampc:
++-    or ax, ax
++-    jns .x1
++-    xor ax, ax
++-.x1:
++-    or bx, bx
++-    jns .y1
++-    xor bx, bx
++-.y1:
++-    push si
++-    mov si, [tg_cwid]
++-    dec si
++-    cmp cx, si
++-    jle .x2
++-    mov cx, si
++-.x2:
++-    mov si, [tg_chgt]
++-    dec si
++-    cmp dx, si
++-    jle .y2
++-    mov dx, si
++-.y2:
++-    pop si
++-    cmp ax, cx
++-    jg .none
++-    cmp bx, dx
++-    jg .none
++-    add ax, [tg_ox]
++-    add bx, [tg_oy]
++-    add cx, [tg_ox]
++-    add dx, [tg_oy]
++-    clc
++-    ret
++-.none:
++-    stc
++-    ret
++-
++-; tg_fillc / tg_framec - a filled / outlined rect in content coords, in the
++-; pen already set. Clobber AX-DX.
++-tg_fillc:
++-    call tg_clampc
++-    jc .out
++-    call OSAPI_GFX_FILL
++-.out:
++-    ret
++-
++-tg_framec:
++-    call tg_clampc
++-    jc .out
++-    call OSAPI_GFX_FRAME
++-.out:
++-    ret
++-
++-; -----------------------------------------------------------------------------
++-; tg_run / tg_str - a string in content coords, opaque and transparent
++-; in:  CX/DX = content coords, SI = NUL string
++-;      tg_run: AL = ink, AH = the ground the caller has just laid down
++-;      tg_str: the pen, already set
++-; Clobber CX, DX (and AX in tg_str_gate's test).
++-;
++-; All-or-nothing, and deliberately so: a cell is drawn whole or not at all, so
++-; a string half outside the box cannot be trimmed to fit. One that would leave
++-; the box is DROPPED rather than clipped - a missing HUD field is a layout bug
++-; you can see, and a glyph painted onto the window next door is one you cannot.
++-;
++-; TWO ENTRIES because one caller cannot name a ground: the PAUSE / GAME OVER
++-; banner lands on the matrix, which is a grid of coloured cells and not a
++-; colour - SPEC.md 6.6.2 case 1, and the only transparent text left in this
++-; package. Everything else letters onto something this same routine's caller
++-; filled a few instructions earlier: the HUD band is [tg_hudbg] and the About
++-; card is its own panel.
++-; -----------------------------------------------------------------------------
++-tg_run:
++-    push ax                         ; the pair, banked across FONT_WIDTH
++-    call tg_str_gate
++-    pop ax
++-    jc .out
++-    call OSAPI_FONT_RUN
++-.out:
++-    ret
++-
++-tg_str:
++-    call tg_str_gate
++-    jc .out
++-    call OSAPI_FONT_STR_XPARENT
++-.out:
++-    ret
++-
++-; tg_str_gate - the shared box test. CF=1 drop it; CF=0 draw at CX/DX, which
++-; it has moved to SCREEN coordinates. Clobbers AX.
++-tg_str_gate:
++-    or cx, cx
++-    js .no
++-    or dx, dx
++-    js .no
++-    mov ax, dx
++-    add ax, 8
++-    cmp ax, [tg_chgt]
++-    jg .no
++-    call OSAPI_FONT_WIDTH           ; AX = the string's pixel width
++-    add ax, cx
++-    cmp ax, [tg_cwid]
++-    jg .no
++-    add cx, [tg_ox]
++-    add dx, [tg_oy]
++-    clc
++-    ret
++-.no:
++-    stc
++-    ret
++-
++-; -----------------------------------------------------------------------------
++ ; tg_draw_hud - the status band above the matrix
++ ; Three 8px rows inside TG_HUD_H, and the layout the TG_HUD_W floor is for,
++ ; drawn from the table tg_hud: every field is an opaque run of its own on the
++@@ -1419,7 +1300,7 @@
++     mov cx, [tg_cwid]
++     dec cx
++     mov dx, TG_HUD_H - 1
++-    call tg_fillc
+++    call OSAPI_GFX_FILL
++     mov di, tg_hud
++     cmp byte [tg_glock], 0          ; LOCK is the table's first row, and
++     jne .field                      ; there only while the vector is locked
++@@ -1461,7 +1342,7 @@
++     shr dl, 1                       ; faint but absent. A filled BAND may
++     xor dh, dh                      ; dither; a 1px stroke does not survive it
++     mov ah, [tg_hudbg]              ; AH = the band, filled above
++-    call tg_run
+++    call OSAPI_FONT_RUN
++     add di, 4
++     jmp .field
++ 
++@@ -1519,7 +1400,7 @@
++     mov dx, bx
++     add dx, [tg_boardpx]
++     dec dx
++-    call tg_framec
+++    call OSAPI_GFX_FRAME
++     mov al, TG_FAC                  ; any occupant
++     jmp short tg_walk
++ 
++@@ -1631,7 +1512,8 @@
++     dec cx
++     sub cx, si
++     pop bx
++-    jmp tg_fillc
+++    call OSAPI_GFX_FILL
+++    ret
++ 
++ ; -----------------------------------------------------------------------------
++ ; tg_erase_prev - black out the previous active piece
++@@ -1702,7 +1584,8 @@
++     mov dx, [tg_boardpx]
++     shr dx, 1
++     add dx, TG_HUD_H - 4
++-    jmp tg_str
+++    call OSAPI_FONT_STR_XPARENT
+++    ret
++ 
++ ; =============================================================================
++ ; Data
+diff --git a/tools/os88pkg.py b/tools/os88pkg.py
+index 2dda488e..dcda00c4 100644
+--- a/tools/os88pkg.py
++++ b/tools/os88pkg.py
+@@ -170,7 +170,7 @@ def main() -> int:
+     if version != VERSION:
+         fail(f"bad version {version} (want {VERSION}; rebuild against the "
+              "v3 os88api.inc)")
+-    if flags & 0xD8:
++    if flags & 0x98:  # DCPROTO rig: bit 6 allowed (was 0xD8)
+         fail(f"flags 0x{flags:02X} has reserved bits set (bits 3-4 are this "
+              f"tool's to set, bits 6-7 must be 0)")
+     if link != 0:

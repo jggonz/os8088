@@ -4,9 +4,8 @@
 #
 # Build the C toolchain's capability gate (SPEC.md 73) end to end and put it on
 # a floppy. It is a script rather than a make target because nothing under
-# tests/ ships and the top-level Makefile does not know about C packages yet -
-# apps/cc/Makefile.inc holds the reusable rules and this is the same five steps
-# written out for one program that lives outside apps/.
+# tests/ ships; `make chello` runs the same chain from the Makefile, and this
+# is the five steps written out for one program that lives outside apps/.
 #
 #     tests/chello/build.sh
 #     make test TESTAPPS=build/chello.img

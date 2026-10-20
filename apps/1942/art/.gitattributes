@@ -1,0 +1,2 @@
+# Raw palette indices are pixels, including whitespace-valued bytes.
+*.idx binary

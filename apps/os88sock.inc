@@ -34,6 +34,24 @@
 ; This file is code and data, so it goes where a package's code goes - at the
 ; end of the source, before OS88_BSS - and it carries its own one byte of
 ; state in the image rather than asking its includer for a bss slot.
+;
+; **OS88SOCK_STATE: AND IS THE STACK UP?** Almost every package asks NETV_STATE
+; next and refuses unless NSTF_SOCK is set - the same five instructions after
+; every net_find. A package whose EVERY net_find wants that question answered
+; defines OS88SOCK_STATE before including this file, and net_find asks it too:
+;
+;       %define OS88SOCK_STATE
+;       ...
+;       call net_find
+;       jc   .no_driver              ; no socket driver, or NETV_STATE refused
+;       jz   .no_link                ; one answered, and NSTF_SOCK is clear
+;
+; with AX = NETV_STATE's answer on the CF=0 path (AL the NSTF_* bits, AH the
+; free handles). It costs net_find 10 bytes and saves each caller 15, so it
+; is opt-in: a package that never asks (the DOS box, NETBENCH) assembles the
+; plain net_find and pays nothing, and one with a net_find that must NOT ask
+; - FTPD's address read at PASV, where NETV_STATE would pump ETHER.DRV's ring
+; a second time - leaves it undefined and asks inline.
 ; =============================================================================
 
 net_cls:    db 0                ; the class that answered, 0 = none yet
@@ -41,6 +59,8 @@ net_cls:    db 0                ; the class that answered, 0 = none yet
 ; -----------------------------------------------------------------------------
 ; net_find - which class answers the socket verbs?
 ; out: CF=0 and [net_cls] set; CF=1 = no socket driver at all
+;      ...and with OS88SOCK_STATE (see the header): CF=1 also when NETV_STATE
+;      refuses, and on CF=0 AX = its answer and ZF=1 = NSTF_SOCK clear
 ; clobbers: flags (AX is NOT preserved: the probe's answer is not interesting
 ;           and a caller that wanted AX kept would be the only one)
 ; -----------------------------------------------------------------------------
@@ -53,14 +73,24 @@ net_find:
     call net_try
     jnc .got
     mov byte [net_cls], 0
+.no:
     pop bx
     stc
     ret
 .got:
     mov [net_cls], bh
+%ifdef OS88SOCK_STATE
+    mov bl, NETV_STATE          ; BH is still the class that answered
+    call OSAPI_DRV_CALL         ; both drivers keep BX, CX, DX and SI here
+    jc .no
+    test al, NSTF_SOCK          ; CF=0, and ZF is the caller's second answer
+    pop bx
+    ret
+%else
     pop bx
     clc
     ret
+%endif
 
 ; --- net_try - does the class in BH answer NETV_IDENT with NET_SIG? ----------
 net_try:

@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - drivers/net/pktdrv.inc
 ;
-; A PACKET DRIVER WHERE THE NE2000 WAS (docs/NET-PLAN.md 5, SPEC.md 62.11.1)
+; A PACKET DRIVER WHERE THE NE2000 WAS (docs/plans/completed/NET-PLAN.md 5, SPEC.md 62.11.1)
 ;
 ; drivers/ether's TCP/IP stack talks to its card through exactly five
 ; routines - ne_probe, ne_init, ne_stop, ne_tx, ne_rx - and nothing else in
@@ -13,7 +13,7 @@
 ; **THAT IS THE WHOLE REASON THE DOS SIDE CAN SERVE SOCKETS AT ALL.** The
 ; alternative was linking mTCP itself into a NASM .COM - a C++ library and an
 ; Open Watcom toolchain this tree deliberately does not have - or writing a
-; second TCP, which is docs/NET-PLAN.md's own warning about two replayers
+; second TCP, which is docs/plans/completed/NET-PLAN.md's own warning about two replayers
 ; wearing a different hat.
 ;
 ; --- WHAT IS DIFFERENT FROM ne2000.inc, and it is one thing -----------------

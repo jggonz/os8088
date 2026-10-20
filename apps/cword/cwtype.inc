@@ -33,13 +33,13 @@
 ;
 ; THE WHOLE LIBRARY IS RESIDENT, and that is a decision rather than an
 ; oversight. ty_putn, ty_flush and ty_advof ARE the redraw path, so they could
-; never have gone to CWORD.OVL (SPEC.md 73.14 splits by frequency); ty_scan and
+; never have gone to the overlay (SPEC.md 73.14 splits by frequency); ty_scan and
 ; ty_open could have, and moving them would have meant a `%ifdef` through
 ; apps/os88type.inc - a file apps/word and tests/facetest also include - to
 ; sort its own labels into two sections. The room came from this program's own
 ; once-per-command code instead (SPEC.md 73.12.2), which is code this package
-; owns, and the side effect is worth having: THE FONT LIST WORKS ON A DISK WITH
-; NO CWORD.OVL ON IT.
+; owns. (The side effect it used to buy - a Font list that worked on a disk
+; with no CWORD.OVL on it - is moot now the overlay is a part, SPEC.md 73.14.2.)
 ; =============================================================================
 
 section .text
@@ -291,23 +291,26 @@ _cw_ty_putn:
 ; kern_small kernel carries the GFX_BLIT1 slot and not its body (SPEC.md 6.5),
 ; and the caller letters that row in the 8x8 face instead.
 ;
-; THE `clc` IS LOAD-BEARING AND IT COST A ROUND OF TESTING TO FIND. ty_flush
-; opens with `call OSAPI_GFX_PEN` / `jnc .live` / `call ty_gray`, which reads
-; like a QUERY of the disabled pen and is not one: OSAPI_GFX_PEN is a SETTER
-; whose argument IS the carry flag, and the cell preserves every flag, so the
-; carry that comes back is the carry that went in. ty_flush therefore dithers
-; the band whenever its CALLER happened to arrive with CF set - and a compiled
-; C call site arrives with whatever the last instruction of the argument setup
-; left there, which is neither clear nor stable. The symptom is a run of the
-; document drawn as a 50% checkerboard, exactly as a greyed control is (SPEC.md
-; 47), on some runs and not others: it turned up here on a run that was bold
-; AND underlined and on nothing else.
+; THE `clc` IS LOAD-BEARING AND IT COST A ROUND OF TESTING TO FIND. The carry
+; is ty_flush's GREYING ARGUMENT (SPEC.md 6.5.4), and a compiled C call site
+; arrives with whatever the last instruction of the argument setup left there,
+; which is neither clear nor stable. The symptom is a run of the document
+; drawn as a 50% checkerboard, exactly as a greyed control is (SPEC.md 47), on
+; some runs and not others: it turned up here on a run that was bold AND
+; underlined and on nothing else. Document text is never a disabled control,
+; so it is always `clc`.
 ;
-; So the carry is set explicitly, which is what os88api.inc's own note about
-; this slot tells a caller to do - "use `clc` or `stc` first for the
-; unconditional cases". Document text is never a disabled control, so it is
-; always `clc`. apps/word reaches the same routine from assembly and has the
-; same exposure; nothing here can fix that for it.
+; THE DIAGNOSIS HERE WAS RIGHT AND HALF THE DAMAGE WAS MISSED, which is why
+; this paragraph is kept. ty_flush used to open `call OSAPI_GFX_PEN` / `jnc
+; .live`, which reads like a query of the disabled pen and is not one - a
+; package cannot read the pen back (SPEC.md 68.14) - so besides greying the
+; band it ARMED [gfx_dis] for the rest of the lock hold, and everything
+; lettered after it dithered too. This note ended *"apps/word reaches the same
+; routine from assembly and has the same exposure; nothing here can fix that
+; for it"*, and the field duly reported it: Word's status line with its
+; changed field a checkerboard beside solid ones. The call is out of ty_flush
+; now and the carry is documented as the argument it always was, so the trap
+; is gone for every caller rather than described at four of them.
 ; -----------------------------------------------------------------------------
 _cw_ty_flush:
     push bp
@@ -422,6 +425,10 @@ _cw_ty_close:
 ; it leaves the assembler in .text, which CLAUDE.md's section discipline
 ; requires of every include in this tree.
 ; =============================================================================
+%define OS88TY_NOWIDTH          ; SPEC.md 6.5.5: the four routines no shim
+%define OS88TY_NOWIDTHN         ; above reaches
+%define OS88TY_NOPUT
+%define OS88TY_NOGETASC
 %include "os88type.inc"
 
 section .bss

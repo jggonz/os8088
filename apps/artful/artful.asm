@@ -83,15 +83,69 @@ AT_MAXKB   equ 60                   ; ...and its ceiling. NOT the heap's - it
                                     ; that range alone
 AT_NL      equ 10                   ; the internal newline
 AT_MAXLN   equ 2048                 ; visual-line table entries
-AT_LBUFCAP equ 128                  ; one visual line's slice cap
 AT_STGCAP  equ 64                   ; relayout staging entries
 AT_S1ST    equ 80                   ; 1bpp strip stride (640 px covers the
-                                    ; widest text region, Hercules' 592)
-AT_S4ST    equ 304                  ; 4bpp strip stride (608 px)
+                                    ; widest text region, Hercules' 592 -
+                                    ; and at_geom_init clamps [at_tw] to it)
+AT_LBUFCAP equ AT_S1ST              ; one visual line's slice cap: every raw
+                                    ; character takes a cell of at least 8px
+                                    ; and at_scan wraps at [at_tw], so a line
+                                    ; is at most [at_tw]/8 characters (46.4.12)
+AT_S4ST    equ 304                  ; 4bpp strip stride (608 px) - NOATBLIT1's
+                                    ; alone since SPEC.md 46.4.12
+AT_BIGW    equ 608                  ; at_bigtext's cap: what the 4bpp strip
+                                    ; held, kept when it went (46.4.12)
+AT_NONECAP equ 4556                 ; Style > None's position list, at most
+                                    ; (46.6.3): the 4bpp strip's old clamp
+AT_NONESTRIP equ (AT_S1ST*AT_SROWS)/2 - 4   ; ...and what at_strip1 holds of
+                                    ; it, so a short selection claims nothing
 AT_SROWS   equ 30                   ; strip rows (the tallest row height)
+
+; --- the strip's POLARITY (SPEC.md 46.4.2) ------------------------------------
+; at_strip1 is composed in SCREEN polarity - a SET bit is PAPER - so it is
+; already the object OSAPI_GFX_BLIT1 takes and the DEFAULT pen (ink CWHITE on
+; paper CBLACK) delivers it correctly on every adapter with no pen call. The
+; ink-side-up composer that shipped before it is NOATBLIT1's arm, and these
+; three names are the whole of the difference: five writers into the strip and
+; one build-time table read it.
+; AT_PAPERAX is a MACRO and not an immediate so that the knob arm keeps
+; `xor ax, ax` and assembles byte for byte identical to the package before
+; this change - `mov ax, 0` is the same value in three bytes instead of two.
+%ifdef NOATBLIT1
+  %macro AT_PAPERAX 0
+    xor ax, ax                      ; at_compose / at_bigtext clear to this
+  %endmacro
+  %define AT_MERGE  or               ; at_glyph folds the row in with this
+  %define AT_RULE   0FFh             ; at_ruleat lays a rule down as this
+%else
+  %macro AT_PAPERAX 0
+    mov ax, 0FFFFh
+  %endmacro
+  %define AT_MERGE  and
+  %define AT_RULE   0
+%endif
+; --- the four characters that can style (SPEC.md 46.4.7, 46.4.8) --------------
+; ` * ~ [ are the ONLY bytes that reach at_parse's .code, .star, .tilde or
+; .bracket. at_scan proves a line free of them and at_parse trusts that proof,
+; so the two MUST test the same set - this macro is why they cannot drift, and
+; a fifth delimiter is one edit rather than two files.
+%macro AT_SPECIAL 1                 ; AL = the character; jumps to %1 if it can
+    cmp al, '`'                     ; style
+    je %1
+    cmp al, '*'
+    je %1
+    cmp al, '~'
+    je %1
+    cmp al, '['
+    je %1
+%endmacro
+
 AT_CBGCAP  equ 80                   ; per-8px-column background flags
 AT_UMAX    equ 15                   ; undo/redo depth (MAX_UNDO_LEVELS)
-AT_CLIPBSS equ 2048                 ; clipboard fallback when no claim
+AT_USZ     equ 24576                ; ...and each stack's capacity, bytes
+AT_UKB0    equ 1                    ; the arena at first entry, KB - it grows
+AT_UGROWKB equ 4                    ; ...in this quantum (power of two) to at
+                                    ; most 2*AT_USZ as the stacks fill (46.6.3)
 AT_FONTBYTES equ 95*8               ; room for the kernel's glyph table
                                     ; (FONT_FIRST..FONT_LAST at 8 rows), which
                                     ; at_font_init copies in and at_glyph
@@ -120,6 +174,37 @@ at_entry:
     pop si
     jc .out
     mov [at_win], bx
+    push ax                         ; **THE GESTURE'S TWO SLOTS** (SPEC.md
+    push bx                         ; 20.5.1.3): neither is a template word,
+    push si                         ; which is why this modal's three buttons
+    push di                         ; fired on the press for as long as they
+    push dx                         ; existed
+    mov ax, bx
+    mov bx, at_btrec
+    mov si, at_modal_up             ; the release and the drag go straight
+    mov di, at_modal_drag           ; to the one record both button sets
+                                    ; share: a callback may clobber CX, DX
+                                    ; and DI (SPEC.md 13.7, 13.8.2), and the
+                                    ; two pass-through frames that pushed and
+                                    ; popped all six went in apps size pass 2
+    mov dx, at_onclick                ; OUR own click work; the library
+                                    ; takes the press FIRST and chains
+                                    ; here (SPEC.md 20.5.1.3.3)
+    call os88ui_btninit
+    pop dx
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
+    OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
+                                    ; scancode until something asks, and the
+                                    ; kernel's Alt+Enter latch rides on that
     push si
     mov si, at_kmenus
     call OSAPI_MENU_SET             ; the WINDOWED bar (flags preserved)
@@ -141,6 +226,13 @@ at_entry:
     mov bx, [at_win]                ; SPEC.md 54.10: the kernel calls this once
     mov ax, at_onwake               ; our window is on the glass, and the launch
     call OSAPI_WM_ONWAKE            ; document loads in front of it
+    mov ax, at_onclose              ; SPEC.md 46.7.1: the close box asks about
+    call OSAPI_WM_ONCLOSE           ; unsaved changes like the other three doors
+                                    ; - it did not, and lost the document
+                                    ; silently. A side table, so this goes here
+                                    ; and not in the template, and it preserves
+                                    ; the FLAGS, which is what lets it sit in
+                                    ; front of the CF the loader is owed
     clc                             ; the CF the loader is owed
 .out:
     ret
@@ -193,6 +285,28 @@ at_font_init:
     rep movsw
     pop es
     pop ds
+%ifndef NOATBLANK
+    ; SPEC.md 46.4.6: ASK THE FACE. The table above is the KERNEL's, and on a
+    ; `make FONT=` kernel that is a different typeface - so "glyph 32 is eight
+    ; zero bytes" is a fact about that table and not about this app. Glyph 32
+    ; is at offset 0: at_glyph indexes (ch - 32) * 8.
+    push cx
+    push si
+    mov byte [at_blankok], 1
+    mov si, at_fontbuf
+    mov cx, 8
+.blank:
+    cmp byte [si], 0
+    je .bnext
+    mov byte [at_blankok], 0        ; a face that inks its space composes
+    jmp short .bdone                ; spaces exactly as before
+.bnext:
+    inc si
+    loop .blank
+.bdone:
+    pop si
+    pop cx
+%endif
     pop di
     pop si
     pop dx
@@ -299,8 +413,27 @@ at_paint:
     cmp byte [at_fs], 0
     je .win
     call at_fs_paint_body
+%ifndef NOATSBAR
+    mov byte [at_sbst], 0           ; a W_PAINT arrives with a damage region
+%endif                              ; armed (SPEC.md 11.3), so what the body
+                                    ; just drew may have been clipped away:
+                                    ; poison on the way OUT, never set
     jmp short .done
 .win:
+    cmp byte [at_fsowed], 0         ; SPEC.md 46.5.3: back out of the dock, and
+    je .splash                      ; the document is where we are going. Draw
+    mov bx, [at_win]                ; NOTHING - the kernel white-filled this
+    call OSAPI_WM_WAKE              ; content already, and the splash here is
+    jc .splash                      ; (a ring too full to take it is a restore
+    jmp short .done                 ; nothing will finish: the splash, and
+                                    ; [at_fsowed] stays set for the next paint)
+                                    ; the front door on the glass for exactly
+                                    ; the moment this avoids. The re-entry is
+                                    ; the wake handler's: it runs without the
+                                    ; lock and may take it, where a paint proc
+                                    ; calling OSAPI_FULLSCREEN would re-enter
+                                    ; wm_paint_all from inside itself
+.splash:
     call at_splash
     cmp byte [at_abon], 0           ; ...and the About card LAST, over the
     je .done                        ; splash it is opaque about (SPEC.md 20.5.1)
@@ -354,6 +487,13 @@ at_fs_paint_all:
     mov dx, [at_vh]
     dec dx
     call OSAPI_GFX_FILL
+%ifndef NOATSBAR
+    mov byte [at_sbst], 0           ; SPEC.md 46.4.4: THE POISON THAT MATTERS.
+%endif                              ; The fill above just erased the gutter,
+                                    ; so without this the dispatcher inside
+                                    ; at_fs_paint_body answers "nothing moved",
+                                    ; returns 0 far calls, and the bar stays
+                                    ; erased for the rest of the session
     call at_fs_paint_body
     pop dx
     pop cx
@@ -375,6 +515,25 @@ at_onkey:
     push es
     push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
     pop es
+    ; --- ALT+ENTER IS THE FULL SCREEN, BOTH WAYS (SPEC.md 11.2.1.1) ---------
+    ; SPEC.md 11.2.1 exempts this app from `F` because the whole of it is a
+    ; writer - pressing F here writes an `f`, and it must. That exempts the
+    ; LETTER and not the idea: a modified key is free, and the document IS the
+    ; screen, so the splash and the page are the two ends of one toggle. It is
+    ; SPEC.md 11.2's LATCH and not a bracket, so this window keeps taking
+    ; W_ONKEY while it is full screen and one test is both directions.
+    cmp ax, KEY_ALTENTER
+    jne .nofull
+    cmp byte [at_modal], 0          ; ...unless a dialog owns the keyboard, in
+    jne .done                       ; which case it owns this key too
+    cmp byte [at_fs], 0
+    je .gofull
+    call at_fs_exit
+    jmp short .done
+.gofull:
+    call at_fs_enter
+    jmp short .done
+.nofull:
     cmp byte [at_fs], 0
     je .win
     cmp byte [at_modal], 0
@@ -407,11 +566,12 @@ at_onkey:
     call at_fs_enter
     jmp short .done
 .new:
-    call at_cmd_newdoc
-    call at_fs_enter
+    mov al, AT_CMD_NEW              ; asks first when the document is edited
+    call at_wreplace                ; (SPEC.md 46.7.2)
     jmp short .done
 .open:
-    call at_dlg_open
+    mov al, AT_CMD_OPEN
+    call at_wreplace
 .done:
     pop es
     pop bp
@@ -439,9 +599,9 @@ at_onclick:
     pop es
     cmp byte [at_fs], 0
     je .win
-    cmp byte [at_modal], 0
-    jne .modal
-    cmp dx, 20
+    cmp byte [at_modal], 0          ; an alert is up: its buttons are the
+    jne .done                       ; library's, which took the press first
+    cmp dx, 20                      ; (SPEC.md 20.5.1.3.3) - nothing is ours
     jb .bar
     mov ax, [at_sbx]
     cmp cx, ax
@@ -457,14 +617,11 @@ at_onclick:
 .bar:
     call at_bar_click
     jmp short .done
-.modal:
-    call at_modal_click
-    jmp short .done
 .win:
     call at_abdismiss               ; the credits are up: this click is spent
-    jc .done                        ; taking them down
-    call at_splash_click
-.done:
+.done:                              ; taking them down - and the splash's own
+                                    ; New / Open are the library's, armed on
+                                    ; the press and fired by at_modal_up
     pop es
     pop bp
     pop di
@@ -493,11 +650,12 @@ at_koncmd:
     call at_fs_enter                ; Write: the current document, fullscreen
     jmp short .out
 .new:
-    call at_cmd_newdoc
-    call at_fs_enter
+    mov al, AT_CMD_NEW              ; asks first when the document is edited
+    call at_wreplace                ; (SPEC.md 46.7.2)
     jmp short .out
 .open:
-    call at_dlg_open
+    mov al, AT_CMD_OPEN
+    call at_wreplace
 .out:
     ret
 
@@ -514,7 +672,6 @@ at_fs_enter:
     call at_geom_init               ; the live screen, fresh every entry
     mov byte [at_fs], 1
     call at_layout                  ; the text width just became real
-    call at_cline_span
     call at_maxtop
     mov bx, ax
     mov ax, [at_top]
@@ -554,6 +711,32 @@ at_fs_enter:
     call OSAPI_TASK_SPAWN           ; the caret-blink worker
     jc .out                         ; transient refusal: retry next entry
     mov byte [at_wspawned], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame, so a region
+    ; declaration alone is INERT. It is PERMANENT and not a window
+    ; around OSAPI_TASK_ALIVE - the SDK note's advice for a park-safe
+    ; worker, which fails SILENTLY (REGION-SELF-COMPACT-PLAN 8.2):
+    ; mem_frameless reads [inst_restart] at PLAN time, and this worker
+    ; is outside its own ALIVE for essentially all of a tick, so a
+    ; windowed declaration would make OSAPI_MEM_COMPACT's what-if answer no
+    ; better for a heap the compactor could have emptied.
+    ;
+    ; SO BOTH PARK POINTS ARE ENUMERATED, Tracker's shape. We are
+    ; OSAPI_MEM_PARKSAFE, so the second one is BLOCKED IN
+    ; OSAPI_GFX_LOCK - never HOLDING it (66.5.4 marks the task only
+    ; across the yield inside the wait path).
+    ;   * ALIVE is the top of .loop; .gate above the lock only READS the
+    ;     four suppression flags.
+    ;   * The only worker lock site is the one in .loop - at_caret_on and
+    ;     at_caret_off take none, being called with it held - and
+    ;     [at_cphase] is toggled AFTER the acquire, so it is never half
+    ;     applied at a park. The file's six other lock calls are
+    ;     at_click_text, at_sb_repeat, at_sb_thumb, at_onwake and
+    ;     at_menu_track: all UI task.
+    ; A restart costs one caret phase - and lands on at_worker rather than
+    ; .loop, which is what re-does the `push cs / pop es` the caret path
+    ; needs.
+    OS88_WORKER_RESTARTABLE at_worker
 .out:
     pop bx
     pop ax
@@ -564,12 +747,47 @@ at_fs_exit:
     push bx
     cmp byte [at_fs], 0
     je .out
-    mov byte [at_fs], 0
-    mov byte [at_cshown], 0
+    call at_fs_forget
     mov al, 0
     mov bx, [at_win]
     call OSAPI_FULLSCREEN           ; restores geometry + wm_paint_all,
 .out:                               ; which re-enters at_paint windowed
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_fs_forget - drop OUR idea of being fullscreen, telling the kernel nothing
+; out: nothing; preserves all registers
+;
+; The half of at_fs_exit that is not the kernel's (SPEC.md 46.5.3). The
+; minimize path needs exactly this and NOT the OSAPI_FULLSCREEN(0) beside it:
+; wm_hide drops the latch itself and repaints, so an exit in front of it buys a
+; second whole-desktop repaint on a 4.77MHz machine and changes nothing. It is
+; factored rather than copied because the blink worker gates on [at_fs] from
+; ANOTHER TASK (SPEC.md 46.5.1) - a second copy that fell behind this one would
+; be a worker drawing on a screen its window had left.
+; -----------------------------------------------------------------------------
+at_fs_forget:
+    mov byte [at_fs], 0
+    mov byte [at_cshown], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; at_fs_dock - the minimize box: this window goes to the DOCK (SPEC.md 46.5.3)
+; in:  the gfx lock held (W_ONCLICK); at_fs is set
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+at_fs_dock:
+    push ax
+    push bx
+    cmp byte [at_fs], 0
+    je .out                         ; not on the surface: nothing to send down
+    mov byte [at_fsowed], 1         ; ...and the way back is fullscreen, not
+    call at_fs_forget               ; the splash (SPEC.md 46.5.3)
+    mov bx, [at_win]
+    call OSAPI_WM_MINIMIZE          ; SPEC.md 29.6 - NOT OSAPI_WM_HIDE, which
+.out:                               ; would leave a tile that does nothing
     pop bx
     pop ax
     ret
@@ -643,7 +861,7 @@ at_worker:
 ; standard card here.
 
 ; -----------------------------------------------------------------------------
-; at_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; at_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -681,12 +899,11 @@ at_abdismiss:
     ret
 
 ; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+; ONE copy of each string the card shares with at_about_body (apps size pass
+; 2): the card's lines name the splash's own, so they cannot drift apart
 at_ablines:
-    dw at_ab1, at_ab2, at_ab3, at_ab4, 0
-at_ab1:     db 'The Artful Type', 0
-at_ab2:     db 'A Distraction-Free Writing Environment', 0
+    dw at_s_title, at_s_sub, at_ab3, at_s_credit, 0
 at_ab3:     db 0
-at_ab4:     db 'Ported by Jorge Gonzalez', 0
 
 at_tpl:
     dw 140, 60, 360, 300
@@ -696,14 +913,11 @@ at_ttl: db 'ArtfulType', 0
 
 ; --- the WINDOWED bar's menu set (SPEC.md 12.2) --------------------------------
     OS88_MENUSET at_kmenus, at_ttl, at_koncmd
-        OS88_MENU at_km_file, at_km_items, 3
+        OS88_MENU at_m_file, at_km_items, 3
     OS88_MENUSET_END at_kmenus
 
-at_km_file:  db 'File', 0
-at_km_items: dw at_ki_new, at_ki_open, at_ki_write
-at_ki_new:   db 'New', 0
-at_ki_open:  db 'Open...', 0
-at_ki_write: db 'Write', 0
+at_km_items: dw at_i_new, at_i_open, at_ki_write   ; the fullscreen bar's own
+at_ki_write: db 'Write', 0                         ; 'File', 'New', 'Open...'
 
 ; --- the FULLSCREEN menus (at_mtab: title, items, count - 6 bytes each) --------
 ; item records: dw label (0 = separator), dw shortcut label, db AT_CMD_*,
@@ -840,15 +1054,13 @@ at_k_k:  db '^K', 0
 at_k_l:  db '^L', 0
 
 ; --- the alert/splash strings --------------------------------------------------
+; 'Save', 'New' and 'Open...' are the menu items' own (at_i_*): one copy each
 at_s_savechg:  db 'Save changes to ', 0
 at_s_qmark:    db '?', 0
 at_s_untitled: db 'Untitled', 0
-at_s_save:     db 'Save', 0
 at_s_cancel:   db 'Cancel', 0
 at_s_dontsave: db "Don't Save", 0
 at_s_ok:       db 'OK', 0
-at_s_new:      db 'New', 0
-at_s_open:     db 'Open...', 0
 at_s_title:    db 'The Artful Type', 0
 at_s_sub:      db 'A Distraction-Free Writing Environment', 0
 at_s_ver:      db 'v0.1 - the os8088 port', 0
@@ -908,6 +1120,7 @@ at_trp:
     %rep 4
         %assign hi ((n >> (7 - 2*k)) & 1)
         %assign lo ((n >> (6 - 2*k)) & 1)
+%ifdef NOATBLIT1
         %if hi
             %assign hv 0
         %else
@@ -918,6 +1131,22 @@ at_trp:
         %else
             %assign lv %1
         %endif
+%else
+        ; SPEC.md 46.4.2: the strip is screen-polarity now, so a SET bit is the
+        ; background and a CLEAR one is ink. Swapping the arms of a build-time
+        ; table costs nothing at run time and keeps the 4bpp fallback drawing
+        ; the identical picture.
+        %if hi
+            %assign hv %1
+        %else
+            %assign hv 0
+        %endif
+        %if lo
+            %assign lv %1
+        %else
+            %assign lv 0
+        %endif
+%endif
         db (hv << 4) | lv
         %assign k k+1
     %endrep
@@ -925,8 +1154,10 @@ at_trp:
 %endrep
 %endmacro
 
+%ifdef NOATBLIT1
 at_x4w: AT_X4TAB 15
 at_x4g: AT_X4TAB 7
+%endif
 
 ; =============================================================================
 ; bss (SPEC.md 20.1: loader-zeroed; all-zero = windowed, markdown-empty,
@@ -937,6 +1168,10 @@ AT_BSS_TOTAL equ (at_bss_end - at_bss_base)
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; ...and the standard About card beside the
+%define OS88UI_ALERT 1          ; SPEC.md 46.7.1: os88ui_ask, for the ONE
+                                ; question that has to be asked when this app
+                                ; has no surface of its own to ask it on
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"           ; buttons this already drew
 
     OS88_BSS AT_BSS_TOTAL
@@ -985,8 +1220,36 @@ at_scpos    equ at_scend + 2                 ; word
 at_scskip   equ at_scpos + 2                 ; word
 at_sccw     equ at_scskip + 2                ; word: scan cell width
 at_sclst    equ at_sccw + 2                  ; word: scan line start
-at_stgs     equ at_sclst + 2                 ; AT_STGCAP words: staging starts
+at_sc1      equ at_sclst + 2                 ; byte: at_scan stops after ONE
+                                             ; logical line (SPEC.md 46.3.1)
+at_sbst     equ at_sc1 + 1                   ; byte: the scroll bar's bank -
+                                             ; 0 POISONED, 1 drawn, 2 known
+                                             ; blank (SPEC.md 46.4.4)
+at_sbmax    equ at_sbst + 1                  ; word: the at_maxtop it was
+                                             ; drawn for
+at_sbty     equ at_sbmax + 2                 ; word: the thumb y actually
+                                             ; DRAWN, never one recomputed
+at_scplain  equ at_sbty + 2                  ; byte: this visual line has no
+                                             ; styling character in it yet
+at_scplsp   equ at_scplain + 1               ; byte: ...as it stood at the last
+                                             ; SPACE, for the wrap rewind
+at_pplain   equ at_scplsp + 1                ; byte: at_parse took .rloop AND
+                                             ; the scale is 1, so every cell
+                                             ; of this line is visible,
+                                             ; unstyled and byte-aligned
+                                             ; (SPEC.md 46.4.9)
+at_scspsp   equ at_pplain + 1                ; byte: the span nibble at that
+                                             ; same space (SPEC.md 46.3.2)
+at_scsksp   equ at_scspsp + 1                ; word: ...and at_scskip with it
+at_blankok  equ at_scsksp + 2                ; byte: 1 = the kernel's face
+                                             ; draws glyph 32 blank, so a
+                                             ; space need not be composed
+                                             ; (SPEC.md 46.4.6)
+at_stgs     equ at_blankok + 1                ; AT_STGCAP words: staging starts
 at_stga     equ at_stgs + AT_STGCAP*2        ; AT_STGCAP bytes: staging attrs
+%if at_stgs < at_sbty + 2
+  %error "artful bss: at_stgs overlaps a scalar above it. Every name here is `equ <previous> + <size>`, so a chain that RESTATES an earlier base silently aliases two variables onto one address - which is what happened when at_sc1 was added and at_stgs kept saying `at_sclst + 2`. The alias was not a crash: at_sc1 read back as at_stgs[0]'s low byte, so the flag it controls was set by whatever offset the staging window happened to hold and the feature was inert for a document starting at offset 0."
+%endif
 at_rldel    equ at_stga + AT_STGCAP          ; word: relayout delta
 at_rlst     equ at_rldel + 2                 ; word: relayout scan start
 at_rlj      equ at_rlst + 2                  ; word: surviving old index
@@ -1012,7 +1275,11 @@ at_vis      equ at_lbuf + AT_LBUFCAP         ; AT_LBUFCAP bytes: 1 = hidden
 at_sty      equ at_vis + AT_LBUFCAP          ; AT_LBUFCAP bytes: AT_ST_*
 at_xmap     equ at_sty + AT_LBUFCAP          ; AT_LBUFCAP+1 words: x per char
 at_cellbg   equ at_xmap + (AT_LBUFCAP+1)*2   ; AT_CBGCAP bytes
-at_pcnt     equ at_cellbg + AT_CBGCAP        ; word
+at_pcb0     equ at_cellbg + AT_CBGCAP        ; word: first at_cellbg column set
+at_pcb1     equ at_pcb0 + 2                  ; word: ...and the last. 0FFFFh/0
+                                             ; is the empty span, which is what
+                                             ; at_codebg is refused on
+at_pcnt     equ at_pcb1 + 2                  ; word
 at_pstart   equ at_pcnt + 2                  ; word
 at_pcw      equ at_pstart + 2                ; word
 at_prh      equ at_pcw + 2                   ; word
@@ -1024,12 +1291,16 @@ at_plh      equ at_plt + 2                   ; word: link hide end
 at_pforce   equ at_plh + 2                   ; byte: force styled parse
 at_gsty     equ at_pforce + 1                ; byte: composing style
 at_grow     equ at_gsty + 1                  ; 4 bytes: scaled glyph row
-at_cll0     equ at_grow + 4                  ; word: caret paragraph first
-at_cll1     equ at_cll0 + 2                  ; word: caret paragraph last
 ; --- the strips ---------------------------------------------------------------
-at_strip1   equ at_cll1 + 2                  ; AT_S1ST * AT_SROWS
+at_strip1   equ at_grow + 4                  ; AT_S1ST * AT_SROWS
+%ifdef NOATBLIT1
 at_strip4   equ at_strip1 + AT_S1ST*AT_SROWS ; AT_S4ST * AT_SROWS
 at_xw       equ at_strip4 + AT_S4ST*AT_SROWS ; word: expand/blit width
+%else
+; SPEC.md 46.4.12: no 4bpp strip. at_strip1 is the band on every path, and
+; a colour line's code span goes down as runs in their own pens.
+at_xw       equ at_strip1 + AT_S1ST*AT_SROWS ; word: at_button's width
+%endif
 at_dly      equ at_xw + 2                    ; word: draw-line y
 ; --- the caret ----------------------------------------------------------------
 at_cshown   equ at_dly + 2                   ; byte
@@ -1061,33 +1332,48 @@ at_ink      equ at_pair + 2                  ; byte: a pull-down item's ink,
                                              ;   kept because a package cannot
                                              ;   read the pen back
 at_pad64    equ at_ink + 1                   ; byte: keeps the words below even
-at_b1x      equ at_pad64 + 1                 ; the buttons: x, y, width
-at_b1y      equ at_b1x + 2
-at_b1w      equ at_b1y + 2
-at_b2x      equ at_b1w + 2
-at_b2y      equ at_b2x + 2
-at_b2w      equ at_b2y + 2
-at_b3x      equ at_b2w + 2
-at_b3y      equ at_b3x + 2
-at_b3w      equ at_b3y + 2
-at_spx      equ at_b3w + 2                   ; splash geometry
-at_spy      equ at_spx + 2
-at_spw      equ at_spy + 2
-at_sph      equ at_spw + 2
+at_spx      equ at_pad64 + 1                 ; splash geometry (the buttons'
+at_spy      equ at_spx + 2                   ; own rects are at_brects, the
+at_sph      equ at_spy + 2                   ; one copy os88ui_btn reads)
 at_spcx     equ at_sph + 2
 at_btx      equ at_spcx + 2                  ; bigtext/image cursor
 at_bty      equ at_btx + 2
 ; --- edit scratch -------------------------------------------------------------
-at_ocll0    equ at_bty + 2
-at_ocll1    equ at_ocll0 + 2
-at_oselb    equ at_ocll1 + 2
-at_nvlo     equ at_oselb + 2
-at_nvhi     equ at_nvlo + 2
-at_xrlo     equ at_nvhi + 2
+at_osela    equ at_bty + 2                   ; the pre-move SELECTION and caret -
+at_oselb    equ at_osela + 2                 ; between them, all a caret move can
+at_ocaret   equ at_oselb + 2                 ; change on the glass (46.2.1)
+at_xrlo     equ at_ocaret + 2
 at_xrhi     equ at_xrlo + 2
 at_xry      equ at_xrhi + 2
 at_rby      equ at_xry + 2
-at_pastepos equ at_rby + 2
+at_tby      equ at_rby + 2                    ; word: SPEC.md 46.4.10 - the
+                                              ; first row of the text region
+                                              ; that the repaint loop has NOT
+                                              ; drawn on, kept as it goes. It
+                                              ; is not at_line_y(at_nlines):
+                                              ; that walk is right only while
+                                              ; the loop ran to the end, and
+                                              ; a loop that stopped early
+                                              ; leaves the rows between the
+                                              ; last line and that answer
+                                              ; UNERASED - which is a stale
+                                              ; picture and how this shipped
+                                              ; wrong once.
+at_apnd     equ at_tby + 2                    ; byte: SPEC.md 46.4.11 - at_type
+                                              ; inserted a non-styling
+                                              ; character at the END of its
+                                              ; logical line. A ONE-SHOT, set
+                                              ; by at_type and cleared by
+                                              ; at_apply_edit at .see, so no
+                                              ; other caller of that proc can
+                                              ; inherit it.
+at_suseg    equ at_apnd + 1                   ; word: SPEC.md 46.5.1 - the claim
+                                              ;   holding the pull-down's
+at_surx1    equ at_suseg + 2                  ; word: banked pixels, and the
+at_sury1    equ at_surx1 + 2                  ; word: rect they came from. 0
+at_surx2    equ at_sury1 + 2                  ; word: in at_suseg is the whole
+at_sury2    equ at_surx2 + 2                  ; word: of "nothing was banked"
+at_pastepos equ at_sury2 + 2
 at_wlo      equ at_pastepos + 2
 at_whi      equ at_wlo + 2
 at_wplen    equ at_whi + 2
@@ -1096,15 +1382,27 @@ at_ferr     equ at_wn + 2
 ; --- the window, the file, the clipboard, undo --------------------------------
 at_win      equ at_ferr + 2                  ; word: our window ptr
 at_name     equ at_win + 2                   ; 14 bytes: 8.3 + NUL
-at_cliplen  equ at_name + 14                 ; word
-at_argp     equ at_cliplen + 2              ; byte: 1 = launched to open
+at_fsowed   equ at_name + 14                 ; byte: SPEC.md 46.5.3 - we went to
+                                             ; the DOCK out of fullscreen, so
+                                             ; the W_PAINT that brings the
+                                             ; window back owes a re-entry.
+                                             ; There is no "restored" callback
+                                             ; (SPEC.md 29.6), so the paint is
+                                             ; the signal and the wake handler
+                                             ; is where the work happens
+at_nrev     equ at_fsowed + 1                ; byte: SPEC.md 46.6.2 - the
+                                             ; caret got where it is by a
+                                             ; PASTE, so 46.2.2's reveal
+                                             ; leaves it alone. A LATCH:
+                                             ; cleared by the next key, click
+                                             ; or command, so a repaint in
+                                             ; between draws the same picture
+at_argp     equ at_nrev + 1                  ; byte: 1 = launched to open
 at_argdrv   equ at_argp + 1                 ; byte: ...and where it lives
 at_argclus  equ at_argdrv + 1               ; word
 at_aseg     equ at_argclus + 2               ; word: heap claim (0 = none)
 at_usz      equ at_aseg + 2                  ; word: per-stack bytes
-at_coff     equ at_usz + 2                   ; word: clip slice offset
-at_csz      equ at_coff + 2                  ; word: clip slice bytes
-at_ucnt     equ at_csz + 2                   ; word
+at_ucnt     equ at_usz + 2                   ; word
 at_utop     equ at_ucnt + 2                  ; word
 at_rcnt     equ at_utop + 2                  ; word
 at_rtop     equ at_rcnt + 2                  ; word
@@ -1116,8 +1414,8 @@ at_sncnt    equ at_snpad + 1                 ; word
 at_sntop    equ at_sncnt + 2                 ; word
 at_snbase   equ at_sntop + 2                 ; word
 at_snoffs   equ at_snbase + 2                ; word
-at_clipbss  equ at_snoffs + 2                ; AT_CLIPBSS bytes
-at_fontbuf  equ at_clipbss + AT_CLIPBSS      ; the kernel's glyph table,
+at_akb      equ at_snoffs + 2                ; word: the arena's size NOW, KB
+at_fontbuf  equ at_akb + 2                ; the kernel's glyph table,
                                              ; copied in at launch
 at_abon     equ at_fontbuf + AT_FONTBYTES     ; byte: the About card is up
 at_bss_end  equ at_abon + 1

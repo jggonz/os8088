@@ -255,7 +255,7 @@ structure the natural one to write. What CWORD does, and what it costs:
   overstrike sits one pixel above the glyph band and the double underline two
   below; at pitch 10 the rule landed exactly where the next row's italic goes
   and rubbed it out on every repaint. Model every pixel row outside the band
-  separately, and let a face off `FONTS/` bring its own height.
+  separately, and let a face off `SYSTEM/FONTS/` bring its own height.
 - **One decision per cell, one call per RUN.** Bold is a second strike one
   pixel right, italic a strike up-and-right, the underlines are drawn rules,
   small caps a case map — each ONE extra call per run, never one per glyph.
@@ -402,11 +402,55 @@ Traps in the harness itself:
 - **Verify a saved file from the host by walking the FAT12 directory entry
   to its cluster**, not by grepping the image for its magic — the first grep
   found the package's own string literals.
-- **The C SDK has no build-time association block**, so `assoc=0` in the
-  header and `.RTF` is not double-clickable on a cold boot until the program
-  has run once (`os88_assoc_set()` is runtime). Known, ~15 lines in
-  `crt0.asm` (§54.6), left as an SDK change. Say so in the plan if the port
-  has a document type.
+- **A STUB THAT IS MORE PERMISSIVE THAN THE KERNEL IS LESSON 7 WITH THE SIGN
+  FLIPPED.** `a2uitest`'s `os88_file_read_seg` TRUNCATED to the caller's
+  capacity; the kernel REFUSES — `kernel/diskw.inc` compares the directory
+  entry's 32-bit size against the capacity before any data I/O and answers
+  `FERR_BIG` with the destination untouched, which `apps/cc/os88.h:854` says
+  in words. So the package grew a "was the read cut off?" arm that the machine
+  can never reach, the refusal a user would actually get was the WRONG
+  SENTENCE, and a new gate passed while asserting behaviour that does not
+  exist. When you write a stub for a slot that can refuse, **copy the
+  refusal, not the convenience** — and give the harness `os88_ferr()`, because
+  0 bytes means both "empty" and "refused" and nothing else tells them apart.
+- **`os88_onfile` ARRIVES UNDER THE DESKTOP'S GFX LOCK, and so does every
+  Standard File proc around it** (`kernel/fdlg.inc:45-48`, and `fdlg_commit`'s
+  own in-contract repeats it). `os88_onwake` is the ONE callback without it.
+  So the picker's answer is a LATCH — `os88_strcpy` the name (the kernel
+  reuses `fdlg_name`, so the pointer may not be kept), store the mode and
+  size, `os88_wm_wake` — and the wake does the claims, the read and the
+  parse. APPLE2 shipped the loader inline: six heap claims that may compact an
+  arena the package has a pinned 64KB in, a 46 KB floppy read and a 48KB block
+  move, all with the pointer frozen, the dock frozen and every other task's
+  painter blocked. It also defeats the overlay fence one line above it — that
+  fence exists so a locked caller does not go to the floppy for the `.OVL`.
+  **The host harness can assert this and an emulator cannot**: count claims
+  and file calls across the locked call and require both to be zero.
+- **The C SDK HAS a build-time association block, and this line used to say it
+  did not.** `%define CC_ASSOC "<pkg>/<pkg>assoc.inc"` in the shim, plus a file
+  holding a count byte and `OS88_ASSOC_EXT 'XXX'` per extension - the bracket
+  and the offset assertions are `crt0.asm`'s. `apps/apple2/a2assoc.inc` and
+  `apps/weave/wvassoc.inc` are the worked examples, and `os88pkg` prints
+  `assoc=1` when it took. So a document IS double-clickable on a cold boot with
+  no prior run, which `os88_assoc_set()` (runtime) cannot do. CWORD's `assoc=0`
+  is a fact about CWORD and not about the SDK.
+  **Declare it only in the wave that can OPEN the file**: an extension the
+  build cannot open launches the program and then refuses, which is worse than
+  no association - the user has spent a floppy seek, a claim and a window to be
+  told no. Write the `.inc` early (make cannot see through a `%include`, so it
+  has to be a written prerequisite from the start) and add the `%define` late.
+- **A launch document arrives with NO SIZE**, where the Standard File dialog
+  reads one out of the mount snapshot and hands it over so the program can
+  refuse before the motor spins. Claim what `os88_mem_largest_kb()` can spare,
+  capped at what the format can be, and take the READ's own answer as the size.
+- **`os88_arg_file()` is read-and-clear and the `.OVL` cannot be reached from
+  `os88_main`**, so the name is BANKED at launch and SPENT in the first wake -
+  and if the document has to be handed to something the emulated machine has
+  not finished booting yet, the wait is on that MACHINE's own state and not on
+  a wall clock. APPLE2 loaded an Applesoft program on the first wake and
+  Applesoft's cold start, which ends in a `NEW`, wiped it a moment later: a `]`
+  prompt whose `LIST` is empty, invisible to any screendump that does not type
+  `LIST`. Bound the wait, or a load left armed fires on the user's own `NEW`.
 - **The 86Box machine is a copy of one that has booted**, with the B: image
   and the uuid changed and *nothing else*: 86Box does not reject an unknown
   `cpu_family`, it substitutes a default speed and rewrites the config on
@@ -490,7 +534,7 @@ decided, done, and written down. That is the ratio to keep.
 ## 13. What the RunCPM port added
 
 `apps/runcpm` is RunCPM 6.9 (SPEC.md §74), ported across six waves by the
-skill this file belongs to; `docs/RUNCPM-PORT-PLAN.md` carries each wave's
+skill this file belongs to; `docs/plans/completed/RUNCPM-PORT-PLAN.md` carries each wave's
 measured paragraph. What it learned that CWORD had not, one line each:
 
 - **The `.OVL` cannot be loaded from `os88_main`** — there is no instance
@@ -531,3 +575,138 @@ measured paragraph. What it learned that CWORD had not, one line each:
   the caller's `rc_n11` and an `F_OPEN` that triggered a refill opened the
   LAST file walked — exactly the trap the `static` idiom (§73.5) invites;
   give a walker its own scratch and make the harness refill before an open.
+
+## 14. What the APPLE2 port added
+
+`apps/apple2` is a 48K Apple II Plus (`docs/APPLE2-SPEC.md`), ported across
+seven waves by the skill this file belongs to;
+`docs/APPLE2-PORT-PLAN.md`'s "What shipped" carries each wave's measured
+paragraph. What it learned that CWORD and RUNCPM had not, one line each:
+
+- **A CHARACTER CELL THAT IS NOT EIGHT PIXELS HAS NO CHEAP PATH ANYWHERE.**
+  280/40 = 7, so no cell after the first lands on a byte boundary, a decoded
+  glyph is never a pixel byte, and text is the same shift-accumulator class as
+  the bitmap - not the per-cell composer every other package in this tree
+  writes. The draft was costed on eight and every per-cell figure in it was
+  wrong. **Measure the cell before planning the renderer.**
+- **WHICH SCAN LINES ARE ON THE GLASS IS A CORRECTNESS QUESTION, NOT A
+  PREFERENCE.** On a 640x200 desktop only 111 of the Apple's 192 lines fit, and
+  the first version anchored the band at the BOTTOM: a launch screen was a
+  black window with the banner and the `]` prompt off the top, on the one
+  adapter class the OS most needs to work on, and no VGA screendump could show
+  it. The band follows the CURSOR ROW now. Anything that clips a taller
+  picture into a shorter box has this decision in it.
+- **A `%ifdef`-GATED THUNK IS THE ONLY POLITE WAY TO ADD ONE TO A SHARED SDK.**
+  Four `OSAPI_FSX_*` wrappers in `apps/cc/os88thunk.asm` cost **23 bytes each**
+  and `nasm -f bin` has no dead-code elimination, so the first cut charged 92
+  bytes to every C package in the tree - and LOOM, the tightest package in the
+  tree, ships with **under 200 bytes** of 61,440 to spare. `CC_HAS_FSX` makes it +92 to the one package that calls them and
+  +0 to the other six. Check the TIGHTEST package before adding an SDK line,
+  not the one you are working on.
+- **A REFUSAL THE SDK RAISES IS STILL A STRING WITH A LENGTH.**
+  `TOAST_MAX` is 24 and `OSAPI_TOAST` **truncates** rather than refusing, and
+  `crt0.asm`'s three overlay refusals are assembled from `CC_PKG_NAME` - so
+  they were 32, 30 and 38 characters and every C package in the tree had been
+  losing the second half of all three for as long as the overlay had existed
+  (`APPLE2.OVL is not on this disk` reaching a reader as
+  `APPLE2.OVL is not on thi`). The fix is a shape - `No <NAME>.OVL`,
+  `No RAM: <NAME>`, `Old <NAME>.OVL` - and **the shape is sized from the SDK's
+  own name FIELD (15 characters, `crt0.asm`'s `%fatal`) and not from the
+  longest package name that happens to exist**: the first draft kept the prose
+  and fitted names of 9 and 11, which passes in a tree whose longest name is 7
+  and fails inside somebody else's build the day an 11-character package
+  arrives. A shared SDK's message is sized by its own field. The gate reads
+  the cap out of `kernel/toast.inc`, the literals out of `crt0.asm`, the name
+  cap out of `crt0.asm` and every `%define CC_PKG_NAME` in the tree - and it
+  lives in `tests/unit/t_mirror.py`, NOT in the package's own `build.sh`: a
+  gate on a SHARED file belongs where the shared build runs, and an on-demand
+  C target's script never runs for the edit it is watching for.
+- **`0xFFFF` IS NEGATIVE IN THIS C AND A SENTINEL TEST OF `>= 0` IS DEAD
+  CODE.** The enhanced Alt+Enter's scan code made the whole chord unreachable
+  and the host harness could not have seen it, because the harness types what
+  the program asks it to type. Make a sentinel `unsigned` and say so where it
+  is declared; `-32768` and `0xFFFF` are both `Constant too big` here and both
+  want writing out (LESSONS 3).
+- **MEASURE THE FEATURE BEFORE WRITING THE FEATURE, AND BE WILLING TO LOSE.**
+  Three foreign-video writers were built and benched; two were **cut** because
+  they lost to the window they came from (695.4 ms a frame against 632.6, 34.8
+  ms a row against 26.4). What made that cheap was that the cut gave nothing
+  back - one routine served all three - which is a design choice made in
+  advance rather than a rescue.
+- **A SAMPLE DOCUMENT IN THE MACHINE'S OWN FORMAT IS GENERATED FROM THE
+  MACHINE'S OWN TABLES.** `WELCOME.BAS` is tokenised Applesoft, and
+  `tools/a2bas.py` reads the token names out of the PINNED ROM at `$D0D0`
+  rather than typing a table from a reference: the shipped bytes then rebuild
+  byte for byte, and no token in them was remembered. Its `--selfcheck` LISTs
+  the result back through the same table - a tokeniser is exactly the tool
+  whose output looks fine and runs wrong, and one byte out is a `]` prompt
+  whose `LIST` is empty.
+- **THE PLAN'S SPEED ESTIMATE WAS OUT BY EIGHT, AND THE FIRST EXPLANATION OF
+  WHY WAS ALSO WRONG - WHICH IS THE LESSON.** The port plan divided 8088
+  clocks by 6502 instructions and predicted 3-4% of a 1.02 MHz Apple on an XT;
+  the first measurement was **0.41%** idle and **0.51%** in a BASIC loop, and
+  the wave wrote that down as "the ceiling is the SLICE and not the
+  interpreter", `A2_SLICE_MIN` = 256 cycles once a wake. Instrumenting the
+  package - host ticks summed around the slice, around the flush and around
+  the whole wake, read out of the guest - found three things that arithmetic
+  had guessed at, and it disagreed on two of them:
+  - the **interpreter** is ~415 8088 clocks an emulated 6502 *cycle*, about
+    1,250 an instruction against the plan's 400. That alone caps the port at
+    **1.13%**, so most of the factor of eight was never the slice's;
+  - the **flush** took 50% of every second at 110.9 ms a flush, against the
+    6502's 39%. The redraw, not the emulation, is what the remaining gap is;
+  - the slice really was pinned at the floor, but not for the stated reason.
+    A 256-cycle slice is 22.5 ms of a 55 ms tick - nowhere near it. The rule
+    doubled after **four consecutive** slices that cost no host tick and
+    halved on **one** that did, and solving `(1-p)^4/4 = p` puts that walk's
+    fixed point at **p = 0.14**: an asymmetric step size is a controller with
+    a set point in it, and the set point was 14% of a tick on every machine.
+    Measuring the crossing RATE over a window instead - the rate IS the duty
+    cycle - took the XT to 0.54% / 0.64% for 98 bytes.
+
+  **So: an estimate of emulated speed needs the slice, the wake rate AND the
+  redraw in it, and a rule with two different step sizes needs its fixed point
+  solved before it is believed.** Take the number on the slow machine before
+  the tier, the README row and the Wire page are written from it - and if the
+  number surprises you, put counters in the wake before writing down which
+  part of it was to blame.
+- **AND A PER-CENT FIELD RUNS OUT OF RESOLUTION BEFORE THE MACHINE DOES.**
+  The status row reads `0%` on an XT, honestly, and that is worth saying in
+  the SPEC beside the figure: a reader who sees `0%` and no explanation
+  reports a broken field.
+- **MartyPC IS WHERE A SPEED FIGURE COMES FROM AND 86Box IS WHERE IT IS
+  LOOKED AT.** A `make <machine>` target that launches a GUI emulator cannot
+  assert anything; the debug server can read the package's own counters out
+  of the guest. **Read the one with the RESOLUTION in it**: APPLE2's figure
+  was taken from `a2_c64u`, the raw one-second cycle fold, and not from
+  `a2_pct` - the whole-per-cent field the status row prints - which reads
+  **0** on the machine this lesson is about. Sample the guest at the RATE the
+  thing you are measuring moves -
+  sampling a one-second fold every two seconds read two windows as one and
+  produced a plausible, wrong conclusion about the code.
+- **AND TYPING A BURST INTO A SLOW GUEST LOSES KEYS SILENTLY, WHICH READS AS A
+  NULL RESULT.** The driver that measured "the machine inside a BASIC loop"
+  sent `FOR I = 1 TO 1000 : NEXT` in one `type_text()`. The BIOS keyboard
+  buffer holds **15**, so everything after `FOR I = 1 TO 10` was dropped -
+  RETURN included - and what was measured, and screendumped as evidence, was
+  the machine sitting at the prompt with a half-typed command on it. It agreed
+  with the idle figure and the agreement was believed. Two more things bite at
+  4.77 MHz: `advance()` STOPS the machine, so a chunk typed while it is
+  stopped arrives as one instant; and a shifted letter's shift-up collapses
+  into the next key's shift-down (`1 TO 1000` came back as `1 T !)))`, the
+  shifted digit row). **Type one character, read it back off the GUEST's own
+  screen memory, then send the next** - and PROVE the state you are claiming
+  (here: the trailing prompt is gone, and the program is still running at the
+  screendump) rather than assuming the keystrokes landed.
+- **A FULLSCREEN BRACKET IS A SECOND REDRAW PATH AND EVERY TERM THE FIRST ONE
+  HAS TO EARN, IT HAS TO EARN AGAIN.** The windowed flush had had "at most
+  once a tick, and on the slow tier every OTHER tick" since wave 1; the
+  fullscreen loop, which draws the SAME picture more expensively (a colour
+  character row is 5.3x a windowed one), had a dirty-set gate and no pacing at
+  all - so on the one CPU tier the port had just measured and printed a
+  message about, it spent a 140 ms frame between every 256-cycle slice and ran
+  the emulated machine at a third of the speed the WINDOW managed. The gate
+  and the pacing are two different terms and a bracket copied from the flush
+  is easy to copy with only the first. **Diff the bracket's predicate against
+  the window's, term for term**, and re-derive the tier factor from what the
+  bracket's own row costs rather than reusing the window's.

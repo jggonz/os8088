@@ -60,7 +60,7 @@ static unsigned char h_void[16];        /* where a bad pointer lands, once the
 
 /* THE MACHINE'S OWN CEILING, and the harness holds the program to it:
  * kernel/memory.inc gives MEM_MAX = 20 on kern_small, SYSTEM-WIDE and shared
- * with every Disk window and driver already open (SPEC.md 92.6.1). This
+ * with every Disk window and driver already open (SPEC.md 114.6.1). This
  * program may not be most of it. */
 #define H_MEM_KB      512               /* what a 640 KB machine has free */
 #define H_MEM_MAX      20
@@ -172,7 +172,7 @@ static int h_r_vstart;              /* VGA: the CRTC Start Address points at
 static int h_r_rects;               /* lem_r_rect CALLS since the last reset -
                                      * the SmallerC cdecl boundary is three
                                      * quarters of a minimap cell (SPEC.md
-                                     * 92.7.1), so the call count is a cost in
+                                     * 114.7.1), so the call count is a cost in
                                      * its own right and not a proxy */
 static unsigned char h_r_dirty[H_SCR_H];
 

@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "INDEX.md")
@@ -37,34 +38,52 @@ OUT = os.path.join(ROOT, "docs", "INDEX.md")
 # Each is (title, SPEC sections, [slot-name prefixes or exact names]). The
 # ORDER is the order a package author meets them, not the API's own numbering:
 # you draw before you handle a click, and you open a window before either.
+#
+# Every slot must land in exactly one group: a prefix is tried against the
+# groups in this order and the first match wins, and a slot no prefix claims
+# fails the run by name (see build()) rather than being filed under a heading
+# nobody reads. Add the prefix here when a slot is added there.
 GROUPS = [
     ("Windows", ["11", "20"],
-     ["WM_", "ABOUT_SET", "WIN_"]),
-    ("Menus and the menu bar", ["12"],
+     ["WM_", "ABOUT_SET"]),
+    ("Packages and the desktop", ["21", "26", "110"],
+     ["PKG_", "DESK_"]),
+    ("Menus and the menu bar", ["12", "59"],
      ["MENU_", "TOAST"]),
-    ("Drawing", ["5", "32", "39", "76"],
-     ["GFX_", "SET_COLOR", "PAL_"]),
+    ("Drawing", ["5", "25", "32", "39", "76"],
+     ["GFX_", "SET_COLOR", "ICON_", "THM_"]),
     ("Text and fonts", ["6", "83"],
-     ["FONT_", "FACE_"]),
+     ["FONT_"]),
     ("Input - keyboard and mouse", ["9", "10", "13"],
-     ["KEY_", "MOUSE", "KBD_"]),
-    ("Files and volumes", ["18", "19", "22", "38", "54"],
-     ["FILE_", "DIR_", "VOL_", "FDLG", "DLG_", "ASSOC"]),
+     ["KEY_", "MOUSE", "EVQ_", "CUR_"]),
+    ("Files and volumes", ["18", "19", "22", "38", "54", "20.13"],
+     ["FILE_", "VOL_", "FS_", "ASSOC", "ARG_FILE", "BATCH_", "DECOMP",
+      "DSK_", "FERR_"]),
     ("Memory", ["2", "41", "50", "66"],
-     ["MEM_", "XMEM_", "CLAIM", "SYS_KB"]),
+     ["MEM_", "XMEM_", "CLAIM_SNAPSHOT", "SYS_KB"]),
     ("Tasks, timing and the clock", ["7", "8", "37"],
-     ["TASK_", "TICKS", "TIMER", "SLEEP", "YIELD"]),
+     ["TASK_", "GET_TICKS", "BOOT_TICKS", "CLK_"]),
     ("Sound", ["34", "35"],
-     ["SND_", "TONE"]),
+     ["SND_"]),
     ("The system - CPU, video, clipboard, drivers", ["31", "51", "55", "57", "60"],
-     ["CPU_INFO", "VIDEO", "CLIP_", "DRV_", "SYS_", "CFG_", "SNAPSHOT"]),
-    ("Networking", ["62", "67", "70", "71", "72", "77"],
-     ["NET_", "SOCK_"]),
+     ["CPU_INFO", "VIDEO", "CLIP_", "DRV_", "SYS_SNAPSHOT", "REBOOT"]),
+    ("Networking", ["62", "70", "71", "72", "77"],
+     []),
     ("Fullscreen and the screen saver", ["53", "64", "79"],
-     ["FSX_", "BLANK"]),
+     ["FSX_", "FULLSCREEN"]),
     ("Randomness and maths", ["84"],
      ["RAND", "SRAND"]),
+    ("Running a DOS program", ["96"],
+     ["DOS_"]),
 ]
+
+# What a group with no slots of its own says instead of a table.
+GROUP_NOTES = {
+    "Networking":
+        "No kernel slot: a package reaches the network through a DRIVER "
+        "(`OSAPI_DRV_CALL`, SPEC.md 20.11), with the verbs in "
+        "`drivers/net/netpkg.inc` and the driver found by `apps/os88sock.inc`.",
+}
 
 # Shared includes a package opts into. The blurb is this file's own - it is the
 # one thing here not extracted, because "what is this FOR" is not in the source
@@ -77,10 +96,55 @@ GROUPS = [
 # already exist?" answered no about a file that did.
 INCLUDES = [
     ("os88ui.inc", "13, 75",
-     "Buttons, check boxes, radio dots, scroll bars, group boxes and the "
-     "standard alert. Opt into the alert with `%define OS88UI_ALERT`, the "
-     "scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with "
-     "`%define OS88UI_SBDRAG`."),
+     "Buttons, check boxes, radio dots, scroll bars, group boxes, the "
+     "standard alert, the standard About card and the drop-down. Opt into "
+     "the alert with `%define OS88UI_ALERT`, the About card with `%define "
+     "OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its "
+     "thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one "
+     "pick out of a short list, a Macintosh popup's gesture - with `%define "
+     "OS88UI_DROP` (SPEC.md 13.14). Buttons that carry an ICON_DRAW image in "
+     "place of a caption, drawn in one write with no ground fill, are `%define "
+     "OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a button whose "
+     "face the PACKAGE paints, keeping the library's press gesture, is `%define "
+     "OS88UI_BOWN` and the `OS88UI_OWN` flag (SPEC.md 13.8.10); a package with "
+     "no check box or radio sheds that code with `%define OS88UI_NOGLYPH`, "
+     "and one whose every button is a picture sheds the caption, ink and "
+     "default-ring paths with `%define OS88UI_BIMGONLY`."),
+    ("os88alt.inc", "11.2.1.1",
+     "Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - "
+     "where no event is dispatched, so the kernel's synthesised keystroke "
+     "cannot reach you and your own int 16h poll cannot see the key either. "
+     "`os88alt_edge` asks the key-state map and finds the edge in it. A "
+     "package on SPEC.md 11.2's LATCH needs none of this file: one "
+     "`cmp ax, KEY_ALTENTER` in its W_ONKEY is both directions. Both want "
+     "`OS88_ALTENTER_ARM` (apps/os88api.inc) in the entry proc, without which "
+     "the chord is silently dead."),
+    ("os88stik.inc", "110",
+     "A STICKY APP - a widget that lives in STIKAPPS\\ "
+     "and comes back at the next boot where it was left. Its state file "
+     "(SYSTEM\\APPDATA, a 16-byte Sticky App header then your payload), its Sticky App row "
+     "in SYSTEM.CFG's desktop trailer, registered on the first tick and "
+     "removed by name on close, and a 36-tick poll that saves the window's "
+     "place once a drag settles. `stik_load` in the entry proc (size your "
+     "template for the adapter first), `stik_made` after OSAPI_WM_CREATE and "
+     "your own KEEPH/PREFER, `stik_painted` as the LAST thing your W_PAINT "
+     "does (kern_small's worker is hired there - without it that kernel has "
+     "no tick, no save and no reminders, and says nothing), and `stik_touch` "
+     "whenever your payload changes. `%define STIK_WIDGET` (§110.11) is the "
+     "widget TREATMENT: a desk window (§11.103) of chromeless cards with the "
+     "desktop between them and a name tag that becomes a handle - x to "
+     "close, drag by the tag or a gap - under the pointer; you give "
+     "`STIK_LAYOUT`s (picked by the screen's height) and a card painter "
+     "(`stik_slabs` + `STIK_COMPOSE` into os88gfx.inc's band), it owns every "
+     "other pixel, the gestures, the hover and focus states and the titled "
+     "fallback on kern_small. A kern_big widget (`STIK_DESKONLY`) that adds "
+     "`%define STIK_LIB` before its OS88_HEADER carries none of the code: "
+     "it far-calls the ONE copy in DESK.DRV (§110.15)."),
+    ("os88stikc.inc", "110.15",
+     "The Sticky App library's CLIENT, and you do not include it: "
+     "os88stik.inc does for a package built `%define STIK_LIB` - the "
+     "descriptor's values, the thunks into DESK.DRV's copy, the trampoline "
+     "the library calls back through, and the bind in `stik_load`."),
     ("os88line.inc", "83",
      "A one-line text field: caret, horizontal scroll, focus, click-to-position "
      "and the editing keys. The caller owns a 20-byte block."),
@@ -95,16 +159,147 @@ INCLUDES = [
      "IEEE-754 double arithmetic in software, with an 8087 path chosen at run "
      "time. Parse, format, add, subtract, multiply, divide, compare, sqrt, "
      "trunc, floor, round."),
-    ("os88sock.inc", "62, 72",
-     "The socket layer over NET.DRV or ETHER.DRV."),
-    ("os88pit.inc", "37",
-     "Sub-tick timing off the 8253."),
-    ("os88type.inc", "54",
-     "File-type recognition by name and by content."),
+    ("os88xgap.inc", "41.14",
+     "Where a buffer that copies to and from XMS should START: `xg_gap` times "
+     "8 KB copies at six gaps against a block the caller owns and answers G, "
+     "half a page-interleaved board's period, or 0. Place by (conventional - "
+     "extended) mod 2G = G. Measured, never assumed - the period is the "
+     "board's DRAM page."),
+    ("os88la.inc", "41.13",
+     "LOADALL on a 286: memory above 1 MB read and written IN PLACE through "
+     "a hidden segment base, as one BORROW of the API table at physical "
+     "0x800 inside one cli window (`la_capture`, `la_probe`, `la_borrow`, "
+     "`la_restore`). Tier 1 only, behind the INT 6 probe. XMEM.DRV's tier-1 "
+     "copy is built on it, so a package that only wants bytes moved wants "
+     "OSAPI_XMEM_COPY, not this."),
+    ("os88ub.inc", "41.15",
+     "A 386's segment BASE loaded where it is wanted: `ub_set` puts DS's "
+     "and/or ES's hidden base at any linear address through a moment of "
+     "protected mode, limit 64 KB, so 16-bit code reads and writes extended "
+     "memory unchanged until the register is next loaded. The 386's answer "
+     "to os88la.inc, under the same cli rule. Tier 2 only. XMEM.DRV's "
+     "tier-2 copy is built on it, so a package that only wants bytes moved "
+     "wants OSAPI_XMEM_COPY, not this."),
+    ("os88lzw.inc", "106.18",
+     "LZW DECODE, GIF's flavour: Paint's reader with Paint taken out - a code "
+     "past the table or a non-root after a Clear is refused, a chain cannot "
+     "cycle - over the includer's 18 KB table segment, input appended by "
+     "`LZW_FILL`, strings handed to `LZW_RUN`. PiXEL's GIF part first; "
+     "TIFF's reader, the GIF encoder and Paint are to share it as source."),
+    ("os88img.inc", "93",
+     "Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that "
+     "OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block "
+     "in SI. 8-bit files are refused by name, not approximated."),
+    ("os88spkfx.inc", "34.11.9",
+     "The SPEAKER SHAPER, beside os88spk.inc: 8-bit PCM made into pulse "
+     "counts a 5150's cone can play - a first-difference pre-emphasis, a "
+     "leveller chosen per span from the peak held over three spans, a soft "
+     "clip and the "
+     "carrier put away in the quiet, all one `xlatb` and one subtract a "
+     "sample. `os88spkfx_init` builds the level family in your own segment "
+     "after `os88spk_init`; `os88spkfx_level` decides a span, "
+     "`os88spkfx_emit` translates it into the ring in any number of pieces. "
+     "tools/os88spkfx.py is its reference to the byte."),
+    ("os88spkfx_t.inc", "34.11.9",
+     "os88spkfx.inc's tables - the soft clip's curve, the level gains, the "
+     "peak-to-level table - GENERATED by `tools/os88spkfx.py gen`; never "
+     "edited by hand, and t_spkfx holds it to the model."),
+    ("os88spk.inc", "34.11",
+     "PCM through the PC SPEAKER, with no card, from inside your own "
+     "FSXF_RATE bracket: the ring player on OSAPI_FSX_SPK. The ring is the "
+     "external ring's layout (SPEC.md 34.5.3), so a player that feeds a Sound "
+     "Blaster feeds this the same way, but it holds PWM COUNTS - "
+     "`os88spk_init` writes the table a sample goes through. `os88spk_go` "
+     "plays, `os88spk_stop` pauses or stops. It costs the machine an "
+     "interrupt a sample (SPEC.md 34.11 has the measured share)."),
+    ("os88pcm.inc", "34.4",
+     "A PWM CLIP through the PC speaker on the desktop, run to completion: "
+     "`os88pcm_play` takes ES:SI, CX samples and a rate and answers AX = 0 "
+     "or 1..5, the contract OSAPI_SND_PLAY had before it became this "
+     "player's door (grant, release, the scheduler lock and the click's "
+     "drain). It FREEZES the desktop for the clip; a click skips it. UI task "
+     "only. BX names 256 bytes of YOUR scratch for its rescale table."),
+    ("os88sock.inc", "20.11, 62.11, 72",
+     "Finding the socket driver: `net_find` answers CF=1 when neither "
+     "ETHER.DRV nor NET.DRV is loaded and sets `NET_CLASS` otherwise, so every "
+     "`OSAPI_DRV_CALL` after it addresses the right class. `%define "
+     "OS88SOCK_STATE` makes it ask NETV_STATE as well (ZF=1 = no NSTF_SOCK), "
+     "for a package whose every `net_find` wants that. The verbs "
+     "themselves are `drivers/net/netpkg.inc`'s."),
+    ("os88gfx.inc", "5.12",
+     "The EMBEDDABLE graphics library: drawing code that lives in the PACKAGE "
+     "rather than in the kernel, taken one capability at a time. `%define "
+     "GFXE_BAND` composes into your own 1bpp band and commits it with one "
+     "`OSAPI_GFX_BLIT1` - the pixel primitive is a bit-set, not a slot - and "
+     "`%define GFXE_LINE` adds the Bresenham, which implies the band because a "
+     "line needs somewhere to land. An app-side rasteriser is FASTER than the "
+     "slot (24.6 us a pixel against `gfx_line`'s 31.6 with the arrival "
+     "removed). `%define GFXE_TEXT` puts the kernel's 8x8 glyphs into the "
+     "band at any x - normal or inverse, x1/x2/x3, bold - plus a rectangle "
+     "fill, and `%define GFXE_BITS` a 16-wide bit record (a tick, a bell): "
+     "a whole card composed and put down in one BLIT1, nothing drawn twice "
+     "(§5.12.8)."),
+    ("os88dec.inc", "20.5.2",
+     "Number -> decimal text, 0 resident: `dec_u16`/`dec_s16`/`dec_u32` at "
+     "DS:DI, NUL-ended with DI left on the NUL so the next piece appends, "
+     "`dec_fld` as a right-aligned space-padded FIELD for one opaque "
+     "`font_run`, and `DEC_SEP` for `16,384`. Each arm a `%define`; every "
+     "register but DI kept. Reach for it before writing a `div 10` loop."),
+    ("os88m83.inc", "77.20.1",
+     "The 8.3 name mangle: `m83_mangle` turns a sender's pathname into the "
+     "name this machine stores it under (`banana split.mod` -> "
+     "`BANANA~1.MOD`, a legal name left alone, always `~1`). ONE copy, so "
+     "FTPD's uploads and Telnet's Zmodem downloads land on the same name by "
+     "construction; `tools/os88bbs.py`'s `mangle83` is its reference."),
+    ("os88rseq.inc", "18.4.8.1",
+     "`os88_rseq`: `OSAPI_FILE_READ_AT`'s registers plus a 16-byte cursor at "
+     "`DS:DI`, served by `OSAPI_FILE_READ_SEQ` - one FAT link a chunk where "
+     "`READ_AT` walks the chain from the front every call. The offset stays "
+     "yours and a cursor whose offset differs is re-seeded, so a seek needs "
+     "nothing; the small kernel's `FERR_NAME` is retried as `READ_AT`. Zero "
+     "the cursor with `os88_rseq_new` whenever the FILE changes."),
+    ("os88data.inc", "19.9.1",
+     "SYSTEM\\APPDATA on your own volume: `od_read` and `od_write`, which walk "
+     "there with `OSAPI_FILE_GOTO_QM` (never the display remount), bank the "
+     "folder's cluster, rewrite a file of unchanged length in ONE sector with "
+     "`OSAPI_FILE_WRITE_AT`, and put the instance back on every path out. For "
+     "a high-score table or a settings file; five packages carry it."),
+    ("os88link.inc", "26.10.6",
+     "LINKS and AUTOSTART: `OS88_LINK` lays down a 50-byte `.LNK` record and "
+     "`ol_autostart` writes it into `\\AUTOSTRT` on the BOOT volume, making "
+     "the folder if need be, so the program it names is opened at every boot "
+     "(Shift held skips it). Over os88data.inc's walk, so it needs "
+     "`OD_BOOTVOL`; REDLINE's Apply on boot is the worked example."),
+    ("os88pit.inc", "72.15.1",
+     "`pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, "
+     "good for an hour before it wraps. Sub-tick timing for a profiler."),
+    ("os88type.inc", "6.3, 6.5",
+     "Proportional type: composes a row of glyphs from an `.F88` face into a "
+     "1bpp band in your own RAM and puts it up with one `OSAPI_GFX_BLIT1`."),
     ("os88parts.inc", "20.12",
      "Package parts: named, sized parts inside one `.O88` - claimed, loaded on "
      "demand, optionally into XMS, and refused with an arithmetic the package "
      "states itself. A package over 64KB is still a package."),
+    ("os88con.inc", "70.8, 96.32",
+     "An 80x25 TEXT CONSOLE: a fixed buffer of (character, IBM attribute) "
+     "pairs - text VRAM's own layout - a dirty-ROW bitmap, and a composer that "
+     "writes eight bytes a cell and calls nothing. `con_putc`, `con_clear`, "
+     "the two scrolls, and `con_rows_owed` to draw what is owed. The CARRIER "
+     "owes it the geometry at every paint - the 8-aligned text pen, the "
+     "content top, the first text row below it, the visible columns and rows "
+     "and [con_mono] - and nothing else: not the window's left edge, its width "
+     "or its height, so a carrier may centre or inset the band freely. It "
+     "carries the CP437 face and declares its own bss off `CON_BSS_AT`."),
+    ("os88cp437.inc", "70.8.6",
+     "The 160 CP437 glyphs a machine cannot be asked for - 0x00..0x1F and "
+     "0x80..0xFF, eight bytes each. GENERATED by `tools/cp437font.py` and "
+     "committed, the way docs/INDEX.md is. `os88con.inc` includes it, so a "
+     "carrier never names it."),
+    ("os88partsbody.inc", "20.12.9",
+     "The parts standard's CODE, and you do not include it: OS88_PARTS_END "
+     "emits it after your table, gated on the OP_HAS_* flags the table itself "
+     "derived. One plain part carries 1,018 bytes of it where every consumer "
+     "used to carry 2,536."),
 ]
 
 
@@ -132,11 +327,18 @@ def check_includes():
 
 
 def anchor(num, title):
-    """GitHub's heading anchor for "## <num>. <title>"."""
-    text = "%s. %s" % (num, title)
-    text = text.lower()
-    text = re.sub(r"[^\w\s-]", "", text.replace("\u2014", "").replace("\u2019", ""))
-    return re.sub(r"[\s]+", "-", text.strip())
+    """GitHub's heading anchor for "## <num>. <title>".
+
+    github-slugger's rule: lowercase, drop every character that is not a
+    letter, digit, mark, space, `-` or `_`, then turn EACH space into a
+    hyphen. Spaces are not collapsed, so "wm.inc — windows" is
+    `wminc--windows` - the em dash goes and both spaces around it stay.
+    """
+    text = ("%s. %s" % (num, title)).lower()
+    kept = "".join(c for c in text
+                   if c.isalnum() or c in " -_"
+                   or unicodedata.category(c).startswith("M"))
+    return kept.replace(" ", "-")
 
 
 def read(path):
@@ -179,13 +381,12 @@ def api_slots():
 
 
 def trim(note, width=150):
-    """Enough to say what the call IS FOR, not just what it takes.
+    """The first `width` characters of a slot's comment, cut at a sentence.
 
-    A slot's comment opens with its register list, and a cut there leaves
-    "BX = win ptr, SI = your About handler's offset" - which answers "how do I
-    call it" and not "is this the thing I want", the only question this index
-    exists for. So the register clause is stepped over and the PROSE after it
-    is what gets the room.
+    A slot's comment opens with its register list and the prose about what
+    the call is FOR follows it, so the cut is made at the last sentence, clause
+    or dash boundary inside the width (never in its first third) and marked
+    with an ellipsis. The full text is in apps/os88api.inc.
     """
     note = " ".join(note.replace("|", r"\|").split())
     if len(note) <= width:
@@ -197,38 +398,118 @@ def trim(note, width=150):
     return (cut[:cut.rindex(" ")] if " " in cut else cut) + "..."
 
 
+def make_vars(mk):
+    """{NAME: value} for every plain variable assignment in the Makefile.
+
+    Continuations are already joined. `+=` appends; the last assignment of a
+    name wins, which is right for the two APPS_DATA arms and wrong for
+    nothing this file reads."""
+    out = {}
+    for m in re.finditer(r"^([A-Za-z0-9_]+)\s*([:?+]?)=\s*(.*)$", mk, re.M):
+        name, op, val = m.group(1), m.group(2), m.group(3).strip()
+        out[name] = (out.get(name, "") + " " + val) if op == "+" else val
+    return out
+
+
+def make_expand(text, mvars, depth=12):
+    """`text` with every `$(NAME)` that names a plain variable replaced by its
+    value, recursively. A function call - `$(filter-out a,b)`, `$(addprefix
+    p,l)` - keeps its ARGUMENTS and loses the function, which over-includes
+    (a filter-out's filtered names survive) and never drops a name; the caller
+    only wants the set of names reachable at all. `$(BUILD)` is left alone
+    so the `$(BUILD)/x.o88` shape stays greppable."""
+    for _ in range(depth):
+        def sub(m):
+            inner = m.group(1)
+            if inner == "BUILD":
+                return m.group(0)
+            if inner in mvars:
+                return mvars[inner]
+            if " " in inner:                   # a function call
+                return inner.split(" ", 1)[1].replace(",", " ")
+            return ""
+        new = re.sub(r"\$\(([^()$]+)\)", sub, text)
+        if new == text:
+            break
+        text = new
+    return text
+
+
 def packages():
-    """[(NAME, source)] for every package the Makefile builds.
+    """[(NAME, source, ships)] for every package the Makefile builds.
 
     TWO SHAPES, because there are two, and reading only the first left five
     packages out of an index whose whole claim is that it cannot drift:
 
-      * an assembly package has an open-coded `$(BUILD)/x.bin:` rule naming
-        `apps/x/x.asm`, and its name is in its own `OS88_HEADER`;
+      * an assembly package has an open-coded `$(BUILD)/x.bin:` rule whose
+        prerequisites name `apps/x/x.asm` - directly, or through a variable
+        such as `$(FROTZSRC)`, which is why the prerequisites are expanded
+        before they are searched - and its name is in its own `OS88_HEADER`;
       * a C package (SPEC.md 73) is `$(eval $(call CC_PACKAGE,name,dir))` -
         the rule is generated, so there is no `.bin:` line to find - and its
         name is the `CC_PKG_NAME` in the same shim. LOOM open-codes its rules
-        for an include-path reason, so it has BOTH; the set() below is why
-        that is not a duplicate row.
+        for an include-path reason, so it is found the first way.
+
+    `ships` is whether `$(BUILD)/<stem>.o88` is reachable from ALLAPPSFILES,
+    the payload of `make allapps` and the live media (SPEC.md 19.10, 80) -
+    the one list every shipped application is on. What `all` builds and no
+    disk carries (WIREFRAME, SPEC.md 78.9) or a test only its own target
+    builds (FPTEST) is still a worked example, and the column says so.
+
+    ...AND `retired` IS ITS OWN ANSWER, read from apps/RETIRED.txt (SPEC.md
+    20.16). A retired package and an instrument are both `no` on the disks
+    and they are not the same fact - one is a failure kept as a record, the
+    other is a bench doing its job - so the column would be saying "not
+    shipped" about two things a reader needs to tell apart. The registry is
+    the source, never a list here: tests/unit/t_retired.py gates that file,
+    so a name added there reaches this index at the next `make` with no
+    second edit.
     """
     mk = re.sub(r"\\\n\s*", " ", read("Makefile"))
+    mvars = make_vars(mk)
+    # ...OR the system disk's own SYSTEM/ and STIKAPPS/ (SPEC.md 92, 110):
+    # The Wire and the Desk Calendar ride every system floppy and no apps
+    # disk, so the everything-set alone called both "built by its own target
+    # only", which is the one thing neither is
+    shipped = set(re.findall(r"\$\(BUILD\)/([a-z0-9]+)\.o88",
+                             make_expand("$(ALLAPPSFILES) $(SYSAPPS) "
+                                         "$(STIKAPPS)", mvars)))
+    retired = set()
+    rp = os.path.join(ROOT, "apps", "RETIRED.txt")
+    if os.path.exists(rp):
+        for line in read(os.path.join("apps", "RETIRED.txt")).splitlines():
+            t = line.split("#", 1)[0].split()
+            if len(t) == 2 and t[0] == "retired":
+                retired.add(t[1])
     srcs = []
     for m in re.finditer(r"^\$\(BUILD\)/([a-z0-9]+)\.bin:([^\n]*)$", mk, re.M):
-        got = re.search(r"(apps/[a-z0-9]+/[a-z0-9]+\.asm)", m.group(2))
+        got = re.search(r"(apps/[a-z0-9]+/[a-z0-9]+\.asm)",
+                        make_expand(m.group(2), mvars))
         if got:
-            srcs.append(got.group(1))
+            srcs.append((m.group(1), got.group(1)))
     for m in re.finditer(r"CC_PACKAGE,([a-z0-9]+),([a-z0-9]+)", mk):
-        srcs.append("apps/%s/%s.asm" % (m.group(2), m.group(1)))
-    out = []
-    for src in srcs:
+        srcs.append((m.group(1), "apps/%s/%s.asm" % (m.group(2), m.group(1))))
+    out = {}
+    for stem, src in srcs:
         if not os.path.exists(os.path.join(ROOT, src)):
             continue
         text = read(src)
         hdr = re.search(r"OS88_HEADER\s+'([^']+)'", text) \
             or re.search(r"CC_PKG_NAME\s+'([^']+)'", text)
         if hdr:
-            out.append((hdr.group(1), src))
-    return sorted(set(out))
+            # One source can be built under several stems (calc.bin and the
+            # calcref.bin gate, notepad.bin and its small build): one row,
+            # and it ships if any of them does.
+            key = (hdr.group(1), src)
+            # A retired package is 'retired' whatever a disk list says, which
+            # is deliberate: if one reappears in ALLAPPSFILES this column goes
+            # on reading 'retired' and t_retired.py is what fails. The index
+            # reports the DECISION; the gate reports the disagreement.
+            if src.split("/")[1] in retired:
+                out[key] = "retired"
+            else:
+                out[key] = out.get(key) or stem in shipped
+    return sorted((n, s, v) for (n, s), v in out.items())
 
 
 def own_specs():
@@ -248,28 +529,71 @@ def own_specs():
     return out
 
 
+# Where a document lives is what it IS, and that is the whole point of the
+# layout: docs/ describes how the system works TODAY, docs/plans/ is work that
+# is proposed or half-done, docs/plans/completed/ is the design record behind
+# something that shipped, and docs/history/ is a record of a moment that has
+# passed. The filename used to carry that meaning - "plan" if "PLAN" in the
+# name - and it was wrong in both directions: HANDOFF-REDRAW.md is a plan with
+# no PLAN in it, and KERNEL-MEMORY.md is maintained reference that happens to
+# sit beside eighty design records. A reader could not tell which of the two
+# any given file was, which is exactly the misleading the split exists to end.
+DOC_KINDS = [
+    ("docs/plans/completed/", "completed"),
+    ("docs/plans/", "plan"),
+    ("docs/history/", "history"),
+    # A REPORT is a measurement, not a description: true of the tree it was
+    # taken on and of no other, so it neither goes stale the way `docs/` does
+    # nor proposes anything the way `docs/plans/` does. It has to sit ABOVE
+    # the catch-all below, which is a prefix match in order - under it, every
+    # report would file itself as maintained reference.
+    ("docs/reports/", "report"),
+    ("docs/", "reference"),
+]
+
+
 def doc_files():
-    """[(name, kind)] for docs/*.md - PLAN files are design records, not reference.
+    """[(path, kind)] for every docs/**.md, kind taken from the DIRECTORY.
 
     TRACKED files, deliberately: --check runs in every `make`, so listing the
     live directory means an untracked draft parked in docs/ fails every build -
     and regenerating writes the local-only name into INDEX.md, which then fails
-    --check on every other machine. A plain listdir is the fallback for a tree
-    without git (a release tarball)."""
+    --check on every other machine. A walk is the fallback for a tree without
+    git (a release tarball).
+
+    The git pathspec `docs/*.md` matches at any depth - a pathspec wildcard is
+    not stopped by a `/` - so the one glob still reaches all four directories.
+    Do not "fix" it to `docs/**/*.md`, which git reads as a LITERAL `**`.
+
+    **AND IT IS DE-DUPLICATED, because `ls-files` lists a CONFLICTED path once
+    per stage.** During an unresolved merge git holds three entries for a file
+    with a conflict in it - base, ours, theirs - and plain `ls-files` prints
+    the name three times (verified: a two-line synthetic conflict returns
+    `d/x.md` three times). Regenerating the index in that state wrote
+    `WRITING-TESTS.md` three times into the list and 17 where the answer is
+    15, and nothing caught it: `checkdocs` compares INDEX.md against what the
+    tool produces, so a wrong answer generated and committed together AGREES.
+    A set is the whole fix and it costs nothing in the ordinary case."""
     try:
         names = subprocess.check_output(
             ["git", "-C", ROOT, "ls-files", "docs/*.md"],
             text=True, stderr=subprocess.DEVNULL).split("\n")
-        names = [os.path.basename(n) for n in names if n]
+        names = sorted({n for n in names if n})
     except (OSError, subprocess.CalledProcessError):
         names = []
     if not names:
-        names = os.listdir(os.path.join(ROOT, "docs"))
+        names = []
+        for base, _dirs, files in os.walk(os.path.join(ROOT, "docs")):
+            rel = os.path.relpath(base, ROOT).replace(os.sep, "/")
+            names += ["%s/%s" % (rel, f) for f in files if f.endswith(".md")]
     out = []
     for n in sorted(names):
-        if not n.endswith(".md") or n == "INDEX.md":
+        if not n.endswith(".md") or n == "docs/INDEX.md":
             continue
-        out.append((n, "plan" if "PLAN" in n else "notes"))
+        for prefix, kind in DOC_KINDS:
+            if n.startswith(prefix):
+                out.append((n, kind))
+                break
     return out
 
 
@@ -319,18 +643,16 @@ def build():
             for name, slot, note in rows:
                 w("| `%s` | `%s` | %s |" % (slot, name, trim(note)))
         else:
-            w("*(no dedicated slots - see the sections above)*")
+            w("*%s*" % GROUP_NOTES.get(
+                title, "(no dedicated slots - see the sections above)"))
         w("")
 
-    leftover = [(n, s, c) for (n, s, c) in slots if n not in used]
+    leftover = [n for (n, _s, _c) in slots if n not in used]
     if leftover:
-        w("### Everything else")
-        w("")
-        w("| slot | call | takes |")
-        w("|---|---|---|")
-        for name, slot, note in leftover:
-            w("| `%s` | `%s` | %s |" % (slot, name, trim(note)))
-        w("")
+        # A slot no group claims would be filed under a heading nobody reads,
+        # which is the drift this index exists to prevent. Name it and stop.
+        raise SystemExit("os88index: no GROUPS entry claims %s - add a prefix"
+                         % ", ".join(leftover))
 
     w("## Shared includes")
     w("")
@@ -346,12 +668,16 @@ def build():
     w("## Packages, and what to read them for")
     w("")
     w("The tree's own worked examples. When a convention is unclear, the "
-      "shortest package that uses it is usually the fastest answer.")
+      "shortest package that uses it is usually the fastest answer. "
+      "*ships* is **retired** for a package apps/RETIRED.txt retires "
+      "(SPEC.md 20.16), and otherwise whether a shipped floppy carries it (the `make allapps` "
+      "payload, SPEC.md 19.10, or the system disk's `SYSTEM/` and `STIKAPPS/`); "
+      "a `no` is built by its own target only.")
     w("")
-    w("| package | source | SPEC |")
-    w("|---|---|---|")
+    w("| package | source | SPEC | ships |")
+    w("|---|---|---|---|")
     specs = own_specs()
-    for name, src in packages():
+    for name, src, ships in packages():
         sec = ""
         for num, title in sorted(head.items(), key=lambda kv: len(kv[0])):
             if "." in num:
@@ -376,7 +702,9 @@ def build():
                 if re.search(r"\b%s\b" % re.escape(name), title, re.I):
                     sec = "`docs/%s.md`" % doc
                     break
-        w("| %s | `%s` | %s |" % (name, src, sec))
+        w("| %s | `%s` | %s | %s |"
+          % (name, src, sec,
+             "**retired**" if ships == "retired" else "yes" if ships else "no"))
     w("")
 
     w("## SPEC.md sections")
@@ -389,16 +717,32 @@ def build():
 
     w("## docs/")
     w("")
-    w("**`*-PLAN.md` files are DESIGN RECORDS, not descriptions of what "
-      "shipped.** They record what was considered, including options that were "
-      "rejected. SPEC.md is the current state; these are how it got there.")
+    w("**The DIRECTORY says what a document is, and the filename does not.** "
+      "`docs/` describes how the system works today - instructions, contracts "
+      "and maintained reference. Everything under `docs/plans/` is a design "
+      "record: what was considered, including the options that were rejected, "
+      "and it is never a description of what shipped - SPEC.md is the current "
+      "state and these are how it got there. `docs/plans/completed/` is the "
+      "subset whose work has landed; what stays directly in `docs/plans/` "
+      "still has work open. `docs/history/` is superseded or closed - a record "
+      "of a moment that has passed, and true of no tree you can check out. "
+      "`docs/reports/` is a MEASUREMENT taken at a point in time: true of the "
+      "tree it was taken on, quotable with its date and its box, and never to "
+      "be read as a description of today.")
     w("")
-    plans = [n for n, k in doc_files() if k == "plan"]
-    notes = [n for n, k in doc_files() if k == "notes"]
-    w("*Design records (%d):* " % len(plans) + ", ".join("`%s`" % n for n in plans))
-    w("")
-    w("*Notes and reference (%d):* " % len(notes) + ", ".join("`%s`" % n for n in notes))
-    w("")
+    docs = doc_files()
+    for kind, label in (
+            ("reference", "*How it works today - `docs/` (%d):*"),
+            ("plan", "*Plans with work still open - `docs/plans/` (%d):*"),
+            ("completed", "*Design records for what shipped - "
+                          "`docs/plans/completed/` (%d):*"),
+            ("history", "*Superseded and closed - `docs/history/` (%d):*"),
+            ("report", "*Measurements, each true of the tree it was taken on "
+                       "- `docs/reports/` (%d):*")):
+        names = [os.path.basename(n) for n, k in docs if k == kind]
+        w(label % len(names) + " "
+          + ", ".join("`%s`" % n for n in names))
+        w("")
     return "\n".join(L) + "\n"
 
 

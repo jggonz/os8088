@@ -12,8 +12,8 @@ now, and the first one says what the click does *now*: `Install`, then
 THREE ASSERTIONS, and the first is what makes the other two trustworthy.
 
   1. **The caption is READ, not inferred.**  The kernel's own 8x8 glyph table
-     comes out of the guest (`font_glyphs`, .lowbss - so LOW_SEG, which is
-     what os88sym.py is for), the expected string is rendered from it on the
+     comes out of the guest (`[font_seg]:[font_base]`, the ROM's own table
+     that font_init found - SPEC.md 6), the expected string is rendered from it on the
      host, and the result is searched for inside the button's rect.  A pixel
      count or a "did these bytes change" diff would pass on a button that had
      gone blank, gone greyed, or picked up the wrong string; this cannot.
@@ -62,7 +62,11 @@ GONE_X, GONE_W = 168, 72            # ...and the retired third button
 
 
 def glyph_table(m):
-    return m.read(m.sym("font_glyphs"), FONT_N * 8)
+    """The table font_init FOUND - [font_seg]:[font_base], the ROM's own
+    (SPEC.md 6) - read where the renderers read it."""
+    seg = int.from_bytes(m.read(m.sym("font_seg"), 2), "little")
+    off = int.from_bytes(m.read(m.sym("font_base"), 2), "little")
+    return m.read(seg * 16 + off, FONT_N * 8)
 
 
 def render(text, tab):

@@ -82,7 +82,7 @@ DOC = os.path.join(ROOT, "docs", "KERNEL-MEMORY.md")
 BEGIN = "<!-- kernsize:begin -->"
 END = "<!-- kernsize:end -->"
 
-# --- the two builds (docs/KERN-SPLIT-PLAN.md) --------------------------------
+# --- the two builds (docs/history/KERN-SPLIT-PLAN.md) --------------------------------
 # kern_big and kern_small are two kernels off one tree, and BOTH ARE SHIPPED
 # PRODUCTS - big by default, small for the 128KB floor. That makes the variant
 # a different kind of flag from every other -D this script forwards:
@@ -91,23 +91,39 @@ END = "<!-- kernsize:end -->"
 #   nobody ships, so blessing one would write a baseline describing a binary
 #   that does not exist on any disk, and --bless refuses them.
 #
-#   KERN_BIG / KERN_SMALL are VARIANTS. Each has a baseline of its own, and
-#   each is blessable, because each IS a shipped kernel.
+#   KERN_BIG / KERN_SMALL / KERN_EMU are VARIANTS. Each has a baseline of its
+#   own, and each is blessable, because each IS a shipped kernel.
 #
 # Conflating the two is the bug this section exists to prevent: with one flat
 # baseline, `make KERN_SMALL=1` reported small's sections against big's
 # figures and every line was a delta of the difference between the products -
 # noise that looks exactly like a regression, in the build that is supposed to
 # be defended byte by byte.
-VARIANTS = ("big", "small")
-VARIANT_DEFS = {"-DKERN_BIG": "big", "-DKERN_SMALL": "small"}
+# ...and kern_emu is the THIRD (SPEC.md 9.11.7): kern_big plus SPEC.md 9.11's
+# absolute pointer, for v86 in a browser and for a desktop hypervisor. It is a
+# shipped product on the same terms - somebody boots it, it has a baseline and
+# it is blessable - so it is a VARIANT and not a knob.
+#
+# **ITS COMMAND LINE CARRIES BOTH -DKERN_BIG AND -DKERN_EMU**, because the
+# build is additive (Makefile, kernel.asm): kern_emu IS kern_big with a file
+# switched on. So the order of this dict is load-bearing in a way the two-way
+# version never had to be - a plain left-to-right scan over nasm_args would
+# answer "big" for a kern_emu line, report its sections against kern_big's
+# baseline, and show the absolute pointer as a +384 regression in the shipped
+# kernel. variant_of therefore checks the NARROWEST name first, which is
+# what the sorted-by-specificity tuple below is for.
+VARIANTS = ("big", "small", "emu")
+VARIANT_DEFS = {"-DKERN_BIG": "big", "-DKERN_SMALL": "small",
+                "-DKERN_EMU": "emu"}
+# most specific first: -DKERN_EMU implies -DKERN_BIG and must win over it
+VARIANT_ORDER = ("-DKERN_EMU", "-DKERN_SMALL", "-DKERN_BIG")
 
 
 def variant_of(nasm_args):
     """Which product is this? Defaults to big, as the Makefile does."""
-    for arg in nasm_args:
-        if arg in VARIANT_DEFS:
-            return VARIANT_DEFS[arg]
+    for want in VARIANT_ORDER:
+        if want in nasm_args:
+            return VARIANT_DEFS[want]
     return "big"
 
 
@@ -117,11 +133,13 @@ def knob_args(nasm_args):
 
 # The sections an author can actually move a byte into, in the order the
 # ladder lays them out.  The two overlay halves are here because they have to
-# be watched, not because they cost anything: `ovl` rides the boot blob and is
-# given back at spl_finish, `ovlw` lands in the FAT window and is overwritten
-# by the first mount (SPEC.md 2.5, 2.5.3), so neither has a rung of its own.
-# Each still has a ceiling - see the guards on OVL_SIZE and OVLW_SIZE.
-SECTIONS = ("text", "bss", "cold", "lowbss", "vgabuf", "ovl", "ovlw")
+# be watched, not because they cost anything: `boot2` is the whole boot blob -
+# the loader, the splash and the overlay's blob half, one section since SPEC.md
+# 2.9.14 - and is given back at spl_finish; `ovl` lands in the FAT window and
+# is overwritten by the first mount (SPEC.md 2.5, 2.5.3), so neither has a rung
+# of its own. Each still has a ceiling - see the guards on BOOT2_SIZE and
+# OVL_SIZE.
+SECTIONS = ("text", "bss", "cold", "lowbss", "vgabuf", "boot2", "ovl")
 
 # Which rung each section rounds into.  .text and .bss share one; that is why
 # a byte moved from .bss to .lowbss can cost 512 rather than saving anything
@@ -135,7 +153,7 @@ RUNGS = (
 
 # ...and therefore the sections a rung CHARGES for, which is not SECTIONS:
 # neither overlay half is charged to a rung at all (SPEC.md 2.5, 2.5.3), so
-# counting `.ovl` or `.ovlw` in the spend would price a change that only moved
+# counting `.boot2` or `.ovl` in the spend would price a change that only moved
 # overlay code as if it had eaten the image rung's slack.  Derived
 # from RUNGS rather than written out, so the two cannot drift apart.
 RUNG_SECTIONS = tuple(dict.fromkeys(
@@ -149,7 +167,7 @@ THEMES_END = "<!-- /kernsize:themes -->"
 # The same, per module, plus `.boot2`: splash.inc has no section directive
 # of its own and takes the `.boot2` it is included at (SPEC.md 2.9.4), so
 # without it here a 967-byte module reports as costing nothing.
-MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl", "ovlw", "boot2")
+MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl", "boot2")
 # ...AND `kernel.asm`'s OWN `.boot2` FIGURE IS ALMOST ALL boot/boot2.asm.
 # Stage 2 is `%include`d at the FOOT of kernel.asm, below the last module this
 # brackets, so it lands in the residual: of kernel.asm's `.boot2` row, all but
@@ -175,7 +193,7 @@ RESIDUAL = "kernel.asm"
 # exists entirely for file operations: it is a widget in the menu bar
 # (SPEC.md 12.8), and the theme is about where the code lives in the design.
 THEMES = (
-    # clone.inc (SPEC.md 18.99) is the file system's and not hardware's for
+    # diskops.inc (SPEC.md 18.99) is the file system's and not hardware's for
     # fprog.inc's reason turned around: it drives int 13h directly and knows
     # nothing about FAT, but what it IS to a reader is a File Manager command
     # on a volume, which is where disk.inc and diskw.inc already live.
@@ -186,12 +204,38 @@ THEMES = (
     # by the order its file is included, so it has to be the first one. So
     # 3,584 bytes of `.lowbss` moved off disk.inc's row and onto this one
     # without a byte moving in the machine.
+    # lz.inc (docs/plans/O88-COMPRESSION-PLAN.md) is the file system's, and it is
+    # worth saying why rather than putting it under "the machine": what it is
+    # to a reader is a step in READING A FILE. Every caller it has is a loader
+    # - loader.inc for a package image, driver.inc for a .DRV, diskw.inc for
+    # an ordinary file - and the only thing it does for a package is arrive
+    # between the sectors and the bytes.
+    # compress.inc (SPEC.md 20.15) is here with lz.inc and for the same
+    # reading: it is a step in WRITING a file. Its row is 0 in every section
+    # this report tracks, and correctly - the whole file is `.modl`, part of
+    # the cloner's image, which os88mod.py cuts out of kernel.bin into
+    # DISKOPS.DRV, so the only thing it costs a machine is files.inc's thunk.
+    # ascw.inc (SPEC.md 54.7.6.4) is compress.inc's shape beside assoc.inc:
+    # the ASSOC.DAT flush is FORMAT.DRV's fifth entry, all of it image, and
+    # its resident half is the one `dw` on diskw.inc's row.
     ("the file system, end to end",
      ("disk.inc", "dskwin.inc", "diskw.inc", "files.inc", "filecp.inc",
-      "fdlg.inc", "loader.inc", "assoc.inc", "clone.inc")),
+      "fdlg.inc", "loader.inc", "assoc.inc", "ascw.inc", "diskops.inc",
+      "lz.inc", "compress.inc")),
+    # deskmod.inc (SPEC.md 11.103.10) is the same shape: DESK.DRV's image is
+    # cut out, and what stays is the 16-byte QUERY thunk in `.cold`.
+    # extmod.inc (SPEC.md 39.19.6) goes beside dockmod.inc for dockmod's
+    # reason: nearly all of it is EXTD.DRV's image, cut out of kernel.bin, and
+    # what it is to a reader is where a WINDOW lands on a second display. Its
+    # row is not zero - exf_sync, the load/drop reconciler, is 35 bytes of
+    # `.cold` - so it is not IMAGE_ONLY in tests/unit/t_kernmods.py either.
+    # stikmenu.inc (SPEC.md 110.12) is the Sticky Apps menu: STIKMENU.DRV's
+    # image is cut out, and its two `.cold` thunks are what stays - a MENU,
+    # so it goes beside menu.inc.
     ("the window system and its furniture",
-     ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "dock.inc",
-      "fsx.inc", "clip.inc", "fprog.inc", "toast.inc")),
+     ("wm.inc", "ui.inc", "menu.inc", "stikmenu.inc", "instance.inc", "desk.inc", "desksc.inc", "dock.inc", "dockmod.inc",
+      "extmod.inc", "winmod.inc", "deskmod.inc", "fsx.inc", "clip.inc",
+      "fprog.inc", "toast.inc")),
     # moudiag.inc (SPEC.md 9.4.4) goes with the mouse and NOT with
     # bootprof.inc below, although both are knob-only: what it records is what
     # mouse_init's identify window saw, so a byte it grows is the mouse's
@@ -201,9 +245,22 @@ THEMES = (
     # is is the POINTER's question, and its other half - the 386 protocol
     # itself - is VMMOUSE.DRV and weighs nothing here at all. xmem.inc is the
     # same shape one subject over, and is already on this row.
+    # SINCE SPEC.md 9.11.7 IT IS 0 IN TWO OF THE THREE PRODUCTS, moudiag.inc's
+    # shape rather than xmem.inc's: the whole file is inside %ifdef KERN_EMU,
+    # so it weighs nothing on kern_big or kern_small and its bytes appear on
+    # the emu variant's row alone.
+    # kbddiag.inc (SPEC.md 9.8.1) is moudiag.inc's shape for the keyboard:
+    # knob-only (`make KBDDIAG=1`), 0 in every shipped build, and what a byte
+    # it grows is is the input hardware's question.
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
-     ("mouse.inc", "moudiag.inc", "vmmouse.inc", "clock.inc", "driver.inc",
-      "hiber.inc", "snd.inc", "cpudet.inc", "xmem.inc")),
+     ("mouse.inc", "mouproto.inc", "moudiag.inc", "kbddiag.inc", "vmmouse.inc", "clock.inc",
+      "driver.inc", "hiber.inc", "snd.inc", "cpudet.inc", "xmem.inc")),
+    # mouproto.inc (SPEC.md 9.5) goes beside mouse.inc, and it always MEASURES
+    # ZERO: it is the serial packet's arithmetic as a macro, so its bytes are
+    # charged to the expansion site inside mou_byte. It is listed anyway
+    # because render_themes DROPS what it cannot place, so a module missing
+    # from this table makes the theme total stop agreeing with the module
+    # table - which is what tests/unit/t_kernmods.py's last check is for.
     # blank.inc (SPEC.md 64) is here and not under hardware, although all it
     # does is write a video port: what it owns is whether the SIGNAL is on,
     # which is a property of the adapter the rest of this group programs.
@@ -214,14 +271,14 @@ THEMES = (
     # own phase sequence, which lives in kernel.asm - and because it is not in
     # a shipped build at all (`make BOOTPROF=1`), so no other theme's figure
     # should move when it is compiled in. stkdiag.inc
-    # (docs/STACK-SLOTS-PLAN.md 10) is here for both halves of that: what it
+    # (docs/plans/completed/STACK-SLOTS-PLAN.md 10) is here for both halves of that: what it
     # measures is sch_isr's own chain to the ROM, and `make STKDIAG=1` is the
     # only build that has it.
     ("the kernel proper: API table, heap, scheduler, events",
      (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc",
       "bootprof.inc", "stkdiag.inc")),
     ("the Control Panel", ("ctrl.inc",)),
-    ("the three built-in kinds", ("apps.inc",)),
+    ("the About box, the one built-in kind left in apps.inc", ("apps.inc",)),
 )
 
 
@@ -240,7 +297,12 @@ def measure(nasm_args=()):
     out_fd, out_path = tempfile.mkstemp(suffix=".bin")
     os.close(out_fd)
     try:
-        cmd = ["nasm", "-f", "bin", "-w+error", "-w-error=user", "-DKERNSIZE",
+        # $NASM, not `nasm`: this re-assembles the kernel to MEASURE it, and
+        # a measurement taken with a different assembler than built the
+        # image is a measurement of something else (tools/os88sym.py has
+        # the worked example - two assemblers, two bytes apart).
+        cmd = [os.environ.get("NASM", "nasm"), "-f", "bin", "-w+error",
+               "-w-error=user", "-DKERNSIZE",
                "-I", os.path.join(ROOT, "kernel") + os.sep,
                "-I", os.path.join(ROOT, "apps") + os.sep,
                "-I", BUILDDIR + os.sep,
@@ -307,7 +369,7 @@ def _markers(i, back):
     whichever section the assembler had reached rather than the one the text
     is in.  It fails in a different place for every trailing section - .bss
     gives "attempt to initialize memory in a nobits section" in the module's
-    first data line, .cold assembles and moves bytes, .ovl overflows the boot
+    first data line, .cold assembles and moves bytes, .boot2 overflows the boot
     blob - and none of them names the marker.  So the section is tracked in
     PYTHON, over kernel.asm's own text, where there is no second reader to
     disagree with.
@@ -351,7 +413,7 @@ def instrument(src):
 
 def _nasm(path, out_path, nasm_args=()):
     return subprocess.run(
-        ["nasm", "-f", "bin", "-w+error", "-w-error=user",
+        [os.environ.get("NASM", "nasm"), "-f", "bin", "-w+error", "-w-error=user",
          "-I", os.path.join(ROOT, "kernel") + os.sep,
          "-I", os.path.join(ROOT, "apps") + os.sep,
          "-I", BUILDDIR + os.sep,
@@ -434,6 +496,10 @@ def rung_accrued(size, used):
     return 0 if size <= 0 else 512 - (size - used)
 
 
+ROM_WINDOW = 40960              # U28-U32, F4000-FDFFF (ROM-PLAN 1.3)
+ROM_HEADER = 16                 # ...less tools/os88rom.py's header paragraph
+
+
 def kb(n):
     return f"{n:,}"
 
@@ -514,9 +580,20 @@ def report(cur, base, variant="big", out=sys.stdout):
       + "   - spent into the current rung and NOT YET BILLED")
 
     spare = cur["budget"] - cur["ksize"]
-    line = (f"{tag} footprint  KERN_SIZE {kb(cur['ksize'])}"
-            f" of KERN_BUDGET {kb(cur['budget'])} -> {kb(spare)} spare"
-            f" ({spare // 512} step{'' if spare // 512 == 1 else 's'})")
+    if spare >= 0:
+        line = (f"{tag} footprint  KERN_SIZE {kb(cur['ksize'])}"
+                f" of KERN_BUDGET {kb(cur['budget'])} -> {kb(spare)} spare"
+                f" ({spare // 512} step{'' if spare // 512 == 1 else 's'})")
+    else:
+        # INSIDE THE GRACE, not past it - past it the kernel did not assemble
+        # and this line is never reached. Branch and integration work may sit
+        # here; an upstream merge or a release may not, and `make
+        # budget-check` (`--release`) is what says so.
+        line = (f"{tag} footprint  KERN_SIZE {kb(cur['ksize'])}"
+                f" of KERN_BUDGET {kb(cur['budget'])} -> *** {kb(-spare)}"
+                f" OVER, inside the {kb(cur.get('grace', 0))} branch grace"
+                f" - size-pass it back under before an upstream merge or a"
+                f" release ***")
     if base is not None:
         line += (f", was {kb(base['budget'] - base['ksize'])}"
                  f"  [{delta(cur['ksize'] - base['ksize'])}]")
@@ -561,15 +638,35 @@ def report(cur, base, variant="big", out=sys.stdout):
     # the heap's start is the figure every RAM number in this project falls
     # out of (docs/KERNEL-MEMORY.md, "heap KB = int 12h - this").
     ks = cur["kseg"]
-    cold = ks + cur["imgpara"]
-    fat = cold + cur["coldpara"]
-    low = fat + cur["fatpara"]
-    vgabuf = low + cur["lowpara"]
-    p(f"{tag} ladder     KERNEL {ks:#06x}  COLD {cold:#06x}"
-      f"  FAT {fat:#06x}  LOW {low:#06x}  VGABUF {vgabuf:#06x}"
-      f"  HEAP {cur['kend']:#06x}"
+    # the bases as the kernel computed them, in ADDRESS order - ROM_COLD puts
+    # COLD under VGABUF rather than under FAT (docs/plans/ROM-PLAN.md 3.4.2);
+    # a kernel older than the four `%assign`s falls back to the old order
+    if "colds" in cur:
+        rungs = sorted((cur[k], n) for k, n in (("colds", "COLD"),
+                       ("fats", "FAT"), ("lows", "LOW"), ("vgas", "VGABUF")))
+    else:
+        cold = ks + cur["imgpara"]
+        fat = cold + cur["coldpara"]
+        low = fat + cur["fatpara"]
+        rungs = [(cold, "COLD"), (fat, "FAT"), (low, "LOW"),
+                 (low + cur["lowpara"], "VGABUF")]
+    p(f"{tag} ladder     KERNEL {ks:#06x}  "
+      + "  ".join(f"{n} {v:#06x}" for v, n in rungs)
+      + f"  HEAP {cur['kend']:#06x}"
       f" = {cur['kend'] * 16 / 1024:.1f} KB   (heap KB = int 12h"
       f" - {cur['kend'] * 16 / 1024:.1f})")
+
+    # THE ROM WINDOW (docs/plans/ROM-PLAN.md 3.6): every kernel finds a ROM
+    # in a 5150's U28-U32 and runs `.cold` from it, and `.cold` has been
+    # bigger than the window on 8 of 21 days. A REPORT, like everything
+    # here - a `.cold` that outgrows it means no ROM can be cut, and the disks
+    # still boot. 40,960 less the 16-byte header; boot/osrom.asm's tail
+    # (~1.2-1.3KB, two bytes a fixup) comes off what is left, and `make rom`
+    # prints that exact spare.
+    win = ROM_WINDOW - ROM_HEADER
+    p(f"{tag} rom        .cold {kb(cur['cold'])} of the {kb(win)} the 40KB"
+      f" window holds before its tail -> {kb(win - cur['cold'])} for the"
+      f" tail and spare (`make rom` says exactly)")
 
     if base is None:
         p(tag + " no baseline for this variant in docs/KERNEL-MEMORY.md"
@@ -611,9 +708,9 @@ def report(cur, base, variant="big", out=sys.stdout):
           f" feature does not have to ask for. A saving is priced in bytes,"
           f" not in steps (CLAUDE.md's rung rule)")
     elif total:
-        p(f"{tag} the boot overlay moved and no rung did - .ovl rides the"
-          f" blob and .ovlw lands in the FAT window, and neither is charged"
-          f" to a rung at all (SPEC.md 2.5, 2.5.3)")
+        p(f"{tag} the boot blob or the overlay moved and no rung did - .boot2"
+          f" is the blob and .ovl lands in the FAT window, and neither is"
+          f" charged to a rung at all (SPEC.md 2.5.3, 2.9.14)")
     else:
         p(f"{tag} unchanged")
     return crossed
@@ -789,6 +886,11 @@ def main():
                     help="exit 1 when the size cannot be measured. This tool "
                          "is a REPORT and exits 0 by default even when it "
                          "measured nothing; a gate wants the opposite.")
+    ap.add_argument("--release", action="store_true",
+                    help="exit 1 unless KERN_SIZE fits KERN_BUDGET EXACTLY - "
+                         "the branch grace does not apply at an upstream "
+                         "merge or a release. `make budget-check` runs it "
+                         "on both kernels")
     ap.add_argument("--build", metavar="DIR",
                     help="where the generated includes are (default build/); "
                          "a sub-make with BUILD= set needs this")
@@ -822,10 +924,24 @@ def main():
         # "could not measure" and conclude the size was fine, which is the same
         # class of quiet wrongness as the ks:-after-a-failed-assembly bug above.
         # --strict is how a gate asks for the other contract.
-        return 1 if a.strict else 0
+        return 1 if a.strict or a.release else 0
 
     if a.json:
         print(json.dumps({k: cur[k] for k in sorted(cur)}, indent=2))
+        return 0
+
+    if a.release:
+        over = cur["ksize"] - cur["budget"]
+        name = "kern_" + variant
+        if over > 0:
+            print(f"budget-check: {name} KERN_SIZE {kb(cur['ksize'])} is"
+                  f" {kb(over)} OVER KERN_BUDGET {kb(cur['budget'])}. The"
+                  f" branch grace ends at an upstream merge or a release:"
+                  f" size-pass it back, or take the overrun to the owner"
+                  f" (docs/KERNEL-MEMORY.md)", file=sys.stderr)
+            return 1
+        print(f"budget-check: {name} KERN_SIZE {kb(cur['ksize'])} of"
+              f" KERN_BUDGET {kb(cur['budget'])} - {kb(-over)} spare")
         return 0
 
     if a.modules or a.bless:
@@ -876,7 +992,7 @@ def main():
 if __name__ == "__main__":
     # `kernsize.py | head` closes the pipe under us; an unhandled
     # BrokenPipeError buries the report under a traceback.  Same cure as
-    # tools/martylock.py: die quietly the way `cat` does.
+    # tools/os88soak.py's `status`: die quietly the way `cat` does.
     try:
         import signal
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)

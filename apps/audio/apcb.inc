@@ -49,7 +49,21 @@ apu_repaint:
     mov al, 0
     call OSAPI_SET_COLOR
     call apu_draw
+    call OSAPI_WM_CLIP_CLEAR        ; ...and DISARMED, as Tracker's and the
+                                    ; Video Player's are: aps_bracket repaints
+                                    ; and then enters OSAPI_FSX_RUN in the same
+                                    ; lock hold, and the kernel's teardown of
+                                    ; the file-progress widget at the bracket's
+                                    ; door (SPEC.md 12.8.5) drew under THIS
+                                    ; region - clipped to our window, so the
+                                    ; bar stayed on the menu bar for good
 .done:
+                                    ; (falls into the shared epilogue)
+
+; ap_ret6 - THE SHARED EPILOGUE: pop DI SI DX CX BX AX and return, for the
+; callers that pushed AX BX CX DX SI DI in that order (a `jmp`, so it costs no
+; stack and three bytes a caller against seven)
+ap_ret6:
     pop di
     pop si
     pop dx
@@ -68,15 +82,36 @@ ap_paint:
     push di
     APCNT apc_uipaint
     call apu_draw
-    pop di
-    pop si
-    pop dx
-    pop cx
+    jmp ap_ret6
+
+; =============================================================================
+; --- ap_onup / ap_ondrag - the transport FIRES here (13.7 / 13.8.2) ----------
+ap_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, apu_btrec
+    call os88ui_btnup               ; AX = what FIRED, 0 = cancelled
+    or ax, ax
+    jz .uout
+    dec ax                          ; ap_dispatch_btn takes the 0-based id
+    call ap_dispatch_btn
+    call apu_repaint
+.uout:
+    jmp ap_ret6
+
+ap_ondrag:
+    push ax
+    push bx
+    mov bx, apu_btrec
+    call os88ui_btndrag
     pop bx
     pop ax
     ret
 
-; =============================================================================
 ap_onclick:                        ; CX = x, DX = y (SCREEN); SI = window
     push ax
     push bx
@@ -98,60 +133,42 @@ ap_onclick:                        ; CX = x, DX = y (SCREEN); SI = window
     mov [apu_oy], dx
     pop dx
     pop cx
-    sub cx, [apu_ox]
-    sub dx, [apu_oy]
     call apu_layout
-    call apu_hit                    ; AX = AP_B_* or AP_B_NONE
-    cmp al, AP_B_NONE
-    je .rep
-    call ap_dispatch_btn
+    call apu_baim                   ; the rects the press is about to be tested
+                                    ; against, from the origin just read
+                                    ; machine is doing, so a mis-aimed press
+                                    ; must be cancellable. ap_onup has the
+                                    ; action
+    or ax, ax
+    jnz .out                        ; **ARMED, DRAWN DOWN, AND THAT IS ALL.**
+                                    ; The blanket apu_repaint below used to run
+                                    ; on EVERY click - it was how the old press
+                                    ; path put the transport back - and it
+                                    ; repaints the whole window, which is
+                                    ; PERFORMANCE.md's rule 1 with a full
+                                    ; redraw behind it. os88ui_btnpress draws
+                                    ; the ONE button that changed
+    sub cx, [apu_ox]                ; CX/DX are SCREEN until here, because the
+    sub dx, [apu_oy]                ; record's rects are; everything below
+                                    ; wants them content-relative
 .rep:
     call apu_repaint
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+.out:
+    jmp ap_ret6
 
-; ap_dispatch_btn - AL = AP_B_*
+; ap_dispatch_btn - AL = AP_B_* (the Play menu's items are the same ids);
+; anything else does nothing. Clobbers BX (and what the command does)
 ap_dispatch_btn:
-    cmp al, AP_B_PREV
-    jne .n0
-    call ap_cmd_prev
-    ret
-.n0:
-    cmp al, AP_B_PLAY
-    jne .n1
-    call ap_cmd_play
-    ret
-.n1:
-    cmp al, AP_B_PAUSE
-    jne .n2
-    call ap_cmd_pause
-    ret
-.n2:
-    cmp al, AP_B_STOP
-    jne .n3
-    call ap_cmd_stop
-    ret
-.n3:
-    cmp al, AP_B_NEXT
-    jne .n4
-    call ap_cmd_next
-    ret
-.n4:
-    cmp al, AP_B_SHUF
-    jne .n5
-    call ap_cmd_shuffle
-    ret
-.n5:
     cmp al, AP_B_REP
-    jne .done
-    call ap_cmd_repeat
+    ja .done
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    jmp [ap_btn_tab + bx]           ; the command's ret is ours
 .done:
     ret
+ap_btn_tab: dw ap_cmd_prev, ap_cmd_play, ap_cmd_pause, ap_cmd_stop, \
+               ap_cmd_next, ap_cmd_shuffle, ap_cmd_repeat
 
 ; =============================================================================
 ap_onkey:                          ; AL = ascii, AH = scancode; SI = window
@@ -214,6 +231,7 @@ ap_onkey:                          ; AL = ascii, AH = scancode; SI = window
 .prev:
     call ap_cmd_prev
 .rep:
+ap_rep5:                           ; (ap_oncmd's tail too: the same five pops)
     call apu_repaint
     pop di
     pop si
@@ -269,13 +287,7 @@ ap_oncmd:                          ; AL = item, AH = menu; SI = window
     ; item 0..6 map directly onto the AP_B_* command ids
     call ap_dispatch_btn
 .rep:
-    call apu_repaint
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp ap_rep5
 
 ; =============================================================================
 ap_about:                          ; SI = window; gfx lock held
@@ -287,13 +299,7 @@ ap_about:                          ; SI = window; gfx lock held
     push di
     mov byte [ap_abon], 1          ; apu_draw draws the card last while this is set
     call apu_repaint
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ; ap_onwake - UI task, NO gfx lock (SPEC.md 74.1)
@@ -312,9 +318,7 @@ ap_onwake:                         ; SI = window
     cmp byte [ap_first_paint], 0
     je .no_first
     mov byte [ap_first_paint], 0
-    call OSAPI_GFX_LOCK
-    call apu_repaint
-    call OSAPI_GFX_UNLOCK
+    call ap_lrepaint
 .no_first:
 
     ; 1. the disk-refill handshake (time-critical: do it first)
@@ -336,8 +340,7 @@ ap_onwake:                         ; SI = window
     je .noend
     call OSAPI_GFX_LOCK
     call ap_autoadvance
-    call apu_repaint
-    call OSAPI_GFX_UNLOCK
+    call ap_repunlock
 .noend:
 
     ; 3. the launch document, once (SPEC.md 54.10) - double-click means "play
@@ -351,21 +354,23 @@ ap_onwake:                         ; SI = window
     mov bl, [ap_arg_vol]
     mov al, AP_ADD_CUR | AP_ADD_PLAY
     call ap_add_file
-    call apu_repaint
-    call OSAPI_GFX_UNLOCK
+    call ap_repunlock
 .noarg:
 
     ; 4. a would-be second instance may have queued a document for us
-    ;    (SPEC.md 86.11.1). OFF by default: the poll has to REMOUNT the system
-    ;    root to read APQUEUE.DAT (OSAPI_FILE_GOTO), and on a 4.77 MHz XT that
-    ;    is seconds - a playing ADPCM track polls often enough that the machine
-    ;    spends half its time remounting. Build with -DAP_HANDOFF to re-enable.
+    ;    (SPEC.md 86.11.1). OFF by default: the poll has to stand at the system
+    ;    root to read APQUEUE.DAT. It was turned off when that stand was
+    ;    OSAPI_FILE_GOTO - a full REMOUNT, seconds on a 4.77 MHz XT, so a
+    ;    playing ADPCM track polled often enough that the machine spent half
+    ;    its time remounting. ap_que_root is OSAPI_FILE_GOTO_QM now (a word on
+    ;    the mounted volume, a quiet mount across volumes), which is cheaper
+    ;    but still a stand and a read per poll and is not re-measured as
+    ;    affordable, so the default stands. Build with -DAP_HANDOFF to
+    ;    re-enable.
 %ifdef AP_HANDOFF
     call ap_que_poll
     jc .noque
-    call OSAPI_GFX_LOCK
-    call apu_repaint
-    call OSAPI_GFX_UNLOCK
+    call ap_lrepaint
 .noque:
 %endif
 %ifdef APROF
@@ -376,17 +381,21 @@ ap_onwake:                         ; SI = window
     call ap_diag_dump
 .nodump:
 %endif
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp ap_ret6
+
+; ap_lrepaint - a repaint from outside the gfx lock (ap_onwake's): take it,
+; repaint, give it back. ap_repunlock is the second half, for a holder
+ap_lrepaint:
+    call OSAPI_GFX_LOCK
+ap_repunlock:
+    call apu_repaint
+    call OSAPI_GFX_UNLOCK
     ret
 
 ; =============================================================================
 ap_onclose:                        ; SI = window; gfx lock held
     call ap_stream_close
+    call aps_free                  ; the speaker's ring back to the heap
     clc                            ; allow the close (no unsaved state)
     ret
 
@@ -406,29 +415,26 @@ ap_onfile:
     mov si, di
     mov di, ap_dlgname
     mov cx, 13
-.cn:
-    mov al, [es:si]
-    mov [di], al
-    or al, al
-    jz .cnd
-    inc si
-    inc di
-    dec cx
-    jnz .cn
-.cnd:
-    mov byte [ap_dlgname+13], 0
+    call ap_kcopy
     call OSAPI_FILE_HERE            ; DX = current dir cluster, BL = drive
     mov si, ap_dlgname
     ; Open adds and selects; it starts the track ONLY if nothing is playing
     ; (SPEC.md 86.3) - it must not interrupt the current song.
     mov al, AP_ADD_CUR | AP_ADD_IDLE
     call ap_add_file
-.rep:
     call apu_repaint
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp ap_ret6
+
+; ap_kcopy - the NUL string at ES:SI into DS:DI, at most CX characters, and a
+; NUL after them. CX >= 1. Clobbers AL, CX, SI, DI
+ap_kcopy:
+    mov al, [es:si]
+    or al, al
+    jz .z
+    mov [di], al
+    inc si
+    inc di
+    loop ap_kcopy
+.z:
+    mov byte [di], 0
     ret

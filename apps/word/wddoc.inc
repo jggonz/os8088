@@ -281,10 +281,7 @@ wd_dgrpc:
     add bx, 2
 .nu:
     mov cx, bx
-    pop dx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdba
 
 ; -----------------------------------------------------------------------------
 ; wd_dgrpp - build the PAPX grpprl for a PAP dictionary entry
@@ -433,12 +430,7 @@ wd_fkinit:
 ; out: CF=1 = the page is full and nothing was written; preserves all
 ; -----------------------------------------------------------------------------
 wd_fkadd:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     mov bx, [wd_dfkn]
     mov si, bx                      ; the head AFTER this run: (crun+2) FCs
     shl si, 1                       ; and (crun+1) offset bytes
@@ -491,13 +483,7 @@ wd_fkadd:
 .full:
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; wd_fkflush - copy the built page into the image at ES:DI and advance DI.
 ; Preserves all but DI.
@@ -531,11 +517,7 @@ wd_fkflush:
     mov cx, WD_SECT
     cld
     rep movsb
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rscba
 
 ; wd_btadd - bank a page's first fc in the bin table under construction
 ; in:  AX = the fc; out: CF=1 = there are more pages than WD_MAXBTE allows.
@@ -567,10 +549,7 @@ wd_btadd:
 ; properties live in the PAPX.
 ; -----------------------------------------------------------------------------
 wd_dchps:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     push si
     mov word [wd_dbtn], 0
     mov bx, WD_HDRPAGE              ; BX = the fc the current run starts at
@@ -611,12 +590,7 @@ wd_dchps:
 .no:
     stc
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rsdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_dchpx - wrap the grpprl at [wd_dgrp] as a CHPX at [wd_dprop]
@@ -708,10 +682,7 @@ wd_dat1:
 ; measured.
 ; -----------------------------------------------------------------------------
 wd_dpaps:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     push si
     mov word [wd_dbtn], 0
     mov bx, WD_HDRPAGE
@@ -751,12 +722,7 @@ wd_dpaps:
 .no:
     stc
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rsdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_dpara - the paragraph beginning at SI
@@ -939,10 +905,7 @@ wd_dsed:
 ; So the CHP table is written FIRST, out of the pages already in the image.
 ; -----------------------------------------------------------------------------
 wd_dbte:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     push si
     mov ax, [wd_dbn0]               ; CHP pages
     add ax, [wd_dbn1]
@@ -978,12 +941,7 @@ wd_dbte:
 .no:
     stc
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rsdcba
 
 ; wd_dbtwr - write one bin table: BX pages starting at page DX. in/out ES:DI.
 ; Each page's first FC is read back out of the page itself (rgfc[0]), which
@@ -1179,9 +1137,7 @@ wd_dvfib:
 .no:
     stc
 .out:
-    pop bx
-    pop ax
-    ret
+    jmp wd_rba
 
 ; wd_dvfc - the FC at ES:BX is 16-bit and inside the file. CF=1 = it is not.
 ; Preserves all registers.
@@ -1234,10 +1190,7 @@ wd_dvpair:
 ; single shape to walk.
 ; -----------------------------------------------------------------------------
 wd_dpieces:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     push es
     mov es, [wd_stgseg]
     test word [es:WDF_FLAGS], WD_FCOMPLEX
@@ -1307,11 +1260,7 @@ wd_dpieces:
     stc
 .out:
     pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_dpget - piece BX's file offset, length and first CP
@@ -1423,12 +1372,7 @@ wd_dfcof:
 ; afterwards, once the properties have been painted.
 ; -----------------------------------------------------------------------------
 wd_dtext:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     push ds
     push es
     xor bx, bx
@@ -1460,13 +1404,7 @@ wd_dtext:
     pop ds
     mov ax, [wd_dccp]
     mov [wd_len], ax
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_dchpin - paint the CHP array from the CHPX FKPs
@@ -1477,12 +1415,7 @@ wd_dtext:
 ; some fc leaves the CHP byte at its cleared value, which is plain.
 ; -----------------------------------------------------------------------------
 wd_dchpin:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     push es
     mov es, [wd_cseg]               ; the CHP claim starts blank
     xor di, di
@@ -1540,13 +1473,7 @@ wd_dchpin:
     jmp short .piece
 .done:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_dpapin - stamp the paragraph marks with their PAP dictionary indices
@@ -1559,12 +1486,7 @@ wd_dchpin:
 ; that actually carries the index (SPEC.md 68.3) - is what drives the loop.
 ; -----------------------------------------------------------------------------
 wd_dpapin:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wd_sv6
     push ds
     push es
     mov byte [cs:wd_pap_tail], 0
@@ -1598,13 +1520,7 @@ wd_dpapin:
 .done:
     pop es
     pop ds
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdisdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_dpapat - the dictionary index for the paragraph covering CP AX
@@ -1659,10 +1575,7 @@ wd_dpapat:
 ; widths are transcribed at the head of this file.
 ; -----------------------------------------------------------------------------
 wd_dprl:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     push si
 .step:
     or cx, cx
@@ -1730,12 +1643,7 @@ wd_dprl:
     or byte [wd_pfb], WDPA_SB
     jmp short .skip
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rsdcba
 
 ; wd_dcell - AL = the signed word operand at ES:SI in cells, clamped to the
 ; indent range. Preserves all but AX.
@@ -2109,9 +2017,7 @@ wd_dtrim:
     mov [cs:wd_len], bx
 .out:
     pop ds
-    pop bx
-    pop ax
-    ret
+    jmp wd_rba
 
 ; -----------------------------------------------------------------------------
 ; wd_dcompact - drop the characters this port cannot hold

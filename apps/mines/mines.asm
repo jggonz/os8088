@@ -104,12 +104,18 @@ MN_M_LIVE    equ 1                  ; playing, mines placed
 MN_M_LOST    equ 2
 MN_M_WON     equ 3
 
-; per-cell states ([mn_state + cell])
-MN_S_COVER   equ 0
-MN_S_FLAG    equ 1
-MN_S_OPEN    equ 2
+; one byte per cell ([mn_cell + cell]) - SPEC.md 23. It was three 81-byte
+; arrays (mine, state, adjacency); every question the game asks of a cell is
+; one bit test on one byte now, and adjacency is the low nibble so mn_place's
+; `inc byte [mn_cell+bx]` still counts a neighbour (8 is the most, so it can
+; never carry into the flags). A covered cell is one with neither OPEN nor FLAG.
+MN_C_MINE    equ 0x80               ; a mine is here
+MN_C_OPEN    equ 0x40               ; revealed
+MN_C_FLAG    equ 0x20               ; flagged (never with OPEN)
+MN_C_ADJ     equ 0x0F               ; adjacent-mine count 0..8
 
-MN_BSS_TOTAL equ 427                ; see the bss layout after OS88_IMAGE_END
+MN_XPTN      equ 20                 ; the wrong-flag X's pixels (SPEC.md 5.6.9)
+MN_BSS_TOTAL equ 91 + MN_XPTN * 4   ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; mn_entry - package entry point (SPEC.md 20.2)
@@ -126,10 +132,20 @@ MN_BSS_TOTAL equ 427                ; see the bss layout after OS88_IMAGE_END
 ; established - and the abort path returns wm_create's CF untouched.
 ; -----------------------------------------------------------------------------
 mn_entry:
-    push si
     mov si, mn_tpl
     call OSAPI_WM_CREATE             ; BX = window ptr, CF on table full
     jc .full
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE_NOKEEP mn_ret ; ...naming a ret we already have.
+                                     ; NOKEEP: an entry proc owes the loader
+                                     ; BX and CF and nothing else (the loader
+                                     ; reloads every register it reads after
+                                     ; the far call), so the bank was for
+                                     ; nobody - CF is put right below
     mov si, mn_menus
     call OSAPI_MENU_SET              ; BX = the window, SI = our set
     mov si, mn_about                 ; ...and 'About Mines' above the Close the
@@ -149,7 +165,7 @@ mn_entry:
                                      ; the mine placement. The board changes
                                      ; when the player clicks it and at no
                                      ; other time
-    mov al, 1                        ; ...and its 164 content rows are 9 x 16
+                                     ; ...and its 164 content rows are 9 x 16
     call OSAPI_WM_KEEPH              ; plus a 20px strip, none of which can give
                                      ; a pixel up: the cells are 16px because
                                      ; the mine, the flag and the digits are
@@ -159,118 +175,74 @@ mn_entry:
                                      ; drawing all nine rows through the bottom
                                      ; of the frame, and the two rows below the
                                      ; cut can be SEEN and not played - the
-                                     ; clicks land on the dock (SPEC.md 11.93)
-    pop si
-    ret
-.full:
-    pop si                          ; no window: nothing to hang menus on
-    ret
+                                     ; clicks land on the dock (SPEC.md 11.93).
+                                     ; AL is still SAVEU's 1: every slot keeps
+                                     ; what it does not answer in (SPEC.md 20.3)
+    clc                              ; OSAPI_MEM_MOVABLE's CF is not ours to pass
+.full:                               ; (no window: nothing to hang menus on,
+    ret                              ; and wm_create's CF=1 goes back as it is)
 
 ; -----------------------------------------------------------------------------
-; mn_paint - W_PAINT: full content repaint
-; in:  SI = window ptr; caller holds the gfx lock
-; out: nothing; preserves all registers
+; mn_org - refresh the content origin: the window moves, so every handler
+; asks rather than trusting the last answer (os88api.inc's rule 1)
+; in:  SI = window ptr
+; out: AX = [mn_ox] = content left, DX = [mn_oy] = content top, BX = SI
 ; -----------------------------------------------------------------------------
-mn_paint:
-    push ax
-    push bx
-    push dx
+mn_org:
     mov bx, si
     call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
     mov [mn_ox], ax
     mov [mn_oy], dx
-    call mn_draw_status
-    call mn_draw_board
+mn_ret:                              ; ...a bare ret, which is also the
+    ret                              ; region's relocation proc (mn_entry)
+
+; -----------------------------------------------------------------------------
+; mn_paint - W_PAINT: full content repaint
+; in:  SI = window ptr; caller holds the gfx lock
+; out: SI and DF as they came (W_PAINT's whole contract, SPEC.md 11: the
+;      kernel banks AX-DX, DI and BP round the call); clobbers the rest
+;
+; THE CALLBACKS BANK NOTHING THE KERNEL DOES NOT READ BACK (apps size pass
+; 2). A paint gives back SI, a click SI (W_ONCLICK's arm, SPEC.md 13.7), and
+; a key, a menu pick and the About handler nothing at all (SPEC.md 12.2) - so
+; the push-everything prologues went, and with them the drawing routines'
+; own banks: each says below what it keeps, which is only what its callers
+; read after it.
+; -----------------------------------------------------------------------------
+mn_paint:
+    push si
+    call mn_org
+    call mn_redraw
+    pop bx                           ; BX = the window, for the card
     cmp byte [mn_abon], 0            ; ...and the About card LAST, over the
     je .out                          ; board it is opaque about (SPEC.md 20.5.1)
-    push si
     mov si, mn_ablines
     call os88ui_about_d              ; _d: the kernel armed a region for this
-    pop si                           ; paint and re-arming would throw it away
-.out:
-    pop dx
-    pop bx
-    pop ax
+.out:                                ; paint and re-arming would throw it away
+    mov si, bx                       ; (the card keeps every register)
     ret
 
 ; -----------------------------------------------------------------------------
 ; mn_onkey - W_ONKEY: 'f'/'F' toggles flag mode, 'n'/'N' starts a new game
 ; in:  AL = ascii, AH = scan, SI = window ptr; caller holds the gfx lock
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX-DI (nothing reads a register after W_ONKEY)
+;
+; The key becomes the Game menu's item number and goes down the menu's own
+; path (mn_docmd), so the keys and the menu are one code path rather than
+; two that have to be kept in agreement (SPEC.md 12.2). `or al, 0x20` folds
+; the case: only 'F' and 'N' fold onto 'f' and 'n'.
 ; -----------------------------------------------------------------------------
 mn_onkey:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov cl, al                      ; keep the key; wm_content returns AX/DX
     call mn_abdismiss               ; any key takes the credits down, and is
     jc .out                         ; spent doing it
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    mov [mn_ox], ax
-    mov [mn_oy], dx
-    cmp cl, 'f'
-    je .flag
-    cmp cl, 'F'
-    je .flag
-    cmp cl, 'n'
-    je .new
-    cmp cl, 'N'
-    je .new
-    jmp .out
-
-.flag:
-    call mn_cmd_flag
-    jmp .out
-
-.new:
-    call mn_cmd_new
-
+    or al, 0x20
+    mov cl, 0                       ; item 0 = New Game
+    cmp al, 'n'
+    je mn_docmd
+    inc cx                          ; item 1 = Flag Mode
+    cmp al, 'f'
+    je mn_docmd
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; mn_cmd_flag - the flag-mode command: toggle it, refresh the strip text
-; in:  nothing ([mn_ox]/[mn_oy] already name the content origin)
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-mn_cmd_flag:
-    xor byte [mn_flagmode], 1
-    call mn_draw_status             ; 'F=FLAG' appears / disappears
-    ret
-
-; -----------------------------------------------------------------------------
-; mn_cmd_new - the new-game command: wipe the board and repaint it
-; in:  nothing ([mn_ox]/[mn_oy] already name the content origin)
-; out: nothing; preserves all registers
-;
-; Both commands are separate routines only so that the 'F'/'N' keys and the
-; Game menu's two items are one code path rather than two that have to be
-; kept in agreement (SPEC.md 12.2). They repaint themselves, which the key
-; path always did and the menu path requires: the kernel does not repaint a
-; window after a menu command returns.
-; -----------------------------------------------------------------------------
-mn_cmd_new:
-    push bx
-    mov bx, 0                       ; wipe mine/state/adj (contiguous in bss)
-.zero:
-    mov byte [mn_mine+bx], 0
-    inc bx
-    cmp bx, MN_CELLS * 3
-    jb .zero
-    mov byte [mn_flags], 0
-    mov byte [mn_revealed], 0
-    mov byte [mn_mode], MN_M_FRESH  ; mines re-placed on the next reveal
-    call mn_draw_status
-    call mn_draw_board
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -280,165 +252,182 @@ mn_cmd_new:
 ; out: nothing; clobbers AX, BX, CX, DX like any window callback
 ;
 ; Called exactly like W_ONCLICK, so it draws directly and must not lock,
-; block or spawn. The window may have moved since the last paint, so the
-; content origin is re-fetched here for the same reason W_ONKEY re-fetches
-; it - the command routines below draw from [mn_ox]/[mn_oy]. AH is not
-; tested: the kernel only ever routes cells this set actually declares, and
-; the set declares one menu.
+; block or spawn. AH is not tested: the kernel only ever routes cells this
+; set actually declares, and the set declares one menu.
 ; -----------------------------------------------------------------------------
 mn_oncmd:
-    mov cl, al                      ; keep the item; wm_content returns AX/DX
-    call mn_abdismiss               ; a menu pick takes the credits down first,
-                                    ; and then does what it says
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    mov [mn_ox], ax
-    mov [mn_oy], dx
-    or cl, cl
-    jz mn_cmd_new                   ; item 0 = New Game
-    dec cl
-    jz mn_cmd_flag                  ; item 1 = Flag Mode
-    ret                             ; unknown item: do nothing
-
-; -----------------------------------------------------------------------------
-; mn_onclick - W_ONCLICK: reveal (or flag, in flag mode) the cell hit
-; in:  CX = x, DX = y (absolute screen), SI = window ptr; gfx lock held
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-mn_onclick:
-    push ax
-    push bx
-    push cx
-    push dx
     push si
-    push di
-    call mn_abdismiss               ; the credits are up: this click is spent
-    jc .out                         ; taking them down
-    call mn_hitcell                 ; BX = the cell under the point, CF = none
-    jc .out
-    cmp byte [mn_flagmode], 0
-    jne .flag
-
-    ; --- reveal ---------------------------------------------------------------
-    cmp byte [mn_state+bx], MN_S_COVER
-    jne .out                        ; flags block reveal; open cells are done
-    cmp byte [mn_mode], MN_M_FRESH
-    jne .armed
-    call mn_place                   ; lazy placement: first click always safe
-    mov byte [mn_mode], MN_M_LIVE
-.armed:
-    cmp byte [mn_mine+bx], 0
-    jne .boom
-    call mn_reveal                  ; opens + draws the flood
-    cmp byte [mn_revealed], MN_SAFE
-    jb .out
-    mov byte [mn_mode], MN_M_WON    ; all 71 safe cells open
-    call mn_draw_status
-    jmp .out
-.boom:
-    mov byte [mn_mode], MN_M_LOST
-    mov ax, bx
-    mov [mn_boom], al               ; the one that gets the red cell
-    call mn_draw_board              ; mode-aware: mines + wrong flags shown
-    call mn_draw_status
-    jmp .out
-
-    ; --- flag mode --------------------------------------------------------------
-.flag:
-    call mn_flag_toggle
-
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    push ax                         ; keep the item, and the window: the card's
+    call mn_abdismiss               ; repaint spends both, and a menu pick takes
+    pop cx                          ; the credits down first and then does what
+    pop si                          ; it says - CL = the item
+    ; fall into mn_docmd
 
 ; -----------------------------------------------------------------------------
-; mn_onrclick - the RIGHT button in the content (SPEC.md 13.11): flag or
-; unflag the cell hit, whatever flag mode says
-; in:  CX = x, DX = y (absolute screen), SI = window ptr; gfx lock held
-; out: nothing; preserves all registers
+; mn_docmd - run Game item CL: 0 = New Game, else Flag Mode
+; in:  CL = item, SI = our window; gfx lock held
+; out: nothing; clobbers AX-DI
 ;
-; W_ONCLICK's environment exactly, so this draws directly and never locks,
-; blocks or spawns - and it is the same two routines the left button's flag
-; branch runs, not copies of them (mn_cmd_flag's rule). What the right button
-; adds is that flagging no longer needs a MODE - and the mode, the 'F' key and
-; the Game menu item all stay exactly as they were, because a one-button mouse
-; is still a machine this runs on. (SPEC.md 9.6.4's KEYBOARD mouse arrives
-; here too: its right button is Del, and it queues the same EVT_RDOWN.)
+; The window may have moved since the last paint, so the content origin is
+; re-fetched here - the command routines below draw from [mn_ox]/[mn_oy].
+; They repaint themselves, which the key path always did and the menu path
+; requires: the kernel does not repaint a window after a menu command.
+; -----------------------------------------------------------------------------
+mn_docmd:
+    call mn_org
+    or cl, cl
+    jz mn_cmd_new                   ; item 0 = New Game; item 1 falls through
+                                    ; - the set declares two, and the kernel
+                                    ; routes only what a set declares
+
+; -----------------------------------------------------------------------------
+; mn_cmd_flag - the flag-mode command: toggle it, refresh the strip text
+; in:  nothing ([mn_ox]/[mn_oy] already name the content origin)
+; out: nothing; clobbers AX-SI (mn_draw_status's)
+; -----------------------------------------------------------------------------
+mn_cmd_flag:
+    xor byte [mn_flagmode], 1
+    jmp mn_draw_status              ; 'F=FLAG' appears / disappears
+
+; -----------------------------------------------------------------------------
+; mn_cmd_new - the new-game command: wipe the board and repaint it
+; in:  nothing ([mn_ox]/[mn_oy] already name the content origin)
+; out: nothing; clobbers AX-SI (mn_redraw's)
+;
+; The wipe is MN_WIPE bytes from mn_cell: the 81 cells and then the three
+; counters laid out after them (mn_flags, mn_revealed, mn_mode), whose zero
+; is a fresh game - MN_M_FRESH places the mines again on the next reveal.
+; It runs DOWN, so the index is its own counter: BH is 0 throughout (the
+; run is under 256) and is the zero it stores.
+; -----------------------------------------------------------------------------
+mn_cmd_new:
+    mov bx, MN_WIPE
+.zero:
+    dec bx
+    mov [mn_cell+bx], bh            ; (a store leaves dec's ZF alone)
+    jnz .zero
+    jmp mn_redraw
+
+; -----------------------------------------------------------------------------
+; mn_onclick / mn_onrclick - W_ONCLICK and the RIGHT button (SPEC.md 13.11):
+; reveal (or flag, in flag mode) the cell hit / flag or unflag it whatever
+; flag mode says
+; in:  CX = x, DX = y (absolute screen), SI = window ptr; gfx lock held
+; out: SI as it came (W_ONCLICK's, SPEC.md 13.7) and BP; clobbers AX-DI
+;
+; One body for both buttons: the only thing the right button changes is the
+; answer to "flag or reveal?", so it is handed in AL and the rest - the card,
+; mn_hitcell, the flag toggle - is the same code, not a copy of it (that is
+; mn_cmd_flag's rule again, one level down). What the right button adds is
+; that flagging no longer needs a MODE - and the mode, the 'F' key and the
+; Game menu item all stay exactly as they were, because a one-button mouse is
+; still a machine this runs on. (SPEC.md 9.6.4's KEYBOARD mouse arrives here
+; too: its right button is Del, and it queues the same EVT_RDOWN.)
 ;
 ; A right press that merely raises the window never arrives here (13.11), so
 ; the first right click on a background Minesweeper raises it and the second
 ; plants a flag - which is what the left button already did.
 ; -----------------------------------------------------------------------------
 mn_onrclick:
-    push ax
-    push bx
-    push cx
-    push dx
+    mov al, 1                       ; the right button always flags
+    jmp short mn_click
+mn_onclick:
+    mov al, [mn_flagmode]           ; the left one flags in flag mode
+mn_click:
     push si
-    push di
-    call mn_abdismiss               ; ...and so is a right-click
-    jc .out
+    push bp
+    call mn_abdismiss               ; the credits are up: this click is spent
+    jc .out                         ; taking them down
+    push ax
     call mn_hitcell                 ; BX = the cell under the point, CF = none
-    jc .out
-    call mn_flag_toggle
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     pop ax
+    jc .out
+    or al, al
+    jnz .flag
+
+    ; --- reveal ---------------------------------------------------------------
+    test byte [mn_cell+bx], MN_C_OPEN | MN_C_FLAG
+    jnz .out                        ; flags block reveal; open cells are done
+    cmp byte [mn_mode], MN_M_FRESH
+    jne .armed
+    call mn_place                   ; lazy placement: first click always safe
+    inc byte [mn_mode]              ; MN_M_FRESH -> MN_M_LIVE
+.armed:
+    test byte [mn_cell+bx], MN_C_MINE
+    jnz .boom
+    call mn_reveal                  ; opens + draws the flood
+    cmp byte [mn_revealed], MN_SAFE
+    jb .out
+    mov byte [mn_mode], MN_M_WON    ; all 71 safe cells open
+    jmp short .stat
+
+    ; --- the flag toggle: plant or lift the flag on cell BX -------------------
+    ; ONE CELL and the status strip, never the board: the counter at the left
+    ; of the strip is 10 minus the flags placed, so it is the only other thing
+    ; this can change (SPEC.md 23, and PERFORMANCE.md's rule 1).
+.flag:
+    mov al, [mn_cell+bx]
+    test al, MN_C_OPEN
+    jnz .out                        ; can't flag an open cell
+    xor al, MN_C_FLAG
+    mov [mn_cell+bx], al
+    test al, MN_C_FLAG
+    mov al, 1                       ; planted: one more
+    jnz .upd
+    neg al                          ; lifted: one fewer
+.upd:
+    add [mn_flags], al
+    call mn_draw_cell
+    jmp short .stat                 ; mines-remaining counter changed
+.boom:
+    mov byte [mn_mode], MN_M_LOST
+    mov [mn_boom], bl               ; the one that gets the red cell
+    call mn_draw_board              ; mode-aware: mines + wrong flags shown
+.stat:
+    call mn_draw_status
+.out:
+    pop bp
+    pop si
     ret
+
+%if MN_M_LIVE != MN_M_FRESH + 1
+  %error "mines: mn_click arms a fresh board with an inc"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; mn_hitcell - which cell is this point in? (both buttons' first act)
 ; in:  CX = x, DX = y (absolute screen), SI = window ptr
-; out: CF = 0 and BX = cell index; CF = 1 = no cell, and BX is undefined
+; out: CF = 0 and BX = cell index (BH = 0); CF = 1 = no cell, BX undefined
 ;      ([mn_ox]/[mn_oy] refreshed either way, unless the board is dead)
 ; clobbers: AX, CX, DX, DI
 ;
-; The window moves, so the content origin is re-fetched here rather than
-; trusted - the same reason W_ONKEY re-fetches it. A dead board (won or lost
-; until 'N') answers "no cell" for both buttons at once, which is where the
-; rule belongs: it is a fact about the board, not about the button.
+; A dead board (won or lost until 'N') answers "no cell" for both buttons at
+; once, which is where the rule belongs: it is a fact about the board, not
+; about the button.
 ; -----------------------------------------------------------------------------
 mn_hitcell:
     cmp byte [mn_mode], MN_M_LOST
     jae .none                       ; board is dead after win/lose until 'N'
-    mov bx, si
-    push cx
-    push dx
-    call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
-    mov [mn_ox], ax
-    mov [mn_oy], dx
-    pop dx
-    pop cx
-    sub cx, [mn_ox]                 ; -> content-relative point
-    sub dx, [mn_oy]
-    sub dx, MN_STRIP_H
+    mov di, dx                      ; DI = y while mn_org takes AX/BX/DX
+    call mn_org                     ; AX = content left, DX = content top
+    sub cx, ax                      ; -> content-relative point (CX
+                                    ; survives mn_org: WM_CONTENT keeps it)
+    sub di, dx
+    sub di, MN_STRIP_H
     js .none                        ; it landed in the status strip
-    mov ax, cx                      ; column = x / 16
+    xchg ax, cx                     ; column = x / 16
     mov cl, 4
     shr ax, cl
-    cmp ax, MN_COLS
-    jae .none
-    mov di, ax
-    mov ax, dx                      ; row = y / 16
+    cmp al, MN_COLS                 ; AL alone: a point in the content is
+    jae .none                       ; under 4096 px, so AH is 0 here
+    xchg ax, di                     ; DI = column, AX = y; row = y / 16
     shr ax, cl
-    cmp ax, MN_COLS
+    cmp al, MN_COLS                 ; (and mul reads AL alone anyway)
     jae .none
-    mov bx, ax                      ; cell = row*9 + column
-    add ax, ax
-    add ax, ax
-    add ax, ax
-    add ax, bx
+    mov bl, MN_COLS                 ; cell = row*9 + column
+    mul bl
     add ax, di
-    mov bx, ax
+    xchg ax, bx
     clc
     ret
 .none:
@@ -446,39 +435,12 @@ mn_hitcell:
     ret
 
 ; -----------------------------------------------------------------------------
-; mn_flag_toggle - plant or lift the flag on cell BX
-; in:  BX = cell index ([mn_ox]/[mn_oy] already name the content origin)
-; out: nothing; clobbers AX, CX, DX, SI, DI (a drawing routine)
-;
-; ONE CELL and the status strip, never the board: the counter at the left of
-; the strip is 10 minus the flags placed, so it is the only other thing this
-; can change (SPEC.md 23, and PERFORMANCE.md's rule 1).
-; -----------------------------------------------------------------------------
-mn_flag_toggle:
-    cmp byte [mn_state+bx], MN_S_OPEN
-    je .done                        ; can't flag an open cell
-    cmp byte [mn_state+bx], MN_S_FLAG
-    je .lift
-    mov byte [mn_state+bx], MN_S_FLAG
-    inc byte [mn_flags]
-    jmp .upd
-.lift:
-    mov byte [mn_state+bx], MN_S_COVER
-    dec byte [mn_flags]
-.upd:
-    call mn_draw_cell
-    call mn_draw_status             ; mines-remaining counter changed
-.done:
-    ret
-
-; -----------------------------------------------------------------------------
 ; mn_place - place the 10 mines, excluding the first-clicked cell, and build
 ; the adjacent-mine counts by bumping every placed mine's neighbours
 ; in:  BX = safe cell index
-; out: nothing; clobbers AX, CX, DX, SI, DI (BX preserved)
+; out: nothing; clobbers AX, CX, DX, SI, DI, BP (BX preserved)
 ; -----------------------------------------------------------------------------
 mn_place:
-    push bp
     call OSAPI_GET_TICKS
     call OSAPI_SRAND
     mov bp, MN_MINES                ; mines left to place
@@ -490,215 +452,206 @@ mn_place:
     cmp dx, bx
     je .next                        ; keep the first click safe
     mov di, dx
-    cmp byte [mn_mine+di], 0
-    jne .next                       ; already a mine there
-    mov byte [mn_mine+di], 1
+    test byte [mn_cell+di], MN_C_MINE
+    jnz .next                       ; already a mine there
+    or byte [mn_cell+di], MN_C_MINE
     push bx                         ; bump neighbours' adjacency counts
-    mov bx, di
-    call mn_nlist                   ; CX = count, mn_nbuf = indices
-    mov si, mn_nbuf
-    jcxz .placed
+    mov bx, di                      ; (BH = 0: DI < 81)
+    call mn_nlist                   ; CX = count (4..9), SI = mn_nbuf
 .adj:
     mov bl, [si]
-    mov bh, 0
-    inc byte [mn_adj+bx]
+    inc byte [mn_cell+bx]           ; the low nibble: at most 9 - eight mined
+                                    ; neighbours and the mine itself, which
+                                    ; the list includes - so no carry
     inc si
     loop .adj
-.placed:
     pop bx
     dec bp
     jnz .next
-    pop bp
     ret
 
 ; -----------------------------------------------------------------------------
 ; mn_reveal - open cell BX (known covered, unflagged, not a mine) and flood
 ; through zero-count cells: iterative, explicit queue, no recursion. Cells
-; are marked open when enqueued (so nothing enters the queue twice - 81
-; words is provably enough) and drawn when dequeued.
-; in:  BX = cell index
-; out: nothing; [mn_revealed] bumped per cell; clobbers AX, CX, DX, SI
+; are marked open when enqueued (so nothing enters the queue twice) and drawn
+; when dequeued, in the order they were found - a ripple out of the click.
+; in:  BX = cell index, BH = 0
+; out: nothing; [mn_revealed] bumped per cell; clobbers AX-DI and BP
+;
+; DI is the queue's tail and BP its head, both pointers into mn_queue, so
+; neither is a variable and an enqueue is two instructions. Only SAFE cells
+; are ever queued - the first is not a mine, and a zero cell has none beside
+; it - so the queue holds at most MN_SAFE (71) bytes; that is what lets it
+; share mn_xpts, which only a LOST board draws (see the bss layout). BH stays
+; 0 throughout: every index written to BL is under 81.
+;
+; The clicked cell enters as a one-entry neighbour list, so opening it is the
+; same five instructions that open every cell the flood reaches - the list
+; being the queue's first byte, which the enqueue then writes over with the
+; same value.
 ; -----------------------------------------------------------------------------
 mn_reveal:
-    push bx
-    push di
-    mov word [mn_qhead], 0
-    mov word [mn_qtail], 0
-    mov byte [mn_state+bx], MN_S_OPEN
-    inc byte [mn_revealed]
-    call mn_enq
+    mov di, mn_queue                ; tail
+    mov bp, di                      ; head
+    mov [di], bl                    ; the clicked cell's one-entry list, in
+    mov si, di                      ; the very byte .nb enqueues it to
+    mov cx, 1
+    jmp short .nb
 .pump:
-    mov ax, [mn_qhead]
-    cmp ax, [mn_qtail]
+    cmp bp, di
     je .done
-    mov si, ax                      ; dequeue
-    shl si, 1
-    mov bx, [mn_queue+si]
-    inc word [mn_qhead]
+    mov bl, [ds:bp]                 ; dequeue (BP addresses SS without ds:)
+    inc bp
     call mn_draw_cell
-    cmp byte [mn_adj+bx], 0
-    jne .pump                       ; numbered cell: no spreading
-    call mn_nlist                   ; CX = count, mn_nbuf = indices
-    mov si, mn_nbuf
-    jcxz .pump
+    test byte [mn_cell+bx], MN_C_ADJ
+    jnz .pump                       ; numbered cell: no spreading
+    call mn_nlist                   ; CX = count (4..9), SI = mn_nbuf
 .nb:
     mov bl, [si]
-    mov bh, 0
-    cmp byte [mn_state+bx], MN_S_COVER
-    jne .skip                       ; flagged or already open
-    mov byte [mn_state+bx], MN_S_OPEN
+    test byte [mn_cell+bx], MN_C_OPEN | MN_C_FLAG
+    jnz .skip                       ; flagged or already open
+    or byte [mn_cell+bx], MN_C_OPEN
     inc byte [mn_revealed]
-    call mn_enq
+    mov [di], bl                    ; enqueue
+    inc di
 .skip:
     inc si
     loop .nb
     jmp .pump
 .done:
-    pop di
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
-; mn_enq - append cell BX to the flood queue
-; in:  BX = cell index
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-mn_enq:
-    push di
-    mov di, [mn_qtail]
-    shl di, 1
-    mov [mn_queue+di], bx
-    inc word [mn_qtail]
-    pop di
-    ret
-
-; -----------------------------------------------------------------------------
-; mn_nlist - list the valid neighbours of a cell (3..8 of them)
-; in:  BX = cell index
-; out: CX = neighbour count, mn_nbuf = neighbour indices (bytes)
-; clobbers: AX, DX (BX, SI, DI preserved)
+; mn_nlist - list a cell's 3x3 block: its valid neighbours AND ITSELF (4..9)
+; in:  BX = cell index (BH = 0)
+; out: CX = count, SI = mn_nbuf = the indices (bytes), in row order
+; clobbers: AX, DX (BX, DI, BP preserved)
+;
+; THE CELL ITSELF IS IN THE LIST (apps size pass 2). Both callers are
+; indifferent to it - the flood finds it already OPEN and skips it, and
+; mn_place bumps a MINE's own count, which nothing reads (a mine is never
+; opened, so its digit is never drawn) and which tops out at 9, still inside
+; the nibble - so testing for it was 8 bytes and a branch per candidate for
+; nobody. The walk is the block's indices, BL running from cell - 10 and a
+; row apart by 9: a candidate is kept when it is ON THE BOARD (0..80, which
+; settles the row - an index off the top wraps past 80 as a byte) and when
+; its column is (0..8). That is the whole test, with no row*9 + column to
+; rebuild, so a candidate costs a third of what it did.
 ; -----------------------------------------------------------------------------
 mn_nlist:
     push bx
-    push di
     mov ax, bx
     mov dl, MN_COLS
-    div dl                          ; AL = row, AH = column
+    div dl                          ; AH = column
     xor cx, cx
-    mov di, mn_nbuf
-    mov dh, -1                      ; row delta: -1, 0, +1
+    mov si, mn_nbuf
+    sub bl, MN_COLS + 1             ; BL = the block's top-left index
+    mov al, 3                       ; three rows
 .row:
-    mov dl, al
-    add dl, dh                      ; neighbour row
-    cmp dl, MN_COLS
-    jae .rownext                    ; unsigned: catches -1 (255) and 9
-    mov bh, -1                      ; column delta: -1, 0, +1
+    mov dh, -1                      ; column delta: -1, 0, +1
 .col:
-    mov bl, ah
-    add bl, bh                      ; neighbour column
-    cmp bl, MN_COLS
-    jae .colnext
-    cmp dh, 0
-    jne .keep
-    cmp bh, 0
-    je .colnext                     ; skip the cell itself
-.keep:
-    push ax
-    mov al, dl                      ; index = row*9 + column
-    add al, al
-    add al, al
-    add al, al
-    add al, dl
-    add al, bl
-    mov [di], al                    ; (no stosb: ES is not ours to assume)
-    inc di
-    pop ax
+    cmp bl, MN_CELLS
+    jae .no                         ; off the top (wrapped) or the bottom
+    mov dl, ah
+    add dl, dh                      ; the candidate's column
+    cmp dl, MN_COLS
+    jae .no                         ; unsigned: catches -1 (255) and 9
+    mov [si], bl                    ; (no stosb: ES is not ours to assume)
+    inc si
     inc cx
-.colnext:
-    inc bh
-    cmp bh, 2
-    jl .col
-.rownext:
-    inc dh
+.no:
+    inc bx                          ; BL only matters: a carry into BH is
+    inc dh                          ; undone by the pop
     cmp dh, 2
-    jl .row
-    pop di
+    jl .col
+    add bl, MN_COLS - 3             ; the next row's first column
+    dec al
+    jnz .row
+    sub si, cx                      ; SI = mn_nbuf again
     pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; mn_cellxy - screen position of a cell's top-left pixel
 ; in:  BX = cell index; uses [mn_ox]/[mn_oy] stashed by the handler
-; out: CX = x, DX = y; clobbers AX
+; out: CX = x, DX = y; clobbers AX (BX untouched)
 ; -----------------------------------------------------------------------------
 mn_cellxy:
-    push bx
     mov ax, bx
-    mov bl, MN_COLS
-    div bl                          ; AL = row, AH = column
-    mov bl, ah
-    mov bh, 0
+    mov cl, MN_COLS
+    div cl                          ; AL = row, AH = column
     mov cl, 4
-    shl bx, cl                      ; column * 16
+    shl ax, cl                      ; AL = row * 16, AH = column * 16 - one
+                                    ; shift for both, as neither is over 8 and
+                                    ; nothing carries from AL into AH
+    xor dx, dx
+    xchg dl, ah                     ; DX = column * 16, AX = row * 16
     mov cx, [mn_ox]
-    add cx, bx
-    mov bl, al
-    mov bh, 0
-    push cx
-    mov cl, 4
-    shl bx, cl                      ; row * 16
-    pop cx
+    add cx, dx
     mov dx, [mn_oy]
+    add dx, ax
     add dx, MN_STRIP_H
-    add dx, bx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; mn_shape - run a list of coloured fills relative to a cell origin.
-; Record: db colour, x1, y1, x2, y2 (cell-relative bytes); 0xFF terminates.
+; List: runs of `db MN_SC + colour` and then that colour's rects, each
+; `db x1, y1, x2, y2` (cell-relative, 0..15); 0xFF terminates.
 ; in:  SI -> shape list, CX = cell x, DX = cell y
-; out: nothing; preserves all registers
+; out: SI -> past the list's 0xFF; preserves every other register
+;
+; A COLOUR IS SET ONCE PER RUN, not once per rect: a coordinate is 0..15
+; and a colour byte MN_SC (16) + 0..15, so one compare tells them apart and
+; a rect in the colour already set costs no pen call and no byte. The same
+; compare sorts out the 0xFF - it is the one byte whose difference from 16
+; is negative. (Not `cbw` for a sign test anywhere here: CBW WRITES NO
+; FLAGS, and a `js` after it tested whatever the last gfx_fill left - which
+; is how this shipped once and walked off the end of the list.)
+;
+; SI is LEFT past the terminator on purpose: a list laid out straight after
+; another is drawn by calling again with no reload (the flag over a covered
+; cell). Each coordinate goes to the register gfx_fill wants it in with a
+; one-byte xchg.
 ; -----------------------------------------------------------------------------
 mn_shape:
     push ax
     push bx
     push cx
     push dx
-    push si
     push di
     push bp
     mov bp, cx                      ; cell left
     mov di, dx                      ; cell top
 .rec:
-    lodsb                           ; colour (DF=0 per calling convention)
-    cmp al, 0xFF
-    je .done
+    lodsb                           ; DF=0 per calling convention
+    cmp al, MN_SC
+    jb .rect                        ; 0..15: x1 of another rect in this colour
+    js .done                        ; 0xFF: the end of the list
+    and al, 0x0F                    ; MN_SC + colour: the pen for this run
     call OSAPI_SET_COLOR
-    lodsb                           ; x1
-    mov ah, 0
+    lodsb                           ; x1 (every coordinate is 0..15, so
+.rect:
+    cbw                             ; cbw is the zero extension)
     add ax, bp
     push ax
     lodsb                           ; y1
-    mov ah, 0
+    cbw
     add ax, di
-    push ax
+    xchg bx, ax
     lodsb                           ; x2
-    mov ah, 0
+    cbw
     add ax, bp
-    mov cx, ax
+    xchg cx, ax
     lodsb                           ; y2
-    mov ah, 0
+    cbw
     add ax, di
-    mov dx, ax
-    pop bx                          ; y1
+    xchg dx, ax
     pop ax                          ; x1
     call OSAPI_GFX_FILL
     jmp .rec
 .done:
     pop bp
     pop di
-    pop si
     pop dx
     pop cx
     pop bx
@@ -708,98 +661,80 @@ mn_shape:
 ; -----------------------------------------------------------------------------
 ; mn_draw_cell - draw one cell in its normal in-play state
 ; in:  BX = cell index
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX, CX, DX, SI - BX, DI and BP are kept, which is
+;      all the board loop and the flood read after it
 ; -----------------------------------------------------------------------------
 mn_draw_cell:
-    push ax
-    push cx
-    push dx
-    push si
     call mn_cellxy                  ; CX/DX = cell origin
-    cmp byte [mn_state+bx], MN_S_OPEN
-    je .open
-    mov si, mn_sh_covered
-    call mn_shape
-    cmp byte [mn_state+bx], MN_S_FLAG
-    jne .done
-    mov si, mn_sh_flag
-    call mn_shape
-    jmp .done
-.open:
+    mov al, [mn_cell+bx]            ; (mn_shape preserves AX)
     mov si, mn_sh_open
+    test al, MN_C_OPEN
+    jnz .open
+    mov si, mn_sh_covered
+    call mn_shape                   ; SI -> mn_sh_flag, laid out after it
+    test al, MN_C_FLAG
+    jnz mn_shape                    ; ...so a flag is one more call, no reload
+.done:
+    ret
+.open:
     call mn_shape
-    mov al, [mn_adj+bx]
-    or al, al
+    and al, MN_C_ADJ
     jz .done                        ; zero-count cells stay blank
-    push bx                         ; pinned digit colour (SPEC.md 23)
-    mov bl, al
-    mov bh, 0
-    mov al, [mn_digcol+bx]
-    pop bx
+    cbw                             ; (1..8)
+    xchg si, ax                     ; pinned digit colour (SPEC.md 23),
+    mov al, [si + mn_digcol - 1]    ; ...indexed 1..8
     call OSAPI_SET_COLOR
-    mov al, [mn_adj+bx]
+    xchg si, ax                     ; AL = the count again
     add al, '0'
     add cx, 4                       ; centre the 8x8 glyph in the 16px cell
     add dx, 4
     call OSAPI_FONT_CHAR_XPARENT
-.done:
-    pop si
-    pop dx
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; mn_draw_cell2 - mode-aware cell renderer: normal while playing; after a
 ; loss, unflagged mines show as mines (the clicked one on light red),
-; wrong flags get a mine + black X, correct flags keep their flag.
+; wrong flags get a mine + light-red X, correct flags keep their flag.
 ; in:  BX = cell index
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX, CX, DX, SI (BX, DI, BP kept)
 ; -----------------------------------------------------------------------------
 mn_draw_cell2:
     cmp byte [mn_mode], MN_M_LOST
     jne mn_draw_cell
-    cmp byte [mn_mine+bx], 0
-    je .nomine
-    cmp byte [mn_state+bx], MN_S_FLAG
-    je mn_draw_cell                 ; correctly flagged mine keeps its flag
-    jmp mn_draw_minecell
-.nomine:
-    cmp byte [mn_state+bx], MN_S_FLAG
-    je mn_draw_wrongflag
-    jmp mn_draw_cell
+    mov al, [mn_cell+bx]
+    and al, MN_C_MINE | MN_C_FLAG
+    cmp al, MN_C_FLAG
+    je mn_draw_wrongflag            ; a flag with no mine under it
+    cmp al, MN_C_MINE
+    jne mn_draw_cell                ; a correct flag keeps it; no mine, as played
+    ; an unflagged mine: fall into mn_draw_minecell
 
 ; -----------------------------------------------------------------------------
 ; mn_draw_minecell - an exposed mine (loss): black disc with spokes on a
 ; light gray cell, or light red for the mine that was clicked
 ; in:  BX = cell index
-; out: nothing; preserves all registers
+; out: CX/DX = the cell's origin (mn_shape keeps them); clobbers AX, SI
+;      (BX, DI, BP kept)
+;
+; ONE LIST, ONE CALL: the ground is a record in front of mn_sh_mine whose
+; colour byte this writes first - the image is ours and the byte is set
+; before every use, so a second instance or a move cannot see a stale one.
 ; -----------------------------------------------------------------------------
 mn_draw_minecell:
-    push ax
-    push cx
-    push dx
-    push si
     call mn_cellxy
-    mov si, mn_sh_bggray
-    mov ax, bx
-    cmp al, [mn_boom]
+    mov al, MN_SC + CLGRAY
+    cmp bl, [mn_boom]
     jne .bg
-    mov si, mn_sh_bgred
+    mov al, MN_SC + CLRED
 .bg:
-    call mn_shape
-    mov si, mn_sh_mine
-    call mn_shape
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+    mov [mn_sh_bg], al
+    mov si, mn_sh_bg
+    jmp mn_shape
 
 ; -----------------------------------------------------------------------------
 ; mn_draw_wrongflag - a flag with no mine under it (loss): mine + LIGHT-RED X
 ; in:  BX = cell index
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX, CX, DX, SI (BX, DI, BP kept)
 ;
 ; The X may not be CBLACK, and SPEC.md 23 states it as a rule because the
 ; first cut was: all twenty of its pixels land inside the mine glyph under
@@ -813,67 +748,58 @@ mn_draw_minecell:
 ;
 ; Light red because 39.4 maps 12 to WHITE at 1bpp: red on a black mine on
 ; VGA, white on a black mine on a CGA and a Hercules. It is one SET_COLOR
-; for the whole loop, so the fix costs nothing (PERFORMANCE.md: the twenty
-; gfx_pixel calls are what they always were, and only a lost board with a
-; wrong flag on it pays them at all).
+; for the whole loop, so the fix costs nothing.
+;
+; ...AND THE TWENTY CALLS ARE ONE CALL NOW (SPEC.md 5.6.9). The X is a set of
+; pixels this program computes, which is exactly what OSAPI_GFX_POINTS takes,
+; so the loop composes into mn_xpts and hands the lot over together. Twenty
+; far calls at ~640us was 12.8ms per wrongly flagged cell of a lost board -
+; the whole board can carry several - against one arrival and twenty points.
+;
+; The ground and the mine are mn_draw_minecell's, called rather than copied:
+; a wrong flag has no mine under it, so it is never [mn_boom] and the ground
+; is always the gray one.
 ; -----------------------------------------------------------------------------
 mn_draw_wrongflag:
-    push ax
-    push cx
-    push dx
-    push si
-    push di
-    call mn_cellxy
-    mov si, mn_sh_bggray
-    call mn_shape
-    mov si, mn_sh_mine
-    call mn_shape
+    call mn_draw_minecell           ; ...which leaves CX/DX = the cell origin
     mov al, CLRED                   ; NOT CBLACK - see the header
     call OSAPI_SET_COLOR
-    mov di, 0                       ; two 10px diagonals, corner to corner
+    mov ax, cx                      ; AX = the falling diagonal's x, from 3
+    add ax, 3
+    add cx, 12                      ; CX = the rising one's, from 12
+    add dx, 3                       ; DX = the row both are on, from 3
+    mov si, mn_xpts                 ; ...composed here and drawn in ONE call
 .px:
-    push cx
-    push dx
-    add cx, di
-    add cx, 3
-    add dx, di
-    add dx, 3
-    call OSAPI_GFX_PIXEL             ; (3+i, 3+i)
-    pop dx
-    pop cx
-    push cx
-    push dx
-    add cx, 12
-    sub cx, di
-    add dx, di
-    add dx, 3
-    call OSAPI_GFX_PIXEL             ; (12-i, 3+i)
-    pop dx
-    pop cx
-    inc di
-    cmp di, 10
+    mov [si], ax                    ; (3+i, 3+i)
+    mov [si+2], dx
+    mov [si+4], cx                  ; ...and (12-i, 3+i), same row
+    mov [si+6], dx
+    inc ax
+    inc dx
+    dec cx
+    add si, 8
+    cmp si, mn_xpts + MN_XPTN * 4
     jb .px
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+    mov si, mn_xpts                 ; SPEC.md 5.6.9: twenty pixels, ONE
+    mov cx, MN_XPTN                 ; arrival. It was twenty far calls at
+    call OSAPI_GFX_POINTS           ; ~640us each - 12.8ms of a lost board,
+    ret                             ; per wrongly flagged cell
 
 ; -----------------------------------------------------------------------------
+; mn_redraw - the whole content: the strip, then the board
 ; mn_draw_board - repaint all 81 cells (mode-aware)
 ; in:  nothing (uses [mn_ox]/[mn_oy])
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX-SI and DI (BP kept)
 ; -----------------------------------------------------------------------------
+mn_redraw:
+    call mn_draw_status
 mn_draw_board:
-    push bx
-    mov bx, 0
+    xor bx, bx
 .cell:
     call mn_draw_cell2
     inc bx
     cmp bx, MN_CELLS
     jb .cell
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -881,23 +807,20 @@ mn_draw_board:
 ; mines-remaining counter at the left (10 minus flags placed, clamped at 0),
 ; and the centred mode text
 ; in:  nothing (uses [mn_ox]/[mn_oy] and the game state)
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 mn_draw_status:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov al, CLGRAY
     call OSAPI_SET_COLOR
     mov ax, [mn_ox]
     mov bx, [mn_oy]
-    mov cx, ax
-    add cx, MN_BOARD_W - 1
-    mov dx, bx
-    add dx, MN_STRIP_H - 1
-    call OSAPI_GFX_FILL
+    mov cx, MN_BOARD_W - 1          ; (the add takes the long immediate
+    add cx, ax                      ; either way; the mov is shorter)
+    lea dx, [bx + MN_STRIP_H - 1]
+    call OSAPI_GFX_FILL             ; (preserves AX/BX, like every slot)
+    mov cx, ax                      ; the counter's pen, (4,6) - and DX is
+    add cx, 4                       ; the mode text's row too: the font
+    lea dx, [bx + 6]                ; slots leave it where it was
 
     mov al, CBLACK                  ; counter, clamped at 0
     call OSAPI_SET_COLOR
@@ -906,49 +829,35 @@ mn_draw_status:
     jnc .clamped
     mov al, 0
 .clamped:
-    mov cx, [mn_ox]
-    add cx, 4
-    mov dx, [mn_oy]
-    add dx, 6
     cmp al, 10                      ; only ever 0..10: "10" or one digit
     jb .one
     mov al, '1'
     call OSAPI_FONT_CHAR_XPARENT
     add cx, 8
-    mov al, '0'
-    jmp .putc
+    mov al, 0                       ; ...and the 0, through the line below
 .one:
     add al, '0'
-.putc:
     call OSAPI_FONT_CHAR_XPARENT
 
     mov si, mn_s_boom               ; centred mode text
-    cmp byte [mn_mode], MN_M_LOST
+    mov al, [mn_mode]
+    cmp al, MN_M_LOST
     je .have
     mov si, mn_s_win
-    cmp byte [mn_mode], MN_M_WON
+    cmp al, MN_M_WON
     je .have
     cmp byte [mn_flagmode], 0
     je .done                        ; playing, flag mode off: blank
     mov si, mn_s_flag
 .have:
-    call OSAPI_FONT_WIDTH            ; AX = pixel width
-    mov cx, MN_BOARD_W
-    sub cx, ax
-    shr cx, 1
-    add cx, [mn_ox]
-    mov dx, [mn_oy]
-    add dx, 6
+    lodsb                           ; the line's own x, worked out at build
+    cbw                             ; time (MN_CTEXT): the font is 8px a
+    add ax, [mn_ox]                 ; character by contract (font_width), so
+    xchg cx, ax                     ; this is what OSAPI_FONT_WIDTH answered
     call OSAPI_FONT_STR_XPARENT
 .done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
-; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 ; =============================================================================
 ; 'About Mines' - the credit card (SPEC.md 12.2, 20.5.1)
 ; =============================================================================
@@ -960,61 +869,46 @@ mn_draw_status:
 ; every background task for as long as the reader left the credits up.
 
 ; -----------------------------------------------------------------------------
-; mn_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; mn_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX-SI, like a menu command (SPEC.md 12.2)
 ;
 ; Only the CARD is drawn: nothing underneath it has changed and the card is
 ; opaque over its own rect, so repainting the board first would be
 ; PERFORMANCE.md rule 2's double-draw with the credits as the second layer.
 ; -----------------------------------------------------------------------------
 mn_about:
-    push bx
-    push si
     mov byte [mn_abon], 1
     mov bx, si
     mov si, mn_ablines
-    call os88ui_about               ; arms the clip itself: nothing has armed
-    pop si                          ; one for a menu dispatch (SPEC.md 11.3),
-    pop bx                          ; and a refusal leaves the flag set so the
-    ret                             ; next paint puts the card up
+    jmp os88ui_about                ; arms the clip itself: nothing has armed
+                                    ; one for a menu dispatch (SPEC.md 11.3),
+                                    ; and a refusal leaves the flag set so the
+                                    ; next paint puts the card up
 
 ; -----------------------------------------------------------------------------
 ; mn_abdismiss - take the card down if it is up
 ; in:  SI = our window ptr; gfx lock held
-; out: CF = 1 the click or key was spent doing it, CF = 0 there was no card;
-;      preserves every register
+; out: CF = 0 there was no card, and nothing was touched; CF = 1 the click
+;      or key was spent doing it, and AX-SI and DI are the repaint's
 ;
 ; The way back is the whole content and not the card's own rect: the card
 ; covered the strip and the board, and mn_tpl's 144 x 164 is exactly those
 ; two, which is what mn_paint draws.
 ; -----------------------------------------------------------------------------
 mn_abdismiss:
-    cmp byte [mn_abon], 0
-    je .none
-    push ax
-    push bx
-    push dx
-    mov byte [mn_abon], 0
-    mov bx, si
-    call OSAPI_WM_CONTENT           ; the window may have been dragged since
-    mov [mn_ox], ax                 ; the card went up
-    mov [mn_oy], dx
-    mov bx, si
+    shr byte [mn_abon], 1           ; 0 or 1: CF = it was up, and it is down
+    jnc .none                       ; ...and CF = 0 is the no-card answer
+    call mn_org                     ; the window may have been dragged since
+                                    ; the card went up; BX = SI
     call OSAPI_WM_CLIP_SET          ; ...and nothing has armed a region for a
     jc .gone                        ; click or a key either (SPEC.md 11.3)
-    call mn_draw_status
-    call mn_draw_board
+    call mn_redraw
 .gone:
-    pop dx
-    pop bx
-    pop ax
     stc
-    ret
 .none:
-    clc
     ret
-
+; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 mn_tpl:
     dw 240, 120, 146, 183           ; x, y, w, h -> content 144 x 164
     dw mn_ttl, mn_paint, mn_onkey, mn_onclick
@@ -1034,99 +928,120 @@ mn_mi_game: dw mn_mi_new, mn_mi_flag   ; item order = mn_oncmd's AL ladder
 mn_mi_new:  db 'New Game', 0
 mn_mi_flag: db 'Flag Mode', 0
 
-mn_ttl:     db 'Minesweeper', 0
-
 ; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
 ; SHORT, because the card is clamped to the content box and this window's is
 ; 144px - eighteen cells, of which the card's own margins take three. The
 ; credit is two lines for that reason and not for a typographic one.
+;
+; PACKED (OS88UI_ABPACK, 20.5.1.1): the lines end to end, each with its NUL,
+; closed by OS88UI_ABEND - no pointer table. The first line IS the window's
+; title, so mn_ttl names the same bytes.
 mn_ablines:
-    dw mn_ab1, mn_ab2, mn_ab3, mn_ab4, mn_ab5, 0
-mn_ab1:     db 'Minesweeper', 0
-mn_ab2:     db 'for os8088', 0
-mn_ab3:     db 0
-mn_ab4:     db 'Contributed by', 0
-mn_ab5:     db 'Jorge Gonzalez', 0
-mn_s_flag:  db 'F=FLAG', 0
-mn_s_boom:  db 'BOOM! N=NEW', 0
-mn_s_win:   db 'YOU WIN!', 0
+mn_ttl:     db 'Minesweeper', 0     ; the title, and the card's first line
+            db 'for os8088', 0
+            db 0
+            db 'Contributed by', 0
+            db 'Jorge Gonzalez', 0
+            db OS88UI_ABEND
+; the strip's three lines, each led by its centred x in the 144px strip -
+; (144 - 8 * length) / 2, what mn_draw_status used to ask OSAPI_FONT_WIDTH
+; for on every repaint
+%macro MN_CTEXT 2
+  %strlen %%n %2
+%1: db (MN_BOARD_W - 8 * %%n) / 2, %2, 0
+%endmacro
+    MN_CTEXT mn_s_flag, 'F=FLAG'
+    MN_CTEXT mn_s_boom, 'BOOM! N=NEW'
+    MN_CTEXT mn_s_win,  'YOU WIN!'
 
-; pinned digit colours, indexed by adjacent-mine count 1..8 (SPEC.md 23)
+; pinned digit colours, indexed by adjacent-mine count 1..8 (SPEC.md 23) -
+; read as [mn_digcol - 1 + count], so there is no entry for a 0
 mn_digcol:
-    db 0                            ; [0] unused
     db CBLUE, CGREEN, CRED, CMAGENTA, CBROWN, CCYAN, CBLACK, CDGRAY
 
-; --- cell shape lists: db colour, x1, y1, x2, y2 (cell-relative); 0xFF ends ----
-mn_sh_covered:                      ; light gray face, 2px bevels
-    db CLGRAY,  0,  0, 15, 15
-    db CWHITE,  0,  0, 15,  1       ; top bevel
-    db CWHITE,  0,  0,  1, 15       ; left bevel
-    db CDGRAY,  0, 14, 15, 15       ; bottom bevel
-    db CDGRAY, 14,  0, 15, 15       ; right bevel
+; --- cell shape lists (mn_shape): MN_SC + colour, then that colour's rects as
+; x1, y1, x2, y2 (cell-relative, inclusive); 0xFF ends the list -------------
+MN_SC        equ 16                 ; above every coordinate (0..15)
+mn_sh_covered:                      ; light gray face, 2px bevels - and
+                                    ; mn_sh_flag MUST follow it (mn_draw_cell)
+    db MN_SC + CLGRAY
+    db          0,  0, 15, 15
+    db MN_SC + CWHITE
+    db          0,  0, 15,  1       ; top bevel
+    db          0,  0,  1, 15       ; left bevel
+    db MN_SC + CDGRAY
+    db          0, 14, 15, 15       ; bottom bevel
+    db         14,  0, 15, 15       ; right bevel
     db 0xFF
 
 mn_sh_flag:                         ; overlay on a covered cell
-    db CBLACK,  8,  3,  8, 11       ; mast
-    db CBLACK,  6, 12, 10, 12       ; base
-    db CLRED,   4,  3,  7,  7       ; pennant
+    db MN_SC + CBLACK
+    db          8,  3,  8, 11       ; mast
+    db          6, 12, 10, 12       ; base
+    db MN_SC + CLRED
+    db          4,  3,  7,  7       ; pennant
     db 0xFF
 
-mn_sh_open:                         ; white face, 1px dark gray grid border
-    db CWHITE,  0,  0, 15, 15
-    db CDGRAY,  0,  0, 15,  0
-    db CDGRAY,  0,  0,  0, 15
-    db CDGRAY, 15,  0, 15, 15
-    db CDGRAY,  0, 15, 15, 15
+mn_sh_open:                         ; white face, 1px dark gray grid border:
+                                    ; a gray square, a white one inside it -
+                                    ; two fills, less flash (SPEC.md 23)
+    db MN_SC + CDGRAY
+    db          0,  0, 15, 15
+    db MN_SC + CWHITE
+    db          1,  1, 14, 14
     db 0xFF
 
-mn_sh_bggray:                       ; loss backgrounds under the mine glyph
-    db CLGRAY,  0,  0, 15, 15
-    db 0xFF
-
-mn_sh_bgred:
-    db CLRED,   0,  0, 15, 15
-    db 0xFF
-
+mn_sh_bg:                           ; loss: the ground under the mine glyph,
+    db 0                            ; its MN_SC + colour written by
+    db          0,  0, 15, 15       ; mn_draw_minecell
 mn_sh_mine:                         ; black disc with spokes
-    db CBLACK,  5,  5, 10, 10       ; disc core
-    db CBLACK,  6,  4,  9,  4       ; rounded top / bottom / left / right
-    db CBLACK,  6, 11,  9, 11
-    db CBLACK,  4,  6,  4,  9
-    db CBLACK, 11,  6, 11,  9
-    db CBLACK,  7,  2,  8, 13       ; vertical spoke
-    db CBLACK,  2,  7, 13,  8       ; horizontal spoke
-    db CBLACK,  3,  3,  4,  4       ; diagonal spoke nubs
-    db CBLACK, 11,  3, 12,  4
-    db CBLACK,  3, 11,  4, 12
-    db CBLACK, 11, 11, 12, 12
+    db MN_SC + CBLACK
+    db          5,  5, 10, 10       ; disc core
+    db          6,  4,  9, 11       ; the rounding: the core grown by a row
+    db          4,  6, 11,  9       ; ...and by a column (two rects for four)
+    db          7,  2,  8, 13       ; vertical spoke
+    db          2,  7, 13,  8       ; horizontal spoke
+    db          3,  3,  4,  4       ; diagonal spoke nubs
+    db         11,  3, 12,  4
+    db          3, 11,  4, 12
+    db         11, 11, 12, 12
     db 0xFF
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; the standard About card, and NOTHING else:
 %define OS88UI_NOBTN            ; Minesweeper's cell is its own game's chrome
-%include "os88ui.inc"           ; (os88ui.inc's own header says so) and it
-                                ; draws no standard button anywhere
+%define OS88UI_ABPACK           ; (os88ui.inc's own header says so), it draws
+%include "os88ui.inc"           ; no standard button anywhere, and its card's
+                                ; lines are packed end to end (mn_ablines)
 
     OS88_BSS MN_BSS_TOTAL
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
 ; All zero = fresh game: covered board, no mines placed (MN_M_FRESH), flag
-; mode off, nothing revealed. mn_mine/mn_state/mn_adj must stay contiguous -
-; the 'N' handler wipes all three as one 243-byte run.
-mn_mine     equ os88_image_end + 0   ; 81 bytes: 1 = mine here
-mn_state    equ os88_image_end + 81  ; 81 bytes: MN_S_COVER / FLAG / OPEN
-mn_adj      equ os88_image_end + 162 ; 81 bytes: adjacent-mine counts 0..8
-mn_queue    equ os88_image_end + 243 ; 81 words: flood-fill queue
-mn_qhead    equ os88_image_end + 405 ; word: queue read index
-mn_qtail    equ os88_image_end + 407 ; word: queue write index
-mn_ox       equ os88_image_end + 409 ; word: content left (per handler call)
-mn_oy       equ os88_image_end + 411 ; word: content top
-mn_flags    equ os88_image_end + 413 ; byte: flags currently placed
-mn_mode     equ os88_image_end + 414 ; byte: MN_M_*
-mn_flagmode equ os88_image_end + 415 ; byte: 1 = clicks flag instead of reveal
-mn_revealed equ os88_image_end + 416 ; byte: open safe cells (win at 71)
-mn_boom     equ os88_image_end + 417 ; byte: the mine cell that was clicked
-mn_nbuf     equ os88_image_end + 418 ; 8 bytes: mn_nlist output
-mn_abon     equ os88_image_end + 426 ; byte: the About card is up
-                                    ; total 427 = MN_BSS_TOTAL
+; mode off, nothing revealed. mn_cmd_new wipes the first MN_WIPE bytes - the
+; cells and the three counters after them - so those four must stay in this
+; order and contiguous; flag mode, which a new game keeps, comes after.
+mn_cell     equ os88_image_end + 0   ; 81 bytes: MN_C_* bits + adjacent count
+mn_flags    equ os88_image_end + 81  ; byte: flags currently placed
+mn_revealed equ os88_image_end + 82  ; byte: open safe cells (win at 71)
+mn_mode     equ os88_image_end + 83  ; byte: MN_M_*
+MN_WIPE     equ 84                   ; mn_cmd_new's run: mn_cell .. mn_mode
+mn_boom     equ os88_image_end + 84  ; byte: the mine cell that was clicked
+mn_flagmode equ os88_image_end + 85  ; byte: 1 = clicks flag instead of reveal
+mn_abon     equ os88_image_end + 86  ; byte: the About card is up
+mn_ox       equ os88_image_end + 87  ; word: content left (per handler call)
+mn_oy       equ os88_image_end + 89  ; word: content top
+mn_xpts     equ os88_image_end + 91  ; MN_XPTN x,y pairs: the wrong-flag X,
+                                     ; composed once and drawn in one call
+                                     ; total 91 + 80 = MN_BSS_TOTAL
+; ...and inside mn_xpts, the two buffers only a LIVE board uses. The X is
+; drawn only on a LOST board, so they never meet: mn_nbuf (mn_nlist's
+; output, 9 bytes - the cell's whole 3x3 block) and then the flood queue,
+; which holds at most MN_SAFE cells because only safe cells are ever queued
+; (mn_reveal). 9 + 71 is exactly the 80 the X takes.
+mn_nbuf     equ mn_xpts              ; 9 bytes: mn_nlist output
+mn_queue    equ mn_xpts + 9          ; MN_SAFE bytes: the flood queue
+%if 9 + MN_SAFE > MN_XPTN * 4
+  %error "mines: mn_nbuf + the flood queue no longer fit inside mn_xpts"
+%endif

@@ -335,11 +335,12 @@ static void c64_irq_update(void)
         c64_icd[1] |= 0x80;
         c64_iasrt[1] = 1;
     }
-    nmi = c64_iasrt[1] ? 1 : 0;
+    nmi = c64_iasrt[1];                     /* 0 or 1 - its only writers */
 
     was = c64_scr_rd(C64_SCR_IRQ);
-    if (nmi && !c64_nmi_state)
-        was |= 0x02;                        /* the EDGE, latched for the core */
+    if (nmi)
+        if (!c64_nmi_state)
+            was |= 0x02;                    /* the EDGE, latched for the core */
     c64_nmi_state = nmi;
     if (line)
         was |= 0x01;
@@ -354,8 +355,9 @@ static void c64_irq_update(void)
      * set, and without this the machine would not notice until the next
      * alarm. c64_cut() moves the unspent countdown into CARRY, so ending the
      * run early costs nothing in the cycle accounting (4.4). */
-    if (c64_in_run && (was & 0x03) != 0)
-        c64_cut();
+    if (c64_in_run)
+        if ((was & 0x03) != 0)
+            c64_cut();
 }
 
 /* c64_nmi_raise - RESTORE (7.4). The edge is the point: holding the key does
@@ -375,20 +377,24 @@ static void c64_nmi_raise(void)
  * are counting phi2, the VIC raster compare, the frame end and the TOD tick.
  * There is no fixed quantum anywhere in this machine.
  * ========================================================================*/
-static int c64_ta_runs(int k)
-{
-    /* CRA: bit 0 START, bit 5 INMODE (1 = count CNT, which nothing here
-     * drives, so the timer does not count) */
-    return ((c64_cia[k][0x0E] & 0x21) == 0x01) ? 1 : 0;
-}
-
-static int c64_tb_runs(int k)
-{
-    /* CRB bits 5-6 INMODE: 00 = phi2. 10 = count timer A underflows, which is
-     * not a phi2 alarm - it happens when timer A underflows, and that IS an
-     * alarm already. */
-    return ((c64_cia[k][0x0F] & 0x61) == 0x01) ? 1 : 0;
-}
+/* CRA: bit 0 START, bit 5 INMODE (1 = count CNT, which nothing here
+ * drives, so the timer does not count).
+ *
+ * CRB bits 5-6 INMODE: 00 = phi2. 10 = count timer A underflows, which is
+ * not a phi2 alarm - it happens when timer A underflows, and that IS an
+ * alarm already.
+ *
+ * MACROS AND NOT FUNCTIONS, and only ever the whole condition of an `if`.
+ * They were two functions answering `(...) ? 1 : 0`, called from the alarm
+ * scheduler and the timer step on every slice: SmallerC compiled each into a
+ * frame, a setcc, a cbw, a second test and a 0/1 select, and the caller then
+ * tested the answer again. As the condition of an `if` the compare is one
+ * `cmp` and one `jcc` - fewer bytes AND fewer instructions on every path,
+ * so the hot path only got shorter (apps size pass 1). */
+#define C64_TA_RUNS(k) ((c64_cia[k][0x0E] & 0x21) == 0x01)
+#define C64_TB_RUNS(k) ((c64_cia[k][0x0F] & 0x61) == 0x01)
+#define C64_TA_STOPPED(k) ((c64_cia[k][0x0E] & 0x21) != 0x01)
+#define C64_TB_STOPPED(k) ((c64_cia[k][0x0F] & 0x61) != 0x01)
 
 static int c64_rcmp_line(void)
 {
@@ -416,16 +422,18 @@ static int c64_alarm_next(void)
      * c64_advance over both CIAs, the VIC and the TOD. The nearest real alarm
      * is never further than the frame end (19,656), so nothing is lost. */
     for (k = 0; k < 2; k++) {
-        if (c64_ta_runs(k) && c64_ta[k] < (unsigned)0x7FFF) {
-            t = (int)c64_ta[k] + 1;
-            if (t < d)
-                d = t;
-        }
-        if (c64_tb_runs(k) && c64_tb[k] < (unsigned)0x7FFF) {
-            t = (int)c64_tb[k] + 1;
-            if (t < d)
-                d = t;
-        }
+        if (C64_TA_RUNS(k))
+            if (c64_ta[k] < (unsigned)0x7FFF) {
+                t = (int)c64_ta[k] + 1;
+                if (t < d)
+                    d = t;
+            }
+        if (C64_TB_RUNS(k))
+            if (c64_tb[k] < (unsigned)0x7FFF) {
+                t = (int)c64_tb[k] + 1;
+                if (t < d)
+                    d = t;
+            }
     }
     /* THE RASTER COMPARE IS AN ALARM WHETHER OR NOT IT IS UNMASKED. $D019
      * bit 0 is a STATUS latch: vicii_irq_raster_set (vicii-irq.c:64) sets it
@@ -450,11 +458,16 @@ static int c64_alarm_next(void)
  * (ciacore.c:236-242). A match raises ICR bit 2, which is CIA_IM_TOD. */
 static void c64_tod_alarm(int k)
 {
-    if (c64_todt[k] == c64_alt[k] && c64_tods[k] == c64_als[k]
-        && c64_todm[k] == c64_alm[k] && c64_todh[k] == c64_alh[k]) {
-        c64_icd[k] |= 0x04;
-        c64_irq_update();
-    }
+    /* NESTED, not one `&&` chain: SmallerC turns every operand of a chain
+     * into a 0/1 value and tests it again, where a nested `if` is a compare
+     * and a branch (apps size pass 1) */
+    if (c64_todt[k] == c64_alt[k])
+        if (c64_tods[k] == c64_als[k])
+            if (c64_todm[k] == c64_alm[k])
+                if (c64_todh[k] == c64_alh[k]) {
+                    c64_icd[k] |= 0x04;
+                    c64_irq_update();
+                }
 }
 
 /* c64_tod_tick - one tenth of a second on the CIA's own mains accumulator.
@@ -469,7 +482,7 @@ static void c64_tod_alarm(int k)
  * 09, 0A..0F, 10 - six hours that do not exist - and never touched AM/PM. */
 static void c64_tod_tick(int k)
 {
-    int v, hl, hh, pm;
+    int v, h, pm;
 
     if (c64_todstop[k])
         return;                             /* stopped by a write to HOURS */
@@ -500,18 +513,22 @@ static void c64_tod_tick(int k)
         return;
     }
     c64_todm[k] = 0;
-    hl = c64_todh[k] & 0x0F;
-    hh = (c64_todh[k] >> 4) & 1;
+    /* The hours are BCD in bits 0-4 - `hh` is bit 4, `hl` bits 0-3 - and
+     * bits 5-6 are forced 0 by the write (0x9F), so the five bits are taken
+     * whole and compared as one byte rather than as two digits under a
+     * four-term `&&`/`||` (apps size pass 1). */
+    h = c64_todh[k] & 0x1F;
     pm = c64_todh[k] & 0x80;
-    if ((hh == 1 && hl == 2) || (hh == 0 && hl == 9)) {
-        hl = hh;                            /* 12 -> 01, and 09 -> 10 */
-        hh = hh ^ 1;
-    } else {
-        hl = (hl + 1) & 0x0F;
-        if (hh == 1 && hl == 2)
+    if (h == 0x12)
+        h = 0x01;                           /* 12 -> 01 */
+    else if (h == 0x09)
+        h = 0x10;                           /* 09 -> 10 */
+    else {
+        h = (h & 0x10) | ((h + 1) & 0x0F);
+        if (h == 0x12)
             pm = pm ^ 0x80;                 /* 11 -> 12 flips AM/PM */
     }
-    c64_todh[k] = (unsigned char)(hl | (hh << 4) | pm);
+    c64_todh[k] = (unsigned char)(h | pm);
     c64_tod_alarm(k);
 }
 
@@ -521,7 +538,7 @@ static void c64_tod_tick(int k)
 static void c64_timer_step(int k, int n)
 {
     unsigned c;
-    int under, casc, i, rem;
+    int under, i, rem;
 
     /* THE TWO TIMERS ARE ADVANCED FROM THE SAME ELAPSED COUNT, INDEPENDENTLY,
      * and that is what `rem` is for. Timer A's loop used to consume and
@@ -533,7 +550,7 @@ static void c64_timer_step(int k, int n)
      * other (src/core/ciacore.c:937); only the CASCADE mode consumes timer
      * A's underflows, which is the branch below. */
     under = 0;
-    if (c64_ta_runs(k)) {
+    if (C64_TA_RUNS(k)) {
         rem = n;
         c = c64_ta[k];
         /* THE COMPARE IS UNSIGNED, AND THAT IS NOT A STYLE CHOICE. `c` is a
@@ -561,8 +578,7 @@ static void c64_timer_step(int k, int n)
         }
         c64_ta[k] = (unsigned)(c - (unsigned)rem);
     }
-    casc = ((c64_cia[k][0x0F] & 0x61) == 0x41) ? 1 : 0;
-    if (casc) {
+    if ((c64_cia[k][0x0F] & 0x61) == 0x41) {  /* cascaded onto timer A */
         for (i = 0; i < under; i++) {
             if (c64_tb[k] == 0) {
                 c64_tb[k] = c64_lb[k];
@@ -576,7 +592,7 @@ static void c64_timer_step(int k, int n)
         }
         return;
     }
-    if (c64_tb_runs(k)) {
+    if (C64_TB_RUNS(k)) {
         rem = n;                            /* the SAME elapsed count timer A
                                              * saw, never what it left over */
         c = c64_tb[k];
@@ -689,13 +705,14 @@ static int c64_cia_rd(int k, int r)
     case 0x01:
         return (k == 0) ? c64_kbd_pb() : (int)c64_cia[1][0x01];
     case 0x04:
-        return (int)(c64_ta[k] & 0xFF);
+        return C64_LOB(c64_ta[k]);         /* a byte of the word, not a
+                                             * mask or a shift (C64_HIB) */
     case 0x05:
-        return (int)((c64_ta[k] >> 8) & 0xFF);
+        return C64_HIB(c64_ta[k]);
     case 0x06:
-        return (int)(c64_tb[k] & 0xFF);
+        return C64_LOB(c64_tb[k]);
     case 0x07:
-        return (int)((c64_tb[k] >> 8) & 0xFF);
+        return C64_HIB(c64_tb[k]);
     /* THE TOD READ LATCH (ciacore.c:1249-1270). Reading HOURS latches all
      * four registers and reading TENTHS releases them, so a program that
      * reads $0B..$08 cannot see the clock tick under it and read 10:59:59.9
@@ -739,19 +756,19 @@ static void c64_cia_wr(int k, int r, int v)
     c64_cia[k][r] = (unsigned char)v;
     switch (r) {
     case 0x04:
-        c64_la[k] = (c64_la[k] & 0xFF00) | (unsigned)(v & 0xFF);
+        C64_LOB(c64_la[k]) = (unsigned char)v;  /* the latch's low byte */
         return;
     case 0x05:
-        c64_la[k] = (c64_la[k] & 0x00FF) | (((unsigned)(v & 0xFF)) << 8);
-        if (!c64_ta_runs(k))                /* a stopped timer loads at once */
+        C64_HIB(c64_la[k]) = (unsigned char)v;  /* ...and its high byte */
+        if (C64_TA_STOPPED(k))              /* a stopped timer loads at once */
             c64_ta[k] = c64_la[k];
         return;
     case 0x06:
-        c64_lb[k] = (c64_lb[k] & 0xFF00) | (unsigned)(v & 0xFF);
+        C64_LOB(c64_lb[k]) = (unsigned char)v;
         return;
     case 0x07:
-        c64_lb[k] = (c64_lb[k] & 0x00FF) | (((unsigned)(v & 0xFF)) << 8);
-        if (!c64_tb_runs(k))
+        C64_HIB(c64_lb[k]) = (unsigned char)v;
+        if (C64_TB_STOPPED(k))
             c64_tb[k] = c64_lb[k];
         return;
     /* THE FOUR TOD REGISTERS ARE TWO SETS OF FOUR, AND CRB BIT 7 PICKS
@@ -845,14 +862,14 @@ static int c64_io_rd(unsigned a)
         p = a & 0x3F;
         if (p == 0x11)
             return (int)((c64_vic[0x11] & 0x7F)
-                         | ((c64_raster_now() & 0x100) ? 0x80 : 0));
+                         | ((c64_raster_now() >> 1) & 0x80));  /* bit 8 */
         if (p == 0x12)
             return c64_raster_now() & 0xFF;
         if (p == 0x19)
             return (int)(c64_vic[0x19] | 0x70);
         if (p == 0x1A)
             return (int)(c64_vic[0x1A] | 0xF0);
-        if (p == 0x1E || p == 0x1F)
+        if ((p & 0x3E) == 0x1E)             /* $1E or $1F */
             return 0;                       /* the collision registers answer
                                              * 0 and 5.3 says why */
         return c64_vic[p];
@@ -916,16 +933,23 @@ static void c64_io_wr(unsigned a, int v)
         if (old == (unsigned char)v)
             return;                         /* nothing moved: nothing to draw */
         /* a FRAME REGISTER changes every row by itself (9.2), and $D021
-         * changes what every colour resolves to in 1bpp (9.6) */
-        if (r == 0x11 || r == 0x16 || r == 0x18) {
+         * changes what every colour resolves to in 1bpp (9.6). A SWITCH and
+         * not an `||` chain: SmallerC makes a switch one `cmp`/`je` a case,
+         * and an `||` chain a 0/1 value per operand (apps size pass 1) */
+        switch (r) {
+        case 0x11:
+        case 0x16:
+        case 0x18:
             c64_frame_regs();               /* the matrix may have moved: the
                                              * core's write window watches the
                                              * NEW one from here on (9.2) */
             c64_dirty_all();
-        } else if (r == 0x21) {
+            break;
+        case 0x21:
             c64_lum_update();
             c64_dirty_all();
-        } else if (r == 0x20) {
+            break;
+        case 0x20:
             /* $D020 IS THE BORDER'S OWN LEVEL, AND c64_lum_update DECIDES.
              * It raises c64_border_dirty only when the mono level FLIPS -
              * colour 14 to 15 over background 6 is still `lighter than the
@@ -939,6 +963,7 @@ static void c64_io_wr(unsigned a, int v)
                 c64_dirty_any = 1;          /* ...and only a border that will
                                              * LOOK different is a reason to
                                              * flush at all */
+            break;
         }
         return;
     }
@@ -977,10 +1002,11 @@ static void c64_io_wr(unsigned a, int v)
          * user port, and the KERNAL bit-bangs CLK and DATA through them for
          * every byte it loads from drive 8 - so dirtying on any write to
          * $DD00 was a full-screen repaint per serial edge. */
-        if (r == 0x00 && (((unsigned char)v ^ old) & 3) != 0) {
-            c64_frame_regs();               /* the matrix moved with the bank */
-            c64_dirty_all();
-        }
+        if (r == 0x00)
+            if ((((unsigned char)v ^ old) & 3) != 0) {
+                c64_frame_regs();           /* the matrix moved with the bank */
+                c64_dirty_all();
+            }
         return;
     }
 }
@@ -1043,9 +1069,10 @@ static int c64_sid_voice1(void)
      * near neighbour). The hex form is the unsigned bit pattern and reaches
      * c64_muldiv, whose arithmetic is unsigned, as 65,535. */
 #define C64_SIDDIV 0xFFFF
-    f = ((unsigned)c64_sid[0x00]) | (((unsigned)c64_sid[0x01]) << 8);
+    f = C64_W(c64_sid);                     /* $D400 low, $D401 high */
     hz = (int)c64_muldiv(f, 3848, C64_SIDDIV);
-    if (hz < 20 || hz > 12000) {
+    if ((unsigned)(hz - 20) > (unsigned)(12000 - 20)) {   /* hz < 20, or
+                                             * hz > 12000, in one compare */
         os88_snd_tone(0, 0, 0x40);
         return 0;
     }
@@ -1069,8 +1096,8 @@ static void c64_reset_cpu(void)
     c64_m.cnt = 0;
     c64_m.reason = 0;
     c64_map_publish();
-    c64_m.pc = (unsigned)c64_bread(0xFFFC)
-             | (((unsigned)c64_bread(0xFFFD)) << 8);
+    c64_m.pc = (unsigned)c64_bread(0xFFFC);
+    C64_HIB(c64_m.pc) = (unsigned char)c64_bread(0xFFFD);
     c64_scr_wr(C64_SCR_IRQ, 0);
     c64_nmi_state = 0;
 }

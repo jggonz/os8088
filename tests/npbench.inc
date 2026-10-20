@@ -218,7 +218,7 @@ npb_b_measure:                  ; the UNBOUNDED walk - what a resize cost before
     mov si, [np_win]            ; SPEC.md 27.7.5 bounded it, and what the
     mov word [np_hity], 0xFFFF  ; caret-follow safety net still costs when the
     mov word [np_wanty], 0xFFFF ; caret is outside the view
-    mov byte [np_draw], 0       ; (docs/NOTEPAD-NOTES.md 1.4)
+    mov byte [np_draw], 0       ; (docs/plans/completed/NOTEPAD-NOTES.md 1.4)
     mov byte [np_sigup], 0
     mov byte [np_clip], 0
     mov byte [np_resume], 0
@@ -351,7 +351,7 @@ npb_run:
     pop ax
     ret
 
-npb_h1: db 'NPBENCH - os8088 Note Pad, the walk timed (docs/NOTEPAD-NOTES.md)', 0
+npb_h1: db 'NPBENCH - os8088 Note Pad, the walk timed (docs/plans/completed/NOTEPAD-NOTES.md)', 0
 npb_h2: db 'note: len=', 0
 npb_h3: db '  rows=', 0
 npb_h4: db '  vrows=', 0

@@ -27,8 +27,9 @@ Then tell the agent what you want, and make it read `SPEC.md` first.
 ## 1. Toolchain
 
 Three tools do everything: **nasm** (assembler), **qemu-system-i386**
-(emulator), **python3** (the packaging and test tooling). Plus `git` and
-`make`, which you probably have. There is no linker and no cross-compiler —
+(emulator), **python3** 3.11 or newer (the packaging and test tooling, which
+imports `tomllib` — Apple's `/usr/bin/python3` is 3.9 and fails every
+`make`). Plus `git` and `make`, which you probably have. There is no linker and no cross-compiler —
 NASM emits flat binaries directly.
 
 Optional: **gitleaks** (the pre-commit hook wants it), **gdb** (for
@@ -53,7 +54,8 @@ Xcode Command Line Tools supply `make` and `git` (`xcode-select --install`).
 Both spellings work on Apple Silicon and on Intel, and neither wants Rosetta:
 Homebrew's qemu is a native arm64 binary that *emulates* x86, and 86Box ships
 a universal build. What the script does that the three `brew` lines do not is
-**check the nasm version** (below) and **install the 86Box ROM set**, which is
+**check the nasm and python3 versions** (below; a Homebrew python3 shadowed
+by Apple's 3.9 is reported with where it is) and **install the 86Box ROM set**, which is
 the step that is easiest to miss — 86Box ships with no ROMs at all, so without
 them it launches fine and then every machine in `vm/` fails at the BIOS.
 `tools/setup-macos.sh --dry-run` prints what it would do and changes nothing;
@@ -72,6 +74,36 @@ left is memory-indirect (`call far [bx+DRVR_DISP]`), which 2.x has always
 taken. Verified: a clean `make` under 2.16.01 assembles the whole tree with
 zero warnings and reproduces every artifact this branch used to ship, byte for
 byte. Homebrew's nasm is 3.x and is fine too; nothing here needs it.
+
+**A floor of 2 does not make 3.x equivalent, and there is a soak row about
+that.** nasm 3 *refuses* constructs 2.x accepts — `add di, mod_fp -
+mod_tab*7` in `kernel/mod.inc` is `invalid operand type` there and silent
+under 2.16 — so the tree can be assembled every day by 2.16 here and be
+un-buildable for everyone whose only assembler is 3.x. That has happened
+(commit 799c5a9). `python3 tools/os88test.py soak -k nasm3` is the gate:
+it assembles the shipped set, `kern_small`, the `APP_SMALL` package arms,
+`kern_emu` and every knob arm with an nasm 3, in a build tree of its own.
+It needs one to run and **SKIPS** without one, which on Linux means building
+it — no distribution packages a 3.x yet (Ubuntu noble is 2.16.01, Debian
+trixie 2.16.03). One command:
+
+```
+tools/setup-nasm3.sh
+```
+
+It probes first, so on macOS — where `brew install nasm` is already 3.x —
+it exits at once having done nothing; on Linux it clones, builds and prints
+the `export OS88_NASM3=` line to paste. `python3 tools/os88soak.py check`
+says which of the two you are in.
+
+**Do not do it by hand in a container.** The four lines that used to be
+printed here are correct and still do not work there, because the route has
+three traps that each report as something else — a proxy that refuses
+`nasm.us` while GitHub's own 403s make it look like the whole network is
+down, a git tree that ships no `configure`, and a `/dev/null` that is a
+regular file and silently corrupts the `config.status` autoconf generates.
+The script checks all three *before* it clones;
+docs/MARTYPC-DEBUG.md's *An nasm 3 in a fresh container* is the account.
 
 ### Linux
 
@@ -92,6 +124,10 @@ Arch:
 ```
 sudo pacman -S nasm qemu-system-x86 python make git
 ```
+
+The `python3` has to be **3.11 or newer**, which an older release's archive
+is not (Ubuntu 22.04's is 3.10): install a newer one and put it first in PATH
+as `python3`. `tools/setup-linux.sh --check` says which you have.
 
 gitleaks: your distro may package it (`apt install gitleaks`,
 `pacman -S gitleaks`); otherwise grab a release binary from
@@ -179,8 +215,8 @@ What happens, and what it needs from you:
 2. **It asks where the original is.** Either it scans this directory and the
    one above for git checkouts and lets you pick, or you give it a list of
    repositories to clone into a scratch directory. The reference source stays
-   *outside* this repo — nothing is vendored (§6 below); the port quotes
-   strings, tables and formats and cites the file.
+   *outside* this repo; the port quotes strings, tables and formats and cites
+   the file.
 3. **It scouts, with a team of agents** (this is the "ultracode" multi-agent
    orchestration; invoking the skill authorises it), and drafts a plan: which
    file of the original is the authority for each menu, key, dialog and
@@ -192,7 +228,7 @@ What happens, and what it needs from you:
    cut that changes what ships, which of two file formats, whether to spend an
    API slot, which reference wins when two disagree — with its recommendation
    first. Everything else it decides and writes into `SPEC.md` (a new section,
-   before the code, as always) and `docs/<NAME>-PORT-PLAN.md`.
+   before the code, as always) and `docs/plans/<NAME>-PORT-PLAN.md`.
 5. **It builds one wave at a time**: an implementer builds through the
    compiler gate and the host harness and boots the result; three reviewers
    check the four C rules and the budget, the redraw cost, and fidelity to
@@ -409,8 +445,6 @@ make clean && make          # both geometries, no warnings (-w+error is on)
   with it, credential-shaped data is refused. `SKIP_GITLEAKS=1 git commit`
   bypasses it deliberately (for fixtures that are *meant* to look like keys).
 - **Don't commit `build/`.** It's gitignored; keep it that way.
-- **No vendored third-party code.** Everything in the OS is hand-written and
-  the whole tree is MIT under one license file. A dependency would break that.
 
 Commit messages here are a subject line that says what changed, then a
 paragraph or two on *why* and what it cost. Look at `git log` for the shape.
@@ -431,9 +465,8 @@ A good PR body says:
 - whether you checked the 360KB build or only QEMU.
 
 Things that won't merge: 186+ instructions, anything that breaks the 256KB /
-0xA000 budget, vendored code, changes to interfaces without the matching
-SPEC.md update, and features that only work in QEMU when they didn't have to
-be.
+0xA000 budget, changes to interfaces without the matching SPEC.md update, and
+features that only work in QEMU when they didn't have to be.
 
 ## Questions and security
 

@@ -24,7 +24,6 @@ import os
 import shutil
 import struct
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -64,16 +63,34 @@ def main():
     with os88marty.launch(BAD, apps=APPS, machine="os8088_5150_cga_gla",
                           boot=False) as m:
         m.run()
+        tick = lambda: int.from_bytes(m.read(0x46C, 2), "little")
         booted = False
-        for _ in range(45):
-            time.sleep(1.0)
+        # Until it boots or HALTS, in guest time. A BIOS tick that has run and
+        # then held still for three guest seconds is stage 1's `cli`/`hlt`,
+        # which nothing comes back from; the assertions below re-check both.
+        seen = {"t": -1, "c": 0}
+
+        def over(_):
+            nonlocal booted
             if (m.read(lin_entry, 1)[0] == 0xE9
                     and os88marty._Screen(m).field > 0.9):
                 booted = True
-                break
-        a = int.from_bytes(m.read(0x46C, 2), "little")
-        time.sleep(2.0)
-        b = int.from_bytes(m.read(0x46C, 2), "little")
+                return True
+            t, c = tick(), int(m.status().get("cycles", 0))
+            if t != seen["t"]:
+                seen["t"], seen["c"] = t, c
+                return False
+            return t > 0 and (c - seen["c"]) / os88marty.GUEST_HZ > 3.0
+        try:
+            os88marty.until(m, over, "a desktop or a halt", poll=1.0,
+                            limit=45)
+        except os88marty.MartyError:
+            pass                    # the tick below reports what it did
+        a = tick()
+        # TIME, deliberately: is the BIOS clock still running? 2.25 guest
+        # seconds is ~40 ticks, and one is enough to say it is.
+        os88marty.pace(m, 0.5)
+        b = tick()
 
     print("  desktop=%s ; BIOS ticks %d -> %d" % (booted, a, b))
     if booted:

@@ -103,6 +103,8 @@ void os88_menu_set(void *win, struct os88_menuset *set);
 void os88_about_set(void *win);
 
 int  os88_task_spawn(void *win);
+int  os88_task_restartable(int on);   /* SPEC.md 66.6.2 - a stub here:
+                                       * the host has no heap to compact */
 void os88_task_sleep(int ticks);
 void os88_task_alive(void *win);
 int  os88_toast(const char *text, int ticks);
@@ -113,6 +115,10 @@ unsigned os88_ticks(void);
  * always answers 0 (C64-SPEC §7.2's rule 1: it is asked once, from
  * os88_main). Advice, not an oracle. The harness models both. */
 int  os88_key_down(int scan);
+
+/* SPEC.md 11.2.1.1's full-screen chord, mirrored from apps/cc/os88.h */
+#define OS88_SCAN_ENTER 0x1C
+#define OS88_SCAN_ALT   0x38
 int  os88_snd_caps(void);                        /* SND_CAP_* bits (11.4) */
 int  os88_snd_tone(int hz, int ticks, int prio);
 

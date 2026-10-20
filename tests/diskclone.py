@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Does Clone Disk... produce a disk that is byte for byte the source?
 
+(...bar BS_VolID, which SPEC.md 18.8.2.1 stamps fresh on every copy, so the
+row asserts it DIFFERS - from the source, and from the other clone.)
+
     python3 tests/diskclone.py
 
 SPEC.md 18.99 / 22.21.  The assertion that matters is not a screenshot: a
@@ -23,12 +26,13 @@ twenty:
      check must FIRE, and land on CLS_SAME rather than writing.
 
   3. **Esc.** At a prompt, which is the only place input is required - and the
-     claim and CLONE.DRV must both be gone afterwards (SPEC.md 22.21.2).
+     claim and DISKOPS.DRV must both be gone afterwards (SPEC.md 22.21.2).
 
   4. **`Write Img...`** as far as this machine can take it (SPEC.md 18.99.8).
      The round trip is NOT here: a 360KB disk's image is 720 sectors and a
-     360KB volume's data area is 708, so on the only floppy geometry MartyPC's
-     os8088 machines have there is nowhere to put one.  Everything up to the
+     360KB volume's data area is 708, so on this machine's two 360KB drives
+     there is nowhere to put one. `tests/wimgtrip.py` is the round trip, on
+     a machine with a 720KB B:.  Everything up to the
      transfer is here - the item, the dialog, and that a CANCEL puts the
      machine back exactly as it found it, which is the half SPEC.md 22.21.5
      says the command is built around.
@@ -46,6 +50,8 @@ sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
 sys.path.insert(0, "tests/unit")
 import os88marty as M                                     # noqa: E402
+import os88geom                                           # noqa: E402
+import os88ui                                             # noqa: E402
 from os88mouse import Mouse                               # noqa: E402
 import dispcp                                             # noqa: E402
 from harness import check, done                           # noqa: E402
@@ -58,10 +64,10 @@ APPS = "build/apps360.img"
 # there lands somewhere nothing then reads, or does not land at all.
 OUT = os.path.abspath(os.path.join("build", "clonetest"))
 
-# The File menu's title cell and the item pitch.  SPEC.md 22's own layout -
+# The Disk menu's title cell and the item pitch.  SPEC.md 22.28's layout -
 # titles at x 112/160/208/248, MENU_ITEM_H = 16 in a 19px bar - so item k's
 # centre is 28 + 16k and 'Clone Disk...' is item FM_ICLONE.
-FILE_X, BAR_Y = 120, 8
+DISK_X, BAR_Y = 256, 8
 ITEM0_Y, ITEM_H = 28, 16
 
 
@@ -74,25 +80,24 @@ def equ(path, name):
 
 
 FS_EDIT = equ("kernel/files.inc", "FS_EDIT")
-FS_SIZE = equ("kernel/files.inc", "FS_SIZE")
 FM_ICLONE = equ("kernel/files.inc", "FM_ICLONE")
 FM_IWIMG = equ("kernel/files.inc", "FM_IWIMG")
-CL_STEP = equ("kernel/clone.inc", "CL_STEP")
-CL_SRC = equ("kernel/clone.inc", "CL_SRC")
-CL_TGT = equ("kernel/clone.inc", "CL_TGT")
-CLS_PICK = equ("kernel/clone.inc", "CLS_PICK")
-CLS_SRC = equ("kernel/clone.inc", "CLS_SRC")
-CLS_TGT = equ("kernel/clone.inc", "CLS_TGT")
-CLS_SAME = equ("kernel/clone.inc", "CLS_SAME")
-CL_CHUNK = equ("kernel/clone.inc", "CL_CHUNK")
-CL_XON = equ("kernel/clone.inc", "CL_XON")
-CL_TOT = equ("kernel/clone.inc", "CL_TOT")
-CLE_IMG = 0xFE          # clone.inc's sentinel; not a decimal equ, so it is
+CL_STEP = equ("kernel/diskops.inc", "CL_STEP")
+CL_SRC = equ("kernel/diskops.inc", "CL_SRC")
+CL_TGT = equ("kernel/diskops.inc", "CL_TGT")
+CLS_PICK = equ("kernel/diskops.inc", "CLS_PICK")
+CLS_SRC = equ("kernel/diskops.inc", "CLS_SRC")
+CLS_TGT = equ("kernel/diskops.inc", "CLS_TGT")
+CLS_SAME = equ("kernel/diskops.inc", "CLS_SAME")
+CL_CHUNK = equ("kernel/diskops.inc", "CL_CHUNK")
+CL_XON = equ("kernel/diskops.inc", "CL_XON")
+CL_TOT = equ("kernel/diskops.inc", "CL_TOT")
+CLE_IMG = 0xFE          # diskops.inc's sentinel; not a decimal equ, so it is
                         # written here and asserted against the source below
-MOD_CLONE = equ("kernel/mod.inc", "MOD_CLONE")
-if not re.search(r"^CLE_IMG\s+equ\s+0x%02X" % CLE_IMG, open("kernel/clone.inc").read(),
+MOD_DISKOPS = equ("kernel/mod.inc", "MOD_DISKOPS")
+if not re.search(r"^CLE_IMG\s+equ\s+0x%02X" % CLE_IMG, open("kernel/diskops.inc").read(),
                  re.M | re.I):
-    sys.exit("tests/diskclone.py: CLE_IMG moved in kernel/clone.inc")
+    sys.exit("tests/diskclone.py: CLE_IMG moved in kernel/diskops.inc")
 MODR_SIZE = equ("kernel/mod.inc", "MODR_SIZE")
 
 
@@ -106,16 +111,33 @@ class Probe:
 
     def __init__(self, m):
         self.m = m
+        self.ui = os88ui.UI(m, verbose=False)
         self.pool = m.sym("fm_pool")
         self.clo_seg = m.sym("clo_seg")
         self.mod_tab = m.sym("mod_tab")
 
     def edit(self):
-        """The FS_EDIT of the first window that has one armed (0 = none)."""
-        for slot in range(4):
-            b = self.m.read(self.pool + slot * FS_SIZE, FS_SIZE)
-            if b[FS_EDIT]:
-                return b[FS_EDIT]
+        """The FS_EDIT of the first window that has one armed (0 = none).
+
+        EACH WINDOW'S OWN BLOCK, by the kernel's route (window -> instance
+        -> I_SPTR, os88ui's `_fsblk`), and not fm_pool at a stride. The
+        stride was `equ(FS_SIZE)`, whose first DECIMAL definition in
+        files.inc is kern_small's 24 - kern_big's is 61, an expression - so
+        this read slot 1's FS_SEL as slot 2's FS_EDIT. It was harmless while
+        only the user's first Disk window was open, and read 255 the moment
+        the Standard File chooser took a pool block of its own with nothing
+        selected (SPEC.md 38.1).
+        """
+        for w in os88geom.windows(self.m):
+            blk = self.ui._fsblk(w)
+            # ...and only a block IN THE DISK POOL: a package's instance has
+            # an I_SPTR of its own kind. Five blocks (FM_NSLOT), each well
+            # under 64 bytes on either build.
+            if blk is None or not 0 <= blk - self.pool < 5 * 64:
+                continue
+            e = self.m.read(blk + FS_EDIT, 1)[0]
+            if e:
+                return e
         return 0
 
     def claim(self):
@@ -135,19 +157,19 @@ class Probe:
         return b[0] | (b[1] << 8)
 
     def image(self):
-        """CLONE.DRV's MODR_SEG - 0 when the image is not resident."""
-        return word(self.m, self.mod_tab + MOD_CLONE * MODR_SIZE)
+        """DISKOPS.DRV's MODR_SEG - 0 when the image is not resident."""
+        return word(self.m, self.mod_tab + MOD_DISKOPS * MODR_SIZE)
 
 
 def open_clone(m, mo):
-    """File > Clone Disk..., and settle."""
-    mo.menu(FILE_X, BAR_Y, FILE_X + 30, ITEM0_Y + FM_ICLONE * ITEM_H)
+    """Disk > Clone Disk..., and settle."""
+    mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_ICLONE * ITEM_H)
     M.settle(m)
 
 
 def open_wimg(m, mo):
-    """File > Write Img..., and settle."""
-    mo.menu(FILE_X, BAR_Y, FILE_X + 30, ITEM0_Y + FM_IWIMG * ITEM_H)
+    """Disk > Write Image..., and settle."""
+    mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_IWIMG * ITEM_H)
     M.settle(m)
 
 
@@ -157,18 +179,47 @@ def toast(m):
     return b.split(b"\x00")[0].decode("ascii", "replace").rstrip()
 
 
+# BS_VolID, the one field a clone does NOT copy (SPEC.md 18.8.2.1): the
+# target is stamped with a serial of its own on the way down, so that the two
+# disks do not sign the same (dsk_bpb_sig) and a quiet mount cannot take one
+# for the other. Every other byte of both disks must still agree.
+VOLID = slice(39, 43)
+
+
+def unserial(d):
+    """The disk with its serial blanked - what 'an exact copy' now means."""
+    return d[:VOLID.start] + bytes(4) + d[VOLID.stop:]
+
+
+def serial(d):
+    return int.from_bytes(d[VOLID], "little")
+
+
 def disks_agree(m, tag):
+    """B: against A:, byte for byte bar the serial. Answers B:'s serial."""
     os.makedirs(OUT, exist_ok=True)
     a = os.path.join(OUT, "a.img")
     b = os.path.join(OUT, "b.img")
     m.flush(0, a)
     m.flush(1, b)
     da, db = open(a, "rb").read(), open(b, "rb").read()
-    check(da == db, "%s: B: is byte for byte A:" % tag,
+    check(da[38] == 0x29, "%s: the source carries the extended BPB" % tag,
+          "the fixture's own precondition: only a 0x29 boot sector has a "
+          "serial to stamp, so without it the next check proves nothing",
+          got=da[38], want=0x29)
+    check(unserial(da) == unserial(db),
+          "%s: B: is byte for byte A:, bar the serial" % tag,
           "a clone is an EXACT copy or it is nothing - a file copy would "
           "agree about the files and differ about the boot sector, the free "
           "clusters and the layout (SPEC.md 18.99)",
           got=db, want=da)
+    check(serial(da) != serial(db),
+          "%s: ...and B: carries a SERIAL OF ITS OWN" % tag,
+          "SPEC.md 18.8.2.1: clo_fin stamps the copy. An equal serial is a "
+          "twin of its source, which signs the same, and a quiet mount on one "
+          "keeps the other's FAT window and cached sectors",
+          got="%08X" % serial(db), want="not %08X" % serial(da))
+    return serial(db)
 
 
 with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
@@ -182,7 +233,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     open_clone(m, mo)
     check(p.edit() == 7, "the pick prompt is armed",
           "FS_EDIT 7 is the cloner's one mode (SPEC.md 22.21.1); 0 means "
-          "fm_c_clone refused and 6 means it could not read CLONE.DRV",
+          "fm_c_clone refused and 6 means it could not read DISKOPS.DRV",
           got=p.edit(), want=7)
     check(p.claim() != 0, "...and the job block is claimed",
           "[clo_seg] IS the operation (SPEC.md 18.99.1)")
@@ -201,8 +252,8 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     check(p.edit() == 0, "the mode ended", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...the claim went back (SPEC.md 22.21.2)", "",
           got=p.claim(), want=0)
-    check(p.image() == 0, "...and so did CLONE.DRV", "", got=p.image(), want=0)
-    disks_agree(m, "cross drive")
+    check(p.image() == 0, "...and so did DISKOPS.DRV", "", got=p.image(), want=0)
+    first = disks_agree(m, "cross drive")
 
     # --- 2. same drive, and the disk was never swapped -----------------------
     open_clone(m, mo)
@@ -268,10 +319,21 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     after = os.path.join(OUT, "after.img")
     m.flush(0, after)
     da, db = open(before, "rb").read(), open(after, "rb").read()
-    check(da == db, "a disk cloned onto itself is unchanged",
+    check(unserial(da) == unserial(db),
+          "a disk cloned onto itself is unchanged, bar the serial",
           "every sector was read and written back, sector 0 last - a wrong "
           "buffer offset, a wrong LBA or a lost sector 0 all show here",
           got=db, want=da)
+    check(serial(db) != serial(da),
+          "...and the copy is STAMPED: its serial moved",
+          "SPEC.md 18.8.2.1 - the copy's base is the source's serial and the "
+          "moment is added to it, so it cannot come back the same",
+          got="%08X" % serial(db), want="not %08X" % serial(da))
+    check(serial(db) != first,
+          "...and differs from the FIRST clone of the same source",
+          "two disks cloned from one source, minutes apart, must not be twins "
+          "of each other either - the stamp is the moment, not a constant",
+          got="%08X" % serial(db), want="not %08X" % first)
 
     # --- 4. Esc, at a prompt -------------------------------------------------
     open_clone(m, mo)
@@ -280,17 +342,17 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     M.settle(m)
     check(p.edit() == 0, "Esc ends it where it stands", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...the claim goes back", "", got=p.claim(), want=0)
-    check(p.image() == 0, "...and CLONE.DRV with it",
+    check(p.image() == 0, "...and DISKOPS.DRV with it",
           "fm_edit_end is the one place both happen (SPEC.md 22.21.2)",
           got=p.image(), want=0)
     check(p.claim() == 0 and p.edit() == 0,
           "...and the machine is still answering afterwards", "")
 
     # --- 5. Write Img..., and what it refuses (SPEC.md 18.99.8) -------------
-    # THE ROUND TRIP IS NOT TESTED HERE AND CANNOT BE: an image of a 360KB
-    # disk is 720 sectors and a 360KB volume's data area is 708, so on the
-    # only floppy geometry MartyPC's machines have (`pcxt_2_360k_floppies`,
-    # every os8088 config in ibm5150.toml) there is nowhere to put one. What
+    # THE ROUND TRIP IS NOT TESTED HERE: an image of a 360KB disk is 720
+    # sectors and a 360KB volume's data area is 708, so on this machine's
+    # `pcxt_2_360k_floppies` there is nowhere to put one. tests/wimgtrip.py
+    # is the round trip, on os8088_5150_cga_720b_gla's 720KB B:. What
     # IS on this machine is every part of the command up to the transfer -
     # the menu item, the resident thunk, fdlg_open's fence, the completion
     # proc, the module load and the geometry table - and the refusal exercises
@@ -307,7 +369,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
           "would be left with nothing to end it",
           got=p.edit(), want=0)
     check(p.claim() == 0, "...and claims nothing", "", got=p.claim(), want=0)
-    check(p.image() == 0, "...and does not load CLONE.DRV either",
+    check(p.image() == 0, "...and does not load DISKOPS.DRV either",
           "the completion proc loads it, for the same cancel (SPEC.md 22.21.5)",
           got=p.image(), want=0)
 
@@ -326,7 +388,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
           got=word(m, m.sym("fdlg_win")), want=0)
     check(p.edit() == 0, "...leaving no mode armed", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...no claim outstanding", "", got=p.claim(), want=0)
-    check(p.image() == 0, "...and CLONE.DRV not resident",
+    check(p.image() == 0, "...and DISKOPS.DRV not resident",
           "a cancel calls nothing back, so an image loaded before the dialog "
           "would never be dropped (SPEC.md 22.21.5)",
           got=p.image(), want=0)

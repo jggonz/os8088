@@ -35,6 +35,15 @@ hd_req:      times HRQ_SIZE db 0    ; the request block most verbs read
 ; [hd_rsvc] would be read out of the resident's image. CS is untouched, so
 ; the far pointer stays reachable through a `cs:` override.
 ; -----------------------------------------------------------------------------
+hd_svc_req:                     ; ...the same, with SI = hd_req and AX and SI
+    push ax                     ; given back: every verb but HSV_SYNC reads that
+    push si                     ; block and answers in it
+    mov si, hd_req
+    call hd_svc_call
+    pop si
+    pop ax
+    ret
+
 hd_svc_call:
     push ds
     push bp
@@ -73,7 +82,6 @@ hd_dev_ix:
 ; -----------------------------------------------------------------------------
 hd_raw:
     push ax
-    push si
     mov [hd_req+HRQ_LBA], ax
     mov [hd_req+HRQ_LBA+2], dx
     mov [hd_req+HRQ_OFS], bx
@@ -84,10 +92,8 @@ hd_raw:
     mov [hd_req+HRQ_OP], al
     call hd_dev_ix
     mov [hd_req+HRQ_DEV], al
-    mov si, hd_req
     mov al, HSV_RAW
-    call hd_svc_call
-    pop si
+    call hd_svc_req
     pop ax
     ret
 
@@ -115,6 +121,12 @@ hd_sync:
     call hd_svc_call
     mov [hd_ndev], al
     mov [hd_sel], ah
+    mov al, HSV_STATE           ; ...and the three bytes that do not fit AX,
+    call hd_svc_req             ; in a verb of their own (hddabi.inc)
+    mov al, [hd_req+HRQ_RES]
+    mov [hd_msgc], al           ; the caption the resident last set...
+    mov al, [hd_req+HRQ_VOL]
+    mov [hd_mntmask], al        ; ...and which devices have a volume up
     pop si
     pop ax
     ret
@@ -139,17 +151,14 @@ hd_sync:
 ; -----------------------------------------------------------------------------
 hd_mount_one:
     push ax
-    push si
     mov [hd_req+HRQ_DEV], al
     mov al, [hd_pslot]
     mov [hd_req+HRQ_SLOT], al
     mov byte [hd_req+HRQ_RES], 0xFF
-    mov si, hd_req
     mov al, HSV_MOUNT
-    call hd_svc_call
+    call hd_svc_req
     mov al, [hd_req+HRQ_RES]
     mov [hd_mvol], al
-    pop si
     pop ax
     ret
 
@@ -165,7 +174,6 @@ hd_mount_one:
 ; -----------------------------------------------------------------------------
 hd_tw_unmount_slot:
     push ax
-    push si
     mov [hd_req+HRQ_SLOT], al
     mov [hd_req+HRQ_DEV], ah    ; THE DEVICE IS AN ARGUMENT, and it used to be
                                 ; [hd_tdev] - which is the TOOL WINDOW's
@@ -177,14 +185,12 @@ hd_tw_unmount_slot:
                                 ; nobody's (SPEC.md 52.10.8)
     mov byte [hd_req+HRQ_RES], 0
     mov byte [hd_req+HRQ_VOL], 0xFF
-    mov si, hd_req
     mov al, HSV_UNMOUNT
-    call hd_svc_call
+    call hd_svc_req
     mov al, [hd_req+HRQ_RES]
     mov [hd_tdrop], al
     mov al, [hd_req+HRQ_VOL]
     mov [hd_tdropv], al
-    pop si
     pop ax
     ret
 
@@ -196,13 +202,8 @@ hd_tw_unmount_slot:
 ; -----------------------------------------------------------------------------
 hd_cfg_mark:
     push ax
-    push si
-    mov si, hd_req
     mov al, HSV_CFGMARK
-    call hd_svc_call
-    pop si
-    pop ax
-    ret
+    jmp short hd_svc_ax
 
 ; -----------------------------------------------------------------------------
 ; hd_page_pick - put the PAGE's caption back to its neutral line
@@ -218,13 +219,111 @@ hd_cfg_mark:
 ; -----------------------------------------------------------------------------
 hd_page_pick:
     push ax
-    push si
-    mov si, hd_req
-    mov al, HSV_MSG
     mov ah, HDM_PICK
-    call hd_svc_call
-    pop si
+    jmp short hd_say_ah
+
+; -----------------------------------------------------------------------------
+; hd_say - set the page's caption, both sides (SPEC.md 52.13)
+; in:  AL = an HDM_*
+; out: nothing (all registers preserved)
+;
+; BOTH, and that is the point: this image renders [hd_msgc] so it must hold
+; it, and the resident owns the copy hd_sync will bring back the next time the
+; page acts - so setting only one of them is a caption that survives until the
+; first mount and then silently reverts.
+; -----------------------------------------------------------------------------
+hd_say:
+    push ax
+    mov [hd_msgc], al
+    mov ah, al
+hd_say_ah:
+    mov al, HSV_MSG
+hd_svc_ax:                      ; the shared tail: AL = the verb, AX banked
+    call hd_svc_req
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_sel_set - move the panel's highlight, both sides
+; in:  AL = the device index
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+hd_sel_set:
+    push ax
+    mov [hd_sel], al
+    mov [hd_req+HRQ_DEV], al
+    mov al, HSV_SEL
+    jmp short hd_svc_ax
+
+; -----------------------------------------------------------------------------
+; hd_geom_push - the typed geometry, into the resident's row and the drive
+; in:  DI = a row in OUR copy of hd_devs
+; out: nothing (all registers preserved)
+;
+; The resident's name and the resident's contract, so hd_page_adjust's call
+; site did not move. Over there it is SET PARAMETERS on an IDE drive; here it
+; is that plus the store, because our hd_devs is a COPY and an edit to it
+; reaches the transport through nothing else.
+; -----------------------------------------------------------------------------
+hd_geom_push:
+    push ax
+    call hd_dev_ix
+    mov [hd_req+HRQ_DEV], al
+    mov ax, [di+HDD_CYL]
+    mov [hd_req+HRQ_CYL], ax
+    mov ax, [di+HDD_HEADS]
+    mov [hd_req+HRQ_HEADS], ax
+    mov ax, [di+HDD_SPT]
+    mov [hd_req+HRQ_SPT], ax
+    mov al, [di+HDD_FLAGS]
+    mov [hd_req+HRQ_FLAGS], al
+    mov al, HSV_GEOM
+    jmp short hd_svc_ax
+
+; -----------------------------------------------------------------------------
+; hd_mount / hd_unmount - the page's two buttons, on the selected device
+; in:  [hd_sel]; the gfx lock is HELD
+; out: nothing (all registers preserved)
+;
+; The resident's names again. hd_vols is its table and the kernel registered
+; those volume indices from there, so the whole job is its - the page names a
+; DEVICE and reads the answer back on the next hd_sync.
+; -----------------------------------------------------------------------------
+hd_mount:
+    mov al, HSV_MOUNTDEV
+    jmp short hd_mnt_do
+hd_unmount:
+    mov al, HSV_UNMOUNTDEV
+hd_mnt_do:
+    push ax
+    mov ah, al                  ; THE VERB, banked in AH and not on the stack:
+    mov al, [hd_sel]            ; a second push of AX inside one proc is what
+    mov [hd_req+HRQ_DEV], al    ; t_asmrules reads as a crossed pop, and it is
+    mov al, ah                  ; right to - the depth is fine either way, so
+    call hd_svc_req             ; getting it wrong returns with two registers
+                                ; swapped and nothing faults
+    call hd_sync                ; the mask, the count and the caption are all
+    pop ax                      ; the resident's answer (SPEC.md 52.13)
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_vol_ask - which kernel volume THIS DRIVER mounted on one partition
+; in:  AL = the device index, AH = the slot
+; out: AL = the kernel's volume index, 0FFh = none (or a resident too old to
+;      know the verb, which refuses it and leaves the 0FFh standing)
+; clobbers: AX (the output), flags
+;
+; The installer's State column wants a drive LETTER (SPEC.md 52.10.4.2), and
+; the table that knows is hd_vols, which stays the resident's. The kernel's
+; own adoption of the boot partition is NOT in there - hd_kvol asks that half.
+; -----------------------------------------------------------------------------
+hd_vol_ask:
+    mov [hd_req+HRQ_DEV], al
+    mov [hd_req+HRQ_SLOT], ah
+    mov byte [hd_req+HRQ_RES], 0xFF
+    mov al, HSV_VOLOF
+    call hd_svc_req
+    mov al, [hd_req+HRQ_RES]
     ret
 
 hd_pslot:    db 0               ; the partition hd_mount_one is to mount

@@ -7,12 +7,12 @@
 one: `all` never builds kern_small, and the only thing that does is `make
 small` and test-full's `buildmatrix` row - which assembles it and stops there.
 So the build that has been *discovered* broken three times rather than
-reported broken (docs/KERNEL-MEMORY.md moves 22, 23 and 32) has never had a
+reported broken (kernel/kernel.asm's KERN_BUDGET ledger, moves 22, 23 and 32) has never had a
 boot behind it at all.
 
 That mattered less while kern_small was the same code with fewer features. It
 matters now: SPEC.md 39's VGA renderer is gated out of it entirely
-(docs/MONO-RECLAIM-PLAN.md 2), which is ~1,800 bytes of `.text` that the
+(docs/plans/MONO-RECLAIM-PLAN.md 2), which is ~1,800 bytes of `.text` that the
 assembler proves is unreferenced and nothing else proves is unreachable. An
 %ifdef that takes out one body too many assembles perfectly and dies at the
 first paint.
@@ -49,6 +49,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests/unit")
+import os88build
 import os88marty                                          # noqa: E402
 from harness import check, done                           # noqa: E402
 
@@ -60,6 +61,7 @@ MACHINES = [
 ]
 
 IMAGE = "build/small360.img"
+APPS = "build/apps360.img"
 
 
 def smoke(machine, card, want_w, want_h, why):
@@ -73,7 +75,7 @@ def smoke(machine, card, want_w, want_h, why):
 
 
 def _smoke(machine, card, want_w, want_h, why, t0):
-    with os88marty.launch(IMAGE, apps="build/apps360.img", machine=machine,
+    with os88marty.launch(IMAGE, apps=APPS, machine=machine,
                           boot=30, card=card) as m:
         w, h, rows = m.vram(card)
         check((w, h) == (want_w, want_h), "%s: geometry" % machine,
@@ -118,17 +120,25 @@ def _smoke(machine, card, want_w, want_h, why, t0):
 def main():
     # IT BUILDS ITS OWN IMAGE, disptitle.py's shape and for the same reason:
     # `all` does not build kern_small and there is no capability to probe for,
-    # so a row that needed one to be lying about would never run. `make small`
-    # is idempotent and leaves build/kernel.bin alone - it builds into
-    # build/smallk/ - so nothing this does disturbs the default tree.
+    # so a row that needed one to be lying about would never run. It builds in
+    # a PRIVATE TREE (tools/os88build.py): `make small` writes build/*.drv as
+    # well as build/smallk/, and tests/unit/t_buildmatrix.py measured it
+    # restamping build/hddtool.drv so that it disagreed with the copy on the
+    # shipped images. Out of tree it writes none of that, which is what lets
+    # this row share the box with the rest of the gate.
+    #
+    # `apps360.img` comes along because kern_small boots with the ordinary
+    # apps disk in B:, and a tree holds only what it was asked for.
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-build", action="store_true",
                     help="use build/small360.img as it stands")
     a = ap.parse_args()
+    global IMAGE, APPS
     if not a.no_build:
-        subprocess.check_call(["make", "small"], cwd=ROOT,
-                              stdout=subprocess.DEVNULL)
-    if not os.path.exists(os.path.join(ROOT, IMAGE)):
+        t = os88build.tree(targets=("small", "apps360.img"))
+        IMAGE, APPS = t.img("small360.img"), t.img("apps360.img")
+    if not os.path.exists(IMAGE if os.path.isabs(IMAGE)
+                          else os.path.join(ROOT, IMAGE)):
         check(False, "the kern_small image exists",
               "`make small` did not produce it, so there is nothing to boot",
               got="missing", want=IMAGE)

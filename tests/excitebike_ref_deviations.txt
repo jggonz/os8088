@@ -1,0 +1,9 @@
+# Where EXCITEBIKE's rules differ from the study material's tables, and why.
+# tests/excitebike_ref.py reads this only when EXCITEBIKE_REF names the study
+# disassembly; every difference it finds must be listed here by name, and a name
+# listed here that no longer differs fails the row.  Format: NAME: reason.
+
+MUD: ours caps the speed in mud at 0.75 px/step and sheds 64/256 an update above it; the study game applies a decel of $C0 (turbo held) or $7F a update with no cap. Ours is one clamp the guest does in three instructions and it lands the bike at the same crawl; a rider cannot tell them apart and the heat added in mud is the same rate as turbo.
+LAND_WINDOW: the study game accepts a landing when the pitch is inside a window per slope class (widths up to 9 of its pitch scale); ours accepts |pitch - slope pitch| <= 1, bounces once at 2 and crashes at 3. Our pitch is stored relative to the slope, which makes the rule one subtract and one compare instead of two table loads and a class lookup; tests/excitebike_ref.py compares it step for step with exbsim.
+TAKEOFF: the study game launches from a per-element handler with its own velocity; ours keeps 1.5 x the last sloped rise of the ground, so a ramp launches in proportion to speed and slope with no per-element code (one branch in xm_ground).
+PITCH_SCALE: the study game keeps an absolute pitch 0..$0B (then $0C and $0D as the wheelie countdown) with level at 6 and forces it from the element keyframes; ours keeps the pitch relative to the terrain's slope code (-3 nose down .. 4 wheelie) and the keyframes set only the slope, so every pose is one subtract from the state.

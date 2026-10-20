@@ -43,6 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
+import os88build                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import shot                                                 # noqa: E402
 import os88qemu                                              # noqa: E402
@@ -72,8 +73,9 @@ def kill_stale():
     itself - exit 144, nothing dead, every command after it skipped."""
     if os.path.exists(PIDFILE):
         try:
-            os.kill(int(open(PIDFILE).read().strip()), signal.SIGTERM)
-            time.sleep(1)
+            pid = int(open(PIDFILE).read().strip())
+            os.kill(pid, signal.SIGTERM)
+            os88qemu.gone(pid)
         except Exception:
             pass
     for f in (SOCK, PIDFILE):
@@ -83,25 +85,29 @@ def kill_stale():
 
 # NAMED TARGETS, never a bare `make`: the default goal runs the fast tier, and
 # `api-abi` there re-assembles the kernel plain and compares it against
-# build/kernel.bin - which is exactly what a knob kernel is not (CLAUDE.md's
-# third trap). So a bare `make VGADIRTY=1` fails on its own instrumentation.
-TARGETS = ["build/os8088.img", "build/apps.img"]
+# kernel.bin - which is exactly what a knob kernel is not (CLAUDE.md's third
+# trap). So a bare `make VGADIRTY=1` fails on its own instrumentation.
+# os88build.tree() names its targets for the same reason.
+TARGETS = ("os8088.img", "apps.img")
 
-
-def build(knob):
-    subprocess.run(["make"] + knob + TARGETS, cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
+# THE KNOB KERNEL LIVES IN A TREE OF ITS OWN (tools/os88build.py), so this row
+# no longer writes build/ and no longer has to put it back. It used to be
+# `make VGADIRTY=1 build/os8088.img build/apps.img` followed by a `make` in a
+# `finally` - and the `finally` could only promise the restore, not deliver
+# it: a killed Python runs none.
+KNOB = os88build.tree("VGADIRTY=1", targets=TARGETS).apply()
 
 
 def launch():
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     subprocess.run(
         em + " -S -machine pc,vmport=off"   # the msserial mouse drives this
-        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"  # (SPEC.md
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"    # 9.11)
+        " -drive file=%s,format=raw,if=floppy -boot a"                # (SPEC.md
+        " -drive file=%s,format=raw,if=floppy,index=1"                # 9.11)
         " -chardev msmouse,id=m0 -serial chardev:m0"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
-        % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
+        % (KNOB.img("os8088.img"), KNOB.img("apps.img"), SOCK, PIDFILE),
+        cwd=ROOT, shell=True, check=True)
     # ...and it is DAEMONISED, so it outlives this script unless
     # somebody kills it - and the somebody is us (os88qemu).
     os88qemu.own(PIDFILE, SOCK)
@@ -116,7 +122,6 @@ def screen(q):
 
 def main():
     kill_stale()
-    build(["VGADIRTY=1"])
     try:
         launch()
         q = heapmap.Qmp(SOCK)
@@ -135,14 +140,13 @@ def main():
         q.hmp("cont")
 
         # Catch the splash mid-load: [spl_live] is 1 from its first tick until
-        # spl_finish, and the frame is the same background throughout.
-        shot_at, t0 = None, time.time()
-        while time.time() - t0 < 60:
-            if q.read(live, 1)[0] == 1:
-                time.sleep(0.4)             # ...one bar frame in, so the
-                shot_at = screen(q)         # chrome is certainly drawn
-                break
-            time.sleep(0.05)
+        # spl_finish, and the frame is the same background throughout. The
+        # budget is the GUEST's 60 seconds (tests/os88qemu.py), not the host's.
+        shot_at = None
+        if os88qemu.acted(q, lambda: q.read(live, 1)[0] == 1, secs=60,
+                          what="[spl_live]", poll=0.02):
+            os88qemu.pace(q, 0.4)           # ...one bar frame in, so the
+            shot_at = screen(q)             # chrome is certainly drawn
         if shot_at is None:
             raise SystemExit("vgadirty: the loading screen never came up - "
                              "this machine did not boot, so nothing below "
@@ -150,7 +154,6 @@ def main():
         q.hmp("quit")
     finally:
         kill_stale()
-        build([])                           # never leave a knob kernel in build/
 
     w, h, pix = shot_at
     dirty, inbox = [], 0

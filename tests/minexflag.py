@@ -14,7 +14,7 @@ one too low. That was reported as the COUNTS being wrong, which they never
 were.
 
 So this is a PIXEL test and it has to be. The state is right either way -
-`mn_mine` says no mine and `mn_state` says flagged in both builds - and a
+`mn_cell` says no mine and flagged in both builds - and a
 test that reads the bss cannot tell the bug from the fix. What differs is
 what the player can see, so the check is the two 16x16 cells' pixels
 against each other: the wrongly flagged one and a genuinely mined one, off
@@ -70,6 +70,15 @@ def bss(m, seg, name, n):
     return bytes(m.read((seg << 4) + base + 0, n)) if n else b""
 
 
+def cells(m, seg):
+    """(mine, state) per cell, decoded from `mn_cell` - one byte a cell
+    (SPEC.md 23): MN_C_MINE 0x80, MN_C_OPEN 0x40, MN_C_FLAG 0x20."""
+    raw = bss(m, seg, "mn_cell", MN_CELLS)
+    return ([1 if b & 0x80 else 0 for b in raw],
+            [2 if b & 0x40 else MN_S_FLAG if b & 0x20 else MN_S_COVER
+             for b in raw])
+
+
 def block(rows, h, x, y):
     """One cell's 16x16 pixels out of the 1bpp framebuffer."""
     return tuple(tuple(rows[yy][x:x + MN_CELLPX])
@@ -113,8 +122,7 @@ def main(argv):
         # --- 1. one click arms the board (first reveal is always safe) --------
         mo.click(*cell_xy(rect, 0))
         settle(m)
-        mine = bss(m, seg, "mn_mine", MN_CELLS)
-        state = bss(m, seg, "mn_state", MN_CELLS)
+        mine, state = cells(m, seg)
         if sum(mine) != 10:
             sys.exit("minexflag: the board has %d mines, not 10 - the click "
                      "did not arm it" % sum(mine))
@@ -141,7 +149,7 @@ def main(argv):
         settle(m)
         mo.click(*cell_xy(rect, wrong))
         settle(m)
-        if bss(m, seg, "mn_state", MN_CELLS)[wrong] != MN_S_FLAG:
+        if cells(m, seg)[1][wrong] != MN_S_FLAG:
             sys.exit("minexflag: cell %d did not take a flag - flag mode did "
                      "not arm" % wrong)
         m.type_text("f")                                # back out of flag mode

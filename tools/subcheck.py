@@ -54,19 +54,18 @@ Four things cost a run each, and all four are REDRAW-SPEC Part 3's:
 
   ONE GLYPH IN A DISK WINDOW'S STATUS LINE IS A FACT ABOUT THE KERNEL. The
     drive-A window shows `Size ... Free ...` for the SYSTEM disk, which carries
-    KERNEL.SYS - so a build that crosses a 1KB cluster reports one kilobyte less
+    KERNEL.SYS - so a build that crosses a cluster can report one kilobyte less
     free, and the gate sees a 7x7 box of differing pixels that is not a redraw
     defect at all. Measured: 25 pixels on all three adapters, at the drive-A
     window's status line and only in the steps where that line is ON SCREEN.
     Confirm it in one command rather than guessing - `make` prints
-    `os88disk: ... N/354 clusters` for os8088-360.img, and if N differs between
+    `os88disk: ... N/706 clusters` for os8088-360.img, and if N differs between
     the two builds that is the whole of it. The same shape reaches callfront.py
     through a package's SIZE in a folder listing.
 """
 import os
 import struct
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -132,7 +131,7 @@ def wins(m):
     return [x for x in su.windows(m) if x.visible]
 
 
-def pclick(mo, x, y, settle=2.5):
+def pclick(mo, x, y, settle=True):
     """A click whose BOTH EDGES are proven, which os88mouse's own `click` does
     not do - and a dropped edge here is silent and cumulative.
 
@@ -144,16 +143,25 @@ def pclick(mo, x, y, settle=2.5):
     happened - a session whose last seven steps left the window table completely
     unchanged while every click "succeeded". `_edge` is the primitive that waits
     for the published mouse_btn to agree.
+
+    AND THEN IT WAITS FOR THE UI TO FINISH WITH IT, not for a fixed time. This
+    paced 2.5 here, which is ELEVEN guest seconds after every click whether
+    the handler took a millisecond or a folder load - most of every session
+    these gates drive was the machine sitting idle. `os88marty.ui_done` ends
+    when ui_task has gone back to sleep with nothing queued, nothing locked
+    and no disk read in the hold. `settle=0` returns as soon as the release
+    is proven.
     """
     mo.to(x, y)
     if mo.where()[2] & 1:
         mo._edge(False)
     mo._edge(True)
     mo._edge(False)
-    time.sleep(settle)
+    if settle:
+        os88marty.ui_done(mo.m, "the click at (%d,%d) to be handled" % (x, y))
 
 
-def pdrag(mo, x0, y0, x1, y1, settle=2.5):
+def pdrag(mo, x0, y0, x1, y1, settle=True):
     """...and the same for a drag: press proven, move proven by `to`'s own
     read-back, release proven."""
     mo.to(x0, y0)
@@ -162,7 +170,8 @@ def pdrag(mo, x0, y0, x1, y1, settle=2.5):
     mo._edge(True)
     mo.to(x1, y1, l=True)
     mo._edge(False)
-    time.sleep(settle)
+    if settle:
+        os88marty.ui_done(mo.m, "the drag to (%d,%d) to be handled" % (x1, y1))
 
 
 def zorder(m):
@@ -208,9 +217,9 @@ def capture(out, machine, defines=()):
         shot(m, "desktop", out, log, mo)
 
         # Two Disk windows, cascaded 16px apart by wm_create.
-        mo.dblclick(*su.zone(m, 1)); time.sleep(4)
+        mo.dblclick(*su.zone(m, 1)); su.idle(m)
         shot(m, "disk-b", out, log, mo)
-        mo.dblclick(*su.zone(m, 0)); time.sleep(4)
+        mo.dblclick(*su.zone(m, 0)); su.idle(m)
         shot(m, "disk-a", out, log, mo)
 
         w = wins(m)

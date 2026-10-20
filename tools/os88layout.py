@@ -77,13 +77,13 @@ def cold_span(root=None):
         `9A offset <cold seg> / C3` that live in `.text` and are what calls
         `.cold`. Comparing those against `.cold` differs in ~98% of bytes.
       * the length: `FAT_SEG - COLD_SEG` is the RUNG the section was rounded
-        up into. `.cold` is padded out to fill it and `.ovlw` starts at the
-        far end, so the span is `OVLW_START - offset` and not `EOF - offset`.
+        up into. `.cold` is padded out to fill it and `.ovl` starts at the
+        far end, so the span is `OVL_START - offset` and not `EOF - offset`.
 
         **THAT SENTENCE USED TO SAY `.cold` IS THE LAST THING IN kernel.bin
-        AND ENDS AT EOF**, which stopped being true when `.ovlw` was
+        AND ENDS AT EOF**, which stopped being true when `.ovl` was
         introduced after it, and the two rows below then failed on every build
-        - 37,376 of rung plus 5,215 of `.ovlw` measured as 42,591 of section.
+        - 37,376 of rung plus 5,215 of `.ovl` measured as 42,591 of section.
         The failure named the wrong cause too, telling the reader to rebuild a
         build that was current, and it cost a wrong diagnosis before the
         arithmetic was done. A check whose message names the wrong cause is
@@ -97,14 +97,27 @@ def cold_span(root=None):
                                           # without paying for a map
     root = root or ROOT
     seg = os88sym.segment_of("fm_layout")            # any .cold symbol will do
-    off = seg_at(seg, root=root)
     eq = os88sym.equates()
-    rung = (eq["FAT_SEG"] - seg) << 4
-    size = eq["OVLW_START"] - off
+    # ...and the section starts COLD_VSTART into that segment, not at its
+    # paragraph: `.cold`'s offsets begin at 0x10 so FFFF can run it from the
+    # HMA (kernel.asm), which makes seg:0000 the LAST paragraph of the rung
+    # below. The file offset is the section's; a caller reading RAM adds the
+    # same COLD_VSTART to `seg << 4`
+    off = seg_at(seg, root=root) + eq.get("COLD_VSTART", 0)
+    # THE SECTION'S OWN LENGTH where the assembly states it. `OVL_START -
+    # off` was the span only while the window half followed `.cold` in the file;
+    # ROM_COLD (docs/plans/ROM-PLAN.md 3.4.2) puts `.cold` LAST, under
+    # `.vgabuf`, so its rung is COLD_PARA and not `FAT_SEG - seg`
+    if "COLD_SIZE" in eq and "COLD_PARA" in eq:
+        rung = eq["COLD_PARA"] << 4
+        size = eq["COLD_SIZE"]
+    else:
+        rung = (eq["FAT_SEG"] - seg) << 4
+        size = eq["OVL_START"] - off
     have = os.path.getsize(os.path.join(root, "build", "kernel.bin"))
     if not 0 < size <= rung:
         raise RuntimeError(
-            ".cold spans %d bytes from file offset %d to OVLW_START, against "
+            ".cold spans %d bytes from file offset %d to OVL_START, against "
             "a %d-byte rung below FAT_SEG - two equates that derive from the "
             "same section order now disagree, so kernel.asm's layout has "
             "moved and this routine has not" % (size, off, rung))

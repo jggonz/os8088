@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemdraw.c   (#included by lemmings.c)
  *
- * THE FRAME (SPEC.md 92.4). What is drawn and when; lemblit.inc, lemmask.inc
+ * THE FRAME (SPEC.md 114.4). What is drawn and when; lemblit.inc, lemmask.inc
  * and lemfont.inc touch the pixels. Nothing in this file writes one, and that
  * is the rule SPEC.md 73.11 states as "the inner loop is never C": a per-pixel
  * loop in C costs 3-5x what the same loop costs in assembly, and inside
@@ -109,7 +109,7 @@
  * what it already was on VGA. In the original the rectangle is white against
  * the build-brick colour and is always readable, which is the whole of what it
  * is for - it is the only thing telling the player where they are in a
- * 1,584-pixel level. §92.4.4. */
+ * 1,584-pixel level. §114.4.4. */
 #define LEM_C_MAP1BPP    8
 
 static int lem_c_map(void)
@@ -258,7 +258,7 @@ static void lem_mm_row(int my, int c0, int c1)
 
     /* ONCE PER ROW AND NOT ONCE PER RUN. lem_c_map() is two near calls and a
      * compare, which is nothing beside a run's own lem_r_rect - but a run is
-     * 150-550 us (§92.7.1) and a per-run call would put a fifth of that back
+     * 150-550 us (§114.7.1) and a per-run call would put a fifth of that back
      * on the one path this wave measured. */
     on = lem_c_map();
     if (c0 < 0)
@@ -282,7 +282,7 @@ static void lem_mm_row(int my, int c0, int c1)
 
 /* lem_mm_col - the same thing down a COLUMN, in RECTANGLE rows.
  *
- * IT IS A RUN AND NOT A CELL, AND THE BENCH IS WHY. SPEC.md 92.7.1 measured a
+ * IT IS A RUN AND NOT A CELL, AND THE BENCH IS WHY. SPEC.md 114.7.1 measured a
  * bracketed one-cell `lem_r_rect` at 548 us and a plot INSIDE one call at
  * 153 us: the SmallerC cdecl boundary is three quarters of a minimap cell, so
  * the batch that took the VGA's ten `out`s a pixel down to two barely moved a
@@ -505,7 +505,7 @@ static void lem_panel_draw(void)
 
 /* lem_frame_panel - THE PANEL AND A WORD, before the level is composed.
  *
- * COMPOSING A LEVEL IS ~25 SECONDS ON AN XT (SPEC.md 92.7.1 conclusion 2: 400
+ * COMPOSING A LEVEL IS ~25 SECONDS ON AN XT (SPEC.md 114.7.1 conclusion 2: 400
  * terrain pieces at 8.8 ms into the mask and 53.8 ms into four VGA planes),
  * plus ~4.0 s to sample the minimap and ~1.2 s to draw it. Inside SPEC.md 53's
  * bracket every kernel slot is refused, so nothing can be said and no toast can
@@ -527,7 +527,7 @@ static void lem_frame_panel(void)
     /* THE VGA'S WINDOW AT THE LEVEL'S OWN VIEW, BEFORE A PIXEL OF TERRAIN.
      * lem_r_prep() pointed the CRTC Start Address at the world (lemblit.inc) -
      * without that the card displays VRAM 0 with a 200-byte row, which is the
-     * panel twice - but it ran before os88_fsx_main() had read the LVL's
+     * panel twice - but it ran before lem_fsx_main() had read the LVL's
      * ScreenPosition, so it left the window at world x 0. On VGA the world IS
      * video memory and the compose is watched through this window, so leaving
      * it there would be twenty-five seconds of the level's far left followed
@@ -567,7 +567,7 @@ static void lem_frame_panel(void)
  * lem_mm_draw() covers completely afterwards, so it needs no erase of its own.
  *
  * IT DOES NOT PRESENT. On VGA the well IS video memory and the bar is live; on
- * the two shadow backends a present is 178 ms (SPEC.md 92.7.1 row 7) and the
+ * the two shadow backends a present is 178 ms (SPEC.md 114.7.1 row 7) and the
  * compose there is five seconds rather than twenty-five, so the panel and the
  * word above are what those cards show and the bar arrives with the first
  * frame. Paying 100 presents to animate a five-second wait is the trade this

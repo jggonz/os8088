@@ -200,18 +200,17 @@ ttx_fill:
 ;      the caller falls back to the graphics bracket having changed nothing.
 ; =============================================================================
 ttx_begin:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
+    cmp word [ttx_shseg], 0         ; NO SHADOW, NO TEXT SCREEN (SPEC.md
+    stc                             ; 45.13.8): trk_fs_enter claims it and a
+    je .out                         ; refusal there lands here, before the mode
+                                    ; is touched - so the graphics bracket is
+                                    ; what the user gets, as for any refusal
     mov byte [ttx_clk], FSXW_TICK   ; the tick clock until ttx_clkpick says
     mov al, TTX_SHCHUNK             ; otherwise (SPEC.md 45.16) - ttx_draw_all
     mov [ttx_chunk], al             ; runs a whole shadow build BEFORE the
-    mov byte [ttx_fdiv], 1          ; pick does, and reads these
-    mov byte [ttx_fcnt], 1
+    mov word [ttx_fdiv], 0101h      ; pick does, and reads these (ttx_fcnt is
+                                    ; the byte after ttx_fdiv)
     push ds
     pop es                          ; the FSI block is ours (the gfx_blit4
     mov di, ttx_fsi                 ; idiom: ES:DI is the caller's own)
@@ -226,12 +225,6 @@ ttx_begin:
     clc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -310,11 +303,10 @@ ttx_clkpick:
     push ax
     mov byte [ttx_clk], FSXW_FRAME  ; the PIT, not the CRTC (SPEC.md 53.5.1)
 %ifdef TTXNOFAST
-    mov byte [ttx_fdiv], 1          ; no sub-tick: one frame per tick, and
-    mov byte [ttx_fcnt], 1          ; FSXW_FRAME then waits on a [sch_subs]
+    mov word [ttx_fdiv], 0101h      ; no sub-tick: one frame per tick, and
+                                    ; FSXW_FRAME then waits on a [sch_subs]
 %else                               ; that only moves once a tick
-    mov byte [ttx_fdiv], FSX_SUBTICK
-    mov byte [ttx_fcnt], FSX_SUBTICK
+    mov word [ttx_fdiv], (FSX_SUBTICK << 8) | FSX_SUBTICK
 %endif
     mov al, TTX_SHCHUNKF            ; one row a frame: TTX_SHCHUNK's four are
     mov [ttx_chunk], al             ; ~25 ms and a frame's slot is now 18
@@ -322,14 +314,10 @@ ttx_clkpick:
     ret
 
 ttx_shbuild:
-    push ax
-    push cx
-    push di
     push es
-    push ds
-    pop es
+    mov es, [ttx_shseg]             ; the shadow is its own claim (45.13.8)
     cld
-    mov di, ttx_shadow
+    xor di, di
     mov cx, TTX_SHROWS * TTX_RW
     mov ax, (TTX_A_NORM << 8) | ' '
     rep stosw
@@ -341,9 +329,6 @@ ttx_shbuild:
     jmp short .l
 .done:
     pop es
-    pop di
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -409,11 +394,7 @@ ttx_shvalid:
     ret
 
 ttx_shstart:
-    push ax
-    push bx                         ; mp_order decodes through it
-    push cx
-    push si
-    push di
+                                    ; mp_order decodes through it
     push es
     mov al, [ttx_shpat]             ; bank what the shadow HOLDS before the
     mov [ttx_ocpat], al             ; claim below overwrites it - the carry
@@ -427,8 +408,7 @@ ttx_shstart:
     mov [ttx_shpos], al
     mov al, [mp_ploop]
     mov [ttx_shloop], al
-    mov byte [ttx_shprev], TTX_NOPAT
-    mov byte [ttx_shnext], TTX_NOPAT
+    mov word [ttx_shprev], (TTX_NOPAT << 8) | TTX_NOPAT ; and ttx_shnext
     mov byte [ttx_shok], 0
     mov byte [ttx_shbusy], 1
     mov byte [ttx_sleft], TTX_SHROWS
@@ -487,25 +467,23 @@ ttx_shstart:
     cmp al, [ttx_ocpat]             ; ...and it is the pattern we call prev
     jne .out
     push ds
-    pop es
-    cld
-    mov si, ttx_shadow + (64 * TTX_RW * 2)  ; rows 64..81: this pattern's tail
-    mov di, ttx_shadow                      ; and the next one's head, which
+    mov es, [ttx_shseg]
+    mov ds, [ttx_shseg]             ; ES LAST read of our own DS: from here
+    cld                             ; to the pop both name the shadow claim
+    mov si, 64 * TTX_RW * 2                 ; rows 64..81: this pattern's tail
+    xor di, di                              ; and the next one's head, which
     mov cx, 2 * TTX_HALF * TTX_RW           ; become rows 0..17 - the window
     rep movsw                               ; the view is sitting on
-    mov byte [ttx_srow], 2 * TTX_HALF       ; so the cursor starts BELOW them
-    mov byte [ttx_sleft], TTX_SHROWS - 2 * TTX_HALF
+    pop ds
+    mov word [ttx_srow], ((TTX_SHROWS - 2 * TTX_HALF) << 8) | (2 * TTX_HALF)
+                                            ; so the cursor starts BELOW them
+                                            ; (ttx_sleft is the byte after)
 %ifdef TRKLOG
     mov al, TLOGF_CARRY             ; so a capture says which of the two a
     call tlog_flag                  ; boundary took, not just that one happened
 %endif
 .out:
     pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -513,12 +491,6 @@ ttx_shstart:
 ;              [ttx_shbusy] and sets [ttx_shok] on the last of TTX_SHROWS
 ; -----------------------------------------------------------------------------
 ttx_shstep:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     push ds
     pop es
@@ -534,15 +506,17 @@ ttx_shstep:
     xor ah, ah
     mov dx, TTX_RW * 2
     mul dx                          ; shadow row * rowbytes; 9,558 max, so DX
-    add ax, ttx_shadow              ; is 0 and the product fits AX
-    mov di, ax
-    mov si, ttx_line
+    mov di, ax                      ; is 0 and the product fits AX - and it IS
+    mov si, ttx_line                ; the offset, the claim starting at 0
     mov cx, TTX_RW
-    mov ah, TTX_A_NORM              ; lodsb leaves AH alone: one attribute
-.w:                                 ; rides the whole row
-    lodsb
+    mov es, [ttx_shseg]             ; ...ES for the row only: ttx_shline above
+    mov ah, TTX_A_NORM              ; wants it DS, and gets it back below
+.w:                                 ; lodsb leaves AH alone: one attribute
+    lodsb                           ; rides the whole row
     stosw
     loop .w
+    push ds
+    pop es
     mov al, [ttx_srow]              ; does the screen owe a blit for it? Only
     sub al, [tui_cvr]               ; if the row just formatted is INSIDE the
     jnc .vis                        ; window - the cursor walks all 82 shadow
@@ -569,12 +543,6 @@ ttx_shstep:
     jnz .r
 .done:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -590,8 +558,6 @@ ttx_shstep:
 ; blit.
 ; -----------------------------------------------------------------------------
 ttx_shline:
-    push ax
-    push bx
     mov al, bl
     mov ah, [ttx_shpat]
     cmp al, TTX_HALF
@@ -607,27 +573,16 @@ ttx_shline:
     mov ah, [ttx_shprev]            ; rows TTX_SHPAD0..63
 .row:
     cmp ah, TTX_NOPAT
-    je .blank
+    je ttx_rowblank                 ; (the next routine down)
     mov [ttx_pat], ah
     mov bl, al
-    call ttx_rowtext
-    jmp short .out
-.blank:
-    call ttx_rowblank
-.out:
-    pop bx
-    pop ax
-    ret
+    jmp ttx_rowtext
 
 ; -----------------------------------------------------------------------------
 ; ttx_rowblank - TTX_RW spaces in ttx_line: the end of a song that does not
 ;                restart, where there genuinely is no row to show
 ; -----------------------------------------------------------------------------
 ttx_rowblank:
-    push ax
-    push cx
-    push di
-    push es
     push ds
     pop es
     cld
@@ -635,10 +590,6 @@ ttx_rowblank:
     mov cx, TTX_RW
     mov al, ' '
     rep stosb
-    pop es
-    pop di
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -654,13 +605,6 @@ ttx_rowblank:
 ; general register - it decodes through BX and CX and returns with ES = DS.
 ; -----------------------------------------------------------------------------
 ttx_rowtext:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     mov [ttx_row], bl
     push ds
     pop es
@@ -705,13 +649,6 @@ ttx_rowtext:
     inc byte [ttx_chn]
     cmp byte [ttx_chn], 4
     jb .cl
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -736,22 +673,17 @@ ttx_rowtext:
 ; against a rep movsw plus a read-modify-write of every attribute byte.
 ; =============================================================================
 ttx_blit:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     mov al, [tui_cvr]               ; shadow row [view] IS screen row 0 of the
     xor ah, ah                      ; area: pattern row r lives at r + HALF and
     mov dx, TTX_RW * 2              ; the area starts at view - HALF
     mul dx
-    add ax, ttx_shadow
-    mov si, ax
+    mov si, ax                      ; the claim starts at offset 0
     mov ax, [ttx_seg]
     mov es, ax
-    mov di, TTXAT(TTX_PATY, TTX_X0)
+    push ds
+    mov ds, [ttx_shseg]             ; DS:SI = the shadow; nothing in the loop
+    mov di, TTXAT(TTX_PATY, TTX_X0) ; below reads our own data
     mov bx, TTX_VIS
     cld
 .r:
@@ -775,13 +707,8 @@ ttx_blit:
     add di, TTX_STRIDE
     dec bx
     jnz .r
+    pop ds
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -791,12 +718,6 @@ ttx_blit:
 
 ; --- row 0: TRACKER, the module title, and what the audio is doing -------------
 ttx_name:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     mov ax, [ttx_seg]
     mov es, ax
@@ -825,12 +746,6 @@ ttx_name:
                                     ; while XT mode was on. SPEC.md 45.13.7
                                     ; retired the second half of that sentence
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -850,16 +765,11 @@ ttx_name:
 ; stream was OPENED at, and a pick takes effect at the next Play. mp_init
 ; seeds it 11,000, so this never reads a zero.
 ;
-; Preserves everything. Leading zeros become spaces and so does the `XT `
+; Clobbers AX..DX and DI (ttx_rate_cell allows it). Leading zeros become spaces and so does the `XT `
 ; prefix when the mode is off, so the field keeps its width in every state and
 ; the pen behind it never moves.
 ; -----------------------------------------------------------------------------
 ttx_rate_stamp:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
     mov di, ttx_s_xtrate
     mov ax, '  '                    ; `XT ` is a FACT only while the mode is
     cmp byte [mp_xt], 0             ; on - off, it is a claim about the rate
@@ -888,21 +798,14 @@ ttx_rate_stamp:
     inc di
     loop .z
 .out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; ttx_rate_cell - stamp it and draw that one cell. ES = [ttx_seg] on entry from
-; ttx_name; ttx_draw_dyn's delta call sets its own. Preserves everything.
+; ttx_name; ttx_draw_dyn's delta call sets its own. Keeps ES; clobbers the
+; rest, which both callers allow.
 ; -----------------------------------------------------------------------------
 ttx_rate_cell:
-    push ax
-    push si
-    push di
     call ttx_rate_stamp
     mov di, TTXAT(TTX_NAMEY, TTX_COLS - 12)
     mov si, ttx_s_xtrate
@@ -910,19 +813,10 @@ ttx_rate_cell:
     call ttx_put
     mov ax, [mp_mixrate]
     mov [ttx_lrate], ax
-    pop di
-    pop si
-    pop ax
     ret
 
 ; --- row 1: Pos / Ptn / Row / BPM / Spd ----------------------------------------
 ttx_readout:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     mov di, ttx_line
     mov si, ttx_s_pos
@@ -975,12 +869,6 @@ ttx_readout:
     mov al, [tui_aspd]
     mov [tui_lspd], al
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- row 3: the status line. Same string [tui_msgp] carries everywhere else,
@@ -1018,12 +906,6 @@ ttx_status:
 
 ; --- rows 4 and 5: the channel header and its rule. Drawn once per bracket -----
 ttx_header:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     mov ax, [ttx_seg]
     mov es, ax
@@ -1067,12 +949,6 @@ ttx_header:
     add di, TTX_CHD * 2
     loop .t
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1084,12 +960,6 @@ ttx_header:
 ; bars (SPEC.md 45.12).
 ; =============================================================================
 ttx_vuframe:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     mov ax, [ttx_seg]
     mov es, ax
@@ -1126,12 +996,6 @@ ttx_vuframe:
     cmp byte [ttx_chn], 4
     jb .c
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; ttx_vu - the levels, delta-drawn: a rising bar writes its growth, a falling
@@ -1139,12 +1003,6 @@ ttx_vuframe:
 ;          channel is skipped whole - its cells say MUTE and mp_chvol is 0
 ;          there anyway, so there is nothing for the needle to say.
 ttx_vu:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     mov ax, [ttx_seg]
     mov es, ax
@@ -1203,12 +1061,6 @@ ttx_vu:
     cmp byte [ttx_chn], 4
     jb .c
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1218,12 +1070,6 @@ ttx_vu:
 ; way to have heard about it.
 ; =============================================================================
 ttx_draw_all:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     call tui_sync                   ; the position being HEARD (SPEC.md 45.15)
     mov ax, [ttx_seg]
@@ -1258,12 +1104,6 @@ ttx_draw_all:
     mov ax, [mp_mute + 2]
     mov [tui_lmute + 2], ax
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1272,12 +1112,6 @@ ttx_draw_all:
 ; steady-state cost of a playing frame is four comparisons and the bars.
 ; =============================================================================
 ttx_draw_dyn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
 %ifdef TRKLOG
     call tlog_fstart                ; this frame's span starts here
 %endif
@@ -1414,30 +1248,24 @@ ttx_draw_dyn:
     je .out
     call ttx_status
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
 ; Strings
 ; =============================================================================
 ttx_s_name:   db 'TRACKER', 0
-ttx_s_nomod:  db 'no module loaded', 0
+ttx_s_nomod equ tw_s_nomod + 10     ; 'no module loaded', the tail of tw_s_nomod's bytes
 ttx_s_xtrate: db 'XT 00000 Hz', 0   ; STAMPED per paint in every build now
                                     ; (SPEC.md 45.13.7): the rate is not a
                                     ; constant once the surface is a pick.
                                     ; TTX_COLS - 12 leaves room for the fifth
                                     ; digit, which 44,100 needs
-ttx_s_pos:    db 'Pos ', 0
+ttx_s_pos equ tw_s_pos              ; 'Pos ', tw_s_pos's own bytes
 ttx_s_slash:  db '/', 0
 ttx_s_ptn:    db '  Ptn ', 0
 ttx_s_rowl:   db '  Row ', 0
-ttx_s_bpm:    db '  BPM ', 0
-ttx_s_spd:    db '  Spd ', 0
+ttx_s_bpm equ tw_s_bpm              ; '  BPM ', tw_s_bpm's own bytes
+ttx_s_spd equ tw_s_spd              ; '  Spd ', tw_s_spd's own bytes
 ttx_s_rw:     db 'Rw', 0
 ttx_s_chan:   db 'Channel ', 0
 ttx_s_mute:   db '   MUTE', 0
@@ -1450,8 +1278,10 @@ ttx_s_mute:   db '   MUTE', 0
                                     ; - B000 on Hercules and MDA, B800 on the
                                     ; CGA/VGA family. Read, never assumed
     TRKBUF ttx_fsi, FSI_SIZE        ; OSAPI_FSX_MODE's info block
-    TRKBUF ttx_shadow, TTX_SHBYTES  ; the current pattern as char/attr words,
-                                    ; TTX_HALF rows of the neighbouring orders
+    TRKW ttx_shseg                  ; the pattern shadow's CLAIM: TTX_SHBYTES
+                                    ; of char/attr words, held only while the
+                                    ; Text Screen is up (SPEC.md 45.13.8):
+                                    ; the current pattern plus TTX_HALF rows of the neighbouring orders
                                     ; at each end so the window into it needs
                                     ; no clamp (SPEC.md 45.13.4)
     TRKB ttx_shpat                  ; ...the pattern it holds
@@ -1483,6 +1313,9 @@ ttx_s_mute:   db '   MUTE', 0
     TRKB ttx_chunk                  ; ...and the rebuild rows a frame it buys
     TRKB ttx_fdiv                   ; frames per tick - FSX_SUBTICK now that
     TRKB ttx_fcnt                   ; the clock is the PIT's, so reported and
+%if ttx_fcnt != ttx_fdiv + 1 || ttx_sleft != ttx_srow + 1 || ttx_shnext != ttx_shprev + 1
+  %error "ttx_fcnt/ttx_sleft/ttx_shnext follow ttx_fdiv/ttx_srow/ttx_shprev: each pair is written as a word"
+%endif
                                     ; never inferred from a measurement
     TRKW ttx_vutick                 ; the tick the needles last decayed on
     TRKW ttx_lmsg                   ; the status string last drawn

@@ -219,6 +219,10 @@ entry:
     adc si, 0
     add bx, [bpb_hidd]          ; ...and the partition base
     adc si, [bpb_hidd+2]
+    add bx, [kofs]              ; ...and WHERE IN THE DATA AREA the kernel
+    adc si, [kofs+2]            ; starts, which is 0 after a format and the
+                                ; run a non-destructive install found free
+                                ; otherwise (SPEC.md 52.10.15)
     mov [lba], bx               ; ...the FIRST sector of KERNEL.SYS, which is
                                 ; the blob's, not `.text`'s: the two passes
                                 ; below read the file straight through and
@@ -234,10 +238,32 @@ entry:
     mov dx, BLOB_SEG            ; because two `mov word [mem], imm` a pass is
     call load_all               ; six bytes this sector has not got
     ; --- PASS 2: `.text` onward, to KERNEL_SEG, which [lba] already names ---
+    ; ...OR R PARAGRAPHS ABOVE IT, when the kernel is PACKED (SPEC.md
+    ; 2.9.13.5). This sector has its own reader and never enters stage 2, so a
+    ; compressed KERNEL.SYS read to KERNEL_SEG would simply be JUMPED INTO -
+    ; and there are 23 spare bytes here to do something about that in. Five is
+    ; what it takes, because the two loaders' arithmetic agrees: one run to
+    ; KERNEL_SEG + R puts the plain head at the bottom of it and the packed
+    ; blocks at KERNEL_SEG + R + head/16, which is exactly where the floppy's
+    ; two separate reads put them. So the blob's own kz_hd moves the head down
+    ; and expands, on the same addresses, with no second copy of anything.
+    ;
+    ; KZ_RPARA is an IMMEDIATE here where [ksecs] is patched, and that is the
+    ; same assumption BLOB_SEG and SPL_FSEG already make: this sector ships
+    ; as BOOTHD.SYS on the system disk beside the kernel it will boot, and the
+    ; installer writes THAT disk's copy (SPEC.md 52.10.16). It shipped inside
+    ; HDDTOOL.DRV once, which booted the tool's kernel instead - the one on
+    ; C: when a hard-disk-booted machine installed a newer floppy.
     mov ax, [ksecs]
     sub ax, BOOT2_SECS
+%ifdef KZIP
+    mov dx, KERNEL_SEG + KZ_RPARA
+    call load_all
+    call BLOB_SEG:KZ_HD         ; ...and the blob puts it where it belongs
+%else
     mov dx, KERNEL_SEG
     call load_all
+%endif
 
     ; --- hand off -----------------------------------------------------------
     ; DL is the BIOS drive and BX:CX the partition base, which is what the
@@ -421,15 +447,25 @@ fail:
     jmp short .halt             ; halted machine into a spinning one
 
 boot_drive:  db 0x80
-dest_seg:    dw KERNEL_SEG
-lba:         dd 0
-left:        dw 0
-run:         dw 0
-spt:         dw 0
-spt_heads:   dw 0
-cyllo:       db 0
-cylhi:       db 0
-head:        db 0
+
+; THE WORKING VARIABLES ARE NOT IN THE SECTOR (SPEC.md 52.10.15). Every one is
+; written before it is read, so none needs an initialiser, and the seventeen
+; bytes they took are what paid for [kofs]. They live 0600h into the segment
+; the sector relocated to: .nomem above proves the kernel's own read ends
+; BOOT_STACK below that segment's base, the stack is at 7C00h and grows down
+; into a few hundred bytes at most, and the blob is at the heap floor, below
+; both. boot_drive stays in the sector: it is read AFTER the blob has run.
+absolute 0x0600
+dest_seg:    resw 1
+lba:         resd 1
+left:        resw 1
+run:         resw 1
+spt:         resw 1
+spt_heads:   resw 1
+cyllo:       resb 1
+cylhi:       resb 1
+head:        resb 1
+section .text
 
 ; --- the one word the INSTALLER patches, at a FIXED offset ---------------------
 ; The floppy sector takes KERNEL_SECTORS as a -D at build time, because the
@@ -445,10 +481,16 @@ head:        db 0
 ; this file is edited, and four separate immediates - which is what the count
 ; used to be - could not have been patched at all.
 BOOTHD_KSECS equ 508
+; ...and the second patch site, the dword below it: the kernel's first sector
+; as an offset into the DATA AREA. A format puts KERNEL.SYS at cluster 2 and
+; leaves this 0; an install that keeps the volume's files puts it in the first
+; free run long enough and writes (cluster - 2) * spc here (SPEC.md 52.10.15).
+BOOTHD_KOFS  equ 504
 
-%if $ - $$ > BOOTHD_KSECS
+%if $ - $$ > BOOTHD_KOFS
 %error "the hard disk boot sector does not fit 512 bytes"
 %endif
-    times BOOTHD_KSECS - ($ - $$) db 0
+    times BOOTHD_KOFS - ($ - $$) db 0
+kofs:        dd 0
 ksecs:       dw 0
     dw 0xAA55

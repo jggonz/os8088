@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four source rules NASM cannot refuse and a reader does not see.
+"""Five source rules NASM cannot refuse and a reader does not see.
 
     python3 tests/unit/t_asmrules.py
 
@@ -135,6 +135,31 @@ about its own package rather than a line of this file:
 Widening the scan means answering those four, which is package work; and a gate
 that ships with its own findings pre-excused is worth less than one that ships
 green, so there is no exception list here and there should not be one.
+
+5. A REPEATED STRING INSTRUCTION WITH A SEGMENT OVERRIDE.
+
+`rep es movsb` assembles on every NASM and is WRONG ON THE TARGET CPU. An
+8086/8088 that takes an interrupt in the middle of a repeated string
+instruction resumes it at the prefix IMMEDIATELY BEFORE THE OPCODE - so of two
+prefixes, the one further out is simply gone. With REP outermost the copy
+stops after one more byte and leaves CX short; with the override outermost
+the rest of it is read from DS instead. IRQ0 alone arrives 18.2 times a
+second and the mouse more often, so on a 4.77 MHz machine a copy of any length
+is a question of when. The 286 fixed it, which is why nothing faster notices.
+
+It shipped once, in `dsk_path_x` (kernel/disk.inc, OSAPI_FILE_PATH's kernel
+half), and it was found by the ASSEMBLER rather than by a reader:
+tests/unit/t_nasm3.py's nasm 3.02 build of kern_big differed from nasm 2.16's
+by exactly two bytes, `F3 26` against `26 F3`, because the two generations
+order the prefixes differently. Neither order is safe, which is the point -
+nasm 2's loses REP and nasm 3's loses ES. The cure is not an order: it is no
+override at all, `push ds / push es / pop ds / rep movsb / pop ds`, three bytes.
+
+Both spellings are refused - the prefix keywords (`rep es movsb`,
+`es rep movsb`) and an explicit segment in a string instruction's operand
+(`rep movs byte [es:di], [es:si]`) - in kernel/, boot/, apps/, drivers/ and
+kerndos/. A `cli` bracket would also make it safe; nothing in the tree needs
+one, so there is no exception for it either.
 """
 import os
 import re
@@ -173,6 +198,23 @@ def sources():
             for f in sorted(files):
                 if f.endswith((".asm", ".inc")):
                     yield os.path.join(dirpath, f)
+
+
+REPSEG = re.compile(
+    r"^\s*(?:(?:rep|repe|repz|repne|repnz)\s+(?:es|cs|ss|ds)\b"
+    r"|(?:es|cs|ss|ds)\s+(?:rep|repe|repz|repne|repnz)\b"
+    r"|(?:rep|repe|repz|repne|repnz)\s+(?:movs|cmps|lods|scas|stos)[bw]?\s+"
+    r"[^;]*\[\s*(?:es|cs|ss|ds)\s*:)", re.I)
+
+
+def rep_overrides(path):
+    """[(line, text)] - repeated string instructions carrying an override."""
+    out = []
+    with open(path, errors="replace") as f:
+        for n, text in enumerate(f, 1):
+            if REPSEG.match(text):
+                out.append((n, text.strip()))
+    return out
 
 
 def dead_code(path):
@@ -232,23 +274,27 @@ GAPOK = re.compile(r"^\s+(clc|stc|cmc|cld|std|sti|cli|nop)\s*(;.*)?$", re.I)
 # swap two rung labels and this goes from 0 findings to 2.  On a tree with no
 # ladder the table is empty, RUNGJMP never matches, and every line below is an
 # exact no-op.
-RUNGDEF = re.compile(r"^(kretf?c?_[a-z]{2}):\s*(?:pop\s+(\w+))?\s*(;.*)?$", re.I)
+RUNGDEF = re.compile(r"^(kret(?:f?c?|m)_[a-z]{2}):\s*(?:pop\s+(\w+))?\s*(;.*)?$", re.I)
 RUNGPOP = re.compile(r"^\s*pop\s+(\w+)\s*(;.*)?$", re.I)
 RUNGEND = re.compile(r"^\s*retf?\s*(;.*)?$", re.I)
-RUNGJMP = re.compile(r"^\s*jmp\s+(kretf?c?_[a-z]{2})\s*(;.*)?$", re.I)
+RUNGJMP = re.compile(r"^\s*jmp\s+(kret(?:f?c?|m)_[a-z]{2})\s*(;.*)?$", re.I)
 _RUNGS = None
 
 
 def rungs():
-    """{rung label: [registers it pops, in order]}, read from kernel.asm."""
+    """{rung label: [registers it pops, in order]}, read from kernel.asm -
+    and from ctrl.inc, whose CTRL.DRV image carries a ladder of its own
+    (kretm_*, a CS away from the kernel's)."""
     global _RUNGS
     if _RUNGS is None:
         _RUNGS = {}
-        path = os.path.join(ROOT, "kernel", "kernel.asm")
-        try:
-            lines = open(path, errors="replace").read().split("\n")
-        except OSError:
-            return _RUNGS
+        lines = []
+        for rel in ("kernel.asm", "ctrl.inc"):
+            path = os.path.join(ROOT, "kernel", rel)
+            try:
+                lines += open(path, errors="replace").read().split("\n")
+            except OSError:
+                pass
         for i, ln in enumerate(lines):
             m = RUNGDEF.match(ln)
             if not m:
@@ -273,6 +319,11 @@ def rungs():
     return _RUNGS
 
 
+# Every first word PUSH, POP, RUNGJMP, RET and GAPOK can accept.
+_CPFIRST = frozenset(("push", "pop", "jmp", "ret", "retf", "clc", "stc", "cmc",
+                      "cld", "std", "sti", "cli", "nop"))
+
+
 def crossed_pops(path):
     """[(line, routine, prologue, epilogue)] - a restore in the wrong order."""
     out = []
@@ -281,6 +332,17 @@ def crossed_pops(path):
     routine, pro, inpro = None, [], False
     poprun, start = [], 0
     for n, raw in enumerate(lines, 1):
+        # THE COMMON LINE, decided without a regex. A blank or comment-only
+        # line matches none of the patterns below and reaches nothing; an
+        # INDENTED line (so not a label) whose first word none of them accepts
+        # reaches the final clause and ends the run. Both are exactly what the
+        # chain below does with them - this only skips asking.
+        st = raw.strip()
+        if not st or st[0] == ";":
+            continue
+        if raw[0] in " \t" and st.split(None, 1)[0].lower() not in _CPFIRST:
+            inpro, poprun = False, []
+            continue
         if TOPLBL.match(raw):
             routine, pro, inpro, poprun = TOPLBL.match(raw).group(1), [], True, []
             continue
@@ -349,8 +411,7 @@ def orphan_sources():
     `drivers/` has the kernel's idiom and no table dispatch, so it comes in
     clean: the two hits it had were both real - a greyed-control sentence
     `hd_ibhit` can never produce, and a "will not boot" arm the SYSTEM phase
-    took with it when SPEC.md 52.10.10 moved the commit
-    (docs/HANDOFF-SOAK-FINDINGS.md A4).
+    took with it when SPEC.md 52.10.10 moved the commit.
     """
     ok = (os.path.join(ROOT, "kernel"), os.path.join(ROOT, "drivers"))
     return [p for p in sources()
@@ -380,6 +441,8 @@ def _mentions(body, name):
     n = re.escape(name)
     total = 0
     for ln in body:
+        if name not in ln:
+            continue                # no mention can match without the text
         code = ln.split(";", 1)[0]
         if re.match(r"^\s*%s:" % n, code):
             continue
@@ -391,7 +454,19 @@ def _mentions(body, name):
 def _qualified(owner, local):
     """`jmp owner.local` from anywhere else in the kernel - see the header."""
     needle = owner + local
-    return sum(1 for ln in kernel_code_lines() if needle in ln)
+    # "some line contains it" is "the joined text contains it": the needle has
+    # no newline, so it cannot span two lines. One scan, not one per line.
+    return 1 if needle in _ktext() else 0
+
+
+_KTEXT = None
+
+
+def _ktext():
+    global _KTEXT
+    if _KTEXT is None:
+        _KTEXT = "\n".join(kernel_code_lines())
+    return _KTEXT
 
 
 def orphan_locals(path):
@@ -470,6 +545,29 @@ def main():
                   "in one of them (SPEC.md 44.10.6.1, 50.6.4.1, 77.12.3)",
                   got="push %s / pop %s" % (", ".join(pro), ", ".join(popped)),
                   want="pop %s" % ", ".join(reversed(pro)))
+
+    reps, scanned = 0, 0
+    for path in files + sorted(
+            os.path.join(dp, f)
+            for dp, _, fs in os.walk(os.path.join(ROOT, "kerndos"))
+            for f in fs if f.endswith((".asm", ".inc"))):
+        rel = os.path.relpath(path, ROOT)
+        scanned += 1
+        for line, text in rep_overrides(path):
+            reps += 1
+            check(False, "%s:%d - a repeated string instruction with a "
+                  "segment override" % (rel, line),
+                  "an 8086/8088 interrupted mid-string resumes at the prefix "
+                  "next to the opcode and LOSES the other one - REP (the copy "
+                  "stops short) or the override (the rest comes from DS). The "
+                  "two nasm generations order the prefixes differently and "
+                  "neither order is safe (kernel/disk.inc's dsk_path_x shuffle "
+                  "is the worked fix)",
+                  got=text, want="push ds / push es / pop ds / rep movsb / "
+                  "pop ds - no override at all")
+    check(reps == 0, "no repeated string instruction carries a segment "
+          "override (%d sources, kerndos/ included)" % scanned,
+          "rule 5 reported above", got=reps, want=0)
 
     for path in orphan_sources():
         rel = os.path.relpath(path, ROOT)

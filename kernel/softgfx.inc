@@ -60,7 +60,7 @@
 ; happened to be. It was left behind at the last split of that file; this is
 ; the correction. A shared body inside a file that is about to gate its
 ; contents on "does this machine have a VGA" is the defect that gate would
-; otherwise ship (docs/MONO-RECLAIM-PLAN.md 1.1).
+; otherwise ship (docs/plans/MONO-RECLAIM-PLAN.md 1.1).
 ;
 ; It is HOT: PERFORMANCE.md Set 102 profiles gfx_rect_setup.x2ok at 7.3% of
 ; the whole machine in the screen saver, on a CGA. Nothing here may become a
@@ -145,10 +145,11 @@ gfx_rect_setup:
 .offs:
     mov ax, [gfx_ry1]            ; this one call re-bases every rect primitive
     call gfx_rowbase            ; in BOTH renderers - on VGA it is still just
-    add ax, bx                   ; y1 * 80 (SPEC.md 39.3)
-    mov [gfx_roff], ax
-    clc
-    ret
+    add ax, bx                   ; y1 * 80 (SPEC.md 39.3) - AND CF = 0: a
+    mov [gfx_roff], ax           ; row base plus a byte column is inside one
+    ret                          ; framebuffer (under 0x9660 on every adapter
+                                 ; there is), so the ADD cannot carry and the
+                                 ; clc that followed it restated its answer
 .empty:
     stc
     ret
@@ -253,7 +254,7 @@ sw_rect_pl:
                                  ; was first priced at - on a gray fill the
                                  ; file's own accounting puts at 5,305 cycles:
                                  ; 0.98%, once per fill and not per row.
-                                 ; docs/LAST-DROP-BYTES.md 7.6 refused +33% on
+                                 ; docs/plans/LAST-DROP-BYTES.md 7.6 refused +33% on
                                  ; this body; this is a thirtieth of that.
                                  ; sw_parity clobbers AL and flags, and AX is
                                  ; dead here (gfx_rect_setup spent it and
@@ -325,18 +326,16 @@ sw_spans:
     jc .next
     mov dl, [sw_pat]
     mov dh, dl                      ; left edge (the whole row if 1 byte wide)
-    and dh, ah
-    not ah
-    and [es:di], ah
-    or  [es:di], dh
+    xor dh, [es:di]                 ; ONE STORE an edge byte - sw_col's
+    and dh, ah                      ; dest ^= (pat ^ dest) & mask, and for
+    xor [es:di], dh                 ; sw_col's reason
     or bx, bx
     jz .next
     add di, bx                      ; right edge
     mov dh, dl
+    xor dh, [es:di]
     and dh, al
-    not al
-    and [es:di], al
-    or  [es:di], dh
+    xor [es:di], dh
     dec bx                          ; interior bytes
     jz .next
     sub di, bx                      ; DI is on the right edge: step back over
@@ -478,7 +477,7 @@ sw_plane_op:
     xor ah, [sw_altm]           ; gray alternates, solid stays
     dec si
     jnz .irow
-    jmp .out
+    ret
 .xrow:
     mov cx, bp
 .xbyte:
@@ -500,7 +499,20 @@ sw_plane_op:
 ;          XOR mode: dest ^= mask. Else: dest = (dest & ~mask) |
 ;          (pattern & mask), pattern xor-stepped by [sw_altm] per row.
 ; in:       AH = mask, DI = top byte, ES = plane; [sw_mode]/[sw_pat]/[sw_altm]
-; clobbers: AL, BX, CX, DX, SI, DI, BP, flags (AH and ES survive)
+; clobbers: AL, CX, DX, SI, DI, BP, flags (AH, BX and ES survive)
+;
+; **ONE STORE A BYTE.** The masked row was `and [es:di], ~mask` then
+; `or [es:di], pat & mask` - two writes, and the first leaves the masked bits
+; BLACK until the second lands. The CRTC scans the framebuffer while the CPU
+; writes it, so a row the beam passed between the two was displayed with the
+; hole in it: three alternating pixels of a dither edge black for one frame,
+; on a different row each time, about one gesture in six on CGA
+; (tests/deskflash.py, which had carried it as a known flake). SPEC.md 6.6's
+; rule - nothing writes a pixel twice - at the scale of one byte. It is now
+; dest ^= (pat ^ dest) & mask, vga12.inc's own masked-blit idiom: the same
+; ten bytes, three bus accesses where there were four, and the bits outside
+; the mask are never written with a stale value even if an interrupt touches
+; the byte between the read and the store.
 ;
 ; It preserves NOTHING, deliberately: sw_plane_op banks BX/DX for the whole
 ; plane and reloads AH, DI, SI and BP itself around every call, so the five
@@ -510,8 +522,6 @@ sw_plane_op:
 ; gfx_nextrow's step and wrap bit across the row loop.
 ; -----------------------------------------------------------------------------
 sw_col:
-    mov bl, ah
-    not bl                      ; BL = ~mask
     mov cx, [sw_altm]           ; CL = toggle, CH = running pattern - ONE word
                                 ; read where two byte reads were. The two are
                                 ; declared adjacent in .bss with a %if that
@@ -523,10 +533,10 @@ sw_col:
     cmp byte [sw_mode], SWM_XOR ; around them cost as much again
     je .xrow
 %ifdef GFX_COLFAST
-    or bl, bl                   ; --- SPEC.md 39.25: A WHOLE COLUMN NEEDS NO
-    jz .frow                    ;     READ. ~mask = 0 means the byte is ours
+    cmp ah, 0xFF                ; --- SPEC.md 39.25: A WHOLE COLUMN NEEDS NO
+    je .frow                    ;     READ. mask = FF means the byte is ours
 %endif                          ;     entire, so there is nothing under it to
-                                ;     preserve and the read-modify-write pair
+                                ;     preserve and the read-modify-write
                                 ;     below is doing nothing but cost. That is
                                 ;     not a rare shape: gfx_rect_setup takes
                                 ;     the left mask from x1 & 7 and the right
@@ -536,9 +546,9 @@ sw_col:
                                 ;     with BOTH edge columns whole
 .row:
     mov al, ch
-    and al, ah                  ; AL = pattern & mask
-    and [es:di], bl
-    or  [es:di], al
+    xor al, [es:di]             ; AL = (pattern ^ dest) & mask...
+    and al, ah
+    xor [es:di], al             ; ...and ONE store (see the header)
     xor ch, cl
     add di, si
     test di, bp
@@ -583,7 +593,7 @@ sw_col:
 ; 256-byte table answers it outright and the loop is a read, an xlat and a
 ; shift per two pixels. It costs the same whatever is in the row.
 ;
-; THERE IS NO HYBRID and docs/LAST-DROP.md 3 is why. The run path is cheaper
+; THERE IS NO HYBRID and docs/plans/LAST-DROP-PERF.md 3 is why. The run path is cheaper
 ; only below 1.84 runs a row (PERFORMANCE.md Set 43's two-term fit), nothing
 ; anyone waits on draws flat art through this - Paint's canvas, Solitaire's
 ; lattice card backs, ArtfulType's line of TEXT per keystroke - and keeping
@@ -632,49 +642,44 @@ sw_pairbuild:
     push dx
     push si
     push di
-    xor bx, bx
+    xor bx, bx                  ; BH stays 0: the loop runs BL round once
 .byte:
-    mov ax, bx                  ; AL = the byte; SI = its high nibble...
-    mov cl, 4
-    shr al, cl
-    xor ah, ah
-    mov si, ax
-    mov ax, bx                  ; ...and DI its low one
-    and al, 15
-    xor ah, ah
-    mov di, ax
+    mov si, bx                  ; SI = the byte's high nibble (the LEFT
+    mov cl, 4                   ; pixel)...
+    shr si, cl
+    mov di, bx                  ; ...and DI its low one
+    and di, 15
     xor dh, dh                  ; --- tab0: hi at parity 0, lo at parity 1
-    call sw_pbit
-    shl al, 1
-    mov dl, al
-    push si
-    mov si, di
-    mov dh, 1
-    call sw_pbit
-    pop si
-    or dl, al
+    call .pair
     mov [ss:bx + gfx_pairtab0], dl
     mov dh, 1                   ; --- tab1: the other way round
+    call .pair
+    mov [ss:bx + gfx_pairtab1], dl
+    inc bl
+    jnz .byte                   ; 256 entries: BL wraps to 0 after 255
+%ifdef GFX_PLANE
+    mov word [gfx_pairbuilt], 0x0001 ; built - and vga_p4built = 0, UNION: the
+                                ; pair tables overwrote it (one word store,
+                                ; the pair adjacent under vga12.inc's %error)
+%else
+    mov byte [gfx_pairbuilt], 1
+%endif
+    jmp kret_di                 ; once a boot: the shared epilogue, not six
+                                ; pops of its own
+
+; one table entry: DL = sw_pbit(SI, parity DH) << 1 | sw_pbit(DI, parity
+; DH ^ 1). DH, SI and DI come back as they went in (size pass 9: the two
+; table halves were this sequence written out twice)
+.pair:
     call sw_pbit
     shl al, 1
     mov dl, al
-    push si
-    mov si, di
-    xor dh, dh
+    xchg si, di
+    xor dh, 1
     call sw_pbit
-    pop si
+    xor dh, 1
+    xchg si, di
     or dl, al
-    mov [ss:bx + gfx_pairtab1], dl
-    inc bx
-    cmp bx, 256
-    jb .byte
-    mov byte [gfx_pairbuilt], 1
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -853,7 +858,7 @@ sw_blit_row:
 ; 15.6 clocks. That gap is the WHOLE prize: removing every instruction byte
 ; for nothing would buy 7.7%, and the loop is execution-bound the moment four
 ; of them go. Two levers were costed against that and both are recorded in
-; docs/MONO-RECLAIM-PLAN.md 5.3:
+; docs/plans/MONO-RECLAIM-PLAN.md 5.3:
 ;
 ;   * the six `shl dl, 1` as three `shl dl, cl` with CL = 2 (the count moving
 ;     to DH, which is free here). Four bytes smaller and 11% SLOWER: an 8088
@@ -1163,12 +1168,7 @@ sw_xfer:
                                 ; gfx_save between the arm and the restore
                                 ; would disarm it - and wm_su_edge is exactly
                                 ; that, twice
-    pop bp
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp gfx_xor_rect_d.pops     ; the same five pops (bp dx cx bx ax) and ret
 
 ; -----------------------------------------------------------------------------
 section .bss

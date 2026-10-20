@@ -10,10 +10,11 @@ door along with the notes for its releases page, opens a pull request there,
 and cuts a GitHub release on this repo.
 
 **The GitHub release carries ONE asset: a zip.** `os8088-<version>.zip` holds
-every image, a README that says which two of them a reader needs, and a
-SHA256SUMS covering all of them. Eleven loose `.img` files used to hang off
-the release, and a reader had to know which pair they wanted before they could
-download anything. Step 3a builds it. The website is unchanged -- its download
+every image, a `README.md` that explains every file in it -- grouped by what the
+reader is trying to do, so the pair most people need comes first and each group
+says how to use its own files -- and a SHA256SUMS covering all of them. Eleven
+loose `.img` files used to hang off the release, and a reader had to know which
+pair they wanted before they could download anything. Step 3a builds it. The website is unchanged -- its download
 page still serves the images individually out of `public/disk/`, because the
 browser demo streams them and a table of per-image checksums is the point of
 that page.
@@ -26,6 +27,11 @@ When the release adds a whole program -- or there is a video about it -- it
 also gets a **Spotlight page** (step 4b), which is a page of its own under
 `/spotlight/` with its own screenshots. A line on the releases page does not
 carry a new program.
+
+**Every release also brings the site's Docs section up to the build** (step
+4d): `/docs/`'s disk guide, memory model and source-checked articles quote one
+source commit, and a release that ships new disks under last release's Docs is
+a guide describing software nobody can download any more.
 
 **Read "Writing the copy" below before writing a word of any of them.**
 
@@ -151,27 +157,59 @@ to a fresh branch off `main` and would otherwise sweep unrelated work into it.
 
 ```bash
 cd "$OS_REPO"
-make clean && make
+make clean && make && make emu
 ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
       build/os8088-360.img \
       build/apps.img build/apps120.img build/apps720.img build/apps360.img \
-      build/media360.img
+      build/media360.img \
+      build/office360.img build/network360.img build/games360.img \
+      build/emu.img
 ```
 
-All nine must exist -- step 3a refuses to pack without them. (Four geometries
-of each pair since SPEC.md 19's 1.2MB disk, plus the 360KB-only media disk.) The build
-enforces its own invariants -- a 512-byte boot sector and a kernel that fits
-under offset 0xA000 -- so a build failure here is a real problem, not
-something to work around. Report the kernel size; if it has
-grown, say by how much and how much headroom is left (the ceiling is 0xA000 =
-40,960 bytes for image + bss).
+All thirteen must exist -- step 3a refuses to pack without them. (Four
+geometries of each pair since SPEC.md 19's 1.2MB disk, plus the 360KB-only media
+disk and SPEC.md 24.6's three 360KB-only category disks -- at that size the
+spreadsheet and the chart viewer ship on the office disk and on NO other.)
+
+The build enforces its own invariants, so a build failure here is a real
+problem, not something to work around. **Then the kernel budgets, which the
+build does NOT enforce exactly**:
+
+```bash
+make budget-check
+```
+
+Branch and integration work may run a kernel up to 2KB over its budget
+(`KERN_GRACE`, docs/KERNEL-MEMORY.md) and `make` lets it; **a release may not
+run one byte over**. `budget-check` measures kern_big, kern_small and kern_emu
+against 100,864 / 64,000 / 100,864 and fails naming the one that is over. If it
+fails, STOP: that is a size pass or a conversation with the owner about the
+budgets, never a raise to get the release out. Report each kernel's
+`KERN_SIZE` and spare from its output.
+
+**`make emu` is not optional, though `make` does not run it.** It builds
+`build/emu.img`, the **emulator system disk** (SPEC.md 9.11.7): the `kern_emu`
+kernel -- `kern_big` plus the VMware absolute pointer, `VMMOUSE.DRV` -- with a
+`SYSTEM.CFG` that already switches the driver on. In QEMU, VMware, VirtualBox
+and the v86 browser emulator the pointer then follows the host mouse with no
+grab. It needs nothing a bare `make` does not, which is why `mkzip.py` treats
+it as required rather than on-demand. Three things about it that are decided
+and not to be "fixed" at release time:
+
+- **It pairs with the SHIPPED `apps.img`.** `kern_emu` holds the same API table
+  at the same offsets, so there is no emu software disk and must not be.
+- **It is 1.44MB only.** The driver is 386 code, and no machine that needs a
+  360KB floppy can run it. The Makefile says a 720KB one is `--size 720` if it
+  is ever wanted; that is a Makefile change, not a release step.
+- **Its kernel lives in `build/emuk/`**, never in `build/`, so nothing in the
+  rest of this procedure boots it by accident.
 
 **Then the on-demand disks**, which `make` does not build and the zip carries
 when they exist:
 
 ```bash
 tools/setup-cc.sh                     # SmallerC; needed by cword and allapps
-make allapps                          # apps-all.img -- every program, one disk
+make allapps                          # apps-all-N.img -- every program, a set of disks
 make worddisk cworddisk               # word*.img, cword*.img
 make c64disk                          # c64*.img
 make weavedisk                        # weave*.img -- the Weave family's disk
@@ -179,23 +217,49 @@ make loomdisk                         # loom*.img -- the same family's IDE disk,
                                       # with the demo SOURCES instead of the
                                       # compiled bundles
 make runcpm-src && make runcpmdisk    # runcpm*.img
+make scribedisk paccmandisk           # scribe*.img, paccman*.img
+make 1942disk redlinedisk             # 1942*.img, redline*.img
+make midirackdisk pixeldisk           # midirack*.img, pixel*.img
+make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
+                                      # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live
                                       # USB image and the live CD (SPEC.md 80).
                                       # Needs the fetch on the line above and
                                       # the C toolchain, like allapps
+make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
+                                      # DISK (SPEC.md 80.7), the same volume on
+                                      # kern_emu with VMMOUSE.DRV wanted. Not
+                                      # in the zip; the web repo's release.py
+                                      # publishes it, and skipping it leaves
+                                      # the demo on last release's build
+make viddemo                          # VIDDEMO-*-ST11R.VHD -- the Video
+                                      # Player's demo drives. Not in the zip
+                                      # either; the website's Docs disk guide
+                                      # lists them, and step 4d reads every
+                                      # image that guide lists
 ```
 
 Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
-network, no host toolchain -- **release the nine and say which on-demand disks
-were skipped**; they are a convenience, and a release that waits on one is a
+network, no host toolchain -- **release the thirteen and say which on-demand disks
+were skipped**, and know that step 4d then cannot refresh the Docs disk guide,
+which reads every image it lists or none; they are a convenience, and a release that waits on one is a
 release that does not happen. `mkzip.py` prints the ones it did not find, so
 that list is generated rather than remembered. Boot any that were built in step
 3 like any other image (they go in B:, `make test TESTAPPS=build/word.img`).
 
-**Do not build the story disk for a release.** `make zdisk` fetches Infocom
-story files that nobody here has the right to redistribute, and they are not
-release content. `mkzip.py` will not pack them -- its manifest is an allowlist,
-not a glob -- but do not put them in `build/` on a release run either.
+**The live media carries the story files, and that is decided.** Since #188,
+`make live` puts every story in `tools/getstories.py`'s MANIFEST on the live
+USB image and the live CD, so the zip carries them inside those two files. The
+user decided at v1.0.20260916 that this ships: the MANIFEST is curated to files
+that are free to redistribute -- three Infocom and Activision giveaways (the
+two Samplers, Mini-Zork, ZTUU) and authors' own freeware -- and none of the
+Infocom games that were sold. Do not stop to ask about it again.
+
+What still stays out is the story disk as a zip entry. `zork*.img` is not in
+`mkzip.py`'s `ITEMS`, and `STORIES=` can add files a user owns but may not
+redistribute, so **never run a release build with `STORIES=` set**. If a new
+entry is proposed for the MANIFEST, it has to be free to redistribute, because
+it ships in the next release.
 
 ### 3. Smoke-test the build before publishing
 
@@ -216,6 +280,22 @@ menu bar across the top with the chip glyph, then Locator, File and Builtins;
 a Disk A and a Disk B icon down the right-hand side; the mouse pointer.
 If the screen is blank or garbled, stop -- do not publish. Delete the two
 scratch files afterwards; `build/` is gitignored, but leave it tidy.
+
+**Then boot the emulator disk** -- `emu.img` with `apps.img`, the README's own
+QEMU line with no mouse on it:
+
+```bash
+python3 .claude/skills/release-os8088/emusmoke.py --shot build/smoke-emu.png
+```
+
+It must print `PASS`. A screenshot alone cannot pass this disk: an emulator disk
+whose driver never attached boots to the same desktop, silently on the serial
+mouse, which is the one failure that matters here. So the script reads the
+answer out of the guest -- the driver attached, the backdoor won the mouse, and
+three absolute positions sent through QMP land where they were sent -- and kills
+only the QEMU it started. **Then look at `build/smoke-emu.png`** the same way as
+`smoke.png`: the same desktop, with the pointer in the middle of the screen,
+where the script left it. Delete it afterwards.
 
 **If `make live` ran, boot both live images the same way** -- the rule is
 per image, and a zip does not exempt the two biggest files in it:
@@ -258,10 +338,12 @@ The script does three things worth knowing about:
 - **Its file list is an allowlist, not a glob.** `build/` also holds the story
   disks and every test gate's scratch image, and a glob ships those the first
   time somebody runs an unrelated target before cutting a release. If a new
-  disk should be in releases, add it to `MANIFEST` in `mkzip.py` -- that is the
-  only place the list lives.
-- **It refuses to pack a partial release.** A missing image that `make` builds
-  stops it; a missing on-demand disk is reported and skipped.
+  disk should be in releases, add it to `ITEMS` in `mkzip.py`, in the group a
+  reader would look for it under -- that is the only place the list lives, and
+  the README's description of it is written there too. A disk that fits no
+  group gets a new entry in `GROUPS`, with the instructions for using it.
+- **It refuses to pack a partial release.** A missing image that `make` or
+  `make emu` builds stops it; a missing on-demand disk is reported and skipped.
 - **The zip is byte-for-byte reproducible.** Timestamps come from the date in
   the version string and the images are already deterministic, so the same
   version from the same commit packs to the same bytes. Do not add anything
@@ -271,16 +353,37 @@ Then look inside it, the same way step 3 makes you look at the screenshot:
 
 ```bash
 cd "$(mktemp -d)" && unzip -q "$OS_REPO/build/os8088-$VERSION.zip"
-cd "os8088-$VERSION" && shasum -a 256 -c SHA256SUMS && cat README.txt
+cd "os8088-$VERSION" && shasum -a 256 -c SHA256SUMS && cat README.md
 ```
 
 **Read the README with the Read tool.** It is written for someone who has never
 seen this project, so "Writing the copy" governs it exactly as it governs the
-release notes. Check the version, the commit and the file list are this
-release's, and that every image listed is one that was actually built. The
-QEMU command line in it is the real one -- if `make run`'s invocation ever
-changes, `README` in `mkzip.py` has to change with it, and the way to know is
-to run the command out of the unpacked directory and see the desktop come up.
+release notes. It is `README.md`: Markdown that reads the same in Notepad as
+on GitHub, generated from two tables in `mkzip.py`:
+
+- **`GROUPS`** -- the situations a reader is in, in the order the README takes
+  them: *Start here* (the system and software pair per disk size, as a table),
+  *Extra disks for a 360KB machine*, *In an emulator or virtual machine* (the
+  emulator disk), *No floppy drive* (the live USB image and CD), *Every program,
+  on a set of disks*, *One program per disk*, and *About this zip* (checksums
+  and licence files). Each carries the instructions for using its own files --
+  the QEMU line, the `dd` line -- so they sit beside the files they are about.
+- **`ITEMS`** -- the things a reader chooses between, each in one group, with
+  the images it comes as and a line saying what it is for. This is also the
+  allowlist of what can go in the zip.
+
+Only what was packed is described, and a group with nothing in this zip is left
+out whole. **Check that every file in the unpacked directory has its own line**
+in the README, that the version and commit are this release's, and that no
+group explains a file that is not there.
+
+The QEMU command lines in it are the real ones -- if `make run`'s invocation
+ever changes, `GROUPS` in `mkzip.py` has to change with it, and the way to know
+is to run the commands out of the unpacked directory and see the desktop come
+up. The emulator group's line is the one `emusmoke.py` boots, and it has **no
+mouse line on purpose**: QEMU answers the absolute pointer by default, and the
+serial mouse beside it would be a second pointing device with the buttons split
+across the two.
 
 ### 4. Publish into the website repo
 
@@ -412,11 +515,12 @@ so **the step is between v1.0.20260809 and v1.0.20260810, and the entry says
 so.** When a figure jumps because the counting changed, say so where the
 figure is, or the jump reads as growth that did not happen.
 
-If you update these, the same figures are hardcoded in the website's prose --
-`site/index.html`, `site/faq.html`, `site/how-it-works.html`,
-`site/download.html` and `site/how-it-works/graphics.html` all quote the kernel
-size, the RAM footprint, the headroom or the line count. Grep the old numbers
-across `$WEB_REPO/site/` and fix them in the same PR; nothing validates them.
+If you update these, the same figures may be hardcoded in the website's prose --
+`site/index.html` and `site/docs.html` have quoted the kernel size, the RAM
+footprint, the headroom or the line count, and pages come and go (the FAQ, How
+It Works and Download pages are gone; `/docs/` replaced the FAQ). Grep the old
+numbers across `$WEB_REPO/site/` and fix them in the same PR; nothing validates
+them.
 
 Then rebuild and verify:
 
@@ -551,7 +655,7 @@ step 4a makes you look at the releases page. Three things that will fool you:
 
 #### 4c. The Wire's library, every time
 
-**The site is now where the machine gets its software from** (SPEC.md 88), so
+**The site is now where the machine gets its software from** (SPEC.md 92), so
 a release ships a *catalog* as well as four floppy images, and nothing on the
 OS side can tell you it went wrong: a stale `catalog.bin` is a Wire that lists
 last release's programs at last release's sizes and hands out last release's
@@ -586,7 +690,7 @@ python3 tools/os88wire.py --dump   "$WEB_REPO/public/wire/catalog.bin"
 ```
 
 Run from the **OS** repo on purpose. `tools/os88wire.py` and the website's
-`tools/wire.py` are two independent writers of one format (SPEC.md 88.2), and
+`tools/wire.py` are two independent writers of one format (SPEC.md 92.2), and
 this is the one moment they meet: the OS repo's reader checking the website's
 bytes, with `--pkgdir` cross-checking every declared size and every embedded
 icon against the files actually published. Read the `--dump` output against
@@ -596,6 +700,77 @@ on last release's entry are all things only a person notices.
 Nothing may redirect `http://` to `https://` for `/wire/*`. The machine
 cannot follow one, and a redirect there is a Wire that says
 `The Wire did not answer (301)` on every fetch.
+
+#### 4d. The Docs section, every time
+
+`/docs/` (`$WEB_REPO/site/docs.html`) is source-backed, and every part of it
+names the OS commit it was read from. Bring it to the release commit in the
+same PR; a Docs section one release behind is wrong in ways no build check
+catches. It has three kinds of content, and `docsync.py` treats each the way
+it can honestly be treated:
+
+| content | where | how it moves |
+|---|---|---|
+| the **disk guide's inventory** -- every path, size, attribute, free-cluster count and embedded README on every image | `public/guide/disk-guide.json` | **measured**: the web repo's `tools/sync_disk_guide.py --write`, then `--check`, reading `$OS_REPO/build/` |
+| the **memory model's kernel figures** | `public/js/memory-map.js`'s `builds` | **measured**: `tools/kernsize.py --json --strict` on kern_big and kern_small |
+| captions quoting the snapshot (`N images built from source commit X (build N)`, `Layout measured from source commit X`) | `site/docs.html` | moved with the measurement |
+| articles captioned **`Checked against source commit X`** (the Bootloader), and the guide's **manuals**, which link their sources at a pinned commit | `site/docs.html`, `disk-guide.json` `manuals` | **bumped only when nothing they link to changed**; otherwise left on X and listed |
+| every other article -- Quick start, Supported Hardware, Storage, Networking, the developer guide | `site/docs.html` | **listed** with the commits since X that touched the files it links to |
+
+```bash
+cd "$OS_REPO"
+python3 .claude/skills/release-os8088/docsync.py --web "$WEB_REPO"          # report
+python3 .claude/skills/release-os8088/docsync.py --web "$WEB_REPO" --write  # apply
+```
+
+Run it after `release.py`, from the OS repo, with step 2's build still in
+`build/` (it reads `build/smallk/` too, which `make budget-check` leaves).
+The report is the work list; `--write` applies only the measured parts.
+**Then do what it lists, which is the part that is yours:**
+
+- **Each listed article and manual: read the commits it names against what
+  the page says**, and fix what they made untrue -- a new driver on the
+  Supported Hardware pages, a changed boot message in the Bootloader's table, a
+  renamed image in Quick start. Each article's GitHub links ARE its source map,
+  so a commit that touched none of them is not listed. Files nearly every
+  commit touches (`Makefile`, `SPEC.md`, `README.md`, `kernel/kernel.asm`,
+  `docs/INDEX.md`) do not trigger a listing; step 4a's read of the whole log
+  covers those. When an article with a `Checked against` caption, or a manual
+  with pinned links, has been reviewed, move its commit to the release commit
+  by hand -- **never move one you did not read**, because that caption is the
+  claim that someone did.
+- **New files with no manual.** A new package, driver or folder on a disk
+  shows in the guide as a bare file until `disk-guide.json` gets a `manuals`
+  entry (keyed `NAME_EXT`) or an `entries` one. Write it in the voice of the
+  manuals beside it and the "Writing the copy" standard -- what it is, how to
+  start it, what it needs -- and take any screenshot it carries from a real
+  boot into `public/guide/shots/`, looked at, like a Spotlight shot.
+- **Release images the guide does not list** -- a new on-demand disk in
+  `mkzip.py`'s `ITEMS` -- need a `disks` entry (and a `sets`/`diskpages` one
+  if it starts a new set) before the next `--write` will read them.
+- **Images the guide lists that are not built** make it refuse the inventory
+  outright: the guide's caption says all of them came from one commit, so a
+  partial sync is a false caption. Build them, or leave the whole guide on its
+  previous snapshot and say so in the PR body and the report.
+- **Dead GitHub links** (an OS file an article links to that has gone) and
+  image names the prose quotes that nothing builds any more.
+
+Then rebuild, which re-versions `docs.js`, `memory-map.js` and the guide JSON
+so a returning reader's browser does not keep last release's copy:
+
+```bash
+cd "$WEB_REPO"
+python3 tools/build.py                                  # 0 problems
+python3 tools/linkcheck.py                              # 0 dead
+python3 tools/sync_disk_guide.py --source "$OS_REPO" --check
+git status --porcelain public/guide/ public/js/memory-map.js site/docs.html
+```
+
+**Look at `/docs/` before you commit it**, the way 4a looks at the releases
+page: serve `public/`, open `#disk-guide`, pick a disk this release changed and
+a file it added, and open `#memory` at 128K and 640K on both kernel builds. An
+inventory that parses and a guide that renders an empty pane read the same in
+`git diff`.
 
 ### 5. Commit and open the pull request
 
@@ -616,6 +791,12 @@ expected and nothing changed, that is a signal something is wrong.
 Check the diff includes `data/releases.json` with its prose filled in. A
 release PR that touches the images and the manifest but not the release log
 means step 4a was skipped.
+
+Say what step 4d did to the Docs section: the snapshot commit it moved from
+and to, the images whose inventory changed, the manuals and articles you
+revised (and any you left on the old commit, with why), and the files still
+without a manual. If the guide stayed on the previous snapshot because an image
+was not built, the PR body says that in its first lines.
 
 If step 4b produced a Spotlight page, say so in the PR body and give its path,
 list the scenes captured, and name the video it embeds. Mention that the video
@@ -654,7 +835,10 @@ images a reader actually needs, the packed size, and the sha256 step 3a
 printed. When the zip carries the live media, name them too: a reader with no
 floppy drive needs to hear that `os8088-usb.img` and `os8088.iso` boot a PC
 or an emulator directly, or the two files that serve them best read as
-padding. Someone who wants a per-image checksum finds it in the SHA256SUMS
+padding. Name the emulator disk the same way: someone running os8088 in QEMU,
+VMware, VirtualBox or a browser should hear that `emu.img` goes in drive A in
+place of `os8088.img` and that the pointer then follows their own mouse with no
+click to capture it. Someone who wants a per-image checksum finds it in the SHA256SUMS
 inside the zip, or on the download page, and the notes should say which.
 
 `gh` infers the repository from the checkout's remote, so this works for a
@@ -676,7 +860,8 @@ and update `data/releases.json` to match before the website PR is merged.
 
 Tell the user: the version, the PR URL, the release URL, the kernel size and
 its delta, the zip's packed size and how many images went into it, the
-Spotlight page's URL if step 4b ran, and anything you skipped or that needs
+Spotlight page's URL if step 4b ran, the Docs snapshot commit step 4d moved
+to (or that it did not, and why), and anything you skipped or that needs
 their attention -- naming any on-demand disk that did not get built, since a
 reader of the zip's README cannot tell a disk that was left out from one that
 does not exist. If the website PR is merged, the site's own CI
@@ -694,8 +879,10 @@ them in a status line is how they get lost.
   into a zip does not make it booted.
 - **The GitHub release gets the zip and nothing else.** Never attach loose
   images beside it, and never build the zip from a glob of `build/` -- the
-  manifest in `mkzip.py` is the list, and it exists so a story disk or a test
+  `ITEMS` table in `mkzip.py` is the list, and it exists so a story disk or a test
   gate's scratch image cannot ride out with a release.
+- **Never publish an emulator disk whose driver did not attach.** `emusmoke.py`
+  is how step 3 knows, and a desktop screenshot is not.
 - **Never hand-assemble the zip.** `mkzip.py` writes the README, the checksums
   and a reproducible archive; a `zip -r` by hand gets none of those and looks
   identical until somebody checks.
@@ -713,8 +900,11 @@ them in a status line is how they get lost.
   Step 4b captures them from a real boot and you read every one. A mockup, a
   crop of an old shot, or a scene whose click was lost are all the same defect
   to a reader: a picture of something that did not happen.
-- **The licence is MIT** -- `LICENSE` is in the root of this repo and the FAQ
-  says so. Do not restate the terms in release copy, and do not claim a
+- **Never move a Docs "checked against" commit you did not check.** Step 4d's
+  script moves only what it measured or what nothing touched; the rest is a
+  person reading the commits it lists.
+- **The licence is MIT** -- `LICENSE` is in the root of this repo and the
+  website's colophon says so. Do not restate the terms in release copy, and do not claim a
   different one.
 - Both repositories get branches, never direct commits to `main`.
 - If any step fails, stop and report rather than continuing with a partial

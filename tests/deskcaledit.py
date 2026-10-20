@@ -1,0 +1,542 @@
+#!/usr/bin/env python3
+"""SPEC.md 110.3: the Desk Calendar's APPOINTMENTS - typed, kept in order,
+edited, deleted, refused at the limits - read back off the guest's own disk.
+
+    make && python3 tests/deskcaledit.py
+
+The SHIPPED 360KB system disk copied to a scratch file, with a DESKCAL.DAT
+that tools/os88stik.py wrote put into SYSTEM\\APPDATA by mtools, on MartyPC's
+VGA XT. The machine's clock is set to Wed 14 October 2026 before the
+calendar opens, so "the selected day" is a date this file knows. Every
+assertion about the data is about the STATE FILE as the guest wrote it -
+flushed off the emulated drive and parsed by tools/os88stik.py, the
+independent reader - and not about the package's memory.
+
+Boot 1, a DAMAGED file (its appointment count is 60, past the table):
+
+  A  it opens EMPTY (the payload is not trusted, SPEC.md 110.3) and says
+     `Calendar file damaged`; until the first edit the file on A: is the
+     fixture byte for byte, and the first edit's save DELETES it and writes
+     afresh (STIK_DMGREPLACE, SPEC.md 110.5.2) - and B's saves after it
+     have room, which a set-aside copy would have taken on the 360KB
+     system disk. Nothing is asked.
+  B  the one-line entry: `N` and `9:30 Dentist` Enter, then `1230 Lunch`,
+     `815 Gym` and `Mum's birthday` - the state file holds four
+     appointments on 2026-10-14 IN ORDER: the all-day one first, then 08:15,
+     09:30 (570, its reminder armed), 12:30 - so the three time forms (H:MM,
+     HHMM, HMM) and the all-day rule are each asserted by what the guest
+     wrote.
+  C  a press on Dentist's line and Enter opens the field HOLDING `09:30
+     Dentist`; seven Backspaces and `Doctor` make it 09:30 Doctor, its
+     reminder kept.
+  D  a click on Lunch's line and Del say `Delete again to confirm` and
+     write nothing; another key in between DISARMS it (the next Del only
+     says it again); two Dels in a row take Lunch out of the file.
+  E  a line whose text is 26 characters is REFUSED, not cut: `At most 25
+     letters`, the field still open, and Esc shuts it with nothing written.
+  G  Calendar > Delete Item picked while the field is OPEN shuts it and
+     arms the latch; picked again it deletes - the menu's route to the
+     same two presses.
+
+  H  v2's FOCUS (SPEC.md 110.3, 11.103.4), with a Disk window in front all
+     along: a press on a card's margin hands the widget the bar and the
+     Disk window stays wm_top; `+` opens the field for EITHER in card 2's
+     heading row - `Walk the dog` is a TASK and `1700 Tea` an appointment;
+     a press on the Disk window - losing the bar - shuts an open field as
+     Esc does and keeps nothing; Esc gives the bar back (RELEASE).
+
+The appointments are selected the user's way on v2's two-line agenda:
+paged by its `+N more` line until the one wanted is on show, then pressed.
+
+Boot 2, a FULL table (DESKCAL_NAPPT appointments, 48):
+
+  F  Calendar > New Appointment is GREYED (SPEC.md 47) - its own words,
+     the reason being what `N` answers: `Calendar is full (48)`, and no
+     field opens.
+
+**BREAK IT ON PURPOSE**: make dc_parse refuse three digits and B's 08:15
+comes back all-day; take dc_check out of dc_entry and A opens the junk
+and replaces nothing; drop the `jbe .fits` test and E's line is stored;
+take `call dc_age` out of dc_onkey and D's interleaved key no longer
+disarms, so the third Del deletes.
+"""
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+import os88ui      # noqa: E402
+import os88marty   # noqa: E402
+import os88geom as geom   # noqa: E402
+import os88flush   # noqa: E402
+import os88stik    # noqa: E402
+
+ROOT = os.path.join(HERE, "..")
+BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
+TITLE = "Desk Calendar"
+TODAY = (2026, 10, 14)
+STIK_S_DIRTY, STIK_S_DAMAGED = 16, 8
+DC_BSS_ASK = 70                 # deskcal.asm's dc_ask: Delete's latch
+
+fails = []
+
+
+def check(cond, what):
+    print("   %s  %s" % ("ok " if cond else "FAIL", what))
+    if not cond:
+        fails.append(what)
+    return cond
+
+
+def image_size(m, seg):
+    """The image as LOADED - its header's +8, read off the guest, so a row
+    reading the SMALL build (build/smallapp/) finds its bss as well"""
+    return struct.unpack("<H", bytes(m.readseg(seg, 8, 2)))[0]
+
+
+def disk_with(tmp, name, dat):
+    img = os.path.join(tmp, name)
+    shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
+    src = os.path.join(tmp, "DESKCAL.DAT")
+    open(src, "wb").write(dat)
+    subprocess.run(["mcopy", "-o", "-i", img, src, "::/SYSTEM/APPDATA/"],
+                   check=True, stdout=subprocess.DEVNULL,
+                   env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
+    return img
+
+
+class Cal(object):
+    """One running calendar: its bss, its state file on A:, its keys - and
+    its GEOMETRY, v2's three cards (SPEC.md 110.3), from tools/os88stik.py's
+    DESKCAL_GEO, which t_stik holds to the package's own dc_geos."""
+
+    def __init__(self, ui, tmp, check=check, before=None, today=TODAY,
+                 bare=True):
+        """`before`, when given, runs with STIKAPPS open and the
+        double-click not yet made - so a caller can set the clock to the
+        very minute the entry proc will read. `bare` closes the folder
+        window the launch was made from: a widget is UNDER every window, so
+        the folder would cover the presses aimed at its cards."""
+        self.ui, self.m, self.tmp = ui, ui.m, tmp
+        m = self.m
+        m.write(ui._S("clk_day"), bytes([today[2], today[1]]))
+        m.write(ui._S("clk_year"), struct.pack("<H", today[0]))
+        if before is None:
+            w = ui.path("A:/STIKAPPS/DESKCAL.O88")
+        else:
+            ui.path("A:/STIKAPPS")
+            before()
+            w = ui.open("DESKCAL.O88")
+        check(w is not None and w.title == TITLE, "the calendar opened")
+        self.slot = w.i
+        self.wseg = struct.unpack_from("<H", m.read(
+            ui._S("wm_wins") + w.i * geom.WIN_SIZE + geom.W_SEG, 2))[0]
+        self.image = image_size(m, self.wseg)
+        # the state's offsets past the image: the kern_big build keeps it
+        # in its Sticky App block (SPEC.md 110.15), so they need the image
+        self.woff = os88stik.state_off(os88stik.DESKCAL_LIB,
+                                       os88stik.DESKCAL_STIK_BSS,
+                                       os88stik.DESKCAL_PAYLEN, self.image)
+        if bare:
+            for o in list(ui.windows()):
+                if o.i != self.slot and o.visible:
+                    ui.close(o)
+
+    # --- the guest's state ---------------------------------------------------
+    def bss(self, off, n=1):
+        return self.m.readseg(self.wseg, self.image + off, n)
+
+    def word(self, off):
+        return struct.unpack("<H", bytes(self.bss(off, 2)))[0]
+
+    def wb(self, name):
+        """A byte of os88stik.inc's widget state (stik_li, stik_hv, ...)."""
+        return self.bss(self.woff[name])[0]
+
+    def st(self):
+        return self.bss(self.woff["st"])[0]
+
+    def ed(self):
+        return self.bss(os88stik.DESKCAL_BSS_ED)[0]
+
+    def c3(self):
+        """Card 3: (kind 0 none / 1 next / 2 RINGING, appointment, time)."""
+        return (self.bss(os88stik.DESKCAL_BSS_C3K)[0],
+                self.bss(os88stik.DESKCAL_BSS_C3A)[0],
+                self.word(os88stik.DESKCAL_BSS_C3T))
+
+    def pane(self):
+        return self.bss(os88stik.DESKCAL_BSS_PANE)[0]
+
+    def win(self):
+        for o in self.ui.windows():
+            if o.i == self.slot:
+                return o
+        return None
+
+    def desk(self):
+        return bool(self.win().flags & geom.WF_DESK)
+
+    # --- the geometry --------------------------------------------------------
+    def li(self):
+        return self.wb("stik_li")
+
+    def g(self):
+        return os88stik.DESKCAL_GEO[self.li()]
+
+    def face(self):
+        w = self.win()
+        return w.x + 1, w.y + (0 if self.desk() else geom.TITLE_H)
+
+    def origin(self):
+        return self.face()
+
+    def at(self, card, x, y):
+        """Card `card`'s point (x, y) on the glass."""
+        fx, fy = self.face()
+        return fx + x, fy + os88stik.deskcal_card_top(self.li(), card) + y
+
+    def dayc(self):
+        """Card 2's index: the day card (TALL / MID) or the slot (COMPACT)."""
+        return 1
+
+    def remc(self):
+        return 2 if self.li() < 2 else 1
+
+    def line(self, k):
+        g = self.g()
+        return self.at(1, 40, g["A0"] + g["AP"] * k + 3)
+
+    def task_box(self, k):
+        g = self.g()
+        return self.at(1, 8 + g["BOX"] // 2, g["T0"] + g["TP"] * k
+                       + g["BOX"] // 2)
+
+    def task_text(self, k):
+        g = self.g()
+        return self.at(1, g["TX"] + 24, g["T0"] + g["TP"] * k + g["TTY"] + 3)
+
+    def plus(self):
+        return self.at(1, 163, self.g()["HY"] + 3)
+
+    def heading(self):
+        return self.at(1, 20, self.g()["HY"] + 3)
+
+    def nav(self, which):
+        g = self.g()
+        x = g["NAVL"] if which < 0 else g["NAVR"]
+        return self.at(0, x + 3, g["NAVY"] + 3)
+
+    def day_xy(self, day):
+        g = self.g()
+        i = list(self.bss(os88stik.DESKCAL_BSS_GRID, 42)).index(day)
+        return self.at(0, 4 + 24 * (i % 7) + 12,
+                       g["W0"] + g["WP"] * (i // 7) + 3)
+
+    def link(self, which):
+        """`Snooze` (0) or `Dismiss` (1) on card 3 - the slot's reminder
+        page on COMPACT."""
+        g = self.g()
+        return self.at(self.remc(), g["LKX"] + (20 if not which else 96),
+                       g["LKY"] + 3)
+
+    # --- gestures ------------------------------------------------------------
+    def front(self):
+        """The widget takes the bar and the keys (a press on a card margin,
+        ui.widget_activate) - or, titled (kern_small), comes to the front."""
+        self.ui.raise_window(self.win())
+
+    def key(self, name):
+        self.front()
+        self.m.key(name)
+
+    def type(self, s):
+        """In fours, a pace between: the BIOS buffer holds fifteen keys and
+        a shifted character is two."""
+        for i in range(0, len(s), 4):
+            self.m.type_text(s[i:i + 4])
+            os88marty.pace(self.m, 0.6)
+
+    def press(self, pt):
+        self.ui.mo.click(pt[0], pt[1], settle=0)
+        os88marty.pace(self.m, 1.0)
+
+    def click_line(self, k):
+        self.press(self.line(k))
+
+    def show_appt(self, k):
+        """Page the agenda until the day's appointment k is on line 0, by
+        its `+N more` pager - the user's own route - and return its line."""
+        g = self.g()
+        for _ in range(64):
+            top = self.bss(os88stik.DESKCAL_BSS_ATOP)[0]
+            n = self.bss(os88stik.DESKCAL_BSS_ACNT)[0]
+            page = g["AN"] if n <= g["AN"] else g["AN"] - 1
+            if top <= k < top + page:
+                return k - top
+            print("        DBG top %d n %d page %d pager at %r lit %d" % (
+                top, n, page, self.line(g["AN"] - 1),
+                self.bss(os88stik.DESKCAL_BSS_LIT)[0]))
+            self.press(self.line(g["AN"] - 1))
+        raise SystemExit("the agenda never paged to appointment %d" % k)
+
+    def select_appt(self, k):
+        self.click_line(self.show_appt(k))
+
+    def delete_once(self, how="key"):
+        """One Delete - Del, or Calendar > Delete Item - and the guest's
+        latch after it: 2 armed, 0 gone off (dc_askdel)."""
+        if how == "key":
+            self.m.key("Delete")        # NOT key(): its front() is a PRESS,
+                                        # and a press disarms
+        else:
+            self.ui.menu_pick("Calendar", "Delete Item")
+        os88marty.pace(self.m, 1.0)
+        return self.bss(DC_BSS_ASK)[0]
+
+    def field_shut(self, what):
+        self.ui._wait(lambda: self.ed() == 0, what, 30,
+                      snapshot=lambda: "dc_ed = %d" % self.ed())
+
+    def saved(self, what):
+        """Wait for the edit's save, then the state file off A:."""
+        os88marty.guest_sleep(self.m, 1.0)
+        self.ui._wait(lambda: not self.st() & STIK_S_DIRTY, what, 60,
+                      snapshot=lambda: "stik_st = %#x" % self.st())
+        return self.dat()
+
+    def raw(self, name="DESKCAL.DAT"):
+        out = os.path.join(self.tmp, "flushed.img")
+        self.m.pause()
+        try:
+            self.m.flush(0, out)
+        finally:
+            self.m.run()
+        v = os88flush.Volume(open(out, "rb").read())
+        try:
+            return v.read("SYSTEM/APPDATA/" + name)
+        except Exception:
+            return None
+
+    def dat(self):
+        d = self.raw()
+        if d is None:
+            return None
+        p = os88stik.parse_dat(d, os88stik.DESKCAL_PAYLEN,
+                              os88stik.DESKCAL_PAYVER, packed=True)
+        return os88stik.parse_deskcal(p["payload"])
+
+
+def appts_of(cal):
+    return [(tuple(a["date"]), a["time"], a["text"], a["remind"])
+            for a in (cal or {}).get("appts", [])]
+
+
+def boot_damaged(tmp):
+    pay = bytearray(os88stik.deskcal([(TODAY, 600, "Not trusted")]))
+    pay[0] = 60                 # past the 48-record table
+    fixture = os88stik.dat(bytes(pay), x=335, y=40, screen=(640, 480))
+    img = disk_with(tmp, "damaged.img", fixture)    # a v1 place: converted
+    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+        c = Cal(ui, tmp)
+        print("A: a DAMAGED file opens empty, says so, and is replaced")
+        check(c.st() & STIK_S_DAMAGED, "the load called it damaged (stik_st %#x)"
+              % c.st())
+        check(c.bss(os88stik.STIK_HDR_SIZE + os88stik.DESKCAL_STIK_BSS)[0] == 0,
+              "...and runs empty: no appointment in memory")
+        txt = ui.wait_toast(says="damaged")
+        check(txt == "Calendar file damaged", "the launch says %r" % txt)
+        check(c.raw() == fixture,
+              "until an edit the file on A: is the fixture byte for byte")
+        c.key("KeyK")
+        c.type("First")
+        c.key("Enter")
+        cal = c.saved("the first save")
+        check(cal is not None and [t["text"] for t in cal["tasks"]]
+              == ["First"], "the first edit wrote afresh: one task, `First` "
+              "(%r)" % ((cal or {}).get("tasks"),))
+        check(not c.st() & STIK_S_DAMAGED, "...and no longer damaged "
+              "(stik_st %#x)" % c.st())
+
+        print("B: four lines, three time forms and an all-day one")
+        for line in ("9:30 Dentist", "1230 Lunch", "815 Gym",
+                     "Mum's birthday"):
+            c.key("KeyN")
+            c.type(line)
+            c.key("Enter")
+            c.field_shut("the field to shut after %r" % line)
+        cal = c.saved("the save of four appointments")
+        want = [(TODAY, None, "Mum's birthday", False),
+                (TODAY, 495, "Gym", True),
+                (TODAY, 570, "Dentist", True),
+                (TODAY, 750, "Lunch", True)]
+        got = appts_of(cal)
+        check(got == want, "the file holds them in order, all-day first, "
+              "times 08:15 / 09:30 / 12:30 armed\n        got  %r\n        "
+              "want %r" % (got, want))
+        n = len(c.raw() or b"")
+        check(n == os88stik.STIK_HDR_SIZE + 8 + 4 * 32 + 1 * 28,
+              "...PACKED: four appointments and the one task, %d bytes - "
+              "one cluster where the fixed layout was three (SPEC.md "
+              "110.5.3)" % n)
+
+        print("C: Dentist edited in the field")
+        c.select_appt(2)
+        check(c.bss(os88stik.DESKCAL_BSS_SELK)[0] == 1
+              and c.bss(os88stik.DESKCAL_BSS_SELI)[0] == 2,
+              "a click on its line selected appointment 2")
+        c.key("Enter")
+        ui._wait(lambda: c.ed() == 2, "the field to open on it", 30)
+        buf = bytes(c.bss(os88stik.DESKCAL_BSS_EBUF, 32)).split(b"\0")[0].decode("latin-1")
+        check(buf == "09:30 Dentist", "the field holds %r" % buf)
+        for _ in range(7):
+            c.m.key("Backspace")
+            os88marty.pace(c.m, 0.2)
+        c.type("Doctor")
+        c.key("Enter")
+        c.field_shut("the field to shut")
+        got = appts_of(c.saved("the edit's save"))
+        check((TODAY, 570, "Doctor", True) in got and len(got) == 4,
+              "09:30 Doctor, its reminder kept (%r)" % (got,))
+
+        print("D: Lunch deleted by Del twice; a key between disarms")
+        c.select_appt(3)
+        before = c.raw()
+        check(c.delete_once() == 2, "the first Del arms the latch")
+        txt = ui.wait_toast(says="again")
+        check(txt == "Delete again to confirm", "...and says %r" % txt)
+        c.m.key("KeyX")                  # a key that does nothing...
+        os88marty.pace(c.m, 1.0)
+        check(c.delete_once() == 2, "...after another key, Del only arms "
+              "again")
+        os88marty.guest_sleep(c.m, 3.0)
+        check(c.raw() == before and len(appts_of(c.dat())) == 4,
+              "nothing was deleted or written")
+        check(c.delete_once() == 0, "the second Del in a row goes off")
+        got = appts_of(c.saved("the delete's save"))
+        check([g[2] for g in got] == ["Mum's birthday", "Gym", "Doctor"],
+              "Lunch is gone from the file (%r)" % ([g[2] for g in got],))
+
+        print("E: 26 characters are refused, not cut")
+        before = c.raw()
+        c.key("KeyN")
+        c.type("930 abcdefghijklmnopqrstuvwxyz")
+        c.key("Enter")
+        txt = ui.wait_toast(says="At most")
+        check(txt == "At most 25 letters", "the toast says %r" % txt)
+        check(c.ed() == 1, "the field is still open (dc_ed %d)" % c.ed())
+        c.key("Escape")
+        c.field_shut("Esc to shut the field")
+        os88marty.guest_sleep(c.m, 3.0)
+        check(c.raw() == before and not c.st() & STIK_S_DIRTY,
+              "nothing was written")
+
+        print("G: Delete Item picked twice, the first time with the field OPEN")
+        c.select_appt(0)
+        c.key("Enter")
+        ui._wait(lambda: c.ed() != 0, "the field to open on line 0", 30)
+        os88marty.pace(c.m, 1.0)
+        check(c.delete_once("menu") == 2, "the pick armed the latch")
+        check(c.ed() == 0, "...and shut the field (dc_ed %d)" % c.ed())
+        check(c.delete_once("menu") == 0, "picked again it goes off")
+        got = appts_of(c.saved("the menu delete's save"))
+        check([g[2] for g in got] == ["Gym", "Doctor"],
+              "Mum's birthday is gone (%r)" % ([g[2] for g in got],))
+
+        print("H: the WIDGET's focus - an application in front all along")
+        disk = ui.open_drive("A")
+        check(ui.front() is not None and ui.front().i == disk.i,
+              "a Disk window is the front window")
+        c.front()
+        rec = ui._wrec(c.win())
+        check(ui._word("menu_win") == rec, "a press on a card's margin "
+              "handed the widget the bar (menu_win %#06x)"
+              % ui._word("menu_win"))
+        check(ui.front().i == disk.i, "...and the Disk window is still "
+              "wm_top: a widget is activated, never raised")
+        c.press(c.plus())
+        ui._wait(lambda: c.ed() == 5, "`+` to open the field for EITHER", 20,
+                 snapshot=lambda: "dc_ed = %d" % c.ed())
+        g = c.g()
+        y1 = struct.unpack("<H", bytes(c.bss(160 + 2, 2)))[0]
+        check(y1 == c.at(1, 0, g["HY"] - 3)[1], "the field is in card 2's "
+              "heading row (LN_Y1 %d)" % y1)
+        c.type("Walk the dog")
+        c.m.key("Enter")
+        c.field_shut("the plain line to commit")
+        cal = c.saved("the task's save")
+        check([t["text"] for t in cal["tasks"]][-1:] == ["Walk the dog"],
+              "a line with no time is a TASK (%r)" % ([t["text"] for t
+                                                         in cal["tasks"]],))
+        c.press(c.plus())
+        ui._wait(lambda: c.ed() == 5, "`+` again", 20)
+        c.type("1700 Tea")
+        c.m.key("Enter")
+        c.field_shut("the timed line to commit")
+        got = appts_of(c.saved("the appointment's save"))
+        check((TODAY, 1020, "Tea", True) in got, "a line starting with a "
+              "time is an APPOINTMENT (%r)" % (got,))
+        check(ui.front().i == disk.i, "the Disk window stayed in front "
+              "through all of it")
+        c.press(c.plus())
+        ui._wait(lambda: c.ed() == 5, "`+` a third time", 20)
+        c.type("Never")
+        before = c.raw()
+        x, y = disk.x + disk.w // 2, disk.y + disk.h // 2
+        ui.mo.click(x, y, settle=0)
+        ui._wait(lambda: c.ed() == 0, "losing the bar to shut the field "
+                 "(STIK_ONFOCUS 0, as Esc)", 20)
+        os88marty.guest_sleep(c.m, 3.0)
+        check(c.raw() == before, "...and nothing typed there was kept")
+        c.front()
+        c.m.key("Escape")
+        ui._wait(lambda: ui._word("menu_win") == ui._wrec(disk),
+                 "Esc to give the bar back (OSAPI_WM_DESK RELEASE)", 20,
+                 snapshot=lambda: "menu_win %#06x" % ui._word("menu_win"))
+        check(True, "Esc RELEASED: the Disk window owns the bar again")
+
+
+def boot_full(tmp):
+    days = [(2026, 10, d) for d in range(1, os88stik.DESKCAL_NAPPT // 2 + 1)]
+    appts = [(d, 600 + i, "Busy %d" % i) for d in days for i in (0, 1)]
+    fixture = os88stik.dat(os88stik.deskcal(appts), x=335, y=40,
+                          screen=(640, 480))
+    img = disk_with(tmp, "full.img", fixture)
+    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+        c = Cal(ui, tmp)
+        print("F: %d appointments: New Appointment greyed, N refused"
+              % os88stik.DESKCAL_NAPPT)
+        c.front()
+        cal = [mm for mm in ui.menus() if mm[0] == "Calendar"]
+        items = cal[0][3] if cal else []
+        check(items[:1] == [("New Appointment  N", False)],
+              "the item is greyed (%r)" % (items[:1],))
+        check(items[1:2] == [("New Task  K", True)],
+              "...and New Task is live (%r)" % (items[1:2],))
+        c.key("KeyN")
+        txt = ui.wait_toast(says="full")
+        check(txt == "Calendar is full (%d)" % os88stik.DESKCAL_NAPPT,
+              "N says %r" % txt)
+        os88marty.pace(c.m, 1.0)
+        check(c.ed() == 0, "and opened no field")
+
+
+def main():
+    tmp = tempfile.mkdtemp(prefix="deskcaledit-")
+    try:
+        boot_damaged(tmp)
+        boot_full(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("deskcaledit: %s" % ("PASS" if not fails else
+                               "FAIL (%d): %s" % (len(fails),
+                                                  "; ".join(fails))))
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

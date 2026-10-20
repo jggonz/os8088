@@ -34,15 +34,16 @@ coordinates - so the compare is allowed to shift by one and has to be EXACT
 at one of them.
 """
 import argparse
+import tempfile
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
 import dispapps                                              # noqa: E402
+import blitpair                                              # noqa: E402
 from blitpair import gif_pixels                              # noqa: E402
 from paintmove import pkg_syms                               # noqa: E402
 
@@ -69,23 +70,10 @@ def tool_xy(ox, oy, i):
     return ox - PT_CV_X + x + PT_BW // 2, oy + y + PT_BW // 2
 
 
-def widest(m, blit, iw, limit=40):
-    """The regs at the next `blit` call at least as wide as the picture."""
-    for _ in range(limit):
-        if not m.wait_stop(limit=300.0):
-            return None
-        r = m.regs()
-        if r["cx"] >= iw:
-            return r
-        m.bp_exec(blit)
-        m.run()
-    return None
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintbig.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintbig.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None)
     # WHICH PRIMITIVE THE CANVAS ARRIVES ON is what says which format it is
@@ -104,7 +92,7 @@ def main():
     gif = dispapps.colour_gif()
     gifname = os.path.basename(gif)
 
-    if a.apps == "/tmp/paintbig.img":
+    if a.apps == tempfile.gettempdir() + "/paintbig.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + gif)
 
@@ -138,30 +126,37 @@ def main():
                                                               gifname)))
         mo.to(rx, ry)
         os88marty.settle(m)
-        m.bp_exec(a.blit)
-        mo.dblclick(rx, ry)
-        r = widest(m, a.blit, iw)
+        got = {}
+
+        def stub_ds(mm, r):
+            """Paint's segment, off the API stub's saved DS - the menu check
+            at the end reads variables of Paint's, and this is the one place
+            the harness is stopped inside a call Paint made. It has to happen
+            HERE: the word is on the guest's stack and is gone on the resume."""
+            got["base"] = int.from_bytes(
+                mm.read((r["ss"] << 4) + r["sp"] + 2, 2), "little") << 4
+
+        r = blitpair.wide_blit(m, lambda: mo.dblclick(rx, ry), iw,
+                               syms=(a.blit,), regs=True, at_hit=stub_ds)
         if r is None:
             sys.exit("paintbig: no %s as wide as the picture" % a.blit)
-        # Paint's segment, off the API stub's saved DS - the menu check at
-        # the end reads variables of Paint's, and this is the one place the
-        # harness is stopped inside a call Paint made.
-        pkgbase = int.from_bytes(
-            m.read((r["ss"] << 4) + r["sp"] + 2, 2), "little") << 4
-        m.bp_exec()
-        m.run()
-        time.sleep(6)
+        pkgbase = got["base"]
+
+        def words(*names):
+            """Paint's own words, for a wait on the state an action moves."""
+            return tuple(bytes(m.read(pkgbase + sym[n], 2)) for n in names)
+
+        os88marty.settle(m)             # the rest of the load, off the glass
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         wx, wy, ww, wh = dispcp.win_rect(m, S, pw)
 
         # --- GROW, by the grow box, as far as the desktop allows
-        m.bp_exec(a.blit)
-        mo.drag(wx + ww - 6, wy + wh - 6, 636, 476)
-        r = widest(m, a.blit, iw)
-        m.bp_exec()
-        m.run()
+        r = blitpair.wide_blit(m, lambda: mo.drag(wx + ww - 6, wy + wh - 6,
+                                                  636, 476),
+                               iw, syms=(a.blit,), regs=True)
         os88marty.settle(m)
-        time.sleep(8)
+        os88marty.quiesce(m, lambda: words("pt_cw", "pt_ch"), guest=1.0,
+                          what="the canvas size after the grow")
         if r is None:
             sys.exit("paintbig: the picture never blitted after the grow, so "
                      "there is nowhere to read it back from")
@@ -213,11 +208,12 @@ def main():
         tx, ty = tool_xy(ox, oy, PT_T_SEL)
         mo.click(tx, ty)
         os88marty.settle(m)
-        time.sleep(2)
+        os88marty.quiesce(m, lambda: words("pt_tool"), guest=0.5,
+                          what="the Select tool")
         mo.drag(ox + SRC_X, oy + SRC_Y,
                 ox + SRC_X + SEL_W - 1, oy + SRC_Y + SEL_H - 1)
         os88marty.settle(m)
-        time.sleep(4)
+        os88marty.quiesce(m, selrect, guest=1.0, what="the marquee")
         sx1, sy1, sx2, sy2 = selrect()
         print("   source selection (%d,%d)-(%d,%d), %dx%d, x phase %d"
               % (sx1, sy1, sx2, sy2, sx2 - sx1 + 1, sy2 - sy1 + 1, sx1 & 7))
@@ -225,20 +221,22 @@ def main():
         m.key("KeyC")
         m.key("ControlLeft", down=False, up=True)
         os88marty.settle(m)
-        time.sleep(8)
+        os88marty.quiesce(m, lambda: words("pt_cbw", "pt_cbh", "pt_cbseg",
+                                           "pt_cbparas"),
+                          guest=1.0, what="the Copy's clipboard")
 
         # --- the destination: a marquee in the blank ground BELOW the
         # picture, so nothing here is comparing the block against itself.
         mo.drag(ox + DST_X, oy + DST_Y, ox + DST_X + 8, oy + DST_Y + 8)
         os88marty.settle(m)
-        time.sleep(4)
+        os88marty.quiesce(m, selrect, guest=1.0, what="the marquee")
         dx1, dy1 = selrect()[:2]
         print("   destination corner (%d,%d), x phase %d" % (dx1, dy1, dx1 & 7))
         m.key("ControlLeft", down=True, up=False)
         m.key("KeyV")
         m.key("ControlLeft", down=False, up=True)
         os88marty.settle(m)
-        time.sleep(10)
+        os88marty.quiesce(m, selrect, guest=1.0, what="the Paste")
         # The marquee is a LATCHED XOR (SPEC.md 11.90.2) and pt_paste re-shows
         # it over the block it just laid down, so the outline is in the
         # framebuffer and 4n-4 pixels of the compare below are it. Picking a
@@ -246,7 +244,8 @@ def main():
         tx, ty = tool_xy(ox, oy, PT_T_PENCIL)
         mo.click(tx, ty)
         os88marty.settle(m)
-        time.sleep(3)
+        os88marty.quiesce(m, lambda: words("pt_tool"), guest=0.5,
+                          what="the Pencil tool")
         mo.to(4, 4)
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)

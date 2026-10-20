@@ -43,7 +43,7 @@ SIX ASSERTIONS, and they climb the stack.
 
 5. NOT ONE BYTE OF THE BROWSER IS ABOUT ETHERNET. The `.o88` under test is the
    one `make` builds for the shipped floppy, and the only thing it was told is
-   a URL. That is stage E's whole claim (docs/NET-STACK-PLAN.md).
+   a URL. That is stage E's whole claim (docs/plans/completed/NET-STACK-PLAN.md).
 
 The driver is asked for by a SYSTEM.CFG that `make ethertest` puts on the disk,
 so nothing here drives the Control Panel: the driver is attached and DHCP has
@@ -61,11 +61,19 @@ import tempfile
 import threading
 import time
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import dispcp                                          # noqa: E402
 import os88sym                                         # noqa: E402
+import os88geom                                        # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88build                                       # noqa: E402
 
 S = os88sym.linear
 SOCK = "build/qmp.sock"
@@ -73,7 +81,7 @@ PORT = 8090
 PATH = "/eth.htm"
 URL = "http://10.0.2.2:%d%s" % (PORT, PATH)
 
-SK_RXMAX, SK_TXMAX = 8192, 1024         # tcp.inc's top rung (SPEC.md 72.13)
+SK_RXMAX, SK_TXMAX = 8192, 4096         # tcp.inc's top rung (SPEC.md 72.13, 72.4.3)
 ETH_ROW, DRVR_SZ, DRVR_SEG = 2, 16, 2   # drv_tab row 2 since SPEC.md 31.1's
                                         # reorder (sound, hdd, ETHER, ram, net)
 DH_BOUND = 3
@@ -130,7 +138,7 @@ def ether_syms():
                        + ["-I", "drivers/ether/", "-I", "drivers/net/",
                           "-I", "drivers/", "-I", "apps/", "-o", out, src],
                        check=True)
-        if open(out, "rb").read() != open("build/ether.bin", "rb").read():
+        if open(out, "rb").read() != open(os88build.at("build/ether.bin"), "rb").read():
             sys.exit("ethernet: the mapped build is not build/ether.bin - "
                      "every offset it names would be plausible and wrong")
         syms = {}
@@ -194,6 +202,25 @@ class Qemu:
             f.close()
             s.close()
 
+    # --- SENDKEY, and it lives HERE rather than in a subclass ----------------
+    # tests/dispcp.py's scroller drives a list with ArrowDown/End, and it is
+    # the shared navigation every gate reuses. tests/ftpd.py worked out the
+    # mapping and put it on its OWN Qemu, so ethernet.py - the file that
+    # DEFINES this class and calls dispcp.open_named itself - had no `key` at
+    # all and died with AttributeError the moment it opened a package by name.
+    # One method on the base class is what ftpd's own comment already said it
+    # was: "the whole of what a QEMU-hosted gate is missing to reuse that
+    # scroller."
+    QKEYS = {"ArrowDown": "down", "ArrowUp": "up", "Home": "home",
+             "End": "end", "PageDown": "pgdn", "PageUp": "pgup",
+             "Tab": "tab", "Enter": "ret"}
+
+    def key(self, name):
+        if name not in self.QKEYS:
+            raise KeyError("no QMP sendkey name for %r" % name)
+        self.hmp("sendkey " + self.QKEYS[name])
+        os88qemu.pace(self, 0.05)           # the GUEST's time: os88qemu.py
+
     def read(self, linear, n):
         p = os.path.join(self.tmp, "m.bin")
         # THE FILENAME IS QUOTED, and it has to be: HMP parses an unquoted
@@ -216,6 +243,14 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
+def gsleep(secs):
+    """`secs` of the GUEST's clock, for a caller holding no Qemu - one
+    tools/qmp.py `gsleep`, which counts the BIOS ticks (tests/os88qemu.py's
+    reason: a loaded box cannot shorten it the way it shortens a sleep)."""
+    subprocess.run(["python3", "tools/qmp.py", SOCK, "gsleep %s" % secs],
+                   check=True, capture_output=True)
+
+
 def dotted(b):
     return ".".join(str(x) for x in b)
 
@@ -230,23 +265,30 @@ class Mouse:
 
     def click(self, x, y):
         self.run("click", str(x), str(y))
-        time.sleep(0.4)
+        gsleep(0.4)
 
     def dblclick(self, x, y):
         # TWO `click`s ARE NOT A DOUBLE-CLICK (CLAUDE.md): the detectors
         # compare birth ticks in a 9-tick window and two processes are far too
-        # slow. Position, then both presses down one QMP connection.
+        # slow. Position, then both presses down one QMP connection. The
+        # spacing INSIDE the pair stays host time: it is well inside the
+        # window either way, and a tick-rounded one would eat into it.
         self.run("to", str(x), str(y))
         subprocess.run(["python3", "tools/qmp.py", SOCK,
                         "mouse_button 1", "sleep 0.08", "mouse_button 0",
                         "sleep 0.12",
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0"],
+                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
+                        "gsleep 0.4"],
                        check=True, capture_output=True)
-        time.sleep(0.4)
 
 
 def settle(m, card=None):
-    time.sleep(2.0)
+    """What a settle was on QEMU - two seconds of the GUEST's time - as a
+    CEILING: it ends as soon as the UI task has finished with everything it
+    was given (os88qemu.ui_done), which after most gestures is a tick or two.
+    A caller whose next step needs a WORKER or the network to have moved
+    waits on that state; this only promises the UI."""
+    os88qemu.ui_done(m, S, cap=2.0)
 
 
 # --- QEMU's sendkey names for the characters a URL needs ---------------------
@@ -265,7 +307,7 @@ def type_url(text):
             cmds += ["sendkey " + KEYS[ch]]
         else:
             sys.exit("ethernet: no sendkey mapping for %r" % ch)
-        cmds += ["sleep 0.06"]
+        cmds += ["gsleep 0.06"]         # the guest's time (tools/qmp.py)
     subprocess.run(["python3", "tools/qmp.py", SOCK] + cmds,
                    check=True, capture_output=True)
 
@@ -309,6 +351,29 @@ def stale(img, src):
     return os.path.getmtime(img) < os.path.getmtime(src)
 
 
+MC_SIZE = os88geom.MC_SIZE
+MEM_MAX = 32
+
+
+def claims(m, S):
+    """Every live heap claim: (base, paragraphs, owner, dma, rloc, hi).
+
+    HI IS MC_DMA's BIT 15 (MC_DMA_HI), and the record is os88geom's MC_SIZE.
+    It was a byte of its own at +10 until the record shrank to ten bytes, and
+    this row, unregistered then, went on reading byte 10 and died on an
+    IndexError nobody saw. The layout comes from the kernel's own equates."""
+    raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
+    out = []
+    for i in range(MEM_MAX):
+        r = raw[i * MC_SIZE:(i + 1) * MC_SIZE]
+        if u16(r, 0):
+            dma = u16(r, 6)
+            out.append((u16(r, 0), u16(r, 2), u16(r, 4),
+                        dma & os88geom.MC_DMA_HEAD, u16(r, 8),
+                        1 if dma & os88geom.MC_DMA_HI else 0))
+    return sorted(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shot", default=None)
@@ -324,7 +389,7 @@ def main():
     # about DHCP. Staleness is not the hazard here - a dirty image is - and
     # `make` cannot see the difference, because the guest's write leaves the
     # image NEWER than everything it was built from.
-    if os.path.exists("build/ether360.img"):
+    if os.path.exists(os88build.at("build/ether360.img")):
         os.remove("build/ether360.img")
     r = subprocess.run(["make", "ethertest"], capture_output=True, text=True)
     if r.returncode:
@@ -353,8 +418,9 @@ def main():
     # with `pkill -f qemu`, whose pattern matches the calling shell.
     if os.path.exists("build/qemu.pid"):
         try:
-            os.kill(int(open("build/qemu.pid").read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open("build/qemu.pid").read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in ("build/qmp.sock", "build/qemu.pid"):
@@ -374,13 +440,14 @@ def main():
     m = Qemu()
     try:
         # --- 1: a card, and an address ------------------------------------
-        seg = 0
-        for _ in range(150):
-            time.sleep(0.4)
-            row = m.read(S("drv_tab") + ETH_ROW * DRVR_SZ + DRVR_SEG, 2)
-            seg = u16(row)
-            if seg:
-                break
+        # EVERY WAIT BELOW IS IN THE GUEST'S SECONDS (tests/os88qemu.py) and on
+        # the word the next line reads - the budgets are what the host-clock
+        # loops they replace allowed on an idle box.
+        def drvseg():
+            return u16(m.read(S("drv_tab") + ETH_ROW * DRVR_SZ + DRVR_SEG, 2))
+        os88qemu.acted(m, lambda: drvseg() != 0, secs=60,
+                       what="ETHER.DRV's drv_tab row", poll=0.4)
+        seg = drvseg()
         if not seg:
             m.quit()
             sys.exit("ethernet: ETHER.DRV never attached - no card was found "
@@ -401,12 +468,9 @@ def main():
         # above can catch the row a whole floppy read and a bus sweep ahead of
         # the card. A machine that really has none leaves this 0 for ever, so a
         # bounded wait still catches it and no longer reports the window.
-        base = 0
-        for _ in range(60):
-            base = dw("eth_base")
-            if base:
-                break
-            time.sleep(0.4)
+        os88qemu.acted(m, lambda: dw("eth_base") != 0, secs=24,
+                       what="[eth_base]", poll=0.4)
+        base = dw("eth_base")
         mac = m.readseg(seg, syms["eth_mac"], 6)
         say("card at %04X, id %s" % (base, mac.hex()))
         if base == 0:
@@ -439,10 +503,43 @@ def main():
                          "the RX rung and these two have come apart"
                          % (txcap, SK_TXMAX))
 
-        for _ in range(80):                     # DHCP_WAIT is 110 ticks
-            if db("dhcp_st") == DH_BOUND:
-                break
-            time.sleep(0.3)
+        # --- 1c. ...AND THE POOL DECLARED ITSELF MOVABLE (SPEC.md 66.4.1) --
+        # docs/plans/HEAP-UNPIN-PLAN.md 5.1. This is the largest single block
+        # in 2.0's wall - 14KB of driver furniture claimed from the top and
+        # pinned there for the session - and it was pinned by a comment
+        # ("the card's own descriptors point into these rings and it DMAs into
+        # them") that is false for an NE2000: the 8390's DMA engines are
+        # internal, the host side is `in al, dx` / `stosb`, and this driver
+        # hooks no vector at all.
+        #
+        # IT IS READ FROM mem_tab AND NOT FROM THE DRIVER, because that is the
+        # only place a REFUSED declaration shows. mem_movable's fence is
+        # "yours, or not at all", so a wrong owner returns CF=1, writes no
+        # MC_RLOC, and looks identical from inside the driver - which is
+        # exactly how SPEC.md 66.5.6.2's silent refusal went unnoticed for a
+        # release.
+        pool = [c for c in claims(m, S) if c[0] == skseg]
+        if len(pool) != 1:
+            fails.append("no claim in mem_tab starts at sk_seg %04X, so the "
+                         "rings are not where the driver says they are"
+                         % skseg)
+        else:
+            base_, para_, own_, dma_, rloc_, hi_ = pool[0]
+            say("pool claim %04X %dKB owner %04X%s%s"
+                % (base_, para_ // 64, own_,
+                   " MOVABLE" if rloc_ else " PINNED",
+                   " HI" if hi_ else " low"))
+            if not rloc_:
+                fails.append("the socket pool's MC_RLOC is 0: the "
+                             "OSAPI_MEM_MOVABLE call in sk_claim was REFUSED "
+                             "and the driver cannot tell (SPEC.md 66.5.6.2)")
+            if not hi_:
+                fails.append("the socket pool's MC_DMA_HI is 0: it came in "
+                             "through the low door, so SPEC.md 66.4.1's "
+                             "descending pass will never reach it")
+
+        os88qemu.acted(m, lambda: db("dhcp_st") == DH_BOUND, secs=24,
+                       what="DHCP bound", poll=0.3)     # DHCP_WAIT: 110 ticks
         st, ip, gw, dns = db("dhcp_st"), dip("eth_ip"), dip("eth_gw"), \
             dip("eth_dns")
         if db("eth_mode") != 0:
@@ -491,20 +588,18 @@ def main():
         # read `http:/http://10.0.2.2:8090/eth.htm/`, the browser refused it
         # correctly, and the gate reported the STACK as broken over a fetch
         # that was never asked for. Nothing below assertion 2 could pass.
-        time.sleep(1.0)
+        os88qemu.pace(m, 1.0)
         type_url(URL[len("http://"):])
-        time.sleep(1.0)
+        os88qemu.pace(m, 1.0)
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey ret"],
                        check=True, capture_output=True)
 
-        img = os.path.getsize("build/browser.bin")
-        nstate = nlines = 0
-        for _ in range(60):
-            time.sleep(0.5)
-            nstate = m.readseg(pseg, img + BR_NSTATE, 1)[0]
-            nlines = u16(m.readseg(pseg, img + BR_NLINES, 2))
-            if nstate in (BN_DONE, BN_ERR):
-                break
+        img = os.path.getsize(os88build.at("build/browser.bin"))
+        os88qemu.acted(m, lambda: m.readseg(pseg, img + BR_NSTATE, 1)[0]
+                       in (BN_DONE, BN_ERR), secs=30, what="br_nstate",
+                       poll=0.5)
+        nstate = m.readseg(pseg, img + BR_NSTATE, 1)[0]
+        nlines = u16(m.readseg(pseg, img + BR_NLINES, 2))
         say("br_nstate = %d, br_nlines = %d" % (nstate, nlines))
         say("frames rx %d tx %d, segments %d, dropped %d, overruns %d"
             % (dw("eth_nrx"), dw("eth_ntx"), dw("eth_nseg"),

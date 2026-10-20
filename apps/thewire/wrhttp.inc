@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/thewire/wrhttp.inc
 ;
-; THE WIRE'S HTTP/1.0 CLIENT (SPEC.md 88.4), and the worker that drives it.
+; THE WIRE'S HTTP/1.0 CLIENT (SPEC.md 92.4), and the worker that drives it.
 ;
 ; --- WRITTEN SO IT COULD MOVE TO apps/ -------------------------------------
 ; docs/WIRE-PLAN.md 11 defers a shared `apps/os88http.inc` and says why: the
@@ -18,7 +18,7 @@
 ;
 ; Everything else here is private. The one deliberate coupling is the
 ; INVERSION in wr_take - a WK_PIC body is stored `not`-ed, which is SPEC.md
-; 88.3's whole adapter story - and it is one instruction behind one compare.
+; 92.3's whole adapter story - and it is one instruction behind one compare.
 ;
 ; --- THE DESTINATION IS A FAR POINTER, WHICH THE BROWSER'S IS NOT ------------
 ; brnet.inc always drains into one claim. This drains into a claim (a catalog
@@ -53,6 +53,16 @@ wr_hire:
     call OSAPI_TASK_SPAWN
     jc .out
     mov byte [wr_hired], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame before its
+    ; first instruction, so mem_frameless pins a region with an
+    ; undeclared worker however that region is declared. What a restart
+    ; costs is one pass of the loop - the park is inside
+    ; OSAPI_TASK_ALIVE and nowhere else (this package is not
+    ; OSAPI_MEM_PARKSAFE), which is the TOP of the loop, and every byte
+    ; that outlives a pass is a static and moves with us. NOKEEP: AX is
+    ; popped below and no caller reads this routine's flags.
+    OS88_WORKER_RESTARTABLE_NOKEEP wr_worker
 .out:
     pop bx
     pop ax
@@ -72,49 +82,33 @@ wr_hire:
 ; handle lands on a socket that is closed and not yet reissued.
 ; -----------------------------------------------------------------------------
 wr_start:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     inc byte [wr_gen]
     call wr_hclose
     mov [wr_dseg], ax
     mov [wr_dbase], bx
     mov [wr_dmax], cx
     mov [wr_kind], dl
-    mov word [wr_got], 0
-    mov word [wr_got+2], 0              ; both halves: a WK_ARC transfer leaves
-    mov word [wr_clen], 0               ; them non-zero and the next kind reads
-    mov word [wr_clen+2], 0             ; them as a 4GB body already delivered
-    mov word [wr_rxp], 0                ; ...and the bytes an archive's pause
-    mov word [wr_rxn], 0                ; kept in wr_rxb belong to a transfer
-                                        ; that is now superseded
-    mov word [wr_code], 0
-    mov word [wr_hlen], 0
-    mov word [wr_hline], 0
-    mov word [wr_sent], 0
-    mov word [wr_msg], 0
-    mov word [wr_shown], 0xFFFF
-    mov byte [wr_wake], WW_NONE
+    push ds                             ; wr_got, wr_clen, wr_code,
+    pop es                              ; wr_hline, wr_hlen, wr_sent, wr_msg,
+    mov di, os88_image_end + WR_ZERO    ; wr_rxp and wr_rxn: one block. BOTH
+    mov cx, WR_ZEROW                    ; halves of the two dwords - a WK_ARC
+    xor ax, ax                          ; transfer leaves them non-zero and the
+    rep stosw                           ; next kind reads them as a 4GB body
+                                        ; already delivered - and the bytes an
+                                        ; archive's pause kept in wr_rxb
+                                        ; belong to a transfer that is now
+                                        ; superseded
+    mov [wr_wake], al                   ; WW_NONE
+    dec ax
+    mov [wr_shown], ax                  ; 0xFFFF
     call wr_pathbuild
     mov byte [wr_state], WS_OPEN
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- wr_pathbuild - the prefix and what this kind asks for, into wr_path -----
 wr_pathbuild:
-    push ax
-    push cx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     mov di, wr_path
     mov si, wr_pfx
     call wr_sput
@@ -126,12 +120,10 @@ wr_pathbuild:
     mov si, wr_p_pkg                    ; /wire/pkg/<NAME>
     call wr_sput
     mov si, wr_fname
-    call wr_sput
-    jmp short .term
+    jmp short .last
 .cat:
     mov si, wr_f_cat                    ; /wire/catalog.bin
-    call wr_sput
-    jmp short .term
+    jmp short .last
 .pic:
     mov si, wr_p_pic                    ; /wire/pic/<STEM>.PIC
     call wr_sput
@@ -140,27 +132,21 @@ wr_pathbuild:
     mov cx, 8
     call wr_stemcopy
     mov si, wr_x_pic
-    call wr_sput
-.term:
-    mov byte [di], 0
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+.last:
+    jmp wr_sput                         ; ...which writes the NUL; its ret is
+                                        ; ours, and lands in wr_rs
 
 ; --- wr_hclose - give the handle back, whatever happened ---------------------
 wr_hclose:
     push ax
     push bx
-    cmp byte [wr_hnd], 0
-    je .out
-    mov al, [wr_hnd]
+    xor al, al
+    xchg al, [wr_hnd]                   ; the handle, and NONE from this one
+    or al, al                           ; instruction on - so the other task's
+    jz .out                             ; wr_hclose cannot close it twice
     mov bh, NET_CLASS
     mov bl, NETV_CLOSE
     call OSAPI_DRV_CALL
-    mov byte [wr_hnd], 0
 .out:
     pop bx
     pop ax
@@ -225,17 +211,13 @@ wr_nstep:
                                         ; wire": no NETV_RECV is issued, so
                                         ; TCP's own receive window backs the
                                         ; server off while the UI task writes
-                                        ; a file (SPEC.md 88.14)
+                                        ; a file (SPEC.md 92.14)
 
 .open:
     call net_find                       ; WHICH driver, and is it one of ours?
     jc .nodrv                           ; (SPEC.md 20.11.1 - a class is a
-    mov bh, NET_CLASS                   ; publication slot, not a driver)
-    mov bl, NETV_STATE
-    call OSAPI_DRV_CALL
-    jc .nodrv
-    test al, NSTF_SOCK
-    jz .nodrv
+    jz .nodrv                           ; publication slot, not a driver) -
+                                        ; and NSTF_SOCK, OS88SOCK_STATE's half
     mov bh, NET_CLASS
     mov bl, NETV_OPEN
     mov si, wr_host
@@ -248,10 +230,10 @@ wr_nstep:
     mov byte [wr_state], WS_WAIT
     jmp .redraw
 .stale:                                 ; superseded WHILE OPENING: this socket
-    mov bh, NET_CLASS                   ; belongs to nobody, and leaving it
-    mov bl, NETV_CLOSE                  ; would hold a handle for the session
-    call OSAPI_DRV_CALL
-    jmp .out
+    mov [wr_hnd], al                    ; belongs to nobody, and leaving it
+    call wr_hclose                      ; would hold a handle for the session.
+    jmp .out                            ; If the UI task closes it first, the
+                                        ; xchg there leaves this one nothing
 .nodrv:
     mov si, wr_s_nodrv
     jmp .fail
@@ -268,6 +250,10 @@ wr_nstep:
 .up:
     call wr_gchk
     jc .out
+    mov word [wr_rxn], 0                ; THE REQUEST IS COMPOSED INTO wr_rxb
+                                        ; (thewire.asm's bss): whatever a
+                                        ; superseded pass banked there is gone
+                                        ; now, so the count of it goes too
     call wr_req
     mov word [wr_sent], 0
     mov byte [wr_state], WS_SEND
@@ -447,7 +433,7 @@ wr_rputs:
 ; the pass started and is stale a thousand stores later.
 ;
 ; **AND IT MAY STOP BEFORE THE CHUNK IS SPENT.** An archive's unpacker pauses
-; at every entry boundary (SPEC.md 88.14) and a boundary lands wherever it
+; at every entry boundary (SPEC.md 92.14) and a boundary lands wherever it
 ; lands, so the read position is state rather than a register - which is also
 ; why the counter is carried in CX and written back at each exit rather than
 ; run down by `loop`.
@@ -471,8 +457,7 @@ wr_take:
     mov ah, [wr_gen]
     cmp ah, [wr_gen0]
     jne .done
-    mov al, [si]
-    inc si
+    lodsb                               ; DS:SI, the chunk in wr_rxb
     dec cx
     cmp byte [wr_state], WS_BODY
     je .body
@@ -491,7 +476,7 @@ wr_take:
     cmp byte [wr_kind], WK_PIC
     jne .st
     not al                              ; **THE PICTURE IS INVERTED AS IT
-                                        ; ARRIVES** (SPEC.md 88.3): the file's
+                                        ; ARRIVES** (SPEC.md 92.3): the file's
                                         ; 1 is ink and gfx_blit1 wants a set
                                         ; bit to be a LIT pixel, so one `not`
                                         ; here buys a draw with no adapter
@@ -506,7 +491,7 @@ wr_take:
     call wr_afeed                       ; THE UNPACKER, not a store: this byte
                                         ; is a header field, a literal or half
                                         ; of a pair, and where it lands is
-                                        ; wrarc.inc's business (SPEC.md 88.13)
+                                        ; wrarc.inc's business (SPEC.md 92.13)
     add word [wr_got], 1                ; ...and the count is 32-bit HERE ONLY,
     adc word [wr_got+2], 0              ; so a package and a picture keep the
                                         ; single `inc` they always had
@@ -599,23 +584,22 @@ wr_hdrline:
     inc si
     jmp short .sp
 .num:
-    ; **THE ACCUMULATOR IS 32 BITS** (SPEC.md 88.14): a .WPK is the one body
+    ; **THE ACCUMULATOR IS 32 BITS** (SPEC.md 92.14): a .WPK is the one body
     ; this client reads that may pass 64KB, and a word here would take a
     ; 196KB archive as a 65KB one - a small plausible number, which is
     ; PERFORMANCE.md rule 3's failure mode exactly. The low half is multiplied
     ; first and its carry added to the high half's product; either overflowing
     ; saturates, and wr_hdrdone then refuses the length against what the
     ; transfer can actually hold.
-    mov word [wr_clen], 0
-    mov word [wr_clen+2], 0
+    xor ax, ax
+    mov [wr_clen], ax
+    mov [wr_clen+2], ax
 .d:
     mov al, [si]
-    cmp al, '0'
-    jb .out
-    cmp al, '9'
+    sub al, '0'                         ; a digit is 0..9 after this, and
+    cmp al, 9                           ; anything else is above 9 unsigned
     ja .out
-    sub al, '0'
-    xor ah, ah
+    cbw
     mov di, ax                          ; DI = the digit
     mov cx, 10
     mov ax, [wr_clen]
@@ -637,8 +621,9 @@ wr_hdrline:
     inc si
     jmp short .d
 .huge:
-    mov word [wr_clen], 0xFFFF          ; ...and wr_hdrdone refuses it, which
-    mov word [wr_clen+2], 0xFFFF        ; no claim and no catalog size reaches
+    mov ax, 0xFFFF                      ; ...and wr_hdrdone refuses it, which
+    mov [wr_clen], ax                   ; no claim and no catalog size reaches
+    mov [wr_clen+2], ax
     jmp short .out
 .status:
     mov si, wr_hbuf                     ; `HTTP/1.0 200 OK`: columns 9..11
@@ -652,18 +637,13 @@ wr_hdrline:
     mov cx, 3
 .code:
     mov al, [si]
-    cmp al, '0'
-    jb .cdone
-    cmp al, '9'
+    sub al, '0'                         ; a digit is 0..9 after this, and
+    cmp al, 9                           ; anything else is above 9 unsigned
     ja .cdone
-    sub al, '0'
-    push ax
-    mov ax, bx
-    mov bx, 10
-    mul bx
-    mov bx, ax
-    pop ax
-    xor ah, ah
+    cbw
+    xchg ax, bx                         ; AX = the code so far, BX = the digit
+    mov dx, 10
+    mul dx
     add bx, ax
     inc si
     loop .code
@@ -739,7 +719,7 @@ wr_hdrdone:
     or ax, [wr_clen+2]
     jz .status                          ; no length is 'did not answer (0)',
                                         ; which is true and is what SPEC.md
-                                        ; 88.4 requires
+                                        ; 92.4 requires
     cmp byte [wr_kind], WK_ARC
     je .arc
     cmp word [wr_clen+2], 0             ; every OTHER kind lands in one claim,
@@ -768,7 +748,7 @@ wr_hdrdone:
 .arc:
     ; **AN ARCHIVE MUST BE EXACTLY THE BYTES THE CATALOG PROMISED**, over 32
     ; bits, and there is no claim to check it against: WC_SIZE is what the
-    ; transfer carries and WC_TOTAL what it unpacks to (SPEC.md 88.2), so this
+    ; transfer carries and WC_TOTAL what it unpacks to (SPEC.md 92.2), so this
     ; is the only bound the stream has before wr_ahdrck sees the header.
     call wr_selrec
     mov ax, [wr_clen]
@@ -788,9 +768,7 @@ wr_hdrdone:
     call wr_sput
     mov ax, [wr_code]
     call wr_snum
-    mov byte [di], ')'
-    inc di
-    mov byte [di], 0
+    mov word [di], ')'                  ; the parenthesis and its NUL
     mov word [wr_msg], wr_nmsg
     jmp short .fail
 .toobig:
@@ -814,8 +792,9 @@ wr_hdrdone:
 ; -----------------------------------------------------------------------------
 ; wr_finish / wr_failpost - the two ways a transfer ends
 ;
-; Both are the WORKER's half of SPEC.md 88.5's one byte: everything the
-; handler will read is written first, and [wr_wake] LAST.
+; Both are the WORKER's half of SPEC.md 92.5's one byte: everything the
+; handler will read is written first, and [wr_wake] LAST - which is wr_post,
+; the tail the two of them and wr_pausepost share.
 ; -----------------------------------------------------------------------------
 wr_finish:
     push ax
@@ -825,15 +804,16 @@ wr_finish:
     mov [wr_catlen], ax                 ; only the catalog reads it, and it is
                                         ; free to write for every kind
     mov byte [wr_state], WS_DONE
-    mov al, [wr_kind]
-    mov [wr_wkind], al
-    mov byte [wr_wake], WW_DONE
-    mov bx, [wr_win]
-    call OSAPI_WM_WAKE
-    call wr_nshow
-    pop bx
-    pop ax
-    ret
+    mov al, WW_DONE
+    jmp short wr_post
+
+wr_failpost:
+    push ax
+    push bx
+    call wr_hclose
+    mov byte [wr_state], WS_FAIL
+    mov al, WW_FAIL
+    jmp short wr_post
 
 ; --- wr_pausepost - the THIRD way out of a pass, and it is not an end -------
 ; The unpacker has reached a boundary the worker may not cross (a claim, a
@@ -843,26 +823,18 @@ wr_finish:
 wr_pausepost:
     push ax
     push bx
-    mov al, [wr_kind]
-    mov [wr_wkind], al
     mov al, [wr_apw]
-    mov [wr_wake], al                   ; ...LAST, after everything the handler
-                                        ; will read (SPEC.md 88.5)
-    mov bx, [wr_win]
-    call OSAPI_WM_WAKE
-    call wr_nshow
-    pop bx
-    pop ax
-    ret
+    ; ...falls into wr_post
 
-wr_failpost:
-    push ax
-    push bx
-    call wr_hclose
-    mov byte [wr_state], WS_FAIL
-    mov al, [wr_kind]
-    mov [wr_wkind], al
-    mov byte [wr_wake], WW_FAIL
+; --- wr_post - AL = the WW_* code: bank the kind, then the ONE BYTE ----------
+; Entered by a jump with AX and BX pushed, and pops them. [wr_wake] is written
+; LAST, after everything the handler will read (SPEC.md 92.5).
+wr_post:
+    ; STKBALANCE-OK: never called - jumped to by the three above with AX and
+    ; BX already pushed, and pops exactly those two
+    mov ah, [wr_kind]
+    mov [wr_wkind], ah
+    mov [wr_wake], al
     mov bx, [wr_win]
     call OSAPI_WM_WAKE
     call wr_nshow

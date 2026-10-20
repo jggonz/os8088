@@ -44,7 +44,6 @@ Four things cost a run each here, and three of them are subcheck's:
 """
 import os
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -62,8 +61,16 @@ def main():
                           apps=os.path.join(ROOT, "build/apps360.img"),
                           machine=machine) as m:
         mo = Mouse(marty=m)
-        mo.dblclick(*su.zone(m, 1)); time.sleep(4)
-        mo.dblclick(*su.zone(m, 0)); time.sleep(4)
+        for zone in (1, 0):                 # each opens a window: wait for
+            n = len([x for x in su.windows(m) if x.visible])    # it, then
+            mo.dblclick(*su.zone(m, zone))                      # for its
+            try:                                                # paint
+                os88marty.until(m, lambda _: len(
+                    [x for x in su.windows(m) if x.visible]) > n,
+                    "the zone's window", poll=0.25, limit=60)
+            except os88marty.MartyError:
+                pass                        # ...reported just below
+            os88marty.settle(m)
         w = [x for x in su.windows(m) if x.visible]
         z = [i for i in sc.zorder(m) if i in [x.i for x in w]]
         if len(z) < 2:

@@ -4,7 +4,7 @@
 ; The text window for v1-v5, v7 and v8: geometry, word wrap, the scrollback
 ; ring, the [MORE] prompt, the upper window, the v1-3 status line, styles and
 ; colour. v6 replaces the whole model with pixel-addressed windows and is
-; zwin6.inc; the two never run together (docs/FROTZ-PLAN.md 5).
+; zwin6.inc; the two never run together (docs/plans/completed/FROTZ-PLAN.md 5).
 ;
 ; THE DECISION THIS FILE IS BUILT AROUND: every cell it paints is painted by
 ; OSAPI_FONT_RUN and by nothing else. Not one gfx_fill touches a cell.
@@ -44,7 +44,7 @@
 ; worker may not hold the lock across a yield (SPEC.md 20.6) and that wait is
 ; unbounded. It is called out again at zw_morewait.
 ;
-; ES. The worker runs with ES = the story segment (docs/FROTZ-PLAN.md 3.1),
+; ES. The worker runs with ES = the story segment (docs/plans/completed/FROTZ-PLAN.md 3.1),
 ; so every routine below that touches the scrollback claim or does a string
 ; instruction saves and restores ES itself. Callers never have to think
 ; about it.
@@ -109,7 +109,7 @@ ZW_GROW      equ 13                 ; the kernel's grow box, bottom right
 ; that never boxes never pays anything (PERFORMANCE.md Part 5).
 ;
 ; --- private state, from this module's slack range (zbss.inc 10) -------------
-; ZWIN_SLACK is 256 bytes and this uses 232 of them.
+; ZWIN_SLACK is 232 bytes and this uses all of them.
 %define zw_tx     (os88_image_end + ZWIN_SLACK + 0)   ; word: text origin x
 %define zw_ty     (os88_image_end + ZWIN_SLACK + 2)   ; word: text origin y
 %define zw_sbr    (os88_image_end + ZWIN_SLACK + 4)   ; word: bar's right edge
@@ -968,12 +968,7 @@ zw_morewait:
     call zw_blank
 .done:
     mov word [zw_more], 0
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop5
 
 ; -----------------------------------------------------------------------------
 ; zw_wflush - the pending word joins the line, wrapping under it if it must
@@ -1379,6 +1374,18 @@ zw_notice:
     call zh_puts                    ; whole point: a halt has to reach the host
     call zh_nl
 %endif
+    cmp byte [zf_state], ZFS_NONE   ; NO STORY: there is no text window to put
+    jne .story                      ; it in. It goes under the splash's lines,
+    mov [zf_why], si                ; where a repaint keeps it - it was set
+    mov si, [zf_win]                ; hard against the title bar, a scroll bar
+    or si, si                       ; beside it with nothing to scroll, and the
+    jz .out                         ; next uncover drew the splash over it.
+    mov al, CWHITE                  ; Only the UI task gets here (the worker
+    call OSAPI_SET_COLOR            ; has a story by definition), lock held;
+    call zw_clear                   ; no window yet and the first paint draws
+    call zf_splash                  ; it
+    jmp short .out
+.story:
     mov byte [zw_nomore], 1
     mov bl, [zw_style]
     mov byte [zw_style], ZST_ROMAN
@@ -1400,6 +1407,7 @@ zw_notice:
     call zw_newline
     mov [zw_style], bl
     mov byte [zw_nomore], 0
+.out:
     pop si
     pop bx
     pop ax
@@ -1445,14 +1453,7 @@ zw_paint:
     call OSAPI_WM_GROW              ; only here: the corner is out of reach of
     mov byte [zw_dirty], 0          ; everything on the per-line path
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 ; -----------------------------------------------------------------------------
 ; zw_up_draw - the upper window's rows, from the grid in the claim
@@ -1512,14 +1513,7 @@ zw_up_draw:
 .done:
     mov al, [zw_lstyle]
     mov [zw_style], al
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 ; -----------------------------------------------------------------------------
 ; zw_low_draw - the lower window's rows: stored lines, then the live one,
@@ -1543,11 +1537,7 @@ zw_low_draw:
     mov dx, ax                      ; DX = the first screen row
     mov bx, [zw_sbtop]              ; BX = the first logical line
     call zw_low_rows
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zw_low_rows - draw a RANGE of the lower window's rows (SPEC.md 61.15)
@@ -1591,14 +1581,7 @@ zw_low_rows:
 .done:
     mov al, [zw_lstyle]
     mov [zw_style], al
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 ; zw_storedinto - in AX = logical line; fill zw_rbuf and adopt its style
 zw_storedinto:
@@ -1687,11 +1670,7 @@ zw_clear:
     dec dx
     call OSAPI_GFX_FILL
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; =============================================================================
 ; The status line (Standard 8.2) - v1-3 only, and the interpreter's own work
@@ -1831,14 +1810,7 @@ zw_status:
     call zw_rowdraw
     mov [zw_style], bl
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 ; zw_status_draw - the repaint's view of the status line: v1-3 only, and it
 ;                  must not disturb the capture flag a caller may be inside
@@ -1888,11 +1860,7 @@ zw_dec:
     mov [di], al
     inc di
     loop .emit
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; zw_dec2 - the same, always two digits (minutes)
 zw_dec2:
@@ -2136,11 +2104,7 @@ zw_upclear:
     mov word [zw_ucol], 1           ; find nothing to release
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zw_lowclear - empty the scrollback and blank the lower window
@@ -2152,13 +2116,14 @@ zw_lowclear:
     mov ax, [zw_upper]              ; FIRST: the held rows are the lower
     mov [zw_uphold], ax             ; window's, and a story clearing it means
                                     ; the whole band, box included
-    mov word [zw_sbhead], 0
-    mov word [zw_sbcount], 0
-    mov word [zw_sbtop], 0
-    mov word [zw_lbn], 0
-    mov word [zw_wbn], 0
-    mov word [zw_more], 0
-    mov word [zw_col], 0
+    xor ax, ax
+    mov [zw_sbhead], ax
+    mov [zw_sbcount], ax
+    mov [zw_sbtop], ax
+    mov [zw_lbn], ax
+    mov [zw_wbn], ax
+    mov [zw_more], ax
+    mov [zw_col], ax
     call zw_lowrows
     mov cx, ax
     jcxz .out
@@ -2172,10 +2137,7 @@ zw_lowclear:
     call zw_lowtop
     mov [zw_row], ax
 .out:
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop3
 
 ; -----------------------------------------------------------------------------
 ; zw_erasewin - in AX = window number (Standard 8.7.3.2/8.7.3.3)
@@ -2292,14 +2254,7 @@ zw_eraseline:
     call zw_run
     mov [zw_style], bl
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 ; -----------------------------------------------------------------------------
 ; zw_setstyle - in AL = the style bits (Standard 8.7.1)
@@ -2384,12 +2339,6 @@ zw_zcol:
     pop ax
     ret
 
-; zw_buflen - out AX = how many characters are on the line so far
-zw_buflen:
-    mov ax, [zw_lbn]
-    add ax, [zw_wbn]
-    mov [zw_col], ax
-    ret
 
 ; =============================================================================
 ; The scroll bar (SPEC.md 22's geometry, so it looks like the Disk window's)
@@ -2479,11 +2428,7 @@ zw_sbar:
                                     ; repaint and skipping the bar inside one
                                     ; would leave the rect it just erased
                                     ; (SPEC.md 13.10.6.5)
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; zw_sbhit - is (CX, DX) inside the bar? out CF=0 = yes; preserves everything
 zw_sbhit:
@@ -2540,8 +2485,9 @@ zw_click:
     jne .out                        ; now. BX is still the block and DX still
     cmp byte [zw_nodrag], 0         ; the press, absolute
     jne .out
-    mov al, ZF_SBRATE
-    call os88ui_sbgrab
+    mov ax, ZF_SBRATE | (ZF_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
 %endif
     jmp short .out                  ; the thumb itself, or an inert track
 .lineup:
@@ -2563,11 +2509,7 @@ zw_click:
 .set:
     call zw_scrollto
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 %ifdef OS88UI_SBDRAG
 ; -----------------------------------------------------------------------------
@@ -2581,6 +2523,26 @@ zw_click:
 ; zw_scrollto does the clamp and the paint, so the tier 61.15 built is what a
 ; dragged thumb rides on: a blit and |d| rows, not a whole window.
 ; -----------------------------------------------------------------------------
+; zw_sbpause - SPEC.md 13.10.5.4.2: the thumb has been STILL long enough, so
+;              the view goes where the hand is. zw_sbtrack's shape with
+;              os88ui_sbowed in place of os88ui_sbtrack - a pause is not the
+;              end of the gesture, so the record must survive it.
+zw_sbpause:
+    push ax
+    push bx
+    push cx
+    push dx
+    call os88ui_sbdragging
+    jc .pout
+    call zw_bounds
+    jc .pout
+    call zw_sbset
+    call os88ui_sbowed
+    jc .pout
+    call zw_scrollto
+.pout:
+    jmp zf_pop4
+
 zw_sbtrack:
     push ax
     push bx
@@ -2595,11 +2557,7 @@ zw_sbtrack:
     jc .out                     ; line
     call zw_scrollto
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 zw_sbcommit:
     push ax
@@ -2615,11 +2573,7 @@ zw_sbcommit:
     jc .out                     ; position the rate refused is never lost
     call zw_scrollto
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; ...and the same without the commit, for a press that found one still live
 zw_sbdrop:
@@ -2632,11 +2586,7 @@ zw_sbdrop:
     call zw_sbset
     call os88ui_sbdrop
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -2661,11 +2611,7 @@ zw_scrollpage:
     add ax, [zw_sbtop]
     call zw_scrollto
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zw_scrollto - in AX = the line wanted at the top of the lower window (signed)
@@ -2700,10 +2646,7 @@ zw_scrollto:
     mov ax, bx
     call zw_sbpaint                 ; ...and this is what it costs now
 .out:
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop3
 
 ; -----------------------------------------------------------------------------
 ; zw_sbpaint - the scrollback moved: the LOW WINDOW and the THUMB (SPEC.md
@@ -2789,14 +2732,7 @@ zw_sbpaint:
 .bar:
     call zw_sbtrans
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 ; -----------------------------------------------------------------------------
 ; zw_sbtrans - the thumb moved: TRANSLATE it (SPEC.md 13.10.3)
@@ -2859,25 +2795,30 @@ zw_setup:
     push dx
     push di
     push es
-    mov word [zw_sbseg], 0
-    mov word [zw_sbmax], 0
-    mov word [zw_sbhead], 0
-    mov word [zw_sbcount], 0
-    mov word [zw_sbtop], 0
-    mov word [zw_lbn], 0
-    mov word [zw_wbn], 0
-    mov word [zw_upper], 0
-    mov word [zw_more], 0
-    mov word [zw_col], 0
-    mov word [zw_row], 0
-    mov word [zw_urow], 1
-    mov word [zw_ucol], 1
-    mov byte [zw_cur], 0
-    mov byte [zw_style], ZST_ROMAN
-    mov byte [zw_fg], 0
-    mov byte [zw_bg], 0
-    mov byte [zw_capon], 0
-    mov byte [zw_nomore], 0
+    xor ax, ax
+    mov [zw_sbseg], ax
+    mov [zw_sbmax], ax
+    mov [zw_sbhead], ax
+    mov [zw_sbcount], ax
+    mov [zw_sbtop], ax
+    mov [zw_lbn], ax
+    mov [zw_wbn], ax
+    mov [zw_upper], ax
+    mov [zw_more], ax
+    mov [zw_col], ax
+    mov [zw_row], ax
+    mov [zw_cur], al
+%if ZST_ROMAN != 0
+  %error "zw_setup stores AL = 0 as ZST_ROMAN"
+%endif
+    mov [zw_style], al              ; ZST_ROMAN
+    mov [zw_fg], al
+    mov [zw_bg], al
+    mov [zw_capon], al
+    mov [zw_nomore], al
+    inc ax
+    mov [zw_urow], ax
+    mov [zw_ucol], ax
     call zw_bounds
 
     mov ax, ZW_SBKB
@@ -2891,7 +2832,6 @@ zw_setup:
 .got:
     mov ax, ZW_SBKB
 .have:
-    mov [zw_sbkb], ax
     mov [zw_sbseg], dx
     mov es, dx
     push ax
@@ -2914,11 +2854,7 @@ zw_setup:
 .out:
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; =============================================================================
 ; Strings

@@ -17,7 +17,7 @@
  * ovl_compose(), the terrain-list walk that runs once per level and never
  * during play. At cword's MEASURED 5.7 bytes a line of resident C this program
  * does not fit one segment and never could, so the split is from wave 1 rather
- * than from the wave the ceiling binds in (SPEC.md 92.6).
+ * than from the wave the ceiling binds in (SPEC.md 114.6).
  *
  * AN OVERLAY FUNCTION ANSWERS A STATUS AND 0 MEANS IT DID NOT HAPPEN. A refused
  * load - no heap, no file, a stale module, a worker task asking - toasts the
@@ -31,7 +31,7 @@
  *
  * ATTRIBUTION. The preview wording, the level names and the greying sentences
  * this file assembles are the original's own strings and the converter's own
- * prose, read out of LEMSTR.LEM (SPEC.md 92.3). Lemmings is (C) 1991 DMA Design
+ * prose, read out of LEMSTR.LEM (SPEC.md 114.3). Lemmings is (C) 1991 DMA Design
  * / Psygnosis; the layout of the preview screen is Lemmix
  * GameScreen.Preview.pas GetScreenLinesAndColors and its wording
  * Base.Strings.pas:411-418. README.TXT carries the full list.
@@ -44,7 +44,7 @@
  * more than it looks: cc_ovneed TOASTS ITS OWN REFUSAL, a kernel drawing call
  * this C never wrote and cannot intercept, and once wave 2's bracket owns the
  * screen a kernel toast is painted with DESKTOP geometry into a foreign mode
- * (SPEC.md 92.5, 53.1). It cannot be called from os88_main() either - there is
+ * (SPEC.md 114.5, 53.1). It cannot be called from os88_main() either - there is
  * no instance yet to resolve a module for (SPEC.md 73.14, LESSONS.md 13). */
 static int ovl_ready(void)
 {
@@ -138,7 +138,7 @@ static void ovl_fmt(int line, int level, char *dst, unsigned cap)
  * WAVE 1 DRAWS IT IN THE WINDOW, in the kernel's own face. Wave 5 draws this
  * same content inside SPEC.md 53's bracket, in the second foreign mode each
  * adapter needs to hold the original's 640x350 surface, lettered in MAIN.DAT's
- * own 16x16 purple font over its own brown background (SPEC.md 92.4.3) - the
+ * own 16x16 purple font over its own brown background (SPEC.md 114.4.3) - the
  * CONTENT and the transition are here from wave 1 and only the surface changes.
  *
  * The layout is the original's: line 0 is the level's number and name and is
@@ -285,11 +285,11 @@ static int ovl_greyfact(int labelid, int strid, int level)
  *
  * IT CARRIES THE PRODUCT, WHAT THIS PORT IS, AND THE TWO PRINCIPALS, and
  * nothing about how the build renders: the frame rate goes to PERFORMANCE.md
- * and SPEC.md 92.7, the synthesised tones to the greyed Music row and to
+ * and SPEC.md 114.7, the synthesised tones to the greyed Music row and to
  * README.TXT. Lemmix's SCredits block is EIGHT lines on its own, which with a
  * product and a port line is already twelve, so the full attribution list lives
  * in README.TXT beside the package and this names the two principals and points
- * at it (SPEC.md 92.2).
+ * at it (SPEC.md 114.2).
  *
  * The lines array is RESIDENT (only code moves to the module) and is filled
  * here so that os88_paint() can redraw the card with os88_about_card_d()
@@ -321,10 +321,10 @@ static void ovl_about(void *win)
     lem_ab[5] = lem_str(LEMS_CREDIT1);
     lem_ab[6] = lem_str(LEMS_CREDIT2);
     /* THE RIGHTSHOLDER, AND IT REPLACES A BLANK SPACER RATHER THAN ADDING A
-     * ROW. The card is capped at twelve (SPEC.md 92.1) and this uses nine
+     * ROW. The card is capped at twelve (SPEC.md 114.1) and this uses nine
      * either way, so the CGA card - the narrow one, and already nearly full -
      * does not grow by a pixel. apps/cword/cwovl.c names Microsoft on cword's
-     * card and this port's posture is cword's (SPEC.md 92.2). */
+     * card and this port's posture is cword's (SPEC.md 114.2). */
     lem_ab[7] = lem_str(LEMS_COPYRIGHT);
     lem_ab[8] = lem_str(LEMS_README);
     lem_ab[9] = 0;
@@ -456,7 +456,7 @@ static int ovl_progress_write(int rating, int level)
 }
 
 /* ============================================================================
- * WAVE 2: ovl_compose - THE TERRAIN LIST, ONCE PER LEVEL (SPEC.md 92.4)
+ * WAVE 2: ovl_compose - THE TERRAIN LIST, ONCE PER LEVEL (SPEC.md 114.4)
  *
  * IT IS IN THE MODULE BECAUSE IT RUNS ONCE PER LEVEL AND NEVER DURING PLAY,
  * which is SPEC.md 73.14's split by FREQUENCY exactly. It is also the largest
@@ -466,7 +466,7 @@ static int ovl_progress_write(int rating, int level)
  *
  * IT IS CALLED FROM INSIDE THE BRACKET, and that is safe for one reason and
  * one only: the module was forced RESIDENT before the bracket was entered
- * (lem_play, SPEC.md 92.5). cc_ovneed toasts its own refusal, and a kernel
+ * (lem_play, SPEC.md 114.5). cc_ovneed toasts its own refusal, and a kernel
  * toast paints DESKTOP geometry into a foreign mode - so the load may not
  * happen in here, and once the module is in, cc_ovneed is a four-byte no-op
  * that cannot reach that path.
@@ -483,7 +483,7 @@ static int ovl_progress_write(int rating, int level)
  * ATTRIBUTION. The record layout is lemmings_3ds/doc/data/
  * lemmings_lvl_file_format.txt's; the three rulings this walk makes where the
  * readers disagree - skip a 0xFFFF slot rather than break, the 12-bit x mask,
- * the y boundary at 0x100 - are SPEC.md 92.3.1's, measured over all 120 levels
+ * the y boundary at 0x100 - are SPEC.md 114.3.1's, measured over all 120 levels
  * in lemtool/REPORT.md. Lemmings is (C) 1991 DMA Design / Psygnosis.
  * ==========================================================================*/
 
@@ -507,7 +507,7 @@ static void ovl_far_add(unsigned n)
  * LEMLV<n>.LEM is read rather than the 2,048 bytes wanted, because
  * os88_file_read_at()'s offset must be a whole number of CLUSTERS and the
  * cluster is 512 on two geometries, 1,024 on the other two and neither on the
- * RAM disk The Wire unpacks this onto (SPEC.md 92.3.2). One extra revolution
+ * RAM disk The Wire unpacks this onto (SPEC.md 114.3.2). One extra revolution
  * once per level against a read that is wrong on one medium in three. */
 static int ovl_compose(int level)
 {
@@ -542,7 +542,7 @@ static int ovl_compose(int level)
 
     for (i = 0; i < LEM_LVL_NTERR; i++) {
         /* THE ONLY THING THE USER CAN SEE FOR THE NEXT TWENTY-FIVE SECONDS
-         * (SPEC.md 92.7.1 conclusion 2). One cell of the loading bar every
+         * (SPEC.md 114.7.1 conclusion 2). One cell of the loading bar every
          * fourth slot is one lb_rpix against 53.8 ms for the piece beside it,
          * and it is a call from the module back into the resident image, which
          * is an ordinary far call the toolchain makes (never the reverse: an
@@ -552,7 +552,7 @@ static int ovl_compose(int level)
         slot = LEM_LVL_TERR + 4 * i;
         b0 = lem_pk(rec, base + slot);
         b1 = lem_pk(rec, base + slot + 1);
-        /* SPEC.md 92.3.1: a slot whose first WORD is 0xFFFF is SKIPPED and
+        /* SPEC.md 114.3.1: a slot whose first WORD is 0xFFFF is SKIPPED and
          * never breaks the walk. Breaking renders Taxing 27 with 68 of its
          * 395 pieces (lemtool/REPORT.md measured it). */
         if (b0 == 0xFF && b1 == 0xFF)

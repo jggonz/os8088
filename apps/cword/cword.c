@@ -4,7 +4,7 @@
  * A native reimplementation of Microsoft Word for Windows 1.1a ("Opus") as an
  * os8088 package, compiled from C by the toolchain of SPEC.md 73 and split
  * across two segments by the overlay of SPEC.md 73.14. The binding contract is
- * SPEC.md 73.12; the reasoning behind the UI it reproduces is docs/WORD-PLAN.md
+ * SPEC.md 73.12; the reasoning behind the UI it reproduces is docs/plans/completed/WORD-PLAN.md
  * and SPEC.md 68, which describe the same product ported by hand into assembly.
  *
  * THE USER INTERFACE IS OPUS'S, TAKEN FROM THE SOURCE AND NOT FROM MEMORY.
@@ -50,7 +50,7 @@
  * (SPEC.md 73.12.1) wraps to a 60-cell SHEET instead of to the window, which is
  * two numbers in cw_layout() and a pair of rules drawn outside the text column.
  * And the ribbon's Font box now lists the machine's typefaces off the system
- * disk's FONTS/ folder and SETS THE DOCUMENT IN ONE (SPEC.md 19.8, 67.12.2) -
+ * disk's SYSTEM/FONTS folder and SETS THE DOCUMENT IN ONE (SPEC.md 19.8) -
  * for which the cell stays the unit of the row model and only its PIXEL
  * POSITION stops being 8k. With no face chosen, cw_prop is 0, cw_cx() is the
  * shift it replaces, and every path below is the one it always was.
@@ -68,16 +68,18 @@
  * through - is resident. Everything that runs ONCE PER COMMAND is in the
  * overlay (every function named `ovl_*`, wherever it is written): the dialogs,
  * RTF in and out, Sort, Renumber, Table of Contents, the clipboard, the
- * paragraph dictionary, and the Font list. It ships as CWORD.OVL beside
- * CWORD.O88 and is read into a heap claim the first time one of those is asked
- * for. The split is not arbitrary - it is exactly the line between what a
+ * paragraph dictionary, and the Font list. It ships as PART 0 of CWORD.O88
+ * (SPEC.md 73.14.2) and op_load reads it into a heap claim of its own at
+ * launch, right behind the image - it was a CWORD.OVL beside the package, read
+ * the first time a command needed it, until the C SDK's overlay became a part.
+ * The split is not arbitrary - it is exactly the line between what a
  * keystroke touches and what a menu command touches, so nothing in the inner
  * loop ever pays for it.
  *
  * THAT LINE MOVED WHEN THE TYPEFACES ARRIVED (SPEC.md 73.12.2), and the shape
  * of the move is worth reading before adding anything here: the resident image
  * got SMALLER while the program grew a second view and a typeface engine,
- * because everything that runs once per command went out. There are 971 bytes
+ * because everything that runs once per command went out. There are 581 bytes
  * left. The next thing to move is not code - it is CW_RTF_MAX, out of bss and
  * into a heap claim, the way SPEC.md 46.9 moved ArtfulType's document.
  *
@@ -107,16 +109,22 @@
  * ---------------------------------------------------------------------------
  * Measured by tools/os88pkg.py and tools/os88ovl.py on the shipping package:
  *
- *     resident image  35,958   the code above, its strings, the Opus tables,
- *                              and apps/os88type.inc (SPEC.md 6.3)
- *              bss    24,511   the document (4,000 + 4,000), the RTF staging
+ *     resident image  30,452   the code above, its strings, the Opus tables,
+ *                              apps/os88type.inc (SPEC.md 6.3) and the parts
+ *                              standard that reads the overlay at launch
+ *              bss    24,624   the document (4,000 + 4,000), the RTF staging
  *                              buffer (6,000), the glass shadow (6,144), the
  *                              type library's band and face table (1,933)
  *              -------------
- *              total  60,469   98% of APP_MAX_SIZE; 971 bytes spare
- *     CWORD.OVL       18,564   the dialogs, RTF in and out, search, Sort,
- *                              Renumber, Table of Contents, the clipboard, the
- *                              paragraph dictionary, the Font list
+ *              total  55,076   90% of APP_MAX_SIZE; 6,364 bytes spare
+ *     the overlay     14,106   PART 0 of CWORD.O88, 8,423 packed: the dialogs,
+ *                              RTF in and out, search, Sort, Renumber, Table
+ *                              of Contents, the clipboard, the paragraph
+ *                              dictionary, the Font list
+ *
+ * (Measured at SPEC.md 73.14.2. The "581 bytes spare" and "there are 581
+ * bytes left" this header once carried were 60,859 of 61,440 before the
+ * peephole pass of SPEC.md 73.15.)
  *
  * THE TIGHTEST NUMBER IN THE PACKAGE IS CW_RTF_MAX, the RTF staging buffer, at
  * 6,000 bytes - which is why a document that is 4,000 characters of dense
@@ -322,6 +330,12 @@
 #define CW_K_DEL    0x53
 #define CW_K_F11    0x85
 #define CW_K_F12    0x86
+#define CW_K_SF12   0x88                /* Shift+F12 - the F11/F12 family    */
+#define CW_K_CF12   0x8A                /* Ctrl+F12    arrives only from a ROM
+                                         * that passes it through int 16h 00h */
+#define CW_K_AF4    0x6B                /* Alt+F4, which every ROM sends     */
+#define CW_K_ABKSP  0x0E                /* Alt+BkSp, ascii 0                 */
+#define CW_K_CINS   0x92                /* Ctrl+Ins as an enhanced ROM sends */
 
 /* Ctrl+letter formatting, keys.cmd's map. Ctrl-H, Ctrl-I and Ctrl-M are folded
  * by int 16h into BkSp, Tab and Enter, so hidden text, italic and one indent
@@ -359,14 +373,10 @@
  * everything else, and deleting a mark merges the paragraph into the next
  * one's format, which is exactly what Word does.
  *
- * CW_A_* below extend cwrtfio.c's three bits to Word's seven. Bit 7 is not
- * free - see cw_pap_of().
+ * CW_A_* and the dictionary itself live in cwrtfio.c, beside the document,
+ * because the RTF reader and writer carry both (SPEC.md 73.12.4). Bit 7 is
+ * not free - see cw_pap_of().
  * ========================================================================*/
-#define CW_A_WUL      8                 /* word underline    (Ctrl-W) */
-#define CW_A_DUL     16                 /* double underline  (Ctrl-D) */
-#define CW_A_SCAP    32                 /* small caps        (Ctrl-K) */
-#define CW_A_HID     64                 /* hidden text                */
-#define CW_A_CHP    127                 /* every character bit        */
 
 /* The paragraph mark's stand-in inside a row buffer. It is NOT a character
  * the kernel's face can letter - there is no pilcrow in 32..126 - so it is a
@@ -376,28 +386,6 @@
  * the model holds printable ASCII and '\n' only. */
 #define CW_MARK      20
 
-#define CW_PAP_MAX   64                 /* unique paragraph formats. Word's own
-                                         * dictionary is 256; 64 x 4 bytes is
-                                         * what this ceiling affords, and the
-                                         * 65th unique format is a refusal with
-                                         * a reason rather than a silent
-                                         * flattening (SPEC.md 47) */
-#define CW_AL_LEFT    0
-#define CW_AL_CENTER  1
-#define CW_AL_RIGHT   2
-#define CW_AL_JUST    3
-
-/* The dictionary, four parallel byte arrays rather than an array of structs
- * so that a careless assignment cannot become a `rep movsb`. */
-static unsigned char cw_pap_al[CW_PAP_MAX];    /* CW_AL_*                     */
-static unsigned char cw_pap_sp[CW_PAP_MAX];    /* 0 single, 1 one-and-a-half,
-                                                * 2 double                    */
-static unsigned char cw_pap_op[CW_PAP_MAX];    /* space before the paragraph  */
-static unsigned char cw_pap_li[CW_PAP_MAX];    /* left indent, in cells       */
-static signed char   cw_pap_fi[CW_PAP_MAX];    /* first line, relative to it  */
-static unsigned char cw_pap_ri[CW_PAP_MAX];    /* right indent                */
-static int cw_pap_n = 1;                       /* entry 0 is the default and
-                                                * is never reclaimed          */
 
 /* ==========================================================================
  * STATE - all of it file scope, because everything addressable has to be
@@ -441,12 +429,21 @@ static int cw_chrome_top;               /* where the text band's strip begins,
 static int cw_cur;                      /* the caret, 0..cw_len */
 static int cw_top;                      /* offset of the first visible row */
 static int cw_attr;                     /* CHP that NEW characters get */
-static int cw_pap_now;                  /* the PAP new paragraphs get. NOT
-                                         * `cw_pap`: cwrtfio.c owns that name
-                                         * for the RTF reader's property
-                                         * record, and one translation unit
-                                         * means one namespace (SPEC.md 73.1) */
 static int cw_mod;                      /* changed since the last save */
+
+/* Undo's state (SPEC.md 73.12.4; the mechanism is beside cw_touch). */
+#define CW_U_TYPE   1                   /* the group kinds */
+#define CW_U_DEL    2
+#define CW_U_CMD    3
+static unsigned cw_u_seg;               /* the snapshot's claim, 0 = none yet */
+static int cw_u_ok;                     /* a snapshot is held: Undo is live */
+static int cw_u_kind;                   /* the group the last edit opened */
+static int cw_u_at;                     /* ...and where it left the caret */
+static int cw_u_hold;                   /* a command that already marked */
+static int cw_u_len;                    /* the snapshot's own scalars */
+static int cw_u_cur;
+static int cw_u_papn;
+static int cw_u_now;
 static int cw_ovr;                      /* overtype (Ins), status lamp OVR */
 static int cw_ext;                      /* F8 extend-selection, lamp EXT */
 static int cw_showp;                    /* Show paragraph marks */
@@ -458,7 +455,7 @@ static int cw_page;                     /* View > Page rather than Draft */
  * cw_prop IS THE ONE FLAG, and everything that used to be 8k asks cw_cx() /
  * cw_xc() instead of shifting. With it clear those two are exactly the shifts
  * they replace, so the kernel's cell costs a call and a return and NOTHING
- * ELSE changes - a build with no FONTS/ folder, a kernel that refuses the band
+ * ELSE changes - a build with no SYSTEM/FONTS, a kernel that refuses the band
  * blit (SPEC.md 6.5) and a document nobody has set all behave as they always
  * did, because bss arrives zeroed and this is 0 until a face is picked.
  * ========================================================================*/
@@ -485,8 +482,9 @@ static int cw_px[CW_COLS_MAX + 1];      /* the row's own pixel map: the pen each
 static int cw_nfam;                     /* families the scan found */
 static int cw_scanned;                  /* ...and that it has run at all: it
                                          * runs ONCE WHATEVER THE ANSWER, so a
-                                         * disk with no FONTS/ is not re-walked
-                                         * on the next press (SPEC.md 19.8) */
+                                         * disk with no SYSTEM/FONTS is not
+                                         * re-walked on the next press
+                                         * (SPEC.md 19.8) */
 static int cw_fl_open;                  /* the Font list is down */
 static int cw_fl_rows;                  /* ...and how many items a column of it
                                          * holds, which is the window's height
@@ -614,9 +612,12 @@ static char cw_st_lamp[20];
 #define CW_DLG_REPLACE    4
 #define CW_DLG_GOTO       5
 #define CW_DLG_ABOUT      6
-#define CW_DLG_SAVE_NEW   7             /* "Do you want to save changes?" and */
-#define CW_DLG_SAVE_OPEN  8             /* which command is waiting behind it */
-#define CW_DLG_SAVE_EXIT  9
+#define CW_DLG_CONFIRM    7             /* Replace's "Replace this occurrence?" -
+                                         * and every number from here up is a
+                                         * QUESTION, answered by its letters */
+#define CW_DLG_SAVE_NEW   8             /* "Do you want to save changes?" and */
+#define CW_DLG_SAVE_OPEN  9             /* which command is waiting behind it */
+#define CW_DLG_SAVE_EXIT 10
 
 static int cw_dlg;                      /* CW_DLG_*, 0 = none */
 static int cw_pending;                  /* the CWA_* a save is running ahead of */
@@ -676,7 +677,7 @@ int  cw_ty_flush(int x, int y, int w, int rows);      /* 1 = drawn */
 int  cw_ty_fit(const char *s, int n, int px);   /* characters that fit */
 int  cw_ty_hit(const char *s, int n, int px);   /* the character under px */
 void cw_ty_pen(const char *s, int n, int *px);  /* the row's pixel map */
-int  cw_ty_scan(void);                  /* families in FONTS/, 0 = none */
+int  cw_ty_scan(void);                  /* families on the disk, 0 = none */
 void cw_ty_name(int i, char *dst);      /* family i's display name */
 int  cw_ty_open(int i);                 /* a handle, or 0 = refused */
 void cw_ty_close(int handle);
@@ -707,15 +708,19 @@ static int  cw_pap_of(int para_end);
 static void cw_toast(const char *s);
 
 /* THE OVERLAY'S DOORS (SPEC.md 73.14). Every one of these is named `ovl_*`,
- * so tools/cc8086.py emits its code into CWORD.OVL instead of into this
- * segment and turns each call below into a far call preceded by a
- * load-on-demand check.
+ * so tools/cc8086.py emits its code into the overlay instead of into this
+ * segment and turns each call below into a far call preceded by the
+ * overlay's door (cc_ovneed: the worker gate, on the eager arm this package
+ * takes - SPEC.md 73.14.2).
  *
  * EACH ANSWERS 0 WHEN IT DID NOT HAPPEN, and that is the contract that makes
- * the refusal path free: a module that cannot be loaded - no heap, or a disk
- * without the file - toasts the reason and returns 0 without the call taking
- * place at all, which is indistinguishable here from a dialog the user
- * cancelled. Nothing in this file tests for it and nothing has to.
+ * the refusal path free: a call the overlay's door refuses toasts the reason
+ * and returns 0 without the call taking place at all, which is
+ * indistinguishable here from a dialog the user cancelled. Since the overlay
+ * became an eager part the only refusal left at that door is the WORKER's
+ * (SPEC.md 73.14) - a machine without the RAM for it refuses the LAUNCH, with
+ * the parts standard's own toast, and never opens a window whose every menu
+ * says no. Nothing in this file tests for it and nothing has to.
  *
  * The five things out there are the five that run ONCE PER COMMAND: the
  * dialogs, RTF in and out, search, and the three utilities. Nothing a
@@ -775,38 +780,6 @@ static void cw_num_at(char *dst, int v, int at)
         dst[at + i] = cw_num[i];
 }
 
-/* ==========================================================================
- * THE PARAGRAPH DICTIONARY
- *
- * ovl_pap_find() is the only way an entry is made, and it DEDUPLICATES: a
- * document where every paragraph is left-aligned and unindented uses one
- * entry, which is what keeps a 64-entry dictionary sufficient for a real
- * document rather than a toy one.
- * ========================================================================*/
-
-/* out: the index of an entry with these properties, making one if needed, or
- * -1 if the dictionary is full - a refusal the caller reports (SPEC.md 47). */
-static int ovl_pap_find(int al, int sp, int op, int li, int fi, int ri)
-{
-    int i;
-
-    for (i = 0; i < cw_pap_n; i++) {
-        if (cw_pap_al[i] == al && cw_pap_sp[i] == sp && cw_pap_op[i] == op &&
-            cw_pap_li[i] == li && cw_pap_fi[i] == fi && cw_pap_ri[i] == ri)
-            return i;
-    }
-    if (cw_pap_n >= CW_PAP_MAX)
-        return -1;
-    i = cw_pap_n;
-    cw_pap_al[i] = (unsigned char)al;
-    cw_pap_sp[i] = (unsigned char)sp;
-    cw_pap_op[i] = (unsigned char)op;
-    cw_pap_li[i] = (unsigned char)li;
-    cw_pap_fi[i] = (signed char)fi;
-    cw_pap_ri[i] = (unsigned char)ri;
-    cw_pap_n++;
-    return i;
-}
 
 /* cw_pap_of - the paragraph format in force for the paragraph CONTAINING
  * offset p. It is written on the paragraph's own mark, so this scans forward
@@ -2153,6 +2126,86 @@ static void cw_redraw_all(void *win)
 static void cw_touch(void)
 {
     cw_mod = 1;
+    cw_u_at = cw_cur;                   /* where this edit left the caret, which
+                                         * is how the next one knows it is the
+                                         * same run of typing (cw_u_mark) */
+}
+
+/* ==========================================================================
+ * UNDO (SPEC.md 73.12.4) - Word 1.1a's own: ONE level, and Undo undoes
+ * itself.
+ *
+ * THE SNAPSHOT IS THE WHOLE DOCUMENT, taken before the first edit of a group,
+ * in a heap claim of its own: the text, its attribute bytes and the paragraph
+ * dictionary - 8,384 bytes the segment has not got to spare twice, and which
+ * a C package can only reach through cwmove.inc's two movers (C cannot say
+ * `es:`). A whole snapshot rather than an edit record because it is the
+ * cheap one to get RIGHT: every edit in the program, from a keystroke to Sort
+ * and Replace All, is undone by the same swap, so none of them needs its own
+ * inverse and none of them can disagree with it.
+ *
+ * WHAT A GROUP IS, which is what makes "Undo Typing" undo the TYPING and not
+ * one letter: typing (and Enter) is one group for as long as the caret is
+ * where the last keystroke left it, Backspace and Del likewise; anything else
+ * - a format, a cut, a paste, a dialog's OK, Sort, Replace - is a group of
+ * its own. A snapshot costs a `rep movsb` of the document, ~10 ms on the
+ * target, and it is paid once per GROUP, never per keystroke.
+ *
+ * UNDO IS A SWAP: the snapshot and the present trade places, so a second
+ * Undo is Redo for nothing, exactly as Word's Undo of an Undo is. New and
+ * Open drop it. A machine with no 9KB to spare keeps Undo greyed, which is
+ * the fact (SPEC.md 47).
+ * ========================================================================*/
+#define CW_U_KB     9                   /* 4,000 + 4,000 + 6 x 64 = 8,384 */
+#define CW_U_ATT    CW_DOC_MAX          /* the attribute bytes' offset */
+#define CW_U_PAP    (CW_DOC_MAX * 2)    /* ...and the dictionary's */
+
+void cw_farput(const void *src, unsigned seg, unsigned off, unsigned n);
+void cw_farswap(void *p, unsigned seg, unsigned off, unsigned n);
+
+/* THE COMPACTOR MAY MOVE THE SNAPSHOT (SPEC.md 66): one word names it. */
+void os88_onmove(unsigned was, unsigned now)
+{
+    if (cw_u_seg == was)
+        cw_u_seg = now;
+}
+
+static void cw_u_save(void)
+{
+    if (cw_u_seg == 0) {
+        cw_u_seg = os88_mem_claim(CW_U_KB);
+        if (cw_u_seg == 0) {
+            cw_u_ok = 0;
+            return;
+        }
+        (void)os88_mem_movable(cw_u_seg, 1);
+    }
+    cw_farput(cw_buf, cw_u_seg, 0, (unsigned)cw_len);
+    cw_farput(cw_att, cw_u_seg, CW_U_ATT, (unsigned)cw_len);
+    cw_farput(cw_pap_al, cw_u_seg, CW_U_PAP, CW_PAP_MAX);
+    cw_farput(cw_pap_sp, cw_u_seg, CW_U_PAP + CW_PAP_MAX, CW_PAP_MAX);
+    cw_farput(cw_pap_op, cw_u_seg, CW_U_PAP + CW_PAP_MAX * 2, CW_PAP_MAX);
+    cw_farput(cw_pap_li, cw_u_seg, CW_U_PAP + CW_PAP_MAX * 3, CW_PAP_MAX);
+    cw_farput(cw_pap_fi, cw_u_seg, CW_U_PAP + CW_PAP_MAX * 4, CW_PAP_MAX);
+    cw_farput(cw_pap_ri, cw_u_seg, CW_U_PAP + CW_PAP_MAX * 5, CW_PAP_MAX);
+    cw_u_len = cw_len;
+    cw_u_cur = cw_cur;
+    cw_u_papn = cw_pap_n;
+    cw_u_now = cw_pap_now;
+    cw_u_ok = 1;
+}
+
+/* cw_u_mark - an edit of this kind is about to change the document. It
+ * snapshots unless the edit continues the group already open. */
+static void cw_u_mark(int kind)
+{
+    if (cw_u_hold)
+        return;                         /* inside a command that marked once */
+    if (cw_u_ok && kind != CW_U_CMD && kind == cw_u_kind &&
+        cw_cur == cw_u_at && !cw_sel_on)
+        return;
+    cw_u_kind = kind;
+    cw_u_save();
 }
 
 /* cw_insert - one character at the caret in the current formatting. The tail
@@ -2216,7 +2269,20 @@ static int cw_sel_kill(void *win)
  * by any plain move. */
 static void cw_moved(void *win, int was)
 {
-    (void)was;
+    int now;
+
+    /* THE GLASS MUST SHOW THE STATE cw_show() IS HANDED. cw_show() takes the
+     * selection off with one XOR on the way in and puts it back with another
+     * on the way out, which is only right if what is on the glass at entry is
+     * the selection the state describes - and the caret has already moved. So
+     * the OLD selection comes off here, drawn from where the caret WAS, and the
+     * new one goes on. Without this an F8 selection was XORed on and off again
+     * inside one cw_show() and never reached the glass at all: the arrows
+     * extended a selection nobody could see. */
+    now = cw_cur;
+    cw_cur = was;
+    cw_sel_xor();
+    cw_cur = now;
     if (cw_ext) {
         if (!cw_sel_on) {
             cw_sel_on = 1;
@@ -2225,6 +2291,7 @@ static void cw_moved(void *win, int was)
     } else if (cw_sel_on) {
         cw_sel_on = 0;
     }
+    cw_sel_xor();
     cw_show(win, -2, 0, 0);
 }
 
@@ -2232,6 +2299,11 @@ static void cw_type(void *win, int c)
 {
     int lo;
 
+    if (cw_len >= CW_DOC_MAX && !cw_sel_on) {
+        cw_toast("This document is full.");
+        return;
+    }
+    cw_u_mark(CW_U_TYPE);
     if (cw_sel_on)
         cw_sel_kill(win);
     if (cw_len >= CW_DOC_MAX) {
@@ -2266,6 +2338,7 @@ static void cw_type_para(void *win)
     int lo;
     int pap;
 
+    cw_u_mark(CW_U_TYPE);
     if (cw_sel_on)
         cw_sel_kill(win);
     if (cw_len >= CW_DOC_MAX) {
@@ -2283,6 +2356,9 @@ static void cw_type_para(void *win)
 
 static void cw_backspace(void *win)
 {
+    if (!cw_sel_on && cw_cur <= 0)
+        return;
+    cw_u_mark(CW_U_DEL);
     if (cw_sel_kill(win))
         return;
     if (cw_cur <= 0)
@@ -2295,6 +2371,9 @@ static void cw_backspace(void *win)
 
 static void cw_del(void *win)
 {
+    if (!cw_sel_on && cw_cur >= cw_len)
+        return;
+    cw_u_mark(CW_U_DEL);
     if (cw_sel_kill(win))
         return;
     if (cw_cur >= cw_len)
@@ -2394,6 +2473,7 @@ static void ovl_chp_apply(void *win, int bits, int how)
         cw_status();
         return;
     }
+    cw_u_mark(CW_U_CMD);                /* undoable once it touches the text */
     cw_sel_bounds();
     a = cw_w_end;
     b = cw_w_next;
@@ -2452,6 +2532,7 @@ static void ovl_pap_apply(void *win, int al, int sp, int op, int li, int fi,
     int idx;
     int touched;
 
+    cw_u_mark(CW_U_CMD);
     if (cw_sel_on) {
         cw_sel_bounds();
         a = cw_w_end;
@@ -2557,8 +2638,23 @@ void os88_paint(void *win)
      * instance is published (SPEC.md 20.6). A refusal is normal and transient
      * - the task table is 12 slots - so this retries on the next paint rather
      * than treating it as fatal. */
-    if (!cw_hired && os88_task_spawn(win) == 0)
+    if (!cw_hired && os88_task_spawn(win) == 0) {
         cw_hired = 1;
+        /* ...AND THE REGION STAYS MOVABLE (SPEC.md 66.6.2). crt0 declared it
+         * at entry, and hiring a worker would pin it again for ever: the
+         * kernel wrote our segment into that worker's frame before its first
+         * instruction. This says it may throw that frame away and start
+         * os88_worker() again.
+         *
+         * IT IS TRUE HERE and it is worth being explicit about why. The
+         * kernel restarts a worker only where it PARKS, which is inside
+         * os88_task_alive(); our loop reaches that with nothing of its own on
+         * the stack and every value it reads - cw_quit - in a static that the
+         * move carries. A restart costs one four-tick poll. We do not declare
+         * os88_mem_parksafe(), so the gfx-lock park - which could stop the
+         * worker anywhere - is not in play. */
+        os88_task_restartable(1);
+    }
 }
 
 void *os88_main(void)
@@ -2616,9 +2712,12 @@ void *os88_main(void)
 /* os88_onwake - W_ONWAKE (SPEC.md 54.10/74.1): open the launch document.
  *
  * The UI task with the gfx lock NOT held, which is exactly what this needs:
- * os88_file_goto() is a remount and the file slots are the UI task's. It takes
- * the lock for the burst 74.1 lets it state - one remount, one read, one parse
- * and one repaint - because everything below ovl_file_load() draws.
+ * the file slots are the UI task's. It takes the lock for the burst 74.1 lets
+ * it state - one quiet stand, one read, one parse and one repaint - because
+ * everything below ovl_file_load() draws. The stand is
+ * os88_file_goto_q_mark() and not os88_file_goto(): this reads by name and
+ * never has the kernel list the folder, so the display remount was motor time
+ * bought for nothing (docs/plans/NAV-COST-PLAN.md).
  *
  * Below the goto it is os88_onfile()'s OPEN arm, deliberately: a document
  * opened by double-click and the same document opened through File > Open now
@@ -2633,9 +2732,11 @@ void os88_onwake(void *win)
     cw_argp = 0;
     os88_gfx_lock();
     /* THE GOTO GETS ITS OWN ARM.  It answers -1 when the folder could not be
-     * listed, and with no arm the whole launch failed in silence: the window
-     * came up empty and a double-click looked like it had done nothing. */
-    if (os88_file_goto(&cw_argplace) != 0)
+     * reached, and with no arm the whole launch failed in silence: the window
+     * came up empty and a double-click looked like it had done nothing. A
+     * refused GOTO_QM also MOVES NOTHING, so the arm is what stops a load of a
+     * same-named document from wherever we happen to stand. */
+    if (os88_file_goto_q_mark(cw_argplace.clus, cw_argplace.vol) != 0)
         cw_toast("Could not open that folder.");
     else
         ovl_file_load(win, cw_argname, 0, 0);

@@ -3,8 +3,7 @@
 
     python3 tests/unit/t_stkapps.py
 
-`tests/suite.py`'s `stkbalance` row walks the kernel plus SHEET, CHART and four
-shared includes.  This walks **all of `apps/` and all of `drivers/`**: 9,038
+`tests/suite.py`'s `stkbalance` row walks the kernel.  This walks **all of `apps/` and all of `drivers/`**: 9,038
 entries across every package, every shared SDK include, the three CPU cores and
 the loadable drivers - the TCP/IP stack among them, which nothing had walked
 either.  What made that impossible was not the code, it was three blind spots

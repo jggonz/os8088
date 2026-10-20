@@ -33,8 +33,15 @@ Three assertions, and the second and third are what stop a fix that cheats:
 import argparse
 import sys
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import dispcp                                          # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
@@ -72,6 +79,11 @@ def main():
         rec = m.read(S("wm_wins") + wins[-1] * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
         pseg = rec[22] | (rec[23] << 8)
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))   # noqa: E731
+        # THE PAGE ARRIVES ON THE WAKE, after the window is up (SPEC.md 54.10):
+        # read straight after the open and this is an empty browser
+        os88marty.until(m, lambda _m: rw("br_nlines") > 0, "the page laid out",
+                        limit=120)
+        os88marty.settle(m)
 
         def rect(n):
             return [u16(m.readseg(pseg, sy[n] + i * 2, 2)) for i in range(4)]

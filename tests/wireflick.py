@@ -18,9 +18,34 @@ and the draw has fewer, and how many fewer, how often, is the flicker. The
 numbers below are that distribution per draw order: the FLOOR is the emptiest
 frame a viewer sees and `blank` is the fraction of frames under half full.
 
-It is a MEASUREMENT and not a gate. 78.5's three orders are a trade with no
-free corner, so there is no threshold to assert - the point is to put numbers
-on a choice the reader makes by looking.
+78.5's three orders are a trade with no free corner, so THOSE THREE are a
+measurement and not a gate - the point is to put numbers on a choice the reader
+makes by looking, and there is no threshold to assert between them.
+
+**ONE NUMBER IS ASSERTED and it is not a flicker one** (SPEC.md 5.12.3). Since
+wave 3 of docs/plans/completed/GFX-EMBEDDABLE-PLAN.md the Composed mode is
+`apps/os88gfx.inc` - the shared embeddable graphics library - rather than code
+of wire's own, so a defect there reaches every future customer of the library
+and not just this instrument. 78.5.1 left ONE draw order, so there is no
+second route to compare against and the gate is an ABSOLUTE floor: Composed's
+FULLEST frame must light at least `WR_FULL_MIN` = 250 pixels, a drawn cube
+being ~380. A `gfxe_line` that plotted nothing, into the wrong rows, or that
+lost the wrap into the next byte drops it below that immediately.
+
+**THE FLICKER NUMBERS ARE STILL NOT A GATE, and one draft of this file made
+them one and had to take it back.** `floor` and `under half` are a sample of a
+free-running animation: the run that measured Composed at floor 74% and `under
+half` 0% measured it at 30% and 6% an hour later, on the same build - and
+`Edge at a time`, which nothing had touched, moved 63% -> 39% in the same pair.
+A frame is sampled by advancing one and pausing, so what moves under host load
+is WHERE IN THE COMPOSITION the pause lands, which is
+docs/plans/SOAK-PARALLEL.md 1's finding in miniature. The fullest frame does
+not move that way - it is the figure and not the phase - which is exactly why
+it is the one that can be asserted.
+
+Broken on purpose to check it goes red (docs/WRITING-TESTS.md 1): stubbing
+`gfxe_line` an immediate `ret` takes Composed's fullest frame to 42, against
+the 250 floor.
 
 **ON THE GLaBIOS TWIN**, `os8088_5150_herc_gla`, because `os8088_5150_herc`
 wants the IBM ROM this repo cannot ship. Checked with that ROM dropped in
@@ -44,9 +69,9 @@ import dispcp                                               # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WR_OX0, WR_OY0, WR_OW, WR_OH = 16, 18, 20, 22       # apps/wire's own bss
-MENU_DRAW = (0, 0)                                  # menu 2's three items
-ORDERS = ["Whole figure", "Edge at a time", "Edge, then repair",
-          "Composed"]                          # SPEC.md 78.8
+WR_FULL_MIN = 250                           # a drawn cube is ~380 lit
+ORDERS = ["Composed"]                       # SPEC.md 78.5.1: the other three
+                                            # went with the line primitive
 
 
 def ink(m, rig_seg, geom, fbseg, stride, banks):
@@ -105,9 +130,8 @@ def main(argv):
 
         out = []
         for mode, name in enumerate(ORDERS):
-            m.pause()
-            m.write((seg << 4) + base + 39, bytes([mode]))   # wr_mode
-            m.run()
+            del mode                        # there is one order and no
+                                            # [wr_mode] to select it with
             m.advance(frames=110)               # let the order take effect,
             m.run()                             # and wr_fps re-settle
             samples = []
@@ -136,6 +160,19 @@ def main(argv):
         print("| %s | %.0f%% | %.0f%% | %.0f%% | %.1f |"
               % (name, 100.0 * floor / full, 100.0 * mean / full,
                  100.0 * blank, fps))
+
+    # --- and ONE number is a gate, because Composed is the library's. The
+    # flicker columns above are deliberately not - see the header.
+    by = dict((r[0], r) for r in out)
+    full, floor = by["Composed"][1], by["Composed"][2]
+    print()
+    if full < WR_FULL_MIN:
+        print("FAIL: Composed's fullest frame is %d lit pixels, under the %d "
+              "floor - apps/os88gfx.inc is not drawing the figure"
+              % (full, WR_FULL_MIN))
+        return 1
+    print("ok: Composed's fullest frame %d lit, emptiest %d (%.0f%%)"
+          % (full, floor, 100.0 * floor / full))
     return 0
 
 

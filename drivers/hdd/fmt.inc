@@ -18,8 +18,9 @@
 ; The data area is NOT touched, which is what makes a 32MB format a hundred
 ; sector writes instead of 65,000.
 ;
-; The layout is the FAT specification's own arithmetic, and every term of it
-; fits a word because a partition is capped at 65,535 sectors (SPEC.md 18.7):
+; The layout is the FAT specification's own arithmetic. Its terms fitted a
+; word while a partition was capped at 65,535 sectors (SPEC.md 18.7); the
+; sector counts are 32-bit since that cap became FAT16's own (SPEC.md 52.3.1):
 ;
 ;   TmpVal1 = sectors - (reserved + rootsecs)
 ;   TmpVal2 = (256 * SecPerClus) + NumFATs        ; FAT16
@@ -81,10 +82,7 @@ HF_B_FSTYPE  equ 54
 ; out of the same two tests.
 ; -----------------------------------------------------------------------------
 hd_fmt_plan:
-    push ax
-    push bx
-    push cx
-    push dx
+    call os88_ent
     call hd_fmt_spc0            ; AX = where to start looking
     mov [hd_fspc], ax
 .try:
@@ -113,23 +111,15 @@ hd_fmt_plan:
     cmp word [hd_fclus], 4085
     jae .next
 .ok:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp os88_r_bp
 .next:
     shl word [hd_fspc], 1
     cmp word [hd_fspc], 64      ; mount rule 4 refuses 128 (a 64KB cluster
     jbe .try                    ; overflows dskw_clbytes' word), so a layout
                                 ; only reachable there is no layout at all
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     stc
-    ret
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_fmt_spc0 - the cluster size to start from, by capacity (SPEC.md 52.3)
@@ -137,20 +127,26 @@ hd_fmt_plan:
 ; out: AX = sectors per cluster, a power of two
 ; clobbers: AX (the output), flags
 ;
-; Microsoft's DskTableFAT16, trimmed to the sizes a 16-bit volume-relative LBA
-; can reach (SPEC.md 18.7 caps a partition at 65,535 sectors = 31.99MB), so
-; only its first two rows are reachable and the rest would be dead code:
+; Microsoft's DskTableFAT16, of which two rows are here:
 ;
 ;   <= 16MB   (32,680 sectors)   2 sectors, 1KB clusters
 ;   <= 32MB   (65,535 sectors)   4 sectors, 2KB clusters
 ;
+; ...and the rest are what hd_fmt_plan's walk arrives at on its own: past a
+; word of sectors it starts at 2KB and doubles until the count is under
+; 65,525, which IS the table's row for every size to 2GB (SPEC.md 52.3.1).
 ; A partition too small for FAT16 at 1KB clusters walks DOWN by way of
 ; hd_fmt_plan's FAT12 branch, which is the same path it always took.
 ; -----------------------------------------------------------------------------
 hd_fmt_spc0:
-    mov ax, 2
-    cmp word [hd_fsecs], 32680
-    jbe .out
+    mov ax, 4
+    cmp word [hd_fsecs+2], 0    ; past 32MB the walk goes on up from 2KB by
+    jne .out                    ; doubling - which lands on DOS's own row for
+    mov ax, 2                   ; every size to 2GB (SPEC.md 18.7.5), so the
+    cmp word [hd_fsecs], 32680  ; table needs no more rows
+    ja .four
+    ret
+.four:
     mov ax, 4
 .out:
     ret
@@ -162,21 +158,14 @@ hd_fmt_spc0:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_fmt_layout:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ax, [hd_fsecs]
-    mov bx, HF_RSVD + HF_ROOTSECS
-    cmp ax, bx
-    jbe .no
-    sub ax, bx                  ; TmpVal1
+    call os88_ent
+    call hd_fmt_tmp1            ; DX:AX = TmpVal1, 32 bits (SPEC.md 18.7.5)
+    jc .no
     mov bx, [hd_fspc]
     mov cl, 8
     shl bx, cl                  ; 256 * SecPerClus (<= 32,768)
     add bx, HF_NFATS            ; TmpVal2
-    xor dx, dx                  ; the ceiling in THIRTY-TWO bits: TmpVal1 is
-    add ax, bx                  ; nearly 65,535 already and TmpVal1+TmpVal2-1
+    add ax, bx                  ; the ceiling in THIRTY-TWO bits: TmpVal1 is
     adc dx, 0                   ; wraps a word for every cluster size there
     sub ax, 1                   ; is - which read as "no layout fits" for
     sbb dx, 0                   ; every partition over about 32MB
@@ -186,34 +175,17 @@ hd_fmt_layout:
     mov [hd_ffatsz], ax
     call hd_fmt_clusters
     jc .no
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
+    CLC_OR_STC .no
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_fmt_layout12 - the same, for FAT12's 1.5-byte entries
 ; in / out: hd_fmt_layout's
 ; -----------------------------------------------------------------------------
 hd_fmt_layout12:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ax, [hd_fsecs]
-    mov bx, HF_RSVD + HF_ROOTSECS
-    cmp ax, bx
-    jbe .no
-    sub ax, bx
+    call os88_ent
+    call hd_fmt_tmp1
+    jc .no
     mov bx, [hd_fspc]
     mov cl, 9
     shl bx, cl                  ; 512 * SecPerClus
@@ -224,9 +196,7 @@ hd_fmt_layout12:
     div bx                      ; (512 * SecPerClus) / 3 - two FAT12 entries
     mov bx, ax                  ; to three bytes
     add bx, HF_NFATS            ; TmpVal2
-    mov ax, [hd_fsecs]
-    sub ax, HF_RSVD + HF_ROOTSECS
-    xor dx, dx                  ; ...and the same 32-bit ceiling
+    call hd_fmt_tmp1            ; ...and the same 32-bit ceiling
     add ax, bx
     adc dx, 0
     sub ax, 1
@@ -237,18 +207,41 @@ hd_fmt_layout12:
     mov [hd_ffatsz], ax
     call hd_fmt_clusters
     jc .no
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
+    CLC_OR_STC .no
+    jmp os88_r_bp
+
+; -----------------------------------------------------------------------------
+; hd_fmt_tmp1 - DX:AX = [hd_fsecs] less the reserved sector and the root
+; out: CF = 1 = the partition is not even that long
+; -----------------------------------------------------------------------------
+hd_fmt_tmp1:
+    mov ax, [hd_fsecs]
+    mov dx, [hd_fsecs+2]
+    sub ax, HF_RSVD + HF_ROOTSECS
+    sbb dx, 0
     ret
-.no:
-    pop dx
-    pop cx
-    pop bx
+
+; -----------------------------------------------------------------------------
+; hd_fmt_tot - the volume's length into hd_sec0's BPB (SPEC.md 18.7.5)
+; out: nothing (all registers preserved)
+;
+; TotSec16 while it fits a word, and 0 there with TotSec32 holding it when it
+; does not - the FAT spec's rule, and the one the kernel's mount folds back
+; into one staged count. hd_sec0 is zeroed (or a template with zeros there)
+; by every caller, so TotSec32 is already 0 on the small path.
+; -----------------------------------------------------------------------------
+hd_fmt_tot:
+    push ax
+    mov ax, [hd_fsecs]
+    cmp word [hd_fsecs+2], 0
+    je .w16
+    mov [hd_sec0+HF_B_TOT32], ax
+    mov ax, [hd_fsecs+2]
+    mov [hd_sec0+HF_B_TOT32+2], ax
+    xor ax, ax
+.w16:
+    mov [hd_sec0+HF_B_TOT16], ax
     pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -258,9 +251,7 @@ hd_fmt_layout12:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 hd_fmt_clusters:
-    push ax
-    push bx
-    push dx
+    call os88_ent
     mov ax, [hd_ffatsz]
     mov bx, HF_NFATS
     mul bx
@@ -269,27 +260,20 @@ hd_fmt_clusters:
     add ax, HF_RSVD + HF_ROOTSECS
     jc .no
     mov bx, ax                  ; BX = the first data sector
-    mov ax, [hd_fsecs]
-    cmp ax, bx
-    jbe .no
+    mov ax, [hd_fsecs]          ; ...and what is left, in 32 bits
+    mov dx, [hd_fsecs+2]
     sub ax, bx
-    xor dx, dx
+    sbb dx, 0
+    jc .no
+    cmp dx, [hd_fspc]           ; a quotient past a word is too many clusters
+    jae .no                     ; for FAT16: .no sends the plan to a bigger one
     div word [hd_fspc]
     mov [hd_fclus], ax
     mov [hd_fdata], bx
     or ax, ax
     jz .no
-    pop dx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop bx
-    pop ax
-    stc
-    ret
+    CLC_OR_STC .no
+    jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
 ; hd_fmt_run - write the volume
@@ -303,100 +287,50 @@ hd_fmt_clusters:
 ; that mounts and is wrong.
 ; -----------------------------------------------------------------------------
 hd_fmt_run:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call os88_ent
     push es
     push ds
     pop es
 
     ; --- the FATs: zeroed, then entry 0's media byte and EOC mark -----------
+    ; Both FATs and then the root directory are ONE contiguous run of zeroed
+    ; sectors from HF_RSVD on, in that order, so they are one loop. hd_fmt_wr
+    ; gives back every register, and DX stays 0: the metadata ends far below
+    ; sector 65,536 of the partition.
     call hd_sec_zero
     mov cx, [hd_ffatsz]
-    mov bx, HF_RSVD
-.fat1:
-    push cx
-    push bx
-    mov ax, bx
+    shl cx, 1
+    add cx, HF_ROOTSECS
+    mov ax, HF_RSVD
     xor dx, dx
-    call hd_fmt_wr              ; one zeroed sector at partition LBA AX
-    pop bx
-    pop cx
+.zero:
+    call hd_fmt_wr              ; one zeroed sector at partition LBA DX:AX
     jc .fail
-    inc bx
-    loop .fat1
-    mov cx, [hd_ffatsz]
-.fat2:
-    push cx
-    push bx
-    mov ax, bx
-    xor dx, dx
-    call hd_fmt_wr
-    pop bx
-    pop cx
-    jc .fail
-    inc bx
-    loop .fat2
-
-    ; --- the root directory ---------------------------------------------------
-    mov cx, HF_ROOTSECS
-.root:
-    push cx
-    push bx
-    mov ax, bx
-    xor dx, dx
-    call hd_fmt_wr
-    pop bx
-    pop cx
-    jc .fail
-    inc bx
-    loop .root
+    inc ax
+    loop .zero
 
     ; --- FAT[0]: the media byte, and the end-of-chain mark for cluster 1 ----
     call hd_sec_zero
-    mov byte [hd_sec0+0], HF_MEDIA
-    mov byte [hd_sec0+1], 0xFF
+    mov word [hd_sec0+0], 0xFF00 | HF_MEDIA
     mov byte [hd_sec0+2], 0xFF
     cmp byte [hd_ftype], 0
     je .f12
     mov byte [hd_sec0+3], 0xFF
 .f12:
-    mov ax, HF_RSVD
-    xor dx, dx
+    mov ax, HF_RSVD             ; (DX is still 0)
     call hd_fmt_wr
     jc .fail
-    mov ax, HF_RSVD
-    add ax, [hd_ffatsz]
-    xor dx, dx
+    add ax, [hd_ffatsz]         ; ...and the second FAT's first sector
     call hd_fmt_wr
     jc .fail
 
     ; --- the boot sector: the commit -----------------------------------------
     call hd_fmt_boot
     xor ax, ax
-    xor dx, dx
     call hd_fmt_wr
     jc .fail
-
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.fail:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
+    CLC_OR_STC .fail
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_fmt_wr - write hd_sec0 at a PARTITION-relative LBA (module internal)
@@ -404,11 +338,17 @@ hd_fmt_run:
 ; out: CF = 0 written
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
+hd_fmt_rd:                      ; ...and its READ twin, the installer's
+    push ax                     ; (a kept volume's VBR, a kernel plan's BPB)
+    mov al, 0
+    jmp short hd_fmt_io
 hd_fmt_wr:
     push ax
-    push bx
-    push cx
-    push dx
+    mov al, 1                   ; write
+hd_fmt_io:
+    mov [hd_rawop], al
+    pop ax
+    call os88_ent
     push es
     push ds
     pop es
@@ -416,14 +356,8 @@ hd_fmt_wr:
     adc dx, [hd_fbase+2]
     mov bx, hd_sec0
     mov cx, 1
-    mov byte [hd_rawop], 1      ; write
     call hd_raw
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_sec_zero - 512 zero bytes in hd_sec0 (module internal)
@@ -431,9 +365,7 @@ hd_fmt_wr:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 hd_sec_zero:
-    push ax
-    push cx
-    push di
+    call os88_ent
     push es
     push ds
     pop es
@@ -442,11 +374,7 @@ hd_sec_zero:
     mov cx, 256
     xor ax, ax
     rep stosw
-    pop es
-    pop di
-    pop cx
-    pop ax
-    ret
+    jmp os88_r_es
 
 ; -----------------------------------------------------------------------------
 ; hd_fmt_boot - build the boot sector in hd_sec0 (module internal)
@@ -459,75 +387,110 @@ hd_sec_zero:
 ; would write a volume its own kernel refuses to mount.
 ; -----------------------------------------------------------------------------
 hd_fmt_boot:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent
     push es
+    call hd_sec_zero
+    call hd_bpb_fill            ; the BPB the installer's fresh VBR also takes
     push ds
     pop es
-    push di                     ; the device row, for the geometry below
-    call hd_sec_zero
-    mov byte [hd_sec0+0], 0xEB  ; jmp short 0x3E
-    mov byte [hd_sec0+1], 0x3C
-    mov byte [hd_sec0+2], 0x90  ; nop
-    mov si, hd_s_oem
-    mov di, hd_sec0 + HF_B_OEM
-    mov cx, 8
     cld
+    mov si, hd_fb_jmp           ; jmp short 0x3E / nop, and the OEM name
+    mov di, hd_sec0
+    mov cx, 3 + 8
     rep movsb
-    mov word [hd_sec0+HF_B_BPS], 512
-    mov ax, [hd_fspc]
-    mov [hd_sec0+HF_B_SPC], al
-    mov word [hd_sec0+HF_B_RSVD], HF_RSVD
-    mov byte [hd_sec0+HF_B_NFATS], HF_NFATS
-    mov word [hd_sec0+HF_B_ROOTN], HF_ROOTENT
-    mov ax, [hd_fsecs]
-    mov [hd_sec0+HF_B_TOT16], ax
-    mov byte [hd_sec0+HF_B_MEDIA], HF_MEDIA
-    mov ax, [hd_ffatsz]
-    mov [hd_sec0+HF_B_FATSZ], ax
-    pop di
-    push di
-    mov ax, [di+HDD_SPT]
-    mov [hd_sec0+HF_B_SPT], ax
-    mov ax, [di+HDD_HEADS]
-    mov [hd_sec0+HF_B_HEADS], ax
-    mov ax, [hd_fbase]          ; HiddSec: DOS reads it, os8088 does not -
-    mov [hd_sec0+HF_B_HIDD], ax ; its volumes start at their own LBA 0
-    mov ax, [hd_fbase+2]
-    mov [hd_sec0+HF_B_HIDD+2], ax
-    mov byte [hd_sec0+HF_B_DRVNUM], 0x80
-    mov byte [hd_sec0+HF_B_BOOTSIG], 0x29
-    call OSAPI_GET_TICKS        ; a volume serial with no clock behind it:
-    mov [hd_sec0+HF_B_VOLID], ax    ; the tick counter is what there is
-    mov [hd_sec0+HF_B_VOLID+2], ax
     mov si, hd_s_nolabel
     mov di, hd_sec0 + HF_B_VOLLAB
-    mov cx, 11
+    mov cl, 11                  ; (CX is 0 after the rep)
     rep movsb
     mov si, hd_s_fat16id
     cmp byte [hd_ftype], 0
     jne .id
     mov si, hd_s_fat12id
 .id:
-    mov di, hd_sec0 + HF_B_FSTYPE
-    mov cx, 8
+    mov cl, 8                   ; DI is HF_B_FSTYPE already: the label's end
     rep movsb
     mov word [hd_sec0+510], 0xAA55
-    pop di
-    pop es
-    pop di
-    pop si
+    jmp os88_r_es
+
+%if HF_B_VOLLAB + 11 != HF_B_FSTYPE
+%error "hd_fmt_boot runs the label straight into the FS type"
+%endif
+
+; -----------------------------------------------------------------------------
+; hd_bpb_fill - the BPB of the volume just planned, into hd_sec0
+; in:  DI = the device row, the plan, [hd_fbase]
+; out: BPS..BOOTSIG written; every register preserved
+;
+; ONE COPY for the two sectors that carry it: the formatter's own boot sector
+; above and the installer's fresh VBR (hd_inst_vbr), which wrote the same
+; thirteen fields in the same words longhand.
+;
+; ...AND THE SERIAL, which is why both now get one (SPEC.md 18.8.2.1). It was
+; the formatter's alone - [ticks] in BOTH words - and the installer's fresh
+; VBR, built over a zeroed sector, went down with 0. It is the floppy
+; formatter's mix (kernel/diskw.inc's DSK_VOLID): the date and time as words,
+; the way DOS makes a serial, plus [ticks] and the PIT's live count, so two
+; volumes made in one second still differ. A KEPT volume never reaches here
+; and keeps its own (52.10.15).
+; -----------------------------------------------------------------------------
+hd_bpb_fill:
+    push ax
+    push bx
+    push cx
+    push dx
+    call OSAPI_CLK_GET          ; CX = year, DX = month:day, BX = hour:minute,
+    add cx, dx                  ; AH = second
+    add bx, ax
+    call OSAPI_GET_TICKS
+    add cx, ax                  ; the HIGH word: the date, and the tick
+    pushf
+    cli                         ; the latch and both reads in one window
+    mov al, 0x00                ; (SPEC.md 34.1)
+    out 0x43, al
+    in al, 0x40
+    mov ah, al
+    in al, 0x40
+    popf
+    add bx, ax                  ; the LOW word: the time, and the PIT
+    mov [hd_sec0+HF_B_VOLID], bx
+    mov [hd_sec0+HF_B_VOLID+2], cx
     pop dx
     pop cx
     pop bx
+    mov word [hd_sec0+HF_B_BPS], 512
+    mov ax, [hd_fspc]
+    mov [hd_sec0+HF_B_SPC], al
+    mov word [hd_sec0+HF_B_RSVD], HF_RSVD
+    mov byte [hd_sec0+HF_B_NFATS], HF_NFATS
+    mov word [hd_sec0+HF_B_ROOTN], HF_ROOTENT
+    call hd_fmt_tot             ; TotSec16, or TotSec32 past a word
+    mov byte [hd_sec0+HF_B_MEDIA], HF_MEDIA
+    mov ax, [hd_ffatsz]
+    mov [hd_sec0+HF_B_FATSZ], ax
+    mov ax, [di+HDD_SPT]
+    mov [hd_sec0+HF_B_SPT], ax
+    mov ax, [di+HDD_HEADS]
+    mov [hd_sec0+HF_B_HEADS], ax
+    call hd_bpb_hidd
+    mov byte [hd_sec0+HF_B_BOOTSIG], 0x29
     pop ax
     ret
 
-hd_s_oem:     db 'OS8088   '    ; 8 bytes; the trailing space is not copied
+; hd_bpb_hidd - BPB_HiddSec = the partition base, and the drive number:
+; DOS reads both, os8088's own volumes start at their own LBA 0. Every
+; register preserved; the installer's KEPT volume takes these two alone.
+hd_bpb_hidd:
+    push ax
+    mov ax, [hd_fbase]
+    mov [hd_sec0+HF_B_HIDD], ax
+    mov ax, [hd_fbase+2]
+    mov [hd_sec0+HF_B_HIDD+2], ax
+    mov byte [hd_sec0+HF_B_DRVNUM], 0x80
+    pop ax
+    ret
+
+hd_fb_jmp:    db 0xEB, 0x3C, 0x90   ; BS_jmpBoot: jmp short 0x3E / nop
+              db 'OS8088  '         ; ...and BS_OEMName, 8 bytes
 hd_s_nolabel: db 'NO NAME    '
 hd_s_fat16id: db 'FAT16   '    ; the BPB's 8-byte field: NOT terminated, so
 hd_s_fat12id: db 'FAT12   '    ; it must never reach font_str
@@ -553,14 +516,18 @@ hd_s_f12name: db 'FAT12', 0
 ; slot's state is being worked out.
 ; -----------------------------------------------------------------------------
 hd_fmt_isfat:
-    push ax
-    push bx
-    push cx
-    push dx
+    call os88_ent
     push es
     push ds
     pop es
     mov bx, hd_sec0
+    mov word [bx+510], 0        ; the signature, CLEARED first: a transfer
+                                ; that answers success and delivers nothing
+                                ; otherwise leaves the LAST slot's boot
+                                ; sector here to be read as this one's -
+                                ; which the installer's scan, reading all
+                                ; four in a row, would print as a FAT type
+                                ; (SPEC.md 52.10.4.2)
     mov ax, [si+HP_LBA]
     mov dx, [si+HP_LBA+2]
     mov cx, 1
@@ -583,21 +550,8 @@ hd_fmt_isfat:
     je .no
     cmp word [hd_sec0+HF_B_FATSZ], 0
     je .no
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
+    CLC_OR_STC .no
+    jmp os88_r_es
 
 ; --- state this module owns (moved out of hdd.asm's data block) ---
 hd_fspc:     dw 0               ; the plan: sectors per cluster,

@@ -127,13 +127,6 @@ SV_HEDGE    equ 8
 ; in:  the gfx lock is HELD and the screen has just been cleared
 ; -----------------------------------------------------------------------------
 sv_fish_init:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
     mov byte [sv_ival], SV_FIVAL
 
     mov word [sv_hlim], 0       ; SPEC.md 79.5.10: no reserve unless this is a
@@ -147,6 +140,61 @@ sv_fish_init:
     mov [sv_hlim], ax
 .nohedge:
 %endif
+
+    ; --- sv_dbl, built: the union it lives in was another mode's a moment
+    ; ago. Entry i is i's eight bits each written twice, high bit leftmost;
+    ; eight two-bit steps shift every bit of the last entry out of DX, so DX
+    ; needs no clearing. ~41,000 cycles once a pick, against a frame that is
+    ; one tick - and the frame's own read of the table is untouched.
+    mov di, sv_dbl
+    xor cx, cx                  ; CL = the entry, CH = its bit count
+.dent:
+    mov al, cl
+    mov ch, 8
+.dbit:
+    shl dx, 1
+    shl dx, 1
+    shl al, 1
+    jnc .dz
+    or dl, 3
+.dz:
+    dec ch
+    jnz .dbit
+    mov [di], dx
+    inc di
+    inc di
+    inc cl
+    jnz .dent
+
+    ; --- sv_fart, built from its right-facing half: each kind's three
+    ; bitmaps are copied, and the LEFT heading is the same row MIRRORED for
+    ; the fish (a 16-bit reversal of the word as stored, left byte low) and
+    ; the same row again for the jellyfish, which has no facing
+    mov si, sv_fartsrc
+    mov di, sv_fart
+    mov bh, 2                   ; BH = the kinds left; the fish is first
+.akind:
+    mov bl, SV_FNFR * SV_FHU    ; BL = this kind's rows, one heading's worth
+.arow:
+    lodsw                       ; DS:SI, which is ours - no ES involved
+    mov [di], ax
+    cmp bh, 2
+    jne .acopy                  ; the jellyfish's left IS its right
+    mov cx, 16
+.arev:
+    shr ax, 1
+    rcl dx, 1
+    loop .arev
+    mov ax, dx
+.acopy:
+    mov [di + SV_FNFR * SV_FHU * 2], ax
+    inc di
+    inc di
+    dec bl
+    jnz .arow
+    add di, SV_FNFR * SV_FHU * 2    ; past the left heading just written
+    dec bh
+    jnz .akind
 
     xor si, si
 .sw:
@@ -182,12 +230,6 @@ sv_fish_init:
     cmp si, SV_NBUB
     jb .bu
 
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -287,13 +329,6 @@ sv_fish_edge:
 ; in:  the gfx lock is HELD
 ; -----------------------------------------------------------------------------
 sv_fish_step:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
     xor si, si
 .sw:
     call sv_fish_one
@@ -308,13 +343,6 @@ sv_fish_step:
     cmp si, SV_NBUB
     jb .bu
 
-    mov byte [sv_shown], 1
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -974,35 +1002,18 @@ sv_bub_blot:
 ;
 ; A FISH FACES RIGHT AND IS MIRRORED BY... NOTHING. The first draft mirrored
 ; its unit coordinates for a swimmer heading left; a bitmap cannot be mirrored
-; for free, so there are two sets - and 16 bytes a frame is what that costs,
-; on the floppy, where this image lives.
+; for free at DRAW time, so there are two sets - and the second is made once
+; a pick by sv_fish_init, in the mode union, rather than shipped: mirroring a
+; row is a 16-bit bit reversal, and a 16-bit reversal of the word as it sits in
+; memory (left byte low) IS the row's mirror, both bytes swapped and reversed.
 ; =============================================================================
 SV_FNFR     equ 3               ; bitmaps per kind
-
-; sv_dbl - a bitmap byte -> the same eight pixels DOUBLED, sixteen bits, high
-; bit leftmost. 512 bytes of image and no run-time build, which is what makes
-; a scale-2 band row two table reads where the 4bpp block spent a shift, a
-; mask and a store per PIXEL.
-sv_dbl:
-%assign SVDI 0
-%rep 256
-  %assign SVDV 0
-  %assign SVDB 0
-  %rep 8
-    %if (SVDI & (1 << SVDB))
-      %assign SVDV SVDV | (3 << (SVDB * 2))
-    %endif
-    %assign SVDB SVDB + 1
-  %endrep
-    dw SVDV
-  %assign SVDI SVDI + 1
-%endrep
 
 sv_fseq:    db 0, 1, 2, 1, 0, 1, 2, 1  ; the phase's top bits -> a frame, out
                                        ; and BACK: a tail that snapped from 2
                                        ; to 0 read as a twitch
 
-sv_fart:
+sv_fartsrc:                     ; the RIGHT-facing half of sv_fart, below
 ; --- fish, tail FLARED -------------------------------------------------------
     db 10000000b, 00000000b     ; #...............
     db 11000001b, 11111100b     ; ##.....#######..
@@ -1030,31 +1041,6 @@ sv_fart:
     db 00110011b, 11111110b     ; ..##..##########
     db 00000001b, 11111100b     ; .......#######..
     db 00000000b, 00000000b     ; ................
-; --- fish facing LEFT, the same three, mirrored ------------------------------
-    db 00000000b, 00000001b     ; ...............#
-    db 00111111b, 10000011b     ; ..#######......#
-    db 01011111b, 11001110b     ; .#.#######..###.
-    db 11111111b, 11111100b     ; ##############..
-    db 11111111b, 11111100b     ; ##############..
-    db 01111111b, 11001110b     ; .##########.###.
-    db 00111111b, 10000011b     ; ..#######......#
-    db 00000000b, 00000001b     ; ...............#
-    db 00000000b, 00000000b
-    db 00111111b, 10000010b     ; ..#######......#
-    db 01011111b, 11001110b
-    db 11111111b, 11111100b
-    db 11111111b, 11111100b
-    db 01111111b, 11001110b
-    db 00111111b, 10000010b
-    db 00000000b, 00000000b
-    db 00000000b, 00000000b
-    db 00111111b, 10000000b     ; ..#######.......
-    db 01011111b, 11001100b     ; .#.#######..##..
-    db 11111111b, 11111100b
-    db 11111111b, 11111100b
-    db 01111111b, 11001100b
-    db 00111111b, 10000000b
-    db 00000000b, 00000000b
 ; --- jellyfish, bell RELAXED -------------------------------------------------
     db 00000111b, 11100000b     ; .....######.....
     db 00011111b, 11111000b     ; ...##########...
@@ -1082,76 +1068,74 @@ sv_fart:
     db 00001001b, 00100000b     ; ....#..#..#.....
     db 00010001b, 00010000b     ; ...#...#...#....
     db 00100000b, 10001000b     ; ..#.....#...#...
-; --- jellyfish facing left is the same jellyfish -----------------------------
-; It has no facing at all, so the LEFT set is the RIGHT set again rather than
-; a branch at every use: sv_fk is 0 or 1 and the heading picks the half.
-    db 00000111b, 11100000b
-    db 00011111b, 11111000b
-    db 00011111b, 11111000b
-    db 00001111b, 11110000b
-    db 00001001b, 00100000b
-    db 00001001b, 00100000b
-    db 00010001b, 00010000b
-    db 00010000b, 10010000b
-    db 00000011b, 11000000b
-    db 00001111b, 11110000b
-    db 00011111b, 11111000b
-    db 00011111b, 11111000b
-    db 00001001b, 00100000b
-    db 00000101b, 01000000b
-    db 00001001b, 00100000b
-    db 00000101b, 01000000b
-    db 00000011b, 11000000b
-    db 00000111b, 11100000b
-    db 00011111b, 11111000b
-    db 00011111b, 11111000b
-    db 00010001b, 00010000b
-    db 00001001b, 00100000b
-    db 00010001b, 00010000b
-    db 00100000b, 10001000b
+; --- ...and facing LEFT, which is NOT SHIPPED -----------------------------------
+; The left set is the right set MIRRORED for the fish and REPEATED for the
+; jellyfish, which has no facing at all - so sv_fish_init builds it
+; (sv_fart_make) into the mode union, where the whole table lives, rather than
+; the floppy and the claim carrying 96 bytes nobody can proof-read. The frame
+; reads sv_fart exactly as it did: kind * 6 + heading * 3 + frame, 16 bytes a
+; bitmap. sv_fart_make walks this source in this order: three fish, three
+; jellyfish.
 
 ; --- the sea ----------------------------------------------------------------
-sv_fx:      times SV_NFISH dw 0     ; where it is, and where it is going
-sv_fy:      times SV_NFISH dw 0
-sv_fvx:     times SV_NFISH dw 0
-sv_fk:      times SV_NFISH db 0     ; fish or jellyfish
-sv_fs:      times SV_NFISH db 1     ; the scale, 1 or 2
-sv_fph:     times SV_NFISH db 0
-sv_fi:      times SV_NFISH db 0     ; its COLOUR, not its logical ink
-sv_fox:     times SV_NFISH dw 0     ; ...and the box it last occupied
-sv_foy:     times SV_NFISH dw 0
-sv_fos:     times SV_NFISH db 1
-sv_fon:     times SV_NFISH db 0
+; The mode's state is a macro emitted into saver.asm's mode union (see
+; SV_CUBE_STATE). sv_fish_init writes every swimmer's and every bubble's
+; position, kind, scale and heading and clears sv_fon/sv_bon, and the frame
+; writes the old box and all of the drawing scratch before it reads them, so
+; nothing here needs a load-time value. The two tests that pin a scale write
+; sv_fs/sv_fos before each frame, which is unaffected.
+%macro SV_FISH_STATE 0
+; sv_dbl - a bitmap byte -> the same eight pixels DOUBLED, sixteen bits, high
+; bit leftmost, which is what makes a scale-2 band row two table reads where
+; the 4bpp block spent a shift, a mask and a store per PIXEL. BUILT by
+; sv_dbl_make at every sv_fish_init rather than shipped: it is 512 bytes of
+; the union, where the 4 modes' largest state already pays for the room, and
+; the frame's read of it is the same instruction it always was.
+sv_dbl:     resw 256
+sv_fart:    resb SV_FNFR * 4 * SV_FHU * 2  ; two kinds by two headings, built
+                                        ; from sv_fartsrc by sv_fish_init
+sv_fx:      resw SV_NFISH               ; where it is, and where it is going
+sv_fy:      resw SV_NFISH
+sv_fvx:     resw SV_NFISH
+sv_fk:      resb SV_NFISH               ; fish or jellyfish
+sv_fs:      resb SV_NFISH               ; the scale, 1 or 2
+sv_fph:     resb SV_NFISH
+sv_fi:      resb SV_NFISH               ; its COLOUR, not its logical ink
+sv_fox:     resw SV_NFISH               ; ...and the box it last occupied
+sv_foy:     resw SV_NFISH
+sv_fos:     resb SV_NFISH
+sv_fon:     resb SV_NFISH
 
-sv_bx:      times SV_NBUB dw 0
-sv_by:      times SV_NBUB dw 0
-sv_bv:      times SV_NBUB dw 0
-sv_bph:     times SV_NBUB db 0
-sv_bon:     times SV_NBUB db 0
+sv_bx:      resw SV_NBUB
+sv_by:      resw SV_NBUB
+sv_bv:      resw SV_NBUB
+sv_bph:     resb SV_NBUB
+sv_bon:     resb SV_NBUB
 
-sv_fdx:     dw 0                    ; the drawing scratch: ONE swimmer at a
-sv_fdy:     dw 0                    ; time, sv_shape_load's argument one mode
-sv_fbw:     dw 0                    ; over. The block, and where the sprite
-sv_fbh:     dw 0                    ; sits inside it
-sv_fbox:    dw 0
-sv_fboy:    dw 0
-sv_fbx0:    dw 0                    ; the block's origin on the glass
-sv_fby0:    dw 0
-sv_fsrc:    dw 0                    ; sv_bnd_build's chosen bitmap
-sv_bnx0:    dw 0                    ; the BAND: where it goes and how wide it
-sv_bnw:     dw 0                    ; is, both multiples of 8 (SPEC.md 5.4.2)
-sv_bnbo:    dw 0                    ; ...and where the sprite sits in it, as
-sv_bnsh:    db 0                    ; whole bytes plus a shift of 0..7
-sv_bnn:     db 0                    ; bytes a bitmap row becomes before the
-sv_bnsc:    db 0                    ; shift, and band rows it then fills
-sv_bnrc:    db 0                    ; bitmap rows left
-sv_bndm:    db 0                    ; the dither mask this band row takes...
-sv_bndx:    db 0                    ; ...and the XOR that steps it to the next
-sv_hlim:    dw 0                    ; SPEC.md 79.5.10: one PAST the last column
-                                    ; this mode may light, or 0 for "all of it"
-sv_bex:     dw 0                    ; a bubble's PREVIOUS blot, banked across
-sv_bey:     dw 0                    ; the move so the erase can follow the draw
-sv_beph:    db 0
-sv_bnexp:   times 4 db 0            ; one bitmap row, doubled but not yet
-sv_bnsft:   times 8 db 0            ; shifted - and then shifted
-sv_bnd:     times SV_BNSZ db 0      ; the union band itself
+sv_fdx:     resw 1                      ; the drawing scratch: ONE swimmer at a
+sv_fdy:     resw 1                      ; time, sv_shape_load's argument one mode
+sv_fbw:     resw 1                      ; over. The block, and where the sprite
+sv_fbh:     resw 1                      ; sits inside it
+sv_fbox:    resw 1
+sv_fboy:    resw 1
+sv_fbx0:    resw 1                      ; the block's origin on the glass
+sv_fby0:    resw 1
+sv_fsrc:    resw 1                      ; sv_bnd_build's chosen bitmap
+sv_bnx0:    resw 1                      ; the BAND: where it goes and how wide it
+sv_bnw:     resw 1                      ; is, both multiples of 8 (SPEC.md 5.4.2)
+sv_bnbo:    resw 1                      ; ...and where the sprite sits in it, as
+sv_bnsh:    resb 1                      ; whole bytes plus a shift of 0..7
+sv_bnn:     resb 1                      ; bytes a bitmap row becomes before the
+sv_bnsc:    resb 1                      ; shift, and band rows it then fills
+sv_bnrc:    resb 1                      ; bitmap rows left
+sv_bndm:    resb 1                      ; the dither mask this band row takes...
+sv_bndx:    resb 1                      ; ...and the XOR that steps it to the next
+sv_hlim:    resw 1                      ; SPEC.md 79.5.10: one PAST the last column
+                                        ; this mode may light, or 0 for "all of it"
+sv_bex:     resw 1                      ; a bubble's PREVIOUS blot, banked across
+sv_bey:     resw 1                      ; the move so the erase can follow the draw
+sv_beph:    resb 1
+sv_bnexp:   resb 4                      ; one bitmap row, doubled but not yet
+sv_bnsft:   resb 8                      ; shifted - and then shifted
+sv_bnd:     resb SV_BNSZ                ; the union band itself
+%endmacro

@@ -20,12 +20,19 @@ It captures the claim map at every step too, for the same reason - the map is
 where a spurious move would show first, and two identical screens over two
 different maps is exactly the state a later boot turns into a wrong pixel.
 """
-import sys, time, argparse, hashlib
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import sys, argparse, hashlib
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
-MC_SIZE, MEM_MAX = 10, 32
+MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 
 
 def main():
@@ -80,8 +87,10 @@ def main():
 
         w = dispcp.win_list(m, S)
         wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
+        had = len(dispcp.win_list(m, S))
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "ARTFUL.O88")
-        time.sleep(3)
+        os88marty.until(m, lambda _m: len(dispcp.win_list(m, S)) > had,
+                        "the ARTFUL window", poll=0.3, limit=60)
         os88marty.settle(m)
         step(m, "a package running")
 

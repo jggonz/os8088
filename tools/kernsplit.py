@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """kernsplit.py SMALL.bin BIG.bin - what does kern_big cost over kern_small?
 
-Two kernels off one tree (docs/KERN-SPLIT-PLAN.md). `make` builds the small
+Two kernels off one tree (docs/history/KERN-SPLIT-PLAN.md). `make` builds the small
 one and `make big` the big one, and this says what separates them.
 
 WHAT IT IS FOR IS THE SMALL BUILD, not the big one. kern_big has a machine

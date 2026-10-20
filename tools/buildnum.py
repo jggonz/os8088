@@ -56,7 +56,21 @@ def _git(*args):
 
 
 def build_number():
-    """The commit count, or (0, why) when it cannot be trusted."""
+    """The commit count, or (0, why) when it cannot be trusted.
+
+    **`$OS88_BUILDNUM` PINS IT**, and tools/os88soak.py is why: a soak freezes
+    its artefacts into a tree of its own so that build/ stays the operator's
+    while it runs, but a row that builds a declared artefact runs `make` in
+    that tree hours later - and without a pin this function answered for the
+    LIVE checkout's HEAD. One commit mid-run and the tree's kernel.bin came
+    back a build number ahead of the images already in it, so every row that
+    compares the running kernel with the file read one byte of damage in
+    `mod_check`'s build test (dispcold: ".cold is already corrupt before the
+    click"). The run sets this to the count it froze at.
+    """
+    pinned = os.environ.get("OS88_BUILDNUM", "")
+    if pinned.isdigit():
+        return int(pinned), None
     if _git("rev-parse", "--git-dir") is None:
         return 0, ("no git checkout here (a tarball, or git is not "
                    "installed)")

@@ -1,11 +1,11 @@
 # The LEMMINGS converted band format (wave 1 pin)
 
 Pinned by the wave-1 implementer so `tools/os88lem.py` and `apps/lemmings/`
-can be written at the same time. It is the concrete form of SPEC.md §92.3 and
-§92.3.2 and nothing here may contradict those two sections.
+can be written at the same time. It is the concrete form of SPEC.md §114.3 and
+§114.3.2 and nothing here may contradict those two sections.
 
 Everything is **little-endian**. Every file is **padded to a multiple of 512**
-and **no file exceeds 64,512 bytes** (§92.3.2). Every name is uppercase 8.3 in
+and **no file exceeds 64,512 bytes** (§114.3.2). Every name is uppercase 8.3 in
 `[A-Z0-9_-]`.
 
 ## The files
@@ -14,8 +14,8 @@ and **no file exceeds 64,512 bytes** (§92.3.2). Every name is uppercase 8.3 in
 |---|---|---|
 | `LEMMAN.LEM` | the manifest header: what this disk carries, and the cluster arithmetic it was built with | wave 1 |
 | `LEMR0.LEM` … `LEMR3.LEM` | one file per RATING: 30 level entries of 64 bytes with the preview fields already unpacked | wave 1 |
-| `LEMSTR.LEM` | the string resource band (§92.3, "the string resource band is written here too") | wave 1 |
-| `LEMLV0.LEM` … `LEMLV9.LEM` | the 80 raw 2048-byte level records, **eight to a file** (§92.3.2), ODDTABLE already folded in | wave 4 |
+| `LEMSTR.LEM` | the string resource band (§114.3, "the string resource band is written here too") | wave 1 |
+| `LEMLV0.LEM` … `LEMLV9.LEM` | the 80 raw 2048-byte level records, **eight to a file** (§114.3.2), ODDTABLE already folded in | wave 4 |
 | `LEMGR0.LEM` … `LEMGR4.LEM` | one style bank per graphic set: palette, terrain pieces, object metadata and frames | wave 2 |
 | `LEMMAIN.LEM` | the MAIN.DAT-derived bank: panel bitmap, both fonts, the 28 animations, the masks, the rating signs, the brown background | wave 2 |
 | `LEMSP0_0.LEM` … | the four VGASPEC pictures, in numbered parts (`LEMSP<n>_<part>.LEM`) because one is 76,800 bytes | wave 4 |
@@ -30,7 +30,7 @@ with the four ratings inside it would have to be read a rating at a time —
 clusters** (`apps/cc/os88.h`). The cluster is 512 bytes on the 1.44MB and
 1.2MB geometries and 1,024 on the 720KB and 360KB ones, and it is neither of
 those on a RAM disk — which is exactly where The Wire unpacks this package
-(§92.3.2). So the rating is the FILE: `os88_file_read()` reads a whole small
+(§114.3.2). So the rating is the FILE: `os88_file_read()` reads a whole small
 file into a DS-relative static with no alignment rule of any kind, and the
 package carries one rating's 2,048 bytes of bss rather than four ratings'
 8,192. Four extra directory rows against `RD_MAXENT`'s 96 is the price and
@@ -107,7 +107,7 @@ copyright took the band from 3,584 to exactly that — the very step that would
 have refused. The next 512-step is 4,608, so 5,120 clears the band by a whole
 step, which is what `lem_str_load()`'s strict `n >= LEM_STRBUF` needs; the
 8,192 wave 1 first took was 3,072 bytes of headroom charged to a bss line that
-had none to give (`apps/lemmings/lemmings.c`, §92.6).
+had none to give (`apps/lemmings/lemmings.c`, §114.6).
 
 **The ids are generated.** `tools/os88lem.py` writes `build/lemstr.h` beside
 the band — `#define LEMS_<NAME> <n>` for every string — and `apps/lemmings`
@@ -116,7 +116,7 @@ error, not a wrong sentence on the glass.
 
 The string table's source is a table inside `tools/os88lem.py`, one row per
 string, each row carrying **the reference file that defines it** in a comment
-(SPEC.md §92's authority table).
+(SPEC.md §114's authority table).
 
 ## `--fixture`
 

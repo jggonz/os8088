@@ -71,7 +71,7 @@ class Rows(dispcells.Pump):
         self.rows.append((r["cx"] & 0xFFFF, r["dx"] & 0xFFFF,
                           t[:48 if n < 0 else n].decode("latin-1")))
 
-    def frames(self):
+    def raw_frames(self):
         out, cur, last = [], [], -1
         for x, y, t in self.rows:
             if y < last and cur:
@@ -81,7 +81,27 @@ class Rows(dispcells.Pump):
             last = y
         if cur:
             out.append(cur)
-        return [self.join(f) for f in out]
+        return out
+
+    def frames(self):
+        """...only the frames whose every row kept its FIRST chunk.
+
+        The pump loses stops (see the header). A row missing its leftmost one
+        has lost TMH_IND with it and reads as a heading, which is the one loss
+        that changes this gate's answer - so it is the one tested for, and a
+        frame carrying it is dropped rather than reasoned about.
+        """
+        return [self.join(f) for f in self.raw_frames() if self.usable(f)]
+
+    @staticmethod
+    def usable(frame):
+        by = {}
+        for x, y, _ in frame:
+            by.setdefault(y, []).append(x)
+        if not by:
+            return False
+        pen = min(x for v in by.values() for x in v)
+        return all(pen in v for v in by.values())
 
     @staticmethod
     def join(frame):
@@ -174,33 +194,51 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
           % ((w.x, w.y, w.w, w.h), (d.x, d.y, d.w, d.h), (c.x, c.y, c.w, c.h)))
     stub = m.sym("api_x") - (KSEG << 4)      # SPEC.md 20.3's shared X body
 
-    def to_heap(cap):
-        """...onto the heap page, capturing every repaint on the way."""
-        for _ in range(8):
+    def to_heap(cap, want):
+        """...onto the heap page, capturing until the answer is READABLE.
+
+        Not until a fixed number of clicks: the pump drops stops, so arriving
+        at the page is not the same as having captured it whole. Each click
+        cycles the view, so every third one is a fresh full repaint of this
+        page to try again with - which is the RETRY dispcells.Pump.serve asks
+        for, spelled as a condition rather than a hope.
+        """
+        for _ in range(12):
             ww = W(slot)
             cap.click(ww.x + 20, ww.y + TITLE_H + 40)
             cap.pump(1200, 4)
-            if view() == 2 and len(cap.rows) > 40:
+            if view() != 2:
+                continue
+            if not want:                # nothing was banked, so there is no
+                return len(cap.rows) > 40   # row to wait for and the leg
+            if group_in(                    # below says that for itself
+                    [f for f in cap.frames() if len(f) > 3], want)[0]:
                 return True
-        return view() == 2
+        return False
 
     # --- KERNEL ------------------------------------------------------------
     drag(c.x + 30, c.y + 9, d.x + 40 + 30, d.y + 20 + 9, settle=False)
     ds = su(disk)
     kp = Rows(m, mo, stub)
-    ok = to_heap(kp)
+    ok = to_heap(kp, ds)
     kp.close()
     mo.to(*dispcorner.PARK)
     for _ in range(4):
         tick(m)
     dh, drow, _ = group_in([f for f in kp.frames() if len(f) > 3], ds)
     print("KERNEL  : view %d, Disk cache %04X -> %r" % (view(), ds, dh))
-    if not ok or view() != 2:
+    if view() != 2:
         fails.append("KERNEL: never reached the heap page, so this read the "
                      "wrong list")
     elif not ds:
         fails.append("KERNEL: the Disk window banked nothing when the "
                      "Calculator landed on it, so there is no row to file")
+    elif not ok:
+        fails.append("KERNEL: 12 cycles of the page and not one capture came "
+                     "back with every row's first chunk AND a row naming "
+                     "%04X. That is the HARNESS (dispcells.Pump.serve drops "
+                     "stops) unless the page has genuinely stopped listing "
+                     "the cache - the frames are printed above" % ds)
     elif drow is None:
         fails.append("KERNEL: no row names its cache %04X - the list was "
                      "never composed in full under capture" % ds)
@@ -214,13 +252,20 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     drag(d.x + 30, d.y + 9, c.x + 40 + 30, c.y + 20 + 9, settle=False)
     cs, cseg = su(calc), segs.get(calc)
     rp = Rows(m, mo, stub)                      # ...and cycle the page round
-    okp = to_heap(rp)                           # to compose the list IN FULL:
+    okp = to_heap(rp, cs)                       # to compose the list IN FULL:
     rp.close()                                  # SPEC.md 28.10.2 means the
     mo.to(*dispcorner.PARK)                     # drag's own repaint draws only
     for _ in range(4):                          # the chunks that changed, so
         tick(m)                                 # there is no whole list in it
-    if not okp or view() != 2:
+    if view() != 2:
         fails.append("PACKAGE: never got back to the heap page")
+    elif not cs:
+        fails.append("PACKAGE: the Calculator banked nothing when the Disk "
+                     "window landed on it, so there is no row to file")
+    elif not okp:
+        fails.append("PACKAGE: 12 cycles and no capture came back with every "
+                     "row's first chunk AND a row naming %04X - the harness, "
+                     "unless the page has stopped listing it" % cs)
     ch, crow, cf = group_in([f for f in rp.frames() if len(f) > 3], cs)
     print("PACKAGE : Calc cache %04X -> %r (its segment %04X)"
           % (cs, ch, cseg or 0))

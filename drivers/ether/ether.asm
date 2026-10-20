@@ -3,7 +3,7 @@
 ;
 ; An NE1000/NE2000 card and a TCP/IP stack, answering the SAME socket verbs
 ; NET.DRV answers over a parallel cable (SPEC.md 62.11, drivers/net/netpkg.inc).
-; That is the whole claim of docs/NET-STACK-PLAN.md stage E and it is the test
+; That is the whole claim of docs/plans/completed/NET-STACK-PLAN.md stage E and it is the test
 ; of whether stage A's boundary was drawn in the right place: the browser and
 ; Telnet are not rebuilt against a new interface here, they ask for a socket
 ; and get one from a card instead of a cable.
@@ -134,6 +134,19 @@ eth_attach:
     push bx
     push cx
     push di
+    call os88_pin               ; THE PORTS PAGE FIRST (SPEC.md 51.9.2): a
+    or  al, al                  ; pinned card is probed at its one address and
+    jz  .auto                   ; the sweep never runs, so nothing else on the
+    cmp al, DRVPIN_OFF          ; bus is so much as read. Off - which the page
+    je  .none                   ; does not offer for a card - looks nowhere
+    xor ah, ah
+    shl ax, 1
+    add ax, DRVPIN_BASE
+    mov [eth_base], ax
+    call ne_probe
+    jnc .found
+    jmp .none
+.auto:
 %ifdef ETH_BASE
     mov ax, [eth_fixed]         ; `make ETHBASE=0x320`: one address and no
     mov [eth_base], ax          ; sweep, for a machine where the sweep would
@@ -152,12 +165,13 @@ eth_attach:
     jc  .try
 .found:
     call sk_claim               ; THE RINGS, before the card can deliver into
-    jc  .noring                 ; them (SPEC.md 72.13). A card with no buffers
+    jc  .none                   ; them (SPEC.md 72.13). A card with no buffers
     call ne_init                ; cannot serve a socket, so this is the one
-    mov byte [eth_up], 1        ; memory failure that refuses the attach
-    mov di, eth_ip              ; a fresh attach starts with no address: a
-    mov cx, 16                  ; second one must not inherit the first's
-    call mem_zero
+    mov byte [eth_up], 1        ; memory failure that refuses the attach.
+                                ; NO ADDRESS IS CLEARED HERE: eth_ip..eth_dns
+                                ; are zero because the image was loaded a
+                                ; moment ago, and an attach is the first verb
+                                ; any image gets (os88drv.inc, OS88_STATE)
 %ifdef ETH_IP
     mov si, eth_static          ; ...unless one was baked in (SPEC.md 72.5)
     mov di, eth_ip
@@ -173,18 +187,13 @@ eth_attach:
     pop ax
     clc
     ret
-.noring:
-    mov word [eth_base], 0      ; the card is real and the memory is not: the
-    mov byte [eth_up], 0        ; Drivers page reports a refusal either way,
-    pop di                      ; and a stack with no window is not a stack
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-.none:
-    mov word [eth_base], 0
-    mov byte [eth_up], 0
+.none:                          ; ...and the card being real with the memory
+                                ; not is the same refusal: the Drivers page
+                                ; reports one either way, and a stack with no
+                                ; window is not a stack. Nothing is put back:
+                                ; a refused attach is handed straight back to
+                                ; the heap, so [eth_base] and [eth_up] are
+                                ; never read again
     pop di
     pop cx
     pop bx
@@ -246,22 +255,27 @@ eth_dhcp_wait:
     call OSAPI_GET_TICKS
     add ax, DHCP_WAIT
     mov [eth_dl], ax
-.begin:
-    call eth_claim              ; the DISCOVER is a frame like any other, so it
-    jnc .go                     ; goes out under the claim too - and a worker
-    call OSAPI_GET_TICKS        ; that holds it is milliseconds away, with the
-    sub ax, [eth_dl]            ; same deadline bounding even that
-    js  .begin
-    mov byte [dhcp_st], DH_FAIL
-    jmp short .done
-.go:
-    call dhcp_begin
-    mov byte [eth_busy], 0
+    mov byte [dhcp_st], DH_IDLE ; NOT ASKED YET: the first claim asks, and
+                                ; every one after it pumps. IDLE cannot come
+                                ; back once asked - a NAK is IDLE and a fresh
+                                ; DISCOVER inside the one pump
 .spin:
     call eth_claim              ; ONE PUMP AT A TIME and never held across the
     jc  .look                   ; spin: this is the UI task sitting here for up
-    call eth_pump               ; to DHCP_WAIT ticks, and a package's worker
-    mov byte [eth_busy], 0      ; would get NETE_BUSY for every one of them
+                                ; to DHCP_WAIT ticks, and a package's worker
+                                ; would get NETE_BUSY for every one of them.
+                                ; The DISCOVER is a frame like any other, so
+                                ; it goes out under the claim too - and a
+                                ; worker that holds it is milliseconds away,
+                                ; with the same deadline bounding even that
+    cmp byte [dhcp_st], DH_IDLE
+    jne .pump
+    call dhcp_begin
+    jmp short .rel
+.pump:
+    call eth_pump
+.rel:
+    mov byte [eth_busy], 0
 .look:
     cmp byte [dhcp_st], DH_BOUND
     je  .done
@@ -280,12 +294,7 @@ eth_dhcp_wait:
 ; DRVV_DETACH - cannot fail (SPEC.md 51.6 rule 1)
 ; -----------------------------------------------------------------------------
 eth_detach:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call os88_ent               ; push ax..di, and bp: out by ep_bp
     call wz_withdraw            ; **THE DESKTOP ICON FIRST** (SPEC.md 26.7):
                                 ; its paint verb lives in the image the kernel
                                 ; is about to free, and the zone is redrawn
@@ -310,14 +319,8 @@ eth_detach:
     mov byte [eth_busy], 0      ; ...and the flag does not outlive the driver:
                                 ; a claim left standing would refuse every
                                 ; verb of the next attach
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp ep_bp
 
 ; -----------------------------------------------------------------------------
 ; eth_dropall - every connection goes, and the peers are told
@@ -339,19 +342,18 @@ eth_dropall:
     jb  .kill
     mov al, TF_RST | TF_ACK
     push cx
-    xor cx, cx
-    call tcp_out
+    push dx                     ; DL is the slot: the RST carries SND.NXT,
+    mov dx, [bx+SKO_TXS]        ; SND.UNA past what is in flight, as tcp_ack
+    xor cx, cx                  ; does - a peer takes a reset at no other
+    call tcp_out                ; sequence number (RFC 5961)
+    pop dx
     pop cx
 .kill:
     mov byte [bx+SKO_TS], TS_CLOSED
     mov byte [bx+SKO_ST], NSK_FREE
     inc dl
     loop .l
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_dx
 
 ; =============================================================================
 ; THE PACKAGE DOOR - the socket verbs (netpkg.inc)
@@ -491,6 +493,9 @@ eth_vtab:
     dw eth_v_prof               ; 12 NETV_PROF - the stage timers (72.15)
     dw eth_v_sktab              ; 13 NETV_SKTAB - the socket table (72.20)
     dw eth_v_bulk               ; 14 NETV_BULK  - give me the big ring (72.21.1)
+    dw eth_v_raw                ; 15 NETV_RAW   - the wire is mine (72.22)
+    dw eth_v_rawtx              ; 16 NETV_RAWTX - one frame out
+    dw eth_v_rawrx              ; 17 NETV_RAWRX - one frame in
 eth_vtab_end:
 %if (eth_vtab_end - eth_vtab) / 2 != NETV_MAX + 1
   %error "ether: the verb table and NETV_MAX disagree"
@@ -554,10 +559,46 @@ eth_v_state:
 ; package must keep its header and icon block at fixed image offsets (SPEC.md
 ; 20.2) and a driver has neither, while ethcfg.inc's four line blocks are sized
 ; by OS88LINE_SZ and a `times` needs its constant already defined.
+%define OS88UI_ARM              ; os88ui_arm/fire/armed: the press/release
+%define OS88UI_NOGEST           ; ...and the page and the Setup window both
+                                ; drive their own buttons through those
+                                ; three, so the record-based gesture half is
+                                ; ~226 bytes nothing here calls (SPEC.md
+                                ; 20.5.1.3.4, hddtool.asm's shape)
+%define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
+%define OS88UI_NOGCHECK       ; radios only: no check picture (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard control (SPEC.md 20.5.1)...
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"         ; ...and the one-line field the Setup window is
 %include "etherui.inc"
 %include "ethcfg.inc"           ; ...and the Setup window behind it (72.7)
 
+; THE SHARED PROLOGUE (drivers/os88drv.inc): `call os88_ent` is the seven
+; pushes ax..bp, so a routine that opens with it leaves through ep_bp exactly
+; as it did - inet.inc's ladder, which is the same stack shape. HERE, and not
+; beside ep_bp, because inet.inc is shared with the DOS end of the cable
+; (drivers/net/os88net.asm), which does not include os88drv.inc - and for the
+; same reason no routine in inet/tcp/dns.inc calls it. Its callers are the
+; Control Panel page and the Setup window: cold, ~100 cycles a call.
+    OS88_ENT
+    OS88_PIN                    ; the Ports view's byte (SPEC.md 51.9.2)
+
 %include "ethstate.inc"         ; ...and the state it all runs on
     OS88_DRV_END
+
+; --- the published frame bounds against the real ones ------------------------
+; netpkg.inc publishes NET_FRAME and NET_EHSIZE so a RAW consumer can build a
+; frame without reaching into the driver's own files (SPEC.md 72.22). These
+; two say the published numbers still describe this card and this stack. At
+; the END of the file because that is where ne2000.inc and inet.inc have been
+; included by - the assertion was written above them and failed on the symbol
+; it exists to check.
+%if NE_FRAME != NET_FRAME
+  %error "ether: the card's frame size and netpkg.inc's published one disagree"
+%endif
+%if EH_SIZE != NET_EHSIZE
+  %error "ether: the stack's Ethernet header size and netpkg.inc's disagree"
+%endif
+%if ETY_IP != NET_ETY_IP || ETY_ARP != NET_ETY_ARP
+  %error "ether: the stack's ethertypes and netpkg.inc's published ones disagree"
+%endif

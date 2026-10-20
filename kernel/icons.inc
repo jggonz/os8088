@@ -11,6 +11,8 @@
 ;   db wwords        ; row width in words (1 = 16px, 2 = 32px)
 ;   db height        ; rows
 ;   ; height x wwords mask words, then height x wwords data words
+;   (the API's door also takes `db 0, height` + data words alone - the mask
+;   implied all ones, which icon_draw_x fills in as it stages, SPEC.md 25.6.2)
 ;   ; bit 15 = leftmost pixel of the word's 16px span; words left -> right
 ;
 ; Each 16-bit source word lands at bit offset (x & 7) inside a 24-bit window
@@ -36,8 +38,10 @@
 ; so DS cannot be moved to the caller's segment the way gfx_blit1_x moves it
 ; to the caller's band (SPEC.md 5.4.2) - the pass would then read its own
 ; geometry out of the package. The record is STAGED instead: it is 66 bytes at
-; the outside, one `movsb` loop, and nothing measurable beside two passes over
-; twelve rows.
+; the outside, one `rep movsw` with the two segments swapped for it, and
+; nothing measurable beside two passes over twelve rows. The SOLID kind
+; (`db 0, rows`, SPEC.md 25.6.2) has no mask rows to copy: a `rep stosw` of
+; 0xFFFF writes them, so the stage the passes read is the plain record's.
 ;
 ; The bound is what the stage holds and it is a REFUSAL rather than a
 ; truncation: one word a row, sixteen rows - a 16x16 icon, and every control
@@ -62,10 +66,11 @@ ICO_IBUF_SZ equ 2 * ICO_IBUF_H * (ICO_IBUF_WW * 2)  ; mask table + data table
 ;
 ; os88ui_glyph hands icon_draw_x the constant record `db 1, OS88UI_GW` and has
 ; NO fallback - the branch that used to stand in for one could not draw a
-; glyph, so it went rather than being kept (SPEC.md 25.6.1). Of the four shapes
-; icon_draw_x refuses - a width that is not ICO_STAGE_WW (which is ww = 0 and
-; ww > 1 in one compare), rows = 0, rows > ICO_STAGE_H - the first two are
-; pinned by ICO_STAGE_WW; this is the last, and a glyph grown past the
+; glyph, so it went rather than being kept (SPEC.md 25.6.1). Of the three
+; shapes icon_draw_x refuses - a kind above ICO_STAGE_WW (ICON_SOLID = 0 and
+; the plain 1 are the two it takes, SPEC.md 25.6.2), rows = 0, rows >
+; ICO_STAGE_H - the first is pinned by ICO_STAGE_WW and the glyph's own
+; `db 1`; this is the last, and a glyph grown past the
 ; stage would otherwise turn every control in every package into nothing at
 ; all, silently.
 ; No %ifdef around it: `equ` defines an ASSEMBLER symbol and %ifdef tests the
@@ -76,22 +81,25 @@ ICO_IBUF_SZ equ 2 * ICO_IBUF_H * (ICO_IBUF_WW * 2)  ; mask table + data table
   %error "OS88UI_GW is taller than the icon stage: icon_draw_x refuses the control-glyph record and os88ui_glyph has no fallback (SPEC.md 25.6.1)"
 %endif
 %if ICO_STAGE_WW != 1
-  %error "icon_draw_x refuses every width but ICO_STAGE_WW in ONE compare (`cmp al, ICO_STAGE_WW / jne .refuse`), which is only the same answer while the stage is ONE word across. A wider stage needs the pair back - `cmp al, ICO_STAGE_WW / ja .refuse` and `or al,al / jz .refuse` - as well as the resb below re-sized"
+  %error "icon_draw_x takes exactly two kinds in ONE compare (`cmp al, ICO_STAGE_WW / ja .refuse`): ICON_SOLID = 0 and the plain ICO_STAGE_WW = 1 (SPEC.md 25.6.2). A wider stage needs a kind byte that is not the width, the solid fill sized by it and the resb below re-sized"
 %endif
 icon_draw_x:
     push ax
     push cx
     push si
     push di
-    mov al, [es:si]             ; the header: words a row, then rows
-    mov ah, [es:si+1]
-    cmp al, ICO_STAGE_WW        ; ONE compare, two refusals: `ja` refused
-    jne .refuse                 ; ww > 1 and `jz` refused ww = 0, so the only
-                                ; surviving value was ICO_STAGE_WW itself -
-                                ; which is what `jne` refuses the complement
-                                ; of, over the whole byte domain, AL = 0
-                                ; included (cmp 0,1 sets CF, so `ja` was
-                                ; correctly not taken there either)
+    mov ax, [es:si]             ; the header: the KIND (AL), then rows (AH)
+    cmp al, ICO_STAGE_WW        ; ONE compare, the kind's whole refusal: 1 is
+%ifdef KERN_SMALL               ; the plain record...
+    jne .refuse                 ; ...and the only one kern_small takes: the
+                                ; SOLID kind is refused there (SPEC.md
+                                ; 25.6.2.1), every package that writes one
+                                ; being off the small floppies
+%else
+    ja .refuse                  ; ...and ICON_SOLID (0) the one with an
+                                ; implied full mask (SPEC.md 25.6.2); `ja`
+                                ; refuses every other byte
+%endif
     or ah, ah
     jz .refuse
     cmp ah, ICO_STAGE_H
@@ -100,6 +108,7 @@ icon_draw_x:
                                 ; the count - so it is banked a second time
                                 ; rather than spent. Without this the record
                                 ; staged perfectly and drew at a byte count
+%ifdef KERN_SMALL
     mov cl, ah                  ; CX = 2 + h * 4: the header, h mask words
     xor ch, ch                  ; and h data words
     shl cx, 1
@@ -121,7 +130,38 @@ icon_draw_x:
     mov [di], al                ; DS is KERNEL_SEG here - the X stub's doing
     inc di
     loop .cp
-    pop si                      ; the stage base...
+    pop si                      ; the stage base (each arm pops its own, so
+%else                           ; each is balanced on its own - stkbalance
+                                ; walks the two as one straight line)
+    push ds                     ; DS = the CALLER'S, ES = KERNEL_SEG for the
+    push es                     ; copy, so the string ops do it: DS is
+    pop ds                      ; KERNEL_SEG on entry (the X stub's doing) and
+    pop es                      ; ES the caller's (SPEC.md 25.6.1)
+    lodsw                       ; AX = the header again, SI -> the body
+    mov cl, ah                  ; CX = rows
+    xor ch, ch
+    cmp al, 1                   ; CF = 1: the solid kind - read BEFORE the
+    mov al, ICO_STAGE_WW        ; header is normalised to the plain kind's,
+    mov di, ico_stage           ; which is what the passes read (no `mov`
+    push di                     ; and no `stosw` writes a flag)
+    stosw
+    sbb ax, ax                  ; AX = 0xFFFF solid, 0 plain
+    push cx
+    and cx, ax                  ; CX = rows for the solid kind, 0 for the
+    rep stosw                   ; plain - the implied mask; ZF = 1 plain
+    pop cx                      ; (neither a `rep stosw` nor a pop writes a
+    jnz .mv                     ; flag)...
+    shl cx, 1                   ; ...which copies its mask AND its data rows,
+.mv:                            ; where the solid kind copies the data alone.
+    rep movsw                   ; DF = 0 is the system contract (SPEC.md 1
+                                ; rule 3, 20.2); ico_pass's `lodsw` and api_x
+                                ; rest on it already
+    push ds                     ; ...and the two segments back
+    push es
+    pop ds
+    pop es
+    pop si                      ; the stage base
+%endif
     pop cx                      ; ...and x back
     call icon_draw
     clc
@@ -151,31 +191,34 @@ icon_draw_x:
 ; -----------------------------------------------------------------------------
 icon_draw:
     GFXAUDIT_HOOK
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
     push es
-    mov al, [si]                ; header: wwords, height
-    mov ah, 0
+    lodsw                       ; header: AL = wwords, AH = height, and SI ->
+.hdr:                           ; body (mask rows first). icon_draw16 joins
+    mov bl, ah                  ; HERE with its fixed header in AX
+    xor ah, ah
     mov [ico_ww], ax
-    mov al, [si+1]              ; AH still 0
-    mov [ico_h], ax
-    add si, 2                   ; SI -> body (mask rows first)
+    mov bh, ah
+    mov [ico_h], bx
 
 ; ico_draw_common - the tail both wrappers share, written once. Everything
 ; from here down was byte-identical in icon_draw16; the only difference
 ; between the two entries is how [ico_ww] and [ico_h] get set, and where SI
 ; is pointing when they are.
 ico_draw_common:
+%ifdef OS88_SHORTCUTS
+    cmp byte [ico_bnd], 0       ; a desktop cell is COMPOSING (SPEC.md 26.9.9):
+    je .scr                     ; the picture goes into its band and not onto
+    call COLD_SEG:ico_band_x    ; the glass, whichever entry it came in by -
+    jmp short .pen              ; a volume's indexed record, a shortcut's,
+.scr:                           ; its badge or the Wire's driver through
+%endif                          ; OSAPI_ICON_DRAW
     GFXDENTERCD                 ; whole-shape, like a glyph (SPEC.md 39.14.2)
     call ico_core
-    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: ONE-SHOT
     GFXDLEAVE
-    jmp kret_es
+.pen:
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: ONE-SHOT, on
+    jmp kret_es                 ; both paths (gfx_dleave never reads the pen)
 
 ; -----------------------------------------------------------------------------
 ; icon_draw16 - draw a header-less 16x16 icon body (16 mask words + 16 data
@@ -196,23 +239,18 @@ icon_draw16:
                                 ; header-carrying records were. The macro is
                                 ; empty in every shipped build, so this costs
                                 ; the machine nothing
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
     push es
-    mov word [ico_ww], 1
-    mov word [ico_h], 16
-    jmp short ico_draw_common   ; SI already points at the body: a 16x16 body
-                                ; carries no header to step over
+    mov ax, (16 << 8) | 1       ; the header a 16x16 body does not carry -
+    jmp short icon_draw.hdr     ; SI already points at the body - stored by
+                                ; icon_draw's own four lines rather than two
+                                ; immediate word stores (kernel size pass 10: 9)
 
 ; -----------------------------------------------------------------------------
 ; icon_draw_ix - draw an INDEXED record: runs over the shared row pool
-;                (SPEC.md 25.7). The desktop's four volume icons and nothing
-;                else - 744 bytes of hand-authored rows became 135.
+;                (SPEC.md 25.7). The desktop's six volume icons and nothing
+;                else - 744 bytes of hand-authored rows for four of them
+;                became 135, and all six are 217 now (SPEC.md 25.7.3).
 ;
 ; in:       CX = x, DX = y, SI -> an indexed record; caller holds the gfx lock
 ; out:      nothing (all registers preserved)
@@ -230,23 +268,22 @@ icon_draw16:
 icon_draw_ix:
     GFXAUDIT_HOOK               ; the same primitive as far as the audit is
                                 ; concerned; empty in every shipped build
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
     push es
-    mov al, [si]                ; the same two bytes stand at the top of every
-    mov ah, 0                   ; record, plain or indexed - which is what lets
-    mov [ico_ww], ax            ; a reader (and tests/icoclip.py) see one shape
-    mov al, [si+1]
-    mov [ico_h], ax
-    inc si                      ; SI -> the run bytes
-    inc si
+    mov word [ico_ww], ICO_IBUF_WW  ; this kind is 32 px wide and only that,
+                                ; so the record does not say so (SPEC.md
+                                ; 25.7.3) - a plain record's first byte is
+                                ; its width, an indexed one's is its height
+    lodsb                       ; AL = the height, SI -> the run bytes. DF = 0
+    cbw                         ; is the system contract (SPEC.md 1 rule 3).
+                                ; At most ICO_IBUF_H = 32, so `cbw` zeroes AH
+    mov [ico_h], ax             ; and this file already rests on it three
+                                ; times - icon_draw_x's `es lodsb` and both
+                                ; passes' `lodsw`
 
     ; --- expand: `2 * h` rows, mask table then data table ------------------
+    mov bp, ax
+    shl bp, 1                   ; BP = rows still to produce
     push cx                     ; CX is the x and DX the y, and ico_draw_common
     push dx                     ; wants both - so they are BANKED rather than
                                 ; worked around, which leaves the walk below
@@ -261,28 +298,26 @@ icon_draw_ix:
                                 ; a body that needed one would already be
                                 ; broken there. Each pass sets its own
                                 ; (VGA_SEG / [vid_rseg]).
-                                ; DF = 0 is the system contract (SPEC.md 1
-                                ; rule 3) and this file already rests on it
-                                ; twice - icon_draw_x's `es lodsb` and both
-                                ; passes' `lodsw`
-    mov bp, [ico_h]
-    shl bp, 1                   ; BP = rows still to produce
     mov di, ico_ibuf
     xor bx, bx                  ; BH stays 0 for the whole walk: nothing below
-                                ; writes it and the mask keeps BL under 0x3C
+                                ; writes it and the mask keeps BL under 0x80
+%ifdef OS88_SHORTCUTS
+    cmp byte [ico_bnd], 0
+    jne .band                   ; a desktop cell composing (SPEC.md 26.9.9)
+%endif
 .run:
-    mov bl, [si]                ; run byte: pool row << 4 | repeat count - 1
+    mov bl, [si]                ; run byte: pool row << 3 | repeat count - 1
     inc si
     mov cl, bl
-    shr bl, 1                   ; BL = the pool row's BYTE offset. `(b >> 2) &
-    shr bl, 1                   ; 0x3C` is `(b >> 4) * 4` in two shifts and a
-    and bl, 0x3C                ; mask rather than six shifts, and the mask is
-                                ; what drops the count nibble on the way past
+    shr bl, 1                   ; BL = the pool row's BYTE offset: `(b >> 1) &
+    and bl, 0x7C                ; 0x7C` is `(b >> 3) * 4` in one shift and a
+                                ; mask, and the mask is what drops the count
+                                ; bits on the way past
     mov ax, [bx+ico_pool]       ; the row, once, however many times it repeats
     mov dx, [bx+ico_pool+2]
-    and cl, 0x0F
+    and cl, 0x07
     inc cl
-    mov ch, 0                   ; CX = the repeat count, 1..16
+    mov ch, 0                   ; CX = the repeat count, 1..8
     sub bp, cx                  ; ...off the budget BEFORE `loop` spends it
 .rep:
     stosw                       ; the row's two words, `count` times over. The
@@ -307,6 +342,54 @@ icon_draw_ix:
 
     mov si, ico_ibuf            ; ...and from here down it IS a plain body
     jmp ico_draw_common
+%ifdef OS88_SHORTCUTS
+; ...and IN A CELL'S BAND the runs go straight into it, a row at a time, so
+; this record never decodes into ico_ibuf - which the band shares (below). A
+; volume's picture is the column's own and sits at the band's origin: its h
+; mask rows are ORed onto the band's rows 0.., then its h data rows AND-NOTed
+; over the same rows, which is ico_band_x's rule. BP counts the rows still to
+; come, so it is above h exactly while the mask table is.
+.band:
+    pop dx
+    pop cx
+    xor cx, cx                  ; (CH stays 0: `loop` leaves CX at 0)
+    mov di, ico_band
+.brun:
+    mov bl, [si]
+    inc si
+    mov cl, bl
+    shr bl, 1
+    and bl, 0x7C
+    and cl, 0x07
+    inc cx                      ; CX = 1..8
+.brow:
+    mov ax, [bx+ico_pool]
+    call .bop
+    mov ax, [bx+ico_pool+2]
+    call .bop
+    dec bp
+    cmp bp, [ico_h]
+    jne .bnx
+    mov di, ico_band            ; the mask table is in: the data over it
+.bnx:
+    loop .brow
+    or bp, bp
+    jnz .brun
+    jmp kret_es
+.bop:
+    xchg al, ah                 ; the band's bytes run left to right
+    cmp bp, [ico_h]
+    ja .bor
+    not ax
+    and [di], ax
+    jmp short .bo
+.bor:
+    or [di], ax
+.bo:
+    inc di
+    inc di
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ico_core - shared body: clip, set up the GC, run the white (mask) pass and
@@ -319,15 +402,18 @@ ico_core:
     call fnt_unlazy             ; whole-shape clipped like a glyph (7.1.4)
     mov [ico_x], cx
     mov [ico_y], dx
+    mov ax, [ico_ww]            ; source/VRAM stride bookkeeping, FIRST now:
+    shl ax, 1                   ; the clip test below wants 16 * wwords, which
+    mov [ico_rb], ax            ; is this times 8 (kernel size pass 10: 7)
+                                ; bytes per icon row (= 2 * wwords)
 
-    cmp word [wm_clip_n], 0     ; whole-icon against a background task's clip
-    je .noclip                  ; region, the font_char rule (SPEC.md 11.3):
-    mov ax, cx                  ; an icon is one shape or none
+    CLIPQ                        ; against an armed clip region (SPEC.md 11.3):
+    je .noclip                  ; whole-icon, the font_char rule (11.3.5) -
+                                ; and CLIPQ preserves every register, AX too
     mov bx, dx
-    mov cx, [ico_ww]            ; CX = 16 * wwords = the body's pixel width
-    shl cx, 1                   ; (a "word" of an icon row is 16 pixels, not
-    shl cx, 1                   ; 8 - four shifts, not three)
-    shl cx, 1
+    xchg ax, cx                 ; AX = x, CX = 2 * wwords...
+    shl cx, 1                   ; ...x 8 = the body's pixel width (a "word" of
+    shl cx, 1                   ; an icon row is 16 pixels, not 8)
     shl cx, 1
     add cx, ax
     dec cx
@@ -337,21 +423,23 @@ ico_core:
     call wm_clip_test
     mov cx, [ico_x]
     mov dx, [ico_y]
-    jc .none
-.noclip:
+    jnc .noclip
+.ret:                           ; a `ret` within short reach of the three
+    ret                         ; refusals above .rows_ok, where `.none` at the
+.noclip:                        ; foot was a relaxed five-byte jcc away
 
-    mov ax, [ico_ww]            ; source/VRAM stride bookkeeping
-    shl ax, 1
-    mov [ico_rb], ax            ; bytes per icon row (= 2 * wwords)
+    mov ax, [ico_rb]            ; (the clip test spent AX)
+%ifdef GFX_VGA
     mov bx, [vid_stride]
     sub bx, ax
     mov [ico_rowadv], bx        ; DI advance after a row's words (the planar
-                                ; pass only - the banked one goes through
-                                ; gfx_nextrow instead)
+%endif                          ; pass only - the banked one goes through
+                                ; gfx_nextrow instead, and it is the only
+                                ; pass a kernel with no VGA has)
 
     mov [ico_maskp], si         ; mask rows first, data rows after
-    mov ax, [ico_rb]            ; = 2 * wwords, set three lines up, so this is
-    mul word [ico_h]            ; the table's BYTES straight off (DX clobbered)
+    mul word [ico_h]            ; AX = 2 * wwords still, so this is the
+                                ; table's BYTES straight off (DX clobbered)
     add ax, si
     mov [ico_datap], ax
 
@@ -362,7 +450,7 @@ ico_core:
     jns .top_ok
     neg ax                      ; AX = rows clipped off the top
     cmp ax, bx
-    jae .none                   ; fully above the screen
+    jae .ret                    ; fully above the screen
     sub bx, ax
     mul word [ico_rb]           ; AX = bytes to skip in both tables
     add [ico_maskp], ax
@@ -447,6 +535,34 @@ ico_core:
 .none:
     ret
 
+; (ico_core_bb sits HERE, straight after ico_core, so ico_core's `jne` to it
+; is a short jump rather than a relaxed five-byte one.)
+; -----------------------------------------------------------------------------
+; ico_core_bb - the software renderer's icon body (SPEC.md 32/39.5): the white underlay
+;               ORs the shifted mask-row bits into all four planes, the
+;               black pass AND-NOTs the data-row bits out of them - color
+;               15 under the mask, 0 under the data, like the VRAM passes.
+; in:       DI = row offset, CL/CH = shift pair, ico_* vars set by ico_core
+; out:      returns to icon_draw/icon_draw16's epilogue (ico_core contract)
+; clobbers: everything but DS (the wrappers restore)
+; -----------------------------------------------------------------------------
+ico_core_bb:
+    mov ax, [ico_col0]
+    cmp ax, [vid_stride]        ; x < 0 (huge unsigned) or entirely off the
+    jae ico_core.none           ; right edge: the passes would skip every
+                                ; byte - so skip them. It is also what proves
+                                ; ico_pass_bb's byte column cannot wrap: col0
+                                ; is below the stride, the stride is 90 at
+                                ; most, and the walk adds 2*ww <= 4 to it.
+    mov al, [ico_c1]            ; SPEC.md 25.6: WHITE ors the rows in and
+    mov si, [ico_maskp]         ; anything else ands them out - which is the
+    call ico_bbpass             ; hardcoded pair's own behaviour, and gives a
+    mov al, [ico_c2]            ; pressed control its black underlay and a
+    mov si, [ico_datap]         ; disabled one its stipple for free (the
+    jmp short ico_bbpass        ; CALLER dithers the data rows; a 1bpp op has
+                                ; nowhere to put a grey)
+
+
 %ifdef GFX_VGA
 ; -----------------------------------------------------------------------------
 ; ico_pass - one masked pass over [ico_rows] rows of [ico_ww] words each.
@@ -489,8 +605,10 @@ ico_pass:
     cmp word [ico_col], ROW_BYTES
     jae .b1
     out dx, al
-    mov al, [es:di]             ; load latches
-    mov [es:di], al
+    xchg [es:di], al            ; load latches and write back in ONE: xchg
+                                ; reads then writes, and every plane takes
+                                ; Set/Reset (GC1 = 0Fh) so the byte written
+                                ; is don't-care - font_char's latch idiom
 .b1:
     mov al, bl                  ; --- byte 1, column +1 ---
     or  al, al
@@ -498,8 +616,7 @@ ico_pass:
     cmp word [ico_col], ROW_BYTES-1
     jae .b2
     out dx, al
-    mov al, [es:di+1]
-    mov [es:di+1], al
+    xchg [es:di+1], al
 .b2:
     mov al, ah                  ; --- byte 2, column +2 ---
     or  al, al
@@ -507,8 +624,7 @@ ico_pass:
     cmp word [ico_col], ROW_BYTES-2
     jae .wnext
     out dx, al
-    mov al, [es:di+2]
-    mov [es:di+2], al
+    xchg [es:di+2], al
 .wnext:
     inc di                      ; next word of this row
     inc di
@@ -523,64 +639,39 @@ ico_pass:
     ret
 %endif                          ; ...end of the VGA icon pass
 
-; -----------------------------------------------------------------------------
-; ico_core_bb - the software renderer's icon body (SPEC.md 32/39.5): the white underlay
-;               ORs the shifted mask-row bits into all four planes, the
-;               black pass AND-NOTs the data-row bits out of them - color
-;               15 under the mask, 0 under the data, like the VRAM passes.
-; in:       DI = row offset, CL/CH = shift pair, ico_* vars set by ico_core
-; out:      returns to icon_draw/icon_draw16's epilogue (ico_core contract)
-; clobbers: everything but DS (the wrappers restore)
-; -----------------------------------------------------------------------------
-ico_core_bb:
-    mov ax, [ico_col0]
-    cmp ax, [vid_stride]        ; x < 0 (huge unsigned) or entirely off the
-    jae .none                   ; right edge: the passes would skip every
-                                ; byte - so skip them. It is also what proves
-                                ; ico_pass_bb's byte column cannot wrap: col0
-                                ; is below the stride, the stride is 90 at
-                                ; most, and the walk adds 2*ww <= 4 to it.
-    mov al, [ico_c1]            ; SPEC.md 25.6: WHITE ors the rows in and
-    call ico_bbop_of            ; anything else ands them out - which is the
-    mov [ico_bbop], al          ; hardcoded pair's own behaviour, and gives a
-    mov si, [ico_maskp]         ; pressed control its black underlay and a
-    call ico_pass_bb            ; disabled one its stipple for free (the
-    mov al, [ico_c2]            ; CALLER dithers the data rows; a 1bpp op has
-    call ico_bbop_of            ; nowhere to put a grey)
-    mov [ico_bbop], al
-    mov si, [ico_datap]
-    call ico_pass_bb
-.none:
-    ret
-
-; ico_bbop_of - AL = a colour -> AL = 0 (or) for white, 1 (and-not) otherwise
-; The 1bpp reduction is gfx_ink's (SPEC.md 39.4): only pure white lights a
-; pixel, and the dither class is a black stipple, so it ands out like black.
-ico_bbop_of:
+; ico_bbpass - AL = a colour, SI -> word rows: [ico_bbop] = 0 (or) for white,
+; 0FFh (and-not) otherwise, and FALL INTO ico_pass_bb with it. The 1bpp
+; reduction is gfx_ink's (SPEC.md 39.4): only pure white lights a pixel, and
+; the dither class is a black stipple, so it ands out like black. It was
+; ico_bbop_of, a value both passes stored and then called the pass with -
+; one entry for the three is 15 bytes (kernel size pass 10). gfx_ink keeps SI.
+ico_bbpass:
     call gfx_ink
-    cmp al, 0xFF
-    mov al, 0
-    je .out
-    inc al
-.out:
-    ret
+    cmp al, 0xFF                ; CF = 1 for anything but white...
+    sbb al, al                  ; ...so 0FFh is and-not and 0 is or
+    mov [ico_bbop], al
+.fall:
 
 ; -----------------------------------------------------------------------------
 ; ico_pass_bb - one masked pass over the renderer's single plane: the same
 ;               3-byte shifted window and edge clipping as ico_pass, with
-;               [ico_bbop] picking OR (0) or AND-NOT (1) per byte.
+;               [ico_bbop] picking OR (0) or AND-NOT (non-zero) per byte.
 ; in:       SI -> word rows, DI = row offset, CL = shift, CH = 8-shift,
-;           [ico_bbop] = 0/1, ico_* vars set
+;           [ico_bbop] = 0 / non-zero, ico_* vars set
 ; out:      none; preserves CX, DI; clobbers ax, bx, dx, si, bp, es
 ;           (DH is the row stride and DL the running byte column, for the
 ;            whole pass - gfx_nextrow and ico_bbop_byte both leave DX alone)
 ; -----------------------------------------------------------------------------
 ico_pass_bb:
+%if ico_pass_bb - ico_bbpass.fall != 0
+  %error "ico_bbpass falls into ico_pass_bb: nothing may sit between them"
+%endif
     push di
-    cmp word [ico_rows], 0
-    je .done                    ; degenerate record / fully clipped
+    mov bp, [ico_rows]
+    or bp, bp
+    jz .done                    ; degenerate record / fully clipped
     mov es, [vid_rseg]          ; ONE PLANE, SO NO LOOP (SPEC.md 39.26): this
-    mov bp, [ico_rows]          ; body is only ever entered with [vid_mono]
+                                ; body is only ever entered with [vid_mono]
                                 ; set, and vid_depth_set writes mono and
                                 ; planes TOGETHER - so [vid_planes] is 1 here
                                 ; and the walk never restarted. The two
@@ -671,47 +762,67 @@ ico_bbop_byte:
     ret
 
 ; =============================================================================
-; THE INDEXED RECORD (SPEC.md 25.7) - the desktop's four volume icons
+; THE INDEXED RECORD (SPEC.md 25.7) - the desktop's six volume icons
 ;
 ; ico_disk32, ico_disk14, ico_hdd14 and ico_hdd32 held 744 bytes of `dw` rows
-; between them and are the same picture four times: a diskette and a hard disk,
-; at 32 rows and at 14 (SPEC.md 26.4). Enumerated, the four hold SIXTEEN
-; DISTINCT ROWS - and a diskette's mask is one row repeated 32 times.
+; between them, and SPEC.md 26.4.1's 5.25" pair are two more pictures of the
+; same kind: a diskette or a hard disk, at 32 rows and at 14 (SPEC.md 26.4).
+; Enumerated, the six hold TWENTY-FIVE DISTINCT ROWS - and a diskette's mask
+; is one row repeated.
 ;
-; So they are runs over a shared pool: one byte a run, `pool row << 4 | count -
-; 1`, the first `height` rows the runs produce being the mask table and the
-; next `height` the data table - which is a plain record's own order, so what
-; icon_draw_ix hands ico_draw_common IS a plain body. 135 bytes for the four.
+; So they are runs over ONE shared pool: one byte a run, `pool row << 3 |
+; count - 1`, the first `height` rows the runs produce being the mask table
+; and the next `height` the data table - which is a plain record's own order,
+; so what icon_draw_ix hands ico_draw_common IS a plain body. SPEC.md 25.7.3
+; is why the split is 5 + 3 and not 4 + 4: sixteen rows stopped being enough
+; at the fifth picture, and a second pool cost more than the longer runs do.
 ;
-; A RUN DOES NOT CROSS THE MASK/DATA BOUNDARY. That costs exactly two bytes
-; over letting it, and buys a source that reads as "these are the mask rows,
-; these are the data rows" plus an assembly-time count of EACH HALF - a
-; miscount inside one table that the other's compensates for is otherwise
-; invisible until somebody looks at the icon. IHALF is that count; nothing
-; below emits a byte the assembler has not counted, because a run stream is
-; unreadable data and a wrong one draws a scrambled picture rather than
-; failing to build.
+; A record is its HEIGHT and then its runs. The width byte every plain record
+; carries is not stored: this kind is 32 px wide and only that, so the decoder
+; writes the constant. 217 bytes for the six, pool included.
+;
+; A RUN DOES NOT CROSS THE MASK/DATA BOUNDARY. That costs a byte or two over
+; letting it, and buys a source that reads as "these are the mask rows, these
+; are the data rows" plus an assembly-time count of EACH HALF - a miscount
+; inside one table that the other's compensates for is otherwise invisible
+; until somebody looks at the icon. IHALF is that count; nothing below emits a
+; byte the assembler has not counted, because a run stream is unreadable data
+; and a wrong one draws a scrambled picture rather than failing to build. And
+; a record must CLOSE both tables - IREC and IEND check the one before - since
+; a record whose runs went missing entirely passes every per-table count there
+; is and assembles to its height byte alone. That happened, once, while this
+; block was being regenerated, and nothing failed until the listing was read.
+;
+; The runs were GENERATED from one list of rows and six pictures and checked
+; against the pictures they replaced - which is why every run carries its row
+; as a comment: the comment is the picture, the byte is the index.
 ; =============================================================================
-%macro IREC 2                   ; wwords, height: opens a record
-  %if (%1) != ICO_IBUF_WW
-    %error "an indexed record is 32 px wide (ww = 2) and only that - it is what makes a pool row four bytes"
+%assign ICO_IXHALVES 2          ; "the previous record closed both tables" -
+                                ; true before the first one
+%macro IREC 1                   ; height: opens a record
+  %if ICO_IXHALVES != 2
+    %error "the record before this one did not close BOTH of its tables with IHALF - a record with no runs assembles to its height byte alone and draws whatever follows it"
   %endif
-  %if (%2) > ICO_IBUF_H
+  %assign ICO_IXHALVES 0
+  %if (%1) > ICO_IBUF_H
     %error "an indexed record taller than ico_ibuf holds: grow ICO_IBUF_H, which is the .bss cell as well as this test"
   %endif
-    db %1, %2
-  %assign ICO_IXH   (%2)
+    db %1
+  %assign ICO_IXH   (%1)
   %assign ICO_IXROW 0
 %endmacro
 
 %macro IRUN 2                   ; pool row, repeat count
-  %if (%1) > 15
-    %error "a pool row index is 0..15 - it is the run byte's HIGH nibble"
+  %if (%1) > 31
+    %error "a pool row index is 0..31 - it is the run byte's HIGH five bits"
   %endif
-  %if (%2) < 1 || (%2) > 16
-    %error "a run is 1..16 rows - it is the run byte's LOW nibble, plus one"
+  %if (%1) >= ICO_POOL_N
+    %error "this pool row index is past the end of ico_pool"
   %endif
-    db ((%1) << 4) | ((%2) - 1)
+  %if (%2) < 1 || (%2) > 8
+    %error "a run is 1..8 rows - it is the run byte's LOW three bits, plus one"
+  %endif
+    db ((%1) << 3) | ((%2) - 1)
   %assign ICO_IXROW ICO_IXROW + (%2)
 %endmacro
 
@@ -720,19 +831,27 @@ ico_bbop_byte:
     %error "this table's runs do not add up to the record's height"
   %endif
   %assign ICO_IXROW 0
+  %assign ICO_IXHALVES ICO_IXHALVES + 1
+%endmacro
+
+%macro IEND 0                   ; ...and after the LAST record, the same check
+  %if ICO_IXHALVES != 2         ; IREC makes of the one before it
+    %error "the last indexed record did not close BOTH of its tables with IHALF"
+  %endif
 %endmacro
 
 ; -----------------------------------------------------------------------------
-; ico_pool - the sixteen rows the four records are made of, four bytes each.
-;            Indexed 0..15 by a run byte's high nibble, which is why there are
-;            sixteen of them and not seventeen: the nibble IS the bound.
+; ico_pool - the twenty-five rows the six records are made of, four bytes
+;            each. Indexed 0..31 by a run byte's high five bits; nothing past
+;            ICO_POOL_N is defined, and IRUN refuses an index there, because
+;            the bytes beyond are the first record read as art.
 ; -----------------------------------------------------------------------------
 ico_pool:
     dw 0x3FFF, 0xFFFC           ;  0 IR_SOLID  ..############################..
-    dw 0x2040, 0x0204           ;  1 IR_DSIDE  ..#......#............#......#..
-    dw 0x204F, 0x0204           ;  2 IR_DSHUT  ..#......#..####......#......#..
-    dw 0x207F, 0xFE04           ;  3 IR_DSBOT  ..#......##############......#..
-    dw 0x2000, 0x0004           ;  4 IR_HOLLOW ..#..........................#..
+    dw 0x2000, 0x0004           ;  1 IR_HOLLOW ..#..........................#..
+    dw 0x2040, 0x0204           ;  2 IR_DSIDE  ..#......#............#......#..
+    dw 0x2040, 0xF204           ;  3 IR_DSHUT  ..#......#......####..#......#..
+    dw 0x207F, 0xFE04           ;  4 IR_DSBOT  ..#......##############......#..
     dw 0x27FF, 0xFFE4           ;  5 IR_DLTOP  ..#..######################..#..
     dw 0x2400, 0x0024           ;  6 IR_DLSIDE ..#..#....................#..#..
     dw 0x0000, 0x0000           ;  7 IR_BLANK  ................................
@@ -744,12 +863,22 @@ ico_pool:
     dw 0x2480, 0x0124           ; 13 IR_FACE   ..#..#..#..............#..#..#..
     dw 0x2487, 0x8124           ; 14 IR_HUB    ..#..#..#....####......#..#..#..
     dw 0x2424, 0x2424           ; 15 IR_BAYSID ..#..#....#..#....#..#....#..#..
+    dw 0x2000, 0x001C           ; 16 IR_NOTCHE ..#........................###..
+    dw 0x2000, 0x0010           ; 17 IR_NOTCHS ..#........................#....
+    dw 0x3FFF, 0xFFF0           ; 18 IR_NOTCHM ..##########################....
+    dw 0x2007, 0xE004           ; 19 IR_HUBA   ..#..........######..........#..
+    dw 0x200F, 0xF004           ; 20 IR_HUBB   ..#.........########.........#..
+    dw 0x201C, 0x3804           ; 21 IR_HUBC   ..#........###....###........#..
+    dw 0x2018, 0x18C4           ; 22 IR_HUBD   ..#........##......##...##...#..
+    dw 0x2001, 0x8004           ; 23 IR_SLOTE  ..#............##............#..
+    dw 0x2003, 0xC004           ; 24 IR_SLOTM  ..#...........####...........#..
+ICO_POOL_N  equ ($ - ico_pool) / 4
 
 IR_SOLID    equ  0
-IR_DSIDE    equ  1
-IR_DSHUT    equ  2
-IR_DSBOT    equ  3
-IR_HOLLOW   equ  4
+IR_HOLLOW   equ  1
+IR_DSIDE    equ  2
+IR_DSHUT    equ  3
+IR_DSBOT    equ  4
 IR_DLTOP    equ  5
 IR_DLSIDE   equ  6
 IR_BLANK    equ  7
@@ -761,47 +890,50 @@ IR_RING     equ 12
 IR_FACE     equ 13
 IR_HUB      equ 14
 IR_BAYSID   equ 15
-%if ($ - ico_pool) != 16 * 4
-  %error "ico_pool is sixteen rows of two words - the run byte's high nibble indexes it and cannot reach a seventeenth"
+IR_NOTCHE   equ 16
+IR_NOTCHS   equ 17
+IR_NOTCHM   equ 18
+IR_HUBA     equ 19
+IR_HUBB     equ 20
+IR_HUBC     equ 21
+IR_HUBD     equ 22
+IR_SLOTE    equ 23
+IR_SLOTM    equ 24
+%if ICO_POOL_N > 32
+  %error "ico_pool is indexed by five bits - thirty-two rows at most"
 %endif
 
 ; -----------------------------------------------------------------------------
-; ico_disk32 - 32x32 Mac-style 3.5" floppy. Black data = 1px body outline,
-;              shutter with cutout window, label rectangle; mask = the solid
-;              disk silhouette so the desktop dither never bleeds through.
-;
-; data (black pixels), # = set:            rows
-;   ..############################..        0      top edge
-;   ..#......#............#......#..        1      body + shutter sides
-;   ..#......#..####......#......#..        2..8    + cutout window (filled)
-;   ..#......#............#......#..        9
-;   ..#......##############......#..       10      shutter bottom
-;   ..#..........................#..       11..14
-;   ..#..######################..#..       15      label top
-;   ..#..#....................#..#..       16..30  label sides
-;   ..############################..       31      bottom edge
-;
-; mask (white underlay), every row:
-;   ..############################..        0..31   solid silhouette
+; ico_disk32 - 32x32 Mac-style 3.5" floppy, drawn with its LABEL at the top
+;              and its SHUTTER on the bottom edge - the edge that goes into
+;              the drive - which is the way ico_f525_32 stands too, so the two
+;              diskettes on one desktop are the same object turned the same
+;              way (SPEC.md 26.4.1). It is the old picture turned 180 degrees:
+;              rows reversed and each one mirrored, which moves nothing but
+;              the shutter's window. Mask = the solid silhouette, so the
+;              desktop dither never bleeds through.
 ; -----------------------------------------------------------------------------
 ico_disk32:
-    IREC 2, 32                  ; wwords, height
+    IREC 32                    ; height
 
-    ; --- mask: 32 rows, the white underlay -------------------------------------
-    IRUN IR_SOLID,  16      ;  0..15  ..############################..
-    IRUN IR_SOLID,  16      ; 16..31  ..############################..
+    ; --- mask: 32 rows, the white underlay 
+    IRUN IR_SOLID,  8     ;  0.. 7  ..############################..
+    IRUN IR_SOLID,  8     ;  8..15  ..############################..
+    IRUN IR_SOLID,  8     ; 16..23  ..############################..
+    IRUN IR_SOLID,  8     ; 24..31  ..############################..
     IHALF
 
-    ; --- data: 32 rows, the picture -------------------------------------
-    IRUN IR_SOLID,   1      ;  0      ..############################..
-    IRUN IR_DSIDE,   1      ;  1      ..#......#............#......#..
-    IRUN IR_DSHUT,   7      ;  2.. 8  ..#......#..####......#......#..
-    IRUN IR_DSIDE,   1      ;  9      ..#......#............#......#..
-    IRUN IR_DSBOT,   1      ; 10      ..#......##############......#..
-    IRUN IR_HOLLOW,  4      ; 11..14  ..#..........................#..
-    IRUN IR_DLTOP,   1      ; 15      ..#..######################..#..
-    IRUN IR_DLSIDE, 15      ; 16..30  ..#..#....................#..#..
-    IRUN IR_SOLID,   1      ; 31      ..############################..
+    ; --- data: 32 rows, the picture 
+    IRUN IR_SOLID,  1     ;  0      ..############################..
+    IRUN IR_DLSIDE, 8     ;  1.. 8  ..#..#....................#..#..
+    IRUN IR_DLSIDE, 7     ;  9..15  ..#..#....................#..#..
+    IRUN IR_DLTOP,  1     ; 16      ..#..######################..#..
+    IRUN IR_HOLLOW, 4     ; 17..20  ..#..........................#..
+    IRUN IR_DSBOT,  1     ; 21      ..#......##############......#..
+    IRUN IR_DSIDE,  1     ; 22      ..#......#............#......#..
+    IRUN IR_DSHUT,  7     ; 23..29  ..#......#......####..#......#..
+    IRUN IR_DSIDE,  1     ; 30      ..#......#............#......#..
+    IRUN IR_SOLID,  1     ; 31      ..############################..
     IHALF
 
 ; -----------------------------------------------------------------------------
@@ -817,24 +949,106 @@ ico_disk32:
 ; window, the label box and the two vertical rules are all single lines, so
 ; what comes out is a blob with the diskette's outline. Selecting alternate
 ; rows loses them instead. The shutter keeps 3 rows of window and the label
-; box 5 of interior, which is the proportion the 32-row icon has.
+; box 5 of interior, which is the proportion the 32-row icon has - and it is
+; turned 180 degrees with it.
 ; -----------------------------------------------------------------------------
 ico_disk14:
-    IREC 2, 14                  ; wwords, height
+    IREC 14                    ; height
 
-    ; --- mask: 14 rows, the white underlay -------------------------------------
-    IRUN IR_SOLID,  14      ;  0..13  ..############################..
+    ; --- mask: 14 rows, the white underlay 
+    IRUN IR_SOLID,  8     ;  0.. 7  ..############################..
+    IRUN IR_SOLID,  6     ;  8..13  ..############################..
     IHALF
 
-    ; --- data: 14 rows, the picture -------------------------------------
-    IRUN IR_SOLID,   1      ;  0      ..############################..
-    IRUN IR_DSIDE,   1      ;  1      ..#......#............#......#..
-    IRUN IR_DSHUT,   3      ;  2.. 4  ..#......#..####......#......#..
-    IRUN IR_DSBOT,   1      ;  5      ..#......##############......#..
-    IRUN IR_HOLLOW,  1      ;  6      ..#..........................#..
-    IRUN IR_DLTOP,   1      ;  7      ..#..######################..#..
-    IRUN IR_DLSIDE,  5      ;  8..12  ..#..#....................#..#..
-    IRUN IR_SOLID,   1      ; 13      ..############################..
+    ; --- data: 14 rows, the picture 
+    IRUN IR_SOLID,  1     ;  0      ..############################..
+    IRUN IR_DLSIDE, 5     ;  1.. 5  ..#..#....................#..#..
+    IRUN IR_DLTOP,  1     ;  6      ..#..######################..#..
+    IRUN IR_HOLLOW, 1     ;  7      ..#..........................#..
+    IRUN IR_DSBOT,  1     ;  8      ..#......##############......#..
+    IRUN IR_DSHUT,  3     ;  9..11  ..#......#......####..#......#..
+    IRUN IR_DSIDE,  1     ; 12      ..#......#............#......#..
+    IRUN IR_SOLID,  1     ; 13      ..############################..
+    IHALF
+
+; -----------------------------------------------------------------------------
+; ico_f525_32 - a 5.25" diskette, for a drive that takes one (SPEC.md 26.4.1).
+;               What tells it from the 3.5" one at a glance is its features
+;               rather than its outline: the label is a closed box, the hub
+;               ring sits in the middle with the index hole beside it, the head
+;               slot below that, and the write-protect notch is cut out of the
+;               right-hand edge - so the mask is notched too, or the notch
+;               would be a white block.
+; -----------------------------------------------------------------------------
+ico_f525_32:
+    IREC 32                    ; height
+
+    ; --- mask: 32 rows, the white underlay 
+    IRUN IR_SOLID,  8     ;  0.. 7  ..############################..
+    IRUN IR_SOLID,  1     ;  8      ..############################..
+    IRUN IR_NOTCHM, 2     ;  9..10  ..##########################....
+    IRUN IR_SOLID,  8     ; 11..18  ..############################..
+    IRUN IR_SOLID,  8     ; 19..26  ..############################..
+    IRUN IR_SOLID,  5     ; 27..31  ..############################..
+    IHALF
+
+    ; --- data: 32 rows, the picture 
+    IRUN IR_SOLID,  1     ;  0      ..############################..
+    IRUN IR_HOLLOW, 1     ;  1      ..#..........................#..
+    IRUN IR_DLTOP,  1     ;  2      ..#..######################..#..
+    IRUN IR_DLSIDE, 3     ;  3.. 5  ..#..#....................#..#..
+    IRUN IR_DLTOP,  1     ;  6      ..#..######################..#..
+    IRUN IR_HOLLOW, 1     ;  7      ..#..........................#..
+    IRUN IR_NOTCHE, 1     ;  8      ..#........................###..
+    IRUN IR_NOTCHS, 2     ;  9..10  ..#........................#....
+    IRUN IR_NOTCHE, 1     ; 11      ..#........................###..
+    IRUN IR_HOLLOW, 1     ; 12      ..#..........................#..
+    IRUN IR_HUBA,   1     ; 13      ..#..........######..........#..
+    IRUN IR_HUBB,   1     ; 14      ..#.........########.........#..
+    IRUN IR_HUBC,   1     ; 15      ..#........###....###........#..
+    IRUN IR_HUBD,   2     ; 16..17  ..#........##......##...##...#..
+    IRUN IR_HUBC,   1     ; 18      ..#........###....###........#..
+    IRUN IR_HUBB,   1     ; 19      ..#.........########.........#..
+    IRUN IR_HUBA,   1     ; 20      ..#..........######..........#..
+    IRUN IR_HOLLOW, 1     ; 21      ..#..........................#..
+    IRUN IR_SLOTE,  1     ; 22      ..#............##............#..
+    IRUN IR_SLOTM,  6     ; 23..28  ..#...........####...........#..
+    IRUN IR_SLOTE,  1     ; 29      ..#............##............#..
+    IRUN IR_HOLLOW, 1     ; 30      ..#..........................#..
+    IRUN IR_SOLID,  1     ; 31      ..############################..
+    IHALF
+
+; -----------------------------------------------------------------------------
+; ico_f525_14 - the 5.25" diskette at 32 x 14, for the CGA (SPEC.md 26.4)
+;
+; Drawn, for ico_disk14's reason. Fourteen rows cannot hold a boxed label
+; AND a hub ring AND a slot, so the label is a solid bar - 2 rows, which is
+; nearly five units tall on a 2.4:1 pixel - the notch is one row, the ring is
+; 10 wide by 4 rows, round on that aspect, and the slot is 4 by 2, clear of
+; the bottom edge or the two read as a T.
+; -----------------------------------------------------------------------------
+ico_f525_14:
+    IREC 14                    ; height
+
+    ; --- mask: 14 rows, the white underlay 
+    IRUN IR_SOLID,  4     ;  0.. 3  ..############################..
+    IRUN IR_NOTCHM, 1     ;  4      ..##########################....
+    IRUN IR_SOLID,  8     ;  5..12  ..############################..
+    IRUN IR_SOLID,  1     ; 13      ..############################..
+    IHALF
+
+    ; --- data: 14 rows, the picture 
+    IRUN IR_SOLID,  1     ;  0      ..############################..
+    IRUN IR_HOLLOW, 1     ;  1      ..#..........................#..
+    IRUN IR_DLTOP,  2     ;  2.. 3  ..#..######################..#..
+    IRUN IR_NOTCHS, 1     ;  4      ..#........................#....
+    IRUN IR_HUBB,   1     ;  5      ..#.........########.........#..
+    IRUN IR_HUBD,   2     ;  6.. 7  ..#........##......##...##...#..
+    IRUN IR_HUBB,   1     ;  8      ..#.........########.........#..
+    IRUN IR_HOLLOW, 1     ;  9      ..#..........................#..
+    IRUN IR_SLOTM,  2     ; 10..11  ..#...........####...........#..
+    IRUN IR_HOLLOW, 1     ; 12      ..#..........................#..
+    IRUN IR_SOLID,  1     ; 13      ..############################..
     IHALF
 
 ; -----------------------------------------------------------------------------
@@ -845,29 +1059,78 @@ ico_disk14:
 ; the two feet that make it sit on a desk rather than float.
 ; -----------------------------------------------------------------------------
 ico_hdd14:
-    IREC 2, 14                  ; wwords, height
+    IREC 14                    ; height
 
-    ; --- mask: 14 rows, the white underlay -------------------------------------
-    IRUN IR_BLANK,   1      ;  0      ................................
-    IRUN IR_SOLID,  12      ;  1..12  ..############################..
-    IRUN IR_FEET,    1      ; 13      ....##....................##....
+    ; --- mask: 14 rows, the white underlay 
+    IRUN IR_BLANK,  1     ;  0      ................................
+    IRUN IR_SOLID,  8     ;  1.. 8  ..############################..
+    IRUN IR_SOLID,  4     ;  9..12  ..############################..
+    IRUN IR_FEET,   1     ; 13      ....##....................##....
     IHALF
 
-    ; --- data: 14 rows, the picture -------------------------------------
-    IRUN IR_BLANK,   1      ;  0      ................................
-    IRUN IR_SOLID,   1      ;  1      ..############################..
-    IRUN IR_HOLLOW,  1      ;  2      ..#..........................#..
-    IRUN IR_PLAT,    1      ;  3      ..#...####################...#..
-    IRUN IR_DLSIDE,  1      ;  4      ..#..#....................#..#..
-    IRUN IR_HHUB,    1      ;  5      ..#..#.....##########.....#..#..
-    IRUN IR_DLSIDE,  1      ;  6      ..#..#....................#..#..
-    IRUN IR_PLAT,    1      ;  7      ..#...####################...#..
-    IRUN IR_SOLID,   1      ;  8      ..############################..
-    IRUN IR_HOLLOW,  1      ;  9      ..#..........................#..
-    IRUN IR_BAYS,    2      ; 10..11  ..#..######..######..######..#..
-    IRUN IR_SOLID,   1      ; 12      ..############################..
-    IRUN IR_FEET,    1      ; 13      ....##....................##....
+    ; --- data: 14 rows, the picture 
+    IRUN IR_BLANK,  1     ;  0      ................................
+    IRUN IR_SOLID,  1     ;  1      ..############################..
+    IRUN IR_HOLLOW, 1     ;  2      ..#..........................#..
+    IRUN IR_PLAT,   1     ;  3      ..#...####################...#..
+    IRUN IR_DLSIDE, 1     ;  4      ..#..#....................#..#..
+    IRUN IR_HHUB,   1     ;  5      ..#..#.....##########.....#..#..
+    IRUN IR_DLSIDE, 1     ;  6      ..#..#....................#..#..
+    IRUN IR_PLAT,   1     ;  7      ..#...####################...#..
+    IRUN IR_SOLID,  1     ;  8      ..############################..
+    IRUN IR_HOLLOW, 1     ;  9      ..#..........................#..
+    IRUN IR_BAYS,   2     ; 10..11  ..#..######..######..######..#..
+    IRUN IR_SOLID,  1     ; 12      ..############################..
+    IRUN IR_FEET,   1     ; 13      ....##....................##....
     IHALF
+
+; -----------------------------------------------------------------------------
+; ico_hdd32 - 32 wide by 26 ROWS: the drive body, a platter face and two feet.
+;             What a driver-backed volume gets on the desktop (SPEC.md 26), so
+;             a hard disk never reads as a floppy that will not eject.
+;
+; It was 32 rows, and the last six were BLANK in both tables - no white, no
+; black, so the desktop showed through and the draw wrote nothing there. A
+; record that stops at row 25 draws exactly the same pixels in fewer rows and
+; two fewer runs; the zone's height is desk_zh1's, not the record's, so
+; nothing that lays the desktop out moves. Row 0 stays blank: it is the
+; icon's top margin, and cutting it would move the picture up.
+; -----------------------------------------------------------------------------
+ico_hdd32:
+    IREC 26                    ; height
+
+    ; --- mask: 26 rows, the white underlay 
+    IRUN IR_BLANK,  1     ;  0      ................................
+    IRUN IR_SOLID,  8     ;  1.. 8  ..############################..
+    IRUN IR_SOLID,  8     ;  9..16  ..############################..
+    IRUN IR_SOLID,  7     ; 17..23  ..############################..
+    IRUN IR_FEET,   2     ; 24..25  ....##....................##....
+    IHALF
+
+    ; --- data: 26 rows, the picture 
+    IRUN IR_BLANK,  1     ;  0      ................................
+    IRUN IR_SOLID,  1     ;  1      ..############################..
+    IRUN IR_HOLLOW, 1     ;  2      ..#..........................#..
+    IRUN IR_PLAT,   1     ;  3      ..#...####################...#..
+    IRUN IR_DLSIDE, 1     ;  4      ..#..#....................#..#..
+    IRUN IR_RING,   1     ;  5      ..#..#...##############...#..#..
+    IRUN IR_FACE,   2     ;  6.. 7  ..#..#..#..............#..#..#..
+    IRUN IR_HUB,    2     ;  8.. 9  ..#..#..#....####......#..#..#..
+    IRUN IR_FACE,   2     ; 10..11  ..#..#..#..............#..#..#..
+    IRUN IR_RING,   1     ; 12      ..#..#...##############...#..#..
+    IRUN IR_DLSIDE, 1     ; 13      ..#..#....................#..#..
+    IRUN IR_PLAT,   1     ; 14      ..#...####################...#..
+    IRUN IR_HOLLOW, 1     ; 15      ..#..........................#..
+    IRUN IR_SOLID,  1     ; 16      ..############################..
+    IRUN IR_HOLLOW, 1     ; 17      ..#..........................#..
+    IRUN IR_BAYS,   1     ; 18      ..#..######..######..######..#..
+    IRUN IR_BAYSID, 2     ; 19..20  ..#..#....#..#....#..#....#..#..
+    IRUN IR_BAYS,   1     ; 21      ..#..######..######..######..#..
+    IRUN IR_HOLLOW, 1     ; 22      ..#..........................#..
+    IRUN IR_SOLID,  1     ; 23      ..############################..
+    IRUN IR_FEET,   2     ; 24..25  ....##....................##....
+    IHALF
+    IEND
 
 ; -----------------------------------------------------------------------------
 ; ico_app16 - 16x16 generic application: a diamond outline with a filled
@@ -930,69 +1193,6 @@ ico_app16:
     dw 0x0240                   ; 14  ......#..#......
     dw 0x0180                   ; 15  .......##.......
 
-; -----------------------------------------------------------------------------
-; ico_hdd32 - 32x32 hard disk: the drive body, a platter face and two feet.
-;             What a driver-backed volume gets on the desktop (SPEC.md 26),
-;             so a hard disk never reads as a floppy that will not eject.
-;
-; data (black pixels), # = set:            rows
-;   ..............................         0
-;   ..############################..       1      case top
-;   ..#..........................#..       2
-;   ..#...####################...#..       3      platter top
-;   ..#..#....................#..#..       4
-;   ..#..#...##############...#..#..       5      spindle ring top
-;   ..#..#..#..............#..#..#..       6..11  the platter's face
-;   ..#..#...##############...#..#..      12
-;   ..#..#....................#..#..      13
-;   ..#...####################...#..      14
-;   ..#..........................#..      15
-;   ..############################..      16     case rule
-;   ..#..........................#..      17
-;   ..#..######..######..######..#..      18     the three drive bays
-;   ..#..######..######..######..#..      19..21
-;   ..#..........................#..      22
-;   ..############################..      23     case bottom
-;   .....##................##.......      24..26 feet
-;
-; mask (white underlay), rows 1..23 solid, the feet's rows narrower - so the
-; desktop dither never shows through the body and the feet still read.
-; -----------------------------------------------------------------------------
-ico_hdd32:
-    IREC 2, 32                  ; wwords, height
-
-    ; --- mask: 32 rows, the white underlay -------------------------------------
-    IRUN IR_BLANK,   1      ;  0      ................................
-    IRUN IR_SOLID,  16      ;  1..16  ..############################..
-    IRUN IR_SOLID,   7      ; 17..23  ..############################..
-    IRUN IR_FEET,    2      ; 24..25  ....##....................##....
-    IRUN IR_BLANK,   6      ; 26..31  ................................
-    IHALF
-
-    ; --- data: 32 rows, the picture -------------------------------------
-    IRUN IR_BLANK,   1      ;  0      ................................
-    IRUN IR_SOLID,   1      ;  1      ..############################..
-    IRUN IR_HOLLOW,  1      ;  2      ..#..........................#..
-    IRUN IR_PLAT,    1      ;  3      ..#...####################...#..
-    IRUN IR_DLSIDE,  1      ;  4      ..#..#....................#..#..
-    IRUN IR_RING,    1      ;  5      ..#..#...##############...#..#..
-    IRUN IR_FACE,    2      ;  6.. 7  ..#..#..#..............#..#..#..
-    IRUN IR_HUB,     2      ;  8.. 9  ..#..#..#....####......#..#..#..
-    IRUN IR_FACE,    2      ; 10..11  ..#..#..#..............#..#..#..
-    IRUN IR_RING,    1      ; 12      ..#..#...##############...#..#..
-    IRUN IR_DLSIDE,  1      ; 13      ..#..#....................#..#..
-    IRUN IR_PLAT,    1      ; 14      ..#...####################...#..
-    IRUN IR_HOLLOW,  1      ; 15      ..#..........................#..
-    IRUN IR_SOLID,   1      ; 16      ..############################..
-    IRUN IR_HOLLOW,  1      ; 17      ..#..........................#..
-    IRUN IR_BAYS,    1      ; 18      ..#..######..######..######..#..
-    IRUN IR_BAYSID,  2      ; 19..20  ..#..#....#..#....#..#....#..#..
-    IRUN IR_BAYS,    1      ; 21      ..#..######..######..######..#..
-    IRUN IR_HOLLOW,  1      ; 22      ..#..........................#..
-    IRUN IR_SOLID,   1      ; 23      ..############################..
-    IRUN IR_FEET,    2      ; 24..25  ....##....................##....
-    IRUN IR_BLANK,   6      ; 26..31  ................................
-    IHALF
 
 
 ; --- SPEC.md 25.6: the two colours a record is drawn in ----------------------
@@ -1011,18 +1211,16 @@ ico_c2:     db CBLACK           ; ...and the data pass's: the picture
   %error "ico_c1/ico_c2 must stay adjacent: icon_pen sets both in one word store"
 %endif
 
-; -----------------------------------------------------------------------------
-; icon_pen - set the pair the NEXT icon_draw uses (SPEC.md 25.6)
-; in:       AL = the mask pass's colour, AH = the data pass's
-; out:      nothing
-; clobbers: nothing (flags)
-; -----------------------------------------------------------------------------
-icon_pen:
-    mov [ico_c1], ax
-    ret
+; OSAPI_ICON_PEN - set the pair the NEXT icon_draw uses (SPEC.md 25.6)
+; in AL = the mask pass's colour, AH = the data pass's; nothing else touched,
+; flags included. AN INLINE CELL (SPEC.md 20.3): `mov [cs:ico_c1], ax / retf`
+; is the whole routine, so there is no body here.
 
 
 section .bss
+%if FONT_RN_MAX*2 + 16 > ICO_IBUF_SZ
+  %error "font_run_x's glyph table and edge bytes are a union with ico_ibuf (font.inc) and no longer fit it"
+%endif
 %if ICO_STAGE_SZ > ICO_IBUF_SZ
   %error "ico_ibuf is the taller of the pair and sizes the cell (SPEC.md 25.7.2) - ICO_STAGE_SZ has outgrown it"
 %endif
@@ -1046,15 +1244,42 @@ ico_ww      resw 1              ; current record: words per row
 ico_h       resw 1              ; current record: total rows
 ico_rows    resw 1              ; rows after vertical clip
 ico_rb      resw 1              ; bytes per icon row (2 * wwords)
+%ifdef GFX_VGA
 ico_rowadv  resw 1              ; DI advance after a row (80 - 2*wwords)
+%endif
 ico_maskp   resw 1              ; -> first (unclipped) mask row
 ico_datap   resw 1              ; -> first (unclipped) data row
 ico_col0    resw 1              ; base byte column (x / 8)
+%ifdef GFX_VGA                  ; (ico_pass is the VGA pass's alone)
 ico_col     resw 1              ; running byte column inside ico_pass.
-                                ; ico_pass_bb's is DL and its limit DH, so it
+%endif                          ; ico_pass_bb's is DL and its limit DH, so it
                                 ; has no cell here at all
 ico_wleft   resw 1              ; words left in the current row
 ico_x       resw 1              ; requested x
 ico_y       resw 1              ; requested y, clamped to 0 after top clip
-ico_bbop    resb 1              ; bb pass: 0 = or (white), 1 = and-not (black)
+ico_bbop    resb 1              ; bb pass: 0 = or (white), 0FFh = and-not (black)
+%ifdef OS88_SHORTCUTS
+; --- a desktop cell's COMPOSE band (SPEC.md 26.9.9) ---------------------------
+; desk_col lays the ground into ico_band, sets [ico_bnd], draws its picture -
+; every icon entry lands in ico_band_x instead of on the glass - and puts the
+; band down with ONE gfx_blit1, so no pixel of the picture column is written
+; twice. 1 = white, 0 = black, bit 7 leftmost, ICO_BSTR bytes a row.
+ICO_BSTR    equ 4               ; 32 px: the picture column, on the byte grid
+ICO_BROWS   equ 34              ; the picture box and the gap under it: 32 +
+                                ; DESK_ZGAP, asserted in desk.inc where that
+                                ; is defined (a resb wants it on pass one)
+ico_bnd     resb 1              ; 1 = icon draws go to the band
+ico_bx0     resw 1              ; the band's screen x (a multiple of 8)...
+ico_by0     resw 1              ; ...and y
+ico_bh      resw 1              ; its rows, <= ICO_BROWS
+; THE BAND IS THE TOP OF ico_ibuf: nothing else needs that buffer while a cell
+; composes. The indexed kind writes straight into the band there (icon_draw_ix
+; .band), icon_draw_x's stage is the buffer's first ICO_STAGE_SZ bytes, and
+; desk_cap's caption reuses the whole buffer only once the column is on the
+; glass
+ico_band    equ ico_ibuf + ICO_IBUF_SZ - ICO_BSTR * ICO_BROWS
+%if ICO_IBUF_SZ - ICO_BSTR * ICO_BROWS < ICO_STAGE_SZ
+  %error "ico_band shares ico_ibuf with icon_draw_x's stage and must clear it"
+%endif
+%endif
 section .text

@@ -400,7 +400,7 @@ static int w_key(void *win, int ascii, int scan)
         w_gcommitran = 0;
         ovl_gcommit();
         if (!w_gcommitran)
-            os88_toast("WEAVE.OVL is gone; no cell can be committed.", 0);
+            os88_toast("WEAVE could not load its overlay; no cell can be committed.", 0);
         return 1;
     }
     if (ascii == 13) {                  /* Enter COMMITS (3.3, 6.7) */

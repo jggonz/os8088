@@ -39,6 +39,10 @@ EVT_WAKE    equ 4               ; a=window ptr, b/c unused. A PACKAGE'S OWN
                                 ; window at a time, so a package that kicks
                                 ; from every callback cannot fill the ring.
 
+%if EVT_MDOWN != 1 || EVT_MUP != 2
+  %error "events.inc: two decoders in mouse.inc (mou_apply, kbm_btn) build the left-button event as `and ax, 1` - 1 IS EVT_MDOWN - and load EVT_MUP only on a 0. Renumber either and both queue the wrong event, silently"
+%endif
+
 EVQ_RECSIZE equ 8               ; bytes per record
 EVQ_CAP     equ 16              ; records in the ring
 EVQ_MASK    equ (EVQ_RECSIZE * EVQ_CAP) - 1     ; byte-offset wrap mask (0x7F)
@@ -78,7 +82,7 @@ EVQ_MASK    equ (EVQ_RECSIZE * EVQ_CAP) - 1     ; byte-offset wrap mask (0x7F)
 ; -----------------------------------------------------------------------------
 evq_push:
     call sch_wake_ui            ; an event means the UI task has work
-    push ax                     ; work (docs/SCHED-IDLE-PLAN.md 6.3)
+    push ax                     ; work (docs/plans/completed/SCHED-IDLE-PLAN.md 6.3)
     push si                     ; ...and no CX bank: with the record copy
                                 ; unrolled nothing in this body writes it. The
                                 ; CONTRACT is unchanged - CX still comes back
@@ -189,13 +193,13 @@ evq_push:
 ; near.
 ; -----------------------------------------------------------------------------
 evq_drain:
-.dl:
-    call evq_pop
-    jc .dend
-    call wm_wake_eaten          ; a package's wake is OWED, not dropped
-    jmp short .dl
-.dend:
-    ret
+    call evq_mup                ; evq_mup IS this loop with one record kept:
+    jnc evq_drain               ; it stops early only on an EVT_MUP, which it
+    ret                         ; has consumed - and wm_wake_eaten on an MUP
+                                ; would have done nothing (it acts on a WAKE
+                                ; alone) - so going round again until the ring
+                                ; is empty is the same drain, every wake still
+                                ; OWED (kernel size pass 10: 5 bytes)
 
 ; -----------------------------------------------------------------------------
 ; evq_mup - pop until an EVT_MUP arrives or the ring goes empty, owing every
@@ -276,7 +280,7 @@ evq_pop:
     ret
 
 ; -----------------------------------------------------------------------------
-; evq_pending - how many events are still queued behind this one?
+; OSAPI_EVQ_PENDING - how many events are still queued behind this one?
 ; out: AX = 0..EVQ_CAP; preserves every other register and the flags
 ;
 ; SPEC.md 13.4. A callback is dispatched one event at a time, so a handler that
@@ -295,12 +299,12 @@ evq_pop:
 ; for, so a handler that skips a redraw on the strength of it must still make
 ; sure the redraw eventually happens - the next event may belong to somebody
 ; else. Note Pad owes it to its worker (SPEC.md 27.7.8).
+;
+; AN INLINE CELL (SPEC.md 20.3), so there is no body: the cell is `mov al,
+; [cs:evq_count] / cbw / retf`. [evq_count] is a BYTE since size pass 3 (see
+; .bss below) and 0..EVQ_CAP is inside seven bits, so the sign extension is a
+; zero extension - and neither instruction writes the flags.
 ; -----------------------------------------------------------------------------
-evq_pending:
-    mov al, [evq_count]             ; a BYTE since size pass 3 - see .bss below
-    cbw                             ; - and 0..EVQ_CAP is inside seven bits, so
-    ret                             ; the sign extension is a zero extension.
-                                    ; NEAR - the OSAPI_SLOT cell owns the retf
 
 ; -----------------------------------------------------------------------------
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1, 10.1.1): 128 bytes of

@@ -8,7 +8,7 @@ They drive a headless MartyPC through `tools/os88marty.py`, so every number
 here is a **guest cycle count on a cycle-accurate 4.77MHz 8088** — the machine
 the app is written for. Nothing reads a wall clock, because in this container
 the guest runs at whatever multiple of real time the host manages
-(docs/NOTEPAD-NOTES.md 6.4).
+(docs/plans/completed/NOTEPAD-NOTES.md 6.4).
 
 **No code is added to the guest.** The measurements are of the shipped
 instruction stream.
@@ -62,7 +62,7 @@ caught a session measuring a stale disk.
 
 ## The four traps, all of which produced a confident wrong answer
 
-Written up in full as docs/NOTEPAD-NOTES.md §6; the short form:
+Written up in full as docs/plans/completed/NOTEPAD-NOTES.md §6; the short form:
 
 1. **A trace leg is billed to the label at its END.** A routine with no
    breakpoint of its own is invisible and its cost lands on the next traced
@@ -98,7 +98,7 @@ Written up in full as docs/NOTEPAD-NOTES.md §6; the short form:
 | `state.py` | Note Pad's bss, with the guard that refuses stale offsets |
 | `trace.py` | the breakpoint tracer |
 | `drive.py` | cold boot, and the mouse work to get README.TXT open |
-| `pixcheck.py` | is the incrementally-drawn content the same pixels a FULL repaint makes? Covers the window and raises it to force one, then diffs the content rect. The check that cleared SPEC.md §27.13 and found docs/NOTEPAD-NOTES.md §5.2.1. **Run `--self-test` first** (below) |
+| `pixcheck.py` | is the incrementally-drawn content the same pixels a FULL repaint makes? Covers the window and raises it to force one, then diffs the content rect. The check that cleared SPEC.md §27.13 and found docs/plans/completed/NOTEPAD-NOTES.md §5.2.1. **Run `--self-test` first** (below) |
 | `notecheck.py` | is the document BUFFER right? Reads the claim out of guest RAM and diffs it against README.TXT with the session's edits applied on the host. What cleared §27.12's `rep movsb` |
 
 ## A check that cannot fail is not a check

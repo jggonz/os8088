@@ -42,12 +42,19 @@ kernel picks between them by the base in BX. A proc that fixed the wrong word
 would leave one of the two stale, so both are checked by address AND by
 content.
 """
-import sys, os, time, hashlib, argparse, subprocess, tempfile
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
-import os88marty, os88mouse, os88sym, os88geom, dispcp
+import sys, os, re, hashlib, argparse, subprocess, tempfile
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
+import os88fixture                                       # noqa: E402
+import os88marty, os88mouse, os88sym, os88geom, os88ui, dispcp
 
-MC_SIZE, MEM_MAX = 10, 32
+MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 
 # WHAT TO DOUBLE-CLICK, BY NAME. It was a row INDEX per app and a comment
 # saying the listing is sorted (SPEC.md 19.4) - which is true and is exactly
@@ -63,29 +70,27 @@ PKG_MPP = {"heapfrag": "HEAPFRAG.O88", "modplug": "MODPLUG.O88"}
 # nothing movable" and is really "there is no story in it".
 PKG_Z   = {"frotz": "ZOPS.Z5", "heapfrag": "HEAPFRAG.O88"}
 
-# the Standard File dialog's geometry (SPEC.md 38, kernel/fdlg.inc)
-FD_ROW0, FD_ROWH, FD_TEXTX = 22, 16, 28
-
 APPS = {
-    # title prefix, source, includes, and the base words the proc must fix.
-    # "waits" is how long the app needs after its row is double-clicked.
+    # title prefix, source, includes, and the base words the proc must fix
+    # ("extra" are more words the steps below read, and are not checked).
     "notepad": dict(title="Note Pad", src="apps/notepad/notepad.asm",
-                    incs=("apps/",), words=["np_dseg", "np_useg"], wait=8),
+                    incs=("apps/",), words=["np_dseg", "np_useg"],
+                    extra=["np_len", "np_uopen"]),
     "fractal": dict(title="Fractal", src="apps/fractal/fractal.asm",
-                    incs=("apps/",), words=["fr_cseg"], wait=14),
+                    incs=("apps/",), words=["fr_cseg"], extra=["fr_pass"]),
     "artful":  dict(title="ArtfulType", src="apps/artful/artful.asm",
                     incs=("apps/", "apps/artful/"),
-                    words=["at_dseg", "at_aseg"], wait=8),
+                    words=["at_dseg", "at_aseg"]),
     "modplug": dict(title="ModPlug", src="apps/modplug/modplug.asm",
                     incs=("apps/", "apps/modplug/"),
-                    words=["mpp_modseg"], wait=8,
+                    words=["mpp_modseg"],
                     img="build/mppmove360.img", rows=PKG_MPP),
     # ...and the window is titled after the STORY, not the app: Frotz calls
     # OSAPI_WM_TITLE when one is loaded (SPEC.md 11.92), so matching "Frotz"
     # finds nothing on exactly the runs that worked
     "frotz":   dict(title="ZOPS", src="apps/frotz/frotz.asm",
                     incs=("apps/", "apps/frotz/"),
-                    words=["zf_sseg", "zf_stkseg"], wait=30,
+                    words=["zf_sseg", "zf_stkseg"],
                     extra=["zf_pcseg", "zf_sdelta", "zi_undoseg",
                            "zf_err", "zf_dead", "zx_badop"],
                     img="build/zmove360.img", rows=PKG_Z),
@@ -164,6 +169,68 @@ def pkg_seg(m, S, title):
     return None, None
 
 
+# how many checks heapfrag's suite records ([hf_n] once it has run them all),
+# read from its source so there is no second copy of the number to go stale
+with open(os.path.join(_OS88_ROOT, "tests", "heapfrag", "heapfrag.asm")) as _f:
+    HF_ROWS = int(re.search(r"^HF_ROWS\s+equ\s+(\d+)", _f.read(),
+                            re.M).group(1))
+
+KBUF = 0x41A                        # 0040:001A/001C - the BIOS ring's head, tail
+
+
+def ui_idle(m, S):
+    """The input is out of both queues (the BIOS keyboard ring and the
+    kernel's event ring) and nobody holds the gfx lock, which ui_task takes
+    around every handler it dispatches."""
+    kb = m.read(KBUF, 4)
+    return (kb[0:2] == kb[2:4] and m.read(S("evq_count"), 1)[0] == 0
+            and m.read(S("gfx_lock_flag"), 1)[0] == 0)
+
+
+def until_ok(m, cond, what, limit=30):
+    """`until`, reported rather than raised: a step that never gets there
+    leaves the checks after it to say what was wrong."""
+    try:
+        os88marty.until(m, lambda _: cond(), what, poll=0.1, limit=limit)
+        return True
+    except os88marty.MartyError as e:
+        print("  (%s)" % str(e).split(". ")[0])
+        return False
+
+
+def disk_quiet(m, what):
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0, what=what)
+
+
+def heapfrag_ran(m, S):
+    """heapfrag's suite has recorded every check: [hf_n] (bss +0) reaches
+    HF_ROWS. It publishes no other "done", and the suite IS the claim that
+    forces the compaction, so this is the wait for the thing under test."""
+    def done():
+        try:
+            sg, _ = pkg_seg(m, S, "Heap")
+            if not sg:
+                return False
+            img = u16(m.read(sg * 16 + 8, 2))
+            return u16(m.read(sg * 16 + img, 2)) >= HF_ROWS
+        except Exception:
+            return False
+    until_ok(m, done, "heapfrag's suite to finish")
+
+
+def park(mo, m):
+    """Put the POINTER somewhere neither capture is looking.
+
+    The arrow is drawn into the framebuffer, so it is part of any picture
+    compared - and the two captures below are taken after different gestures,
+    so it is somewhere different in each. tests/sheetmove.py failed on exactly
+    that and the difference was six pixels wide. Bottom-left of the desktop is
+    clear of every window these rows open.
+    """
+    mo.to(5, 195)
+    os88marty.settle(m)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--app", required=True, choices=sorted(APPS))
@@ -191,8 +258,14 @@ def main():
     # The docstring's `make build/editmove360.img`, run rather than assumed -
     # a registered row cannot depend on a human having read it.
     img = cfg.get("img", "build/editmove360.img")
-    if not os.path.exists(img):
-        subprocess.check_call(["make", img])
+    # THE SAME `make`, AND IT DOES NOTHING once the runner has built the
+    # artefact: Row(wants=...) declares it and os88test's prebuild builds
+    # it before any row starts. That is what lets this row drop
+    # builds=True and share the emulator lane.
+    os88fixture.need(img)
+    # has
+        # already built the artefact (Row(wants=...) and os88test's prebuild).
+        # That is what lets this row drop builds=True and share the lane.
     with os88marty.launch("build/os8088-360.img",
                           apps=img,
                           machine=a.machine, boot=False) as m:
@@ -224,7 +297,7 @@ def main():
 
         # --- heapfrag first, so it owns the floor of the arena --------------
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, rows["heapfrag"])
-        time.sleep(22)
+        heapfrag_ran(m, S)
         os88marty.settle(m)
         hf_seg, hf_win = pkg_seg(m, S, "Heap")
         print("heapfrag at %04x" % (hf_seg or 0))
@@ -232,7 +305,8 @@ def main():
         # --- then the app, which lands ABOVE it -----------------------------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=rows[a.app])
-        time.sleep(cfg["wait"])
+        # the window is up; what is left of the open is its file reads
+        disk_quiet(m, "%s to finish opening" % cfg["title"])
         os88marty.settle(m)
         seg, win = pkg_seg(m, S, cfg["title"])
         if seg is None:
@@ -241,31 +315,51 @@ def main():
                                     for w in os88geom.windows(m, S)]))
             return 1
 
+        P = pkg_syms(cfg["src"], cfg["incs"],
+                     cfg["words"] + cfg.get("extra", []))
+
+        def pword(name):
+            return u16(m.read(seg * 16 + P[name], 2))
+
         # --- give it something to hold --------------------------------------
         cx0, cy0, cx1, cy1 = win.content
         if a.app == "notepad":
             mo.click(cx0 + 20, cy0 + 12)
             os88marty.settle(m)
-            m.type_text("the quick brown fox jumps over the lazy dog")
-            time.sleep(3)
+            text = "the quick brown fox jumps over the lazy dog"
+            n0 = pword("np_len")
+            m.type_text(text)
+            # ...and the typing run CLOSED: half a second with no edit ends
+            # an undo group (SPEC.md 27.9), and only then is a Backspace a
+            # deletion with a blob to store rather than a shorter insert
+            ubyte = lambda: m.read(seg * 16 + P["np_uopen"], 1)[0]
+            until_ok(m, lambda: pword("np_len") == n0 + len(text)
+                     and ubyte() == 0 and ui_idle(m, S),
+                     "Note Pad to take the typing")
             # ...and DELETE some of it, which is what claims the undo arena.
             # An insert records a count and no bytes; only a deletion has a
             # blob to store, so an insert-only session leaves [np_useg] at 0
             # and the two-claims-one-proc half of this test vacuous.
             for _ in range(12):
                 m.key("Backspace")
-            time.sleep(3)
+            until_ok(m, lambda: pword("np_len") == n0 + len(text) - 12
+                     and ubyte() == 0 and ui_idle(m, S),
+                     "Note Pad to take the deletes")
             os88marty.settle(m)
         elif a.app == "fractal":
-            time.sleep(25)          # let the cache fill with computed rows
+            # let the cache fill with computed rows: the picture's last
+            # progressive pass done ([fr_pass] = 3)
+            until_ok(m, lambda: pword("fr_pass") == 3,
+                     "Fractal to finish its picture", limit=120)
             os88marty.settle(m)
         elif a.app == "frotz":
             # the story is already loaded: Frotz owns .Z5 (SPEC.md 54), so the
-            # double-click that opened the app also loaded it. Give the VM a
-            # few seconds to boot and run to its first prompt, so [zf_pcseg]
-            # is a live PC INTO the claim rather than 0 - which is the word
-            # 66.5.9 is actually about
-            time.sleep(12)
+            # double-click that opened the app also loaded it. Let the VM
+            # boot and run to its first prompt, so [zf_pcseg] is a live PC
+            # INTO the claim rather than 0 - which is the word 66.5.9 is
+            # actually about
+            until_ok(m, lambda: pword("zf_pcseg") != 0 and ui_idle(m, S),
+                     "the story to reach its first prompt")
             os88marty.settle(m)
         elif a.app == "modplug":
             # 'l' is ModPlug's Open (SPEC.md 56), and it has to be the DIALOG
@@ -275,23 +369,23 @@ def main():
             mo.click(cx0 + 20, cy0 + 20)     # focus the player first
             os88marty.settle(m)
             m.key("KeyL")
-            time.sleep(3)
-            os88marty.settle(m)
-            # MATCH ON THE TITLE, not the size: wm_fit clamps the template's
-            # 170 rows to 155 on a 640x200 screen (SPEC.md 39.7), so a size
-            # test reports "the dialog never opened" about one that did
-            fd = [w for w in os88geom.windows(m, S)
-                  if w.visible and w.title.startswith("Open")]
-            if not fd:
-                print("FAIL: the file dialog never opened")
+            # THE CHOOSER IS A DISK WINDOW (SPEC.md 38.1): `chooser` waits for
+            # it up and painted, and `chooser_open` names BEVERLY.MOD out of
+            # its own listing and waits for it to come down - no remembered
+            # row offsets. It opens on this instance's own folder (SPEC.md
+            # 38.10), which is B:'s root because MEDIA does not exist on this
+            # image.
+            ui = os88ui.UI(m, mouse=mo, sym=S)
+            try:
+                ui.chooser()
+            except os88ui.UIError as e:
+                print("FAIL: the file dialog never opened (%s)" % e)
                 return 1
-            fd = fd[-1]
-            fx0, fy0, _, _ = fd.content
-            # row 0 is BEVERLY.MOD - the listing is sorted by name and the
-            # dialog opens on this instance's own folder (SPEC.md 38.10),
-            # which is B:'s root because MEDIA does not exist on this image
-            mo.dblclick(fx0 + FD_TEXTX + 20, fy0 + FD_ROW0 + FD_ROWH // 2)
-            time.sleep(20)          # 116KB off a 360KB floppy
+            ui.chooser_open("BEVERLY.MOD")
+            # 116KB off a 360KB floppy: the claim, then the reads stopping
+            until_ok(m, lambda: pword("mpp_modseg") != 0,
+                     "ModPlug to claim the module")
+            disk_quiet(m, "ModPlug to read the module")
             os88marty.settle(m)
         else:
             # ArtfulType is the SPLASH windowed (SPEC.md 46); 'w' takes the
@@ -301,25 +395,23 @@ def main():
             # document without ever testing OSAPI_MEM_PARKSAFE - passing for
             # the wrong reason, which is the failure this file exists to avoid
             m.key("KeyW")
-            time.sleep(4)
-            os88marty.settle(m)
+            # No SCREEN settle inside the editor: its caret blinks, so one
+            # never returns, and nothing reads a pixel until the splash.
+            until_ok(m, lambda: pword("at_aseg") != 0 and ui_idle(m, S),
+                     "the editor to claim its arena")
             m.type_text("hello from the compactor")
-            time.sleep(3)
-            os88marty.settle(m)
+            os88marty.quiesce(m, lambda: (bytes(m.read(KBUF, 4)),
+                                          ui_idle(m, S)), guest=0.5,
+                              what="ArtfulType to take the typing")
+            until_ok(m, lambda: ui_idle(m, S), "ArtfulType to take the typing")
             # ...and Esc back to the splash. The fullscreen surface covers the
             # dock, so heapfrag's tile - the only handle on a window nothing
             # else can reach - is unclickable while it is up. Neither claim is
             # freed by leaving, and the caret worker keeps running, so this
             # costs the test nothing it was measuring
             m.key("Escape")
-            time.sleep(2)
+            until_ok(m, lambda: ui_idle(m, S), "the way back to the splash")
             os88marty.settle(m)
-
-        P = pkg_syms(cfg["src"], cfg["incs"],
-                     cfg["words"] + cfg.get("extra", []))
-
-        def pword(name):
-            return u16(m.read(seg * 16 + P[name], 2))
 
         before = mine(claims(m, S), seg)
         print("%s at %04x holds %s"
@@ -350,6 +442,7 @@ def main():
         if not bank:
             print("FAIL: no declared base word held a claim")
             return 1
+        park(mo, m)
         shot0 = m.vram("cga")
 
         # --- close heapfrag: the floor under the app opens up ---------------
@@ -404,7 +497,7 @@ def main():
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk,
                           name=rows["heapfrag"])
-        time.sleep(22)
+        heapfrag_ran(m, S)
         os88marty.settle(m)
 
         # heapfrag's OWN verdict plus the whole map, so a claim that did not
@@ -430,6 +523,26 @@ def main():
         if top_p > fill:
             print("        %5d KB HOLE (to the top)" % ((top_p - fill) // 64))
 
+        # **RE-RESOLVE THE APP'S OWN SEGMENT FIRST.** A package REGION is a
+        # movable claim now, so the compaction this row provokes can move the
+        # program as well as the blocks it holds - and `seg` was read out of
+        # the window record BEFORE the pass. Everything below is keyed on it:
+        # `mine()` matches claims by OWNER, and `pword()` reads the package's
+        # words at `seg * 16 + offset`. Measured on Note Pad: the instance
+        # went 8520 -> 9a40, so the claims it still held read as owned by a
+        # segment the row was not asking about ("now holds []") and the two
+        # words came back as 4d60/4da0 - bytes read out of the base the
+        # program had VACATED, which then matched no claim and reported two
+        # relocation failures against a proc that had done its job.
+        #
+        # The kernel keeps W_SEG current across the move, which is what makes
+        # re-reading it the whole fix.
+        seg2, _ = pkg_seg(m, S, cfg["title"])
+        if seg2 and seg2 != seg:
+            print("  %s ITSELF moved %04x -> %04x (its region is movable "
+                  "too), so the words and the owner match below are read "
+                  "against the new base" % (cfg["title"], seg, seg2))
+            seg = seg2
         after = mine(claims(m, S), seg)
         held = [c[0] for c in after]
         print("%s now holds %s"
@@ -494,11 +607,24 @@ def main():
         if pt is not None:
             mo.click(*pt)
         os88marty.settle(m)
+        park(mo, m)
         shot1 = m.vram("cga")
 
         def band(v):
+            """The window's content rectangle, ONE BYTE PER PIXEL.
+
+            m.vram() answers a row per scanline and a BYTE per pixel - the
+            colour index, not packed bits - so the slice is x directly. It
+            said `x // 8` for a year, which against a 640-wide frame compared
+            the leftmost (cx1-cx0)/8 PIXELS of each row instead of this
+            window: a strip of desktop that is identical in both captures
+            whatever the window does. The assertion below was therefore green
+            by construction. Found while writing tests/sheetmove.py, which
+            failed on it the other way round - the strip it happened to
+            compare had a window in one capture and desktop in the other.
+            """
             _, _, rows = v
-            return b"".join(bytes(rows[y][cx0 // 8:cx1 // 8])
+            return b"".join(bytes(rows[y][cx0:cx1])
                             for y in range(cy0, min(cy1, len(rows))))
 
         if a.app == "frotz":
@@ -523,7 +649,8 @@ def main():
             pre = band(m.vram("cga"))
             m.type_text("look")
             m.key("Enter")
-            time.sleep(6)
+            until_ok(m, lambda: band(m.vram("cga")) != pre and ui_idle(m, S),
+                     "the story to answer", limit=10)
             os88marty.settle(m)
             ran = band(m.vram("cga")) != pre
             print("  %d VM still running   %s" % (n, "OK" if ran else "STUCK"))

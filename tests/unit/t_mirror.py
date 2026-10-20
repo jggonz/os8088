@@ -88,6 +88,23 @@ import os88parts as parts                                 # noqa: E402
 # the side of the comparison that was not getting it.
 ASM = ["boot/boot.asm", "boot/boothd.asm",
        "apps/os88api.inc", "apps/os88ui.inc",
+       # Clear Skies' world constants (SPEC.md 88.10.5): a WORLD PART is
+       # assembled on its own - it has to be, or it could not be laid at a
+       # fixed org - so it cannot see skies.asm's declarations, and
+       # cswdefs.inc is the two dozen it needs, written out a second time.
+       # Moving them out of skies.asm instead would take them away from the
+       # prose that explains what an ink or a face flag MEANS, which is the
+       # trade this file exists to make unnecessary.
+       "apps/skies/skies.asm", "apps/skies/cswdefs.inc",
+       # The embeddable line library's walk block (SPEC.md 5.6.7, 5.12): the
+       # seven GLS_* offsets are written out in kernel/kernel.asm AND here,
+       # and since 5.12.7 retired gfx_linit/gfx_lstep the kernel's copy has
+       # no reader of its own - so a reorder there assembles cleanly. GLS_SZ
+       # is already watched and sizes every caller's block (missile, tank,
+       # the saver), so a GLS_SY here that outgrew it would be gfxe_winit
+       # writing past the block, silently. The file's own comment at the
+       # block promises this row keeps the two the same.
+       "apps/os88gfx.inc",
        "drivers/os88drv.inc",
        # The screen saver's private ABI (SPEC.md 79.3): five verbs, the
        # settings block's four offsets, the mode bits and the minutes clamp,
@@ -113,12 +130,38 @@ ASM = ["boot/boot.asm", "boot/boothd.asm",
        # two entries, and the kernel's answer to every xmem failure is to
        # carry on with no store and tell nobody.
        "drivers/xmem/xmem.asm",
+       # THMPAL.DRV's private ABI (SPEC.md 76.14.14): THMV_ABI_VER, the three
+       # verbs and THM_COLOR, typed out in kernel/vga12.inc AND in the overlay
+       # for drivers/saver's reason. A drifted version word is a chooser the
+       # kernel refuses as DRVE_BAD; a drifted verb is the wrong one called.
+       "drivers/thmpal/thmpal.asm",
        # apps/c64 is a C package whose assembly half and C half type the same
        # constants out twice (docs/C64-SPEC.md, its memory and screen
        # sections): the core's scratch offsets, the composer's band stride.
        # A drifted C64_SCR_WLO reads the wrong scratch words and presents as
        # a stale screen, not as an error.
-       "apps/c64/c64cpu.inc", "apps/c64/c64band.inc"]
+       "apps/c64/c64cpu.inc", "apps/c64/c64band.inc",
+       # ...and apps/apple2, which is the same construction one machine along
+       # (docs/APPLE2-SPEC.md, its memory and screen sections): the core's
+       # scratch offsets (A2_SCR_*), the composer's band stride and group
+       # count, and the run reasons the C compares a2_m.reason against are all
+       # typed out in the .inc AND in the C. A drifted A2_SCR_WLO reads the
+       # wrong scratch word and presents as a stale screen; a drifted
+       # A2_RUN_JAM is a machine that never stops.
+       "apps/apple2/a2cpu.inc", "apps/apple2/a2band.inc",
+       "apps/apple2/a2mem.inc",
+       # ...and a2fsx.inc, whose A2_FSXW - the Apple's 280-pixel raster, one
+       # byte a pixel - is typed out in a2scr.c as well: the composer writes
+       # it and the frame loop strides by it, and a drift is a picture that
+       # walks sideways one line at a time rather than an error.
+       "apps/apple2/a2fsx.inc",
+       # SOUND.DRV's package verbs (SPEC.md 34.14): apps/os88spk.inc asks the
+       # Covox's port with SNDV_DACINFO and types the number out itself, so
+       # Tracker, Audio and the Video Player - which every symbol-reading
+       # test reassembles with its own include list - need no -I
+       # drivers/sound/. A drifted copy asks the driver a different verb and
+       # reads the answer as a port.
+       "drivers/sound/sndpkg.inc", "apps/os88spk.inc"]
 
 # ...and the kernel, whole. `kernel/*.inc` + `kernel.asm`: 44 files, of which
 # the hand-written list named five. The knob-only files (band.inc, moudiag.inc)
@@ -129,12 +172,15 @@ KERNEL_GLOB = os.path.join(ROOT, "kernel", "*.inc")
 
 # ...and the C side of those, which cannot `%include` an .inc any more than a
 # host tool can.  `#define NAME VALUE`, same one-value-everywhere rule.
-CDEF = ["apps/c64/c64.c", "apps/c64/c64scr.c"]
+CDEF = ["apps/c64/c64.c", "apps/c64/c64scr.c",
+        "apps/apple2/apple2.c", "apps/apple2/a2scr.c"]
 
 # Constants a host tool spells out for itself, and where the truth lives.
 PY_MIRROR = {
     "KERNEL_SEG":   ["tools/os88sym.py", "tools/os88marty.py"],
     "APP_MAX_SIZE": ["tools/os88pkg.py"],
+    "PKG_FMT":      ["tools/os88pkg.py"],
+    "DRV_VER":      ["tools/os88drv.py"],
 }
 
 # Names that are DELIBERATELY different between two files. Empty today. A row
@@ -154,14 +200,82 @@ PY_MIRROR = {
 # SPEC.md 51.0 took the same decision for MEM_P_FATW_N and states the rule.
 DIVERGENT = {
     "MAX_TASKS": "kern_small has 7 slots (SPEC.md 8.7, "
-                 "docs/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
+                 "docs/plans/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
                  "taskmgr sizes SS_TSTATE from it, so a package built at 14 "
                  "reading a 7-slot snapshot over-allocates and is safe, where "
                  "the reverse overflows",
-    "MEM_MAX": "kern_small has 20 claim records "
-               "(docs/KERN-SMALL-CUT-PLAN.md D7) and the SDK keeps 32, which "
+    "MEM_MAX": "kern_small has 16 claim records "
+               "(SPEC.md 11.102) and the SDK keeps 32, which "
                "is CLAIM_SNAPSHOT_SIZE's input - same direction, same reason",
+    "INST_MAX": "kern_small runs 6 instances (SPEC.md 11.102) and the SDK "
+                "keeps 12: it is SYS_SNAPSHOT_SIZE's input and "
+                "osapi_sys_snapshot_x fills that buffer bounded by the "
+                "KERNEL's figure, so a package built at 12 reading a 6-record "
+                "snapshot over-allocates and is safe - same direction, same "
+                "reason as MAX_TASKS and MEM_MAX above",
+    # ...and one that is NOT the buffer argument, which is why it has its own
+    # sentence rather than "same reason".
+    "MAX_WIN": "kern_small has 6 window slots (SPEC.md 11.102) and the SDK "
+               "keeps 12 - but MAX_WIN SIZES NO PACKAGE BUFFER. It appears in "
+               "apps/os88api.inc exactly once, as a bare equ, and that file "
+               "says why there is deliberately no WIN_SIZE beside it: the "
+               "stride differs between the two kernels and a window index "
+               "never leaves the kernel. What it bounds is the INDEX a "
+               "package may hand OSAPI_WM_OWNSEG, and six kernel sites check "
+               "one against the kernel's OWN MAX_WIN and answer CF=1 - so the "
+               "SDK's larger value costs a package a refusal it already has "
+               "to handle, never a read past wm_wins",
 }
+
+# --- constants mirrored under DIFFERENT NAMES --------------------------------
+# The gate above pairs by NAME, so a mirror that was deliberately spelled
+# differently is invisible to it. ALIAS is that case written down: each entry
+# is (file, name, file, name), and both must resolve to the same number.
+ALIAS = [
+    # SPEC.md 13.14.5. Word allocates its three combos with a LITERAL because
+    # WDVAR cannot evaluate an include's equ, and the drop-down records are
+    # packed back to back - so a size that drifts is not a build error, it is
+    # os88ui_drop writing over the next control's rect.
+    ("apps/os88ui.inc", "OS88UI_DR_SIZE", "apps/word/word.asm", "WD_DREC_SZ"),
+    # ...and a THIRD spelling, in Python: skiesui walks the two records by
+    # stride to prove one does not overlap the next, which is the very defect
+    # a stale size causes.
+    ("apps/os88ui.inc", "OS88UI_DR_SIZE", "tests/skiesui.py", "DR_SIZE"),
+    # SPEC.md 98.1.9.12. The player's bench gives no CPU verdict on a layer
+    # yardstick under this, and the encoder's report says so at the same
+    # line - a drift is a report promising a disk test that never decides
+    ("apps/video/video.asm", "VP_LYTMIN", "tools/os88venc.py", "LY_TMIN"),
+    # SPEC.md 98.1.9.13. The bench record is built twice - the player's
+    # vp_bngen at play and os88vid's bench_record when the encoder prices it
+    # - and these say where its words are and how wide its writes run; a
+    # drift is a yardstick for one record and a timing of another
+    ("apps/video/video.asm", "VP_BNSPAN", "tools/os88vid.py", "BENCH_SPAN"),
+    ("apps/video/video.asm", "R_BENCH", "tools/os88vid.py", "R_BENCH"),
+    ("apps/video/video.asm", "V88_BENCHL", "tools/os88vid.py", "H_BENCHL"),
+    # SPEC.md 96.13.1. The DOS box has no slot to ask the kernel what day it
+    # is - there is no date or time cell in the SDK at all - so on a machine
+    # with no clock chip it answers the kernel's OWN fallback, spelled again
+    # in the package. A drift does not fail a build: it stamps a file with one
+    # date and lists it under another.
+    ("kernel/clock.inc", "CLK_DEF_Y", "apps/dos/dos.asm", "CLK_DEF_Y"),
+    ("kernel/clock.inc", "CLK_DEF_M", "apps/dos/dos.asm", "CLK_DEF_M"),
+    ("kernel/clock.inc", "CLK_DEF_D", "apps/dos/dos.asm", "CLK_DEF_D"),
+    # SPEC.md 20.2.0. The loader's `wrong os8088 version` verdict, published
+    # to packages under the SDK's prefix: OSAPI_PKG_START answers it in AL,
+    # and The Wire words it rather than printing the number.
+    ("kernel/loader.inc", "LD_EVER", "apps/os88api.inc", "OSAPI_LD_EVER"),
+    # SPEC.md 110.2. The Sticky App mark: which byte of a desktop row says "this is
+    # a remembered widget", and the value it must EQUAL. The kernel's desk_live
+    # and stik_boot read it, CTRL.DRV's settings core writes it, a package sets
+    # it in the record it hands OSAPI_DESK_ITEM, and the host tool writes the
+    # fixtures every gate boots - four readers of one byte.
+    ("kernel/desksc.inc", "SC_R_STIK", "apps/os88api.inc", "OSAPI_DI_STIK"),
+    ("kernel/desksc.inc", "SC_STIK", "apps/os88api.inc", "OSAPI_STIK_MARK"),
+    ("kernel/desksc.inc", "SC_R_STIK", "tools/os88stik.py", "SC_R_STIK"),
+    ("kernel/desksc.inc", "SC_REC", "tools/os88stik.py", "SC_REC"),
+    ("kernel/desksc.inc", "SC_VER", "tools/os88stik.py", "SC_VER"),
+]
+DEFINE = re.compile(r"^%define\s+([A-Z][A-Z0-9_]*)\s+([^\s;]+)", re.M)
 
 EQU = re.compile(r"^([A-Z][A-Z0-9_]*)\s+equ\s+([^\s;]+)", re.M)
 PYCONST = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*([^\s#]+)", re.M)
@@ -242,12 +356,34 @@ def main():
               got="; ".join("%s=%s" % (p, v) for p, v in places),
               want="one value")
 
+    # ...the ones spelled differently on purpose (SPEC.md 13.14.5),
+    for fa, na, fb, nb in ALIAS:
+        def anyof(rel, name):
+            for pat in (EQU, DEFINE, PYCONST, CCONST):
+                v = defs(rel, pat).get(name)
+                if v is not None:
+                    return v
+            return None
+
+        a, b = anyof(fa, na), anyof(fb, nb)
+        check(a is not None and b is not None and a == b,
+              "%s (%s) agrees with %s (%s)" % (na, fa, nb, fb),
+              "the same quantity under two names is still two constants, and "
+              "this one sizes a record the library writes past the end of",
+              got="%s=%s; %s=%s" % (na, a, nb, b), want="one value")
+
     # ...and the Python side, which cannot include anything at all.
-    truth = tables["kernel/kernel.asm"]
+    # THE KERNEL, WHOLE - not kernel.asm alone, for the docstring's reason one
+    # level up: a constant the kernel defines in loader.inc (PKG_FMT) or
+    # driver.inc (DRV_VER) is as much the authority as one in kernel.asm.
+    truth = {}
+    for rel, t in tables.items():
+        if rel.startswith("kernel/"):
+            truth.update(t)
     pychecked = 0
     for name, tools in PY_MIRROR.items():
         if name not in truth:
-            check(False, "%s is defined in kernel/kernel.asm" % name,
+            check(False, "%s is defined in the kernel" % name,
                   "PY_MIRROR names it as the authority; if it moved, point this at "
                   "the new home rather than dropping the check")
             continue
@@ -259,17 +395,41 @@ def main():
                   got=got, want=truth[name])
             pychecked += 1
 
-    # ...and the one mirrored LAYOUT: apps/c64's 6510 register file is a nasm
-    # `resw` block with CM_* offsets and a C struct read over the same bytes,
-    # and the field ORDER is the layout (docs/C64-SPEC.md's register plan).
-    # A field inserted on one side alone makes the C read the wrong word.
-    fields = structfields("apps/c64/c64.c", "c64_mach")
-    cpu = defs("apps/c64/c64cpu.inc", EQU)
-    if fields and cpu:
+    # ...and the mirrored LAYOUTS: a package's register file is a nasm `resw`
+    # block with NAMED OFFSETS and a C struct read over the same bytes, and
+    # the field ORDER is the layout (docs/C64-SPEC.md's register plan,
+    # docs/APPLE2-SPEC.md section 4.1). A field inserted on one side alone
+    # makes the C read the wrong word - a stale screen or a wrong PC, never an
+    # error. One row per (C file, struct, .inc, offset prefix): a second
+    # package is an ENTRY here and not a second copy of the block.
+    for cfile, sname, incfile, pfx in [
+            ("apps/c64/c64.c",       "c64_mach", "apps/c64/c64cpu.inc",     "CM_"),
+            ("apps/apple2/apple2.c", "a2_mach",  "apps/apple2/a2cpu.inc",   "AM_")]:
+        fields = structfields(cfile, sname)
+        cpu = defs(incfile, EQU)
+        # A `continue` here is a row that reports GREEN having checked
+        # nothing: a rename of `struct a2_mach`, or a reflow that puts it on
+        # one line, makes the regex miss and the whole block vanish from the
+        # count this row exists to be evidence of. So it is a CHECK.
+        check(bool(fields), "struct %s was found in %s" % (sname, cfile),
+              "the layout check reads the struct with a regex; if it stops "
+              "matching, every field below silently stops being checked")
+        check(bool(cpu), "%s defines the %s offsets" % (incfile, pfx),
+              "the layout check reads the core's `equ`s; without them there "
+              "is nothing to compare the struct against")
+        if not fields or not cpu:
+            continue
         for i, f in enumerate(fields):
-            name = "CM_" + f
+            # structfields() UPPERCASES every name it returns (its docstring
+            # says so, and its last statement is `out.append(f.upper())`), so
+            # both packages spell an offset the same way and there is one arm,
+            # not two. The `pfx == "AM_"` conditional that used to be here
+            # produced the identical string on both sides and read as though
+            # the two packages differed.
+            name = pfx + f
             check(cpu.get(name) == i * 2,
-                  "struct c64_mach.%s is %s in c64cpu.inc" % (f.lower(), name),
+                  "struct %s.%s is %s in %s"
+                  % (sname, f.lower(), name, os.path.basename(incfile)),
                   "the C struct and the core's resw block are one layout typed "
                   "out twice; a field inserted on one side reads the wrong word",
                   got=cpu.get(name, "<not defined>"), want=i * 2)
@@ -339,9 +499,117 @@ def main():
                         for c in pstale) or "none",
           want="every copy equal to the include, or imported from os88parts")
 
+    # ...and the same shape once more, over a LITERAL rather than a constant:
+    # the SDK's three overlay refusals against the kernel's TOAST_MAX.
+    # apps/cc/crt0.asm assembles `No <NAME>.OVL`, `No RAM: <NAME>` and
+    # `Old <NAME>.OVL` out of CC_PKG_NAME, so their length is different in
+    # every C package that includes the SDK; OSAPI_TOAST TRUNCATES what is
+    # longer than TOAST_MAX rather than refusing it, so all three were being
+    # cut off the glass in all seven C packages - `APPLE2.OVL is not on this
+    # disk` reaching the reader as `APPLE2.OVL is not on thi` - and nothing
+    # in the tree was looking.
+    #
+    # THE BOUND IS THE NAME FIELD AND NOT THIS TREE'S NAMES, which is the
+    # whole reason this row is not a list of seven package names: crt0.asm
+    # %fatals a CC_PKG_NAME longer than 15 and docs/C-TOOLCHAIN.md tells
+    # authors 15 is legal, so a literal sized by the longest name that
+    # happens to exist today (7) fails inside somebody else's build the day
+    # an 11-character package arrives. Both arms are checked - the declared
+    # cap, and every %define CC_PKG_NAME in the tree, so a name too long for
+    # the FIELD is caught by the header's own %fatal and one too long for a
+    # MESSAGE is caught here.
+    #
+    # AND THE SECOND ARM IS DEFENCE IN DEPTH, WHICH IS SAID HERE BECAUSE IT
+    # CANNOT FIRE ON ITS OWN IN A HEALTHY TREE: every name really is <=
+    # name_cap (crt0.asm %fatals otherwise), so the cap arm is the strictly
+    # stronger test and the per-name arm is silent whenever it passes. What
+    # the per-name arm is for is the day one of the two things it does NOT
+    # depend on breaks - the %fatal fence being deleted, the cap being raised
+    # without re-sizing the literals, or the `%if cc__namelen > (\d+)` regex
+    # above quietly matching something smaller - and then it reports the
+    # PACKAGE, by path, rather than an abstract ceiling. It was EXERCISED
+    # rather than assumed: a scratch tests/_toastprobe/probe.asm declaring a
+    # 17-character CC_PKG_NAME makes this arm and only this arm fail
+    # (`cc_ovm_mem with CC_PKG_NAME 'SEVENTEENCHARSXYZ' ... is 25
+    # characters`, exit 1) while the cap arm stays quiet at 23 - which is
+    # also how the four-conversion/five-argument TypeError that had kept it
+    # from ever running was found.
+    toast_src = open(os.path.join(ROOT, "kernel", "toast.inc")).read()
+    m = re.search(r"^TOAST_MAX\s+equ\s+(\d+)", toast_src, re.M)
+    check(m, "kernel/toast.inc still defines TOAST_MAX",
+          "this row reads the cap out of the kernel rather than typing 24 a "
+          "third time; a renamed constant must fail rather than skip",
+          got="TOAST_MAX equ <n>" if m else "<not found>", want="TOAST_MAX equ <n>")
+    toast_max = int(m.group(1)) if m else 0
+
+    crt0_path = os.path.join(ROOT, "apps", "cc", "crt0.asm")
+    crt0 = open(crt0_path).read()
+    mc = re.search(r"%if\s+cc__namelen\s*>\s*(\d+)", crt0)
+    check(mc, "apps/cc/crt0.asm still %fatals on CC_PKG_NAME's length",
+          "the declared cap is what the three overlay refusals have to fit; "
+          "without it this row would only know the names that exist today",
+          got=("cap %s" % mc.group(1)) if mc else "<not found>",
+          want="a %if cc__namelen > <n> fence")
+    name_cap = int(mc.group(1)) if mc else 0
+
+    # every C package's name, from the one place each of them states it
+    ccnames = {}
+    for f in (glob.glob(os.path.join(ROOT, "apps", "*", "*.asm"))
+              + glob.glob(os.path.join(ROOT, "tests", "*", "*.asm"))):
+        for d in re.finditer(r"^\s*%define\s+CC_PKG_NAME\s+'([^']*)'",
+                             open(f).read(), re.M):
+            ccnames[d.group(1)] = os.path.relpath(f, ROOT)
+    check(ccnames, "the tree still declares C package names to size against",
+          "a corpus of zero is a gate that has stopped looking",
+          got="%d name(s)" % len(ccnames), want="at least one CC_PKG_NAME")
+
+    # ...and the literals, as crt0.asm assembles them: a quoted run
+    # contributes its own characters and CC_PKG_NAME contributes a name's.
+    ovm = []
+    for line in crt0.splitlines():
+        m2 = re.match(r"^(cc_ovm_[A-Za-z0-9_]*)\s*:?\s*db\s+(.*)$", line)
+        if not m2:
+            continue
+        rest = m2.group(2)
+        fixed = sum(len(t) for t in re.findall(r"'([^']*)'", rest))
+        uses = len(re.findall(r"\bCC_PKG_NAME\b", rest))
+        ovm.append((m2.group(1), fixed, uses))
+    check(len(ovm) == 3,
+          "apps/cc/crt0.asm still carries three cc_ovm_* refusals",
+          "the overlay loader raises three - missing, out of memory and "
+          "stale - and a row that finds fewer has stopped looking rather "
+          "than passing",
+          got="%d literal(s)" % len(ovm), want="3")
+
+    long = []
+    for label, fixed, uses in ovm:
+        n = fixed + uses * name_cap
+        if n > toast_max:
+            long.append("%s is %d characters with a %d-character name"
+                        % (label, n, name_cap))
+        for nm, where in sorted(ccnames.items()):
+            n = fixed + uses * len(nm)
+            if n > toast_max:
+                long.append("%s with CC_PKG_NAME %r (%s) is %d characters"
+                            % (label, nm, where, n))
+    check(not long,
+          "every SDK overlay refusal fits TOAST_MAX for a full-length "
+          "CC_PKG_NAME",
+          "OSAPI_TOAST TRUNCATES rather than refusing, so the consequence is "
+          "in the half that is cut. Size the prose from the NAME FIELD (%d "
+          "characters, crt0.asm's own %%fatal) and not from the longest name "
+          "in the tree today - a message that fits only a short name is a "
+          "build failure in a package that has not been written yet"
+          % name_cap,
+          got="; ".join(long) or "none",
+          want="every cc_ovm_* literal <= TOAST_MAX %d with a %d-character "
+               "name" % (toast_max, name_cap))
+
     print("t_mirror: %d names mirrored across %d asm/c files, %d host-tool "
-          "copies, %d local constants scanned, %d os88parts copies"
-          % (len(mirrored), len(asm) + len(CDEF), pychecked, copies, pcopies))
+          "copies, %d local constants scanned, %d os88parts copies, %d SDK "
+          "toast(s) against TOAST_MAX %d for %d CC_PKG_NAME(s)"
+          % (len(mirrored), len(asm) + len(CDEF), pychecked, copies, pcopies,
+             len(ovm), toast_max, len(ccnames)))
     done("t_mirror")
 
 

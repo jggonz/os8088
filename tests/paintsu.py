@@ -42,51 +42,52 @@ a background window's title does not raise it from here, and a drag leaves the
 pointer clamped so every click after it lands somewhere else.
 """
 import argparse
+import tempfile
 import os
 import sys
-import threading
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
-from blitpair import gif_pixels                              # noqa: E402
+# EITHER PRIMITIVE (SPEC.md 5.4.2.5, 42.23): a canvas reaches the screen
+# through gfx_blit4 on a colour adapter and through gfx_blit1 on a one-bit
+# one, since Paint's canvas matches the screen. This row waited on the first
+# alone, and its own message asked the right question - "is this a 1bpp
+# machine?" - about a machine where the answer had become yes. Both take the
+# same arguments in the same registers, so arming both changes nothing else.
+# BLITS is blitpair's, beside gif_pixels: one definition, two rows.
+import blitpair                                              # noqa: E402
+from blitpair import gif_pixels, BLITS                        # noqa: E402
 
 S = os88sym.linear
 BAND_KB = 8                 # the band cache measures 3 KB, the whole content 9
 
 
-def serialise(m):
-    """One socket, two threads.
-
-    The debug link is a request/response pipe, and the thread that closes the
-    panel and the loop that polls for a breakpoint interleave on it - which
-    arrives as a JSON decode error rather than as anything about the guest.
-    """
-    lock = threading.Lock()
-    inner = m.cmd
-
-    def cmd(**kw):
-        with lock:
-            return inner(**kw)
-    m.cmd = cmd
+def idle(m):
+    """Until Paint - or whatever the gesture started - has finished: the
+    drive quiet, the gfx lock free (a canvas operation can hold it for
+    seconds with nothing new on the glass), and then the screen still."""
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="the drive to go quiet")
+    os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
+                    "the gfx lock to be free", poll=0.2, limit=60)
+    os88marty.settle(m)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintsu.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintsu.img")
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--gif", default="build/OS8088.GIF")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/paintsu.img":
+    if a.apps == tempfile.gettempdir() + "/paintsu.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
-    kbase = os88sym.KERNEL_SEG << 4
     print("   %s: %dx%d" % (a.gif, iw, ih))
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
@@ -107,25 +108,19 @@ def main():
                                                               "OS8088.GIF")))
         mo.to(rx, ry)
         os88marty.settle(m)
-        m.bp_exec("gfx_blit4")
-        mo.dblclick(rx, ry)
-        geom = None
-        for _ in range(60):
-            if not m.wait_stop(limit=300.0):
-                break
-            r = m.regs()
-            if r["cx"] >= iw:
-                geom = (r["ax"], r["bx"])
-                break
-            m.bp_exec("gfx_blit4")
-            m.run()
+        # THE LAUNCH BLIT, with the double-click inside the trace. It used
+        # to be a bare `bp_exec` followed by `mo.dblclick` and it worked by
+        # ORDERING alone: dblclick proves each button edge by polling
+        # `mouse_btn`, so it can only survive an armed breakpoint while none
+        # has fired yet - which is true here right up until Paint launches and
+        # blits, inside the click's own trailing settle. Pumped, the ordering
+        # stops being load-bearing.
+        geom = blitpair.wide_blit(m, lambda: mo.dblclick(rx, ry), iw)
         if geom is None:
-            sys.exit("paintsu: the canvas never blitted through gfx_blit4 - "
-                     "is this a 1bpp machine?")
-        ox, oy = geom
-        m.bp_exec()
-        m.run()
-        time.sleep(6)
+            sys.exit("paintsu: the canvas never blitted through %s"
+                     % " or ".join(BLITS))
+        ox, oy = geom[0], geom[1]
+        idle(m)
 
         # --- WHAT IS ON THE GLASS BEFORE ANYTHING IS COVERED ---------------
         # WITHOUT THIS THE ROW BLAMES THE CACHE FOR WHAT THE DRAW GOT WRONG,
@@ -142,59 +137,80 @@ def main():
                                         # canvas is 31 differing pixels that
                                         # belong to nothing
 
-        # --- WHAT THE CACHE IS ASKED FOR, off wm_su_kb's own answer
-        serialise(m)
-        m.bp_exec("wm_su_kb")
-        opened = []
-        threading.Thread(
-            target=lambda: (time.sleep(1.0),
-                            opened.append(_open(m, mo))), daemon=True).start()
-        want = None
-        if m.wait_stop(limit=120.0):
-            r = m.regs()
-            ret = int.from_bytes(m.read((r["ss"] << 4) + r["sp"], 2), "little")
-            m.bp_exec(kbase + ret)
-            m.run()
-            if m.wait_stop(limit=120.0):
-                want = m.regs()["ax"]
-        m.bp_exec()
-        m.run()
-        for _ in range(60):
-            if opened:
-                break
-            time.sleep(1.0)
+        # --- WHAT THE CACHE IS ASKED FOR, off mem_bytes_kb's answer to it
+        #
+        # `serialise(m)` used to stand here: a monkey-patch wrapping `m.cmd`
+        # in a lock of this row's own, because the driving thread and the
+        # pumping loop interleaved on one socket and the collision arrived as
+        # a JSON decode error rather than as anything about the guest. That
+        # lock is IN `Marty.cmd` now and has been since tests/paintcull.py
+        # needed the same thing - so what stood here was a second lock around
+        # an already-atomic call, and with the pump on bp_trace's own daemon
+        # there are no longer two callers of this socket in this row at all.
+        # TWO STAGES, AND THE SECOND ADDRESS IS ONLY KNOWABLE AT THE FIRST
+        # STOP: the KB answers in AX at the RETURN, and the return address
+        # is on the guest's own stack. So the callback reads it and re-arms on
+        # it - the pump resumes into the new set with nothing else arranged -
+        # and the cover gesture below runs as ordinary code where it used to
+        # be a lambda on a daemon thread.
+        #
+        # It was `wm_su_kb`, whose only caller was wm_su_take, until size
+        # pass 9 folded it in (d26f95c) - and the row then died on a KeyError
+        # for a symbol that no longer exists. The sizing is wm_su_take's own
+        # `call mem_bytes_kb` now, which has other callers, so the entry stop
+        # keeps only the call whose return address lies inside wm_su_take.
+        entry, want = m.sym("mem_bytes_kb"), None
+        take = m.sym("wm_su_take")
+
+        def kb(mm, rec):
+            nonlocal want
+            r = rec["regs"]
+            cs = r["cs"] << 4
+            if cs + r["ip"] == entry:
+                ret = int.from_bytes(
+                    mm.read((r["ss"] << 4) + r["sp"], 2), "little")
+                if 0 <= cs + ret - take < 0x200:
+                    mm.breakpoints([{"type": "exec", "addr": cs + ret}])
+            else:
+                want = r["ax"]
+                mm.breakpoints([])
+            return None
+
+        with os88marty.bp_trace(m, entry, regs=True, on_hit=kb) as tr:
+            _open(m, mo)
+            # The cover gesture is confirmed the moment the click is decoded;
+            # the sizing runs inside the raise that FOLLOWS it. Exiting here read
+            # `None` KB on the run that taught this.
+            tr.until(lambda: want is not None, "wm_su_take's KB to return",
+                     limit=120.0, required=False)
         print("   the raise cache asks for %s KB"
               % ("?" if want is None else want))
-        time.sleep(6)
+        idle(m)                         # the panel's open, to its last paint
 
         # --- UNCOVER: is the canvas redrawn?
-        m.bp_exec("gfx_blit4")
-        done = []
-        threading.Thread(
-            target=lambda: (time.sleep(1.0),
-                            done.append(_close(m, mo))), daemon=True).start()
         wide = None
-        for _ in range(160):
-            if not m.wait_stop(limit=45.0):
-                break
-            r = m.regs()
-            if r["cx"] >= iw // 2:
+
+        def uncover_blit(mm, rec):
+            nonlocal wide
+            r = rec["regs"]
+            if wide is None and r["cx"] >= iw // 2:
                 wide = (r["ax"], r["bx"], r["cx"], r["dx"])
-                break
-            m.bp_exec("gfx_blit4")
-            m.run()
-        m.bp_exec()
-        m.run()
-        for _ in range(60):
-            if done:
-                break
-            time.sleep(1.0)
-        time.sleep(8)
+                mm.breakpoints([])          # one wide blit is the answer
+            return None
+
+        with os88marty.bp_trace(m, *BLITS, regs=True, on_hit=uncover_blit) as tr:
+            _close(m, mo)
+            # `required=False` and it MUST be: a canvas-sized blit not running
+            # is this section's whole finding - it means the raise cache put
+            # the picture back - so a timeout here is an answer, not a failure.
+            tr.until(lambda: wide is not None, "a canvas-sized blit",
+                     limit=60.0, required=False)
+        idle(m)
         mo.to(4, 4)
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)
 
-    print("   uncover: a canvas-sized gfx_blit4 %s"
+    print("   uncover: a canvas-sized blit %s"
           % ("never ran - the cache put it back" if wide is None
              else "RAN, x=%d y=%d w=%d h=%d" % wide))
     bad = _differs(fb, fw, ox, oy, iw, ih, px)

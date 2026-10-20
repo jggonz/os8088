@@ -126,7 +126,15 @@ BL_MAXROWS  equ 380             ; report lines. Sized for the longest suite,
                                 ; time at 300 when SPEC.md 18.4's write block
                                 ; landed. 380 for 305, and 337 after Set 35's
                                 ; seek and spin-up blocks.
+%ifdef BL_ARENA_BYTES              ; A BENCH WHOSE REPORT IS SHORT MAY ASK
+BL_ARENA    equ BL_ARENA_BYTES      ; FOR LESS, before it includes this file:
+%else                               ; tests/pxsbench's report is ~40 lines,
+                                    ; and its image + bss ran 52 bytes past
+                                    ; APP_MAX_SIZE at 16,000 (PIXELSTEIN wave
+                                    ; 6). Every bench that defines nothing
+                                    ; assembles byte for byte as before
 BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text.
+%endif
                                 ; **THIS CEILING IS INVISIBLE UNTIL IT IS
                                 ; HIT, AND IT CANNOT SIMPLY BE RAISED**, which
                                 ; together are why it needs a paragraph. The
@@ -922,6 +930,13 @@ bl_lcommit:
     jmp short .tr
 .have:
     mov ax, [bl_nrow]
+    or ax, ax                   ; THE FIRST LINE OF A REPORT EMPTIES THE
+    jnz .room                   ; ARENA: a bench that runs again starts a
+    mov [bl_used], ax           ; report with `mov word [bl_nrow], 0` and
+    mov [bl_full], al           ; nothing else - ten of them do - so the
+.room:                          ; arena kept every earlier run's text and
+                                ; the fourth run in one window truncated
+                                ; (VIDDISK L on the Victory, 2026-10-15)
     cmp ax, BL_MAXROWS
     jae .full
     mov bx, [bl_used]
@@ -1059,6 +1074,9 @@ bl_paint:
     mov [bl_ch], dx
     call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
     mov [bl_cx], ax
+%ifdef BL_TOP_ROWS
+    add dx, BL_TOP_ROWS * 8     ; a band the bench draws itself (REDLINE's tabs)
+%endif
     mov [bl_cy], dx
     mov ax, [bl_cw]
     mov cl, 3
@@ -1075,6 +1093,20 @@ bl_paint:
     jnz .rows
     inc ax
 .rows:
+%ifdef BL_TOP_ROWS
+    sub ax, BL_TOP_ROWS
+    ja .top
+    mov ax, 1
+.top:
+%endif
+%ifdef BL_BOTTOM_ROWS
+    sub ax, BL_BOTTOM_ROWS
+    jbe .one
+    jmp .reserved
+.one:
+    mov ax, 1
+.reserved:
+%endif
     mov [bl_vrows], ax
     dec ax                      ; the last row is the status line
     mov [bl_prows], ax
@@ -1403,6 +1435,11 @@ bl_key:
 ; out:      [bl_saved] = 1, [bl_savemsg] -> the word the status line shows
 ; clobbers: flags (every register preserved)
 ;
+; A harness that defines BL_NUMBERED before including this NUMBERS its
+; saves: NAME.EXT is written as NAME1.EXT, then NAME2.EXT - the first that
+; is not on the disk - so a field run of several passes needs nobody to
+; rename anything between them. The status line then shows the name used.
+;
 ; UI-task context only, which every caller of this is (a menu command or a key
 ; handler). The lines go out CR LF terminated so a DOS or a modern host reads
 ; the file as text without a converter.
@@ -1437,6 +1474,9 @@ bl_save:
     push si
     push di
     push es
+%ifdef BL_NUMBERED
+    call bl_numname             ; SI = the first NAMEn.EXT not on the disk
+%endif
     push si                     ; the name, for the write below
     push ds
     pop es
@@ -1483,6 +1523,9 @@ bl_save:
     call OSAPI_FILE_WRITE       ; ES:BX = the text, DX:CX = the count
     mov byte [bl_saved], 1
     mov word [bl_savemsg], bl_s_wrote
+%ifdef BL_NUMBERED
+    mov [bl_savemsg], si        ; ...as the name it went to
+%endif
     jnc .out
     mov word [bl_savemsg], bl_s_werr
 .out:
@@ -1494,6 +1537,105 @@ bl_save:
     pop bx
     pop ax
     ret
+
+%if %isdef(BL_NUMBERED) || %isdef(BL_NUMNAME)
+; -----------------------------------------------------------------------------
+; (BL_NUMNAME assembles this helper alone, for a package that numbers a file
+; of its own and leaves bl_save's names as they were - REDLINE's CHIPSET.TXT)
+;
+; bl_numname - SI = 'NAME.EXT' -> SI = 'NAMEn.EXT', for the first n from 1
+;              that is not on the disk; the base is cut to keep it 8.3
+;              (VIDDISK.TXT goes VIDDISK1 .. VIDDISK9, then VIDDIS10). SI is
+;              left alone when 1 to 99 are all taken, and the write then
+;              replaces the plain name as it always did
+; clobbers: flags (every register but SI preserved)
+;
+; "Is it there" is a read of zero bytes: the lookup answers FERR_NOENT
+; before any data I/O, and a file that IS there answers FERR_BIG off its
+; directory entry, so nothing is read into the buffer either way.
+; -----------------------------------------------------------------------------
+bl_numname:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    push ds
+    pop es
+    mov [bl_nsrc], si
+    mov word [bl_nnum], 0
+.next:
+    inc word [bl_nnum]
+    cmp word [bl_nnum], 100
+    jae .full
+    mov ax, [bl_nnum]           ; the digits, into bl_ndig; CX = how many
+    mov cx, 1
+    cmp al, 10
+    jb .one
+    mov bl, 10
+    div bl                      ; AL = tens, AH = units
+    add ax, 0x3030
+    mov [bl_ndig], ax
+    inc cx
+    jmp short .dig
+.one:
+    add al, '0'
+    mov [bl_ndig], al
+.dig:
+    mov si, [bl_nsrc]
+    mov di, bl_nname
+    mov bx, 8
+    sub bx, cx                  ; BX = room left for the base
+.base:
+    lodsb
+    or al, al
+    jz .ebase
+    cmp al, '.'
+    je .ebase
+    or bx, bx
+    jz .base                    ; no room: drop the rest of the base
+    stosb
+    dec bx
+    jmp short .base
+.ebase:
+    dec si                      ; back onto the '.' or the NUL
+    push si
+    mov si, bl_ndig
+    cld
+    rep movsb                   ; the digits
+    pop si
+.ext:
+    lodsb                       ; '.EXT' and the NUL
+    stosb
+    or al, al
+    jnz .ext
+    mov si, bl_nname
+    xor cx, cx                  ; a zero-byte read: is it there?
+    xor dx, dx
+    mov bx, bl_ndig
+    call OSAPI_FILE_READ
+    jnc .next                   ; there, and empty
+    cmp ax, FERR_NOENT
+    jne .next                   ; there (FERR_BIG), or not ours to take
+    mov si, bl_nname
+    jmp short .out
+.full:
+    mov si, [bl_nsrc]
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+bl_nsrc:    dw 0                ; the name asked for
+bl_nnum:    dw 0                ; the n being tried
+bl_ndig:    db 0, 0             ; its digits
+bl_nname:   times 13 db 0       ; NAMEn.EXT and its NUL
+%endif
 
 ; -----------------------------------------------------------------------------
 ; bl_drive - the current volume's drive letter (SPEC.md 19.2), for the report:

@@ -12,8 +12,7 @@
 ;  - **The dictionary header is parsed once into a cache, not per word.** A
 ;    turn's line is a dozen words and every one of them would otherwise re-read
 ;    the separator count, the entry length and the entry count out of story
-;    memory. zd_setdict does it once per zd_tokenise call; zd_lookup reloads it
-;    only when the caller has moved to a different table.
+;    memory. zd_setdict does it once per zd_tokenise call.
 ;
 ;  - **Every address here is 16 bits.** Standard 1.1: static memory "must end
 ;    by the last byte of the story file or by byte address $0ffff, whichever is
@@ -37,7 +36,7 @@
 ; first character of the reply, so it is on the latency path all the same.
 ; =============================================================================
 
-; --- private bss, out of ZDICT_SLACK (192 bytes; 56 used) ---------------------
+; --- private bss, out of ZDICT_SLACK (56 bytes, all used) ---------------------
 ZD_WMAX     equ 16                  ; characters of a word we bother to copy.
                                     ; Standard 3.7 truncates the encoding at 6
                                     ; or 9 Z-characters, and no ZSCII code
@@ -216,13 +215,7 @@ zd_tokenise:
     call zd_emit
     jnc .scan
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop6
 
 ; -----------------------------------------------------------------------------
 ; zd_emit - encode the word at [zd_wstart]/[zd_wlen], look it up, and write its
@@ -387,37 +380,6 @@ zd_issep:
     pop ax
     ret
 
-; =============================================================================
-; zd_lookup - find an encoded word in the STORY's own dictionary
-; in:  DI = a 4-byte (v1-3) or 6-byte (v4+) encoded word in OUR segment
-; out: DX:AX = the entry's byte address, or 0 if there is no such entry;
-;      preserves every other register
-;
-; The public face of the search. It re-reads the header cache only when the
-; last caller was tokenising a user dictionary, which is the only way the
-; cache can be describing anything else.
-; =============================================================================
-zd_lookup:
-    push bx
-    push cx
-    push si
-    mov ax, [zf_dict]
-    or ax, ax
-    jz .nostory                     ; no story loaded: there is no dictionary
-    cmp ax, [zd_dbase]
-    je .have
-    call zd_setdict
-.have:
-    call zd_find
-    jmp short .out
-.nostory:
-    xor ax, ax
-    xor dx, dx
-.out:
-    pop si
-    pop cx
-    pop bx
-    ret
 
 ; -----------------------------------------------------------------------------
 ; zd_find - search the CACHED dictionary
@@ -598,8 +560,4 @@ zd_setdict:
     jae .out
     mov [zd_ecnt], ax
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4

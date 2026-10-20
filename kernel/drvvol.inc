@@ -75,7 +75,10 @@ drv_mounted:
 ; -----------------------------------------------------------------------------
 ; drv_vol_bank / drv_vol_back - put the user's volume back (SPEC.md 51.5.2)
 ; in (bank):  nothing.  in (back): the banked pair
-; out: nothing. BOTH PRESERVE EVERY REGISTER AND THE FLAGS.
+; out: nothing. BOTH PRESERVE EVERY REGISTER; BACK PRESERVES THE FLAGS TOO,
+;      and bank clobbers them - no caller of bank reads a flag after it
+;      (kernel size pass 12: every site, HIBER.DRV's hbm_vbn included, writes
+;      or calls before it tests anything)
 ;
 ; drv_mounted goes to A: because that is where the system files are, and for
 ; a long time nothing put the volume back - so a user working on B: was
@@ -104,16 +107,44 @@ drv_mounted:
 ; drv_cfg_save, and drv_load reaches no path that writes the settings file.
 ; In .text with real initialisers, because -f bin zeroes no .bss and A:'s root
 ; is the right answer before anything has been banked.
+;
+; **IT READS THE MACHINE'S OWN POSITION AND NOT osapi_file_here'S.** That cell
+; answers for the CALLING INSTANCE (SPEC.md 19.2.1) and only falls back to the
+; machine when there is no instance stamp - and the stamp is set for the length
+; of any dispatched callback, which is where every one of these brackets
+; actually runs. So a verb inside a window's own AM_ONCMD banked THAT WINDOW'S
+; instance directory, and the restore then MOVED the machine there: SPEC.md
+; 22.22's Compress read a file on B: and wrote the result to A:, which is the
+; exact bug this routine exists to prevent, arriving through the routine.
+;
+; What it wants is the two words drv_mounted is about to overwrite, and those
+; are [dsk_cwd] and [disk_drive]. It was invisible for as long as both callers
+; worked by DRIVE - a format and a driver load do not resolve a name in a
+; directory - and the first caller that wrote a file BY NAME after a module
+; load found it immediately. Four bytes shorter, and no far call.
+;
+; **A FAILED MOUNT IS NOT BANKED** (SPEC.md 51.5.2.1). With [dsk_mntok] shut
+; there is no validated position to go back to, and going back anyway is a
+; mount of whatever is in the drive - an EMPTY A: on a machine booted from C:,
+; three int 13h retries before the screen saver's first frame. It also never
+; healed: the restore fails the way the first mount did, so the next bracket
+; banks the same drive again. So it banks the BOOT volume's root, which is
+; where drv_mounted is about to stand, and drv_vol_back's compare then finds
+; nothing moved. The compare writes the flags, and bank's contract lets it.
 ; -----------------------------------------------------------------------------
 drv_vol_bank:
     push ax
-    push bx
-    push dx
-    call KERNEL_SEG:cw_osapi_file_here        ; DX = the directory cluster, BL = the drive
-    mov [drv_vol_cwd], dx
-    mov [drv_vol_drv], bl
-    pop dx
-    pop bx
+    xor ax, ax                  ; the boot volume's ROOT, cluster 0
+    cmp [dsk_mntok], al
+    je .cwd                     ; the gate is shut: nothing validated to keep
+    mov ax, [dsk_cwd]
+.cwd:
+    mov [drv_vol_cwd], ax
+    mov al, [dsk_bootvol]       ; `mov` writes no flag, so the compare above
+    je .drv                     ; still decides this one too
+    mov al, [disk_drive]
+.drv:
+    mov [drv_vol_drv], al
     pop ax
     ret
 
@@ -173,28 +204,69 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; which is what lets the claim be made at exactly the right size before a
 ; byte of the file is read. DX:CX is a 32-bit size and a driver is capped at
 ; DRV_MAX_KB, so a non-zero high word is simply not one of ours.
+;
+; **THE SIZE IS WHAT THE FILE BECOMES, NOT WHAT IT OCCUPIES** (SPEC.md
+; 20.13.3.1): a compressed .DRV or module is a 'CZ' file, dskw_read_x will
+; expand it into the claim, and the claim has to be cut from the size the
+; read is going to deliver. That is the directory hint's whole purpose
+; (SPEC.md 20.14.1), and dskw_stat_x has just left the raw entry in dskw_raw
+; - so the hint costs a compare and two loads, and no I/O. A file with NO
+; hint - a driver a host tool copied on - is asked itself (dskw_czknow): one
+; sector, the one the read is about to want, out of SPEC.md 18.95's cache.
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; dskw_czsize - DX:CX = the size the READ will deliver, for dskw_raw's entry
+; in:  DX:CX = the size it OCCUPIES (dskw_stat's answer), dskw_raw its entry
+; out: DX:CX = the UNPACKED size when it is compressed (SPEC.md 20.14.6:
+;      the hint, or the file's own header when the hint is absent), else as
+;      it came in
+; clobbers: AX, BX and ES when it sniffs (dskw_czknow), flags
+;
+; drv_find's question and the Standard File dialog's (fdlg_reap's commit,
+; SPEC.md 38.6.1) are the same question, and it was asked twice - the
+; dialog's copy without the sniff, so a hintless compressed file reported
+; the size it OCCUPIES and the read then delivered more. kern_big's alone:
+; on kern_small the dialog is FDLG.DRV's image and drv_find keeps it in line.
+dskw_czsize:
+    push cx
+    push dx
+    call dskw_czknow            ; BE: compressed, and the hint holds U
+    pop dx
+    pop cx
+    ja .r
+    mov cx, [dskw_raw+DSK_R_CZL]
+    mov dl, [dskw_raw+DSK_R_CZH]
+    mov dh, 0
+.r: ret
+%endif
 drv_find:
     push bx
     push cx
     push dx
     push si
+    push es                     ; ...which a sniff spends
     call dskw_stat_x              ; AL = attribute, BX = first cluster,
-    jc .no                      ; DX:CX = the size
+    jc .no                      ; DX:CX = the size it OCCUPIES...
+%ifdef KERN_BIG
+    call dskw_czsize            ; ...and what it BECOMES (below)
+%else                           ; (kern_small: in line - its one other
+    push cx                     ; caller is FDLG.DRV's image, which carries
+    push dx                     ; its own, so a shared routine would be four
+    call dskw_czknow            ; resident bytes for nothing there)
+    pop dx                      ; ...and the hint says what it BECOMES - or,
+    pop cx                      ; when a host tool's copy left none, the
+    ja .plain                   ; file's own header does (SPEC.md 20.14.6)
+    mov cx, [dskw_raw+DSK_R_CZL]
+    mov dl, [dskw_raw+DSK_R_CZH]
+    mov dh, 0
+.plain:
+%endif
     test dx, dx
     jnz .no
-    mov ax, cx
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
+    mov ax, cx                  ; CF = 0 from the `test`, which `mov` keeps
+.out:
+    jmp dskw_isempty.out        ; the same five pops (size pass 10, -3)
 .no:
-    pop si
-    pop dx
-    pop cx
-    pop bx
     stc
-    ret
+    jmp short .out
 section .text                   ; SPEC.md 1: every file ends where it began

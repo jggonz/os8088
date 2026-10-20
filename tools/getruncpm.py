@@ -8,19 +8,21 @@
                              --reserve build/runcpm.o88 ...   # the A/0 files
                              # a 360/720/1200/1440KB disk carries beside
                              # the root files named (--folders N: how many
-                             # other folders the disk has; apps-all's ten)
+                             # other folders the disk has)
     python3 tools/getruncpm.py -o build/runcpm-disk --from DIR # take the files
                              # from a local checkout of RunCPM at the pin
 
-**Nothing this script downloads is committed** (CONTRIBUTING.md 6): the DRI
-CCP binary and the master disk are RunCPM's (Marcelo Dantas / Mockba the
-Borg, MIT - the LICENSE lands beside them), and the programs on the master
-disk are their own authors' (MBASIC, Z80ASM, TE, ...). The bytes land in
-build/, which is ignored outright, and the floppies are built from there -
-the same decision tools/getstories.py made for Frotz's stories, and the
-os8088 tree pins the upstream COMMIT rather than a branch so that the images
-rebuild byte for byte (tools/os88disk.py pins the volume serial and every
-timestamp; this pins the input).
+**The bytes come out of a COMMITTED zip** (SPEC.md 74.6.1,
+apps/runcpm/cache/cpmcache.zip via tools/cpmcache.py) before GitHub is ever
+asked - a user-decided departure from CONTRIBUTING.md 6, recorded in
+apps/runcpm/cache/README.md. The DRI CCP binary and the master disk are
+RunCPM's (Marcelo Dantas / Mockba the Borg, MIT - the LICENSE lands beside
+them), and the programs on the master disk are their own authors' (MBASIC,
+Z80ASM, TE, ...). They land in build/ and the floppies are built from there,
+and the os8088 tree pins the upstream COMMIT rather than a branch so that the
+images rebuild byte for byte (tools/os88disk.py pins the volume serial and
+every timestamp; this pins the input). A file the zip lacks is fetched from
+GitHub, and `tools/cpmcache.py --pack` then brings the zip up to date.
 
 THE PIN is the commit SPEC.md 74's banner names as its 'Built' date, and
 every artifact's SHA-256 is checked on the way in - a mismatch is a hard
@@ -29,7 +31,8 @@ failure and never a warning.
 WHAT LANDS in the output directory:
 
     CCP-DR.60K       Digital Research's CCP for a 60K CP/M 2.2, the command
-                     processor RUNCPM loads from its own folder (SPEC.md 74.3)
+                     processor - a BUILD input, incbin'd into RUNCPM.O88's
+                     module part (SPEC.md 74.3); no disk carries the file
     LICENSE          RunCPM's MIT licence
     1STREAD.ME       the master disk's read-me
     A/0/*            the master disk, DISK/A0.zip unpacked: drive A user 0.
@@ -63,8 +66,8 @@ or has no room for, each under its own heading - and prints it in place of
 A/0's, so a CP/M user can TYPE what is missing and why. 1STREAD.ME
 (upstream's, on A/0 and in the root) credits the programs beyond Digital
 Research's distribution. THE BUDGET IS DERIVED, NOT GUESSED: --reserve
-names the root files that ride beside A/0 (the package, its .OVL if one
-comes, the CCP, LICENSE, the read-me) and
+names the root files that ride beside A/0 (the package - one file, its
+CCP and module being parts of it - LICENSE and the read-me) and
 their sizes are priced in the geometry's own clusters, so the selection
 re-shapes itself as the package grows and the disk build's --verify (still
 the check) is never the first to hear of it; what stays a constant is the
@@ -131,8 +134,18 @@ CURATED = {360: CATEGORY[:4]}
 # an .OVL beside it re-selects the disk instead of overflowing it. Checked
 # against the built images: the arithmetic below reproduces --verify's
 # 'in use' exactly (353 / 672 / 1,294 with the 24,848-byte package)
+# ...AND "hdd", WHICH IS NOT A FLOPPY (SPEC.md 80.6). The live USB/CD volume
+# is one FAT16 partition of 16,324 clusters of 2,048 bytes - ~32MB - against
+# the 1.44MB disk's 2,847 of 512, so a selection priced in floppy clusters
+# truncates the master disk on a volume with thirty megabytes free. It was
+# doing exactly that: `make usb` passed --select 1440 and the live image
+# carried 62 of the master disk's 77 files with a LEFT-OFF.TXT on it naming
+# the other fifteen, on a volume that had room for all of them nine times
+# over. A whole geometry rather than a flag because every arm of select() is
+# already keyed by one - the cluster size, the total, the save reserve and
+# the curation - and a flag would have to reach into four of them.
 GEOMETRY = {360: (1024, 354), 720: (1024, 713), 1200: (512, 2371),
-            1440: (512, 2847)}
+            1440: (512, 2847), "hdd": (2048, 16324)}
 DIR_ENTRY = 32            # a FAT directory entry
 # ROOM TO SAVE IN KB, held back from A/0's fill (SPEC.md 71.5): a disk full to its
 # last cluster cannot take a $$$.SUB, an MBASIC program or TE's file, which is
@@ -150,7 +163,12 @@ DIR_ENTRY = 32            # a FAT directory entry
 # are on it, and both write files) - and the 1.2MB disk holds back the same
 # 64KB for the same reason: it carries the same software area, on the AT-class
 # machine 74.6's timing note is least worried about.
-SAVE_ROOM_KB = {360: 0, 720: 16, 1200: 64, 1440: 64}
+SAVE_ROOM_KB = {360: 0, 720: 16, 1200: 64, 1440: 64,
+                # the live volume holds back a megabyte, which is the
+                # same gesture and not the same arithmetic: it is 3% of
+                # the partition rather than 4.5% of a floppy, and what
+                # it is for is a CP/M session that compiles.
+                "hdd": 1024}
 # ASSOC.DAT, the icon/association cache os88disk.py writes in the root beside
 # the packages (SPEC.md 54.7), is priced by asking os88disk.py itself
 # (assoc_clusters below): one cluster on the RUNCPM disks, whose only package
@@ -162,6 +180,21 @@ SAVE_ROOM_KB = {360: 0, 720: 16, 1200: 64, 1440: 64}
 def fail(msg):
     print(f"getruncpm: error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def geometry_arg(text):
+    """--select's value: a floppy's KB as an integer, or the word "hdd" for
+    the live volume (SPEC.md 80.6). Kept as one converter so that argparse
+    rejects a typo rather than select() raising a KeyError two screens in."""
+    if text == "hdd":
+        return "hdd"
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "want one of " + ", ".join(str(g) for g in GEOMETRY
+                                       if g != "hdd") + ' or "hdd", '
+            f"not {text!r}")
 
 
 def sha256(data):
@@ -182,7 +215,8 @@ def fetch(path):
 
 def get_artifact(path, out, check, src):
     """The bytes of one pinned repository file, from the cache, a local
-    checkout (--from) or the network, verified whichever way."""
+    checkout (--from), the committed zip or the network, verified whichever
+    way."""
     want_sha, want_size = PINNED[path]
     cache = os.path.join(out, ".artifacts", os.path.basename(path))
     data = None
@@ -198,9 +232,15 @@ def get_artifact(path, out, check, src):
         with open(p, "rb") as fh:
             data = fh.read()
     if data is None:
+        # the committed copy (tools/cpmcache.py) before the network
+        import cpmcache
+        data = cpmcache.member("runcpm/" + path)
+    if data is None:
         if check:
             fail(f"{path} is not cached in {out} (--check does not fetch)")
-        print(f"getruncpm: fetching {path}")
+        print(f"getruncpm: fetching {path} (not in "
+              f"apps/runcpm/cache/cpmcache.zip - `tools/cpmcache.py --pack` "
+              f"once it is fetched)")
         data = fetch(path)
     if len(data) != want_size or sha256(data) != want_sha:
         fail(f"{path}: SHA-256/size mismatch against the pin {COMMIT[:12]}\n"
@@ -444,9 +484,10 @@ def main():
     ap.add_argument("--check", action="store_true",
                     help="verify what is cached; never download")
     ap.add_argument("--list", action="store_true", help="print what is shipped and exit")
-    ap.add_argument("--select", type=int, metavar="KB",
+    ap.add_argument("--select", type=geometry_arg, metavar="KB",
                     help="print the A/0 files a 360/720/1200/1440 disk carries, "
-                         "one path per line")
+                         "one path per line; \"hdd\" is the live volume "
+                         "(SPEC.md 80.6), which carries the whole master disk")
     ap.add_argument("--reserve", nargs="*", default=[], metavar="FILE",
                     help="with --select: the root files that ride beside A/0, priced first")
     ap.add_argument("--dir-slots", type=int, default=0, metavar="N",
@@ -458,7 +499,7 @@ def main():
     ap.add_argument("--folders", type=int, default=1, metavar="N",
                     help="with --select: how many OTHER folder directories the disk "
                          "has, priced a cluster each (default 1: the folder A "
-                         "above A/0; apps-all has ten)")
+                         "above A/0)")
     ap.add_argument("--from", dest="src", metavar="DIR",
                     help="a local checkout of RunCPM at the pinned commit to take the files from")
     args = ap.parse_args()
@@ -469,8 +510,10 @@ def main():
                                       args.reserve_clusters)
         for path in chosen:
             print(path)
+        where = ("live volume" if args.select == "hdd"
+                 else f"{args.select}KB disk")
         print(f"getruncpm: {len(chosen)} files, {used} of {budget} clusters "
-              f"for A/0 on the {args.select}KB disk (after {len(args.reserve)} "
+              f"for A/0 on the {where} (after {len(args.reserve)} "
               f"root files"
               f"{f' and {args.reserve_clusters} clusters of games' if args.reserve_clusters else ''})",
               file=sys.stderr)

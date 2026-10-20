@@ -226,6 +226,12 @@ mpp_entry:
     call OSAPI_WM_CREATE            ; out BX = win ptr, CF on full
     jc .out
     mov [mpp_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov si, mpp_menus
     call OSAPI_MENU_SET             ; preserves registers AND flags, so the
     mov si, mpp_about               ; loader's CF survives to the ret
@@ -400,6 +406,32 @@ mpp_hire:
     call OSAPI_TASK_SPAWN
     jc .out
     mov byte [mpp_hired], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame, so a region
+    ; declaration alone is INERT. It is PERMANENT and not a window
+    ; around OSAPI_TASK_ALIVE - the SDK note's advice for a park-safe
+    ; worker, which fails SILENTLY (REGION-SELF-COMPACT-PLAN 8.2):
+    ; mem_frameless reads [inst_restart] at PLAN time, and this worker
+    ; is outside its own ALIVE for essentially all of a tick, so a
+    ; windowed declaration would make OSAPI_MEM_COMPACT's what-if answer no
+    ; better for a heap the compactor could have emptied.
+    ;
+    ; SO BOTH PARK POINTS ARE ENUMERATED, Tracker's shape. We are
+    ; OSAPI_MEM_PARKSAFE, so the second one is BLOCKED IN
+    ; OSAPI_GFX_LOCK - never HOLDING it (66.5.4 marks the task only
+    ; across the yield inside the wait path).
+    ;   * ALIVE is the top of .loop.
+    ;   * THE MIXER IS THE CASE THE SDK NOTE NAMES, and it is safe for a
+    ;     reason rather than by luck: mpp_feed is LOCK-FREE, so the worker
+    ;     is never blocked in gfx_lock inside it, and [mpp_mixing] - the
+    ;     byte mpp_stream_close DRAINS on - is set first in that pass and
+    ;     cleared LAST, before mpp_render is even called. So it reads 0 at
+    ;     the one park point and no drain can wait on a worker that is no
+    ;     longer there.
+    ;   * mpp_render takes the lock as its first action after its pushes
+    ;     and sets nothing before it.
+    ; A restart costs one frame, never a half-mixed buffer.
+    OS88_WORKER_RESTARTABLE mpp_worker
 .out:
     pop bx
     pop ax
@@ -1038,6 +1070,23 @@ mpp_load_name:
                                     ; worker's in-flight feed pass, so no
                                     ; mpm_mixch is mid-fetch from the old
                                     ; claim past this line ([mpp_mixing])
+    ; --- PAST THIS LINE THE PLAYING MODULE IS GONE (SPEC.md 56.14.1) -------
+    ; AND HERE THAT IS BEFORE THE SIZE IS EVEN LOOKED AT, which is the one
+    ; place this player is weaker than Tracker: .alloc below reads the figure
+    ; and .toobig/.nofit refuse on it, and by then the old blob has been
+    ; freed. SPEC.md 56.14 recorded that when the refusals were ported over -
+    ; .toobig's "nothing is playing that this interrupted" has been wrong
+    ; since - and rested on the sized path being unreachable for any file a
+    ; real heap could hold.
+    ;
+    ; THAT PREMISE WAS FALSE FOR A YEAR: fdlg_sizeof reported the PACKED size
+    ; (SPEC.md 20.14.3), so a compressed module reached .nofit on a third of
+    ; its real figure with the previous module already gone. The figure is
+    ; right now and the premise holds again - but it is a premise and not a
+    ; guarantee, where Tracker's ordering is the guarantee. The free cannot
+    ; simply move below the read (that holds both blobs and doubles the peak
+    ; on a 640KB machine); the fix would be to hoist the .alloc sizing ABOVE
+    ; the stop-and-free, which is Tracker's shape and is not attempted here.
     mov byte [mpm_loaded], 0        ; the old blob is about to be freed: no
                                     ; reader may trust it past this line
     cmp word [mpp_modseg], 0
@@ -1086,7 +1135,7 @@ mpp_load_name:
     mov cx, ax
     call OSAPI_MEM_AVAIL            ; AX = the LARGEST contiguous run, in KB
     cmp cx, ax
-    ja .toobig                      ; it will not fit this heap: say so NOW,
+    ja .nofit                       ; it will not fit this heap: say so NOW,
     mov ax, cx                      ; with the drive still stopped
     jmp short .sized
 
@@ -1154,6 +1203,22 @@ mpp_load_name:
     mov si, mpp_s_toobig            ; refused on the SIZE, before any claim was
     jmp .fail                       ; made - so there is nothing to free, and
                                     ; nothing is playing that this interrupted
+.nofit:
+    mov si, mpp_s_nofit             ; ...AND THIS IS A DIFFERENT REFUSAL, which
+    jmp .fail                       ; said 'File too big' until SPEC.md 56.14.1.
+                                    ; The module is a perfectly ordinary size
+                                    ; and THIS MACHINE has nowhere to put it,
+                                    ; which is a fact about the heap and about
+                                    ; today - close a window and it loads. The
+                                    ; other message sends the reader to look at
+                                    ; the file, which is the one thing that is
+                                    ; not the matter. Tracker has said
+                                    ; 'Too big for free memory' here all along
+                                    ; (SPEC.md 45.3.1, trk_s_nofit); this is
+                                    ; that string, borrowed, so the two players
+                                    ; answer the same question the same way.
+                                    ; SPEC.md 47: grey - and refuse - a FACT,
+                                    ; never a guess
 .rderr:
     cmp ax, FERR_BIG
     je .big
@@ -2189,6 +2254,7 @@ mpp_s_noload:  db 'No module loaded - L loads one', 0
 mpp_s_nosb:    db 'No Sound Blaster: the interface only', 0
 mpp_s_nomem:   db 'Out of memory', 0
 mpp_s_toobig:  db 'File too big', 0
+mpp_s_nofit:   db 'Too big for free memory', 0
 mpp_s_noent:   db 'File not found', 0
 mpp_s_ioerr:   db 'Disk error', 0
 mpp_s_snderr:  db 'Sound open failed', 0
@@ -2228,7 +2294,7 @@ mpp_ab3: db 'Interface ported from ModPlug Player V2', 0
 mpp_ab4: db 'by Volkan Orhan - modplugplayer.org, GPLv3', 0
 mpp_ab5: db 0
 mpp_ab6: db 'Replayer: 4-channel ProTracker, 8-bit mono.', 0
-mpp_ab7: db 'Not libopenmpt - see SPEC.md 56.1.', 0
+mpp_ab7: db 'Not libopenmpt: its own replayer.', 0
 mpp_ab8: db 0
 mpp_ab9: db 'Ported by Jorge Gonzalez', 0
 

@@ -7,7 +7,7 @@
 claims hang off that. Both fail silently, which is why they are here.
 
 **One: the gate costs the full build ZERO.** It is the same claim
-docs/KERN-SPLIT-PLAN.md 6 set for the first removal from `kern_small`, and it
+docs/history/KERN-SPLIT-PLAN.md 6 set for the first removal from `kern_small`, and it
 fails the same way - a `%ifdef` written round one line too many, or a field
 moved out of a gated block "while we are here", and the shipped package
 changes for a feature it still has. Nothing errors. So this ASSEMBLES THE
@@ -27,6 +27,7 @@ saves and draws. Nothing host-side can: it wants a machine, and
 """
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -37,11 +38,44 @@ from harness import check, done                             # noqa: E402
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 ROOT = os.path.abspath(ROOT)
 
-# (package, source, the shipped .o88 it must still equal)
-PKGS = [("notepad", "apps/notepad/notepad.asm", "build/notepad.o88"),
-        ("paint", "apps/paint/paint.asm", "build/paint.o88"),
-        ("calc", "apps/calc/calc.asm", "build/calc.o88"),
-        ("solitaire", "apps/solitaire/solitaire.asm", "build/solitair.o88")]
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88pkg                                              # noqa: E402
+
+# (package, source, the shipped .o88 it must still equal, a heap claim in KB
+#  the package makes for the life of an instance and whose SOURCE CONSTANT is
+#  named here, or None)
+#
+# THAT LAST FIELD EXISTS FOR TANK, and it is the case that says what this file
+# is really measuring. Five of the six small builds trade FEATURES, so their
+# saving is in image + bss and the region is the whole story. Tank trades a
+# DATA STRUCTURE (SPEC.md 85.3.5.1): its HUD template stops being a second
+# 16,000-byte frame buffer and becomes a span store, which costs 576 bytes of
+# image and takes 14KB off the claim. Weighed on the region alone it is a small
+# build that got BIGGER and this gate would fail it; weighed on what an
+# instance actually takes out of the heap it saves 26%. The quantity is
+# "region + claim" for every row - the other five simply have no claim.
+PKGS = [("notepad", "apps/notepad/notepad.asm", "build/notepad.o88", None),
+        ("paint", "apps/paint/paint.asm", "build/paint.o88", None),
+        ("calc", "apps/calc/calc.asm", "build/calc.o88", None),
+        ("solitaire", "apps/solitaire/solitaire.asm", "build/solitair.o88", None),
+        ("taskmgr", "apps/taskmgr/taskmgr.asm", "build/taskmgr.o88", None),
+        ("tank", "apps/tank/tank.asm", "build/tank.o88", "TK_SHKB")]
+
+# ...and the arms BETWEEN the two, which no floppy carries and which nothing
+# else would keep assembling (SPEC.md 28.12). The Task Manager's gates are a
+# LADDER - `TMF_HEAP` off alone, then `TMF_MEM` off as well - and the middle
+# rung is a real configuration with a measured cost that somebody may yet
+# choose to ship. A rung nothing builds is a rung that silently stops
+# building, which is exactly why the knob kernels are in `make test-full`'s
+# matrix.
+#
+# Defining a flag on the command line is how a rung is selected: the source
+# defines both under `%ifndef APP_SMALL`, so -DAPP_SMALL -DTMF_MEM leaves the
+# memory view in and takes only the heap page out.
+#
+# (source, extra defines, what the rung is, must be smaller than)
+RUNGS = [("apps/taskmgr/taskmgr.asm", ["-DTMF_MEM"],
+          "taskmgr: the heap page alone (SPEC.md 28.12)", "taskmgr")]
 
 # The least a small build must save to be worth having, as a fraction of the
 # full build's image + bss.
@@ -60,6 +94,17 @@ PKGS = [("notepad", "apps/notepad/notepad.asm", "build/notepad.o88"),
 # is optional; that is a good outcome, not a failing gate.
 MIN_SAVING = 0.05
 
+# ...AND SOLITAIRE IS BELOW EVEN THAT NOW, for the same reason told again. The
+# apps size pass's set 6 (SPEC.md 43.11.5) took the full arm 7,425 -> 5,737
+# bytes and the small one 6,973 -> 5,534 - and one of its wins is that the win
+# plaque and the About card became ONE routine, so the card's drawing stopped
+# being About-only bytes at all. What the small arm still drops is the About
+# handler, its credit lines and Auto Finish, ~200 bytes: 3.5% of a smaller
+# whole. The floor is per package rather than lowered for all five, because it
+# is a floor under "the define stopped reaching the source" and the others
+# still sit far above 5%.
+FLOORS = {"solitaire": 0.03}
+
 
 # The package defines the Makefile built the SHIPPED .o88 with - $(PKGSBDEF),
 # which is SBDRAGOFF=/SBRATE= and nothing else today. `make test-fast` passes
@@ -72,7 +117,14 @@ DEFS = os.environ.get("OS88_PKGDEFS", "").split()
 
 
 def build(src, out, small):
-    cmd = ["nasm", "-f", "bin", "-w+error", "-I", "apps/"] + DEFS
+    # ...and the SOURCE'S OWN directory, because a package with more than one
+    # file includes its siblings by bare name and the Makefile passes it:
+    # tank is `-I apps/ -I apps/tank/`. Adding it for the single-file packages
+    # too is safe and is checked rather than assumed - the md5 row below
+    # compares each default arm against the shipped .o88, so a resolution this
+    # changed would fail there.
+    cmd = (["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+            "-I", os.path.dirname(src) + "/"] + DEFS)
     if small:
         cmd += ["-DAPP_SMALL"]
     cmd += ["-o", out, src]
@@ -81,20 +133,69 @@ def build(src, out, small):
 
 
 def claim(path):
-    """image + bss - what ONE instance takes out of the heap (SPEC.md 20.1)."""
+    """image + bss - the REGION one instance takes out of the heap (SPEC.md 20.1)."""
     with open(path, "rb") as f:
         h = f.read(32)
     return int.from_bytes(h[8:10], "little") + int.from_bytes(h[10:12], "little")
 
 
+def equ_kb(src, name, small):
+    """`NAME equ <n>` from a source, read for ONE ARM of its %ifdef APP_SMALL.
+
+    A plain regex finds both arms and picks whichever comes first, which for
+    Tank is the small one - so this walks the conditional instead. It knows
+    only APP_SMALL: any other %if nests and is skipped whole, which is enough
+    here and fails loudly rather than quietly if it stops being.
+    """
+    want, depth, skip = [], 0, None
+    for line in open(os.path.join(ROOT, src)):
+        t = line.strip()
+        if skip is not None:
+            if t.startswith("%if"):
+                depth += 1
+            elif t.startswith("%endif"):
+                if depth == 0:
+                    skip = None
+                else:
+                    depth -= 1
+            continue
+        if t.startswith("%ifdef APP_SMALL") or t.startswith("%ifndef APP_SMALL"):
+            arm = t.startswith("%ifdef") == bool(small)
+            want.append(arm)
+            continue
+        if t.startswith("%else") and want:
+            want[-1] = not want[-1]
+            continue
+        if t.startswith("%endif") and want:
+            want.pop()
+            continue
+        if t.startswith("%if"):                 # any other conditional: skip it
+            skip, depth = True, 0
+            continue
+        if all(want):
+            m = re.match(r"%s\s+equ\s+(\d+)\s*(;.*)?$" % re.escape(name), t)
+            if m:
+                return int(m.group(1)) * 1024
+    return None
+
+
 def md5(path):
+    """...of the IMAGE, which for a shipped package is not the file.
+
+    Every shipped `.o88` is LZ4 on the disk now (SPEC.md 20.13.4) and the
+    thing this file compares is an ASSEMBLY - so the shipped side has to be
+    unwrapped or the check degenerates into "compression changes bytes", which
+    it does, and says nothing about which arm was built. image_unwrap puts the
+    flags byte back too, so a plain package and a compressed one made from the
+    same source hash the same.
+    """
     with open(path, "rb") as f:
-        return hashlib.md5(f.read()).hexdigest()
+        return hashlib.md5(os88pkg.image_unwrap(f.read())).hexdigest()
 
 
 def main():
     tmp = tempfile.mkdtemp(prefix="appsmall.")
-    for name, src, shipped in PKGS:
+    for name, src, shipped, kbconst in PKGS:
         full = os.path.join(tmp, name + ".full.bin")
         small = os.path.join(tmp, name + ".small.bin")
 
@@ -123,18 +224,57 @@ def main():
                   got=md5(full), want=md5(shipped_path))
 
         cf, cs = claim(full), claim(small)
+        if kbconst:                     # ...plus the package's own claim, which
+            kf = equ_kb(src, kbconst, False)     # for Tank is where the whole
+            ks = equ_kb(src, kbconst, True)      # saving is (SPEC.md 85.3.5.1)
+            check(kf is not None and ks is not None,
+                  "%s: %s reads for both arms" % (name, kbconst),
+                  "the walker over %ifdef APP_SMALL has stopped finding it, so "
+                  "the numbers below would be the region alone and this row "
+                  "would fail for the wrong reason",
+                  got="%s / %s" % (kf, ks), want="two figures")
+            if kf and ks:
+                cf, cs = cf + kf, cs + ks
         saved = (cf - cs) / float(cf) if cf else 0.0
         check(cs < cf, "%s: the small build claims less than the full one" % name,
               "if these match, -DAPP_SMALL has stopped reaching the source and "
               "build/smallapps*.img is the ordinary floppy under another name",
               got="%d vs %d bytes" % (cs, cf), want="smaller")
-        check(saved >= MIN_SAVING,
-              "%s: the small build saves at least %d%%" % (name, MIN_SAVING * 100),
+        floor = FLOORS.get(name, MIN_SAVING)
+        check(saved >= floor,
+              "%s: the small build saves at least %d%%" % (name, floor * 100),
               "a floor under 'the gates carry nothing', not a target - the "
               "real figure is ~34%% and is allowed to move",
-              got="%.1f%%" % (saved * 100), want=">= %d%%" % (MIN_SAVING * 100))
+              got="%.1f%%" % (saved * 100), want=">= %d%%" % (floor * 100))
+    rungs(tmp)
     disks(tmp)
     done("t_appsmall")
+
+
+def rungs(tmp):
+    """the intermediate arms: they assemble, and they sit between the two."""
+    for i, (src, extra, what, pkg) in enumerate(RUNGS):
+        out = os.path.join(tmp, "rung%d.bin" % i)
+        cmd = (["nasm", "-f", "bin", "-w+error", "-I", "apps/"] + DEFS +
+               ["-DAPP_SMALL"] + extra + ["-o", out, src])
+        r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+        check(r.returncode == 0, "%s assembles" % what,
+              "nothing in the tree builds this arm, so this row is the only "
+              "thing that keeps it compiling (%s)" % " ".join(extra),
+              got=r.stderr.strip(), want="exit 0")
+        if r.returncode:
+            continue
+        full = os.path.join(tmp, pkg + ".full.bin")
+        small = os.path.join(tmp, pkg + ".small.bin")
+        if not (os.path.exists(full) and os.path.exists(small)):
+            continue
+        mid, cf, cs = claim(out), claim(full), claim(small)
+        check(cs < mid < cf, "%s: it lands BETWEEN the two arms" % what,
+              "a rung that saves nothing has stopped reaching the source; one "
+              "that saves as much as the full small build means the flag "
+              "below it is carrying everything and the ladder is a fiction",
+              got="%d (full %d, small %d)" % (mid, cf, cs),
+              want="small < this < full")
 
 
 # The disks themselves: SPEC.md 42.22.1 - every gated package that reaches a
@@ -160,7 +300,7 @@ def disks(tmp):
         return
 
     want = {}
-    for name, src, shipped in PKGS:
+    for name, src, shipped, _kb in PKGS:
         base = os.path.basename(shipped).upper()            # e.g. PAINT.O88
         small = os.path.join(ROOT, "build", "smallapp", os.path.basename(shipped))
         full = os.path.join(ROOT, "build", os.path.basename(shipped))

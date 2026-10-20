@@ -1,0 +1,143 @@
+track Meadow Sprint
+theme 0
+laps 2
+par 0:48.62 the turbo time 0:45.02 + 8% (tools/exbsim.py --run-track t1)
+par2 0:48.70 the turbo time 0:45.09 + 8% (tools/exbsim.py --run-track t1)
+
+# pass 1: one piece (or `piece xN`) a line
+
+plain_c x6
+plain_a x4
+plain_c x2
+rough_a
+plain_a x7
+plain_c x3
+plain_a x6
+plain_b x1
+ramp_b
+plain_a x7
+plain_c x5
+plain_b x4
+arrow_a
+plain_a x5
+plain_c x7
+plain_b x3
+hurdle_lo_c
+plain_a x4
+plain_b x4
+plain_a x6
+plain_b x1
+ramp_b
+plain_a x7
+plain_c x5
+arrow_a
+plain_a x6
+plain_c x4
+plain_a x5
+hurdle_lo_c
+plain_a x7
+plain_b x4
+plain_c x3
+rough_a
+plain_a x4
+plain_b x7
+plain_c x3
+plain_a x3
+rough_c
+plain_c x4
+plain_a x7
+plain_c x3
+plain_b x1
+kicker_a
+plain_c x3
+plain_b x7
+plain_a x3
+ramp_b
+plain_c x7
+plain_a x7
+plain_c x3
+arrow_a
+plain_c x7
+plain_a x3
+plain_b x5
+hurdle_lo_a
+plain_c x6
+plain_a x7
+plain_c x3
+plain_a x1
+arrow_a
+plain_a x4
+plain_c x4
+plain_a x6
+plain_c x1
+arrow_a
+plain_b x6
+plain_a x3
+plain_c x3
+plain_a x4
+rough_a
+plain_a x5
+plain_b x4
+plain_a x4
+plain_c x2
+arrow_a
+plain_c x3
+plain_b x4
+plain_c x5
+hurdle_lo_b
+plain_c x7
+plain_a x5
+plain_b x2
+ramp_a
+plain_a x7
+plain_b x3
+plain_a x4
+hurdle_lo_c
+plain_a x5
+plain_c x5
+plain_a x3
+hill_a
+plain_c x5
+plain_a x6
+plain_c x4
+rough_c
+plain_a x7
+plain_c x6
+plain_b x1
+hill_a
+plain_c x5
+plain_a x7
+plain_c x3
+plain_b x2
+hill_a
+plain_a x4
+plain_b x5
+plain_c x5
+plain_b x3
+ramp_a
+plain_c x4
+plain_b x5
+plain_a x4
+ramp_a
+plain_a x6
+plain_c x6
+plain_b x3
+ramp_b
+plain_a x5
+plain_b x5
+plain_c x5
+plain_a x1
+ramp_f
+plain_c x7
+plain_a x6
+plain_c x2
+finish
+
+pass2
+# every occurrence of the left piece becomes the right one in lap 2
+swap hurdle_lo_a hurdle_hi_a
+swap hurdle_lo_b hurdle_hi_b
+swap rough_a mud_a
+swap rough_c mud_c
+swap ramp_a ramp_c
+swap kicker_a kicker_b

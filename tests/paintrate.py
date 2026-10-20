@@ -67,6 +67,7 @@ import argparse
 import math
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -120,27 +121,33 @@ def main(argv):
         m.advance(frames=10)
         m.run()
 
-        m.breakpoints([{"type": "mem", "addr": S("gfx_lock_own")}])
-        t0 = m.status()["cycles"]
-        nxt = t0 + NUDGE_MS * HZ / 1000.0
-        end = t0 + WINDOW * HZ
-        hits, step = 0, 0
-        while True:
-            st = m.status()
-            now = st["cycles"]
-            if now >= end:
-                break
-            if st["state"] == "breakpoint":
-                hits += 1
-                m.run()
-            if now >= nxt:                  # a report, on the guest's clock
-                step += 1
-                mo._pk(dx=int(6 * math.cos(step / 4.0)),
-                       dy=int(6 * math.sin(step / 4.0)), l=True)
-                nxt = now + NUDGE_MS * HZ / 1000.0
-        dt = (m.status()["cycles"] - t0) / HZ
-        m.breakpoints([])
-        m.run()
+        # THE WINDOW IS GUEST SECONDS, which is what makes the pump free: a
+        # stop costs host time and no guest cycles at all, so stalling the
+        # machine to count a hit moves neither the numerator nor the
+        # denominator of a rate measured per guest second. What it does buy is
+        # an exact numerator - the hand-rolled pump this replaces counted every
+        # `"breakpoint"` it polled, including the stop it had just resumed past
+        # whenever the resume had not landed by the next round trip, and this
+        # row's verdict is that count against a floor.
+        with os88marty.bp_trace(m, {"type": "mem",
+                                    "addr": S("gfx_lock_own")}) as tr:
+            t0 = m.status()["cycles"]
+            nxt = t0 + NUDGE_MS * HZ / 1000.0
+            end = t0 + WINDOW * HZ
+            step, now = 0, t0
+            while now < end:
+                now = m.status()["cycles"]
+                if now >= nxt:              # a report, on the guest's clock
+                    step += 1
+                    # m.mouse and not mo._pk: _pk paces GAP after the packet
+                    # (0.54 guest s), which starved this 25 ms schedule to one
+                    # report in twenty; the spacing HERE is the pacing
+                    m.mouse(int(6 * math.cos(step / 4.0)),
+                            int(6 * math.sin(step / 4.0)), l=True)
+                    nxt = now + NUDGE_MS * HZ / 1000.0
+                time.sleep(0.001)
+            dt = (now - t0) / HZ
+        hits = tr.n
         mo._edge(False)
         m.advance(frames=40)
         m.run()

@@ -26,7 +26,12 @@ from harness import check, done                           # noqa: E402
 
 IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img", "os8088-360.img",
           "apps.img", "apps120.img", "apps720.img", "apps360.img",
-          "media360.img"]
+          "media360.img",
+          # the category disks (SPEC.md 24.6) - three more 360KB volumes,
+          # and the first shipped ones with PACKAGES AT THE ROOT, so the
+          # root-directory arithmetic they exercise is arithmetic no other
+          # image in this list reaches.
+          "office360.img", "network360.img", "games360.img"]
 
 
 def main():

@@ -24,9 +24,9 @@ wide, reading into the next), and no `cld` in a routine built out of `lodsb`,
 `stosb` and `rep movsb`.
 """
 import argparse
+import tempfile
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -45,11 +45,11 @@ def u16(b, i=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/blitp.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/blitp.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/blitp.img":
+    if a.apps == tempfile.gettempdir() + "/blitp.img":
         os88marty.scratch_disk(a.apps, "APPS:build/gfxbench.o88")
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
@@ -69,11 +69,12 @@ def main():
                                                 dispcp.row_of(m, S,
                                                               "GFXBENCH.O88")))
         mo.dblclick(rx, ry)
-        t0 = time.time()
-        while time.time() - t0 < 120:
-            if [w for w in dispcp.win_list(m, S) if w != disk]:
-                break
-            time.sleep(0.3)
+        try:
+            os88marty.until(m, lambda _: [w for w in dispcp.win_list(m, S)
+                                          if w != disk],
+                            "GFXBENCH's window", poll=0.3, limit=120)
+        except os88marty.MartyError:
+            pass                    # the breakpoint below says what it means
         os88marty.settle(m)
 
         m.bp_exec("gfx_blitp")

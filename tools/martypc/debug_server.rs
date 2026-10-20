@@ -58,7 +58,10 @@ use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Mutex, OnceLock,
+    },
     time::{Duration, Instant},
 };
 
@@ -215,6 +218,27 @@ fn disks(machine: &mut Machine) -> Value {
         out.push(row);
     }
     json!({"ok": true, "drives": out})
+}
+
+/// Put another image in a floppy drive while the machine RUNS - a disk swap.
+///
+/// `mount_floppy` was only ever called at startup, so a scripted session
+/// could not change a floppy under a running guest, and every test of a
+/// feature that asks for the next disk had to fake it (SPEC.md 22.23.6's
+/// Uncompress To... is the first that cannot be faked: it asks). The drive
+/// has no change line on an XT, so the guest learns of the swap the way a
+/// real one does - the motor has stopped (SPEC.md 18.9.1) - and the caller
+/// must let it stop before answering the prompt.
+fn mount_cmd(machine: &mut Machine, req: &Value) -> Value {
+    let drive = req.get("drive").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let path = match req.get("path").and_then(Value::as_str) {
+        Some(p) => PathBuf::from(p),
+        None => return err("mount wants a path"),
+    };
+    match mount_floppy(machine, drive, &path) {
+        Ok(()) => json!({"ok": true, "drive": drive, "path": path.display().to_string()}),
+        Err(e) => err(&e),
+    }
 }
 
 /// Write a drive's live image out to a file on the host.
@@ -468,6 +492,7 @@ impl DebugServer {
 
             if matches!(exec.get_state(), ExecutionState::Running) {
                 machine.run(batch, &mut exec);
+                note_state(&exec);       // the stop sequence number, above
                 // Drain after every batch, not on a timer: the channels are
                 // bounded and a device that outruns the reader drops samples,
                 // which would read as the guest having gone quiet.
@@ -684,6 +709,7 @@ impl DebugServer {
             }),
             "status" => status(machine, exec),
             "disk" => disk_stats(machine, &req),
+            "midi" => midi_log(machine, &req),
             "regs" => regs(machine),
             "setreg" => setreg(machine, &req),
             "read" => read_mem(machine, &req),
@@ -706,6 +732,18 @@ impl DebugServer {
                 // executing. Input then goes nowhere, which reads as the guest
                 // ignoring it. Drive the transition through machine.run(),
                 // exactly as "reset" below does, and let it own the flag.
+                //
+                // `resumed_from` IS THE ANSWER TO "did my resume land?", and
+                // it is taken here, before the transition: it is the stop
+                // count as this command found the machine. Every later status
+                // carrying that same number is the SAME stop - the resume did
+                // not land - and any greater one is a new stop, including one
+                // produced by the single instruction the transition below
+                // steps. Deriving it from the reply instead cannot be done:
+                // "stopped, count unchanged" and "stopped, count just
+                // incremented" are the two cases that have to be told apart,
+                // and both leave `stops` equal to whatever the reply says.
+                let from = STOPS.load(Ordering::Relaxed);
                 if matches!(exec.get_state(),
                             ExecutionState::BreakpointHit | ExecutionState::StepOverHit) {
                     machine.run(1, exec);
@@ -713,7 +751,10 @@ impl DebugServer {
                 else {
                     exec.set_state(ExecutionState::Running);
                 }
-                status(machine, exec)
+                note_resumed();
+                let mut v = status(machine, exec);
+                v["resumed_from"] = json!(from);
+                v
             }
             "pause" => {
                 exec.set_op(ExecutionOperation::Pause);
@@ -740,6 +781,7 @@ impl DebugServer {
             "key" => key(machine, &req),
             "mouse" => mouse(machine, &req),
             "disks" => disks(machine),
+            "mount" => mount_cmd(machine, &req),
             "flush" => flush(machine, &req),
             "history" => json!({"ok": true, "history": machine.cpu().dump_instruction_history_string()}),
             "callstack" => json!({"ok": true, "callstack": machine.cpu().dump_call_stack()}),
@@ -799,6 +841,63 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// THE STOP SEQUENCE NUMBER: how many times this machine has ENTERED a
+/// stopped state.
+///
+/// It exists because `state` alone cannot answer the one question every
+/// caller that resumes a breakpoint has to ask - **is this the stop I just
+/// resumed from, or a new one?** Both read `"breakpoint"`, and neither the
+/// address nor the registers tell them apart: a breakpoint that fires
+/// repeatedly fires at the SAME IP every time, by construction, so "the IP
+/// has not changed" is true of a machine that never resumed and of one that
+/// went round the whole loop and came back. Every client here has invented
+/// its own answer to that and two of them were wrong (see
+/// `os88marty.bp_count`), which is the tell that the protocol owed them one.
+///
+/// The contract is exactly what a caller needs and no more:
+///
+///   * two reports of the SAME stop carry the same number, and
+///   * a NEW stop carries a strictly greater one.
+///
+/// So `stops` unchanged and not running means the resume did not land, and
+/// `stops` advanced means it did and the machine stopped again. Nothing is
+/// missed in between, because a stopped machine stays stopped until a client
+/// resumes it.
+///
+/// WHY A STATIC rather than a field: `status()` is a free function reached
+/// from three paths that do not share a `self` (the `status`/`run`/`pause`
+/// arms above, `step` and `advance`), and the alternative is threading a u64
+/// through two more signatures to arrive at the same value. One machine per
+/// process is a property of this server, not an assumption - the only fork is
+/// a snapshot holder, which is a separate process and correctly gets its own
+/// count, continuing from the machine it was forked from.
+static STOPS: AtomicU64 = AtomicU64::new(0);
+static WAS_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Count the machine's transitions into a stopped state. Called wherever the
+/// machine may have just run - after every batch in `run_loop`, and by
+/// `status()` itself, which is what makes it exact for a client: a status is
+/// the only way the count is ever read, and it is brought up to date before
+/// it is answered.
+fn note_state(exec: &ExecutionControl) -> u64 {
+    let running = matches!(exec.get_state(), ExecutionState::Running);
+    let was = WAS_RUNNING.swap(running, Ordering::Relaxed);
+    if was && !running {
+        return STOPS.fetch_add(1, Ordering::Relaxed) + 1;
+    }
+    STOPS.load(Ordering::Relaxed)
+}
+
+/// A command has RELEASED the machine (`run`, `step`, `advance`, and the two
+/// captures). Marking it makes the status that follows count a stop the
+/// release produced - including one inside the very instruction the release
+/// stepped, which is invisible from outside `machine.run()`: that call sets
+/// Running and can be back in BreakpointHit before it returns, so the endpoint
+/// alone looks like a machine that never moved.
+fn note_resumed() {
+    WAS_RUNNING.store(true, Ordering::Relaxed);
+}
+
 fn state_name(s: ExecutionState) -> &'static str {
     match s {
         ExecutionState::Paused => "paused",
@@ -806,6 +905,33 @@ fn state_name(s: ExecutionState) -> &'static str {
         ExecutionState::StepOverHit => "stepover",
         ExecutionState::Running => "running",
         ExecutionState::Halted => "halted",
+    }
+}
+
+/// `midi`: what the recording MPU-401 (devices/mpu401.rs) was sent - every
+/// byte written to its data port, with the emulated microsecond it arrived,
+/// as `bytes` (hex) and `us`. `reset: true` empties the log after answering,
+/// so a test can bracket one region of a session. `uart` says whether the
+/// guest put the card in UART mode, which is the probe's half of the story.
+fn midi_log(machine: &mut Machine, req: &Value) -> Value {
+    let clear = req.get("reset").and_then(Value::as_bool).unwrap_or(false);
+    match machine.bus_mut().mpu401_mut().as_mut() {
+        Some(mpu) => {
+            let bytes: String = mpu.log.iter().map(|(_, b)| format!("{:02x}", b)).collect();
+            let us: Vec<u64> = mpu.log.iter().map(|(t, _)| *t).collect();
+            let v = json!({
+                "ok": true,
+                "uart": mpu.uart(),
+                "bytes": bytes,
+                "us": us,
+                "dropped": mpu.dropped,
+            });
+            if clear {
+                mpu.log.clear();
+            }
+            v
+        }
+        None => err("no MPU-401 in this machine"),
     }
 }
 
@@ -847,10 +973,20 @@ fn disk_stats(machine: &mut Machine, req: &Value) -> Value {
 fn status(machine: &mut Machine, exec: &ExecutionControl) -> Value {
     let cs = machine.cpu().get_register16(Register16::CS);
     let ip = machine.cpu_mut().get_ip();
+    // Bring the stop count up to date BEFORE answering with it: a status is
+    // the only way it is read, so noting here is what makes the number the
+    // client gets describe the state it is being handed.
+    let stops = note_state(exec);
     json!({
         "ok": true,
         "state": state_name(exec.get_state()),
+        "stops": stops,
         "cycles": machine.cpu_cycles(),
+        // NOT A CLOCK, and `stops` is here because of it. machine.run()
+        // accumulates `cpu_instructions` once, at the END of a batch, and
+        // returns EARLY when a breakpoint hits - so the instructions of the
+        // batch a stop lands in are never counted at all. `cycles` is
+        // accumulated per instruction and is the honest guest clock.
         "instructions": machine.cpu_instructions(),
         "cs": cs,
         "ip": ip,
@@ -1047,6 +1183,7 @@ fn step(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Valu
         else {
             ExecutionOperation::Step
         });
+        note_resumed();
         machine.run(0, exec);
         // A breakpoint reached mid-step ends the run: the caller asked for n
         // instructions and got fewer, and the state field says why.
@@ -1113,7 +1250,7 @@ fn breakpoints(machine: &mut Machine, req: &Value) -> Value {
 /// RAM at that address, which on a machine whose card has never written
 /// through is a screen of zeroes. It does not error; it returns a plausible
 /// blank screen, which is the worst way to be wrong. Ask the card instead.
-// --- WHICH CARD (docs/DUAL-DISPLAY-PLAN.md 9) -------------------------------
+// --- WHICH CARD (docs/plans/completed/DUAL-DISPLAY-PLAN.md 9) -------------------------------
 //
 // A machine may hold more than one video card - `[[machine.video]]` is an
 // array and the bus builder installs every entry - and until this existed
@@ -1451,6 +1588,7 @@ fn flicker(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
         }
         exec.set_op(ExecutionOperation::Pause);
         exec.set_state(ExecutionState::Paused);
+        note_resumed();          // ...and it ran to get here: see note_state
         match grab(machine, idx, sel) {
             Ok((gw, gh, data)) => {
                 w = gw;
@@ -1619,6 +1757,7 @@ fn pace(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Valu
         }
         exec.set_op(ExecutionOperation::Pause);
         exec.set_state(ExecutionState::Paused);
+        note_resumed();          // ...and it ran to get here: see note_state
         let (gw, gh, cur) = match grab(machine, idx, sel) {
             Ok(v) => v,
             Err(e) => return err(&e),
@@ -1663,7 +1802,7 @@ fn pace(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Valu
     })
 }
 
-// --- fork() snapshots (docs/SNAPSHOT-PLAN.md B) ------------------------------
+// --- fork() snapshots (docs/plans/completed/SNAPSHOT-PLAN.md B) ------------------------------
 //
 // A SNAPSHOT IS A PROCESS, NOT A FILE, and that is the whole design. `fork`
 // gives a copy-on-write image of everything this process holds - the CPU, all
@@ -1804,7 +1943,7 @@ fn restore(_server: &mut DebugServer, _req: &Value) -> Value {
 /// multiple of real time the host can manage. Two instances given the same
 /// sleep were measured 21.7 million cycles apart - 4.5 seconds of guest time -
 /// which is enough for every later input to land somewhere else and every
-/// downstream state to differ (docs/SNAPSHOT-PLAN.md 2.1).
+/// downstream state to differ (docs/plans/completed/SNAPSHOT-PLAN.md 2.1).
 ///
 /// `cycles` stops at the first instruction boundary at or past the target, so
 /// it is deterministic but not cycle-exact; `frames` counts completed video
@@ -1870,6 +2009,7 @@ fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
         exec.set_op(ExecutionOperation::Pause);
         exec.set_state(ExecutionState::Paused);
     }
+    note_resumed();              // it ran to get here: see note_state
     let mut v = status(machine, exec);
     v["advanced_cycles"] = json!(machine.cpu_cycles() - c0);
     v["advanced_frames"] = json!(card_frames(machine, idx).unwrap_or(f0).saturating_sub(f0));

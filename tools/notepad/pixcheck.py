@@ -48,8 +48,14 @@ from pkg import Lab, Labels                              # noqa: E402
 from state import State                                  # noqa: E402
 import drive                                             # noqa: E402
 
-BIN = "/home/user/os8088/build/npbench.bin"
-LST = "/home/user/os8088/build/npbench.lst"
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BIN = os.path.join(_OS88_ROOT, "build/npbench.bin")
+LST = os.path.join(_OS88_ROOT, "build/npbench.lst")
 DISK_BODY = (395, 135)          # blank area of the Disk window
 NP_TITLE = (80, 30)             # Note Pad's title bar, left of the Disk window
 
@@ -138,7 +144,7 @@ def fb(m):
     instead of 3, deterministically. That keeps "do these two screens differ?"
     honest, because the transform is injective, and makes every byte count,
     bounding box, glyph-cell count and per-row attribution meaningless. It is
-    what docs/NOTEPAD-NOTES.md 5.2.1's "66 stale cells" was measured with.
+    what docs/plans/completed/NOTEPAD-NOTES.md 5.2.1's "66 stale cells" was measured with.
     m.fbuf() is the one decoder in the tree and is what `shot --rendered`
     uses."""
     return m.fbuf()

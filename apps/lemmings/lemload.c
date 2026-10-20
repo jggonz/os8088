@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemload.c   (#included by lemmings.c)
  *
- * THE BAND READER, RESIDENT HALF (SPEC.md 92.3, docs/lemband-format.md).
+ * THE BAND READER, RESIDENT HALF (SPEC.md 114.3, docs/lemband-format.md).
  *
  * Wave 1 reads three of the band files and nothing else: LEMMAN.LEM (the
  * 512-byte manifest header and its cost table), LEMSTR.LEM (the string resource
@@ -17,7 +17,7 @@
  * os88_file_read_at(). That call's offset AND cap must each be a whole number
  * of CLUSTERS; the cluster is 512 bytes on a 1.44MB or 1.2MB disk and 1,024 on
  * a 720KB or 360KB one (tools/os88disk.py:124), and it is neither of those on
- * the RAM disk The Wire unpacks this package onto (SPEC.md 92.3.2). That is why
+ * the RAM disk The Wire unpacks this package onto (SPEC.md 114.3.2). That is why
  * the RATING is the file and not a window into a 10 KB index: a whole small
  * file has no alignment rule of any kind, and the package carries one rating's
  * 2,048 bytes of bss rather than four ratings' 8,192. Four extra directory rows
@@ -103,7 +103,7 @@ static int lem_cost_parts(int kind, int n)
 /* lem_bandname - the 8.3 name of a bank's FIRST file, for a fact that has to
  * say which file is not here. A bank that fits one 64,512-byte band keeps its
  * plain name and a bank written as numbered parts is LEMGR<n>_0.LEM
- * (SPEC.md 92.3.2). Uppercase 8.3 in [A-Z0-9_-] by construction.
+ * (SPEC.md 114.3.2). Uppercase 8.3 in [A-Z0-9_-] by construction.
  *
  * ONE BUFFER, so the answer may not be live across the next call - the caller
  * here stages it as a format argument and formats immediately (LESSONS.md 13). */
@@ -259,7 +259,7 @@ static int lem_data_load(void)
 }
 
 /* ============================================================================
- * WAVE 2: THE CLAIMS AND THE BANK READER (SPEC.md 92.6.1)
+ * WAVE 2: THE CLAIMS AND THE BANK READER (SPEC.md 114.6.1)
  *
  * Everything above reads a small file into bss. Everything here reads a BANK -
  * 32 KB to 96 KB - into a HEAP CLAIM through os88_file_read_seg(), which is
@@ -268,7 +268,7 @@ static int lem_data_load(void)
  * (APP_MAX_SIZE), and os88_file_read_at()'s offset and cap must each be a whole
  * number of CLUSTERS, which is 512 bytes on two geometries, 1,024 on the other
  * two and neither of those on the RAM disk The Wire unpacks this onto
- * (SPEC.md 92.3.2).
+ * (SPEC.md 114.3.2).
  *
  * A _seg BASE MUST BE 512-BYTE ALIGNED (SPEC.md 2.1.1, apps/cc/os88.h): a
  * claim's own base is, and so is any offset into it that is a multiple of

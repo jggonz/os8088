@@ -1,0 +1,7 @@
+Welcome
+Notes on your desk.
+[ ] + makes a note
+[ ] The arrow edits one
+[x] Click a box to tick
+Notes are .TXT files
+in APPDATA\NOTES.

@@ -1,0 +1,25 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 743cee9..47213d5 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -38,16 +38,16 @@ set(CMAKE_CXX_STANDARD 17)
+ 
+ # Declare the Pi Pico Board used
+ 
+-set(PICO_BOARD pimoroni_pico_plus2_rp2350 CACHE STRING "Board type")
+-#set(PICO_BOARD pico_w CACHE STRING "Board type")
++#set(PICO_BOARD pimoroni_pico_plus2_rp2350 CACHE STRING "Board type")
++set(PICO_BOARD pico_w CACHE STRING "Board type")
+ 
+ # Declare the PicoMEM Board
+ 
+-#set(PICOMEM_BOARD "PICOMEM")
++set(PICOMEM_BOARD "PICOMEM")
+ #set(PICOMEM_BOARD "PICOMEM_LP")
+ #set(PICOMEM_BOARD "PICOMEM_13")
+ #set(PICOMEM_BOARD "PICOMEM_15")
+-set(PICOMEM_BOARD "PICOMEM_20")
++#set(PICOMEM_BOARD "PICOMEM_20")
+ #set(PICOMEM_BOARD "WONDERMCA_10")
+ 
+ # ** UART (Debug) and USB Host definition **

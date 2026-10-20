@@ -6,7 +6,7 @@
 ; NETV_OPEN..NETV_ACCEPT over tcp.inc, cut out of ether.asm whole so that the
 ; DOS side of the parallel cable can serve the same verbs with the same code
 ; (drivers/net/os88net.asm, SPEC.md 62.11.1). Two implementations of a socket
-; API is exactly the shape docs/NET-PLAN.md warned about at the replayer -
+; API is exactly the shape docs/plans/completed/NET-PLAN.md warned about at the replayer -
 ; a bug fixed in one is not fixed in the other - and this file is the answer.
 ;
 ; It needs, from whichever program includes it: the state in ethstate.inc,
@@ -21,7 +21,7 @@
 ; advance the stack is a package asking the driver something.
 ;
 ; A driver-side WORKER doing it instead was built, measured on the 5150 and
-; REMOVED - SPEC.md 72.19 is the record and docs/FTP-PERF.md 6.1 the numbers.
+; REMOVED - SPEC.md 72.19 is the record and docs/plans/completed/FTP-PERF.md 6.1 the numbers.
 
 ; --- NETV_OPEN ---------------------------------------------------------------
 ; in ES:SI = a NUL host, CX = the port; out AX = a handle
@@ -45,17 +45,15 @@ eth_v_open:
     mov [bx+SKO_LP], ax
     mov byte [bx+SKO_ST], NSK_CONNECT
 
-    mov di, bx                  ; the name, out of their segment and into the
-    add di, SKO_HOST            ; record - bounded by the record and never by
+    lea di, [bx+SKO_HOST]       ; the name, out of their segment and into the
+                                ; record - bounded by the record and never by
     mov cx, NET_HOSTMAX - 1     ; the NUL, which came off a package
     mov si, [eth_usi]
     call usr_read
     mov byte [bx+SKO_HOST+NET_HOSTMAX-1], 0
 
-    mov si, bx
-    add si, SKO_HOST
-    mov di, bx
-    add di, SKO_RIP
+    lea si, [bx+SKO_HOST]
+    lea di, [bx+SKO_RIP]
     call ip_parse               ; a dotted quad connects at once; a NAME waits
     jnc .go                     ; for dns_timer to pick it up
     or  byte [bx+SKO_FL], SKF_RES
@@ -68,25 +66,21 @@ eth_v_open:
 .ok:
     mov al, [eth_hnd]
     xor ah, ah
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     clc
-    ret
+    jmp short .pop
 .nolink:
     mov ax, NETE_NOLINK
     jmp short .no
 .full:
     mov ax, NETE_FULL
 .no:
+    stc
+.pop:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    stc
     ret
 
 ; --- NETV_STATUS -------------------------------------------------------------
@@ -117,6 +111,7 @@ eth_v_send:
     push ax
     push bx
     push dx
+    push si
     push di
     call eth_pump
     call sk_h2p
@@ -141,16 +136,26 @@ eth_v_send:
     mov cx, ax
 .room:
     jcxz .none
+    push cx                     ; the whole count, whichever arm runs
+    mov ax, [bx+SKO_TXN]        ; the byte after the last one queued, in a
+    call sk_txpos               ; CIRCULAR ring (SPEC.md 72.4.3): DI = it,
+    cmp cx, ax                  ; AX = the run to the ring's end
+    jbe .tail
+    xchg cx, ax                 ; the run to the end first...
+    call ring_in
+    add si, cx
+    sub ax, cx
+    mov cx, ax                  ; ...and the rest at the ring's start
     call sk_txbase
-    add di, [bx+SKO_TXN]
+.tail:
     call ring_in                ; ...INTO THE CLAIM, not the driver's bss:
                                 ; usr_read wrote through DS (SPEC.md 72.13)
-    add [bx+SKO_TXN], cx
-    push cx
-    call tcp_kick
     pop cx
+    add [bx+SKO_TXN], cx
+    call tcp_kick               ; (keeps CX - it banks its own)
 .none:
     pop di
+    pop si
     pop dx
     pop bx
     pop ax
@@ -158,6 +163,7 @@ eth_v_send:
     ret
 .no:
     pop di
+    pop si
     pop dx
     pop bx
     add sp, 2                   ; AX is the error and must survive the pops
@@ -275,6 +281,7 @@ eth_v_sktab:
     call eth_pump
     mov bp, cx                          ; the capacity, banked
     mov es, [eth_useg]
+    cld
     xor cx, cx                          ; ...and CX becomes the answer
     xor dl, dl
 .l:
@@ -284,25 +291,21 @@ eth_v_sktab:
     ja  .done                           ; a partial record is worse than none
     mov al, dl
     call sk_ptr                         ; BX = the record (CX survives it)
-    mov al, [bx+SKO_ST]
-    mov [es:di+SKI_ST], al
-    mov al, [bx+SKO_TS]
-    mov [es:di+SKI_TS], al
-    mov al, [bx+SKO_FL]
-    mov [es:di+SKI_FL], al
-    mov al, [bx+SKO_TRY]
-    mov [es:di+SKI_TRY], al
-    mov ax, [bx+SKO_LP]
-    mov [es:di+SKI_LP], ax
-    mov ax, [bx+SKO_RP]
-    mov [es:di+SKI_RP], ax
-    mov ax, [bx+SKO_RXN]
-    mov [es:di+SKI_RXN], ax
-    mov ax, [bx+SKO_TXN]
-    mov [es:di+SKI_TXN], ax
-    mov ax, [bx+SKO_RXC]                ; ...and WHICH RING, as its size (72.21)
-    mov [es:di+SKI_RXC], ax
-    add di, SKI_SZ
+    mov si, sk_ski                      ; ...and the record's fields in SKI
+.f:                                     ; order, each a WORD to ES:DI: a byte
+    lodsb                               ; field's spare half is overwritten by
+    cbw                                 ; the field after it, so DI steps one
+    push bx                             ; for those and two for the rest, and
+    add bx, ax                          ; SKI_SZ in all
+    mov ax, [bx]
+    pop bx
+    stosw
+    cmp si, sk_ski + SKI_NB
+    ja  .w
+    dec di
+.w:
+    cmp si, sk_ski_end
+    jb  .f
     add cx, SKI_SZ
     inc dl
     cmp dl, NET_SOCKS
@@ -317,48 +320,62 @@ eth_v_sktab:
     clc
     ret
 
+; the record's offsets in SKI order: the SKI_NB byte fields, then the words -
+; ST, TS, FL and TRY, then LP, RP, RXN, TXN and RXC (WHICH RING, as its
+; size - 72.21)
+SKI_NB      equ 4
+sk_ski:     db SKO_ST, SKO_TS, SKO_FL, SKO_TRY
+            db SKO_LP, SKO_RP, SKO_RXN, SKO_TXN, SKO_RXC
+sk_ski_end:
+%if SKI_ST != 0 || SKI_TS != 1 || SKI_FL != 2 || SKI_TRY != 3 || SKI_LP != 4 || SKI_RP != 6 || SKI_RXN != 8 || SKI_TXN != 10 || SKI_RXC != 12 || SKI_SZ != 14
+  %error "sk_ski writes the SKI record as four bytes and five words, in order"
+%endif
+
 ; --- NETV_CLOSE --------------------------------------------------------------
 ; in AL = a handle. The handle is theirs no more, whatever the far side says.
 eth_v_close:
     push ax
     push bx
-    call eth_pump
-    call sk_h2p
+    call sk_shut
     jc  .no
-    cmp byte [bx+SKO_TS], TS_LISTEN ; a LISTENER takes its un-accepted children
-    jne .mine                       ; with it - see sk_reap_kids, and the FTP
-    call sk_reap_kids               ; server it was found by (SPEC.md 77)
-.mine:
     or  byte [bx+SKO_FL], SKF_ORPH
     cmp byte [bx+SKO_TS], TS_ESTAB
     je  .fin
     cmp byte [bx+SKO_TS], TS_CLOSEW
     je  .fin
-    and byte [bx+SKO_FL], ~SKF_RES      ; a NAME still being looked up is
-    mov ah, [bx+SKO_IDX]                ; cancelled WITH the slot. [dns_sk]
-    cmp ah, [dns_sk]                    ; lives outside the record, so
-    jne .nores                          ; sk_alloc's mem_zero cannot reach it
-    mov byte [dns_sk], 0xFF             ; and the reply would land on whoever
-    mov word [dns_lport], 0             ; the slot went to next - dns_in writes
-.nores:                                 ; SKO_RIP and calls tcp_syn on it
     mov byte [bx+SKO_TS], TS_CLOSED     ; nothing was ever connected, or it is
     mov byte [bx+SKO_ST], NSK_FREE      ; already over: the slot goes now
     call sk_ring_put                    ; ...and the ring with it (72.21)
-    jmp short .out
+    jmp short .no
 .fin:
     or  byte [bx+SKO_FL], SKF_FIN
     mov byte [bx+SKO_ST], NSK_CLOSED    ; ...but TCP keeps the slot until the
     call tcp_kick                       ; handshake is done (tcp_abort)
-.out:
-    pop bx
-    pop ax
-    clc
-    ret
 .no:
     pop bx
     pop ax
     clc                                 ; a close of a handle that is already
     ret                                 ; gone is not an error
+
+; --- sk_shut - what NETV_CLOSE and NETV_ABORT share -------------------------
+; in:  AL = a handle. out: CF=1 = no such socket; else BX = its record, a
+;      LISTENER's un-accepted children gone with it (sk_reap_kids, and the
+;      FTP server it was found by - SPEC.md 77), and a NAME still being
+;      looked up cancelled with the slot (dns_unres). An ESTABLISHED socket
+;      is never mid-lookup, so for eth_v_close's FIN path that last is a no-op
+; clobbers: AH
+sk_shut:
+    call eth_pump
+    call sk_h2p
+    jc  .out
+    cmp byte [bx+SKO_TS], TS_LISTEN
+    jne .mine
+    call sk_reap_kids
+.mine:
+    call dns_unres
+    clc
+.out:
+    ret
 
 ; --- NETV_ABORT --------------------------------------------------------------
 ; AL = a handle: the connection is dropped and THE SLOT COMES BACK NOW
@@ -378,20 +395,9 @@ eth_v_close:
 eth_v_abort:
     push ax
     push bx
-    call eth_pump
-    call sk_h2p
+    call sk_shut
     jc  .no                             ; already gone: not an error, exactly
-    cmp byte [bx+SKO_TS], TS_LISTEN     ; as eth_v_close is not
-    jne .mine
-    call sk_reap_kids
-.mine:
-    and byte [bx+SKO_FL], ~SKF_RES      ; a name still being looked up dies
-    mov ah, [bx+SKO_IDX]                ; with the slot, and [dns_sk] lives
-    cmp ah, [dns_sk]                    ; OUTSIDE the record, so sk_alloc's
-    jne .nores                          ; mem_zero cannot reach it and the
-    mov byte [dns_sk], 0xFF             ; reply would land on whoever the slot
-    mov word [dns_lport], 0             ; went to next
-.nores:
+                                        ; as eth_v_close is not
     or  byte [bx+SKO_FL], SKF_ORPH      ; ...which is what sends tcp_abort to
     mov al, NSK_FREE                    ; its .free arm
     call tcp_abort
@@ -410,7 +416,7 @@ eth_v_abort:
 ; disagree about. An ADDRESS is not: both ends answer with the IP of the
 ; machine the stack is running on, and over the cable that machine is the DOS
 ; box - which is the true answer there, because an inbound connection arrives
-; there and is forwarded (docs/NET-STACK-PLAN.md 1.5). One body, so the two
+; there and is forwarded (docs/plans/completed/NET-STACK-PLAN.md 1.5). One body, so the two
 ; transports cannot come to differ about it.
 ;
 ; **The zero test is not a formality.** `eth_ip` is four zeroes until DHCP
@@ -429,18 +435,15 @@ eth_v_addr:
                                 ; which is the caller's ES in the driver and
                                 ; the program's own DS on the DOS side
                                 ; (ethusr.inc)
-    xor ax, ax
-    pop di
-    pop si
-    pop cx
-    clc
-    ret
+    xor ax, ax                  ; (and CF=0: `xor` clears it)
+    jmp short .pop
 .none:
     mov ax, NETE_NOLINK
+    stc
+.pop:
     pop di
     pop si
     pop cx
-    stc
     ret
 
 ; --- NETV_LISTEN -------------------------------------------------------------
@@ -454,16 +457,14 @@ eth_v_listen:
     mov [bx+SKO_LP], cx
     mov byte [bx+SKO_TS], TS_LISTEN
     mov byte [bx+SKO_ST], NSK_LISTEN
-    xor ah, ah
-    pop cx
-    pop bx
-    clc
-    ret
+    xor ah, ah                  ; (and CF=0: `xor` clears it)
+    jmp short .pop
 .full:
     mov ax, NETE_FULL
+    stc
+.pop:
     pop cx
     pop bx
-    stc
     ret
 
 ; --- NETV_ACCEPT -------------------------------------------------------------
@@ -493,29 +494,188 @@ eth_v_accept:
     and byte [bx+SKO_FL], ~SKF_ACPT
     mov al, dl
     inc al
-    xor ah, ah
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
+    xor ah, ah                  ; (and CF=0: `xor` clears it)
+    jmp short .pop
 .next:
     inc dl
     loop .l
-    xor ax, ax                  ; nobody yet, which is the ORDINARY answer
+    xor ax, ax                  ; nobody yet, which is the ORDINARY answer -
+    pop si                      ; a listener polls for it every tick, so it
+    pop dx                      ; keeps its own pops rather than a jump to
+    pop cx                      ; the shared ones
+    pop bx
+    ret
+.no:
+    mov ax, NETE_HANDLE
+    stc
+.pop:
     pop si
     pop dx
     pop cx
     pop bx
+    ret
+
+
+; =============================================================================
+; THE RAW VERBS - whole frames, for a consumer that IS a stack (SPEC.md 72.22)
+; =============================================================================
+; netpkg.inc carries the contract and the reasoning. These three are short
+; because every hard part of them is already written: ne_tx and ne_rx are the
+; link layer the socket half sits on, and usr_read/usr_write are the caller's
+; segment. What is new is only WHO the frames belong to.
+;
+; **ETH_NORAW, BECAUSE THIS FILE HAS TWO HOSTS** (SPEC.md 72.22.5). ether.asm
+; is one and drivers/net/os88net.asm is the other - the DOS end of the cable
+; runs the SAME stack (SPEC.md 62.11.1), and it reaches these verbs through no
+; table at all: eth_vtab lives in ether.asm. So on that host they are 215
+; bytes of a shipped .COM that nothing can call. The gate is ETH_NOEMIT's
+; shape and sits beside it in the same includer, for the same reason.
+%ifndef ETH_NORAW
+
+; --- NETV_RAW ----------------------------------------------------------------
+; in AL = 1 claim / 0 release.
+;
+; **THE CLAIM STOPS eth_pump, WHICH IS WHY IT IS A CLAIM AND NOT A FLAG.**
+; A second consumer would not corrupt anything - ne_rx is one frame at a time
+; and the card mutex is above us - it would simply make frames vanish, one
+; stack getting the ones the other was waiting for. That is the failure this
+; project keeps writing down as the expensive kind: nothing reports an error
+; and the symptom is a protocol that stalls.
+eth_v_raw:
+    or  al, al
+    je  .release
+    cmp byte [eth_raw], 0
+    jne .held
+    mov byte [eth_raw], 1
+    mov word [eth_nraw], 0      ; the counters are per CLAIM, so a probe can
+    mov word [eth_nrawtx], 0    ; read them without knowing what ran before it
+    or  di, di                  ; ...AND THE STATION ADDRESS, because a
+    jz  .nomac                  ; consumer that is the stack now cannot build
+    push cx                     ; one frame without it (netpkg.inc)
+    push si
+    mov si, eth_mac
+    mov cx, 6
+    call usr_write              ; SI ours, DI theirs
+    pop si
+    pop cx
+.nomac:
     clc
     ret
-.no:
-    mov ax, NETE_HANDLE
+.release:
+    mov byte [eth_raw], 0       ; **A RELEASE ALWAYS SUCCEEDS** (netpkg.inc):
+    clc                         ; the DOS box calls it on every exit path it
+    ret                         ; has, including the ones that never claimed
+.held:
+    mov ax, NETE_BUSY
+    stc
+    ret
+
+; --- NETV_RAWTX --------------------------------------------------------------
+; in SI = the frame, CX = its length, DX = the segment it is in (0 = the
+;    caller's own).
+eth_v_rawtx:
+    push bx
+    push cx
+    push si
+    push di
+    push word [eth_useg]            ; **DX NAMES THE SEGMENT** (SPEC.md
+    call eth_rawseg                 ; 72.22.4): a consumer moving 1.5KB a frame
+    cmp byte [eth_raw], 0           ; should not have to keep the buffer in its
+    je  .noclaim                    ; own image, and OSAPI_DRV_CALL can only
+                                    ; put the CALLER's segment in [eth_useg]
+    cmp cx, EH_SIZE             ; shorter than an Ethernet header is not a
+    jb  .bad                    ; short frame, it is a wrong one - ne_tx pads
+    cmp cx, NE_FRAME            ; to the 60-byte minimum itself
+    ja  .bad                    ; ...and too long is REFUSED, never truncated:
+                                ; a silently shortened frame is a checksum
+                                ; failure at the far end and a bug hunt here
+    mov di, eth_txb
+    call usr_read               ; SI theirs, DI ours, CX bytes
+    call ne_tx
+    jc  .gone
+    inc word [eth_ntx]          ; the same counter the stack's own frames use:
+    inc word [eth_nrawtx]       ; the Control Panel page is about the CARD
+    pop word [eth_useg]
+    pop di
     pop si
-    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.gone:
+    mov ax, NETE_NOLINK         ; the card never finished the previous transmit
+    jmp short .err
+.bad:
+    mov ax, NETE_ARG
+    jmp short .err
+.noclaim:
+    mov ax, NETE_NOLINK         ; **NOT NETE_ARG**: a caller that never claimed
+                                ; the wire is not making a malformed call, it
+                                ; is making one there is no wire for - and the
+                                ; frame it wanted to send would have gone out
+                                ; under a MAC our own stack is still using
+.err:
+    pop word [eth_useg]
+    pop di
+    pop si
     pop cx
     pop bx
     stc
     ret
 
+; --- NETV_RAWRX --------------------------------------------------------------
+; in DI = a buffer, CX = its capacity, DX = the segment it is in (0 = the
+;    caller's own).
+; out CF=0 with CX = the frame's TRUE length; CF=1 = nothing there.
+eth_v_rawrx:
+    push ax
+    push bx
+    push si
+    push di
+    push word [eth_useg]
+    call eth_rawseg             ; DX, as above
+    mov bx, cx                  ; **THE CAPACITY, BANKED BEFORE ne_rx**, which
+                                ; returns the frame's length in the same
+                                ; register the caller passed the capacity in
+    cmp byte [eth_raw], 0
+    je  .none                   ; no claim, no frames - and it reads as an
+                                ; empty ring rather than an error, because a
+                                ; poll loop is the only thing that calls this
+    call ne_rx                  ; CF=1 = empty; CX = the length in eth_rxb
+    jc  .none
+    inc word [eth_nrx]
+    inc word [eth_nraw]
+    push cx                     ; **THE TRUE LENGTH IS THE ANSWER** and the
+    cmp cx, bx                  ; COPY is what the capacity bounds. A caller
+    jbe .fits                   ; told "1514" by a 64-byte buffer knows it lost
+    mov cx, bx                  ; bytes; one told "64" would think that was the
+.fits:                          ; frame and read a truncated header as a whole
+    mov si, eth_rxb
+    call usr_write              ; SI ours, DI theirs, CX bytes
+    pop cx
+    pop word [eth_useg]
+    pop di
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+.none:
+    pop word [eth_useg]
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+; --- eth_rawseg - DX names the buffer's segment, 0 = the caller's own --------
+; The two raw verbs both want it and both have banked [eth_useg] already.
+eth_rawseg:
+    or  dx, dx
+    jz  .keep
+    mov [eth_useg], dx
+.keep:
+    ret
+
+%endif                          ; ETH_NORAW

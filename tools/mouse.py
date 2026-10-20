@@ -40,7 +40,6 @@ mouse.inc's decoder looks. Verified end to end against this kernel: only
 """
 import subprocess
 import sys
-import time
 
 ARGV = sys.argv[1:]
 SCREEN_W, SCREEN_H = 640, 480
@@ -66,7 +65,7 @@ def chunks(d):
         d -= c
 
 
-def paced(moves):
+def paced(moves, after=None):
     """Emit moves down ONE connection with a sleep between each.
 
     The msmouse backend runs at 1200 baud - about 25ms per 3-byte packet -
@@ -75,12 +74,21 @@ def paced(moves):
     hide that on its own; on a fast host it is not, and the symptom is a
     cursor that does not move at all while every screendump still looks
     plausible. Pace it explicitly instead (CLAUDE.md's documented rule).
+
+    PACE IS A HOST SLEEP ON PURPOSE: it is the LINE's time, and the line is
+    a QEMU device on QEMU's virtual clock, which follows the host's without
+    -icount. What the GUEST must have had - the settle after a walk, a
+    button held - is `after`, a `gsleep` in guest ticks (tools/qmp.py).
     """
     cmds = []
     for cx, cy in moves:
         cmds += [f"mouse_move {cx} {cy}", f"sleep {PACE}"]
-    for i in range(0, len(cmds), 60):   # keep argv a sane length
-        hmp(*cmds[i:i + 60])
+    batches = [cmds[i:i + 60] for i in range(0, len(cmds), 60)] or [[]]
+    if after:                           # the settle rides the last batch
+        batches[-1] = batches[-1] + [after]
+    for b in batches:                   # keep argv a sane length
+        if b:
+            hmp(*b)
 
 
 def move(dx, dy):
@@ -89,8 +97,7 @@ def move(dx, dy):
         xs.append(0)
     while len(ys) < len(xs):
         ys.append(0)
-    paced(list(zip(xs, ys)))
-    time.sleep(0.15)
+    paced(list(zip(xs, ys)), after="gsleep 0.15")
 
 
 def goto(x, y):
@@ -113,15 +120,13 @@ def main():
                   file=sys.stderr)
             return 2
         btn = BTN_R if cmd.startswith("r") else BTN_L
-        hmp(f"mouse_button {btn}" if cmd.endswith("down") else "mouse_button 0")
-        time.sleep(0.15)
+        hmp(f"mouse_button {btn}" if cmd.endswith("down") else "mouse_button 0",
+            "gsleep 0.15")
     elif cmd in ("click", "rclick"):
         btn = BTN_R if cmd == "rclick" else BTN_L
         goto(int(args[0]), int(args[1]))
-        hmp(f"mouse_button {btn}")
-        time.sleep(0.2)
-        hmp("mouse_button 0")
-        time.sleep(0.2)
+        hmp(f"mouse_button {btn}", "gsleep 0.2", "mouse_button 0",
+            "gsleep 0.2")
     elif cmd == "shot":
         hmp(f"screendump {args[0]}")
     else:

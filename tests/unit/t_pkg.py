@@ -31,6 +31,7 @@ FLOPPY, because by then their job is over:
      independent gates stopping a `.DRV` being double-clicked into the
      application loader - the first being that the mount only types `*.O88`.
 """
+import glob
 import os
 import struct
 import sys
@@ -40,9 +41,13 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from harness import check, eq, done                       # noqa: E402
 from t_image import Vol, read, SYSTEM_IMAGES, DATA_IMAGES  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88drv                                            # noqa: E402
+import os88pkg                                            # noqa: E402
 
 MAGIC = 0x384F                       # 'O','8'
-V_APP, V_DRV, V_MOD = 3, 4, 5        # package / driver / on-demand module
+V_APP, V_DRV, V_MOD = os88pkg.PKG_FMT, os88drv.DRV_VER, 5  # package / driver / module
+                                     # (SPEC.md 20.2.0: the first two move with the API table)
 DISPATCH = bytes((0xFF, 0xD5, 0xCB))  # call bp / retf, at +12
 HEADER = 32
 ICON_END = 96
@@ -52,31 +57,54 @@ DRV_MAX = 40 * 1024                  # DRV_MAX_KB in kernel/driver.inc
 # driver's own loadable half (OS88_OVERLAY, SPEC.md 52.11), which the kernel
 # never loads - its OWNER does - and which is stamped here because the header,
 # the dispatcher and the one-claim load discipline are identical.
-DRV_CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file",
+DRV_CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file", 6: "point", 7: "ems",
+               8: "file2",
                0x40: "overlay"}
 MAP_MAGIC = b"O8MM"
 MOD_H_IMG, MOD_H_NENT = 8, 10
 
 
-def _mod_nent():
-    """MOD_NENT, READ OUT OF kernel/mod.inc rather than copied - which is the
-    lesson tools/os88mod.py records against itself after a bare 4 here failed
-    a build with a message naming a constant this side did not have."""
-    import re as _re
-    src = open(os.path.join(ROOT, "kernel/mod.inc"), errors="replace").read()
-    m = _re.search(r"^MOD_NENT\s+equ\s+(\d+)", src, _re.M)
-    return int(m.group(1)) if m else 8
-
-
-MOD_NENT = _mod_nent()
 
 
 def app(blob, nm, flags, entry, image, bss):
     """SPEC.md 20.2 - a v3 application package."""
-    check(not (flags & 0xF8), "%s: no reserved flag bits" % nm, got=hex(flags),
-          why="bit 0 is an embedded icon, bit 1 an association block (SPEC.md "
-              "54.6) and bit 2 says the FILE is longer than the image on "
-              "purpose (SPEC.md 20.12). Bits 3-7 are nobody's yet")
+    # Every bit of the flags byte has a meaning now: 0 an embedded icon, 1 an
+    # association block (SPEC.md 54.6), 2 the FILE longer than the image on
+    # purpose (SPEC.md 20.12), 3-4 SHORTER because compressed and in which
+    # format (SPEC.md 20.13), 5 a shipped document glyph (SPEC.md 54.3.2), 6
+    # OS88_F_DESK (SPEC.md 11.103.9) and 7 OS88_F_STIK, the Sticky App card
+    # (SPEC.md 110.12) - which, being in the clear prefix, is checked here off
+    # the FILE as the menu reads it, compressed or not.
+    if flags & 0x80:
+        at = (96 if flags & 1 else 32) + (16 if flags & 2 else 0) + \
+            (16 if flags & 0x20 else 0)     # the card follows the prefix,
+        card = blob[at:at + 192]            # counted here rather than asked
+        ok = (len(card) == 192 and card[0:4] == b"SA\x01\x00"
+              and 0 in card[4:28] and card[4] != 0 and 0 in card[28:64])
+        check(ok, "%s: its Sticky App card is where bit 7 says" % nm,
+              got=card[:28],
+              why="flags bit 7 promises a card the Sticky Apps menu reads "
+                  "out of the first sector (SPEC.md 110.12)")
+    if flags & 0x20:
+        check(flags & 3 == 3, "%s: the shipped glyph has an icon and a "
+              "declaration in front of it" % nm, got=hex(flags),
+              why="SPEC.md 54.3.2: the block sits at 112, after both")
+        check(entry >= 128, "%s: entry is past the document-glyph block" % nm,
+              got=hex(entry), want=">= 0x80")
+        check(any(blob[112:120]), "%s: the shipped glyph is not blank" % nm,
+              why="all-zero is the UNRESOLVED sentinel (SPEC.md 54.2), so the "
+                  "kernel would reduce the icon after all")
+        check(not any(blob[120:128]), "%s: the glyph block's reserved bytes are 0" % nm)
+    if flags & 0x0C == 0x0C:
+        # PARTS AND A PACKED IMAGE (SPEC.md 20.13.8): the image's own stream
+        # ends at the link word, and it has to unpack to the image exactly -
+        # what the kernel's step 6a will do with those bytes
+        plen = struct.unpack_from("<H", blob, 4)[0]
+        if check(32 < plen < image and plen <= len(blob),
+                 "%s: the packed image's length lies inside the image and "
+                 "the file" % nm, got=plen, want="33..%d" % (image - 1)):
+            check(len(os88pkg.image_unwrap(blob)) == image,
+                  "%s: the packed image unpacks to %d bytes" % (nm, image))
     lo = ICON_END if flags & 1 else HEADER
     check(lo <= entry < image, "%s: entry +0x%04X is inside the image" % (nm, entry),
           got=hex(entry), want="0x%04X..0x%04X" % (lo, image))
@@ -107,7 +135,12 @@ def module(blob, nm):
     assumption about a format it had not read.
     """
     ver, ident, img, nent = blob[2], blob[3], struct.unpack_from("<H", blob, MOD_H_IMG)[0], blob[MOD_H_NENT]
-    check(1 <= nent <= MOD_NENT, "%s: declares 1..%d entries" % (nm, MOD_NENT),
+    # There is no MOD_NENT (SPEC.md 2.8.1): the KERNEL's count for this
+    # module rides in kernel.bin's O8MM map and tools/os88mod.py demands
+    # equality there. What is checkable from the file alone is that it has
+    # an entry and that its entry table fits inside it.
+    check(nent >= 1 and 12 + 2 * nent <= img,
+          "%s: declares at least one entry, and its table fits" % nm,
           "mod_check refuses anything else at run time, and a module the kernel "
           "refuses is a Control Panel page that does not open", got=nent)
     check(img <= len(blob), "%s: header image size is inside the file" % nm,
@@ -128,18 +161,31 @@ def header(blob, nm):
     magic, ver, b3, link, entry, image, b6 = struct.unpack_from("<HBBHHHH", blob, 0)
     eq(magic, MAGIC, "%s: magic is 'O8'" % nm)
     if not check(ver in (V_APP, V_DRV, V_MOD),
-                 "%s: version is 3 (app), 4 (driver) or 5 (module)" % nm, got=ver):
+                 "%s: version is %d (app), %d (driver) or %d (module)"
+                 % (nm, V_APP, V_DRV, V_MOD), got=ver):
         return None
     if ver == V_MOD:
         module(blob, nm)
         return ver
-    eq(link, 0, "%s: links at org 0" % nm,
-       "a v3/v4 package owns a segment and is loaded on a paragraph boundary "
-       "(SPEC.md 20.1) - a non-zero link base is a v2 image")
+    if not (ver == V_APP and b3 & 0x0C == 0x0C):
+        eq(link, 0, "%s: links at org 0" % nm,
+           "a v3/v4 package owns a segment and is loaded on a paragraph "
+           "boundary (SPEC.md 20.1) - a non-zero link base is a v2 image, and "
+           "the one package whose link word is not zero is a parted one with "
+           "a packed image (SPEC.md 20.13.8)")
     eq(blob[12:15], DISPATCH, "%s: carries the dispatcher at +12" % nm,
        "the kernel far-calls +12 to reach every callback (SPEC.md 20.2); a "
        "package without it sends the kernel into its own data on the first paint")
-    if ver == V_APP and b3 & 4:
+    if ver == V_APP and b3 & 0x0C == 0x0C:
+        # PARTS AND A PACKED IMAGE (SPEC.md 20.13.8): the bound the kernel
+        # takes is the LINK WORD - the packed stream's length, which
+        # ld_check_hdr puts in [ld_fsz] in place of the file's - and app()
+        # holds it inside the image and the file. The FILE may be shorter
+        # than the image: MIDIRack's 36,490-byte image packs to 29,141 and
+        # its one part is 772, so the file is 29,956 (SPEC.md 105.9.5)
+        check(32 <= image <= 0xFFFF,
+              "%s: image %d fits the 16-bit field" % (nm, image), got=image)
+    elif ver == V_APP and b3 & 4:
         # FLAGS BIT 2: the file is longer than the image ON PURPOSE, and the
         # tail is the package's own to read (SPEC.md 20.12). The truncation
         # guard becomes image <= file, which is still exact about the half
@@ -151,6 +197,19 @@ def header(blob, nm):
               why="flags bit 2 lifts `image == file size`, not the bound - a "
                   "package whose image runs past its own file is a truncated "
                   "copy however the flag reads")
+    elif ver == V_APP and b3 & 8:
+        # COMPRESSED (SPEC.md 20.13.2): `image` keeps meaning the UNPACKED
+        # bytes, so the file is SHORTER than it - which is the case the
+        # truncated-file guard refuses without the bit, and the reason a
+        # compressed package needs no version bump to be refused by an older
+        # kernel.
+        check(image > len(blob),
+              "%s: compressed, so the image %d is bigger than its %d-byte file"
+              % (nm, image, len(blob)), got=image, want=">%d" % len(blob),
+              why="a compressed package that saved nothing should have been "
+                  "shipped uncompressed - os88pkg.py refuses to write one")
+        check(32 <= image <= 0xFFFF,
+              "%s: image %d fits the 16-bit field" % (nm, image), got=image)
     else:
         eq(image, len(blob), "%s: image size field matches the file" % nm)
     if ver == V_APP:
@@ -162,13 +221,21 @@ def header(blob, nm):
 
 def main():
     build = os.path.join(ROOT, "build")
-    arts, apps, drvs, mods = {}, 0, 0, 0
+    arts, apps, drvs, mods, drvs_cz = {}, 0, 0, 0, 0
     for f in sorted(os.listdir(build)):
         p = os.path.join(build, f)
         if not os.path.isfile(p) or not f.endswith((".o88", ".drv")):
             continue
         blob = read(p)
         arts[f.upper()] = blob
+        if f.endswith(".drv") and blob[:2] == b"CZ":
+            # A COMPRESSED DRIVER IS A 'CZ' FILE (SPEC.md 20.13.3.1): the header
+            # is inside the stream with everything else, so what the loader
+            # will check is the IMAGE the read delivers, and that is what the
+            # header tests below have to be made on. The file itself is what
+            # the freshness check further down compares against a floppy
+            drvs_cz += 1
+            blob = os88drv.image_unwrap(blob)
         ver = header(blob, f)
         if ver == V_APP:
             apps += 1
@@ -181,12 +248,83 @@ def main():
         elif ver == V_MOD:
             mods += 1
 
+    # HDDTOOL.DRV IS COMPRESSED WITH THE REST (SPEC.md 20.13.5.1) - and it was
+    # the one artefact that must NOT be, for a reason worth keeping: it is read
+    # by HDD.DRV with OSAPI_FILE_READ rather than by a loader, and under the v4
+    # body format that read handed back what was on the disk, the 32-byte
+    # header crossing compression VERBATIM, so all seven of hd_tool_check's
+    # tests passed and the driver far-called [es:6] into a stream - a crash on
+    # Format or Install, on a machine with a hard disk. Since 20.13.3.1 a
+    # compressed driver is a 'CZ' file and that read is the transparent one,
+    # so the tool arrives expanded into a claim cut from its image, and the
+    # loop above has already checked what it expands to as a driver.
+    #
+    # What THIS asserts is that the rule did not quietly fall back: when the
+    # build is compressing - any OTHER .drv is a 'CZ' file - the tool is one
+    # too. `make PKGZ=` packs nothing and asserts nothing here.
+    tool = arts.get("HDDTOOL.DRV")
+    if tool is not None:
+        others = drvs_cz - (1 if tool[:2] == b"CZ" else 0)
+        if others:
+            eq(tool[:2], b"CZ", "HDDTOOL.DRV is compressed with the rest",
+               "its Makefile rule takes $(OS88DRV) like every other driver, "
+               "and a plain tool beside %d compressed drivers is that rule "
+               "falling back (SPEC.md 20.13.5.1)" % others)
+
     # Everything else in build/ that an image can carry, so the freshness
     # check below covers the kernel, the fonts, the logo and README.TXT too.
     for f in sorted(os.listdir(build)):
         p = os.path.join(build, f)
         if os.path.isfile(p) and not f.endswith((".o88", ".drv")):
             arts.setdefault(f.upper(), read(p))
+    # ...except the faces, which ship PACKED out of build/faces/ under the
+    # same basename (SPEC.md 6.4.1, 20.13.5) - the plain build/*.f88 is what
+    # os88face wrote and what the host reads; the disk gets the container.
+    faces = os.path.join(build, "faces")
+    if os.path.isdir(faces):
+        for f in sorted(os.listdir(faces)):
+            p = os.path.join(faces, f)
+            if os.path.isfile(p) and f.endswith(".f88"):
+                arts[f.upper()] = read(p)
+    # ...and the DATA files, same shape and a sharper reason (SPEC.md 20.13.5):
+    # build/zdata-<fmt>/ is what os88lz wrapped and what the disk carries, and
+    # it OVERRIDES a top-level file of the same basename. That is not a tidy
+    # preference, it is a false failure fixed: `make browsertest` writes an
+    # UNCOMPRESSED build/DEMO.HTM as its own fixture, and with only the
+    # top-level scan the next plain `make` compared the shipped compressed
+    # DEMO.HTM against it and reported every apps image stale - naming the one
+    # failure mode this row exists to catch, about a build that was current.
+    # It also widens the row: without this the four data files were compared
+    # against nothing at all unless something else had left a copy in build/.
+    for zd in sorted(glob.glob(os.path.join(build, "zdata*"))):
+        if not os.path.isdir(zd):
+            continue
+        for f in sorted(os.listdir(zd)):
+            p = os.path.join(zd, f)
+            if os.path.isfile(p):
+                arts[f.upper()] = read(p)
+
+    # ...and DOS.O88 is TWO artifacts with one name (SPEC.md 96.40).  The APPS
+    # disks carry build/dos.o88, the plain compressed package; the SYSTEM
+    # disks carry build/kdos/DOS.O88, the same package with kern_dos as a
+    # PART, which is what makes the Memory page's third arm live rather than
+    # greyed.  A parted image cannot be compressed, so the two differ in every
+    # byte from offset 3 - which is exactly what this row said, about a build
+    # that was current, until it was taught that the SYSTEM disk's copy has a
+    # source of its own.
+    # WHICH ONE THE SYSTEM DISK CARRIES IS THE MAKEFILE'S ANSWER and not this
+    # row's guess: $(SYSROOTARG) names it, and it has been both.  Reading the
+    # variable keeps the row right on either setting, where a hard-coded
+    # preference would report a current build stale the day it is flipped -
+    # which is the one failure mode this row exists to catch.
+    parted = os.path.join(build, "kdos", "DOS.O88")
+    sysarts = dict(arts)
+    mk = os.path.join(ROOT, "Makefile")
+    if os.path.exists(parted) and os.path.exists(mk):
+        for ln in open(mk):
+            if ln.startswith("SYSROOT :=") and "kdos/DOS.O88" in ln:
+                sysarts["DOS.O88"] = read(parted)
+                break
 
     # ...and every file on every image must BE one of them.
     compared = 0
@@ -200,9 +338,10 @@ def main():
                 continue
             stem, ext = name11[:8].strip().decode(), name11[8:].strip().decode()
             fname = ("%s.%s" % (stem, ext)) if ext else stem
-            if fname.upper() not in arts:
+            table = sysarts if img in SYSTEM_IMAGES else arts
+            if fname.upper() not in table:
                 continue                            # generated on the volume
-            want = arts[fname.upper()]
+            want = table[fname.upper()]
             chain, _ = v.chain(clus) if clus else ([], 0)
             got = b"".join(v.blob[v.cluster_lba(c) * v.byts:
                                   v.cluster_lba(c) * v.byts + v.spc * v.byts]
@@ -212,8 +351,9 @@ def main():
                "nothing - it boots, it looks right, and it is the previous build")
             compared += 1
 
-    print("t_pkg: %d packages, %d drivers, %d modules, %d files compared against build/"
-          % (apps, drvs, mods, compared))
+    print("t_pkg: %d packages, %d drivers, %d modules (%d of the .drv files are "
+          "'CZ' containers), %d files compared against build/"
+          % (apps, drvs, mods, drvs_cz, compared))
     done("t_pkg")
 
 

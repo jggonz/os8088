@@ -27,7 +27,7 @@
 ; THE POOL HAS A KERNEL CONSUMER, and this banner said the opposite for
 ; several releases - which is worth knowing before reading any comment here
 ; as a description of live behaviour, and before deleting anything on the
-; strength of it. **kernel/clone.inc declares all four published slots and
+; strength of it. **kernel/diskops.inc declares all four published slots and
 ; calls every one**: clo_xmsup asks xm_caps for the free KB and xm_alloc for
 ; a whole floppy's worth, so a same-drive clone makes ONE trip to the disk
 ; box instead of twenty-two (SPEC.md 18.99.4); clo_free gives it back, and
@@ -81,7 +81,7 @@ XMV_SIZE    equ 10
 
 ; --- the copy's parameter block (SPEC.md 41.12.2) ----------------------------
 ; BOTH ENDS TRAVEL AS 32-BIT LINEAR ADDRESSES, and that is forced rather than
-; chosen: slot 0x01A8 takes the conventional end as ES:SI, and drv_call loads
+; chosen: slot 0x016C takes the conventional end as ES:SI, and drv_call loads
 ; ES with KERNEL_SEG on its way into the image, so the caller's segment cannot
 ; survive the crossing. Folding it down here is arithmetic the resident
 ; xm_copy did internally anyway - and a block rather than registers because
@@ -157,7 +157,7 @@ xm_kb:      dw 0                ; THE GATE. KB the pool holds, and "the
 ;           is set and xm_boot will read the image
 ;
 ; THE PROBE IS EXACT, NOT HEURISTIC, and that is what separates it from
-; drv_snd_sniff (SPEC.md 51.3.1). That one runs an OPL2 timer dance which is
+; drv_sniff (SPEC.md 51.3.1). That one runs an OPL2 timer dance which is
 ; merely CORRELATED with the driver finding a card, and can be wrong in both
 ; directions - hence the SNDSNIFF= knob. This runs the same int 15h AH=88h the
 ; overlay sizes the store with, so a machine it skips is a machine that would
@@ -177,15 +177,15 @@ xm_kb:      dw 0                ; THE GATE. KB the pool holds, and "the
 ; reboot hazard in it (SPEC.md 41.2), now runs only on a machine that has
 ; already said it has RAM to reach. On tier 0 this is one compare.
 ;
-; .ovl, called from kmain, for drv_snd_sniff's own reason: drv_boot's first
+; .boot2, called from kmain, for drv_sniff's own reason: drv_boot's first
 ; mount writes over the overlay, so a probe called from there would be running
 ; FAT. The overlay costs no RAM at all, so the sniff is free of both guards.
 ; -----------------------------------------------------------------------------
-section .ovlw
+section .ovl
 
 xm_sniff:
     call FAT_SEG:cpu_detect     ; THE TIER THIS READS, PUBLISHED FIRST. kmain
-                                ; made two adjacent OVWCALLs and now makes one:
+                                ; made two adjacent OVLCALLs and now makes one:
                                 ; 5 resident bytes of .text for 5 of overlay,
                                 ; which is forfeit at the first mount. A far
                                 ; call into the segment we are already running
@@ -209,9 +209,9 @@ xm_sniff:
     retf                        ; FAR, and the shim that used to own this
                                 ; return is deleted (SPEC.md 2.6.1, 2.5.2):
                                 ; the caller names this body directly through
-                                ; OVWCALL - a plain `call FAT_SEG:%%1` - and
-                                ; nothing near-calls it. NOT OVLGATE1: that is
-                                ; the .ovl half's gate and this body is .ovlw,
+                                ; OVLCALL - a plain `call FAT_SEG:%%1` - and
+                                ; nothing near-calls it. NOT SPLGATE1: that is
+                                ; the blob half's gate and this body is .ovl,
                                 ; which the first mount overwrites rather than
                                 ; spl_finish
 
@@ -245,8 +245,8 @@ section .cold                   ; xm_boot is COLD, and that is not a saving:
 ; published - the snd_live ordering of SPEC.md 34.7. Every cell below tests
 ; that one word, so it must not be visible before what it gates.
 ; -----------------------------------------------------------------------------
-section .ovl                   ; THE BOOT OVERLAY (SPEC.md 2.5.2,
-                                ; docs/LAST-DROP-BYTES.md row 5): kmain calls
+section .boot2                   ; THE BOOT OVERLAY (SPEC.md 2.5.2,
+                                ; docs/plans/LAST-DROP-BYTES.md row 5): kmain calls
                                 ; this once, right at the end, and the XMS
                                 ; driver it attaches outlives it - what does not
                                 ; is the attaching. The three drv_* edges below
@@ -296,7 +296,7 @@ xm_boot_x:
                                 ; is the image's: the row is read through DS
                                 ; BEFORE DS moves, and ES takes the KERNEL's
                                 ; from DS rather than from CS - this body is
-                                ; `.ovl` and CS is the BLOB's segment here,
+                                ; `.boot2` and CS is the BLOB's segment here,
                                 ; not KERNEL_SEG
     push ds
     push ds
@@ -312,7 +312,7 @@ xm_boot_x:
     and dl, CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL
     and byte [cpu_feat], ~(CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL) & 0xFF
     or [cpu_feat], dl           ; the A20/HMA/UNREAL bits, so cpu_info's AH
-                                ; (slot 0x0188) keeps meaning what it always
+                                ; (slot 0x0155) keeps meaning what it always
                                 ; meant. THREE BITS, not the whole byte: this
                                 ; runs after cpu_detect, and a plain store
                                 ; here silently wiped the coprocessor bit that
@@ -332,7 +332,7 @@ xm_boot_x:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain reaches this through OVLGATE1
+    retf                        ; FAR: kmain reaches this through SPLGATE1
 .refuse:
     mov bx, xm_row              ; ...and here too, for the same reason. This
                                 ; path worked BY LUCK on the machine it was
@@ -354,7 +354,7 @@ xm_boot_x:
     jmp short .out              ; nothing was hooked
 
 ; The far entry kmain used to reach xm_boot through is GONE with the move: the
-; body is in the blob and OVLGATE1 is the crossing now (SPEC.md 2.5.2).
+; body is in the blob and SPLGATE1 is the crossing now (SPEC.md 2.5.2).
 
 section .text
 
@@ -371,7 +371,7 @@ section .text
 ; xm_free, xm_copy and xm_release_rec - are published-slot or teardown bodies
 ; that promise the caller's ES back, and NOT ONE of them banks ES itself; the
 ; `push es`/`pop es` below is what they promise with. No test asserts ES
-; across slot 0x01A8, so a future edit that drops it would be silent.
+; across slot 0x016C, so a future edit that drops it would be silent.
 ;
 ; drv_svc_call with the row baked in rather than taken in BX, and that is the
 ; point: BX is an ARGUMENT here (BL carries the requesting instance to ALLOC
@@ -402,9 +402,11 @@ xm_dsp:
     push cs
     pop es                      ; ES = KERNEL_SEG: what the image reads the
     mov ds, [es:xm_row+DRVR_SEG]    ; things it was handed through
+    call COLD_SEG:wm_nest_pushd_x   ; SPEC.md 66.6.3 - .text, so far
     call far [es:xm_row+DRVR_DISP]
     pop es
-    pop ds
+    pop ds                          ; ...and DS names the kernel again, which
+    call COLD_SEG:wm_nest_pop_x     ; is the segment the pop reads
     ret
 
 ; -----------------------------------------------------------------------------
@@ -433,7 +435,7 @@ xm_ownbl:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_caps - what is left up there? (osapi slot 0x0190's body)
+; xm_caps - what is left up there? (osapi slot 0x015A's body)
 ;
 ; in:       -
 ; out:      AX = KB the pool can still hand out (0 = none, and xm_alloc /
@@ -466,7 +468,7 @@ xm_caps:
     ret                         ; promises is still the `xor`'s 0
 
 ; -----------------------------------------------------------------------------
-; xm_alloc - first-fit a run of extended memory (osapi slot 0x0198's body)
+; xm_alloc - first-fit a run of extended memory (osapi slot 0x0160's body)
 ;
 ; in:       DX:AX = bytes wanted (rounded up to 1KB)
 ; out:      CF = 0 and DX:AX = the block's 32-bit linear base;
@@ -487,11 +489,12 @@ xm_alloc:
                                 ; to assemble the file
 .none:
     xor ax, ax
-    stc
+.stc:                           ; ...and xm_free's own refusal, which is these
+    stc                         ; two bytes and wants AX left alone
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_free - give a block back (osapi slot 0x01A0's body)
+; xm_free - give a block back (osapi slot 0x0166's body)
 ;
 ; in:       DX:AX = a base this caller owns
 ; out:      CF = 0 freed and merged with the adjacent free runs;
@@ -500,7 +503,7 @@ xm_alloc:
 ; -----------------------------------------------------------------------------
 xm_free:
     call xm_have
-    je .none
+    je xm_alloc.stc
     push bp
     mov bp, [xm_svc+XMV_FREE]
 .stamp:                         ; ...and xm_alloc arrives HERE, having pushed
@@ -515,13 +518,10 @@ xm_free:
     pop bx                      ; pop leaves CF alone, and BX is no output
     pop bp
     ret
-.none:
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; xm_copy - move bytes between conventional and extended memory
-;           (osapi slot 0x01A8's body, SPEC.md 41.5)
+;           (osapi slot 0x016C's body, SPEC.md 41.5)
 ;
 ; in:       ES:SI = the conventional end, DX:AX = the extended end (32-bit
 ;           linear), CX = bytes (even, <= XM_MAX_COPY), DI = 0 conventional
@@ -585,11 +585,10 @@ xm_copy:
                                 ; pops it.
     mov [si+XMC_DIR], al
     mov ax, es                  ; the conventional end, as linear ES*16 + SI,
-    mov dx, ax                  ; SI being the offset now parked in BP
-    mov cl, 4
-    shl ax, cl
-    mov cl, 12
-    shr dx, cl
+    mov dx, 16                  ; SI being the offset now parked in BP. ONE
+    mul dx                      ; mul where two shift pairs were (size pass
+                                ; 10, -5). Only a 286 or later reaches this
+                                ; line (xm_sniff), where a mul is ~21 clocks
     add ax, bp                  ; a REGISTER add, so SS-vs-DS does not reach it
     adc dx, 0
     mov [si+XMC_CONV], ax
@@ -648,20 +647,33 @@ xm_copy:
 ; slot and this will never free it. Claim from a callback (SPEC.md 41.5.1).
 ; -----------------------------------------------------------------------------
 xm_release_rec:
-    call xm_have
-    je .out                     ; no overlay, so no table and nothing to free
     push ax
     push bx
     push cx
     push bp
-    call inst_idx               ; AL = the instance slot
+    push es
+    call inst_idx               ; AL = the instance slot, ONCE for the two
+    push ax                     ; releases below (the driver eats AX)
+    push cs                     ; FIRST, AND ON EVERY MACHINE: the instance's
+    pop es                      ; EXPANDED memory (SPEC.md 107.1), which an
+    mov bx, DRVC_EMS * 256 + EMSV_GONE ; 8088 can have and the store above
+    call drv_pkg_call_x         ; 1MB it cannot. EMS.DRV's own door, with ES
+    pop ax                      ; = the kernel (a package's call never has
+                                ; it): no driver, no door, CF = 1 and nothing
+                                ; done. The driver keeps every register but
+                                ; AX and BX for this verb; it is HERE and not
+                                ; in inst_rel_rec because this has the fourth
+                                ; caller, ld_unreserve's abort sweep
+    call xm_have
+    je .out                     ; no overlay, so no table and nothing to free
     mov bp, [xm_svc+XMV_RELINST]
-    call xm_dsp
+    call xm_dsp                 ; (sets its own ES)
+.out:
+    pop es
     pop bp
     pop cx
     pop bx
     pop ax
-.out:
     ret
 
 section .bss
@@ -673,13 +685,13 @@ xm_cblk:    resb XMC_SIZE       ; the copy's parameter block, read by the
 %else
 ; =============================================================================
 ; kern_small: the four slots keep their NUMBERS and their CONTRACTS
-; (SPEC.md 20.8 rule 4, SPEC.md 41.11, docs/KERN-SPLIT-PLAN.md 3)
+; (SPEC.md 20.8 rule 4, SPEC.md 41.11, docs/history/KERN-SPLIT-PLAN.md 3)
 ;
 ; The tables must stay the same length in both builds, or a package built
 ; against one kernel far-calls into whatever follows the other's table - which
 ; here is the debug registry, not code. It assembles, it loads, it launches,
 ; and it dies somewhere unrelated. So a kern_big-only slot is present here as
-; a cell pointing at a body that answers, exactly as retired slot 0x01E8 is.
+; a cell pointing at a body that answers, exactly as retired slot 0x0190 is.
 ;
 ; THE ANSWERS ARE TIER 0's, BYTE FOR BYTE, and that is the safety argument
 ; rather than a convenience. The target machine is an 8088, so a kern_big
@@ -702,7 +714,7 @@ xm_cblk:    resb XMC_SIZE       ; the copy's parameter block, read by the
 section .text
 
 ; -----------------------------------------------------------------------------
-; xm_caps - what is left up there? (osapi slot 0x0190's body). Nothing.
+; xm_caps - what is left up there? (osapi slot 0x015A's body). Nothing.
 ;
 ; out:      AX = 0 (no store), DX:CX = 0 (the pool base), BL = XM_MAX_BLKS
 ; clobbers: nothing else (BH is the caller's and stays that way; flags)
@@ -721,7 +733,7 @@ xm_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_alloc - first-fit a run of extended memory (slot 0x0198). There is none.
+; xm_alloc - first-fit a run of extended memory (slot 0x0160). There is none.
 ;
 ; in:       DX:AX = bytes wanted
 ; out:      CF = 1 and AX = 0 - "no store", xm_alloc's .nostore answer
@@ -733,18 +745,17 @@ xm_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_free - give a block back (slot 0x01A0). You cannot hold one.
+; xm_free - give a block back (slot 0x0166). You cannot hold one.
 ;
 ; in:       DX:AX = a base this caller owns
 ; out:      CF = 1 - not a base. DX:AX preserved, per the contract
 ; clobbers: nothing (flags)
 ; -----------------------------------------------------------------------------
-xm_free:
-    stc
-    ret
+xm_free         equ osapi_snd_fm    ; `stc` / `ret` - snd.inc's kern_small
+                                ; FM refusal, the same two bytes, named once
 
 ; -----------------------------------------------------------------------------
-; xm_copy - move bytes to or from the store (slot 0x01A8). There is nowhere.
+; xm_copy - move bytes to or from the store (slot 0x016C). There is nowhere.
 ;
 ; in:       ES:SI, DX:AX, CX, DI as SPEC.md 41.8 documents them
 ; out:      CF = 1 and AX = 1 - "no store", xm_copy's .e1 answer

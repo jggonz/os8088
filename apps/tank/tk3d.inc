@@ -3,12 +3,13 @@
 ;
 ; THE GEOMETRY (SPEC.md 85.5). Fixed point throughout, 8086 only, and the two
 ; expensive instructions on this machine - imul at ~140 clocks and idiv at
-; ~170 - are what the whole shape of this file is arranged around.
+; ~170 - are what the whole shape of this file is arranged around; the
+; projection no longer divides at all (tk_project, 85.5.3).
 ;
 ; ANGLES ARE BYTES. 256 units to the turn, so a heading wraps by being a byte
-; and the sine table is indexed with no masking at all; cos(a) is sin(a+64).
-; tksin.inc is sin * 16384, which is the largest scale that keeps a signed
-; word, and MUL14 below is the matching multiply.
+; and cos(a) is sin(a+64). tksin.inc is one quarter of sin * 16384, which is
+; the largest scale that keeps a signed word, and MUL14 below is the matching
+; multiply.
 ;
 ; THE WORLD IS A TORUS 8192 UNITS ROUND and the wrap is three instructions:
 ; mask a difference to 13 bits, fold the top half negative, and every
@@ -38,21 +39,40 @@
 
 ; -----------------------------------------------------------------------------
 ; tk_sincos - AL = angle; out AX = sin, BX = cos.  Clobbers nothing else.
+;
+; A QUARTER WAVE, not a whole one: tksin.inc is sin(0..64) - 65 words where it
+; was 256 - and the other three quarters are the same numbers read backwards
+; and negated, which tksin.inc's table was already exactly (sin(64 - i) is
+; sin(64 + i) and sin(128 + i) is -sin(i), to the unit). 382 bytes of image for
+; two folds a lookup; nothing on a pixel's path asks for a sine.
 ; -----------------------------------------------------------------------------
 tk_sincos:
-    push si
-    xor ah, ah
-    mov si, ax
-    shl si, 1
-    mov bx, [tk_sintab + si]        ; sin
-    add al, 64
-    xor ah, ah
-    mov si, ax
-    shl si, 1
-    mov ax, [tk_sintab + si]        ; cos
-    xchg ax, bx
-    pop si
+    add al, 64                      ; cos(a) = sin(a + 64)
+    call tk_sin1
+    sub al, 64
+    push bx                         ; BX = cos
+    call tk_sin1
+    mov ax, bx                      ; AX = sin
+    pop bx
     ret
+
+; tk_sin1 - AL = angle; out BX = sin.  Preserves every other register.
+tk_sin1:
+    mov bl, al
+    and bx, 63                      ; BX = the angle within its quarter
+    test al, 64
+    jz .rise
+    neg bx                          ; quarters 1 and 3 read it backwards:
+    add bx, 64                      ; 64 - i, which is 1..64
+.rise:
+    shl bx, 1
+    mov bx, [tk_sintab + bx]
+    test al, 128
+    jz .pos
+    neg bx                          ; quarters 2 and 3 are the negatives
+.pos:
+tk_ret:                             ; a lone `ret`, which is also the region's
+    ret                             ; relocation proc (tank.asm, 85.10.6)
 
 ; -----------------------------------------------------------------------------
 ; tk_camsetup - the camera's sine and cosine, once a frame
@@ -69,72 +89,185 @@ tk_camsetup:
     ret
 
 ; -----------------------------------------------------------------------------
-; tk_pdiv - AX = a projected offset: (DX:AX) / BX, clamped to +-4000
-; in:  DX:AX = a signed 32-bit product, BX = the depth (positive, >= TK_NEARZ)
-; out: AX.  clobbers CX, DX, SI
-;
-; THE CLAMP IS NOT COSMETIC. idiv raises int 0 when the quotient will not fit
-; a word, and a vertex a hand's breadth past the near plane projects to tens
-; of thousands - so the overflow case is the NORMAL one for anything close,
-; and an unguarded idiv here is a machine that reboots when a tank gets near.
-; The test is |DX| < BX/2, which is sufficient because |DX:AX| < (|DX|+1)*65536.
-; -----------------------------------------------------------------------------
-tk_pdiv:
-    mov cx, bx
-    shr cx, 1
-    mov si, dx
-    or si, si
-    jns .p
-    not si
-.p:
-    cmp si, cx
-    jb .safe
-    or dx, dx
-    js .neg
-    mov ax, 4000
-    ret
-.neg:
-    mov ax, -4000
-    ret
-.safe:
-    idiv bx
-    cmp ax, 4000
-    jle .lo
-    mov ax, 4000
-    ret
-.lo:
-    cmp ax, -4000
-    jge .done
-    mov ax, -4000
-.done:
-    ret
-
-; -----------------------------------------------------------------------------
 ; tk_project - one camera-space point onto the viewport
-; in:  AX = cx, BX = cy, CX = cz (cz >= TK_NEARZ)
+; in:  AX = cx, BX = yp (the height, PRE-SCALED: see tk_ktabs), CX = cz
+;      (cz >= TK_NEARZ)
 ; out: AX = screen x, BX = screen y (viewport-relative, clamped)
-; clobbers CX, DX, SI, DI
+; clobbers CX, DX, DI - and NOT SI, which tk_emit's vertex loop keeps its
+; model's heights in
+;
+; A TABLE AND A MULTIPLY, NOT A DIVIDE (SPEC.md 85.5.3). This was two imul and
+; two guarded idiv a vertex - about 1,400 cycles on the 8088 after 85.3.4's
+; rule, a third of the heavy scene's non-pixel floor. Now the depth picks a
+; row of ONE table built once a bracket, kx = sclx x 2048 / z, and each axis
+; is one imul and a shift. The table is exact below 1,024 units and bucketed
+; by 4 and then 16 beyond, which keeps every error under half a pixel where an
+; object is big and under a pixel where it is small (85.5.3 has the model).
+;
+; THE HEIGHT READS kx TOO (SPEC.md 85.5.3.1): it arrives already multiplied by
+; 64 x scly / sclx, so yp x kx >> 17 is the screen offset - the product's high
+; word and one sar - and a height never reaches the clamp below.
+;
+; THE CLAMP IS STILL NOT COSMETIC for x: a vertex a hand's breadth past the
+; near plane still projects to tens of thousands, and screen-space arithmetic
+; downstream wants +-4000. The high word of the product says so before any
+; shift: 4000 << 11 is 125 in DX.
 ; -----------------------------------------------------------------------------
+; THE TABLE STOPS AT THE DEEPEST VERTEX THERE CAN BE: tk_objcam culls an
+; object whose ORIGIN is past TK_FARZ, and a vertex is never further from its
+; origin than its model's reach - the tank's barrel tip, sqrt(130^2 + 330^2) =
+; 355, is the furthest of any. Rows past that were 104 bytes of bss nothing
+; could read; the clamp below stays, so a model that grows a longer reach
+; draws a hair small rather than reading past the table.
+;
+; AND THE BUCKET DOUBLES WITH EVERY OCTAVE OF DEPTH (SPEC.md 85.5.3.2): exact
+; below 512, then every 2, 4, 8 and 16 units an octave, so the depth error is
+; at most a 512th of the depth - the worst the 1,024 boundary already had -
+; everywhere. Each octave's row is the depth shifted and an add, with no
+; subtract: rows 512 + z/2, 512 + z/4, 768 + z/8 and 1024 + z/16 are what the
+; octaves' bases come to.
+TK_MREACH equ 360
+TK_KROWS  equ 1024 + (TK_FARZ + TK_MREACH) / 16 + 1
+%if TK_FARZ + TK_MREACH < 4096
+  %error "the deepest vertex is no longer in the last octave"
+%endif
+
 tk_project:
-    push cx
-    mov di, bx                      ; keep cy
-    mov bx, [tk_sclx]
-    imul bx                         ; DX:AX = cx * sclx
-    pop bx                          ; BX = cz
-    push bx
-    call tk_pdiv
+    xchg bx, cx                     ; the depth picks the row; CX = yp
+    cmp bx, 512
+    jb .row                         ; under 512: the depth IS the row
+    cmp bx, 2048
+    jae .hi
+    shr bx, 1
+    cmp bx, 512                     ; (the depth, halved, against 1024's half)
+    jae .m1
+    add bx, 256                     ; 512..1023: every 2 units
+    jmp short .row
+.m1:
+    shr bx, 1                       ; 1024..2047: every 4
+    add bx, 512
+    jmp short .row
+.hi:
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    cmp bx, 512                     ; (4096's eighth)
+    jae .far
+    add bx, 768                     ; 2048..4095: every 8
+    jmp short .row
+.far:
+    shr bx, 1                       ; 4096..: every 16
+    add bx, 1024
+    cmp bx, TK_KROWS - 1
+    jbe .row
+    mov bx, TK_KROWS - 1
+.row:
+    shl bx, 1
+    imul word [tk_kx + bx]          ; DX:AX = cx x kx, and >> 11 is the pixel:
+    cmp dx, 125                     ; the high word's low byte and the low
+    jge .xhi                        ; word's high byte moved down a byte, and
+    cmp dx, -126                    ; three arithmetic shifts - the clamp has
+    jl .xlo                         ; already promised sixteen bits. INLINE,
+    mov al, ah                      ; because a height no longer comes this way
+    mov ah, dl                      ; and the call was this axis's alone
+    sar ax, 1
+    sar ax, 1
+    sar ax, 1
+.xok:
     add ax, [tk_vcx]
-    push ax
-    mov ax, di
-    mov bx, [tk_scly]
-    imul bx
-    pop di                          ; DI = screen x
-    pop bx                          ; BX = cz
-    call tk_pdiv
+    mov di, ax                      ; DI = screen x
+    mov ax, cx
+    imul word [tk_kx + bx]          ; DX:AX = yp x kx, and >> 17 is the pixel:
+    mov ax, dx                      ; |yp x kx| < 2^28, so no clamp
+    sar ax, 1
     neg ax                          ; screen y grows DOWNWARD
     add ax, [tk_vcy]
     mov bx, ax
     mov ax, di
+    ret
+.xhi:
+    mov ax, 4000
+    jmp short .xok
+.xlo:
+    mov ax, -4000
+    jmp short .xok
+
+; -----------------------------------------------------------------------------
+; tk_ktabs - the projection table and the models' heights, once a bracket
+;            (SPEC.md 85.5.3, 85.5.3.1)
+;
+; Row i stands for a depth: i itself below 512, and from there each octave's
+; 256 rows stand for 2^k units of depth apiece (k = 1..4) at the bucket's
+; centre, so the error is signed both ways rather than always short. Depths
+; under TK_NEARZ
+; never reach the table - tk_emit clips at the near plane first - so the table
+; STARTS at row TK_NEARZ and tk_kx is an address TK_NEARZ rows in front of
+; the bytes it owns. 1,437 divides, once.
+;
+; ...and every model vertex's camera-space height, y - TK_EYE, as
+; yp = (y - TK_EYE) x scly x 64 / sclx into the model's own tk_ypre row. That
+; is what lets the vertical axis use kx: nothing here pitches or rolls, so a
+; height is the same number in every frame, and the scale between the two
+; axes is folded into it here instead of into a second 4 KB table. Six
+; fractional bits, because tk_nclip subtracts two of them in a word and seven
+; would put the pyramid's 260 at 33,280 on Mode X.
+; -----------------------------------------------------------------------------
+tk_ktabs:
+    mov si, TK_NEARZ * 2            ; rows under the near plane are never read
+.e:
+    mov ax, si
+    shr ax, 1                       ; AX = i
+    cmp ax, 512
+    jb .zz
+    mov cl, ah                      ; the octave k = i / 256 - 1, 1..4: its
+    dec cl                          ; rows start at 256 (k + 1), and each one
+    mov bh, cl                      ; stands for 2^k units of depth from
+    xor bl, bl                      ; 256 k 2^k - its centre is the depth
+    sub ax, bx
+    shl ax, cl
+    mov dx, 1
+    shl dx, cl
+    shr dx, 1
+    add ax, dx
+.zz:
+    mov cx, ax                      ; CX = z
+    mov ax, [tk_sclx]
+    mov dx, 2048
+    mul dx                          ; DX:AX = sclx x 2048
+    div cx
+    mov [tk_kx + si], ax
+    add si, 2
+    cmp si, TK_KROWS * 2
+    jb .e
+
+    mov di, tk_modtab + 2           ; the heights: every model once (the shell
+.m:                                 ; is in the table twice, and is done twice)
+    mov si, [di]
+    mov cl, [si]                    ; CX = its vertices
+    xor ch, ch
+    mov bx, [si+6]                  ; BX = its row of tk_ypre
+    mov si, [si+2]                  ; SI = its vertex table
+.y:
+    mov ax, [si+2]
+    sub ax, TK_EYE
+    imul word [tk_scly]             ; DX:AX = (y - eye) x scly, under 2^17...
+    push cx
+    mov cx, 6
+.sh:
+    shl ax, 1                       ; ...x 64, under 2^23
+    rcl dx, 1
+    loop .sh
+    pop cx
+    idiv word [tk_sclx]
+    mov [bx], ax
+    inc bx
+    inc bx
+    add si, 6
+    loop .y
+    inc di
+    inc di
+    cmp di, tk_modtab + 14
+    jb .m
     ret
 
 ; -----------------------------------------------------------------------------
@@ -215,7 +348,7 @@ tk_objcam_raw:
 ; -----------------------------------------------------------------------------
 ; tk_rotshape - turn a model's vertices by ONE relative angle, once
 ; in:  [tk_mdl] = the model, AL = the object's heading minus the camera's
-; out: tk_rotx/tk_roty/tk_rotz filled, indexed by vertex * 2
+; out: tk_rotx/tk_rotz filled, indexed by vertex * 2
 ; clobbers everything
 ;
 ; This is the cache the file header talks about. Every cube in the world is at
@@ -253,12 +386,9 @@ tk_rotshape:
     neg ax
     add ax, cx
     mov bx, bp
-    mov [tk_rotz + bx], ax
-    mov ax, [si+2]                  ; y is not turned - there is no pitch and
-    sub ax, TK_EYE                  ; no roll in this game
-    mov bx, bp
-    mov [tk_roty + bx], ax
-    add si, 6
+    mov [tk_rotz + bx], ax          ; y is not turned - there is no pitch and
+    add si, 6                       ; no roll in this game, so the model's own
+                                    ; tk_ypre row is the height (85.5.3.1)
     add bp, 2
     pop cx
     loop .v
@@ -273,6 +403,8 @@ tk_emit:
     mov si, [tk_mdl]
     mov cl, [si]
     xor ch, ch
+    mov si, [si+6]                  ; SI = the model's heights (85.5.3.1),
+    mov [tk_ycur], si               ; which tk_nclip reads them from too
     xor bp, bp
 .v:
     push cx
@@ -283,8 +415,7 @@ tk_emit:
     mov ax, [tk_rotx + bx]
     add ax, [tk_ocx]
     mov [tk_cxv + bx], ax
-    mov dx, [tk_roty + bx]
-    mov [tk_cyv + bx], dx
+    mov dx, [si + bx]
     cmp cx, TK_NEARZ
     jl .behind
     mov bx, dx
@@ -306,73 +437,53 @@ tk_emit:
     mov cl, [si+1]                  ; the edges
     xor ch, ch
     mov si, [si+4]
+    cld
 .e:
+    lodsw                           ; AL/AH = the edge's two vertex indices
     push cx
-    mov al, [si]
-    xor ah, ah
-    shl ax, 1
-    mov [tk_na], ax
-    mov al, [si+1]
-    xor ah, ah
-    shl ax, 1
-    mov [tk_nb], ax
     push si
-    mov bx, [tk_na]
+    mov bl, al
+    xor bh, bh
+    shl bx, 1                       ; BX = a x 2
+    mov dl, ah
+    xor dh, dh
+    shl dx, 1                       ; DX = b x 2
+    mov di, dx
     mov cx, [tk_fv + bx]
-    mov bx, [tk_nb]
-    add cx, [tk_fv + bx]
-    or cx, cx
-    jz .skip                        ; both behind the near plane
+    add cx, [tk_fv + di]
+    jcxz .skip                      ; both behind the near plane
     cmp cx, 2
     je .both
     ; --- one end is behind: pull it up to the near plane ------------------
-    mov bx, [tk_na]
     cmp word [tk_fv + bx], 0
-    jne .aisfront
-    mov ax, [tk_na]                 ; make tk_na the one in FRONT
-    mov bx, [tk_nb]
+    jne .afront
+    xchg bx, dx                     ; make BX the one in FRONT
+.afront:
     mov [tk_na], bx
-    mov [tk_nb], ax
-.aisfront:
+    mov [tk_nb], dx
     call tk_nclip                   ; AX/BX = the clipped end, projected
-    mov [tk_ex2], ax
-    mov [tk_ey2], bx
+    mov cx, ax
+    mov dx, bx
     mov bx, [tk_na]
     mov ax, [tk_sxv + bx]
-    mov [tk_ex1], ax
-    mov ax, [tk_syv + bx]
-    mov [tk_ey1], ax
+    mov bx, [tk_syv + bx]
     jmp short .draw
 .both:
-    mov bx, [tk_na]
     mov ax, [tk_sxv + bx]
-    mov [tk_ex1], ax
-    mov ax, [tk_syv + bx]
-    mov [tk_ey1], ax
-    mov bx, [tk_nb]
-    mov ax, [tk_sxv + bx]
-    mov [tk_ex2], ax
-    mov ax, [tk_syv + bx]
-    mov [tk_ey2], ax
+    mov bx, [tk_syv + bx]
+    mov cx, [tk_sxv + di]
+    mov dx, [tk_syv + di]
 .draw:
-    mov ax, [tk_ex1]
-    mov bx, [tk_ey1]
-    mov cx, [tk_ex2]
-    mov dx, [tk_ey2]
     cmp bx, dx
     jne .slope
     call tk_hseg                    ; SPEC.md 5.6.1's deferral, ours: a flat
     jmp short .skip                 ; edge is a run and never a walk
 .slope:
-    call tk_seg
-.skip:
+    call tk_seg                     ; ...and both keep nothing (85.3.4), which
+.skip:                              ; is why SI and CX ride on the stack
     pop si
-    add si, 2
     pop cx
-    dec cx
-    jz .done
-    jmp .e
-.done:
+    loop .e
     ret
 
 ; -----------------------------------------------------------------------------
@@ -402,15 +513,15 @@ tk_nclip:
     add ax, [tk_cxv + bx]
     mov [tk_ncx], ax
 
-    mov bx, [tk_na]                 ; y
-    mov ax, [tk_cyv + bx]
+    mov si, [tk_ycur]               ; y: a height is the model's own, so it is
+    mov bx, [tk_na]                 ; read where tk_ktabs left it rather than
+    mov ax, [si + bx]               ; copied a vertex at a time
     mov bx, [tk_nb]
-    sub ax, [tk_cyv + bx]
-    mov bx, [tk_nnum]
-    imul bx
+    sub ax, [si + bx]
+    imul word [tk_nnum]
     idiv word [tk_nden]
     mov bx, [tk_nb]
-    add ax, [tk_cyv + bx]
+    add ax, [si + bx]
 
     mov bx, ax
     mov ax, [tk_ncx]
@@ -427,19 +538,29 @@ tk_nclip:
 ; table lookup per frame.
 ; -----------------------------------------------------------------------------
 tk_ridgesetup:
+    push si
     xor bx, bx
-    mov cx, 25
+    mov cx, -12                     ; CX = the column's angle off the sights
 .p:
-    push cx
-    mov ax, [tk_tantab + bx]
+    mov ax, cx
+    cwd                             ; DX = its sign, 0 or -1
+    xor ax, dx
+    sub ax, dx
+    xchg ax, si                     ; SI = |angle|...
+    mov al, [tk_tantab + si]        ; ...whose tangent is the table's, and a
+    mov ah, 0                       ; tangent is odd, so it takes the angle's
+    xor ax, dx                      ; sign (tktan.inc)
+    sub ax, dx
     imul word [tk_sclx]             ; DX:AX = tan * 256 * sclx
     mov al, ah                      ; ...>> 8
     mov ah, dl
     add ax, [tk_vcx]
     mov [tk_ridgex + bx], ax
     add bx, 2
-    pop cx
-    loop .p
+    inc cx
+    cmp cx, 12
+    jle .p
+    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -449,16 +570,15 @@ tk_ridgesetup:
 tk_ridge:
     mov al, TKI_HORIZ               ; the line the world stands on, and the
     call tk_setink                  ; ridge behind it, are different distances
-    xor ax, ax                      ; the horizon is the viewport's whole
-    mov cx, [tk_vw]                 ; width, so it is a RUN and never a walk
-    dec cx
-    mov bx, [tk_vcy]
+    mov ax, [tk_rx0]                ; the horizon is the viewport's whole
+    mov cx, [tk_rx1]                ; width, so it is a RUN and never a walk -
+    mov bx, [tk_vcy]                ; or the part of it asked for (85.3.8)
     call tk_hseg
     mov al, TKI_RIDGE
     call tk_setink
 
-    mov al, [tk_pa]
-    sub al, 24
+    mov al, [tk_rpa_draw]           ; the heading the CALLER means (85.3.8.1),
+    sub al, 24                      ; which is not always the live one
     mov [tk_ra], al
     xor bx, bx
     mov cx, 25
@@ -489,6 +609,10 @@ tk_ridge:
     push bx
     mov ax, [tk_ridgex + bx]
     mov cx, [tk_ridgex + bx + 2]
+    cmp cx, [tk_rx0]                ; a segment wholly outside the range asked
+    jl .sgn                         ; for is not drawn (85.3.8: a redraw inside
+    cmp ax, [tk_rx1]                ; another item's rectangle)
+    jg .sgn
     push cx
     mov bx, [tk_rpy + bx]
     pop cx
@@ -498,6 +622,7 @@ tk_ridge:
     mov dx, [tk_rpy + bx + 2]
     mov bx, si
     call tk_seg
+.sgn:
     pop bx
     add bx, 2
     pop cx
@@ -611,7 +736,8 @@ tk_drawmovers:
 ; =============================================================================
 ; The models (SPEC.md 85.5.2)
 ;
-; db nverts, db nedges, dw the vertex table, dw the edge table. A vertex is
+; db nverts, db nedges, dw the vertex table, dw the edge table, dw its row of
+; tk_ypre - the heights tk_ktabs pre-scales once a bracket. A vertex is
 ; three words - x right, y up, z forward - in world units, with y = 0 the
 ; ground plane; an edge is two vertex indices. Nothing here is a face: this
 ; is a vector game and a wireframe is what it draws.
@@ -619,67 +745,88 @@ tk_drawmovers:
 tk_modtab:
     dw 0, tk_m_cube, tk_m_pyr, tk_m_block, tk_m_tank, tk_m_shell, tk_m_shell
 
-tk_m_cube:  db 8, 12
-            dw tk_v_cube, tk_e_box
-tk_m_block: db 8, 12
-            dw tk_v_block, tk_e_box
-tk_m_pyr:   db 5, 8
-            dw tk_v_pyr, tk_e_pyr
-tk_m_tank:  db 13, 22
-            dw tk_v_tank, tk_e_tank
-tk_m_shell: db 6, 3
-            dw tk_v_shell, tk_e_shell
+TKV_CUBE  equ 8                     ; each model's vertex count, named once:
+TKV_BLOCK equ 8                     ; the record says it and the model's row
+TKV_PYR   equ 5                     ; of tk_ypre is placed by it
+TKV_TANK  equ 13
+TKV_SHELL equ 6
+TK_NYPRE  equ TKV_CUBE + TKV_BLOCK + TKV_PYR + TKV_TANK + TKV_SHELL
+%if TKV_CUBE > TK_MAXV || TKV_BLOCK > TK_MAXV || TKV_PYR > TK_MAXV || TKV_TANK > TK_MAXV || TKV_SHELL > TK_MAXV
+  %error "a model has more vertices than TK_MAXV: tk_rotx and the projected arrays are sized off it"
+%endif
 
-tk_v_cube:
-    dw  -90,   0,  -90
-    dw   90,   0,  -90
-    dw   90,   0,   90
-    dw  -90,   0,   90
-    dw  -90, 180,  -90
-    dw   90, 180,  -90
-    dw   90, 180,   90
-    dw  -90, 180,   90
+tk_m_cube:  db TKV_CUBE, 12
+            dw tk_v_cube, tk_e_box, tk_ypre
+tk_m_block: db TKV_BLOCK, 12
+            dw tk_v_block, tk_e_box, tk_ypre + 2 * TKV_CUBE
+tk_m_pyr:   db TKV_PYR, 8
+            dw tk_v_pyr, tk_e_pyr, tk_ypre + 2 * (TKV_CUBE + TKV_BLOCK)
+tk_m_tank:  db TKV_TANK, 22
+            dw tk_v_tank, tk_e_tank, tk_ypre + 2 * (TKV_CUBE + TKV_BLOCK + TKV_PYR)
+tk_m_shell: db TKV_SHELL, 3
+            dw tk_v_shell, tk_e_shell, tk_ypre + 2 * (TK_NYPRE - TKV_SHELL)
 
-tk_v_block:                         ; the low wide slabs the 1983 port stands
-    dw -150,   0,  -60              ; in threes
-    dw  150,   0,  -60
-    dw  150,   0,   60
-    dw -150,   0,   60
-    dw -150,  90,  -60
-    dw  150,  90,  -60
-    dw  150,  90,   60
-    dw -150,  90,   60
+; THE VERTICES ARE THE BSS'S (apps size pass 2, SPEC.md 85.5.2). Every
+; coordinate is a multiple of five, so the file ships each one as a signed
+; byte of fifths and tk_mktabs multiplies them back - TK_MODELS is that list,
+; emitted once, in the entry overlay (tank.asm), and tk_v_cube..tk_v_shell
+; are bss names laid out in the same order, TKV_* vertices apiece.
+%macro TK_MODELS 0
+    ; tk_v_cube
+    TKV  -90,    0,  -90
+    TKV   90,    0,  -90
+    TKV   90,    0,   90
+    TKV  -90,    0,   90
+    TKV  -90,  180,  -90
+    TKV   90,  180,  -90
+    TKV   90,  180,   90
+    TKV  -90,  180,   90
+    ; tk_v_block                    ; the low wide slabs the 1983 port stands
+    TKV -150,    0,  -60            ; in threes
+    TKV  150,    0,  -60
+    TKV  150,    0,   60
+    TKV -150,    0,   60
+    TKV -150,   90,  -60
+    TKV  150,   90,  -60
+    TKV  150,   90,   60
+    TKV -150,   90,   60
+    ; tk_v_pyr
+    TKV -110,    0, -110
+    TKV  110,    0, -110
+    TKV  110,    0,  110
+    TKV -110,    0,  110
+    TKV    0,  260,    0
+    ; tk_v_tank                     ; hull, turret, and a barrel that says
+    TKV -130,    0, -150            ; which way it is about to shoot
+    TKV  130,    0, -150
+    TKV  130,    0,  150
+    TKV -130,    0,  150
+    TKV -130,   70, -150
+    TKV  130,   70, -150
+    TKV  130,   70,  150
+    TKV -130,   70,  150
+    TKV  -60,  130,  -80
+    TKV   60,  130,  -80
+    TKV   60,  130,   60
+    TKV  -60,  130,   60
+    TKV    0,  105,  330
+    ; tk_v_shell                    ; a three-axis cross: small, bright, and
+    TKV  -40,   90,    0            ; unmistakably not scenery
+    TKV   40,   90,    0
+    TKV    0,   50,    0
+    TKV    0,  130,    0
+    TKV    0,   90,  -40
+    TKV    0,   90,   40
+%endmacro
 
 tk_e_box:
     db 0,1, 1,2, 2,3, 3,0
     db 4,5, 5,6, 6,7, 7,4
     db 0,4, 1,5, 2,6, 3,7
 
-tk_v_pyr:
-    dw -110,   0, -110
-    dw  110,   0, -110
-    dw  110,   0,  110
-    dw -110,   0,  110
-    dw    0, 260,    0
-
 tk_e_pyr:
     db 0,1, 1,2, 2,3, 3,0
     db 0,4, 1,4, 2,4, 3,4
-
-tk_v_tank:                          ; hull, turret, and a barrel that says
-    dw -130,   0, -150              ; which way it is about to shoot
-    dw  130,   0, -150
-    dw  130,   0,  150
-    dw -130,   0,  150
-    dw -130,  70, -150
-    dw  130,  70, -150
-    dw  130,  70,  150
-    dw -130,  70,  150
-    dw  -60, 130,  -80
-    dw   60, 130,  -80
-    dw   60, 130,   60
-    dw  -60, 130,   60
-    dw    0, 105,  330
 
 tk_e_tank:
     db 0,1, 1,2, 2,3, 3,0
@@ -689,22 +836,48 @@ tk_e_tank:
     db 4,8, 5,9, 6,10, 7,11
     db 10,12, 11,12
 
-tk_v_shell:                         ; a three-axis cross: small, bright, and
-    dw  -40,  90,    0              ; unmistakably not scenery
-    dw   40,  90,    0
-    dw    0,  50,    0
-    dw    0, 130,    0
-    dw    0,  90,  -40
-    dw    0,  90,   40
-
 tk_e_shell:
     db 0,1, 2,3, 4,5
 
-tk_sintab:
-%include "tksin.inc"
+; tk_sintab is the bss's: tksin.inc ships its second differences, and the
+; entry overlay adds them back up (tank.asm, SPEC.md 85.5)
 
-tk_ridgetab:
+; TKRDG0 / TKRDG - tkridge.inc's runs, read HERE for TK_RIDGEPK alone: the
+; tallest height, so the band the ridge can reach is ASSEMBLED rather than
+; scanned for at run time (SPEC.md 85.3.9) - tk_tmlayout's rectangle and the
+; two span arrays sized to it. A run's heights lie between its two ends, so
+; the tallest end is the tallest height. The bytes are emitted once more, by
+; the entry overlay (tank.asm), where tk_mktabs expands them into the bss's
+; tk_ridgetab.
+%assign TK_RIDGEPK 0
+%assign TK_RIDGEN 0
+%macro TKRDG0 1
+  %assign TK_RIDGEPK %1
+%endmacro
+%macro TKRDG 2-*
+  %rep %0 / 2
+    %assign TK_RIDGEN TK_RIDGEN + %1
+    %if %2 > TK_RIDGEPK
+      %assign TK_RIDGEPK %2
+    %endif
+    %rotate 2
+  %endrep
+%endmacro
 %include "tkridge.inc"
+%if TK_RIDGEN != 255
+  %error "tkridge.inc's runs must cover angles 1..255 exactly"
+%endif
+; ...and the most rows the ridge's BAND can be on a shadow backend - the peak
+; at the larger of the two ridge scales (scly / 3, tk_r_setup), above the
+; horizon and the two rows of slack tk_tmlayout gives it
+TK_RBROWS equ ((TK_RIDGEPK * (TK_SCLYH / 3)) >> 8) + 3
+%if TK_SCLYH < TK_SCLYC
+  %error "TK_RBROWS is sized off Hercules' vertical scale, which is no longer the larger"
+%endif
 
 tk_tantab:
 %include "tktan.inc"
+    db 0                            ; THE PARITY PAD (SPEC.md 85.10.7): every
+                                    ; routine below keeps the address parity
+                                    ; it had before apps size pass 2 - free on
+                                    ; an 8088, a fetch on a 16-bit bus

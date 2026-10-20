@@ -49,85 +49,38 @@ FV_TEXTMAX  equ 127
 ; -----------------------------------------------------------------------------
 ; fv_entry - scan the machine's faces, make the window and defer the first
 ; face read until the window is visible.
+;
+; The launch name and its catalogue match are INLINE here and not two procs:
+; each runs once, and their own call/ret and register banks were most of
+; their size. NOTHING IS BANKED: the loader reads BX and CF back and nothing
+; else (SPEC.md 20.2, 21 step 9), and TameGram's entry has long returned
+; with SI, DI, CX and ES all its own.
 ; -----------------------------------------------------------------------------
 fv_entry:
-    push si
-    push di
-    call ty_init
-    call fv_take_arg                ; first: OSAPI_ARG_FILE is read-and-clear
-    call ty_scan
-    call fv_pick_arg
-
-    mov byte [fv_loaded], 0xFF
-    mov byte [fv_pending], 1
-    mov byte [fv_textlen], FV_INITLEN
-    mov si, fv_tpl
-    call OSAPI_WM_CREATE
-    jc .out
-    mov [fv_win], bx
-    mov al, 1
-    call OSAPI_WM_SNAP              ; makes fv_x + FV_TEXTX byte-aligned
-    mov ax, fv_onwake
-    call OSAPI_WM_ONWAKE
-    call OSAPI_WM_WAKE              ; ordinary launch needs the same first load
-    clc
-.out:
-    pop di
-    pop si
-    ret
-
-; Record the associated file name while its kernel pointer is still live.
-fv_take_arg:
-    pushf
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    call OSAPI_ARG_FILE
-    jc .out
-    mov ax, KERNEL_SEG
-    mov es, ax
+    call ty_init                    ; ES = KERNEL_SEG still (SPEC.md 20.2)...
+    call OSAPI_ARG_FILE             ; first: OSAPI_ARG_FILE is read-and-clear,
+    jc .scan                        ; and SI names the KERNEL's segment
     mov di, fv_arg
-    mov cx, TY_NAMSZ
-.copy:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jz .have
-    loop .copy
-.have:
-    mov byte [fv_arg + TY_NAMSZ - 1], 0
-    mov byte [fv_arghave], 1
-.out:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-    popf
-    ret
-
-; If an F88 launched us, make that family the initial selection.  A foreign
-; face whose name is not installed still opens the catalogue at its first row.
-fv_pick_arg:
-    cmp byte [fv_arghave], 0
-    je .out
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
+    mov cx, TY_NAMSZ - 1            ; [fv_arg + TY_NAMSZ - 1] is the zero the
+.copy:                              ; loader left in the bss (nothing has
+    es lodsb                        ; lettered fv_line yet), so the copy is
+    mov [di], al                    ; NUL-terminated however long the name.
+    inc di                          ; Read through the ES the loader handed
+    or al, al                       ; us, so DS never moves and ES is set
+    loopnz .copy                    ; once, below
+.scan:
     push ds
-    pop es
+    pop es                          ; ES:DI = our own segment for the compare
+    call ty_scan
+    ; If an F88 launched us, make that family the initial selection. A foreign
+    ; face whose name is not installed - or no launch name at all, which
+    ; leaves fv_arg empty and so equal to no family - opens the catalogue at
+    ; its first row.
     xor bx, bx
     mov si, ty_fnames
 .family:
     cmp bl, [ty_nfam]
-    jae .done
+    jae .picked
     mov di, fv_arg
     mov cx, TY_NAMSZ
     push si
@@ -135,47 +88,72 @@ fv_pick_arg:
     pop si
     je .found
     add si, TY_NAMSZ
-    inc bl
+    inc bx
     jmp short .family
 .found:
     mov [fv_selected], bl
-.done:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
+.picked:
+    mov si, fv_tpl                  ; [fv_loaded], [fv_pending] and
+    call OSAPI_WM_CREATE            ; [fv_textlen] start as IMAGE bytes
+    jc .out
+    mov [fv_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE_NOKEEP fv_ret   ; AX, DX and the flags are all set
+                                    ; again below before anything reads them.
+                                    ; The proc is a bare `ret` that is already
+                                    ; here: nothing in the region names the
+                                    ; region's own segment
+    mov al, 1
+    call OSAPI_WM_SNAP              ; makes fv_x + FV_TEXTX byte-aligned
+    mov ax, fv_onwake
+    call OSAPI_WM_ONWAKE
+    mov si, fv_about                ; 'About Font Viewer...' under our name in
+    call OSAPI_ABOUT_SET            ; the bar (SPEC.md 12.2, 90.9)
+    call OSAPI_WM_WAKE              ; ordinary launch needs the same first load
+    clc
 .out:
     ret
 
 ; -----------------------------------------------------------------------------
 ; fv_onwake - the only path that turns the floppy for a face change.
 ; W_ONKEY/W_ONCLICK merely choose and post this callback (SPEC.md 90.1).
+;
+; ONE EXTERNAL FACE AT A TIME, and the old one goes back BEFORE the new one is
+; claimed: opening first held two face claims for the length of a floppy
+; read (each is the face file's own size now, SPEC.md 6.4.2 - 2KB a shipped
+; face where it was 8). Face 0 stands in meanwhile, so nothing
+; ever points at a freed claim, and it is also what a face that will not open
+; leaves showing - the system face, ty_open's own answer to every refusal
+; (SPEC.md 6.4, 90).
 ; -----------------------------------------------------------------------------
 fv_onwake:
-    cmp byte [fv_pending], 0
-    je .out
-    mov byte [fv_pending], 0
+    shr byte [fv_pending], 1        ; it is 0 or 1, so the shift is the test
+    jnc .out                        ; (CF = the old bit) and the clear at once
     cmp byte [ty_nfam], 0
     je .paint
-    mov al, [fv_selected]
-    cmp al, [fv_loaded]
+    mov dl, [fv_selected]           ; DL = the row, which every ty_* call
+    cmp dl, [fv_loaded]             ; below preserves
     je .paint
-    call ty_openfam
+    mov byte [fv_loaded], 0xFF      ; nothing open until the open succeeds
+    xor ax, ax
+    xchg al, [fv_face]
+    call ty_close                   ; the old face back first...
+    xor ax, ax
+    call ty_use                     ; ...face 0 meanwhile...
+    mov al, dl
+    call ty_openfam                 ; ...and only then the new one
     jc .bad
-    mov dl, al                      ; new handle survives selecting/caching it
+    mov [fv_face], al
     xor ah, ah
     call ty_use
-    call ty_cache                   ; refusal is harmless: ty_put falls back
-    mov al, [fv_face]
-    call ty_close
-    mov [fv_face], dl
-    mov al, [fv_selected]
-    mov [fv_loaded], al
-    mov byte [fv_error], 0
-    jmp short .paint
-.bad:
+    call ty_cache                   ; refusal is harmless: ty_putn falls back
+    mov [fv_loaded], dl
+    jmp short .paint                ; [fv_error] is already 0: fv_choose
+.bad:                               ; cleared it when it posted this wake
     mov [fv_error], al
 .paint:
     call OSAPI_GFX_LOCK
@@ -185,17 +163,52 @@ fv_onwake:
     ret
 
 ; -----------------------------------------------------------------------------
+; fv_about / fv_abdismiss - the standard About card (SPEC.md 20.5.1.1, 90.9)
+;
+; This package shipped with NO handler at all, which is the case that section
+; was written about: the cheapest thing an author can do is nothing, and what
+; goes missing when they do it is the credit.
+;
+; fv_about is the HANDLER, so it is os88ui_about and not the _d entry -
+; ui_dispatch arms no clip region before it far-calls us.
+; -----------------------------------------------------------------------------
+fv_about:
+    mov byte [fv_abon], 1           ; nothing banked: ui_dispatch reads no
+    mov bx, si                      ; register back (SPEC.md 12.2), so the
+    mov si, fv_ablines              ; card's own `ret` is ours. SI = our
+    jmp os88ui_about                ; window on entry
+
+; Any key or click takes it down. The repaint is the WHOLE window and not the
+; card's rect: what the card covered is a specimen row, a catalogue row or the
+; divider, and fv_redraw is the one routine that knows how to put all three
+; back (SPEC.md 90.9).
+fv_abdismiss:
+    cmp byte [fv_abon], 0
+    je .none
+    mov byte [fv_abon], 0
+    call fv_redraw
+    stc                             ; CF = 1: the event was OURS, and the
+    ret                             ; caller must not act on it as well
+.none:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; THE CALLBACKS BANK NOTHING BUT SI, and SI only where the kernel reads it
+; back: W_PAINT and W_ONCLICK owe it (SPEC.md 11, 13.7), and fv_choose's
+; OSAPI_WM_WAKE wants it after the repaint. Every other register a callback
+; is handed is its own to clobber (SPEC.md 11, 12.2, 74.1), so the routines
+; below preserve only what their OWN callers in this file read after them,
+; and each says which.
+; -----------------------------------------------------------------------------
+
+; -----------------------------------------------------------------------------
 ; Keyboard: arrows walk the catalogue; printable ASCII and Backspace edit the
 ; specimen.  The right pane alone is repainted for ordinary typing.
 ; -----------------------------------------------------------------------------
 fv_onkey:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call fv_abdismiss               ; the card eats the keystroke that takes it
+    jc .out                         ; down, so a specimen edit is not also made
     cmp ah, KSC_UP
     je .prev
     cmp ah, KSC_LEFT
@@ -204,261 +217,99 @@ fv_onkey:
     je .next
     cmp ah, KSC_RIGHT
     je .next
+    mov bl, [fv_textlen]
+    xor bh, bh
     cmp al, 8
     je .back
     cmp al, 32
     jb .out
     cmp al, 126
     ja .out
-    mov bl, [fv_textlen]
     cmp bl, FV_TEXTMAX
     jae .out
-    xor bh, bh
     mov [fv_text + bx], al
     inc bx
-    mov byte [fv_text + bx], 0
-    inc byte [fv_textlen]
-    call fv_redraw_right
-    jmp short .out
+    jmp short .set
 .back:
-    cmp byte [fv_textlen], 0
-    je .out
-    dec byte [fv_textlen]
-    xor bx, bx
-    mov bl, [fv_textlen]
+    dec bx                          ; an empty specimen goes to -1 and stops
+    js .out
+.set:
+    mov [fv_textlen], bl
     mov byte [fv_text + bx], 0
-    call fv_redraw_right
-    jmp short .out
+    jmp fv_redraw_right
 .prev:
-    cmp byte [ty_nfam], 0
-    je .out
     mov al, [fv_selected]
     or al, al
     jnz .pdec
     mov al, [ty_nfam]
 .pdec:
     dec al
-    call fv_choose
-    jmp short .out
+    jmp short .pick
 .next:
-    cmp byte [ty_nfam], 0
-    je .out
     mov al, [fv_selected]
     inc al
     cmp al, [ty_nfam]
-    jb .nset
+    jb .pick
     xor al, al
-.nset:
-    call fv_choose
+.pick:
+    cmp byte [ty_nfam], 0           ; an empty catalogue has nothing to walk
+    jne fv_choose
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; A click in a catalogue row selects it.  CX/DX arrive in screen coordinates.
 fv_onclick:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov di, cx
-    mov bp, dx
+    call fv_abdismiss               ; ...and the click likewise: dismissing is
+    jc fv_ret                       ; not also a selection (SPEC.md 90.9)
+    push dx                         ; the click's y
     mov bx, si
-    call OSAPI_WM_CONTENT
+    call fv_origin                  ; AX/DX = the content origin
+    pop bx
     add ax, FV_DIVX
-    cmp di, ax
-    jae .out
+    cmp cx, ax
+    jae fv_ret
     add dx, FV_LISTY
-    cmp bp, dx
-    jb .out
-    sub bp, dx
-    mov ax, bp
+    sub bx, dx
+    jb fv_ret
+    xchg ax, bx                     ; AX = y below the first row's top
     mov bl, FV_ROWH
     div bl                          ; AL = row
     cmp al, [ty_nfam]
-    jae .out
-    call fv_choose
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jae fv_ret                      ; ...else FALL INTO fv_choose
 
 ; in: AL = valid family index, SI = window; gfx lock held
 fv_choose:
     cmp al, [fv_selected]
-    je .out
+    je fv_ret
     mov [fv_selected], al
-    mov byte [fv_pending], 1
-    mov byte [fv_error], 0
-    call fv_redraw                 ; marker + "Loading...", no disk work
-    mov bx, si
+    mov word [fv_pending], 1        ; [fv_pending] = 1 and [fv_error] = 0
+    call fv_redraw                  ; marker + "Loading...", no disk work;
+    mov bx, si                      ; it preserves SI
     call OSAPI_WM_WAKE
-.out:
-    ret
+fv_ret:                             ; a bare `ret`, and the region's
+    ret                             ; relocation proc (SPEC.md 66.6.1)
 
-; -----------------------------------------------------------------------------
-; Painting
-; -----------------------------------------------------------------------------
-fv_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    mov [fv_x], ax
-    mov [fv_y], dx
-    call fv_draw
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; Erase and repaint only the pane touched by an ordinary keystroke, and FALL
+; INTO the pane itself.
+fv_redraw_right:
+    mov ax, FV_DIVX + 1
+    call fv_wipe
 
-; Full self-repaint.  Caller holds the gfx lock.
-fv_redraw:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov bx, [fv_win]
-    call OSAPI_WM_CONTENT
-    mov [fv_x], ax
-    mov [fv_y], dx
-    mov bx, dx
-    mov cx, ax
-    add cx, FV_CW - 1
-    add dx, FV_CH - 1
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FILL
-    call fv_draw
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-fv_draw:
-    call fv_draw_list
-    call fv_draw_right
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, [fv_x]
-    add ax, FV_DIVX
-    mov bx, [fv_y]
-    add bx, 3
-    mov dx, [fv_y]
-    add dx, FV_CH - 4
-    call OSAPI_GFX_VLINE
-    ret
-
-fv_draw_list:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov cx, [fv_x]
-    add cx, FV_LISTX
-    mov dx, [fv_y]
-    add dx, 4
-    mov si, fv_s_fonts
-    call fv_sysline
-    cmp byte [ty_nfam], 0
-    jne .rows
-    add dx, 13
-    mov si, fv_s_none
-    call fv_sysline
-    jmp short .hint
-.rows:
-    xor bx, bx
-.row:
-    cmp bl, [ty_nfam]
-    jae .hint
-    mov byte [fv_line], ' '
-    cmp bl, [fv_selected]
-    jne .mark
-    mov byte [fv_line], '>'
-.mark:
-    mov byte [fv_line + 1], ' '
-    mov al, bl
-    call ty_famname
-    mov di, fv_line + 2
-    call fv_copy
-    mov byte [di], 0
-    mov cx, [fv_x]
-    add cx, FV_LISTX
-    mov dx, bx
-    and dx, 0x00FF
-    mov ax, dx
-    mov dl, FV_ROWH
-    mul dl
-    mov dx, [fv_y]
-    add dx, FV_LISTY
-    add dx, ax
-    mov si, fv_line
-    call fv_sysline
-    inc bl
-    jmp short .row
-.hint:
-    mov cx, [fv_x]
-    add cx, FV_LISTX
-    mov dx, [fv_y]
-    add dx, FV_CH - 12
-    mov si, fv_s_pick
-    call fv_sysline
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
+; Clobbers AX-DX, SI and DI.
 fv_draw_right:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov cx, [fv_x]
-    add cx, FV_RIGHTX
-    mov dx, [fv_y]
-    add dx, 4
+    mov cx, FV_RIGHTX
+    mov dx, 4
     mov si, fv_s_spec
     call fv_sysline
 
     mov di, fv_line
-    cmp byte [ty_nfam], 0
-    jne .family
     mov si, fv_s_builtin
-    call fv_copy
-    jmp short .state
-.family:
+    cmp byte [ty_nfam], 0
+    je .name
     mov al, [fv_selected]
     call ty_famname
+.name:
     call fv_copy
-.state:
     cmp byte [fv_pending], 0
     je .error
     mov si, fv_s_loading
@@ -469,84 +320,160 @@ fv_draw_right:
     mov si, fv_s_error
     call fv_copy
 .named:
-    mov byte [di], 0
-    mov cx, [fv_x]
-    add cx, FV_RIGHTX
-    mov dx, [fv_y]
-    add dx, 16
+    mov dx, 16                      ; CX is still FV_RIGHTX
     mov si, fv_line
     call fv_sysline
 
     mov al, CBLACK
     call OSAPI_SET_COLOR
-    mov ax, [fv_x]
-    add ax, FV_RIGHTX - 3
-    mov bx, [fv_y]
-    add bx, FV_BOXY
-    mov cx, [fv_x]
-    add cx, FV_CW - 5
-    mov dx, [fv_y]
-    add dx, FV_BOXBOT
+    mov ax, FV_RIGHTX - 3
+    mov bx, FV_BOXY
+    mov cx, FV_CW - 5
+    mov dx, FV_BOXBOT
+    call fv_abs
     call OSAPI_GFX_FRAME
 
     call fv_draw_sample
-    mov cx, [fv_x]
-    add cx, FV_RIGHTX
-    mov dx, [fv_y]
-    add dx, FV_CH - 12
-    mov si, fv_s_type
-    call fv_sysline
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov cx, FV_RIGHTX
+    mov si, fv_s_type               ; ...and FALL INTO fv_sysline, at the
+                                    ; catalogue's hint row (fv_lastline)
+fv_lastline:
+    mov dx, FV_CH - 12
 
-; Erase and repaint only the pane touched by an ordinary keystroke.
-fv_redraw_right:
-    push ax
-    push bx
+; One opaque line in the always-readable system face, at CX/DX relative.
+; Preserves BX, CX and DX - fv_draw_list's row walk rides on all three.
+fv_sysline:
     push cx
     push dx
-    mov ax, [fv_x]
-    add ax, FV_DIVX + 1
-    mov bx, [fv_y]
-    mov cx, [fv_x]
-    add cx, FV_CW - 1
-    mov dx, [fv_y]
-    add dx, FV_CH - 1
+    call fv_abscd                   ; BX is never touched, so never banked
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    pop dx
+    pop cx
+    ret
+
+; Clobbers AX-DX, SI and DI.
+fv_draw_list:
+    mov cx, FV_LISTX                ; one column: fv_sysline keeps CX
+    mov dx, 4
+    mov si, ty_s_fonts              ; os88type.inc's 'FONTS', the folder
+                                    ; this column lists: one copy, not two
+    call fv_sysline
+    cmp byte [ty_nfam], 0
+    jne .rows
+    mov dx, 4 + 13
+    mov si, fv_s_none
+    call fv_sysline
+.rows:
+    mov dx, FV_LISTY
+    xor bx, bx
+.row:
+    cmp bl, [ty_nfam]
+    jae .hint
+    mov ax, '  '                    ; the row's two-cell gutter, and the
+    cmp bl, [fv_selected]           ; marker in its first cell when it is
+    jne .mark                       ; the selection - composed in AX and
+    mov al, '>'                     ; stored once
+.mark:
+    mov [fv_line], ax
+    mov al, bl
+    call ty_famname
+    mov di, fv_line + 2
+    call fv_copy
+    mov si, fv_line
+    call fv_sysline
+    add dx, FV_ROWH
+    inc bx
+    jmp short .row
+.hint:
+    mov si, fv_s_pick
+    jmp fv_lastline
+
+; -----------------------------------------------------------------------------
+; Painting. Every coordinate below is RELATIVE to the content origin, which
+; fv_origin banks in [fv_x]/[fv_y]; fv_abs and fv_sysline add it at the call.
+; -----------------------------------------------------------------------------
+fv_paint:
+    mov bx, si
+    call fv_origin
+    call fv_draw                    ; it preserves SI
+    cmp byte [fv_abon], 0           ; ...and the About card LAST, over the lot
+    je .out                         ; (SPEC.md 20.5.1.1): the kernel's region
+    mov bx, si                      ; is armed here, so it is the _d entry and
+    mov si, fv_ablines              ; NOT os88ui_about, which would re-arm and
+    call os88ui_about_d             ; throw this paint's damage rect away. It
+    mov si, bx                      ; preserves BX, so SI goes back off it
+.out:
+    ret
+
+; Full self-repaint, FALLING INTO fv_draw.  Caller holds the gfx lock.
+fv_redraw:
+    mov bx, [fv_win]
+    call fv_origin
+    xor ax, ax
+    call fv_wipe
+
+; Both panes and the divider. Preserves SI; clobbers AX-DX and DI.
+fv_draw:
+    push si
+    call fv_draw_list
+    call fv_draw_right
+    pop si
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, FV_DIVX
+    mov bx, 3
+    mov dx, FV_CH - 4
+    call fv_abs
+    call OSAPI_GFX_VLINE
+    ret
+
+; BX = our window; out AX/DX = its content origin, banked in [fv_x]/[fv_y].
+fv_origin:
+    call OSAPI_WM_CONTENT
+    mov [fv_x], ax
+    mov [fv_y], dx
+    ret
+
+; AX/CX += [fv_x], BX/DX += [fv_y]: a relative rect made a screen one.
+; fv_abscd is its second half, the point CX/DX alone: fv_sysline's.
+fv_abs:
+    add ax, [fv_x]
+    add bx, [fv_y]
+fv_abscd:
+    add cx, [fv_x]
+    add dx, [fv_y]
+    ret
+
+; White from relative x = AX to the content's right and bottom edges.
+; Clobbers AX-DX.
+fv_wipe:
     push ax
     mov al, CWHITE
     call OSAPI_SET_COLOR
     pop ax
+    xor bx, bx
+    mov cx, FV_CW - 1
+    mov dx, FV_CH - 1
+    call fv_abs
     call OSAPI_GFX_FILL
-    call fv_draw_right
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; Wrap the mutable specimen by the current face's advances and emit one band
-; per row.  ES:SI is kept in our segment for all type-library calls.
+; per row.  ES:SI is kept in our segment for all type-library calls. DI is
+; the row's RELATIVE top, and DX the face's cell height for the whole walk:
+; ty_band, ty_putn and ty_flush all preserve it. Preserves ES (the About
+; card drawn after it reads the kernel's records through it); clobbers the
+; rest, BP included - every dispatch that reaches it banks BP itself
+; (SPEC.md 11's W_PAINT, ui_bill, wm_wake_disp).
 fv_draw_sample:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
     push es
     push ds
     pop es
     mov si, fv_text
     xor cx, cx
     mov cl, [fv_textlen]
-    mov di, [fv_y]
-    add di, FV_TEXTY
+    mov di, FV_TEXTY
 .line:
     jcxz .out
     mov ax, FV_SAMPLEW
@@ -558,71 +485,62 @@ fv_draw_sample:
     jz .out
     call ty_getrows
     xor ah, ah
-    mov dx, ax
-    mov ax, di
-    add ax, dx
-    mov bx, [fv_y]
-    add bx, FV_BOXBOT - 3
-    cmp ax, bx
+    mov dx, ax                      ; DX = rows, for ty_band and ty_flush
+    add ax, di
+    cmp ax, FV_BOXBOT - 3
     ja .out
     call ty_band
     push cx
     mov cx, bp
     xor ax, ax
     call ty_putn
-    pop cx
     mov ax, [fv_x]
     add ax, FV_TEXTX
-    mov bx, di
-    mov dx, 0
-    mov dl, [ty_rows]
-    push cx
+    mov bx, [fv_y]
+    add bx, di
     mov cx, FV_SAMPLEW
-    call ty_flush
+    call ty_flushlive               ; a face SAMPLE is never a greyed control,
+                                    ; so the carry-less entry (OS88TY_NOGRAY)
     pop cx
     add si, bp
     sub cx, bp
-    xor ax, ax
-    mov al, [ty_rows]
-    add di, ax
-    xor ax, ax
-    mov al, [ty_lead]
+    add di, dx
+    mov al, [ty_lead]               ; 0..8 (SPEC.md 6.4), so CBW is exact
+    cbw
     add di, ax
     jmp short .line
 .out:
     pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
-; One opaque line in the always-readable system face.
-fv_sysline:
-    push ax
-    mov ax, (CWHITE << 8) | CBLACK
-    call OSAPI_FONT_RUN
-    pop ax
-    ret
-
-; SI -> NUL source, DI -> destination; copy without NUL, advance DI.
+; SI -> NUL source, DI -> destination. Copies the NUL too and leaves DI ON it,
+; so the next copy appends and the last one has terminated the line.
+; Clobbers AL.
 fv_copy:
-    push ax
-.c:
-    mov al, [si]
+    lodsb
+    mov [di], al
     or al, al
     jz .out
-    mov [di], al
-    inc si
     inc di
-    jmp short .c
+    jmp short fv_copy
 .out:
-    pop ax
     ret
 
+;  SPEC.md 6.5.5: the band is FV_SAMPLEW = 480 pixels wide and no wider -
+; ty_fit bounds every line to it - so 60 bytes, one for the last glyph's
+; spill, even: 62, and 480 bytes of bss back. Only ty_fit, ty_putn,
+; ty_getrows and the scan/open/use/cache/band/flush core are reached.
+%define TY_STRIDE 62
+%define OS88TY_NOHIT
+%define OS88TY_NOWIDTH
+%define OS88TY_NOWIDTHN
+%define OS88TY_NOPUT
+%define OS88TY_NOADVOF
+%define OS88TY_NOFAMN
+%define OS88TY_NOGETASC
+%define OS88TY_NOGETLEAD
+%define OS88TY_NOGRAY           ; no band is ever greyed: ty_gray out, and the
+                                ; flush is ty_flushlive (apps size pass 2b)
 %include "os88type.inc"
 
 fv_tpl:
@@ -630,7 +548,6 @@ fv_tpl:
     dw fv_title, fv_paint, fv_onkey, fv_onclick
 
 fv_title:      db 'Font Viewer', 0
-fv_s_fonts:    db 'FONTS', 0
 fv_s_none:     db 'No .F88 files', 0
 fv_s_pick:     db 'Click/arrows', 0
 fv_s_spec:     db 'SPECIMEN', 0
@@ -639,26 +556,84 @@ fv_s_loading:  db '  Loading...', 0
 fv_s_error:    db '  Open failed', 0
 fv_s_type:     db 'Type to edit; Backspace deletes', 0
 
+; --- the About card's lines (SPEC.md 20.5.1.1, 90.9) -------------------------
+; FIVE lines. The content box is FV_CW = 618 px = 77 cells on every adapter -
+; this window is one size everywhere (FV_W/FV_H, and FV_H is the whole CGA
+; band) - so the widest line here, 29 cells, is nowhere near the widget's
+; clamp and nothing is split across two lines the way Mines and Hello had to.
+;
+; PACKED (OS88UI_ABPACK, SPEC.md 20.5.1.1): the lines end to end, each with
+; its NUL, closed by OS88UI_ABEND - no pointer table to ship.
+fv_ablines:
+    db 'Font Viewer for os8088', 0
+    db 'The system face browser', 0
+    db 0
+    db 'Contributed by Jorge Gonzalez', 0
+    db 'Any key or click closes', 0
+    db OS88UI_ABEND
+
+; --- the shared controls (SPEC.md 20.5.1) ------------------------------------
+; AT THE END OF THE CODE, which is os88ui.inc's own rule: the header and the
+; OS88_ICON16 block are at fixed offsets in the image (SPEC.md 20.2) and code
+; emitted between them fails the icon macro's offset assertion.
+;
+; NOBTN because this card draws no button and no scroll bar - the card IS the
+; only control this package takes, and without the opt-out every package
+; carrying the include pays 116 bytes for a glyph nothing calls.
+%define OS88UI_ABOUT
+%define OS88UI_NOBTN
+%define OS88UI_ABPACK
+%include "os88ui.inc"
+
+; --- state whose first value is not zero, and the specimen LAST --------------
+; Four bytes the entry proc used to store, fifteen bytes of code, are simply
+; what the image arrives with: every launch reads its own copy (SPEC.md 20.2).
+; [fv_pending]/[fv_error] are adjacent because fv_choose sets both in one word.
+fv_loaded:   db 0xFF                ; family row actually open (none yet)
+fv_pending:  db 1                   ; the first face load is owed
+fv_error:    db 0
+fv_textlen:  db FV_INITLEN
+
+; THE SPECIMEN IS THE LAST BYTE OF THE IMAGE, and its zero tail is not in it:
+; the buffer runs on into the first FV_TAIL bytes of the bss, which the loader
+; zeroes (SPEC.md 20.2), so the 61 zeros it used to ship are in RAM exactly as
+; before and on no disk.
 fv_text:
     db 'The quick brown fox jumps over the lazy dog. ABC abc 0123456789 !?'
 FV_INITLEN equ $ - fv_text
-    times FV_TEXTMAX + 1 - FV_INITLEN db 0
+FV_TAIL    equ FV_TEXTMAX + 1 - FV_INITLEN
 
-FV_BSS_OWN equ 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + TY_NAMSZ + 24
+; The bss, after the specimen's tail. FV_PAD puts [fv_win] on an EVEN offset,
+; and FV_BSS_VARS being even puts ty_bandbuf on one with it: the compose loops
+; write the band a word at a time and [fv_x]/[fv_y] are read by every drawing
+; call, and an odd word costs an 8086 or a 286 a second bus cycle.
+FV_BSS_VARS equ 2 + 2 + 2 + 1 + 1 + 1 + 1 + 24    ; ...the 1 is spare: even
+FV_PAD      equ (os88_image_end - $$ + FV_TAIL) & 1
+%if FV_BSS_VARS & 1
+    %error "FV_BSS_VARS must stay even, or ty_bandbuf goes odd"
+%endif
+FV_BSS_OWN  equ FV_TAIL + FV_BSS_VARS + FV_PAD
     OS88_BSS FV_BSS_OWN + TY_BSS_SIZE
     OS88_IMAGE_END
 
-fv_win       equ os88_image_end + 0     ; word
-fv_x         equ os88_image_end + 2     ; content origin
-fv_y         equ os88_image_end + 4
-fv_selected  equ os88_image_end + 6     ; family row requested
-fv_loaded    equ os88_image_end + 7     ; family row actually open
-fv_face      equ os88_image_end + 8     ; ty_* handle (0 = built-in)
-fv_pending   equ os88_image_end + 9
-fv_error     equ os88_image_end + 10
-fv_arghave   equ os88_image_end + 11
-fv_textlen   equ os88_image_end + 12
-fv_arg       equ os88_image_end + 13    ; TY_NAMSZ bytes
-fv_line      equ fv_arg + TY_NAMSZ      ; 24-byte composed label
+%if os88_image_end - fv_text != FV_INITLEN
+    %error "fv_text must be the last thing in the image: its tail is the bss"
+%endif
+
+fv_win       equ os88_image_end + FV_TAIL + FV_PAD     ; word
+fv_x         equ fv_win + 2         ; content origin
+fv_y         equ fv_win + 4
+fv_selected  equ fv_win + 6         ; family row requested
+fv_face      equ fv_win + 7         ; ty_* handle (0 = built-in)
+fv_abon      equ fv_win + 8         ; the About card is up (SPEC.md 90.9)
+fv_line      equ fv_win + 10        ; 24-byte composed label
+; THE LAUNCH NAME SHARES fv_line. It is read by fv_entry alone, before the
+; window exists and so before anything can be lettered, and is dead from the
+; first paint on: TY_NAMSZ bytes of every instance's bss for a value nothing
+; reads after its first millisecond.
+fv_arg       equ fv_line
+%if TY_NAMSZ > 24
+    %error "fv_arg no longer fits in fv_line"
+%endif
 
     TY_BSS os88_image_end + FV_BSS_OWN

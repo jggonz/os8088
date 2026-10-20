@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/lemmings/lemmings.asm
 ;
-; The assembly shim of LEMMINGS (SPEC.md 92) - Lemmings (DMA Design /
+; The assembly shim of LEMMINGS (SPEC.md 114) - Lemmings (DMA Design /
 ; Psygnosis, 1991, the DOS release) reimplemented as an os8088 C package. It is
 ; the top-level nasm source: apps/lemmings/lemmings.c is never assembled on its
 ; own, because `nasm -f bin` has no notion of an external symbol, so the
@@ -17,9 +17,9 @@
 ;
 ; ATTRIBUTION. Lemmings is (C) 1991 DMA Design / Psygnosis. Nothing in this
 ; file is derived from the original; the derived tables, strings and offsets
-; are in the converted band files (SPEC.md 92.2, 92.3) and in the .c files that
+; are in the converted band files (SPEC.md 114.2, 92.3) and in the .c files that
 ; read them, each naming its source at the line that carries it. The full
-; attribution list is in README.TXT beside the package (SPEC.md 92.2).
+; attribution list is in README.TXT beside the package (SPEC.md 114.2).
 ; =============================================================================
 
 ; --- os88ui.inc's FEATURE DEFINES, AND THEY BELONG AT THE TOP -----------------
@@ -38,7 +38,7 @@
                                     ; so os88ui's button drawer and its arm word
                                     ; would be bytes with no caller - and this
                                     ; package's resident budget is 81% spent
-                                    ; before it starts (SPEC.md 92.6)
+                                    ; before it starts (SPEC.md 114.6)
 
 %define CC_PKG_NAME 'LEMMINGS'      ; <= 15 chars, and the stem of LEMMINGS.OVL:
                                     ; crt0.asm builds the module's file name out
@@ -89,17 +89,15 @@
                                     ; anyway, because os88_menu_set() is the
                                     ; slot that patches the trampoline in
 %define CC_HAS_ABOUT                ; void os88_about(void *)
-%define CC_HAS_FSX                  ; void os88_fsx_main(void *) and the seven
-                                    ; thunks (SPEC.md 92.5). WAVE 1 USES EXACTLY
-                                    ; ONE OF THEM: os88_fsx_caps(), asked with
-                                    ; OUR window, is the predicate that greys the
-                                    ; Mode row AND the bit os88_fsx_mode() would
-                                    ; refuse on, which is SPEC.md 47 rule 4's
-                                    ; one predicate for both. The bracket itself
-                                    ; arrives with the raster in wave 2, so
-                                    ; os88_fsx_main() is declared, defined and
-                                    ; not yet called - exactly as os88_oncmd()
-                                    ; above is
+%define CC_HAS_FSX                  ; the bracket's thunks (SPEC.md 53, 114.5):
+                                    ; os88_fsx_caps() asked with OUR window is
+                                    ; the predicate that greys the Mode row AND
+                                    ; the bit os88_fsx_mode() would refuse on,
+                                    ; SPEC.md 47 rule 4's one predicate for
+                                    ; both; os88_fsx_run() is handed
+                                    ; lem_fsx_main, a RESIDENT function. The
+                                    ; C's own use set (SPEC.md 73.9.1) trims
+                                    ; the thunks to the ones it names
 %define CC_HAS_OVL                  ; ...and LEMMINGS.OVL (SPEC.md 73.14, 92.6).
                                     ; The split is from wave 1 rather than from
                                     ; the wave the ceiling binds in: at cword's
@@ -124,7 +122,7 @@
 ; forward-resolve.
 %include "os88ui.inc"
 
-; --- THE RASTER (SPEC.md 92.4), and it is hand-written for two reasons -------
+; --- THE RASTER (SPEC.md 114.4), and it is hand-written for two reasons -------
 ; Inside SPEC.md 53's bracket every kernel drawing slot is REFUSED, so the only
 ; way to put a pixel on the glass is a write into the framebuffer segment the
 ; FSI block names and a word with the card's own registers - and C can do

@@ -19,7 +19,7 @@
  * the worked example of both, and are built by `make cc-smoke`.
  *
  * ---------------------------------------------------------------------------
- * THE FOUR RULES A C AUTHOR CANNOT SEE (SPEC.md 73.5, 67.5.1, 67.7, 67.8)
+ * THE FOUR RULES A C AUTHOR CANNOT SEE (SPEC.md 73.5, 73.5.1, 73.7, 73.8)
  * ---------------------------------------------------------------------------
  *
  * 1. TAKING THE ADDRESS OF AN AUTOMATIC IS A BUILD FAILURE, and it has to be,
@@ -72,9 +72,9 @@
  *    you and are correct in any context, because they load KERNEL_SEG
  *    themselves rather than trusting the ES they were entered with.
  *
- * 3. THE STACK IS TINY AND IS NOT GROWABLE. The UI task has 1,024 bytes total
- *    with a measured 246 already spent under load, and a worker has 384 with
- *    a measured 150 (SPEC.md 2.1, 67.8). tools/cc8086.py prints every
+ * 3. THE STACK IS TINY AND IS NOT GROWABLE. The UI task has 512 bytes total
+ *    with a measured 246 already spent under load, and a worker has at most
+ *    384 with a measured 150 (SPEC.md 2.1, 73.8). tools/cc8086.py prints every
  *    function's frame size on every build and fails on any frame over 96
  *    bytes (CC_FRAME_MAX). Rule 1 is most of what keeps this true: a buffer
  *    that cannot be addressed on the stack was never going to be on it.
@@ -102,7 +102,7 @@
  * covers - so the C is free to be three to five times slower than assembly
  * INSIDE the loop and must not add a single call to it. Anything that
  * touches pixels or cells per iteration belongs in hand-written assembly
- * that C calls once (SPEC.md 6.3/6.5/65.13: a whole row of proportional
+ * that C calls once (SPEC.md 6.3/6.5: a whole row of proportional
  * glyphs is composed into a 1bpp band in your own RAM and emitted with ONE
  * os88_gfx_blit1, because lettering it a glyph at a time is 79 ms of pure
  * call floor).
@@ -117,19 +117,18 @@
  *   OSAPI_XMEM_*                          every argument and answer is a
  *     32-bit linear base, and there is no 32-bit type here (rule 4). The one
  *     part of the API that C genuinely cannot hold.
- *   OSAPI_FSX_*                           WRAPPED NOW, and only behind
- *     %define CC_HAS_FSX - see "the exclusive bracket" below. This entry used
- *     to say the bracket was not wrappable because "the rules are the whole
- *     feature and none of them is checkable from C". The rules have not
- *     changed and are still not checkable; what changed is that a C package
- *     needs the bracket (SPEC.md 92), and seven far calls hand-written in
- *     each package's own shim would rediscover the ES fence, the info-block
- *     layout and the int 16h fallback once per package. Gated, so a package
- *     that does not say CC_HAS_FSX does not carry a byte of it.
- *     (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md 11.2, is a different
- *     thing and is wrapped unconditionally: os88_fullscreen() below.)
- *   OSAPI_GFX_LINIT / LSTEP / LSTEPV      a resumable Bresenham whose state
- *     block is explicitly not yours to read (SPEC.md 5.6.7).
+ *   OSAPI_GFX_LSTEP / LSTEPV              RETIRED - a stock kernel carries the
+ *     cells and no body and answers CF=1 (SPEC.md 5.12.6). The resumable walk
+ *     is apps/os88gfx.inc's `GFXE_WALK` now, which is NASM and so out of C's
+ *     reach; a C package that wants one writes the recurrence itself and
+ *     commits with os88_gfx_points(). OSAPI_GFX_LINIT was the third and its
+ *     CELL HAS BEEN REUSED - 0x0300 is OSAPI_DSK_CACHE now (SPEC.md 18.95.8),
+ *     which is safe precisely because a retired cell answers CF=1 and every
+ *     caller of one has to test CF.
+ *   OSAPI_DSK_CACHE                       commands the kernel's directory
+ *     read-ahead window to a width, for a program about to claim the whole
+ *     arena. No C package does that - the DOS box is NASM - so it is listed
+ *     rather than wrapped; adding it is a thunk of a dozen lines.
  *   OSAPI_SYS_SNAPSHOT / CLAIM_SNAPSHOT / SYS_KB   buffer layouts that the
  *     kernel renumbers; for the Task Manager, not for applications.
  *   OSAPI_VOL_* / OSAPI_FS_* / OSAPI_DRV_CFG / OSAPI_FILE_*_SYS   fenced on
@@ -150,21 +149,39 @@
  *     to read a file's HEADER and decide from it before reading the rest,
  *     which os88_file_read() cannot express - it is os88_file_read_at().)
  *
- * The count: 96 of the 149 slots apps/os88api.inc publishes, plus six
+ * The count: 105 of the 164 slots apps/os88api.inc publishes, plus six
  * window-record accessors and six runtime helpers that are not slots at all -
- * 117 C entry points, and every one of them is in apps/cc/os88thunk.asm.
+ * 133 C entry points, and every one of them is in apps/cc/os88thunk.asm -
+ * FOUR OF THEM ONLY IF THE SHIM SAYS SO. The four fsx_* thunks are behind
+ * `%define CC_HAS_FSX` (the gate list below), so a package without it has
+ * four prototypes with no bodies. And a package ASSEMBLES ONLY THE ENTRY
+ * POINTS ITS C CALLS (SPEC.md 73.9.1): ccsmoke carries 13 of the 133, so an
+ * unused prototype here costs nothing and neither does an unused thunk. The
+ * recipe below counts the FILE, which holds all of them.
  *
  * How those three are counted, so the next person does not have to guess:
- *   149  `%define OSAPI_<NAME> KERNEL_SEG:0x...` lines in apps/os88api.inc.
+ *   164  `%define OSAPI_<NAME> KERNEL_SEG:0x...` lines in apps/os88api.inc.
  *        OSAPI_FIND_SZ is an `equ`, not a slot, and is not one of them.
- *    96  those names that appear in apps/cc/os88thunk.asm, in code rather
+ *   105  those names that appear in apps/cc/os88thunk.asm, in code rather
  *        than in a comment - a macro invocation names its slot as an
- *        argument, so a plain grep finds them all.
- *   117  distinct `_os88_*` entry points defined in that same file, whether
+ *        argument, so a plain grep finds them all. Four of the 105 are
+ *        inside the `%ifdef CC_HAS_FSX` block: a grep sees them, and a
+ *        package that has not set the define does not assemble them, which
+ *        is why the paragraph above gives 101 as the other number.
+ *   133  distinct `_os88_*` entry points defined in that same file, whether
  *        written out or generated by one of the CC_T_* macros. It is not
- *        96 + 12: some slots have two entry points (the _seg forms), and
+ *        105 + 12: some slots have two entry points (the _seg forms), and
  *        the callbacks a package DEFINES - os88_main, os88_paint and the
  *        rest - are not entry points into the API and are not counted.
+ *
+ * THOSE THREE ARE RE-COUNTED, NOT INCREMENTED. They read 96/149/117 until
+ * PACCMAN (SPEC.md 91) added os88_gfx_blitp() and os88_wm_display(), and the
+ * recipe above then answered 99/155/127; the merge that brought PACCMAN and
+ * THE WIRE onto the integration branch beside its own five new slots answers
+ * 101/160/129, APPLE2's four gated fsx thunks (SPEC.md 53) take the file to
+ * 105/160/133, and this cycle's four slots - PKG_REHOME, GFX_POINTS, CUR_BUSY
+ * and WM_MINIMIZE, none of them wrapped - take it to 105/164/133. Run the
+ * recipe when you touch this file; do not add one to what is written here.
  * ==========================================================================*/
 
 #ifndef OS88_H
@@ -259,10 +276,12 @@ struct os88_menuset {
 /* The layouts above are the kernel's, not this header's opinion of them, so
  * the header checks itself: a mismatch is an "Array dimension less than 1"
  * at the line below rather than a package that reads a menu set at the wrong
- * stride. Costs one byte of bss each. */
-static char os88__sz_menu[sizeof(struct os88_menu)    ==  6 ? 1 : -1];
-static char os88__sz_mset[sizeof(struct os88_menuset) == 36 ? 1 : -1];
-static char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
+ * stride. TYPEDEFS, so they cost nothing: SmallerC checks a typedef's
+ * dimension exactly as it checks an object's, and emits no storage for it -
+ * they were `static char` once, a byte of bss each in every C package. */
+typedef char os88__sz_menu[sizeof(struct os88_menu)    ==  6 ? 1 : -1];
+typedef char os88__sz_mset[sizeof(struct os88_menuset) == 36 ? 1 : -1];
+typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
 
 /* --- constants, mirrored from apps/os88api.inc ---------------------------
  * Mirrored, which means they are two copies of one fact: if a value here ever
@@ -373,6 +392,24 @@ static char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
  *   CC_HAS_WORKER     void  os88_worker(void *win);
  *   CC_HAS_ONWAKE     void  os88_onwake(void *win);       (74.1 - see below)
  *   CC_HAS_ONCLOSE    int   os88_onclose(void *win);      (75.1 - see below)
+ *
+ * ...AND ONE OF THEM GATES THE OTHER DIRECTION, which is why it is listed
+ * apart from the twelve above rather than among them:
+ *
+ *   CC_HAS_FSX        no callback at all - it assembles the four
+ *                     os88_fsx_*() THUNKS (SPEC.md 53, the exclusive
+ *                     bracket). Every row above gates a callback the package
+ *                     EXPORTS; this one gates calls the package MAKES, and
+ *                     it exists because nasm has no dead-code elimination:
+ *                     four thunks nothing references still cost every C
+ *                     package that assembles os88thunk.asm 92 bytes of its
+ *                     61,440, and ungated they took LOOM - the tightest
+ *                     image in the tree - to 30 bytes of spare. The
+ *                     prototypes below stay unconditional, because an
+ *                     unreferenced prototype costs nothing; what a package
+ *                     that calls one without the %define gets is nasm's
+ *                     `binary output format does not support external
+ *                     references` naming the symbol.
  * ========================================================================*/
 
 /* os88_main - your entry point (SPEC.md 20.2, 21 step 8).
@@ -472,6 +509,16 @@ void os88_set_color(int colour);                 /* ONE global pen for the
                                                   * the same lock hold as the
                                                   * drawing it colours */
 void os88_gfx_pixel(int x, int y);
+void os88_gfx_points(const void *pts, int n);    /* SPEC.md 5.6.9: n records
+                                                  * of two ints, x then y, in
+                                                  * a static of yours. THE
+                                                  * PLOT PRIMITIVE - one
+                                                  * arrival for a whole set of
+                                                  * pixels you computed, where
+                                                  * os88_gfx_pixel is one far
+                                                  * call EACH. A loop that
+                                                  * plots more than two or
+                                                  * three points wants this */
 void os88_gfx_hline(int x1, int x2, int y);
 void os88_gfx_vline(int x, int y1, int y2);
 void os88_gfx_fill(int x1, int y1, int x2, int y2);
@@ -479,7 +526,6 @@ void os88_gfx_frame(int x1, int y1, int x2, int y2);
 void os88_gfx_fill_gray(int x1, int y1, int x2, int y2);   /* 50% dither */
 void os88_gfx_xor_rect(int x1, int y1, int x2, int y2);
 void os88_gfx_xor_fill(int x1, int y1, int x2, int y2);
-void os88_gfx_line(int x1, int y1, int x2, int y2, int dilate);  /* 5.6 */
 
 /* The 8 pattern bytes are yours and are SCREEN-aligned, so two rects that
  * abut tile seamlessly. A set bit is WHITE, bit 7 is leftmost. */
@@ -515,6 +561,27 @@ int os88_gfx_blit1(const void *bits, int stride, int x, int y,
 /* os88_gfx_blit4 - the same idea for a 4bpp image: two pixels per byte, high
  * nibble leftmost. Coalesces equal-coloured runs into horizontal lines. */
 void os88_gfx_blit4(const void *pix, int stride, int x, int y, int w, int h);
+
+/* os88_gfx_blitp - a band you already composed AS THE CARD WANTS IT: four
+ * bitplanes, one rep movsb a plane a row, and nothing worked out on the way
+ * (SPEC.md 5.4.3). `planes` points at plane 0's first row, `plane_step` is the
+ * distance to plane 1, `stride` the bytes per row inside one; x must be a
+ * MULTIPLE OF 8 (free for a window - os88_wm_snap() already puts the content
+ * origin on one), w is in pixels. Returns 0 taken, -1 REFUSED.
+ *
+ * IT REFUSES MORE THAN IT ACCEPTS, so TEST THE ANSWER and keep the second
+ * path: a 1bpp adapter, an unaligned x, a block off the screen, a REAL armed
+ * clip region, a straddle of two displays, and a kern_small kernel each refuse
+ * and draw nothing. os88_gfx_blit4() is the fallback for all six and takes the
+ * same packed bytes these planes were built from.
+ *
+ * PLANE_STEP | 0x8000 IS A PROBE (SPEC.md 5.4.3.2): the refusals are decided
+ * against the rect alone, `planes` and `stride` are not read, and no pixel is
+ * written - so "would a band here be taken?" can be asked BEFORE composing
+ * anything. A refused probe changes nothing; ask again next repaint. */
+#define OS88_BLITP_PROBE 0x8000
+int os88_gfx_blitp(const void *planes, int plane_step, int stride,
+                   int x, int y, int w, int rows);
 
 /* --- text (SPEC.md 6) ----------------------------------------------------
  * The kernel's 8x8 face. One glyph cell is ~900 us and a 78-cell row is
@@ -579,6 +646,17 @@ int  os88_wm_geom(void *win, struct os88_size *sz);        /* content size;
                                                   * frame - it is the same
                                                   * subtraction done once */
 int  os88_wm_obscured(void *win);                /* 1 = covered or hidden */
+
+/* os88_wm_display - os88_video(), but for the display THIS WINDOW IS ON
+ * (SPEC.md 39.16.4). os88_video() answers about the primary and is right to;
+ * on a two-card machine a window can be dragged onto the other display, and
+ * then every fact taken from os88_video() is about a screen you are not on.
+ * Ask this wherever the answer decides a layout or a drawing path, and ask it
+ * again inside os88_onresize() - a drag across the seam fires that too. No
+ * lock, any context, so a worker may ask it. `v->dock_top` is the first row
+ * the dock owns on THAT display; the desktop row the slot also answers has no
+ * field in the struct and is dropped. */
+void os88_wm_display(void *win, struct os88_video *v);
 void os88_wm_title(void *win, const char *s);    /* redraws the caption strip
                                                   * and NOTHING else: 17 rows.
                                                   * The bytes must outlive it */
@@ -598,7 +676,7 @@ void os88_wm_grow(void *win);                    /* a resizable window's own
                                                   * repaint must END with this
                                                   * - the white fill erased
                                                   * the grow box */
-void os88_wm_resize(void *win, int w, int h);    /* do NOT hold the lock */
+void os88_wm_resize(void *win, int w, int h);    /* lock held or not (11.1.2) */
 
 /* os88_wm_minsize - "below this my layout stops working; do not cut me past
  * it, even to fit a screen" (11.100.2). w and h are the OUTER window, frame
@@ -734,107 +812,112 @@ int os88_wm_wake(void *win);
  * keys states its own chord (74.2). NOT the exclusive bracket of SPEC.md 53. */
 int os88_fullscreen(void *win, int enter);
 
-/* --- the exclusive bracket (SPEC.md 53) -----------------------------------
- * BEHIND %define CC_HAS_FSX. Nothing below is assembled into a package that
- * does not ask for it, which is why the gate is not optional: crt0.asm
- * %includes os88thunk.asm whole, so an ungated thunk costs every existing C
- * package image bytes it has no use for.
+/* --- the exclusive bracket (SPEC.md 53) ------------------------------------
+ * os88_fullscreen() above is a WINDOW the size of the screen. This is the
+ * other thing: your app BORROWS THE MACHINE. Multitasking is suspended, every
+ * kernel drawer is parked, and the video mode is yours to set.
  *
- * The bracket is the app BORROWING THE MACHINE. os88_fsx_run() is called from
- * a callback (the UI task, the gfx lock held) and does not return until your
- * os88_fsx_main(win) rets; while it runs the scheduler passes only this task
- * and its kept worker, the video mode is yours to change, and the desktop
- * comes back on the way out with nothing for you to undo.
+ * NEEDS `%define CC_HAS_FSX` IN YOUR .asm SHIM - one line covers all four,
+ * and without it these prototypes have no bodies and nasm answers `binary
+ * output format does not support external references` from a line in
+ * build/*.gen.asm you did not write.
  *
- * WHAT IS STILL YOURS TO GET RIGHT, because none of it is checkable from C:
- *   - EVERY KERNEL DRAWING SLOT IS REFUSED INSIDE THE BRACKET. os88_gfx_*,
- *     os88_font_*, the window slots: all of them. You draw by writing the
- *     framebuffer segment os88_fsx_mode() hands you, from assembly of your
- *     own (SPEC.md 73.11 - the inner loop is never C).
- *   - so is a kernel TOAST: it paints desktop geometry into a foreign mode.
- *     Force any overlay you need resident BEFORE you enter (SPEC.md 92.5).
- *   - never take the gfx lock (you are holding it) and never call
- *     os88_task_alive().
- *   - the FILE API IS LEGAL mid-bracket, and so are the sound grants this
- *     instance already holds (SPEC.md 53.1).
- *   - stack a SPEC.md 11.2 fullscreen window under it if you want the whole
- *     screen back on the way out looking like your app rather than like the
- *     desktop; apps/missile is the worked example. */
+ * NOTHING IN THE TOOLCHAIN ENFORCES ANY OF THE RULES, which is why the whole
+ * bracket belongs in ONE function whose header comment is the rule list
+ * (docs/APPLE2-SPEC.md section 13.3 is the worked example):
+ *
+ *   - the entry passed to os88_fsx_run() is a plain RESIDENT function whose
+ *     address is taken, and must NEVER be an ovl_ - tools/cc8086.py refuses
+ *     that address by name, because the bracket has parked the machine that
+ *     would have to load the module;
+ *   - after your first os88_fsx_mode() every drawing slot renders DESKTOP
+ *     geometry into a foreign framebuffer and is off-limits until you return;
+ *   - keys come from a polled int 16h and the mouse from os88_mouse(), with
+ *     YOU edge-detecting the buttons: no events are dispatched in here;
+ *   - pace with os88_fsx_wait() and never os88_task_sleep(), which returns at
+ *     once because nothing else is eligible;
+ *   - never touch PIT channel 0, the sound ports or an int 10h mode set;
+ *   - the exit is your entry RETURNING, on SPEC.md 11.2.1's F with Esc as the
+ *     escape hatch - or on Ctrl+F where your app TAKES TYPED TEXT, which is
+ *     11.2.1's own exemption and is the case of every emulator and every
+ *     terminal: a bare letter is not yours to bind when every letter belongs
+ *     to the guest, and Esc usually belongs to it too
+ *     (docs/APPLE2-SPEC.md section 13.3 is the worked example, and it states
+ *     its departure rather than assuming it). The ~200 ms wm_paint_all the
+ *     exit costs is paid once.
+ *
+ * The file slots, os88_mouse(), os88_ticks(), the sound, memory and cpu slots
+ * and these four stay legal throughout. */
+int os88_fsx_caps(void *win, int *kind);         /* -> FSXM_* mask; *kind =
+                                                  * OS88_VID_* of the display
+                                                  * that window is on. Any
+                                                  * context - grey a mode row
+                                                  * with it before entering
+                                                  * (47). `kind` is an
+                                                  * out-parameter and must be
+                                                  * a static (rule 1) */
+int os88_fsx_run(void (*entry)(void), void *win, int flags);
+int os88_fsx_mode(int id, void *fsi);            /* fsi = a static block of
+                                                  * OS88_FSI_SIZE bytes */
+int os88_fsx_wait(int kind);                     /* ...and it is the PRESENT
+                                                  * as well as the clock */
 
-/* The block os88_fsx_mode() fills - the kernel's FSI layout, field for field,
- * so the header checks its own size below. Text modes take FSI_W/H as columns
- * and rows and answer bpp 0. */
-struct os88_fsi {
-    unsigned seg;                                /* framebuffer segment */
-    unsigned w, h;                               /* pixels (text: cols, rows) */
-    unsigned stride;                             /* bytes per row */
-    unsigned char flags;                         /* OS88_FSIF_* */
-    unsigned char bpp;                           /* bits per pixel (text: 0) */
-    unsigned char banks;                         /* interleaved banks, 1 =
-                                                  * linear (CGA and Hercules
-                                                  * are NOT) */
-    unsigned char pages;                         /* display pages */
-    unsigned bstep;                              /* bank step bytes, 0 linear */
-    unsigned char mode;                          /* the OS88_FSXM_* id back */
-    unsigned char rsvd;
-};
-/* The self-check is a TYPEDEF and not the `static char` the three above are,
- * because those three predate a gated section: a static costs one byte of bss
- * in every C package that includes this header, and the whole claim being
- * made for CC_HAS_FSX is that a package which does not ask for the bracket
- * pays nothing for it. A typedef is checked and occupies no storage. */
-typedef char os88__sz_fsi[sizeof(struct os88_fsi) == 16 ? 1 : -1];
-
-#define OS88_FSXM_TEXT80  0                      /* 80x25 text  VGA CGA HERC */
-#define OS88_FSXM_TEXT40  1                      /* 40x25 text  VGA CGA      */
-#define OS88_FSXM_CGA320  2                      /* 320x200x4   VGA CGA      */
-#define OS88_FSXM_CGA640  3                      /* 640x200x2   VGA CGA      */
-#define OS88_FSXM_HERC    4                      /* 720x348 mono        HERC */
-#define OS88_FSXM_VGA0D   5                      /* 320x200x16 planar VGA    */
-#define OS88_FSXM_VGA13   6                      /* 320x200x256       VGA    */
-#define OS88_FSXM_VGA12   7                      /* 640x480x16        VGA    */
-#define OS88_FSXM_MODEX   8                      /* 320x240x256       VGA    */
-
-#define OS88_FSIF_TEXT    1
-#define OS88_FSIF_PLANAR  2
-#define OS88_FSIF_BANKED  4
+#define OS88_FSXM_TEXT80 0                       /* SPEC.md 53.4's ids - bit n
+                                                  * of the caps mask is id n */
+#define OS88_FSXM_TEXT40 1
+#define OS88_FSXM_CGA320 2
+#define OS88_FSXM_CGA640 3                       /* 640x200x2   CGA/VGA */
+#define OS88_FSXM_HERC   4                       /* 720x348     HERC */
+#define OS88_FSXM_VGA0D  5
+#define OS88_FSXM_VGA13  6                       /* 320x200x256 VGA */
+#define OS88_FSXM_VGA12  7
+#define OS88_FSXM_MODEX  8
 
 #define OS88_FSXF_KEEPWORKER 1                   /* os88_fsx_run() flags */
-#define OS88_FSXF_FASTTICK   2                   /* IRQ0 three times a tick */
+#define OS88_FSXF_FASTTICK   2
 
-#define OS88_FSXW_TICK    0                      /* os88_fsx_wait() kinds */
-#define OS88_FSXW_VSYNC   1                      /* SPINS */
-#define OS88_FSXW_FRAME   2                      /* YIELDS - use it with a
-                                                  * kept worker */
+#define OS88_FSXW_TICK  0                        /* os88_fsx_wait() clocks */
+#define OS88_FSXW_VSYNC 1
+#define OS88_FSXW_FRAME 2
 
-/* Which OS88_FSXM_* ids the display THIS WINDOW is on can set: bit n = id n.
- * *kind comes back as OS88_VID_*. Pass your own window - a package's entry
- * proc has none yet and would be told about the window it was launched from.
- * The bit that greys your mode row is the bit os88_fsx_mode() refuses on,
- * which is SPEC.md 47 rule 4's one predicate for both. */
-int os88_fsx_caps(void *win, unsigned char *kind);
+/* The block os88_fsx_mode() fills - SPEC.md 53.4's FSI_*, as BYTE offsets
+ * into a static char array, because a C struct here would have to promise an
+ * alignment nasm does not. */
+#define OS88_FSI_SEG    0                        /* word: framebuffer segment */
+#define OS88_FSI_W      2                        /* word: width in pixels */
+#define OS88_FSI_H      4                        /* word: height in pixels */
+#define OS88_FSI_STRIDE 6                        /* word: bytes per row */
+#define OS88_FSI_FLAGS  8                        /* byte: bit0 text, bit1
+                                                  * planar, bit2 banked */
+#define OS88_FSI_BPP    9                        /* byte */
+#define OS88_FSI_BANKS  10                       /* byte: 1 = linear */
+#define OS88_FSI_PAGES  11                       /* byte */
+#define OS88_FSI_BSTEP  12                       /* word: bank step in bytes */
+#define OS88_FSI_MODE   14                       /* byte: the id, echoed */
+#define OS88_FSI_SIZE   16
 
-/* Take the machine. Calls os88_fsx_main(win); 0 = it ran and the desktop is
- * back, -1 = refused with nothing changed. Needs CC_HAS_FSX, which is also
- * what declares the callback. */
-int os88_fsx_run(void *win, int flags);
+/* The three the bracket's FOUR do not cover, wrapped for LEMMINGS (SPEC.md
+ * 114) and gated like every thunk by the C's own use set (SPEC.md 73.9.1),
+ * so a package that names none of them carries none of them. */
+int os88_fsx_page(int page);                     /* show FSI_PAGES' page n,
+                                                  * latched at retrace and
+                                                  * waited for (53.10): 0 =
+                                                  * on the glass, -1 = no
+                                                  * bracket, no mode, or one
+                                                  * page */
+int os88_fsx_surf(struct os88_rect *r);          /* the rect the bracket
+                                                  * OWNS (53.7.1), inclusive
+                                                  * like every rect here - on
+                                                  * a two-display SAME-MODE
+                                                  * bracket it is not at 0,0.
+                                                  * 0 = filled, -1 = none */
 
-/* Set a foreign mode and describe it. Legal MORE THAN ONCE inside one
- * bracket - a program whose game raster and whose text screens are different
- * shapes changes mode between them. 0 = set, -1 = refused. */
-int os88_fsx_mode(int id, struct os88_fsi *fsi);
-
-int os88_fsx_wait(int kind);                     /* the frame clock */
-int os88_fsx_page(int page);                     /* flip, latched at retrace */
-int os88_fsx_surf(struct os88_rect *r);          /* the rect you own */
-
-/* Read the keyboard, which is the one thing inside the bracket that has no
- * slot at all and should not have one: no event is dispatched here, and the
- * contract is that the app polls. wait == 0 peeks and answers 0 when nothing
- * is there. The answer is (scan << 8) | ascii. It uses the enhanced BIOS pair
- * where the BIOS says it has one and the original pair where it does not - so
- * F11 and F12 arrive on an AT and are ABSENT on an 83-key XT, which is a fact
- * to grey with rather than a defect. */
+/* Read the keyboard inside the bracket - no event is dispatched there and the
+ * contract is that the app polls (53.1). wait == 0 peeks and answers 0 when
+ * nothing is there. The answer is (scan << 8) | ascii. It uses the enhanced
+ * BIOS pair where the BIOS says it has one (0040:0096 bit 4) and the original
+ * pair where it does not - so F11 and F12 arrive on an AT and are ABSENT on an
+ * 83-key XT, which is a fact to grey with (SPEC.md 47) rather than a defect. */
 int os88_fsx_key(int wait);
 
 /* --- tasks and time (SPEC.md 8, 20.6) ------------------------------------- */
@@ -867,6 +950,20 @@ void os88_mouse(struct os88_mouse *m);
  * It is ADVICE, NOT AN ORACLE: a break code the ISR missed leaves that key
  * reading down until it is pressed again. Bound what a "yes" makes you do. */
 int  os88_key_down(int scan);
+
+/* ALT+ENTER, THE FULL-SCREEN KEY (SPEC.md 11.2.1.1). os88_onkey is handed
+ * ascii 0 with OS88_SCAN_ENTER for it - the code an enhanced ROM gives, and
+ * the code the kernel SYNTHESISES on every ROM that does not, which is most
+ * of them: no XT BIOS enqueues this combination at all (SPEC.md 9.7.1).
+ * Two things it needs from you:
+ *   - ask os88_key_down(OS88_SCAN_ALT) ONCE from os88_main(), because the
+ *     kernel's latch rides on the key-state map and the map does not exist
+ *     until something asks. Without it the chord is silently dead.
+ *   - test it ABOVE any ascii handling, since ascii is 0.
+ * A window on SPEC.md 11.2's latch keeps taking os88_onkey while it is full
+ * screen, so one test is both directions. */
+#define OS88_SCAN_ENTER 0x1C
+#define OS88_SCAN_ALT   0x38
 
 int  os88_evq_pending(void);                     /* events queued BEHIND the
                                                   * one being dispatched (13.4)
@@ -945,6 +1042,37 @@ int os88_file_delete(const char *name);
 int os88_file_rename(const char *oldname, const char *newname);
 int os88_file_mkdir(const char *name);
 
+/* os88_file_copy / os88_file_move - ONE ENTRY from one folder to another, by
+ * the kernel's own engine (SPEC.md 22.24) - one cell, two verbs, and these
+ * are its two names. A struct os88_place is what os88_file_here() fills and
+ * os88_file_goto() takes, so "copy this to where I was standing" needs no
+ * vocabulary of its own. It lands under the SAME NAME; a copy that renames is
+ * a copy and then os88_file_rename().
+ *
+ * Reach for the copy rather than writing the loop. It streams through a
+ * buffer it claims and gives back, takes the redirector's own fast path when
+ * both ends are on one remote volume, and DELETES A PARTIAL DESTINATION when
+ * anything fails - and that last one is the half a hand-rolled copy in C gets
+ * wrong, because it is the path you cannot easily test.
+ *
+ * os88_file_move() is the file manager's Cut. On one volume it REWRITES THE
+ * DIRECTORY ENTRY and moves no data at all, so a 100KB file costs a directory
+ * write instead of 100KB out through a buffer and 100KB back; where that
+ * declines - two volumes, a destination that already holds the name, a
+ * folder with no free slot - it copies and then deletes the source, so there
+ * is no "not attempted" answer to handle any more. A folder moves with
+ * everything under it. Either verb REPLACES a file of that name at the
+ * destination, as a paste answered "replace all" would.
+ *
+ * Both return 0, or -1 with os88_ferr() set: FERR_EXIST when the destination
+ * is the folder the entry is already in (nothing was written), FERR_FULL
+ * when the engine cannot claim its buffer - a same-volume move needs none -
+ * and FERR_NODISK while the user's own Cut/Copy/Paste is running. */
+int os88_file_copy(const char *name, const struct os88_place *from,
+                   const struct os88_place *to);
+int os88_file_move(const char *name, const struct os88_place *from,
+                   const struct os88_place *to);
+
 /* os88_ferr - the FERR_* of the last file call, 0 if it succeeded. It is one
  * word of the runtime's bss and every file thunk writes it, so read it before
  * the next call. os88_file_read() answers 0 bytes both for an empty file and
@@ -965,7 +1093,10 @@ int os88_disk_cluster_sectors(void);             /* chunk sizes are multiples
 
 void os88_file_here(struct os88_place *p);       /* bank where you stand... */
 int  os88_file_goto(struct os88_place *p);       /* ...and come back. A
-                                                  * REMOUNT: real floppy I/O */
+                                                  * REMOUNT for DISPLAY - real
+                                                  * floppy I/O. To read or
+                                                  * write by name, stand with
+                                                  * os88_file_goto_q_mark() */
 
 /* os88_file_goto_q_mark - stand in another folder QUIETLY, and STAY there
  * (SPEC.md 74.1, 19.2.2). Inside the volume you are on it is a word - no disk
@@ -1004,6 +1135,19 @@ int os88_arg_file(char *name13, struct os88_place *p);
  * this pads them. Your icon becomes the mark its documents carry. */
 int os88_assoc_set(const char *ext, const char *stem);
 
+/* os88_assoc_flush - bring volume vol's ASSOC.DAT up to date with the
+ * packages on it (54.7.6): after copying packages onto a disk, so the next
+ * boot knows their icons, their extensions and where they are. flags is 0
+ * (incremental) or the OS88_ASSOC_* bits: FULL reads every package the old
+ * cache did not hold; NOFLUSH|HOLD loads the writer and keeps it (call it
+ * BEFORE replacing system files), NOFLUSH alone releases it - on every way
+ * out. Returns 0, or -1 if it could not (a full or write-protected disk, no
+ * system disk, kern_small). */
+#define OS88_ASSOC_FULL    1
+#define OS88_ASSOC_HOLD    2
+#define OS88_ASSOC_NOFLUSH 4
+int os88_assoc_flush(int vol, int flags);
+
 /* The batch bracket (18.9.3): between these two a floppy may reuse its banked
  * BPB instead of re-reading LBA 0 at every volume switch - one call and one
  * revolution per switch, on a copy or an install. It nests, and any
@@ -1027,6 +1171,86 @@ unsigned os88_mem_regrow(unsigned seg, int kb);  /* 0 = refused and the old
                                                   * which may have MOVED */
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
+
+/* --- letting the compactor MOVE a claim (SPEC.md 66) ----------------------
+ * A claim is born PINNED, and a pinned claim sitting in the middle of the
+ * arena is a wall the heap cannot close over for as long as you hold it
+ * (SPEC.md 50.3). Declaring one movable is two lines and it is the whole of
+ * what a C package could not do until now:
+ *
+ *     %define CC_HAS_ONMOVE            (in your .asm shim)
+ *
+ *     static unsigned my_seg;
+ *     void os88_onmove(unsigned was, unsigned now)
+ *     {   if (my_seg == was) my_seg = now;   }
+ *
+ *     my_seg = os88_mem_claim(32);
+ *     os88_mem_movable(my_seg, 1);
+ *
+ * THREE RULES, and each of them has cost this project a defect:
+ *
+ *   1. FIX EVERY WORD THAT NAMES THE BLOCK, not the first one you think of.
+ *      A second copy of the segment kept anywhere - a cached base, a
+ *      "current" pointer, a scratch you handed a library - is stale the
+ *      instant this returns. SPEC.md 66.1 is the record of a design that
+ *      failed on exactly that.
+ *   2. THE HANDLER MAY NOT CLAIM, FREE, YIELD, DRAW OR TOUCH A FILE
+ *      (SPEC.md 66.3 rule 3). It runs INSIDE the compaction, and any of those
+ *      re-enters the walk that is calling it. Assignments and arithmetic only.
+ *   3. PIN IT AROUND A FILE CALL. If the block is the ES:BX of an
+ *      os88_file_read()/write(), pin it first and declare it again after
+ *      (SPEC.md 66.9 reason 4) - a file call claims, so a compaction inside
+ *      one moves the buffer out from under a transfer the kernel already has
+ *      the address of.
+ *
+ * The kernel will not move it while a WORKER of yours could be running in it
+ * (SPEC.md 66.5), so a package with no worker gets this for free and one with
+ * a worker gets it whenever that worker is parked. */
+int os88_mem_movable(unsigned seg, int on);   /* on: 1 = movable, 0 = pin.
+                                               * 0 = the kernel took it,
+                                               * -1 = refused. ALWAYS take
+                                               * the answer */
+void os88_onmove(unsigned was, unsigned now); /* YOU define this, under
+                                               * %define CC_HAS_ONMOVE */
+
+/* --- and your REGION, if you hired a worker (SPEC.md 66.6.2) ---------------
+ * Your region - the block your code, your literals and your statics live in -
+ * is a claim like any other, and os88_mem_movable(<your segment>, 1) declares
+ * it. But the moment you call os88_task_spawn() the kernel has written your
+ * segment into that worker's frame, and its own call chain has pushed it again
+ * since, at depths nothing can compute. So a region with a worker stays PINNED
+ * however you declare it - unless you say this:
+ *
+ *     os88_task_restartable(1);      // in os88_main(), for a poller
+ *
+ * WHAT YOU ARE ASSERTING is stronger than os88_mem_parksafe() and the
+ * difference is the whole of it: parksafe says "you may STOP my worker here",
+ * this says "you may DISCARD what it is standing on and start it again".
+ * os88_worker() begins AGAIN - it does not resume. Everything it needs must
+ * live in a static (which moves with your region) or in a claim of its own
+ * (which has os88_onmove), and never in an automatic across the declaration.
+ *
+ * WHEN IT IS TRUE. The kernel only ever restarts a PARKED worker, and a worker
+ * parks inside os88_task_alive(). So a loop of the ordinary shape -
+ *
+ *     for (;;) { os88_task_alive(win); os88_task_sleep(n); ...statics... }
+ *
+ * - is restartable at the one point it can be restarted at, and may declare
+ * once and leave it. What changes that is os88_mem_parksafe(): with BOTH
+ * declared your worker can also be stopped, and therefore restarted, while it
+ * is blocked in os88_gfx_lock() - which is anywhere in your loop, including
+ * halfway through a frame. If that costs you something, declare this as a
+ * WINDOW instead: turn it on immediately before os88_task_alive() and off
+ * immediately after.
+ *
+ * THE ASYMMETRY TO WEIGH: parksafe declared wrongly costs you a missed
+ * optimisation. This costs you a lost loop iteration - and if your worker was
+ * holding something the declaration was wrong about, it costs you
+ * correctness. Undeclared is the safe answer and it is the default. */
+int os88_task_restartable(int on);            /* on: 1 = you may restart my
+                                               * worker at its entry, 0 =
+                                               * withdraw. 0 = the kernel took
+                                               * it, -1 = refused */
 
 /* --- the PARTS standard (SPEC.md 20.12) ------------------------------------
  * A package that carries more than its own segment - a second segment of
@@ -1091,8 +1315,16 @@ int os88_toast(const char *text, int ticks);
 /* --- the runtime's own helpers -------------------------------------------
  * There is no C library here (SPEC.md 73.9: no printf family - it is
  * thousands of bytes for the one conversion a program wanted). These six are
- * hand-written in apps/cc/os88thunk.asm, are DS-only - no string instruction
- * and therefore no ES - and are all a package has needed so far. */
+ * hand-written in apps/cc/os88thunk.asm, work on DS only - memset and memcpy
+ * are `rep stosb`/`rep movsb` with ES loaded from DS inside the call, which is
+ * why compiled C may not spell them itself (SPEC.md 73.5.1) - and are all a
+ * package has needed so far.
+ *
+ * os88_memcpy copies FORWARD, a byte at a time, so it is safe for an
+ * OVERLAPPING move to a LOWER address (dst < src: closing a gap, the way a
+ * text editor deletes) and wrong for one to a higher address, which needs a
+ * backward copy of your own. A non-overlapping copy is either. n = 0 copies
+ * nothing. */
 void os88_memset(void *p, int c, unsigned n);
 void os88_memcpy(void *dst, const void *src, unsigned n);
 unsigned os88_strlen(const char *s);

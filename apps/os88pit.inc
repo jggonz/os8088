@@ -18,9 +18,19 @@
 ; The tick is read BEFORE and AFTER the counter and the pair is taken again if
 ; it moved: without that, a read landing on the reload takes the old tick with
 ; the freshly reloaded counter and reports 55ms that did not happen. IF is
-; cleared across the latch and the two INs and NOWHERE ELSE - holding it down
+; cleared across the latch and the INs and NOWHERE ELSE - holding it down
 ; across the tick reads as well would defeat the check, because the tick
 ; cannot move while its ISR cannot run.
+;
+; **THE RE-READ ALONE DOES NOT CLOSE IT.** A reload that lands INSIDE the cli
+; leaves IRQ0 pending, and the CPU need not have taken it by the time the tick
+; is read again - so the pair passes with the old tick and the new count, one
+; tick EARLY. MEASURED on MartyPC's 5150: 40 such reads in 60,000 over 211
+; ticks, and PIXELSTEIN's Auto judged a 98.2 ms frame as 43.3 (98.2 less one
+; tick) about one run in twelve of tests/pxsauto.py. So the PIC's IRR is read
+; in the same window: IRQ0 pending with the count under half a tick in means
+; the reload came before the latch and its tick is owed - the kernel's own
+; accounting has done exactly this all along (sched.inc's .cohere).
 ;
 ; **A SPAN THAT SITS INSIDE A cli LONGER THAN 55ms UNDER-REPORTS**, for that
 ; same reason. Nothing that uses this holds interrupts off for anything like
@@ -54,12 +64,22 @@ pit_now:
     mov cl, al
     jmp short $+2
     in  al, 0x40
-    mov ah, al
-    mov al, cl
+    mov ch, al                  ; CX = the latched count
+    mov al, 0x0A                ; OCW3: the next read of 0x20 is the IRR
+    out 0x20, al
+    jmp short $+2
+    in  al, 0x20                ; bit 0: IRQ0 raised and not yet TAKEN
     popf
     cmp dx, [es:0x6C]           ; ...then the tick again: unchanged means the
     jne .again                  ; two halves belong to each other
-    neg ax                      ; the counter runs DOWN; count up in the tick
+    neg cx                      ; the counter runs DOWN; count up in the tick
+    test al, 1
+    jz .cohere
+    or cx, cx                   ; pending, and under half a tick in: the
+    js .cohere                  ; reload came BEFORE the latch and its tick
+    inc dx                      ; is not in 006C yet - sched.inc's .cohere
+.cohere:
+    xchg ax, cx
     pop es
     pop cx
     ret

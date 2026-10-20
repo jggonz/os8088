@@ -119,7 +119,12 @@ static int rc_sh_cy;                               /* the row the cursor was
                                                     * DRAWN on, -1 = none */
 static unsigned char rc_bandbuf[RC_COLS * RC_CELLH];   /* rc_band's output */
 static unsigned char rc_want_at[RC_ATTRB];         /* a row's wanted attrs */
-static char rc_runbuf[RC_COLS + 1];                /* a font_run span */
+#define rc_runbuf ((char *)rc_bandbuf)              /* a font_run span: the
+                                                    * fallback composes it
+                                                    * only AFTER blit1 refused
+                                                    * the band, so it takes
+                                                    * the band's own scratch
+                                                    * (81 of its 640 bytes) */
 
 /* the counters the harness and the debug key read: calls and cells drawn */
 static unsigned rc_n_calls, rc_n_cells, rc_n_scroll;

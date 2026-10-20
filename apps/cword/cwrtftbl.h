@@ -50,16 +50,16 @@
  * thing the table says. That is Opus's design and it is the reason RTF support
  * fits in a package that must also hold an editor. Two tables:
  *
- *   cw_rsym[]  - THE KEYWORD TABLE. 76 entries, sorted by name, searched by
+ *   cw_rsym[]  - THE KEYWORD TABLE. 77 entries, sorted by name, searched by
  *                ovl_rtf_lookup(). Each says what kind of thing the keyword is
  *                (its `rac`), what value it carries, and an index into...
- *   cw_rrb[]   - THE PROPERTY-ACTION TABLE. 40 entries, indexed by an
+ *   cw_rrb[]   - THE PROPERTY-ACTION TABLE. 41 entries, indexed by an
  *                CW_IRRB_* constant. Each says which property record to touch,
  *                where in it, how wide, and what the value is when the
  *                keyword arrives with no number after it.
  *
  * ---------------------------------------------------------------------------
- * THE KEYWORD SET IS FROZEN AT 76 AND THE REST IS AN EXPLICIT IGNORE PATH
+ * THE KEYWORD SET IS FROZEN AT 77 AND THE REST IS AN EXPLICIT IGNORE PATH
  * ---------------------------------------------------------------------------
  * Opus's rgrsymWord has 287 entries and RTFRARE.C is 1,700 further lines of
  * tables, borders, footnotes, sections, columns, index entries and fields. The
@@ -88,8 +88,8 @@
  *   fields (\field \fldinst \fldrslt)                   ignored, which leaves
  *                                                       the result text - the
  *                                                       behaviour you want
- *   revision marks, outline/small caps (\revised \outl  no renderer for them;
- *   \scaps)                                             the text still reads
+ *   revision marks, outline (\revised \outl)          no renderer for them;
+ *                                                       the text still reads
  *   \mac and \pca charsets                              read as the default
  *
  * ---------------------------------------------------------------------------
@@ -564,9 +564,14 @@
 #define CW_IRRB_DEFF        37  /* \deff                                     */
 #define CW_IRRB_ASTERISK    38  /* \*      the next unknown keyword skips    */
 
-#define CW_IRRB_IGNORE      39  /* recognised, deliberately does nothing     */
+#define CW_IRRB_SCAPS       39  /* \scaps  small caps - a CHP bit, placed here
+                                 * rather than in the CHP range so no row moved
+                                 * when it was added (SPEC.md 73.12.4); \plain's
+                                 * reset is explicit and needs no range      */
 
-#define CW_IRRB_MAX         40
+#define CW_IRRB_IGNORE      40  /* recognised, deliberately does nothing     */
+
+#define CW_IRRB_MAX         41
 
 /* ===========================================================================
  * THE TABLES
@@ -716,7 +721,7 @@ CW_CTASSERT(66, CW_IRRB_PLAIN >= CW_IRRB_CHP_LIM);
  * four rules of apps/cc/os88.h, and cwrtftbl.c is written to all four.
  * ========================================================================= */
 
-#define CW_RTF_NAMES     76     /* rows in cw_rsym[] */
+#define CW_RTF_NAMES     77     /* rows in cw_rsym[] */
 #define CW_RTF_NOTFOUND  (-1)
 
 /* DECLARED WITHOUT A DIMENSION ON PURPOSE, and the tables are DEFINED without

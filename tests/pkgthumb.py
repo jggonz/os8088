@@ -30,11 +30,12 @@ window's right edge.
 """
 import os
 import subprocess
+import re
 import sys
-import time
 
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
+import os88build as _B
 import os88marty as M
 from os88mouse import Mouse
 from os88geom import WIN_SIZE, MAX_WIN
@@ -43,8 +44,24 @@ import dispcp
 APP = (sys.argv[1] if len(sys.argv) > 1 else "notepad").lower()
 ARGS = [a for a in sys.argv[2:] if not a.startswith("--")]
 MACHINE = ARGS[0] if ARGS else "os8088_5150_cga_gla"
+
+
+def _pkgnum(name, default):
+    """The constant THIS BUILD was assembled with. $(PKGSBDEF) reaches the
+    package builds, so the knob wins over the %define in the source - reading
+    only the source would assert the shipped numbers against another tree."""
+    for d in os.environ.get("OS88_PKGDEFS", "").replace("-D", " ").split():
+        k, _, v = d.partition("=")
+        if k == name and v:
+            return int(v, 0)
+    m = re.search(r"^%define\s+" + name + r"\s+(\d+)",
+                  open("apps/notepad/notepad.asm").read(), re.M)
+    return int(m.group(1)) if m else default
+
+
 RATE = int(next((a.split("=")[1] for a in sys.argv[1:]
-                 if a.startswith("--rate=")), "0"))
+                 if a.startswith("--rate=")), str(_pkgnum("SB_RATE", 0))))
+IDLE = _pkgnum("SB_IDLE", 0)         # 13.10.5.4.2's PAUSE commit
 W_FLAGS, W_X, W_Y, W_W, W_H = 0, 2, 4, 6, 8
 TITLE_H = 18
 
@@ -145,7 +162,11 @@ def band(px, r):
 # One long document per app, in the format its association claims: each is
 # opened by DOUBLE-CLICKING it, so the app comes up with something to scroll
 # rather than empty (SPEC.md 54).
-os.makedirs("build/pkgthumbsrc", exist_ok=True)
+# WRITTEN WHERE IT IS READ (docs/plans/SOAK-PARALLEL.md 14.2): scratch_disk
+# resolves the paths it is handed, so a source file created at the literal
+# `build/pkgthumbsrc/` is one os88disk then looks for in the run's own tree.
+SRCDIR = _B.at("build/pkgthumbsrc")
+os.makedirs(SRCDIR, exist_ok=True)
 DOC = {"notepad": ("LONG.TXT",
                    "".join("line %03d of a long document\r\n" % i
                            for i in range(220))),
@@ -159,7 +180,7 @@ DOC = {"notepad": ("LONG.TXT",
        "texpad":  ("LONG.TEX",
                    "".join("line %03d of a long source file\r\n" % i
                            for i in range(220)))}[APP]
-LONG = "build/pkgthumbsrc/" + DOC[0]
+LONG = os.path.join(SRCDIR, DOC[0])
 open(LONG, "w").write(DOC[1])
 PKG = {"notepad": "build/notepad.o88", "browser": "build/browser.o88",
        "texpad": "build/texpad.o88", "word": "build/word.o88",
@@ -175,18 +196,17 @@ if APP == "frotz":
     need("build/frotz.o88", "build/zt/ZOPS.Z5")
     EXTRA = ["build/zt/ZOPS.Z5"]
 elif APP == "word":
-    # Word is not on the apps disk and it ships in TWO pieces: WORD.OVL is
-    # far-called out of the package image (SPEC.md 68.10) and the document is
-    # its own format, so this borrows the three artifacts `make worddisk`
-    # builds rather than writing a .DOC by hand.
+    # Word is not on the apps disk and the document is its own format, so
+    # this borrows the two artifacts `make worddisk` builds rather than
+    # writing a .DOC by hand.
     #
     # os88fixture.need is SAFE AGAIN here, and it was not while the gesture was
     # a knob: `make` for a fixture runs with no knob variables, and the
     # VIDSTAMP rule then removed build/kernel.bin because the knob set
     # differed. The drag ships now, so a plain `make` is the build under test.
     from os88fixture import need
-    need("build/word.o88", "build/WORD.OVL", "build/WELCOME.DOC")
-    EXTRA = ["build/WORD.OVL", "build/WELCOME.DOC"]
+    need("build/word.o88", "build/WELCOME.DOC")
+    EXTRA = ["build/WELCOME.DOC"]
 M.scratch_disk(DISK, PKG, *(EXTRA or [LONG]))
 
 OPEN = {"word": "WELCOME.DOC", "frotz": "ZOPS.Z5"}.get(APP, DOC[0])
@@ -201,8 +221,13 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     dispcp.open_drive(m, mo, S, M.settle, "B")
     d = dispcp.win_list(m, S)[-1]
     dx, dy = dispcp.win_rect(m, S, d)[:2]
+    nwin = len(dispcp.win_list(m, S))
     dispcp.open_named(m, mo, S, M.settle, dx, dy, OPEN)
-    time.sleep(1.5)
+    try:
+        M.until(m, lambda _: len(dispcp.win_list(m, S)) > nwin,
+                "the app's window", poll=0.25, limit=60)
+    except M.MartyError:
+        pass                                     # ...checked just below
     M.settle(m)
     if APP == "frotz":
         # A STORY THAT FITS THE WINDOW HAS NO SCROLLBACK, and Frotz's bar
@@ -212,18 +237,18 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
         # already shown into the ring.
         for _ in range(14):
             m.key("Enter")
-            time.sleep(0.25)
-        time.sleep(2.0)
+            M.pace(m, 0.25)
+        # TIME: the story runs on Frotz's WORKER, which ui_done cannot see
+        M.pace(m, 2.0)
         M.settle(m)
         w = wins(m)[-1]
         mo.drag(w[0] + w[2] - 5, w[1] + w[3] - 5, w[0] + w[2] - 5, w[1] + 70)
-        time.sleep(2.0)
         M.settle(m)
     w = wins(m)[-1]
     check("the app opened a window", w[2] > 100, f"{w}")
 
     mo.to(4, 4)                                  # pointer off everything
-    time.sleep(1.0)
+    M.settle(m)
     px = rows(m)
     bars = find_bars(px, w)
     check("a scroll-bar track is on screen", len(bars) >= 1, f"{bars}")
@@ -252,7 +277,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     mo.click(cx, ttop + th // 2)
     M.settle(m)
     mo.to(4, 4)
-    time.sleep(1.0)
+    M.settle(m)
     px = rows(m)
 
     barband = (bar[0] - 2, bar[2], bar[1] + 2, bar[3])
@@ -277,10 +302,19 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     # --- press and drag ----------------------------------------------------
     mo.to(cx, ttop + th // 2)
     mo._edge(True)
-    time.sleep(0.8)
+    M.pace(m, 0.8)
     target = bar[3] - th // 2 - 2
-    mo.to(cx, target, l=True)
-    time.sleep(1.4)
+    # RAW PACKETS, AND THE READING IS TAKEN WITH NO SLEEP AFTER THEM. This used
+    # to be `mo.to(...); time.sleep(1.4)`, and SPEC.md 13.10.5.4.2's PAUSE
+    # commit made both halves wrong: the absolute driver confirms every packet
+    # by reading guest memory, which is ~680 GUEST ms a packet here, and a host
+    # sleep is magnified ~5.7x - so SB_IDLE's 494 ms elapsed BETWEEN two
+    # packets of one drag and again during the wait, and the row read the pause
+    # commit as "the content followed at rate 0". A raw stream is ~17 ms a
+    # packet, which is a real hand and is inside the deadline.
+    step = 8 if target > ttop else -8
+    for _ in range(abs(target - (ttop + th // 2)) // 8):
+        m.mouse(0, step, l=True)
     px1 = rows(m)
     b1, c1 = band(px1, barband), band(px1, content)
     check("the bar changed under the hand", b1 != b0)
@@ -288,6 +322,17 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
         check("...and the CONTENT did not, at rate 0", c1 == c0)
     else:
         check(f"...and the CONTENT followed, at rate {RATE}", c1 != c0)
+    # ...and now the PAUSE, which is a different trigger (13.10.5.4.2)
+    if IDLE:
+        try:                                     # 70 x 0.06s, in GUEST time
+            M.until(m, lambda _: band(rows(m), content) != c1,
+                    "the pause commit", poll=0.06,
+                    guest=70 * 0.06 * M.GUEST_PACE)
+            got = True
+        except M.MartyError:
+            got = False
+        check("...and the PAUSE commits with the button still down", got,
+              f"(SB_IDLE {IDLE})")
     # --- D: x is never read, and it is ALSO how the thumb gets read ---------
     # THE POINTER HAS TO BE OFF THE BAR TO SEE THE THUMB. The cursor is drawn
     # over it during the drag - it is sitting ON the thing being dragged - and
@@ -295,7 +340,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     # for, which reads as "no thumb" rather than as a cursor. Moving 150px off
     # (still held) is 13.10.5.2's own case and gives a clean frame for free.
     mo.to(cx - 150, target, l=True)
-    time.sleep(1.4)
+    M.settle(m)
     t1 = find_thumb(rows(m), bar)
     check("the thumb moved down with the hand",
           t1 is not None and t1[0] > ttop + 2, f"(top {ttop} -> {t1})")
@@ -306,7 +351,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     vw = len(px[0])
     x2p = cx + 60 if cx + 60 < vw - 4 else cx - 40
     mo.to(x2p, target, l=True)
-    time.sleep(1.4)
+    M.settle(m)
     t2 = find_thumb(rows(m), bar)
     check(f"x is never read: at x={x2p} too, the same thumb",
           t2 is not None and t1 is not None and abs(t2[0] - t1[0]) <= 1,
@@ -322,7 +367,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     mo._edge(False)
     M.settle(m)
     mo.to(4, 4)
-    time.sleep(1.0)
+    M.settle(m)
     px2 = rows(m)
     check("the release moves the CONTENT", band(px2, content) != c0)
     t3 = find_thumb(px2, bar)

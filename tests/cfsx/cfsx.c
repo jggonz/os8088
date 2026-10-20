@@ -2,7 +2,7 @@
  * os8088 - tests/cfsx/cfsx.c
  *
  * THE CAPABILITY GATE FOR THE EXCLUSIVE BRACKET IN C (SPEC.md 53, reached
- * from C per SPEC.md 92.2). tests/chello proved a compiled package can hold a
+ * from C per SPEC.md 114.2). tests/chello proved a compiled package can hold a
  * window and tests/covl proved half of it can live in a second segment; this
  * one proves a compiled package can BORROW THE MACHINE - take the screen away
  * from the desktop, set a foreign video mode, drive the VGA's own registers,
@@ -17,7 +17,7 @@
  * ---------------------------------------------------------------------------
  * Every claim below is the sort that assembles cleanly, boots, and is wrong -
  * a picture that is merely different rather than absent. Three of them had
- * never been done anywhere in this tree before SPEC.md 92 needed them:
+ * never been done anywhere in this tree before SPEC.md 114 needed them:
  *
  *   THE CRTC LINE COMPARE with a panel standing still under a scrolling top
  *   half; a MODE CHANGE INSIDE a bracket; and an ovl_* FAR-CALLED FROM INSIDE
@@ -25,7 +25,7 @@
  *
  * So the gate prints, in the foreign mode, with the BIOS's own font: the caps
  * bitmask, all ten FSI fields, the rect fsx_surf answers, the counter only
- * os88_fsx_main() can bump, the three line-compare registers READ BACK, and
+ * cf_fsx_main() can bump, the three line-compare registers READ BACK, and
  * what the overlay answered. A screendump of any stage is a complete
  * statement about that stage.
  *
@@ -36,7 +36,7 @@
  *     in the window before the bracket and again inside it. Asking with 0
  *     answers about the window we were LAUNCHED from, which is the defect
  *     kernel/fsx.inc's own comment records against Missile Command.
- *  2. THE BRACKET ACTUALLY RUNS: cf_entered is bumped by os88_fsx_main() and
+ *  2. THE BRACKET ACTUALLY RUNS: cf_entered is bumped by cf_fsx_main() and
  *     by nothing else, and the window shows it after the bracket returns.
  *  3. ALL TEN FSI FIELDS printed inside the foreign mode.
  *  4. A SIXTEEN-COLOUR RAMP in mode 0Dh - a plane that does not get written
@@ -49,7 +49,7 @@
  *  7. THE OVERLAY FROM INSIDE THE BRACKET, in three arms the operator picks
  *     between - and the third one is the reason this gate found something:
  *
- *       SPACE  force the module resident BEFORE entering (SPEC.md 92.5's
+ *       SPACE  force the module resident BEFORE entering (SPEC.md 114.5's
  *              rule), with a SPEC.md 11.2 fullscreen window stacked under
  *              the bracket the way apps/missile stacks one
  *       L      enter first and load the module INSIDE, fullscreen stacked
@@ -57,7 +57,7 @@
  *
  *     Booted against build/cfsxnoovl.img, which carries no module at all,
  *     SPACE refuses in the app's own words with nothing toasted, which is
- *     92.5 working. L refuses cleanly TOO - and that is not 92.5 working, it
+ *     114.5 working. L refuses cleanly TOO - and that is not 114.5 working, it
  *     is menu_draw_bar's own `wm_fs_vis` guard: a visible fullscreen window
  *     is over the bar, so the toast composes nothing. N takes that guard away
  *     and the kernel's toast lands in the middle of mode 0Dh, drawn at the
@@ -138,18 +138,18 @@ void cf_vsync(void);
 /* --- state, all static (os88.h rule 1: &automatic is refused at build time) */
 
 static unsigned      cf_caps_out;       /* fsx_caps outside the bracket... */
-static unsigned char cf_kind_out;
+static int           cf_kind_out;       /* int: os88_fsx_caps's out-param */
 static unsigned      cf_caps_in;        /* ...and inside it */
-static unsigned char cf_kind_in;
+static int           cf_kind_in;
 
-static int cf_entered;                  /* ONLY os88_fsx_main() bumps this */
+static int cf_entered;                  /* ONLY cf_fsx_main() bumps this */
 static int cf_runret;                   /* what os88_fsx_run() answered */
 static int cf_stage;                    /* how far the last bracket got */
 static int cf_modes;                    /* fsx_mode calls that returned 0 */
 static int cf_frames;                   /* scrolled frames */
 
 static int cf_want_pre;                 /* this run forces the module in
-                                         * first (SPEC.md 92.5) */
+                                         * first (SPEC.md 114.5) */
 static int cf_want_fs;                  /* ...and stacks SPEC.md 11.2's
                                          * fullscreen window under the
                                          * bracket, which turns out to be
@@ -158,11 +158,18 @@ static int cf_pre_ok;                   /* ...and whether that worked */
 static int cf_ovl;                      /* what ovl_probe() answered */
 static int cf_ovl_where;                /* 0 none, 1 before, 2 inside */
 
-static struct os88_fsi  cf_fsi;
+static char             cf_fsi[OS88_FSI_SIZE];  /* SPEC.md 53.4's block,
+                                                  * read by byte offset as
+                                                  * os88.h lays it out */
+static void            *cf_runwin;      /* the window os88_fsx_run() was
+                                         * handed: the entry takes nothing */
 static struct os88_rect cf_surf;
 static int              cf_surfr;
 
 static struct os88_pt   cf_org;
+
+#define CF_FB(o) ((unsigned)(unsigned char)cf_fsi[o])
+#define CF_FW(o) (CF_FB(o) | (CF_FB((o) + 1) << 8))
 static struct os88_size cf_sz;
 
 static char cf_line[84];
@@ -221,7 +228,7 @@ static void cf_apph2(unsigned v)
  * What is new here is WHERE it is called from: inside the bracket, with the
  * gfx lock held, the scheduler passing only this task and a foreign video
  * mode on the glass. Getting there costs a floppy read if the module is not
- * already resident, which is why SPEC.md 92.5 says to force it in first - and
+ * already resident, which is why SPEC.md 114.5 says to force it in first - and
  * why this gate can be told to do the opposite.
  * ========================================================================= */
 static int ovl_probe(int a, int b, int c, int d)
@@ -239,31 +246,31 @@ static void cf_fsi_lines(int row)
 {
     cf_line[0] = 0;
     cf_app("FSI seg ");
-    cf_apph(cf_fsi.seg);
+    cf_apph(CF_FW(OS88_FSI_SEG));
     cf_app(" w ");
-    cf_appn((int)cf_fsi.w);
+    cf_appn((int)CF_FW(OS88_FSI_W));
     cf_app(" h ");
-    cf_appn((int)cf_fsi.h);
+    cf_appn((int)CF_FW(OS88_FSI_H));
     cf_tty(row, 0, cf_line, 15);
 
     cf_line[0] = 0;
     cf_app("    stride ");
-    cf_appn((int)cf_fsi.stride);
+    cf_appn((int)CF_FW(OS88_FSI_STRIDE));
     cf_app(" flags ");
-    cf_apph2(cf_fsi.flags);
+    cf_apph2(CF_FB(OS88_FSI_FLAGS));
     cf_app(" bpp ");
-    cf_appn(cf_fsi.bpp);
+    cf_appn(CF_FB(OS88_FSI_BPP));
     cf_tty(row + 1, 0, cf_line, 15);
 
     cf_line[0] = 0;
     cf_app("    banks ");
-    cf_appn(cf_fsi.banks);
+    cf_appn(CF_FB(OS88_FSI_BANKS));
     cf_app(" pages ");
-    cf_appn(cf_fsi.pages);
+    cf_appn(CF_FB(OS88_FSI_PAGES));
     cf_app(" bstep ");
-    cf_appn((int)cf_fsi.bstep);
+    cf_appn((int)CF_FW(OS88_FSI_BSTEP));
     cf_app(" mode ");
-    cf_appn(cf_fsi.mode);
+    cf_appn(CF_FB(OS88_FSI_MODE));
     cf_tty(row + 2, 0, cf_line, 15);
 }
 
@@ -302,7 +309,7 @@ static void cf_head(const char *what)
  * The refusal is the half worth reading: cc_ovneed answers 0 and the program
  * says so in its own words, in the foreign mode, with the BIOS's font. If a
  * kernel toast appears above this line then the module was loaded INSIDE the
- * bracket and failed there, which is exactly what SPEC.md 92.5 forbids and
+ * bracket and failed there, which is exactly what SPEC.md 114.5 forbids and
  * what the L arm of this gate exists to photograph. */
 static void cf_ovl_line(int row)
 {
@@ -343,7 +350,7 @@ static int cf_pause(void)
  * ------------------------------------------------------------------------- */
 static int cf_stage_info(void)
 {
-    if (os88_fsx_mode(OS88_FSXM_VGA0D, &cf_fsi) != 0)
+    if (os88_fsx_mode(OS88_FSXM_VGA0D, cf_fsi) != 0)
         return 1;                       /* refused: nothing to draw on */
     cf_modes++;
     cf_stage = 1;
@@ -351,7 +358,7 @@ static int cf_stage_info(void)
     cf_surfr = os88_fsx_surf(&cf_surf);
 
     cf_gcmode(2);
-    cf_ramp(cf_fsi.seg, cf_fsi.stride, 104, 48);
+    cf_ramp(CF_FW(OS88_FSI_SEG), CF_FW(OS88_FSI_STRIDE), 104, 48);
     cf_gcmode(0);
 
     cf_head("0Dh");
@@ -395,7 +402,7 @@ static int cf_stage_info(void)
 }
 
 /* ---------------------------------------------------------------------------
- * STAGE 2 - THE SPLIT SCREEN (SPEC.md 92.4's raster, proved)
+ * STAGE 2 - THE SPLIT SCREEN (SPEC.md 114.4's raster, proved)
  *
  * The canvas is 640 pixels wide and the screen shows 320 of it, so the scroll
  * is a scroll and not a shear: without the wider logical line, advancing the
@@ -431,9 +438,9 @@ static int cf_stage_split(void)
                                          * this canvas rather than a rule */
 
     cf_gcmode(2);
-    cf_fill(cf_fsi.seg, 0, CF_VSTRIDE * CF_VROWS, 0);
-    cf_panel(cf_fsi.seg, CF_VSTRIDE, CF_PANEL);
-    cf_diag(cf_fsi.seg, CF_VSTRIDE, CF_PANEL, CF_VROWS - CF_PANEL);
+    cf_fill(CF_FW(OS88_FSI_SEG), 0, CF_VSTRIDE * CF_VROWS, 0);
+    cf_panel(CF_FW(OS88_FSI_SEG), CF_VSTRIDE, CF_PANEL);
+    cf_diag(CF_FW(OS88_FSI_SEG), CF_VSTRIDE, CF_PANEL, CF_VROWS - CF_PANEL);
     cf_gcmode(0);
 
     cf_tty(0, 0, "STATIC PANEL - below the line compare", 15);
@@ -515,7 +522,7 @@ static int cf_stage_split(void)
  * ------------------------------------------------------------------------- */
 static int cf_stage_12h(void)
 {
-    if (os88_fsx_mode(OS88_FSXM_VGA12, &cf_fsi) != 0) {
+    if (os88_fsx_mode(OS88_FSXM_VGA12, cf_fsi) != 0) {
         cf_tty(20, 0, "mode 12h REFUSED", 12);
         return cf_pause();
     }
@@ -525,7 +532,7 @@ static int cf_stage_12h(void)
     cf_surfr = os88_fsx_surf(&cf_surf);
 
     cf_gcmode(2);
-    cf_ramp(cf_fsi.seg, cf_fsi.stride, 240, 120);
+    cf_ramp(CF_FW(OS88_FSI_SEG), CF_FW(OS88_FSI_STRIDE), 240, 120);
     cf_gcmode(0);
 
     cf_head("12h - CHANGED MID-BRACKET");
@@ -554,7 +561,7 @@ static int cf_stage_12h(void)
  * ------------------------------------------------------------------------- */
 static int cf_stage_back(void)
 {
-    if (os88_fsx_mode(OS88_FSXM_VGA0D, &cf_fsi) != 0) {
+    if (os88_fsx_mode(OS88_FSXM_VGA0D, cf_fsi) != 0) {
         cf_tty(20, 0, "mode 0Dh REFUSED on the way back", 12);
         return cf_pause();
     }
@@ -562,7 +569,7 @@ static int cf_stage_back(void)
     cf_stage = 4;
 
     cf_gcmode(2);
-    cf_ramp(cf_fsi.seg, cf_fsi.stride, 104, 48);
+    cf_ramp(CF_FW(OS88_FSI_SEG), CF_FW(OS88_FSI_STRIDE), 104, 48);
     cf_gcmode(0);
 
     cf_head("0Dh AGAIN");
@@ -576,8 +583,11 @@ static int cf_stage_back(void)
 /* ---------------------------------------------------------------------------
  * THE BRACKET ITSELF. It does not return until this function does.
  * ------------------------------------------------------------------------- */
-void os88_fsx_main(void *win)
+static void cf_fsx_main(void)
 {
+    void *win;
+
+    win = cf_runwin;
     cf_entered++;
     cf_frames = 0;
     cf_modes = 0;
@@ -625,7 +635,7 @@ static void cf_draw(void *win)
     os88_font_run(x, y, cf_line, OS88_BLACK, OS88_WHITE);
     y += 12;
 
-    /* cf_entered is bumped by os88_fsx_main() and by nothing else, so a
+    /* cf_entered is bumped by cf_fsx_main() and by nothing else, so a
      * non-zero number here is the bracket having run and returned. */
     cf_line[0] = 0;
     cf_app("entered ");
@@ -685,7 +695,7 @@ void os88_paint(void *win)
  * required by it - a refusal here is not a reason not to enter.
  *
  * pre != 0 forces the module resident BEFORE the bracket is entered, which is
- * SPEC.md 92.5's rule. When that fails, the flag says so and the bracket
+ * SPEC.md 114.5's rule. When that fails, the flag says so and the bracket
  * never asks again: cc_ovneed's refusal path ends in a kernel toast, and a
  * toast paints desktop geometry into whatever foreign mode is on the glass. */
 static void cf_enter(void *win, int pre, int full)
@@ -708,7 +718,8 @@ static void cf_enter(void *win, int pre, int full)
     fs = -1;
     if (full)
         fs = os88_fullscreen(win, 1);
-    cf_runret = os88_fsx_run(win, 0);
+    cf_runwin = win;
+    cf_runret = os88_fsx_run(cf_fsx_main, win, 0);
     if (fs == 0)
         os88_fullscreen(win, 0);
     cf_draw(win);

@@ -34,6 +34,7 @@ import argparse
 import hashlib
 import os
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -136,44 +137,34 @@ def main(argv):
         BAND = (seg << 4) + pm["pt_fillband"]
 
         def zoom_counting(label):
-            """A title double-click as raw packets, counting the decoder.
-            os88mouse proves each edge by polling, which a guest stopped at a
-            breakpoint never reaches - so the helper parks the pointer and the
-            packets go in by hand."""
+            """A title double-click with the decoder and the band fill watched.
+
+            THE PROOF THIS ROW WANTS IS A ZERO, so what it cannot afford is a
+            hit that goes uncounted. The hand-rolled pump this replaces had
+            one: it advanced the guest when it found it running, and
+            `advance()` STOPS AT A BREAKPOINT and returns there - so the hit
+            that landed inside an advance was resumed by the `m.run()` on the
+            next line without ever being classified. A missed decoder entry is
+            a `0 DECODED` that means nothing, which is this row's PASS.
+
+            `bp_trace` pumps from a daemon, so the count is every stop and the
+            gesture is an ordinary proven double-click rather than four raw
+            packets aimed at a parked pointer - which is what it had to be
+            while an armed breakpoint and os88mouse could not coexist."""
             wr = dispcp.win_rect(m, S, pw)
-            mo.to(wr[0] + 60, wr[1] + 9)
-            os88marty.settle(m)
-            m.bp_exec(BAND, *DEC)
-            n = nf = 0
-            for lvl in (True, False, True, False):
-                m.mouse(dx=0, dy=0, l=lvl)
-                end = m.status()["cycles"] + int(0.05 * HZ)
+            with os88marty.bp_trace(m, BAND, *DEC) as tr:
+                mo.dblclick(wr[0] + 60, wr[1] + 9)
+                # The zoom's repaint outlives the click's own proof by whole
+                # seconds on a 4.77MHz 8088, so the window is the guest's
+                # clock and not the gesture's return.
+                end = m.status()["cycles"] + int(30 * HZ)
                 while m.status()["cycles"] < end:
-                    if m.status()["state"] != "running":
-                        r = m.regs()
-                        if (r["cs"] << 4) + r["ip"] == BAND:
-                            nf += 1
-                        else:
-                            n += 1
-                        m.run()
-                    else:
-                        m.advance(frames=3)
-                        m.run()
-            end = m.status()["cycles"] + int(30 * HZ)
-            m.run()
-            while m.status()["cycles"] < end:
-                if m.status()["state"] != "running":
-                    r = m.regs()
-                    if (r["cs"] << 4) + r["ip"] == BAND:
-                        nf += 1
-                    else:
-                        n += 1
-                    m.run()
-                else:
-                    m.advance(frames=8)
-                    m.run()
-            m.breakpoints([])
-            m.run()
+                    time.sleep(0.005)
+            nf = sum(1 for h in tr.hits if h["addr"] == BAND)
+            n = tr.n - nf
+            if tr.overflowed:
+                fails.append("SETUP: %s recorded %d of %d stops - the counts "
+                             "below are a floor" % (label, len(tr.hits), tr.n))
             os88marty.settle(m)
             moved = dispcp.win_rect(m, S, pw)
             print("   %-16s %3d DECODED, %2d bands   %r -> %r   %s"

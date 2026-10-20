@@ -36,15 +36,16 @@ the byte grid, because gfx_blitp refuses anything else and Paint would have
 fallen back to nibbles (pt_topacked) before the first frame.
 """
 import argparse
+import tempfile
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
 import dispapps                                              # noqa: E402
+import blitpair                                              # noqa: E402
 from blitpair import gif_pixels                              # noqa: E402
 
 S = os88sym.linear
@@ -55,10 +56,21 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
+def idle(m):
+    """Until Paint - or whatever the gesture started - has finished: the
+    drive quiet, the gfx lock free (a canvas operation can hold it for
+    seconds with nothing new on the glass), and then the screen still."""
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="the drive to go quiet")
+    os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
+                    "the gfx lock to be free", poll=0.2, limit=60)
+    os88marty.settle(m)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintplan.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintplan.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: a COLOUR derivation "
@@ -68,7 +80,7 @@ def main():
     if a.gif is None:
         a.gif = dispapps.colour_gif()
 
-    if a.apps == "/tmp/paintplan.img":
+    if a.apps == tempfile.gettempdir() + "/paintplan.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 
@@ -98,18 +110,8 @@ def main():
 
         # The CANVAS blit, not a palette swatch: the first gfx_blitp as wide
         # as the picture. Anything narrower is Paint's own furniture.
-        m.bp_exec("gfx_blitp")
-        mo.dblclick(rx, ry)
-        geom = None
-        for _ in range(40):
-            if not m.wait_stop(limit=300.0):
-                break
-            r = m.regs()
-            if r["cx"] >= iw:
-                geom = (r["ax"], r["bx"], r["cx"], r["dx"])
-                break
-            m.bp_exec("gfx_blitp")
-            m.run()
+        geom = blitpair.wide_blit(m, lambda: mo.dblclick(rx, ry), iw,
+                                  syms=("gfx_blitp",))
         if geom is None:
             sys.exit("paintplan: no gfx_blitp as wide as the picture - the "
                      "canvas is not planar, or it fell back to nibbles")
@@ -118,7 +120,7 @@ def main():
               % (x, y, w, h, "" if x % 8 == 0 else "  ...NOT byte-aligned"))
         m.bp_exec()
         m.run()
-        time.sleep(6)
+        idle(m)
         mo.to(4, 4)                 # the arrow is drawn INTO the framebuffer
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)
@@ -147,23 +149,15 @@ def main():
             # blits and the pass proves nothing. A drag is a real move and
             # ends in a real repaint - which is also exactly what the field
             # did to find this.
-            m.bp_exec("gfx_blitp")
-            mo.drag(wx + ww // 2, wy + 9, wx + ww // 2, newy + 9)
-            for _ in range(40):
-                if not m.wait_stop(limit=300.0):
-                    print("   ...no gfx_blitp fired after the raise: either it "
-                          "REFUSED and Paint fell back to nibbles, or the "
-                          "machine is not coming back")
-                    break
-                r = m.regs()
-                if r["cx"] >= iw:
-                    low = (r["ax"], r["bx"], r["cx"], r["dx"])
-                    break
-                m.bp_exec("gfx_blitp")
-                m.run()
-            m.bp_exec()
-            m.run()
-            time.sleep(6)
+            low = blitpair.wide_blit(
+                m, lambda: mo.drag(wx + ww // 2, wy + 9,
+                                   wx + ww // 2, newy + 9),
+                iw, syms=("gfx_blitp",))
+            if low is None:
+                print("   ...no gfx_blitp fired after the raise: either it "
+                      "REFUSED and Paint fell back to nibbles, or the "
+                      "machine is not coming back")
+            idle(m)
             mo.to(4, 4)
             os88marty.settle(m)
             lw, lh, lfb = m.fbuf(card=0)

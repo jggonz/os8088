@@ -36,8 +36,8 @@ checked second, three ways:
 
   * "SPEC.md §N"        -> SPEC.md, always;
   * "<DOC> §N"          -> that document, where <DOC> is any tracked .md file
-                           named in full (`docs/ASSOC-PLAN.md`) or by its
-                           upper-case stem (ASSOC-PLAN, SPEC);
+                           named in full (`docs/plans/completed/ASSOC-PLAN.md`)
+                           or by its upper-case stem (ASSOC-PLAN, SPEC);
   * a bare "§N"         -> SPEC.md, OR the containing file's own headings when
                            that file numbers its sections.
 
@@ -65,7 +65,12 @@ CITE = re.compile(r"(?:SPEC\.md\s+§?|§)(\d{1,2}(?:\.\d+)*(?:/\d{1,2}(?:\.\d+)*
 # The document a citation is qualified with, immediately before it. Upper-case
 # only, so an ordinary word ending a sentence cannot be read as a file name -
 # and the whole token is taken, so "REDRAW-SPEC.md" is never "SPEC.md".
-QUAL = re.compile(r"`?((?:docs/)?(?:[A-Z][A-Z0-9-]*\.md|[A-Z][A-Z0-9-]*))`?\s+$")
+# The directory part is ANY lower-case path, not just `docs/`: the plans moved
+# under docs/plans/ and docs/history/, and a citation naming one in full is the
+# normal way they are written. Only the basename is used to resolve (`stems`),
+# so the depth never matters - but a prefix the pattern cannot match makes the
+# citation look UNQUALIFIED, which silently checks it against SPEC.md instead.
+QUAL = re.compile(r"`?((?:[a-z][a-z0-9_-]*/)*(?:[A-Z][A-Z0-9-]*\.md|[A-Z][A-Z0-9-]*))`?\s+$")
 # PERFORMANCE.md's field sets are headings too, and `HEAD` cannot see one: the
 # word "Set" sits between the hashes and the number, so `### Set 93` is not a
 # numbered heading by that grammar and neither is a citation of it - those are
@@ -88,14 +93,16 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 # that were are either filled (0x00F8/0x0100 went to the sound driver) or
 # gone, closed up when the numbering settled.
 #
-# THE SET IS EMPTY NOW, and that is SPEC.md 20.3.1 working rather than an
-# omission. It was kept for 0x01E8 - RETIRED at SPEC.md 18.4.1, where
-# OSAPI_FILE_READ absorbed readbig - and a retired cell is a FREE LIST, not a
-# headstone: 0x01F0 went to wm_onmouseup (13.7) and 0x01E8 to OSAPI_VOL_KIND
-# (18.7.2). Both are published names again, so prose naming either number is
-# checkable the ordinary way. Put a number back here only for a cell the SDK
-# deliberately does not define, and say which section retired it.
-HELD = set()
+# EIGHT NUMBERS, and they are SPEC.md 20.3.1 working: kernel size pass 4
+# DELETED the eight withdrawn cells (the three main-era paragraph-arena cells
+# at 0x01b8..0x01c8, OSAPI_VOL_PAINT at 0x0288, the line family's 0x02e0,
+# 0x0308, 0x0318 and FILE_MOVE's 0x0568) and renumbered the table, so a
+# number here can only appear in prose that is HISTORY - the record of what
+# a cell was - and must not be checked against today's map, where most of
+# these numbers now belong to a different, live cell's neighbourhood. Put a
+# number back here only for a cell the SDK deliberately does not define, and
+# say which section retired it.
+HELD = {"0x01b8", "0x01c0", "0x01c8", "0x0288", "0x02e0", "0x0308", "0x0318", "0x0568"}
 
 # --- 4. THE TRANSPARENT-TEXT TOTALS, which are prose about a FILE ------------
 #
@@ -113,15 +120,28 @@ HELD = set()
 # HISTORICAL PAIRS are the reason this is a table and not an equality. The
 # sweep's own record quotes where it STARTED, and those numbers are correct
 # and must never be "fixed" to the current ones - SPEC.md 6.6.5's "111 sites
-# in 49 files" is where the last batch began (docs/TEXT-PLAN.md 4 item 6 says
-# so in as many words). A pair here is a claim that the number describes a
+# in 49 files" is where the last batch began (docs/plans/completed/TEXT-PLAN.md
+# 4 item 6 says so in as many words). A pair here is a claim that the number
+# describes a
 # moment other than now; give the moment.
 SITES = re.compile(r"(\d+) sites? in (\d+) files?")
 SITES_HIST = {
-    (189, 61): "docs/TEXT-PLAN.md 2 - where the ratchet started",
-    (111, 49): "SPEC.md 6.6.5 / docs/TEXT-PLAN.md 4 item 6 - where the LAST "
+    (189, 61): "docs/plans/completed/TEXT-PLAN.md 2 - where the "
+               "ratchet started",
+    (111, 49): "SPEC.md 6.6.5 / docs/plans/completed/TEXT-PLAN.md 4 item 6 - where the LAST "
                "batch started, which is not where the sweep started",
-    (37, 17): "SPEC.md 6.6.5 / docs/TEXT-PLAN.md 4.4 - what stage 4 LEFT. "
+    (59, 20): "TWO moments, both real and both this number - which is why "
+              "this is ONE entry and not two: a duplicate key in a dict "
+              "literal is discarded silently, and the second of these once "
+              "was. docs/reports/TIER-TIMINGS-2026-09-07.md - what the suite "
+              "read on 7 Sep 2026, before SCRIBE's two inherited sites joined "
+              "the ratchet at its merge (SPEC.md 94.1); AND SPEC.md 6.1.10.1 / "
+              "PERFORMANCE.md Set 121 - before gfxbench gained the row that "
+              "draws a NON-SUBSET colour pair, which is the fall-back "
+              "font_run takes on VGA and which no row in the tree had ever "
+              "drawn. docs/reports/ is a measurement and is never maintained "
+              "against a later tree",
+    (37, 17): "SPEC.md 6.6.5 / docs/plans/completed/TEXT-PLAN.md 4.4 - what stage 4 LEFT. "
               "Sheet and Chart (SPEC.md 81, 83) were written on main while "
               "6.6 was being written here, so they joined the ratchet at the "
               "merge and neither number is the sweep's account of itself",
@@ -193,7 +213,7 @@ def main() -> int:
     tracked = [f for f in tracked if not f.startswith("build/")]
 
     docs = {f: headings(f) for f in tracked if f.endswith(".md")}
-    # ASSOC-PLAN -> docs/ASSOC-PLAN.md, SPEC -> SPEC.md, and so on.
+    # ASSOC-PLAN -> docs/plans/completed/ASSOC-PLAN.md, SPEC -> SPEC.md, and so on.
     stems = {f.rsplit("/", 1)[-1][:-3].upper(): f for f in docs}
     spec = docs["SPEC.md"]
 
@@ -207,6 +227,51 @@ def main() -> int:
              or f == "Makefile"]
 
     bad = []
+    # AN UNRESOLVED MERGE COMMITTED INTO A DOCUMENT, before anything else -
+    # because a file in that state is not a document at all and every check
+    # below it is reading two trees at once.
+    #
+    # IT HAS HAPPENED, and it got past all 45 rows of the fast tier. Merging
+    # origin/main into this fork left conflict markers in CLAUDE.md and in
+    # SPEC.md §45.3: `git merge` NAMED both files, the operator read its output
+    # through `tail`, and the two that scrolled off the top were staged by a
+    # `git add -A` along with the ones that were fixed. Nothing downstream
+    # could see it - nasm never reads a .md, and the markers fell in prose
+    # rather than in a heading or a citation, so headings(), dupes() and the
+    # citation walk below all passed over them without a word. It surfaced
+    # days later because a person happened to scroll past line 402.
+    #
+    # THE SWEEP IS EVERY TRACKED FILE and not just the documents. A marker in
+    # a .asm or .inc is caught by nasm and one in a .py by the import, so the
+    # SILENT cases are exactly the files nothing executes - but the cost of
+    # covering the loud ones too is one comparison each, and "which files can
+    # hide this" is a question that goes stale while a whole-tree sweep does
+    # not.
+    #
+    # The `=======` arm needs the other two beside it: a bare row of equals
+    # signs is legal Markdown (a setext heading rule) and appears in this
+    # tree's own documents, so it is only a finding when a file also carries
+    # the `<<<<<<<` or `>>>>>>>` that cannot be anything else.
+    for path in tracked:
+        try:
+            text = open(path, encoding="utf-8").read()
+        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+            continue                                        # binary, or gone
+        if "<<<<<<< " not in text and ">>>>>>> " not in text:
+            continue                    # the cheap necessary condition
+        lines = text.split("\n")
+        hits = [(n, ln) for n, ln in enumerate(lines, 1)
+                if ln.startswith("<<<<<<< ") or ln.startswith(">>>>>>> ")]
+        if not hits:
+            continue
+        hits += [(n, ln) for n, ln in enumerate(lines, 1) if ln == "======="]
+        bad.append("%s: an UNRESOLVED MERGE is committed here - %s. Resolve "
+                   "it and check the whole tree (`git grep -lE "
+                   "'^(<<<<<<< |=======$|>>>>>>> )'`), not just this file: "
+                   "these arrive in batches, because they are what one "
+                   "`git add -A` over a half-read `git merge` leaves behind" %
+                   (path, ", ".join("line %d" % n for n, _ in sorted(hits))))
+
     # ...before any citation is resolved, because a duplicate makes the
     # resolution meaningless rather than wrong: both headings exist, so every
     # citation of the number passes and points at whichever the reader finds
@@ -235,8 +300,19 @@ def main() -> int:
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
         own = docs.get(path, set())        # empty for every non-.md file
+        md = path.endswith(".md")
         for n, line in enumerate(text.split("\n"), 1):
-            for m in CITE.finditer(line):
+            # Each pattern below needs a literal its line must carry - CITE a
+            # `§` or `SPEC.md`, SITES `site`, SLOT `slot ` or `API ` - so a
+            # line with none of them is skipped before any regex runs. That
+            # is ~97% of the tree's 3.3M lines, and the three finditer calls
+            # on each were most of this gate's time on every `make`.
+            cite = "\u00a7" in line or "SPEC.md" in line
+            sites = md and "site" in line
+            slot = "slot " in line or "API " in line
+            if not (cite or sites or slot):
+                continue
+            for m in (CITE.finditer(line) if cite else ()):
                 if m.group(0).startswith("SPEC.md"):
                     target = "SPEC.md"
                 else:
@@ -258,7 +334,7 @@ def main() -> int:
                             and num not in own:
                         bad.append(f"{path}:{n}: SPEC.md §{num} is not a "
                                    "heading")
-            if reg is not None and path.endswith(".md"):
+            if reg is not None and sites:
                 for m in SITES.finditer(line):
                     pair = (int(m.group(1)), int(m.group(2)))
                     if pair == reg or pair in SITES_HIST:
@@ -268,7 +344,7 @@ def main() -> int:
                         f"{reg[0]} sites in {reg[1]} files. If this pair "
                         "describes an earlier moment, put it in SITES_HIST "
                         "with the moment")
-            for m in SLOT.finditer(line):
+            for m in (SLOT.finditer(line) if slot else ()):
                 num = m.group(1).lower()
                 if num not in api and num not in HELD:
                     bad.append(f"{path}:{n}: 'slot {m.group(1)}' is not an "

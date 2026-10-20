@@ -63,7 +63,8 @@ the answer. It compares against `_KNOWN` now - mirrored AND derived.
 
 AND A FOURTH TIME, one level down from any of them: **the tree builds TWO
 kernels off one source**, and this module mirrored ONE of them without saying
-so. `WIN_SIZE` is 34 on kern_big and 28 on kern_small (SPEC.md 13.7's
+so. `WIN_SIZE` was 34 on kern_big and 28 on kern_small (72 / 65 since size
+pass 4 folded the side tables in; SPEC.md 13.7's
 W_ONMOUSEUP pair and 13.9's timers are kern_big's), the parser below took the
 FIRST `equ` it saw, and `verify` compared it against that same first `equ` -
 so the guard agreed with itself and every script pointed at kern_small
@@ -138,8 +139,23 @@ _MIRROR = {
     # kernel with the OTHER arm's %ifdef folded out rather than taking the
     # first `equ` in the file - which is what it did, and which made the guard
     # agree with itself while every kern_small script decoded garbage.
-    "WIN_SIZE": ("kernel/wm.inc", {"big": 34, "small": 28}),
-    "MAX_WIN": ("kernel/wm.inc", 12),
+    "WIN_SIZE": ("kernel/wm.inc", {"big": 72, "small": 65}),
+    "MAX_WIN": ("kernel/wm.inc", {"big": 12, "small": 6}),
+    # kernel/driver.inc - a driver row (SPEC.md 51.2). DRVR_SEG is "is it
+    # loaded", which is the only way a host-side script can SEE a driver
+    # come and go - tests/xmcheck.py watches XMEM.DRV arrive and
+    # tests/dossnd.py watches SOUND.DRV get out of a DOS program's way
+    # (SPEC.md 51.11).
+    # kernel/hiber.inc - where kern_dos lands (SPEC.md 96.40.2), mirrored in
+    # kerndos/kdlayout.inc because the kernel STAGES the handoff and kern_dos
+    # IS the handoff. Two host scripts read it now: tests/kdos.py builds the
+    # gate blob at it, and tests/unit/t_kdapi.py scans the assembled images
+    # for far calls carrying it as a segment (SPEC.md 96.44.6).
+    "KD_SEG": ("kernel/hiber.inc", 0x0060),
+    # kernel/diskw.inc - the copy engine's "it will not fit" (SPEC.md 22.5.2),
+    # read back out of [fcp_err] by tests/fcpcopy.py and tests/fcproom.py.
+    "FERR_FULL": ("kernel/diskw.inc", 6),
+    "DRVR_SEG": ("kernel/driver.inc", 2),
     "W_FLAGS": ("kernel/wm.inc", 0),
     "W_X": ("kernel/wm.inc", 2),
     "W_Y": ("kernel/wm.inc", 4),
@@ -155,6 +171,16 @@ _MIRROR = {
     "WM_BOX_W": ("kernel/wm.inc", 10),
     "WM_BOX_Y0": ("kernel/wm.inc", 4),
     "WM_BOX_Y1": ("kernel/wm.inc", 14),
+    # ...and the WINDOWS theme's three buttons (SPEC.md 76.14.3), which stand
+    # at the RIGHT of every window's title bar and are measured from its right
+    # edge: a button's left column is W_X + W_W - WN_*. close_xy and os88ui's
+    # raise point read these when the theme is live.
+    "WN_CLOSE": ("kernel/winmod.inc", 19),
+    "WN_MAX": ("kernel/winmod.inc", 37),
+    "WN_MIN": ("kernel/winmod.inc", 53),
+    "WN_BTY": ("kernel/winmod.inc", 2),
+    "WN_BTH": ("kernel/winmod.inc", 14),
+    "THM_WIN": ("kernel/vga12.inc", 3),
     "W_MENUS": ("kernel/wm.inc", 18),
     "W_SEG": ("kernel/wm.inc", 22),
     "WF_SIZABLE": ("kernel/wm.inc", 4),
@@ -169,9 +195,13 @@ _MIRROR = {
     # WF_HIBITS' sake - see the derivation below.
     "WF_NOANIM": ("kernel/wm.inc", 0x4000),
     "WF_STALE": ("kernel/wm.inc", 0x8000),
+    # ...and the desk layer's two (SPEC.md 11.103), in the same byte
+    "WF_DESK": ("kernel/wm.inc", 0x0400),
+    "WF_HOVER": ("kernel/wm.inc", 0x0800),
     # kernel/instance.inc - the instance record (SPEC.md 29)
     "I_STATE": ("kernel/instance.inc", 0),
     "I_FLAGS": ("kernel/instance.inc", 1),
+    "IF_DESK": ("kernel/instance.inc", 4),
     "I_KIND": ("kernel/instance.inc", 2),
     "I_TASK": ("kernel/instance.inc", 3),
     "I_WIN": ("kernel/instance.inc", 4),
@@ -181,7 +211,7 @@ _MIRROR = {
     "I_NAME": ("kernel/instance.inc", 12),
     "I_CYC": ("kernel/instance.inc", 28),
     "I_RECSZ": ("kernel/instance.inc", 32),
-    "INST_MAX": ("kernel/instance.inc", 12),
+    "INST_MAX": ("kernel/instance.inc", {"big": 12, "small": 6}),
     # kernel/dock.inc - the strip (SPEC.md 30)
     "DOCK_H": ("kernel/dock.inc", 24),
     "DOCK_X0": ("kernel/dock.inc", 8),
@@ -193,6 +223,18 @@ _MIRROR = {
     "DESK_ZW": ("kernel/desk.inc", 32),
     "DESK_COLW": ("kernel/desk.inc", 44),
     "DESK_ZOVER": ("kernel/desk.inc", 2),
+    # ...and the ONE CELL every desktop item sits in (SPEC.md 26.9), per arm:
+    # kern_small's is the drive zone it always was, kern_big's a shortcut's
+    # twelve-glyph caption wide
+    "DESK_CW": ("kernel/desk.inc", {"big": 96, "small": 32}),
+    "DESK_PX": ("kernel/desk.inc", {"big": 102, "small": 44}),
+    "DSL_SLOT": ("kernel/desk.inc", 0x3F),
+    "DSL_GONE": ("kernel/desk.inc", 0x80),
+    # kernel/desksc.inc - one LINK row, which is OSAPI_DESK_ITEM's record too
+    "SC_REC": ("kernel/desksc.inc", {"big": 128}),   # OS88_SHORTCUTS: big only
+    # ...and the rows the table never exceeds - tests/desksc.py's and
+    # tools/os88stik.py's (SPEC.md 110) copies are checked against it
+    "SC_MAX": ("kernel/desk.inc", {"big": 15}),
     # kernel/disk.inc - the volume table (SPEC.md 18.7)
     # PER ARM (SPEC.md 51.0): kern_small can load no driver, so it can have no
     # DVK_DRV volume, so every volume it will ever have is one of the four
@@ -210,10 +252,34 @@ _MIRROR = {
     # ...and two fields of its per-window state block, which is what lets a
     # harness ask WHERE THE LIST IS SCROLLED TO instead of assuming row 0 is
     # entry 0. That assumption is the one dispcp.open_named exists to end.
+    "FS_SEL": ("kernel/files.inc", 0),
     "FS_SCRL": ("kernel/files.inc", 2),
+    # ...and WHICH VOLUME, AT WHICH FOLDER, which is what makes "open drive B"
+    # confirmable. FS_CWD == 0 is a ROOT (files.inc says so at its only clear
+    # site), so the pair IS the post-condition of desk_click_x's double-click:
+    # "it fronts a window already showing that drive's root, OR opens one, OR
+    # at the cap moves the front one" - three outcomes, one statement.
+    "FS_CWD": ("kernel/files.inc", 8),
+    "FS_DRV": ("kernel/files.inc", 10),
+    # ...and WHETHER IT HAS LISTED, which is the half a first version left
+    # out. FS_DRV and FS_CWD are recorded by dsk_chdir before the listing
+    # exists, so a wait on those two alone returns with an EMPTY window and
+    # the next line says "'MEDIA' is not in this folder. It holds []" about a
+    # folder that has one. FS_MOK is files.inc's own "that listing came from
+    # a good mount", and it is what an EMPTY VOLUME would still set - which
+    # FS_N would not.
+    "FS_MOK": ("kernel/files.inc", 11),
     "FS_N": ("kernel/files.inc", 6),
     "FS_VIEW": ("kernel/files.inc", 12),
     "FS_VSEG": ("kernel/files.inc", 16),
+    # ...and the pair that locates the ICON REFERENCE INDEX inside that view
+    # cache, which is how a host script asks "does this entry name a row in
+    # the store, or the 0xFF blank?" without judging pixels. Two rows read it
+    # - tests/icoshed.py and tests/rdicon.py - which is the second copy
+    # t_mirror exists to catch. FS_IOFH is a HIGH byte, so the offset is
+    # `(FS_IOFH << 8) + FV_ICOIX + entry`.
+    "FS_IOFH": ("kernel/files.inc", 15),
+    "FV_ICOIX": ("kernel/files.inc", 0),
     # kernel/kernel.asm - the chrome
     "MBAR_H": ("kernel/kernel.asm", 20),
     "TITLE_H": ("kernel/kernel.asm", 18),
@@ -223,6 +289,24 @@ _MIRROR = {
     # Two of the four are registered rows and two are not, so without this the
     # unregistered pair would have gone on reading cell 2 as cell 1's tail.
     "MB_ENTSZ": ("kernel/menu.inc", 12),
+    # ...and the cell's FIELDS, so a menu can be picked BY NAME. Reading them
+    # is what lets tools/os88ui.py aim at the title the bar is actually
+    # showing - menu_layout rebuilds this table on every raise, so a menu
+    # picked by remembered coordinate lands on the PREVIOUS window's bar, and
+    # nothing about the picture afterwards says the wrong command ran.
+    "MB_TITLE": ("kernel/menu.inc", 0),
+    "MB_ITEMS": ("kernel/menu.inc", 2),
+    "MB_NITEM": ("kernel/menu.inc", 4),
+    "MB_XL": ("kernel/menu.inc", 6),
+    "MB_XR": ("kernel/menu.inc", 8),
+    "MB_SEG": ("kernel/menu.inc", 10),
+    "MENU_DIS": ("kernel/menu.inc", 1),
+    # kernel/loader.inc - the staged directory entry (SPEC.md 19.1)
+    # The TYPE word is the only thing a consumer branches on: 1 = loadable
+    # package, 2 = subdirectory, 3 = the synthesized parent link, 0 = inert.
+    # A harness that does not read it waits out its whole budget on a type-0
+    # entry, which does nothing at all when double-clicked.
+    "LD_DE_TYPE": ("kernel/loader.inc", 16),
     # kernel/mouse.inc - the pointer's CELL and the worst hot spot in it
     # (SPEC.md 7.1/7.2.2). A shape's cell starts at (pointer - hot), so a
     # harness masking the arrow's 8x12 at the published position misses the
@@ -231,39 +315,39 @@ _MIRROR = {
     "CUR_GH": ("kernel/mouse.inc", 12),
     "CUR_XHX": ("kernel/mouse.inc", 3),
     "CUR_XHY": ("kernel/mouse.inc", 5),
-    # kernel/fdlg.inc - the Standard File dialog's chrome, content-relative
-    # (SPEC.md 38.4). Two test scripts click these, and a third copy is one
-    # `equ` change away from a row that clicks empty background and reports a
-    # feature broken.
-    "FD_BX1": ("kernel/fdlg.inc", 224),
-    "FD_BX2": ("kernel/fdlg.inc", 286),
-    "FD_BY0": ("kernel/fdlg.inc", 20),
-    "FD_BY1": ("kernel/fdlg.inc", 40),
-    "FD_BY2": ("kernel/fdlg.inc", 60),
-    "FD_BH": ("kernel/fdlg.inc", 13),
-    "FD_LX1": ("kernel/fdlg.inc", 6),
-    "FD_LX2": ("kernel/fdlg.inc", 213),
-    "FD_ROW0": ("kernel/fdlg.inc", 22),
-    "FD_ROWH": ("kernel/fdlg.inc", 16),
-    # FD_TEXTX is deliberately NOT here. apps/ftpd/ftpd.asm defines its own
-    # (8, the Setup page's text pen) and tests/ftpdflick.py carries a THIRD
-    # value, 6 - so registering the kernel's 28 makes the gate compare two
-    # constants that were never the same one. A row that wants to click a
-    # listing entry should take FD_LX1..FD_LX2 and aim at the middle of the
-    # row, which is what the whole row is: less coupled, and it does not need
-    # this name at all.
+    # kernel/files.inc - the Standard File chooser's button column (SPEC.md
+    # 38.3): the chooser is a Disk window whose content is FM_CHCOLW narrower,
+    # its three buttons FM_BTN_W x FM_BTN_H at fm_rgt+5, 20px apart.
+    # tools/os88ui.py's chooser verbs aim at them.
+    "FM_CHCOLW": ("kernel/files.inc", 72),
+    "FM_BTN_W": ("kernel/files.inc", 63),
+    "FM_BTN_H": ("kernel/files.inc", 14),
+    # kernel/toast.inc - the strip's message (SPEC.md 59)
+    # TOAST_MAX is the TIGHT one by its own comment, so a local copy that is
+    # one short truncates exactly the message it was added to read.
+    "TOAST_MAX": ("kernel/toast.inc", 24),
     "KERNEL_SEG": ("kernel/kernel.asm", 0x0060),
     # kernel/memory.inc - the claim table (SPEC.md 50)
-    # PER ARM (docs/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK
+    # PER ARM (docs/plans/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK
     # keeps the LARGER value, so a package over-allocates rather than
     # the kernel overflowing what it was handed (SPEC.md 51.0.0).
-    "MEM_MAX": ("kernel/memory.inc", {"big": 32, "small": 20}),
+    "MEM_MAX": ("kernel/memory.inc", {"big": 32, "small": 16}),
     "MC_SEG": ("kernel/memory.inc", 0),
     "MC_PARA": ("kernel/memory.inc", 2),
     "MC_OWN": ("kernel/memory.inc", 4),
     "MC_DMA": ("kernel/memory.inc", 6),
     "MC_RLOC": ("kernel/memory.inc", 8),
+    # MC_HI was a byte of its own and is now MC_DMA's top bit: both halves of
+    # the word say WHERE a claim may land, and the head is capped at 0x1000 by
+    # mem_claim_1, so the bit is free by a check and not by hope.
+    "MC_DMA_HI": ("kernel/memory.inc", 0x8000),
+    "MC_DMA_HEAD": ("kernel/memory.inc", 0x7FFF),
     "MC_SIZE": ("kernel/memory.inc", 10),
+    # ...and the one OWNER WORD a host script has to spell, because it is the
+    # only tag that is not a segment: a loaded driver's IMAGE. Its own claims
+    # carry the driver's segment instead (mem_own's `mov bx, es`), so a walk
+    # that wants everything one driver holds needs this and that base.
+    "MEM_K_DRV": ("kernel/memory.inc", 0xFF03),
     # kernel/vidsel.inc - the PER-DISPLAY CONTEXT record (SPEC.md 39.14)
     #
     # Nine harness scripts each wrote `VID_CTX_SZ = 42` down by hand, and the
@@ -328,15 +412,41 @@ _MIRROR = {
     # scripts were reading the listing at 32 and would have decoded garbage
     # from entry 1 onward the moment they diverged.
     "DSK_DE_STRIDE": ("kernel/dskwin.inc", 24),
+    # kernel/disk.inc - the two REFERENCE BYTES that are not rows (SPEC.md
+    # 25.9). `dsk_icoix` holds one byte per listing entry: a row index, or one
+    # of these. Any harness that reads that array has to know them to tell a
+    # folder and the generic icon apart from body 254 and body 255 - which
+    # ICO_NROW makes unreachable today and which is exactly the kind of thing
+    # that stops being true quietly. Two scripts had their own copies, which
+    # is the threshold this table exists for.
+    "ICO_R_FOLDER": ("kernel/disk.inc", 0xFE),
+    "ICO_R_NONE": ("kernel/disk.inc", 0xFF),
     # kernel/sched.inc - the scheduler's slot count (SPEC.md 8). It went 8 ->
-    # 14 with docs/STACK-SLOTS-PLAN.md and tests/saverate.py's copy did not,
+    # 14 with docs/plans/completed/STACK-SLOTS-PLAN.md and tests/saverate.py's copy did not,
     # so sch_cycles was read six slots short; the test reads os88sym now and
     # this entry is what makes the next copy a t_mirror failure.
-    # PER ARM (docs/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small has SIX worker slices and the UI task. The SDK
+    # PER ARM (docs/plans/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small has SIX worker slices and the UI task. The SDK
     # keeps the LARGER value, so a package over-allocates rather than
     # the kernel overflowing what it was handed (SPEC.md 51.0.0).
-    "MAX_TASKS": ("kernel/sched.inc", {"big": 14, "small": 7}),
+    "MAX_TASKS": ("kernel/sched.inc", {"big": 14, "small": 5}),
+    # kernel/ui.inc - the Restart request's "do not go near a disk" value,
+    # which a gate writes to [ui_rebootq] to reach the last instruction before
+    # int 19h (tests/fddpark.py, tests/usbmouse.py's detach leg)
+    "UI_RBQ_NOFLUSH": ("kernel/ui.inc", 2),
+    # kernel/kernel.asm - where a DRIVER's offsets start when it runs from the
+    # HMA (SPEC.md 2.10.8): a drv_tab row naming a segment at or above
+    # DRV_HMA_SEG has its header at SEG:DRV_HMA_ORG, never SEG:0. A harness
+    # that reads a driver's variables wants drv_base() below, not seg << 4
+    "DRV_HMA_ORG": ("kernel/kernel.asm", 0xE000),
+    "DRV_HMA_SEG": ("kernel/kernel.asm", 0xF000),
 }
+
+
+def drv_base(seg):
+    """The linear address a driver's org-0 offsets are relative to, for the
+    segment its drv_tab row names: SEG:0 in the heap, SEG:DRV_HMA_ORG in the
+    HMA (SPEC.md 2.10.8). Add a symbol's offset from the driver's map."""
+    return (seg << 4) + (DRV_HMA_ORG if seg >= DRV_HMA_SEG else 0)
 
 def _armval(name):
     """This arm's value for a mirrored constant, or None if it has none."""
@@ -369,8 +479,8 @@ def __getattr__(name):
 
 # Derived, and not mirrored: W_FLAGS bits 0 and 1 have no names in wm.inc.
 WF_USED, WF_VIS = 1, 2
-# WF_STALE|WF_NOANIM|WF_1BPP: the kernel's bits in the shape byte (SPEC.md
-# 11.96.17), and `WF_HIBITS equ (WF_STALE | WF_NOANIM | WF_1BPP) >> 8` in
+# WF_STALE|WF_NOANIM|WF_1BPP|WF_USRSZ|WF_DESK|WF_HOVER: the kernel's bits in
+# the shape byte (SPEC.md 11.96.17, 11.103), and `WF_HIBITS equ (...) >> 8` in
 # wm.inc is an EXPRESSION, which _equs deliberately refuses to evaluate. So it
 # is derived here from three values that ARE checked, rather than written down
 # as a literal - which is what it was, with only WF_1BPP of the three mirrored,
@@ -378,7 +488,7 @@ WF_USED, WF_VIS = 1, 2
 # VID_CTX_SZ's failure exactly: watching some of the inputs and none of the
 # answer. Getting this wrong reads a kernel bit as a cursor shape, which is the
 # defect WF_STALE's own banner records having shipped once.
-WF_HIBITS = (WF_STALE | WF_NOANIM | WF_1BPP) >> 8
+WF_HIBITS = (WF_STALE | WF_NOANIM | WF_1BPP | WF_USRSZ | WF_DESK | WF_HOVER) >> 8
 
 # ...and the FOUR the kernel derives from VID_CTX_W the same way. They are
 # EXPRESSIONS in vidsel.inc (`VID_CTX_W*2`, `VID_CTX_W*2+5`), which _equs
@@ -686,8 +796,68 @@ def snapw(w, flush=False, x=None, screen=None):
     return down if down > c else w
 
 
-def close_xy(wx, wy):
+def snapx(x, nosnap=False, span=False):
+    """Where a frame asked to sit at `x` ACTUALLY lands (SPEC.md 11.94).
+
+    `span` IS THE CASE snapw's docstring said no test subject was. SPEC.md
+    96.32's DOS window is one now: 80 columns is 640 pixels of content and VGA
+    and CGA are 640 wide, so its frame spans the screen and 11.95.2 gives it no
+    left border - which makes its CONTENT origin W_X itself rather than W_X+1,
+    so the snap is `x & ~7` and an x of 0 is already where it belongs. Model it
+    with the +7 form and a drag to 0 is predicted to land at 7, the window
+    correctly lands at 0, and the harness calls the window manager wrong.
+
+    `wm_snap_win` rounds a window's CONTENT origin down to a multiple of 8 -
+    content left is W_X + 1, so the frame x it hands back is
+    `((x + 1) & ~7) - 1`, and an x of 0..6 goes UP to 7 because the round-down
+    would be negative.
+
+    A HARNESS THAT DOES NOT MODEL THIS READS ITS OWN DRAG AS A FAILURE. Ask
+    for 195 and the window sits at 191, every time, deterministically - so a
+    check written as `rect == (195, 50)` fails on a window manager doing
+    exactly what SPEC.md says. Measured: Calculator dragged +20 moved +16.
+
+    It is the ORIGIN's half of the pair `snapw` above models for the width,
+    and it does NOT model the refusal: `wm_snap_ax` leaves x alone when the
+    snapped rect would run past `wm_zoom_xmax` on the window's own display, so
+    a window near the right edge can keep an unaligned x. That case is rare
+    enough that no caller here has met it and modelling it would need the
+    display table; a caller that lands somewhere else should read the record
+    rather than trust this.
+
+    `nosnap` is W_FLAGS bit 4 (WF_NOSNAP), whose sense is inverted - a window
+    that OPTS OUT is not snapped at all.
+    """
+    if nosnap:
+        return x
+    if span:
+        return x & 0xFFF8           # no left border: the content origin IS
+                                    # the frame's, so 0 stays 0
+    c = ((x + 1) & 0xFFF8) - 1
+    return c if c >= 0 else c + 8
+
+
+def win95(m, sym=None):
+    """Is the WINDOWS theme live (SPEC.md 76.14)? Its buttons are on the
+    RIGHT, so every helper that aims at one has to ask - the Mac close box's
+    position is a TITLE DRAG there, which closes nothing."""
+    return m.read(_sym(m, sym)("thm_kind"), 1)[0] == THM_WIN
+
+
+def button_xy(wx, wy, ww, which):
+    """The centre of a Windows-theme caption button (SPEC.md 76.14.3):
+    `which` is "close", "max" or "min"."""
+    off = {"close": WN_CLOSE, "max": WN_MAX, "min": WN_MIN}[which]
+    return (wx + ww - off + 8, wy + WN_BTY + WN_BTH // 2)
+
+
+def close_xy(wx, wy, ww=None, m=None, sym=None):
     """The close box's centre for a window whose frame starts at (wx, wy).
+
+    Pass the window's width and the Marty (`ww=`, `m=`) and the answer follows
+    the THEME: under Windows (SPEC.md 76.14) the close button is at the right
+    and this is its centre instead. Without them it is the Mac box, which is
+    every caller written before the theme existed.
 
     wm_hit accepts columns W_X+WM_BOX_X0 .. +WM_BOX_X0+WM_BOX_W and rows
     W_Y+WM_BOX_Y0 .. +WM_BOX_Y1, so the centre is the safe aim - a click one
@@ -696,6 +866,8 @@ def close_xy(wx, wy):
     W_X+W_W-1-WM_BOX_X0, and is not written out here because nothing asks for
     it yet; the four constants above are what an asker would need.
     """
+    if ww is not None and m is not None and win95(m, sym):
+        return button_xy(wx, wy, ww, "close")
     return (wx + WM_BOX_X0 + WM_BOX_W // 2,
             wy + (WM_BOX_Y0 + WM_BOX_Y1) // 2)
 
@@ -727,6 +899,21 @@ def win_list(m, sym=None, check=True):
             if struct.unpack_from("<H", raw, i * WIN_SIZE)[0] & want == want]
 
 
+def zorder(m, sym=None):
+    """The z-order, BOTTOM first - slot indices, as wm_zord holds them.
+
+    `top` answers only the frontmost. This is what a caller needs to ask
+    WHAT IS COVERING a window, which is the question behind every title-bar
+    click that lands on the wrong window: the record says where the bar is
+    and says nothing about whether that point is on the glass.
+    """
+    S = _sym(m, sym)
+    n = m.read(S("wm_zn"), 1)[0]
+    if not n:
+        return []
+    return list(m.read(S("wm_zord"), n))
+
+
 def top(m, sym=None):
     """wm_top's answer - the address of the frontmost VISIBLE window, or 0.
 
@@ -741,8 +928,9 @@ def top(m, sym=None):
     raw = m.read(S("wm_wins"), MAX_WIN * WIN_SIZE)
     for k in range(n - 1, -1, -1):
         i = zord[k]
-        if struct.unpack_from("<H", raw, i * WIN_SIZE)[0] & WF_VIS:
-            return S("wm_wins") + i * WIN_SIZE
+        f = struct.unpack_from("<H", raw, i * WIN_SIZE)[0]
+        if f & (WF_VIS | WF_DESK) == WF_VIS:    # SPEC.md 11.103.2: a desk
+            return S("wm_wins") + i * WIN_SIZE  # window is never wm_top's
     return 0
 
 
@@ -777,42 +965,50 @@ def tile_xy(m, win, sym=None):
 
 
 def drive_ordinal(m, letter="B", sym=None):
-    """Which desktop ZONE does drive `letter` own? None if it has none.
+    """Which desktop CELL is drive `letter` shown in? None if it is not shown.
 
-    NOT the drive number. A zone exists per volume with DV_FLAGS bit 0 set and
-    the ordinal is that volume's POSITION among the shown ones - so a machine
-    whose B: was retired by SPEC.md 18.97's probe, or which mounts a hard
-    disk, numbers them differently. Walking dsk_vtab is the only way to be
-    right, and it turns "no window opened" into "B: has no zone", which is the
-    difference between a test that fails and a test that says why.
+    NOT the drive number, and since SPEC.md 26.9 not a position you can count
+    either: every desktop item - volume, service item, shortcut - is a zone
+    with one byte of `desk_zslot` naming its cell, and a drive packs round
+    whatever is placed in the grid. So the table is read, which also turns
+    "no window opened" into "B: has no cell", the difference between a test
+    that fails and a test that says why. The name stays for its callers.
     """
     want = ord(letter.upper()) - ord("A") if isinstance(letter, str) else letter
-    t = m.read(_sym(m, sym)("dsk_vtab"), DVOL_MAX * DV_SIZE)
-    n = 0
-    for v in range(DVOL_MAX):
-        r = t[v * DV_SIZE:(v + 1) * DV_SIZE]
-        if r[DV_KIND] == DVK_FREE or not (r[DV_FLAGS] & 1):
-            continue
-        if v == want:
-            return n
-        n += 1
-    return None
+    if not 0 <= want < DVOL_MAX:        # a letter no volume row can have: the
+        return None                     # byte past the volumes is the Wire's
+    # NO LAYOUT, NO CELL. A guest still booting has `desk_zslot` as zeroed
+    # RAM, and a zero byte reads as "cell 0" - so a wait for a drive's zone
+    # passed before the kernel had run at all, and drive_xy then divided by
+    # a [desk_rows] of 0. desk_layout writes that word before any zone can
+    # be drawn (the kernel's own desk_cell_xy divides by it), so a zero there
+    # is the machine saying no cell exists yet. Loaded boxes hit it: QEMU
+    # spends longer in the window the first read can land in.
+    if not word(m, "desk_rows", sym):
+        return None
+    v = m.read(_sym(m, sym)("desk_zslot") + want, 1)[0]
+    if v >= DSL_GONE:
+        return None
+    return v & DSL_SLOT
 
 
 def drive_xy(m, ordinal, sym=None):
-    """The centre of zone `ordinal`, in virtual screen coordinates.
+    """The centre of cell `ordinal`'s PICTURE, in virtual screen coordinates.
 
-    desk_ord_xy's arithmetic (SPEC.md 26.1): zones fill a column downwards and
-    wrap to a NEW COLUMN ON THE LEFT, and how many fit is [desk_rows] - 2 on a
-    CGA with the tall icon, 4 with SPEC.md 26.4's square one, 4 on Hercules,
-    7 on VGA. The pitch and the zone's height are live words for that reason.
+    desk_cell_xy's arithmetic (SPEC.md 26.9): cell 0 is the top of the
+    rightmost column, [vid_desk_zx]; cells fill a column downwards and then
+    the next column to the LEFT, DESK_PX apart, [desk_rows] to a column. The
+    picture is the 32-wide column in the middle of a DESK_CW cell.
     """
     rows = word(m, "desk_rows", sym)
     step = word(m, "desk_zstep", sym)
     zh1 = word(m, "desk_zh1", sym)
     zx = word(m, "vid_desk_zx", sym)
     col, row = divmod(ordinal, rows)
-    return (zx - col * DESK_COLW + DESK_ZW // 2,
+    # the column on the byte grid (SPEC.md 26.9.9's DESKPIC: the centred x
+    # rounded to the nearest multiple of 8)
+    return (((zx - col * DESK_PX + (DESK_CW - DESK_ZW) // 2 + 4) & ~7)
+            + DESK_ZW // 2,
             DESK_ZY0 + row * step + zh1 // 2)
 
 
@@ -847,6 +1043,166 @@ _COLLISIONS = {
     "BAND_KB": "kernel/band.inc's title-bar composer buffer vs Paint's own "
                "band-cache threshold in tests/paintsu.py - unrelated",
 }
+
+
+# Parsed once per (path, mtime) and shared by `scan` and `unmirrored`: t_mirror
+# runs the pair three times over ~800 host scripts, and parsing every one each
+# time - then visiting every EXPRESSION node of it with ast.walk, when an
+# assignment is a statement - was 16 of the fast tier's 30 seconds.
+_ASSIGNS = {}
+
+
+_TARGETISH = re.compile(r"\b([A-Za-z_]\w*)[ \t\\\r\n]*[,=)]")
+
+
+def _named(names):
+    """The names a file must spell as a target before it is worth parsing.
+
+    Every assignment target the callers count is a bare Name, so its spelling
+    is in the source followed by `=`, by the `,` of a tuple or by the `)` that
+    closes one. Most host scripts mention none of the constants that way, and
+    one regex pass over the text is far cheaper than ast.parse."""
+    return frozenset(names)
+
+
+def _assigns(path, named=None):
+    """[(lineno, targets, value)] for every `Assign` statement in `path` - or
+    [] at once when `named` is given and the text cannot hold one of them."""
+    import ast
+    import warnings
+
+    try:
+        key = (path, os.stat(path).st_mtime_ns)
+    except OSError:
+        return []
+    got = _ASSIGNS.get(key)
+    if got is None:
+        try:
+            text = open(path, "r", errors="replace").read()
+        except OSError:
+            return []
+        disk = _disk_assigns()
+        sha = _sha(text)
+        ent = disk.get(path)
+        if ent and ent[0] == sha:
+            got = [text, frozenset(ent[1]),
+                   None if ent[2] is None else [(ln, [_dec(t) for t in tg], _dec(v))
+                                                for ln, tg, v in ent[2]]]
+        else:
+            got = [text, frozenset(_TARGETISH.findall(text)), None]
+            disk[path] = [sha, sorted(got[1]), None]
+            _DISKA_DIRTY[0] = True
+        _ASSIGNS[key] = got
+    text, words, found = got
+    if found is None:
+        if named is not None and named.isdisjoint(words):
+            return []
+        try:
+            with warnings.catch_warnings():
+                # Somebody's invalid escape in a docstring is not this
+                # module's business, and printing it is half of a parse.
+                warnings.simplefilter("ignore")
+                tree = ast.parse(text)
+        except SyntaxError:
+            tree = None
+        found = []
+        # Statements only: an Assign is a statement, so nothing below an
+        # expression can hold one, and skipping them is most of the tree.
+        todo = [tree] if tree is not None else []
+        while todo:
+            node = todo.pop()
+            if isinstance(node, ast.Assign):
+                found.append((node.lineno, node.targets, node.value))
+            for _, val in ast.iter_fields(node):
+                if isinstance(val, list):
+                    todo.extend(v for v in val
+                                if isinstance(v, (ast.stmt, ast.excepthandler,
+                                                  getattr(ast, "match_case",
+                                                          ()))))
+        found.sort(key=lambda r: r[0])
+        got[2] = found
+        ent = _disk_assigns().get(path)
+        if ent is not None and ent[0] == _sha(text):
+            ent[2] = [(ln, [_enc(t) for t in tg], _enc(v)) for ln, tg, v in found]
+            _DISKA_DIRTY[0] = True
+    return found
+
+
+# --- ...and kept between RUNS, by content -----------------------------------
+# A script's assignments are a function of its text, and the ~900 host
+# scripts this reads change one or two at a time, so the answer is kept on
+# disk (build/.os88geom-assigns.json) under each file's SHA-1. Only the
+# shapes the callers test survive the round trip - a Name, a Tuple of them,
+# an int (or bool) Constant - and anything else comes back as a bare ast.expr
+# that no caller's isinstance() accepts, exactly as before. Cold, t_mirror
+# parses as it always did (~5s); warm it is a hash per file.
+# $OS88_NOGEOMCACHE=1 skips the disk.
+_DISKA = None
+_DISKA_DIRTY = [False]
+
+
+def _sha(text):
+    import hashlib
+    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()
+
+
+def _disk_path():
+    b = os.path.join(ROOT, "build")
+    return os.path.join(b, ".os88geom-assigns.json") if os.path.isdir(b) else None
+
+
+def _disk_assigns():
+    global _DISKA
+    if _DISKA is None:
+        _DISKA = {}
+        p = _disk_path()
+        if p and not os.environ.get("OS88_NOGEOMCACHE"):
+            import json
+            try:
+                with open(p) as f:
+                    _DISKA = json.load(f)
+            except (OSError, ValueError):
+                _DISKA = {}
+            import atexit
+            atexit.register(_disk_save)
+    return _DISKA
+
+
+def _disk_save():
+    p = _disk_path()
+    if not (p and _DISKA_DIRTY[0]):
+        return
+    import json
+    import tempfile
+    try:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(_DISKA, f)
+        os.replace(tmp, p)          # atomic for a parallel reader
+    except OSError:
+        pass
+
+
+def _enc(node):
+    import ast
+    if isinstance(node, ast.Name):
+        return ["N", node.id]
+    if isinstance(node, ast.Tuple):
+        return ["T", [_enc(e) for e in node.elts]]
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return ["C", node.value]
+    return ["X"]
+
+
+def _dec(e):
+    import ast
+    if e[0] == "N":
+        return ast.Name(id=e[1])
+    if e[0] == "T":
+        return ast.Tuple(elts=[_dec(x) for x in e[1]])
+    if e[0] == "C":
+        return ast.Constant(value=e[1])
+    return ast.expr()
 
 
 def unmirrored(root=None, least=2):
@@ -884,6 +1240,8 @@ def unmirrored(root=None, least=2):
                     pass
 
     hits = {}
+    named = _named([k for k in kern if len(k) >= 4 and k.isupper()
+                    and k not in _MIRROR and k not in _COLLISIONS])
     for sub in ("tools", "tests", os.path.join("tests", "unit")):
         d = os.path.join(root, sub)
         if not os.path.isdir(d):
@@ -891,21 +1249,13 @@ def unmirrored(root=None, least=2):
         for fn in sorted(os.listdir(d)):
             if not fn.endswith(".py") or fn == "os88geom.py":
                 continue
-            try:
-                tree = ast.parse(open(os.path.join(d, fn), "r",
-                                      errors="replace").read())
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Assign):
-                    continue
-                for tgt in node.targets:
+            for lineno, targets, value in _assigns(os.path.join(d, fn), named):
+                for tgt in targets:
                     if (isinstance(tgt, ast.Name)
-                            and isinstance(node.value, ast.Constant)
-                            and isinstance(node.value.value, int)):
+                            and isinstance(value, ast.Constant)
+                            and isinstance(value.value, int)):
                         hits.setdefault(tgt.id, []).append(
-                            (os.path.join(sub, fn), node.lineno,
-                             node.value.value))
+                            (os.path.join(sub, fn), lineno, value.value))
 
     out = []
     for name, places in hits.items():
@@ -934,6 +1284,7 @@ def scan(root=None):
 
     root = root or ROOT
     out = []
+    named = _named(_KNOWN)
     for sub in ("tools", "tests"):
         d = os.path.join(root, sub)
         if not os.path.isdir(d):
@@ -942,30 +1293,24 @@ def scan(root=None):
             if not fn.endswith(".py") or fn == "os88geom.py":
                 continue
             path = os.path.join(d, fn)
-            try:
-                tree = ast.parse(open(path, "r", errors="replace").read())
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Assign):
-                    continue
-                for tgt in node.targets:
+            for lineno, targets, value in _assigns(path, named):
+                for tgt in targets:
                     # NAME = 18, and NAME, OTHER = 18, 20 - the two spellings
                     # the harness actually uses.
                     pairs = []
                     if isinstance(tgt, ast.Name):
-                        pairs = [(tgt, node.value)]
+                        pairs = [(tgt, value)]
                     elif (isinstance(tgt, ast.Tuple)
-                          and isinstance(node.value, ast.Tuple)
-                          and len(tgt.elts) == len(node.value.elts)):
-                        pairs = list(zip(tgt.elts, node.value.elts))
+                          and isinstance(value, ast.Tuple)
+                          and len(tgt.elts) == len(value.elts)):
+                        pairs = list(zip(tgt.elts, value.elts))
                     for nm, val in pairs:
                         if not isinstance(nm, ast.Name) or nm.id not in _KNOWN:
                             continue
                         if not isinstance(val, ast.Constant) \
                                 or not isinstance(val.value, int):
                             continue
-                        out.append((os.path.join(sub, fn), node.lineno, nm.id,
+                        out.append((os.path.join(sub, fn), lineno, nm.id,
                                     val.value, _KNOWN[nm.id]))
     return sorted(out, key=lambda r: (r[3] == r[4], r[0], r[1]))
 

@@ -22,7 +22,6 @@ run captures both mid-drag and after the button comes up.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -53,12 +52,12 @@ def session(m, mo):
 
     mo.to(200, 100)
     m.mouse(0, 0, l=True)
-    time.sleep(0.4)
+    os88marty.pace(m, 0.4)
     mo.to(240, 120, l=True)
-    time.sleep(0.6)
+    os88marty.pace(m, 0.6)
     snap("drag-outline-up")         # vga_xor_rect_vram -> gfx_xor_strips
     mo.to(300, 140, l=True)
-    time.sleep(0.6)
+    os88marty.pace(m, 0.6)
     snap("drag-outline-moved")
     m.mouse(0, 0, l=False)
     os88marty.settle(m)

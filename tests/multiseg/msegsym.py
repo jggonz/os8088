@@ -26,9 +26,21 @@ from os88map import Syms                                    # noqa: E402
 MSEG = Syms("tests/multiseg/mseg.asm", "build/mseg.bin",
             ["apps", "tests/multiseg"])
 
+# ...and the SAME SOURCE built -DMSEG_COMP, which is the compressed-part
+# fixture (SPEC.md 20.12.7). It is a second Syms and not a flag on the first
+# because the byte comparison is per BUILD: the two binaries differ, and a map
+# that described either one of them would be wrong about the other.
+MSEGZ = Syms("tests/multiseg/mseg.asm", "build/msegz.bin",
+             ["apps", "tests/multiseg"], defines=("MSEG_COMP",))
 
-def sym(name):
-    return MSEG.sym(name)
+# ...and built -DMSEG_LZC, OP_COMP on the LAZY part alone, which is
+# tests/mseglzslack.py's fixture (SPEC.md 88.10.4.1).
+MSEGLZ = Syms("tests/multiseg/mseg.asm", "build/mseglz.bin",
+              ["apps", "tests/multiseg"], defines=("MSEG_LZC",))
+
+
+def sym(name, comp=False):
+    return (MSEGZ if comp else MSEG).sym(name)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,12 @@ store - and the exception, the size box taking the caret, is exactly SPEC.md
   B  ...and it comes back UP when the pointer slides off it, still held
   A  a slide-off release does NOT change the size
   C  press-and-release ON it DOES
+  G  Load puts the Open dialog up, and after Esc the button is UP again
+  H  ...and so does Preserve As, with the Save dialog
+
+G and H compare the button as a BITMAP against its own upright picture. They
+were red before rp_a_up: the panel's raise cache (SPEC.md 11.96) banked the
+pane with the button PRESSED as the dialog went over it, and Esc put that back.
 
 C is the one that says the conversion did not eat the feature: a page that had
 simply stopped dispatching would pass P, D, B and A.
@@ -25,11 +31,13 @@ The SIZE FIELD is compared as a BITMAP and never as a lit-pixel count - two
 different numbers can weigh the same, and this is a four-character field where
 that is not far-fetched.
 """
+import os
 import sys
 import time
 
 sys.path.insert(0, "tools")
 import os88marty as M
+import os88sym
 from os88mouse import Mouse
 from os88geom import WIN_SIZE, MAX_WIN
 
@@ -46,8 +54,35 @@ RP_PX, RP_MW, RP_FH = 146, 18, 12
 DRVR_SZ, DRVR_SEG = 16, 2
 RD_ROW = 3                      # drv_tab row 3 is the RAM disk since
                                 # SPEC.md 31.1's reorder
-DRVC_FILE, DSV_SIZE = 5, 34
-DSV_CPUP, DSV_CPDRAG = 30, 32
+# **ASKED, NOT TYPED.** `DSV_SIZE` was written down here as 34 and the
+# kernel's is 38 (kernel/driver.inc grew DSV_GEOM), so `drv_svc + 4*34` read
+# sixteen bytes short - the middle of the PREVIOUS class's record - and
+# reported `CPUP=0x0000 CPDRAG=0x0000` about a driver that publishes both.
+# ramdisk.asm's own service table carries the same warning about its pad:
+# "it is the one that self-heals when DSV_SIZE grows again". A number typed
+# into a test does not self-heal, and this is the third row in one soak to
+# prove it (tests/lzship.py's DRVR_SIZE, tests/lzdrv.py's DRV_MAX).
+#
+# ...AND THE SLOT INDEX IS THE SAME LESSON ONE LEVEL UP. This read `(DRVC_FILE
+# - 1) * DSV_SIZE` with "class 1 is index 0" beside it, which was the whole
+# rule until drv_svc stopped reserving a slot for DRVC_RETIRED3 - a class that
+# can never be published. drv_cls_svc_x COMPACTS past it now, so a class ABOVE
+# the retired one is one slot lower than its number implies, and a typed
+# `- 1` read off the end of the table and reported both cells as 0 again. The
+# rule is mirrored from the kernel below rather than restated.
+_EQ = os88sym.equates()
+DRVC_FILE = _EQ["DRVC_FILE2"]   # RAMDISK.DRV's class since SPEC.md 62.9.19
+DRVC_RETIRED3 = _EQ["DRVC_RETIRED3"]
+DSV_SIZE = _EQ["DSV_SIZE"]
+DSV_CPUP, DSV_CPDRAG = _EQ["DSV_CPUP"], _EQ["DSV_CPDRAG"]
+
+
+def _svc_slot(cls):
+    """drv_cls_svc_x's own arithmetic: index = class - 1, less one more for
+    every published class the retired one used to sit in front of."""
+    if cls == _EQ["DRVC_FILE2"]:    # ...and class 8 steps back over 6 and 7,
+        cls -= 2                    # the two classes with no copy (62.9.19)
+    return cls - 1 - (1 if cls > DRVC_RETIRED3 else 0)
 TITLE_H = 18
 
 fails = []
@@ -125,7 +160,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # driver's table. A table that stopped short would show whatever follows
     # it here, so a NON-ZERO answer is only half of it; the behaviour below
     # is the other half.
-    base = m.sym("drv_svc") + (DRVC_FILE - 1) * DSV_SIZE   # class 1 is index 0
+    base = m.sym("drv_svc") + _svc_slot(DRVC_FILE) * DSV_SIZE
     up = int.from_bytes(m.read(base + DSV_CPUP, 2), "little")
     dg = int.from_bytes(m.read(base + DSV_CPDRAG, 2), "little")
     check("DSV_CPUP and DSV_CPDRAG are published", up != 0 and dg != 0,
@@ -144,6 +179,20 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     was = bmp(field)
     check("the Ram Disk page painted", any(was),
           f"({lit(field)} lit in the size field)")
+    # ...AND THE EVIDENCE, because every check below this line is a pixel
+    # count and `any(was)` is a weak reading of "the page is up": the
+    # `rd_s_nopage` message RAMPAGE.DRV's absence draws would light this rect
+    # too (drivers/ramdisk/rdpage.inc). A row that compares pixels should be
+    # able to hand over the picture it compared.
+    def shot(tag=""):
+        if not os.environ.get("RDUP_SHOT"):
+            return
+        s = os.environ["RDUP_SHOT"].replace(".png", tag + ".png")
+        M.write_png(s, *m.vram()) if mono else \
+            M.write_png_rgb(s, *m.fbuf())
+        print("  shot: %s" % s)
+
+    shot()
 
     # --- D: the press draws it DOWN ---------------------------------------
     # The INTERIOR and a HALVING, not a difference: a pressed 18x12 cell turns
@@ -151,19 +200,25 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # pixels all by itself - which is enough to pass a `!=` against a build
     # whose down state never drew at all (PERFORMANCE.md Part 3.1's own trap,
     # and it has already caught this exact conversion once in files.inc).
+    # **SETTLE, NOT SLEEP** (docs/WRITING-TESTS.md 7). Every reading below is
+    # a PIXEL COUNT, so what has to be true before `lit()` is that the screen
+    # has stopped changing - and `time.sleep(0.9)` asks for host seconds, of
+    # which a loaded box gives the guest a third (docs/plans/SOAK-PARALLEL.md
+    # 1). It read the interior mid-repaint and reported "139 lit held against
+    # 160 upright" about a pressed state that draws perfectly.
     mo.to(plus[0] + 6, plus[1] - 24)            # park off it first
-    time.sleep(0.8)
+    quiet(m)
     upl = lit(inner)
     mo.to((plus[0] + plus[2]) // 2, (plus[1] + plus[3]) // 2)
     mo._edge(True)
-    time.sleep(0.9)
+    quiet(m)
     dnl = lit(inner)
     check("a press draws `+` DOWN", dnl * 2 < upl,
           f"({upl} lit upright, {dnl} held)")
 
     # --- B: it comes back UP while STILL HELD -----------------------------
     mo.to(plus[0] - 40, (plus[1] + plus[3]) // 2, l=True)
-    time.sleep(1.2)
+    quiet(m)
     off = lit(inner)
     check("...and back UP when the pointer slides off it", off == upl,
           f"({off} lit, upright is {upl})")
@@ -177,7 +232,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # --- C: press AND release on it ---------------------------------------
     mo.to((plus[0] + plus[2]) // 2, (plus[1] + plus[3]) // 2)
     mo._edge(True)
-    time.sleep(0.7)
+    quiet(m)
     mo._edge(False)
     quiet(m)
     check("press-and-release ON it DOES change the size", bmp(field) != was,
@@ -193,11 +248,59 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     before = bmp(box)
     mo.to((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
     mo._edge(True)
-    time.sleep(0.9)
+    quiet(m)
     check("the size box takes the caret on the PRESS", bmp(box) != before,
           "(13.6: a safe prefix action keeps the press)")
     mo._edge(False)
     quiet(m)
+
+    # --- G/H: a button that opens a DIALOG comes back UP after a Cancel ----
+    # Load and Preserve As put the Standard File dialog up from the release.
+    # The window takes down by putting back what was under it, so whatever
+    # the button looked like at the moment the dialog went UP is what Esc
+    # restores: it was left drawn PRESSED for the rest of the session until
+    # rp_a_up drew it upright first. Compared as a BITMAP against the same
+    # button's own upright picture, the pointer parked off it both times.
+    park = (x0 + CP_RX + 110, y0 + 4)
+
+    def dlg_up():
+        return int.from_bytes(m.read(m.sym("fdlg_win"), 2),
+                              "little") not in (0, 0xFFFF)
+
+    def dlg_cancel(tag, rect, what):
+        mo.to(*park)
+        quiet(m)
+        upright = bmp(rect)
+        mo.to((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+        mo._edge(True)
+        quiet(m)
+        mo._edge(False)
+        try:
+            M.until(m, lambda _: dlg_up(), f"{what}'s dialog", poll=0.2,
+                    guest=40.0)
+        except M.MartyError:
+            pass
+        quiet(m, 20.0)
+        up = dlg_up()
+        check(f"{tag}: {what} put a file dialog up", up)
+        if not up:
+            return
+        m.key("Escape")
+        try:
+            M.until(m, lambda _: not dlg_up(), "the dialog to go",
+                    poll=0.2, guest=40.0)
+        except M.MartyError:
+            pass
+        mo.to(*park)
+        quiet(m, 20.0)
+        now = bmp(rect)
+        shot("-" + tag)
+        diff = sum(1 for a, b in zip(now, upright) if a != b)
+        check(f"{tag}: {what} is UP again after Esc", now == upright,
+              f"({diff} of {len(now)} pixels differ from its upright picture)")
+
+    load = (x0 + CP_RX + 152, y0 + 52, x0 + CP_RX + 152 + 63, y0 + 52 + 15)
+    dlg_cancel("G", load, "Load")
 
     # --- F: Mount, which is the control the release was worth having for ---
     # It puts a whole volume up, so a mis-aimed press was the expensive one.
@@ -206,19 +309,23 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     mnt = (x0 + CP_RX + 2, y0 + 52, x0 + CP_RX + 2 + 63, y0 + 52 + 15)
     mo.to((mnt[0] + mnt[2]) // 2, (mnt[1] + mnt[3]) // 2)
     mo._edge(True)
-    time.sleep(0.8)
+    quiet(m)
     mo.to(mnt[0] - 40, (mnt[1] + mnt[3]) // 2, l=True)   # slide off, HELD
-    time.sleep(1.0)
+    quiet(m)
     mo._edge(False)
     quiet(m, 20.0)
     check("a slide-off release does NOT mount", bmp(cap) == was)
     mo.to((mnt[0] + mnt[2]) // 2, (mnt[1] + mnt[3]) // 2)
     mo._edge(True)
-    time.sleep(0.7)
+    quiet(m)
     mo._edge(False)
     quiet(m, 25.0)
     check("press-and-release on Mount DOES", bmp(cap) != was,
           "(the 'Mounted D: ...' caption row)")
+
+    # --- H: Preserve As, live now there is a volume to preserve -----------
+    presa = (x0 + CP_RX + 2, y0 + 72, x0 + CP_RX + 2 + 95, y0 + 72 + 15)
+    dlg_cancel("H", presa, "Preserve As")
 
 print()
 if fails:

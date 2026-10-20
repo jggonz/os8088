@@ -44,12 +44,21 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
 
+import os88build
 import os88marty                                           # noqa: E402
 import os88sym                                             # noqa: E402
 import instdeep                                            # noqa: E402
 
 KNOBS = ["BOOTPROF=1", "MOUDIAG=1"]
-DEFINES = ("BOOT_PROFILE", "MOU_DIAG")
+KNOBTREE = None
+# **DERIVED, NEVER RESTATED** (docs/plans/SOAK-PARALLEL.md 8.4). A knob's make
+# VARIABLE and its nasm DEFINE are not the same string, and this line used to
+# be the second copy of that mapping: `("BOOT_PROFILE", "MOU_DIAG")` against `os88build`'s
+# `('BOOT_PROFILE', 'MOU_DIAG', 'KERN_BIG', 'KERN_KNOB')`. It assembled - which is exactly why it survived - but as
+# a DIFFERENT cache key from the one `Tree.apply()` had just set, so the row
+# re-assembled the kernel a second time to get the same answer. `fddpark`
+# is the class that died of this mirror going stale; `tree()` asks make.
+DEFINES = ()                    # filled from the tree in main()
 MACHINES = ("os8088_xt_hdd", "os8088_xt_vga_hdd")
 BLANK = os.path.join(ROOT, "build", "hdboot-blank.img")
 
@@ -103,7 +112,7 @@ def boot(machine, heap, run_dir):
         return
     if fseg_seen != {heap}:
         fail.append("%s: the kernel read [spl_fseg] = %s while the splash was "
-                    "live and its own HEAP_SEG is %04X. SPEC.md 52.10.2.1: the "
+                    "live and its own blob segment is %04X. SPEC.md 52.10.2.1: the "
                     "volume boot record was built from a different define set "
                     "than the kernel it loads"
                     % (machine, sorted("%04X" % v for v in fseg_seen), heap))
@@ -115,52 +124,54 @@ def boot(machine, heap, run_dir):
 
 
 def main():
+    # A PRIVATE TREE (tools/os88build.py). This used to build the knob pair
+    # into build/ and put the plain kernel back in a `finally` - two full
+    # builds, and in between the shared tree carried a BOOTPROF/MOUDIAG kernel
+    # that any row reading it would have driven. Out of tree there is nothing
+    # to restore and no reason for the row to hold the tree.
     print("  building the knob pair (%s)..." % " ".join(KNOBS))
-    r = subprocess.run(["make"] + KNOBS, cwd=ROOT,
-                       capture_output=True, text=True, timeout=900)
-    if r.returncode != 0:
-        raise SystemExit("knobhd: `make %s` failed, so nothing below would "
-                         "mean what it says:\n%s"
-                         % (" ".join(KNOBS), r.stdout[-2000:] + r.stderr[-2000:]))
-    try:
-        os88sym.default_defines(*DEFINES)
-        heap = os88sym.equates(DEFINES)["HEAP_SEG"]
-        print("  the knob kernel's HEAP_SEG is %04X" % heap)
+    global KNOBTREE, DEFINES
+    KNOBTREE = os88build.tree(*KNOBS).apply()
+    DEFINES = KNOBTREE.defines  # ...and apply() has already set the default
+    # the BLOB's segment, which is HEAP_SEG lifted by BLOB_LIFT where `.cold`
+    # is the top rung (SPEC.md 2.10.3) - what the VBR is told and [spl_fseg]
+    eq = os88sym.equates(DEFINES)
+    heap = eq.get("BLOB_SEG_AT", eq["HEAP_SEG"])
+    print("  the knob kernel's blob segment is %04X" % heap)
 
-        # ONE RUN TREE FOR THE INSTALL AND BOTH BOOTS. The install and the
-        # boots are different machines - the install needs the system floppy
-        # in fd:0 and a boot needs a blank one so GLaBIOS offers its menu -
-        # but they have to be those machines over ONE VHD. It used to work
-        # because every instance mounted the shared master disk; per-instance
-        # isolation gave each its own clone and `close()` deletes a private
-        # one, so the install went into a directory that vanished and each
-        # boot opened a fresh clone of the pristine master. Both adapters then
-        # reported "the loading screen never came up", which reads as a knob
-        # kernel that will not boot (docs/HANDOFF-SOAK-FINDINGS.md B1).
-        #
-        # In-process rather than a subprocess, so the knob DEFINES set above
-        # are the ones the installer resolves symbols with - that is what the
-        # OS88_DEFINES environment variable was carrying.
-        run_dir = os88marty.stage_run_dir("knobhd")
-        print("  installing (tests/instdeep.py's own installer, on this tree)...")
-        with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                              machine=instdeep.MACHINE,
-                              run_dir=run_dir) as m:
-            os88marty.settle(m)
-            instdeep.install(m)
-            v = instdeep.partition(instdeep.vhd(m))
-        missing = [q for q in instdeep.WANT_FILES if q not in v.tree()]
-        if missing:
-            raise SystemExit("knobhd: the install failed (%s missing)"
-                             % ", ".join(missing))
+    # ONE RUN TREE FOR THE INSTALL AND BOTH BOOTS. The install and the
+    # boots are different machines - the install needs the system floppy
+    # in fd:0 and a boot needs a blank one so GLaBIOS offers its menu -
+    # but they have to be those machines over ONE VHD. It used to work
+    # because every instance mounted the shared master disk; per-instance
+    # isolation gave each its own clone and `close()` deletes a private
+    # one, so the install went into a directory that vanished and each
+    # boot opened a fresh clone of the pristine master. Both adapters then
+    # reported "the loading screen never came up", which reads as a knob
+    # kernel that will not boot.
+    #
+    # In-process rather than a subprocess, so the knob DEFINES set above
+    # are the ones the installer resolves symbols with - that is what the
+    # OS88_DEFINES environment variable was carrying.
+    run_dir = os88marty.stage_run_dir("knobhd")
+    print("  installing (tests/instdeep.py's own installer, on this tree)...")
+    with os88marty.launch(KNOBTREE.img("os8088-360.img"),
+                          apps=KNOBTREE.img("apps360.img"),
+                          machine=instdeep.MACHINE,
+                          run_dir=run_dir) as m:
+        os88marty.settle(m)
+        instdeep.install(m)
+        v = instdeep.partition(instdeep.vhd(m))
+    missing = [q for q in instdeep.WANT_FILES if q not in v.tree()]
+    if missing:
+        raise SystemExit("knobhd: the install failed (%s missing)"
+                         % ", ".join(missing))
 
-        if not os.path.exists(BLANK):
-            with open(BLANK, "wb") as f:    # no boot signature, so GLaBIOS
-                f.write(bytes(368640))      # offers its menu and C: is the disk
-        for machine in MACHINES:
-            boot(machine, heap, run_dir)
-    finally:
-        subprocess.check_call(["make"], cwd=ROOT, stdout=subprocess.DEVNULL)
+    if not os.path.exists(BLANK):
+        with open(BLANK, "wb") as f:    # no boot signature, so GLaBIOS
+            f.write(bytes(368640))      # offers its menu and C: is the disk
+    for machine in MACHINES:
+        boot(machine, heap, run_dir)
 
     if fail:
         for f in fail:

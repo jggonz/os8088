@@ -28,7 +28,8 @@ than a restatement of the first:
     width of the trough is measured out of the card's own framebuffer and has
     to take many values too, and to grow.
 
-Both halves read state that lives in `.boot2`, and its segment is **HEAP_SEG**:
+Both halves read state that lives in `.boot2`, and its segment is **BLOB_SEG_AT**
+(HEAP_SEG, lifted by BLOB_LIFT where `.cold` is the top rung - SPEC.md 2.10.3):
 since SPEC.md 2.9.5 stage 2 copies itself to the heap's floor before it reads a
 sector, so the blob's address is a kernel constant for the whole boot.
 `[spl_fseg]` is NOT the way in here - stage 2 publishes that word only after the
@@ -88,17 +89,22 @@ def main():
     sect = os88sym.sections()
     for n in ("spl_done", "spl_total"):
         assert sect[n] == ".boot2", (n, sect[n])
-    blob = os88sym.equates()["HEAP_SEG"]
+    eq = os88sym.equates()       # HEAP_SEG lifted by BLOB_LIFT (SPEC.md 2.10.3)
+    blob = eq.get("BLOB_SEG_AT", eq["HEAP_SEG"])
     off_done = os88sym.syms()["spl_done"]
     off_total = os88sym.syms()["spl_total"]
     off_bar = os88sym.syms()["spl_l_bar"]
+    # spl_finish's own exit: [spl_done] forced, [spl_live] cleared, and the
+    # guest still INSIDE the blob - see `at_fin` below
+    fin = (blob << 4) + os88sym.syms()["spl_finish.out"]
 
     done, widths, backwards, total = [], [], 0, 0
     with os88marty.launch(IMG, apps=os.path.join(ROOT, "build", "apps360.img"),
                           machine=MACHINE, boot=0) as m:
         started = False
+        m.breakpoints([{"type": "exec", "addr": fin}])
         for _ in range(4000):
-            m.advance(frames=1)
+            at_fin = m.advance(frames=1).get("state") == "breakpoint"
             live = m.read(lin_live, 1)[0]
             if not started:
                 # [spl_live] means nothing until the kernel's own bytes are on
@@ -106,16 +112,60 @@ def main():
                 if live != 1 or m.read(lin_entry, 1)[0] != 0xE9:
                     continue
                 started = True
+            # **THE READS COME AFTER THE LIVE TEST, NOT BEFORE IT.** The
+            # note below is right that the blob is handed back (SPEC.md 2.9.5)
+            # and that its words are then somebody else's memory - but it
+            # guarded only `total`, with the max() that is still here. `bar`
+            # got `if bar:`, which rejects ZERO and not the arbitrary non-zero
+            # word that teardown leaves: `bar_width(m, bar + 8)` then indexes a
+            # framebuffer row that does not exist and the row dies on
+            # `IndexError: list index out of range` with nothing said about the
+            # bar. Breaking first means no sample is ever taken off a blob that
+            # has stopped being ours, which retires the whole class.
+            # splashspin.py had the identical defect at the identical line.
+            # **THE LAST NOTCH AND THE TEARDOWN ARE THE SAME FRAME.**
+            # `spl_finish` forces [spl_done] to [spl_total] and THEN clears
+            # [spl_live] (SPEC.md 15.3), so a loop that breaks the moment
+            # `live` reads 0 never sees the value the whole check below is
+            # about: it reported `the bar ended at 179 of 180 - spl_finish
+            # forces the last notch, so this is not a rounding question`
+            # about a kernel that had forced it.
+            #
+            # So the counters get ONE more reading on that frame and the
+            # LAYOUT does not. That asymmetry is the point: `off_done` and
+            # `off_total` are two words of a blob the kernel has finished
+            # with but has not handed back yet - `mem_unblob` is at the end
+            # of `kmain` - while `bar` is a pointer this would follow into
+            # `bar_width`, which is what used to die on `IndexError` off a
+            # blob that had stopped being ours. Reading two words is safe
+            # where dereferencing one is not.
+            # ...AND THE TEARDOWN FRAME IS NOT ENOUGH ANY MORE. kmain_o
+            # returns from spl_finish straight into mem_unblob_x, which gives
+            # the blob back AND packs the heap ceiling into it (docs/plans/
+            # REGION-SELF-COMPACT-PLAN.md 3.4.1) - so by the end of that frame
+            # a moved claim can be sitting on these two words, and the row
+            # read `8448 of 8540` off a boot whose bar had reached 178 of 178.
+            # So the last reading is taken STOPPED at spl_finish's own exit,
+            # where the counter is forced and the guest has not left the
+            # blob. A teardown without that stop is spl_finish not having run.
+            last = at_fin
+            if live == 0 and not at_fin:
+                raise SystemExit("splashbar: [spl_live] went to 0 without "
+                                 "spl_finish's exit being reached - the "
+                                 "splash was torn down by something else")
             d = int.from_bytes(m.readseg(blob, off_done, 2), "little")
             t = int.from_bytes(m.readseg(blob, off_total, 2), "little")
-            total = max(total, t)       # the LAST sample is taken as the blob
-                                        # is handed back (SPEC.md 2.9.5), so
-                                        # these words are already somebody
-                                        # else's memory by then
+            total = max(total, t)       # kept: harmless, and it is what the
+                                        # half-guarded version used
             if not done or done[-1] != d:
                 if done and d < done[-1]:
                     backwards += 1
                 done.append(d)
+            if last:
+                m.breakpoints([])
+                m.run()
+                break                   # the counters are read, the layout is
+                                        # not: see above
             bar = int.from_bytes(m.readseg(blob, off_bar, 2), "little")
             if bar:             # spl_tick raises [spl_live] and THEN calls
                                 # spl_chrome, so there is a window where the
@@ -123,8 +173,6 @@ def main():
                 wpx = bar_width(m, bar + 8)
                 if not widths or widths[-1] != wpx:
                     widths.append(wpx)
-            if live == 0:
-                break
         else:
             raise SystemExit("splashbar: the splash never handed the screen "
                              "over - this machine did not finish booting, so "

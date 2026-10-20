@@ -2,7 +2,7 @@
 # =============================================================================
 # os8088 - apps/lemmings/build.sh
 #
-# LEMMINGS's host checks (SPEC.md 92.12), run by `make lemmings` BEFORE anything
+# LEMMINGS's host checks (SPEC.md 114.12), run by `make lemmings` BEFORE anything
 # is built for the 8086, and each one stops the build: a stale cell, a
 # double-draw or a row that fell past the dock costs an hour in an emulator and
 # a second here, and two of PERFORMANCE.md's three defects cannot be seen in an
@@ -31,7 +31,7 @@
 #
 # NEITHER NEEDS A NETWORK FETCH, which is what makes `make lemmings` work on a
 # tree that has never run tools/getlemmings.py. Only `make lemmingsdisk` needs
-# the real data (SPEC.md 92.12).
+# the real data (SPEC.md 114.12).
 #
 # WAVE 2 ADDS a third: the raw-x86 harness for lemmask.inc's probes and
 # lemblit.inc's movers, run in QEMU with SS != DS and with negative controls,

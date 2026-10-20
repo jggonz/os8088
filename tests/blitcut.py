@@ -34,15 +34,17 @@ leave by the same `ret`. SP is what tells them apart, the halves' frames
 sitting one return address deeper than the outer's.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
-import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
+import os88build                                            # noqa: E402
 import os88marty                                            # noqa: E402
 import dispapps                                              # noqa: E402
 
@@ -112,8 +114,17 @@ def diff_box(mine, theirs, skip=None):
     return n, (None if n == 0 else (x0, y0, x1, y1))
 
 
-def run(image, apps, machine, defines):
-    """-> (cycles, geometry, [card framebuffers as bit strings])"""
+def run(image, apps, machine, defines, tree=None):
+    """-> (cycles, geometry, [card framebuffers as bit strings])
+
+    `tree` is the build this kernel came out of, and applying it is not
+    optional. os88sym re-assembles from the defines and checks the result
+    against that tree's own kernel.bin, so the two travel together - and the
+    MODULE DEFAULT has to move with them, because the library helpers below
+    (`no_saver` resolves `ss_idle`) do not take a `defines` argument and go
+    to it. `Tree.apply()` sets all three.
+    """
+    (tree or os88build.plain()).apply()
     def S(n):
         return os88sym.linear(n, defines)
 
@@ -128,8 +139,7 @@ def run(image, apps, machine, defines):
         # this one sits still for 240 HOST seconds waiting for a straddling
         # blit to arrive - which at 3.4x is over thirteen guest minutes with
         # no input. What the saver would then do is not fail this row, it is
-        # make it wait out the whole 240 and report that the blit never came
-        # (docs/HANDOFF-SOAK-FINDINGS.md B7).
+        # make it wait out the whole 240 and report that the blit never came.
         os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, settle)
@@ -158,8 +168,17 @@ def run(image, apps, machine, defines):
                                                               gifname()),
                                                 card=0))
         mo.dblclick(rx, ry)
+        # Paint's window, the drive going quiet, then the glass - a decode
+        # holds the screen still, so a settle alone can end inside one
+        try:
+            os88marty.until(m, lambda _: any(w != disk for w in
+                                             dispcp.win_list(m, S)),
+                            "Paint's window", poll=0.2, limit=60)
+        except os88marty.MartyError:
+            pass
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          stable=3, what="the picture to load")
         settle(m, card=0, limit=300.0)
-        time.sleep(4)
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         wx, wy, ww, wh = dispcp.win_rect(m, S, pw)
 
@@ -169,8 +188,8 @@ def run(image, apps, machine, defines):
         mo.drag(wx + ww // 2, wy + TITLE_H // 2,
                 tgt + ww // 2, wy + TITLE_H // 2)
         settle(m, card=0, limit=300.0)
-        time.sleep(4)
-        wx2, wy2 = dispcp.win_rect(m, S, pw)[:2]
+        wx2, wy2 = os88marty.quiesce(m, lambda: dispcp.win_rect(m, S, pw),
+                                     guest=0.5, what="the dragged window")[:2]
         if not (wx2 < seam < wx2 + ww):
             sys.exit("blitcut: the window ended at x=%d, which does not "
                      "straddle the seam at %d" % (wx2, seam))
@@ -199,10 +218,6 @@ def run(image, apps, machine, defines):
         # still holds for the OUTER call: the cut re-enters gfx_blit4 for each
         # half, and those return at a lower sp.
         entry, ret = S("gfx_blit4"), S("kret_ret")
-        m.bp_exec(entry, ret)
-        m.run()
-        pend, got, geom = None, [], None
-        t0 = time.time()
 
         # WHAT THE DRIVER DID, recorded rather than assumed. This row's only
         # failure mode is a 240-second wait ending in "no straddling canvas
@@ -211,33 +226,56 @@ def run(image, apps, machine, defines):
         # or the loop never saw a hit at all. All three look identical.
         drove = {"done": False, "err": None}
         hits = {"entry": 0, "ret": 0, "wide": 0}
+        pend, got, geom = None, [], None
 
-        def driver():                       # a 16px nudge is a whole repaint
-            try:
-                mo.drag(wx2 + ww // 2, wy2 + TITLE_H // 2,
-                        wx2 + ww // 2 + 16, wy2 + TITLE_H // 2)
-                drove["done"] = True
-            except Exception as e:                          # noqa: BLE001
-                drove["err"] = "%s: %s" % (type(e).__name__, e)
-        threading.Thread(target=driver, daemon=True).start()
-        while time.time() - t0 < 240 and not got:
-            if m.status().get("state") == "running":
-                time.sleep(0.01)
-                continue
-            r = m.regs()
+        # THE MATCH RUNS AT THE STOP, because that is the only place it can.
+        # `sp` pairs an entry with its own return - the cut re-enters
+        # gfx_blit4 for each half and those return at a LOWER sp - and both
+        # halves of that comparison are registers, gone the moment the guest
+        # resumes. It disarms the moment it has its pair: `kret_ret` is the
+        # shared epilogue ladder's `ret`, which every routine using the ladder
+        # returns through, so leaving it armed for the rest of the drag stops
+        # the guest thousands of times for an answer already in hand. That is
+        # what the old loop's `and not got` bought, kept here exactly.
+        def match(mm, rec):
+            nonlocal pend, geom
+            r = rec["regs"]
             ip = (r["cs"] << 4) + r["ip"]
             if ip == entry:
                 hits["entry"] += 1
                 if r["cx"] > 200:
                     hits["wide"] += 1
                 if pend is None and r["cx"] > 200:      # the CANVAS, not a
-                    pend = (r["sp"], m.status()["cycles"],      # dock tile
+                    pend = (r["sp"], rec["cycles"],             # dock tile
                             r["ax"], r["bx"], r["cx"], r["dx"])
             elif ip == ret and pend is not None and r["sp"] == pend[0]:
                 hits["ret"] += 1
-                got.append(m.status()["cycles"] - pend[1])
+                got.append(rec["cycles"] - pend[1])
                 geom = pend[2:]
-            m.run()
+                mm.breakpoints([])          # ...and let the drag finish
+            return None
+
+        # A 16px nudge is a whole repaint. It is ordinary code here because
+        # bp_trace pumps the breakpoints from a daemon; this was a driver
+        # THREAD around a hand-rolled pump, for the reason that docstring
+        # gives - os88mouse proves every button edge by polling `mouse_btn`,
+        # and a guest stopped at a breakpoint never advances far enough to
+        # answer.
+        with os88marty.bp_trace(m, entry, ret, regs=True, on_hit=match) as tr:
+            try:
+                mo.drag(wx2 + ww // 2, wy2 + TITLE_H // 2,
+                        wx2 + ww // 2 + 16, wy2 + TITLE_H // 2)
+                drove["done"] = True
+            except Exception as e:                          # noqa: BLE001
+                drove["err"] = "%s: %s" % (type(e).__name__, e)
+            # ...AND STAY IN THE BLOCK UNTIL THE BLIT HAS RUN. `drag` returns
+            # when the mouse-up is decoded; the repaint it starts has not
+            # begun, and on a 4.77MHz 8088 those are seconds apart. Leaving
+            # here clears the breakpoints first and the row reports the kernel
+            # never blitting - which is exactly what it said on the run that
+            # taught this: one entry, no matched return.
+            tr.until(lambda: bool(got), "a straddling canvas blit",
+                     limit=240.0, required=False)
         if not got:
             print("   the drag %s; gfx_blit4 entered %d time(s), %d of them "
                   "wide (cx > 200), %d matched returns"
@@ -245,8 +283,6 @@ def run(image, apps, machine, defines):
                      ("FAILED - %s" % drove["err"]) if drove["err"] else
                      "NEVER FINISHED", hits["entry"], hits["wide"],
                      hits["ret"]))
-        m.bp_exec()
-        m.run()
         if not got:
             sys.exit("blitcut: no straddling canvas blit arrived in 240s")
 
@@ -257,7 +293,10 @@ def run(image, apps, machine, defines):
         settle(m, card=0, limit=300.0)
         mo.to(4, 4)
         settle(m, card=0, limit=200.0)
-        time.sleep(6)
+        # ...and the FAR card too: both framebuffers are read below, and the
+        # settles above only watched card 0.
+        for c in m.cards():
+            settle(m, card=c["idx"], limit=200.0)
         fbs = []
         for c in m.cards():
             fw, fh, fb = m.fbuf(card=c["idx"])   # what the card RASTERISED:
@@ -272,7 +311,7 @@ def run(image, apps, machine, defines):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/blitcut.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/blitcut.img")
     ap.add_argument("--machine", default="os8088_xt_vga_mda")
     a = ap.parse_args()
 
@@ -284,27 +323,22 @@ def main():
     # pixel, so every oracle below is the one it always was.
     gif = gifpath()
 
-    if a.apps == "/tmp/blitcut.img":
+    if a.apps == tempfile.gettempdir() + "/blitcut.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + gif)
 
     print("   shipped kernel:")
     cyc, geom, fbs, clk = run(a.image, a.apps, a.machine, ())
 
-    # THIS ROW REBUILDS THE TREE (blitplane.py says why, and the `finally` is
-    # not decoration): `make NOBLITCUT=1` writes build/kernel.bin, so a run
-    # that dies in the middle leaves every emulator row after it driving a
-    # kernel nobody asked for.
-    ref = "/tmp/blitcut-noblitcut.img"
-    print("   NOBLITCUT=1 kernel: building")
-    try:
-        subprocess.check_call(["make", "NOBLITCUT=1", a.image],
-                              stdout=subprocess.DEVNULL)
-        subprocess.check_call(["cp", a.image, ref])
-        print("   NOBLITCUT=1 kernel:")
-        rcyc, rgeom, rfbs, _ = run(ref, a.apps, a.machine, ("NOBLITCUT",))
-    finally:
-        subprocess.check_call(["make"], stdout=subprocess.DEVNULL)
+    # THE KNOB KERNEL IS BUILT IN A TREE OF ITS OWN (tools/os88build.py;
+    # blitplane.py is the same conversion). It used to go into build/ with a
+    # `finally` putting the plain kernel back, so a run that died in the
+    # middle left every emulator row after it driving a kernel nobody asked
+    # for. Now build/ is never written and there is nothing to put back.
+    knob = os88build.tree("NOBLITCUT=1")
+    print("   NOBLITCUT=1 kernel: %s" % os.path.relpath(knob.dir, ROOT))
+    rcyc, rgeom, rfbs, _ = run(knob.img(os.path.basename(a.image)), a.apps,
+                               a.machine, knob.defines, tree=knob)
 
     bad = 0
     if geom != rgeom:
@@ -325,9 +359,10 @@ def main():
               % (i, d, mine[0] * mine[1], "" if not d else " - box %r" % (box,)))
         if d:                       # ...and the two images, so a failure can
             for tag, im in (("cut", mine), ("nocut", theirs)):   # be looked at
-                open("/tmp/blitcut-%s-%d.pgm" % (tag, i), "wb").write(
+                open(tempfile.gettempdir() + "/blitcut-%s-%d.pgm" % (tag, i), "wb").write(
                     b"P5\n%d %d\n1\n" % (im[0], im[1]) + im[2])
-            print("      -> /tmp/blitcut-{cut,nocut}-%d.pgm" % i)
+            print("      -> %s/blitcut-{cut,nocut}-%d.pgm"
+                  % (tempfile.gettempdir(), i))
         bad += d
     gain = rcyc / float(cyc)
     print("   the straddled canvas blit: %d cycles against %d - %.2fx"

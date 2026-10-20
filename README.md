@@ -48,7 +48,7 @@ feel what they were up against).
 > (legacy BIOS), in QEMU, or burned to a CD-R.
 > **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** walks through all of it:
 > grab the images from a [release](https://github.com/jggonz/os8088/releases)
-> or `make live`, then `make burn` guides you through writing the stick on a
+> or `make live`, then `make imager` guides you through writing the stick on a
 > Mac — it shows only the drives that could be the right answer, makes you
 > type the disk's name before erasing anything, and verifies every byte it
 > wrote by reading it back.
@@ -62,6 +62,7 @@ make run-120  # the same, off the 1.2MB 5.25" HD pair. RUNAPPS120=<img>
               # swaps the B: floppy, so any 1.2MB app disk can be looked at
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
+make wireball-pair # two 86Box XTs linked over COM2 for WireBall (86Box 6.0+)
 make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
@@ -79,6 +80,7 @@ make xt-wire  # the xt-sound XT with an NE1000 on slirp, ETHER.DRV
 make 286-sound  # 86Box: the 286, with a Sound Blaster 16
 make 386-sound  # 86Box: the 386DX, with a Sound Blaster 16
 make worddisk # build the Microsoft Word floppy, all four geometries
+make scribedisk # ...and Scribe's, the fork of Word that inserts pictures
 make xt-word  # 86Box: the 640KB XT with the Word disk in B:
 make 386-word # 86Box: the 386DX with the Word disk in B:
 make zdisk    # build the Frotz story floppies (fetches the stories first)
@@ -93,6 +95,41 @@ make runcpmdisk # build the RunCPM floppies - the CP/M 2.2 emulator, its
 make xt-runcpm  # 86Box: the 4.77MHz XT with the 360KB RunCPM disk in B:
 make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
 make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
+make drmarcodisk # native XT DrMarco on its own floppies: 320x240 VGA /
+                 # color CGA. It is on the apps disks too; apps/drmario/README.md
+make excitebikedisk # native XT motocross racer (VGA, CGA and Hercules;
+                 # five courses, opponents, sound), four floppy geometries:
+                 # original art and sound, nothing external -
+                 # see apps/excitebike/README.md, SPEC.md 102;
+                 # `make excitebikegeom` boots each geometry, `excitebikevideo`
+                 # / `excitebikeperf` are its gates
+make xt-excitebike # 86Box: the 4.77MHz VGA XT with the 360KB Excitebike disk
+                 # in B: (double-click EXCBIKE.O88)
+make paccmandisk # build the PaccMan floppy - a second Pac-Man, in C: the
+              # Namco arcade layout from Andre Weissflog's pacman.c, in all
+              # four geometries (paccman.img, paccman720/120/360.img)
+make xt-paccman # 86Box: the 4.77MHz XT with the 720KB PaccMan disk in B: -
+              # the machine the "more performant on XTs" question was about
+make 386-paccman # 86Box: the 386DX/25 with the 1.44MB disk in B: - full speed
+make xt-pixelstein # 86Box: the 4.77MHz 640KB XT on CGA with games360.img in
+              # B: - Pixelstein 3D (double-click PXSTEIN.O88), whose F is
+              # the CGA 320x200x4 bracket and whose Mode row's second item
+              # the 160x100x16 retime (SPEC.md 97.15)
+make xt-pixelstein-herc # ...the same XT on a Hercules: F takes the box
+make isotrondisk # isoTron, a light-wall duel on a raised 3D slab (SPEC.md 108):
+              # the package and its README in all four geometries
+              # (isotron.img, isotron720/120/360.img). It is on the apps
+              # disks and games360.img too; apps/isotron/README.md.
+              # `make isotrontest` runs its gates (the host model, then
+              # seeded games, pictures, toggle, flow, sound, keys and pace
+              # on MartyPC); `tests/isotron.py --perf all` is the XT audit
+make xt-isotron # 86Box: the 4.77MHz 640KB VGA XT with isotron360.img in B:
+              # (double-click ISOTRON.O88; F is the 320x200x16 bracket)
+make xt-isotron-cga # ...a 640KB CGA XT: 1bpp windowed, F the 320x200x4 palette 1
+make xt-isotron-herc # ...a Hercules XT: F takes 720x348 at 2x by 1.5
+make xt-isotron-ega # ...the 256KB IBM XT with a real EGA: F is a same-mode
+              # bracket in 16 colours at 640x350
+make pmcbandbench # its band composer's benchmark, under QEMU -icount shift=3
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
               # package as an embedded part (SPEC.md 20.12)
@@ -103,6 +140,21 @@ make xt-c64   # 86Box: the 4.77MHz XT with the 360KB C64 disk in B: - where
               # the speed figure on the status row is the one that matters
 make 286-c64  # 86Box: the 12.5MHz 286 with the 720KB one
 make 386-c64  # 86Box: the 386DX with the 1.44MB one
+make apple2disk # build the Apple II Plus floppy - a 48K II+: the package,
+              # WELCOME.BAS, COPYING and README.TXT in one APPLE2/ folder;
+              # Applesoft, the Monitor and the character generator ride
+              # INSIDE the package as an embedded part (SPEC.md 20.12),
+              # and so does its overlay (SPEC.md 73.14.2).
+              # The ROMs are Apple's and are FETCHED at a pin, never
+              # committed - make apple2rom does that, and a tree with no
+              # network and no build/apple2-rom/ cache cannot build it
+              # ...in all four geometries: apple2.img, apple2720.img,
+              # apple2120.img, apple2360.img
+make xt-apple2 # 86Box: the 4.77MHz XT with the 360KB Apple II+ disk in B: -
+              # where the speed figure was measured, and it is 0.4% of a
+              # 1.02MHz Apple, so the status row reads 0%
+make 286-apple2 # 86Box: the 12.5MHz 286 with the 720KB one
+make 386-apple2 # 86Box: the 386DX with the 1.44MB one
 make weavedisk # build the Weave floppy - web-style apps compiled to a .WAB
               # bundle and run natively: the runtime, its two companion
               # modules, three demo bundles, LOOM (the in-OS IDE that edits
@@ -121,14 +173,26 @@ make 286-525-z    # 86Box: the 1.2MB 5.25" 286 with a 1.2MB app disk in B:
 make 286-525-word #   instead of the apps floppy - one per application disk:
 make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
 make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
-make allapps  # one floppy with every program on it - both word processors,
-              # Frotz, RunCPM, the Commodore 64 and the Weave family
-              # included. 1.44MB and 1.2MB; the two DD geometries cannot
-              # hold the payload at all
+make redlinedisk # REDLINE CPU/graphics lab, four disk sizes; R runs, S saves
+make redline-profile # record the cycle-accurate 4.77 MHz MartyPC reference
+make pixeldisk # PiXEL, the image viewer, with its sample gallery in PICTURES/,
+              # four disk sizes
+make xt-pixel # 86Box: the 4.77MHz 640KB VGA XT with the 360KB pixeldisk in
+              # B: (double-click PIXEL.O88, or a picture in PICTURES/)
+make 386-pixel # 86Box: the 386DX/25 with the 1.44MB pixeldisk in B:
+make allapps  # every program on a set of floppies - both word processors,
+              # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
+              # family included - apps-all-1.img, -2.img, ... at 1.44MB and
+              # apps-all-120-N.img at 1.2MB. A disk is added when the
+              # programs need one; CONTENTS.TXT on each says what is where
 make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # bootable hard-disk image for a USB stick, and os8088.iso,
               # the same image as a live CD - the whole OS and every app
               # on one C: drive (make usb / make iso build them singly)
+make imager   # macOS: os8088 imager discovers floppy/USB/CD devices and
+              # offers compatible built images (docs/IMAGER.md); asks the
+              # geometry a period ROM reports before writing a CompactFlash
+              # card for an XTIDE machine (SPEC.md 80.5)
 make burn     # macOS: interactively write the stick / burn the CD, with a
               # typed confirmation and a read-back verify
 make test     # boot headless with a QMP socket for scripted testing
@@ -140,18 +204,62 @@ make marty    # a cycle-accurate IBM 5150 (MartyPC) with a debugger attached -
 make clean
 ```
 
-`make` builds the six shipping floppies and needs nothing but `nasm` and
+`make` builds the nine shipping floppies and needs nothing but `nasm` and
 `python3`. The disks that carry the C applications — `cworddisk`,
-`runcpmdisk`, `allapps` and the live media (`make live`) — want the compiler
-first: `tools/setup-cc.sh`
-fetches and builds it into `build/cc`, and nothing else in the tree depends on
+`runcpmdisk`, `allapps` and the live media (`make live`) — automatically run
+`tools/setup-cc.sh` when the compiler is missing. It fetches and builds it
+into `build/cc`, and nothing else in the tree depends on
 it. `runcpmdisk`, `allapps` and `live` also fetch RunCPM's command processor
-and master disk (`make runcpm-src`), and `runcpmdisk` the CP/M software that
-rides beside it (`make cpmsw`); none of it is committed here.
+and master disk (`make runcpm-src`) and the CP/M software that rides beside
+it (`make cpmsw`); none of it is committed here.
 
 ![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
 Timer, Bounce, Control Panel and Task Manager windows, and the dock
 strip](docs/screenshot.png)
+
+## Writing real media: the disk imager
+
+`make imager` is the one tool for putting any built image on any real medium
+from a Mac ([docs/IMAGER.md](docs/IMAGER.md)). It scans what is plugged in,
+lists the images that fit each device, and never writes anything until you
+have typed the target's identifier back at it. Every write is read back and
+its SHA-256 compared, so a stick or card that silently drops bytes is caught
+before you carry it to the machine.
+
+| medium | what to plug in | what it writes |
+|---|---|---|
+| a floppy | a USB floppy drive with a disk in it | the floppy image whose geometry matches the disk: 1.44MB or 720KB on most USB drives, 360KB and 1.2MB where the drive can |
+| a USB stick | any removable USB flash drive | `os8088-usb.img`, the live disk (`make live`) -- boots any legacy-BIOS PC straight into the desktop as C: |
+| a CD-R | a CD burner | `os8088.iso`, the live CD, burned and verified by macOS's own `drutil` |
+| **a CompactFlash card** | the card in a USB reader | the same live image, **rewritten for the geometry the card's BIOS reports** |
+
+The last row is how os8088 gets onto a **Book8088** -- the 8088 laptop that
+boots CompactFlash through the XTIDE Universal BIOS -- or onto any XT with an
+XTIDE card. A modern PC derives a drive's geometry from the image's partition
+table; XTIDE reports the *card's own* geometry instead, so the image has to be
+written to match it or the machine answers `Not bootable`. The imager asks
+one extra question for a card: it suggests what XTIDE reports for a card of
+that size, and you confirm it or type the heads and sectors from the card's
+datasheet. It cannot read them itself -- a USB reader does not pass the
+card's identity through. A 256MB SanDisk, for example, reports 16 heads and
+32 sectors, and the Book8088 boots the image written that way. Only the
+first 32MB of the card is used; the rest is untouched.
+(`python3 tools/os88disk.py --retarget os8088-usb.img --geometry 16/32 -o
+cf.img` is the same rewrite for `dd` users and other platforms;
+SPEC.md 80.5 is the design.)
+
+A **USB mouse** works in the Book8088's USB socket too: open the Control
+Panel's Drivers page, tick **USB Mouse**, and plug a mouse in -- it is found
+when it is plugged, not only at boot. The socket is a CH375 chip that the
+Book8088's BIOS uses for flash drives, so the driver leaves a flash drive
+alone. It has been exercised against a model of the chip rather than a real
+Book8088, so a report from one is welcome (SPEC.md 9.12).
+
+An **EMS board** -- a Lo-tech 2MB board, or a PicoMEM's EMS -- gives programs
+up to 4MB of expanded memory, even on an XT: tick **EMS** on the Drivers page.
+It looks for the board at its usual places (ports 260h-26Ch, frame E000h,
+D000h or C000h) and needs no setting. Programs that use it are still to come;
+the driver is the first step (SPEC.md 107).
 
 ## What it does
 
@@ -172,10 +280,38 @@ a Standard File dialog for opening and saving.
 - **Task Manager** — live CPU and RAM, one row per instance, with the work
   done inside an app's window callbacks billed to that app.
 - **Control Panel** — Scheduler, Buffer, Display, Sound and Date/Time.
+- **Desk Calendar** — the first *Sticky App*: a widget
+  in `STIKAPPS/` on the system disk that lives ON the desktop, under every
+  window, with no frame and no dock tile - three white cards (today and a
+  Monday-first month with a dot under each busy day; the chosen day's
+  appointments and your tasks with real ticks; a reminder card that rings,
+  with Snooze and Dismiss) and a name tag that turns into a handle to drag
+  it or close it while the pointer is over it. Its keys and menus are its
+  own once it is clicked. Once opened it comes back at every boot where it
+  was left, and a widget that has gone missing becomes a desktop shortcut
+  with one message rather than stopping the boot. `apps/os88stik.inc` is the
+  shared half a new widget includes (SPEC.md 110).
+- **Sticky Note** — the second Sticky App: a pinned note pad on the desk, a
+  sheet on a stack of sheets with its corner turned, showing one note at a
+  time with `< 1 / 3 >` to page through them, and an editor window behind it
+  with the notes listed beside the page. A note's first line is its title,
+  `[ ]` at the start of a line makes a check box, and a click ticks one on
+  the pad or in the editor. On VGA and EGA each note has a paper - yellow,
+  pink, green, blue or white (SPEC.md 110.13).
+- **Desk Clock** — the third Sticky App: a clock on the desk in nine faces -
+  three dials (Classic, Memphis '80, Neon '90) and six digital (Mono
+  Digital, Casio LCD, Casio VGA, Red LED, Amber LED, Flip Clock) - at three
+  sizes, with seconds or not, 12- or 24-hour, and a daily alarm with Snooze
+  and Dismiss. `Clock face only` leaves just the face on the desk; a double
+  click, the gear or Enter opens `Desk Clock Settings`, whose gallery
+  previews every face and whose changes preview on the desk before OK. In
+  colour on VGA and EGA, in black, white and greys on CGA and Hercules
+  (SPEC.md 110.14).
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.
 - **A system clipboard**, shared across apps.
-- **Typefaces** — **ten** `.F88` faces in `FONTS/` on the system disk, found
+- **Typefaces** — **ten** `.F88` faces in `SYSTEM/FONTS/` on the system disk (on the
+  office disk at 360KB, SPEC.md 24.3.1.5), found
   at run time by any app that asks: Charter and the house 8x8 cell, a Times, a
   Helvetica and a Courier, two more text faces and three monospaces, each
   fitted onto an 8-pixel grid from an open outline font (SPEC.md 6.4.1). The
@@ -199,18 +335,78 @@ a Standard File dialog for opening and saving.
 
 **Software**
 
-Loadable packages ship on the software disk, all closable and most
+Twenty-five loadable packages ship on the software disk, all closable and most
 multi-instance:
 
 - **Apps** — Note Pad (word wrap, DOS-readable text files), TeXPad, Paint,
-  ArtfulType, Font Viewer, Fractal, Calculator, Piano, Recorder, Tracker and
-  ModPlug Player (both play Amiga MOD files).
-- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, [Pac-Man](apps/pacman/README.md), Cyclone 88,
-  Tank Attack (a first-person wireframe tank duel that takes the whole
-  machine, in 320x200 colour on CGA, Mode X on VGA and 640x200 mono in the
-  middle of a Hercules) and TameGram.
+  ArtfulType, Font Viewer, Fractal, Calculator, Sheet, Chart, Piano, Tracker
+  (an Amiga MOD player with a playlist, windowed or full screen - it took
+  ModPlug Player's windowed face when ModPlug retired), an Audio Player that
+  streams a WAV off the disk and keeps playing while you work in another
+  window, MIDIRack (a Standard MIDI File player with a channel rack, on an
+  OPL2/OPL3 FM chip, a Sound Blaster's DSP or the PC speaker - or, chosen in
+  its Settings, MIDI out to an MPU-401 and whatever module is on it, or a
+  sample-based wavetable mixed for the Sound Blaster from a bank `make
+  midibank` builds out of the GeneralUser GS soundfont - with ten demo songs
+  in `MEDIA\MIDI`: Für Elise, The Entertainer, the Can-can and three more
+  public-domain classics beside four originals), and the three that talk
+  over the network —
+  Browser, Telnet and an FTP server.
+- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Dot Delirium,
+  [Gorillas](apps/gorillas/README.md) (solo or two-player banana artillery, windowed
+  or fullscreen; four-color CGA in fullscreen),
+  Cyclone 88,
+  Clear Skies, Tank Attack (a first-person wireframe tank duel that takes the
+  whole machine, in 320x200 colour on CGA, Mode X on VGA and 640x200 mono in
+  the middle of a Hercules), TameGram and Pixelstein 3D (a raycast
+  first-person shooter in the shape of the 1992 one, priced for the 4.77 MHz
+  8088 before a line of it was shaped - fullscreen in CGA 320x200x4, the
+  160x100x16 text retime, the Hercules box or Mode X, and windowed as a 1bpp
+  band: eight floors with textured walls, guards and dogs, sliding doors,
+  keys and secret doors, a status bar, a Tab map of what you have seen,
+  floor passwords instead of saves, a high-score table, and a timedemo - T
+  on the title page - that prints the machine's own frame rate), and
+  [isoTron](apps/isotron/README.md) (a light-wall duel against the computer on
+  a raised slab drawn in 3D, every trail an extruded wall, and two wins in a
+  row stacking the next arena one slab higher, a tower four levels tall; in a
+  desktop window on every adapter and full screen in colour wherever the
+  card has it - CGA 320x200x4, VGA 320x200x16, 16 colours on an EGA - with F
+  to switch at any time. A step writes one column of the picture and redraws
+  nothing, so the game keeps its pace on a 4.77 MHz XT).
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
+
+**Pixelstein 3D on period hardware.** Which backend a machine shows is the
+adapter's: on a CGA, F takes the game full screen in 320x200x4 and the Mode
+menu's second item is the 160x100x16 text retime (a genuine CGA only); on a
+Hercules, F takes the 720x348 box; on a VGA, Mode X; and windowed it is a
+1bpp band on any desktop, or 16 colours on a VGA from a 286 up. `make
+xt-pixelstein` (CGA) and `make xt-pixelstein-herc` (Hercules) are the two
+86Box XTs to look at it on: 4.77MHz, 640KB on the `ibmxt86` board
+(86Box's `ibmxt` caps at 256KB and rewrites 640 back) - the one change from
+the tree's `xt-cga` and `xt-hercules` besides the disk in B:, because at 256KB
+the game plays its flat-shaded rung with boxes for sprites and no gun (the
+textured walls and the sprite set want ~262KB in all; MartyPC's 256KB 5150
+shows that). Both boot to the desktop with the games disk in B:, and a
+human double-clicks `PXSTEIN.O88` from there - 86Box takes no scripted
+input, so these machines are for looking, and every frame number is
+MartyPC's cycle-exact 640KB 5150's (`os8088_5150_cga_gla`, the gate's
+machine). The Detail menu is a LADDER - textures at full rays, textures at
+half (Low res), flat at full, flat at half - and Auto starts an 8086 full
+screen at textures with half the rays at the full width and a window at
+flat with half the rays, steps down when eight frames in a row miss 1/8 s,
+and steps back up after a 10 s hold-down and 64 frames in a row under the
+position above's own line: 111 ms onto textured half-rays, the budget over
+the largest cost ratio measured between the two (1.125). On an 8086 the
+ladder skips flat full-rays both ways - it is SLOWER than textured half-rays
+there (164 ms against 114 on the CGA) - so a fight with two guards in the
+face steps a 5150 from textured to flat half-rays, and the empty corridor
+after it steps it back (SPEC.md 97.8). Wire (edges only) is one menu pick
+away. **T on the title page is the timedemo**: it replays the two pinned
+scenes unthrottled and prints frames, ticks and fps on the card, which is
+how a 5150 owner reports the machine's number without an emulator. Tab is
+the map, the arrows or WASD move, Ctrl fires, Space opens doors, 1/2/3 pick
+the weapon.
 
 **TeXPad** is the newest of them and a contributed one: a two-pane pad for a
 small, paper-oriented subset of TeX — source on the left, the typeset page on
@@ -221,9 +417,10 @@ there is no math engine, no figures and no colour. `PAPER.TEX` and `GUIDE.TEX`
 ride the software disk beside it, and `GUIDE.TEX` is the markup written up as
 a document TeXPad sets.
 
-Timer and Bounce are built into the kernel rather than loaded. **Drivers**
-load the same way packages do — hard disk, sound, and a serial debug
-monitor.
+Timer (a stopwatch) and Bounce (a square bouncing in its window) are
+packages too, `TIMER.O88` and `BOUNCE.O88` on every software disk; they were
+built into the kernel until it was asked what that cost. **Drivers** load the
+same way packages do — hard disk, sound, and a serial debug monitor.
 
 **Frotz** ships separately, on a story floppy of its own (`make zdisk`): an
 interpreter for Infocom's Z-machine, v1–v8, windowed, with a scrollback,
@@ -241,13 +438,14 @@ into `build/`, and `STORIES=` puts your own beside them.
 native package — Draft and Page views, a two-row ruler, real `.DOC` files in
 the Word for Windows 1.x/2.x binary format, RTF in and out, wildcard Search,
 Sort, Renumber and Table of Contents. Its **Font menu is built from the
-disk**: it lists whatever `FONTS/` is carrying — ten families as shipped, from
+disk**: it lists whatever `SYSTEM/FONTS/` is carrying — ten families as shipped, from
 Times to JetBrains Mono — and choosing one sets the whole document in it. The faces are set at fixed pitch for now — their
 shapes, their height and their leading, but eight pixels a character. It is not a recompile: Opus is pcode
 built against the Windows 2.x API, none of which exists here, so the UI
 definition is mined from the Computer History Museum's source release and
-every menu string is verbatim from it. The disk carries `WORD.O88`,
-`WORD.OVL`, a generated `WELCOME.DOC` and an empty `DOCS\`. **`all` does not
+every menu string is verbatim from it. The disk carries `WORD.O88` (one
+file: its second segment is a part inside it), a generated `WELCOME.DOC` and
+an empty `DOCS\`. **`all` does not
 build it and no shipped disk grows a byte** — `make wordcheck` is the format
 gate, which round-trips the `.DOC` through an independent host-side reader.
 
@@ -258,8 +456,9 @@ Digital Research's own command processor at the `A>` prompt, its drives kept
 as folders on the floppy, and RunCPM's master disk in drive A so MBASIC, PIP,
 SUBMIT, TE and Z80ASM run — with **CP/M games and applications beside it**:
 LADDER, CATCHUM and PM, Nemesis and Dungeon Master, GAINA, WordStar 3.30 and
-Turbo Pascal 3.01A, as much of it as each geometry holds. `make allapps` puts
-every one of these on one 1.44MB floppy.
+Turbo Pascal 3.01A, as much of it as each geometry holds. The everything set
+(`make allapps`) carries RunCPM with its whole master disk as drive A, and the
+live media (`make live`) carries the games and applications too.
 
 **Hardware**
 
@@ -282,7 +481,7 @@ every one of these on one 1.44MB floppy.
 | ...and a **PS/2 mouse** | the 8042's auxiliary port on IRQ12, probed **after** both serial ports and only above the XT — an 8088's keyboard is an 8255 and port 64h is not decoded there, so the whole module is behind the CPU tier and compiled out of the 128KB kernel entirely. Unlike a serial mouse this one *answers*: a reset it acknowledges with `FA AA` is a real probe, so there is no run threshold and the first packet settles it. Both mice can be live at once and the first complete packet wins, exactly as it does between two UARTs; the loser is switched off once. `make run MOUSEPORT=ps2` takes the serial ports away and leaves it the only pointing device on the machine. |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
 | keyboard      | BIOS int 16h, polled by the UI task. |
-| font          | two answers, and the second is new. **System chrome** is the VGA ROM's own 8x8 cell, copied out via int 10h AX=1130h at boot — one glyph, one byte-aligned store, and the fast path every menu, title and dialog is priced against. **An application** can set type in a real typeface instead: `FONTS/` on the system disk carries `.F88` faces, `apps/os88type.inc` composes a whole row of glyphs into a 1bpp band in the app's own RAM, and **one** kernel call puts the band on the screen. That split is the whole design — a proportional pen can never reach the 8x8 fast path, so lettering a 104-glyph line one glyph at a time would be 79ms of per-call *floor* on an XT before a pixel moved; composed and emitted once it is one floor, and measured it matches the 8x8 row it replaces. Glyph data, metrics, wrap and hit-testing live in the packages that want them, so the second and fifth face cost the kernel nothing. |
+| font          | two answers, and the second is new. **System chrome** is the VGA ROM's own 8x8 cell, copied out via int 10h AX=1130h at boot — one glyph, one byte-aligned store, and the fast path every menu, title and dialog is priced against. **An application** can set type in a real typeface instead: `SYSTEM/FONTS/` on the system disk carries `.F88` faces, `apps/os88type.inc` composes a whole row of glyphs into a 1bpp band in the app's own RAM, and **one** kernel call puts the band on the screen. That split is the whole design — a proportional pen can never reach the 8x8 fast path, so lettering a 104-glyph line one glyph at a time would be 79ms of per-call *floor* on an XT before a pixel moved; composed and emitted once it is one floor, and measured it matches the 8x8 row it replaces. Glyph data, metrics, wrap and hit-testing live in the packages that want them, so the second and fifth face cost the kernel nothing. |
 | disks         | BIOS int 13h, with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart, and contiguous clusters coalesce into one transfer because a call costs roughly a disk revolution whatever it moves. Task switching pauses during a transfer (the tick still runs — the floppy motor needs it). FAT12 and FAT16, on floppies and on hard-disk partitions. |
 | software      | `.o88` packages on plain FAT volumes — any PC, Mac or Linux box can read and write the disks, and so can os8088: apps create, replace, rename and delete files through the API, and the kernel validates every byte it reads off a disk before any of it becomes an address. A package is a flat binary assembled at `org 0` and loaded into a paragraph-aligned **claim off the heap**, which is **its own address space**, one segment per package — so there are no relocations of any kind, and `tools/os88pkg.py` is a validator rather than a generator. It calls the kernel through a fixed table of far-call cells at 0060:0010, and the kernel calls back through a three-byte dispatcher in the package's header. Several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock and then arm a clip region — their window's content rect less every window above it — so a covered window draws the part that shows instead of skipping the frame; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
@@ -343,9 +542,9 @@ docs/MARTYPC-DEBUG.md a cycle-accurate 5150 with a debugger attached, and the
                      accurate
 docs/KERNEL-MEMORY.md what the kernel's byte budget is spent on, and the
                      measured RAM floor
-docs/HERCULES-TESTING.md  testing on Hercules - it IS automatable, and all
-                     three ways of getting it wrong give a black image
-                     rather than an error
+docs/HERCULES-TESTING.md  testing on Hercules - MartyPC reads the card back
+                     directly; on QEMU all four ways of getting it wrong
+                     give a black image rather than an error
 boot/boot.asm        512-byte boot sector: LBA->CHS, retrying reads. It
                      relocates itself, because the kernel lands where it runs
 kernel/kernel.asm    constants, the memory ladder and its guards, boot
@@ -379,6 +578,33 @@ tools/mouse.py       absolute mouse positioning over the QMP socket
 ```
 
 ## Software packages
+
+**REDLINE** is the CPU and graphics performance lab: period-style hardware
+facts, 25 fixed workloads, timing tables and comparison bars against a
+measured 4.77 MHz MartyPC PC. `make redlinedisk` builds all four disk sizes;
+Summary has framed panels and graphical bars; Detailed keeps the complete
+inventory and timing report. Three-run averages, live graphics progress,
+rotating wireframe/shaded 3D, Mandelbrot and nested moving objects exercise
+three graphics tiers in a canvas that doubles in height when it fits.
+VGA bars use color and share a highest-score-plus-5x scale; CGA/Hercules/VGA have measured
+4.77 MHz references. R runs and S saves `REDLINE.TXT`. See [the research, CPU/MHz detection limits
+and reproducible baseline](docs/REDLINE.md).
+
+**PiXEL** is the image viewer and editor, laid out like a modern photo tool -
+a toolbar, a tool column, the canvas, Navigator / Histogram / Image Info
+panels and a status bar - on VGA, Hercules and CGA alike (SPEC.md
+106, [the design record](docs/plans/PIXEL-PLAN.md)). It opens JPEG (baseline
+and progressive, decoded straight to 1/2, 1/4 or 1/8 when memory or speed
+asks), PNG, GIF (and plays an animated one), BMP, PCX, TGA, PNM, TIFF, ICO,
+IFF/LBM, MacPaint and os8088's own PIX, dithering them to the desktop's 16
+or 2 colours, and shows them full screen in more where the card has them -
+256 on a VGA, 16 adaptive, the CGA's four and its 160x100x16. Prev/Next walk
+the folder, with a slideshow. It edits - six tools, palette
+and pixel operations, undo - and saves as BMP, PCX, GIF, PNG or PIX. Every
+heavy decoder is a compressed part loaded only when a picture needs it, and
+the whole thing is priced against a 4.77 MHz XT (SPEC.md 106.26 has the
+numbers). `make pixeldisk` builds its floppy with a gallery of original
+sample pictures; `make xt-pixel` / `make 386-pixel` boot it on 86Box.
 
 Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is
 installed on one, on a hard-disk partition. Either way it is an ordinary
@@ -441,8 +667,8 @@ Disk...** writes the same tree onto the floppy you pick as a folder. Both need
 nothing but `ETHER.DRV`; the first needs `RAMDISK.DRV` too, and greys with the
 size it wants when the machine cannot fund the store. The site publishes
 RunCPM as a core archive that fits beside RunCPM on a 640KB machine and its
-remaining tools as a second one. SPEC.md §88.13 is the format, pinned by its
-decoder, and §88.14 the run-from-RAM path, with the 640KB arithmetic.
+remaining tools as a second one. SPEC.md §92.13 is the format, pinned by its
+decoder, and §92.14 the run-from-RAM path, with the 640KB arithmetic.
 
 `THEWIRE.O88` is 12KB and rides the **system** disk in `SYSTEM/`, on all four
 geometries — the disk that already carries the network driver ought to carry
@@ -462,13 +688,44 @@ are kept honest. Everything off the wire is checked field by field before a
 pixel of it is drawn — a catalog that does not pass leaves the window working
 and says `Catalog not understood`.
 
-SPEC.md §88 is the format and the contract; `docs/WIRE-PLAN.md` is why it
+SPEC.md §92 is the format and the contract; `docs/WIRE-PLAN.md` is why it
 reads that way.
+
+### WireChat — chat rooms on the wire
+
+`WIRECHAT.O88` is a chat client: four public rooms (lobby, hardware,
+development, games), private messages, a member list with each person's
+status, a friends list, a search through what is on screen, and a status of
+your own — Online, Away or Busy, and Away on its own after ten idle minutes. It
+talks plain HTTP/1.0 over `ETHER.DRV` to one server at **os8088.com/chat/**, a
+Cloudflare Durable Object in the website's repository, by **long poll**: the
+server holds each request until there is something to say, so a message
+arrives in about a second while an idle machine sends one request every fifty.
+One socket at a time — a message sent while a poll is held closes the poll, and
+the answer carries everything the poll would have.
+
+The lobby is open and public, so the server moderates it, not the 8088: every
+message and nick goes through a language scanner — LDNOOBW's lists in every
+language they have, folded to ASCII, and WireChat's own lists of evasion
+spellings and of the phrases of harassment and hate — and anything it misses
+can be flagged. A message flagged from **two different addresses**, neither the
+author's, is removed for everyone, and blocked or removed messages become
+mutes that grow. Every rate is limited, and the server counts its own requests
+against a daily budget, slowing every client down as it fills, so the chat
+stays inside the Workers Free plan. A few nicks are owned. Joining as one
+makes WireChat ask for that nick's code, which the server checks.
+
+The window follows the screen: three panes on VGA and Hercules, the side panes
+going as the window narrows, and a compact one-line message form on a CGA. The
+nick (and its code, if it has one), the friends and the notification switch live in `WIRECHAT.CFG` beside
+the program. It is on every apps disk but the 360KB one, where it rides the
+network disk. SPEC.md §113 is the protocol and the contract.
 
 ### A package can also be written in C
 
 The OS itself is assembly and stays that way. But a **package** can be written
-in C, and two are. The first is `apps/cword` — a second reimplementation of **Microsoft Word
+in C, and several are — the Commodore 64 and the Weave family among them, plus
+the three described here. The first is `apps/cword` — a second reimplementation of **Microsoft Word
 1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
 line as `apps/word` and RTF as its file format. It has both of the product's
 views — Draft, which wraps to the window, and Page, which wraps to the sheet —
@@ -478,9 +735,9 @@ document in the one you pick, proportional metrics and all.
 It does not fit in one segment, and that is the interesting part. A package's
 image and bss share 60KB and that ceiling IS the segment; C costs two to three
 times the image of hand assembly for the same work. So a good deal of it lives
-in `CWORD.OVL`, a file beside the package that is read into a heap claim the
-first time a dialog, a file command, the clipboard, the ruler or the Font list
-is asked for — the split falling exactly between what a keystroke touches and
+in its overlay, a second segment carried INSIDE `CWORD.O88` as a part and
+read into a heap claim at launch, right behind the program (SPEC.md 73.14.2) —
+the split falling exactly between what a keystroke touches and
 what a menu command touches. When the typefaces went in, that line is what
 moved: the resident half got *smaller* while the program grew a view and a text
 engine.
@@ -497,16 +754,18 @@ prompt (`make rczex`), and MBASIC, TE, PIP, SUBMIT and Z80ASM off RunCPM's
 master disk run on it. It is the port that gave the kernel its wake event —
 the emulator runs on the UI task in bounded slices and never blocks, so a
 program waiting for a key costs nothing — and it too spills into a second
-segment, `RUNCPM.OVL`, split by frequency: what a record, a console byte or a
-keystroke touches stays resident, and the per-command half of the disk layer
-goes out. Nothing of RunCPM's is committed: `tools/getruncpm.py` fetches the
-CCP and the master disk at a pinned commit and `make runcpmdisk` builds the
+segment, split by frequency: what a record, a console byte or a keystroke
+touches stays resident, and the per-command half of the disk layer goes out
+- into a part of `RUNCPM.O88` itself, with DRI's CCP inside it, so the program
+is one file (SPEC.md 74.3.1). `tools/getruncpm.py` takes the CCP and the master disk at a pinned
+commit out of a committed cache zip (`apps/runcpm/cache/`) and `make runcpmdisk` builds the
 four floppies from them (the 360KB one curated to the programs and texts,
 with a `LEFT-OFF.TXT` naming what it leaves off).
 
 **And there is software to run on it.** `tools/getcpmsw.py` fetches CP/M
 games and applications from the public RunCPM software collection — every
-file pinned by id, SHA-256 and size, nothing committed, the collection's own
+file pinned by id, SHA-256 and size and read out of that same committed zip
+rather than off Google Drive a file at a time, the collection's own
 `<DRIVE>/<USER>` coordinates kept — and each floppy takes what it holds, an
 area whole or not at all, every one of them a **user area of drive A** so
 that the emulator's own icon stays on the first screen of the Disk window:
@@ -528,6 +787,34 @@ speed**: nothing throttles the emulated Z80 — upstream has no limiter either
 at period speed on the three 86Box machines above. Zork, Hitchhiker and
 Colossal Cave are not there and cannot be: their data files are 76KB, 113KB
 and 68KB, and this port opens a file whole through a 16-bit count.
+
+The third is `apps/paccman` — **PaccMan**, a port of Andre Weissflog's
+[`pacman.c`](https://github.com/floooh/pacman.c) (MIT), the arcade-faithful
+C99 Pac-Man, and a *second* Pac-Man beside the hand-written assembly one in
+`GAMES/`. It is the Namco cabinet's own screen: a 28×36-tile, 224×288 vertical
+field held exactly as the arcade board holds it, the real tile, sprite and
+colour ROM tables, the four ghosts with the *Pac-Man Dossier*'s scatter/chase
+schedule and house dot counters, the CHARACTER / NICKNAME reveal on the
+attract screen, and the arcade's three-voice sound reduced to the one PC
+speaker with the reduction stated rather than hidden. It shares nothing with
+the other Pac-Man — not a file, a name, an image, a target or a vm directory —
+because the next person to touch either would otherwise silently get the
+other.
+
+It exists to answer a question, and the answer is on the glass. The ask was
+*"maybe this port is more performant on XTs"*: C plus one kernel call that
+sends a whole composed band down as four bitplanes, against assembly that
+sends packed pixels through the planar decoder. `tests/paccman.py` runs the
+same bracket over both ports on the same emulated 4.77 MHz 8088 and prints
+them side by side, each on a frame it actually DREW — **2.18 fps against the
+assembly port's 4.14 on VGA** — so no, it is not, and the row prints that
+either way. The band bench says why: the one call really is 6.6× faster than
+the fallback, and the repack that feeds it costs six times what the call
+saves. What PaccMan *does* keep, on VGA, is arcade *time* — a slow frame
+carries two OS ticks of game rather than one, so it runs at 24% of arcade
+speed where the assembly port runs at 23% while drawing twice as often. On
+CGA and Hercules it keeps nothing: the assembly port is at its 18.2 Hz
+deadline there and asleep.
 
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in
@@ -593,13 +880,16 @@ cleanly and runs wrong when C meets this machine.
 | `build/media360.img`   | 360KB FAT12              | 360KB media floppy — the shipped module, which the 360KB apps disk has no room for. It exists at that geometry **alone**: every other apps disk, the 1.2MB one included, carries `BEVERLY.MOD` in `MEDIA/` itself |
 | `build/zork*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Frotz story floppies (`make zdisk`). The 1.2MB one is the only list here that is a cut rather than a fill — the 1.44MB story set alone overruns it, so `ADVENT5.Z5` and `905.Z5` come off and nine of the eleven stay |
 | `build/word*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Microsoft Word floppies (`make worddisk`) |
-| `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
-| `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
-| `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64, package + `C64.OVL` + the `C64.ROM` sidecar (`make c64disk`) |
+| `build/scribe*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Scribe, the fork of Word: one parted package + its welcome documents (`make scribedisk`) |
+| `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C: one package, its overlay a part of it, and `WELCOME.RTF` (`make cworddisk`) |
+| `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package (its module and the CCP inside it) + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
+| `build/paccman*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | PaccMan, the C Pac-Man: the package and its README, no overlay (`make paccmandisk`) |
+| `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64: one package (the ROMs and its overlay are parts of `C64.O88`) + `README.TXT` + `COPYING` (`make c64disk`) |
+| `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `WELCOME.BAS` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs and the overlay are inside the package as parts; the ROMs are fetched at a pin, never committed |
 | `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
 | `build/loom*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
-| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the seven above included (`make allapps`) |
-| `build/apps-all-120.img` | 1.2MB FAT12            | the same disk for the 5.25" HD machine. There is no 720KB or 360KB build: the payload does not fit either |
+| `build/apps-all-N.img`   | 1.44MB FAT12, a set    | every program, on as many floppies as it takes — every on-demand disk above except Scribe's (`make allapps`). `build/apps-all.list` names them; `CONTENTS.TXT` on each disk maps the set |
+| `build/apps-all-120-N.img` | 1.2MB FAT12, a set   | the same set for the 5.25" HD machine. There is no 720KB or 360KB set |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -608,7 +898,8 @@ A 1.44MB drive postdates the 8086 by years, so period hardware gets the
 
 **No binary is committed to this repository.** `build/` is gitignored
 outright — the nine images, the kernel, the boot sectors, the drivers and
-every package are products of `make`, which needs only `nasm` and `python3`.
+every package are products of `make`, which needs only `nasm` and `python3`
+3.11 or newer.
 For a floppy you can boot without a toolchain, take a
 [release](https://github.com/jggonz/os8088/releases) or
 [os8088.com](https://os8088.com); the build is deterministic
@@ -629,14 +920,14 @@ neither 3.5" disk. It *can* boot the 360KB one, because a 1.2MB drive reads
 360KB media, and that is what it had to do; it then got 354 clusters of
 software in a drive with 2,371, and had to swap the media disk in for
 `BEVERLY.MOD`. The 1.2MB pair carries the full 1.44MB payload instead, and so
-does every application floppy: the seven on-demand disks above are built in
+does every application floppy: the ten on-demand disks above are built in
 this geometry too, and so is the everything disk.
 
 Its clusters are 512 bytes like the 1.44MB disk's rather than 1,024 like the
 two DD disks', so it has 2,371 of them — 1,185KB against 1,423KB — and that
-ratio, not the raw one, is what each disk is measured against. Four of the
-seven (Word, cword, the C64, Weave/LOOM) are small enough that every geometry
-carries the identical payload. Three are not, and each answers it in its own
+ratio, not the raw one, is what each disk is measured against. Eight of the
+eleven (Word, Scribe, cword, PaccMan, the C64, the Apple II+, Weave and LOOM)
+are small enough that every geometry carries the identical payload. Three are not, and each answers it in its own
 way: the **story disk** is a straight cut, because the 1.44MB story list alone
 is 2,519 clusters and two titles have to come off; the **RunCPM disk** drops
 its largest CP/M software area so that the master disk keeps its programs, and
@@ -713,8 +1004,9 @@ CMOS — on the first launch the BIOS stops at its setup screen, and picking
 `make xt-sound`, `make xt-sound-1.44`, `make 286-sound` and `make 386-sound`
 add a sound card to four of the machines above. The first XT has a Sound
 Blaster 2.0 (`vm/xt-sound`); the 1.44MB variant has a Sound Blaster 1.0 and
-mounts `build/apps-all.img` in B: (`vm/xt-sound-1.44`), putting every
-application on the same 4.77MHz machine. The 286 and 386 use an SB16
+mounts disk 1 of the everything set, `build/apps-all-1.img`, in B:
+(`vm/xt-sound-1.44`; the other disks swap in from 86Box's floppy menu),
+putting every application on the same 4.77MHz machine. The 286 and 386 use an SB16
 (`vm/286-sound`, `vm/386-sound`). `make test ADLIB=1` and `SB16=1` give the
 driver a card to attach to under QEMU, but only these give it one on a
 machine whose bus and clock are period-correct — and pacing a stream is the
@@ -753,6 +1045,9 @@ All targets, at a glance:
 | `xt-c64` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `286-c64` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
 | `386-c64` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-apple2` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `286-apple2` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `386-apple2` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
 | `xt-weave` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `386-weave` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
 | `xt-weave-256` | IBM PC/XT | 8088 @ 4.77MHz | **256KB** | OTI-067 VGA | — |
@@ -816,9 +1111,9 @@ drive the system from a script.
 `make test` boots headless with a QMP socket at `build/qmp.sock`:
 
 ```
-python3 tools/mouse.py build/qmp.sock to 110 8          # Locator's File menu
+python3 tools/mouse.py build/qmp.sock to 12 8           # the System menu
 python3 tools/mouse.py build/qmp.sock down              # menus need press...
-python3 tools/mouse.py build/qmp.sock to 110 30         # ...drag to Timer...
+python3 tools/mouse.py build/qmp.sock to 60 30          # ...drag to About...
 python3 tools/mouse.py build/qmp.sock up                # ...release to choose
 python3 tools/qmp.py build/qmp.sock 'sendkey h' 'sendkey i'
 python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'

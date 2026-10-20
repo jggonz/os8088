@@ -44,16 +44,13 @@
 ;
 ;   make dosstub          build/dosstub.img, and how to run it
 ;
-; The "file" it serves is RAM: DSF_SEG holds the first DSF_KB, and the SIZE it
-; reports is a pair of constants, so the sector-count arithmetic in
-; open_image - a 32-bit byte count folded into a 16-bit sector count with no
-; 32-bit registers - is exercised over its whole range without a 32MB image.
-; The three FSIZE lines below need `/I:` IN THE TAIL to reach it at all now:
-; the redirector superseded block mode, so open_image returns at once unless a
-; run asks for an image by name (SPEC.md 62.10).
-;   make dosstub ARGS='/I:IMAGE'         10MB, the old ordinary path (20,480 secs)
-;   make dosstub FSIZE=64M ARGS='/I:IMAGE'  past os8088's cap: 65,535, and it says so
-;   make dosstub FSIZE=256 ARGS='/I:IMAGE'  under one sector: the refusal
+; THE RAM FILE `IMAGE` WAS BLOCK MODE'S, and block mode is gone from
+; OS88NET.COM (SPEC.md 62.12.6 item 8: NET.DRV published no DSV_BLK, so
+; nothing could reach it). DSF_SEG holds its first DSF_KB and FSIZE_LO/HI are
+; the size it reports; nothing the program sends opens it now, and the FSIZE
+; knob that drove the sector arithmetic over its range went with the mode.
+; The file stays here because 3Dh/3Fh/40h/42h are written around it and a
+; harness is not where to shave bytes.
 ;   make dosstub ARGS='/P:378 /W'    ...and the whole-machine root, whose
 ;                                    listing is srv_drives rather than a
 ;                                    findfirst - a different walk entirely
@@ -92,12 +89,8 @@ DSF_KB      equ 32              ; ...and how much of it is real. 32 and not
                                 ; word and 64KB is 0x10000: the one place a
                                 ; round number does not fit the machine
 
-%ifndef FSIZE_LO
-%define FSIZE_LO 0x0000         ; default 10MB = 0x00A00000 -> 20,480 sectors
-%endif
-%ifndef FSIZE_HI
-%define FSIZE_HI 0x00A0
-%endif
+FSIZE_LO    equ 0x0000          ; the RAM file's reported size: 10MB
+FSIZE_HI    equ 0x00A0
 
 FH          equ 5               ; the one handle we hand out
 
@@ -246,10 +239,10 @@ f_putc:
 ; which is the point of a harness: "the open failed" and "the open failed on
 ; THAT name" are different sentences.
 ; A NAME IN THE TREE OPENS THE TREE; THE ONE NAME `IMAGE` OPENS THE RAM FILE;
-; ANYTHING ELSE FAILS. Both of the first two are wanted - the redirector reads
-; files out of the synthetic directory below, and block mode's `/I:` names
-; something deliberately not in it so the FSIZE arithmetic keeps its harness -
-; and the third is what makes the harness honest.
+; ANYTHING ELSE FAILS. The redirector reads files out of the synthetic
+; directory below; `IMAGE` is what block mode (since removed) opened, kept
+; deliberately outside the tree; and the third is what makes the harness
+; honest.
 ;
 ; It used to fall back to the RAM file for ANY unknown name, and that quietly
 ; removed a whole class of test: `open a file that is not there` could not

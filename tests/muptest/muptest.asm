@@ -80,7 +80,7 @@ mu_entry:
                                      ; wm_show and inst_bind_win both take it
 
 ; -----------------------------------------------------------------------------
-; The VANISH window - docs/MOUSEUP-PLAN.md 4.2, "the armed window may be gone"
+; The VANISH window - docs/plans/completed/MOUSEUP-PLAN.md 4.2, "the armed window may be gone"
 ;
 ; The one guard in the mouse-up work that no gesture could reach: between the
 ; press and the release, a package can tear its own window down, and
@@ -190,6 +190,7 @@ mu_paint:
 ; -----------------------------------------------------------------------------
 ; mu_onclick - W_ONCLICK: bank the press and draw NOTHING.
 ; in:  CX = x, DX = y, SI = window; gfx lock held
+; out: SI = 0 - clobbered deliberately (SPEC.md 12.2, see the end)
 ;
 ; Drawing nothing is deliberate: the harness's "did anything happen" is the
 ; window's existence, and a repaint here would put pixels in the way of that
@@ -207,6 +208,16 @@ mu_onclick:
     call os88ui_bfind               ; AX = button+1, 0 = off both
     mov [mu_log + 12], ax
     call os88ui_arm                 ; a press ACTS ON NOTHING
+    xor si, si                      ; ...and SI IS CLOBBERED ON PURPOSE, as
+                                    ; SPEC.md 12.2 permits every window
+                                    ; callback: the kernel must arm the
+                                    ; release on the window it dispatched TO,
+                                    ; not on what the handler left in SI.
+                                    ; Zero is the deterministic red - the arm
+                                    ; is lost and no release ever arrives -
+                                    ; where any other value would dispatch it
+                                    ; through a stray offset (tests/mouseup.py
+                                    ; case 0)
     pop bx
     pop ax
     ret

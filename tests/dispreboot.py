@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WHO WRITES ui_rebootq? (docs/DUAL-DISPLAY-VGA.md 8(11))
+"""WHO WRITES ui_rebootq? (docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))
 
     make && python3 tests/dispreboot.py
 
@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
                       VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+import os88build                                       # noqa: E402
 # SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
 # written down here. This file spelled it `42 + 36`, which is the
 # VID_CTX_W = 18 layout - two bytes early, and what sits there is
@@ -98,6 +99,7 @@ BSS0 = 0xC12E       # .text ends here; everything above is live state and a
 # write instead lands BOOT2_PAD bytes early, in the cold thunk table. That is
 # what cold_span is for, and it carries the assertions.
 COLD_SEG, _COLD_OFF, COLD_MAX = os88layout.cold_span(ROOT)
+COLD_LIN = (COLD_SEG << 4) + os88sym.equates().get("COLD_VSTART", 0)   # .cold's first byte
 
 
 def coldbase():
@@ -116,7 +118,7 @@ def coldbase():
 def colddiff(m, pad=""):
     base, k = coldbase()
     img = k[base:base + COLD_MAX]
-    ram = m.read(COLD_SEG << 4, COLD_MAX)
+    ram = m.read(COLD_LIN, COLD_MAX)
     rs = runs_of(img, ram)
     print("%s.cold vs kernel.bin: %d byte(s) in %d run(s)%s"
           % (pad, sum(l for _, l in rs), len(rs),
@@ -137,7 +139,7 @@ def textdiff(m, pad=""):
     evidence, and it must be taken while the machine is still healthy as well
     as after - a corrupt byte that was already there before the click is a
     different bug from one the click produced."""
-    img = open("build/kernel.bin", "rb").read()[:BSS0]
+    img = open(os88build.at("build/kernel.bin"), "rb").read()[:BSS0]
     ram = m.read(0x0060 << 4, BSS0)
     rs = runs_of(img, ram)
     print("%s.text vs kernel.bin: %d byte(s) in %d run(s)"
@@ -255,7 +257,12 @@ def main():
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
         dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "NOTEPAD.O88",
                           card=pri)
-        time.sleep(2)
+        try:
+            os88marty.until(m, lambda _: len(dispcp.win_list(m, S)) >= 2,
+                            "notepad's window", poll=0.2, limit=60)
+            os88marty.settle(m, card=pri)
+        except os88marty.MartyError:
+            pass                            # ...reported just below
         wins = dispcp.win_list(m, S)
         if len(wins) < 2:
             sys.exit("notepad did not launch")
@@ -279,10 +286,34 @@ def main():
         # So every wait below is spent here, resuming ui_task's own accesses.
         state = {"benign": 0}
 
-        def pump(secs):
-            t0 = time.time()
-            while time.time() - t0 < secs:
+        # `secs` is what the window was on an idle box, and it is spent in
+        # GUEST time: a stop resumes at once, so the clock only stands still
+        # if the machine has stopped for good, and that ends the watch too.
+        #
+        # `tail`, when given, ENDS THE WATCH EARLY: once `tail` guest seconds
+        # have passed AND ui_task is asleep with nothing left to do
+        # (os88marty.ui_idle), the click has been handled in full - any
+        # folder read included, since a read runs inside the handler - and
+        # there is nothing further for it to have set off. The release's
+        # window was a flat 25, which at GUEST_PACE is 112 guest seconds per
+        # click of stopping the machine on every ui_task pass, six times over:
+        # most of this row's run, and all of it watching an idle desktop.
+        def pump(secs, tail=None):
+            c0 = last = m.status()["cycles"]
+            moved = time.time()
+            while True:
                 st = m.status()
+                spent = (st["cycles"] - c0) / os88marty.GUEST_HZ
+                if spent >= secs * os88marty.GUEST_PACE:
+                    break
+                if (tail is not None and spent >= tail
+                        and st["state"] != "breakpoint"
+                        and os88marty.ui_idle(m)):
+                    break
+                if st["cycles"] != last:
+                    last, moved = st["cycles"], time.time()
+                elif time.time() - moved > 10.0:
+                    break
                 if st["state"] != "breakpoint":     # state_name(), NOT the
                     # THE DIFFERENTIAL. A `mem` breakpoint is a check inside
                     # the CPU's own bus cycle, so it sees CPU writes and
@@ -308,6 +339,14 @@ def main():
                     return show(m, "fm_layout ENTERED WITH DS != KERNEL_SEG")
                 hit = [n for n, a in watch.items()
                        if st["cs"] == KSEG and abs(st["ip"] - (a - 0x600)) <= 4]
+                # ui_cmd with AX = 0 is "nothing", by its own first compare:
+                # since kernel size pass 10 ui_task's posted-command step
+                # calls it WITHOUT a `jz` in front (ui.inc .chk_pcmd), so an
+                # entry with AX = 0 is that step being told no and not a
+                # command - the reboot's is CMD_REBOOT, never 0
+                if hit == ["ui_cmd"] and m.cmd(cmd="regs")["ax"] == 0:
+                    m.run()
+                    continue
                 if hit:
                     return show(m, "REACHED %s" % hit[0])
                 state["benign"] += 1
@@ -342,45 +381,68 @@ def main():
         # that has moved fails here loudly instead of being patched somewhere
         # else.
         # Step 0 grew when the flag became a REQUEST byte (UI_RBQ_*): the
-        # cmp/je pair now shelters a mov al / sub al / clear before the call,
-        # so the fingerprint is 18 bytes and the je hops 0x0D. The bytes are
-        # still CHECKED before they are overwritten, for the same reason.
-        step0 = m.read(S("ui_task"), 18)
-        want = bytes([0x80, 0x3E, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00,          # cmp [q], 0
-                      0x74, 0x0D,                            # je .keys
-                      0xA0, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8,                      # mov al, [q]
-                      0x2C, 0x01,                            # sub al, RBQ_FLUSH
-                      0xC6, 0x06, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00])         # mov byte [q], 0
-        if step0[:17] != want or step0[17] != 0xE8:
-            sys.exit("ui_task step 0 is not the expected 18 bytes: %s"
-                     % hexd(step0))
+        # cmp/je pair shelters a mov al / clear before the call. **AND IT
+        # GREW AGAIN** - SPEC.md 87's hibernate put a whole second arm under
+        # the same `je`, so on kern_big the body is `cmp al, UI_RBQ_HIBER /
+        # jb .restart / call far hbf_perform / jmp .keys` before the flush
+        # arithmetic, and on kern_small it is not there at all. A typed
+        # 18-byte fingerprint could only ever describe one of them, and it
+        # described NEITHER after #143: this row failed with `ui_task step 0
+        # is not the expected 18 bytes` about a kernel that was perfectly
+        # healthy.
+        #
+        # So the HEAD is fingerprinted and the BODY is measured. The head is
+        # the fifteen bytes the patches below actually overwrite or depend on
+        # - the compare, the branch, the read and the clear - and it fails
+        # loudly if any of them moves. `.keys` is then wherever the `je` says
+        # it is, which is the one fact both kernels and every future arm
+        # agree on. (docs/WRITING-TESTS.md 7.2: pick a signal that means what
+        # you think it means. `je`'s displacement means "past step 0"; a byte
+        # count means "past the step 0 I happened to assemble".)
+        # **AND IT SHRANK** (kernel size pass 10): the compare, the read and
+        # the clear are ONE `xchg`, so the head is `xor al, al / xchg al, [q]
+        # / or al, al / jz .keys`, ten bytes where fifteen were. The patches
+        # below keep their meaning on it: AL is the byte read and the flag is
+        # never cleared.
+        HEAD = 10
+        step0 = m.read(S("ui_task"), HEAD)
+        want = bytes([0x30, 0xC0,                                              # xor al, al
+                      0x86, 0x06, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8,  # xchg al, [q]
+                      0x08, 0xC0,                                              # or al, al
+                      0x74, step0[9]])                                         # jz .keys
+        if step0 != want:
+            sys.exit("ui_task step 0 is not the expected %d-byte head: %s"
+                     % (HEAD, hexd(step0)))
+        KEYS = 10 + step0[9]                    # the `jz`'s own target
+        print("ui_task step 0 is %d bytes (je .keys hops 0x%02X)"
+              % (KEYS, step0[9]))
         if NOP:
-            m.write(S("ui_task"), b"\x90" * 20)             # ...call included
+            # TO `.keys`, not a typed count: NOPping 20 bytes of a 31-byte
+            # step 0 lands in the middle of the far call to hbf_perform.
+            m.write(S("ui_task"), b"\x90" * KEYS)          # ...call included
             print("ui_task step 0 NOPped: the flag is now sticky and the "
                   "reboot cannot fire")
         else:
-            # THE DISCRIMINATOR, and it fits in the same five bytes.
-            #   80 3E B2 CD 00   cmp byte [ui_rebootq], 0
-            # becomes
-            #   A0 B2 CD         mov al, [ui_rebootq]
-            #   3C 00            cmp al, 0
-            # which is the identical test with the byte it read LEFT IN AL -
-            # and AL is dead here, the next use being int 16h AH=01h's own
-            # return. Nothing between +5 and +12 touches AL, so AL at the
-            # ui_cmd_reboot catch IS what the compare saw. AL non-zero means
-            # the flag really was set; AL ZERO means `cmp al,0` set ZF and the
-            # `je` was taken, so control cannot have come through this pair at
-            # all and the entry is from somewhere else.
-            # ...and `74 0D` (je .keys) becomes `EB 0D` (jmp .keys), so the
-            # branch is ALWAYS taken: the read/sub/clear at +7 and the call at +17 are
-            # both unreachable, the flag STICKS once written, and the reboot
-            # cannot fire. Two bytes for two bytes and the same instruction
-            # count, which is why this is the patch to use rather than 15
-            # NOPs - those change what the loop does, and six clicks under
-            # them produced no write at all.
+            # THE DISCRIMINATOR. The head's first five bytes
+            #   30 C0 86 06 lo hi    xor al, al / xchg al, [ui_rebootq]
+            # read AND CLEAR; they become
+            #   A0 lo hi             mov al, [ui_rebootq]
+            #   3C 00                cmp al, 0
+            # which reads the same byte into AL and LEAVES IT SET - and AL is
+            # dead here, the next use being int 16h AH=01h's own return, so
+            # AL at the ui_cmd_reboot catch IS what was read. AL non-zero
+            # means the flag really was set; AL ZERO means the branch below
+            # was taken, so control cannot have come through here at all and
+            # the entry is from somewhere else.
+            # ...and the next two bytes are `EB` (jmp) hopping to `.keys`,
+            # whose displacement is the `jz`'s plus the three bytes it starts
+            # ahead of it - so the branch is ALWAYS taken: the rest of step 0
+            # is unreachable, the flag STICKS once written, and the reboot
+            # cannot fire. **The displacement is the kernel's own**, so this
+            # holds whatever is inside step 0.
             m.write(S("ui_task"), bytes([0xA0, SY["ui_rebootq"] & 0xFF,
                                          SY["ui_rebootq"] >> 8, 0x3C, 0x00,
-                                         0xEB, 0x0D]))
+                                         0xEB, step0[9] + 3]))
             print("ui_task step 0 patched: AL carries the byte read, and the "
                   "branch is unconditional so the flag sticks")
 
@@ -413,14 +475,14 @@ def main():
                 caught = pump(0.6)
             if caught is None:
                 m.mouse(0, 0, l=False)
-                caught = pump(25.0)
+                caught = pump(25.0, tail=5.0)
             m.breakpoints([])
             if caught is not None:
                 print("   (%d benign ui_task accesses before it)" % state["benign"])
                 return 1
             m.run()
             k2, kb2 = ticks(m), bios_ticks(m)
-            time.sleep(1.2)
+            os88marty.pace(m, 1.2)
             k3, kb3 = ticks(m), bios_ticks(m)
             how = ("ALIVE" if k3 != k2 else
                    "*** REBOOTED (kernel tick dead, BIOS tick alive) ***"

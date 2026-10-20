@@ -1,0 +1,124 @@
+# tests/movable.txt - the region-movable exemption registry (SPEC.md 66.6.1)
+#
+# A package's region is born PINNED (66.2). OS88_REGION_MOVABLE is the one line
+# that opts it out, and OS88_WORKER_RESTARTABLE is the other half for a package
+# that hires a worker - without it task_spawn's frame pins the region however it
+# is declared (66.6.2), so a region declaration alone is INERT and reads as done.
+#
+# ONE LINE PER EXEMPTION: <kind> <package>  # <reason>
+#
+#   region  the package does not declare OS88_REGION_MOVABLE at all
+#   worker  it hires a worker and does not declare that worker restartable
+#
+# tests/unit/t_movable.py is the gate. A package NOT in this list must declare -
+# that is the case that matters, because it is what a new app hits. And the list
+# turns ONE WAY: a line for a package that now declares is a FAILURE, so it
+# cannot rot into a register of things that used to be true.
+#
+# THE BAR IS "WHAT BLOCKS IT AND WHAT WOULD UNBLOCK IT", not "not yet". Every
+# line below names a mechanism and the work that retires it. If you are adding
+# one and cannot write that sentence, the answer is the declaration.
+#
+# WHY THERE IS NO 'my package is too complicated' EXEMPTION. A relocation proc
+# is a `ret` for almost everything (the SDK header says why: every word that
+# names a region belongs to the KERNEL, and mem_region_reloc puts those right).
+# The only packages that need more are a segment of our own stamped somewhere,
+# or a worker that cannot be restarted where it parks (the one below). The
+# first shape had one member, SCRIBE, whose SCRIBE.OVL kept DS = the package
+# and was told it by stamps meant to last the session; that module became a
+# part in the package's OWN segment (SPEC.md 95.8.8), nothing is stamped, and
+# the line is gone - docs/plans/completed/SCRIBE-OVL-PLAN.md is the record.
+
+# --- region ------------------------------------------------------------------
+
+region apps/skies/csload.asm     # NOTHING TO DECLARE: it is the launch image
+                                 # only. It reads the parts, hands off through
+                                 # OSAPI_PKG_REHOME and its region is freed
+                                 # inside that call - and until then it IS
+                                 # [ld_base], which mem_frameless pins anyway
+                                 # (66.6.1). A declaration here could never be
+                                 # acted on. Retired by nothing; this one is
+                                 # correct as it stands.
+
+region apps/word/wdload.asm      # THE SAME SHAPE a third time: WORD.O88's
+                                 # raw loader (SPEC.md 68.10), which reads
+                                 # the two parts, hands its identity to part
+                                 # 0 through OSAPI_PKG_REHOME and has its own
+                                 # region freed inside that call. The region
+                                 # that remains is the carve, and word.asm
+                                 # declares it - part 1 is inside the same
+                                 # claim and moves with it, which is why its
+                                 # proc is still a bare `ret`. Retired by
+                                 # nothing; correct as it stands.
+
+region apps/scribe/scload.asm    # WORD's shape a fourth time, one fork along:
+                                 # SCRIBE.O88's raw loader (SPEC.md 95.8.8),
+                                 # which reads the two parts, hands its
+                                 # identity to part 0 through OSAPI_PKG_REHOME
+                                 # and has its own region freed inside that
+                                 # call. scribe.asm declares the carve, and
+                                 # part 1 - the file formats that were
+                                 # SCRIBE.OVL - is inside the same claim and
+                                 # moves with it, so the proc is a bare `ret`.
+                                 # Retired by nothing; correct as it stands.
+
+region apps/dos/dosload.asm      # THE SAME SHAPE, one package along: the
+                                 # four-piece DOS.O88's raw loader image
+                                 # (SPEC.md 96.44.5), which reads the parts,
+                                 # hands its identity to part 0 through
+                                 # OSAPI_PKG_REHOME and has its own region
+                                 # freed inside that call. What is left
+                                 # afterwards is the parts CARVE, and
+                                 # apps/dos/dos.asm - the part that inherits
+                                 # it - is what declares that. It MOVES now,
+                                 # at every geometry rather than at 1.44MB
+                                 # alone (SPEC.md 66.6.1.2), so the region
+                                 # this line is about is covered by the
+                                 # declaration one file over rather than
+                                 # missing. Retired by nothing; correct as it
+                                 # stands.
+
+region apps/pixelstein/pxstein.asm  # csload's shape exactly: the launch image
+                                 # only, which reads the parts, hands off
+                                 # through OSAPI_PKG_REHOME and has its region
+                                 # freed inside that call (SPEC.md 97.9).
+                                 # Retired by nothing; correct as it stands.
+
+# --- worker -------------------------------------------------------------------
+#
+# THE FOUR PARK-SAFE PACKAGES ARE GONE FROM THIS LIST and the reason they were
+# on it was wrong. The SDK note says a park-safe worker should declare this as
+# a WINDOW around OSAPI_TASK_ALIVE rather than blanket-fashion, and
+# REGION-SELF-COMPACT-PLAN 8.2 found that reading FAILS SILENTLY:
+# mem_frameless reads [inst_restart] at PLAN time, and a worker is outside its
+# own ALIVE for essentially all of a tick, so a windowed declaration answers no
+# better for a heap the compactor could have emptied. The declaration is
+# permanent and the work is enumerating BOTH park points - which came to a few
+# lines each, because a park-safe worker is parked while BLOCKED in
+# OSAPI_GFX_LOCK and never while holding it, and all four take the lock as
+# their first action with nothing set before it.
+
+worker apps/frotz/frotz.asm      # A PARK POINT INSIDE THE INTERPRETER'S OWN
+                                 # CALL CHAIN. NOT, as this line first said,
+                                 # because a restart would restart the story:
+                                 # zx_boot is edge-guarded by [zx_seen], so a
+                                 # restart re-entering zx_worker goes straight
+                                 # to .running and resumes. The real blocker is
+                                 # zi_yield (zio.inc), which is called from
+                                 # EVERY wait loop in the module and holds
+                                 # ES = THE PROGRAM COUNTER'S SEGMENT across
+                                 # the yield - it already banks [zf_sdelta] and
+                                 # re-bases ES afterwards precisely because the
+                                 # story can move under it (SPEC.md 66.5.9).
+                                 # The Z-machine's PC is in the story block and
+                                 # survives; the HOST-side position - mid
+                                 # opcode, mid read, mid print, however many
+                                 # frames deep in zx_run - is on the worker's
+                                 # stack and does not. RETIRED BY answering one
+                                 # question nobody has: whether an opcode in
+                                 # flight at zi_yield has committed, so that
+                                 # re-entering at a burst boundary re-executes
+                                 # it rather than skipping it. Until then
+                                 # undeclared is the SDK's own safe answer -
+                                 # this is the one package in the tree where
+                                 # that sentence is load-bearing.

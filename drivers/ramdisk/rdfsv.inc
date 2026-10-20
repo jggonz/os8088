@@ -9,46 +9,71 @@
 ; ES IS KERNEL_SEG ON ENTRY TO EVERY CALLBACK (SPEC.md 20.1). Every string
 ; instruction in this file therefore loads its own segments and puts them
 ; back; a bare `rep stosw` here writes into the kernel's own image.
+;
+; **AND THEN ES IS THE DIRECTORY** (SPEC.md 62.9.13.1). The rows are not in
+; this image: they are the first RD_DIRB bytes of [rd_dtab]'s claim, which
+; Mount takes and Unmount gives back, so a loaded driver with nothing mounted
+; does not carry them. A ROW IS AN OFFSET INTO THAT CLAIM and every access is
+; [es:...]. Each verb makes ES the directory exactly once - rd_row for a
+; handle, rd_vlook for a name, the scan itself for FSV_LIST and FSV_ENUM -
+; and a NAME verb first stages the kernel's string into rd_nbuf, because a
+; compare needs both sides and the 8086 has one spare segment register. DS
+; stays ours throughout, so not one variable access in this file moved.
+;
+; Holding the segment across a verb is safe because nothing a verb calls
+; claims memory (SPEC.md 66.3 rule 2); drv_fs_call's drv_stamped puts ES back
+; for the kernel on the way out.
 ; =============================================================================
 
 ; =============================================================================
 ; DIRECTORY HELPERS
 ; =============================================================================
 
-; rd_dir_clear - every row free
+; rd_dir_clear - every row free. A STORE MUST EXIST: [rd_dtab] is 0
+; otherwise and this would write the interrupt vectors.
+; out: ES = the directory, which every caller wants next
+;
+; ZEROED WHOLE FIRST: the directory is a heap claim now (SPEC.md 62.9.13.1),
+; not the image's own zeroed rd_dir, and a claim is not zeroed - and
+; rd_meta_build copies every row's 14 name bytes into a Preserve, so the
+; heap's bytes after each name's NUL went into the .RAM file
 rd_dir_clear:
+    push ax
     push cx
     push di
-    mov di, rd_dir
+    mov es, [rd_dtab]
+    xor di, di
+    xor ax, ax
+    mov cx, RD_DIRB / 2
+    cld
+    rep stosw
+    mov di, RDE_TYPE
     mov cx, RD_MAXENT
 .blank:
-    mov byte [di+RDE_TYPE], RD_FREE
+    mov byte [es:di], RD_FREE
     add di, RDE_SZ
     loop .blank
     mov byte [rd_cwd], 0
     pop di
     pop cx
+    pop ax
     ret
 
-; rd_row - AL = a handle -> CF=0 and SI = its row; CF=1 = no such handle
+; rd_row - AL = a handle -> CF=0 and ES:SI = its row; CF=1 = no such handle
 ; A free row answers CF=1, so a handle held across a delete cannot resolve.
+; ES = the directory on BOTH answers: this is where a handle verb gets it.
 rd_row:
     push ax
+    mov es, [rd_dtab]
     or al, al
     jz .no
     cmp al, RD_MAXENT
     ja .no
     dec al
-    xor ah, ah
-    push cx
-    push dx
-    mov cx, RDE_SZ
-    mul cx
-    pop dx
-    pop cx
-    mov si, ax
-    add si, rd_dir
-    cmp byte [si+RDE_TYPE], RD_FREE
+    mov ah, RDE_SZ              ; AX = index * RDE_SZ: a byte multiply, the
+    mul ah                      ; product being at most 2,280 - and that IS
+    xchg ax, si                 ; the row's offset in the claim
+    cmp byte [es:si+RDE_TYPE], RD_FREE
     je .no
     pop ax
     clc
@@ -58,27 +83,25 @@ rd_row:
     stc
     ret
 
-; rd_hand - SI = a row -> AL = its handle (index + 1)
+; rd_hand - SI = a row -> AX = its handle (index + 1, so AH = 0); CF = 0
 rd_hand:
     push dx
-    push cx
-    mov ax, si
-    sub ax, rd_dir
-    xor dx, dx
-    mov cx, RDE_SZ
-    div cx
-    inc ax
-    pop cx
+    mov ax, si                  ; the row's offset, the directory being at 0
+    mov dl, RDE_SZ              ; a byte divide: the offset is under 2,304,
+    div dl                      ; so the index fits AL, and SI is a row's
+    inc ax                      ; first byte, so the remainder in AH is 0
     pop dx
+    clc                         ; CF = 0 for FSV_STAT, which answers with this
     ret
 
-; rd_free_row - out CF=0 and DI = a free row; CF=1 = the directory is full
+; rd_free_row - in ES = the directory
+;               out CF=0 and DI = a free row; CF=1 = the directory is full
 rd_free_row:
     push cx
-    mov di, rd_dir
+    xor di, di
     mov cx, RD_MAXENT
 .scan:
-    cmp byte [di+RDE_TYPE], RD_FREE
+    cmp byte [es:di+RDE_TYPE], RD_FREE
     je .got
     add di, RDE_SZ
     loop .scan
@@ -90,29 +113,35 @@ rd_free_row:
     clc
     ret
 
-; rd_nfiles - out AX = live rows
+; rd_nfiles - out AX = live rows, 0 with no store (and so no directory);
+;             every other register preserved, ES included - RSV_STATE's ES is
+;             the page's block
 rd_nfiles:
     push bx
     push cx
-    push dx
-    xor dx, dx
-    mov bx, rd_dir
+    push es
+    xor ax, ax
+    cmp [rd_have], al
+    je .out                     ; no store, no claim: nothing to read, and
+                                ; reading [rd_dtab] = 0 would count the vectors
+    mov es, [rd_dtab]
+    mov bx, RDE_TYPE
     mov cx, RD_MAXENT
 .scan:
-    cmp byte [bx+RDE_TYPE], RD_FREE
+    cmp byte [es:bx], RD_FREE
     je .next
-    inc dx
+    inc ax
 .next:
     add bx, RDE_SZ
     loop .scan
-    mov ax, dx
-    pop dx
+.out:
+    pop es
     pop cx
     pop bx
     ret
 
 ; -----------------------------------------------------------------------------
-; rd_settype - SI = a row whose name is set -> its RDE_TYPE (internal)
+; rd_settype - ES:SI = a row whose name is set -> its RDE_TYPE (internal)
 ;
 ; A PACKAGE IS DECIDED BY ITS EXTENSION, and a redirected volume has to decide
 ; it the same way disk_mount's own dsk_synth does. Without this a written or
@@ -125,34 +154,27 @@ rd_settype:
     push ax
     push bx
     push cx
-    mov bx, si
-    add bx, RDE_NAME
-    xor cx, cx
+    lea bx, [si+RDE_NAME]
+    mov cx, bx                  ; where the name starts...
 .len:
-    cmp byte [bx], 0
-    je .got
     inc bx
-    inc cx
-    jmp short .len
-.got:
-    cmp cx, 4
-    jb .file
-    sub bx, 4                   ; the last four characters
-    cmp byte [bx], '.'
-    jne .file
-    mov al, [bx+1]
+    cmp byte [es:bx-1], 0
+    jne .len                    ; ...and BX one past its NUL
+    sub bx, 5                   ; where a `.O88` tail's dot would be
+    xor ah, ah                  ; 0 = a plain file
+    cmp bx, cx
+    jb .set                     ; a name under four characters has no tail
+    cmp word [es:bx+2], '88'
+    jne .set
+    cmp byte [es:bx], '.'
+    jne .set
+    mov al, [es:bx+1]
     call rd_upper
     cmp al, 'O'
-    jne .file
-    cmp byte [bx+2], '8'
-    jne .file
-    cmp byte [bx+3], '8'
-    jne .file
-    mov byte [si+RDE_TYPE], 1
-    jmp short .out
-.file:
-    mov byte [si+RDE_TYPE], 0
-.out:
+    jne .set
+    inc ah                      ; 1 = a package
+.set:
+    mov [es:si+RDE_TYPE], ah
     pop cx
     pop bx
     pop ax
@@ -168,41 +190,28 @@ rd_upper:
 .out:
     ret
 
-; rd_ncopy - DS:SI -> DS:DI, a NUL name, at most 15 characters (internal)
-rd_ncopy:
-    push ax
-    push cx
-    mov cx, 15
-.next:
-    mov al, [si]
-    mov [di], al
-    or al, al
-    jz .out
-    inc si
-    inc di
-    loop .next
-    mov byte [di], 0
-.out:
-    pop cx
-    pop ax
-    ret
-
-; rd_ncopy_es - ES:SI -> DS:DI, the same, for a name the KERNEL is handing us
-rd_ncopy_es:
+; rd_scopy - DS:SI -> ES:DI, a NUL string of at most CX characters, and
+;            NUL-terminated whatever it found (internal)
+; out: CF = 0; every register preserved
+;
+; THE ONE NAME COPY. There were seven loops of this shape, one per pair of
+; segments and per length, and they differed only in which segment each side
+; was read through - which is what rd_scopy_in below supplies. ES is set by
+; every caller here, never assumed: it is KERNEL_SEG on entry (SPEC.md 20.1).
+rd_scopy:
     push ax
     push cx
     push si
     push di
-    mov cx, 15
+    cld
 .next:
-    mov al, [es:si]
-    mov [di], al
+    lodsb
+    stosb
     or al, al
     jz .out
-    inc si
-    inc di
     loop .next
-    mov byte [di], 0
+    xor al, al                  ; CX characters and no NUL among them: end it
+    stosb
 .out:
     pop di
     pop si
@@ -210,23 +219,34 @@ rd_ncopy_es:
     pop ax
     ret
 
-; rd_ncmp - row SI's name against the caller's at ES:DI, case-insensitive
+; rd_scopy_in - ES:SI -> DS:DI, the same, for a name in a segment that is NOT
+;               ours: the kernel's (FSV_*), or the page's (rd_svc_page)
+; out: CF = 0; every register preserved
+rd_scopy_in:
+    call .swap                  ; swap DS and ES, so rd_scopy's DS:SI -> ES:DI
+    call rd_scopy               ; is the caller's ES:SI -> DS:DI...
+.swap:                          ; ...and fall in to swap them back, whose
+    push ds                     ; `ret` is this routine's. The pushes and pops
+    push es                     ; CROSS ON PURPOSE - it is an exchange, which
+    pop ds                      ; tests/unit/t_asmrules.py's restore-order
+    pop es                      ; check rightly reads as a defect anywhere it
+    ret                         ; is a routine's own prologue and epilogue
+
+; rd_ncmp - row ES:SI's name against the staged one at DS:DI, case-insensitive
 ; out: CF=0 equal; SI and DI preserved
 ;
-; The caller's string is in KERNEL_SEG and ours is in our own image, which is
-; why ES is read explicitly: ES is KERNEL_SEG on entry to everything the
-; kernel far-calls into a driver (SPEC.md 20.1).
+; The row is in the directory's claim and the name in rd_nbuf, where rd_vlook
+; staged it out of KERNEL_SEG - two segments, and ES and DS are both of them.
 rd_ncmp:
     push ax
     push bx
     push di
-    mov bx, si
-    add bx, RDE_NAME
+    lea bx, [si+RDE_NAME]
 .next:
-    mov al, [bx]
+    mov al, [es:bx]
     call rd_upper
     mov ah, al
-    mov al, [es:di]
+    mov al, [di]
     call rd_upper
     cmp al, ah
     jne .no
@@ -248,16 +268,33 @@ rd_ncmp:
     stc
     ret
 
-; rd_look - find ES:DI's name in the CURRENT folder
-; out: CF=0 and SI = the row; CF=1 = no such name
+; -----------------------------------------------------------------------------
+; rd_vlook - find the CALLER's name in the CURRENT folder
+; in:  ES:SI = a NUL name - KERNEL_SEG, as every FSV_* name verb is handed it
+; out: CF=0 and SI = the row; CF=1 = no such name. EITHER WAY ES = the
+;      directory and DI = rd_nbuf, holding the name - which is what
+;      rd_new_row copies into a fresh row
+; clobbers: AX, CX, DI, ES, flags
+;
+; THE NAME IS STAGED FIRST, because the row it is compared against is in a
+; segment that is neither ours nor the kernel's (SPEC.md 62.9.13.1) and the
+; 8086 has one segment register to spare. 15 characters bounds the copy the
+; way the row's own name field does; an 8.3 name is at most 12.
+; -----------------------------------------------------------------------------
+rd_vlook:
+    mov di, rd_nbuf
+    mov cx, 15
+    call rd_scopy_in            ; ES:SI -> DS:DI
+    mov es, [rd_dtab]
+; rd_look - the same for a name ALREADY in DS:DI, with ES = the directory
 rd_look:
-    mov si, rd_dir
+    xor si, si
 .row:
-    cmp si, rd_dir + RD_MAXENT * RDE_SZ
+    cmp si, RD_DIRB
     jae .none
-    cmp byte [si+RDE_TYPE], RD_FREE
+    cmp byte [es:si+RDE_TYPE], RD_FREE
     je .nextrow
-    mov al, [si+RDE_PAR]
+    mov al, [es:si+RDE_PAR]
     cmp al, [rd_cwd]            ; this folder only: a name resolves where the
     jne .nextrow                ; volume is standing (SPEC.md 19.2)
     call rd_ncmp
@@ -290,10 +327,10 @@ rd_chdir:
     jz .root
     call rd_row
     jc .no
-    cmp byte [si+RDE_TYPE], 2   ; folders only - nothing chdirs into a file
+    cmp byte [es:si+RDE_TYPE], 2    ; folders only - nothing chdirs into a file
     jne .no
     mov [rd_cwd], al
-    mov dl, [si+RDE_PAR]
+    mov dl, [es:si+RDE_PAR]
     xor dh, dh
     pop si
     clc
@@ -322,19 +359,23 @@ rd_list:
     push cx
     push si
     push di
-    mov si, rd_dir
+    mov es, [rd_dtab]
+    xor si, si
     mov cx, RD_MAXENT
 .next:
-    cmp byte [si+RDE_TYPE], RD_FREE
+    cmp byte [es:si+RDE_TYPE], RD_FREE
     je .skip
-    mov al, [si+RDE_PAR]
+    mov al, [es:si+RDE_PAR]
     cmp al, [rd_cwd]
     jne .skip
     call rd_stage               ; SI's row -> rd_ent
     push si
     mov si, rd_ent              ; ES is set by the X stub from our own DS, so
-    call OSAPI_FS_ENT           ; there is nothing to load here
+    call OSAPI_FS_ENT           ; there is nothing to load here...
     pop si
+    mov es, [rd_dtab]           ; ...and the directory is re-read after it,
+                                ; SPEC.md 66.3 rule 2 kept rather than argued
+                                ; (`mov` leaves the call's CF alone)
     jc .full                    ; the listing is full: SPEC.md 19's cap, and
 .skip:                          ; stopping cleanly is what the kernel's own
     add si, RDE_SZ              ; directory scan does
@@ -367,12 +408,13 @@ rd_enum:
     push si
     push di
     mov ah, al                  ; AH = the folder, so AL is free to load rows
-    mov si, rd_dir
+    mov es, [rd_dtab]
+    xor si, si
     mov di, RD_MAXENT
 .row:
-    cmp byte [si+RDE_TYPE], RD_FREE
+    cmp byte [es:si+RDE_TYPE], RD_FREE
     je .skip
-    mov al, [si+RDE_PAR]
+    mov al, [es:si+RDE_PAR]
     cmp al, ah
     jne .skip                   ; somebody else's child
     jcxz .found                 ; ...this is the one asked for
@@ -385,9 +427,8 @@ rd_enum:
     stc                         ; every walk of every folder finishes
     jmp short .out
 .found:
-    push bx                     ; RD_STAGE SPENDS BX - its name copy walks the
-    call rd_stage               ; row through it - and BX is the caller's
-    pop bx                      ; buffer offset, which nothing else holds
+    call rd_stage               ; (it keeps BX, the caller's buffer offset,
+                                ; which nothing else holds)
     push es                     ; ...and out to that buffer, which is DX:BX
     mov es, dx                  ; because ES is KERNEL_SEG on entry to
     mov si, rd_ent              ; anything the kernel far-calls (SPEC.md 51.8)
@@ -407,8 +448,8 @@ rd_enum:
 
 ; -----------------------------------------------------------------------------
 ; rd_stage - one row -> the 32-byte staged SPEC.md 19.1 entry (internal)
-; in:  SI = the row
-; out: rd_ent filled; AX/BX/DI clobbered, CX PRESERVED
+; in:  ES:SI = the row
+; out: rd_ent filled; AX/DI clobbered, every other register PRESERVED
 ;
 ; CX is saved because the caller's loop counter is in it, and the first
 ; version of this did not save it: the zeroing loop below spent CX, rd_list's
@@ -417,36 +458,32 @@ rd_enum:
 ; -----------------------------------------------------------------------------
 rd_stage:
     push cx
+    push si
+    push es                     ; the directory...
+    push ds
+    pop es                      ; ...and ours for the zeroing, then back
     mov di, rd_ent
     mov cx, DSK_DE_SIZE/2
-.zero:
-    mov word [di], 0            ; DS-relative, NOT `rep stosw`: ES is
-    inc di                      ; KERNEL_SEG here (SPEC.md 20.1)
-    inc di
-    loop .zero
+    xor ax, ax
+    cld
+    rep stosw                   ; zeroed first, every field this does not set
+    pop es
 
-    mov bx, si                  ; @0: the display name, up to its own NUL
-    add bx, RDE_NAME
+    push si                     ; @0: the display name, NUL and all
+    add si, RDE_NAME
     mov di, rd_ent
-.name:
-    mov al, [bx]
-    mov [di], al
-    or al, al
-    jz .named
-    inc bx
-    inc di
-    jmp short .name
-.named:
-    mov al, [si+RDE_TYPE]       ; @16: 0 file / 1 package / 2 folder. NEVER 3 -
-    xor ah, ah                  ; the parent link is the kernel's to synthesize
-    mov [rd_ent+16], ax
-    call rd_hand                ; @18: OUR OPAQUE HANDLE
-    xor ah, ah
+    mov cl, 15
+    call rd_scopy_in            ; ES:SI (the row) -> DS:DI
+    pop si
+    mov al, [es:si+RDE_TYPE]    ; @16: 0 file / 1 package / 2 folder. NEVER 3 -
+    mov [rd_ent+16], ax         ; the parent link is the kernel's to synthesize
+    call rd_hand                ; @18: OUR OPAQUE HANDLE (AH = 0: it is <= 96)
     mov [rd_ent+18], ax
-    mov ax, [si+RDE_SIZE]       ; @20: the size dword, which fm_measure sums
+    mov ax, [es:si+RDE_SIZE]    ; @20: the size dword, which fm_measure sums
     mov [rd_ent+20], ax
-    mov ax, [si+RDE_SIZE+2]
+    mov ax, [es:si+RDE_SIZE+2]
     mov [rd_ent+22], ax
+    pop si
     pop cx
     ret
 
@@ -461,24 +498,17 @@ rd_stage:
 ; `test 0x18` refuses a folder with FERR_PROT.
 ; -----------------------------------------------------------------------------
 rd_stat:
-    mov di, si                  ; ES:DI = the caller's name
-    call rd_look
-    jc .none
-    mov cx, [si+RDE_SIZE]
-    mov dx, [si+RDE_SIZE+2]
+    call rd_vlook               ; ES:SI = the caller's name
+    jc rd_e_noent
+    mov cx, [es:si+RDE_SIZE]
+    mov dx, [es:si+RDE_SIZE+2]
     xor bx, bx
-    cmp byte [si+RDE_TYPE], 2
+    cmp byte [es:si+RDE_TYPE], 2
     jne .attr
     mov bl, 0x10                ; a directory, in the kernel's own vocabulary
 .attr:
-    call rd_hand
-    xor ah, ah
-    clc
-    ret
-.none:
-    mov ax, FERR_NOENT
-    stc
-    ret
+    jmp rd_hand                 ; AX = the handle (AH is 0: it is <= 96), and
+                                ; CF = 0
 
 ; -----------------------------------------------------------------------------
 ; FSV_READ - the whole file, by handle (SPEC.md 62.9.1)
@@ -498,54 +528,50 @@ rd_stat:
 ; -----------------------------------------------------------------------------
 rd_read:
     call rd_row
-    jc .bad
-    mov ax, [si+RDE_SIZE+2]     ; a 32-BIT capacity against a 32-bit size, and
+    jc rd_e_noent
+    mov ax, [es:si+RDE_SIZE+2]  ; a 32-BIT capacity against a 32-bit size, and
     cmp ax, di                  ; the high words decide first
-    ja .big
+    ja rd_e_big
     jb .fits
-    mov ax, [si+RDE_SIZE]
+    mov ax, [es:si+RDE_SIZE]
     cmp ax, cx
-    ja .big
+    ja rd_e_big
 .fits:
-    mov ax, [si+RDE_SIZE]
+    mov [rd_bufs], dx
+    mov [rd_bufo], bx
+    xor ax, ax                  ; from the top...
+    mov [rd_off], ax
+    mov [rd_off+2], ax
+    mov ax, [es:si+RDE_SIZE]    ; ...and all of it
     mov [rd_n], ax
-    mov ax, [si+RDE_SIZE+2]
-    mov [rd_n+2], ax
-    mov ax, [rd_n]
-    or ax, [rd_n+2]
-    jz .none                    ; an empty file: 0 bytes, and not an error
-    mov ax, [si+RDE_EXT]
-    mov [rd_io_ext], ax
-    mov byte [rd_io_dir], 0     ; store -> caller
-    mov word [rd_io_off], 0
-    mov word [rd_io_off+2], 0
-    mov ax, [rd_n]
-    mov [rd_io_len], ax
-    mov ax, [rd_n+2]
-    mov [rd_io_len+2], ax
-    mov [rd_io_seg], dx
-    mov [rd_io_ofs], bx
-    mov byte [rd_io_prog], 1
+    mov dx, [es:si+RDE_SIZE+2]
+    mov [rd_n+2], dx
+    or dx, ax
+    jz .out                     ; an empty file: 0 bytes, and not an error
+    mov ax, 0x0100              ; store -> caller, reporting each piece
     call rd_io
-    mov byte [rd_io_prog], 0
-    cmp byte [rd_xerr], 0       ; the extended store refused a stage: the
-    jne .ioerr                  ; buffer holds someone else's bytes and saying
-.none:                          ; so is the only honest answer (62.9.10.2)
+    jc rd_e_io                  ; the extended store refused a stage: the
+                                ; buffer holds someone else's bytes and saying
+                                ; so is the only honest answer (62.9.10.2)
+.out:
     mov ax, [rd_n]
-    mov dx, [rd_n+2]
-    clc
+    mov dx, [rd_n+2]            ; CF = 0 from the `or` or from rd_io
     ret
-.ioerr:
-    mov ax, FERR_IO
-    xor dx, dx
-    stc
-    ret
-.big:
-    mov ax, FERR_BIG
-    stc
-    ret
-.bad:
+
+; -----------------------------------------------------------------------------
+; THE FSV_* REFUSALS, spelled once: AX = the FERR_* and CF = 1. They sit in
+; the middle of the verbs so every one of them is a short jump away.
+; -----------------------------------------------------------------------------
+rd_e_io:
+    xor dx, dx                  ; FSV_READ / READAT answer a count in DX:AX,
+    mov ax, FERR_IO             ; and a refusal's is nothing
+    jmp short rd_e
+rd_e_noent:
     mov ax, FERR_NOENT
+    jmp short rd_e
+rd_e_big:
+    mov ax, FERR_BIG
+rd_e:
     stc
     ret
 
@@ -561,61 +587,35 @@ rd_read:
 rd_readat:
     mov [rd_off], si
     mov [rd_off+2], di
-    mov [rd_cap], cx
     mov [rd_bufo], bx
     mov [rd_bufs], dx
     call rd_row
-    jc .bad
-    mov ax, [si+RDE_SIZE]       ; what is LEFT of the file, in 32 bits: an
-    mov cx, [si+RDE_SIZE+2]     ; offset can now be past 64KB into a file that
+    jc rd_e_noent
+    mov ax, [es:si+RDE_SIZE]    ; what is LEFT of the file, in 32 bits: an
+    mov dx, [es:si+RDE_SIZE+2]  ; offset can now be past 64KB into a file that
     sub ax, [rd_off]            ; is itself megabytes
-    sbb cx, [rd_off+2]
+    sbb dx, [rd_off+2]
     jc .eof                     ; the offset is past the end: 0 bytes, and NOT
-    mov dx, ax                  ; an error - it is how every walk finishes
-    or dx, cx
-    jz .eof
-    or cx, cx
+    or dx, dx                   ; an error - it is how every walk finishes
     jnz .clamp                  ; more than a word left, so the capacity wins
-    cmp ax, [rd_cap]
+    or ax, ax
+    jz .eof
+    cmp ax, cx
     jbe .take
 .clamp:
-    mov ax, [rd_cap]            ; ...clamped to what was asked for
+    mov ax, cx                  ; ...clamped to what was asked for
 .take:
     mov [rd_n], ax
-    mov ax, [si+RDE_EXT]
-    mov [rd_io_ext], ax
-    mov byte [rd_io_dir], 0
-    mov ax, [rd_off]
-    mov [rd_io_off], ax
-    mov ax, [rd_off+2]
-    mov [rd_io_off+2], ax
-    mov ax, [rd_n]
-    mov [rd_io_len], ax
-    mov word [rd_io_len+2], 0
-    mov ax, [rd_bufs]
-    mov [rd_io_seg], ax
-    mov ax, [rd_bufo]
-    mov [rd_io_ofs], ax
+    mov word [rd_n+2], 0
+    xor ax, ax                  ; store -> caller, no reports
     call rd_io
-    cmp byte [rd_xerr], 0
-    jne .ioerr                  ; (62.9.10.2)
+    jc rd_e_io                  ; (62.9.10.2)
     mov ax, [rd_n]
-    xor dx, dx
-    clc
-    ret
-.ioerr:
-    mov ax, FERR_IO
-    xor dx, dx
-    stc
-    ret
+    jmp short .out
 .eof:
     xor ax, ax
-    xor dx, dx
-    clc
-    ret
-.bad:
-    mov ax, FERR_NOENT
-    stc
+.out:
+    xor dx, dx                  ; ...which is also what leaves CF = 0
     ret
 
 ; -----------------------------------------------------------------------------
@@ -630,103 +630,73 @@ rd_readat:
 ; order (SPEC.md 18.4 rule 1) precisely because it cannot do that.
 ; -----------------------------------------------------------------------------
 rd_write:
-    mov [rd_nameo], si          ; banked: rd_look and rd_free_row both spend
-    mov [rd_n], cx              ; the registers this needs at the end
-    mov [rd_n+2], di
+    mov [rd_n], cx              ; banked: rd_vlook and rd_free_row both spend
+    mov [rd_n+2], di            ; the registers this needs at the end
     mov [rd_bufo], bx
     mov [rd_bufs], dx
+    xor ax, ax                  ; a write starts at the top of the file
+    mov [rd_off], ax
+    mov [rd_off+2], ax
     cmp byte [rd_have], 0
-    je .full
-    mov ax, [rd_n]              ; DX / [rd_fitlo] = the count. It arrived as
-    mov [rd_fitlo], ax          ; DI:CX and DX is the BUFFER's segment here,
-    mov dx, [rd_n+2]            ; which is why it is reloaded from the bank
-    call rd_fits                ; rather than passed on. A file is bounded by
-    jc .big                     ; the volume now and by nothing else - the
-                                ; 63.5KB ceiling went with the 16-bit offsets
-                                ; (SPEC.md 62.9.10)
-    mov di, si                  ; ES:DI = the name
-    call rd_look
+    je rd_e2_full
+    mov [rd_fitlo], cx          ; DI:CX = the count. A file is bounded by the
+    mov dx, di                  ; volume now and by nothing else - the 63.5KB
+    call rd_fits                ; ceiling went with the 16-bit offsets
+    jc rd_e2_big                 ; (SPEC.md 62.9.10)
+    call rd_vlook               ; ES:SI = the name
     jnc .have
-    call rd_free_row            ; a new file: a row...
-    jc .dirfull
-    mov si, di                  ; SI = the row rd_free_row found
-    mov word [si+RDE_EXT], RD_NOEXT
-    mov word [si+RDE_SIZE], 0
-    mov word [si+RDE_SIZE+2], 0
-    mov byte [si+RDE_TYPE], 0
-    mov al, [rd_cwd]
-    mov [si+RDE_PAR], al
-    push si
-    add di, RDE_NAME            ; DI is still that row
-    mov si, [rd_nameo]          ; ES:SI = the caller's name, banked above
-    call rd_ncopy_es
-    pop si
+    call rd_new_row             ; a new file: a row...
+    jc rd_e2_dirfull
     call rd_settype             ; ...and only now can the extension be read
-    push si
-    mov cx, [rd_n]
-    mov dx, [rd_n+2]
-    call rd_chain_fit
-    pop si
-    jc .newfull                 ; the row was ours a moment ago and nothing
-                                ; else can have taken it, so giving it back is
-                                ; the whole rollback
-    jmp short .store
+    call .fit
+    jnc .store                  ; the row was ours a moment ago and nothing
+    mov byte [es:si+RDE_TYPE], RD_FREE  ; else can have taken it, so giving
+    jmp rd_e2_full               ; it back is the whole rollback
 .have:
-    cmp byte [si+RDE_TYPE], 2
-    jne .fit
-    mov ax, FERR_PROT           ; a folder is not a file to be overwritten
-    stc
-    ret
-.fit:
-    push si
-    mov cx, [rd_n]
-    mov dx, [rd_n+2]
-    call rd_chain_fit
-    pop si
-    jc .full
+    cmp byte [es:si+RDE_TYPE], 2
+    je rd_e2_prot                ; a folder is not a file to be overwritten
+    call .fit
+    jc rd_e2_full
 .store:
     mov cx, [rd_n]
-    mov [si+RDE_SIZE], cx
+    mov [es:si+RDE_SIZE], cx
     mov ax, [rd_n+2]
-    mov [si+RDE_SIZE+2], ax
+    mov [es:si+RDE_SIZE+2], ax
     or ax, cx
-    jz .ok
-    mov ax, [si+RDE_EXT]
-    mov [rd_io_ext], ax
-    mov byte [rd_io_dir], 1     ; caller -> store
-    mov word [rd_io_off], 0
-    mov word [rd_io_off+2], 0
-    mov ax, [rd_n]
-    mov [rd_io_len], ax
-    mov ax, [rd_n+2]
-    mov [rd_io_len+2], ax
-    mov ax, [rd_bufs]
-    mov [rd_io_seg], ax
-    mov ax, [rd_bufo]
-    mov [rd_io_ofs], ax
+    jz .ok                      ; CF = 0
+    mov ax, 0x0001              ; caller -> store, no reports
     call rd_io
-    cmp byte [rd_xerr], 0
-    jne .ioerr                  ; (62.9.10.2)
+    jc rd_e2_io                 ; (62.9.10.2)
 .ok:
-    clc
     ret
-.ioerr:
+.fit:                           ; SI's chain, made [rd_n] long
+    mov cx, [rd_n]
+    mov dx, [rd_n+2]
+    jmp rd_chain_fit
+
+; ...and AGAIN for FSV_WRITE and FSV_APPEND, and a third time for the four
+; name verbs below: an 8086 has no near conditional jump, and a refusal that is
+; not a short jump away is assembled as a jump AROUND a near one - five bytes a
+; site, against the two of a short `jc`.
+rd_e2_io:
+    xor dx, dx
     mov ax, FERR_IO
-    stc
-    ret
-.newfull:
-    mov byte [si+RDE_TYPE], RD_FREE
-    jmp short .full
-.big:
+    jmp short rd_e2
+rd_e2_noent:
+    mov ax, FERR_NOENT
+    jmp short rd_e2
+rd_e2_big:
     mov ax, FERR_BIG
-    stc
-    ret
-.full:
+    jmp short rd_e2
+rd_e2_full:
     mov ax, FERR_FULL
-    stc
-    ret
-.dirfull:
+    jmp short rd_e2
+rd_e2_dirfull:
     mov ax, FERR_DIRFULL
+    jmp short rd_e2
+rd_e2_prot:
+    mov ax, FERR_PROT
+rd_e2:
     stc
     ret
 
@@ -746,73 +716,30 @@ rd_append:
                                 ; it is 32-bit, so the high half is stated once
     mov [rd_bufo], bx
     mov [rd_bufs], dx
-    mov di, si
-    call rd_look
-    jc .none
-    cmp byte [si+RDE_TYPE], 2
-    je .prot
-    mov ax, [si+RDE_SIZE]       ; where it goes, in 32 bits...
-    mov dx, [si+RDE_SIZE+2]
+    call rd_vlook               ; ES:SI = the name
+    jc rd_e2_noent
+    cmp byte [es:si+RDE_TYPE], 2
+    je rd_e2_prot
+    mov ax, [es:si+RDE_SIZE]    ; where it goes, in 32 bits...
+    mov dx, [es:si+RDE_SIZE+2]
     mov [rd_off], ax
     mov [rd_off+2], dx
-    add ax, [rd_n]              ; ...and what the file becomes
+    add ax, [rd_n]              ; ...and what the file becomes, DX:AX
     adc dx, 0
-    mov [rd_end], ax
-    mov [rd_end+2], dx
     mov [rd_fitlo], ax          ; will THAT fit the store? (DX is its high half)
     call rd_fits
-    jc .big
-    push si
-    mov cx, [rd_end]
-    mov dx, [rd_end+2]
-    call rd_chain_fit
-    pop si
-    jc .full
-    mov ax, [rd_end]
-    mov [si+RDE_SIZE], ax
-    mov ax, [rd_end+2]
-    mov [si+RDE_SIZE+2], ax
+    jc rd_e2_big
+    mov cx, ax                  ; DX:CX = the new length, which rd_chain_fit
+    call rd_chain_fit           ; takes and leaves alone
+    jc rd_e2_full
+    mov [es:si+RDE_SIZE], cx
+    mov [es:si+RDE_SIZE+2], dx
     cmp word [rd_n], 0
-    je .ok
-    mov ax, [si+RDE_EXT]
-    mov [rd_io_ext], ax
-    mov byte [rd_io_dir], 1
-    mov ax, [rd_off]
-    mov [rd_io_off], ax
-    mov ax, [rd_off+2]
-    mov [rd_io_off+2], ax
-    mov ax, [rd_n]
-    mov [rd_io_len], ax
-    mov word [rd_io_len+2], 0
-    mov ax, [rd_bufs]
-    mov [rd_io_seg], ax
-    mov ax, [rd_bufo]
-    mov [rd_io_ofs], ax
+    je .ok                      ; CF = 0
+    mov ax, 0x0001              ; caller -> store, no reports
     call rd_io
-    cmp byte [rd_xerr], 0
-    jne .ioerr                  ; (62.9.10.2)
+    jc rd_e2_io                  ; (62.9.10.2)
 .ok:
-    clc
-    ret
-.ioerr:
-    mov ax, FERR_IO
-    stc
-    ret
-.big:
-    mov ax, FERR_BIG
-    stc
-    ret
-.full:
-    mov ax, FERR_FULL
-    stc
-    ret
-.prot:
-    mov ax, FERR_PROT
-    stc
-    ret
-.none:
-    mov ax, FERR_NOENT
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -824,55 +751,40 @@ rd_append:
 ; make: files.inc calls one or the other from the entry's TYPE.
 ; -----------------------------------------------------------------------------
 rd_delete:
-    mov di, si
-    call rd_look
-    jc .none
-    cmp byte [si+RDE_TYPE], 2
-    je .prot
-    mov ax, [si+RDE_EXT]
+    call rd_vlook               ; ES:SI = the name
+    jc rd_e2_noent
+    cmp byte [es:si+RDE_TYPE], 2
+    je rd_e2_prot
+    mov ax, [es:si+RDE_EXT]
     call rd_chain_free
-    mov byte [si+RDE_TYPE], RD_FREE
+    mov byte [es:si+RDE_TYPE], RD_FREE
     clc
-    ret
-.prot:
-    mov ax, FERR_PROT
-    stc
-    ret
-.none:
-    mov ax, FERR_NOENT
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
 ; FSV_RENAME - SI = the old name, DI = the new one, both in KERNEL_SEG
 ; -----------------------------------------------------------------------------
 rd_rename:
-    mov [rd_nameo], di          ; bank the NEW name: rd_look spends DI
-    mov di, si
-    call rd_look
-    jc .none
+    push di                     ; the NEW name, banked: rd_vlook spends DI...
+    push es                     ; ...and the KERNEL_SEG it is in, ES being
+    call rd_vlook               ; the directory after this one
+    pop es
+    pop di
+    jc rd_e3_noent              ; (`pop` leaves rd_vlook's CF alone)
     push si                     ; the row it found
-    mov di, [rd_nameo]
-    call rd_look                ; is the new name taken? (rd_look uses ES:DI)
-    pop si
-    jnc .exists
+    mov si, di
+    call rd_vlook               ; is the new name taken? It is staged in
+    pop si                      ; rd_nbuf either way...
+    jnc rd_e3_exist
     push si
-    mov di, si
-    add di, RDE_NAME
-    mov si, [rd_nameo]
-    call rd_ncopy_es            ; ES:SI -> DS:DI
+    lea di, [si+RDE_NAME]
+    mov si, rd_nbuf             ; ...so it goes into the row from there
+    mov cx, 15
+    call rd_scopy               ; DS:SI -> ES:DI
     pop si
     call rd_settype             ; a rename can change what a file IS - .TXT to
     clc                         ; .O88 makes it a package, exactly as it would
     ret                         ; on a FAT volume, where the mount re-reads it
-.exists:
-    mov ax, FERR_EXIST
-    stc
-    ret
-.none:
-    mov ax, FERR_NOENT
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; FSV_MKDIR - SI = a NUL name in KERNEL_SEG
@@ -882,31 +794,11 @@ rd_rename:
 ; FERR_FULL are different answers here as they are on a FAT volume.
 ; -----------------------------------------------------------------------------
 rd_mkdir:
-    mov [rd_nameo], si
-    mov di, si
-    call rd_look
-    jnc .exists
-    call rd_free_row
-    jc .dirfull
-    mov si, di
-    mov byte [si+RDE_TYPE], 2
-    mov word [si+RDE_EXT], RD_NOEXT
-    mov word [si+RDE_SIZE], 0
-    mov word [si+RDE_SIZE+2], 0
-    mov al, [rd_cwd]
-    mov [si+RDE_PAR], al
-    add di, RDE_NAME
-    mov si, [rd_nameo]
-    call rd_ncopy_es
-    clc
-    ret
-.exists:
-    mov ax, FERR_EXIST
-    stc
-    ret
-.dirfull:
-    mov ax, FERR_DIRFULL
-    stc
+    call rd_vlook               ; ES:SI = the name, staged for rd_new_row
+    jnc rd_e3_exist
+    call rd_new_row
+    jc rd_e3_dirfull
+    mov byte [es:si+RDE_TYPE], 2    ; (a `mov`: CF = 0 stays the answer)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -917,39 +809,64 @@ rd_mkdir:
 ; rather than making files.inc walk the folder first.
 ; -----------------------------------------------------------------------------
 rd_rmdir:
-    mov di, si
-    call rd_look
-    jc .none
-    cmp byte [si+RDE_TYPE], 2
-    jne .prot                   ; a file is dskw_delete's, not ours
+    call rd_vlook               ; ES:SI = the name
+    jc rd_e3_noent
+    cmp byte [es:si+RDE_TYPE], 2
+    jne rd_e3_prot               ; a file is dskw_delete's, not ours
     call rd_hand                ; AL = this folder's handle...
-    push si
-    mov si, rd_dir              ; ...and nothing may still name it as a parent
+    xor di, di                  ; ...and nothing may still name it as a parent
     mov cx, RD_MAXENT
 .scan:
-    cmp byte [si+RDE_TYPE], RD_FREE
+    cmp byte [es:di+RDE_TYPE], RD_FREE
     je .nextrow
-    cmp [si+RDE_PAR], al
-    je .notempty
+    cmp [es:di+RDE_PAR], al
+    je rd_e3_prot                ; the kernel's own word for "not empty" here
 .nextrow:
-    add si, RDE_SZ
+    add di, RDE_SZ
     loop .scan
-    pop si
-    mov byte [si+RDE_TYPE], RD_FREE
+    mov byte [es:si+RDE_TYPE], RD_FREE
     clc
     ret
-.notempty:
-    pop si
-    mov ax, FERR_PROT           ; the kernel's own word for "not empty" here
-    stc
-    ret
-.prot:
-    mov ax, FERR_PROT
-    stc
-    ret
-.none:
+
+rd_e3_noent:                    ; (the third copy - see rd_e2 above)
     mov ax, FERR_NOENT
+    jmp short rd_e3
+rd_e3_dirfull:
+    mov ax, FERR_DIRFULL
+    jmp short rd_e3
+rd_e3_exist:
+    mov ax, FERR_EXIST
+    jmp short rd_e3
+rd_e3_prot:
+    mov ax, FERR_PROT
+rd_e3:
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; rd_new_row - a fresh row in the current folder, named rd_nbuf (rd_vlook
+;              staged it), ES = the directory
+; out: CF=0 and SI = the row, no extent and no bytes - its TYPE is still the
+;      caller's to set; CF=1 = the directory is full
+; clobbers: AX, CX, DI, flags
+; -----------------------------------------------------------------------------
+rd_new_row:
+    call rd_free_row            ; DI = a free row
+    jc .out
+    mov si, di
+    mov word [es:si+RDE_EXT], RD_NOEXT
+    xor ax, ax
+    mov [es:si+RDE_SIZE], ax
+    mov [es:si+RDE_SIZE+2], ax
+    mov al, [rd_cwd]
+    mov [es:si+RDE_PAR], al
+    push si
+    add di, RDE_NAME
+    mov si, rd_nbuf             ; the caller's name, as rd_vlook staged it
+    mov cx, 15
+    call rd_scopy               ; DS:SI -> ES:DI ...CF = 0
+    pop si
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -987,33 +904,12 @@ rd_dfree:
 rd_fits:
     push ax
     push bx
-    push cx
     push dx
-    mov ax, [rd_kb]             ; BX:AX = the store, in bytes - and BX rather
-    mov bx, ax                  ; than DX, because DX is the count's own high
-    mov cl, 10                  ; word and this compares the two
-    shl ax, cl
-    mov cl, 6
-    shr bx, cl
-    pop dx                      ; the count, back off the stack: the shifts
-    push dx                     ; above spent CL and CX is its low half
-    mov cx, [rd_fitlo]
-    cmp bx, dx
-    ja .fits
-    jb .no
-    cmp ax, cx
-    jb .no
-.fits:
+    mov bx, dx                  ; BX:[rd_fitlo] = the count, because DX is
+    call rd_kb_bytes            ; about to be the store's own high word
+    sub ax, [rd_fitlo]          ; the store LESS the count, which borrows
+    sbb dx, bx                  ; exactly when the count is the larger
     pop dx
-    pop cx
     pop bx
     pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
     ret

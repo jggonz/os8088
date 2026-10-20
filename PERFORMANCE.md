@@ -327,7 +327,7 @@ then 21,307 B/s. Nothing was wrong with any measurement; the summary table
 simply was not edited when Part 9 moved, and every consumer of it inherited a
 figure **2.9x too pessimistic**. It reached docs/FIELD-MACHINES.md's machine
 register, `sysbench`'s own report text, `trklog.inc`, and a whole plan document
-(docs/NET-PLAN.md) that concluded a parallel cable would be *faster* than the
+(docs/plans/completed/NET-PLAN.md) that concluded a parallel cable would be *faster* than the
 floppy partly on the strength of it.
 
 **So every row in the table above now names the Set it came from**, and that
@@ -393,7 +393,7 @@ the ACCESS SHAPE:
 | 512 bytes **delivered by a warm `FILE_READ`** | **24 ms** (5150) | measured, **Set 24**. NOT a sector transferred — §18.95's cache means some are never read |
 | a sector **inside a coalesced run**, pre-cache | 65 ms (5150), 46 ms (Compaq III) | measured, Sets 17/18 — **superseded by the row above for any estimate made today**, and kept because pre-Set-22 reasoning all over this tree is derived from it |
 | an **`int 13h` call** in such a run | **199 ms** for one sector, **384 ms** for a 9-sector track — 1 to 1.92 revolutions, near enough whatever it moves | measured, Sets 14/22 |
-| an **isolated single-sector access** — a boot sector at LBA 0, a lone directory sector | **~150–200 ms once the motor is up**, and most of a second if it is not | **MODELLED, NOT MEASURED** (docs/ASSOC-PLAN.md): ~100 ms average rotational latency + ~80 ms average seek across 40 tracks at a 6 ms step + ~15 ms settle |
+| an **isolated single-sector access** — a boot sector at LBA 0, a lone directory sector | **~150–200 ms once the motor is up**, and most of a second if it is not | **MODELLED, NOT MEASURED** (docs/plans/completed/ASSOC-PLAN.md): ~100 ms average rotational latency + ~80 ms average seek across 40 tracks at a 6 ms step + ~15 ms settle |
 
 **A fourth quantity has since split off the first**, which is why the table
 grew a row rather than having one edited: §18.95's cache made *bytes
@@ -1223,12 +1223,20 @@ list to check yourself against.
 | Double-click a title bar to zoom | `wm_paint_all` both ways: a screen's dither, every drive zone, both strips, every window's `W_PAINT`. Worst transient **23,842 px**, 445 ms of flashing | out: nothing is revealed, so `wm_draw_win` and the chrome — **1,540 px**. Back: the union through `wm_paint_dmg`, with the dither clipped — **1,161 px**, a 20x drop | §11.95.1, §11.91.1 |
 | Retitle a window | full frame repaint | one `TITLE_H` strip | §11.92 |
 | Mount / unmount a volume | `wm_paint_all` | the zone grid — measured **371 glyphs → 182** | §26.3 |
-| Select a covered drive icon | **two** whole-screen repaints per click | one XOR strip, zero repaints; byte-identical output | §26.2 |
+| Select a covered drive icon | **two** whole-screen repaints per click | `kern_small`: one XOR strip, zero repaints; byte-identical output. `kern_big`: the old and new cells repainted through `desk_zones_paint`, each drawn once and only where it shows - nothing flashes, but it is a reveal pass a cell, **47-52 ms** each in place on a 4.77 MHz 8088 (§26.9.9's `cell` row), so about 100 ms a click | §26.2, §26.9.9 |
 | Select a file row (Disk window) | ~130 glyphs + a dozen fills | two XOR bands; **zero** `font_char`, **zero** `gfx_fill` for most cases | §22.2 |
 | Scroll a Disk window one row | `fm_repaint`: header, both buttons, every visible row, the whole scroll bar and the status line. Measured on CGA with `os88marty.py flicker` — **16 frames of visible redraw = 262 ms, 15 of them flashing = 246 ms, worst 2,772 transient pixels**, bounding box the whole window content | one `gfx_scroll`, the row it exposed, two XOR bands and the thumb: **5 frames = 83 ms, 2 flashing = 33 ms, worst 320 px** — and the bounding box is one row and the bar. Framebuffer **byte-identical** to the full repaint on CGA (both byte phases), Hercules and VGA mode 12h, 25 frames each | §22.11 |
 | Scroll the Browser one line, deep in a page | the tier test read the old scroll POSITION rather than the delta, so past one windowful every scroll repainted the whole band, on every page, for the rest of the document. Measured on a cycle-accurate 5150/CGA in a 15-row band, one Down key: **15 `font_run`s and no `gfx_scroll` at all**, **19 frames of visible redraw = 317 ms** | one `gfx_scroll` and the row it exposed, at every depth: **1 `font_run` and 1 `gfx_scroll`**, **5 frames = 83 ms**. Framebuffer **0 differing pixels** against the band repaint on CGA (15 rows) and Hercules (27), 55 scroll steps each | §71.10 |
 | Scroll a Disk window that is already at an end stop | a full repaint to show the same pixels — **266 ms** | **nothing at all**, 0 frames | §22.11 |
 | Type into the file dialog's name box | ~120 glyphs + a 298×151 fill | `font_char` **972 → 36**, scanlines **7,600 → 184** (8 chars) | §38.8 |
+| Word: a Left or Right arrow | `wd_fastcm` parked `[wd_mvbot]` at the 0x7FFF sentinel - they do not go through `wd_move`, which is what sets a real bound - so pass 1 laid out the whole view. Right **186.3 ms** (walk 142.8), Left **216.6** (walk 164.8), against Down's 114.5 (walk 4.3) | §27.4.1's two-row rule applied to them as well, `ckpr + 1`: Right **67.3 ms** (walk 23.8), Left **96.2** (walk 42.2) | §27.4.4 |
+| Word: typing a character mid-line | pass 1 laid out every row from the caret to the bottom of the view, every keystroke, to be told nothing below had changed. On `WELCOME.DOC` in the shipped window (`vrows` = 6): **205.6 ms** at caret row 1, of which `wd_walk` **149.2 ms** | `wd_eoutck` stops the walk where the row indices reconverge - one compare a row, exact, height-agnostic: **80.4 ms**, of which `wd_walk` **29.6 ms** (2.6x and 5.0x). At caret row 3, 224.9 -> **142.8 ms** | §27.4.3 |
+| Word: moving the caret at all | `wd_redraw` is two walks - pass 1 finds the rows whose signatures moved and pass 2 draws them - and the split is there for a REFLOW, which can change a row's height and so needs a band erased before it is lettered. A caret move reflows nothing and pays for it anyway: a Right arrow was **67.6 ms of which pass 1 is 23.5**, drawing not one pixel | `wd_rflush` runs at the row's END, one call before `wd_nextrow` folds the signature, so it asks the question itself: **47.0 ms**, ONE `wd_walk` instead of two (1.44x) | §27.4.6 |
+| Word: a scroll-bar click ABOVE the thumb | A formatted note gave up the upward blit-scroll - the entering rows are above the view and in no bank - so every click above the thumb repainted the whole window, menu bar and ruler included: **622 ms** against the down click's 251 | `wd_upheight` prices those rows with a bounded measure walk instead: **307 ms**, 2.03x, and the chrome is not touched | §27.7.2.2 |
+| Word: pressing Enter | `[wd_fast]` stayed 0, so the keystroke got no seed, no bound and no early-out, and every row below the split changed its y - `[wd_ymoved]` erased to the content bottom and pass 2 lettered the lot. Caret on row 1 of `WELCOME.DOC`: **448.2 ms**, of which **165 ms is a pass that draws nothing** | kind 5: §27.4.3's reconvergence one row down, then the note below it is a `gfx_scroll` rather than a repaint. **116.9 ms**; pass 1 7 rows -> 2, pass 2 6 -> 2 | §27.4.5 |
+| Word: a track click on the scroll bar | the blit refused (a page is `[wd_vfit]` = 2 of 6 rows, but `[wd_rowsn]` had been left at `[wd_bd0]` = 2 by the previous scroll, so `d` = 4 > 2), and the full repaint that followed white-filled the whole content — bar and grow box with it — then drew the bar whole. **512.9 ms** | the blit is taken, and when it genuinely cannot be the fill stops at `[wd_rgt]` and only the THUMB moves: **155.0 ms**, 3.3x | §68.2.2 |
+| Word: an arrow click on the scroll bar | the band rounded x2+1 up from `[wd_rgt]` and carried six of the bar's fourteen columns; the strip was blanked white and `wd_sbar` redrew all sixteen calls. 230.4 ms, and the bar's arrow cell altered in **44 of 48** samples through the click | the band is cut from the CELLS and cannot reach the bar; `wd_sbcheck` moves the thumb in three calls. **197.8 ms**, and **0 of 48** samples | §68.2.2 |
+| Dismiss one of Word's own dropdowns | `wd_mrepair`, a piecewise repaint of everything the panel covered - the covered text rows erased FULL COLUMN WIDTH and re-lettered. Measured on a cycle-accurate 5150, Utilities (168x109) over `WELCOME.DOC` in a 600x136 content area: **2,488,591 cy = 521.4 ms**. `wd_mtrack` closes and reopens per title crossed, so dragging File -> Help was eight of them, ~4.97 s | the banked pixels written back: **93,940 cy = 19.7 ms**, plus **96,863 cy = 20.3 ms** to bank them on the way down. Round trip **621 -> 139.6 ms**; File -> Help ~1.12 s. `wd_mrepair` is now the refusal path only | §68.2.1, §5.3 |
 | Note Pad keystroke | full content fill + a glyph per character | **2 cells**; `font_char` **8,410 → 350**, scanlines **5,020 → 1,960** (20 keystrokes, 410-char note) | §27.2 |
 | Note Pad layout per keystroke | 404 walk iterations at 200 chars, growing | 35, and flat | §27.4 |
 | Note Pad caret keys | Up 1,608 iterations / Home 1,608 / Left 804 | 184 / 90 / 60 | §27.5 |
@@ -1239,6 +1247,7 @@ list to check yourself against.
 | Task Manager row update | 20 glyphs to change 3, twice a second | the changed chunks only | §28.2 |
 | The Task Manager's QUIET pages | the memory view and the heap page repainted at `TM_INT` like the live one — and measured on a 5150/CGA with `tools/os88lockw.py`, one refresh held the gfx lock **45.1 ms** and **51.2 ms** and made **no drawing call of any kind**: the chunk cache was working and the walk to find that out was not free. Twice a second that is **102 ms of every second with the pointer hidden** (§7.1.4) buying nothing | `tm_paintdue` — every fourth interval on those two pages, tested BEFORE the lock is taken. Heap page **10.3% → 2.0%** of wall-clock holding the lock, memory view 1.9%, performance view untouched at 4.4%. The SAMPLE still runs at `TM_INT`, so the CPU gauge and its epoch are unchanged | §28.6 |
 | ...and the walk that was left | §28.6 quartered the paint and the remaining refresh still held the lock **51.2 ms** to conclude nothing had changed | `tm_quiet` — the same question as three hashes over 334 bytes, **4.89 ms**, and asked BEFORE the lock is taken. The heap page sitting quiet now takes the lock **0 times in 9 seconds**; a change still reaches it on the first refresh | §28.6.1 |
+| The Task Manager's GRAPH | 216 columns walked on EVERY paint whatever the damage said, at up to two `gfx_vline` each — **432 primitive calls for a 216x40 box**, which is 333.9 ms of a Hercules and 126.6 ms of a VGA. It has no key and had no band, so uncovering the ~16 ms RAM bar *underneath* it redrew the lot. 333.9/432 is **773 µs**, this file's own fixed part for a `gfx_*` call, and the 1bpp arm's floor is **2.6x** the VGA one — so the cost was the CALL and the target machine was the one it fell on | `tm_graph` — the band test the rows have had since §28.2, then the damaged COLUMNS, then neighbouring equal heights coalesced into one `gfx_fill`. The same drop is **333.9 → 30.5 ms** (Hercules) and **126.6 → 27.8 ms** (VGA), and the reported gesture — damage entirely below the graph — is 216 columns against **none**. A run of one is the same primitive on the same pixels, `gfx_vline` being a one-column `gfx_fill`, so the worst case did not move | §28.10.3 |
 | Scroll the Task Manager's heap page | there was no scrolling: `TMH_ROWS` is 47, no screen shows more than 22, and `tm_row_place` refused the rest without saying so | a list repaint a click — ~20 rows × 5 chunks of changed text, **~450 ms on the target**, which is about what a page switch already costs and is why the thumb does not DRAG. §28.2's per-chunk cache is REUSED rather than cleared: the offset is spent at the source (`tm_mrow_close`), so `tm_rowck` stays indexed by the row's place on the SCREEN and a row whose text matches the one that was in that slot is not redrawn. An end stop is **nothing at all** — `tm_hscroll` compares the clamped position against the one the bar was drawn from and returns | §28.4.4 |
 | Press an arrow on the Drivers page | §13.8.3's pressed look reached this page as `cp_drv_boxes` — **every** row's checkbox, on both edges of every press, and `os88ui_glyph` white-fills its box before it draws a pixel. Measured on a cycle-accurate 5150/CGA with `tests/drvscroll.py`: the press is **9 frames = 133.3 ms** of visible redraw with the flashing rect spanning the whole list, the release carries another **100 ms** in front of the scroll's own repaint, and a press on a **greyed** arrow spends **116.7 ms** twice to draw nothing at all | the one control the down state moved to or from: the press is **2 frames = 16.7 ms**, the flash is the mouse pointer's own cell and the rows are 0 differing pixels; a greyed arrow is **0 frames**; the release is the scroll's pane repaint alone, **367.1 → 267.1 ms**. A driver row's own press 133.3 → **33.6 ms**, one glyph instead of four | §31.1.2 |
 | Timer digits | eight erase-and-letter pairs — 8 `gfx_fill` + 8 `font_char`, each cell blank between its two calls, **twice a second for as long as the window is open**: 320 + 320 calls in 20 s, ~24.7 ms a redraw | one `font_run` over the cells that CHANGED, byte-aligned by `WF_SNAP`: **0 fills, 0 `font_char`**, 20 runs of 22 cells in the same 20 s, and no blank interval | §14.1, §6.1 |
@@ -1250,18 +1259,30 @@ list to check yourself against.
 | A dock tile whose MARK moved (every focus change) | erased to white and rebuilt — fill, frame, two-pass masked icon blit, marks — twice, to move one 1px rectangle. On CGA: **9 frames flashing = 149 ms, worst 534 px** | one `gfx_xor_rect` or one `gfx_xor_fill`; **the icon is not touched**. Both marks are their own inverse, so old XOR new names the difference | §30.3 |
 | Damage that reaches the dock strip | `dock_force`: all 640px of rule and field restored and **every** tile rebuilt, for a window that closed in one corner | the damaged span only, and the keys of just the tiles it overlaps | §30.3.1 |
 | Arkanoid pause / resume | the whole content — background, both rails, every brick, paddle, ball, capsules, shots, status strip | the banner's 9-row band: `gfx_fill` **89 → 2**, `font_char` **10 → 6** | §44.1 |
+| PIXELSTEIN 3D: a textured wall (SPEC.md 97.3, 97.5) | the 1992 engine's shape, mechanically: every column's wall redrawn every frame, a `spotvis` clear and a whole-view clear a frame, a far call per scaler from C — WolfensteinCGA's field figure is ~2.5–2.9 fps at 90% of this cell count on a 4.77 MHz 8088 | a compiled scaler per height (2..80 by 2, 86..116 by 6, 120) that stores every covered view row ONCE and loads a texel once per run, entered by a NEAR call from a driver the frame far-calls ONCE; a column whose six bytes (top, bot, the quantised height, mat, side, u>>3) stood is skipped whole, the ceiling and floor put back only over what the wall gave up. Measured on the cycle-exact 5150 CGA at the default (Size 64 × Rows 80 × Low res), wave 2: **98.7 ms = 10.13 fps full repaint, 88.0 ms = 11.36 turning** on scene A; the compose 41.6 ms full / 32.5 turning against Flat's 32.3 / 16.8 (a one-row ceiling or floor end — the modal end of a turn, since the generated heights step by 2 — takes `px_pix` rather than a ladder entry, −3,270 clk on the turn frame's compose); Hercules within 1.5 ms of it. **Wave 3, the same frame with the sprite pass, the weapon and the sim in the loop: 110.1 ms = 9.09 full repaint, 99.5 = 10.05 turning; the FINISHED frame (the world's simulation running) 113.7 = 8.79** — the gather 4.7 ms of it (§97.6: 9.2 before review r1 inlined its probes), the compose 47.7 / 39.9 against Flat's 38.0 / 22.6 (§97.6's `px_cwrote` stores and the weapon's sixteen posts) | §97.3, §97.6, `tests/pixelstein.py`, `docs/reports/PXS-FRAME-2026-09-21.md`, `-22.md` |
+| PIXELSTEIN 3D: a Mode change or the F toggle | regenerate both scaler sets and re-transpose the byte-texture set on every entry and exit (~0.9 s of black on the 5150), and at launch before the menus for a rung the window does not start at | `px_tex_setup` rebuilds by CLASS — the phase class (CGA4 / Hercules-and-WIN1 / none) and the ink class — so Hercules ↔ its own window costs **nothing** and CGA ↔ window pays it once each way; a Size change regenerates nothing (the set does not depend on Size); and it is called by `px_apply` only when the rung in force is Textured, so the 8086's window (Flat Low res since wave 6's close; Flat Full before it) launches without it and leaves a bracket without it | §97.3 |
+| PIXELSTEIN 3D: the bracket's present at any Size (SPEC.md 97.3, 97.5) | the row loop re-reading the band's first byte, its width and the row advance from memory on every one of 80 rows — five `cs:`-prefixed loads, +5,800 clk = +1.2 ms a frame on every rung and backend over wave 1's loop (107,026 clk against 101,200 on the same 64-byte band) | the band's first byte folded into the device-row table once a Size change (`px_devrows`), the width and the advance loaded into registers once a present: the loop is `mov di, [cs:bx]` / `mov cx, ax` / `rep movsw` / `add si, dx` and the counters | §97.3 |
+| PIXELSTEIN 3D: the Tab map (SPEC.md 97.6, wave 6) | every cell asking its three SEEN sources (the plain mark, the transposed mark, the fold's bit) and a wall asking them again for each of four neighbours: **4,276,980 clk = 896 ms** on the 5150 for one map | three rows of SEEN FLAGS, each map row's worked out once (`px_map_row`, ~120 clk a cell at the fetch floor), and a cell one flag read — five for a wall or a door — with the cell index, the flag pointer and the player's column in registers: **1,175,579 clk = 246.3 ms** for the draw on the last build (1,171,971 before review r2 sent a door down the wall's path), **1,291,608 = 270.6 ms** for the whole Tab frame with the bar and the present, drawn once when Tab is pressed and nothing after it (the world stops under it) | §97.6, §97.15, `docs/reports/PXS-FRAME-2026-09-23.md` §9 |
+| PIXELSTEIN 3D: the seen fold at the spotvis wrap (SPEC.md 97.6, wave 6) | both marks folded a byte at a time: **449,843 clk = 94.3 ms** on the frame the generation wraps, every 255 frames | eight plain cells and two transposed ones at a look (the usual cell was never crossed): **186,969 clk = 39.2 ms** once every 255 frames, ~0.15 ms a frame amortised — but paid INSIDE one live frame: with the two clears that frame reads **167.0 ms against 113.9** (+53.1), kept (§97.6 says why) | §97.6 |
+| PIXELSTEIN 3D: Auto after a fight on an 8086 (SPEC.md 97.8, wave 6's close) | a step-up line of half the budget, 62.5 ms, under every frame an 8086 draws at any position: a fight's sprites stepped a 5150 down and it never climbed back, the plainer picture for the rest of the session; and a ladder through Flat Full, which is DEARER than the Textured Low res above it (164.4 ms against 113.9) | a line per position, the budget over the largest measured cost ratio between the landing rung and the one under it (111.1 ms onto Textured Low res), and an 8086 ladder that skips Flat Full both ways: two guards at the elbow step a 5150 from Textured Low res (145.2–147.6 ms, forced repaints) straight to Flat Low res, and the empty hall (98.2–152.1, median 99.4; the top is the one seen-fold frame) steps it back after 228 ticks — the 10 s hold-down and 64 frames under the line (`tests/pxsauto.py` leg f); +65 bytes of part 0 | §97.8 |
+| PIXELSTEIN 3D: the finished frame, the last build (SPEC.md 97.15) | — (the standing number) | the default (Textured Low res 64 × 80) on the CGA 5150: **113.9 ms = 8.78 fps full repaint, 117.5 = 8.51 finished** on scene A (8.67 / 8.40 on B); Hercules 8.67 / 8.41; wave 6 moved no CGA row of the pinned scenes by more than 0.1 ms (Mode X's whole-retrace cells move by a field; the finished frames with sprites by ~1% between runs) | §97.15 |
+| isoTron step: one column, <=22 probes, 0 redraws (SPEC.md 108.10, 108.15) | ISOTRON-PLAN 2.2's scouts: a constant table of 9 to 36 OCCLUDING CELLS redrawn a step in front of the new wall, on blocks several pixels wide - and wave 2's first build of the one-pixel grid, a packed nibble canvas with the grid probed in pairs, at **3,735 cycles** a Lunatic head-step | one cell owns one screen column, so the cells in front of a new wall are its own sight diagonal, and §108.10.1's proof makes the step ONE column written: at most **22 grid probes** (k* off the canvas by `repne scasb`), at most **23 rows** (`rep stosb` down a column-major byte canvas), **no previously drawn cell redrawn** - counted (`it_maxprobe`, `it_maxspan`; a span cannot leave its column, an `%error` in `itcanvas.inc`, SPEC.md 108.10.2) and held to the model's full repaint after every step. A computer head-step whole: **2,417 / 2,612 cycles** median Rookie / Lunatic, all three adapters; with the full-screen span written straight into video memory **3,983 / 4,534 / 3,280** (CGA / Hercules / VGA 0Dh, Rookie). `isotronperf` fails a line 1.25 x over its pin | §108.10, §108.15.1, `tests/isotron.py --bound/--perf` |
 | Missile Command explosion (1bpp / 8088) | a full disc **every** frame for 27 frames plus 12 ring erases — ~750 fills a burst, 124 ms a frame in a busy wave | three drawn states, five-rect discs — 22 fills a burst, 7.9 ms | §48.8 |
 | Missile Command terrain repair | `[mc_gdirty]`, one byte: the whole ground band, six cities and three bases — **143 ms**, five times in 86 frames | a damage **span**: 16.5 ms, byte-identical to a full repaint | §48.9 |
 | Missile Command score strip | the whole strip blanked and re-lettered on every kill | three `font_run` fields, space-padded — no blank interval | §48.9, §6.1 |
-| Missile Command missile trails | an app-side Bresenham emitting one `gfx_hline` per **row** — a whole-trail erase was 267 fills, ~310 ms, a five-tick stall | one `gfx_line`: 59 ms worst frame, and the busy frame whole went 190 ms → **43.5 ms** | §5.6, §48.8.3 |
+| Missile Command missile trails | an app-side Bresenham emitting one `gfx_hline` per **row** — a whole-trail erase was 267 fills, ~310 ms, a five-tick stall | one `gfx_line`: 59 ms worst frame, and the busy frame whole went 190 ms → **43.5 ms**. **Since §48.16.1 it is an app-side walk committed through `OSAPI_GFX_POINTS`** — `gfx_line` is retired (§5.12.7) — which is 165.96 µs a point against a flat ~986 a call, so a per-frame segment of one to three pixels is ~1.6× cheaper still and the ERASE is an exact replay rather than §5.6.5's dilation. The 43.5 ms figure has not been re-taken | §5.6, §48.8.3, §48.16.1 |
 | Missile Command fullscreen | the §11.2 fullscreen WINDOW — still in the z-order, still pre-empted, so **6.2 ms of `gfx_lock`+`wm_clip_set` and 5.7 ms of `gfx_unlock` on every frame**, 21.8% of a session | §53.7's same-mode bracket: `lok` and `unl` measured at **0**, and the double cursor goes with them | §48.13 |
-| A dilated STEEP line | three Bresenham walks over the same pixels — 37.8 ms of a 73.5 ms Missile Command frame | one walk writing a three-bit mask: **1.91×**, measured in guest instructions by `gfxbench`'s transposed pair after `linetest`'s host-time 1.3–1.9× settled nothing | §5.6.6 |
+| ~~A dilated STEEP line~~ | three Bresenham walks over the same pixels — 37.8 ms of a 73.5 ms Missile Command frame | one walk writing a three-bit mask: **1.91×**, measured in guest instructions by `gfxbench`'s transposed pair after `linetest`'s host-time 1.3–1.9× settled nothing. **RETIRED with the primitive** (§5.12.7): dilation existed because a draw and an erase were two different Bresenhams that disagree by a pixel, and an app-side walk erases by REPLAYING the draw, which is exact. The row is kept because 1.91× is what the workaround was worth, and a reader meeting `[mc_lfat]` in an old set needs it | §5.6.6, §5.12.7 |
 | Missile Command crosshair | 8 `gfx_xor_fill` **every frame** whether the mouse moved or not — **8.6 ms of a 55 ms tick**, idle frames included | 0 unless it moved or something drew through it; 4 signed compares per primitive otherwise, and the screen is byte-identical | §48.11 |
 | Missile Command burst life | grow, peak, **collapse**, gone — 39 fills a burst, and the collapse alone is 42% of it for one visible state | grow and hold, with the life cut 27→21 frames so Σr (all a burst's lethality) is preserved to 3.3%: 25 fills, **18.3 → 12.4 ms a frame** | §48.12 |
 | FTPD's Setup page, a click that moves the CARET | `FDD_PAGE`, so `fd_spend` answered a 1px bar with `fd_draw_setup`: `fd_clear_content` and every field, label, tick and help line. Measured on a cycle-accurate 5150/CGA by `tests/ftpdflick.py`, the same scripted session through both builds - within the same field **9 frames = 133.5 ms**, into another field **9 = 133.6 ms**, back onto a character **10 = 150.3 ms**, onto the page background **9 = 133.5 ms**, a tick's release with a field focused **10 = 150.3 ms** - each flashing **~4,300 transient pixels** over a rect that is the whole content box | the two cells the bar leaves and arrives at: one opaque `font_run` of the character it covered (or an 8x8 white fill past the end of the text) and one 1px `gfx_fill`. **1 frame = 0 ms, 15 px changed, 0 transient** for a caret move, and the tick's release is §77.44's box alone at **16.7 ms**. Every transient pixel left is the mouse pointer's own cell (§7.1). The window's rendered pixels after each of six gestures: **0 differing** against the old build | §77.45 |
 | Solitaire stock click | 635 wasted fill runs **every click** | 0 unless the picture changed | §43.7 |
 | Solitaire column redraw | every card, backs included (634 runs each) | buried backs kept; a measured move skips 246 runs | §43.7 |
+| Gorillas skyline repaint | Full-width top-down bands: VGA **3.30/5.92 s**, CGA **2.90/2.34 s**, Hercules **3.00/3.00 s** (window/fullscreen) | Complete buildings left to right, native ink-pair tables, repeated rows and empty-sky fills: VGA **1.39/1.63 s**, CGA **0.36/0.32 s**, Hercules **0.46/0.51 s**. City generation separately **1.54–1.56 → 0.30–0.31 s**. MartyPC cycles at 4.77 MHz; independent pixel and clipping checks, same seeded scene. Budgets: city 400 ms, VGA paint 1800 ms, CGA/Hercules paint 600 ms | §99.4, `tests/gorillascity.py` |
 | Fractal repaint | re-render from row 0 (~115 s) | replay the pass-0 cache, resume refining | §40.1 |
+| Fractal's INTERIOR | escape-time gives a point that never escapes the full `FR_CAP`, so at the default Mandelbrot view **76.9% of the frame's 867,555 iterations** are spent on the 13,894 black pixels — and at zoom 3 it is **100% of 2,611,200**, six minutes to arrive at a uniformly black canvas | `fr_inset`: the main cardioid and the period-2 bulb answered in at most four multiplies instead of 144, gated by their bounding boxes so a view holding neither pays **+1.1%**. Default view **120 → 49.4 s**, zoom 3 **361 → 8.2 s**. Modelled on `tools/frref.py` at 660 execution clocks an iteration — the calibration that reproduces the ~115 s above — and the picture checked on the machine: **0 differing pixels** of 65,448 at zoom 0 and again at zoom 1, against the build before it | §40.5 |
+| Fractal's MIRROR | four of the five types are symmetric and `FT_SYM` said so from the first version, unexploited: every row of the frame computed, including the 84 of 170 that are another row negated | `fr_stepv`'s passes counted from the AXIS ROW rather than row 0, so a row's twin is the row IMMEDIATELY after it and `fr_line` still holds it — no cache read, and `rc = 0` is the pre-phase order exactly. Default view **55.0 → 30.4 s**, zoom 3 **6.5 → 3.3 s**; 1.81x and not 2x because a mirrored row is still emitted and 5.2 s of that frame is drawing calls. Available only where `cy = 0` lands on a canvas row — the default, Reset and both menu zooms. On the machine: **0 differing pixels** at zoom 0 and zoom 1, and Burning Ship (which declares no symmetry) byte-identical | §40.6 |
+| Fractal's CYCLE CHECK | the three types §40.5 cannot describe, and every view reached by clicking, still iterate an interior point to the full cap | a repeated state can never escape, so the orbit is compared against a reference refreshed every 8 iterations — exact by determinism rather than by sweep. Elephant valley z=3 **181.6 → 127.5 s**, Julia Rabbit **90.0 → 56.6**, Tricorn **60.7 → 49.8**, Burning Ship z=1 **290.6 → 250.4**. It costs **~5% of every iteration** and two views pay it for nothing: north tip **+4.4%**, seahorse **+3.4%** | §40.7 |
 | Tracker row scroll | 30+ strips erase-then-text | 2 `gfx_scroll` + 3 strips | §45.12 |
 | Tracker row scroll, LATE frame | the 1-row reach missed it, so 35 strips — and the repaint outlasted its own frame, so the next one was later still: **0.72 full repaints/s** against a module changing pattern **0.13** times a second | scroll 8n pixels and relight **2n+1** strips, n up to `TUI_SCRL_MAX` = 4. 0.13/s, and 13.1 → 15.2 frames/s | §45.12.2 |
 | Tracker on a tier-0 machine | a per-position repaint it does not have | one banded line | §45.9.1 |
@@ -1271,17 +1292,54 @@ list to check yourself against.
 | Tracker's text frame clock | one frame per tick: a 120 ms row drawn 110, 110, 110, **165** ms after the last, and on a module past 18.2 rows/s the display never shows some rows at all | `FSXW_FRAME` — the fsx sub-tick, 54.6 Hz, and it **yields** rather than polls, so the mixer keeps the machine (the retrace clock that came between cost 28.8% of the CPU and 13% of the audio) | §45.16, §53.5.1 |
 | Tracker's text shadow rebuild | all 64 rows in one frame — 256 `mp_cell2txt` + 3,776 `lodsb`/`stosw` + a 9,676-byte blank ≈ **140–330 ms, once every ~9 s**, reported from the field as the screen stopping and then jumping | `TTX_SHCHUNK` = 4 rows a frame, cursor starting at the visible window and wrapping. **Confirmed on the 5150**: 51 s of bracket, frame spacings 432 × 1 tick / 247 × 2 / 2 × 3 and nothing else, with all five pattern boundaries indistinguishable from the baseline. (§45.13.4 took the shadow to 82 rows — 328 calls, 21 chunk frames instead of 16 — which lengthens the *rebuild*, not the frame the field run measured) | §45.13.2 |
 | Screen saver, sea life | a swimmer was a 4bpp block through `gfx_blit4`, which on a 1bpp adapter costs **2,863 cycles a ROW** near enough whatever the row's width - 540 µs a row at 20 px and 611 at 36 - so four large swimmers were **73.4 ms of work in a 54.9 ms tick**, and the pass was **76.2 ms, 13.1 fps** | the swimmers were 1bpp art all along: the union is composed as a BAND and put down with `OSAPI_GFX_BLIT1`, a `rep movsw` a row over five or six bytes instead of eighteen. The arrival is **10.20 → 1.26 ms** and the frame **73.4 → 32.8**, so the pass is **54.93 ms on all three adapters - one tick, flat to 54.90-54.95 over 199 frames**. Same generator, same sizes, **0 differing pixels** on CGA, Hercules and VGA | §79.5.8 |
-| Paint brush stroke | width² per pixel of travel | the dab's leading edge, one `gfx_fill` per step | docs/PAINT-NOTES.md |
+| Paint brush stroke | width² per pixel of travel | the dab's leading edge, one `gfx_fill` per step | docs/plans/completed/PAINT-NOTES.md |
+| Paint: a one-bit picture's full repaint on a 1bpp adapter, `kern_big` | `pt_ex1` expands each row to 4bpp and `gfx_blit4` decodes it back, one call a row, for any picture whose width is off the byte grid: OS8088.GIF's 110 rows **809 ms** | one `gfx_blit1` a band, `rep movsw` a row with the tail byte merged under a mask: **36.6 ms**. (`kern_small` keeps the row loop by decision — a 192-row undo there is **1,309 ms**, and a body for it measured 55 and was refused, SPEC.md §5.4.2.5) | SPEC.md §5.4.2.5, §42.23.4 |
+| Paint: the tool palette, every full repaint | eight glyphs at one `gfx_hline` per run, ~30 calls each: **201 ms**, half the paint | one `OSAPI_ICON_DRAW` a glyph: **111 ms** (§42.26); then, on a 1bpp screen, a whole ROW of two buttons composed and blitted once — 24 drawing calls to 4: **33 ms** (§42.26.1). The strip beside it is the next item, 106 ms of ~35 small calls | SPEC.md §42.26, §42.26.1 |
+| Paint: undo / redo | `pt_uswap_row` at 3,878 cycles a row — eight block setups for seven bytes each, and `pt_imark` once a ROW: **156 ms** of a 211 ms undo | runs of saved blocks exchanged as one loop, two words a turn, one mark a swap: **95 ms**, 2,360 a row | SPEC.md §42.8.6.2 |
 | Paint undo | whole canvas | row-granular and lazy | ibid |
 | Paint's canvas, redrawn | a BMP in memory, transposed into the card's four planes on every repaint - 106.9 cycles a pixel of which nearly all is the transpose, **1,148 ms** for 466x110 | the canvas IS four planes, so a repaint is a COPY: **162 ms**, 7.1x again and **44x** on the run writer this line started from. No heap: the two formats want the identical stride | §42.13, §5.4.3 |
 | Paint's canvas on an UNCOVER, 1bpp | the raise cache banked the tool column and the bottom strip - 3 KB - and left the canvas to be redrawn: an uncover issues a **376x110** `gfx_blit4`, and the whole 466x110 canvas is **399 ms** on a cycle-accurate 5150/CGA (31.2 cycles a pixel in `sw_blit_row`, 1.4 in `gfx_blit4`, and §5.4.1.2 had already taken the 2x in the loop) | on a 1bpp adapter the WHOLE content is banked instead - measured **9 KB** against the band's 3, and granted - so an uncover issues **no canvas blit at all**. The reduction cannot be made cheaper (the canvas is 4bpp because it is the FILE, and §39.4 maps sixteen colours onto three classes), so it is not made at all | §11.96.11.3 |
 | Paint's Copy and Paste | the clipboard was packed 4bpp whatever the canvas was, so a Copy off a four-plane canvas transposed the selection out a pixel at a time and a Paste transposed it back - a row-table lookup and a four-bit gather, or four read-modify-writes, PER PIXEL. Bracketed entry-to-return: **1,044 cycles a pixel to copy and 1,619 to paste**, which is **4.38 s and 6.79 s** for a 200x100 block at 4.77MHz - beside an Undo of the same rows that is a `rep movsw` and instant | the clipboard holds what the CANVAS holds, so a row is four byte runs and a row is four byte moves - and neither inner loop tests per byte what it can decide per operation, so a middle byte is a shift and a STORE: **96 and 145** cycles a pixel, **0.40 s and 0.61 s**, which is **10.9x and 11.2x**. Measured with the block off the byte grid at BOTH ends; on it, 56 and 102. What is left is the variable shift an unaligned phase needs, 8+4n on an 8088 | §42.13.3 |
+| Paint's Copy and Paste on a 1bpp ADAPTER | the planar row above was the only byte path: a one-bit canvas (every Hercules and CGA since §42.23) and a packed one went through `pt_getpx`/`pt_setpx` a pixel at a time, and `pt_setpx` folds every pixel into the band table. Bracketed on a 5150 with Hercules, 200x100 off the grid: one bit **714 and 2,005 cycles a pixel, 2.99 s and 8.41 s**; packed 694 and 1,808, 2.91 s and 7.58 s | the three formats are ONE bitstream - packed is a plane of four bits a pixel, one bit a plane of one - so the planar grab and merge serve all three with the column counted in bits: one bit **28 and 67, 0.12 s and 0.28 s** (25x and 30x), packed **91 and 175, 0.38 s and 0.73 s**; and 10 bytes smaller | §42.13.3.1 |
 | Paint's canvas going back to nibbles | `pt_topacked` was `pt_line_get` then `pt_line_put` - a planar row unpacked into one colour index a BYTE and packed again, two passes and a 736-byte buffer between them to move eight bits: **377.7 cycles a pixel**, **4,056 ms** for 466x110. On a two-card machine that is what a window dragged onto the mono monitor costs before it draws | one loop: four plane bytes of a byte column in, four packed bytes out, eight `shl`/`rcl` pairs a pixel and no buffer between. **108.4 cycles a pixel**, **1,165 ms**, 3.48x. The break-even against KEEPING the planes - 164 ms a repaint through `gfx_blitp` against 1,161 through `gfx_blit4` - goes from 4.1 repaints to 1.2. Two table designs were costed against the shift loop and both lose | §42.13.1.2 |
 | Paint's GIF save, per row | `pt_line_get`'s planar loop is the writer's row reader, one call a row, and a pixel in it is eight shifts wrapped in a `cmp`/`jae`/`dec`/`jnz`: **190.3 cycles a pixel**, 18.58 ms a row, **2,044 ms** of a 466x110 save | the whole byte column unrolled, the rolled loop kept for the partial one at the end of a row: **141.1 cycles a pixel**, 13.78 ms a row, **1,516 ms**, 26% off every save. `tests/paintrow.py` calls the routine directly - nothing that draws goes near it | §42.13.1.2 |
 | Paint's GIF **open**, the LZW loop | LZW hands a string back last character first, so the reader unwound it onto a character stack and emitted it in reverse - a near call per pixel into `pt_gemit`, two more around it for `pt_gpush`/`pt_gpop`, and a `pt_pmap` lookup inside the innermost one: **999 cycles a pixel**, **10.6 s** of a 466x110 picture | the stack the walk fills IS the string, backwards - so it is filled DOWNWARDS from the top of the same 4,096 bytes and comes out forwards, and a run is one `rep movsb` at 17 cycles a pixel. Row end, crop and interlace are decided once per RUN (30 pixels here), the palette once per STRING: **205 cycles a pixel**, **4.87x**, for **27 bytes** and three routines deleted. With the row packing below it, `OS8088.GIF` opens in **3,494 ms on a VGA against 12,547, and 2,687 against 12,755 on a CGA** | §42.21, `tests/paintlzw.py` |
 | Paint's GIF/BMP open, per row packed - FOUR PLANES | `pt_line_put`'s planar path is the decoders' inner loop, and a pixel in it is `mov bl, [pt_line+si]` / `inc si`, eight shifts and `dec cl`/`jnz` - **25 bytes against 32 clocks**, so it was paying the 8088's FETCH floor and not its clocks: **169 cycles a pixel**, 16.53 ms a row | `lodsb` off a walking `SI` (one byte, not five) and the whole byte column straight-line: **125 cycles a pixel**, 12.21 ms a row, 1.34x, for 125 bytes. §42.13.1.2 is the same finding on the way OUT, and this is the way in | §42.13.1.4 |
 | ...and per row PACKED, which is what a 5150 runs | two pixels are one byte and the loop decided PER PIXEL which nibble it held (`test si, 1`), re-derived the destination byte from the column (`mov di, si` / `shr di, 1` / `add di, bx`), and asked on every even pixel whether it was the last in the row: **185 cycles a pixel**, 18.08 ms a row | the pair is the unit - `lodsw`, one `shl`, an `or`, `stosb`, and the count decided once: **48.8 cycles a pixel**, 4.77 ms a row, **3.79x**, and **12 bytes SMALLER** than the loop it replaced. It is why the 1bpp adapters end up 4.75x on the whole decode against the VGA's 3.59x | §42.13.1.4 |
 | A 4bpp canvas blit on VGA | one write per coalesced RUN, at **1,797 cycles a run whatever it covers** — so os8088.gif's 50% dither is 18,978 runs and **7,146 ms** of one `gfx_blit4`, with the pixel count barely in it | the row is priced and a detailed one is transposed into the four planes at **106.9 cycles a pixel**: **1,148 ms**, 6.23x, and 4.88x on the odd destination phase. A FLAT row keeps the run writer and pays 4.2% for the pricing | §5.4.1.3 |
+| PiXEL: a full repaint of the window, the yardstick its gestures are held against | wave 1's empty window: **297** primitive calls on VGA, 293 on Hercules, 191 on CGA (~225 ms of fixed parts) | with a picture and the colour face: **279 / 220** (Hercules / VGA, `pxdraw`, 2026-10-06) - **363 / 310** while the filmstrip's seven thumbnailed cards were under the canvas, until the owner had it withdrawn (§106.21). It is not a gesture and must not become one: every row below is a fraction of it, and `pxdraw`'s identity assertion holds each gesture's glass to it pixel for pixel | §106.4, §106.15, §106.21, `tests/pxdraw.py` |
+| PiXEL: an open's drawing (Revert of CITY.PCX, decode included) | drawn by REGION: the toolbar, the panel column, the filmstrip and the status bar whole at the end of the decode - **597 / 660** calls, 216 of them the buttons ringing again over buttons that had not moved | each region RECORDS what it drew and `px_usync` draws what moved: **103 / 107** with no filmstrip (§106.21, 2026-10-06); 107 / 109 with it, 125 / 141 when §106.15 measured it | §106.15, §106.21 |
+| PiXEL: a status field (the free-memory sample, every 91 ticks) | one run of **14 cells** (12.6 ms of glyphs at 0.9 ms a cell) | one run of the cells that changed: **1 cell**, one `font_run` | §106.15 |
+| PiXEL: a pan step (an arrow) | wave 2: **0.29 s** on the 5150/CGA, **0.56 s** on the XT/VGA | **0.29 s / 0.49 s**. A pan DOWN is one `gfx_scroll` and the exposed strip's composer bands - **5 / 6** calls; ACROSS saves and restores the strip, **47 / 72** (38 / 60 before §106.21 gave the canvas the filmstrip's rows) | §106.17, §106.15, `tests/pxbench.py` |
+| PiXEL: a zoom step, the canvas covered | wave 2: **0.87 s** / **4.31 s** | **0.87 s / 3.71 s** - the CGA's is its 1bpp DDA and stood; the VGA's took the butterfly (70 → 45 cycles a pixel into planes) and the composer (62 → 54). **17 / 26** calls (14 / 22 on the shorter canvas before §106.21) | §106.17, §106.15 |
+| PiXEL: Fit | wave 2: **0.52 s** / **2.41 s** | **0.46 s / 1.95 s**, **15 / 21** calls. A colour pixel through the composer is still 116-137 cycles against the plan's 25 - nine bus bytes at 1.4x, the 8088's fetch floor | §106.17, §106.15 |
+| PiXEL: hide / show the panels (a panel collapse) | wave 2 (`pxpaint`'s API hits): a collapse **98**; Show Panels **120 / 140** before §106.15's records | Hide Panels **14 / 20** (the canvas's bands, nothing of the chrome); Show Panels **107 / 140** - a repaint of the regions that moved, the dearest gesture and the rarest (98 / 136 before §106.21 gave the middle band the filmstrip's rows: Image Info runs to the status bar now) | §106.14, §106.15, §106.21 |
+| PiXEL: Next / Prev | — | an open each, the decode included (G8.GIF / CITY.PCX): Next **63 / 52**, Prev **116 / 114** with no filmstrip (§106.21, 2026-10-06) - **83 / 138** and **129 / 196** while the strip's two cards whose highlight moved, and their thumbnails, were drawn with them | §106.21, §106.26 |
+| PiXEL: open MOUNTAIN.BMP (256x192 24-bit, the cube) | wave 2: **34.55 s** / **37.68 s** - Floyd–Steinberg's three error passes at **1,361 cycles a pixel**, and 18 reads of 8 KB | **18.23 s / 19.96 s**, first rows 3.08 / 3.18 s - the blue-noise ordered dither, **139** cycles a pixel; 10 reads of 16 KB | §106.17, `tests/pxbench.py` |
+| PiXEL: open CITY.PCX (320x240 8-bit RLE, its own palette) | wave 2: **15.61 s** / **21.64 s**, first rows 3.33 / 6.99 s - PCX runs 38.7 M cycles; the VGA's 256 mixing plans **3.96 s** before its first row | **12.78 s / 16.62 s**, first rows **2.69 / 4.60 s** - a literal byte four instructions (18.4 M); the plans **2.28 s**, exact to the bit (a coarse grid would be faster and approximately right, and is not shipped) | §106.17 |
+| PiXEL: BIG.BMP's first rows (640x480 8-bit, 308 KB) | **3.64 s** on the 5150 (4.05 at wave 3's base): the wake's deferral counted a row painted that the canvas clipped, so both 16 KB slots (2.5 s) were read before the first row that reached the glass. The whole open is 35.23 / 41.00 s | **1.34 s / 2.95 s** (the VGA waits for its palette's plans) - `px_onglass` asks whether the painted rows REACH the canvas | §106.22, §106.18, §106.17 |
+| PiXEL: open VACATION.JPG at 1/8 (640x480 4:2:0, 87 KB) | wave 4: **31.4 s** / **34.3 s** - the loop round the fast table, a clear and walk of 64 zigzag words a block, three `mul`s a block | **23.8 s / 27.3 s**, first rows 4.6 / 4.5 s - a bit POSITION and no window, a loop per scale (1/8 runs only the skip loop, ~160 cycles a symbol), the MCU as a program of blocks. The floor: 126,227 Huffman symbols, ~4 s at EVERY scale, and 6.1 s of disk | §106.22 |
+| PiXEL: open VACATION.JPG at 1/2 | wave 4: **63.2 s** / **67.4 s** | **46.1 s / 50.0 s**, first rows 2.8 / 3.9 s - dequantised as read (`imul` into place), the IDCT's multiplies by table (`(x K) >> 8` as a byte and a word lookup and an add, where `imul` was ~140 cycles). Of the 1/2 decode: IDCT 10.0 s, colour 7.5, rows out 3.2, entropy + dequantise 19.6 with the UI's disk reads inside it | §106.22 |
+| PiXEL: open VACATION.JPG at 1/1 | wave 4: **151.5 s** / **154.7 s** | **116.1 s / 119.9 s**, first rows 6.2 / 6.3 s | §106.22 |
+| PiXEL: VACATION.JPG by fast open (an 8088, 1/2) | a strict cover (`2^-s >= Z_fit`) took **1/1** on a 640x480 picture in this canvas - **150 s** on the 5150 | the coarsest scale the canvas shows at Fit magnified by at most 4/3, so **1/2**: wave 4 65.2 / 67.4 s, now **47.4 s / 50.0 s**, first rows 3.7 / 2.8 s. Zooming past it re-decodes finer on the worker | §106.19, §106.22 |
+| PiXEL: open ROOM.JPG, progressive at 1/4 | wave 4: **127.8 s** / **131.3 s**, first rows **115.1 / 115.2 s** | **62.4 s / 66.1 s**, first rows **55.7 / 55.9 s** - a refinement scan's correction bits COUNTED a history byte at a time (a 256-byte popcount) where only 1/4's three kept positions need their value. A progressive picture's first rows are its whole store's decode | §106.22 |
+| PiXEL: open CAT.GIF (320x240, 256 colours, interlaced, 70 KB) | wave 3: **31.8 s** / **35.7 s** (35.5 / - before wave 3's own pass) | **25.2 s / 29.6 s**, first rows 3.1 / 4.8 s - `os88lzw.inc`'s code reader in registers, a root code (62% of them) handled first with its one character, a run's row and screen end one compare (79.6 → 53.3 M cycles by the model) | §106.18, §106.22 |
+| PiXEL: open BALLOONS.PNG (320x240, a palette, 41 KB) | wave 3: **16.7 s** / **20.6 s**; **16.43 / 20.98 s** at wave 8's head | **15.24 s / 19.78 s**, first rows 4.53 / 7.02 s (the VGA's wait is its 256 plans) | §106.22, wave 9's PNG pass, `tests/pxbench.py` |
+| PiXEL: open HOUSE.PNG (320x240 RGB, 165 KB) | wave 3: **49.5 s** / **52.6 s** (65.3 before wave 3's own pass); **45.98 / 48.35 s** at wave 8's head - inflate **344.7** cycles a byte written (396 at wave 3), a literal ~230 cycles, Paeth ~250 a byte | **39.80 s / 42.20 s**, first rows 2.65 / 2.06 s - inflate **240.3 / 239.1** cycles a byte: one budget counter in the literal loop, two literals a turn, the length/distance extra bits inline, Paeth branch-light two a turn (exact over all 16,777,216 triples), word moves for the long block copies. The disk is 11-12 s of it and stays: a cylinder an `int 13h` is near the drive's floor | §106.22, wave 9's PNG pass |
+| PiXEL full screen: Mode X, 320x240 in 256 (the VGA's default) | — | its colours (the DAC) **0.37 s**, the picture whole **1.85 s**, 115 cycles a pixel: a sample and a copy. A pan MOVES what stays through the latches and renders only the strip it exposed | §106.23, `tests/pxfsx.py` |
+| PiXEL full screen: 13h, 320x200 in 256 | — | **0.27 s + 1.55 s**, 116 cycles a pixel; a pan moves a byte at a time and renders the exposed strip | §106.23 |
+| PiXEL full screen: 12h, 640x480 in an adaptive sixteen | — | the weighted median cut and its plans **2.81 s**, the picture **26.4 s** - the diffuser's ~250 cycles a pixel plus ~95 into planes, **410**: the 8088's fetch floor on ~45 bytes of loop, not a slow path left in. Every dithered mode renders whole on a pan or a zoom (the error runs from the top-left) | §106.23 |
+| PiXEL full screen: the EGA's Desktop, 640x350 in os8088's sixteen (a same-mode bracket, `OSAPI_GFX_BLITP`) | — | **no EGA under MartyPC**, so it is measured on the VGA's own 12h, the same code path at 640x480: its colours (the 256 entries' plans against the fixed sixteen) **2.65 s**, the picture **26.8 s**, **416** cycles a pixel - 12h's adaptive mode to within 2%. An EGA's 640x350 is 73% of those pixels, so **~19.6 s** by arithmetic, not by a run | §106.23 |
+| PiXEL full screen: C160, 160x100 in sixteen (the CGA's default) | the plan search **3.79 s** | expanded and pruned by its penalty: **2.74 s**; the picture **1.38 s**, 410 cycles a pixel | §106.23 |
+| PiXEL full screen: CGA 320x200 in four | the set chooser **7.88 s** | targets heaviest first, a candidate abandoned once past the best: **3.44 s**; the picture **5.25 s**, 390 cycles a pixel | §106.23 |
+| PiXEL full screen: CGA 640x200 in two | the picture **11.4 s** - the error row a pair swapped a row, written read-modify-write | the in-place row above **9.96 s**, the two-colour arm (an `xlat` and an immediate for a plan's two lookups) **8.83 s**; its colours 0.15 s, 330 cycles a pixel | §106.23 |
+| PiXEL full screen: Hercules 720x348 in two | — | **0.19 s + 16.1 s**, 310 cycles a pixel (the luma diffuser) | §106.23 |
+| PiXEL: an animated GIF's frame (BOUNCE.GIF, 96x72, ten frames) | — | **2.7 / 3.8** calls a frame (2.8 / 4.5 at §106.25): the dirty rect's composer bands (16 rows a band) and nothing of the chrome, under a ceiling of 12; the stopped frame held to a repaint from nothing | §106.25 |
+| PiXEL: an animated GIF's frame with a 256-entry table of its own | **~5.8 s** of `pa_mkmap` (256 x 256 distances) EVERY frame, the cancel never polled - every key waited for it | the map KEPT with its table, the picture and the palette's size, so a frame whose table repeats pays **2 ms**; a new table **3.0 s** (an entry that repeats the one before takes its map, a candidate dropped once its partial sum passes the best), and the cancel answered within an entry | §106.26 |
+| PiXEL: a palette operation (Invert, Brightness/Contrast, Gamma, ...) | the 256 plans' search on the UI task: the window took **no key for ~2.3 s** on a 4bpp display | the WORKER builds them (`JOB_TABLES`) and the old picture stays until they are drawn; Invert **23 / 30** calls, its Undo an EXCHANGE with the banked palette and plans, **22 / 28** and instant. A parameter CARD going up was a full repaint, **391 / 350**, and is the card alone, **28 / 40** - and since §106.26 after a SAVE too, which had given the plans' part back so the search fell to the UI task again (the wave-7 review's F14) | §106.24, §106.26 |
+| PiXEL: Blur (a 3x3 pixel operation, CITY.PCX 320x240) | — | **49 s** on the XT/VGA, the menu included (rotate or flip 9-12 s, Crop 14, Pixelate and Resize 1/2 34, Sharpen 38, Emboss 42, Edge 48): on the worker a row at a time with progress and Esc, and REFUSED BEFORE IT STARTS with the arithmetic when there is no room (`Blur needs 302K; 120K free`) | §106.24 |
+| PiXEL: Save BMP / Save PNG (CITY.PCX 320x240, Save As's card and dialog included) | — | **BMP 33 s, PNG 113 s** on the XT/VGA (PIX 29, PCX 37, GIF 56): the worker encodes into the ring's two slots and the UI task writes a temporary, renamed over the name only when the last slot is down. PNG is fixed-Huffman deflate with a 16 KB window and chains of 8 | §106.24 |
+| PiXEL: the longest UI-task callback with PiXEL in front | wave 5: **10.63 s** (a cache write) and 0.75-2.75 s a decode's start and end; wave 8's first build **4.32 s** (a visit and a make in one call); **2.42 s** at wave 9, a thumbnail's hidden decode ending (`pxthumb`) | **no idle engine since §106.21** (2026-10-06): the thumbnails' steps went with the filmstrip, so a PiXEL that is still runs nothing in front but the five-second free-memory look, and what is long is what the user asked for - an open's start and end, one `int 13h` at least (~0.4 s). Behind another window: **4 callbacks, 0.37 s of the UI task in 20 s, the longest 0.127 s** (`pxfolder`, the VGA XT) | §106.21, §106.25, §106.26 |
 | Per-switch CPU accounting | `sch_account` on **every** `task_yield`, 500 cycles a call. On a bare desktop `sch_switch` finds nobody ready and resumes the caller, so all 1,048 of them a second charged a task and then went on running that same task: **10.9% of a 4.77 MHz 8088**, and 11% of an idle `ui_task` pass | charged at `.pick`, behind `cmp dl, [sch_cur]` — **17/s, 0.18%**, and **exact**: the timestamp is good for an interval of any length, so a skipped charge rolls into the next one and the same desktop still bills **99.6%** of the elapsed window to task 0. +10 bytes of `.text`. It buys nothing with two runnable tasks (measured: 399 of 400 switches are real changes) and that is by design | §8.1.1, `tests/schacct.py` |
 | Menu save-under | 20KB claimed permanently, then 20KB per menu | sized from the rect actually dropped (~4KB VGA, ~1KB Hercules) | docs/KERNEL-MEMORY.md |
 | Covered background window | skipped the frame entirely | draws its visible region | §11.3 |
@@ -1293,6 +1351,16 @@ list to check yourself against.
 | Moving the cursor | erase-then-draw, two walks, so every byte where the old and new cells overlap is written **twice** — and the value in between is the background, `ffff` on all twelve rows inside a window. ~6.5% of a 20 ms Hercules frame, on every mouse packet | each byte written **once**: pass 1 skips what pass 2 will write, pass 2 sources its background from the save buffer. No gate, no union walk, and the pair unmoved at 544 counts against 541 | §7.1.2, docs/FIELD-NOTES.md 6 |
 | A renderer row step | `call gfx_nextrow`: a near call plus two CS-overridden memory reads, **three times per scan line** | three register instructions, parameters hoisted out of the loop | §39.3 |
 | `gfx_lock` + `gfx_unlock` — the pair every drawing burst pays | the mouse cursor over a 16x16 cell it never fills: a save, a white pass and a black pass, three walks over the same bytes, plus a restore — **17.82** guest-instruction counts a pair on Hercules, ~6.4 ms of the field machine, 11.6% of a 55 ms frame | the arrow's real 8x12 cell, no third byte, and on 1bpp **one** fused read-bank-paint-write pass: **5.41**, ~1.94 ms, 3.5% — **3.29x**, output byte-identical on all three adapters | §7.1, Part 9 Set 7 |
+| Desk Calendar: an idle beat, and a minute with nothing due | - (wave 2 priced it, unmeasured) | **0 primitive calls**: one `OSAPI_CLK_GET` and a compare a beat (every 36 ticks), a scan of at most 48 records a minute. Counted by `tests/deskcalperf.py` - a breakpoint on every drawing cell, a call counted when its far return is the calendar's segment - over five beats and a minute boundary on the VGA XT, four on the 5150/CGA | §110.3 |
+| Desk Calendar v1 (the titled window, v2 replaced it): its full paint | wave 2's month alone, "~22 calls"; wave 4 **54** / **28**, 159 / 106 ms, before the agenda had gaps and the boxes an inset | TALL (VGA, EGA, Hercules) **65** with three tasks - 24 runs, 36 fills (the gaps, one under each agenda line but the last, the strips between task rows, the row under each box, the column of inset left of the boxes), 4 frames (the selection and the three check boxes), the rule; COMPACT (CGA) **31** - 15 / 14 / 1 / 1. **177 ms / 117 ms** first call to last on MartyPC's 4.77 MHz XT and 5150; the About card's take-down repaints the same picture in the same count. The +11 and +3 are fills of rows that are ground - a pixel each, once - and are the price of a descender that no longer meets the next line and boxes that no longer touch (§110.9) | §110.3 |
+| Desk Calendar v1: selecting another day (v2's row is below) | - | the old frame and the new, the heading, and ONE run per agenda line that was or is now occupied - plus today's field when the frame leaves it (the white frame cuts its inverse): **6 calls** from today with two appointments to an empty day, 21 / 24 ms | §110.3 |
+| Desk Calendar v1: a reminder going off (v2 has no alert - its row is below) | - | **one run** of the calendar's own - its agenda line, `!` to `-` - and the alert's own paint (5 calls, OK alone); the chirp is two `OSAPI_SND_TONE` requests and the toast costs the window nothing. **And a save**: the FIRED mark owes the state file's write at the next quiet poll, ~2 s later - 3 reads and 8 writes at the drive, **~4.4 s on the lock**, landing under the alert, so an OK clicked then waits behind it (`deskcalperf` counts it at the drive) | §110.3, §110.6 |
+| Desk Calendar: a boot that autostarts it | no Sticky App row: **0** disk calls after the desktop's paint (a byte compare, `[sc_nrows]`) | a SYSTEM.CFG with the row: **+0.55 s** reading the trailer before the paint, then **+3.62 s** in `stik_boot` - 7 `int 13h` reads, 44 sectors: the path, v1's 11-cluster package, the state file (**v2: the 16-cluster package, 50 sectors after the paint, `ui_task` at 19.22 s**) - and the first tick's compare-only registration after it (7 reads, ~2 s, §110.6). Measured cold, reset to `ui_task`, on the VGA XT: 14.85 s against 19.02 s (v1) and **19.22 s (v2)**. **On a day whose reminders came due before the boot** - the first boot of a working day - the missed marks owe a save at the next quiet poll - 4 reads and 8 writes, **~4.8 s more** on the lock ~2 s after the registration; the boot leg's fixture has nothing missed, so the 19.02 s leaves it out, and the UI leg counts it | §110.4, §110.6 |
+| Desk Calendar v2 (the widget): its full paint | v1: 65 / 31 calls, 177 / 117 ms (the row above) | **19 calls TALL** (VGA: 12 `BLIT1`s - 11 card slabs and the tag's plate - and 7 `OSAPI_GFX_DESK`, the two ground columns, three gaps and the tag's two sides), **12 COMPACT** (CGA: 6 + 6). **265 ms / 169 ms** from the first `dc_compose` to the last call's start on MartyPC's 4.77 MHz XT and 5150 (263 / 161 after the v4 review) - **a REGRESSION against v1's 177 / 117 ms and the design's ~90-110 ms, raised for the owner** (SPEC.md 110.6): every glyph on a slab's rows is composed into the band at ~0.49 ms. The About card's take-down was the same picture through `stik_redraw`; since the v4 review it is its rows alone (`stik_redrawr`): **6 calls, 54 / 95 ms**. Every pixel written once - no `font_run`, no fill under a glyph. `tests/deskcalperf.py`, budgets <= 20 / <= 14 asserted | §110.3, §110.11 |
+| Desk Calendar v2: a day select / a month / a tick | v1: 6 calls, **21 / 24 ms** a select | wave 4 **5 / 8 / 1** on TALL (88 / 136 / 17 ms), **4 / 5 / 1** on COMPACT (73 / 132 / 15 ms) - the select a ~4x **REGRESSION** against v1's time, raised for the owner (SPEC.md 110.6). After the v4 review **4 / 8 / 1** (**60** / 143 / 13 ms) and **3 / 5 / 1** (**48** / 140 / 12 ms): today's box is never redrawn (it is inverse selected or not) and a sub-rect `BLIT1` composes no string outside its bytes - still ~2.5x v1. A day is the new day's box (and the old one's when it is not today), a sub-rect `BLIT1` each, and card 2's slabs; PgDn is card 1 from the nav down and card 2; Space on a task its 11 x 11 (9 x 9, 8 x 8) box alone. A PRESS also pays the handle's reveal when it was down - one tag-row `BLIT1` of the include's, set aside here (SPEC.md 110.9). Budgets <= 5 / <= 8 / 1 asserted | §110.3 |
+| Desk Calendar v2: the handle revealed / hidden, an idle beat, a reminder | - (v1 has none) | **1 / 3** calls (one plate `BLIT1`; two `OSAPI_GFX_DESK` and the plate), 0 / 4 ms; **0** calls across four beats and a minute boundary; a reminder going off is **2** - card 3's two slabs (the CGA slot's, which the ringing reminder takes), 27 / 30 ms - and the toast; no alert. Its save (with the dismiss before it) 6 reads, 14 writes at the drive; a missed launch's 2 / 1 reads and 7 writes | §11.103.7, §110.3, §110.11 |
+| A widget DROPPED from under an application window | - (v1's widget had a title bar, so it was raised first and was the front window its own drop was written for) | **the widget's one `W_PAINT` AND every ordinary window over its old or new rect redrawn WHOLE** - chrome, the 15-call title bar and that package's `W_PAINT`, over pixels that were already right: `ui_drag`'s drop marks the windows over the vacated rect, and `.mbelow` the windows above the widget (§11.103.6). `deskdrag` E counts `wm_draw_win` **twice** for one Disk window over it; on a 5150 that is ~40 ms of title bar and a package's paint a drop, on the order of a second under a Note Pad window. A STANDING cost besides, for a widget left over the dock: every dock change marks it and every window above it. **Not cured** - 10-16 resident bytes kern_big does not have, the owner's (§110.9) | §11.103.3, §11.103.6 |
+| A widget under a moved window: the uncover | - (v1's window was raised by a click, and an uncover repainted its whole face: 65 / 31 calls) | **10 calls TALL** (8 `BLIT1` slabs, 2 `OSAPI_GFX_DESK`), **191 ms**, and **11 COMPACT** (6 + 5), **158 ms**, on MartyPC's 4.77 MHz XT and 5150 - a Disk window over the left 154 of the frame's 178 columns, from 20 rows down, dragged clear. The widget is the backmost window and has no drag cache (§11.103.6), so what the window vacated is the widget's own `W_PAINT`, and it recomposes only the slabs that meet `OSAPI_WM_DAMAGE`: on CGA the window covered nearly the whole 146-row face and it is one call short of the full paint. `tests/deskcalperf.py`'s uncover, asserted more than 0 and no more than the first paint | §11.103, §110.11 |
 
 Two entries in that table are load-bearing beyond their own numbers.
 **`OSAPI_WM_GROW` was called on every Note Pad keystroke** — free in the
@@ -1417,6 +1485,52 @@ In rough order of cost, and you do not always need all of it.
    session can conclude.
 6. **Watch it with your eyes** if the change is about flash or redraw. That
    judgement is made on hardware and by a person. Nothing above substitutes.
+7. **A size pass that must leave the hot path alone: diff it per ROUTINE.**
+   `tools/os88rdiff.py` assembles a package (or the kernel) at a base commit
+   and at the working tree and reports every top-level label as `same`,
+   `equ` (identical but for a layout-derived `equ` such as a segment base),
+   `relaxed` (identical but for BRANCH FORM), `changed`, `new` or `gone`,
+   with its size delta and its address shift and that shift's PARITY.
+   Relocated fields and relative branches are resolved to `label+offset`
+   against each build's own map, so a moved target is not a difference and
+   a retargeted one is.
+
+   ```
+   python3 tools/os88rdiff.py apps/video/video.asm e8f9e5a1 \
+           --hot 'vd_.*' --hot 'vp_(play|worker|hook|adue|frame)'   # exit 1 = moved
+   python3 tools/os88rdiff.py apps/video/video.asm e8f9e5a1 -D VP_DIAG   # a knob's arm
+   python3 tools/os88rdiff.py kernel HEAD~1 --show 'sch_isr'             # the kernel, one diff
+   python3 tools/os88rdiff.py --selfcheck                                # the tool, planted
+   ```
+
+   **The reason it exists is that a cold-only edit is not hot-safe.** NASM
+   assembles every `jz label` short when the target is in range and as
+   `jnz +3 / jmp near` when it is not, and every `jmp` as EB or E9 - no
+   source line says which. Delete forty bytes of cold code and some far
+   branch comes into range, shrinks by one or three bytes, and everything
+   after it moves by an ODD amount: the hot routines are instruction-identical
+   and no longer where they were. On a 16-bit bus (an 8086, a V30, every 286
+   here) a word fetch at an odd address is two bus cycles, so an odd shift
+   re-prices the loop; an 8088 fetches a byte at a time and does not care.
+   The first apps size pass's Video set (docs/reports/APPS-SIZE-P1-SET6-2026-10-12.md)
+   found five such branches and wrote them back by hand as `jnz .x / jmp near
+   .far / .x:`, which the tool reads as the five bytes nasm synthesises and
+   so reports `same`. `--hot` (repeatable, or `--hot-file`) names the
+   routines that must be `same` at a shift that is a multiple of `--align`
+   (2); a failure names each routine, groups them by shift and says WHERE
+   the alignment was lost - usually one `relaxed` routine, which is the
+   branch to pin. A `--hot` pattern that matches nothing is a failure, not
+   a pass.
+
+   The include path and literal `-D`s come from the Makefile's own recipe
+   at each commit; a Makefile VARIABLE (`$(VPDEF)`) is the caller's to pass
+   with `-D`. A commit is exported with `git archive` - its `.asm`/`.inc`
+   files only, a few MB - under `build/rdiff/`, which is removed afterwards.
+   The listings are made with nasm's `-Le`, the one listing that says which
+   `section` line a false `%if` threw away; every routine's listed bytes are
+   checked to add up to its size in the map, and a build where they do not
+   is named on stderr rather than trusted. `--lst A.lst B.lst` compares two
+   listings you already have (each with its `.map` beside it).
 
 **Under QEMU, wall clock is still a lower bound worth having.** Paint's
 measured figures under `make run-640` — a full-canvas flood fill in ~4 s, a
@@ -1449,8 +1563,8 @@ was ruled out (tens of seconds per 448×280 frame before the dither).
 | The tracker on an 8088 | SPEC.md §45.9 – §45.12 |
 | ArtfulType's performance contract | SPEC.md §46.1 |
 | Greying a control honestly | SPEC.md §47 |
-| Paint's design notes and what it cost | [docs/PAINT-NOTES.md](docs/PAINT-NOTES.md) |
-| Per-device cycle budgets on the floor machine | [docs/SOUND-PLAN.md](docs/SOUND-PLAN.md) |
+| Paint's design notes and what it cost | [docs/plans/completed/PAINT-NOTES.md](docs/plans/completed/PAINT-NOTES.md) |
+| Per-device cycle budgets on the floor machine | [docs/history/SOUND-PLAN.md](docs/history/SOUND-PLAN.md) |
 | Memory, and why there is no growth room | [docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md) |
 | `sysbench`'s three CPU books, and the tier that picks one | Part 8.1, below |
 | The benchmarks themselves | `tests/fontbench/`, `tests/typebench/`, `tests/gfxbench/`, `tests/sysbench/` (`make bench`) |
@@ -1524,6 +1638,49 @@ row and `shl clk/bit book` at 0.
 
 ---
 
+## Part 8.2 — `sysbench` by memory REGION: ANSWERED by SPKBENCH
+
+**Status: answered 2026-09-29, and the answer is no wait states.** SPKBENCH
+(`tests/spkbench/`, SPEC.md 45.25.1) carries the per-bank row this proposed -
+4 KB of `rep lodsw` in each 64 KB bank, 0 to 9 - and the owner's 5150 reads
+all ten within 0.02% (74,021-74,032 PIT counts), the SixPakPlus banks
+included; so do the T1100 Plus, the 286 and 86Box. The difference below was
+the speaker ISR's own cost (~395 cycles a sample on iron against the 325 the
+predictor assumed), not the memory. The rest of this section is the proposal
+as it was written, kept for why the question came up; a `sysbench` section
+remains unbuilt and is not needed for this.
+
+**The proposal, as written (2026-09-29):** `sysbench`'s
+RAM rows time ONE buffer wherever the package happens to land. The owner's
+5150 (docs/FIELD-MACHINES.md) is 256 KB on the planar and 384 KB on a
+SixPakPlus, and a question came up that the one buffer cannot answer:
+**does the machine run the same code at the same speed in every part of its
+RAM?** Every MartyPC profile here says yes by construction
+(`conventional.wait_states = 0` for the whole 640 KB).
+
+Why it came up (SPEC.md 45.25): Tracker on the PC speaker benches a 5150 at
+95% of the machine on MartyPC for both BEVERLY.MOD and ELYSIUM.MOD and holds
+both - and the owner's 5150 benched ELYSIUM at 101%, and BEVERLY starved
+briefly in its heavy passages (a recording of the speaker line shows the
+carrier exact at 5,524 Hz and the ring running dry for 2-3 ms at a time),
+where MartyPC's never runs dry. A module of 100-130 KB and the speaker's
+17 KB ring are claimed high in the arena, which on that machine is SixPak
+RAM. The SixPakPlus is documented as adding NO wait states, so the
+expectation is that this finds nothing - which is itself the useful answer,
+because it moves the search to the interrupt's own cost on iron.
+
+What the profile would be:
+- the same RAM-bandwidth rows (a `rep movsw`, a `lodsb/stosb` loop, an
+  `xlat` loop - the speaker ISR's and the shaper's shapes) run with the
+  buffer placed at **each 64 KB bank** in turn, 0 to 9, by a claim sized to
+  land there (or a far pointer the package walks);
+- the speaker ISR's cost per pulse (§34.11.7.1's `CYC_SPK_PULSE`) timed
+  with its RING in the low 256 KB and again above it;
+- printed per bank, so a card's wait states show as a step at its base.
+
+It is a `sysbench` section rather than a new package, and a MartyPC run is
+its control: flat across the banks there, by the configuration above.
+
 ## Part 9 — The field reports
 
 Part 2's calibration table has fifteen rows and **two of them were ever
@@ -1575,40 +1732,35 @@ worth taking:
 | `gfxbench: GFX_FILL 64x64 clipped` | **what §11.3's clip region costs a covered background window.** `WM_CLIP_SET+CLEAR` was measured; drawing *under* one never was. It sits next to its own unclipped row, so the gap is the answer | a little over the unclipped row plus the `SET+CLEAR` cell. Much more and `gfx_clip_run`'s re-entry is dearer than the region arithmetic it saves |
 | `gfxbench:` the whole **fullscreen block** | **whether a primitive costs what it costs wherever it is drawn.** Same code, same sandbox, different place on the glass, no chrome around it. The rows carry the same labels as their windowed twins so they diff by name | the primitives to be **boring** — landing on their twins. One that does not has found something position-dependent nobody believed was |
 | `sysbench: boot ticks` / `boot ms` | **how long the machine takes to boot** (§15.4) — the one thing this project could never measure, because it is over before a package can run. On a floppy machine it is mostly the 125-sector kernel read, and Sets 17/18 took it from 39.88 s to **9.94 s** by fixing §18.91's `AL` bug in both transfer loops - so 238 ms a sector is the number this row was written against and NOT the one to expect now | a number at last. Resolution is one tick, 54.925 ms, which on a boot measured in seconds is quantisation rather than noise |
-| `gfxbench: GFX_LSTEP x8` vs **`GFX_LSTEPV x8`** | **§5.6.8's batching, which was argued from §5.7's floor and never measured.** The two rows draw the identical eight pixels and differ only in arriving eight times or once | it already contradicted its own prediction: **118** in instructions, not the ~800 the floor implies, because `gfx_lstep` is not a rect primitive and its arrival is a far-call cell rather than `vga_rect_setup`. Expect higher than 118 on iron — far-call cells are 46.7 µs for ~7 instructions — but §5.6.8's own field figures imply **356**, and nothing reconciles that yet. **This is the row most likely to find something** |
-| `gfxbench:` the four **`GFX_LINE`** rows | **§5.6.6's dilated-line optimisation, in microseconds.** The instruction answer is already in (below); this is the duration. The two geometries are the same line transposed, 128 pixels each, so the pair checks itself | the two **thin** rows to match; `line shal fat/thin` near **300** (three walks, the control); `line steep fat/thin` near **156**, which is the claim |
+| ~~`gfxbench: GFX_LSTEP x8` vs `GFX_LSTEPV x8`~~ and ~~the four `GFX_LINE` rows~~ | **RETIRED, subject and all.** SPEC.md §5.12.7 took `gfx_line` and §5.6.7's resumable walk out of both kernels, so §5.6.6's dilation and §5.6.8's batching are questions about code that no longer exists. The five derived rows that decomposed them went too — a ratio whose inputs are gone divides uninitialised memory, which is Part 6 rule 3 exactly | nothing, now. What a field set should carry in their place is below |
+| `gfxbench: GFX_POINTS 8 pts` and **`24 pts`** | **what a committed POINT costs**, on the slot every app-side walker in the tree now goes through (§5.12.5). Two lengths is the whole measurement: `arrival + N × marginal` is two unknowns, so two readings determine it and any longer commit is read off the fit | an arrival near a far-call cell's **46.7 µs** plus §5.7's entry, and a marginal near Set 133's **165.96 µs** a point. A marginal much above that and a composing program should be committing a BAND instead |
+| `gfxbench:` `clear mask 2048` / `mask line 127x32` / **`GFX_BLIT1 128x128`** | **the band composer end to end** (§5.9, §5.12.2) — clear, rasterise, commit, which is what `GFXE_BAND` does and what four programs plus `SAVER.DRV` draw every frame through. The rows predate the library and were written as the app-side arm of an argument against `gfx_line`; the argument is settled and the arm is now the standard path | `mask line` well under the retired `GFX_LINE shallow thin` (Set 133 fitted **24.6 µs** a pixel against 31.6), and `GFX_BLIT1 128x128 pen` to land **exactly on** its unpenned twin on both 1bpp adapters — a gap there is a bug, since a 1bpp band already means lit and unlit |
 | `sysbench:` the **hard-disk block** | **§52's driver on real spinning MFM, which has never been measured** — and the first hard-disk twin of the floppy rows. Read-only by construction: it mounts, walks the FAT, reads one file and puts the volume back, because the disk it will run against is somebody's DOS 3.3 install (docs/FIELD-MACHINES.md) | anything at all — **and it has since been measured: 74,553 B/s against the floppy's 21,307, 3.5x** (Set 24). The floppy figure moved twice while this row said 7,457: check which side of Set 17 (the `AL` fix) AND of Sets 22/24 (§18.95's cache) a figure comes from before comparing anything to it. `HDD FILE_DFREE` is the one to watch — the 9-sector FAT window (§18.8) has to page across a 41-sector FAT, which is what §18.8.1 was written against |
 
 None of them says anything on an emulator, and two say so loudly: under
 `-icount` both shift rows measure identically and the derived per-bit line
 reads **0**, which is correct and is the caution block in miniature.
 
-**The two decomposed `lstep` rows are WRONG in the first field set that
-carries them, and they are recoverable by hand.** `lstep arrival us x100` and
-`lstep pixel us x100` were computed with a raw `sub`/`sbb`, which **underflows
-whenever the vector row measures larger than the scalar one** — which is what
-noise does the moment the two are close, and the whole point of the pair is
-that they might be. What comes out is a nine-digit number (a sighting run
-printed `514229986` and `385674937`), so it does not hide, but it is exactly
-Part 6 rule 3's failure: arithmetic that looks like a measurement. Both
-subtractions go through the floored `gb_sub` now, and an inverted pair reports
-an arrival of **0** and gives the whole cost to the pixel, which is what "the
-batching saved nothing measurable" honestly means.
+**The two decomposed `lstep` rows were WRONG in the first field set that
+carried them, and the reason outlived the rows — which is why this stays.**
+`lstep arrival us x100` and `lstep pixel us x100` were computed with a raw
+`sub`/`sbb`, which **underflows whenever the vector row measures larger than
+the scalar one** — which is what noise does the moment the two are close, and
+the whole point of the pair is that they might be. What comes out is a
+nine-digit number (a sighting run printed `514229986` and `385674937`), so it
+does not hide, but it is exactly Part 6 rule 3's failure: arithmetic that looks
+like a measurement. Every subtraction in the derived block goes through the
+floored `gb_sub`, and an inverted pair reports a term of **0** rather than four
+billion.
 
-Nothing is lost, because **both inputs are printed as their own rows in the
-same report**. Take `R_A` = `GFX_LSTEP x8 (8 calls)` and `R_B` =
-`GFX_LSTEPV x8 (1 call)`, both µs × 100 per iteration, and redo the two lines:
-
-| | |
-|---|---|
-| arrival, µs × 100 | `(R_A − R_B) / 7` |
-| pixel, µs × 100 | `(R_B − arrival) / 8` |
-
-That is the same pair of equations the harness solves — `R_A = 100(8a + 8p)`,
-`R_B = 100(a + 8p)` — so a set taken with the broken build is a complete set
-with two rows to recompute, not a set to retake. If `R_B > R_A` the equations
-have no positive solution and the answer is the floored one: arrival 0, pixel
-`R_B / 8`.
+**Both rows are gone with §5.12.7** — `gfx_lstep` and `gfx_lstepv` answer
+CF = 1 now — and their three companions went with them, which is the same rule
+one turn further on: *a derived row dies with its inputs.* Left in place they
+would have divided uninitialised `.bss`, which is the identical failure with
+nothing at all behind the number. The recovery arithmetic that stood here is
+dropped because there is no set left to recover; what a decomposition of the
+surviving slot looks like is the `GFX_POINTS` pair above, and it is two rows
+rather than a derived one on purpose.
 
 **Reading the fullscreen pairs had one trap, and §32's removal retired it.**
 `[bb_mono]` was one-way and `bb_mono_chk` five instructions cheaper once it
@@ -1904,7 +2056,7 @@ an ISA status-port `in` 8.7 us.
 `tests/deskbench.py` prices eleven ordinary actions against a fixed
 four-window scene (Control Panel, a Disk window on A:, Note Pad on
 `README.TXT` stretched to the band, Paint on `MEDIA/OS8088.GIF`). It had
-never been run — `docs/LAST-DROP-PERF.md` named it as a measurement that
+never been run — `docs/plans/LAST-DROP-PERF.md` named it as a measurement that
 *"has not been taken"* — so this is the first table and the point of writing
 it down is that the next one can be compared against it.
 
@@ -1947,7 +2099,7 @@ Three things fall out of it:
 - **Moving the BOTTOM window is outline-dominated on every adapter, and on
   VGA it is three times worse.** 0.96 / 0.97 against **3.15** — the only row
   in the table where the adapters differ in kind rather than in size, and the
-  mechanism `docs/LAST-DROP-PERF.md` names for it is VGA-only by
+  mechanism `docs/plans/LAST-DROP-PERF.md` names for it is VGA-only by
   construction (three extra `gfx_xor_rect` arrivals per strip; 1bpp pays
   nothing). Moving the TOP window instead reads 0.13-0.39 everywhere, so
   what is being priced is the repaint of the three windows above rather than
@@ -1958,7 +2110,7 @@ Three things fall out of it:
 **Two caveats on the whole table.** The scene is reproducible to about nine
 lit pixels and not to the pixel — CGA reads 78,821 / 78,825 / 78,830 across
 three runs of one build, because `new_window` waits on host time
-(`docs/HANDOFF-SOAK-FINDINGS.md` B5) — so a few tenths of a percent is noise.
+ — so a few tenths of a percent is noise.
 And the scene is identical to itself *per adapter*, not across adapters: the
 Display page is hidden on a single-adapter machine (§39.11.1), so the Control
 Panel holds record 0 on CGA and Hercules and the Display page on VGA. Compare
@@ -4173,7 +4325,7 @@ since there the padding IS the erase. It needs a per-run array of glyph
 pointers (80 cells × 2 bytes of `.bss`) or 8x the glyph-address lookups, so it
 is a real trade rather than a free one.
 
-**docs/LAST-DROP-PERF.md carries the rejected one in full** — the patch, the
+**docs/plans/LAST-DROP-PERF.md carries the rejected one in full** — the patch, the
 figures, the price and what would have to change for the answer to flip — so
 the next session that has this idea can read it instead of building it.
 
@@ -4658,6 +4810,16 @@ goes only on the `ibm5150_82_v4` machines, and the GLaBIOS twins keep 1:1.
 > so no config has to distinguish the two ROMs and `os8088_5150_cga_gla`
 > boots `combo.img` in 175 ticks. The ~250 ms abandon is still a fact about
 > GLaBIOS and still the reason not to take a disk number off it.
+>
+> **CORRECTED 2026-09-24: the ~250 ms abandon was never a fact about
+> GLaBIOS.** It was upstream MartyPC raising two IRQ6s for one RECALIBRATE.
+> The spare one left the BDA's working-interrupt flag set, so GLaBIOS's
+> 37-tick IRQ wait returned at once and its 5-tick RESULT wait (~250 ms) is
+> what expired. `tools/martypc/patches/05-fdc-recal-one-interrupt.patch` raises
+> one. With it GLaBIOS completes a 345 ms read first time
+> (docs/MARTYPC-DEBUG.md, *GLaBIOS "gives up..."*). The IBM ROM tolerates the
+> stale flag, which is why it "completed the identical reads". GLaBIOS is still
+> not where a disk NUMBER comes from, for the other reason that section gives.
 
 **And a run must be paced per SECTOR, not charged as one lump.** The first
 version delayed a whole multi-sector run in one silent block, which is not what
@@ -4979,7 +5141,8 @@ to say: go and find out what the machine is *doing*, not just how long it took.
 
 **The GLaBIOS exception.** Set 35 gave 2:1 media only to the IBM-ROM machines,
 because GLaBIOS abandons a floppy operation after ~250 ms and a 2:1 track read
-takes up to 400. At 1:1 no machine needs the exception and every config here
+takes up to 400 (that abandon was MartyPC's double RECALIBRATE interrupt and
+not GLaBIOS, corrected in Set 37's note above). At 1:1 no machine needs the exception and every config here
 carries the same disks; `os8088_5150_cga_gla` boots `combo.img` in 175 ticks.
 
 **"MartyPC's floppy is 1.17x slow."** It is 0.92x, and the sign changed twice
@@ -5104,7 +5267,7 @@ the wrong one — and the second of those was invisible until it was measured.
 
 `tests/lptlink` between the **5150** (Hercules GB101's LPT at **03BC**) and
 the DOS machine (**DIO-500 at 0378**), a LapLink nibble cable between them.
-Two runs, the master role swapped between them. **docs/NET-PLAN.md step 1.**
+Two runs, the master role swapped between them. **docs/plans/completed/NET-PLAN.md step 1.**
 
 **Neither end is os8088**, which is the point: no kernel byte is involved, so
 a result here is a fact about the cable and the protocol and cannot be
@@ -5195,7 +5358,7 @@ docs/FIELD-MACHINES.md.
 
 ### Set 40 — the network drive works, and a third of it is turnaround
 
-**docs/NET-PLAN.md step 2, on the iron**: the 5150 (GB101's LPT at **03BC**)
+**docs/plans/completed/NET-PLAN.md step 2, on the iron**: the 5150 (GB101's LPT at **03BC**)
 against the DOS machine (DIO-500 at **0378**), NET.DRV loaded and
 `OS88NET.COM` serving a 720KB image. The Control Panel reads **Linked, 1440
 sectors** — the image's exact size — a Disk window lists `APPS`, `MEDIA` and
@@ -5357,7 +5520,7 @@ pixels, which is what proves it pre-dates the change. One `pt_org` after
 
 ### Set 42 — the chrome flash under a drag, and a bug that was not there
 
-Two of the three open items in docs/HANDOFF-REDRAW.md, on a cycle-accurate
+Two of the three open items in docs/plans/completed/HANDOFF-REDRAW.md, on a cycle-accurate
 5150/CGA. One was real and is fixed; one was a misreading of a trace and is
 retired.
 
@@ -5444,7 +5607,7 @@ neither of which fires.
 
 ### Set 43 — a blit run goes straight into the framebuffer (SPEC.md §5.4.1)
 
-docs/HANDOFF-REDRAW.md's item B, and the largest single drawing cost in the
+docs/plans/completed/HANDOFF-REDRAW.md's item B, and the largest single drawing cost in the
 system. `gfx_blit4` coalesces runs of equal pixels and emits one `gfx_hline`
 per run — which is one `gfx_fill`, which is §5.7's per-call floor of clip test,
 display hook, adapter dispatch, `vga_rect_setup` and row-base arithmetic before
@@ -5471,7 +5634,7 @@ The whole Paint raise is 5,947.8 → **2,851.5 ms** on the textured canvas, and
 against the figure this round started from — before §11.96.10 gave a raise a
 damage rect at all — **9,090.1 → 2,851.5, 3.19x**.
 
-**Flat art gets faster too, which the plan doubted.** docs/PAINT-NOTES.md's
+**Flat art gets faster too, which the plan doubted.** docs/plans/completed/PAINT-NOTES.md's
 sketch was a plane-parallel decoder that "would beat this on detailed pictures
 and lose to it on flat ones"; this is not that. It keeps the run scan, so a
 solid row is still ONE run — it just costs less. Measured on `mkbmp`'s `flat`
@@ -5485,7 +5648,7 @@ run path, µs a row = 830 + 371 x runs      (830 = the scan and the row setup)
 — reproducing all three measured densities within 3% (flat 132.1 against 132.1,
 textured 2,352 against 2,430.7, fine 8,292 against 8,364.9). **That 830 µs is
 the term the "45x" estimate forgot**, and it is what decides whether the byte
-decoder needs a hybrid; docs/HANDOFF-REDRAW.md item B2 has the working.
+decoder needs a hybrid; docs/plans/completed/HANDOFF-REDRAW.md item B2 has the working.
 
 **Merging the two routines was worth 11%** — 2,698.1 → 2,430.7 ms — and that is
 the 8088 lesson rather than a tidy-up. Written as a `gfx_blit_span` that worked
@@ -5535,7 +5698,7 @@ identifies it; `make`'s own `N/354 clusters` line confirms it in one command.
 
 ### Set 44 — the blit stops working per run (SPEC.md §5.4.1.1)
 
-docs/HANDOFF-REDRAW.md item B2, built without its hybrid. Same session, same
+docs/plans/completed/HANDOFF-REDRAW.md item B2, built without its hybrid. Same session, same
 damage rect, cycle-accurate 5150/CGA, three run densities:
 
 | Paint's canvas | runs/row | pre-§5.4.1 | span writer | **decoder** |
@@ -5616,7 +5779,7 @@ same window, one pixel over, **508.3 ms against 259.1**. The odd body is 52
 bytes per eight pixels against the even one's 37, the carry epilogue being the
 whole difference, and it takes the spread down to 15%.
 
-**The crossover moved with it, and docs/LAST-DROP-PERF.md 3 is re-costed**: the run
+**The crossover moved with it, and docs/plans/LAST-DROP-PERF.md 3 is re-costed**: the run
 path is still `830 + 371 x runs` µs a row and the decoder is now 1,948, so the
 hybrid's band is **~3 runs a row** rather than Set 44's ~10, and what it buys
 on flat art is 1.96x rather than 3.9x. Same verdict, less of it.
@@ -5650,7 +5813,7 @@ from.
 
 ### Set 46 — Paint's palette stops being drawn (SPEC.md §11.96.11)
 
-docs/HANDOFF-REDRAW.md item C, in the half that fits. **Paint has no raise
+docs/plans/completed/HANDOFF-REDRAW.md item C, in the half that fits. **Paint has no raise
 cache at all and the reason is memory** — over its whole content that is ~9 KB
 on 1bpp, ~36 KB on VGA and ~150 KB grown, on top of the ~127 KB it already
 holds — while its repaint is the most expensive in the tree.
@@ -5713,7 +5876,7 @@ next one, not a build fix.
 
 ### Set 47 — item D measured, and not built (SPEC.md §11.91.3)
 
-docs/HANDOFF-REDRAW.md item D: key §11.91's marking on each window's **redrawn
+docs/plans/completed/HANDOFF-REDRAW.md item D: key §11.91's marking on each window's **redrawn
 region** instead of its rect. **A negative result, and the measurement is the
 deliverable** — it costs one guest run and it stops the next session spending a
 budget step on it.
@@ -6210,7 +6373,7 @@ per forced repaint, so counts under about ten say nothing.
 
 ### Set 54 — snapping in Y buys nothing, and the scroll recomputes what it could add
 
-The Y question was left open by Set 53 and `docs/SNAP-PLAN.md` §6. It is
+The Y question was left open by Set 53 and `docs/plans/completed/SNAP-PLAN.md` §6. It is
 answered: **a `WF_SNAP` in Y would gain nothing on any adapter**, and the
 investigation redirects to something that does.
 
@@ -6378,7 +6541,7 @@ sector, which is the guard working rather than this change being dear.
 `make SNAPAUDIT=1` carried a documented unexplained artifact: every window's
 callback reported a **constant 4 glyphs in bucket 7** whatever the app, which
 made any count under about ten worthless and left Piano, Arkanoid and Missile
-Command unresolved in `docs/SNAP-PLAN.md`.
+Command unresolved in `docs/plans/completed/SNAP-PLAN.md`.
 
 **It was `wm_draw_title`.** A caption's pen is **centred in the title bar by the
 kernel** and no application can influence it, and it was being attributed to
@@ -6430,7 +6593,7 @@ measured. Reset with no filter and then LAUNCH the app.
 ### Set 58 — the Disk window and Fractal go on the grid, and one of them was not an alignment problem
 
 Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_cga` /
-`os8088_5150_herc` / `os8088_xt_vga`. Two items off docs/SNAP-PLAN.md's list,
+`os8088_5150_herc` / `os8088_xt_vga`. Two items off docs/plans/completed/SNAP-PLAN.md's list,
 and the second is the interesting one.
 
 **The Disk window (SPEC.md §22.11.1.1/§22.11.2, seven constants + two): 0 bytes.**
@@ -6443,7 +6606,7 @@ pen and the status line's 6 → 8 (with their truncation constants 14 → 16 and
 78 → 80 and the grid icon `fm_cellx + 31` → `+ 32`.
 
 **Two things the numbers could not see, and one of them was in this tree's own
-notes.** docs/SNAP-PLAN.md said an aligned content origin makes
+notes.** docs/plans/completed/SNAP-PLAN.md said an aligned content origin makes
 `fm_scrollpaint`'s left strip *always* 4px wide, so §22.11.1's strip pass runs on
 every scroll; that is backwards — `fm_bx1 = align_up(fm_cx)` and an aligned
 `fm_cx` already is a multiple of 8, so the strip is **empty** and §11.94.1's
@@ -6461,7 +6624,7 @@ right edge **exactly on the name's first letter** — `ARTFUL.O88`'s A against t
 app diamond. Both numbers are multiples of 8, the kernel is 0 bytes bigger, and a
 four-row scroll stayed byte-identical to a full repaint on all three adapters:
 **nothing in the verification recipe could see it.** A 5x crop could. That is now
-a rule in docs/SNAP-PLAN.md §5 — look at the pixels that moved, every item.
+a rule in docs/plans/completed/SNAP-PLAN.md §5 — look at the pixels that moved, every item.
 
 **Fractal (SPEC.md §40.2.1): 2,557 glyph cells → 565, 4.5x — and it was not an
 alignment item.** Set 57 put it first of what was left (2,542 glyphs sampled,
@@ -6518,7 +6681,7 @@ figures. The 5150 is where they would land.
 ### Set 59 — Note Pad's panel goes on the bank quantum; Tracker is measured and left alone
 
 Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_cga` /
-`os8088_5150_herc` / `os8088_xt_vga`. Two more items off docs/SNAP-PLAN.md, and
+`os8088_5150_herc` / `os8088_xt_vga`. Two more items off docs/plans/completed/SNAP-PLAN.md, and
 the second is a **negative result** — the more useful of the two.
 
 **Note Pad's find panel (SPEC.md §27.10.3): 0 bytes.** §27.10.2 makes opening or
@@ -6591,7 +6754,7 @@ reads precisely like a blit that moved a band of text. The reference build score
 
 ### Set 60 — Tamegram's HUD goes on the grid; Paint was already there
 
-Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_herc`. docs/SNAP-PLAN.md
+Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_herc`. docs/plans/completed/SNAP-PLAN.md
 listed these as "one constant table each". One of them was one constant table.
 The other needed nothing at all.
 
@@ -6655,7 +6818,7 @@ as designed, and the reason to `make SNAPAUDIT=1` immediately before an audit ru
 ### Set 61 — the survey's tail, walked in one batch: one change, six reasons not to
 
 Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_herc`. The last
-entries in docs/SNAP-PLAN.md §2 — the Task Manager, Recorder, Minesweeper, the two
+entries in docs/plans/completed/SNAP-PLAN.md §2 — the Task Manager, Recorder, Minesweeper, the two
 HDD pages, Piano, Arkanoid, Missile Command. **One change came out of them**, and
 the reasons the others did not are the useful part.
 
@@ -7320,7 +7483,7 @@ it to `gfx_hline` (§5.6.1); at 127×32 the row changes every fourth pixel and
 the byte has to be spent then anyway. Rule 5 in miniature — the optimisation's
 *shape* was right and its *reason* was not present.
 
-`docs/LINE-PERF-PLAN.md` is what this would cost to build, and what has to
+`docs/plans/completed/LINE-PERF-PLAN.md` is what this would cost to build, and what has to
 move with it.
 
 ### Set 70 — §5.6.4.1 built and measured, and one defect it found
@@ -7838,7 +8001,7 @@ path to miss:
 | **VGA, after** | 3,005.5 | 8,337.1 | **2.77×** |
 | Hercules | 3,192.3 | 11,056.0 | 3.46× |
 
-docs/TEXT-PLAN.md §4 is the argument that the unaligned case is *also*
+docs/plans/completed/TEXT-PLAN.md §4 is the argument that the unaligned case is *also*
 tractable — and that SPEC.md §6.1.4's "4 accesses per cell row, 320 per
 ten-character run" is a fact about a **cell** being read as a fact about a
 **run**, where the true figure is `n+3` per row and 104 for the same ten
@@ -8254,7 +8417,7 @@ is dragged** — the panel moved 159 → 175 for a 21-pixel drag, so `x & 7` is 
 property of where a window opens and cannot be nudged. The seed flip for an odd
 `k7` is therefore reasoned, not measured, and the caller that will first reach it
 is a *centred* pen — `wm_draw_title`'s, which lands on the exact pixel
-(docs/TEXT-PLAN.md §6.1) — if it ever greys.
+(docs/plans/completed/TEXT-PLAN.md §6.1) — if it ever greys.
 
 ### Set 83 — a Control Panel press edge, and what one control glyph costs (SPEC.md §31.1.3)
 
@@ -8512,7 +8675,7 @@ Old build against new, VGA, cropped to each window and compared byte for byte:
 
 #### There is no headline number here, and that is the honest report
 
-This batch converted the **tail** of docs/TEXT-PLAN.md's Stage 4 — forty-odd
+This batch converted the **tail** of docs/plans/completed/TEXT-PLAN.md's Stage 4 — forty-odd
 sites one and two at a time across twenty-five files. Not one of them is on a
 path anybody would put a stopwatch to: an About box is drawn once when it
 opens, a driver's Control Panel page when you click its row, a Find panel when
@@ -8756,8 +8919,8 @@ Two consequences:
   should not be quoted as the thing a design has to beat. Measure the call you
   mean. `band_hline_x` at 2,286 cycles is *under* what `gfx_hline` spends
   before it draws anything, which is the whole argument for
-  docs/GFX-REWORK-PLAN.md in one comparison.
-- **Speed is not the axis this work is on.** docs/TEXT-PLAN.md §1.1 is the
+  docs/plans/completed/GFX-REWORK-PLAN.md in one comparison.
+- **Speed is not the axis this work is on.** docs/plans/completed/TEXT-PLAN.md §1.1 is the
   ordering: flicker first. The composed bar writes every pixel once; the
   fifteen-call bar writes the caption's rows four times, and the gap between
   the third and the fourth is visible on the target machine. A 61 ms bar that
@@ -8817,7 +8980,7 @@ of the six were fine.
 | harness | a breakpoint pair on a `cw_` shim and on the body it wraps, entry to return, and the difference between them |
 | date | 2026-08-24 |
 
-docs/GFX-REWORK-PLAN.md's Phase 2 said a cross-segment call "pays a far call
+docs/plans/completed/GFX-REWORK-PLAN.md's Phase 2 said a cross-segment call "pays a far call
 plus a near call plus two returns" and that a direct far entry "roughly halves
 it, globally". Half of that was right and the important half was not.
 
@@ -9058,11 +9221,11 @@ assembling is not ceremony.
 **VGA ships at a loss and that is the decision, not an oversight.** 38.3 ms
 against the primitives' 30.3. A band is 1bpp on every card while the primitives
 get VGA's planar hardware, so VGA is where the trade is worst — and
-docs/TEXT-PLAN.md §1.1 is the standing ordering: *flicker first, speed second.*
+docs/plans/completed/TEXT-PLAN.md §1.1 is the standing ordering: *flicker first, speed second.*
 The fifteen-call bar writes the caption's own rows four times and the gap
 between the third and the fourth is visible on the target machine. Both halves
 of that — VGA, and eventually mono — are re-decidable if
-docs/GFX-REWORK-PLAN.md brings the per-call cost down far enough that fifteen
+docs/plans/completed/GFX-REWORK-PLAN.md brings the per-call cost down far enough that fifteen
 calls stop flashing in practice. `NOBAND=1` is how that gets measured rather
 than argued.
 
@@ -9146,7 +9309,7 @@ override byte `[cs:…]` would have been. `KERN_SIZE +0`.
 | adapter | `os8088_5150_herc_gla`, one window raise, two Disk windows |
 | date | 2026-08-24 |
 
-docs/GFX-REWORK-PLAN.md's Phase 1: *"the layer resolves the clip region, the
+docs/plans/completed/GFX-REWORK-PLAN.md's Phase 1: *"the layer resolves the clip region, the
 display and the pen per call when none of them changes within a `gfx_lock`
 hold."* Set 92 priced the chain; this is what was left after acting on it.
 
@@ -9201,7 +9364,7 @@ this kernel is no longer the one that can be negotiated.
 **Removed 2026-08-27 by the owner's decision, and nothing replaces it.** It
 counted crossings out of `.cold` over two gestures on an idle desktop and its
 conclusion — that segment crossings cost the system essentially nothing — was
-written as a general fact and cited as one, by docs/GFX-REWORK-PLAN.md §4 and
+written as a general fact and cited as one, by docs/plans/completed/GFX-REWORK-PLAN.md §4 and
 by sessions since. Two gestures cannot establish that. A crossing cost is a
 property of the whole system under load, and the paths that would show it are
 the ones neither gesture went near.
@@ -9628,7 +9791,7 @@ worst case here and 1–3% of the ordinary one, against an ABI change that
 reaches every package in the tree. **The graphics layer's cost is not the
 boundary — it is what is on the other side of it**: 60–85% of every one of
 these four scenarios is in kernel drawing code, and that is where
-docs/GFX-REWORK-PLAN.md should be pointed.
+docs/plans/completed/GFX-REWORK-PLAN.md should be pointed.
 
 #### What each one is really bound by, which is not what you would guess
 
@@ -9972,7 +10135,7 @@ what the gate reads and the screen is not.
 
 #### Why this one has a hybrid where Set 44's did not
 
-Set 44 took the row outright on 1bpp, and the costing was docs/LAST-DROP-PERF.md 3:
+Set 44 took the row outright on 1bpp, and the costing was docs/plans/LAST-DROP-PERF.md 3:
 the crossover is ~1.84 runs a row and nothing anyone waits on is below it.
 Both halves of that move here. The transpose is **four planes deep**, and the
 run it replaces is a direct framebuffer write rather than a `gfx_hline` —
@@ -10115,7 +10278,7 @@ exactly right the whole time.** `tests/blitp.py` reads them rather than the
 rendered frame, and docs/MARTYPC-DEBUG.md now carries the trap beside the
 Hercules offset it sits next to.
 
-### Set 109 — what the segment machinery COSTS, in bytes and in cycles (SPEC.md §2.6, §2.6.1, docs/GFX-REWORK-PLAN.md §4)
+### Set 109 — what the segment machinery COSTS, in bytes and in cycles (SPEC.md §2.6, §2.6.1, docs/plans/completed/GFX-REWORK-PLAN.md §4)
 
 | | |
 |---|---|
@@ -10301,7 +10464,7 @@ for no other.
 | | |
 |---|---|
 | machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088, `os8088_5150_cga_gla` |
-| harness | `tests/bouncecost.py` — exec breakpoints on the loop body's two ends, cycle deltas, two kernels |
+| harness | `tests/bouncecost.py` — exec breakpoints on the loop body's two ends, cycle deltas, two kernels. **Retired with the kind** (SPEC.md §14.8, 2026-10-15): Bounce is a package, `apps/bounce/`, and the frame it measured is the API's to price now |
 | date | 2026-08-27 |
 
 Set 109 priced a crossing and said, in its own last paragraph, that it could
@@ -10540,7 +10703,7 @@ change that had removed per-PIXEL work would produce the opposite column, and
 #### 113c — `kern_small` with the VGA renderer gated out (§39.27)
 
 The size half is `.text` −1,805 and four rungs. This is the speed half, which
-§2.2 of docs/MONO-RECLAIM-PLAN.md predicted and nothing had measured. Both
+§2.2 of docs/plans/MONO-RECLAIM-PLAN.md predicted and nothing had measured. Both
 sides carry §39.26, so the only difference is the gate.
 
 | row | CGA | Hercules |
@@ -10781,7 +10944,7 @@ squash into `main` (`f6e00ac`, before size pass 1) against the branch at
 one report each, same bench disk shape, `os8088_xt_vga` and
 `os8088_5150_cga_gla`. The third VGA column is the branch with the pre-pass
 VGA outline body put back (`vga_xor_rect_raw`, 304 bytes) — built and
-measured to price the trade, and NOT shipped: docs/LAST-DROP-PERF.md §4 is
+measured to price the trade, and NOT shipped: docs/plans/LAST-DROP-PERF.md §4 is
 the decision.
 
 **The target machine is better off everywhere that matters.** On CGA the
@@ -10807,7 +10970,7 @@ hand — the dock's focus mark is one rect per focus change, and the four
 package callers of slot 0x0050 (Paint's rubber band and marquee, Solitaire's
 drag outline, Cyclone's aiming box) are tick- or event-paced at one or two
 rects each. That is
-docs/LAST-DROP-PERF.md §4's accounting, taken when the strips shipped; the
+docs/plans/LAST-DROP-PERF.md §4's accounting, taken when the strips shipped; the
 review's contribution is the body's own measured price beside it, so the day a
 use for the outline arrives that is not one of these two, the answer is the
 review's commit and 304 bytes rather than a rebuild.
@@ -10929,7 +11092,3778 @@ harness checking itself. The menu click that starts the run is at x=150 on a
 on the app-name menu for a package whose title is nine characters, and the
 run silently never starts.
 
-### Set 116 — the LEMMINGS raster, on a 4.77 MHz 8088 (SPEC.md §92.4, §92.7.1)
+### Set 116 — Paint's one-bit canvas on a 1bpp adapter: where a repaint went, on both kernels — and what the `kern_small` body would buy, measured and refused (SPEC.md §5.4.2.5, §42.23.4, §42.26, §42.8.6.2)
+
+| | |
+|---|---|
+| machine | **MartyPC**, `os8088_5150_herc_gla`, 4.77 MHz 8088, Hercules 720x348 |
+| harness | breakpoints on Paint's own labels, cycle-exact (tests/tankperf.py's shape): `pt_paint` → `pt_fsbed` → `pt_draw_pal` → `pt_draw_dims` → `pt_draw_strip` → `.nosep` → `pt_blit_dmg` → `pt_marq` → `.out`, and `pt_undo_swap` → `pt_blit` → `.out`; a deterministic CS:IP sampler between two of them (advance 1,009 cycles, read CS:IP, bucket by the nearest preceding kernel or package label) |
+| points | before `8fecf19`; after, the same tree with §5.4.2.5, §42.26 and §42.8.6.2. The `kern_small after` column is the variant body that was built for the measurement and NOT SHIPPED (§5.4.2.5) |
+| kernels | `kern_big` with the shipped Paint; `kern_small` (`build/small360.img`) with the SAME Paint, which is a legal pairing (CLAUDE.md, "not a second ABI") and the one that shows the slot with no body |
+| date | 2026-09-05 |
+
+**The report was "Paint is slow to draw in 1bpp mode — initial draw, undo,
+redo".** §42.23 had made the canvas one bit a pixel and `gfx_blit1` was the
+path, so the first thing to find out was whether the band move was being
+reached at all. It was, on one kernel, for pictures of one shape.
+
+#### Where the initial paint of a fresh window went (kern_big, blank 448×258)
+
+| stage | before | after | |
+|---|---:|---:|---|
+| `pt_fsbed` — the beds | 26.8 ms | 26.8 | two fills |
+| `pt_draw_pal` — eight tool buttons | **201.3** | **111.0** | §42.26: a glyph was ~30 `gfx_hline`s, it is one `OSAPI_ICON_DRAW`; ~10 ms a draw and two fills a well are what is left |
+| `pt_draw_dims` + the size boxes | 30.5 | 30.5 | |
+| `pt_draw_strip` + the separator | 106.2 | 106.2 | ~35 small primitives; `sw_col.row` 9.6% of the whole paint is in here — the separator's 258 rows and every frame's two verticals. **The next item** |
+| `pt_blit_dmg` — the canvas | 61.4 | 61.4 | a blank canvas is one `gfx_fill` (§42.15), 64.9% of it `sw_plane_op.irow` |
+| **`pt_paint`** | **426.8** | **337.7** | |
+
+The canvas was a seventh of a blank window's paint; the pictures nobody looks
+at were half. The same eight buttons on `kern_small` (small Paint): 193.8 →
+107.4.
+
+#### Where a PICTURE's paint went — OS8088.GIF, 466×110, dithered (the benchmark the report named)
+
+| | kern_big before | kern_big after | |
+|---|---:|---:|---|
+| the load (click → the picture's own paint begins) | 9.5 s | 9.5 s | §42.25's decoder; untouched |
+| `pt_draw_pal` | 245.8 | 121.8 | |
+| strip + separator | 119.1 | 119.1 | |
+| **`pt_blit_dmg` — the canvas** | **809.4** | **36.6** | **22×** |
+| **the picture's paint** | **1,202.0** | **306.5** | |
+| **undo (Ctrl+Z, all 110 rows)** | **722.7** | **73.0** | the swap 68.7 → 43.1, the blit 654.0 → 29.8 |
+
+466 is not a multiple of 8, and `pt_blit_1` rounded its width up to the byte
+grid and gave the whole rect to the row loop when that reached past the
+picture — so on the shipped kernel every full repaint of this picture went
+through `pt_ex1` and `gfx_blit4`, and the sampler inside the blit read
+**48.6% `pt_ex1.byte`** (the package expanding its own one-bit rows to
+nibbles) and **35.8% `sw_blit_row.abyte`** (the kernel decoding them back).
+Two passes over every pixel to reach a framebuffer that wanted the bytes as
+they were. §5.4.2.5's tail mask is what makes the width exact.
+
+#### ...and on kern_small, where NO canvas reaches the band move — measured with a body it does not ship
+
+| | kern_small as shipped | kern_small WITH the body (not shipped) | kern_big after |
+|---|---:|---:|---:|
+| undo, 192 rows × 327 px of a 448×258 canvas: the swap | 155.0 | 93.6 | 95.1 |
+| ...the blit | **1,309.3** | **55.3** | 55.8 |
+| **the undo** | **1,464.3** | **148.9** | 151.0 |
+| maximize (448 → 670 wide): the canvas | 1,368.0 | 113.9 | 111.8 (111.1 before: already the band move) |
+| **the maximize** | **2,042.1** | **672.2** | 690.4 (813.3 before) |
+
+`kern_small` carries the slot and a `stc`/`ret` stub, so the fallback is that
+kernel's only path — for the very canvas §42.23 was built to give the 128 KB
+machine. A body for it was built to take this column — the same source with
+the pen, VGA and two-display arms compiled out — and it draws the same rows
+in the same time as `kern_big`, **24× on the blit**, for `.text` +16, `.cold`
++403, **+419 bytes**, one `.cold` rung crossed, `KERN_SIZE` 80,896 → 81,408.
+**It is not shipped**: the owner's decision is that `kern_small` may stay
+slower here, SPEC.md §39.27.4's rule standing, and §5.4.2.5 keeps the bytes
+and the 24× beside the stub for whoever decides otherwise. What shipped is
+`kern_big`'s `.cold` **+38** for the tail mask, no rung crossed.
+
+#### The undo's other half
+
+The 192-row undo on `kern_big` was **211 ms** and 156 of them were
+`pt_uswap_row` — 3,878 cycles a row to exchange 56 bytes with the undo image,
+where the words themselves are ~2,400 of that. Eight blocks a row each with a
+shift, two compares and a segment reload, and `pt_imark` once a row at 344,
+was the 4bpp canvas's shape applied to seven-byte blocks. §42.8.6.2 walks
+runs of saved blocks and marks once: **156 → 95 ms**, 2,360 a row; the undo
+**211 → 151**. The tail test §5.4.2.5 adds to every row of the plain emit
+reads here as the blit's 55.1 → 55.8 ms over 192 rows — ~17 clocks a row,
+as priced.
+
+#### What was NOT done, and what is next
+
+- **The palette went on to be composed too** (SPEC.md §42.26.1), which is
+  the follow-up this list asked for: a whole ROW of two buttons is one
+  42-wide band, 24 drawing calls become 4, and `pt_draw_pal` reads **111.0 →
+  33.0 ms** with a fresh window's paint **337.7 → 258.5**. A width of 42 is
+  what §5.4.2.5's tail mask made expressible, so the two halves of this set
+  are one change used twice.
+- **The strip** is 106–124 ms of every full repaint and is now the largest
+  furniture item: ~35 primitives, most of them frames and one-column fills
+  that go through `sw_col` a row at a time. Composing it as a band (§5.9's
+  shape) or cutting the call count is the next candidate; it is the same on
+  both adapters and both kernels.
+- **The resize a maximize or restore does** (`pt_track` → `pt_bands`,
+  217–258 ms) was not sampled; it is not in the report's list.
+- **`ICON_DRAW` at ~10 ms a 16×16** is more than Set 84's 6.7 for a 12×12
+  would predict and is worth a look of its own; the palette's 111 ms is
+  eight of them plus sixteen fills.
+- **The load** (9.5 s for OS8088.GIF on a Hercules) is §42.25's and dwarfs
+  every paint after it; it is not "the draw" and was left alone.
+
+
+### Set 117 — Word's own dropdowns banked, and the italic run priced (SPEC.md §68.2.1, §5.3)
+
+All on `os8088_5150_both_gla` — a cycle-accurate 4.77MHz 8088 — with
+`WELCOME.DOC` open in Word's shipped window (content 600x136). Brackets are
+entry-to-return, taken by arming an exec breakpoint on the entry and a second
+on the near return address read off SS:SP. The counter is the MACHINE's, so a
+PIT tick inside a bracket only ever makes a sample longer: repeats keep the
+minimum.
+
+**The dropdown.** Utilities, 9 items, panel 168x109 covering 80% of the
+content height:
+
+| | cycles | ms |
+|---|---:|---:|
+| open, `wd_mdraw` | 475,304 | 99.6 |
+| close, `wd_mrepair` (before) | 2,488,591 | **521.4** |
+| close, `wd_surest` (after) | 93,940 | **19.7** |
+| bank, `wd_subank` (after, new) | 96,863 | 20.3 |
+
+**26.5x on the close**; the round trip 621 -> 139.6 ms. The open is untouched
+and is now the dominant term. `wd_mtrack` closes and reopens per title
+crossed, so a File -> Help slide went ~4.97 s -> ~1.12 s.
+
+Why the close was so much dearer than the open: `wd_mrepair` erases the
+covered text rows at the FULL column width — all 600 px, not the panel's 168 —
+and re-letters them at ~915 us a glyph cell, plus the ribbon and ruler strips
+whole.
+
+### Set 117.1 — …and the italic run is NOT the 4bpp disaster it reads like
+
+`wd_drawrun`'s italic arm stages sheared kernel glyphs into a FOUR-bit buffer
+(`WD_STG4`, stride = cells x 4 bytes) and puts them down with
+`OSAPI_GFX_BLIT4` — one-bit data on a four-bit path, and it looks like an
+obvious defect. A reading of the tree priced it at 1,797 cycles a coalesced
+run (Set 107) x ~13 runs a cell, making a 7-cell run **37.7 ms**, and
+proposed a 1bpp band conversion worth ~20x.
+
+**Measured, it is 7.71 ms**, and the proposal is refused on that number:
+
+| run | cycles (min) | ms | per cell |
+|---|---:|---:|---:|
+| 6 cells | 33,691 | 7.06 | 5,615 cy |
+| 7 cells | 36,785 | 7.71 | 5,255 cy |
+
+**~5,300-5,600 cycles a cell, ~1.15 ms** — against ~900 us for an ordinary
+opaque `font_run` cell. Italic costs **1.28x** ordinary text, not 20x.
+
+The derivation was wrong for a reason worth writing down: **`gfx_blit4` is not
+a run-only primitive.** `vga12.inc` arms a per-PIXEL row decoder on both mono
+adapters (`sw_pairbuild`) and §5.4.1.3's planar decoder on VGA, so the italic
+blit never reaches the 1,797-cycles-a-run cell it was priced against. Set 107's
+figure is real and describes a different path.
+
+So the conversion buys ~1-2 ms on a realistic run, against a delicate change:
+the kernel glyph row is 1 = INK and a screen band needs 1 = PAPER, so the
+shear must run before a complement; the x must be a multiple of 8 or
+`gfx_blit1_x` refuses (`test ax, 7`); and `gfx_blit1` is `stc`/`ret` on
+`kern_small` (§5.4.2.5), so it needs the 4bpp path kept as a fallback. Not
+worth it. **This is rule 4 of CLAUDE.md's performance section doing its job —
+measure before redesigning — and the measurement is the whole finding.**
+
+What IS true and unpriced here: `wd_itinit` builds a 3,040-byte 4bpp glyph
+table into a 9KB claim whose information is one bit deep. It is built once and
+cached (the brackets above include the call and are far below its cost), so it
+is a MEMORY question and not a speed one; ~2.2 KB is available to whoever wants
+it. The Show-all pilcrow is the same class — one `OSAPI_GFX_BLIT4` per mark for
+a two-colour 8x8 stamp — and has not been bracketed.
+
+
+### Set 117.2 — what a Word keystroke actually costs, and the document movers (SPEC.md §68.3.1)
+
+Nobody had ever priced a Word keystroke: §68.6 declares the standing budget
+"unchanged", and the ~2-cell figure in it is **Note Pad's** measurement,
+inherited. These are Word's, on `os8088_5150_both_gla` with `WELCOME.DOC`
+(1,524 chars) in the shipped window — `vrows` = 6.
+
+**The caret is placed by CLICKING.** Writing `[wd_cur]` invalidates the
+checkpoint (`[wd_ckok]`, §27.4) that lets pass 1 skip the rows above the
+caret, so a poked index prices the slow path and calls it typing: 215 ms
+against 140 for the same keystroke.
+
+| keystroke | `wd_onkey` | of which `wd_walk` (pass 1) |
+|---|---:|---:|
+| printable, caret on row 1 | 205.6 ms | 149.2 ms (73%) |
+| printable, caret on row 3 | 224.9 ms | 88.6 ms |
+| Enter, caret on row 3 | 287.3 ms | 53.8 ms |
+
+**A keystroke is four system ticks**, and the layout walk is most of it. The
+walk is bounded by the VIEW and not the document (5 rows below the caret →
+149 ms, 3 rows → 89 ms, ≈30 ms a row), so it is already doing the right thing;
+it simply costs ~2,000 cycles a character across the many small near calls of
+§27's "one walk, four questions". No single hot spot: `wd_wordfit` already
+returns at once mid-word on `[wd_wstart]`, and `wd_ask` with every query
+disabled is a compare and a return.
+
+**The visual break was NOT engaged in any of this** — `[wd_bmode]` = 0 and
+`wd_brkdraw` is never reached — because `wd_brktry` stands down on
+`[wd_hasfmt]`, and `WELCOME.DOC` is formatted. That is §68.6's documented
+degrade, not a defect, and it is why mid-document typing in a *formatted*
+document pays a full reflow where Note Pad pays two cells. **Anyone wanting
+the big win here is buying §68.6's height model, and inherits all three of its
+degrades.**
+
+**The movers** (§68.3.1), which is what was actually taken:
+
+| | cycles a byte, both moves | each | 1,524-byte tail | at `WD_MAXKB` |
+|---|---:|---:|---:|---:|
+| `rep movsb` | 36.0 | 18.0 | 12.35 ms | ~232 ms |
+| `rep movsw` | **26.6** | **13.3** | **9.31 ms** | **~171 ms** |
+
+26% off, and the fixed part of `wd_ins` is unchanged at 3,734 cy (0.78 ms).
+It is 1.5% of a keystroke on this document and ~15% at the ceiling: the move
+is the whole cost of typing into the front of a long document, where the
+redraw has already been taken away.
+
+### Set 117.3 — where an Enter's 448 ms goes, and what a push takes off it (SPEC.md §27.4.5)
+
+Set 117.2 priced an Enter at 287.3 ms with the caret on row 3 and left it
+there. Taken again on row 1 it is **448.2 ms**, and the reason to take it a
+third time was that `wd_walk`'s pass 1 was only 34.3 ms of it: **414 ms was
+somewhere else, and the walk is where everyone looks.**
+
+A TIMELINE settles it — one breakpoint per routine entry, the delta between
+consecutive stops read as the work done in between. `os8088_5150_cga_gla`,
+`WELCOME.DOC`, shipped window, `vrows` = 6, caret CLICKED on row 1:
+
+| | before | after |
+|---|---:|---:|
+| `wd_onkey`, whole keystroke | 448.16 ms | **116.91 ms** |
+| ...the same keystroke A/B'd on a QUIET machine | 410.7 ms | **71.9 ms** (5.71x) |
+| the edit itself (`wd_selkill` → `wd_redraw`) | 9.7 ms | 9.8 ms |
+| pass 1: rows laid out, drawing nothing | **7 rows, 165 ms** | **2 rows, 23 ms** |
+| pass 2: rows laid out AND drawn | 6 rows, 189 ms | 2 rows, 55 ms |
+| the push's own `OSAPI_GFX_SCROLL` | — | 17.1 ms |
+| `wd_sbcheck` (the thumb) | 33.8 ms | 1.5 ms |
+
+**The finding is that the two passes cost the same.** A full row of *layout*
+was 19–43 ms with `[wd_draw]` clear — `wd_rflush` returns on its first compare
+— so pass 1, which draws not one pixel, was 47% of the keystroke. That is the
+half a `gfx_scroll` cannot touch and a BOUND can, which is why §27.4.5 is a
+reconvergence test first and a blit second: the seed took pass 1 from row 0 to
+the caret's row, and the early stop took it from the bottom of the view to the
+split.
+
+**Two numbers that were nearly a wrong design.** `[wd_hasfmt]` is 1 on
+`WELCOME.DOC` and `[wd_hastab]` is 1 — the two flags `wd_brktry` and
+`wd_append` both stand down on — so the obvious reading is that no
+height-uniform trick is legal here. The banked ys say otherwise:
+`wd_ryb` = [110, 118, 126, 134, 142, 150], a **uniform 8-pixel stride**. The
+flags are document-wide and conservative; the rows on the glass are not. The
+push therefore gates on neither and takes its delta from the **pen**, which is
+right whatever the heights are — and is why it works on the one document
+anybody actually opens, where §68.6's degrade had already made the visual
+break worthless (Set 117.2).
+
+**And one that was a wrong screen.** The first build scrolled the band to
+`[wd_bot]` and read **429 differing bits against the reflow**, all of them in
+`y` 158–161: the sliver below the last whole row, `ty` = 110 + 6 rows of 8 =
+158, `bot` = 161. `wd_rflush` refuses to draw a row that would cross it, so
+nothing erases what a scroll pushes into it — `wd_vshift`'s own comment,
+one routine along, in a routine that did not call it. Cutting the band at the
+last whole row's bottom is 0 differing bits, and `wd_rows`/`wd_ryb` then match
+the reflow's entry for entry.
+
+**Two more numbers, each of which changed the code.** The first build fired
+one row LATE on every caret position tried, because the split compares against
+`wd_rows[R−1]` and `wd_rstart` overwrote that entry a row earlier — it was
+matching a row whose old and new entries happened to be equal, which is luck
+and not a proof. A one-entry shadow fixed it and took two refusals to firings.
+The second was the caret guard: a row of slack below `[wd_ckpr]` is the
+conservative reading and cost a drawn row every time; `[wd_curseen]` is the
+exact condition and is 133.3 → **116.9 ms**.
+
+**And one that did not.** A stopwatch across `wd_onkey` read **412 ms in both
+arms of the A/B** — the push doing nothing at all — until the machine was made
+quiet first. `[wd_hdirty]` is set by every edit and cleared only by a walk that
+reaches the note's end (§27.6), so after any editing the chunked row counter is
+running on its own wake; a bracket between two breakpoints counts every cycle
+the guest spends inside it, another task's included. `tests/wdenter.py` waits
+the counter out before it times anything, and says why.
+
+**And a third that was a wrong screen on the OTHER arm.** `[wd_eodel]` was
+set for kind 5 before the arming rather than inside it, so an Enter the push
+declined kept §27.4.3's early-out — whose test is about a row's own entry and
+whose repair bumps indices where a shift was owed. A ten-scenario A/B caught
+it as 6 to 53 differing bits on every row, including the ones the push never
+took, which is what said the fault was in the arm with the feature *off*.
+
+`.text` +369 bytes, `.bss` +10. `tests/wdenter.py` is the gate, and the
+ten-scenario A/B that found two of these three is what it was cut from.
+
+### Set 117.4 — one pass instead of two for a caret move (SPEC.md §27.4.6)
+
+Set 117.3 found that Word's two layout passes cost about the same, and that
+pass 1 draws nothing. This is that finding acted on, for the one kind of
+redraw where the split buys nothing: a caret move reflows no text, so no row
+changes height, so no band is erased before it is lettered — and with no fill
+in the way a row can be drawn the moment its signature says it changed.
+
+`os8088_5150_cga_gla`, `WELCOME.DOC`, shipped window, `vrows` = 6, caret
+CLICKED, and the A/B is `wd_1pok` patched to `stc`/`ret` inside one boot on a
+machine made quiet first:
+
+| keystroke, from a fresh click | two passes | one |
+|---|---:|---:|
+| Right | 67.6 ms | **47.0 ms** (1.44x) |
+| Right ×8 | 67.8 | **46.3** (1.46x) |
+| Left off a row | 67.6 | **46.1** (1.47x) |
+| Left | 107.7 | **81.9** (1.32x) |
+| Down then Up | 127.0 | **102.1** (1.24x) |
+| Right off a row | 163.7 | **132.1** (1.24x) |
+| Home then End | 290.2 | **209.8** (1.38x) |
+| Down ×7, scrolling the view | 321.2 | 337.3 (**0.95x**) |
+
+**The last row is the honest one**: a caret move that scrolls is the case the
+collapse cannot help, because `wd_seecaret` now runs *after* the drawing, so
+the rows drawn before the scroll are drawn for nothing. It is 5% slower and
+it is one keystroke in seven of a page.
+
+**The trap is a level below the pixels and cost the first build 419 bits.**
+`[wd_clip]` gates the **glyph store** as well as the drawing — the same three
+tests at all three store sites, deliberately — so clipping the one pass to the
+dirty range composed no cells at all for a row whose signature was not yet
+known. `wd_rflush`'s delta then diffed a stale `wd_rbuf` against `wd_prow`,
+found every cell changed, and re-lettered the whole row. On a centred title
+that is 23 cells where the two-pass form drew 2, and the screen still read as
+text.
+
+**And a measurement trap that nearly became a bug report.** A ten-scenario A/B
+run as two BOOTS, comparing whole framebuffers, read 6 and 15 bits apart on two
+of them. The 15 was the **desktop clock**, which is outside the window and
+which two boots do not agree on. The 6 survives banding to the window and is
+still not the collapse: the same sequences read **0 against a full repaint in
+both forms**, and the two boots' screens already differed by 31 bits before a
+key was pressed. The reference is the full repaint taken inside one boot; a
+cross-boot framebuffer diff is a signal, not a verdict.
+
+`.text` +475 bytes for §27.4.5 and §27.4.6 together, `.bss` +13.
+`tests/wdcaret.py` is the gate, and its leg A is the change itself: ONE
+`wd_walk` in the keystroke, counted.
+
+### Set 117.5 — a scroll UPWARD is priced, not refused (SPEC.md §27.7.2.2)
+
+`os8088_5150_cga_gla`, `WELCOME.DOC`, shipped window, `vrows` = 6, `hasfmt` = 1,
+one scroll-bar track click bracketed at `wd_onclick`:
+
+| track click | before | now | what runs |
+|---|---:|---:|---|
+| below the thumb (down) | 251.3 ms | 252.3 ms | `wd_vshift` + `wd_shiftrows`, 5 rows |
+| **above the thumb (up)** | **622.2 ms** | **307.6 ms** | was `wd_paint` + `wd_chrome` + 7 rows; now the blit, 2 walks, 8 rows |
+
+The second walk is the price: `wd_upheight` lays out |d| rows to learn how far
+the retained rows move. It buys the content fill and the whole of the chrome.
+
+**Three defects on the way, all of them found on the glass and none by
+reading**, and the third is the one worth remembering:
+
+1. the formatted erase band was derived for one direction only — an up scroll
+   vacates the TOP;
+2. the <8px **sliver** below the last drawable row: a down scroll's vacated
+   band covers it, an up scroll pushes pixels into it, and `wd_rflush` will
+   never draw there again. **529 differing pixels**, four scanlines. The scan
+   for the last drawable row then had to reject a bank outside the band — a
+   slot never written reads 0, and 0 + `[wd_gh1]` is under `[wd_bot]`, so the
+   first version filled from y = 8 to the foot of the window: **7,522 pixels**;
+3. **the pricing walk banked `wd_rows`**, and `wd_shiftrows` reads exactly
+   those entries as its source. The up blit's own screen was **perfect to the
+   pixel** and the NEXT page down drew three rows of the wrong text. A gate
+   that only ever compares what a scroll DRAWS cannot see this, which is what
+   `tests/wdscroll.py` leg F is for.
+
+**And a note on how it was found**, because two wrong diagnoses came first.
+The failing comparison was a round trip - page down, page back, require the
+same pixels - and both ends of it were suspect. Putting each end against a
+FORCED repaint separately (`wd_upheight` patched to `stc`/`ret`) read *start
+7522, end 0* in one line, which named the half that was wrong and turned the
+next experiment into a two-armed one: page-downs after a repaint, 0 bits;
+page-downs after an up-blit, 7522. A round trip says something is wrong. It
+never says which end.
+
+### Set 118 — PACCMAN's band composer, and the CGA row merge (SPEC.md §91)
+
+`tests/pmcband/pmcbandbench.asm` `%include`s the **shipping**
+`apps/paccman/pmcband.inc` and brackets each of its four entry points, the
+three emits a band can go down through, and four whole bands. It is
+`tests/rcbandbench.asm`'s shape and Set 65's lesson — *measure a band before
+believing a per-cell guess* — and it is the only source of any microsecond in
+SPEC.md §91 or `apps/paccman/README.md`.
+
+**Harness**: `make pmcbandbench`, then
+`make test TESTAPPS=build/pmcband.img QEMU="qemu-system-i386 -icount shift=3,sleep=off"`,
+double-click Disk B and `PMCBBAND.O88`, press `R`. Counts are PIT ticks and
+are converted at Part 4's **one count = 0.359 ms of real XT**; N = 8 per row,
+except the three `TILE` rows, which run at `PB_N_TILE` = **256** — see below.
+Two things a repeat of this needs to know. **The screen saver arms**: the
+guest's clock runs ~22× real time under `-icount`, so five minutes of guest
+idle is ~14 s of yours, and the saver then eats the first click of every
+double-click. QEMU's monitor cannot write memory — add `-s` and poke
+`[ss_idle]` and `[ss_mins]` to zero over the gdb stub, and **detach** (`D`),
+because QEMU stops the machine the moment a gdb client attaches and a client
+that walks away leaves every later screendump showing one frozen picture.
+**And read the SECOND run**: the first run of a session prices `BLIT4` about
+10% high and every other row within a count and a half. Runs 2 and 3 below
+agree to the COUNT on all sixteen rows. The report is longer than the window
+and does not auto-scroll: press `End`, or the four `BAND` rows and the two
+`pb_recon` lines look like a bench that hung.
+
+ONE RUN, the second of a session (see the warm-up note below), so a reader who
+subtracts two of these rows gets the quantity the reconciliation row states:
+
+| row | N | counts/op | real XT |
+|---|---|---|---|
+| `TILE` step 1 — one 8×8 tile into the packed band, 8 rows | 256 | 1.949 | 0.70 ms |
+| `TILE` step 2 — the CGA layout SAMPLED, 4 rows | 256 | 1.164 | 0.42 ms |
+| `TILE` step 2 MERGED — the shipping CGA arm | 256 | 1.520 | 0.55 ms |
+| `PACK_PL` — one 8-row band → four bitplanes, 28 columns | 8 | 116.250 | **41.73 ms** |
+| `PACK_1` — one 8-row band → 1bpp | 8 | 50.375 | 18.08 ms |
+| `SPRITE` 16×8, even destination nibble, SAMPLED | 8 | 19.375 | 6.96 ms |
+| `SPRITE` 16×8, odd nibble + flipx, SAMPLED | 8 | 20.375 | 7.31 ms |
+| `SPRITE` 16×8, even nibble, MERGED | 8 | 23.125 | **8.30 ms** |
+| `SPRITE` 16×8, odd nibble + flipx, MERGED | 8 | 24.375 | **8.75 ms** |
+| `BLITP` 224×8, four planes | 8 | 20.500 | **7.36 ms** |
+| `BLIT4` 224×8, packed | 8 | 134.625 | **48.33 ms** |
+| `BLIT1` 224×8, 1bpp | 8 | 3.375 | 1.21 ms |
+| `BAND colour` — 28 tiles + `PACK_PL` + `BLITP` | 8 | 193.875 | 69.60 ms |
+| `BAND mono` — 28 tiles + `PACK_1` + `BLIT1` | 8 | 110.750 | 39.76 ms |
+| `BAND cga` — 28 tiles step 2 + 4-row pack + 4-row `BLIT1`, SAMPLED | 8 | 62.375 | 22.39 ms |
+| `BAND cga` — the same band MERGED | 8 | 72.875 | **26.16 ms** |
+
+**The two 8-row `BAND` rows equal the sum of their parts to within 1.5%** —
+28 × 1.949 + 116.250 + 20.500 = 191.3 against 193.875 measured, and
+28 × 1.949 + 50.375 + 3.375 = 108.3 against 110.750 — which is what says the
+rows above them measure what their labels claim. **The two CGA rows have
+no measured parts**: their pack and their blit are 4-row emits and only the
+8-row ones are rows of this table, so halving those is arithmetic and not
+measurement, and it lands 5% low on each. What those two rows ARE checked
+against is each other, by `pb_recon`: the merge's cost per band must be 28× its
+cost per tile, and the bench prints both — 28 × 0.356 = **9.97 counts** against
+a band A/B of **10.50** on the same run, **4.7% apart**.
+
+**AND THAT CHECK EXISTS BECAUSE THE TWO ONCE DISAGREED BY 3×.** With the tile
+rows at `PB_N` = 8 the merge measured 1.250 − 1.125 = 0.125 counts a tile —
+**one PIT count spread over eight iterations, the instrument's floor** — while
+the band A/B over the same 28 tiles measured 10.5. The band row was the
+credible one; `PB_N_TILE` = 256 is the fix, and the tile figures above are the
+re-take. The shipping merged tile is 1.520 counts, not 1.250: **+31% on a
+tile**, not +11%.
+
+**THE LEVER WORKS AND THE REPACK EATS IT.** `OSAPI_GFX_BLITP` puts a 224×8
+band down in **7.36 ms** where `GFX_BLIT4` takes **48.33** — 6.6×, and at 224
+pixels wide `BLIT4` always takes `kernel/vga12.inc`'s planar decoder, so that
+ratio is the whole of the port's performance premise. But turning the packed
+band into four planes costs **41.73 ms**, so a whole colour band is 69.60 ms
+against the ~68.5 ms the same band costs composed and sent straight through
+`BLIT4`: **a wash, and the win is spent before it is banked.** Composing
+straight into planar on the colour path is the change that would bank it, and
+it is a recorded follow-up rather than a wave-4 edit. The model the plan
+started from was four times wrong in the other direction: `BLITP` priced from
+Paint's 64×64 and 256×16 shapes (Set 107's neighbourhood, 756 µs a call +
+114 µs a row-plane) predicts 4.4 ms for this band against the measured 7.36.
+
+**The CGA row merge costs +16.8% of a band** — 22.39 ms to 26.16 — and that is
+the number the look decision in SPEC.md §91 was taken on. It buys the arcade
+font's horizontal middle strokes back on a 200-line screen, which the fixed
+alternate-row sample drops with source row 3: `HIGH SCORE` read `IIIGII SCORC`
+before it. Per tile it is **1.164 counts against 1.520**.
+
+**And it reaches the SPRITE layer too, where sampling was taking the top and
+bottom caps off Pac-Man's circle.** A `SPRITE 16×8` row goes from **2.422
+counts to 2.891** even-nibble and **2.547 to 3.047** odd-nibble-plus-flipx —
+**+20% on a row** — and the arm that does NOT merge pays **one test a source
+byte**, +3.9% on the two sampled rows (18.5625/19.625 before it, 19.375/20.375
+after), because one byte loop is cheaper in image than two are in time.
+`PMC_T_SPRROW` is the mean of the two SAMPLED rows over their eight, **892 µs**,
+and `PMC_T_SPRROWM` the mean of the two merged ones, **1,066 µs**; the two
+cases differ by 5% and Pac-Man spends about half his frames at each.
+
+On a whole CGA FRAME, which is what the look decision is written about,
+`pmcuitest`'s `drive_cga_arms` prices both merges together at **+16.4% of a
+full repaint and +7.5% of a play frame**. The repaint has no sprites in it — it
+is the tile merge alone, 1,008 tiles — and a play frame is 46 tiles and 80
+sprite rows, so most of its 8% is the sprite half.
+
+**And one term here is NOT the bench's.** `game_tick()` is a C function and
+this bench is a standalone assembly package that cannot call one, so
+`tests/paccman.py` brackets it on MartyPC between `pmc_game_tick`'s entry and
+the return address read off the stack there, taking the minimum of eleven
+samples. Six runs across three profiles read 85,374 / 86,742 / 89,990 /
+90,496 / 91,432 / 91,576 cycles — **17.9 to 19.2 ms of 4.77 MHz 8088**, and
+18.6 ms is the term. A play frame carries three of them, which is why the
+harness's play-frame row went from 131.2 ms with the sprite and logic terms
+zeroed to **257.5 ms** with them in.
+
+**What the whole thing adds up to, measured on the machine rather than
+modelled**: `tests/paccman.py`'s one `bracket()` over both Pac-Men on the same
+profile reads **PACCMAN.O88 at 2.18 fps against PACMAN.O88's 4.14** on
+`os8088_xt_vga`, 2.94 against 18.21 on `os8088_5150_cga_gla`, and 2.62 against
+16.71 on `os8088_5150_herc_gla`. The two draw different pictures — the arcade's
+28×36 field against Roklan's 40×22 — so that is not a race between C and
+assembly; it is the answer to "maybe this port is more performant on XTs",
+which is **no**.
+
+### Set 119 — CLEAR SKIES: the shared edge, the cull walk, and why a NOPed call lies (SPEC.md §88.4.2.1, §88.11.1, docs/plans/SKIES-FRAME-PLAN.md)
+
+The question: `cs_wire` (SPEC.md §88.13.3) draws each edge of a solid ONCE
+because two faces share it, and that was worth 284.7 → 167.5 ms on Mode X. The
+FILL has the same redundancy — `cs_poly` traces all four edges of every front
+face — so **is there an indexed-face-set win in the filled path too?**
+
+**Harness**: `make skiesprobe` (SPEC.md §88.11.1) + `tests/skiescount.py`,
+`os8088_5150_herc_gla`, mean of 12 exact frames with the `OSAPI_FSX_WAIT` out,
+four arms per row interleaved 0-1-0-1 so drift cannot land on one of them.
+
+**THE METHOD IS THE FIRST FINDING. Every term is priced by ADDING it, never by
+removing it, so every arm draws the identical picture** — and that is not
+fastidiousness, it is a factor of two. `tests/skiesperf.py` prices a stage by
+NOPing its call, and **a NOPed call takes its consequences with it**: NOP
+`cs_edge` and the chains keep their +big/−big, the polygon's rows are never
+filled, and the reading is the tracing PLUS the fill it removed. On `city`
+that is **17.50 ms removing against 8.47 adding**. A candidate sized against
+the first number is sized against pixels it was never going to save.
+
+So: `cs_edge` is idempotent (a chain takes the same value, `.both` takes
+min/max), and the arm runs it **twice** per edge — the frame's difference over
+the trace count is one trace, exactly. The dedup test is priced by an arm that
+*skips* it. The copy is `rep movsw`'d **into scratch** in front of the trace it
+would replace. The face preamble is repeated into scratch likewise.
+
+**THE SECOND FINDING IS THE SCENE.** SPEC.md §88.12's `runway`, `city` and
+`tower` hold a distant skyline that is LOD-boxed (§88.5.4) and contributes no
+faces; what covers the view there is the one-face FLAT models. They are the
+wrong scenes for a question about building faces, and they understate it
+fourfold. `dflevel`, `dfangled` and `dfsquare` stand among La Défense's six
+110 m towers at ~950 m, and the discriminator is the **pitch**: eye above the
+roofs and a box shows two walls AND a roof — three faces at three shared edges
+of twelve — eye below and it shows two walls sharing one of eight. The
+textbook 3/12 and 1/8, landing on the glass at **25.0%, 23.2% and 11.1%**.
+
+| per frame | runway | city | tower | dflevel | dfangled | dfsquare |
+|---|---|---|---|---|---|---|
+| frame (probe build) | 172.19 ms | 178.18 | 195.59 | 231.4 | 255.28 | 248.7 |
+| eye vs. the roofs | — | — | — | below | above | above |
+| objects in the frame | 7 | 13 | 11 | 7 | 7 | 7 |
+| faces walked | 9.0 | 15.8 | 14.6 | 28.1 | 28.1 | 28.1 |
+| …back-culled | 3.4 (38%) | 4.5 (29%) | 5.6 (38%) | 16.9 (60%) | 11.2 (40%) | 11.2 (40%) |
+| edge traces | 20.2 | 31.5 | 27.0 | 40.5 | 63.0 | 67.5 |
+| …duplicates | 1.1 (5.6%) | 4.5 (14.3%) | 3.4 (12.5%) | 4.5 (11.1%) | 14.6 (23.2%) | 16.9 (25.0%) |
+| rows a trace | 10.2 | 6.6 | 5.9 | 26.7 | 17.3 | 16.8 |
+| **one trace** | 1,352 cy | 1,285 | 1,119 | 2,866 | 2,121 | 1,902 |
+| **all the tracing there is** | 5.74 ms (3.3%) | 8.47 (4.7%) | 6.33 (3.2%) | 24.24 (10.5%) | 28.00 (11.0%) | 26.85 (10.8%) |
+| **the duplicates — the prize** | 0.32 ms (0.19%) | 1.21 (0.68%) | 0.78 (0.40%) | 2.69 (1.16%) | 6.50 (2.55%) | 6.71 (2.69%) |
+| the dedup test, per edge | 295 cy | 490 | 477 | 481 | 496 | 501 |
+| …per frame | 1.33 ms | 3.17 | 2.72 | 4.05 | 6.55 | 7.11 |
+| the copy, per frame | 0.10 ms | 0.30 | 0.16 | 1.37 | 1.71 | 2.02 |
+| **NET at runtime** | **−1.12 ms** | **−2.26** | **−2.10** | **−2.73** | **−1.76** | **−2.42** |
+| **NET, topology precomputed** | −0.02% | +0.29% | +0.14% | +0.35% | **+1.56%** | **+1.54%** |
+| a face's preamble | — | 1,326 cy | — | 1,402 | 1,380 | 1,376 |
+| **the back-culled faces cost** | — | **1.25 ms (0.70%)** | — | **4.96 (2.14%)** | **3.25 (1.27%)** | **3.24 (1.30%)** |
+
+**A runtime dedup is a LOSS on every one of the six**, and it is not close: the
+test is 295–501 cycles paid on 20–68 edges to save on 1–17. Precompute the
+topology per model — a flag beside each face index, ~60 cycles — and the
+ceiling is **+1.56% of a frame** in the view it is best in and under +0.35% on
+four of the six, for a topology byte per face-edge over 122 models in a
+package that has already met `APP_MAX_SIZE` at a merge.
+
+**Why §88.13.3's version was worth 117 ms and this one is worth four, in one
+sentence: in WIREFRAME the duplicate is duplicate PIXELS, and in a FILL it is
+duplicate BOOKKEEPING.** The second `cs_seg` re-walks a span doing a
+read-modify-write per pixel over a line already on the glass. The second
+`cs_edge` refills a span TABLE — two front faces fill two different interiors,
+`cs_polyrows_herc` lays a row as two masked end bytes and a `rep stosw`
+between into the SHADOW, and `cs_blit` carries it to the card once. **The shape
+of a redundancy says nothing about its price.**
+
+**AND THE CULL WALK IS THE BETTER CANDIDATE, which is what the last two rows
+are for.** `cs_faces` decides a face is back-facing from the signed area of its
+PROJECTED points (§88.5.10), so a culled face has already been gathered by
+index into `cs_pv` and paid the two `imul`s: **1,326–1,402 cycles, and 29–60%
+of walked faces are culled.** On `dflevel` — level flight among buildings,
+which is the ordinary case, where a box shows two of its five faces — that is
+**4.96 ms, 2.14% of the frame**, and it needs no per-model data at all. It is
+also the exact complement of the dedup: `dflevel` is where the dedup is worth
+least (0.35%) and this is worth most. docs/plans/SKIES-FRAME-PLAN.md §3 is the
+design; the figure is a **lower bound**, the arm repeating the gather and the
+cross but not the `.cnt` in front of them.
+
+Two readings that outlive the question:
+
+1. **A trace is nearly all fixed cost where the polygons are small** — 6.6
+   rows an edge on `city` at 1,285 cycles — and the rows only start to matter
+   in a building view (26.7 rows at 2,866). A scheme that shares ROWS is
+   sharing the part that was never the expense in half the frames measured.
+2. **The vertex pipeline is already an indexed face set**: `cs_projall`
+   transforms and projects each vertex once per object and every face reads it
+   by index, so the nine multiplies a vertex — the part worth sharing — is
+   shared already. What is left unshared is scan conversion, and that is
+   3.2–11.0% of a frame in total.
+
+### Set 120 — CLEAR SKIES: the back-face cull moved in front of the projection, and the wireframe's per-pixel write priced (SPEC.md §88.5.12, §88.4.3.1, docs/plans/SKIES-FRAME-PLAN.md)
+
+Set 119's two leftovers, both measured with `make skiesprobe` +
+`tests/skiescount.py` on `os8088_5150_herc_gla`, means of 12 exact frames with
+the `OSAPI_FSX_WAIT` out, arms interleaved.
+
+**THE CULL.** `cs_faces` decides a face is back-facing from the signed area of
+its PROJECTED points (§88.5.10), so a culled face has already been counted
+against the near and side planes, gathered by index into `cs_pv` and paid two
+`imul`s — **1,326–1,478 cycles, and 29–60% of walked faces are culled.**
+`cs_axcull` (§88.5.12) decides it first and with **no multiply at all**: a
+stack's side face is an axis-aligned plane in WORLD space when its level pair
+is untapered, so the test is one compare against the eye's own world position,
+and `cs_scale` already has that offset because it is the input to the rotation
+(`dot(M x̂, M d) = d.x` for orthonormal M). 143 bytes.
+
+`[cs_axoff]` is the A/B — one image, one speed, the cull acting or computing
+and not acting:
+
+| | runway | city | tower | dflevel | dfangled | dfsquare |
+|---|---|---|---|---|---|---|
+| the winding alone | 176.08 ms | 181.20 | 204.76 | 236.69 | 260.35 | 253.76 |
+| `cs_axcull` on | 175.05 | 180.55 | 204.12 | **231.05** | **256.64** | **250.09** |
+| | −0.58% | −0.35% | −0.32% | **−2.38%** | **−1.43%** | **−1.45%** |
+| faces walked, off → on | 112→70 | 196→168 | 182→154 | 350→140 | 350→210 | 350→210 |
+
+**`dflevel` — level flight among buildings, where a box shows two of its five
+faces — walks 140 faces where it walked 350, and the winding is left with
+nothing to cull at all.**
+
+**THE WIREFRAME'S PIXEL.** `cs_dblplot` prices one `or [es:di], al` by doing it
+twice (`or` is idempotent, so the picture is identical):
+
+| per frame, wire | dfangled | tower |
+|---|---|---|
+| segments: shallow per-pixel / SLICED / steep / vertical | 9.0 / 23.6 / 7.9 / 6.8 | 8.6 / 21.6 / 9.4 / 7.9 |
+| pixels plotted (shallow / steep / vertical) | 861 (188/327/345) | 601 (133/226/242) |
+| **one plot** | **14.5 cy** | **14.2 cy** |
+| **every plot in the frame** | 2.62 ms (1.5%) | 1.79 ms (0.9%) |
+| **plots a byte accumulator could merge** | 0.37 ms (0.21%) | 0.16 ms (0.08%) |
+
+**The write is 14 cycles of a steep pixel's ~85**, 78% of the pixels are steep
+or vertical and 80 bytes apart so nothing can merge, and above six pixels a row
+the slice already lays runs. §88.13.3's dedup was worth 16.7 ms because it
+removed whole SEGMENTS — ~2,400 cycles each — and because that figure is Mode
+X, where a pixel is an `out` and a store.
+
+**THREE THINGS THE VERIFICATION COST, and they are the value of this set.**
+
+1. **`cs_axcull` must preserve SI.** The caller falls through to `.cnt`, which
+   walks the face's indices with `lodsb` from the SI it already has, where
+   `.plain` reloads it. Invisible on every WHOLE object (§88.3.2) and wrong on
+   every other: one building drawn wrong in a 32×6 patch. **The verdict audit
+   could not see it** — both tests agreed about the face and its indices were
+   then read from the wrong place. The framebuffer A/B found it.
+2. **…and a framebuffer A/B of this program cannot CERTIFY.** Two arms
+   byte-identical in behaviour and speed differ in **2 runs of 6, by 865 and
+   896 pixels**, in a band along the horizon, with the scene pinned and the
+   world paused. Four fixes were tried (capture at a breakpoint, count guest
+   frames, pin the nine flight-state words the position does not, re-pin every
+   frame at the breakpoint) and none removed it. The gate is the VERDICT AUDIT
+   instead — the new test's answer against the old one, face by face on the
+   guest — which reads 0 disagreements over 12 scene-and-fill configurations.
+3. **An A/B that can silently measure NOTHING needs an arm check.** Package bss
+   is zeroed, `cs_axmask` defaulted to 0, `and dl, [cs_axmask]` cleared every
+   axis bit, and the cull was inert in BOTH arms: six scenes read a tidy
+   +0.06%, and the timings looked entirely reasonable. What caught it was
+   printing the counters of what each arm actually did beside the milliseconds.
+
+### Set 121 — `font_run`'s VGA fast path covers 57% of the colour pairs, and no row in the tree drew one of the other 43% (SPEC.md §6.1.10.1)
+
+| | |
+|---|---:|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapters | `os8088_xt_vga` (mode 12h) and `os8088_5150_herc_gla` (720×348) |
+| harness | `tests/gfxbench`, report read back with `tools/os88flush.py` |
+| date | 2026-09-08 |
+
+Raised by an agent writing a game, reporting an attract line falling to
+`gfx_fill` + `font_str` on VGA — the pair §6.1 exists to replace — and asking
+whether §6.1.10 had regressed. **It had not**: `.plno` is byte-identical to the
+commit that introduced it (#116). What is true is narrower and was never
+written down for callers.
+
+#### The measurement
+
+Two rows added, the same string, length and place as `FONT_RUN 10 aligned` and
+differing only in the pen — the construction §6.1.12's disabled row already
+uses, and for the same reason.
+
+| row | VGA | Hercules |
+|---|---:|---:|
+| `FONT_RUN 10 aligned` — `CBLACK` on `CWHITE` (subset) | **2,997.88 µs** | 3,179.19 |
+| `FONT_RUN 10 coloured` — `CYELLOW` on `CBLUE` (shares no plane) | **7,200.25** | **3,178.70** |
+| `PAIR 10 coloured` — the same two colours written by hand | 6,882.19 | 8,654.36 |
+| `FONT_RUN 10 aligned` re-run, same session *(instrument control)* | 2,997.18 | 3,180.03 |
+
+**2.40× on VGA.** The instrument repeats to **0.023% (VGA) / 0.026% (Hercules)**
+within a session, so the gap is four orders of magnitude outside noise. And the
+sharpest number is the one Set 76 already taught us to look for: the coloured
+run is **4.6% SLOWER than the hand-written pair** at those colours (7,200.25
+against 6,882.19) — the pair, plus the cost of deciding not to take a fast path
+that does not cover this pen. Set 76 measured the identical shape at 3.3% when
+the fast path covered *no* VGA pen at all.
+
+**The Hercules column is the control and it is flat**: 3,179.19 against
+3,178.70, **0.015% apart** — inside the instrument's own repeatability.
+`font_ink` reduces either pair to 00/FF before the mono prologue runs, so the
+pen cannot reach that path, and the divergence is therefore VGA's alone rather
+than anything about the two strings. `PAIR 10 aligned` and `PAIR 10 coloured`
+read **identically** on VGA (6,882.19 both), which is the second control:
+`gfx_fill` + `font_str` does not care what the colours are, so the whole of the
+VGA movement is `font_run`'s own gate.
+
+Cross-check against the record: this session's Hercules `whole page of rows`
+reads **494,331.49 µs** against Set 76's **494,331** — the same instrument,
+three tree-months apart.
+
+#### Why it was invisible
+
+- **Every `FONT_RUN` row in `tests/gfxbench` drew `CBLACK` on `CWHITE`** — a
+  subset pair, always the fast path.
+- **All 42 statically-resolvable `OSAPI_FONT_RUN` call sites in `apps/` are
+  subset pairs.** (98 sites total; 56 take their colours from a variable and
+  cannot be ruled out by reading.) Nothing shipped has ever taken `.plno`.
+
+So the fall-back had no witness in the tree — which is *exactly* the sentence
+§6.1.12's disabled row is already there to stop being true, one pen along.
+**The lesson is the one that keeps recurring in this file: a fast path with a
+predicate needs a row on BOTH sides of the predicate, not a row on the side the
+kernel happens to use.** A census over the kernel's own pens sized the omission
+correctly and then got quoted as the exposure; the callers it did not count are
+the packages.
+
+#### What a caller needs to know, and what it costs
+
+The rule is a subset test on the plane bits, and its useful corollary is free:
+**if either colour is `CBLACK` or `CWHITE`, the pair always takes the fast
+path** (`0 ⊆ x`, `x ⊆ 15`). 146 of 256 ordered pairs are fast; the 110 that are
+not all have two "mixed" colours. A game wanting yellow letters gets the single
+store on black paper and the pair on blue.
+
+Not proposed here: the `Map Mask` second pass §6.1.10 left out. It is still two
+passes over the run, so against a 6,882 µs pair it would buy something well
+short of the 2.40× the subset pairs get, and the honest first move is that
+packages can have the fast path today for nothing by picking the pen.
+
+#### …and the pen was not the reporter's problem: the follow-up rows
+
+The report that raised this was **coloured text on a BLACK background**, and
+`bg = 0` makes `B` empty for every ink: **colour on black is always a subset
+pair and always takes the single store.** So `.plno` is not that bug, and the
+next candidate was the phase. Two more rows, 19 cells — an attract line's
+length — at `CYELLOW` on `CBLACK`:
+
+| VGA row | measured | vs aligned |
+|---|---:|---:|
+| `FONT_RUN 19 col/blk` — aligned | **4,891.29 µs** | — |
+| `FONT_RUN 19 col/blk +5` — off the byte grid (§6.1.11) | **7,832.39 µs** | **1.60×** |
+
+**§6.1.11 costs 1.60× and not an order of magnitude**, which is what its own
+arithmetic predicts: a run of `n` cells off the grid is `n−1` whole stores plus
+**2 merges**, not `4n` accesses, and the two edge bytes are stashed and written
+by two column passes with the Bit Mask set once rather than per row.
+
+The aligned row is also the **cross-check that the pen is on the fast path**:
+the cost model fitted to the `CBLACK`-on-`CWHITE` rows — 898.8 µs fixed plus
+209.9 µs a cell — predicts **4,887 µs** for 19 cells and the machine reads
+**4,891.29**, 0.09% out. A run that had fallen to `.slow` would read ~13,700.
+
+**So neither the pen nor the phase explains a reported 176 ms for 19
+characters**: that is **36× the aligned run and 22× the unaligned one**, or
+9.26 ms a character against a `FONT_CHAR one cell` of 629 µs — about fifteen
+primitive calls per character. The cost is above `font_run`, not inside it.
+Three things to rule out in that order, all of which have produced a number
+of this shape before: **a measurement taken under QEMU** (Part 3 — the µs
+column there is host speed and means nothing); **the line being redrawn per
+frame** and the span covering tens of frames; and **a per-character call**,
+which pays the 899 µs fixed part of a run nineteen times instead of once.
+
+### Set 122 — CLEAR SKIES IN FLIGHT: five moving profiles, every stage bracketed (SPEC.md §88.12.1)
+
+Everything in Set 119, Set 120 and SPEC.md §88.12 is a PINNED frame — the
+aeroplane parked, the world paused — which is what makes those A/Bs exact and
+what means none of them has ever measured a frame that had to step the flight
+model, redraw a panel field that changed, or refill a horizon that had rolled.
+This set flies.
+
+**Harness**: `tests/skiesprof.py`, `os8088_5150_herc_gla`, 24 flown frames a
+profile, tier 3. A profile pokes a starting state, sets the throttle and lets
+go; nothing is pinned after that except a held bank, where the profile says so.
+Every stage is bracketed **at its call site** — a breakpoint on the `call` and
+another on the instruction after it — so a stage's cost is one subtraction of
+the emulator's cycle counter and no arm is compared with another. A stopped
+guest burns no cycles, so `os88marty.bp_trace`'s pump is free to the
+measurement. The brackets nest, so the walk keeps a stack and an EXCLUSIVE
+cost is the inclusive one less the brackets inside it.
+
+**The unaccounted line is 0.07–0.13 ms, 0.0–0.1%, on all five.** That is what
+says these are the frame and not a sample of it.
+
+The view is the one asked for: over the Champ de Mars heading north-east —
+**three solids drawing polygons, two box impostors (§88.5.4), five FLAT ground
+models** (the Seine, the axis road) — a dozen objects.
+
+| 24 frames each | descend | climb | cruise | bank | turnhold |
+|---|---|---|---|---|---|
+| | −12° nose down, 600 m | rotating off Issy, full throttle | level, 300 m | 45° RELEASED, decaying | 45° HELD |
+| **frame** | **124.7 ms** | **152.8** | **164.5** | **238.9** | **282.8** |
+| fps | 8.02 | 6.54 | 6.08 | 4.19 | 3.54 |
+| spread | 16% | 17% | 4% | **71%** | 17% |
+| `cs_input` | 0.59 | 0.59 | 0.59 | 0.59 | 0.69 |
+| `cs_stick` ×ticks | 1.29 | 1.51 | 1.63 | 1.60 | 1.68 |
+| `cs_step` ×ticks | 8.06 | 9.61 | 10.17 | 10.20 | 10.45 |
+| `cs_r_begin` + `cs_matrix` | 1.8 | 1.9 | 1.85 | 1.9 | 1.85 |
+| `cs_skyground` | 8.55 | 9.28 | 8.76 | 30.33 | **47.77** |
+| `cs_scene` | 88.72 | 114.58 | 128.42 | 143.48 | 178.72 |
+| …`cs_consider` (47 objects) | 11.18 | 9.90 | 17.27 | 18.18 | 19.02 |
+| …`cs_drawobj` (n) | 74.83 (10) | 102.28 (7) | 108.28 (11) | 122.12 (14) | 156.22 (17) |
+| `cs_panel` | 4.87 | 5.04 | 3.57 | **20.61** | 5.02 |
+| `cs_blit` | 10.30 | 9.90 | 9.01 | 29.62 | **36.13** |
+
+Inside `cs_drawobj`, inclusive, level (`cruise`):
+
+| | ms | % frame | calls |
+|---|---|---|---|
+| `cs_faces` | 33.94 | 20.6% | 8 |
+| …`cs_poly` | 21.72 | 13.2% | 9.8 |
+| …… `cs_edge` | 6.83 | 4.2% | 28 |
+| …`cs_fclip` | 4.39 | 2.7% | 1 |
+| …`cs_axcull` | 1.21 | 0.7% | 14 |
+| `cs_edges` | 17.46 | 10.6% | 6 |
+| …`cs_seg` | 11.30 | 6.9% | 37 |
+| `cs_projall` | 18.02 | 11.0% | 8 |
+| `cs_scale` | 10.19 | 6.2% | 11.2 |
+| `cs_flatverts` | 10.03 | 6.1% | 5 |
+| `cs_stackverts` | 7.36 | 4.5% | 3 |
+| `cs_boxlod` (the impostors) | 3.25 | 2.0% | 2 |
+| `cs_markrows` | 2.01 | 1.2% | 7 |
+
+**A BANKED TURN IS 1.7 TIMES A LEVEL ONE and almost none of it is the
+objects.** §88.3.1's own sentence is what does it — a rolled horizon is
+refilled EVERY ROW WHOLE — so `cs_skyground` goes **8.76 → 47.77 ms (5.5×)**
+and `cs_blit`, which then has every row to carry, **9.01 → 36.13 (4.0×)**.
+Together **75.9 ms of a 282.8 ms frame, 26.8%, against 17.8 ms and 10.8%
+level.** That is the largest single lever this project has not taken.
+
+**The RELEASED bank walks the cost down inside one trace**, roll +42.6° → 0.0°:
+
+| frame | roll | total | skyground | blit | panel | scene | faces | poly | markrows |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | 45° | 302.4 | 47.9 | 40.9 | 41.0 | 157.8 | 66.7 | 54.0 | 10.4 |
+| 4 | ~40° | 313.9 | 47.9 | 39.9 | 40.9 | 169.2 | 59.1 | 45.1 | 7.9 |
+| 8 | ~33° | 304.0 | 43.4 | 40.8 | 44.7 | 159.1 | 45.8 | 33.8 | 7.0 |
+| 10 | ~30° | 250.1 | 38.7 | 38.0 | **2.4** | 156.2 | 43.4 | 31.4 | 6.4 |
+| 14 | ~20° | 215.6 | 23.1 | 30.4 | 2.4 | 145.0 | 41.2 | 29.2 | 3.9 |
+| 18 | ~9° | 165.4 | 10.0 | 15.4 | 2.4 | 122.9 | 40.0 | 25.7 | 2.2 |
+| 22 | ~0° | 150.0 | 9.0 | 9.9 | 2.4 | 114.1 | 37.1 | 25.1 | 2.1 |
+
+**THE PANEL'S CLIFF AT FRAME 10 — 44.7 ms to 2.4 — IS THE ADI, and it is the
+one thing on this page a still frame cannot show.** §88.9's items are redrawn
+when the value they show has changed, so the attitude indicator costs **41 ms
+a frame, 14% of a banked one**, for exactly as long as the roll keeps moving
+and nothing once it settles. It is why the HELD bank is *cheaper in the panel
+than the released one* — 5.02 against 20.61 — while being dearer everywhere
+else: a held attitude does not change, so the ADI stops redrawing.
+
+**Three more things no pinned frame charges for:**
+
+1. **The flight model is 6.2% of a level frame** — `cs_step` three times a
+   frame, one per tick, 10.17 ms. §88.12's table charges it nothing because
+   the world was paused there.
+2. **`cs_fclip` is 10.91 ms in the CLIMB** against 4.39 level, 7.1% of that
+   frame over 1.8 calls. On the runway the strip crosses both side planes at
+   its near end, which is §88.5.7's own worst case measured in flight.
+3. **`cs_consider` is 9.9–19.0 ms and never less than 6.5%** — 47 objects
+   considered every frame to draw 7 to 17. It is the largest single stage
+   after the drawing itself, and it grows with the bank because the cone
+   opens (§88.5.1).
+
+**Where the levers are, ranked by what a frame would give back:**
+
+| | level | banked | note |
+|---|---|---|---|
+| the rolled-horizon refill + its blit | 17.8 ms | **75.9 ms** | §88.3.1; nothing has been tried |
+| the ADI while the attitude moves | 0 | **41 ms** | one panel item, §88.9.2 |
+| the cull over 47 objects | 17.3 | 19.0 | §88.5.2's skips already cut it |
+| `cs_faces` inclusive | 33.9 | 73.8 | Set 120 took the back faces out |
+| `cs_edges`/`cs_seg` outlines | 17.5 | 13.7 | §88.4.7's size test governs |
+| the flight model | 10.2 | 10.2 | fixed per tick, not per pixel |
+
+### Set 123 — CLEAR SKIES: the ADI's erase, and what F6's four modes cost (SPEC.md §88.9.2.5)
+
+Set 122 found the attitude indicator at **41 ms a frame, 14% of a banked one**,
+for as long as the roll keeps moving. This is where that goes and what the
+four modes `F6` cycled are worth. (`Fast` won and shipped; see the note
+below the table.)
+
+**Harness**: `tests/skiesprof.py --tier 4 --profile rollsweep --adi <mode>`,
+`os8088_5150_herc_gla`, 20 flown frames. `rollsweep` drives the bank **2° a
+frame** so the ADI's key (§88.9.2 — the top bytes of roll and pitch) changes
+every frame; `bank` only passes through that state and its 71% frame spread
+swamps the comparison.
+
+**Where the ADI's time is**, bracketed inside `cs_d_adi` on `bank`:
+
+| | per frame | of the ADI |
+|---|---|---|
+| `cs_adwin` — the erase | **20.45 ms** | **90%** |
+| …`cs_elhw`, the half-width a row | 10.52 | of which `cs_isqrt` **7.08** |
+| …`cs_prect`, the row itself | 8.23 | |
+| the chord + the aeroplane, four `cs_seg` | 2.25 | 10% |
+
+**It is not the line — it is the erase, and half the erase is a SQUARE ROOT A
+ROW.** The glass is a filled ellipse and `cs_elhw` takes `sqrt(ry² − dy²)`
+per row, on every redraw, for a radius that cannot change in flight: 35 roots
+a redraw for 35 answers that were the same last frame.
+
+| `F6` mode | `cs_panel` mean | worst frame | the erase PER REDRAW |
+|---|---|---|---|
+| `Full` — as shipped | 22.43 ms | 44.88 | **30.8 ms** |
+| `Fast` — the table | 15.84 | 33.41 | **14.6 ms** |
+| `Small` — `Fast` + a half-radius glass | 9.06 | 20.99 | **7.5 ms** |
+| `Off` | 4.28 | 8.31 | 0 |
+
+**`Fast` halves the erase for the IDENTICAL picture** — 0 differing pixels of
+5,040 over the instrument's own box. +254 bytes of image, of which 82 are the
+table.
+
+**`Fast` is what ships, and `F6` is gone** — the ladder was the instrument
+that took this table and it has answered. Removing it and the three other
+modes gave **107 bytes** back (§88.9.2.5).
+
+**Three things about measuring this that cost time:**
+
+1. **The frame MEAN is the wrong comparison.** A roll sweep changes what is in
+   the view, so `Small` reads a 161.8 ms frame against `Full`'s 254.6 for
+   reasons that have nothing to do with the instrument. Compare `cs_panel`, or
+   the erase per redraw.
+2. **A pixel comparison needs the world PAUSED.** The ADI redraws when its key
+   changes, so with the model running the roll has moved on by the time it
+   draws and two shots of the SAME mode differ by 74 pixels. Paused, the poked
+   attitude is the one it draws and `Full` against `Fast` is 0.
+3. **The first `F6` after the bracket opens is swallowed**, so a script that
+   steps the ladder has to settle first and then check it arrived — the mode
+   byte is readable, so check it rather than counting presses.
+
+### Set 124 — CLEAR SKIES: the rolled horizon's span, and why the SAME code costs three times more inline (SPEC.md §88.3.1.1)
+
+`tests/skiesprof.py`, MartyPC, `os8088_5150_herc_gla`, the game's view 400×112
+and so 50 bytes wide on Hercules. Twenty flown frames of `turnhold` — a 45°
+bank HELD, so every row of the view is a split row for the whole run — and of
+`bank`, which decays out of one. Each stage is bracketed at its call site, so
+the numbers are one subtraction of the emulator's cycle counter and no arm is
+compared with another.
+
+**What a split row cost.** The band gave every split row `cs_fullspan`, so it
+was refilled AND carried whole:
+
+| | split rows a frame | carried | the crossing's band | crossing did not move a BYTE |
+|---|---|---|---|---|
+| `turnhold` | 112 — every row | 5,600 B | 336 (6.0%) | **112 of 112** |
+| `rollsweep` | 109.1 | 5,455 | 441 (8.1%) | 64.5 (59%) |
+| `bank` | 29.1 | 1,452 | 123 (8.5%) | 12.6 (43%) |
+| `cruise` | 1.0 | 50 | 3 (6.0%) | 1 (100%) |
+
+**THE HEADLINE IS NOT THE SAVING, IT IS THAT THE SAME DECISION HAS TWO
+PRICES.** The span decision — read the row's kind, take the crossing's byte,
+clamp it to the view, write the pair — was built first INLINE in the band's
+fill loop, which was already walking exactly those rows and already had the
+crossing in a register. It cost **12.5 ms a frame, 533 cycles a row**, and the
+whole change measured **280.2 ms against 280.1**: the blit's 7.9 ms saving
+spent entirely on the bookkeeping that produced it.
+
+Moved into a walk of its own immediately ahead of the fill loop — the view's
+first and last byte in a register, the shift count held in CL for the whole
+walk instead of being loaded and restored around the crossing 112 times, the
+rows stepped with `lodsw`/`stosw` instead of `mov di, si / add di, [cs_spcur]`
+— the identical decision costs **~168 cycles a row**. Nothing was taken out of
+it. What fell is the number of BYTES of code a row runs through, which is
+Part 2's `max(clocks, 4.34 × instruction bytes)` collecting on a loop that
+runs 112 times a frame.
+
+| Hercules 8088, 20 flown frames | frame | `cs_skyground` | `cs_blit` |
+|---|---|---|---|
+| `turnhold`, before | 280.1 | 47.75 | 36.17 |
+| ...decided inline | 280.2 | 55.88 | 28.31 |
+| ...**decided in a pass** | **276.0** | 51.70 | 28.37 |
+| `bank`, before | 256.0 | 34.60 | 33.39 |
+| ...**decided in a pass** | **254.3** | 36.88 | 29.04 |
+| `cruise`, before | 164.3 | 8.77 | 9.95 |
+| ...decided in a pass | 164.5 | 9.27 | 8.83 |
+
+**And the companion optimisation is REFUSED on its own measurement.** Laying
+only `union(last frame's span, this frame's band)` instead of the whole view
+was built and bracketed at all 112 calls of `cs_hzproc`:
+
+| `cs_hzrow_sh`, `turnhold` | ms a frame | cycles a row |
+|---|---|---|
+| the whole view — 50 bytes | 33.76 | 1,437 |
+| the union — typically 4 to 10 bytes | 29.92 | 1,273 |
+
+**A tenth of the pixels is 11% of the time.** ~1,100 cycles of a split row's
+fill is fixed — the row's offset, the crossing's byte (recomputed, the span
+pass having just done it), the mask lookup and two `cs_fillrun` calls — and
+the 50 bytes it lays are ~350 of it. `cs_blit`'s own per-row walk is ~300
+more. So after this change the rolled horizon is **112 rows × ~1,400 cycles of
+fixed cost**, and the pixels are nearly free: that is where the next reading
+goes, not at the fill's width.
+
+Three things worth not re-deriving:
+
+1. **`cs_dbg_hzby` is a WORD, and 112 × 50 × 20 is 112,000.** The first
+   reading of the table above said `turnhold` refilled **2,323 bytes a
+   frame** — one wrap of 65,536 divided by the frames — and `rollsweep` 2,178
+   for the same reason. Both are small, plausible numbers. Rows × `[cs_wbn]`
+   is what caught it, which is rule 3 of the summary in one line.
+2. **Writing the FILL's range as the row's span makes the span MONOTONIC.**
+   A row that was ever full stays full for ever, so the blit never comes back
+   down: 36.33 ms against 36.13, the change doing nothing but cost. The span
+   is what CHANGED; the fill is allowed to be wider than it.
+3. **A "this row is already right" skip is wrong and would not fire.**
+   `cmp ax, dx` against last frame's span is `cs_hzrows`' own skip and looks
+   free, but the band is the crossing's BYTE: a crossing that moves within one
+   byte gives the same band while the byte's own split moves, which quantises
+   the horizon to 8 pixels of x. It also never fired — in a held 45° bank the
+   crossing moves ~4 pixels a frame, so the byte changes every second one.
+
+### Set 125 — CLEAR SKIES: a split row's fill was 1,421 cycles and 350 of them were pixels (SPEC.md §88.3.1.2)
+
+`tests/skiesprof.py --tier 5`, MartyPC, `os8088_5150_herc_gla`, the view
+400×112 and so 50 bytes wide. `cs_hzproc` is bracketed at all 112 of its calls
+a frame, and its two `cs_fillrun` calls inside that, so the split is exact.
+
+| `cs_hzrow_sh`, `turnhold` | ms a frame | cycles a row |
+|---|---|---|
+| the two `cs_fillrun` calls — 49 bytes of pixels | 15.60 | 664 |
+| **its own body, everything else** | **17.76** | **756** |
+| the whole call | 33.37 | 1,421 |
+
+`rep stosw` over 49 bytes is ~350 cycles, so **1,070 of the 1,421 is
+overhead** — and all of it is work the caller had already done or the frame
+had already decided. The band loop holds the row's first view byte in DI and
+steps it by the stride; the routine rebuilt it from `cs_rowoff` and
+`cs_tbase`, reloaded ES, and bracketed the left run in `push di`/`pop di` to
+get back to it. Each run was a `call` into a routine that re-did `cld`, the
+odd-address test and the halving. And which pixel-mask table to use, and
+whether the index masks to 7 or 3, was re-decided every row for an answer that
+is the ADAPTER's and cannot change inside a frame.
+
+Taking the three of them: DI is passed and WALKS the row (the left run leaves
+it on the crossing's byte, the blend is a `stosb`, the right run carries on),
+the runs are a `FILLRUN` macro inlined at both sites, and the mask is
+`[cs_hzmt]`/`[cs_hzmm]` set once beside the ink patterns.
+
+| Hercules 8088, 20 flown frames | frame | `cs_skyground` | `cs_blit` |
+|---|---|---|---|
+| `turnhold`, before Set 124 | 280.1 | 47.75 | 36.17 |
+| ...with the span pass | 276.0 | 51.70 | 28.37 |
+| ...**and this** | **267.3** | **42.74** | 28.31 |
+| `bank`, before Set 124 | 256.0 | 34.60 | 33.39 |
+| ...**and this** | **248.7** | **31.81** | 28.89 |
+
+**+8 bytes** — the two inlined runs are paid for by the pointer arithmetic and
+the mask decision that came out. A held bank is 280.1 → 267.3 ms, 3.57 → 3.74
+fps, for the two changes together and 133 bytes.
+
+**And this set is also why a "the horizon has not moved" cache is refused.**
+The horizon is a function of `(roll, pitch)` alone — `cs_matrix`'s second
+column is `(-sr·cp, cr·cp, sp)` and carries no heading term — so "has the
+picture moved" is an exact five-word compare once a frame, and in a held bank
+it has not: **20 frames of 20, longest run 20**. Read off the shipping build
+at the `call cs_blit` site, with no probe:
+
+| `turnhold`, 20 frames | |
+|---|---|
+| horizon identical to last frame | 20 of 20 |
+| band rows that are object-free | **0 of 112** |
+| mean span width where not empty | **31 bytes of the view's 50** |
+| `bank`, same measure | still in 2 of 20 |
+
+A still horizon ought to mean a row needs no fill at all. It never does,
+because every band row is already widened by `cs_markspan` — **`cs_skyground`
+in a bank is mostly erasing last frame's objects, not drawing a horizon.** The
+cache therefore degrades to laying 31 bytes instead of 50, which Set 124
+prices at 3.84 ms, against ~2 ms a frame to obtain it.
+
+**And the change had a defect the fast tier could not see**, worth writing
+down because it is what "pass a pointer instead of rebuilding it" costs: the
+band loop borrows a register for the row's pattern PHASE two instructions
+before the call, and that register was **DI**. Harmless while `cs_hzrow_sh`
+rebuilt DI from `cs_rowoff`; fatal the moment DI became the pointer being
+passed. Every split row then laid itself at the top of the shadow. **A
+one-row band hides it completely** — level flight and roll 180 draw the
+identical picture, and `make`'s fast tier is host-side and cannot see a pixel
+at all — so it took `tests/skieshz.py`, which pins the attitude and sweeps the
+bank angle, to fail it: 0 groups wrong at roll 0 and 180, **867 at roll 150**,
+where the band is the whole view. The timings above were first taken on that
+build and are unchanged by the fix, because the bug wrote the same bytes to
+the wrong address.
+
+Two instrument notes, both of which cost a run:
+
+1. **A breakpoint takes a FLAT address**, and the listing gives an offset in
+   the package. Arming one without the load segment makes nothing hit, and the
+   wait then sits out its whole limit looking like a slow guest rather than a
+   bad address. `tests/skiesprof.py` says so in a comment for the same reason.
+2. **`cs_hzy0`/`cs_hzy1` are not the band.** They are where the horizon meets
+   the view's left and right edges, which at 45° in a 400-wide view is rows
+   −61..174 of a 112-row view — so a host-side walk of "the band's rows" that
+   trusts them reads 236 rows, and `y0` being NEGATIVE reads in front of the
+   span array. The band loop clamps to `[0, cs_wh)`; anything reading it must.
+
+### Set 126 — CLEAR SKIES: the band's row stops being a CALL, and a byte count that was a quarter right (SPEC.md §88.3.1.3)
+
+Set 125 took the row filler's half of the overhead and left the seam. `tier 5`
+on the post-diet build, `turnhold`, Hercules, view 400×112:
+
+| | ms a frame | cycles a row |
+|---|---|---|
+| `cs_hzrow_sh` (`hzproc`) | 24.46 | 1,042 |
+| the band LOOP around it — `cs_skyground` exclusive, less the span pass | 14.1 | **601** |
+| the row, all in | 38.6 | 1,643 |
+
+The loop's own 601 is three `push`/`pop` pairs, the row's ink pair fetched as
+two bytes through two pointers, the 0x7FFF sentinel test and a `call`/`ret`.
+So the band is now ONE loop with no call in it on the shadow backends: the ink
+PAIR is a word in `cs_hzpat4` built once a frame, the walk of `cs_xl` is
+`lodsw` against a hoisted `[cs_hzend]`, and the row's three runs — left, the
+crossing's blended byte, right — write straight through DI without restoring
+it. Mode X keeps the per-row call, its filler selecting planes as it goes;
+`cs_hzrow_sh` and `[cs_hzproc]` are deleted, so the fusion is **+89 bytes**.
+
+| Hercules 8088, 20 flown frames | frame | `cs_skyground` | `cs_blit` |
+|---|---|---|---|
+| `turnhold`, before Set 124 | 280.1 | 47.75 | 36.17 |
+| ...span pass | 276.0 | 51.70 | 28.37 |
+| ...fill diet | 267.3 | 42.74 | 28.31 |
+| ...**fused** | **263.1** (3.80 fps) | **38.41** | 28.44 |
+| `bank`, **all three** | **246.1** (4.06 fps) | 29.18 | 29.21 |
+
+**280.1 → 263.1 ms in a held bank for 222 bytes across the three changes.**
+
+**THE FUSION BOUGHT A QUARTER OF WHAT THE BYTE COUNT SAID, and that is the set
+worth remembering.** It was predicted at ~936 cycles against 1,643 — 16.6 ms —
+by the same method that made Set 124's span pass a 3× win: count the bytes of
+code the row runs through, multiply by 4.34. It measures ~1,460: **183 cycles
+a row, 4.3 ms.**
+
+The difference is what the row is made of. The span pass's body is ~33 bytes
+of register work with two memory operands, so its fetch floor IS its cost. A
+fill row is ~135 bytes with twenty memory operands and two `rep stosw` runs,
+and at ~24 cycles a word the 25 words it lays are **~600 cycles, 41% of the
+row.** Hoisting cannot touch the stores or the operand fetches, so
+`max(clocks, 4.34 × bytes)` priced the third of the row it applies to and said
+nothing about the rest. **Use the byte count where the body is registers; use
+it as an upper bound on the saving where the body is memory.**
+
+So the next candidate is the one that reduces the WRITES: laying
+`union(last frame's span, this frame's band)` — a mean of 31 bytes of the
+view's 50 — which Set 124 measured at 164 cycles a row and refused when the
+row cost 1,437 and the range had to be threaded through three row fillers. In
+a fused loop it is a handful of bytes, and it is the largest single item left.
+
+**And a new profile joins the set: `sparse`** (SPEC.md §88.3.1.3.2). The other
+five are busy on purpose, so the horizon cache Set 125 refused had only ever
+been measured where every band row has an object on it. `sparse` is
+`turnhold`'s held bank over an EMPTY quarter of the map — no object in the
+view at all — and it is a different machine:
+
+| held 45° bank, 20 frames | `turnhold` | `sparse` |
+|---|---|---|
+| frame | 263.1 ms (3.80 fps) | **77.6 ms (12.88 fps)** |
+| `cs_scene` | 176.07 | 6.50 |
+| `cs_skyground` | 38.41 (14.6%) | **38.64 — 49.8%** |
+| `cs_blit` | 28.44 | 15.09 |
+| band rows object-free | 0 of 112 | **112 of 112** |
+| mean span width | 31 of 50 | **3.0** |
+| horizon still frame-to-frame | 20/20 | 7/20 |
+
+**With nothing to draw the horizon IS the frame**, and every row of it is
+skippable — the case the cache wanted. Over these twenty frames that is ~13.5
+ms of 77.6; on a still frame 77.6 → ~39.
+
+**The aerodrome was tried first and is the wrong scene, which is the finding
+to keep.** Three short buildings and two of the Seine's ribbons reads as
+sparse and measures as busy: **0 of 112 rows object-free and spans WIDER than
+turnhold's, 33.1 bytes against 31**, with FEWER objects and an empty sky.
+`cs_markrows` marks an object's bounding BOX (§88.3.2) and a flat ground model
+kilometres across whose ink is a thin diagonal has a box the size of the view.
+A per-row interval represents a diagonal horizon perfectly; one rectangle per
+object cannot represent a diagonal at all. `cs_poly` already computes the
+exact per-row bounds it fills between, so marking from those is a
+compare-and-store on a pair the loop already holds — a different trade from
+§88.3.2's refusal, which was a wireframe tower's 32 segments each running
+`cs_markrows` over the same hundred rows.
+
+### Set 127 — CLEAR SKIES: a row costs ~50 cycles to MARK and ~4.5 a byte to CARRY (SPEC.md §88.3.2.1)
+
+Set 126 left "the box is the wrong shape for a diagonal" as the next lead, and
+this set prices it and refuses it. Stopping after every `cs_drawobj` in a held
+45° bank and reading the span set's total width — host-side, no build:
+
+| `turnhold`, one frame | span total | it added |
+|---|---|---|
+| after `cs_skyground` | 336 (112 rows × the 3-byte band) | — |
+| **after the AXIS ROAD** | **2,928** | **2,592** |
+| every one of the eight objects after it | 2,928 | **0** |
+
+**One object does all of it.** `cs_m_axis` — Paris's Louvre-to-La-Défense
+axis — is `CSM_FLAT` with three vertices, no faces and two edges: a polyline.
+In a bank one segment crosses the whole view, so its clipped box IS the view
+and it marks 26 bytes on every one of 112 rows where its ink is a few. Every
+later object then finds everything already marked, which is why a "sparse"
+scene with two Seine ribbons measured busier than `turnhold` (Set 126).
+
+Marking a flat model's segments in sixteen ROW BANDS instead — each band with
+the x range the line actually has there, one divide for the step, addition
+after — was built and measured:
+
+| `turnhold`, 20 flown frames | fused | + banded marks |
+|---|---|---|
+| span total marked | 2,928 | **1,752** (−40%) |
+| `cs_blit` | 28.44 | **27.34** (−1.10) |
+| `cs_scene` | 176.07 | **180.04** (+3.97) |
+| frame | **263.1** | 266.0 (**+2.9**) |
+
+**The marks got 40% tighter and the frame got 2.9 ms slower.** Two unit costs
+explain it, and they decide every marking question in this program:
+
+> **A row costs ~50 cycles to MARK and ~4.5 cycles a byte to CARRY.**
+
+`cs_markrows`' inner loop is a read, two compares and a write; `cs_blit` moves
+a byte for about a ninth of that. So a marking pass over R rows pays only if
+it saves more than **eleven bytes on every row it touches** — banding the axis
+road saved 10.5. More bands narrow the marks and cost nothing per row, so it
+is not a tuning problem: the PASS is what is dear, and a segment that marks
+its own rows stops accumulating into the object's box, so a two-segment object
+walks the rows twice where it walked them once.
+
+§88.3.2 refused per-primitive marking on a wireframe tower's 32 segments and
+lost by 45 ms. This is the friendliest case imaginable — one object, two
+segments, a box the size of the view, ink a few bytes wide — and it still
+loses. **The mark is per object and off its box; that is settled.** The
+change is reverted and `build/skies.bin` is byte-identical to before it.
+
+**And the instrument was wrong about the aeroplane.** Set 126 reported the
+empty turn's horizon still in only 7 frames of 20 and a held bank that seemed
+to wobble. It was the PIN wobbling: `tests/skiesprof.py`'s held-bank profiles
+pinned the roll at the frame's START and then let the model run, so what
+`cs_matrix` saw was 45° less whatever §88.7.5's easing rolled out over that
+frame's ticks — and at 77.6 ms a frame takes one tick or two. The raw attitude
+took exactly two values, 146 units apart, which is one tick of roll-out; the
+horizon alternated between two positions three rows apart. Pinned at the
+matrix instead, the same profile reads **19 of 20, longest run 19** — so the
+cache §88.3.1.1.2 refused is worth ~33 ms of the empty turn's 77.6 (12.9 → ~23
+fps) and still nothing at all in a busy one.
+
+### Set 128 — CLEAR SKIES: REFUSED, the narrow fill — a proportional saving against a fixed cost (SPEC.md §88.3.1.3.3)
+
+Set 126 left the row's two `rep stosw` runs at ~600 cycles, 41% of it, and the
+mean span at 31 bytes of the view's 50. So the last candidate is the one that
+reduces the WRITES: lay `union(last frame's span, this frame's band)` instead
+of the whole view. Correct, gated (`tests/skieshz.py` passes unchanged),
+**+109 bytes, and a regression wherever there is anything to draw**:
+
+| 20 flown frames | fused | + the narrow fill |
+|---|---|---|
+| `turnhold` | **263.1** | 270.1 (**+7.0**) |
+| `bank` | **246.1** | 248.6 (**+2.5**) |
+| `sparse` — the EMPTY turn | 77.6 | **71.3** (−6.3, 12.9 → 14.0 fps) |
+| `turnhold` `cs_skyground` | 38.41 | 41.90 |
+| `sparse` `cs_skyground` | 38.64 | 36.84 |
+
+**A proportional saving against a fixed cost.** Obtaining the union costs
+~340 cycles a row — three indexed reads, four compares, and u0/u1/the pixel
+mask in memory temporaries because the fused loop has no register left — and
+laying one byte fewer saves ~10. So it pays when the union is under **16 bytes
+of the 50**: `sparse`'s is 3 and it wins by 8%, `turnhold`'s is 31 and it
+loses. Halving the block's cost would only move break-even to 30, so this is
+not a code-quality problem.
+
+**It is the same wall as Set 127, seen from the other side.** The narrow fill
+fails because the mean span is 31 and not 12; the mean span is 31 because a
+mark is an object's BOX; and tightening the box costs more than the blit it
+saves. Three changes in this family now measure: the span (Set 124, kept), the
+fill's range (this, refused), the mark's shape (Set 127, refused).
+
+Reverted; `build/skies.bin` is byte-identical to before it. **What the family
+did buy is Sets 123–125: 280.1 → 263.1 ms in a held bank, 3.57 → 3.80 fps, for
+222 bytes** — all of it from removing per-row FIXED cost, none of it from
+drawing less.
+
+### Set 129 — CLEAR SKIES: cs_blit's row, and why a control must be SAME-SESSION (SPEC.md §88.3.6)
+
+Set 128 left `cs_blit`'s per-row walk as the last per-row fixed cost in the
+horizon. Breakpointing the row loop's own top and taking the delta between
+consecutive hits gives the row whole, copy and all — 856 of them over
+`turnhold`, no model in between:
+
+| a `cs_blit` row, Hercules | cycles |
+|---|---|
+| **empty** — nothing in either set | **~129** |
+| narrowest working row (p10) | ~518 |
+| median working row | 904 |
+| widest | 1,850 |
+
+The narrowest working row is the fixed cost with almost nothing copied, so it
+is **~490 a row**, and the slope over the median's ~11 words puts a word to
+Hercules VRAM at **40–49 cycles**. Solving the same two unknowns from two
+scenes instead (`turnhold` 126 working rows and 2,879 bytes at 28.42 ms,
+`sparse` 119.6 and 372.6 at 14.47) gives 490 and 49 independently. So
+`turnhold`'s blit is **12.9 ms of walking, 14.8 of copying, 0.6 of empty
+rows** — and the empty rows are not the target, the range being rows 0..157
+and not the screen's 348.
+
+**What was in the 490 was a segment register.** The row swapped DS to the
+shadow and back every iteration — `push ds` / `mov ds, [cs_shseg]` / `pop ds`,
+43 clocks for a value that cannot change inside a frame. A package runs
+**CS = DS**, so DS holds the shadow for the whole walk now and the three reads
+that want the package's own data take a `cs:` override at one byte and two
+clocks each. **+4 bytes**, `cs_blit` **28.36 → 27.2 ms**.
+
+**AND THE CONTROL IS THE REAL SET.** That −1.1 ms frame is quoted against a
+control built from the committed source and run in the same session, because
+measured an hour apart the identical build reads **263.1 ms and then 266.6**
+on the same profile — 1.3%. Host-side breakpoint overhead changes how many
+18.2 Hz ticks land inside a frame; the aeroplane flies a slightly different
+path; `cs_scene` follows it, at 176.07 and then 177.67 for code that did not
+change. Measured against yesterday's number, a change inside `cs_blit`
+appeared to make `cs_scene` 1.8 ms slower.
+
+`tests/skiesprof.py` is exact *within* a run — the brackets are cycle counts
+and a stopped guest burns none — and the drift is entirely in WHICH FRAMES get
+flown. So: **build the control from the tree you are comparing against and run
+it beside the change**, which is what `git stash` plus one rebuild costs, and
+treat any cross-session delta under ~2 ms on a 260 ms frame as unmeasured.
+
+### Set 130 — CLEAR SKIES: where cs_scene's 169 ms goes, and the cull taken apart (SPEC.md §88.5.2.1)
+
+`cs_scene` is 169 of `turnhold`'s 265 ms and had never been split. Tier 2 over
+twelve flown frames with tier 3's sub-splits:
+
+| | ms | % of scene | calls | cycles each |
+|---|---|---|---|---|
+| **the polygon FILL** (`cs_poly` less `cs_edge`) | 39.8 | 24% | 11.5 | **16,500** |
+| the object cull `cs_consider` | 19.1 | 11% | 47 | 1,894 |
+| `cs_project` | 15.6 | 9% | 8.8 | 8,450 |
+| `cs_scale` | 14.3 | 8% | 16.1 | 4,246 |
+| `cs_edges` (own + `cs_seg`) | 12.8 | 8% | 6.8 | — |
+| `cs_edge` (polygon edge trace) | 12.4 | 7% | 21 | 2,813 |
+| `cs_flatverts` | 11.7 | 7% | 5.8 | **9,640** |
+| `cs_markrows` | 9.5 | 6% | 5.4 | 8,410 |
+| `cs_faces`' own | 7.3 | 4% | 8.8 | — |
+| **`cs_fclip`** | 6.1 | 4% | **1.0** | **29,000** |
+| `cs_stackverts` | 4.9 | 3% | 3.0 | 7,840 |
+| boxlod / wireclr / sizepx / axcull | 7.6 | 4% | — | — |
+
+**THE CULL IS NOT FAT.** `cs_consider` bracketed at its own call site, 323
+calls over six frames, split by whether `cs_nvisn` moved:
+
+| per frame | calls | cycles each | ms |
+|---|---|---|---|
+| cheap rejects — tier ladder, skip counter, Manhattan | ~21 | ~390 | 1.7 |
+| **cone rejects** | ~14 | ~2,080 | **6.1** |
+| **filed** | ~15 | **3,255** | **10.3** |
+
+A filed object costs ~1,175 cycles *more* than a rejected one that did the same
+work — `.file`'s six-word record and an insertion sort whose body is 29 bytes
+and ~126 cycles a shift. The ~2,080 common to every expensive call is the range
+test and the cone: **five 8086 multiplies** (one in `cs_range`, four `MUL14` at
+~150 clocks) over a ~200-byte fetch floor. Twenty-nine in-range objects a frame
+each need a rotation to know where they are.
+
+**What WAS redundant is +13 bytes' worth.** `cs_range` looked the Detail rung's
+scale up once an OBJECT — `[cs_setlod]`, a shift, an index into `cs_lodscl` and
+a `push bx`/`pop bx` — for an answer that cannot change inside a frame; it is
+`[cs_lodsc]` now, read once in `cs_scene`. And at `CSL_MOD`, the rung the
+simulator ships on, **that scale is 256**, so `range × 256 >> 8` is an ~130-cycle
+`mul` by one and the identity is tested for instead. `cs_lodat` takes the same.
+
+| turnhold, tier 2, **same session** | control | + the hoist |
+|---|---|---|
+| `cull#1` | 18.75 | **17.80** |
+| `cs_scene` | 169.05 | **168.00** |
+| `drawobj` / `faces` | 146.81 / 68.34 | 146.82 / 68.34 |
+
+The neighbouring terms are identical to 0.01, which is what a same-session
+control buys (Set 129).
+
+**And one probe error worth not repeating.** The first run of that split read
+five visible objects where the profiler sees eighteen, and priced the cull at
+half. **A poke is a teleport, so the cull's skip counters have to go**
+(§88.5.2) — `tests/skiesprof.py` does it and the scratch probe did not, so
+most of the world stayed filed away as out-of-range and the very thing being
+measured was halved.
+
+### Set 131 — CLEAR SKIES: REFUSED, the angular skip — and the four gates that could not see it (SPEC.md §88.5.2.2, §88.5.2.3)
+
+Set 130 named the angular skip as the biggest thing left in the cull, and
+built it measures like it. Twelve of the twenty objects a frame that reach the
+cone are refused by it, at ~2,080 cycles each, every frame, and §88.5.2's
+`CSO_SKIP` was already the mechanism. Measured on `turnhold`, tier 2, twelve
+frames, **same-session controls throughout** (Set 129):
+
+| | control | skip `/32` | skip `/64` |
+|---|---|---|---|
+| `cull#1` | 17.80 | 16.46 | **15.46** |
+| frame | 257.6 | — | **251.6** |
+| cone rejects a frame | 12.6 | — | **7.7** |
+
+**It was buying a changed picture. Three landmarks and a road stopped being
+drawn, and it is refused.**
+
+**The four gates that reported it clean**, which is the reusable half of this
+set:
+
+| gate | why it says nothing |
+|---|---|
+| the profiler's `objects 18 → 18` | that is the WORLD's object count, not the drawn one |
+| the FILED SET, frame by frame | an object can be filed and then refused by `cs_drawobj`'s frustum. The first comparison found ten differing frames that were all one road drawing no pixels |
+| a hash of the WHOLE framebuffer | the panel integrates over TICKS and two builds do not spend them alike — **29 of 46 frames "differed"** on airspeed and altitude |
+| a turn scripted per FRAME | the bound is per TICK. `sparse` is ~1.8 ticks a frame, so 2.88° a frame is **1.5° a tick, 2.5× what the aeroplane can do** — the harness violated the premise, not the code |
+
+**The instrument that works** pins `[cs_last]` as well as the attitude: every
+frame advances the tick counter by exactly N and the heading by exactly
+N × 0.626°, the flight model's own ceiling (`CSP_TURNK` 90 + `CS_RUDDER` 24 =
+114 units a tick). Both builds then see the identical world at the identical
+tick at frame *i* whatever they cost to draw. The reading is the DRAWN set
+(`CSO_SEEN`) beside a hash of the **3D view's** pixels alone. It is exactly
+reproducible — **the same build twice differs in 0 of 93 frames** — and that
+control is what turned a counter-intuitive result into a second bug.
+
+**Why it cannot be made to pay.** The cone is not a conservative test: it
+refuses at `f·|along| + r` where a vertex `r` from the centre needs
+`f·|along| + (1+f)·r`. At f = 1 it is short by a whole radius — **3,739 m for
+`cs_m_per1`**, a Paris périphérique segment. The cone throws the road out, the
+frustum keeps it, and it stays on screen only because §88.5.1 files an object
+drawn last frame **without a cone test at all**. Re-testing every frame
+repairs that in one frame; a skip does not. Widen the margin to
+`|along| + 2(r + |dy|)`, make every compare unsigned (the sum passes 32,767,
+and a signed `jle` reads an object well inside as enormously outside and hands
+it the full 255 ticks), and the picture becomes exact — **0 of 91 and 0 of 90
+frames differ in the DRAWN SET** — while the saving disappears:
+
+| turnhold, tier 2, same session | control | sound skip + sort |
+|---|---|---|
+| `cull#1` | 17.70 | 17.58 / 17.59 |
+
+Only **3.0 of 17.1 cone tests a frame** qualify once the margin is sound, and
+they save about what they cost. 56 bytes for 0.0 ms.
+
+**What did pay, from the same session:** the insertion sort's shift body. A
+breakpoint on it counts **67 shifts over 15 filed objects a frame — 1.77 ms**.
+The loop kept a source pointer in SI when `[di-4]`/`[di-2]` address the source
+for nothing, and loaded the compare's word twice. 131 → 116 cycles a shift,
+**29 → 26 bytes**:
+
+| turnhold, tier 2, same session | control | + the sort |
+|---|---|---|
+| `cull#1` | 17.80 | **17.42 / 17.43** |
+| frame | 257.2 | 256.9 / 256.9 |
+
+**0.375 ms against 0.21 predicted** — the arithmetic prices the shift and not
+the prefetch, and three bytes out of a 29-byte loop relieve the 8088's queue
+for the code around it as well. The two arms agree to 0.01 ms.
+
+**The standing lesson is rule 5 one level up.** The shape of the optimisation
+survived every rebuild and every timing; what it had stopped doing was drawing
+three landmarks and a road. **A cull change is not measured in milliseconds
+until it has been measured in pixels.**
+
+### Set 132 — CLEAR SKIES: `cs_poly` taken apart, and a row loop that is 89% ENCODING (SPEC.md §88.4.5.1)
+
+Set 130's cull work left `cs_scene` at 67% of a banked frame, and the parts
+round (§88.10.5) changed none of it — the worlds became lazy parts and the
+frame is **identical to 0.3 ms on every stage**, which is what a bss overlay
+was for. What HAS changed rank is `cs_poly`: §88.5.4.6's banked impostor
+covers 12.5 rows where the compressed one covered 6, so the row filler is now
+the largest single exclusive term in the program.
+
+**Where `cs_poly`'s 40 ms goes**, `turnhold`, 14.2 calls a frame of which half
+exit at the bounding-box reject:
+
+| phase | ms a frame | cycles a call |
+|---|---|---|
+| the min/max pass + the rejects | 1.58 | 1,029 |
+| the box mark | 0.68 | 444 |
+| the one-or-two-row test | 0.04 | 28 |
+| the sentinel pass (§88.5.4.7) | 1.89 | 1,265 |
+| the edge loop (`cs_edge` is 13.5 of it) | 17.71 | 11,524 |
+| **the ROW LOOP** | **37.96** | **25,084** |
+
+**A row is 725 cycles and 2.1 bytes wide.** Regressed over 1,800 rows with the
+deltas reset at each polygon — the first attempt let a delta span from one
+polygon's last row to the next one's first, folded a whole edge loop into a
+row, and read a **negative cost a byte**:
+
+    whole iteration   509 + 101.5 x bytes     70% of it fixed
+    the storing body   49 +  93.1 x bytes
+
+So **480 cycles of every row is bookkeeping and 245 is storing**. The mean row
+is 17 pixels while the median polygon BOX is 45 wide by 36 tall, and those
+only reconcile one way: **a banked polygon is diagonal** — a wide box with
+narrow rows. It is the same geometry that makes `cs_markrows` 9.25 ms in a
+bank against 2.04 level.
+
+**AND THE LOOP IS FETCH-BOUND, which decides what a fix may look like.** A
+masked row executes **148 bytes**; at the 8088's `max(clocks, 4.34 x bytes)`
+floor that is **642 cycles against 725 measured — 89%**. Removing clock cycles
+from this loop buys nothing. Removing ENCODED BYTES buys 4.34 each.
+
+| a row's 148 bytes | bytes | cycles of floor |
+|---|---|---|
+| loop head + the `cs_xl`/`cs_xr` read | 12 | 52 |
+| **the CLAMPS** | **25** | **108** |
+| the empty-row test | 4 | 17 |
+| the pattern byte | 10 | 43 |
+| first byte + its mask | 15 | 65 |
+| last byte + its mask | 15 | 65 |
+| address + width | 10 | 43 |
+| **the STORES** | 43 | 187 |
+| pop + advance + loop test | 14 | 61 |
+
+**Only 43 of 148 bytes write pixels.** §88.4.5.1 takes the 25 out of line
+behind BP: **148 -> 128 bytes**, `cs_scene` **174.73 -> 172.23 ms** and the
+frame **262.2 -> 259.7** on `turnhold`, for **+33 bytes** — and **nothing at
+all** on `bank`, `cruise` or `descend`, because in level flight the near
+buildings fill the view and 59 of ~63 rows a frame still need the clamp,
+where a held bank runs 257 rows and 76% of them skip it.
+
+**...and the sentinel pass is retired outright (§88.4.2.2).** The other two
+items the breakdown named came out very differently from how they were
+estimated. The edge loop's own per-edge setup is **2.43 ms**, not the 4.2 a
+cross-run subtraction had given it - `cs_edge` itself is **16.02 ms over 30.2
+edges** and is the real weight there. And the sentinel pass, at 1.89 ms, had
+**no customer at all**: reading `cs_xl`/`cs_xr` back at `.rows` over each
+polygon's own row range found **0 rows left bare of 4,654, over 209
+polygons** on four profiles. The only thing that ever read a chain back was
+`cs_edge`'s horizontal arm, and a convex polygon at its top row IS its top
+edge - so that store is unconditional now, nothing reads back, and the pass,
+its `[cs_pnosent]` promise, the `push ds`/`pop es` that only the `rep stosw`
+wanted and `cs_edge`'s already-unreachable sloped `both` arm all go:
+
+| tier 1, 16 frames | control | + the removal |
+|---|---|---|
+| `turnhold` `cs_scene` | 172.23 ms | **170.50 / 170.12** |
+| `bank` `cs_scene` | 155.93 | **154.50 / 154.50** |
+| `cruise` `cs_scene` | 126.62 | **126.22 / 126.22** |
+
+**-1.9 ms and -100 BYTES**, on every profile rather than only the banked one,
+and 0 differing frames of 557 across six profiles.
+
+**...and `cs_edge`'s two chains were ONE loop written twice (§88.4.2.3).** At
+16.0 ms a frame it is the largest routine in the scene after the row filler,
+and it splits into a **4.60 ms setup** (765 cycles a call; its above-view arm
+runs on 12% of them) and **13.48 ms of Bresenham stepping** at `83 + 90.0 x
+rows` over **689 row-stores a frame**. `.left` and `.right` were the same
+thirty-six lines differing only in the array - and the array was also why each
+store cost FOUR bytes, `mov [cs_xl + bx], si` carrying a disp16 where
+`mov [bx], si` is two. BX becomes a real pointer, the arms become one loop,
+and the reload of q and r moves into the only arm that clobbers them:
+
+| tier 1, 16 frames | control | + both |
+|---|---|---|
+| `turnhold` `cs_scene` | 170.50 ms | **169.39 / 169.32** |
+| `bank` `cs_scene` | 154.80 | **153.92 / 154.07** |
+| `cruise` `cs_scene` | 126.22 | **125.88 / 125.88** |
+
+**-1.13 ms and -54 bytes.** The duplicate is the part worth remembering: two
+arms since the routine was written, reading as a deliberate specialisation,
+and the only thing specialised was a constant.
+
+**Three things this set is a worked example of.** A delta that crosses a
+structure boundary measures the boundary — the negative slope above was the
+finding that said so, not a noisy fit. And a prediction off a fetch floor is
+an UPPER bound: 3.6 ms predicted, 2.5 delivered, because 4.34 x bytes is only
+reached when the operands are registers. **And an instrument that hangs the
+guest is not the change hanging it**: a callback raising inside a breakpoint
+trace never resumes the machine, and CSO_SEEN latched during an UNPINNED
+warm-up made one terrain object differ on all 93 frames of `descend` with the
+pixels identical. The same build against itself is what separates those, and
+it is taken before any conclusion.
+
+### Set 133 — CLEAR SKIES: which REGISTER the scalar sits in, and a third of `cs_flatverts` (SPEC.md §88.5.6.2)
+
+docs/plans/SKIES-FRAME-PLAN.md §7.6.3 ranked the vertex pipeline by multiply share and put
+`cs_flatverts` at the head of it. Bracketed phase by phase — `bank`, 7 frames,
+5.9 calls a frame of 4.5 vertices each — it read:
+
+| phase | ms a frame | cycles a vertex |
+|---|---|---|
+| the prologue (once a call) | 0.14 | — |
+| A the x setup | 0.86 | 155 |
+| **B `cs_colscale` (x M0)** | **3.78** | **683** |
+| C the z setup | 0.78 | 140 |
+| **D `cs_colscale` (z M2)** | **3.93** | **714** |
+| E the sum and the stores | 2.04 | 370 |
+| F the loop's advance | 0.29 | 66 |
+| **total** | **11.81** | **2,128** |
+
+Six `MUL14` a vertex is ~144 clocks each, so **936 of the 2,128 is the
+multiply and 1,192 is not**: two `call`/`ret`, eight push/pops, two reloads of
+a loop-invariant `[cs_pshr]`, and — the largest single item — **twelve memory
+round-trips**, `cs_colscale` writing three words to `cs_col0`/`cs_col2` that
+the caller then reads back and adds.
+
+**What deletes the lot is which register the scalar sits in.** `MUL14` is
+`imul bx`, so it clobbers AX and DX and **leaves BX alone**. Put the scalar in
+BX and the matrix element in AX — a multiply is commutative, so the product is
+the same bit for bit — and one scalar serves all three of its multiplies with
+no save, no call and no scratch array. CL then holds `[cs_pshr]` for the whole
+routine, BP is the counter, and each product lands straight in its output
+word: the x column STORES, the z column ADDS INTO the same word.
+
+Same-session control, NEW/BASE/NEW, tier 2, 16 frames:
+
+| | `cs_flatverts` | | frame | |
+|---|---|---|---|---|
+| | control | + BX | control | + BX |
+| `turnhold` | 11.87 ms | **8.60 / 8.83** | 256.8 ms | **253.7 / 253.7** |
+| `bank` | 10.04 | **7.71 / 7.71** | 248.5 | **245.9 / 245.9** |
+| `cruise` | 10.44 | **7.53 / 7.37** | 162.6 | **159.5 / 159.2** |
+
+**−2.3 to −3.2 ms, and the whole frame moves by the same amount** — the frame
+is 3.89 → 3.94 fps in `turnhold` and 6.15 → 6.28 in `cruise`. A vertex is
+**2,128 → 1,394 cycles**, so what is left is **62% multiply** where it was
+44%: the scaffolding is gone and the arithmetic is what remains.
+
+The predicted saving was ~4.0 ms and 2.8 delivered, which is Set 132's rule
+again — a prediction off the fetch floor is an UPPER bound. The routine grew
+**+28 bytes**, and they come out of the declared gap ahead of `CS_VOCAB_AT`,
+so the package image is the same 49,216 bytes it was.
+
+**The gate is that the picture cannot have moved at all**, and it did not:
+`tickscript.py` over six profiles — `turnhold`, `sparse`, `cruise`, `bank`,
+`rollsweep`, `descend` — with `[cs_last]` and the attitude pinned so both
+builds see the same world at the same tick, reads **0 drawn-set differences
+and 0 differing pixels across 554 frames**. That is what a commutative
+multiply and an unchanged sum order should give, and it is worth taking
+anyway: the sum order is only unchanged because integer addition wraps the
+same either way, which is an argument rather than an observation.
+
+### Set 134 — CLEAR SKIES: a row's SHAPE decides its bytes, and a gate one comparison too loose (SPEC.md §88.4.5.2, §88.4.5.3)
+
+Set 132 priced `cs_polyrows_herc` at 725 cycles and 148 bytes a row and said
+the only thing worth removing is ENCODED BYTES. The clamp gate took 25 of them
+out of line; this set censuses what is left **by arm**, because a fetch-bound
+loop only pays for the bytes a row actually executes. `turnhold`, six frames,
+279.5 rows a frame, each row measured `.row` to `.row` — **with the delta
+closed at the routine's `ret`**, without which the last row of one polygon
+runs into the first of the next and reads 38,478 cycles instead of 658, the
+same boundary error Set 132 found in the regression:
+
+| the row | a frame | share | cycles |
+|---|---|---|---|
+| multi, two bytes | 70.7 | 25.3% | 635 |
+| clipped multi, two bytes | 70.0 | 25.0% | 763 |
+| multi with a middle run | 63.3 | 22.7% | 728 |
+| ONE byte | 50.3 | 18.0% | 537 |
+| clipped multi with a middle | 21.0 | 7.5% | 828 |
+| clipped ONE byte | 4.2 | 1.5% | 658 |
+| **all** | **279.5** | | **685** |
+
+Two bytes or fewer is **43%** of every row, only 30% have a middle run at all,
+and an EMPTY row never happens — `cs_edge` leaves `xl <= xr` on every row it
+writes, so the `jg .nrow` guard has fired zero times in every census taken.
+
+**Finding 1: the one-byte arm was in the wrong place, twice.** It sat inline,
+jumped over by `jnz .multi`, so 80% of rows took a jump they did not need —
+and a taken jump flushes the 8088's prefetch queue. Worse, its fifteen bytes
+were fifteen bytes of the loop's SPAN: at 138 the backward `jle .row` was
+outside `rel8` and nasm was emitting `jnle $+5` / `jmp .row`, **five bytes and
+a second taken jump on every row of the program**. That is the kind of cost
+that never appears in a diff. Out of line the span is 122, the `jle` is two
+bytes, the common arm falls through, and with `cmp bp, 0` rewritten as the
+two-byte `or bp, bp` it is **−4 bytes a row for −4 bytes of image**:
+
+| tier 1, 16 frames | control | + the span |
+|---|---|---|
+| `turnhold` `cs_scene` | 166.04 ms | **165.09 / 165.24** |
+| `bank` | 151.27 | **150.31 / 150.53** |
+| `cruise` | 122.89 | **122.71 / 122.86** |
+
+**Finding 2, and it is the one worth remembering: the gate was one comparison
+too loose in each direction, and that was 32% of every row in the program.**
+§88.4.5.1 turned the clamp block on when the polygon's box was `<=` the left
+edge or `>=` the right. Touching is not crossing, and `cs_edge` proves it:
+the walker interpolates strictly BETWEEN an edge's endpoints, so every `xl`
+and `xr` lies inside the box, and a box whose left extreme IS `wx0` has no row
+needing the left clamp. Instrumented at the row loop's entry, reading the
+whole `cs_xl`/`cs_xr` range against the box the gate tested:
+
+| | clipped rows a frame | of which NEITHER end clamped |
+|---|---|---|
+| `turnhold` | 82.3 | **100%** |
+| `descend` | 8.1 | 78% |
+| `cruise` | 35.2 | 72% |
+| `climb` | 104.3 | 43% |
+
+**One polygon a frame in `turnhold` carried 81.6 of those rows.** On `jl`/`jg`
+the block is off for every row of that scene. Two things had to be checked
+before taking it: that the WHOLE-VIEW arm survives — it wants the box to touch
+BOTH edges at once, and nothing lands there because `cs_fclip` clips to the
+frustum, whose side crossings are at 4z ≈ 1,772 pixels, so `climb` keeps its
+5.5 whole-view rows a frame — and that a tie test for the case was worth its
+eight bytes. **It was not**: measured, it cost 0.1 ms of `cs_poly` and bought
+0.1 ms of nothing, so it came back out.
+
+Both, on the `cs_poly` bracket with the call counts identical in every arm:
+
+| tier 3, 16 frames | `cs_poly` control | + both | frame |
+|---|---|---|---|
+| `turnhold` | 49.09 ms | **47.79 / 47.79** | 253.7 → 252.6 |
+| `bank` | 36.54 | **35.52 / 35.22** | 244.7 → 243.9 |
+| `climb` | 18.27 | **17.72 / 17.72** | 151.8 → 151.4 |
+
+**569 frames over six pinned profiles are pixel-identical**, which is the only
+thing that can license a tighter gate — the change is an argument about what
+`cs_edge` can produce, and an argument is not evidence.
+
+**Two method notes.** The row COUNTS are not comparable between runs of the
+probe: it flies 40 rendered frames before arming, and a faster build takes
+fewer ticks to do that, so it arms in a different place — only the shares
+within one run mean anything, and the `calls` column of a same-session tier
+bracket is what says the two arms saw the same scene. And `cs_scene` at 16
+frames wanders about **0.3 ms between runs of the same code**, which is the
+size of the second finding: the `cs_poly` bracket, whose call count is
+identical in every arm, is the instrument that could see it.
+
+### Set 135 — CLEAR SKIES: the row loop split in two, and the register that was worth 11 bytes (SPEC.md §88.4.5.4)
+
+Set 134 made the clip gate exact, which left it never firing in `turnhold` —
+**four bytes on every row of the program to ask a question the polygon already
+answered.** The reason it could not simply go is that BP was where the answer
+lived, and BP is the one register the loop could use for something better.
+
+Moving the question to the caller (`cs_poly` picks `[cs_rowsprocc]` over
+`[cs_rowsproc]` once a polygon; `cs_rect` always takes the clamping one)
+turns `cs_polyrows_herc` into **one source assembled twice** — a `%macro` with
+`%%`-local labels — and BP then pays for the duplication three times over:
+
+| | bytes a row |
+|---|---|
+| the gate is gone | −4 |
+| BP counts the rows DOWN: `cmp bx, [cs_py1]` → `dec bp` | −3 |
+| `push bx` leaves BX dead, so `mov si,bx`/`and si,3` → `and bx,3` | −2 |
+| ...and `and bx, 3` leaves BH zero, retiring `xor bh, bh` | −2 |
+| **total** | **−11** |
+
+...plus, in the clipping arm, the clamp INLINE, so the 43-100% of clipped rows
+that need neither end moved fall through it rather than taking a jump out and
+a jump back — two fewer prefetch flushes.
+
+The last two rows are worth separating out because neither is about the split.
+They are what re-reading a loop for register pressure turns up: twelve
+instructions sit between `push bx` and the `mov bl, al` that rebuilds BX, so
+the pattern index had no business being computed in SI — and once `and bx, 3`
+is there, BH is provably zero and the `xor bh, bh` under it is dead. **It was
+not dead before**: a Hercules view is ~300 rows, so the row index really does
+reach BH, and that instruction was doing real work right up until the `and`
+arrived above it.
+
+Same-session control, NEW/BASE/NEW, on the `cs_poly` bracket with the call
+counts identical in every arm:
+
+| tier 3, 16 frames | `cs_poly` control | + the split | frame |
+|---|---|---|---|
+| `turnhold` | 47.79 ms | **44.98 / 44.98** | 252.4 → 249.4 (3.96 → **4.01 fps**) |
+| `bank` | 35.90 | **33.44 / 33.51** | 243.9 → 241.4 (4.10 → **4.14**) |
+| `climb` | 17.72 | **16.64 / 16.80** | 151.4 → 150.8 (6.60 → **6.64**) |
+
+**−2.4 to −2.8 ms**, against a costing of 1.4 — the estimate was made on the
+−6 bytes the split itself buys, and the other −5 came free with the rewrite.
+That is the opposite error to the usual one here: a prediction off the fetch
+floor is normally an UPPER bound (Set 132), and it undershot only because the
+byte count it was made against was the wrong one.
+
+It costs **+155 bytes of image** for the second expansion, plus six in
+`cs_poly`, eight in the two backend arms and a word of bss. **This is the
+first change in this round that buys speed with SIZE rather than by removing
+work**, and it was taken on the owner's decision with the trade stated
+beforehand — about 170 bytes for ~2.4 ms of a 250 ms frame.
+
+**653 frames over SEVEN pinned profiles are pixel-identical.** The gate's
+usual six do not include `climb`, and `climb` is the only one that reaches the
+whole-view arm or `cs_rect`'s dispatch at all — so a register reallocation
+gated on the six would have been gated on the arm it did not touch.
+
+### Set 136 — CLEAR SKIES: 2,560 bytes of RAM for the row's two ends, and the disk pays NOTHING (SPEC.md §88.4.5.5)
+
+The largest single block left in the row's fixed cost was **thirty bytes to
+turn two pixel x's into two byte indices and two sub-byte masks** — `and si,
+7`, three `shr`, a byte load, twice. The 8088 has no shift-by-3 shorter than
+three `shr`, and CL, the register that would make it one instruction, is the
+last byte.
+
+A word table indexed by x fixes it, and the shape is the point: `cs_lend[x] =
+(cs_hlm[x & 7] << 8) | (x >> 3)` is **exactly the AH:AL the left end wants**
+and `cs_rend` the CH:CL the right one does, so fifteen bytes become eight and
+twelve — **−10 a row**, both spans still inside `rel8` (101 and 113).
+
+**This was REFUSED in docs/plans/SKIES-FRAME-PLAN.md 7.5.4 and the refusal was wrong**,
+which is the finding worth keeping. The arithmetic that refused it was
+correct — 640 entries × 2 bytes × 2 tables is 2,560, against a 1,389-byte gap
+below `CS_VOCAB_AT` — and it never asked what that gap was protecting. Three
+facts, all cheap to check and none checked:
+
+| | |
+|---|---|
+| the bss ships inside the part as a run of ZEROS, and LZ4 is best at that | `skies.o88` is **43,717 bytes in both arms of the A/B — identical to the byte** |
+| what actually grows is the heap CLAIM | 49,216 → **51,776**, `CS_VOCAB_AT` 0xB400 → 0xBE00 |
+| `SKIES` is in `SMALLOMIT_GAMES` | the 128 KB floor machine never loads it at all |
+
+So the cost is 2.5 KB of a `kern_big` machine's heap, in a program that takes
+the whole screen and the whole scheduler for as long as it runs.
+
+Same-session control, NEW/BASE/NEW, `cs_poly` bracket, call counts identical
+in every arm:
+
+| tier 3, 16 frames | `cs_poly` control | + the tables | frame |
+|---|---|---|---|
+| `turnhold` | 44.90 ms | **42.96 / 42.96** | 249.3 → 247.6 (4.01 → **4.04 fps**) |
+| `bank` | 33.51 | **31.89 / 31.82** | 241.5 → 239.9 (4.14 → **4.17**) |
+| `climb` | 16.64 | **16.03 / 16.25** | 150.6 → 149.9 (6.64 → **6.67**) |
+
+**−1.6 to −1.9 ms** against a prediction of 2.3, which is Set 132's rule
+holding: a fetch-floor prediction is an upper bound. `x` cannot leave
+`[0, 639]` — the shadow row is 80 bytes and `cs_vptab`'s Hercules entry is a
+640-wide box that `cs_r_size`'s Full arm hands out whole — so 640 entries is
+exact rather than generous, and `cs_endtab` fills both beside `cs_ktabs` in
+`cs_r_setup`, ~4 ms once a bracket.
+
+**659 frames over seven pinned profiles are pixel-identical.**
+
+**The method note is the one to carry forward.** A size refusal is only as
+good as its account of where the size lands, and this one had three places to
+land — the file, the claim, and the floor machine — of which the refusal
+priced none. "It needs 2.5 KB and the gap is 1.4" was true and useless.
+
+### Set 137 — CLEAR SKIES: `cs_scale`, where a 32-bit shift turned out to be a per-FRAME constant (SPEC.md §88.5.6.3, §88.5.6.4)
+
+`cs_scale` was 14.6 ms a frame at 16.4 calls and had never been opened below
+the top. Bracketed by phase — the same probe shape as Set 133's, `turnhold`:
+
+| phase | cycles a call | |
+|---|---|---|
+| A the `pshr` ladder and the projection variant | 309 | 7.7% |
+| **B three `cs_sdiff` and the `cs_odx` stores** | **1,101** | **27.6%** |
+| C1 `cs_rot`'s prologue | 119 | |
+| C2/C3/C4 the three `cs_dot` | 726 / 737 / 767 | **55.8%** |
+| D the three `sar` to whole metres | 226 | 5.7% |
+| **total** | **3,994** | |
+
+**Finding 1, and it is arithmetic rather than a peephole.** Phase B built a
+32-bit `coordinate x 256`, subtracted the 32-bit 16.8 eye position and shifted
+the pair down `8 - pshr` — three times an object, 1,101 cycles for what is
+three subtractions. **The shift distributes, exactly:** `c x 256` is divisible
+by `2^s` for every `s <= 8`, so
+
+    (c * 256 - p) >> s   ==   (c << (8 - s))  -  ceil(p / 2^s)
+
+for every integer `c` and `p`, and `ceil(p / 2^s)` is `sar(p + 2^s - 1, s)` —
+**a property of the frame, not of the object**. So nine of them are computed
+once a frame (`cs_eyeshift`, three axes by three scales) and the call site is
+`shl ax, cl` and a word subtract. `cs_sdiff` is deleted, and so is the ladder
+inside it that tested `[cs_pshr]` on every one of three calls for an answer
+that could not change between them. **1,101 → 457 cycles**, at a cost of
+**+0.38 ms** on `cs_matrix`.
+
+**Finding 2 is Set 133 one subject along, with the registers the other way
+round.** `cs_rot`'s vector lived in `cs_rvx`/`cs_rvy`/`cs_rvz` and `cs_dot`
+read it back three times a row, three rows — nine loads, three `call`/`ret`s
+and an `add si, 6` a row around nine `MUL14`. In `cs_flatverts` the fix was to
+put the SCALAR in BX, because `imul bx` leaves BX alone; here the multiplicand
+must be AX and it is the matrix element that varies, so the vector needs three
+registers of its own. **CX, SI and BP** are free, DI accumulates, and the two
+finished rows park on the stack — a byte and a clock cheaper each way than the
+bss words, which are now gone. **2,365 → 1,979 cycles**, and `cs_rot` is 71%
+multiply where it was 59%.
+
+Same-session control, NEW/BASE/NEW, tier 3, call counts identical in every arm:
+
+| | `cs_scale` | `cs_matrix` | frame |
+|---|---|---|---|
+| `turnhold` | 14.53 → **10.99 / 10.99** ms | 1.15 → 1.53 | 247.4 → **244.1** (4.04 → **4.10 fps**) |
+| `bank` | 13.14 → **9.64 / 9.87** | 1.15 → 1.54 | 239.9 → **237.3** (4.17 → **4.21**) |
+| `climb` | 6.23 → **4.83 / 4.83** | 1.22 → 1.53 | 149.5 → **149.2** |
+
+A call is **4,229 → 3,199 cycles, −24%**, and the phase probe attributes −644
+to the origin and −386 to the rotation — which **sums to −1,030, the A/B's
+figure to the cycle**. That agreement is worth more than either number alone:
+the probe's own scene drifted between the two runs (5.8 calls a frame against
+19.0), so phases A and D moved for reasons that are not the change, and the
+two that did change still land on the total.
+
+**+148 bytes of image and +10 of bss.** `cs_eyeshift`'s `s = 8` group is a
+byte move rather than eight `sar`/`rcr` pairs — 28 bytes and 84 clocks, and
+the same trick `cs_sdiff`'s whole-metre arm always used.
+
+**649 frames over seven pinned profiles are pixel-identical.** An identity is
+a claim about every input, so it is the only kind of change where the gate is
+not a formality: `(A - B) >> s == A>>s - ceil(B/2^s)` is true, and
+`A>>s - (B>>s)` — the version anybody would write first — is off by one
+whenever `B` has low bits set.
+
+### Set 138 — CLEAR SKIES: the flight model gets a tier, and 55% of it was one walk (SPEC.md §88.7.13)
+
+`cs_step` is 10.8 ms a frame at three calls and had never been opened at all —
+there was no profiler tier below it. Adding one (`skiesprof --tier 6`, TIER1
+plus the flight model's own calls) answered it in a single run:
+
+| `cs_step`'s calls, `turnhold` | ms a frame |
+|---|---|
+| **`cs_collide`** | **5.92** |
+| `cs_move` | 1.00 |
+| the aeroplane's own attitude proc | 0.46 |
+| `cs_sin` x3, `cs_cos`, `cs_lift`, `cs_fence`, `cs_msgage` | 0.81 together |
+| the model's own arithmetic (exclusive) | 2.41 |
+
+**One call was 55% of the flight model**, and what it does is walk every
+object in the picked location's world — three times a frame — asking whether
+the aeroplane is inside its footprint in x, in z, and below its top. It asked
+in that order, and **the y question is the expensive one**: an object's top is
+its base plus the height of its model's TALLEST LEVEL, so answering it chases
+the object to its model, the model to its vertex table, and multiplies by six
+to index the last level. Every collidable object paid that to be told it was
+250 m below.
+
+`cs_ctop` holds that word per object now — filled at `cs_wldpick`'s success
+exit, the only place it can change — so the walk opens with `cmp bp, [di]`.
+An object that cannot be hit carries **−32768**, so the same compare rejects a
+non-collider and the `CSO_COLLIDE` test leaves the loop entirely.
+
+**A world-wide maximum was the first idea and the numbers killed it.** Paris'
+tallest collidable top is the Eiffel Tower's **324 m** and every pinned profile
+flies at 300, so one object of 47 would have kept the whole walk alive for the
+other 46. Per object, 46 of the 47 now reject on the first compare.
+
+| tier 1, 16 frames | `cs_step` control | + the table | frame |
+|---|---|---|---|
+| `turnhold` | 10.77 ms | **7.63 / 7.63** | 244.1 → **241.0** (4.10 → **4.15 fps**) |
+| `bank` | 10.61 | **7.63 / 7.63** | 237.3 → **234.1** (4.21 → **4.27**) |
+| `climb` | 9.57 | **9.70 / 9.70** | 148.6 → 148.7 |
+
+**`climb` costing +0.13 ms is the honest half of it**, and it is the right way
+round: on the runway the aeroplane is below everything, so the new first
+compare never rejects and the walk pays it before doing the work it always
+did. A frame on the ground is the cheapest one the program draws.
+
+**The gate here is not the pixels.** A collision table that is subtly wrong is
+an aeroplane that flies through a building, and no screenshot shows that until
+it happens — so `cs_ctop` is read back off a running machine and checked row
+by row against the arithmetic it replaces (**47 of 47 agree**). 647 frames over
+seven pinned profiles are pixel-identical, and the soak's `skiescrash` passes
+with the other 28 skies rows.
+
+**The method note is that the tier paid for itself in one run.** Four rounds of
+this work have started by bracketing a routine's internals; this is the first
+where the bracket table did not exist, and adding nine rows to `skiesprof`
+turned "10.8 ms and never opened" into "one call, 55%, here is which" before
+any code was read. The instrument is cheaper than the reading.
+
+---
+
+### Set 139 — the resumable walk against an APP-SIDE walker plotting `OSAPI_GFX_LINE` (docs/plans/completed/GFX-EMBEDDABLE-PLAN.md 3.2)
+
+| | |
+|---|---|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapter | `os8088_5150_herc_gla` |
+| harness | `tests/gfxbench`, six new rows: `kwalk n=N x8` / `aline n=N x8` |
+| subject | eight live walks stepping N pixels a frame, two ways |
+| date | 2026-09-09 |
+
+docs/plans/completed/GFX-EMBEDDABLE-PLAN.md 3.2 asks whether a package holding its own
+Bresenham can plot through `OSAPI_GFX_LINE` — one call a frame-segment,
+`(p_prev, p_now)` — instead of asking the kernel to step a block the kernel
+holds. SPEC.md 5.6.2 makes a line's pixel set a pure function of the endpoint
+PAIR, so replaying the same segments erases exactly what they drew; the
+question was never correctness, it was cost.
+
+#### The rows
+
+| pixels a block a frame | `gfx_lstepv` x8 | 8 x `gfx_line` | |
+|---:|---:|---:|---|
+| 1 | **5,243.9 µs** | 7,884.8 | kernel **1.50x** |
+| 3 | **7,703.8** | 10,496.9 | kernel **1.36x** |
+| 10 | 16,271.5 | **9,179.6** | app **1.77x** |
+
+**The two sides have different SHAPES, and that is the whole finding.** The
+kernel walk is linear and agrees with SPEC.md 5.6.8 to within 3% — a fitted
+intercept of **4,013 µs** for eight blocks (5.6.8's ~480 µs a block setup x 8 =
+3,840) and **1,230 µs** a pixel across the eight (5.6.8's ~175 x 8 = 1,400,
+measured 154 a pixel a block). The `gfx_line` side is **near enough FLAT**:
+986 µs a call at two pixels and 1,147 at eleven, because a short line is its
+own fixed part and almost nothing else.
+
+**So the crossover is at about FOUR pixels a block a frame**, from the kernel's
+own line against the app's flat band: (9,180 − 4,013) / 1,230 = **4.2**. The
+plan predicted 2, on a `gfx_line` fixed part of 714 µs taken from the intercept
+of a 127-pixel row; the real fixed part for a SHORT line on this geometry is
+**~1,150 µs**, and that is the correction.
+
+#### What it decides
+
+- **Missile Command's drain is well past the crossover.** `MC_DRNBUD` is 64
+  pixels a frame over ~4 blocks — sixteen a block — where the kernel walk
+  models at 4,013 + 1,230x16 = **23.7 ms** against a measured app-side
+  **9.2 ms**. **2.6x, to the app.**
+- **An ordinary trail is not — but the band is narrow.** One to three pixels a
+  block a frame is what Cyclone's warp and Missile's missiles do, and the walk
+  leads there against `gfx_line`; against `GFX_PIXEL` it leads only above
+  ~1.3 a block. **What `gfx_lstep` is actually worth is a window of two to
+  four pixels a block a frame**, and whether the two programs sit in it is a
+  reading nobody has taken - `MC_DRN_RATE` is jittered per trail and
+  `MC_DRNBUD` caps the queue at 64 a frame, so Missile spans the whole range
+  inside one `gfx_lstepv` call.
+
+So GFX-EMBEDDABLE-PLAN's wave 4 is **not free**, and the plan says so now: the
+walk earns its 537/641 bytes on fine-grained animation and loses on coarse.
+
+#### The THIRD route, off the same run's own rows — and it moves the answer
+
+`aline` is not the only thing an app-side walker can plot through. The same
+report carries **`GFX_PIXEL` at 539.52 µs**, and a walker that owns its state
+knows each pixel's coordinates, so eight blocks stepping N pixels is 8N of
+them. Against the walk's fitted `4,013 + 1,230N`:
+
+| pixels a block a frame | `gfx_lstepv` x8 | 8 x `GFX_PIXEL` | 8 x `GFX_LINE` | best |
+|---:|---:|---:|---:|---|
+| 1 | 5,243.9 | **4,316** | 7,884.8 | **PIXEL**, 1.21x |
+| 3 | **7,703.8** | 12,948 | 10,496.9 | **walk** |
+| 10 | 16,271.5 | 43,162 | **9,179.6** | **LINE**, 1.77x |
+
+**The walk is the best of the three only between about 1.3 and 4.2 pixels a
+block a frame** — `4,013 / (4,316 − 1,230)` at the bottom and
+`(9,200 − 4,013) / 1,230` at the top. Below it the per-block setup is bigger
+than a whole `gfx_pixel`; above it the 154 µs marginal pixel is bigger than
+amortising one `gfx_line` over the segment.
+
+The walk's own decomposition checks out against SPEC.md 5.6.8 exactly: the
+report's derived rows read **`lstep arrival` 142.49 µs** and **`lstep pixel`
+637.70**, and 142.49 + 8 x 637.70 = **5,244** against a measured 5,243.9 for
+`kwalk n=1 x8`. 5.6.8's own point — *"a one-pixel walk costs what a pixel
+costs, because it is one"* — is why the bottom of the band exists at all: at
+N=1 the walk IS eight pixels with a staging round each, and the staging is
+what `GFX_PIXEL` does not pay.
+
+#### One anomaly, left named rather than explained
+
+`aline` is **non-monotonic**: a four-row segment is 1,312 µs a call and an
+eleven-row one 1,147. Both are steep (dx = 1), so it is not the octant
+dispatch; a `gfx_line_fast` eligibility refusal on one and not the other is the
+obvious suspect and was not run down. It does not move the finding — the app
+side is flat to ±15% across the range either way — but it is the kind of thing
+Set 116's ICON_DRAW note was: worth its own look, and cheaper to write down
+than to rediscover. The row was first built ADVANCING each iteration's
+segments down the sandbox, and reads the same either way, so it is not the
+clip region.
+
+---
+
+### Set 140 — `gfx_points` BUILT and measured (SPEC.md 5.6.9)
+
+| | |
+|---|---|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapter | `os8088_5150_herc_gla` |
+| harness | `tests/gfxbench`, rows `pts n=1 x8` / `pts n=3 x8` |
+| subject | the same eight walks Set 139 stepped, handed over as coordinates |
+| date | 2026-09-09 |
+
+Set 139 ended by naming the slot that was missing. It is built:
+
+| | |
+|---|---:|
+| `pts n=1 x8` — 8 points | **1,662.69 µs** |
+| `pts n=3 x8` — 24 points | **4,317.97 µs** |
+| fitted **per point** | **165.96 µs** |
+| fitted **arrival** | **335.0 µs** |
+
+Two points fit `arrival + N x marginal` exactly, which is the whole shape of
+the row. **The marginal was estimated at ~170 µs from the walk's own 154 plus a
+full `gfx_ls_addr`; it measures 165.96** — 2.4% out, and the reason it is close
+is that the body IS `gfx_lstep_mono`'s with the Bresenham advance replaced.
+
+#### Against the three routes Set 139 measured
+
+| pixels a block a frame | `gfx_lstepv` x8 | 8 x `GFX_PIXEL` | 8 x `GFX_LINE` | **`GFX_POINTS`** |
+|---:|---:|---:|---:|---:|
+| 1 | 5,243.8 | 4,316.3 | 7,884.7 | **1,662.7** |
+| 3 | 7,704.2 | 12,949.0 | 10,497.0 | **4,318.0** |
+| 10 | 16,272.0 | 43,163.2 | **9,180.0** | 13,611.5 *(fit)* |
+
+- **It is the best route below 6.66 pixels a block a frame** — Set 139
+  predicted 6.6 from the estimated marginal.
+- **It beats the resumable walk out to 37.7**, which is past anything in the
+  tree. `MC_DRNBUD` caps Missile's drain at 64 pixels a frame over ~4 blocks,
+  which is sixteen.
+
+> **So `gfx_lstep` is no longer the best route at any n a shipped program
+> uses**, which is what Set 139 said it would take and what
+> docs/plans/completed/GFX-EMBEDDABLE-PLAN.md wave 4 was waiting on.
+
+#### What it cost
+
+Per-symbol from `[map all]`, reconciled against the section lengths:
+
+| | `.text` | + cell | + `.bss` | total |
+|---|---:|---:|---:|---:|
+| `kern_small` | **157** | 8 | 2 | **167** |
+| `kern_big` | **211** | 8 | 2 | **221** |
+
+Estimated at +150 / +165. `kern_small` is 17 over; `kern_big` is 56 over,
+because the `gfx_pixel` fallback arm and the three gates in front of it cost
+more than the estimate allowed. Both reuse `gfx_ls_box`, `gfx_ls_addr` and
+`gfx_rowbase` and add nothing to them.
+
+#### What is NOT established
+
+**There is no correctness gate yet.** What the rows establish is that the draw
+path *executes* — 165.96 µs a point is within 8% of the walk's own measured
+marginal, and a loop that skipped every point could not cost that — and not
+that the pixels land where they should. The body is `gfx_lstep_mono`'s
+verbatim, which is an argument and not a check.
+
+~~**Nothing shipped calls the slot**~~ — true when this set was taken and false
+since: Cyclone, Missile, Tank, `SAVER.DRV` and Mines all commit through it now
+(SPEC.md 5.12.5, 5.13), and Set 141 is what they cost.
+
+
+### Set 141 — the embeddable library BUILT: what four programs and two kernels actually did (SPEC.md 5.12, docs/plans/completed/GFX-EMBEDDABLE-PLAN.md waves 3-7)
+
+| | |
+|---|---|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapter | `os8088_5150_herc_gla` — the GLaBIOS twin; the IBM ROM is not in this tree |
+| harness | exec-breakpoint brackets around the one call under test, guest cycles from the emulator's own counter. `tests/paintstroke.py` is the one that shipped as a row |
+| subject | every headline figure waves 3–7 are quoted on |
+
+**Everything here is GUEST CYCLES between two breakpoints, not arithmetic.**
+Set 139's window was the thing this set was supposed to resolve and it did,
+twice in the same direction: the model over-predicted the win in both places it
+was checked.
+
+#### 134.1 The stroke's screen half (SPEC.md 42.23.8)
+
+Paint rasterises a one-pixel stroke twice — into its 1bpp canvas, then onto the
+glass. Bracketed between the call and its return, median of ~23 segments:
+
+| route | cycles | µs | |
+|---|---:|---:|---|
+| `OSAPI_GFX_LINE` — §42.8's | 10,646 | 2,231 | was |
+| `pt_blit` of the segment's rect | 14,268 | 2,989 | **refused, +34%** |
+| `OSAPI_GFX_BLIT1` direct | **9,243** | **1,937** | ships, −13% |
+
+**The middle row is the one to remember.** *"Commit the damaged band with one
+blit"* reads as *"call `pt_blit`, which the program already has"* — and
+`pt_blit` is the path for everything that **cannot know what it changed**, so
+it pays a clip, an inked-table band walk and a decode setup before it reaches a
+blit at all. A stroke segment knows exactly what it changed. The same trap is
+waiting wherever a program has a general repaint routine and a specific one is
+called for.
+
+#### 134.2 Pixels a block a frame — the reading the walk's window needed
+
+Read off the descriptor arrays `gfx_lstepv` was actually handed, over ~14 guest
+seconds of play:
+
+| | live blocks a call | pixels a call | **pixels a BLOCK** |
+|---|---:|---:|---:|
+| Cyclone | 10.43 | 38.68 | **3.71** |
+| Missile | 3.64 | 10.08 | **2.77** |
+
+Both inside `GFX_POINTS`'s best-route window (≤ 6.66, Set 140), Missile further
+in — and **that ordering predicted the result**, which is the only part of the
+model that survived intact.
+
+> **Set 143 re-took this slot on the real caller and both figures moved.** Set
+> 133's geometry is eight VERTICAL columns, which is the one shape in which the
+> points' incoherence does not show; a game's trails are y-major. A point is
+> **573 cycles rather than 903** since SPEC.md 5.6.9.3, so any arithmetic
+> resting on the older marginal wants re-doing against 136.
+
+#### 134.3 …and what the conversion was worth
+
+Guest cycles inside one batch-step call, bracketed entry to exit:
+
+| | before | after | |
+|---|---:|---:|---:|
+| Cyclone `cy_dsc_run`, median | 75,537 | 68,596 | **−9.2%** |
+| …mean | 66,872 | 58,759 | −12.1% |
+| Missile `mc_dsc_run`, median | 18,429 | 12,250 | **−33.5%** |
+| …mean | 13,589 | 10,110 | −25.6% |
+
+**The arithmetic predicted −41% and −47%.** It is right about the ordering and
+about the sign and wrong about the size, in both cases the same way: a point
+committed through `gfx_points` costs more than Set 140's marginal 165.96 µs when
+the points are SCATTERED, because `gfx_ls_box` re-resolves and every point pays
+a full `gfx_ls_addr`, where the walk carried its framebuffer byte and bit mask
+forward. Set 140 measured eight walks stepping in step; a game's warp does not.
+
+> **SET 135 RE-TOOK THE MISSILE ROW DETERMINISTICALLY AND THE MEAN ABOVE DOES
+> NOT SURVIVE IT.** These are medians over LIVE PLAY on two trees playing two
+> different games. On one game run twice, the median holds (−26.3% and −24.8%
+> against this −33.5%) and the mean is **−1.6% to −4.6%, not −25.6%** — the
+> distribution changed shape rather than shifting, the tail getting a quarter
+> dearer as the typical call got a quarter cheaper. **Quote Set 142.2 for this
+> call and Set 142.1 for what a frame and a game do with it.**
+
+#### 134.4 What it bought the kernel, and what it cost the apps
+
+| | `.text` | `.bss` |
+|---|---:|---:|
+| `kern_small` | **−493** | −20 |
+| `kern_big` | **−597** | −20 |
+
+`kern_big` **uncrosses an image rung** with it, so a further 512 bytes of every
+machine's RAM come back on top of the sum.
+
+Against, in four package images and none of it resident: Cyclone +238 and 384
+of bss, Missile +251 and 384, Tank +236 and 256, `SAVER.DRV` +392 (a driver's
+bss ships inside its image). **That is the premise made good rather than
+asserted** — duplicate code only used by programs that monopolise the machine
+anyway, instead of permanently spending kernel RAM on them — and the programs
+got faster doing it.
+
+
+### Set 142 — the SAME GAME twice: Missile's walk conversion, deterministically (SPEC.md 48.16.2)
+
+| | |
+|---|---|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapter | `os8088_5150_herc_gla` |
+| harness | `tests/mcperf.py` over `apps/missile/mcbench.inc` — a fixed seed, scripted shots, 400 frames back to back, exec-breakpoint brackets on the frame and on `mc_dsc_run` |
+| arms | `2324ede` (the kernel walk, `OSAPI_GFX_LSTEPV`) against this branch (the app-side walk, `gfxe_wstepv` + `gfxe_pput`) |
+
+**Set 141.3 is the reason this exists.** It priced the conversion over LIVE
+PLAY — two trees playing two different games, medians over whatever the waves
+happened to do. Set 141.2 had to measure blocks-per-call separately for exactly
+that reason. This runs one game twice, and **the two arms end on the same state
+checksum in both scenarios** (`C3B7` busy, `6430` calm), so what follows is a
+comparison rather than two numbers.
+
+#### 135.1 The whole game
+
+| | busy (a shot every 7 frames) | | calm (every 29) | |
+|---|---:|---:|---:|---:|
+| | kernel walk | app walk | kernel walk | app walk |
+| 400 frames, cycles | 68,767,775 | **68,511,561** | 54,449,606 | **53,696,467** |
+| | | **−0.37%** | | **−1.38%** |
+| median frame, cycles | 144,038 | **142,146** | 112,924 | **107,168** |
+| | 30.18 ms | **29.78 ms, −1.30%** | 23.66 ms | **22.45 ms, −5.10%** |
+| system ticks | 262 | 261 | 207 | **204** |
+| state checksum | C3B7 | C3B7 | 6430 | 6430 |
+
+#### 135.2 …and the converted call inside it
+
+`mc_dsc_run`, entry to `.out`, over the same runs. Empty calls (`jcxz .out`,
+about a fifth of them) are separated out because they cost nothing and would
+otherwise move a mean without meaning anything.
+
+| | busy | | calm | |
+|---|---:|---:|---:|---:|
+| | kernel | app | kernel | app |
+| calls / of them empty | 1,074 / 239 | 1,079 / 240 | 1,027 / 187 | 1,023 / 187 |
+| walks a non-empty call | 3.53 | 3.53 | 2.63 | 2.63 |
+| **median, non-empty** | 27,434 | **20,217** | 17,558 | **13,211** |
+| | | **−26.3%** | | **−24.8%** |
+| mean, non-empty | 27,754 | 27,309 | 19,734 | 18,833 |
+| | | −1.6% | | −4.6% |
+| **max** | 79,224 | **99,398** | 75,833 | **98,903** |
+| | | **+25.5%** | | **+30.4%** |
+| share of the run | 33.70% | 33.44% | 30.48% | 29.37% |
+
+#### 135.3 What it found, and it is not what Set 141.3 says
+
+**The median is confirmed and the mean is refuted.** Set 141.3 reported the
+Missile call at −33.5% median and −25.6% mean; deterministically it is **−26.3%
+and −24.8% median** — same sign, same order, close enough — and **−1.6% and
+−4.6% mean**. The two statistics have parted because **the distribution changed
+shape**: the typical call got a quarter cheaper and the expensive tail got a
+quarter to a third DEARER. That is Set 141.3's own explanation for why its
+model over-predicted, arriving as a measurement — a point committed through
+`gfx_points` costs more when the points are SCATTERED, and the worst calls are
+the ones laying a whole new trail at once.
+
+**So the game gets 1–5% faster, not a third** — and 135.4 is why that sentence
+is not the whole answer: the busy scenario's 0.37% is a REDISTRIBUTION, and it
+moves four frames in four hundred across §44.1's tick deadline. The arithmetic
+closes exactly:
+`mc_dsc_run` is 30–34% of the run, its TOTAL falls 1.1% (busy) and 4.9% (calm)
+once the tail is counted, and 30% × 4.9% is the 1.38% the whole calm run moved.
+A per-call median is not a frame and a frame is not a game, and this is the set
+where all three are on the table at once.
+
+**The batch size is not the explanation, which had to be checked.** The obvious
+reading of the gap is that this scenario is busier than live play, and it is
+not: 3.53 walks a non-empty call against Set 141.2's 3.64 live. The calmer arm
+at 2.63 gets a BIGGER whole-game win (−5.10% median frame against −1.30%),
+which is the direction Set 140's window predicts — `GFX_POINTS` is at its best
+with few points — but the effect is in the frame rather than in the call.
+
+#### 135.4 It is a REDISTRIBUTION, and the tick deadline is where that costs
+
+The whole-run figure is a wash in the busy scenario (−0.37%), so the natural
+reading is that nothing much happened. Both arms play the same game, though,
+so frame N in one is frame N in the other and the two runs compare **pairwise**
+— which is a far sharper question than two distributions, and it says the
+opposite of "nothing much".
+
+| | busy, 400 frames, paired |
+|---|---|
+| frames faster on the app walk | **182** |
+| frames slower | **218** |
+| total | **−0.38%** |
+| the 200 QUIETEST frames | **−4.63%** |
+| the 40 BUSIEST frames | **+2.53%** |
+
+| percentile | kernel walk | app walk | |
+|---|---:|---:|---:|
+| p50 | 143,082 | 141,446 | **−1.1%** |
+| p75 | 218,548 | 220,122 | +0.7% |
+| p90 | 285,806 | 291,916 | **+2.1%** |
+| p95 | 315,964 | 330,576 | **+4.6%** |
+| p99 | 432,172 | 449,380 | **+4.0%** |
+
+**So the time was MOVED and not spent**: the quiet frames pay for the busy ones.
+That would be a free trade if a frame's cost were linear in what the player
+sees, and it is not — §44.1 is a **cliff**. `mc_worker` sleeps to a deadline of
+one tick, and a frame that crosses it does not make the rate sag, it HALVES it.
+
+| | kernel walk | app walk |
+|---|---:|---:|
+| frames over one tick (54.93 ms) | **56 of 400** | **60 of 400** |
+| newly over, pairwise | | **6** |
+| newly under, pairwise | | **2** |
+| frames over 2 / 3 / 5 ticks | 2 / 2 / 1 | 2 / 2 / 1 |
+
+**Four net frames in four hundred — 1% — and it is EXACT rather than
+indicative.** Two independent runs of each arm give 56, 56, 60, 60; the
+within-arm noise is **0 newly-over and ±0.01% of total** and all four
+cross-arm pairings give the same 6 and 2. Nothing here is a sampling artefact.
+
+And the six were all standing on the line already: 52.20 → 57.04, 52.96 →
+57.98, 52.81 → 56.47, 53.92 → 54.98, 54.12 → 55.07, 52.81 → 55.31 ms against a
+54.93 ms tick. **Three of the six cross by under 0.4 ms.** The worst frames are
+untouched — the 2-, 3- and 5-tick frames are the same count in both arms, and
+the maximum is 1,313,399 against 1,312,551, marginally in the app walk's
+favour. This is not the peak getting worse; it is the shoulder of the
+distribution rising through a threshold that happens to sit on it.
+
+**Where it comes from** is 135.2's tail, one level down: `mc_dsc_run`'s p95 and
+p99 are **+34% and +36%** where its median is −26%, and the expensive calls are
+the ones laying a whole new trail at once — many SCATTERED points through
+`gfx_points`, which is Set 141.3's own explanation for its over-prediction. The
+busiest frames are the ones with a launch in them.
+
+**The lever is §48.15's drain budget** — `MC_DRNBUD` bounds how much trail a
+frame erases and was calibrated against the kernel walk's per-pixel cost, so a
+budget that no longer matches the commit it is spending is the mechanism.
+**135.5 is that re-tune, and it took the count back to 57 against the
+pre-conversion 56** for one frame in four hundred of extra smoke.
+
+#### 135.5 The re-tune: `MC_DRNBUD` 64 -> 32, and what fixed it
+
+135.4 named the drain budget as the lever and did not pull it. Pulling it
+needed one more measurement first — **which producer fills the expensive
+batches** — because `mc_dsc_add` has three callers and re-tuning the wrong one
+would have been a look change for nothing. `mc_dsc_run`'s median against the
+pixels it was handed:
+
+| pixels in the batch | kernel walk | app walk | | cyc/px, kernel | cyc/px, app |
+|---|---:|---:|---:|---:|---:|
+| 1–8 | 21,665 | **13,425** | **−38%** | 3,710 | 2,307 |
+| 9–16 | 28,679 | **19,639** | **−32%** | 2,662 | 1,823 |
+| 17–32 | 29,423 | 37,309 | **+27%** | 1,205 | 1,530 |
+| 33–64 | 53,649 | 75,503 | **+41%** | 1,082 | 1,523 |
+
+**The crossover is between 16 and 17 pixels, and it is an AMORTISATION
+difference rather than a constant one.** The kernel walk's cost per pixel falls
+by 3.4x across that range because it carried a framebuffer byte and bit mask
+forward; `gfx_points` re-resolves per point and stays near 1,500 whatever the
+batch. So a big batch is exactly where the conversion loses, and `MC_DRNBUD` =
+64 put every drain batch there — the other two producers add a missile's speed
+each and never leave the 1–16 rows.
+
+The sweep, busy scenario, everything else fixed:
+
+| `MC_DRNBUD` | 400 frames | p90 | p95 | p99 | over one tick | smoke frames |
+|---|---:|---:|---:|---:|---:|---:|
+| *(kernel walk, 64)* | 68,802,005 | 285,806 | 315,964 | 432,172 | **56** | 240 |
+| 64 — as shipped | 68,541,774 | 291,916 | 330,576 | 449,380 | **60** | 240 |
+| 48 | 68,465,106 | 286,012 | 330,656 | 445,060 | 59 | — |
+| **32 — taken** | **68,298,000** | 280,396 | 320,130 | 387,172 | **57** | **241** |
+| 24 | 67,530,664 | 266,932 | 313,866 | 418,266 | 43 | 263 |
+| 16 | 66,660,576 | 247,996 | 294,940 | 404,298 | 30 | — |
+
+**32 is not the empirical optimum and is deliberately not chosen as one.** 24
+and 16 fix the deadline further — 43 and 30 against the pre-conversion 56 — and
+both cross a line: `MC_DRNRATE` is 24, the per-trail cap, and a budget at or
+below it caps a SINGLE trail's drain, which is a different promise from the
+one this constant makes (SPEC.md 48.15). 16 costs 23 extra frames of smoke on
+screen for it. **32 is the smallest value that leaves the per-trail rate
+alone**, and `%if MC_DRNBUD < MC_DRNRATE` now refuses the build below it.
+
+**Its cost is one frame in four hundred** (240 → 241 with the queue non-empty)
+and one more queue entry alive at once (5 → 6, against `MC_MAXDRN` = 16). The
+calm scenario comes out ahead of the tree it came from on both counts: **21
+frames over a tick against 24**, 187 smoke frames against 186.
+
+**The surprise is that it does LESS work.** The same pixels erased on a smaller
+per-frame budget is 0.4% cheaper overall, and repeatably so across the whole
+sweep — 68.54M at 64 down to 66.66M at 16, monotonically. A trail that drains
+more slowly is more likely to be under a burst when one arrives, and SPEC.md
+48.19 gives those pixels to the burst: slower draining sheds work to a routine
+that was going to run anyway. Nothing in 135.4's reasoning predicted that, and
+it is the reason the re-tune has no downside to weigh beyond the smoke.
+
+**And the conversion is still the right trade**, which this set does not
+disturb: it took **−597 bytes of `.text` and an image rung** out of `kern_big`
+(Set 141.4) for +251 bytes of one package image, and the game is faster rather
+than slower. What is corrected is the size of the win, and the place to quote
+it is 135.1 rather than 134.3.
+
+### Set 143 — `gfx_points` inlined and specialised: 903 -> 573 cycles a point (SPEC.md 5.6.9.3)
+
+| | |
+|---|---|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapters | `os8088_5150_herc_gla`, `os8088_5150_cga_gla`, `os8088_xt_vga` |
+| harness | `tests/mcperf.py --pts` — the deterministic Missile run of Set 142, with the KERNEL's `gfx_points` bracketed and the arrays it is handed read back |
+| subject | the one slot §5.12.7 left standing: every app-side walker in the tree commits through it |
+
+**This set exists because Set 140 measured the slot on the wrong shape.** That
+was gfxbench's geometry — eight VERTICAL columns — and the figure it produced
+was fine and hid everything interesting. Read off the real caller instead:
+
+| | before | after | |
+|---|---:|---:|---:|
+| arrival | 2,928 | 3,200 | +272 |
+| **a point** | **903** | **573** | **−36.5%** |
+| instructions a point | 52.7 | **31.1** | **−41%** |
+| cycles an instruction | 17.15 | 18.40 | |
+
+**The load-bearing number is 17.15 cycles an INSTRUCTION**, and it is not a
+rounding — the arrival fits the same ratio (148 instructions, 19.8 each). On
+this path an 8088 is fetch- and operand-bound, so **the currency is
+instructions removed and not clocks saved**: a routine that looks cheap by
+clock count is not, and the 41% fewer instructions is where the 36.5% comes
+from.
+
+#### 136.1 The obvious optimisation is refused by the geometry
+
+Caching the resolved row, or the framebuffer byte, is what anyone would reach
+for first. It buys nothing here, and only measuring says so:
+
+| | |
+|---|---:|
+| consecutive points sharing a ROW | **0.4%** |
+| …sharing a framebuffer BYTE | **0.3%** |
+| points per byte touched | **1.00** |
+
+A sampled array says why in one line — `297,50 297,51 296,52 296,53 296,54` —
+**y-major**, which is what a falling missile is. `y` moves every point and `x`
+every second or third, and the byte is (x>>3, y), so neither cache ever hits.
+Set 140's vertical columns are the one shape where that is invisible.
+
+#### 136.2 What was done instead, all of it data-independent
+
+- **`gfx_ls_addr` is gone into the loop.** It was a call inside this loop, and
+  `gfx_points` was its only caller once §5.12.7 took the walk family out — so
+  inlining it is a move, not a duplication. `gfx_rowbase`'s fast path went with
+  it: a call whose whole body is four instructions.
+- **The caller's array is in DS and the framebuffer in ES**, both set once, so
+  the loop loads **no segment register per point** where it loaded two. Kernel
+  words are reached `cs:` (`.bss` and `.text` share the segment) and
+  `vid_rowtab` stays `ss:`.
+- **The bit comes from a table.** `shr bl, cl` is 8+4n clocks and wants CL,
+  which is the loop counter's.
+- **Three loops, one per ink class.** Ink commits with `or [es:di], bl` and
+  paper with `and [es:di], bl` — ONE read-modify-write instruction where the
+  general form is seven. Only the dither class needs the general form.
+- **The hot path is straight**: the clip-rect miss and the row past the row
+  table both live after `loop`, so a point executes no jump but the loop's own.
+
+#### 136.3 What it did to the game, and what it cost
+
+| Missile, 400 deterministic frames | Hercules | CGA |
+|---|---:|---:|
+| whole run, before | 68,298,000 | — |
+| whole run, after | **63,836,496** | **52,823,161** |
+| | **−6.5%** | |
+| frames over one tick, before | 57 of 400 | — |
+| frames over one tick, after | **39 of 400** | **17 of 400** |
+| cycles a point, after | 573 | **547** |
+
+**Against the tree this arc started from** — the kernel walk at `MC_DRNBUD` 64
+— the game is **68,802,005 → 63,836,496 cycles, −7.2%**, and frames over the
+tick are **56 → 39**.
+
+The break-even is under one point: +272 of arrival against −330 a point, so
+any call with a single point in it is already ahead, and the real caller hands
+over 15.8.
+
+**Bytes: `.text` +329, `.bss` 0, `.cold` 0.** `kern_big` crosses no rung (this
+branch's arc had already freed four). **`kern_small` does cross one** — 74,981
+→ 75,493 — so the 128KB floor machine pays 512 bytes of heap for it and stands
+at **52.5 KB free** (`tests/small128.py`). That is the trade stated rather than
+buried: the floor machine is also the machine a 36% faster point loop is worth
+most to.
+
+#### 136.3.1 Where the +329 went, since it is NOT what a move costs
+
+The obvious model — a routine moves from A to B, so B grows and A shrinks —
+predicts about zero, and it is right about the part it describes. Symbol spans,
+both builds:
+
+| | before | after | |
+|---|---:|---:|---:|
+| the early-out | 5 | 5 | |
+| prologue, the VGA gates and `.slow` | 72 | 74 | +2, the `push ds`/`pop ds` |
+| setup and the class dispatch | 21 | 44 | +23 |
+| **the loop** | **104** | **394** | **+290** — 146 dither, 125 paper, 123 ink |
+| epilogue | 9 | 10 | +1 |
+| `gfx_pt_box` + `gfx_pt_row` | 0 | 26 | +26 |
+| `gfx_bitset` + `gfx_bitclr` | 0 | 16 | +16 |
+| `gfx_ls_ink` | 10 | 10 | |
+| **`gfx_ls_addr`** | **29** | **0** | **−29** |
+| **total** | **250** | **579** | **+329** |
+
+**ONE loop went 104 → 123 bytes**, and that is the number the move model is
+about: +19 despite absorbing `gfx_ls_addr`'s body *and* `gfx_rowbase`'s fast
+path, because it gave back a call, a `push`/`pop` pair, the per-point class
+test and five instructions of commit. Take the 29 bytes of `gfx_ls_addr` off
+that and the inlining is **−10 bytes net**, exactly as it ought to be.
+
+**+290 of the +329 is the loop being emitted THREE TIMES**, which is not a move
+at all. That is the price of the one-instruction commit, and it is the change
+that bought the most.
+
+Two smaller terms have nothing to give back by construction. **`gfx_rowbase` is
+not deleted** — its own comment calls it *the fixed cost of every drawing call
+in the machine*, and `gfx_fill`, `font_char` and the rest still call it — so
+inlining its fast path here is pure addition. And the bit tables replace a
+shift that was *inside* the loop, so they add 16 while removing bytes from a
+body that is then emitted three times.
+
+#### 136.3.2 …and what the THREE loops are worth, built both ways
+
+The expansion is not forced by anything. `gfx_ls_ink` resolves a colour to
+three 1bpp classes — `FF` ink, `00` paper, `01` dither (§5.4.2) — and
+specialising the commit per class is what turns nine instructions into one.
+One loop can serve all three; it has to ask the class per point and keep the
+general read-modify-write, which is what the routine did before. Both were
+built and measured on the same deterministic run:
+
+| | before | ONE loop | THREE loops |
+|---|---:|---:|---:|
+| `.text` | 48,870 | **+72** | **+329** |
+| `gfx_points` span | 211 | 270 | 527 |
+| instructions a point | 52.7 | **38.7** | **31.1** |
+| cycles a point | 903 | **665** | **573** |
+| Missile, 400 frames | 68,298,000 | 65,142,657 | **63,836,496** |
+| frames over one tick | 57 | 46 | **39** |
+| screen hash | `28bc481…` | `28bc481…` | `28bc481…` |
+
+**So the split costs 257 of the 329 bytes and delivers 92 of the 330 cycles**
+— 78% of the bytes for 28% of the win, which is exactly the shape a duplication
+has and is worth stating rather than implying. The other three changes are the
+bargain: 72 bytes for 238 cycles a point.
+
+**Taken: three loops on `kern_big`, ONE on `kern_small`.** The question a
+duplication asks is *do we spend N resident bytes for M cycles?*, and it
+answers differently per machine — yes at 257 for 92 on the build with memory,
+no on the build with 128KB. Measured on the floor machine, `gfx_points` is
+**215 bytes against 472**; `kernel.bin` is **75,493 either way**, so the file
+size cannot see the decision at all and the symbol span is what to read
+(CLAUDE.md's *rungs are temporary, bytes are forever*).
+
+**And the `kern_small` rung is crossed EITHER WAY.** The one-loop build is
+74,981 → **75,493**, the same figure the three-loop build gives: the slack in
+that rung was under 72 bytes, so the floor machine's 512 is the price of the
+inlining and not of the expansion. An earlier revision of this set said the
+lever was the expansion; it is not, and there is no version of this change that
+is free there short of not making it.
+
+#### 136.4 The pixels are gated, not asserted
+
+`tests/mcperf.py` hashes the screen 400 deterministic frames into a Missile
+game. Before and after, on three adapters with different geometry and banking:
+
+| adapter | before | after |
+|---|---|---|
+| Hercules | `28bc48113a562257` | `28bc48113a562257` |
+| CGA — different banking, so `gfx_rowbase`'s bank path | `9a23245295c71fbe` | `9a23245295c71fbe` |
+| VGA — the `.slow` planar arm, untouched | `9ba6396856939c66` | `9ba6396856939c66` |
+
+Eighteen registered rows pass with it, `gfxpoints` and `gfxewalk` among them.
+### Set 144 — the 176 ms was never measured, and the band that replaced it was 2.4× slower than the slot (SPEC.md §93.5.5)
+
+| | |
+|---|---:|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapters | `os8088_xt_vga` (mode 12h), `os8088_5150_herc_gla` (720×348), `os8088_5150_cga_gla` (640×200) |
+| harness | breakpoint pair on the package's own `dd_play_line`, guest cycle counter |
+| date | 2026-09-08 |
+
+Set 121 ends by ruling out the pen and the phase and naming three things to
+check above `font_run`. **The answer is none of the three: the 176 ms was not a
+measurement.** It was inherited from two sentences in this tree that described
+the pre-§6.1.10 world in the present tense, one of them `font_run`'s own header
+docblock; Set 121's other half is the correction to those. This set is what the
+line actually costs, and what the renderer built on that number costs beside it.
+
+#### The instrument
+
+An exec breakpoint on `dd_play_line`'s entry, the near-call return address read
+off the task stack (SS:SP), a second breakpoint there, and the difference of
+`status()["cycles"]`. **The minimum of nine samples**, because an IRQ0 or a
+mouse packet landing inside the window adds an ISR to a sample and never
+subtracts one — and in practice eight of nine samples were bit-identical, so
+the window is short enough that the tick usually misses it.
+
+No rebuild is needed to point it at a package: a probe assembly emits the code
+label's org-0 offset, and the package's segment comes out of its window record.
+
+#### The measurement
+
+`dd_play_line` end to end — a nineteen-character line, `CWHITE` on `CBLACK`, at
+an x rounded down to the byte grid — in three builds that differ only in
+`dd_text`:
+
+| adapter | band, as first written | band, cell-outer | `OSAPI_FONT_RUN` |
+|---|---:|---:|---:|
+| VGA 640×480 | 12,882 µs | **4,887** | 5,422 |
+| Hercules 720×348 | 12,969 | **4,988** | 5,663 |
+| CGA 640×200 | 12,986 | **5,000** | 5,797 |
+
+The `font_run` column agrees with Set 121's `FONT_RUN 19 col/blk` — 4,891 µs
+for the bare run against 5,028 µs measured here for `dd_text`'s wrapper around
+it, the difference being the caller's own string walk and stack frame. Two
+independent harnesses, 2.8% apart.
+
+#### The finding, and the tell that was in the table all along
+
+**The band as first written was 2.4× slower than the slot it was written to
+replace.** It composed ROW-outer and CELL-inner, so the whole glyph lookup —
+two bounds compares, a shift and two adds — ran eight times a character instead
+of once: **393 cycles a band byte**. Cell-outer with the eight stores unrolled
+is 2.6× faster.
+
+The tell is the first column, and it is the kind that is free to notice:
+**three adapters whose `gfx_blit1` costs differ by a factor of two agree to
+0.9%**. A cost that does not move with the adapter is not in the blit. That one
+comparison would have found this at any point in the three weeks the wrong
+version shipped, and nobody made it because the number it was being checked
+against was 176 ms and 12.9 looked like a triumph.
+
+#### What it does not say
+
+At **twice a second** the play line is under 2% of the machine at either cost,
+so **neither renderer is why that attract screen ran at 9.8 fps**. The 46% it
+was overrunning by belongs to the two fixes that landed in the same commit —
+a pellet blink that walked all 868 tiles three times a second, and two 16-bit
+`div`s per tile lookup from a dozen call sites a tick. Three fixes and one
+measurement afterwards cannot attribute, and Part 7's rule is the one that was
+broken here: **one row per thing changed.**
+
+### Set 145 — where a DOT DELIRIUM frame goes, and the 677 ms nobody had priced (SPEC.md §93.5.3.1)
+
+| | |
+|---|---:|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapter | `os8088_xt_vga`, mode 12h, tile 16×13, five actors, in play |
+| harness | Set 137's breakpoint pair, on each proc in turn |
+| date | 2026-09-08 |
+
+| proc | µs, min of twelve |
+|---|---:|
+| `dd_render` — lock, clip, draw, unlock | 34,599 |
+| `dd_draw` | 25,962 |
+| `dd_actors_draw` — five actors | 23,111 |
+| `dd_actor_emit` — one of them | 4,068 |
+| `dd_blit` — the `gfx_blit1` under it | 1,856 |
+| `dd_band_one` — the sprite into the band | 1,135 |
+| `dd_band_build` | 886 |
+| `dd_band_ground` / `dd_band_items` / `dd_band_others` | 102 / 209 / 323 |
+| `dd_step` — one whole tick of game logic | **71** |
+| `dd_draw`, the FULL-repaint outlier in the same sample | **677,018** |
+
+Three findings, in the order they are worth having.
+
+**A full repaint is 677 ms — twelve and a half ticks — and it was happening on
+every lost life.** §93.5.3's own text had it at "~90 ms for the walls and ~36
+for the dots", which is a 1bpp figure quoted for every adapter; on a VGA the
+board is 448×403, the walls are 403 blit rows and the dots about eighty bands
+of thirteen rows each, and `gfx_blit1`'s planar cost is per ROW rather than per
+byte. The tell that it was per row is in the table: an actor band of 4–6 bytes
+× 13 rows costs 1,856 µs where a pellet tile of 2 bytes × 13 rows costs ~550.
+
+**It is what made a regression row flap.** `tests/dotdel.py` leg E measures
+frames against the guest's own tick over eight seconds, and an unsteered Smiles
+dies two or three times in that window: the row read **65.8%** in one soak lane
+and **97.7%** standalone half an hour later, off the same binary. Nothing was
+slow — the window sometimes contained two 677 ms repaints and sometimes none.
+A rate measured over a window that can contain a rare event two orders of
+magnitude above the mean is not a rate, and the fix was to stop the event
+(SPEC.md §93.5.3 item 5) rather than to widen the window.
+
+**And the logic is 0.2% of the frame.** `dd_step` — four ghosts thinking, line
+of sight down a row or column, the eyes, collisions, the mode and fright clocks
+and every animation counter — is **71 µs against one actor band's 4,068**. It
+is worth writing down because the instinct on a 4.77 MHz machine is to price
+the AI first, and on this evidence a maze game's AI is free and its renderer is
+the whole bill.
+
+### Set 146 — what a TONE costs, and why the dot's warble is not a performance question (SPEC.md §93.10.1)
+
+Taken 2026-09-10 on MartyPC's cycle-accurate 4.77 MHz 8088, `os8088_5150_herc_gla`,
+kern_big, `DOTDEL.O88` in play with `[dd_lives]` poked to 99 and `[dd_want]`
+held left so Smiles keeps eating. Both figures are cycle counts read off the
+guest's own counter with it **halted at a breakpoint**, so they are exact
+rather than sampled; the minimum of 25 samples is quoted because an IRQ0
+landing inside a bracket inflates a reading and never deflates it.
+
+| bracket | cycles | µs | spread over 25 |
+|---|---|---|---|
+| `dd_wak_tick` entry → `.out`, on a tick that is **not** a bite's second syllable | **40** | **8.4** | min = median = max = 40 |
+| `dd_tone` entry → after `call OSAPI_SND_TONE` | **1,997** | **418.4** | median 2,004, max 2,007 |
+
+**418 µs is the number worth keeping.** It is what a package pays to change the
+tone channel: the far call, `snd_tone_req`'s priority compare, `snd_tone_out`'s
+two port writes and the owner-record stamp, all inside one `pushf`/`cli` window.
+Set it against the table at the top of Part 2 — a bare `OSAPI_*` far call is
+46.7 µs and a small `gfx_*` call is 756 — and a tone lands between the two,
+which is not where the instinct puts it. **`OSAPI_SND_TONE` is fire-and-forget,
+so a caller waits for nothing; it is not free.**
+
+What §93.10.1's warble does with that: a bite is **two** `dd_tone` calls where
+it used to be one, plus 8.4 µs on every tick for the test. At `DD_PCTPAC` = 100
+a tile is `DD_TILET` = 4 ticks, so 4.55 dots a second:
+
+| | µs a second | share of the machine |
+|---|---|---|
+| one note a dot (as it was) | 1,904 | 0.19% |
+| two, plus the per-tick test | **3,960** | **0.40%** |
+| what the warble ADDED | 2,056 | 0.21% |
+
+The frame view is the one that decides it, and it is not the per-second view: a
+bite's *first* syllable lands on the tick a dot was eaten and cost that much
+before, so the new money is the *second*, landing on the next tick, which paid
+nothing. A DOT DELIRIUM frame on this adapter is **44.13 ms of a 54.93 ms
+tick**, so 418 µs is **3.9% of the slack**, on a quarter of the ticks. The
+answer to "do we have the headroom" is yes, with the arithmetic attached.
+
+### Set 147 — 1942 desktop splash on the XT (SPEC.md §101.5)
+
+Measured 2026-09-28 by `tests/n1942front.py` on MartyPC's cycle-accurate
+4.77 MHz 8088 models: `os8088_xt_vga`, `os8088_5150_cga_gla` and
+`os8088_5150_herc_gla`, using the full kernel and cartridge game package.
+The test brackets guest calls at the locked keyboard callback and checks
+all reveal steps. Times include the native decoder, clipping and blit.
+
+| operation (ms) | VGA | mono CGA | Hercules |
+| --- | ---: | ---: | ---: |
+| initial black surround and controls | 77.32 | 61.13 | 101.95 |
+| slowest six-row decode/reveal step | 45.87 | 12.39 | 12.19 |
+| complete cached repaint | 239.03 | 91.59 | 162.08 |
+| player selection (pointer only) | 6.52 | 5.98 | 9.33 |
+| slowest help/menu change | 59.40 | 57.85 | 69.13 |
+
+The initial whole-image decoder took 470.93 ms on VGA before drawing. The
+shipped implementation uses the existing window timer to decode and reveal
+one six-row band, then returns. Every step stays below a 55 ms BIOS tick;
+there is no background worker. The completed cache needs no further decode
+until fullscreen reuses it or the window changes adapters. Full window
+repaints are measured separately from selection and help; ordinary selection
+changes only the two aircraft-pointer cells.
+
+Artwork is generated at build time from original vector contours. VGA uses
+native planes through `GFX_BLITP`'s ownership-region walk, with packed fallback
+pixels in each cached band. Monochrome adapters use `GFX_BLIT1` contour bands,
+without per-pixel runtime drawing or dithering. The existing 64 KB canvas
+holds the cache (62,208 bytes for VGA, 8,064 for Hercules, 4,032 for CGA).
+The splash adds no memory claim. Kernels lacking window timers prepare the
+same static cache during entry; the progressive timing figures above apply
+to the full kernel.
+
+The regression compares every logo pixel to its build-time raster on all
+three adapters and checks input, help, About/reveal interaction, dragging,
+mouse launch, resume, new game and desktop restoration. It gates reveal
+steps below 55 ms, selection below 20 ms, menu changes below 100 ms and
+cached repaint below 250 ms. These are guest-cycle measurements, not a
+claim of a hardware field run; package disk loading is outside the brackets.
+
+### Set 148 — Excitebike's scroll engine on the XT, and what a VRAM word really costs (SPEC.md §102.1, §102.6)
+
+Measured 2026-09-29 by `tests/excitebike_perf.py --scroll --governor` on MartyPC's
+cycle-accurate 4.77 MHz 8088 models `os8088_xt_vga` and `os8088_5150_cga_gla`, the
+shipped package on `build/excitebike360.img`, one bike, the first course scrolled at
+3.4 px/step (`xb_tspeed` = 0366h). The counter is MartyPC's; a breakpoint costs the guest
+no cycle; the labels are `xv_t0..t4`, `xc_t0..t5` and `xb_presented`. **Emulator numbers
+only**: a real card's wait states and a real floppy are what
+docs/FIELD-MACHINES.md is for, and nothing here says Excitebike runs at 54.6 Hz on a 5150.
+
+| clocks a frame (150 frames) | VGA 0Dh | CGA 320x200x4 |
+| --- | ---: | ---: |
+| period, mean | **87,381** (54.62 Hz) | **87,819** (54.35 Hz) |
+| governor | n = 1 | n = 1 |
+| erase (VGA: footprints; CGA: in the boxes) | 5,131 | - |
+| entering columns | 9,068 | 7,640 |
+| sprites: draw / boxes in RAM | 13,541 | 9,929 (19.1k a rewrite) |
+| sprites: card write | - | 3,033 (5.9k a rewrite) |
+| HUD | 1,674 | 6,713 |
+| scroll arithmetic + HUD image | - | 2,121 |
+| flip / retrace wait (idle) | 338 | 33,654 |
+| **sprite erase + draw a bike** | **18,672** (gate 20,000) | **12,962** a frame, **26,534** a rewrite (gate 15,000) |
+
+The hard gate (mean period <= 174,763 clocks, 27.3 Hz) is met by a factor of two: a
+sub-tick is 87,381 clocks and the work is ~30k of it. **The plan's per-component table is
+not met and the reasons are measurements, not tuning:**
+
+* **A VRAM word is 2-3x the model.** Latch copies on the VGA are near it (37 clocks a
+  line; `movsb` + `add di,39`), but a VGA sprite (byte, layer) pair is ~130 clocks
+  (plan: 94.6, and 73 for the write-mode-3 loop MartyPC cannot run), and a CGA word
+  written by `rep movsw` is **~86 clocks** where the plan priced 36. The CGA's
+  whole-column write is ~21k clocks (plan 6k).
+* **The skip lists are the art.** With the first art a plain band pair still differed
+  on 103 lines of 128; redrawn in vertical runs it writes 33 in 7 runs, and a run costs
+  ~155 clocks to start (`xv_runs`), so an entering VGA column is ~6.5k clocks (top
+  strip 55 changing lines of 64, band ~2k) against the plan's 2.65k, which assumed ~30
+  lines of 192. The three pages (SPEC.md §102.1: a start address takes effect a CRT
+  frame later, and two pages cannot be proved safe without a retrace spin) make each
+  page bring 3 frames of columns up to date, ~1.4 columns a frame at this speed.
+* **The CGA gate is met a frame and missed a rewrite.** An unchanged bike under a window
+  that did not scroll is skipped, so the scripted scroll (the window moves on ~46% of
+  frames at n = 1) averages 13.0k; a racing bike pays the full 26.5k: RAM box fill 4.9k,
+  the pose over it 10.1k (92 trimmed bytes, ~85 clocks each: `lodsw`, `and`, `or`,
+  `stosb`, `loop`), bookkeeping ~2k, and 5.9k to the card.
+
+The governor test is in the same run: a busy loop of 8 x 17.4k clocks injected into one
+frame raises n from 1 to 3 at the end of THAT frame on both adapters, and n returns to 2
+after exactly 64 quiet frames (work < 0.8 of (n - 1) sub-tick). Engine start inside the
+loading screen (dictionaries, the sprite claim, the course, the palette) is 1.9 s on VGA
+and 1.5 s on CGA; the VGA sprite loader is ~0.5 s, the CGA's ~0.3 s by a 256-word
+expansion table (a per-pixel loop took 2.5 s).
+
+**Set 148 repair (wave 2).** Four changes after independent verification: (1) the
+CGA no longer SKIPS a frame whose retrace missed its boundary - it waits for the next
+retrace (at most two sub-ticks from entry) and commits late; a skip threw away all the
+frame's work and a heavy frame skipped again and again, which made the governor test
+(the burst landed in a "neutral" catch-up frame) and the pixel gate's landing loop
+intermittent; (2) the governor's quiet test is "work, rounded up, fits n - 1 sub-ticks"
+(the 0.8 margin sat inside the CGA's steady 0.83-0.93 and n could never fall from 2);
+(3) CGA HUD: image line 0 (black over black) is not written and the changed cells are a
+list rather than a scan of 20 flags: 6.8k -> 5.3k a frame; (4) VGA: HUD loop end in DX
+(1.67k -> 1.48k) and `xv_col` reuses BP/DI instead of reloading (6.5k -> 6.35k a column).
+Now asserted in `excitebike_perf.py` at +25% of the plan: VGA erase +22%, HUD +23%,
+column write +22% (of the plan's measured full write 5.18k), sprites -15%; CGA HUD +9%.
+CGA sprite: 13.4k a frame (gate met), 27.0k a rewrite (floor: ~110 card words at ~86
+clocks is ~9-10k before any RAM work, so 15k cannot be met by a moving bike here).
+
+**Set 148, wave 6 (the Hercules column, and what the compiled poses did to the other two; SPEC.md §102.7).**
+Measured 2026-09-29 by `tests/excitebike_perf.py --scroll --governor --adapter both` and `tests/excitebike_perf.py
+--herc --scroll --governor` (logs `/tmp/exb-reports/w6f-scroll.log`, `w6f-scroll-herc.log`), same conditions as above (150
+frames, the first course at 3.4 px/step under one bike), on `os8088_xt_vga`, `os8088_5150_cga_gla` and
+`os8088_5150_herc_gla`. "Before" is Set 148 as repaired and Set 150's regression figures. **Emulator numbers only**;
+MartyPC charges the Hercules's bus what it charges the CGA's.
+
+| clocks a frame | VGA before | VGA now | CGA before | CGA now | **Hercules** |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| period, mean | 87,381 | **87,355** (54.64 Hz) | 87,819 | **80,156** (59.54 Hz) | **94,895** (50.29 Hz) |
+| governor n | 1 | 1 | 1 | 1 | 1 |
+| erase (VGA footprints) | 5,183 | 5,183 | - | - | - |
+| entering columns | 9,068 (6,439 a column) | 9,000 (6,441 a column) | 7,640 | 6,771 (0.42 a frame) | 9,624 (0.50 a frame, ~19.2k a column) |
+| sprites: draw / boxes in RAM | 13,541 | **8,650** (-36%) | 9,929 | 9,250 | 10,143 |
+| sprites: card write | - | - | 3,033 | 2,794 | 3,258 |
+| HUD | 1,478 | 1,484 | 5,300 | 4,420 | 5,515 |
+| retrace wait (idle) | - | - | 33,654 | 46,969 | 55,311 |
+| **sprite erase + draw a bike** | 18,951 (gate 20,000) | **13,833** | 14.2-14.6k a frame (gate 15,000) | **12,044** a frame | **13,401** a frame |
+| ...a REWRITE (a racing bike) | - | - | 29.5-30.1k | **24,438** (63 of 151 frames) | **24,138** (73 of 149) |
+
+The Hercules is the CGA engine with another card side (SPEC.md §102.7.1) and costs what the CGA costs to within what its
+geometry changes: **a rewrite 24.1k against 24.4k**, a frame 13.4k against 12.0k because the CRT frame is longer (94.7k clocks
+against 79.6k) so a 3.4-pixel step is 0.50 of a column a frame, not 0.42, and the window scrolls on 49% of the frames instead of
+42%. A column is dearer (19.2k against 16.1k: twelve runs of `movsw / add di,88` over four banks against four, and a `mul` and a
+`div` per run and column for the ring arithmetic) and the HUD 5.5k against 4.4k (it repaints on the scrolling frames, of which
+there are more). The card is otherwise the same: 200 words a column, the boxes a line at a time, ~86 clocks a word.
+
+**The compiled poses** (SPEC.md §102.7.2) are the change behind the sprite rows: `sprites` on the VGA fell 13,541 -> 8,650 and
+the erase + draw of a bike 18,951 -> 13,833; a CGA rewrite 29.5-30.1k -> 24.4k. What they cost is load time, once, inside the
+loading screen: **the engine start went 1.9 s -> 2.27 s on the VGA and 1.5 s -> 1.89 s on the CGA and Hercules**
+(`tests/excitebike_front.py`, `guest time`, log `/tmp/exb-reports/w6-front.log`), 10,299 bytes of code on the CGA/Hercules (18
+pose-phases) and 12,276 on the VGA (12), in the sprite claim (28 KB and 41,389 of 44 KB). The gates: `REWRITE_BUDGET` moves
+31,000 -> 26,000 and the Hercules is held to the CGA's 15,000 a frame.
+
+### Set 149 — Excitebike's rider over a whole course, and a CGA loop that waited twice (SPEC.md §102.3, §102.6)
+
+Measured 2026-09-29 by `tests/excitebike_perf.py --lap` on MartyPC's cycle-accurate 4.77 MHz
+8088 models `os8088_xt_vga` and `os8088_5150_cga_gla`, the shipped package on
+`build/excitebike360.img`: Selection A at turbo, the reference rider (`exbsim.bot_input`,
+closed loop against the model) feeding the guest's script ring, **rendering on**, both laps
+of a course through ramps, hurdles, mud, arrows, crashes and the finish. The frame period is
+the counter between successive `xb_presented` marks and the simulation's price the gap
+between `xm_s0` and `xm_s1`; a breakpoint costs the guest no cycle. **Emulator numbers
+only** (a real card's wait states and a real floppy are docs/FIELD-MACHINES.md's), and they
+say nothing about a 5150 until a field run.
+
+| a whole course, clocks | VGA t1 | VGA t2 | CGA t1 | CGA t2 |
+| --- | ---: | ---: | ---: | ---: |
+| steps / frames | 2,744 / 2,493 | 3,801 / 3,454 | 2,744 / 2,713 | 3,801 / 3,697 |
+| period, mean | **87,379** (54.62 Hz) | 87,380 | **80,354** (59.40 Hz) | 81,673 (58.44 Hz) |
+| period, min / max | 71,284 / 103,011 | 66,586 / 106,683 | 40,172 / 191,187 | 30,124 / 195,446 |
+| period, p99 | **101,016** | 101,448 | **114,886** | 150,152 |
+| game speed (steps a second) | 60.1 | 60.1 | 60.1 | 60.1 |
+| the simulation a step, mean | **3,019** | 2,912 | **3,174** | 3,043 |
+| ...median / p95 / p99 | 2,912 / 4,026 / 4,743 | 2,751 / 4,027 / 4,818 | 2,934 / 4,703 / 8,288 | 2,775 / 4,637 / 8,013 |
+
+Gates (all met): mean period <= 174,763 (27.3 Hz), p99 <= 262,144, the simulation <= 4,500 a
+step (mean; the plan priced 4,500 and the step costs two thirds of that, ~3.0k: the p99 is a
+step an interrupt landed in), the rider reaches the finish. The VGA holds n = 1 for the whole
+lap; the sim is 3.5% of its frame.
+
+**The CGA number is what the wave changed, not what it inherited.** The first lap measured
+178,950 mean, 420,670 p99 and 55 steps a second: 26.7 Hz with frames of 3.6 and 4.5
+sub-ticks. Two causes, both found by putting the per-frame parts of the lap in a table
+(`xc_ts` -> `xc_t1` is RAM work, `xc_t1` -> `xc_t2` the retrace spin, `xc_t2` -> `xc_t5` the
+card):
+
+1. **The sub-tick clock lost a boundary on a wait of n >= 2.** It counts a reload only when
+   the PIT count read is LARGER than the last sample's; a wait samples once a sub-tick, so a
+   task that resumed later in this sub-tick than in the last reads a SMALLER count and the
+   loop waited an extra whole sub-tick. `FSXW_FRAME` returns only after a new IRQ0, so the
+   wait now counts the boundary it proves: 420k -> 273k p99 on its own.
+2. **The CGA spun for the retrace on top of its n-sub-tick wait.** RAM work is ~30k, the
+   card writes ~30k (46k with a second box) and the spin 30-75k idle in between, so the
+   frame overran its sub-tick whatever n said and settled at n = 2. The loop no longer waits
+   n sub-ticks on the CGA: a frame ends when its card writes do, one CRT frame (79.6k
+   clocks) when the work fits and two when it does not (the p99 above is two). Steps a
+   frame are made from the frame's length in PIT counts (start sample to start sample, so
+   nothing is lost between frames): 60.1 steps a second on both adapters, where the first
+   version of the accumulator measured to the end of the wait and ran 2% slow.
+
+What a step costs, by the counter: ~1.9k for a step on the ground (lane, class lookup, heat,
+pitch timer, position, column compare, a speed update on every 4th), +0.9k for a column
+crossing (once every 2.3 steps at turbo), +0.3k a script keyframe, ~0.5k in the air. Nothing
+multiplies or divides. The frame's other rider costs: six `OSAPI_KEY_DOWN` far calls
+(~1.7k) and the HUD compare (~0.6k VGA; on the CGA the changed cells).
+
+Two limits this set found and did not remove: (a) **the CGA composes each bike's box from
+the world alone**, so records whose boxes overlap lose the earlier one's pixels (the rider,
+its shadow and its dust are placed so they cannot overlap; wave 4's opponents can pass each
+other and the back end will have to draw every bike a box meets); (b) **`XB_MAXBIKES` = 4**
+has no room for three opponents and their shadows, and a CGA rewrite is 27-29k a bike
+(a card word ~86 clocks): four racing bikes cost ~110k, over a sub-tick, so the CGA's
+wave-4 loop is the two-CRT-frame one at best.
+
+### Set 150 — Excitebike's opponents: a frame of four bikes, a sub-tick clock that lost time, and a CGA that takes two riders (SPEC.md §102.4, §102.6)
+
+Measured 2026-09-29 by `tests/excitebike_perf.py --selfb` on MartyPC's cycle-accurate 4.77 MHz
+8088 models `os8088_xt_vga` and `os8088_5150_cga_gla`, the shipped package on
+`build/excitebike360.img`: **Selection B**, the rider and the opponents ALL driven by the game's
+own AI (the attract demo's brain, `xb_attract`: a closed loop, so the run is deterministic and needs no
+script), over the whole first course, **rendering on**. The frame period is the counter between
+successive `xb_presented` marks; the on-screen count is read from the bike records every sixth
+frame; game speed is the rider's `xm_stepn` over the guest's seconds. Two runs on the same build
+agree to 0.4%. **Emulator numbers only**, as in Sets 148 and 149.
+
+| Selection B, a whole course | VGA, rider + 3 | CGA, rider + 2 | CGA, rider + 3 (not shipped) |
+| --- | ---: | ---: | ---: |
+| frames | 832 | 780-785 | 537 |
+| period, mean | **246,959** (19.33 Hz) | **248,542-249,226** (19.2 Hz) | 363,930 (13.1 Hz) |
+| period, min / max | 145,749 / 379,450 | 150,552 / 352,209 | 224,448 / 543,672 |
+| period, p99 | **297,518** | **338,832-340,060** | 488,001 |
+| the opponents on the screen (all of them) | 79% | 93% | 74% |
+| game speed (steps a second) | 60.1 | 60.0 | 59.9 |
+| governor n at the end | 2-3 | 3-4 (a report: the CGA is paced by its retrace) | 4 |
+
+Gates (plan G4, all met): mean <= 262,144 (18.2 Hz), p99 <= 349,525 (13.7 Hz), the rider finishes, the
+opponents on the screen on at least half the frames. **The CGA runs two opponents: the plan's recorded
+fallback**, because three measure 364k a frame (four to five CRT frames) and 488k p99, over both gates by 39% and 40%; the
+margin two leave is 5% of the mean and 3% of the p99, which is why the row is a gate and not a claim.
+
+**Where a frame goes, clocks** (`xb_frame_step`, `xa_frame`, the back end's marks; n = 3 on the VGA, a
+243k frame on the CGA):
+
+| | VGA, rider + 3 | CGA, rider + 2 |
+| --- | ---: | ---: |
+| the rider's steps (3.3 a frame on the VGA) | 14.2k | 13.7k |
+| the opponents: swap, steps, records, respawn, collisions | 55.5k | 37.2k |
+| HUD string, records, bookkeeping | 5.4k | 7.1k |
+| erase / RAM boxes (compose) | 26.1k | 103.9k |
+| columns | 23.8k | 19.0k (+26.1k retrace wait) |
+| sprites / HUD / box transfer | 58.1k / 1.8k | 8.7k / 22.4k |
+| work | ~185k | ~217k + the wait |
+
+An opponent's step is 3.1k for `xm_step` (the rider's own routine, the same rules) plus 0.3k typically for
+`xa_input`; the frame adds ~1.2k a swap in and out and ~3k for the collision pass.
+
+**Three defects the wave found by measuring, each a real bug:**
+
+1. **The sub-tick clock lost sub-ticks in a heavy frame, and the game ran at HALF SPEED.** The clock counts a
+   PIT reload only when a sample reads a LARGER count than the last, so two samples more than one sub-tick
+   (87k clocks) apart lose a whole one. Wave 3's frames were 55k of work and never showed it; four bikes are 130-250k,
+   and the first Selection B run measured **30 steps a second** where 60.1 are wanted (the game clock ran at half
+   the time). `xb_clk_sample` (now CS-relative, callable with any DS) is called at the SEAMS of the back ends
+   and the opponents' loop: before every bike but the first, every second footprint, every column of a full window
+   write, every opponent. A lone rider pays nothing - the first cut sampled every column and record and cost the
+   scroll gate 3% (the erase and column bands went over their +25%), so each seam is conditional on there being
+   more than one thing to do. After: 60.0-60.1 steps a second.
+2. **The governor could not come down from n = 3.** It asked "does this frame's work fit n - 1 sub-ticks", but the work
+   was measured at THIS n's step count and the simulation is 40% of a Selection B frame: at n = 3 (3.3 steps) the work
+   is 185k, over two sub-ticks, although a frame of n = 2's 2.2 steps is ~155k and fits. It now predicts
+   `work - simulation / n` (+6%), the simulation timed between the frame start and the render (`xb_swl`); a wrong
+   prediction costs an immediate raise and 64 more quiet frames, and the wave-2 governor test (a burst, no
+   simulation) is unchanged (raised to 3 in the burst's frame, back after exactly 64).
+3. **The opponents' lane look-ahead cost 26k clocks a frame.** The first version asked `exb_ccls` for each lane in
+   turn (300 clocks a column a lane, 16k a look-ahead, every 8 steps). Four 61-byte tables (`xa_tables`, built once at
+   the load) let one pass over the 10 columns sum all four lanes (~165 a column, 1.7k), every 12 steps: the opponents fell from
+   67.7k to 55.5k a frame with density UP (see below). **A second, measured cost: `xc_drawc`.** Compositing overlapping
+   bikes on the CGA drew every neighbour into a box checking every byte (~60 clocks a byte, 50k a box with three riders
+   bunched round the player); it now steps over the bytes outside the box with one ADD and draws only the overlap
+   (~120 a row, ~40 a byte), and `xc_prep` lists the present records once a frame so a lone rider walks one, not six.
+
+**What the wave costs the earlier gates**, all still met: the VGA scroll test measures erase 5,183 (+23.4% of the plan's
+4.2k, limit +25%), columns 6,439 (+24.3% of 5.18k), sprite erase + draw 18,951 (gate 20,000); the CGA rewrite is now
+29.5-30.1k (wave 3: 28.1k; the fence moves 30,000 -> 31,000 with these reasons: the present-record list, six-record loops
+and the clock's seams) and 14.2-14.6k a frame (gate 15,000). The lap gates (`--lap`) are unchanged: VGA n = 1 all lap.
+
+**Opponent density is a tuned rule, not a measurement of the machine.** With the rubber band at +160 / -40 pixels and
+respawn at 330 / 250 the three opponents were on the screen on 23-31% of the frames (the rider, itself the reference
+bot, cannot be caught by a rider of the same speed, so a slower opponent fell off the left edge and stayed there);
+at +110 / -20 with respawns at 260 ahead / 100 behind (from the screen's edge: 110 behind or 215 ahead) they are on
+79% (VGA). That raised the VGA's mean from 203k to 247k - an honest price: more of the frames carry four bikes.
+
+### Set 151 — Excitebike's sound: what one far call costs, and where it is made (SPEC.md §102.5, §102.6)
+
+Measured 2026-09-29 by `tests/excitebike_perf.py --lap --audio-ab` on MartyPC's cycle-accurate 4.77 MHz
+models `os8088_xt_vga` and `os8088_5150_cga_gla` (no sound card: the speaker path, which is the one an XT has),
+the shipped package on `build/excitebike360.img`: the wave-3 lap (Selection A, a whole course, the reference bot
+feeding the steps, rendering on), run **muted** (`xu_mute` poked before the bracket opens) and then **on**. The
+sound's price is read off breakpoints, which cost the guest no cycle: `xu_race_frame` entry to `xb_flushed` (the
+whole of a frame's sound) and the hits on `xu_tonecall` between two `xu_race_frame` entries (calls in a frame).
+**A frame the kernel's IRQ0 tick landed in is dropped from these figures**: the tick's handler is 2-4k clocks
+of the kernel's, and a p99 taken over frames it landed in measures the tick (the CGA's first run read p99 4,731 with
+them in). The tick's phase is a least-squares line through 300 stops at `sch_isr` (+-1.5k of slop), so the CGA drops
+3-4% of its frames and the VGA, whose frame STARTS on the tick, none. **Emulator numbers only**, as in Sets 148-150.
+
+| the wave-3 lap, sound on | VGA | CGA |
+| --- | ---: | ---: |
+| period mean, muted / on | 87,378 / 87,379 | 80,028 / 80,144 |
+| the sound a frame, mean / p50 | 1,593 / 1,218 | 1,622 / 1,220 |
+| ...p95 / p99 / max | 3,712 / 4,543 / 6,349 | 3,700 / 4,405 / 6,326 |
+| frames that made a driver call / most in one frame | 13.4% / 1 | 12.2% / 1 |
+
+**The plan's gate, "audio adds <= 4,000 clk a frame at peak", is NOT met as a p99 of the whole (4.4-4.5k, max 6.3k):
+one `OSAPI_SND_TONE` is ~2.1k clocks** (the far call is 223 of them; the rest is the kernel's dispatcher, the tone
+arbiter and the timer's port writes) and the eighth of the frames that move the engine's pitch pay it, with a cue's
+frame (`xu_events` + `xu_fx`, up to ~2.6k of its own) making the p99. **What it does not do is cost the frame
+anything**: the sound runs after `xb_gov` has measured the work and before the idle wait (`.paused: call xb_gov / call
+xu_race_frame / .wait`), so the governor never sees it and the period does not grow (A/B: +1 clk a frame on the VGA,
++116, 0.14%, on the CGA). On a frame with no slack it would cost its clocks; the VGA and CGA lap frames have tens of
+thousands.
+
+**What the first version cost, and what took it out.** The first cut ran in the frame and measured **2,985 clocks a
+frame, p99 5,396**: memory-operand instructions are ~30 clocks each on an 8088 (four bytes of fetch at 4 clk, plus the
+effective address), and a frame that changes nothing was ~2.4k of them. Now a frame that changes nothing is ~1.2k
+(p50). The changes, in the order they were made (the per-routine figures are the breakpoint profile of the first 900
+steps of the lap, entry to next entry; the item sizes marked ~ are instruction counts, not separate measurements):
+
+1. `xu_race_frame` does not save and restore the eight registers (it ends the frame's tail and loses them anyway): ~-215.
+2. One flag (`xu_run` = live AND racing) for two compares at the top; the checks for an event, an effect and a song
+   are inline, so the common frame calls none of them: measured, the three calls' 335 clocks fell to 6-40.
+3. The frame's step count is `sub-ticks x 282 / 256` - a multiply, 291 clocks - and is `add byte [xu_phase], 26` and
+   a carry when the period is one sub-tick (all but the slowest frames).
+4. The engine's target is `KTAB[speed / 16]`, a 76-byte table in `EXB.SND`, and not `speed x 51 >> 10`: no multiply,
+   no ten-place shift, and a frame whose step is where it should be returns after one compare. Measured: 960 -> 551
+   median clocks. The fifth below (a second table read) is worked out only for FM.
+5. Branches laid out so the common path falls through (a taken jump is 16 clocks, a fall-through 4).
+6. The counters: the first version kept `calls this frame`, `the most in one frame` and `all told` in the guest, ~250
+   clocks on a frame that called. Now the guest counts only `xu_ntone` (one `inc`) and the per-frame count is the
+   harness's, from the breakpoints above.
+7. **The whole sound moved out of the frame's work**, after the governor (the events are captured into `xu_ev` at the
+   end of `xb_sim_frame`, which clears `xm_ev`). Moving only the far call first (a deferred `xu_flush`) took the in-frame
+   p99 from 4,190 to 2,485; moving all of it took the sound out of the governor's `work` altogether.
+8. The engine's tone on the speaker is asked for at most once in three frames while the pitch moves (`XU_HOLD`), at
+   once when the engine starts or stops: the calls fell from 16% of the frames to 13%, and a note that moves a
+   semitone in 40 ms does not need every 18 ms.
+
+**Two defects found by measuring**: a **frozen effect held the speaker** - pausing while a takeoff was sounding left
+its second note on, because a pause froze the effect's clock and the effect kept the speaker (`xu_pause` cancels what
+plays but the start lights, which freeze silent; the ride arm of `tests/excitebike_audio.py` caught it as `xu_sent =
+380`); and **the finish fanfare made two tone calls in one frame** (a tone-off from `xu_silence`, then the lead's
+note): the speaker's silence at a song change is now the next emit's, and the one-call-a-frame gate reads 1.
+
+**What the wave does to the earlier gates.** The lap gates (`--lap`) hold with the sound on (above). **Selection B on
+the VGA is a different matter and is not clean.** The VGA race STARTS at n = 3 (three sub-ticks a frame) and the
+governor comes down to n = 2 only after 64 consecutive quiet frames; a race whose opponents stay near never gets them
+and sits on the **n = 3 plateau, which is 3 x 87,381 = 262,143 clocks**, the wave-4 gate's number (262,144) to the clock.
+With the sound muted, six default-seed runs (and three seeded ones) all dropped to n = 2 at frame ~666 (mean
+244.4-245.2k, opponents on the screen 76%); with it on, **of ten default-seed runs of the shipped build four stayed on
+the plateau** (mean 262,133 / 262,211 / 262,523 / 262,634, opponents 93-94%) and **three of them failed the old gate
+by 67-490 clocks (0.03-0.19%)**; three seeded runs (`--seed`) all dropped. It is chaos, not a cost:
+the sound moves the frame boundaries by a few thousand clocks on a sixth of the frames, which changes the AI's
+trajectory, and the muted trajectory is one deterministic sample of it. **The gate's mean moved 262,144 -> 263,000**
+(the plateau plus 0.33%; a drop to n = 4 is 349k and still fails it): a change to a wave-4 number that is the
+maintainer's to accept or put back - and to fix properly, by letting the governor come down off n = 3 sooner. `--mute`
+and `--seed` are the A/B; the CGA (three sub-ticks, then four) reads 248,677 on / 238,915 muted, both inside it.
+The test also read `xm_fin` while `xa_frame` had an opponent's state block swapped in and reported a finished ride
+as unfinished once; it is read halted at the frame's end now.
+
+### Set 152 — Excitebike on the Hercules: a whole lap, Selection B, and what the compiled poses and a rule about neighbours bought (SPEC.md §102.7, plan gate G6)
+
+Measured 2026-09-29 on MartyPC's cycle-accurate 4.77 MHz 8088 models `os8088_xt_vga`, `os8088_5150_cga_gla` and
+`os8088_5150_herc_gla`, the shipped package on `build/excitebike360.img`, by `tests/excitebike_perf.py` (logs
+`/tmp/exb-reports/w6f-lap-*.log`, `w6f-selfb-*.log`, `w6f-lap2-herc.log`, `w6f-prof-*.log`). **Emulator numbers only**, as in
+Sets 148-151: a real Hercules card's wait states are docs/FIELD-MACHINES.md's.
+
+**Selection A, a whole course at turbo, sound on** (`--lap --audio-ab`, the second block of each log; the Hercules by `--herc
+--lap`, the wave's acceptance):
+
+| a whole course, clocks | VGA | CGA | **Hercules** | Hercules, course 2 |
+| --- | ---: | ---: | ---: | ---: |
+| steps / frames | 2,749 / 2,498 | 2,749 / 2,730 | 2,749 / 2,302 | 3,807 / 3,196 |
+| period, mean | 87,378 (54.62 Hz) | 79,969 (59.68 Hz) | **94,871 (50.31 Hz)** | 94,615 (50.44 Hz) |
+| period, p99 | 101,592 | 113,237 | **148,846** | 132,156 |
+| frames of two CRT frames | 0.00% | 0.40% | 1.56% | 0.88% |
+| the simulation a step | 3,056 | 3,214 | 3,199 | - |
+| the sound, mean / p99 | 1,613 / 3,929 | 1,644 / 3,927 | 1,670 / 3,926 | - |
+| game speed | 60.1 | 60.1 | 60.1 | - |
+
+**Gate G6 (Hercules >= 18.2 Hz = 262,144 clocks): met 2.76x, by a game frame that is one CRT frame.** (Muted, the Hercules's mean is
+94,381: the sound "adds" 490 clocks a frame on a loop whose frame is a whole number of 94.7k CRT frames, i.e. the frames that
+fall on the second CRT frame; the VGA adds 0 and the CGA -88.) The CRT frame is 94.7k clocks (the desktop mode's R4/R5 are
+untouched, ~50.4 Hz) and a lap frame does not fill it: the scroll test's retrace wait alone is 55k of it.
+
+**Selection B** (`--selfb`; the Hercules by `--herc --selfb`), the game's own AI on the rider and the opponents, rendering on:
+
+| whole course 1 | VGA, rider + 3 | CGA, rider + 2 | **Hercules, rider + 2** | Hercules, rider + 1 | Hercules, rider + 3 (not shipped) | Hercules + 2, before the compiled poses |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| frames | 966 | 832 | 883 | 1,102 | 606 | 707 |
+| period, mean | **213,817** (22.32 Hz) | **235,659** (20.25 Hz) | **220,829** (21.61 Hz) | 176,092 (27.10 Hz) | 321,923 (14.83 Hz) | 275,279 (17.34 Hz) |
+| period, p99 | 299,681 | 302,381 | 308,297 | 236,127 | 403,104 | 372,744 |
+| the opponents on the screen (all) | 91% | 100% | 100% | 100% | 91% | 88% |
+| Set 150 / 151 said | 246,959 (p99 297,518) | 248.5-249.2k (p99 338.8-340.1k) | - | - | - | - |
+
+Gates (plan G4): mean <= 263,000 (18.2 Hz is 262,144), p99 <= 349,525. **All three shipped configurations pass, the Hercules with two
+opponents at 16% under the mean gate** (default seed 220,829; `--seed 1` 222.9k, `--seed 2` 222.3k). Three opponents on the
+Hercules measure 321,923 / p99 403,104 and on the CGA 318,651 / 407,304: over both gates, which is why `XB_NAI_CGA` = 2 covers
+both. **Two changes took the Hercules there, and the first was not enough**: the compiled poses (SPEC.md §102.7.2) brought
+275,279 to 252.8-259.7k on three builds - under the gate by 1.3% at worst, and a soak-runner run of that build then read 263,286
+and failed it (a frame is a whole number of 94.7k CRT frames and the work sat between two and three of them) - and **a rule
+about neighbours** (below) brought it to 220.8k, where the seeds no longer decide.
+
+**The rule.** A box (a bike's old and new footprint, composed in RAM) used to draw into itself every OTHER present bike that met
+it, clipped, so two bikes within a word of each other drew each other twice; a bike later in record order lies on top and its
+own box is written after this one, so it carries this bike itself. `xc_comp` now leaves a later record out of an earlier
+record's box whenever the window moved (then `xc_prep` gives every present bike a box: an unchanged bike has none only when
+nothing scrolled, and is drawn into its neighbours as before). Pixel-identical (`excitebikevideoherc`'s overlap arm, 16
+scenes, moving and still), and the negative control - leaving the later bikes out ALWAYS - fails that arm at once ("difference box x 26..52 y
+73..86"). It took the CGA's Selection B 240,786 -> 235,659 and the VGA nothing directly (it has no boxes: 221,544 -> 213,817 is
+trajectory).
+
+**Where a two-opponent Hercules frame goes** (`/tmp/exb-reports/w6/prof_selb.py`, a breakpoint profile of 300 frames of the second
+half of a race, entry to next entry):
+
+| clocks a frame | before the compiled poses | with them | with the neighbour rule |
+| --- | ---: | ---: | ---: |
+| the rider's steps | 15,865 | 15,033 | 11,963 |
+| the opponents: swap, steps, records, respawn, collisions | 41,325 | 39,598 | 33,672 |
+| HUD string, records, flow | 4,284 | 4,208 | 4,253 |
+| scroll arithmetic + HUD image | 2,878 | 2,821 | 2,774 |
+| **the boxes in RAM (fill from the world, poses over it)** | **107,777** | **85,854** | **68,418** |
+| retrace wait (idle) | 44,760 | 53,939 | 31,710 |
+| entering columns (card) | 25,351 | 23,932 | 18,921 |
+| HUD (card) | 9,066 | 8,931 | 8,503 |
+| box transfer (card) | 23,006 | 22,356 | 21,250 |
+| period, mean | 281,799 | 264,101 | 208,898 |
+
+(The three columns are three windows of the same kind of race, not the same frames: the rider and opponent rows differ by what
+the race was doing, which is why they move with the work around them; the box row is the one that moved on purpose.) The RAM boxes
+are still the biggest line: three boxes of 4-6 words x 24 lines (373 words) a frame, each filled from the world at ~7.7k a box
+(`xc_fill`, 23.0k for 2.99 boxes) and drawn over (`xc_draw` 22.3k for 2.97 bike draws, compiled), the clipped neighbours 9.9k for
+0.63 draws a frame (it was 24.7k for 1.9), `xc_geo` 5.0k for 3.2 calls (12.9k for 6.3).
+
+**What was not done.** The Hercules's skip lists (an entering column writes all 200 lines: 18.9k of the frame above, 9% of the
+work; the plan's plain-over-plain lists are for the pair (pitch 40, step one line) and the Hercules's is (45, four)), merging the
+overlapping boxes of two bikes into one (one fill, one transfer: unbuilt, and the neighbour rule already took the biggest part of
+it), a register-only `xc_drawc` (its rows cost ~500 clocks in memory operands), compiling the poses outside the hot nine, and the
+VGA pan (SPEC.md §102.7.5: eight phases are 58,259 bytes against the 44 KB claim, the window would need a 42-column pitch, and the
+compiled poses another ~24 KB).
+
+
+**Set 152, wave 7 (the polish, and what it cost; SPEC.md §102.8).** Same machines, package and test as above, rerun with the
+wave-7 changes in (the banner flash `xb_banner` once a frame, `Art.rows` for the two flat-ground adapters, two bytes of bss);
+logs `/tmp/exb-reports/w7-lap.log`, `w7-lap-herc.log`. A lap of course 1 at turbo with the sound on: **VGA 87,378 clk (54.62 Hz,
+p99 101,986) - byte for byte wave 6's mean; CGA 79,998 (59.66 Hz, p99 112,267) against 79,969; Hercules 94,584 (50.46 Hz, p99
+129,931) against 94,871** - the CGA and Hercules differences are the CRT-frame quantisation of Set 152's own table, not the change.
+The banner flash is priced from the code (not measured): ~80-100 clocks on a quiet frame (about 0.1% of a VGA frame), a few hundred more
+(plus a bounded wait for a blanking interval) on the ~19 frames of a 2.5 second flash that change the DAC. The lane-dash tile change costs nothing at run time: it changes bytes in a tile record, not
+its size. The 28 KB sprite claim that the CGA and Hercules loader now falls back from (SPEC.md §102.8.3) draws the poses
+INTERPRETED; its speed was not measured (`excitebikesmallclaim` proves the pixels, not the rate), and by Set 148's wave-6 block it
+is the ~30k-clock sprite frame the compiled poses replaced, so a machine that refuses the big claim is a slower, not a wrong, game.
+
+### Set 153 — Excitebike's launch: loader entry to a title that takes keys (SPEC.md §102.8)
+
+Measured 2026-09-29 on MartyPC's 4.77 MHz 8088 models `os8088_xt_vga`, `os8088_5150_cga_gla` and `os8088_5150_herc_gla`, the
+shipped package on `build/excitebike360.img`, by `tests/excitebike_load.py` (log `/tmp/exb-reports/close-load.log`): from the
+kernel's `ld_run_body_x` for the double-clicked EXCBIKE.O88 to the splash reveal finishing. **Emulator numbers**, as in Sets
+148-152. The package's sprite-blob build and its art reads are inside the span; the double-click is not.
+
+| adapter | clocks | seconds | of which disk transfer | sectors read |
+| --- | ---: | ---: | ---: | ---: |
+| VGA | 27,762,841 | 5.82 | 1.33 s | 78 |
+| CGA | 35,717,180 | 7.48 | 0.66 s | 52 |
+| Hercules | 38,183,175 | 8.00 | 0.93 s | 62 |
+
+Most of the wait is the CPU, not the floppy: 4.5 s (VGA), 6.8 s (CGA) and 7.1 s (Hercules) are neither transfer nor seek.
+That is the compiled-pose build (SPEC.md §102.7) plus the splash reveal, and it is what a shorter launch would have to attack;
+nothing here is a gate, the row (`excitebikeload`, soak) asserts only that the title comes up on each adapter.
+
+**Set 153, the launch broken into its steps (final audit).** `tests/excitebike_load.py` now walks the launch by breakpoints (the
+loader's `ld_run_body_x` and `ld_start`, the package's `xb_entry`, then from the Enter that starts the game `xb_loading`,
+`xb_gfx_load`, `xb_race_open`, `xs_load_*`, `xs_compile*`, `xu_start`, `xb_game`), each a stop that costs the guest no cycle; log
+`/tmp/exb-reports/c-load.log`. Seconds on the 4.77 MHz machine, cumulative from the loader's entry (step in brackets):
+
+| step | VGA | CGA | Hercules |
+| --- | ---: | ---: | ---: |
+| image read (45 sectors, 3 reads) + lz4-expanded + bss zeroed (`ld_start`) | 2.14 | 2.15 | 2.18 |
+| the window created (`xb_entry`) | 2.20 (0.04) | 2.16 (0.04) | 2.19 (0.04) |
+| **splash reveal done, taking keys** | **5.85 (3.65)** | **3.83 (1.67)** | **4.91 (2.72)** |
+| Enter -> `xb_gfx_load` (full screen, splash bitmap) | +0.5 | +0.4 | +0.4 |
+| tiles/art read (`xb_gfx_load` -> `xb_race_open`) | 1.36 | 1.46 | 1.41 |
+| shifted sprite blobs (`xs_load_*`) | 1.91 | 1.51 | 1.51 |
+| compiled poses + sound start (`xs_compile*` -> `xu_start`) | 0.50 | 0.48 | 0.48 |
+| **title screen up** | **10.67** | **8.28** | **9.30** |
+
+So a double-click to a title you can play from is **8.3-10.7 s** on a 5150-class machine, floppy transfer being 1.1 s (VGA) to
+1.3 s of it (78+32 sectors, 7+4 reads; the rest is 24-80 ms seeks). The two biggest CPU items the package owns are the sprite-blob
+build (1.5-1.9 s) and the art decode/read (1.4 s); the reveal is the splash's own band animation on the window timer, paced by
+the tick and the floppy reads it interleaves, and is a look decision, not a cost. Not changed: shipping the shifted blobs
+pre-built would replace 1.5-1.9 s of CPU with ~28 KB (55 sectors, ~1.0 s) of floppy transfer on a 360 KB disk that has the room
+for neither, so it is a trade and not a cheap win.
+
+### Set 154 — Excitebike, the shipped build: the steady state on the XT (final audit; SPEC.md §102.6)
+
+Measured 2026-09-29 on MartyPC's 4.77 MHz 8088 models `os8088_xt_vga`, `os8088_5150_cga_gla` and `os8088_5150_herc_gla`, the
+shipped package (`build/excbike.o88`, 24,881 bytes) on `build/excitebike360.img`, by `tests/excitebike_perf.py` (logs
+`/tmp/exb-reports/c-scroll.log`, `c-lap.log`, `c-lap-herc.log`, `c-selfb.log`, `c-selfb-herc.log`). Emulator numbers: no real
+VGA/CGA/Hercules card wait states (docs/FIELD-MACHINES.md). Period is the cycle counter between `xb_presented` marks; the game is
+locked to the CRT frame, so **period is quantised to it and is not the work** - the work columns are the honest headroom.
+
+**Riding at speed, a whole course at turbo (jumps, ramps, obstacles, lap change; sound on):**
+
+| course 1, 2,749 steps | VGA | CGA | Hercules |
+| --- | ---: | ---: | ---: |
+| frames | 2,498 | 2,730 | 2,314 |
+| period, mean | 87,378 clk (**54.62 fps**) | 79,969 (**59.68**) | 94,380 (**50.57**) |
+| period, p99 | 101,664 | 112,506 | 129,679 |
+| frames of two CRT frames | 0.00% | 0.40% | 0.56% |
+| simulation a step, mean / p99 | 3,056 / 4,800 | 3,209 / 8,267 | 3,180 / 7,976 |
+| the sound a frame, mean / p99 | 1,615 / 3,929 | 1,641 / 3,911 | 1,659 / 3,934 |
+| game speed (steps a second) | 60.1 | 60.1 | 60.1 |
+
+Every figure is inside Sets 148-152's gates (mean 27.3 Hz, p99 20.5 Hz) by 2-3x, and within 0.1% of wave 7's (VGA's mean is
+87,378 both times).
+
+**Scrolling under one bike, per component** (`--scroll`, 151 frames, 3.4 px a step):
+
+| clocks a frame | VGA | CGA |
+| --- | ---: | ---: |
+| erase / scroll + HUD image | 5,184 | 2,031 |
+| entering columns | 9,041 | 6,573 |
+| bike: erase + draw (RAM boxes on CGA) | 8,649 (VGA sprites) | 9,317 |
+| HUD | 1,484 | 4,508 |
+| flip / box transfer | 392 | 2,805 |
+| **work total** | **24,750** | **25,300** (+ 46,884 idle retrace wait) |
+| sprite erase + draw (gate 20,000 / 15,000) | 13,833 | 12,122 |
+
+That is a **frame of ~25k clocks of work in an 80-87k CRT frame**: 29% (VGA) and 32% (CGA) of the machine, plus 3.4k of
+simulation - the 4.77 MHz XT holds the CRT rate with about 3x to spare.
+
+**Selection B, the game's own AI on the rider and the opponents (the worst frame the game draws), whole course 1:**
+
+| | VGA, rider + 3 | CGA, rider + 2 | Hercules, rider + 2 |
+| --- | ---: | ---: | ---: |
+| frames | 945 | 841 | 910 |
+| period, mean | 220,401 (**21.65 fps**) | 232,550 (**20.52**) | 215,308 (**22.17**) |
+| period, p99 | 317,273 | 262,198 | 305,902 |
+| opponents on screen | 100% | 100% | 94% (at least one 100%) |
+| game speed | 59.9 | 60.1 | 60.1 |
+
+Gates (plan G4: mean <= 263,000, p99 <= 349,525) pass on all three; the governor holds game speed at 60 steps a second by
+dropping drawn frames (n = 2-4 steps a frame). The VGA/CGA figures are 3% and 1.3% above Set 152's, one trajectory apart (a
+different governor history), and the Hercules is 2.5% under it.
+
+**Verdict.** Nothing on a hot path is clearly improvable at a cheap price: the free-running frame is 29-32% of the CRT frame
+(nothing to win at the frame rate the CRT allows), and Selection B's biggest line is Set 152's RAM boxes (68k of a Hercules
+frame), whose remaining ideas are its "what was not done" list (merged boxes, a register-only `xc_drawc`, skip lists) - each a
+rewrite of a pixel-verified path, not a cheap change. No code changed in this audit; the audit added `tests/excitebike_load.py`'s
+timeline.
+
+### Set 155 — isoTron windowed: the head-step and the wake on the XT (SPEC.md §108.10.3, §108.11.7)
+
+Measured 2026-10-13 on MartyPC's 4.77 MHz 8088 models `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga`, the
+package (`build/isotron.o88`, image 9,106 bytes) on `build/isotron360.img`, by `tests/isotron.py --perf all` (the `isotronperf`
+row; log in the wave's reports, `w2/perf-final.log`). Emulator numbers: no real card wait states (docs/FIELD-MACHINES.md).
+
+**The head-step** is a computer head's whole step - its RNG byte, its decision (SPEC.md §108.6), its move and its picture
+(§108.10) - between the `it_hs0` / `it_hs1` marks, as the MEDIAN over six windows of 60 head-steps 2.5 guest seconds apart in a
+seeded FAST game, so an early round's open field and a late round's crowded one both count (the first measurement took round 1's
+opening only and read ~300 cycles low at Lunatic):
+
+| cycles, median (p90) | Rookie | Lunatic | move + picture | plan §16 ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| CGA | **2,415** (3,347) | **2,669** (3,207) | ~1,540 | 3,000 |
+| Hercules | **2,468** (2,860) | **2,707** (3,698) | ~1,545 | 3,000 |
+| XT-VGA | **2,440** (3,435) | **2,754** (3,848) | ~1,545 | 3,000 |
+
+The path there, Lunatic medians: **3,735** at the first build - its picture 2,118 (424 to find the column and ids, 628 for 22 grid
+probes in pairs, 657 for 22 nibble read-modify-writes, 178 of counters, 231 of dirty box) - then the canvas one byte a pixel and
+column-major (the face one `rep stosb`, 657 -> 276), k* off the canvas column by `repne scasb` with a per-column fast path
+(628 -> 478, and nothing in an open column), the RNG inline (273 -> ~170), the dirty box grown on the one side a step can grow it
+(231 -> ~100), the AI's look-ahead unrolled per tier and inline (54 -> ~30 a cell), N/S runs the ring bounds as an unrolled scan
+and one DIV (54 -> ~25 a cell), and rule 5 skipped in one test for a head whose sides are parallel to the player. A head-step's
+logic is now ~1,100-1,200 of it and its picture ~1,000; the move ~460 of that is wave 1's.
+
+**The wake** is one worker pass's gfx lock hold, from before `OSAPI_GFX_LOCK` to after `OSAPI_GFX_UNLOCK` (`it_wake0` /
+`it_wake1`), wakes in play only, a paced BOT game (Rookie h1, the bot's one F10: p = 3) and a Lunatic round at h4 with p = 9:
+
+| ms, median (most) | CGA | Hercules | XT-VGA | ceiling 1bpp / VGA |
+| --- | ---: | ---: | ---: | ---: |
+| Rookie h1 | **13.6** (17.4) | **16.8** (23.4) | **27.3** (39.3) | 22 / 30 |
+| Lunatic h4, full boost | **24.9** (33.3) | **27.8** (50.4) | **37.1** (97.9) | 35 / 50 |
+| presentation governor | idle / idle | idle / engaged | idle / engaged | above 45 ms |
+
+What the XT-VGA wake is made of, measured inside it: the fixed part of a present ~9,800 cycles (CLIP_SET and the content box
+~8,000, OBSERVED and CLIP_CLEAR ~1,400) once the surface probe (~11,900, asked every wake at first) moved to when the window
+moves; and per head a box of 1-2 device bytes by ~46 device rows, ~50-70k cycles - `gfx_blitp`'s plane-major ~5,000 + ~340 a row,
+and the conversion ~1,000 a logical row for both its device rows (it was ~1,073 a device row plus ~1,003 a copied one). The
+1bpp cards are the cheap ones: ~150 cycles a device byte of conversion and `gfx_blit1`. **The governor latched on at Rookie
+three ways, each found here**: round-start whole presents (now not counted), the round's result lettered by a VGA `font_run`
+(~1 ms a cell: not counted), and its own doubled presents compared whole with the 30 ms release (the share is now half the
+hold); and it now starts every round clear.
+
+**Verdict.** Every §16 windowed ceiling is met on all three machines. The tightest lines are the Lunatic head-step (~250 cycles
+under 3,000, and the median moves ~100 with the sample) and the XT-VGA Rookie wake (27.3 of 30 ms). A real 8-bit VGA pays more
+on the `gfx_blitp` half than MartyPC's (Set 107's caveat), so that line is the one to re-measure on iron.
+
+**The review's fix pass** (same machines, same row, `isotronperf` with its new round-start lines; package image 9,882 bytes).
+The wake, median (most), ms:
+
+| ms | CGA | Hercules | XT-VGA |
+| --- | ---: | ---: | ---: |
+| Rookie h1 | **11.7** (15.8) | **13.1** (21.0) | **21.1** (36.9) |
+| Lunatic h4, full boost | **23.5** (28.3) | **27.6** (36.3) | **32.9** (78.8) |
+
+The XT-VGA Rookie wake went 27.3 -> 21.1 ms, counted from the review's breakdown: a box no longer carries the column its head
+stood on (14,649 logical byte-rows presented for 12,034 changed, x1.217, over 509 boxes); the narrow colour row loop lost a
+call, two pushes and five `cs:` operands a logical row (~450 cycles); the mono row loop its five-instruction page and 12-byte end
+test (`xor bh, 2` on 1,024-aligned tables, one compare); and the content box is asked only when the frame moves (3,043 cycles a
+wake). **A round's start** was ONE lock hold - rebuild and whole present - of 2.61 / 2.84 s (h1 / h4) on the XT-VGA, 1.82 s on
+the Hercules, 0.99 / 1.22 s on the CGA, and the first paint then drew the picture a second time behind it. Now the rebuild is
+one pass down the column-major canvas, every byte once (1.84M -> 1.49M cycles at h1, 2.94M -> 2.06M at h4: 0.31 / 0.43 s), and
+the whole present goes out in 4-row bands in holds of at most 43 ms with a yield between, on the glass 0.71 s (CGA), 1.46 s
+(Hercules) and 3.28 s (XT-VGA) after the rebuild - against 0.57 / 1.17 / 2.18 s in one hold, the difference being each hold's
+own fixed part (the lock's release alone ~15,000 cycles on the XT-VGA). The head-step medians moved with where the windows
+landed (Lunatic 2,554 - 2,984 across runs on the CGA, 2,685 - 2,944 elsewhere), not with the step, which changed by a few tens of
+cycles. **What it leaves**: the XT-VGA's whole present (3.28 s banded) is over both wave 3's 1.5 s toggle and wave 4's 2.2 s
+sweep, and its conversion (~402 cycles a device byte of 32,000) is most of it.
+
+**Wave 2's repair** (same machines; `isotronperf` run four times, three of them directly with `--json`, logs in the wave's
+reports, `w2r/`). The verification failed the row on two counts, and neither was the step's cost alone. **The sample**: six
+windows of ~50 consecutive head-steps landed wherever the harness's host-timed pokes put them, and the Lunatic median read
+2,581 - 3,072 across runs, over 3,000 once on the Hercules. Traced whole, all nine rounds of that game (13,344 computer
+head-steps, every tower height) read **2,648 - 2,691** a round on the same build, so the spread was the windows'. The row now
+takes EVERY computer head-step of two whole rounds (Rookie 1,049, Lunatic 3,177), each round's count held to the model's, and
+reads the same head-steps on every run:
+
+| cycles, median (p90) | Rookie | Lunatic |
+| --- | ---: | ---: |
+| CGA | **2,375 - 2,377** (2,943 - 2,957) | **2,576** (3,409 - 3,413) |
+| Hercules | **2,375 - 2,377** (2,942 - 2,943) | **2,575 - 2,576** (3,407 - 3,409) |
+| XT-VGA | **2,377 - 2,383** (2,959 - 3,008) | **2,575 - 2,576** (3,404 - 3,472) |
+
+**The margin**, Lunatic round 2 whole on the CGA, **2,648 -> 2,553**: rule 5 in one try (the two sides share k and their t
+differ in sign, so only the side with t > 0 can pass: a try was ~390 cycles, made in pairs about one step in three; p90 3,875
+-> 3,628); `it_span` with BX the head throughout and SI its one scratch, so no `push bx`, no `push di` round the scan and ES put
+back as `it_seg` (picture 1,135 -> 1,089); the head loop by record (`it_hend`, `it_openp`) so nothing keeps CX (1,089 -> 1,061,
+and ~36 off the decision); and an E/W look-ahead a word a pair of cells (seven byte compares ~245 -> three words and a byte
+~115). Found by single-stepping 150 head-steps and summing MartyPC's cycles per instruction (`it_span_ud` 1,072, `it_ai` 854,
+`it_move` 479, `it_icpt_try` 310 a head-step on average). **The round-start lines** were the other failure: a pause from the
+harness thread inside the trace could resume past a stop the pump had not yet recorded - a lost `it_rb0` crashed the row, a
+lost `it_wake0` charged a 431 ms rebuild to a 1 ms hold. The round is now started by one byte written inside the trace, the
+wait is for the `it_fdone` after the rebuild, and a trace with non-alternating wake marks is refused. Wakes (median, ms):
+Rookie h1 11.7 - 11.8 / 13.1 / 21.1 - 21.2, Lunatic h4 full boost 23.0 - 23.2 / 27.3 - 27.5 / 32.8 - 34.6 (CGA / Hercules /
+XT-VGA). Every §16 windowed ceiling is met, the head-step's by ~420 cycles (14%) at Lunatic and ~620 at Rookie, with no sampling
+spread left to eat it.
+
+### Set 156 — isoTron full screen: the step on the glass, the whole present and the way back (SPEC.md §108.12.7)
+
+Measured 2026-10-14 on MartyPC's 4.77 MHz 8088 models `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga` (and
+the XT-VGA running the `VIDEO=ega` kernel tree for EGA), the package on `build/isotron360.img`, by `tests/isotron.py --perf all
+--json` (the `isotronperf` row, a boot of its own a machine; JSON in the wave's reports, `w3/perf-fs-*.json` for the first
+build and `w3fix/perfall-*.json` for the review's fix pass). Emulator numbers: no real card wait states, and MartyPC's VGA writes
+are ~0.9 cycles over RAM where an 8-bit ISA VGA's are more (docs/FIELD-MACHINES.md) - the VGA and EGA lines are floors.
+
+**The head-step with its span hook** - RNG byte, decision, move, canvas, and the new wall's column written straight into video
+memory (SPEC.md §108.12.3) - over EVERY computer head-step of Set 155's two whole rounds of a seeded FAST game (1,049 at Rookie,
+3,177 at Lunatic), in the bracket. The median is the gate (ISOTRON-PLAN 16's ceilings); the fix pass's numbers:
+
+| cycles, median (p90) | Rookie | Lunatic | the hook, ~ | ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| CGA 320 x 200 x 4 | **3,979** (4,663) | **3,455** (5,033) | 1,550 | 4,500 |
+| Hercules 2x by 1.5 | **4,536 - 4,641** (5,801 - 5,989) | **3,949 - 3,953** (6,257) | 2,150 | 5,000 |
+| VGA 0Dh | **3,287** (3,906) | **3,316** (4,360) | 850 | 4,000 |
+
+A device row is ONE read-modify-write (CGA, Hercules) or ONE `xchg` (VGA set/reset: the read loads the latches) at a fixed
+displacement in an unrolled run entered by count - ~50 cycles a row, 12 bytes and fetch-bound on the 8088, VGA's ~30. The
+Hercules pays per CARD row, 1.5 a logical row, so a full 23-row wall is ~34 of them; its first build worked the row numbers out
+and read **4,869** at Rookie; the per-row tables (`it_fs_herc_tabs`, 1.6 KB in the windowed strip) took ~330 off. **The
+Hercules' Rookie median is not one number**: two runs of one build read 4,536 and 4,641, because it falls between round 1's own
+median (4,780) and round 2's (4,530) and moves with where the timer's interrupts land - the margin to 5,000 is ~360 cycles. The
+fix pass gave the runs their shortest displacements (k = 0, which every face executes, is `[di]`) and the Hercules' a COMPUTED
+entry instead of four 34-word jump tables (272 bytes): about even on the step, by count, and no change the medians can resolve.
+
+**The whole present** - the canvas through the surface's tables minus the text cells, then the text, every byte once (SPEC.md
+§108.12.5) - on F, at the title and in a round with the HUD up:
+
+| | CGA | Hercules | VGA 0Dh | EGA | ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| W3's first build, at the title | 0.86 s (4.12M) | 1.25 s (5.97M) | 1.38 s (6.60M) | - | 1.5 s |
+| W3's first build, in a round | - | - | **2.89 s** (2 x the picture, below) | - | 1.5 s |
+| the fix pass, at the title | **0.67 s** (3.21M) | **0.88 s** (4.22M) | **1.27 s** (6.04M) | 2.08 s (9.92M) | 1.5 s (EGA reported) |
+| the fix pass, in a round | **0.67 s** | **0.88 s** | **1.29 s** | 2.08 s | 1.5 s |
+
+**ISOTRON-PLAN 8.3 priced these at 0.23 / 0.57 / 0.3 s** (CGA / VGA / Hercules), from a device byte's table look-ups alone (~70
+cycles on the CGA), and the first build measured 3.7x / 2.4x / 4.2x that: the column-major canvas puts a device byte's four canvas bytes 200 apart, so
+each was four `es:`-overridden disp16 byte reads (~257 cycles a CGA device byte, all in). The fix reads a canvas WORD - rows y and
+y + 1 of one column - so two output rows share every read: the CGA's loop is 27 bytes an output byte where it was 39, and the
+Hercules' converts a row PAIR into its THREE card rows where it converted two card rows for every logical row and threw one away
+for each odd one (0.66M cycles). The VGA's c2p tables became eight 512-byte WORD tables (planes 0-1 and 2-3 a pair position),
+indexed with `mov bx, ax / shl bx, 1` and AH held 0 where it was `xor bh, bh / mov bl, al / shl bx, 1 / shl bx, 1` four times a
+cell: ~740 -> ~640 cycles a cell. **The 2.89 s**: `it_fs_whole` kept its row cursor in BP across `it_fs_rect`, and the VGA
+presenter counted its cells in BP and returned it 0, so with the HUD up the last two passes presented rows [0, 192) and [0, 200)
+- the picture twice, the left HUD blanked for 1.4 s; nothing measured F in a round. `it_fs_rect` keeps BP now, and the row tiles
+every traced present: the rects, read at the presenters' entries, cover the 200 x 40 cells exactly once outside the text (with
+the defect put back it fails, "row 0 cell 0 presented twice").
+
+**The way back** - the bracket's last frame to `OSAPI_FSX_RUN`'s return: the kernel's exit mode set and whole-desktop
+`wm_paint_all` with our `W_PAINT` inside it. The first build made the window's whole picture in that paint, one hold with the
+pointer off; the fix pass makes the content black there and owes the picture, which the worker puts out in bands (SPEC.md
+§108.12.6):
+
+| | CGA | Hercules | VGA 0Dh | EGA | ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| W3's first build: one hold | 0.88 s | **1.57 s** | **2.65 s** | - | 1.5 s |
+| the fix pass: first light | **0.38 s** | **0.48 s** | **0.59 s** | **0.34 s** | 1.5 s |
+| ...then the band holds, the longest | 40.5 ms (22) | 40.1 ms (48) | 33.5 ms (100) | 43.9 ms (73) | 50 ms |
+| ...and the picture all out, after first light | 0.70 s | 1.47 s | 3.29 s | 2.82 s | reported |
+
+The trade: no hold over 44 ms and first light in 0.3 - 0.6 s, for a reveal that takes longer in total than the one hold did -
+the VGA's 4-row band is ~22 ms, so each hold carries one, and each pays the lock, the clip and the yield. The first build also
+synced the governor's clock INSIDE the bracket, before the way back, so the worker's first wake after it owed DEBT_CAP: 7
+iterations where a paced wake runs 3. V = now is taken once `OSAPI_FSX_RUN` returns, and the round's pace waits for the banded
+picture (`it_vsync`): the first wake that iterates runs 1 (`isotrontoggle`, CGA and XT-VGA).
+
+**EGA in full screen** presents the steps as dirty boxes through the windowed colour presenter once a tick, now under a
+presentation governor (SPEC.md §108.12.4: a present that runs into the next tick engages it; the TICK, because FASTTICK runs PIT
+channel 0 at 3x and `os88pit.inc` assumes one period a tick). Lunatic h4 at speed 9, a frame's work (logic and present): at most
+52.0 / 52.0 / 68.5 ms over three runs; in the third the governor engaged and the median frame fell to 4.5 ms. The game held 33
+iterations a second in all three. Its whole present, 2.08 s, is the windowed one at Hc 350 (Set 155's colour conversion) and is
+over 1.5 s: reported, not gated.
+
+**The windowed lines after wave 3** (the same run; every windowed step now ends in `jmp [it_spanhk]`, and a band that passes an
+overlay's last row leaves its text to a hold of its own - the title's 40-cell line with a band was ~50 ms on the XT-VGA):
+
+| | CGA | Hercules | XT-VGA | ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| head-step, median: Rookie / Lunatic | 2,416 / 2,619 | 2,423 / 2,619 | 2,420 / 2,615 | 3,000 |
+| ...Set 155's (wave 2's repair) | 2,375 - 2,377 / 2,576 | 2,375 - 2,377 / 2,575 - 2,576 | 2,377 - 2,383 / 2,575 - 2,576 | |
+| wake, median (most), ms: Rookie h1 | 11.7 (15.8) | 13.2 (21.1) | 21.1 (36.9) | 22 / 22 / 30 |
+| wake, Lunatic h4 full boost | 23.1 (27.4) | 27.6 (36.3) | 35.4 (86.3, governor engaged) | 35 / 35 / 50 |
+| round start, the longest band hold (h1, h4) | 40.0, 39.9 ms | 40.0, 40.0 ms | 33.0, 33.0 ms | 50 ms |
+
+The indirect jump is ~40 cycles a windowed head-step (2,576 -> 2,619 at Lunatic): the Lunatic margin to 3,000 is ~380 cycles.
+
+**The package** after the fix pass: image 16,286 bytes (12,648 lz4), bss 3,000; ISOTRON-PLAN 13's budget is 16 KB, 98 to spare.
+
+At Lunatic's worst rate (228 head-steps a second, ISOTRON-PLAN 4.1) the full-screen steps alone cost ~19% of the XT on the
+Hercules and ~17% on the CGA (the plan's paper 24% / 21% also charged each of 54.6 frames a second ~1,500 of its own).
+
+### Set 157 — isoTron's pace and its sound on the XT (SPEC.md §108.14.3, §108.14.4)
+
+Measured 2026-10-14 on MartyPC's 4.77 MHz 8088 model `os8088_5150_cga_gla` (the machine the pace is fitted to), the package on
+`build/isotron360.img`, by `tests/isotronlive.py --pace` and `--sound` (the `isotronpace` and `isotronsound` rows; logs in the
+wave's reports, `w5-pace*.log`, `w5-sound*.log`). Numbers are guest state and MartyPC's cycle counter, never wall clock.
+
+**The pace.** A seeded harness round (NOFLOW, paced, nobody steering, p = 2), traced at every wake end (`it_wake1`) or bracket
+frame end (`it_fs_frame`) - where the debt is in (-cost, 0], so a count between two is good to one iteration - against SPEC.md
+§108.4.1's model, `768 x 18.2065 / (A + B h + C p / 6)` iterations a second:
+
+| iterations / guest s | windowed | full screen (CGA 320) | model |
+| --- | ---: | ---: | ---: |
+| Rookie h1 (2.0 s window) | 59.53 (-0.10%) | 59.55 (-0.05%) | 59.58 |
+| Rookie h2 (3.0 s) | 34.10 (+0.65%) | 33.77 (-0.34%) | 33.88 |
+| Lunatic h1 (1.0 s) | 119.71 (+0.45%) | 119.17 (+0.00%) | 119.17 |
+
+The governor's CREDIT over each window - the iterations' costs plus the debt's change - is the clock itself: 28,416 u over 37
+ticks windowed is 768 a tick exactly; in full screen 28,160 over 37 ticks, the phases' 256 each making up the difference to
+within a tick. Four runs of the row read the windowed lines identically and the full-screen ones within 0.06 of each other
+(where a window starts depends on when the host's trace comes up; the stall read 10.1 - 11.1 ticks, crediting 1,024 or 1,536 by
+the phase the frame before it had paid).
+
+**A stall** of ten ticks (`it_tstall`, the wake or the frame waiting on the BIOS clock with the lock held) credits exactly
+`1,536 - 256 x lastph` u: **1,536** windowed after 11.0 ticks, **1,024** in full screen after 10.4 (the last frame had paid
+phase 2) - its own tick and one owed; the other eight or nine are dropped and nothing bursts. **V = now**: after a guest second
+paused the first wake back credits 768 u (256 in full screen); across a toggle mid-round the first iterating frame credits 256
+and the window's first wake back 0.
+
+**The sound's price**, the call site's own marks (`it_tonecall` -> `it_tonecall1`) and a bracket frame's sound
+(`it_fs_frame` -> `it_fssnd1`), medians over a boosted round in full screen:
+
+| | cycles | at 4.77 MHz |
+| --- | ---: | ---: |
+| one `OSAPI_SND_TONE`, a tone on | 1,814 | 380 us |
+| ...a tone off | 1,521 | 319 us |
+| a bracket frame's sound, no call | 390 | 82 us |
+| ...with one call | 2,528 | 530 us |
+| the wall tick's count, a player cell | ~40 (by count) | 8 us |
+
+(Re-measured after the wave's review fixes: `it_tone` records a lease only on a grant, reading the tick before the call, and
+`it_snd_frame` tests the About card - +75 cycles a calling frame, +43 a quiet one, against the first run's 1,818 / 1,533 / 347 /
+2,453.) Set 146's 1,997 cycles a call (Excitebike's) is the same driver at a different site.
+
+**The worst case, COMPUTED from those medians** (the cost leg itself runs at Rookie, p = 5): the wall tick at Lunatic h1 full
+boost, 34 four-cell boundaries a second. Windowed, at most one call a wake, and a wake that calls spends the frame's sound with
+a call: 18.2 x ~2,530 = **~46k cycles a second, ~1.0%** of the XT. Full screen, `it_snd_frame` makes at most ONE call a frame
+and the bracket runs 54.6 frames a second: the hard bound is 54.6 x 2,528 = **~138k cycles a second, 2.9%** - at ISOTRON-PLAN
+12's 2.9% estimate - and the expected rate is under it, a tick's off being skipped once its one-tick lease has run out (~48
+calls a second, ~2.6% with the quiet frames).
+
+**Where it lands.** The head-step and the bracket's frame work keep Set 155's and Set 156's numbers: the sound is after them.
+**The windowed wake does NOT**: `it_snd_frame` is the last thing inside the wake's lock hold (`it_wake0` -> `it_wake1`), after
+the governor has read the hold, so a wake that calls grows by ~2,530 cycles (0.53 ms) and every wake by `it_tsample`'s ~30 -
+280. Set 155's wake lines were taken SILENT (a NOFLOW game is silent, `it_snd` = 0), so `isotronperf`'s Lunatic h4 full-boost
+line now pokes `it_snd` on and counts the calls (at least 20, or the row fails as no longer audible), gating the ceiling WITH
+the sound - measured 2026-10-14:
+
+| wake, Lunatic h4 full boost, audible | CGA | Hercules | VGA | ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| median (most), ms | 24.5 (29.1) | 28.9 (40.2) | 34.0 (81.8, governor engaged) | 35 / 35 / 50 |
+| `OSAPI_SND_TONE` calls over the 120 wakes | 83 | 76 | 89 | |
+
+against Set 155's silent 23.0 - 23.5 / 27.3 - 27.6 / 32.8 - 35.4: about a millisecond, a call most wakes.
+
+### Set 158 — isoTron, the shipped build: every ISOTRON-PLAN 16 line on the XT (final audit; SPEC.md §108.15)
+
+Measured 2026-10-14 on MartyPC's 4.77 MHz 8088 models `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga`
+(plus a `VIDEO=ega` tree on the XT-VGA), the package as wave 6 found it - image 21,312 bytes, 16,845 lz4 on the disk, bss 3,734 (wave 6's fix then added two bytes off every hot path, §108.15) -
+by `python3 tests/isotron.py --perf all --json` (the `isotronperf` row, alone in its lane). MartyPC's cycle
+counter throughout; host load 4.4 - 5.6 moved no number, since none is a wall clock.
+
+| line | CGA 5150 | Hercules 5150 | XT-VGA | ceiling | the wave it was pinned in |
+| --- | ---: | ---: | ---: | ---: | --- |
+| head-step, Rookie / Lunatic median | 2,416 / 2,610 | 2,417 / 2,612 | 2,417 / 2,612 | 3,000 | 2 (2,375 / 2,576), 3 - 5 (~2,417 / ~2,615) |
+| ...90th centile | 2,987 / 3,453 | 3,028 / 3,459 | 2,989 / 3,448 | | |
+| head-step + full-screen span, Rookie / Lunatic | 3,983 / 3,449 | 4,534 / 3,951 | 3,280 / 3,317 | 4,500 / 5,000 / 4,000 | 3 (3,979 / 4,536 - 4,641 / 3,287) |
+| wake, Rookie h1, ms median (most) | 12.3 (16.3) | 13.6 (21.5) | 22.3 (37.4) | 22 / 22 / 30 | 2 (11.7 / 13.1 / 21.1) |
+| wake, Lunatic h4 full boost, audible | 24.5 (29.1) | 28.4 (37.3) | 34.6 (80.9) | 35 / 35 / 50 | 5 (24.5 / 28.9 / 34.0) |
+| round start: rebuild h1 / h4; longest band hold | 322 / 450 ms; 40.7 | 322 / 450; 42.5 | 322 / 450; 33.5 | 50 ms a hold | 2 |
+| F's whole present, title / round | 725 / 670 ms | 944 / 883 | 1,129 / 1,294 | 1,500 | 3 - 4 |
+| the way back: first light | 379 ms | 481 | 595 | 1,500 | 3 |
+| sweep, windowed (4 cases) / full screen (3) | 1,534 - 1,535 / 1,453 - 1,471 ms | 1,578 - 1,581 / 1,493 - 1,494 | 1,751 - 2,108 / 1,540 - 1,541 | 2,200 | 4 |
+| CRASH -> WAIT, the longest hold | 18.6 ms | 18.4 | 22.4 | 100 | 4 |
+
+EGA (`VIDEO=ega` on the XT-VGA, MODELLED - the card's memory cycles are not MartyPC's): F's whole present 2.07 / 2.08 s
+(reported, exempt), first light 342 ms then 2.83 s to all out, holds at most 44.5 ms; a Lunatic h4 frame at speed 9 4.4 ms
+median and 66.5 at most, the bracket's governor engaged, 33 iterations a second; sweeps 1.54 - 1.82 s windowed and 1.49 -
+1.66 full screen. WINDOWED (measured after the review, the colour window at 640 x 350): the Rookie h1 wake **21.0 ms**
+median (33.8 most, the governor idle), the Lunatic h4 audible wake **33.8 ms** (74.2 most, 88 calls, the governor engaged),
+the round start's longest band hold 44.3 ms over 73 bands - against VGA's 30 / 50 / 50 ceilings, and pinned.
+
+**Nothing moved and nothing was tuned**: the head-steps (a fixed sample, §108.10.3) read within a few cycles of the wave
+that pinned them; the wakes (120 from wherever the trace arms) carry run-to-run noise of about 3% - the XT-VGA's Rookie h1
+median read 21.6 ms on wave 5's fix and 22.3 here with the package byte-identical (+0.7 ms), 21.1 in wave 2 (+1.2 ms, 6%),
+the Hercules' 13.1 then 13.6. None is over +25% of its pin, and every one is under its ceiling. The two lines over the plan's PAPER figures - the
+CGA span hook at ~1,567 against 1,200 and F's whole presents at 0.67 - 1.29 s against 0.23 - 0.57 - were measured and pinned
+in wave 3 (Set 156 has why: the hook is fetch-bound at four instructions a row, the presents read word tables a cell).
+
+**What the row gates now.** The plan's ceilings are a paper budget most lines sit far under (12.3 ms against 22), so
+`isotronperf` also fails every gated line over **1.25 x its own pinned value**, whichever is lower (`PINNED` in
+`tests/isotron.py`; SPEC.md §108.15.1 lists them) - the head-steps, the wakes, the band holds, F's presents title and round
+pinned apart, first light, every sweep case, the sweep and CRASH -> WAIT holds, and EGA's windowed wakes; where 1.25 x the
+pin is above the ceiling (the XT-VGA's windowed sweeps, the holds on F's way back) the ceiling stays the gate - and
+fails if the windowed presentation governor engages at Rookie h1 - it did not on any machine: `it_gskip` never set in the 81 -
+95 wakes traced. It does engage on the XT-VGA's Lunatic h4 audible wake (80.9 ms the longest) and the pace holds.
+
+**The worst rate, ESTIMATED** (Lunatic h1 full boost, 228 head-steps a second; not a bound): ISOTRON-PLAN 16's formula
+with the measured terms, 228 x the step with its span + 54.6 frames x (the plan's paper ~1,500 a frame, never measured
+alone + Set 157's 2,528 of sound charged on every frame, its hard bound). The step is the larger tier median - Rookie's
+whole h1 rounds, long spans in an open field: 4,534 / 3,983 / 3,317. That reads **1.25M cycles a second, 26%** in the
+Hercules bracket, 24% on the CGA's and 20% in VGA 0Dh - and at the 90th centile step (6,251 / 5,035 / 4,354) 34% / 29% /
+25%. The plan's paper 24% was the closer figure; this set first printed 19% (228 x 3,951, Lunatic's median step alone,
+no frame and no sound). SPEC.md §108.15.1 has the table.
+
+**Two more facts this set rests on**: on MartyPC's 256KB 5150 (kern_big) isoTron launches with both claims (63 + 30 KB)
+granted, plays and toggles full screen; on kern_small's 128KB floor machine it refuses in its own words with 38 KB the
+largest run (`isotronsmall`). Both are SPEC.md §108.15.3 / §108.15.4.
+
+### Set 159 — isoTron, the closing audit: launch to play, the rate against the 5150 original, and the machine it leaves (SPEC.md §108.15.6)
+
+Measured 2026-10-14 on MartyPC's 4.77 MHz 8088 models `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga`, the
+shipped package (image 21,365 bytes, 16,904 lz4 on the disk, bss 3,734) on `build/isotron360.img` beside `os8088-360.img`, by
+`python3 tests/isotronload.py` (the new `isotronload` soak row; logs and JSON in the audit's reports, `close-perf-final-*`).
+MartyPC's cycle counter throughout, never a wall clock; host load moved nothing. Set 158 stays the authority for the gated
+lines (the head-steps over whole rounds, the wakes, F's presents, the sweeps): this set adds the three things it did not
+measure - the launch, the game's rate as a player gets it, and how much of the machine that rate leaves free.
+
+**Launch to play.** The double-clicked ISOTRON.O88 walked by breakpoints (tests/excitebike_load.py's recipe, each a stop that
+costs the guest no cycle), no harness flag set; the second half measured from the `1` key's ARRIVAL at the package
+(`it_onkey`), since the gap before the harness presses is the host's. Seconds, cumulative from the loader's entry (step in
+brackets), the shipped build:
+
+| step | CGA 5150 | Hercules 5150 | XT-VGA |
+| --- | ---: | ---: | ---: |
+| image read (30 sectors, 2 reads) + lz4-expanded, bss zeroed (`ld_start`) | 1.44 | 1.39 | 1.45 |
+| entry proc: window, both claims, menus (`it_lut_build`) | 1.47 (0.03) | 1.43 (0.03) | 1.48 (0.03) |
+| the presenters' tables | 1.56 (0.09) | 1.52 (0.09) | 1.57 (0.09) |
+| the title's canvas: the grid cleared / the slab (`it_rebuild`) | 1.60 / 1.91 (0.04 / 0.31) | 1.55 / 1.87 | 1.61 / 1.92 |
+| ...the word **isoTron** (79 glyph cells of 4 x 4 floor cells) | 2.19 (**0.285**) | 2.15 (0.285) | 2.21 (0.285) |
+| the window shown, the worker's first wake | 2.56 (0.37) | 2.56 (0.41) | 2.67 (0.46) |
+| **title up**: its whole present out (the first `W_PAINT`), taking keys | **3.06** (0.50) | **3.69** (1.13) | **4.77** (2.10) |
+| `1` -> the arena built (`it_bld0 .. it_bld1`, the worker, outside the lock) | +0.41 (0.36) | +0.41 | +0.39 |
+| the sweep: slab, tower and rims onto the glass (`it_sw0 .. it_sw1`) | +1.96 (1.55) | +2.03 (1.60) | +2.18 (1.77) |
+| READY's half second (`it_rdy1`), then the first wall moves (`it_step0`) | +2.52 | +2.58 | +2.72 |
+| **launch to play** | **5.58 s** | **6.27 s** | **7.49 s** |
+
+The floppy is 30 sectors in 2 reads before `ld_start` (~0.33 - 0.40 s of transfer, 16 ms of seek) and **nothing after it**:
+no art, no sidecar, every table built in RAM. Of the 2.5 - 2.7 s from the key, 2.0 s is PACE by design - the sweep at ~1.5 s
+(SPEC.md §108.13.3; the footage's first slab sweep is ~1.5 s) and READY's 9 ticks - and 0.36 s is the arena's canvas. The
+title's own whole present is the windowed presenter's whole picture (Set 155: ~150 cycles a 1bpp device byte, ~400 a VGA one),
+the only line where the adapters part company. Excitebike (Set 153) is 8.3 - 10.7 s to a title; isoTron is 3.1 - 4.8 s to one
+and 5.6 - 7.5 s to walls moving.
+
+**The cheap change this audit made: the title's word, 0.443 -> 0.285 s.** The first walk of the launch put **0.794 s** in
+`it_title_build` - 0.037 the grid, 0.314 the slab, **0.443 s (2.11M cycles) the word**, where its comment said ~0.25 s: 1,264
+floor cells, each a whole `it_span` at ~1,670 cycles with the loop's own bookkeeping. A column's logo pixels are drawn top to
+bottom, so every one takes `it_span`'s fast path, and the next one down (x the same, d one less, u one more: k_ring and k*
+fall by at most one) writes its TOP over this one's first face row and its own face over all the rest - a face above a glyph
+cell's last row is never seen. Now the three rows above it write the TOP byte and the column's lowest TOP (`it_ctop`) and
+return; only the block's last row runs `it_span` (`it_logo_cell`, itcanvas.inc: +51 bytes of image). **2.11M -> 1.36M cycles, the title
+build 0.794 -> 0.635 s, -0.158 s on every adapter**, at every launch and every return to the title. The canvas is byte for
+byte the model's, which still draws every span whole: `isotronwin` and `isotronflow` compare the two at the title and after a
+game over, and the sixteen `isotron*` soak rows pass on the change (`close-perf-soak1.log`). The rest of the word (~1,080
+cycles a cell on average) is the walk itself - memory-held counters and one MUL a cell in `it_logo_cell` - and drawing a
+block's four columns at once would take another ~0.1 s for a rewrite rather than a cheap change; not taken.
+
+**The rate, against the original.** A harness BOT round at Rookie h1 (the bot's one F10: p = 3) and at Lunatic h1 with p
+poked to 9 - the worst rate anywhere, SPEC.md §108.4.1 - windowed and in the full-screen bracket, audible: every head-step
+counted between two frame ends over two guest seconds of one steady state (heads, speed and state unchanged). Head-steps a
+GUEST second, against §108.4.1's model:
+
+| head-steps / s (computer a head + player) | CGA win | CGA 320x200x4 | Herc win | Herc box | VGA win | VGA 0Dh | model |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Rookie h1, p 3 | 85.7 (57.1 + 28.6) | 85.5 | 85.8 | 85.8 | 86.1 | 85.5 | 85.6 (57.1 + 28.5) |
+| Lunatic h1, p 9 | 228.4 (91.2 + 137.1) | 228.3 | 228.3 | 227.3 | 229.5 | 227.8 | 227.7 (91.1 + 136.6) |
+
+Every renderer holds the model within 0.8% (the window's ends are a frame apart, so ~1 iteration of error), and Set 157 has
+p = 2 within 0.65%: **59.5 computer cells a second and 19.8 player cells at Rookie h1, 34.1 / 11.4 at h2**. The 5150 footage
+(the timing scout's tracks) read **~60 px/s** for the computer along the back rim at a game's first round and **~17 - 20
+rows/s** for the player in depth, **~34 / 12 at h2**, and ~3x for the player after F10 (17 -> 50 rows/s; here p 2 -> 9 is
+x3.4 for the player, 19.9 -> 68.3, and slows the computer by a quarter - SPEC.md §108.4's coupling). One cell is one CGA pixel along
+the floor (E is +1 on the screen, N is +1 across and -1 down), so cells a second ARE the footage's pixels a second: isoTron on
+the XT runs the original's Rookie pace to within the footage's own reading error, on every adapter and in both modes, and
+Veteran / Lunatic are x4/3 and x2 of it by design.
+
+**What that rate leaves of the machine** - the share of the guest's cycles inside the game's frames: windowed the worker's lock
+holds (`it_wake0 .. it_wake1`: the iterations, the present and the frame's sound), in the bracket each frame's work and sound
+(`it_fsf0 .. it_fssnd1`). Everything else is the kernel's tick, the scheduler and idle:
+
+| share of the XT (hold median / most, ms) | CGA | Hercules | XT-VGA |
+| --- | ---: | ---: | ---: |
+| windowed, Rookie h1 | **24.0%** (13.3 / 15.8) | **29.5%** (16.6 / 21.0) | **50.5%** (29.4 / 36.9) |
+| windowed, Lunatic h1 p 9 | **35.2%** (19.4 / 22.8) | **42.9%** (23.7 / 30.1) | **52.6%** (29.8 / 74.0, governor) |
+| full screen, Rookie h1 | **12.3%** (2.2 / 4.4) | **14.3%** (2.5 / 5.2) | **11.1%** (2.1 / 3.8) |
+| full screen, Lunatic h1 p 9 | **25.6%** (5.0 / 6.9) | **29.5%** (5.2 / 8.1) | **22.7%** (4.5 / 5.9) |
+
+So the worst rate the game can ask for takes **a quarter to 30% of a 4.77 MHz 8088 in full screen** - Set 158 ESTIMATED 24% /
+26% / 20% (CGA / Hercules / VGA) from medians and the plan's paper frame, and this is the measurement - and 35 - 53% windowed,
+with the XT-VGA's window the only renderer near half. Its presentation governor (SPEC.md §108.11.6) engages there at Lunatic
+h1 p 9 in the round's first seconds (14.5 presents a second, the longest hold 74 ms) and the pace holds (229.5 head-steps a
+second). **The XT-VGA's windowed wake depends on where in the round it is sampled**: the first two seconds of a round read 29.4
+ms median at Rookie, 200 iterations in it reads **20.5** (`--after 200`, `close-perf-rate5-vga-after200.log`), and Set 158's
+22.3 is 120 wakes from a second in - the opening's long straight walls make tall boxes, and the VGA conversion is paid by the
+row. A step's own price in these windows (`it_step0 .. it_step1`, the move and its picture without the decision, 300 steps
+after each window) is ~1,460 - 1,500 cycles windowed on every adapter and ~2,000 - 2,900 with the bracket's span hook (CGA /
+Hercules / VGA medians 1,977 / 2,223 / 2,026 at Lunatic); Set 158's whole-round head-steps are the gated figure.
+
+**Where the time goes at the worst rate** (`tests/isotronload.py --profile win|fs`: MartyPC's flat IP sampled from the host -
+uncorrelated with the guest - 15,000 samples, bucketed by the package's labels and the kernel's): windowed CGA, 67.8% the idle
+task, the largest package item the mono row loop `it_praw1` at 3.5%, then `it_span_ud` 2.8%, `it_iterate` 2.0%, `it_move` 1.6%;
+full-screen CGA, ~77% the bracket's own wait (the frame yielding: `sch_switch`, `task_yield`, `fsx_wait`), the span hook (`it_hk_cga`, `it_hk_cga_x`) 4.1%;
+windowed XT-VGA, 53.1% idle, the colour conversion `it_praw4p.c16d` 8.6% and the kernel's `gfx_blitp` 5.9%, the pointer's
+save and restore around the lock ~2.6%. **No hot path is a cheap change**: nothing in play is over 9% of the machine, and the
+largest, the windowed VGA conversion, is the one Sets 155 and 156 already reworked (one logical row converted once into both
+its device rows, word tables).
+
+**Not changed, and why.** The title's whole present on the XT-VGA (2.10 s, one `W_PAINT` hold) is the windowed colour
+conversion of the whole picture, which Set 155 measured and pinned; banding it would add each hold's fixed part (Set 155: 3.28
+s banded against 2.18 in one hold) for no earlier first light. The arena build (0.36 s after the key) is `it_rebuild`, one
+pass over the 64,000-byte canvas at ~23 cycles a byte (Set 155 took it from 1.84M to 1.49M cycles; 1.50M here); the floor
+dots' loop is ~0.06 s of it by count. The image load (~1.4 s, 30 sectors) is the kernel's loader and its lz4 decode.
+
+### Set 160 — WireBall: local serial collisions and pixel movement on the XT (SPEC.md §109.5)
+
+Measured 2026-10-14 with `python3 tests/wireball.py --video`, MartyPC's
+cycle-accurate 4.77 MHz 8088, native adapter modes and the ordinary big kernel.
+The measurement starts a controlled live practice rally at X=156, Y=39,
+VX=8, VY=2 with no serve countdown, then alternates held Down/Up keys over four
+exact half-second CPU advances, with 10 ms advances to deliver each key release.
+Rates use the actual elapsed guest cycles. It includes the AI paddle and actual wall/paddle collisions;
+paused-screen frame rates are not the price of movement.
+
+| Adapter | Display frames/s | Physics steps/s | Drawing |
+| --- | ---: | ---: | --- |
+| VGA | 59.2 | 72.9 | Mode X, two VRAM pages |
+| CGA | 59.2 | 72.9 | One page, masked byte/word spans |
+| Lone Hercules | 46.0 | 72.9 | Two 32KB VRAM pages |
+| Hercules + CGA | 48.5 | 72.4 | One Hercules page; color VRAM unchanged |
+
+The renderer keeps overlapping paddle pixels, clears only
+exposed strips and paints newly covered strips. It caches each page's HUD
+state before building strings or comparing glyphs. One/two-byte mono sprite
+spans combine the end masks into byte/word operations and advance through
+scanline banks by addition instead of multiplying on every row. Mode X groups
+neighboring pixels into one plane-mask write per VRAM byte. The app draws
+ahead of retrace and advances physics separately at 72.8 Hz; fractional ball
+coordinates contribute whole pixels where the adapter scale allows it.
+
+There is no whole-frame copy or heap-backed framebuffer. Mode X and lone
+Hercules use OSAPI_FSX_PAGE; CGA and dual-card Hercules use the existing
+vertical-retrace wait followed by small writes. The latter preserves the
+second card's aperture. Original 8250 RX/TX is serviced by a 582 Hz FSXF_RATE
+callback across retrace waits, then decoded in the foreground. The small
+kernel keeps the text court and foreground UART polling.
+
+`--video` checks the complete sprite mask after movement, quarter-row paddle
+steps, page counts, UART/PIC restoration and at least 45 display frames/s and
+68 physics steps/s. CGA's exact mask is read from banked VRAM because the
+emulator raster includes red diagnostic pixels during subcycle status-port
+catch-up; sprite centers are also checked in the rendered raster. Hercules
+raster checks account for its documented (-16,+2) porch displacement. The
+Mode X raster capture is cropped to 200 logical rows in MartyPC; the separate
+two-PC QEMU serial regression captures the full 320x240 court.
+
+`--physics` measures four production collision microsteps at **18,216 CPU
+cycles**, within one 2400-baud byte period (19,886 clocks). Its swept-contact
+fixtures save both upper and lower paddle ends on both sides when the ball
+would have passed vertically by the end of the step. The real serial test
+also saves a right-side hit with a deliberately stale paddle on the left PC
+and confirms that duplicate ownership grants cannot rewind or score twice.
+These are emulator measurements; they do not replace a physical XT/null-modem
+run.
+
+### Set 161 — the LEMMINGS raster, on a 4.77 MHz 8088 (SPEC.md §114.4, §114.7.1)
 
 **What it is.** `tests/lembench` times the SHIPPING raster - its shim
 `%include`s `apps/lemmings/lemmask.inc`, `lemblit.inc` and `lemfont.inc`
@@ -10941,7 +14875,7 @@ contention, and writes a PNG of the bench's own screen
 
 **IT WAS TAKEN TWICE.** The first pass is what wave 2 shipped on; the four
 panel-side rows were re-taken after the wave's review rebuilt that side
-(SPEC.md §92.4.4), and both figures are given because the difference is the
+(SPEC.md §114.4.4), and both figures are given because the difference is the
 whole content of readings 4 and 7.
 
 **Machines**: `os8088_xt_vga` and `os8088_xt_hdd` — both an IBM 5160 at

@@ -6,7 +6,7 @@
  * 1.7, in full: "Loom additionally offers Preview - the compiled UI stream
  * rendered in a child area by the SAME shared component includes WEAVE paints
  * with; widgets draw and arm/fire natively but no bytecode runs, and the pane
- * is labelled `Preview: layout and controls only - Run runs the app`."
+ * is labelled `Preview: layout and controls only - Weave runs the app`."
  *
  * ---------------------------------------------------------------------------
  * THE FOUR THINGS IT IS
@@ -69,16 +69,10 @@
  * W_PAINT.
  * ==========================================================================*/
 
-static unsigned lm_pvseg;               /* LOOM.WPV's claim, 0 = not loaded */
+static unsigned lm_pvseg;               /* the module's claim, 0 = not here */
 static int      lm_pvparm[WPVP_NW];     /* WPVV_PAINT's block, in OUR DS */
-static int      lm_pverr;               /* the last load's refusal, LM_PVE_* */
 
-#define LM_PVE_OK    0
-#define LM_PVE_MEM   1                  /* no room for the claim */
-#define LM_PVE_GONE  2                  /* not on this disk / short read */
-#define LM_PVE_STALE 3                  /* magic, ABI, size or bss disagrees */
-
-/* lm_pv_need - the module, loaded once.  1 = bound, 0 = lm_pverr says why.
+/* lm_pv_need - the module, loaded once.  1 = bound, 0 = refused, toasted.
  *
  * IT IS CALLED BEFORE THE PACK CLAIMS AND NOT INSIDE THE PAINT, and both
  * halves of that are deliberate. Before the claims, because a machine that
@@ -89,50 +83,25 @@ static int      lm_pverr;               /* the last load's refusal, LM_PVE_* */
  * the module is either resident or known to be absent. */
 static int lm_pv_need(void)
 {
-    unsigned kb, got;
-    int k;
-
     if (lm_pvseg)
         return 1;
-    lm_pverr = LM_PVE_OK;
-    kb = (unsigned) lpv_kb();
-    lm_pvseg = os88_mem_claim((int) kb);
-    if (lm_pvseg == 0) {
-        lm_pverr = LM_PVE_MEM;
+    /* PART 0 OF OUR OWN FILE, fetched from HOME - where LOOM.O88 is, which
+     * File > Open Project may have walked us out of. No stamp: the part is
+     * bytes of the package's own file, and op_fetch refuses a stream that
+     * does not expand to exactly the row's length (SPEC.md 20.13.4). A
+     * refusal has toasted its reason (memory, the read, the disk gone). */
+    if (w_partfetch(LM_WPVPART) != 0)
         return 0;
-    }
-    got = os88_file_read_seg("LOOM.WPV", lm_pvseg, kb << 10);
-    if (got < lpv_bytes()) {
-        os88_mem_free(lm_pvseg);        /* a half-believed module is worse
-                                         * than none (crt0.asm's rule) */
-        lm_pvseg = 0;
-        lm_pverr = LM_PVE_GONE;
-        return 0;
-    }
-    k = lpv_stamp(lm_pvseg);            /* the four words, in the assembly
-                                         * that owns their constants */
-    if (k) {
-        os88_mem_free(lm_pvseg);
-        lm_pvseg = 0;
-        lm_pverr = k == 1 ? LM_PVE_GONE : LM_PVE_STALE;
-        return 0;
-    }
+    lm_pvseg = os88_part_seg(LM_WPVPART);
     lpv_bindmod(lm_pvseg);
     return 1;
 }
 
-/* lm_pv_why - the sentence, in WEAVE-SPEC 10.3's shape and NAMING THE FILE.
- *
- * 10.3: "a disk somebody has taken the package off without its modules is the
- * case, it is paid once and visibly". `make loomdisk` puts LOOM.O88, LOOM.OVL
- * and LOOM.WPV in one folder for exactly this reason. */
+/* lm_pv_why - the status row's sentence, WEAVE-SPEC 10.3's shape. The REASON
+ * is op_fetch's toast; this says what it cost. */
 static const char *lm_pv_why(void)
 {
-    if (lm_pverr == LM_PVE_MEM)
-        return "Not enough memory for LOOM.WPV.";
-    if (lm_pverr == LM_PVE_STALE)
-        return "LOOM.WPV does not match this program.";
-    return "LOOM.WPV is not on this disk.";
+    return "LOOM could not load its preview module.";
 }
 
 /* lm_prev_off - give the output claim back and go back to editing. Every exit
@@ -172,7 +141,7 @@ static void lm_prev_on(void)
     ok = ovl_pack();
     if (!ok && !lm_failed()) {
         lm_pack_free();
-        lm_say("LOOM.OVL is missing or stale; Preview cannot compile.");
+        lm_say("LOOM could not load its overlay; Preview cannot compile.");
         return;
     }
     if (!ok) {
@@ -279,7 +248,7 @@ static void lm_prev_paint(void)
     int ok;
 
     lm_ed_caret_off();
-    lm_say("Preview: layout and controls only - Run runs the app");
+    lm_say("Preview: layout and controls only - Weave runs the app");
 
     if (lm_pvseg == 0) {
         lm_prev_note(lm_pv_why());
@@ -308,5 +277,5 @@ static void lm_prev_paint(void)
     if ((ok >> 8) == WPVE_PANE)
         lm_prev_note("The pane is too small to lay this card out.");
     else
-        lm_prev_note("LOOM.WPV cannot read the staged bundle.");
+        lm_prev_note("The preview cannot read the staged bundle.");
 }

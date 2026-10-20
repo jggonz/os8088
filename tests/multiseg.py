@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """A package carries its own parts, and loads them itself (SPEC.md 20.12).
 
-    make mseg && python3 tests/multiseg.py [1440|360] [machine] [system-image]
+    make mseg && python3 tests/multiseg.py [1440|360] [--comp] [--wide] [machine] [system-image]
 
 MSEG is a v3 package with flags bit 2: its file is longer than its image, and
 what is past the image is three separately assembled modules it reads for
 itself through `apps/os88parts.inc`. **The kernel parses none of it** - all it
 learns is that bit, and it hands the entry proc the name of the file it came
-out of. docs/O88-MULTISEG-PLAN.md 1 is why the kernel-side version of this
+out of. docs/plans/completed/O88-MULTISEG-PLAN.md 1 is why the kernel-side version of this
 was thrown away.
 
 MSEG checks itself THREE INDEPENDENT WAYS PER PART and publishes the verdict
@@ -37,10 +37,12 @@ import sys
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
 import os88marty
+import os88build
 import os88mouse
 import os88sym
 import os88geom
 import os88parts
+from os88pkg import PKG_FMT
 import dispcp
 sys.path.insert(0, "tests/multiseg")
 import msegsym
@@ -49,13 +51,32 @@ def _image_of(rel):
     """A packed .o88's IMAGE bytes - the part table lives inside it.
 
     Relative, like every other path in this file: the row runs from the repo
-    root, which is where `make` put the fixture.
+    root - but WHICH `build/` that is depends on the run. Under a frozen soak
+    the fixture is in the run's own tree and `build/` may not have it at all
+    (docs/plans/SOAK-PARALLEL.md 14.2), which is a FileNotFoundError at IMPORT time
+    naming a file the row correctly declared.
     """
-    blob = open(rel, "rb").read()
-    return blob[:blob[8] | (blob[9] << 8)]
+    import os88pkg
+    blob = os88pkg.image_unwrap(open(os88build.at(rel), "rb").read())
+    return blob[:blob[8] | (blob[9] << 8)]      # packed or not (20.13.8)
 
 
-GEOM = sys.argv[1] if len(sys.argv) > 1 else "1440"
+# THE COMPRESSED FIXTURE IS THE SAME PACKAGE (SPEC.md 20.12.7): `--comp`
+# swaps in build/msegz*.img, which is mseg.asm built -DMSEG_COMP so that parts
+# 0 and 2 carry OP_COMP. Every assertion below is unchanged and has to come out
+# identical, which is a stronger statement about op_unpack than a new check -
+# and the point of building both from one source.
+COMP = "--comp" in sys.argv
+# ...and `--wide` swaps in build/msegw*.img: the SAME primaries with parts 1
+# and 2 padded (tests/multiseg/mkwide.py) until the carve is past 64KB at
+# both ends, packed and unpacked (SPEC.md 20.12.11). Every assertion is again
+# unchanged, and one is added: that the carve really is past 128 sectors,
+# because a padding that shrank would let this row pass on a carve the old
+# bound allowed.
+WIDE = "--wide" in sys.argv
+argv = [a for a in sys.argv if a not in ("--comp", "--wide")]
+
+GEOM = argv[1] if len(argv) > 1 else "1440"
 if GEOM not in ("1440", "360"):
     sys.exit("multiseg: geometry must be 1440 or 360")
 
@@ -64,15 +85,17 @@ if GEOM not in ("1440", "360"):
 # image in B: is media the drive cannot read.
 DEFAULT_MACHINE = {"1440": "os8088_5150_herc_gla_144"}.get(
     GEOM, "os8088_5150_cga_gla")
-MACHINE = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_MACHINE
-SYS_IMG = sys.argv[3] if len(sys.argv) > 3 else "build/os8088-360.img"
-APPS_IMG = "build/mseg.img" if GEOM == "1440" else "build/mseg360.img"
+MACHINE = argv[2] if len(argv) > 2 else DEFAULT_MACHINE
+SYS_IMG = argv[3] if len(argv) > 3 else "build/os8088-360.img"
+STEM = ("msegw" if WIDE else "mseg") + ("z" if COMP else "")
+APPS_IMG = "build/%s.img" % STEM if GEOM == "1440" else "build/%s360.img" % STEM
+O88 = ("build/%sd/MSEG.O88" % STEM) if WIDE else ("build/%s.o88" % STEM)
 S = os88sym.linear
 # HOW MANY PARTS IS THE PACKAGE'S OWN ANSWER, read out of the .o88's part
 # table (tools/os88parts.py). It was written down here as `PARTS = 6` and wave
 # 5 made it 7; the semantic indices below are not derivable and stay, but the
 # COUNT and the verdict string that quotes it now follow the fixture.
-PARTS = len(os88parts.rows(_image_of("build/mseg.o88")))
+PARTS = len(os88parts.rows(_image_of(O88)))
 SCRATCH, OPT, XMS, LAZY = 3, 4, 5, 6
 fails = []
 
@@ -87,7 +110,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
     rows = dispcp.listing(m, S)
     if not any(n.upper() == "MSEG.O88" for n, _ in rows):
-        sys.exit("multiseg: MSEG.O88 is not on %s - run `make mseg`. It lists "
+        sys.exit("multiseg: MSEG.O88 is not on %s - run `make mseg` (`make msegz`, `make msegw`). It lists "
                  "%r" % (APPS_IMG, [n for n, _ in rows]))
 
     # THE TYPE WORD FIRST. MSEG's file is bigger than its image and, on a
@@ -127,10 +150,11 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     say("version %d, flags 0x%02X, image %d, verdict %r"
         % (ver, flags, image, title))
 
-    if ver != 3:
-        fails.append("MSEG loaded with version %d, not 3. THERE IS NO .o88 "
-                     "v6: a package carrying parts is a v3 package with one "
-                     "flag bit, for SPEC.md 54.6's reason (SPEC.md 20.12)"
+    if ver != PKG_FMT:
+        fails.append("MSEG loaded with version %d, not PKG_FMT. PARTS ARE "
+                     "NOT A FORMAT: a package carrying parts is an ordinary "
+                     "package with one flag bit, for SPEC.md 54.6's reason "
+                     "(SPEC.md 20.12, 20.2.0)"
                      % ver)
     if not flags & 4:
         fails.append("MSEG's flags are 0x%02X and bit 2 is clear - so the "
@@ -141,7 +165,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     want = "MSEG %d/%d OK" % (PARTS, PARTS)
     if title != want:
         bad = struct.unpack_from(
-            "<H", m.read((seg << 4) + msegsym.sym("ms_bad"), 2), 0)[0]
+            "<H", m.read((seg << 4) + msegsym.sym("ms_bad", COMP), 2), 0)[0]
         fails.append(
             "MSEG says %r, wanted %r - the parts that did NOT pass are %r. "
             "Each part is checked three independent "
@@ -162,7 +186,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     # out a second time, in Python, with the part count in it - and the
     # namespace one along has already gone stale exactly that way (see
     # tools/os88parts.py's header).
-    ms_seg = msegsym.sym("ms_seg")
+    ms_seg = msegsym.sym("ms_seg", COMP)
 
     # THE HEAD SLACK, and this is what makes the two geometries different
     # rows rather than one run twice. A part begins on a 512-byte boundary in
@@ -173,7 +197,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     # back. Unpadded it was 1,024, aligned on both, and this row passed
     # without ever running the arithmetic it exists for (SPEC.md 20.12.2).
     slack = struct.unpack_from(
-        "<H", m.read((seg << 4) + msegsym.sym("op_slack"), 2), 0)[0]
+        "<H", m.read((seg << 4) + msegsym.sym("op_slack", COMP), 2), 0)[0]
     want_slack = 512 if GEOM == "360" else 0
     say("op_slack = %d (want %d on a %s disk)" % (slack, want_slack, GEOM))
     if slack != want_slack:
@@ -185,6 +209,23 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
             "part 512 past one. A zero here at 360 means this row is passing "
             "without testing what it is for (SPEC.md 20.12.2)"
             % (slack, want_slack))
+    # THE CARVE'S OWN SIZE, on the --wide fixture: past 128 sectors at the
+    # end the READ moves (op_secs) and the end the CLAIM is cut from
+    # (op_usecs). Either at or under 128 is a run the old bound allowed, and
+    # this row would be passing without testing SPEC.md 20.12.11 at all.
+    if WIDE:
+        secs, usecs = (struct.unpack_from(
+            "<H", m.read((seg << 4) + msegsym.sym(n, COMP), 2), 0)[0]
+            for n in ("op_secs", "op_usecs"))
+        say("carve: %d sectors read, %d unpacked (want both > 128)"
+            % (secs, usecs))
+        if secs <= 128 or usecs <= 128:
+            fails.append(
+                "the WIDE carve is %d sectors read and %d unpacked - at least "
+                "one is within the 128 the bound used to be, so this row is "
+                "not testing a carve past 64KB (SPEC.md 20.12.11). "
+                "tests/multiseg/mkwide.py's padding is what makes it wide"
+                % (secs, usecs))
     for i in range(PARTS):
         v = struct.unpack_from("<H", m.read((seg << 4) + ms_seg + i * 2, 2), 0)[0]
         sig = m.read((v << 4) + 2, 4) if v and i < SCRATCH else b"----"
@@ -225,4 +266,5 @@ if fails:
         print("  " + f)
     sys.exit(1)
 print("\nmultiseg: three parts in one file, sized with no disk read, claimed "
-      "once and read by the PACKAGE - PASS on %s (%s)" % (GEOM, MACHINE))
+      "once and read by the PACKAGE - PASS on %s (%s)%s"
+      % (GEOM, MACHINE, ", a carve past 64KB" if WIDE else ""))

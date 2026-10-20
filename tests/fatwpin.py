@@ -49,16 +49,17 @@ the one whose mount is the most work.
 import os
 import subprocess
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "unit"))
+import os88build
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+import os88geom                                              # noqa: E402
 import dispcp                                               # noqa: E402
 from harness import check, done                             # noqa: E402
 
@@ -72,7 +73,8 @@ IMG = "build/os8088-360.img"
 APPS = "build/apps360.img"
 
 DVOL_MAX = 8
-MEM_MAX, MC_SIZE, MC_SEG, MC_OWN = 32, 10, 0, 4
+MEM_MAX, MC_SIZE, MC_SEG, MC_OWN = (os88geom.MEM_MAX, os88geom.MC_SIZE,
+                                    os88geom.MC_SEG, os88geom.MC_OWN)
 # SPEC.md 18.8.4: a FAT window is a purgeable CACHE now, and its owner is a
 # RANGE - MEM_P_FATW + the volume - not the single tag 0xFF05 it used to be.
 MEM_PG_MED = 0xFD               # ...and MED, not LOW: a shed volume falls back
@@ -82,14 +84,10 @@ MEM_P_FATW, MEM_P_FATW_N = 0xFD20, 8   # to the pin, only one volume can hold
                                 # 45 loads on 18.8.1's reference copy, not one
 
 
-def build(*args):
-    subprocess.run(["make", "-s"] + list(args), check=True, cwd=ROOT,
-                   stdout=subprocess.DEVNULL)
-
-
-def kernel_md5():
+def kernel_md5(bdir=None):
     import hashlib
-    with open(os.path.join(ROOT, "build", "kernel.bin"), "rb") as f:
+    p = os.path.join(bdir or os.path.join(ROOT, "build"), "kernel.bin")
+    with open(p, "rb") as f:
         return hashlib.md5(f.read()).hexdigest()
 
 
@@ -188,25 +186,49 @@ def boot(m, defs=()):
     lin_live = os88sym.linear("spl_live", defs)
     lin_entry = os88sym.linear("cold_entry", defs)
     m.run()
-    started, t0 = False, time.time()
-    while time.time() - t0 < 300:
+    seen = {"started": False}
+
+    def desk(_):
         live = m.read(lin_live, 1)[0]
-        if not started:
+        if not seen["started"]:
             if live == 1 and m.read(lin_entry, 1)[0] == 0xE9:
-                started = True
-        elif live == 0:
-            time.sleep(3.0)
-            return
-        time.sleep(0.2)
-    raise SystemExit("fatwpin: never reached a desktop - nothing below would "
-                     "mean what it says")
+                seen["started"] = True
+            return False
+        return live == 0
+    try:                                # a GUEST-time budget
+        os88marty.until(m, desk, "the splash to end", poll=0.2, limit=300)
+    except os88marty.MartyError:
+        raise SystemExit("fatwpin: never reached a desktop - nothing below "
+                         "would mean what it says")
+    os88marty.settle(m)                 # the desktop's first paint
 
 
-def phase(label, defs, maxheap, expect_move):
-    """Boot, sample at the desktop, open B:, sample again."""
+def sample(m, defs=()):
+    """A State once the FAT-window world has stopped moving, in GUEST time.
+
+    What the samples wait for is the mount's claims landing, and those words
+    are exactly what State reads - so wait on them rather than on a clock."""
+    def key():
+        st = State(m, defs)
+        return (str(st), tuple(st.ww), tuple(st.fatw_claims))
+    os88marty.quiesce(m, key, guest=1.0,
+                      what="the FAT-window state to stop changing")
+    return State(m, defs)
+
+
+def phase(label, defs, maxheap, expect_move, tree=None):
+    """Boot, sample at the desktop, open B:, sample again.
+
+    `tree` is the build this arm's kernel came out of (tools/os88build.py);
+    applying it points os88sym at that kernel rather than at build/'s.
+    """
+    tree = tree or os88build.plain()
+    tree.apply()
     print("\n--- %s ---" % label)
     S = lambda n: os88sym.linear(n, defs)                   # noqa: E731
-    with os88marty.launch(IMG, apps=APPS, machine=MACHINE, boot=False) as m:
+    with os88marty.launch(tree.img("os8088-360.img"),
+                          apps=tree.img("apps360.img"),
+                          machine=MACHINE, boot=False) as m:
         boot(m, defs)
         at_desk = State(m, defs)
         print("  at the desktop : %s" % at_desk)
@@ -221,8 +243,7 @@ def phase(label, defs, maxheap, expect_move):
         wins0 = len(dispcp.win_list(m, S))
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle)
-        time.sleep(3.0)
-        after = State(m, defs)
+        after = sample(m, defs)
         wins1 = len(dispcp.win_list(m, S))
         print("  after B: mounts: %s ; windows %d -> %d"
               % (after, wins0, wins1))
@@ -270,13 +291,14 @@ def phase_shed():
     """
     print("\n--- the live window, shed ---")
     S = os88sym.linear
-    build(IMG, HEAPFRAG)
-    with os88marty.launch(IMG, apps=HEAPFRAG, machine=MACHINE, boot=False) as m:
+    t = os88build.tree(targets=("os8088-360.img", "heapfrag360.img")).apply()
+    with os88marty.launch(t.img("os8088-360.img"),
+                          apps=t.img("heapfrag360.img"),
+                          machine=MACHINE, boot=False) as m:
         boot(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
-        time.sleep(2.0)
-        before = State(m)
+        before = sample(m)
         print("  B: mounted     : %s" % before)
         check(len(before.fatw_claims) == 1
               and before.fatseg == before.wc[before.drive]
@@ -290,8 +312,14 @@ def phase_shed():
         w = dispcp.win_list(m, S)
         wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "HEAPFRAG.O88")
-        time.sleep(6.0)
-        after = State(m)
+        try:                            # heapfrag's comb, then the shed -
+            os88marty.until(            # bounded by what an idle box's
+                m, lambda _: not State(m).fatw_claims,      # pause gave it
+                "heapfrag's comb to shed the FAT window", poll=0.2,
+                guest=6.0 * os88marty.GUEST_PACE)
+        except os88marty.MartyError:
+            pass                        # ...the first check below says so
+        after = sample(m)
         print("  heap filled    : %s" % after)
 
         check(not after.fatw_claims,
@@ -320,28 +348,26 @@ def phase_shed():
 
 
 def main():
-    build(IMG, APPS)
-    plain = kernel_md5()
-    phase("default", (), maxheap=1, expect_move=False)
+    # TWO TREES, and neither is build/ (tools/os88build.py). This row used to
+    # build the plain kernel into build/, then the knob kernel over the top of
+    # it, then the plain one back in a `finally` - FOUR full builds for two
+    # phases, and the shared tree carrying a FATWNONE kernel in between.
+    plain_t = os88build.tree()
+    plain = kernel_md5(plain_t.dir)
+    phase("default", (), maxheap=1, expect_move=False, tree=plain_t)
 
-    build("FATWNONE=1", IMG, APPS)
-    knob = kernel_md5()
-    try:
-        # The two phases must be looking at two DIFFERENT kernels. Without this
-        # row a build that silently did not happen reads as the knob having no
-        # effect, which is how the first run of this file spent twenty minutes.
-        check(knob != plain,
-              "FATWNONE=1 actually rebuilt the kernel",
-              "Both phases would otherwise measure the same binary and the "
-              "FATWNONE rows below would be asserting nothing",
-              got="md5 %s twice" % knob[:12], want="two different kernels")
-        phase("FATWNONE=1", ("FATW_NONE",), maxheap=0, expect_move=True)
-    finally:
-        build(IMG, APPS)                    # leave build/ as `all` left it
-    try:
-        phase_shed()
-    finally:
-        build(IMG, APPS)
+    knob_t = os88build.tree("FATWNONE=1")
+    knob = kernel_md5(knob_t.dir)
+    # The two phases must be looking at two DIFFERENT kernels. Without this
+    # row a build that silently did not happen reads as the knob having no
+    # effect, which is how the first run of this file spent twenty minutes.
+    check(knob != plain,
+          "FATWNONE=1 actually rebuilt the kernel",
+          "Both phases would otherwise measure the same binary and the "
+          "FATWNONE rows below would be asserting nothing",
+          got="md5 %s twice" % knob[:12], want="two different kernels")
+    phase("FATWNONE=1", ("FATW_NONE",), maxheap=0, expect_move=True, tree=knob_t)
+    phase_shed()
     return done("fatwpin")
 
 

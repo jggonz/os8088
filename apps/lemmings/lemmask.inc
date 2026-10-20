@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/lemmings/lemmask.inc      THE SOLID MASK (SPEC.md 92.4)
+; os8088 - apps/lemmings/lemmask.inc      THE SOLID MASK (SPEC.md 114.4)
 ;
 ; %included by apps/lemmings/lemmings.asm after the compiled C, exactly as
 ; tests/cfsx/cfsxvga.inc and apps/cword/cwtype.inc are. It defines C-callable
@@ -7,7 +7,7 @@
 ; section discipline requires.
 ;
 ; WHAT THE MASK IS. One bit per world pixel: 1 = solid terrain, 0 = air. The
-; world is 1,584 x 160 (SPEC.md 92.3.1's ruling - lemmings_3ds and Lemmix agree
+; world is 1,584 x 160 (SPEC.md 114.3.1's ruling - lemmings_3ds and Lemmix agree
 ; and Lemmings.ts's 1,600 is wrong) and the STRIDE is 200 bytes = 1,600
 ; addressable pixels, the next multiple of 8 above 1,584, which makes the claim
 ; exactly 32,000 bytes and the 16 pixels past the world a harmless margin that
@@ -26,7 +26,7 @@
 ; BEFORE the body. Sixty lemmings at six probes is 360 calls a tick, 9,000 of
 ; the 16,000 in overhead alone. So lem_probe4() exists: ONE call carrying four
 ; offsets and answering four bits. tests/lembench measures both and prints the
-; microseconds (SPEC.md 92.7).
+; microseconds (SPEC.md 114.7).
 ;
 ; THE MASK IS ALSO WHAT THE 1bpp ADAPTERS' PICTURE IS MADE OF. On CGA and
 ; Hercules terrain is drawn by COLOUR CLASS (SPEC.md 39.4, 92.4.2) rather than
@@ -616,7 +616,7 @@ _lem_m_piece:
 ;
 ; The CGA arm expands a NIBBLE through a 16-byte table rather than a byte
 ; through a 512-byte one. Sixteen bytes of a resident image that is spent
-; before this file starts (SPEC.md 92.6) against half a kilobyte for one shift
+; before this file starts (SPEC.md 114.6) against half a kilobyte for one shift
 ; saved per byte.
 ;
 ; Locals: [bp-2] row, [bp-4] maskseg.

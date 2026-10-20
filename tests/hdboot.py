@@ -27,12 +27,25 @@ half-fixed version:
     record can be right, the blob aboard and `[spl_fseg]` published, and the
     screen still never appear, because `spl_step` used to be a no-op until
     somebody else had started it and stage 2 was the only somebody there was;
- 3. ...and the CLOCK IS DRAWN IN FULL. That is the boot overlay's own signature:
-    `clk_init` is an OVLGATE, so a kernel that did not get the blob skips it
+ 3. the CLOCK IS DRAWN IN FULL. That is the boot overlay's own signature:
+    `clk_init` is an SPLGATE, so a kernel that did not get the blob skips it
     along with cpu_detect, font_init, desk_init and the settings parse -
     and comes up looking almost right, with two glyphs where the date goes and
     no drivers configured. A boot that merely REACHES the desktop proves
     nothing here; the date string is what says the overlay ran.
+
+ 4. ...and THE MENU BAR ANSWERS THE POINTER, which is the one claim here that
+    is about the machine being usable rather than about it being drawn. A
+    hard-disk boot is not a cosmetic variation: `ui_loc_gate` asks `hb_ok`
+    whether Hibernate may be live, `hb_ok` reaches `OSAPI_XM_CAPS` ONLY when a
+    fixed volume exists, and that call answers in `DX:CX` as well as `BL`
+    (SPEC.md 87.2, 41.8). It used to save `BX` alone, so the press's x - which
+    `ui_task` is holding in `CX` for `menu_track` three instructions later -
+    came back 0, every title in the bar hit-tested at x = 0, and cell 0 is the
+    System menu in every application. Every menu on the bar dropped the System
+    menu, on the desktop and in a Disk window alike, and NO FLOPPY-BOOTED
+    MACHINE COULD SEE IT. So this row presses every cell of the live bar and
+    asserts that `menu_track` resolved the press to the cell that was pressed.
 
 It installs first, because a gate that depends on some other row having run is
 not a gate. That costs a full install per run, which is why it is a soak row.
@@ -46,6 +59,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
 import os88marty as M                                       # noqa: E402
 import os88sym                                              # noqa: E402
+import os88ui                                               # noqa: E402
 import instdeep                                             # noqa: E402
 
 MACHINE = "os8088_xt_hdd"
@@ -87,6 +101,176 @@ def drive_rows(px, w, h):
                if any(px[(y * w + x) * 3] < 128 for x in range(x0, w)))
 
 
+def bar_check(m):
+    """Press every title on the live bar; each must drop ITS OWN menu.
+
+    The assertion is `menu_cell` - what `menu_track` resolved the press to -
+    against the cell index the press was aimed at, both taken from the guest's
+    own `menu_bar[]` (`os88ui.menus`). Nothing here is a remembered
+    coordinate, so a bar that gains a menu needs no edit.
+
+    It is NOT `menu_pick`: picking would RELEASE over an item, which runs a
+    command, and Restart is one of the System menu's. The release below
+    happens WHERE THE PRESS LANDED, which chooses nothing by construction:
+    a bar menu hangs from `menu_y1` = MBAR_H and `menu_hover` wants
+    `mouse_y` > that, while the press is at MBAR_H // 2.
+
+    **IT USED TO WALK THE POINTER OFF THE TITLE FIRST, AND THAT IS WHAT MADE
+    THIS ROW FLAKE.** `mo.to` carries `l=False` by default, so the FIRST
+    movement packet of that walk released the button at an intermediate
+    position nobody chose - and the destination, a remembered (2, MBAR_H + 8),
+    is not "off every title" at all: the menu hangs BELOW the title and cell
+    0's rect starts at x = 0, so (2, 28) is squarely on the System menu's item
+    0, `About os8088...`. The About window then took the bar, the bar went
+    from three cells to two, and every later press at a coordinate measured
+    off the OLD bar hit-tested past the last cell - which is the shape the
+    failure arrives in, and the reason `menu_cell` is printed with
+    `menu_nbar` below rather than alone.
+    """
+    m.run()
+    ui = os88ui.UI(m, verbose=False)
+    ui.up(limit=180.0)
+    M.no_saver(m)
+    cells = ui.menus()
+    if len(cells) < 2:
+        raise SystemExit(
+            "hdboot: FAIL - this desktop's bar has %d cells (%r). There is no "
+            "hit test to check with one, and menu_relayout should have built "
+            "at least the System menu and Locator's own two"
+            % (len(cells), [c[0] for c in cells]))
+    wrong = []
+    # TWO KINDS OF DROP. A bar menu is menu.inc's pull-down and sets
+    # [menu_dropd]; the Sticky Apps cell (SPEC.md 110.12) is STIKMENU.DRV's
+    # own panel of cards, which never touches that byte - [menu_dropd] is what
+    # makes the keypad step by MENU_ITEM_H (SPEC.md 9.6.3), and the panel's
+    # rows are not that tall - and says it is up with its own stm_live, read
+    # through the module's mod_tab row while it is held. Waiting for
+    # menu_dropd alone timed out on that cell every run, with menu_cell
+    # resolved exactly as pressed.
+    eq = os88sym.equates()
+    stm_row = ui._S("mod_tab") + eq["MOD_STIKM"] * eq["MODR_SIZE"]
+    stm_live = os88sym.syms()["stm_live"]
+
+    def dropped():
+        if ui._byte("menu_dropd"):
+            return True
+        seg = int.from_bytes(bytes(m.read(stm_row, 2)), "little")
+        return bool(seg) and m.read((seg << 4) + stm_live, 1)[0] == 1
+
+    for i, (title, x0, x1, _items) in enumerate(cells):
+        # `menu_dropd` and NOT `menu_y1`: y1 is stamped MBAR_H before every
+        # drop and never cleared, so from the second press on it is true
+        # before the press lands and the `menu_cell` read is the PREVIOUS
+        # cell's. Waiting for the previous menu to go away first is the other
+        # half of the same point.
+        M.until(m, lambda mm: not dropped(),
+                "the bar to have nothing down before pressing %r" % title,
+                poll=0.05, guest=10.0)
+        px = (x0 + x1) // 2
+        ui.mo.to(px, os88ui.geom.MBAR_H // 2)
+        if ui.mo.where()[2] & 1:            # a press that finds the button
+            ui.mo._edge(False)              # already down is not an edge, and
+        try:                                # so drops nothing at all
+            try:
+                # `_edge_until` AND NOT A BARE WAIT: the press is confirmed
+                # against the guest's `mouse_btn` and its EVT_MDOWN can still
+                # be dropped from a full ring (SPEC.md 10.1), which is this
+                # row's own failure at a lane of four. A second EDGE is the
+                # only recovery; ten more seconds is not.
+                ui._edge_until(dropped,
+                               "the %s menu to drop" % title, guest=10.0)
+            except Exception:
+                # **SAY WHAT THE MACHINE LOOKED LIKE**, because `_edge(True)`
+                # already proves the guest's own `mouse_btn` agreed the button
+                # went down - so "the press was lost" is the one explanation
+                # this failure cannot have, and a bare timeout invites it
+                # anyway. It went red once in a width-4 soak, on a bar cell
+                # eleven presses in, and every guess about it since has been
+                # about a press that never arrived.
+                #
+                # The four readings that tell the real cases apart cost one
+                # round trip: where the pointer ACTUALLY is (a press at the
+                # right x on the wrong y hits no title), whether the button is
+                # still down at all, whether a PREVIOUS drop is still up
+                # (menu_y1 is stamped and never cleared, so menu_dropd is the
+                # only honest one), and what ui_task last decided.
+                cx, cy, btn = ui.mo.where()
+                cell, nbar = ui._byte("menu_cell"), ui._word("menu_nbar")
+                raise SystemExit(
+                    "hdboot: FAIL - pressed %r (cell %d of %d) at x=%d in "
+                    "[%d,%d], y=%d, and no menu dropped in 10 guest seconds. "
+                    "The guest confirmed the button DOWN before this wait, so "
+                    "the press reached mou_isr. At the timeout: pointer "
+                    "(%d,%d) btn %#x, menu_dropd %d, menu_cell %d of "
+                    "menu_nbar %d, menu_y1 %d. THE LIVE BAR IS NOW %r.\n"
+                    "  menu_cell IS NOT A RESOLVED CELL UNTIL menu_track HAS "
+                    "FOUND ONE: it is zeroed at the top of the find and "
+                    "incremented past every MISS, so menu_cell == menu_nbar "
+                    "means the press landed in the dead zone PAST THE LAST "
+                    "TITLE and menu_track returned 0xFFFF. When that happens "
+                    "with a bar shorter than the %d cells this row measured, "
+                    "the bar CHANGED under the test - some earlier gesture "
+                    "opened a window and it took the menu bar - and the press "
+                    "is aimed at a title that is no longer there. Compare the "
+                    "live bar above with %r.\n"
+                    "  Only if menu_cell < menu_nbar is this the hit test: a "
+                    "pointer that is not at (%d,%d) means the move was undone "
+                    "between the confirm and the press, and menu_dropd 0 with "
+                    "the button still down means ui_task saw the edge and "
+                    "menu_track refused."
+                    % (title, i, len(cells), px, x0, x1,
+                       os88ui.geom.MBAR_H // 2, cx, cy, btn,
+                       ui._byte("menu_dropd"), cell, nbar,
+                       ui._word("menu_y1"),
+                       [(c[0], c[1], c[2]) for c in ui.menus()], len(cells),
+                       [(c[0], c[1], c[2]) for c in cells],
+                       px, os88ui.geom.MBAR_H // 2))
+            got = ui._byte("menu_cell")
+        finally:
+            # RELEASE WHERE THE PRESS IS, AND DO NOT WALK THERE FIRST. The
+            # title row is above `menu_y1`, so `menu_hover` answers 0xFFFF for
+            # it whatever the menu is; and `_edge` sends a (0, 0) packet, so
+            # the pointer does not move at all and there is no intermediate
+            # position for a release to land on. See the docstring for what
+            # the walk this replaces actually did.
+            ui.mo._edge(False)
+        # ...AND IT CHOSE NOTHING - asserted, not assumed. `menu_sel` is what
+        # menu_drop returned (it is set to 0xFFFF at the drop and written only
+        # by menu_hover), so a value here is a COMMAND THAT RAN, and the next
+        # cell's press would then be aimed at a bar that no longer exists.
+        # Catching it here names the gesture that did it instead of leaving a
+        # timeout eleven presses later to be re-diagnosed.
+        M.until(m, lambda mm: not dropped(),
+                "the %r menu to come back up after the release" % title,
+                poll=0.05, guest=10.0)
+        sel = ui._word("menu_sel")
+        if sel != 0xFFFF:
+            raise SystemExit(
+                "hdboot: FAIL - releasing on the %r TITLE chose item %d of "
+                "its menu (%r) and ran the command. The press is at y=%d and "
+                "a bar menu's first item cell starts at menu_y1 + 1 = %d, so "
+                "menu_hover cannot see an item at the pointer - unless it read "
+                "the two halves of the pointer a packet apart (SPEC.md "
+                "12.4.1). The bar is now %r."
+                % (title, sel,
+                   _items[sel][0] if sel < len(_items) else "?",
+                   os88ui.geom.MBAR_H // 2, ui._word("menu_y1") + 1,
+                   [(c[0], c[1], c[2]) for c in ui.menus()]))
+        if got != i:
+            wrong.append((title, i, got))
+    if wrong:
+        raise SystemExit(
+            "hdboot: FAIL - %d of %d bar cells dropped somebody else's menu: "
+            "%s. The bar is %r. menu_bar[] is right and the HIT TEST is not, "
+            "which on this machine means the press's x did not survive the "
+            "greying predicates ui_task runs before menu_track (SPEC.md 87.2)."
+            % (len(wrong), len(cells),
+               ", ".join("%r (cell %d) -> cell %d" % w for w in wrong),
+               [(c[0], c[1], c[2]) for c in cells]))
+    print("  bar: %d cells, each drops its own menu (%s)"
+          % (len(cells), ", ".join(c[0] for c in cells)))
+
+
 def main():
     # ONE RUN TREE FOR BOTH HALVES, and it is the whole point of this row.
     #
@@ -99,8 +283,7 @@ def main():
     # landed in a directory that went away and the boot opened a fresh clone of
     # the pristine master. It found an empty disk and reported "no desktop from
     # drive C:" - which reads as a broken volume boot record, and cost a bisect
-    # to place on a host-side commit that touched no kernel code at all
-    # (docs/HANDOFF-SOAK-FINDINGS.md B1).
+    # to place on a host-side commit that touched no kernel code at all.
     #
     # `M.stage_run_dir` is a tree the CALLER owns: `launch(run_dir=...)` leaves
     # its media alone, so the VHD survives the first instance closing, and
@@ -147,34 +330,44 @@ def main():
                 "because the volume boot record jumped into stage 2 instead "
                 "of into `.text`.")
 
-    if not splashed:
-        raise SystemExit(
-            "hdboot: FAIL - the desktop came up and [spl_live] was NEVER "
-            "raised: this machine booted with no loading screen and no "
-            "SPEC.md 15.6 status line. spl_step starts the splash itself when "
-            "no loader has (2.9.9.1) - a hard-disk sector does not tick one - "
-            "and that is what this catches.")
+        # EVERY CHECK IS INSIDE THE `with`, because the last of them DRIVES the
+        # machine. The three above it read one captured frame and would run
+        # after a close perfectly well; keeping them here keeps the order the
+        # diagnosis wants - "did it boot", then "did it boot WHOLE", then "does
+        # it work" - so a desktop with no clock is not first reported as a bar
+        # that will not answer the pointer.
+        if not splashed:
+            raise SystemExit(
+                "hdboot: FAIL - the desktop came up and [spl_live] was NEVER "
+                "raised: this machine booted with no loading screen and no "
+                "SPEC.md 15.6 status line. spl_step starts the splash itself "
+                "when no loader has (2.9.9.1) - a hard-disk sector does not "
+                "tick one - and that is what this catches.")
 
-    clock = [g for g in bar if g[0] >= CLOCK_X]
-    icons = drive_rows(px, w, h)
-    print("  menu bar: %d ink groups, %d of them right of x=%d"
-          % (len(bar), len(clock), CLOCK_X))
+        clock = [g for g in bar if g[0] >= CLOCK_X]
+        icons = drive_rows(px, w, h)
+        print("  menu bar: %d ink groups, %d of them right of x=%d"
+              % (len(bar), len(clock), CLOCK_X))
 
-    if len(clock) < MIN_CLOCK_GROUPS:
-        raise SystemExit(
-            "hdboot: FAIL - the desktop is up and the CLOCK is %d ink groups "
-            "wide. The boot overlay did not run: clk_init, font_init, "
-            "desk_init and the settings parse are all OVLGATEs, so a kernel that "
-            "did not get stage 2's blob skips every one of them and boots to a "
-            "desktop that looks almost right with no clock and no configured "
-            "drivers (SPEC.md 2.9.5.3)." % len(clock))
-    if icons < MIN_ICONS:
-        raise SystemExit(
-            "hdboot: FAIL - %d rows of ink in the right-hand strip, expected "
-            "at least %d: this desktop has NO DRIVE ICONS. desk_init is "
-            "reached through the overlay too." % (icons, MIN_ICONS))
+        if len(clock) < MIN_CLOCK_GROUPS:
+            raise SystemExit(
+                "hdboot: FAIL - the desktop is up and the CLOCK is %d ink "
+                "groups wide. The boot overlay did not run: clk_init, "
+                "font_init, desk_init and the settings parse are all OVLGATEs, "
+                "so a kernel that did not get stage 2's blob skips every one "
+                "of them and boots to a desktop that looks almost right with "
+                "no clock and no configured drivers (SPEC.md 2.9.5.3)."
+                % len(clock))
+        if icons < MIN_ICONS:
+            raise SystemExit(
+                "hdboot: FAIL - %d rows of ink in the right-hand strip, "
+                "expected at least %d: this desktop has NO DRIVE ICONS. "
+                "desk_init is reached through the overlay too."
+                % (icons, MIN_ICONS))
+        bar_check(m)
     print("  ok  loading screen seen, desktop from drive C:, clock drawn in "
-          "full, %d rows of drive icons" % icons)
+          "full, %d rows of drive icons, every bar cell drops its own menu"
+          % icons)
 
 
 if __name__ == "__main__":

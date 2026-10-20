@@ -9,7 +9,9 @@ repaint":
 
   A. a window's (W_X, W_Y+W_H) - the drop shadow's bottom-LEFT corner - reads
      differently after an incremental draw than after a full repaint. One
-     pixel, reproducible with `hello`.
+     pixel, reproducible with `calc` (it was `hello` until that package came
+     off the apps disk - SPEC.md 27.0; SUBJECT below is the one line that
+     names it).
   B. dragging across an extended desktop's seam leaves pixels a repaint
      disagrees with - hundreds of them.
   D. reported off the FIELD MACHINE, and in the field's own words: drag an
@@ -53,11 +55,19 @@ whether the two captures agree - it asks which KIND of difference it is, and
 all, including the two cases that would make it a way of not looking.
 """
 import argparse
+import tempfile
 import sys
 import time
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 
 from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
                       VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
@@ -83,15 +93,30 @@ PARK = (4, MBAR_H + 4)
 
 snapw = os88geom.snapw          # SPEC.md 11.94.5, mirrored once
 
-# `hello` IS THE SUBJECT BECAUSE IT DOES NOTHING - no worker, no animation, a
-# 240x90 window that draws one string. That is what makes "capture, force a
-# repaint, diff" mean anything at all: a screen that never settles cannot be
-# compared with itself. This file reached row numbers for it (`APPS_ROW = 1`,
-# `HELLO_ROW = 3`) and they named GAMES and MISSILE.O88 - Missile Command, a
-# live arcade game with a worker drawing every tick - so it reported the
-# game's own motion as a kernel artifact, twice, with different counts.
-# dispcp.open_named asks the guest which row a NAME is on (SPEC.md 19.4).
-HELLO_DIR, HELLO_FILE = "APPS", "HELLO.O88"
+# THE SUBJECT IS A PACKAGE THAT DOES NOTHING - no worker, no animation, a
+# small window that draws itself once and then stops. That is what makes
+# "capture, force a repaint, diff" mean anything at all: a screen that never
+# settles cannot be compared with itself. This file reached row numbers for it
+# (`APPS_ROW = 1`, `HELLO_ROW = 3`) and they named GAMES and MISSILE.O88 -
+# Missile Command, a live arcade game with a worker drawing every tick - so it
+# reported the game's own motion as a kernel artifact, twice, with different
+# counts. dispcp.open_named asks the guest which row a NAME is on (SPEC.md
+# 19.4).
+#
+# IT WAS `hello` AND IT IS `calc` (SPEC.md 27.0 took hello off the apps disk).
+# Calc is the nearest thing left and it makes the same promise in the kernel's
+# own terms rather than in a comment's: cal_entry calls OSAPI_WM_SAVEU, whose
+# whole precondition (SPEC.md 11.96.1) is "our content genuinely does not
+# change while we are not drawing - no worker, no clock, nothing moves but on
+# a click or a key". SUBJECT_WH is checked against the guest below for the
+# reason the literal always was there: a wrong row opens ANOTHER PROGRAM, and
+# a size that is nobody's is how this file says so.
+SUBJECT_DIR, SUBJECT_FILE = "APPS", "CALC.O88"
+SUBJECT_TTL = "Calculator"
+# cal_tpl is 226 x (118 + TITLE_H + 1) - CAL_CW + 2 by CAL_BASE_H + TITLE_H + 1
+# - and snapw is SPEC.md 11.94.5's frame-width snap, which rounds a frame down
+# until its CONTENT is whole bytes.
+SUBJECT_W, SUBJECT_H = 226, 118 + TITLE_H + 1
 
 
 def u16(b, i=0): return b[i] | (b[i + 1] << 8)
@@ -455,9 +480,9 @@ def probe(m, mo, pri, pw, ph, label, bad, prev, corner=None, tag="A",
                    % (tag, label, corner))
     classify(inc, full, d, pw, ph, tag, label, bad, allow_dither)
     if d:
-        crop_png("/tmp/corner%s-%s-inc.png" % (tag, label), inc, pw, ph,
+        crop_png(tempfile.gettempdir() + "/corner%s-%s-inc.png" % (tag, label), inc, pw, ph,
                  bbox(d))
-        crop_png("/tmp/corner%s-%s-full.png" % (tag, label), full, pw, ph,
+        crop_png(tempfile.gettempdir() + "/corner%s-%s-full.png" % (tag, label), full, pw, ph,
                  bbox(d))
     return d
 
@@ -472,19 +497,62 @@ def wins(m, tag=""):
     return out
 
 
-def launch_hello(m, mo, pri):
-    """A Disk window on B:, stepped into APPS, and HELLO launched out of it.
-    Returns (disk slot, hello slot)."""
+# The close box is at (x+8, y+9) and the grow box at the other end, so a press
+# has to clear both as well as the covering window - CB_PAD is what "clear of
+# the corner" means here.
+CB_PAD = 24
+
+
+def title_press_x(dr, cover):
+    """An x on `dr`'s title bar that `cover` does not cover, or die saying so.
+
+    Answers the middle of the widest clear run, preferring the bar's own
+    centre when that is already clear. A press that lands on the covering
+    window raises IT and moves nothing, and the operation's own "did this
+    change any pixels" guard then reports the drag as a defect - which is
+    twenty steps from the reason.
+    """
+    x0, y0, w, h = dr
+    cx, cy, cw, ch = cover
+    mid = x0 + w // 2
+    bar = (y0 + TITLE_H // 2)
+    if not (cy <= bar < cy + ch) or not (cx <= mid < cx + cw):
+        return mid                      # the centre is clear; nothing to do
+    runs = [(x0 + CB_PAD, min(cx, x0 + w - CB_PAD)),
+            (max(cx + cw, x0 + CB_PAD), x0 + w - CB_PAD)]
+    runs = [(a, b) for a, b in runs if b - a >= 8]
+    if not runs:
+        sys.exit("no clear point on the Disk window's title bar: it is "
+                 "(%d,%d %dx%d) and the subject is (%d,%d %dx%d), which "
+                 "leaves nothing to press that is not one of them"
+                 % (dr + cover))
+    a, b = max(runs, key=lambda r: r[1] - r[0])
+    return (a + b) // 2
+
+
+def launch_subject(m, mo, pri):
+    """A Disk window on B:, stepped into APPS, and the subject launched out of
+    it. Returns (disk slot, subject slot)."""
     dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
     disk = dispcp.win_list(m, S)[-1]
     bx, by = dispcp.win_rect(m, S, disk)[:2]
-    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, HELLO_DIR, card=pri)
+    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, SUBJECT_DIR, card=pri)
     bx, by = dispcp.win_rect(m, S, disk)[:2]
-    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, HELLO_FILE, card=pri)
-    time.sleep(4)
+    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, SUBJECT_FILE,
+                      card=pri)
+    # THE WINDOW, NOT A PAUSE: a launch reads the package and draws nothing
+    # while it does, so the answer is the window list and the wait is the
+    # guest's. It was a 4-second host sleep.
+    try:
+        os88marty.until(m, lambda mm: [x for x in dispcp.win_list(mm, S)
+                                       if x != disk],
+                        "%s's window" % SUBJECT_FILE, poll=0.2, limit=30.0)
+    except os88marty.MartyError:
+        pass
+    os88marty.settle(m, card=pri)
     other = [x for x in dispcp.win_list(m, S) if x != disk]
     if not other:
-        sys.exit("%s did not launch out of %s" % (HELLO_FILE, HELLO_DIR))
+        sys.exit("%s did not launch out of %s" % (SUBJECT_FILE, SUBJECT_DIR))
     return disk, other[-1]
 
 
@@ -492,8 +560,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga_herc")
     ap.add_argument("--only", choices=("a", "b", "c", "d"), default=None)
-    ap.add_argument("--under", choices=("none", "hello"), default="none",
-                    help="B: what is UNDER the dragged window")
+    ap.add_argument("--under", choices=("none", "package"), default="none",
+                    help="B: what is UNDER the dragged window (`package` is "
+                         "leg A's subject, %s)" % SUBJECT_FILE)
     ap.add_argument("--dest", choices=("seam", "near", "far"), default="seam",
                     help="B: drag ONTO the seam, stay on the primary, or take "
                          "the window's ORIGIN across onto the second display "
@@ -555,27 +624,29 @@ def main():
         # corner nothing writes to come out differently.
         if a.only in (None, "a"):       # ...and NOT on --only c, which was
                                         # running A as well and saying nothing
-            disk, h = launch_hello(m, mo, pri)
+            disk, h = launch_subject(m, mo, pri)
             hx, hy, hw, hh = dispcp.win_rect(m, S, h)
             print("%s at (%d,%d) %dx%d - its shadow corner is (%d,%d)"
-                  % (HELLO_FILE, hx, hy, hw, hh, hx, hy + hh))
-            want = (snapw(240), 90)         # hl_tpl, THROUGH SPEC.md 11.94.5's
-            if (hw, hh) != want:            # size snap - the kernel rounds a
-                sys.exit("that is not %s: hl_tpl is %dx%d after 11.94.5 and "
-                         "this is %dx%d"    # frame down until its CONTENT is
-                         % (HELLO_FILE, want[0], want[1], hw, hh))
-                                            # whole bytes, so 240 lands at 242
-                                            # and a literal here reads as
-                                            # "another PROGRAM", which is what
-                                            # this check exists to say
+                  % (SUBJECT_FILE, hx, hy, hw, hh, hx, hy + hh))
+                                            # cal_tpl, THROUGH SPEC.md
+            want = (snapw(SUBJECT_W), SUBJECT_H)
+            if (hw, hh) != want:            # 11.94.5's size snap - the kernel
+                sys.exit("that is not %s: cal_tpl is %dx%d after 11.94.5 and "
+                         "this is %dx%d"    # rounds a frame down until its
+                         % (SUBJECT_FILE, want[0], want[1], hw, hh))
+                                            # CONTENT is whole bytes, so a
+                                            # literal here reads as "another
+                                            # PROGRAM", which is what this
+                                            # check exists to say
 
             prev = [None]           # the last check's post-repaint capture
             # SPEC.md 11.96.13.1's residue is possible on this leg from the
             # moment the two windows are PARTED, and saying otherwise was the
             # second half of what this file got wrong. The reasoning written
-            # here was "hello draws one string and has no dithered control in
-            # it" - true of hello, and this leg has a DISK WINDOW on screen as
-            # well, with a scroll-bar track in it that gfx_fill_gray draws.
+            # here was "the subject draws one string and has no dithered
+            # control in it" - true of it, and this leg has a DISK WINDOW on
+            # screen as well, with a scroll-bar track in it that gfx_fill_gray
+            # draws.
             # The parting drag below moves that window by whatever dy it takes,
             # and an odd one inverts the track for the rest of the session
             # (wm_dc_done keeps the cache as an ordinary raise cache), so the
@@ -627,17 +698,17 @@ def main():
                 classify(inc, full, d, pw, ph, "A", label, bad,
                          dither_ok[0])
                 if d:
-                    crop_png("/tmp/cornerA-%s-inc.png" % label,
+                    crop_png(tempfile.gettempdir() + "/cornerA-%s-inc.png" % label,
                              inc, pw, ph, bbox(d))
-                    crop_png("/tmp/cornerA-%s-full.png" % label,
+                    crop_png(tempfile.gettempdir() + "/cornerA-%s-full.png" % label,
                              full, pw, ph, bbox(d))
 
             check("launch")                 # wm_show: reveals nothing (11.90)
 
-            # ...AND NOW SEPARATE THE TWO WINDOWS, because hello opens INSIDE
-            # the Disk window's rect (hl_tpl (200,150) against fm_tpl
-            # (103,80) 320x200) and a click aimed at hello's title bar lands
-            # on whatever is on top of it. That is tools/sucheck.py's
+            # ...AND NOW SEPARATE THE TWO WINDOWS, because the subject opens
+            # INSIDE the Disk window's rect (cal_tpl (180,48) against fm_tpl
+            # (103,80) 320x200) and a click aimed at its title bar lands on
+            # whatever is on top of it. That is tools/sucheck.py's
             # hard-coded (300,40) exactly: the raise raised the wrong window,
             # the drag pressed on a Disk row instead of a title bar, and the
             # window never moved - which the "did this operation move any
@@ -646,21 +717,30 @@ def main():
             disk_y0 = dr[1]                 # ...banked: the parity that
                                             # matters is the one the RECORD
                                             # took, not the one asked for
-            mo.drag(dr[0] + dr[2] // 2, dr[1] + TITLE_H // 2,
-                    dr[0] + dr[2] // 2, hy + hh + 20 + TITLE_H // 2)
+            # AND THE PRESS POINT IS DERIVED, not the title bar's centre.
+            # That centre worked while the subject was `hello`, whose (200,150)
+            # is BELOW this bar; cal_tpl's (180,48) is ACROSS it, so the centre
+            # press landed on the subject, raised the subject, and moved
+            # nothing. That is the failure the paragraph above is about, and it
+            # came back the moment the subject changed - so the point is
+            # computed from the two rects instead of from one of them.
+            px = title_press_x(dr, (hx, hy, hw, hh))
+            mo.drag(px, dr[1] + TITLE_H // 2,
+                    px, hy + hh + 20 + TITLE_H // 2)
             os88marty.settle(m, card=pri)
             dr = dispcp.win_rect(m, S, disk)
             hx, hy, hw, hh = dispcp.win_rect(m, S, h)
             if not (dr[1] > hy + hh or hy > dr[1] + dr[3]):
-                sys.exit("the two windows still overlap: hello (%d,%d %dx%d) "
+                sys.exit("the two windows still overlap: %s (%d,%d %dx%d) "
                          "and Disk (%d,%d %dx%d) - every click below would be "
                          "aimed at whichever is on top"
-                         % (hx, hy, hw, hh, dr[0], dr[1], dr[2], dr[3]))
+                         % (SUBJECT_TTL, hx, hy, hw, hh,
+                            dr[0], dr[1], dr[2], dr[3]))
             parted_dy = dr[1] - disk_y0
             dither_ok[0] = bool(parted_dy % 2)
-            print("   parted: hello y %d..%d, Disk y %d..%d - the Disk window "
+            print("   parted: %s y %d..%d, Disk y %d..%d - the Disk window "
                   "moved %+d, so its dither %s slip"
-                  % (hy, hy + hh, dr[1], dr[1] + dr[3], parted_dy,
+                  % (SUBJECT_TTL, hy, hy + hh, dr[1], dr[1] + dr[3], parted_dy,
                      "CAN" if dither_ok[0] else "cannot"))
 
             mo.click(dr[0] + 60, dr[1] + TITLE_H // 2)
@@ -782,12 +862,12 @@ def main():
         # repainted after the window is moved.
         #
         # THE SUBJECT HAS TO DRAW DOWN ITS WHOLE HEIGHT, which is why it is
-        # the Control Panel and not `hello`. What goes wrong is that
+        # the Control Panel and not leg A's package. What goes wrong is that
         # wm_strad_fit shortens the FRAME and the gfx primitives clip to the
         # SCREEN (SPEC.md 11.3), so a fixed layout puts the same pixels on the
-        # glass either way - and hello's one string is near its top, inside
-        # the shortened frame, so it spills nothing and the leg would read 0
-        # on a broken kernel. The panel's list and page run to its last row.
+        # glass either way - and a package whose content sits inside the
+        # shortened frame spills nothing, so the leg would read 0 on a broken
+        # kernel. The panel's list and page run to its last row.
         #
         # TWO ASSERTIONS, AND THE FIRST IS THE ONE THAT CANNOT BE VACUOUS.
         # The record's W_H after the drop is a number, and the rule is that a
@@ -889,10 +969,10 @@ def main():
                          dshift)
                 if dd:
                     for tg, cap in (("inc", inc[c][2]), ("full", full[c][2])):
-                        box = crop_png("/tmp/cornerD-%s-%s.png" % (nm, tg),
+                        box = crop_png(tempfile.gettempdir() + "/cornerD-%s-%s.png" % (nm, tg),
                                        cap, w0, h0, bbox(dd))
-                    print("     crops in /tmp/cornerD-%s-{inc,full}.png  %r"
-                          % (nm, box))
+                    print("     crops in %s/cornerD-%s-{inc,full}.png  %r"
+                          % (tempfile.gettempdir(), nm, box))
 
         # --- B: a drag that uncovers ---------------------------------------
         if a.only not in ("a", "c", "d"):
@@ -921,8 +1001,8 @@ def main():
                 seam = (u16(ctx, VID_CTX_SZ + VID_CTX_VX),
                         u16(ctx, VID_CTX_SZ + VID_CTX_VY))
                 print("extended; the second display is at %r" % (seam,))
-            if a.under == "hello" and a.only == "b":
-                launch_hello(m, mo, pri)
+            if a.under == "package" and a.only == "b":
+                launch_subject(m, mo, pri)
 
             before = {w for w, _ in wins(m, "before")}
             dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
@@ -982,10 +1062,10 @@ def main():
                 # name". Both captures are cropped identically so they can be
                 # looked at side by side.
                 for tag, cap in (("inc", inc[c][2]), ("full", full[c][2])):
-                    box = crop_png("/tmp/corner-%s-%s.png" % (nm, tag),
+                    box = crop_png(tempfile.gettempdir() + "/corner-%s-%s.png" % (nm, tag),
                                    cap, w0, h0, bbox(dd))
-                print("     crops in /tmp/corner-%s-{inc,full}.png  %r"
-                      % (nm, box))
+                print("     crops in %s/corner-%s-{inc,full}.png  %r"
+                      % (tempfile.gettempdir(), nm, box))
 
         print()
         print(("FAIL: " + "; ".join(bad)) if bad else

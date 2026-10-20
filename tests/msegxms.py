@@ -9,7 +9,7 @@ machine is an 8088 and an 8088 has nothing above linear 0x0FFFFF - so those
 rows prove the FALLBACK, which is what makes `OP_XMS` a hint rather than a
 mode. THIS row is the other half.
 
-WHY QEMU: docs/TESTING.md's closed list, entry 6's shape - MartyPC cannot host
+WHY QEMU: docs/TESTING.md's closed list, entry 1 - MartyPC cannot host
 extended memory at all, so there is no "prefer MartyPC" to weigh. It is the
 same reason tests/xmcheck.py is here, and this borrows its boot and its
 block-table reader.
@@ -69,9 +69,16 @@ import os88fixture                                          # noqa: E402
 sys.path.insert(0, os.path.join(HERE, "multiseg"))
 import msegsym                                              # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88build
 
-IMG = os.path.join(ROOT, "build", "mseg.img")
-O88 = os.path.join(ROOT, "build", "mseg.o88")
+IMG = os.path.join(ROOT, os88build.at("build/mseg.img"))
+                                # THE RUN'S TREE, not build/: os88fixture.make
+                                # passes BUILD=<tree> so `make test` resolves its
+                                # own goals there, and a TESTAPPS= pointing at
+                                # build/ is then a target with no rule under that
+                                # BUILD - which is how this failed a soak while
+                                # passing by hand (tests/unit/t_artpath.py)
+O88 = os.path.join(ROOT, os88build.at("build/mseg.o88"))
 PKG = "MSEG.O88"
 XMS_PART = 5                        # a SEMANTIC index and not derivable; the
                                     # count below is, and is read out of the
@@ -81,7 +88,7 @@ XMS_PART = 5                        # a SEMANTIC index and not derivable; the
 
 def _parts():
     blob = open(O88, "rb").read()
-    return len(os88parts.rows(blob[:blob[8] | (blob[9] << 8)]))
+    return len(os88parts.image_rows(blob))
 fails = []
 
 
@@ -98,8 +105,9 @@ def boot():
     import time
     if os.path.exists(xmcheck.PID):
         try:
-            os.kill(int(open(xmcheck.PID).read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open(xmcheck.PID).read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in (xmcheck.SOCK, xmcheck.PID):
@@ -108,8 +116,12 @@ def boot():
     # `make test` DAEMONISES the emulator, so it outlives this script
     # unless somebody kills it - and the somebody is us (os88qemu).
     os88qemu.own()
-    r = subprocess.run(["make", "test", "TESTAPPS=" + IMG],
-                       capture_output=True, text=True, cwd=ROOT)
+    # THROUGH os88fixture.make: `make test` is a LAUNCHER, and the only thing
+    # it leaves under build/ is the buildnum stamp the parse rewrites - this
+    # puts that back. Its prerequisites ($(TESTIMG) $(TESTAPPS)) are declared
+    # as this row's `wants=`, so the runner has them current and nothing is
+    # built here either.
+    r = os88fixture.make("test", "TESTAPPS=" + IMG)
     if r.returncode:
         raise SystemExit("msegxms: make test failed:\n" + r.stdout + r.stderr)
     for _ in range(150):
@@ -118,7 +130,7 @@ def boot():
         time.sleep(0.2)
     else:
         raise SystemExit("msegxms: QEMU never opened " + xmcheck.SOCK)
-    time.sleep(12)
+    xmcheck.wait_desktop(xmcheck.SOCK, "msegxms")   # guest time, not 12s
     return xmcheck.SOCK
 
 
@@ -156,7 +168,6 @@ def open_pkg(sock, m):
     one into the other - and it needs the keyboard, which this file's QMP
     driver does not have yet.
     """
-    import time
     slots = dispcp.win_list(m, xmcheck.sym)
     if not slots:
         raise SystemExit("msegxms: drive B: opened no window")
@@ -167,28 +178,15 @@ def open_pkg(sock, m):
     x, y = dispcp.row_xy(wx, wy, row)
     say("%s is row %d, at (%d,%d)" % (PKG, row, x, y))
     xmcheck.dblclick(sock, x, y)
-    time.sleep(9)
+    # MSEG creates its window AFTER its checks, with the verdict already in
+    # the title (tests/multiseg/mseg.asm) - so the window IS the answer, and
+    # it is waited for in GUEST seconds (tests/os88qemu.py).
+    os88qemu.acted(m, lambda: mseg_window(sock)[0] is not None, secs=30,
+                   what="the MSEG window", poll=0.3)
 
 
-def run(sock):
-    import time
-    base = xmcheck.table_base(sock)
-    m = Mem(sock)
-
-    # xmcheck's own wait, and it is not generous: QEMU boots fast and then
-    # reads a floppy at the speed of a floppy.
-    xmcheck.dblclick(sock, *xmcheck.DISKB)
-    time.sleep(7)
-    open_pkg(sock, m)
-
-    st = xmcheck.read_bytes(sock, xmcheck.sym("ld_status"), 1)[0]
-    say("ld_status = %d" % st)
-    if st != 0:
-        raise SystemExit("msegxms: MSEG did not load (ld_status %d) - nothing "
-                         "below can be asked. 4 means op_load refused itself, "
-                         "which on a machine WITH a store means the XMS path "
-                         "failed where the fallback path works" % st)
-
+def mseg_window(sock, show=False):
+    """(segment, title) of the MSEG window, or (None, None)."""
     wins = bytes(xmcheck.read_bytes(sock, xmcheck.sym("wm_wins"),
                                     os88geom.MAX_WIN * os88geom.WIN_SIZE))
     seg = title = None
@@ -199,9 +197,41 @@ def run(sock):
             continue
         t = u16(r, os88geom.W_TITLE)
         txt = bytes(xmcheck.read_bytes(sock, (w << 4) + t, 24)).split(b"\0")[0]
-        say("window %d: seg %04X title %r" % (i, w, txt))
+        if show:
+            say("window %d: seg %04X title %r" % (i, w, txt))
         if txt.startswith(b"MSEG") and not txt.startswith(b"MSEGBIG"):
             seg, title = w, txt.decode("ascii", "replace")
+    return seg, title
+
+
+def run(sock):
+    base = xmcheck.table_base(sock)
+    m = Mem(sock)
+
+    # The Disk window, and MSEG in its listing: the thing open_pkg reads next,
+    # waited for on the GUEST's clock rather than a host `time.sleep(7)`.
+    xmcheck.dblclick(sock, *xmcheck.DISKB)
+
+    def listed():
+        try:
+            return any(r[0].upper() == PKG
+                       for r in dispcp.listing(m, xmcheck.sym))
+        except Exception:                   # noqa: BLE001 - no window yet
+            return False
+    os88qemu.acted(m, lambda: bool(dispcp.win_list(m, xmcheck.sym))
+                   and listed(), secs=20, what="%s listed" % PKG, poll=0.3)
+    os88qemu.pace(m, 1)                     # ...and the rows painted
+    open_pkg(sock, m)
+
+    st = xmcheck.read_bytes(sock, xmcheck.sym("ld_status"), 1)[0]
+    say("ld_status = %d" % st)
+    if st != 0:
+        raise SystemExit("msegxms: MSEG did not load (ld_status %d) - nothing "
+                         "below can be asked. 4 means op_load refused itself, "
+                         "which on a machine WITH a store means the XMS path "
+                         "failed where the fallback path works" % st)
+
+    seg, title = mseg_window(sock, show=True)
     if seg is None:
         raise SystemExit("msegxms: no MSEG window - the launch did not land")
 

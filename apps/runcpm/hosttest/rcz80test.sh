@@ -8,7 +8,7 @@
 # raw QEMU and print what the Z80 program wrote to BDOS 2/9 on the serial
 # port. Exit 0 when the program ended by BOOT/WBOOT/BDOS 0 and no line said
 # ERROR, 1 otherwise. This is the fast gate on the core; tests/rczex.py is
-# the same oracle run inside os8088 (docs/RUNCPM-PORT-PLAN.md wave 2).
+# the same oracle run inside os8088 (docs/plans/completed/RUNCPM-PORT-PLAN.md wave 2).
 # =============================================================================
 set -e
 cd "$(dirname "$0")/../../.."       # the repo root, whatever the caller's cwd

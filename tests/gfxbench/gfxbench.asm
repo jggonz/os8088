@@ -15,6 +15,19 @@
 ; that the Hercules column and the CGA column are the SAME measurement. It runs
 ; on VGA too, where it prices the planar path for contrast.
 ;
+; **THERE ARE NO LINE OR WALK ROWS.** SPEC.md 5.12.7 took gfx_line and
+; SPEC.md 5.6.7's resumable walk out of both kernels, so those rows would time a
+; `stc`/`ret` - which reports a NUMBER rather than an error, and is worse than
+; no row. Five derived rows went with them, for the sharper version of the same
+; reason: a ratio whose inputs are gone divides UNINITIALISED bss.
+;
+; What is here instead is the path that replaced them, priced end to end -
+; `clear mask` / `mask line` / `GFX_BLIT1`, which is apps/os88gfx.inc's
+; GFXE_BAND (SPEC.md 5.12.2), and two `GFX_POINTS` rows, which is the slot
+; every app-side WALKER commits through (5.12.5). Those five rows are older
+; than the library and were written as the app-side arm of an argument; the
+; argument is settled and the arm is now how figures get drawn.
+;
 ;   make bench
 ;   make test VIDEO=herc HERCSEG=0x7000 TESTAPPS=build/bench.img
 ;   make test VIDEO=cga                 TESTAPPS=build/bench.img
@@ -1232,57 +1245,17 @@ gb_prims:
     call bl_run                         ; the gap is the region's cost, and the
     mov word [bl_body], gb_b_fill       ; API block prices SET+CLEAR alone
 
-    ; --- gfx_line, four rows whose sizes are predicted in advance ------------
-    ; SPEC.md 5.6.6 made a STEEP dilated line one Bresenham walk instead of
-    ; three, and left "how much cheaper" unsettled: tests/linetest said
-    ; 1.3x-1.9x, which is the spread of the SAME two builds measured four
-    ; times, because it was taken as QEMU host time - the one thing Part 4
-    ; says is not a measurement. These four rows settle it, in instructions
-    ; under -icount and in microseconds on iron.
-    ;
-    ; The two geometries are the SAME LINE TRANSPOSED - 32x127 against 127x32,
-    ; so 128 pixels each - which is what makes the comparison mean anything.
-    ; Predicted, and a run that disagrees has found something: the two THIN
-    ; rows should match; shallow fat should be about 3x its thin row, because
-    ; it still walks three times; and steep fat should be well under 3x, which
-    ; is the whole claim. The derived block prints both ratios.
-    mov word [gb_lfat], 0
-    mov word [bl_n], 24
-    mov word [bl_body], gb_b_lsteep
-    mov si, gb_r_lst
-    xor al, al
-    call bl_run
-    mov ax, [bl_last]
-    mov dx, [bl_last+2]
-    mov [gb_tlst], ax
-    mov [gb_tlst+2], dx
-    mov word [bl_body], gb_b_lshal
-    mov si, gb_r_lsh
-    xor al, al
-    call bl_run
-    mov ax, [bl_last]
-    mov dx, [bl_last+2]
-    mov [gb_tlsh], ax
-    mov [gb_tlsh+2], dx
-    mov word [gb_lfat], 1
-    mov word [bl_body], gb_b_lsteep
-    mov si, gb_r_lstf
-    xor al, al
-    call bl_run
-    mov ax, [bl_last]
-    mov dx, [bl_last+2]
-    mov [gb_tlstf], ax
-    mov [gb_tlstf+2], dx
-    mov word [bl_body], gb_b_lshal
-    mov si, gb_r_lshf
-    xor al, al
-    call bl_run
-    mov ax, [bl_last]
-    mov dx, [bl_last+2]
-    mov [gb_tlshf], ax
-    mov [gb_tlshf+2], dx
-
-    ; --- SPEC.md 79.5.6: the private mask, against the kernel's own line -------
+    ; --- THE BAND COMPOSER, END TO END (SPEC.md 5.9, 5.12.2) ----------------
+    ; These rows were written as SPEC.md 79.5.6's private mask AGAINST the
+    ; kernel's own line, and 5.12.7 retired the other half of that comparison -
+    ; but not one of them times a retired slot, and what they price is now the
+    ; STANDARD way a package draws a figure: apps/os88gfx.inc's GFXE_BAND
+    ; clears a mask, rasterises into it and commits with OSAPI_GFX_BLIT1
+    ; (5.12.2), and four programs plus SAVER.DRV do exactly that. So the three
+    ; rows are the three terms of every composed frame in the tree - clear,
+    ; rasterise, commit - and `xordiff` is the fourth term the design REFUSED
+    ; (79.5.6: computing old^new costs more than writing the box blind), kept
+    ; because a refusal with no number behind it gets re-proposed.
     mov word [bl_body], gb_b_mline
     mov si, gb_r_mline
     xor al, al
@@ -1324,60 +1297,45 @@ gb_prims:
     xor al, al
     call bl_run
 
-    ; --- many walks, one arrival (SPEC.md 5.6.8) -----------------------------
-    ; The resumable walk (5.6.7) gives a moving line a cheap PIXEL and does
-    ; nothing about the ARRIVAL, which for a caller stepping eight live trails
-    ; is the whole cost: 5.7 prices getting into a drawing call at ~756 us
-    ; whatever it then draws. gfx_lstepv is CX of those calls with the pushes,
-    ; the far call, the dispatch and the ink paid ONCE.
+
+    ; --- SPEC.md 5.6's LINE and WALK ROWS WERE HERE, and 5.12.7 took them ----
+    ; out with the primitives. GFX_LINE steep/shallow (thin and fat), the
+    ; private mask against the kernel's line, LSTEPV x8, and 3.2's `kwalk` /
+    ; `aline` / `pts` triples at n = 1, 3 and 10 all timed slots that answer
+    ; CF = 1 now, and a bench row that times a `stc`/`ret` reports a number
+    ; rather than an error. PERFORMANCE.md Sets 69-72, 132 and 133 keep what
+    ; they measured.
     ;
-    ; So the two rows draw the IDENTICAL eight pixels and differ only in how
-    ; many times they arrive - eight against one - and the ratio is the whole
-    ; measurement. 5.6.8 argues its case from 5.7's floor rather than from a
-    ; measurement of itself, and tests/linetest gates the PIXELS (0 differing
-    ; of 236,160) without pricing them; this is the missing half.
-    ;
-    ; THIS ROW ALREADY CONTRADICTED ITS OWN PREDICTION, which is why it is
-    ; here. The guess was "approaching 800, because 5.7 prices an arrival at
-    ; ~756 us"; it measures 118 in instructions, and ~36 instructions removed
-    ; per arrival rather than 5.7's 196. The reason is structural and worth
-    ; knowing: gfx_lstep is NOT a rect primitive - it never goes near
-    ; gfx_rect_setup or sw_rect - so its arrival is the far-call cell and a
-    ; prologue, not the rect machinery 5.7 measured. 5.6.8 borrowed a floor
-    ; that does not apply to it.
-    ;
-    ; Instructions understate the clocks here (Part 9 measured the far-call
-    ; cell at 46.7 us for about seven instructions), so the field ratio will
-    ; be higher than 118 - but even charging every removed instruction at
-    ; far-call rates only reaches about 160, against the 356 that 5.6.8's own
-    ; field figures imply (570 us a pixel stepping one call per missile
-    ; against 160 in the drain). That gap is unexplained, and settling it is
-    ; what these two rows are for.
-    call gb_lsinit                  ; walks are 126 px long and each row steps
-    mov word [bl_n], 100            ; one pixel per iteration, so 100 cannot
-    mov word [bl_body], gb_b_lstep8 ; run one off its end
-    mov si, gb_r_ls8
+    ; OSAPI_GFX_POINTS survived, and these two rows are it on ITS OWN TERMS -
+    ; not the third arm of a comparison whose other two arms are gone. Two
+    ; lengths is the whole measurement: `arrival + N x marginal` has two
+    ; unknowns, so 8 points and 24 determine it and every longer commit is read
+    ; off the fit. That is the number every app-side walker in the tree now
+    ; pays (SPEC.md 5.12.5), which is why the slot needs a row of its own.
+    mov word [gb_ptn], 1            ; no box call: gb_b_points reads neither
+                                    ; gb_x2 nor gb_y2, and GB_NWALK columns of
+                                    ; GB_PTSN is 64 x 3 from (gb_x, gb_y) - well
+                                    ; inside the sandbox whatever the last row
+                                    ; left the box at
+    call gb_ptsinit
+    mov word [bl_n], 100
+    mov word [bl_body], gb_b_points
+    mov si, gb_r_pts1
     xor al, al
     call bl_run
-    mov ax, [bl_last]
-    mov dx, [bl_last+2]
-    mov [gb_tls8], ax
-    mov [gb_tls8+2], dx
-    call gb_lsinit                  ; fresh walks: the row above spent 100 px
-    mov word [bl_body], gb_b_lstepv8
-    mov si, gb_r_lsv8
+    mov word [gb_ptn], GB_PTSN
+    call gb_ptsinit
+    mov word [bl_n], 100
+    mov word [bl_body], gb_b_points
+    mov si, gb_r_pts3
     xor al, al
     call bl_run
-    mov ax, [bl_last]
-    mov dx, [bl_last+2]
-    mov [gb_tlsv8], ax
-    mov [gb_tlsv8+2], dx
-    call gb_boxfull
-    mov word [bl_n], 6
-    mov word [bl_body], gb_b_fill   ; RESTORE it: this used to be carried over
-    mov si, gb_r_fbox               ; from the 64x64 fill twelve lines up, and
-    xor al, al                      ; then the line and lstep blocks were
-    call bl_run                     ; inserted between the two (see gb_boxrow)
+    call gb_boxfull                 ; the fill's third size, and gb_tfbox feeds
+    mov word [bl_n], 6              ; TWO derived rows below - the second slope
+    mov word [bl_body], gb_b_fill   ; and the clean per-ROW term. It is set here
+    mov si, gb_r_fbox               ; rather than carried over from the 64x64
+    xor al, al                      ; fill above, because blocks have been
+    call bl_run                     ; inserted between the two before now
     mov ax, [bl_last]
     mov dx, [bl_last+2]
     mov [gb_tfbox], ax
@@ -1560,6 +1518,25 @@ gb_text:
     mov [gb_trundis], ax
     mov [gb_trundis+2], dx
 
+    ; ...and the same run in a pair of colours that share no plane, which on
+    ; VGA is the OTHER way into .slow (SPEC.md 6.1.10). Read against FONT_RUN
+    ; 10 aligned; on a 1bpp adapter the two are the same measurement.
+    mov word [bl_body], gb_b_fruncol
+    mov si, gb_r_rucol
+    xor al, al
+    call bl_run
+    mov word [bl_body], gb_b_paircol
+    mov si, gb_r_pacol
+    xor al, al
+    call bl_run
+
+    ; ...and the game's own shape: 19 cells, coloured on BLACK (a subset pair,
+    ; so the fast path), aligned. Its +5 twin is in the skewed block below.
+    mov word [bl_body], gb_b_f19
+    mov si, gb_r_f19
+    xor al, al
+    call bl_run
+
     ; SPEC.md 6.1.7's question: a run of 20, once as ordinary text and once
     ; SPACE-PADDED, which is what this system actually draws - 27.2 makes a
     ; Note Pad row's padding its ERASE, 12.9 composes the menu bar out to the
@@ -1592,6 +1569,10 @@ gb_text:
     mov word [bl_body], gb_b_frun
     mov si, gb_r_ru5
     xor al, al
+    call bl_run
+    mov word [bl_body], gb_b_f19    ; ...and the 19-cell coloured run off the
+    mov si, gb_r_f19u               ; byte grid: SPEC.md 6.1.11's path, at the
+    xor al, al                      ; length and pen an attract line uses
     call bl_run
 
     mov ax, [gb_x]
@@ -1914,79 +1895,13 @@ gb_derived:
     mov si, gb_d_fillpx2
     call gb_num32
 
-    mov ax, [gb_tlstf]              ; SPEC.md 5.6.6, settled: a dilated line is
-    mov dx, [gb_tlstf+2]            ; three Bresenham walks unless it is STEEP,
-    mov bx, [gb_tlst]               ; where one walk writing a three-bit mask
-    mov cx, [gb_tlst+2]             ; is the identical pixel set. So the shallow
-    call gb_ratio                   ; ratio is the control and should sit near
-    mov si, gb_d_lsteep             ; 300; the steep one is the answer
-    call gb_num32
-
-    mov ax, [gb_tlshf]
-    mov dx, [gb_tlshf+2]
-    mov bx, [gb_tlsh]
-    mov cx, [gb_tlsh+2]
-    call gb_ratio
-    mov si, gb_d_lshal
-    call gb_num32
-
-    mov ax, [gb_tls8]               ; SPEC.md 5.6.8: eight arrivals over one,
-    mov dx, [gb_tls8+2]             ; for the same eight pixels. 118 in
-    mov bx, [gb_tlsv8]              ; instructions under -icount; higher on
-    mov cx, [gb_tlsv8+2]            ; iron, because what comes off is far-call
-    call gb_ratio                   ; cells. 5.6.8's own field figures imply
-    mov si, gb_d_lsv                ; 356 and nothing reconciles that yet
-    call gb_num32
-
-    ; ...and the two rows are two equations in two unknowns, so the walk comes
-    ; apart with no extra rows at all. A = 100(8a + 8p), B = 100(a + 8p), so
-    ; A - B = 700a and B - 100a = 800p. THIS is what settles 5.6.8: if a
-    ; pixel dominates an arrival then batching cannot be where the cost is,
-    ; whatever the ratio above says, and the field's 570 us a pixel becomes a
-    ; number this report can be held against directly.
-    ; BOTH SUBTRACTIONS GO THROUGH gb_sub, which floors at zero, and that is
-    ; not defensive tidiness - it is a bug this row shipped with for one run.
-    ; A raw `sub`/`sbb` of two measured totals UNDERFLOWS the moment the
-    ; vector row measures larger than the scalar one, which is exactly what
-    ; noise does when the two are close, and 4 billion divided by 700 is a
-    ; large plausible-looking number in a report meant to be carried off a
-    ; machine (PERFORMANCE.md Part 6 rule 3: the failure mode is a number that
-    ; looks fine). Floored, an inverted pair reports an arrival of 0 and gives
-    ; the whole cost to the pixel, which is what "the batching saved nothing
-    ; measurable" honestly means.
-    mov ax, [gb_tls8]               ; A - B = 700a
-    mov dx, [gb_tls8+2]
-    call gb_stash
-    mov ax, [gb_tlsv8]
-    mov dx, [gb_tlsv8+2]
-    call gb_sub
-    mov [gb_tlsa], ax               ; park it: bl_us100 consumes DX:AX
-    mov [gb_tlsa+2], dx
-    mov cx, 700
-    call bl_us100
-    mov si, gb_d_lsarr
-    call gb_num32
-
-    mov ax, [gb_tlsa]               ; 100a = (A - B) / 7
-    mov dx, [gb_tlsa+2]
-    mov cx, 1
-    call bl_mul48
-    mov cx, 7
-    call bl_div48
-    call bl_get32
-    mov bx, ax
-    mov cx, dx
-    mov ax, [gb_tlsv8]              ; B - 100a = 800p
-    mov dx, [gb_tlsv8+2]
-    call gb_stash
-    mov ax, bx
-    mov dx, cx
-    call gb_sub
-    mov cx, 800
-    call bl_us100
-    mov si, gb_d_lspx
-    call gb_num32
-
+    ; --- FIVE DERIVED ROWS WERE HERE and SPEC.md 5.12.7 took them: the two
+    ; dilation ratios (5.6.6), the LSTEPV-over-LSTEP ratio (5.6.8) and the
+    ; arrival/pixel decomposition of the pair. Every one of them read a
+    ; [gb_t*] total that the deleted rows used to write, so leaving them would
+    ; have divided UNINITIALISED bss - which is this block's own stated failure
+    ; mode one paragraph up, a number that looks fine. A derived row dies with
+    ; its inputs.
     mov ax, [gb_tfbox]              ; the per-ROW term, cleanly: 256x128 against
     mov dx, [gb_tfbox+2]            ; 256x1 differs by 127 rows and by NOTHING
     mov cx, 6                       ; else, so neither the per-call floor nor
@@ -2351,95 +2266,69 @@ gb_b_vline:
     call OSAPI_GFX_VLINE
     ret
 
-; The fill again, with this window's own clip region armed. With nothing on
-; top the region is one rectangle, so gfx_clip_run re-enters the raw body
-; exactly once and the row measures the ARMING plus one fragment - which is
-; the cheapest case, and the one a background painter pays on a quiet desktop.
-; GB_NWALK resumable walks (SPEC.md 5.6.7) side by side in the sandbox, 126
-; pixels long so a 100-iteration row cannot step one off its end, plus the
-; descriptor array gfx_lstepv takes. Both are rebuilt from scratch before each
-; row, untimed, because the rows consume the walks.
+; gb_ptsinit / gb_b_points - OSAPI_GFX_POINTS (SPEC.md 5.6.9), the one slot of
+; SPEC.md 5.6's family that SURVIVED 5.12.7. These rows are its own, and saying
+; so is the point of this comment: the `pts` rows that used to stand here were
+; the third arm of a three-way comparison (kernel walk / app-side line / point
+; array), and when the other two arms became `stc`/`ret` cells the surviving
+; arm lost its meaning with them - a number that only ever said "cheaper than
+; the walk" says nothing once there is no walk. So the row was REBUILT to
+; measure the slot on its own terms, which is a per-call arrival plus a
+; per-point marginal, and 5.12.5 is what wants it: every app-side walker in
+; the tree commits through this slot now, so what a point costs is what a
+; figure costs.
 ;
-; Note what is NOT passed: these are X slots, so the stub puts the caller's DS
-; in ES itself and a package hands over a bare offset in its own segment.
-gb_lsinit:
+; GB_NWALK columns of [gb_ptn] pixels, one column every 8px, which is the
+; geometry the retired rows used - kept so PERFORMANCE.md Sets 132 and 133
+; stay comparable to what replaces them.
+gb_ptsinit:
     push ax
     push bx
     push cx
     push dx
-    push si
     push di
-    mov word [gb_lsi], 0
-    mov di, gb_lsblk
-.next:
-    mov ax, [gb_lsi]                ; walk i runs from (x + 8i, y) to
-    mov cl, 3                       ; (x + 8i + 4, y + 126): steep, and clear
-    shl ax, cl                      ; of its neighbours
-    add ax, [gb_x]
-    mov cx, ax
-    add cx, 4
-    mov bx, [gb_y]
-    mov dx, bx
-    add dx, 126
-    call OSAPI_GFX_LINIT
-    add di, GLS_SZ
-    inc word [gb_lsi]
-    cmp word [gb_lsi], GB_NWALK
-    jb .next
-    mov di, gb_lsdsc                ; (block, count) pairs, one pixel each
-    mov ax, gb_lsblk
-    mov cx, GB_NWALK
-.d:
+    mov di, gb_pts
+    xor bx, bx
+.w:
+    mov ax, bx
+    mov cl, 3
+    shl ax, cl
+    add ax, [gb_x]              ; one column every 8px, clear of its neighbours
+    mov cx, [gb_ptn]
+    mov dx, [gb_y]
+.p:
     mov [di], ax
-    mov word [di+2], 1
-    add ax, GLS_SZ
+    mov [di+2], dx
     add di, 4
-    loop .d
+    inc dx
+    loop .p
+    inc bx
+    cmp bx, GB_NWALK
+    jb .w
     pop di
-    pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
 
-gb_b_lstep8:                        ; eight arrivals for eight pixels
-    mov di, gb_lsblk
-    mov si, GB_NWALK
-.next:
-    mov cx, 1
-    call OSAPI_GFX_LSTEP
-    add di, GLS_SZ
-    dec si
-    jnz .next
+gb_b_points:
+    mov si, gb_pts              ; an X slot: the stub puts our DS in ES itself
+    mov cx, [gb_ptn]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1                   ; GB_NWALK = 8 points a step
+    call OSAPI_GFX_POINTS
     ret
 
-gb_b_lstepv8:                       ; one arrival for the same eight
-    mov di, gb_lsdsc
-    mov cx, GB_NWALK
-    call OSAPI_GFX_LSTEPV
-    ret
-
-; The two line geometries, transposed so the pixel counts match: 32 across by
-; 127 down, and 127 across by 32 down. [gb_lfat] is SPEC.md 5.6.5's dilation,
-; 0 for a draw and 1 for an erase-what-was-drawn-in-pieces.
-gb_b_lsteep:
-    mov ax, [gb_x]
-    mov cx, ax
-    add cx, 32
-    mov bx, [gb_y]
-    mov dx, bx
-    add dx, 127
-    mov si, [gb_lfat]
-    call OSAPI_GFX_LINE
-    ret
-
-; --- SPEC.md 79.5.6's two candidates -------------------------------------------
+; --- THE BAND COMPOSER'S THREE TERMS, plus the one that was refused ----------
 ; gb_b_mline rasterises ONE line into a private 1bpp mask, with no clipping, no
-; ink, no dither table and no arrival - everything gfx_line does that a
-; caller compositing its own figure does not need. Against `GFX_LINE shallow
-; thin`, which draws the identical 127 x 32 line, the difference IS what the
-; kernel's generality costs.
+; ink, no dither table and no arrival - everything gfx_line USED to do that a
+; caller compositing its own figure does not need. It was written as the
+; app-side arm of a comparison against `GFX_LINE shallow thin`, and SPEC.md
+; 5.12.7 retired the other arm - but the WINNER is what apps/os88gfx.inc's
+; gfxe_line does in every composing program in the tree, so this row went from
+; being half an argument to being the cost of a figure.
 ;
 ; gb_b_xdiff is the commit: the whole box walked a word at a time, XORing this
 ; frame's mask against last frame's, and writing only where they differ. It
@@ -2608,17 +2497,10 @@ gb_b_mclr:
     pop es
     ret
 
-gb_b_lshal:
-    mov ax, [gb_x]
-    mov cx, ax
-    add cx, 127
-    mov bx, [gb_y]
-    mov dx, bx
-    add dx, 32
-    mov si, [gb_lfat]
-    call OSAPI_GFX_LINE
-    ret
-
+; The fill again, with this window's own clip region armed. With nothing on
+; top the region is one rectangle, so gfx_clip_run re-enters the raw body
+; exactly once and the row measures the ARMING plus one fragment - which is
+; the cheapest case, and the one a background painter pays on a quiet desktop.
 gb_b_clipfill:
     mov bx, [gb_win]
     call OSAPI_WM_CLIP_SET
@@ -2817,6 +2699,71 @@ gb_b_frunp:
 ; solid black), the FLAG is: font_ink masks a flagged glyph to 47's
 ; checkerboard. So on Hercules and CGA this row measures the mask fold and
 ; nothing else, which is exactly what it is for.
+; SPEC.md 6.1.10's OTHER fall-back, and the one no row here has ever drawn.
+; The planar prologue groups the run's planes once and writes one CPU byte a
+; cell row - but it can only do that when one colour's plane bits are a SUBSET
+; of the other's, so that the planes which VARY across the glyph all want the
+; glyph or all want its complement. A pair sharing no plane in either direction
+; needs two passes, which are not implemented, and it takes .slow: gfx_fill +
+; font_str, the erase-and-letter pair 6.1 exists to replace.
+;
+; 6.1.10's census ran over thm_tab's themes and the content pens - kernel
+; CHROME - and found exactly one pair that needs two passes. Over all 256
+; ordered pairs of the 16 colours, 110 of them do: 43%. A PACKAGE picking its
+; own two colours is outside that census, and a game is the case that picks
+; them freely. CYELLOW on CBLUE is the shape it hits (14 vs 1: A = 14, B = 1,
+; both non-empty).
+;
+; Same string, same length, same place as FONT_RUN 10 aligned - the only
+; difference is the pen, which is the disabled row's construction above and for
+; the same reason. On the two 1bpp adapters this must read as FONT_RUN 10
+; aligned does: font_ink reduces either pair to 00/FF and the mono path never
+; asks what the colours were. A divergence here is VGA's alone.
+; SPEC.md 6.1.11's question asked at a GAME's pen. Nineteen cells, CYELLOW on
+; CBLACK - which is a SUBSET pair (bg = 0, so B is empty), so this takes the
+; planar single-store prologue and NOT .slow: the colour is not the variable
+; here, the phase is. Registered twice, at the aligned x and at x+5, so the
+; pair is what 6.1.11 costs a run of the length an attract line actually is.
+gb_b_f19:
+    mov cx, [gb_tx]
+    mov dx, [gb_y]
+    mov si, gb_s_t19
+    mov al, CYELLOW
+    mov ah, CBLACK
+    call OSAPI_FONT_RUN
+    ret
+
+gb_b_fruncol:
+    mov cx, [gb_tx]
+    mov dx, [gb_y]
+    mov si, gb_s_test
+    mov al, CYELLOW
+    mov ah, CBLUE
+    call OSAPI_FONT_RUN
+    ret
+
+; ...and the PAIR written by hand at those same two colours, which is what
+; .slow does on the row above. It prices the fall-back against the fall-back
+; rather than against the fast path, so the two readings separate what the
+; pair costs from what DECIDING to take it costs (Set 76's 3.3%).
+gb_b_paircol:
+    mov al, CBLUE
+    call OSAPI_SET_COLOR
+    mov ax, [gb_tx]
+    mov bx, [gb_y]
+    mov cx, ax
+    add cx, 79
+    mov dx, bx
+    add dx, 7
+    call OSAPI_GFX_FILL
+    mov al, CYELLOW
+    call OSAPI_SET_COLOR
+    mov cx, [gb_tx]
+    mov dx, [gb_y]
+    mov si, gb_s_test
+    call OSAPI_FONT_STR_XPARENT
+    ret
+
 gb_b_frundis:
     stc
     mov al, CDGRAY
@@ -3074,6 +3021,7 @@ gb_ttl:     db 'Gfx Bench', 0
 ; The measured string is tests/fontbench's, character for character, so its
 ; published figures (SPEC.md 6.1.1) cross-check this harness for free.
 gb_s_test:  db 'C-2 01 A0F', 0
+gb_s_t19:   db 'PRESS SPACE TO PLAY', 0   ; 19 cells, an attract line's length
 
 gb_pattern: db 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55
 
@@ -3204,10 +3152,6 @@ gb_r_f8:   db 'GFX_FILL 8x8', 0
 gb_r_f64:  db 'GFX_FILL 64x64', 0
 gb_r_fbox: db 'GFX_FILL 256x128', 0
 gb_r_f64c: db 'GFX_FILL 64x64 clipped', 0
-gb_r_lst:  db 'GFX_LINE steep thin', 0
-gb_r_lstf: db 'GFX_LINE steep fat', 0
-gb_r_lsh:  db 'GFX_LINE shallow thin', 0
-gb_r_lshf: db 'GFX_LINE shallow fat', 0
 gb_r_mline:db 'mask line 127x32', 0
 gb_r_xdiff:db 'xordiff 128x128', 0
 gb_r_blit1:db 'GFX_BLIT1 128x128', 0
@@ -3215,8 +3159,8 @@ gb_r_blit1:db 'GFX_BLIT1 128x128', 0
 gb_r_blit1c:db 'GFX_BLIT1 128x128 pen', 0
 %endif
 gb_r_mclr: db 'clear mask 2048', 0
-gb_r_ls8:  db 'GFX_LSTEP x8 (8 calls)', 0
-gb_r_lsv8: db 'GFX_LSTEPV x8 (1 call)', 0
+gb_r_pts1: db 'GFX_POINTS 8 pts', 0
+gb_r_pts3: db 'GFX_POINTS 24 pts', 0
 gb_r_frow: db 'GFX_FILL 256x1', 0
 gb_r_fr:   db 'GFX_FRAME 64x64', 0
 gb_r_gy:   db 'GFX_FILL_GRAY 64x64', 0
@@ -3236,6 +3180,10 @@ gb_r_st:   db 'FONT_STR 10 aligned', 0
 gb_r_pa:   db 'PAIR 10 aligned', 0
 gb_r_ru:   db 'FONT_RUN 10 aligned', 0
 gb_r_rudis:db 'FONT_RUN 10 disabled', 0
+gb_r_rucol:db 'FONT_RUN 10 coloured', 0
+gb_r_f19:  db 'FONT_RUN 19 col/blk', 0
+gb_r_f19u: db 'FONT_RUN 19 col/blk +5', 0
+gb_r_pacol:db 'PAIR 10 coloured', 0
 gb_r_ru20: db 'FONT_RUN 20 text', 0
 gb_r_rup:  db 'FONT_RUN 20 padded', 0
 gb_r_pa5:  db 'PAIR 10 skewed 5', 0
@@ -3263,11 +3211,6 @@ gb_r_fspair:  db 'FULLSCREEN in+out', 0
 
 gb_d_fillpx:   db 'fill ns/px 8-64', 0
 gb_d_fillrow:  db 'fill ns per row', 0
-gb_d_lsteep:   db 'line steep fat/thin', 0
-gb_d_lshal:    db 'line shal fat/thin ~300', 0
-gb_d_lsv:      db 'LSTEP8/LSTEPV8 icnt118', 0
-gb_d_lsarr:    db 'lstep arrival us x100', 0
-gb_d_lspx:     db 'lstep pixel us x100', 0
 gb_d_fillpx2:  db 'fill ns/px 64-box', 0
 gb_d_hlpx:     db 'hline ns per pixel', 0
 gb_d_cell:     db 'FONT_CHAR us x100', 0
@@ -3338,10 +3281,13 @@ VCTX_KIND   equ VCTX_W*2+4      ; ...and which adapter it is
 
 GB_NWALK    equ 8               ; walks stepped together (SPEC.md 5.6.8)
 GB_O_SCAL   equ 216             ; ...where the scalars below end
-GB_O_SYSKB  equ GB_O_SCAL + GB_NWALK * (4 + GLS_SZ)   ; the scalars above end at
-                                ; gb_lsblk, which is DERIVED - a hand-totalled
-                                ; figure that is too small is a package writing
-                                ; over benchlib's arena, and it assembles
+GB_O_SYSKB  equ GB_O_SCAL       ; SPEC.md 5.12.7 took the walk descriptors and
+                                ; the GB_NWALK walk states that used to sit
+                                ; between these two, so the scalars now run
+                                ; straight into gb_syskb. It stays DERIVED
+                                ; rather than hand-totalled: a figure that is
+                                ; too small is a package writing over
+                                ; benchlib's arena, and it assembles
 GB_O_VROW   equ GB_O_SYSKB + SYSKB_SIZE
 GB_O_RROW   equ GB_O_VROW + GB_BWROWS * 2
 GB_O_RAM    equ GB_O_RROW + GB_BWROWS * 2
@@ -3363,6 +3309,19 @@ GB_O_MASKA  equ GB_O_PLANAR + GB_BLITPZ
 GB_O_MASKB  equ GB_O_MASKA + GB_MSZ
 GB_BSS_OWN  equ ((GB_O_MASKB + GB_MSZ + 511) / 512) * 512   ; benchlib's base must be
                                         ; 512-ALIGNED: bl_out is an int 13h target
+
+; gb_b_points' coordinate array - GB_NWALK columns of at most GB_PTSN points.
+;
+; IN THE IMAGE and not the bss, and capped at 3, which is not a style choice:
+; GB_BSS_OWN's 512-rounding has very little slack, and a bss addition buys a
+; whole step. Two points fit `arrival + N x marginal` EXACTLY, which is the
+; whole shape of the row, so any longer n is read off the fit rather than
+; measured - and that is why two lengths is enough rather than a compromise.
+; gb_ptsinit overwrites every byte before a row reads one, so what is stored
+; here does not matter.
+GB_PTSN     equ 3
+GB_PTSZ     equ GB_NWALK * GB_PTSN * 4
+gb_pts:     times GB_PTSZ db 0
 
     align 512                   ; ...and os88_image_end likewise, which this
                                 ; costs up to 511 bytes of image and buys the
@@ -3419,18 +3378,9 @@ gb_tpage    equ os88_image_end + 118
 gb_tfbox    equ os88_image_end + 130   ; dword: the 256x128 fill, for slope 2
 gb_tfrow    equ os88_image_end + 136   ; dword: ...and the 256x1 one, for the
                                        ; per-row term it pins against
-gb_lfat     equ os88_image_end + 140   ; word: SPEC.md 5.6.5's dilation flag
-gb_tlst     equ os88_image_end + 142   ; dword: the four gfx_line rows, whose
-gb_tlstf    equ os88_image_end + 146   ; two RATIOS are the finding rather
-gb_tlsh     equ os88_image_end + 150   ; than any one of them (SPEC.md 5.6.6)
-gb_tlshf    equ os88_image_end + 154
 gb_tapi     equ os88_image_end + 122   ; dword: 122..125
 gb_ran      equ os88_image_end + 126   ; byte: has the suite been run yet?
 gb_tlock    equ os88_image_end + 158   ; dword: the gfx lock pair (SPEC.md 7)
-gb_tls8     equ os88_image_end + 162   ; dword: eight arrivals (SPEC.md 5.6.8)
-gb_tlsv8    equ os88_image_end + 166   ; dword: ...and one, for the same pixels
-gb_tlsa     equ os88_image_end + 174   ; dword: A - B, parked across bl_us100
-gb_lsi      equ os88_image_end + 170   ; word:  gb_lsinit's walk index
 gb_dok      equ os88_image_end + 178   ; byte: the 'VD' block answered, and
 gb_dn       equ os88_image_end + 179   ; byte: ...with this many displays
 gb_dix      equ os88_image_end + 180   ; byte: which one the sandbox is on,
@@ -3451,8 +3401,10 @@ gb_tbpw     equ os88_image_end + 208   ; dword: ...and the same bytes wide,
                                        ;        which separates the per-ROW part
 gb_trundis  equ os88_image_end + 200   ; dword: a DISABLED run (SPEC.md 6.1.12),
                                        ;        against gb_trun beside it
-gb_lsdsc    equ os88_image_end + GB_O_SCAL   ; GB_NWALK (block, count) pairs
-gb_lsblk    equ os88_image_end + GB_O_SCAL + GB_NWALK * 4  ; ...and walk states
+gb_ptn      equ os88_image_end + 212   ; word: pixels in a gb_b_points column
+                                       ;       iteration - 1 is what every row
+                                       ;       before docs/plans/completed/GFX-EMBEDDABLE-PLAN.md
+                                       ;       3.2 used
 gb_syskb    equ os88_image_end + GB_O_SYSKB    ; SYSKB_SIZE bytes
 gb_vrow     equ os88_image_end + GB_O_VROW     ; GB_BWROWS words: fb offsets
 gb_rrow     equ os88_image_end + GB_O_RROW     ; ...and the RAM ones

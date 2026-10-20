@@ -33,11 +33,20 @@ Generators rather than threads: a two-party protocol has to be STEPPED to be
 debugged, and each `yield` is one poll, charged to a shared clock at that
 end's own per-poll cost.
 """
-LP_SPIN = 5000
-LP_TMO = 2                       # ticks
-TURN_RX = 8                      # ticks
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from asmequ import equ                                    # noqa: E402
+
+# READ from lplink.inc rather than typed out (asmequ.py says why): a model
+# whose constants have drifted from the code it models is a model of
+# something else, and passes.
+_LP = "drivers/net/lplink.inc"
+LP_SPIN, LP_TMO, TURN_RX = equ(_LP, "LP_SPIN", "LP_TMO", "TURN_RX")
+                                 # polls / ticks / ticks
 TICK_US = 54925                  # 18.2065 Hz
-MAGQ = 0xF48383F3
+MAGQ = equ(_LP, "MAGQ_HI") << 16 | equ(_LP, "MAGQ_LO")
 
 
 class Clock:

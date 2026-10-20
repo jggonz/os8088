@@ -1,0 +1,7 @@
+# Game over: a slow falling line in A minor, once.  Original.
+title Flat Tyre
+tempo 92
+loop once
+v1 o5 e4 c4 o4 a4 e4 | o4 a1 |
+v2 o4 c4 o3 a4 o4 c4 o3 a4 | o3 e1 |
+v3 o2 a2 e2 | o2 a1 |

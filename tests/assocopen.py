@@ -74,16 +74,20 @@ def bp_open(m, mo, wx, wy, name):
     t1 = mo.ticks()
     mo._edge(False)
 
-    m.bp_exec("fm_repaint")
-    try:
+    # The second press is inside the trace, and it has to be: `_edge` proves
+    # the press by polling the published `mouse_btn`, and a guest stopped at
+    # `fm_repaint` never publishes another one. It worked before only because
+    # the repaint cannot be reached until the click has been decoded - an
+    # ordering, not a guarantee - and the `finally` below was the other half
+    # of the same problem, clearing the set by hand so the NEXT fm_repaint
+    # would not stop the machine under the caller and time out every later
+    # step. A trace clears its own set on the way out, on both paths.
+    with os88marty.bp_trace(m, "fm_repaint") as tr:
         mo._edge(True)          # ...the double-click
         t2 = mo.ticks()
         m.mouse(0, 0, l=False)
-        state = m.wait_stop(8.0)
-    finally:
-        m.bp_exec()             # clear BEFORE the run below, or the next
-        m.run()                 # fm_repaint stops the machine under the
-                                # caller and every later step times out
+        tr.wait(1, limit=30.0)
+    state = tr.n > 0
     os88marty.settle(m)
     span = (t2 - t1) & 0xFFFFFFFF
     if span >= os88mouse.DBL_TICKS:
@@ -91,7 +95,7 @@ def bp_open(m, mo, wx, wy, name):
                  "window is %d - the guest saw two FIRST clicks, so nothing "
                  "below is about a double-click at all"
                  % (span, os88mouse.DBL_TICKS))
-    return state is not None, span
+    return state, span
 
 
 with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:

@@ -83,7 +83,7 @@ C64_X2STRIDE equ 80                 ; ...and of a pixel-doubled one
 ;   mode        0 = standard text. WAVE 1 COMPOSES STANDARD TEXT ONLY; every
 ;               other mode fills the span with c64_bgfill and wave 4 writes
 ;               the bitmap, multicolour and extended-background composers
-;               (docs/C64-PORT-PLAN.md wave 4). It is a stated gap, not a
+;               (docs/plans/completed/C64-PORT-PLAN.md wave 4). It is a stated gap, not a
 ;               silent one: the harness asserts mode 0 against tools/c64ref.py
 ;               bit for bit and no wave-1 gate claims the others
 ;   bg          $D021, for the mode != 0 fill

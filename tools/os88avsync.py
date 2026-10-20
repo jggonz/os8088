@@ -39,10 +39,12 @@ Tracker must be PLAYING. Either surface works: the numbers come from memory,
 not from pixels.
 """
 import sys, os, re, struct, subprocess, argparse, statistics
+import tempfile
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from os88marty import Marty, MartyError
+from os88pkg import PKG_FMT                              # noqa: E402
 
 GUEST_HZ = 4772728.0
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,9 +57,9 @@ MP_ST_N, MP_ST_SIZE, MP_SP_ROW = 64, 16, 4
 def symbols(src):
     """Offsets by NAME, out of a fresh NASM listing - so this survives every
     rebuild instead of carrying numbers that rot."""
-    lst = "/tmp/os88avsync.lst"
+    lst = tempfile.gettempdir() + "/os88avsync.lst"
     subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                    "-I", "apps/tracker/", "-o", "/tmp/os88avsync.bin",
+                    "-I", "apps/tracker/", "-o", tempfile.gettempdir() + "/os88avsync.bin",
                     "-l", lst, src], cwd=ROOT, check=True)
     lines = open(lst).read().splitlines()
     out = {}
@@ -82,7 +84,7 @@ def symbols(src):
 def find_pkg(m, name=b"TRACKER"):
     buf = m.read(0x40000, 0xA0000 - 0x40000)
     for off in range(0, len(buf) - 32, 16):
-        if buf[off:off + 2] == b"O8" and buf[off + 2] == 3 \
+        if buf[off:off + 2] == b"O8" and buf[off + 2] == PKG_FMT \
            and buf[off + 16:off + 16 + len(name)] == name:
             return (0x40000 + off) >> 4
     raise MartyError("no loaded TRACKER package found - is it running?")

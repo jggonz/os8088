@@ -1,0 +1,26 @@
+# tests/toastlong.txt - the long-string registry for SPEC.md 59.10's ratchet
+#
+# `toast_show` copies at most TOAST_MAX = 24 characters and drops the rest
+# SILENTLY. The clock's field is 25 cells on every screen this runs on and the
+# strip spends one of them on its gap, so 24 is GEOMETRY and not a budget - it
+# cannot be raised without moving the toast somewhere it can be covered.
+#
+# So every FIXED message in the tree is written to fit, and
+# `tests/unit/t_toast.py` checks it. That checker over-approximates: it takes
+# every `db` string a TOASTING procedure loads, which is sound in the safe
+# direction (it cannot miss a string) and produces false positives (a
+# procedure that both draws an About box and toasts one line of it). This file
+# is where those go.
+#
+# ONE LINE PER STRING: <label> <path>  # <reason>
+#
+# The reason has to say WHY the string is not a toast - which routine draws it
+# and with what. "It is fine" is not a reason. A string that really is toasted
+# is FIXED, not registered: the rule is the geometry's, and a message nobody
+# can read is worse than a shorter one.
+#
+# THIS IS A RATCHET. The list can only get shorter. It starts at two, which is
+# what the sweep behind SPEC.md 59.10 left.
+
+wd_s_abou3  apps/word/word.asm      # the About BOX's third line, drawn by wd_about with OSAPI_FONT_RUN into a panel it sized. wd_about also toasts wd_s_abou2 on the no-room fallback, which is why the walker sees both
+sc_s_abou3  apps/scribe/scribe.asm  # the same, in sc_about: OSAPI_FONT_RUN into the box, never toasted

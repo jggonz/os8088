@@ -38,8 +38,6 @@ to lose here.
 import argparse
 import os
 import sys
-import threading
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -147,34 +145,37 @@ def main(argv):
         os88marty.settle(m)
         note("maximized")
 
-        # THE RESTORE, with pt_topacked watched. The breakpoint is pumped from
-        # this thread while a daemon does the click: os88mouse proves each
-        # button edge by polling mouse_btn, and a guest stopped at a
-        # breakpoint never advances far enough to answer.
+        # THE RESTORE, with pt_topacked watched. A breakpoint stops the guest
+        # and os88mouse proves each button edge by polling `mouse_btn`, so the
+        # two cannot be spelled one after the other - the click's own proof is
+        # unobtainable while the machine is frozen. `bp_trace` pumps the
+        # breakpoint from a daemon so the dblclick here is ordinary code; this
+        # was a hand-rolled inversion of that (the CLICK on the thread and the
+        # pump in this loop) and is the row bp_trace was factored out of.
         big = dispcp.win_rect(m, S, pw)
-        m.bp_exec(base + pm["pt_topacked"])
-        done = []
-        threading.Thread(target=lambda: (
-            time.sleep(1.0),
-            mo.dblclick(big[0] + 60, big[1] + 9),
-            done.append(1)), daemon=True).start()
-        for _ in range(3000):
-            if done and m.status()["state"] == "running":
-                break
-            if not m.wait_stop(limit=10.0):
-                continue
-            r = m.regs()
-            if (r["cs"] << 4) + r["ip"] == base + pm["pt_topacked"] and not why:
-                sx = _bss(m, seg, "pt_bx0") + _bss(m, seg, "pt_cx0")
-                why = dict(wm_clip_n=_kern(m, "wm_clip_n"),
-                           vid_mono=_kern(m, "vid_mono", 1),
-                           vid_ndisp=_kern(m, "vid_ndisp", 1),
-                           gfx_dnest=_kern(m, "gfx_dnest", 1),
-                           screen_x=sx, x_and_7=sx & 7,
-                           w=_bss(m, seg, "pt_bwid"))
-            m.run()
-        m.breakpoints([])
-        m.run()
+
+        def guards(mm, rec):
+            """WHY gfx_blitp refused - read INSIDE pt_topacked, where alone it
+            is true. Five reads, so only the first entry pays for them: the
+            finding is about the refusal that converted the canvas, and every
+            later entry is a canvas that is already packed."""
+            if seen:
+                return None
+            seen.append(1)
+            sx = _bss(m, seg, "pt_bx0") + _bss(m, seg, "pt_cx0")
+            return dict(wm_clip_n=_kern(m, "wm_clip_n"),
+                        vid_mono=_kern(m, "vid_mono", 1),
+                        vid_ndisp=_kern(m, "vid_ndisp", 1),
+                        gfx_dnest=_kern(m, "gfx_dnest", 1),
+                        screen_x=sx, x_and_7=sx & 7,
+                        w=_bss(m, seg, "pt_bwid"))
+
+        seen = []
+        with os88marty.bp_trace(m, base + pm["pt_topacked"],
+                                on_hit=guards) as tr:
+            mo.dblclick(big[0] + 60, big[1] + 9)
+        print("   pt_topacked entered %d time(s) across the restore" % tr.n)
+        why = next((h["hit"] for h in tr.hits if h.get("hit")), None)
         m.advance(frames=400)
         m.run()
         os88marty.settle(m)

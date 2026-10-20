@@ -139,6 +139,8 @@ trk_dbg_jump:
     ret
 
 ; --- .bss (the TRKW accumulator, like every other file here) -------------------
+    TRKW tds_keys                   ; keys the bracket handed trk_fsx_key
+    TRKW tds_wkeys                  ; ...and keys ui_task handed trk_onkey
     TRKW tds_frame                  ; frames drawn
     TRKW tds_scrl                   ; ...of which a scroll answered
     TRKW tds_no                     ; ...and tui_scrl refused

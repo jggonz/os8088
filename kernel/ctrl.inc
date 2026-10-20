@@ -76,6 +76,19 @@ CP_ITDY   equ 2                 ; label baseline offset (8px font in 12px bar)
 CP_IBX1   equ 2                 ; selection bar left edge
 CP_IBX2   equ CP_DIVX - 3       ; 85: selection bar right edge
 
+%ifdef DOCK_OPT
+; --- THE LIST SCROLLS (SPEC.md 31.1.5) ----------------------------------------
+; Nine rows fit the pane. A list that is longer shows EIGHT and puts two arrows
+; in the ninth row's place, the Drivers page's own (31.1.1) - so a machine with
+; nine rows or fewer sees exactly the list it always did.
+CP_LALL   equ (CP_CH - CP_I0Y) / CP_IROWH   ; 9: rows shown with no arrows
+CP_LVIS   equ CP_LALL - 1                   ; 8: ...and while it scrolls
+CP_LAY    equ CP_I0Y + CP_LVIS * CP_IROWH   ; 118: the arrows' top row
+CP_LAH    equ 12                            ; ...and their height
+CP_LAX0   equ 22                            ; up arrow's left edge
+CP_LAX1   equ 52                            ; down arrow's left edge
+
+%endif
 ; --- right pane: the selected item's page -----------------------------------
 CP_RX     equ 96                ; pane left edge (pane top = content top)
 CP_PRGT   equ CP_CW - CP_RX - 1 ; ...and its LAST COLUMN, as an offset from
@@ -150,14 +163,23 @@ CPH_ROWH  equ 16                ; row pitch inside a group
 CPH_R0Y   equ 18                ; Bright glyph top
 CPH_R1Y   equ CPH_R0Y + CPH_ROWH        ; 34: Dark
 CPH_R2Y   equ CPH_R1Y + CPH_ROWH        ; 50: Color (SPEC.md 76.12)
+%ifdef KERN_BIG
+CPH_R3Y   equ CPH_R2Y + CPH_ROWH        ; 66: Windows (SPEC.md 76.14.10)
+CPH_H2Y   equ 86                ; 'Window Animations' heading text row
+CPH_A0Y   equ 98                ; On glyph top
+CPH_A1Y   equ CPH_A0Y + CPH_ROWH        ; 114: Off; + 12px = 126, inside
+%else                           ; no Color or Windows row on kern_small
 CPH_H2Y   equ 70                ; 'Window Animations' heading text row
-CPH_A0Y   equ 82                ; On glyph top
-CPH_A1Y   equ CPH_A0Y + CPH_ROWH        ; 98: Off; + 12px = 110, inside CP_CH
-                                ; (132). The two-line caption that used to sit
-                                ; under this is what the third theme row is
-                                ; drawn in - the page had no other room and
-                                ; SPEC.md 76.4's argument for the caption was
-                                ; always the weaker of the two
+CPH_A0Y   equ 80                ; On glyph top
+CPH_A1Y   equ CPH_A0Y + CPH_ROWH        ; 96: Off
+%endif
+                                ; CP_CH (132). The two-line caption that used
+                                ; to sit under this is what the third theme
+                                ; row is drawn in - the page had no other room
+                                ; and SPEC.md 76.4's argument for the caption
+                                ; was always the weaker of the two - and the
+                                ; FOURTH took the Screen Saver button's band,
+                                ; which moved to the right-hand column
 
 ; ...and its hit bands, contiguous WITHIN a group and dead BETWEEN them: a
 ; click in the gap belongs to neither group, where the Scheduler page's two
@@ -166,26 +188,56 @@ CPH_B0Y1  equ CPH_R0Y - 4                   ; 14: theme row 0 top
 CPH_B0Y2  equ CPH_R0Y + CP_GW + 1           ; 31: ...bottom = row 1 top - 1
 CPH_B1Y2  equ CPH_R1Y + CP_GW + 1           ; 47: theme row 1 bottom
 CPH_B2Y2  equ CPH_R2Y + CP_GW + 1           ; 63: theme row 2 bottom
+%ifdef KERN_BIG
+CPH_B3Y2  equ CPH_R3Y + CP_GW + 1           ; 79: theme row 3 bottom
+%endif
 CPH_A0Y1  equ CPH_A0Y - 4                   ; 78: anim row 0 top
 CPH_A0Y2  equ CPH_A0Y + CP_GW + 1           ; 79: ...bottom
 CPH_A1Y2  equ CPH_A1Y + CP_GW + 1           ; 95: anim row 1 bottom
 
-; ...and the SCREEN SAVER button (SPEC.md 79.7), under both groups in the last
-; band of the pane the two radio groups leave: row 1's glyph ends at 110 and
-; the content box is CP_CH tall, so a 16px button at 114 ends at 129 with two
-; rows to spare. It is a BUTTON and not a third group because what is behind
-; it is four checkboxes and two numbers, which is a window's worth (SPEC.md
-; 79.7) - the same call HDD.DRV's page makes for its disk tool and ETHER.DRV's
-; for its addresses (SPEC.md 52.2, 72.7).
-CPH_BTX   equ CP_PGX
-CPH_BTY   equ 114
+; ...and the SCREEN SAVER button (SPEC.md 79.7), in the RIGHT-HAND column
+; beside the animation group (SPEC.md 76.14.10): it stood under both groups
+; until the Windows row took that band, and the animation labels - 'On',
+; 'Off' - leave the right of the pane empty. It is a BUTTON and not a third
+; group because what is behind it is four checkboxes and two numbers, which is
+; a window's worth (SPEC.md 79.7) - the same call HDD.DRV's page makes for its
+; disk tool and ETHER.DRV's for its addresses (SPEC.md 52.2, 72.7).
+; It sits in the pane's bottom-right CORNER, one margin in from both edges:
+; level with 'On' it floated, a button with nothing under it beside a group
+; that runs on below it. Its left edge is Customize's (CPH_CZX), so the two
+; buttons make one right-hand column.
 CPH_BTW   equ 104                           ; 'Screen Saver' is 96px of glyph
 CPH_BTH   equ 16
-CPH_CSAVE equ 6                             ; its control id: 1..3 are the
-                                            ; theme rows and 4..5 the zoom's
+CPH_BTM   equ 6                             ; the corner margin, both edges
+CPH_BTX   equ CP_PRGT + 1 - CPH_BTM - CPH_BTW   ; 112
+CPH_BTY   equ CP_CH - CPH_BTM - CPH_BTH         ; 110
+CPH_CSAVE equ 7                             ; its control id: 1..4 are the
+                                            ; theme rows and 5..6 the zoom's
 
-%if CPH_BTY + CPH_BTH > CP_CH
+%if CPH_BTY + CPH_BTH > CP_CH || CPH_A1Y + CP_GW > CP_CH
 %error "ctrl: the Theme page runs past its pane - see SPEC.md 76.4"
+%endif
+%if CPH_BTX + CPH_BTW - 1 > CP_PRGT
+%error "ctrl: the Screen Saver button runs past the pane's right edge"
+%endif
+
+; ...and CUSTOMIZE..., ON THE COLOR ROW ITSELF rather than a row of its own
+; (SPEC.md 76.14): the pane has no room left below CPH_A1Y2 (the Screen Saver
+; button already takes it), and the task this row's label leaves 150px of a
+; 222px pane unused is the one place a fourth control fits without moving
+; anything else. It OVERLAPS the theme group's Y band (CPH_B0Y1..CPH_B3Y2),
+; so cp_thm_click tests this rect FIRST, exactly as it already tests the
+; Screen Saver button's before falling into the band logic that ignores X.
+CPH_CZX   equ 112                           ; clear of 'Color''s label at
+                                            ; CP_PLX (22) plus five glyphs
+CPH_CZY   equ CPH_R2Y - 2                   ; 48: centred on the Color row's
+                                            ; 12px glyph band (50..61)
+CPH_CZW   equ 104                           ; 'Customize...' is 96px of glyph
+CPH_CZH   equ 16
+CPH_CCUST equ 8                             ; 7 is the Screen Saver's
+
+%if CPH_CZX + CPH_CZW > CP_CW - CP_RX
+%error "ctrl: the Customize button runs past the Theme page's pane"
 %endif
 
 %endif
@@ -194,6 +246,34 @@ CPH_CSAVE equ 6                             ; its control id: 1..3 are the
 CP_B0Y1   equ CP_PR0Y - 4                     ; 22: row 0 (Pre-emptive) top
 CP_B0Y2   equ CP_PR0Y + CP_GW + 3             ; 41: row 0 bottom = row 1 top-1
 CP_B1Y2   equ CP_PR0Y + CP_PROWH + CP_GW + 3  ; 61: row 1 (Cooperative) bottom
+
+; --- CPXK / CPXC - the panel image's own way back into the kernel -----------
+; A kernel routine only this image calls needs no resident shim: `CPXK x` is a
+; five-byte far hop into the near .text routine x, `CPXC x` the same into a
+; near .cold one, through cp_kgo / cp_cgo below (fdlg.inc's fdx_go and
+; extmod.inc's exk_go, one image along). Five bytes is what the far call to
+; the shim was, so the sites cost nothing and every shim they replace is four
+; resident bytes back (kernel size pass 13); the price is the device, once,
+; and ~300 cycles a hop on paths that are a click or a page paint.
+%macro CPXK 1
+    call cp_kgo
+    dw %1
+%endmacro
+%macro CPXC 1
+    call cp_cgo
+    dw %1
+%endmacro
+; ...and CPXN, a plain near call to a routine os88ui.inc assembles INTO this
+; image (OS88UI_KGLYPH): tools/os88ovlchk.py files that file as `.cold` on
+; both kernels, so the call is written through %1, which that scan does not
+; read - fdlg.inc's FDX/FDENT idiom
+%macro CPXN 1
+    call %1
+%endmacro
+%macro CPXF 1                   ; ...and the FAR-bodied one (a `retf`): this
+    push cs                     ; image's vid_switch and dock_apply, whose
+    call %1                     ; boot copies drv_boot far-calls (KSW_SECT)
+%endmacro
 section .text
 
 
@@ -202,15 +282,17 @@ section .text
 ; whole life - it is mouse-only, every control on the five static pages being
 ; a radio, a check box or a button - and it is non-zero on kern_big alone,
 ; where SPEC.md 31.9.2 gave a DRIVER's page a typed field (SPEC.md 62.9.15).
+; The callbacks are the RESIDENT `.cold` entries below, NEAR procs there:
+; wm_pkgcall dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
 %ifdef KERN_BIG
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, cp_onkey, cp_onclick
+cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick
 %else                           ; **NO KEYBOARD ON kern_small** (SPEC.md
                                 ; 62.9.15): the one field in the machine that
                                 ; can be typed into is the RAM disk's size, and
                                 ; kern_small has no RAM disk. The word goes
                                 ; back to 0, which is what it was for the whole
                                 ; life of the panel before SPEC.md 31.9.2
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, 0, cp_onclick
+cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, 0, cpf_cp_onclick
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -245,10 +327,10 @@ cp_kinit:
     xor ax, ax
     call COLD_SEG:os88ui_arm_f
 %endif
-    mov ax, cp_onup
+    mov ax, cpf_cp_onup         ; a COLD offset (SPEC.md 2.6.3)
     call wm_onmouseup           ; .text calling .text: apps.inc's kind table
 %ifdef KERN_BIG                 ; is resident and so is this proc
-    mov ax, cp_ondrag
+    mov ax, cpf_cp_ondrag
     call wm_ondrag
 %endif
     pop ax
@@ -260,7 +342,8 @@ cp_sname:   db 'Control', 0     ; KD_NAME: fits the memory view's 7-char
 ; Deferred-repaint flag, drained by ui_task step 3 (SPEC.md 13/31.2). Inline
 ; .text data, not .bss, so it is initialised on disk and needs no cp_init -
 ; the osapi_seed trick from kernel.asm.
-cp_dirty:   db 0                ; 1 = the mode changed, repaint everything
+cp_dirty:   db 0                ; 1 = the mode changed, repaint everything -
+                                ; 0 or 1 ONLY: ui_task tests it with `shr`
 cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
                                 ; a write. Deferred to the panel's teardown
                                 ; (cp_flush_close) rather than taken on the
@@ -284,6 +367,9 @@ cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
                                 ; RECORD of it waits.
                                 ; .text and not .bss, like everything else
                                 ; here: nothing zeroes .bss (-f bin)
+%if cp_wdirty - cp_dirty != 1
+%error "ctrl: cp_repost sets [cp_dirty] and [cp_wdirty] with one word store"
+%endif
 cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
                                 ; wrong disk in A:, 2 = the write failed. Said
                                 ; as a TOAST at the moment it happens (SPEC.md
@@ -291,6 +377,15 @@ cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
                                 ; to be found next session; what is left of
                                 ; its old job is telling cp_flush_close_x
                                 ; whether to keep [cp_wdirty] and retry
+%ifdef OS88_DRIVERS
+cp_fdbsd:   db 0                ; the Reads row changed (SPEC.md 31.14): byte
+                                ; 509 is owed and a Cylinder pick is tested.
+                                ; RESIDENT, beside [cp_wdirty], because it is
+                                ; owed exactly as long as that is: in the
+                                ; module's image a failed save dropped it
+                                ; with the image, and the retry [cp_wdirty]
+                                ; promises wrote SYSTEM.CFG and neither
+%endif
 
 ; The selected item, as a RECORD index into cp_items - never as a position in
 ; the drawn list (SPEC.md 31.10.1). That distinction is what lets a hidden row
@@ -299,11 +394,25 @@ cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
 ; another one is not being shown. Inline .text data for the same reason as the
 ; rest; 0 = Scheduler is the boot selection, so the panel opens on it.
 cp_sel:     db 0
+%ifdef DOCK_OPT
+cp_ltop:    db 0                ; the first LIST ordinal shown (SPEC.md 31.1.5)
+cp_lsel:    db 0FFh             ; ...and the selection the list last showed,
+                                ; so a [cp_sel] set from OUTSIDE the panel
+                                ; (the clock, drv_notice) scrolls into view
+                                ; and a user's own scroll is never undone
+%endif
 cp_dtop:    db 0                ; the FIRST DRIVER ROW SHOWN (SPEC.md 31.1.1).
                                 ; The Drivers pane fits CP_DVIS rows and
                                 ; drv_tab has more, so the list scrolls; this
                                 ; is where the window into it starts. Inline
                                 ; .text data for the same reason [cp_sel] is
+%ifdef OS88_DRIVERS
+cp_dview:   db 0                ; 1 = the Drivers page is showing its PORTS
+                                ; view (SPEC.md 31.15). Back to the list on
+                                ; every page change; across a close it is
+                                ; kept, as [cp_dtop] is - a reset in cp_open_x
+                                ; would be five bytes of .cold for it
+%endif
 
 %ifdef KERN_BIG
 ; --- SPEC.md 13.8.3: the panel acts on the RELEASE ---------------------------
@@ -339,51 +448,32 @@ cp_down:    db 0                ; which control is DRAWN pressed (0 = none).
                                 ; draws the held control held
 %endif
 
-; --- item table: one 8-byte record per panel item (SPEC.md 31.1) ------------
-; The 4th word is reserved (a future page onkey proc) and keeps the stride a
-; power of two, so index -> record is three shl-by-1s and no CL.
-CP_I_NAME   equ 0               ; -> list name, ASCIIZ
+; --- item table: one 6-byte record per panel item (SPEC.md 31.1) ------------
+; The TABLE is in CTRL.DRV's image, below (SPEC.md 31.1, 2.8.6): every reader
+; of it is a module body, so it is read [cs:] and stages its name.
+CP_I_NAME   equ 0               ; -> list name, ASCIIZ, IN THE IMAGE
 CP_I_PAINT  equ 2               ; -> page paint proc (in DI/BP = pane origin)
 CP_I_CLICK  equ 4               ; -> page click proc (in DI/BP, CX/DX = rel)
-CP_ISTRIDE  equ 8
-
-; ANY ROW HERE MAY BE HIDDEN, AND ITS POSITION DOES NOT MATTER (SPEC.md
-; 31.10.1). Display is the one that is - a machine with one adapter has
-; nothing to choose between - and it USED to have to be last, because
-; [cp_sel] and every consumer of it indexed this table by the row's position
-; in the DRAWN LIST. Hiding a row in the middle then renumbered every row
-; below it, which is a second opinion about what the user clicked on at four
-; call sites, so "last" was doing real work and was a real constraint: it had
-; been spent here and by drv_tab's settings bitmap (SPEC.md 51.2.1), and
-; SPEC.md 41.12 nearly spent it a third time.
-;
-; The two spaces are separated now. [cp_sel] and every routine below name a
-; RECORD (an index into this table, stable for the life of the build);
-; cp_list and cp_pick work in VISIBLE ORDINALS, and cp_v2r is the one place
-; that converts. So [cp_hide] can carry a bit for any row, and the order here
-; is free.
-cp_items:
-    dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
-    dw cp_s_time,  cp_time_paint,  cp_time_click,  0
-%ifdef OS88_DRIVERS             ; SPEC.md 51.0: kern_small can load no driver,
-    dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0
-%endif                          ; so the page has nothing to list and is not
-                                ; offered. The BODIES stay compiled - this
-                                ; image is a module on both builds, so gating
-                                ; them would move no resident byte and would
-                                ; put a %ifdef through the Sound page, which
-                                ; stays
-    dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
-    dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0
-%ifdef OS88_THEME
-    dw cp_s_thm,   cp_thm_paint,   cp_thm_click,   0
+%ifdef KERN_BIG
+CP_I_CTLS   equ 6               ; -> the page's CONTROLS painter, cp_ctlgroup's
+CP_ISTRIDE  equ 8               ;    (SPEC.md 31.1.3): kern_big's press states
+%else
+CP_ISTRIDE  equ 6
 %endif
-cp_items_end:
-CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
+
+; CPITEM name, paint, click, controls - one record; the fourth word is only
+; assembled where cp_ctlgroup is (kern_big)
+%macro CPITEM 4
+    dw %1, %2, %3
+%ifdef KERN_BIG
+    dw %4
+%endif
+%endmacro
+
 CP_ITIME  equ 1                 ; the Date/Time item: ui.inc selects it by
                                 ; name when the menu bar clock is clicked
                                 ; (SPEC.md 12.1/31.5)
-; ...and the three below it SHIFT when the Drivers row is not there
+; ...and the ones below it SHIFT when the Drivers row is not there
 ; (SPEC.md 51.0). An index into cp_items is what [cp_sel] holds, so every
 ; number after the gap has to move with it - written out per arm rather than
 ; derived, because deriving it would hide exactly the fact that makes it
@@ -393,18 +483,25 @@ CP_ITIME  equ 1                 ; the Date/Time item: ui.inc selects it by
 CP_IDRV   equ 2                 ; ...and the Drivers item, which drv_notice
                                 ; opens the panel on when a driver did not
                                 ; load at boot (SPEC.md 51.3)
-CP_ISND   equ 3                 ; ...and Sound, the tone tier's route (34.8)
-%ifdef OS88_THEME
-CP_ITHM   equ 5                 ; ...and Theme (SPEC.md 76.4)
-%endif
-CP_IVID   equ 4                 ; ...and Display, the one row that is HIDDEN
+CP_IVID   equ 3                 ; ...and Display, the one row that is HIDDEN
                                 ; on a machine with a single adapter (SPEC.md
                                 ; 39.11.1). vid_probe_avail names it by this
                                 ; rather than by "the last one", which is what
                                 ; frees the order above
+CP_ISND   equ 4                 ; ...and Sound, the tone tier's route (34.8)
+%ifdef OS88_THEME
+CP_ITHM   equ 5                 ; ...and Theme (SPEC.md 76.4)
+%endif
+%ifdef DOCK_OPT
+CP_IDOCK  equ 6                 ; ...and Dock (SPEC.md 31.13)
+%endif
+CP_IFDD   equ 7                 ; ...and Floppy (SPEC.md 31.14), the LAST - the
+                                ; table is in the image, so a host tool that
+                                ; wants the record reads this equate rather
+                                ; than the table (tests/fddpage.py)
 %else
-CP_ISND   equ 2                 ; no Drivers row, so Sound, Display and Theme
-CP_IVID   equ 3                 ; each come up one (SPEC.md 51.0)
+CP_IVID   equ 2                 ; no Drivers row, so Display and Sound each
+CP_ISND   equ 3                 ; come up one (SPEC.md 51.0)
 %ifdef OS88_THEME
 CP_ITHM   equ 4
 %endif
@@ -434,21 +531,28 @@ cp_nst:   db CP_ITEMS
 ; [cp_nst], by the same single writer.
 cp_hide:  db 0
 
-; THE LIST HAS ROOM FOR NINE ROWS AND NO MORE: row i's bar runs
+; THE PANE HAS ROOM FOR NINE ROWS: row i's bar runs
 ; CP_I0Y + i*CP_IROWH .. + CP_IBH - 1, so row 8 ends at 129 inside a content
 ; box 132 tall and row 9 would run through the bottom border onto the
 ; desktop. Six static items plus the THREE drivers that publish a page
 ; (SPEC.md 31.9 - the hard disk's, the debug monitor's and the network link's;
 ; the sound driver publishes none) is exactly nine. The count was two until
-; NET.DRV (docs/NET-PLAN.md), and growing this constant is what the guard
+; NET.DRV (docs/plans/completed/NET-PLAN.md), and growing this constant is what the guard
 ; below is FOR: it is a build-time %error, so the third page could not be
 ; added without the window being made to hold it. CP_ITEMS and not [cp_nst],
 ; because the guard has to hold on the machine that shows every row.
 ;
+%ifdef DOCK_OPT
+; ...AND IT SCROLLS NOW (SPEC.md 31.1.5), which is the answer this guard was
+; always pointing at: the Dock row made the count ten.
+%if CP_LVIS < 1 || CP_LAY + CP_LAH > CP_CH
+%error "ctrl: the item list's arrows do not fit the pane (SPEC.md 31.1.5)"
+%endif
+%else
 ; A FOURTH page does not fit CGA (see CP_CH), so the answer then is a
-; scrolling list rather than another 14 rows of window.
-%if CP_ITEMS + 3 > (CP_CH - CP_I0Y) / CP_IROWH
-%error "ctrl: the item list can overflow its pane - grow CP_CH (SPEC.md 31.1)"
+; scrolling list rather than another 14 rows of window. kern_small has no
+; Dock page (SPEC.md 30.5), so its list still fits unscrolled.
+; The %error is beside cp_items, in the image: CP_ITEMS is known there.
 %endif
 
 ; List names are at most 9 characters (72px): the selection bar ends at
@@ -461,12 +565,62 @@ cp_hide:  db 0
 ; the ground the desktop is laid with. It changes no geometry and claims no
 ; memory, so the only thing a switch owes is a repaint - which is [cp_dirty],
 ; the flag that already means "every window has to be told".
-cp_s_thm:   db 'Theme', 0       ; list name AND the page heading, so RESIDENT
-                                ; (SPEC.md 31.9). The page's own strings are
-                                ; in the image, at cp_modstr below
+; The page's name - its list row and its heading - and its own strings are
+; in the image, at cp_modstr below (SPEC.md 31.9)
 %endif
 
-cp_s_sched: db 'Scheduler', 0   ; list name AND the page heading, so RESIDENT
+%ifdef OS88_DRIVERS
+; --- Floppy page (SPEC.md 31.14), PANE-relative ------------------------------
+; Five rows of one shape - a label, then a drop-down box - at a pitch of 18:
+; the four units a machine can claim (SPEC.md 18.98), then the read bound.
+; The box is the kernel's own popup menu (menu_popup) hung under a frame, so
+; the page owns no list, no bank and no tracker: all of that is resident
+; already, and the drop-down is 0 resident bytes.
+CPF_R0Y   equ 20                ; row 0's box top
+CPF_ROWH  equ 18                ; ...and the pitch
+CPF_BH    equ 14                ; box height: an 8px caption, 3px each side
+CPF_LX    equ CP_PMX + 2        ; label x
+CPF_BX1   equ 76                ; box left: 'Drive A:' is 64px from 4
+CPF_BX2   equ CPF_BX1 + 87      ; ...and right. 8 characters plus the arrow
+CPF_CAPY  equ CPF_R0Y + 5*CPF_ROWH + 4  ; 114: the caption
+
+; --- the Drivers page's Ports VIEW (SPEC.md 31.15), PANE-relative -----------
+; The button that swaps to it sits on the heading row, right of 'Drivers' and
+; above the first driver row's band at CP_DBY1 = 20. Then two rows of one
+; shape - a label, a value box, and the list's own two arrow cells to step it.
+CPD_PBX1  equ 148               ; the Ports / Back button
+CPD_PBX2  equ CPD_PBX1 + 47
+CPD_PBY1  equ 2
+CPD_PBY2  equ CPD_PBY1 + 15
+CP_DIDPORT equ DRV_MAX + 3      ; ...and its control id, above the arrows'
+                                ; (SPEC.md 13.8.3: ids are per page)
+CPP_R0Y   equ 24                ; row 0's box top, clear of the button
+CPP_ROWH  equ 24                ; ...and the pitch
+CPP_BH    equ CP_DSAH           ; box height = an arrow cell's, so they line up
+CPP_LX    equ CP_PMX + 2        ; label x
+CPP_BX1   equ 112               ; the value box: 'Network card:' is 104px
+CPP_BX2   equ CPP_BX1 + 43      ; from 4. Four cells and 6px of air each side
+CPP_AX1   equ CPP_BX2 + 4       ; the up cell...
+CPP_AX2   equ CPP_AX1 + CP_DSW + 2  ; ...and the down cell
+CPP_CAPY  equ CPP_R0Y + 2*CPP_ROWH + 6  ; 74: the two caption lines
+%endif
+%ifdef DOCK_OPT
+; --- Dock page (SPEC.md 31.13), PANE-relative --------------------------------
+; The Theme page's pitch and shape: a radio group, then a check box, then one
+; caption line. On BOTH builds - the strip moves and hides on kern_small too,
+; it only forgets at a reboot there, SYSTEM.CFG not being read (SPEC.md 51.0).
+CPK_ROWH  equ 16
+CPK_R0Y   equ 18                ; Bottom glyph top
+CPK_R1Y   equ CPK_R0Y + CPK_ROWH        ; 34: Left
+CPK_R2Y   equ CPK_R1Y + CPK_ROWH        ; 50: Right
+CPK_AY    equ 74                ; Auto-hide check box glyph top
+CPK_B0Y1  equ CPK_R0Y - 4               ; 14: the group's first band top
+CPK_B0Y2  equ CPK_R0Y + CP_GW + 1       ; 31
+CPK_B1Y2  equ CPK_R1Y + CP_GW + 1       ; 47
+CPK_B2Y2  equ CPK_R2Y + CP_GW + 1       ; 63
+CPK_AY1   equ CPK_AY - 4                ; 70: the check box's band - and the
+CPK_AY2   equ CPK_AY + CP_GW + 3        ; 89  gap above it is dead (76.4's rule)
+%endif
 
 ; --- Display page (SPEC.md 31.10/39.11) --------------------------------------
 ; One radio row per adapter the machine actually HAS, and a button that moves
@@ -478,10 +632,9 @@ cp_s_sched: db 'Scheduler', 0   ; list name AND the page heading, so RESIDENT
 ; The names are indexed by VID_* and so is everything else on this page - the
 ; kernel's own enum is the row order, which is what keeps the label, the dot,
 ; the click and vid_switch from ever disagreeing about which row is which.
-cp_s_vid:   db 'Display', 0     ; list name AND the page heading, so RESIDENT
 
 %ifdef KERN_BIG
-; The DESKTOP line (SPEC.md 31.10.2): one row of three radios under the button.
+; The DESKTOP line (SPEC.md 31.1.4): one row of three radios under the button.
 ; ONE choice and not two controls - a single display has no layout, so a
 ; checkbox plus a direction would carry a fourth state that means nothing.
 ;
@@ -505,7 +658,7 @@ cp_s_vid:   db 'Display', 0     ; list name AND the page heading, so RESIDENT
 
 ; Display page geometry, PANE-relative. The Sound page's tighter 16px row
 ; pitch rather than the two-row pages' 20, because three adapter rows, a
-; button, SPEC.md 31.10.2's desktop row and its label and a caption all have
+; button, SPEC.md 31.1.4's desktop row and its label and a caption all have
 ; to fit CP_CH - and the %if guards below are what say so rather than a
 ; comment claiming it. Of 132 rows: adapters at 20/36/52, button 72..89,
 ; desktop label 94..101, desktop row 106..117, caption 122..129.
@@ -522,7 +675,7 @@ CPV_MLY   equ 94                ; SPEC.md 31.10.3's label for the desktop row.
                                 ; CPV_MB1 starts below it, so a press here
                                 ; falls through rather than picking a radio
                                 ; out of an x that means nothing
-CPV_MY    equ 106               ; SPEC.md 31.10.2's desktop row: glyph top
+CPV_MY    equ 106               ; SPEC.md 31.1.4's desktop row: glyph top
 CPV_MSTEP equ 74                ; ...and its radio pitch, so the hit test is
                                 ; one divide like the adapter rows'. Glyphs at
                                 ; 4/78/152, labels at 22/96/170, and the last
@@ -531,7 +684,7 @@ CPV_CAPY  equ 122               ; caption row, LAST as it is on every page -
                                 ; which is why the label went above it rather
                                 ; than below (the caption was 96, then 112)
 %if CPV_CAPY + 8 > CP_CH
-%error "ctrl: the Display page's caption runs past the pane (SPEC.md 31.10.2)"
+%error "ctrl: the Display page's caption runs past the pane (SPEC.md 31.1.4)"
 %endif
 %if CPV_MLY + 8 > CPV_MY
 %error "ctrl: the Display page's desktop label runs into its radios (31.10.3)"
@@ -564,16 +717,27 @@ CPV_MB2   equ CPV_MY + CP_GW + 3
 %if CPV_MB1 > CPV_MY
 %error "ctrl: the Display page's desktop band starts below its own glyphs"
 %endif
+%ifdef KERN_BIG
+; SPEC.md 31.10.4's Force Color box, on the Set Primary button's own row and
+; to its right: the page has no row left for it on a VGA beside a Hercules.
+; Its band is the button's y range from CPV_FCB rightward, so the four columns
+; between the two are nothing.
+CPV_FCX   equ CPV_BTNX + CPV_BTNW + 8       ; 110: glyph left
+CPV_FCY   equ CPV_BTNY + (CPV_BTNH - CP_GW) / 2 ; 75: glyph top, centred
+CPV_FCB   equ CPV_FCX - 4                   ; 106: the band's left edge
+CPV_FCLX  equ CPV_FCX + 18                  ; 128: label left, CP_PLX's gap
+%if CPV_FCLX + 11*8 - 1 > CP_PRGT
+%error "ctrl: 'Force Color' runs past the Display page's pane (SPEC.md 31.10.4)"
+%endif
+%endif
 
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
-cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
 
 ; --- Drivers page (SPEC.md 31.6/51) ------------------------------------------
 ; One row per drv_tab row: a checkbox, the driver's name, and - in the caption
 ; - what the last load attempt actually answered. The click loads or unloads
 ; ON THE SPOT and then writes SYSTEM.CFG, so the box is never a promise about
 ; the next boot: what it shows is what is running right now.
-cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
 ; Both 27 characters, which is the pane's limit: 222px of pane less CP_PMX,
 ; and font_str clips to the SCREEN and not to the pane (SPEC.md 5). The one
 ; string these replace was THIRTY, and painted through the window's right
@@ -597,23 +761,20 @@ cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
 ; user has been working off it - and what it is not is the SYSTEM disk
 ; (drv_cfg_save asks dskw_stat for KERNEL.SYS, SPEC.md 51.5.1). `need disk`
 ; reads as an empty drive and sends the reader to look at the light.
-cp_s_dsok:  db 'Settings Saved', 0
 cp_s_dsdsk: db 'Not Saved: No Sys in '
 cp_s_dsdrv: db 'A:', 0          ; the letter, stamped (SPEC.md 52.10.3): the
                                 ; system volume is not A: on a machine booted
                                 ; from a hard disk, and a message that names
                                 ; the wrong drive is worse than one that names
                                 ; none. This is the only string in the kernel
-                                ; that needs it, and dsk_ltrtab's third entry
-                                ; exists for it
-cp_s_dserr: db 'Not saved: disk error', 0
-; Indexed by [cp_dsave] + 1, so slot 0 keeps toast_say's "nothing to say" and
-; SUCCESS gets a message of its own - a save is a thing the user asked for and
-; waited seconds of floppy for, so silence is the wrong report. It only fires
-; when [cp_wdirty] was set, because that is what cp_flush_close_x gates on:
-; closing a panel nobody changed says nothing.
-cp_savetab: dw 0, cp_s_dsok, cp_s_dsdsk, cp_s_dserr
-CP_NSAVE  equ 4
+                                ; that needs it, and dsk_bootltr's second
+                                ; store exists for it
+; ...and the other two verdicts, `Settings Saved` and `Not saved: disk error`,
+; are CTRL.DRV's own lines beside cp_flush_x, which is the only thing that
+; says any of the three. SUCCESS gets a message of its own - a save is a thing
+; the user asked for and waited seconds of floppy for, so silence is the wrong
+; report. It only fires when [cp_wdirty] was set, because that is what
+; cp_flush_close_x gates on: closing a panel nobody changed says nothing.
 
 ; ...and the other end of the same conversation (SPEC.md 2.8.4): the panel's
 ; own code is a file on the system disk now, so OPENING it can fail for the
@@ -647,9 +808,6 @@ CP_NOPEN  equ 2
 ; a Sound Blaster read 'Sound Blaster' with the DSP tier up and 'AdLib' with it
 ; down - the label moved as the setting moved, so the one control on the page
 ; could not be read as a choice between two things.
-cp_s_snd:   db 'Sound', 0       ; list name AND the page heading, so RESIDENT
-cp_s_gone:  db 0                ; the empty string: what a vanished driver's
-                                ; list row letters as (cp_item_name's guard)
 
 ; Date/Time geometry, PANE-relative: the date row above the time row, the
 ; +/- buttons in their own column to the right of both, and the clock's two
@@ -675,22 +833,8 @@ CPT_OB0Y1 equ CPT_O0Y - 4                   ; 64: row 0 top
 CPT_OB0Y2 equ CPT_O1Y - 3                   ; 81: row 0 bottom = row 1 top-1
 CPT_OB1Y2 equ CPT_O1Y + CP_GW + 3           ; 99: row 1 bottom
 
-; The editable fields, {x, w, y, pad} - stride 4, so index -> record is two
-; shl-by-1s. The INDEX IS the field number clk_fld_str/clk_fld_adj take
-; (SPEC.md 37), which is what keeps this page free of any knowledge of what
-; a month or an hour actually is. The LAST entry exists only in 12-hour
-; mode: the active count is 6 + [clk_h12], and both the draw loop and the
-; hit test take their bound from it.
-cp_tflds:
-    db CPT_FX,    CPT_MONW, CPT_DY, 0       ; 0 month  'Mmm'
-    db CPT_FX+32, CPT_NUMW, CPT_DY, 0       ; 1 day    'DD'
-    db CPT_FX+56, CPT_YRW,  CPT_DY, 0       ; 2 year   'YYYY'
-    db CPT_FX,    CPT_NUMW, CPT_TY, 0       ; 3 hour   'HH'
-    db CPT_FX+24, CPT_NUMW, CPT_TY, 0       ; 4 minute 'MM'
-    db CPT_FX+48, CPT_NUMW, CPT_TY, 0       ; 5 second 'SS'
-    db CPT_FX+72, CPT_NUMW, CPT_TY, 0       ; 6 AM/PM  - 12-hour mode only
-cp_tflds_end:
-CPT_NFLD  equ (cp_tflds_end - cp_tflds) / 4
+; The editable fields' table, cp_tflds, is in the image beside its two
+; readers (cp_time_fld, cp_time_pick) - kernel size pass 8.
 
 cp_tsel:  db 0                  ; selected field; initialised .text data like
                                 ; cp_sel, so the panel stays boot-clean
@@ -701,11 +845,11 @@ cp_tsel:  db 0                  ; selected field; initialised .text data like
 ; full draw - so an incremental pass draws seven opaque runs and NOTHING else.
 ; A byte rather than a register because cp_time_fld's AL and AH are already
 ; the field index and the field count.
-; The page list row's PAPER (SPEC.md 31.11). The ink is [gfx_color] like every
-; other label here, but this is the one surface whose ground is not the pane -
-; a selected row is white on a black bar - so the run's other half is decided
-; at the same branch that decides the pen and read back at the draw.
-cp_ipap:  db CWHITE
+; cp_list has JUST laid the whole pane's ground, so an unselected row's bar
+; rect is already white and cp_listrow may skip its fill (SPEC.md 31.1.4).
+; Set around cp_list's row loop and nowhere else: a selection that MOVES calls
+; cp_listrow on its own, where the fill is the one write that takes a bar off.
+cp_lfull: db 0
 
 ; Which ONE control cp_ctlpaint is redrawing, and whether the next control emit
 ; is it (SPEC.md 31.1.3). [cp_only] = 0 means "all of them", which is what every
@@ -714,12 +858,12 @@ cp_ipap:  db CWHITE
 ; pressed look at all (cp_vid_rows') cannot inherit a stale one.
 cp_only:  db 0
 cp_skip:  db 0
+%if cp_skip - cp_only != 1
+%error "ctrl: cp_skip must follow cp_only - one word store clears both"
+%endif
+CPT_FBOX  equ 2                 ; [cp_tfull]'s third value: draw MY OWN box,
+                                ; whichever way round it goes (SPEC.md 31.5.3)
 cp_tfull: db 0
-cp_tpair: dw 0                  ; ...and the field's (ink, bg), decided where
-                                ; the selection is known and read where the
-                                ; run is drawn
-cp_tendp: dw 0                  ; cp_time_pick scratch: one past the last
-                                ; ACTIVE field record
 
 ; The Display page's PENDING adapter - which row the dot is on, not which
 ; adapter is running (that is [vid_kind], read live like every other page
@@ -760,7 +904,7 @@ CPS_B0Y2  equ CPS_R0Y + CP_GW - 1       ; 31: row 0 bottom = row 1 top - 1
 CPS_B1Y2  equ CPS_R1Y + CP_GW - 1       ; 47: route row 1 bottom
 CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 ; =============================================================================
-; The module image (SPEC.md 2.8, docs/ONDEMAND-PLAN.md 2)
+; The module image (SPEC.md 2.8, docs/plans/completed/ONDEMAND-PLAN.md 2)
 ;
 ; Everything above this line is DATA, in ordinary .text in the kernel's own
 ; segment, and it STAYS THERE - a module moves code and never data, which is
@@ -778,7 +922,7 @@ CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 ; to the system disk when it CLOSES (SPEC.md 31.8/51.5.1), so every session
 ; that changes anything already requires that disk to be reachable. Loading
 ; the image asks for nothing the feature did not already ask for. That is the
-; whole test (docs/ONDEMAND-PLAN.md 1) and it is about the user rather than
+; whole test (docs/plans/completed/ONDEMAND-PLAN.md 1) and it is about the user rather than
 ; about the code.
 ;
 ; TWO ROUTINES DO NOT GO, and both would otherwise force a load at a moment
@@ -795,30 +939,46 @@ CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 ; instructions rather than far-calling across the boundary for them.
 ; =============================================================================
 ; The entry indices, which are the image's ABI with its own thunks. They are
-; here rather than beside those thunks because the header below is built with
-; `times MOD_NENT - CP_NENT`, and TIMES wants a constant it has already seen.
-CPE_PAINT   equ 0
-CPE_ONCLICK equ 1
-CPE_FLUSH   equ 2
-CPE_TICK    equ 3
-CPE_ONUP    equ 4               ; SPEC.md 13.8.3's two edges. The RELEASE is on
+; here rather than beside those thunks because kernel.asm sizes CPFP's slot
+; block from CP_NENT, and RESB wants a constant it has already seen.
+%ifdef OS88_SHORTCUTS
+CPE_SC      equ 0               ; THE SETTINGS CORE'S ONE ENTRY, and FIRST, so
+CPE_B       equ 1               ; MOD_SETS's one-slot block arms exactly it off
+%else                           ; a header it shares with MOD_CTRL (SPEC.md
+CPE_B       equ 0               ; 2.8.7): mod_check arms the first CX entries
+%endif
+CPE_PAINT   equ CPE_B + 0
+CPE_ONCLICK equ CPE_B + 1
+CPE_FLUSH   equ CPE_B + 2
+CPE_TICK    equ CPE_B + 3
+CPE_ONUP    equ CPE_B + 4       ; SPEC.md 13.8.3's two edges. The RELEASE is on
 %ifdef KERN_BIG                 ; both kernels - a driver's page acts on it
-CPE_ONDRAG  equ 5               ; (SPEC.md 13.8.4) - and the drag is kern_big's
-CP_NENT     equ 6               ; alone, so CP_NENT differs between the builds.
-%else                           ; Which is safe because MOD_H_NENT is IN the
-CP_NENT     equ 5               ; header and mod_check compares it against the
-%endif                          ; file it just read, so a CTRL.DRV with the
-                                ; wrong count is refused rather than
-                                ; dispatched into
-CPFP        equ mod_fp + MOD_CTRL * MODFP_STRIDE
+CPE_ONDRAG  equ CPE_B + 5       ; (SPEC.md 13.8.4) - and the drag and the KEY
+CPE_ONKEY   equ CPE_B + 6       ; (SPEC.md 31.9.2) are kern_big's alone, so
+%ifdef DOCK_OPT                 ; CP_NENT differs between the builds. Which is
+CPE_DOCK_GEOM equ CPE_B + 7     ; safe because MOD_H_NENT is IN the header and
+CP_NENT     equ CPE_B + 9       ; mod_check compares it against the file it
+%else                           ; just read, so a CTRL.DRV with the wrong count
+CP_NENT     equ CPE_B + 8       ; is refused rather than dispatched into - and
+%endif                          ; MOD_H_STAMP rejects one from another build
+%else
+%ifdef DOCK_OPT
+CPE_DOCK_GEOM equ CPE_B + 5
+CP_NENT     equ CPE_B + 7
+%else
+CP_NENT     equ CPE_B + 6
+%endif
+%endif
+
+CPE_SHUTDOWN equ CP_NENT - 1
 
 section .modc                   ; the on-demand image starts HERE, at its own
                                 ; offset 0, so the header below is the first
                                 ; thing in the file
 modc_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
-    db MOD_VER                  ; MOD_H_VER - 5, so ld_check_hdr (3) and
-                                ; drv_check (4) both refuse this file
+    db MOD_VER                  ; MOD_H_VER - 5, so ld_check_hdr (8) and
+                                ; drv_check (9) both refuse this file
     db MOD_CTRL                 ; MOD_H_ID
     dw BUILD_NUM                ; MOD_H_BUILD (SPEC.md 2.8.2): refuses a
                                 ; CTRL.DRV from another COMMIT...
@@ -829,6 +989,9 @@ modc_hdr:
     dw modc_end                 ; MOD_H_IMG - vstart is 0, so the end label IS
                                 ; the size
     dw CP_NENT                  ; MOD_H_NENT
+%ifdef OS88_SHORTCUTS
+    dw modc_e_sc                ; CPE_SC - the core's, so FIRST (SPEC.md 2.8.7)
+%endif
     dw modc_e_paint             ; CPE_PAINT
     dw modc_e_onclick           ; CPE_ONCLICK
     dw modc_e_flush             ; CPE_FLUSH
@@ -836,11 +999,15 @@ modc_hdr:
     dw modc_e_onup              ; CPE_ONUP
 %ifdef KERN_BIG
     dw modc_e_ondrag            ; CPE_ONDRAG
+    dw modc_e_onkey             ; CPE_ONKEY
 %endif
-    times MOD_NENT - CP_NENT dw 0   ; the table is a FIXED MOD_NENT words, so
-                                ; MOD_HDR_SZ is a constant and mod_check can
-                                ; refuse an entry offset that points into the
-                                ; header itself
+%ifdef DOCK_OPT
+    dw modc_e_dock_geom         ; CPE_DOCK_GEOM: Dock and Display settings
+%endif
+    dw modc_e_shutdown          ; CPE_SHUTDOWN: confirmation and terminal splash
+section .modu                   ; ...and the PANEL from here on: the stubs below
+                                ; name the UI's bodies, so they are UI too.
+                                ; Only the header has to be at offset 0
 
 ; --- the far entries, which are the WHOLE reason this is not a body pointer --
 ; A module's entries are reached by `call far [mod_fp + K]`, so they have to
@@ -855,21 +1022,70 @@ modc_hdr:
 ; marched forward through whatever the image had after it - which reached the
 ; panel's own drawing code and painted a Control Panel, with no window, over
 ; the desktop, once a minute. Nothing errored and nothing hung.
-modc_e_paint:   call cp_paint_x
-            retf
-modc_e_onclick: call cp_onclick_x
-            retf
-modc_e_flush:   call cp_flush_close_x
-            retf
-modc_e_tick:    call cp_tick_x
-            retf
-modc_e_onup:    call cp_onup_x
-            retf
+%include "shutdown.inc"
+
+modc_e_flush:   call cp_flush_close_x   ; ...a stub still, because shutdown
+            retf                        ; calls the body NEAR as well
+;
+; THE OTHER FIVE ARE THE BODIES, entered far and leaving by kretf_bp - the
+; KENT frame's own ladder with the `retf` this needs (SPEC.md 2.6.1: the body
+; owns the far return and the thunk in the middle is deleted). Each of them
+; has exactly one caller, its header slot, and opens with kentm_bp, so the
+; whole difference from the stub was the four bytes of `call` + `retf`
+; (CTRL.DRV size pass 1). A near `ret` in one of them is the failure above.
+
+kretf_bp:         pop bp
+                  pop di
+                  pop si
+                  pop dx
+                  pop cx
+                  pop bx
+                  pop ax
+                  retf
 %ifdef KERN_BIG
-modc_e_ondrag:  call cp_ondrag_x
-            retf
+
+; -----------------------------------------------------------------------------
+; modc_e_onkey - CPE_ONKEY: the Control Panel's W_ONKEY (SPEC.md 31.9.2)
+; in:  AL = ASCII, AH = scan code, SI = the window; the gfx lock is HELD
+; out: nothing; every register preserved
+;
+; **THE PANEL HAD NO KEYBOARD AT ALL** until this: `cp_tpl`'s onkey word was 0,
+; which is why the hard disk's geometry is typed with `-` and `+`. Everything
+; on the five static pages is a radio, a check box or a button and has nothing
+; to do with a key, so what this exists for is a DRIVER's page with a typed
+; field in it - the RAM disk's size is the first - and it forwards to exactly
+; that, or drops the key.
+;
+; **IT IS IN THE IMAGE, and it was resident for a reason that has gone.** When
+; it was written a fifth entry meant a fifth far-pointer slot for EVERY module,
+; in `.bss` every machine carries, and forty resident bytes was the cheaper of
+; the two. SPEC.md 2.8.1's per-module slot blocks retired that cap: an entry
+; now costs this module's own four bytes, so the body came in beside
+; cp_item_click and what stays resident is cpf_cp_onkey's five - a far call and
+; a `ret`. It asks cp_drv_item the record-space question rather than carrying
+; its own copy of it, which only a body OUTSIDE the image had to.
+;
+; An unclaimed key is DROPPED and not beeped at: a Control Panel is not a text
+; window, and every key that reaches it while a button page is showing would
+; otherwise be an error the user did not make.
+; -----------------------------------------------------------------------------
+modc_e_onkey:
+    call kentm_bp                ; KENT: push ax..bp
+    xchg dx, ax                 ; DX = the KEY: cp_drv_ev hands DX to the page
+    mov ax, DSV_CPKEY           ; in BX, which is where 31.9.2 wants it - and
+    call cp_drv_ev              ; NOT in AX, which is the dispatcher's CLASS.
+                                ; A static page, a page that went away or one
+                                ; that takes no keys: the key is dropped
+.out:
+    jmp kretf_bp
 %endif
 
+%ifdef DOCK_OPT
+modc_e_dock_geom: call cpd_geom
+    retf
+DOCK_GEOM cpd
+
+%endif
 section .cold                   ; ...and the two that stay resident
 
 ; -----------------------------------------------------------------------------
@@ -884,91 +1100,22 @@ cp_tick_due_x:
     push ax
     push bx
     push di
-    cmp byte [cp_sel], CP_ITIME
-    jne .no
+    mov al, [cp_sel]
+    xor al, CP_ITIME            ; ...and `xor` leaves CF = 0, so every "no"
+    jnz .out                    ; below can go straight to .out
     mov al, KIND_CTRL
     call KERNEL_SEG:cw_inst_find_kind         ; CF = 1: no live Control Panel
-    jc .no
+    cmc
+    jnc .out
     mov bx, [di+I_WIN]
-    test byte [bx+W_FLAGS], 2   ; visible?
-    jz .no
+    test byte [bx+W_FLAGS], 2   ; visible? (`test` clears CF too)
+    jz .out
     stc
-    jmp .out
-.no:
-    clc
 .out:
     pop di
     pop bx
     pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; cp_onkey - W_ONKEY for the Control Panel (SPEC.md 31.9.2)
-; in:  AL = ASCII, AH = scan code, SI = the window; the gfx lock is HELD
-; out: nothing
-;
-; **THE PANEL HAD NO KEYBOARD AT ALL** until this: `cp_tpl`'s onkey word was 0,
-; which is why the hard disk's geometry is typed with `-` and `+`. Everything
-; on the five static pages is a radio, a check box or a button and has nothing
-; to do with a key, so what this exists for is a DRIVER's page with a typed
-; field in it - the RAM disk's size is the first - and it forwards to exactly
-; that, or drops the key.
-;
-; **IT IS RESIDENT, and that is a size decision rather than a taste.** The
-; obvious home is the on-demand module beside cp_item_click, and `MOD_NENT` is
-; FOUR far-pointer slots per module with all four spent (paint, click, flush,
-; tick); a fifth doubles the table to eight, for every module, in `.bss` that
-; every machine carries. Forty resident bytes here is the cheaper of the two,
-; and cp_drv_gone_x is the same trade already taken - it carries its own copy
-; of cp_drv_item's record-space test for exactly this reason, and so does this.
-;
-; An unclaimed key is DROPPED and not beeped at: a Control Panel is not a text
-; window, and every key that reaches it while a button page is showing would
-; otherwise be an error the user did not make.
-; -----------------------------------------------------------------------------
-%ifdef KERN_BIG
-cp_onkey_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov bl, al                  ; the KEY, banked: every test below answers in
-    mov bh, ah                  ; AL and the page wants both halves back
-    mov al, [cp_sel]
-    cmp al, CP_ITEMS            ; RECORD space (SPEC.md 31.10.1), so the
-    jb .out                     ; boundary is the table's LENGTH - a static
-    sub al, CP_ITEMS            ; page has nothing to type into
-    call drv_cp_class_x         ; AL = its class; CF = 1 = it went away.
-                                ; NEAR: this body is .cold and so are all three
-                                ; of these (driver.inc:1028, :1613, :2058), so
-                                ; CS is already right and the drvf_* thunk's
-                                ; own `retf` is one nobody wanted. It is the
-                                ; same call cp_drv_gone_x makes seven lines
-                                ; below. The thunks STAY - the .modc sites
-                                ; (ctrl.inc:1573 and five more) still need them
-    jc .out
-    push ax
-    call drv_cls_svc_x          ; DI = that class's copied table
-    pop ax
-    jc .out
-    mov bp, [di+DSV_CPKEY]
-    or bp, bp
-    jz .out                     ; ...or a driver page that takes no keys
-    call drv_cp_call_x          ; BX IS THE KEY AND AL IS STILL THE CLASS.
-                                ; This dispatcher takes the class in AL
-                                ; (SPEC.md 31.9) - which is exactly why the
-                                ; key was banked into BX at the top and why
-                                ; `pop ax` above puts the class back rather
-                                ; than being tidiness. Handing the key over in
-                                ; AX assembles, boots, and delivers the CLASS
-                                ; to the page as a keystroke
-.out:
-    jmp kretc_bp
-%endif
-
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_gone_x - a driver's page is on screen no longer (SPEC.md 31.9)
@@ -990,6 +1137,7 @@ cp_onkey_x:
 ; is a thunk; module -> kernel is a cw_* shim; resident -> module for a
 ; five-instruction predicate is neither).
 ; -----------------------------------------------------------------------------
+%ifdef OS88_DRIVERS             ; (its one caller, drv_release, is)
 cp_drv_gone_x:
     push ax
     mov al, [cp_sel]
@@ -1003,8 +1151,9 @@ cp_drv_gone_x:
 .out:
     pop ax
     ret
+%endif
 
-section .modc                   ; ...and back to the image
+section .modu                   ; ...and back to the panel's image
 
 ; -----------------------------------------------------------------------------
 ; cp_paint_x - W_PAINT for the Control Panel window (far body of cp_paint_x)
@@ -1017,32 +1166,18 @@ section .modc                   ; ...and back to the image
 ; derived from the live window rect, never a screen constant - and every
 ; helper below takes it in the same pair.
 ; -----------------------------------------------------------------------------
+modc_e_paint:                   ; CPE_PAINT, entered FAR (see kretf_bp)
 cp_paint_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentm_bp                ; KENT: push ax..bp
 
     mov bx, si                  ; wm_content takes the window in BX
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
-    mov di, ax                  ; DI = content left \ the panel's origin
-    mov bp, dx                  ; BP = content top  /
+    call cp_origin              ; DI = content left, BP = content top
 
     call cp_list                ; left pane
     call cp_divider             ; the rule between them
     call cp_page                ; right pane: the selected item's page
 
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretf_bp
 
 ; -----------------------------------------------------------------------------
 ; cp_onclick_x - W_ONCLICK for the Control Panel window (far body)
@@ -1063,34 +1198,53 @@ cp_paint_x:
 ; wm_paint_all here (that would deadlock or recurse) - a page that needs
 ; other windows repainted posts a deferred flag instead (SPEC.md 31.2).
 ; -----------------------------------------------------------------------------
+modc_e_onclick:                 ; CPE_ONCLICK, entered FAR (see kretf_bp)
 cp_onclick_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentm_bp                ; KENT: push ax..bp
 
-    mov bx, si                  ; wm_content takes the window in BX
-    mov si, dx                  ; SI = click y; the window ptr is done with
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
-    mov di, ax                  ; DI = content left \ same origin pair as
-    mov bp, dx                  ; BP = content top  / cp_paint_x's
-    sub cx, di                  ; CX = content-relative click x
-    mov dx, si
-    sub dx, bp                  ; DX = content-relative click y
+    call cp_crel                ; DI/BP = the origin, CX/DX content-relative
 
     cmp cx, CP_DIVX
     jge .page
 
-    call cp_pick                ; --- left pane: which row? ---
+%ifdef DOCK_OPT
+    call cp_lscroll             ; --- left pane: the list's arrows? (31.1.5)
+    jc .done
+%endif
+    call cp_pick                ; ...which row? ---
     jc .done                    ; below the last row: nothing
+    mov ah, al                  ; AH = the ORDINAL, banked: cp_v2r clobbers AL
     call cp_v2r                 ; ...and which RECORD that row names
     cmp al, [cp_sel]
     je .done                    ; already showing: change nothing
-    mov [cp_sel], al
-    call cp_list                ; move the bar...
+
+    ; --- THE BAR MOVES AND THE PANE DOES NOT (SPEC.md 31.1.4) --------------
+    ; cp_list used to be the redraw path here, and it erases the whole left
+    ; pane: moving one highlight blanked every row on it and re-lettered them
+    ; all, on every click, which is SPEC.md 13.14.6 rule 1 exactly. Two rows
+    ; change, so two rows are drawn - and cp_listrow draws an unselected bar
+    ; in the GROUND, so the row that loses the highlight clears it by drawing
+    ; its replacement rather than by being blanked.
+    ;
+    ; [cp_sel] MOVES FIRST and both rows are drawn after it, because
+    ; cp_listrow reads [cp_sel] itself to decide which way round a row goes.
+    ; cp_r2v does not read it, so the old record's ordinal comes out the same
+    ; either side of the move.
+    push ax                     ; AL = the new record, AH = the new ordinal
+%ifdef DOCK_OPT
+    mov [cp_lsel], al           ; ...chosen ON the list, so already in view
+%endif
+%ifdef OS88_DRIVERS
+    mov byte [cp_dview], 0      ; another page: the Drivers page comes back
+%endif                          ; as its list (SPEC.md 31.15)
+    xchg al, [cp_sel]           ; AL = the record the bar is LEAVING
+    call cp_r2v                 ; ...and its ordinal - CF = 1 hidden and so on
+    jc .newbar                  ; no row: cannot happen while [cp_sel] is what
+    call cp_listrow             ; is SHOWN. The row that loses the bar...
+.newbar:
+    pop ax
+    mov al, ah
+    call cp_listrow             ; ...and the one that gains it
     call cp_page                ; ...and swap the page under it
     jmp .done
 
@@ -1113,21 +1267,12 @@ cp_onclick_x:
     call cp_setdown             ; ...and the pressed look
     jmp short .done
 .drvpress:
-    mov al, [cp_sel]
     call cp_item_click          ; its own arm, its own down state, its own
 %else                           ; release (DSV_CPUP)
-    mov al, [cp_sel]
     call cp_item_click          ; kern_small acts on the press, which is what
 %endif                          ; it did before and all it can afford
 .done:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretf_bp
 
 ; -----------------------------------------------------------------------------
 ; cp_onup_x - W_ONMOUSEUP (SPEC.md 13.7/13.8.3): a panel control fires HERE
@@ -1151,20 +1296,15 @@ cp_onclick_x:
 ; What kern_small does not get is the kernel's own arm, probe and pressed
 ; look - that half is the drag's company inside the guard below.
 ; -----------------------------------------------------------------------------
+modc_e_onup:                    ; CPE_ONUP, entered FAR (see kretf_bp)
 cp_onup_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentm_bp                ; KENT: push ax..bp
     call cp_pt                  ; DI/BP = pane origin, CX/DX = pane-relative
     mov ax, DSV_CPUP            ; SPEC.md 13.8.4: a driver page owns its own
     call cp_drv_ev              ; gesture, so the probe below must not run
 %ifdef KERN_BIG
     jnc .done
-    call COLD_SEG:os88ui_fire_f ; AX = what the press armed, and it is CLEARED
+    CPXC os88ui_fire             ; AX = what the press armed, and it is CLEARED
     or ax, ax
     jz .done
     mov bx, ax                  ; BL = the armed control
@@ -1179,14 +1319,7 @@ cp_onup_x:
     call cp_pgact               ; ...and only now does anything happen
 %endif
 .done:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretf_bp
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -1200,19 +1333,14 @@ cp_onup_x:
 ; pixels - which is what makes an edge that arrives per mouse packet
 ; affordable at all.
 ; -----------------------------------------------------------------------------
+modc_e_ondrag:                  ; CPE_ONDRAG, entered FAR (see kretf_bp)
 cp_ondrag_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentm_bp                ; KENT: push ax..bp
     call cp_pt
     mov ax, DSV_CPDRAG          ; SPEC.md 13.8.4, and cp_onup_x's reasoning
     call cp_drv_ev
     jnc .ddone
-    call COLD_SEG:os88ui_armed_f
+    CPXC os88ui_armed
     or ax, ax
     jz .ddone
     mov bx, ax
@@ -1224,14 +1352,7 @@ cp_ondrag_x:
 .dset:
     call cp_setdown             ; ...which draws only if that CHANGED
 .ddone:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretf_bp
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -1244,17 +1365,31 @@ cp_ondrag_x:
 ; -----------------------------------------------------------------------------
 cp_pt:
     push si
-    mov bx, si                  ; wm_content takes the window in BX
-    mov si, dx                  ; SI = click y
-    call KERNEL_SEG:cw_wm_content ; AX = content left, DX = content top
-    mov di, ax
-    mov bp, dx
-    sub cx, di                  ; CX = content-relative x
-    mov dx, si
-    sub dx, bp                  ; DX = content-relative y
+    call cp_crel
     pop si
     sub cx, CP_RX               ; ...and pane-relative, DI the pane left
     add di, CP_RX
+    ret
+
+; cp_crel - a SCREEN point to the CONTENT origin and a content-relative point
+; in:  CX/DX = x/y (screen), SI = window ptr
+; out: DI = content left, BP = content top, CX/DX content-relative; AX, BX, SI
+;      clobbered (cp_onclick_x's arithmetic, and cp_pt's first half)
+cp_crel:
+    mov bx, si                  ; wm_content takes the window in BX
+    mov si, dx                  ; SI = the point's y
+    call cp_origin
+    sub cx, di                  ; CX = content-relative x
+    mov dx, si
+    sub dx, bp                  ; DX = content-relative y
+    ret
+
+; cp_origin - BX = the panel's window -> DI = content left, BP = content top
+; (AX and DX as cw_wm_content leaves them: the same two values)
+cp_origin:
+    call KERNEL_SEG:cw_wm_content
+    mov di, ax
+    mov bp, dx
     ret
 
 %ifdef KERN_BIG
@@ -1272,15 +1407,17 @@ cp_pt:
 ; is that it does not flash.
 ;
 ; Each page's controls already have a painter of their own, because a click
-; changes one control and os88ui_glyph is ~35-50ms of the field machine's time
-; (cp_drv_box1's header does that arithmetic). This is the switch over them.
+; changes one control and os88ui_glyph is MEASURED at 4.3-6.4 ms of the field
+; machine's time (docs/reports/GLYPH-AND-LINE-COST-2026-09-10.md; the ~35-50ms
+; that stood here was the CLIPPED fallback's arithmetic and the whole path is
+; fills since SPEC.md 13.15.1). This is the switch over them.
 ;
 ; **THE IDS ARE AN ARGUMENT BECAUSE THE DRIVERS PAGE DRAWS PER CONTROL**
 ; (SPEC.md 31.1.2). Every branch below used to redraw its page's whole control
 ; set on both edges of every press, which is the same double-draw the header
 ; above objects to, one level down: os88ui_glyph white-fills its own box
 ; before it draws a pixel, so a control that did not change still BLINKS. On
-; the Drivers page that is four checkboxes at ~35-50ms each, twice, in front
+; the Drivers page that is four checkboxes at 4.3-6.4 ms each, twice, in front
 ; of a scroll whose own repaint is the thing the user was waiting for - and
 ; the two arrows are not even in cp_drv_boxes, so all of it was drawn for a
 ; control that is not one of them. The pages whose ladders draw a whole set in
@@ -1301,8 +1438,9 @@ cp_ctlpaint:
     jz .done
     call cp_ctlgroup
 .done:
-    mov byte [cp_only], 0       ; ...and back to "all", which is what every
-    mov byte [cp_skip], 0       ; other caller of these painters wants
+    mov word [cp_only], 0       ; ...and back to "all", which is what every
+                                ; other caller of these painters wants - and
+                                ; [cp_skip] with it, the next byte
     pop bx
     pop ax
     ret
@@ -1315,61 +1453,53 @@ cp_ctlpaint:
 ; This was cp_ctlpaint's whole body, and the split is the fix: it walks the
 ; page's controls and each one asks cp_skipset whether it is the one, so the
 ; walk is cheap and only the control that moved is DRAWN. A page's set is
-; three or four glyphs and a glyph is 24-34 ms of the field machine's time
-; (PERFORMANCE.md Set 83), which is what made "redraw them all on both edges
-; of a press" a visible blink of the whole group.
+; three or four glyphs and a glyph is 4.3-6.4 ms of the field machine's time
+; (measured, docs/reports/GLYPH-AND-LINE-COST-2026-09-10.md - PERFORMANCE.md
+; Set 83's 24-34 ms was the CLIPPED fallback SPEC.md 13.15.1 deleted), which
+; is what made "redraw them all on both edges of a press" a visible blink of
+; the whole group.
 ; -----------------------------------------------------------------------------
 cp_ctlgroup:
     push ax
+    push si
     mov al, [cp_sel]
-    or al, al
-    jz .sched
-    cmp al, CP_ITIME
-    je .time
-    cmp al, CP_IDRV
-    je .drv
-    cmp al, CP_ISND
-    je .snd
-    cmp al, CP_IVID
-    je .vid
-%ifdef OS88_THEME
-    cmp al, CP_ITHM
-    je .thm
-%endif
-    jmp short .out              ; a DRIVER's page (SPEC.md 31.9) draws its own
-                                ; controls and knows nothing about this
-.sched:
-    call cp_radios
-    jmp short .out
-.time:
+    cmp al, CP_ITEMS
+    jae .out                    ; a DRIVER's page (SPEC.md 31.9) draws its own
+    call cp_entry
+    call [cs:si + cp_items + CP_I_CTLS]
+.out:
+    pop si
+    pop ax
+cp_ret:
+    ret
+
+; The pages' CONTROL painters, CP_I_CTLS - the ones that are more than one
+; routine. Each page's paint ends on its own, so a press redraws the very
+; controls a paint drew and no second list of them can drift.
+cp_time_ctls:
     call cp_timechk             ; the two checks...
     xor al, al
     call cp_timebtn             ; ...and the two buttons
     mov al, 1
-    call cp_timebtn
-    jmp short .out
-.snd:
-    call cp_snd_radios          ; the three tiers...
-    call cp_snd_test            ; ...and the Test button
-    jmp short .out
-.vid:
-    call cp_vid_btn             ; Activate...
-    call cp_vid_mode            ; ...and the three arrangement radios (which
-                                ; refuses itself on a one-display machine)
-    jmp short .out
-%ifdef OS88_THEME
-.thm:
-    call cp_thm_radios          ; the whole group: a radio glyph is one
-    call cp_thm_btn             ; os88ui_glyph_f and the page has five of them
-    jmp short .out              ; ...and the button, which is the only control
-                                ; here whose pressed look ever moves
-%endif
-.drv:
+    jmp cp_timebtn
+cp_drv_ctls:
     mov al, [cp_only]           ; the Drivers page got here first (SPEC.md
-    call cp_drv_ctl1            ; 31.1.2) and already draws one control by id;
-.out:                           ; the driver above now hands it the same one
-    pop ax
-    ret
+    jmp cp_drv_ctl1             ; 31.1.2) and already draws one control by id
+cp_snd_ctls:
+    call cp_snd_radios          ; the three tiers...
+    jmp cp_snd_test             ; ...and the Test button
+cp_vid_ctls:
+    call cp_vid_btn             ; Activate...
+%ifdef KERN_BIG
+    call cp_vid_fc              ; ...Force Color's glyph (SPEC.md 31.10.4)...
+%endif
+    jmp cp_vid_mode             ; ...and the three arrangement radios
+%ifdef OS88_THEME
+cp_thm_ctls:
+    call cp_thm_radios          ; the whole group: a radio glyph is one
+    call cp_thm_btn             ; os88ui_glyph_f, and the two buttons
+    jmp cp_thm_cust_btn
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_setdown - MOVE the pressed state to control AL (0 = none)
@@ -1425,12 +1555,11 @@ cp_pgprobe:
     jl .none
     cmp cx, CP_CW - 1 - CP_RX
     jg .none
-    cmp dx, 0
+    test dx, dx
     jl .none
     cmp dx, CP_CH - 1
     jg .none
     mov [cp_probe], ah
-    mov al, [cp_sel]
     call cp_item_click
     mov byte [cp_probe], 0
     mov al, [cp_ctlid]
@@ -1446,8 +1575,8 @@ cp_pgprobe:
 ; -----------------------------------------------------------------------------
 cp_pgact:
     mov byte [cp_probe], 0      ; belt to cp_pgprobe's braces: this is the one
-    mov al, [cp_sel]            ; path that must not be probing, and the store
-    jmp cp_item_click           ; is two bytes
+    jmp cp_item_click           ; path that must not be probing, and the store
+                                ; is two bytes
 
 %endif
 
@@ -1455,19 +1584,17 @@ cp_pgact:
 ; cp_entry - item index -> item record
 ;
 ; in:  AL = item index (0..CP_ITEMS-1)
-; out: SI = record ptr
+; out: SI = the record's OFFSET in cp_items, so a field is
+;      [cs:si + cp_items + CP_I_*] - the table is in the image (SPEC.md 2.8.6),
+;      and naming it in the operand is what lets os88ovlchk see the cs:
 ; clobbers: nothing else (flags only)
-; CP_ISTRIDE is 8, so the multiply is three shl-by-1s: no CL to save, and no
-; 8086-illegal shl by an immediate count.
+; A byte multiply by CP_ISTRIDE: AH is free, and DX is not touched by one.
 ; -----------------------------------------------------------------------------
 cp_entry:
     push ax
-    mov ah, 0
-    mov si, ax
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    add si, cp_items
+    mov ah, CP_ISTRIDE
+    mul ah
+    xchg si, ax
     pop ax
     ret
 
@@ -1552,8 +1679,13 @@ cp_v2r:
 ; clobbers: AL (the output), flags
 ; -----------------------------------------------------------------------------
 cp_nitems:
-    call COLD_SEG:drv_cp_count_x
+%ifdef OS88_DRIVERS
+    mov al, 0xFF                ; drv_cp_count: an ordinal no class can be, so
+    CPXC drv_cp_class_x          ; the walk runs out and AL is the tally
     add al, [cp_nst]
+%else
+    mov al, [cp_nst]            ; ...and no class publishes a page here
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1566,8 +1698,13 @@ cp_drv_item:
     cmp al, CP_ITEMS            ; the static/driver boundary is a RECORD-space
     jb .static                  ; question, so it is the table's length and
     sub al, CP_ITEMS            ; not the count of rows on screen
-    call COLD_SEG:drvf_drv_cp_class   ; CF=1 if the driver went away under us
+%ifdef OS88_DRIVERS
+    CPXC drv_cp_class_x          ; CF=1 if the driver went away under us
+%else                           ; (kern_small: the refusing stub, CF = 1)
+    call COLD_SEG:drvf_drv_cp_class
+%endif
     jc .gone
+.static:                        ; (`jb` arrives with CF = 1)
     ret
 .gone:
     add al, CP_ITEMS            ; hand back the ROW index, not the rebased
@@ -1575,8 +1712,54 @@ cp_drv_item:
     ret                         ; the rebased index read as "static row 5 ->
                                 ; dispatch the Scheduler page", and the
                                 ; consumers below could not tell
-.static:
+
+; -----------------------------------------------------------------------------
+; cp_r2v - a RECORD -> the visible list ORDINAL that names it, cp_v2r's inverse
+;
+; in:  AL = the record index
+; out: AL = the ordinal, 0 = the top row on screen; CF = 1 if the record is
+;      HIDDEN and has no ordinal at all, and AL is then untouched
+; clobbers: AL (the output), flags
+;
+; DERIVED rather than remembered, and that is the whole reason it exists.
+; SPEC.md 31.1.4 wants the ordinal the selection is LEAVING, and the obvious
+; way to have it is a byte written beside [cp_sel] - which goes stale the
+; moment a driver comes up or goes down, because that is exactly when the
+; mapping cp_v2r implements changes. A record is the durable name (SPEC.md
+; 31.10.1's whole point); an ordinal is a view of it, so it is computed from
+; the view.
+;
+; It walks cp_v2r rather than re-implementing the hide test: CP_ITEMS is under
+; eight, this is arithmetic with no drawing in it, and one walker that can
+; disagree with another is what SPEC.md 31.10.1 is about.
+; -----------------------------------------------------------------------------
+cp_r2v:
+    push bx
+    push cx
+    mov bh, al                  ; BH = the record wanted
+    call cp_nitems
+    mov cl, al                  ; CL = how many ordinals there are
+    xor ch, ch                  ; CH = the one being tried
+.scan:
+    cmp ch, cl
+    jae .miss
+    mov al, ch
+    call cp_v2r
+    cmp al, bh
+    je .hit
+    inc ch
+    jmp short .scan
+.hit:
+    mov al, ch
+    clc
+    pop cx
+    pop bx
+    ret
+.miss:
+    mov al, bh                  ; hidden: no ordinal names it
     stc
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1589,98 +1772,127 @@ cp_item_name:
     push ax
     call cp_drv_item
     jc .static
-    call COLD_SEG:drvf_drv_cp_name            ; the staged copy, so font_str can read it
-    pop ax
+%ifdef OS88_DRIVERS             ; (kern_small: cp_drv_item never answers
+    call cp_drv_name            ; CF = 0, there being no driver layer)
+    pop ax                      ; staged into cp_sbuf, so font_run can read it
     ret
+%endif
 .static:
     cmp al, CP_ITEMS            ; a vanished driver's row has no name; the
     jae .gone                   ; empty string letters as a blank row
     call cp_entry
-    mov si, [si + CP_I_NAME]
+    CPSTAGEX cp_items + CP_I_NAME ; staged: the name is the image's (2.8.6)
     pop ax
     ret
 .gone:
-    mov si, cp_s_gone
+    CPSTAGE cp_s_gone
     pop ax
     ret
 
+%ifdef OS88_DRIVERS
 ; -----------------------------------------------------------------------------
-; cp_item_paint / cp_item_click - dispatch one row's page
-; in:  AL = row index, DI = pane left, BP = pane top (+ CX/DX = the click,
+; cp_drv_name - a driver class's page name, staged (SPEC.md 31.9)
+; in:  AL = class
+; out: SI -> cp_sbuf, a NUL string in the kernel segment ('' if none)
+; clobbers: SI (the output), flags
+;
+; It was driver.inc's drv_cp_name, RESIDENT, with a 12-byte .bss buffer of
+; its own - for a name only this image ever draws. It stages into cp_sbuf
+; now, like every other name the list letters (kernel size pass 8), so the
+; buffer and the body both left the kernel.
+; -----------------------------------------------------------------------------
+cp_drv_name:
+    push ax
+    push cx
+    push di
+    push es
+    mov si, cp_sbuf             ; '' unless a PUBLISHED class names a page
+    mov byte [si], 0
+    call cp_clssvc              ; DI = this class's published table
+    jc .out
+    mov cx, [di+DSV_CPNAME]     ; the driver's own pointer, in ITS segment
+    jcxz .out
+    cbw                         ; AL = the class, 1..DRVC_MAX
+    xchg di, ax
+    shl di, 1
+    shl di, 1
+    mov es, [di + drv_fseg - 4] ; ...whose segment is the dispatch half - 0
+    mov di, es                  ; between drv_release's two clears
+    or di, di
+    jz .out
+    mov di, si
+    mov si, cx
+    mov cx, DRV_CPNSZ - 1
+.c:
+    mov al, [es:si]             ; ES:SI (the driver's) -> DS:DI (ours)
+    inc si
+    mov [di], al
+    inc di
+    or al, al
+    loopnz .c
+    mov byte [di], 0            ; the bound was hit: terminate what was copied
+    mov si, cp_sbuf
+.out:
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
+; cp_item_paint / cp_item_click - dispatch the SELECTED row's page
+; in:  [cp_sel] = the row - every caller's, so it is read here rather than
+;      passed - DI = pane left, BP = pane top (+ CX/DX = the click,
 ;      content-relative, for the click half)
 ; out: nothing
 ; clobbers: whatever the page clobbers
+;
+; A DRIVER's page is cp_drv_ev's: the paint and the click are two more cells
+; of the one published table, and its argument shuffle serves both - the
+; paint half of the ABI reads DI and DX alone (31.9), so the BX it is also
+; handed is nobody's.
 ; -----------------------------------------------------------------------------
 cp_item_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    call cp_drv_item
-    jc .static
-    mov bx, di                  ; BX = the pane left, banked: drv_cls_svc
-    mov dx, bp                  ; answers in DI, and DX is the driver ABI's
-    call COLD_SEG:drvf_drv_cls_svc            ; pane top
-    jc .done                    ; (AL survives: it is drv_cls_svc's input)
-    mov bp, [di+DSV_CPPAINT]
-    mov di, bx
-    call COLD_SEG:drvf_drv_cp_call
-    jmp short .done
-.static:
+    call kentm_bp                ; KENT: push ax..bp
+    mov ax, DSV_CPPAINT
+    call cp_drv_ev
+    jnc .done                   ; a driver's page (or one that just went)
+    mov al, [cp_sel]
     cmp al, CP_ITEMS            ; a vanished driver's row paints nothing -
     jae .done                   ; unreachable while cp_drv_gone_x clamps
     call cp_entry               ; [cp_sel] at detach, and checked anyway
-    call [si + CP_I_PAINT]
-.done:
-    pop bp
-    pop di
+    push si
+    ; THE HEADING IS THE LIST NAME (SPEC.md 31.9), so it is drawn HERE, once,
+    ; for every static page, rather than by eight page bodies each naming its
+    ; own string. A page is entered with the heading drawn and the pen black.
+    CPSTAGEX cp_items + CP_I_NAME
+    call cp_black
+    mov cx, CP_PMX
+    mov dx, CP_PHY
+    call cp_runp
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call [cs:si + cp_items + CP_I_PAINT]
+.done:
+    jmp kretm_bp
 
 cp_item_click:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    call cp_drv_item
-    jc .static
-    mov bx, dx                  ; BX = the pane-relative y...
-    mov dx, bp                  ; ...DX the pane top, CX already the x
-    mov si, di
-    call COLD_SEG:drvf_drv_cls_svc
-    jc .done
-    mov bp, [di+DSV_CPCLICK]
-    mov di, si
-    call COLD_SEG:drvf_drv_cp_call
-    jmp short .done
-.static:
+    call kentm_bp                ; KENT: push ax..bp
+    mov ax, DSV_CPCLICK
+    call cp_drv_ev
+    jnc .done
+    mov al, [cp_sel]
     cmp al, CP_ITEMS            ; a vanished driver's row refuses the click
     jae .done                   ; (same reasoning as cp_item_paint's guard)
     call cp_entry
-    call [si + CP_I_CLICK]
+    call [cs:si + cp_items + CP_I_CLICK]
 .done:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_bp
 
 ; -----------------------------------------------------------------------------
-; cp_drv_ev - forward a RELEASE or a DRAG to a driver's page (SPEC.md 13.8.4)
-; in:  AX = DSV_CPUP or DSV_CPDRAG - the WHOLE word, because it is banked in
+; cp_drv_ev - forward a RELEASE or a DRAG to a driver's page (SPEC.md 13.8.4),
+;             and its paint and click for cp_item_paint/cp_item_click
+; in:  AX = the DSV_CP* cell - the WHOLE word, because it is banked in
 ;      SI and cp_pt leaves rubbish in AH - DI = pane left, BP = pane top,
 ;      CX/DX = pane-relative x/y
 ; out: CF = 1 if this page is not a driver's, in which case nothing was called
@@ -1700,13 +1912,7 @@ cp_item_click:
 ; cp_item_click's argument shuffle exactly, because the ABI is the same one.
 ; -----------------------------------------------------------------------------
 cp_drv_ev:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentm_bp                ; KENT: push ax..bp
     mov si, ax                  ; SI = the DSV_* cell wanted, banked across
     mov al, [cp_sel]            ; cp_drv_item's own use of AL
     call cp_drv_item
@@ -1715,7 +1921,7 @@ cp_drv_ev:
     mov dx, bp                  ; ...DX the pane top, CX already the x
     push si
     mov si, di                  ; SI = pane left, banked past drv_cls_svc
-    call COLD_SEG:drvf_drv_cls_svc
+    call cp_clssvc
     pop bp                      ; BP = the cell (pushed as SI above)
     jc .yes                     ; the class went: nothing to call, and the
                                 ; caller must still not run the static path
@@ -1729,21 +1935,12 @@ cp_drv_ev:
     mov di, si
     or bp, bp
     jz .yes
-    call COLD_SEG:drvf_drv_cp_call
+    call cp_drvcall
 .yes:
     clc
-    jmp short .out
 .no:
-    stc
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_bp
 
 ; (cp_drv_gone_x was here. It is RESIDENT now, above the .modc switch, because
 ; drv_shutdown calls it after cp_flush_close has dropped this image - SPEC.md
@@ -1776,15 +1973,22 @@ cp_ctl:
     or al, al
     jz .sel                     ; not an armable control: nothing to report
     mov [cp_ctlid], al
+.no:
     stc
     ret
 .sel:
     cmp byte [cp_probe], 2      ; ...and it still selects on the press
-    je .act
-    stc
-    ret
+    jne .no
 .act:
     clc
+    ret
+
+; cp_ctli - cp_ctl for control AL + 1, AL kept: a row whose value is 0-based
+; and whose id is 1-based (`dec` writes no CF, so cp_ctl's answer stands)
+cp_ctli:
+    inc al
+    call cp_ctl
+    dec al
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1853,12 +2057,11 @@ cp_skipset:
     or ah, ah
     jz .want                    ; 0 = every control, which is what a full page
     cmp ah, al                  ; paint and every setting change leave it at
-    je .want
-    mov byte [cp_skip], 1
-    pop ax
-    ret
-.want:
-    mov byte [cp_skip], 0
+.want:                          ; ZF = 1: draw it. A `mov` writes no flag, so
+    mov byte [cp_skip], 0       ; the store is the answer's for both, and a
+    je .out                     ; skip is the one byte more
+    inc byte [cp_skip]
+.out:
     pop ax
     ret
 %endif
@@ -1876,6 +2079,204 @@ cp_skipset:
 ; the click is in the left pane, and the whole pane width selects.
 ; -----------------------------------------------------------------------------
 cp_pick:
+%ifdef DOCK_OPT
+    push bx
+    push dx
+    sub dx, CP_I0Y
+    jl .miss                    ; signed: above the first row
+    mov ax, dx
+    mov bl, CP_IROWH
+    div bl                      ; AL = the ROW on screen
+    mov bh, al
+    call cp_lvis                ; AL = how many rows are shown (31.1.5)
+    cmp bh, al
+    jae .miss                   ; below the last one: no item
+    mov al, bh
+    add al, [cp_ltop]           ; ...and the ORDINAL that row shows
+    clc
+    jmp short .done
+.miss:
+    stc
+.done:
+    pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_lvis - how many list rows are SHOWN (SPEC.md 31.1.5)
+; out: AL = the count; CF = 1 the list scrolls (and AL = CP_LVIS)
+; clobbers: AL (the output), flags
+; -----------------------------------------------------------------------------
+cp_lvis:
+    call cp_nitems
+    cmp al, CP_LALL
+    ja .scroll
+    clc
+    ret
+.scroll:
+    mov al, CP_LVIS
+    stc
+    ret
+
+; cp_lrow - list ORDINAL AL -> the ROW it is drawn on; CF = 1 off the screen.
+; clobbers: AL (the output), flags
+cp_lrow:
+    push bx
+    sub al, [cp_ltop]
+    jb .off
+    mov bl, al
+    call cp_lvis
+    cmp bl, al
+    mov al, bl                  ; (a mov writes no flags)
+    jae .off
+    clc
+    pop bx
+    ret
+.off:
+    stc
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_lfix - keep [cp_ltop] inside the list, and a selection made from outside
+;           the panel in view (SPEC.md 31.1.5)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cp_lfix:
+    push ax
+    push bx
+    call cp_nitems
+    cmp al, CP_LALL
+    ja .scroll
+    mov byte [cp_ltop], 0       ; it fits: nothing is scrolled
+    jmp short .sel
+.scroll:
+    sub al, CP_LVIS             ; AL = the largest top there can be
+    cmp [cp_ltop], al
+    jbe .sel
+    mov [cp_ltop], al           ; a driver went away under the scroll
+.sel:
+    mov al, [cp_sel]
+    cmp al, [cp_lsel]
+    je .out                     ; the list has shown this selection already
+    mov [cp_lsel], al
+    call cp_r2v                 ; AL = its ordinal
+    jc .out
+    cmp al, [cp_ltop]
+    jb .top                     ; above the rows shown: it becomes the top
+    mov bh, al
+    call cp_lvis
+    add al, [cp_ltop]
+    cmp bh, al
+    jb .out                     ; already shown
+    mov al, bh                  ; below them: it becomes the bottom row
+    sub al, CP_LVIS - 1
+.top:
+    mov [cp_ltop], al
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_lscroll - a left-pane press on the arrows' row, while the list scrolls
+; in:  CX/DX = content-relative press, DI/BP = content origin; lock held
+; out: CF = 1 the press was the arrows' (acted on or refused), CF = 0 not
+;
+; ONE ROW A PRESS, and the pane is repainted whole: every row moved, which is
+; the one whole-pane repaint a scroll honestly owes (SPEC.md 31.1.1). A greyed
+; arrow refuses through the predicate that greyed it (SPEC.md 47 rule 2).
+; -----------------------------------------------------------------------------
+cp_lscroll:
+    push ax
+    call cp_lvis
+    jnc .no                     ; nothing scrolls: the row is a list row
+    cmp dx, CP_LAY
+    jl .no
+    xor al, al                  ; the up arrow's cell...
+    cmp cx, CP_LAX0
+    jl .yes
+    cmp cx, CP_LAX0 + CP_DSW - 1
+    jle .go
+    inc al                      ; ...or the down one's
+    cmp cx, CP_LAX1
+    jl .yes
+    cmp cx, CP_LAX1 + CP_DSW - 1
+    jg .yes
+.go:
+    call cp_larrowok
+    jc .yes                     ; greyed: nothing to scroll to
+    shl al, 1                   ; 0 up / 1 down -> -1 / +1
+    dec ax
+    add [cp_ltop], al
+    call cp_list
+.yes:
+    pop ax
+    stc
+    ret
+.no:
+    pop ax
+    clc
+    ret
+
+; cp_larrowok - may list arrow AL (0 up / 1 down) be used? CF = 1 no.
+; Every register preserved. gfx_pen_cf's convention (see cp_drv_arrowok).
+cp_larrowok:
+    push ax
+    or al, al
+    jnz .dn
+    cmp byte [cp_ltop], 1       ; CF = 1 at the top
+    pop ax
+    ret
+.dn:
+    call cp_nitems              ; AL = the rows...
+    sub al, [cp_ltop]           ; ...from the top one down, and [cp_ltop] is
+    cmp al, CP_LVIS + 1         ; always a row: CF = 1 when all of them are
+    pop ax                      ; already shown
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_larrows - the list's two arrows, each greyed at its own end
+; in:  DI = content left, BP = content top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; The Drivers page's cell (SPEC.md 31.1.1): cp_drv_arrfill's interior, a
+; frame and cp_drv_tri's triangle, in a CP_DSW-wide cell so the triangle
+; centres. No pressed look: the list acts on the PRESS, as its rows do.
+; -----------------------------------------------------------------------------
+cp_larrows:
+    push ax
+    xor al, al
+    call cp_larrow
+    inc al
+    call cp_larrow
+    pop ax
+    jmp cp_black
+
+cp_larrow:
+    call kentm_si                ; KENT: push ax..si
+    call cp_larrowok            ; CF = the pen's argument...
+    pushf                       ; ...spent below by the direction test
+    xor si, si                  ; CP_TRI_UP
+    or al, al                   ; the direction BEFORE AX is the cell's x
+    mov ax, CP_LAX0
+    jz .have                    ; (a mov writes no flags)
+    mov si, CP_TRI_DN
+    mov ax, CP_LAX1
+.have:
+    add ax, di
+    mov cx, ax
+    add cx, CP_DSW - 1
+    lea bx, [bp+CP_LAY]
+    lea dx, [bx+CP_LAH - 1]
+%ifdef KERN_BIG
+    mov byte [cp_darr_dn], 0    ; never drawn held (see above)
+%endif
+    popf
+    call cp_arrcell
+    call cp_penlive
+    jmp kretm_si
+%else
     push dx
     sub dx, CP_I0Y
     jl .miss                    ; signed: above the first row
@@ -1899,7 +2300,84 @@ cp_pick:
     clc
 .done:
     pop dx
+%endif
     ret
+
+; -----------------------------------------------------------------------------
+; cp_listrow - ONE row of the left pane: its bar and its name, ground and all
+;
+; in:  AL = the visible ORDINAL, DI = content left, BP = content top;
+;      caller holds the gfx lock
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK or CWHITE)
+;
+; NOTHING IS BLANKED HERE, which is the whole point (SPEC.md 13.14.6 rule 1).
+; The bar rect is drawn EVERY time - in the ink when this row is the selection
+; and in the GROUND when it is not - so a row that has just lost the bar
+; erases it by drawing its replacement, in one write, rather than by having
+; the pane wiped out from under it. The name is an OPAQUE font_run, so it
+; carries its own paper in the pass that carries the glyph and needs no ground
+; laid for it either.
+;
+; That is what lets a selection MOVE cost two rows instead of a pane: the
+; ordinal it left and the ordinal it arrived at, and nothing else on the
+; screen changed.
+; -----------------------------------------------------------------------------
+cp_listrow:
+    call kentm_si                ; KENT: push ax..si
+
+    mov bl, al                  ; BL = the ordinal, wanted after the multiply
+%ifdef DOCK_OPT
+    call cp_lrow                ; AL = the ROW it is on (SPEC.md 31.1.5)...
+    jc .skip                    ; ...if it is on the screen at all
+%endif
+    mov cl, CP_IROWH
+    mul cl                      ; AX = ordinal * pitch (8086: mul r/m8)
+    add ax, bp
+    add ax, CP_I0Y
+    mov si, ax                  ; SI = this row's top, and it has to be SI:
+                                ; cw_gfx_fill's four arguments are AX, BX, CX
+                                ; and DX, DI is the content left and BP the
+                                ; content top, so SI is the only register a
+                                ; position can sit in across the call
+
+    mov al, bl
+    call cp_v2r                 ; AL = the RECORD this ordinal names
+    mov bh, al
+    mov ax, (CWHITE << 8) | CBLACK  ; --- not selected: the bar rect in the
+    cmp bh, [cp_sel]                ; GROUND (AH), which is what takes a bar
+    jne .ns                         ; off a row that used to have one - one
+    xchg al, ah                     ; write; selected: black bar, white name
+.ns:
+    mov [gfx_color], ah             ; (`mov` leaves the compare's flags)
+    je .bar
+    cmp byte [cp_lfull], 0          ; ...unless cp_list laid that ground a
+    jne .name                       ; moment ago, and this would be the second
+.bar:                               ; write of every white pixel in the rect
+    push ax                     ; the text pair, and the record in BH: both
+    push bx                     ; live in registers cw_gfx_fill takes as
+                                ; arguments. On the STACK rather than in a
+                                ; byte of .text, which is what [cp_ipap] was
+    lea ax, [di+CP_IBX1]
+    lea cx, [di+CP_IBX2]
+    mov bx, si
+    lea dx, [si+CP_IBH - 1]
+    call cp_fill
+    pop bx
+    pop ax
+.name:
+    lea cx, [di+CP_IX]          ; --- the name, OPAQUE, on the paper the bar
+                                ; just laid (SPEC.md 6.1): font_run carries
+    lea dx, [si+CP_ITDY]        ; both in one pass, so there is no ground for
+                                ; anything else to lay and no interval in
+    push ax                     ; which the row is blank
+    mov al, bh
+    call cp_item_name           ; SI -> it, static or staged (SPEC.md 31.9).
+    pop ax                      ; It clobbers SI and nothing else, which is
+    call KERNEL_SEG:cw_font_run ; why the row top could live there until now
+%ifdef DOCK_OPT
+.skip:
+%endif
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_list - draw the left pane: every item name, the selected one barred
@@ -1907,91 +2385,72 @@ cp_pick:
 ; in:  DI = content left, BP = content top; caller holds the gfx lock
 ; out: nothing
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK or CWHITE)
-; Erases the whole pane first, so this doubles as the redraw path when the
-; selection moves. BP is repurposed as the selected record's pointer once
-; the first row's y has been computed from it - the loop then only needs a
-; running y (DX) and a running record ptr (BX), which is what lets the two
-; drawing calls (which preserve everything) sit inside it unguarded.
+;
+; THIS IS THE WHOLE-PANE PAINT and it is no longer the redraw path for a
+; selection: the pane erase below is the left pane's own GROUND - cp_paint
+; does not fill the content, it calls the three routines that each own a pane -
+; and it is legitimate exactly once, when the whole thing is being drawn.
+; A selection that MOVES calls cp_listrow twice instead (SPEC.md 31.1.4), and
+; a list whose membership changed - a driver that came up owns a page - calls
+; this, because then every row really has moved.
 ; -----------------------------------------------------------------------------
+%ifdef DOCK_OPT
 cp_list:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push bp
+    call kentm_bp
 
-    mov byte [gfx_color], CWHITE ; erase the pane
+                                ; the pane's ground, laid once
     mov ax, di
     mov bx, bp
-    mov cx, di
-    add cx, CP_DIVX - 1
-    mov dx, bp
-    add dx, CP_CH - 1
-    call KERNEL_SEG:cw_gfx_fill
+    lea cx, [di+CP_DIVX - 1]
+    lea dx, [bp+CP_CH - 1]
+    call cp_wfill
 
-    mov dx, bp
-    add dx, CP_I0Y              ; DX = row 0 top, screen y
-    call cp_nitems
-    mov bp, ax
-    and bp, 0x00FF              ; BP = how many rows there are
-    xor bx, bx                  ; BX = the ORDINAL being drawn
+    call cp_lfix                ; the scroll inside the list (SPEC.md 31.1.5)
+    call cp_lvis                ; AL = rows shown, CF = it scrolls
+    pushf
+    mov cl, al
+    xor ch, ch                  ; CX = how many rows are drawn
+    jcxz .arrows
+    mov byte [cp_lfull], 1      ; ...each on the ground laid above, so no
+    mov bl, [cp_ltop]           ; BL = the ORDINAL being drawn
 .row:
     mov al, bl
-    call cp_v2r                 ; ...and BH = the record it names, resolved
-    mov bh, al                  ; ONCE for both the bar and the name
-    cmp al, [cp_sel]
-    jne .plain
+    call cp_listrow
+    inc bl
+    loop .row
+    mov byte [cp_lfull], 0      ; row is written twice (SPEC.md 31.1.4)
+.arrows:
+    popf
+    jnc .out
+    call cp_larrows             ; ...and the arrows, when it scrolls
+.out:
+    jmp kretm_bp
+%else
+cp_list:
+    call kentm_bp
 
-    push ax                     ; --- selected: white text on a black bar ---
-    push bx
-    push cx
-    push dx
-    mov byte [gfx_color], CBLACK
+                                ; the pane's ground, laid once
     mov ax, di
-    add ax, CP_IBX1
-    mov cx, di
-    add cx, CP_IBX2
-    mov bx, dx                  ; y1 = row top
-    add dx, CP_IBH - 1          ; y2
-    call KERNEL_SEG:cw_gfx_fill
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    mov byte [gfx_color], CWHITE
-    mov byte [cp_ipap], CBLACK  ; ...on the bar this row just laid
-    jmp .text
-.plain:
-    mov byte [gfx_color], CBLACK
-    mov byte [cp_ipap], CWHITE  ; ...on the pane
-.text:
-    mov al, bh
-    call cp_item_name           ; SI -> it, static or staged (SPEC.md 31.9)
-    mov cx, di
-    add cx, CP_IX
-    push dx
-    add dx, CP_ITDY
-    push ax                     ; OPAQUE, and the one label on this window
-    mov al, [gfx_color]         ; whose paper is not the pane (SPEC.md 31.11)
-    mov ah, [cp_ipap]
-    call KERNEL_SEG:cw_font_run
-    pop ax
-    pop dx
+    mov bx, bp
+    lea cx, [di+CP_DIVX - 1]
+    lea dx, [bp+CP_CH - 1]
+    call cp_wfill
 
-    add dx, CP_IROWH
-    mov bh, 0                   ; BX is the ordinal again: the resolved record
-    inc bx                      ; lived in BH for the length of one row
-    cmp bx, bp
-    jb .row
-
-    pop bp
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call cp_nitems
+    mov cx, ax
+    and cx, 0x00FF              ; CX = how many rows there are
+    jcxz .out
+    mov byte [cp_lfull], 1      ; ...each on the ground laid above, so no
+    xor bx, bx                  ; BL = the ORDINAL being drawn
+.row:
+    mov al, bl
+    call cp_listrow
+    inc bl
+    loop .row
+    mov byte [cp_lfull], 0      ; row is written twice (SPEC.md 31.1.4)
+.out:
+    jmp kretm_bp
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_divider - the 1px rule between the two panes
@@ -2004,13 +2463,11 @@ cp_divider:
     push ax
     push bx
     push dx
-    mov byte [gfx_color], CBLACK
-    mov ax, di
-    add ax, CP_DIVX
+    call cp_black
+    lea ax, [di+CP_DIVX]
     mov bx, bp
-    mov dx, bp
-    add dx, CP_CH - 1
-    call KERNEL_SEG:cw_gfx_vline              ; in AX = x, BX = y1, DX = y2
+    lea dx, [bp+CP_CH - 1]
+    call KERNEL_SEG:apic_gfx_vline            ; in AX = x, BX = y1, DX = y2
     pop dx
     pop bx
     pop ax
@@ -2052,7 +2509,10 @@ cp_promise:
     jne .say
     xor al, al                          ; the clock is on the pane: withdraw,
 .say:                                   ; and wm_saveu drops the claim with it
-    call KERNEL_SEG:cw_wm_saveu
+    call KERNEL_SEG:apic_wm_saveu       ; the CELL (0x0378): the Control
+                                        ; Panel answers SPEC.md 11.96.1's
+                                        ; promise per PAGE, from its
+                                        ; module (SPEC.md 31.12)
 .out:
     pop di
     pop bx
@@ -2084,27 +2544,17 @@ cp_page:
     push si
     push di
 
-    mov byte [gfx_color], CWHITE ; erase the pane, divider column excluded
-    mov ax, di
-    add ax, CP_DIVX + 1
+                                ; erase the pane, divider column excluded
+    lea ax, [di+CP_DIVX + 1]
     mov bx, bp
-    mov cx, di
-    add cx, CP_CW - 1
-    mov dx, bp
-    add dx, CP_CH - 1
-    call KERNEL_SEG:cw_gfx_fill
+    lea cx, [di+CP_CW - 1]
+    lea dx, [bp+CP_CH - 1]
+    call cp_wfill
 
-    mov al, [cp_sel]
     add di, CP_RX               ; DI = pane left, BP = pane top
     call cp_item_paint
 
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_di
 
 ; =============================================================================
 ; Item 0: the Scheduler page
@@ -2120,46 +2570,21 @@ cp_page:
 ; radio glyphs with the live mode's one filled (SPEC.md 31.1).
 ; -----------------------------------------------------------------------------
 cp_sched_paint:
-    push cx
-    push dx
-    push si
+    call kentm_si
 
-    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
 
-    mov si, cp_s_sched          ; 'Scheduler' heading, same string as the
-    mov cx, di                  ; list row that selects this page
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PHY
-    call cp_run
+    call cp_lbl                 ; row 0 label
+    dw cp_s_pre, CP_PLX, CP_PR0Y + CP_PLDY
 
-    CPSTAGE cp_s_pre            ; row 0 label
-    mov cx, di
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CP_PR0Y + CP_PLDY
-    call cp_run
+    call cp_lbl                 ; row 1 label
+    dw cp_s_coop, CP_PLX, CP_PR0Y + CP_PROWH + CP_PLDY
 
-    CPSTAGE cp_s_coop           ; row 1 label
-    mov cx, di
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CP_PR0Y + CP_PROWH + CP_PLDY
-    call cp_run
-
-    CPSTAGE cp_s_cap            ; caption: the flip is immediate
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PCAPY
-    call cp_run
+    call cp_lbl                 ; caption: the flip is immediate
+    dw cp_s_cap, CP_PMX, CP_PCAPY
 
     call cp_radios              ; both glyphs, filled per the live mode
 
-    pop si
-    pop dx
-    pop cx
-    ret
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_run - one Control Panel label, OPAQUE (SPEC.md 31.11)
@@ -2198,14 +2623,38 @@ cp_sched_paint:
 ; The skip is consumed rather than tested, so it cannot leak: cp_vid_rows draws
 ; a glyph with no down state and no cp_dngly before it, and would otherwise
 ; inherit whatever the last control armed.
+;
+; cp_chk / cp_gnz / cp_rad / cp_gz - ONE GLYPH ROW in a call (CTRL.DRV size
+; pass 1): the set bit decided by the flags the caller left, then cp_dngly
+; (kern_big) and cp_gemit, which is what every row of every page spelled out
+; in nine instructions. cp_rad is a radio and cp_chk a check box; cp_gz and
+; cp_gnz take AX (AH = OS88UI_DIS or 0) already loaded. The radios are set on
+; ZF and the check boxes on NZ, because that is how each one's state reads:
+; a radio is "this row IS the value", a box is "this byte is not zero".
+; in:  CX, DX = the glyph's top-left, BH = its control id (kern_big), flags
 ; -----------------------------------------------------------------------------
+cp_chk:
+    mov ax, OS88UI_GCHECK       ; (a `mov` writes no flags)
+cp_gnz:
+    jz cp_gdraw
+    jmp short cp_gon
+cp_rad:
+    mov ax, OS88UI_GRADIO
+cp_gz:
+    jnz cp_gdraw
+cp_gon:
+    or al, OS88UI_GON
+cp_gdraw:
+%ifdef KERN_BIG
+    call cp_dngly
+%endif
 cp_gemit:
 %ifdef KERN_BIG
     cmp byte [cp_skip], 0
     mov byte [cp_skip], 0       ; ...one-shot (a `mov` writes no flags)
     jne .out
 %endif
-    call COLD_SEG:os88ui_glyph_f
+    CPXN os88ui_glyph           ; IN THIS IMAGE (OS88UI_KGLYPH, fdlg.inc)
 %ifdef KERN_BIG
 .out:
 %endif
@@ -2223,6 +2672,93 @@ cp_bemit:
 %endif
     ret
 
+; The image's NEAR doors to six far routines it calls often enough that a
+; five-byte far call at every site costs more than one of these: 38 sites at
+; 2 bytes each against 36 bytes here (kernel size pass 8). Each is the far
+; call and a ret, so registers and flags come back exactly as the callee left
+; them; the price is a near call and ret, ~11 us against a primitive's ~756.
+; cp_krect - THE kernel's one button rect (SPEC.md 20.5.1), pane-relative in:
+; AX, DX = left, top and CX, BX = right, bottom, all offsets from DI, BP.
+; out: BX = os88ui_krect, filled; AX, CX, DX clobbered. Every caller of it is
+; the UI task under the gfx lock, so one rect is enough and a second is .bss
+; nobody needs. Four buttons spelt the eight-instruction fill out each
+; (CTRL.DRV size pass 1)
+cp_krect:
+    add ax, di
+    mov [os88ui_krect+0], ax
+    add dx, bp
+    mov [os88ui_krect+2], dx
+    add cx, di
+    mov [os88ui_krect+4], cx
+    add bx, bp
+    mov [os88ui_krect+6], bx
+    mov bx, os88ui_krect
+    ret
+
+; --- cp_kgo / cp_cgo - CPXK's and CPXC's far hop, built by hand (kernel.asm's
+; KGO_PAIR, which says how; the boot blob carries the same pair as bvs_kgo /
+; bvs_cgo for its copies of the adapter switch)
+KGO_PAIR cp
+
+cp_wfill:   mov byte [gfx_color], CWHITE ; ...a fill in the GROUND, which is
+                                    ; what six sites set the pen for first
+cp_fill:    call KERNEL_SEG:cw_gfx_fill
+            ret
+cp_penlive: CPXK gfx_pen_live
+            ret
+cp_drvrow:  call COLD_SEG:drvf_drv_row
+            ret
+cp_clssvc:  call COLD_SEG:drvf_drv_cls_svc
+            ret
+cp_pencf:   call KERNEL_SEG:cw_gfx_pen_cf
+            ret
+%ifdef OS88_DRIVERS
+cp_drvcall: CPXC drv_cp_call_x
+%else                           ; (kern_small: driver.inc's refusing stub)
+cp_drvcall: call COLD_SEG:drvf_drv_cp_call
+%endif
+            ret
+
+; cp_repost - a setting that changes the WORLD: remembered on close (SPEC.md
+; 31.8), every window repainted by ui_task (SPEC.md 13) and said once (13.13).
+; [cp_dirty] and [cp_wdirty] are adjacent, so one word store sets both.
+; clobbers: nothing
+cp_repost:
+    mov word [cp_dirty], 0x0101
+    inc byte [ui_post]          ; zero/non-zero, and swept every tick
+    ret
+
+; cp_lbl - stage an image string and letter it at a PANE-relative spot: the
+; three words after the call are {string, x, y}, and it returns past them.
+; out: SI = cp_sbuf, CX/DX absolute - exactly CPSTAGE + cp_runp's state
+; Ten labels spelled CPSTAGE / mov cx / mov dx / call cp_runp; this is nine
+; bytes a site against fifteen (kernel size pass 8).
+cp_brun:                        ; cp_run in BLACK: the pen first, as a dozen
+    call cp_black               ; sites spelt it
+    jmp short cp_run
+; cp_black / cp_wdset - the two five-byte stores this image made most often,
+; as near doors: three bytes a site against five. Neither writes a flag.
+cp_black:   mov byte [gfx_color], CBLACK
+            ret
+cp_wdset:   mov byte [cp_wdirty], 1     ; remembered on close (SPEC.md 31.8)
+            ret
+cp_blbl:                        ; ...in BLACK: four labels set the pen first
+    call cp_black
+cp_lbl:
+    pop si                      ; SI -> the record, in the image
+    add si, 6
+    push si                     ; ...and the real return is past it
+    mov cx, [cs:si-4]
+    mov dx, [cs:si-2]
+    mov si, [cs:si-6]
+    call cp_stage               ; ...and FALLS INTO cp_runp, below
+
+; cp_runp - cp_run at PANE-relative CX/DX: DI/BP are added first, so a caller
+; names its row's offsets with two plain immediates. Falls into cp_run.
+; out: CX/DX absolute, as cp_run's callers had them
+cp_runp:
+    add cx, di
+    add dx, bp
 cp_run:
     push ax
     mov al, [gfx_color]
@@ -2243,68 +2779,42 @@ cp_run:
 ; ~137 ms of held gfx lock per window appearing, leaving or minimizing.
 ; -----------------------------------------------------------------------------
 cp_thm_paint:
-    push cx
-    push dx
-    push si
+    call kentm_si
 
-    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase) - the
-                                ; PANE is content and is not themed, so this
-                                ; page is drawn in the ordinary pens like
-                                ; every other one
-
-    mov si, cp_s_thm            ; heading, same string as the list row
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PHY
-    call cp_run
-
-    CPSTAGE cp_s_tbrt           ; theme row 0
-    mov dx, bp
-    add dx, CPH_R0Y + CP_PLDY
-    call cp_thm_lbl
-    CPSTAGE cp_s_tdrk           ; theme row 1
-    mov dx, bp
-    add dx, CPH_R1Y + CP_PLDY
-    call cp_thm_lbl
+    call cp_lbl                 ; theme row 0
+    dw cp_s_tbrt, CP_PLX, CPH_R0Y + CP_PLDY
+    call cp_lbl                 ; theme row 1
+    dw cp_s_tdrk, CP_PLX, CPH_R1Y + CP_PLDY
 %ifdef KERN_BIG
-    CPSTAGE cp_s_tclr           ; theme row 2 - drawn on every adapter, and
-    mov dx, bp                  ; GREYED where the machine has no colour
-    add dx, CPH_R2Y + CP_PLDY   ; (SPEC.md 47 rule 3, 76.12.1)
-    call cp_thm_colgrey
-    call KERNEL_SEG:cw_gfx_pen_cf   ; the pen AND [gfx_dis] together, which on
-    call cp_thm_lbl                 ; a 1bpp adapter is the whole difference
-    call KERNEL_SEG:cw_gfx_pen_live ; (SPEC.md 47 rule 1)
-%endif
+    call cp_thm_colgrey         ; theme row 2 - drawn on every adapter, and
+    call cp_pencf               ; GREYED where the machine has no colour
+                                ; (SPEC.md 47 rule 3, 76.12.1): the pen AND
+                                ; [gfx_dis] together, which on a 1bpp adapter
+                                ; is the whole difference (SPEC.md 47 rule 1)
+    call cp_lbl
+    dw cp_s_tclr, CP_PLX, CPH_R2Y + CP_PLDY
+    call cp_penlive
+    call cp_lbl                 ; theme row 3 - never greyed: whether
+    dw cp_s_twin, CP_PLX, CPH_R3Y + CP_PLDY ; WIN95.DRV reads is the click's
+%endif                          ; to find out (SPEC.md 76.14.10)
 
 %ifdef WM_ANIM
-    CPSTAGE cp_s_tanim          ; --- the second group's heading
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CPH_H2Y
-    call cp_run
-
-    CPSTAGE cp_s_ton            ; anim row 0
-    mov dx, bp
-    add dx, CPH_A0Y + CP_PLDY
-    call cp_thm_lbl
-    CPSTAGE cp_s_toff           ; anim row 1
-    mov dx, bp
-    add dx, CPH_A1Y + CP_PLDY
-    call cp_thm_lbl
+    call cp_lbl                 ; --- the second group's heading
+    dw cp_s_tanim, CP_PMX, CPH_H2Y
+    call cp_lbl                 ; anim row 0
+    dw cp_s_ton, CP_PLX, CPH_A0Y + CP_PLDY
+    call cp_lbl                 ; anim row 1
+    dw cp_s_toff, CP_PLX, CPH_A1Y + CP_PLDY
 %endif
 
 
-    call cp_thm_radios
 %ifdef KERN_BIG
-    call cp_thm_btn             ; ...and the Screen Saver button (SPEC.md 79.7)
+    call cp_thm_ctls            ; the radios and the Screen Saver button
+%else                           ; (SPEC.md 79.7)
+    call cp_thm_radios
 %endif
 
-    pop si
-    pop dx
-    pop cx
-    ret
+    jmp kretm_si
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -2322,35 +2832,108 @@ cp_thm_paint:
 ; the toast the panel's own load refusal already uses.
 ; -----------------------------------------------------------------------------
 cp_thm_btn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov ax, di
-    add ax, CPH_BTX
-    mov [os88ui_krect+0], ax    ; THE kernel's one button rect (SPEC.md
-    add ax, CPH_BTW - 1         ; 20.5.1): every caller of it is the UI task
-    mov [os88ui_krect+4], ax    ; under the gfx lock, so one is enough and a
-    mov ax, bp                  ; second is .bss nobody needs
-    add ax, CPH_BTY
-    mov [os88ui_krect+2], ax
-    add ax, CPH_BTH - 1
-    mov [os88ui_krect+6], ax
-    mov bx, os88ui_krect
+    call kentm_bp
+    mov ax, CPH_BTX
+    mov dx, CPH_BTY
+    mov cx, CPH_BTX + CPH_BTW - 1
+    mov bx, CPH_BTY + CPH_BTH - 1
+    call cp_krect               ; BX = os88ui_krect
     CPSTAGE cp_s_tsave
+    mov al, CPH_CSAVE           ; ...pressed if it is the one down (13.8.3)
+    jmp cp_btfill
+
+; -----------------------------------------------------------------------------
+; cp_thm_cust_btn - the Customize... button, beside the Color row (SPEC.md
+; 76.14)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; GREYS where Color itself greys (SPEC.md 47 rule 1): cp_thm_colgrey is the
+; one predicate behind the Color label, the Color radio's refusal AND this
+; button, so the three cannot disagree. Unlike the Screen Saver button above,
+; this one CAN grey on a fact (rule 3): whether the primary adapter has
+; colour in it is known before the click, not discovered by making it.
+;
+; IT DOES NOT GREY ON THE THEME RADIO. It did - live only while Color or
+; Windows was - and on VGA a greyed button is dark-grey letters in a BLACK
+; frame, so under Bright it looked live and every click on it was silently
+; refused. Nothing needed the rule: THMPAL.DRV banks the kind it was opened
+; over, every change it makes is a Color, and Cancel puts Bright or Dark back.
+; -----------------------------------------------------------------------------
+cp_thm_cust_btn:
+    call kentm_bp
+    mov ax, CPH_CZX
+    mov dx, CPH_CZY
+    mov cx, CPH_CZX + CPH_CZW - 1
+    mov bx, CPH_CZY + CPH_CZH - 1
+    call cp_krect               ; BX = os88ui_krect
+    CPSTAGE cp_s_tcust
     mov di, OS88UI_FILL
-    mov al, CPH_CSAVE
+    call cp_thm_colgrey         ; the FACT, not the radio above it: see below
+    jnc .enabled
+    or di, OS88UI_DIS
+.enabled:
+    mov al, CPH_CCUST
     call cp_dnbtn               ; ...pressed if it is the one down (13.8.3)
     call cp_bemit
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_bp
+%endif
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_thmv_open - load THMPAL.DRV and ask it to open the Customize window
+;                (SPEC.md 76.14.14)
+; in:  the gfx lock is HELD - a Control Panel click (SPEC.md 31.1)
+; out: CF = 0 the window is up; CF = 1 not, [thmv_row+DRVR_ERR] says why
+;
+; HERE IN THE PANEL'S IMAGE, NOT IN .cold: the button that calls it is this
+; image's, so the loader costs the kernel nothing. What stays resident is the
+; row (kernel/driver.inc), drv_call's range test and the reap that every panel
+; close runs (drv_cp_closed_x's tail). The window is handed the three addresses it edits -
+; the Color row, the struct's 'TP' record and [thm_cstrp] - so it needs no
+; symbol and the kernel needs no preset table and no call to set one.
+; -----------------------------------------------------------------------------
+cp_thmv_open:
+    call kentm_bp               ; KENT: push ax..bp (AX too: the caller reads
+    mov bx, thmv_row            ; [thmv_row+DRVR_ERR] for itself afterwards)
+    CPSTAGE cp_thmv_fname       ; THE FILE NAME IS STAGED, not resident (kernel
+    mov [bx+DRVR_FILE], si      ; size pass 13): drv_load_at reads it through
+                                ; DS, and this is the one code that loads the
+                                ; row, so the name lives in this image and
+                                ; cp_sbuf carries it for the length of the
+                                ; call. Nothing else reads thmv_row's FILE or
+                                ; TITLE - it is past DRV_MAX, so no walk meets it
+    call COLD_SEG:drvf_drv_load_at  ; CF = 0 immediately once it is already live
+    jc .no
+    push es
+    mov es, [bx+DRVR_SEG]
+    cmp word [es:10], THMV_ABI_VER
+    pop es
+    je .ok
+    call COLD_SEG:drvf_drv_release  ; never call an incompatible private overlay
+    mov byte [bx+DRVR_ERR], DRVE_BAD
+    jmp short .no
+.ok:
+    mov si, THM_CROW
+    mov di, drv_cfg + CFG_THMP
+    mov dx, thm_cstrp
+    mov ch, [thm_kind]
+    mov bp, [bx+DRVR_ENT]
+    mov al, THMV_OPEN
+    call COLD_SEG:drvf_drv_call
+    jnc .out
+    mov bx, thmv_row            ; it loaded and then refused: give it back -
+    mov bp, [bx+DRVR_ENT]       ; the panel close's own two steps (the tail
+    mov al, THMV_CLOSE          ; of drv_cp_closed_x), through the two far
+    call COLD_SEG:drvf_drv_call ; entries. The row and the entry are loaded
+    call COLD_SEG:drvf_drv_release  ; again: a refusing driver may answer in
+.no:                            ; BX, and drv_call spends BP
+    stc
+.out:
+    jmp kretm_bp                ; pops and a ret: CF survives
+cp_thmv_fname: db 'THMPAL.DRV', 0   ; staged into cp_sbuf above (ss_fname's
+                                ; shape, one image along: no row on the
+                                ; Drivers page and no caption)
 %endif
 
 ; cp_thm_colpen - the pen for the Color row: greyed unless this machine has
@@ -2378,25 +2961,12 @@ cp_thm_colgrey:
     cmp byte [vid_kind], VID_VGA
     je .live
     cmp byte [vid_kind], VID_EGA
-    je .live
+    je .live                    ; ...an equal `cmp` leaves CF = 0
     stc
-    ret
 .live:
-    clc
     ret
-%endif
 
-; cp_thm_lbl - one row label at the group's x (internal)
-; in:  SI -> string, DX = text y, DI = pane left; out: nothing, CX clobbered
-cp_thm_lbl:
-    mov cx, di
-    add cx, CP_PLX
-    jmp cp_run                  ; a tail call is safe HERE and was not before:
-                                ; cp_run is a near proc in this segment, where
-                                ; the cw_ shim this used to call ends in
-                                ; `retf` and jumping to one pops this
-                                ; routine's near return address as CS:IP.
-                                ; desk_zone_xor's comment is the same finding
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_thm_click - a click inside the Theme page
@@ -2415,37 +2985,89 @@ cp_thm_click:
     push ax
 
 %ifdef KERN_BIG
-    cmp dx, CPH_BTY             ; --- the Screen Saver button, tested FIRST
-    jl .groups                  ; because it is the lowest band on the page
-    cmp dx, CPH_BTY + CPH_BTH - 1
-    jg .donej
-    cmp cx, CPH_BTX
-    jl .donej
+    cmp cx, CPH_BTX             ; --- the Screen Saver button, claimed only
+    jl .groups                  ; INSIDE its rectangle: its rows are the Off
     cmp cx, CPH_BTX + CPH_BTW - 1
-    jg .donej
+    jg .cust                    ; a press outside may be
+                                ; Customize on the Color row
+    cmp dx, CPH_BTY             ; group's
+    jl .cust
+    cmp dx, CPH_BTY + CPH_BTH - 1
+    jg .groups
     mov al, CPH_CSAVE
     call cp_ctl                 ; ...and it FIRES ON THE RELEASE (SPEC.md
     jc .donej                   ; 13.8.3): opening a window is not a safe
                                 ; prefix action, so a mis-aimed press has to
                                 ; be cancellable by sliding off
-    call COLD_SEG:ssf_cfg       ; the overlay, and then its window (79.7)
+    mov al, SSV_CFG             ; the overlay, and then its window (79.7):
+    CPXC ss_open                 ; ssf_cfg's two instructions, from here
     jnc .donej
-    push bx                     ; ...and the ONE refusal on this page that the
-    push cx                     ; user is standing in front of, so it is said
-    mov al, 1                   ; out loud rather than swallowed the way every
-    mov bx, cp_opentab          ; other one in SPEC.md 79 is (SPEC.md 2.8.4,
-    mov cx, CP_NOPEN            ; 47 rule 3)
-    call KERNEL_SEG:toast_say
-    pop cx
-    pop bx
+    mov al, [ss_row+DRVR_ERR]   ; ...and the ONE refusal on this page that the
+    or al, al                   ; user is standing in front of, so it is said
+    jz .nowinj                  ; out loud rather than swallowed the way every
+    cmp al, DRVE_NERR           ; other one in SPEC.md 79 is (SPEC.md 2.8.4,
+    jae .nowinj                 ; 47 rule 3) - AND IT SAYS WHY, out of the
+    push si                     ; LOADER's own words (drv_errstg), which
+                                ; cp_snd_note already borrows for these same
+                                ; causes. drv_load_at wrote the code into the
+    call drv_errstg             ; row before ssf_cfg ever answered, so naming
+                                ; it is one byte read and no string of our own.
+                                ; An out-of-range code takes the beep rather
+                                ; than silence: a bounds miss here would be a
+    call cp_toast               ; press that did nothing
+    pop si
+    jmp short .donej
+.nowinj:
+    call KERNEL_SEG:cw_snd_beep ; DRVE_OK = the image loaded and SSV_CFG itself
+                                ; refused, which today is wm_create finding the
+                                ; table full - no window, and NOT ABOUT THE
+                                ; DISK, so it does not say the disk. cp_open_x's
+                                ; own rule and cp_open_x's own answer (34.3),
+                                ; and it costs no resident string
 .donej:                         ; ...and the five refusals above
     jmp .done
+
+; --- Customize..., beside the Color row (SPEC.md 76.14) --------------------
+; Tested here, BEFORE the band logic below that ignores X entirely, because
+; this rect sits INSIDE the theme group's own Y band (CPH_B0Y1..CPH_B3Y2): a
+; miss on any of the four bounds falls through to .groups exactly as a click
+; outside this button, anywhere else on the Color row, already does.
+.cust:
+    cmp dx, CPH_CZY
+    jl .groups
+    cmp dx, CPH_CZY + CPH_CZH - 1
+    jg .groups
+    cmp cx, CPH_CZX
+    jl .groups
+    cmp cx, CPH_CZX + CPH_CZW - 1
+    jg .groups
+    call cp_thm_colgrey         ; greyed is inert on the release too, through
+    jc .donej                   ; the predicate that greyed it
+    mov al, CPH_CCUST
+    call cp_ctl                  ; ...and it FIRES ON THE RELEASE (13.8.3),
+    jc .donej                    ; ssf_cfg's own reason: opening a window is
+                                  ; not a safe prefix action
+    call cp_thmv_open            ; the overlay, and then its window (76.14.14)
+    jnc .donej
+    mov al, [thmv_row+DRVR_ERR]  ; the one refusal on THIS row the user is
+    or al, al                    ; standing in front of, said out loud rather
+    jz .cnowin                   ; than swallowed - ssf_cfg's exact shape
+    cmp al, DRVE_NERR
+    jae .cnowin
+    push si
+    call drv_errstg
+    call cp_toast
+    pop si
+    jmp short .donej
+.cnowin:
+    call KERNEL_SEG:cw_snd_beep  ; DRVE_OK = the image loaded and THMV_OPEN
+    jmp short .donej             ; itself refused (wm_create's table full)
 .groups:
 %endif
     cmp dx, CPH_B0Y1
     jl .done
 %ifdef KERN_BIG
-    cmp dx, CPH_B2Y2
+    cmp dx, CPH_B3Y2
 %else
     cmp dx, CPH_B1Y2            ; no Color row on this build (SPEC.md 76.12.3)
 %endif
@@ -2457,6 +3079,9 @@ cp_thm_click:
 %ifdef KERN_BIG
     cmp dx, CPH_B1Y2
     jle .tset
+    mov al, THM_WIN             ; ...the fourth, Windows (SPEC.md 76.14.10)
+    cmp dx, CPH_B2Y2
+    jg .tset
     mov al, THM_COLOR           ; ...and the third refuses where it is greyed,
     call cp_thm_colgrey         ; through the predicate that greyed it
     jc .done
@@ -2465,19 +3090,35 @@ cp_thm_click:
 .tbright:
     mov al, THM_BRIGHT
 .tset:
-    mov ah, al
 %ifdef KERN_BIG
-    inc al                      ; ...and it IS the control: id 1, 2 or 3
-    call cp_ctl                 ; (SPEC.md 13.8.3)
-    jc .done
-    mov al, ah
+    call cp_ctli                ; ...and it IS the control: id 1 to 4
+    jc .done                    ; (SPEC.md 13.8.3)
 %endif
     cmp al, [thm_kind]
     je .done                    ; already live: change nothing
-    call KERNEL_SEG:cw_thm_set
-    mov byte [cp_wdirty], 1     ; remembered on close (SPEC.md 31.8)
-    mov byte [cp_dirty], 1      ; ui_task repaints the world (SPEC.md 13)
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+%ifdef KERN_BIG
+    cmp al, THM_COLOR           ; Color and Windows are ONE row and a title
+    jb .tstyle                  ; style (SPEC.md 76.14.13): bit 2 of
+    and byte [thm_cstrp], 0FBh  ; [thm_cstrp] is what thm_set promotes Color
+    cmp al, THM_WIN             ; to Windows on, so the radio that names
+    jne .tstyle                 ; plain Color clears it and the Windows radio
+    or byte [thm_cstrp], 4      ; sets it - the page and Customize's style
+.tstyle:                        ; group then cannot disagree
+%endif
+    call COLD_SEG:thm_set
+%ifdef KERN_BIG
+    jnc .tok                    ; WIN95.DRV could not be mounted (SPEC.md
+    push si                     ; 76.14.1): thm_set has adopted the nearest
+    mov si, cp_s_tnowin         ; theme that needs no module and [thm_kind]
+    call sc_m_say               ; says which - the radios below read it back,
+    pop si                      ; and the toast says why they did not move.
+.tok:                           ; The line is in THIS image, so sc_m_say
+                                ; (ES = CS) and not cp_toast, which is for
+                                ; the kernel's strings
+%endif
+    call cp_repost              ; remembered on close (SPEC.md 31.8)
+                                ; ui_task repaints the world (SPEC.md 13)
+                                ; ...and SAY SO once (SPEC.md 13.13)
     call cp_thm_radios
     jmp short .done
 
@@ -2497,7 +3138,7 @@ cp_thm_click:
 .aset:
     mov ah, al
 %ifdef KERN_BIG
-    add al, 4                   ; ...id 4 or 5 (SPEC.md 13.8.3)
+    add al, 5                   ; ...id 5 or 6 (SPEC.md 13.8.3)
     call cp_ctl
     jc .done
     mov al, ah
@@ -2505,7 +3146,7 @@ cp_thm_click:
     cmp al, [wm_animon]
     je .done                    ; already live
     mov [wm_animon], al
-    mov byte [cp_wdirty], 1     ; remembered on close - and NOTHING else is
+    call cp_wdset               ; remembered on close - and NOTHING else is
     call cp_thm_radios          ; owed: the zoom is not on screen, so there is
 %endif                          ; nothing to repaint and no [cp_dirty]
 .done:
@@ -2513,93 +3154,523 @@ cp_thm_click:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_thm_radios - all four glyphs, each group's live row filled
+; cp_thm_radios - all four theme glyphs, each group's live row filled
 ; -----------------------------------------------------------------------------
 cp_thm_radios:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
 
-    mov cx, di
-    add cx, CP_PGX              ; CX = glyph left x (every row)
+    lea cx, [di+CP_PGX]         ; CX = glyph left x (every row)
 
     mov bl, [thm_kind]          ; --- the theme group
-    mov dx, bp
-    add dx, CPH_R0Y
-    mov ax, OS88UI_GRADIO       ; row 0: Bright
-    or bl, bl
-    jnz .r0
-    mov al, OS88UI_GRADIO | OS88UI_GON
-.r0:
+    lea dx, [bp+CPH_R0Y]        ; row 0: Bright
 %ifdef KERN_BIG
     mov bh, 1
-    call cp_dngly
 %endif
-    call cp_gemit
-    mov dx, bp
-    add dx, CPH_R1Y
-    mov ax, OS88UI_GRADIO       ; row 1: Dark
-    cmp bl, THM_DARK
-    jne .r1
-    mov al, OS88UI_GRADIO | OS88UI_GON
-.r1:
+    or bl, bl
+    call cp_rad
+    lea dx, [bp+CPH_R1Y]        ; row 1: Dark
 %ifdef KERN_BIG
     mov bh, 2
-    call cp_dngly
 %endif
-    call cp_gemit
+    cmp bl, THM_DARK
+    call cp_rad
 %ifdef KERN_BIG
-    mov dx, bp
-    add dx, CPH_R2Y
-    mov ax, OS88UI_GRADIO       ; row 2: Color, greyed off a colour adapter
-    cmp bl, THM_COLOR
-    jne .r2
-    mov al, OS88UI_GRADIO | OS88UI_GON
-.r2:
-    call cp_thm_colgrey
-    jnc .r2live
-    mov ah, OS88UI_DIS
-.r2live:
+    lea dx, [bp+CPH_R2Y]        ; row 2: Color, greyed off a colour adapter
+    call cp_thm_colgrey         ; CF = greyed...
+    mov ax, OS88UI_GRADIO
+    adc ah, 0                   ; ...is AH = OS88UI_DIS (1) or 0
     mov bh, 3
-    call cp_dngly
-    call cp_gemit
+    cmp bl, THM_COLOR
+    call cp_gz
+    lea dx, [bp+CPH_R3Y]        ; row 3: Windows (SPEC.md 76.14.10)
+    mov bh, 4
+    cmp bl, THM_WIN
+    call cp_rad
 %endif
 
 %ifdef WM_ANIM
     mov bl, [wm_animon]         ; --- the animation group
-    mov dx, bp
-    add dx, CPH_A0Y
-    mov ax, OS88UI_GRADIO       ; row 0: On
+    lea dx, [bp+CPH_A0Y]        ; row 0: On
+    mov bh, 6                   ; ...id 6, which is what cp_thm_click's UPPER
+                                ; band reports for this row (SPEC.md 13.8.3):
+                                ; its `inc al` then `add al, 5` makes On 6 and
+                                ; Off 5, so the painter must agree or a press
+                                ; on one row draws the OTHER one pressed
+    mov ax, OS88UI_GRADIO
+    or bl, bl                   ; set when the byte is NOT zero
+    call cp_gnz
+    lea dx, [bp+CPH_A1Y]        ; row 1: Off
+    mov bh, 5
     or bl, bl
-    jz .a0
-    mov al, OS88UI_GRADIO | OS88UI_GON
-.a0:
-    mov bh, 5                   ; ...id 5, which is what cp_thm_click's UPPER
-    call cp_dngly               ; band reports for this row (SPEC.md 13.8.3):
-    call cp_gemit               ; its `inc al` then `add al, 4` makes On 5 and
-    mov dx, bp                  ; Off 4, so the painter must agree or a press
-    add dx, CPH_A1Y             ; on one row draws the OTHER one pressed
-    mov ax, OS88UI_GRADIO       ; row 1: Off
-    or bl, bl
-    jnz .a1
-    mov al, OS88UI_GRADIO | OS88UI_GON
-.a1:
-    mov bh, 4
-    call cp_dngly
-    call cp_gemit
+    call cp_rad
 %endif
 
+    jmp kretm_si
+
+%endif
+
+%ifdef DOCK_OPT
+; -----------------------------------------------------------------------------
+; cp_dock_paint - the Dock page (SPEC.md 31.13)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; No row greys: a side strip on a screen too short for every tile holds fewer
+; and packs them (SPEC.md 30.5.1), so every edge is available on every adapter.
+; -----------------------------------------------------------------------------
+cp_dock_paint:
+    call kentm_si
+
+
+    call cp_lbl                 ; row 0
+    dw cp_s_kbot, CP_PLX, CPK_R0Y + CP_PLDY
+    call cp_lbl                 ; row 1
+    dw cp_s_kleft, CP_PLX, CPK_R1Y + CP_PLDY
+    call cp_lbl                 ; row 2
+    dw cp_s_kright, CP_PLX, CPK_R2Y + CP_PLDY
+    call cp_lbl                 ; the check box's label
+    dw cp_s_kauto, CP_PLX, CPK_AY + CP_PLDY
+
+    call cp_dock_ctls
+
+    jmp kretm_si
+
+; -----------------------------------------------------------------------------
+; cp_dock_ctls - the three radios and the check box
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The dot is on the edge the strip STANDS on ([dock_side]), which is the
+; setting's own edge (a byte from a future version stands at the bottom).
+; -----------------------------------------------------------------------------
+cp_dock_ctls:
+    call kentm_si                ; KENT: push ax..si
+
+    lea cx, [di+CP_PGX]         ; CX = glyph left x (every row)
+    mov bl, [dock_side]
+
+    lea dx, [bp+CPK_R0Y]        ; --- row 0: Bottom
+%ifdef KERN_BIG
+    mov bh, 1
+%endif
+    or bl, bl
+    call cp_rad
+
+    lea dx, [bp+CPK_R1Y]        ; --- row 1: Left
+%ifdef KERN_BIG
+    mov bh, 2
+%endif
+    cmp bl, DOCK_P_LEFT
+    call cp_rad
+
+    lea dx, [bp+CPK_R2Y]        ; --- row 2: Right
+%ifdef KERN_BIG
+    mov bh, 3
+%endif
+    cmp bl, DOCK_P_RIGHT
+    call cp_rad
+
+    lea dx, [bp+CPK_AY]         ; --- the check box: Auto-hide
+%ifdef KERN_BIG
+    mov bh, 4
+%endif
+    test byte [dock_cfg], DOCK_F_AUTO
+    call cp_chk
+
+    jmp kretm_si
+
+; -----------------------------------------------------------------------------
+; cp_dock_click - a click inside the Dock page
+; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
+;      DX = pane-relative y; gfx lock held by the caller
+; out: nothing (flags only)
+;
+; A click that changes [dock_cfg] applies it on the spot (cw_dock_apply: the
+; geometry, the drive column, every window refitted), is remembered at the
+; close (SPEC.md 31.8) and posts [cp_dirty], whose wm_paint_all puts the strip
+; up where it now stands and lays the desktop over where it stood. It does NOT
+; redraw its own glyphs first: dock_apply's wm_refit can have moved this very
+; window, so DI/BP may describe where the pane WAS, and the repaint the flag
+; buys draws them in the right place anyway.
+; -----------------------------------------------------------------------------
+cp_dock_click:
+    push ax
+
+    cmp dx, CPK_B0Y1
+    jl .done
+    cmp dx, CPK_B2Y2
+    jg .auto                    ; below the group: the check box, or nothing
+
+    mov al, DOCK_P_BOTTOM
+    cmp dx, CPK_B0Y2
+    jle .pset
+    mov al, DOCK_P_LEFT
+    cmp dx, CPK_B1Y2
+    jle .pset
+    mov al, DOCK_P_RIGHT
+.pset:
+    mov ah, al
+%ifdef KERN_BIG
+    call cp_ctli                ; ...and it IS the control: id 1, 2 or 3
+    jc .done                    ; (SPEC.md 13.8.3)
+%endif
+    mov al, [dock_cfg]          ; the new byte: this edge, Auto-hide kept
+    and al, ~DOCK_P_MASK & 0FFh
+    or al, ah
+    jmp short .change
+
+.auto:
+    cmp dx, CPK_AY1
+    jl .done
+    cmp dx, CPK_AY2
+    jg .done
+%ifdef KERN_BIG
+    mov al, 4                   ; id 4
+    call cp_ctl
+    jc .done
+%endif
+    mov al, [dock_cfg]
+    xor al, DOCK_F_AUTO
+
+.change:
+    cmp al, [dock_cfg]
+    je .done                    ; already the setting: change nothing
+    mov ah, [dock_cfg]
+    mov [dock_cfg], al
+    CPXF dock_apply             ; IN THIS IMAGE (KSW_SECT, kernel.asm)
+    jnc .changed
+    mov [dock_cfg], ah          ; failed enable: keep the working preference
+    push si
+    CPSTAGE cp_dock_fail
+    call cp_toast
     pop si
-    pop dx
-    pop cx
-    pop bx
+    jmp short .done
+.changed:
+    call cp_repost              ; remembered on close (SPEC.md 31.8)
+                                ; ui_task repaints the world (SPEC.md 13)
+                                ; ...and SAY SO once (SPEC.md 13.13)
+.done:
     pop ax
     ret
 
+cp_dock_fail: db 'Dock Module Unavailable', 0
+
 %endif
 
+%ifdef OS88_DRIVERS
+; =============================================================================
+; The Floppy page (SPEC.md 31.14)
+;
+; Five drop-downs over SYSTEM.CFG's 'FD' record: one per unit a machine can
+; claim, Auto / None / 5.25 / 3.5, and the read bound, Auto / Track /
+; Cylinder - Cylinder being how a 286 and up, which never runs the canary,
+; gets the cylinder run at all (SPEC.md 31.14). The page
+; EDITS THE RECORD AND NOTHING ELSE - the bytes live in drv_cfg alone, nothing
+; resident reads them, and ovl_fdd_apply applies them at the next boot, which
+; is when the detection they override runs. So the caption says restart, and
+; a pick costs no kernel code at all.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_fdd_paint - the Floppy page
+; in:  DI = pane left, BP = pane top (pane white, lock held)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cp_fdd_paint:
+    call kentm_si                ; KENT: push ax..si
+
+
+    xor bx, bx                  ; BL = the row
+.row:
+    cmp bl, 4
+    je .rlab
+    CPSTAGE cp_s_fdrv           ; 'Drive A:', lettered below
+    call cp_fdltr
+    mov [cp_sbuf + CPF_LTR], al
+    jmp short .lab
+.rlab:
+    CPSTAGE cp_s_frd
+.lab:
+    call cp_fdy                 ; DX = the row's box top
+    add dx, 3
+    lea cx, [di+CPF_LX]
+    call cp_run
+
+    call cp_fdy                 ; --- the box: its frame and its arrow
+    push bx
+    mov bx, dx                  ; y1
+    add dx, CPF_BH - 1          ; y2
+    lea ax, [di+CPF_BX1]
+    lea cx, [di+CPF_BX2]
+    call cp_penlive             ; a run clipped whole leaves the pen at its
+    call KERNEL_SEG:cw_gfx_frame    ; GROUND (font_run), so set it outright
+    mov ax, cx
+    sub ax, CP_DSW
+    mov si, CP_TRI_DN           ; the Drivers page's down arrow
+    call cp_drv_tri
+    pop bx
+    clc                         ; the ground is the pane's: no tail to clear
+    call cp_fdcap
+    inc bx
+    cmp bl, 5
+    jb .row
+
+    call cp_lbl
+    dw cp_s_fcap, CP_PMX, CPF_CAPY
+
+    jmp kretm_si
+
+; -----------------------------------------------------------------------------
+; cp_fdd_click - a press inside the Floppy page
+; in:  DI = pane left, BP = pane top, CX/DX = pane-relative; lock held
+; out: nothing (all registers preserved)
+;
+; A box is a SELECTING site (cp_ctl id 0, SPEC.md 13.8.3): it acts on the
+; PRESS, because the popup it opens IS the rest of the gesture - menu_drop
+; follows the held button and returns at the release. So the drag and the
+; release find nothing armed and do nothing. The label beside a box is part
+; of its row, as a radio's is.
+; -----------------------------------------------------------------------------
+cp_fdd_click:
+    call kentm_si                ; KENT: push ax..si
+
+    cmp cx, CPF_BX2
+    jg .done
+    mov ax, dx
+    sub ax, CPF_R0Y
+    jl .done
+    mov bl, CPF_ROWH
+    div bl                      ; AL = the row, AH = where in it
+    cmp ah, CPF_BH
+    jae .done                   ; the gap between two boxes
+    cmp al, 4
+    ja .done
+    mov bl, al                  ; BL = the row, for good
+
+    xor al, al
+    call cp_ctl                 ; id 0: acts on the press only
+    jc .done
+
+    push bx
+    call cp_fdy
+    add dx, CPF_BH              ; the list hangs under the box...
+    lea cx, [di+CPF_BX1]
+                                ; ...from its left edge
+    call cp_fdstg               ; BX = the item array, AX = the count
+    call KERNEL_SEG:cw_menu_popup ; CF = 1 nothing chosen, else AL = the pick
+    pop bx
+    jc .done
+
+    mov ah, al                  ; AH = the pick
+    cmp bl, 4
+    jne .drv
+    cmp ah, [drv_cfg+CFG_FDR]
+    je .done
+    mov [drv_cfg+CFG_FDR], ah
+    mov byte [cp_fdbsd], 1   ; ...and the boot sector's byte is owed too
+    jmp short .changed
+.drv:
+    mov cl, bl
+    shl cl, 1                   ; CL = this unit's shift
+    mov al, 3
+    shl al, cl                  ; AL = its mask
+    shl ah, cl                  ; AH = the pick, in place
+    mov dl, [drv_cfg+CFG_FDD]
+    mov dh, dl
+    not al
+    and dl, al
+    or dl, ah
+    cmp dl, dh
+    je .done
+    mov [drv_cfg+CFG_FDD], dl
+.changed:
+    call cp_wdset               ; remembered on close (SPEC.md 31.8)
+    stc                         ; the old caption may be longer
+    call cp_fdcap
+.done:
+    jmp kretm_si
+
+; -----------------------------------------------------------------------------
+; cp_fdcap - row BL's box caption, the setting it holds
+; in:  BL = the row, CF = 1 to clear what a longer caption left to its right;
+;      DI = pane left, BP = pane top; lock held
+; out: nothing (all registers preserved)
+;
+; The caption is one opaque run and the tail is ONE fill of what it did not
+; cover, up to the arrow - so a changed pick writes each pixel once. A page
+; paint passes CF = 0: cp_page has already laid that ground. (Padding every
+; caption to its menu's longest would delete the tail, and does not fit:
+; the Reads menu would stage 33 bytes into cp_sbuf's 28.)
+; -----------------------------------------------------------------------------
+cp_fdcap:
+    call kentm_si                ; KENT: push ax..si
+    pushf
+    call cp_fdy                 ; DX = the box top
+    call cp_fdval               ; AL = the setting
+    cbw
+    shl ax, 1
+    xchg si, ax                 ; SI = its slot in the menu's pointer array
+    call cp_fdstg               ; its menu, whose strings are its captions
+    mov si, [si + cp_sbuf]      ; SI -> the staged caption
+    mov bx, dx                  ; BX = the box top, for the tail
+    add dx, 3
+    lea cx, [di+CPF_BX1 + 4]
+    call cp_brun
+    popf
+    jnc .out
+.len:                           ; CX += 8 per cell of the caption
+    cmp byte [si], 0
+    je .tail
+    inc si
+    add cx, 8
+    jmp short .len
+.tail:
+    xchg ax, cx                 ; x1 = where the run ended
+    inc bx                      ; y1 = inside the frame
+    lea cx, [di+CPF_BX2 - CP_DSW + 3]
+                                ; x2 = short of the arrow
+    lea dx, [bx+CPF_BH - 3]
+                                ; y2 = inside the frame
+    call cp_penlive             ; ...undithered
+    call cp_wfill
+    call cp_black
+.out:
+    jmp kretm_si
+
+; cp_fdy - row BL's box top, absolute: DX = BP + CPF_R0Y + BL*CPF_ROWH
+cp_fdy:
+    push ax
+    mov al, CPF_ROWH
+    mul bl
+    add ax, bp
+    add ax, CPF_R0Y
+    xchg dx, ax
+    pop ax
+    ret
+
+; cp_fdval - row BL's setting: AL = 0..3 for a unit, 0..2 for the reads
+cp_fdval:
+    mov al, [drv_cfg+CFG_FDR]
+    cmp bl, 4
+    je .rd
+    push cx
+    mov cl, bl
+    shl cl, 1
+    mov al, [drv_cfg+CFG_FDD]
+    shr al, cl
+    pop cx
+    and al, 3
+    ret
+.rd:
+    cmp al, 3
+    jb .ok
+    xor al, al                  ; a future byte: Auto, which is what
+.ok:                            ; ovl_fdd_apply does with it
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_fdltr - the letter unit BL goes by: AL
+;
+; The row's own letter when the unit has one, since that is what the desktop
+; calls it. A unit with no row reads as the letter it would be given -
+; dsk_flop_add_x's order, where C: belongs to the hard disk - which is the
+; letter a forced unit gets at the next boot on a machine that has not
+; already put something there.
+; -----------------------------------------------------------------------------
+cp_fdltr:
+    push bx
+    push cx
+    mov al, bl
+    cmp al, 2
+    jb .dflt
+    inc ax                      ; units 2 and 3 skip C:
+.dflt:
+    add al, 'A'
+    mov cl, bl
+    mov bx, dsk_vtab
+    mov ah, 'A'
+.f:
+    cmp byte [bx+DV_KIND], DVK_BIOS
+    jne .n
+    cmp [bx+DV_UNIT], cl
+    jne .n
+    mov al, ah
+    jmp short .o
+.n:
+    inc ah
+    add bx, DV_SIZE
+    cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
+    jb .f
+.o:
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_fdstg - stage row BL's menu into cp_sbuf, pointers and strings together
+; in:  BL = the row
+; out: BX = the item array (cp_sbuf), AX = the item count
+;
+; menu_popup reads its items through DS (SPEC.md 12.4: every popup is the
+; kernel's own), and an image's strings are CS-relative (SPEC.md 2.8.6) - so
+; the whole menu is copied down, laid out in the image EXACTLY as it lands,
+; pointers already naming cp_sbuf. The caption painter uses the same copy.
+; -----------------------------------------------------------------------------
+cp_fdstg:
+    push cx
+    push si
+    push di
+    mov di, cp_sbuf
+    xor si, si
+    mov cx, CPF_MDN
+    mov bh, 4
+    cmp bl, 4
+    jb .c
+    mov si, CPF_MRO
+    mov cx, CPF_MRN
+    mov bh, 3
+.c:
+    mov al, [cs:si + cp_fdmd]
+    mov [di], al
+    inc si
+    inc di
+    loop .c
+    mov al, bh
+    cbw
+    mov bx, cp_sbuf
+    pop di
+    pop si
+    pop cx
+    ret
+
+; The two menus, each laid out as it lands in cp_sbuf. Item n IS setting n.
+cp_fdmd:
+    dw cp_sbuf + (cp_fdm0 - cp_fdmd), cp_sbuf + (cp_fdm1 - cp_fdmd)
+    dw cp_sbuf + (cp_fdm2 - cp_fdmd), cp_sbuf + (cp_fdm3 - cp_fdmd)
+cp_fdm0: db 'Auto', 0
+cp_fdm1: db 'None', 0
+cp_fdm2: db '5.25', 0
+cp_fdm3: db '3.5', 0
+cp_fdmr:
+    dw cp_sbuf + (cp_fdr0 - cp_fdmr), cp_sbuf + (cp_fdr1 - cp_fdmr)
+    dw cp_sbuf + (cp_fdr2 - cp_fdmr)
+cp_fdr0: db 'Auto', 0
+cp_fdr1: db 'Track', 0
+cp_fdr2: db 'Cylinder', 0
+cp_fdend:
+CPF_MDN   equ cp_fdmr - cp_fdmd
+CPF_MRO   equ cp_fdmr - cp_fdmd
+CPF_MRN   equ cp_fdend - cp_fdmr
+%if CPF_MDN > CP_SBUF || CPF_MRN > CP_SBUF
+%error "ctrl: a Floppy page menu does not fit cp_sbuf (SPEC.md 31.14)"
+%endif
+
+CPS cp_s_fdrv,  'Drive A:'
+CPF_LTR   equ 6                 ; ...where the letter sits in it
+CPS cp_s_frd,   'Reads:'
+CPS cp_s_fcap,  'Applies at the next restart'
+
+%endif
 ; -----------------------------------------------------------------------------
 ; cp_sched_click - a click inside the Scheduler page
 ;
@@ -2630,19 +3701,17 @@ cp_sched_click:
 .set:
     mov ah, al                  ; AH = the mode this row selects
 %ifdef KERN_BIG
-    inc al                      ; ...and it IS the control: id 1 or 2
-    call cp_ctl                 ; (SPEC.md 13.8.3)
-    jc .done
-    mov al, ah
+    call cp_ctli                ; ...and it IS the control: id 1 or 2
+    jc .done                    ; (SPEC.md 13.8.3)
 %endif
     call KERNEL_SEG:sched_mode_get         ; AL = the live mode
     cmp al, ah
     je .done                    ; that row is already live: change nothing
     mov al, ah
-    call KERNEL_SEG:sched_mode_set            ; live on the next tick (SPEC.md 8.2)
-    mov byte [cp_wdirty], 1     ; ...and remembered on close (31.8)
-    mov byte [cp_dirty], 1      ; ui_task step 3 repaints the About box's
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    call cp_schset              ; live on the next tick (SPEC.md 8.2)
+    call cp_repost              ; ...and remembered on close (31.8)
+                                ; ui_task step 3 repaints the About box's
+                                ; ...and SAY SO once (SPEC.md 13.13)
                                 ; third line and any other mode-quoting
                                 ; window, outside the lock (SPEC.md 13)
     call cp_radios              ; the two glyph boxes only
@@ -2661,51 +3730,28 @@ cp_sched_click:
 ; lets cp_sched_click repaint in place without touching the rest of the page.
 ; -----------------------------------------------------------------------------
 cp_radios:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
 
     call KERNEL_SEG:sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
     mov bl, al                  ; BL = the row whose glyph is filled
 
-    mov cx, di                  ; the pen is os88ui_glyph's now, taken from
-    add cx, CP_PGX              ; AH so the colour and [gfx_dis] cannot be set
-    mov dx, bp                  ; apart (SPEC.md 47 rule 1) - it used to be
-    add dx, CP_PR0Y             ; set here because the click path's entry pen
-                                ; is whatever the last drawing left behind,
-                                ; and now that is nobody's business but the
-                                ; control's. CX = glyph left x (both rows),
-                                ; DX = row 0 glyph top
-
-    mov ax, OS88UI_GRADIO       ; --- row 0: Pre-emptive --- (AH = 0: neither
-    cmp bl, 0                   ; mode is ever refused)
-    jne .r0
-    mov al, OS88UI_GRADIO | OS88UI_GON
-.r0:
+    lea cx, [di+CP_PGX]         ; the pen is os88ui_glyph's now, taken from
+                                ; AH so the colour and [gfx_dis] cannot be set
+    lea dx, [bp+CP_PR0Y]        ; apart (SPEC.md 47 rule 1). Row 0 Pre-emptive and
+                                ; row 1 Cooperative, ids 1 and 2 (13.8.3);
+                                ; AH = 0: neither mode is ever refused
 %ifdef KERN_BIG
-    mov bh, 1                   ; ...and PRESSED if it is the one being held
-    call cp_dngly               ; (SPEC.md 13.8.3): row 0 is id 1
+    mov bh, 1
 %endif
-    call cp_gemit
-    add dx, CP_PROWH            ; --- row 1: Cooperative ---
-    mov ax, OS88UI_GRADIO
-    cmp bl, 1
-    jne .r1
-    mov al, OS88UI_GRADIO | OS88UI_GON
-.r1:
+    test bl, bl
+    call cp_rad
+    add dx, CP_PROWH
 %ifdef KERN_BIG
     mov bh, 2
-    call cp_dngly
 %endif
-    call cp_gemit
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    cmp bl, 1
+    call cp_rad
+    jmp kretm_si
 
 ; =============================================================================
 ; Display page (SPEC.md 31.10/39.11) - which adapter, and where display 1 sits
@@ -2718,7 +3764,7 @@ cp_radios:
 ; clobbers: nothing (flags)
 ; -----------------------------------------------------------------------------
 cp_vid_rowok:
-    call KERNEL_SEG:cw_vid_avail_test
+    call vid_avail_test         ; in this image (KSW_SECT, kernel.asm)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2799,13 +3845,9 @@ cp_vid_slot:
 cpf_vidok:
     push ax
     call cp_vid_pick
-    cmp al, [vid_kind]
+    sub al, [vid_kind]          ; 0 = the running adapter...
+    cmp al, 1                   ; ...which is CF = 1, and nothing else is
     pop ax                      ; POP does not touch flags
-    je .no
-    clc
-    ret
-.no:
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2819,11 +3861,7 @@ cpf_vidok:
 ; first, so nothing is left half-erased between the two.
 ; -----------------------------------------------------------------------------
 cp_vid_rows:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
     call cp_vid_pick            ; [cp_vsel] now names a row that exists
     xor bl, bl                  ; BL = slot
 .r:
@@ -2835,18 +3873,16 @@ cp_vid_rows:
     mov al, bl                  ; DX = this row's glyph top
     mov cl, CPV_ROWH
     mul cl                      ; AX = slot * pitch (mul r/m8: AX = AL * op)
-    mov dx, bp
-    add dx, CPV_R0Y
+    lea dx, [bp+CPV_R0Y]
     add dx, ax
 
     mov al, bh                  ; --- the label
-    xor ah, ah
+    cbw                         ; (a VID_* kind, < 128)
     shl ax, 1
-    mov si, ax
+    xchg si, ax
     CPSTAGEX cp_vidnam
-    mov byte [gfx_color], CBLACK
-    mov cx, di
-    add cx, CP_PLX
+    call cp_black
+    lea cx, [di+CP_PLX]
     push dx
     add dx, CP_PLDY
     call cp_run
@@ -2857,19 +3893,14 @@ cp_vid_rows:
     jne .g
     mov al, OS88UI_GRADIO | OS88UI_GON
 .g:
-    mov cx, di                  ; NO down state here: an adapter row SELECTS,
-    add cx, CP_PGX              ; which is a safe prefix action, so it keeps
+    lea cx, [di+CP_PGX]         ; NO down state here: an adapter row SELECTS,
+                                ; which is a safe prefix action, so it keeps
     call cp_gemit                ; the press (SPEC.md 13.6/13.8.3)
     inc bl
     cmp bl, 3
     jb .r
 .done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -2893,7 +3924,7 @@ cp_vid_msel:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_vid_mode - the desktop row: Single / Right / Below (SPEC.md 31.10.2)
+; cp_vid_mode - the desktop row: Single / Right / Below (SPEC.md 31.1.4)
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
 ;
@@ -2906,72 +3937,54 @@ cp_vid_msel:
 ; be left with a heading over nothing.
 ; -----------------------------------------------------------------------------
 cp_vid_mode:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call KERNEL_SEG:cw_vid_dual_ok
+    call kentm_si                ; KENT: push ax..si
+    CPXK vid_dual_ok
     jc .done
 
-    mov byte [gfx_color], CBLACK    ; --- the row's label (SPEC.md 31.10.3).
-    CPSTAGE cp_s_vdesk              ; No erase: cp_page has already whitened
-    mov cx, di                      ; the pane and nothing else ever draws
-    add cx, CP_PMX                  ; here - the caption below is constant
-    mov dx, bp                      ; too, so this page has no state line
-    add dx, CPV_MLY
-    call cp_run
+    call cp_blbl                ; --- the row's label (SPEC.md 31.10.3).
+                                ; No erase: cp_page has already whitened
+    dw cp_s_vdesk, CP_PMX, CPV_MLY
+                                ; the pane and nothing else ever draws
+                                ; here - the caption below is constant
+                                ; too, so this page has no state line
 
     call cp_vid_msel
     mov bh, al                  ; BH = the radio that is on
     xor bl, bl                  ; BL = the radio being drawn
 .r:
     mov al, bl                  ; --- SI = this radio's name, BEFORE AX becomes
-    xor ah, ah                  ; the x offset: both want it
+    cbw                         ; the x offset: both want it (BL <= 2)
     shl ax, 1
-    mov si, ax
+    xchg si, ax
     CPSTAGEX cp_vmodnam
 
     mov al, bl                  ; AX = this radio's x offset within the pane
     mov cl, CPV_MSTEP
     mul cl                      ; mul r/m8: AX = AL * op
 
-    mov cx, di                  ; --- the label
-    add cx, CP_PLX
+    lea cx, [di+CP_PLX]         ; --- the label
     add cx, ax
-    mov dx, bp
-    add dx, CPV_MY + CP_PLDY
-    mov byte [gfx_color], CBLACK
+    lea dx, [bp+CPV_MY + CP_PLDY]
     push ax
-    call cp_run
+    call cp_brun
     pop ax
 
-    mov cx, di                  ; --- the glyph. The x offset is SPENT into CX
-    add cx, CP_PGX              ; before AX becomes the glyph's own argument,
+    lea cx, [di+CP_PGX]         ; --- the glyph. The x offset is SPENT into CX
+                                ; before AX becomes the glyph's own argument,
     add cx, ax                  ; which is the same both-want-AX shuffle the
-    mov dx, bp                  ; label above does one register over
-    add dx, CPV_MY
-    mov ax, OS88UI_GRADIO
-    cmp bl, bh
-    jne .g
-    mov al, OS88UI_GRADIO | OS88UI_GON
-.g:
-    push bx                     ; ids 2..4, the Activate button being 1
-    mov bh, bl
+    lea dx, [bp+CPV_MY]         ; label above does one register over
+    push bx
+    mov ah, bh                  ; AH = the radio that is on
+    mov bh, bl                  ; ids 2..4, the Activate button being 1
     add bh, 2
-    call cp_dngly
+    cmp bl, ah
+    call cp_rad
     pop bx
-    call cp_gemit
     inc bl
     cmp bl, 3
     jb .r
 .done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -2994,43 +4007,60 @@ cp_vid_mode:
 ; -----------------------------------------------------------------------------
 
 cp_vid_btn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentm_bp
 
-    mov ax, di
-    add ax, CPV_BTNX
-    mov [os88ui_krect+0], ax
-    add ax, CPV_BTNW - 1
-    mov [os88ui_krect+4], ax
-    mov ax, bp
-    add ax, CPV_BTNY
-    mov [os88ui_krect+2], ax
-    add ax, CPV_BTNH - 1
-    mov [os88ui_krect+6], ax
+    mov ax, CPV_BTNX
+    mov dx, CPV_BTNY
+    mov cx, CPV_BTNX + CPV_BTNW - 1
+    mov bx, CPV_BTNY + CPV_BTNH - 1
+    call cp_krect               ; BX = os88ui_krect, kept to cp_bemit below
 
     call cpf_vidok              ; CF = 1 when there is nothing to activate
     mov di, OS88UI_FILL         ; the pane behind it is not white
     jnc .live
     or di, OS88UI_DIS           ; SPEC.md 47 rule 1: the frame AND the label
 .live:                          ; dither together, which is one flag now
+    CPSTAGE cp_s_vact
 %ifdef KERN_BIG
     mov al, 1                   ; ...and pressed if it is being held; DIS
-    call cp_dnbtn               ; outranks DOWN inside os88ui_btn
-%endif
-    CPSTAGE cp_s_vact
-    mov bx, os88ui_krect
-    call cp_bemit
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+%endif                          ; outranks DOWN inside os88ui_btn
+    jmp cp_btdn
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_vid_fcok - is Force Color available here? (SPEC.md 31.10.4, module
+;               internal)
+; out: CF = 0 yes, CF = 1 greyed - there is no VGA in this machine
+; clobbers: nothing (flags)
+;
+; SPEC.md 47 rule 1's one predicate: the label's pen, the glyph's DIS and the
+; click's refusal all read it. [vid_avail] is a fact fixed at boot (39.11.1).
+; -----------------------------------------------------------------------------
+cp_vid_fcok:
+    test byte [vid_avail], VID_A_VGA    ; `test` clears CF
+    jnz .ok
+    stc
+.ok:
     ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_fc - Force Color's GLYPH (its label is cp_vid_paint's, so a press
+;             edge redraws the box and not the words - the Date/Time split)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cp_vid_fc:
+    call kentm_si
+    lea cx, [di+CPV_FCX]
+    lea dx, [bp+CPV_FCY]
+    mov bh, 5                   ; id 5: rows 0, Set Primary 1, desktop 2..4
+    call cp_vid_fcok            ; CF = greyed...
+    mov ax, OS88UI_GCHECK
+    adc ah, 0                   ; ...is AH = OS88UI_DIS (1) or 0
+    test byte [drv_cfg+CFG_VGC], 1
+    call cp_gnz                 ; ticked when bit 0 is set (SPEC.md 39.28)
+    jmp kretm_si
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_vid_paint - the Display page
@@ -3045,36 +4075,26 @@ cp_vid_btn:
 ; the click path exists for.
 ; -----------------------------------------------------------------------------
 cp_vid_paint:
-    push cx
-    push dx
-    push si
+    call kentm_si
 
-    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
-    mov si, cp_s_vid            ; heading, same string as the list row
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PHY
-    call cp_run
 
     call cp_vid_rows
-    call cp_vid_btn
 %ifdef KERN_BIG
-    call cp_vid_mode
+    call cp_vid_fcok            ; Force Color's label, in the pen its
+    call cp_pencf               ; predicate gives it (SPEC.md 31.10.4, 47
+    call cp_lbl                 ; rule 2) - lettered here and not by the
+    dw cp_s_vfc, CPV_FCLX, CPV_FCY + CP_PLDY    ; glyph's painter
+    call cp_penlive
+    call cp_vid_ctls            ; Activate, Force Color and the arrangement
+%else                           ; radios
+    call cp_vid_btn
 %endif
 
-    mov byte [gfx_color], CBLACK ; ...and the caption, LAST on the page as it
-    CPSTAGE cp_s_vcap            ; is on every other one
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CPV_CAPY
-    call cp_run
+    call cp_blbl                ; ...and the caption, LAST on the page as it
+                                ; is on every other one
+    dw cp_s_vcap, CP_PMX, CPV_CAPY
 
-    pop si
-    pop dx
-    pop cx
-    ret
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_vid_click - a click inside the Display page
@@ -3097,9 +4117,7 @@ cp_vid_paint:
 ; lock (SPEC.md 13/31.2), and that is the only correct redraw here.
 ; -----------------------------------------------------------------------------
 cp_vid_click:
-    push ax
-    push cx
-    push dx
+    call kentm_si
 
     cmp dx, CPV_BB1             ; --- the Activate button ---
     jl .rows
@@ -3107,73 +4125,33 @@ cp_vid_click:
     jg .mode                    ; ...and BELOW it is the desktop row now, not
                                 ; the bottom of the page
     cmp cx, CPV_BTNX
-    jl .donej
+    jl .done
     cmp cx, CPV_BTNX + CPV_BTNW - 1
-    jg .donej
+%ifdef KERN_BIG
+    jg .fc                      ; ...and to its right, Force Color (31.10.4)
+%else
+    jg .done
+%endif
     call cpf_vidok              ; greyed: the dot is already on the running
-    jc .donej                   ; adapter, so a refused press says nothing
+    jc .done                    ; adapter, so a refused press says nothing
                                 ; more (SPEC.md 47 rule 5)
 %ifdef KERN_BIG
     mov al, 1                   ; the Activate button
     call cp_ctl
-    jc .donej
+    jc .done
 %endif
     mov al, [cp_vsel]
-    call KERNEL_SEG:vid_switch
-    jc .donej                   ; refused: the adapter went away under us
-    mov byte [cp_wdirty], 1     ; ...remembered on close (SPEC.md 31.8)
-    mov byte [cp_dirty], 1      ; ...and the whole screen is a new shape
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
-.donej:                         ; ...and SEVEN refusals share it
-    jmp .done                   ; NEAR: 13.8.3's probe calls grew the body past
-                                ; a short jump's reach
-.mode:                          ; --- the desktop row (SPEC.md 31.10.2) ---
-%ifdef KERN_BIG
-    cmp dx, CPV_MB1
-    jl .donej
-    cmp dx, CPV_MB2
-    jg .donej
-    call KERNEL_SEG:cw_vid_dual_ok
-    jc .done                    ; not drawn on this machine, so not clickable
-    mov ax, cx                  ; AH = 0: cx is pane-relative and CP_PRGT is
-    sub ax, CP_PGX              ; 221, so this cannot carry
-    jl .done
-    mov cl, CPV_MSTEP
-    div cl                      ; AL = which radio, AH = the remainder
-    cmp al, 3
-    jae .done
-    mov ah, al                  ; ...and is it the one already on?
-%ifdef KERN_BIG
-    add al, 2                   ; ids 2..4, the Activate button being 1
-    call cp_ctl
-    jc .done
-    sub al, 2
-%endif
-    call cp_vid_msel
-    cmp al, ah
-    je .done                    ; draw nothing, exactly like the rows above
-
-    mov al, ah                  ; SPEC.md 39.19's two bytes, from the three
-    or al, al                   ; arrangements: Single has no layout
-    jz .msing
-    dec al
-    mov [vid_dlay], al
-    mov byte [vid_dmode], 1
-    jmp short .mgo
-.msing:
-    mov byte [vid_dmode], 0
-.mgo:
-    ; ...and it takes effect NOW, with only the record of it waiting for the
-    ; close (SPEC.md 31.8). NOTHING IS REDRAWN, for the Activate button's
-    ; reason one screen up: vid_disp_init moves the desktop and re-fits every
-    ; window, so DI/BP describe a rectangle that may no longer exist.
-    call KERNEL_SEG:vid_disp_relayout
-    mov byte [cp_wdirty], 1
-    mov byte [cp_dirty], 1
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
-%endif
-    jmp short .done
-
+    CPXF vid_switch             ; IN THIS IMAGE (KSW_SECT, kernel.asm)
+    jc .done                    ; refused: the adapter went away under us
+    call cp_repost              ; ...remembered on close (SPEC.md 31.8)
+                                ; ...and the whole screen is a new shape
+                                ; ...and SAY SO once (SPEC.md 13.13)
+    jmp short .done             ; (the radio rows sit between: .done is
+                                ; theirs, and in SHORT reach of every
+                                ; refusal above and of the desktop row below
+                                ; since kernel size pass 10 put them here -
+                                ; where .rows had been a relaxed jcc's five
+                                ; bytes away and .done a near jump's three)
 .rows:                          ; --- the radio rows ---
     cmp dx, CPV_B0Y1
     jl .done
@@ -3200,10 +4178,93 @@ cp_vid_click:
                                 ; un-greyed. The caption follows nothing now
                                 ; (SPEC.md 31.10.3), so it is not redrawn
 .done:
-    pop dx
-    pop cx
-    pop ax
-    ret
+    jmp kretm_si
+%ifdef KERN_BIG
+.fc:                            ; --- Force Color (SPEC.md 31.10.4, 39.28) ---
+    cmp cx, CPV_FCB
+    jl .done                    ; the gap between the button and the box
+    call cp_vid_fcok
+    jc .done                    ; greyed: no VGA, and the press says nothing
+    mov al, 5
+    call cp_ctl                 ; ...and it fires on the RELEASE (13.8.3)
+    jc .done
+    and byte [drv_cfg+CFG_VGC], 1   ; stored 0 or 1, whatever a record held
+    xor byte [drv_cfg+CFG_VGC], 1
+    call cp_wdset               ; remembered on close (SPEC.md 31.8) - the
+    jz .fcdraw                  ; door writes no flags, so ZF is the xor's: an
+    call cp_vgc_force           ; UN-tick waits for the next start (39.28)
+.fcdraw:
+    call cp_vid_fc
+    jmp short .done
+%endif
+.mode:                          ; --- the desktop row (SPEC.md 31.1.4) ---
+%ifdef KERN_BIG
+    cmp dx, CPV_MB1
+    jl .done
+    cmp dx, CPV_MB2
+    jg .done
+    CPXK vid_dual_ok
+    jc .done                    ; not drawn on this machine, so not clickable
+    mov ax, cx                  ; AH = 0: cx is pane-relative and CP_PRGT is
+    sub ax, CP_PGX              ; 221, so this cannot carry
+    jl .done
+    mov cl, CPV_MSTEP
+    div cl
+    cmp al, 3
+    jae .done
+    mov ah, al                  ; ...and is it the one already on?
+%ifdef KERN_BIG
+    add al, 2                   ; ids 2..4, the Activate button being 1
+    call cp_ctl
+    jc .done
+    sub al, 2
+%endif
+    call cp_vid_msel
+    cmp al, ah
+    je .done                    ; draw nothing, exactly like the rows above
+
+    mov al, ah                  ; SPEC.md 39.19's two bytes, from the three
+    or al, al                   ; arrangements: Single has no layout
+    jz .msing                   ; (AL = 0 is Single's mode byte too)
+    dec ax                      ; AL >= 1, so no borrow reaches AH
+    mov [vid_dlay], al
+    mov al, 1
+.msing:
+    mov [vid_dmode], al
+    ; ...and it takes effect NOW, with only the record of it waiting for the
+    ; close (SPEC.md 31.8). NOTHING IS REDRAWN, for the Activate button's
+    ; reason one screen up: vid_disp_init moves the desktop and re-fits every
+    ; window, so DI/BP describe a rectangle that may no longer exist.
+    call COLD_SEG:exf_sync      ; Extend: EXTD.DRV FIRST (SPEC.md 39.19.6)
+    jc .mref                    ; refused, and [vid_dmode] is Single again
+    call vid_disp_init           ; (vid_disp_relayout's three, written out:
+    call COLD_SEG:desk_rowcalc_x ; it was a resident far body this image
+    call wm_refit                ; alone called - kernel size pass 13; the
+                                 ; first and last are this image's own now)
+    call COLD_SEG:exf_sync      ; Single: the image goes AFTER the collapse
+    call cp_repost              ; ...and SAY SO once (SPEC.md 13.13)
+%endif
+    jmp .done                   ; (near on kern_big: .fc's 0/1 store, 39.28)
+
+%ifdef KERN_BIG
+.mref:                          ; EXTD.DRV refused (SPEC.md 39.19.6): the
+                                ; panel's own load string - put the system
+    push si                     ; disk in. The radio still reads Single,
+                                ; [vid_dmode] having been put back, and
+                                ; nothing moved.
+                                ; **NOT CPSTAGE**: cp_s_noload is RESIDENT -
+    mov si, cp_s_noload         ; cp_open_x's refusal letters it with no image
+                                ; loaded, and disk.inc stamps its drive at the
+                                ; mount - so it is DS's, and cp_stage reads
+                                ; [cs:si], THIS IMAGE at that offset. The
+                                ; first build did exactly that and toasted an
+                                ; empty string; tests/extdmod.py's arm B is
+                                ; what saw it
+    call cp_toast
+    pop si
+    jmp .done
+%endif
+
 
 ; =============================================================================
 ; Date/Time page (SPEC.md 31.5) - the editor for the system clock of
@@ -3230,68 +4291,51 @@ cp_vid_click:
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 cp_time_paint:
-    push ax
-    push cx
-    push dx
-    push si
-
-    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
-
-    mov si, cp_s_time           ; heading, same string as the list row
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PHY
-    call cp_run
+    call kentm_si                ; KENT: push ax..si
 
     mov al, 1                   ; the page draw: everything (SPEC.md 31.5.1)
     call cp_time_rows           ; both field rows, from the live clock
 
+%ifndef KERN_BIG
     mov al, 0                   ; the '+' button...
     call cp_timebtn
     mov al, 1                   ; ...and the '-' button
     call cp_timebtn
+%endif
 
-    mov byte [gfx_color], CBLACK ; the two option labels; their glyphs are
-    CPSTAGE cp_s_t12            ; drawn by cp_timechk, which is also the
-    mov cx, di                  ; redraw path when one is toggled
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CPT_O0Y + CP_PLDY
-    call cp_run
-    CPSTAGE cp_s_tsec
-    mov cx, di
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CPT_O1Y + CP_PLDY
-    call cp_run
+    call cp_blbl                ; the two option labels; their glyphs are
+                                ; drawn by cp_timechk, which is also the
+    dw cp_s_t12, CP_PLX, CPT_O0Y + CP_PLDY
+                                ; redraw path when one is toggled
+    call cp_lbl
+    dw cp_s_tsec, CP_PLX, CPT_O1Y + CP_PLDY
+%ifdef KERN_BIG
+    call cp_time_ctls           ; the checks, and the '+' and '-' buttons
+%else
     call cp_timechk
+%endif
 
-    mov byte [gfx_color], CBLACK
-    cmp byte [clk_rtc], 0       ; the caption: read live from the probe's
-    je .nort                    ; verdict (SPEC.md 37.90) - informative only,
-    push bx                     ; since editing works either way
-    mov bl, [clk_tier]
-    xor bh, bh
-    add bx, bx
-    CPSTAGEX cp_rtcnam, bx      ; ...and the TEST comes first now: staging the
-    pop bx                      ; default and then overwriting SI would stage
-    jmp short .cap              ; twice, and the second one is what SPEC.md
-.nort:                          ; 2.8.6 says has to happen (the old shape was
-    CPSTAGE cp_s_tnrt           ; `mov si, X` then a conditional `mov si, Y`,
-.cap:                           ; which is the one place a blanket conversion
-                                ; of this file stages the WRONG string)
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CPT_CAP2Y
+    call cp_black
+%ifdef OS88_RTC                 ; the caption: read live from the probe's
+                                ; verdict (SPEC.md 37.90) - informative only,
+                                ; since editing works either way. TWO RUNS,
+    CPSTAGE cp_s_thw            ; 'Hardware clock: ' and then the rung's name
+    mov cx, CP_PMX              ; on the same 8px grid - the same cells as one
+    mov dx, CPT_CAP2Y           ; string and the prefix stored once, not five
+    call cp_runp                ; times. CX/DX come back absolute
+    mov bl, [clk_tier]          ; INDEXED BY THE RUNG ALONE: clk_probe stores
+    xor bh, bh                  ; CLK_T_NONE (0, cp_rtcnam's first row) before
+    add bx, bx                  ; it walks and the rung only on the path that
+    CPSTAGEX cp_rtcnam, bx      ; sets [clk_rtc], so the two bytes cannot
+    add cx, CPT_HWN * 8         ; disagree
     call cp_run
-
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+%else                           ; kern_small: no rung is assembled at all
+    CPSTAGE cp_s_tnrt           ; (SPEC.md 37.0.1), so clk_probe can only answer
+    mov cx, CP_PMX              ; CF = 1 and [clk_tier] is CLK_T_NONE for ever
+    mov dx, CPT_CAP2Y
+    call cp_runp
+%endif
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_time_click - a click inside the Date/Time page
@@ -3329,9 +4373,27 @@ cp_time_click:
 %endif
     cmp al, [cp_tsel]
     je .donej                   ; already selected: change nothing
+
+    ; --- TWO FIELDS CHANGE, SO TWO FIELDS ARE DRAWN (SPEC.md 31.5.3) --------
+    ; This used to be `cp_time_rows(1)`, whose first act is to erase the whole
+    ; date-and-time band white - so moving the caret one field along blanked
+    ; both rows and re-lettered all six fields to take one black box off one of
+    ; them. cp_time_fld draws an unselected field's box in the GROUND now, so
+    ; the field that lost the caret clears it by drawing its replacement.
+    ;
+    ; [cp_tsel] MOVES FIRST, because cp_time_fld reads it to decide which way
+    ; round a field goes: the old field then tests as plain and gets the white
+    ; box, which is exactly what is wanted.
+    push ax
+    mov ah, [cp_tsel]           ; AH = the field the caret is LEAVING
     mov [cp_tsel], al
-    mov al, 1                   ; the SELECTION moved, so the old black box has
-    call cp_time_rows           ; to come off: a full draw (SPEC.md 31.5.1)
+    mov byte [cp_tfull], CPT_FBOX
+    mov al, ah
+    call cp_time_fld            ; the field that loses the box...
+    mov al, [cp_tsel]
+    call cp_time_fld            ; ...and the one that gains it
+    mov byte [cp_tfull], 0
+    pop ax
 .donej:                         ; ...and the four refusals around it
     jmp .done
 
@@ -3361,7 +4423,7 @@ cp_time_click:
     mov al, [cp_tsel]
     call clk_fld_adj            ; in AL = field, BL = +1/-1 (SPEC.md 37).
                                 ; NEAR since SPEC.md 37.93: it is in this image
-    mov byte [cp_wdirty], 1     ; ...and the panel is dirty (SPEC.md 31.8), which
+    call cp_wdset               ; ...and the panel is dirty (SPEC.md 31.8), which
                                 ; is what makes cpf_cp_flush_close load this
                                 ; module on the way out. WITHOUT IT a clock-only
                                 ; edit - arrows and nothing else - hits that
@@ -3399,7 +4461,7 @@ cp_time_click:
 %endif
     xor byte [clk_secs], 1      ; row 1: seconds in the menu bar
 .oredraw:
-    mov byte [cp_wdirty], 1     ; both remembered on close (31.8)
+    call cp_wdset               ; both remembered on close (31.8)
     mov byte [clk_barq], 1      ; the bar's text (and width) changed: ui_task
                                 ; redraws it in this same pass (SPEC.md 37).
                                 ; NOT [cp_dirty] - a whole-desktop repaint to
@@ -3426,14 +4488,9 @@ cp_time_click:
 ; nothing may be on top of it. Only then is the origin re-derived from the
 ; live window rect and the two rows redrawn in place.
 ; -----------------------------------------------------------------------------
+modc_e_tick:                    ; CPE_TICK, entered FAR (see kretf_bp)
 cp_tick_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentm_bp                ; KENT: push ax..bp
 
     cmp byte [cp_sel], CP_ITIME
     jne .out
@@ -3443,24 +4500,16 @@ cp_tick_x:
     mov bx, [di+I_WIN]
     test byte [bx+W_FLAGS], 2   ; visible?
     jz .out
-    call KERNEL_SEG:cw_wm_obscured
+    mov bp, wm_obscured
+    call KERNEL_SEG:cw_mem_disp
     jc .out
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
-    mov di, ax
+    call cp_origin
     add di, CP_RX               ; DI = pane left, BP = pane top
-    mov bp, dx
     xor al, al                  ; SPEC.md 31.5.1: the tick draws seven opaque
     call cp_time_rows           ; runs and nothing else - no erase, no flash
 
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretf_bp
 
 ; -----------------------------------------------------------------------------
 ; cp_time_rows - redraw both field rows from the live clock
@@ -3474,35 +4523,22 @@ cp_tick_x:
 ; selection, a +/- step, and the once-a-second tick.
 ; -----------------------------------------------------------------------------
 cp_time_rows:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
 
     mov [cp_tfull], al          ; SPEC.md 31.5.1: 0 = the once-a-second tick
     or al, al
     jz .fields                  ; ...which erases nothing and draws no chrome
 
-    mov byte [gfx_color], CWHITE
     mov ax, di
-    mov bx, bp
-    add bx, CPT_DY - 4
-    mov cx, di
-    add cx, CPT_BX - 4
-    mov dx, bp
-    add dx, CPT_TY + 11
-    call KERNEL_SEG:cw_gfx_fill
+    lea bx, [bp+CPT_DY - 4]
+    lea cx, [di+CPT_BX - 4]
+    lea dx, [bp+CPT_TY + 11]
+    call cp_wfill
 
-    mov byte [gfx_color], CBLACK ; the time row's two ':' separators (the
-    CPSTAGE cp_s_tcol            ; date row's gaps are simply blank)
-    mov cx, di
-    add cx, CPT_FX + 16
-    mov dx, bp
-    add dx, CPT_TY
-    call cp_run
-    mov cx, di
-    add cx, CPT_FX + 40
+    call cp_blbl                ; the time row's two ':' separators (the
+                                ; date row's gaps are simply blank)
+    dw cp_s_tcol, CPT_FX + 16, CPT_TY
+    lea cx, [di+CPT_FX + 40]
     call cp_run
 .fields:
 
@@ -3517,12 +4553,24 @@ cp_time_rows:
     cmp al, ah
     jb .fld
 
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
+
+; The editable fields, {x, w, y, pad} - stride 4, so index -> record is two
+; shl-by-1s. The INDEX IS the field number clk_fld_str/clk_fld_adj take
+; (SPEC.md 37), which is what keeps this page free of any knowledge of what
+; a month or an hour actually is. The LAST entry exists only in 12-hour
+; mode: the active count is 6 + [clk_h12], and both the draw loop and the
+; hit test take their bound from it.
+cp_tflds:
+    db CPT_FX,    CPT_MONW, CPT_DY, 0       ; 0 month  'Mmm'
+    db CPT_FX+32, CPT_NUMW, CPT_DY, 0       ; 1 day    'DD'
+    db CPT_FX+56, CPT_YRW,  CPT_DY, 0       ; 2 year   'YYYY'
+    db CPT_FX,    CPT_NUMW, CPT_TY, 0       ; 3 hour   'HH'
+    db CPT_FX+24, CPT_NUMW, CPT_TY, 0       ; 4 minute 'MM'
+    db CPT_FX+48, CPT_NUMW, CPT_TY, 0       ; 5 second 'SS'
+    db CPT_FX+72, CPT_NUMW, CPT_TY, 0       ; 6 AM/PM  - 12-hour mode only
+cp_tflds_end:
+CPT_NFLD  equ (cp_tflds_end - cp_tflds) / 4
 
 ; -----------------------------------------------------------------------------
 ; cp_time_fld - draw one field, barred if it is the selected one
@@ -3532,23 +4580,18 @@ cp_time_rows:
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK or CWHITE)
 ; -----------------------------------------------------------------------------
 cp_time_fld:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
 
     mov ah, al                  ; AH = the field index; AL is needed below
     mov bl, al
     mov bh, 0
     shl bx, 1
-    shl bx, 1
-    add bx, cp_tflds            ; BX -> {x, w, y, pad}
+    shl bx, 1                   ; BX = the record's offset in cp_tflds
 
-    mov cl, [bx]                ; CX = the field text's screen x
+    mov cl, [cs:bx+cp_tflds]    ; CX = the field text's screen x
     mov ch, 0
     add cx, di
-    mov dl, [bx+2]              ; DX = its screen y
+    mov dl, [cs:bx+cp_tflds+2]  ; DX = its screen y
     mov dh, 0
     add dx, bp
 
@@ -3556,12 +4599,23 @@ cp_time_fld:
     jne .plain
 
     ; --- selected: white text on a black box ---------------------------------
-    mov word [cp_tpair], (CBLACK << 8) | CWHITE   ; AL = ink, AH = paper
+    call cp_black
     cmp byte [cp_tfull], 0
     je .text                    ; SPEC.md 31.5.1: on a tick the box is already
                                 ; on the glass and its 2px surround is outside
                                 ; the run, so drawing it again would be a
                                 ; second write of pixels that did not change
+    jmp short .box
+.plain:
+    mov byte [gfx_color], CWHITE    ; ...and the SAME box in the GROUND, which
+    cmp byte [cp_tfull], CPT_FBOX   ; is what takes the black one off a field
+    jne .text                       ; that has just been DESELECTED - one write
+                                    ; where the whole band used to be erased
+                                    ; (SPEC.md 31.5.3). Only in that mode: on a
+                                    ; tick there is no box to take off, and on
+                                    ; a full draw the band erase has already
+                                    ; done it for every field at once
+.box:
     push cx
     push dx
     push bx
@@ -3571,7 +4625,7 @@ cp_time_fld:
     dec ax                      ; x1 = x - 2
     dec ax
     mov si, cx
-    mov cl, [bx+1]              ; the field's width
+    mov cl, [cs:bx+cp_tflds+1]  ; the field's width
     mov ch, 0
     add cx, si
     inc cx                      ; x2 = x + w + 1
@@ -3579,16 +4633,17 @@ cp_time_fld:
     dec bx                      ; y1 = y - 2
     dec bx
     add dx, 9                   ; y2 = y + 9
-    mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_gfx_fill
+    call cp_fill                ; the pen was set by whichever arm arrived here
     pop ax
     pop bx
     pop dx
     pop cx
-    jmp short .text
-.plain:
-    mov word [cp_tpair], (CWHITE << 8) | CBLACK
 .text:
+    mov bx, (CWHITE << 8) | CBLACK  ; the run's pair, AL = ink and AH = paper:
+    cmp ah, [cp_tsel]               ; black on white, or white on the selected
+    jne .pair                       ; field's black - decided HERE, in a
+    xchg bl, bh                     ; register, where it used to be a word of
+.pair:                              ; .text written at the two arms above
     mov al, ah                  ; AL = field index for the formatter
     call clk_fld_str            ; SI = that field's text (SPEC.md 37) - near,
                                 ; same image (SPEC.md 37.93)
@@ -3596,15 +4651,10 @@ cp_time_fld:
     ; exactly its own width - 'Mmm' is CPT_MONW, 'DD' is CPT_NUMW, 'YYYY' is
     ; CPT_YRW - so the run covers its field exactly and IS the erase for it
     ; (SPEC.md 27.2). That is what lets the tick above skip the band fill.
-    mov ax, [cp_tpair]
+    xchg ax, bx
     call KERNEL_SEG:cw_font_run               ; in SI, CX = x, DX = y
 
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_time_pick - hit-test the six field bands
@@ -3613,58 +4663,48 @@ cp_time_fld:
 ; out: CF = 0 and AL = field index on a hit, CF = 1 on a miss
 ; clobbers: AX
 ; Bands are generous: x-2..x+w+1 by y-4..y+11, so the gaps between fields
-; belong to nobody and a click just misses. SIGNED compares (SPEC.md 31.2).
+; belong to nobody and a click just misses. A point LEFT or ABOVE a band is
+; negative from its edge, which is why the compares are unsigned (31.2).
 ; -----------------------------------------------------------------------------
 cp_time_pick:
     push bx
     push si
-    push di
-    mov al, 6                   ; one past the last ACTIVE record: the
-    add al, [clk_h12]           ; meridiem is only there in 12-hour mode
-    mov ah, 0
-    shl ax, 1
-    shl ax, 1
-    add ax, cp_tflds
-    mov [cp_tendp], ax
-    mov bx, cp_tflds
+    mov bl, 5                   ; the last ACTIVE record, walking DOWN: the
+    add bl, [clk_h12]           ; meridiem is only there in 12-hour mode, and
+    mov bh, 0                   ; the fields do not overlap, so the order of
+    shl bx, 1                   ; the walk is free - and down ends on a borrow
+    shl bx, 1                   ; with CF = 1 already, the miss's answer
 .scan:
-    mov ax, [bx]                ; AL = field x, AH = field width
-    mov di, ax
-    and di, 0x00FF              ; DI = x
-    mov al, ah
-    mov ah, 0                   ; AX = w
-    mov si, di
-    add si, ax
-    inc si                      ; SI = x2 = x + w + 1
-    mov ax, di
-    dec ax                      ; AX = x1 = x - 2
-    dec ax
-    cmp cx, ax
-    jl .next
-    cmp cx, si
-    jg .next
-    mov al, [bx+2]              ; the field's row y
-    mov ah, 0
-    mov si, ax
-    add si, 11                  ; y2
-    sub ax, 4                   ; y1
-    cmp dx, ax
-    jl .next
-    cmp dx, si
-    jg .next
-    mov ax, bx                  ; hit: index = (record - table) / 4
-    sub ax, cp_tflds
+    ; Each band as ONE UNSIGNED compare of the distance from its first column:
+    ; a point left of x - 2 wraps to a large number and fails the same test a
+    ; point right of x + w + 1 does. x, w and y are bytes under 128 (cbw).
+    mov si, cx
+    mov al, [cs:bx+cp_tflds]    ; x
+    cbw
+    sub si, ax
+    inc si
+    inc si                      ; SI = cx - (x - 2)
+    mov al, [cs:bx+cp_tflds+1]  ; w...
+    add al, 3                   ; ...and the band, x - 2 .. x + w + 1
+    cbw
+    cmp si, ax
+    ja .next
+    mov si, dx
+    mov al, [cs:bx+cp_tflds+2]  ; the field's row y
+    cbw
+    sub si, ax
+    add si, 4                   ; SI = dy - (y - 4)...
+    cmp si, 4 + 11
+    ja .next                    ; ...in y - 4 .. y + 11
+    mov ax, bx                  ; hit: index = offset / 4
     shr ax, 1
     shr ax, 1
     clc                         ; after the shifts - they write CF
-    jmp .out
+    jmp short .out
 .next:
-    add bx, 4
-    cmp bx, [cp_tendp]
-    jb .scan
-    stc
+    sub bx, 4
+    jnc .scan                   ; ...past record 0: CF = 1, not found
 .out:
-    pop di
     pop si
     pop bx
     ret
@@ -3679,46 +4719,21 @@ cp_time_pick:
 ; also the redraw path after a toggle.
 ; -----------------------------------------------------------------------------
 cp_timechk:
-    push ax
-    push cx
-    push dx
-    push si
-
-    mov cx, di
-    add cx, CP_PGX
-    mov dx, bp
-    add dx, CPT_O0Y
-    mov ax, OS88UI_GCHECK       ; --- row 0: 12-hour clock --- (AH = 0: a
-    cmp byte [clk_h12], 0       ; clock option is never refused)
-    je .r0
-    mov al, OS88UI_GCHECK | OS88UI_GON
-.r0:
-%ifdef KERN_BIG
-    push bx
+    call kentm_si                ; KENT: push ax..si
+    lea cx, [di+CP_PGX]
+    lea dx, [bp+CPT_O0Y]        ; --- row 0: 12-hour clock, id 7 (AH = 0: a
+%ifdef KERN_BIG                 ; clock option is never refused)
     mov bh, 7
-    call cp_dngly
-    pop bx
 %endif
-    call cp_gemit
-    mov dx, bp
-    add dx, CPT_O1Y
-    mov ax, OS88UI_GCHECK       ; --- row 1: seconds in the menu bar ---
-    cmp byte [clk_secs], 0
-    je .r1
-    mov al, OS88UI_GCHECK | OS88UI_GON
-.r1:
+    cmp byte [clk_h12], 0
+    call cp_chk
+    lea dx, [bp+CPT_O1Y]        ; --- row 1: seconds in the menu bar, id 8
 %ifdef KERN_BIG
-    push bx
     mov bh, 8
-    call cp_dngly
-    pop bx
 %endif
-    call cp_gemit
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+    cmp byte [clk_secs], 0
+    call cp_chk
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_timebtn - draw one of the two stepper buttons
@@ -3729,12 +4744,7 @@ cp_timechk:
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
 ; -----------------------------------------------------------------------------
 cp_timebtn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentm_bp
 
     CPSTAGE cp_s_tplus
     mov dx, CPT_BUY
@@ -3743,35 +4753,18 @@ cp_timebtn:
     CPSTAGE cp_s_tminus
     mov dx, CPT_BDY
 .have:
-    mov ax, di
-    add ax, CPT_BX
-    mov [os88ui_krect+0], ax
-    add ax, CPT_BW - 1
-    mov [os88ui_krect+4], ax
-    mov ax, bp
-    add ax, dx
-    mov [os88ui_krect+2], ax
-    add ax, CPT_BH - 1
-    mov [os88ui_krect+6], ax
-
-    mov di, OS88UI_FILL         ; always live: a field is always adjustable
-%ifdef KERN_BIG
-    mov al, 5                   ; '+' is id 5, '-' is 6 - and AL arrived as
-    cmp dx, CPT_BUY             ; 0/1 for which, spent above into DX
-    je .dn
-    inc al
-.dn:
-    call cp_dnbtn
-%endif
-    mov bx, os88ui_krect
-    call cp_bemit
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
+    push ax                     ; AL = 0 '+' / 1 '-', for the id below
+    mov ax, CPT_BX
+    mov cx, CPT_BX + CPT_BW - 1
+    mov bx, CPT_BH - 1
+    add bx, dx
+    call cp_krect               ; BX = os88ui_krect, kept to cp_bemit below
     pop ax
-    ret
+
+%ifdef KERN_BIG                 ; always live: a field is always adjustable
+    add al, 5                   ; '+' is id 5, '-' is 6
+%endif
+    jmp cp_btfill
 
 ; SPEC.md 37's RTC WRITE HALF, hosted here too (SPEC.md 37.94). A file of its
 ; own rather than 600 lines of MC146818, MM58167 and RP5C01 in the middle of
@@ -3821,50 +4814,43 @@ clk_fld_str:
     push ax
     push bx
     mov bx, clk_fbuf
-    or al, al
-    jz .mon
-    cmp al, 1
-    je .day
-    cmp al, 2
-    je .year
-    cmp al, 3
-    je .hour
-    cmp al, 4
-    je .min
-    cmp al, 5
-    je .sec
-
+    mov ah, 4                   ; the snapshot's byte fields sit sec, min,
+    cmp al, 2                   ; hour, day, mon - so field f is the byte
+    jb .byte                    ; (4 - f) past clk_sn_sec for the month and
+    je .year                    ; the day, and (5 - f) for the time
+    cmp al, 6
+    je .mer
+    inc ah
+.byte:
+    sub ah, al
+    mov al, ah
+    cbw
+    xchg si, ax                 ; SI = that offset (and SI is the output
+    mov al, [si+clk_sn_sec]     ; anyway, reloaded at .done)
+    cmp si, 4
+    je .mon
+    cmp si, 2
+    jne .two                    ; the day, the minute, the second
+    cmp byte [clk_h12], 0       ; the hour
+    je .two
+    CPXK clk_h12h ; AL = 1..12, still zero-padded below
+.two:
+    CPXK clk_put2
+    jmp short .done
+.mon:
+    CPXK clk_put_mon
+    jmp short .done
+.mer:
     mov al, [clk_sn_hour]       ; 6: the meridiem
-    call KERNEL_SEG:cw_clk_ampm ; AL = 'A' or 'P'
+    CPXK clk_ampm ; AL = 'A' or 'P'
     mov [bx], al
     inc bx
     mov byte [bx], 'M'
     inc bx
-    jmp .done
-.sec:
-    mov al, [clk_sn_sec]
-    jmp .two
-.min:
-    mov al, [clk_sn_min]
-    jmp .two
-.hour:
-    mov al, [clk_sn_hour]
-    cmp byte [clk_h12], 0
-    je .two
-    call KERNEL_SEG:cw_clk_h12h ; AL = 1..12, still zero-padded below
-    jmp .two
-.day:
-    mov al, [clk_sn_day]
-.two:
-    call KERNEL_SEG:cw_clk_put2
-    jmp .done
-.mon:
-    mov al, [clk_sn_mon]
-    call KERNEL_SEG:cw_clk_put_mon
-    jmp .done
+    jmp short .done
 .year:
     mov ax, [clk_sn_year]
-    call KERNEL_SEG:cw_clk_put4
+    CPXK clk_put4
 .done:
     mov byte [bx], 0
     mov si, clk_fbuf
@@ -3895,82 +4881,57 @@ clk_fld_adj:
     pushf                       ; one edit = one critical section, so a
     cli                         ; reader never catches the day mid-clamp
     mov ah, bl                  ; AH = the step, +1 or -1
-    or al, al
-    jz .mon
-    cmp al, 1
-    je .day
-    cmp al, 2
-    je .year
-    cmp al, 3
-    je .hour
-    cmp al, 4
-    je .min
-    cmp al, 5
-    je .sec
-
-    mov al, [clk_hour]          ; 6: the meridiem - +-12 hours, either sign
-    cmp al, 12
-    jb .pm
-    sub al, 12                  ; PM -> AM
-    jmp .merset
-.pm:
-    add al, 12                  ; AM -> PM
+    mov bl, 4                   ; --- the five plain byte fields: the live
+    cmp al, 2                   ; clock is sec, min, hour, day, mon, so field
+    jb .byte                    ; f is the byte (4 - f) past clk_sec for the
+    je .year                    ; month and the day and (5 - f) for the time
+    cmp al, 6                   ; - clk_fld_str's arithmetic - and its range
+    je .mer                     ; is clk_frng's row: CL the min, CH the max,
+    inc bx                      ; a max of 0 meaning the month's own length
+.byte:
+    sub bl, al
+    xor bh, bh
+    shl bx, 1
+    mov cx, [cs:bx+clk_frng]
+    shr bx, 1
+    or ch, ch
+    jnz .have
+    mov al, [clk_mon]           ; the day: max = this month's length
+    CPXK clk_mlen
+    mov ch, al
+.have:
+    mov al, [bx+clk_sec]
+    call clk_step
+    mov [bx+clk_sec], al
+    jmp short .fixday           ; a month may have got shorter under the day;
+                                ; after any other field it is already inside
+.mer:
+    mov al, [clk_hour]          ; 6: the meridiem - +-12 hours, either sign:
+    add al, 12                  ; AM -> PM, and PM wraps round to AM
+    cmp al, 24
+    jb .merset
+    sub al, 24
 .merset:
     mov [clk_hour], al
-    jmp .done
-.sec:
-    mov cx, 0x3B00              ; second: CH = 59 max, CL = 0 min
-    mov al, [clk_sec]
-    call clk_step
-    mov [clk_sec], al
-    jmp .done
-.min:
-    mov cx, 0x3B00
-    mov al, [clk_min]
-    call clk_step
-    mov [clk_min], al
-    jmp .done
-.hour:
-    mov cx, 0x1700              ; CH = 23, CL = 0
-    mov al, [clk_hour]
-    call clk_step
-    mov [clk_hour], al
-    jmp .done
-.day:
-    mov al, [clk_mon]
-    call KERNEL_SEG:cw_clk_mlen
-    mov ch, al                  ; max = this month's length
-    mov cl, 1
-    mov al, [clk_day]
-    call clk_step
-    mov [clk_day], al
-    jmp .done
-.mon:
-    mov cx, 0x0C01              ; CH = 12, CL = 1
-    mov al, [clk_mon]
-    call clk_step
-    mov [clk_mon], al
-    jmp .fixday
+    jmp short .done
 .year:
     mov bx, [clk_year]
-    cmp ah, 0
-    jl .ydn
-    inc bx
+    mov al, ah
+    cbw
+    add bx, ax                  ; the step, either sign
+    cmp bx, CLK_YMIN
+    jae .ylo
+    mov bx, CLK_YMAX            ; below the first year: wrap to the last
+.ylo:
     cmp bx, CLK_YMAX
     jbe .yset
-    mov bx, CLK_YMIN
-    jmp .yset
-.ydn:
-    dec bx
-    cmp bx, CLK_YMIN
-    jae .yset
-    mov bx, CLK_YMAX
+    mov bx, CLK_YMIN            ; past the last: wrap to the first
 .yset:
     mov [clk_year], bx
 
 .fixday:                        ; the month (or the leap year) may have got
     mov al, [clk_mon]           ; shorter under the current day
-    call KERNEL_SEG:cw_clk_mlen
+    CPXK clk_mlen
     cmp [clk_day], al
     jbe .done
     mov [clk_day], al
@@ -3983,11 +4944,7 @@ clk_fld_adj:
     mov byte [clk_barq], 1      ; ...and step 4 refreshes the bar, which may
                                 ; otherwise be a minute from noticing
     popf
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_dx
 
 ; -----------------------------------------------------------------------------
 ; clk_step - add a signed step to a byte, wrapping into a closed range
@@ -3997,11 +4954,20 @@ clk_fld_adj:
 ; Values are small unsigned bytes, so stepping down from 0 lands on 0xFF -
 ; above the max - and the step's sign is what tells the two overflows apart.
 ; -----------------------------------------------------------------------------
+; clk_fld_adj's plain fields' ranges, {min, max} by offset past clk_sec
+; (sec, min, hour, day, mon); a max of 0 = the month's length.
+clk_frng:
+    db 0, 59                    ; second
+    db 0, 59                    ; minute
+    db 0, 23                    ; hour
+    db 1, 0                     ; day
+    db 1, 12                    ; month
+
 clk_step:
     add al, ah
     cmp al, ch
     jbe .lo
-    cmp ah, 0
+    test ah, ah
     jl .under                   ; 0xFF from a -1: wrap to the top
     mov al, cl                  ; past the max: wrap to the bottom
     ret
@@ -4070,28 +5036,115 @@ cp_flush_x:
     push bx
     push cx
     call cp_cfg_save            ; SPEC.md 51.5.3: the writer is in THIS image
-    mov byte [cp_dsave], 0
-    jnc .say
-    mov byte [cp_dsave], 2      ; the write itself failed: full, protected, I/O
+    mov bl, 0                   ; BL = the verdict, stored once below
+    jnc .have
+    mov bl, 2                   ; the write itself failed: full, protected, I/O
     cmp ax, FERR_NODISK         ; ...as against no disk in A: at all, or a disk
     je .wrongdisk               ; that is not the SYSTEM one (SPEC.md 51.5.1),
     cmp ax, FERR_NOENT          ; which is one thing the user can act on and so
-    jne .say                    ; earns a message that says what to do
+    jne .have                   ; earns a message that says what to do
 .wrongdisk:
-    mov byte [cp_dsave], 1
-.say:
-    mov al, [cp_dsave]
-    inc al                      ; slot 0 stays toast_say's "nothing to say"
-    mov bx, cp_savetab
-    mov cx, CP_NSAVE
-    call KERNEL_SEG:toast_say
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov bl, 1
+.have:
+    mov [cp_dsave], bl
+    push si
+    push es
+%ifdef OS88_DRIVERS
+    cmp byte [cs:cp_fdno], 0    ; the save turned Cylinder back to Auto
+    je .verdict                 ; (SPEC.md 31.14): ONE line on the bar, so
+    mov byte [cs:cp_fdno], 0    ; it is chosen before the toast and not
+    cmp byte [cp_dsave], 0      ; drawn over 'Settings Saved' after it
+    jne .fdback
+    push cs
+    pop es                      ; the line is this image's: a toast copies it
+    mov si, [cs:cp_fdnop]       ; a POINTER to image data, read `cs:` - the
+                                ; core has no cp_stage (that is .modu's), and
+                                ; the line goes out through ES = CS
+    jmp short .tell
+.fdback:
+    mov byte [drv_cfg+CFG_FDR], 2   ; ...but a FAILED save's line is the news,
+                                ; and the pick goes back to Cylinder so the
+                                ; retry [cp_wdirty] promises tests it again -
+                                ; [cp_fdbsd] is still owed - rather than
+                                ; saving Auto and saying 'Settings Saved'
+.verdict:
+%endif
+    mov si, cp_s_dsdsk          ; [cp_dsave] = 1, no system disk: RESIDENT,
+    push ds                     ; because its drive letter is stamped by the
+    pop es                      ; mount (disk.inc) - every other line is
+    cmp bl, 1                   ; this image's own, out through ES = CS. The
+    je .tell                    ; save's verdicts were a resident word table
+    push cs                     ; and three resident lines for a message only
+    pop es                      ; this image ever says (kernel size pass 9)
+    mov bh, 0                   ; 0 or 2: the verdict IS the table's offset -
+    mov si, [cs:bx+cp_dsvt]     ; a POINTER to image data, read `cs:` (SPEC.md
+                                ; 2.8.6, cp_fdnop's shape)
+.tell:
+    xor cx, cx                  ; a toast COPIES its line, so image data is
+    call KERNEL_SEG:cw_toast_show   ; fine for the drop that follows
+    pop es
+    pop si
+    jmp kretm_cx
+cp_dsvt:    dw cp_s_dsok, cp_s_dserr       ; [cp_dsave] = 0 and 2, read `cs:`
+cp_s_dsok:  db 'Settings Saved', 0
+cp_s_dserr: db 'Not saved: disk error', 0
 
 ; -----------------------------------------------------------------------------
-; cp_flush_close_x - spend [cp_wdirty], if there is anything to spend
+; cp_flush_cfg - [cp_wdirty]'s half of cp_flush_close_x, and the SETTINGS
+;                CORE's door (SPEC.md 2.8.7)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; A desktop gesture that wrote a placement ends here with nothing but the core
+; loaded, so this may not reach the clock's half below it, which is the
+; panel's and lives in .modu.
+; -----------------------------------------------------------------------------
+cp_flush_cfg:
+    cmp byte [cp_wdirty], 0
+    je .out
+    call cp_flush_x
+    cmp byte [cp_dsave], 0      ; the write failed: KEEP the flag, so closing
+    jne .out                    ; the panel again - or rebooting - tries once
+    mov byte [cp_wdirty], 0     ; more rather than dropping the settings
+.out:
+    ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_toast / sc_m_say - put one line on the bar (SPEC.md 59), the image's way
+; in:  SI -> a NUL string: in KERNEL_SEG (cp_toast - a staged cp_sbuf line or a
+;      resident one) or in THIS IMAGE (sc_m_say - a toast COPIES its line, so
+;      image data is fine for a drop that follows)
+; out: nothing (every register preserved, as toast_show itself does)
+;
+; IN THE CORE (.modc), because the desktop gestures' refusals say themselves
+; through it with nothing but the core loaded (SPEC.md 2.8.7). It is the
+; push/stage/pop that six sites spelt out around the one far call (CTRL.DRV
+; size pass 1); kern_small has no caller but cp_flush_x, which keeps its own.
+; -----------------------------------------------------------------------------
+sc_m_say:
+    push es
+    push cs
+    jmp short cp_toast1
+cp_toast:
+    push es
+    push ds
+cp_toast1:
+    pop es
+    push cx
+    xor cx, cx                  ; CX = 0: TOAST_TICKS
+    call KERNEL_SEG:cw_toast_show
+    pop cx
+    pop es
+    ret
+%endif
+
+section .modu                   ; ...the clock's half is the PANEL's: only a
+                                ; Date & Time edit sets [clk_dirty], and the
+                                ; core never runs while a panel is open
+; -----------------------------------------------------------------------------
+; cp_flush_close_x - spend [clk_dirty] and [cp_wdirty], if there is anything
+;                    to spend
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ;
@@ -4116,14 +5169,7 @@ cp_flush_close_x:
                                 ; to, so the edit is the SESSION's and the
                                 ; flag is cleared rather than acted on
 %endif
-    cmp byte [cp_wdirty], 0
-    je .out
-    call cp_flush_x
-    cmp byte [cp_dsave], 0      ; the write failed: KEEP the flag, so closing
-    jne .out                    ; the panel again - or rebooting - tries once
-    mov byte [cp_wdirty], 0     ; more rather than dropping the settings
-.out:
-    ret
+    jmp cp_flush_cfg            ; ...and the settings, in the core
 
 ; =============================================================================
 ; The Sound page (SPEC.md 31.7/34.8)
@@ -4171,116 +5217,149 @@ cp_flush_close_x:
 ; exactly the behaviour before the cell existed.
 ; =============================================================================
 
-CPS_B2Y2  equ CP_PR0Y + 2*CP_PROWH + CP_GW + 3  ; 81: route row 2's bottom
+CPS_B3Y2  equ CP_PR0Y + 3*CP_PROWH + CP_GW + 3  ; 101: row 3's (the Covox)
+CPS_NROW  equ 4                         ; the tier rows (SPEC.md 34.14 made it
+                                        ; four, and moved what is below them
+                                        ; down a row pitch: the content is 132
+                                        ; high and the notice ends at 131)
+CPS_LY    equ CP_PR0Y + 3*CP_PROWH      ; 86: the Covox row's glyph top...
+CPS_LX0   equ 66                        ; ...and its three PORT radios, LPT1
+CPS_LDX   equ 50                        ; to LPT3 beside the label, 50 apart:
+CPS_LLX   equ 16                        ; each glyph, then its 'LPTn' 16 on.
+                                        ; The last ends at 66+100+16+32 = 214,
+                                        ; inside the pane's 222
 CPS_BTX1  equ CP_PGX                    ; the Test button
 CPS_BTX2  equ CP_PGX + 44
-CPS_BTY1  equ 84
-CPS_BTY2  equ 99
-CPS_NOTEY equ 104                       ; the refusal notice's text row
+CPS_BTY1  equ 104
+CPS_BTY2  equ 119
+CPS_NOTEY equ 124                       ; the refusal notice's text row
+%if CPS_NOTEY + 8 > CP_CH
+%error "the Sound page's notice line runs off the pane"
+%endif
+%if CP_B0Y2 - CP_B0Y1 + 1 != CP_PROWH || CPS_B3Y2 != CP_B0Y1 + CPS_NROW*CP_PROWH - 1 || CPS_B3Y2 >= CPS_BTY1
+%error "cp_snd_click finds the tier row by dividing by the pitch: the bands must tile it from CP_B0Y1, and end above the Test button"
+%endif
+%if CPS_LY != CP_PR0Y + (CPS_NROW - 1) * CP_PROWH || CPS_NROW != 4
+%error "the Sound page steps from its last tier row to the Covox's ports, and cp_snd_tbit's port entries follow four rows"
+%endif                                  ; (and a port's entry CPS_NROW + n IS
+                                        ; its tier SND_RT_LPT + n: snd.inc
+                                        ; holds SND_RT_LPT at 4 to say so)
 section .text
 
-
-; Which row a click asked for, in [snd_route] order, so the band test is an
-; index rather than a ladder of compares - and the same rows as DSV_TIERS
-; bits, which is a table rather than a shift because cp_snd_rowok promises to
-; clobber nothing and a variable shift count costs CL.
-cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB
-cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_SB
 
 ; The last click's refusal, as a DRVE_* (0 = the last click was fine, and the
 ; notice line is blank). .text and not .bss for the reason everything else
 ; here is: -f bin zeroes nothing.
 cp_snd_err: db 0
-section .modc                   ; the on-demand image (SPEC.md 2.8): a segment
+section .modu                   ; the on-demand image (SPEC.md 2.8): a segment
                                 ; of its own with DS still KERNEL_SEG, so
                                 ; every reference below - this module's own
                                 ; strings included - is unchanged
 
+; Which row a click asked for, in [snd_route] order, so the band test is an
+; index rather than a ladder of compares - and the same rows as DSV_TIERS
+; bits, which is a table rather than a shift because cp_snd_rowok promises to
+; clobber nothing and a variable shift count costs CL. In the image, read
+; [cs:] (kernel size pass 8).
+cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB
+                                ; (no fourth: the Covox row's click is a
+                                ; question of PORT, and .lpt answers it)
+cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_SB, 7 << SND_RT_LPT
+              db 1 << SND_RT_LPT, 2 << SND_RT_LPT, 4 << SND_RT_LPT
+                                ; (the Covox row is live when ANY of LPT1..3
+                                ; answered; its three port radios follow it
+                                ; as entries CPS_NROW + n)
+cp_snd_lbl:   dw cp_s_sspk, cp_s_sfm, cp_s_ssb, cp_s_slpt
+                                ; the rows' labels, in the same order
+
 
 ; -----------------------------------------------------------------------------
-; cp_snd_paint - the page: heading, three tier rows, the Test button, notice
+; cp_snd_paint - the page: heading, four tier rows, the Test button, notice
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 cp_snd_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
 
-    mov byte [gfx_color], CBLACK    ; entry pen is CWHITE (cp_page's erase)
-    mov si, cp_s_snd
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PHY
-    call cp_run
 
-    xor bx, bx                      ; BX = row 0..2
+    xor bx, bx                      ; BX = row 0..3
+    lea cx, [di+CP_PLX]             ; the labels' x, and row 0's baseline:
+    lea dx, [bp+CP_PR0Y+CP_PLDY]    ; cp_run keeps both, so the loop steps DX
 .lbl:
     mov al, bl
     call cp_snd_rowok               ; greyed rows still draw - they are what
-    call KERNEL_SEG:cw_gfx_pen_cf                 ; the machine does not have, and a missing
+    call cp_pencf               ; the machine does not have, and a missing
                                     ; row would just look like a shorter list
-    CPSTAGE cp_s_sspk               ; three fixed labels, in ladder order. Each
-    or bl, bl                       ; arm STAGES rather than the join doing it
-    jz .str                         ; once - the join cannot, because the
-    CPSTAGE cp_s_sfm                ; selection is a pointer into the image and
-    cmp bl, 1                       ; naming one outside CPSTAGE is what the
-    je .str                         ; gate refuses. Rows 1 and 2 therefore copy
-    CPSTAGE cp_s_ssb                ; a string they discard: 6 bytes of the
-.str:                               ; image and ~30 clocks, on a page paint
-    mov cx, di
-    add cx, CP_PLX
-    mov ax, CP_PROWH
-    mul bl                          ; AX = bl * CP_PROWH (bl <= 2, so AH = 0)
-    mov dx, bp
-    add dx, ax
-    add dx, CP_PR0Y + CP_PLDY
+    mov si, bx                      ; the four fixed labels, in ladder order,
+    shl si, 1                       ; through cp_snd_lbl - CPSTAGEX being the
+    CPSTAGEX cp_snd_lbl             ; form the gate takes for a table
     call cp_run
-    inc bl
-    cmp bl, 3
+    add dx, CP_PROWH
+    inc bx
+    cmp bl, CPS_NROW
     jb .lbl
-    call KERNEL_SEG:cw_gfx_pen_live
+    sub dx, CP_PROWH                ; THE COVOX'S PORTS: 'LPT1'..'LPT3' on the
+    add cx, CPS_LX0 + CPS_LLX - CP_PLX  ; last row's baseline, each greyed
+.lpt:                               ; when that port did not answer. BX runs
+    mov al, bl                      ; on from the rows: CPS_NROW + n is the
+    call cp_snd_rowok               ; port's entry everywhere on this page
+    call cp_pencf
+    CPSTAGE cp_s_slptn
+    add [si+3], bl                  ; the digit, staged: '1' + n
+    call cp_run
+    add cx, CPS_LDX
+    inc bx
+    cmp bl, CPS_NROW + 3
+    jb .lpt
+    call cp_penlive
 
+%ifdef KERN_BIG
+    call cp_snd_ctls            ; the tiers and the Test button
+%else
     call cp_snd_test
-
     call cp_snd_radios
+%endif
     call cp_snd_note
 
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_snd_rowok - is tier row AL selectable? (module internal)
-; in:  AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; in:  AL = 0 speaker, 1 AdLib, 2 Sound Blaster, 3 Covox - or CPS_NROW + n,
+;      the Covox's port LPTn+1, which is live only on its own DSV_TIERS bit
+;      SND_RT_LPT + n (SPEC.md 34.14): the "driver said nothing" shortcut is
+;      for a ROW. It was cp_snd_lptok, a second body, until kernel size pass 10
 ; out: CF = 0 yes; CF = 1 no - the hardware that row names is not here
 ; clobbers: nothing (flags)
 ;
-; ONE test for both driver rows, because both ask the same question and the
+; ONE test for every driver row, because all ask the same question and the
 ; driver answered it once, at attach. The bits are in the low byte for every
-; SND_RT_* there is (they are 1..3), so this is a byte test.
+; SND_RT_* there is (they are 1..4), so this is a byte test. The Covox's bit
+; says a parallel PORT answered, which is all a probe can say (SPEC.md 34.14).
 ; -----------------------------------------------------------------------------
 cp_snd_rowok:
+%ifndef OS88_DRIVERS            ; kern_small: NOTHING IS EVER PUBLISHED, so the
+    cmp al, 1                   ; speaker's row is the only live one - CF = 1
+    cmc                         ; for every other (kernel size pass 11; the
+    ret                         ; arm below reads drv_owner's zeros to say so)
+%else
     or al, al
     jz .yes                     ; the PC speaker is resident and needs no
                                 ; driver at all: never refused
     cmp word [drv_owner], 0
     je .no                      ; nothing published: the speaker is all the
                                 ; machine has
+    cmp al, CPS_NROW
+    jae .bit                    ; a Covox PORT is live on its own bit alone
     cmp word [drv_svc+DSV_TIERS], 0
     je .yes                     ; a driver that did not answer is taken at its
                                 ; word - the click finds out the slow way,
                                 ; which is what every row used to do
+.bit:
     push bx
     mov bl, al
     xor bh, bh
-    mov bl, [bx+cp_snd_tbit]
+    mov bl, [cs:bx+cp_snd_tbit]
     test byte [drv_svc+DSV_TIERS], bl
     pop bx                      ; POP does not touch flags
     jz .no
@@ -4290,11 +5369,12 @@ cp_snd_rowok:
 .no:
     stc
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_snd_row - which row is EFFECTIVELY live? (module internal)
 ; in:  nothing
-; out: AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; out: AL = 0 speaker, 1 AdLib, 2 Sound Blaster, 3 Covox
 ; clobbers: AL (the output), flags
 ;
 ; The dot follows the effective tier, not the stored setting, so it can never
@@ -4305,9 +5385,21 @@ cp_snd_rowok:
 ; the speaker, whichever the driver actually reached.
 ; -----------------------------------------------------------------------------
 cp_snd_row:
-    cmp byte [snd_route], SND_RT_SPK
+%ifndef OS88_DRIVERS            ; kern_small: the speaker, whatever SYSTEM.CFG
+    xor al, al                  ; says - the arm below reads drv_svc's zeros
+    ret                         ; to the same answer (kernel size pass 11)
+%else
+    mov al, [snd_route]
+    cmp al, SND_RT_SPK
     je .spk
-    cmp byte [snd_route], SND_RT_FM
+    cmp al, SND_RT_LPT
+    jb .nlpt                    ; SND_RT_LPT + n, a Covox on LPTn+1
+    test byte [drv_svc+DSV_CAPS+1], SND_CAP_LPTDAC >> 8
+    jz .fm                      ; a Covox setting whose port has gone is the
+    mov al, 3                   ; AdLib tier (snd_tier), and the dot says so
+    ret
+.nlpt:
+    cmp al, SND_RT_FM
     je .fm                      ; AUTO and SB both take the best tier up
     cmp word [drv_svc+DSV_STREAM], 0
     jne .sb
@@ -4323,9 +5415,10 @@ cp_snd_row:
 .sb:
     mov al, 2
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
-; cp_snd_radios - the three glyphs (module internal)
+; cp_snd_radios - the four glyphs (module internal)
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
 ;
@@ -4360,52 +5453,44 @@ cp_snd_row:
 ; other state of itself (apps/os88ui.inc's OS88UI_FILL note).
 ; -----------------------------------------------------------------------------
 cp_snd_test:
-    push ax
-    push bx
-    push si
-    push di
-    mov ax, di                      ; the Test button, through the shared
-    add ax, CPS_BTX1                ; control (apps/os88ui.inc) like every
-    mov [os88ui_krect+0], ax        ; other button in the machine
-    mov ax, di
-    add ax, CPS_BTX2
-    mov [os88ui_krect+4], ax
-    mov ax, bp
-    add ax, CPS_BTY1
-    mov [os88ui_krect+2], ax
-    mov ax, bp
-    add ax, CPS_BTY2
-    mov [os88ui_krect+6], ax
+    call kentm_bp
+    mov ax, CPS_BTX1            ; the Test button, through the shared
+    mov dx, CPS_BTY1            ; control (apps/os88ui.inc) like every
+    mov cx, CPS_BTX2            ; other button in the machine
+    mov bx, CPS_BTY2
+    call cp_krect               ; BX = os88ui_krect
     CPSTAGE cp_s_stest
-    mov bx, os88ui_krect
+%ifdef KERN_BIG
+    mov al, 1
+%endif
+; cp_btfill / cp_btdn - THE SHARED TAIL of the panel's buttons: Set Primary,
+; Test, Screen Saver, the clock's + and -, and Ports / Back. Entered by a JUMP
+; from a routine that opened with kentm_bp, whose bank the tail spends.
+; in: BX = os88ui_krect (cp_krect), SI = the staged label, AL = the control
+;     id (kern_big: pressed if it is the one down, SPEC.md 13.8.3); at
+;     cp_btdn, DI = os88ui_btn's flag word already (cp_vid_btn's greying).
+; Five routines spelt it out each (kernel size pass 12).
+cp_btfill:
     mov di, OS88UI_FILL             ; DI is the pane's left edge everywhere in
                                     ; this file and the flags word wants it -
+                                    ; the one place that has to bank it is the
+                                    ; kentm_bp every button opens with
+cp_btdn:
 %ifdef KERN_BIG
-    mov al, 1                       ; the one site that has to bank it
     call cp_dnbtn
 %endif
     call cp_bemit
-    pop di
-    pop si
-    pop bx
-    pop ax
-    ret
+    jmp kretm_bp
 
 ; -----------------------------------------------------------------------------
 cp_snd_radios:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
     call cp_snd_row             ; BH = the row that owns the dot
     mov bh, al
-    xor bl, bl
-    mov cx, di
-    add cx, CP_PGX
-    mov dx, bp
-    add dx, CP_PR0Y
-.r:
+    xor bl, bl                  ; BL = the glyph: 0..3 the tier rows, then
+    lea cx, [di+CP_PGX]         ; CPS_NROW + n the Covox's port LPTn+1
+    lea dx, [bp+CP_PR0Y]        ; (SPEC.md 34.14), beside the last row - ONE
+.r:                             ; loop for all seven since kernel size pass 10
     mov al, bl
     call cp_snd_rowok           ; ...and the same predicate cp_snd_paint gave
     mov ax, OS88UI_GRADIO       ; the label, so the two halves of a row can
@@ -4415,27 +5500,35 @@ cp_snd_radios:
                                 ; the row would refuse (ADC after a `mov` that
                                 ; does not touch CF)
     cmp bl, bh
-    jne .draw
-    mov al, OS88UI_GRADIO | OS88UI_GON
+    je .on
+    cmp bh, CPS_NROW - 1        ; THE COVOX ROW owns the dot - its tier is up
+    jne .draw                   ; and the driver has the DAC (cp_snd_row) - so
+    cmp bl, [snd_route]         ; the port it names has one as well: port n is
+    jne .draw                   ; glyph CPS_NROW + n and tier SND_RT_LPT + n,
+.on:                            ; one number. It never claims a port that is
+    mov al, OS88UI_GRADIO | OS88UI_GON  ; not sounding, which is the rows' rule
 .draw:
 %ifdef KERN_BIG
-    push bx                     ; ids 2..4, the Test button being 1
+    push bx                     ; ids 2..8, the Test button being 1
     mov bh, bl
     add bh, 2
     call cp_dngly
     pop bx
 %endif
     call cp_gemit                ; ...which leaves the pen LIVE by itself, so
-    add dx, CP_PROWH            ; the gfx_pen_live that used to close this
-    inc bl                      ; loop is gone too
-    cmp bl, 3
+    inc bx                      ; the gfx_pen_live that used to close this
+    cmp bl, CPS_NROW            ; loop is gone too
+    jb .down                    ; a row: the next one down
+    jne .step                   ; the first port: across from the last row,
+    add cx, CPS_LX0 - CP_PGX - CPS_LDX  ; on its glyph top...
+.step:
+    add cx, CPS_LDX             ; ...and each port after it, along
+    cmp bl, CPS_NROW + 3
     jb .r
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
+.down:
+    add dx, CP_PROWH
+    jmp short .r
 
 ; -----------------------------------------------------------------------------
 ; cp_snd_note - the notice line: why the last click did not take (internal)
@@ -4448,35 +5541,22 @@ cp_snd_radios:
 ; vocabulary for both is one less thing for the user to map.
 ; -----------------------------------------------------------------------------
 cp_snd_note:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov dx, bp
-    add dx, CPS_NOTEY
-    mov ax, CP_PMX              ; nothing to this line's left on this page
-    call cp_drv_wipe            ; the strings differ in length, and the line
-    mov bl, [cp_snd_err]        ; is usually empty
+    call kentm_si                ; KENT: push ax..si
+    xor si, si                  ; SI = the note, or 0 for none: cp_drv_line
+    mov bl, [cp_snd_err]        ; takes both, and the line is usually empty
     or bl, bl
-    jz .out
+    jz .draw
     cmp bl, DRVE_NERR           ; the code came out of a driver, and a table
-    jae .out                    ; index is not a thing to take on trust
-    xor bh, bh
-    shl bx, 1
-    mov si, [bx+drv_errstr]
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CPS_NOTEY
-    call cp_run
+    jae .draw                   ; index is not a thing to take on trust
+    xchg ax, bx
+    call drv_errstg             ; SI -> the loader's words, staged
+.draw:
+    lea dx, [bp+CPS_NOTEY]
+    mov ax, CP_PMX              ; nothing to this line's left on this page
+    call cp_drv_line            ; the strings differ in length, so the TAIL is
+                                ; what gets cleared - after the run, not before
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_snd_click - a click inside the Sound page
@@ -4491,44 +5571,37 @@ cp_snd_note:
 ; keep a machine that has the room off a tier it can afford (SPEC.md 34.8).
 ; -----------------------------------------------------------------------------
 cp_snd_click:
-    push ax
-    push bx
-    push cx
-    push dx
+    call kentm_si
 
     cmp dx, CPS_BTY1            ; --- the Test button ------------------------
     jl .rows
     cmp dx, CPS_BTY2
-    jg .done
-    cmp cx, CPS_BTX1
-    jl .done
+    jg .tout                    ; (.tout: .done is past a short jump's reach
+    cmp cx, CPS_BTX1            ; from here, and a relaxed jcc is five bytes)
+    jl .tout
     cmp cx, CPS_BTX2
-    jg .done
+    jg .tout
 %ifdef KERN_BIG
     mov al, 1                   ; the Test button
     call cp_ctl
-    jc .done
+    jc .tout
 %endif
     mov ax, 660                 ; one second of a tone through whatever the
     mov cx, 18                  ; page currently selects. UI priority, so it
     mov dl, SND_PRI_UI          ; outranks anything a package is playing -
-    call KERNEL_SEG:cw_osapi_snd_tone         ; the user asked for it
+    call KERNEL_SEG:apic_osapi_snd_tone       ; the user asked for it
+.tout:
     jmp short .done
 
 .rows:
-    cmp dx, CP_B0Y1             ; --- the three tier rows -------------------
-    jl .done
-    xor bl, bl                  ; BL = the row the y lands in
-    cmp dx, CP_B0Y2
-    jle .band
-    inc bl
-    cmp dx, CP_B1Y2
-    jle .band
-    inc bl
-    cmp dx, CPS_B2Y2
-    jg .done
-.band:
-    mov al, bl
+    mov ax, dx                  ; --- the four tier rows --------------------
+    sub ax, CP_B0Y1             ; (the SUB's flags are CMP's: above the first
+    jl .done                    ; row's band is not a press)
+    mov dl, CP_PROWH            ; BL = the row the y lands in: each band ends
+    div dl                      ; one row pitch below the last, so this is the
+    cmp al, CPS_NROW            ; ladder of four compares it was, as one
+    jae .done                   ; divide (kernel size pass 10). DX is spent:
+    mov bl, al                  ; .lpt reads x alone
     call cp_snd_rowok           ; a row whose hardware is not here is refused
     jc .done                    ; without a notice: it is drawn grey, which
                                 ; has already said so.
@@ -4537,38 +5610,332 @@ cp_snd_click:
                                 ; that will refuse must not arm, or the press
                                 ; draws it held and SPEC.md 13.8's "disabled
                                 ; outranks down" is broken by this page
+    cmp bl, 3
+    je .lpt                     ; the Covox row: which PORT is its own question
 %ifdef KERN_BIG
-    add al, 2                   ; ids 2..4, the Test button being 1
+    add al, 2                   ; ids 2..5, the Test button being 1
     call cp_ctl
     jc .done
     mov al, bl
 %endif
     xor bh, bh
-    mov ah, [bx+cp_snd_tiers]   ; the SND_RT_* that row asks for
+    mov ah, [cs:bx+cp_snd_tiers] ; the SND_RT_* that row asks for
+.ask:
     mov byte [cp_snd_err], 0
     cmp ah, [snd_route]
     je .redraw                  ; already the setting: still redraw, because
                                 ; the click clears a stale notice
-    call COLD_SEG:drvf_drv_tier               ; ask the driver to move; AL = why not
+    call cdl_tier               ; ask the driver to move; AL = why not
     jnc .take
     mov [cp_snd_err], al        ; the tier stands where it was, and the notice
     jmp short .redraw           ; line says which of the two reasons
 .take:
     mov [snd_route], ah
-    mov byte [cp_wdirty], 1
+    call cp_wdset
 .redraw:
     call cp_snd_radios
     call cp_snd_note
 .done:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
+.lpt:                           ; --- the Covox row (SPEC.md 34.14) ---------
+    mov ax, cx                  ; on a PORT radio: that port, if it answered.
+    sub ax, CPS_LX0 - 2         ; On the label: the port already chosen, or
+    jl .lab                     ; the first that answered - a Covox tier is
+    mov dl, CPS_LDX             ; SND_RT_LPT + n, LPTn+1, and the byte that
+    div dl                      ; holds it is the one SYSTEM.CFG already keeps.
+                                ; SIGNED first (the SUB's flags are CMP's):
+                                ; CX is pane-relative and the gutter left of
+                                ; the pane is -8..-1, which an unsigned test
+                                ; passed on to a `div` whose quotient then
+                                ; overflowed - INT 0, and no handler for it
+    cmp al, 3
+    jae .done
+    add al, CPS_NROW            ; the port's entry, CPS_NROW + n - which IS
+    mov bl, al                  ; its tier, SND_RT_LPT + n
+    call cp_snd_rowok
+    jc .done
+%ifdef KERN_BIG
+    add al, 2                   ; ids 6..8
+    call cp_ctl
+    jc .done
+%endif
+.got:
+    mov ah, bl
+    jmp short .ask
+.lab:
+%ifdef KERN_BIG
+    mov al, 5                   ; the row's own id
+    call cp_ctl
+    jc .done
+%endif
+    call cp_snd_row             ; already a Covox that SOUNDS - the Covox row
+    mov ah, [snd_route]         ; owning the dot: re-asking is harmless. One
+    cmp al, 3                   ; whose port did not answer here falls to the
+    je .ask                     ; first that did, as a setting from another
+    mov bl, CPS_NROW            ; machine
+.first:
+    mov al, bl
+    call cp_snd_rowok
+    jnc .got
+    inc bl
+    cmp bl, CPS_NROW + 3
+    jb .first
+    jmp short .done             ; (cp_snd_rowok passed, so one answered)
 
+%ifdef OS88_DRIVERS             ; THE DRIVERS PAGE'S BODIES are kern_big's alone:
+                                ; kern_small loads no driver and cp_items has no
+                                ; row for the page (SPEC.md 51.0), so nothing
+                                ; there could reach them. They were compiled on
+                                ; both while a module byte was thought to cost
+                                ; nothing; it costs the claim (SPEC.md 2.8).
+                                ; cp_drv_line stays - the Sound page draws its
+                                ; note with it
 ; =============================================================================
 ; The Drivers page (SPEC.md 31.6/51)
 ; =============================================================================
+
+; =============================================================================
+; The Drivers page's Ports view (SPEC.md 31.15)
+;
+; Where the network card and the MPU-401 are, for a machine where the drivers'
+; own search finds the wrong thing or nothing: one byte each, SYSTEM.CFG's 'EP'
+; and 'SP' records - the Ethernet row's and the sound row's blobs (SPEC.md
+; 51.9.2). The page EDITS THE BYTES AND NOTHING ELSE, the Floppy page's rule:
+; each driver reads its own at ATTACH, before it touches a port, so a pick is
+; used the next time the driver loads and the caption says restart.
+;
+; ON THE DRIVERS PAGE, AND THAT IS THE POINT. A driver's own page exists only
+; while it is attached, and the machine that most needs a pinned port is the
+; one where the search FAILED - so its driver is not loaded and has no page,
+; and the Drivers page is where it says "No hardware found". A ninth static
+; page was built first and refused: nine statics and one driver page is ten
+; rows, so the list scrolled on every VGA machine with a card and the
+; Ethernet page went below the fold (SPEC.md 31.1.5).
+;
+; A pin is (port - 200h) / 2: 0 is Auto, FFh is Off, and anything else names
+; one port - which is also how the caption is built, so the page carries no
+; strings for the ports and shows whatever a SYSTEM.CFG holds, even a value
+; this build's list does not offer.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_pty - row BL's box top, absolute: DX = BP + CPP_R0Y + BL*CPP_ROWH, BL
+; being 0 or 1. Every other register preserved (flags clobbered)
+; -----------------------------------------------------------------------------
+cp_pty:
+    lea dx, [bp+CPP_R0Y]
+    or bl, bl
+    jz .o
+    add dx, CPP_ROWH
+.o:
+    ret
+
+; cp_ppin - SI = row BX's byte in drv_cfg, BH = 0: row 0 is the Ethernet
+; row's blob and row 1 the sound row's, which is the byte BELOW it
+cp_ppin:
+    mov si, drv_cfg + CFG_EPIN
+    sub si, bx
+    ret
+                                ; (driver.inc asserts it, at CFG_EPIN)
+
+; cp_plist - SI = row BL's list of pins, in the image; AH = its length
+cp_plist:
+    mov si, cp_pnl
+    mov ah, CPP_NNL
+    or bl, bl
+    jz .o
+    mov si, cp_pml
+    mov ah, CPP_NML
+.o:
+    ret
+
+; cp_pidx - AL = where row BX's pin is in its list (0, Auto, when it is not
+; there: a value no build offers steps from the top), AH = the list's length.
+; clobbers: CL, SI
+cp_pidx:
+    call cp_ppin
+    mov cl, [si]                ; CL = the pin
+    call cp_plist
+    xor al, al
+.f:
+    cmp [cs:si], cl
+    je .o
+    inc si
+    inc ax                      ; AL counts; it stays under AH, so no carry
+    cmp al, ah
+    jb .f
+    xor al, al                  ; not found
+.o:
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_pval - row BX's VALUE (BH = 0): 'Auto', 'Off ' or the port in its box,
+; and the two arrow cells that step it, each greyed at its end of the list.
+; The paint and the click both draw the two together, so they are one routine
+; (kernel size pass 12). Registers preserved
+;
+; Always FOUR cells of caption, so one opaque run covers whatever the last
+; one was and the box writes each pixel once (PERFORMANCE.md rule 2).
+; -----------------------------------------------------------------------------
+cp_pval:
+    call kentm_si
+    call cp_ppin
+    mov al, [si]
+    mov si, cp_sbuf
+    mov word [si], 'Au'
+    mov word [si+2], 'to'
+    or al, al
+    jz .put
+    mov word [si], 'Of'
+    mov word [si+2], 'f '
+    cmp al, 0xFF
+    je .put
+    xor ah, ah                  ; the port: 200h + 2 * pin
+    shl ax, 1
+    add ah, 2 + '0'             ; ...whose top digit is 2 or 3
+    mov [si], ah
+    mov ah, al
+    mov cl, 4
+    shr al, cl
+    cmp al, 10                  ; a nibble -> its hex digit, the cmp/sbb/das
+    sbb al, 0x69                ; idiom: exact on every 8086-class part (an
+    das                         ; AAM with a base is not: a V20 takes 10)
+    mov [si+1], al
+    mov al, ah
+    and al, 0x0F
+    cmp al, 10
+    sbb al, 0x69
+    das
+    mov ah, 'h'
+    mov [si+2], ax
+.put:
+    mov byte [si+4], 0
+    call cp_pty
+    add dx, 3
+    lea cx, [di+CPP_BX1 + 6]
+    call cp_brun
+    ; --- ...and the two cells
+    mov byte [cp_darr_dn], 0    ; cp_sbuf's tail: nothing here is held
+    call cp_pidx                ; AL = the index, AH = the length
+    dec ah                      ; AH = the last index
+    cmp al, 1                   ; up is dead at the top: CF = index < 1
+    pushf
+    cmp al, ah
+    cmc                         ; down is dead at the end: CF = index >= last
+    pushf
+    call cp_pty
+    mov bx, dx                  ; BX = y1
+    add dx, CPP_BH - 1          ; DX = y2
+    lea ax, [di+CPP_AX2]        ; DOWN first: its answer is on top
+    lea cx, [di+CPP_AX2 + CP_DSW - 1]
+    mov si, CP_TRI_DN
+    popf
+    call cp_arrcell
+    sub ax, CPP_AX2 - CPP_AX1
+    sub cx, CPP_AX2 - CPP_AX1
+    xor si, si                  ; CP_TRI_UP
+    popf
+    call cp_arrcell
+    call cp_penlive
+    jmp kretm_si
+
+; -----------------------------------------------------------------------------
+; cp_port_click - a press inside the Ports view. CX/DX = pane-relative
+;
+; JUMPED TO from cp_drv_click, and it ends on that routine's kentm_si bank.
+;
+; An arrow cell is a SELECTING site, the Floppy box's species (cp_ctl id 0):
+; it steps on the PRESS, the way a scroll arrow does. At the end of its list
+; a cell is greyed (SPEC.md 47 rule 3: a fact), and its press does nothing.
+; -----------------------------------------------------------------------------
+cp_port_click:
+    mov ax, dx
+    sub ax, CPP_R0Y
+    jl .done
+    mov bl, CPP_ROWH
+    div bl                      ; AL = the row, AH = where in it
+    cmp ah, CPP_BH
+    jae .done
+    cmp al, 1
+    ja .done
+    cbw
+    xchg bx, ax                 ; BX = the row, for good (BH = 0: cp_ppin)
+    xchg ax, cx                 ; AX = x
+    sub ax, CPP_AX1
+    jl .done
+    mov cl, CPP_AX2 - CPP_AX1
+    div cl                      ; AL = the cell, AH = where in it. AX is under
+    cmp ah, CP_DSW              ; 63: x is pane-relative and CP_PRGT is 221
+    jae .done
+    cmp al, 1
+    ja .done
+    shl al, 1                   ; 0 up / 1 down -> -1 / +1
+    dec ax
+    xchg dx, ax                 ; DL = the step
+    xor al, al
+    call cp_ctl                 ; id 0: acts on the press only
+    jc .done
+    call cp_pidx                ; AL = where the pin is in the list, AH = its
+    add al, dl                  ; length
+    cmp al, ah
+    jae .done                   ; off either end (-1 is FFh): greyed, nothing
+    call cp_plist               ; SI = the list, in the image
+    cbw
+    add si, ax
+    mov al, [cs:si]
+    call cp_ppin                ; SI = the pin's byte in drv_cfg
+    mov [si], al
+    call cp_wdset               ; remembered on close (SPEC.md 31.8)
+    call cp_pval
+.done:
+    jmp kretm_si
+
+; The pins each row steps through, in order. Network: the NE1000/NE2000
+; jumper set, Auto first. MIDI: the MPU-401's usual bases, then Off - which
+; makes the driver look nowhere, the one answer an AUTO search cannot give.
+cp_pnl: db 0, 0x20, 0x40, 0x50, 0x60, 0x80, 0x90, 0xA0, 0xB0
+CPP_NNL equ $ - cp_pnl          ; Auto 240h 280h 2A0h 2C0h 300h 320h 340h 360h
+cp_pml: db 0, 0x80, 0x88, 0x90, 0x98, 0x99, 0x9A, 0x9B, 0xA0, 0xA8, 0xB0, 0xFF
+CPP_NML equ $ - cp_pml          ; Auto 300h 310h 320h 330h 332h 334h 336h
+                                ; 340h 350h 360h Off
+
+CPS cp_s_dport, 'Ports'
+CPS cp_s_dback, 'Back'
+CPS cp_s_pnet,  'Network card:'
+CPS cp_s_pmid,  'MIDI port:'
+CPS cp_s_pnote, 'Auto tries the usual ports'
+
+; -----------------------------------------------------------------------------
+; cp_port_paint - the view, under the page's heading and its button
+;
+; JUMPED TO from cp_drv_paint, straight below, and it ends on that routine's
+; kentm_si bank. The two labels first and then the rows from the bottom: the
+; same pixels as row by row, which no two of them share.
+; -----------------------------------------------------------------------------
+cp_port_paint:
+    call cp_blbl
+    dw cp_s_pnet, CPP_LX, CPP_R0Y + 3
+    call cp_lbl
+    dw cp_s_pmid, CPP_LX, CPP_R0Y + CPP_ROWH + 3
+    mov bx, 1                   ; BX = the row: 1 MIDI, then 0 network
+.row:
+    call cp_pty                 ; --- the value box's frame
+    push bx
+    mov bx, dx
+    add dx, CPP_BH - 1
+    lea ax, [di+CPP_BX1]
+    lea cx, [di+CPP_BX2]
+    call cp_penlive
+    call KERNEL_SEG:cw_gfx_frame
+    pop bx
+    call cp_pval                ; ...what it holds and the cells that step it
+    dec bx
+    jns .row
+    call cp_blbl
+    dw cp_s_fcap, CP_PMX, CPP_CAPY
+    call cp_lbl
+    dw cp_s_pnote, CP_PMX, CPP_CAPY + 10
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_paint - the page: heading, a checkbox row per driver, one caption
@@ -4582,19 +5949,12 @@ cp_snd_click:
 ; the click all read one word, so they cannot disagree.
 ; -----------------------------------------------------------------------------
 cp_drv_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
+    call cp_drv_pbtn            ; the heading row's Ports / Back (31.15)
+    cmp byte [cp_dview], 0
+    jne cp_port_paint           ; ...and the view, in place of the list: it
+                                ; ends on this routine's bank
 
-    mov byte [gfx_color], CBLACK    ; entry pen is CWHITE (cp_page's erase)
-    mov si, cp_s_drv                ; heading, same string as the list row
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PHY
-    call cp_run
 
     call cp_drv_mempar              ; ...and one bit for the whole page before
                                     ; any row is lettered: do the memory
@@ -4606,7 +5966,7 @@ cp_drv_paint:
 .row:
     push bx
     mov al, bl
-    call COLD_SEG:drvf_drv_row                    ; BX = the drv_tab row
+    call cp_drvrow              ; BX = the drv_tab row
     cmp word [bx+DRVR_FILE], 0
     je .next                        ; an empty table row draws nothing
     mov si, [bx+DRVR_TITLE]
@@ -4614,8 +5974,7 @@ cp_drv_paint:
     push ax                         ; AX = the row index again
     push bx
     call cp_drv_rowy                ; DX = this row's glyph top
-    mov cx, di
-    add cx, CP_PLX
+    lea cx, [di+CP_PLX]
     add dx, CP_PLDY
     call cp_run                                   ; the driver's name
     pop bx
@@ -4625,38 +5984,29 @@ cp_drv_paint:
     call cp_drv_mem1                ; (SPEC.md 31.6.2). BX survives it, and the
                                     ; status call below still wants the row
 
-    call COLD_SEG:drv_status_x                    ; ...and what it is doing right now
+    call drv_status_x                             ; ...and what it is doing right now
+                                                  ; NEAR: the body is in this image
     pop ax
     push ax
     call cp_drv_rowy
     add dx, CP_DSTDY
-    mov cx, di
-    add cx, CP_PLX
+    lea cx, [di+CP_PLX]
     call cp_run                                   ; no erase needed: cp_page has
                                                   ; just white-filled the pane
 .next:
     pop bx
     inc bx
-    cmp bx, DRV_MAX
-    jae .rdone
-    mov al, [cp_dtop]
-    add al, CP_DVIS
-    xor ah, ah
-    cmp bx, ax
+    call cp_drv_end
+    cmp bl, al
     jb .row
-.rdone:
     call cp_drv_arrows              ; ...and the two that move the window
     call cp_drv_boxes               ; every checkbox, from the live state.
                                     ; NO save caption: a failed write is said
                                     ; as a toast at the moment it fails
                                     ; (SPEC.md 59.6), so this page has nothing
                                     ; left to report from a previous session
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
+%endif ; OS88_DRIVERS
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_rowy - a driver row's glyph top (module internal)
@@ -4706,6 +6056,11 @@ CP_DSW    equ 14
 CP_DSX1   equ 200
 CP_DSX2   equ CP_DSX1 + CP_DSW - 1
 CP_DSAH   equ 14              ; each arrow cell is square
+%ifdef OS88_DRIVERS
+%if CPP_AX2 + CP_DSW > 221
+  %error "ctrl: the Ports view's arrows run off the pane"
+%endif
+%endif
 
 ; The MEMORY COLUMN (SPEC.md 31.6.2): roughly what a driver holds while it is
 ; doing its job, on the name's own line and right of it. It is a compile-time
@@ -4738,24 +6093,33 @@ CP_DMMAX  equ 12              ; cp_dmbuf: '(~' + 5 digits + 'K+)' + NUL is 11
 CP_DIDUP  equ DRV_MAX + 1
 CP_DIDDN  equ DRV_MAX + 2
 
+%ifdef OS88_DRIVERS
 
 cp_drv_rowy:
     push ax
-    push cx
-    mov ah, 0
     sub al, [cp_dtop]           ; ...THE VISIBLE POSITION of this table row.
                                 ; Doing it here rather than at the call sites
                                 ; is what let the list scroll without touching
                                 ; one of them: every caller still names a
                                 ; drv_tab row, which is the only index the
                                 ; rest of the page has ever used
-    mov cx, CP_DROWH
-    mul cx
+    mov ah, CP_DROWH
+    mul ah                      ; 0..CP_DVIS-1 rows: a byte multiply is room
     add ax, CP_DR0Y
     add ax, bp
-    mov dx, ax
-    pop cx
+    xchg dx, ax
     pop ax
+    ret
+
+; cp_drv_end - AL = one past the last drv_tab row on screen: [cp_dtop] +
+; CP_DVIS, or DRV_MAX where the table ends first. clobbers: AL, flags
+cp_drv_end:
+    mov al, [cp_dtop]
+    add al, CP_DVIS
+    cmp al, DRV_MAX
+    jbe .r
+    mov al, DRV_MAX
+.r:
     ret
 
 
@@ -4776,18 +6140,14 @@ cp_drv_rowy:
 ; one per row for exactly that reason.
 ; -----------------------------------------------------------------------------
 cp_drv_mempar:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov byte [cp_dmnw], 0
-    mov byte [cp_dmdg], 1       ; a one-digit figure at the very least
+    call kentm_si                ; KENT: push ax..si
+    mov word [cp_dmnw], 0x0100  ; and [cp_dmdg] = 1: a one-digit figure at the
+                                ; very least (adjacent in cp_sbuf's tail)
     xor bx, bx
 .row:
     push bx
     mov al, bl
-    call COLD_SEG:drvf_drv_row  ; BX = the drv_tab row (AX preserved)
+    call cp_drvrow              ; BX = the drv_tab row (AX preserved)
     cmp word [bx+DRVR_FILE], 0
     je .next                    ; an empty row names nothing and costs nothing
     mov si, [bx+DRVR_TITLE]
@@ -4806,7 +6166,7 @@ cp_drv_mempar:
     pop si                      ; the ROW INDEX again, for drv_memk
     push si
     shl si, 1
-    mov ax, [drv_memk + si]
+    mov ax, [cs:drv_memk + si]
     and ah, 0x7F                ; DRVM_PLUS is a flag, not a digit
     or ax, ax
     jz .next                    ; a row with no figure at all
@@ -4827,29 +6187,19 @@ cp_drv_mempar:
     cmp bx, DRV_MAX
     jb .row
 
-    mov al, [cp_dmdg]           ; where a BRACKETED field would start...
-    add al, 2                   ; ...'(' and '~' in front of the digits
-    xor ah, ah
-    mov cl, 3
-    shl ax, cl                  ; cells -> pixels
-    mov dx, CP_DMKX
-    sub dx, ax
-    mov al, [cp_dmnw]           ; ...against where the longest name ends
-    xor ah, ah
-    shl ax, cl
-    add ax, CP_PLX + CP_DMGAP
-    mov byte [cp_dmpar], 1
-    cmp ax, dx
-    jbe .out
-    mov byte [cp_dmpar], 0      ; two cells narrower without them, and the
-                                ; digits still align on the 'K'
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    ; A BRACKETED field starts (digits + 2) cells left of CP_DMKX - '(' and
+    ; '~' in front of the digits - and the longest name ends CP_DMGAP short
+    ; of it at the most: 8 * (names + digits + 2) <= CP_DMKX - CP_PLX -
+    ; CP_DMGAP, all of it in whole CELLS, so one sum and one compare.
+    ; Without the brackets the field is two cells narrower, and the digits
+    ; still align on the 'K'
+    mov al, [cp_dmnw]
+    add al, [cp_dmdg]
+    cmp al, (CP_DMKX - CP_PLX - CP_DMGAP) / 8 - 2 + 1
+    sbb al, al                  ; 0xFF when it fits...
+    neg al                      ; ...and so 1, else 0
+    mov [cp_dmpar], al
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_memstr - one drv_memk word as text (module internal)
@@ -4863,11 +6213,7 @@ cp_drv_mempar:
 ; -----------------------------------------------------------------------------
 cp_drv_memstr:
     ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
+    call kentm_bp
     mov [cp_dmplus], ah         ; the flag rides bit 15, out of the way of the
     and ah, 0x7F                ; divide below
     mov di, cp_dmbuf
@@ -4909,12 +6255,7 @@ cp_drv_memstr:
     inc di
 .term:
     mov byte [di], 0
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_bp
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_mem1 - one driver row's memory column (SPEC.md 31.6.2)
@@ -4928,15 +6269,11 @@ cp_drv_memstr:
 ; the click budget.
 ; -----------------------------------------------------------------------------
 cp_drv_mem1:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
     mov bl, al
     xor bh, bh
     shl bx, 1
-    mov bx, [drv_memk + bx]
+    mov bx, [cs:drv_memk + bx]
     or bx, bx
     jz .out                     ; a row with no figure says nothing rather
                                 ; than '~0K'
@@ -4945,27 +6282,16 @@ cp_drv_mem1:
                                 ; on that line, not a second caption
     mov ax, bx
     call cp_drv_memstr
-    mov cl, [cp_dmkc]
-    dec cl                      ; cells BEFORE the 'K'...
-    xor ch, ch
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1                   ; ...in pixels (cpu 8086: no shl by an
-                                ; immediate other than 1)
-    mov ax, CP_DMKX
-    sub ax, cx                  ; so every row's 'K' lands on one column
-    add ax, di
-    mov cx, ax
+    mov al, [cp_dmkc]
+    mov ah, 8
+    mul ah                      ; the cells up to the 'K', in pixels...
+    mov cx, CP_DMKX + 8
+    sub cx, ax                  ; ...so every row's 'K' lands on one column
+    add cx, di
     mov si, cp_dmbuf
-    mov byte [gfx_color], CBLACK
-    call cp_run
+    call cp_brun
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_box1 - one driver row's checkbox, drawn from the live table
@@ -4976,58 +6302,40 @@ cp_drv_mem1:
 ; what the settings file asks for. A driver the user enabled on a machine with
 ; no card is unchecked, and its caption says why.
 ;
-; Per ROW because a click changes one, and os88ui_glyph is not cheap: a white
-; 12x12 fill and then one gfx_pixel per set bit - 44 of them for the empty
-; box, 64 for the crossed one - which at PERFORMANCE.md Part 2's ~756us of
-; fixed cost per drawing call is ~35-50ms of the field machine's time. Redrawn
-; unconditionally it is also a double-draw flash on a control that did not
-; change.
+; Per ROW because a click changes one, and os88ui_glyph is not cheap: since
+; SPEC.md 13.15.1 it is a white 12x12 fill and then three to eight more, and
+; it MEASURES 4.3-6.4 ms of the field machine's time
+; (docs/reports/GLYPH-AND-LINE-COST-2026-09-10.md, on a Hercules 5150). The
+; ~35-50ms that stood here was 44-64 gfx_pixel calls at PERFORMANCE.md Part
+; 2's ~756us - which was the CLIPPED fallback's cost and never the normal
+; path's. Redrawn unconditionally it is also a double-draw flash on a control
+; that did not change.
 ; -----------------------------------------------------------------------------
 cp_drv_box1:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov byte [gfx_color], CBLACK    ; kept for the EMPTY-row path only: that
+    call kentm_si                ; KENT: push ax..si
+    call cp_black                   ; kept for the EMPTY-row path only: that
                                     ; one draws nothing, so os88ui_glyph never
                                     ; runs and the documented pen would not
                                     ; hold. On the drawn path the control
                                     ; leaves it live by itself
-    call COLD_SEG:drvf_drv_row      ; AL survives (drv_row preserves AX)
+    call cp_drvrow              ; AL survives (drv_row preserves AX)
     cmp word [bx+DRVR_FILE], 0
     je .out                         ; an empty table row is not a control
     call cp_drv_rowy                ; DX = this row's glyph top - taken BEFORE
                                     ; AX becomes the glyph's argument, because
                                     ; both want AL (the row index)
 %ifdef KERN_BIG
-    mov si, ax                      ; ...and the row is banked for the same
-                                    ; reason, one register further along: it
-                                    ; is this control's ID (SPEC.md 13.8.3)
+    mov ah, al                      ; ...and the row is this control's ID
+    inc ah                          ; (SPEC.md 13.8.3), one per driver ROW,
+%endif                              ; 1-based
+    lea cx, [di+CP_PGX]
+    cmp word [bx+DRVR_SEG], 0       ; AH = 0 to the glyph: a driver row never
+%ifdef KERN_BIG                     ; greys - what it cannot do, its caption
+    mov bh, ah                      ; says
 %endif
-    mov cx, di
-    add cx, CP_PGX
-    mov ax, OS88UI_GCHECK           ; AH = 0: a driver row never greys - what
-    cmp word [bx+DRVR_SEG], 0       ; it cannot do, its caption says
-    je .off
-    mov al, OS88UI_GCHECK | OS88UI_GON
-.off:
-%ifdef KERN_BIG
-    push bx                     ; one id per driver ROW, 1-based, out of the
-    mov bx, si                  ; bank above (SI's low byte is the row)
-    mov bh, bl
-    inc bh
-    call cp_dngly
-    pop bx
-%endif
-    call cp_gemit
+    call cp_chk
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_boxes - every driver row's checkbox (the page's own paint)
@@ -5038,24 +6346,37 @@ cp_drv_boxes:
     push ax
     push bx
     mov bl, [cp_dtop]
-    xor bh, bh
 .row:
     mov al, bl
     call cp_drv_box1
     inc bx
-    cmp bx, DRV_MAX
-    jae .out
-    mov al, [cp_dtop]
-    add al, CP_DVIS
-    xor ah, ah
-    cmp bx, ax
+    call cp_drv_end
+    cmp bl, al
     jb .row
-.out:
     pop bx
     pop ax
     ret
 
 %ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_drv_pbtn - the heading row's button: 'Ports' on the list, 'Back' on the
+; view. in: DI = pane left, BP = pane top. Registers preserved
+; -----------------------------------------------------------------------------
+cp_drv_pbtn:
+    call kentm_bp
+    mov ax, CPD_PBX1
+    mov dx, CPD_PBY1
+    mov cx, CPD_PBX2
+    mov bx, CPD_PBY2
+    call cp_krect
+    CPSTAGE cp_s_dport
+    cmp byte [cp_dview], 0
+    je .lab
+    CPSTAGE cp_s_dback
+.lab:
+    mov al, CP_DIDPORT
+    jmp cp_btfill
+
 ; -----------------------------------------------------------------------------
 ; cp_drv_ctl1 - redraw the ONE control the down state moved to or from
 ; in:  AL = a control id on this page (0 = none), DI/BP = pane origin; lock held
@@ -5064,7 +6385,8 @@ cp_drv_boxes:
 ; The Drivers page's half of cp_ctlpaint (SPEC.md 31.1.2). Every other page
 ; redraws its whole control set on both edges of a press, which is affordable
 ; where a page has three or four of them and is not here: a row's checkbox is
-; os88ui_glyph, ~35-50ms of the field machine's time, and it WHITE-FILLS its
+; os88ui_glyph, a measured 4.3-6.4 ms of the field machine's time, and it
+; WHITE-FILLS its
 ; box before it draws a pixel - so redrawing the four that did not change is
 ; a visible blink of the whole list. Pressing an ARROW redrew all four and not
 ; the arrow, which is the reported defect in one sentence: two flashes of the
@@ -5075,6 +6397,9 @@ cp_drv_boxes:
 ; anything acts, so [cp_dtop] cannot move under a held row.
 ; -----------------------------------------------------------------------------
 cp_drv_ctl1:
+    cmp al, CP_DIDPORT
+    je cp_drv_pbtn              ; the Ports / Back button above the rows: its
+                                ; painter keeps every register itself
     push ax
     or al, al
     jz .out                     ; nothing was down, or nothing is: the common
@@ -5105,20 +6430,13 @@ cp_drv_ctl1:
 ; identical to a live one.
 ; -----------------------------------------------------------------------------
 cp_drv_arrows:
-    push ax
-    push bx
-    push cx
-    push dx
+    call kentm_si
     mov al, 0                       ; the UP arrow, at the top of the column
     call cp_drv_arrowx
     mov al, 1                       ; ...and the DOWN one
     call cp_drv_arrowx
-    mov byte [gfx_color], CBLACK
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call cp_black
+    jmp kretm_si
 
 ; --- cp_drv_arrowx - one arrow, greyed or not by its own end stop -----------
 ; in:  AL = 0 up / 1 down, DI/BP = pane origin; gfx lock held
@@ -5148,28 +6466,16 @@ cp_drv_arrowx:
 ; only happened to agree.
 cp_drv_arrowok:
     push ax
-    push bx
     or al, al
     jnz .dn
-    cmp byte [cp_dtop], 0
-    je .no                          ; ...at the top: nothing above to scroll to
-    jmp short .yes
-.dn:
-    mov al, [cp_dtop]
-    add al, CP_DVIS
-    xor ah, ah
-    mov bx, ax
-    cmp bx, DRV_MAX
-    jae .no                         ; ...the last row is already shown
-.yes:
-    pop bx
-    pop ax
-    clc
+    cmp byte [cp_dtop], 1           ; CF = 1 at the top: nothing above to
+    pop ax                          ; scroll to
     ret
-.no:
-    pop bx
+.dn:
+    call cp_drv_end
+    cmp al, DRV_MAX                 ; CF = 1 while a row is still below...
+    cmc                             ; ...which is the LIVE answer, so flipped
     pop ax
-    stc
     ret
 
 ; --- cp_drv_arrow1 - AL = 0 up / 1 down, CF = 1 if it can be used -----------
@@ -5180,55 +6486,32 @@ cp_drv_arrowok:
 ; cw_gfx_pen_cf reads CF and `or al, al` writes it. That is the whole reason
 ; this routine is shaped the way it is rather than testing AL where it reads.
 cp_drv_arrow1:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kentm_si                ; KENT: push ax..si
     pushf                           ; ...CF is the ARGUMENT, and the branch
-    mov si, cp_drv_triu             ; below spends it
+    xor si, si                      ; below spends it (CP_TRI_UP)
     mov dx, CP_DBY1
     or al, al
     jz .have
-    mov si, cp_drv_trid
+    mov si, CP_TRI_DN
     mov dx, CP_DBYN - CP_DSAH
 .have:
 %ifdef KERN_BIG
-    mov byte [cp_darr_dn], 0        ; IS THIS THE ARROW BEING HELD? (SPEC.md
-    push ax                         ; 13.8.3) - asked here, with CF still safe
-    add al, CP_DIDUP                ; on the stack, because cp_isdown's compare
-    call cp_isdown                  ; would spend it. The id IS the direction:
-    jne .nodn                       ; up is CP_DIDUP and down the one above it
-    mov byte [cp_darr_dn], 1
-.nodn:
-    pop ax                          ; (pop leaves the flags alone)
+    push ax                         ; IS THIS THE ARROW BEING HELD? (SPEC.md
+    add al, CP_DIDUP                ; 13.8.3) - asked here, with CF still safe
+    sub al, [cp_down]               ; on the stack. The id IS the direction:
+    cmp al, 1                       ; up is CP_DIDUP and down the one above
+    sbb al, al                      ; it, so AL = 0 exactly when it is the one
+    mov [cp_darr_dn], al            ; down: FFh held, 0 not (cp_isdown's
+    pop ax                          ; question, answered as a byte)
 %endif
     add dx, bp
     mov bx, dx                      ; BX = y1
     add dx, CP_DSAH - 1             ; DX = y2
-    mov ax, CP_DSX1
-    add ax, di
-    mov cx, CP_DSX2
-    add cx, di
-    call cp_drv_arrfill             ; ...the interior, BEFORE the pen is set
+    lea ax, [di+CP_DSX1]
+    lea cx, [di+CP_DSX2]
     popf
-    call KERNEL_SEG:cw_gfx_pen_cf   ; the pen AND the disabled flag together
-    call KERNEL_SEG:cw_gfx_frame
-%ifdef KERN_BIG
-    cmp byte [cp_darr_dn], 0
-    je .tri
-    mov byte [gfx_color], CWHITE    ; held: the triangle is the hole in the
-.tri:                               ; black, the way os88ui_btn's label is
-%endif
-    call cp_drv_tri                 ; ...the rect is still in AX/BX/CX/DX: a
-                                    ; kernel primitive preserves everything it
-                                    ; does not document (SPEC.md 1)
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call cp_arrcell
+    jmp kretm_si
 
 ; --- cp_drv_arrfill - the cell's interior, so an arrow is IDEMPOTENT --------
 ; in:  AX/BX/CX/DX = the cell; gfx lock held
@@ -5245,97 +6528,103 @@ cp_drv_arrow1:
 ; not to the paper behind them - inheriting cw_gfx_pen_cf's [gfx_dis] would
 ; dither the background itself.
 cp_drv_arrfill:
-    push ax
-    push bx
-    push cx
-    push dx
+    call kentm_si
     inc ax                          ; ...inside the frame, which is drawn after
     inc bx
     dec cx
     dec dx
-    call KERNEL_SEG:cw_gfx_pen_live
+    call cp_penlive
 %ifdef KERN_BIG
     cmp byte [cp_darr_dn], 0
     jne .go                         ; held: CBLACK, which pen_live just set
 %endif
     mov byte [gfx_color], CWHITE    ; ...otherwise the pane's own background
 .go:
-    call KERNEL_SEG:cw_gfx_fill
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call cp_fill
+    jmp kretm_si
+
+; --- cp_arrcell - ONE arrow cell, whole: interior, frame and triangle ------
+; in:  AX/BX/CX/DX = the cell, SI = CP_TRI_UP or CP_TRI_DN, CF = 1 greyed,
+;      [cp_darr_dn] set (non-zero = drawn held); gfx lock held
+; out: nothing (all registers preserved; the pen is left as the triangle had
+;      it, so a caller that letters next calls cp_penlive)
+;
+; The tail four arrow drawers spelt out each - the Drivers page's two, the
+; item list's and the Ports view's (kernel size pass 12). FALLS INTO
+; cp_drv_tri, which is why it sits here.
+cp_arrcell:
+    pushf                           ; CF is the pen's: the fill spends flags
+    call cp_drv_arrfill             ; ...the interior, BEFORE the pen is set
+    popf
+    call cp_pencf                   ; the pen AND the disabled flag together
+    call KERNEL_SEG:cw_gfx_frame
+%ifdef KERN_BIG
+    cmp byte [cp_darr_dn], 0
+    je cp_drv_tri
+    mov byte [gfx_color], CWHITE    ; held: the triangle is the hole in the
+%endif                              ; black, the way os88ui_btn's label is.
+                                    ; The rect is still in AX/BX/CX/DX: a
+                                    ; kernel primitive preserves everything
+                                    ; it does not document (SPEC.md 1)
 
 ; --- cp_drv_tri - the triangle inside an arrow cell -------------------------
-; in:  AX/BX/CX/DX = the cell, SI = a four-byte half-width table; pen already
-;      set by the caller
+; in:  AX/BX/CX/DX = the cell, SI = CP_TRI_UP or CP_TRI_DN; pen already set
+;      by the caller
 ;
 ; Four scan lines drawn as FILLS, because a gfx_fill with y1 = y2 IS an hline
-; and one primitive is one thing to keep right. The half-widths come from a
-; table rather than from arithmetic so that up and down are one loop: the
-; alternative is two loops differing by a sign, which is two places to get an
-; off-by-one into.
+; and one primitive is one thing to keep right. Up and down are ONE loop: row
+; r's half-width is r XOR the mask in SI's high byte (0 up, 3 down), and SI's
+; low byte is r itself - so the table it used to read, and the byte of memory
+; its counter lived in, are both gone (kernel size pass 8).
+CP_TRI_UP equ 0
+CP_TRI_DN equ 0x0300
 cp_drv_tri:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentm_bp
     mov di, ax
     add di, CP_DSW / 2              ; DI = the cell's centre column
     add bx, 4                       ; ...and the triangle's first row
-    mov byte [cp_dtri_n], 0
 .row:
-    xor ax, ax
-    mov al, [si]
+    mov ax, si
+    xor al, ah                      ; AL = r, or 3 - r
+    xor ah, ah
     mov cx, di
     add cx, ax                      ; CX = x2
     mov dx, di
     sub dx, ax
     mov ax, dx                      ; AX = x1
     mov dx, bx                      ; DX = y2 = y1
-    call KERNEL_SEG:cw_gfx_fill
+    call cp_fill
     inc si
     inc bx
-    inc byte [cp_dtri_n]
-    cmp byte [cp_dtri_n], 4
-    jb .row
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    test si, 4                      ; four rows: r runs 0..3
+    jz .row
+    jmp kretm_bp
 
+%endif ; OS88_DRIVERS
 section .text                   ; DATA, so out of the on-demand image and back
                                 ; to the kernel segment (SPEC.md 2.8: a
                                 ; module's data stays in .text, and
                                 ; os88ovlchk.py refuses it here otherwise -
                                 ; which is what caught this one)
-cp_drv_triu: db 0, 1, 2, 3      ; up: a point at the top, widening downward
-cp_drv_trid: db 3, 2, 1, 0      ; down: the same triangle upside down
-cp_darr_dn:  db 0               ; is the arrow being drawn the one HELD? In
-                                ; memory for cp_dtri_n's reason below, and
-                                ; because CF is already this routine's
-                                ; argument and AL its direction
+; cp_darr_dn - is the arrow being drawn the one HELD? In memory for
+; the UI task's one-user reason, and because CF is already this routine's argument
+; and AL its direction. It is a byte of cp_sbuf's tail now (see there).
 ; --- the memory column's scratch (SPEC.md 31.6.2) ---------------------------
-; In memory rather than in registers for cp_dtri_n's reason: the panel runs on
+; In memory rather than in registers: the panel runs on
 ; the UI task under the gfx lock, so a scratch byte here has exactly one user
 ; at a time - and cp_drv_memstr has a divide, which spends DX:AX, and a digit
 ; stack, which spends CX.
-cp_dmbuf:    times CP_DMMAX db 0 ; the figure as text, built per row
-cp_dmkc:     db 0               ; ...cells in it up to AND INCLUDING the 'K',
-                                ; which is what cp_drv_mem1 aligns on
-cp_dmplus:   db 0               ; DRVM_PLUS, parked out of AX for the divide
+; cp_dmbuf - the figure as text, built per row - and cp_dmkc, the cells in
+; it up to AND INCLUDING the 'K' (what cp_drv_mem1 aligns on), and cp_dmplus,
+; DRVM_PLUS parked out of AX for the divide, are cp_sbuf and its tail now.
+%ifdef OS88_DRIVERS
 cp_dmpar:    db 1               ; 1 = there is room for the brackets, decided
                                 ; once per paint by cp_drv_mempar and the same
                                 ; for every row on the page
-cp_dmnw:     db 0               ; its two working maxima, in 8px cells: the
-cp_dmdg:     db 1               ; longest name in drv_tab, and the most digits
-                                ; any drv_memk figure needs
+%endif
+; cp_dmnw/cp_dmdg - its two working maxima, in 8px cells: the longest name
+; in drv_tab, and the most digits any drv_memk figure needs - are cp_sbuf's
+; tail (below): cp_drv_mempar is their only reader and stages nothing.
 
 section .bss                    ; ...and the one piece of ctrl.inc's data with
                                 ; no resting value: a scratch buffer belongs
@@ -5349,16 +6638,27 @@ cp_sbuf:     resb CP_SBUF       ; cp_stage's landing ground - ONE string at a
                                 ; is the same argument for the Drivers page's
                                 ; figure, and the two are never live together
                                 ; only because that page has no staged string)
+; ...AND FIVE SCRATCH BYTES BESIDE IT, for the same one-user argument
+; (kernel size pass 8, -16 resident). Each is live only INSIDE one routine
+; with no stage in it: the Drivers page's figure is composed and drawn by
+; cp_drv_mem1 without a stage between (cp_dmbuf/cp_dmkc/cp_dmplus - a staged
+; string is always drawn before the next routine runs), and the arrow's
+; held flag lives across cp_drv_arrow1 alone. cp_dmpar/cp_dmnw/cp_dmdg are NOT here: they persist
+; across a whole Drivers page paint, which stages.
+cp_dmbuf     equ cp_sbuf
+cp_dmkc      equ cp_sbuf + CP_DMMAX
+cp_dmplus    equ cp_sbuf + CP_DMMAX + 1
+cp_darr_dn   equ cp_sbuf + CP_DMMAX + 2
+cp_dmnw      equ cp_sbuf + CP_DMMAX + 3  ; ...and cp_drv_mempar's two maxima,
+cp_dmdg      equ cp_sbuf + CP_DMMAX + 4  ; live across that routine alone
+%if CP_DMMAX + 5 > CP_SBUF
+%error "ctrl: the Drivers page's scratch no longer fits cp_sbuf's tail"
+%endif
 section .text
 
-cp_dtri_n:   db 0               ; the row counter. In memory because every
-                                ; general register is spoken for - DI is the
-                                ; centre, SI the table, BX the row, and the
-                                ; fill eats AX/CX/DX - and the panel runs on
-                                ; the UI task under the gfx lock, so a scratch
-                                ; byte here has exactly one user at a time
-section .modc                   ; ...and back to the image
+section .modu                   ; ...and back to the panel's image
 
+%ifdef OS88_DRIVERS
 ; --- cp_drv_pane - repaint the whole Drivers pane, after a SCROLL -----------
 ; in:  DI = PANE left, BP = pane top; gfx lock held
 ;
@@ -5403,9 +6703,27 @@ cp_drv_pane:
 ; inside a click handler - is not one the window manager offers.
 ; -----------------------------------------------------------------------------
 cp_drv_click:
-    push ax
-    push bx
-    push dx
+    call kentm_si
+
+    cmp dx, CPD_PBY2            ; --- the heading row's button (SPEC.md
+    jg .nopb                    ; 31.15). Off it, the press goes on down: the
+    cmp dx, CPD_PBY1            ; up arrow's band reaches into this row
+    jl .nopb
+    mov ax, cx                  ; x - CPD_PBX1 UNSIGNED past the width is
+    sub ax, CPD_PBX1            ; either edge: left of it wraps to a huge
+    cmp ax, CPD_PBX2 - CPD_PBX1 ; number, so one compare is both of the
+    ja .nopb                    ; signed pair
+    mov al, CP_DIDPORT          ; a control: identify on the press, act on the
+    call cp_ctl                 ; release (SPEC.md 13.8.3)
+    jc .donej
+    xor byte [cp_dview], 1      ; the list <-> the Ports view
+    call cp_drv_pane            ; ...and the whole pane: it is another view
+    jmp short .donej
+.nopb:
+    cmp byte [cp_dview], 0
+    je .list
+    jmp cp_port_click           ; the view's own arrows, ending on this bank
+.list:
 
     cmp cx, CP_DSX1             ; ...THE ARROWS FIRST, because they share the
     jb .rows                    ; rows' y bands and only x separates them
@@ -5440,13 +6758,9 @@ cp_drv_click:
                                 ; which is what a merge does to a branch that
                                 ; grew a scrolling list while the trunk grew
                                 ; press-and-release
-    or al, al
-    jz .scrup
-    inc byte [cp_dtop]
-    jmp short .scrolled
-.scrup:
-    dec byte [cp_dtop]
-.scrolled:
+    shl al, 1                   ; 0 up / 1 down -> -1 / +1
+    dec ax
+    add [cp_dtop], al
     call cp_drv_pane            ; the whole pane: every row moved
     jmp .done
 
@@ -5454,58 +6768,45 @@ cp_drv_click:
     mov ax, dx                  ; which band, by division rather than by a
     sub ax, CP_DBY1             ; constant per row: DRV_MAX has changed twice
     js .donej                   ; and a hand-written ladder does not follow it
-    xor dx, dx                  ; (DX is banked on the stack above)
-    mov bx, CP_DROWH
-    div bx                      ; AX = the visible row, DX = where in it
-    cmp ax, CP_DVIS
+    mov bl, CP_DROWH            ; (a pane is 132 rows: a byte divide)
+    div bl                      ; AL = the visible row, AH = where in it
+    cmp al, CP_DVIS
     jae .done                   ; past the last band the pane shows
     add al, [cp_dtop]           ; ...and THEN into the table (SPEC.md 31.1.1)
     xor ah, ah
-    cmp ax, DRV_MAX
+    cmp al, DRV_MAX
     jae .done
-    push ax
-    call COLD_SEG:drvf_drv_row
-    cmp word [bx+DRVR_FILE], 0  ; an empty table row is not a control
-    pop ax
-    je .done
+    call cp_drvrow              ; BX = the row, from here to the end: drv_row,
+    cmp word [bx+DRVR_FILE], 0  ; cp_ctl and drv_unload all preserve it
+    je .done                    ; an empty table row is not a control
 %ifdef KERN_BIG
-    push ax                     ; one id per driver ROW (SPEC.md 13.8.3)
-    inc al
-    call cp_ctl
-    pop ax
+    call cp_ctli                ; one id per driver ROW (SPEC.md 13.8.3)
     jc .done
 %endif
 
-    push ax
-    call COLD_SEG:drvf_drv_row
     cmp word [bx+DRVR_SEG], 0
-    pop ax
     je .load
-    call COLD_SEG:drvf_drv_unload             ; it is up: take it down
-    push ax
-    call COLD_SEG:drvf_drv_row
-    mov byte [bx+DRVR_WANT], 0
-    mov byte [bx+DRVR_ERR], DRVE_OK ; nothing failed - it was turned off
-    pop ax
-    jmp short .save
+    call COLD_SEG:drvf_drv_unload             ; it is up: take it down...
+    jmp short .off              ; ...and nothing failed - it was turned off
 .load:
-    push ax
-    call COLD_SEG:drvf_drv_row
     cmp byte [bx+DRVR_WANT], 0  ; unloaded but WANTED: the boot tried and
     je .try                     ; failed (no card, no disk), and on a machine
-    mov byte [bx+DRVR_WANT], 0  ; where that is permanent this click is the
-    mov byte [bx+DRVR_ERR], DRVE_OK ; only gesture there is for "stop asking"
-    pop ax                      ; - without it the boot notice could not be
+.off:                           ; where that is permanent this click is the
+    mov byte [bx+DRVR_WANT], 0  ; only gesture there is for "stop asking"
+    mov byte [bx+DRVR_ERR], DRVE_OK ; - without it the boot notice could not be
     jmp short .save             ; silenced at all, because retrying re-set
                                 ; the want on every click. Clicking AGAIN
                                 ; from here retries the load, so nothing
                                 ; was lost, only unnagged
 .try:
     mov byte [bx+DRVR_WANT], 1  ; wanted first, so a failed load still
-    pop ax                      ; persists the intent: put the disk in and
-    call COLD_SEG:drvf_drv_load               ; the next boot picks it up
+                                ; persists the intent: put the disk in and
+    call cdl_load               ; the next boot picks it up
 .save:
-    mov byte [cp_wdirty], 1     ; ...and the settings file is OWED, not
+    mov byte [bx+DRVR_ANS], 1   ; a click is an ANSWER, on or off: from here
+                                ; the file keeps this row's want and no sniff
+                                ; second-guesses it (SPEC.md 51.5.4)
+    call cp_wdset               ; ...and the settings file is OWED, not
                                 ; written: the close pays it (SPEC.md 31.8)
     push di                     ; a driver that came up or went down may own
     push bp                     ; a PAGE, so the item list changed too and
@@ -5526,10 +6827,7 @@ cp_drv_click:
     call cp_drv_box1
     call cp_drv_line1
 .done:
-    pop dx
-    pop bx
-    pop ax
-    ret
+    jmp kretm_si
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_line1 - redraw the reason under one driver row
@@ -5550,59 +6848,102 @@ cp_drv_click:
 ; both painters walked all of drv_tab, the untouched row's too.
 ; -----------------------------------------------------------------------------
 cp_drv_line1:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call COLD_SEG:drvf_drv_row      ; AL survives both of these
+    call kentm_si                ; KENT: push ax..si
+    call cp_drvrow              ; AL survives both of these
     cmp word [bx+DRVR_FILE], 0
     je .out
-    call COLD_SEG:drv_status_x      ; SI = what it is doing right now
+    call drv_status_x               ; SI = what it is doing right now (NEAR:
+                                    ; the body is in this image)
     call cp_drv_rowy                ; DX = this row's glyph top
     add dx, CP_DSTDY
     mov ax, CP_PLX                  ; ...and NOT CP_PMX: see above
-    call cp_drv_wipe
-    mov cx, di
-    add cx, CP_PLX
-    call cp_run
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov cx, CP_DSX1 - 1             ; ...and its tail stops short of the
+    call cp_drv_linex               ; SCROLL ARROWS on the right, which share
+.out:                               ; the row's scan lines too: a clear to the
+    jmp kretm_si                    ; pane's edge wiped a band through the
+                                    ; down arrow, and the click path does not
+                                    ; redraw the arrows (the longest reason,
+                                    ; drv_e2's 22 cells from CP_PLX, ends at
+                                    ; 197)
+
+%endif ; OS88_DRIVERS
 
 ; -----------------------------------------------------------------------------
-; cp_drv_wipe - white out one text line of the pane (module internal)
+; cp_drv_line - one VARIABLE-LENGTH text line of the pane (module internal)
+;
 ; in:  DI = pane left, AX = the line's LEFT inset from the pane, DX = the
-;      line's baseline y; gfx lock held
+;      line's baseline y, SI -> the string or 0 for none; gfx lock held
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; THE RUN GOES FIRST AND THE CLEAR IS ONLY THE TAIL (SPEC.md 31.9.3). This
+; used to be cp_drv_wipe - fill the whole line white - and then a cp_run over
+; it, which is SPEC.md 13.14.6 rule 1: on a 4.77 MHz 8088 the line is blank
+; for the width of a fill before a letter of it comes back.
+;
+; font_run is OPAQUE, so it lays its own paper under every cell it covers
+; (SPEC.md 6.1) and the only thing an erase was ever for is the TAIL of a
+; LONGER previous string. So the string is drawn where it goes and then the
+; pixels between its end and the pane's right edge are cleared - one write
+; each, nothing written twice, and no interval in which the line reads empty.
+;
+; THE WIDTH COMES FROM font_width AND NOT A LOCAL strlen. It is 8 * length
+; today and a local loop would be a dozen bytes cheaper, but a second opinion
+; about how wide a string is, is a second opinion that can drift - and
+; font_width is FAR-ENTERED already (SPEC.md 2.6.1), so this costs no kernel
+; byte at all.
 ;
 ; The inset is an argument rather than CP_PMX because a line does not always
 ; own the pane's full width: a driver row's reason line shares a scan line
-; with that row's checkbox and must not erase into it (cp_drv_line1). A
-; caption, which has nothing to its left, passes CP_PMX.
+; with that row's checkbox and must not erase into it. A caption, which has
+; nothing to its left, passes CP_PMX.
 ; -----------------------------------------------------------------------------
-cp_drv_wipe:
-    push ax
-    push bx
+cp_drv_line:
     push cx
-    push dx
-    mov byte [gfx_color], CWHITE
-    add ax, di
-    mov bx, dx
-    mov cx, di
-    add cx, CP_PRGT             ; the PANE's last column, not the content's
-    add dx, 7
-    call KERNEL_SEG:cw_gfx_fill
-    mov byte [gfx_color], CBLACK
-    pop dx
+    mov cx, CP_PRGT             ; ...to the pane's own last column
+    call cp_drv_linex
     pop cx
-    pop bx
-    pop ax
     ret
+
+; cp_drv_linex - the same, the tail cleared only to pane column CX
+cp_drv_linex:
+    call kentm_si                ; KENT: push ax..si
+    push cx                     ; the clear's last column, pane-relative
+
+    add ax, di                  ; AX = the line's left, in screen x
+    mov bx, ax                  ; BX = it, kept clear of the calls below
+    or si, si
+    jz .clear                   ; no string: the whole line is the tail
+
+    push bx
+    push dx
+    mov cx, bx                  ; ...the string first, opaque, and THE INK
+    call cp_brun                ; SET BEFORE THE RUN (cp_brun). cp_run takes
+                                ; it from [gfx_color] and the wipe this
+                                ; replaced left it CBLACK on its way past -
+                                ; so drawing the text first, without this,
+                                ; letters the line in whatever pen the last
+                                ; caller happened to leave behind
+    pop dx
+    pop bx
+
+    push bx
+    push dx
+    call KERNEL_SEG:font_width  ; AX = 8 * length (it sets its own ES)
+    pop dx
+    pop bx
+    add bx, ax                  ; BX = one past the string's last column
+.clear:
+    pop cx
+    add cx, di                  ; the caller's last column, in screen x
+    mov ax, bx
+    cmp ax, cx
+    ja .out                     ; the string filled the line: nothing to clear
+    mov bx, dx
+    add dx, 7
+    call cp_wfill
+.out:
+    call cp_black
+    jmp kretm_si
 
 
 ; =============================================================================
@@ -5613,17 +6954,15 @@ cp_drv_wipe:
 ; They are here now, in CTRL.DRV's own image, which is claimed when the panel
 ; opens and given back when it closes.
 ;
-; **What did NOT move, and why it is the line the trap is on.** SPEC.md 31.9's
-; `DSV_CPNAME` trap is about the ITEM LIST: a row's name may be a static kernel
-; string OR a driver's staged one, `cp_list` draws it with `font_str`, and
-; `font_str` reads through DS - so a pointer into a driver's segment would
-; render the driver's own image. All six list names therefore stay resident
-; (`cp_s_thm`, `cp_s_sched`, `cp_s_vid`, `cp_s_drv`, `cp_s_snd`, `cp_s_time`),
-; and each of them is ALSO its page's heading, which is why they read as page
-; strings and are not. What moved is page BODY text, whose only readers are
-; the `cp_*_paint` bodies and their click ladders - every one of them in this
-; image, entered only through `call far [CPFP+...]` after `mod_need` succeeded.
-;
+; **The list names moved last** (kernel size pass 8). SPEC.md 31.9's
+; `DSV_CPNAME` trap is about the ITEM LIST: a row's name may be a static
+; string OR a driver's staged one, and `cp_list` draws it through DS - so a
+; pointer into another segment renders that segment. They stayed resident on
+; that argument, and it only ever required that a name be STAGED before it is
+; drawn, which cp_item_name now does for a static row exactly as the driver's
+; slot does for a driver's. The item table came with them, and the heading -
+; the same string - is drawn by cp_item_paint rather than by each page.
+
 ; The module-cannot-load path reads NONE of these: `cp_open_x` is `.cold` and
 ; letters `cp_s_noload` / `cp_s_nodrv` out of `cp_opentab`, all of which stay
 ; in `.text`. A refusal costs no module read and reads no moved string.
@@ -5633,11 +6972,89 @@ cp_drv_wipe:
 ; `mov si, cp_s_*` here; it assembles, it draws rubbish, and the gate is the
 ; only thing between the two.
 ; -----------------------------------------------------------------------------
+; ANY ROW HERE MAY BE HIDDEN, AND ITS POSITION DOES NOT MATTER (SPEC.md
+; 31.10.1). Display is the one that is - a machine with one adapter has
+; nothing to choose between - and it USED to have to be last, because
+; [cp_sel] and every consumer of it indexed this table by the row's position
+; in the DRAWN LIST. Hiding a row in the middle then renumbered every row
+; below it, which is a second opinion about what the user clicked on at four
+; call sites, so "last" was doing real work and was a real constraint: it had
+; been spent here and by drv_tab's settings bitmap (SPEC.md 51.2.1), and
+; SPEC.md 41.12 nearly spent it a third time.
+;
+; The two spaces are separated now. [cp_sel] and every routine below name a
+; RECORD (an index into this table, stable for the life of the build);
+; cp_list and cp_pick work in VISIBLE ORDINALS, and cp_v2r is the one place
+; that converts. So [cp_hide] can carry a bit for any row, and the order here
+; is free.
+cp_items:
+    CPITEM cp_s_sched, cp_sched_paint, cp_sched_click, cp_radios
+    CPITEM cp_s_time,  cp_time_paint,  cp_time_click,  cp_time_ctls
+%ifdef OS88_DRIVERS             ; SPEC.md 51.0: kern_small can load no driver,
+    CPITEM cp_s_drv,   cp_drv_paint,   cp_drv_click,   cp_drv_ctls
+%endif                          ; so the page has nothing to list and is not
+                                ; offered - and its bodies are not assembled
+    CPITEM cp_s_vid,   cp_vid_paint,   cp_vid_click,   cp_vid_ctls
+    ; THE ORDER IS THE LIST'S, and it is grouped (SPEC.md 31.14.2): Sound,
+    ; Theme and Dock are how the machine looks and sounds, so they stand
+    ; together; Floppy is LAST, so the first DRIVER page - the hard disk's,
+    ; DRVC_DISK being the lowest class that publishes one - lands directly
+    ; under it and the two disk pages read as a pair
+    CPITEM cp_s_snd,   cp_snd_paint,   cp_snd_click,   cp_snd_ctls
+%ifdef OS88_THEME
+    CPITEM cp_s_thm,   cp_thm_paint,   cp_thm_click,   cp_thm_ctls
+%endif
+%ifdef DOCK_OPT
+    CPITEM cp_s_dock,  cp_dock_paint,  cp_dock_click,  cp_dock_ctls ; 31.13
+%endif
+%ifdef OS88_DRIVERS             ; SPEC.md 31.14: the page is SYSTEM.CFG's, and
+    CPITEM cp_s_fdd,   cp_fdd_paint,   cp_fdd_click,   cp_ret ; kern_small
+%endif                                                         ; reads none
+cp_items_end:
+CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
+%if CP_ITEMS > 8
+%error "ctrl: [cp_hide] is one byte, so the static list stops at eight rows"
+%endif
+%ifdef OS88_DRIVERS
+%if CP_IFDD != CP_ITEMS - 1
+%error "ctrl: CP_IFDD must name the Floppy record, the table's last"
+%endif
+%endif
+%ifndef DOCK_OPT
+%if CP_ITEMS + 3 > (CP_CH - CP_I0Y) / CP_IROWH
+%error "ctrl: the item list can overflow its pane - grow CP_CH (SPEC.md 31.1)"
+%endif
+%endif
+
+; The list names. Each is ALSO its page's heading, which cp_item_paint draws
+; before it dispatches (SPEC.md 31.9) - so one string, one reader, and it
+; lives in the image beside its only reader. 'Sound' is here a SECOND time:
+; driver.inc's drv_t_sound is the resident copy drv_tab names its row by, and
+; a string in an image may be copied rather than shared (SPEC.md 2.8.6).
+CPS cp_s_sched, 'Scheduler'
+CPS cp_s_time,  'Date/Time'
+%ifdef OS88_DRIVERS
+CPS cp_s_drv,   'Drivers'
+CPS cp_s_fdd,   'Floppy'
+%endif
+CPS cp_s_vid,   'Display'
+CPS cp_s_snd,   'Sound'
+%ifdef OS88_THEME
+CPS cp_s_thm,   'Theme'
+%endif
+%ifdef DOCK_OPT
+CPS cp_s_dock,  'Dock'
+%endif
+cp_s_gone:  db 0                ; the empty string: what a vanished driver's
+                                ; list row letters as (cp_item_name's guard)
+
 %ifdef OS88_THEME
 CPS cp_s_tbrt,  'Bright'
 CPS cp_s_tdrk,  'Dark'
 %ifdef KERN_BIG
 CPS cp_s_tclr,  'Color'         ; ...and the third, VGA's alone (SPEC.md 76.12)
+CPS cp_s_twin,  'Windows'       ; ...and the fourth (SPEC.md 76.14)
+CPS cp_s_tnowin, 'WIN95.DRV not loaded'   ; ...and its refusal (76.14.1)
 %endif
 %ifdef WM_ANIM
 CPS cp_s_tanim, 'Window Animations'
@@ -5651,17 +7068,38 @@ CPS cp_s_tsave, 'Screen Saver'  ; the button, SPEC.md 79.7. The settings
                                 ; is on the disk (SPEC.md 79.2) - this is now
                                 ; the only byte the feature costs the panel,
                                 ; and it is not resident either
+CPS cp_s_tcust, 'Customize...' ; the button beside Color, SPEC.md 76.14 - the
+                                ; eight preset names are THMPAL.DRV's own, on
+                                ; the disk, for SAVER.DRV's identical reason
 %endif
 %endif
 
+%ifdef DOCK_OPT
+CPS cp_s_kbot,  'Bottom'        ; the Dock page (SPEC.md 31.13)
+CPS cp_s_kleft, 'Left'
+CPS cp_s_kright, 'Right'
+CPS cp_s_kauto, 'Auto-hide'
+
+%endif
 CPS cp_s_pre,   'Pre-emptive'
 CPS cp_s_coop,  'Cooperative'
 CPS cp_s_cap,   'Takes effect immediately'
 
+%ifdef GFX_VGA
 CPS cp_s_vvga,  'Vga 640x480'
+%endif
 CPS cp_s_vherc, 'Hercules 720x348'
 CPS cp_s_vcga,  'Cga 640x200'
+%ifdef GFX_VGA
 CPS cp_s_vega,  'Ega 640x350'
+%else
+; kern_small has no planar renderer (kernel.asm, GFX_VGA), so vid_detect never
+; answers VID_VGA or VID_EGA and vid_probe_avail never sets either bit: those
+; two rows cannot be listed and need no name. The slots stay, so the table is
+; still indexed by the VID_* enum (CTRL.DRV size pass 1)
+cp_s_vvga   equ cp_s_vcga
+cp_s_vega   equ cp_s_vcga
+%endif
 ; FOUR ROWS SINCE SPEC.md 39.24, and the table is indexed by the VID_* enum -
 ; so this row is EGA's because it is fourth, not because of its name. It lives
 ; here rather than beside cp_s_vid because SPEC.md 51.5.3 moved the page's
@@ -5669,6 +7107,9 @@ CPS cp_s_vega,  'Ega 640x350'
 ; into every machine's resident .text.
 cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga, cp_s_vega
 CPS cp_s_vact,  'Set Primary'
+%ifdef KERN_BIG
+CPS cp_s_vfc,   'Force Color'   ; SPEC.md 31.10.4
+%endif
 ; The Display caption, inside the pane's 27-character limit. It is ONE string
 ; and the page's only constant line: it says what the button does, on every
 ; state the page can be in. It had three answers once - 'No other adapter
@@ -5701,6 +7142,9 @@ cp_vmodnam: dw cp_s_vsing, cp_s_vrgt, cp_s_vblw
 CPS cp_s_sspk,  'PC Speaker'
 CPS cp_s_sfm,   'AdLib'
 CPS cp_s_ssb,   'Sound Blaster'
+CPS cp_s_slpt,  'Covox'
+cp_s_slptn:  db 'LPT', '1' - CPS_NROW, 0  ; the port label's stem: its
+                                ; digit is staged as this plus CPS_NROW + n
 CPS cp_s_stest, 'Test'
 
 ; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),
@@ -5708,12 +7152,20 @@ CPS cp_s_stest, 'Test'
 ; the four answered is the whole diagnosis, and there is nowhere else to see
 ; it. **Indexed by [clk_tier], i.e. by the CLK_T_* enum - NOT by the order
 ; clk_probe tries them in, which is a different order.**
+%ifdef OS88_RTC                 ; ...the four rungs' names exist only where
+CPS cp_s_thw,   'Hardware clock: '              ; a rung can answer (SPEC.md
+CPT_HWN     equ $ - cp_s_thw - 1                ; 37.0.1): kern_small's caption
+CPS cp_s_tnrt,  'none'                          ; is cp_s_tnrt, always, and
+CPS cp_s_trt1,  'AT 70h'                        ; whole. Here the prefix is
+CPS cp_s_trt2,  '58167 2C0h'                    ; drawn once and the rung's
+CPS cp_s_trt3,  '5C01 2C0h'                     ; name after it
+CPS cp_s_trt4,  'BIOS'
+%else
 CPS cp_s_tnrt,  'Hardware clock: none'
-CPS cp_s_trt1,  'Hardware clock: AT 70h'
-CPS cp_s_trt2,  'Hardware clock: 58167 2C0h'
-CPS cp_s_trt3,  'Hardware clock: 5C01 2C0h'
-CPS cp_s_trt4,  'Hardware clock: BIOS'
+%endif
+%ifdef OS88_RTC
 cp_rtcnam:  dw cp_s_tnrt, cp_s_trt1, cp_s_trt2, cp_s_trt3, cp_s_trt4
+%endif
 CPS cp_s_t12,   '12-hour clock'         ; option row 0 label
 CPS cp_s_tsec,  'Seconds in menu bar'   ; option row 1 label
 CPS cp_s_tplus, '+'
@@ -5741,6 +7193,64 @@ CPS cp_s_tcol,  ':'
 ;
 ; `lodsb` is not used and cannot be: it reads DS:SI, and DS is KERNEL_SEG here.
 ; os88ovlchk.py refuses it in a module image for that reason.
+; -----------------------------------------------------------------------------
+; THE IMAGE'S OWN SHARED-EPILOGUE LADDER (kernel.asm's, SPEC.md 15.1.2, one
+; segment along). `jmp kretm_si` IS `pop si / pop dx / pop cx / pop bx /
+; pop ax / ret`. The kernel's ladders are a CS away from here, so the image
+; carries its own: 39 routines spend three bytes on the jump instead of four to
+; eight on the run and its `ret`. Near only - no far entry (a `retf`) takes
+; it. tests/unit/t_asmrules.py reads the rung -> pop map out of THIS ladder as
+; well as the kernel's, and stkbalance walks a rung as a continuation; a rung
+; nothing jumps to is a build error there, so only used rungs are labelled.
+; -----------------------------------------------------------------------------
+; ...AND ITS PROLOGUE HALF (kernel.asm's kentc_*, one segment along).
+; `call kentm_si` IS `push ax / bx / cx / dx / si`, and `call kentm_bp` the
+; same through `push bp`: the words land exactly where the pushes would put
+; them, so the routine's own pops and the ladder below end it unchanged.
+; Stack only - every write is at or above SP, so an interrupt can land
+; anywhere in here - and no flag moves, so a routine that takes an input in
+; CF (cp_fdcap) keeps it. 3 bytes a site against 5 and 7.
+; -----------------------------------------------------------------------------
+section .modc                   ; THE LADDER IS THE CORE'S (SPEC.md 2.8.7):
+                                ; cp_flush_x ends on kretm_cx, and the panel
+                                ; reaches it near from .modu either way
+kentm_si:
+    ; STKBALANCE-NET: +5 - banks AX..SI on the CALLER's stack; its epilogue pops them
+    push bx
+    push cx
+    push dx
+    push si                     ; [si][dx][cx][bx][ret]
+    mov si, sp
+    push word [ss:si+8]         ; [ret][si][dx][cx][bx][ret]
+    mov [ss:si+8], ax           ; ...[bx][ax]
+    mov si, [ss:si]             ; SI back
+    ret
+
+kentm_bp:
+    ; STKBALANCE-NET: +7 - banks AX..BP on the CALLER's stack; its epilogue pops them
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp                     ; [bp][di][si][dx][cx][bx][ret]
+    mov bp, sp
+    push word [bp+12]           ; [ret][bp]...[bx][ret]
+    mov [bp+12], ax             ; ...[bx][ax]
+    mov bp, [bp]                ; BP back
+    ret
+
+; -----------------------------------------------------------------------------
+kretm_bp:         pop bp
+kretm_di:         pop di
+kretm_si:         pop si
+kretm_dx:         pop dx
+kretm_cx:         pop cx
+                  pop bx
+                  pop ax
+                  ret
+section .modu
+
 ; -----------------------------------------------------------------------------
 cp_stage:
     push ax
@@ -5804,30 +7314,51 @@ cpf_need:
     pop ax
     ret
 
+cpf_shutdown:
+    call cp_open_need           ; same refusal as opening the Control Panel
+    jc .out
+    call far [CPFP + CPE_SHUTDOWN*4]
+    push di
+    mov al, KIND_CTRL
+    call KERNEL_SEG:cw_inst_find_kind
+    pop di
+    jnc .out                   ; an open panel still owns CTRL.DRV
+    mov al, MOD_CTRL
+    call mod_drop              ; cancellation must not pin the image
+.out:
+    retf
+
 cpf_cp_paint:
     call cpf_need
     jc .p_gone
     call far [CPFP + CPE_PAINT*4]
 .p_gone:                        ; the window is up and its content cannot be
-    retf                        ; drawn. ui_cp_open makes this unreachable in
+    ret                         ; drawn. ui_cp_open makes this unreachable in
                                 ; practice by loading BEFORE app_launch; it is
                                 ; here because "unreachable" is a claim about
                                 ; today's callers
 
-; cp_onkey is a plain thunk: it is short, it runs only while the panel is on
-; screen (so the image is already in), and a mod_need here would be a floppy
-; read on a keystroke.
-%ifdef KERN_BIG
-cpf_cp_onkey:          call cp_onkey_x
-                    retf
-%endif
+; ...and cp_onkey's shim does NOT call mod_need either: a key reaches the
+; panel only while its window is on screen, and the image is loaded before the
+; window opens and dropped when it closes - so a mod_need here would only ever
+; be a floppy read on a keystroke. If the image is somehow gone the slot rests
+; on mod_gone, which keeps every register and returns: the key is dropped,
+; which is what an unclaimed key does anyway (SPEC.md 31.9.2).
+; THESE ARE NEAR PROCS, every one of the four: cp_tpl and cp_kinit name them
+; and wm_pkgcall calls a kernel window's callbacks near in `.cold` (SPEC.md
+; 2.6.3).
 
 cpf_cp_onclick:
     call cpf_need
     jc .c_gone
     call far [CPFP + CPE_ONCLICK*4]
 .c_gone:
-    retf
+    ret
+%ifdef KERN_BIG
+cpf_cp_onkey:
+    call far [CPFP + CPE_ONKEY*4]
+    ret
+%endif
 
 ; SPEC.md 13.8.3's two edges. They do NOT call mod_need, and that is the
 ; difference from every shim above: a release or a drag can only follow a
@@ -5843,7 +7374,7 @@ cpf_cp_onup:
     jc .u_gone
     call far [CPFP + CPE_ONUP*4]
 .u_gone:
-    retf
+    ret
 %ifdef KERN_BIG
 cpf_cp_ondrag:
     push ax
@@ -5853,7 +7384,7 @@ cpf_cp_ondrag:
     jc .d_gone
     call far [CPFP + CPE_ONDRAG*4]
 .d_gone:
-    retf
+    ret
 %endif
 
 ; cp_flush_close is the panel's TEARDOWN (SPEC.md 31.8), so it is also where
@@ -5925,33 +7456,47 @@ cpf_cp_open:           call cp_open_x
 ; -----------------------------------------------------------------------------
 cp_open_x:
     push ax                     ; the bank is the BODY's, not the load's:
-    call cpf_need               ; cpf_need banks AX itself, but `mov al,
-    jc .no                      ; KIND_CTRL` below and `mov al, 1` at .no do not
+    call cp_open_need           ; cpf_need banks AX itself, but `mov al,
+    jc .failed                  ; KIND_CTRL` below and `mov al, 1` at .no do not
     mov al, KIND_CTRL
     call KERNEL_SEG:cw_app_launch
-    jc .beep                    ; the panel itself refused - no instance slot,
+    jnc .out                    ; the panel itself refused - no instance slot,
                                 ; no window. app_launch's own answer, and it
                                 ; is not about the disk, so it keeps the beep
                                 ; the three call sites used to give it
-    pop ax
-    clc
+    call ct_cw_snd_beep         ; audible refusal (SPEC.md 34.3), which is
+                                ; what every one of these call sites did with
+                                ; a CF=1 from app_launch before cp_open owned
+                                ; the decision
+.failed:
+    stc
+.out:
+    pop ax                      ; (POP keeps CF: one epilogue for all three)
     ret
-.beep:
-    call KERNEL_SEG:cw_snd_beep ; audible refusal (SPEC.md 34.3), which is
-    pop ax                      ; what every one of these call sites did with
-    stc                         ; a CF=1 from app_launch before cp_open owned
-    ret                         ; the decision
-.no:
-    push bx                     ; ...but THIS one is about the disk, and a
-    push cx                     ; beep cannot say which disk
+
+cp_open_need:
+    call cpf_need
+    jnc .out
+%ifdef KERN_BIG
+    call hbf_nodisk             ; ...but THIS one is about the disk, and a
+                                ; beep cannot say which disk - and it is the
+                                ; SAME sentence Hibernate's refusal says, out
+                                ; of one table AND one body (hiber.inc). It
+                                ; banks AX, BX and CX itself
+%else                           ; kern_small has no hiber.inc arm, so there it
+    push ax                     ; keeps the copy below - where it is the only
+    push bx                     ; one there is
+    push cx
     mov al, 1
     mov bx, cp_opentab
     mov cx, CP_NOPEN
-    call KERNEL_SEG:toast_say
+    call ct_toast_say
     pop cx
     pop bx
     pop ax
+%endif
     stc
+.out:
     ret
 
 section .text

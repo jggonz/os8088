@@ -1,0 +1,117 @@
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -1454,8 +1454,15 @@
+ 
+     pub fn process_keyboard_input(&mut self) {
+         if let Some(keyboard) = &mut self.keyboard {
+-            // Read a byte from the keyboard
+-            if let Some(kb_byte) = keyboard.recv_scancode() {
++            // Read a byte from the keyboard - os8088: only when the PPI can
++            // latch it. send_keyboard DROPS a byte that arrives before the
++            // last one was acknowledged, so a held key's break code landing
++            // just after a typematic repeat used to vanish (the key stuck
++            // down in the guest's map). The keyboard keeps it and offers it
++            // again at its next update (KB_UPDATE_RATE, 5 ms - a scan
++            // interval, not the microseconds after the acknowledge).
++            let ready = self.ppi.as_ref().map_or(true, |ppi| ppi.kb_ready());
++            if let Some(kb_byte) = keyboard.recv_scancode_when(ready) {
+                 //log::debug!("Received keyboard byte: {:02X}", kb_byte);
+ 
+                 // Do we have a PPI? if so, send the scancode to the PPI
+--- a/crates/marty_core/src/devices/keyboard_common.rs
++++ b/crates/marty_core/src/devices/keyboard_common.rs
+@@ -153,7 +153,12 @@
+             typematic: true,
+             typematic_delay: 500.0,
+             typematic_rate: 100.0,
+-            kb_buffer_size: 1,
++            // os8088: the IBM 83-key keyboard has a 16-character buffer and
++            // holds a scancode until the system takes it. Upstream ships 1,
++            // which overwrites, and the PPI then drops whatever arrives
++            // before the ISR has acknowledged the last byte - a key's BREAK
++            // landing just after a typematic repeat was lost outright.
++            kb_buffer_size: 16,
+             kb_buffer: Vec::new(),
+             kb_buffer_overflow: false,
+             reset_buffer: Vec::new(),
+@@ -653,11 +658,16 @@
+     pub fn send_scancodes(&mut self, keys: &[u8]) {
+         if !keys.is_empty() {
+             if self.kb_buffer_size > 1 {
+-                // We have a keyboard buffer
+-                if self.kb_buffer.len() + keys.len() >= self.kb_buffer_size {
++                // We have a keyboard buffer. A FIFO: the system reads it in
++                // the order the keys were struck (recv_scancode_when takes the
++                // front). Upstream flagged the overflow and never queued at all.
++                if self.kb_buffer.len() + keys.len() > self.kb_buffer_size {
+                     // KB overflow!
+                     self.kb_buffer_overflow = true;
+                 }
++                else {
++                    self.kb_buffer.extend_from_slice(keys);
++                }
+             }
+             else if self.kb_buffer_size == 1 {
+                 // No keyboard buffer (kb_buffer_size == 1). Just set one scancode.
+@@ -670,6 +680,21 @@
+         }
+     }
+ 
++    /// os8088: take the next scancode, but leave a KEY scancode in the
++    /// keyboard's own buffer when the system cannot accept it yet (`ready`
++    /// false: the PPI's shift register still holds an unacknowledged byte, or
++    /// the keyboard is disabled). A reset or overflow byte is delivered as
++    /// before, whatever `ready` says.
++    pub fn recv_scancode_when(&mut self, ready: bool) -> Option<u8> {
++        if !self.reset_buffer.is_empty() || self.kb_buffer_overflow || self.kb_buffer_size == 1 {
++            return self.recv_scancode();
++        }
++        if ready && !self.kb_buffer.is_empty() {
++            return Some(self.kb_buffer.remove(0));
++        }
++        None
++    }
++
+     /// Read out a scancode from the keyboard or None if no key in buffer.
+     pub fn recv_scancode(&mut self) -> Option<u8> {
+         // Prioritize reset buffer over keyboard buffer.
+@@ -821,7 +846,13 @@
+                 .reverse()
+         });
+ 
+-        // Only repeat the oldest pressed key
++        // Only repeat the oldest pressed key - and (os8088) not while the
++        // system has yet to take an earlier byte: a repeat is the key still
++        // being down, which a queued byte already says, and stacking repeats
++        // behind a busy ISR only fills the buffer to an overflow.
++        if !self.kb_buffer.is_empty() {
++            return;
++        }
+         if let Some(key) = repeating_keys.pop() {
+             if let Some(translation) = key.translation {
+                 self.send_scancodes(&translation);
+--- a/crates/marty_core/src/devices/ppi.rs
++++ b/crates/marty_core/src/devices/ppi.rs
+@@ -843,6 +843,22 @@
+         }
+     }
+ 
++    /// os8088: can the shift register take a scancode now? The same test
++    /// send_keyboard applies before it latches one - and drops the byte when
++    /// it fails, which is why the keyboard asks first and holds it instead.
++    pub fn kb_ready(&self) -> bool {
++        match self.machine_type {
++            MachineType::IbmPCJr => true,
++            MachineType::Tandy1000 | MachineType::Tandy1000SL | MachineType::Tandy1000HX => self.ksr_cleared,
++            MachineType::CompaqPortable
++            | MachineType::CompaqDeskpro
++            | MachineType::Ibm5150v64K
++            | MachineType::Ibm5150v256K
++            | MachineType::Ibm5160 => self.kb_enabled() && self.ksr_cleared,
++            _ => true,
++        }
++    }
++
+     /// Return whether the keyboard enable line (PB7) is set and the keyboard clock line is not held low.
+     pub fn kb_enabled(&self) -> bool {
+         match self.machine_type {

@@ -30,6 +30,7 @@ the depth Paint chose (a colour file's depth is not this file's), and
 still be allowed to overwrite the original (42.16).
 """
 import argparse
+import tempfile
 import os
 import struct
 import sys
@@ -47,8 +48,8 @@ ROOT = os.path.dirname(HERE)
 S = os88sym.linear
 W, H = 128, 48                  # a multiple of 32 wide, so the stride is exact
 NAME = "MONO1.BMP"
-BMP = "/tmp/" + NAME
-IMG = "/tmp/paint1load.img"
+BMP = tempfile.gettempdir() + "/" + NAME
+IMG = tempfile.gettempdir() + "/paint1load.img"
 
 
 def _rows():

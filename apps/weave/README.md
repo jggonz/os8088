@@ -32,12 +32,13 @@ the picture they drew before the palette existed.
 | `wevent.c` | the ring's doorway, the slices, the errors, the timer (WEAVE-SPEC §4.9, WEAVE-SPEC §4.10 and WEAVE-SPEC §4.11) |
 | `wnative.c` | WEAVE-SPEC §6's get/set/method surface and WEAVE-SPEC §8.1's six impure builtins |
 | `wstate.c` | WEAVE-SPEC §8.3's `.SAV`, the only file surface |
-| `wovl.c` | `WEAVE.OVL`'s own tenants: About and Bundle Info |
+| `wovl.c` | the overlay's own tenants: About and Bundle Info. The overlay is part 1 of `WEAVE.O88` (WEAVE-SPEC §1.2.5) |
 | `wcanv.c` | the `<canvas>`/`<sprite>` component's UI-TASK half (WEAVE-SPEC §6.10): the load, the paint arm, the native surface, the drain. The other half is a second segment |
-| `wcanvas.asm` | ...which is `WEAVE.WSM` (WEAVE-SPEC §1.2.2): a resident module beside the package, far-called from the WORKER as well as the UI task |
-| `wspr.inc` | the sprite composer and the dirty-band emit (WEAVE-SPEC §6.10.2), plus WEAVE-SPEC §6.10.7's colour spans — assembled into `WEAVE.WSM` |
+| `wcanvas.asm` | ...which is the canvas core (WEAVE-SPEC §1.2.2): a resident module, part 0 of `WEAVE.O88` (built as `build/WEAVE.WSM`), far-called from the WORKER as well as the UI task |
+| `wspr.inc` | the sprite composer and the dirty-band emit (WEAVE-SPEC §6.10.2), plus WEAVE-SPEC §6.10.7's colour spans — assembled into the canvas core |
 | `wwork.inc` | ...and the frame loop, the collisions, the key poll and the staging ring |
 | `wsmabi.inc` | the ONE file both assemblies include: the verbs, the claim layout and the ABI number |
+| `wfetch.inc` | `w_partfetch`: a lazy part fetched from the folder the package was LAUNCHED from - the canvas core's door, and LOOM's preview module's (WEAVE-SPEC §1.2.5) |
 | `wblob.inc` | the bundle claim's accessors (assembly) |
 | `wdraw.inc` | the paint and hit-test cores (assembly, WEAVE-SPEC §1.2's seam — LOOM's Preview paints with these) |
 | `wui.inc` | the shared alert, the arm word, the `os88line` wrappers, and the bridge the bytecode core leaves through |

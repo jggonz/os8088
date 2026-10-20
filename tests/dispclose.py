@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88geom                                            # noqa: E402
+import os88build
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -52,19 +53,21 @@ S = os88sym.linear
 FAIL = []
 
 
-def small_syms():
-    """`S` for a kern_small kernel.
-
-    os88sym.linear asserts its map against build/kernel.bin, which is the BIG
-    build - so a small run has to ask for the map explicitly and go without
-    that proof. It is worth saying what is given up: an address from here is
-    the map's word and nothing has checked it describes the kernel that is
-    running, so this leg asserts on the FILE and on window presence and never
-    on a pixel.
-    """
-    d = ("KERN_SMALL",)
-    tab = os88sym.syms(d, check=False)
-    return lambda n: os88sym.segment_of(n, d, check=False) * 16 + tab[n]
+# `small_syms` USED TO BE HERE, and it is gone. It built a kern_small map in
+# process with `check=False`, because os88sym compares against
+# build/kernel.bin and that is the BIG build - so the row went without the
+# proof its own docstring described giving up, AND every other tool in the
+# session went on answering for the big kernel. The window record is 28 bytes
+# on kern_small and 34 on kern_big, so os88geom's stride, tools/os88ui.py's
+# window table and dispcp's decode were all reading the wrong one; the row
+# patched `dispcp.WIN_SIZE = 28` and nothing else, which was enough while it
+# only used dispcp.
+#
+# $OS88_DEFINES and $OS88_BUILD say it ONCE, in the registry, and every
+# consumer follows: os88sym picks the arm AND checks against
+# build/smallk/kernel.bin, os88geom's per-arm constants resolve to 28, and
+# the map is proven rather than assumed. tests/fcpcopy.py's row has said it
+# that way all along.
 
 
 def u16(b, i=0):
@@ -137,32 +140,41 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/npclose.img")
+    ap.add_argument("--apps", default=os88build.at("build/npclose.img"))
     ap.add_argument("--small", action="store_true",
                     help="drive kern_small, which has the SAME behaviour now "
                          "(SPEC.md 75.3.2) - the alert being a package's")
     a = ap.parse_args(argv)
     if a.small:
-        global S
         if a.image == "build/os8088-360.img":
             a.image = "build/small360.img"
-        S = small_syms()
-        # ...and the WINDOW RECORD IS SHORTER THERE. W_ONDRAG, W_ONTIMER and
+        if "KERN_SMALL" not in os.environ.get("OS88_DEFINES", ""):
+            sys.exit("dispclose --small needs the kern_small arm declared in "
+                     "the environment, which is what makes every tool in the "
+                     "session agree about a 28-byte window record:\n"
+                     "  OS88_DEFINES=KERN_SMALL OS88_BUILD=build/smallk \\\n"
+                     "      python3 tests/dispclose.py --small")
+        # ...and the WINDOW RECORD IS SHORTER THERE: W_ONDRAG, W_ONTIMER and
         # W_TIMER are inside %ifdef KERN_BIG (SPEC.md 13.8.2/13.9), so
-        # WIN_SIZE is 28 and not 34 - os88geom mirrors the big build's, which
-        # every other gate in this tree is right to assume because every other
-        # gate runs the big build. Measured rather than derived: instance 1's
-        # I_WIN minus instance 0's is exactly 28. Read with 34 the table looks
-        # PLAUSIBLE for slot 0 and is nonsense from slot 1 on, so a visible
-        # window reads as "not used" - which is how that cost an hour.
-        dispcp.WIN_SIZE = 28
+        # WIN_SIZE is 28 and not 34. Read with 34 the table looks PLAUSIBLE
+        # for slot 0 and is nonsense from slot 1 on, so a visible window reads
+        # as "not used" - which cost an hour once, and cost this row a soak
+        # when tools/os88ui.py started reading the same table. os88geom
+        # resolves it per arm off the environment above; nothing here needs to
+        # know the number.
 
     # ALWAYS rebuilt, never cached on existence: a stale scratch disk runs a
     # Note Pad from an earlier build, and every assertion here is about what
     # Note Pad does - so the gate reports the last build's behaviour and says
     # nothing about this one.
+    # THE OUTPUT IS RESOLVED, not just the input (docs/plans/SOAK-PARALLEL.md 14.2).
+    # `launch` resolves what it is handed, so writing the literal
+    # `build/npclose.img` built the disk in the shared tree and looked for it
+    # in the run's own - FileNotFoundError in `_clone`, with the image sitting
+    # right there.
     subprocess.check_call([sys.executable, "tools/os88disk.py", "-o",
-                           a.apps, "--size", "360", "build/notepad.o88"])
+                           os88build.at(a.apps), "--size", "360",
+                           os88build.at("build/notepad.o88")])
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:

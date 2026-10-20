@@ -112,7 +112,9 @@ NE_RST      equ 0x80
 ; what makes polling at 18.2 Hz safe (SPEC.md 72.2.1).
 ;
 ; **AN NE1000 HAS HALF OF IT**, 8KB at page 0x20..0x40, so the layout is
-; picked at probe time from what the PROM said the card was. Every constant
+; picked at probe time from what the PROM said the card was - and, when it
+; says 8-bit, from what the MEMORY says too (ne_memok, SPEC.md 72.2: the
+; PicoMEM's NE2000 has an 8-bit PROM and the 16KB map). Every constant
 ; below is therefore a variable in [eth_pstart]/[eth_pstop]/[eth_txpg] and the
 ; equs are the NE2000 case they are initialised to.
 NE_TXPAGE   equ 0x40
@@ -213,7 +215,7 @@ ne_dma_read:
     ; --- EIGHT AT A TIME (SPEC.md 72.16.5) ---------------------------------
     ; `loop` is SEVENTEEN CLOCKS against `in al,dx` + `stosb`'s nineteen, so
     ; the bookkeeping was very nearly half of this loop - and this loop is
-    ; 12% of an upload (docs/FTP-PERF.md 4), the largest single line in the
+    ; 12% of an upload (docs/plans/completed/FTP-PERF.md 4), the largest single line in the
     ; driver. Eight copies leave one `loop` per eight bytes instead of one
     ; per byte. The field's card is an 8-bit NE1000, so a word read is not
     ; the answer available here; the count is a frame length and is odd as
@@ -369,6 +371,17 @@ ne_dma_write:
 ; differs it is an NE1000 and the address is bytes 0..5. That is Linux's
 ; ne.c's test and it needs no signature byte, which matters because the
 ; signature is the one thing the clones disagree about.
+;
+; **NO REGISTER IS WRITTEN UNTIL TWO READS SAY AN 8390 COULD BE HERE**
+; (SPEC.md 72.9.1). The sweep walks seven 32-port windows, and other cards
+; live in them: an MPU-401 at 330h is the DATA PORT of a card at 320h, a Sound
+; Blaster at 240h is inside a card at 240h. So a window whose CR floats to FFh
+; is empty and is left with no write at all - not even the reset's - and after
+; the reset (whose port is the window's last, which nothing else of the period
+; sits on, and the only write made before the second read) the ISR must
+; show RST from a register that is THERE - FFh is a floating bus, which has
+; RST set too and used to pass. Only then does ne_t_setup touch the register
+; file.
 ; -----------------------------------------------------------------------------
 ne_probe:
     push ax
@@ -377,7 +390,10 @@ ne_probe:
     push dx
     push si
     push di
-    mov dx, [eth_base]
+    mov dx, [eth_base]          ; CR: FFh is no 8390 (STA and STP both set,
+    in  al, dx                  ; RD 7) and IS an empty window. Linux's
+    cmp al, 0xFF                ; ne_probe1 asks this first for the same
+    je  .none                   ; reason
     add dx, NE_RESET
     in  al, dx                  ; the reset port: reading it and writing the
     out dx, al                  ; value back is the documented reset
@@ -385,31 +401,54 @@ ne_probe:
 .settle:
     mov al, NE_ISR              ; ...bounded, because a port that never sets
     call ne_in                  ; RST is exactly what an empty slot looks like
-    test al, NE_RST
-    jnz .up
+    cmp al, 0xFF                ; ...and a FLOATING one reads FFh, RST and
+    je  .float                  ; all, so it is not an answer. Kept polling
+    test al, NE_RST             ; rather than refused outright: a card held
+    jnz .up                     ; in reset may not drive the bus yet
+.float:
     loop .settle
     jmp .none
 .up:
-    mov ax, (NE_STP | NE_RD_ABORT) << 8 | NE_CR
+    mov si, ne_t_setup                  ; stopped, byte-wide, monitoring
+    call ne_outs                        ; and in loopback (ne_t_setup)
+
+    ; --- CR READS BACK WHAT WAS WRITTEN, ON TWO PAGES (SPEC.md 72.2) ---------
+    ; An EMPTY port on an 8088 does not float to FFh: it answers with the last
+    ; byte the bus carried, which is an instruction byte the prefetcher just
+    ; fetched - `stosb` (AAh) after the PROM loop's `in`, `ret` (C3h) after
+    ; ne_in's. C3h has RST's bit set and AAh pairs with itself, so a slot with
+    ; NOTHING in it passed both tests above as an NE2000 at AAAAAAAAAAAA (a
+    ; 5150 with a PicoMEM 2.x, docs/FIELD-NOTES.md 66) - and, being first in
+    ; eth_bases, hid the real card further down the list. The command
+    ; register is the one an 8390 always reads back, and two DIFFERENT values
+    ; through the same `ne_in` cannot both match one stale bus byte.
+    mov al, NE_CR
+    call ne_in
+    cmp al, NE_STP | NE_RD_ABORT
+    jne .nocr
+    mov ax, ((NE_PAGE1 | NE_STP | NE_RD_ABORT) << 8) | NE_CR
     call ne_out
-    mov ax, 0x48 << 8 | NE_DCR          ; BYTE-WIDE (see the header)
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR0
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR1
-    call ne_out
-    mov ax, 0x20 << 8 | NE_RCR          ; monitor: accept nothing yet
-    call ne_out
-    mov ax, 0x02 << 8 | NE_TCR          ; internal loopback while we set up
-    call ne_out
+    mov al, NE_CR
+    call ne_in
+    mov bl, al
+    mov ax, ((NE_STP | NE_RD_ABORT) << 8) | NE_CR
+    call ne_out                         ; page 0 again, whatever came back
+    cmp bl, NE_PAGE1 | NE_STP | NE_RD_ABORT
+    je  .cr
+.nocr:
+    jmp .none
+.cr:
 
     mov ax, 32                          ; the PROM: 32 bytes at card address 0
-    mov bx, 0
-    mov di, eth_prom
+    xor bx, bx
+    mov di, eth_rxb             ; (the receive frame as SCRATCH: nothing is
+                                ; received before the card is found, and the
+                                ; PROM is wanted only long enough to read
+                                ; the address out of it)
     call ne_dma_read
 
     mov byte [eth_word], 1              ; ...16-bit until a pair disagrees
-    mov si, eth_prom
+    mov si, eth_rxb
     mov cx, 16
 .pair:
     mov al, [si]
@@ -420,7 +459,7 @@ ne_probe:
     add si, 2
     loop .pair
 
-    mov si, eth_prom                    ; the address, doubled or not
+    mov si, eth_rxb                     ; the address, doubled or not
     mov di, eth_mac
     mov cx, 6
 .mac:
@@ -435,42 +474,89 @@ ne_probe:
     loop .mac
 
     ; --- is it a plausible station address? ---------------------------------
-    ; All zero and all ones are what a floating bus reads as, and bit 0 of the
-    ; first byte is the MULTICAST bit - a card's own address never has it set,
-    ; so a PROM that answers with one is not a PROM.
+    ; Bit 0 of the first byte is the MULTICAST bit - a card's own address
+    ; never has it set, so a PROM that answers with one is not a PROM.
+    ;
+    ; **SIX EQUAL BYTES ARE A PORT, NOT A PROM.** All zero and all ones are a
+    ; floating bus, and they are two cases of the rule rather than the rule:
+    ; a device that answers ONE value on every read is the same lie. The one
+    ; that was met is an MPU-401 at 330h - the DATA port of a card at 320h -
+    ; which reads its last byte, FEh after its reset's ACK, every time it is
+    ; asked: FE:FE:FE:FE:FE:FE, unicast, pairs agreeing, an "NE2000" at 320h
+    ; that swallowed the real card's attach further down the sweep.
     test byte [eth_mac], 1
     jnz .none
     mov si, eth_mac
-    mov cx, 6
-    xor bl, bl                          ; the OR of every byte
-    mov bh, 0                           ; ...and how many are 0xFF
-.chk:
+    mov cx, 5
     mov al, [si]
+.chk:
     inc si
-    or  bl, al
-    cmp al, 0xFF
-    jne .n1
-    inc bh
-.n1:
-    loop .chk
-    or  bl, bl
-    jz  .none                           ; all zero: nothing there
-    cmp bh, 6
+    cmp al, [si]
+    loopz .chk
+    je  .none                           ; all six the same: no address
+
+    ; --- an 8-bit PROM is a claim about the BUS, not about the MEMORY --------
+    ; (SPEC.md 72.2.) The PicoMEM's emulated NE2000 answers the PROM read
+    ; un-doubled - its bytes 0..5 are the MAC and 6..11 are zero - so the pair
+    ; test above calls it an NE1000 and the ring went at page 0x20. Its packet
+    ; memory is the NE2000's, 16KB up: a write below that is DROPPED and a
+    ; read answers FFh, so every frame we sent was a page of nothing and
+    ; every frame it received was written outside its own buffer. So the
+    ; NE1000 map is TESTED rather than assumed, and only a card whose 8KB at
+    ; 0x2000 does not hold a pattern while 0x4000 does is moved to the NE2000
+    ; map. A real NE1000 passes the first test and nothing about it changes;
+    ; a card that fails both keeps the NE1000 map it always had. Everything
+    ; stays BYTE-WIDE either way - [eth_word] decides the MAP from here on.
+    cmp byte [eth_word], 0
     jne .ok
-    jmp .none                           ; all ones: a floating bus
+    mov bx, NE1_TXPAGE << 8
+    call ne_memok
+    jnc .ok                             ; the NE1000's 8KB is really there
+    mov bx, NE_TXPAGE << 8
+    call ne_memok
+    jc  .ok                             ; neither holds: the NE1000 map, as ever
+    inc byte [eth_word]                 ; 0 -> 1, 16KB at 0x4000: the
+                                        ; NE2000's map
 .ok:
-    clc
-    jmp short .out
-.none:
-    stc
+    CLC_OR_STC .none
+.out:
+    jmp ep_di
+
+; -----------------------------------------------------------------------------
+; ne_memok - does the card's packet memory hold a pattern at address BX?
+; in:  BX = the card address (a page boundary)
+; out: CF = 0 the pattern read back; CF = 1 it did not
+; clobbers: flags. Uses eth_rxb as scratch, as ne_probe's PROM read does -
+; nothing is received before the card is found.
+; -----------------------------------------------------------------------------
+ne_memok:
+    push ax
+    push cx
+    push si
+    push di
+    mov ax, NE_MEMPATN
+    mov si, ne_mempat
+    call ne_dma_write           ; SI and DI each come back advanced past the
+    mov di, eth_rxb             ; AX bytes they moved, and AX comes back too,
+    call ne_dma_read            ; so the compare walks DOWN from the ends
+    mov cx, ax
+.cmp:
+    dec si
+    dec di
+    mov al, [si]
+    cmp al, [di]
+    loope .cmp                  ; ZF = 0 out of it is a byte that differed
+    jne .no
+    CLC_OR_STC .no
 .out:
     pop di
     pop si
-    pop dx
     pop cx
-    pop bx
     pop ax
     ret
+
+ne_mempat:  db 0x55, 0xAA, 0x0F, 0xF0, 0x3C, 0xC3, 0x01, 0x80
+NE_MEMPATN  equ $ - ne_mempat
 
 ; -----------------------------------------------------------------------------
 ; ne_init - bring the card up and start receiving
@@ -495,18 +581,8 @@ ne_init:
     mov [eth_pstart], ah
     mov [eth_pstop], ch
 
-    mov ax, (NE_STP | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov ax, 0x48 << 8 | NE_DCR
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR0
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR1
-    call ne_out
-    mov ax, 0x20 << 8 | NE_RCR          ; monitor while the ring is being set
-    call ne_out
-    mov ax, 0x02 << 8 | NE_TCR          ; internal loopback, likewise
-    call ne_out
+    mov si, ne_t_setup                  ; ne_probe's six: stopped, monitoring
+    call ne_outs                        ; and in loopback while the ring is set
     mov al, NE_TPSR
     mov ah, [eth_txpg]
     call ne_out
@@ -522,13 +598,8 @@ ne_init:
     mov ah, [eth_pstart]
     inc ah
     mov [eth_next], ah
-    mov ax, 0xFF << 8 | NE_ISR
-    call ne_out
-    mov ax, 0x00 << 8 | NE_IMR          ; NO INTERRUPTS: SPEC.md 72.2.1
-    call ne_out
-
-    mov ax, (NE_PAGE1 | NE_STP | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
+    mov si, ne_t_quiet                  ; every cause cleared, NO INTERRUPTS
+    call ne_outs                        ; (SPEC.md 72.2.1), and page 1
     mov si, eth_mac                     ; our address, six registers
     mov cl, NE_PAR0
     mov ch, 6
@@ -553,14 +624,8 @@ ne_init:
     mov ah, [eth_next]
     call ne_out
 
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR     ; page 0 again, and GO
-    call ne_out
-    mov ax, 0x00 << 8 | NE_TCR          ; out of loopback
-    call ne_out
-    mov ax, 0x04 << 8 | NE_RCR          ; ours and broadcast; no promiscuous,
-    call ne_out                         ; no multicast
-    mov ax, 0xFF << 8 | NE_ISR
-    call ne_out
+    mov si, ne_t_go                     ; page 0 again, GO, out of loopback,
+    call ne_outs                        ; ours and broadcast only
     pop si
     pop cx
     pop ax
@@ -570,15 +635,65 @@ ne_init:
 ; ne_stop - silence the card (DRVV_DETACH's half, and it cannot fail)
 ; -----------------------------------------------------------------------------
 ne_stop:
+    push si
+    mov si, ne_t_stop
+    call ne_outs
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; ne_outs - a table of register writes: SI = a count byte, then that many
+; (register, value) pairs, written in order on whatever page the card is on
+; -----------------------------------------------------------------------------
+ne_outs:
     push ax
-    mov ax, (NE_STP | NE_RD_ABORT) << 8 | NE_CR
+    push cx
+    push si
+    mov cl, [si]
+    xor ch, ch
+.l:
+    inc si
+    mov ax, [si]                ; AL = the register, AH = the value: ne_out's
+    inc si                      ; own two arguments, as one word
     call ne_out
-    mov ax, 0x00 << 8 | NE_IMR
-    call ne_out
-    mov ax, 0xFF << 8 | NE_ISR
-    call ne_out
+    loop .l
+    pop si
+    pop cx
     pop ax
     ret
+
+; the tables. Each pair is `db register, value`, which a word load hands to
+; ne_out as AL and AH.
+ne_t_setup: db 6
+            db NE_CR,    NE_STP | NE_RD_ABORT   ; stopped
+            db NE_DCR,   0x48                   ; BYTE-WIDE (see the header)
+            db NE_RBCR0, 0x00
+            db NE_RBCR1, 0x00
+            db NE_RCR,   0x20                   ; monitor: accept nothing yet
+            db NE_TCR,   0x02                   ; internal loopback
+ne_t_quiet: db 3
+            db NE_ISR,   0xFF
+            db NE_IMR,   0x00                   ; NO INTERRUPTS: SPEC.md 72.2.1
+            db NE_CR,    NE_PAGE1 | NE_STP | NE_RD_ABORT
+ne_t_go:    db 4
+            db NE_CR,    NE_STA | NE_RD_ABORT   ; page 0 again, and GO
+            db NE_TCR,   0x00                   ; out of loopback
+            db NE_RCR,   0x04                   ; ours and broadcast; no
+                                                ; promiscuous, no multicast
+            db NE_ISR,   0xFF
+ne_t_stop:  db 3
+            db NE_CR,    NE_STP | NE_RD_ABORT
+            db NE_IMR,   0x00
+            db NE_ISR,   0xFF
+ne_t_ovw1:  db 4                                ; ne_overflow, once stopped:
+            db NE_RBCR0, 0x00
+            db NE_RBCR1, 0x00
+            db NE_TCR,   0x02                   ; loopback while the ring moves
+            db NE_CR,    NE_STA | NE_RD_ABORT
+ne_t_ovw2:  db 3                                ; ...and once the ring has
+            db NE_CR,    NE_STA | NE_RD_ABORT   ; moved: page 0, OVW cleared,
+            db NE_ISR,   NE_OVW                 ; out of loopback
+            db NE_TCR,   0x00
 
 ; -----------------------------------------------------------------------------
 ; ne_curr - what page the CARD will write next (page 1's CURR)
@@ -744,14 +859,9 @@ ne_overflow:
     jnz .go
     loop .stopped
 .go:
-    mov ax, 0x00 << 8 | NE_RBCR0
-    call ne_out
-    mov ax, 0x00 << 8 | NE_RBCR1
-    call ne_out
-    mov ax, 0x02 << 8 | NE_TCR              ; loopback while the ring moves
-    call ne_out
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
+    push si
+    mov si, ne_t_ovw1
+    call ne_outs
     mov al, NE_BNRY
     mov ah, [eth_pstart]
     call ne_out
@@ -763,12 +873,9 @@ ne_overflow:
     mov al, NE_CURR
     mov ah, [eth_next]
     call ne_out
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov ax, NE_OVW << 8 | NE_ISR
-    call ne_out
-    mov ax, 0x00 << 8 | NE_TCR
-    call ne_out
+    mov si, ne_t_ovw2
+    call ne_outs
+    pop si
     inc word [eth_novw]
     pop cx
     pop ax

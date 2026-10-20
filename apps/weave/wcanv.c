@@ -3,9 +3,9 @@
  *
  * The `<canvas>`/`<sprite>` component's UI-TASK half (WEAVE-SPEC 6.10). The
  * other half - the frame loop, the composer, the collision pass, the key poll
- * and the staging ring - is WEAVE.WSM, a second RESIDENT segment beside the
- * package (1.2.2), because every byte of it runs on a worker and SPEC.md
- * 73.14's overlay refuses a worker at its first instruction.
+ * and the staging ring - is the canvas core, a second RESIDENT segment that is
+ * part 0 of WEAVE.O88 (1.2.2), because every byte of it runs on a worker and
+ * SPEC.md 73.14's overlay refuses a worker at its first instruction.
  *
  * So what is HERE is only the seams, and that is the point: the load, the
  * paint arm, the native surface's two arms, the drain and the free. Every
@@ -22,8 +22,7 @@
 /* --- the state, all of it per INSTANCE and none of it re-entrant ---------- */
 static unsigned w_cseg;                 /* the canvas claim, 0 = none */
 static unsigned w_ckb;
-static unsigned w_cmseg;                /* WEAVE.WSM's claim, 0 = not loaded */
-static unsigned w_cmkb;
+static unsigned w_cmseg;                /* the core's claim, 0 = not here */
 static unsigned w_cso;                  /* ...and its state block's offset */
 static int      w_cid;                  /* the canvas's comp_id, 0 = no canvas */
 static int      w_cnspr;
@@ -135,6 +134,40 @@ static int w_chire(void)
     if (os88_task_spawn(w_win) != 0)
         return 0;
     w_cworker = 1;
+    /* ...AND OUR REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2). crt0.asm
+     * declared it movable before os88_main returned and the spawn above just
+     * pinned it again: a region declaration without this one is INERT.
+     *
+     * THE WORKER'S BODY IS NOT IN THIS SEGMENT, which is what made this look
+     * like a canvas-VM question rather than a declaration. It is: os88_worker
+     * is a trampoline into wcv_run, which far-calls WSMV_WORKER in WEAVE.WSM
+     * (WEAVE-SPEC 1.2.2). Three facts settle it, and none of them is about
+     * the VM's semantics.
+     *
+     * THE MODULE NEVER HOLDS OUR SEGMENT. Its ABI passes claim segments and a
+     * kernel window pointer - WSMV_BIND takes the canvas and bundle claims,
+     * WSMV_START the window - and the one word naming the module, wcv_vec,
+     * lives in OUR region and names the MODULE, so a region move carries it
+     * and leaves what it points at alone. The module switches its own DS and
+     * puts the caller's back, so it does not bank that either.
+     *
+     * THE RESTART REBUILDS THE WHOLE CHAIN. os88_task_restartable names
+     * crt0's cc_worker, which re-banks its stack top and re-pushes cc_win,
+     * and wsm_v_worker re-reads wsm_win out of the dispatcher's wsm_ab. The
+     * module's own state is in the MODULE's bss, which a region move does not
+     * touch, so the canvas resumes rather than restarts.
+     *
+     * AND wsm_ack IS 1 AT THE PARK POINT, which is the one thing that could
+     * have made this unsafe. wsm_v_unbind SPINS on that byte for up to 40
+     * ticks before freeing the canvas claim, so a worker restarted while it
+     * read 0 would strand the unbind - but this package does NOT declare
+     * os88_mem_parksafe(), so the only park is OSAPI_TASK_ALIVE at .park,
+     * which is past wsm_doframe's exit where the byte is 1 again. (Even under
+     * parksafe it would hold: wwork.inc raises it BEFORE the lock, on
+     * purpose, and says so.)
+     *
+     * A restart costs one frame. */
+    os88_task_restartable(1);
     return 1;
 }
 
@@ -153,11 +186,12 @@ static int w_chire(void)
  * in this bundle".
  *
  *   0 fine   1 no room for a claim   2 the OVERLAY never ran
- *   3 WEAVE.WSM is not on this disk  4 WEAVE.WSM does not match
+ *   3 the canvas core (part 0) could not be fetched - op_fetch has toasted
+ *     why: memory, the read, or the program's disk gone from its drive
  * ==========================================================================*/
 static void ovl_canvasload(void)
 {
-    unsigned s, n, i, rec, id, ct, props, got, need;
+    unsigned s, n, i, rec, id, ct, props, need;
     int k, col;
 
     w_cldstate = 0;
@@ -221,30 +255,18 @@ static void ovl_canvasload(void)
     w_cparm[WSMP_NSPR] = w_cnspr;
     w_cparm[WSMP_SPOFF] = (int)w_soff[W_SPRITES];
 
-    /* --- the module, read ONCE and stamped three ways (1.2.2) ------------- */
+    /* --- the module, fetched ONCE: part 0 of our own file (1.2.2) ---------
+     * From HOME, which is where WEAVE.O88 is and not where the bundle is: a
+     * .WAB double-clicked in the LOOM folder leaves us standing there. There
+     * is no stamp to check - the part is bytes of the package's own file, and
+     * op_fetch refuses a stream that does not expand to exactly the row's
+     * length (SPEC.md 20.13.4). */
     if (w_cmseg == 0) {
-        w_cmkb = (unsigned)wcv_kb();
-        w_cmseg = os88_mem_claim((int)w_cmkb);
-        if (w_cmseg == 0) {
-            w_cldstate = 1;
-            return;
-        }
-        got = os88_file_read_seg("WEAVE.WSM", w_cmseg, w_cmkb << 10);
-        if (got < wcv_bytes()) {
-            os88_mem_free(w_cmseg);
-            w_cmseg = 0;
+        if (w_partfetch(W_WSMPART) != 0) {
             w_cldstate = 3;
             return;
         }
-        k = wcv_stamp(w_cmseg);         /* the three words, in the assembly
-                                         * that owns their constants */
-        if (k) {
-            os88_mem_free(w_cmseg);     /* a half-believed module is worse
-                                         * than none (crt0.asm's rule) */
-            w_cmseg = 0;
-            w_cldstate = k == 1 ? 3 : 4;
-            return;
-        }
+        w_cmseg = os88_part_seg(W_WSMPART);
         w_cso = wcv_stateoff(w_cmseg);
         wcv_bindmod(w_cmseg);
     }

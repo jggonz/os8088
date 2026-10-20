@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Can this MartyPC drive TWO video cards at once? (docs/DUAL-DISPLAY-PLAN.md 9)
+"""Can this MartyPC drive TWO video cards at once? (docs/plans/completed/DUAL-DISPLAY-PLAN.md 9)
 
     python3 tests/dualcheck.py                          # os8088_5150_both_gla
     python3 tests/dualcheck.py --machine os8088_5150_both
@@ -19,7 +19,7 @@ from the debugger, and the only thing moving is the rasters.
 
 IT COVERS BOTH TWO-CARD MACHINES OUT OF ONE BODY - Hercules+CGA, which is the
 calibration 5150's pair and what SPEC.md 39.12-39.19 ships for, and
-VGA+Hercules (docs/DUAL-DISPLAY-VGA.md), which is the pair the period built the
+VGA+Hercules (docs/plans/completed/DUAL-DISPLAY-VGA.md), which is the pair the period built the
 most of. One gate rather than two, for tests/gfxbench's reason: two sources
 that measure "the same" thing drift apart, and the drift is silent. Everything
 that differs between the two pairs is a row in CARDS - the aperture, the fill

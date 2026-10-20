@@ -53,7 +53,7 @@ RDPV_UPCASE  equ 1              ; in  ES:SI = a NUL-terminated string in YOUR
                                 ; package's segment in ES. Any other driver
                                 ; entry point gets KERNEL_SEG there and could
                                 ; not have done it
-RD_CLASS     equ DRVC_FILE      ; the publication slot this driver sits in -
+RD_CLASS     equ DRVC_FILE2     ; the publication slot this driver sits in -
                                 ; SHARED with NET.DRV, which is what makes
                                 ; RDPV_IDENT load-bearing rather than tidy
 RD_SIG       equ 'DR'           ; ...and what RDPV_IDENT answers

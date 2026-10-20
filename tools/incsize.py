@@ -21,12 +21,22 @@ label the include defines is found in the listing and its size is the distance
 to the next label. That is what the assembler emitted, jump distances and all,
 rather than instruction bytes counted by hand.
 """
-import re, sys, subprocess, os
+import re, sys, subprocess, os, tempfile, shutil
 
 inc, src, out = sys.argv[1], sys.argv[2], sys.argv[3]
-lst = "/tmp/attrib.lst"
-subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                "-l", lst, "-o", "/tmp/attrib.bin", src], check=True)
+# A private directory per run: several agents (and several soak lanes) run
+# this at once, and a fixed /tmp/attrib.lst let one run read another's
+# listing. The .bin is written there too and thrown away - never /dev/null,
+# which nasm unlinks on a failed assembly (CLAUDE.md, the testing traps).
+tmp = tempfile.mkdtemp(prefix="incsize-")
+lst = os.path.join(tmp, "attrib.lst")
+try:
+    subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+                    "-l", lst, "-o", os.path.join(tmp, "attrib.bin"), src],
+                   check=True)
+    listing = open(lst, encoding="utf-8", errors="replace").read().splitlines()
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
 
 # every global label DEFINED in the include
 want = set()
@@ -38,10 +48,14 @@ for line in open(inc, encoding="utf-8", errors="replace"):
 
 # walk the listing: remember the last label seen, and the first address after it
 LAB = re.compile(r"^\s*\d+\s+(?:([0-9A-F]{8})\s+)?(?:[0-9A-F<>\-\(\)]+\s+)?(?:<\d+>\s+)?([A-Za-z_][A-Za-z0-9_]*):")
-ADDR = re.compile(r"^\s*\d+\s+([0-9A-F]{8})\s+[0-9A-F]")
+ADDR = re.compile(r"^\s*\d+\s+([0-9A-F]{8})\s+([0-9A-F]+)")
 marks = []          # (addr, label)
 pending = None
-for line in open(lst, encoding="utf-8", errors="replace"):
+hi = 0              # the end of the last byte emitted
+for line in listing:
+    m = ADDR.match(line)
+    if m:
+        hi = max(hi, int(m.group(1), 16) + len(m.group(2)) // 2)
     m = LAB.match(line)
     if m:
         pending = m.group(2)
@@ -51,6 +65,11 @@ for line in open(lst, encoding="utf-8", errors="replace"):
     m = ADDR.match(line)
     if m and pending:
         marks.append((int(m.group(1), 16), pending)); pending = None
+# A label with no byte after it (os88_image_end, when the include is the last
+# thing in the package) still ENDS the routine before it: without this the
+# include's last routine measured zero and dropped out of the table
+if pending:
+    marks.append((hi, pending))
 
 marks.sort()
 tot = 0

@@ -8,9 +8,10 @@
 # SHIPPING apps/c64/c64cpu.inc and c64mem.inc - boots it in raw QEMU with
 # SS != DS and reads the serial port.
 #
-# THE TEN ROWS, and the negative control each one carries. Decision 22 in
-# docs/C64-PORT-PLAN.md says nine, and the tenth is the split below: decimal
-# ADC/SBC came out of Dormann's row and became a row of its own.
+# THE TWELVE ROWS, and the negative control each one carries. Decision 22 in
+# docs/plans/completed/C64-PORT-PLAN.md says nine; the tenth is the split below (decimal
+# ADC/SBC came out of Dormann's row and became a row of its own) and rows 11
+# and 12 are the fix pass's.
 #
 #   1  Klaus Dormann's 6502 functional test, 64KB, fetched at a pinned
 #      SHA-256 and NEVER COMMITTED, run to its success trap at $3469.
@@ -25,6 +26,8 @@
 #   8  the illegal opcodes            control: LAX abs dispatched to NOP
 #   9  cycle totals and the penalties control: one opcode costs one less
 #  10  decimal ADC/SBC, all 262,144   control: SED dispatched to CLD
+#  11  the four unstable stores       control: SHA abs,Y dispatched to STA abs,Y
+#  12  the interrupt stack and RTI    control: BRK dispatched to NOP
 #
 # ROW 10 IS NOT DORMANN'S DECIMAL TEST, and the reason is a fact about the
 # world rather than a scope cut: that test is published as SOURCE only - the

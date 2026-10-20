@@ -1,0 +1,85 @@
+REM =========================================================================
+REM os8088 - apps/apple2/welcome.a2b   the Applesoft listing WELCOME.BAS is
+REM tokenised from (docs/APPLE2-SPEC.md section 16.2).
+REM
+REM THIS FILE IS THE SOURCE AND `build/WELCOME.BAS` IS THE ARTEFACT.
+REM tools/a2bas.py tokenises it against the token name table in the PINNED
+REM Apple II+ ROM itself ($D0D0, AppleWin bin/A2_BASIC.SYM:805), so the
+REM shipped bytes rebuild byte for byte and no token in them was typed from
+REM memory.
+REM
+REM IT CLAIMS NOTHING THIS BUILD DOES NOT RENDER, which is CWORD's WELCOME.RTF
+REM rule (LESSONS.md 1) one machine along: every screen it puts up is one the
+REM package composes today - the 40x24 text page out of the machine's own
+REM character generator, INVERSE, lo-res with MIXED's four text rows, hi-res
+REM with the same, and the speaker. It does not use FLASH, which the CPU_8086
+REM tier refuses and greys with its cost (APPLE2-SPEC section 7.8) - a
+REM listing that said "this flashes" would be false on the machine this port
+REM is aimed at - and it says where the COLOURS are rather than pretending the
+REM window has any (section 13.1: colour is FSXM_VGA13 and needs a VGA).
+REM
+REM AND IT IS SIZED FOR A 4.77 MHz XT, WITH THE MEASUREMENT ATTACHED. At
+REM 0.64% of a 1.02 MHz Apple (section 16.4.1) a loop of 1,600 PLOTs is many
+REM minutes, so the lo-res picture is 32 HLINs and the hi-res one 7 HPLOT
+REM lines, and every wait is a GET rather than a FOR/NEXT delay - a delay
+REM loop tuned on a 386 is a machine that looks hung on an XT.
+REM
+REM WHAT THAT COSTS, MEASURED ON THE XT ITSELF and not estimated (section
+REM 16.2.1, build/a2welcome.py, off the BIOS tick counter): the text screen
+REM is 2-3 s from RUN, the lo-res screen 76.2 s and the hi-res screen
+REM 78.2 s. Two runs agreed to a tenth of a second on both graphics screens;
+REM the text figure is the noisy one, being short enough that the launch is
+REM most of it. They were 6.0, 91.2 and 106.2 before section 4.3.1's slice
+REM controller, which is where the difference went. Both graphics screens
+REM draw PROGRESSIVELY - a band or a line at a time - so the machine is
+REM visibly working rather than hung, and README.TXT says the same number to
+REM the reader who has not opened this file. It is the emulated Apple that is
+REM slow and not the window: this is what 0.64% of a 1.02 MHz machine feels
+REM like, which is the one thing a demonstration on this port is FOR.
+REM
+REM Lines outside this header are the program. A `REM` line here whose first
+REM word is REM and which carries no line number is a COMMENT and is not
+REM tokenised at all; the program's own lines are numbered.
+REM =========================================================================
+10  REM  WELCOME - APPLE II PLUS FOR OS8088
+20  TEXT : HOME
+30  PRINT "APPLE II PLUS, IN A WINDOW."
+40  PRINT
+50  PRINT "40 COLUMNS AND 24 ROWS, DRAWN"
+60  PRINT "OUT OF THE MACHINE'S OWN"
+70  PRINT "CHARACTER GENERATOR ROM."
+80  PRINT
+90  INVERSE
+100  PRINT "INVERSE TEXT"
+110  NORMAL
+120  PRINT
+130  PRINT "PRESS A KEY FOR LO-RES.";
+140  GET A$
+150  GR : HOME
+160  FOR C = 0 TO 15
+170  COLOR= C
+180  HLIN 0,39 AT C * 2
+190  HLIN 0,39 AT C * 2 + 1
+200  NEXT C
+210  PRINT "GR: 40 X 40 BLOCKS, AND THE"
+220  PRINT "FOUR TEXT ROWS OF MIXED MODE."
+230  PRINT "COLOR NTSC IN THE MACHINE MENU"
+240  PRINT "PUTS THESE IN COLOUR ON A VGA.";
+250  GET A$
+260  HGR : HOME
+270  HCOLOR= 3
+280  FOR X = 0 TO 279 STEP 40
+290  HPLOT X,0 TO 279 - X,159
+300  NEXT X
+310  PRINT "HGR: 280 X 160, MIXED AGAIN."
+320  PRINT "PRESS A KEY FOR THE SPEAKER.";
+330  GET A$
+340  TEXT : HOME
+350  PRINT CHR$ (7);
+360  PRINT "THAT WAS THE SPEAKER: THE"
+370  PRINT "INTERVAL BETWEEN TOGGLES OF"
+380  PRINT "$C030, PLAYED AS A TONE."
+390  PRINT
+400  PRINT "TYPE LIST TO READ THIS PROGRAM,"
+410  PRINT "OR RUN TO SEE IT AGAIN."
+420  END

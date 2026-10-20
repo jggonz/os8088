@@ -51,6 +51,7 @@ shape - three calls and a palette lookup a pixel, or a rolled byte column -
 and not to pin a figure that a picture with a different dither would move.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -75,7 +76,22 @@ def u16(b, i=0):
 
 
 def paint_base(m, mo, rx, ry):
-    """Double-click the picture and answer where Paint landed."""
+    """Double-click the picture and answer where Paint landed.
+
+    A BARE ARM ON PURPOSE - do NOT put this in a `bp_trace`. It RETURNS WITH
+    THE GUEST STOPPED at `toast_show`, and everything below depends on that:
+    `to()` brackets the decode from `pt_gif_in` onwards, and the toast is
+    staged a few thousand cycles before it. Resuming here to clear the
+    breakpoints - which is what a trace does on the way out - lets the guest
+    run past `pt_gif_in` in the two round trips before the next arm, and the
+    row then waits out 600s for a mark that has already gone by. Measured:
+    the converted spelling reached the toast correctly and then timed out.
+
+    The click is safe under a bare arm here for a reason rather than by luck:
+    `toast_show` cannot be reached until the launch has begun, and the launch
+    cannot begin until the double-click has been decoded. `paintrow`'s second
+    site is the other member of this small class.
+    """
     m.bp_exec("toast_show")
     mo.dblclick(rx, ry)
     for _ in range(12):
@@ -93,7 +109,7 @@ def paint_base(m, mo, rx, ry):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintlzw.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintlzw.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None)
     a = ap.parse_args()

@@ -12,7 +12,7 @@
 ; in a window at twelve edges a frame. This exercises what is on the OTHER
 ; side of SPEC.md 53.7's fence - the machine, in a foreign mode, where NO
 ; kernel drawing slot is legal and every pixel is the app's - at about a
-; hundred edges a frame with a game attached. docs/GFX-FSX-PLAN.md is what
+; hundred edges a frame with a game attached. docs/plans/completed/GFX-FSX-PLAN.md is what
 ; that exercise found.
 ;
 ; THE THREE THINGS THAT DECIDE THE WHOLE DESIGN
@@ -178,8 +178,14 @@ OT_SHELL  equ 5                 ; the player's
 OT_ESHELL equ 6                 ; theirs
 
 ; --- the projection -----------------------------------------------------------
-TK_MAXV   equ 16                ; vertices in the largest model
-TK_MAXROW equ 240               ; the tallest viewport any backend offers
+TK_MAXV   equ 13                ; vertices in the largest model (the tank's;
+                                ; tk3d.inc asserts every model against it)
+TK_MAXROW equ 240               ; the tallest viewport any backend offers...
+TK_SHROWS equ 200               ; ...and the tallest a SHADOW backend offers,
+                                ; which is every array only CGA and Hercules
+                                ; touch - the template's span sets, the device
+                                ; rows, the span store's index (tkraster.inc
+                                ; asserts tk_vptab against it)
 
 TK_LASTB  equ 79                ; the last byte of a viewport row - and it is
                                 ; 79 on ALL THREE, which is the coincidence
@@ -187,7 +193,66 @@ TK_LASTB  equ 79                ; the last byte of a viewport row - and it is
                                 ; 640 at 1bpp and 320 Mode X byte-addresses are
                                 ; each 80 bytes
 TK_SHSEG  equ 16000             ; the CGA/Hercules shadow, in bytes
-TK_SHKB   equ 16                ; ...as a claim
+; --- THE HUD TEMPLATE'S STORAGE IS THE ONE THING THE TWO BUILDS DIFFER ON ----
+; (SPEC.md 85.3.5.1). The shipped package keeps SPEC.md 85.3.5's template as a
+; second 16,000-byte frame buffer and claims a flat 32KB for the pair, because
+; that is the fastest thing to restore from - one rep movsw a row - and a
+; machine with heap to spare should have it.
+;
+; APP_SMALL stores the same template as SPANS of the bytes it actually lights,
+; and claims off a LADDER instead. Measured, on both shadow backends and in
+; every state the game can be driven into: the template holds 486-512 non-zero
+; bytes of 16,000. THREE PER CENT. That is what makes the trade worth taking on
+; the 128KB machine, where the largest run a claimant can have once mem_claim
+; has shed the purgeable caches is 20KB and a 32KB claim simply refuses - and
+; what makes it the wrong trade on every other machine, because restoring from
+; spans costs the frame 4.0% (tests/tankperf.py; SPEC.md 85.3.5.1 has the
+; table). It is the SMALL BUILD's trade and not the package's.
+;
+;   18KB  2,432 bytes of pool - 14% over the measured high water, and what the
+;         128KB machine takes today
+;   17KB  1,408. The panel fits and a settled ridge does not, which is what
+;         TKT_RIDGEMIN below is for
+;   16KB  the shadow alone, [tk_tmpl] = 0 from the start: the pre-85.3.5 game,
+;         which is what a 128KB machine could not have at all before this
+;
+; A RUNG IS NOT A FEATURE. The game is the same game on all three and only the
+; panel's cost moves; nothing else here is sized against them.
+%ifdef APP_SMALL
+TK_SHKB   equ 18                ; the rung it would like...
+TK_SHKB2  equ 17                ; ...and the two it will settle for
+TK_SHKB3  equ 16
+TKT_POOLMIN  equ 1280           ; A POOL SMALLER THAN THIS HOLDS NO TEMPLATE
+                                ; AT ALL: the six panel items encode to ~1,050
+                                ; bytes, and the 16KB rung leaves 384 (16,384
+                                ; less TK_SHSEG's 16,000) rather than the 0 the
+                                ; table above rounds it to - so an `or ax, ax`
+                                ; test never fired and the bottom rung started
+                                ; with [tk_tmpl] = 1 over a pool the panel
+                                ; overflowed on its first encode
+TKT_RIDGEMIN equ 2048           ; A POOL SMALLER THAN THIS NEVER TAKES THE
+                                ; RIDGE. Measured: the six panel items encode
+                                ; to ~1,050 bytes and a settled ridge adds
+                                ; 800-1,100 more, so the 17KB rung holds the
+                                ; panel and cannot hold both. Refusing the
+                                ; ridge there keeps 85.3.5's 61-67 ms a frame
+                                ; and pays 85.3.8's 26; letting it overflow
+                                ; instead dropped the template whole and paid
+                                ; both
+TKT_GAP   equ 4                 ; lit runs closer than this are ONE span, the
+                                ; zeros between them stored: the panel's runs
+                                ; average under two bytes, so a two-byte header
+                                ; costs more than the gap it saves
+%else
+TK_SHKB   equ 32                ; ...as a claim, with the HUD TEMPLATE in its
+                                ; second half (SPEC.md 85.3.5)
+TK_DEVOFS equ 2 * TK_SHSEG      ; ...and the blit's device-row table in the
+                                ; 768 bytes the two leave of it (85.3.9)
+%if TK_DEVOFS + TK_SHROWS * 2 > TK_SHKB * 1024
+  %error "the device-row table does not fit the claim's tail"
+%endif
+%endif
+
 
 ; --- gameplay -----------------------------------------------------------------
 TK_TURN   equ 2                 ; angle units per TICK at full lock
@@ -228,7 +293,7 @@ TK_CLEARR equ 600               ; ...and no piece may stand nearer the spawn
 ; them a TICK. tk_input latches once a FRAME and tk_pmove spends up to
 ; TK_MAXSTEP of them, so the finest turn a player can COMMAND is
 ; TK_TURN * min(ticks a frame, TK_MAXSTEP) - SIX units, 8.44 degrees, on both
-; 1bpp adapters, where docs/GFX-FSX-PLAN.md 0 measures 6.06 and 4.32 fps. What
+; 1bpp adapters, where docs/plans/completed/GFX-FSX-PLAN.md 0 measures 6.06 and 4.32 fps. What
 ; that has to fit inside is tk_espoil's own window, 6,100/R units either side:
 ; 4.1 units wide at 3,000 and 3.1 at the shell's 3,900-unit reach. So the sweep
 ; steps clean over a distant tank and the phase of the press decides whether it
@@ -347,89 +412,11 @@ TK_KD     equ 0x20              ; D - turn right
 TK_KW     equ 0x11              ; W - forward
 TK_KS     equ 0x1F              ; S - back
 
-; =============================================================================
-; tk_entry - the loader calls this once per instance (SPEC.md 20.1)
-; =============================================================================
-tk_entry:
-    push si
-    push di
-    call OSAPI_VIDEO                ; AX = w, BX = h, CX = the dock's top row
-    mov [tk_scrw], ax
-    mov [tk_dock], cx
-
-    mov al, KSC_SPACE               ; ARMING the scancode reader: the first
-    call OSAPI_KEY_DOWN             ; answer is always "up" and this is where
-                                    ; the SDK says to spend it (SPEC.md 9.7)
-
-    call OSAPI_GET_TICKS
-    call OSAPI_SRAND                ; the field, the tanks and their aim all
-                                    ; walk down one stream
-    call tk_hs_init                 ; the built-in table; the file replaces it
-                                    ; at the first paint, which is a UI-task
-                                    ; callback and therefore a legal place to
-                                    ; read one from
-    mov byte [tk_gosh], TK_GOSH     ; the lettering's halo (SPEC.md 85.8.1)
-    mov byte [tk_at_scrt], TK_SCRT  ; the band's first roll is a whole interval
-                                    ; away, not 256 of them: the loader zeroes
-                                    ; bss and this counts DOWN
-    mov byte [tk_at_blink], 1       ; ...and the play line starts LIT, for the
-    mov byte [tk_at_blt], TK_BLINKON    ; same reason: a zeroed counter would
-                                    ; hold the first dark phase for 256 wakes
-                                    ; and a zeroed flag would open the window
-                                    ; on a panel with no play line at all
-
-    ; Centre the attract window in the desktop band. It is not resizable and
-    ; it never draws the game - the game is the bracket - so one size does.
-    mov ax, [tk_scrw]
-    sub ax, TK_WINW
-    jns .xok
-    xor ax, ax
-.xok:
-    shr ax, 1
-    mov [tk_tpl + WT_X], ax
-    mov ax, [tk_dock]
-    sub ax, MBAR_H
-    sub ax, TK_WINH
-    jns .yok
-    xor ax, ax
-.yok:
-    shr ax, 1
-    add ax, MBAR_H
-    mov [tk_tpl + WT_Y], ax
-
-    call tk_adapter                 ; which raster we would take, and whether
-                                    ; the machine will give it to us
-    call tk_newgame
-
-    mov si, tk_tpl
-    call OSAPI_WM_CREATE
-    jc .full
-    mov [tk_win], bx
-    mov al, 1                       ; an 8-aligned content origin: every
-    call OSAPI_WM_SNAP              ; font_run below reaches SPEC.md 6.1's
-                                    ; single-store cell, and the score band's
-                                    ; OSAPI_GFX_SCROLL has ends it accepts
-    mov ax, tk_onresize             ; the card can change under us
-    call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98), and tk_adapter is every
-                                    ; fact this package holds about it
-    mov si, tk_menus
-    call OSAPI_MENU_SET
-    mov si, tk_about                ; ...and 'About Tank Attack' above the
-    call OSAPI_ABOUT_SET            ; Close the kernel already puts in our
-                                    ; pull-down (SPEC.md 12.2). WINDOWED only:
-                                    ; inside an fsx bracket the app owns every
-                                    ; pixel and there is no bar to pull down
-                                    ; (SPEC.md 53.7, docs/GFX-FSX-PLAN.md)
-.full:
-    pop di
-    pop si
-    ret
-
 ; -----------------------------------------------------------------------------
 ; tk_adapter - the raster this machine would give us, and the mode to ask for
 ;
 ; in:  nothing.  out: [tk_want] = a TKB_*, [tk_fsxm] = the FSXM_* to set,
-;      [tk_caps] = the caps mask, and the menu item's caption.
+;      [tk_vidk] = that display's VID_* kind, and the menu item's caption.
 ; preserves every register (tk_onresize is a callback)
 ;
 ; EVERY BRANCH WRITES BOTH WAYS - SPEC.md 48's own lesson, and it is the same
@@ -446,34 +433,34 @@ tk_adapter:
     push dx
     mov bx, [tk_win]
     call OSAPI_FSX_CAPS             ; AX = settable ids, DL = that display's
-    mov [tk_caps], ax               ; VID_* kind
-    mov [tk_vidk], dl               ; ...which is also the attract window's ink
-                                    ; question, and it is asked HERE so that a
-                                    ; window dragged to the other card of a
-                                    ; two-card machine re-answers it
-    mov byte [tk_want], TKB_NONE
-    mov byte [tk_fsxm], 0FFh
-
-    test ax, 1 << FSXM_MODEX        ; VGA first: Mode X is the only mode here
-    jz .cga                         ; with a spare page in it
-    mov byte [tk_want], TKB_MODEX
-    mov byte [tk_fsxm], FSXM_MODEX
-    jmp short .say
+    mov [tk_vidk], dl               ; VID_* kind - which is also the attract
+                                    ; window's ink question, and it is asked
+                                    ; HERE so that a window dragged to the other
+                                    ; card of a two-card machine re-answers it
+    ; THE LAST TEST TO PASS WINS, so they run in the reverse of the preference
+    ; - VGA's Mode X, the only mode here with a spare page in it, then the 1983
+    ; port's own CGA mode, then Hercules - and [tk_want] and [tk_fsxm],
+    ; adjacent, are written as ONE word whatever answered
+    mov bx, TKB_NONE | (0FFh << 8)
+    test al, 1 << FSXM_HERC
+    jz .cga
+    mov bx, TKB_HERC | (FSXM_HERC << 8)
 .cga:
-    test ax, 1 << FSXM_CGA320       ; ...then the 1983 port's own mode
-    jz .herc
-    mov byte [tk_want], TKB_CGA
-    mov byte [tk_fsxm], FSXM_CGA320
-    jmp short .say
-.herc:
-    test ax, 1 << FSXM_HERC
+    test al, 1 << FSXM_CGA320
+    jz .modex
+    mov bx, TKB_CGA | (FSXM_CGA320 << 8)
+.modex:
+    test ax, 1 << FSXM_MODEX
     jz .say
-    mov byte [tk_want], TKB_HERC
-    mov byte [tk_fsxm], FSXM_HERC
+    mov bx, TKB_MODEX | (FSXM_MODEX << 8)
 .say:
+    mov [tk_want], bx
     mov dx, tk_s_play               ; and the menu says WHY not, off the same
-    cmp byte [tk_want], TKB_NONE    ; predicate the command refuses on
-    jne .ok                         ; (SPEC.md 47)
+%if TKB_NONE != 0                   ; predicate the command refuses on
+  %error "tk_adapter tests TKB_NONE as zero"    ; (SPEC.md 47)
+%endif
+    or bl, bl
+    jnz .ok
     mov dx, tk_s_playn
 .ok:
     mov [tk_mi_game + 0], dx
@@ -486,9 +473,7 @@ tk_adapter:
 ; tk_onresize - the adapter changed under us (SPEC.md 11.98)
 ; in:  SI = our window, gfx lock held.  preserves all registers
 ; -----------------------------------------------------------------------------
-tk_onresize:
-    call tk_adapter
-    ret
+tk_onresize equ tk_adapter         ; which keeps every register itself
 
 ; =============================================================================
 ; The windowed half: an attract panel, and one command that leaves it
@@ -541,7 +526,8 @@ tk_paint:
     call tk_at_text                 ; and then the parts that never move
     call tk_band_full
     call tk_at_resume               ; the two gleam cursors are absolute, so a
-    call tk_hire                    ; window that MOVED has to re-init them
+    mov byte [tk_atstale], 0        ; window that MOVED has to re-init them -
+    call tk_hire                    ; and a bracket has just reused their bytes
     cmp byte [tk_abon], 0           ; ...and the About card LAST, over the
     je .out                         ; attract panel it is opaque about (20.5.1)
     push si
@@ -565,17 +551,18 @@ tk_onkey:
     push ax
     call tk_abdismiss               ; any key takes the credits down, and is
     jc .out                         ; spent doing it
-    cmp al, 'f'
-    je .go
-    cmp al, 'F'
-    je .go
+    cmp ax, KEY_ALTENTER            ; Alt+Enter is the same door (SPEC.md
+    je .go                          ; 11.2.1.1), and a plain Enter already
+                                    ; opens it three lines down - so this is
+                                    ; the chord agreeing with the key rather
+                                    ; than a new action. On AX: ascii is 0
     cmp al, 0x0D
     je .go
+    or al, 0x20                     ; either case: only 'F' and 'N' fold onto
+    cmp al, 'f'                     ; the two letters below
+    je .go
     cmp al, 'n'
-    je .new
-    cmp al, 'N'
     jne .out
-.new:
     call tk_newgame
     call tk_paint                   ; the lock is held in a key callback, so
 .out:                               ; the panel is redrawn here and now
@@ -630,7 +617,7 @@ tk_s_play:   db 'Play', 0              ; tk_adapter when no mode can be had
 tk_s_playn:  db 'Play (no mode)', 0
 tk_s_new:    db 'New Game', 0
 
-tk_ttl:      db 'Tank Attack', 0
+tk_ttl       equ tk_m_name          ; the window's title is the menu's name
 tk_s_high:   db 'HIGH', 0
 tk_s_pl1:    db 'PL 1', 0
 ; What a shell cannot pass through, by the object's own OT_* (SPEC.md 85.6.2).
@@ -650,7 +637,7 @@ tk_s_enter:  db 'PRESS ENTER', 0
 ; =============================================================================
 ; WINDOWED ONLY, and that is the architecture rather than a choice: the game
 ; itself runs inside an fsx bracket where this package owns every pixel and no
-; kernel drawing slot is legal at all (SPEC.md 53.7, docs/GFX-FSX-PLAN.md), so
+; kernel drawing slot is legal at all (SPEC.md 53.7, docs/plans/completed/GFX-FSX-PLAN.md), so
 ; there is no bar to pull the item down from. The attract panel is where the
 ; kernel's chrome exists, and the card goes on it.
 ;
@@ -659,7 +646,7 @@ tk_s_enter:  db 'PRESS ENTER', 0
 ; whole frame - the arkanoid/tracker pattern.
 
 ; -----------------------------------------------------------------------------
-; tk_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; tk_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -712,9 +699,16 @@ tk_tpl:
     dw tk_ttl, tk_paint, tk_onkey, tk_onclick
 
 %include "tklogo.inc"
+%assign TK_GONSEG 0                ; tkover.inc's strokes, COUNTED here: the
+%macro TKGO 4-*                     ; bytes are the entry overlay's, and the
+  %assign TK_GONSEG TK_GONSEG + %0 / 2 - 1    ; list they expand to the bss's
+%endmacro
 %include "tkover.inc"
 %include "tkhs.inc"
 %include "tkraster.inc"
+%ifdef APP_SMALL
+%include "tktmpl.inc"     ; the span store (SPEC.md 85.3.5.1)
+%endif
 %include "tk3d.inc"
 %include "tkgame.inc"
 %include "tkattr.inc"
@@ -737,6 +731,16 @@ tk_tpl:
 %assign TK_BSS TK_BSS + (%2)
 %endmacro
 
+; --- the tables the entry overlay expands (SPEC.md 85.5, 85.5.1) --------------
+    ZBUF  tk_sintab, 65 * 2         ; FIRST, so the word tables are on even
+    ZBUF  tk_v_cube, TKV_CUBE * 6   ; addresses: the overlay ends the image on
+    ZBUF  tk_v_block, TKV_BLOCK * 6 ; one, and these are all words
+    ZBUF  tk_v_pyr, TKV_PYR * 6
+    ZBUF  tk_v_tank, TKV_TANK * 6
+    ZBUF  tk_v_shell, TKV_SHELL * 6 ; (tk3d.inc's TK_MODELS, in its order)
+    ZBUF  tk_goseg, TK_GONSEG * 4   ; GAME OVER's segments (tk_golets counts)
+    ZBUF  tk_ridgetab, 256
+
 ; --- the desktop side ---------------------------------------------------------
     ZWORD tk_scrw
     ZWORD tk_dock
@@ -745,9 +749,9 @@ tk_tpl:
     ZWORD tk_winoy
     ZWORD tk_cw
     ZWORD tk_ch
-    ZWORD tk_caps
     ZBYTE tk_want
     ZBYTE tk_fsxm
+    OS88_ADJACENT tk_want, tk_fsxm, 1   ; tk_adapter writes the pair as a word
     ZBYTE tk_vidk                   ; the VID_* kind of the display we are on
     ZBUF  tk_numbuf, 14
     ZBYTE tk_ctry
@@ -759,14 +763,16 @@ tk_tpl:
 ; --- the raster ---------------------------------------------------------------
     ZBUF  tk_fsi, FSI_SIZE
     ZBYTE tk_back
-    ZWORD tk_vx
-    ZWORD tk_vy
+    ZWORD tk_vx                     ; these six are one row of tk_vptab,
+    ZWORD tk_vy                     ; copied as a block by tk_r_setup
     ZWORD tk_vw
     ZWORD tk_vh
-    ZWORD tk_vcx
-    ZWORD tk_vcy
     ZWORD tk_sclx
     ZWORD tk_scly
+    ZWORD tk_inktab                 ; the live backend's TKI_* -> device map
+    OS88_ADJACENT tk_vx, tk_inktab, 12
+    ZWORD tk_vcx
+    ZWORD tk_vcy
     ZWORD tk_ridgek
     ZWORD tk_tseg
     ZWORD tk_tbase
@@ -774,47 +780,104 @@ tk_tpl:
     ZWORD tk_page1
     ZBYTE tk_npage
     ZWORD tk_shseg
+%ifdef APP_SMALL
+    ZBYTE tk_shkb                   ; the ladder rung the claim came off
+%endif
+    ZWORD tk_tmseg                  ; the template: the claim's second half
+    ZBYTE tk_tmpl                   ; ...and whether this backend has one
+    ZWORD tk_tmsave                 ; tk_spcur, while an item draws
+    ZBYTE tk_inrange                ; ENEMY IN RANGE, this frame
+    ZBUF  tk_tmc, 7 * 4             ; the items' cached keys (85.3.5)...
+    ZBUF  tk_tmr, 7 * 8             ; ...their rectangles...
+    ZBUF  tk_tmovl, 7               ; ...and which rectangles meet which
+    ZBYTE tk_tmbits
+    ZWORD tk_tmcur                  ; the rectangle being redrawn, or 0
+%ifdef APP_SMALL
+    ZBUF  tk_tmrix, (TK_SHROWS + 1) * 2 ; row r's records start at pool
+                                    ; [tk_tmrix[r]] and end at [tk_tmrix[r+1]],
+                                    ; which is why there is one more of these
+                                    ; than there are rows (SPEC.md 85.3.5.1)
+    ZWORD tk_tmlen                  ; the pool's bytes in use...
+    ZWORD tk_tmcap                  ; ...and how many it has, which is the rung
+                                    ; the claim came off (SPEC.md 85.3.5.1)
+    ZWORD tk_tmr0                   ; the rows tk_tmenc is rebuilding...
+    ZWORD tk_tmr1
+    ZWORD tk_tmmid                  ; ...how many bytes it PARKED above them...
+    ZWORD tk_tmceil                 ; ...the first pool byte it may not write,
+                                    ; which is where they are parked...
+    ZBYTE tk_tmovf                  ; ...and whether a record ran into it
+    ZWORD tk_tmpen                  ; the pool pen, while a row is written
+%endif
+    ZWORD tk_rb2                    ; tk_spans2 and tk_sprdg less the band's
+    ZWORD tk_rbd                    ; first row: an absolute row indexes both
+    ZBYTE tk_rtm_on                 ; the template holds a ridge (85.3.8)...
+    ZBYTE tk_rpa_tm                 ; ...drawn at this heading...
+    ZBYTE tk_rpa_last               ; ...and the heading of the last frame
+    ZBYTE tk_rpa_draw               ; the heading tk_ridge is drawing AT, which
+                                    ; is the live one for every caller but the
+                                    ; template's own redraw (85.3.8.1)
+    ZWORD tk_rx0                    ; the columns tk_ridge draws between
+    ZWORD tk_rx1
     ZBYTE tk_par
     ZWORD tk_spcur
     ZWORD tk_spprv
     ZBUF  tk_spanp, 4
-    ZWORD tk_lineproc
-    ZWORD tk_elineproc              ; ...and the same walk taking ink away
+    ZWORD tk_lsh                    ; the live walk trio - shallow, steep,
+    ZWORD tk_lst                    ; vertical - reached by `jmp` from tk_seg
+    ZWORD tk_lvt                    ; (SPEC.md 85.3.4)
+    ZWORD tk_eftab                  ; ...and the bytes the halo flips in it
+                                    ; (SPEC.md 85.8.1.1), 0 on Mode X
+    ZBYTE tk_kshift                 ; log2 of the pixels in a byte: 3 or 2
     ZWORD tk_hrunproc
     ZWORD tk_glyphproc
     ZBYTE tk_ink
-    ZBYTE tk_ink8
-    ZBYTE tk_pat0
+    ZBYTE tk_ink8                   ; these four are complemented as two words
+    ZBYTE tk_pat0                   ; for the halo's erase (SPEC.md 85.8.1.1)
     ZBYTE tk_pat3
     ZBYTE tk_inkpat
+    OS88_ADJACENT tk_ink8, tk_pat0, 1
+    OS88_ADJACENT tk_pat0, tk_pat3, 1
+    OS88_ADJACENT tk_pat3, tk_inkpat, 1
     ZWORD tk_nibp
-    ZWORD tk_inktab                 ; the live backend's TKI_* -> device map
 
 ; The two span sets, with slack either side: a walk's LAST step can advance
 ; the row pointer one past the row it drew on, and the guard is cheaper than
-; a test in the inner loop (SPEC.md 85.3.2).
+; a test in the inner loop (SPEC.md 85.3.2). The two frame sets serve every
+; backend; the three after them and the device rows serve only the TEMPLATE,
+; which only a shadow backend has, so they are TK_SHROWS long.
     ZBUF  tk_spguard0, 8
     ZBUF  tk_spans0, TK_MAXROW * 2
     ZBUF  tk_spguard1, 8
     ZBUF  tk_spans1, TK_MAXROW * 2
     ZBUF  tk_spguard2, 8
-    ZBUF  tk_devoff, TK_MAXROW * 2
+    ZBUF  tk_spans2, TK_RBROWS * 2  ; the ridge's old runs, then the union
+    ZBUF  tk_spguard3, 8            ; (85.3.8) - over the BAND alone, so both
+    ZBUF  tk_sprdg, TK_RBROWS * 2   ; are the band's rows long and reached
+                                    ; through tk_rb2/tk_rbd (85.3.9)
+    ZBUF  tk_spguard4, 8            ; tk_spjunk, the set a template draw
+                                    ; marks and nobody reads, is the ENTRY
+                                    ; OVERLAY's bytes (85.10.6, image's end)
+%ifdef APP_SMALL
+    ZBUF  tk_devoff, TK_SHROWS * 2  ; the blit's, so a shadow's alone - and in
+%endif                              ; the claim's tail on the shipped build
+                                    ; tk_rowoff, 80 x row - the target offset
+                                    ; of a row, looked up rather than
+                                    ; multiplied - is the overlay's too
 
 ; --- the clipper and the walk -------------------------------------------------
     ZWORD tk_cx1                    ; these four are CONTIGUOUS and indexed
     ZWORD tk_cy1                    ; as a pair by tk_clip_x / tk_clip_y
     ZWORD tk_cx2
     ZWORD tk_cy2
-    ZWORD tk_lx
-    ZWORD tk_ly
-    ZWORD tk_err
-    ZWORD tk_e1
-    ZWORD tk_e2
-    ZWORD tk_cnt
-    ZWORD tk_ystep
+    ZWORD tk_e2                     ; the walk's per-row constants; everything
+    ZWORD tk_ystep                  ; it touches per PIXEL is in a register
     ZWORD tk_sistep
     ZBYTE tk_xdir
-    ZBYTE tk_steep
+    ZWORD tk_lx                     ; the slice's (85.3.6): its first x, whole
+    ZWORD tk_q                      ; step, error, runs to go and last run
+    ZWORD tk_err
+    ZWORD tk_cnt
+    ZWORD tk_final
 
 ; --- the geometry -------------------------------------------------------------
     ZWORD tk_csin
@@ -827,10 +890,9 @@ tk_tpl:
     ZBYTE tk_dtype
     ZBYTE tk_rotdone
     ZBUF  tk_rotx, TK_MAXV * 2
-    ZBUF  tk_roty, TK_MAXV * 2
     ZBUF  tk_rotz, TK_MAXV * 2
     ZBUF  tk_cxv,  TK_MAXV * 2
-    ZBUF  tk_cyv,  TK_MAXV * 2
+    ZWORD tk_ycur                   ; the heights of the model tk_emit is on
     ZBUF  tk_czv,  TK_MAXV * 2
     ZBUF  tk_sxv,  TK_MAXV * 2
     ZBUF  tk_syv,  TK_MAXV * 2
@@ -847,6 +909,38 @@ tk_tpl:
     ZBUF  tk_ridgex, 25 * 2
     ZBUF  tk_rpy, 25 * 2
     ZBYTE tk_ra
+%assign TK_UNION TK_BSS
+    ZBUF  tk_kxrows, (TK_KROWS - TK_NEARZ) * 2
+%assign TK_UEND TK_BSS
+; THE ATTRACT WINDOW'S WALK BUFFERS SHARE THE PROJECTION TABLE'S BYTES
+; (SPEC.md 85.10.5). tk_ktabs rebuilds the table at the top of every bracket,
+; and the window's cursors, logo walk and point list are rebuilt by the
+; repaint that ends one (tk_paint: tk_logo_full, tk_at_resume) before the
+; attract worker can take the gfx lock again - so neither half ever finds the
+; other's bytes where it left its own.
+%assign TK_BSS TK_UNION
+    ZBUF  tk_curfh, TKC_SZ          ; the two gaps and their two tails: one
+    ZBUF  tk_curft, TKC_SZ          ; walk block each, plus where it has got
+    ZBUF  tk_curbh, TKC_SZ          ; to and what it still owes this glyph
+    ZBUF  tk_curbt, TKC_SZ
+    ZBUF  tk_lgwk,  GLS_SZ          ; ...and one more walk block, for the logo
+                                    ; segments drawn WHOLE (SPEC.md 85.10.4):
+                                    ; the cursors above animate, this one just
+                                    ; lays a segment down and is done with it
+    ZBUF  tk_pts, TK_PTMAX * 4      ; the attract cursors' points, stepped into
+                                    ; here and committed in ONE arrival
+                                    ; (SPEC.md 5.12.5). A full list commits
+                                    ; itself, so this is a tuning size and
+                                    ; never a correctness one
+%if TK_BSS > TK_UEND
+  %error "the attract window's walk buffers outgrew the projection table they share"
+%endif
+%assign TK_BSS TK_UEND
+tk_kx equ tk_kxrows - TK_NEARZ * 2  ; the projection table (85.5.3): sclx over
+                                    ; the depth, a row a bucket - for BOTH axes,
+    ZBUF  tk_ypre, TK_NYPRE * 2     ; because every model height is pre-scaled
+                                    ; by scly / sclx here once a bracket
+                                    ; (85.5.3.1)
 
 ; --- the world ----------------------------------------------------------------
     ZWORD tk_px
@@ -885,7 +979,6 @@ tk_tpl:
     ZBYTE tk_over                   ; 0 playing, 1 the fly-in, 2 the menu
     ZWORD tk_ovt                    ; ...and the tick the fly-in began at
     ZWORD tk_goq                    ; how much of the journey is left, 0..256
-    ZWORD tk_gok
     ZWORD tk_gdx
     ZWORD tk_gdy
     ZWORD tk_gtx
@@ -893,24 +986,23 @@ tk_tpl:
     ZWORD tk_hox                    ; the halo pass's displacement (85.8.1)
     ZWORD tk_hoy
     ZWORD tk_hset                   ; ...where it has got to in the table
-    ZWORD tk_lsave                  ; ...and the drawing walk, while it runs
     ZBYTE tk_gosh                   ; 0 none, 1 shadow, 2 outline
     ZBYTE tk_still                  ; the settled frame is already on the glass
     ZBYTE tk_pquick                 ; ...and only its prompt needs redrawing
     ZBUF  tk_wbuf, 24
 
 ; --- the high scores (SPEC.md 85.9) -------------------------------------------
-    ZBUF  tk_hs, TK_NHS * 4         ; six dwords...
-    ZBUF  tk_hsn, TK_NHS * 3        ; ...and three initials each
-    ZBUF  tk_hsbuf, TK_HSFSZ        ; the file, as it sits on the disk
+    ZBUF  tk_hsbuf, 4               ; THE FILE, as it sits on the disk: the
+    ZBUF  tk_hs, TK_NHS * 4         ; magic, six dwords...
+    ZBUF  tk_hsn, TK_NHS * 3        ; ...and three initials each (tkhs.inc)
+    OS88_ADJACENT tk_hsbuf, tk_hs, 4
+    OS88_ADJACENT tk_hs, tk_hsn, TK_NHS * 4
     ZWORD tk_hsidx                  ; the row this game took, x4; TK_NHS*4 none
     ZBYTE tk_hsload
     ZBYTE tk_ient                   ; the initials prompt is up
     ZBYTE tk_ipos
     ZBUF  tk_ibuf, 4
-    ZWORD tk_dbclus                 ; where we were standing before a save
-    ZBYTE tk_dbdrv
-    ZBUF  tk_dfind, OSAPI_FIND_SZ
+    OS88_ADJACENT tk_ient, tk_ipos, 1   ; tk_ient_begin writes the pair as a word
     ZWORD tk_frames                 ; frames rendered this session; the only
                                     ; instrument in the package, read from
                                     ; outside by tests/bzfps.py
@@ -992,15 +1084,308 @@ tk_tpl:
     ZWORD tk_due                    ; the tick the worker's next wake is due
     ZBYTE tk_hired
     ZBYTE tk_abon                   ; the About card is up (SPEC.md 20.5.1)
-    ZBUF  tk_curfh, TKC_SZ          ; the two gaps and their two tails: one
-    ZBUF  tk_curft, TKC_SZ          ; walk block each, plus where it has got
-    ZBUF  tk_curbh, TKC_SZ          ; to and what it still owes this glyph
-    ZBUF  tk_curbt, TKC_SZ
+    ZBYTE tk_atstale                ; a bracket has run since the last paint
+                                    ; (the walk buffers share tk_kx's bytes:
+                                    ; see the geometry block above)
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; the standard About card, and NOTHING else:
 %define OS88UI_NOBTN            ; the attract panel is the game's own chrome
+%include "os88alt.inc"              ; SPEC.md 11.2.1.1's edge, for the bracket
 %include "os88ui.inc"
+
+; --- the embeddable graphics library (SPEC.md 5.12) ---------------------------
+; SPEC.md 5.6.7's resumable walk, in our own image, for tkattr.inc's letter
+; cursors: pure arithmetic over blocks we already owned, with the pixels
+; committed through OSAPI_GFX_POINTS. It used to spend one arrival per SEGMENT
+; of a glyph and now spends one per WAKE.
+%define GFXE_WALK                   ; ...which implies GFXE_POINTS
+%define GFXE_PT_BUF tk_pts
+%define GFXE_PT_MAX TK_PTMAX
+%include "os88gfx.inc"
+
+; =============================================================================
+; THE ENTRY OVERLAY (SPEC.md 85.10.6): the entry proc lies under tk_spjunk
+; and tk_rowoff
+;
+; tk_entry runs once per instance, from a fresh read of the file, and never
+; again (SPEC.md 20.1) - and tk_spjunk is the span set a TEMPLATE draw marks
+; and nobody reads (tkgame.inc), which only a shadow backend has and only
+; inside an fsx bracket, while tk_rowoff is written whole, every row the
+; viewport has, by tk_devrows at the top of every bracket before anything
+; reads it. Neither meets the entry proc: the bracket is a menu command or a
+; key, long after the loader has had its window. So the set, its two guards
+; and the row table are THESE bytes, at the very end of the image, and not
+; 896 more of bss. Three rules make it safe:
+;
+; 1. Nothing here may be named after tk_entry returns - so the region's
+;    relocation proc is tk_ret (tk3d.inc), NAMED, because the bare
+;    OS88_REGION_MOVABLE plants its own `ret` inline, which would be here.
+; 2. Nothing the kernel keeps a pointer to is here: the window template, the
+;    title, the menus, the About handler and every callback are above.
+; 3. A walk's overrun runs at most one row past either end of the set
+;    (SPEC.md 85.3.2), and its 8-byte guards are the overlay's first bytes
+;    and the ones between it and tk_rowoff, which nothing overruns - so the
+;    bss's first word, after the row table, is safe. tk_spguard4 is the bss's
+;    own, in front of tk_sprdg, and stays there.
+; =============================================================================
+TK_OVLSZ  equ 8 + TK_SHROWS * 2 + 8 + TK_MAXROW * 2
+    align 2, db 0                   ; tk_spjunk is marked a word a row
+tk_ovl:
+tk_spjunk equ tk_ovl + 8
+tk_rowoff equ tk_spjunk + TK_SHROWS * 2 + 8
+
+; -----------------------------------------------------------------------------
+; tk_entry - the loader calls this once per instance (SPEC.md 20.1)
+; -----------------------------------------------------------------------------
+tk_entry:
+    push si
+    push di
+    call tk_mktabs                  ; the tables the file ships as seeds
+    call OSAPI_VIDEO                ; AX = w, BX = h, CX = the dock's top row
+    mov [tk_scrw], ax
+    mov [tk_dock], cx
+
+    mov al, KSC_SPACE               ; ARMING the scancode reader: the first
+    call OSAPI_KEY_DOWN             ; answer is always "up" and this is where
+                                    ; the SDK says to spend it (SPEC.md 9.7)
+
+    call OSAPI_GET_TICKS
+    call OSAPI_SRAND                ; the field, the tanks and their aim all
+                                    ; walk down one stream
+    call tk_hs_init                 ; the built-in table; the file replaces it
+                                    ; at the first paint, which is a UI-task
+                                    ; callback and therefore a legal place to
+                                    ; read one from
+    mov byte [tk_gosh], TK_GOSH     ; the lettering's halo (SPEC.md 85.8.1)
+    mov byte [tk_at_scrt], TK_SCRT  ; the band's first roll is a whole interval
+                                    ; away, not 256 of them: the loader zeroes
+                                    ; bss and this counts DOWN
+    mov byte [tk_at_blink], 1       ; ...and the play line starts LIT, for the
+    mov byte [tk_at_blt], TK_BLINKON    ; same reason: a zeroed counter would
+                                    ; hold the first dark phase for 256 wakes
+                                    ; and a zeroed flag would open the window
+                                    ; on a panel with no play line at all
+
+    ; Centre the attract window in the desktop band. It is not resizable and
+    ; it never draws the game - the game is the bracket - so one size does.
+    mov ax, [tk_scrw]
+    sub ax, TK_WINW
+    jns .xok
+    xor ax, ax
+.xok:
+    shr ax, 1
+    mov [tk_tpl + WT_X], ax
+    mov ax, [tk_dock]
+    sub ax, MBAR_H
+    sub ax, TK_WINH
+    jns .yok
+    xor ax, ax
+.yok:
+    shr ax, 1
+    add ax, MBAR_H
+    mov [tk_tpl + WT_Y], ax
+
+    call tk_adapter                 ; which raster we would take, and whether
+                                    ; the machine will give it to us
+    call tk_newgame
+
+    mov si, tk_tpl
+    call OSAPI_WM_CREATE
+    jc .full
+    mov [tk_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
+    ; worker's declaration: a package with NO worker is the case that
+    ; moves most easily, and putting this at the spawn left exactly
+    ; those runs declaring nothing - measured, by the row that reads
+    ; MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE tk_ret      ; NAMED, and outside the overlay: the
+                                    ; bare form plants its `ret` HERE, where
+                                    ; tk_spjunk's first frame lands. And the
+                                    ; KEEPING form: kern_small refuses the slot
+                                    ; with CF = 1 and nothing below this sets
+                                    ; CF again there, so the _NOKEEP spelling
+                                    ; made the entry proc refuse ITSELF on the
+                                    ; small build (tests/tanksmall.py)
+    mov al, 1                       ; an 8-aligned content origin: every
+    call OSAPI_WM_SNAP              ; font_run below reaches SPEC.md 6.1's
+                                    ; single-store cell, and the score band's
+                                    ; OSAPI_GFX_SCROLL has ends it accepts
+    mov ax, tk_onresize             ; the card can change under us
+    call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98), and tk_adapter is every
+                                    ; fact this package holds about it
+    mov si, tk_menus
+    call OSAPI_MENU_SET
+    mov si, tk_about                ; ...and 'About Tank Attack' above the
+    call OSAPI_ABOUT_SET            ; Close the kernel already puts in our
+                                    ; pull-down (SPEC.md 12.2). WINDOWED only:
+                                    ; inside an fsx bracket the app owns every
+                                    ; pixel and there is no bar to pull down
+                                    ; (SPEC.md 53.7, docs/plans/completed/GFX-FSX-PLAN.md)
+.full:
+    pop di
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; tk_mktabs - the tables the file ships as SEEDS, expanded into the bss
+; clobbers AX, BX, CX, DX, SI, DI
+;
+; The ridge (SPEC.md 85.5.1): tkridge.inc's runs, each step k of an n-step run
+; from h0 to h1 being (h0 (n - k) + h1 k + n / 2) / n. Every term is unsigned
+; and the quotient is a height, so one byte MUL apiece and one byte DIV.
+; -----------------------------------------------------------------------------
+tk_mktabs:
+    push es
+    push ds
+    pop es
+    cld
+    mov si, tk_rdgseed
+    mov di, tk_ridgetab
+    lodsb                           ; angle 0's height...
+    stosb
+    xchg ax, dx                     ; ...is the first run's h0, in DL
+.run:
+    lodsw                           ; AL = n, AH = h1
+    mov cl, al
+    mov dh, ah
+    mov ch, 1                       ; CH = k
+.step:
+    mov al, cl
+    sub al, ch
+    mul dl                          ; h0 (n - k)
+    xchg ax, bx
+    mov al, ch
+    mul dh                          ; + h1 k
+    add ax, bx
+    mov bl, cl
+    mov bh, 0
+    shr bx, 1                       ; + n / 2
+    add ax, bx
+    div cl                          ; / n
+    stosb
+    inc ch
+    cmp ch, cl
+    jbe .step
+    mov dl, dh                      ; this run's end is the next one's start
+    cmp di, tk_ridgetab + 256
+    jb .run
+
+    ; The quarter sine (SPEC.md 85.5): tksin.inc's second differences, two
+    ; to a byte with the EVEN step in the low nibble, added up twice.
+    mov si, tk_sinseed
+    mov di, tk_sintab
+    xor ax, ax                      ; AX = sin i, from sin 0 = 0
+    mov dx, TK_SIN_D1               ; DX = sin (i + 1) - sin i
+    mov cx, 64                      ; CX = 64 - i
+.sin:
+    stosw
+    add ax, dx
+    mov bl, [si]
+    test cl, 1
+    jz .lo                          ; an even i is the byte's low nibble...
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    inc si                          ; ...and an odd one its high, and done
+.lo:
+    and bx, 0Fh
+    sub dx, bx
+    loop .sin
+    stosw                           ; sin 64
+
+    ; The models' vertices (SPEC.md 85.5.2): a byte of fifths each, and DI
+    ; runs on from tk_sintab's end into tk_v_cube
+%if tk_v_cube != tk_sintab + 65 * 2
+  %error "tk_mktabs runs from the sine into the vertices: keep them adjacent"
+%endif
+    mov si, tk_mdlseed
+    mov cx, TK_NYPRE * 3
+.vtx:
+    lodsb
+    cbw
+    mov dx, ax
+    shl ax, 1
+    shl ax, 1
+    add ax, dx                      ; x 5
+    stosw
+    loop .vtx
+
+    ; GAME OVER (SPEC.md 85.8): tkover.inc's strokes - a segment count and
+    ; its points - out to one segment per pair of neighbours, and DI runs on
+    ; from the vertices into tk_goseg
+%if tk_goseg != tk_v_shell + TKV_SHELL * 6
+  %error "tk_mktabs runs from the vertices into tk_goseg: keep them adjacent"
+%endif
+.stroke:
+    lodsb                           ; SI runs on from the vertices' seed too
+    cbw
+    xchg ax, cx                     ; CX = the stroke's segments, 0 the end
+    jcxz .goend
+    lodsw                           ; its first point
+.goseg:
+    stosw                           ; a segment's start...
+    lodsw
+    stosw                           ; ...and its end, which starts the next
+    loop .goseg
+    jmp short .stroke
+.goend:
+    pop es
+    ret
+
+%unmacro TKRDG0 1
+%unmacro TKRDG 2-*
+%macro TKRDG0 1
+    db %1
+%endmacro
+%macro TKRDG 2-*
+  %rep %0
+    db %1
+    %rotate 1
+  %endrep
+%endmacro
+tk_rdgseed:
+%include "tkridge.inc"
+
+%macro TKSIN 2-*
+  %rep %0 / 2
+    db (%1) | ((%2) << 4)
+    %rotate 2
+  %endrep
+%endmacro
+tk_sinseed:
+%include "tksin.inc"
+
+%assign TK_NVSEED 0
+%macro TKV 3
+  %if ((%1) // 5) * 5 != (%1) || ((%2) // 5) * 5 != (%2) || ((%3) // 5) * 5 != (%3)
+    %error "a model coordinate that is not a multiple of five"
+  %endif
+    db (%1) // 5, (%2) // 5, (%3) // 5
+  %assign TK_NVSEED TK_NVSEED + 1
+%endmacro
+tk_mdlseed:
+    TK_MODELS
+%if TK_NVSEED != TK_NYPRE
+  %error "TK_MODELS does not hold TK_NYPRE vertices"
+%endif
+
+%unmacro TKGO 4-*
+%macro TKGO 4-*
+    db %0 / 2 - 1
+  %rep %0
+    db %1
+    %rotate 1
+  %endrep
+%endmacro
+%include "tkover.inc"               ; ...on from tk_mdlseed, which is where
+    db 0                            ; tk_mktabs reads it; and the strokes' end
+
+tk_ovlend:
+    times TK_OVLSZ - (tk_ovlend - tk_ovl) db 0  ; a negative count is the
+                                    ; assembler refusing an overlay that
+                                    ; outgrew the set it lies under
 
     OS88_BSS TK_BSS
     OS88_IMAGE_END

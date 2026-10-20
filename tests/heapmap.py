@@ -50,7 +50,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
+import os88fixture                                       # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88sym                                               # noqa: E402
 
 PIDFILE = os.path.join(ROOT, "build", "qemu.pid")
 SOCK = os.path.join(ROOT, "build", "qmp.sock")
@@ -86,13 +88,14 @@ def image():
     one line that builds the image is picked out by name instead of the stdout
     being run whole.
     """
-    out = subprocess.run(["make", "-n", "--always-make", "build/os8088.img"],
-                         cwd=ROOT, capture_output=True, text=True,
-                         check=True).stdout.replace("\\\n", " ")
-    cmd = next((ln.strip() for ln in out.splitlines()
-                if "tools/os88disk.py" in ln and "-o build/os8088.img" in ln), "")
-    assert "--folder SYSTEM/APPDATA" in cmd, out
-    cmd = (cmd.replace("-o build/os8088.img", "-o " + IMG)
+    # THROUGH os88fixture.make, which puts build/buildnum.inc back. `make -n`
+    # is not a dry run of the PARSE: `BUILDNUM` is a `:=` shell assignment and
+    # regenerates that file whatever the goal and whatever -n says. Lifting a
+    # recipe out is the only thing this row wants from make, and with the
+    # stamp restored it leaves build/ exactly as it found it.
+    cmd, goal = os88fixture.recipe("build/os8088.img", "tools/os88disk.py")
+    assert "--folder SYSTEM/APPDATA" in cmd, cmd
+    cmd = (cmd.replace("-o " + goal, "-o " + IMG)
               .replace("--folder SYSTEM/APPDATA",
                        cfgfile() + " --folder SYSTEM/APPDATA"))
     subprocess.run(cmd, cwd=ROOT, shell=True, check=True,
@@ -106,8 +109,9 @@ def kill_stale():
     exit 144, nothing dead, every command after it skipped (CLAUDE.md)."""
     if os.path.exists(PIDFILE):
         try:
-            os.kill(int(open(PIDFILE).read().strip()), signal.SIGTERM)
-            time.sleep(1)
+            pid = int(open(PIDFILE).read().strip())
+            os.kill(pid, signal.SIGTERM)
+            os88qemu.gone(pid)
         except Exception:
             pass
     for f in (SOCK, PIDFILE):
@@ -150,8 +154,30 @@ def sample(limit=40.0):
             time.sleep(0.1)
     sym = heapmap.symbols()
     q.hmp("cont")
-    seen, keys, t0 = [], set(), time.time()
-    while time.time() - t0 < limit:
+    # `limit` and every t= below are GUEST seconds, off the BIOS tick count
+    # (tests/os88qemu.py): a loaded box gives the guest less of a host second.
+    clk = os88qemu.Clock(q)
+    seen, keys = [], set()
+    # NOTHING IS READ UNTIL THE KERNEL IS WHOLE. Under a packed kernel the
+    # `.bss` words below lie in the in-place LZ4 stream until stage 2 expands
+    # it (SPEC.md 2.9.13), and a packed byte can pass the plausibility test
+    # further down - it did once, at t=0.22, as 32 claims across the whole
+    # 1MB. Stage 2 publishes [spl_fseg] only after the expansion, so its first
+    # non-zero reading is the line; it is LATCHED because mem_unblob puts the
+    # word back to 0 when the blob is given back.
+    fseg = os88sym.linear("spl_fseg")
+    whole = False
+    while True:
+        t = clk.secs()
+        if t >= limit or clk.stalled():
+            break
+        if not whole:
+            try:
+                whole = q.read(fseg, 2) != b"\0\0"
+            except Exception:
+                pass
+            if not whole:
+                continue
         try:
             m = heapmap.Map(q, sym)
         except Exception:
@@ -163,8 +189,8 @@ def sample(limit=40.0):
         k = m.key()
         if k not in keys:
             keys.add(k)
-            seen.append((time.time() - t0, m))
-        if len(seen) > 3 and not m.live and time.time() - t0 > 15:
+            seen.append((t, m))
+        if len(seen) > 3 and not m.live and t > 15:
             break
     return q, seen
 

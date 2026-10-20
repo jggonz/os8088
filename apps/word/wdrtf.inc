@@ -186,21 +186,14 @@ wd_rdress:
 .done:
     mov [wd_rat], cl
 .out:
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rscba
 
 ; -----------------------------------------------------------------------------
 ; wd_rpap - emit \pard\plain and the controls of the paragraph starting at BX
 ; Preserves all registers.
 ; -----------------------------------------------------------------------------
 wd_rpap:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     push si
     push ds
     mov si, wd_r_pard
@@ -289,12 +282,7 @@ wd_rpap:
                                     ; second space is TEXT - it arrived as a
                                     ; leading space on every paragraph
     pop ds
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rsdcba
 
 ; wd_rpapidx - AL = the PAP index of the paragraph starting at BX. Preserves
 ; all other registers.
@@ -354,10 +342,7 @@ wd_res:
 ; wd_rnum - emit signed AX in decimal, then one space. Preserves all but DI.
 wd_rnum:
     ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     or ax, ax
     jge .pos
     neg ax
@@ -382,11 +367,7 @@ wd_rnum:
     loop .emit
     mov al, ' '
     call wd_re
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdcba
 
 ; --- the writer's strings ----------------------------------------------------
 wd_r_head: db '{\rtf1\ansi\deff0{\fonttbl{\f0\fmodern Courier New;}}', 13, 10
@@ -574,9 +555,7 @@ wd_rput:
     mov byte [wd_dtrunc], 1
 .out:
     pop es
-    pop bx
-    pop ax
-    ret
+    jmp wd_rba
 
 ; wd_rputm - append a paragraph mark carrying the current PAP candidate.
 ; Preserves all registers.
@@ -606,9 +585,7 @@ wd_rputm:
     mov byte [wd_dtrunc], 1
 .out:
     pop es
-    pop bx
-    pop ax
-    ret
+    jmp wd_rba
 
 ; wd_rtail - the tail paragraph's format, for wd_ldpost. Preserves all.
 wd_rtail:
@@ -627,10 +604,7 @@ wd_rtail:
 ; out: SI advanced past it (and past one trailing space); preserves all others
 ; -----------------------------------------------------------------------------
 wd_rtok:
-    push ax
-    push bx
-    push cx
-    push dx
+    call wd_sv4
     push di
     push es
     mov es, [wd_stgseg]
@@ -754,11 +728,7 @@ wd_rtok:
 .out:
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp wd_rdcba
 
 ; wd_risal - CF=0 if AL is an ASCII letter. Preserves all registers.
 wd_risal:

@@ -78,6 +78,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import os88fixture                                           # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -180,8 +181,7 @@ def _open(m, mo, S, machine, stem):
     """Double-click <stem>.WML in the B: window and answer LOOM's window slot.
 
     IT IS weavesmoke._open_bundle(), UNCHANGED AND NOT A COPY - open drive B,
-    double-click `weavesmoke.BUNDLE`, retry the NAVIGATION up to three times
-    and nothing else. That file's docstring is the argument for every part of
+    double-click `weavesmoke.BUNDLE`. That file's docstring is the argument for every part of
     it, and the only difference here is which file is double-clicked: a `.WML`
     rather than a `.WAB`, so the association that answers is LOOM's rather
     than WEAVE's (WEAVE-SPEC 1.5 step 2).
@@ -306,12 +306,11 @@ def main():
     ap.add_argument("--no-make", action="store_true")
     a = ap.parse_args()
     if not a.no_make:
-        r = subprocess.run(["make", DISK], cwd=ROOT, capture_output=True,
-                           text=True)
-        if r.returncode:
-            print("weaveprev: `make %s` failed:\n%s"
-                  % (DISK, (r.stderr or r.stdout)[-800:]))
-            return 1
+        # THE SAME `make`, AND IT DOES NOTHING once the runner has built the
+        # artefact: Row(wants=...) declares it and os88test's prebuild builds
+        # it before any row starts. That is what lets this row drop
+        # builds=True and share the emulator lane.
+        os88fixture.need(DISK)
     for machine, cardk, w, h in [t for t in MACHINES
                                  if not a.machine or t[0] == a.machine]:
         session(machine, cardk, w, h, a.png, a.project)

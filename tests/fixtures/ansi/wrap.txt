@@ -1,0 +1,65 @@
+fixture: wrap
+  The wrap rule, which is the one place a terminal's arithmetic shows.
+  A glyph in column 80 stays visible and does not move the cursor; the next
+  GLYPH wraps; any cursor motion cancels it; and at the bottom right the
+  screen scrolls.
+
+stream:  362 bytes
+cursor:  row 24 col 1 (0-based)   attribute 07   276 glyph(s)
+state:   GROUND   bells 0   scrolls 1
+cursor visible: True
+
+    +--------------------------------------------------------------------------------+
+  0 |W                                                                               |
+  1 |                                                                               Y|
+  2 |                                                                                |
+  3 |                                                                           abcde|
+  4 |                                                                                |
+  5 |c                                                                              Z|
+  6 |                                                                                |
+  7 |                                                                              qP|
+  8 |                                                                                |
+  9 |long: ##########################################################################|
+ 10 |################################################################################|
+ 11 |######                                                                          |
+ 12 |                                                                                |
+ 13 |                                                                                |
+ 14 |                                                                                |
+ 15 |                                                                                |
+ 16 |                                                                                |
+ 17 |                                                                                |
+ 18 |tabs:   1       2       3       4                                               |
+ 19 |                                                                               c|
+ 20 |lamped                                                                          |
+ 21 |                                                                                |
+ 22 |                                                                                |
+ 23 |                                                                               S|
+ 24 |T                                                                               |
+    +--------------------------------------------------------------------------------+
+
+attributes, run-length encoded, one row per line:
+  0 80*07
+  1 80*07
+  2 80*07
+  3 80*07
+  4 80*07
+  5 80*07
+  6 80*07
+  7 80*07
+  8 80*07
+  9 80*07
+ 10 80*07
+ 11 80*07
+ 12 80*07
+ 13 80*07
+ 14 80*07
+ 15 80*07
+ 16 80*07
+ 17 80*07
+ 18 80*07
+ 19 80*07
+ 20 80*07
+ 21 80*07
+ 22 80*07
+ 23 80*07
+ 24 80*07

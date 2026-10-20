@@ -1,0 +1,10 @@
+# Course and mode menus: an easy, rolling C major (C Am F G).  Original.
+title Warm Up
+tempo 116
+loop 0
+v1 o5 e4 g4 e8 d8 c4 | o5 c4 e4 c8 o4 b8 a4 | o5 f4 a4 f8 e8 f4 | o5 d4 g4 d8 e8 d4 |
+v1 o5 g4 e4 g8 a8 g4 | o5 a4 e4 a8 g8 e4 | o5 a4 f4 a8 o6 c8 o5 a4 | o5 g4 d4 e8 d8 g4 |
+v2 o4 c4 e4 g4 e4 | o4 a4 o5 c4 e4 c4 | o4 a4 o5 c4 f4 c4 | o4 g4 b4 o5 d4 o4 b4 |
+v2 o4 c4 e4 g4 e4 | o4 a4 o5 c4 e4 c4 | o4 a4 o5 c4 f4 c4 | o4 g4 b4 o5 d4 o4 b4 |
+v3 o3 c2 g2 | o2 a2 o3 e2 | o2 f2 o3 c2 | o2 g2 o3 d2 |
+v3 o3 c2 g2 | o2 a2 o3 e2 | o2 f2 o3 c2 | o2 g2 o3 d2 |

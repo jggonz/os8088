@@ -5,10 +5,11 @@
     python3 tools/stkdepth.py drivers/ether/ether.asm            # every root
 
 `tools/stkwater.py` says HOW DEEP a task slice went; this says WHERE, and it
-says it without an emulator, a network or a lucky sample. `SCH_STACK` is 384
-bytes for every background task (SPEC.md 8) and `ETHER.DRV`'s service worker
-has been measured at 208 of them, so "which chain do we cut" is a question with
-a numeric answer and this is what answers it.
+says it without an emulator, a network or a lucky sample. A background task
+gets the smallest slot class that fits what it declared, 128 to `SCH_STACK` =
+384 (SPEC.md 8.7), and `ETHER.DRV`'s service worker has been measured at 208
+of a 384 slice, so "which chain do we cut" is a question with a numeric answer
+and this is what answers it.
 
 --- WHAT IT COUNTS ---------------------------------------------------------
 The NASM listing, not the source: `%if` is already resolved and every byte has
@@ -58,6 +59,7 @@ handler STAGED its reply instead of sending it inline" - and the answer, 140
 down to 126, is why that change was not worth making on its own.
 """
 import argparse
+import atexit
 import os
 import re
 import shutil
@@ -85,7 +87,12 @@ RET = re.compile(r"^\s*ret(f|n)?\b")
 
 
 def assemble(asm, includes):
+    # GONE AT EXIT: the callers read the listing and the map after this
+    # returns, so it cannot be a `with` - and a bare mkdtemp left ~2 MB a
+    # package in /tmp on every `make` (the stack-class rows run this), 25 GB
+    # of them in three days of one session before the disk filled
     d = tempfile.mkdtemp()
+    atexit.register(shutil.rmtree, d, True)
     src = os.path.join(d, "a.asm")
     mp = os.path.join(d, "a.map")
     lst = os.path.join(d, "a.lst")
@@ -113,6 +120,50 @@ def symbols(mp):
     return out
 
 
+def epilogues(lst, syms):
+    """{label: [registers]} for every global label that is nothing but a run
+    of `pop`s and a `ret` - a SHARED EPILOGUE LADDER, entered by `jmp`.
+
+    drivers/ether/inet.inc's ep_* is the worked example: a routine that saved
+    some tail of AX..BP ends `jmp ep_<the last it pushed>` instead of its own
+    pops. Read alone, that routine pushes and never pops, so every register
+    it saved looked CLOBBERED and every `STKDEPTH-NOSAVE` that leant on it
+    failed. The run is walked in address order and straight through the
+    ladder's own labels, which is what makes ep_di's list include the pops
+    that ep_si, ep_dx and the rest also begin with."""
+    ins = []
+    for line in open(lst, errors="replace"):
+        m = re.match(r"^\s*\d+\s+([0-9A-F]{8})\s+(.*)$", line)
+        if not m:
+            continue
+        rest = m.group(2)
+        inc = re.search(r"<\d+>", rest)
+        text = rest[inc.end():] if inc else \
+            re.sub(r"^[0-9A-F\[\]<>()-]+\s*", "", rest)
+        text = text.split(";")[0].strip()
+        if text and not re.match(r"^[\w.]+:$", text):
+            text = re.sub(r"^[\w.]+:\s*", "", text)
+            ins.append((int(m.group(1), 16), text))
+    at = {}
+    for i, (addr, _t) in enumerate(ins):
+        at.setdefault(addr, i)
+    out = {}
+    for addr, name in syms.items():
+        i = at.get(addr)
+        if i is None:
+            continue
+        regs = []
+        while i < len(ins) and POP.match(ins[i][1]):
+            r = _reg(ins[i][1].split()[-1])
+            if not r:
+                break
+            regs.append(r)
+            i += 1
+        if i < len(ins) and RET.match(ins[i][1]) and regs:
+            out[name] = regs
+    return out
+
+
 def routines(lst, syms):
     """(routines, indirect sites, entry pushes, self-written regs)."""
     starts = sorted(syms)
@@ -129,6 +180,7 @@ def routines(lst, syms):
                 hi = mid - 1
         return syms.get(best)
 
+    ladder = epilogues(lst, syms)
     rout, cur, d, mx = {}, None, 0, 0
     pushes, pops, owns = {}, {}, {}          # BALANCED pushes = "saved"; a
     indirect = []                            # register written any other way
@@ -219,6 +271,11 @@ def routines(lst, syms):
             # routine's own control flow and are dropped by `deepest`, the
             # same way a `call .local` is.
             rout[cur][1].append((d, JMP.match(text).group(1), "tail"))
+            # ...and a jump into a SHARED EPILOGUE is this routine's own
+            # exit: the pops it lands on are the other half of this routine's
+            # pushes, so they count here (see `epilogues`)
+            for r in ladder.get(JMP.match(text).group(1), ()):
+                pops[cur][r] = pops[cur].get(r, 0) + 1
         elif INT.match(text):
             mx = max(mx, d + 6)
         mx = max(mx, d)
@@ -465,10 +522,17 @@ def main():
                          "source and exit - the build gate")
     ap.add_argument("--top", type=int, default=12,
                     help="how many roots to list when none is named")
+    ap.add_argument("--listing", metavar="PREFIX",
+                    help="walk PREFIX.lst and PREFIX.map - the listing and map "
+                         "the BUILD wrote beside the image (the Makefile's "
+                         "STKLST) - instead of assembling the package again")
     a = ap.parse_args()
     inc = a.inc or [os.path.dirname(a.asm) + "/", "drivers/net/",
                     "drivers/ramdisk/", "drivers/", "apps/"]
-    lst, mp = assemble(a.asm, inc)
+    if a.listing:
+        lst, mp = a.listing + ".lst", a.listing + ".map"
+    else:
+        lst, mp = assemble(a.asm, inc)
     syms = symbols(mp)
     rout, indirect, saves, owns = routines(lst, syms)
     if a.check:
@@ -488,6 +552,19 @@ def main():
         for who, addr in indirect[:8]:
             print("          %s at 0x%04X" % (who, addr))
     leaves = tuple(a.leaf)
+    # A ROOT THAT IS NOT IN THIS IMAGE IS AN ERROR, NOT A ZERO. `--from` on a
+    # label the listing does not carry used to print "== root: 0 bytes ==",
+    # and tests/unit/t_stkclass.py read that 0 as a measured chain: PIXELSTEIN's
+    # worker lives in pxgame.asm (part 0) and the gate walked the LOADER's
+    # source for it, so the package passed at "0 + 64 in 384" while nothing
+    # had been walked at all. A gate cannot tell a shallow chain from an
+    # absent one unless this refuses.
+    missing = [r for r in a.roots if r not in rout]
+    if missing:
+        print("stkdepth: %s does not assemble a routine named %s - is the "
+              "worker in another image (a parts package's part 0)?"
+              % (a.asm, ", ".join(missing)))
+        return 2
     roots = a.roots or sorted(
         rout, key=lambda n: -deepest(rout, n, (), leaves)[0])[:a.top]
     for r in roots:

@@ -146,6 +146,66 @@ def sectors(row):
     return 0 if not row["off"] else (row["len"] + 511) // 512
 
 
+def run_sectors(rows_):
+    """The eager read run in UNPACKED sectors - the figure SPEC.md 20.12.11
+    bounds at OP_SECMAX (os88partsbody.inc's `cmp dx, OP_SECMAX / jae .bad`,
+    and on the unpacked side `op_usecs` likewise; it was 128 until the carve
+    passed 64KB): every filed row that is not LAZY,
+    at its unpacked `len`, which OP_COMP does not relieve because the CLAIM
+    is cut from the unpacked total. A packed part on the floppy is fewer
+    sectors than this; the bound is not about the floppy."""
+    run = 0
+    for r in rows_:
+        if not r["off"] or r["flags"] & EQU["OP_LAZY"]:
+            continue
+        run += sectors(r)
+    return run
+
+
+def run_of(path):
+    """(run sectors, rows) of a packed .o88 on disk - the parts table decoded
+    out of the IMAGE (os88pkg.image_unwrap: the file is not the image)."""
+    import os88pkg
+    raw = open(path, "rb").read()
+    blob = os88pkg.image_unwrap(raw)
+    rows_ = rows(blob[:_u16(blob, 8)])
+    return run_sectors(rows_), rows_
+
+
+def image_rows(raw):
+    """The part table's rows of a `.o88` FILE, decoded out of its IMAGE -
+    which since SPEC.md 20.13.8 may be packed, so `raw[:image]` is not it."""
+    import os88pkg
+    blob = os88pkg.image_unwrap(raw)
+    return rows(blob[:_u16(blob, 8)])
+
+
+def part_bytes(raw, i):
+    """Part `i` of a packed `.o88`, UNPACKED - what the machine will see.
+
+    THE FILE IS NOT THE IMAGE and a part is not the file either: a host check
+    about a size, a bss offset or an assembly wants THESE bytes
+    (docs/plans/O88-COMPRESSION-PLAN.md's rule, one container along). It is
+    what `tests/dispapps.py` needs the day a package's program is a PART
+    rather than its image (SPEC.md 88.10.4): comparing a fresh assembly with
+    the file's `image` then compares the LOADER with the program and reports
+    "build/ is BEHIND THE TREE" about a perfectly current tree.
+
+    `raw` is the file as it lies on the floppy; the TABLE is read out of the
+    IMAGE (os88pkg.image_unwrap), because since SPEC.md 20.13.8 a parted
+    package's image may itself be packed - and the offsets it holds are
+    sectors of `raw`, so the part's bytes come out of `raw`.
+    """
+    row = image_rows(raw)[i]
+    if not row["off"]:
+        raise ValueError("part %d has no file bytes (a scratch row)" % i)
+    at = row["off"] * 512
+    if not row["flags"] & EQU["OP_COMP"]:
+        return raw[at:at + row["len"]]
+    import os88lz
+    return os88lz.decompress(raw[at:at + row["zkb"]], os88lz.LZ4, row["len"])
+
+
 # --- and the same question asked of the harness ------------------------------
 
 _PYCONST = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*(\d+)\s*(?:#.*)?$", re.M)
@@ -219,7 +279,43 @@ def pkg_copies(root=None):
     return out
 
 
+def main_run(argv):
+    """`os88parts.py --run FILE.o88 [--max-run N]`: print the eager run in
+    unpacked sectors and fail if it is not under N (default OP_SECMAX, SPEC.md
+    20.12.11's bound - a run that reaches it fails at LAUNCH, on the machine,
+    so a package recipe asserts it where the file is made). A recipe passes a
+    SMALLER N when it has a reason of its own to stay under one."""
+    path, limit = None, EQU["OP_SECMAX"]
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--run":
+            path = argv[i + 1]
+            i += 2
+        elif argv[i] == "--max-run":
+            limit = int(argv[i + 1])
+            i += 2
+        else:
+            print("os88parts: unknown argument %r" % argv[i])
+            return 2
+    if path is None:
+        print("os88parts: --run FILE.o88 [--max-run N]")
+        return 2
+    run, rows_ = run_of(path)
+    for k, r in enumerate(rows_):
+        print("  part %d %-5s %s len %6d%s" % (
+            k, "SEG" if r["kind"] == EQU["OP_SEG"] else "ASSET",
+            "scratch" if not r["off"] else "sector %3d" % r["off"], r["len"],
+            " lazy" if r["flags"] & EQU["OP_LAZY"] else ""))
+    ok = run < limit
+    print("os88parts: %s: the eager run is %d unpacked sectors, %s %d (SPEC.md 20.12.11)"
+          % (path, run, "under" if ok else "NOT UNDER", limit))
+    return 0 if ok else 1
+
+
 def main():
+    import sys
+    if len(sys.argv) > 1:
+        return main_run(sys.argv[1:])
     for n in sorted(OFF, key=lambda k: OFF[k]):
         print("  %-12s os88_image_end + %d" % (n, OFF[n]))
     print("  %-12s %d" % ("OP_BSS", OP_BSS))

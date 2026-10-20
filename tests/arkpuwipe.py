@@ -2,8 +2,7 @@
 """Does a capsule the blit REFUSED leave a streak behind it? (SPEC.md 44.10.6.2)
 
     make && python3 tests/arkpuwipe.py                      # trigger B
-    make small && python3 tests/arkpuwipe.py --small \
-        --img build/small360.img                           # trigger A
+    make small && python3 tests/arkpuwipe.py --small       # trigger A, Hercules
 
 **IT RUNS ON VGA, AND THAT IS NOT A PREFERENCE.** `ark_scale_vel` floors
 `ARK_PUFALL` at 1 on CGA (`ark_met_sml`'s velocity scale is 37), so the strip a
@@ -42,9 +41,13 @@ comparing two builds:
 
   aligned    the capsule's absolute x on the byte grid - the blit TAKES it,
              the band owns the erase, and the wipe must stay out of the way
-  unaligned  the same capsule one pixel over: `gfx_blit1_x` refuses any x with
-             `test ax, 7` non-zero, which is TRIGGER B - the shipped kernel
-             once the window's content origin stops being 8-aligned
+  unaligned  the same capsule one pixel over: `gfx_blit1_x` refused any x with
+             `test al, 7` non-zero, which is TRIGGER B - the shipped kernel
+             once the window's content origin stopped being 8-aligned. Since
+             SPEC.md 5.4.2.8 kern_big DRAWS such a band instead, so the row
+             puts the refusal back in the running kernel (`refuse_offgrid`) -
+             without it this column takes the blit and the forced one below
+             measures nothing
   forced     the same unaligned drop with `.slow`'s clear of `[ark_puband]`
              patched to a SET in the running image, so both draw paths raise it
              and nothing lowers it - which is exactly what reading `[ark_spok]`
@@ -61,7 +64,7 @@ The playfield is frozen the way cycweb.py freezes the wave - `ark_do_ball`,
 because a ball crossing the capsule's column is the one thing that repaints the
 streak away for free, and the run would then measure the ball.
 """
-import sys, os, time, argparse, tempfile, subprocess
+import sys, os, argparse, tempfile, subprocess
 
 # THIS TREE'S tools, not /home/user/os8088's. Every other test here hard-codes
 # that path, which is right in the checkout it was written in and wrong in a
@@ -73,6 +76,15 @@ import sys, os, time, argparse, tempfile, subprocess
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_ROOT, "tests"))
+# --small IS A DIFFERENT KERNEL TO EVERY SYMBOL READER, not just to this file:
+# dispcp and os88ui resolve through os88sym too, and resolved against the big
+# map they read wm_wins at the wrong place and see no windows at all ("a Disk
+# window showing B: did not happen ... every window: []"). So the switch is
+# tests/paint1small.py's, made before anything resolves a symbol.
+if "--small" in sys.argv:
+    import os88build as _B
+    _B.use_build("build/smallk")
+    os.environ.setdefault("OS88_DEFINES", "KERN_SMALL")
 import os88marty, os88mouse, os88sym, os88geom
 import dispcp
 from cycweb import Pkg, u16, diff, bbox, shot
@@ -104,11 +116,11 @@ def pkg_syms(src="apps/arkanoid/arkanoid.asm", incs=("apps/",)):
 def find_win(m, S, prefix, stride):
     """The window whose title starts with `prefix`, at THIS kernel's stride.
 
-    os88geom hard-codes WIN_SIZE = 34, which is kern_big's. kern_small's record
-    is 28 bytes (SPEC.md 13.7/13.9 are not in it), so every slot but 0 decodes
-    as garbage there - slot 1 reads flags 0xD0, no WF_USED, and a running app
-    is reported as "it did not launch". The first 28 bytes are the same record
-    in both, so the stride is the whole of the difference.
+    The stride is the caller's: os88geom.WIN_SIZE, which os88geom takes per
+    kernel off $OS88_DEFINES (72 on kern_big, 65 on kern_small today). A
+    literal here went stale twice - 34/28, then 72/65 - and a wrong stride
+    decodes every slot but 0 as garbage, so a running app reads as "it did
+    not launch".
     """
     import struct
     raw = m.read(S("wm_wins"), os88geom.MAX_WIN * stride)
@@ -138,6 +150,15 @@ def stable_shot(m, card, tries=6):
     "residue", in whichever column got unlucky. Two identical reads in a row
     is the cheap fix and it costs nothing when the screen is genuinely still.
     """
+    # **RESUME FIRST.** Every caller reaches this straight out of an
+    # `advance(frames=...)`, which STOPS the emulator - and a stopped guest
+    # cannot settle, because its screen can never change again. That used to
+    # look like success: `settle` saw two identical frames at once and
+    # returned, so the "two identical reads" below were trivially satisfied
+    # and this routine photographed a machine that was not running. It is a
+    # loud failure now (os88marty's guest-stall check), which is how it was
+    # found; the fix is to say `run` rather than to weaken the check.
+    m.run()
     last = shot(m, card=card)
     for _ in range(tries):
         os88marty.settle(m)
@@ -198,6 +219,39 @@ def old_flag(m, p, image, on):
     if at < 0 or image.find(pat + b"\x00", at + 1) >= 0:
         raise RuntimeError("cannot find .slow's single clear of ark_puband")
     m.write(p.seg * 16 + at + 4, b"\x01" if on else b"\x00")
+
+
+def refuse_offgrid(m, S):
+    """Put TRIGGER B back in the running kernel: an x off the byte grid is
+    REFUSED again.
+
+    SPEC.md 5.4.2.8 retired it on kern_big - `gfx_blit1_x`'s `test al, 7`
+    now branches to `.offg`, which cuts the band at x exactly - so the
+    unaligned capsule is TAKEN, `puband` reads 1 in every column and the
+    forced column has no `.slow` path left to break. The row then went red on
+    "the forced column measured NOTHING", which was true and was about the
+    kernel having moved rather than the package. A refusal can still happen
+    (kern_small refuses every off-grid x, trigger A), so the package's
+    handling of one still wants gating - and the faithful reproduction is the
+    kernel as it was: an x off the grid sent to `.refuse`, which is what the
+    `%else` arm still assembles.
+
+    The row and width checks come FIRST since 5.4.2.8's own refusal fix, so
+    the x test is `test al, 7 / jz .argok` with `.offg` the fall-through:
+    the patch is a `jmp short .refuse` over `.offg`'s first two bytes, which
+    an off-grid band reaches only after the arguments have passed.
+    """
+    at = S("gfx_blit1_x.offg")
+    code = m.read(at - 4, 4)
+    if code[:3] != b"\xA8\x07\x74":
+        raise RuntimeError("gfx_blit1_x.offg does not follow `test al, 7 / "
+                           "jz`: %s" % code.hex())
+    if at + code[3] - 256 * (code[3] > 127) != S("gfx_blit1_x.argok"):
+        raise RuntimeError("gfx_blit1_x's jz is not to .argok")
+    rel = S("gfx_blit1_x.refuse") - (at + 2)
+    if not -128 <= rel <= 127:
+        raise RuntimeError(".refuse is out of a short jump's reach (%d)" % rel)
+    m.write(at, bytes([0xEB, rel & 0xFF]))
 
 
 def run(m, p, frames, steps, stop):
@@ -276,14 +330,17 @@ def main():
                          "them against build/kernel.bin, which is the BIG "
                          "kernel and a different binary on purpose")
     a = ap.parse_args()
+    S = os88sym.linear          # against kern_small's map under --small
     if a.small:
-        _s = os88sym.syms(("KERN_SMALL",), check=False)
-
-        def S(name):
-            return (os88sym.segment_of(name, ("KERN_SMALL",), check=False) * 16
-                    + _s[name])
-    else:
-        S = os88sym.linear
+        # kern_small has no VGA (docs/plans/MONO-RECLAIM-PLAN.md) and CGA
+        # floors ARK_PUFALL to 1 (above), so Hercules is the only adapter the
+        # trigger-A measurement can be taken on
+        if a.machine == "os8088_xt_vga":
+            a.machine = "os8088_5150_herc_gla"
+        if a.img == "build/os8088-360.img":
+            a.img = "build/small360.img"
+        if a.apps == "build/apps360.img":
+            a.apps = "build/smallapps360.img"
 
     with os88marty.launch(a.img, apps=a.apps, machine=a.machine,
                           boot=False) as m:
@@ -298,13 +355,18 @@ def main():
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        stride = 28 if a.small else os88geom.WIN_SIZE
-        title = seg = box = None
-        for _ in range(20):             # kern_small reads the package off a
-            time.sleep(2)               # 360KB disk and is slower about it
-            title, seg, box = find_win(m, S, "ark", stride)
-            if title:
-                break
+        stride = os88geom.WIN_SIZE      # per kernel, off $OS88_DEFINES
+        found = [None, None, None]
+
+        def _up(_):
+            found[:] = find_win(m, S, "ark", stride)
+            return bool(found[0])
+        try:                            # kern_small reads the package off a
+            os88marty.until(m, _up, "the Arkanoid window",   # 360KB disk and
+                            poll=0.5, limit=40)              # is slower
+        except os88marty.MartyError:
+            pass                        # ...and a miss is diagnosed below
+        title, seg, box = found
         if title is None:
             w, h, px = m.fbuf()
             os88marty.write_png_rgb("build/arkfail.png", w, h, px)
@@ -318,7 +380,7 @@ def main():
                                "wm_wins=%#x slots %s"
                                % (os88geom.windows(m, S), S("wm_wins"), slots))
         mo.to(2, 2)                     # the pointer off the playfield
-        time.sleep(1)
+        os88marty.pace(m, 1)
 
         syms, image = pkg_syms(a.src)
         p = Pkg(m, seg, syms)
@@ -328,13 +390,18 @@ def main():
             raise RuntimeError("the ARKANOID.O88 running here is not %s - "
                                "run make" % a.src)
         card = 0
+        if not a.small:
+            refuse_offgrid(m, S)
         ox = p.rw("ark_ox")
         fall = p.rw("ark_pufall")
         freeze(m, p)
         repaint(m, p, a.frames)
 
-        print("window %s content %s  ark_ox=%d ark_spok=%d puband=%s"
-              % (title, box, ox, p.rb("ark_spok"),
+        # ark_spok left the package in size pass 1 (SPEC.md 44.11): the
+        # bands are composed before the window exists, so it was always 1
+        print("window %s content %s  ark_ox=%d ark_spok=%s puband=%s"
+              % (title, box, ox,
+                 p.rb("ark_spok") if "ark_spok" in syms else "-",
                  "yes" if "ark_puband" in syms else "NO (pre-44.10.6.2)"))
         rows = []
         for name, skew, forced in (("aligned", 0, False),

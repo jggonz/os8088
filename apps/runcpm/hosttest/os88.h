@@ -81,11 +81,18 @@ void os88_wm_ownbg(void *win, int on);
 void os88_wm_onwake(void *win);
 int  os88_wm_wake(void *win);
 int  os88_fullscreen(void *win, int enter);
+int  os88_key_down(int scan);
+
+/* SPEC.md 11.2.1.1's full-screen chord, mirrored from apps/cc/os88.h */
+#define OS88_SCAN_ENTER 0x1C
+#define OS88_SCAN_ALT   0x38
 void os88_menu_set(void *win, struct os88_menuset *set);
 void os88_about_set(void *win);
 
 void os88_wm_destroy(void *win);
 int  os88_task_spawn(void *win);
+int  os88_task_restartable(int on);   /* SPEC.md 66.6.2 - a stub here:
+                                       * the host has no heap to compact */
 void os88_task_alive(void *win);
 void os88_task_sleep(int ticks);
 int  os88_snd_tone(int hz, int ticks, int prio);
@@ -100,6 +107,7 @@ int  os88_peek(unsigned seg, unsigned off);
 void os88_poke(unsigned seg, unsigned off, int value);
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
+unsigned os88_part_seg(int i);
 int  os88_file_write_seg(const char *name, unsigned seg, unsigned count);
 int  os88_file_delete(const char *name);
 int  os88_file_rename(const char *oldname, const char *newname);

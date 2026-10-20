@@ -34,7 +34,8 @@ WHAT IT CHECKS THAT --verify CANNOT.
      that misbehaves on the host OS rather than on os8088, which is the
      hardest place for this project to notice.
 
-  3. SPEC.md 19.6's ATTRIBUTES.  `KERNEL.SYS` and every `.DRV` hidden +
+  3. SPEC.md 19.6's ATTRIBUTES.  `KERNEL.SYS`, `BOOTHD.SYS` (SPEC.md
+     52.10.16), `COLDHMA.SYS` (docs/plans/HMA-PLAN.md) and every `.DRV` hidden +
      system + read-only, `SYSTEM.CFG` hidden + system but WRITABLE (the
      kernel rewrites it - make it read-only and the first save locks out
      every save after it), everything else on a system disk visible and
@@ -43,6 +44,14 @@ WHAT IT CHECKS THAT --verify CANNOT.
   4. THE BOOT SECTOR'S SECTOR COUNT MATCHES THE KERNEL.  It is baked in at
      assembly time from the measured kernel size; if it is short the machine
      boots into a partly-loaded kernel, which is a black screen with no clue.
+
+  5. THE HARD-DISK BOOT SECTOR RIDES WITH ITS KERNEL (SPEC.md 52.10.16).
+     Every system disk carries `BOOTHD.SYS` in its root, byte for byte the
+     `build/boothd.bin` built with the KERNEL.SYS beside it - because the
+     installer writes the SOURCE disk's copy to a hard disk, and a disk
+     carrying another build's (or none) installs a machine that freezes at
+     `Booting HDD0` (or is refused). `t_vbrseg` is the other half: that
+     boothd.bin's constants are the kernel's own.
 """
 import os
 import struct
@@ -55,9 +64,12 @@ from harness import check, eq, done                       # noqa: E402
 
 A_RDONLY, A_HIDDEN, A_SYSTEM, A_VOLID, A_DIR = 0x01, 0x02, 0x04, 0x08, 0x10
 
-# The IBM standard formats, by total sector count. SPEC.md 19.3: these are
-# not ours to choose - DOS reads a floppy's geometry out of its own table and
-# ignores the BPB, so anything else is a disk the host OS misreads.
+# The IBM standard formats, by total sector count. SPEC.md 19.3: DOS does not
+# honour a floppy's RsvdSecCnt - it looks for the FAT at LBA 1 whatever the
+# BPB says - so a layout that moves the FAT is a disk the host OS misreads.
+# It DOES take SecPerClus and FATSz16 from the boot sector (measured on IBM DOS
+# 3.30, docs/reports/CLUSTER-SIZE-2026-10-17.md), which is the one freedom
+# CLUSTERS below spends.
 # (bytes/sec, sec/clus, reserved, FATs, root entries, media, FAT sectors, spt, heads)
 STANDARD = {
     2880: (512, 1, 1, 2, 224, 0xF0, 9, 18, 2),   # 1.44MB
@@ -66,10 +78,24 @@ STANDARD = {
     720:  (512, 2, 1, 2, 112, 0xFD, 2, 9, 2),    # 360KB
 }
 
+# The images that leave the IBM cluster size on purpose, as (sec/clus, FAT
+# sectors) - SPEC.md 19.3.2. An image named here MUST have exactly that, so a
+# recipe that loses its `--spc` fails here rather than shipping a fuller disk.
+CLUSTERS = {
+    "os8088-360.img": (1, 3),   # 512-byte clusters: 11KB free -> 22KB
+}
+
 SYSTEM_IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img",
                  "os8088-360.img"]
 DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
-               "media360.img"]
+               "media360.img",
+               # ...and the CATEGORY DISKS (SPEC.md 24.6), which are 360KB
+               # only, like the media disk and for its reason one step on.
+               # They are DATA images and not system ones: no boot sector of
+               # ours, no kernel, so t_canary and t_blobruns - which are both
+               # about a bootable volume - have nothing to say about them and
+               # do not list them.
+               "office360.img", "network360.img", "games360.img"]
 
 
 class Vol:
@@ -146,13 +172,16 @@ def read(p):
 def check_geometry(v):
     want = STANDARD.get(v.tot16)
     if not check(want is not None, "%s: %d total sectors is not a standard format"
-                 % (v.name, v.tot16), "SPEC.md 19.3 - DOS reads a floppy's geometry "
-                 "from its own table, so a non-standard one is misread on the host"):
+                 % (v.name, v.tot16), "SPEC.md 19.3 - a floppy shape outside the IBM "
+                 "table is one a host OS has no reason to read"):
         return
+    if v.name in CLUSTERS:
+        spc, fatsz = CLUSTERS[v.name]
+        want = want[:1] + (spc,) + want[2:6] + (fatsz,) + want[7:]
     got = (v.byts, v.spc, v.rsvd, v.nfat, v.rootent, v.media, v.fatsz, v.spt, v.heads)
     eq(got, want, "%s: BPB is the standard %dKB format" % (v.name, v.tot16 * 512 // 1024),
-       "a drifted BPB builds, verifies and mounts in os8088 and is garbled by DOS "
-       "- 52,224 bytes free was the symptom last time (SPEC.md 19.3)")
+       "a drifted BPB builds, verifies and mounts in os8088 and can be garbled by "
+       "DOS - 52,224 bytes free was the symptom last time (SPEC.md 19.3)")
     eq(struct.unpack_from("<H", v.blob, 510)[0], 0xAA55,
        "%s: boot signature" % v.name)
     check(v.blob[0] in (0xEB, 0xE9), "%s: boot sector starts with a jump" % v.name,
@@ -201,7 +230,7 @@ def check_kernel(v, kernel):
        "%s: KERNEL.SYS is contiguous" % v.name,
        "the boot sector has no cluster-chain walker (SPEC.md 19.3) - a fragmented "
        "kernel builds, verifies and mounts cleanly and does not boot")
-    eq(size, len(kernel), "%s: KERNEL.SYS size matches build/kernel.bin" % v.name)
+    eq(size, len(kernel), "%s: KERNEL.SYS size matches build/kernel.sys" % v.name)
     base = v.cluster_lba(chain[0]) * v.byts
     eq(v.blob[base:base + len(kernel)], kernel,
        "%s: KERNEL.SYS bytes are the kernel this tree built" % v.name,
@@ -211,8 +240,26 @@ def check_kernel(v, kernel):
     check(secs * 512 >= len(kernel), "%s: kernel sector count covers the image" % v.name)
 
 
+def check_hdboot(v, vbr):
+    """SPEC.md 52.10.16: BOOTHD.SYS in the root is THIS build's boothd.bin."""
+    rows = [r for r in v.walk() if r[0] == "" and r[1] == b"BOOTHD  SYS"]
+    if not check(len(rows) == 1, "%s: exactly one BOOTHD.SYS in the root" % v.name,
+                 "the installer reads the SOURCE disk's boot sector and refuses a "
+                 "disk without one (SPEC.md 52.10.16)", got=len(rows)):
+        return
+    _, _, attr, clus, size = rows[0]
+    eq(size, 512, "%s: BOOTHD.SYS is one sector" % v.name)
+    base = v.cluster_lba(clus) * v.byts
+    eq(v.blob[base:base + 512], vbr,
+       "%s: BOOTHD.SYS is the boothd.bin built with this kernel" % v.name,
+       "the installer writes it in front of the KERNEL.SYS on the same disk; "
+       "another build's sector far-calls that kernel's decoder at the wrong "
+       "offset and the machine freezes at `Booting HDD0` (SPEC.md 52.10.16)")
+
+
 def check_attrs(v, is_system):
-    """SPEC.md 19.6, plus the two files the KERNEL owns.
+    """SPEC.md 19.6, plus the two files the KERNEL owns. Only KERNEL.SYS and
+    the drivers are read-only; everything else on any disk is writable.
 
     `SYSTEM.CFG` (SPEC.md 51.5) and `ASSOC.DAT` (SPEC.md 54.7) are one class
     and not two: both are written by the kernel, so both are hidden + system
@@ -235,12 +282,19 @@ def check_attrs(v, is_system):
             check(not (attr & hs), "%s: %s is not hidden on a DATA disk" % (v.name, nm),
                   "a data disk is the user's; a hidden+system file there cannot be "
                   "listed or deleted from inside os8088 (SPEC.md 19.6)")
-        elif name11 == b"KERNEL  SYS" or name11.endswith(b"DRV"):
+        elif name11 in (b"KERNEL  SYS", b"BOOTHD  SYS", b"COLDHMA SYS") \
+                or name11.endswith(b"DRV"):
+            # BOOTHD.SYS is the hard-disk boot sector built with that kernel,
+            # which the installer reads off the source (SPEC.md 52.10.16), and
+            # COLDHMA.SYS the HMA image cut from it (docs/plans/HMA-PLAN.md)
             eq(attr & (hs | A_RDONLY), hs | A_RDONLY,
                "%s: %s is hidden+system+read-only" % (v.name, nm))
         else:
-            check(attr & A_RDONLY, "%s: %s is read-only on the system disk" % (v.name, nm),
-                  "the boot disk holds nothing a user should delete by accident")
+            check(not (attr & A_RDONLY), "%s: %s is WRITABLE on the system disk" % (v.name, nm),
+                  "only what would unboot the disk is locked: the packages, tools, "
+                  "faces and manual are the user's to delete when they rework their "
+                  "system disk, and a read-only file is one a keep-install cannot "
+                  "replace (SPEC.md 19.6, 52.10.15.1)")
             check(not (attr & hs), "%s: %s stays VISIBLE" % (v.name, nm),
                   "TASKMGR.O88 is loaded by name from the chip menu and README.TXT is "
                   "meant to be opened - hiding either makes it unreachable")
@@ -248,7 +302,15 @@ def check_attrs(v, is_system):
 
 def main():
     build = os.path.join(ROOT, "build")
-    kernel = read(os.path.join(build, "kernel.bin"))
+    # **build/kernel.sys AND NOT kernel.bin**, because the two stopped being the
+    # same file when the kernel learned to ship compressed (SPEC.md 2.9.13).
+    # kernel.bin is the IMAGE - what runs, what os88sym resolves against, what
+    # every size guard is about - and kernel.sys is the FILE, which under
+    # KZIP is 40 sectors shorter and under no knob at all is a copy. What goes
+    # on a floppy is the file, so that is what a floppy is compared with; the
+    # Makefile ships $(KERNFILE) for exactly the same reason.
+    kernel = read(os.path.join(build, "kernel.sys"))
+    vbr = read(os.path.join(build, "boothd.bin"))
     seen = 0
     for img, is_system in ([(i, True) for i in SYSTEM_IMAGES] +
                            [(i, False) for i in DATA_IMAGES]):
@@ -263,6 +325,7 @@ def main():
         check_attrs(v, is_system)
         if is_system:
             check_kernel(v, kernel)
+            check_hdboot(v, vbr)
     check(seen == len(SYSTEM_IMAGES) + len(DATA_IMAGES),
           "every shipped image was read", got=seen)
     print("t_image: %d images, kernel %d bytes (%d sectors)"

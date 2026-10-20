@@ -60,6 +60,19 @@ in the destination must still be poison afterwards, which is the overrun test:
 the file is 2,000 bytes, the last sector is read whole into `dsk_secbuf`, and
 only 464 of its 512 bytes may reach the caller.
 
+AND THE TRANSFER'S OWN BOUNCE (SPEC.md 18.91.4), B0-B2. The file layer's
+stage above copies the sector BEFORE dsk_xfer sees it, so the transfer has
+nothing to bounce there - every case above asserts `dsk_xfer.bounce` fired
+ZERO times, which is the control on that counter. WRITE_AT's inside arm and
+every dsk_read_chain caller hand the transfer the caller's ES:BX, and
+dsk_xfer bounces the one sector through `dsk_secbuf` itself: B0 makes
+BNC.TST the ordinary way, B1 rewrites its first cluster through
+`dskw_write_at_x` from a straddling source, and B2 reads it whole through
+`dskw_read_at_x` into a straddling destination with `[dsk_rah_busy]` = 1 so
+§18.95's read cache stands aside and the bytes come off the disk. `.bounce`
+and `.unbounce` each fire exactly once per leg, ES comes back the caller's,
+and BNC.TST is checked in the guest and off the flushed floppy.
+
 `--bug` INVERTS W1: the straddling write must be REFUSED with FERR_IO, which
 is what every kernel from `2e8e292` to SPEC.md 18.4.2.1 does. That is the A/B
 this row exists to make repeatable - point it at a pre-fix image
@@ -122,17 +135,51 @@ class Caller(object):
     and so does the return trap - a near `ret` cannot cross one.
 
     SS IS LEFT ALONE, and that is a requirement rather than an economy:
-    `dskw_stage` reaches `dsk_secbuf` as `push ss / pop es`, so the staging
+    `dskw_wone` reaches `dsk_secbuf` as `push ss / pop es`, so the staging
     this file is about only works with SS = LOW_SEG.
     """
 
     def __init__(self, m, trap="dskw_rmtree"):
         self.m = m
         self.trap = os88sym.linear(trap)
-        r = m.regs()
-        # 96 bytes clear of the interrupted frame. The call below goes as deep
-        # as the BIOS's own int 13h handler, on this task's stack.
-        self.ss, self.sp = r["ss"], (r["sp"] - 96) & 0xFFFF
+        self.lock = os88sym.linear("sch_lock")
+        # **ON TASK 0's STACK, NOT ON THE INTERRUPTED TASK'S**, and this is
+        # what the row was failing on - `dskw_write_x never returned`, 2 runs
+        # in 3, at both ends of the pass (
+        # which got as far as ruling out the ROM and the box's load).
+        #
+        # It used to take the paused machine's own SS:SP and drop 96 bytes,
+        # on the reasoning that the call *"goes as deep as the BIOS's own
+        # int 13h handler, on this task's stack"*. It does - and the stack it
+        # was landing on is 128 bytes:
+        #
+        #   sch_chstack  .lowbss 0x1556  128 bytes, the ROM int 08h chain's
+        #   sch_stacks   .lowbss 0x15D6  the twelve task slices, first = 128
+        #
+        # SPEC.md 8.1.2 is why it is always that one: an idle desktop is
+        # **96.9% halted**, so a pause lands on the idle task, whose slice is
+        # the smallest class in SCH_PARTITION. Measured, the paused SP was
+        # 0x1654 - two bytes into a slice topping out at 0x1656 - and the
+        # traced call took SP down to **0x1562**, which is 116 bytes BELOW
+        # `sch_stacks`, through its canary word and into `sch_chstack`. The
+        # damage then shows up whenever something reads those bytes, which is
+        # why the row failed sometimes rather than always.
+        #
+        # `STK0_TOP` is the answer and not merely a bigger number.  Task 0 is
+        # the UI task, it owns no slice of `sch_stacks` (kernel/sched.inc's
+        # header), its stack runs from `kernel_low_end` 0x23DE to 0x25DC with
+        # nothing below it, and **it is the stack the real caller uses**: a
+        # file operation on this machine IS the UI task calling this routine.
+        # So the row now reproduces the shipping caller's stack rather than an
+        # idle task's slice, which is a better experiment as well as a
+        # survivable one.
+        #
+        # SS is still LOW_SEG, which is the requirement: `dskw_wone` reaches
+        # `dsk_secbuf` as `push ss / pop es`.  Clobbering task 0's parked frame
+        # costs nothing here - `park` clears IF, so from the first call on,
+        # nothing but this file's own calls ever executes.
+        self.ss = os88sym.equates()["LOW_SEG"]
+        self.sp = os88sym.equates()["STK0_TOP"]
 
     def call(self, name, watch=(), limit=180.0, **regs):
         """Returns (registers at the trap, {watched symbol: times hit}).
@@ -154,14 +201,73 @@ class Caller(object):
         m.setreg("sp", sp)
         m.setreg("ds", KERNEL_SEG)
         m.setreg("es", KERNEL_SEG)
+        # **INTERRUPTS ON, AND THE SCHEDULER LOCKED**, in that order of
+        # importance. `park` goes through the reset vector, so it clears FLAGS
+        # with every other register and this ran with IF = 0 for its whole
+        # life. That is not what the shipping caller does and it is why the
+        # row hung.
+        #
+        # The BIOS's floppy handler starts the MOTOR and then waits for it to
+        # come up to speed, and it times that wait on the BIOS tick at
+        # 0040:006C - a byte only IRQ0 advances. With interrupts off the tick
+        # never moves and the wait never ends: sampled at the timeout, the
+        # guest was at F000:FF23 with IF=0 and a PIC read in front of it,
+        # parked in the ROM for 540 guest seconds.
+        #
+        # THE PROOF IS THE MOTOR. `launch` settles on the first desktop, a few
+        # hundred milliseconds after the last boot read, with the motor still
+        # turning - and a handler that finds it already up skips the wait. So
+        # the row passed exactly when it won that race, which is what "2 runs
+        # in 3" was. Adding five idle guest seconds before taking over - long
+        # enough for the ROM's own motor-off timer - took it to **0 of 6**,
+        # deterministically, which is the cleanest evidence in this file.
+        #
+        # Interrupts alone are not enough, because this Caller's context is
+        # not a task the scheduler knows about: the first IRQ0 to reach
+        # `sch_switch` would park our synthetic SP into whatever `sch_cur`
+        # names. [sch_lock] is the byte `sch_isr` tests before it picks
+        # ("locked: count ticks but do not switch"), and it is exactly what
+        # `dsk_xfer` raises around every int 13h in this system. The tick
+        # still runs and still advances 0040:006C, `mou_isr` still runs on its
+        # own stack (SPEC.md 9.10), and nothing switches.
+        #
+        # It is restored to what it was after the trap, which is right
+        # whatever the routine's own inc/dec did in between: with the machine
+        # parked in our call, nothing else can have touched it.
+        was_lock = m.read(self.lock, 1)[0]
+        m.write(self.lock, bytes((was_lock + 1,)))
+        m.setreg("flags", 0x0202)
         for r, v in regs.items():
             m.setreg(r, v & 0xFFFF)
+        # **AND THE SETUP IS READ BACK.** Every line above is one debug-server
+        # round trip, and a synthetic call is exactly as good as the registers
+        # it starts with: a `setreg` that does not take leaves the value
+        # `park`'s CPU reset left - 0 for SP - and the machine then runs off
+        # with a stack pointer nobody chose. That is the residual failure this
+        # row had after the stack fix, and its signature was SS:SP = 1860:2A08
+        # with the "stack" pointing at kernel CODE. Confirming costs one round
+        # trip and turns a silent bad start into a sentence naming it, which
+        # is what the rest of this harness does for every other action.
+        want = {"ss": self.ss, "sp": sp, "cs": COLD_SEG,
+                "ip": os88sym.linear(name) - CB}
+        want.update((k, v & 0xFFFF) for k, v in regs.items())
+        got = m.regs()
+        wrong = [(k, want[k], got[k]) for k in want if got.get(k) != want[k]]
+        if wrong:
+            raise SystemExit(
+                "dskwstage: the call setup for %s did not take - %s. Every "
+                "register above is a debug-server round trip and one of them "
+                "was not applied; running anyway would report on a machine "
+                "nobody configured"
+                % (name, ", ".join("%s wanted %04X, reads %04X" % w
+                                   for w in wrong)))
+
         hits = dict((w, 0) for w in watch)
         while True:
             m.run()
             if m.wait_stop(limit) is None:
-                raise SystemExit("dskwstage: %s never returned - the machine "
-                                 "is still running after %gs" % (name, limit))
+                raise SystemExit("dskwstage: %s never returned - %s"
+                                 % (name, _where(m, limit)))
             r = m.regs()
             flat = (r["cs"] << 4) + r["ip"]
             if flat in wmap:
@@ -171,7 +277,154 @@ class Caller(object):
                 raise SystemExit("dskwstage: %s stopped at %#07x, which is "
                                  "neither the return trap %#07x nor a watched "
                                  "symbol" % (name, flat, self.trap))
+            m.write(self.lock, bytes((was_lock,)))
             return r, hits
+
+
+def _where(m, limit):
+    """WHERE the guest is, for a call that never came back.
+
+    `wait_stop`'s budget is GUEST seconds now (os88marty, and
+    the pass-3 soak is what made it so), so a
+    timeout here means the machine really did run that long inside the call -
+    it is not the box being loaded. What it does NOT say is where, and "the
+    machine is still running" was the whole of the old message: E2 spent four
+    runs and two ROM sets on it and got no further than "the hang is still
+    open".
+
+    So sample the program counter. A hang has a shape: a tight loop reads as
+    two or three addresses in one routine, a wait on a device reads as one,
+    and a machine walking off into nothing reads as addresses with no symbol
+    near them at all. Six samples a fifth of a guest second apart cost
+    nothing and turn "it hung" into "it is spinning in <symbol>+0x<n>".
+
+    The samples are taken PAUSED and the machine is left running, because the
+    caller raises straight after and the `with launch(...)` block still has to
+    tear the emulator down.
+    """
+    # **SYMBOL VALUES ARE SECTION-RELATIVE, and IP is what to compare them
+    # against.** `os88sym.syms()` answers offsets within a section and
+    # `os88sym.linear()` answers a flat address; a walker that sorts the first
+    # and searches with the second gets a name for every address and every
+    # name is wrong. It cost this diagnosis a whole pass: adjacent addresses
+    # came back `menu_drop.poll`, `fpg_begin.shr`, `wm_db_b`, `fm_saycl` -
+    # four unrelated subsystems in twenty bytes, which is the tell.
+    #
+    # This kernel is near-model (CLAUDE.md), so within a segment the offset IS
+    # the section offset: KERNEL_SEG holds `.text`/`.bss` and COLD_SEG holds
+    # `.cold` (SPEC.md 2.6). So pick the table by CS and search it with IP.
+    _sec = os88sym.sections()
+    _syms = os88sym.syms()
+    _by_seg = {
+        os88sym.KERNEL_SEG: sorted((v, k) for k, v in _syms.items()
+                                   if _sec.get(k) in (".text", ".bss")),
+        COLD_SEG: sorted((v, k) for k, v in _syms.items()
+                         if _sec.get(k) == ".cold"),
+    }
+
+    def near(cs, ip):
+        tab = _by_seg.get(cs)
+        if tab is None:
+            return "ROM" if cs >= 0xF000 else "not a kernel segment"
+        best, lo = None, 0
+        for v, k in tab:
+            if v <= ip:
+                best, lo = k, v
+            else:
+                break
+        return ("%s+0x%x" % (best, ip - lo)) if best is not None else "?"
+
+    seen, extra = [], []
+    for i in range(6):
+        m.pause()
+        r = m.regs()
+        flat = (r["cs"] << 4) + r["ip"]
+        seen.append("%04X:%04X (%s)" % (r["cs"], r["ip"],
+                                        near(r["cs"], r["ip"])))
+        if i == 0:
+            # IF is the first thing to know when the PC is in the ROM: the
+            # BIOS's int 13h hands the transfer to DMA and SPINS on IRQ6
+            # (SPEC.md 15.3.8), so a handler entered with interrupts off can
+            # never be completed by the controller it is waiting for.
+            extra.append("IF=%d" % (1 if r["flags"] & 0x200 else 0))
+            extra.append("code at CS:IP %s"
+                         % bytes(m.read(flat, 8)).hex())
+            # ...and who called in. The eight words above SP are enough to
+            # spot our own return trap and the routine under it.
+            sp = (r["ss"] << 4) + r["sp"]
+            extra.append("stack %s"
+                         % " ".join("%04X" % int.from_bytes(
+                             bytes(m.read(sp + k * 2, 2)), "little")
+                             for k in range(10)))
+            extra.append("SS:SP %04X:%04X" % (r["ss"], r["sp"]))
+            extra.append("regs " + " ".join(
+                "%s=%04X" % (k.upper(), r[k]) for k in
+                ("ax", "bx", "cx", "dx", "si", "di", "bp", "ds", "es")))
+            # **A CPU EXCEPTION LANDS HERE AND LOOKS LIKE A HANG**, so name
+            # it rather than leaving a segment nobody recognises. The one
+            # this machine actually takes is int 0: kernel/disk.inc warns
+            # about "zeroing disk_read's CHS divisor and divide-faulting with
+            # sch_lock held" in as many words, and a `div` by a zero geometry
+            # word is a jump through vector 0 to wherever that points.
+            ivt = bytes(m.read(0, 5 * 4))
+            for v in range(5):
+                o = int.from_bytes(ivt[v * 4:v * 4 + 2], "little")
+                g = int.from_bytes(ivt[v * 4 + 2:v * 4 + 4], "little")
+                if (g, o) == (r["cs"], r["ip"]):
+                    extra.append("**this IS int %02X's vector** - the machine "
+                                 "took a CPU exception, it did not hang" % v)
+        m.run()
+        os88marty.guest_sleep(m, 0.2)
+    m.pause()
+    uniq = []
+    for x in seen:
+        if x not in uniq:
+            uniq.append(x)
+    return ("the machine ran %g GUEST seconds inside it and is at %s; %s"
+            % (limit * os88marty.GUEST_BUDGET_RATIO, ", ".join(uniq),
+               "; ".join(extra)))
+
+
+BNC = "dsk_xfer.bounce"         # the transfer's own bounce (SPEC.md 18.91.4)
+UNBNC = "dsk_xfer.unbounce"
+
+
+def bnc_pattern(n):
+    """B1's bytes: not pattern()'s, never 0 and never POISON."""
+    out = bytearray()
+    for i in range(n):
+        b = (((i * 13) ^ (i >> 7)) + 5) % 0xF0 + 1
+        out.append(0x33 if b == POISON else b)
+    return bytes(out)
+
+
+BNC_PAT = bnc_pattern(4096)
+
+
+def no_bounce(tag, hits):
+    """dsk_xfer's bounce must NOT fire on a file-layer case: the stage hands
+    the transfer dsk_secbuf, which cannot straddle - so this is the control
+    that the B legs' counter counts the straddle and nothing else."""
+    n = hits.get(BNC, 0)
+    return (["%s: dsk_xfer.bounce fired %d times, and the file layer's stage "
+             "should have left the transfer nothing to bounce" % (tag, n)]
+            if n else [])
+
+
+def bounced(tag, r, hits, buf):
+    """B1/B2's verdict: answered, ONE bounce and ONE unbounce, ES given back."""
+    bad = []
+    if r["flags"] & 1 or (tag == "B1" and r["ax"]):
+        bad.append("%s: refused, CF=%d AX=%d" % (tag, r["flags"] & 1, r["ax"]))
+    for w in (BNC, UNBNC):
+        if hits.get(w, 0) != 1:
+            bad.append("%s: %s executed %d times, want 1 - the buffer starts "
+                       "%d bytes short of a 64KB page, so exactly its first "
+                       "sector bounces" % (tag, w, hits.get(w, 0), NEAR_END))
+    if r["es"] != buf >> 4:
+        bad.append("%s: ES came back %04X, want the caller's %04X - the "
+                   "bounce did not put it back" % (tag, r["es"], buf >> 4))
+    return bad
 
 
 def blast(m, addr, data, chunk=2048):
@@ -198,7 +451,56 @@ def run(img, apps, machine, want_bug, verbose):
     src_pat = pattern(FSIZE)
     with os88marty.launch(img, apps=apps, machine=machine,
                           label="dskwstage") as m:
-        m.pause()
+        # **TAKE THE MACHINE OVER AT A DEFINED POINT, not wherever `pause`
+        # lands.** Everything below runs kernel routines on a synthetic
+        # context, so the state they inherit is whatever the guest was in the
+        # middle of - and `pause` is a host-timed act, so that is different
+        # every run. It is the row's only remaining source of variance and it
+        # was worth a failure in three even after the stack was fixed: a pause
+        # inside a disk operation leaves `dsk_secbuf`, the FAT window and
+        # [sch_lock] mid-flight, and the staging path below shares all three.
+        #
+        # `sch_idle_body.loop` is the quiet point (SPEC.md 8.1.2): the idle
+        # task's own footprint is at most 4 bytes, nothing is in a primitive,
+        # and on a settled desktop the machine is 96.9% halted so it arrives
+        # at once. Stopping there costs one breakpoint and makes every run
+        # start from the same machine.
+        m.bp_exec(os88sym.linear("sch_idle_body.loop"))
+        m.run()
+        if m.wait_stop(30.0) is None:
+            raise SystemExit("dskwstage: the guest never reached the idle "
+                             "task's loop - it is not a settled desktop, and "
+                             "every call below would inherit whatever it is "
+                             "doing instead")
+        m.bp_exec()                 # ...and disarm it: the Caller arms its own
+        # **AND LET THE DRIVE GO QUIET FIRST.** `launch` settles on the first
+        # desktop, which is a few hundred milliseconds after the last boot
+        # read: the motor is still turning, the BIOS's own motor-off timer has
+        # not run, and IRQ6 may still be pending. Everything below then runs
+        # `int 13h` with IF clear (see the Caller), so a completion that
+        # arrives from the PREVIOUS operation is one this call will never
+        # account for. So wait for the drive, not for five idle seconds: no
+        # controller traffic for 2.5 guest seconds (past the IBM ROM's
+        # 37-tick motor-off count, which is 2.03), and then the BIOS's own
+        # MOTOR STATUS at 0040:003F with its four drive bits clear, for a ROM
+        # that keeps one - GLaBIOS reads 0 there throughout. Five guest
+        # seconds, what this was as a sleep, bounds the second half.
+        m.run()
+        os88marty.quiesce(m, m.disk, guest=1.25,
+                          what="the floppy controller's traffic")
+        try:
+            os88marty.until(m, lambda _: not (m.read(0x43F, 1)[0] & 0x0F),
+                            "the diskette motors to stop", poll=0.05,
+                            guest=5.0)
+        except os88marty.MartyError:
+            pass
+        m.bp_exec(os88sym.linear("sch_idle_body.loop"))
+        m.run()
+        if m.wait_stop(30.0) is None:
+            raise SystemExit("dskwstage: the guest left the idle loop and did "
+                             "not come back - something is running that was "
+                             "not there five seconds ago")
+        m.bp_exec()
         if not m.read(os88sym.linear("dsk_mntok"), 1)[0]:
             raise SystemExit("dskwstage: the boot volume is not mounted - "
                              "there is nothing to write to")
@@ -258,10 +560,10 @@ def run(img, apps, machine, want_bug, verbose):
         blast(m, safe_src, src_pat)
 
         # --- W1: the straddling write --------------------------------------
-        r, hits = c.call("dskw_write_x", watch=("dskw_wdata.stg",),
+        r, hits = c.call("dskw_write_x", watch=("dskw_xclus.stg", BNC),
                          si=name_at(m, "STGW.TST"),
                          es=straddle_src >> 4, bx=0, cx=FSIZE, dx=0)
-        cf, ax, n = r["flags"] & 1, r["ax"], hits["dskw_wdata.stg"]
+        cf, ax, n = r["flags"] & 1, r["ax"], hits["dskw_xclus.stg"]
         if want_bug:
             if not (cf and ax == FERR_IO):
                 bad.append("W1 --bug: the straddling write returned CF=%d "
@@ -269,7 +571,7 @@ def run(img, apps, machine, want_bug, verbose):
                            "CF=1 FERR_IO(%d). This image is FIXED."
                            % (cf, ax, FERR_IO))
             if n:
-                bad.append("W1 --bug: dskw_wdata.stg executed %d times, and "
+                bad.append("W1 --bug: dskw_xclus.stg executed %d times, and "
                            "in a pre-18.4.2.1 kernel nothing can reach it at "
                            "all" % n)
             return bad
@@ -278,29 +580,31 @@ def run(img, apps, machine, want_bug, verbose):
                        "(FERR_IO is %d). dskw_runmax answered 0 and the third "
                        "case went to the error arm - which is exactly the "
                        "defect SPEC.md 18.4.2.1 fixed" % (cf, ax, FERR_IO))
+        bad += no_bounce("W1", hits)
         if n != 1:
-            bad.append("W1: dskw_wdata.stg executed %d times, want 1. The "
+            bad.append("W1: dskw_xclus.stg executed %d times, want 1. The "
                        "source starts %d bytes short of a 64KB page, so "
                        "exactly one sector stages and the rest go in runs"
                        % (n, NEAR_END))
 
         # --- W2: the same bytes, page-safe (control) -----------------------
-        r, hits = c.call("dskw_write_x", watch=("dskw_wdata.stg",),
+        r, hits = c.call("dskw_write_x", watch=("dskw_xclus.stg", BNC),
                          si=name_at(m, "SAFEW.TST"),
                          es=safe_src >> 4, bx=0, cx=FSIZE, dx=0)
         if r["flags"] & 1 or r["ax"]:
             bad.append("W2 (control): an ORDINARY write failed, CF=%d AX=%d - "
                        "this row's machinery is broken, not the staging"
                        % (r["flags"] & 1, r["ax"]))
-        if hits["dskw_wdata.stg"]:
-            bad.append("W2 (control): dskw_wdata.stg fired %d times on a "
+        bad += no_bounce("W2", hits)
+        if hits["dskw_xclus.stg"]:
+            bad.append("W2 (control): dskw_xclus.stg fired %d times on a "
                        "PAGE-SAFE buffer, so the .stg counter above is not "
-                       "measuring the straddle" % hits["dskw_wdata.stg"])
+                       "measuring the straddle" % hits["dskw_xclus.stg"])
 
         # --- R1/R2/R3: read it back ----------------------------------------
         def readback(tag, fname, dst, want_stg):
             m.write(dst, bytes([POISON]) * 4096)
-            r, hits = c.call("dskw_read_x", watch=("dskw_rdata.stg",),
+            r, hits = c.call("dskw_read_x", watch=("dskw_xclus.stg", BNC),
                              si=name_at(m, fname),
                              es=dst >> 4, bx=0, cx=4096, dx=0)
             got = m.read(dst, 4096)
@@ -312,9 +616,10 @@ def run(img, apps, machine, want_bug, verbose):
             if size != FSIZE:
                 bad.append("%s: %s came back %d bytes, want %d"
                            % (tag, fname, size, FSIZE))
-            n = hits["dskw_rdata.stg"]
+            bad.extend(no_bounce(tag, hits))
+            n = hits["dskw_xclus.stg"]
             if n != want_stg:
-                bad.append("%s: dskw_rdata.stg executed %d times, want %d"
+                bad.append("%s: dskw_xclus.stg executed %d times, want %d"
                            % (tag, n, want_stg))
             if got[:FSIZE] != src_pat:
                 first = next(i for i in range(FSIZE)
@@ -343,18 +648,76 @@ def run(img, apps, machine, want_bug, verbose):
                        "into a straddling one differ - the read staging is "
                        "delivering different bytes from the run path")
 
+        # --- B0/B1/B2: the TRANSFER's own bounce (SPEC.md 18.91.4) ---------
+        # Everything above is the FILE layer's stage, which copies a sector
+        # the 8237 cannot carry before dsk_xfer ever sees it - so .bounce
+        # never fires there, and no_bounce() says so on every case above.
+        # WRITE_AT's inside arm and every dsk_read_chain caller hand the
+        # transfer the caller's ES:BX instead, and dsk_xfer bounces the
+        # sector through dsk_secbuf itself. B0 makes a file the ordinary way,
+        # B1 rewrites its first cluster through WRITE_AT from a straddling
+        # source, and B2 reads it whole through READ_AT into a straddling
+        # destination with the read cache stood aside ([dsk_rah_busy] = 1,
+        # as its own fill sets it), so the bytes come off the disk. Each
+        # bounce must fire exactly once, put the caller's ES back, and move
+        # the right 512 bytes - and the host reads the result below.
+        r, hits = c.call("dskw_write_x", watch=(BNC,),
+                         si=name_at(m, "BNC.TST"),
+                         es=safe_src >> 4, bx=0, cx=FSIZE, dx=0)
+        if r["flags"] & 1 or r["ax"]:
+            bad.append("B0: making BNC.TST failed, CF=%d AX=%d"
+                       % (r["flags"] & 1, r["ax"]))
+        bad += no_bounce("B0", hits)
+        blast(m, straddle_src, BNC_PAT)
+        clb = 512 * spc
+        r, hits = c.call("dskw_write_at_x", watch=(BNC, UNBNC),
+                         si=name_at(m, "BNC.TST"),
+                         es=straddle_src >> 4, bx=0, cx=clb, dx=0, ax=0)
+        bad += bounced("B1", r, hits, straddle_src)
+        if verbose:
+            print("  B1 WRITE_AT %d bytes from %#07x: bounce %d, unbounce %d"
+                  % (clb, straddle_src, hits[BNC], hits[UNBNC]))
+        busy = os88sym.linear("dsk_rah_busy")
+        was_busy = m.read(busy, 1)[0]
+        m.write(busy, b"\x01")
+        m.write(straddle_dst, bytes([POISON]) * 4096)
+        # THE WHOLE FILE in whole clusters, which is NOT "two clusters": the
+        # 360KB system disk's are 512 bytes (SPEC.md 19.3.2), and two of
+        # those are 1,024 of the file's 2,000
+        whole = -(-FSIZE // clb) * clb
+        r, hits = c.call("dskw_read_at_x", watch=(BNC, UNBNC),
+                         si=name_at(m, "BNC.TST"),
+                         es=straddle_dst >> 4, bx=0, cx=whole, dx=0, ax=0)
+        m.write(busy, bytes((was_busy,)))
+        bad += bounced("B2", r, hits, straddle_dst)
+        if verbose:
+            print("  B2 READ_AT  %d bytes into %#07x: bounce %d, unbounce %d"
+                  % (whole, straddle_dst, hits[BNC], hits[UNBNC]))
+        size = r["ax"] | (r["dx"] << 16)
+        if not r["flags"] & 1 and size != FSIZE:
+            bad.append("B2: READ_AT delivered %d bytes of BNC.TST, want %d"
+                       % (size, FSIZE))
+        bnc_want = BNC_PAT[:clb] + src_pat[clb:]
+        got = m.read(straddle_dst, FSIZE)
+        if got != bnc_want:
+            first = next(i for i in range(FSIZE) if got[i] != bnc_want[i])
+            bad.append("B2: BNC.TST reads back WRONG through the bounce at "
+                       "byte %d (sector %d + %d): got %#04x, want %#04x"
+                       % (first, first // 512, first % 512, got[first],
+                          bnc_want[first]))
+
         # --- and the host reads the disk, with none of the kernel's code ---
         with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as t:
             out = t.name
         try:
             m.flush(0, path=out)
-            bad += host_check(out, src_pat, verbose)
+            bad += host_check(out, src_pat, verbose, bnc_want)
         finally:
             os.unlink(out)
     return bad
 
 
-def host_check(path, src_pat, verbose):
+def host_check(path, src_pat, verbose, bnc_want=None):
     """Walk the flushed floppy with tests/unit/t_image's own FAT12 reader.
 
     Independent of os8088 by construction: it shares no code with the kernel,
@@ -372,6 +735,8 @@ def host_check(path, src_pat, verbose):
         if want not in found:
             bad.append("host: %s is not in the flushed volume's root at all"
                        % want)
+    if bnc_want is not None:
+        bad += bnc_check(v, bnc_want)
     if len(found) != 2:
         return bad
 
@@ -418,13 +783,39 @@ def host_check(path, src_pat, verbose):
     return bad
 
 
+def bnc_check(v, want):
+    """BNC.TST off the disk: B1's bounced cluster, then B0's bytes."""
+    for _path, name11, attr, clus, size in v.walk():
+        if name11.decode("ascii", "replace") == "BNC     TST":
+            break
+    else:
+        return ["host: BNC.TST is not in the flushed volume's root"]
+    if size != FSIZE:
+        return ["host: BNC.TST's entry says %d bytes, want %d"
+                % (size, FSIZE)]
+    chain, _eoc = v.chain(clus)
+    blob = b"".join(v.blob[v.cluster_lba(cl) * v.byts:
+                           (v.cluster_lba(cl) + v.spc) * v.byts]
+                    for cl in chain)[:FSIZE]
+    if blob != want:
+        first = next((i for i in range(min(len(blob), FSIZE))
+                      if blob[i] != want[i]), FSIZE)
+        return ["host: BNC.TST's bytes ON THE DISK are wrong from byte %d - "
+                "the WRITE_AT bounce wrote the wrong sector" % first]
+    return []
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--img", default=os.path.join(ROOT, "build",
                                                   "os8088-360.img"))
     ap.add_argument("--apps", default=os.path.join(ROOT, "build",
                                                    "apps360.img"))
-    ap.add_argument("--machine", default="os8088_5150_cga")
+    # The twin: the pass-3 soak ran this row on the IBM ROM
+    # and on GLaBIOS and got the identical hang, so the ROM is measured NOT
+    # to be the variable here.
+    ap.add_argument("--machine",
+                    default=os88marty.machine("os8088_5150_cga"))
     ap.add_argument("--bug", action="store_true",
                     help="assert the PRE-18.4.2.1 behaviour instead: the "
                          "straddling write must be refused FERR_IO and .stg "

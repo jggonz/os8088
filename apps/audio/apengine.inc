@@ -5,18 +5,18 @@
 ; the UI task EXCEPT ap_la_get / ap_la_avail / ap_src_eof, which the worker
 ; also calls and which touch only the free-running ring counters.
 ;
-;   look-ahead ring   ap_la_get / ap_ring_put over a 32 KB heap claim, with
-;                     free-running 16-bit ap_la_wr / ap_la_rd (SPEC.md 86.5)
+;   look-ahead ring   ap_la_get over a 32 KB heap claim, with free-running
+;                     16-bit ap_la_wr / ap_la_rd (SPEC.md 86.5); the disk
+;                     reads land in it directly (ap_refill_chunk)
 ;   track open        apl_goto_cur -> apw_parse -> claim -> grant -> pre-roll
 ;                     -> OSAPI_SND_STREAM verb 0 (ring mode)
-;   refill            ap_refill_chunk: one cluster read, head-skipped and
-;                     tail-clamped into the ring (UI task only, SPEC.md 20.6/7)
+;   refill            ap_refill_chunk: one gulp read into the ring itself,
+;                     head-skipped and tail-clamped (UI task only, SPEC.md 20.6/7)
 ;   close / reap      ap_stream_close drains [ap_mixing] first (SPEC.md 45.2)
 ; =============================================================================
 
     APBUF ap_findbuf, 24           ; OSAPI_FIND_SZ
     APW  ap_lg_got                 ; scratch: ap_la_get byte count
-    APW  ap_rp_n                   ; scratch: ap_ring_put byte count
 
 ; =============================================================================
 ; ap_la_avail -> AX = bytes queued in the look-ahead ring
@@ -110,52 +110,6 @@ ap_la_get:
     ret
 
 ; =============================================================================
-; ap_ring_put - copy CX bytes from DS:SI into the look-ahead ring
-; in:  SI = source offset (this segment), CX = bytes (<= AP_LA_SZ)
-; out: ap_la_wr advanced by CX
-; clobbers: nothing (all pushed).  UI task only.
-; =============================================================================
-ap_ring_put:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov [ap_rp_n], cx
-    mov ax, [ap_la_seg]
-    mov es, ax
-    mov di, [ap_la_wr]
-    and di, AP_LA_MASK
-    mov dx, AP_LA_SZ
-    sub dx, di                     ; DX = run to the ring seam
-    cld
-    cmp cx, dx
-    jbe .single
-    push cx
-    mov cx, dx
-    rep movsb
-    pop cx
-    sub cx, dx
-    xor di, di
-    rep movsb
-    jmp .fin
-.single:
-    rep movsb
-.fin:
-    mov ax, [ap_rp_n]
-    add [ap_la_wr], ax
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
 ; ap_filesize - find a file by name in the current directory
 ; in:  SI -> NUL 8.3 name (this segment)
 ; out: CF = 0 and DX:AX = size in bytes; CF = 1 not found
@@ -180,9 +134,8 @@ ap_filesize:
     call ap_nameeq                 ; ZF = 1 if equal (case-insensitive)
     pop cx
     pop si
-    je .hit
-    jmp .loop
-.hit:
+    jne .loop
+    ; the hit
     mov ax, [ap_findbuf+18]
     mov dx, [ap_findbuf+20]
     pop es
@@ -201,32 +154,23 @@ ap_filesize:
 
 ; ap_nameeq - compare NUL strings DS:SI and DS:DI, ASCII case-insensitive
 ;             ZF = 1 when equal.  preserves every register except flags.
-ap_nameeq:
+ap_nameeq:                         ; (equal: ZF = 1 and CF = 0)
     push si
     push di
     push ax
-    push bx
 .l:
-    mov al, [si]
-    mov bl, [di]
-    call ap_upcase                 ; AL
-    xchg al, bl
+    mov al, [di]
     call ap_upcase
-    xchg al, bl
-    cmp al, bl
-    jne .ne
-    or al, al
-    jz .eq
+    mov ah, al
+    mov al, [si]
+    call ap_upcase
+    cmp al, ah
+    jne .d                         ; ZF = 0
     inc si
     inc di
-    jmp .l
-.eq:
-    xor al, al                     ; ZF = 1
-    jmp .done
-.ne:
-    or al, 1                       ; ZF = 0
-.done:
-    pop bx
+    or al, al
+    jnz .l                         ; both NUL: ZF = 1, CF = 0
+.d:
     pop ax
     pop di
     pop si
@@ -321,9 +265,19 @@ ap_free_ring:
     ret
 
 ; =============================================================================
-; ap_refill_chunk - read ONE cluster of the data chunk into the ring, with the
-;                   first chunk's head skipped and the last chunk's tail
+; ap_refill_chunk - read ONE gulp of the data chunk STRAIGHT INTO THE RING,
+;                   the first gulp's head skipped and the last one's tail
 ;                   clamped at ap_data_end.  UI task only.
+;
+; The disk lands at DISK = ap_la_wr - ap_skip, the ring index of the next file
+; byte: a head skip still owed (the first gulp of a track, whose data does not
+; start on a cluster) is bytes the disk writes and nobody publishes, so the
+; track starts with ap_la_wr = ap_la_rd = ap_skip (ap_prep_track) and DISK at
+; 0. DISK only ever moves by whole clusters until the gulp that ends the data,
+; and the ring is a whole number of clusters, so a gulp is floored to the seam
+; as well and never splits (in practice every gulp is AP_RD_CHUNK: a refill is
+; asked for with more than that free, SPEC.md 86.5.2). The read writes only
+; free bytes, and ap_la_wr moves after it - the worker sees nothing early.
 ; out: nothing (ap_src_done latched when the whole chunk has been read)
 ; =============================================================================
 ap_refill_chunk:
@@ -336,13 +290,22 @@ ap_refill_chunk:
     push es
     cmp byte [ap_src_done], 0
     jne .out
-    ; --- how big a gulp? min(AP_RD_CHUNK, free) floored to a cluster ---------
-    ; A read holds sch_lock and costs ~1-2 disk revolutions whatever it moves
-    ; (SPEC.md 34.5 / 86.5.2), so we want the FEWEST, biggest reads the ring
-    ; has room for - not one cluster at a time.
-    call ap_la_avail
+    ; --- how big a gulp? min(AP_RD_CHUNK, free, run to the seam), floored to
+    ; a cluster. A read holds sch_lock and costs ~1-2 disk revolutions
+    ; whatever it moves (SPEC.md 34.5 / 86.5.2), so we want the FEWEST,
+    ; biggest reads the ring has room for - not one cluster at a time.
+    mov di, [ap_la_wr]
+    sub di, [ap_skip]              ; DI = DISK, free-running
     mov bx, AP_LA_SZ
-    sub bx, ax                     ; BX = free bytes in the ring
+    add bx, [ap_la_rd]
+    sub bx, di                     ; BX = free bytes from DISK
+    and di, AP_LA_MASK             ; DI = the read's offset in the ring
+    mov ax, AP_LA_SZ
+    sub ax, di                     ; AX = the run to the seam
+    cmp bx, ax
+    jbe .seam
+    mov bx, ax
+.seam:
     cmp bx, AP_RD_CHUNK
     jbe .cap
     mov bx, AP_RD_CHUNK
@@ -372,45 +335,36 @@ ap_refill_chunk:
                                    ; across; CF: the folder is gone - the track
                                    ; ends, and says why
 .inplace:
-    ; read [ap_rd_pos, +ap_rd_len) into ap_scratch
-    push ds
-    pop es
+    ; read [ap_rd_pos, +ap_rd_len) into the ring at DI
+    mov es, [ap_la_seg]
+    mov bx, di
     mov si, [apw_name]
-    mov bx, ap_scratch
     mov cx, [ap_rd_len]
     mov ax, [ap_rd_pos]
     mov dx, [ap_rd_pos+2]
-    call OSAPI_FILE_READ_AT        ; out CF, DX:AX = bytes delivered
+    mov di, ap_rd_cur              ; one FAT link a gulp, not a walk from the
+    call os88_rseq                 ; front (SPEC.md 18.4.8.1); out CF, DX:AX
     APCNT apc_readat
     APCNT apc_refill
     jc .ioerr                     ; an I/O error ends the data - and says why
     APADD apc_rbytes, ax
     ; DX:AX = got; it fits a word (AP_RD_CHUNK <= 16384)
-    mov bx, ax                     ; BX = got (low word; DX must be 0)
+    mov cx, ax                     ; CX = got (low word; DX must be 0)
     or dx, dx
     jz .g0
-    mov bx, [ap_rd_len]
+    mov cx, [ap_rd_len]
 .g0:
-    or bx, bx
-    jz .done_all                  ; nothing delivered -> at/after EOF
+    jcxz .done_all                ; nothing delivered -> at/after EOF
 
     ; usable = got - head-skip, then clamp so we never pass ap_data_end
-    mov si, ap_scratch
-    mov cx, bx                     ; CX = usable count
     mov ax, [ap_skip]
-    or ax, ax
-    jz .noskip
-    cmp ax, cx
-    jae .allskip
-    add si, ax
     sub cx, ax
-    mov word [ap_skip], 0
-    jmp .clamp
-.allskip:
-    sub word [ap_skip], bx        ; whole chunk was pre-data - carry the skip
-    jmp .advance
+    jae .noskip
+    neg cx                        ; the whole gulp was pre-data: skip -= got,
+    mov [ap_skip], cx             ; so DISK moves by got and nothing is
+    jmp short .advance            ; published
 .noskip:
-.clamp:
+    mov word [ap_skip], 0
     ; bytes of real audio still wanted = ap_data_end - (ap_data_off + ap_got)
     mov ax, [ap_data_off]
     mov dx, [ap_data_off+2]
@@ -426,28 +380,25 @@ ap_refill_chunk:
     jae .putall
     mov cx, bx                     ; clamp to the tail
 .putall:
-    or cx, cx
-    jz .advance
-    call ap_ring_put              ; SI = source, CX = bytes
-    ; ap_got += CX
-    xor dx, dx
-    mov ax, cx
-    add [ap_got], ax
-    adc [ap_got+2], dx
+    add [ap_la_wr], cx            ; PUBLISH, last: the bytes are in already
+    add [ap_got], cx              ; ap_got += CX
+    adc word [ap_got+2], 0
 .advance:
     ; ap_rd_pos += ap_rd_len
     mov ax, [ap_rd_len]
     xor dx, dx
     add [ap_rd_pos], ax
     adc [ap_rd_pos+2], dx
-    ; done if the next read position is at/after the data end
+    ; done if the next read position is at/after the data end - which is
+    ; the data's END and not an error: this used to fall into .ioerr below,
+    ; so every track's last gulp put "Cannot read the file" on the status
+    ; line for the seconds the ring took to play out
     mov ax, [ap_rd_pos]
     mov dx, [ap_rd_pos+2]
-    cmp dx, [ap_data_end+2]
+    sub ax, [ap_data_end]
+    sbb dx, [ap_data_end+2]
     jb .out
-    ja .done_all
-    cmp ax, [ap_data_end]
-    jb .out
+    jmp short .done_all
 .ioerr:
     mov word [ap_msg], apw_e_io    ; a bad sector or a pulled disk: the status
                                    ; line says so, not "End of playlist"
@@ -455,13 +406,7 @@ ap_refill_chunk:
     mov byte [ap_src_done], 1
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ; ap_prime - fill the look-ahead ring before playback starts (UI context, so
@@ -494,21 +439,34 @@ ap_prime:
 ; =============================================================================
 ap_open_track:
     APCNT apc_opentk
-    cmp byte [ap_have_sb], 0
-    jne .havesb
-    mov word [ap_msg], ap_s_nosb
-    jmp .refuse
-.havesb:
-    call apl_count
-    or ax, ax
-    jnz .havetrk
+    cmp byte [apl_n], 0
+    jne .havetrk
     mov word [ap_msg], ap_s_nofile
     jmp .refuse
 .havetrk:
     mov word [ap_msg], ap_s_opening
 
     call ap_stream_close          ; a clean slate (drains the worker)
+    call ap_prep_track            ; the file parsed and the look-ahead primed
+    jc .refuse                    ; (ap_msg says why)
+    call OSAPI_SND_CAPS           ; THE TIER NOW, not at launch: the
+    test ax, SND_CAP_PCM_BG       ; Control Panel's, and it may have moved
+    jnz .card                     ; (the Covox's turns streams off, 34.14).
+    jmp aps_open                  ; NO CARD: THE SPEAKER, or the Covox (SPEC.md
+                                  ; 86.21, 86.21.3) - sound and nothing else
+                                  ; is better than no sound. CF its own
+.card:
+    jmp ap_open_card
+.refuse:
+    stc
+    ret
 
+; =============================================================================
+; ap_prep_track - the current entry opened, parsed and adopted, the look-ahead
+;                 claimed and primed: everything a play needs before the card
+;                 or the speaker. out: CF = 1 refused (ap_msg says why)
+; =============================================================================
+ap_prep_track:
     call apl_goto_cur             ; move into the track's directory
     jc .badfile                   ; could not reach the folder - say so
     call OSAPI_FILE_HERE          ; ...and bank it: the refill reads BY NAME,
@@ -520,10 +478,24 @@ ap_open_track:
     call ap_filesize             ; CF, DX:AX = size
     jc .badfile
 
+    call ap_ensure_bufs           ; the look-ahead ring: the parser's header
+    jc .nomem                     ; window too (whatever it held is dead here)
     call apw_parse                ; CF = 1 rejected, apw_err set
-    jc .parseerr
+    jnc .adopt
+    mov ax, [apw_err]             ; (the refusals sit HERE, inside a short
+    jmp short .say                ; jump of every Jcc that takes one)
+.badfile:
+    mov ax, ap_s_loaderr
+    jmp short .say
+.nomem:
+    mov ax, ap_s_nomem
+.say:
+    mov [ap_msg], ax
+    stc
+    ret
 
     ; --- adopt the parsed record ---------------------------------------
+.adopt:
     mov al, [apw_fmt]
     mov cx, [apw_balign]
     call apd_start
@@ -550,38 +522,40 @@ ap_open_track:
     mov cx, ax
     and cx, bx                     ; low bits
     mov [ap_skip], cx
+    mov [ap_la_wr], cx            ; the ring starts EMPTY at the skip: the
+    mov [ap_la_rd], cx            ; first gulp lands at index 0 (ap_refill_chunk)
     not bx
     and ax, bx
     mov [ap_rd_pos], ax
     mov [ap_rd_pos+2], dx
+    mov di, ap_rd_cur              ; a new track: the cursor names no file
+    call os88_rseq_new
 
-    mov word [ap_got], 0
-    mov word [ap_got+2], 0
-    mov byte [ap_src_done], 0
-    mov word [ap_la_wr], 0
-    mov word [ap_la_rd], 0
-    mov word [ap_total], 0
-    mov word [ap_consumed], 0
-    mov word [ap_consumed_prev], 0
-    mov word [ap_played], 0
-    mov word [ap_played+2], 0
-    mov byte [ap_ended], 0
-    mov byte [ap_lasthalf], 0
-    mov byte [ap_paused], 0
-    mov byte [ap_req], FR_NONE
-    mov word [ap_elapsed_s], 0
-    mov word [ap_sub], 0
+    push es                       ; the per-track run (audio.asm): got,
+    push ds                       ; played, total, consumed, the clock and
+    pop es                        ; the five flags, all from 0
+    mov di, AP_TRK0
+    mov cx, AP_TRKLEN
+    xor al, al
+    cld
+    rep stosb
+    pop es
 
     call ap_calc_duration         ; ap_total_s from datlen / rate / bytes-per-s
-    call ap_calc_bpt              ; ap_bpt = rate / 18.2065
-
-    call ap_ensure_bufs
-    jc .nomem
-    call ap_grant_ring
-    jc .nomem
 
     call ap_prime                 ; fill the look-ahead ring
+    clc
+    ret
 
+; ap_open_card - the prepared track onto the Sound Blaster: the grant, the
+; pre-roll, the stream and the worker
+ap_open_card:
+    call ap_grant_ring
+    jc .nomem
+    cmp byte [apw_spk], 2           ; A FILE OF SPEAKER COUNTS on a card:
+    jne .samples                    ; played as the samples they came from
+    call ap_cinv_build              ; (SPEC.md 86.21.1)
+.samples:
     ; --- pre-roll [ap_preroll] halves straight into the grant ------------
     mov cx, [ap_preroll]
 .pre:
@@ -610,19 +584,20 @@ ap_open_track:
     call OSAPI_TASK_SPAWN         ; CF = 1 refused (transient, SPEC.md 20.6)
     jc .notask                    ; no worker slot: say so and stop, rather than
     mov byte [ap_have_worker], 1  ; "Playing" over a ring nothing will feed
-.running:
+    ; ...AND THE WORKER MAY BE RESTARTED (SPEC.md 66.6.2). Hiring one
+    ; would otherwise pin the region for ever - task_spawn wrote our
+    ; segment into that worker's frame before its first instruction:
+    ; the feed's whole state is in statics and the restart lands above ap_feed.
+    ; The kernel restarts a worker only where it PARKS, which for us is
+    ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
+    ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
+    OS88_WORKER_RESTARTABLE_NOKEEP ap_worker    ; AX was spent already
+.running:                           ; (SPAWN's slot), CF is the `clc` below
     mov byte [ap_state], AP_ST_PLAY
     mov word [ap_msg], ap_s_playing
     clc
     ret
 
-.badfile:
-    mov word [ap_msg], ap_s_loaderr
-    jmp .refuse
-.parseerr:
-    mov ax, [apw_err]
-    mov [ap_msg], ax
-    jmp .refuse
 .nomem:
     mov word [ap_msg], ap_s_nomem
     jmp .refuse
@@ -641,6 +616,57 @@ ap_open_track:
     call ap_stream_close
 .refuse:
     stc
+    ret
+
+; =============================================================================
+; ap_cinv_build - ap_cinv[c] = the sample a speaker count c came from: the
+; inverse of 34.11.2's t[s] = 1 + s(N-2)/255 at this file's rate, N =
+; 1,193,182 / rate - s = ((c - 1) x 255 + (N - 2) / 2) / (N - 2), clamped.
+; A counts file (86.21.1) on a CARD is then the shaped sound it was made
+; from, rather than a quiet wave sitting off the centre. preserves all
+; =============================================================================
+ap_cinv_build:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, 0x34DE                  ; 1,193,182
+    mov dx, 0x0012
+    div word [ap_rate]              ; AX = N (a rate of 4,679 or more: a word)
+    sub ax, 2
+    mov bx, ax                      ; BX = N - 2
+    mov si, ax
+    shr si, 1                       ; SI = (N - 2) / 2, the rounding
+    mov di, ap_cinv
+    xor cx, cx
+.c:
+    mov ax, cx
+    dec ax                          ; c - 1 (count 0 is below the table)
+    jns .p
+    xor ax, ax
+.p:
+    mov dx, 255
+    mul dx
+    add ax, si
+    adc dx, 0
+    div bx
+    or ah, ah
+    jz .s
+    mov al, 255
+.s:
+    mov [di], al
+    inc di
+    inc cx
+    cmp cx, 256
+    jb .c
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; =============================================================================
@@ -672,6 +698,26 @@ ap_stage_half:
     mov cx, AP_HALF
     call apd_pull                 ; AX = PCM8 bytes produced into apd_out
     mov bx, ax
+    cmp byte [apw_spk], 2         ; speaker COUNTS: back to samples, before
+    jne .pcm                      ; the end's pad of silence, which is one
+    push ax                       ; (SPEC.md 86.21.1)
+    push bx
+    push si
+    mov cx, ax
+    mov si, apd_out
+    mov bx, ap_cinv
+    jcxz .cvd
+.cv:
+    mov al, [si]
+    xlatb
+    mov [si], al
+    inc si
+    loop .cv
+.cvd:
+    pop si
+    pop bx
+    pop ax
+.pcm:
     xor dl, dl                    ; DL = "last half" flag
     cmp bx, AP_HALF
     jae .full
@@ -725,36 +771,16 @@ ap_stage_half:
     ret
 
 ; =============================================================================
-; ap_calc_bpt - ap_bpt = rate / 18.2065  (bytes of PCM8 per system tick)
-;               rate * 3600 / 65536 is that to 0.011%; take the product's high
-;               word.  (The Tracker idiom, SPEC.md 45.15.)
-; =============================================================================
-ap_calc_bpt:
-    push ax
-    push dx
-    mov ax, [ap_rate]
-    mov dx, 3600
-    mul dx                         ; DX:AX = rate * 3600
-    mov [ap_bpt_lo], dx
-    mov word [ap_bpt_hi], 0
-    pop dx
-    pop ax
-    ret
-
-; =============================================================================
 ; ap_calc_duration - ap_total_s from the data length and the format
 ;   PCM8   : seconds = datlen / rate
 ;   ADPCM  : samples = (datlen / balign) * spb ; seconds = samples / rate
 ; A rough value is fine; 0 means "unknown".
 ; =============================================================================
-ap_calc_duration:
-    push ax
+ap_calc_duration:                  ; (all three outputs arrive 0: the
+    push ax                        ; per-track run, ap_prep_track)
     push bx
     push cx
     push dx
-    mov word [ap_total_s], 0
-    mov word [ap_total_pcm], 0
-    mov word [ap_total_pcm+2], 0
     mov ax, [apw_datlen]
     mov dx, [apw_datlen+2]
     cmp byte [apw_fmt], AP_FMT_ADPCM
@@ -794,6 +820,7 @@ ap_calc_duration:
 ; =============================================================================
 ap_stream_close:
     push ax
+    call aps_close                 ; a speaker session ends with it
     cmp byte [ap_sopen], 0
     je .drain
     mov al, 2
@@ -804,8 +831,15 @@ ap_stream_close:
     cmp byte [ap_mixing], 0
     jne .drain                     ; bounded: the worker re-checks ap_sopen
     call ap_free_ring
-    mov byte [ap_ended], 0
-    mov byte [ap_lasthalf], 0
+    xor ax, ax
+    mov [ap_ended], al
+    mov [ap_lasthalf], al
+    ; nothing is in the stream now, so the clock AND the bar read zero: the
+    ; bar is drawn from ap_played, and zeroing only ap_elapsed_s left a full
+    ; bar beside 00:00 after "End of playlist" (and a stale one after Stop)
+    mov [ap_played], ax
+    mov [ap_played+2], ax
+    mov [ap_elapsed_s], ax
     pop ax
     ret
 
@@ -817,24 +851,31 @@ ap_reap:
     cmp byte [ap_ended], 0
     je .out
     call ap_autoadvance
-.out:
-    ret
+.out:                              ; (a BARE ret: our region's relocation
+    ret                            ; proc too, audio.asm)
 
 ; =============================================================================
 ; ap_autoadvance - a track finished: step the playlist and start the next, or
 ;                  stop at the end of the list.
 ; =============================================================================
 ap_autoadvance:
-    call ap_stream_close
     mov al, 1
-    call apl_advance              ; CF = 1 => list ended, Repeat off
-    jc .end
-    call ap_open_track
+    call ap_step_track            ; CF = 1 => list ended, Repeat off
+    jnc .out
+    mov ax, ap_s_endlist
+    jmp ap_stop_msg
+.out:
     ret
-.end:
-    mov byte [ap_state], AP_ST_STOP
-    mov word [ap_elapsed_s], 0
-    mov word [ap_msg], ap_s_endlist
+
+; ap_step_track - AL = 1 next / 0xFF previous: close the stream, step the
+; list, open what it lands on. CF = 1: the list ended and nothing opened
+ap_step_track:
+    call ap_stream_close
+    call apl_advance
+    jc .out
+    call ap_open_track
+    clc
+.out:
     ret
 
 ; =============================================================================
@@ -843,13 +884,16 @@ ap_autoadvance:
 ap_cmd_play:
     cmp byte [ap_state], AP_ST_PAUSE
     jne .fresh
+    cmp byte [aps_on], 0           ; a speaker session, paused on the
+    je .card                       ; desktop: its bracket again
+    jmp aps_resume
+.card:
     mov byte [ap_paused], 0
     mov byte [ap_state], AP_ST_PLAY
     mov word [ap_msg], ap_s_playing
     ret
 .fresh:
-    call ap_open_track
-    ret
+    jmp ap_open_track
 
 ap_cmd_pause:
     cmp byte [ap_state], AP_ST_PLAY
@@ -862,43 +906,29 @@ ap_cmd_pause:
 
 ap_cmd_stop:
     call ap_stream_close
-    mov byte [ap_state], AP_ST_STOP
-    mov word [ap_elapsed_s], 0
-    mov word [ap_msg], ap_s_stopped
+    mov ax, ap_s_stopped
+ap_stop_msg:                      ; AX = what the status line says
+    mov [ap_msg], ax
+    mov byte [ap_state], AP_ST_STOP ; (the clock and the bar: ap_stream_close)
     ret
 
-ap_cmd_next:
-    call ap_stream_close
-    mov al, 1
-    call apl_advance
-    jc .end
-    call ap_open_track
-    ret
-.end:
-    mov word [ap_msg], ap_s_endlist
-    call ap_cmd_stop
+ap_cmd_next:                      ; (Next off the end says Stopped: the
+    mov al, 1                     ; "End of playlist" it once wrote first was
+    call ap_step_track            ; overwritten by ap_cmd_stop's own message)
+    jc ap_cmd_stop
     ret
 
 ap_cmd_prev:
-    call ap_stream_close
-    mov al, 0xFF
-    call apl_advance
-    jc .end
-    call ap_open_track
-    ret
-.end:
-    ret
+    mov al, 0xFF                  ; (Previous wraps, so it ends only on an
+    jmp ap_step_track             ; empty list - and then does nothing)
 
 ap_cmd_shuffle:
     mov al, [ap_shuffle]
     xor al, 1
-    call apl_set_shuffle
-    ret
+    jmp apl_set_shuffle
 
 ap_cmd_repeat:
-    mov al, [ap_repeat]
-    xor al, 1
-    mov [ap_repeat], al
+    xor byte [ap_repeat], 1
     ret
 
 ; =============================================================================
@@ -919,28 +949,17 @@ ap_has_wav_ext:
     jb .cl
 .got:
     cmp cx, 4
-    jb .ne
-    sub si, 4                      ; SI back to the '.' (SI is at the NUL now)
-    mov al, [si]
-    cmp al, '.'
+    jb .ne                         ; (ZF = 0: CX is not 4)
+    cmp byte [si-4], '.'
     jne .ne
-    mov al, [si+1]
-    call ap_upcase
-    cmp al, 'W'
+    mov ax, [si-3]                 ; "WA", any case: AND 0xDF folds exactly
+    and ax, 0xDFDF                 ; the two letters it is compared with, and
+    cmp ax, 'WA'                   ; maps no other byte onto them
     jne .ne
-    mov al, [si+2]
-    call ap_upcase
-    cmp al, 'A'
-    jne .ne
-    mov al, [si+3]
-    call ap_upcase
-    cmp al, 'V'
-    jne .ne
-    xor al, al                    ; ZF = 1
-    jmp .done
+    mov al, [si-1]
+    and al, 0xDF
+    cmp al, 'V'                    ; ZF = 1 iff it is
 .ne:
-    or al, 1                       ; ZF = 0
-.done:
     pop si
     pop cx
     pop ax
@@ -956,18 +975,25 @@ ap_has_wav_ext:
 ; =============================================================================
 ap_add_file:
     mov [ap_af_flags], al
-    mov [ap_af_dir], dx
-    mov [ap_af_vol], bl
-    mov [ap_af_name], si
 
-    call ap_has_wav_ext
+    call ap_has_wav_ext            ; (preserves every register)
     jne .notwav
 
+    ; Open while a track is PLAYING OR PAUSED adds the file and leaves the
+    ; current track alone, selection included: the title line and Play both
+    ; read apl_cur, so selecting the new entry would name it over the song
+    ; still in the stream and Play would resume the old audio under the new
+    ; name. A paused song is the user's as much as a playing one.
+    test byte [ap_af_flags], AP_ADD_IDLE
+    jz .flagsok
+    cmp byte [ap_state], AP_ST_STOP
+    je .flagsok
+    and byte [ap_af_flags], ~(AP_ADD_CUR | AP_ADD_IDLE) & 0xFF
+.flagsok:
+
     ; duplicate? same name + dir + vol -> select it, do not add again
-    mov si, [ap_af_name]
-    mov dx, [ap_af_dir]
-    mov bl, [ap_af_vol]
     call apl_find                  ; out AX = index, CF = 1 not found
+                                   ; (BX..DI preserved: SI, DX, BL still ours)
     jc .fresh
     mov word [ap_msg], ap_s_dup
     test byte [ap_af_flags], AP_ADD_PLAY
@@ -983,30 +1009,25 @@ ap_add_file:
     mov [apl_cur], al
     jmp .startcur
 .selonly:
+    test byte [ap_af_flags], AP_ADD_CUR
+    jz .ok                         ; busy: not even selected
     mov [apl_cur], al
     jmp .ok
 .fresh:
-    mov si, [ap_af_name]
-    mov dx, [ap_af_dir]
-    mov bl, [ap_af_vol]
     call apl_add                   ; CF = 1 list full
     jc .full
     mov al, [apl_n]
     dec al                         ; index of the entry just added
-    mov ah, al                     ; keep it
     test byte [ap_af_flags], AP_ADD_CUR | AP_ADD_PLAY
     jz .notcur
     mov [apl_cur], al
 .notcur:
     mov word [ap_msg], ap_s_added
 
-    test byte [ap_af_flags], AP_ADD_PLAY
-    jnz .startcur
-    test byte [ap_af_flags], AP_ADD_IDLE
+    ; PLAY starts it; IDLE survived the busy test above only if the player
+    ; is stopped, so it starts it too
+    test byte [ap_af_flags], AP_ADD_PLAY | AP_ADD_IDLE
     jz .ok
-    cmp byte [ap_state], AP_ST_PLAY
-    je .ok                         ; Open while playing: added, not interrupted
-    mov [apl_cur], ah
 .startcur:
     call ap_stream_close
     call ap_open_track             ; sets ap_msg itself
@@ -1022,11 +1043,9 @@ ap_add_file:
     stc
     ret
 
-    APW ap_af_name
-    APW ap_af_dir
-    APB ap_af_vol
     APB ap_af_flags
 
+%ifdef AP_HANDOFF                 ; (only the handoff asks, SPEC.md 86.11.1)
 ; =============================================================================
 ; ap_find_sibling - CF = 0 iff another live "AUDIO PLAYER" instance exists in a
 ;                   different region segment (SPEC.md 86.11.1). Entry-proc only.
@@ -1064,23 +1083,32 @@ ap_find_sibling:
 .found:
     clc
     ret
+%endif
 
+%if %isdef(AP_HANDOFF) || %isdef(APROF) ; the root move: the handoff's, and
+                                  ; APROF's dump. The shipped package calls
+                                  ; neither, so it carries none of it
 ; =============================================================================
 ; ap_que_root - move this instance to the system volume's root (where
 ;               APQUEUE.DAT lives).  clobbers AX, BX, DX.  CF = 1 on failure.
 ;
-; OSAPI_FILE_GOTO, not its quiet twin: GOTO_Q sets only a transient by-cluster
-; resolution dir and OSAPI_FILE_WRITE / _READ by NAME still land in the
-; instance's own launched-from folder (measured - APDIAG.TXT and the queue file
-; both missed the root). The real GOTO moves the instance, so every caller
-; banks OSAPI_FILE_HERE first and GOTOs back (the FONTS/ pattern, os88type.inc).
+; OSAPI_FILE_GOTO_QM (SPEC.md 74.1, 86.11.1). NOT GOTO_Q: that moves the
+; machine and not the instance, and every file cell first puts the machine
+; back in the instance's own folder (inst_vol_enter) - so a READ or WRITE by
+; NAME lands in the launched-from folder (measured - APDIAG.TXT and the queue
+; file both missed the root). And not the full GOTO this used to be: that is a
+; REMOUNT - BPB, FAT window, root scan, sort, icon harvest - which is what made
+; the poll unaffordable on an XT. GOTO_QM moves the instance, quietly: a word
+; on the volume already mounted, a quiet mount across volumes. Every caller
+; banks OSAPI_FILE_HERE first and GOTO_QMs back.
 ; =============================================================================
 ap_que_root:
     call OSAPI_VOL_SYS             ; BL = the volume this machine booted from
     xor dx, dx
-    call OSAPI_FILE_GOTO          ; DX = 0 (root), BL = volume; REMOUNT
+    call OSAPI_FILE_GOTO_QM       ; DX = 0 (root), BL = volume; quiet, moves us
     ret
 
+%ifdef AP_HANDOFF                 ; the handoff itself (SPEC.md 86.11.1)
 ; =============================================================================
 ; ap_que_write - append the banked ARG_FILE document to APQUEUE.DAT on the
 ;                system volume root (SPEC.md 86.11.1).  Entry-proc only.
@@ -1167,7 +1195,7 @@ ap_que_write:
     ; --- restore our folder regardless -----------------------------------
     mov dx, [ap_que_bdir]
     mov bl, [ap_que_bvol]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_QM
     popf
     jc .fail
     clc
@@ -1216,13 +1244,16 @@ ap_que_poll:
 .qfull:
     APCNT apc_quechk
 
-    ; GOTO_Q, not the real GOTO: this runs on every idle ap_onwake, and a real
-    ; remount of the system root (scan + sort + icon harvest) is seconds on an
-    ; XT. GOTO_Q only re-points name resolution and does not move us, so there
-    ; is nothing to restore afterwards.
-    call OSAPI_VOL_SYS            ; BL = the system volume
-    xor dx, dx
-    call OSAPI_FILE_GOTO_Q        ; resolve names at the root; cheap, no move
+    ; GOTO_QM, for ap_que_root's reason: this runs on every idle ap_onwake,
+    ; so it must be the quiet stand, and it must MOVE us - GOTO_Q did not, and
+    ; the read looked for APQUEUE.DAT in our own folder, so a handoff was never
+    ; seen unless this package lived at the system root. Our folder is banked
+    ; first and stood in again after.
+    call OSAPI_FILE_HERE
+    mov [ap_que_bdir], dx
+    mov [ap_que_bvol], bl
+    call ap_que_root
+    jc .qhome
     push ds
     pop es
     mov si, ap_qfile
@@ -1237,11 +1268,8 @@ ap_que_poll:
     mov si, ap_qfile
     call OSAPI_FILE_DELETE        ; still resolving at the root
     pop cx
-    ; re-point name resolution back to our own folder before ap_add_file:
-    ; OSAPI_FILE_HERE is unmoved by GOTO_Q, so it still names where we live.
-    push cx
-    call OSAPI_FILE_HERE
-    call OSAPI_FILE_GOTO_Q
+    push cx                      ; back to our own folder before ap_add_file
+    call ap_que_home
     pop cx
 
     mov si, ap_querec
@@ -1261,8 +1289,7 @@ ap_que_poll:
     sub cx, AP_QUEREC
     jmp .rec
 .qhome:
-    call OSAPI_FILE_HERE
-    call OSAPI_FILE_GOTO_Q        ; name resolution back to our folder
+    call ap_que_home              ; back to our folder
 .done:
     cmp byte [ap_que_hit], 0
     pop di
@@ -1278,6 +1305,16 @@ ap_que_poll:
     stc
     ret
 
+%endif                            ; AP_HANDOFF
+; ap_que_home - back to the folder banked in [ap_que_bdir]/[ap_que_bvol].
+; clobbers AX, BX, DX
+ap_que_home:
+    mov dx, [ap_que_bdir]
+    mov bl, [ap_que_bvol]
+    call OSAPI_FILE_GOTO_QM       ; a CALL: the cell is far and ends in retf,
+    ret                           ; so a tail jmp would return to nowhere
+
     APB  ap_que_hit
     APW  ap_que_bdir
     APB  ap_que_bvol
+%endif                            ; AP_HANDOFF or APROF

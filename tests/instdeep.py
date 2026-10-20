@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""The installer reproduces the source disk's WHOLE tree (SPEC.md 52.10.13).
+"""The installer reproduces the source disk's WHOLE tree, and its BYTES.
+
+SPEC.md 52.10.13.
 
 An install used to walk the root and one level of folders, so a folder inside
 a folder was never made on the destination.  Two are shipped and both went
@@ -10,10 +12,27 @@ missing with no error anywhere:
     stick on a hard-disk machine" in every application at once;
   * SYSTEM/DOS/OS88NET.COM (SPEC.md 62), which is not.
 
+A third is the deepest of them: SYSTEM/APPDATA/NOTES/WELCOME.TXT (SPEC.md
+110.13), the Sticky Note's welcome note, three folder levels down with real
+content in it on the volume the installer is copying FROM. Losing it is
+silent in the same way the other two are - the pad on the installed machine
+comes up with no notes and says nothing about why. (It was SYSTEM/FONTS until
+the 360 KB system disk gave its typefaces to office360.img, SPEC.md 24.3.1.5,
+and this row installs from that disk.)
+
 So this drives a real install on MartyPC's XT-IDE machine and then reads the
 partition back ON THE HOST, with a FAT reader that is not the one that wrote
 it.  A screendump cannot answer this question: the installer says `Done` in
 both the broken and the fixed case, and the difference is a directory entry.
+
+**AND IT COMPARES README.TXT BYTE FOR BYTE**, because the same harness answers
+a second question the same way and the installer got that one wrong too. The
+shipped manual is COMPRESSED - 8,088 bytes on the floppy, 14,722 expanded -
+and the installer had two copy shapes, one raw and one not: a file that fitted
+the buffer took OSAPI_FILE_READ, which is the TRANSPARENT one (SPEC.md
+20.14.3), so it arrived expanded and was installed as a plain file with the
+directory hint gone. The tree check above passes either way; only the bytes
+say which happened.
 
     python3 tests/instdeep.py
 
@@ -25,14 +44,15 @@ therefore never written and is the pristine master by construction. That is
 also what lets two of these run at once - a shared VHD is one disk being
 installed onto twice.
 """
+import hashlib
 import os
 import struct
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88marty as M                                      # noqa: E402
 from os88mouse import Mouse                                # noqa: E402
+import os88build                                       # noqa: E402
 
 MACHINE = "os8088_xt_hdd"
 VHD_REL = "media/hdds/default_xtide.vhd"
@@ -51,8 +71,15 @@ FOOTER = 512                        # the VHD footer, past the data area
 
 # What must be on the installed volume, as PATHS - the point of the exercise
 # is the ones with two components in them.
-WANT_DIRS = ["SYSTEM", "APPS", "GAMES", "SYSTEM/APPDATA", "SYSTEM/DOS"]
-WANT_FILES = ["KERNEL.SYS", "SYSTEM/DOS/OS88NET.COM", "SYSTEM/TASKMGR.O88"]
+WANT_DIRS = ["SYSTEM", "APPS", "GAMES", "SYSTEM/APPDATA", "SYSTEM/DOS",
+             "SYSTEM/APPDATA/NOTES"]
+WANT_FILES = ["KERNEL.SYS", "SYSTEM/DOS/OS88NET.COM", "SYSTEM/TASKMGR.O88",
+              "SYSTEM/APPDATA/NOTES/WELCOME.TXT"]
+
+# ...and these must arrive BYTE FOR BYTE, hint and all. Any compressed file on
+# the source disk would do; README.TXT is the one the shipped system disk has
+# (SPEC.md 20.13.5), and it is the file the split shape actually expanded.
+WANT_RAW = ["README.TXT"]
 
 
 # --- a FAT reader that is not os88disk.py's ----------------------------------
@@ -114,6 +141,52 @@ class Vol:
                         struct.unpack_from("<I", e, 28)[0]))
         return out
 
+    def read(self, path):
+        """One file's exact bytes, truncated to its directory size."""
+        first, parts = 0, [p for p in path.split("/") if p]
+        for i, want in enumerate(parts):
+            for name, attr, clus, size in self.entries(first):
+                if name.upper() != want.upper():
+                    continue
+                if i + 1 == len(parts):
+                    data = b"".join(
+                        self.sec(self.data_lba + (c - 2) * self.spc, self.spc)
+                        for c in self.chain(clus))
+                    return data[:size]
+                first = clus
+                break
+            else:
+                return None
+        return None
+
+    def mark(self, path):
+        """The compression hint (+12) of a file's directory entry, or None.
+
+        Read out of the RAW 32 bytes rather than through `entries`, which
+        drops everything but name, attribute, cluster and size - and the hint
+        is the field that says the installed copy is still the packed one
+        (SPEC.md 20.14.1).
+        """
+        first, parts = 0, [p for p in path.split("/") if p]
+        for i, want in enumerate(parts[:-1]):
+            for name, attr, clus, size in self.entries(first):
+                if name.upper() == want.upper():
+                    first = clus
+                    break
+            else:
+                return None
+        if first == 0:
+            raw = self.sec(self.root_lba, self.root_secs)
+        else:
+            raw = b"".join(self.sec(self.data_lba + (c - 2) * self.spc,
+                                    self.spc) for c in self.chain(first))
+        stem, _, ext = parts[-1].upper().partition(".")
+        key = (stem.ljust(8) + ext.ljust(3)).encode()
+        for o in range(0, len(raw), 32):
+            if raw[o:o + 11] == key:
+                return raw[o + 12]
+        return None
+
     def tree(self, first=0, path="", depth=0):
         """Every path on the volume, as {PATH: (is_dir, size)}."""
         found = {}
@@ -160,6 +233,7 @@ HDP_B2X, HDP_BW2 = 74, 64          # ...Install, the middle of the three
                                    #    buttons (SPEC.md 52.4)
 HIW_BY, HIW_BH = 96, 16            # inst.inc: the installer's own button row
 HIW_B0X, HIW_BW0 = 8, 88           # ...and Install / Copy Apps, the first one
+HIW_LX, HIW_CKY, HIW_CKH = 8, 78, 12   # ...and the Erase box (SPEC.md 52.10.15)
 WIN_BORDER, WIN_TITLE = 1, 18      # a window's content origin, from its rect
 
 
@@ -194,8 +268,14 @@ def open_installer(m):
         sys.exit("no Control Panel")
     x0, y0 = content(cp[0])
     mo.click(x0 + 40, y0 + CP_I0Y + CP_IDRV * CP_IROWH + 7)     # Drivers
-    mo.click(x0 + CP_RX + 40, y0 + CP_DBY1 + CP_DROWH + CP_DROWH // 2,
-             settle=8.0)                        # tick Hard Drive (row 1)
+    if not int.from_bytes(m.read(m.sym("drv_tab") + 16 + 2, 2), "little"):
+        mo.click(x0 + CP_RX + 40, y0 + CP_DBY1 + CP_DROWH + CP_DROWH // 2,
+                 settle=8.0)                    # tick Hard Drive (row 1) -
+                                                # ONLY if it is not up: SPEC.md
+                                                # 51.3.2 loads it at boot on a
+                                                # machine whose BIOS knows a
+                                                # disk, and a click on a loaded
+                                                # row UNLOADS it
     nst = m.read(m.sym("cp_nst"), 1)[0]         # SPEC.md 31.9: the driver's
     mo.click(x0 + 40, y0 + CP_I0Y + nst * CP_IROWH + 7, settle=3.0)  # own page
     known = {w[0] for w in wins(m)}
@@ -207,6 +287,20 @@ def open_installer(m):
     print("  installer window = %s" % (iw,))
     ix, iy = content(iw)
     return mo, ix, iy
+
+
+def tick_erase(m, mo, ix, iy):
+    """Tick `Erase the partition first` (SPEC.md 52.10.15), and CHECK it took.
+
+    A slot with a volume on it defaults to KEEPING that volume's files, and
+    the MartyPC XT-IDE disk ships a DOS 3.3 partition - so a row that means a
+    FRESH install has to say so, or it is testing the other one.
+    """
+    mo.click(ix + HIW_LX + 6, iy + HIW_CKY + HIW_CKH // 2, settle=2.0)
+    # It is proved AFTER the install, not here: the box lives in HDDTOOL.DRV's
+    # heap image, where no symbol reader reaches, and the disk answers the
+    # question better anyway - main() refuses a volume that still carries the
+    # DOS files the fixture partition was shipped with.
 
 
 def run_install(m, mo, ix, iy):
@@ -238,24 +332,34 @@ def run_install(m, mo, ix, iy):
     took = M.until(m, lambda _: open(disk, "rb").read(446) != base,
                    "the installer to commit its MBR", limit=600.0)
     print("  MBR committed after %.0fs" % took)
-    quiet, last = 0, None
-    for _ in range(120):
-        time.sleep(2.0)
-        now = open(disk, "rb").read(8 << 20)
-        quiet = quiet + 1 if now == last else 0
-        last = now
-        if quiet >= 8:                          # 16s: the apps phase pauses
-                                                # for a floppy read and a
-                                                # shorter window calls that
-                                                # the end of the install
-            break
-    else:
-        sys.exit("the disk never stopped changing - the install did not finish")
+    # THE DRIVE GOING QUIET IS `quiesce`, and on the GUEST's clock. This was
+    # eight identical 8MB reads two HOST seconds apart, which asks the box for
+    # 16 seconds of stillness and gets whatever fraction of the machine's own
+    # work a loaded box happens to give it - so under contention the apps
+    # phase's pause for a floppy read reads as the end of the install
+    # (docs/plans/SOAK-PARALLEL.md 1). Same signal, same eight readings, the
+    # interval and the budget in guest seconds: the pause it must see through
+    # is the guest's, not the host's.
+    #
+    # A DIGEST, not the 8MB: `quiesce` compares with `==` and holds the last
+    # reading, so hashing keeps two 8MB strings out of the loop for a
+    # comparison that is exactly as strong.
+    try:
+        M.quiesce(m, lambda: hashlib.sha1(
+                      open(disk, "rb").read(8 << 20)).digest(),
+                  guest=2.0, stable=8, budget=480.0,
+                  what="the drive to go quiet")
+    except M.MartyError as e:
+        sys.exit("the disk never stopped changing - the install did not "
+                 "finish (%s)" % e)
     print("  the drive went quiet")
 
 
-def install(m):
+def install(m, wipe=True):
     """Drive the installer on `m`, and REFUSE a disk that is already installed.
+
+    `wipe` ticks the Erase box first, which is what every row written before
+    SPEC.md 52.10.15 meant by an install.
 
     The pre-flight is here because the alternative is a 600-second timeout
     saying nothing useful: an already-installed disk gets the same MBR written
@@ -281,6 +385,8 @@ def install(m):
             "  Restore it from its .pristine copy beside it, or delete it and "
             "re-run `make marty`." % BASE_VHD)
     mo, ix, iy = open_installer(m)
+    if wipe:
+        tick_erase(m, mo, ix, iy)
     run_install(m, mo, ix, iy)
 
 
@@ -311,6 +417,20 @@ def main():
         print("    %-28s %s" % (p, "<dir>" if tree[p][0] else tree[p][1]))
 
     bad = []
+    # THE VOLUME BOOT RECORD'S SERIAL (SPEC.md 18.8.2.1, 52.10.2): the
+    # installer's fresh VBR is built over a zeroed sector, and hd_bpb_fill
+    # wrote BootSig 0x29 with nothing after it - so every installed volume
+    # carried serial 0, whatever the format before it had stamped.
+    vid = struct.unpack_from("<I", v.b, 39)[0]
+    print("  VBR: BootSig %02X, BS_VolID %08X" % (v.b[38], vid))
+    if v.b[38] != 0x29 or vid == 0:
+        bad.append("the installed VBR carries BootSig %02X and serial %08X - "
+                   "a fresh install must stamp one of its own (hd_bpb_fill, "
+                   "SPEC.md 18.8.2.1)" % (v.b[38], vid))
+    if "IO.SYS" in tree or "COMMAND.COM" in tree:
+        bad.append("the DOS files the fixture partition carries are still "
+                   "there - the install KEPT the volume instead of erasing it "
+                   "(the Erase box, SPEC.md 52.10.15)")
     for p in WANT_DIRS:
         if p not in tree:
             bad.append("%s is MISSING" % p)
@@ -321,13 +441,46 @@ def main():
             bad.append("%s is MISSING" % p)
         elif tree[p][0] or tree[p][1] == 0:
             bad.append("%s is empty or a folder" % p)
+
+    # --- and the BYTES, for the files the source disk carries packed --------
+    # THE SAME READER ON BOTH SIDES, so a difference is the install's and not
+    # two implementations disagreeing.
+    src = Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
+    for p in WANT_RAW:
+        want, wmark = src.read(p), src.mark(p)
+        if want is None or wmark not in (0x5A, 0x5B):
+            bad.append("%s is not COMPRESSED on build/os8088-360.img (hint "
+                       "%s) - this row would pass on any installer, so the "
+                       "fixture is wrong rather than the machine"
+                       % (p, wmark))
+            continue
+        got, gmark = v.read(p), v.mark(p)
+        if got is None:
+            bad.append("%s is MISSING" % p)
+        elif got != want:
+            bad.append("%s is %d bytes on the hard disk and %d on the floppy "
+                       "it came from - an install must COPY a file, and "
+                       "OSAPI_FILE_READ would have EXPANDED this one "
+                       "(SPEC.md 20.14.3, 52.10.13)"
+                       % (p, len(got), len(want)))
+        elif gmark != wmark:
+            bad.append("%s arrived byte for byte and its directory hint did "
+                       "not: %02X on the hard disk against %02X on the floppy. "
+                       "dskw_czstamp derives the mark from the bytes being "
+                       "written (SPEC.md 20.14.4), so the file reads as PLAIN "
+                       "and every application would be handed the packed bytes"
+                       % (p, gmark or 0, wmark))
+        else:
+            print("    %-28s %d bytes, byte for byte, hint %02X"
+                  % (p, len(got), gmark))
     for b in bad:
         print("  !! " + b)
     if bad:
         sys.exit("instdeep: %d of the source tree's paths did not survive the "
                  "install (SPEC.md 52.10.13)" % len(bad))
-    print("instdeep: the installed volume carries every folder, "
-          "including the nested and the empty ones")
+    print("instdeep: the installed volume carries every folder, including "
+          "the nested and the empty ones, and every packed file is still "
+          "packed")
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@ import sys
 
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests/unit")
+import os88build                                          # noqa: E402
 import os88marty                                          # noqa: E402
 from harness import check, done                           # noqa: E402
 
@@ -48,47 +49,54 @@ IMG = "build/os8088-360.img"
 APPS = "build/apps360.img"
 
 
-def build(*args):
-    subprocess.run(["make", "-s"] + list(args), check=True,
-                   stdout=subprocess.DEVNULL)
-
-
 def boots(junk, apps):
-    """(reached_a_desktop, the text on screen) for one DLJUNK build."""
-    build("DLJUNK=%s" % junk, IMG, APPS)
+    """(reached_a_desktop, the text on screen) for one DLJUNK build.
+
+    EACH VALUE OF DLJUNK GETS ITS OWN TREE (tools/os88build.py). This used to
+    be `make DLJUNK=<n>` into build/, which is why the row was `builds=True`:
+    it rewrote the shared kernel and every floppy image with it, so nothing
+    else could be reading the tree while it ran. The two values are two trees
+    now, both cached, and build/ is untouched - so the A/B costs one build per
+    value on the first run and nothing on later ones.
+    """
+    t = os88build.tree("DLJUNK=%s" % junk)
+    img = t.img("os8088-360.img")
     try:
-        with os88marty.launch(IMG, apps=apps, machine=MACHINE) as m:
+        with os88marty.launch(img, apps=apps, machine=MACHINE) as m:
             return True, "\n".join(m.screen())
     except os88marty.MartyError:
         # The desktop gate never fired. Come back with no gate at all and read
         # what IS on the screen, because `Disk error` is the assertion - a
         # machine that hung with a blank screen would be a different defect
         # wearing the same result.
-        with os88marty.launch(IMG, apps=apps, machine=MACHINE, boot=10) as m:
+        with os88marty.launch(img, apps=apps, machine=MACHINE, boot=10) as m:
             return False, "\n".join(m.screen())
 
 
-try:
-    # --- 0x61: the Packard Bell exactly. Clamped to 0, so it boots. ---------
-    up, text = boots("0x61", APPS)
-    check(up, "DLJUNK=0x61 reaches a desktop",
-          "SPEC.md 2.9.11's range check should clamp a unit above 3 to 0; a "
-          "failure here is the Packard Bell 286 bug, live",
-          got=text.strip()[:120] or "(a blank screen)", want="a desktop")
+# --- 0x61: the Packard Bell exactly. Clamped to 0, so it boots. ---------
+up, text = boots("0x61", APPS)
+check(up, "DLJUNK=0x61 reaches a desktop",
+      "SPEC.md 2.9.11's range check should clamp a unit above 3 to 0; a "
+      "failure here is the Packard Bell 286 bug, live",
+      got=text.strip()[:120] or "(a blank screen)", want="a desktop")
 
-    # --- 1: a legal unit, left alone, and drive 1 is empty. ------------------
-    up, text = boots("1", None)
-    check(not up, "DLJUNK=1 does NOT reach a desktop",
-          "1 is a legal floppy unit and the check must leave it alone. A "
-          "desktop here means the sector is clamping DL it should keep - or "
-          "that the knob never reached the register, which would make the "
-          "first check above pass for no reason at all",
-          got="a desktop", want="a boot that fails")
-    check("Disk error" in text, "...and it says `Disk error`",
-          "the sector should reach its own message rather than hanging: a "
-          "blank screen here is a different defect with the same verdict",
-          got=text.strip()[:120] or "(a blank screen)", want="Disk error")
-finally:
-    build()                     # ...and the plain kernel goes back in build/
+# --- 1: a legal unit, left alone, and drive 1 is empty. ------------------
+up, text = boots("1", None)
+check(not up, "DLJUNK=1 does NOT reach a desktop",
+      "1 is a legal floppy unit and the check must leave it alone. A "
+      "desktop here means the sector is clamping DL it should keep - or "
+      "that the knob never reached the register, which would make the "
+      "first check above pass for no reason at all",
+      got="a desktop", want="a boot that fails")
+check("Disk error" in text, "...and it says `Disk error`",
+      "the sector should reach its own message rather than hanging: a "
+      "blank screen here is a different defect with the same verdict",
+      got=text.strip()[:120] or "(a blank screen)", want="Disk error")
 
+# NO RESTORE. There used to be a `finally: build()` here putting the plain
+# kernel back into build/, because this row had just overwritten it. It builds
+# into build/trees/dljunk-<hash>/ now and never touches the shared tree, so
+# there is nothing to put back - and a run that dies part way through leaves
+# nothing behind either, which the `finally` could only promise and not
+# deliver (a killed Python runs no `finally` at all).
 done("dljunk")

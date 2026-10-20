@@ -1,9 +1,15 @@
 ; =============================================================================
-; tcp.inc - TCP, stop-and-wait (SPEC.md 72.4)
+; tcp.inc - TCP (SPEC.md 72.4)
 ;
-; Four connections, one unacknowledged segment each. That is the whole
-; congestion and flow-control story and it is a DELIBERATE floor rather than a
-; first draft to be improved on:
+; Four connections. **A SEND WINDOW SINCE SPEC.md 72.4.3**: several segments
+; may be in flight, up to the peer's window and the send ring, and a
+; retransmit is GO-BACK-N from the oldest unacknowledged byte. The three
+; reasons below are why it was stop-and-wait, and 72.4.3 is why the first of
+; them was wrong: on a LAN one segment per round trip is not bounded by the
+; round trip but by the PEER'S DELAYED ACK, which holds a lone segment's ACK
+; for 40-200 ms, so a RETR moved ~1 KB per 100 ms. What the reasons still
+; buy is kept - what is in flight is always the FRONT of the send ring, so a
+; retransmit is still "send the front again", just more than one segment of it:
 ;
 ;   * The wire is 10 Mbit and the machine is 4.77 MHz. A 5150 cannot fill a
 ;     window - PERFORMANCE.md prices a byte through this stack at far more
@@ -110,10 +116,17 @@ SKO_RXB     equ SKO_WANTB + 1   ; word: this socket's rx ring, as an offset
 SKO_RXC     equ SKO_RXB + 2     ; word: ...and its capacity
 SKO_TXB     equ SKO_RXC + 2     ; word: the same pair for the send ring
 SKO_TXC     equ SKO_TXB + 2
+SKO_TXT     equ SKO_TXC + 2     ; word: where the send ring's FRONT is - it is
+                                ; CIRCULAR (SPEC.md 72.4.3), so an ACK moves
+                                ; this rather than sliding the rest down
+SKO_SWND    equ SKO_TXT + 2     ; word: the window the peer last offered
 SK_SZ       equ 128             ; A POWER OF TWO ON PURPOSE - `sk_ptr` is a
                                 ; shift, and an 8086 `mul` writes DX, which is
                                 ; live at three of the six call sites
-%if SKO_HOST + NET_HOSTMAX > SK_SZ
+%if SKO_RXC > 127
+  %error "ethsock.inc's sk_ski holds record offsets as sign-extended bytes"
+%endif
+%if SKO_HOST + NET_HOSTMAX > SK_SZ || SKO_SWND + 2 > SK_SZ
   %error "ether: the socket record does not fit SK_SZ"
 %endif
 
@@ -125,10 +138,14 @@ SK_RXCAP0   equ 1024            ; the floor: what a machine that can spare
 SK_TXCAP0   equ 512             ; nothing else still gets
 
 SK_RXMAX    equ 8192            ; **AND THE CEILING IS THE SEGMENT.** The pool
-SK_TXMAX    equ 1024            ; at this rung is 13,824 bytes; the
+SK_TXMAX    equ 4096            ; at this rung is 16,896 bytes; the
 
 SK_RXMID    equ 4096            ; the middle rung, and the one the arithmetic
-SK_TXMID    equ 512             ; says is the sweet spot: ~29 KB/s predicted
+SK_TXMID    equ 2048            ; says is the sweet spot: ~29 KB/s predicted.
+                                ; The TX sizes are the SEND window's ceiling
+                                ; (SPEC.md 72.4.3): four and two segments of
+                                ; TCP_MSS, and at least two is what makes the
+                                ; peer ACK at once instead of on its timer
 
 ; What the two MEASURED rungs cost, in KB. Derived from the sizes above and
 ; from NET_SOCKS rather than written down beside them, because a number
@@ -163,9 +180,11 @@ SKF_ACPT    equ 0x20            ; a listener made this and NETV_ACCEPT has not
                                 ; frees a slot whose peer went away before
                                 ; anybody asked for it
 
-TCP_MSS     equ SK_TXMAX        ; we never send more than one buffer's worth,
-                                ; so this is the honest number to advertise -
-                                ; and it is under the 1460 an Ethernet path
+TCP_MSS     equ 1024            ; the largest segment we send. It was SK_TXMAX
+                                ; while the send ring held one segment; the
+                                ; ring holds several now (SPEC.md 72.4.3) and
+                                ; this stays what the field has always sent -
+                                ; it is under the 1460 an Ethernet path
                                 ; allows, so nothing here can provoke a
                                 ; fragment (inet.inc drops those).
                                 ;
@@ -218,14 +237,14 @@ TCP_TWTMO   equ 36              ; ticks in TIME-WAIT. The standard is minutes;
 ; sk_ptr - AL = slot 0..NET_SOCKS-1 -> BX = the record
 ; clobbers: BX, flags
 ; -----------------------------------------------------------------------------
+%if SK_SZ != 128
+  %error "sk_ptr multiplies by 128 as a byte move and one shift"
+%endif
 sk_ptr:
-    push cx
-    mov bl, al
-    xor bh, bh
-    mov cl, 7
-    shl bx, cl
-    add bx, sk_tab
-    pop cx
+    mov bh, al                  ; AL * 256...
+    xor bl, bl
+    shr bx, 1                   ; ...halved: AL * 128 = AL * SK_SZ, with no
+    add bx, sk_tab              ; CL to bank and 28 cycles of `shl bx, cl`
     ret
 
 ; -----------------------------------------------------------------------------
@@ -244,52 +263,38 @@ sk_ptr:
 ; -----------------------------------------------------------------------------
 sk_ring_get:
     push ax
-    push cx
-    push dx
+    push si
     cmp word [sk_seg], 0            ; no claim at all: no rings to hand out
-    je  .no
+    stc                             ; (neither `stc` nor `clc` touches ZF)
+    je  .out
     cmp byte [bx+SKO_RING], SK_NORING
-    jne .have                       ; already holds one
-    cmp byte [bx+SKO_WANTB], 0
-    je  .lean
-    cmp byte [sk_rused], 0          ; ring 0 IS the bulk ring
-    jne .lean                       ; taken: a lean one still moves bytes
-    xor al, al
-    jmp short .take
-.lean:
-    mov al, SK_NBULK
-    mov cx, SK_NLEAN
-.l:
-    mov dl, al
-    xor dh, dh
-    push bx
-    mov bx, dx
-    cmp byte [sk_rused+bx], 0
-    pop bx
-    je  .take
-    inc al
-    loop .l
-    jmp short .no                   ; every lean ring is out
-.take:
-    mov [bx+SKO_RING], al
-    mov dl, al
-    xor dh, dh
-    push bx
-    mov bx, dx
-    mov byte [sk_rused+bx], 1
-    pop bx
-    call sk_ring_geo                ; the four words, from the ring number
-.have:
-    pop dx
-    pop cx
-    pop ax
     clc
-    ret
-.no:
-    pop dx
-    pop cx
+    jne .out                        ; already holds one
+    mov si, sk_rused                ; SI walks the allocator's bytes, so the
+    cmp byte [bx+SKO_WANTB], 0      ; ring number is SI - sk_rused
+    je  .lean
+    cmp byte [si], 0                ; ring 0 IS the bulk ring
+    je  .take                       ; taken: a lean one still moves bytes
+.lean:
+    mov si, sk_rused + SK_NBULK
+.l:
+    cmp byte [si], 0
+    je  .take
+    inc si
+    cmp si, sk_rused + SK_NRING
+    jb  .l
+    stc                             ; every lean ring is out
+    jmp short .out
+.take:
+    mov byte [si], 1
+    mov ax, si
+    sub ax, sk_rused
+    mov [bx+SKO_RING], al
+    call sk_ring_geo                ; the four words, from the ring number
+    clc
+.out:
+    pop si
     pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -303,11 +308,10 @@ sk_ring_put:
     mov al, [bx+SKO_RING]
     cmp al, SK_NORING
     je  .out
-    mov byte [bx+SKO_RING], SK_NORING
-    mov word [bx+SKO_RXB], 0        ; **AND THE GEOMETRY GOES WITH IT.** A
-    mov word [bx+SKO_RXC], 0        ; capacity left behind is a window this
-    mov word [bx+SKO_TXB], 0        ; socket would go on advertising over a
-    mov word [bx+SKO_TXC], 0        ; ring somebody else now owns
+    call sk_ring_clr            ; **AND THE GEOMETRY GOES WITH IT.** A
+                                ; capacity left behind is a window this
+                                ; socket would go on advertising over a
+                                ; ring somebody else now owns
     xor ah, ah
     mov bx, ax
     mov byte [sk_rused+bx], 0
@@ -315,6 +319,21 @@ sk_ring_put:
     pop bx
     pop ax
     ret
+
+; --- sk_ring_clr - socket BX holds no ring: SK_NORING and four zero words ---
+sk_ring_clr:
+    push cx
+    push di
+    mov byte [bx+SKO_RING], SK_NORING
+    lea di, [bx+SKO_RXB]
+    mov cx, SKO_TXC + 2 - SKO_RXB       ; RXB, RXC, TXB and TXC, in a row
+    call mem_zero
+    pop di
+    pop cx
+    ret
+%if SKO_RXC != SKO_RXB + 2 || SKO_TXB != SKO_RXC + 2 || SKO_TXC != SKO_TXB + 2
+  %error "sk_ring_clr zeroes the four geometry words as one run"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sk_ring_geo - AL = a ring number -> socket BX's four geometry words
@@ -347,11 +366,7 @@ sk_ring_reset:
     mov cx, NET_SOCKS
 .l:
     call sk_ptr
-    mov byte [bx+SKO_RING], SK_NORING
-    mov word [bx+SKO_RXB], 0
-    mov word [bx+SKO_RXC], 0
-    mov word [bx+SKO_TXB], 0
-    mov word [bx+SKO_TXC], 0
+    call sk_ring_clr
     inc al
     loop .l
     pop di
@@ -392,7 +407,8 @@ sk_ring_geo:
     mov [bx+SKO_TXB], ax
     mov word [bx+SKO_TXC], SK_LEANTX
 .out:
-    pop dx
+    mov word [bx+SKO_TXT], 0        ; an empty ring's front is its start, and a
+    pop dx                          ; ring swap (NETV_BULK) happens only empty
     pop cx
     pop ax
     ret
@@ -414,12 +430,38 @@ sk_txbase:
     add di, [sk_base]
     ret
 
+; --- sk_txpos - socket BX's send ring at logical byte AX (0 = the front) -----
+; out: DI = where that byte is, AX = how many bytes run from there to the
+; ring's end. **THE SEND RING IS CIRCULAR** (SPEC.md 72.4.3): with several
+; segments in flight an ACK retires the front while the rest is still out, and
+; sliding the rest down - what the linear ring did - would copy most of the
+; window again on every ACK. AX may reach the ring's size (TXT < TXC and
+; AX <= TXN <= TXC), so one subtraction folds it.
+sk_txpos:
+    call sk_txfold
+    call sk_txbase
+    add di, ax
+    neg ax
+    add ax, [bx+SKO_TXC]
+    ret
+
+; --- sk_txfold - AX = (AX + the front) folded into socket BX's send ring -----
+; The offset into the ring of logical byte AX; sk_txpos's first half, and
+; tcp_ackin's new front (kernel size pass 12)
+sk_txfold:
+    add ax, [bx+SKO_TXT]
+    cmp ax, [bx+SKO_TXC]
+    jb  .in
+    sub ax, [bx+SKO_TXC]
+.in:
+    ret
+
 ; =============================================================================
-; THE THREE RING COPIES (SPEC.md 72.13)
+; THE RING COPIES (SPEC.md 72.13)
 ;
 ; mem_copy and usr_read move DS->DS and ES->DS, and the ring is in NEITHER
 ; segment now. Rather than juggle segment registers at four call sites - which
-; is how a wrong ES gets written once and read back wrong for ever - the three
+; is how a wrong ES gets written once and read back wrong for ever - the two
 ; shapes the driver actually needs are named here, and every one of them
 ; leaves DS and ES as it found them.
 ;
@@ -430,10 +472,11 @@ sk_txbase:
 ; itself, which is one `mov` and the direction movsb moves in. The field
 ; profile priced the loop it excused at 83 clocks a byte against movsb's 17.
 ;
-; The three shapes differ only in where the two segments come from:
+; The two shapes differ only in where the two segments come from:
 ;   ring_in    DS = the caller's ([eth_useg]),  ES = the claim
 ;   ring_out   DS = the claim,                  ES = ours
-;   ring_move  DS = ES = the claim
+; (ring_move, the third, slid the send ring down on every ACK and went when
+; the ring became circular - SPEC.md 72.4.3)
 ; =============================================================================
 
 ; --- ring_in - the CALLER's buffer at SI -> the ring at DI, CX bytes --------
@@ -485,33 +528,6 @@ ring_out_i:
     pop es                      ; ES:DI = ours...
     mov ds, ax                  ; ...and DS:SI the ring, which is the direction
     cld                         ; `movsb` moves in (72.16)
-    rep movsb
-.out:
-    pop ds
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; --- ring_move - within the ring, SI -> DI, CX bytes ------------------------
-; Forward, and every caller has dest < src, so an overlapping move is safe -
-; the same guarantee the mem_copy it replaces relied on.
-ring_move:
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    push ds
-    jcxz .out
-    cmp word [sk_seg], 0
-    je  .out
-    mov ax, [sk_seg]
-    mov es, ax                  ; BOTH segments are the ring: `movsb` reads
-    mov ds, ax                  ; through DS and writes through ES, and here
-    cld                         ; they are the same block (72.16)
     rep movsb
 .out:
     pop ds
@@ -608,20 +624,12 @@ sk_claim:
     call sk_try                 ; driver's bss used to be, so a machine that
     jnc .done                   ; cannot spare it could not have loaded the
                                 ; driver at all a version ago
-    pop dx                          ; not one rung: [sk_seg] stays 0 and every
-    pop cx                          ; socket verb refuses at sk_ring
-    pop bx
-    pop ax
-    stc
-    ret
+    stc                             ; not one rung: [sk_seg] stays 0 and every
+    jmp ep_dx                       ; socket verb refuses at sk_ring
 .have:
 .done:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp ep_dx
 
 ; --- sk_release - hand the rings back ---------------------------------------
 sk_release:
@@ -662,17 +670,11 @@ sk_busy:
     jne .yes
     inc al
     loop .l
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp ep_cx
 .yes:
-    pop cx
-    pop bx
-    pop ax
     stc
-    ret
+    jmp ep_cx
 
 ; --- sk_reclaim - take [sk_want]'s rung instead of the one we hold ----------
 ; out: CF=0 and [sk_rxcap] is whatever the ladder could get; CF=1 = nothing
@@ -775,24 +777,68 @@ sk_try:
     add ax, cx                      ; bulk pair plus SK_NLEAN lean ones, and
                                     ; NOT one pair per slot. That is what
                                     ; decouples how many sockets exist from
-                                    ; what they cost - 13,824 bytes at the top
+                                    ; what they cost - 16,896 bytes at the top
                                     ; rung where a pair per slot was 36,864
     add ax, SK_NLEAN * (SK_LEANRX + SK_LEANTX)
     add ax, 1023
     mov cl, 10
     shr ax, cl                      ; AX = KB
     call OSAPI_MEM_CLAIM_HI         ; out DX = the base segment. FROM THE TOP
-                                    ; (SPEC.md 50.3.2): the card's own
-                                    ; descriptors point into these rings and it
-                                    ; DMAs into them, so this block is as
-                                    ; unmovable as a driver image and belongs at
-                                    ; the same end of the heap - not in the
-                                    ; arena the compactor and every data claim
-                                    ; share
+                                    ; (SPEC.md 50.3.2), because it is long-lived
+                                    ; and driver-owned and belongs at the same
+                                    ; end of the heap as a driver image - not in
+                                    ; the arena the compactor and every data
+                                    ; claim share.
+                                    ;
+                                    ; **NOT because the card writes into it: it
+                                    ; cannot.** This comment used to say "the
+                                    ; card's own descriptors point into these
+                                    ; rings and it DMAs into them, so this block
+                                    ; is as unmovable as a driver image", and
+                                    ; both clauses are false for an NE2000. The
+                                    ; 8390's two DMA engines are internal to the
+                                    ; card - frames land in ITS packet memory
+                                    ; between PSTART and PSTOP (ne2000.inc) and
+                                    ; the host side of remote DMA is `in al, dx`
+                                    ; / `stosb` through one port, so the CPU
+                                    ; moves every byte. There is no host-memory
+                                    ; descriptor to point anywhere, and this
+                                    ; driver hooks no vector at all (ether.asm:
+                                    ; "IT POLLS, AND HOOKS NOTHING").
+                                    ;
+                                    ; So the pool is UNDECLARED, not unmovable -
+                                    ; sk_reclaim below says so in as many words,
+                                    ; and a relocation proc for it is one store
+                                    ; to [sk_seg], because sk_ring re-derives ES
+                                    ; from that word on every access and
+                                    ; [sk_base] is an offset INSIDE the block.
+                                    ; docs/plans/HEAP-UNPIN-PLAN.md 5.1 is the
+                                    ; full argument and what declaring it would
+                                    ; cost. Placement stays either way: top-down
+                                    ; is right for a long-lived driver block
     jc .no
     mov [sk_seg], dx
-    mov ax, bx                      ; TX starts above ALL the RX rings: the
-    add ax, SK_NLEAN * SK_LEANRX    ; bulk one and then the lean ones
+    push ax                         ; ...AND IT IS MOVABLE (SPEC.md 66.2).
+    mov ax, sk_reloc                ; docs/plans/HEAP-UNPIN-PLAN.md 2.0 is the
+    call OSAPI_MEM_MOVABLE          ; case: mount ETHER at boot, open three
+    pop ax                          ; apps, mount SOUND and unmount ETHER, and
+                                    ; whatever is left below the ceiling is a
+                                    ; wall for the rest of the session. This is
+                                    ; the largest single block in that wall,
+                                    ; and it was the one there was no reason to
+                                    ; pin - the pool is undeclared rather than
+                                    ; unmovable, which the comment above says
+                                    ; in as many words.
+                                    ;
+                                    ; IT WAITED FOR SPEC.md 66.4.1 on purpose.
+                                    ; Declaring it before the descending pass
+                                    ; existed would have slid it DOWN to close
+                                    ; the gap beneath it - an improvement, but
+                                    ; the wrong one: what is wanted is for it
+                                    ; to pack UP with the rest of the ceiling,
+                                    ; and only that pass does that
+    lea ax, [bx+SK_NLEAN * SK_LEANRX] ; TX starts above ALL the RX rings:
+                                    ; the bulk one and then the lean ones
     mov [sk_txoff], ax
     call sk_ring_reset              ; ...and nothing holds a ring yet
     pop dx
@@ -805,6 +851,30 @@ sk_try:
     pop cx
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sk_reloc - THE HEAP COMPACTOR MOVED THE SOCKET POOL (SPEC.md 66.2, 66.4.1)
+; in:  BX = the base segment it WAS at, DX = the base it is at NOW.
+;      DS = CS = ours, ES = KERNEL_SEG. The bytes have already moved.
+; out: nothing; every register preserved
+;
+; ONE WORD, and sbl_reloc's shape exactly, because the property that makes it
+; one word was designed in for a different reason: sk_ring below re-derives ES
+; from [sk_seg] on EVERY access - "every ring access goes through this rather
+; than loading [sk_seg] by hand" - and [sk_base] is an offset INSIDE the block,
+; so nothing outside this word names where the pool is.
+;
+; The four sites that do load [sk_seg] into a register (they have to: the word
+; is unreachable once DS moves for a copy) hold it across a `rep movsb` and
+; nothing else. A compaction can only fire from inside a claim, and no claim
+; happens in any of those windows.
+; -----------------------------------------------------------------------------
+sk_reloc:
+    cmp bx, [sk_seg]
+    jne .out
+    mov [sk_seg], dx
+.out:
     ret
 
 %endif  ; ETH_NOEMIT
@@ -1130,12 +1200,14 @@ sk_rxget_i:
 
 ; -----------------------------------------------------------------------------
 ; tcp_out - one segment for socket BX
-; in:  AL = the flags, CX = data bytes from the FRONT of its send buffer
+; in:  AL = the flags, CX = data bytes, DX = where they start, counted from
+;      the FRONT of its send ring (SND.UNA's byte)
 ; out: CF=1 = nothing went (no ARP yet, or the card refused)
 ;
-; The sequence number is always SKO_SUNA, because the front of the buffer is
-; the only thing that can be in flight (see the header). That is what makes a
-; retransmit and a first transmission the same call.
+; The sequence number is SKO_SUNA + DX, because what is in flight is always
+; the front of the ring (see the header): a first transmission names how far
+; along it starts and a go-back-N retransmit starts again at 0. That is what
+; still makes the two the same call (SPEC.md 72.4.3).
 ; -----------------------------------------------------------------------------
 tcp_out:
     push ax
@@ -1146,8 +1218,8 @@ tcp_out:
     push di
     mov [eth_oflg], al
     mov [eth_dlen], cx
-    mov si, bx
-    add si, SKO_RIP
+    mov [eth_doff], dx
+    lea si, [bx+SKO_RIP]
     mov al, IPP_TCP
     call ip_start
     jc  .out
@@ -1158,13 +1230,13 @@ tcp_out:
     add di, 2
     mov ax, [bx+SKO_RP]
     call be_put
-    mov si, bx
-    add si, SKO_SUNA
+    lea si, [bx+SKO_SUNA]
     call q_get
+    add ax, [eth_doff]
+    adc dx, 0
     mov di, eth_txb + IP_PAY + TCO_SEQ
     call be32_put
-    mov si, bx
-    add si, SKO_RNXT
+    lea si, [bx+SKO_RNXT]
     call q_get
     mov di, eth_txb + IP_PAY + TCO_ACK
     call be32_put
@@ -1180,7 +1252,7 @@ tcp_out:
     ; segment size and so tests/ftpd.py could never see it.
     ;
     ; A SYN carries no data on any path here - tcp_syn, tcp_accept_in and
-    ; tcp_retx all arrive with CX = 0 - so the four bytes sit where the
+    ; tcp_timers' retransmit all arrive with CX = 0 - so the four bytes sit where the
     ; payload would, and the only other change is the four added to the TCP
     ; length below.
     ; -----------------------------------------------------------------------
@@ -1209,11 +1281,22 @@ tcp_out:
     mov word [eth_txb+IP_PAY+TCO_CK], 0
     mov word [eth_txb+IP_PAY+TCO_URG], 0
 
-    mov cx, [eth_dlen]                  ; the data, from the front
+    mov cx, [eth_dlen]                  ; the data, from [eth_doff] along
     jcxz .nodata
-    call sk_txbase
+    mov ax, [eth_doff]
+    call sk_txpos                       ; DI = it, AX = the run to the end
     mov si, di
     mov di, eth_txb + IP_PAY + TC_HLEN
+    cmp cx, ax
+    jbe .tail
+    xchg cx, ax                         ; **A SEGMENT MAY WRAP** (72.4.3): the
+    call ring_out                       ; run to the ring's end first...
+    add di, cx
+    sub ax, cx                          ; (eth_v_send's shape: AX was the
+    mov cx, ax                          ; whole, CX the run - size pass 12)
+    mov si, [bx+SKO_TXB]                ; ...and the rest from its start
+    add si, [sk_base]
+.tail:
     call ring_out               ; the ring is the CLAIM's, the frame is ours
 .nodata:
     mov cx, [eth_dlen]
@@ -1222,7 +1305,10 @@ tcp_out:
     jz  .nomss                          ; which ip_pseudo, ip_ck_part and
     add cx, 4                           ; ip_finish all measure from CX
 .nomss:
-    push cx
+    inc word [eth_nseg]                 ; (a segment we send; tcp_rst joins
+                                        ; below this, so a RST is not one)
+.ck:                                    ; **tcp_rst's way in**: CX = the TCP
+    push cx                             ; length, the header otherwise written
     call ip_pseudo                      ; BX = the pseudo-header sum. **BX is
     mov si, eth_txb + IP_PAY            ; the socket everywhere else in this
     call ip_ck_part                     ; file and it is not here** - which is
@@ -1231,7 +1317,6 @@ tcp_out:
     pop cx
     mov [eth_txb+IP_PAY+TCO_CK], ax
     call ip_finish
-    inc word [eth_nseg]
     clc
 .out:
     pop di
@@ -1248,9 +1333,12 @@ tcp_out:
 tcp_ack:
     push ax
     push cx
-    mov al, TF_ACK
-    xor cx, cx
-    call tcp_out
+    push dx
+    mov dx, [bx+SKO_TXS]                ; past what is in flight: a bare ACK
+    mov al, TF_ACK                      ; carries SND.NXT, which is SND.UNA
+    xor cx, cx                          ; whenever one segment was the most
+    call tcp_out                        ; that could be out
+    pop dx
     pop cx
     pop ax
     ret
@@ -1277,107 +1365,105 @@ tcp_rst:
     mov al, IPP_TCP
     call ip_start
     jc  .out
-    mov si, eth_rxb + IP_PAY + TCO_DP   ; our port was their destination
-    call be_get
-    mov di, eth_txb + IP_PAY + TCO_SP
-    call be_put
-    mov si, eth_rxb + IP_PAY + TCO_SP
-    call be_get
-    mov di, eth_txb + IP_PAY + TCO_DP
-    call be_put
-    mov si, eth_rxb + IP_PAY + TCO_ACK  ; their ack becomes our sequence, and
-    call be32_get                       ; their sequence plus everything it
-    mov di, eth_txb + IP_PAY + TCO_SEQ  ; carried becomes our ack - which is
-    call be32_put                       ; what makes the peer believe it
-    mov si, eth_rxb + IP_PAY + TCO_SEQ
-    call be32_get
-    mov di, eth_ph2
-    call q_put
-    mov ax, [eth_seglen]
-    mov di, eth_ph2
-    call q_add
+    mov ax, [eth_rxb+IP_PAY+TCO_DP]     ; our port was their destination - and
+    mov [eth_txb+IP_PAY+TCO_SP], ax     ; the other way round - copied as the
+    mov ax, [eth_rxb+IP_PAY+TCO_SP]     ; wire has them, so no byte order
+    mov [eth_txb+IP_PAY+TCO_DP], ax
+    mov si, eth_rxb + IP_PAY + TCO_ACK  ; their ack becomes our sequence, byte
+    mov di, eth_txb + IP_PAY + TCO_SEQ  ; for byte, and their sequence plus
+    call mem_cp4                        ; everything it carried becomes our ack
+    mov si, eth_rxb + IP_PAY + TCO_SEQ  ; - which is what makes the peer
+    call be32_get                       ; believe it
+    add ax, [eth_seglen]
+    adc dx, 0
     test byte [eth_rxb+IP_PAY+TCO_FLG], TF_SYN
     jz  .nosyn
-    mov ax, 1
-    mov di, eth_ph2
-    call q_add                          ; a SYN counts as a byte, and a RST
-.nosyn:                                 ; that does not say so is ignored
-    mov si, eth_ph2
-    call q_get
+    add ax, 1                           ; a SYN counts as a byte, and a RST
+    adc dx, 0                           ; that does not say so is ignored
+.nosyn:
     mov di, eth_txb + IP_PAY + TCO_ACK
     call be32_put
-    mov byte [eth_txb+IP_PAY+TCO_OFF], 5 << 4
-    mov byte [eth_txb+IP_PAY+TCO_FLG], TF_RST | TF_ACK
-    mov word [eth_txb+IP_PAY+TCO_WIN], 0
-    mov word [eth_txb+IP_PAY+TCO_CK], 0
-    mov word [eth_txb+IP_PAY+TCO_URG], 0
+    mov word [eth_txb+IP_PAY+TCO_OFF], (TF_RST | TF_ACK) << 8 | 5 << 4
+    xor ax, ax                          ; ...the offset and the flags in one
+    mov [eth_txb+IP_PAY+TCO_WIN], ax    ; word, and no window, no checksum yet
+    mov [eth_txb+IP_PAY+TCO_CK], ax     ; and nothing urgent
+    mov [eth_txb+IP_PAY+TCO_URG], ax
     mov cx, TC_HLEN
-    call ip_pseudo
-    mov si, eth_txb + IP_PAY
-    mov cx, TC_HLEN
-    call ip_ck_part
-    mov ax, bx
-    not ax
-    mov [eth_txb+IP_PAY+TCO_CK], ax
-    mov cx, TC_HLEN
-    call ip_finish
+    jmp tcp_out.ck                      ; the same six registers are on the
+                                        ; stack there, and its tail sums,
+                                        ; stores and sends exactly this
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_di
 
 ; -----------------------------------------------------------------------------
 ; tcp_kick - send whatever socket BX has to send, if anything can go now
 ;
 ; ONE PLACE decides what goes on the wire for a connection, and every caller -
 ; the verbs, the timers, the receive path - comes through it. That is what
-; keeps "is there a segment in flight" a question with one answer.
+; keeps "what is in flight" a question with one answer.
+;
+; **SEVERAL SEGMENTS, NOT ONE** (SPEC.md 72.4.3). What has gone is the front
+; TXS bytes of the ring and what has not is the TXN - TXS after it, so this
+; sends segments from TXS on until that runs out or the peer's window is
+; full. The FIRST segment goes whatever the window says, which is exactly
+; what the stop-and-wait sender did on every segment: it is the probe a shut
+; window needs, and a peer whose window is under two segments gets the old
+; stack and nothing worse. A later one goes only WHOLE into what is open,
+; so a narrow window is not answered with a sliver (RFC 1122 4.2.3.4).
+;
+; The retransmit timer times the OLDEST byte out: it is armed by the send
+; that finds it idle and left alone by the rest, and tcp_ackin re-arms it for
+; whatever an ACK leaves still out.
 ; -----------------------------------------------------------------------------
 tcp_kick:
     push ax
     push cx
     push dx
     push di
-    cmp word [bx+SKO_TXS], 0
-    jne .out                            ; something is already in flight
     cmp byte [bx+SKO_TS], TS_ESTAB
     je  .data
     cmp byte [bx+SKO_TS], TS_CLOSEW
-    je  .data
-    jmp short .out
+    jne .out
 .data:
+    mov dx, [bx+SKO_TXS]                ; the next byte to go, from the front
     mov cx, [bx+SKO_TXN]
-    jcxz .fin
+    sub cx, dx                          ; ...and how many have not gone
+    jz  .fin
     cmp cx, TCP_MSS
-    jbe .send
+    jbe .full
     mov cx, TCP_MSS
+.full:
+    or  dx, dx
+    jz  .send                           ; nothing out: this one goes regardless
+    mov ax, [bx+SKO_SWND]
+    sub ax, dx                          ; the window still open past what is
+    jbe .out                            ; out (unsigned: it may be all used)
+    cmp cx, ax
+    ja  .out                            ; only a whole segment into it
 .send:
     mov al, TF_ACK | TF_PSH
     call tcp_out
     jc  .out                            ; ARP pending: the timer will retry
-    mov [bx+SKO_TXS], cx
-    mov di, bx
-    add di, SKO_SNXT
+    add [bx+SKO_TXS], cx
+    lea di, [bx+SKO_SNXT]
     mov ax, cx
     call q_add
-    call tcp_arm
-    jmp short .out
+    call tcp_arm_idle                   ; unless already timing the oldest byte
+    jmp short .data
 .fin:
+    or  dx, dx                          ; **A FIN FOLLOWS THE LAST BYTE'S ACK**,
+    jnz .out                            ; not the last byte: everything sent is
+                                        ; not everything acknowledged
     test byte [bx+SKO_FL], SKF_FIN      ; nothing left to send: is a close owed?
     jz  .out
     test byte [bx+SKO_FL], SKF_FINS
     jnz .out
     mov al, TF_ACK | TF_FIN
-    xor cx, cx
+    xor cx, cx                          ; (DX = 0: the FIN is SND.UNA's)
     call tcp_out
     jc  .out
     or  byte [bx+SKO_FL], SKF_FINS
-    mov di, bx
-    add di, SKO_SNXT
+    lea di, [bx+SKO_SNXT]
     mov ax, 1
     call q_add
     call tcp_arm
@@ -1396,7 +1482,16 @@ tcp_kick:
 
 ; -----------------------------------------------------------------------------
 ; tcp_arm / tcp_disarm - the retransmit timer for socket BX
+;
+; tcp_arm_idle is tcp_arm unless the timer is already running: it times the
+; OLDEST byte out (72.4.3), so a send or an ACK that finds it armed leaves it
+; alone. tcp_kick's and tcp_ackin's one test, here once (kernel size pass 12)
 ; -----------------------------------------------------------------------------
+tcp_arm_idle:
+    cmp word [bx+SKO_RTO], 0
+    je  tcp_arm
+    ret
+
 tcp_arm:
     push ax
     push cx
@@ -1428,9 +1523,13 @@ tcp_disarm:
 ; -----------------------------------------------------------------------------
 tcp_abort:
     mov byte [bx+SKO_TS], TS_CLOSED
-    mov word [bx+SKO_RTO], 0
-    mov word [bx+SKO_TXN], 0
-    mov word [bx+SKO_TXS], 0
+    push ax                             ; AL is the state, below: the four
+    xor ax, ax                          ; words through a zero register are
+    mov [bx+SKO_RTO], ax                ; 16 bytes where four immediates are
+    mov [bx+SKO_TXN], ax                ; 20 (kernel size pass 12)
+    mov [bx+SKO_TXS], ax
+    mov [bx+SKO_TXT], ax
+    pop ax
     test byte [bx+SKO_FL], SKF_ORPH
     jnz .free
     test byte [bx+SKO_FL], SKF_ACPT     ; nobody ever asked for this one, so
@@ -1496,12 +1595,7 @@ sk_reap_kids:
 .next:
     inc dl
     loop .l
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ep_si
 
 ; =============================================================================
 ; CONNECTING
@@ -1554,33 +1648,16 @@ tcp_syn:
     call OSAPI_GET_TICKS                ; the initial sequence number. Not a
     mov dx, ax                          ; security measure on a machine with no
     call OSAPI_RAND                     ; clock worth the name - it is here so
-    mov di, bx                          ; that a connection reopened on the same
-    add di, SKO_SUNA                    ; port pair does not inherit the old
-    call q_put                          ; one's numbers
-    mov si, bx
-    add si, SKO_SUNA
-    call q_get
-    mov di, bx
-    add di, SKO_SNXT
-    call q_put
-    mov ax, 1
-    call q_add
+    call tcp_isn                        ; that a connection reopened on the same
+                                        ; port pair does not inherit the old
+                                        ; one's numbers
     call sk_ring_get                    ; **BEFORE THE SYN** (SPEC.md 72.21):
     jc  .noring                         ; tcp_out advertises sk_rxfree, so a
                                         ; socket with no ring would open the
                                         ; connection announcing a zero window
-    mov byte [bx+SKO_TS], TS_SYNSENT
-    mov byte [bx+SKO_ST], NSK_CONNECT
-    or  byte [bx+SKO_FL], SKF_SYNA
-    mov byte [bx+SKO_TRY], 0
-    call OSAPI_GET_TICKS
-    add ax, TCP_CONNTMO
-    mov [bx+SKO_TMO], ax
-    mov al, TF_SYN
-    xor cx, cx
-    call tcp_out                        ; a CF here is ARP: the timer retries
-    call tcp_arm
-    jmp short .done
+    mov ax, TF_SYN << 8 | TS_SYNSENT
+    call tcp_synout                     ; a CF in there is ARP: the timer
+    jmp short .done                     ; retries
 .noring:
     mov byte [bx+SKO_TS], TS_CLOSED     ; every ring is busy: this is a refusal
     mov byte [bx+SKO_ST], NSK_FAILED    ; the caller can see, not a connection
@@ -1592,6 +1669,42 @@ tcp_syn:
     pop cx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; tcp_isn - DX:AX = the initial sequence number of socket BX: SND.UNA is it
+; and SND.NXT one past, because the SYN occupies a sequence number
+; clobbers: AX, DX, DI
+; -----------------------------------------------------------------------------
+tcp_isn:
+    lea di, [bx+SKO_SUNA]
+    call q_put                  ; (q_put keeps DX:AX)
+    lea di, [bx+SKO_SNXT]
+    call q_put
+    mov ax, 1
+    jmp q_add
+
+; -----------------------------------------------------------------------------
+; tcp_synout - socket BX opens: AL = its TCP state, AH = the flags of the
+; segment that says so (a SYN, or a SYN-ACK). Connecting, retries reset, the
+; connect deadline started, the segment sent and the retransmit armed - what
+; an active open and a passive one share
+; clobbers: AX, CX, DX
+; -----------------------------------------------------------------------------
+tcp_synout:
+    mov [bx+SKO_TS], al
+    mov byte [bx+SKO_ST], NSK_CONNECT
+    or  byte [bx+SKO_FL], SKF_SYNA
+    mov byte [bx+SKO_TRY], 0
+    push ax
+    call OSAPI_GET_TICKS
+    add ax, TCP_CONNTMO
+    mov [bx+SKO_TMO], ax
+    pop ax
+    mov al, ah
+    xor cx, cx
+    xor dx, dx
+    call tcp_out
+    jmp tcp_arm
 
 ; =============================================================================
 ; THE RECEIVE PATH
@@ -1631,8 +1744,7 @@ tcp_match:
     cmp ax, [bx+SKO_RP]
     jne .next
     mov si, eth_rxb + IP_OFF + IPO_SRC
-    mov di, bx
-    add di, SKO_RIP
+    lea di, [bx+SKO_RIP]
     call ip_eq
     je  .hit
 .next:
@@ -1773,47 +1885,29 @@ tcp_accept_in:
                                         ; table is structurally full it never
                                         ; does. CF=1 and tcp_in sends the RST
     mov [bx+SKO_LP], dx
+    call tcp_wnd                        ; the window their SYN offers
     mov ax, [eth_rport]
     mov [bx+SKO_RP], ax
     mov si, eth_rxb + IP_OFF + IPO_SRC
-    mov di, bx
-    add di, SKO_RIP
-    mov cx, 4
-    call mem_copy
+    lea di, [bx+SKO_RIP]
+    call mem_cp4
     mov si, eth_rxb + IP_PAY + TCO_SEQ  ; their sequence, plus one for the SYN
     call be32_get
-    mov di, bx
-    add di, SKO_RNXT
+    lea di, [bx+SKO_RNXT]
     call q_put
     mov ax, 1
     call q_add
     call OSAPI_RAND                     ; ...and ours
     mov dx, ax
     call OSAPI_RAND
-    mov di, bx
-    add di, SKO_SUNA
-    call q_put
-    mov si, bx
-    add si, SKO_SUNA
-    call q_get
-    mov di, bx
-    add di, SKO_SNXT
-    call q_put
-    mov ax, 1
-    call q_add
-    mov byte [bx+SKO_TS], TS_SYNRCVD
-    mov byte [bx+SKO_ST], NSK_CONNECT
-    or  byte [bx+SKO_FL], SKF_SYNA | SKF_ACPT
-    mov byte [bx+SKO_TRY], 0
-    call OSAPI_GET_TICKS                ; the connect deadline, which sk_alloc
-    add ax, TCP_CONNTMO                 ; has just ZEROED - and a deadline of
-    mov [bx+SKO_TMO], ax                ; zero is one tcp_timers' .ctmo has
-                                        ; already passed, so the slot is
-                                        ; aborted on the very first pump
-    mov al, TF_SYN | TF_ACK
-    xor cx, cx
-    call tcp_out
-    call tcp_arm
+    call tcp_isn
+    or  byte [bx+SKO_FL], SKF_ACPT
+    mov ax, (TF_SYN | TF_ACK) << 8 | TS_SYNRCVD
+    call tcp_synout                     ; ...which starts the connect deadline
+                                        ; that sk_alloc has just ZEROED - and a
+                                        ; deadline of zero is one tcp_timers'
+                                        ; .ctmo has already passed, so the slot
+                                        ; would be aborted on the very first pump
     clc                                 ; **SET EXPLICITLY, BOTH WAYS**: the
     jmp short .out                      ; pops below do not touch the flags but
 .noring:                                ; tcp_arm's CF is nobody's contract
@@ -1825,12 +1919,17 @@ tcp_accept_in:
 .full:
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp ep_di
+
+; --- tcp_wnd - socket BX's send window is what the segment in eth_rxb offers -
+; No window scaling is offered on our SYN, so the peer's 16 bits are bytes
+; (SPEC.md 72.4.3). Taken from every in-order segment: on a connection that
+; does not reorder, the latest is the one that counts.
+; clobbers: AX - both callers have it dead (kernel size pass 12)
+tcp_wnd:
+    mov ax, [eth_rxb+IP_PAY+TCO_WIN]
+    xchg al, ah
+    mov [bx+SKO_SWND], ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1869,8 +1968,7 @@ tcp_seg:
     mov di, eth_ph2
     call q_put
     mov si, eth_ph2
-    mov di, bx
-    add di, SKO_RNXT
+    lea di, [bx+SKO_RNXT]
     call q_sub                          ; DX:AX = theirs - ours
     or  ax, dx
     jz  .inorder
@@ -1882,7 +1980,8 @@ tcp_seg:
                                         ; ACK answers the peer's own ACKs, and
                                         ; on a stop-and-wait connection that is
                                         ; a frame per frame for nothing
-    call tcp_ackin                      ; what have they acknowledged?
+    call tcp_ackin                      ; what have they acknowledged? (and
+                                        ; what may we send them, 72.4.3)
 
     cmp byte [bx+SKO_TS], TS_SYNRCVD    ; **AND A PASSIVE OPEN IS NOW UP.** The
     jne .est                            ; peer's final ACK is the only thing
@@ -1901,8 +2000,7 @@ tcp_seg:
                                         ; the peer must come back - and NOTHING
                                         ; may be consumed here, their FIN least
                                         ; of all
-    mov di, bx
-    add di, SKO_RNXT
+    lea di, [bx+SKO_RNXT]
     mov ax, cx
     call q_add
     mov byte [eth_adv], 1
@@ -1912,8 +2010,7 @@ tcp_seg:
 .nodata:
     test byte [eth_flg], TF_FIN
     jz  .acknow
-    mov di, bx
-    add di, SKO_RNXT
+    lea di, [bx+SKO_RNXT]
     mov ax, 1
     call q_add
     mov byte [eth_adv], 1
@@ -1949,13 +2046,12 @@ tcp_seg:
     jz  .out
     test byte [eth_flg], TF_SYN
     jz  .out
-    call tcp_ackin
+    call tcp_ackin                      ; (the window too)
     test byte [bx+SKO_FL], SKF_SYNA     ; ...the ack has to have covered it
     jnz .out
     mov si, eth_rxb + IP_PAY + TCO_SEQ
     call be32_get
-    mov di, bx
-    add di, SKO_RNXT
+    lea di, [bx+SKO_RNXT]
     call q_put
     mov ax, 1
     call q_add
@@ -1986,6 +2082,10 @@ tcp_ackin:
     push dx
     push si
     push di
+    call tcp_wnd                        ; **THE WINDOW FIRST, ACK OR NOT**: both
+                                        ; of tcp_seg's calls took it just before
+                                        ; this one, so it is here once (kernel
+                                        ; size pass 12)
     test byte [eth_flg], TF_ACK
     jz  .out
     mov si, eth_rxb + IP_PAY + TCO_ACK
@@ -1993,8 +2093,8 @@ tcp_ackin:
     mov di, eth_ph2
     call q_put
     mov si, eth_ph2                     ; ahead of what we SENT is no ack at
-    mov di, bx                          ; all: SND.UNA may never pass SND.NXT,
-    add di, SKO_SNXT                    ; and a peer that moved it there would
+    lea di, [bx+SKO_SNXT]               ; all: SND.UNA may never pass SND.NXT,
+                                        ; and a peer that moved it there would
     call q_sub                          ; have every later segment sent from a
     or  dx, dx                          ; sequence the peer discards, with the
     js  .inwin                          ; retransmit timer just disarmed
@@ -2004,8 +2104,7 @@ tcp_ackin:
     jnz .out
 .inwin:
     mov si, eth_ph2                     ; theirs - ours: zero or less is old
-    mov di, bx
-    add di, SKO_SUNA
+    lea di, [bx+SKO_SUNA]
     call q_sub
     or  dx, dx
     js  .out
@@ -2016,8 +2115,9 @@ tcp_ackin:
 .new:
     mov cx, ax                          ; how many sequence numbers retired.
     or  dx, dx                          ; A jump of more than 64KB cannot
-    jz  .amt                            ; happen with one segment in flight,
-    mov cx, 0xFFFF                      ; so this only guards a malicious peer
+    jz  .amt                            ; happen with a send ring under 64KB
+    mov cx, 0xFFFF                      ; in flight, so this only guards a
+                                        ; malicious peer
 .amt:
     test byte [bx+SKO_FL], SKF_SYNA     ; the SYN, if it was still out
     jz  .nosyn
@@ -2034,15 +2134,13 @@ tcp_ackin:
     sub cx, ax
     sub [bx+SKO_TXS], ax
     sub [bx+SKO_TXN], ax
-    push cx                             ; ...and what is left slides down
-    push ax
-    call sk_txbase
-    mov si, di
-    add si, ax
-    mov cx, [bx+SKO_TXN]
-    call ring_move                      ; forward, and dest < src, so an
-    pop ax                              ; overlapping move is safe
-    pop cx
+    jz  .empty                          ; **THE FRONT MOVES, THE BYTES DO NOT**
+    call sk_txfold                      ; (72.4.3): what is left used to be
+    jmp short .front                    ; slid down to the start, which with a
+.empty:                                 ; window out is most of it again per
+    xor ax, ax                          ; ACK. An empty ring goes back to its
+.front:                                 ; start, which is what NETV_BULK's
+    mov [bx+SKO_TXT], ax                ; ring swap and sk_ring_geo assume
 .nodata:
     test byte [bx+SKO_FL], SKF_FINS     ; and the FIN
     jz  .nofin
@@ -2051,14 +2149,16 @@ tcp_ackin:
     call tcp_finacked
 .nofin:
     mov si, eth_ph2                     ; SND_UNA moves to what they acked
-    mov di, bx
-    add di, SKO_SUNA
-    mov cx, 4
-    call mem_copy
-    call tcp_disarm
-    cmp word [bx+SKO_TXS], 0
-    jne .out
-    call tcp_kick
+    lea di, [bx+SKO_SUNA]
+    call mem_cp4
+    call tcp_disarm                     ; progress: the backoff starts over...
+    call tcp_kick                       ; ...and the window has moved on
+    cmp word [bx+SKO_TXS], 0            ; **AND WHAT IS STILL OUT IS STILL
+    jne .arm                            ; TIMED** (72.4.3). An ACK of part of
+    test byte [bx+SKO_FL], SKF_SYNA | SKF_FINS ; what was out used to leave
+    jz  .out                            ; the timer disarmed - rare with one
+.arm:                                   ; segment, and every ACK with a window.
+    call tcp_arm_idle                   ; Unless the kick sent, and armed it
 .out:
     pop di
     pop si
@@ -2125,7 +2225,6 @@ tcp_timers:
     call OSAPI_GET_TICKS
     mov [eth_now], ax
     xor dl, dl
-    mov cx, NET_SOCKS
 .l:
     mov al, dl
     call sk_ptr
@@ -2162,19 +2261,17 @@ tcp_timers:
     js  .next
     inc byte [bx+SKO_TRY]
     cmp byte [bx+SKO_TRY], TCP_RTMAX + 1
-    jbe .again
+    jbe .retx
     mov al, NSK_FAILED                  ; it stopped answering altogether
     call tcp_abort
-    jmp short .next
-.again:
-    call tcp_retx
     jmp short .next
 .idle:
     call tcp_kick                       ; nothing in flight and something to
 .next:                                  ; send: usually the ARP that was not
     inc dl                              ; ready the first time
-    loop .l
-    pop di
+    cmp dl, NET_SOCKS                   ; THE INDEX IS THE COUNT, so CX is free
+    jb  .l                              ; for the retransmit below (kernel
+    pop di                              ; size pass 12: it was `loop`)
     pop si
     pop dx
     pop cx
@@ -2182,12 +2279,12 @@ tcp_timers:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; tcp_retx - send the front of socket BX's window again
-; -----------------------------------------------------------------------------
-tcp_retx:
-    push ax
-    push cx
+; --- .retx - send the front of socket BX's window again ----------------------
+; tcp_retx until kernel size pass 12, written at its one call: AX, CX, SI and
+; DI are dead in this loop, so DX - DL is the slot - is the only bank it owes
+.retx:
+    push dx
+    xor dx, dx                          ; every retransmit starts at SND.UNA
     test byte [bx+SKO_FL], SKF_SYNA
     jz  .data
     mov al, TF_SYN
@@ -2199,10 +2296,19 @@ tcp_retx:
     call tcp_out
     jmp short .arm
 .data:
-    mov cx, [bx+SKO_TXS]
-    jcxz .fin
-    mov al, TF_ACK | TF_PSH
-    call tcp_out
+    cmp word [bx+SKO_TXS], 0
+    je  .fin
+    ; **GO-BACK-N** (SPEC.md 72.4.3): everything out is forgotten and sent
+    ; again from the front, by the one routine that sends data. It is still
+    ; "send the front of the ring again" - only as many segments of it as the
+    ; window takes - and it cannot desynchronise from the ACK for the reason
+    ; stop-and-wait could not: SND.NXT is put back to SND.UNA, so what is in
+    ; flight is again exactly what tcp_kick is about to send.
+    mov word [bx+SKO_TXS], 0
+    lea si, [bx+SKO_SUNA]
+    lea di, [bx+SKO_SNXT]
+    call mem_cp4
+    call tcp_kick
     jmp short .arm
 .fin:
     test byte [bx+SKO_FL], SKF_FINS
@@ -2213,6 +2319,5 @@ tcp_retx:
 .arm:
     call tcp_arm
     inc word [eth_nretx]
-    pop cx
-    pop ax
-    ret
+    pop dx
+    jmp short .next

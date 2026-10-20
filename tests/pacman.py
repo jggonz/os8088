@@ -22,6 +22,8 @@ import os88sym
 import os88geom
 import dispcp
 import dispapps
+import os88build
+import os88pkg
 
 
 def main():
@@ -79,8 +81,19 @@ def main():
         assert read('pm_hired') == 1
         assert read('pm_score', 4) >= 10 and read('pm_eaten', 2) > 0
         assert read('pm_half') == (1 if 'cga' in args.machine else 0)
-        disk = Path('build/pacman.o88').read_bytes()
-        live = m.read(base, len(disk))
+        # THE FILE IS NOT THE IMAGE (SPEC.md 20.13.5): every shipped
+        # package is compressed on this branch, so the .o88 on disk is a
+        # wrapped stream and what the guest holds is what the loader
+        # expanded. Comparing them raw matched to offset 95 - lz4 opens
+        # with a literal run - and then reported every byte after the
+        # first back-reference as 'image modified', shifted by four.
+        disk = os88pkg.image_unwrap(
+            Path(os88build.at('build/pacman.o88')).read_bytes())
+        live = bytearray(m.read(base, len(disk)))
+        disk = bytearray(disk)
+        # ...and the flags byte keeps saying so on both sides (bits 3/4)
+        live[3] &= ~0x18
+        disk[3] &= ~0x18
         changes = [(i,a,b) for i,(a,b) in enumerate(zip(live,disk)) if a != b and not any(symbols[n] <= i < symbols[n]+20 for n in ('pm_score_text','pm_lives_text','pm_level_text','pm_tpl'))]
         assert not changes, ('image modified', changes[:32])
         print('  launch, autonomous movement, dots and adapter layout: pass', flush=True)

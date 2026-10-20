@@ -1,6 +1,8 @@
 # The MartyPC debugger
 
 **Full documentation: [docs/MARTYPC-DEBUG.md](../../docs/MARTYPC-DEBUG.md).**
+**What MartyPC does wrong that we would patch someday:
+[docs/plans/MARTYPC-PLAN.md](../../docs/plans/MARTYPC-PLAN.md).**
 Build it with `make marty` (or `./build.sh`); drive it with
 `tools/os88marty.py`.
 
@@ -14,8 +16,8 @@ in the guest at all**.
 |---|---|
 | `UPSTREAM` | the pinned commit. Editing it is a deliberate act, not maintenance |
 | `debug_server.rs` | the new module, copied in whole |
-| `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have, and `04-floppy-disk-timing.patch`, the platter |
-| `configs/` | five IBM 5150 machine configs shaped after docs/FIELD-MACHINES.md |
+| `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have, `04-floppy-disk-timing.patch`, the platter, `05-fdc-recal-one-interrupt.patch`, one IRQ6 a recalibrate rather than upstream's two, and `07-v20-mode-flag-protect.patch`, the V20's MD flag write-protected outside BRKEM as the chip does it (upstream let POPF clear it, so every 8086/286/386 FLAGS probe called a V20 a 386), and `08-hlt-override-lost.patch`, a HLT whose INTR is gone by the end of the instruction HALTING as the 8088 does (upstream halted the prefetcher and not the CPU, so the next queue read spun for ever inside one step and the debug server never answered again - `vidspkunmute`'s *"the debug server is gone (TimeoutError)"*, about one run in two at 11 kHz under load), and `09-mpu401-uart.patch`, `devices/mpu401.rs`: an MPU-401 in UART mode that upstream does not have and that RECORDS every byte it is sent, with its emulated microsecond, for the debug server's `midi` command (SPEC.md 34.13 - os8088's MIDI out is otherwise untestable here, since there is no synthesiser to hear and the bytes are the behaviour), and `11-keyboard-hold-scancode.patch`, the keyboard holding a scancode in a 16-byte FIFO until the PPI has acknowledged the last one (upstream overwrote a one-byte buffer and the PPI dropped any byte that arrived inside the ISR's latency, so a held key's break landing just after a typematic repeat was lost - docs/plans/MARTYPC-PLAN.md 2), and `13-hercules-page1-lone-card.patch`, the Hercules's page 1 at B8000 claimed again ONLY WHERE NO OTHER CARD HAS MAPPED IT, and decoded only while 3BFh bit 1 allows it (patch 02 had taken it off the bus for the two-card machine; the Video Player's page-ahead, SPEC.md 98.3.8.3, is the guest that writes there), and `14-keyboard-byte-pacing.patch`, queued key events and the bytes they become reaching the PPI at most one a millisecond of GUEST time, the keyboard's serial rate (upstream took one event per `machine.run()` call, which the debug server's `advance` makes every 0.25 ms, and handed each byte over the instant the last was acknowledged - so a scripted burst nested one ROM int 09h inside the next, after its `sti`, until the stack it landed on overran: SPEC.md 9.8.2, `soak -k kbdburst`) |
+| `configs/` | the machine configs (docs/MARTYPC-DEBUG.md's *The list*), the first shaped after docs/FIELD-MACHINES.md's 5150 |
 | `roms/` | **gitignored, and you supply it** — see the note at the bottom |
 | `build.sh` | clone at the pin, patch, stage a run tree, build |
 
@@ -74,8 +76,23 @@ short, is the 5150's question. What the **ROM** does is reproduced, because
 MartyPC runs the ROM — §18.91's `AL` bug shows here.
 
 **The period-accurate machines need the ROM below.** Without it only the
-GLaBIOS twins run, and a GLaBIOS machine is not where a disk number comes
-from — that BIOS abandons a floppy operation after ~250 ms.
+GLaBIOS twins run.
+
+**"GLaBIOS abandons a floppy operation after ~250 ms" was THIS EMULATOR'S
+defect, and `patches/05-fdc-recal-one-interrupt.patch` fixes it.** It stood
+here for a long time as a property of the BIOS. GLaBIOS's wait for IRQ6 is 37
+ticks, two seconds, the same as IBM's. What gave up after ~250 ms was its
+5-tick wait for the RESULT phase, which it reached early because upstream
+MartyPC raises TWO IRQ6s for one RECALIBRATE, one when the command is taken
+and one when it completes. The spare one left the BDA's working-interrupt
+flag (`0040:003E` bit 7) set, so the next `int 13h`'s wait returned at once
+and polled for results mid-transfer. Any read that waited most of a
+revolution for its first sector then answered `80h`. A reset clears the
+calibrated bits, so the retry recalibrated and was poisoned again. The kernel
+saw three failures and SPEC.md 18.91's per-sector fallback, ~800 ms on a
+first B: mount. The IBM ROM sees the same stale flag and survives it: it
+seeks first, and its result wait outlasts a revolution. A real 765 raises
+one interrupt for a recalibrate, at completion.
 
 **What the guest WROTE to a floppy is a different question, and `flush`
 answers it.** MartyPC keeps a mounted image in RAM and never writes it back —
@@ -94,8 +111,8 @@ file — which is a grant this project cannot make for someone else's ROM. The
 same reasoning already kept the IBM/Xebec hard disk controller out
 (docs/MARTYPC-DEBUG.md).
 
-Three of the eight machines use **GLaBIOS**, which MartyPC bundles, and they
-build and run with nothing added. The five period-accurate ones
+The `_gla` and `os8088_xt_*` machines use **GLaBIOS**, which MartyPC bundles,
+and they build and run with nothing added. The period-accurate ones
 (`rom_set = "ibm5150_82_v4"`) need your own dump of the 27 OCT 82 5150 BIOS:
 
 ```

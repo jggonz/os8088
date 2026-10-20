@@ -1,0 +1,65 @@
+fixture: sgr
+  Every SGR code in the contract, each on its own row and labelled: the
+  eight foregrounds, the eight backgrounds, bold and its 22, blink and its
+  25, reverse and its 27, concealed, the bright 90-97 and 100-107, 39 and
+  49, and the codes that must be IGNORED.
+
+stream:  1077 bytes
+cursor:  row 17 col 16 (0-based)   attribute 0F   367 glyph(s)
+state:   GROUND   bells 0   scrolls 0
+cursor visible: True
+
+    +--------------------------------------------------------------------------------+
+  0 |SGR                                                                             |
+  1 |3031323334353637                                                                |
+  2 |3031323334353637                                                                |
+  3 |4041424344454647                                                                |
+  4 |boldnotbold                                                                     |
+  5 |blinksteady                                                                     |
+  6 |reversenormal                                                                   |
+  7 |REV-THEN-31-IS-BLACK-ON-RED                                                     |
+  8 |REV-KEEPS-BOLD                                                                  |
+  9 |vishiddenvis                                                                    |
+ 10 |9091929394959697                                                                |
+ 11 |100101102103104105106107                                                        |
+ 12 |setfg39bg49                                                                     |
+ 13 |all-ignored                                                                     |
+ 14 |underline-is-not-in-the-attribute                                               |
+ 15 |bare-m-is-a-reset                                                               |
+ 16 |ninth-param-goes-to-a-sink-the-first-eight-still-apply                          |
+ 17 |saturated-at-255                                                                |
+ 18 |0;7=701;7=787;31=1044;8=44                                                      |
+ 19 |concealedand-28-back                                                            |
+ 20 |                                                                                |
+ 21 |                                                                                |
+ 22 |                                                                                |
+ 23 |                                                                                |
+ 24 |                                                                                |
+    +--------------------------------------------------------------------------------+
+
+attributes, run-length encoded, one row per line:
+  0 80*07
+  1 2*00 2*01 2*02 2*03 2*04 2*05 2*06 66*07
+  2 2*08 2*09 2*0a 2*0b 2*0c 2*0d 2*0e 2*0f 64*07
+  3 2*07 2*17 2*27 2*37 2*47 2*57 2*67 2*77 64*07
+  4 4*09 7*01 69*07
+  5 5*83 6*03 69*07
+  6 7*70 73*07
+  7 27*10 53*07
+  8 14*78 66*07
+  9 3*47 6*44 71*07
+ 10 2*08 2*09 2*0a 2*0b 2*0c 2*0d 2*0e 2*0f 64*07
+ 11 3*80 3*90 3*a0 3*b0 3*c0 3*d0 3*e0 3*f0 56*07
+ 12 3*49 4*47 73*07
+ 13 80*07
+ 14 80*07
+ 15 80*07
+ 16 54*09 26*07
+ 17 16*0f 64*07
+ 18 6*70 6*78 7*10 7*44 54*07
+ 19 9*44 11*47 60*07
+ 20 80*07
+ 21 80*07
+ 22 80*07
+ 23 80*07
+ 24 80*07

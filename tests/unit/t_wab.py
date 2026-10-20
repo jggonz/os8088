@@ -44,21 +44,15 @@ The former AMBIGUITY sites below now enforce the pinned readings:
       in CODE, an <input>, or a <grid> (its formula bar is a library-wired
       input, S6.9).  Enforced both directions.
 
-STILL AMBIGUOUS, and read leniently here rather than guessed at:
+TWO MORE, since pinned, whose lenient readings are still in the code:
 
-  A9. What `<canvas walls="TB">` COMPILES to.  S3.3 types the attribute
-      as a string, a subset of `TBLR`, and pins no encoding; the packed
-      bundles carry a PK_INT edge mask.  Both readings are admitted -
-      a mask is bounded by S3.4's four edge codes (0..15), a pooled
-      string by the TBLR subset - because a second reader that picks one
-      and refuses the other is asserting a fact the spec does not state.
-      Naming it here is the point: the spec should pin it, and until it
-      does neither implementation can be called wrong.
+  A9. What `<canvas walls="TB">` COMPILES to.  S3.3 now says a PK_INT
+      edge mask, T=1 B=2 L=4 R=8 (S6.10.1), and the packed bundles carry
+      one; this reader still admits a pooled TBLR string as well, a
+      leniency that is a decision and not a drift.
 
-  A10. S2.2 tabulates `section count` as 1-9 while S2.4 makes four
-      sections mandatory and ICON always present.  Read here as 5-9,
-      the only range the rest of the format can produce; S2.2's own
-      figure is the one that should move.
+  A10. `section count`: S2.2 pins 5-9 (four mandatory sections plus ICON),
+      which is what this file reads.
 
 WHAT S3.3 SAYS AND THIS FILE NOW ENFORCES.  S2.6 hands the reader the
 attribute table as a validation duty - "which names are legal on which

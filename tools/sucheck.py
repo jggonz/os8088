@@ -59,7 +59,7 @@ about a state that never existed. It tests the whole desktop from one frame
 now (os88marty `_desktop_up`), so `boot=True` is the wait again.
 
 EVERY COORDINATE IS DERIVED, so this runs on all three adapters. The drive
-zone is desk_ord_xy's arithmetic (SPEC.md 26.1) over [vid_desk_zx] and
+zone is desk_cell_xy (SPEC.md 26.9) on its [desk_zslot] cell, [vid_desk_zx] and
 [desk_rows] read out of the guest - 2 rows on CGA, 4 on Hercules, 7 on VGA,
 so a written-down zone is a different drive on each; the file rows are
 fm_layout's (FM_ROW_Y0 + i*FM_ROW_H below the content top). The frame itself
@@ -71,7 +71,6 @@ the screen is rather than assuming it.
 import os
 import struct
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -117,8 +116,32 @@ def trivial(m):
 # tile / zone / row are os88geom's, under this module's older names - every
 # coordinate in them is either a live guest word or a checked constant.
 tile = tile_xy
-zone = drive_xy
 row = row_xy
+
+
+def zone(m, vol):
+    """Volume `vol`'s picture centre. drive_xy takes a CELL since SPEC.md 26.9,
+    and a volume's cell is its desk_zslot byte - so B: is cell 1 only while
+    nothing else is placed before it."""
+    return drive_xy(m, drive_ordinal(m, "ABCDEFGH"[vol]))
+
+
+def idle(m, guest=2.0):
+    """Until the machine has GONE IDLE after a gesture, in GUEST time.
+
+    What the fixed host sleeps here were for - a folder listed, a package
+    launched, a window covered or raised - is over when the drive, the window
+    table and the gfx lock have all held still for `2 * guest` guest seconds
+    and the lock is free; the screen is then settled for the pixels that
+    follow. A load is reads, a paint is the lock, a launch is a new window."""
+    lock = m.sym("gfx_lock_flag")
+    os88marty.quiesce(
+        m, lambda: (m.disk().get("reads"), m.read(lock, 1)[0],
+                    [(w.i, w.visible, w.x, w.y) for w in windows(m)]),
+        guest=guest, budget=240.0, what="the machine to go idle")
+    os88marty.until(m, lambda mm: mm.read(lock, 1)[0] == 0,
+                    "the gfx lock to be free", poll=0.1, limit=60)
+    os88marty.settle(m)
 
 
 def cover_point(m, target):
@@ -201,10 +224,10 @@ def main():
                           apps=os.path.join(ROOT, "build/apps360.img"),
                           machine=machine) as m:
         mo = Mouse(marty=m)
-        mo.dblclick(*zone(m, VOL_B)); time.sleep(4)
+        mo.dblclick(*zone(m, VOL_B)); idle(m)
         disk = [w for w in windows(m) if w.visible][0]
-        mo.dblclick(*row(disk, ROW_GAMES)); time.sleep(4)
-        mo.dblclick(*row(disk, ROW_SOLIT)); time.sleep(14)
+        mo.dblclick(*row(disk, ROW_GAMES)); idle(m)
+        mo.dblclick(*row(disk, ROW_SOLIT)); idle(m)
 
         sol = named(m, "SOLIT")
         # THE ONE THAT IS NOT THE PACKAGE'S. This read
@@ -220,10 +243,10 @@ def main():
 
         # ---- phase 1: one window, the whole screen ------------------------
         painted = fb(m)
-        mo.click(*cover_point(m, disk)); time.sleep(3)   # cover: this is the
+        mo.click(*cover_point(m, disk)); idle(m)   # cover: this is the
         one = trivial(m)                                 # take
         print("1: covered        %s" % (one or "NO TRIVIAL CLAIM"))
-        mo.click(*tile(m, sol)); time.sleep(4)           # ...and the restore
+        mo.click(*tile(m, sol)); idle(m)           # ...and the restore
         now = fb(m)
         d1 = pixdiff(now, painted[2], now[2])
         print("1: raised         %s   screen differs by %d of %d pixels"
@@ -236,12 +259,12 @@ def main():
 
         # ---- phase 2: two windows, both banked at once (SPEC.md 11.96.3) --
         ref = {sol.i: crop(fb(m), sol.content)}
-        mo.click(*cover_point(m, disk)); time.sleep(3)      # bank Solitaire
-        mo.dblclick(*row(disk, ROW_MINES)); time.sleep(12)  # ...and launch
+        mo.click(*cover_point(m, disk)); idle(m)      # bank Solitaire
+        mo.dblclick(*row(disk, ROW_MINES)); idle(m)  # ...and launch
         mines = named(m, "MINE")
         ref[mines.i] = crop(fb(m), mines.content)
         print("2: mines up       %r" % (windows(m),))
-        mo.click(*cover_point(m, disk)); time.sleep(3)      # bank Minesweeper
+        mo.click(*cover_point(m, disk)); idle(m)      # bank Minesweeper
         two = trivial(m)
         print("2: both covered   %s" % (two or "NO TRIVIAL CLAIM"))
         if len(two) < 2:
@@ -249,7 +272,7 @@ def main():
                        "promising windows - a second take is still dropping "
                        "the first (SPEC.md 11.96.3)" % len(two))
         for w in (sol, mines):
-            mo.click(*tile(m, w)); time.sleep(4)
+            mo.click(*tile(m, w)); idle(m)
             now = [x for x in windows(m) if x.i == w.i][0]
             f = fb(m)
             d = pixdiff(f, ref[w.i], crop(f, now.content))

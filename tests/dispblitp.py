@@ -28,9 +28,9 @@ half is NOT: MartyPC's MDA aperture is offset from the guest origin (SPEC.md
 so a compare in guest coordinates there is sampling the wrong pixels.
 """
 import argparse
+import tempfile
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -50,6 +50,7 @@ def gifname():
     return os.path.basename(gifpath())
 from os88geom import (VID_CTX_SZ, VID_CTX_VX, VID_CTX_VY,    # noqa: E402
                       VID_CTX_CW, VID_CTX_CH)
+import blitpair                                              # noqa: E402
 from blitpair import gif_pixels                              # noqa: E402
 from paintmove import pkg_syms                               # noqa: E402
 
@@ -100,18 +101,28 @@ def run(a, case, iw, ih, px, sym):
                                                 card=0))
         mo.to(rx, ry)
         settle(m, card=0)
-        m.bp_exec("gfx_blitp")
-        mo.dblclick(rx, ry)
-        if not m.wait_stop(limit=300.0):
+        got = {}
+
+        def stub_ds(mm, r):
+            """Paint's segment off the API stub's saved DS - a word on the
+            guest's own stack, so it is readable HERE and nowhere after."""
+            got["base"] = int.from_bytes(
+                mm.read((r["ss"] << 4) + r["sp"] + 2, 2), "little") << 4
+
+        # `wide=0` is "the first gfx_blitp, whatever its width", which is what
+        # this row has always taken.
+        r = blitpair.wide_blit(m, lambda: mo.dblclick(rx, ry), 0,
+                               syms=("gfx_blitp",), regs=True, at_hit=stub_ds)
+        if r is None:
             sys.exit("dispblitp: no gfx_blitp at all - the canvas is not "
                      "planar, so there is nothing here to refuse")
-        r = m.regs()
-        base = int.from_bytes(
-            m.read((r["ss"] << 4) + r["sp"] + 2, 2), "little") << 4
+        base = got["base"]
         ox0, oy0 = r["ax"], r["bx"]      # ...where Paint puts its canvas, ASKED
-        m.bp_exec()
-        m.run()
-        time.sleep(6)
+        # the rest of Paint's open - its reads, then its first paint - before
+        # the drag takes the title bar
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="Paint's open to stop reading")
+        settle(m, card=0)
         planar = base + sym["pt_planar"]
         if not m.read(planar, 1)[0]:
             sys.exit("dispblitp: Paint's canvas is not four planes on the "
@@ -135,7 +146,18 @@ def run(a, case, iw, ih, px, sym):
         mo.drag(wx + ww // 2, wy + TITLE_H // 2,
                 tgt + ww // 2, wy + TITLE_H // 2)
         settle(m, card=0)
-        time.sleep(8)
+        # THE CONVERSION IS CPU WORK THE SCREEN CAN SIT STILL THROUGH, so wait
+        # on the flag it clears - and on a broken kernel, which never clears
+        # it, spend what the old 8-second pause gave and let the assertion
+        # below say so.
+        try:
+            os88marty.until(m, lambda mm: not mm.read(planar, 1)[0],
+                            "Paint to convert its canvas", poll=0.2,
+                            guest=8 * os88marty.GUEST_PACE)
+        except os88marty.MartyError:
+            pass
+        settle(m, card=0)               # ...and the repaint it starts, on
+        settle(m, card=1)               # both displays, before [gfx_dnest]
         still = m.read(planar, 1)[0]
         nest = m.read(S("gfx_dnest"), 1)[0]
         wx2, wy2, _, _ = dispcp.win_rect(m, S, pw)
@@ -200,7 +222,7 @@ def run(a, case, iw, ih, px, sym):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/dispblitp.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/dispblitp.img")
     ap.add_argument("--machine", default="os8088_xt_vga_mda")
     ap.add_argument("--gif", default=None)
     ap.add_argument("--case", choices=("straddle", "direct"), default=None)
@@ -214,7 +236,7 @@ def main():
     # pixel, so every oracle below is the one it always was.
     gif = gifpath()
 
-    if a.apps == "/tmp/dispblitp.img":
+    if a.apps == tempfile.gettempdir() + "/dispblitp.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + gif)
 

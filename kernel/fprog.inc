@@ -102,6 +102,22 @@ FPG_USHR   equ 9                ; SECTOR, because fpg_step's caller is the
 %endif
 
 ; -----------------------------------------------------------------------------
+; fpg_baron - CURBAR_ON (mouse.inc, SPEC.md 7.4.3) as a routine: every entry of
+; this file opens with it, and five copies of its ten bytes were 50 of .text
+; on every kernel where one copy and five calls are 26. Every register
+; preserved; the flags are not, and each entry has already banked them with
+; its `pushf`. The NOCURDISK arm is nothing at all, as the macro's is.
+; -----------------------------------------------------------------------------
+%ifndef NOCURDISK
+  %define FPG_BARON call fpg_baron
+fpg_baron:
+    CURBAR_ON
+    ret
+%else
+  %define FPG_BARON
+%endif
+
+; -----------------------------------------------------------------------------
 ; fpg_begin - arm the widget and draw everything expensive about it
 ; in:  DX:CX = BYTES this operation expects (0 refuses: nothing to report);
 ;      DS = KERNEL_SEG, gfx lock held by the caller
@@ -138,12 +154,13 @@ FPG_USHR   equ 9                ; SECTOR, because fpg_step's caller is the
 ; -----------------------------------------------------------------------------
 fpg_begin:
     pushf
-    CURBAR_ON                   ; SPEC.md 7.4.3: everything this module draws
+    FPG_BARON                   ; SPEC.md 7.4.3: everything this module draws
                                 ; is inside the menu bar's rows, so an arrow
                                 ; below them is out of reach and cur_unlazy
                                 ; keeps gfx_lock's promise instead of spending
                                 ; it. menu_draw_bar, below, is the unclipped
-                                ; composition this is really for
+                                ; composition this is really for (and the same
+                                ; at every entry below)
     push ax
     push bx
     push cx
@@ -252,12 +269,7 @@ fpg_begin:
 ; -----------------------------------------------------------------------------
 fpg_busy:
     pushf
-    CURBAR_ON                   ; SPEC.md 7.4.3: everything this module draws
-                                ; is inside the menu bar's rows, so an arrow
-                                ; below them is out of reach and cur_unlazy
-                                ; keeps gfx_lock's promise instead of spending
-                                ; it. menu_draw_bar, below, is the unclipped
-                                ; composition this is really for
+    FPG_BARON                   ; SPEC.md 7.4.3, as at fpg_begin
     push ax
     push bx
     push cx
@@ -295,6 +307,17 @@ fpg_busy:
     call fpg_arm
     jc .out
 .armed:
+%ifndef NOCURDISK
+    call cur_busy               ; **A POINTER TAKEN DOWN SINCE THE ARM COMES BACK
+                                ; BEFORE THE READ** (SPEC.md 7.5.3.2). fpg_arm
+                                ; asks once per hold, so a handler that painted
+                                ; AFTER the chrome went up - a window repainting
+                                ; once a job has said its verdict - left the
+                                ; clock frozen on the glass for every sector
+                                ; that followed. cur_busy asks whose lock it is
+                                ; and is six instructions when there is nothing
+                                ; to do
+%endif
     cmp word [fpg_total], 0
     jne .out                    ; a phase with a scale owns the trough
     cmp byte [fpg_pat], 0
@@ -326,11 +349,26 @@ fpg_busy:
 fpg_arm:
     cmp byte [fpg_on], 0
     jne .yes
-    cmp byte [spl_live], 0      ; boot: the splash owns screen and mode
-    jne .no
-    cmp byte [fsx_cur], 0xFF    ; **A FOREIGN MODE IS ON THE GLASS** (SPEC.md
-    jne .no                     ; 53.7): there is no menu bar to put a widget
-                                ; at the end of, and everything below composes
+    cmp word [spl_live], 0      ; boot: the splash owns screen and mode -
+    jne .no                     ; and, the byte after it, [blk_on]:
+                                ; **THE DESKTOP IS NOT ON THE GLASS** (SPEC.md
+                                ; 79.6.2): a saver session is drawing there,
+                                ; or the signal is gated. A server's file call
+                                ; on the UI task - FTPD reading the next chunk
+                                ; of a RETR - armed this widget, and the
+                                ; menu bar and the bar drew over the
+                                ; animation. Both kernels: [blk_on] is the
+                                ; blanker's and is in each, and it is set
+                                ; BEFORE the saver's own load, so that read
+                                ; puts nothing up either
+    cmp byte [fsx_task], 0xFF   ; **AN fsx BRACKET IS UP** (SPEC.md 12.8.5.2),
+    jne .no                     ; same-mode or foreign: the app owns the
+                                ; pixels either way, and an In-window video
+                                ; draws beside the bar from an interrupt. It
+                                ; was [fsx_cur], a FOREIGN mode only (SPEC.md
+                                ; 53.7) - where there is no menu bar to put
+                                ; a widget at the end of, and everything
+                                ; below composes
                                 ; one in the DESKTOP's geometry - so the icon,
                                 ; the box and the bar all land inside whatever
                                 ; the exclusive app is drawing, in its raster,
@@ -473,54 +511,39 @@ fpg_arm:
     call cursor_hide
 .lit:
 %ifndef NOCURDISK
-    ; --- ...OR IT IS ALREADY DOWN, AND AN ARROW THAT IS DOWN CANNOT TRACK ---
-    ; (SPEC.md 7.4.3.1) The case above is the pointer sitting ON the bar. This
-    ; is the other one, and it is most of the machine: a handler that PAINTED
-    ; before it read - the Control Panel, a file dialog, a copy repainting its
-    ; list - spent gfx_lock's promised hide on the way past (SPEC.md 7.1.4),
-    ; so by the time any of the disk work starts the arrow is off the glass and
-    ; [cur_level] < 0 keeps the ISR off it for the rest of the hold.
-    ;
-    ; PUT IT BACK, AND PUT THE PROMISE BACK WITH IT. Re-arming [cur_lazy] is
-    ; what makes this need no new state and no debt to settle: the arrow is up
-    ; and owed a hide, which is exactly what that byte means, so every existing
-    ; consumer takes over unchanged - a later unclipped painter's cur_unlazy
-    ; hides it, a clipped one's cur_lazyck decides, and gfx_unlock's own tail
-    ; ends it either way. Without that re-arm this would be a lit arrow with no
-    ; promise outstanding, and the first painter after the transfer would draw
-    ; straight through it (SPEC.md 7.1.4's permanent smear).
-    ;
-    ; Five conditions, and the first two are the ones that make the rest sound:
-    cmp byte [fsx_task], 0xFF
-    jne .curdone                ; ANY fsx bracket owns the pointer (SPEC.md
-                                ; 53.6): .no above refuses a FOREIGN mode for
-                                ; the widget, but a same-mode bracket (53.7 -
-                                ; Paint fullscreen, Cyclone's high-score save)
-                                ; keeps the desktop's geometry and the app
-                                ; owns every pixel of it, so the system arrow
-                                ; has no business on that raster, and an app
-                                ; writing VRAM directly would never spend the
-                                ; re-armed promise - the stale save-under is
-                                ; restored at the bracket's end
-    cmp byte [gfx_lock_flag], 0
-    je .curdone                 ; HELD, and .no above already refused another
-                                ; task's - so it is ours. A free lock needs
-                                ; none of this: nothing spent the promise,
-                                ; because there was no hold to make one
-    cmp byte [cur_level], -1
-    jne .curdone                ; not hidden, or hidden more than once - a
-                                ; refcount we did not take is not ours to undo
-    cmp word [wm_clip_n], 0
-    jne .curdone                ; a region is armed, so the ISR will not move
-                                ; it anyway (SPEC.md 7.4.2) and lit-but-frozen
-                                ; is the thing 7.1.4.3 rejected
-    cmp word [mouse_y], MBAR_H + CUR_GH
-    jb .curdone                 ; [mouse_y] and NOT [cur_drawn_y]: the drawn
-                                ; position is meaningless while the arrow is
-                                ; hidden, and cursor_show draws at the live one
-    mov byte [cur_lazy], 1
-    call cursor_show
-.curdone:
+    call cur_busy_on            ; **AND THE POINTER SAYS SO** (SPEC.md 7.5.3),
+                                ; and an arrow that is already DOWN comes back
+                                ; with it (SPEC.md 7.4.3.1). The case above is
+                                ; the pointer sitting ON the bar; this is the
+                                ; other one, and it is most of the machine: a
+                                ; handler that PAINTED before it read - the
+                                ; Control Panel, a file dialog, a copy
+                                ; repainting its list - spent gfx_lock's
+                                ; promised hide on the way past (SPEC.md
+                                ; 7.1.4), so by the time the disk work starts
+                                ; the arrow is off the glass and [cur_level] <
+                                ; 0 keeps the ISR off it for the rest of the
+                                ; hold. cur_busy_on's DOWN arm is that block
+                                ; whole - the same tests, the re-armed promise
+                                ; and the show - with the clock riding inside
+                                ; a show that was going to happen anyway. Its
+                                ; LIT arm is the case that block never saw and
+                                ; which measured 2 of 3: a package launch and
+                                ; an assoc open both read with the lock FREE
+                                ; (SPEC.md 7.4.2.1), where nothing spent a
+                                ; promise and the arrow is simply lit and
+                                ; tracking.
+                                ;
+                                ; **INSIDE THE %ifndef, and tests/curdisk.py is
+                                ; why** (SPEC.md 7.5.3.1): NOCURDISK=1 is the
+                                ; A/B for the whole of 7.4 and its contract is
+                                ; that NOTHING puts a pointer on the glass
+                                ; during a disk freeze. This call shows one, so
+                                ; outside the gate it moved the arrow twice in
+                                ; the arm that must not move it at all - a
+                                ; knob build measuring the kernel it no longer
+                                ; describes, which is the one failure a knob
+                                ; exists to make impossible
 %endif
     ; ...AND THE BAR BELOW IS COMPOSED WITH THE MUTEX POSSIBLY UNHELD, which is
     ; not excluded by the [gfx_lock_own] test above: that test refuses a lock
@@ -727,12 +750,7 @@ fpg_tin:
 ; -----------------------------------------------------------------------------
 fpg_step:
     pushf
-    CURBAR_ON                   ; SPEC.md 7.4.3: everything this module draws
-                                ; is inside the menu bar's rows, so an arrow
-                                ; below them is out of reach and cur_unlazy
-                                ; keeps gfx_lock's promise instead of spending
-                                ; it. menu_draw_bar, below, is the unclipped
-                                ; composition this is really for
+    FPG_BARON                   ; SPEC.md 7.4.3, as at fpg_begin
     cmp word [fpg_total], 0
     je .out
     push ax                     ; AX/BX/CX/DX/SI and no more: everything this
@@ -785,7 +803,7 @@ fpg_step:
 ; out: nothing - every register and the flags preserved, fpg_step's contract
 ;
 ; The entry point for a producer that moves bytes rather than sectors, and it
-; IS slot 0x03C8 (OSAPI_FS_PROG) - an ordinary OSAPI_SLOT cell, so a
+; IS slot 0x02DF (OSAPI_FS_PROG) - an ordinary OSAPI_SLOT cell, so a
 ; DRVC_FILE driver inside FSV_READ/FSV_WRITE calls exactly this routine. That
 ; is the half fpg_begin cannot cover: the kernel arms the widget from
 ; FSV_STAT's size and then has NOTHING to say until the verb returns, because
@@ -814,12 +832,7 @@ fpg_step:
 ; -----------------------------------------------------------------------------
 fpg_stepb:
     pushf
-    CURBAR_ON                   ; SPEC.md 7.4.3: everything this module draws
-                                ; is inside the menu bar's rows, so an arrow
-                                ; below them is out of reach and cur_unlazy
-                                ; keeps gfx_lock's promise instead of spending
-                                ; it. menu_draw_bar, below, is the unclipped
-                                ; composition this is really for
+    FPG_BARON                   ; SPEC.md 7.4.3, as at fpg_begin
     cmp word [fpg_total], 0     ; fpg_step's gate, for fpg_step's reason
     je .out
     push ax
@@ -843,9 +856,7 @@ fpg_stepb:
     pop cx
     pop ax
 .out:
-    CURBAR_OFF
-    popf
-    ret
+    jmp short fpg_step.out      ; the same three instructions, fpg_step's
 
 ; -----------------------------------------------------------------------------
 ; fpg_end - this PHASE is over; the widget is not (SPEC.md 12.8.3)
@@ -887,8 +898,10 @@ fpg_end:
 ; Nothing anywhere HAS to call this.
 ;
 ; ONE OTHER SITE MAY, and it is an exception with a reason rather than a
-; loophole: fsx_mode calls it before setting a foreign mode (SPEC.md 12.8.5),
-; because the desktop this routine repairs is about to stop existing. It calls
+; loophole: fsx_run at the bracket's door (SPEC.md 12.8.5.2), because the app
+; owns the pixels from there on, in the desktop's mode or a foreign one - and
+; fsx_mode, which used to pay off its own (12.8.5), finds nothing to pay
+; since fpg_arm refuses inside any bracket. It calls
 ; the TEARDOWN and not a state reset for the sake of bit 1 of [fpg_on] -
 ; clearing that byte by hand would drop the cursor debt and leave the arrow
 ; gone for the rest of the session.
@@ -912,16 +925,13 @@ fpg_end:
 ; -----------------------------------------------------------------------------
 fpg_finish:
     pushf
-    CURBAR_ON                   ; SPEC.md 7.4.3: everything this module draws
-                                ; is inside the menu bar's rows, so an arrow
-                                ; below them is out of reach and cur_unlazy
-                                ; keeps gfx_lock's promise instead of spending
-                                ; it. menu_draw_bar, below, is the unclipped
-                                ; composition this is really for
+    FPG_BARON                   ; SPEC.md 7.4.3, as at fpg_begin
     push ax
     push bx
     push cx
     push dx
+    push si                     ; (SI only so that fpg_step's epilogue, which
+                                ; pops these five, is this routine's too)
     xor ax, ax                  ; **ONE INSTRUCTION BANKS AND CLEARS BOTH**,
     xchg ax, [fpg_on]           ; because [fpg_on] and [fpg_warm] are declared
                                 ; adjacent and are always cleared together: the
@@ -1015,13 +1025,9 @@ fpg_finish:
                                 ; its own cursor tail is BELOW this - so the
                                 ; refcount lands where it started either way
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    CURBAR_OFF
-    popf
-    ret
+    jmp fpg_step.done           ; pop si..ax, CURBAR_OFF, popf, ret - written
+                                ; `jmp`, so it grows a byte rather than failing
+                                ; to assemble if it ever leaves short reach
 
 ; -----------------------------------------------------------------------------
 ; fpg_span - the whole widget's horizontal extent, from the armed origin

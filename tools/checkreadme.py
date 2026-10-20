@@ -39,6 +39,7 @@ as a rule that was broken. So they are checked here, before the file is used.
 Exit 1 on any finding.
 """
 
+import os
 import sys
 
 MAXCOL = 28          # authored width; Note Pad's default window fits 29
@@ -108,6 +109,12 @@ def main() -> int:
         print(f"{path}: {ondisk} bytes on disk (CRLF), over Note Pad's "
               f"{limit}-byte ceiling - it would refuse the file entirely")
         bad += 1
+
+    # There used to be a rule 4 here - that the manual must expand IN PLACE
+    # inside the kilobyte a reader claims, which one size in sixteen did not
+    # and which had the manual EDITED to fit. A stream ends in a raw tail now
+    # and needs no margin (SPEC.md 20.13.7), so the manual can be any size
+    # under the ceiling above and still ship compressed.
 
     if bad:
         print(f"checkreadme: {bad} problem(s)")

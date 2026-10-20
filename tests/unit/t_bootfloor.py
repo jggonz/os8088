@@ -88,8 +88,11 @@ def boot2_secs():
 # the 2,560 bytes stage 1 keeps live at the ceiling. It was briefly two, when
 # the blob was read to the top and copied down and the far jump at the end of
 # that copy had to survive being copied over (SPEC.md 2.9.5).
+# ...and the blob is LIFTED off HEAP_SEG by BLOB_LIFT where `.cold` is the
+# top rung (SPEC.md 2.10.3): kernsize's `blobseg` is where stage 1 reads it,
+# and `kend` only on a kernel that predates ROM_COLD
 k = ladder()
-want = k["kend"] + boot2_secs() * 32 + TRANSIENT_PARA
+want = k.get("blobseg", k["kend"]) + boot2_secs() * 32 + TRANSIENT_PARA
 
 for name in ("boot.bin", "boot360.bin", "boot120.bin"):
     path = os.path.join(BUILD, name)

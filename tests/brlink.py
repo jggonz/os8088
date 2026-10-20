@@ -23,10 +23,18 @@ This asserts the PIXELS under it:
      the fix would fail too.
 """
 import argparse
+import re
 import sys
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import dispcp                                          # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
@@ -35,6 +43,15 @@ from brtest import MACHINE, frame                      # noqa: E402
 
 S = os88sym.linear
 CELL = 8                       # the ROM font's cell, and the underline's unit
+
+
+def br_ltot():
+    """BR_LTOT, the chrome above the band, summed off apps/browser's equs."""
+    src = open(os.path.join(_OS88_ROOT, "apps", "browser", "browser.asm"),
+               encoding="latin-1").read()
+    eq = dict(re.findall(r"^(BR_\w+)\s+equ\s+(\d+)\b", src, re.M))
+    ltot = re.search(r"^BR_LTOT\s+equ\s+([^;\n]+)", src, re.M).group(1)
+    return sum(int(eq[t.strip()]) for t in ltot.split("+"))
 
 
 def runs_on(fb, stride, y, x0, x1):
@@ -69,6 +86,12 @@ def main():
         if len(wins2) <= len(wins):
             sys.exit("brlink: LINKS.HTM did not open a browser window")
         bx, by, bw, bh = dispcp.win_rect(m, S, wins2[-1])
+        # THE PAGE ARRIVES AFTER THE WINDOW: open_named returns on the window,
+        # and the Browser reads, parses and draws its page on the wake that
+        # follows (SPEC.md 74.1) - so a frame taken here was the Disk window
+        # still standing in the Browser's frame, and its Icons/Refresh buttons
+        # were read as two 63-pixel "underlines".
+        os88marty.settle(m)
         w, h, fb = frame(m, args.adapter)
         stride = len(fb) // h
         if args.shot:
@@ -77,7 +100,11 @@ def main():
             os88marty.write_png(args.shot, sw, sh, srows)
 
         x0, x1 = bx + 1, min(bx + bw - 1, stride)
-        y0, y1 = by + dispcp.TITLE_H + 1, min(by + bh - 1, h)
+        # ...and the scan starts BELOW the toolbar and the location bar,
+        # whose button frames are runs of exactly the kind sought here. The
+        # height is the source's own sum (BR_LTOT), so a re-laid strip moves
+        # the scan with it rather than leaving it reading chrome.
+        y0, y1 = by + dispcp.TITLE_H + 1 + br_ltot(), min(by + bh - 1, h)
         # An UNDERLINE is a run of dark pixels at least a word long on a row
         # whose neighbours above are mostly light: glyph rows are broken up by
         # the gaps inside letters, so a 24-pixel unbroken run is the rule and

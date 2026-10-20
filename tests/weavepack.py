@@ -64,6 +64,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "unit"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
+import os88fixture                                       # noqa: E402
 import os88marty as M                                          # noqa: E402
 import os88flush                                               # noqa: E402
 import os88sym                                                 # noqa: E402
@@ -170,7 +171,9 @@ def errcases():
 
 
 def build_disk(projects, errs):
-    files = [os.path.join(BUILD, "loom.o88"), os.path.join(BUILD, "LOOM.OVL")]
+    # ONE FILE: the overlay and the preview module are PARTS of LOOM.O88
+    # (SPEC.md 73.14.2, WEAVE-SPEC 1.2.4), so there is nothing to put beside it
+    files = [os.path.join(BUILD, "loom.o88")]
     for stem, _ in projects:
         for ext in ("WML", "WJS", "WFX", "WSP"):
             p = os.path.join(PROJ, "%s.%s" % (stem, ext))
@@ -181,8 +184,26 @@ def build_disk(projects, errs):
             p = os.path.join(PROJ, "%s.%s" % (stem, ext))
             if os.path.isfile(p):
                 files.append(p)
+    # **360KB, BECAUSE THE MACHINE HAS 360KB DRIVES** (`pcxt_2_360k_floppies`
+    # in tools/martypc/configs/os8088_machines.toml, on every 5150 and 5160
+    # profile here). This built a 1.44MB image for its whole life and the
+    # failure it produced looked nothing like a geometry error: a 1.44MB
+    # layout is 18 sectors a track, so the boot sector, the FAT and the root
+    # directory all sit inside the first two tracks and READ PERFECTLY - the
+    # Disk window opens, the listing is complete, `entry("LOOM.O88")` finds
+    # it. The first thing that asks for sector 10 of a track is the package
+    # LOAD, and a 360KB drive cannot step there. What the row reported was
+    # "LOOM opens on the double-click" failing with no toast, no instance and
+    # ld_status still 0, nine times over, which reads as an association or a
+    # double-click problem and is neither. The pass-3 soak
+    # spent three runs on the host-speed theory the row's own message
+    # proposes; the row was never able to load the package at all.
+    #
+    # It fits with room to spare - 131 of ~354 clusters for the inputs, plus
+    # seven .WAB outputs of about a cluster each - and 360KB is what every
+    # other Weave row here uses (weavesmoke's DISK is build/weave360.img).
     r = subprocess.run(["python3", "tools/os88disk.py", "-o", IMG,
-                        "--size", "1440"] + files, cwd=ROOT,
+                        "--size", "360"] + files, cwd=ROOT,
                        capture_output=True, text=True)
     if r.returncode != 0:
         print(r.stdout + r.stderr)
@@ -195,33 +216,26 @@ def pack_one(m, mo, S, wx, wy, stem):
     WAIT ON THE WINDOW, NOT ON THE PICTURE - weavesmoke's own note, and its
     reason applies twice as hard here: a package LOAD draws nothing while it
     runs, and so does a PACK, so `settle` sees perfect stillness partway
-    through either and returns. os88marty.until is the bounded wait that the
-    retry can catch."""
+    through either and returns. os88marty.until is the bounded wait, and
+    NOTHING IS RETRIED: os88mouse steps the guest by cycles between a
+    double-click's two presses (`Mouse.DBL_STEP`), so the 9-tick window sees
+    the same gesture whatever the host is doing, and a launch that does not
+    happen is a finding."""
     before = set(dispcp.win_list(m, S))
-    win = None
-    for attempt in range(3):
-        try:
-            dispcp.open_named(m, mo, S, M.settle, wx, wy, "%s.WML" % stem)
-            M.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
-                    "LOOM's window for %s" % stem, limit=25.0)
-        except Exception as e:                                  # noqa: BLE001
-            if attempt == 2:
-                check(False, "%s: LOOM opens on the double-click" % stem,
-                      "os88mouse refuses a double-click whose two presses "
-                      "straddled the kernel's 9-tick window - a statement "
-                      "about the HOST, retried three times and then "
-                      "reported. The .WML association is LOOM's "
-                      "(WEAVE-SPEC 1.5 step 2)",
-                      got=str(e)[:200], want="a package window")
-                return 0
-            continue
-        M.settle(m)
-        now = set(dispcp.win_list(m, S)) - before
-        if now:
-            win = sorted(now)[-1]
-            break
-    if win is None:
+    try:
+        dispcp.open_named(m, mo, S, M.settle, wx, wy, "%s.WML" % stem)
+        M.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
+                "LOOM's window for %s" % stem, limit=25.0)
+    except Exception as e:                                      # noqa: BLE001
+        check(False, "%s: LOOM opens on the double-click" % stem,
+              "the .WML association is LOOM's (WEAVE-SPEC 1.5 step 2)",
+              got=str(e)[:200], want="a package window")
         return 0
+    M.settle(m)
+    now = set(dispcp.win_list(m, S)) - before
+    if not now:
+        return 0
+    win = sorted(now)[-1]
 
     m.ctrl(K_PACK)                      # WEAVE-SPEC 1.7's ^P
     M.settle(m)
@@ -252,14 +266,10 @@ def main():
     args = ap.parse_args()
 
     if not args.no_make:
-        r = subprocess.run(["make", "loom"], cwd=ROOT, capture_output=True,
-                           text=True)
-        if r.returncode != 0:
-            print(r.stdout[-2000:] + r.stderr[-2000:])
-            check(False, "make loom", "the package under test has to build",
-                  got="non-zero", want="exit 0")
-            done("weavepack")
-            return
+        # os88fixture.need is the same `make`, and it does NOTHING when the runner has
+        # already built the artefact (Row(wants=...) and os88test's prebuild).
+        # That is what lets this row drop builds=True and share the lane.
+        os88fixture.need("build/loom.o88")
     if not os.path.isfile(os.path.join(BUILD, "loom.o88")):
         print("weavepack: SKIP - build/loom.o88 is not here; the C toolchain "
               "(tools/setup-cc.sh) is what builds it")
@@ -269,12 +279,12 @@ def main():
     projects = flatten()
     errs = errcases()
     if not check(build_disk(projects, errs), "the pack disk builds",
-                 "one 1.44MB floppy: LOOM.O88, LOOM.OVL and the seven "
+                 "one 360KB floppy - the geometry the machine's drives "
+                 "actually have: LOOM.O88 and the seven "
                  "flattened projects (WEAVE-SPEC 11.2's stem rule)"):
         done("weavepack")
         return
 
-    boot = os.path.join(BUILD, "os8088-360.img")
     boot = os.path.join(BUILD, "os8088-360.img")
     with M.launch(boot, apps=IMG, machine=args.machine) as m:
         M.settle(m)

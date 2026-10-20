@@ -1,35 +1,29 @@
 ; =============================================================================
 ; os8088 - apps/wire/wire.asm
 ;
-; WIREFRAME (SPEC.md 78): a rotating wireframe solid, drawn with nothing but
-; OSAPI_GFX_LINE, one frame a tick.
+; WIREFRAME (SPEC.md 78): a rotating wireframe solid, composed into a 1bpp
+; band and put down with ONE OSAPI_GFX_BLIT1, one frame a tick.
 ;
-; IT EXISTS TO BE THE THING SPEC.md 5.6.4.1 WAS BUILT FOR, and to say out loud
-; whether it worked: the status strip reports the measured frame rate and how
-; many line calls each frame costs, so the answer is on the glass rather than
-; in a document. On the 4.77MHz 8088 this targets, the same twelve edges drawn
-; and erased through 5.6.4's general walk are about 7 frames a second and
-; through 5.6.4.1's about 18 - which is the tick, and therefore the ceiling.
+; IT EXISTED TO BE THE THING SPEC.md 5.6.4.1 WAS BUILT FOR, and it outlived
+; that: the line family is out of the kernel (SPEC.md 5.12.7) and there is no
+; walk left to compare against. What the status strip reports is still the
+; measured frame rate and the edges a frame, so the answer is on the glass
+; rather than in a document - it is now the BAND's answer.
 ;
-; WHY IT ERASES WITH LINES AND NOT WITH A FILL. A fill of the object's box is
-; cheaper - about 10ms against 23 - and it would make this a benchmark of
-; gfx_fill. The point here is the line primitive, and erasing the way SPEC.md
-; 48's missile trails erase is also the honest shape: only the pixels that
-; were drawn are touched, which is PERFORMANCE.md rule 1.
+; THE FOUR DRAW ORDERS ARE GONE and SPEC.md 78.5.1 is why. They were a menu -
+; whole figure, edge at a time, edge then repair, composed - because the order
+; turned out to be the whole of the flicker and to be free: erasing the whole
+; figure and then drawing it left the window EMPTY on 56% of displayed frames,
+; and doing it an edge at a time never dropped below 72%. Composed beat all
+; three on both counts (74% floor, 90% mean, zero frames under half) and it is
+; the only one that does not call the line primitive, so when the primitive
+; went the other three went with it. What is left of that finding is 78.5's
+; numbers, which are worth keeping and are not worth three code paths.
 ;
-; ...AND THE ORDER IT ERASES IN IS A MENU (SPEC.md 78.5), because it turned
-; out to be the whole of the flicker and to be free. Erasing the whole figure
-; and then drawing it leaves the window EMPTY - measured, literally zero ink,
-; on 56% of displayed frames. Doing it an edge at a time leaves eleven of
-; twelve edges up, never drops below 72% of the figure, and costs nothing at
-; all: the same twenty-four line calls, twenty-two more SET_COLOR. It is the
-; default for that reason and not as a taste.
-;
-; NO DILATION on the erase (SPEC.md 5.6.5). A trail is drawn in per-frame
-; SEGMENTS and erased as one long line, so the two rasterisations differ; here
-; every edge is drawn whole and erased whole from the same endpoint pair, so
-; 5.6.2's contract makes the pixel sets identical and SI = 0 is correct. That
-; is worth stating because passing 1 would cost three walks for nothing.
+; A BAND ERASES BY COVERING, so there is no erase pass and nothing to erase
+; with: the band is sized to hold the frame on the glass AND the frame about to
+; replace it, and blitting it does both at once. That is also why no dilation
+; is owed (5.6.5) and why nothing here draws a pixel twice.
 ;
 ; The maths is integer and the projection is ORTHOGRAPHIC on purpose: a
 ; perspective divide is affordable (16 idivs a frame, ~0.6ms) but it makes the
@@ -88,13 +82,21 @@ WR_BSTEP    equ 2                   ; coprime, so the tumble does not repeat
 ; whole band is checked against the object area before the blit - a band that
 ; would leave it sends the frame down mode 0's path instead, COVERING the mask
 ; frame with a fill first, because a white kernel line does not cancel a mask
-; one (SPEC.md 78.8.2). WR_BW/WR_BH are
+; one (SPEC.md 78.8.2). GFXE_BAND_W/GFXE_BAND_H are
 ; now the mask's CAPACITY rather than the band's size, and the STRIDE stays
-; WR_BST so wr_mline's row step is still a shift by 4.
-WR_BW       equ 128                 ; the most COLUMNS the mask can hold, and a
-WR_BST      equ WR_BW / 8           ; multiple of 8; also the mask's stride
-WR_BH       equ 128                 ; ...and the most rows
-WR_BSZ      equ WR_BST * WR_BH
+; the buffer's so gfxe_line's row step is still a shift by 4.
+;
+; THE COMPOSER AND THE RASTERISER ARE NOT WIRE'S ANY MORE. They were, and this
+; program is where they were written; they are apps/os88gfx.inc's now - the
+; embeddable graphics library of docs/plans/completed/GFX-EMBEDDABLE-PLAN.md - and this
+; is its first customer. What stayed here is what is genuinely wire's: the
+; vertex-to-band mapping (wr_mpt), the object-area refusal, and the record of
+; which band is on the glass (78.8.2). The library owns the bounds, the byte
+; grid, the capacity refusals, the paper, the plot and the Bresenham.
+%define GFXE_BAND_W   128           ; the most COLUMNS the mask can hold, and a
+%define GFXE_BAND_H   128           ; multiple of 8; also the mask's stride
+%define GFXE_BAND_BUF wr_mask
+%define GFXE_LINE                   ; ...which implies GFXE_BAND
 WR_LAGMAX   equ 4                   ; ticks behind before the deadline is
                                     ; re-anchored rather than caught up
 WR_FPSTICK  equ 18                  ; ...and how often the strip is re-lettered
@@ -119,9 +121,14 @@ wr_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [wr_win], bx
-    mov byte [wr_size], 4           ; Medium, and the two bss bytes whose zero
-    mov byte [wr_mode], 1           ; is not the state we want - SPEC.md 78.5
-    call wr_pick                    ; measured `Edge at a time` free
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
+    mov byte [wr_size], 4           ; Medium - the one bss byte whose zero is
+    call wr_pick                    ; not the state we want
     mov si, wr_menus
     call OSAPI_MENU_SET
     mov si, wr_about
@@ -331,102 +338,51 @@ wr_rot:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_edges - draw the shape's edges from one coordinate pair table
-; in:  SI = the x table, DI = the y table, the pen already set
-; out: nothing; clobbers everything but the segments
-;
-; ONE OSAPI_GFX_LINE PER EDGE and nothing else - which is the whole of this
-; package's inner loop, and what the fps figure below is measuring.
-; -----------------------------------------------------------------------------
-wr_edges:
-    mov bp, [wr_ep]                 ; the shape's edge list: index pairs
-    mov cl, [wr_ne]
-    xor ch, ch
-.edge:
-    push cx
-    push bp
-    call wr_edge1
-    pop bp
-    add bp, 2
-    pop cx
-    dec cx
-    jnz .edge
-    ret
-
-; -----------------------------------------------------------------------------
 ; wr_compose - the whole figure into the mask (SPEC.md 78.8)
 ; out: CF = 1 = it does not fit the band, nothing composed
 ; clobbers: everything but the segments
 ; -----------------------------------------------------------------------------
 wr_compose:
     mov ax, [wr_px]                 ; --- the bounds, seeded from vertex 0 and
-    mov [wr_bmnx], ax               ; folded over BOTH figures below
-    mov [wr_bmxx], ax
-    mov ax, [wr_py]
-    mov [wr_bmny], ax
-    mov [wr_bmxy], ax
+    mov dx, [wr_py]                 ; folded over BOTH figures below
+    call gfxe_bnew
     mov si, wr_px
     mov di, wr_py
-    call wr_bspan
+    mov cl, [wr_nv]
+    xor ch, ch
+    call gfxe_bfold
     cmp byte [wr_shown], 0
     je .bounded                     ; nothing on the glass to have to cover
     mov si, wr_ex                   ; THE BAND ERASES BY COVERING, so the frame
     mov di, wr_ey                   ; already down has to be inside it too -
-    call wr_bspan                   ; see the header (SPEC.md 78.8.1)
+    mov cl, [wr_nv]                 ; see the header (SPEC.md 78.8.1)
+    xor ch, ch
+    call gfxe_bfold
 .bounded:
-    mov ax, [wr_bmnx]               ; --- x, a pixel of margin and onto the
-    dec ax                          ; byte grid BLIT1 insists on
-    and ax, 0FFF8h
-    mov [wr_bx0], ax
-    mov ax, [wr_bmxx]
-    add ax, 8                       ; +1 of margin, then rounded UP to the byte
-    and ax, 0FFF8h
-    sub ax, [wr_bx0]
-    cmp ax, WR_BW
-    ja .no                          ; wider than the mask: refuse
-    mov [wr_bw], ax
+    call gfxe_bsize                 ; the margin, the byte grid and the two
+    jc .no                          ; capacity refusals are the library's
 
-    mov ax, [wr_bmny]               ; --- ...and y, which needs no grid
-    dec ax
-    mov [wr_by0], ax
-    mov ax, [wr_bmxy]
-    add ax, 2                       ; +1 of margin, +1 to make it a COUNT
-    sub ax, [wr_by0]
-    cmp ax, WR_BH
-    ja .no
-    mov [wr_bh], ax
-
-    mov ax, [wr_bx0]                ; --- and INSIDE the object area, both ways.
+    mov ax, [gfxe_bx0]              ; --- and INSIDE the object area, both ways.
     cmp ax, [wr_ox0]                ; The clip would stop a band that was not,
     jl .no                          ; but it would stop it having already spent
-    mov bx, [wr_bw]                 ; the blit - and the strip lives directly
-    add ax, bx                      ; under these rows
-    mov bx, [wr_ox0]
-    add bx, [wr_ow]
-    cmp ax, bx
-    jg .no
-    mov ax, [wr_by0]
-    cmp ax, [wr_oy0]
-    jl .no
-    mov bx, [wr_bh]
+    mov bx, [gfxe_bw]               ; the blit - and the strip lives directly
+    add ax, bx                      ; under these rows.
+    mov bx, [wr_ox0]                ;
+    add bx, [wr_ow]                 ; THIS test stays wire's and does not move
+    cmp ax, bx                      ; into os88gfx.inc: the library knows what
+    jg .no                          ; its own buffer can hold, and only the
+    mov ax, [gfxe_by0]              ; program knows what its WINDOW will allow.
+    cmp ax, [wr_oy0]                ; Both are refusals and they are refusals
+    jl .no                          ; about different things
+    mov bx, [gfxe_bh]
     add ax, bx
     mov bx, [wr_oy0]
     add bx, [wr_oh]
     cmp ax, bx
     jg .no
 
-    push es                         ; --- the paper, which is WHITE here. Only
-    push ds                         ; the rows this band HAS: the mask is sized
-    pop es                          ; for WR_BH and this frame rarely wants them
-    mov di, wr_mask
-    mov ax, [wr_bh]
-    mov cl, 3                       ; bh * WR_BST bytes = bh * 8 words
-    shl ax, cl
-    mov cx, ax
-    mov ax, 0FFFFh
-    cld
-    rep stosw
-    pop es
+    mov ax, 0FFFFh                  ; --- the paper, which is WHITE here
+    call gfxe_bclear
 
     mov bp, [wr_ep]                 ; --- and the figure ANDed out of it
     mov cl, [wr_ne]
@@ -434,17 +390,16 @@ wr_compose:
 .edge:
     push cx
     push bp
+    mov al, [ds:bp+1]               ; the far end FIRST, so the near end lands
+    call wr_mpt                     ; in AX/BX last and nothing is shuffled
+    push ax                         ; x2
+    push dx                         ; y2
     mov al, [ds:bp]
     call wr_mpt
-    mov [wr_mx1], ax
-    mov [wr_my1], dx
-    pop bp
-    push bp
-    mov al, [ds:bp+1]
-    call wr_mpt
-    mov [wr_mx2], ax
-    mov [wr_my2], dx
-    call wr_mline
+    mov bx, dx                      ; y1
+    pop dx                          ; y2
+    pop cx                          ; x2
+    call gfxe_line                  ; AX,BX -> CX,DX, in BAND coordinates
     pop bp
     add bp, 2
     pop cx
@@ -456,255 +411,32 @@ wr_compose:
     stc
     ret
 
-; wr_bspan - fold one frame's vertex arrays into the running band bounds
-; in:  SI = the x array, DI = the y array, [wr_nv] vertices in each
-; out: [wr_bmnx]/[wr_bmxx]/[wr_bmny]/[wr_bmxy] widened to include them
-; clobbers: AX, BX, CX, flags
-;
-; SIGNED compares throughout: wr_project can put a vertex off the left of the
-; object area for a frame, and an unsigned MIN would take -3 for 65533 and
-; size the band to the whole screen.
-wr_bspan:
-    mov cl, [wr_nv]
-    xor ch, ch
-    xor bx, bx
-.v:
-    mov ax, [si + bx]
-    cmp ax, [wr_bmnx]
-    jge .nx
-    mov [wr_bmnx], ax
-.nx:
-    cmp ax, [wr_bmxx]
-    jle .xx
-    mov [wr_bmxx], ax
-.xx:
-    mov ax, [di + bx]
-    cmp ax, [wr_bmny]
-    jge .ny
-    mov [wr_bmny], ax
-.ny:
-    cmp ax, [wr_bmxy]
-    jle .xy
-    mov [wr_bmxy], ax
-.xy:
-    add bx, 2
-    dec cx
-    jnz .v
-    ret
-
-; wr_mpt - vertex AL -> AX/DX = its place in the mask; clobbers AX, DX, DI
+; wr_mpt - vertex AL -> AX/DX = its place in the band; clobbers AX, DX, DI
 wr_mpt:
     xor ah, ah
     add ax, ax
     mov di, ax
     mov dx, [wr_py + di]
-    sub dx, [wr_by0]
+    sub dx, [gfxe_by0]
     mov ax, [wr_px + di]
-    sub ax, [wr_bx0]
+    sub ax, [gfxe_bx0]
     ret
 
 ; -----------------------------------------------------------------------------
 ; wr_put - the band onto the glass, one arrival (SPEC.md 5.4.2)
-; out: CF = 1 = REFUSED (a kern_small kernel carries the slot and not the body)
+; out: CF = 1 = REFUSED (a kern_small kernel before SPEC.md 5.4.2.5.1 carries
+;      the slot and not the body)
 ; -----------------------------------------------------------------------------
 wr_put:
-    push es
-    push ds
-    pop es
-    mov si, wr_mask
-    mov bp, WR_BST                  ; the STRIDE stays the mask's, so wr_mline's
-                                    ; row step is still a shift by 4 - only the
-                                    ; COLUMNS blitted shrink (SPEC.md 78.8.1)
-    mov ax, [wr_bx0]
-    mov bx, [wr_by0]
-    mov cx, [wr_bw]
-    mov dx, [wr_bh]
-    call OSAPI_GFX_BLIT1
-    pop es                          ; `pop` writes no flag, so BLIT1's CF is
-    jc .out                         ; still the caller's answer
-    mov ax, [wr_bx0]                ; THE BAND THAT IS ON THE GLASS, kept here
-    mov [wr_gbx0], ax               ; and not read back off wr_bx0: a later
-    mov ax, [wr_by0]                ; wr_compose stages x0/y0 before the tests
-    mov [wr_gby0], ax               ; that can refuse, so after a refusal those
-    mov ax, [wr_bh]                 ; four words are half this frame's and half
-    mov [wr_gbh], ax                ; the last one's (SPEC.md 78.8.2)
-    mov ax, [wr_bw]
-    mov [wr_gbw], ax                ; ...and this one LAST: it is the flag
-.out:                               ; (`mov` writes no flag, so CF is still
-    ret                             ; BLIT1's on both arms)
-
-; -----------------------------------------------------------------------------
-; wr_mline - one edge into the mask, in MASK coordinates
-; in:  [wr_mx1]/[wr_my1] -> [wr_mx2]/[wr_my2]; clobbers AX, BX, CX, DX, SI, DI
-;
-; Ordered left to right first, so the x step is always +1 and only the y step
-; carries a sign. The bit is an AND MASK and not a set bit - see the header at
-; the top of this file - so it walks by rotating a zero along with `stc`/`rcr`,
-; and the carry OUT of that is the wrap into the next byte.
-; -----------------------------------------------------------------------------
-wr_mline:
-    mov ax, [wr_mx1]
-    mov cx, [wr_mx2]
-    cmp ax, cx
-    jle .ord
-    mov [wr_mx1], cx
-    mov [wr_mx2], ax
-    mov ax, [wr_my1]
-    mov cx, [wr_my2]
-    mov [wr_my1], cx
-    mov [wr_my2], ax
-.ord:
-    mov ax, [wr_mx2]
-    sub ax, [wr_mx1]
-    mov [wr_mdx], ax
-    mov ax, [wr_my2]
-    sub ax, [wr_my1]
-    mov word [wr_msy], WR_BST
-    jns .dy
-    neg ax
-    mov word [wr_msy], -WR_BST
-.dy:
-    mov [wr_mdy], ax
-
-    mov ax, [wr_my1]                ; the first byte, and the bit in it
-    mov cl, 4
-    shl ax, cl                      ; y * WR_BST, which is why the stride is 16
-    mov di, ax
-    mov ax, [wr_mx1]
-    mov bx, ax
-    mov cl, 3
-    shr bx, cl
-    add di, bx
-    and al, 7
-    mov cl, al
-    mov bl, 07Fh
-    ror bl, cl                      ; the ZERO walks, not the one
-
-    mov ax, [wr_mdx]
-    cmp ax, [wr_mdy]
-    jl .majy
-
-    mov si, ax                      ; --- x is the major axis
-    inc si
-    mov bp, [wr_mdy]
-    add bp, bp
-    mov [wr_me1], bp
-    sub bp, ax
-    add ax, ax
-    mov [wr_me2], ax
-.mx:
-    and [wr_mask + di], bl
-    stc
-    rcr bl, 1
-    jc .mx1
-    mov bl, 07Fh
-    inc di
-.mx1:
-    add bp, [wr_me1]
-    jle .mx2
-    sub bp, [wr_me2]
-    add di, [wr_msy]
-.mx2:
-    dec si
-    jnz .mx
-    ret
-
-.majy:                              ; --- ...or y is
-    mov si, [wr_mdy]
-    inc si
-    mov bp, [wr_mdx]
-    add bp, bp
-    mov [wr_me1], bp
-    sub bp, [wr_mdy]
-    mov ax, [wr_mdy]
-    add ax, ax
-    mov [wr_me2], ax
-.my:
-    and [wr_mask + di], bl
-    add di, [wr_msy]
-    add bp, [wr_me1]
-    jle .my2
-    sub bp, [wr_me2]
-    stc
-    rcr bl, 1
-    jc .my2
-    mov bl, 07Fh
-    inc di
-.my2:
-    dec si
-    jnz .my
-    ret
-
-; -----------------------------------------------------------------------------
-; wr_pairs - SPEC.md 78.5: erase old[i], draw new[i], EDGE BY EDGE
-; in:  the pen is set per edge here; clobbers everything but the segments
-;
-; The figure is then missing one edge of twelve at a time instead of all
-; twelve at once, which is the whole of the flicker. What it costs is a NICK:
-; erasing old[j] cuts new[i] wherever the two cross, for every j drawn after
-; i, and on a cube in projection that is a handful of pixels a frame. Mode 2
-; buys them back with a repair pass.
-; -----------------------------------------------------------------------------
-wr_pairs:
-    mov bp, [wr_ep]
-    mov cl, [wr_ne]
-    xor ch, ch
-.edge:
-    push cx
-    push bp
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov si, wr_ex
-    mov di, wr_ey
-    call wr_edge1
-    pop bp
-    push bp
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, wr_px
-    mov di, wr_py
-    call wr_edge1
-    pop bp
-    add bp, 2
-    pop cx
-    dec cx
-    jnz .edge
-    ret
-
-; -----------------------------------------------------------------------------
-; wr_edge1 - ONE edge, from one coordinate pair table
-; in:  SI = the x table, DI = the y table, BP -> the edge's two indices
-; out: nothing; SI/DI/BP survive, AX/BX/CX/DX do not
-; -----------------------------------------------------------------------------
-wr_edge1:
-    mov bx, bp
-    mov al, [bx]                    ; the two vertex indices, as word offsets
-    xor ah, ah
-    add ax, ax
-    mov bx, ax
-    mov al, [bx + si]               ; ...and NOT [si+bx]: one is a base+index
-    mov ah, [bx + si + 1]           ; addressing mode either way, and this is
-    push ax                         ; the one NASM assembles without a warning
-    mov ax, [bx + di]
-    push ax
-    mov bx, bp
-    mov al, [bx+1]
-    xor ah, ah
-    add ax, ax
-    mov bx, ax
-    mov cx, [bx + si]
-    mov dx, [bx + di]
-    pop bx                          ; y1
-    pop ax                          ; x1
-    push si
-    push di
-    push bp
-    xor si, si                      ; SPEC.md 5.6.5: thin, both ways - see the
-    call OSAPI_GFX_LINE             ; header
-    pop bp
-    pop di
-    pop si
-    ret
+    call gfxe_bput                  ; ES:SI, the stride and the four numbers
+    ret                             ; are all os88gfx.inc's, and its CF is ours
+                                    ;
+                                    ; WHAT USED TO BE HERE was four words
+                                    ; remembering the band on the glass, so the
+                                    ; kernel-line orders could cover it with a
+                                    ; fill (78.8.2). 78.5.1 deleted those, and
+                                    ; a band erases by covering, so nothing
+                                    ; reads them any more
 
 ; -----------------------------------------------------------------------------
 ; wr_draw - erase the frame on the glass, then draw the new one
@@ -718,64 +450,22 @@ wr_edge1:
 ; trails do for the same reason.
 ; -----------------------------------------------------------------------------
 wr_draw:
-    cmp byte [wr_mode], 3           ; --- SPEC.md 78.8: composed and put down
-    jne .orders                     ; in one call
-    call wr_compose
-    jc .orders                      ; ...the figure does not fit the band
-    call wr_put
-    jnc .keep
-.orders:
-    cmp byte [wr_shown], 0
-    je .fresh                       ; nothing on the glass to take off
-    cmp word [wr_gbw], 0
-    jne .cover                      ; A COMPOSED FRAME IS ON THE GLASS, and a
-                                    ; white kernel line does not cancel a mask
-                                    ; one: the two rasterisations differ for
-                                    ; most endpoint pairs (SPEC.md 78.8.2)
-    cmp byte [wr_mode], 0
-    je .whole
-    cmp byte [wr_mode], 3
-    je .whole                       ; the composite refused: this frame goes
-                                    ; down whole, since nothing was erased
-    call wr_pairs                   ; 78.5's two other orders
-    cmp byte [wr_mode], 2
-    jne .keep
-    mov al, CBLACK                  ; ...and the repair pass, which buys back
-    call OSAPI_SET_COLOR            ; the nicks at the cost of a third walk
-    mov si, wr_px
-    mov di, wr_py
-    call wr_edges
-    jmp short .keep
-.cover:
-    mov al, CWHITE                  ; ...so it comes off the way it went down,
-    call OSAPI_SET_COLOR            ; in ONE call rather than one per edge. The
-    mov ax, [wr_gbx0]               ; band passed the object-area test before it
-    mov bx, [wr_gby0]               ; was blitted, so this fill is inside it
-    mov cx, ax
-    add cx, [wr_gbw]
-    dec cx
-    mov dx, bx
-    add dx, [wr_gbh]
-    dec dx
-    call OSAPI_GFX_FILL
-    jmp short .fresh
-.whole:
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov si, wr_ex
-    mov di, wr_ey
-    call wr_edges
-.fresh:
-    mov word [wr_gbw], 0            ; this frame goes down as kernel lines, so
-                                    ; kernel lines are what will take it off
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, wr_px
-    mov di, wr_py
-    call wr_edges
-.keep:
-    call wr_keep
-    ret
+    call wr_compose                 ; SPEC.md 78.8: composed, and put down in
+    jc .out                         ; ONE call. THERE IS NO OTHER ORDER since
+    call wr_put                     ; 78.5.1 - a band ERASES BY COVERING, so
+    jc .out                         ; there is nothing to erase separately and
+    call wr_keep                    ; nothing to erase it WITH
+.out:                               ;
+    ret                             ; A REFUSAL LEAVES THE LAST FRAME UP, which
+                                    ; is a dropped frame and not a wrong one:
+                                    ; wr_compose refuses a figure that will not
+                                    ; fit the band or would leave the object
+                                    ; area, and wr_put refuses what BLIT1
+                                    ; refuses. Neither has drawn anything by
+                                    ; then, and the figure already on the glass
+                                    ; is still the one [wr_ex]/[wr_ey] describe,
+                                    ; so the next frame's band covers it exactly
+                                    ; as it would have
 
 ; wr_keep - the frame now on the glass is the one to erase next time
 wr_keep:
@@ -1008,6 +698,15 @@ wr_hire:
     call OSAPI_TASK_SPAWN
     jc .out
     mov byte [wr_hired], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame before its
+    ; first instruction, so mem_frameless pins a region with an
+    ; undeclared worker however that region is declared. What a restart
+    ; costs is one pass of the loop - the park is inside
+    ; OSAPI_TASK_ALIVE and nowhere else (this package is not
+    ; OSAPI_MEM_PARKSAFE), which is the TOP of the loop, and every byte
+    ; that outlives a pass is a static and moves with us.
+    OS88_WORKER_RESTARTABLE wr_worker
 .out:
     pop bx
     pop ax
@@ -1133,13 +832,10 @@ wr_oncmd:
     call wr_abdown                  ; a pick takes the card down (78.7); every
                                     ; arm below ends at .redraw, which puts the
                                     ; content back whole
-    cmp ah, 1
-    jb .shape
-    je .view
-    cmp al, 4                       ; --- Draw: 78.5's three orders and 78.8's
-    jae .out                        ;     COMPOSED, which shipped as item 3 and
-    mov [wr_mode], al               ;     a `cmp al, 3` here kept unpickable
-    jmp short .redraw
+    cmp ah, 1                       ; SPEC.md 78.5.1: there is no Draw menu -
+    jb .shape                       ; one order survives, so there is nothing
+    je .view                        ; to offer
+    jmp short .out
 .shape:
     cmp al, WR_NSHAPE
     jae .out
@@ -1162,7 +858,7 @@ wr_oncmd:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_about - the OSAPI_ABOUT_SET handler (SPEC.md 78.7, slot 0x01E0)
+; wr_about - the OSAPI_ABOUT_SET handler (SPEC.md 78.7, slot 0x018A)
 ; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment -
 ;      a window callback in every respect that matters
 ; out: nothing; preserves all registers
@@ -1347,7 +1043,6 @@ wr_tpl:
     OS88_MENUSET wr_menus, wr_name, wr_oncmd
         OS88_MENU wr_m_shape, wr_i_shape, WR_NSHAPE
         OS88_MENU wr_m_view,  wr_i_view,  3
-        OS88_MENU wr_m_draw,  wr_i_draw,  4
     OS88_MENUSET_END wr_menus
 
 wr_name:    db 'Wire', 0
@@ -1361,12 +1056,6 @@ wr_i_view:  dw wr_it_sm, wr_it_md, wr_it_lg
 wr_it_sm:   db 'Small', 0
 wr_it_md:   db 'Medium', 0
 wr_it_lg:   db 'Large', 0
-wr_m_draw:  db 'Draw', 0
-wr_i_draw:  dw wr_it_whole, wr_it_pair, wr_it_rep, wr_it_comp
-wr_it_whole: db 'Whole figure', 0
-wr_it_pair:  db 'Edge at a time', 0
-wr_it_rep:   db 'Edge, then repair', 0
-wr_it_comp:  db 'Composed', 0
 
 wr_eighths: db 3, 4, 6          ; Small, Medium, Large
 wr_ttl:     db 'Wireframe', 0
@@ -1428,7 +1117,13 @@ wr_tet_e:
 wr_sintab:
 %include "wiresin.inc"
 
-    OS88_BSS 184 + WR_BSZ
+; --- the embeddable graphics library -----------------------------------------
+; At the END of the code and before OS88_BSS: the header and the icon block are
+; at fixed offsets in the image (SPEC.md 20.2), so code emitted between them
+; fails the icon macro's own offset assertion.
+%include "os88gfx.inc"
+
+    OS88_BSS 142 + GFXE_BAND_SZ
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) ------------------------------------
@@ -1461,9 +1156,8 @@ wr_sinb     equ os88_image_end + 35
 wr_cosb     equ os88_image_end + 36
 wr_nv       equ os88_image_end + 37   ; byte
 wr_ne       equ os88_image_end + 38   ; byte
-wr_mode     equ os88_image_end + 39   ; byte: 78.5's draw order; wr_entry sets
-                                  ; it to 1, `Edge at a time`
-wr_vp       equ os88_image_end + 40   ; word
+wr_vp       equ os88_image_end + 40   ; word   (+39 is free: SPEC.md 78.5.1
+                                  ; deleted [wr_mode] with the other orders)
 wr_ep       equ os88_image_end + 42   ; word
 wr_px       equ os88_image_end + 44   ; WR_MAXV words: this frame
 wr_py       equ os88_image_end + 60
@@ -1473,26 +1167,13 @@ wr_line     equ os88_image_end + 108  ; the strip's composed text, 32 bytes -
                                   ; and wr_fpsdraw's four-cell field, which is
                                   ; never live at the same time (78.6)
 wr_abon     equ os88_image_end + 140  ; byte: the credit card is up (78.7)
-wr_bx0      equ os88_image_end + 142  ; SPEC.md 78.8: the band's origin, and
-wr_by0      equ os88_image_end + 144  ; the rows of it this window has
-wr_bh       equ os88_image_end + 146
-wr_mx1      equ os88_image_end + 148  ; wr_mline's endpoints, in the mask
-wr_my1      equ os88_image_end + 150
-wr_mx2      equ os88_image_end + 152
-wr_my2      equ os88_image_end + 154
-wr_mdx      equ os88_image_end + 156
-wr_mdy      equ os88_image_end + 158
-wr_msy      equ os88_image_end + 160  ; the row step, which carries the sign
-wr_me1      equ os88_image_end + 162
-wr_me2      equ os88_image_end + 164
-wr_bw       equ os88_image_end + 166  ; SPEC.md 78.8.1: the band's WIDTH, which
-                                  ; is the figure's and not the window's
-wr_bmnx     equ os88_image_end + 168  ; the union bounds wr_bspan folds into
-wr_bmxx     equ os88_image_end + 170
-wr_bmny     equ os88_image_end + 172
-wr_bmxy     equ os88_image_end + 174
-wr_gbx0     equ os88_image_end + 176  ; SPEC.md 78.8.2: the band that is ON THE
-wr_gby0     equ os88_image_end + 178  ; GLASS, saved by wr_put once BLIT1 has
-wr_gbh      equ os88_image_end + 180  ; taken it - and wr_gbw = 0 says the frame
-wr_gbw      equ os88_image_end + 182  ; there was drawn with kernel lines
-wr_mask     equ os88_image_end + 184  ; ...and the band itself
+wr_mask     equ os88_image_end + 142  ; the band itself, which is the one
+                                  ; thing os88gfx.inc does NOT declare for
+                                  ; itself: only the program knows how big a
+                                  ; band it can afford and only the program can
+                                  ; put it out here rather than in the image
+                                  ;
+                                  ; The band's ORIGIN and SIZE, the bounds they
+                                  ; are folded out of, and gfxe_line's working
+                                  ; set are all the library's now - 34 bytes
+                                  ; that left this list for 30 in the image

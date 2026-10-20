@@ -15,7 +15,7 @@
 ;  - **The decoder is a flat loop over an explicit cursor, not a recursion.**
 ;    An abbreviation (Standard 3.3) is itself a Z-string, and the obvious
 ;    implementation calls the decoder again. The worker's stack is 384 bytes
-;    total and shared with the tick, mouse and sound IRQs (docs/FROTZ-PLAN.md
+;    total and shared with the tick, mouse and sound IRQs (docs/plans/completed/FROTZ-PLAN.md
 ;    4), so this decodes out of a cursor held in bss - the word being consumed,
 ;    which Z-character of it is next, the address of the next word, and the
 ;    two alphabet registers - and an abbreviation SAVES that cursor into one
@@ -28,7 +28,7 @@
 ;  - **Only zmem.inc forms a word out of story bytes.** Z-machine words are
 ;    big-endian and the 8086 is not; the decoder reads through zm_gw/zm_gw16
 ;    and never touches ES, which belongs to the PC while the VM runs
-;    (docs/FROTZ-PLAN.md 3.1).
+;    (docs/plans/completed/FROTZ-PLAN.md 3.1).
 ;
 ;  - **A ZSCII character the 8x8 font cannot draw is TRANSLITERATED, not
 ;    dropped.** The kernel font is glyphs 32..126 and there is no second font
@@ -85,7 +85,10 @@
 %define zt_ebuf   (os88_image_end + ZTEXT_SLACK + 102) ; 12: zt_encode's Z-chars
 %define zt_eni    (os88_image_end + ZTEXT_SLACK + 114) ; byte: how many so far
 %define zt_enn    (os88_image_end + ZTEXT_SLACK + 115) ; byte: how many fit
-; 116 of ZTEXT_SLACK's 128 bytes. Nothing here is touched by another module.
+; All 116 of ZTEXT_SLACK's bytes. Nothing here is touched by another module.
+; THREE PAIRS ARE MOVED AS WORDS and must stay adjacent and in this order:
+; alph/lock (+3/+4) and its bank salph/slock (+12/+13), ci/end (+8/+9) and
+; sci/send (+10/+11), and mode/lvl (+5/+6), which are only ever zeroed together.
 
 ZT_S3MAX    equ 16              ; Standard 7.1.2.1.1: a 17th select is an error
 ZT_S3CAP    equ 32000           ; the Standard says the GAME sizes the table and
@@ -122,13 +125,12 @@ zt_print_ret:
     push di
     mov [zt_al], ax
     mov [zt_ah], dx
-    mov byte [zt_alph], 0       ; Standard 3.2.1: A0 is current initially
-    mov byte [zt_lock], 0
-    mov byte [zt_mode], 0
-    mov byte [zt_lvl], 0
-    mov byte [zt_ci], 3         ; nothing buffered: fetch on the first turn
-    mov byte [zt_end], 0
-    call zt_decloop
+    xor ax, ax
+    mov [zt_alph], ax           ; Standard 3.2.1: A0 is current initially,
+    mov [zt_mode], ax           ; and not locked; no escape, no abbreviation
+    mov al, 3
+    mov [zt_ci], ax             ; ci = 3: nothing buffered, fetch on the first
+    call zt_decloop             ; turn; end = 0
     mov ax, [zt_al]
     mov dx, [zt_ah]
     pop di
@@ -163,22 +165,18 @@ zt_decloop:
 .strend:
     cmp byte [zt_lvl], 0
     je .done
-    mov al, [zt_sci]            ; resume the outer string
-    mov [zt_ci], al
-    mov al, [zt_send]
-    mov [zt_end], al
-    mov al, [zt_salph]
-    mov [zt_alph], al
-    mov al, [zt_slock]
-    mov [zt_lock], al
+    mov ax, [zt_sci]            ; resume the outer string: ci and end,
+    mov [zt_ci], ax
+    mov ax, [zt_salph]          ; ...alph and lock, a pair at a time
+    mov [zt_alph], ax
     mov ax, [zt_scw]
     mov [zt_cw], ax
     mov ax, [zt_sal]
     mov [zt_al], ax
     mov ax, [zt_sah]
     mov [zt_ah], ax
-    mov byte [zt_lvl], 0
-    mov byte [zt_mode], 0       ; Standard 3.3.1: an abbreviation may not end
+    xor ax, ax
+    mov [zt_mode], ax           ; mode and lvl both 0. Standard 3.3.1: an abbreviation may not end
                                 ; with an incomplete construction. If one does,
                                 ; the half-built escape dies with it rather
                                 ; than eating the outer string's next Z-char.
@@ -194,7 +192,7 @@ zt_decloop:
 ;
 ; Standard 3.2: bit 15 is set only on the last word, and the three Z-characters
 ; are bits 14-10, 9-5 and 4-0. zm_gw does the big-endian assembly - this file
-; never forms a word out of story bytes itself (docs/FROTZ-PLAN.md 3.1).
+; never forms a word out of story bytes itself (docs/plans/completed/FROTZ-PLAN.md 3.1).
 ; -----------------------------------------------------------------------------
 zt_fetch:
     push ax
@@ -406,6 +404,23 @@ zt_abbrev:
     push bx
     push cx
     push dx
+    ; Bank the outer cursor FIRST - all of it, because the abbreviation can
+    ; begin at the first of three Z-characters in a word and the other two
+    ; must still be read afterwards - while AX is free to do it a WORD at a
+    ; time: ci/end and alph/lock are byte pairs that sit side by side, in the
+    ; same order, in both the live block and the banked one (ztext.inc's bss).
+    mov dl, al                  ; the index Z-character, meanwhile
+    mov ax, [zt_ci]
+    mov [zt_sci], ax            ; ci, end
+    mov ax, [zt_alph]
+    mov [zt_salph], ax          ; alph, lock
+    mov ax, [zt_cw]
+    mov [zt_scw], ax
+    mov ax, [zt_al]
+    mov [zt_sal], ax
+    mov ax, [zt_ah]
+    mov [zt_sah], ax
+    mov al, dl
     xor ah, ah
     mov bl, [zt_abase]
     dec bl
@@ -421,28 +436,13 @@ zt_abbrev:
     shl ax, 1
     rcl dx, 1
 
-    mov bl, [zt_ci]             ; bank the outer cursor - all of it, because
-    mov [zt_sci], bl            ; the abbreviation can begin at the first of
-    mov bl, [zt_end]            ; three Z-characters in a word and the other
-    mov [zt_send], bl           ; two must still be read afterwards
-    mov bl, [zt_alph]
-    mov [zt_salph], bl
-    mov bl, [zt_lock]
-    mov [zt_slock], bl
-    mov bx, [zt_cw]
-    mov [zt_scw], bx
-    mov bx, [zt_al]
-    mov [zt_sal], bx
-    mov bx, [zt_ah]
-    mov [zt_sah], bx
-
     mov [zt_al], ax
     mov [zt_ah], dx
+    xor ax, ax
+    mov [zt_alph], ax           ; an abbreviation is a Z-string in its own
+    mov al, 3                   ; right and starts in A0 (alph and lock 0)
+    mov [zt_ci], ax             ; ci = 3, end = 0: fetch on the first turn
     mov byte [zt_lvl], 1
-    mov byte [zt_ci], 3
-    mov byte [zt_end], 0
-    mov byte [zt_alph], 0       ; an abbreviation is a Z-string in its own
-    mov byte [zt_lock], 0       ; right and starts in A0
     pop dx
     pop cx
     pop bx
@@ -514,7 +514,7 @@ zt_putc:
     push si
     push di
     push es                     ; ES IS THE PROGRAM COUNTER'S SEGMENT
-                                ; (docs/FROTZ-PLAN.md 3.1), and this is the one
+                                ; (docs/plans/completed/FROTZ-PLAN.md 3.1), and this is the one
                                 ; funnel from the VM into the window - so every
                                 ; drawing path below reaches ES sooner or later
                                 ; and putting it back HERE is what keeps that
@@ -533,7 +533,7 @@ zt_putc:
     cmp byte [zt_s2on], 0
     je .done
     call zi_script_putc         ; the transcript is a FILE, and a worker may
-                                ; not touch one (docs/FROTZ-PLAN.md 4) - zio.inc
+                                ; not touch one (docs/plans/completed/FROTZ-PLAN.md 4) - zio.inc
                                 ; buffers it and the UI task writes it
     jmp .done
 .mem:
@@ -746,11 +746,7 @@ zt_num:
     call zt_putc
     loop .emit
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; =============================================================================
 ; Output stream selection (Standard 7.1, 7.4)
@@ -829,11 +825,7 @@ zt_stream:
     call zt_s3close
 .out:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zt_s3close - finish the innermost stream 3 table (Standard 7.1.2.1)
@@ -934,94 +926,51 @@ zt_flag2:
     or bl, 1
 .put:
     mov ax, 0x10
-    call zm_pw16
-    pop bx
+    call zm_pw16                    ; ...whose Flags 2 hook (zt_f2sync) puts
+    pop bx                          ; Story > Transcript's label right
     pop ax
     ret
 
-; =============================================================================
-; zt_selected - is a stream on?
-; in:  AL = 1..4
-; out: CF = 1 selected, CF = 0 not; all registers preserved
-;
-; zio.inc asks about stream 4 before echoing a command, and zexec.inc asks
-; about stream 2 when the story writes Flags 2 by hand.
-; =============================================================================
-zt_selected:
-    push ax
-    xor ah, ah
-    cmp al, 1
-    jne .n1
-    mov al, [zt_s1off]
-    xor al, 1
-    jmp .ans
-.n1:
-    cmp al, 2
-    jne .n2
-    mov al, [zt_s2on]
-    jmp .ans
-.n2:
-    cmp al, 3
-    jne .n3
-    xor al, al
-    cmp word [zt_s3n], 0
-    je .ans
-    inc al
-    jmp .ans
-.n3:
-    cmp al, 4
-    jne .no
-    mov al, [zt_s4on]
-.ans:
-    or al, al
-    jz .no
-    stc
-    jmp .out
-.no:
-    clc
-.out:
-    pop ax
-    ret
-
-; =============================================================================
-; zt_reset - put the streams back the way a fresh game finds them
-; in:  nothing
+; -----------------------------------------------------------------------------
+; zt_f2sync - the story WROTE Flags 2: stream 2 follows its bit 0 (Standard 7.3)
+; in:  ES = the story claim (zm_pb16/zm_pw16, straight after the store)
 ; out: nothing; preserves all registers
 ;
-; @restart and @restore both land on a machine whose streams are whatever the
-; previous story left, and an unterminated stream 3 pointing into the old
-; dynamic memory is the one that bites.
-; =============================================================================
-zt_reset:
-    mov byte [zt_s1off], 0
-    mov byte [zt_s2on], 0
-    mov byte [zt_s4on], 0
-    mov word [zt_s3n], 0
-    mov byte [zt_mode], 0
-    mov byte [zt_lvl], 0
+; A v1-3 story has no @output_stream: Infocom's SCRIPT and UNSCRIPT verbs set
+; and clear the bit with a store, and the interpreter is expected to notice -
+; real Frotz watches exactly this address. Without it SCRIPT printed its own
+; "Here begins a transcript" and nothing was ever buffered.
+; -----------------------------------------------------------------------------
+zt_f2sync:
+    push ax
+    mov al, [es:ZMH_FLAGS2 + 1]
+    and al, 1
+    mov [zt_s2on], al
+    call zf_menufix                 ; Story > Transcript says Start or Stop
+    pop ax
     ret
 
-; =============================================================================
-; zt_enclen - how many bytes an encoded dictionary word occupies
-; in:  nothing
-; out: AX = 4 (v1-3) or 6 (v4+); other registers preserved
+; -----------------------------------------------------------------------------
+; zt_f2keep - re-stamp bit 0 after zm_setup re-read the header
+; in:  ES = the story claim; out: nothing; preserves all registers
 ;
-; Six Z-characters in v1-3 and nine in v4+ (Standard 3.7), packed three to a
-; word - so the BUFFER is 4 or 6 bytes, not 6 or 9. zdict.inc compares this
-; many bytes against a dictionary entry, so the two must agree.
-; =============================================================================
-zt_enclen:
-    mov ax, 4
-    cmp byte [zf_ver], 4
-    jb .out
-    mov ax, 6
+; A restart or a restore brings Flags 2 back off disk with the bit as it was
+; THEN, and the Standard marks it as one that survives both (11.1, "Rst").
+; zi_load clears [zt_s2on] before the first zm_setup, so a new story still
+; starts with it off.
+; -----------------------------------------------------------------------------
+zt_f2keep:
+    cmp byte [zt_s2on], 0
+    je .out
+    or byte [es:ZMH_FLAGS2 + 1], 1
 .out:
     ret
+
 
 ; =============================================================================
 ; zt_encode - encrypt typed text the way the dictionary stores it
 ; in:  SI = the text, in OUR segment; CX = its length
-;      DI = the destination, zt_enclen bytes
+;      DI = the destination, 4 bytes (v1-3) or 6 (v4+)
 ; out: nothing; preserves all registers
 ;
 ; Standard 3.7, and every clause of it is load-bearing: lower-case first (so
@@ -1104,13 +1053,7 @@ zt_encode:
     or dl, dl
     jnz .pw
 
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop6
 
 ; -----------------------------------------------------------------------------
 ; zt_enc_char - one character of typed text into Z-characters
@@ -1175,11 +1118,7 @@ zt_enc_char:
     add al, 6
     call zt_emit
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zt_search - where a character sits in one alphabet

@@ -9,12 +9,14 @@
 CYCLE-EXACT, ON A RUNNING os8088, WITH NO CODE ON THE FLOPPY. MartyPC's debug
 server reports `cycles` and `instructions` and its `park` command points the
 CPU at an address with the prefetch queue flushed (docs/MARTYPC-DEBUG.md), so
-this boots a desktop, writes a stub into `snd_xlat` - 256 idle .bss bytes
-inside KERNEL_SEG, the PWM rescale table, which is rebuilt per clip and so
-holds nothing while nothing is playing, and whose first 8 bytes are also
-`snd_evtmp`, the click-abort drain's scratch (SPEC.md 34.4), idle for the
-same reason - parks on it and reads the counter
-either side.  It was `gfx_pairtab0` until that pair moved to `.lowbss`
+this boots a desktop, writes a stub over `fsx_caps` - the fullscreen
+bracket's resident code (~980 bytes of KERNEL_SEG `.text`) that a line never
+reaches, so the stub may overwrite it for the life of a parked measurement
+(the machine is thrown away after) - parks on it and reads the counter either
+side. It was `snd_xlat`, the PWM clip's table, until kernel size pass 8 moved
+the clip into apps/os88pcm.inc (SPEC.md 34.4), and then briefly `font_glyphs`,
+which the same pass took out of the plain build (glyphs are read in the ROM,
+SPEC.md 6) - and which was a LOW_SEG table besides.  It was `gfx_pairtab0` until that pair moved to `.lowbss`
 (SPEC.md 5.4.1.1): a LOW_SEG offset written at KERNEL_SEG is a plausible
 address in the middle of the kernel, which is os88sym.py's own warning.  `park`
 resets the CPU, so IF is 0 for the whole measurement: no tick, no mouse ISR,
@@ -274,7 +276,7 @@ def with_rig(args, body):
     with os88marty.launch(args.image, machine=args.machine) as m:
         os88marty.settle(m)
         m.pause()
-        rig = Rig(m, sym, sym["snd_xlat"])
+        rig = Rig(m, sym, sym["fsx_caps"])
         print("%s: framebuffer %04x:0000+%04x\n"
               % (args.machine, rig.fbseg, rig.fblen))
         return body(rig, sym)

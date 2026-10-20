@@ -63,6 +63,9 @@ RANGE_TAGS = {
     "MEM_P_WSAVE": "a window's raise cache: MEM_P_WSAVE_N of them, the slot "
                    "added (SPEC.md 11.96.3), so tm_htype subtracts and "
                    "compares against the length instead of matching a word",
+    "MEM_P_VIEW": "a Disk window's listing cache on kern_small: MEM_P_VIEW_N "
+                  "of them, the window's fm_pool slot added (SPEC.md 50.6.5), "
+                  "so tm_htype tests the range before it walks the table",
     "MEM_P_FATW": "one volume's FAT window: MEM_P_FATW_N of them, the VOLUME "
                   "added (SPEC.md 18.8.4). It was MEM_K_FATW and an ordinary "
                   "tm_ktab row until the window became a purgeable cache, "
@@ -71,6 +74,38 @@ RANGE_TAGS = {
 }
 
 EQU = re.compile(r"^(MEM_[KP]_[A-Z0-9_]+)\s+equ\s", re.M)
+
+
+def code_only(text):
+    """`text` with its NASM comments removed - quotes respected.
+
+    THE RESERVED CHECK BELOW IS A WORD COUNT, and a word count cannot tell a
+    claim from a cross-reference.  Its own `why` says what it is for - "if
+    something CLAIMS or DECODES it" - and a tombstone's whole job is to be
+    pointed AT, so `memory.inc` explaining that 0xFF0E is taken is exactly the
+    prose this tree writes and exactly what tripped this gate: `MEM_K_FDLG`'s
+    comment says "0xFF0E is MEM_K_ICO_UNUSED above, kept as a tombstone", and
+    the row went red naming the tombstone instead of the live tag beside it
+    that really was missing.
+
+    Stripping comments keeps every tooth: a `mov bx, MEM_K_ICO_UNUSED` or a
+    `dw MEM_K_ICO_UNUSED` still counts, which is the whole of what the suffix
+    could otherwise be used to hide.
+    """
+    out = []
+    for ln in text.split("\n"):
+        q = None
+        for i, ch in enumerate(ln):
+            if q:
+                if ch == q:
+                    q = None
+            elif ch in "'\"":
+                q = ch
+            elif ch == ";":
+                ln = ln[:i]
+                break
+        out.append(ln)
+    return "\n".join(out)
 
 
 def read(rel):
@@ -91,7 +126,41 @@ def main():
         done("ktags")
     ktab = m.group(1)
 
-    tags = [t for t in EQU.findall(kern) if not t.endswith("_N")]
+    # A name ending `_N` is a LENGTH and not a tag; a name ending `_UNUSED` is
+    # a RESERVED NUMBER and not a tag either. `MEM_K_ICO_UNUSED` is 0xFF0E,
+    # the ordinary tag the icon store had before SPEC.md 25.9 made it a
+    # purgeable page, kept only so that nobody reuses the number while a
+    # hibernation image written with it could still be read. Nothing claims
+    # it, so there is nothing for the Task Manager to name and requiring a
+    # `tm_ktab` row would be requiring a row for a tag that can never appear.
+    #
+    # THE SUFFIX IS NOT TAKEN ON TRUST, because `_UNUSED` would otherwise be a
+    # way to hide a live tag from this gate: each one is checked to be
+    # referenced NOWHERE but its own definition, and to be absent from
+    # tm_ktab - the exact opposite of what is required of a real tag.
+    reserved = [t for t in EQU.findall(kern) if t.endswith("_UNUSED")]
+    tags = [t for t in EQU.findall(kern)
+            if not t.endswith("_N") and not t.endswith("_UNUSED")]
+
+    for tag in reserved:
+        hits = []
+        for rel in (KERNEL, SDK, TASKMGR):
+            n = len(re.findall(r"\b%s\b" % tag, code_only(read(rel))))
+            if rel == KERNEL:
+                n -= 1                  # its own `equ`
+            hits.append((rel, n))
+        live = [r for r, n in hits if n > 0]
+        check(not live,
+              "%s is RESERVED, so nothing names it" % tag,
+              "a tag exempted from this gate by its `_UNUSED` suffix must "
+              "actually be unused - if something claims or decodes it, it is "
+              "a live tag wearing a name that hides it from every check here",
+              got=", ".join(live) or "nothing", want="nothing")
+        check(re.search(r"\b%s\b" % tag, ktab) is None,
+              "%s has no tm_ktab row, which is correct" % tag,
+              "a reserved number cannot be an owner word, so a row for it "
+              "would decode something that never appears",
+              got="a row", want="no row")
     check(len(tags) >= 10, "kernel/memory.inc still defines its owner tags",
           "a rename of the MEM_K_ / MEM_P_ prefix would empty this check "
           "without failing it", got=len(tags), want=">= 10")

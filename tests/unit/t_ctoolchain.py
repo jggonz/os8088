@@ -23,10 +23,11 @@ WHAT IT CHECKS, in the order the chain runs:
 
   2. The four targets BUILD, from a forced-clean start.  ccsmoke is the SDK's
      worked example, chello and covl are the two capability gates, and cword
-     is the application - and cword is in here rather than left to `soak`
-     because it is where the VOLUME is: 1,327 lowered sites against chello's
-     58, 76 overlay functions, 60 external references.  A lowering that is
-     wrong once in a thousand sites shows up there and nowhere else.
+     is the application - in here rather than left to `soak` because it is
+     where the VOLUME is: 1,327 lowered sites against chello's 58, 76 overlay
+     functions, 60 external references into the C SDK.  A lowering that is
+     wrong once in a thousand sites shows up there and nowhere else.  It is a
+     C package used as the toolchain's load, not as a subject of its own.
 
   3. The generated assembly carries no bare `extern`.  That is the invariant
      itself rather than a consequence of it, so it fails on the change rather
@@ -81,6 +82,12 @@ TARGETS = [
     ("chello",   ["build/chello.o88"],                   ["build/chello.gen.asm"]),
     ("covl",     ["build/covl.o88", "build/COVL.OVL"],   ["build/covl.gen.asm"]),
     ("cword",    ["build/cword.o88", "build/CWORD.OVL"], ["build/cword.gen.asm"]),
+    # paccman WAS here, its host-check stamp deleted so the full tier would
+    # run that one game's pixel audit and composer test every time - 4.4s of
+    # this row, and a package's own gates, which the full tier does not carry
+    # (docs/WRITING-TESTS.md 2.2). `make paccman` re-runs them whenever its
+    # sources change, which is when they can break, and `soak -k paccman` is
+    # the package's row.
 ]
 
 

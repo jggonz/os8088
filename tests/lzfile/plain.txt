@@ -1,0 +1,43 @@
+THE COMPRESSED FILE, READ TRANSPARENTLY (SPEC.md 20.14)
+
+This file exists twice on the test disk. PLAIN.TXT is these bytes as they are.
+PACKED.TXT is the same bytes inside a 'CZ' wrapper, compressed with LZ4 by
+tools/os88lz.py at build time. A package that opens the two of them and gets
+different answers is a package that has found a defect in the read path, and
+that comparison is the whole gate: no checksum has to travel from the host,
+and no assertion about what the text says has to be maintained beside it.
+
+The text is prose rather than a pattern on purpose. A run of the same byte is
+compressed by every scheme ever written and would pass a decoder that only
+ever emitted one match; ordinary English gives the compressor short matches at
+short distances, long matches at long distances, and literal runs in between,
+which is what a real document does and what the fast paths are cut for.
+
+The paragraphs repeat some of their own phrasing, because a match that reaches
+back further than the window would allow is exactly the case the bounds in
+kernel/lz.inc exist to refuse, and a fixture with no long-distance matches
+never asks them anything. The text is prose rather than a pattern on purpose.
+A run of the same byte is compressed by every scheme ever written.
+
+What the read path does, in one paragraph: the directory entry carries a hint
+at offset 12 saying the file is compressed and what it expands to, so a
+listing costs no extra sector read; the capacity check is against the UNPACKED
+figure and still happens before any data crosses; the packed bytes are then
+read HIGH inside the caller's own buffer, far enough up that the writer can
+never overtake the reader, and expanded downwards onto themselves. There is no
+second claim and no scratch buffer, which is what makes this affordable on a
+machine with 128KB in it.
+
+The hint is a cache and the file's own header is the truth. A foreign tool may
+drop those four bytes, or leave them describing a file that has since been
+replaced, so the kernel checks the 'CZ' magic, the format byte, the reserved
+byte and the recorded length against the hint before it decodes anything. A
+disagreement is refused as an I/O error rather than resolved in favour of
+either side, because every byte off a disk is hostile input and neither of the
+two numbers is more trustworthy than the other.
+
+Writing works the other way round. The hint is derived from the bytes being
+written rather than propagated from another entry, so a save, a file-manager
+copy and a package's own write all get it right without knowing it exists -
+and a plain file landing on a compressed one's slot clears the mark, which is
+the half that matters most.

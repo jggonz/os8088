@@ -38,7 +38,7 @@ index ccfc2ba7..22ec8392 100644
 +# ImageWriter takes.
 +fluxfox = { workspace = true, default-features = false, features = ["core", "archives", "mfi", "fat", "flux", "ibm_pc"] }
 +
-+# For the fork() snapshot (docs/SNAPSHOT-PLAN.md B). Unix only; the feature
++# For the fork() snapshot (docs/plans/completed/SNAPSHOT-PLAN.md B). Unix only; the feature
 +# refuses to arm itself elsewhere rather than failing to compile.
 +[target.'cfg(unix)'.dependencies]
 +libc = "0.2"
@@ -125,7 +125,7 @@ index e1680ee..a748b4f 100644
  #![allow(clippy::too_many_arguments)]
 -#![forbid(unsafe_code)]
 +// `forbid` rather than `deny` upstream. Relaxed here because the fork()
-+// snapshot (docs/SNAPSHOT-PLAN.md B) needs exactly one unsafe call and
++// snapshot (docs/plans/completed/SNAPSHOT-PLAN.md B) needs exactly one unsafe call and
 +// `forbid` cannot be overridden locally by an `allow`. Everything else in the
 +// crate is still denied, so a second unsafe block is a compile error and has
 +// to be a deliberate act.

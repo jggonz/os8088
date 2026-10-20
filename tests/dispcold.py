@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WHO DRAWS INTO .cold? (docs/DUAL-DISPLAY-VGA.md 8(11))
+"""WHO DRAWS INTO .cold? (docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))
 
     make && python3 tests/dispcold.py
 
@@ -47,11 +47,11 @@ FILE.
     end of the file.
 
 Both are gone below, and the second is why the length is derived rather than
-written down: the span runs from `.cold`'s file offset to `OVLW_START`, which
-is where `.ovlw` begins. **It used to run to EOF**, on the belief that `.cold`
+written down: the span runs from `.cold`'s file offset to `OVL_START`, which
+is where `.ovl` begins. **It used to run to EOF**, on the belief that `.cold`
 was the last thing in `kernel.bin` - true when that was written, false since
-`.ovlw` landed after it, and this row then failed on every build with 37,376
-of rung plus 5,215 of `.ovlw` measured as one 42,591-byte section.
+`.ovl` landed after it, and this row then failed on every build with 37,376
+of rung plus 5,215 of `.ovl` measured as one 42,591-byte section.
 
 The lesson is one line and it has now cost three rows - this one,
 tests/linefast.py and tests/wirefps.py: **a segment delta is not a file
@@ -80,6 +80,7 @@ from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
 # written down here. This file spelled it `42 + 36`, which is the
 # VID_CTX_W = 18 layout - two bytes early, and what sits there is
 # display 1's vid_chm8, so the seam read 192 instead of 720.
+import os88build
 import os88marty, os88mouse, os88sym, dispcp, os88layout
 S = os88sym.linear
 SY = os88sym.syms()
@@ -92,7 +93,7 @@ TITLE_H = 18
 # what gives its length without needing a section-size accessor. It is the
 # right upper bound in its own right: past FAT_SEG is the FAT window, which
 # the first mount has overwritten (SPEC.md 2.5), so there is nothing there to
-# compare.  FAT_SEG is read from the map's equates now - `.ovl` used to land
+# compare.  FAT_SEG is read from the map's equates now - the boot overlay used to land
 # there and gave the same answer through segment_of("ovl_base"), and since
 # SPEC.md 2.9.6 the overlay is in stage 2's blob and has no fixed segment.
 # ...and where it sits in kernel.bin, which is os88layout's answer and not
@@ -101,6 +102,8 @@ TITLE_H = 18
 # alone reads as `.cold` being scribbled on before the first click, and this
 # row hit both. cold_span carries the reasoning and the assertions.
 COLD_SEG, COLD_OFF, COLD_LEN = os88layout.cold_span(ROOT)
+COLD_VST = os88sym.equates().get("COLD_VSTART", 0)   # .cold's offsets start here
+COLD_LIN = (COLD_SEG << 4) + COLD_VST                # ...so this is its first byte
 
 # The carpet: the span the file manager's own code occupies, padded, rather
 # than the 0x4000..0x5000 that span happened to fall in when this was written.
@@ -132,7 +135,7 @@ def coldimage():
     that stage 2 sits in front of `.text` and that the FAT_SEG rung is not the
     section's length.
     """
-    k = open(os.path.join(ROOT, "build", "kernel.bin"), "rb").read()
+    k = open(os88build.at("build/kernel.bin"), "rb").read()
     if COLD_OFF + COLD_LEN > len(k):
         raise RuntimeError(
             ".cold at +%04X..%04X runs past kernel.bin (%d bytes) - the map "
@@ -159,6 +162,9 @@ def video(m):
     return " ".join(out)
 
 
+QUIET = 5.0                 # guest seconds of a free gfx lock that end a watch
+
+
 def pump(m, mo, px, py, secs=30.0):
     """Position, click, and run until either a write into .cold stops the
     machine or the click has plainly finished. Returns the regs dict on a
@@ -166,17 +172,38 @@ def pump(m, mo, px, py, secs=30.0):
     mo.to(px, py)
     os88marty.settle(m, card=0)
     m.mouse(0, 0, l=True)
-    t0 = time.time()
+    # GUEST time on both clocks: the button is held for what 0.6 s gave on an
+    # idle box, and the watch lasts what `secs` did - so a loaded box neither
+    # shortens the press nor watches less of the click's work.
+    # It ends EARLY once the click has plainly finished: the button up and
+    # the gfx lock - which every drawing path holds - free for QUIET guest
+    # seconds on end. What draws into .cold draws, so it holds the lock.
+    hz, rate = os88marty.GUEST_HZ, os88marty.GUEST_PACE or 4.5
+    lock = S("gfx_lock_flag")
+    c0 = last = busy = int(m.status()["cycles"])
+    moved = time.time()
     up = False
-    while time.time() - t0 < secs:
+    while True:
         st = m.status()
-        if st["state"] != "breakpoint":
-            time.sleep(0.01)
-            if not up and time.time() - t0 > 0.6:
-                m.mouse(0, 0, l=False)
-                up = True
-            continue
-        return m.cmd(cmd="regs")
+        if st["state"] == "breakpoint":
+            return m.cmd(cmd="regs")
+        c = int(st["cycles"])
+        g = (c - c0) / hz
+        if g >= secs * rate:
+            break
+        if m.read(lock, 1)[0] or not up:
+            busy = c
+        elif (c - busy) / hz >= QUIET:
+            break
+        if c != last:
+            last, moved = c, time.time()
+        elif time.time() - moved > 30.0:
+            raise os88marty.MartyError("the guest stopped (%r) while a click "
+                                       "was being watched" % st["state"])
+        time.sleep(0.01)
+        if not up and g > 0.6 * rate:
+            m.mouse(0, 0, l=False)
+            up = True
     if not up:
         m.mouse(0, 0, l=False)
     return None
@@ -205,7 +232,7 @@ def main():
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
         dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "NOTEPAD.O88",
                           card=pri)
-        time.sleep(2)
+        os88marty.settle(m, card=pri)       # its first paint, before the drag
         wins = dispcp.win_list(m, S)
         if len(wins) < 2:
             sys.exit("notepad did not launch")
@@ -222,7 +249,7 @@ def main():
         print("disk window x %d..%d y %d..%d" % (bx, bx + bw - 1, by, by + bh - 1))
 
         img = coldimage()
-        now = m.read(COLD_SEG << 4, COLD_LEN)
+        now = m.read(COLD_LIN, COLD_LEN)
         if now != img:
             # NAME THE DAMAGE. A bare "already corrupt" was indistinguishable
             # from this script pointing at the wrong memory, which is exactly
@@ -231,7 +258,7 @@ def main():
             sys.exit(".cold is already corrupt before the click: %d of %d "
                      "bytes differ at COLD_SEG=%04X, first %s"
                      % (len(bad), COLD_LEN, COLD_SEG,
-                        ", ".join("%04X (%s)" % (b, coldname(b))
+                        ", ".join("%04X (%s)" % (b, coldname(b + COLD_VST))
                                   for b in bad[:8])))
         print(".cold at %04X:0000+%04X is byte-identical to the built image; "
               "carpeting COLD_SEG:%04X..%04X with %d memory breakpoints"
@@ -245,7 +272,7 @@ def main():
             print("click %d at (%d,%d)" % (n, px, py))
             r = pump(m, mo, px, py)
             if r is None:
-                now = m.read(COLD_SEG << 4, COLD_LEN)
+                now = m.read(COLD_LIN, COLD_LEN)
                 bad = [i for i in range(len(img)) if img[i] != now[i]]
                 print("   no write caught; .cold differs in %d byte(s)"
                       % len(bad))
@@ -281,10 +308,10 @@ def main():
         m.breakpoints([])
         m.mouse(0, 0, l=False)
         print("no write into COLD_SEG:%04X..%04X caught" % (LO, HI - 1))
-        now = m.read(COLD_SEG << 4, COLD_LEN)
+        now = m.read(COLD_LIN, COLD_LEN)
         bad = [i for i in range(len(img)) if img[i] != now[i]]
         print(".cold now differs in %d byte(s)%s" % (len(bad),
-              (": " + ", ".join("%04X (%s)" % (b, coldname(b))
+              (": " + ", ".join("%04X (%s)" % (b, coldname(b + COLD_VST))
                                 for b in bad[:12])) if bad else ""))
     return 0
 

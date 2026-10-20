@@ -50,18 +50,18 @@ struct os88_menu    { const char *title; const char **items; int nitems; };
 struct os88_menuset { const char *name; int oncmd; int nmenus;
                       struct os88_menu menu[OS88_MENU_MAX]; };
 
-struct os88_fsi {
-    unsigned seg;
-    unsigned w, h;
-    unsigned stride;
-    unsigned char flags;
-    unsigned char bpp;
-    unsigned char banks;
-    unsigned char pages;
-    unsigned bstep;
-    unsigned char mode;
-    unsigned char rsvd;
-};
+/* SPEC.md 53.4's FSI block, as byte offsets - apps/cc/os88.h's layout */
+#define OS88_FSI_SEG    0
+#define OS88_FSI_W      2
+#define OS88_FSI_H      4
+#define OS88_FSI_STRIDE 6
+#define OS88_FSI_FLAGS  8
+#define OS88_FSI_BPP    9
+#define OS88_FSI_BANKS  10
+#define OS88_FSI_PAGES  11
+#define OS88_FSI_BSTEP  12
+#define OS88_FSI_MODE   14
+#define OS88_FSI_SIZE   16
 
 #define OS88_MBAR_H   20
 #define OS88_TITLE_H  18
@@ -117,7 +117,6 @@ void os88_onwake(void *win);
 void os88_ontimer(void *win);
 void os88_oncmd(int item, int menu, void *win);
 void os88_about(void *win);
-void os88_fsx_main(void *win);
 
 /* drawing */
 void os88_gfx_lock(void);
@@ -153,9 +152,9 @@ void os88_about_card_d(void *win, const char **lines);
 void os88_video(struct os88_video *v);
 int  os88_snd_caps(void);
 int  os88_toast(const char *text, int ticks);
-int  os88_fsx_caps(void *win, unsigned char *kind);
-int  os88_fsx_run(void *win, int flags);
-int  os88_fsx_mode(int id, struct os88_fsi *fsi);
+int  os88_fsx_caps(void *win, int *kind);
+int  os88_fsx_run(void (*entry)(void), void *win, int flags);
+int  os88_fsx_mode(int id, void *fsi);
 int  os88_fsx_wait(int kind);
 int  os88_fsx_key(int wait);
 
@@ -173,7 +172,7 @@ int  os88_fullscreen(void *win, int enter);
 int  os88_fsx_page(int page);
 int  os88_fsx_surf(struct os88_rect *r);
 
-/* THE RASTER (SPEC.md 92.4). These are the entries apps/lemmings/lemblit.inc,
+/* THE RASTER (SPEC.md 114.4). These are the entries apps/lemmings/lemblit.inc,
  * lemmask.inc and lemfont.inc define in assembly; the harness defines the same
  * names over a byte-per-pixel model in hosttest/lemraster.c, so a shim added
  * without a stub beside it is a LINK error here rather than three steps later

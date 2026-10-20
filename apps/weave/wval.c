@@ -846,16 +846,17 @@ static int ovl_validate(void)
     return w_valfield == 0;
 }
 
-/* The two resident wrappers.  `WEAVE.OVL` is written BEFORE the call, so a
- * refused load leaves it standing and 10.4's sentence names the real cause. */
+/* The two resident wrappers.  `overlay not loaded` is written BEFORE the
+ * call, so a refused load leaves it standing and 10.4's sentence names the
+ * real cause (the overlay is part 1 of WEAVE.O88 - op_fetch toasted why). */
 static const char *w_val_header(void)
 {
-    w_valfield = "WEAVE.OVL";
+    w_valfield = "overlay not loaded";
     return ovl_val_header() ? 0 : w_valfield;
 }
 
 static const char *w_validate(void)
 {
-    w_valfield = "WEAVE.OVL";
+    w_valfield = "overlay not loaded";
     return ovl_validate() ? 0 : w_valfield;
 }

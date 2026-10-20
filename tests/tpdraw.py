@@ -40,7 +40,6 @@ paint is under test here too, for free.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -98,11 +97,10 @@ def full_repaint(m):
     comment is the long version."""
     m.cmd(cmd="run")
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(200):
-        time.sleep(0.05)
-        if m.read(S("cp_dirty"), 1)[0] == 0:
-            break
-    else:
+    try:
+        os88marty.until(m, lambda mm: mm.read(S("cp_dirty"), 1)[0] == 0,
+                        "ui_task to drain [cp_dirty]", poll=0.05, limit=10)
+    except os88marty.MartyError:
         raise RuntimeError("ui_task never drained [cp_dirty]")
     os88marty.settle(m)
     m.cmd(cmd="pause")
@@ -229,6 +227,16 @@ def main(argv):
         m.key("Backspace")
         os88marty.settle(m)
         agrees(m, mo, "Backspace joins two lines")
+
+        # ...and enough Returns that the bar's TOTAL moves its thumb's HEIGHT
+        # and not only its place: one line in a long document resizes it by
+        # no pixel, so the two legs above cannot tell os88ui_sbupd taking the
+        # thumb-only path (SPEC.md 13.10.3.2) from taking the whole bar. Here
+        # a thumb-only redraw leaves the old thumb's tail behind on the track
+        for _ in range(24):
+            m.key("Enter")
+        os88marty.settle(m)
+        agrees(m, mo, "Returns that resize the thumb")
 
         for k in ("ArrowDown", "ArrowDown", "ArrowUp", "ArrowRight",
                   "ArrowLeft", "Home", "End"):

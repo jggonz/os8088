@@ -41,6 +41,15 @@ AT_CMD_ZOUT   equ 24
 AT_CMD_ZDEF   equ 25
 AT_CMD_ABOUT  equ 26
 AT_CMD_MAX    equ 26
+; at_docmd hands the command's own number to the routine at_cmdtab names, and
+; three routines read it as an ARGUMENT: at_heading (the level), at_setview
+; (the mode) and at_confirm (the pending action). These are what that needs.
+%if AT_CMD_H2 != AT_CMD_H1 + 1 || AT_CMD_H3 != AT_CMD_H1 + 2
+  %error "at_heading takes its level as AL - AT_CMD_H1 + 1"
+%endif
+%if AT_CMD_VIEWWR != AT_CMD_VIEWMD + 1
+  %error "at_setview takes Writer as AL - AT_CMD_VIEWMD = 1"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; at_docmd - run command AL
@@ -50,6 +59,9 @@ AT_CMD_MAX    equ 26
 at_docmd:
     push ax
     push bx
+    mov byte [at_nrev], 0           ; SPEC.md 46.6.2: every command resumes
+                                    ; 46.2.2's reveal - at_paste, reached
+                                    ; through the table below, sets it again
     xor bh, bh
     mov bl, al
     or bl, bl
@@ -65,12 +77,12 @@ at_docmd:
     ret
 
 at_cmdtab:
-    dw at_cmd_new,    at_cmd_open,   at_cmd_save,   at_cmd_saveas
-    dw at_cmd_quit,   at_undo,       at_redo,       at_cut
+    dw at_confirm,    at_confirm,    at_cmd_save,   at_cmd_saveas
+    dw at_confirm,    at_undo,       at_redo,       at_cut
     dw at_copy,       at_paste,      at_selall,     at_cmd_bold
-    dw at_cmd_italic, at_cmd_code,   at_cmd_strike, at_cmd_h1
-    dw at_cmd_h2,     at_cmd_h3,     at_cmd_link,   at_cmd_none
-    dw at_cmd_viewmd, at_cmd_viewwr, at_cmd_zin,    at_cmd_zout
+    dw at_cmd_italic, at_cmd_code,   at_cmd_strike, at_heading
+    dw at_heading,    at_heading,    at_cmd_link,   at_cmd_none
+    dw at_setview,    at_setview,    at_cmd_zin,    at_cmd_zout
     dw at_cmd_zdef,   at_cmd_about
 
 ; =============================================================================
@@ -244,25 +256,10 @@ at_wrapsel:
 ; one; asking for the level it already has toggles it off (markdown.c's
 ; ToggleHeadingHidden semantics on canonical text).
 ; =============================================================================
-
-at_cmd_h1:
-    push cx
-    mov cx, 1
-    call at_heading
-    pop cx
-    ret
-at_cmd_h2:
-    push cx
-    mov cx, 2
-    call at_heading
-    pop cx
-    ret
-at_cmd_h3:
-    push cx
-    mov cx, 3
-    call at_heading
-    pop cx
-    ret
+; in:  AL = AT_CMD_H1, AT_CMD_H2 or AT_CMD_H3, which at_docmd hands every
+;      command - at_cmdtab names this for all three, and the level is the
+;      command's distance from AT_CMD_H1 (three stubs that loaded CX = 1 / 2 /
+;      3 went in apps size pass 2)
 
 at_heading:
     push ax
@@ -270,6 +267,9 @@ at_heading:
     push cx
     push dx
     push si
+    mov cl, al
+    sub cl, AT_CMD_H1 - 1
+    xor ch, ch                      ; CX = the asked-for level, 1..3
     call at_undo_push
     mov byte [at_typrun], 0
     mov [at_wplen], cx              ; the asked-for level
@@ -441,10 +441,50 @@ at_cmd_none:
     mov byte [at_typrun], 0
     mov [at_wlo], ax
     mov [at_whi], dx
+%ifdef NOATBLIT1
     ; collect hidden positions into at_strip4 (idle scratch, word list)
     push ds
     pop es
     mov di, at_strip4
+%else
+    ; collect hidden positions into a word list (SPEC.md 46.6.3). It used to
+    ; borrow the 4bpp strip, which is gone (46.4.12). A selection can hide no
+    ; more characters than it holds, so one that fits at_strip1 - which
+    ; nothing writes while None runs: at_parse fills at_lbuf/at_vis/at_sty/
+    ; at_xmap/at_cellbg only - lists there; a longer one claims the list for
+    ; the command's length, up to the same 4,556 entries, and falls back to
+    ; the strip if the heap refuses.
+    push bp
+    xor dx, dx                      ; DX = 0: nothing to hand back
+    push ds
+    pop es
+    mov di, at_strip1
+    mov bp, AT_NONESTRIP            ; BP = the list's clamp
+    mov ax, [at_whi]
+    sub ax, [at_wlo]                ; AX = the selection's length
+    cmp ax, bp
+    jbe .listed
+    cmp ax, AT_NONECAP
+    jbe .want
+    mov ax, AT_NONECAP
+.want:
+    push ax                         ; the clamp, if the claim is granted
+    shl ax, 1
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                      ; AX = KB for that many words
+    call OSAPI_MEM_CLAIM            ; AX KB -> DX segment, CF = refused
+    pop cx
+    jc .refused
+    mov es, dx
+    xor di, di
+    mov bp, cx
+    jmp short .listed
+.refused:
+    xor dx, dx
+.listed:
+    push dx
+%endif
     mov word [at_wn], 0
     mov byte [at_pforce], 1
     mov ax, [at_wlo]
@@ -468,7 +508,11 @@ at_cmd_none:
     jb .keep
     cmp ax, [at_whi]
     jae .keep
+%ifdef NOATBLIT1
     cmp word [at_wn], (AT_S4ST*AT_SROWS)/2 - 4
+%else
+    cmp [at_wn], bp
+%endif
     jae .keep                       ; the list is huge; a clamp is a clamp
     stosw
     inc word [at_wn]
@@ -485,32 +529,32 @@ at_cmd_none:
     jcxz .repaint
 .del:
     sub di, 2
+%ifdef NOATBLIT1
     mov ax, [di]
+%else
+    mov ax, [es:di]                 ; at_delrange preserves ES (at_gapto)
+%endif
     mov dx, ax
     inc dx
     call at_delrange
     loop .del
 .repaint:
+%ifndef NOATBLIT1
+    pop dx
+    or dx, dx
+    jz .nofree
+    call OSAPI_MEM_FREE
+.nofree:
+    pop bp
+%endif
     mov ax, [at_wlo]
     mov [at_caret], ax
     mov [at_sela], ax
     mov [at_selb], ax
-    ; scattered edits: relayout whole, repaint whole - None is rare
-    call at_layout
-    call at_cline_span
+    ; scattered edits: relayout whole, repaint whole - None is rare, and
+    ; that is exactly at_refit, which a zoom or a view change runs
     mov byte [at_dirty], 1
-    call at_maxtop
-    mov bx, ax
-    mov ax, [at_top]
-    cmp ax, bx
-    jbe .t
-    mov [at_top], bx
-.t:
-    call at_caret_off
-    call at_draw_text
-    call at_sbar
-    call at_seecaret
-    call at_caret_on
+    call at_refit
 .out:
     pop es
     pop di
@@ -525,24 +569,13 @@ at_cmd_none:
 ; The View menu
 ; =============================================================================
 
-at_cmd_viewmd:
-    push ax
-    xor al, al
-    call at_setview
-    pop ax
-    ret
-at_cmd_viewwr:
-    push ax
-    mov al, 1
-    call at_setview
-    pop ax
-    ret
-
-; at_setview - AL = 1 Writer / 0 Markdown (SetViewMode's port; no buffer
-; sync exists to do - the mode is a rendering property)
+; at_setview - AL = AT_CMD_VIEWWR Writer / AT_CMD_VIEWMD Markdown, as at_docmd
+; hands both (SetViewMode's port; no buffer sync exists to do - the mode is a
+; rendering property). The two stubs that loaded 1 / 0 went in apps size pass 2
 at_setview:
     push ax
     push bx
+    sub al, AT_CMD_VIEWMD           ; AL = 1 Writer / 0 Markdown
     cmp al, [at_writer]
     je .out
     mov [at_writer], al
@@ -591,7 +624,6 @@ at_refit:
     push ax
     push bx
     call at_layout
-    call at_cline_span
     call at_maxtop
     mov bx, ax
     mov ax, [at_top]

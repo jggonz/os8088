@@ -59,7 +59,6 @@
 AP_FMT_PCM8    equ 0
 AP_FMT_ADPCM   equ 1
 
-AP_HDRBUF_SZ   equ 16384           ; header window / streaming read bounce (shared)
 AP_RD_CHUNK    equ 16384           ; bytes one ap_refill_chunk read pulls (SPEC.md
                                    ; 86.5.2): cost disk work in int-13h CALLS,
                                    ; not sectors - a 4.77 MHz XT pays ~1-2 disk
@@ -67,7 +66,17 @@ AP_RD_CHUNK    equ 16384           ; bytes one ap_refill_chunk read pulls (SPEC.
                                    ; the read holds sch_lock (SPEC.md 34.5), so a
                                    ; 2 KB-per-call refill froze the machine ~5x a
                                    ; second. One big gulp every few seconds instead.
+                                   ; It lands STRAIGHT IN THE LOOK-AHEAD RING
+                                   ; (SPEC.md 86.5.2): no bounce, no copy.
 APD_OUTSZ      equ 2048            ; decoder scratch = one stage half
+APD_SRCSZ      equ 2368            ; ...and what apd_out really holds: on the
+                                   ; speaker it is a STEP's span of inputs too
+                                   ; (aps_source, SPEC.md 86.21) - span x step
+                                   ; + the carry + the position carried, which
+                                   ; for 44.1 kHz to an 8088's 4,800 Hz is 255 x
+                                   ; 9.1875 + 1 + 1 + 9 = 2,354. At 2,048 that
+                                   ; ran 306 bytes past, into the parser's state
+                                   ; (the playing track's folder among it)
 APD_BLKMAX     equ 2048            ; sanity cap on nBlockAlign
 APD_INBUF      equ 512             ; ADPCM input bounce: one ap_la_get feeds many
                                    ; nibbles, instead of ap_la_get per byte (the
@@ -200,7 +209,6 @@ AP_B_NONE  equ 0xFF
     APW ap_win
     APB ap_state
     APB ap_have_worker
-    APB ap_have_sb
     APB ap_shuffle
     APB ap_repeat
     APW ap_msg
@@ -208,20 +216,16 @@ AP_B_NONE  equ 0xFF
     APBUF ap_arg_name, 16
     APW  ap_arg_dir
     APB  ap_arg_vol
-    APW  ap_elapsed_s              ; seconds played of the current track
-    APW  ap_total_s               ; track duration in seconds (0 = unknown)
-    APW  ap_bpt_lo                 ; bytes of PCM8 per system tick (rate/18.2)
-    APW  ap_bpt_hi
-    APW  ap_sub                    ; sub-tick byte remainder for the clock
-    APW  ap_t0                     ; OSAPI_GET_TICKS at play start (unused net)
     APB  ap_diag                   ; 1 = the window shows the Diagnostics view
     APW  ap_last_s                 ; last elapsed second the dynamic redraw drew
     APW  ap_last_bar               ; last progress-bar fill (px) it drew
     APW  ap_last_draw_t            ; OSAPI_GET_TICKS at that redraw (throttle)
     APW  ap_reap_kick_t            ; ...and at the last end-of-track UI kick
+%ifdef AP_HANDOFF                  ; the handoff's alone (SPEC.md 86.11.1)
     APW  ap_que_t                  ; ...and at the last APQUEUE.DAT poll
     APBUF ap_snap, SYS_SNAPSHOT_SIZE   ; single-instance probe buffer (entry only)
     APBUF ap_querec, 128           ; APQUEUE.DAT records, staged for a poll
+%endif
 
 ; --- look-ahead ring ---------------------------------------------------
     APW ap_la_seg
@@ -229,12 +233,11 @@ AP_B_NONE  equ 0xFF
     APW ap_la_rd
     APW ap_clu
     APD ap_rd_pos
+    APBUF ap_rd_cur, FSEQ_SIZE     ; the refill's READ_SEQ cursor (os88rseq.inc)
     APW ap_skip
     APW ap_rd_len                  ; bytes the current ap_refill_chunk read pulls
     APD ap_data_off
     APD ap_data_end
-    APD ap_got
-    APB ap_src_done
 
 ; --- SND ring stream -------------------------------------------------
     APW ap_grant
@@ -246,15 +249,30 @@ AP_B_NONE  equ 0xFF
     APB ap_hand
     APB ap_sopen
     APB ap_mixing
+    APW ap_rate
+    APB ap_first_paint             ; 1 until ap_onwake does the settled repaint
+
+; --- the PER-TRACK RUN: ap_prep_track zeroes AP_TRK0 .. + AP_TRKLEN in one
+;     REP STOSB, so whatever a new track must start from 0 lives here - the
+;     speaker's too: every speaker play opens a track through ap_prep_track
+AP_TRK0 equ os88_image_end + AP_BSS
+    APD ap_got
+    APD ap_played                  ; total PCM8 bytes the DSP has consumed
+    APW ap_total
+    APW ap_consumed
+    APW ap_consumed_prev           ; last polled verb-3 count (for the delta)
+    APW ap_elapsed_s               ; seconds played of the current track
+    APB ap_src_done
     APB ap_ended
     APB ap_lasthalf
     APB ap_paused
-    APW ap_total
-    APW ap_consumed
-    APW ap_rate
-    APB ap_req
-    APB ap_pcmbits                 ; 8 for PCM8, effective 8 after ADPCM decode
-    APB ap_first_paint             ; 1 until ap_onwake does the settled repaint
+    APB ap_req                     ; (FR_NONE is 0)
+    APW ap_total_s                 ; track duration in seconds (0 = unknown)
+    APD ap_total_pcm               ; total PCM8 bytes in the track (0 = unknown)
+    APB aps_eot                    ; (apspk.inc) this track's source is all made
+    APB aps_lag                    ; ...the last rung is still behind: play on
+    APW aps_crem                   ; ...the clock's remainder, in 1/R samples
+AP_TRKLEN equ os88_image_end + AP_BSS - AP_TRK0
 
 ; --- decoder state (apdec.inc) --------------------------------------
     APB apd_codec
@@ -266,12 +284,12 @@ AP_B_NONE  equ 0xFF
     APB apd_hasbyte
     APB apd_hinib
     APB apd_curbyte
-    APBUF apd_hdr, 4
-    APBUF apd_tmp, 2
     APW   apd_inlen                ; bytes currently in apd_inbuf
     APW   apd_inpos                ; read cursor into apd_inbuf
+APD_ZLEN equ apd_inpos + 2 - apd_bleft  ; apd_start zeroes apd_bleft..here:
+                                   ; keep these eight together, in this order
     APBUF apd_inbuf, APD_INBUF
-    APBUF apd_out, APD_OUTSZ
+    APBUF apd_out, APD_SRCSZ
 
 ; --- WAV parser state (apwav.inc) ---------------------------------
     APW apw_name
@@ -285,12 +303,10 @@ AP_B_NONE  equ 0xFF
     APB apw_winn
     APW apw_pos
     APD apw_lpos
-    APW apw_ckid
     APD apw_cksz
     APB apw_gotfmt
     APW apw_tag
     APW apw_bits
-    APB apw_ok
     APB apw_fmt
     APW apw_rate
     APW apw_balign
@@ -298,31 +314,30 @@ AP_B_NONE  equ 0xFF
     APD apw_datoff
     APD apw_datlen
     APW apw_err
+    APB apw_spk                    ; 'o8sp': 1 shaped, 2 counts (SPEC.md 86.21)
+ap_cinv equ aps_dbuf               ; ...counts back to samples, on a card or a
+                                   ; Covox (86.21.1): 256 bytes of the box's
+                                   ; table (apspk.inc), because a file of counts
+                                   ; plays 1:1 or not at all - never boxed - and
+                                   ; each is rebuilt by its own track's open
 
-; --- shared header window / cluster bounce -----------------------
-; THE int 13h TARGET, so 512-ALIGNED (CLAUDE.md, SPEC.md 2.4): the loader's
-; claim is whole KB, so the OFFSET decides - align the accumulator here and
-; pad the image end to 512 below. A base that is not answers 09h on the one
-; transfer in four that straddles a 64 KB page, and the refill takes that CF
-; as end of data: the song stops a few seconds in, on the machine whose heap
-; happened to put the package there.
-%assign AP_BSS ((AP_BSS + 511) / 512) * 512
-    APBUF ap_scratch, AP_HDRBUF_SZ
-apw_hdrbuf equ ap_scratch
+; (NO int 13h TARGET HERE. The parser's header window and every refill read
+; land in the look-ahead ring, a heap claim - whose base is 512-aligned by the
+; kernel's own construction (guard 6b: HEAP_SEG + n * MEM_PARA_KB, a multiple
+; of 32 paragraphs), which is SPEC.md 2.1.1's rule kept without a 16 KB bounce
+; in every instance's bss and a 16 KB copy a gulp (SPEC.md 86.5.2).)
 
 ; --- playlist (aplist.inc) --------------------------------------
     APBUF apl_ent, AP_MAXTRK * AP_ENTSZ
     APB   apl_n                    ; entries in use
-    APB   apl_cur                  ; index of the current track (0..n-1)
+    APB   apl_cur                  ; index of the current track (0..n-1) -
+                                   ; AFTER apl_n: apl_clear zeroes the pair
     APBUF apl_ord, AP_MAXTRK       ; shuffle order (indices)
     APB   apl_opos                 ; position within apl_ord
 
 ; --- ui layout (apui.inc) --------------------------------------
     APBUF apu_rects, 7 * 8         ; 7 buttons x {x1,y1,x2,y2} words
-    APW   apu_pbx1                 ; progress bar rect
-    APW   apu_pby1
-    APW   apu_pbx2
-    APW   apu_pby2
+    APW   apu_pbx2                 ; progress bar right edge (apui.inc)
     APW   apu_cw                   ; last content w/h laid out against
     APW   apu_ch
     APB   ap_abon                  ; 1 = the About card is up
@@ -335,30 +350,12 @@ apw_hdrbuf equ ap_scratch
 ; out: CF = 0 ok / CF = 1 fatal (no window)
 ; =============================================================================
 ap_entry:
-    call OSAPI_SND_CAPS            ; AX = merged caps word
-    xor cl, cl
-    test ax, SND_CAP_PCM_BG
-    jz .nosb
-    mov cl, 1
-.nosb:
-    mov [ap_have_sb], cl
-
     call OSAPI_ARG_FILE           ; CF = 1 launched empty (the common case)
     jc .nodoc
     ; SI -> name in KERNEL_SEG; ES is KERNEL_SEG on entry - copy it out
     mov di, ap_arg_name
-    mov cx, 16
-.cpn:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jz .cpndone
-    dec cx
-    jnz .cpn
-.cpndone:
-    mov byte [ap_arg_name+15], 0
+    mov cx, 15
+    call ap_kcopy                 ; (apcb.inc)
     mov [ap_arg_dir], dx
     mov [ap_arg_vol], bl
     mov byte [ap_arg_pending], 1
@@ -384,12 +381,30 @@ ap_entry:
     ret                           ; region, no window, no handover (SPEC.md 21)
 %endif
 .nodoc:
-    call aplist_init
+    call apd_mkstep               ; the IMA step table (apdec.inc)
 
     mov si, ap_tpl
     call OSAPI_WM_CREATE          ; BX = window ptr, CF on table full
     jc .fail
     mov [ap_win], bx
+    xchg ax, bx                     ; **THE GESTURE'S TWO SLOTS** (SPEC.md
+    mov bx, apu_btrec               ; 20.5.1.3): neither is a template word
+    mov si, ap_onup
+    mov di, ap_ondrag
+    mov dx, ap_onclick                ; OUR own click work; the library
+                                    ; takes the press FIRST and chains
+                                    ; here (SPEC.md 20.5.1.3.3)
+    call os88ui_btninit             ; (which keeps every register)
+    xchg ax, bx                     ; BX = the window again
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
+    ; worker's declaration: a package with NO worker is the case that
+    ; moves most easily, and putting this at the spawn left exactly
+    ; those runs declaring nothing - measured, by the row that reads
+    ; MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE_NOKEEP ap_reap.out  ; nothing kept: this proc
+                                    ; preserves no register, and its CF is
+                                    ; the `clc` below. The relocation proc is
+                                    ; a bare `ret` we already have
 
     mov si, ap_menus
     call OSAPI_MENU_SET
@@ -403,12 +418,8 @@ ap_entry:
     mov ax, ap_onclose
     call OSAPI_WM_ONCLOSE
 
-    mov word [ap_msg], ap_s_ready
-    cmp byte [ap_have_sb], 0
-    jne .m_ok
-    mov word [ap_msg], ap_s_nosb
-.m_ok:
-    mov byte [ap_state], AP_ST_STOP
+    mov word [ap_msg], ap_s_ready  ; (no card: the speaker, SPEC.md 86.21)
+                                   ; ([ap_state] is AP_ST_STOP: bss is zeroed)
 
     ; The loader shows the window AFTER the entry proc returns, so the first
     ; W_PAINT can run before wm_fit has settled the frame and OSAPI_WM_GEOM /
@@ -429,12 +440,16 @@ ap_entry:
 ;           the ui, the playlist.
 ; =============================================================================
 %include "apengine.inc"
+%include "os88rseq.inc"
 %include "apwork.inc"
 %include "apcb.inc"
 %include "apwav.inc"
 %include "apdec.inc"
 %include "apui.inc"
 %include "aplist.inc"
+%include "os88spk.inc"
+%include "os88spkfx.inc"
+%include "apspk.inc"
 
 ; =============================================================================
 ; Data: window template, menus, labels, strings
@@ -474,10 +489,10 @@ ap_it_shuf:  db 'Shuffle', 0
 ap_it_rep:   db 'Repeat', 0
 
 ap_l_prev:  db 'Prev', 0
-ap_l_play:  db 'Play', 0
-ap_l_pause: db 'Pause', 0
-ap_l_stop:  db 'Stop', 0
-ap_l_next:  db 'Next', 0
+ap_l_play  equ ap_it_play          ; the button captions that are the Play
+ap_l_pause equ ap_it_pause         ; menu's own words are its strings
+ap_l_stop  equ ap_it_stop
+ap_l_next  equ ap_it_next
 ap_l_shuf:  db 'Shuf', 0
 ap_l_rep:   db 'Rep', 0
 
@@ -486,6 +501,22 @@ ap_s_playing: db 'Playing', 0
 ap_s_paused:  db 'Paused', 0
 ap_s_stopped: db 'Stopped', 0
 ap_s_nosb:    db 'No Sound Blaster - playback off', 0
+; THE SPEAKER'S SENTENCES, each after two bytes: where its device is and how
+; long, so that aps_say can tell it again with the Covox in that place (SPEC.md
+; 86.21.3) - a play opened on a Covox says Covox where the speaker's says
+; speaker, for 8 bytes here rather than four more sentences. The macro counts
+; them, so a sentence reworded cannot leave its two bytes pointing elsewhere
+%macro APSAY 4                     ; label, before, the device, after
+%strlen %%b %2
+%strlen %%d %3
+              db %%b, %%d
+%1:           db %2, %3, %4, 0
+%endmacro
+    APSAY ap_s_spk, '', 'PC speaker', ' - click or Space to pause'
+    APSAY ap_s_spkpaused, 'Paused - Space plays on the ', 'speaker', ''
+    APSAY ap_s_spkbusy, 'The ', 'PC speaker', ' is busy'
+ap_s_spkfast: db 'Made for a faster machine', 0
+    APSAY ap_s_spkslow, 'Too slow for this file on the ', 'speaker', ''
 ap_s_nomem:   db 'Out of memory', 0
 ap_s_nofile:  db 'Playlist is empty', 0
 ap_s_loaderr: db 'Cannot play this file', 0
@@ -493,14 +524,16 @@ ap_s_notask:  db 'No free task - close an app and retry', 0
 ap_s_hirate:  db 'Rate needs a Sound Blaster Pro', 0
 ap_s_opening: db 'Opening...', 0
 ap_s_endlist: db 'End of playlist', 0
-ap_s_queued:  db 'Sent to the running Audio Player', 0
 ap_s_added:   db 'Added to playlist', 0
 ap_s_notwav:  db 'Not a .WAV file', 0
 ap_s_full:    db 'Playlist is full', 0
 ap_s_dup:     db 'Already in the playlist', 0
+%ifdef AP_HANDOFF
+ap_s_queued:  db 'Sent to Audio Player', 0
 ap_qfile:     db 'APQUEUE.DAT', 0
+%endif
 
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"
     OS88_BSS AP_BSS
-    align 512, db 0                ; os88_image_end on a 512 boundary, so the
-    OS88_IMAGE_END                 ; aligned AP_BSS offset above is physical
+    OS88_IMAGE_END

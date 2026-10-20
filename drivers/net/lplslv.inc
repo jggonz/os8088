@@ -2,7 +2,7 @@
 ; lplslv.inc - the SLAVE half of the LapLink transport
 ;
 ; Shared by tests/lptlink and OS88NET.COM, and deliberately NOT part of
-; lplink.inc: os8088 is always the master (docs/NET-PLAN.md 1.3), so NET.DRV
+; lplink.inc: os8088 is always the master (docs/plans/completed/NET-PLAN.md 1.3), so NET.DRV
 ; would carry this as dead code. What the two includers here have in common is
 ; that both are the far end of a cable and both have a console.
 ;

@@ -1,0 +1,1053 @@
+# One-line descriptions of every file and folder on the shipped floppies,
+# written for the user-facing guide. One table per name; folders end in "/".
+# kind: program, driver, system, font, document, music, picture, video,
+#       data, folder, dos-tool
+
+# --- folders ----------------------------------------------------------------
+
+["APPDATA/"]
+title = "Application data"
+kind = "folder"
+summary = "Where programs keep their settings, high scores and saved state, inside SYSTEM. You can leave it alone."
+short = "Settings and saved state"
+
+["APPS/"]
+title = "Applications"
+kind = "folder"
+summary = "The everyday programs: editors, tools, players and utilities. Double-click one to start it."
+short = "The everyday programs"
+
+["AUTOSTRT/"]
+title = "Startup items"
+kind = "folder"
+summary = "Links placed here (made with an Alt-drop) open automatically after the machine boots. Hold Shift during boot to skip them."
+short = "Programs that run at boot"
+
+["DOS/"]
+title = "DOS tools"
+kind = "folder"
+summary = "Small MS-DOS programs to copy onto a PC running DOS, for sharing files and disks with this machine."
+short = "Tools for a PC running DOS"
+
+["FONTS/"]
+title = "Fonts"
+kind = "folder"
+summary = "The typefaces installed on the system, with their licence. Double-click a face to preview it in Font Viewer."
+short = "Installed typefaces"
+
+["GAMES/"]
+title = "Games"
+kind = "folder"
+summary = "The games collection. Double-click one to play."
+short = "The games collection"
+
+["MEDIA/"]
+title = "Media"
+kind = "folder"
+summary = "Sample documents, pictures, music and video to open in the matching programs. File dialogs start here."
+short = "Sample files to open"
+
+["MIDI/"]
+title = "MIDI songs"
+kind = "folder"
+summary = "Ten demo songs for MIDIRack, from Fur Elise and The Entertainer to original game music."
+short = "Demo songs for MIDIRack"
+
+["NOTES/"]
+title = "Notes"
+kind = "folder"
+summary = "Sticky Note's notes, one text file each, inside SYSTEM/APPDATA on the system disk."
+short = "Sticky Note's notes"
+
+["STIKAPPS/"]
+title = "Sticky Apps"
+kind = "folder"
+summary = "Desktop widgets that live on the desktop itself and come back where you left them at every boot."
+short = "Widgets that live on the desktop"
+
+["SYSTEM/"]
+title = "System folder"
+kind = "folder"
+summary = "The system's own folders: the typefaces, the programs' settings, and Task Manager, The Wire and Redline Apply."
+short = "Files the system runs on"
+
+# --- the system itself --------------------------------------------------------
+
+["KERNEL.SYS"]
+title = "os8088 system"
+kind = "system"
+summary = "The operating system itself, loaded when the machine boots from this disk. Do not move or delete it."
+short = "The operating system itself"
+
+["BOOTHD.SYS"]
+title = "Hard disk boot sector"
+kind = "system"
+summary = "The startup code written onto a hard disk when you install os8088 there. The installer uses it."
+short = "Startup code for hard disks"
+
+["COLDHMA.SYS"]
+title = "High memory image"
+kind = "system"
+summary = "Lets the system move part of itself above 1MB on machines that have the memory, leaving more room for programs."
+short = "Moves system code above 1MB"
+needs = "A 286 or better with memory above 1MB"
+
+["ASSOC.DAT"]
+title = "File associations"
+kind = "system"
+summary = "The system's list of which program opens which kind of document, so a double-click opens the right one."
+short = "Which program opens what"
+
+["CTRL.DRV"]
+title = "Control Panel"
+kind = "system"
+summary = "The Control Panel, loaded when you open it: display, theme, sound, clock, drivers and other settings."
+short = "Display, sound and settings"
+
+["DESK.DRV"]
+title = "Desktop widgets"
+kind = "system"
+summary = "Lets desktop widgets such as the Desk Calendar be placed, dragged and shown on the desktop."
+short = "Support for desktop widgets"
+
+["DISKOPS.DRV"]
+title = "Disk operations"
+kind = "system"
+summary = "Copies a whole floppy sector for sector, to another floppy or to an image file and back, and compresses or expands files."
+short = "Copy disks, compress files"
+
+["DOCK.DRV"]
+title = "Dock options"
+kind = "system"
+summary = "Extra dock behaviour: standing it on the left or right edge of the screen and hiding it automatically."
+short = "Move or auto-hide the dock"
+
+["EXTD.DRV"]
+title = "Extended desktop"
+kind = "system"
+summary = "Spreads the desktop across two monitors so windows can be moved from one screen to the other."
+short = "Desktop across two monitors"
+needs = "Two display cards, such as a VGA or CGA beside a Hercules"
+
+["FORMAT.DRV"]
+title = "Disk formatter"
+kind = "system"
+summary = "Formats a blank floppy so the system can store files on it. Loaded when you choose Format Disk."
+short = "Formats blank floppies"
+
+["HIBER.DRV"]
+title = "Hibernate"
+kind = "system"
+summary = "Saves the whole machine, open programs and all, to a file on the hard disk and restores it later."
+short = "Save the machine, resume later"
+needs = "A hard disk"
+
+["STIKMENU.DRV"]
+title = "Sticky Apps menu"
+kind = "system"
+summary = "The menu that lists the Sticky Apps on your disks and lets you open, hide, show and arrange them."
+short = "Menu for Sticky Apps"
+
+["WIN95.DRV"]
+title = "Windows theme"
+kind = "system"
+summary = "The Windows theme's look: close, maximize and minimize buttons on the right, a size grip and click-open menus."
+short = "Windows-style window look"
+
+["THMPAL.DRV"]
+title = "Color theme presets"
+kind = "system"
+summary = "The Customize window for the Color theme: eight preset colour schemes and the title bar style. The Control Panel opens it."
+short = "Preset colour schemes"
+
+["HDDTOOL.DRV"]
+title = "Hard disk tool"
+kind = "system"
+summary = "The hard disk setup tool, used to partition and format a hard disk and install os8088 onto it."
+short = "Partition and install on a disk"
+needs = "A hard disk"
+
+["RAMPAGE.DRV"]
+title = "RAM disk settings"
+kind = "system"
+summary = "The Control Panel page for the RAM disk: its size, and saving or restoring its contents as one file."
+short = "RAM disk settings page"
+
+# --- drivers ------------------------------------------------------------------
+
+["SOUND.DRV"]
+title = "Sound driver"
+kind = "driver"
+summary = "Lets programs play music and sound on an AdLib, Sound Blaster, MPU-401 MIDI interface or Covox, beyond the built-in PC speaker."
+short = "Music and sound on any card"
+needs = "An AdLib, Sound Blaster, MPU-401 or Covox"
+
+["HDD.DRV"]
+title = "Hard disk driver"
+kind = "driver"
+summary = "Lets the machine use MFM and IDE hard disks: mounting their drives, setting them up and booting from them."
+short = "Use MFM and IDE hard disks"
+needs = "A hard disk"
+
+["ETHER.DRV"]
+title = "Ethernet driver"
+kind = "driver"
+summary = "Connects the machine to a network and the internet, for the Browser, Telnet, the FTP server and The Wire."
+short = "Network and internet access"
+needs = "An NE1000 or NE2000 network card"
+
+["NET.DRV"]
+title = "Parallel link"
+kind = "driver"
+summary = "Links to a DOS PC over a LapLink parallel cable, so its files appear here as an ordinary drive."
+short = "Share a PC's files by cable"
+needs = "A LapLink cable to a PC running OS88NET.COM"
+
+["XMEM.DRV"]
+title = "Extended memory"
+kind = "driver"
+summary = "Lets programs and the RAM disk use memory above 1MB, and frees room by moving part of the system up there."
+short = "Use memory above 1MB"
+needs = "A 286 or better with memory above 1MB"
+
+["EMS.DRV"]
+title = "Expanded memory"
+kind = "driver"
+summary = "Lets programs use the extra memory on a LIM EMS expanded memory board."
+short = "Use expanded memory boards"
+needs = "A LIM EMS memory board"
+
+["RAMDISK.DRV"]
+title = "RAM disk"
+kind = "driver"
+summary = "Makes a fast drive out of memory for temporary files. Its contents can be saved to a file and restored."
+short = "A fast drive made of memory"
+
+["SAVER.DRV"]
+title = "Screen saver"
+kind = "driver"
+summary = "The animated screen saver: a bouncing cube, a starfield, geometric shapes or sea life, set in the Control Panel."
+short = "Animated screen saver"
+
+["USBMOUSE.DRV"]
+title = "USB mouse driver"
+kind = "driver"
+summary = "Lets you use a USB mouse plugged into a Book8088's USB socket or a PicoMEM card."
+short = "USB mouse on the Book8088"
+needs = "A Book8088 (CH375 USB) or a PicoMEM card"
+
+# --- programs: applications -------------------------------------------------
+
+["CALC.O88"]
+title = "Calculator"
+kind = "program"
+summary = "A four-function desk calculator with a fold-out history. Click a past answer to start the next sum from it."
+short = "Desk calculator with history"
+
+["NOTEPAD.O88"]
+title = "Note Pad"
+kind = "program"
+summary = "A simple text editor with word wrap. It reads and writes plain text files that DOS can read too."
+short = "Simple plain text editor"
+
+["TEXPAD.O88"]
+title = "TeXPad"
+kind = "program"
+summary = "A two-pane TeX editor: source on the left, typeset page on the right, exporting PDF or PostScript."
+short = "TeX editor with live preview"
+
+["ARTFUL.O88"]
+title = "ArtfulType"
+kind = "program"
+summary = "A distraction-free Markdown writer that takes the whole screen, showing headings and emphasis as you type."
+short = "Full-screen Markdown writer"
+
+["WORD.O88"]
+title = "Microsoft Word"
+kind = "program"
+summary = "A recreation of Word for Windows 1.1a with rulers, page view and real .DOC files, plus RTF in and out."
+short = "Word for Windows 1.1a remake"
+
+["SHEET.O88"]
+title = "Sheet"
+kind = "program"
+summary = "A spreadsheet in the style of Excel 2.1, with formulas, formats, macros, charts and SYLK, DIF and BIFF files."
+short = "Excel 2.1-style spreadsheet"
+
+["CHART.O88"]
+title = "Chart"
+kind = "program"
+summary = "Opens a spreadsheet file, draws a chart from a column of its numbers, and can save the chart as a BMP."
+short = "Charts from spreadsheet data"
+
+["PAINT.O88"]
+title = "Paint"
+kind = "program"
+summary = "A bitmap painting program with eight tools, undo and a clipboard. It opens and saves BMP and GIF pictures."
+short = "Bitmap painting program"
+
+["PIXEL.O88"]
+title = "PiXEL"
+kind = "program"
+summary = "An image viewer and editor that opens JPEG, PNG, GIF, BMP, PCX, TIFF and more, with a full-screen view."
+short = "Image viewer and editor"
+
+["FONTVIEW.O88"]
+title = "Font Viewer"
+kind = "program"
+summary = "Lists the installed typefaces and shows a sample you can type into, in whichever face you pick."
+short = "Preview installed typefaces"
+
+["FRACTAL.O88"]
+title = "Fractal"
+kind = "program"
+summary = "Draws five kinds of fractal in the background, band by band, while you keep using the desktop."
+short = "Background fractal drawing"
+
+["PIANO.O88"]
+title = "Piano"
+kind = "program"
+summary = "A playable piano keyboard with a scrolling note viewer, replay of what you played and three built-in songs."
+short = "Playable piano keyboard"
+
+["TRACKER.O88"]
+title = "Tracker"
+kind = "program"
+summary = "Plays Amiga MOD music modules with a playlist, in a window or full screen with pattern display."
+short = "Amiga MOD music player"
+
+["AUDIO.O88"]
+title = "Audio Player"
+kind = "program"
+summary = "Plays WAV sound files from disk. With a Sound Blaster it keeps playing while you work in other programs."
+short = "Background WAV player"
+
+["MIDIRACK.O88"]
+title = "MIDIRack"
+kind = "program"
+summary = "Plays standard MIDI song files with a channel rack, on an FM chip, a Sound Blaster, MIDI out or the PC speaker."
+short = "MIDI song player with rack"
+
+["VIDEO.O88"]
+title = "Video Player"
+kind = "program"
+summary = "Plays full-motion .V88 videos, in a window or full screen, with sound on a Sound Blaster or the PC speaker."
+short = "Plays .V88 videos"
+
+["TASKMGR.O88"]
+title = "Task Manager"
+kind = "program"
+summary = "Shows live CPU load and memory use for every running program, with a map of where memory has gone."
+short = "CPU and memory monitor"
+
+["TIMER.O88"]
+title = "Timer"
+kind = "program"
+summary = "A stopwatch with Start, Stop and Reset buttons, counting in hours, minutes and seconds."
+short = "Stopwatch"
+
+["BOUNCE.O88"]
+title = "Bounce"
+kind = "program"
+summary = "A small black square bouncing around its own window. A tiny demonstration program."
+short = "Bouncing square demo"
+
+["DESKCAL.O88"]
+title = "Desk Calendar"
+kind = "program"
+summary = "A calendar widget on the desktop showing today, the month, your appointments and tasks, with reminders that ring."
+short = "Desktop calendar widget"
+
+["STIKNOTE.O88"]
+title = "Sticky Note"
+kind = "program"
+summary = "A pad of notes and checklists on the desktop: each note is a text file you write in Note Pad, and you tick its boxes with a click."
+short = "Notes and checklists on the desktop"
+
+["DESKCLOK.O88"]
+title = "Desk Clock"
+kind = "program"
+summary = "A clock on the desktop in nine faces and three sizes, with the date and a daily alarm with Snooze and Dismiss."
+short = "Desktop clock with an alarm"
+
+["RLAPPLY.O88"]
+title = "Redline Apply"
+kind = "program"
+summary = "Puts back the bus timing setting saved by the Redline benchmark, after each boot, then quits."
+short = "Restores Redline timing"
+needs = "A 286 or 386 tuned with Redline"
+
+["DOS.O88"]
+title = "DOS"
+kind = "program"
+summary = "Runs MS-DOS .COM and .EXE programs. Double-click a DOS program and it starts here."
+short = "Runs MS-DOS programs"
+
+["THEWIRE.O88"]
+title = "The Wire"
+kind = "program"
+summary = "Browses the os8088 online software library, then runs a program straight from the network or saves it to disk."
+short = "Online software library"
+needs = "A network card"
+
+["BROWSER.O88"]
+title = "Browser"
+kind = "program"
+summary = "A text-and-tables web browser. It opens web pages over the network or HTML files from a disk."
+short = "Text-and-tables web browser"
+needs = "A network connection for web pages"
+
+["TELNET.O88"]
+title = "Telnet"
+kind = "program"
+summary = "A terminal for logging in to other computers over the network."
+short = "Terminal for remote logins"
+needs = "A network card or parallel link"
+
+["FTPD.O88"]
+title = "FTP Server"
+kind = "program"
+summary = "Turns the machine into an FTP server, so a modern computer can send and fetch files from its disks."
+short = "Serve your files over FTP"
+needs = "A network card or parallel link"
+
+# --- programs: games ----------------------------------------------------------
+
+["MINES.O88"]
+title = "Minesweeper"
+kind = "program"
+summary = "The classic mine-finding puzzle on a 9 by 9 board. Right-click to flag a mine."
+short = "Classic mine-finding puzzle"
+
+["SOLITAIR.O88"]
+title = "Solitaire"
+kind = "program"
+summary = "Klondike Solitaire with drag-and-drop cards."
+short = "Klondike card game"
+
+["ARKANOID.O88"]
+title = "Arkanoid"
+kind = "program"
+summary = "Break the bricks with a ball and paddle in this classic arcade game."
+short = "Brick-breaking arcade game"
+
+["MISSILE.O88"]
+title = "Missile Command"
+kind = "program"
+summary = "Defend your cities from falling missiles in a port of Atari's 1980 arcade game."
+short = "Defend cities from missiles"
+
+["CYCLONE.O88"]
+title = "Cyclone 88"
+kind = "program"
+summary = "A tube shooter in the style of Tempest 2000: spin around the rim and blast what climbs up."
+short = "Tempest-style tube shooter"
+
+["TAMEGRAM.O88"]
+title = "TameGram"
+kind = "program"
+summary = "A falling-block puzzle where gravity changes direction. Line up eight of one faction to clear them. By Jason Page."
+short = "Gravity-shifting block puzzle"
+
+["DOTDEL.O88"]
+title = "Dot Delirium"
+kind = "program"
+summary = "A maze chase in the Pac-Man tradition starring Smiles, in a window or full screen."
+short = "Pac-Man-style maze chase"
+
+["DRMARCO.O88"]
+title = "DrMarco"
+kind = "program"
+summary = "A pill-dropping puzzle game remade from the NES Dr. Mario. Match colours to clear the viruses."
+short = "Pill-dropping virus puzzle"
+
+["GORILLAS.O88"]
+title = "Gorillas"
+kind = "program"
+summary = "Banana-throwing artillery across a city skyline, solo or two players, adapted from the QBasic classic."
+short = "Banana-throwing artillery game"
+
+["TANK.O88"]
+title = "Tank Attack"
+kind = "program"
+summary = "A first-person wireframe tank battle in the spirit of the 1980 arcade game, played full screen."
+short = "Wireframe tank battle"
+
+["SKIES.O88"]
+title = "Clear Skies"
+kind = "program"
+summary = "A 3D flight simulator: five aircraft, from a Cessna to a glider and an amphibian, over nine places from Paris to Nepal."
+short = "3D flight simulator"
+
+["PXSTEIN.O88"]
+title = "Pixelstein 3D"
+kind = "program"
+summary = "A first-person maze shooter in the style of the 1992 classic, with eight floors, doors, keys and guards."
+short = "First-person maze shooter"
+
+["ISOTRON.O88"]
+title = "isoTron"
+kind = "program"
+summary = "A light-wall duel against the computer on a raised 3D arena that rises a level after two wins in a row."
+short = "Light-wall duel in 3D"
+
+["WIREBALL.O88"]
+title = "WireBall"
+kind = "program"
+summary = "Pong full screen. Play another computer over a null modem cable, or practise against the computer."
+short = "Full-screen Pong, two players"
+needs = "A null modem cable and a second machine for two players"
+
+# --- DOS tools ----------------------------------------------------------------
+
+["OS88CZ.COM"]
+title = "OS88CZ"
+kind = "dos-tool"
+summary = "A DOS program that splits big files across floppies and joins them back, compatible with os8088's compressed files."
+short = "Split files across floppies"
+
+["OS88NET.COM"]
+title = "OS88NET"
+kind = "dos-tool"
+summary = "Run on a DOS PC to share its files over a LapLink parallel cable with an os8088 machine."
+short = "Share files over a cable"
+
+# --- fonts --------------------------------------------------------------------
+
+["ARCHIVO.F88"]
+title = "Archivo Narrow"
+kind = "font"
+summary = "A bold, narrow sans-serif typeface, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Archivo Narrow typeface"
+
+["CHARTER.F88"]
+title = "Charter"
+kind = "font"
+summary = "A sturdy hand-drawn serif typeface, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Charter typeface"
+
+["COURIER.F88"]
+title = "Courier"
+kind = "font"
+summary = "A typewriter-style monospaced typeface, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Courier typeface"
+
+["HELV.F88"]
+title = "Helvetica"
+kind = "font"
+summary = "A clean sans-serif typeface in Helvetica's proportions, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Helvetica typeface"
+
+["INCONSOL.F88"]
+title = "Inconsolata"
+kind = "font"
+summary = "A compact monospaced typeface for code and tables, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Inconsolata typeface"
+
+["JETBRAIN.F88"]
+title = "JetBrains Mono"
+kind = "font"
+summary = "A bold monospaced typeface designed for code, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "JetBrains Mono typeface"
+
+["NOTO.F88"]
+title = "Noto Serif"
+kind = "font"
+summary = "A bold, condensed serif typeface, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Noto Serif typeface"
+
+["ROBOMONO.F88"]
+title = "Roboto Mono"
+kind = "font"
+summary = "A heavy monospaced typeface, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Roboto Mono typeface"
+
+["TALLX.F88"]
+title = "Tallx"
+kind = "font"
+summary = "os8088's own 8 by 8 letter design as a typeface, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Tallx typeface"
+
+["TIMES.F88"]
+title = "Times"
+kind = "font"
+summary = "A light book serif in Times Roman's proportions, for Word, the C edition of Word and Scribe; Font Viewer shows it."
+short = "Times typeface"
+
+# --- documents ----------------------------------------------------------------
+
+["README.TXT"]
+title = "Read Me"
+kind = "document"
+summary = "Notes on what is on this disk and how to use it. On the system disk it is the whole os8088 manual. Double-click to read it in Note Pad."
+short = "Read this first"
+
+["WELCOME.TXT"]
+title = "Welcome note"
+kind = "document"
+summary = "The first note on the Sticky Note pad, with a short checklist of how the pad works. Opens in Note Pad."
+short = "Sticky Note's first note"
+
+["LICENSE.TXT"]
+title = "Font licence"
+kind = "document"
+summary = "The licence for the installed typefaces and the names of their authors. Opens in Note Pad."
+short = "Typeface licences and authors"
+
+["GUIDE.TEX"]
+title = "TeXPad guide"
+kind = "document"
+summary = "A guide to TeXPad's markup, written in that markup. Opens in TeXPad."
+short = "Guide to TeXPad markup"
+
+["PAPER.TEX"]
+title = "Sample paper"
+kind = "document"
+summary = "A short sample working paper with sections and tables, to open and typeset in TeXPad."
+short = "Sample working paper"
+
+["WELCOME.DOC"]
+title = "Welcome letter"
+kind = "document"
+summary = "A sample Word document introducing the word processor. Opens in Word."
+short = "Sample Word document"
+
+["WRITING.MD"]
+title = "Writing in ArtfulType"
+kind = "document"
+summary = "A Markdown guide to ArtfulType that also shows off its formatting. Opens in ArtfulType."
+short = "Guide to ArtfulType"
+
+["BROWSER.HTM"]
+title = "Browser manual"
+kind = "document"
+summary = "A web page explaining how to use the Browser. Opens in the Browser without any network."
+short = "How to use the Browser"
+
+["SALES.SLK"]
+title = "Sales sample"
+kind = "data"
+summary = "A small sample spreadsheet of monthly units and revenue, to open in Sheet or chart in Chart."
+short = "Sample sales spreadsheet"
+
+# --- pictures and video -----------------------------------------------------
+
+["OS8088.GIF"]
+title = "os8088 logo"
+kind = "picture"
+summary = "The os8088 logo as a black-and-white GIF picture. Double-click it to open it in Paint; PiXEL opens it too."
+short = "Black-and-white logo picture"
+
+["SAMPLE.BMP"]
+title = "Paint sample"
+kind = "picture"
+summary = "A sample picture showing the shapes Paint draws: a line, boxes, an oval and a freehand curve. Opens in Paint."
+short = "Sample Paint drawing"
+
+["LAKE.JPG"]
+title = "Lake photo"
+kind = "picture"
+summary = "A sample greyscale picture of a lake scene, made for os8088, to view and edit in PiXEL."
+short = "Greyscale lake photo"
+
+["OS8088.V88"]
+title = "Logo video"
+kind = "video"
+summary = "A short looping animation of the os8088 logo burning into a computer chip. Plays in the Video Player."
+short = "Looping logo animation"
+
+# --- music --------------------------------------------------------------------
+
+["BEVERLY.MOD"]
+title = "Beverly Hills Cop"
+kind = "music"
+summary = "The Beverly Hills Cop theme as an Amiga music module. Plays in Tracker."
+short = "Music module for Tracker"
+
+["BATTLE1.MID"]
+title = "Battle"
+kind = "music"
+summary = "Original 1990s-style game battle music as a MIDI song. Plays in MIDIRack."
+short = "Game battle music"
+
+["CANCAN.MID"]
+title = "Can-can"
+kind = "music"
+summary = "Offenbach's Can-can as a MIDI song. Plays in MIDIRack."
+short = "Offenbach's Can-can"
+
+["DEMO.MID"]
+title = "MIDI demo"
+kind = "music"
+summary = "An original test piece showing off MIDI effects such as pitch bend, swells and tempo changes. Plays in MIDIRack."
+short = "MIDI effects test piece"
+
+["ENTERTNR.MID"]
+title = "The Entertainer"
+kind = "music"
+summary = "Scott Joplin's ragtime piece The Entertainer as a MIDI song. Plays in MIDIRack."
+short = "Joplin's ragtime classic"
+
+["FURELISE.MID"]
+title = "Fur Elise"
+kind = "music"
+summary = "Beethoven's Fur Elise as a MIDI song. Plays in MIDIRack."
+short = "Beethoven piano piece"
+
+["INTRO.MID"]
+title = "Intro fanfare"
+kind = "music"
+summary = "An original title-screen fanfare as a MIDI song. Plays in MIDIRack."
+short = "Title-screen fanfare"
+
+["KOROBEIN.MID"]
+title = "Korobeiniki"
+kind = "music"
+summary = "The Russian folk song Korobeiniki as a MIDI song. Plays in MIDIRack."
+short = "Russian folk song"
+
+["MOUNTKNG.MID"]
+title = "In the Hall of the Mountain King"
+kind = "music"
+summary = "Grieg's In the Hall of the Mountain King, speeding up as it goes, as a MIDI song. Plays in MIDIRack."
+short = "Grieg's accelerating march"
+
+["SPACEJAM.MID"]
+title = "Space Jam"
+kind = "music"
+summary = "Original 1990s-style game music as a MIDI song. Plays in MIDIRack."
+short = "Game music piece"
+
+["TURKISH.MID"]
+title = "Turkish March"
+kind = "music"
+summary = "Mozart's Rondo alla Turca as a MIDI song. Plays in MIDIRack."
+short = "Mozart's Rondo alla Turca"
+
+# --- the one-program disks, the everything set and the demo drives ------------
+
+["1942.O88"]
+title = "1942"
+kind = "program"
+summary = "Air combat after the 1942 arcade game: 32 stages, one or two players, music on an AdLib or Sound Blaster."
+short = "1942-style air combat"
+needs = "A colour VGA or CGA card"
+
+["APPLE2.O88"]
+title = "Apple II Plus"
+kind = "program"
+summary = "An Apple II Plus in a window, with Applesoft BASIC and the monitor built in."
+short = "Apple II Plus emulator"
+
+["APPLE2/"]
+title = "Apple II Plus"
+kind = "folder"
+summary = "The Apple II Plus program, its README, its licence and a BASIC program to load."
+short = "Apple II Plus and extras"
+
+["C64.O88"]
+title = "Commodore 64"
+kind = "program"
+summary = "A Commodore 64 in a window, with its KERNAL, BASIC and character ROMs built in."
+short = "Commodore 64 emulator"
+
+["C64/"]
+title = "Commodore 64"
+kind = "folder"
+summary = "The Commodore 64 program, its README and its licence."
+short = "Commodore 64 and licence"
+
+["COPYING"]
+title = "Licence"
+kind = "document"
+summary = "The program's licence, the GNU General Public License."
+short = "GNU General Public License"
+
+["WELCOME.BAS"]
+title = "Welcome program"
+kind = "document"
+summary = "An Applesoft BASIC program to load into the Apple II Plus."
+short = "Sample Applesoft program"
+
+["CWORD.O88"]
+title = "Word, C edition"
+kind = "program"
+summary = "Word written again in C: the same menus, ruler and documents."
+short = "Word rewritten in C"
+
+["CWORD/"]
+title = "Word, C edition"
+kind = "folder"
+summary = "The C edition of Word and its welcome document."
+short = "C edition of Word"
+
+["WORD/"]
+title = "Word"
+kind = "folder"
+summary = "Word and its welcome document."
+short = "Word and its welcome file"
+
+["WELCOME.RTF"]
+title = "Welcome document"
+kind = "document"
+summary = "A sample document introducing the word processor. Open it from the program's File menu, or double-click it once the program has run."
+short = "Sample welcome document"
+
+["SCRIBE.O88"]
+title = "Scribe"
+kind = "program"
+summary = "A word processor on Word's document format, with its own program and choices."
+short = "Word processor on Word files"
+
+["SCWELCOM.RTF"]
+title = "Scribe welcome"
+kind = "document"
+summary = "A sample document introducing Scribe. Open it from Scribe's File menu; Scribe does not take a double-click."
+short = "Sample Scribe document"
+
+["SCWELCOM.DOC"]
+title = "Scribe welcome (Word format)"
+kind = "document"
+summary = "Scribe's welcome document as a Word .DOC file. Open it from Scribe's File menu; a double-click opens Word."
+short = "Sample Scribe document, .DOC"
+
+["DOCS/"]
+title = "Documents"
+kind = "folder"
+summary = "A place to keep your documents."
+short = "Folder for your documents"
+
+["FROTZ.O88"]
+title = "Frotz"
+kind = "program"
+summary = "Plays interactive fiction: text adventures in the Infocom story format."
+short = "Text adventure player"
+
+["PACCMAN.O88"]
+title = "PaccMan"
+kind = "program"
+summary = "Arcade-accurate Pac-Man with the four ghosts and their personalities. Full speed wants a 386."
+short = "Arcade-accurate Pac-Man"
+
+["PACCMAN/"]
+title = "PaccMan"
+kind = "folder"
+summary = "PaccMan and its README."
+short = "PaccMan and its notes"
+
+["REDLINE.O88"]
+title = "REDLINE"
+kind = "program"
+summary = "A benchmark that times 25 workloads and scores your PC against a 4.77 MHz IBM PC."
+short = "PC speed benchmark"
+
+["MIDIRACK.BNK"]
+title = "MIDIRack instruments"
+kind = "music"
+summary = "The wavetable instruments MIDIRack plays through a Sound Blaster."
+short = "Wavetable instrument bank"
+
+["RUNCPM.O88"]
+title = "RunCPM"
+kind = "program"
+summary = "Runs CP/M 2.2 programs in a window: games, WordStar, Turbo Pascal and more."
+short = "CP/M 2.2 emulator"
+
+["RUNCPM/"]
+title = "RunCPM"
+kind = "folder"
+summary = "The CP/M emulator and its drive A with the master disk, on the everything set."
+short = "CP/M emulator and software"
+
+["1STREAD.ME"]
+title = "RunCPM read me"
+kind = "document"
+summary = "RunCPM's own notes on what is on drive A and how to start."
+short = "Notes on CP/M drive A"
+
+["LICENSE"]
+title = "Licence"
+kind = "document"
+summary = "RunCPM's licence."
+short = "RunCPM licence"
+
+["CONTENTS.TXT"]
+title = "Contents"
+kind = "document"
+summary = "Which disk of the everything set holds which program."
+short = "What is on which disk"
+
+["PICTURES/"]
+title = "Pictures"
+kind = "folder"
+summary = "Sample pictures in many formats to open in PiXEL."
+short = "Sample pictures for PiXEL"
+
+["BALLOONS.PNG"]
+title = "Balloons"
+kind = "picture"
+summary = "A sample PNG picture."
+short = "Sample PNG picture"
+
+["BOUNCE.GIF"]
+title = "Bounce"
+kind = "picture"
+summary = "A sample GIF picture: a ten-frame animation that PiXEL plays."
+short = "Sample GIF picture"
+
+["CAT.GIF"]
+title = "Cat"
+kind = "picture"
+summary = "A sample GIF picture."
+short = "Sample GIF picture"
+
+["CITY.PCX"]
+title = "City"
+kind = "picture"
+summary = "A sample PCX picture."
+short = "Sample PCX picture"
+
+["FLOWER.JPG"]
+title = "Flower"
+kind = "picture"
+summary = "A sample JPEG photograph."
+short = "Sample JPEG photograph"
+
+["HOUSE.PNG"]
+title = "House"
+kind = "picture"
+summary = "A sample PNG picture."
+short = "Sample PNG picture"
+
+["MOUNTAIN.BMP"]
+title = "Mountain"
+kind = "picture"
+summary = "A sample BMP picture."
+short = "Sample BMP picture"
+
+["ROOM.JPG"]
+title = "Room"
+kind = "picture"
+summary = "A sample JPEG photograph."
+short = "Sample JPEG photograph"
+
+["VACATION.JPG"]
+title = "Vacation"
+kind = "picture"
+summary = "A sample JPEG photograph."
+short = "Sample JPEG photograph"
+
+["WEAVE.O88"]
+title = "Weave"
+kind = "program"
+summary = "Runs Weave apps: programs made of markup, script and formulas, packed into one .WAB file."
+short = "Runs Weave apps"
+
+["WEAVE/"]
+title = "Weave"
+kind = "folder"
+summary = "The Weave runtime and the demo apps, ready to run."
+short = "Weave runtime and demos"
+
+["LOOM.O88"]
+title = "Loom"
+kind = "program"
+summary = "The Weave editor: change an app's sources and pack it into a .WAB on the machine."
+short = "Weave editor and packer"
+
+["LOOM/"]
+title = "Loom"
+kind = "folder"
+summary = "The Weave editor and the demo apps' sources."
+short = "Weave editor and sources"
+
+["CATALOG.TXT"]
+title = "Catalog"
+kind = "document"
+summary = "What each Weave app on this disk is, and how to open it."
+short = "List of Weave apps here"
+
+["FORM.WAB"]
+title = "Greeter demo"
+kind = "program"
+summary = "A Weave app: type a name and it greets you, with a meter that counts the greetings. Double-click to run it in Weave."
+short = "Weave demo: greets you"
+
+["PONG.WAB"]
+title = "Pong demo"
+kind = "program"
+summary = "A Weave app: Pong against the computer. A and Z move your paddle. Double-click to run it in Weave."
+short = "Weave Pong demo"
+
+["SHEET.WAB"]
+title = "Picnic Budget demo"
+kind = "program"
+summary = "A Weave app: a small budget spreadsheet for a picnic. Double-click to run it in Weave."
+short = "Weave demo: picnic budget"
+
+["FORM.WML"]
+title = "Form markup"
+kind = "document"
+summary = "The Form demo's layout, in Weave markup. Open it in Loom."
+short = "Form demo layout"
+
+["FORM.WJS"]
+title = "Form script"
+kind = "document"
+summary = "The Form demo's script. Open it in Loom."
+short = "Form demo script"
+
+["PONG.WML"]
+title = "Pong markup"
+kind = "document"
+summary = "The Pong demo's layout, in Weave markup. Open it in Loom."
+short = "Pong demo layout"
+
+["PONG.WJS"]
+title = "Pong script"
+kind = "document"
+summary = "The Pong demo's script: the serve, the paddles, hits and scoring. Open it in Loom."
+short = "Pong demo game logic"
+
+["PONG.WSP"]
+title = "Pong sprites"
+kind = "document"
+summary = "The Pong demo's sprite art, drawn as text. Open the project's PONG.WML in Loom to edit it."
+short = "Pong demo sprite art"
+
+["SHEET.WML"]
+title = "Sheet markup"
+kind = "document"
+summary = "The Sheet demo's layout, in Weave markup. Open it in Loom."
+short = "Sheet demo layout"
+
+["SHEET.WJS"]
+title = "Sheet script"
+kind = "document"
+summary = "The Sheet demo's script. Open it in Loom."
+short = "Sheet demo script"
+
+["SHEET.WFX"]
+title = "Sheet formulas"
+kind = "document"
+summary = "The Picnic Budget demo's cell formulas. Open the project's SHEET.WML in Loom to edit it."
+short = "Sheet demo formulas"
+
+["VMMOUSE.DRV"]
+title = "Emulator pointer"
+kind = "driver"
+summary = "The Absolute mouse: moves the pointer straight to where your real mouse is, in emulators that support it, with no capture."
+short = "Pointer for emulators"
+needs = "A 386 or later, in an emulator"
+
+["SYSTEM.CFG"]
+title = "Settings"
+kind = "system"
+summary = "The system's saved settings, written when the Control Panel closes. The emulator disk ships one that turns the Absolute mouse on."
+short = "Saved system settings"
+
+["00-VIDS.TXT"]
+title = "About these videos"
+kind = "document"
+summary = "What each demo video is, what it needs, and how to play it."
+short = "Guide to the demo videos"

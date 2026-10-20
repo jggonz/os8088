@@ -24,12 +24,18 @@ comes up on B:\\MEDIA with the GIF the only thing in it - SPEC.md 38.10's
 default, and it removes every navigation click from the measurement.
 """
 import argparse
+import tempfile
 import os
 import sys
-import time
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 
 from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
                       VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
@@ -49,7 +55,7 @@ def u16(b, i=0): return b[i] | (b[i + 1] << 8)
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintbench.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintbench.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--far", action="store_true",
                     help="...and then drag Paint wholly onto the second one")
@@ -61,7 +67,7 @@ def main():
     # The docstring's recipe, RUN rather than transcribed: a registered row
     # that only passes after a human builds its disk by hand is a row that
     # fails for a reason the summary line cannot name.
-    if a.apps == "/tmp/paintbench.img":
+    if a.apps == tempfile.gettempdir() + "/paintbench.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:build/OS8088.GIF")
 
@@ -104,11 +110,12 @@ def main():
         # WAIT FOR IT RATHER THAN SLEEPING A GUESS - the whole question is
         # how long this takes, so a fixed sleep either truncates the slow
         # case or pads the fast one.
-        t0 = time.time()
-        while time.time() - t0 < 90.0:
-            if [w for w in dispcp.win_list(m, S) if w != disk]:
-                break
-            time.sleep(0.2)
+        try:
+            os88marty.until(m, lambda _: [w for w in dispcp.win_list(m, S)
+                                          if w != disk],
+                            "Paint's window", poll=0.2, limit=90)
+        except os88marty.MartyError:
+            pass                        # the check below says so
         os88marty.settle(m)
         c1 = m.status()["cycles"]
         d = m.disk()
@@ -118,7 +125,7 @@ def main():
             sys.exit("paint did not open on the association")
         print("paint window %r" % (dispcp.win_rect(m, S, pw[-1]),))
         w, h, fb = m.fbuf(card=0)
-        os88marty.write_png_rgb("/tmp/paintgif.png", w, h, fb)
+        os88marty.write_png_rgb(tempfile.gettempdir() + "/paintgif.png", w, h, fb)
 
         if a.far:
             # THE NEW PATH: a blit wholly on the SECOND display, which is the
@@ -135,7 +142,7 @@ def main():
                   % (px, px + pw2 - 1, seam))
             for c, nm in ((0, "vga"), (1, "herc")):
                 w2, h2, fb2 = m.fbuf(card=c)
-                os88marty.write_png_rgb("/tmp/paintgif-far-%s.png" % nm,
+                os88marty.write_png_rgb(tempfile.gettempdir() + "/paintgif-far-%s.png" % nm,
                                         w2, h2, fb2)
                 print("   %s: %d lit" % (nm, sum(
                     1 for i in range(0, len(fb2), 3)

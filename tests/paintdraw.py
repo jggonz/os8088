@@ -31,6 +31,7 @@ memory. The first says the tools drew what they were asked for; the second
 says the canvas AGREES - which is the half a `gfx_fill` to the screen hides.
 """
 import argparse
+import tempfile
 import os
 import sys
 import time
@@ -40,6 +41,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
 import dispapps                                              # noqa: E402
+import blitpair                                              # noqa: E402
 from blitpair import gif_pixels                              # noqa: E402
 
 S = os88sym.linear
@@ -62,7 +64,7 @@ def split(fb, fw, ox, oy, iw, ih, px, box):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintdraw.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintdraw.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: a COLOUR "
@@ -79,7 +81,7 @@ def main():
     if a.gif is None:
         a.gif = dispapps.colour_gif()
 
-    if a.apps == "/tmp/paintdraw.img":
+    if a.apps == tempfile.gettempdir() + "/paintdraw.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 
@@ -109,25 +111,13 @@ def main():
         # The canvas origin is ASKED for, off the blit that draws it, for
         # tests/paintplan.py's reason: where Paint puts its picture is not
         # this test's opinion to hold.
-        m.bp_exec("gfx_blitp")
-        mo.dblclick(rx, ry)
-        geom = None
-        for _ in range(40):
-            if not m.wait_stop(limit=300.0):
-                break
-            r = m.regs()
-            if r["cx"] >= iw:
-                geom = (r["ax"], r["bx"])
-                break
-            m.bp_exec("gfx_blitp")
-            m.run()
-        if geom is None:
+        hit = blitpair.wide_blit(m, lambda: mo.dblclick(rx, ry), iw,
+                                 syms=("gfx_blitp",))
+        if hit is None:
             sys.exit("paintdraw: no gfx_blitp as wide as the picture - the "
                      "canvas is not planar, or it fell back to nibbles")
-        ox, oy = geom
-        m.bp_exec()
-        m.run()
-        time.sleep(6)
+        ox, oy = hit[0], hit[1]
+        os88marty.settle(m)         # the rest of the load, off the glass
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         wx, wy, ww, wh = dispcp.win_rect(m, S, pw)
 
@@ -173,7 +163,8 @@ def main():
         newy = wy + 40
         mo.drag(wx + ww // 2, wy + 9, wx + ww // 2, newy)
         os88marty.settle(m)
-        time.sleep(6)
+        os88marty.quiesce(m, lambda: dispcp.win_rect(m, S, pw), guest=0.5,
+                          what="the moved window")
         mo.to(4, 4)
         os88marty.settle(m)
         wx2, wy2 = dispcp.win_rect(m, S, pw)[:2]

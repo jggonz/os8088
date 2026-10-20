@@ -1,0 +1,704 @@
+# EXCITEBIKE tile set: 8x8, `.` = palette slot 0, 0-9a-f = a slot.
+# Original artwork, drawn by tools/excitebike_art.py (procedural); after
+# generation THIS FILE is the source of record.  `class` feeds the
+# 256-byte element class table (SPEC.md 102.2).
+
+tile grass_a class=none
+21232212
+21232212
+21232212
+21232212
+21232212
+21232212
+21232212
+21232212
+
+tile grass_b class=none
+21232212
+21232212
+21232212
+21232212
+21232212
+21232212
+21232212
+21232212
+
+tile grass_far class=none
+12112121
+12112121
+12112121
+12112121
+12112121
+12112121
+12112121
+12112121
+
+tile tuft_a class=none
+22222222
+22222222
+22222222
+22222222
+22222222
+23223232
+23223232
+11211112
+
+tile tuft_b class=none
+22222222
+22222222
+22222222
+22222222
+22222222
+23222332
+23222332
+11221112
+
+tile bank_top class=none
+22222222
+22222222
+11111111
+54565455
+54565455
+54565455
+54565455
+54565455
+
+tile bank_bot class=none
+55655565
+55655565
+55655565
+55655565
+66666666
+44444444
+44444444
+44444444
+
+tile dirt_a class=none
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+
+tile dirt_b class=none
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+
+tile dirt_line_a class=none mono=9>8
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+99996666
+
+tile dirt_line_b class=none mono=9>8
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+66669999
+
+tile hedge_a class=none
+21121121
+21121121
+21121121
+21121121
+21121121
+21121121
+21121121
+21121121
+
+tile hedge_b class=none
+1.121.12
+1.121.12
+1.121.12
+1.121.12
+1.121.12
+1.121.12
+1.121.12
+1.121.12
+
+tile hedge_c class=none
+21121121
+21121121
+21121121
+21121121
+21121121
+21121121
+21121121
+21121121
+
+tile hedge_d class=none
+21.121.1
+21.121.1
+21.121.1
+21.121.1
+21.121.1
+21.121.1
+21.121.1
+21.121.1
+
+tile rough_a class=rough
+55555655
+55555555
+56655645
+54455445
+54455445
+44444444
+55565556
+55555555
+
+tile rough_b class=rough
+55555555
+55555555
+55646455
+55444655
+55444655
+54644465
+55555555
+55555555
+
+tile mud_a class=mud
+54444445
+44.44444
+47444447
+44444444
+4444444.
+44444.4.
+44444.44
+54444445
+
+tile mud_b class=mud
+54444445
+44444444
+444.4444
+4.447444
+.4444444
+44447444
+4.444444
+54444445
+
+tile hurdle_lo_a class=hurdle_lo
+55555555
+55555555
+........
+a9a9a9a9
+a9a9a9a9
+a9a9a9a9
+........
+4.5555.5
+
+tile hurdle_lo_b class=hurdle_lo
+55455555
+55555555
+........
+9a9a9a9a
+9a9a9a9a
+9a9a9a9a
+........
+5.5555.5
+
+tile hurdle_hi_a class=hurdle_hi
+........
+bbb..bbb
+bbb..bbb
+........
+5.f55f.5
+5.f55f.5
+5.f55f.4
+5.f55f.5
+
+tile hurdle_hi_b class=hurdle_hi
+5.f55f.5
+5.f55f.5
+5.f55f.5
+........
+bbb..bbb
+bbb..bbb
+........
+5.f55f.5
+
+tile arrow_a class=arrow
+44444444
+5dd55555
+55dd4555
+555ddd55
+555ddd55
+55dd5555
+4dd55555
+44444444
+
+tile arrow_b class=arrow
+44444444
+55dd5555
+555dd545
+5555ddd5
+5555ddd5
+555dd555
+55dd5555
+44444444
+
+tile kicker_a class=kicker
+55555555
+55555555
+55555555
+55555555
+5555555.
+5555...b
+5.....bb
+.bb..bb.
+
+tile kicker_b class=kicker
+55555555
+5555555.
+5555....
+5...b..b
+..bb..bb
+.bb..bb.
+bb..bb..
+b..bb..b
+
+tile kicker_c class=kicker
+55......
+...bb..b
+..bb..bb
+.bb..bb.
+bb..bb..
+b..bb..b
+..bb..bb
+.bb..bb.
+
+tile rbody_a class=ramp
+bbbbbbbb
+ccccccc4
+cccccc4c
+ccccc4cc
+cccc4ccc
+ccc4cccc
+cc4ccccc
+44444444
+
+tile rbody_b class=ramp
+bbbbbbbb
+cccc4ccc
+ccc4cccc
+cc4ccccc
+c4cccccc
+4ccccccc
+ccccccc4
+44444444
+
+tile rp_up_s class=ramp
+2212222.
+1222122b
+12222..c
+22222bbc
+222..ccc
+222bbccc
+2..ccccc
+2bbccccc
+
+tile rp_up_ga class=ramp
+22122222
+12222212
+22222222
+22222222
+2222222.
+22222..b
+222..bbc
+2..bbccc
+
+tile rp_up_gb class=ramp
+2221222.
+22222..b
+222..bbc
+2..bbccc
+.bbccccc
+bccccccc
+cccccccc
+cccccccc
+
+tile rp_dn_s class=ramp
+.2212221
+b2212222
+c..22222
+cbb22222
+ccc..222
+cccbb222
+ccccc..2
+cccccbb2
+
+tile rp_dn_ga class=ramp
+.2222222
+b..22221
+cbb..222
+cccbb..2
+cccccbb.
+cccccccb
+cccccccc
+cccccccc
+
+tile rp_dn_gb class=ramp
+22222222
+22222222
+22221222
+22222222
+.2222211
+b..21222
+cbb..222
+cccbb..2
+
+tile rp_top class=ramp
+........
+bbbbbbbb
+cccccccc
+cccccccc
+cccccccc
+cccccccc
+cccccccc
+cccccccc
+
+tile rp_fill class=ramp
+4cccccc4
+ccccc4cc
+ccc4cccc
+c4cccccc
+cccccc4c
+cccc4ccc
+cc4ccccc
+4cccccc4
+
+tile hbody_a class=hill
+45555555
+55554555
+55555655
+55645555
+55555554
+55455556
+55556545
+44444444
+
+tile hbody_b class=hill
+55455555
+55555546
+54556555
+56555455
+45555555
+55554565
+55565555
+44444444
+
+tile hp_up_s class=hill
+2222122.
+22222226
+22221..5
+22222665
+221..555
+22266555
+2..55555
+26655555
+
+tile hp_up_ga class=hill
+12222222
+22222221
+22222222
+22222222
+1222222.
+22212..6
+222..665
+2..66555
+
+tile hp_up_gb class=hill
+2222222.
+22221..6
+222..665
+2..66555
+.6655555
+65555555
+55555555
+55555555
+
+tile hp_dn_s class=hill
+.2222222
+62222222
+5..22211
+56622112
+555..222
+55566222
+55555..2
+55555662
+
+tile hp_dn_ga class=hill
+.1212222
+6..12222
+566..222
+55566..2
+5555566.
+55555556
+55555555
+55555555
+
+tile hp_dn_gb class=hill
+22222222
+22222212
+22222222
+22212122
+.2212222
+6..22222
+566..222
+55566..2
+
+tile hp_top class=hill
+........
+66666666
+55555555
+55555555
+55555555
+55555555
+55555555
+55555555
+
+tile hp_fill class=hill
+54454454
+44444444
+44444444
+44544544
+44444444
+44444444
+45445445
+44444444
+
+tile chequer_a class=finish
+99..99..
+99..99..
+..99..99
+..99..99
+99..99..
+99..99..
+..99..99
+..99..99
+
+tile chequer_b class=finish
+..99..99
+..99..99
+99..99..
+99..99..
+..99..99
+..99..99
+99..99..
+99..99..
+
+tile finish_post class=finish
+55.ff.55
+55.ff.55
+55.ff.55
+55.ff.55
+55.ff.55
+55.ff.55
+55.ff.55
+55.ff.55
+
+tile gate_bar class=gate
+aaaaaaaa
+aaaaaaaa
+aaaaaaaa
+........
+55555555
+99999999
+55555555
+55555555
+
+tile gate_post class=gate
+5.9aa9.5
+5.9aa9.5
+5.9aa9.5
+5.9aa9.5
+5.9aa9.5
+5.9aa9.5
+5.9aa9.5
+5.9aa9.5
+
+tile gate_shadow class=gate
+........
+44444444
+44444454
+44444444
+54444454
+44444444
+44444444
+44454444
+
+tile crowd_a class=none
+88888.88
+88888ee8
+8.888ee8
+8ee8bbbb
+8ee8bbb.
+bbbbbb.b
+b.bb8888
+b.bb8888
+
+tile crowd_b class=none
+8.888.88
+8ee88ee8
+8ee88ee8
+dddddddd
+d.dddddd
+d.dddddd
+88888888
+888.88.8
+
+tile crowd_c class=none
+88888888
+8.888.88
+8ee88ee8
+8ee88ee8
+ee.eeeee
+eeeee.ee
+eeeeee.e
+88888888
+
+tile crowd_d class=none
+88888888
+88888888
+8.888.88
+8ee88ee8
+8ee.8ee8
+aaaaaaaa
+.a.aa.aa
+aaaaaaaa
+
+tile sky_a class=none
+77777777
+77777777
+77777777
+77777777
+77777777
+77777777
+77777777
+77777777
+
+tile sky_cloud class=none
+77777777
+77999977
+79999997
+79999997
+77777777
+77777777
+77777777
+77777777
+
+tile pennant_a class=none
+.7777777
+.aaa7777
+.bbbbb77
+.aaaaaaa
+.bbbbb77
+.aaa7777
+.7777777
+.7777777
+
+tile pennant_b class=none
+.7777777
+.ddd7777
+.9999977
+.ddddddd
+.9999977
+.ddd7777
+.7777777
+.7777777
+
+tile plate_a class=none
+99999999
+9aaaaaaa
+99a9a9aa
+99a9a9aa
+99a9a9aa
+99a9a9aa
+9aaaaaaa
+9.......
+
+tile plate_b class=none
+99999999
+dddddddd
+d9d9d9dd
+d9d9d9dd
+d9d9d9dd
+d9d9d9dd
+dddddddd
+........
+
+tile fence_a class=none
+99999999
+99999999
+ffffffff
+ffffffff
+ffffffff
+........
+88888888
+88888888
+
+tile fence_b class=none
+99999999
+99999999
+fff.ffff
+fff.ffff
+fff.ffff
+........
+88888888
+88888888
+
+tile gauge_empty class=none
+........
+........
+.ffffff.
+.888888.
+.888888.
+.888888.
+........
+........
+
+tile gauge_cool class=none
+........
+........
+.999999.
+.dddddd.
+.dddddd.
+.dddddd.
+........
+........
+
+tile gauge_hot class=none
+........
+........
+.999999.
+.aaaaaa.
+.aaaaaa.
+.aaaaaa.
+........
+........
+
+tile gauge_cap class=none
+........
+ffffffff
+f.......
+f.......
+f.......
+f.......
+ffffffff
+........

@@ -15,10 +15,10 @@ purgeable claim that sizes itself off available heap has a floor of its own -
 the directory read-ahead is 64KB on a 640KB machine and nothing had ever
 squeezed one.
 
-It also answers docs/KERN-SMALL-CUT-PLAN.md 8.2's *"cheapest unexamined
+It also answers docs/plans/KERN-SMALL-CUT-PLAN.md 8.2's *"cheapest unexamined
 lever"*: a PINNED claim made at boot is heap the machine never gets back, no
 assembler can see it, and its cost is only real against the heap a 128KB
-machine actually has.  docs/KERN-SMALL-MODULE-SPLIT.md 9.1 found one by
+machine actually has.  docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.1 found one by
 accident - the association cache held 3,072 bytes before the user had done
 anything - and SPEC.md 54.0 has since gated it out.  This walks `mem_tab` on
 the machine itself and says whether any others are left.
@@ -35,14 +35,16 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 os.environ.setdefault("OS88_DEFINES", "KERN_SMALL")
-os.environ.setdefault("OS88_BUILD", "build/smallk")
 import os88marty as M                                        # noqa: E402
 import os88sym                                               # noqa: E402
-from os88fixture import need                                 # noqa: E402
+import os88build                                             # noqa: E402
+import os88geom                                              # noqa: E402
+os88build.use_build("build/smallk")
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_128k"
 DEFS = ("KERN_SMALL",)
-MC_SIZE, MC_SEG, MC_PARA, MC_OWN = 10, 0, 2, 4
+MC_SIZE, MC_SEG, MC_PARA, MC_OWN = (os88geom.MC_SIZE,
+    os88geom.MC_SEG, os88geom.MC_PARA, os88geom.MC_OWN)
 fails = []
 
 
@@ -56,7 +58,16 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
-need("build/small360.img")          # `all` does not build kern_small
+# THE SHARED BUILD, declared as `wants=` (tests/suite.py), and no longer a
+# private tree. `make small` on top of a current `make` adds build/smallk/,
+# build/smallapp/ and the two small disks and touches nothing a plain `make`
+# wrote (checked file by file on 2026-10-11), so the private tree it used to
+# build - which was the reason this row cost ~40s of a ~180s tier - bought
+# nothing but a second assembly of every package: 49s of CPU against 10.6s.
+# The runner prebuilds a `wants=` artefact before any row starts, which is
+# the moment a shared `make` is safe, and `make test-full` carries it as a
+# prerequisite. use_build() above points the symbol reader at build/smallk,
+# through os88build.at() so a frozen soak tree is honoured.
 
 # ...and the FLOOR MACHINE has to be staged. tools/martypc/build.sh appends
 # os8088_machines.toml to upstream's ibm5150.toml, so a run tree built before

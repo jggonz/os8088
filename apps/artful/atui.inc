@@ -17,6 +17,18 @@
 AT_ITEMH   equ 13                   ; pull-down item row height
 AT_BARY    equ 6                    ; bar title text y
 
+; The minimize box (SPEC.md 46.5.2): the kernel's own 11x11 title-bar box and
+; its collapse glyph, at the kernel's own arithmetic (SPEC.md 11's frame
+; drawing), mirrored onto a bar that is ours. A WF_FULL window has no chrome
+; to click - which is the same fact that lets this bar exist - and F is not
+; ours to bind (SPEC.md 11.2.1), so this box is the only way out of the
+; writing surface with the mouse.
+AT_MBOX_R  equ 9                    ; the box's right edge, in from [at_vw]
+AT_MBOX_W  equ 10                   ; ...and its width, so it spans R+W .. R
+AT_MBOX_Y0 equ 4                    ; rows, both relative to the bar's top
+AT_MBOX_Y1 equ 14
+AT_MBOX_YG equ 9                    ; the collapse rule's row
+
 ; -----------------------------------------------------------------------------
 ; at_bar_draw - the fullscreen menu bar
 ; out: nothing; preserves all registers; lock held by the caller
@@ -73,8 +85,90 @@ at_bar_draw:
     inc di
     jmp short .title
 .done:
+    call at_min_draw
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_min_box - the minimize box's rect (SPEC.md 46.5.2)
+; out: AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); preserves all else
+; -----------------------------------------------------------------------------
+at_min_box:
+    mov cx, [at_vw]
+    sub cx, AT_MBOX_R
+    mov ax, cx
+    sub ax, AT_MBOX_W
+    mov bx, AT_MBOX_Y0
+    mov dx, AT_MBOX_Y1
+    ret
+
+; -----------------------------------------------------------------------------
+; at_min_draw - the box and its collapse rule, in the BAR's ink
+; out: nothing; preserves all registers; lock held by the caller
+;
+; No fill: the bar's own fill (at_bar_draw above) has already laid the ground
+; these two calls draw on, so this is the bottom rule's idiom and not an
+; erase-then-draw pair (SPEC.md 46.5.2, and PERFORMANCE.md rule 2). The ink is
+; [at_pair]'s low byte, which is BLACK on the Markdown bar and WHITE on the
+; Writer one - the kernel's white square would read as a hole in a black bar.
+; -----------------------------------------------------------------------------
+at_min_draw:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, [at_pair]               ; AL = the bar's ink
+    call OSAPI_SET_COLOR
+    call at_min_box
+    call OSAPI_GFX_FRAME
+    inc ax                          ; the collapse glyph: one rule across the
+    inc ax                          ; box's middle, inset 2 either side, so it
+    mov bx, cx                      ; does not read as a second close box
+    dec bx
+    dec bx
+    mov dx, AT_MBOX_YG
+    call OSAPI_GFX_HLINE            ; AX = x1, BX = x2, DX = y
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_min_hit - is (CX, DX) inside the minimize box?
+; in:  CX = x, DX = y (absolute; the bar is at the screen's origin)
+; out: CF = 0 yes, CF = 1 no; preserves every register
+; -----------------------------------------------------------------------------
+at_min_hit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, cx                      ; the press, banked: at_min_box answers in
+    mov di, dx                      ; CX/DX and would land on top of it
+    call at_min_box                 ; AX/BX = top-left, CX/DX = bottom-right,
+    cmp si, ax                      ; the SAME rect at_min_draw framed
+    jb .no
+    cmp si, cx
+    ja .no
+    cmp di, bx
+    jb .no
+    cmp di, dx
+    ja .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di                          ; pops do not touch the flags, so the
+    pop si                          ; verdict above is what returns
     pop dx
     pop cx
     pop bx
@@ -113,8 +207,9 @@ at_mcell:
     ret
 
 ; -----------------------------------------------------------------------------
-; at_bar_click - a press in rows 0..19: track the menus until release
-; in:  CX = x (absolute); gfx lock held (W_ONCLICK)
+; at_bar_click - a press in rows 0..19: the minimize box, else track the menus
+;                until release
+; in:  CX = x, DX = y (absolute); gfx lock held (W_ONCLICK)
 ; -----------------------------------------------------------------------------
 at_bar_click:
     push ax
@@ -123,6 +218,11 @@ at_bar_click:
     push dx
     push si
     push di
+    call at_min_hit                 ; SPEC.md 46.5.2: the box FIRST - it is at
+    jc .menus                       ; the far right and the titles end at 256
+    call at_fs_dock                 ; on the narrowest screen this runs on, so
+    jmp short .out                  ; the two can never be asked about one x
+.menus:
     call at_x2menu                  ; DI = menu under x, or -1
     cmp di, 0FFFFh
     je .out
@@ -301,6 +401,132 @@ at_mgeom:
     ret
 
 ; -----------------------------------------------------------------------------
+; at_subank - bank the pixels a panel is about to cover (SPEC.md 46.5.1)
+; in:  AX/BX/CX/DX = the inclusive rect, gfx lock held
+; out: [at_suseg] set, or 0 if anything refused; preserves all registers
+;
+; WHAT IT REPLACES is at_mclose's line loop: the panel is ~120px wide and
+; at_draw_line is FULL WIDTH, all [at_tw] of it, so erasing a pull-down cost
+; 104.9 ms on a 4.77MHz 8088 against a write-back.
+;
+; THE CLAIM IS PER DROP, not per session - SPEC.md 12.4's rule and for its
+; reason. It is freed in at_surest, before the picked item runs, so whatever
+; that item claims gets a heap this menu has already left.
+;
+; EVERY REFUSAL IS THE SAME REFUSAL and none of them is a new path: no claim,
+; a rect straddling two displays, a zero-byte rect - [at_suseg] stays 0 and
+; at_mclose repaints, which is what it did before this existed.
+; -----------------------------------------------------------------------------
+at_subank:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov word [at_suseg], 0
+    mov di, [at_vw]                 ; clamp the way at_mclose's own erase does,
+    dec di                          ; or the bank is short by a column and the
+    cmp cx, di                      ; restore leaves it stale
+    jbe .xok
+    mov cx, di
+.xok:
+    mov di, [at_vh]
+    dec di
+    cmp dx, di
+    jbe .yok
+    mov dx, di
+.yok:
+    mov [at_surx1], ax
+    mov [at_sury1], bx
+    mov [at_surx2], cx
+    mov [at_sury2], dx
+    ; bytes = planes * rows * byte columns
+    mov ax, cx
+    mov cl, 3
+    shr ax, cl
+    mov bx, [at_surx1]
+    shr bx, cl
+    sub ax, bx
+    inc ax                          ; AX = byte columns
+    mov bx, [at_sury2]
+    sub bx, [at_sury1]
+    inc bx                          ; BX = rows
+    mul bx                          ; (a panel cannot reach 64KB of one plane)
+    mov bl, [at_vbpp]               ; ...OF THE CARD THIS WINDOW IS ON, which
+    xor bh, bh                      ; at_geom_init took from OSAPI_WM_DISPLAY:
+    cmp bl, 4                       ; OSAPI_VIDEO cannot answer that on a
+    je .planes                      ; two-card machine (SPEC.md 39.16.4)
+    mov bx, 1
+.planes:
+    mul bx
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                      ; AX = KB, rounded up
+    or ax, ax
+    jz .no
+    call OSAPI_MEM_CLAIM            ; out CF=0, DX = base segment
+    jc .no
+    mov [at_suseg], dx
+    mov es, dx
+    xor di, di
+    mov ax, [at_surx1]
+    mov bx, [at_sury1]
+    mov cx, [at_surx2]
+    mov dx, [at_sury2]
+    call OSAPI_GFX_SAVE             ; CF=1 = the rect straddles two displays,
+    jnc .out                        ; and half a bank put back is worse than
+    mov dx, [at_suseg]              ; none: hand it straight back
+    call OSAPI_MEM_FREE
+.no:
+    mov word [at_suseg], 0
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_surest - put the banked pixels back and hand the claim over
+; in:  gfx lock held
+; out: CF=0 the screen is repaired, CF=1 nothing was banked and the caller
+;      owes the repaint; preserves all registers
+; -----------------------------------------------------------------------------
+at_surest:
+    cmp word [at_suseg], 0
+    jne .have
+    stc
+    ret
+.have:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov es, [at_suseg]
+    xor si, si
+    mov ax, [at_surx1]
+    mov bx, [at_sury1]
+    mov cx, [at_surx2]
+    mov dx, [at_sury2]
+    call OSAPI_GFX_REST
+    mov dx, [at_suseg]
+    call OSAPI_MEM_FREE             ; BEFORE the picked item runs (SPEC.md
+    mov word [at_suseg], 0          ; 12.4): whatever it claims gets a heap
+    pop es                          ; this menu has already left
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; at_mopen - draw the current pull-down and invert its title cell
 ; -----------------------------------------------------------------------------
 at_mopen:
@@ -313,6 +539,16 @@ at_mopen:
     mov [at_msx1], ax               ; latched for every row routine
     mov [at_msx2], cx
     mov [at_msy2], dx
+%ifndef NOATSU
+    ; SPEC.md 46.5.1, before a pixel of the panel is drawn. THE RECT IS
+    ; at_mclose's OWN - its erase grows the box by 2 for the drop shadow, and
+    ; a bank that is short by a column leaves that column stale.
+    add cx, 2
+    add dx, 2
+    call at_subank
+    mov cx, [at_msx2]               ; ...and the panel is drawn to the box
+    mov dx, [at_msy2]               ; itself, not to the erased extent
+%endif
     mov al, CWHITE
     call OSAPI_SET_COLOR
     mov ax, [at_msx1]
@@ -402,21 +638,27 @@ at_mrows:
     mov ah, al
     mov al, CBLACK
     cmp ah, 1
-    jne .ink
-    mov al, CLGRAY                  ; disabled: gray (dither on 1bpp)
+    je .dis
+    clc                             ; live: CBLACK with [gfx_dis] CLEAR, and it
+    jmp short .ink                  ; is set on EVERY item because the pen is
+.dis:                               ; one lock hold long and the item before
+    mov al, CDGRAY                  ; this one may have been the dead one
+    stc
 .ink:
     mov [at_ink], al                ; ...and the run's ink, kept: a package
-    call OSAPI_SET_COLOR            ; cannot read the pen back (SPEC.md 46.10)
+    call OSAPI_GFX_PEN              ; cannot read the pen back (SPEC.md 46.10)
                                     ;
-                                    ; THIS IS A SPEC.md 47 RULE 1 VIOLATION AND
-                                    ; IT IS LEFT STANDING HERE - see 46.10.1.
-                                    ; A grey store without [gfx_dis] reduces to
-                                    ; solid BLACK on a 1bpp adapter, so a dead
-                                    ; item looks live on the target machine.
-                                    ; The fix is OSAPI_GFX_PEN with CF, and it
-                                    ; is not in this commit because no state
-                                    ; this session could drive put a disabled
-                                    ; item on screen to diff it against
+                                    ; THE PEN AND THE FLAG TOGETHER (SPEC.md 47
+                                    ; rule 1), which is what 46.10.1 left open:
+                                    ; this was OSAPI_SET_COLOR with CLGRAY, the
+                                    ; colour WITHOUT the flag, and SPEC.md 39.4
+                                    ; rounds a middle grey to solid BLACK in
+                                    ; text - so on the machine this OS is for a
+                                    ; dead item was pixel-identical to a live
+                                    ; one. CF is the argument and at_mstate's
+                                    ; answer is what sets it; nothing between
+                                    ; the flag and the call touches one, `mov`
+                                    ; and the API cell both being flag-clean
     cmp ah, 2
     jne .nocheck
     ; a small hand-drawn check in the left gutter (no glyph exists for it)
@@ -466,6 +708,10 @@ at_mrows:
     jz .done
     jmp .item
 .done:
+    clc                             ; the pen back, in case the LAST item was
+    call OSAPI_GFX_PEN              ; the dead one: gfx_unlock would clear the
+                                    ; flag for us, but the hover bar and the
+                                    ; erase are still to draw inside this hold
     pop di
     pop si
     pop dx
@@ -690,6 +936,10 @@ at_mclose:
     push cx
     push dx
     call at_mtitlexor
+%ifndef NOATSU
+    call at_surest                  ; SPEC.md 46.5.1: the banked pixels, or
+    jnc .out                        ; CF=1 and the piecewise repaint that was
+%endif                              ; the only path before it
     call at_mgeom
     add cx, 2                       ; the shadow's columns and row
     add dx, 2
@@ -715,6 +965,9 @@ at_mclose:
     inc bx
     jmp short .lines
 .done:
+%ifndef NOATSU
+.out:
+%endif
     pop dx
     pop cx
     pop bx
@@ -870,40 +1123,31 @@ at_mdbuttons:
     jne .single
     mov ax, [at_msx2]
     sub ax, 64                      ; Save (56 wide), 8 in from the right
-    mov si, at_s_save
-    mov dx, 1
+    mov word [at_btrec+OS88UI_BT_N], 3   ; **THE COUNT FIRST**: os88ui_btn
+                                    ; refuses an index past the LIVE count, so
+                                    ; a count written after the draws is a
+                                    ; count of zero on the pass that matters
+    mov si, at_i_save
+    mov dx, 0001h                   ; DH = slot 0, DL = the default ring
     call at_button                  ; out: CX = width
-    mov [at_b1x], ax
-    mov [at_b1y], bx
-    mov [at_b1w], cx
     sub ax, 80                      ; Cancel (72 wide), 8 gap
     mov si, at_s_cancel
-    xor dx, dx
+    mov dx, 0100h                   ; DH = slot 1, DL = no ring
     call at_button
-    mov [at_b2x], ax
-    mov [at_b2y], bx
-    mov [at_b2w], cx
     sub ax, 112                     ; Don't Save (104 wide), 8 gap
     mov si, at_s_dontsave
-    xor dx, dx
+    mov dx, 0200h                   ; DH = slot 2, DL = no ring
     call at_button
-    mov [at_b3x], ax
-    mov [at_b3y], bx
-    mov [at_b3w], cx
     jmp short .out
 .single:
     mov ax, [at_msx1]
     add ax, [at_msx2]
     shr ax, 1
     sub ax, 20                      ; OK is 40 wide: centre it
+    mov word [at_btrec+OS88UI_BT_N], 1   ; the count first, as above
     mov si, at_s_ok
-    mov dx, 1
+    mov dx, 0001h                   ; DH = slot 0, DL = the default ring
     call at_button
-    mov [at_b1x], ax
-    mov [at_b1y], bx
-    mov [at_b1w], cx
-    mov word [at_b2w], 0
-    mov word [at_b3w], 0
 .out:
     pop si
     pop dx
@@ -931,37 +1175,50 @@ at_mdbuttons:
 ; It gains a greyed state it does not use yet - at_button has never had one -
 ; and that is the point of the shared control rather than an accident of it.
 ; -----------------------------------------------------------------------------
+; in: ...and DH = which of the group's three slots this one IS, 0-based
+;     (SPEC.md 20.5.1.3), DL the default flag. A group's rects must be
+;     contiguous, so the three x/y/width triples this modal used to keep -
+;     and hit-test from, separately - are one array now, and this routine
+;     writes the slot's label word too rather than every caller doing it.
 at_button:
     push ax
     push bx
     push dx
     push si
     push di
-    mov di, dx                      ; DI = the default flag
-    mov [at_btx], ax
-    mov [at_bty], bx
+    push ax                         ; the x, for the rect below
     call OSAPI_FONT_WIDTH           ; AX = the label's width; SI intact
     add ax, 24
-    mov [at_xw], ax                 ; = the button's width, and the answer
-
-    mov ax, [at_btx]                ; ...as a rect, in screen coordinates
-    mov [at_brect+0], ax
-    add ax, [at_xw]
-    dec ax
-    mov [at_brect+4], ax
-    mov ax, [at_bty]
-    mov [at_brect+2], ax
-    add ax, 19
-    mov [at_brect+6], ax
-
-    or di, di                       ; ZF from the flag, and `mov` does not
-    mov di, OS88UI_FILL             ; touch flags - so the test survives the
+    xchg cx, ax                     ; CX = the button's width, and the answer
+    mov di, si                      ; DI = the label
+    or dl, dl                       ; ZF from the flag, and `mov` does not
+    mov ax, OS88UI_FILL             ; touch flags - so the test survives the
     jz .go                          ; register being reused for the answer
-    or di, OS88UI_DEF
+    or al, OS88UI_DEF
 .go:
-    mov bx, at_brect
+    mov dl, dh                      ; --- into the group's own slot ---
+    xor dh, dh                      ; DX = the slot
+    mov si, dx
+    add si, si                      ; SI = slot * 2, the word arrays' stride
+    mov [at_btflg+si], ax
+    mov [at_btlbl+si], di
+    add si, si
+    add si, si                      ; SI = slot * 8, the rect stride - and
+    add si, at_brects               ; the rect is computed IN the slot: it was
+                                    ; staged in an at_brect of its own and
+                                    ; copied across (apps size pass 2)
+    pop ax
+    mov [si+0], ax                  ; x1, in screen coordinates
+    add ax, cx
+    dec ax
+    mov [si+4], ax                  ; x2
+    mov [si+2], bx                  ; y1
+    add bx, 19
+    mov [si+6], bx                  ; y2
+    mov bx, at_btrec
+    mov al, dl
+    inc ax                          ; the record's indices are one-based
     call os88ui_btn
-    mov cx, [at_xw]
     pop di
     pop si
     pop dx
@@ -969,74 +1226,74 @@ at_button:
     pop ax
     ret
 
-at_brect:   dw 0, 0, 0, 0           ; the button being drawn
+at_brects:  dw 0,0,0,0, 0,0,0,0, 0,0,0,0   ; THE GROUP, contiguous
+at_btlbl:   dw 0, 0, 0                     ; its labels, written per pass
+at_btflg:   dw 0, 0, 0                     ; ...and its flags
+    OS88UI_BTNREC at_btrec, at_brects, at_btlbl, at_btflg, 3
+                                       ; THREE is the modal's; the splash and
+                                       ; the one-button modal set their own
+                                       ; OS88UI_BT_N before they draw
 
 ; -----------------------------------------------------------------------------
-; at_btnhit - is the point (CX,DX) inside button (BX=x, AX=y, SI=width)?
-; out: CF=0 hit
+; at_modal_key - a key while an alert is up (AL = ascii)
+;
+; There is no at_modal_click and no at_splash_click: os88ui_btnclick takes the
+; press first and arms whichever button it landed on (SPEC.md 20.5.1.3.3), and
+; at_modal_up fires it on the release - so neither the alert nor the splash
+; has a press of its own to act on, and the empty bodies that stood here went
+; in the second apps size pass, with at_btnhit, the x/y/width ladder they had
+; already stopped calling.
 ; -----------------------------------------------------------------------------
-at_btnhit:
-    cmp cx, bx
-    jb .no
-    push bx
-    add bx, si
-    cmp cx, bx
-    pop bx
-    jae .no
-    cmp dx, ax
-    jb .no
-    push ax
-    add ax, 19
-    cmp dx, ax
-    pop ax
-    ja .no
-    clc
-    ret
-.no:
-    stc
-    ret
 
-; -----------------------------------------------------------------------------
-; at_modal_click / at_modal_key - input while an alert is up
-; click in: CX = x, DX = y;  key in: AL = ascii
-; -----------------------------------------------------------------------------
-at_modal_click:
+; at_btn_up - the release, for WHICHEVER set of buttons is up
+; The splash and the modal share ONE record and os88ui.inc keeps ONE arm word
+; per package, so only one of them can ever have a gesture live; [at_modal]
+; is what says which, exactly as it does for the painter.
+at_modal_up:
     push ax
     push bx
     push si
-    mov bx, [at_b1x]
-    mov ax, [at_b1y]
-    mov si, [at_b1w]
-    call at_btnhit
-    jnc .b1
-    cmp word [at_b2w], 0
-    je .out
-    mov bx, [at_b2x]
-    mov ax, [at_b2y]
-    mov si, [at_b2w]
-    call at_btnhit
-    jnc .b2
-    cmp word [at_b3w], 0
-    je .out
-    mov bx, [at_b3x]
-    mov ax, [at_b3y]
-    mov si, [at_b3w]
-    call at_btnhit
-    jnc .b3
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret
+    mov bx, at_btrec
+    call os88ui_btnup               ; AX = what FIRED, 0 = cancelled
+    or ax, ax
+    jz .out
+    cmp byte [at_modal], 0
+    jne .md
+    cmp al, 1                       ; --- the SPLASH: New, then Open ---
+    jne .spopen
+    mov al, AT_CMD_NEW              ; a fresh document and the whole
+    call at_wreplace                ; screen - asking first when the one
+    jmp short .out                  ; we have is edited (SPEC.md 46.7.2)
+.spopen:
+    mov al, AT_CMD_OPEN
+    call at_wreplace
+    jmp short .out
+.md:
+    cmp al, 1                       ; --- the MODAL: Save, Cancel, Don't ---
+    je .b1
+    cmp al, 2
+    je .b2
+    call at_md_dont
+    jmp short .out
 .b1:
     call at_md_default
     jmp short .out
 .b2:
     call at_md_cancel
-    jmp short .out
-.b3:
-    call at_md_dont
-    jmp short .out
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+at_modal_drag:
+    push ax
+    push bx
+    mov bx, at_btrec
+    call os88ui_btndrag
+    pop bx
+    pop ax
+    ret
 
 at_modal_key:
     push ax
@@ -1129,6 +1386,9 @@ at_mdclose:
     inc bx
     jmp short .lines
 .fin:
+%ifndef NOATSBAR
+    mov byte [at_sbst], 0           ; ...which is exactly why the bank may not
+%endif                              ; answer for it (SPEC.md 46.4.4)
     call at_sbar                    ; a wide card can reach the gutter
     call at_caret_on
     pop dx
@@ -1223,79 +1483,7 @@ at_ctext:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; at_bigtext - scaled styled text, anywhere on screen
-; in:  AX = x, BX = y, SI = string, CX = scale (1..3), DL = AT_ST_* style
-; out: nothing; preserves all registers
-; Borrows the line pipeline: compose into a fresh strip, expand, one blit.
-; -----------------------------------------------------------------------------
-at_bigtext:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    mov [at_btx], ax
-    mov [at_bty], bx
-    mov [at_psc], cx
-    mov ax, cx
-    mov cl, 3
-    shl ax, cl
-    mov [at_pcw], ax                ; cell width = 8*scale
-    mov [at_prh], ax                ; rows = the glyph box exactly
-    push ds
-    pop es
-    cld
-    mov di, at_strip1
-    mov cx, (AT_S1ST*24)/2          ; 24 rows covers scale 3
-    xor ax, ax
-    rep stosw
-    mov di, at_cellbg
-    mov cx, AT_CBGCAP/2
-    rep stosw
-    xor di, di                      ; DI = x within the strip
-.ch:
-    lodsb
-    or al, al
-    jz .composed
-    push dx
-    call at_glyph
-    pop dx
-    add di, [at_pcw]
-    jmp short .ch
-.composed:
-    mov ax, di
-    cmp ax, AT_S4ST*2               ; the 4bpp strip's 608px, not the 1bpp
-    jbe .w                          ; 640: at_expand writes 4 bytes per
-    mov ax, AT_S4ST*2               ; 8px column against AT_S4ST rows
-.w:
-    mov [at_xw], ax
-    or ax, ax
-    jz .out
-    call at_expand
-    push ds
-    pop es
-    mov si, at_strip4
-    mov bp, AT_S4ST
-    mov ax, [at_btx]
-    mov bx, [at_bty]
-    mov cx, [at_xw]
-    mov dx, [at_prh]
-    call OSAPI_GFX_BLIT4
-.out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
+%ifdef NOATBLIT1
 ; -----------------------------------------------------------------------------
 ; at_drawimg - blit the 128x100 splash artwork at (AX, BX)
 ; Expanded 1bpp -> 4bpp through the white table, in bands of 24 rows.
@@ -1314,8 +1502,9 @@ at_drawimg:
     cld
     mov [at_btx], ax
     mov [at_bty], bx
+    add word [at_bty], AT_IMG_TOP   ; atimg.inc stores the inked rows only
     mov si, at_img
-    mov bp, AT_IMG_H                ; BP = rows left
+    mov bp, AT_IMG_ROWS             ; BP = rows left
 .band:
     mov dx, bp
     cmp dx, 24
@@ -1367,6 +1556,110 @@ at_drawimg:
     pop bx
     pop ax
     ret
+%else
+; -----------------------------------------------------------------------------
+; at_drawimg - blit the 128x100 splash artwork at (AX, BX)
+; atimg.inc stores it in screen polarity (46.4.2), so the artwork IS a band:
+; one OSAPI_GFX_BLIT1 for all its inked rows, through at_blit1ph for the x.
+; -----------------------------------------------------------------------------
+at_drawimg:
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+    add bx, AT_IMG_TOP              ; atimg.inc stores the inked rows only
+    mov si, at_img
+    mov bp, AT_IMG_RB
+    mov cx, AT_IMG_W
+    mov dx, AT_IMG_ROWS
+    call at_blit1ph
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; at_blit1ph - put a screen-polarity 1bpp band down at ANY x (SPEC.md 46.4.12)
+; in:  DS:SI = the band, BP = its stride, AX = x (signed), BX = y,
+;      CX = width in px (a multiple of 8), DX = rows; gfx lock held.
+;      Off the byte grid, DX * (CX/8 + 1) <= AT_S1ST*AT_SROWS, and the band
+;      may BE at_strip1 at stride AT_S1ST with CX/8 < AT_S1ST - see below
+; out: nothing; preserves all registers
+; kern_small's gfx_blit1 refuses an x off the byte grid (SPEC.md 5.4.2), so
+; the band is re-laid into at_strip1 shifted right by x & 7 and goes down at
+; x & ~7. The bits it gains on the left are PAPER, and both callers draw on a
+; white ground - the splash's content and the About box - so those pixels
+; are written white over white. Re-laying in place is safe: row r is written
+; at r*(n+1) and read at r*AT_S1ST, and byte j is read before it is written.
+; -----------------------------------------------------------------------------
+at_blit1ph:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ds
+    pop es
+    cld
+    mov di, ax
+    and di, 7
+    jz .go
+    push ax
+    push bx
+    mov bx, cx
+    mov cl, 3
+    shr bx, cl                      ; BL = source bytes a row (BH is spare)
+    mov cx, di                      ; CL = the phase, CH = 0
+    mov di, at_strip1
+    push dx
+.row:
+    push si
+    mov ch, bl
+    mov ah, 0FFh                    ; paper ahead of the first byte
+.byte:
+    lodsb
+    mov bh, al
+    shr ax, cl
+    stosb
+    mov ah, bh
+    dec ch
+    jnz .byte
+    mov al, 0FFh                    ; ...and the last byte's spill
+    shr ax, cl
+    stosb
+    pop si
+    add si, bp
+    dec dx
+    jnz .row
+    pop dx
+    xor bh, bh
+    lea bp, [bx+1]                  ; BP = the re-laid stride
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add cx, bx                      ; CX = width + phase
+    mov si, at_strip1
+    pop bx
+    pop ax
+    and ax, 0FFF8h
+.go:
+    call OSAPI_GFX_BLIT1
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; =============================================================================
 ; The windowed splash card (SPEC.md 46.7). The kernel has already
@@ -1383,7 +1676,6 @@ at_splash:
     mov [at_spx], ax
     mov [at_spy], dx
     call OSAPI_WM_GEOM              ; CX = w, DX = h
-    mov [at_spw], cx
     mov [at_sph], dx
     mov ax, cx
     shr ax, 1
@@ -1401,21 +1693,15 @@ at_splash:
     sub bx, 30                      ; button top
     mov ax, [at_spcx]
     sub ax, 76
-    mov si, at_s_new
-    mov dx, 1
+    mov word [at_btrec+OS88UI_BT_N], 2   ; the splash's pair, count first
+    mov si, at_i_new
+    mov dx, 0001h                   ; DH = slot 0, DL = the default ring
     call at_button
-    mov [at_b1x], ax
-    mov [at_b1y], bx
-    mov [at_b1w], cx
     mov ax, [at_spcx]
     add ax, 12
-    mov si, at_s_open
-    xor dx, dx
+    mov si, at_i_open
+    mov dx, 0100h                   ; DH = slot 1, DL = no ring
     call at_button
-    mov [at_b2x], ax
-    mov [at_b2y], bx
-    mov [at_b2w], cx
-    mov word [at_b3w], 0
     pop si
     pop dx
     pop cx
@@ -1423,33 +1709,3 @@ at_splash:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; at_splash_click - a windowed click (absolute coords, like every click)
-; in:  CX = x, DX = y
-; -----------------------------------------------------------------------------
-at_splash_click:
-    push ax
-    push bx
-    push si
-    mov bx, [at_b1x]
-    mov ax, [at_b1y]
-    mov si, [at_b1w]
-    call at_btnhit
-    jnc .new
-    mov bx, [at_b2x]
-    mov ax, [at_b2y]
-    mov si, [at_b2w]
-    call at_btnhit
-    jnc .open
-    jmp short .out
-.new:
-    call at_cmd_newdoc              ; a fresh document...
-    call at_fs_enter                ; ...and the whole screen
-    jmp short .out
-.open:
-    call at_dlg_open
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret

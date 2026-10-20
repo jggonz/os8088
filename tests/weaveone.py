@@ -60,6 +60,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import os88fixture                                           # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -124,7 +125,10 @@ def _drive(m, png_dir):
 
     live = set(dispcp.win_list(m, S))
     try:
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, SECOND)
+        # THE SECOND LAUNCH IS SUPPOSED TO REFUSE (WEAVE-SPEC 1.4) - that is
+        # the whole row - so it is declared rather than waited out.
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, SECOND,
+                          expect="refusal")
     except os88marty.MartyError as e:
         check(False, "%s: the second double-click reached %s"
               % (MACHINE, SECOND),
@@ -170,13 +174,11 @@ def main():
     ap.add_argument("--no-make", action="store_true")
     a = ap.parse_args()
     if not a.no_make:
-        import subprocess
-        r = subprocess.run(["make", DISK], cwd=ROOT, capture_output=True,
-                           text=True)
-        if r.returncode:
-            print("weaveone: `make %s` failed:\n%s"
-                  % (DISK, (r.stderr or r.stdout)[-800:]))
-            return 1
+        # THE SAME `make`, AND IT DOES NOTHING once the runner has built the
+        # artefact: Row(wants=...) declares it and os88test's prebuild builds
+        # it before any row starts. That is what lets this row drop
+        # builds=True and share the emulator lane.
+        os88fixture.need(DISK)
     with os88marty.launch("build/os8088-360.img", apps=DISK,
                           machine=MACHINE) as m:
         try:

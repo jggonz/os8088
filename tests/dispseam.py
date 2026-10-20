@@ -50,6 +50,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
+import os88build
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -115,9 +116,19 @@ def lit(g):
     return sum(1 for r in g for p in r if p == 1)
 
 
-def leg(image, apps, machine, defs, say):
+def leg(image, apps, machine, tree, say):
     """One kernel on one machine: the bar drawn solo, and the same bar
-    straddling. Returns (solo, straddle, phase, seam)."""
+    straddling. Returns (solo, straddle, phase, seam).
+
+    `tree` is the build this kernel came out of; applying it points os88sym's
+    module default at it as well as the lookups below, which is what the
+    library helpers here need (they take no defines).
+    """
+    tree = tree or os88build.plain()
+    tree.apply()
+    defs = tree.defines
+    image = tree.img(os.path.basename(image))
+    apps = tree.img(os.path.basename(apps))
     S = lambda n: os88sym.linear(n, defines=defs)           # noqa: E731
     settle = os88marty.settle
     with os88marty.launch(image, apps=apps, machine=machine, boot=False) as m:
@@ -254,7 +265,7 @@ def main(argv):
 
     for mach in machines:
         print("\n=== %s: the fixed kernel ===\n" % mach)
-        solo, strad, ph, seam = leg(a.image, a.apps, mach, (), say)
+        solo, strad, ph, seam = leg(a.image, a.apps, mach, None, say)
         d = diff(solo, strad)
         if d:
             fail.append("%s: the straddling title bar differs from the same "
@@ -266,15 +277,13 @@ def main(argv):
         if a.no_build:
             continue
         print("\n=== %s: NOSEAMCUT=1, the drop it replaces ===\n" % mach)
-        subprocess.check_call(["make", "NOSEAMCUT=1"], cwd=ROOT,
-                              stdout=subprocess.DEVNULL)
-        # Put the default kernel back however this exits, so a failure here
-        # does not leave a knob kernel in build/ for the next row to drive -
-        # atexit rather than a try/finally because sys.exit inside leg() is
-        # how this file reports an unusable machine.
-        atexit.register(subprocess.check_call, ["make"], cwd=ROOT,
-                        stdout=subprocess.DEVNULL)
-        bsolo, bstrad, bph, _ = leg(a.image, a.apps, mach, ("NOSEAMCUT",), say)
+        # A TREE OF ITS OWN (tools/os88build.py). The paragraph that used to
+        # sit here explained an `atexit` putting the default kernel back "so a
+        # failure does not leave a knob kernel in build/ for the next row to
+        # drive". build/ is not written at all now, so there is nothing to put
+        # back and nothing a failure can leave behind.
+        knob = os88build.tree("NOSEAMCUT=1")
+        bsolo, bstrad, bph, _ = leg(a.image, a.apps, mach, knob, say)
         bd = diff(bsolo, bstrad)
         if not bd:
             fail.append("%s: NOSEAMCUT=1 draws the SAME bar straddling as on "
@@ -284,7 +293,6 @@ def main(argv):
         else:
             say("...loses %d pixel(s) of the straddling cell, which is the "
                 "defect and is what the fixed kernel does not do" % bd)
-        subprocess.check_call(["make"], cwd=ROOT, stdout=subprocess.DEVNULL)
 
     print()
     for f in fail:

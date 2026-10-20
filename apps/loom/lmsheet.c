@@ -34,7 +34,7 @@
 
 /* The RPN buffer wfxc.c emits into (see 2, above). 256 is W_FXCMAX, which
  * that file sets from the widest formula a person can type into the bar. */
-static unsigned char lm_fxbuf[256];
+static unsigned char lm_fxbuf[256];   /* PHASE STORE (loom.h) - the sheet's */
 #define w_fxc_out lm_fxbuf
 
 #include "../weave/wfxc.c"
@@ -222,7 +222,7 @@ static int lms_number(int slot, unsigned off, unsigned len, int line)
             }
             lmw_msg[m] = 0;
         }
-        lm_cat(lmw_msg, ": |value| < 32768 (WEAVE-SPEC 5.1)");
+        lm_cat(lmw_msg, ": |value| < 32768");
         lm_perr(slot, line, lmw_msg);
         return 0;
     }
@@ -238,7 +238,7 @@ static int lms_number(int slot, unsigned off, unsigned len, int line)
             lmw_msg[m] = 0;
         }
         lm_cat(lmw_msg, ": at most 4 fraction digits; 16.16 resolves to "
-               "1/65536 (WEAVE-SPEC 5.1)");
+               "1/65536");
         lm_perr(slot, line, lmw_msg);
         return 0;
     }
@@ -271,7 +271,7 @@ notnum:
 }
 
 /* --- the formula source, as a C string for wfxc.c ----------------------- */
-static char lms_fsrc[256];
+static char lms_fsrc[256];          /* PHASE STORE (loom.h) - the sheet's */
 
 static int lms_copysrc(int slot, unsigned off, unsigned len, int line)
 {
@@ -381,7 +381,7 @@ int ovl_sheet(void)
         }
         if (lm_ncell >= LM_MAXCELL) {
             lm_perr(LM_SLOT_WFX, line, "more than 384 starting cells; this "
-                    "machine packs that many (WEAVE-SPEC 11.4)");
+                    "machine packs that many");
             return 0;
         }
         {
@@ -451,7 +451,7 @@ int ovl_sheet(void)
             unsigned k;
             if (lm_nform >= LM_MAXFORM) {
                 lm_perr(LM_SLOT_WFX, line, "more than 256 formulas; this "
-                        "machine packs that many (WEAVE-SPEC 11.4)");
+                        "machine packs that many");
                 return 0;
             }
             if (!lms_copysrc(LM_SLOT_WFX, rhs + 1, end - rhs - 1, line))
@@ -465,8 +465,7 @@ int ovl_sheet(void)
             }
             if (fxn + w_fxc_n > LM_FXMAX) {
                 lm_perr(LM_SLOT_WFX, line, "the compiled formulas are over "
-                        "4096 bytes; this machine packs that much "
-                        "(WEAVE-SPEC 11.4)");
+                        "4096 bytes; this machine packs that much");
                 return 0;
             }
             lm_wpw(LMW_FXOFF + (unsigned) lm_nform * 2, fxn);
@@ -496,7 +495,9 @@ int ovl_sheet(void)
 static int lms_nrow;                /* rows accumulated for the open frame */
 static int lms_cur;                 /* the sprite being read, -1 = none */
 static int lms_nframe;
-static unsigned lms_rowoff[64];     /* each row's offset in the .WSP */
+static unsigned lms_rowoff[64];     /* each row's offset in the .WSP -
+                                     * PHASE STORE (loom.h): the sprite
+                                     * reader's */
 static unsigned lms_spb;            /* the SPRB write cursor */
 
 static int lms_close_frame(int line)
@@ -534,7 +535,7 @@ static int lms_close_frame(int line)
     }
     if (lms_spb + (unsigned) (h * wb * 2) > LM_SPRBMAX) {
         lm_perr(LM_SLOT_WSP, line, "the sprite art is over 6144 bytes; this "
-                "machine packs that much (WEAVE-SPEC 11.4)");
+                "machine packs that much");
         return 0;
     }
     for (y = 0; y < h; y++) {       /* the image plane, then the mask */
@@ -741,7 +742,7 @@ static int ovl_wsp(void)
                     lmw_msg[m] = 0;
                 }
                 lm_cat(lmw_msg, ": w a multiple of 8 in 8..64, h 1..64, "
-                       "frames 1..8 (WEAVE-SPEC 3.6)");
+                       "frames 1..8");
                 lm_perr(LM_SLOT_WSP, line, lmw_msg);
                 return 0;
             }
@@ -777,8 +778,7 @@ static int ovl_wsp(void)
             if (lm_nspr_art >= LM_MAXSPR) {
                 lmw_msg[0] = 0;
                 lm_catn(lmw_msg, lm_nspr_art + 1);
-                lm_cat(lmw_msg, " sprites; the section count byte caps at 16 "
-                       "(WEAVE-SPEC 2.11)");
+                lm_cat(lmw_msg, " sprites; the section count byte caps at 16");
                 lm_perr(LM_SLOT_WSP, line, lmw_msg);
                 return 0;
             }
@@ -839,7 +839,7 @@ static int ovl_wsp(void)
             }
             if (lms_nrow >= 64) {
                 lm_perr(LM_SLOT_WSP, line, "a sprite frame is 64 rows at "
-                        "most (WEAVE-SPEC 3.6)");
+                        "most");
                 return 0;
             }
             lms_rowoff[lms_nrow] = s;

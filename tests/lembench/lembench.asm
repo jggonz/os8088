@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - tests/lembench/lembench.asm
 ;
-; The assembly shim of LEMBENCH, the LEMMINGS raster's BENCH (SPEC.md 92.7).
+; The assembly shim of LEMBENCH, the LEMMINGS raster's BENCH (SPEC.md 114.7).
 ;
 ; IT %includes THE SHIPPING RASTER, IT DOES NOT CARRY A COPY OF IT. The three
 ; .inc files below are apps/lemmings' own, included from their own directory,

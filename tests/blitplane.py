@@ -50,14 +50,16 @@ it, and the association (SPEC.md 54) launches Paint with the picture already
 decoded, so not one navigation click is inside the measurement.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
+import os88build                                             # noqa: E402
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
 import dispapps                                              # noqa: E402
 
@@ -71,7 +73,11 @@ def gifpath():
 
 def gifname():
     return os.path.basename(gifpath())
-from os88geom import TITLE_H                                  # noqa: E402
+from os88geom import TITLE_H, top                            # noqa: E402
+
+PARK = (4, 24)      # the desktop's top-left under the menu bar: outside Paint,
+                    # which the harness has at x >= 64, and outside the Disk
+                    # window at (103, 80)
 
 MIN_GAIN = 3.0                  # measured 6.2x even / 4.9x odd (Set 107).
                                 # Three is the floor a REGRESSION has to break
@@ -82,9 +88,16 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
-def shots(image, apps, machine, defines):
-    """(even-phase frame, odd-phase frame, even cycles, odd cycles)."""
-    os88sym.default_defines(*defines)
+def shots(image, apps, machine, tree=None):
+    """(even-phase frame, odd-phase frame, even cycles, odd cycles).
+
+    `tree` is the build this kernel came out of, and it carries the defines
+    with it - os88sym re-assembles from those and checks the result byte for
+    byte against that tree's own kernel.bin, so neither travels alone. It also
+    moves os88sym's MODULE DEFAULT, which is what the library helpers below
+    resolve against (`no_saver` asks for `ss_idle` and takes no defines).
+    """
+    (tree or os88build.plain()).apply()
     S = os88sym.linear
     kbase = os88sym.KERNEL_SEG << 4
     out = []
@@ -136,7 +149,17 @@ def shots(image, apps, machine, defines):
         # provokes the refusal, so it both selects the rcr pass and is what
         # puts Paint into the mode the rest of this gate needs.
         mo.dblclick(rx, ry)
-        time.sleep(6)
+        # Paint's window, then the drive going quiet, then the glass: the
+        # decoded picture, where this was a blind 20 guest seconds. The
+        # settle cannot go first - a decode holds the screen still
+        try:
+            os88marty.until(m, lambda _: any(w != disk for w in
+                                             dispcp.win_list(m, S)),
+                            "Paint's window", poll=0.2, limit=60)
+        except os88marty.MartyError:
+            pass
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          stable=3, what="the picture to load")
         os88marty.settle(m)
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         px, py, pwid, _ = dispcp.win_rect(m, S, pw)
@@ -149,12 +172,25 @@ def shots(image, apps, machine, defines):
                     x.to_bytes(2, "little"))
             m.run()
             mo.click(dx + 60, dy + 9)                # behind the disk window
-            time.sleep(4)
-            m.bp_exec("gfx_blit4")
-            mo.click(x + pwid // 2, py + TITLE_H // 2)      # ...and in front
-            cyc, g = _bracket(m, kbase)
-            m.bp_exec()
-            m.run()
+            # the Disk window in front (wm_zord), and its repaint finished
+            try:
+                os88marty.until(m, lambda _: top(m, S) == S("wm_wins")
+                                + disk * dispcp.WIN_SIZE, "the Disk window raised",
+                                poll=0.2, limit=20)
+            except os88marty.MartyError:
+                pass
+            os88marty.settle(m)
+            cyc, g = _bracket(          # ...and in front
+                m, kbase,
+                lambda: mo.click(x + pwid // 2, py + TITLE_H // 2))
+            # THE POINTER LEAVES BEFORE THE CAPTURE. The raise is a click on
+            # the title bar's centre and the arrow hangs sixteen rows down from
+            # there - its last three into the canvas's first three - and
+            # whether the frame shows it depends on where the capture falls
+            # against the cursor's lazy hide. So one arm carried seventeen
+            # arrow pixels the other did not, in a lane four wide, and the
+            # row reported the DECODER as drawing them.
+            mo.to(*PARK)
             os88marty.settle(m)
             return cyc, g, m.fbuf(card=0)[2]
 
@@ -172,12 +208,18 @@ def shots(image, apps, machine, defines):
     return f_even, f_odd, cyc_even, cyc_odd, geom, geom2
 
 
-def _bracket(m, kbase):
-    """Time the next gfx_blit4 from its entry to its RETURN.
+def _bracket(m, kbase, gesture):
+    """Time the next gfx_blit4 from its entry to its RETURN, over `gesture`.
 
     The return address is read off the stack rather than assumed: gfx_blit4
     has no exit symbol of its own, and a settle-shaped measurement would be
-    reporting the harness's quiet window rather than the primitive.
+    reporting the harness's quiet window rather than the primitive. It is a
+    word on the GUEST's stack, so it can only be read at the entry stop -
+    which is what `on_hit` is for, and what lets the same callback arm it.
+
+    THE GESTURE IS AN ARGUMENT because it has to be inside the trace: it is a
+    `mo.click`, which proves both button edges against the published
+    `mouse_btn`, and a guest stopped at `gfx_blit4` never publishes another.
     """
     # THE LIMIT IS UNDER THE SCREEN SAVER'S IDLE PERIOD, and that is the
     # point of the number. The blit being waited for happens within a couple
@@ -189,23 +231,37 @@ def _bracket(m, kbase):
     # came up at five, and the breakpoint finally caught one of ITS shapes -
     # so the gate reported a 16x8 blit at (162,377) and then waited out a
     # settle that could never return, and none of it named the cause.
-    if not m.wait_stop(limit=45.0):
+    st = {}
+
+    def stage(mm, rec):
+        r = rec["regs"]
+        if "geom" not in st:                    # the ENTRY
+            ret = u16(mm.read((r["ss"] << 4) + r["sp"], 2))
+            st["geom"] = (r["ax"], r["bx"], r["cx"], r["dx"])
+            st["c0"] = rec["cycles"]
+            print("      blit x=%d y=%d w=%d h=%d" % st["geom"])
+            mm.breakpoints([{"type": "exec", "addr": kbase + ret}])
+        else:                                   # ...and its own return
+            st["cyc"] = rec["cycles"] - st["c0"]
+            mm.breakpoints([])
+        return None
+
+    with os88marty.bp_trace(m, "gfx_blit4", regs=True, on_hit=stage) as tr:
+        gesture()
+        tr.until(lambda: "geom" in st, "gfx_blit4", limit=45.0,
+                 required=False)
+        if "geom" in st:
+            tr.until(lambda: "cyc" in st, "gfx_blit4 to return",
+                     limit=120.0, required=False)
+    if "geom" not in st:
         sys.exit("blitplane: gfx_blit4 never ran within 45s of the click.\n"
                  "  The primitive is not being reached at all - check that "
                  "Paint's canvas is still PACKED here (SPEC.md 42.13.1: a "
                  "planar canvas repaints through gfx_blitp instead), which is "
                  "what putting the window off the byte grid is for.")
-    r = m.regs()
-    ret = u16(m.read((r["ss"] << 4) + r["sp"], 2))
-    print("      blit x=%d y=%d w=%d h=%d" % (r["ax"], r["bx"], r["cx"],
-                                              r["dx"]))
-    m.bp_exec(kbase + ret)
-    c0 = m.status()["cycles"]
-    m.run()
-    if not m.wait_stop(limit=120.0):
+    if "cyc" not in st:
         sys.exit("blitplane: gfx_blit4 never returned")
-    return (m.status()["cycles"] - c0,
-            (r["ax"], r["bx"], r["cx"], r["dx"]))
+    return st["cyc"], st["geom"]
 
 
 def canvas_diff(a, b, geom, w=640):
@@ -237,7 +293,7 @@ def canvas_diff(a, b, geom, w=640):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/blitplane.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/blitplane.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     a = ap.parse_args()
 
@@ -249,31 +305,31 @@ def main():
     # pixel, so every oracle below is the one it always was.
     gif = gifpath()
 
-    if a.apps == "/tmp/blitplane.img":
+    if a.apps == tempfile.gettempdir() + "/blitplane.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + gif)
 
     print("   shipped kernel:")
-    fe, fo, ce, co, ge, go = shots(a.image, a.apps, a.machine, ())
+    fe, fo, ce, co, ge, go = shots(a.image, a.apps, a.machine)
 
-    # THIS ROW REBUILDS THE TREE, which no other one does, and the `finally`
-    # is not decoration: `make NOPLANE=1` writes build/kernel.bin, so a run
-    # that dies in the middle leaves the tree holding a kernel `make` did not
-    # put there - and every emulator row after it would then be driving a
-    # kernel its symbol map describes perfectly and nobody asked for. The
-    # knob image is COPIED out before the tree is put back, so the two
-    # captures are of two files rather than of one file twice.
-    ref = "/tmp/blitplane-noplane.img"
-    print("   NOPLANE=1 kernel: building")
-    try:
-        subprocess.check_call(["make", "NOPLANE=1", a.image],
-                              stdout=subprocess.DEVNULL)
-        subprocess.check_call(["cp", a.image, ref])
-        print("   NOPLANE=1 kernel:")
-        ne, no, rce, rco, nge, ngo = shots(ref, a.apps, a.machine,
-                                           ("NOPLANE",))
-    finally:
-        subprocess.check_call(["make"], stdout=subprocess.DEVNULL)
+    # THE KNOB KERNEL IS BUILT IN A TREE OF ITS OWN (tools/os88build.py), and
+    # this used to be the row that best showed why that matters. It ran `make
+    # NOPLANE=1` into build/, copied the image out, and ran a bare `make` in a
+    # `finally` to put the tree back - two full builds for one measurement,
+    # and in between, build/kernel.bin was a kernel nobody else had asked for.
+    # Any row reading the tree in that window drove it. That is what
+    # `builds=True` was protecting against, and it is why this row could never
+    # share the box with another.
+    #
+    # Now the knob lands in build/trees/noplane-<hash>/ and build/ is never
+    # written at all, so there is no restore, no `finally`, and no reason for
+    # this row to run alone. The defines come off the tree rather than being
+    # spelled here: a knob's make VARIABLE and its nasm DEFINE are not always
+    # the same string, and os88sym needs the second.
+    knob = os88build.tree("NOPLANE=1")
+    print("   NOPLANE=1 kernel: %s" % os.path.relpath(knob.dir, ROOT))
+    ne, no, rce, rco, nge, ngo = shots(knob.img(os.path.basename(a.image)),
+                                       a.apps, a.machine, tree=knob)
 
     bad = 0
     for name, x, y, g, ng in (("even", fe, ne, ge, nge),

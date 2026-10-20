@@ -20,15 +20,16 @@ tolerance - a fill that leaks fails it, a fill that stops early fails it, and
 a fill that gets the picture right for the wrong reason cannot.
 """
 import argparse
+import tempfile
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
 import dispapps                                              # noqa: E402
+import blitpair                                              # noqa: E402
 from blitpair import gif_pixels                              # noqa: E402
 
 S = os88sym.linear
@@ -36,6 +37,17 @@ PT_CV_X = 48                # SPEC.md 42.13: the canvas's inset in the content
 PT_BW = 20                  # the palette's button side and pitch
 PT_PAL_DY = 21
 PT_T_FILL = 6
+
+
+def idle(m):
+    """Until Paint - or whatever the gesture started - has finished: the
+    drive quiet, the gfx lock free (a canvas operation can hold it for
+    seconds with nothing new on the glass), and then the screen still."""
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="the drive to go quiet")
+    os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
+                    "the gfx lock to be free", poll=0.2, limit=60)
+    os88marty.settle(m)
 
 
 def tool_xy(ox, oy, i):
@@ -73,7 +85,7 @@ def host_fill(iw, ih, px, sx, sy):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintfill.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintfill.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: a COLOUR "
@@ -90,7 +102,7 @@ def main():
     if a.gif is None:
         a.gif = dispapps.colour_gif()
 
-    if a.apps == "/tmp/paintfill.img":
+    if a.apps == tempfile.gettempdir() + "/paintfill.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 
@@ -133,33 +145,20 @@ def main():
                                                                   a.gif))))
         mo.to(rx, ry)
         os88marty.settle(m)
-        m.bp_exec("gfx_blitp")
-        mo.dblclick(rx, ry)
-        geom = None
-        for _ in range(40):
-            if not m.wait_stop(limit=300.0):
-                break
-            r = m.regs()
-            if r["cx"] >= iw:
-                geom = (r["ax"], r["bx"])
-                break
-            m.bp_exec("gfx_blitp")
-            m.run()
-        if geom is None:
+        hit = blitpair.wide_blit(m, lambda: mo.dblclick(rx, ry), iw,
+                                 syms=("gfx_blitp",))
+        if hit is None:
             sys.exit("paintfill: no gfx_blitp as wide as the picture - the "
                      "canvas is not planar, or it fell back to nibbles")
-        ox, oy = geom
-        m.bp_exec()
-        m.run()
-        time.sleep(6)
+        ox, oy = hit[0], hit[1]
+        idle(m)
 
         tx, ty = tool_xy(ox, oy, PT_T_FILL)
         mo.click(tx, ty)
-        os88marty.settle(m)
-        time.sleep(2)
+        idle(m)
         mo.click(ox + seed[0], oy + seed[1])
         os88marty.settle(m)
-        time.sleep(10)
+        idle(m)                     # the fill itself: CPU work under the lock
         mo.to(4, 4)                 # the arrow is drawn INTO the framebuffer
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)

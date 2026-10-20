@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/lemmings/lemblit.inc      THE THREE RASTERS (SPEC.md 92.4)
+; os8088 - apps/lemmings/lemblit.inc      THE THREE RASTERS (SPEC.md 114.4)
 ;
 ; %included by apps/lemmings/lemmings.asm AFTER lemmask.inc, which it reads
 ; `lm_seg` out of. Everything CLAUDE.md's section discipline and the cdecl
@@ -57,7 +57,7 @@
 ; on Hercules (1bpp), against 1 pixel on VGA where the pel pan does it in
 ; hardware. A shifted copy would cost a shift and a merge on every one of
 ; 12,800 bytes - about 40% of the whole frame on a 4.77 MHz 8088 - to make a
-; scroll that is already smooth at 17 fps smoother. SPEC.md 92.4.2 records it
+; scroll that is already smooth at 17 fps smoother. SPEC.md 114.4.2 records it
 ; and README.TXT says it.
 ;
 ; PER-ROW DIRTY SPANS, in BYTES, and two sets of them (SPEC.md 85.3.1). A
@@ -1156,7 +1156,7 @@ _lem_r_present:
 ; paletteless adapters is a colour-CLASS conversion, because those cards have
 ; no palette to put it in (SPEC.md 39.4, 92.4.2): nibble 0 is black, 1..7 is
 ; the SPRITE/panel/text class - the panel, its buttons and their captions - and
-; 8..15 the TERRAIN class, which is the direction lb_spix, SPEC.md 92.4 and
+; 8..15 the TERRAIN class, which is the direction lb_spix, SPEC.md 114.4 and
 ; README.TXT all state. THE FIRST VERSION OF THIS COMMENT HAD IT THE OTHER WAY
 ; ROUND, which is the fourth on-the-glass defect of this wave left behind in
 ; the one place a reader of the panel path would look
@@ -1510,12 +1510,12 @@ _lem_r_rect:
     ret
 
 ; -----------------------------------------------------------------------------
-; THE BATCH (SPEC.md 92.4.4), and it is a MEASURED fix rather than a tidy-up.
+; THE BATCH (SPEC.md 114.4.4), and it is a MEASURED fix rather than a tidy-up.
 ;
 ; lb_rpix used to reprogram the VGA on EVERY PIXEL - GC 8 (bit mask), GC 5
 ; (write mode 2), Seq 2 (map mask), then GC 5 and GC 8 back again: five indexed
 ; pairs, TEN `out`s, per pixel, around one read and one write. Measured on a
-; 4.77 MHz 8088 that is the whole of SPEC.md 92.7.1's 583 us a minimap cell, and
+; 4.77 MHz 8088 that is the whole of SPEC.md 114.7.1's 583 us a minimap cell, and
 ; everything on the panel side goes through it - the status line, the minimap
 ; and the view rectangle.
 ;

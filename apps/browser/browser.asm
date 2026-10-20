@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/browser/browser.asm
 ;
-; BROWSER, the text-and-table HTTP viewer (docs/BROWSER-PLAN.md). This is
+; BROWSER, the text-and-table HTTP viewer (docs/plans/completed/BROWSER-PLAN.md). This is
 ; step 1 of that document's 10: the RENDERER, with no network in the machine
 ; at all - it opens a .HTM off a floppy through the Standard File dialog and
 ; draws it. tools/htmsim.py is the reference implementation and the cost
@@ -49,6 +49,22 @@
 %define SB_RATE 0               ; RATE 0 (13.10.5.4): a scrolled line is ~90 ms
 %endif                          ; here (br_scroll_by's own note), so a view
 BR_SBRATE   equ SB_RATE         ; that followed the hand IS input overrun
+; ...AND A 286 GETS 2 (13.10.5.4.1). The line is ~90 ms HERE; the same line
+; on a 286 is not the same line, and 13.10.5.4's throttle is what keeps the
+; difference a number rather than a rewrite.
+%ifndef SB_RATE286
+%define SB_RATE286 2
+%endif
+BR_SBRATE286 equ SB_RATE286
+; ...AND THE PAUSE COMMIT (13.10.5.4.2): a one-shot timer re-armed on every
+; movement fires only after this many ticks in which the thumb did not move,
+; which reaches the bars the RATE cannot - 13.10.5.4.3 measured a commit here
+; slower than any window the rate can name. No tier pair: half a second is
+; half a second on an 8088 and on a 286 alike.
+%ifndef SB_IDLE
+%define SB_IDLE 9               ; ticks of stillness before the view arrives;
+%endif                          ; 9 = 494 ms. 0 = no pause commit
+BR_SBIDLE   equ SB_IDLE
 %endif
 %include "netpkg.inc"          ; the SOCKET ABI (SPEC.md 62.11) - the
                                 ; same file drivers/net/net.asm
@@ -152,11 +168,29 @@ D_LNK1       equ 14                 ; a link opens, and the TWO BYTES after it
                                     ; walker in this file already skips a byte
                                     ; below 0x20 as "a marker, not a cell", so
                                     ; the payload costs not one of them a line
-                                    ; of change; and no real marker is above
-                                    ; 15, so a BACKWARD scan can tell a payload
-                                    ; byte from a marker and answer "which link
-                                    ; is this offset inside" without a table
+                                    ; of change; and the markers above 15 -
+                                    ; D_Q1..D_CMETA, 16..24 - are all ones a
+                                    ; BACKWARD scan may step over as if they
+                                    ; were payload, so it can still tell a
+                                    ; payload byte from D_LNK1/D_LNK0 and
+                                    ; answer "which link is this offset
+                                    ; inside" without a table. The one byte
+                                    ; that is NEITHER is D_CMETA's own payload
+                                    ; (0..23, which can read as any marker),
+                                    ; so every walker consumes the pair and
+                                    ; br_linkat refuses a D_LNK1 found straight
+                                    ; after a D_CMETA
 D_LNK0       equ 15                 ; ...and closes
+D_Q1         equ 16                 ; quote indent starts; D_LNK1 consumes its
+D_Q0         equ 17                 ; ...paired payload bytes before layout sees them
+D_B1         equ 18                 ; bold starts (zero-width, paired controls)
+D_B0         equ 19
+D_I1         equ 20                 ; italic starts
+D_I0         equ 21
+D_U1         equ 22                 ; underline starts
+D_U0         equ 23
+D_CMETA      equ 24                 ; one byte after D_CELL: span (bits 0..2),
+                                    ; alignment (bits 3..4); zero-width control
 
 D_NBSP       equ 0x7F               ; A NO-BREAK SPACE, and it is 0x7F rather
                                     ; than a marker because it is TEXT: it
@@ -182,19 +216,35 @@ BR_TCOLS     equ 8                  ; columns a table may have. Past it the
                                     ; table degrades to a block rather than
                                     ; being refused - 3.2's rule
 BR_TFLRMAX   equ 14
-BR_FMAX      equ 4                  ; text inputs on a page. A search box is
+BR_FORMMAX   equ 4
+BR_FMAX      equ 12                 ; bounded visible controls on a page
                                     ; one; past this they are ignored
 BR_FLDW      equ 20                 ; a field's default width in cells
 BR_FLDWMAX   equ 40
 BR_NAMEMAX   equ 12                 ; a field's name, for the query string
+BR_VALMAX    equ 12
 BR_ACTMAX    equ 64                 ; the form's action
-BR_HIDMAX    equ 96                 ; hidden pairs, already encoded
+BR_HIDMAX    equ 48                 ; hidden pairs per form, already encoded
 BR_URLMAX    equ 160                ; the composed query
-BR_FLDSZ     equ 18                 ; one field record:
+BR_FLDSZ     equ 36                 ; one field record:
 FLD_OFS      equ 0                  ;   word: its first EDITABLE document byte
 FLD_W        equ 2                  ;   byte: cells
 FLD_LEN      equ 3                  ;   byte: characters typed so far
 FLD_NAME     equ 4                  ;   BR_NAMEMAX+2: its name
+FLD_FORM     equ 18                 ;   byte: owner form
+FLD_TYPE     equ 19                 ;   byte: 0 text, 1 select
+FLD_VALUE    equ 20                 ;   BR_VALMAX: radio/checkbox value
+FLD_SCAN     equ 32                 ;   word: next option in retained source
+FLD_FIRST    equ 34                 ;   word: first option search position
+BR_SUBMAX    equ 4
+BR_SUBSZ     equ 9
+SUB_OFS      equ 0
+SUB_END      equ 2
+SUB_FORM     equ 4
+SUB_ASTART   equ 5                  ; word: the button tag's attribute span in
+SUB_AEND     equ 7                  ;   the retained source - only the CLICKED
+                                    ;   button's name=value is a successful
+                                    ;   control, so it is encoded at submit
 KSC_TAB      equ 0x0F                 ; a column's floor is its longest WORD,
                                     ; capped here: one very long word does not
                                     ; get to reserve the whole band
@@ -214,6 +264,17 @@ LNF_LNK      equ 4                  ; this line BEGINS inside a link, so its
                                     ; br_emitline from the layout's running
                                     ; state, which is O(1) - the alternative is
                                     ; a backward scan per line per paint
+LNF_HEAD     equ 8                  ; heading underline, using the link ink pass
+LNF_LIST     equ 16                 ; a bullet lives in the hanging indent
+LNF_BOLD     equ 32                 ; formatting active at this line's first cell
+LNF_ITALIC   equ 64
+LNF_UNDER    equ 128
+
+LM_LINK      equ 1                  ; per-cell style marks in br_lmark
+LM_HEAD      equ 2
+LM_BOLD      equ LNF_BOLD
+LM_ITALIC    equ LNF_ITALIC
+LM_UNDER     equ LNF_UNDER
 
 ; --- geometry -----------------------------------------------------------------
 BR_SBW       equ 14                 ; scroll bar width, the Disk window's
@@ -262,9 +323,32 @@ br_entry:
     mov si, br_menus
     call OSAPI_MENU_SET
     mov [br_win], bx
+    push ax                         ; **THE BUTTONS' THREE SLOTS** (SPEC.md
+    push bx                         ; 20.5.1.3.3): btninit links this record so
+    push dx                         ; the library's click thunk can find it,
+    mov ax, bx                      ; and installs the PRESS as well as the
+    mov bx, br_btrec                ; release and the tracking edge. br_onclick
+    mov si, br_onup                 ; is our own click work and the library
+    mov di, br_ondrag               ; chains to it when the press was not a
+    mov dx, br_onclick              ; button's - which is what stops a package
+    call os88ui_btninit             ; having a click path that skips them.
+    pop dx                          ; CX is not touched, and SI and DI are
+    pop bx                          ; loaded afresh before their next use
+    pop ax
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
+    ; worker's declaration: a package with NO worker is the case that
+    ; moves most easily, and putting this at the spawn left exactly
+    ; those runs declaring nothing - measured, by the row that reads
+    ; MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
+    mov ax, br_ontimer          ; 13.10.5.4.2's PAUSE commit - FIRST of
+    call OSAPI_WM_ONTIMER       ; the three, because the `sbb al, al`
+                                ; below captures OSAPI_WM_ONDRAG's OWN
+                                ; CF and a third install after it would
+                                ; answer for the wrong slot
     mov ax, br_onup
     call OSAPI_WM_ONMOUSEUP
     mov ax, br_ondrag
@@ -365,7 +449,10 @@ br_size:
     push bx
     push cx
     push dx
+    push si
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = the dock's first row
+    mov [br_bpp], dh                ; ...and DH = bits per pixel, which is the
+                                    ; polarity br_paintstyled hands its band in
     cmp dl, VID_CGA
     je .cga
     sub cx, MBAR_H                  ; CX = the desktop band
@@ -387,11 +474,7 @@ br_size:
     mov [br_tpl+6], bx              ; own reasoning, and its WF_KEEPH clamp)
     mov word [br_tpl+2], MBAR_H
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop5
 
 ; --- br_keeph - a CGA window may hang over the dock (SPEC.md 11.93) ----------
 ; in:  BX = the window; out: nothing, FLAGS PRESERVED - the CF wm_create left
@@ -514,25 +597,11 @@ br_arg:
     push es
     call OSAPI_ARG_FILE             ; CF=1 = launched empty, the ordinary case
     jc .out
-    push dx                         ; the folder it lives in...
-    push bx                         ; ...and BL, its volume
-    mov di, br_name                 ; DS:DI is ours; the NAME is the KERNEL's,
-    mov ax, KERNEL_SEG              ; and ES is NOT reliably KERNEL_SEG here -
-    mov es, ax                      ; the X stubs hand a callee our DS in ES,
-    xor cx, cx                      ; so name the segment rather than assume it
-.copy:
-    cmp cx, 13
-    jae .done
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    inc cx
-    or al, al
-    jnz .copy
-.done:
-    pop bx
-    pop dx
+    mov di, si                      ; the NAME is the KERNEL's, and ES is NOT
+    mov ax, KERNEL_SEG              ; reliably KERNEL_SEG here - the X stubs
+    mov es, ax                      ; hand a callee our DS in ES, so name the
+    call br_getname                 ; segment rather than assume it. DX and BL
+                                    ; (the folder, the volume) ride through
     mov [br_argclus], dx            ; **BANK, DO NOT READ** (SPEC.md 54.10).
     mov [br_argdrv], bl             ; This did the GOTO and the br_load right
     mov byte [br_argp], 1           ; here, in the entry proc - under the
@@ -543,17 +612,11 @@ br_arg:
                                     ; br_onwake spends the three once the window
                                     ; is drawn
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop7
 
 ; -----------------------------------------------------------------------------
-; br_onwake - W_ONWAKE: open the launch document (SPEC.md 54.10/74.1)
+; br_onwake - W_ONWAKE: a fetch's claims (SPEC.md 71.14), and the launch
+;             document (SPEC.md 54.10/74.1)
 ; in:  SI = our window; the UI task, gfx lock NOT held
 ; out: nothing; no register need be preserved
 ;
@@ -567,24 +630,41 @@ br_arg:
 ; nothing but where the name came from.
 ; -----------------------------------------------------------------------------
 br_onwake:
+    cmp byte [br_nstate], BN_BODY   ; both hand-overs are a BODY's, asked once
+    jne .arg
+    cmp byte [br_fin], 4            ; A FRAMESET'S RE-CLAIM (SPEC.md 71.15):
+    jne .net                        ; the worker has parsed the frameset and
+                                    ; its children need the page buffers at
+    call br_frameclaim              ; the ceiling, which it may not claim. It
+                                    ; leaves [br_fin] at 5 or 0, never 1
+.net:
+    cmp byte [br_fin], 1            ; ...AND THE FETCH'S HAND-OVER (SPEC.md
+    jne .arg                        ; 71.14): a worker that has drained a page
+                                    ; posts this, and the claims it may not
+                                    ; make are made here, sized by the page.
+    call br_netclaim                ; A stale wake finds [br_fin] != 1 or a
+.arg:                               ; dropped fetch's BN_IDLE, and does nothing
     cmp byte [br_argp], 0           ; not the document's wake, or the document
     je .out                         ; is already open
     mov byte [br_argp], 0           ; once, whatever happens below
     call OSAPI_GFX_LOCK
     mov dx, [br_argclus]
     mov bl, [br_argdrv]
-    call OSAPI_FILE_GOTO            ; stand in the document's folder
-    jc .unlock
+    call OSAPI_FILE_GOTO_QM         ; stand in the document's folder -
+    jc .unlock                      ; QUIETLY, and the instance with us, so
+                                    ; br_load's by-name read resolves there.
+                                    ; The listing remount's scan, sort and
+                                    ; icon harvest were ~0.5 s of floppy for
+                                    ; no reader (docs/plans/NAV-COST-PLAN.md,
+                                    ; SPEC.md 19.9.1). CF=1 moved NOTHING, so
+                                    ; the read would resolve in the Browser's
+                                    ; own folder and could find a same-named
+                                    ; page: refuse. Nothing is live in AX, CX,
+                                    ; SI or DI here (SPEC.md 62.9.1's clobbers)
     mov word [br_srclen], 0         ; unknown: br_load claims the ceiling
     call br_load
     jc .unlock
-    mov si, [br_win]
-    call br_measure
-    mov word [br_top], 0
-    mov word [br_ptop], 0
-    call br_layout
-    call br_paint_band
-    call br_sbar
+    call br_show
 .unlock:
     call OSAPI_GFX_UNLOCK
 .out:
@@ -593,6 +673,58 @@ br_onwake:
 ; =============================================================================
 ; PAINT
 ; =============================================================================
+
+; -----------------------------------------------------------------------------
+; br_show - a page br_load has just read, laid out and put on screen
+; in:  the gfx lock held. All registers but SI preserved; SI = [br_win] out.
+;
+; **ONE LAYOUT, NOT TWO.** Both callers used to run br_measure and then
+; br_layout - but br_load's br_free_all zeroes [br_cols], and br_measure lays
+; out on ANY width change, so the explicit second call laid the whole document
+; out again for nothing. [br_top] and [br_ptop] are br_free_all's zeroes too.
+; -----------------------------------------------------------------------------
+br_show:
+    push ax
+    push bx
+    mov si, [br_win]
+    call br_measure                 ; [br_cols] = 0, so this IS the layout
+    call br_paint_band
+    call br_sbar
+    mov bx, [br_win]
+    cmp byte [br_ptitle], 0         ; the page title is metadata, so put it in
+    je .default                     ; the frame caption rather than the body
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov si, br_ptitle
+    mov di, br_wtitle
+    mov cx, BR_TITMAX - 1
+.copytitle:
+    lodsb
+    or al, al
+    jz .suffix
+    stosb
+    loop .copytitle
+.suffix:
+    mov si, br_s_titlesfx
+    mov cx, br_s_titlesfx_end - br_s_titlesfx
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+    mov ax, br_wtitle
+    jmp .title
+.default:
+    mov ax, br_s_webbrowser         ; untitled pages use the full product name
+.title:
+    call OSAPI_WM_TITLE             ; event-driven; redraws only the title strip
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; br_paint - W_PAINT: the whole content
@@ -617,28 +749,19 @@ br_paint:
     call br_hire
     call br_measure                 ; CF=1 if the width moved (relayout done)
     call br_toolbar                 ; ...the strip draws the state itself
-    push si
-    mov si, br_loc
-    call os88line_draw
-    pop si
+    call br_ldraw
     call br_paint_band
     call br_sbar
     mov bx, si
     call OSAPI_WM_GROW              ; the grow box is ours to put back
     cmp byte [br_abon], 0           ; ...and the credit card LAST, because it
     je .noab                        ; is on top of all of it. A repaint the
-    call br_abdraw                  ; KERNEL ordered - a raise, a drag, another
+    mov si, br_ablines              ; KERNEL ordered - a raise, a drag, another
+    call os88ui_about_d             ; (BX = the window, from WM_GROW above)
 .noab:                              ; window closing - would otherwise erase a
-                                    ; card that is still up as far as the next
+    jmp br_pop6                     ; card that is still up as far as the next
                                     ; click is concerned, and that click would
                                     ; then be swallowed by nothing visible
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; br_measure - read the live content box; relayout if the width changed
@@ -673,7 +796,7 @@ br_measure:
 .rok:
     mov [br_rows], ax               ; whole 8px rows that fit
     mov ax, [br_cw]
-    sub ax, BR_SBW                  ; the bar owns the right edge
+    sub ax, BR_SBW + (BR_CELL * 2)  ; bar plus two clear cells before its edge
     jns .wok
     xor ax, ax
 .wok:
@@ -697,11 +820,7 @@ br_measure:
 .same:
     clc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop4
 
 ; -----------------------------------------------------------------------------
 ; br_locrect - the location bar's rect, and the band pushed down under it
@@ -718,31 +837,20 @@ br_locrect:
     push bx
     push cx
     push dx
+    push si
+    push di
                                     ; --- the toolbar row, first ---
     mov ax, [br_cy]
     add ax, BR_LPAD
     mov [br_tby], ax                ; its top
     mov bx, [br_cx]
     add bx, BR_LPAD                 ; BX = the next button's left edge
+    mov di, br_r1
     mov cx, BR_BTNW
-    mov [br_r1], bx                 ; ...stored BEFORE the call, which is what
-    call br_brect                   ; advances it
-    mov [br_r1+4], dx
-    mov [br_r2], bx
-    call br_brect
-    mov [br_r2+4], dx
+    call br_brect                   ; Back
+    call br_brect                   ; Fwd
     mov cx, BR_BTNW2
-    mov [br_r3], bx
-    call br_brect
-    mov [br_r3+4], dx
-    mov ax, [br_tby]                ; ...all three share the row's y span
-    mov [br_r1+2], ax
-    mov [br_r2+2], ax
-    mov [br_r3+2], ax
-    add ax, BR_TBH - 1
-    mov [br_r1+6], ax
-    mov [br_r2+6], ax
-    mov [br_r3+6], ax
+    call br_brect                   ; Reload
     call br_srect                   ; ...and the state, right-aligned
                                     ; --- then the bar under it ---
     mov ax, [br_cx]
@@ -763,21 +871,32 @@ br_locrect:
     jns .out
     mov word [br_ch], 0             ; a window too short for the chrome shows
 .out:                               ; no band at all rather than a negative one
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp br_pop6
+
+; --- br_ldraw - repaint the location bar; all registers preserved -----------
+br_ldraw:
+    push si
+    mov si, br_loc
+    call os88line_draw
+    pop si
     ret
 
-; --- br_brect - one button's right edge, and the next one's left -------------
-; in:  BX = this button's left edge, CX = its width
-; out: DX = its right edge (inclusive); BX = the NEXT button's left edge
+; --- br_brect - one button's rect, and the next one's left edge -------------
+; in:  DI = its {x1,y1,x2,y2}, BX = its left edge, CX = its width, AX = the
+;      row's top
+; out: the rect written; DI = the next rect; BX = the NEXT button's left edge.
+;      DX clobbered
 br_brect:
-    mov dx, bx
-    add dx, cx
-    dec dx                          ; DX = right edge, inclusive
+    mov [di], bx
+    mov [di+2], ax                  ; all three share the row's y span
     add bx, cx
+    lea dx, [bx-1]
+    mov [di+4], dx                  ; right edge, inclusive
+    mov dx, ax
+    add dx, BR_TBH - 1
+    mov [di+6], dx
     add bx, BR_BTNG                 ; BX = where the next one starts
+    add di, 8
     ret
 
 ; -----------------------------------------------------------------------------
@@ -844,11 +963,7 @@ br_srect:
 .none:                              ; state change)
     mov word [br_swid], 0
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop4
 
 ; -----------------------------------------------------------------------------
 ; br_paint_band - letter every visible row
@@ -873,12 +988,7 @@ br_paint_band:
 .done:
     mov ax, [br_top]                ; the glass now shows this
     mov [br_ptop], ax
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop5
 
 ; -----------------------------------------------------------------------------
 ; br_paint_line - one display line, as ONE opaque font_run padded to the band
@@ -900,19 +1010,25 @@ br_paint_line:
     push bx                         ; keep the row
     call br_build                   ; br_lbuf = the padded line, AL = flags
     pop bx
-    mov cx, bx
-    mov ax, BR_CELL
-    mul cx                          ; DX:AX = row * 8  (mul writes DX - see
-                                    ; SPEC.md 65's bug; nothing is held there)
+    mov ax, bx
+    mov cl, 3
+    shl ax, cl                      ; AX = row * BR_CELL, a shift (and so no
+                                    ; DX written, SPEC.md 65's bug the mul
+                                    ; had to be careful of)
     add ax, [br_cy]
     mov dx, ax                      ; DX = pen y
     mov cx, [br_cx]                 ; CX = pen x, 8-aligned by WF_SNAP
     mov si, br_lbuf
     push cx
     push dx
-    mov al, CBLACK
-    mov ah, CWHITE
+    cmp byte [br_drawbitmap], 0
+    je .font
+    call br_paintstyled
+    jnc .painted
+.font:
+    mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
+.painted:
     pop dx
     pop cx
     call br_underline               ; ...and the link runs under it, from the
@@ -954,8 +1070,8 @@ br_underline:
                                     ; task holds it for its whole life
                                     ; (SPEC.md 7.1.4.1) and this runs under
                                     ; the same lock they draw through
-    cmp word [br_lnkn], 0
-    je .out                         ; no links on this page: nothing to scan
+    cmp byte [br_undraw], 0
+    je .out                         ; no link or heading ink on this line
     mov si, cx                      ; SI = the row's pen x, DI = its pen y,
     mov bp, dx                      ; banked - CX and DX are the fill's
     mov bx, br_lmark                ; **BX AND NOT SI**: only BX or BP may be
@@ -964,15 +1080,15 @@ br_underline:
 .scan:
     cmp di, [br_cols]
     jae .out
-    cmp byte [bx+di], 0
-    je .step
+    test byte [bx+di], LM_LINK | LM_HEAD | LM_UNDER
+    jz .step
     mov cx, di                      ; CX = the run's first column
 .run:
     inc di
     cmp di, [br_cols]
     jae .emit
-    cmp byte [bx+di], 0
-    jne .run
+    test byte [bx+di], LM_LINK | LM_HEAD | LM_UNDER
+    jnz .run
 .emit:
     push bx
     push di
@@ -1011,6 +1127,164 @@ br_underline:
     ret
 
 ; -----------------------------------------------------------------------------
+; br_paintstyled - compose one formatted cell-font row a scanline at a time
+; in: CX/DX = the row's pen; br_lbuf/br_lmark are current
+; out: CF=1 if BLIT1 refused (caller redraws with FONT_RUN), all registers kept
+;
+; The 8x8 system glyphs are the only font. Bold thickens each set row by one
+; pixel; italic shears its upper rows right by at most two pixels. One
+; BR_MAXCOL-byte scratch row is reused for each raster row, so this costs no
+; framebuffer and only eight BLIT1 calls on a line that actually has styling.
+; -----------------------------------------------------------------------------
+br_paintstyled:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [br_bmpx], cx
+    mov [br_bmpy], dx
+    call OSAPI_FONT_GLYPHS
+    mov [br_glyphseg], dx
+    mov [br_glyphofs], si
+    mov [br_glyphfirst], al
+    mov [br_glyphlast], ah
+    mov ax, (CWHITE << 8) | CBLACK ; set pixels = ink; clear pixels = paper
+    call OSAPI_GFX_BLIT1_PEN
+    mov byte [br_bmrow], 0
+.row:
+    push ds
+    pop es
+    mov di, br_stylebuf
+    xor ax, ax
+    mov cx, [br_cols]
+    cld
+    rep stosb
+    xor bx, bx                      ; cell index, also the scratch byte offset
+.cell:
+    cmp bx, [br_cols]
+    jae .blit
+    mov al, [br_lbuf+bx]
+    cmp al, [br_glyphlast]          ; the table covers first..last (32..126):
+    ja .blankglyph                  ; a byte outside it draws as the table's
+    sub al, [br_glyphfirst]         ; first glyph, the space, rather than
+    jnc .index                      ; reading up to a KB past the table
+.blankglyph:
+    xor al, al
+.index:
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                       ; eight bytes per ROM glyph
+    add ax, [br_glyphofs]
+    mov si, ax
+    mov ax, [br_glyphseg]
+    mov es, ax
+    xor ax, ax
+    mov al, [br_bmrow]
+    add si, ax
+    mov al, [es:si]
+    mov [br_bmglyph], al
+    mov al, [br_lmark+bx]
+    mov [br_bmmark], al
+    test al, LM_BOLD
+    jz .italic
+    mov al, [br_bmglyph]
+    mov ah, al
+    shr ah, 1
+    or al, ah                       ; one-pixel double-strike
+    mov [br_bmglyph], al
+.italic:
+    mov byte [br_bmshift], 0
+    test byte [br_bmmark], LM_ITALIC
+    jz .deposit
+    mov al, 7
+    sub al, [br_bmrow]
+    shr al, 1
+    cmp al, 2
+    jbe .shear
+    mov al, 2
+.shear:
+    mov [br_bmshift], al
+.deposit:
+    mov cl, [br_bmshift]
+    or cl, cl
+    jz .direct
+    mov al, [br_bmglyph]
+    mov ah, al
+    shr al, cl
+    or [br_stylebuf+bx], al
+    mov cl, 8
+    sub cl, [br_bmshift]
+    mov al, ah
+    shl al, cl
+    ; The last cell's shear spills beyond the visible band; discard it.
+    ; (The branch uses the next byte's column, not the current one.)
+    inc bx
+    cmp bx, [br_cols]
+    jae .spilldone
+    or [br_stylebuf+bx], al
+.spilldone:
+    dec bx
+    jmp .nextcell
+.direct:
+    mov al, [br_bmglyph]
+    or [br_stylebuf+bx], al
+.nextcell:
+    inc bx
+    jmp .cell
+.blit:
+    push ds
+    pop es
+    mov si, br_stylebuf
+    cmp byte [br_bpp], 1            ; THE PEN IS NOT READ ON A 1bpp ADAPTER
+    jne .polar                      ; (SPEC.md 5.4.2.2): a set bit is a LIT
+    mov cx, [br_cols]               ; pixel there, so the band - composed with
+.invert:                            ; 1 = ink - goes over complemented, in
+    not byte [si]                   ; screen polarity. [br_cols] is at least 8
+    inc si
+    loop .invert
+    mov si, br_stylebuf
+.polar:
+    mov bp, [br_cols]               ; one byte per eight-pixel cell
+    mov bx, [br_bmpy]
+    xor dx, dx
+    mov dl, [br_bmrow]
+    add bx, dx
+    mov ax, [br_cols]
+    mov cl, 3
+    shl ax, cl
+    mov cx, ax                      ; width is exactly cells * eight pixels
+    mov ax, [br_bmpx]               ; load destination after width calculation
+    mov dx, 1
+    call OSAPI_GFX_BLIT1
+    jc .failed
+    inc byte [br_bmrow]
+    cmp byte [br_bmrow], 8
+    jb .row
+    mov ax, (CBLACK << 8) | CWHITE ; restore the lock's default pen
+    call OSAPI_GFX_BLIT1_PEN
+    clc
+    jmp .out
+.failed:
+    mov ax, (CBLACK << 8) | CWHITE
+    call OSAPI_GFX_BLIT1_PEN
+    stc
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; br_build - render one line index into br_lbuf, space-padded to the band
 ; in:  AX = line index
 ; out: br_lbuf holds [cols] chars + NUL
@@ -1023,6 +1297,8 @@ br_build:
     push si
     push di
     push es
+    mov byte [br_undraw], 0
+    mov byte [br_drawbitmap], 0
     push ax                         ; THE LINE INDEX. `mov al, ' '` below is a
                                     ; write to the bottom half of it, so
                                     ; without this every row draws line
@@ -1036,11 +1312,6 @@ br_build:
     pop es                          ; KERNEL_SEG on entry to a callback -
     cld                             ; SPEC.md 56's bug, in the place a
     rep stosb                       ; buffer fill will always find it
-    pop cx
-    push cx                         ; ...and the COLUMN MAP beside it, all
-    mov di, br_lmap                 ; 0FFFFh = "no document byte in this cell"
-    mov ax, 0FFFFh
-    rep stosw
     pop cx
     push cx                         ; ...and the LINK MARKS, all clear
     mov di, br_lmark
@@ -1061,16 +1332,31 @@ br_build:
     mov di, [es:si+LN_OFS]
     mov cx, [es:si+LN_END]
     mov al, [es:si+LN_X]
+    xor ah, ah
+    mov dx, ax                      ; preserve the line's actual starting column
     mov ah, [es:si+LN_FL]
     mov bh, ah                      ; BH = flags
+    mov [br_lflags], ah
     and ah, LNF_LNK                 ; ...and the LINK STATE this line inherits
     mov [br_lnkcell], ah            ; (LNF_LNK, set by br_emitline)
-    xor ah, ah
-    xor ah, ah
-    mov dx, ax                      ; the start column. NOT in BP: that
+    mov al, [br_lflags]
+    and al, LNF_BOLD | LNF_ITALIC
+    mov [br_lfmt], al
+    mov byte [br_drawbitmap], 0
+    or al, al
+    jz .plainstart
+    mov byte [br_drawbitmap], 1
+.plainstart:
+    mov byte [br_undraw], 0
+    mov al, [br_lflags]
+    test al, LNF_HEAD | LNF_LNK | LNF_UNDER
+    jz .markready
+    mov byte [br_undraw], 1
+.markready:
+                                    ; DX is the start column. NOT in BP: that
                                     ; addresses SS here (SPEC.md 1) and the
                                     ; kernel's frame is under it
-    test bh, LNF_RULE
+    test byte [br_lflags], LNF_RULE
     jz .text
                                     ; a rule: the band, filled with '-'
     mov di, br_lbuf
@@ -1084,9 +1370,15 @@ br_build:
 .text:
     mov es, [br_docseg]
     mov si, di                      ; SI = doc offset
+    test byte [br_lflags], LNF_LIST
+    jz .nobullet
+    mov byte [br_lbuf], '*'
+    mov byte [br_lbuf+1], ' '
+.nobullet:
     mov di, br_lbuf
     add di, dx                      ; ...plus the line's start column
     mov bx, [br_cols]
+    add bx, br_lbuf                 ; BX = one past the band's last cell
 .copy:
     cmp si, cx
     jae .out
@@ -1097,34 +1389,81 @@ br_build:
     cmp al, D_LNK1                  ; the two inline markers are the only ones
     jne .nl1                        ; this walk has to UNDERSTAND rather than
     mov byte [br_lnkcell], 1        ; skip: they say which cells are a link
-    add si, 2                       ; ...past the two payload bytes
-    jmp .copy
+    mov byte [br_undraw], 1         ; ...and the underline pass is owed: a
+    add si, 2                       ; ...past the two payload bytes - a line
+    jmp .copy                       ; that OPENS a link had no rule under it
 .nl1:
     cmp al, D_LNK0
-    jne .copy
+    jne .meta
     mov byte [br_lnkcell], 0
     jmp .copy                       ; every other marker: not a cell
+.meta:
+    cmp al, D_CMETA                 ; ...and a cell hint's payload byte is not
+    jne .style1                     ; a marker either: step it, as br_layout's
+    inc si                          ; .mcellmeta does
+    jmp .copy
+.style1:
+    cmp al, D_B1
+    jne .style2
+    or byte [br_lfmt], LNF_BOLD
+    mov byte [br_drawbitmap], 1
+    jmp .copy
+.style2:
+    cmp al, D_B0
+    jne .style3
+    and byte [br_lfmt], 0FFh-LNF_BOLD
+    jmp .copy
+.style3:
+    cmp al, D_I1
+    jne .style4
+    or byte [br_lfmt], LNF_ITALIC
+    mov byte [br_drawbitmap], 1
+    jmp .copy
+.style4:
+    cmp al, D_I0
+    jne .style5
+    and byte [br_lfmt], 0FFh-LNF_ITALIC
+    jmp .copy
+.style5:
+    cmp al, D_U1
+    jne .style6
+    or byte [br_lfmt], LNF_UNDER
+    mov byte [br_undraw], 1
+    jmp .copy
+.style6:
+    cmp al, D_U0
+    jne .copy
+    and byte [br_lfmt], 0FFh-LNF_UNDER
+    jmp .copy
 .cell:
     cmp al, D_NBSP                  ; ...a no-break space is a SPACE on screen
     jne .cell2                      ; and only the layout knows the difference
     mov al, ' '
 .cell2:
-    mov dx, di
-    sub dx, br_lbuf
-    cmp dx, bx
+    cmp di, bx
     jae .out                        ; never write past the band
     mov [di], al
-    push bx                         ; **AND WHERE THAT CELL CAME FROM**: the
-    mov bx, dx                      ; hit test is this same walk asked
-    shl bx, 1                       ; backwards, and running it twice from two
-    mov [br_lmap+bx], si            ; descriptions is exactly the drift
-    dec word [br_lmap+bx]           ; SPEC.md 22's fm_hit discipline forbids.
-    shr bx, 1                       ; SI has already been advanced past the
-    push ax                         ; byte, hence the dec
-    mov al, [br_lnkcell]
-    mov [br_lmark+bx], al           ; ...and whether it is inside a link, which
-    pop ax                          ; is what the underline is drawn from
-    pop bx
+    cmp di, [br_htgt]               ; **AND WHERE THAT CELL CAME FROM**, for
+    jne .nh                         ; the ONE cell a click asked about: the hit
+    mov [br_hofs], si               ; test is this same walk asked backwards,
+.nh:                                ; and running it twice from two
+                                    ; descriptions is exactly the drift
+                                    ; SPEC.md 22's fm_hit discipline forbids.
+                                    ; SI is one past the byte. It was a whole
+                                    ; map, a word per cell filled on EVERY
+                                    ; painted line for the one line a click
+                                    ; ever reads (br_hitofs)
+    mov al, [br_lnkcell]            ; per-cell link and semantic style marks
+    test byte [br_lflags], LNF_HEAD
+    jz .markfmt
+    or al, LM_HEAD
+.markfmt:
+    or al, [br_lfmt]
+    test al, LM_UNDER
+    jz .markstore
+    mov byte [br_undraw], 1
+.markstore:
+    mov [di + (br_lmark - br_lbuf)], al ; is what the underline is drawn from
     inc di
     jmp .copy
 .out:
@@ -1153,12 +1492,10 @@ br_sbrect:
     push ax
     mov ax, [br_cx]
     add ax, [br_cw]
-    sub ax, BR_SBW
-    mov [br_sbx], ax                ; x1
-    mov ax, [br_cx]
-    add ax, [br_cw]
     dec ax
     mov [br_sbx2], ax               ; x2
+    sub ax, BR_SBW - 1
+    mov [br_sbx], ax                ; x1
     mov ax, [br_cy]
     mov [br_sby], ax                ; y1
     add ax, [br_ch]
@@ -1186,16 +1523,8 @@ br_sbrect:
 ; so a click on it can do nothing rather than paging.
 ; -----------------------------------------------------------------------------
 br_sbfill:
-    push ax
-    mov ax, [br_sbx]
-    mov [br_sb+0], ax
-    mov ax, [br_sby]
-    mov [br_sb+2], ax
-    mov ax, [br_sbx2]
-    mov [br_sb+4], ax
-    mov ax, [br_sby2]
-    mov [br_sb+6], ax
-    mov ax, [br_nlines]
+    push ax                         ; (words 0-3, the rect, are br_sbrect's
+    mov ax, [br_nlines]             ; own and already in place)
     mov [br_sb+8], ax               ; total
     mov ax, [br_rows]
     mov [br_sb+10], ax              ; fit
@@ -1265,21 +1594,70 @@ br_ondrag:
     push cx
     push dx
     push si
-    call os88ui_sbdragging
+    mov bx, br_btrec            ; THE BUTTONS FIRST: the held one follows the
+    call os88ui_btndrag         ; pointer, and a package has ONE arm word, so
+    call os88ui_sbdragging      ; the bar and the buttons cannot both be live
     jc br_sbd_out
+    mov bx, si                  ; 13.10.5.4.2: EVERY movement pushes the
+    mov ax, BR_SBIDLE           ; one-shot out, which is what makes it an
+    call OSAPI_WM_TIMER         ; IDLE detector and not a cadence. 0 needs no
+                                ; test - the slot takes it as CANCEL
     call br_measure
     call br_sbfill                  ; BX = the block; DX is still the pointer
     call os88ui_sbtrack             ; CF = 1: nothing owed - the rate, or the
     jc br_sbd_out                   ; same line
     jmp short br_sbd_go
+br_ontimer:                     ; the thumb has been STILL for BR_SBIDLE
+    push ax                     ; ticks (SPEC.md 13.9 disarms before this
+    push bx                     ; runs, and this does not re-arm: a pause is
+    push cx                     ; ONE commit however long it lasts)
+    push dx
+    push si
+    call br_measure
+    call br_sbfill
+    call os88ui_sbowed          ; ...and NOT os88ui_sbdrop: a pause is not
+    jc br_sbd_out                 ; the end of the gesture, so the record
+    jmp short br_sbd_go          ; survives it
 br_onup:
     push ax
     push bx
     push cx
     push dx
     push si
+    mov bx, br_btrec            ; the toolbar FIRES here (SPEC.md 13.7)
+    call os88ui_btnup           ; AX = what fired, 0 = nothing of ours
+    or ax, ax
+    jz .nobtn
+    push si
+    mov bx, [br_histi]          ; Back and Forward are one move: the slot
+    cmp al, 1                   ; either side of this one
+    jne .nb2
+    call br_okback              ; ONE predicate for the greying and the
+    dec bx                      ; refusal, so they cannot disagree (47 rule 5)
+    jmp short .move
+.nb2:
+    cmp al, 2
+    jne .nb3
+    call br_okfwd               ; both predicates keep BX...
+    inc bx
+.move:
+    jc .bdone                   ; ...and INC/DEC keep their CF
+    mov [br_histi], bx
+    call br_hgo
+    jmp short .bdone
+.nb3:
+    call br_okrel
+    jc .bdone
+    call br_reload
+.bdone:
+    pop si
+    jmp br_sbd_out
+.nobtn:
     call os88ui_sbdragging
     jc br_sbd_out
+    mov bx, si                  ; the pause timer must not outlive the
+    xor ax, ax                  ; gesture it belongs to (13.10.5.4.2)
+    call OSAPI_WM_TIMER
     call br_measure
     call br_sbfill
     call os88ui_sbdrop
@@ -1429,13 +1807,7 @@ br_flush:
                                     ; and the track it did not cover are all
                                     ; exactly where they were (SPEC.md 13.10)
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop6
 
 ; -----------------------------------------------------------------------------
 ; br_scroll_blit - move the pixels we already have, letter only what appeared
@@ -1453,36 +1825,25 @@ br_scroll_blit:
     push cx
     push dx
     push si
-    mov ax, [br_cx]                 ; x1 - 8-aligned by WF_SNAP, which is what
-    mov bx, [br_cy]                 ; gfx_scroll requires of x1 and x2+1
-    push ax
-    mov ax, [br_cols]
-    mov cx, BR_CELL
-    mul cx
-    mov cx, ax
-    pop ax
-    add cx, ax
-    dec cx                          ; x2 = x1 + cols*8 - 1
-    push ax
-    push cx
-    mov ax, [br_rows]
-    mov cx, BR_CELL
-    mul cx
-    mov dx, ax
-    pop cx
-    pop ax
+    mov cl, 3                       ; BR_CELL = 8: three shifts, not a mul
+    mov si, [br_dy]
+    shl si, cl                      ; SI = dy in PIXELS, signed - a shift is
+                                    ; the same low word imul gave
+    mov bx, [br_cy]                 ; y1
+    mov dx, [br_rows]
+    shl dx, cl
     add dx, bx
     dec dx                          ; y2 = y1 + rows*8 - 1
-    push ax
-    push cx
-    push dx
-    mov ax, [br_dy]
-    mov cx, BR_CELL
-    imul cx                         ; AX = dy in PIXELS, signed
-    mov si, ax
-    pop dx
-    pop cx
-    pop ax
+    mov ax, [br_cols]
+    shl ax, cl
+    add ax, [br_cx]
+    dec ax
+    xchg cx, ax                     ; x2 = x1 + cols*8 - 1
+    mov ax, [br_cx]                 ; x1 - 8-aligned by WF_SNAP, which is what
+                                    ; gfx_scroll requires of x1 and x2+1
+%if BR_CELL != 8
+%error "br_scroll_blit and br_paint_line multiply by BR_CELL as a shift of 3"
+%endif
     call OSAPI_GFX_SCROLL
     jc .full
 
@@ -1518,12 +1879,7 @@ br_scroll_blit:
 .full:
     call br_paint_band
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop5
 
 ; =============================================================================
 ; INPUT
@@ -1557,10 +1913,7 @@ br_onkey:
     call os88line_key               ; key on an unfocused field, which is what
     pop si                          ; keeps the page's own keys working
     jc .notbar
-    push si
-    mov si, br_loc
-    call os88line_draw
-    pop si
+    call br_ldraw
     jmp .out
 .notbar:
     cmp byte [br_loc + LN_FOCUS], 0
@@ -1577,10 +1930,8 @@ br_onkey:
     cmp al, 27
     jne .out                        ; anything else with the bar focused is the
     mov byte [br_loc + LN_FOCUS], 0 ; bar's, and swallowed: a page that
-    push si                         ; scrolled under a caret would be reading
-    mov si, br_loc                  ; one control and typing into another
-    call os88line_draw
-    pop si
+    call br_ldraw                   ; scrolled under a caret would be reading
+                                    ; one control and typing into another
     jmp .out
 .page:
     cmp ah, KSC_TAB
@@ -1599,18 +1950,17 @@ br_onkey:
 .enter:
     cmp byte [br_fcur], 0FFh
     je .out
+    mov al, [br_fcur]               ; br_submit takes the FORM index, which is
+    call br_fld                     ; the focused field's owner - AL here is
+    mov al, [bx+FLD_FORM]           ; the key's ASCII, and 13 names no form
+    mov byte [br_subhit], 0FFh      ; ...and Return clicked no button
     call br_submit
     jmp .out
 .scroll:
     mov ax, cx
     call br_scroll_by               ; ...which coalesces: the copy that used to
 .out:                               ; be here is br_coalesce now
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop5
 
 ; -----------------------------------------------------------------------------
 ; br_keydelta - one keystroke -> a signed line delta
@@ -1620,14 +1970,12 @@ br_onkey:
 br_keydelta:
     cmp ah, KSC_UP
     jne .dn
-    mov cx, -1
-    clc
-    ret
+    mov cx, -1                      ; CF=0 already: an EQUAL compare clears
+    ret                             ; it and a MOV leaves it (apps size pass 2)
 .dn:
     cmp ah, KSC_DOWN
     jne .pgup
     mov cx, 1
-    clc
     ret
 .pgup:
     cmp ah, KSC_PGUP
@@ -1652,12 +2000,10 @@ br_keydelta:
     cmp ah, KSC_END
     jne .no
     mov cx, [br_nlines]
-    clc
     ret
-.page:
-    mov cx, [br_rows]
+.page:                              ; both ways in were an EQUAL compare,
+    mov cx, [br_rows]               ; and DEC does not touch CF
     dec cx
-    clc
     ret
 .no:
     stc
@@ -1695,11 +2041,12 @@ br_onclick:
     jc .out                         ; that dismisses it, and that click does
                                     ; nothing else (SPEC.md 12.2's shape, and
                                     ; every other app here)
-    push cx                         ; **THE GEOMETRY FIRST, AND IT IS THE CLICK'S
-    push dx                         ; TO TAKE.** Every rect this routine tests
+                                    ; **THE GEOMETRY FIRST, AND IT IS THE CLICK'S
+                                    ; TO TAKE.** Every rect this routine tests
     call br_measure                 ; against is derived from the content box,
-    pop dx                          ; and the content box moves whenever the
-    pop cx                          ; window does - a drag, a resize, an adapter
+                                    ; and the content box moves whenever the
+                                    ; window does - a drag, a resize, an adapter
+                                    ; (br_measure keeps CX and DX, the point)
                                     ; switch, a slide across an extended
                                     ; desktop's seam (SPEC.md 39.7/11.98). A
                                     ; painter runs on some of those and not all,
@@ -1714,19 +2061,16 @@ br_onclick:
     call os88line_click             ; click in the page
     pop si
     jc .nobar
-    push si
-    mov si, br_loc
-    call os88line_draw
-    pop si
+    call br_ldraw
     jmp .out
 .nobar:
     cmp byte [br_loc + LN_FOCUS], 0 ; **A CLICK ANYWHERE ELSE BLURS THE BAR**,
     je .nofoc                       ; because LN_FOCUS is what draws the caret
     mov byte [br_loc + LN_FOCUS], 0 ; (os88line_draw) - so a bar left focused
-    push si                         ; while the reader is clicking links keeps
-    mov si, br_loc                  ; a caret in it, pointing at a control the
-    call os88line_draw              ; keyboard is no longer going to. The
-    pop si                          ; include deliberately does NOT do this
+    call br_ldraw                   ; while the reader is clicking links keeps
+                                    ; a caret in it, pointing at a control the
+                                    ; keyboard is no longer going to. The
+                                    ; include deliberately does NOT do this
 .nofoc:                             ; itself: an outside click means something
                                     ; different in every host, and the Setup
                                     ; window's four fields hand focus to each
@@ -1736,37 +2080,11 @@ br_onclick:
     jb .out
     add ax, BR_TBH - 1
     cmp dx, ax
-    ja .nostrip
-    mov bx, br_r1
-    call br_inrect
-    jc .t2
-    call br_okback                  ; ONE predicate for the greying and the
-    jc .out                         ; refusal, so they cannot disagree
-    mov bx, [br_histi]              ; (SPEC.md 47 rule 5) - and a greyed
-    dec bx                          ; control explains itself, so a refused
-    mov [br_histi], bx              ; click says nothing more (rule 6)
-    call br_hgo
-    jmp .out
-.t2:
-    mov bx, br_r2
-    call br_inrect
-    jc .t3
-    call br_okfwd
-    jc .out
-    mov bx, [br_histi]
-    inc bx
-    mov [br_histi], bx
-    call br_hgo
-    jmp .out
-.t3:
-    mov bx, br_r3
-    call br_inrect
-    jc .out
-    call br_okrel                   ; ONE predicate for the greying and the
-    jc .out                         ; refusal...
-    call br_reload                  ; ...and ONE action behind both its doors
-    jmp .out
-.nostrip:
+    jbe .out                        ; the toolbar's press was the LIBRARY's
+                                    ; (SPEC.md 20.5.1.3.3) and never reaches
+                                    ; here; br_onup has the action, and it
+                                    ; asks the SAME ok-predicate the greying
+                                    ; does (47 rule 5)
     cmp cx, [br_sbx]
     jb .page                        ; not in the scroll bar: the PAGE's
     cmp cx, [br_sbx2]
@@ -1786,8 +2104,9 @@ br_onclick:
     jne .out                        ; now, where it was inert. BX is the block
     cmp byte [br_nodrag], 0         ; and DX the press, absolute, exactly as
     jne .out                        ; os88ui_sbhit just took them
-    mov al, BR_SBRATE
-    call os88ui_sbgrab
+    mov ax, BR_SBRATE | (BR_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
 %endif
     jmp .out                        ; the thumb, or nowhere: this app pages
                                     ; from the TRACK only, which the shared
@@ -1814,12 +2133,7 @@ br_onclick:
 .go:
     call br_scroll_by
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop5
 
 ; =============================================================================
 ; THE TOOLBAR (BROWSER-PLAN 5)
@@ -2040,12 +2354,9 @@ br_hgo:
                                     ; One self-copy, and "the buffer and the
                                     ; length agree" holds by construction
                                     ; instead of by every caller remembering
-    mov byte [br_nopush], 1         ; ...and this trip is not a new place
-    mov si, br_ubuf
-    call br_go
-    mov byte [br_nopush], 0
-    pop es
-    pop di
+    call br_reload                  ; ...and this trip is not a new place:
+    pop es                          ; br_reload IS "fetch what the bar says,
+    pop di                          ; without a push", which is now this
     pop si
     pop cx
     pop bx
@@ -2087,37 +2398,28 @@ br_reload:
     ret
 
 ; --- the three predicates, each answering CF=0 LIVE (gfx_pen_cf's shape) -----
+; Each is the COMPARE ITSELF and no branch (apps size pass 2): an unsigned
+; `cmp x, 1` borrows exactly when x is 0, so CF is the "no" answer as it
+; stands, and Forward's `histi + 1 < histn` is the borrow inverted. Every
+; caller reads CF and nothing else.
 br_okback:
-    cmp word [br_histn], 0
-    je .no
-    cmp word [br_histi], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
+    cmp word [br_histn], 1          ; no history at all...
+    jc .out
+    cmp word [br_histi], 1          ; ...or already at the oldest
+.out:
     ret
 
 br_okfwd:
     push ax
     mov ax, [br_histi]
     inc ax
-    cmp ax, [br_histn]
+    cmp ax, [br_histn]              ; CF = there IS a newer entry...
+    cmc                             ; ...and CF=0 is what says so
     pop ax
-    jb .yes
-    stc
-    ret
-.yes:
-    clc
     ret
 
 br_okrel:
-    cmp byte [br_ubuf], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
+    cmp byte [br_ubuf], 1           ; CF = the bar is empty
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2145,52 +2447,45 @@ br_toolbar:
     push di
     call br_hsync                   ; the History menu answers the same
                                     ; question these two buttons do
-    mov bx, br_r1
-    mov si, br_s_back
     call br_okback
+    mov al, 1
     call br_btn1
-    mov bx, br_r2
-    mov si, br_s_fwd
     call br_okfwd
+    mov al, 2
     call br_btn1
-    mov bx, br_r3
-    mov si, br_s_rel
     call br_okrel
+    mov al, 3
     call br_btn1
     call br_status
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- br_inrect - is (CX,DX) inside the rect at BX? CF=0 yes ------------------
-br_inrect:
-    cmp cx, [bx]
-    jb .no
-    cmp cx, [bx+4]
-    ja .no
-    cmp dx, [bx+2]
-    jb .no
-    cmp dx, [bx+6]
-    ja .no
-    clc
-    ret
-.no:
-    stc
-    ret
+    jmp br_pop6
 
 ; --- br_btn1 - one toolbar button; CF on entry = 0 live, 1 disabled ----------
+; in: AL = the button's index PLUS ONE, CF from its own ok-predicate
+; The toolbar group's arrays (SPEC.md 20.5.1.3). The FLAGS are rewritten each
+; pass by br_btn1, from the very predicate that decides the refusal.
+br_btlbl: dw br_s_back, br_s_fwd, br_s_rel
+br_btflg: dw OS88UI_FILL, OS88UI_FILL, OS88UI_FILL
+    OS88UI_BTNREC br_btrec, br_r1, br_btlbl, br_btflg, 3
+
 br_btn1:
+    push bx
     push di
+    push si
     mov di, OS88UI_FILL
     jnc .live
     or di, OS88UI_DIS
 .live:
+    mov bl, al                      ; the flag goes in the record's array, at
+    xor bh, bh                      ; this button's slot, so the painter and
+    dec bx                          ; the record agree by construction
+    add bx, bx
+    add bx, br_btflg
+    mov [bx], di
+    mov bx, br_btrec
     call os88ui_btn
+    pop si
     pop di
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2200,9 +2495,10 @@ br_btn1:
 ;      point is outside the band, past the last line, or on a cell the
 ;      padding owns. Every other register preserved.
 ;
-; **IT ANSWERS BY RE-RUNNING THE PAINTER'S OWN WALK.** br_build fills br_lmap
-; beside br_lbuf, so this positions a row and a column, rebuilds that one line
-; and reads the map - which means the hit test cannot disagree with what was
+; **IT ANSWERS BY RE-RUNNING THE PAINTER'S OWN WALK.** br_build records the
+; document offset of the one cell named by [br_htgt], so this positions a row
+; and a column, rebuilds that one line and reads [br_hofs] - which means the
+; hit test cannot disagree with what was
 ; drawn, however the line got its shape. Markers, table cells, centred lines,
 ; a field's spaces and an indent are all handled because none of them is
 ; handled HERE (SPEC.md 22's fm_hit discipline, one layer down: the shared
@@ -2239,15 +2535,17 @@ br_hitofs:
     shr ax, cl
     cmp ax, [br_cols]
     jae .no                         ; in the scroll bar's column, or past it
-    mov di, ax                      ; DI = the column
+    add ax, br_lbuf                 ; the cell a click names, as the painter's
+    mov [br_htgt], ax               ; own write pointer
+    mov word [br_hofs], 0           ; 0 = no document byte reached it
     mov ax, bx
     push bx
-    call br_build                   ; ...THE PAINTER'S WALK, and it fills the
-    pop bx                          ; map this reads
-    shl di, 1
-    mov ax, [br_lmap+di]
-    cmp ax, 0FFFFh
-    je .no                          ; padding: no document byte here
+    call br_build                   ; ...THE PAINTER'S WALK, which records
+    pop bx                          ; that one cell for us
+    mov ax, [br_hofs]
+    or ax, ax
+    jz .no                          ; padding: no document byte here
+    dec ax                          ; ...and it was one past the byte
     pop di
     pop si
     pop dx
@@ -2281,9 +2579,7 @@ br_hitofs:
 ; click that does nothing rather than a click that goes somewhere wrong.
 ; -----------------------------------------------------------------------------
 br_linkat:
-    push bx
     push cx
-    push dx
     push si
     push es
     cmp word [br_lnkn], 0
@@ -2302,12 +2598,15 @@ br_linkat:
     je .in
     cmp al, D_LNK0
     je .no                          ; the last anchor CLOSED before this byte
-    cmp al, 0x20
-    jae .step                       ; ordinary text
-.step:
-    loop .back
+.step:                              ; ...and text is >= 0x20, so the test
+    loop .back                      ; above already stepped over it
     jmp short .no
 .in:
+    or si, si                       ; a D_LNK1 straight after a D_CMETA is that
+    jz .real                        ; hint's PAYLOAD (0..23), not a marker:
+    cmp byte [es:si-1], D_CMETA     ; br_tcelltag writes the pair with no call
+    je .no                          ; between, so the test is exact
+.real:
     mov al, [es:si+1]               ; the two payload bytes, low nibble first
     mov ah, [es:si+2]
     and al, 15
@@ -2325,9 +2624,7 @@ br_linkat:
 .out:
     pop es
     pop si
-    pop dx
     pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2348,6 +2645,33 @@ br_follow:
     push si
     push di
     push es
+    cmp ax, BR_LNKMAX
+    jae .out
+    mov [br_lnkhit], ax
+    mov bx, ax
+    mov dl, [br_lnkfrm+bx]
+    test dl, dl
+    jz .href
+    dec dl
+    xor bx, bx
+    mov bl, dl
+    shl bx, 1
+    mov si, [br_framebaseoff+bx]    ; the owning frame's saved absolute URL
+    cmp si, 0FFFFh
+    je .out                         ; no retained base: keep the link inert
+    mov es, [br_lnkseg]
+    mov di, br_ubuf
+.basecopy:
+    mov al, [es:si]
+    inc si
+    stosb
+    test al, al
+    jnz .basecopy
+    mov si, br_ubuf
+    call br_split                  ; restore the frame host/path as base
+    jc .out
+.href:
+    mov ax, [br_lnkhit]
     mov bx, ax
     shl bx, 1
     mov si, [br_lnkoff+bx]          ; ES:SI = the href, in the link arena
@@ -2357,14 +2681,7 @@ br_follow:
     mov si, br_ubuf
     call br_go
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop7
 
 ; -----------------------------------------------------------------------------
 ; br_resolve - an href or a form action -> an absolute URL in br_ubuf
@@ -2395,21 +2712,23 @@ br_resolve:
     push es
     mov di, br_ubuf
     mov word [br_upos], 0
+    mov byte [br_urlcut], 0
     cmp byte [es:si], '#'
-    je .anchor
+    je .fail                        ; the page we are already on
     mov bx, br_s_scheme             ; "http://"
     call br_hrefpfx
     jnc .abs
     mov bx, br_s_schemes
     call br_hrefpfx
     jnc .https
-    cmp byte [es:si], '/'
-    je .root
-                                    ; --- relative to this page's directory ---
+                                    ; --- relative: to the root or to this
+                                    ; page's directory, and both need a host
     call br_haveh
     jc .nohost
     call br_ubase                   ; scheme + host + port
-    mov bx, br_path                 ; ...and the path up to its last '/'
+    cmp byte [es:si], '/'
+    je .abs                         ; a root href goes on as it stands
+    mov bx, br_path                 ; ...else the path up to its last '/'
     xor cx, cx
     xor dx, dx
 .dirscan:
@@ -2426,61 +2745,45 @@ br_resolve:
     mov bx, br_path
     mov cx, dx
     call br_uputn                   ; that many bytes of it
-    call br_uputh                   ; ...then the href
-    jmp .done
-.root:
-    call br_haveh
-    jc .nohost
-    call br_ubase
-    call br_uputh
-    jmp .done
-.nohost:
-    push si                         ; **A PAGE OPENED FROM A FILE HAS NO
-    mov si, br_s_nohost             ; SERVER**, so a relative link has nothing
-    mov [br_nmsg], si               ; to be relative TO - br_host is whatever
-    mov byte [br_nstate], BN_ERR    ; the last fetch left, or empty on a
-    call br_status                  ; browser that has not fetched at all.
-    pop si                          ; Composing `http:///torture.htm` and
-    stc                             ; letting br_split refuse it would report
-    jmp .out                        ; a bad ADDRESS about a good link
 .abs:
-    call br_uputh                   ; already absolute
-    jmp .done
-.anchor:
-    stc                             ; the page we are already on
-    jmp .out
-.https:
-    push si
-    mov si, br_s_nohttps
-    mov [br_nmsg], si
-    mov byte [br_nstate], BN_ERR
-    call br_status
-    pop si
-    stc
-    jmp .out
-.done:
+    call br_uputh                   ; ...then the href, already absolute or not
+    cmp byte [br_urlcut], 0
+    jne .toolong
     mov bx, [br_upos]
     mov byte [br_ubuf+bx], 0
     call br_undot                   ; ...and ONE call covers all three shapes
     clc
+    jmp short .out
+                                    ; --- the three REFUSALS share one exit
+                                    ; (apps size pass 2): each names itself
+                                    ; and br_errst says it, unless this is a
+                                    ; child-frame link mid-parse, which is
+                                    ; inert rather than an error to show
+.toolong:
+    mov si, br_s_urltoo
+    jmp short .refuse
+.nohost:                            ; **A PAGE OPENED FROM A FILE HAS NO
+    mov si, br_s_nohost             ; SERVER**, so a relative link has nothing
+    jmp short .refuse               ; to be relative TO - br_host is whatever
+                                    ; the last fetch left, or empty on a
+                                    ; browser that has not fetched at all.
+                                    ; Composing `http:///torture.htm` and
+                                    ; letting br_split refuse it would report
+                                    ; a bad ADDRESS about a good link
+.https:
+    mov si, br_s_nohttps
+.refuse:
+    cmp byte [br_parsing], 0
+    jne .fail
+    call br_errst                   ; SI is the prologue's, restored by pop7
+.fail:
+    stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop7
 
 ; --- br_haveh - is there a host to be relative to? CF=1 = no ----------------
 br_haveh:
-    cmp byte [br_host], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
+    cmp byte [br_host], 1           ; borrows exactly when the host is empty
     ret
 
 ; --- br_hrefpfx - does the href at ES:SI start with the NUL string DS:BX? ----
@@ -2733,21 +3036,17 @@ br_uputdec:
     add al, '0'
     call br_uputc
     loop .emit
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop4
 
-; --- br_uputc - AL into br_ubuf, truncating at BR_UBUF-1 ---------------------
-; TRUNCATES rather than refusing: the alternative is a link that does nothing
-; at all, and a truncated URL fails at the server with a message the user can
-; read (br_split refuses a malformed one before any of it reaches the wire).
+; --- br_uputc - AL into br_ubuf, recording overflow --------------------------
 br_uputc:
     push bx
     mov bx, [br_upos]
     cmp bx, BR_UBUF - 1
-    jae .out
+    jb .store
+    mov byte [br_urlcut], 1
+    jmp .out
+.store:
     mov [br_ubuf+bx], al
     inc word [br_upos]
 .out:
@@ -2784,16 +3083,26 @@ br_page_click:
     call br_follow
     jmp .out
 .notlink:
-    cmp word [br_subend], 0         ; --- the submit button ---
-    je .fields
-    cmp si, [br_subofs]
-    jb .fields
-    cmp si, [br_subend]
+    xor bx, bx                      ; --- submit buttons, each owns a form ---
+.subnext:
+    cmp bl, [br_subn]
     jae .fields
-    cmp byte [br_fn], 0
-    je .out                         ; a button with no field is not a query
+    mov al, bl
+    push bx
+    call br_subrec
+    mov di, bx
+    pop bx
+    cmp si, [di+SUB_OFS]
+    jb .substep
+    cmp si, [di+SUB_END]
+    jae .substep
+    mov [br_subhit], bl             ; WHICH button: its name=value goes too
+    mov al, [di+SUB_FORM]
     call br_submit
     jmp .out
+.substep:
+    inc bl
+    jmp .subnext
 .fields:                            ; --- a text input ---
     xor bx, bx                      ; BL = field index
 .next:
@@ -2804,6 +3113,7 @@ br_page_click:
     call br_fld                     ; BX = the record
     mov ax, [bx+FLD_OFS]
     mov cl, [bx+FLD_W]
+    mov dh, [bx+FLD_TYPE]
     pop bx
     cmp si, ax
     jb .step                        ; before the first editable cell...
@@ -2813,12 +3123,169 @@ br_page_click:
     jae .step                       ; ...or past the last: the '[' and ']' are
                                     ; the frame and not the field
     mov al, bl
+    cmp dh, 1
+    jb .focus
+    je .selecthit
+    call br_choiceclick
+    jmp .out
+.selecthit:
+    call br_selcycle
+    jmp .out
+.focus:
     call br_ffocus                  ; ...and the caret goes to the END of what
     jmp .out                        ; is typed, which is what every one-line
 .step:                              ; field in every system does
     inc bl
     jmp .next
 .out:
+    jmp br_pop6
+
+br_choiceclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call br_fld
+    cmp byte [bx+FLD_TYPE], 2
+    jne .radio
+    xor byte [bx+FLD_LEN], 1
+    call br_choicepaint
+    jmp .out
+.radio:
+    mov si, bx
+    xor cl, cl
+.scan:
+    cmp cl, [br_fn]
+    jae .choose
+    mov al, cl
+    call br_fld
+    cmp byte [bx+FLD_TYPE], 3
+    jne .next
+    mov al, [si+FLD_FORM]
+    cmp [bx+FLD_FORM], al
+    jne .next
+    push cx
+    push si
+    mov di, bx
+    add si, FLD_NAME
+    add di, FLD_NAME
+.name:
+    mov al, [si]
+    cmp al, [di]
+    jne .different
+    or al, al
+    jz .same
+    inc si
+    inc di
+    jmp .name
+.same:
+    pop si
+    pop cx
+    cmp bx, si                      ; the clicked radio matches its own name:
+    je .next                        ; .choose paints it ONCE, not off then on
+    cmp byte [bx+FLD_LEN], 0
+    je .next
+    mov byte [bx+FLD_LEN], 0
+    call br_choicepaint
+    jmp .next
+.different:
+    pop si
+    pop cx
+.next:
+    inc cl
+    jmp .scan
+.choose:
+    mov bx, si
+    mov byte [bx+FLD_LEN], 1
+    call br_choicepaint
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+br_choicepaint:
+    push ax
+    push di
+    push es
+    mov es, [br_docseg]
+    mov di, [bx+FLD_OFS]
+    mov al, D_NBSP
+    cmp byte [bx+FLD_LEN], 0
+    je .put
+    mov al, 'x'
+    cmp byte [bx+FLD_TYPE], 2
+    je .put
+    mov al, '*'
+.put:
+    mov [es:di], al
+    call br_frepaint
+    pop es
+    pop di
+    pop ax
+    ret
+
+; Advance a select control to its next option, wrapping to the first.
+br_selcycle:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call br_fld
+    mov es, [br_srcseg]
+    mov si, [bx+FLD_SCAN]
+    call br_seloption
+    jnc .have
+    mov si, [bx+FLD_FIRST]
+    call br_seloption
+    jc .out
+.have:
+    mov [bx+FLD_SCAN], dx
+    call br_selvalue
+    mov di, [bx+FLD_OFS]
+    push ds
+    mov dx, es
+    mov ax, [br_docseg]
+    mov ds, dx
+    mov es, ax
+    mov dl, [cs:bx+FLD_W]
+    xor dh, dh
+    mov al, D_NBSP
+    push cx
+    mov cx, dx
+    rep stosb
+    pop cx
+    mov di, [cs:bx+FLD_OFS]
+    xor dx, dx
+.copy:
+    cmp si, cx
+    jae .copied
+    cmp dl, [cs:bx+FLD_W]
+    jae .copied
+    lodsb
+    cmp al, 0x20
+    jb .copy
+    cmp al, 0x7E
+    ja .copy
+    stosb
+    inc dl
+    jmp .copy
+.copied:
+    pop ds
+    mov [bx+FLD_LEN], dl
+    call br_frepaint
+.out:
+    pop es
     pop di
     pop si
     pop dx
@@ -2836,41 +3303,39 @@ br_page_click:
 ; which on this app is not an abstract cost, because a page can be arriving.
 ; =============================================================================
 
-BR_ABLH equ 11                      ; line pitch, px (8px glyphs + 3 of air)
-br_ablines:
-    dw br_ab1, br_ab2, br_ab3, br_ab4, 0
-br_ab1:      db 'Browser for os8088', 0
-br_ab2:      db 'HTTP, HTML and tables', 0
-br_ab3:      db 0                   ; a blank line is a line with no glyphs
-br_ab4:      db 'Contributed by Elendilon', 0
+br_ablines:                         ; os88ui_about's lines (SPEC.md 20.5.1.1),
+                                    ; OS88UI_ABPACK's shape: end to end, each
+                                    ; with its NUL, closed by OS88UI_ABEND -
+                                    ; no pointer table (apps size pass 2)
+    db 'os8088 Browser 1.4', 0
+    db 'HTTP, HTML and tables', 0
+    db 0                            ; a blank line is a line with no glyphs
+    db 'Contributed by Elendilon', 0
+    db OS88UI_ABEND
 
 ; -----------------------------------------------------------------------------
-; br_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; br_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; preserves all registers
 ;
-; Only the CARD is drawn: nothing under it has changed and the card is opaque
-; over its own rect, so repainting the page first would be PERFORMANCE.md's
-; double-draw with the credits as the second layer - and on this app the first
-; layer is a bandful of glyphs, which is the expensive one.
+; **THE STANDARD CARD** (SPEC.md 20.5.1.1), which this package was one of the
+; seventeen private copies of. Only the CARD is drawn: nothing under it has
+; changed and the card is opaque over its own rect, so repainting the page
+; first would be PERFORMANCE.md's double-draw with the credits as the second
+; layer. os88ui_about arms the clip itself, which the private card never did:
+; drawn from a handler with no region armed, it landed on top of any window
+; covering ours (SPEC.md 11.3).
 ; -----------------------------------------------------------------------------
 br_about:
-    push ax
     push bx
-    push cx
-    push dx
     push si
-    push di
-    call br_measure                 ; the window may have moved since the last
-    mov byte [br_abon], 1           ; paint; the card is placed from the LIVE
-    call br_abdraw                  ; band, br_sbrect's own reasoning
-    pop di
-    pop si
-    pop dx
-    pop cx
+    mov byte [br_abon], 1
+    mov bx, si                      ; BX = our window
+    mov si, br_ablines
+    call os88ui_about               ; CF = 1: nothing of us is visible, and the
+    pop si                          ; next paint puts the card up
     pop bx
-    pop ax
-    ret                             ; near: dispatched (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; br_abdismiss - take the card down, if it is up
@@ -2897,139 +3362,6 @@ br_abdismiss:
     clc
     ret
 
-; -----------------------------------------------------------------------------
-; br_abmeas - size and place the card, in SCREEN coords
-; out: [br_abw]/[br_abh]/[br_abl]/[br_abt]; clobbers nothing (flags)
-;
-; Measured, never pinned: the widest line sets the width and the count sets the
-; height, so a line of the credit can change without re-deriving anything.
-; Clamped to the BAND, which is what wm_fit and the location bar between them
-; left - on a CGA that is 150px of window less the chrome.
-; -----------------------------------------------------------------------------
-br_abmeas:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    xor cx, cx                      ; CX = widest line, DI = line count
-    xor di, di
-    mov si, br_ablines
-.next:
-    mov bx, [si]
-    or bx, bx
-    jz .done
-    inc di
-    add si, 2
-    push si
-    mov si, bx
-    call OSAPI_FONT_WIDTH           ; AX = pixel width
-    pop si
-    cmp ax, cx
-    jbe .next
-    mov cx, ax
-    jmp .next
-.done:
-    add cx, 24                      ; 12px of margin either side
-    cmp cx, [br_cw]
-    jbe .wok
-    mov cx, [br_cw]
-.wok:
-    mov [br_abw], cx
-    mov ax, di                      ; height = lines * BR_ABLH + margins
-    mov bx, BR_ABLH
-    mul bx                          ; **MUL WRITES DX** (SPEC.md 1), which is
-                                    ; why nothing is banked there across it
-    add ax, 16
-    cmp ax, [br_ch]
-    jbe .hok
-    mov ax, [br_ch]
-.hok:
-    mov [br_abh], ax
-    mov ax, [br_cw]                 ; centred on the band, in SCREEN coords
-    sub ax, [br_abw]
-    shr ax, 1
-    add ax, [br_cx]
-    mov [br_abl], ax
-    mov ax, [br_ch]
-    sub ax, [br_abh]
-    shr ax, 1
-    add ax, [br_cy]
-    mov [br_abt], ax
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; br_abdraw - white fill, black frame, the credit centred in it
-; in:  the geometry is current; gfx lock held
-; out: nothing; preserves all registers
-;
-; Every line is centred on the CARD rather than on the band, so the block still
-; reads as one card when br_abmeas has clamped it narrower than the text wanted.
-; -----------------------------------------------------------------------------
-br_abdraw:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call br_abmeas
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    call .rect
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    call .rect
-    call OSAPI_GFX_FRAME
-
-    mov si, br_ablines
-    mov di, [br_abt]
-    add di, 8                       ; the first baseline, inside the frame
-.line:
-    mov bx, [si]
-    or bx, bx
-    jz .out
-    add si, 2
-    push si
-    mov si, bx
-    call OSAPI_FONT_WIDTH           ; AX = this line's width
-    mov cx, [br_abw]
-    sub cx, ax
-    shr cx, 1
-    add cx, [br_abl]
-    mov dx, di
-    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the panel this routine
-    call OSAPI_FONT_RUN             ; filled white four calls ago
-    pop si
-    add di, BR_ABLH
-    jmp .line
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-.rect:                              ; the card as (x1,y1)-(x2,y2), inclusive
-    mov ax, [br_abl]
-    mov bx, [br_abt]
-    mov cx, ax
-    add cx, [br_abw]
-    dec cx
-    mov dx, bx
-    add dx, [br_abh]
-    dec dx
-    ret
-
 ; =============================================================================
 ; MENUS
 ; =============================================================================
@@ -3045,18 +3377,14 @@ br_oncmd:
     jmp .out
 .f1:
     cmp al, 2
-    je .save
-    jmp .loc
-.save:
+    jne .loc
     call br_saveas                  ; File > Save As...
     jmp .out
 .loc:
     mov byte [br_loc + LN_FOCUS], 1 ; File > Open Location... is FOCUS AND
     mov si, [br_win]                ; NOTHING ELSE: there is no modal dialog
-    push si                         ; here, so the menu item's whole job is to
-    mov si, br_loc                  ; put the caret where the user can type
-    call os88line_draw
-    pop si
+    call br_ldraw                   ; here, so the menu item's whole job is to
+                                    ; put the caret where the user can type
     jmp .out
 .m1:
     cmp ah, 2
@@ -3123,31 +3451,159 @@ br_open:
     ret
 
 ; -----------------------------------------------------------------------------
-; br_lnkclaim - the link arena, for whichever load path is claiming
-; out: [br_lnkseg], or 0; CF is not meaningful. All registers preserved.
-;
-; **A ROUTINE BECAUSE THERE ARE TWO CLAIM PATHS AND ONE FORGOT.** br_load
-; claims for a file and brnet's br_claim claims for a fetch - the same three
-; buffers at different sizes, because a file's size is known and a server's
-; Content-Length is a claim by a stranger - and the arena was added to the
-; file one only. Links therefore worked perfectly on a page opened from a
-; floppy and were plain text on every page off the wire, which is the half
-; that matters and the half no local test could see. One routine now, so a
-; fourth buffer cannot be added to one path and not the other.
-;
-; **A REFUSAL IS NOT A FAILURE**: br_anchor tests [br_lnkseg] and renders
-; anchors as ordinary text when there is none, so a machine too small for 6KB
-; reads the page and cannot follow it - a great deal better than refusing it.
+; br_srcclaim - the source claim, for either load path
+; in:  AX = KB; out: CF=1 refused, else [br_srckb] and [br_srcseg]. DX clobbered
 ; -----------------------------------------------------------------------------
-br_lnkclaim:
-    push ax
-    push dx
-    mov word [br_lnkseg], 0
-    mov ax, BR_LINKKB
+br_srcclaim:
+    mov [br_srckb], ax
     call OSAPI_MEM_CLAIM
     jc .out
-    mov [br_lnkseg], dx
+    mov [br_srcseg], dx
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; br_claimrest - the document, the line table and the link arena, sized from
+; [br_srckb], for whichever load path is claiming
+; out: CF=1 = the document or the line table was refused, and br_free_all has
+;      undone everything; CF=0 = both held, and [br_lnkseg] is the arena or 0.
+;      All registers preserved.
+;
+; **A ROUTINE BECAUSE THERE ARE TWO CLAIM PATHS AND ONE FORGOT.** br_load
+; claims for a file and br_netclaim for a fetch - the same buffers, and the
+; arena was once added to the file path only. Links therefore worked perfectly
+; on a page opened from a floppy and were plain text on every page off the
+; wire, which is the half that matters and the half no local test could see.
+; One routine, so a fourth buffer cannot be added to one path and not the
+; other - and since SPEC.md 71.14 a fetch claims these three only once its
+; page has arrived, so both paths size them from a size that is a fact.
+;
+; **THE ARENA IS min(BR_LINKKB, srckb)** (SPEC.md 71.14): an href is copied out
+; of its own tag, which also holds `<a href=` and `>`, so the hrefs and their
+; NULs are smaller than the source and br_anchor's BR_LINKKB bound cannot be
+; reached early. **A REFUSAL OF IT IS NOT A FAILURE**: br_anchor tests
+; [br_lnkseg] and renders anchors as ordinary text when there is none, so a
+; machine too small for it reads the page and cannot follow it - a great deal
+; better than refusing it.
+;
+; **THE DOCUMENT AND THE LINE TABLE ARE A ROUTINE OF THEIR OWN** (br_claimpage)
+; because a frameset claims them a second time WITHOUT the arena: the queued
+; frame srcs live in it (br_frameclaim, SPEC.md 71.15).
+; -----------------------------------------------------------------------------
+br_claimpage:
+    push ax
+    push bx
+    push dx
+    mov ax, [br_srckb]              ; document claim
+%if BR_DOCMUL != 2
+%error "br_claimpage multiplies by BR_DOCMUL as one shift"
+%endif
+    shl ax, 1                       ; * BR_DOCMUL
+    add ax, BR_DOCSLK
+    cmp ax, BR_DOCMAX               ; ...clamped, because every offset into it
+    jbe .dok                        ; is a WORD: 64 KB is not a 16-bit byte
+    mov ax, BR_DOCMAX               ; count, and the limit arithmetic below
+.dok:                               ; would wrap rather than refuse
+    mov [br_dockb], ax
+    call OSAPI_MEM_CLAIM
+    jc .fail
+    mov [br_docseg], dx
+    mov ax, BR_LINEKB               ; line table
+    call OSAPI_MEM_CLAIM
+    jc .fail
+    mov [br_lseg], dx
+    clc
+    jmp short .out
+.fail:
+    call br_free_all
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+br_claimrest:
+    call br_claimpage               ; the document and the line table...
+    jc .out
+    push ax
+    push bx
+    push dx
+    mov ax, [br_srckb]              ; ...and the hrefs (BROWSER-PLAN 6)
+    cmp ax, BR_LINKKB
+    jbe .lk
+    mov ax, BR_LINKKB
+.lk:
+    mov bx, ax                      ; BX = the KB, kept across the claim
+    call OSAPI_MEM_CLAIM
+    jnc .lok
+    xor dx, dx                      ; no arena: no segment and no capacity
+    xor bx, bx
+.lok:
+    mov [br_lnkseg], dx
+%if BR_LINKKB > 63
+%error "br_claimrest makes the link capacity KB << 10 in one word"
+%endif
+    mov ah, bl                      ; the capacity in bytes, KB << 10 (at
+    mov al, 0                       ; most BR_LINKKB, so it fits a word)
+    shl ax, 1
+    shl ax, 1
+    mov [br_linkcap], ax
+    clc
+    pop dx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; br_frameclaim - the UI task's half of a FRAMESET's hand-over (SPEC.md 71.15)
+; Called from br_onwake when the worker has parsed a frameset page and set
+; [br_fin] = 4. br_netclaim cut the source to the FRAMESET's own size and
+; claimed the document from it, and the children are drained into those - so
+; the first child was cut at a kilobyte. The document and the line table are
+; given back, the source regrown to BR_MAXKB (or, if the heap cannot grow it
+; where it stands, freed and claimed again at the ceiling: the frameset's
+; source is parsed and no longer needed), and the two claimed again from the
+; ceiling. **THE LINK ARENA IS KEPT**: the queued frame srcs and base URLs
+; live there. Hands back with [br_fin] = 5. A refusal is the `Out of memory`
+; br_netclaim gives, said here - the lock is not held. All registers preserved.
+; -----------------------------------------------------------------------------
+br_frameclaim:
+    push ax
+    push dx
+    push si
+    mov si, br_docseg               ; the document and the line table, two
+    call br_free_all.one            ; words in a row (br_free_all's shape)
+    call br_free_all.one
+    mov word [br_nlines], 0
+    mov ax, BR_MAXKB
+    mov dx, [br_srcseg]
+    call OSAPI_MEM_REGROW           ; a GROW may move - fine, nothing holds
+    jnc .grown                      ; the old base - or fail where it stands
+    mov si, br_srcseg
+    call br_free_all.one
+    mov ax, BR_MAXKB
+    call br_srcclaim
+    jc .nomem
+    jmp short .page
+.grown:
+    mov [br_srcseg], dx
+    mov [br_srckb], ax
+.page:
+    call br_claimpage               ; sized from [br_srckb] = BR_MAXKB
+    jc .nomem
+    mov byte [br_fin], 5            ; the worker starts the first child
+    jmp short .out
+.nomem:
+    call br_free_all                ; whatever of the four is still held
+    mov word [br_nmsg], br_s_nomem
+    mov byte [br_nstate], BN_ERR    ; BEFORE [br_fin] goes back to 0: the
+    mov byte [br_frameappend], 0    ; handle is closed, and a worker pass
+    mov byte [br_fin], 0            ; finding BN_BODY and 0 would drain it
+    call br_nshow
+.out:
+    pop si
     pop dx
     pop ax
     ret
@@ -3224,9 +3680,7 @@ br_saveas:
     jmp short .out
 .none:
     mov si, br_s_nopage
-    mov [br_nmsg], si
-    mov byte [br_nstate], BN_ERR
-    call br_status
+    call br_errst
 .out:
     pop di
     pop si
@@ -3278,9 +3732,22 @@ br_saved:
                                     ; next navigation clears it
     call br_status
 .out:
+    jmp br_pop7
+
+; -----------------------------------------------------------------------------
+; br_pop7 .. br_pop4 - the shared epilogue. A routine that pushed AX, BX, CX,
+; DX[, SI[, DI[, ES]]] in that order leaves through `jmp br_popN` instead of
+; its own N pops and a ret: the same instructions, met once rather than written
+; out at every exit. Pops leave the flags alone, so a CF answer rides through.
+; Kept off the per-byte and per-line paths (parse, layout, paint, tables).
+; -----------------------------------------------------------------------------
+br_pop7:
     pop es
+br_pop6:
     pop di
+br_pop5:
     pop si
+br_pop4:
     pop dx
     pop cx
     pop bx
@@ -3317,13 +3784,7 @@ br_opened:
                                     ; call only - and it is ES:DI, not DS:DI
     call br_load
     jc .failed
-    mov si, [br_win]
-    call br_measure
-    mov word [br_top], 0
-    mov word [br_ptop], 0
-    call br_layout
-    call br_paint_band
-    call br_sbar
+    call br_show
     jmp .out
 .toobig:
     mov si, br_s_big
@@ -3338,13 +3799,7 @@ br_opened:
     call OSAPI_TOAST                ; ES:SI, CX ticks
     pop es
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop6
 
 ; =============================================================================
 ; LOADING - claim, read, parse, free the source
@@ -3373,6 +3828,10 @@ br_load:
                                     ; have to write (br_arg's launch path
                                     ; reaches it at BN_IDLE, where it is a
                                     ; no-op)
+    mov byte [br_frameappend], 0
+    mov byte [br_framecount], 0
+    mov byte [br_frameidx], 0
+    mov byte [br_framecut], 0
     call br_free_all
 
     mov ax, [br_srclen]             ; source claim: exactly the file when the
@@ -3385,30 +3844,10 @@ br_load:
     shr ax, cl
     inc ax
 .kb:
-    mov [br_srckb], ax
-    call OSAPI_MEM_CLAIM
+    call br_srcclaim
     jc .fail
-    mov [br_srcseg], dx
-
-    mov ax, [br_srckb]              ; document claim
-    mov bx, BR_DOCMUL
-    mul bx
-    add ax, BR_DOCSLK
-    cmp ax, BR_DOCMAX               ; ...clamped, because every offset into it
-    jbe .dok                        ; is a WORD: 64 KB is not a 16-bit byte
-    mov ax, BR_DOCMAX               ; count, and the limit arithmetic below
-.dok:                               ; would wrap rather than refuse
-    mov [br_dockb], ax
-    call OSAPI_MEM_CLAIM
+    call br_claimrest               ; the document, lines and hrefs
     jc .fail
-    mov [br_docseg], dx
-
-    mov ax, BR_LINEKB               ; line table
-    call OSAPI_MEM_CLAIM
-    jc .fail
-    mov [br_lseg], dx
-
-    call br_lnkclaim                ; ...and the hrefs (BROWSER-PLAN 6)
 
     mov si, br_name                 ; read the whole file
     mov es, [br_srcseg]
@@ -3456,37 +3895,32 @@ br_load:
 br_free_all:
     push ax
     push dx
-    mov dx, [br_srcseg]
-    or dx, dx
-    jz .a
-    call OSAPI_MEM_FREE
-    mov word [br_srcseg], 0
-.a:
-    mov dx, [br_docseg]
-    or dx, dx
-    jz .b
-    call OSAPI_MEM_FREE
-    mov word [br_docseg], 0
-.b:
-    mov dx, [br_lseg]
-    or dx, dx
-    jz .c
-    call OSAPI_MEM_FREE
-    mov word [br_lseg], 0
-.c:
-    mov dx, [br_lnkseg]
-    or dx, dx
-    jz .d
-    call OSAPI_MEM_FREE
-    mov word [br_lnkseg], 0
-.d:
-    mov word [br_doclen], 0
-    mov word [br_nlines], 0
-    mov word [br_top], 0
-    mov word [br_ptop], 0
-    mov word [br_cols], 0           ; force a relayout on the next paint
+    push si
+    mov si, br_srcseg               ; the source, the document and the line
+    call .one                       ; table, three words in a row...
+    call .one
+    call .one
+    mov si, br_lnkseg               ; ...and the link arena
+    call .one
+    xor ax, ax
+    mov [br_doclen], ax
+    mov [br_nlines], ax
+    mov [br_top], ax
+    mov [br_ptop], ax
+    mov [br_cols], ax               ; force a relayout on the next paint
+    pop si
     pop dx
     pop ax
+    ret
+.one:                               ; free the claim the word at SI names, if
+    xor dx, dx                      ; any, and zero the word; SI += 2
+    xchg dx, [si]
+    inc si
+    inc si
+    or dx, dx
+    jz .none
+    call OSAPI_MEM_FREE
+.none:
     ret
 
 ; =============================================================================
@@ -3506,28 +3940,62 @@ br_parse:
     push si
     push di
     push es
-    mov word [br_doclen], 0
+    mov byte [br_parsing], 1
+    cmp byte [br_frameappend], 0
+    jne .keepdoc
+    xor ax, ax                      ; every reset below stores AX or AL: a
+    mov [br_doclen], ax             ; register store is three bytes where an
+    mov [br_lnkn], ax               ; immediate zero is five or six (apps size
+    mov [br_lnkw], ax               ; pass 2)
+    mov [br_linklimited], al
+    push es
+    push ds
+    pop es
+    mov di, br_lnkfrm
+    mov cx, BR_LNKMAX/2
+    rep stosw
+    pop es
+.keepdoc:
     mov word [br_onw], 0
-    mov word [br_lnkn], 0           ; the link table is the PAGE's
-    mov word [br_lnkw], 0
     mov word [br_lnkopen], 0FFFFh
     mov word [br_lnkhit], 0FFFFh
-    mov byte [br_fn], 0
-    mov word [br_subofs], 0         ; ...and the submit button's span, or a
-    mov word [br_subend], 0         ; page with no form inherits the last
-                                    ; page's button at an offset that is now
-                                    ; somebody else's text
-    mov byte [br_hn], 0
-    mov word [br_hnw], 0
-    mov byte [br_hid], 0
-    mov byte [br_faction], 0
-    mov byte [br_ptitle], 0         ; the title is the PAGE's, like the links
+    mov byte [br_formcur], 0FFh
+    cmp byte [br_frameappend], 0    ; THE FORMS ARE THE PAGE'S, like the links:
+    je .newforms                    ; a child frame ADDS its records to the
+    cmp byte [br_framecurrent], 0   ; frames before it, or a form in any frame
+    jne .keepforms                  ; but the last would have no record and
+.newforms:                          ; its button no click. The FIRST child
+    xor ax, ax                      ; starts over: the frameset's own records
+    mov [br_fn], al                 ; point into the document brnet discarded
+    mov [br_formn], al
+    mov [br_subn], al
+    push es
+    push ds
+    pop es
+    mov di, br_factions
+    mov cx, (BR_FORMMAX*BR_ACTMAX + BR_FORMMAX*BR_HIDMAX + BR_FORMMAX*3 + BR_SUBMAX*BR_SUBSZ)/2
+    rep stosw
+    pop es
+.keepforms:
+    xor ax, ax
+    mov [br_ptitle], al             ; the title is the PAGE's, like the links
     mov byte [br_fcur], 0FFh        ; 0 is a real field, so "none" is 0FFh
-    mov byte [br_on], 0
-    mov byte [br_wsp], 0
-    mov byte [br_any], 0
-    mov byte [br_pre], 0
-    mov byte [br_trunc], 0
+    mov [br_on], ax                 ; ...and br_wsp
+    mov [br_any], ax                ; ...and br_pre
+    mov [br_trunc], al
+    mov [br_hn], al
+    mov [br_hnw], ax
+    mov [br_hid], al
+    mov [br_faction], al
+    mov [br_fdepth], al
+    mov [br_frameattr], al
+    mov [br_fmode], al
+    mov byte [br_fnewrow], 1
+    cmp [br_frameappend], al
+    jne .parsebody
+    mov [br_framecount], al
+    mov [br_frameidx], al
+.parsebody:
     call br_sniff_utf8
     mov es, [br_srcseg]
     xor si, si
@@ -3552,6 +4020,7 @@ br_parse:
     mov al, D_END
     call br_put
     call br_flushbuf
+    mov byte [br_parsing], 0
     pop es
     pop di
     pop si
@@ -3787,12 +4256,31 @@ br_foldwide:
 ; --- br_entity - &...; -> folded text ----------------------------------------
 ; A malformed entity is LITERAL TEXT, never an error and never a swallowed
 ; line (tests/htm/torture.htm section 6).
+;
+; AN ENTITY IS INK, so the pending space is owed to it exactly as it is owed
+; to an ordinary byte - br_char's `.ink` path is `br_wflush` then `br_fold`
+; and this is that pair one level up. Without the flush, `word &mdash; word`
+; drew as `word- word`: the space BEFORE the entity was collapsed into
+; [br_wsp] and then never spent, because every path out of here reaches
+; br_fold without passing br_char at all. It is silent in two directions -
+; the space after the dash survives (that one is br_char's), so the line
+; reads as a typographical choice rather than a dropped character, and
+; tools/htmsim.py cannot see it AT ALL, because the model unescapes entities
+; into the text stream before it collapses whitespace and therefore has no
+; entity left to lose a space in front of (SPEC.md 71.13).
+;
+; Flushing at ENTRY rather than beside each br_fold is safe because every
+; path out of here emits exactly once - `.have`, `.num` and `.literal` alike
+; - and it is right even when br_fold DROPS the character (a fold to 0, the
+; soft hyphen): the space is the source's, not the entity's, and br_char
+; spends it the same way in the same case.
 br_entity:
     push ax
     push bx
     push cx
     push dx
     push di
+    call br_wflush                  ; the pending space, if one is owed
     mov di, si                      ; remember where the body starts
     xor cx, cx
     mov bx, br_ebuf
@@ -3932,8 +4420,8 @@ br_named:
     mov di, br_ebuf
 .cmp:
     mov al, [si]
-    or al, al
-    jz .end
+    test al, al
+    js .end                         ; the terminator: bit 7 and the answer
     cmp al, [di]
     jne .skip
     inc si
@@ -3942,18 +4430,15 @@ br_named:
 .end:
     cmp byte [di], 0
     jne .skip
-    mov al, [si+1]
+    and al, 7Fh
     clc
     jmp .out
-.skip:
+.skip:                              ; past this entry's terminator
+    mov al, [si]
+    inc si
+    test al, al
+    jns .skip
     mov bx, si
-.fwd:
-    cmp byte [bx], 0
-    je .fwd2
-    inc bx
-    jmp .fwd
-.fwd2:
-    add bx, 2
     jmp .next
 .none:
     stc
@@ -4096,7 +4581,6 @@ br_skipcomment:
 br_act:
     push ax
     push bx
-    push cx
     push di
     ; SI IS NOT TOUCHED IN HERE, and that is load-bearing rather than tidy:
     ; SI is the parse's position in the SOURCE, and br_do's TA_DROP path calls
@@ -4113,18 +4597,17 @@ br_act:
     ja .table
     cmp byte [br_tname+2], 0
     jne .table
-    cmp byte [br_close], 0
-    jne .hclose
-    call br_break
+    call br_break                   ; open or close, a heading is a block
     push ax
     mov al, D_HEAD
     call br_put
     pop ax
     sub al, '0'
+    cmp byte [br_close], 0
+    je .rank
+    xor al, al                      ; closing heading clears the active style
+.rank:
     call br_put
-    jmp .out
-.hclose:
-    call br_break
     jmp .out
 .table:
     mov bx, br_tagtab
@@ -4134,8 +4617,8 @@ br_act:
     mov di, br_tname
 .cmp:
     mov al, [bx]
-    or al, al
-    jz .end
+    test al, al
+    js .end                         ; the terminator: bit 7 and the action
     cmp al, [di]
     jne .skip
     inc bx
@@ -4144,158 +4627,648 @@ br_act:
 .end:
     cmp byte [di], 0
     jne .skip
-    mov al, [bx+1]
+    and al, 7Fh
     call br_do
     jmp .out
-.skip:
-    cmp byte [bx], 0                ; walk to this entry's NUL...
-    je .fwd2
+.skip:                              ; walk past this entry's terminator
+    mov al, [bx]
     inc bx
-    jmp .skip
-.fwd2:
-    add bx, 2                       ; ...then past it and its action byte
+    test al, al
+    jns .skip
     jmp .next
 .out:
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; A tag's ACTION byte, which is what br_tagtab's terminator carries (bit 7
+; set there, so it must fit seven bits). Two kinds:
+;
+;   1..7     a routine of its own, through br_dotab
+;   TA_MARK  "a block that leaves ONE marker": br_break, then the marker in
+;            the low nibble - plus TA_PAIR, a close tag leaves the NEXT marker
+;            (D_PRE1/D_PRE0 and their kind), or TA_OPEN, a close tag leaves
+;            nothing at all. Seven tags were seven copies of that in br_do.
+TA_LINK  equ 1
+TA_PARA  equ 2
+TA_BR    equ 3
+TA_TITLE equ 4                  ; <title>: dropped from the PAGE like TA_DROP,
+                                ; but read on the way past - it is what the
+                                ; History menu labels this entry with
+TA_IMG   equ 15
+TA_SELECT equ 16
+TA_FRAMESET equ 17
+TA_FRAME equ 18
+TA_TEXTAREA equ 19
+TA_DROP  equ 5
+TA_FORM  equ 6
+TA_INPUT equ 7
+TA_BOLD  equ 8
+TA_ITALIC equ 9
+TA_UNDER equ 10
+TA_QUOTE equ 11
+TA_MARK  equ 40h
+TA_OPEN  equ 20h
+TA_PAIR  equ 10h
+TA_HR    equ TA_MARK | D_HR
+TA_LI    equ TA_MARK | TA_OPEN | D_LI
+TA_PRE   equ TA_MARK | TA_PAIR | D_PRE1
+TA_CEN   equ TA_MARK | TA_PAIR | D_CEN1
+TA_TAB   equ TA_MARK | TA_PAIR | D_TAB1
+TA_ROW   equ TA_MARK | TA_OPEN | D_ROW
+TA_CELL  equ TA_MARK | TA_OPEN | D_CELL
+%if D_PRE0 != D_PRE1 + 1 || D_CEN0 != D_CEN1 + 1 || D_TAB0 != D_TAB1 + 1
+%error "TA_PAIR's close marker is the open one plus one"
+%endif
+
+; br_do - one tag's action. in: AL = the action byte, [br_close]; BX free
+; (br_act banks it). Everything else as the routine it reaches.
+br_do:
+    cmp al, TA_FRAMESET
+    jne .frame
+    jmp br_frameset
+.frame:
+    cmp al, TA_FRAME
+    jne .anchor
+    jmp br_frame
+.anchor:
+    cmp al, TA_IMG
+    jne .select
+    jmp br_image
+.select:
+    cmp al, TA_SELECT
+    jne .textarea
+    jmp br_select
+.textarea:
+    cmp al, TA_TEXTAREA
+    jne .cell
+    cmp byte [br_close], 0
+    jne .done
+    push si
+    mov si, br_s_unsup
+    call br_puts
+    pop si
+    jmp br_skipelem
+.cell:
+    cmp al, TA_CELL
+    jne .format
+    cmp byte [br_close], 0
+    jne .done
+    call br_tcelltag
+.done:
+    ret
+.format:
+    cmp al, TA_BOLD
+    jb .anchorlink
+    cmp al, TA_QUOTE
+    ja .anchorlink
+    sub al, TA_BOLD
+    shl al, 1
+    xor ah, ah
+    mov bx, ax
+    jmp [bx + br_fmttab]
+.anchorlink:
+    test al, TA_MARK
+    jnz .mark
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    jmp [bx + br_dotab - 2]
+.mark:
+    test al, TA_OPEN                ; open-only: a close tag leaves nothing
+    jz .any
+    cmp byte [br_close], 0
+    jne .no
+.any:
+    cmp al, TA_LI
+    je .list
+    call br_break
+    jmp .marker
+.list:
+    mov byte [br_any], 0           ; the next item starts a fresh line, not a
+    mov byte [br_wsp], 0           ; paragraph-sized blank gap
+.marker:
+    mov ah, al
+    and al, 0Fh
+    test ah, TA_PAIR                ; paired: the close tag's marker is next
+    jz .put
+    cmp byte [br_close], 0
+    je .put
+    inc al
+.put:
+    cmp al, D_PRE1                  ; <pre> and </pre> also switch the
+    jb .emit                        ; parse's own whitespace rule:
+    cmp al, D_PRE0                  ; [br_pre] = 1 under D_PRE1, 0 under
+    ja .emit                        ; D_PRE0
+    mov ah, D_PRE0
+    sub ah, al
+    mov [br_pre], ah
+.emit:
+    jmp br_put
+.br:
+    mov al, D_BR
+    call br_put
+    mov byte [br_wsp], 0
+.no:
+    ret
+
+.title:
+    cmp byte [br_close], 0
+    jne .no
+    call br_captitle                ; ...read it BEFORE throwing it away
+    jmp br_skipelem
+.drop:
+    cmp byte [br_close], 0
+    jne .no
+    jmp br_skipelem                 ; the CONTENT goes too, and it contains
+                                    ; markup on purpose (torture.htm)
+.form:
+    call br_break
+    jmp br_form
+br_fmttab:
+    dw br_fmtbold, br_fmtitalic, br_fmtunder, br_fmtquote
+br_fmtbold:
+    mov al, D_B1
+    cmp byte [br_close], 0
+    je br_fmtemit
+    mov al, D_B0
+    jmp br_fmtemit
+br_fmtitalic:
+    mov al, D_I1
+    cmp byte [br_close], 0
+    je br_fmtemit
+    mov al, D_I0
+    jmp br_fmtemit
+br_fmtunder:
+    mov al, D_U1
+    cmp byte [br_close], 0
+    je br_fmtemit
+    mov al, D_U0
+br_fmtemit:
+    jmp br_put
+br_fmtquote:
+    call br_break
+    mov al, D_Q1
+    cmp byte [br_close], 0
+    je .put
+    mov al, D_Q0
+.put:
+    jmp br_put
+br_dotab:
+    dw br_anchor, br_break, br_do.br, br_do.title, br_do.drop, br_do.form
+    dw br_input
+%if TA_INPUT != 7 || TA_LINK != 1
+%error "br_dotab is indexed by the action byte, from TA_LINK = 1"
+%endif
+
+; Open a table cell and store its bounded layout hints inline in the document.
+; Keeping the hints beside D_CELL avoids a second per-cell allocation.
+br_tcelltag:
+    push ax
+    push bx
+    push cx
+    push di
+    push si
+    call br_break
+    mov al, D_CELL
+    call br_put
+    mov byte [br_tspan], 1          ; default span
+    mov di, br_a_colspan
+    call br_getattr
+    jc .align
+    call br_span2num
+    jc .align
+    or ax, ax
+    jz .align
+    cmp ax, BR_TCOLS
+    jbe .span
+    mov ax, 1                       ; malformed/out-of-range is a plain cell
+.span:
+    mov [br_tspan], al
+.align:
+    mov byte [br_talign], 0
+    mov di, br_a_align
+    mov bx, br_s_center
+    call br_attreq
+    jnc .center
+    mov di, br_a_align
+    mov bx, br_s_middle
+    call br_attreq
+    jnc .center
+    mov di, br_a_align
+    mov bx, br_s_right
+    call br_attreq
+    jc .meta
+    mov byte [br_talign], 2
+    jmp .meta
+.center:
+    mov byte [br_talign], 1
+.meta:
+    mov al, D_CMETA
+    call br_put
+    mov al, [br_tspan]
+    dec al
+    mov bl, [br_talign]
+    mov cl, 3
+    shl bl, cl
+    or al, bl
+    call br_put
+    pop si
     pop di
     pop cx
     pop bx
     pop ax
     ret
 
-TA_PARA equ 1
-TA_BR   equ 2
-TA_HR   equ 3
-TA_LI   equ 4
-TA_PRE  equ 5
-TA_CEN  equ 6
-TA_DROP equ 7
-TA_TAB  equ 8
-TA_ROW  equ 9
-TA_CELL equ 10
-TA_FORM equ 11
-TA_INPUT equ 12
-TA_LINK  equ 13
-TA_TITLE equ 14                 ; <title>: dropped from the PAGE like TA_DROP,
-                                ; but read on the way past - it is what the
-                                ; History menu labels this entry with
-
-br_do:
-    cmp al, TA_LINK
-    jne .para
-    call br_anchor
-    ret
-.para:
-    cmp al, TA_PARA
-    jne .br
-    call br_break
-    ret
-.br:
-    cmp al, TA_BR
-    jne .hr
-    mov al, D_BR
-    call br_put
-    mov byte [br_wsp], 0
-    ret
-.hr:
-    cmp al, TA_HR
-    jne .li
-    call br_break
-    mov al, D_HR
-    call br_put
-    ret
-.li:
-    cmp al, TA_LI
-    jne .pre
+; --- br_frameset - nested row/column sets share one linear table -------------
+br_frameset:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
     cmp byte [br_close], 0
-    jne .no
-    call br_break
-    mov al, D_LI
-    call br_put
-    ret
-.pre:
-    cmp al, TA_PRE
-    jne .cen
-    call br_break
-    mov al, D_PRE1
-    cmp byte [br_close], 0
-    je .p1
-    mov al, D_PRE0
-.p1:
-    mov ah, al
-    sub ah, D_PRE1
-    mov byte [br_pre], 1
-    or ah, ah
-    jz .p2
-    mov byte [br_pre], 0
-.p2:
-    call br_put
-    ret
-.cen:
-    cmp al, TA_CEN
-    jne .drop
-    call br_break
-    mov al, D_CEN1
-    cmp byte [br_close], 0
-    je .c1
-    mov al, D_CEN0
-.c1:
-    call br_put
-    ret
-.drop:
-    cmp al, TA_TITLE
-    jne .drop2
-    cmp byte [br_close], 0
-    jne .no
-    call br_captitle                ; ...read it BEFORE throwing it away
-    call br_skipelem
-    ret
-.drop2:
-    cmp al, TA_DROP
-    jne .tab
-    cmp byte [br_close], 0
-    jne .no
-    call br_skipelem                ; the CONTENT goes too, and it contains
-    ret                             ; markup on purpose (torture.htm)
-.tab:
-    cmp al, TA_TAB
-    jne .row
+    jne .close
+    cmp byte [br_fdepth], 0
+    jne .nested
     call br_break
     mov al, D_TAB1
-    cmp byte [br_close], 0
-    je .t1
+    call br_put
+.nested:
+    xor bx, bx
+    mov bl, [br_fdepth]
+    cmp bl, 8
+    jae .depth
+    mov al, [br_fmode]
+    mov [br_fmodes+bx], al
+    mov di, br_a_cols
+    call br_getattr
+    jnc .horizontal
+    mov di, br_a_rows
+    call br_getattr
+    jc .depth
+    mov byte [br_fmode], 0
+    mov byte [br_fnewrow], 1
+    jmp .depth
+.horizontal:
+    mov byte [br_fmode], 1
+    mov byte [br_fnewrow], 1
+.depth:
+    inc byte [br_fdepth]
+    jmp .out
+.close:
+    cmp byte [br_fdepth], 0
+    je .out
+    dec byte [br_fdepth]
+    xor bx, bx
+    mov bl, [br_fdepth]
+    cmp bl, 8
+    jae .out
+    mov al, [br_fmodes+bx]
+    mov [br_fmode], al
+    mov byte [br_fnewrow], 1
+    cmp byte [br_fdepth], 0
+    jne .out
+    call br_break
     mov al, D_TAB0
-.t1:
     call br_put
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
-.row:
-    cmp al, TA_ROW
-    jne .cell
+
+; --- br_frame - a bordered row with its frame name and a source link ----------
+br_frame:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
     cmp byte [br_close], 0
-    jne .no
-    call br_break
-    mov al, D_ROW
-    call br_put
+    jne .out
+    cmp byte [br_fdepth], 0
+    je .out                         ; malformed standalone <frame>
+    cmp byte [br_frameappend], 0
+    jne .out                         ; nested frames are not recursively fetched
+    cmp byte [br_framecount], 8
+    jae .out
+    ; Frame URLs are queued in the existing link arena. br_finish fetches them
+    ; one at a time and appends their parsed text as bordered table rows.
+    mov byte [br_frameattr], 1
+    call br_anchor                  ; this tag's href is the frame's `src`
+    mov byte [br_frameattr], 0
+    cmp word [br_lnkopen], 0FFFFh
+    je .out
+    xor bx, bx
+    mov bl, [br_framecount]
+    mov ax, [br_lnkopen]
+    mov [br_frameurls+bx], al
+    mov byte [br_close], 1
+    call br_anchor                  ; zero-width link: queue only, never shown
+    mov byte [br_close], 0
+    xor bx, bx
+    mov bl, [br_framecount]
+    mov al, [br_fnewrow]
+    cmp byte [br_fmode], 0
+    je .frameflag
+    or al, 2
+.frameflag:
+    mov [br_frameflags+bx], al
+    mov al, [br_fmode]
+    xor al, 1
+    mov [br_fnewrow], al
+    cmp byte [br_framecount], 0
+    jne .count
+    ; Keep the frameset's base URL so every src is resolved against its owner.
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov si, br_host                 ; host and path are ONE run on both
+    mov di, br_framehost            ; sides, so one copy
+    mov cx, BR_HOSTMAX + BR_PATHMAX
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+.count:
+    inc byte [br_framecount]
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
-.cell:
-    cmp al, TA_CELL
-    jne .form
+
+; Images remain undisplayed.  Their alternate text is useful page content,
+; especially when the image is the only child of an anchor.
+br_image:
     cmp byte [br_close], 0
-    jne .no
-    call br_break
-    mov al, D_CELL
-    call br_put
+    jne .out
+    push cx
+    push di
+    push si
+    mov di, br_a_alt
+    call br_getattr
+    jc .done
+.copy:
+    cmp si, cx
+    jae .done
+    mov al, [es:si]
+    inc si
+    cmp al, '&'                     ; alt="Tom &amp; Jerry": the entity, as
+    je .ent                         ; br_parse's own loop decodes it
+    call br_char
+    jmp .copy
+.ent:
+    call br_entity
+    jmp .copy
+.done:
+    pop si
+    pop di
+    pop cx
+.out:
     ret
-.form:
-    cmp al, TA_FORM
-    jne .input
-    call br_break
-    call br_form
+
+; A select is a fixed-width text control backed by the retained source.  The
+; record remembers where the next option begins, so a click can advance it
+; without copying an option table into resident memory.
+br_select:
+    cmp byte [br_close], 0
+    jne .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov al, [br_formcur]
+    cmp al, BR_FORMMAX
+    jae .unsup
+    mov dl, al
+    mov al, [br_fn]
+    cmp al, BR_FMAX
+    jae .unsup
+    call br_fld
+    mov [bx+FLD_FORM], dl
+    mov byte [bx+FLD_TYPE], 1
+    mov word [bx+FLD_W], 8          ; W = 8 and LEN = 0, one store
+    mov [bx+FLD_FIRST], si
+    call br_fldname
+.find:
+    push bx
+    call br_seloption
+    pop bx
+    jc .skip
+    cmp byte [br_selmark], 0
+    jne .selected
+.findselected:
+    mov si, dx
+    push bx
+    call br_seloption
+    pop bx
+    jc .fallback
+    cmp byte [br_selmark], 0
+    je .findselected
+    jmp .selected
+.fallback:
+    mov si, [bx+FLD_FIRST]
+    push bx
+    call br_seloption
+    pop bx
+    jc .skip
+.selected:
+    mov [bx+FLD_SCAN], dx
+    call br_selvalue               ; submit the option's value, not its label
+    push si
+    mov al, '['
+    call br_fput
+    mov ax, [br_doclen]
+    add ax, [br_onw]
+    mov [bx+FLD_OFS], ax
+    pop si
+.text:
+    cmp si, cx
+    jae .pad
+    mov al, [bx+FLD_LEN]
+    cmp al, [bx+FLD_W]
+    jae .pad
+    mov al, [es:si]
+    inc si
+    cmp al, 0x20
+    jb .text
+    cmp al, 0x7E
+    ja .text
+    call br_fput
+    inc byte [bx+FLD_LEN]
+    jmp .text
+.pad:
+    mov cl, [bx+FLD_W]
+    sub cl, [bx+FLD_LEN]
+    xor ch, ch
+.pads:
+    jcxz .close
+    mov al, D_NBSP
+    call br_fput
+    loop .pads
+.close:
+    mov al, ']'
+    call br_fput
+    inc byte [br_fn]
+.skip:
+    mov si, [bx+FLD_FIRST]
+    call br_skipelem
+    jmp .done
+.unsup:                             ; outside any form, or past the control
+    push si                         ; limit: refused VISIBLY and its options
+    mov si, br_s_unsup              ; SWALLOWED, the textarea's way - SI is
+    call br_puts                    ; still the body start and br_tname is
+    pop si                          ; still "select"
+    call br_skipelem
+.done:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
     ret
-.input:
-    cmp al, TA_INPUT
-    jne .no
-    call br_input
+
+; in ES:SI search position; out SI=text, CX=end, DX=next search, CF=0.
+br_seloption:
+    push ax
+    push di
+.seek:
+    cmp si, [br_srclen]
+    jae .no
+    cmp byte [es:si], '<'
+    je .tag
+    inc si
+    jmp .seek
+.tag:
+    inc si
+    cmp byte [es:si], '/'
+    jne .option
+    inc si
+    mov di, br_s_select
+.closename:
+    mov al, [di]
+    or al, al
+    jz .no
+    cmp si, [br_srclen]
+    jae .no
+    mov ah, [es:si]
+    cmp ah, 'A'
+    jb .closecmp
+    cmp ah, 'Z'
+    ja .closecmp
+    or ah, 0x20
+.closecmp:
+    cmp ah, al
+    jne .seek
+    inc si
+    inc di
+    jmp .closename
+.option:
+    mov di, br_s_option
+.name:
+    mov al, [di]
+    or al, al
+    jz .attrs
+    mov ah, [es:si]
+    cmp ah, 'A'
+    jb .cmp
+    cmp ah, 'Z'
+    ja .cmp
+    or ah, 0x20
+.cmp:
+    cmp ah, al
+    jne .seek
+    inc si
+    inc di
+    jmp .name
+.attrs:
+    mov [br_astart], si
+    mov byte [br_selmark], 0
+.tagend:
+    cmp si, [br_srclen]
+    jae .no
+    mov al, [es:si]
+    inc si
+    cmp al, '>'
+    jne .tagend
+    mov ax, si
+    dec ax
+    mov [br_aend], ax
+    mov di, br_s_selected
+    call br_hasattr
+    jc .notselected
+    mov byte [br_selmark], 1
+.notselected:
+    mov di, si
+.endtext:
+    cmp di, [br_srclen]
+    jae .no
+    cmp byte [es:di], '<'
+    je .yes
+    inc di
+    jmp .endtext
+.yes:
+    mov cx, di
+    mov dx, di
+    clc
+    jmp .out
 .no:
+    stc
+.out:
+    pop di
+    pop ax
+    ret
+
+; Copy the selected option's value to the field record. When HTML omits value,
+; the visible label is the successful-control value (common year selectors use
+; the same text for both).
+; in: BX = field record, SI..CX = selected option label, ES = source segment
+; out: all registers preserved
+br_selvalue:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    push si
+    push cx
+    mov di, br_a_value
+    call br_getattr                 ; CF=0: SI..CX is the value
+    jnc .copy
+    pop cx                          ; ...else the label, which is the span
+    pop si                          ; we were handed
+    push si
+    push cx
+.copy:
+    lea di, [bx+FLD_VALUE]
+    call br_fldcp
+    pop cx
+    pop si
+
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; --- br_skipelem - swallow to the matching close tag -------------------------
@@ -4364,6 +5337,10 @@ br_captitle:
     cmp al, '<'
     je .done
     inc si
+    cmp al, '&'
+    jne .space
+    call br_tentity                ; decode once for both the caption and History
+.space:
     cmp al, ' '
     ja .put
     mov al, ' '                     ; a newline, a tab and every other control
@@ -4392,6 +5369,78 @@ br_captitle:
     pop si
     pop cx
     pop ax
+    ret
+
+; --- br_tentity - decode one title entity; unknown ones stay literal ---------
+; in: ES:SI just after '&'; out: AL = folded byte, SI after ';'; CF=1 literal
+; The renderer already owns the named table and numeric decoder. Reusing them
+; here keeps <title> and History labels consistent with the page body without
+; another table or any extra per-page storage.
+br_tentity:
+    push bx
+    push cx
+    push dx
+    push di
+    mov dx, si                      ; rewind to the first byte on malformed input
+    xor cx, cx
+    mov bx, br_ebuf
+.gather:
+    cmp cx, 10
+    jae .literal
+    cmp si, [br_srclen]
+    jae .literal
+    mov al, [es:si]
+    inc si
+    cmp al, ';'
+    je .have
+    mov [bx], al
+    inc bx
+    inc cx
+    jmp .gather
+.have:
+    or cx, cx
+    jz .literal
+    mov byte [bx], 0
+    cmp byte [br_ebuf], '#'
+    je .numeric
+    call br_named
+    jc .literal
+    jmp short .known
+.numeric:
+    call br_ednum
+    jc .literal
+    cmp ax, 0x100
+    jae .wide
+    cmp al, 0x20
+    jb .space
+    cmp al, 0x7E
+    jbe .known
+    mov bl, al
+    sub bl, 0x80
+    xor bh, bh
+    mov al, [bx+br_l1tab]
+    or al, al
+    jnz .known
+    mov al, '?'
+    jmp short .known
+.wide:
+    call br_foldwide
+.known:
+    clc
+    jmp short .out
+.space:
+    mov al, ' '
+    clc
+    jmp short .out
+.literal:
+    mov si, dx
+    mov al, '&'
+    stc
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; --- br_break - end the current block ----------------------------------------
@@ -4479,18 +5528,25 @@ br_layout:
     push si
     push di
     push es
-    mov word [br_nlines], 0
-    cmp word [br_docseg], 0
+    xor ax, ax
+    mov [br_nlines], ax
+    cmp [br_docseg], ax
     je .out
-    mov word [br_lstart], 0
-    mov word [br_nch], 0
-    mov word [br_bpos], 0
-    mov word [br_bch], 0
-    mov byte [br_lcen], 0
-    mov byte [br_lpre], 0
-    mov byte [br_lind], 0
-    mov word [br_lnkopen], 0FFFFh   ; the LAYOUT's copy of the link state, which
-    mov word [br_lnkst], 0FFFFh     ; is a different walk from the parse's
+    mov [br_lstart], ax
+    mov [br_nch], ax
+    mov [br_bpos], ax
+    mov [br_bch], ax
+    mov [br_lcen], al
+    mov [br_lpre], ax               ; br_lpre and br_lind, one word
+    mov [br_lhead], al              ; AX is still 0: three-byte stores
+    mov [br_lquote], al
+    mov [br_litem], al
+    mov [br_lfmt], al
+    mov ax, [br_cols]
+    mov [br_effcols], ax
+    dec ax
+    mov [br_lnkopen], ax            ; the LAYOUT's copy of the link state, which
+    mov [br_lnkst], ax              ; is a different walk from the parse's
     mov ax, [br_doclen]             ; the composed-row arena starts past the
     inc ax                          ; document and is rebuilt with the layout
     mov [br_comp], ax
@@ -4520,7 +5576,7 @@ br_layout:
     mov [br_bch], ax
 .over:
     mov ax, [br_nch]
-    cmp ax, [br_cols]
+    cmp ax, [br_effcols]
     jbe .loop
     cmp byte [br_lpre], 0
     jne .loop                       ; PRE never wraps: it runs off the band
@@ -4533,6 +5589,7 @@ br_layout:
     mov bx, ax
     dec bx                          ; end = just before the space
     call br_emitline
+    call br_seteff                  ; emitline consumed the one-line indent
     mov ax, [br_bpos]
     mov [br_lstart], ax
     mov cx, [br_nch]
@@ -4543,8 +5600,9 @@ br_layout:
 .hard:
     mov bx, si                      ; a word longer than the band: split it
     dec bx
-    mov cx, [br_cols]
+    mov cx, [br_effcols]
     call br_emitline
+    call br_seteff
     mov [br_lstart], bx
     mov word [br_nch], 1
     mov word [br_bpos], 0
@@ -4554,6 +5612,24 @@ br_layout:
     je .mlnk1                       ; END NO LINE.** Every other marker in this
     cmp al, D_LNK0                  ; format is a break and the emitline below
     je .mlnk0                       ; is why; a link is a run of ordinary text
+    cmp al, D_B1
+    je .mbold1
+    cmp al, D_B0
+    je .mbold0
+    cmp al, D_I1
+    je .mitalic1
+    cmp al, D_I0
+    je .mitalic0
+    cmp al, D_U1
+    je .munder1
+    cmp al, D_U0
+    je .munder0
+    cmp al, D_CMETA
+    je .mcellmeta
+    cmp al, D_Q1
+    je .mquote1
+    cmp al, D_Q0
+    je .mquote0
     cmp al, D_END                   ; **AND D_END COMES BEFORE THE EMIT, NOT
     je .fin                         ; AFTER IT**: .fin emits the pending line
                                     ; itself, so testing it below meant a
@@ -4602,21 +5678,72 @@ br_layout:
     inc si
     mov word [br_lnkopen], 0FFFFh
     jmp .loop
+.mcellmeta:
+    add si, 2                       ; cell hint plus its packed value - and
+    jmp .mrst                       ; the line starts AFTER them, not at the
+                                    ; hint (nch and bpos are D_CELL's zeroes
+                                    ; still, so .mrst only moves br_lstart)
+.mbold1:
+    inc si
+    or byte [br_lfmt], LNF_BOLD
+    jmp .loop
+.mbold0:
+    inc si
+    and byte [br_lfmt], 0FFh-LNF_BOLD
+    jmp .loop
+.mitalic1:
+    inc si
+    or byte [br_lfmt], LNF_ITALIC
+    jmp .loop
+.mitalic0:
+    inc si
+    and byte [br_lfmt], 0FFh-LNF_ITALIC
+    jmp .loop
+.munder1:
+    inc si
+    or byte [br_lfmt], LNF_UNDER
+    jmp .loop
+.munder0:
+    inc si
+    and byte [br_lfmt], 0FFh-LNF_UNDER
+    jmp .loop
 .mtab:
     call br_table                   ; SI = the body. CF=1 = inline it, and
     jmp .mrst                       ; either way the walk resumes at SI
 .mpara:
     call br_blank
+    mov byte [br_lhead], 0
+    call br_seteff
     jmp .mrst
 .mhead:
+    mov al, [es:si]                 ; keep the rank for the heading line's
+    mov [br_lhead], al              ; hanging indent and underline
     inc si                          ; the level byte
-    call br_blank
+    call br_seteff
     jmp .mrst
 .mhr:
     call br_emitrule
     jmp .mrst
 .mli:
     mov byte [br_lind], 2
+    mov byte [br_litem], 1
+    call br_seteff
+    jmp .mrst
+.mquote1:
+    inc si                          ; consume D_Q1 before restarting the walk
+    inc byte [br_lquote]
+    cmp byte [br_lquote], 4
+    jbe .quoteindent
+    mov byte [br_lquote], 4
+.quoteindent:
+    call br_seteff
+    jmp .mrst
+.mquote0:
+    inc si                          ; consume D_Q0 before restarting the walk
+    cmp byte [br_lquote], 0
+    je .mrst
+    dec byte [br_lquote]
+    call br_seteff
     jmp .mrst
 .mcen1:
     mov byte [br_lcen], 1
@@ -4649,6 +5776,49 @@ br_layout:
     pop ax
     ret
 
+; --- br_seteff - wrap width after the active line's left indent --------------
+; br_cols already excludes the scroll bar and its two-cell margin.
+; Quote, list and heading indents are also physical cells, so they must reduce
+; the line length before br_build starts copying at LN_X. Centered text is
+; intentionally excluded: br_emitline centers its measured length afterward.
+br_seteff:
+    push ax
+    push bx
+    xor bx, bx
+    mov al, [br_lquote]
+    xor ah, ah
+    shl ax, 1
+    mov bx, ax                      ; two cells per quote level
+    cmp byte [br_lquote], 0
+    jne .head_done
+    mov al, [br_lhead]
+    or al, al
+    jz .head_done
+    dec al                          ; h1 indent 0, h6 indent 5
+    cmp al, 5
+    jbe .head_add
+    mov al, 5
+.head_add:
+    xor ah, ah
+    add bx, ax
+.head_done:
+    xor ax, ax
+    mov al, [br_lind]
+    add bx, ax
+    mov ax, [br_cols]
+    sub ax, bx
+    jnc .store
+    xor ax, ax
+.store:
+    cmp ax, 1
+    jae .save
+    mov ax, 1
+.save:
+    mov [br_effcols], ax
+    pop bx
+    pop ax
+    ret
+
 ; --- br_emitline - record [br_lstart, BX) as one display line ----------------
 ; in: BX = end offset, CX = cells of text on it
 br_emitline:
@@ -4677,10 +5847,33 @@ br_emitline:
     jmp .setx
 .ind:
     mov al, [br_lind]
+    mov ah, [br_lquote]
+    shl ah, 1
+    add al, ah                      ; quotes indent every visual line
+    cmp byte [br_lhead], 0
+    je .setx
+    cmp byte [br_lquote], 0
+    jne .setx
+    mov al, [br_lhead]
+    dec al                          ; h1 at column 0, h6 at column 5
+    cmp al, 5
+    jbe .setx
+    mov al, 5
     xor ah, ah
 .setx:
     mov [es:di+LN_X], al
     mov byte [es:di+LN_FL], 0
+    mov al, [br_lfmt]
+    or [es:di+LN_FL], al            ; style active at the line's first cell
+    cmp byte [br_lhead], 0
+    je .nothead
+    or byte [es:di+LN_FL], LNF_HEAD
+.nothead:
+    cmp byte [br_litem], 0
+    je .notitem
+    or byte [es:di+LN_FL], LNF_LIST
+    mov byte [br_litem], 0
+.notitem:
     cmp word [br_lnkst], 0FFFFh     ; ...DID THIS LINE BEGIN INSIDE A LINK?
     je .nolnk                       ; The underline needs it and the line's own
     or byte [es:di+LN_FL], LNF_LNK  ; span may hold no D_LNK1 at all, the
@@ -4704,10 +5897,25 @@ br_emitline:
 ; --- br_blank / br_emitrule - the two lines with no text in them -------------
 br_blank:
     push ax
+    push bx
+    push dx
     push di
     push es
     cmp word [br_nlines], 0
     je .out                         ; never lead the document with a blank
+    mov ax, [br_nlines]
+    dec ax
+    mov bx, LN_SIZE
+    mul bx                          ; **MUL WRITES DX** (SPEC.md 1)
+    mov di, ax
+    mov es, [br_lseg]
+    cmp word [es:di+LN_OFS], 0
+    jne .add
+    cmp word [es:di+LN_END], 0
+    jne .add
+    cmp byte [es:di+LN_FL], 0
+    je .out                         ; coalesce adjacent paragraph breaks
+.add:
     call br_lslot
     jc .out
     mov word [es:di+LN_OFS], 0
@@ -4718,6 +5926,8 @@ br_blank:
 .out:
     pop es
     pop di
+    pop dx
+    pop bx
     pop ax
     ret
 
@@ -4848,6 +6058,7 @@ br_tmeas:
     mov byte [br_tany], 0
     mov word [br_tcells], 0
     mov byte [br_tcol], 0FFh        ; no cell open yet
+    mov byte [br_tspan], 1
     xor bx, bx                      ; BX = this cell's running length
     xor dx, dx                      ; DX = this cell's running WORD length
     xor cx, cx                      ; CX = nested-table depth
@@ -4865,7 +6076,10 @@ br_tmeas:
 .t0:
     cmp al, D_TAB0
     jne .row
-    jcxz .done
+    or cx, cx
+    jnz .t0end
+    jmp .done
+.t0end:
     dec cx
     jmp .loop
 .row:
@@ -4882,8 +6096,38 @@ br_tmeas:
     cmp al, D_CELL
     jne .loop
     call br_tcellend
+    cmp byte [br_tcol], 0FFh
+    jne .nextcol
+    mov byte [br_tcol], 0
+    jmp .meta
+.nextcol:
+    mov al, [br_tspan]
+    add [br_tcol], al
+.meta:
+    mov byte [br_tspan], 1
+    mov byte [br_talign], 0
+    cmp byte [es:si], D_CMETA
+    jne .clipspan
+    inc si
+    mov al, [es:si]
+    mov bl, al
+    and al, 7
+    inc al
+    mov [br_tspan], al
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    and bl, 3
+    mov [br_talign], bl
+    inc si
+.clipspan:
+    mov al, BR_TCOLS
+    sub al, [br_tcol]
+    cmp [br_tspan], al
+    jbe .count
+    mov [br_tspan], al
+.count:
     inc word [br_tcells]
-    inc byte [br_tcol]
     xor bx, bx
     xor dx, dx
     jmp .loop
@@ -4929,8 +6173,25 @@ br_tcellend:
     cmp al, BR_TCOLS
     jae .out
     xor ah, ah
-    mov di, ax
-    inc al
+    mov di, ax                      ; starting logical column
+    mov al, [br_tspan]
+    dec al
+    shl al, 1
+    xor ah, ah
+    cmp bx, ax
+    ja .adjust
+    mov bx, 1
+    jmp .width
+.adjust:
+    sub bx, ax                      ; separators absorbed by the spanning cell
+.width:
+    mov al, [br_tcol]
+    mov ah, [br_tspan]
+    add al, ah                      ; the COUNT through this cell - [br_tn] is
+    cmp al, BR_TCOLS                ; a column count everywhere it is read,
+    jbe .ncap                       ; not the last logical index
+    mov al, BR_TCOLS
+.ncap:
     cmp al, [br_tn]
     jbe .w
     mov [br_tn], al                 ; the widest ROW decides the count
@@ -5148,6 +6409,11 @@ br_tcells_of:
     cmp si, [br_doclen]
     jae .done
     mov al, [es:si]
+    cmp al, D_CMETA                 ; a cell hint's payload (0..23) is not a
+    jne .t1                         ; marker: a 9th cell's, or a nested
+    add si, 2                       ; table's, reaches here and would count
+    jmp .loop                       ; as a D_TAB1/D_TAB0
+.t1:
     cmp al, D_TAB1
     jne .t0
     inc cx
@@ -5172,9 +6438,32 @@ br_tcells_of:
     cmp al, BR_TCOLS
     jae .adv2
     xor ah, ah
+    mov bx, ax
     mov di, ax
     shl di, 1
     inc si
+    mov byte [br_tspanarr+bx], 1
+    mov byte [br_talignarr+bx], 0
+    cmp byte [es:si], D_CMETA
+    jne .cellstart
+    inc si
+    mov al, [es:si]
+    mov bl, al
+    and al, 7
+    inc al
+    mov bx, di
+    shr bx, 1
+    mov [br_tspanarr+bx], al
+    mov al, [es:si]
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    and al, 3                       ; the alignment, built in AL - BX is the
+    mov bx, di                      ; index and was overwriting it
+    shr bx, 1
+    mov [br_talignarr+bx], al
+    inc si
+.cellstart:
     mov [di+br_cs], si
     mov [di+br_ce], si
     inc byte [br_tnc]
@@ -5229,6 +6518,7 @@ br_trowout:
     cmp di, cx
     jb .init
 .line:
+    mov byte [br_tlogical], 0
     call br_tcompose                ; CF=1 when every cell is exhausted
     jc .out
     jmp .line
@@ -5252,19 +6542,51 @@ br_tcompose:
     call br_cstart                  ; DI = the composed line's start
     mov al, '|'
     call br_cput
-    xor cx, cx                      ; CX = column index
+    xor cx, cx                      ; CX = source cell index
     xor dx, dx                      ; DX = did any cell contribute?
 .col:
-    cmp cl, [br_tn]
-    jae .end
+    cmp cl, [br_tnc]
+    jae .missing
+    mov bx, cx
+    mov al, [bx+br_tspanarr]
+    add al, [br_tlogical]
+    cmp al, [br_tn]
+    jbe .spanok
+    mov al, [br_tn]
+    sub al, [br_tlogical]
+    mov [bx+br_tspanarr], al
+.spanok:
     mov al, ' '
     call br_cput
     call br_tcell1                  ; one cell's next fragment, padded
     or dx, ax
     mov al, '|'
     call br_cput
+    mov bx, cx
+    mov al, [bx+br_tspanarr]
+    add [br_tlogical], al
     inc cx
     jmp .col
+.missing:
+    mov al, [br_tlogical]
+    cmp al, [br_tn]
+    jae .end
+    mov bl, al
+    xor bh, bh
+    mov cl, [bx+br_tw]
+    xor ch, ch
+.blank:
+    jcxz .blankdone
+    mov al, ' '
+    call br_cput
+    dec cx
+    jmp .blank
+.blankdone:
+    mov al, '|'
+    call br_cput
+    inc byte [br_tlogical]
+    mov cx, [br_tnc]
+    jmp .missing
 .end:
     or dx, dx
     jz .none
@@ -5292,12 +6614,38 @@ br_tcell1:
     push si
     push di
     mov bx, cx
+    mov al, [bx+br_tspanarr]
+    or al, al
+    jnz .span
+    ; A source cell past the eight-column edge has a measured span of zero.
+    ; It has no display column; consume it rather than letting DEC wrap the
+    ; width loop through 256 bytes of adjacent state.
+    shl bx, 1
+    mov si, [bx+br_ce]
+    mov [bx+br_tcur], si
+    xor ax, ax
+    jmp .out
+.span:
+    mov [br_tspan], al
+    mov al, [bx+br_talignarr]
+    mov [br_talign], al
+    mov bl, [br_tlogical]
+    xor bh, bh
+    xor di, di
+.width:
     mov al, [bx+br_tw]
     xor ah, ah
-    mov di, ax                      ; DI = the column's width
+    add di, ax
+    inc bx
+    dec byte [br_tspan]
+    jnz .width
+    mov bx, cx
+    mov al, [bx+br_tspanarr]
+    dec al
+    shl al, 1
+    xor ah, ah
+    add di, ax                      ; absorb each spanned separator and inset
     xor dx, dx                      ; DX = characters placed
-    cmp cl, [br_tnc]
-    jae .pad                        ; a short row: this column is just padding
     shl bx, 1
     mov si, [bx+br_tcur]
     mov ax, [bx+br_ce]
@@ -5386,6 +6734,10 @@ br_twrap:
     jae .full
     push ax
     mov al, [es:si]
+    cmp al, D_CMETA
+    jne .sc1
+    inc si                          ; a cell hint's payload is not a marker
+.sc1:
     cmp al, 0x20
     jb .adv                         ; a marker inside a cell is not a cell
     inc cx
@@ -5402,6 +6754,33 @@ br_twrap:
     mov cx, bx
     dec cx                          ; ...excluding the space itself
 .take:
+    mov byte [br_tpad], 0
+    jcxz .emitstart
+    push ax                          ; alignment output must not replace the
+                                     ; source cell's end offset in AX
+    push dx                          ; preserve the source cursor across padding
+    mov bx, di
+    sub bx, cx                       ; spare cells inside this cell
+    xor dx, dx
+    cmp byte [br_talign], 2
+    je .rightpad
+    cmp byte [br_talign], 1
+    jne .pad
+    shr bx, 1
+.rightpad:
+    mov dx, bx
+.pad:
+    or dx, dx
+    jz .padend
+    mov al, ' '
+    call br_cput
+    dec dx
+    inc byte [br_tpad]
+    jmp .pad
+.padend:
+    pop dx
+    pop ax
+.emitstart:
     mov si, dx                      ; rewind and emit exactly CX characters
     xor dx, dx
 .emit:
@@ -5412,16 +6791,26 @@ br_twrap:
     cmp al, 0x20                    ; on the count alone left it behind - the
     jae .etxt                       ; anchor stayed open across the cell wall
     cmp al, D_LNK1                  ; and the rest of the row read as part of
-    jb .e2                          ; it. D_LNK1, D_LNK0 and D_LNK1's two
-    jne .em0                        ; payload bytes are the whole of 14..31, so
-    mov [br_wlnk], si               ; ONE compare - read twice, for below and
-    jmp .eput                       ; for equal - separates them from every
-.em0:                               ; other marker, which is still dropped.
-    cmp al, D_LNK0                  ; A LINK COSTS NO WIDTH: it is copied
-    jne .eput                       ; without touching DX, so a cell keeps the
-    mov word [br_wlnk], 0FFFFh      ; columns br_tmeas measured
-.eput:
+    jb .e2                          ; it. D_LNK1 goes over WITH ITS TWO PAYLOAD
+    jne .em0                        ; BYTES, as a unit: br_build and br_linkat
+    mov [br_wlnk], si               ; read the index out of the two bytes after
+    call br_cput                    ; the marker, so dropping them with the
+    mov al, [es:si+1]               ; other markers below 0x20 made two cells
+    call br_cput                    ; of the link's own text the index. A LINK
+    mov al, [es:si+2]               ; COSTS NO WIDTH: it is copied without
+    call br_cput                    ; touching DX, so a cell keeps the columns
+    add si, 2                       ; br_tmeas measured
+    jmp .e2
+.em0:
+    cmp al, D_LNK0
+    jne .emx
+    mov word [br_wlnk], 0FFFFh
     call br_cput
+    jmp .e2
+.emx:
+    cmp al, D_CMETA                 ; every other marker carries no cell width
+    jne .e2                         ; and is dropped - a cell hint with the
+    inc si                          ; payload byte after it
     jmp .e2
 .etxt:
     cmp dx, cx
@@ -5445,6 +6834,9 @@ br_twrap:
     inc si
 .out:
     mov cx, dx
+    xor ax, ax
+    mov al, [br_tpad]
+    add cx, ax
     pop dx
     pop bx
     pop ax
@@ -5581,6 +6973,11 @@ br_tskip:
     jae .out
     mov al, [es:si]
     inc si
+    cmp al, D_CMETA
+    jne .t1
+    inc si                          ; a cell hint's payload is not a marker
+    jmp .loop
+.t1:
     cmp al, D_TAB1
     jne .t0
     inc cx
@@ -5599,9 +6996,8 @@ br_tskip:
 ; =============================================================================
 ; FORMS (BROWSER-PLAN 7)
 ; =============================================================================
-; One text input and one submit button is what a search box is, and that is
-; the whole of what this implements. FrogFind is the first real site and it is
-; exactly that shape (1.1).
+; Browser keeps four bounded form owners and twelve visible controls.
+; Controls remain document spans, so richer forms do not add a painter.
 ;
 ; A FIELD IS A FIXED SPAN OF THE DOCUMENT. The parse emits '[', W spaces and
 ; ']' as ordinary text, and typing rewrites those bytes in place - so the
@@ -5652,37 +7048,58 @@ br_anchor:
     je .out
     mov ax, [br_lnkn]
     cmp ax, BR_LNKMAX
-    jae .out                        ; full: ordinary text from here on
+    jae .limited                    ; full: ordinary text from here on
     mov di, br_a_href
+    cmp byte [br_frameattr], 0
+    je .hrefattr
+    mov di, br_a_src
+.hrefattr:
     call br_getattr                 ; CF=1 = no href, so <a name=...> is TEXT
     jc .out                         ; and promises no click
     mov bx, cx
     sub bx, si                      ; BX = the href's length
     jz .out
+    ; Keep the href compact and relative. br_lnkfrm records the frame whose
+    ; URL is the base, avoiding a long absolute Wayback URL per anchor.
     mov ax, [br_lnkw]
     add ax, bx
     inc ax
-    cmp ax, BR_LINKKB*1024
-    jae .out                        ; the arena is full: text, not a link
+    cmp ax, [br_linkcap]
+    ja .limited                     ; the arena is full: text, not a link
     mov di, [br_lnkw]               ; DI = where this href lands...
-    mov ax, [br_lnkn]
-    mov dx, ax
-    shl dx, 1
-    push bx
-    mov bx, dx
+    mov cx, bx                      ; (CX = the length, which frees BX)
+    mov bx, [br_lnkn]
+    shl bx, 1
     mov [br_lnkoff+bx], di          ; ...RECORDED BEFORE THE COPY, because the
-    pop bx                          ; copy is what moves the cursor
-    mov cx, bx                      ; CX = the count rep movsb wants
+                                    ; copy is what moves the cursor
     mov dx, [br_lnkseg]
     mov ax, [br_srcseg]             ; ...read while DS is still ours
     push ds
-    mov es, dx                      ; **BOTH ENDS ARE FOREIGN SEGMENTS**, so
-    mov ds, ax                      ; this is the one place in the file that
-    cld                             ; moves DS: a movs needs DS:SI and ES:DI at
-    rep movsb                       ; once and neither of them is ours. Nothing
-    xor al, al                      ; between here and the pop may name a
-    stosb                           ; [br_*] - it would read the SOURCE
+    mov es, dx                      ; both ends are foreign segments
+    mov ds, ax
+    cld
+.copyhref:
+    jcxz .hrefdone
+    lodsb
+    cmp al, 0x20                    ; discard control bytes before storing URLs
+    jb .skiphref
+    stosb
+.skiphref:
+    loop .copyhref
+.hrefdone:
+    xor al, al
+    stosb
     pop ds
+    ; Mark links from a child document so br_follow resolves them against
+    ; that frame's saved absolute URL. Zero means the top-level page.
+    mov bx, [br_lnkn]
+    xor al, al                      ; the owner, built in AL - BX is the
+    cmp byte [br_frameappend], 0    ; index and was overwriting it, so every
+    je .ownerstore                  ; link but the first was tagged as a
+    mov al, [br_framecurrent]       ; frame's and resolved against no base
+    inc al
+.ownerstore:
+    mov [br_lnkfrm+bx], al
     mov [br_lnkw], di
     mov es, [br_srcseg]             ; ...and ES back to what br_act passes round
     mov ax, [br_lnkn]
@@ -5694,15 +7111,19 @@ br_anchor:
     mov al, D_LNK1                  ; the marker and its two payload bytes
     call br_put
     mov ax, [br_lnkopen]            ; the index as two bytes in 16..31 - see
-    and al, 15                      ; D_LNK1's own comment for why that range
-    or al, 0x10
+    mov cl, 4                       ; D_LNK1's own comment for why that range.
+    shl ax, cl                      ; It is < BR_LNKMAX, so after the shift AH
+    shr al, cl                      ; is the high nibble and this the low one
+%if BR_LNKMAX > 256
+%error "br_anchor splits a link index of at most 8 bits into two nibbles"
+%endif
+    or ax, 0x1010
+    call br_put                     ; br_put keeps AX
+    mov al, ah
     call br_put
-    mov ax, [br_lnkopen]
-    mov cl, 4
-    shr ax, cl
-    and al, 15
-    or al, 0x10
-    call br_put
+    jmp .out
+.limited:
+    mov byte [br_linklimited], 1
 .out:
     pop di
     pop si
@@ -5862,28 +7283,65 @@ br_form:
     push di
     push si
     cmp byte [br_close], 0
-    jne .out
-    mov byte [br_fn], 0
-    mov byte [br_hn], 0
-    mov byte [br_post], 0
+    je .open
+    mov byte [br_formcur], 0FFh
+    jmp .out
+.open:
+    mov al, [br_formn]
+    cmp al, BR_FORMMAX
+    jae .disabled
+    mov [br_formcur], al
+    inc byte [br_formn]
+    mov di, br_a_method
+    mov bx, br_s_post
+    call br_attreq                  ; CF=0 = POST; AL is kept, the form
+    cbw                             ; AH = 0: AL < BR_FORMMAX. CBW, MOV and
+    mov bx, ax                      ; CMC leave the answer where it is...
+    cmc
+    adc ah, 0                       ; ...and AH = 1 POST, 0 GET (the default)
+    mov [bx+br_fmethods], ah
+    call br_actptr
+    mov bx, si
+    mov byte [bx], 0
     mov di, br_a_action
     call br_getattr
     jc .noact
-    mov di, br_faction
+    mov di, bx
     mov bx, BR_ACTMAX-1
     call br_copyspan
 .noact:
-    mov di, br_a_method
-    mov bx, br_s_post
-    call br_attreq
-    jc .out
-    mov byte [br_post], 1           ; recorded, and 7.5 says why it is not
+    jmp .out
+.disabled:
+    mov byte [br_formcur], 0FFh
 .out:                               ; acted on: the request builder's body
     pop si                          ; path is the one thing v1 leaves out
     pop di
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- br_fldname - the tag's `name` into the record at BX, empty if it has none
+; ...and br_fldcp, the copy both halves of a field record share: the span
+; SI..CX into DI, at most BR_NAMEMAX - 1 bytes and NUL-terminated. Four parse
+; paths carried this inline, each with a push/add/mov/pop where one LEA is
+; the same address (apps size pass 2). Clobbers SI, CX and DI as br_getattr
+; does; BX is kept.
+%if BR_VALMAX != BR_NAMEMAX
+%error "br_fldcp bounds a name and a value with one limit"
+%endif
+br_fldname:
+    mov di, br_a_name
+    call br_getattr
+    lea di, [bx+FLD_NAME]           ; LEA leaves br_getattr's CF alone
+    mov byte [di], 0
+    jc br_fldcp.out
+br_fldcp:
+    push bx
+    mov bx, BR_NAMEMAX-1
+    call br_copyspan
+    pop bx
+.out:
     ret
 
 ; --- br_copyspan - the source span SI..CX -> DS:DI, at most BX bytes ---------
@@ -5923,37 +7381,96 @@ br_input:
     push si
     cmp byte [br_close], 0
     jne .out
-    mov di, br_a_type
+    mov di, br_a_type               ; ...once: br_attreq hands DI back
     mov bx, br_s_submit
     call br_attreq
     jnc .submit
-    mov di, br_a_type
     mov bx, br_s_hidden
     call br_attreq
     jnc .hidden
-    mov di, br_a_type
     mov bx, br_s_image              ; anything we do not draw is refused
     call br_attreq                  ; VISIBLY (SPEC.md 47 rule 3) rather than
     jnc .unsup                      ; vanishing
-    mov di, br_a_type
-    mov bx, br_s_check
+    mov bx, br_s_password
+    call br_attreq
+    jnc .unsup                      ; no TLS: never expose plaintext credentials
+    mov bx, br_s_file
     call br_attreq
     jnc .unsup
-    jmp .text
+    mov bx, br_s_check
+    call br_attreq
+    jnc .check
+    mov bx, br_s_radio
+    call br_attreq
+    jc .text
+    mov al, 3
+    jmp short .choice
+.check:
+    mov al, 2
+.choice:
+    call br_choice
+    jmp .out
 .submit:
+    mov al, [br_formcur]
+    cmp al, BR_FORMMAX
+    jae .out
+    mov dl, al
+    mov al, [br_subn]
+    cmp al, BR_SUBMAX
+    jae .out
+    call br_subrec
     mov ax, [br_doclen]             ; ...ITS SPAN, so a click can find it: the
     add ax, [br_onw]                ; button is ordinary document text and has
-    cmp word [br_subend], 0         ; no record of its own otherwise. The FIRST
-    jne .subdraw                    ; one on the page wins - v1 implements one
-    mov [br_subofs], ax             ; form, and two would need a span each and
+    mov [bx+SUB_OFS], ax
+    mov [bx+SUB_FORM], dl
+    mov ax, [br_astart]             ; ...and its TAG, so br_submit can send
+    mov [bx+SUB_ASTART], ax         ; the clicked button's name=value and no
+    mov ax, [br_aend]               ; other's - baked into the hidden pairs,
+    mov [bx+SUB_AEND], ax           ; Search and I'm Feeling Lucky both went
 .subdraw:                           ; a form index on every field
-    mov si, br_s_subbtn             ; '< Submit >' as ordinary document text
+    mov al, '<'
+    call br_fput
+    mov al, D_NBSP
+    call br_fput
+    mov di, br_a_value
+    call br_getattr
+    jc .subdefault
+.subvalue:
+    cmp si, cx
+    jae .subtail
+    mov al, [es:si]
+    cmp al, '&'
+    jne .subchar
+    mov ax, cx
+    sub ax, si
+    cmp ax, 6
+    jb .subchar
+    cmp word [es:si+1], 'nb'        ; a word compares two bytes in memory
+    jne .subchar                    ; order, low first
+    cmp word [es:si+3], 'sp'
+    jne .subchar
+    cmp byte [es:si+5], ';'
+    jne .subchar
+    add si, 6
+    mov al, D_NBSP
+    call br_fput
+    jmp .subvalue
+.subchar:
+    inc si
+    call br_fput
+    jmp .subvalue
+.subdefault:
+    mov si, br_s_submit
     call br_puts
+.subtail:
+    mov al, D_NBSP
+    call br_fput
+    mov al, '>'
+    call br_fput
     mov ax, [br_doclen]
     add ax, [br_onw]
-    cmp word [br_subend], 0
-    jne .out
-    mov [br_subend], ax
+    mov [bx+SUB_END], ax
+    inc byte [br_subn]
     jmp .out
 .unsup:
     mov si, br_s_unsup
@@ -5963,28 +7480,17 @@ br_input:
     call br_hidden
     jmp .out
 .text:
+    mov al, [br_formcur]
+    cmp al, BR_FORMMAX
+    jae .out
+    mov dl, al
     mov al, [br_fn]
     cmp al, BR_FMAX
     jae .out                        ; more fields than we can hold: ignored
-    xor ah, ah
-    mov bx, BR_FLDSZ
-    mul bl
-    mov bx, ax                      ; BX = this field's record
-    add bx, br_flds
-    mov di, br_a_name               ; its name, for the query string
-    call br_getattr
-    jc .noname
-    push bx
-    add bx, FLD_NAME
-    mov di, bx
-    pop bx
-    push bx
-    mov bx, BR_NAMEMAX-1
-    call br_copyspan
-    pop bx
-    jmp .size
-.noname:
-    mov byte [bx+FLD_NAME], 0
+    call br_fld                     ; BX = this field's record
+    mov [bx+FLD_FORM], dl
+    mov byte [bx+FLD_TYPE], 0
+    call br_fldname                 ; its name, for the query string
 .size:
     mov dx, BR_FLDW                 ; a width, from `size` when it gives one
     mov di, br_a_size
@@ -6000,38 +7506,232 @@ br_input:
 .w2:
     mov dx, ax
 .w:
-    mov [bx+FLD_W], dl
-    mov byte [bx+FLD_LEN], 0
+    mov [bx+FLD_W], dx              ; W, and LEN = 0: DH is 0, the width
+                                    ; being at most BR_FLDWMAX
                                     ; ...and now the visible span: '[', W
                                     ; spaces, ']' as literal document text
-    push bx
     mov al, '['
-    call br_fput
+    call br_fput                    ; br_fput keeps BX and the record
     mov ax, [br_doclen]             ; where the editable cells begin
     add ax, [br_onw]
-    pop bx
     mov [bx+FLD_OFS], ax
-    push bx
-    mov cx, dx
+    mov di, br_a_value
+    call br_getattr
+    jc .blank
+.initial:
+    cmp si, cx
+    jae .blank
+    mov al, [bx+FLD_LEN]
+    cmp al, [bx+FLD_W]
+    jae .blank
+    mov al, [es:si]
+    cmp al, 0x20
+    jb .skipinit
+    cmp al, 0x7E
+    ja .skipinit
+    call br_fput
+    inc byte [bx+FLD_LEN]
+.skipinit:
+    inc si
+    jmp .initial
+.blank:
+    mov cl, [bx+FLD_W]
+    sub cl, [bx+FLD_LEN]
     xor ch, ch
+    jcxz .close
 .sp:
-    or cx, cx
-    jz .close
     mov al, D_NBSP                  ; ...the same reasoning as the button's: a
                                     ; 30-cell field wrapped at its own spaces
                                     ; would put half a box on each line, and
                                     ; typing into it would look broken
     call br_fput
-    dec cx
-    jmp .sp
+    loop .sp
 .close:
     mov al, ']'
     call br_fput
-    pop bx
     inc byte [br_fn]
 .out:
     pop si
     pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; checkbox/radio: one marker byte in the document, plus bounded name/value.
+br_choice:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov dh, al
+    mov al, [br_formcur]
+    cmp al, BR_FORMMAX
+    jae .out
+    mov dl, al
+    mov al, [br_fn]
+    cmp al, BR_FMAX
+    jae .out
+    call br_fld
+    mov [bx+FLD_FORM], dl
+    mov [bx+FLD_TYPE], dh
+    mov word [bx+FLD_W], 1          ; W = 1 and LEN = 0, one store
+    call br_fldname
+    mov word [bx+FLD_VALUE], 'on'   ; the default value, HTML's own
+    mov byte [bx+FLD_VALUE+2], 0
+    mov di, br_a_value
+    call br_getattr
+    jc .checked
+    lea di, [bx+FLD_VALUE]
+    call br_fldcp
+.checked:
+    mov di, br_a_checked
+    call br_hasattr
+    jc .draw
+    mov byte [bx+FLD_LEN], 1
+.draw:
+    mov al, '['
+    cmp byte [bx+FLD_TYPE], 2
+    je .open
+    mov al, '('
+.open:
+    call br_fput
+    mov ax, [br_doclen]
+    add ax, [br_onw]
+    mov [bx+FLD_OFS], ax
+    mov al, D_NBSP
+    cmp byte [bx+FLD_LEN], 0
+    je .mark
+    mov al, 'x'
+    cmp byte [bx+FLD_TYPE], 2
+    je .mark
+    mov al, '*'
+.mark:
+    call br_fput
+    mov al, ']'
+    cmp byte [bx+FLD_TYPE], 2
+    je .close
+    mov al, ')'
+.close:
+    call br_fput
+    inc byte [br_fn]
+.out:
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Boolean attributes do not have to contain '='. Search exact attribute names
+; in the bounded opening tag span, case-insensitively; CF=0 on a token match.
+br_hasattr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, [br_astart]
+    mov [br_boolbase], di
+.next:
+    cmp si, [br_aend]
+    jae .no
+    cmp byte [es:si], ' '
+    ja .begin
+    inc si
+    jmp .next
+.begin:
+    mov bx, si
+    mov di, [br_boolbase]
+    mov [br_boolname], di
+.cmp:
+    mov di, [br_boolname]
+    mov al, [di]
+    or al, al
+    jz .candidate
+    cmp bx, [br_aend]
+    jae .miss
+    mov ah, [es:bx]
+    cmp ah, 'A'
+    jb .same
+    cmp ah, 'Z'
+    ja .same
+    or ah, 0x20
+.same:
+    cmp ah, al
+    jne .miss
+    inc bx
+    inc word [br_boolname]
+    jmp .cmp
+.candidate:
+    cmp bx, [br_aend]
+    jae .yes
+    mov al, [es:bx]
+    cmp al, '='
+    je .yes
+    cmp al, '>'
+    je .yes
+    cmp al, ' '
+    jbe .yes
+    jmp .miss
+.miss:
+    cmp bx, [br_aend]
+    jae .no
+    mov al, [es:bx]
+    cmp al, '='
+    je .skipvalue
+    cmp al, '>'
+    je .no
+    cmp al, ' '
+    jbe .nextchar
+    inc bx
+    jmp .miss
+.skipvalue:
+    inc bx
+    cmp bx, [br_aend]
+    jae .no
+    mov al, [es:bx]
+    cmp al, '"'
+    je .quoted
+    cmp al, 0x27
+    je .quoted
+.bare:
+    cmp bx, [br_aend]
+    jae .no
+    mov al, [es:bx]
+    cmp al, ' '
+    jbe .nextchar
+    cmp al, '>'
+    je .no
+    inc bx
+    jmp .bare
+.quoted:
+    mov cl, al
+    inc bx
+.qskip:
+    cmp bx, [br_aend]
+    jae .no
+    cmp [es:bx], cl
+    je .nextchar
+    inc bx
+    jmp .qskip
+.nextchar:
+    mov si, bx
+    inc si
+    jmp .next
+.yes:
+    clc
+    jmp .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
@@ -6075,11 +7775,16 @@ br_hidden:
     push cx
     push di
     push si
+    mov al, [br_formcur]
+    cmp al, BR_FORMMAX
+    jae .out
     mov di, br_a_name
     call br_getattr
     jc .out
-    mov al, [br_hn]
-    or al, al
+    xor ah, ah
+    shl ax, 1
+    mov bx, ax
+    cmp word [br_hnws+bx], 0
     jz .n
     mov al, '&'
     call br_hput
@@ -6092,7 +7797,6 @@ br_hidden:
     jc .done
     call br_henc
 .done:
-    mov byte [br_hn], 1
 .out:
     pop si
     pop di
@@ -6162,23 +7866,44 @@ br_span2num:
 ; destinations rather than there being two encoders that can disagree about
 ; what needs escaping.
 br_hput:
+    push ax
     push bx
-    mov bx, [br_hnw]
+    push cx
+    push dx
+    push si
+    mov ch, al                      ; MUL below overwrites DX:AX
+    xor ax, ax
+    mov al, [br_formcur]
+    mov si, ax
+    shl si, 1
+    mov bx, [br_hnws+si]
     cmp bx, BR_HIDMAX-1
     jae .out
-    mov [bx+br_hid], al
-    inc bx
-    mov [br_hnw], bx
-    mov byte [bx+br_hid], 0
-.out:
+    push bx
+    mov bx, BR_HIDMAX
+    mul bx
     pop bx
+    add bx, ax
+    mov al, ch
+    mov [br_hids+bx], al
+    inc word [br_hnws+si]
+    mov byte [br_hids+bx+1], 0
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 br_uput:
     push bx
     mov bx, [br_un]
     cmp bx, BR_URLMAX-1
-    jae .out
+    jb .store
+    mov byte [br_urlcut], 1
+    jmp .out
+.store:
     mov [bx+br_url], al
     inc bx
     mov byte [bx+br_url], 0
@@ -6190,11 +7915,9 @@ br_uput:
 br_oput:
     cmp byte [br_dest], 0
     jne .u
-    call br_hput
-    ret
+    jmp br_hput
 .u:
-    call br_uput
-    ret
+    jmp br_uput
 
 ; --- br_encb - one byte, percent-encoded (BROWSER-PLAN 7.4) ------------------
 ; An ALLOWLIST, never a denylist: everything outside A-Za-z0-9-_.~ becomes
@@ -6203,6 +7926,7 @@ br_oput:
 br_encb:
     push ax
     push bx
+    push cx                          ; percent encoding uses CL as its shift count
     cmp al, ' '
     jne .safe
     mov al, '+'
@@ -6249,6 +7973,7 @@ br_encb:
     call br_hex
     call br_oput
 .out:
+    pop cx
     pop bx
     pop ax
     ret
@@ -6313,8 +8038,8 @@ br_frepaint:
     push bx
     push cx
     push dx
-    push di
     push si
+    push di
     push es
     mov dx, [bx+FLD_OFS]
     mov es, [br_lseg]
@@ -6343,19 +8068,13 @@ br_frepaint:
     mov ax, cx
     call br_paint_line              ; AX = line index, BX = row
 .out:
-    pop es
-    pop si
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp br_pop7
 
 ; --- br_ftab - move focus to the next field ----------------------------------
 br_ftab:
     push ax
     push bx
+    push cx
     cmp byte [br_fn], 0
     je .out
     mov al, [br_fcur]
@@ -6376,8 +8095,26 @@ br_ftab:
 .first:
     xor al, al
 .set:
+    xor cx, cx
+.findtext:
+    cmp cl, [br_fn]
+    jae .out
+    push ax
+    call br_fld
+    cmp byte [bx+FLD_TYPE], 0
+    pop ax
+    je .found
+    inc al
+    cmp al, [br_fn]
+    jb .more
+    xor al, al
+.more:
+    inc cl
+    jmp .findtext
+.found:
     call br_ffocus
 .out:
+    pop cx
     pop bx
     pop ax
     ret
@@ -6493,95 +8230,148 @@ br_submit:
     push bx
     push cx
     push dx
-    push di
     push si
+    push di
     push es
+    mov [br_submitform], al
+    xor ah, ah
+    mov bx, ax
+    mov al, [bx+br_fmethods]
+    mov [br_post], al               ; one-shot method consumed by br_go
     mov word [br_un], 0
     mov byte [br_url], 0
+    mov byte [br_urlcut], 0
     mov byte [br_dest], 1
-    mov si, br_faction              ; the action, verbatim
-.act:
-    mov al, [si]
+    or al, al
+    jnz .fields                     ; a POST's pairs are its BODY
+    mov al, [br_submitform]         ; **THIS FORM'S** action: AL was still the
+    call br_actptr                  ; method byte (0 for a GET), so every GET
+.act:                               ; form on a page submitted to the FIRST
+    mov al, [si]                    ; form's action (apps size pass 2)
     or al, al
     jz .q
-    call br_uput
+    call br_uput                    ; this submit button's action, verbatim
     inc si
     jmp .act
 .q:
     mov al, '?'
     call br_uput
+.fields:
     xor cx, cx                      ; CX = field index
     xor dx, dx                      ; DX = have we written a pair yet
 .fld:
     cmp cl, [br_fn]
-    jae .hid
+    jae .button
     mov al, cl
     call br_fld
+    mov al, [br_submitform]
+    cmp [bx+FLD_FORM], al
+    jne .nextf
+    cmp byte [bx+FLD_TYPE], 2
+    jb .named
+    cmp byte [bx+FLD_LEN], 0
+    je .nextf
+.named:
     cmp byte [bx+FLD_NAME], 0
     je .nextf
-    or dx, dx
-    jz .amp0
-    mov al, '&'
-    call br_uput
-.amp0:
-    mov dx, 1
+    call br_amp
     push cx
-    mov si, bx
-    add si, FLD_NAME
-.nm:
-    mov al, [si]
-    or al, al
-    jz .eq
-    call br_encb
-    inc si
-    jmp .nm
-.eq:
+    lea si, [bx+FLD_NAME]
+    call br_encz
     mov al, '='
     call br_uput
-    mov es, [br_docseg]
+    lea si, [bx+FLD_VALUE]
+    cmp byte [bx+FLD_TYPE], 1       ; select, checkbox, radio: the value
+    jae .choiceval
+    mov es, [br_docseg]             ; text: what is typed in the document
     mov si, [bx+FLD_OFS]
     mov cl, [bx+FLD_LEN]
     xor ch, ch
+    jcxz .doneval
 .val:
-    or cx, cx
-    jz .doneval
     mov al, [es:si]
     call br_encb
     inc si
-    dec cx
-    jmp .val
+    loop .val
+    jmp short .doneval
+.choiceval:
+    call br_encz
 .doneval:
     pop cx
 .nextf:
     inc cl
     jmp .fld
-.hid:
-    cmp byte [br_hn], 0
-    je .say
-    or dx, dx
-    jz .h2
-    mov al, '&'
+.button:                            ; --- the CLICKED submit button, alone ---
+    mov al, [br_subhit]             ; 0FFh: Return in a field, no button
+    cmp al, 0FFh
+    je .hid
+    call br_subrec
+    mov ax, [bx+SUB_ASTART]         ; its tag's span in the retained source,
+    mov [br_astart], ax             ; which lives as long as the page does -
+    mov ax, [bx+SUB_AEND]           ; br_selcycle reads its options the same
+    mov [br_aend], ax               ; way, on this task
+    mov es, [br_srcseg]
+    mov di, br_a_name
+    call br_getattr
+    jc .hid                         ; an unnamed button is not a control
+    call br_amp
+    call br_henc                    ; the name, percent-encoded
+    mov al, '='
     call br_uput
-.h2:
-    mov si, br_hid
+    mov di, br_a_value
+    call br_getattr
+    jc .hid
+    call br_henc
+.hid:
+    xor ax, ax
+    mov al, [br_submitform]
+    mov bx, ax
+    shl bx, 1
+    mov cx, [br_hnws+bx]
+    jcxz .say
+    mov bx, BR_HIDMAX
+    push dx                          ; MUL overwrites the field-pair marker in DX
+    mul bx
+    pop dx
+    mov si, ax
+    add si, br_hids
+    call br_amp
 .hloop:
     mov al, [si]
-    or al, al
-    jz .say
     call br_uput                    ; already encoded at parse time
     inc si
-    jmp .hloop
+    loop .hloop
 .say:
     mov byte [br_dest], 0
-    mov si, br_url                  ; the bar is 25 cells; the whole URL lives
-    mov cx, 120                     ; in br_url for the harness to read
+    cmp byte [br_urlcut], 0
+    je .show
+    mov si, br_s_datatoo
+    cmp byte [br_post], 0
+    jne .too
+    mov si, br_s_urltoo
+.too:
+    mov byte [br_post], 0
+    call br_errst
+    pop es
+    jmp short .out
+.show:                              ; a GET toasts and resolves the composed
+    mov si, br_url                  ; URL; the bar is 25 cells, and the whole
+    mov di, si                      ; URL lives in br_url for the harness
+    cmp byte [br_post], 0
+    je .toast
+    mov al, [br_submitform]         ; a POST resolves its action alone, the
+    call br_actptr                  ; pairs being the body, and says so
+    mov di, si
+    mov si, br_s_posting
+.toast:
+    mov cx, 120
     push ds
     pop es
-    call OSAPI_TOAST
-    mov si, br_url                  ; ...AND THEN FETCH IT. This is the whole
-    call br_resolve                 ; of what a search box is: the encoder was
-    pop es                          ; built at BROWSER-PLAN 7.4 and reported a
-    jc .out                         ; URL because there was no transport, and
+    call OSAPI_TOAST                ; ...which keeps every register
+    mov si, di
+    call br_resolve
+    pop es
+    jc .clearpost
                                     ; into a page (NET-STACK-PLAN stage D').
                                     ;
                                     ; **RESOLVED FIRST, AND THAT IS NOT
@@ -6596,12 +8386,50 @@ br_submit:
                                     ; disagree about what `/` means
     mov si, br_ubuf
     call br_go
+    jmp short .out
+.clearpost:
+    mov byte [br_post], 0
 .out:                               ; br_resolve refused and has already said
-    pop si                          ; why on the status line
-    pop di
-    pop dx
-    pop cx
-    pop bx
+    jmp br_pop6                     ; why on the status line
+
+; --- br_subrec - BX = submit record AL, in br_subs ----------------------------
+br_subrec:
+    push ax
+    mov ah, BR_SUBSZ
+    mul ah
+    add ax, br_subs
+    xchg bx, ax
+    pop ax
+    ret
+
+; --- br_amp - the '&' between two pairs; DX = 0 before the first ---------------
+br_amp:
+    or dx, dx
+    jz .first
+    mov al, '&'
+    call br_uput
+.first:
+    mov dx, 1
+    ret
+
+; --- br_encz - percent-encode the NUL string at DS:SI (SI ends on its NUL) ------
+br_encz:
+    mov al, [si]
+    or al, al
+    jz .out
+    call br_encb
+    inc si
+    jmp br_encz
+.out:
+    ret
+
+; --- br_actptr - SI = form AL's action, in br_factions -------------------------
+br_actptr:
+    push ax
+    mov ah, BR_ACTMAX
+    mul ah
+    add ax, br_factions
+    xchg si, ax
     pop ax
     ret
 
@@ -6654,103 +8482,125 @@ br_wtab:
     dw 0
 
 ; --- named entities -----------------------------------------------------------
-; name, NUL, replacement. A name not here falls through to LITERAL TEXT, which
-; is what stops a malformed entity eating the rest of the line.
+; name, then the replacement with bit 7 set as the terminator - every
+; replacement is ASCII, so the bit is free and the NUL a byte of each entry.
+; A name not here falls through to LITERAL TEXT, which is what stops a
+; malformed entity eating the rest of the line.
 br_enttab:
-    db 'amp',0,'&'
-    db 'lt',0,'<'
-    db 'gt',0,'>'
-    db 'quot',0,'"'
-    db 'apos',0,0x27
-    db 'nbsp',0,' '
-    db 'copy',0,'c'
-    db 'reg',0,'R'
-    db 'trade',0,'?'
-    db 'mdash',0,'-'
-    db 'ndash',0,'-'
-    db 'hellip',0,'.'
-    db 'laquo',0,'<'
-    db 'raquo',0,'>'
-    db 'lsquo',0,0x27
-    db 'rsquo',0,0x27
-    db 'ldquo',0,'"'
-    db 'rdquo',0,'"'
-    db 'bull',0,'*'
-    db 'middot',0,'.'
-    db 'times',0,'x'
-    db 'deg',0,'o'
-    db 'micro',0,'u'
-    db 'plusmn',0,'?'
-    db 'frac12',0,'?'
-    db 'sup2',0,'2'
-    db 'sup3',0,'3'
-    db 'dagger',0,'+'
-    db 'permil',0,'%'
-    db 'sect',0,'?'
-    db 'para',0,'?'
-    db 'curren',0,'?'
-    db 'yen',0,'?'
-    db 'cent',0,'c'
-    db 'iexcl',0,'!'
-    db 'iquest',0,'?'
-    db 'aacute',0,'a'
-    db 'eacute',0,'e'
-    db 'iacute',0,'i'
-    db 'oacute',0,'o'
-    db 'uacute',0,'u'
-    db 'agrave',0,'a'
-    db 'egrave',0,'e'
-    db 'ccedil',0,'c'
-    db 'ntilde',0,'n'
-    db 'aring',0,'a'
-    db 'oslash',0,'o'
-    db 'aelig',0,'a'
-    db 'pound',0,'?'
-    db 'euro',0,'?'
-    db 'szlig',0,'s'
-    db 'auml',0,'a'
-    db 'ouml',0,'o'
-    db 'uuml',0,'u'
+    db 'amp', 80h | '&'
+    db 'lt', 80h | '<'
+    db 'gt', 80h | '>'
+    db 'quot', 80h | '"'
+    db 'apos', 80h | 0x27
+    db 'nbsp', 80h | ' '
+    db 'copy', 80h | 'c'
+    db 'reg', 80h | 'R'
+    db 'trade', 80h | '?'
+    db 'mdash', 80h | '-'
+    db 'ndash', 80h | '-'
+    db 'hellip', 80h | '.'
+    db 'laquo', 80h | '<'
+    db 'raquo', 80h | '>'
+    db 'lsquo', 80h | 0x27
+    db 'rsquo', 80h | 0x27
+    db 'ldquo', 80h | '"'
+    db 'rdquo', 80h | '"'
+    db 'bull', 80h | '*'
+    db 'middot', 80h | '.'
+    db 'times', 80h | 'x'
+    db 'deg', 80h | 'o'
+    db 'micro', 80h | 'u'
+    db 'plusmn', 80h | '?'
+    db 'frac12', 80h | '?'
+    db 'sup2', 80h | '2'
+    db 'sup3', 80h | '3'
+    db 'dagger', 80h | '+'
+    db 'permil', 80h | '%'
+    db 'sect', 80h | '?'
+    db 'para', 80h | '?'
+    db 'curren', 80h | '?'
+    db 'yen', 80h | '?'
+    db 'cent', 80h | 'c'
+    db 'iexcl', 80h | '!'
+    db 'iquest', 80h | '?'
+    db 'aacute', 80h | 'a'
+    db 'eacute', 80h | 'e'
+    db 'iacute', 80h | 'i'
+    db 'oacute', 80h | 'o'
+    db 'uacute', 80h | 'u'
+    db 'agrave', 80h | 'a'
+    db 'egrave', 80h | 'e'
+    db 'ccedil', 80h | 'c'
+    db 'ntilde', 80h | 'n'
+    db 'aring', 80h | 'a'
+    db 'oslash', 80h | 'o'
+    db 'aelig', 80h | 'a'
+    db 'pound', 80h | '?'
+    db 'euro', 80h | '?'
+    db 'szlig', 80h | 's'
+    db 'auml', 80h | 'a'
+    db 'ouml', 80h | 'o'
+    db 'uuml', 80h | 'u'
     db 0
 
 ; --- tags -----------------------------------------------------------------------
-; name, NUL, TA_*. Everything not here is IGNORED and its text kept, which is
-; what makes an unknown tag harmless: <font>, <span>, <tt>, <small>, <b>, <i>
+; name, then TA_* with bit 7 set as the terminator (br_enttab's shape).
+; Everything not here is IGNORED and its text kept, which is
+; what makes an unknown tag harmless: <font>, <span>, <tt>, <small>
 ; and every colour attribute in the file are dropped exactly this way
 ; (BROWSER-PLAN 2.2.1 - colour goes in BOTH directions or text goes invisible).
 br_tagtab:
-    db 'p',0,TA_PARA
-    db 'div',0,TA_PARA
-    db 'ul',0,TA_PARA
-    db 'ol',0,TA_PARA
-    db 'dl',0,TA_PARA
-    db 'dt',0,TA_PARA
-    db 'dd',0,TA_PARA
-    db 'table',0,TA_TAB
-    db 'tr',0,TA_ROW
-    db 'td',0,TA_CELL
-    db 'th',0,TA_CELL
-    db 'caption',0,TA_PARA
-    db 'blockquote',0,TA_PARA
-    db 'a',0,TA_LINK
-    db 'form',0,TA_FORM
-    db 'input',0,TA_INPUT
-    db 'br',0,TA_BR
-    db 'hr',0,TA_HR
-    db 'li',0,TA_LI
-    db 'pre',0,TA_PRE
-    db 'center',0,TA_CEN
-    db 'script',0,TA_DROP
-    db 'style',0,TA_DROP
-    db 'title',0,TA_TITLE       ; ...CAPTURED and then dropped (br_captitle)
-    db 'select',0,TA_DROP
-    db 'textarea',0,TA_DROP
+    db 'p', 80h | TA_PARA
+    db 'div', 80h | TA_PARA
+    db 'main', 80h | TA_PARA
+    db 'article', 80h | TA_PARA
+    db 'section', 80h | TA_PARA
+    db 'header', 80h | TA_PARA
+    db 'footer', 80h | TA_PARA
+    db 'nav', 80h | TA_PARA
+    db 'figure', 80h | TA_PARA
+    db 'figcaption', 80h | TA_PARA
+    db 'details', 80h | TA_PARA
+    db 'summary', 80h | TA_PARA
+    db 'ul', 80h | TA_PARA
+    db 'ol', 80h | TA_PARA
+    db 'dl', 80h | TA_PARA
+    db 'dt', 80h | TA_PARA
+    db 'dd', 80h | TA_PARA
+    db 'table', 80h | TA_TAB
+    db 'frameset', 80h | TA_FRAMESET
+    db 'frame', 80h | TA_FRAME
+    db 'tr', 80h | TA_ROW
+    db 'td', 80h | TA_CELL
+    db 'th', 80h | TA_CELL
+    db 'caption', 80h | TA_PARA
+    db 'blockquote', 80h | TA_QUOTE
+    db 'b', 80h | TA_BOLD
+    db 'strong', 80h | TA_BOLD
+    db 'i', 80h | TA_ITALIC
+    db 'em', 80h | TA_ITALIC
+    db 'u', 80h | TA_UNDER
+    db 'a', 80h | TA_LINK
+    db 'form', 80h | TA_FORM
+    db 'input', 80h | TA_INPUT
+    db 'img', 80h | TA_IMG
+    db 'br', 80h | TA_BR
+    db 'hr', 80h | TA_HR
+    db 'li', 80h | TA_LI
+    db 'pre', 80h | TA_PRE
+    db 'center', 80h | TA_CEN
+    db 'script', 80h | TA_DROP
+    db 'style', 80h | TA_DROP
+    db 'title', 80h | TA_TITLE       ; ...CAPTURED and then dropped (br_captitle)
+    db 'select', 80h | TA_SELECT
+    db 'textarea', 80h | TA_TEXTAREA
     db 0
 
 ; --- window template (SPEC.md 11) ----------------------------------------------
 br_tpl:
     dw 40, 30, 496, 150
-    dw br_ttl, br_paint, br_onkey, br_onclick
+    dw br_s_webbrowser, br_paint, br_onkey, 0 ; W_ONCLICK is installed by
+                                        ; os88ui_btninit (20.5.1.3.3)
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
 ; No Close item: SPEC.md 12.7 puts one in the app-NAME cell for every
@@ -6795,44 +8645,66 @@ br_it_bot:  db 'Bottom', 0
 br_it_rel:  db 'Reload', 0
 
 br_a_href:    db 'href', 0
+br_a_src:     db 'src', 0
+br_a_cols:    db 'cols', 0
+br_a_rows:    db 'rows', 0
 br_a_action:  db 'action', 0
 br_a_method:  db 'method', 0
 br_a_type:    db 'type', 0
+br_a_colspan: db 'colspan', 0
+br_a_align:   db 'align', 0
 br_a_name:    db 'name', 0
 br_a_value:   db 'value', 0
 br_a_size:    db 'size', 0
+br_a_alt:     db 'alt', 0
+br_a_checked: db 'checked', 0
 br_s_post:    db 'post', 0
+br_s_posting: db 'POST request', 0
+br_s_password: db 'password', 0
+br_s_file:    db 'file', 0
+br_s_center:  db 'center', 0
+br_s_middle:  db 'middle', 0
+br_s_right:   db 'right', 0
 br_s_submit:  db 'submit', 0
 br_s_hidden:  db 'hidden', 0
 br_s_image:   db 'image', 0
 br_s_check:   db 'checkbox', 0
-br_s_subbtn:  db '<', D_NBSP, 'Submit', D_NBSP, '>', 0   ; ONE WORD, so the
-                                    ; wrap moves the whole button to the next
-                                    ; line rather than splitting it. FrogFind's
-                                    ; is at the end of a line and came out as
-                                    ; `< Submit` with the `>` alone below
+br_s_radio:   db 'radio', 0
+br_s_option:  db 'option', 0
+br_s_selected: db 'selected', 0
+br_s_select:  db 'select', 0
 br_s_scheme:  db 'http://', 0
 br_s_schemes: db 'https://', 0
 br_s_colon:   db ':', 0
 br_s_nohttps: db 'Https is not supported', 0
+br_s_urltoo:  db 'URL too long', 0
+br_s_datatoo: db 'Form data too long', 0
 br_s_nohost:  db 'Relative link: this page has no server', 0
 br_s_nopage:  db 'Nothing loaded to save', 0
 br_s_saved:   db 'Saved', 0
 br_s_wfail:   db 'Save failed', 0
 br_s_unsup:   db '[unsupported]', 0
+br_s_webbrowser: db 'os8088 Web Browser', 0
+br_s_titlesfx: db ' - os8088 Web Browser', 0
+br_s_titlesfx_end:
 
-br_ttl:     db 'Browser', 0
 br_s_big:   db 'Page too large', 0
 br_s_bad:   db 'Cannot open page', 0
 
                                 ; OS88UI_SBDRAG is at the TOP of this file, not
                                 ; here: SPEC.md 13.10.7.4
+%define OS88UI_ABOUT            ; SPEC.md 20.5.1.1: the standard About card
+%define OS88UI_ABPACK           ; ...its lines packed end to end, br_ablines
 %define OS88UI_SCROLL           ; SPEC.md 13.10: the shared scroll bar - OPT IN,
                                 ; so a package that draws no bar pays none of
                                 ; its bytes
+%define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
+%define OS88UI_1BPP             ; OSAPI_SAVEU_1BPP: a greyed caption keeps its ink (SPEC.md 13.8.11)
 %include "os88ui.inc"           ; the standard button (SPEC.md 20.5.1)...
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"         ; ...and the one-line field the bar is
 %include "brnet.inc"            ; ...and the fetch (NET-STACK-PLAN stage D)
+%define OS88SOCK_STATE             ; ...every net_find here asks NETV_STATE too
 %include "os88sock.inc"         ; ...whose driver net_find locates (SPEC.md 72)
 
 ; The loader zeroes exactly this much (SPEC.md 21 step 5), and every equ below
@@ -6854,7 +8726,9 @@ br_rows     equ os88_image_end + 12
 br_top      equ os88_image_end + 14   ; the line at the top of the view
 br_ptop     equ os88_image_end + 16   ; ...and the one the SCREEN shows
 br_dy       equ os88_image_end + 18   ; the CLAMPED delta the drawing uses
-br_sbx      equ os88_image_end + 20   ; the scroll bar's rect, shared by the
+br_argclus  equ os88_image_end + 20   ; word: the launch document's folder
+                                      ; (SPEC.md 54.10 - br_arg banks it with
+                                      ; br_argdrv and br_argp, below)
 br_skips    equ os88_image_end + 22   ; consecutive coalesced draws, bounded
 
 br_srcseg   equ os88_image_end + 24
@@ -6916,21 +8790,36 @@ br_onw      equ os88_image_end + 536  ; word: br_put's buffered count, so a
                                       ; flush got to
 br_fn       equ os88_image_end + 538  ; byte: text fields on the page
 br_fcur     equ os88_image_end + 539  ; byte: which has focus, 0FFh = none
-br_post     equ os88_image_end + 540  ; byte: method=post (recorded, not acted
-                                      ; on - 7.5)
+br_post     equ os88_image_end + 540  ; byte: one-shot form POST handoff to br_go
 br_hn       equ os88_image_end + 541  ; byte: any hidden pairs
 br_dest     equ os88_image_end + 542  ; byte: which sink br_encb appends to
 br_hnw      equ os88_image_end + 544  ; word: bytes of hidden pairs
 br_un       equ os88_image_end + 546  ; word: bytes of composed URL
-br_flds     equ os88_image_end + 548  ; BR_FMAX * BR_FLDSZ = 72
 br_faction  equ os88_image_end + 620  ; BR_ACTMAX
 br_hid      equ os88_image_end + 684  ; BR_HIDMAX
-br_sbx2     equ os88_image_end + 940  ; painter and the hit-tester so the two
-br_sby      equ os88_image_end + 942  ; cannot drift (SPEC.md 22)
-br_sby2     equ os88_image_end + 944
+br_gen      equ os88_image_end + 940  ; byte: bumped by every br_go that drops
+                                      ; a fetch in flight (brnet.inc's
+                                      ; br_abort)
+br_gen0     equ os88_image_end + 941  ; byte: what the running worker pass
+                                      ; banked at its entry
+br_argdrv   equ os88_image_end + 942  ; byte: the launch document's volume...
+br_argp     equ os88_image_end + 943  ; byte: ...and whether one is pending at
+                                      ; all - 0,0 is a real locator (drive 0's
+                                      ; root), so the pair cannot speak for
+                                      ; itself
+br_fin      equ os88_image_end + 944  ; byte: the fetch's hand-over (SPEC.md
+                                      ; 71.14) - 0 draining, 1 the page is in
+                                      ; and the UI task owes its claims, 2
+                                      ; claimed, 3 the worker IS parsing -
+                                      ; br_abort waits that one out; 4 the UI
+                                      ; task owes a FRAMESET's re-claim, 5
+                                      ; re-claimed - the worker starts the
+                                      ; first child (SPEC.md 71.15)
+                                      ; (945 is free; br_nstate is at 946 and
+                                      ; tests/ethernet.py and tests/brfetch.py
+                                      ; read it there by number)
 br_url      equ os88_image_end + 780  ; BR_URLMAX - and the harness reads this
                                       ; to check the encoder (7.4)
-
 ; --- the network half (NET-STACK-PLAN stage D, apps/browser/brnet.inc) -------
 BR_LPAD     equ 3                     ; the bar's inset from the content edge
 BR_LBAR     equ 15                    ; ...its height
@@ -6973,43 +8862,67 @@ BR_HISTN    equ 8                     ; URLs the Back stack holds. **URL ONLY**
 BR_LTOT     equ BR_LPAD + BR_TBH + BR_TBG + BR_LBAR + BR_TBG
 BR_UBUF     equ 160                   ; what the bar holds: BR_URLMAX
 
-br_nstate   equ os88_image_end + 946  ; byte: the fetch's state
-br_spawn    equ os88_image_end + 947  ; byte: we own a worker
-br_hnd      equ os88_image_end + 948  ; byte: the socket
-br_hstate   equ os88_image_end + 949  ; byte: how much of CR LF CR LF
+br_nstate   equ os88_image_end + 946  ; fixed ABI slot retained from main
+br_spawn    equ os88_image_end + 947
+br_hnd      equ os88_image_end + 948
+br_hstate   equ os88_image_end + 949
 br_port     equ os88_image_end + 950
-br_nlen     equ os88_image_end + 952  ; bytes of BODY taken so far
-br_code     equ os88_image_end + 954  ; the status line's number
-br_hcol     equ os88_image_end + 956  ; ...how far into the first header line
-br_nmsg     equ os88_image_end + 958  ; -> the failure text, for BN_ERR
+br_nlen     equ os88_image_end + 952
+br_code     equ os88_image_end + 954
+br_hcol     equ os88_image_end + 956
+br_nmsg     equ os88_image_end + 958
 br_sent     equ os88_image_end + 960
 br_reqn     equ os88_image_end + 962
 br_loc      equ os88_image_end + 964  ; OS88LINE_SZ: the location bar
 br_ubuf     equ br_loc + OS88LINE_SZ  ; BR_UBUF: ...and its text
 br_host     equ br_ubuf + BR_UBUF     ; BR_HOSTMAX
 br_path     equ br_host + BR_HOSTMAX  ; BR_PATHMAX
-br_reqb     equ br_path + BR_PATHMAX  ; BR_REQMAX
-br_nsline   equ br_reqb + BR_REQMAX   ; BR_SCELLS+1: the padded state field.
+br_nsline   equ br_path + BR_PATHMAX  ; BR_SCELLS+1: the padded state field.
                                       ; **SIZED FROM THE CONSTANT**, because it
                                       ; was a literal 24 against a field of 22
                                       ; and raising one without the other is a
                                       ; run that writes past its buffer
 br_rxb      equ br_nsline + BR_SCELLS + 1  ; BR_CHUNK
+br_reqb     equ br_rxb                ; BR_REQMAX: THE SAME BYTES. The request
+                                      ; is composed at BN_WAIT -> BN_SEND and
+                                      ; is wholly sent before BN_HEAD's first
+                                      ; NETV_RECV writes here, and both belong
+                                      ; to the worker alone, so the two never
+                                      ; live at once. 236 bytes of bss
+%if BR_REQMAX > BR_CHUNK
+%error "br_reqb rides in br_rxb and must fit it"
+%endif
 
 ; --- the column map (BROWSER-PLAN 7.4 / the link hit test) -------------------
 ; br_build fills this beside br_lbuf: one word per band cell, the DOCUMENT
 ; OFFSET whose byte was lettered there, or 0FFFFh for a cell the padding owns.
 ; It is what turns a click into a document position without a second walk.
-br_lmap     equ br_rxb + BR_CHUNK     ; BR_MAXCOL words
+br_htgt     equ br_rxb + BR_CHUNK     ; word: the cell br_hitofs asks
+                                      ; br_build about, as a br_lbuf address
+                                      ; (0 = none, which no cell is)
+br_hofs     equ br_htgt + 2           ; word: ...and the document offset that
+                                      ; landed there, PLUS ONE (0 = none)
 
 ; --- the toolbar and the history (BROWSER-PLAN 5) ----------------------------
-br_sb       equ br_lmap + BR_MAXCOL*2 ; the shared scroll bar's 7-word block
+br_sb       equ br_hofs + 2           ; the shared scroll bar's 7-word block
+br_sbx      equ br_sb + 0             ; ...whose RECT is the scroll bar's rect,
+br_sby      equ br_sb + 2             ; shared by the painter and the
+br_sbx2     equ br_sb + 4             ; hit-tester so the two cannot drift
+br_sby2     equ br_sb + 6             ; (SPEC.md 22): br_sbrect writes it in
+                                      ; place, and os88ui writes only word 6
 br_sbold    equ br_sb + 14           ; word: the pos the thumb is drawn at
 br_tby      equ br_sbold + 2         ; word: the strip's top, derived
 br_r1       equ br_tby + 2            ; the three button rects {x1,y1,x2,y2}
 br_r2       equ br_r1 + 8
 br_r3       equ br_r2 + 8
-br_spen     equ br_r3 + 8             ; word: the state's pen, 8-aligned
+br_spen     equ br_r3 + 8         ; word: the state's pen, 8-aligned.
+                                       ; **PAST THE RECORD**, which was
+                                       ; declared at br_r3 + 8 beside it and
+                                       ; ALIASED it: every write to one
+                                       ; corrupted the other, and a record
+                                       ; whose rect pointer had been
+                                       ; overwritten drew a pressed button as
+                                       ; a black box over half the screen
 br_swid     equ br_spen + 2           ; word: ...and the cells it may use
 br_histn    equ br_swid + 2           ; word: entries in the stack
 br_histi    equ br_histn + 2          ; word: where we are in it
@@ -7025,20 +8938,16 @@ br_lnkopen  equ br_lnkseg + 6         ; word: the link the PARSE is inside,
                                       ; 0FFFFh = none
 br_lnkst    equ br_lnkseg + 8         ; word: ...and what it was when the line
                                       ; being laid out began (br_emitline)
-br_lnkhit   equ br_lnkseg + 10        ; word: the link a click resolved to
-br_lnkoff   equ br_lnkseg + 12        ; BR_LNKMAX words: each href's offset
-br_upos     equ br_lnkoff + BR_LNKMAX*2  ; word: br_resolve's write cursor
+br_upos     equ br_lnkseg + 10        ; word: br_resolve's write cursor.
+                                      ; br_lnkhit and br_lnkoff were here;
+                                      ; br_lnkoff is back (after the frame
+                                      ; metadata below) as a BR_LNKMAX-word
+                                      ; table, because frames store resolved
+                                      ; base URLs between hrefs and the
+                                      ; arena is no longer its own index
 br_lnkcell  equ br_upos + 2           ; byte: br_build's running state
 br_lmark    equ br_lnkcell + 1        ; BR_MAXCOL bytes: 1 = this band cell
                                       ; is inside a link, for the underline
-
-; --- the submit button's span (BROWSER-PLAN 7.4) -----------------------------
-; '< Submit >' is ordinary document text, which is what makes it wrap and
-; scroll for free - and what leaves it with no record a click can find. These
-; two are that record. Cleared by br_parse, so a page without one cannot
-; inherit the last page's button.
-br_subofs   equ br_lmark + BR_MAXCOL
-br_subend   equ br_subofs + 2
 
 ; --- the About panel (SPEC.md 12.2) ------------------------------------------
 ; --- the History menu (SPEC.md 71.7) -----------------------------------------
@@ -7046,38 +8955,122 @@ br_subend   equ br_subofs + 2
 ; segment like any other item array - bss is as good as the image for that.
 ; The labels are a slot each rather than packed, because the menu holds NEAR
 ; POINTERS and a packed arena would have to be re-walked to produce them.
-br_ptitle   equ br_subend + 2         ; BR_TITMAX: the CURRENT page's <title>
+br_ptitle   equ br_lmark + BR_MAXCOL  ; BR_TITMAX: the CURRENT page's <title>
 br_htit     equ br_ptitle + BR_TITMAX ; BR_HISTN labels of BR_TITMAX
 br_hitems   equ br_htit + BR_HISTN * BR_TITMAX   ; BR_HISTN words of pointer
 
-; --- the fetch generation (brnet.inc's br_abort) -----------------------------
-br_gen      equ br_hitems + BR_HISTN * 2   ; byte: bumped by every br_go that drops
-                                      ; a fetch in flight
-br_gen0     equ br_gen + 1            ; byte: what the running worker pass
-                                      ; banked at its entry
-
-br_abon     equ br_gen + 2            ; byte: 1 = the credit card is up
-br_abw      equ br_abon + 2           ; its measured rect, SCREEN coords
-br_abh      equ br_abon + 4
-br_abl      equ br_abon + 6
-br_abt      equ br_abon + 8
+br_abon     equ br_hitems + BR_HISTN * 2   ; byte: 1 = the credit card is up
 
 ; --- the launch document (SPEC.md 54.10) -------------------------------------
-; br_arg banks all three and br_onwake spends them, because the read cannot
-; happen in the entry proc: there is no window on the glass to read in front of.
-br_argclus  equ br_abon + 10          ; word: the folder the document lives in
-br_argdrv   equ br_abon + 12          ; byte: ...and its volume
-br_argp     equ br_abon + 13          ; byte: ...and whether one is pending at
-                                      ; all - 0,0 is a real locator (drive 0's
-                                      ; root), so the pair cannot speak for
-                                      ; itself
+; br_arg banks br_argclus, br_argdrv and br_argp (declared above, in the gaps
+; the old scroll-bar copies left) and br_onwake spends them, because the read
+; cannot happen in the entry proc: there is no window on the glass to read in
+; front of.
 ; --- a table row's link state (BROWSER-PLAN 14.2.2) --------------------------
 ; A composed row is ONE arena line carrying every column, and br_linkat answers
 ; a click by scanning backward through it - so an anchor may not be left open
 ; at a cell wall. br_tcell1 closes one at the end of each fragment and re-opens
 ; it at the head of the next, and these are what it needs to.
-br_tlnk     equ br_abon + 14          ; BR_TCOLS words: the offset of the
+br_tlnk     equ br_abon + 2           ; BR_TCOLS words: the offset of the
                                       ; D_LNK1 each column's cell has left
                                       ; open, 0FFFFh = none
 br_wlnk     equ br_tlnk + BR_TCOLS*2  ; word: br_twrap's running copy of it
-BR_BSS      equ (br_wlnk - os88_image_end) + 2
+br_linkcap  equ br_wlnk + 2
+br_lstate   equ br_linkcap + 2
+br_redirlen equ br_lstate + 1
+br_redirurl equ br_redirlen + 2
+br_redirs   equ br_redirurl + BR_UBUF
+br_urlcut   equ br_redirs + 1
+br_selmark  equ br_urlcut + 1
+br_linklimited equ br_selmark + 1
+br_boolname equ br_linklimited + 1
+br_boolbase equ br_boolname + 2
+br_frameattr equ br_boolbase + 2
+br_fdepth   equ br_frameattr + 1
+br_framecount equ br_fdepth + 1
+br_frameidx equ br_framecount + 1
+br_frameappend equ br_frameidx + 1
+br_framehost equ br_frameappend + 1
+br_framepath equ br_framehost + BR_HOSTMAX
+br_fmode    equ br_framepath + BR_PATHMAX
+br_fnewrow  equ br_fmode + 1
+br_fmodes   equ br_fnewrow + 1
+br_frameflags equ br_fmodes + 8
+br_frameurls equ br_frameflags + 8   ; frame ordinal -> queued source-link ID
+br_framebaseoff equ br_frameurls + 8 ; absolute URL offsets in the link arena
+br_framecut equ br_framebaseoff + 16
+br_factive  equ br_framecut + 1
+br_frametitle equ br_factive + 1
+br_parsing equ br_frametitle + BR_TITMAX
+br_framecurrent equ br_parsing + 1
+br_lnkfrm equ br_framecurrent + 1
+br_lnkoff   equ br_lnkfrm + BR_LNKMAX
+br_lnkhit   equ br_lnkoff + BR_LNKMAX*2
+; Variable-size 1.2b form tables follow main's fixed ABI and the frame/link
+; metadata. These stay in the loader-zeroed package BSS, not the image.
+br_formn      equ br_lnkhit + 2
+br_formcur    equ br_formn + 1
+br_subn       equ br_formcur + 1
+br_submitform equ br_subn + 1
+br_subhit     equ br_submitform + 1 ; the submit button clicked, 0FFh for none
+br_flds       equ br_subhit + 1
+br_factions   equ br_flds + BR_FMAX*BR_FLDSZ
+br_hids       equ br_factions + BR_FORMMAX*BR_ACTMAX
+br_hnws       equ br_hids + BR_FORMMAX*BR_HIDMAX
+br_fmethods   equ br_hnws + BR_FORMMAX*2 ; one byte per form: 0 GET, 1 POST
+br_subs       equ br_fmethods + BR_FORMMAX
+br_lhead      equ br_subs + BR_SUBMAX*BR_SUBSZ
+br_lquote     equ br_lhead + 1
+br_litem      equ br_lquote + 1
+br_effcols    equ br_litem + 1
+br_undraw     equ br_effcols + 2
+br_lfmt       equ br_undraw + 1
+br_drawbitmap equ br_lfmt + 1
+br_lflags     equ br_drawbitmap + 1
+br_bmpx       equ br_lflags + 1
+br_bmpy       equ br_bmpx + 2
+br_glyphseg   equ br_bmpy + 2
+br_glyphofs   equ br_glyphseg + 2
+br_glyphfirst equ br_glyphofs + 2
+br_bmrow      equ br_glyphfirst + 1
+br_bmglyph    equ br_bmrow + 1
+br_bmmark     equ br_bmglyph + 1
+br_bmshift    equ br_bmmark + 1
+br_stylebuf   equ br_bmshift + 1
+br_wtitle     equ br_stylebuf + BR_MAXCOL ; title and the Browser's IE-style suffix
+br_tspanarr   equ br_wtitle + BR_TITMAX + 21 ; 8 bytes: each cell's logical span
+br_talignarr  equ br_tspanarr + BR_TCOLS ; 0 left, 1 center, 2 right
+br_tspan      equ br_talignarr + BR_TCOLS ; current measured span / parser scratch
+br_talign     equ br_tspan + 1            ; parser / compositor alignment scratch
+br_tcw        equ br_talign + 1           ; current composed cell width
+br_tlogical   equ br_tcw + 1              ; logical column at current cell
+br_tpad       equ br_tlogical + 1         ; alignment spaces in current fragment
+br_reqpost    equ br_tpad + 1             ; request worker's method flag
+br_bpp        equ br_reqpost + 1          ; OSAPI_VIDEO's DH: 1 on a 1bpp adapter
+br_glyphlast  equ br_bpp + 1              ; OSAPI_FONT_GLYPHS' AH, the last code
+br_frameurl   equ br_glyphlast + 1        ; BR_UBUF: the frameset's own URL,
+                                          ; banked while its children own the
+                                          ; bar (br_frameclose puts it back)
+br_keep       equ br_frameurl + BR_UBUF  ; byte: br_go kept the page (no link
+                                          ; driver), so the worker may not fetch
+BR_BSS      equ (br_keep + 1 - os88_image_end)
+
+; --- what the code assumes about the layout above ----------------------------
+%if br_wsp != br_on + 1 || br_pre != br_any + 1
+%error "br_parse zeroes br_on/br_wsp and br_any/br_pre as words"
+%endif
+%if br_lind != br_lpre + 1
+%error "br_layout zeroes br_lpre and br_lind as a word"
+%endif
+%if br_nstate != os88_image_end + 946 || br_nlines != os88_image_end + 38
+%error "tests/ethernet.py and tests/brfetch.py read br_nstate at +946 and br_nlines at +38 by number"
+%endif
+%if br_path != br_host + BR_HOSTMAX || br_framepath != br_framehost + BR_HOSTMAX
+%error "a frame saves and restores br_host and br_path as one run"
+%endif
+%if br_docseg != br_srcseg + 2 || br_lseg != br_docseg + 2
+%error "br_free_all walks br_srcseg, br_docseg and br_lseg as a run"
+%endif
+%if br_url + BR_URLMAX != br_gen
+%error "the 1.2b URL buffer must end before main's fixed worker-generation slots"
+%endif

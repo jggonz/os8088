@@ -180,6 +180,12 @@ def main(argv):
                          "restore, and the time below is this loop's own "
                          "timeout")
         ms = (m.status()["cycles"] - t0) / HZ * 1000.0
+        m.run()                 # the sampling loop above ends on an
+                                # `advance`, which leaves the emulator
+                                # STOPPED - and a stopped guest cannot settle.
+                                # It used to settle instantly on a frozen
+                                # screen and everything below measured a
+                                # machine that was not running.
         os88marty.settle(m)
         bad, n, cw2, ch2, st2, top = _canvas(m, seg)
         print("   restored        %dx%d stride=%d   %d of %d bytes not FF   %r"

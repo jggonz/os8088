@@ -1,0 +1,63 @@
+fixture: scroll
+  LF at the bottom row, SU and SD. The vacated rows take the CURRENT
+  attribute, which is why the last block sets a background first.
+
+stream:  401 bytes
+cursor:  row 0 col 69 (0-based)   attribute 47   185 glyph(s)
+state:   GROUND   bells 0   scrolls 6
+cursor visible: True
+
+    +--------------------------------------------------------------------------------+
+  0 |line 05                                                    | scrolled           |
+  1 |line 06                                                                         |
+  2 |line 07                                                                         |
+  3 |line 08                                                                         |
+  4 |line 09                                                                         |
+  5 |line 10                                                                         |
+  6 |line 11                                                                         |
+  7 |line 12                                                                         |
+  8 |line 13                                                                         |
+  9 |line 14                                                                         |
+ 10 |line 15                                                                         |
+ 11 |line 16                                                                         |
+ 12 |line 17                                                                         |
+ 13 |line 18                                                                         |
+ 14 |line 19                                                                         |
+ 15 |line 20                                                                         |
+ 16 |line 21                                                                         |
+ 17 |line 22                                                                         |
+ 18 |line 23                                                                         |
+ 19 |line 24                                                                         |
+ 20 |line 25                                                                         |
+ 21 |                                                                                |
+ 22 |                                                                                |
+ 23 |                                                                                |
+ 24 |                                                                                |
+    +--------------------------------------------------------------------------------+
+
+attributes, run-length encoded, one row per line:
+  0 59*07 10*47 11*07
+  1 80*07
+  2 80*07
+  3 80*07
+  4 80*07
+  5 80*07
+  6 80*07
+  7 80*07
+  8 80*07
+  9 80*07
+ 10 80*07
+ 11 80*07
+ 12 80*07
+ 13 80*07
+ 14 80*07
+ 15 80*07
+ 16 80*07
+ 17 80*07
+ 18 80*07
+ 19 80*07
+ 20 80*07
+ 21 80*07
+ 22 80*07
+ 23 80*47
+ 24 80*47

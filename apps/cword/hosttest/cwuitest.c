@@ -289,35 +289,11 @@ void os88_gfx_lock(void) { }
 void os88_gfx_unlock(void) { }
 void os88_task_sleep(int ticks) { (void)ticks; }
 int  os88_task_spawn(void *win) { (void)win; return -1; }
+int  os88_task_restartable(int on) { (void)on; return 0; }
 void os88_task_alive(void *win) { (void)win; }
 int  os88_peek(unsigned seg, unsigned off) { (void)seg; (void)off; return 0; }
 void os88_gfx_pen(int disabled) { (void)disabled; }
 void os88_gfx_vline(int x, int y1, int y2) { os88_gfx_fill(x, y1, x, y2); }
-/* The arbitrary-angle line (SPEC.md 5.6), which the menu check is two of. The
- * model is a Bresenham walk rather than a bounding fill: the harness audits the
- * glass cell for cell, and a stub that blackened the whole box would report a
- * check mark as damage over the label beside it. */
-void os88_gfx_line(int x1, int y1, int x2, int y2, int dilate)
-{
-    int dx, dy, sx, sy, err, e2;
-
-    (void)dilate;
-    n_fill++;                           /* one drawing call, whatever it draws */
-    dx = x2 > x1 ? x2 - x1 : x1 - x2;
-    dy = y2 > y1 ? y2 - y1 : y1 - y2;
-    sx = x1 < x2 ? 1 : -1;
-    sy = y1 < y2 ? 1 : -1;
-    err = dx - dy;
-    for (;;) {
-        if (x1 >= 0 && x1 < GW * 8 && y1 >= 0 && y1 < GH)
-            pixline[x1][y1] = 1;
-        if (x1 == x2 && y1 == y2)
-            break;
-        e2 = err * 2;
-        if (e2 > -dy) { err -= dy; x1 += sx; }
-        if (e2 <  dx) { err += dx; y1 += sy; }
-    }
-}
 void os88_gfx_pixel(int x, int y) { os88_gfx_fill(x, y, x, y); }
 void os88_font_char_xparent(int x, int y, int ch)
 { char b[2]; b[0] = (char)ch; b[1] = 0; os88_font_str_xparent(x, y, b); }
@@ -377,6 +353,8 @@ int os88_file_dlg(int mode, void *win, const char *defname)
 int os88_arg_file(char *name13, struct os88_place *p)
 { (void)name13; (void)p; return -1; }
 int os88_file_goto(struct os88_place *p) { (void)p; return 0; }
+int os88_file_goto_q_mark(unsigned clus, int vol) { (void)clus; (void)vol; return 0; }
+void os88_wm_onwake(void *win) { (void)win; }
 int os88_assoc_set(const char *e, const char *s) { (void)e; (void)s; return 0; }
 
 static char clipbuf[4096];
@@ -409,6 +387,22 @@ char *os88_utoa(unsigned v, char *dst)
 /* the one hand-written routine, in C for the host */
 void cw_memmove(void *dst, const void *src, unsigned n) { memmove(dst, src, n); }
 
+/* ...and Undo's two (apps/cword/cwmove.inc), over ONE fake claim: segment 1
+ * is this array, which is all the snapshot ever needs. */
+static unsigned char farmem[9 * 1024];
+static int n_claims;
+unsigned os88_mem_claim(int kb) { n_claims++; return kb <= 9 ? 1 : 0; }
+int os88_mem_movable(unsigned seg, int on) { (void)seg; (void)on; return 0; }
+void cw_farput(const void *src, unsigned seg, unsigned off, unsigned n)
+{ (void)seg; memcpy(farmem + off, src, n); }
+void cw_farswap(void *p, unsigned seg, unsigned off, unsigned n)
+{
+    unsigned char *a = (unsigned char *)p, t;
+    unsigned i;
+    (void)seg;
+    for (i = 0; i < n; i++) { t = a[i]; a[i] = farmem[off + i]; farmem[off + i] = t; }
+}
+
 /* ==========================================================================
  * THE TYPE LIBRARY (apps/cword/cwtype.inc), STUBBED AS FACE 0
  *
@@ -427,7 +421,7 @@ void cw_memmove(void *dst, const void *src, unsigned n) { memmove(dst, src, n); 
  * face - the band, the compose and the blit are all on the target - which is
  * why SPEC.md 73.12.2's own testing is on three adapters with a face on each.
  *
- * cw_ty_scan() answering 0 is the honest model of a machine with no FONTS/
+ * cw_ty_scan() answering 0 is the honest model of a machine with no faces
  * folder, and it is what keeps the Font list's refusal path exercised on every
  * build rather than only on a disk somebody remembered to break.
  * ========================================================================*/
@@ -471,7 +465,7 @@ void cw_ty_pen(const char *s, int n, int *px)
     (void)s;
     for (i = 0; i <= n; i++) px[i] = i * 8;
 }
-int  cw_ty_scan(void) { return 0; }                    /* no FONTS/ folder */
+int  cw_ty_scan(void) { return 0; }                 /* no SYSTEM/FONTS on it */
 void cw_ty_name(int i, char *dst) { (void)i; dst[0] = 0; }
 int  cw_ty_open(int i) { (void)i; return 0; }          /* always refused */
 void cw_ty_close(int h) { (void)h; }
@@ -952,6 +946,53 @@ int main(void)
         }
         while (cw_len > before) { key(8, 0); verify("undo-paste backspace"); }
         verify("after undoing the paste by hand");
+    }
+
+    /* 9b'. UNDO (SPEC.md 73.12.4): a run of typing is ONE undo, Undo puts
+     *      the document back to the byte and repaints it truthfully, and a
+     *      second Undo is the Redo. */
+    {
+        static char ub[CW_DOC_MAX];
+        static unsigned char ua[CW_DOC_MAX];
+        int ulen, ucur, k2;
+
+        key(0, CW_K_END);
+        key(0, CW_K_LEFT);              /* a caret move: a new group */
+        ulen = cw_len;
+        ucur = cw_cur;
+        memcpy(ub, cw_buf, ulen);
+        memcpy(ua, cw_att, ulen);
+        typestr("undo me ");
+        key(13, 0);
+        typestr("and this");
+        verify("before undo");
+        if (cw_item_dis(14)) { printf("FAIL: Undo is greyed after typing\n"); fails++; }
+        key(CW_C_UNDO, 0);
+        verify("after undo");
+        if (cw_len != ulen || cw_cur != ucur || memcmp(cw_buf, ub, ulen) ||
+            memcmp(cw_att, ua, ulen)) {
+            printf("FAIL: Undo did not put the document back (%d vs %d)\n",
+                   cw_len, ulen);
+            fails++;
+        }
+        key(CW_C_UNDO, 0);
+        verify("after redo");
+        if (cw_len != ulen + 17) {
+            printf("FAIL: Undo of the Undo did not redo (%d vs %d)\n",
+                   cw_len, ulen + 17);
+            fails++;
+        }
+        key(CW_C_UNDO, 0);
+        verify("after undo again");
+        for (k2 = 0; k2 < 3; k2++) { key(8, 0); verify("backspace group"); }
+        key(CW_C_UNDO, 0);
+        verify("undo a backspace run");
+        if (cw_len != ulen || memcmp(cw_buf, ub, ulen)) {
+            printf("FAIL: a run of backspaces is not one Undo\n");
+            fails++;
+        }
+        printf("undo: typing, Enter and a backspace run each one group; "
+               "undo/redo round trip exact\n");
     }
 
     /* 9c. the keyboard shortcuts that are not menu commands */

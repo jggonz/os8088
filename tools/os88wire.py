@@ -15,7 +15,7 @@
 
 `--verify` and `--dump` take EITHER format and the magic says which.
 
-SPEC.md 88.2, 88.3 and 88.13 are the formats. This file is the OS repo's
+SPEC.md 92.2, 92.3 and 92.13 are the formats. This file is the OS repo's
 writer and its reader; the website's `tools/wire.py` is an INDEPENDENT SECOND
 WRITER of the same bytes, and `--verify` run against the site's published
 `catalog.bin` and `.WPK` files is the cross-check between them - the
@@ -24,7 +24,7 @@ arrangement `tests/unit/t_wab.py` has over a `.WAB`, one format along.
 **THE VERIFIER DOES NOT COMPARE A GENERIC ICON.** A record whose package
 declares an `OS88_ICON16` (header flags bit 0) must carry exactly those 64
 bytes and `--verify --pkgdir` says so. A record whose package declares none
-carries a generic, and SPEC.md 88.2 leaves which generic to the writer - so
+carries a generic, and SPEC.md 92.2 leaves which generic to the writer - so
 two independent writers may choose differently and both be right. What is
 checked there is the one thing that is a fault either way: an icon with no
 pixels in it, which `icon_draw_x` accepts and draws as nothing.
@@ -45,11 +45,12 @@ needs.
 import argparse
 import json
 import os
+import re
 import struct
 import sys
 import zlib
 
-# --- the 32-byte header (SPEC.md 88.2) ---------------------------------------
+# --- the 32-byte header (SPEC.md 92.2) ---------------------------------------
 WC_MAGIC = 0
 WC_VER = 4
 WC_RSZ = 5
@@ -73,6 +74,13 @@ WC_TOTAL = 42
 WC_NEEDKB = 46
 WC_ICON = 48
 WC_DESC = 112
+# The package FORMAT the record's .O88 was built for, and the oldest Wire that
+# can install the record (SPEC.md 92.2). Both are DERIVED - the first is the
+# package header's +2 (an archive's program entry's), the second is 2 for a
+# version 2 archive and 1 otherwise - and 0 in either is "no claim", which is
+# what every catalog before them carries in these bytes.
+WC_PKGFMT = 252
+WC_NEEDW = 253
 WIRE_REC = 256
 WC_DESCN = 5
 WC_DESCW = 28
@@ -102,12 +110,15 @@ WIRE_VER = 1
 WIRE_CATMAX = 16384
 WIRE_FILEMAX = 64512
 WIRE_NMAX = 255
-WIRE_SCMAX = 8
+WIRE_SCMAX = 32
+# What the Wire built from this tree installs (SPEC.md 92.2): 1 = plain records
+# and version 1 archives, 2 = version 2 archives too (92.13.1).
+WIRE_LEVEL = 2
 # 0x100000, one megabyte: the reader's sanity bound on an ARCHIVE record's
 # WC_SIZE. WIRE_FILEMAX is the wrong bound there and refusing on it is what
 # the machine did to the site's real RUNCPM record at 231,463 bytes - an
 # archive is a DWORD length and the first body over 64KB by design (SPEC.md
-# 88.14's WK_ARC). The field still needs a ceiling, because Content-Length
+# 92.14's WK_ARC). The field still needs a ceiling, because Content-Length
 # arrives before the body and the progress figure is computed from it.
 #
 # **IT IS THE FIRST SIZE REFUSED**, not the last accepted: `wcat.inc` says an
@@ -116,13 +127,13 @@ WIRE_SCMAX = 8
 # an archive of exactly 1,048,576 bytes is refused by both sides.
 WIRE_ARCMAX = 1048576
 
-# --- the picture (SPEC.md 88.3) -----------------------------------------------
+# --- the picture (SPEC.md 92.3) -----------------------------------------------
 WIRE_PICW = 128
 WIRE_PICH = 64
 WIRE_PICB = 16
 WIRE_PICSZ = 1024
 
-# --- the archive (SPEC.md 88.13), mirrored from apps/thewire/warc.inc ---------
+# --- the archive (SPEC.md 92.13), mirrored from apps/thewire/warc.inc ---------
 # The 32-byte header.
 WA_MAGIC = 0
 WA_VER = 4
@@ -154,6 +165,11 @@ WAM_LZSS = 1
 
 # What the reader will hold.
 WARC_VER = 1
+# ...and the version an archive carries when an entry is past its claim
+# (SPEC.md 92.13.1): a STORED entry of any size below WIRE_ARCMAX, written in
+# pieces. The writer uses it ONLY then, so a Wire from before 92.13.1 refuses
+# such an archive at the header, before it has written a file.
+WARC_VER2 = 2
 WARC_NMAX = 255
 WARC_DISTMAX = 4096
 WARC_LENMIN = 3
@@ -167,7 +183,7 @@ TIERS = ("8088/8086", "286", "386", "486+")
 
 
 class Refused(Exception):
-    """A rule in SPEC.md 88.2 that the input broke.
+    """A rule in SPEC.md 92.2 that the input broke.
 
     Every one of these is a sentence a person can act on. The writer refuses
     rather than emitting a catalog the machine will then refuse, because the
@@ -182,6 +198,29 @@ class Refused(Exception):
 O88_MAGIC = b"O8"
 O88_F_ICON = 1
 O88_F_PARTS = 4
+
+
+def pkg_fmt(blob):
+    """The package format an .o88's header claims (+2), or 0 if it is none."""
+    if len(blob) >= 3 and blob[0:2] == O88_MAGIC:
+        return blob[2]
+    return 0
+
+
+def sdk_pkgfmt():
+    """PKG_FMT as apps/os88api.inc defines it, or None outside an OS tree.
+
+    The website runs a copy of this file with no SDK beside it, so the answer
+    is optional; in the OS repository it is what a published package must
+    have been built for (SPEC.md 92.2).
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
+                        "apps", "os88api.inc")
+    try:
+        m = re.search(r"^PKG_FMT\s+equ\s+(\d+)", open(path).read(), re.M)
+    except OSError:
+        return None
+    return int(m.group(1)) if m else None
 
 
 def o88_header(blob, name):
@@ -234,7 +273,7 @@ def ascii_field(text, width, what, pad=b"\0"):
     for ch in b:
         if ch < 0x20 or ch > 0x7E:
             raise Refused("%s has a byte 0x%02X in it, and the machine's font "
-                          "is ASCII 0x20..0x7E (SPEC.md 88.2)" % (what, ch))
+                          "is ASCII 0x20..0x7E (SPEC.md 92.2)" % (what, ch))
     if len(b) > width - (1 if pad == b"\0" else 0):
         raise Refused("%s is %d bytes and the field holds %d"
                       % (what, len(b), width - (1 if pad == b"\0" else 0)))
@@ -242,7 +281,7 @@ def ascii_field(text, width, what, pad=b"\0"):
 
 
 def wrap(text, cols, lines, what):
-    """The description, PRE-WRAPPED BY THE WRITER (SPEC.md 88.2).
+    """The description, PRE-WRAPPED BY THE WRITER (SPEC.md 92.2).
 
     The machine wraps nothing, which is why the record is five fixed fields
     and not one string: wrapping on an 8088 is a per-paint cost for an answer
@@ -264,7 +303,7 @@ def wrap(text, cols, lines, what):
         out.append(cur)
     if len(out) > lines:
         raise Refused("%s wraps to %d lines at %d columns and the record "
-                      "holds %d (SPEC.md 88.2)" % (what, len(out), cols, lines))
+                      "holds %d (SPEC.md 92.2)" % (what, len(out), cols, lines))
     return out
 
 
@@ -304,7 +343,7 @@ def pack(manifest, pkgdir, picdir, date=None):
         if fl.get("floppy_only"):
             flags |= WF_FLOPPY
 
-        # --- AN ARCHIVE RECORD (SPEC.md 88.2's WF_ARC, 88.13) ---------------
+        # --- AN ARCHIVE RECORD (SPEC.md 92.2's WF_ARC, 92.13) ---------------
         # The manifest says `"archive": {"file": "RUNCPM.WPK"}` where a
         # program says `"files": [...]`, and every figure in the record then
         # comes out of the .WPK's own header rather than out of the manifest:
@@ -314,10 +353,10 @@ def pack(manifest, pkgdir, picdir, date=None):
         if arc is not None:
             if e.get("files"):
                 raise Refused("%s names both files and an archive; an archive "
-                              "IS the transfer (SPEC.md 88.13)" % stem)
+                              "IS the transfer (SPEC.md 92.13)" % stem)
             if fl.get("needs_disk"):
                 raise Refused("%s is an archive and needs_disk: WF_DISK is "
-                              "clear on every WF_ARC record (SPEC.md 88.2) - "
+                              "clear on every WF_ARC record (SPEC.md 92.2) - "
                               "the tree it unpacks IS its files on a disk")
             afile = arc.get("file") or (stem + ".WPK")
             apath = os.path.join(pkgdir, afile)
@@ -329,13 +368,22 @@ def pack(manifest, pkgdir, picdir, date=None):
             if abad:
                 raise Refused("%s: %s" % (stem, abad[0]))
             ahdr, aents = arc_read(ablob, afile)
-            # **THE WRITER SETS WF_FLOPPY WITH WF_ARC** (SPEC.md 88.2): a Wire
-            # from before 88.13 does not know bit 4, greys both buttons with
+            # **THE WRITER SETS WF_FLOPPY WITH WF_ARC** (SPEC.md 92.2): a Wire
+            # from before 92.13 does not know bit 4, greys both buttons with
             # the floppy reason, and never fetches a .O88 that is not there.
             flags |= WF_ARC | WF_FLOPPY
+            # **AND WF_DISK ON A VERSION 2 ONE** (SPEC.md 92.13.1), derived
+            # rather than declared like every other WF_DISK: an entry past
+            # the claim is past what a RAM disk store holds in one file
+            # (RD_FILEMAX), so Load Program refuses and Add to Disk is the path.
+            if ablob[WA_VER] == WARC_VER2:
+                flags |= WF_DISK
             wc_size = len(ablob)
             wc_total = ahdr["total"]
             wc_needkb = ahdr["needkb"]
+            wc_pkgfmt = (pkg_fmt(aents[-1]["data"])
+                         if ahdr["flags"] & WAH_PROGRAM else 0)
+            wc_needw = 2 if ahdr["ver"] == WARC_VER2 else 1
             icon = arc_icon(ahdr, aents, afile)
             if arc.get("icon"):
                 ipath = os.path.join(pkgdir, arc["icon"])
@@ -372,21 +420,31 @@ def pack(manifest, pkgdir, picdir, date=None):
             for f, n in zip(files, sizes):
                 if n == 0:
                     raise Refused("%s is empty" % f)
-                if n > WIRE_FILEMAX and not (flags & WF_FLOPPY):
-                    raise Refused("%s is %d bytes, over WIRE_FILEMAX (%d), and the "
-                                  "entry is not floppy_only - the Wire moves a "
-                                  "file in ONE claim and ONE write (SPEC.md 88.2)"
-                                  % (f, n, WIRE_FILEMAX))
+                if n > WIRE_FILEMAX:
+                    # **floppy_only DOES NOT LIFT IT** (SPEC.md 92.2): the
+                    # machine's wr_catck reads WC_SIZE before any flag, so a
+                    # plain record past the bound refuses the WHOLE catalog on
+                    # every Wire in the field. A big file goes in a version 2
+                    # archive (92.13.1), which every reader can be handed.
+                    raise Refused("%s is %d bytes, over WIRE_FILEMAX (%d) - a "
+                                  "plain record moves a file in ONE claim and "
+                                  "ONE write, and one past the bound refuses "
+                                  "the whole catalog on the machine whatever "
+                                  "its flags. Publish it as an archive, which "
+                                  "writes a big file in pieces (SPEC.md 92.2, "
+                                  "92.13.1)" % (f, n, WIRE_FILEMAX))
             wc_size = sizes[0]
             wc_total = sum(sizes)
             wc_needkb = 0
+            wc_pkgfmt = pkg_fmt(blobs[0])
+            wc_needw = 1
             icon = icon_of(blobs[0], files[0])
 
         if picdir and os.path.exists(os.path.join(picdir, stem + ".PIC")):
             pic = open(os.path.join(picdir, stem + ".PIC"), "rb").read()
             if len(pic) != WIRE_PICSZ:
                 raise Refused("%s.PIC is %d bytes and a picture is %d "
-                              "(SPEC.md 88.3)" % (stem, len(pic), WIRE_PICSZ))
+                              "(SPEC.md 92.3)" % (stem, len(pic), WIRE_PICSZ))
             flags |= WF_PIC
 
         kind = e.get("kind", 0)
@@ -399,7 +457,7 @@ def pack(manifest, pkgdir, picdir, date=None):
             raise Refused("%s has kind %r" % (stem, kind))
         tier = e.get("tier", 0)
         if tier not in (0, 1, 2, 3):
-            raise Refused("%s has tier %r; 0..3 (SPEC.md 88.2)" % (stem, tier))
+            raise Refused("%s has tier %r; 0..3 (SPEC.md 92.2)" % (stem, tier))
 
         desc = e.get("description") or e.get("summary") or ""
         lines = wrap(desc, WC_DESCW - 1, WC_DESCN, "%s's description" % stem)
@@ -408,7 +466,7 @@ def pack(manifest, pkgdir, picdir, date=None):
         for f, n in zip(files[1:], sizes[1:]):
             sides.append((f.upper(), n))
         # An archive has NO SIDECARS - n = 0 on every WF_ARC record (SPEC.md
-        # 88.2). Its extra files are entries in the stream, not a second
+        # 92.2). Its extra files are entries in the stream, not a second
         # fetch, which is the whole point of the format.
         nside = max(0, len(files) - 1)
         if nside > WIRE_SCMAX:
@@ -428,6 +486,8 @@ def pack(manifest, pkgdir, picdir, date=None):
         struct.pack_into("<I", r, WC_SIZE, wc_size)
         struct.pack_into("<I", r, WC_TOTAL, wc_total)
         struct.pack_into("<H", r, WC_NEEDKB, wc_needkb)
+        r[WC_PKGFMT] = wc_pkgfmt
+        r[WC_NEEDW] = wc_needw
         r[WC_ICON:WC_ICON + 64] = icon
         for i, line in enumerate(lines):
             off = WC_DESC + i * WC_DESCW
@@ -452,8 +512,16 @@ def pack(manifest, pkgdir, picdir, date=None):
     tab = bytearray()
     for name, n in sides:
         e = bytearray(WIRE_SC)
-        e[WC_SCNAME:WC_SCNAME + 12] = ascii_field(name, 12,
-                                                  "sidecar name %s" % name)
+        # AN 8.3 NAME IN A 12-BYTE SLOT, NUL-padded when shorter and with no
+        # NUL at all when it is twelve - arc_name's rule, and the reader's
+        # since the first Wire: the Add chain copies at most twelve bytes and
+        # stops at a NUL (wr_sputn), into a 14-byte wr_fname that it then
+        # terminates itself. This writer used to keep a NUL inside the twelve,
+        # which refused every full 8.3 name (MIDIRACK.GFX, ENTERTNR.MID) for
+        # no reason the machine had. The name lands in a FAT directory as
+        # written, so it is checked as an 8.3 name and not only for length.
+        e[WC_SCNAME:WC_SCNAME + 12] = arc_name(
+            name, "sidecar name %s" % name).encode("ascii").ljust(12, b"\0")
         struct.pack_into("<I", e, WC_SCSIZE, n)
         tab += e
 
@@ -461,7 +529,7 @@ def pack(manifest, pkgdir, picdir, date=None):
     if len(out) > WIRE_CATMAX:
         raise Refused("the catalog is %d bytes and WIRE_CATMAX is %d - the "
                       "machine claims that much before a Content-Length "
-                      "exists, so it is a hard ceiling (SPEC.md 88.2)"
+                      "exists, so it is a hard ceiling (SPEC.md 92.2)"
                       % (len(out), WIRE_CATMAX))
     return out
 
@@ -472,9 +540,31 @@ def pack(manifest, pkgdir, picdir, date=None):
 # =============================================================================
 def verify(blob, pkgdir=None):
     bad = []
+    # WITH --pkgdir THIS IS THE RELEASE'S CHECK, and the release is ALSO about
+    # which kernel the packages are for: every published package must be
+    # built for this tree's PKG_FMT (SPEC.md 92.2), or the Wire hands every
+    # machine on this release a program its loader refuses.
+    sdkfmt = sdk_pkgfmt() if pkgdir else None
 
     def no(msg):
         bad.append(msg)
+
+    def fmt_check(tag, rfmt, pfmt, rneedw, needw, whose):
+        """WC_PKGFMT and WC_NEEDW against what the published bytes say."""
+        if rfmt != pfmt:
+            no("%s: WC_PKGFMT is %d and %s is format %d - the Wire greys a "
+               "record on this byte BEFORE it downloads anything, so a wrong "
+               "one refuses a program that would run or offers one that will "
+               "not (SPEC.md 92.2)" % (tag, rfmt, whose, pfmt))
+        if pfmt and sdkfmt is not None and pfmt != sdkfmt:
+            no("%s: %s is package format %d and this os8088 is %d - a STALE "
+               "package: every machine on this release would download it and "
+               "have its loader refuse it as the wrong os8088 version. "
+               "Republish it from this build (SPEC.md 92.2)"
+               % (tag, whose, pfmt, sdkfmt))
+        if rneedw != needw:
+            no("%s: WC_NEEDW is %d and the record needs a level-%d Wire - "
+               "the writer derives it (SPEC.md 92.2)" % (tag, rneedw, needw))
 
     def icon_check(tag, got, pkg, whose):
         """The record's 64 bytes against the package that owns them.
@@ -498,7 +588,7 @@ def verify(blob, pkgdir=None):
                        "different bytes" % (tag, whose))
                 return
         # IT DECLARES NONE, so the record carries a GENERIC one - and SPEC.md
-        # 88.2 says "or the site's generic program icon", which is a choice
+        # 92.2 says "or the site's generic program icon", which is a choice
         # the writer makes rather than a value this can compare against. Two
         # writers may pick different generics and both be right, so what is
         # checked is the only thing that is actually a fault: an icon with no
@@ -574,27 +664,26 @@ def verify(blob, pkgdir=None):
             no("%s: unknown flag bits 0x%02X" % (tag, flags))
         arc = bool(flags & WF_ARC)
         needkb = struct.unpack_from("<H", blob, o + WC_NEEDKB)[0]
+        rfmt, rneedw = blob[o + WC_PKGFMT], blob[o + WC_NEEDW]
+        if blob[o + WC_NEEDW + 1:o + WIRE_REC] != b"\0" * (WIRE_REC - WC_NEEDW - 1):
+            no("%s: the record's last bytes after WC_NEEDW are not zero" % tag)
         if arc:
-            # SPEC.md 88.2's three rules for an archive record, and the third
-            # is the COMPATIBILITY one: a Wire from before 88.13 does not know
+            # SPEC.md 92.2's three rules for an archive record, and the third
+            # is the COMPATIBILITY one: a Wire from before 92.13 does not know
             # bit 4 and would otherwise fetch a /wire/pkg/<STEM>.O88 that does
             # not exist. WF_FLOPPY beside it greys both buttons instead.
             if blob[o + WC_NSIDE]:
                 no("%s: WF_ARC with %d sidecars, and an archive's n is 0 - "
-                   "its extra files are entries in the stream (SPEC.md 88.2)"
+                   "its extra files are entries in the stream (SPEC.md 92.2)"
                    % (tag, blob[o + WC_NSIDE]))
-            if flags & WF_DISK:
-                no("%s: WF_ARC with WF_DISK, and 88.2 clears bit 0 on an "
-                   "archive - the tree it unpacks IS its files on a disk, so "
-                   "Load Program is the point rather than the refusal" % tag)
             if not flags & WF_FLOPPY:
                 no("%s: WF_ARC without WF_FLOPPY. The writer sets bit 3 WITH "
-                   "bit 4 (SPEC.md 88.2) so that a Wire from before 88.13 "
+                   "bit 4 (SPEC.md 92.2) so that a Wire from before 92.13 "
                    "greys the row with the floppy reason instead of fetching "
                    "a <STEM>.O88 that is not published" % tag)
         elif needkb:
             no("%s: WC_NEEDKB is %d on a record that is not an archive, and "
-               "88.2 says zero otherwise" % (tag, needkb))
+               "92.2 says zero otherwise" % (tag, needkb))
         nside = blob[o + WC_NSIDE]
         if nside > WIRE_SCMAX:
             no("%s: %d sidecars, and the record holds %d"
@@ -621,9 +710,11 @@ def verify(blob, pkgdir=None):
                 no("%s: the archive is %d bytes and WIRE_ARCMAX is %d, which "
                    "is the FIRST size refused and not the last accepted"
                    % (tag, size, WIRE_ARCMAX))
-        elif size > WIRE_FILEMAX and not flags & WF_FLOPPY:
-            no("%s: %d bytes, over WIRE_FILEMAX %d, without WF_FLOPPY"
-               % (tag, size, WIRE_FILEMAX))
+        elif size > WIRE_FILEMAX:
+            no("%s: %d bytes, over WIRE_FILEMAX %d - the machine's wr_catck "
+               "refuses the WHOLE catalog for one such record whatever its "
+               "flags, so a big file is a version 2 archive (SPEC.md 92.2, "
+               "92.13.1)" % (tag, size, WIRE_FILEMAX))
         if total < size and not arc:
             # NOT ON AN ARCHIVE: WC_SIZE is the .WPK on the wire and WC_TOTAL
             # is what it unpacks to, and a tree of many small files carries
@@ -640,12 +731,13 @@ def verify(blob, pkgdir=None):
             if e + WIRE_SC > len(blob):
                 continue
             nm = blob[e:e + 12]
-            if b"\0" not in nm:
-                no("%s: sidecar %d's name is not NUL-terminated" % (tag, j))
+            # a full slot has no NUL and is a name of twelve (SPEC.md 92.2)
             sname = nm.split(b"\0")[0].decode("latin1")
+            if not sname:
+                no("%s: sidecar %d has no name" % (tag, j))
             sz = struct.unpack_from("<I", blob, e + WC_SCSIZE)[0]
             tot += sz
-            if sz == 0 or (sz > WIRE_FILEMAX and not flags & WF_FLOPPY):
+            if sz == 0 or sz > WIRE_FILEMAX:
                 no("%s: sidecar %s is %d bytes" % (tag, sname, sz))
             if pkgdir:
                 # THE SIDECARS ARE CROSS-CHECKED TOO, and they are the half
@@ -669,7 +761,7 @@ def verify(blob, pkgdir=None):
 
         if pkgdir and arc:
             # The published file is <STEM>.WPK and not <STEM>.O88 (SPEC.md
-            # 88.2), and the three figures the record carries are all copies
+            # 92.2), and the three figures the record carries are all copies
             # of the archive header's - so the cross-check is against that
             # header rather than against the manifest that produced both.
             path = os.path.join(pkgdir, stem + ".WPK")
@@ -696,6 +788,19 @@ def verify(blob, pkgdir=None):
                            "is %d - Load Program sizes the RAM disk store on "
                            "the record and fills it from the stream"
                            % (tag, needkb, ahdr["needkb"]))
+                    v2 = ahdr["ver"] == WARC_VER2
+                    pfmt = (pkg_fmt(aents[-1]["data"])
+                            if ahdr["flags"] & WAH_PROGRAM else 0)
+                    fmt_check(tag, rfmt, pfmt, rneedw, 2 if v2 else 1,
+                              "the archive's program entry")
+                    if v2 != bool(flags & WF_DISK):
+                        no("%s: the archive is version %d and WF_DISK is %s - "
+                           "the writer sets it on exactly the version 2 ones, "
+                           "whose big entry no RAM disk store can hold, so "
+                           "Load Program refuses it rather than mounting a "
+                           "store that fails at the write (SPEC.md 92.13.1)"
+                           % (tag, ahdr["ver"], "set" if flags & WF_DISK
+                              else "clear"))
                     icon_check(tag, blob[o + WC_ICON:o + WC_ICON + 64],
                                aents[-1]["data"]
                                if ahdr["flags"] & WAH_PROGRAM else None,
@@ -711,6 +816,7 @@ def verify(blob, pkgdir=None):
                 if len(b) != size:
                     no("%s: WC_SIZE is %d and the file is %d"
                        % (tag, size, len(b)))
+                fmt_check(tag, rfmt, pkg_fmt(b), rneedw, 1, "the package")
                 icon_check(tag, blob[o + WC_ICON:o + WC_ICON + 64], b,
                            "the package")
     return bad
@@ -732,9 +838,9 @@ def dump(blob, out=sys.stdout):
     print("WIRE v%d, %d records, %d sidecars, %s, %d bytes"
           % (blob[WC_VER], n, scn,
              blob[WC_DATE:WC_DATE + 8].decode("latin1"), len(blob)), file=out)
-    print("%-9s %-24s %-9s %-5s %6s %7s %6s %s"
+    print("%-9s %-24s %-9s %-5s %6s %7s %6s %-5s %s"
           % ("STEM", "TITLE", "TIER", "FLAGS", "SIZE", "TOTAL", "NEEDKB",
-             "SIDECARS"), file=out)
+             "FMT/W", "SIDECARS"), file=out)
     for i in range(n):
         o = WIRE_HDR + i * WIRE_REC
         stem = blob[o:o + 8].rstrip(b" ").decode("latin1")
@@ -745,12 +851,13 @@ def dump(blob, out=sys.stdout):
         for j in range(nside):
             e = scoff + (side0 + j) * WIRE_SC
             names.append(blob[e:e + 12].split(b"\0")[0].decode("latin1"))
-        print("%-9s %-24s %-9s %-5s %6d %7d %6d %s"
+        print("%-9s %-24s %-9s %-5s %6d %7d %6d %-5s %s"
               % (stem, title.decode("latin1"), TIERS[blob[o + WC_TIER] & 3],
                  flagstr(blob[o + WC_FLAGS]),
                  struct.unpack_from("<I", blob, o + WC_SIZE)[0],
                  struct.unpack_from("<I", blob, o + WC_TOTAL)[0],
                  struct.unpack_from("<H", blob, o + WC_NEEDKB)[0],
+                 "%d/%d" % (blob[o + WC_PKGFMT], blob[o + WC_NEEDW]),
                  ",".join(names)), file=out)
         for k in range(WC_DESCN):
             d = blob[o + WC_DESC + k * WC_DESCW:
@@ -760,7 +867,7 @@ def dump(blob, out=sys.stdout):
 
 
 # =============================================================================
-# THE ARCHIVE - <STEM>.WPK, a folder tree in ONE stream (SPEC.md 88.13)
+# THE ARCHIVE - <STEM>.WPK, a folder tree in ONE stream (SPEC.md 92.13)
 #
 # The win is the CONNECTION and not the ratio. On a stop-and-wait TCP over a
 # 4.77 MHz 8088, RunCPM's master disk is fifty-nine handshakes and fifty-nine
@@ -774,7 +881,7 @@ def dump(blob, out=sys.stdout):
 # is the direction `tests/unit/t_wire.py` checks - encode, decode, compare.
 # =============================================================================
 def lzss_encode(src, chain=48):
-    """SPEC.md 88.13's method 1: greedy matching with a one-step lazy check.
+    """SPEC.md 92.13's method 1: greedy matching with a one-step lazy check.
 
     Distance 1..WARC_DISTMAX, length WARC_LENMIN..WARC_LENMAX, groups of a
     flag byte and up to eight items, bit 0 first, a SET bit a literal. There
@@ -862,7 +969,7 @@ def lzss_encode(src, chain=48):
 
 
 def lzss_decode(body, want, what="the entry"):
-    """SPEC.md 88.13's decoder, and the four refusals it pins.
+    """SPEC.md 92.13's decoder, and the four refusals it pins.
 
     This is the REFERENCE: the 8088's unpacker is a resumable state machine
     over the same rules, and `--verify` is this one run over every entry. The
@@ -927,15 +1034,16 @@ ARC_RESERVED = ({"CON", "PRN", "AUX", "NUL"}
 def arc_name(name, what, folder=False):
     """One path slot: 1..8 stem, 0..3 extension, A-Z 0-9 _ - and nothing else.
 
-    **A TWELVE-CHARACTER NAME FILLS THE SLOT** (SPEC.md 88.13): the slot is
+    **A TWELVE-CHARACTER NAME FILLS THE SLOT** (SPEC.md 92.13): the slot is
     NUL-padded when the name is shorter and carries no NUL at all when it is
     12, and the reader copies at most twelve bytes and stops at a NUL, which
-    is `wr_sputn`'s rule. The first draft of 88.13 said NUL-TERMINATED, and
+    is `wr_sputn`'s rule. The first draft of 92.13 said NUL-TERMINATED, and
     five of the RunCPM master disk's 77 files are twelve characters
     (`CONSOLE7.COM`, `LEFT-OFF.TXT`), so the format's own motivating example
-    would have been unpackable. The catalog's `WC_SCNAME` is NOT this - it
-    stays NUL-terminated inside its 12 (SPEC.md 88.2) and `ascii_field`
-    enforces that.
+    would have been unpackable. The catalog's `WC_SCNAME` is the same slot
+    (SPEC.md 92.2): it was kept NUL-terminated inside its 12 until
+    v1.0.20261003 for no reason the reader had, and a sidecar name goes
+    through this function now too.
 
     The writer refuses a lowercase name rather than upper-casing it, and that
     is deliberate: `readme` and `README` are one FAT12 directory entry, so a
@@ -949,7 +1057,7 @@ def arc_name(name, what, folder=False):
     if name != name.upper():
         raise Refused("%s is %r and every name in an archive is UPPERCASE - "
                       "it lands in a FAT12 directory, where a fold would put "
-                      "two files on one entry (SPEC.md 88.13)" % (what, name))
+                      "two files on one entry (SPEC.md 92.13)" % (what, name))
     stem, dot, ext = name.partition(".")
     if folder and dot:
         raise Refused("%s is %r and a folder slot takes no extension" % (what,
@@ -1016,7 +1124,7 @@ def arc_order_file(path):
 
 
 def archive(srcdir, home=None, program=None, order=None):
-    """SPEC.md 88.13's writer. Deterministic: no timestamps, stable order."""
+    """SPEC.md 92.13's writer. Deterministic: no timestamps, stable order."""
     if not os.path.isdir(srcdir):
         raise Refused("%s is not a directory" % srcdir)
     present = set(arc_scan(srcdir))
@@ -1039,7 +1147,7 @@ def archive(srcdir, home=None, program=None, order=None):
         ents = sorted(present)
 
     if len(ents) > WARC_NMAX:
-        raise Refused("%d entries; the format's count is 1..%d (SPEC.md 88.13)"
+        raise Refused("%d entries; the format's count is 1..%d (SPEC.md 92.13)"
                       % (len(ents), WARC_NMAX))
 
     # --- the program entry, and why it also decides the GROUP order ----------
@@ -1052,9 +1160,9 @@ def archive(srcdir, home=None, program=None, order=None):
                           "entries" % program)
         if prog[0]:
             raise Refused("--program names %s and a program entry is at DEPTH "
-                          "0: OSAPI_PKG_RUN runs it with the instance's "
+                          "0: OSAPI_PKG_START runs it with the instance's "
                           "directory on the tree, which is where its overlay "
-                          "and sidecars have to be (SPEC.md 88.14)" % program)
+                          "and sidecars have to be (SPEC.md 92.14)" % program)
         if not prog[1].endswith(".O88"):
             raise Refused("--program names %s and a package is a .O88"
                           % program)
@@ -1065,20 +1173,20 @@ def archive(srcdir, home=None, program=None, order=None):
                 raise Refused("--program names %s and it is entry %d of %d; "
                               "the program entry is LAST, so the claim that "
                               "holds it at the end of the transfer is what "
-                              "OSAPI_PKG_RUN launches (SPEC.md 88.14)"
+                              "OSAPI_PKG_START launches (SPEC.md 92.14)"
                               % (program, ents.index(prog) + 1, len(ents)))
         else:
             # SORTED puts the depth-0 group FIRST (an empty tuple sorts before
             # every other), and lifting one file out of it to the end would
             # leave that folder appearing twice - which is exactly the
             # grouping rule below. So the root group goes LAST as a whole,
-            # with the program the last of it. Both of 88.13's ordering rules
+            # with the program the last of it. Both of 92.13's ordering rules
             # then hold at once.
             root = [e for e in ents if not e[0] and e != prog]
             rest = [e for e in ents if e[0]]
             ents = rest + root + [prog]
 
-    # --- GROUPED BY FOLDER (SPEC.md 88.13) ----------------------------------
+    # --- GROUPED BY FOLDER (SPEC.md 92.13) ----------------------------------
     # The reader banks the folder it is standing in, so a tree in this order
     # costs one folder change per FOLDER rather than one per file - and a
     # folder change on a floppy is OSAPI_FILE_FIND walks and a GOTO, each
@@ -1088,7 +1196,7 @@ def archive(srcdir, home=None, program=None, order=None):
         if not groups or groups[-1] != folders:
             if folders in groups:
                 raise Refused("the folder %s appears in two runs of entries; "
-                              "88.13 groups by folder so the reader enters "
+                              "92.13 groups by folder so the reader enters "
                               "each one once" % ("/".join(folders) or "<root>"))
             groups.append(folders)
 
@@ -1109,13 +1217,12 @@ def archive(srcdir, home=None, program=None, order=None):
         arc_name(name, "the file name in %s" % "/".join(folders + (name,)))
 
         raw = open(os.path.join(srcdir, *(folders + (name,))), "rb").read()
-        if len(raw) > WIRE_FILEMAX:
-            raise Refused("%s is %d bytes and WIRE_FILEMAX is %d - the reader "
-                          "makes ONE claim for the largest entry and writes "
-                          "each file with ONE OSAPI_FILE_WRITE (SPEC.md 88.13)"
-                          % ("/".join(folders + (name,)), len(raw),
-                             WIRE_FILEMAX))
-        enc = lzss_encode(raw) if raw else b""
+        # A FILE PAST WIRE_FILEMAX IS STORED, whatever LZSS would make of it
+        # (SPEC.md 92.13.1): the reader passes it through the claim in pieces,
+        # and an LZSS back-reference is a copy WITHIN the claim, so only a
+        # stored body can be cut. It makes the archive version 2.
+        big = len(raw) > WIRE_FILEMAX
+        enc = lzss_encode(raw) if raw and not big else b""
         if enc and len(enc) < len(raw):
             method, body = WAM_LZSS, enc
         else:
@@ -1137,12 +1244,14 @@ def archive(srcdir, home=None, program=None, order=None):
 
     hdr = bytearray(WARC_HDR)
     hdr[WA_MAGIC:WA_MAGIC + 4] = AMAGIC
-    hdr[WA_VER] = WARC_VER
+    v2 = max(sizes) > WIRE_FILEMAX
+    hdr[WA_VER] = WARC_VER2 if v2 else WARC_VER
     hdr[WA_FLAGS] = WAH_PROGRAM if prog else 0
     struct.pack_into("<H", hdr, WA_N, len(ents))
     struct.pack_into("<I", hdr, WA_TOTAL, sum(sizes))
     struct.pack_into("<H", hdr, WA_NEEDKB, needkb_of(sizes))
-    struct.pack_into("<H", hdr, WA_MAXENT, max(sizes))
+    # THE CLAIM, capped: a big entry goes through it in pieces (92.13.1)
+    struct.pack_into("<H", hdr, WA_MAXENT, min(max(sizes), WIRE_FILEMAX))
     hdr[WA_HOME:WA_HOME + WARC_SLOT] = arc_slot(hometxt)
 
     out = bytearray(hdr)
@@ -1156,13 +1265,13 @@ def archive(srcdir, home=None, program=None, order=None):
                       "FIRST size refused - the "
                       "record's WC_SIZE is checked against Content-Length "
                       "before the body arrives, so this one has no path "
-                      "through the machine (SPEC.md 88.2). Split the tree, or "
+                      "through the machine (SPEC.md 92.2). Split the tree, or "
                       "curate it with --order" % (len(out), WIRE_ARCMAX))
     return bytes(out)
 
 
 # =============================================================================
-# THE ARCHIVE READER - SPEC.md 88.13's checks, written to REFUSE
+# THE ARCHIVE READER - SPEC.md 92.13's checks, written to REFUSE
 # =============================================================================
 def arc_read(blob, name="the archive", decode=True):
     """(header, entries) or Refused.
@@ -1175,7 +1284,7 @@ def arc_read(blob, name="the archive", decode=True):
         raise Refused("%s: %s" % (name, msg))
 
     def slot(buf, off, what, folder=False, allow_empty=False):
-        # AT MOST TWELVE BYTES, STOPPING AT A NUL (SPEC.md 88.13): a slot with
+        # AT MOST TWELVE BYTES, STOPPING AT A NUL (SPEC.md 92.13): a slot with
         # no NUL in it is a twelve-character name and not a fault. What is
         # still a fault is a byte AFTER the NUL - the padding is zero, and a
         # reader that stops at the first NUL would never see what follows it.
@@ -1193,8 +1302,9 @@ def arc_read(blob, name="the archive", decode=True):
         no("%d bytes, shorter than the %d-byte header" % (len(blob), WARC_HDR))
     if bytes(blob[WA_MAGIC:WA_MAGIC + 4]) != AMAGIC:
         no("magic is %r and not %r" % (bytes(blob[0:4]), AMAGIC))
-    if blob[WA_VER] != WARC_VER:
-        no("format version %d and not %d" % (blob[WA_VER], WARC_VER))
+    ver = blob[WA_VER]
+    if ver not in (WARC_VER, WARC_VER2):
+        no("format version %d and not %d or %d" % (ver, WARC_VER, WARC_VER2))
     hflags = blob[WA_FLAGS]
     if hflags & ~WAH_PROGRAM:
         no("header flag bits 0x%02X, and only WAH_PROGRAM is defined"
@@ -1209,7 +1319,7 @@ def arc_read(blob, name="the archive", decode=True):
         no("the largest-entry figure is %d and WIRE_FILEMAX is %d - it is the "
            "ONE claim the reader makes for the whole transfer"
            % (maxent, WIRE_FILEMAX))
-    hdr = {"flags": hflags, "n": n,
+    hdr = {"flags": hflags, "n": n, "ver": ver,
            "total": struct.unpack_from("<I", blob, WA_TOTAL)[0],
            "needkb": struct.unpack_from("<H", blob, WA_NEEDKB)[0],
            "maxent": maxent,
@@ -1233,12 +1343,14 @@ def arc_read(blob, name="the archive", decode=True):
             no("%s has a reserved field that is not zero" % tag)
         stored = struct.unpack_from("<I", e, WA_STORED)[0]
         size = struct.unpack_from("<I", e, WA_SIZE)[0]
-        if size > WIRE_FILEMAX:
-            no("%s is %d bytes unpacked and WIRE_FILEMAX is %d"
-               % (tag, size, WIRE_FILEMAX))
-        if size > maxent:
+        if size > maxent and not (ver == WARC_VER2 and method == WAM_STORED):
+            # PAST THE CLAIM is legal for exactly one entry: STORED, in a
+            # version 2 archive, where the reader writes it in pieces of the
+            # claim (SPEC.md 92.13.1). An LZSS entry's back-references are
+            # copies within the claim, so the whole of it has to be there.
             no("%s is %d bytes and the header's largest-entry figure is %d - "
-               "the claim was made from that figure alone"
+               "the claim was made from that figure alone, and only a STORED "
+               "entry of a version 2 archive may pass it (SPEC.md 92.13.1)"
                % (tag, size, maxent))
         folders = tuple(slot(e, WA_PATH + k * WARC_SLOT,
                              "%s's folder slot %d" % (tag, k), folder=True)
@@ -1283,7 +1395,7 @@ def arc_verify(blob, name="the archive"):
         return ["%s: %d bytes and WIRE_ARCMAX is %d, the FIRST size refused "
                 "- WC_SIZE is checked "
                 "against Content-Length before the body, and the progress "
-                "figure is computed from it (SPEC.md 88.2)"
+                "figure is computed from it (SPEC.md 92.2)"
                 % (name, len(blob), WIRE_ARCMAX)]
     try:
         hdr, ents = arc_read(blob, name)
@@ -1298,23 +1410,34 @@ def arc_verify(blob, name="the archive"):
     if hdr["total"] != sum(sizes):
         bad.append("%s: the header's unpacked total is %d and the entries add "
                    "to %d - Add to Disk's free-space check is decided on that "
-                   "figure (SPEC.md 88.2's WC_TOTAL)"
+                   "figure (SPEC.md 92.2's WC_TOTAL)"
                    % (name, hdr["total"], sum(sizes)))
     if hdr["needkb"] != needkb_of(sizes):
         bad.append("%s: the header's need-KB is %d and the entries need %d at "
                    "a 1KB extent - Load Program sizes the RAM disk on it "
-                   "(SPEC.md 88.14)" % (name, hdr["needkb"],
+                   "(SPEC.md 92.14)" % (name, hdr["needkb"],
                                         needkb_of(sizes)))
-    if hdr["maxent"] != max(sizes):
+    if hdr["maxent"] != min(max(sizes), WIRE_FILEMAX):
         bad.append("%s: the header's largest entry is %d and the largest is "
-                   "%d" % (name, hdr["maxent"], max(sizes)))
+                   "%d, capped at WIRE_FILEMAX %d (SPEC.md 92.13.1)"
+                   % (name, hdr["maxent"], max(sizes), WIRE_FILEMAX))
+    big = max(sizes) > WIRE_FILEMAX
+    if big != (hdr["ver"] == WARC_VER2):
+        # BOTH WAYS. A big entry in a version 1 archive is one a Wire from
+        # before 92.13.1 lands every file BEFORE and then refuses, leaving
+        # half a tree; a version 2 archive with no big entry is one those
+        # Wires refuse for nothing.
+        bad.append("%s: version %d with %s - the version is 2 exactly when "
+                   "an entry is past WIRE_FILEMAX (SPEC.md 92.13.1)"
+                   % (name, hdr["ver"], "an entry of %d bytes" % max(sizes)
+                      if big else "no entry past WIRE_FILEMAX"))
 
     groups, seen = [], set()
     for e in ents:
         if not groups or groups[-1] != e["folders"]:
             if e["folders"] in seen:
                 bad.append("%s: the folder %s appears in two runs of entries, "
-                           "so the reader enters it twice - 88.13 groups by "
+                           "so the reader enters it twice - 92.13 groups by "
                            "folder" % (name,
                                        "/".join(e["folders"]) or "<root>"))
             groups.append(e["folders"])
@@ -1329,8 +1452,8 @@ def arc_verify(blob, name="the archive"):
         last = ents[-1]
         if last["depth"] or not last["name"].endswith(".O88"):
             bad.append("%s: WAH_PROGRAM is set and the last entry is %s - it "
-                       "is the .O88 at depth 0 that OSAPI_PKG_RUN launches "
-                       "(SPEC.md 88.14)" % (name, paths[-1]))
+                       "is the .O88 at depth 0 that OSAPI_PKG_START launches "
+                       "(SPEC.md 92.14)" % (name, paths[-1]))
         elif last["data"] is not None:
             try:
                 o88_header(last["data"], paths[-1])
@@ -1360,7 +1483,7 @@ def arc_dump(blob, name, out=sys.stdout):
     hdr, ents = arc_read(blob, name)
     print("WPAK v%d, %d entries, %d bytes packed, %d unpacked, %d KB needed, "
           "largest %d%s%s"
-          % (WARC_VER, hdr["n"], len(blob), hdr["total"], hdr["needkb"],
+          % (hdr["ver"], hdr["n"], len(blob), hdr["total"], hdr["needkb"],
              hdr["maxent"],
              ", home %s" % hdr["home"] if hdr["home"] else ", no home",
              ", WAH_PROGRAM" if hdr["flags"] & WAH_PROGRAM else ""), file=out)
@@ -1375,7 +1498,7 @@ def arc_dump(blob, name, out=sys.stdout):
 
 
 # =============================================================================
-# THE PICTURE - a stdlib PNG reader, and a 1:1 CROP (SPEC.md 88.3)
+# THE PICTURE - a stdlib PNG reader, and a 1:1 CROP (SPEC.md 92.3)
 #
 # The site's captures are what the machine drew: 1-bit grayscale off a
 # Hercules or a CGA, 4-bit palette off a VGA. So the reader handles bit depths
@@ -1475,7 +1598,7 @@ def png_read(path):
 
 
 def cut(path, x0, y0):
-    """WIRE_PICW x WIRE_PICH at (x0, y0), 1 = ink (SPEC.md 88.3)."""
+    """WIRE_PICW x WIRE_PICH at (x0, y0), 1 = ink (SPEC.md 92.3)."""
     w, h, get = png_read(path)
     if x0 < 0 or y0 < 0 or x0 + WIRE_PICW > w or y0 + WIRE_PICH > h:
         raise Refused("a %dx%d crop at (%d, %d) does not fit a %dx%d image"
@@ -1511,7 +1634,7 @@ def main():
                     help="a catalog.bin or a .WPK; the magic says which")
     ap.add_argument("--archive", metavar="OUT.WPK",
                     help="pack --srcdir's tree into this archive "
-                         "(SPEC.md 88.13)")
+                         "(SPEC.md 92.13)")
     ap.add_argument("--srcdir", metavar="DIR",
                     help="with --archive, the folder tree to pack; every file "
                          "and folder name an uppercase 8.3")

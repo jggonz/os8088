@@ -49,7 +49,6 @@ import os
 import re
 import struct
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -59,6 +58,18 @@ from os88mouse import Mouse
 from os88geom import W_SEG, WIN_SIZE
 import sucheck as su
 import subcheck as sc
+
+# THE BUILD UNDER TEST. `SOLBIN=build/smallapp/solitair.bin` captures the
+# APP_SMALL arm (SPEC.md 43.12) off a disk built from its .o88; the bss walk
+# below is the same for both arms up to every name the session reads, and the
+# listing it is checked against is assembled with -DAPP_SMALL to match.
+# `SOLSRC=` names the source that binary was built from, so a frozen copy of
+# a BASE tree can be captured while the working one is being edited; and
+# `SOLSMALL=1` says the binary is the small arm when its name does not.
+DEFBIN = "build/solitair.bin"
+SOLBIN = os.environ.get("SOLBIN", DEFBIN)
+SOLSRC = os.environ.get("SOLSRC", "apps/solitaire/solitaire.asm")
+SOLSMALL = os.environ.get("SOLSMALL", "") or "smallapp" in SOLBIN
 
 SEED = 0x2A17                       # any fixed word; both builds get this one
 TITLE_H = 18
@@ -75,13 +86,68 @@ SOLCONST = {"P_TABN": P_TABN, "SOL_NPILE": 13, "PILE_CAP": PILE_CAP,
             "SOL_BACKMAX": 704, "SOL_SHW": 5 + PILE_CAP}
 
 
+def solequs(src):
+    """Every `NAME equ <expression>` in the source, EVALUATED: the bss sizes
+    are expressions over other equs now (SOL_PILES is CAP_TAB*7 + ..., SOL_SHW
+    is SHW_CARD + CAP_TAB), and a walk that read only bare numbers died on
+    them - or worse, used SOLCONST's stale guess."""
+    raw = dict(re.findall(r"(?m)^([A-Za-z_]\w*)\s+equ\s+([^;\n]+)", src))
+    out = {}
+
+    def ev(n, depth=0):
+        if n in out:
+            return out[n]
+        e = re.sub(r"\b[A-Za-z_]\w*\b",
+                   lambda t: str(ev(t.group(0), depth + 1))
+                   if t.group(0) in raw and depth < 20 else t.group(0),
+                   raw[n].strip())
+        try:
+            out[n] = int(eval(e, {"__builtins__": {}}))
+        except Exception:
+            out[n] = None
+        return out[n]
+    for n in raw:
+        ev(n)
+    return dict((k, str(v)) for k, v in out.items() if v is not None)
+
+
+def pile_offsets(src):
+    """Where each of the 13 piles starts in sol_pile: per kind (CAP_TAB,
+    CAP_FND, CAP_SW) since SPEC.md 43.11.5, all at PILE_CAP before it."""
+    e = solequs(src)
+    if "CAP_TAB" in e:
+        caps = [int(e["CAP_TAB"])] * 7 + [int(e["CAP_FND"])] * 4 + \
+            [int(e["CAP_SW"])] * 2
+    else:
+        caps = [PILE_CAP] * 13
+    offs, o = [], 0
+    for c in caps:
+        offs.append(o)
+        o += c
+    return offs, o
+
+
 def solsyms():
-    src = open(os.path.join(ROOT, "apps/solitaire/solitaire.asm")).read()
+    src = open(os.path.join(ROOT, SOLSRC)).read()
     blk = src[src.index("%assign SOL_BSS 0"):]
     off, syms = 0, {}
+    equs = solequs(src)
+    skip = False
     for line in blk.splitlines():
+        # THE SMALL ARM HAS NO About card, so its bss has no names inside
+        # `%ifdef SOLF_ABOUT` - and a walk that counted them anyway put every
+        # later name (the whole drag state) a few bytes off
+        t = line.split(";")[0].strip()
+        if t.startswith("%ifdef SOLF_ABOUT"):
+            skip = bool(SOLSMALL)
+            continue
+        if t.startswith("%endif"):
+            skip = False
+            continue
+        if skip:
+            continue
         m = re.match(r"^(SWORD|SBYTE|SBUF)\s+([A-Za-z_]\w*)\s*(?:,\s*(.+))?$",
-                     line.split(";")[0].strip())
+                     t)
         if not m:
             continue
         kind, name, arg = m.groups()
@@ -91,12 +157,18 @@ def solsyms():
         elif kind == "SBYTE":
             off += 1
         else:
-            for k, v in SOLCONST.items():
-                arg = arg.replace(k, str(v))
+            # THE SOURCE'S OWN equs FIRST, evaluated (solequs): SOLCONST is
+            # only what a source too old to carry a name falls back on, and
+            # applied first it answered SOL_SHW = 29 for a source whose rows
+            # are 24 - a wrong layout that the check below would not catch,
+            # because sol_pcnt sits in front of every name it moved
+            arg = re.sub(r"\b[A-Za-z_]\w*\b", lambda t: equs.get(
+                t.group(0), str(SOLCONST.get(t.group(0), t.group(0)))), arg)
             off += eval(arg)
-    img = os.path.getsize(os.path.join(ROOT, "build/solitair.bin"))
-    syms = {k: img + v for k, v in syms.items()}
-    lst = "/tmp/solcheck.lst"
+    walk = syms
+    # IN THE TREE, not /tmp: two sessions running this at once would assemble
+    # over each other's listing and each check the other's build
+    lst = os.path.join(ROOT, "build", ".solcheck.lst")
     # THE LISTING HAS TO BE OF THE BUILD THAT IS ACTUALLY THERE, and the knob
     # is a make variable rather than an exported one - so the defines come from
     # the stamp the Makefile wrote beside the binary. Without this the walk is
@@ -107,16 +179,33 @@ def solsyms():
     for n in os.listdir(os.path.join(ROOT, "build")):
         if n.startswith(".sol-"):
             defs = stamps.get(n[len(".sol-"):], "")
-    os.system("nasm -f bin -w+error %s -I %s/apps/ -o /dev/null -l %s %s/apps/"
-              "solitaire/solitaire.asm" % (defs, ROOT, lst, ROOT))
+    if SOLSMALL:                        # the APP_SMALL arm (SPEC.md 43.12):
+        defs = "-DAPP_SMALL"            # `make smallapps` builds it unknobbed
+    os.system("nasm -f bin -w+error %s -I %s/apps/ -o %s.bin -l %s %s"
+              % (defs, ROOT, lst, lst, os.path.join(ROOT, SOLSRC)))
+    if open(lst + ".bin", "rb").read() != \
+            open(os.path.join(ROOT, SOLBIN), "rb").read():
+        raise SystemExit("solcheck: %s does not assemble to %s - the listing "
+                         "describes another build" % (SOLSRC, SOLBIN))
     txt = open(lst).read()
     i = txt.index("mov cl, [sol_pcnt+bx]")
     enc = re.search(r"\[([0-9A-F]{4})\]", txt[txt.rindex("\n", 0, i):i])
     want = int(enc.group(1)[2:4] + enc.group(1)[0:2], 16)
-    if want != syms["sol_pcnt"]:
-        raise SystemExit("solcheck: sol_pcnt is 0x%04x in the binary and "
+    # WHERE THE WALK STARTS is the binary's to say, not the image size's: the
+    # bss began at the image's end until SPEC.md 43.11.6 put the card back
+    # over the entry proc, and it now begins where the back ends. sol_pcnt's
+    # address out of an instruction that uses it anchors the whole walk, and
+    # a second name checked the same way is what says the walk is right
+    base = want - walk["sol_pcnt"]
+    syms = {k: base + v for k, v in walk.items()}
+    mw = re.search(r"mov \[sol_wfan\], d[lh]", txt)
+    enc = mw and re.search(r"\[([0-9A-F]{4})\]",
+                           txt[txt.rindex("\n", 0, mw.start()):mw.start()])
+    got = int(enc.group(1)[2:4] + enc.group(1)[0:2], 16) if enc else None
+    if got is not None and got != syms["sol_wfan"]:
+        raise SystemExit("solcheck: sol_wfan is 0x%04x in the binary and "
                          "0x%04x in this walk - the bss layout moved"
-                         % (want, syms["sol_pcnt"]))
+                         % (got, syms["sol_wfan"]))
     return syms
 
 
@@ -130,8 +219,9 @@ class Board:
     def reload(self):
         m, seg, s = self.m, self.seg, self.sym
         self.cnt = list(m.readseg(seg, s["sol_pcnt"], 13))
-        raw = m.readseg(seg, s["sol_pile"], 13 * PILE_CAP)
-        self.pile = [list(raw[i * PILE_CAP:i * PILE_CAP + self.cnt[i]])
+        offs, total = pile_offsets(open(os.path.join(ROOT, SOLSRC)).read())
+        raw = m.readseg(seg, s["sol_pile"], total)
+        self.pile = [list(raw[offs[i]:offs[i] + self.cnt[i]])
                      for i in range(13)]
         for n in ("sol_cw", "sol_ch", "sol_marg", "sol_topy", "sol_taby",
                   "sol_pitch", "sol_wstep", "sol_ox", "sol_oy", "sol_avail",
@@ -282,7 +372,9 @@ def shot(m, win, path, tag, mo=None):
     if mo is not None:
         px = win.x - 40 if win.x >= 40 else win.x + win.w + 24
         mo.to(max(0, px), max(su.DESK_ZY0 // 2, win.y + 60))
-        time.sleep(0.5)
+        # `to` proved the arrow arrived, and the mouse ISR draws it itself
+        # (SPEC.md 8.1.2): a few frames is only the frame the grab reads
+        os88marty.guest_sleep(m, 0.1)
     w, bpp, data = su.fb(m)
     h = len(data) // (w * bpp)
     x1, y1 = max(0, win.x), max(0, win.y)
@@ -312,12 +404,21 @@ def capture(outdir, img, machine):
         mo = Mouse(marty=m)
         print("machine %s / %s -> %s" % (machine, img, outdir))
         mo.dblclick(*su.zone(m, 1))
-        time.sleep(4)
+        os88marty.until(m, lambda _: any(w.visible for w in su.windows(m)),
+                        "the Disk window", poll=0.1, limit=60)
         disk = [w for w in su.windows(m) if w.visible][0]
         mo.dblclick(*su.row(disk, 0))
-        time.sleep(30)
-        sol = [w for w in su.windows(m) if w.visible
-               and w.title.upper().startswith("SOL")]
+
+        def solwins():
+            return [w for w in su.windows(m) if w.visible
+                    and w.title.upper().startswith("SOL")]
+        try:                            # the launch, then its first paint
+            os88marty.until(m, lambda _: solwins(), "Solitaire's window",
+                            poll=0.1, limit=60)
+            os88marty.settle(m)
+        except os88marty.MartyError:
+            pass                        # ...refused below, in its own words
+        sol = solwins()
         if not sol:
             raise SystemExit("solcheck: Solitaire did not launch off %s" % img)
         sol = sol[0]
@@ -328,9 +429,8 @@ def capture(outdir, img, machine):
         sc.pclick(mo, sol.x + sol.w // 2, sol.y + sol.h - 30)
         os88marty.settle(m)
         m.write(m.sym("osapi_seed"), struct.pack("<H", SEED))
-        m.key("KeyN")
-        time.sleep(3)
-        os88marty.settle(m)
+        m.key("KeyN")                   # the settle's own stillness window
+        os88marty.settle(m)             # is far wider than a key's latency
         s = [w for w in su.windows(m) if w.visible and w.i == sol.i][0]
         shot(m, s, os.path.join(outdir, "deal.raw"), "deal", mo)
 
@@ -347,7 +447,6 @@ def capture(outdir, img, machine):
         # ...and once more in place, so a pile left inside another pile's slot
         # is compared against the same position drawn a second time
         m.key("KeyR")                       # Restart Deal: the SAME deal
-        time.sleep(3)
         os88marty.settle(m)
         s = [w for w in su.windows(m) if w.visible and w.i == sol.i][0]
         shot(m, s, os.path.join(outdir, "restart.raw"), "restart", mo)
@@ -383,7 +482,6 @@ def capture(outdir, img, machine):
                 # nothing to play: deal. The stock is 24 cards, so a dead game
                 # needs a full cycle of it before the session gives up
                 m.key("Space")
-                time.sleep(2)
                 os88marty.settle(m)
                 b.reload()
                 dry += 1
@@ -411,9 +509,8 @@ def capture(outdir, img, machine):
         # Auto Finish: every card that will go to a foundation, a move a tick
         # (§43.6) - a long run of sol_domove with no drag in it at all, which
         # is the other way a column empties
-        m.key("KeyA")
-        time.sleep(6)
-        os88marty.settle(m)
+        m.key("KeyA")                   # a move a tick redraws every tick,
+        os88marty.settle(m)             # so the settle outlasts the run
         s = [w for w in su.windows(m) if w.visible and w.i == sol.i][0]
         shot(m, s, os.path.join(outdir, "play98_auto.raw"), "auto", mo)
 
@@ -451,12 +548,19 @@ def selfcheck(d):
         return 0
     ha, ba = pixels(os.path.join(d, plays[-1]))
     hb, bb = pixels(ref)
-    if ha[2:] != hb[2:] or len(ba) != len(bb):
+    # THE WINDOW MOVED, so on CGA and Hercules - where Solitaire hangs over
+    # the dock (SPEC.md 11.93) and the crop stops at the screen's last row -
+    # the two captures are the same frame cut at two different heights. The
+    # rows both of them have are the comparison; a WIDTH that differs is
+    # still a failure.
+    if ha[2] != hb[2] or ha[4] != hb[4]:
         print("%-18s SIZE DIFFERS %s vs %s" % ("[self] repaint", ha, hb))
         return 1
+    rows = min(ha[3], hb[3])
+    ba, bb = ba[:rows * ha[2] * ha[4]], bb[:rows * hb[2] * hb[4]]
     n = differ(ba, bb, ha[4])
     print("%-18s %dx%d  %d differing pixels  (%s vs a full repaint)"
-          % ("[self] repaint", ha[2], ha[3], n, plays[-1][:-4]))
+          % ("[self] repaint", ha[2], rows, n, plays[-1][:-4]))
     return 1 if n else 0
 
 

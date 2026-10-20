@@ -25,7 +25,6 @@ run there, and they are DEEPER than the worker (114 and 102 against 96).
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88marty as M                                        # noqa: E402
@@ -33,6 +32,7 @@ import os88sym                                               # noqa: E402
 import os88geom                                              # noqa: E402
 import stkwater                                              # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
+import dispcp                                                # noqa: E402
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla"
 DEFS = tuple(d for d in os.environ.get("OS88_DEFINES", "").replace(",", " ").split() if d)
@@ -137,7 +137,7 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
                      "HALF the one SPEC.md 8.7 sizes against (SPEC.md 8.7.4)"
                      % (label, n, u, z, 100 * p, 100 * BAR))
         a = m.status()
-        time.sleep(2)
+        M.pace(m, 0.5)          # TIME: is it retiring instructions at all?
         if m.status()["instructions"] == a["instructions"]:
             fail("%s: the guest retired no instructions - a cli/hlt, which is "
                  "sch_stkdie (SPEC.md 8.8 draws the panel that says so)" % label)
@@ -153,12 +153,24 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
         mo.click(vw // 2 - 60, vh - 60); tick(m, 60)
     step("heap page")
 
-    mo.dblclick(vw - 30, 45); tick(m, 240)                   # drive A
+    mo.dblclick(*os88geom.drive_pt(m, "A")); tick(m, 240)    # drive A, by letter
     step("disk window")
-    mo.dblclick(140, 178); tick(m, 240)                      # MEDIA
+    # **BY NAME, NOT BY ROW** (docs/WRITING-TESTS.md 6). These were
+    # `mo.dblclick(140, 178)` and `mo.dblclick(160, 146)` - the pixel a row
+    # sits at when the listing is the one somebody had on screen the day they
+    # wrote it. SPEC.md 19.8.1 moved the typefaces into SYSTEM/FONTS, so A:\
+    # lost a folder, every entry below it moved up one row, and this row then
+    # opened a GAME and reported "the Paint window is gone" - which reads as
+    # Paint crashing and is a test clicking somewhere else. `open_named`
+    # resolves the row out of the guest's own listing and waits for the thing
+    # the entry's TYPE says will happen.
+    wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
+    dispcp.open_named(m, mo, S, lambda mm: tick(mm, 240), wx, wy, "MEDIA")
     step("MEDIA")
     refill()
-    mo.dblclick(160, 146); tick(m, 1200)                     # OS8088.GIF -> PAINT
+    wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
+    dispcp.open_named(m, mo, S, lambda mm: tick(mm, 1200), wx, wy,
+                      "OS8088.GIF")
     step("paint open")
 
     import random

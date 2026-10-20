@@ -93,7 +93,10 @@ VERIFICATION IS PART OF THE JOB - a fix you have not verified is not done:
   in the big kernel is a real and recurring break.
 - If a kernel size moved, run "python3 tools/kernsize.py --build build --bless" (and the small
   variant) in the same commit, as docs/KERNEL-MEMORY.md asks.
-- Run every batch-specific verification listed in your assignment, and quote what it printed.
+- Run every batch-specific verification listed in your assignment, and quote what it printed -
+  EXCEPT a soak row or "make test-full": those run ONCE, after the last batch (CLAUDE.md, Testing),
+  however the assignment phrases it. That includes "python3 tests/<row>.py" run directly or in the
+  background. NAME the tests/suite.py rows covering your batch in "verification" instead.
 - If your build fails, fix it. Never report a batch whose build does not pass.
 
 COMMIT WHEN DONE, and only then, in the worktree:

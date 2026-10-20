@@ -47,28 +47,29 @@ rd_geom:
     mov ax, [rd_kb]
     xor dx, dx
     div bx                      ; AX = how many extents that would be
+    cmp bx, RD_EXTMAXKB         ; the largest extent is taken whatever the
+    jae .got                    ; count: a size past RD_MAXKB cannot reach
+                                ; here - rd_kb_clamp refuses it - and stopping
+                                ; rather than doubling for ever is what makes
+                                ; that a statement about the clamp instead of
+                                ; a promise about every caller
     cmp ax, RD_MAXEXT
     jbe .got
     shl bx, 1
-    cmp bx, RD_EXTMAXKB
-    jbe .try
-    mov bx, RD_EXTMAXKB         ; a size past RD_MAXKB cannot reach here -
-    mov ax, [rd_kb]             ; rd_kb_clamp refuses it - and clamping rather
-    xor dx, dx                  ; than looping for ever is what makes that a
-    div bx                      ; statement about the clamp instead of a
-.got:                           ; promise about every caller
+    jmp short .try
+.got:
     mov [rd_next], ax
     mov [rd_extkb], bx
     mov ax, bx
-    mov cl, 10
-    shl ax, cl                  ; bytes: 8KB max, so a word holds it
-    mov [rd_extb], ax
-    mov cl, 4
-    shr ax, cl
+    mov cl, 6
+    shl ax, cl                  ; paragraphs: 512 at most...
     mov [rd_extpara], ax
-    mov ax, [rd_next]           ; the table: two bytes an entry, rounded to KB
-    shl ax, 1
-    add ax, 1023
+    mov cl, 4
+    shl ax, cl                  ; ...and bytes, 8KB, so a word holds it
+    mov [rd_extb], ax
+    mov ax, [rd_next]           ; the table: two bytes an entry, AFTER the
+    shl ax, 1                   ; directory (SPEC.md 62.9.13.1), rounded to KB
+    add ax, RD_DIRB + 1023
     mov cl, 10
     shr ax, cl
     mov [rd_ctabkb], ax
@@ -91,7 +92,9 @@ rd_geom:
 ;
 ; THE CHAIN TABLE IS CLAIMED FIRST AND FREED LAST, whichever store it belongs
 ; to: a store with no table is not reachable, and a table with no store is
-; 4KB held for nothing.
+; up to 7KB held for nothing. THE DIRECTORY IS IN THAT CLAIM (SPEC.md
+; 62.9.13.1), so a refused table is a refused Mount with RDERR_MEM, the same
+; sentence on the page as a refused store, and nothing was written anywhere.
 ; -----------------------------------------------------------------------------
 rd_store_get:
     cmp byte [rd_have], 0
@@ -105,37 +108,26 @@ rd_store_get:
     push si
     call rd_geom
     mov ax, [rd_ctabkb]
-    call OSAPI_MEM_CLAIM
+    mov bx, rd_dtab
+    call rd_claim
     jc .no
-    mov [rd_ctab], dx
-    mov ax, rd_reloc
-    call OSAPI_MEM_MOVABLE
     cmp byte [rd_loc], RDL_XMS
     je .xms
-    mov ax, [rd_kb]
-    call OSAPI_MEM_CLAIM        ; owner = our segment, so drv_release sweeps it
-    jc .notab                   ; even if detach somehow does not
-    mov [rd_arena], dx
-    mov ax, rd_reloc            ; ...and it MOVES (SPEC.md 66.5.10): the largest
-    call OSAPI_MEM_MOVABLE      ; claim this driver makes, and live for as long
-    jmp short .ok               ; as the volume is mounted
+    mov ax, [rd_kb]             ; owner = our segment, so drv_release sweeps it
+    mov bx, rd_arena            ; even if detach somehow does not - and it
+    call rd_claim               ; MOVES (SPEC.md 66.5.10): the largest claim
+    jc .notab                   ; this driver makes, and live for as long as
+    jmp short .ok               ; the volume is mounted
 .xms:
     mov ax, [rd_extkb]          ; the bounce is ONE EXTENT, so it follows the
     cmp ax, RDI_META / 1024     ; store's granule rather than being a constant
     jae .bsz                    ; that could stop matching it - but never less
     mov ax, RDI_META / 1024     ; than RDI_META, because rd_wbuf_get LENDS it
 .bsz:                           ; as the image block (SPEC.md 62.9.12) and a
-    call OSAPI_MEM_CLAIM        ; 1KB extent would take 3KB of the next claim
-    jc .notab                   ; with it
-    mov [rd_bounce], dx
-    mov ax, rd_reloc
-    call OSAPI_MEM_MOVABLE
-    mov ax, [rd_kb]             ; DX:AX = KB * 1024, in 32 bits: 16MB is far
-    mov dx, ax                  ; past a word and the shift below is the whole
-    mov cl, 10                  ; of the arithmetic
-    shl ax, cl
-    mov cl, 6
-    shr dx, cl
+    mov bx, rd_bounce           ; 1KB extent would take 3KB of the next claim
+    call rd_claim               ; with it
+    jc .notab
+    call rd_kb_bytes            ; DX:AX = KB * 1024, in 32 bits
     call OSAPI_XMEM_ALLOC       ; stamped 0xFF - the kernel - because
     jc .noxms                   ; drv_cp_call clears the dispatch stamp
     mov [rd_xbase], ax          ; (SPEC.md 51.2.3), and nothing owns 0xFF, so
@@ -151,13 +143,11 @@ rd_store_get:
     clc
     ret
 .noxms:
-    mov dx, [rd_bounce]         ; the bounce goes back with it, or a machine
-    call OSAPI_MEM_FREE         ; that could not fund the store keeps it for
-    mov word [rd_bounce], 0     ; nothing
-.notab:
-    mov dx, [rd_ctab]
-    call OSAPI_MEM_FREE
-    mov word [rd_ctab], 0
+    mov bx, rd_bounce           ; the bounce goes back with it, or a machine
+    call rd_mfree               ; that could not fund the store keeps it for
+.notab:                         ; nothing
+    mov bx, rd_dtab
+    call rd_mfree
 .no:
     pop si
     pop dx
@@ -168,25 +158,55 @@ rd_store_get:
     ret
 
 ; -----------------------------------------------------------------------------
+; rd_claim - AX KB of heap, its segment into the word at BX, and MOVABLE
+; out: CF = 0 claimed; CF = 1 refused and the word is untouched
+; clobbers: AX, DX, flags
+;
+; Every claim the store makes is declared movable with rd_reloc as its proc
+; (SPEC.md 66.5.10), so it is one routine and not three spellings of it.
+; -----------------------------------------------------------------------------
+rd_claim:
+    call OSAPI_MEM_CLAIM
+    jc .out
+    mov [bx], dx
+    mov ax, rd_reloc
+    call OSAPI_MEM_MOVABLE
+    clc
+.out:
+    ret
+
+; rd_mfree - give back the claim whose segment is the word at BX, if there is
+; one, and zero the word. clobbers: DX, flags
+rd_mfree:
+    mov dx, [bx]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [bx], 0
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; rd_store_free - give it all back
 ; in:  nothing
 ; out: nothing
 ; clobbers: flags
+;
+; The conventional store's [rd_arena] and the extended one's [rd_xbase] and
+; [rd_bounce] are each zero when the store is the OTHER kind, so all three are
+; simply given back if they are there - the arena, or the block and its
+; bounce, and then the chain table LAST, for rd_store_get's reason in the
+; other direction.
 ; -----------------------------------------------------------------------------
 rd_store_free:
     push ax
+    push bx
     push cx
     push dx
     cmp byte [rd_have], 0
     je .out
-    cmp byte [rd_loc], RDL_XMS
-    je .xms
-    cmp word [rd_arena], 0
-    je .done
-    mov dx, [rd_arena]
-    call OSAPI_MEM_FREE
-    jmp short .done
-.xms:
+    mov bx, rd_arena
+    call rd_mfree
     mov ax, [rd_xbase]
     mov dx, [rd_xbase+2]
     mov cx, ax
@@ -194,26 +214,19 @@ rd_store_free:
     jz .bounce
     call OSAPI_XMEM_FREE
 .bounce:
-    cmp word [rd_bounce], 0
-    je .done
-    mov dx, [rd_bounce]
-    call OSAPI_MEM_FREE
-.done:
-    cmp word [rd_ctab], 0       ; the table LAST, for rd_store_get's reason in
-    je .zero                    ; the other direction
-    mov dx, [rd_ctab]
-    call OSAPI_MEM_FREE
-.zero:
-    mov word [rd_arena], 0
-    mov word [rd_bounce], 0
-    mov word [rd_ctab], 0
-    mov word [rd_xbase], 0
-    mov word [rd_xbase+2], 0
-    mov byte [rd_have], 0
+    mov bx, rd_bounce
+    call rd_mfree
+    mov bx, rd_dtab
+    call rd_mfree
+    xor ax, ax
+    mov [rd_xbase], ax
+    mov [rd_xbase+2], ax
+    mov [rd_have], al
     mov word [rd_sext], RD_NOEXT
 .out:
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -223,30 +236,38 @@ rd_store_free:
 ; out: nothing; preserves every register
 ;
 ; THREE words, because there are three claims that can move - the arena, the
-; chain table and the extended path's bounce - and the compactor names one of
-; them per call. A handle here is an extent NUMBER, never a segment, and
-; rd_ext_seg derives the segment on every use from the word below it, so there
-; is nothing derived anywhere to fall out of step.
+; directory with the chain table behind it, and the extended path's bounce -
+; and the compactor names one of them per call. A handle here is an extent
+; NUMBER or a row OFFSET, never a segment, and rd_ext_seg and the directory's
+; readers derive the segment from the word below it, so there is nothing
+; derived anywhere to fall out of step. A directory verb holds that segment in
+; ES for its own length - which is safe because nothing a verb calls CLAIMS
+; (SPEC.md 66.3 rule 2): the FSV_* verbs run on the UI task and a worker may
+; not claim at all.
 ;
 ; It has no worker, so it needs no OSAPI_TASK_PARK of its own - but SPEC.md
 ; 66.5.5's rule still binds it, that rule being all-or-nothing across every
 ; TF_SERVICE task on the machine.
 ; -----------------------------------------------------------------------------
 rd_reloc:
-    cmp bx, [rd_arena]
-    jne .tab
-    mov [rd_arena], dx
-    ret
-.tab:
-    cmp bx, [rd_ctab]
-    jne .bounce
-    mov [rd_ctab], dx
-    ret
-.bounce:
-    cmp bx, [rd_bounce]
-    jne .out
-    mov [rd_bounce], dx
-.out:
+    push cx
+    push si
+    mov si, rd_arena            ; rd_arena, rd_bounce, rd_dtab: adjacent words
+    mov cx, 3                   ; (ramdisk.asm asserts it). A claim's base is
+.next:                          ; never 0, so no unclaimed word can match
+    cmp bx, [si]
+    jne .skip
+    mov [si], dx
+.skip:
+    inc si
+    inc si
+    loop .next
+    cmp bx, [rd_wseg]           ; ...and the bounce's LOAN: rd_wbuf_get hands
+    jne .out                    ; [rd_bounce] out as [rd_wseg], and a file call
+    mov [rd_wseg], dx           ; inside Preserve or Load may compact. An owned
+.out:                           ; [rd_wseg] is a pinned claim, so only the loan
+    pop si                      ; can ever match a base that moved
+    pop cx
     ret
 
 ; =============================================================================
@@ -258,7 +279,8 @@ rd_reloc:
 ;
 ; rd_cget and rd_cput are the ONLY readers and writers. Every other routine
 ; here names an extent by NUMBER, which is what makes a moved claim one word
-; to fix rather than a sweep.
+; to fix rather than a sweep. The table starts RD_DIRB bytes into its claim,
+; the directory being the first thing there (SPEC.md 62.9.13.1).
 ; =============================================================================
 
 ; rd_cget - BX = an extent index -> AX = its chain cell
@@ -271,8 +293,8 @@ rd_cget:
                                 ; a table that came off a DISK cannot walk this
                                 ; driver past its own store (SPEC.md 62.9.12)
     shl bx, 1
-    mov es, [rd_ctab]
-    mov ax, [es:bx]
+    mov es, [rd_dtab]
+    mov ax, [es:bx+RD_DIRB]
     pop bx
     pop es
     ret
@@ -290,8 +312,8 @@ rd_cput:
     cmp bx, [rd_next]
     jae .out
     shl bx, 1
-    mov es, [rd_ctab]
-    mov [es:bx], ax
+    mov es, [rd_dtab]
+    mov [es:bx+RD_DIRB], ax
 .out:
     pop bx
     pop es
@@ -385,65 +407,68 @@ rd_ext_flush:
 ; and its size. The fence is fixed at the kernel end; this is the half that
 ; makes the next such refusal LOUD instead of silent.
 ; -----------------------------------------------------------------------------
-rd_stage_addr:                  ; out DX:AX = the staged extent's linear end
-    mov ax, [rd_sext]
-    mul word [rd_extb]          ; DX:AX = extent * bytes
-    add ax, [rd_xbase]
-    adc dx, [rd_xbase+2]
-    ret
-
 rd_stage_in:
-    cmp word [rd_sext], RD_NOEXT
-    je .out
-    push ax
+    push di
+    mov di, 1                   ; in from extended
+    jmp short rd_stage_mv
+rd_stage_out:
+    push di
+    xor di, di                  ; out to extended
+rd_stage_mv:                    ; PER EXTENT, so it is not rd_xcopy below: one
+    cmp word [rd_sext], RD_NOEXT    ; frame of six and no near call, where
+    je .out                     ; the pair it replaced spent the same six and
+    push ax                     ; a call to the address arithmetic
     push cx
     push dx
     push si
-    push di
     push es
-    call rd_stage_addr
+    mov ax, [rd_sext]
+    mul word [rd_extb]          ; DX:AX = extent * bytes, into the store...
+    add ax, [rd_xbase]          ; ...and the block's 32-bit linear base
+    adc dx, [rd_xbase+2]
     mov es, [rd_bounce]
     xor si, si
     mov cx, [rd_extb]
-    mov di, 1                   ; in from extended
     call OSAPI_XMEM_COPY
     jnc .ok
     mov byte [rd_xerr], 1
 .ok:
     pop es
-    pop di
     pop si
     pop dx
     pop cx
     pop ax
 .out:
+    pop di
     ret
 
-rd_stage_out:
-    cmp word [rd_sext], RD_NOEXT
-    je .out
+; -----------------------------------------------------------------------------
+; rd_xcopy - ONE OSAPI_XMEM_COPY between the extended store and BX:0
+; in:  DX:AX = a byte offset into the store, BX = the conventional segment,
+;      CX = the count, DI = 1 in from extended / 0 out to it
+; out: nothing; [rd_xerr] is raised if the copy REFUSED (SPEC.md 62.9.10.2)
+; clobbers: flags
+;
+; rd_blk_out / rd_blk_in in rdimg.inc are this, a chunk of a Preserve or a
+; Load at a time; the per-extent stage above spells it inline.
+; -----------------------------------------------------------------------------
+rd_xcopy:
     push ax
-    push cx
     push dx
     push si
-    push di
     push es
-    call rd_stage_addr
-    mov es, [rd_bounce]
+    add ax, [rd_xbase]          ; the block's 32-bit linear base
+    adc dx, [rd_xbase+2]
+    mov es, bx
     xor si, si
-    mov cx, [rd_extb]
-    xor di, di                  ; out to extended
     call OSAPI_XMEM_COPY
     jnc .ok
     mov byte [rd_xerr], 1
 .ok:
     pop es
-    pop di
     pop si
     pop dx
-    pop cx
     pop ax
-.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -520,7 +545,7 @@ rd_chain_free:
 
 ; -----------------------------------------------------------------------------
 ; rd_chain_fit - make SI's chain exactly long enough for DX:CX bytes
-; in:  SI = the row, DX:CX = the byte count it must hold
+; in:  ES:SI = the row (ES = the directory), DX:CX = the byte count it must hold
 ; out: CF = 0 done; CF = 1 = the store is full and NOTHING was changed
 ; clobbers: flags
 ;
@@ -544,7 +569,7 @@ rd_chain_fit:
     div word [rd_extb]          ; ...and DX:AX / extb, whose quotient is at
                                 ; most RD_MAXEXT and so cannot overflow
     mov [rd_want], ax
-    mov ax, [si+RDE_EXT]        ; ...and how many it has
+    mov ax, [es:si+RDE_EXT]     ; ...and how many it has
     call rd_chain_len
     mov [rd_hasn], ax
     mov ax, [rd_want]
@@ -570,12 +595,13 @@ rd_chain_fit:
     mov ax, [rd_head]           ; ...and now it cannot fail, so link it on
     cmp word [rd_hasn], 0
     jne .append
-    mov [si+RDE_EXT], ax        ; the file had no store at all
+    mov [es:si+RDE_EXT], ax     ; the file had no store at all
     jmp short .done
 .append:
     push ax
-    mov ax, [si+RDE_EXT]
-    call rd_chain_last          ; AX = the last extent of what it already has
+    mov ax, [es:si+RDE_EXT]
+    mov cx, RD_MAXEXT + 1       ; an ordinal past any chain: rd_chain_nth
+    call rd_chain_nth           ; answers the LAST extent of what it has
     mov bx, ax
     pop ax
     inc ax                      ; `next + 1`
@@ -595,7 +621,7 @@ rd_chain_fit:
     mov ax, [rd_want]
     or ax, ax
     jz .cutall
-    mov ax, [si+RDE_EXT]
+    mov ax, [es:si+RDE_EXT]
     mov cx, [rd_want]
     call rd_chain_nth           ; AX = the last extent to KEEP
     mov bx, ax
@@ -610,9 +636,9 @@ rd_chain_fit:
     call rd_chain_free
     jmp short .done
 .cutall:
-    mov ax, [si+RDE_EXT]
+    mov ax, [es:si+RDE_EXT]
     call rd_chain_free
-    mov word [si+RDE_EXT], RD_NOEXT
+    mov word [es:si+RDE_EXT], RD_NOEXT
 .done:
     pop di
     pop dx
@@ -649,31 +675,6 @@ rd_chain_len:
     pop bx
     ret
 
-; rd_chain_last - AX = a first extent -> AX = the last one in that chain
-; clobbers: AX (the output), flags
-rd_chain_last:
-    push bx
-    push cx
-    push dx
-    mov cx, RD_MAXEXT
-.next:
-    cmp ax, [rd_next]
-    jae .out
-    mov dx, ax
-    mov bx, ax
-    call rd_cget
-    cmp ax, RD_CEND
-    je .last
-    dec ax
-    loop .next
-.last:
-    mov ax, dx
-.out:
-    pop dx
-    pop cx
-    pop bx
-    ret
-
 ; rd_chain_nth - AX = a first extent, CX = an ordinal (1-based) -> AX = that
 ;                link, or the last one if the chain is shorter
 ; clobbers: AX (the output), flags
@@ -704,19 +705,25 @@ rd_chain_nth:
 
 ; -----------------------------------------------------------------------------
 ; rd_io - move bytes between a file's chain and the caller's buffer
-; in:  [rd_io_dir] = 0 store -> caller, 1 caller -> store
-;      [rd_io_ext] = the file's FIRST extent
-;      [rd_io_off] = a 32-BIT byte offset within the file
-;      [rd_io_len] = a 32-BIT count (the caller has bounds-checked it)
-;      [rd_io_seg]:[rd_io_ofs] = the caller's buffer
-;      [rd_io_prog] = 1 to report each piece through OSAPI_FS_PROG
-; out: nothing
+; in:  AL = 0 store -> caller, 1 caller -> store
+;      AH = 1 to report each piece through OSAPI_FS_PROG
+;      ES:SI = the file's ROW (its RDE_EXT is the first extent; ES = the
+;      directory, which every caller is holding anyway)
+;      [rd_off] = a 32-BIT byte offset within the file
+;      [rd_n] = a 32-BIT count (the caller has bounds-checked it)
+;      [rd_bufs]:[rd_bufo] = the caller's buffer, which this ADVANCES
+; out: CF = 1 = the extended store refused a stage ([rd_xerr], SPEC.md
+;      62.9.10.2): what moved is not what was asked about, and every caller
+;      answers FERR_IO for it. CF = 0 otherwise. [rd_n] and [rd_off] are
+;      left as they came, being what FSV_READ and FSV_READAT answer with
 ; clobbers: flags
 ;
 ; **IT TAKES ITS ARGUMENTS IN MEMORY AND NOT IN REGISTERS**, which is unusual
 ; here and is the honest shape for this one: two 32-bit quantities, a far
 ; pointer, a first extent and two flags is nine words of argument, and threading
-; them through an 8086's registers costs every caller more than it saves.
+; them through an 8086's registers costs every caller more than it saves. The
+; words are the ones each FSV_* verb banks its arguments in ANYWAY, so a
+; caller stages nothing for this walk but the row.
 ;
 ; THE BUFFER IS NORMALISED AFTER EVERY PIECE, dskw_norm's arithmetic (SPEC.md
 ; 18.4.1) applied per step rather than once. The fold up front is what makes it
@@ -728,22 +735,30 @@ rd_chain_nth:
 ; -----------------------------------------------------------------------------
 rd_io:
     mov byte [rd_xerr], 0       ; ONE operation, one verdict: every caller
-    push ax                     ; tests it afterwards (SPEC.md 62.9.10.2)
+    mov [rd_io_dir], ax         ; tests CF afterwards (SPEC.md 62.9.10.2).
+    push ax                     ; AL -> [rd_io_dir], AH -> [rd_io_prog]
     push bx
     push cx
     push dx
     push si
     push di
 
-    mov ax, [rd_io_ofs]         ; fold the paragraphs into the segment once up
+    mov ax, [es:si+RDE_EXT]
+    mov [rd_io_ext], ax
+    mov ax, [rd_n]              ; the count is a WORKING copy: [rd_n] is the
+    mov [rd_io_len], ax         ; answer FSV_READ and FSV_READAT give back
+    mov ax, [rd_n+2]
+    mov [rd_io_len+2], ax
+
+    mov ax, [rd_bufo]           ; fold the paragraphs into the segment once up
     mov cl, 4                   ; front, so the per-piece fold below only ever
     shr ax, cl                  ; has one extent's worth to carry
-    add [rd_io_seg], ax
-    and word [rd_io_ofs], 15
+    add [rd_bufs], ax
+    and word [rd_bufo], 15
 
-    mov ax, [rd_io_off]         ; walk to the extent the offset is inside:
-    mov dx, [rd_io_off+2]       ; DX:AX / extb, and the remainder is where in
-    div word [rd_extb] ; that extent it starts
+    mov ax, [rd_off]            ; walk to the extent the offset is inside:
+    mov dx, [rd_off+2]          ; DX:AX / extb, and the remainder is where in
+    div word [rd_extb]          ; that extent it starts
     mov [rd_io_o], dx
     mov cx, ax
     jcxz .walked
@@ -761,7 +776,7 @@ rd_io:
 .fin:                           ; than the file has, which its own bounds test
     jmp .done                   ; refuses - this is the belt
 .go:
-    mov ax, [rd_extb]  ; what is left of THIS extent...
+    mov ax, [rd_extb]           ; what is left of THIS extent...
     sub ax, [rd_io_o]
     mov cx, ax
     cmp word [rd_io_len+2], 0   ; ...against what is left of the request, which
@@ -776,11 +791,11 @@ rd_io:
     push ds
     push es
     mov si, [rd_io_o]
-    mov di, [rd_io_ofs]
+    mov di, [rd_bufo]
     mov cx, [rd_io_n]
     cmp byte [rd_io_dir], 0
     jne .write
-    mov es, [rd_io_seg]         ; read: the store is the SOURCE
+    mov es, [rd_bufs]           ; read: the store is the SOURCE
     mov ds, ax
     cld
     rep movsb
@@ -790,7 +805,7 @@ rd_io:
 .write:
     mov es, ax                  ; ...and write is the same copy the other way
     xchg si, di
-    mov ds, [rd_io_seg]
+    mov ds, [rd_bufs]
     cld
     rep movsb
     pop es
@@ -798,12 +813,12 @@ rd_io:
     call rd_ext_flush
 .moved:
     mov ax, [rd_io_n]
-    add [rd_io_ofs], ax         ; ...and normalise, because a big file walks
-    mov ax, [rd_io_ofs]         ; off the end of this segment and into the next
+    add [rd_bufo], ax           ; ...and normalise, because a big file walks
+    mov ax, [rd_bufo]           ; off the end of this segment and into the next
     mov cl, 4
     shr ax, cl
-    add [rd_io_seg], ax
-    and word [rd_io_ofs], 15
+    add [rd_bufs], ax
+    and word [rd_bufo], 15
 
     mov ax, [rd_io_n]
     sub [rd_io_len], ax
@@ -832,6 +847,8 @@ rd_io:
     pop cx
     pop bx
     pop ax
+    cmp byte [rd_xerr], 1       ; CF = 1 for 0, so the complement is the
+    cmc                         ; verdict: CF = 1 exactly when it was raised
     ret
 
 ; -----------------------------------------------------------------------------

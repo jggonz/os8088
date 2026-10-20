@@ -50,7 +50,7 @@ import dispcp                                               # noqa: E402
 
 S = os88sym.linear
 
-# Three rows of drv_cfg_map, spread across it so a `cs:` missed on one cannot
+# Four rows of drv_cfg_map, spread across it so a `cs:` missed on one cannot
 # hide behind the row next to it: the clock's 12/24 (SPEC.md 31.5) is the
 # first byte after the driver bitmap, and the screen saver's two (SPEC.md
 # 79.4) are the last - and [ss_mins]'s unpack derives [ss_idle] through a far
@@ -60,7 +60,7 @@ S = os88sym.linear
 # menu bar showing seconds redraws once a second, so `settle` never sees a
 # still screen and every leg below times out at 120s naming the boot. It is
 # as good a row as any of these and there is no way to watch it from here.
-WANT = {"clk_h12": 1, "ss_modes": 2, "ss_mins": 7}
+WANT = {"clk_h12": 1, "ss_modes": 2, "ss_mins": 7, "dock_cfg": 6}
 
 
 def snap(m):
@@ -120,12 +120,34 @@ def main(argv=None):
                         % cfg[:8])
         f.save(0, written)
 
-    with os88marty.launch(written, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(written, apps=a.apps, machine=a.machine, boot=False) as m:
+        m.run()
+        # A saved hidden dock has no white bottom strip: desktop_up's default
+        # dock sample deliberately cannot recognize this configuration.
+        settle(m, gate=lambda s: s.field > 0.8 and s.rule < 0.1)
         after = snap(m)
         print("boot 2, read back:", after)
         for n, v in WANT.items():
             if after[n] != v:
                 fail.append("%s came back %d, wrote %d" % (n, after[n], v))
+        # Saved advanced settings load the Dock module at boot, without
+        # loading CTRL.DRV just to restore the desktop.
+        def word(name):
+            return int.from_bytes(m.read(S(name), 2), "little")
+        bounds = (word("vid_band_x0"), word("vid_band_xe"), word("vid_dock_y0"))
+        expected = (0, word("vid_pw") - 1, word("vid_ph"))
+        # HIDDEN, asked of the kernel's own words: [dock_hidden] is
+        # DOCK.DRV's private byte (SPEC.md 30.5) and lives in the module
+        # image. What the kernel keeps is the LIVE rect, and a hidden strip's
+        # is the one-pixel line - here a right-hand one, so its two columns
+        # are the same column and it reserves 1.
+        if (bounds != expected or word("dock_thk") != 1
+                or word("dock_lx1") != word("dock_lx2")):
+            fail.append("saved right auto-hide did not rebuild geometry: %r" % (bounds,))
+        if not word("mod_r_dock"):
+            fail.append("saved advanced Dock did not load DOCK.DRV")
+        if word("mod_tab"):
+            fail.append("restoring dock settings loaded CTRL.DRV at boot")
         seg = int.from_bytes(m.read(S("spl_fseg"), 2), "little")
         print("boot 2, spl_fseg = %04X (stage 2's blob, and the overlay in it, "
               "is dropped by here)" % seg)

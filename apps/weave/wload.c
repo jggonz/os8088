@@ -263,7 +263,7 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
         kb = (w_fsize + 1023) >> 10;
         ask = kb + w_vmkb + w_gridkb + w_canvaskb;
         if (w_flags & WABF_CANVAS)
-            ask += (unsigned)wcv_kb();  /* 10.1: WEAVE.WSM's claim, and ONLY
+            ask += (unsigned)wcv_kb();  /* 10.1: the canvas core's, and ONLY
                                          * when the bundle declares a canvas
                                          * (1.2.2 - a bundle without one pays
                                          * nothing at all) */
@@ -366,7 +366,7 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
         return 1;
     }
     if (w_glderr == 2) {
-        w_fail("WEAVE.OVL is missing or stale; no bundle can open.");
+        w_fail("WEAVE could not load its overlay; no bundle can open.");
         return 1;
     }
 
@@ -382,15 +382,11 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
         return 1;
     }
     if (w_cldstate == 2) {
-        w_fail("WEAVE.OVL is missing or stale; no bundle can open.");
+        w_fail("WEAVE could not load its overlay; no bundle can open.");
         return 1;
     }
-    if (w_cldstate == 3) {
-        w_fail("WEAVE.WSM is not on this disk.");
-        return 1;
-    }
-    if (w_cldstate == 4) {
-        w_fail("WEAVE.WSM does not match this program.");
+    if (w_cldstate == 3) {              /* op_fetch has toasted the reason */
+        w_fail("WEAVE could not load its canvas core.");
         return 1;
     }
     w_lay_cw = -1;                      /* force the walk on the next paint */
@@ -556,7 +552,7 @@ static int ovl_find_open(void *win)
  * THE RESIDENT SEAM (WEAVE-SPEC 1.2.1, tenant 4)
  *
  * Everything above between the birth-state walk and here is `ovl_*` and ships
- * in WEAVE.OVL: the size probe, the capability tests, the directory search,
+ * in the overlay: the size probe, the capability tests, the directory search,
  * the claim and the read, the component birth state, the field pool, the menu
  * build and the VM bind. It runs once per open and once per `^R`, which is a
  * COMMAND keystroke and not an editing one, and it is not on any path a
@@ -564,7 +560,7 @@ static int ovl_find_open(void *win)
  *
  * THE TWO WRAPPERS EXIST FOR ONE REASON and it is the validator's, said again
  * one level up: A REFUSED OVERLAY LOAD RETURNS 0 (apps/cc/crt0.asm), and the
- * load path's natural answer is `void` - so a missing WEAVE.OVL would have
+ * load path's natural answer is `void` - so a refused overlay would have
  * been a double-click that opened a window, drew the Deck, and said nothing
  * at all. `ovl_open` and `ovl_find_open` therefore answer 1 at every exit
  * INCLUDING their own refusals (which have already put their own sentence on
@@ -573,7 +569,7 @@ static int ovl_find_open(void *win)
 
 static void w_ovlgone(void)
 {
-    w_fail("WEAVE.OVL is missing; a bundle cannot be opened without it.");
+    w_fail("WEAVE could not load its overlay; no bundle can open.");
 }
 
 static void w_open(void *win, const char *name, unsigned size_lo,
@@ -592,18 +588,21 @@ static void w_find_open(void *win)
 /* w_openpend - spend the banked launch document.  Called from the FIRST
  * W_PAINT and exactly once.
  *
- * THE GOTO GOES FIRST. It is a REMOUNT - real floppy I/O - and CF=1 is the
- * folder no longer being listable, a disk swapped between the double-click and
- * this first paint. Searching the wrong directory would report the wrong
- * reason, so a refused GOTO takes the not-found exit rather than falling
- * through to a search where we stand.
+ * THE GOTO GOES FIRST, and it is os88_file_goto_q_mark(): the open finds and
+ * reads by name and never has the kernel list the folder, so the display
+ * remount os88_file_goto() would do is motor time bought for nothing
+ * (docs/plans/NAV-COST-PLAN.md, SPEC.md 19.9.1). A refusal is the folder no
+ * longer being reachable, a disk swapped between the double-click and this
+ * first paint - and a refused GOTO_QM MOVES NOTHING, so it takes the
+ * not-found exit rather than falling through to a search (and an open of a
+ * same-named bundle) where we stand.
  *
  * Only when a locator actually came with the name: 0,0 is a real locator, so
  * w_arghave is what says whether there was one. */
 static void w_openpend(void *win)
 {
     if (w_arghave) {
-        if (os88_file_goto(&w_place) != 0) {
+        if (os88_file_goto_q_mark(w_place.clus, w_place.vol) != 0) {
             w_missing();
             return;
         }
@@ -617,12 +616,17 @@ static void w_openpend(void *win)
  *
  * It goes back through w_find_open() rather than remembering a size, because
  * the whole point of a reload is that the file on the disk CHANGED - Loom just
- * packed it - and the size it had last time is exactly the wrong number. */
+ * packed it - and the size it had last time is exactly the wrong number.
+ *
+ * The stand is GOTO_QM for w_openpend's reason, and it matters MORE here: ^R
+ * is the edit-run loop's own keystroke, so a display remount was ~0.5 s of
+ * motor on every iteration. A refusal moves nothing, so it must take
+ * w_missing() and never fall through to a re-read where we happen to be. */
 static void w_reload(void *win)
 {
     if (w_name[0] == 0)
         return;
-    if (w_arghave && os88_file_goto(&w_place) != 0) {
+    if (w_arghave && os88_file_goto_q_mark(w_place.clus, w_place.vol) != 0) {
         w_missing();
         return;
     }

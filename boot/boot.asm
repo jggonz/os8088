@@ -112,8 +112,9 @@ RELOC_ADJ    equ 0x07E0         ; int 12h answers KB; KB*64 is the paragraph
 ; KERNEL_SECTORS is not in this sum: it counts the blob twice, the blob being
 ; the front of the same file.
 ;
-; HEAP_PARA is injected by the Makefile out of tools/kernsize.py's `kend`, the
-; way boot/boothd.asm has taken BLOB_SEG since SPEC.md 2.9.9. It cannot be
+; HEAP_PARA is injected by the Makefile out of tools/kernsize.py's `blobseg`
+; (`kend` lifted by BLOB_LIFT, SPEC.md 2.10.3), the way boot/boothd.asm has
+; taken BLOB_SEG since SPEC.md 2.9.9. It cannot be
 ; derived here - LOW_PARA is a nobits size that is not in the file - and it
 ; cannot be a constant, because this sector is assembled before the kernel it
 ; boots is measured.
@@ -151,6 +152,11 @@ DPT_AT       equ 0x0580         ; 0000:0580 - our copy of the diskette
                                 ; claim reaches it
 
 BPB_END      equ 62             ; where a DOS BPB stops and our code starts
+BS_CYLASK    equ 509            ; SPEC.md 31.14: the Floppy page's Cylinder,
+                                ; one byte in front of the signature. This
+                                ; sector never reads it - stage 2 does, `ss:`,
+                                ; at the 286 gate - and CTRL.DRV writes it.
+                                ; Mirrored in boot/boot2.asm
 
 ; The first 62 bytes are NOT ours. tools/os88disk.py writes a full FAT12 BPB
 ; over them when it builds the image (SPEC.md 19.3), because the OS disk is a
@@ -308,9 +314,11 @@ entry:
     ; head load/unload, motor timings and gap lengths in it belong to these
     ; drives and are not ours to guess. Stage 2 still does the same thing to
     ; the same address, which is now idempotent rather than necessary.
-    push ds
     xor ax, ax
-    mov es, ax
+    mov es, ax                  ; ES = 0 for the vector, and outside the knob
+                                ; below because the reads that follow want it
+%ifndef DPT_ROM                 ; DPTROM=1: LEAVE THE ROM'S TABLE ALONE (18.92.1)
+    push ds
     lds si, [es:0x0078]         ; DS:SI = the BIOS's table
     mov di, DPT_AT
     mov cx, 11
@@ -320,6 +328,7 @@ entry:
     mov [es:DPT_AT + 4], al     ; EOT = this disk's sectors per track
     mov word [es:0x0078], DPT_AT
     mov [es:0x007A], cx         ; CX is 0: `rep movsb` counted it down
+%endif
 
     ; --- reset the drive before the first read ------------------------------
     xor ah, ah
@@ -573,5 +582,9 @@ msg_blob:   db 'Loader checksum', 0
 %endif
 %endif
 
-    times 510 - ($ - $$) db 0
+    times BS_CYLASK - ($ - $$) db 0
+bs_cylask:  db 0                ; 1 = open the 286 gate (SPEC.md 31.14), so
+                                ; the canary decides there too. 0 in every
+                                ; image the build writes; only the Control
+                                ; Panel ever sets it, on the system disk
     dw 0xAA55

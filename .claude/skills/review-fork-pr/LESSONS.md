@@ -335,7 +335,7 @@ The reader is the contributor, in a browser, semi-technical. What has worked:
 [ ] git ls-files build == 0; no .claude/, no binaries, no lost .gitignore lines
 [ ] API slots cross-checked by address AND contract; driver table versions bumped
 [ ] review units written; every finding adversarially verified; blockers read by eye
-[ ] plan presented; user approved before anything was written
+[ ] kickoff comment posted (step 1); plan presented; user approved before anything else was written
 [ ] fixes minimal, SPEC updated with them, no guard relieved
 [ ] the PR's own claimed gate re-run at ITS HEAD, not trusted from the message
 [ ] make; make KERN_SMALL=1; kernsize --bless both; disk --verify; boot; VIDEO=cga

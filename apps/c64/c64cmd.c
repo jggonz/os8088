@@ -10,51 +10,41 @@
  * ----------------------------------------------------------------------------
  * EVERYTHING HERE IS ovl_*, AND THAT IS THE WHOLE MECHANISM
  * ----------------------------------------------------------------------------
- * A function named ovl_* has its CODE emitted into C64.OVL, a module with a
- * segment of its own, and is far-called both ways (SPEC.md 73.14). The split
- * is by FREQUENCY, never by size: a keystroke's path stays resident and a
- * menu command's goes out. `CC_HAS_OVL` is on from the first commit
+ * A function named ovl_* has its CODE emitted into the overlay, a module
+ * with a segment of its own, and is far-called both ways (SPEC.md 73.14). The
+ * split is by FREQUENCY, never by size: a keystroke's path stays resident and
+ * a menu command's goes out. `CC_HAS_OVL` is on from the first commit
  * (C64-SPEC §13.1) because the alternative is discovering at 55,000
  * bytes that the code is not the kind that can move.
  *
- * TWO RULES BIND EVERY FUNCTION IN THIS FILE:
+ * THE MODULE IS PART 1 OF C64.O88 AND IT IS EAGER (C64-SPEC 13.3, SPEC.md
+ * 73.14.2): op_load reads it at launch in the same carve read as the ROM, so
+ * it is in memory before os88_main runs and no call into it can be refused -
+ * the runtime's one remaining refusal is a WORKER asking, and this program
+ * hires none. It was a C64.OVL file beside the package, and every function
+ * here used to answer a status whose 0 meant "the file was not there".
  *
- *  - IT ANSWERS A STATUS, AND 0 MEANS IT DID NOT HAPPEN. A refused load - no
- *    heap, a disk with no C64.OVL, a stale module, a worker task asking -
- *    toasts the reason and returns 0 without running (SPEC.md 47). The
- *    callers are written so that 0 is a normal path.
- *  - ONLY CODE MOVES. Every global, literal and bss byte named below is still
- *    resident and still a plain DS-relative reference, which is what makes
- *    the mechanism possible in C at all.
- *
- * And the .OVL cannot be loaded from os88_main - there is no instance yet to
- * resolve a module for (LESSONS.md 13) - so the first ovl_ call is made from
- * a callback, and its refusal is printed in the status row AS WELL AS toasted,
- * because a toast under a fullscreen window is not where the user is looking.
+ * ONLY CODE MOVES. Every global, literal and bss byte named below is still
+ * resident and still a plain DS-relative reference, which is what makes the
+ * mechanism possible in C at all.
  * ==========================================================================*/
 
-/* ovl_conv_init - C64-SPEC §13.3's FIRST `ovl_*` CALL, made from the first
- * wake, AND the two conversion tables Copy and Paste index.
+/* ovl_conv_init - the two conversion tables Copy and Paste index, called
+ * ONCE, from os88_main.
  *
- * TWO JOBS IN ONE FUNCTION, AND BOTH ARE THE SAME FACT ABOUT FREQUENCY.
+ * It is the ONE thing in this program that runs exactly once: VICE's three
+ * transcribed conversions, called 128 and 256 times into c64_sctab and
+ * c64_pettab (c64kbd.c). They used to be three resident functions - ~275
+ * emitted instructions, ~700 bytes of image - sitting beside the loops that
+ * index their output a thousand times a Copy. SPEC.md 73.14 splits by
+ * FREQUENCY, and once-per-launch is the side that goes out; the TABLES are
+ * bss and stay resident, which is what makes the move legal (only code
+ * moves).
  *
- *  - The .OVL cannot be loaded from os88_main (LESSONS.md 13: there is no
- *    instance yet to resolve a module for), so the module's availability is
- *    not known until some callback needs it - and the first callback that
- *    needs it is a menu command, which is exactly the moment when finding out
- *    is too late to be useful. So the first wake asks. A 0 is the runtime
- *    refusing the load - no C64.OVL on the disk, a stale module,
- *    no heap - and c64.c prints `Unable to load C64.OVL.` in the status row as
- *    well as toasting it, because a toast under a fullscreen window is not
- *    where the user is looking (§9.8).
- *  - And what it does while it is here is the ONE thing in this program that
- *    runs exactly once: VICE's three transcribed conversions, called 128 and
- *    256 times into c64_sctab and c64_pettab (c64kbd.c). They used to be
- *    three resident functions - ~275 emitted instructions, ~700 bytes of
- *    image - sitting beside the loops that index their output a thousand
- *    times a Copy. SPEC.md 73.14 splits by FREQUENCY, and once-per-launch is
- *    the side that goes out; the TABLES are bss and stay resident, which is
- *    what makes the move legal (only code moves).
+ * It was also C64-SPEC 13.3's first-wake PROBE while the module was a file
+ * that could be missing and could not be resolved from os88_main. An eager
+ * part is bound before os88_main runs (crt0's cc_ovinit), so os88_main calls
+ * it directly and there is no probe and nothing to retry.
  *
  * THE TWO LOOPS ARE WRITTEN OUT INLINE AND NOT AS THREE FUNCTIONS, and that
  * is a boundary decision rather than a style one: a function an ovl_* calls
@@ -64,7 +54,7 @@
  *
  * IT IS THE ONE PLACE VICE'S ARITHMETIC IS WRITTEN, and the tables are still
  * derived from it rather than being magic arrays somebody typed. */
-static int ovl_conv_init(void)
+static void ovl_conv_init(void)
 {
     int i, c;
 
@@ -86,11 +76,11 @@ static int ovl_conv_init(void)
     for (i = 0; i < 128; i++) {
         if (i <= 0x1F)
             c = i + 0x40;
-        else if (i >= 0x40 && i <= 0x5F)
+        else if ((unsigned)(i - 0x40) <= 0x1F)    /* 0x40..0x5F */
             c = i + 0x20;
         else
             c = i;
-        if (c >= 0x60 && c <= 0x7F)         /* petcii_fix_dupes: the CHROUT
+        if ((unsigned)(c - 0x60) <= 0x1F)   /* petcii_fix_dupes: the CHROUT
                                              * duplicates onto the proper
                                              * codes (charset.c:114-115) */
             c = c - 0x60 + 0xC0;
@@ -100,12 +90,12 @@ static int ovl_conv_init(void)
             c = '\r';
         else if (c == 0xA0)                 /* PETSCII shifted space */
             c = ' ';
-        else if (c >= 0xC1 && c <= 0xDA)
+        else if ((unsigned)(c - 0xC1) <= 0xDA - 0xC1)
             c = 'A' + (c - 0xC1);
-        else if (c >= 0x41 && c <= 0x5A)
+        else if ((unsigned)(c - 0x41) <= 0x5A - 0x41)
             c = 'a' + (c - 0x41);           /* ...and this is the LOWER case,
                                              * charset.c:156-158 */
-        else if (c < 0x20 || c > 0x7E)
+        else if ((unsigned)(c - 0x20) > 0x7E - 0x20)   /* outside 20..7E */
             /* ASCII_UNMAPPED IS '.', NOT '?' (charset.c:126), AND THE COMMENT
              * THAT USED TO SAY OTHERWISE READ THE REFERENCE BACKWARDS.
              * charset.c:122-127 gives the reason in VICE's own words - these
@@ -138,14 +128,14 @@ static int ovl_conv_init(void)
                                              * style names */
         else if (i == '`')
             c = 0x27;
-        else if (i >= 'a' && i <= 'z')
+        else if ((unsigned)(i - 'a') <= 'z' - 'a')
             c = 0x41 + (i - 'a');
-        else if (i >= 'A' && i <= 'Z')
+        else if ((unsigned)(i - 'A') <= 'Z' - 'A')
             c = 0xC1 + (i - 'A');           /* NOT the 0x61 duplicates
                                              * (charset.c:190-191) */
         else if (i >= 0x7B)
             c = 0x3F;
-        else if (i >= 0x60 && i <= 0x7F)    /* petcii_fix_dupes again, which is
+        else if (i >= 0x60)                 /* petcii_fix_dupes again, which is
                                              * what :199 returns through */
             c = i - 0x60 + 0xC0;
         else
@@ -162,16 +152,6 @@ static int ovl_conv_init(void)
     c64_pettab[0x0D] = 0x0D;
     c64_pettab[0x0A] = 0x0D;
 
-    c64_conv_ok = 1;                        /* ...and THIS is what the two
-                                             * commands check, not the probe's
-                                             * `asked once` flag: a load that
-                                             * was refused for a TRANSIENT
-                                             * reason (no heap) and succeeded
-                                             * later would otherwise reach
-                                             * ovl_copy with 128 zero bytes of
-                                             * table and put a screenful of
-                                             * NULs on the user's clipboard */
-    return 1;
 }
 
 /* ==========================================================================
@@ -188,7 +168,8 @@ static int ovl_conv_init(void)
  *
  * The two TABLES those lookups index are bss and resident; the code that
  * FILLS them is ovl_conv_init above, because filling them happens once a
- * launch and the same rule sends it the other way.
+ * launch and the same rule sends it the other way - os88_main calls it, so
+ * the tables are there before any menu can be picked.
  *
  * Both conversions are VICE's, transcribed from src/charset.c, and neither is
  * a table this port invented. The one thing worth knowing before reading them
@@ -209,7 +190,7 @@ static int ovl_conv_init(void)
  * stated there: Copy is ~103 ms of conversion, Paste is a 2KB heap claim and
  * an os88_clip_get, and both reach kernel/clip.inc's mem_claim, which may
  * compact an arena holding this app's pinned 64KB and pinned 20KB. The
- * bodies are c64_clip_service (c64kbd.c), run from the top of the next wake
+ * bodies are ovl_clip_service (c64kbd.c), run from the top of the next wake
  * with no lock held; that function's header carries the whole argument, and
  * the wake that spends the latch is the one os88_oncmd posts after this
  * returns.
@@ -234,7 +215,7 @@ static int ovl_conv_init(void)
 /* ovl_cmd - one command. The kernel never dispatches a disabled item, so
  * every case below is one of C64-SPEC §11.1's LIVE items; the greyed
  * ones carry their fact in c64menu.c beside the string. */
-static int ovl_cmd(int menu, int item, void *win)
+static void ovl_cmd(int menu, int item, void *win)
 {
     if (menu == C64_M_FILE) {
         if (item == C64_I_ATTACH) {
@@ -247,29 +228,37 @@ static int ovl_cmd(int menu, int item, void *win)
              * time, machine-wide - and the first draft discarded it, so
              * picking Smart attach... with somebody else's Save box up did
              * nothing at all and said nothing at all, which is the silent
-             * no-op SPEC.md 47 forbids. */
-            if (os88_file_dlg(OS88_FDLG_OPEN, win, "*.PRG") < 0)
-                c64_say("A file dialog is already open.");
-            return 1;
-        }
-        if (item == C64_I_RESETCPU || item == C64_I_POWER) {
-            /* Reset machine CPU vs Power cycle machine: on a real machine the
-             * difference is the RAM, and this port keeps that difference.
+             * no-op SPEC.md 47 forbids.
              *
-             * THE BODY IS A LATCH, for the reason Copy's and Paste's are.
-             * Power cycle's RAM fill is 65,536 bytes through c64_zfill - two
-             * calls per 128 bytes of VICE's factory pattern - and os88_oncmd
-             * is dispatched under the DESKTOP's gfx lock, so doing it here was
-             * about a quarter of a second of every other task's drawing, the
-             * mouse and the dock stopped dead for a command that draws
-             * nothing. c64_reset_service (c64.c) runs the whole thing from the
-             * top of the next wake with no lock held, and no emulated cycle
-             * runs in between, so the machine the user reset is the machine
-             * that is reset. */
-            c64_reset_req = (item == C64_I_POWER) ? 2 : 1;
-            return 1;
+             * THE THIRD ARGUMENT IS A DEFAULT NAME AND NOT A FILTER, and OPEN
+             * takes 0 for it (apps/apple2/a2cmd.c says the whole of it):
+             * SPEC.md 38.9 - the dialog does no filtering by extension - so
+             * "*.PRG" here was a name no file has. With 0 the box starts on
+             * SPEC.md 38.10's last-picked name for this application, and Open
+             * stays greyed until a row is selected (38.8) rather than sitting
+             * live over nothing. */
+            if (os88_file_dlg(OS88_FDLG_OPEN, win, 0) < 0)
+                c64_say("A file dialog is already open.");
+            return;
         }
-        return 1;
+        /* Reset machine CPU vs Power cycle machine: on a real machine the
+         * difference is the RAM, and this port keeps that difference.
+         *
+         * THE BODY IS A LATCH, for the reason Copy's and Paste's are.
+         * Power cycle's RAM fill is 65,536 bytes through c64_zfill - two
+         * calls per 128 bytes of VICE's factory pattern - and os88_oncmd
+         * is dispatched under the DESKTOP's gfx lock, so doing it here was
+         * about a quarter of a second of every other task's drawing, the
+         * mouse and the dock stopped dead for a command that draws
+         * nothing. ovl_reset_service (c64.c) runs the whole thing from the
+         * top of the next wake with no lock held, and no emulated cycle
+         * runs in between, so the machine the user reset is the machine
+         * that is reset. */
+        if (item == C64_I_RESETCPU)
+            c64_reset_req = 1;
+        else if (item == C64_I_POWER)
+            c64_reset_req = 2;
+        return;
     }
 
     if (menu == C64_M_EDIT) {
@@ -280,22 +269,11 @@ static int ovl_cmd(int menu, int item, void *win)
          * is still the guaranteed route: an AT BIOS int 16h AH=0 drops the
          * enhanced codes Alt+Delete and Alt+Insert carry (7.5), and where a
          * BIOS does pass them os88_onkey dispatches them straight here. */
-        /* ...AND THE TABLES ARE THERE, WHICH IS NOT THE SAME QUESTION AS
-         * `the module loaded once`. ovl_conv_init runs on the first wake and
-         * its refusal is a fact the user has already been told (§13.3), but a
-         * load refused for a TRANSIENT reason - no heap at that moment - and
-         * granted later would reach the loops below with 128 zero bytes of
-         * table and put a screenful of NULs on the user's clipboard. One
-         * compare, and the retry costs one bridge crossing in a case nobody
-         * will meet: if we are running at all, this module is resident, so
-         * this call cannot itself be refused. */
-        if (!c64_conv_ok)
-            ovl_conv_init();
         if (item == C64_I_COPY)
             c64_copy_req = 1;               /* the WAKE does it (c64kbd.c) */
         else if (item == C64_I_PASTE)
             c64_paste_req = 1;
-        return 1;
+        return;
     }
 
     if (menu == C64_M_PREF) {
@@ -333,7 +311,7 @@ static int ovl_cmd(int menu, int item, void *win)
              * apps/runcpm/runcpm.c:1086-1095 records this defect in its own
              * words and this port copied the call instead of the lesson. */
             c64_fullscreen_toggle(win);
-            return 1;
+            return;
         }
         if (item == C64_I_WARP) {
             /* WARP IS TWO THINGS IN VICE AND IT IS THE SAME TWO HERE
@@ -371,8 +349,9 @@ static int ovl_cmd(int menu, int item, void *win)
                                              * meaningful to play, and the note
                                              * it was holding would simply
                                              * stand for the whole warp */
-            if (!c64_warp && c64_budget > C64_SLICE_MAX)
-                c64_budget = C64_SLICE_MAX;
+            if (!c64_warp)
+                if (c64_budget > C64_SLICE_MAX)
+                    c64_budget = C64_SLICE_MAX;
             c64_menu_state();
             /* ...AND ON THE TARGET IT SAYS SO, AND THE RENDER CAP DOES NOT
              * CHANGE THAT. BOTH of warp's halves are no-ops on CPU_8086, for
@@ -412,7 +391,7 @@ static int ovl_cmd(int menu, int item, void *win)
                 c64_say("Warp mode on - no change.");
             else
                 c64_say("Warp mode on.");
-            return 1;
+            return;
         }
         if (item == C64_I_PAUSE) {
             c64_pause = !c64_pause;
@@ -422,7 +401,7 @@ static int ovl_cmd(int menu, int item, void *win)
                                              * machine actually holds (11.4) */
             c64_menu_state();
             c64_say(c64_pause ? "Paused." : "Running.");
-            return 1;
+            return;
         }
         if (item == C64_I_ADVANCE) {
             /* LIVE AS OF WAVE 2 (§11.1). It was greyed with the fact that
@@ -437,20 +416,18 @@ static int ovl_cmd(int menu, int item, void *win)
              * (identically src/arch/gtk3/ui.c:2735-2743) PAUSES a running
              * machine and advances only an already-paused one, so from a
              * running machine this item runs no frame at all. c64.c's
-             * c64_advance_frame is that action, transcribed; and with no
+             * ovl_advance_frame is that action, transcribed; and with no
              * machine at all - no C64.ROM, or a JAM - c64_menu_state greys
              * the item rather than let it be a silent no-op (§47). */
-            c64_advance_frame();
-            return 1;
+            ovl_advance_frame();
+            return;
         }
         if (item == C64_I_SWAPJOY) {
             c64_joyswap = !c64_joyswap;  /* the row's two indicators swap,
                                           * which its own field compare sees */
             c64_menu_state();
             c64_say(c64_joyswap ? "Joysticks swapped." : "Joysticks normal.");
-            return 1;
+            return;
         }
-        return 1;
     }
-    return 1;
 }

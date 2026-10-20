@@ -1620,7 +1620,7 @@ static void do_about(void *w)
  * can be stated there - Copy is ~103 ms of conversion and Paste is a 2KB heap
  * claim, and both reach kernel/clip.inc's mem_claim, which may compact an
  * arena holding this app's pinned 64KB and 20KB. So the command LATCHES and
- * the top of the next wake runs c64_clip_service with no lock held.
+ * the top of the next wake runs ovl_clip_service with no lock held.
  *
  * THE FIRST HALF OF THIS FUNCTION IS THE NEGATIVE CONTROL and it is the whole
  * reason the helper exists rather than two lines at each call site: a command
@@ -1644,9 +1644,9 @@ static void do_reset(int item, void *w)
              "the whole desktop stopped (LESSONS.md 6)");
     if (lock_depth != 0)
         fail("do_reset: the command left the lock held");
-    c64_reset_service();                /* what the top of the next wake does */
+    ovl_reset_service();                /* what the top of the next wake does */
     if (lock_depth != 0)
-        fail("c64_reset_service took the gfx lock - it is called from the "
+        fail("ovl_reset_service took the gfx lock - it is called from the "
              "wake and holds none (SPEC.md 74.1)");
 }
 
@@ -1661,9 +1661,9 @@ static void do_edit(int item, void *w)
              "(LESSONS.md 6, C64-SPEC 7.7)");
     if (lock_depth != 0)
         fail("do_edit: the command left the lock held");
-    c64_clip_service(c64_mbase);        /* what the top of the next wake does */
+    ovl_clip_service(c64_mbase);        /* what the top of the next wake does */
     if (lock_depth != 0)
-        fail("c64_clip_service took the gfx lock - it is called from the wake "
+        fail("ovl_clip_service took the gfx lock - it is called from the wake "
              "and holds none (SPEC.md 74.1)");
 }
 
@@ -1745,19 +1745,16 @@ int main(int argc, char **argv)
         fail("the key-state map was armed from somewhere other than "
              "os88_main (7.2's rule 1)");
 
-    /* ...AND THE TWO CONVERSION TABLES ARE **NOT** BUILT YET, which is the
-     * frequency split's negative control. The code that fills them runs
-     * exactly once a launch, so it is ovl_conv_init's and lives in C64.OVL
-     * (SPEC.md 73.14); the .OVL cannot be resolved from os88_main at all
-     * (LESSONS.md 13), so the first WAKE is where it happens. If this ever
-     * passes here again, ~700 bytes of launch-only code has come back into
-     * the resident image beside the loops that index the tables a thousand
-     * times a Copy. */
-    if (c64_conv_ok)
-        fail("the PETSCII conversion tables were built from os88_main - "
-             "that code runs ONCE a launch and belongs in the overlay, and "
-             "the .OVL cannot be resolved from os88_main anyway "
-             "(SPEC.md 73.14, LESSONS.md 13)");
+    /* ...AND THE TWO CONVERSION TABLES ARE BUILT ALREADY. The code that fills
+     * them runs exactly once a launch, so it is ovl_conv_init's and lives in
+     * the overlay (SPEC.md 73.14) - and the overlay is an EAGER part of
+     * C64.O88 (C64-SPEC 13.3), bound before os88_main runs, so os88_main
+     * calls it. CR and LF both map to PETSCII CR, which no byte-map entry
+     * does, so those two bytes say the fill ran and nothing else could. */
+    if (c64_pettab[0x0A] != 0x0D || c64_pettab[0x0D] != 0x0D)
+        fail("the PETSCII conversion tables were not built by os88_main - "
+             "ovl_conv_init is called from there, the overlay being an "
+             "eager part (C64-SPEC 13.3)");
 
     /* ...and the KERNAL's own first screen. The scripted core writes it on
      * its first slice, which is what a real one does: wave 2 has no
@@ -3653,7 +3650,7 @@ int main(int argc, char **argv)
                  "SPEC.md 47 forbids");
         /* ...AND THE CHORD DOES NOT WALK ROUND THE GREYING. The kernel never
          * dispatches a disabled item, but os88_onkey dispatches Alt+Shift+P
-         * itself (§7.5) - and it used to reach c64_advance_frame's state
+         * itself (§7.5) - and it used to reach ovl_advance_frame's state
          * guard and return in silence, which is §47's shape by the other
          * route. */
         c64_adv = 0;
@@ -3826,13 +3823,7 @@ int main(int argc, char **argv)
         h_clip_n = -1;
         h_clip_refuse = 0;
 
-        /* ...and by now the first wake HAS happened, so the tables are
-         * there. The two halves of this pair - not from os88_main, but from
-         * the first callback - are what the split actually promises. */
-        if (!c64_conv_ok)
-            fail("the PETSCII conversion tables were never built - "
-                 "ovl_conv_init is C64-SPEC §13.3's first-wake ovl_* call "
-                 "and it fills them");
+
 
         /* --- Copy: the screen matrix, trimmed, one '\n' a row ------------
          * The letters are the point. PETSCII $41-$5A is the LOWER case
@@ -4034,7 +4025,7 @@ int main(int argc, char **argv)
                                              * feeder runs inside the wake */
         /* ONE crossing: os88_oncmd -> ovl_cmd (the runtime's far entry) and
          * back. ovl_cmd only LATCHES - the clipboard calls, the claim and the
-         * refusals are c64_clip_service's, which is resident and runs from the
+         * refusals are ovl_clip_service's, which is resident and runs from the
          * wake - so ovl_cmd -> ovl_paste, ovl_paste -> os88_clip_size and
          * ovl_paste -> os88_clip_get are all gone. There is no conversion call
          * in the command either: the byte map is the feeder's, ten a wake with
@@ -4409,7 +4400,6 @@ int main(int argc, char **argv)
             "The clipboard refused the screen.",
             "The clipboard refused to be read.",
             "The speaker is busy - no SID sound.",
-            "Unable to load C64.OVL.",
             "Warp mode off.",
             "Warp mode on - no change.",
             "Warp mode on.",
@@ -4521,41 +4511,6 @@ int main(int argc, char **argv)
         c64_msg[0] = 0;
         c64_state = C64_ST_RUN;
     }
-
-    /* --- THE OVERLAY FENCE (13.3): a LOCKED callback never goes to the disk
-     * ------------------------------------------------------------------
-     * Reaching an `ovl_*` makes the runtime resolve C64.OVL, and if it is not
-     * resident that is a claim and a FILE READ - ~400 ms a floppy call - in
-     * whatever context asked. os88_oncmd, os88_about and os88_onfile are all
-     * dispatched under the desktop's gfx lock. So a locked caller crosses only
-     * when the first wake has already said the module is there.
-     *
-     * The harness compiles flat, so `ovl_*` can never actually refuse here;
-     * what is checked is the FENCE, by telling the package what the probe
-     * would have told it. */
-    c64_ovl_res = 0;
-    c64_msg[0] = 0;
-    c64_ovl_asked = 1;
-    do_cmd(C64_I_WARP, C64_M_PREF, win);
-    if (c64_msg[0] == 0)
-        fail("a menu command with C64.OVL not resident said nothing - it is "
-             "about to go to the FLOPPY with the gfx lock held (13.3)");
-    if (c64_ovl_asked != 0)
-        fail("the fence did not hand the retry back to the wake - the probe "
-             "is the one caller entitled to do the load, because it holds no "
-             "lock (SPEC.md 74.1)");
-    /* ...AND File > Exit emulator STILL WORKS THERE, because it is answered in
-     * the resident half: a machine the user cannot close by its own menu on
-     * exactly the disk where everything else refuses is not an acceptable
-     * corner. */
-    c64_exit_req = 0;
-    do_cmd(C64_I_EXIT, C64_M_FILE, win);
-    if (!c64_exit_req)
-        fail("File > Exit emulator was refused by the overlay fence - it is a "
-             "latch in the resident half and needs no module");
-    c64_exit_req = 0;
-    c64_ovl_res = 1;
-    c64_msg[0] = 0;
 
     /* --- File > Exit emulator (Alt+Q): ONE DOOR, AND IT IS NOT wm_destroy
      * ------------------------------------------------------------------

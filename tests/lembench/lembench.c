@@ -1,5 +1,5 @@
 /* ============================================================================
- * os8088 - tests/lembench/lembench.c      THE LEMMINGS RASTER'S BENCH (SPEC.md 92.7)
+ * os8088 - tests/lembench/lembench.c      THE LEMMINGS RASTER'S BENCH (SPEC.md 114.7)
  *
  * PERFORMANCE.md rule 4: measure before redesigning, and a counter is not a
  * timer. This is the timer. It puts MICROSECONDS on the glass for every
@@ -209,21 +209,23 @@ static void lb_row(int row, const char *name, unsigned n)
     lb_stop(name, n);
 }
 
-void os88_fsx_main(void *win)
+static void lb_fsx_main(void)
 {
-    static struct os88_fsi fsi;
+    static char fsi[OS88_FSI_SIZE];  /* SPEC.md 53.4's block, by byte offset */
+    unsigned seg;
     int mode;
 
-    (void)win;
     mode = OS88_FSXM_CGA320;
     if (lb_kindnow == 0)
         mode = OS88_FSXM_VGA0D;
     else if (lb_kindnow == 2)
         mode = OS88_FSXM_HERC;
-    if (os88_fsx_mode(mode, &fsi) != 0)
+    if (os88_fsx_mode(mode, fsi) != 0)
         return;
+    seg = (unsigned)(unsigned char)fsi[OS88_FSI_SEG]
+        | (((unsigned)(unsigned char)fsi[OS88_FSI_SEG + 1]) << 8);
 
-    lem_r_setup(lb_kindnow, fsi.seg, lb_world, lb_shadow);
+    lem_r_setup(lb_kindnow, seg, lb_world, lb_shadow);
     lem_r_prep();
     lem_m_setup(lb_mask);
     lem_m_clear();
@@ -407,7 +409,7 @@ void os88_onkey(int ascii, int scan, void *win)
         return;
     lb_n = 0;
     os88_fullscreen(win, 1);
-    os88_fsx_run(win, 0);
+    os88_fsx_run(lb_fsx_main, win, 0);
     os88_fullscreen(win, 0);
     lb_ready = 1;
 }
@@ -432,14 +434,14 @@ static void lb_poke_data(void)
 void *os88_main(void)
 {
     static struct os88_video vid;
-    static unsigned char kind;
+    static int kind;                /* an out-parameter, so a static (73.5) */
     int caps;
 
     lb_win = os88_wm_create(40, 40, 448, 160, "LEMBENCH");
     if (lb_win == 0)
         return 0;
     os88_video(&vid);
-    kind = (unsigned char)vid.kind;
+    kind = vid.kind;
     caps = os88_fsx_caps(lb_win, &kind);
     lb_kindnow = 1;
     if (kind == OS88_VID_HERC)

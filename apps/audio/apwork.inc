@@ -17,9 +17,7 @@
 ; =============================================================================
 
     APB apw_halves                 ; halves fed this pass
-    APD ap_played                  ; total PCM8 bytes the DSP has consumed
-    APW ap_consumed_prev           ; last polled verb-3 count (for the delta)
-    APD ap_total_pcm               ; total PCM8 bytes in the track (0 = unknown)
+    ; (ap_played and ap_consumed_prev are audio.asm's: the per-track run)
 
 ; =============================================================================
 ap_worker:

@@ -36,6 +36,27 @@ hd_ndev:     db 0
 hd_sel:      db 0               ; the device row the page (or the tool) shows
 hd_devs:     times HD_MAXDEV * HDD_SIZE db 0
 
+; --- THE THREE THE PAGE READS AND THE RESIDENT OWNS (SPEC.md 52.13) --------
+; They are here for hd_ndev's and hd_sel's reason: the page is in the tool's
+; image and hd_sync copies the resident's values into this image's copies, so
+; a word that BOTH sides name has to exist in both. The page never writes
+; them back by hand - a caption goes out through HSV_MSG and a mount through
+; HSV_MOUNTDEV, because the resident's are the real ones.
+hd_msgc:     db HDM_PICK        ; the page's caption, as an HDM_* code and
+                                ; never a pointer (hddabi.inc): font_str reads
+                                ; through DS, so a string only means anything
+                                ; in the image that letters it
+hd_nmnt:     db 0               ; ...how many volumes the last mount click
+                                ; mounted, which is what HDM_MOUNTED counts
+%ifdef HD_TOOL                 ; the PAGE's alone, and the page is in the
+                                ; tool image (SPEC.md 52.13): the resident
+                                ; letters nothing but one refusal, through
+                                ; OSAPI_FONT_RUN, so it carries none of these
+hd_mntmask:  db 0               ; ...and bit n = device n has a mounted volume.
+                                ; It replaces a walk of hd_vols, which is the
+                                ; resident's table and stays there: the page
+                                ; asked it ONE question and a byte answers it
+
 hd_rowslot:  db 0               ; a row painter's loop index
 ; The pair every label on this driver's two surfaces is lettered in (SPEC.md
 ; 52.12): AL = ink, AH = the ground under it. A driver cannot read [gfx_color]
@@ -44,6 +65,8 @@ hd_rowslot:  db 0               ; a row painter's loop index
 hd_pair:     dw (CWHITE << 8) | CBLACK
 hd_line:     times 64 db 0      ; one line of text under construction
 hd_lineptr:  dw 0               ; ...and where hd_scat/hd_utoa left off
+
+%endif
 
 hd_lba:      dd 0               ; the LBA hd_chs converts, and the one hd_raw
                                 ; is carrying
@@ -62,12 +85,10 @@ hd_rawop:    db 0               ; hd_raw's direction: the LBA needs DX:AX and
 ; -----------------------------------------------------------------------------
 hd_dev_row:
     push ax
-    push dx
     mov ah, HDD_SIZE
-    mul ah
+    mul ah                      ; a BYTE multiply: AX only, DX untouched
     add ax, hd_devs
     mov di, ax
-    pop dx
     pop ax
     ret
 
@@ -80,9 +101,11 @@ hd_dev_row:
 ; The service handlers branch on CF after a row lookup, and the index they
 ; look up arrived over the tool seam (SPEC.md 52.11.5) - a mismatched tool
 ; image is exactly what the seam's validation exists for. hd_dev_row itself
-; stays unchecked because hd_dev_new must reach the row AT [hd_ndev] to fill
+; stays unchecked because hd_at_new must reach the row AT [hd_ndev] to fill
 ; it before the count is raised.
 ; -----------------------------------------------------------------------------
+%ifndef HD_TOOL                 ; the resident's service handlers are its
+                                ; only callers
 hd_dev_row_ck:
     cmp al, [hd_ndev]
     jae .no
@@ -92,6 +115,7 @@ hd_dev_row_ck:
 .no:
     stc
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; hd_chs - a 32-bit LBA as CHS, for the geometry in DI (module internal)
@@ -178,34 +202,30 @@ hd_part_load:
     pop es
     mov bx, hd_mbr
     xor ax, ax
-    xor dx, dx
+    cwd                         ; DX:AX = LBA 0
     mov cx, 1
-    mov byte [hd_rawop], 0      ; read
+    mov [hd_rawop], al          ; read
     call hd_raw
     jc .bad                     ; the READ failed: leave HMB_BAD
     cmp word [hd_mbr+510], 0xAA55
     jne .nosig
-    mov byte [hd_mbrok], HMB_OK
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.nosig:                         ; read fine, nobody has partitioned it - the
-    call hd_mbr_blank           ; blank IS the right answer, and committing it
-    mov byte [hd_mbrok], HMB_NONE   ; destroys nothing
+    mov byte [hd_mbrok], HMB_OK ; ...and CF = 0, off the compare's equal
     jmp short .out
+.nosig:                         ; read fine, nobody has partitioned it - the
+    mov al, HMB_NONE            ; blank IS the right answer, and committing it
+    jmp short .blank            ; destroys nothing
 .bad:
-    call hd_mbr_blank           ; leaves HMB_BAD: this table is a fabrication
+    mov al, HMB_BAD             ; this table is a fabrication
+.blank:
+    call hd_mbr_blank
+    mov [hd_mbrok], al
+    stc
 .out:
     pop es
     pop dx
     pop cx
     pop bx
     pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -227,7 +247,6 @@ hd_part_load:
 hd_mbr_blank:
     push ax
     push cx
-    push si
     push di
     push es
     push ds
@@ -241,7 +260,6 @@ hd_mbr_blank:
     mov byte [hd_mbrok], 0
     pop es
     pop di
-    pop si
     pop cx
     pop ax
     ret
@@ -254,12 +272,10 @@ hd_mbr_blank:
 ; -----------------------------------------------------------------------------
 hd_part_ent:
     push ax
-    push dx
     mov ah, HP_ESZ
-    mul ah
+    mul ah                      ; a BYTE multiply: AX only, DX untouched
     add ax, hd_mbr + HP_TBL
     mov si, ax
-    pop dx
     pop ax
     ret
 
@@ -285,11 +301,13 @@ hd_part_ent:
 ; refuses one as an install TARGET (52.10.4.1). One is a duplicate icon and
 ; the other is formatting the volume the machine is running from.
 ;
-; **Only a BIOS row can be it.** The kernel's transport there is int 13h
-; (rung 0), so a device reached through the task file is by definition not
-; the drive the adoption named - and there is no int 13h number to offer for
-; one anyway. An IDE row therefore answers "not the kernel's", which is right
-; for the drive the BIOS does not know.
+; **Only a drive the BIOS knows can be it.** The kernel's transport there is
+; int 13h (rung 0), so a drive reached only through the task file is not the
+; drive the adoption named, and has no int 13h number to offer. HDD_BIOS is
+; that number on every row that has one - a BIOS row, and an IDE row TAKEN
+; from the BIOS (SPEC.md 52.1.1) - so it is asked by that alone: the boot
+; partition of an installed machine stays the kernel's, and is never mounted
+; a second time.
 ; -----------------------------------------------------------------------------
 hd_kvol:
     push bx
@@ -297,25 +315,17 @@ hd_kvol:
     push dx
     push di
     call hd_dev_row
-    cmp byte [di+HDD_KIND], HDK_BIOS
-    jne .no
-    mov dl, [di+HDD_UNIT]       ; the int 13h drive, and the partition base as
-    mov cx, [si+HP_LBA]         ; the kernel keeps it: 32 bits, high word in BX
-    mov bx, [si+HP_LBA+2]
-    call OSAPI_VOL_AT           ; preserves everything but AL
-    jc .no
+    mov dl, [di+HDD_BIOS]       ; the int 13h drive - a BIOS row's, or the one
+    cmp dl, 1                   ; a drive rung 1 TOOK still answers as
+    jc .out                     ; (52.1.1); none (CF = 1 off 0 - 1) is no
+    mov cx, [si+HP_LBA]         ; ...and the partition base as the kernel
+    mov bx, [si+HP_LBA+2]       ; keeps it: 32 bits, high word in BX
+    call OSAPI_VOL_AT           ; CF, AL; preserves everything else
+.out:
     pop di
     pop dx
     pop cx
     pop bx
-    clc
-    ret
-.no:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -336,6 +346,27 @@ hd_part_used:
     ret
 .yes:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_part_big - is this entry past the volume ceiling? (SPEC.md 18.7.5)
+; in:  SI = the entry
+; out: CF = 1 = it is longer than any FAT16 volume (HP_MAXHI:HP_MAXLO)
+; clobbers: flags
+;
+; It was `cmp word [si+HP_SECS+2], 0` at five sites, which is the 32MB
+; ceiling SPEC.md 18.7 set when an LBA was a word. The ceiling is FAT16's own
+; now, and one routine is what keeps the five from disagreeing about it.
+; -----------------------------------------------------------------------------
+hd_part_big:
+    push ax
+    mov ax, HP_MAXHI
+    cmp ax, [si+HP_SECS+2]      ; CF = 1 when the ceiling is BELOW it
+    jne .out
+    mov ax, HP_MAXLO
+    cmp ax, [si+HP_SECS]
+.out:
+    pop ax                      ; (pop leaves the flags)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -373,6 +404,10 @@ hd_part_isfat:
     clc
     ret
 
+%ifdef HD_TOOL                 ; hd_win_erase, hd_scat and hd_utoa draw and
+                                ; letter, and only the tool image does either
+                                ; (SPEC.md 52.13) - so the resident leaves them
+                                ; out rather than carrying a copy nothing calls
 ; -----------------------------------------------------------------------------
 ; hd_win_erase - white-fill one of our windows' CONTENT, and nothing else
 ; in:  BX = the window; the gfx lock is HELD
@@ -513,7 +548,85 @@ hd_utoa_body:
     ret
 
 
+%endif
+
+; -----------------------------------------------------------------------------
+; hd_geom_ok - is a row's geometry usable? (module internal)
+; in:  DI = the row
+; out: CF = 0 usable
+; clobbers: flags
+; -----------------------------------------------------------------------------
+hd_geom_ok:
+    push ax
+    mov ax, [di+HDD_CYL]
+    test ax, ax
+    jz .no
+    cmp ax, 1024
+    ja .no
+    mov ax, [di+HDD_HEADS]
+    test ax, ax
+    jz .no
+    cmp ax, 255
+    ja .no
+    cmp byte [di+HDD_KIND], HDK_IDE
+    jne .spt
+    cmp ax, 16                  ; the task file has four bits of head, so an
+    ja .no                      ; IDE row carrying more is not a drive we can
+.spt:                           ; address at all - refuse the GEOMETRY rather
+                                ; than truncate it at the port (SPEC.md 52.1)
+    mov ax, [di+HDD_SPT]
+    test ax, ax
+    jz .no
+    cmp ax, 63
+    ja .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+%ifdef HD_TOOL                 ; the page's size column and labels
+; -----------------------------------------------------------------------------
+; hd_dev_mb - a device's size in whole MB
+; in:  DI = the row
+; out: AX = megabytes (0 if the geometry is unknown)
+; clobbers: AX (the output), flags
+;
+; cyl * heads * spt sectors, and 2,048 sectors is a megabyte - so the answer
+; is (cyl*heads*spt) >> 11, computed as a 32-bit product because 1024 x 16 x
+; 63 is 1,032,192 and does not fit a word.
+; -----------------------------------------------------------------------------
+hd_dev_mb:
+    push bx
+    push cx
+    push dx
+    call hd_geom_ok
+    jc .none
+    mov ax, [di+HDD_HEADS]
+    mul word [di+HDD_SPT]       ; DX:AX = heads*spt (<= 16,065)
+    mul word [di+HDD_CYL]       ; ...times cylinders: a true 32-bit product
+                                ; only because the first fits a word
+    mov bx, ax                  ; DX:BX = total sectors
+    mov cl, 11
+.shift:                         ; >> 11, a bit at a time: the 8086 has no
+    shr dx, 1                   ; 32-bit shift and this runs once a repaint
+    rcr bx, 1
+    dec cl
+    jnz .shift
+    mov ax, bx
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 ; --- strings both images letter ---------------------------------------------
 hd_s_mb:     db 'M', 0
 hd_s_close:  db 'Close', 0
 hd_s_two:    db '  ', 0
+%endif

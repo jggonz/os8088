@@ -34,18 +34,30 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import dispcp                                          # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
+import os88build                                       # noqa: E402
 
 S = os88sym.linear
 u16 = lambda b: b[0] | (b[1] << 8)                     # noqa: E731
-_IBMROM = os.path.exists("tools/martypc/roms/ibm5150")
-MACHINE = ({"cga": "os8088_5150_cga", "herc": "os8088_5150_herc"} if _IBMROM
-           else {"cga": "os8088_5150_cga_gla", "herc": "os8088_5150_herc_gla"})
+# THE MACHINE IS THE GLaBIOS TWIN, resolved rather than chosen here.
+# This used to be a conditional on whether the IBM ROM happened to be
+# in the checkout, which made the machine a property of the box - and
+# on two of the four files that carried it, the path it tested was not
+# the ROM's filename, so the IBM arm could never be taken at all.
+# os88marty.machine() is the one place that decision lives now.
+MACHINE = {c: os88marty.machine("os8088_5150_%s" % c)
+           for c in ("cga", "herc")}
 
 WANT_HREFS = ["#http", "https://example.invalid/", "torture.htm",
               "http://frogfind.de/", "#"]
@@ -66,7 +78,7 @@ def browser_syms():
     subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
                     "-I", "apps/browser/", "-I", "drivers/net/",
                     "-o", out, src], check=True)
-    if open(out, "rb").read() != open("build/browser.bin", "rb").read():
+    if open(out, "rb").read() != open(os88build.at("build/browser.bin"), "rb").read():
         sys.exit("brclick: the mapped build is not build/browser.bin - every "
                  "offset it names would be plausible and wrong")
     syms = {}
@@ -96,6 +108,11 @@ def main():
         pseg = rec[22] | (rec[23] << 8)
         rb = lambda n: m.readseg(pseg, sy[n], 1)[0]        # noqa: E731
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))      # noqa: E731
+        # THE PAGE ARRIVES ON THE WAKE, after the window is up (SPEC.md 54.10):
+        # read straight after the open and this is an empty browser
+        os88marty.until(m, lambda _m: rw("br_nlines") > 0, "the page laid out",
+                        limit=120)
+        os88marty.settle(m)
 
         # --- 0: the bar OPENS holding `http://`, focused, caret at the end
         # (SPEC.md 71.7). It is read before anything is clicked, because the
@@ -124,9 +141,9 @@ def main():
             sys.exit("brclick: no link arena was claimed - nothing below can "
                      "be measured")
         arena = bytes(m.readseg(lseg, 0, max(rw("br_lnkw"), 1)))
-        offs = [u16(m.readseg(pseg, sy["br_lnkoff"] + i * 2, 2))
-                for i in range(n)]
-        hrefs = [arena[o:arena.index(b"\0", o)].decode("latin-1") for o in offs]
+        # the arena IS the index (br_follow): hrefs packed in link order,
+        # each ending at its NUL, so link N is the Nth string
+        hrefs = [h.decode("latin-1") for h in arena.split(b"\0")[:n]]
         say("hrefs: %r" % hrefs)
         if hrefs != WANT_HREFS:
             fails.append("hrefs %r != %r" % (hrefs, WANT_HREFS))
@@ -252,7 +269,9 @@ def main():
 
         # --- 3: the form field, then the submit button -------------------
         fofs = u16(m.readseg(pseg, sy["br_flds"], 2))
-        sub0, sub1 = rw("br_subofs"), rw("br_subend")
+        subs = sy["br_subs"]
+        sub0 = u16(m.readseg(pseg, subs, 2))
+        sub1 = u16(m.readseg(pseg, subs + 2, 2))
         say("field @%d, submit %d..%d" % (fofs, sub0, sub1))
         err = click_offset(fofs)
         if err:

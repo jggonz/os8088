@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tests/lembenchmarty.py - RUN tests/lembench ON A 4.77 MHz 8088 (SPEC.md 92.7).
+"""tests/lembenchmarty.py - RUN tests/lembench ON A 4.77 MHz 8088 (SPEC.md 114.7).
 
     python3 tests/lembenchmarty.py                 # every machine it can reach
     python3 tests/lembenchmarty.py --machine os8088_5150_cga
@@ -14,7 +14,7 @@ numbers.
 
 IT IS NOT A GATE AND IT IS NOT IN THE SUITE. It takes minutes, it needs
 build/martypc, and what it produces is a TABLE for a human to read and paste
-into SPEC.md 92.7 and PERFORMANCE.md - which is exactly what
+into SPEC.md 114.7 and PERFORMANCE.md - which is exactly what
 docs/MARTYPC-DEBUG.md says the instrument is for: it writes a PNG of the
 bench's own screen and a person reads the table off it, which is the same act
 the bench was written for.

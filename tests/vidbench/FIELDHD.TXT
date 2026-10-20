@@ -1,0 +1,130 @@
+VIDEO PLAYER - FIELD HARD DISK (waves 0-7)
+==========================================
+
+A bootable fixed disk: the os8088 kernel, the Video
+Player, the videos and four benches. There are eight
+of these images - two layouts on four kinds of disk:
+
+  VIDHERC.VHD   the videos made for a Hercules card
+  VIDCGA.VHD    the videos made for CGA 640x200 - they
+                play on a CGA and on a VGA
+
+  ...both 615 cylinders, 4 heads, 26 sectors (31 MB):
+  an ST-238R on an RLL card, or an XT-IDE.
+
+  VIDHERC-MFM.VHD, VIDCGA-MFM.VHD
+                the same at 615/4/17 (20 MB): an
+                ST-225 on the IBM/Xebec MFM card. No
+                THUNDERC - it does not fit.
+
+  VIDHERC-ST11R.VHD, VIDCGA-ST11R.VHD
+                615/4/26 laid out the way a Seagate
+                ST11R formats an ST-238R: the card's
+                own record in cylinder 0 and the disk
+                one cylinder in. All five videos.
+
+  VIDHERC-ST11M.VHD, VIDCGA-ST11M.VHD
+                the same for an ST-225 on a Seagate
+                ST11M, at 615/4/17. No THUNDERC.
+
+The disk has to be read at the geometry it was written
+with. In 86Box the -MFM pair wants the plain IBM PC
+fixed disk adapter (st506_xt) with an MFM drive of 17
+sectors, 4 heads, 615 cylinders; the -ST11R pair wants
+the ST11R with an RLL drive of 26 sectors, 4 heads,
+615 cylinders; the -ST11M pair the ST11M with an MFM
+drive of 17 sectors, 4 heads, 615. The ST11 and plain
+images do not mix: an ST11 calls a plain image
+unformatted, and reads the others one cylinder off.
+
+A video plays only on the adapter its layout was made
+for (SPEC.md 98.3); anything else says "made for ...".
+On a two-card machine it is the display the Video
+Player's window is on that decides.
+
+THE VIDEOS - double-click one, or open VIDEO.O88 and
+use File > Open. The window shows the video's poster
+frame; Left and Right (or the two arrow buttons, or the
+bar under the picture - click or drag its thumb) pick a
+keyframe to start from, every 2 s. Space plays it -
+in the window when the picture there is the video's own
+size (and the window is uncovered), fullscreen if not.
+In the window, Space or a click pauses it back to the
+desktop, and Space goes on. F or Alt+Enter swaps
+between the window and fullscreen, playing or paused.
+Esc stops. The i button (or I) opens the info card.
+WITH A SOUND BLASTER THEY PLAY WITH SOUND, and the
+card is the clock: the picture follows what the card
+has played. Without one they play silent, on the timer.
+CLOSE THE BENCH WINDOWS FIRST. Each keeps its memory
+until it is closed, and the player reads ahead into
+whatever is free: with the benches open it gets the
+smallest ring (two 32 KB slots) and STALLS, or says
+"Not enough memory to play it".
+
+  BADAPPLE.V88   3:39, 30 fps - the long one
+  THUNDERC.V88   1:16, 23.976 fps (not on -MFM)
+  TRONDISC.V88   0:48, 23.976 fps
+  BBBB_BW.V88    0:07, 60 fps
+  BBBBCOMP.V88   0:07, 60 fps, made for CGA
+                 COMPOSITE colour: in mono it is a
+                 pattern of stripes, and that is expected
+
+  TRONDA4.V88    TRONDISC with its sound as 4-bit
+                 ADPCM, which the CARD decodes (not
+                 on -MFM or -ST11M: no room)
+  BBBBA4.V88     BBBB_BW, the same
+
+  The ADPCM pair halves the sound's bytes for a disk
+  that cannot carry PCM beside the picture. It sounds
+  noticeably worse than its PCM original, and that is
+  expected; loud noise or a buzz is not, and is worth
+  a recording.
+
+When a play ends the window reads "Drew N of N",
+"stalls" (the reader could not keep up), "pauses" (the
+sound card ran dry - with sound only), "Late" and the
+ticks it took against the ticks it should have. Please photograph that for
+each video. Zero late and zero stalls is the target.
+
+THE BENCHES - each opens a window. Click it (or press
+the key named) to run. Space / PgDn / PgUp page the
+results. EACH ONE SAVES ITS RESULTS AS A .TXT FILE ON
+THIS DISK when it finishes, so photographs are only a
+backup: copy the .TXT files off afterwards.
+
+  VIDBENCH.O88 -> VIDBENCH.TXT   (R)
+    The decoder against the card: every frame in
+    VIDBENCH.DAT drawn three ways and timed. The last
+    lines give the worst frame in thousandths of a
+    frame period at 30 and 23.976 fps - under 1000
+    fits. Screen garbage while it runs is the frames.
+
+  VIDDISK.O88 -> VIDDISK.TXT     (R, about 2 minutes)
+    Streaming BADAPPLE.V88 off this disk: the old read
+    at growing offsets, the new streaming read, the
+    int 13h calls it makes, and the SILENT PLAYER'S
+    CEILING - KB/s while a 30 Hz interrupt holds 0,
+    25, 50 and 75% of every frame. The screen stays
+    still for 25 s of that; it is working.
+
+  VIDSND.O88 -> VIDSND.TXT       (R, about 50 s)
+    The Sound Blaster, if there is one: interrupts per
+    frame at 30 and 60 fps and 4-bit ADPCM, then whole
+    tracks off this disk while the sound interrupt
+    burns 0-75% of a frame. With no card it says so.
+    The buffer is silence.
+
+  VIDKERN.O88 -> VIDKERN.TXT     (A, about 30 s)
+    Wave 2's kernel changes on real iron. The rate
+    clock: the "periods/tick x10000" line should read
+    close to 16478, and "BIOS 40:6C moved" should
+    equal "ticks elapsed". Then the progress-box fence:
+    LOOK at the screen - a small progress box shows for
+    the first 2 s park and in neither of the next two.
+    Its READ_SEQ rows need a special file and are
+    skipped here; VIDDISK covers them.
+
+Everything the benches write is their own .TXT; VIDKERN
+writes and deletes one scratch file, VKTMP.DAT. Nothing
+else on the disk is changed.

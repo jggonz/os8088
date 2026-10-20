@@ -37,6 +37,7 @@ Four things are checked, and the FIRST is the byte compare itself:
    place and the total silently stops adding up
 """
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,7 +51,52 @@ import kernsize                                           # noqa: E402
 # a default build measures them at zero and that is the correct answer.  A
 # module joining this list is a decision: it is saying "this ships in no
 # kernel any disk carries", which is exactly what a knob is.
-KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc")
+#
+# **vmmouse.inc IS THE ONE ENTRY THAT IS NOT A KNOB** (SPEC.md 9.11.7), and it
+# is named here rather than exempted quietly because the distinction matters:
+# `make emu` is a SHIPPED PRODUCT - kern_big plus the VMware absolute pointer,
+# for v86 in a browser and for a desktop hypervisor - so build/emu.img is a
+# disk that carries it, which is precisely what the four above are saying is
+# not true of them. What it shares with them is the only thing this test can
+# see: it measures zero on the DEFAULT build, because the whole file is inside
+# %ifdef KERN_EMU and the target machine is a 4.77 MHz 8088 that can neither
+# speak a 32-bit backdoor protocol nor be spoken to. Its bytes are on the emu
+# variant's row instead - `tools/kernsize.py --modules -DKERN_BIG -DKERN_EMU`
+# prints them, exactly as `--modules -DKERN_SMALL` prints kern_small's.
+KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
+             "vmmouse.inc",
+             "kbddiag.inc")     # KBDDIAG=1 (SPEC.md 9.8.1)
+
+# ...and a second reason for a zero row, which is NOT a knob: a file whose
+# whole contribution is an on-demand module IMAGE (SPEC.md 2.8).  Those
+# sections are cut out of kernel.bin by tools/os88mod.py and shipped as a
+# `.DRV`, so they are not in MOD_SECTIONS and never will be - the report is
+# about what a machine carries, and a module image is not it.  Every other
+# module file has a resident half as well (a thunk, a string, a `mod_tab`
+# row) and so measures somewhere; compress.inc is the first that is PURELY
+# the image, and its resident half lives on mod.inc's and files.inc's rows.
+# A file joining this list is saying "nothing of this is in KERNEL.SYS".
+# ascw.inc (SPEC.md 54.7.6.4) is the third: FORMAT.DRV's ASSOC.DAT flush,
+# whose resident half is the one `dw ascw_flush_x` on diskw.inc's row.
+IMAGE_ONLY = ("compress.inc", "dockmod.inc", "ascw.inc")
+
+# ...and a THIRD reason for a zero row, which is neither a knob nor an image:
+# a file whose whole contribution is a MACRO.  `mouproto.inc` (SPEC.md 9.5) is
+# the Microsoft serial packet's arithmetic as `MOU_DECODE_MS`, and it emits not
+# one byte of its own - the bytes are charged to the EXPANSION SITE, inside
+# `mou_byte` in mouse.inc, which is exactly where a reader wants to see them.
+# It is a macro rather than a proc on purpose: the kernel's copy is reached by
+# fall-through from the phase machine above it in an ISR, and a `call` there
+# would cost a return address on the shared mouse stack SPEC.md 9.10 exists to
+# keep shallow.  It has TWO hosts - kernel/mouse.inc and kerndos/kdmouse.inc -
+# which cannot call each other, so what they share they share as SOURCE.
+#
+# A file joining this list is saying "this has no bytes of its own ANYWHERE",
+# which is a stronger claim than the two above and cheap to check: it is true
+# exactly when the file contains no `section` of its own.  Say that in the
+# entry, because the tempting wrong member is a file that emits under an
+# %ifdef nobody defines - that one is KNOB_ONLY, with the knob named.
+MACRO_ONLY = ("mouproto.inc",)
 
 
 def main():
@@ -93,8 +139,24 @@ def main():
               got="%s = %d" % (key, resid[2 + i]), want=">= 0")
 
     # 3. Nothing reads as free.
+    # ...and a MACRO_ONLY claim is CHECKED rather than taken: "no bytes
+    # anywhere" is true exactly when the file opens no section of its own, so
+    # the exemption cannot quietly cover a file that has started emitting.
+    for name in MACRO_ONLY:
+        p = os.path.join(ROOT, "kernel", name)
+        src = open(p, errors="replace").read() if os.path.exists(p) else ""
+        secs = re.findall(r"(?m)^\s*section\s+\.", src)
+        check(os.path.exists(p) and not secs,
+              "%s really is macro-only: it opens no section of its own" % name,
+              "MACRO_ONLY says the file's bytes are charged to the expansion "
+              "site, which is only true while it emits none itself; a file "
+              "here that has grown a `section` is a module measuring zero for "
+              "a DIFFERENT reason and belongs in KNOB_ONLY or on a row",
+              got=("%d section(s)" % len(secs)) if os.path.exists(p)
+                  else "no such file", want="none")
+
     for name, v in sorted(per.items()):
-        if name in KNOB_ONLY:
+        if name in KNOB_ONLY or name in IMAGE_ONLY or name in MACRO_ONLY:
             continue
         check(any(v[s] for s in kernsize.MOD_SECTIONS),
               "%s measures somewhere" % name,

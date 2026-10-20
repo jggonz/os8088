@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemmings.c
  *
- * LEMMINGS (SPEC.md 92) - Lemmings (DMA Design / Psygnosis, 1991, the DOS
+ * LEMMINGS (SPEC.md 114) - Lemmings (DMA Design / Psygnosis, 1991, the DOS
  * release) as an os8088 C package. This file is the translation unit's ROOT:
  * the constants, the state, the prototypes, the callbacks the shim declares,
  * the empty menu set and the #includes of the rest, in dependency order.
@@ -14,7 +14,7 @@
  * change having done nothing (LESSONS.md 9).
  *
  * WHAT WAVE 1 IS. The desktop window is a LAUNCHER and nothing else (SPEC.md
- * 92): the four ratings, the level names of the chosen rating PAGED to the live
+ * 114): the four ratings, the level names of the chosen rating PAGED to the live
  * window height, the original's preview fields beside them, Play, four state
  * rows that give SPEC.md 47's greying a control to sit on, and the standard
  * About card. Play shows the level's own preview screen - the original's seven
@@ -26,16 +26,16 @@
  *
  * WHERE THE WORDS COME FROM. The level names, the preview fields, the rating
  * and style names and every sentence that greys a control are read off the
- * CONVERTED BAND FILES (SPEC.md 92.3, docs/lemband-format.md). This program
+ * CONVERTED BAND FILES (SPEC.md 114.3, docs/lemband-format.md). This program
  * owns SIX literals and no more, and they are listed at their declaration
- * below; that is what SPEC.md 92.6's resident budget rests on, together with
+ * below; that is what SPEC.md 114.6's resident budget rests on, together with
  * the wave-1 overlay split.
  *
  * ATTRIBUTION. Lemmings is (C) 1991 DMA Design / Psygnosis. Every table, string
  * and offset derived from the original or from the three reimplementations that
  * document it names its source at the line that carries it; the full list is in
  * README.TXT beside the package, and the About card names the two principals
- * and points at it (SPEC.md 92.2). Nothing GPL or LGPL is copied.
+ * and points at it (SPEC.md 114.2). Nothing GPL or LGPL is copied.
  *
  * THE FOUR RULES (apps/cc/os88.h, SPEC.md 73.5, docs/C-TOOLCHAIN.md): every
  * addressable object is static - the address of an automatic is a stack offset
@@ -120,7 +120,7 @@
                                      * IT WAS 8,192 AND THE HEADROOM WAS NOT
                                      * THIS FILE'S TO SPEND. bss is the cheap
                                      * half of this budget, but wave 1 measured
-                                     * 14,866 bytes of it against SPEC.md 92.6's
+                                     * 14,866 bytes of it against SPEC.md 114.6's
                                      * plan of ~14,000 for the WHOLE program,
                                      * with the lemming pool, the object
                                      * instances, the terrain list, the sprite
@@ -141,7 +141,7 @@
 #define LEM_BANK_STYLE   0          /* which half of LEMMAN's cost table */
 #define LEM_BANK_SPEC    1
 
-/* --- the world, and the raster's own numbers (SPEC.md 92.3.1, 92.4) --------
+/* --- the world, and the raster's own numbers (SPEC.md 114.3.1, 92.4) --------
  * 1,584 x 160, which is lemmings_3ds's and Lemmix's figure and not
  * Lemmings.ts's 1,600 (lemtool/REPORT.md measured all 120 levels). The C says
  * WHAT to draw and lemblit.inc/lemmask.inc touch the pixels, so these three are
@@ -157,7 +157,7 @@
  * One character and one attribute per cell. 64 columns is 512 pixels, which is
  * the window this launcher is authored at; a wider window is laid out inside
  * 64 cells rather than growing two 1,280-byte arrays, because bss is cheap but
- * it is not free and SPEC.md 92.6's budget is 81% spent before this file
+ * it is not free and SPEC.md 114.6's budget is 81% spent before this file
  * starts. The stride is a power of two so `row * stride` is a SHIFT and never
  * an imul the gate has to find a dead scratch register for (LESSONS.md 3). */
 #define LEM_SH_COLS     64
@@ -201,7 +201,7 @@
 /* The three screens this wave has. */
 #define LEM_SC_LIST     0
 #define LEM_SC_PREVIEW  1           /* the level's own preview, wave 5 moves it
-                                     * inside the bracket (SPEC.md 92.4.3) */
+                                     * inside the bracket (SPEC.md 114.4.3) */
 #define LEM_SC_FACT     2           /* the sentence behind a greyed control */
 
 /* ------------------------------------------------------------------------- */
@@ -288,7 +288,7 @@ static void lem_show_fact(void *win, int labelid, int strid, int level);
 static void lem_back(void *win);
 static void lem_play(void *win);
 
-/* lemdraw.c - the frame (SPEC.md 92.4) */
+/* lemdraw.c - the frame (SPEC.md 114.4) */
 static int  lem_level_load(int level);
 static void lem_compose_level(int level);
 static void lem_mm_sample(void);
@@ -489,7 +489,7 @@ static int lem_c_rows;              /* rows composed and scanned this repaint */
 static int lem_c_cols;              /* ...and columns scanned in them */
 
 /* THE SIX LITERALS THIS PROGRAM OWNS. Everything else the user reads is in
- * LEMSTR.LEM (SPEC.md 92.3, 92.6). These six cannot be:
+ * LEMSTR.LEM (SPEC.md 114.3, 92.6). These six cannot be:
  *   - the window TITLE has to outlive the window (os88.h's own rule) and so
  *     cannot point into a buffer anything reloads;
  *   - the no-data refusal is what is said when the BAND could not be read;
@@ -531,7 +531,7 @@ static struct os88_menuset lem_menus = { lem_title, 0, 0, { { 0, 0, 0 } } };
 #include "lemtext.c"                /* the string ACCESSOR, not the strings */
 #include "lemload.c"                /* the band reader, resident half */
 #include "lemui.c"                  /* the launcher */
-#include "lemdraw.c"                /* the frame (SPEC.md 92.4) */
+#include "lemdraw.c"                /* the frame (SPEC.md 114.4) */
 #include "lemovl.c"                 /* everything ovl_* -> LEMMINGS.OVL */
 
 /* WAVE 2 AND 3 ADD, in this order and between lemload.c and lemui.c:
@@ -558,12 +558,12 @@ static struct os88_menuset lem_menus = { lem_title, 0, 0, { { 0, 0, 0 } } };
  * gets four colours and the row says so with the fact. */
 static int lem_probe_mode(void *win)
 {
-    static unsigned char kind;
+    static int kind;                /* an out-parameter, so a static (73.5) */
     int caps;
 
     kind = OS88_VID_VGA;
     caps = os88_fsx_caps(win, &kind);
-    lem_vidkind = (int)kind;
+    lem_vidkind = kind;
     lem_caps = caps;
     if (caps < 0)
         return 0;
@@ -577,7 +577,7 @@ static int lem_probe_mode(void *win)
  * FSXM_VGA0D - the 320x200x16 mode - because what that row states is a fact
  * about COLOUR: "kernel/fsx.inc:117 fsx_capstab gives an EGA 0x000F, the
  * CGA-compatible modes only, so a sixteen-colour card gets four" (SPEC.md
- * 92.8). A card that cannot set 0Dh still PLAYS, in four colours or in
+ * 114.8). A card that cannot set 0Dh still PLAYS, in four colours or in
  * monochrome; greying the launch on that predicate would refuse the game on
  * every machine but a VGA.
  *
@@ -615,7 +615,7 @@ static int lem_raster_ok(void)
  * LESSONS.md 13), and cc_ovneed TOASTS ITS OWN REFUSAL - a kernel drawing call
  * this C never wrote and cannot intercept. In a window that toast is an
  * ordinary thing; inside wave 2's bracket it would be painted with DESKTOP
- * geometry into a foreign mode (SPEC.md 92.5). So it happens once, here, with
+ * geometry into a foreign mode (SPEC.md 114.5). So it happens once, here, with
  * the window up, and lem_ovl remembers the answer so no later call can reach
  * that path again.
  *
@@ -1032,7 +1032,7 @@ void os88_about(void *win)
         /* THE ATTRIBUTION SURFACE DEGRADES TO THE CREDIT AND NOT TO THE PORT'S
          * OWN NAME. With no module there is no card, and what a reader most
          * needs off it is whose work this is - which is a RESIDENT band string
-         * and needs no module to read (SPEC.md 92.2). lem_prodline is the
+         * and needs no module to read (SPEC.md 114.2). lem_prodline is the
          * fallback's fallback, for a disk with no band on it either. */
         os88_toast(lem_ok ? lem_str(LEMS_CREDIT1) : lem_prodline, 0);
         return;
@@ -1054,21 +1054,21 @@ void os88_about(void *win)
  *
  * WHAT THE LOOP IS SHAPED BY is the frame budget: a tick on a 4.77 MHz 8088 is
  * ~16,000 instructions and one displayed frame of this world costs more than
- * that (SPEC.md 92.7's measurements). So the CURSOR AND THE INPUT POLL RUN ONCE
+ * that (SPEC.md 114.7's measurements). So the CURSOR AND THE INPUT POLL RUN ONCE
  * PER TICK UNCONDITIONALLY and the world's own step may take several - which is
  * what keeps pointer latency at 55 ms when the world is at 300. Wave 2 has no
  * world step yet; the shape is here so wave 3's mechanics drop into it rather
  * than around it.
  *
- * The trampoline in crt0.asm is what makes the two halves impossible to drift:
- * a %define with no C function behind it is an nasm error naming this function,
- * and this function with no %define is code the kernel never calls.
+ * It is a plain RESIDENT function whose address os88_fsx_run() is handed -
+ * never an ovl_, which tools/cc8086.py refuses by name, because the bracket
+ * has parked the machine that would load the module (os88.h, SPEC.md 73.14).
  * ==========================================================================*/
 
 /* The scan codes this loop reads. os88_fsx_key() answers (scan << 8) | ascii
  * and uses the ENHANCED BIOS pair where the BIOS says it has one, which is why
  * F11 and F12 arrive on an AT and are absent on an 83-key XT - a fact the Mode
- * row states rather than a defect (SPEC.md 92.8). */
+ * row states rather than a defect (SPEC.md 114.8). */
 #define LEM_K_ESC    0x01
 #define LEM_K_LEFT   0x4B
 #define LEM_K_RIGHT  0x4D
@@ -1094,18 +1094,20 @@ void os88_about(void *win)
 
 static int lem_playing = -1;        /* the level inside the bracket, or -1 */
 
-void os88_fsx_main(void *win)
+static void lem_fsx_main(void)
 {
-    static struct os88_fsi fsi;
+    static char fsi[OS88_FSI_SIZE];  /* SPEC.md 53.4's block, by byte offset */
+    unsigned seg;
     int k, done;
 
-    (void)win;
     if (lem_playing < 0)
         return;
-    if (os88_fsx_mode(lem_mode_id(), &fsi) != 0)
+    if (os88_fsx_mode(lem_mode_id(), fsi) != 0)
         return;                     /* the same bit that greys the Mode row */
+    seg = (unsigned)(unsigned char)fsi[OS88_FSI_SEG]
+        | (((unsigned)(unsigned char)fsi[OS88_FSI_SEG + 1]) << 8);
 
-    lem_r_setup(lem_kind_id(), fsi.seg, lem_cl_world, lem_cl_shadow);
+    lem_r_setup(lem_kind_id(), seg, lem_cl_world, lem_cl_shadow);
     lem_r_prep();
     if (lem_kind_id() == LEM_RKIND_VGA)
         lem_r_pal(lem_cl_bank, LEM_GR_STDPAL, LEM_GR_CUSTOM);
@@ -1131,7 +1133,7 @@ void os88_fsx_main(void *win)
     lem_view_move(lem_ent_u16(lem_playing, LEM_E_STARTX));
     lem_view = (lem_view + 4) & ~7;
 
-    /* THE PANEL AND A WORD BEFORE THE WAIT (SPEC.md 92.7.1 conclusion 2):
+    /* THE PANEL AND A WORD BEFORE THE WAIT (SPEC.md 114.7.1 conclusion 2):
      * composing a level is ~25 s on an XT and nothing inside the bracket can
      * say so - every kernel slot is refused there, so a toast is impossible
      * (SPEC.md 53.1). lem_frame_panel() draws the panel and writes LOADING into
@@ -1198,7 +1200,7 @@ void os88_fsx_main(void *win)
  * frozen desktop at PERFORMANCE.md's ~400 ms an int 13h - and os88.h pins
  * W_ONCLICK and W_ONKEY as "the UI task, the gfx lock HELD ... must not take
  * long", with every other window's painter stopped behind that lock. It is the
- * same defect SPEC.md 92.6's first table row records as removed from W_PAINT
+ * same defect SPEC.md 114.6's first table row records as removed from W_PAINT
  * for a 2,752-byte read, put back one callback along at forty-eight times the
  * size. os88_onwake() is the one lock-free callback (SPEC.md 74.1) and it
  * already carries the module, the rating file and the progress write; this is
@@ -1217,7 +1219,7 @@ static void lem_ask_launch(void *win)
  *
  * CALLED FROM os88_onwake() AND FROM NOWHERE ELSE (lem_ask_launch above), which
  * is what lets the file half run with the lock FREE. It is the whole of
- * SPEC.md 92.5 in one function: the module is already resident (the first wake
+ * SPEC.md 114.5 in one function: the module is already resident (the first wake
  * did it), the claims are taken and the banks read HERE, in a window, and only
  * then is the machine borrowed. A SPEC.md 11.2 fullscreen window is stacked
  * under the bracket the way apps/missile/missile.asm:1186-1227 does - which
@@ -1249,7 +1251,7 @@ static void lem_launch(void *win)
     if (ok == LEM_LR_GO) {
         lem_playing = lem_sel;
         os88_fullscreen(win, 1);
-        os88_fsx_run(win, 0);
+        os88_fsx_run(lem_fsx_main, win, 0);
         os88_fullscreen(win, 0);
         lem_playing = -1;
         /* The desktop is back and nothing of ours is on it. The shadow

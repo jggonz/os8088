@@ -1,0 +1,19 @@
+# Title theme: a driving, syncopated 4/4 in A minor (Am F C G).  Original.
+title Kick Start
+tempo 138
+loop 0
+# ---- lead ----
+v1 o5 a8 a8 r8 a8 g8 e8 a4 | o5 f8 f8 r8 f8 e8 c8 f4 | o5 e8 e8 r8 e8 d8 c8 e4 | o5 d8 d8 r8 d8 e8 d8 g4 |
+v1 o6 c8 c8 r8 c8 o5 b8 a8 o6 c4 | o5 a8 a8 r8 a8 g8 f8 a4 | o5 g8 g8 r8 g8 e8 c8 g4 | o5 b8 b8 r8 b8 a8 g8 o6 d4 |
+v1 o5 a4 o6 c8 e8 d8 c8 o5 a4 | o5 f4 a8 o6 c8 o5 a8 g8 f4 | o5 e4 g8 o6 c8 o5 g8 e8 g4 | o5 d4 g8 b8 o6 d8 o5 b8 g4 |
+v1 o5 a8 a8 r8 a8 g8 e8 a4 | o5 f8 f8 r8 f8 e8 c8 f4 | o5 e8 e8 r8 e8 d8 c8 e4 | o5 d8 d8 r8 d8 e8 g8 b4 |
+# ---- harmony: quarter-note arpeggios ----
+v2 o4 e4 a4 o5 c4 o4 a4 | o4 f4 a4 o5 c4 o4 a4 | o4 e4 g4 o5 c4 o4 g4 | o4 d4 g4 b4 g4 |
+v2 o4 e4 a4 o5 c4 o4 a4 | o4 f4 a4 o5 c4 o4 a4 | o4 e4 g4 o5 c4 o4 g4 | o4 d4 g4 b4 g4 |
+v2 o4 e4 a4 o5 c4 o4 a4 | o4 f4 a4 o5 c4 o4 a4 | o4 e4 g4 o5 c4 o4 g4 | o4 d4 g4 b4 g4 |
+v2 o4 e4 a4 o5 c4 o4 a4 | o4 f4 a4 o5 c4 o4 a4 | o4 e4 g4 o5 c4 o4 g4 | o4 d4 g4 b4 g4 |
+# ---- bass: a pushed root, then the fifth ----
+v3 o2 a4 a8 a8 a4 e4 | o2 f4 f8 f8 f4 o3 c4 | o3 c4 c8 c8 c4 o2 g4 | o2 g4 g8 g8 g4 o3 d4 |
+v3 o2 a4 a8 a8 a4 e4 | o2 f4 f8 f8 f4 o3 c4 | o3 c4 c8 c8 c4 o2 g4 | o2 g4 g8 g8 g4 o3 d4 |
+v3 o2 a4 a8 a8 a4 e4 | o2 f4 f8 f8 f4 o3 c4 | o3 c4 c8 c8 c4 o2 g4 | o2 g4 g8 g8 g4 o3 d4 |
+v3 o2 a4 a8 a8 a4 e4 | o2 f4 f8 f8 f4 o3 c4 | o3 c4 c8 c8 c4 o2 g4 | o2 g4 g8 g8 g4 o3 d4 |

@@ -18,6 +18,7 @@ TWO THINGS ABOUT MARTYPC'S MOUSE that this exists to encapsulate:
 Positions are for a 640x200 CGA, which is what os8088_xt_hdd has.
 """
 import argparse
+import tempfile
 import sys
 import time
 
@@ -40,7 +41,7 @@ def main():
     ap.add_argument("addr")
     ap.add_argument("--stop", default="install",
                     help="page | slots | arm | install")
-    ap.add_argument("--shot", default="/tmp/step.png")
+    ap.add_argument("--shot", default=tempfile.gettempdir() + "/step.png")
     a = ap.parse_args()
     ADDR = a.addr
     u = UI(a.addr, verbose=False)

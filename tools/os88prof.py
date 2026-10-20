@@ -1,7 +1,7 @@
 """os88prof - a sampling profiler for the guest, costing the guest nothing.
 
     nasm -f bin -w+error -DTRKLOG -I apps/ -I apps/tracker/ -I tests/ \\
-         -o /dev/null -l /tmp/tl.lst apps/tracker/tracker.asm
+         -o /tmp/tl.bin -l /tmp/tl.lst apps/tracker/tracker.asm
     python3 tools/os88prof.py /tmp/tl.lst 25
 
 
@@ -12,8 +12,16 @@ link manages; what matters is that it is uncorrelated with anything the guest
 does, which a host-driven poll is.
 """
 import sys, re, time
-sys.path.insert(0, '/home/user/os8088/tools')
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, 'tools'))
 from os88marty import Marty
+from os88pkg import PKG_FMT
 
 LST = sys.argv[1] if len(sys.argv) > 1 else 'build/tracker.lst'
 SECS = float(sys.argv[2]) if len(sys.argv) > 2 else 20
@@ -56,7 +64,7 @@ def run():
     buf = m.read(0x40000, 0xA0000 - 0x40000)
     seg = None
     for o in range(0, len(buf) - 32, 16):
-        if buf[o:o+2] == b'O8' and buf[o+2] == 3 and buf[o+16:o+23] == b'TRACKER':
+        if buf[o:o+2] == b'O8' and buf[o+2] == PKG_FMT and buf[o+16:o+23] == b'TRACKER':
             seg = (0x40000 + o) >> 4
     base = seg << 4
     syms = symbols()

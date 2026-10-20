@@ -27,11 +27,15 @@ and in no screenshot.
 THE HISTORY LOADS. A row is clicked and the entry must become that row's
 ANSWER, which is the reason the pane exists at all.
 """
-import os, sys, time
+import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
-import os88marty, os88mouse, os88sym, dispcp
-from os88geom import MB_ENTSZ      # the bar cell stride, SPEC.md 12.2
+import os88marty, os88mouse, os88sym, os88ui, dispcp
+# ...and the bar cell's stride and fields, from the one copy that is checked
+# against kernel/menu.inc at import (tools/os88geom.py, and t_mirror in the
+# fast tier). They were four literals here.
+from os88geom import (MB_ENTSZ, MB_SEG, MB_XL,   # noqa: F401
+                      MBAR_H, MENU_ITEM_H)
 
 S = os88sym.linear
 KERNEL_SEG = 0x0060
@@ -45,7 +49,6 @@ TITLE_H = 18
 CAL_KEY_X0, CAL_KEY_Y0 = 4, 24
 CAL_BTN_W, CAL_BTN_H = 51, 14
 CAL_KEY_PIT, CAL_BTN_HG = 16, 4
-MBAR_H, MENU_ITEM_H, MB_XL, MB_SEG = 20, 16, 6, 10
 CAL_HROW_N, CAL_CUT = 26, ord("~")
 # the keypad, row-major, exactly as cal_keytab lists it
 KEYPAD = ["C", "CE", "<-", "/",
@@ -126,12 +129,8 @@ def full_repaint(m):
     """
     m.cmd(cmd="run")
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(200):
-        time.sleep(0.05)
-        if m.read(S("cp_dirty"), 1)[0] == 0:
-            break
-    else:
-        raise RuntimeError("ui_task never drained [cp_dirty]")
+    os88marty.until(m, lambda mm: mm.read(S("cp_dirty"), 1)[0] == 0,
+                    "ui_task to drain [cp_dirty]", poll=0.05, limit=10)
     os88marty.settle(m)
     m.cmd(cmd="pause")
 
@@ -207,10 +206,12 @@ def menu_pick(m, mo, cell, item):
     cell (SPEC.md 12.7) is APPENDED LAST in the table even though it is drawn
     leftmost, precisely so that bar index == set index + 1.
     """
-    t = m.read(S("menu_bar") + cell * MB_ENTSZ, MB_ENTSZ)
-    x = u16(t, MB_XL) + 6
-    mo.menu(x, 8, x, MBAR_H + 1 + item * MENU_ITEM_H + 8)
-    os88marty.settle(m)
+    os88ui.UI(m, mouse=mo, verbose=False).menu_pick(cell, item)
+    _quiet(m)                       # ...and then the APP, not the screen:
+                                    # menu_pick proves the item highlighted
+                                    # before it releases, so what is left to
+                                    # wait for is the command's effect - which
+                                    # is in the buffers `_quiet` watches
 
 
 def menu_title(m, seg, cell):
@@ -272,12 +273,48 @@ def press(m, ch):
         m.type_text(ch)
 
 
+# WHAT `typed` AND `ctrl` WAIT ON. Both used to end in `os88marty.settle(m)`
+# - the whole screen, 2.0 host seconds of proven stillness apiece - and the
+# next line is almost always `shown(m, seg, cal)`, thirteen bytes of the
+# package's own composition buffer. So they settle on THAT instead
+# (`os88marty.quiesce`), which is both an order of magnitude cheaper and a
+# stricter statement about the thing being read.
+#
+# It is a module global because the two functions are called forty times and
+# `seg`/`cal` are not known until the package is up; `watch_calc` is called
+# once, right after they are read. With it unset both fall back to the screen
+# settle, so the file still works if that call is ever moved.
+#
+# MEASURED: this one line was 137.9s of the ten-row profile in
+# docs/plans/SOAK-PARALLEL.md 11 - 60 settles at 2.3s - and the single most
+# expensive wait site in the suite.
+_WATCH = [None]
+
+
+def watch_calc(m, seg, cal):
+    # THE FOLD IS IN HERE TOO, and it has to be: `menu_pick` opens and closes
+    # the history pane, which does not touch the number field at all - so a
+    # watcher that only read `shown` would answer "already still" and wait for
+    # nothing. [cal_open] and [cal_nvis] are what the fold moves.
+    _WATCH[0] = lambda: (shown(m, seg, cal), context(m, seg, cal),
+                         bss(m, seg, cal["open"], 1),
+                         bss(m, seg, cal["nvis"], 2))
+
+
+def _quiet(m):
+    if _WATCH[0] is None:
+        os88marty.settle(m)
+    else:
+        os88marty.quiesce(m, _WATCH[0],
+                          what="the Calculator's display to stop changing")
+
+
 def typed(m, text, settle=True):
     for ch in text:
         press(m, ch)
-        time.sleep(0.15)
+        os88marty.pace(m, 0.15)
     if settle:
-        os88marty.settle(m)
+        _quiet(m)
 
 
 def ctrl(m, letter, settle=True):
@@ -285,13 +322,13 @@ def ctrl(m, letter, settle=True):
     key, exactly as SHIFTED above does it, so what arrives at int 16h is the
     control byte (3 for C, 22 for V) and not the letter."""
     m.key("ControlLeft", down=True, up=False)
-    time.sleep(0.05)
+    os88marty.pace(m, 0.05)
     m.key("Key" + letter.upper())
-    time.sleep(0.05)
+    os88marty.pace(m, 0.05)
     m.key("ControlLeft", down=False, up=True)
-    time.sleep(0.15)
+    os88marty.pace(m, 0.15)
     if settle:
-        os88marty.settle(m)
+        _quiet(m)
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
@@ -306,7 +343,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
-    time.sleep(2)
+    os88marty.settle(m)         # its first paint: the baseline below is a
+                                # pixel compare
     slot = dispcp.win_list(m, S)[-1]
     cx, cy, cw, ch = dispcp.win_rect(m, S, slot)
     seg = pkg_seg(m, slot)
@@ -321,11 +359,13 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # number needed to reach it is where that image ends - which the package
     # header carries at +8 (SPEC.md 20.2).
     img_end = u16(bss(m, seg, 0, 32), 8)
-    cal = {"nvis": img_end + 8, "open": img_end + 22, "err": img_end + 23,
-           "op": img_end + 24, "hn": img_end + 27, "hhead": img_end + 28,
-           "cbuf": img_end + 104, "nbuf": img_end + 136,
-           "htext": img_end + 296}
+    cal = {"nvis": img_end + 8, "open": img_end + 14, "err": img_end + 15,
+           "op": img_end + 19, "hn": img_end + 20, "hhead": img_end + 21,
+           "cbuf": img_end + 76, "nbuf": img_end + 104,
+           "htext": img_end + 190}
     print("image ends at +%d; [cal_nvis] at +%d" % (img_end, cal["nvis"]))
+    watch_calc(m, seg, cal)         # ...and from here `typed`/`ctrl` settle
+                                    # on the display buffer, not the screen
 
     # The BASELINE, before a single key: whatever this reports is the window
     # manager's and not the app's, because nothing here has drawn twice yet.
@@ -344,6 +384,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         ("c2.50+0=",      "2.5",          "...and a COMPUTED one is stripped"),
         ("c9q",           "3",            "square root"),
         ("c2q",           "1.41421356",   "...and an irrational one"),
+        # Scaled to 7.2e18 - 63 bits - whose Newton seed is 2^32: it wrapped
+        # to a zero divisor and the root showed '0' (SPEC.md 65.2). The root
+        # is 26843.54559, rounded into nine digits by cal_pack.
+        ("c720575940q",   "26843.5456",   "...and a 63-bit radicand"),
         ("c4r",           "0.25",         "reciprocal"),
         ("c200+10%=",     "220",          "percent of the accumulator"),
         ("c5/0=",         "Error",        "a zero divisor is refused"),
@@ -560,7 +604,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         fails.append("no calculation was recorded in the history at all")
 
     typed(m, "h")
-    time.sleep(1.5)
+    os88marty.quiesce(m, lambda: dispcp.win_rect(m, S, slot),
+                      what="the frame to take its new size")
     os88marty.settle(m)
     cx2, cy2, cw2, ch2 = dispcp.win_rect(m, S, slot)
     content_h = ch2 - TITLE_H - 1
@@ -618,7 +663,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     before = shown(m, seg, cal)
     mo.to(kx, ky)
     mo._edge(True)
-    time.sleep(0.5)
+    os88marty.pace(m, 0.5)
     mo.to(cx2 + 1 + 200, ky)                   # ...slide off it
     mo._edge(False)
     os88marty.settle(m)
@@ -632,7 +677,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # --- 6. folding back up --------------------------------------------------
     print("\n-- folding it back up --")
     typed(m, "h")
-    time.sleep(1.5)
+    os88marty.quiesce(m, lambda: dispcp.win_rect(m, S, slot),
+                      what="the frame to take its new size")
     os88marty.settle(m)
     cx3, cy3, cw3, ch3 = dispcp.win_rect(m, S, slot)
     nvis3 = u16(bss(m, seg, cal["nvis"], 2))

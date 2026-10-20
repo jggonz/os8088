@@ -6,8 +6,19 @@
 
 A fixture volume out of tools/os88hdd.py, with HIBER.DRV, CTRL.DRV and
 HDD.DRV in its root, on MartyPC's os8088_xt_hdd - XT-IDE's option ROM, which
-is rung 0 (SPEC.md 52.1), the transport the field machine has and the only
-one the resume stub speaks.
+is rung 0 (SPEC.md 52.1), the same RUNG the field machine's controller is and
+the only transport the resume stub speaks.
+
+**THE SAME RUNG IS NOT THE SAME TIMING, and this row asserts behaviour and
+never speed.** The field machine is an ST-225 on an ST-11M and this is an
+XT-IDE, and they are 8-13x apart: MartyPC's hard disk has NO timing model -
+the mechanical one this tree wrote and field-checked
+(tools/martypc/patches/04-floppy-disk-timing.patch, PERFORMANCE.md Part 9 Set
+37) is the FLOPPY's, and the ATA device carries a 200ms reset constant and
+nothing per sector - so every second here is the 8088 grinding through the
+option ROM's byte-at-a-time PIO. A session quoting this row's wall time as
+"what a hibernate costs" read 43 guest seconds for an operation the owner
+measures at ~4 on iron (docs/reports/KERN-DOS-BUDGET-2026-09-13.md 3.2).
 
 Two passes, and each ASSERTS out of the guest's memory rather than out of a
 screenshot, because the thing under test is that memory:
@@ -22,6 +33,10 @@ screenshot, because the thing under test is that memory:
      CLICK on Resume must answer it, and the desktop that comes back must be
      the OLD one: [hb_resumes] = 1, the About instance alive with its window,
      no Hibernate window left, and HIBERNAT.PTR gone from the volume.
+     A DOS handoff's post is poked in before the picture is taken and must be
+     GONE after the wake (SPEC.md 96.40.6): the handoff writes its own image
+     with that latch deliberately live, and a wake that does not spend it
+     kills "Take the whole OS" for the rest of the restored session.
   2. DISCARD. The same again through the KEYBOARD - Enter to hibernate, Esc at
      the question: the desktop is a fresh boot's - no About, [hb_resumes] = 0
      - and the pointer is gone all the same.
@@ -43,18 +58,55 @@ import time
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests/unit")
 sys.path.insert(0, "tests")
+import os88build as _B
 import os88marty as M                                     # noqa: E402
 from harness import check, done                           # noqa: E402
 
 RUN = "build/martypc/run"
 TEMPLATE = os.path.join(RUN, "media/hdds/default_xtide.vhd")
-VHD = os.path.abspath("build/hiber.vhd")
-FLOPPY = "build/hiber360.img"
+# **THIS PROCESS'S OWN DISKS, and that is the whole of why this row was
+# flaky.** They were `build/hiber.vhd` and `build/hiber360.img`, fixed paths,
+# rebuilt by `fixture()` at the start of every run - and `os88marty.launch`
+# copies FLOPPIES into the instance's run directory but passes `--mount
+# hd:0:<path>` straight through, so three concurrent runs mounted ONE hard
+# disk read-write in three emulators while each rewrote it from the template
+# underneath the others.
+#
+# Rated at a lane of three it failed 2 runs in 6, and the reason it took three
+# rounds to find is that it fails at a DIFFERENT LEG every time - whichever
+# step happens to collide. All three of these are the same collision:
+#
+#   - the first boot never reaches a desktop, because another run's
+#     HIBERNAT.PTR is on the disk and the machine asks the resume question
+#     instead of showing one;
+#   - `both files reached the disk` is false, because another run rebuilt the
+#     volume from the template between the write and the read;
+#   - the [Resume] click does nothing, with the machine ALIVE, nothing locked,
+#     the pointer proven on the button and mouse_btn proven decoded - because
+#     the image it is being asked to resume from is not the one this machine
+#     wrote.
+#
+# The last of those is what makes a fixed path worth this comment rather than
+# a one-line fix: it reads exactly like a product defect in the window's hit
+# test, and the row's own header records that the hit test HAS been broken
+# here before. docs/WRITING-TESTS.md 5 is the rule one level up - a row may
+# not write a shared path - and a `--mount` is the case that rule's own
+# wording does not cover, because the runner is not `make`.
+_TAG = os.getpid()
+VHD = os.path.abspath(_B.at("build/hiber-%d.vhd" % _TAG))
+FLOPPY = _B.at("build/hiber360-%d.img" % _TAG)
+# --machine points this at another 8088 with a fixed disk. The one that
+# matters is os8088_5150_herc_hdd_gla, whose staging area is at B000 rather
+# than B800 (SPEC.md 87.5): a hibernate needs the fixed disk and the ADAPTER
+# picks that segment, so until that machine existed the mono arm of the resume
+# had never run at all - which is how SPEC.md 96.49.2 shipped on the DOS route
+# beside it.
 MACHINE = "os8088_xt_hdd"
 
 # kernel/hiber.inc, kernel/instance.inc - the module's own constants
 HB_M_ASK, HB_M_BUSY, HB_M_RESUME, HB_M_GONE = 0, 1, 2, 3
-KIND_ABOUT, KIND_HIBER = 0, 5
+KIND_ABOUT, KIND_HIBER = 0, 3   # kernel/instance.inc - it was 5 until
+                                # Timer and Bounce left the kernel (#264)
 I_RECSZ, INST_MAX = 32, 12
 I_STATE, I_KIND, I_WIN = 0, 2, 4
 W_FLAGS = 0
@@ -81,31 +133,50 @@ def button1(m):
     return x + BTN1_DX, y + BTN1_DY
 
 
+# **THE FILE, NOT THE IMAGE** (docs/plans/O88-COMPRESSION-PLAN.md). `kernel.bin`
+# is what the kernel IS and `kernel.sys` is what goes on a volume; since
+# `PKGZ ?= lz4` they are different bytes and different lengths, and both
+# fixtures below name a kernel by hand where every Makefile rule names
+# `$(KERNFILE)`. Getting it wrong is silent at build time and fatal at boot:
+# the VHD carried 208 sectors of unpacked image under a boot record built for
+# the packed one, and the machine reached a loading screen and stopped there
+# for the whole 360-second budget. `tools/os88hdd.py` refuses it now, and this
+# is the caller that taught it to.
+KERNEL = "build/kernel.sys"
+
+
 def fixture():
     """The VHD, rebuilt from the tree every run: KERNEL.SYS plus the three
     modules and the driver the boot volume must carry (SPEC.md 2.8.4)."""
     subprocess.check_call(
         ["python3", "tools/os88hdd.py", "--template", TEMPLATE, "--out", VHD,
-         "--kernel", "build/kernel.bin", "--vbr", "build/boothd.bin",
-         "--mbr", "build/mbr.bin",
-         "--file", "HIBER.DRV=build/hiber.drv",
-         "--file", "CTRL.DRV=build/ctrl.drv",
-         "--file", "HDD.DRV=build/hdd.drv"])
+         "--kernel", _B.at(KERNEL), "--vbr", _B.at("build/boothd.bin"),
+         "--mbr", _B.at("build/mbr.bin"),
+         "--file", "HIBER.DRV=" + _B.at("build/hiber.drv"),
+         "--file", "CTRL.DRV=" + _B.at("build/ctrl.drv"),
+         "--file", "HDD.DRV=" + _B.at("build/hdd.drv")])
 
 
 def floppy():
     """A 360KB system disk whose SYSTEM.CFG wants HDD.DRV (row 1 = bit 1),
     the Makefile's ethertest shape."""
-    os.makedirs("build/hibcfg", exist_ok=True)
-    cfg = "build/hibcfg/system.cfg"          # its basename IS the file's name
+    d = _B.at("build/hibcfg-%d" % _TAG)      # per-process, like the disks
+    os.makedirs(d, exist_ok=True)
+    cfg = os.path.join(d, "system.cfg")      # its basename IS the file's name
     with open(cfg, "wb") as f:
         f.write(b"O88CFG\0\0" + (3).to_bytes(2, "little") + b"DW"
                 + bytes([1, 2]) + (1 << 1).to_bytes(2, "little") + b"\0\0")
     subprocess.check_call(
         ["python3", "tools/os88disk.py", "-o", FLOPPY, "--size", "360",
-         "--boot", "build/boot360.bin", "--kernel", "build/kernel.bin",
-         "build/hdd.drv", "build/hiber.drv", "build/ctrl.drv", "build/format.drv",
-         "build/clone.drv", cfg])
+         "--boot", _B.at("build/boot360.bin"), "--kernel", _B.at(KERNEL),
+         _B.at("build/hdd.drv"), _B.at("build/hiber.drv"),
+         _B.at("build/ctrl.drv"), _B.at("build/format.drv"),
+         _B.at("build/diskops.drv"), cfg])
+
+
+# A segment that is plausible and is nobody's: the wake must not care what it
+# points at, only that it is gone (SPEC.md 96.40.6).
+HB_DOSSEG_SENTINEL = 0x1234
 
 
 def byte(m, name):
@@ -139,7 +210,7 @@ def shot(m, name):
     """A rendered screenshot into build/, for the eye (the assertions are
     the memory reads, not this)."""
     try:
-        M.write_png_rgb("build/hiber-%s.png" % name, 640, 200,
+        M.write_png_rgb("build/hiber-%d-%s.png" % (_TAG, name), 640, 200,
                         M.crop_rgb(m, 0, 0, 640, 200))
     except Exception as e:                       # a picture is not a check
         print("shot %s: %s" % (name, e))
@@ -170,6 +241,34 @@ def img_present():
     return root_has("HIBERNAT.IMG")
 
 
+def wrote(names, secs=20.0):
+    """Wait for NAMES to appear in the VHD's root, read on the HOST.
+
+    **THE GUEST HAVING WRITTEN IS NOT THE HOST BEING ABLE TO READ IT.** Every
+    other reading in this row comes out of guest memory over the debug
+    socket, which is exact the instant it is taken; these two come out of the
+    VHD FILE, which the emulator is holding open and writes to on its own
+    schedule. The guest's `int 13h` has returned and the sectors are in
+    MartyPC's hands - when they reach the host's filesystem is not something
+    the guest can be asked about.
+
+    Read once, that is a race, and at a lane of three it is a LOST one: the
+    check `both files reached the disk` failed 1 run in 6 on a machine that
+    had written both files perfectly (the run after it resumed from them).
+    docs/WRITING-TESTS.md 7.1 - wait for the thing rather than for a clock -
+    with the twist that the thing here is not the guest's, so the budget is
+    the HOST's and there is nothing else it could be.
+    """
+    end = time.time() + secs
+    while True:
+        have = [n for n in names if root_has(n)]
+        if len(have) == len(names):
+            return True, have
+        if time.time() >= end:
+            return False, have
+        time.sleep(0.5)
+
+
 def boot(driver):
     if driver:
         return M.launch(FLOPPY, machine=MACHINE,
@@ -193,9 +292,149 @@ def hibernate(m, mo, mouse):
         m.key("Enter")
     M.until(m, lambda mm: M.video_is_text(mm.video()),
             "the hibernated sentence in text mode", poll=0.5, limit=240)
-    check(ptr_present() and img_present(),
-          "both files reached the disk (the positive control for the "
-          "'gone' checks below)")
+    ok, have = wrote(["HIBERNAT.PTR", "HIBERNAT.IMG"])
+    check(ok, "both files reached the disk (the positive control for the "
+              "'gone' checks below)", got=have,
+          want=["HIBERNAT.PTR", "HIBERNAT.IMG"])
+
+
+def _diag(m, mo):
+    """Everything that decides whether a PROVEN click could have been acted on.
+
+    `os88mouse.click` proves both halves of itself - `to` raises if the
+    published pointer never reaches the target, `_edge` raises if the guest's
+    own `mouse_btn` never agrees - so a click that returns and changes nothing
+    is not a lost packet. What is left is where the click LANDED and whether
+    the machine could act on it, and this is that list.
+    """
+    try:
+        wins = [w for k, w in instances(m) if k == KIND_HIBER]
+        if wins:
+            r = m.readseg(0x0060, wins[0], 10)
+            rect = tuple(r[i] | (r[i + 1] << 8) for i in (2, 4, 6, 8))
+            print("      KIND_HIBER window x=%d y=%d w=%d h=%d, button1 at %s"
+                  % (rect + (button1(m),)))
+        print("      pointer now %s, mouse_btn=%02x"
+              % (mo.where()[:2], mo.where()[2]))
+        t0 = mo.ticks()
+        time.sleep(1.0)
+        print("      BIOS ticks +%d in a host second (0 = the machine is "
+              "stopped)" % (mo.ticks() - t0))
+        for n in ("sch_lock", "gfx_lock_flag", "gfx_lock_own",
+                  "gfx_lock_want", "ui_rebootq"):
+            try:
+                print("      %-14s %d" % (n, byte(m, n)))
+            except Exception:
+                pass
+        v = m.video()
+        print("      video %s" % {k: v[k] for k in
+                                  ("field_w", "field_h", "mode", "text")
+                                  if k in v})
+        # THE DISCRIMINATOR. A click that is proven at the pointer and at
+        # mouse_btn and still does nothing is either a machine that dispatches
+        # no input at all, or a click path that specifically does not reach
+        # this button - and the row's own header records that the second has
+        # happened here before ("its hit test once clobbered the y and no
+        # click ever landed - only Enter worked"). The keyboard answers the
+        # same window, so this tells the two apart in one press.
+        before = word(m, "hb_resumes")
+        m.key("Enter")
+        try:                            # a GUEST-time budget
+            M.until(m, lambda mm: word(mm, "hb_resumes") != before,
+                    "Enter to be acted on", poll=0.5, limit=10.0)
+            print("      *** ENTER WORKED where the click did not: the "
+                  "CLICK path is the defect, not the machine ***")
+            return
+        except M.MartyError:
+            pass
+        print("      Enter did nothing either: the machine dispatches no "
+              "input at all")
+    except Exception as e:
+        print("      (diagnostic failed: %s)" % e)
+
+
+def answer(m, mo, what, done):
+    """Click the Hibernate window's first button, and say what happened.
+
+    THE SAME SHAPE AS `restart` AND FOR THE SAME REASON. A single unconfirmed
+    input carrying the rest of the row is how this one fails: the machine
+    sits at the question, nothing this row waits for can ever come true, and
+    the message that comes out names a 720-second budget rather than a lost
+    click.
+
+    A second click is only right while the window is STILL THERE - a machine
+    that has taken the first one and is reading its image back has no button
+    under the pointer, and clicking the desktop it is about to restore is not
+    a retry, it is a new event. So the retry is gated on the KIND_HIBER
+    instance still being live, which is also what tells the two apart in the
+    report.
+    """
+    for attempt in (1, 2):
+        mo.click(*button1(m))
+        try:
+            M.until(m, done, what, poll=0.5, limit=60 if attempt == 1 else 240)
+            if attempt == 2:
+                print("   the [Resume] click needed sending TWICE")
+            return
+        except M.MartyError:
+            live = [k for k, _ in instances(m) if k == KIND_HIBER]
+            print("   answer attempt %d: %s - hb_mode=%d, hb_resumes=%d, "
+                  "KIND_HIBER live=%s" % (attempt, what, byte(m, "hb_mode"),
+                                          word(m, "hb_resumes"), bool(live)))
+            _diag(m, mo)
+            shot(m, "answer%d" % attempt)
+            if attempt == 2 or not live:
+                raise               # the window is gone: it TOOK the click
+                                    # and is working, so a second one would
+                                    # land on whatever replaced it
+
+
+def restart(m):
+    """The key that restarts a hibernated machine, and the wait it earns.
+
+    IT WAS `m.key("Space"); time.sleep(1.0)` and then one 240-second wait for
+    [hb_mode], which is two of docs/WRITING-TESTS.md 7's mistakes in three
+    lines: a host sleep before an event the guest has to reach, and a single
+    unconfirmed keystroke carrying the whole rest of the row. Rated at a lane
+    of three it failed 3 runs in 6, every one of them here, having burned 720
+    GUEST seconds - twelve emulated minutes for a reboot that takes four,
+    which is not a slow machine, it is a machine that was never going to get
+    there.
+
+    So the key is CONFIRMED, in the only way it can be: the machine has to
+    leave the sentence. `hbm_kbdrain` empties the ROM's buffer before the
+    sentence is printed (SPEC.md 87.4 step 7), so a key that arrives in the
+    window between the drain and `int 0x16` is the one that can be dropped -
+    and dropping it parks the guest in the sentence for ever, where nothing
+    this row waits for will ever come true. A second press costs nothing when
+    the first was taken (the machine has already left the buffer behind), and
+    it is the whole of the failure when it was not.
+
+    On the way out it says which happened, because "the key needed sending
+    twice" is a fact about this emulator's keyboard that the next reader of a
+    720-second timeout should not have to re-derive.
+    """
+    for attempt in (1, 2):
+        m.key("Space")
+        try:
+            M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
+                    "the fresh boot to ask the question", poll=1.0,
+                    limit=60 if attempt == 1 else 240)
+            if attempt == 2:
+                print("   the restart key needed sending TWICE (the first "
+                      "landed between hbm_kbdrain and int 16h)")
+            return
+        except M.MartyError:
+            v = m.video()
+            print("   restart attempt %d: no question yet - video %s, "
+                  "text=%s, hb_mode=%d, hb_resumes=%d"
+                  % (attempt, v.get("mode", v.get("field_w")),
+                     M.video_is_text(v), byte(m, "hb_mode"),
+                     word(m, "hb_resumes")))
+            shot(m, "restart%d" % attempt)
+            if attempt == 2 or not M.video_is_text(v):
+                raise               # not the sentence: a second key is not
+                                    # the answer and would only hide it
 
 
 def pass_resume(driver):
@@ -208,11 +447,35 @@ def pass_resume(driver):
         quiet(m)
         check(any(k == KIND_ABOUT for k, _ in instances(m)),
               "the About box is up before hibernating")
+
+        # --- A DOS HANDOFF'S POST, IN THE PICTURE (SPEC.md 96.40.6) --------
+        # `hbm_dosrun` takes its hibernation image with `[hb_dosseg]`
+        # DELIBERATELY LIVE, so the restored kernel knows whose record to put
+        # the exit code in - an image carrying a post is a legitimate thing,
+        # and the invariant is that THE WAKE SPENDS IT. It used to be spent
+        # only on the arm where a DOS program really came back, and
+        # `[hb_doscode]` is `KDH_NOCODE` on every other resume by
+        # construction (`hb_probe_x` says so in as many words) - so the latch
+        # came back with the image and nothing ever spent it.
+        # `osapi_dos_handoff_x` refuses a second post while one stands, so
+        # "Take the whole OS" was dead for the whole restored session and the
+        # box reported it as "Not enough memory" on a machine with 425K free.
+        #
+        # Poked rather than staged, `tests/fishedge.py`'s shape: the word is
+        # what the handoff leaves behind and one store reproduces it, where
+        # reproducing the handoff costs a second machine and a hard disk it
+        # has already got. Nothing dereferences it on this path, so the
+        # sentinel only has to be non-zero.
+        #
+        # MEASURED both ways on this row: `hb_dosseg` reads 0000 after the
+        # resume with the fix in and 1234 - the sentinel, intact - without it.
+        m.write(m.sym("hb_dosseg"), HB_DOSSEG_SENTINEL.to_bytes(2, "little"))
+        check(word(m, "hb_dosseg") == HB_DOSSEG_SENTINEL,
+              "a DOS handoff's post is standing when the picture is taken",
+              got=word(m, "hb_dosseg"), want=HB_DOSSEG_SENTINEL)
+
         hibernate(m, mo, mouse=True)
-        m.key("Space")                            # ...and restart
-        time.sleep(1.0)
-        M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
-                "the fresh boot to ask the question", poll=1.0, limit=240)
+        restart(m)
         quiet(m)                                  # ...and paint it. Not a
                                                   # settle: the ROM's disk
                                                   # probe holds a static
@@ -226,9 +489,8 @@ def pass_resume(driver):
         check(not any(k == KIND_ABOUT for k, _ in instances(m)),
               "the fresh boot has no About box yet")
         shot(m, "question")
-        mo.click(*button1(m))                     # [Resume], with the mouse
-        M.until(m, lambda mm: word(mm, "hb_resumes") == 1,
-                "[hb_resumes] to reach 1", poll=0.5, limit=240)
+        answer(m, mo, "[hb_resumes] to reach 1",
+               lambda mm: word(mm, "hb_resumes") == 1)
         quiet(m)
         inst = instances(m)
         about = [w for k, w in inst if k == KIND_ABOUT]
@@ -239,12 +501,21 @@ def pass_resume(driver):
               "the Hibernate window closed itself on waking", got=inst)
         check(byte(m, "hb_mode") == HB_M_GONE, "the module's state is GONE",
               got=byte(m, "hb_mode"), want=HB_M_GONE)
+        check(word(m, "hb_doscode") == 0xFFFF,
+              "...and no DOS program came back, which is what makes the check "
+              "below the one that matters (SPEC.md 96.40.6)",
+              got=word(m, "hb_doscode"), want=0xFFFF)
+        check(word(m, "hb_dosseg") == 0,
+              "the DOS handoff's post was spent by the wake (SPEC.md 96.40.6) "
+              "- left standing it refuses every later handover for the rest "
+              "of the session, and the box calls that a memory shortage",
+              got=word(m, "hb_dosseg"), want=0)
         check(byte(m, "sch_lock") == 0, "sch_lock is down again",
               got=byte(m, "sch_lock"), want=0)
         check(byte(m, "gfx_lock_flag") == 0, "the gfx lock is released",
               got=byte(m, "gfx_lock_flag"), want=0)
         t0 = word(m, "ticks")
-        time.sleep(1.5)
+        M.pace(m, 1.5)                  # guest time: a stopped guest ends it
         check(word(m, "ticks") != t0, "the tick is running after the resume")
         shot(m, "resumed")
         # the menu bar still answers: open and close the System menu
@@ -261,10 +532,7 @@ def pass_discard(driver):
         mo.menu(CHIP_X, CHIP_Y, CHIP_X, ABOUT_Y)
         quiet(m)
         hibernate(m, mo, mouse=False)
-        m.key("Space")
-        time.sleep(1.0)
-        M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
-                "the fresh boot to ask the question", poll=1.0, limit=240)
+        restart(m)
         quiet(m)
         check(byte(m, "hb_mode") == HB_M_RESUME, "the question, again",
               got=byte(m, "hb_mode"), want=HB_M_RESUME)
@@ -286,15 +554,43 @@ def main():
     ap.add_argument("--driver", action="store_true",
                     help="boot from a floppy and reach the disk through HDD.DRV")
     ap.add_argument("--only", choices=["resume", "discard"])
+    ap.add_argument("--machine",
+                    help="another 8088 with a fixed disk. The one that matters "
+                         "is os8088_5150_herc_hdd_gla, whose staging area is at "
+                         "B000 rather than B800 (SPEC.md 87.5)")
     a = ap.parse_args()
-    fixture()
-    if a.driver:
-        floppy()
-    if a.only != "discard":
-        pass_resume(a.driver)
-    if a.only != "resume":
-        pass_discard(a.driver)
-    done("hibernate" + (" (driver)" if a.driver else ""))
+    if a.machine:
+        global MACHINE
+        MACHINE = a.machine
+    try:
+        fixture()
+        if a.driver:
+            floppy()
+        if a.only != "discard":
+            pass_resume(a.driver)
+        if a.only != "resume":
+            pass_discard(a.driver)
+        done("hibernate" + (" (driver)" if a.driver else ""))
+    finally:
+        sweep()
+
+
+def sweep():
+    """Take this process's disks away again.
+
+    A 32MB VHD per run is not something to leave in build/ - and a per-PROCESS
+    name cannot be reclaimed by the next run the way a fixed one was, since
+    pid_max wraps in minutes on a busy box and the next owner of this number
+    is somebody else. The screenshots stay: they are the only thing here worth
+    reading after the fact, and they are kilobytes.
+    """
+    import shutil
+    for p in (VHD, FLOPPY):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    shutil.rmtree(_B.at("build/hibcfg-%d" % _TAG), ignore_errors=True)
 
 
 if __name__ == "__main__":

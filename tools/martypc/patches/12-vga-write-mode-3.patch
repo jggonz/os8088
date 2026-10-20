@@ -1,0 +1,32 @@
+diff --git a/crates/marty_core/src/devices/vga/graphics_controller.rs b/crates/marty_core/src/devices/vga/graphics_controller.rs
+index b975310d..fefedec5 100644
+--- a/crates/marty_core/src/devices/vga/graphics_controller.rs
++++ b/crates/marty_core/src/devices/vga/graphics_controller.rs
+@@ -484,8 +484,26 @@ impl GraphicsController {
+                 });
+             }
+             WriteMode::Invalid => {
++                // os8088: VGA WRITE MODE 3 (the enum's fourth value is the VGA's, an EGA having
++                // three). The rotated CPU byte ANDed with the Bit Mask register is the bit mask;
++                // every plane's data is the expansion of its Set/Reset bit, put through the
++                // Logical Operation against the latches as mode 0 does. The video player's
++                // colour sub-records are this store (SPEC.md 98.1.3.2.4).
+                 self.stats.mode_3_writes = self.stats.mode_3_writes.wrapping_add(1);
+-                log::warn!("Invalid write mode!");
++                let data_rot = VGACard::rotate_right_u8(byte, self.graphics_data_rotate.count());
++                let bitmask = self.graphics_bitmask;
++                self.graphics_bitmask &= data_rot;
++                for i in 0..4 {
++                    self.pipeline_buf[i] = match self.graphics_set_reset & (0x01 << i) != 0 {
++                        true => 0xFF,
++                        false => 0x00,
++                    };
++                    self.apply_logic_fn(i);
++                }
++                self.graphics_bitmask = bitmask;
++                self.foreach_plane(seq, a0, |gc, seq, plane| {
++                    seq.plane_set(plane, offset, a0, gc.pipeline_buf[plane]);
++                });
+             }
+         }
+     }

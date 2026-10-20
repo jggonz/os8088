@@ -33,6 +33,7 @@ this file's happy path and pass its inverse. Without that, "the click worked"
 is a claim about the click path and not about the flag.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -129,8 +130,8 @@ def main(argv):
         # control made this press unanswerable one run in four, by two routes,
         # both of them in mines.asm's own reveal path:
         #
-        #   cmp byte [mn_state+bx], MN_S_COVER
-        #   jne .out                    ; an OPEN cell is done: nothing happens
+        #   test byte [mn_cell+bx], MN_C_OPEN | MN_C_FLAG
+        #   jnz .out                    ; an OPEN cell is done: nothing happens
         #
         # so a control click whose flood reached the bottom-left cell - it
         # opens anywhere from 1 to 62 of the 81, measured - left this press
@@ -139,7 +140,7 @@ def main(argv):
         # went past the window to the dock" and blamed SPEC.md 11.93.
         #
         # On a FRESH board neither can happen, and mines.asm says so rather
-        # than this comment hoping so: every cell is MN_S_COVER, and
+        # than this comment hoping so: every cell is covered (mn_cell 0), and
         #
         #   cmp byte [mn_mode], MN_M_FRESH
         #   jne .armed
@@ -205,8 +206,9 @@ def main(argv):
                         % (cx, cy, rect[1], rect[1] + h - 1))
 
         w, hgt, d = m.fbuf()
-        os88marty.write_png_rgb("/tmp/dispmine-%s.png" % want, w, hgt, d)
-        say("screen written to /tmp/dispmine-%s.png" % want)
+        os88marty.write_png_rgb(tempfile.gettempdir() + "/dispmine-%s.png" % want, w, hgt, d)
+        say("screen written to %s/dispmine-%s.png"
+            % (tempfile.gettempdir(), want))
 
     print()
     for f in fail:
