@@ -2110,7 +2110,7 @@ def holds_of(hits, a, b):
 
 
 def flow_leg(tag):
-    """isotronflow (SPEC.md 108.13.6): the game driven through its UI.
+    """isotronflow (SPEC.md 108.13.5): the game driven through its UI.
 
     One boot. The title's lines are on the glass; `1` - a real key - starts a
     STORED game (it_tflags SEED: the harness's seed instead of the clock's,

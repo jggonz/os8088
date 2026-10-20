@@ -90566,7 +90566,7 @@ smaller one silently becomes the answer to both.
 | app walk, budget 64 | **60** | 240 | 68,541,774 |
 | **app walk, budget 32** | **57** | **241** | **68,298,000** |
 
-So the deadline regression §135.4 found is gone — 60 back to 57 against the
+So the deadline regression PERFORMANCE.md §135.4 found is gone — 60 back to 57 against the
 pre-conversion 56 — and it costs **one frame in four hundred** with dead smoke
 still on the screen, with the queue reaching 6 entries where it reached 5
 (`MC_MAXDRN` is 16, so nothing is near overflowing). The calmer scenario is
@@ -184940,7 +184940,9 @@ deliberate simplifications. **The answer to the go/no-go is GO** (102.7.3), so t
 plays and `OSAPI_FSX_CAPS` bit `FSXM_HERC` is a playable adapter alongside `FSXM_VGA0D` and
 `FSXM_CGA320`; an EGA desktop still refuses (102.1).
 
-**102.7.1 The Hercules is the CGA engine with another card side.** `xb_herc` = 1 (and
+#### 102.7.1 The Hercules is the CGA engine with another card side
+
+`xb_herc` = 1 (and
 `xb_cga` = 1: the RAM side - the boxes, the poses, the footprints, the frame, the text grid
 - is shared whole). What is the Hercules's own is a card ADDRESS, in `herc.inc`:
 
@@ -184984,7 +184986,9 @@ game is `XH_COLS` = 45 columns wide, so `xb_wcols` = 45 and `xb_Smax` = ncols - 
 respawns ahead by `xa_ahead` = 215 + 40 (the same distance beyond the wider picture's edge).
 The opponents are two, the CGA's (`XB_NAI_CGA`, 102.4; three are over the gates on both, 102.7.3).
 
-**102.7.2 Compiled hot poses** (`sprite.inc`, `xs_compile`, `xs_compile_v`). The pose draw was
+#### 102.7.2 Compiled hot poses (`sprite.inc`, `xs_compile`, `xs_compile_v`)
+
+The pose draw was
 the biggest RAM cost of a frame (a rider's ~90 bytes at ~85 clocks each through the `(AND, OR)`
 loop; ~85 clocks a (byte, layer) pair on the VGA), and a pose's bytes are known at load. Poses
 0, 1 and 12 are 80% of a lap's frames and nine (0 1 12 15 16 9 2 11 10) are 94%
@@ -185015,7 +185019,9 @@ hangs outside the box being drawn still take the interpreter.** A neighbour whol
 box now takes the compiled draw too (`xc_draw` reads the record from `[xc_cj]` and the placement from
 `[xc_dy]`, `[xc_db]`, `[xc_dp]`, so the box's own bike and a neighbour share it).
 
-**102.7.3 The gate, and the answer.** `tests/excitebike_perf.py --herc --lap` (soak row
+#### 102.7.3 The gate, and the answer
+
+`tests/excitebike_perf.py --herc --lap` (soak row
 `excitebikelapherc`), MartyPC's Hercules XT (`os8088_5150_herc_gla`), Selection A at turbo over
 a whole course with the sound on: **mean period 94,871 clocks = 50.31 Hz (the plan's gate is
 18.2 Hz = 262,144: met 2.76x), p99 148,846, one CRT frame a game frame** (1.6% of the frames take
@@ -185051,7 +185057,9 @@ own registers and the frame length R4/R5 is untouched, but no monitor has been a
 docs/FIELD-MACHINES.md's to measure. Against a card twice as slow the lap would still be two CRT
 frames (25 Hz), over the gate.
 
-**102.7.4 Edge riders** (`xc_place`, `xc_drawc`; `xv_bike`'s record-skipping loop). A bike now
+#### 102.7.4 Edge riders (`xc_place`, `xc_drawc`; `xv_bike`'s record-skipping loop)
+
+A bike now
 shows from `XB_EDGE` = 22 pixels off the left edge to 22 off the right, on all three adapters
 (wave 4 drew a bike only when its 24-pixel box was wholly on the picture, so an opponent popped in and
 out). `xa_record` keeps a record for x in [-22, 8 x wcols - 2] (`xb_xlo`, `xb_xspan`) and x is read
@@ -185068,7 +185076,9 @@ pixels that show at each edge with the window scrolling, pixel for pixel against
 renderer (which clips at the pixel: the edges are byte boundaries) - on all three adapters, and 25%
 of the random-position arm's bikes are placed anywhere in [-22, width - 2].
 
-**102.7.5 The VGA 1-pixel pan: measured, and it stays OFF.** The plan's gate was "only if
+#### 102.7.5 The VGA 1-pixel pan: measured, and it stays OFF
+
+The plan's gate was "only if
 eight phases fit". They do fit a segment - the eight-phase VGA blob set is **58,259 bytes**
 (29,113 for four) - but not the plan's 44 KB claim, so the claim would be ~61 KB, and that is not
 the only price: the CRTC offset register counts words, so a 41-column window is an odd pitch the
@@ -185079,7 +185089,8 @@ in 0Dh (writing 4 shifts the picture 4 game pixels, measured), so the option is 
 somebody builds it; nothing in this wave does. The scroll stays at 8 pixels (one byte) on every
 adapter, the sprites at even x.
 
-**102.7.6 Validation** (all soak rows; nothing external is read).
+#### 102.7.6 Validation (all soak rows; nothing external is read)
+
 * `tests/excitebike_video.py --adapter herc` (row `excitebikevideoherc`): the whole pixel gate of
   102.6 with `Game.screen_herc` decoding the card's memory through the ring and banks the way the
   6845 scans them (a pair per game pixel) against `frame_herc`: the sprite claim's blobs AND its
@@ -185118,7 +185129,9 @@ line) do not apply and would have to be compiled for the (45, 4) pair.
 
 ### 102.8 Polish, the four geometries, the low-memory refusal (wave 7)
 
-**102.8.1 The lane dash, on the two adapters that could not show it.** The art pass looked at every
+#### 102.8.1 The lane dash, on the two adapters that could not show it
+
+The art pass looked at every
 contact sheet on the three adapters (`make excitebike-art`) and found one defect that only two of
 them have. The lane dividers of the track are drawn `99996666` (palette slot 9, white, and slot 6,
 the light dirt) on a ground of slot 5. On the VGA those are three colours. On the CGA the ink map
@@ -185138,7 +185151,9 @@ a tile and its mono form are the dash row, which no other tile shares; `excitebi
 were looked at on all five - meadow, dusk, desert, frost, night: every course has its sky, grass
 and track told apart and the rider readable - and are unchanged.
 
-**102.8.2 The four geometries.** `make excitebikedisk` builds the game floppy in 1.44MB, 720KB, 1.2MB
+#### 102.8.2 The four geometries
+
+`make excitebikedisk` builds the game floppy in 1.44MB, 720KB, 1.2MB
 and 360KB, each `os88disk.py --verify`'d in the recipe. `tests/excitebike_geom.py` (`make
 excitebikegeom`) holds them to more. `--host` (row `excitebikegeomhost`, no emulator) walks each of
 the four with `tests/unit/t_image.py`'s FAT12 reader - deliberately not os88disk's - and requires
@@ -185157,7 +185172,9 @@ walked and not booted**: it needs a 5.25" HD drive and no MartyPC machine has on
 hand on 86Box's `286-525` by pointing that profile's `fdd_02_fn` at `build/excitebike120.img`, which
 nothing here can drive.
 
-**102.8.3 The low-memory refusal, and the bug it found.** Before wave 7 every refused claim of the
+#### 102.8.3 The low-memory refusal, and the bug it found
+
+Before wave 7 every refused claim of the
 bracket ended as `EXB?.GFX MISSING`, a sentence about files (since 102.10 the non-memory sentence is
 `CANNOT LOAD THE RACE`: there are no such files any more). `XB_ERR_MEM` = 3 is the new answer
 (`const.inc`): `xb_nomem` is set by each of the three `OSAPI_MEM_CLAIM` sites of the bracket (the art
@@ -185182,7 +185199,9 @@ fallback runs for real: 28 poses loaded, none compiled, `xb_error` 0, and the wh
 (the twenty positions, the overlap and edge scenes, the rider's lap and crash, the synthetic course)
 identical to the model on the interpreted draw.
 
-**102.8.4 The banner flash.** The plan (4.4) called the themes and the banner flash DAC rewrites, not
+#### 102.8.4 The banner flash
+
+The plan (4.4) called the themes and the banner flash DAC rewrites, not
 new art. The themes are 102.1's `xb_palette`; the flash is `xb_banner` (`video.inc`), called once a
 frame after `xb_flow_frame`: while `xb_flash` runs - the lap flash (150 steps) and GO! (45) - DAC 13,
 the blue of the banner plates and pennants (and of the arrows and the cool end of the gauge, which
@@ -185199,7 +185218,9 @@ showed slot 13 before the flash (in the top 64 lines, more than fifty of them) t
 orange in more than 80% of them in some sample and are blue again in more than 80% in another, the state
 byte ends 0 and the pixels return to blue; on the CGA and the Hercules the state byte never leaves 0.
 
-**102.8.5 EGA: decided, and the refusal stays.** The plan asked wave 7 to decide whether an EGA machine
+#### 102.8.5 EGA: decided, and the refusal stays
+
+The plan asked wave 7 to decide whether an EGA machine
 plays through the CGA path (`FSXM_CGA320` is on the EGA's mode list, §53.4). It does not, for two
 reasons that are facts and not guesses. **An EGA has no port 3D9h**: the CGA colour-select register
 does not exist on the card, only the BIOS's `int 10h` AH = 0Bh emulates it, and `xb_palette` writes the
@@ -185212,14 +185233,17 @@ holding it: the whole splash and help, `VGA, CGA OR HERC ONLY` on the START line
 the heap back. Reopening it needs a machine that has an EGA and a decision to spend an `int 10h`
 call in the bracket.
 
-**102.8.6 The 86Box machine.** `vm/xt-excitebike/86box.cfg` is `vm/xt640` (a 4.77MHz IBM XT, 640KB, an
+#### 102.8.6 The 86Box machine
+
+`vm/xt-excitebike/86box.cfg` is `vm/xt640` (a 4.77MHz IBM XT, 640KB, an
 OTI-067 VGA) with `fdd_02_fn = ../../build/excitebike360.img` and a fresh uuid and NOTHING else, the
 copy rule `vm/386-c-word` records; `make xt-excitebike` runs it with the 360KB system floppy in A:.
 86Box cannot assert anything (docs/TESTING.md): it is where a human looks at the scroll, the banner
 flash and the palette (`C`) and double-clicks `EXCBIKE.O88` in drive B:. No 86Box run was made in the
 environment that wrote this.
 
-**102.8.7 Validation and what wave 7 could not do.**
+#### 102.8.7 Validation and what wave 7 could not do
+
 * `python3 tools/os88test.py soak -k 'excitebike*'` is every row of 102.6, 102.7 and this section:
   the new ones are `excitebikegeomhost`, `excitebikeboot360`, `excitebikeboot720`,
   `excitebikeboot1440`, `excitebikelowmem` and `excitebikesmallclaim`; `excitebikeflow` gained the

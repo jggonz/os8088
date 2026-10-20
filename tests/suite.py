@@ -3300,7 +3300,7 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("isotronflow", "soak", py("tests/isotron.py", "--flow", "all"), 90.0,
-        "isoTron's FLOW driven through its UI (SPEC.md 108.13.6), MartyPC's "
+        "isoTron's FLOW driven through its UI (SPEC.md 108.13.5), MartyPC's "
         "XT-VGA: the title's own lines over the void and the block-letter word "
         "the model's; `1` - a real key - starts a STORED game (it_tflags SEED, "
         "BOT, FAST, HOLD) and EVERY round's arena is SWEPT in: at its first "

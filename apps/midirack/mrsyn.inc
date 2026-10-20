@@ -13,7 +13,7 @@
 ; running sum and turns it into the output byte through a 2,048-entry table.
 ; A 440 Hz voice at 8 kHz is 880 edges a second, ~60 cycles each on an 8088;
 ; the pass is ~60 cycles a sample whatever the voice count. Six voices and the
-; pass are ~20% of a 4.77 MHz machine (SPEC.md 105.7.4).
+; pass are ~20% of a 4.77 MHz machine (SPEC.md 105.7.1).
 ;
 ; THE TABLE IS WHERE THE OUTPUTS DIFFER, and is also the mixer's compressor:
 ; the running level is -1023..+1023 and the table maps it through a soft clip
