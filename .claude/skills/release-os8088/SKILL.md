@@ -28,6 +28,11 @@ also gets a **Spotlight page** (step 4b), which is a page of its own under
 `/spotlight/` with its own screenshots. A line on the releases page does not
 carry a new program.
 
+**Every release also brings the site's Docs section up to the build** (step
+4d): `/docs/`'s disk guide, memory model and source-checked articles quote one
+source commit, and a release that ships new disks under last release's Docs is
+a guide describing software nobody can download any more.
+
 **Read "Writing the copy" below before writing a word of any of them.**
 
 ## Writing the copy
@@ -227,11 +232,17 @@ make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
                                       # in the zip; the web repo's release.py
                                       # publishes it, and skipping it leaves
                                       # the demo on last release's build
+make viddemo                          # VIDDEMO-*-ST11R.VHD -- the Video
+                                      # Player's demo drives. Not in the zip
+                                      # either; the website's Docs disk guide
+                                      # lists them, and step 4d reads every
+                                      # image that guide lists
 ```
 
 Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
 network, no host toolchain -- **release the thirteen and say which on-demand disks
-were skipped**; they are a convenience, and a release that waits on one is a
+were skipped**, and know that step 4d then cannot refresh the Docs disk guide,
+which reads every image it lists or none; they are a convenience, and a release that waits on one is a
 release that does not happen. `mkzip.py` prints the ones it did not find, so
 that list is generated rather than remembered. Boot any that were built in step
 3 like any other image (they go in B:, `make test TESTAPPS=build/word.img`).
@@ -504,11 +515,12 @@ so **the step is between v1.0.20260809 and v1.0.20260810, and the entry says
 so.** When a figure jumps because the counting changed, say so where the
 figure is, or the jump reads as growth that did not happen.
 
-If you update these, the same figures are hardcoded in the website's prose --
-`site/index.html`, `site/faq.html`, `site/how-it-works.html`,
-`site/download.html` and `site/how-it-works/graphics.html` all quote the kernel
-size, the RAM footprint, the headroom or the line count. Grep the old numbers
-across `$WEB_REPO/site/` and fix them in the same PR; nothing validates them.
+If you update these, the same figures may be hardcoded in the website's prose --
+`site/index.html` and `site/docs.html` have quoted the kernel size, the RAM
+footprint, the headroom or the line count, and pages come and go (the FAQ, How
+It Works and Download pages are gone; `/docs/` replaced the FAQ). Grep the old
+numbers across `$WEB_REPO/site/` and fix them in the same PR; nothing validates
+them.
 
 Then rebuild and verify:
 
@@ -689,6 +701,77 @@ Nothing may redirect `http://` to `https://` for `/wire/*`. The machine
 cannot follow one, and a redirect there is a Wire that says
 `The Wire did not answer (301)` on every fetch.
 
+#### 4d. The Docs section, every time
+
+`/docs/` (`$WEB_REPO/site/docs.html`) is source-backed, and every part of it
+names the OS commit it was read from. Bring it to the release commit in the
+same PR; a Docs section one release behind is wrong in ways no build check
+catches. It has three kinds of content, and `docsync.py` treats each the way
+it can honestly be treated:
+
+| content | where | how it moves |
+|---|---|---|
+| the **disk guide's inventory** -- every path, size, attribute, free-cluster count and embedded README on every image | `public/guide/disk-guide.json` | **measured**: the web repo's `tools/sync_disk_guide.py --write`, then `--check`, reading `$OS_REPO/build/` |
+| the **memory model's kernel figures** | `public/js/memory-map.js`'s `builds` | **measured**: `tools/kernsize.py --json --strict` on kern_big and kern_small |
+| captions quoting the snapshot (`N images built from source commit X (build N)`, `Layout measured from source commit X`) | `site/docs.html` | moved with the measurement |
+| articles captioned **`Checked against source commit X`** (the Bootloader), and the guide's **manuals**, which link their sources at a pinned commit | `site/docs.html`, `disk-guide.json` `manuals` | **bumped only when nothing they link to changed**; otherwise left on X and listed |
+| every other article -- Quick start, Supported Hardware, Storage, Networking, the developer guide | `site/docs.html` | **listed** with the commits since X that touched the files it links to |
+
+```bash
+cd "$OS_REPO"
+python3 .claude/skills/release-os8088/docsync.py --web "$WEB_REPO"          # report
+python3 .claude/skills/release-os8088/docsync.py --web "$WEB_REPO" --write  # apply
+```
+
+Run it after `release.py`, from the OS repo, with step 2's build still in
+`build/` (it reads `build/smallk/` too, which `make budget-check` leaves).
+The report is the work list; `--write` applies only the measured parts.
+**Then do what it lists, which is the part that is yours:**
+
+- **Each listed article and manual: read the commits it names against what
+  the page says**, and fix what they made untrue -- a new driver on the
+  Supported Hardware pages, a changed boot message in the Bootloader's table, a
+  renamed image in Quick start. Each article's GitHub links ARE its source map,
+  so a commit that touched none of them is not listed. Files nearly every
+  commit touches (`Makefile`, `SPEC.md`, `README.md`, `kernel/kernel.asm`,
+  `docs/INDEX.md`) do not trigger a listing; step 4a's read of the whole log
+  covers those. When an article with a `Checked against` caption, or a manual
+  with pinned links, has been reviewed, move its commit to the release commit
+  by hand -- **never move one you did not read**, because that caption is the
+  claim that someone did.
+- **New files with no manual.** A new package, driver or folder on a disk
+  shows in the guide as a bare file until `disk-guide.json` gets a `manuals`
+  entry (keyed `NAME_EXT`) or an `entries` one. Write it in the voice of the
+  manuals beside it and the "Writing the copy" standard -- what it is, how to
+  start it, what it needs -- and take any screenshot it carries from a real
+  boot into `public/guide/shots/`, looked at, like a Spotlight shot.
+- **Release images the guide does not list** -- a new on-demand disk in
+  `mkzip.py`'s `ITEMS` -- need a `disks` entry (and a `sets`/`diskpages` one
+  if it starts a new set) before the next `--write` will read them.
+- **Images the guide lists that are not built** make it refuse the inventory
+  outright: the guide's caption says all of them came from one commit, so a
+  partial sync is a false caption. Build them, or leave the whole guide on its
+  previous snapshot and say so in the PR body and the report.
+- **Dead GitHub links** (an OS file an article links to that has gone) and
+  image names the prose quotes that nothing builds any more.
+
+Then rebuild, which re-versions `docs.js`, `memory-map.js` and the guide JSON
+so a returning reader's browser does not keep last release's copy:
+
+```bash
+cd "$WEB_REPO"
+python3 tools/build.py                                  # 0 problems
+python3 tools/linkcheck.py                              # 0 dead
+python3 tools/sync_disk_guide.py --source "$OS_REPO" --check
+git status --porcelain public/guide/ public/js/memory-map.js site/docs.html
+```
+
+**Look at `/docs/` before you commit it**, the way 4a looks at the releases
+page: serve `public/`, open `#disk-guide`, pick a disk this release changed and
+a file it added, and open `#memory` at 128K and 640K on both kernel builds. An
+inventory that parses and a guide that renders an empty pane read the same in
+`git diff`.
+
 ### 5. Commit and open the pull request
 
 ```bash
@@ -708,6 +791,12 @@ expected and nothing changed, that is a signal something is wrong.
 Check the diff includes `data/releases.json` with its prose filled in. A
 release PR that touches the images and the manifest but not the release log
 means step 4a was skipped.
+
+Say what step 4d did to the Docs section: the snapshot commit it moved from
+and to, the images whose inventory changed, the manuals and articles you
+revised (and any you left on the old commit, with why), and the files still
+without a manual. If the guide stayed on the previous snapshot because an image
+was not built, the PR body says that in its first lines.
 
 If step 4b produced a Spotlight page, say so in the PR body and give its path,
 list the scenes captured, and name the video it embeds. Mention that the video
@@ -771,7 +860,8 @@ and update `data/releases.json` to match before the website PR is merged.
 
 Tell the user: the version, the PR URL, the release URL, the kernel size and
 its delta, the zip's packed size and how many images went into it, the
-Spotlight page's URL if step 4b ran, and anything you skipped or that needs
+Spotlight page's URL if step 4b ran, the Docs snapshot commit step 4d moved
+to (or that it did not, and why), and anything you skipped or that needs
 their attention -- naming any on-demand disk that did not get built, since a
 reader of the zip's README cannot tell a disk that was left out from one that
 does not exist. If the website PR is merged, the site's own CI
@@ -810,8 +900,11 @@ them in a status line is how they get lost.
   Step 4b captures them from a real boot and you read every one. A mockup, a
   crop of an old shot, or a scene whose click was lost are all the same defect
   to a reader: a picture of something that did not happen.
-- **The licence is MIT** -- `LICENSE` is in the root of this repo and the FAQ
-  says so. Do not restate the terms in release copy, and do not claim a
+- **Never move a Docs "checked against" commit you did not check.** Step 4d's
+  script moves only what it measured or what nothing touched; the rest is a
+  person reading the commits it lists.
+- **The licence is MIT** -- `LICENSE` is in the root of this repo and the
+  website's colophon says so. Do not restate the terms in release copy, and do not claim a
   different one.
 - Both repositories get branches, never direct commits to `main`.
 - If any step fails, stop and report rather than continuing with a partial

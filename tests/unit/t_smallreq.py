@@ -110,6 +110,7 @@ FORBIDDEN = {
     "FTPD.O88":     "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "TELNET.O88":   "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "THEWIRE.O88":  "ETHER.DRV is in no small driver set (SPEC.md 24.5, 92)",
+    "WIRECHAT.O88": "ETHER.DRV is in no small driver set (SPEC.md 24.5, 113)",
     "TRACKER.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "AUDIO.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "MIDIRACK.O88": "SOUND.DRV is in no small driver set, and its speaker "

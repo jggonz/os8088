@@ -399,6 +399,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | WIREBALL | `apps/wireball/wireball.asm` | §109 | yes |
 | WORD | `apps/word/wdload.asm` | §68 | no |
 | WORD | `apps/word/word.asm` | §68 | yes |
+| WireChat | `apps/wirechat/wirechat.asm` | §113 | yes |
 | isoTron | `apps/isotron/isotron.asm` | §108 | yes |
 
 ## SPEC.md sections
@@ -517,6 +518,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 110 | Sticky Apps (`STIKAPPS\`, `apps/os88stik.inc`) |
 | 111 | TIMER — the stopwatch (`apps/timer/timer.asm`) |
 | 112 | BOUNCE — the square (`apps/bounce/bounce.asm`) |
+| 113 | WIRECHAT — chat rooms on the wire (`apps/wirechat/wirechat.asm`) |
 
 ## docs/
 

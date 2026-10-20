@@ -60,6 +60,7 @@
                                    # Cancel while it is up, drawn by index
                                    # (SPEC.md 105.9, 105.9.2)
 1 apps/calc/calc.asm               # the keypad, staged one key at a time
+1 apps/wirechat/wirechat.asm      # wc_btn: Set status, Search, :), Send and Add friend through the record (SPEC.md 113.5), one call beside it
 1 apps/timer/timer.asm             # Start/Stop/Reset through the record (SPEC.md
                                    # 111.2): ONE loop in tm_flags, which the painter
                                    # (all three) and a Start or Stop that traded pens
