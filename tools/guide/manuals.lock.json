@@ -500,9 +500,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "4cd88043",
-  "strings": "d35ebdb2509f31a8",
-  "why": "hibernate carries the HMA driver pool (SPEC.md 87.4 step 3b): page gains the HMA resume requirement and the 'Not enough memory' refusal"
+  "stamped": "dc7a4142",
+  "strings": "22e67d0f6c954f23",
+  "why": "Document disconnecting a desktop serial lease before hibernate"
  },
  "HOUSE_PNG": {
   "sources": [],
@@ -870,6 +870,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "SERIAL_DRV": {
+  "sources": [
+   "kernel/serial.inc"
+  ],
+  "stamped": "dc7a4142",
+  "strings": "075d3ddf5a3a826e",
+  "why": "Document desktop serial connection, mouse port refusal and lifetime"
+ },
  "SHEET_O88": {
   "sources": [
    "apps/sheet"
@@ -1183,6 +1191,14 @@
   "stamped": "a805ac61",
   "strings": "455f0b5acdca7829",
   "why": "first page: written from SPEC.md 113 and apps/wirechat (menus, field modes, keys, wheel, status bar words, WIRECHAT.CFG, net_find's card-then-link)"
+ },
+ "WIREFLET_O88": {
+  "sources": [
+   "apps/wirefleet"
+  ],
+  "stamped": "f8bfc2b1",
+  "strings": "852ffb65a027daaa",
+  "why": "Document complete game and remove the deployment-only placeholder"
  },
  "WORD": {
   "sources": [],

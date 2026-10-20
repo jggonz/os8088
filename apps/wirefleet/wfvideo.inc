@@ -1,5 +1,7 @@
 ; Opaque tile rows, native clipping, no idle repaint. SPEC.md 114.2.
 wf_geometry:
+    cmp byte [wf_infs], 0
+    jne wf_fs_geometry
     mov bx, [wf_win]
     call OSAPI_WM_CONTENT
     mov [wf_ox], ax
@@ -12,8 +14,8 @@ wf_geometry:
     mov word [wf_roststep], 44
     cmp dx, 350
     jae .display
-    mov word [wf_cellh], 18
-    mov word [wf_roststep], 32
+    mov word [wf_cellh], 16
+    mov word [wf_roststep], 30
     cmp dx, 200
     jae .display
     mov word [wf_cellh], 8
@@ -69,6 +71,7 @@ wf_geometry:
     add ax, 114
     add di, 8
     loop .rect
+    call wf_chat_geometry
     ret
 
 ; Relative opaque white margins. Grid pixels are never erased underneath.
@@ -130,9 +133,16 @@ wf_boards:
 .board:
     mov byte [wf_drawrow], 0
     mov word [wf_destx], 24
+    cmp byte [wf_infs], 0
+    je .which
+    mov word [wf_destx], 20
+.which:
     cmp byte [wf_drawboard], 0
     je .row
     mov word [wf_destx], 326
+    cmp byte [wf_infs], 0
+    je .row
+    mov word [wf_destx], 176
 .row:
     xor ax, ax
     mov al, [wf_drawrow]
@@ -191,6 +201,18 @@ wf_tileid:
 .enemy:
     mov al, [wf_outshots+bx]
 .select:
+    cmp byte [wf_drawboard], 0
+    jne .cursor
+    mov bx, di
+    cmp byte [wf_inshots+bx], 1
+    jne .hit
+    mov al, 1
+    jmp .cursor
+.hit:
+    cmp byte [wf_inshots+bx], 2
+    jb .cursor
+    add al, 34
+.cursor:
     mov dl, [wf_drawboard]
     cmp dl, [wf_ready]
     jne .out
@@ -278,6 +300,12 @@ wf_copytile:
     and al, 0x7f
     mov bx, WF_TILE_COLOR
     mov si, wf_tiles_color
+    cmp byte [wf_infs], 0
+    je .native
+    mov bx, WF_TILE_MONO
+    mov si, wf_tiles_cga
+    jmp .source
+.native:
     cmp byte [wf_monochrome], 0
     je .source
     mov bx, WF_TILE_MONO
@@ -315,6 +343,8 @@ wf_copytile:
     jb .next
     cmp ax, cx
     ja .next
+    cmp byte [wf_infs], 0
+    jne .cgasides
     cmp byte [wf_monochrome], 0
     jne .monosides
     and byte [bx], 0xf0
@@ -326,7 +356,13 @@ wf_copytile:
     or byte [bx], 0x40
     or byte [bx+2], 2
     jmp .next
+.cgasides:
+    or byte [bx], 0x30
+    or byte [bx+2], 0x0c
+    jmp .next
 .horizontal:
+    cmp byte [wf_infs], 0
+    jne .cgaline
     cmp byte [wf_monochrome], 0
     jne .monoline
     mov di, bx
@@ -339,6 +375,11 @@ wf_copytile:
     or byte [bx], 0x7f
     mov byte [bx+1], 255
     or byte [bx+2], 0xfe
+    jmp .next
+.cgaline:
+    or byte [bx], 0x3f
+    mov byte [bx+1], 255
+    or byte [bx+2], 0xfc
 .next:
     mov ax, [wf_rowstride]
     add [wf_rowdest], ax
@@ -351,6 +392,8 @@ wf_copytile:
     ret
 
 wf_blitrow:
+    cmp byte [wf_infs], 0
+    jne wf_fs_blitrow
     cmp byte [wf_first], 255
     je .out
     push es
@@ -397,6 +440,8 @@ wf_blitrow:
 
 ; Text helper: relative CX/DX, SI=NUL text, AX=ink/paper. Opaque.
 wf_text:
+    clc
+    call OSAPI_GFX_PEN
     push cx
     push dx
     add cx, [wf_ox]
@@ -407,11 +452,69 @@ wf_text:
     ret
 
 wf_header:
-    mov si, wf_bannerdeploy
+    push ds
+    pop es
+    mov di, wf_bannerbuf
+    mov al, ' '
+    mov cx, 75
+    rep stosb
+    mov byte [di], 0
+    call wf_phase
+    mov di, wf_bannerbuf+1
+    mov cx, 35
+.phase:
+    lodsb
+    or al, al
+    jz .caption
+    stosb
+    loop .phase
+.caption:
+    mov si, wf_tagline
     cmp byte [wf_ready], 0
-    je .title
-    mov si, wf_bannerready
+    je .righttext
+    mov si, wf_matchcaption
+.righttext:
+    mov di, wf_bannerbuf+39
+    mov cx, 35
+.captioncopy:
+    lodsb
+    or al, al
+    jz .turn
+    stosb
+    loop .captioncopy
+.turn:
+    cmp byte [wf_ready], 0
+    je .cache
+    mov ax, [wf_turn]
+    inc ax
+    xor dx, dx
+    mov bx, 100
+    div bx
+    add al, '0'
+    mov [wf_bannerbuf+71], al
+    mov ax, dx
+    xor dx, dx
+    mov bx, 10
+    div bx
+    add al, '0'
+    add dl, '0'
+    mov [wf_bannerbuf+72], al
+    mov [wf_bannerbuf+73], dl
+.cache:
+    cmp byte [wf_fullpaint], 0
+    jne .store
+    mov si, wf_bannerbuf
+    mov di, wf_headershown
+    mov cx, 75
+    repe cmpsb
+    je .axes
+.store:
+    mov si, wf_bannerbuf
+    mov di, wf_headershown
+    mov cx, 75
+    rep movsb
 .title:
+    mov si, wf_bannerbuf
     xor cx, cx
     mov dx, 2
     mov ax, (1 << 8) | CWHITE
@@ -420,6 +523,7 @@ wf_header:
     mov ax, CWHITE
 .banner:
     call wf_text
+.axes:
     mov ax, (CWHITE << 8) | CBLACK
     cmp byte [wf_fullpaint], 0
     je .out
@@ -509,6 +613,26 @@ wf_roster:
 .ship:
     xor bx, bx
     mov bl, [wf_rosterindex]
+    xor ax, ax
+    cmp byte [wf_anchors+bx], WF_ABSENT
+    je .selection
+    or al, 1
+.selection:
+    cmp bl, [wf_selected]
+    jne .signature
+    or al, 2
+    cmp byte [wf_direction], 0
+    je .signature
+    or al, 4
+.signature:
+    cmp byte [wf_fullpaint], 0
+    jne .show
+    cmp al, [wf_rostershown+bx]
+    je .next
+.show:
+    mov [wf_rostershown+bx], al
+    cmp byte [wf_fullpaint], 0
+    je .name
     mov al, [wf_lengths+bx]
     mov [wf_rowlimit], al
     mov [wf_drawrow], bl
@@ -520,6 +644,7 @@ wf_roster:
     mov [wf_desty], ax
     call wf_buildrow
     call wf_blitrow
+.name:
     xor bx, bx
     mov bl, [wf_rosterindex]
     mov ax, bx
@@ -530,6 +655,11 @@ wf_roster:
     add ax, [wf_gridy]
     mov dx, ax
     mov ax, (CWHITE << 8) | CBLACK
+    mov bl, [wf_rosterindex]
+    cmp bl, [wf_selected]
+    jne .nametext
+    mov ax, CWHITE
+.nametext:
     call wf_text
     mov si, wf_emptylabel
     xor bx, bx
@@ -540,8 +670,12 @@ wf_roster:
 .selected:
     cmp bl, [wf_selected]
     jne .status
-    mov si, wf_selectedlabel
+    mov si, wf_selectedh
+    cmp byte [wf_direction], 0
+    je .status
+    mov si, wf_selectedv
 .status:
+    mov ax, (CWHITE << 8) | CBLACK
     cmp word [wf_cellh], 8
     je .next
     add dx, 12
@@ -554,7 +688,12 @@ wf_roster:
     ret
 
 wf_controls:
+    mov word [wf_btnlabels], wf_rotatelabel
+    mov word [wf_btnlabels+2], wf_autolabel
+    mov word [wf_btnlabels+4], wf_clearlabel
+    mov word [wf_btnlabels+6], wf_readylabel
     mov word [wf_btnlabels+8], wf_soundlabel
+    mov word [wf_btnflags+8], 0
     cmp byte [wf_muted], 0
     je .flags
     mov word [wf_btnlabels+8], wf_soundoff
@@ -573,27 +712,95 @@ wf_controls:
     mov ax, OS88UI_DIS
 .ready:
     mov [di+6], ax
+    cmp byte [wf_ready], 0
+    je .draw
+    mov word [wf_btnlabels], wf_firelabel
+    mov word [wf_btnlabels+2], wf_chatlabel
+    mov word [wf_btnlabels+4], wf_savelabel
+    mov word [wf_btnlabels+6], wf_connectlabel
+    mov word [wf_btnflags+2], 0
+    mov word [wf_btnflags+4], 0
+    mov word [wf_btnflags+6], 0
+    call wf_canfire
+    jc .draw
+    mov word [wf_btnflags], 0
+.draw:
+    cmp byte [wf_chatmode], 0
+    je .buttons
+    mov word [wf_btnflags], OS88UI_DIS
+    mov word [wf_btnflags+2], OS88UI_DIS
+    mov word [wf_btnflags+4], OS88UI_DIS
+    mov word [wf_btnflags+6], OS88UI_DIS
+    mov word [wf_btnflags+8], OS88UI_DIS
+    jmp .buttons
+.buttons:
     mov bx, wf_buttons
     mov al, 1
 .button:
+    xor ah, ah
+    mov di, ax
+    dec di
+    shl di, 1
+    mov si, di
+    shl si, 1
+    mov dx, [wf_btnlabels+di]
+    cmp byte [wf_fullpaint], 0
+    jne .show
+    cmp dx, [wf_buttonshown+si]
+    jne .show
+    mov dx, [wf_btnflags+di]
+    cmp dx, [wf_buttonshown+si+2]
+    je .next
+.show:
+    mov dx, [wf_btnlabels+di]
+    mov [wf_buttonshown+si], dx
+    mov dx, [wf_btnflags+di]
+    mov [wf_buttonshown+si+2], dx
     call os88ui_btn
+.next:
     inc al
     cmp al, 6
     jb .button
+.out:
     ret
 
 wf_footer:
+    mov ax, [wf_message]
+    cmp byte [wf_fullpaint], 0
+    jne .draw
+    cmp ax, [wf_footershown]
+    jne .draw
+    mov ax, [wf_chatcount]
+    cmp ax, [wf_chatshown]
+    jne .draw
+    mov al, [wf_chatmode]
+    cmp al, [wf_chatmodeshown]
+    je .out
+.draw:
+    mov ax, [wf_message]
+    mov [wf_footershown], ax
+    mov ax, [wf_chatcount]
+    mov [wf_chatshown], ax
+    mov al, [wf_chatmode]
+    mov [wf_chatmodeshown], al
     mov cx, 16
     mov dx, [wf_controlsy]
     add dx, 18
     mov ax, (CWHITE << 8) | CBLACK
     mov si, [wf_message]
-    call wf_text
     cmp word [wf_cellh], 8
-    je .out
-    add dx, 16
-    mov si, wf_footertext
-    call wf_text
+    jne .status
+    cmp byte [wf_chatmode], 0
+    jne .chat
+    cmp byte [wf_chatline], 0
+    je .status
+    cmp byte [wf_connected], 0
+    je .status
+    mov si, wf_chatline
+.status:
+    call wf_paddedline
+.chat:
+    jmp wf_chat_draw
 .out:
     ret
 

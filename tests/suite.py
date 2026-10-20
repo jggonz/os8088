@@ -1914,6 +1914,12 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("wirefleetlink", "soak", py("tests/wirefleetlink.py"), 80.0,
+        "WireFleet two UART peers: turn rules, private fleets, lost result, save/load/reconnect, duplicate commands/chat, malformed frames, victory and cleanup (SPEC.md 114/115)",
+        needs=("qemu", "nasm", "pil"), wants=("build/wireflet.img", "build/os8088.img"), timeout=300),
+    Row("wirefleetsystem", "soak", py("tests/wirefleetsystem.py"), 120.0,
+        "WireFleet on 8088s: original 8250 lease and forced cleanup, CGA color fullscreen and return, saved-record validation, finite speaker/AdLib/SB cues (SPEC.md 114/115)",
+        needs=("marty", "nasm", "pil"), wants=("build/wireflet360.img", "build/wireflet720.img", "build/os8088-360.img", "build/os8088-720.img"), timeout=300),
     Row("wirefleetart", "soak", py("tests/wirefleet.py", "--art"), 1.0,
         "WireFleet generated tiles: reproducibility, palette/bounds, distinct color/mono shot shapes (SPEC.md 114)",
         needs=("pil",)),

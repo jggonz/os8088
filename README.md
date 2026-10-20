@@ -63,6 +63,7 @@ make run-120  # the same, off the 1.2MB 5.25" HD pair. RUNAPPS120=<img>
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
 make wireball-pair # two 86Box XTs linked over COM2 for WireBall (86Box 6.0+)
+make wirefleet-pair # two 86Box XTs linked over COM2 for WireFleet
 make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card

@@ -5,6 +5,10 @@ WF_SHIPS equ 5
 WF_ABSENT equ 255
 
 wf_new:
+    call wf_link_new
+    mov word [wf_buttons+OS88UI_BT_N], 5
+    mov byte [wf_abon], 0
+wf_clearfleet:
     push es
     push ds
     pop es
@@ -133,7 +137,7 @@ wf_place:
 wf_auto:
     cmp byte [wf_ready], 0
     jne .out
-    call wf_new
+    call wf_clearfleet
 .ship:
     mov byte [wf_attempts], 64
 .try:
@@ -143,13 +147,15 @@ wf_auto:
     div bx
     mov [wf_target], dl
     call OSAPI_RAND
+    mov cl, 7
+    shr ax, cl                 ; do not reuse the LCG's alternating low bit
     and al, 1
     mov [wf_direction], al
     call wf_place
     jnc .placed
     dec byte [wf_attempts]
     jnz .try
-    call wf_new
+    call wf_clearfleet
 .fallback:
     mov al, [wf_selected]
     mov dl, 20

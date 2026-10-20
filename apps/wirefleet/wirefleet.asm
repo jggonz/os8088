@@ -22,16 +22,28 @@ wf_entry:
     call OSAPI_WM_PREFER
     mov si, wf_menus
     call OSAPI_MENU_SET
-    mov si, wf_about
+    mov si, wf_aboutentry
     call OSAPI_ABOUT_SET
     mov ax, wf_rightclick
     call OSAPI_WM_ONRCLICK
+    mov ax, wf_closeentry
+    call OSAPI_WM_ONCLOSE
     mov ax, bx
     mov bx, wf_buttons
-    mov si, wf_buttonup
+    mov si, wf_buttonupentry
     mov di, wf_buttondrag
-    mov dx, wf_click
+    mov dx, wf_clickentry
     call os88ui_btninit
+    mov bx, [wf_win]
+    mov ax, wf_tick
+    call OSAPI_WM_ONTIMER
+    call OSAPI_WM_ONWAKE
+    mov ax, 1
+    call OSAPI_WM_TIMER
+    mov byte [wf_fallback], 0
+    jnc .clock
+    mov byte [wf_fallback], 1
+.clock:
     call wf_new
     mov bx, [wf_win]
     clc
@@ -40,6 +52,15 @@ wf_entry:
 
 wf_paint:
     push si
+    cmp byte [wf_fallback], 1
+    jne .clock
+    mov bx, [wf_win]
+    mov ax, wf_wakeworker
+    call OSAPI_TASK_SPAWN
+    jc .clock
+    inc byte [wf_fallback]
+    OS88_WORKER_RESTARTABLE_NOKEEP wf_wakeworker
+.clock:
     call wf_geometry
     ; Only the margins/body are filled. Grids compose their own opaque
     ; ground; there is no white rectangle underneath the new board.
@@ -81,6 +102,16 @@ wf_update:
 wf_onkey:
     cmp byte [wf_abon], 0
     jne wf_dismiss
+    cmp ax, KEY_ALTENTER
+    je wf_fullscreen
+    cmp byte [wf_chatmode], 0
+    jne wf_chat_key
+    cmp al, 27
+    jne .key
+    cmp byte [wf_nativefull], 0
+    jne wf_fullscreen
+    ret
+.key:
     cmp al, 0
     jne .ascii
     mov dl, [wf_target]
@@ -139,16 +170,30 @@ wf_onkey:
     je .mute
     cmp al, 'y'
     je .ready
+    cmp al, 't'
+    je wf_chat_begin
+    cmp al, 's'
+    je wf_save
+    cmp al, 'o'
+    je wf_load
+    cmp al, 'f'
+    je wf_fullscreen
     cmp al, 'h'
     je .help
 .out:
     ret
 .auto:
+    cmp byte [wf_ready], 0
+    jne .out
     call wf_auto
+    mov al, 1
+    call wf_sfx
     jmp wf_update
 .clear:
     cmp byte [wf_ready], 0
     jne .out
+    call wf_clearfleet
+    jmp wf_repaint
 .new:
     call wf_new
     jmp wf_repaint
@@ -158,21 +203,34 @@ wf_onkey:
     xor byte [wf_direction], 1
     jmp wf_update
 .place:
+    cmp byte [wf_ready], 0
+    jne wf_fire
     call wf_place
     jc .invalid
     call wf_nextship
+    mov al, 1
+    call wf_sfx
     jmp wf_update
 .invalid:
     mov word [wf_message], wf_cannotplace
     jmp wf_update
 .mute:
     xor byte [wf_muted], 1
+    cmp byte [wf_muted], 0
+    je .soundupdate
+    call wf_soundquiet
+.soundupdate:
     jmp wf_update
 .ready:
+    cmp byte [wf_ready], 0
+    jne .out
     cmp byte [wf_placed], 5
     jne .out
     mov byte [wf_ready], 1
-    mov word [wf_message], wf_waitlink
+    mov word [wf_message], wf_readywaiting
+    mov byte [wf_urgent], 1
+    mov al, 2
+    call wf_sfx
     jmp wf_repaint
 .help:
     mov si, [wf_win]
@@ -180,12 +238,18 @@ wf_onkey:
 
 ; The native menu callbacks pass a zero-based item in AL and menu in AH.
 wf_command:
+    cmp ah, 2
+    je .link
     cmp ah, 0
     jne .fleet
     cmp al, 0
     je wf_onkey.new
     cmp al, 1
     je wf_onkey.ready
+    cmp al, 2
+    je wf_save
+    cmp al, 3
+    je wf_load
     jmp wf_onkey.mute
 .fleet:
     cmp al, 0
@@ -193,6 +257,14 @@ wf_command:
     cmp al, 1
     je wf_onkey.auto
     jmp wf_onkey.clear
+.link:
+    cmp al, 2
+    je .disconnect
+    inc al
+    jmp wf_connect
+.disconnect:
+    call wf_disconnect
+    jmp wf_update
 
 wf_click:
     cmp byte [wf_abon], 0
@@ -202,10 +274,25 @@ wf_click:
     call wf_geometry
     pop dx
     pop cx
+    cmp word [wf_cellh], 8
+    jne .line
+    cmp byte [wf_chatmode], 0
+    je .grid
+.line:
+    mov si, wf_line
+    call os88line_click
+    jc .outside
+    jmp wf_chat_begin
+.outside:
+    cmp byte [wf_chatmode], 0
+    jne .out
+.grid:
     call wf_hitboard
     jc .roster
     mov [wf_target], al
-    jmp wf_onkey.place
+    cmp byte [wf_ready], 0
+    je wf_onkey.place
+    jmp wf_update
 .roster:
     cmp byte [wf_ready], 0
     jne .out
@@ -249,7 +336,12 @@ wf_rightclick:
 ; CX/DX=absolute pointer. CF=outside left grid; AL=0..99 inside.
 wf_hitboard:
     sub cx, [wf_ox]
-    sub cx, 24
+    mov ax, 24
+    cmp byte [wf_ready], 0
+    je .origin
+    mov ax, 326
+.origin:
+    sub cx, ax
     jc .bad
     cmp cx, 240
     jae .bad
@@ -285,11 +377,29 @@ wf_buttonup:
     call os88ui_btnup
     or ax, ax
     jz .out
+    cmp byte [wf_ready], 0
+    je .deployment
+    cmp al, 1
+    je wf_fire
+    cmp al, 2
+    je wf_chat_begin
+    cmp al, 3
+    je wf_save
+    cmp al, 4
+    je .connect
+.deployment:
     mov bx, ax
     mov al, [wf_btnkeys+bx]
     jmp wf_onkey.ascii
 .out:
     ret
+.connect:
+    mov al, [wf_wantport]
+    or al, al
+    jnz .port
+    mov al, 2
+.port:
+    jmp wf_connect
 wf_buttondrag:
     push cx
     push dx
@@ -316,21 +426,63 @@ wf_about:
 wf_dismiss:
     mov byte [wf_abon], 0
     mov word [wf_buttons+OS88UI_BT_N], 5
+    cmp byte [wf_chatmode], 0
+    je .paint
+    cmp word [wf_cellh], 8
+    jne .paint
+    mov word [wf_buttons+OS88UI_BT_N], 0
+.paint:
     jmp wf_repaint
+
+%macro WF_CALLBACK 2
+%1:
+    push si
+    call %2
+    pop si
+    ret
+%endmacro
+WF_CALLBACK wf_keyentry, wf_onkey
+WF_CALLBACK wf_clickentry, wf_click
+WF_CALLBACK wf_commandentry, wf_command
+WF_CALLBACK wf_buttonupentry, wf_buttonup
+WF_CALLBACK wf_aboutentry, wf_about
+WF_CALLBACK wf_closeentry, wf_close
+
+wf_close:
+    call wf_disconnect
+    call wf_soundquiet
+    clc
+    ret
+
+wf_wakeworker:
+.loop:
+    mov bx, [wf_win]
+    call OSAPI_TASK_ALIVE
+    call OSAPI_WM_WAKE
+    mov ax, 1
+    call OSAPI_TASK_SLEEP
+    jmp short .loop
 
 wf_tpl:
     dw 16,24,600,414
-    dw wf_title,wf_paint,wf_onkey,wf_click
+    dw wf_title,wf_paint,wf_keyentry,wf_clickentry
 wf_prefs: dw 600,414, 600,304, 600,154
-    OS88_MENUSET wf_menus, wf_title, wf_command
-        OS88_MENU wf_gamemenu, wf_gameitems, 3
+    OS88_MENUSET wf_menus, wf_title, wf_commandentry
+        OS88_MENU wf_gamemenu, wf_gameitems, 5
         OS88_MENU wf_fleetmenu, wf_fleetitems, 3
+        OS88_MENU wf_linkmenu, wf_linkitems, 3
     OS88_MENUSET_END wf_menus
-wf_gameitems: dw wf_newlabel,wf_readylabel,wf_soundlabel
+wf_gameitems: dw wf_newlabel,wf_readylabel,wf_savelabel,wf_loadlabel,wf_soundlabel
 wf_fleetitems: dw wf_rotatelabel,wf_autolabel,wf_clearlabel
+wf_linkitems: dw wf_com1label,wf_com2label,wf_disconnectlabel
 wf_title: db 'WireFleet',0
 wf_gamemenu: db 'Game',0
 wf_fleetmenu: db 'Fleet',0
+wf_linkmenu: db 'Link',0
+wf_com1label: db 'Connect COM1',0
+wf_com2label: db 'Connect COM2',0
+wf_disconnectlabel: db 'Disconnect',0
+wf_readywaiting: db 'Fleet locked. Connect in Link menu; both captains must be ready.',0
 wf_newlabel: db 'New fleet [N]',0
 wf_readylabel: db 'Ready [Y]',0
 wf_rotatelabel: db 'Rotate R',0
@@ -338,6 +490,11 @@ wf_autolabel: db 'Auto A',0
 wf_clearlabel: db 'Clear C',0
 wf_soundlabel: db 'Sound M',0
 wf_soundoff: db 'Muted M',0
+wf_firelabel: db 'Fire Enter',0
+wf_chatlabel: db 'Chat T',0
+wf_connectlabel: db 'Connect',0
+wf_savelabel: db 'Save S',0
+wf_loadlabel: db 'Load O',0
 wf_btnkeys: db 0,'racym'
 wf_btnlabels: dw wf_rotatelabel,wf_autolabel,wf_clearlabel,wf_readylabel,wf_soundlabel
 wf_btnflags: times 5 dw 0
@@ -349,32 +506,33 @@ wf_a4: db '1-5 ship, R rotate, A auto, Y ready',0
 wf_placehelp: db 'Place: click/Enter  R rotate  1-5 ship  Right-click remove',0
 wf_allplaced: db 'All five placed. Ready [Y] locks your fleet. N: new fleet',0
 wf_cannotplace: db 'Cannot place here: keep every square on water, inside the grid.',0
-wf_waitlink: db 'Fleet ready. Serial link is the next delivery wave. N: new fleet',0
 wf_deploytitle: db 'DEPLOY YOUR FLEET',0
 wf_readytitle: db 'FLEET READY',0
-%macro WF_BANNER 1
-    %strlen %%length %1
-    db %1
-    times 75-%%length db ' '
-    db 0
-%endmacro
-wf_bannerdeploy: WF_BANNER '  DEPLOY YOUR FLEET                    Two PCs. Two fleets. One winner.'
-wf_bannerready: WF_BANNER '  FLEET READY                         Two PCs. Two fleets. One winner.'
+wf_matchcaption: db 'Captain 1 vs Captain 2 | Turn',0
 wf_tagline: db 'Two PCs. Two fleets. One winner.',0
 wf_yourfleet: db 'YOUR FLEET',0
 wf_enemywaters: db 'ENEMY WATERS',0
 wf_yourships: db 'YOUR SHIPS',0
 wf_selectedlabel: db '  SELECTED',0
-wf_placedlabel: db '  PLACED  ',0
-wf_emptylabel: db '  UNPLACED',0
-wf_footertext: db 'Wave 1: deployment   H: controls/About   M: sound',0
+wf_selectedh: db '> Horizontal ',0
+wf_selectedv: db '> Vertical   ',0
+wf_placedlabel: db '  PLACED     ',0
+wf_emptylabel: db '  UNPLACED   ',0
+wf_footertext: db 'H: controls/About   T: chat   S/O: save/load   F: fullscreen',0
 wf_axes: db 'ABCDEFGHIJ'
 wf_digit: db '  ',0
 
 %define OS88UI_ABOUT
 %define OS88UI_ARM
 %include "os88ui.inc"
+%include "os88line.inc"
+%include "os88alt.inc"
 %include "wirefleet/wfmodel.inc"
+%include "wirefleet/wflink.inc"
+%include "wirefleet/wfchat.inc"
+%include "wirefleet/wfsound.inc"
+%include "wirefleet/wfsave.inc"
+%include "wirefleet/wffull.inc"
 %include "wirefleet/wfvideo.inc"
 %include "wirefleet/art/tiles.inc"
 
@@ -431,5 +589,104 @@ WF_VAR wf_rosterindex,1
 WF_VAR wf_savedboard,1
 WF_VAR wf_rowlimit,1
 WF_VAR wf_rowtiles,10
-    OS88_BSS WF_BSS
+WF_VAR wf_identity,4
+WF_VAR wf_peer,4
+WF_VAR wf_match,4
+WF_VAR wf_side,1
+WF_VAR wf_linkopen,1
+WF_VAR wf_connected,1
+WF_VAR wf_conflict,1
+WF_VAR wf_peerready,1
+WF_VAR wf_wantport,1
+WF_VAR wf_turn,2
+WF_VAR wf_peerturn,2
+WF_VAR wf_hash,2
+WF_VAR wf_pending,1
+WF_VAR wf_pendingcell,1
+WF_VAR wf_cachevalid,1
+WF_VAR wf_cacheturn,2
+WF_VAR wf_cachecell,1
+WF_VAR wf_cachevalue,1
+WF_VAR wf_cacheship,1
+WF_VAR wf_cacheanchor,1
+WF_VAR wf_cachedir,1
+WF_VAR wf_finished,1
+WF_VAR wf_enemysunk,1
+WF_VAR wf_urgent,1
+WF_VAR wf_dirty,1
+WF_VAR wf_sendkind,1
+WF_VAR wf_now,2
+WF_VAR wf_seen,2
+WF_VAR wf_sendtime,2
+WF_VAR wf_rxwork,1
+WF_VAR wf_rlen,1
+WF_VAR wf_rescape,1
+WF_VAR wf_frame,64
+WF_VAR wf_rxbuf,64
+WF_VAR wf_txbuf,130
+WF_VAR wf_txpos,2
+WF_VAR wf_txlen,2
+WF_VAR wf_canonical,7
+WF_VAR wf_serialbuf,SER_BUFFER_SIZE
+WF_VAR wf_badframes,2
+WF_VAR wf_chatseq,2
+WF_VAR wf_chatrxseq,2
+WF_VAR wf_chatpending,1
+WF_VAR wf_chatlength,1
+WF_VAR wf_chattext,32
+WF_VAR wf_chatline,40
+WF_VAR wf_fallback,1
+WF_VAR wf_chatmode,1
+WF_VAR wf_line,OS88LINE_SZ
+WF_VAR wf_input,33
+WF_VAR wf_chatlog,120
+WF_VAR wf_chatcount,2
+WF_VAR wf_linebuf,76
+WF_VAR wf_soundseq,2
+WF_VAR wf_soundwait,1
+WF_VAR wf_soundtime,2
+WF_VAR wf_soundhz,2
+WF_VAR wf_soundactive,1
+WF_VAR wf_soundnotes,2
+WF_VAR wf_filename,13
+WF_VAR wf_filemode,1
+WF_VAR wf_filesizelo,2
+WF_VAR wf_filesizehi,2
+WF_VAR wf_checkboard,100
+WF_VAR wf_checkship,1
+WF_VAR wf_checkplaced,1
+WF_VAR wf_nativefull,1
+WF_VAR wf_infs,1
+WF_VAR wf_fsfile,1
+WF_VAR wf_fsquit,1
+WF_VAR wf_fsforce,1
+WF_VAR wf_fsmouse,1
+WF_VAR wf_fspress,1
+WF_VAR wf_fslastx,2
+WF_VAR wf_fslasty,2
+WF_VAR wf_fsi,FSI_SIZE
+WF_VAR wf_fontfirst,1
+WF_VAR wf_fontlast,1
+WF_VAR wf_fontbase,2
+WF_VAR wf_font,768
+WF_VAR wf_fsstart,2
+WF_VAR wf_fsxbyte,2
+WF_VAR wf_fsscan,1
+WF_VAR wf_fstextx,2
+WF_VAR wf_fstexty,2
+WF_VAR wf_fstextptr,2
+WF_VAR wf_fsglyph,2
+WF_VAR wf_fstextscan,1
+WF_VAR wf_fscache,240
+WF_VAR wf_fscacheptr,2
+WF_VAR wf_bannerbuf,76
+WF_VAR wf_headershown,75
+WF_VAR wf_rostershown,5
+WF_VAR wf_buttonshown,20
+WF_VAR wf_footershown,2
+WF_VAR wf_chatshown,2
+WF_VAR wf_chatmodeshown,1
+wf_savepad equ (512-((os88_image_end-$$+WF_BSS)&511))&511
+wf_savebuf equ os88_image_end+WF_BSS+wf_savepad
+    OS88_BSS WF_BSS+wf_savepad+512
     OS88_IMAGE_END

@@ -16182,9 +16182,13 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 
 # WireBall: serial null-modem Pong (SPEC.md 109).
 # WireFleet (SPEC.md 114). One embedded-art package; all four disk sizes.
-.PHONY: wirefleet wirefleetdisk
+.PHONY: wirefleet wirefleetdisk wirefleet-pair wirefleettest
+wirefleet-pair:
+	python3 tools/wireball-pair.py --game wirefleet
+wirefleettest: wirefleetdisk $(IMG)
+	python3 tests/wirefleetlink.py
 wirefleet: $(BUILD)/wireflet.o88
-$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wfvideo.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
 $(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@

@@ -29,12 +29,14 @@ def art():
     subprocess.run([sys.executable, str(ROOT / 'tools/wirefleet_assets.py'), '--check'],
                    cwd=ROOT, check=True)
     tiles = A.tiles()
-    assert len(tiles) == 38
+    assert len(tiles) == 72
     assert len({A.packed(t) for t in tiles[:4]}) == 4, 'color shot shapes collapsed'
     assert len({A.packed(t, True) for t in tiles[:4]}) == 4, 'mono shot shapes collapsed'
     assert all(set(t.tobytes()) <= set(range(16)) for t in tiles)
     for tile in tiles:
         assert len(A.packed(tile)) == 288 and len(A.packed(tile, True)) == 72
+        assert len(A.cga(tile)) == 72
+    assert len({A.cga(t) for t in tiles[:4]}) == 4, 'CGA shot shapes collapsed'
     for offset in (4, 21):
         for start, length in zip((0, 5, 9, 12, 15), (5, 4, 3, 3, 2)):
             hull = tiles[offset + start:offset + start + length]
