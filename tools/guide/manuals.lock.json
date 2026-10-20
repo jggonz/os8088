@@ -1116,9 +1116,9 @@
   "sources": [
    "drivers/vmmouse"
   ],
-  "stamped": "e4576a70",
+  "stamped": "6151b2e8",
   "strings": "4095e5c86a5e295a",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "why": "the driver passes wheel notches to the kernel (SPEC.md 9.12.8), so the wheel scrolls the front window"
  },
  "WEAVE": {
   "sources": [],
