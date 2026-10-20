@@ -1196,9 +1196,9 @@
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "0517180f",
-  "strings": "852ffb65a027daaa",
-  "why": "Checked the complete game manual against final adapter, recovery and sound acceptance"
+  "stamped": "554028b0",
+  "strings": "b130c36c9f464476",
+  "why": "Rewrote Connect, Chat, New fleet, Load and Display for the automatic link (SPEC 114.9), Send, and the VGA/EGA colour layout (114.10); capture is keyboard-only and still valid"
  },
  "WORD": {
   "sources": [],

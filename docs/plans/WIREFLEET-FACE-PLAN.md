@@ -95,7 +95,7 @@ behaviour that works and was checked; the evidence is named beside it.
 
 - [x] `vga-face` gains the flat vocabulary and what this face learned.
 - [x] SPEC §114 and the diary describe what shipped; screenshots in the PR.
-- [ ] Final pass: the deduplicated soak union of the affected rows once,
+- [x] Final pass: the deduplicated soak union of the affected rows once,
   then `make test-full` once (CLAUDE.md, Testing).
 
 ## Found on the way (fixed)
