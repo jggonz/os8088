@@ -119,6 +119,19 @@ So: **`libudev-dev` wants the NEWER version a refreshed index names; QEMU
 wants an OLDER one than the index names.** Applying either cure to the other
 package reinstates the 404 you are trying to escape.
 
+**Noble's QEMU is 8.2, and one row needs a 9.** QEMU 8.x ABORTS when the
+guest takes a hardware interrupt with SS:SP in MMIO-backed memory -
+`qemu_mutex_lock_iothread_impl: assertion failed`, out of
+`do_interrupt_all`, because 8.2's `do_st_mmio_leN` locks the BQL
+unconditionally and an interrupt arrives with it held (9.0 made it
+`BQL_LOCK_GUARD()`). The hibernate resume stub runs on a stack in the text
+framebuffer by design (SPEC.md 87.5) and calls `int 13h`, so `hmahiber` - the
+one QEMU row that RESUMES - saw the emulator die mid-resume and reported a QMP
+socket refusing. It needs the `qemu9` capability now and SKIPS without it;
+`tools/setup-qemu9.sh` clones (download.qemu.org is refused by the proxy, git
+is not) and builds 9.2 into `build/qemu9/` in about ten minutes, and prints
+the `export PATH=` line, since the rows launch `qemu-system-i386` by name.
+
 If a previous attempt is wedged, clear `/var/lib/dpkg/lock-frontend` and run
 `dpkg --configure -a` first — and **do not `pkill -f apt-get` from inside a
 Bash tool call**, because the pattern matches the calling shell and kills it.

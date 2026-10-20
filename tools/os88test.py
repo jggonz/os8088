@@ -272,6 +272,11 @@ def capabilities():
         caps.add("marty")
     if shutil.which("qemu-system-i386") or shutil.which("qemu-system-x86_64"):
         caps.add("qemu")
+    # ...and one that survives an interrupt taken on a stack in VGA memory,
+    # which QEMU 8 does not (os88build.qemu9() has the defect). Only a row
+    # that RESUMES a hibernate under QEMU needs it.
+    if os88build.qemu9():
+        caps.add("qemu9")
     # The BINARY, not the directory: build/cc exists from the moment
     # tools/setup-cc.sh starts cloning, so a half-finished or failed setup
     # would grant the capability and turn a skip into a confusing build

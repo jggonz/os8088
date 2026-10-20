@@ -692,6 +692,32 @@ def nasm3():
     return None
 
 
+def qemu9():
+    """The qemu-system-i386 a row would launch, when it is QEMU 9 or later.
+
+    QEMU 8.x aborts the whole emulator when the guest takes a hardware
+    interrupt with SS:SP in MMIO-backed memory: accel/tcg/cputlb.c's
+    do_st_mmio_leN locks the BQL unconditionally there, and an interrupt is
+    delivered with it already held (`qemu_mutex_lock_iothread_impl: assertion
+    failed`). 9.0 made it BQL_LOCK_GUARD(). The hibernate resume stub runs on
+    a stack in the TEXT FRAMEBUFFER by design (SPEC.md 87.5) and calls int
+    13h, so a resume under QEMU needs a 9 - and on 8.2, which Ubuntu 24.04
+    ships, a row saw only a QMP socket refusing. The rows launch the binary
+    by NAME, so PATH is the question; tools/setup-qemu9.sh builds one and
+    prints the PATH line. Read by `--version`, never by name.
+    """
+    p = shutil.which("qemu-system-i386")
+    if not p:
+        return None
+    try:
+        out = subprocess.run([p, "--version"], capture_output=True, text=True,
+                             timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"QEMU emulator version (\d+)\.", out or "")
+    return p if m and int(m.group(1)) >= 9 else None
+
+
 def tree_root():
     """The run's own build tree, or None - `$OS88_TREE`.
 

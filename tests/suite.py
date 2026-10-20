@@ -403,8 +403,11 @@ FAST = [
         "is back in the pool, SOUND.DRV is reloaded into it, no MEM_K_HIB "
         "claim is left, C: lists HELLO.TXT and both files are gone. B, -m 1 "
         "on copies of the disks: `Hibernation: other build` and the pointer "
-        "deleted - the negative control. SOAK: one subsystem, a 286 feature",
-        needs=("qemu", "nasm"),
+        "deleted - the negative control. SOAK: one subsystem, a 286 feature. "
+        "NEEDS QEMU 9: the resume stub's stack is in VGA memory (87.5) and "
+        "QEMU 8 aborts on the first interrupt taken there "
+        "(os88build.qemu9(), tools/setup-qemu9.sh)",
+        needs=("qemu", "qemu9", "nasm"),
         wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
                "build/hdd.hma.bin", "build/net.hma.bin",
                "build/sound.hma.map", "build/hdd.hma.map")),
