@@ -186579,7 +186579,6 @@ measured, the tritone-transposed reference 0 - with the PC speaker's
 capture silent.
 
 ### 105.9 The window
-### 105.9 The window
 
 Laid out from the live content box every paint (§39). **Tall** (content
 >= 262 lines - VGA, EGA, Hercules): the mock-up whole, columns 23% / 36% /
