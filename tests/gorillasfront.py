@@ -86,6 +86,14 @@ def arm(tag, off, disk, out):
             G.key(m, 'Backspace')
         type_text(m, 'no'); G.key(m, 'Enter')
         assert not p.b('bgmenabled')
+        assert p.b('state') == 5 and p.b('setupfield') == 6
+        assert b'Dots show the angle of a throw' in p.data('hudchars', 512)
+        type_text(m, 'sure'); G.key(m, 'Enter')
+        assert p.b('setupfield') == 6 and b'Enter Yes or No' in p.data('hudchars', 512)
+        for _ in range(4):
+            G.key(m, 'Backspace')
+        type_text(m, 'y'); G.key(m, 'Enter')
+        assert p.b('guide') == 1
         assert p.b('state') == 6 and (p.w('gwhole')*10 + p.w('gfrac')//100) == 162
         assert p.b('players') == 1 and p.b('target') == 1
         G.key(m, 'KeyV')
@@ -100,17 +108,24 @@ def arm(tag, off, disk, out):
         if tag == 'vga':
             m.alt('Enter')
             G.wait(m, lambda: p.b('fsready'), 'solo fullscreen game')
-        G.key(m, 'Digit0'); G.key(m, 'Enter')
+        G.key(m, 'Digit0')
+        assert p.w('guideat') == 0 and p.b('guidedots') >= 6, 'no guide for the human'
+        G.key(m, 'Enter')
         G.key(m, 'Digit3'); G.key(m, 'Digit0'); G.key(m, 'Enter')
         G.wait(m, lambda: p.b('turn') == 1, 'human throw ends')
+        G.wait(m, lambda: p.w('aipower') > 0, 'computer chooses its throw')
         G.key(m, 'KeyP')
         assert p.b('paused')
         aim = p.w('aipower')
         G.M.pace(m, .4)
         assert p.w('aipower') == aim, 'paused computer kept aiming'
+        # Its choice is on the glass for the whole of its thought.
+        assert p.w('guideat') == p.w('angle') + 512 and p.b('guidedots') >= 3
+        screenshot(m, p, out / (tag + '-guide.png'))
         G.key(m, 'KeyP')
         G.wait(m, lambda: p.b('state') == 1, 'computer launches its own throw')
-        assert p.b('turn') == 1 and p.w('angle') == 55
+        assert p.b('turn') == 1 and 45 <= p.w('angle') <= 70
+        assert p.b('guidedots') == 0, 'guide left in the banana\'s path'
         G.wait(m, lambda: p.b('state') != 1, 'computer throw lands')
         assert p.b('turn') == 0 or p.b('state') == 3
         if p.b('state') == 0:
@@ -126,6 +141,9 @@ def arm(tag, off, disk, out):
         assert p.b('setupfield') == 5
         G.key(m, 'Enter')
         assert p.b('bgmenabled'), 'blank music choice did not default to Yes'
+        assert p.b('setupfield') == 6
+        G.key(m, 'Enter')
+        assert p.b('state') == 6 and not p.b('guide'), 'blank guide choice did not default to No'
         assert p.b('players') == 2 and p.b('target') == 3
         assert (p.w('gwhole')*10 + p.w('gfrac')//100) == 1
         G.key(m, 'KeyV')

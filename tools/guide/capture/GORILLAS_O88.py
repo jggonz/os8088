@@ -63,6 +63,8 @@ def capture(ui, shot):
     key("Enter")                        # gravity 9.8
     wait(lambda: p.b("setupfield") == 5)
     key("Enter")                        # music: yes
+    wait(lambda: p.b("setupfield") == 6)
+    key("Enter")                        # aim guides: no
     wait(lambda: p.b("state") == CHOICE)
     key("KeyP")
     wait(lambda: p.b("state") == AIM and p.b("turn") == 0)

@@ -22,7 +22,7 @@ gorillas. Press any key to go straight to the setup, or let the tune finish.
 
 ![Setup asking for the gravity.](shot:gorillas-setup){right}
 
-The setup asks six questions, one at a time. Type an answer and press
+The setup asks seven questions, one at a time. Type an answer and press
 `Enter`, or press `Enter` alone to take the default. `Backspace` deletes a
 character.
 
@@ -34,6 +34,10 @@ character.
 4. **Gravity**: 0.001 to 9999.999, with up to three decimal places (default
    9.8, the Earth's). Lower gravity gives longer, higher throws.
 5. **Gameplay music?**: Yes or No (default Yes). `Y` and `N` work too.
+6. **Show aim guides?**: Yes or No (default No). With Yes, a line of dots
+   leaves each gorilla's hand at the angle being aimed, the computer's
+   included. It shows the angle only: the dots thin out and stop well
+   before the banana would land.
 
 Finally press `V` to watch the gorillas dance to the intro music, or `P` or
 `Enter` to start playing. Any key ends the dance.
@@ -101,8 +105,10 @@ and white in both.
 
 ## Good to know
 
-- The computer works out its throw from the same wind and gravity as you,
-  then misses by a little, so it can be beaten. Buildings get in its way too.
+- The computer does not know where you are. Its first throw on a skyline is
+  a guess, and after each throw it only sees whether the banana fell short
+  or flew past you, so it takes a few throws to find you. A new skyline
+  makes it start again. Buildings get in its way too.
 - The game waits while its window is covered or while you work in another
   program.
 - With an AdLib or Sound Blaster card set up in the Control Panel, three
