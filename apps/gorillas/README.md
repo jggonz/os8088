@@ -28,7 +28,8 @@ press any key to skip directly to setup:
    (default 9.8). Smaller values give longer, higher arcs.
 5. Choose whether to enable **gameplay music: Yes or No** (default Yes).
    **Y / N** also work. The page explains that **M** toggles music during play.
-6. Press **V** to view the musical gorilla dance, or **P / Enter** to play.
+6. Choose whether to **show aim guides: Yes or No** (default No). See below.
+7. Press **V** to view the musical gorilla dance, or **P / Enter** to play.
    Any key skips the dance; it also ends automatically.
 
 Blank entries accept defaults; Backspace edits. A blinking underscore marks
@@ -125,6 +126,12 @@ past, and narrows its velocity between the two. It usually takes a few turns to
 find you, and a new skyline makes it start over. A throw that craters its own
 rooftop makes it throw higher. Buildings can intercept its shots and retain
 craters. It pauses briefly before each throw, and pause and menus stay usable.
+
+Setup's last question turns on **aim guides**: a line of dots leaving the
+active gorilla's hand at the angle being aimed, the computer's included. The
+line is straight and stops short, with its dots spreading and fading as it
+goes. It shows the exit angle but not where the banana lands. The dots are
+taken out of the scene before the throw, so a banana never hits one.
 
 The intro, dance, throw and impact note sequences come from the reference
 `PLAY` strings. `tools/gorillas_music.py` generates them as a byte a note -

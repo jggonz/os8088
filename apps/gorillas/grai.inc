@@ -11,12 +11,25 @@ GR_AITHINK equ 24               ; worker ticks of visible thought, ~1.3 s
 gr_aitick:
     call gr_aimine
     jne .out
+    cmp word [gr_aipower], 0
+    jne .think
+    ; Choose first and show it: the HUD (and the aim guide, when chosen)
+    ; carry this throw for the whole of the thought before it.
+    call gr_aichoose
+    call gr_hudpaint
+.think:
     inc word [gr_aipower]
     cmp word [gr_aipower], GR_AITHINK
     jae .fire
 .out:
     ret
 .fire:
+    mov word [gr_aipower], 0
+    call gr_fire
+    jmp gr_hudpaint
+
+; Set gr_angle and gr_power to the next throw from what is learned.
+gr_aichoose:
     cmp word [gr_aiangle], 0
     jne .aimed
     mov ax, 26
@@ -93,9 +106,7 @@ gr_aitick:
     mov [gr_power], ax
     mov ax, [gr_aiangle]
     mov [gr_angle], ax
-    mov word [gr_aipower], 0
-    call gr_fire
-    jmp gr_hudpaint
+    ret
 
 ; ZF set when the throw in the air (or about to be) is the computer's.
 gr_aimine:

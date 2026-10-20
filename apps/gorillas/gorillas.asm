@@ -819,6 +819,7 @@ gr_city:
     call gr_gorilla
     call gr_sun
     call gr_windarrow
+    call gr_guidescene          ; gr_city's callers paint the whole scene
     call gr_hud
     jmp gr_bgmlevel
 
@@ -1334,6 +1335,7 @@ gr_selectpaint:
     ret
 
 gr_hudpaint:
+    call gr_guideshow
     call gr_hud
     xor si, si
     mov di, 96
@@ -1571,6 +1573,7 @@ gr_vgatext:
 
  ; Reference equations in a Q6 scene, shared with computer prediction.
 gr_fire:
+    call gr_guidehide           ; before the banana can collide with a dot
     mov byte [gr_state], 1
     mov byte [gr_saved], 0
     mov word [gr_age], 0
@@ -2676,6 +2679,7 @@ gr_sin:
 %include "grphysics.inc"
 %include "grplay.inc"
 %include "grai.inc"
+%include "grguide.inc"
 %include "grfront.inc"
 %include "grmusic.inc"
 %include "grbgm.inc"
@@ -2720,6 +2724,17 @@ VAR gr_aiangle, 2              ; this skyline's arc; 0 until the first throw
 VAR gr_ailast, 2               ; the power of its latest throw
 VAR gr_ailo, 2                 ; strongest throw that fell short, 0 none
 VAR gr_aihi, 2                 ; weakest throw that flew past, 0 none
+VAR gr_guide, 1                ; setup's aim guide choice
+VAR gr_guideat, 2              ; angle+512*turn drawn, 0FFFFh none
+VAR gr_guidedots, 1            ; dots in the scene now
+VAR gr_guideowed, 1            ; gr_guidebox needs a repaint
+VAR gr_guidequiet, 1           ; a whole-scene paint follows: no blit
+VAR gr_guidebox, 8             ; x0, y0, x1, y1 logical, inclusive
+VAR gr_guidesave, 4*GR_GUIDEN  ; x word, y byte, ink underneath byte
+VAR gr_guidex, 2
+VAR gr_guidey, 2
+VAR gr_guidec, 2
+VAR gr_guides, 2
 VAR gr_name1, 11
 VAR gr_name2, 11
 VAR gr_setupfield, 1

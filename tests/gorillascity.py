@@ -166,7 +166,7 @@ def check_variety(m, p, code):
         for seed in seeds:
             forget(**state)
             W('seed', seed)
-            call(m, code, 'gr_aitick.fire')
+            call(m, code, 'gr_aichoose')
             out.append((p.w('angle'), p.w('power')))
         return out
     m.write(p.base + p.offsets['gr_players'], b'\x01')
@@ -272,6 +272,71 @@ def check_surfaces(m, p, code):
     call(m, code, 'gr_inktables')
 
 
+def check_guide(m, p, code, tag):
+    """The aim guide (SPEC.md 99): a ray along the exit angle that thins out
+    and stops short, every ink restored, the glass matching the scene."""
+    W = lambda name, value: m.write(p.base + p.offsets['gr_' + name],
+                                    struct.pack('<H', value))
+    B = lambda name, value: m.write(p.base + p.offsets['gr_' + name], bytes([value]))
+    clean = p.data('scene', 16384)
+    def ink(scene, x, y):
+        return (scene[y*128+x//2] >> (0 if x & 1 else 4)) & 15
+    def dots():
+        n, raw = p.b('guidedots'), p.data('guidesave', 32)
+        return [struct.unpack_from('<HBB', raw, 4*i) for i in range(n)]
+    gx = struct.unpack('<HH', p.data('gx', 4))
+    gy = struct.unpack('<HH', p.data('gy', 4))
+    B('state', 0)
+    B('guide', 0); B('turn', 0); W('angle', 45)
+    call(m, code, 'gr_guideshow')
+    assert p.b('guidedots') == 0 and p.data('scene', 16384) == clean, 'guide drawn while off'
+    B('guide', 1)
+    for turn, angle in ((0, 45), (0, 70), (1, 30), (1, 60)):
+        B('turn', turn); W('angle', angle)
+        call(m, code, 'gr_guideshow')
+        assert p.w('guideat') == angle + 512*turn
+        scene, seen = p.data('scene', 16384), dots()
+        assert len(seen) >= 6, (turn, angle, seen)
+        x0 = gx[turn] + 2 + 8*turn
+        y0 = gy[turn] - 7
+        side = -1 if turn else 1
+        reach = [((x-x0)**2 + (y-y0)**2) ** .5 for x, y, _ in seen]
+        assert all(a < b for a, b in zip(reach, reach[1:])), ('not outward', seen)
+        assert max(reach) <= 36, ('guide runs on toward the landing', seen)
+        gaps = [b - a for a, b in zip(reach, reach[1:])]
+        assert gaps[-1] > 2*gaps[0], ('guide does not thin out', gaps)
+        for x, y, _ in seen[:3]:              # the first dots ARE the angle
+            assert side*(x - x0) > 0 and y < y0
+            # slope in the scene's aspect: dy/dx = tan(angle) * 15/16
+            import math
+            want = math.atan2(math.sin(math.radians(angle))*15/16,
+                              math.cos(math.radians(angle)))
+            got = math.atan2(y0 - y, side*(x - x0))
+            assert abs(got - want) < .3, (angle, x, y, got, want)
+        assert {ink(scene, x, y) for x, y, _ in seen[:3]} == {15}
+        assert {ink(scene, x, y) for x, y, _ in seen[4:]} == {7}, 'far dots do not fade'
+        drawn = {(x, y) for x, y, _ in seen}
+        for y in range(128):
+            for x in range(256):
+                if (x, y) not in drawn:
+                    assert ink(scene, x, y) == ink(clean, x, y), ('stale dot', x, y)
+        for x, y, under in seen:
+            if sum(1 for d in seen if d[:2] == (x, y)) == 1:
+                assert under == ink(clean, x, y)
+        check_pixels(m, p, tag)
+    # Same angle again: nothing redrawn. Then a throw takes it all out.
+    call(m, code, 'gr_guideshow')
+    assert dots() == seen
+    call(m, code, 'gr_guidehide')
+    assert p.b('guidedots') == 0 and p.w('guideat') == 0xffff
+    assert p.data('scene', 16384) == clean, 'guide left ink behind'
+    check_pixels(m, p, tag)
+    B('state', 1)
+    call(m, code, 'gr_guideshow')
+    assert p.b('guidedots') == 0, 'guide drawn in flight'
+    B('state', 0); B('guide', 0); B('turn', 0)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--arm', choices=G.ARMS)
@@ -279,7 +344,8 @@ def main():
     ap.add_argument('--max-paint-ms', type=float, default=1800)
     args = ap.parse_args()
     off, code = G.offsets(), I.code_offsets(('gr_city', 'gr_blit', 'gr_aitick',
-                                          'gr_aitick.fire', 'gr_ailearn',
+                                          'gr_aichoose', 'gr_ailearn',
+                                          'gr_guideshow', 'gr_guidehide',
                                           'gr_aiterrain', 'gr_inktables',
                                           'gr_frontprepare', 'gr_widepose'))
     report = {}
@@ -317,6 +383,7 @@ def main():
                     assert scene == seeded_scene, 'seeded city differs across modes/adapters'
                     paint = call(m, code, 'gr_fullpaint')
                     check_pixels(m, p, tag)
+                    check_guide(m, p, code, tag)
                     report[tag+'-'+mode] = dict(city_ms=build, paint_ms=paint,
                                                scene_sha256=hashlib.sha256(scene).hexdigest())
                     print(tag, mode, report[tag+'-'+mode], flush=True)

@@ -182951,8 +182951,9 @@ gorillas. Music starts on the first worker frame after the initial paint. The
 completed score or any key opens setup: one/two players (default two), two names (ten
 characters each, default Player 1/Player 2 or Computer), winning score, and
 positive decimal gravity (0.001..9999.999 m/s², default 9.8), and gameplay music
-(Yes/No, default Yes; case-insensitive Y/N also accepted). The music question
-explains the M toggle during gameplay. Enter accepts defaults;
+(Yes/No, default Yes; case-insensitive Y/N also accepted), and aim guides
+(Yes/No, default No, the same parser). The music question explains the M toggle
+during gameplay. Enter accepts defaults;
 Backspace edits. Invalid numeric entries remain on the current question. Name
 entry consumes printable keys before gameplay shortcuts. Alt+Enter/Escape and
 the Game menu remain available. V selects the optional musical dance; P/Enter
@@ -183022,8 +183023,22 @@ never below 2 and the velocity is clamped to 5..360. A verdict that contradicts
 the bracket drops the stale end. A crater within 16 pixels of its own gorilla
 raises the angle by 10, up to 80, and empties the bracket. At 80 the same
 crater counts as short. `gr_city` forgets all of it with the skyline. Terrain
-can intercept any throw, and extreme gravity may take many turns.
-Pause, focus and About suspend aiming. Humans cannot edit a pending computer
+can intercept any throw, and extreme gravity may take many turns. Its throw
+is chosen when its turn starts, so the HUD shows it during the thought.
+Pause, focus and About suspend aiming.
+
+Setup's seventh question, `Show aim guides? Yes or No` (default No, `gr_guide`),
+draws the active player's exit angle in `grguide.inc`. It is a straight ray of
+eight dots from `gr_initmotion`'s release point, at the scene's 15/16 aspect.
+No gravity, wind or velocity enters it, so it says nothing of the landing. The
+dots sit 4..33 pixels out with widening gaps and stray up to 3 pixels off the
+line. The first four are ink 15 and the last four ink 7. They are drawn into
+the scene with the ink beneath each one saved. An angle edit, a turn change or
+the computer's choice restores the old dots and draws the new ones, then blits
+their union once. `gr_fire` takes the guide out before the first flight step,
+so collisions never meet a dot. A key of angle + 512 × turn skips the redraw
+when a HUD update moves no angle, and `gr_clear` drops the dots with the scene.
+`gr_city` draws the first one into the scene its caller paints whole. Humans cannot edit a pending computer
 shot. Only the active player's name and both scores appear in the first HUD row, with Angle and
 Velocity below. Wind appears beside Angle and as a proportional arrow in the
 reserved rows below the buildings. The arrow remains visible during flight.
