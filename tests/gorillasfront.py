@@ -110,7 +110,7 @@ def arm(tag, off, disk, out):
         assert p.w('aipower') == aim, 'paused computer kept aiming'
         G.key(m, 'KeyP')
         G.wait(m, lambda: p.b('state') == 1, 'computer launches its own throw')
-        assert p.b('turn') == 1 and p.w('angle') == 55
+        assert p.b('turn') == 1 and 45 <= p.w('angle') <= 70
         G.wait(m, lambda: p.b('state') != 1, 'computer throw lands')
         assert p.b('turn') == 0 or p.b('state') == 3
         if p.b('state') == 0:

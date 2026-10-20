@@ -183010,10 +183010,19 @@ coordinates, a signed 32-bit height, Q14 sine lookup, midpoint velocities
 and fractional acceleration accumulators. One frame represents .1 simulated
 seconds; adaptive substeps move at most one logical pixel per axis and test
 actual gorilla ink. The minimum gravity and maximum velocity keep peak height
-within the signed 32-bit range. The solo opponent in `grai.inc` evaluates one
-candidate power per worker tick using the same motion routines at 55 degrees,
-then adds -8..+8 velocity error, clamped to 1..360. Candidate searches stop after
-512 frames; difficult extreme-gravity shots may miss. Terrain can intercept it.
+within the signed 32-bit range. The solo opponent in `grai.inc` never aims at
+the human's position. It thinks for 24 worker ticks, then throws. A skyline's
+first throw is a guess: an angle of 45..70, kept for the skyline, and a velocity
+of 40..100. Each of its landings yields one verdict, short of the rival or past
+it, taken where the banana cratered or left the scene. The verdict brackets the
+velocity between the strongest short throw and the weakest long one. With both
+ends known the next throw is the midpoint ± a quarter of the gap. With one end
+known it is half as hard again, or a third softer, ± an eighth. The spread is
+never below 2 and the velocity is clamped to 5..360. A verdict that contradicts
+the bracket drops the stale end. A crater within 16 pixels of its own gorilla
+raises the angle by 10, up to 80, and empties the bracket. At 80 the same
+crater counts as short. `gr_city` forgets all of it with the skyline. Terrain
+can intercept any throw, and extreme gravity may take many turns.
 Pause, focus and About suspend aiming. Humans cannot edit a pending computer
 shot. Only the active player's name and both scores appear in the first HUD row, with Angle and
 Velocity below. Wind appears beside Angle and as a proportional arrow in the

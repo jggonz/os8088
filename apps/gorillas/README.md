@@ -119,11 +119,12 @@ substeps move at most one logical pixel along either axis, and gorilla
 collisions test the drawn silhouette. Angles use Q14 sine values.
 The logical scene, integer angles and velocity, bounded decimal gravity and BIOS-tick
 animation timing remain native adaptations rather than bit-exact BASIC emulation. The solo
-opponent predicts candidate trajectories using the same wind and gravity,
-then adds a random velocity error of up to eight points in either direction
-before throwing. This makes it more forgiving; buildings can also intercept
-its shots and retain craters.
-Its aiming work is spread over worker ticks so pause and menus stay usable.
+opponent does not know where you stand. Its first throw on each skyline is a
+guess. After that it learns only whether each banana fell short of you or flew
+past, and narrows its velocity between the two. It usually takes a few turns to
+find you, and a new skyline makes it start over. A throw that craters its own
+rooftop makes it throw higher. Buildings can intercept its shots and retain
+craters. It pauses briefly before each throw, and pause and menus stay usable.
 
 The intro, dance, throw and impact note sequences come from the reference
 `PLAY` strings. `tools/gorillas_music.py` generates them as a byte a note -
@@ -247,7 +248,7 @@ intro-cache allocations. No additional heap or kernel memory is needed.
 
 Run `python3 tests/gorillascity.py --output build/gorillas-city.json` for the
 cycle and pixel gate. It checks rooftop placement and spacing across 32 seeds,
-variable widths, computer aiming error, reproducible cities across adapters,
+variable widths, the computer's guess-and-bracket learning, reproducible cities across adapters,
 every ink pair, scaling, partial terrain updates and clipping. VGA checks read
 all four planes with guest memory copies; debugger peeks alone return only plane zero.
 

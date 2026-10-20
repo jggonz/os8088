@@ -663,6 +663,10 @@ gr_city:
     ; Clearing the scene invalidates the HUD character cache too.
     call gr_clear               ; ...and leaves AX = 0, ES = DS
     mov [gr_aipower], ax
+    mov [gr_aiangle], ax        ; a new skyline: the opponent forgets it all
+    mov [gr_ailast], ax
+    mov [gr_ailo], ax
+    mov [gr_aihi], ax
     mov [gr_state], al
     mov [gr_saved], al
     mov [gr_sunhit], al
@@ -1679,12 +1683,12 @@ gr_tick:
     sar ax, cl
     mov cx, ax
     or ch, ch                   ; x outside 0..255, either side
-    jnz .miss
+    jnz .away
     cmp word [gr_pyhi], 0
     jl .next                    ; signed 32-bit height: high lunar arcs
-    jg .miss
+    jg .away
     cmp dx, 116
-    jge .miss
+    jge .away
     cmp dx, 24
     jl .next                    ; flight above scene is legal
     ; Bound the lookup, then test actual gorilla ink, including self-hits.
@@ -1733,6 +1737,8 @@ gr_tick:
     call gr_banana
 .out:
     ret
+.away:
+    call gr_ailearn             ; CX = where it left the scene
 .miss:
     call gr_sunreset
     xor byte [gr_turn], 1
@@ -1744,6 +1750,7 @@ gr_tick:
     mov [gr_edit], al
     jmp gr_hudpaint
 .terrain:
+    call gr_aiterrain
     mov al, 7
     call gr_blaststart
     mov si, gr_musicimpact
@@ -2708,19 +2715,11 @@ VAR gr_insun, 1
 VAR gr_scores, 2
 VAR gr_target, 1
 VAR gr_players, 1
-VAR gr_aipower, 2
-VAR gr_aierror, 2
-VAR gr_aibest, 2
-VAR gr_aix, 2
-VAR gr_aiy, 2
-VAR gr_aiyhi, 2
-VAR gr_aivx, 2
-VAR gr_aivy, 2
-VAR gr_aigrem, 2
-VAR gr_aiwrem, 2
-VAR gr_aixrem, 2
-VAR gr_aiyrem, 2
-VAR gr_aitarget, 2
+VAR gr_aipower, 2              ; worker ticks spent thinking this turn
+VAR gr_aiangle, 2              ; this skyline's arc; 0 until the first throw
+VAR gr_ailast, 2               ; the power of its latest throw
+VAR gr_ailo, 2                 ; strongest throw that fell short, 0 none
+VAR gr_aihi, 2                 ; weakest throw that flew past, 0 none
 VAR gr_name1, 11
 VAR gr_name2, 11
 VAR gr_setupfield, 1
