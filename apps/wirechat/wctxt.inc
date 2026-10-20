@@ -36,6 +36,7 @@ wc_k_host:      db 'host', 0
 wc_k_nick:      db 'nick', 0
 wc_k_notify:    db 'notify', 0
 wc_k_friend:    db 'friend', 0
+wc_k_code:      db 'code', 0
 wc_def_host:    db 'os8088.com', 0
 wc_def_pfx:     db '/chat/', 0
 
@@ -83,9 +84,10 @@ wc_lk_join:     db 'Connecting...', 0
 wc_lk_live:     db 'Connected', 0
 wc_lk_rest:     db 'Resting - trying again later', 0
 wc_lk_off:      db 'Offline - retrying in ', 0
+wc_lk_key:      db 'Enter the code for this nick', 0
 wc_linkwords:   dw wc_lk_nonick, wc_lk_nodrv, wc_lk_join, wc_lk_live
-                dw wc_lk_rest, wc_lk_off
-%if LK_NONICK != 0 || LK_NODRV != 1 || LK_JOIN != 2 || LK_LIVE != 3 || LK_REST != 4 || LK_OFF != 5
+                dw wc_lk_rest, wc_lk_off, wc_lk_key
+%if LK_NONICK != 0 || LK_NODRV != 1 || LK_JOIN != 2 || LK_LIVE != 3 || LK_REST != 4 || LK_OFF != 5 || LK_KEY != 6
   %error "wc_linkwords is indexed by LK_*"
 %endif
 
@@ -93,7 +95,11 @@ wc_linkwords:   dw wc_lk_nonick, wc_lk_nodrv, wc_lk_join, wc_lk_live
 wc_p_nick:      db 'Nick: ', 0
 wc_p_find:      db 'Find: ', 0
 wc_p_friend:    db 'Friend: ', 0
-wc_prompts:     dw wc_empty, wc_p_nick, wc_p_find, wc_p_friend
+wc_p_key:       db 'Code: ', 0
+wc_prompts:     dw wc_empty, wc_p_nick, wc_p_find, wc_p_friend, wc_p_key
+%if MD_NICK != 1 || MD_FIND != 2 || MD_FRIEND != 3 || MD_KEY != 4
+  %error "wc_prompts is indexed by MD_*"
+%endif
 
 ; --- the emoticons (SPEC.md 113.6.2): ASCII, because the font is -----------------
 wc_e0:          db ':)', 0

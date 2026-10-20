@@ -8,6 +8,7 @@
 ;   nick George
 ;   notify 1
 ;   friend Alin                   (up to WC_NFR of them)
+;   code 0f1e...                  an owned nick's code (SPEC.md 113.2.2)
 ;
 ; Read in the first wake, written whole whenever the nick, the friends or the
 ; notification switch change - by the wake handler, because a file cell is the
@@ -86,6 +87,16 @@ wc_cfgline:
     mov di, wc_k_friend
     call wc_pfxci
     jnc .friend
+    mov di, wc_k_code
+    call wc_pfxci
+    jnc .code
+    jmp short .done
+.code:
+    call wc_skipsp
+    mov bx, si
+    mov di, wc_key
+    mov cx, WC_KEYN
+    call wc_ncopy
     jmp short .done
 .host:
     call wc_hostparse
@@ -237,6 +248,15 @@ wc_cfgsave:
     mov al, ' '
     call wc_putc
     mov si, wc_nick
+    call wc_put
+    call wc_putnl
+    cmp byte [wc_key], 0
+    je .nonick
+    mov si, wc_k_code
+    call wc_put
+    mov al, ' '
+    call wc_putc
+    mov si, wc_key
     call wc_put
     call wc_putnl
 .nonick:

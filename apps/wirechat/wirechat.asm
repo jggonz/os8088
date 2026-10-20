@@ -94,6 +94,7 @@ WC_MINH     equ 147
 
 ; --- stores (SPEC.md 113.10) -------------------------------------------------
 WC_NICKN    equ 13              ; a nick, 12 and the NUL
+WC_KEYN     equ 37              ; an owned nick's code: a UUID, 36 and the NUL
 WC_TEXTN    equ 201             ; a message, 200 and the NUL
 WC_NMSG     equ 40              ; messages held for the view: the server's
                                 ; history is 30 (SPEC.md 113.2.3), and 10 more
@@ -150,6 +151,7 @@ LK_JOIN     equ 2               ; a nick and no session: join next
 LK_LIVE     equ 3               ; a session
 LK_REST     equ 4               ; a 503: waiting [wc_wait]
 LK_OFF      equ 5               ; a failure: backing off [wc_wait]
+LK_KEY      equ 6               ; the nick is owned: waiting for its code
 
 RQ_NONE     equ 0               ; the request in flight
 RQ_JOIN     equ 1
@@ -161,6 +163,7 @@ MD_MSG      equ 0               ; the field's modes (SPEC.md 113.6.1)
 MD_NICK     equ 1
 MD_FIND     equ 2
 MD_FRIEND   equ 3
+MD_KEY      equ 4
 
 ST_ONLINE   equ 0               ; a status, as the wire spells it
 ST_AWAY     equ 1
@@ -264,6 +267,7 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_link, 1              ; LK_*
     WCV wc_tok, 13              ; the token, NUL = none
     WCV wc_nick, WC_NICKN       ; our nick, as the server spells it
+    WCV wc_key, WC_KEYN         ; its code, when it is owned; NUL = none
     WCV wc_seq, 4               ; the server's sequence, dword
     WCV wc_rver, 4              ; the roster's version, dword
     WCV wc_st, 1                ; our status, ST_*

@@ -25,6 +25,8 @@ wc_next:
     jne .out
     cmp byte [wc_link], LK_NONICK
     je .out
+    cmp byte [wc_link], LK_KEY
+    je .out
     cmp byte [wc_nick], 0
     je .out
     mov al, RQ_JOIN
@@ -205,8 +207,19 @@ wc_ondone:
     mov dl, [wc_rqdone]
     cmp dl, RQ_JOIN
     jne .njoin
-    ; --- a join refused: the nick is the problem (400, 409, 422) ----------
+    ; --- a join refused: the nick is the problem (400, 409, 422), or it is
+    ; owned and the code is missing or wrong (428) --------------------------
     mov byte [wc_link], LK_NONICK
+    cmp ax, 428
+    jne .nkey
+    mov byte [wc_link], LK_KEY
+    mov byte [wc_key], 0                ; a wrong code is no use kept
+    mov al, MD_KEY
+    call wc_setmode
+    mov di, wc_empty
+    call wc_fieldset
+    ret
+.nkey:
     mov al, MD_NICK
     call wc_setmode
     mov di, wc_nick                     ; ...so it is offered back to edit
@@ -483,6 +496,8 @@ wc_enter:
     je wc_efind
     cmp al, MD_FRIEND
     je wc_efriend
+    cmp al, MD_KEY
+    je wc_ekey
     ; --- send ---------------------------------------------------------------
 wc_send:
     cmp word [wc_ln+LN_LEN], 0
@@ -519,11 +534,18 @@ wc_enick:
     mov si, wc_s_badnick
     jmp wc_setnote
 .ok:
+    mov si, wc_lbuf                     ; another nick: the code was the old
+    mov di, wc_nick                     ; one's
+    call wc_streqci
+    je .same
+    mov byte [wc_key], 0
+.same:
     mov si, wc_lbuf
     mov di, wc_nick
     mov cx, WC_NICKN
     mov bx, si
     call wc_ncopy
+wc_rejoin:
     mov byte [wc_tok], 0                ; a new session for a new nick; the
     call wc_abandon                     ; old one expires on the server
     mov byte [wc_rq], RQ_NONE
@@ -536,6 +558,18 @@ wc_enick:
     call wc_setnote
     call wc_wantsave
     jmp wc_next
+
+; --- wc_ekey - the code for an owned nick is the field: keep it, join ------
+wc_ekey:
+    cmp word [wc_ln+LN_LEN], 0
+    je .out
+    mov bx, wc_lbuf
+    mov di, wc_key
+    mov cx, WC_KEYN
+    call wc_ncopy
+    jmp wc_rejoin
+.out:
+    ret
 
 ; --- wc_nickok - CF = 0 when the NUL string at SI is a nick (SPEC.md 113.2.2)
 ; 2..12 of [A-Za-z0-9_-], beginning with a letter. clobbers AX, CX, SI
@@ -818,6 +852,18 @@ wc_onkey:
     jne .out
     cmp byte [wc_mode], MD_NICK         ; Esc: back to messages, or empty the
     je .out                             ; field - and nick mode has no back
+    cmp byte [wc_mode], MD_KEY          ; ...but code mode goes back to it,
+    jne .nkey                           ; for another nick
+    mov byte [wc_link], LK_NONICK
+    mov al, MD_NICK
+    call wc_setmode
+    mov di, wc_nick
+    call wc_fieldset
+    mov si, wc_s_picknick
+    call wc_setnote
+    call wc_geom
+    jmp wc_cbflush
+.nkey:
     cmp byte [wc_mode], MD_MSG
     je .clear
     mov al, MD_MSG
@@ -1306,7 +1352,9 @@ wc_onup:
 .friend:
     mov al, MD_FRIEND
 .mode:
-    cmp byte [wc_mode], MD_NICK         ; nick mode is not left by a button
+    cmp byte [wc_mode], MD_NICK         ; nick mode is not left by a button,
+    je .out                             ; nor code mode
+    cmp byte [wc_mode], MD_KEY
     je .out
     call wc_setmode
     call wc_geom                        ; the prompt moves the field's left
@@ -1428,6 +1476,10 @@ wc_oncmd:
     call wc_next
     jmp short .done
 .nick:
+    cmp byte [wc_link], LK_KEY          ; a code was being asked for: now a
+    jne .nick1                          ; nick is
+    mov byte [wc_link], LK_NONICK
+.nick1:
     mov al, MD_NICK
     call wc_setmode
     mov di, wc_nick

@@ -130,23 +130,42 @@ wc_compose:
     call wc_put
     pop si
     call wc_put                         ; ...and the body itself
+    cmp byte [wc_rq], RQ_JOIN           ; a join's second line: the code
+    jne .nkey
+    cmp byte [wc_key], 0
+    je .nkey
+    mov al, 10
+    call wc_putc
+    mov si, wc_key
+    call wc_put
+.nkey:
     sub di, wc_reqb
     mov [wc_reqn], di
     ret
 
 ; --- wc_body - SI = this request's body, CX = its length. clobbers AL --------
+; A join's body is the nick, and when there is a code, LF and the code
+; (SPEC.md 113.2.2); SI is the nick alone, and wc_compose appends the rest.
 wc_body:
+    xor cx, cx
     mov si, wc_nick                     ; join: the nick
     mov al, [wc_rq]
     cmp al, RQ_JOIN
+    jne .say
+    cmp byte [wc_key], 0
     je .len
+    mov si, wc_key
+    call .len
+    inc cx                              ; ...the LF
+    mov si, wc_nick
+    jmp short .len
+.say:
     mov si, wc_qtext                    ; say: the message
     cmp al, RQ_SAY
     je .len
     mov si, wc_empty                    ; poll, flag: nothing
-.len:
+.len:                                   ; CX += the string's length
     push si
-    xor cx, cx
 .c:
     lodsb
     or al, al

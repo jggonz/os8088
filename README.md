@@ -712,11 +712,12 @@ can be flagged. A message flagged from **two different addresses**, neither the
 author's, is removed for everyone, and blocked or removed messages become
 mutes that grow. Every rate is limited, and the server counts its own requests
 against a daily budget, slowing every client down as it fills, so the chat
-stays inside the Workers Free plan.
+stays inside the Workers Free plan. A few nicks are owned. Joining as one
+makes WireChat ask for that nick's code, which the server checks.
 
 The window follows the screen: three panes on VGA and Hercules, the side panes
 going as the window narrows, and a compact one-line message form on a CGA. The
-nick, the friends and the notification switch live in `WIRECHAT.CFG` beside
+nick (and its code, if it has one), the friends and the notification switch live in `WIRECHAT.CFG` beside
 the program. It is on every apps disk but the 360KB one, where it rides the
 network disk. SPEC.md §113 is the protocol and the contract.
 

@@ -195226,7 +195226,7 @@ either, so changing room or going Away costs one request, not two.
 
 | verb | body | does |
 |---|---|---|
-| `join` | the nick | opens a session; answers `J`, four `L`, then a delta with history |
+| `join` | the nick, and for an owned nick LF and its code | opens a session; answers `J`, four `L`, then a delta with history |
 | `poll` | empty | answers the delta at once when there is one, else HOLDS up to 50 s for one |
 | `say` | the message | posts it to the view (a room, or `@nick` privately); answers the delta |
 | `flag` | empty | flags message `m`; answers `N` and the delta |
@@ -195235,6 +195235,14 @@ either, so changing room or going Away costs one request, not two.
 A nick is 2–12 of `[A-Za-z0-9_-]`, beginning with a letter, unique among
 live sessions without regard to case. A message is 1–200 printable ASCII
 characters after runs of white space are folded to one.
+
+**Owned nicks.** The server may own a few nicks. Each owned nick is taken,
+in any case, only by a join whose body has the nick's code on a second line
+(`nick` LF `code`). The server compares codes case-blind and ignores a second
+line on any other nick. The codes are the server's, never this tree's. The
+list and the codes are in os8088-web, which is private. A join without the
+code, or with the wrong one, is `428`. Five wrong codes from one address
+shut it out of owned nicks, then it may try five more an hour (`429`).
 
 #### 113.2.3 The reply
 
@@ -195276,6 +195284,7 @@ The codes, and what the client does with each:
 | 403 | muted, or flagging what may not be flagged | says `text` |
 | 404 | the message or the private partner is gone | says `text` |
 | 409 | the nick is in use / already flagged | `join`: asks for another nick |
+| 428 | an owned nick, and its code missing or wrong (§113.2.2) | `join`: forgets any code it had and asks for the code |
 | 413 | the message is over 200 characters | says `text` (the field cannot produce one) |
 | 422 | the language scanner refused it | says `text`; the text stays in the field |
 | 429 | rate limited | says `text`; the text stays in the field |
@@ -195380,7 +195389,7 @@ refused scroll repaints the pane.
 
 #### 113.6.1 The field
 
-One `os88line` field with four MODES, its prompt drawn to its left:
+One `os88line` field with five MODES, its prompt drawn to its left:
 
 | mode | prompt | Enter | Esc |
 |---|---|---|---|
@@ -195388,6 +195397,11 @@ One `os88line` field with four MODES, its prompt drawn to its left:
 | nick | `Nick:` | joins with it (and saves it) | — (there is no session without one) |
 | find | `Find:` | scrolls to the next older message containing it, case-blind | back to message |
 | friend | `Friend:` | adds the nick to the friends list (and saves it) | back to message |
+| code | `Code:` | joins with the nick and this code (and saves it) | back to nick, for another nick |
+
+Code mode is only ever entered by a `428`, and the status bar then says
+`Enter the code for this nick`. A nick changed to a DIFFERENT nick (compared
+case-blind) forgets the code.
 
 The first run, with no nick in `WIRECHAT.CFG`, opens in nick mode.
 
@@ -195466,16 +195480,19 @@ Not the client's to enforce — a client cannot be trusted with its own limits
 
 `SYSTEM\APPDATA\WIRECHAT.CFG` on the package's own volume (§19.9,
 `apps/os88data.inc`), read in the first wake, written whenever the nick,
-the friends or the notification switch change. Lines of `key value`:
+its code, the friends or the notification switch change. Lines of `key value`:
 
     host os8088.com:80/chat/
     nick George
+    code 0f1e2d3c-...
     notify 1
     friend Alin
     friend Daniel
 
 `host` is §92.4's `host[:port][/prefix/]`, default `os8088.com:80/chat/`;
-the gate's disk carries `10.0.2.2:8093/chat/`. Unknown keys are kept on no
+the gate's disk carries `10.0.2.2:8093/chat/`. `code` is an owned nick's
+code (§113.2.2), at most 36 characters, stored as plain text. Anyone with the
+disk has it. Unknown keys are kept on no
 rewrite — the file is the package's own and is written whole. Up to 8
 friends; at most 512 bytes.
 
@@ -195489,8 +195506,8 @@ full`. The messages already shown stay shown.
 
 ### 113.10 Sizes
 
-Measured on the tree that added it: **image 15,619 bytes, bss 19,859 —
-35,478 of `APP_MAX_SIZE`'s 61,440**; `WIRECHAT.O88` is 13,609 bytes packed.
+Measured on the tree that added owned nicks: **image 15,901 bytes, bss
+19,896 — 35,797 of `APP_MAX_SIZE`'s 61,440**; `WIRECHAT.O88` is 13,844 bytes packed.
 No heap claim: every buffer is in the package's own segment, which is what
 `OSAPI_DRV_CALL` wants of a socket buffer anyway (§72, `netpkg.inc`). The bss,
 largest first:
@@ -195503,7 +195520,7 @@ largest first:
 | `wc_ros` | 800 | the roster: 50 sessions, the server's limit (§113.7), at 16 |
 | `wc_reqb` | 640 | a request: line, headers, a 200-character body |
 | `wc_cfgb` | 514 | `WIRECHAT.CFG` read or written whole |
-| the rest | ~1,775 | the field and its draft, the rooms, the conversations, the friends, the geometry, the client's state |
+| the rest | ~1,812 | the field and its draft, the rooms, the conversations, the friends, the geometry, the client's state |
 
 The worker's stack is `OS88_STACK_256` (§113.4): ETHER.DRV's verbs are ~126
 bytes of it and the interrupt floor 64, and the deepest chain of this file's
@@ -195520,4 +195537,4 @@ own is `wc_nstep` → `wc_take` → `wc_hdrline` → `wc_dec32`.
 
 | row | tier | what |
 |---|---|---|
-| `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined |
+| `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code |

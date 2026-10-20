@@ -14,13 +14,14 @@ contract; os8088-web/src/chat/hub.js is the server that ships; this file's
 `Hub` is a small, deliberately literal reading of the same section, in the
 standard library, so the gate runs with nothing but python3 - the tree's rule
 for tests/ (CLAUDE.md). It does not moderate (that is hub.js's, and its own
-tests'); it refuses one word, `badword`, so the 422 path has a trigger.
+tests'); it refuses one word, `badword`, so the 422 path has a trigger, and
+it owns a nick only when assertion 11 gives it one, so the 428 path has one.
 
 What QEMU costs is what it always costs: the machine is not an 8088 and no
 timing here means anything. Every assertion is about BYTES - guest memory read
 through the package's own map, and the requests the fixture logged.
 
-ELEVEN ASSERTIONS.
+TWELVE ASSERTIONS.
 
 1.  THE JOIN is SPEC.md 113.3's request to the byte: `POST
     /chat/v1/join?v=0&st=0 HTTP/1.0`, the Host, the User-Agent, `Connection:
@@ -40,8 +41,11 @@ ELEVEN ASSERTIONS.
 9.  A FLAG: a right press on a message and Yes send `flag` with that
     message's seq, and the fixture's `X` takes it out of the store.
 10. A LOST SESSION (401) is joined again with the same nick, unasked.
-11. THE SETTINGS FILE: a press on `Notifications:` turns them off, and the
-    WIRECHAT.CFG on the floppy says `notify 0` afterwards.
+11. AN OWNED NICK (428): the rejoin is refused for want of a code and the
+    field asks for one; a wrong code is asked for again; the right one joins,
+    as the join body's second line.
+12. THE SETTINGS FILE: a press on `Notifications:` turns them off, and the
+    WIRECHAT.CFG on the floppy says `notify 0` - and the code - afterwards.
 """
 import argparse
 import os
@@ -73,6 +77,7 @@ PORT = 8093                     # NOT 8090 (ethernet.py), 8092 (thewire.py) or
                                 # OTHER one's answers. The disk's WIRECHAT.CFG
                                 # names this number (the Makefile)
 LK_LIVE = 3
+MD_KEY = 4
 WV_DM = 0xFF
 WC_MREC, WC_MSEQ, WC_MFLG, WC_MNICK, WC_MTEXT = 224, 0, 6, 8, 21
 WCM_MINE = 2
@@ -110,6 +115,7 @@ class Hub:
         self.log = []               # (verb, query dict, headers text, body)
         self.held = 0               # polls being held right now
         self.ntok = 0
+        self.owned = {}             # lowercase nick -> its code
 
     # --- the fixture's own hand ------------------------------------------
     def post(self, room, nick, text):
@@ -177,9 +183,15 @@ class Hub:
     def answer(self, verb, q, body):
         with self.lock:
             if verb == "join":
-                nick = body.strip()
+                nick, _, code = body.partition("\n")
+                nick, code = nick.strip(), code.strip().lower()
                 if not re.match(r"^[A-Za-z][A-Za-z0-9_-]{1,11}$", nick):
                     return ["ER 400 0 Nick: 2-12 letters"]
+                if nick.lower() in self.owned:
+                    if not code:
+                        return ["ER 428 0 That nick needs its code"]
+                    if code != self.owned[nick.lower()]:
+                        return ["ER 428 0 Wrong code for that nick"]
                 self.ntok += 1
                 tok = ("tok%09d" % self.ntok)[:12]
                 v = q.get("v", "0")
@@ -381,7 +393,7 @@ def wc_syms():
             syms[mm.group(3)] = int(mm.group(1), 16)
     for n in ("wc_link", "wc_tok", "wc_mn", "wc_msgs", "wc_view", "wc_dn", "wc_dms",
               "wc_note", "wc_lbuf", "wc_ox", "wc_oy", "wc_tx", "wc_py1", "wc_cw",
-              "wc_sy", "wc_notify", "wc_save", "wc_cfgld", "wc_hist"):
+              "wc_sy", "wc_notify", "wc_save", "wc_cfgld", "wc_hist", "wc_mode", "wc_key"):
         if n not in syms:
             sys.exit("wirechat: %s is not in build/wirechat.map" % n)
     return syms
@@ -566,13 +578,33 @@ def main():
         check(len(rj) >= 2 and rj[-1][3] == "Tester",
               "10 ...with the same nick")
 
-        # --- 11: the settings file ------------------------------------------------------
+        # --- 11: an owned nick -----------------------------------------------------------
+        HUB.owned["tester"] = "0b5e-c0de-42"
+        HUB.drop_all()
+        check(wait(lambda: rb("wc_mode") == MD_KEY
+                   and rs("wc_note", 64) == "That nick needs its code", "the code prompt",
+                   secs=45),
+              "11 an owned nick's join without its code asks for one")
+        typetext("wrong\n")
+        check(wait(lambda: rb("wc_mode") == MD_KEY
+                   and rs("wc_note", 64) == "Wrong code for that nick", "the wrong code"),
+              "11 ...a wrong one is asked for again")
+        shot("4-code")
+        typetext("0b5e-c0de-42\n")
+        check(wait(lambda: rb("wc_link") == LK_LIVE and rs("wc_key", 37) == "0b5e-c0de-42",
+                   "the owned join", secs=45),
+              "11 ...and the right one joins")
+        oj = [e for e in HUB.log if e[0] == "join"]
+        check(oj[-1][3] == "Tester\n0b5e-c0de-42" and "Content-Length: 19" in oj[-1][2],
+              "11 ...sent as the join body's second line (got %r)" % (oj[-1][3],))
+
+        # --- 12: the settings file ------------------------------------------------------
         cw, syy = rw("wc_cw"), rw("wc_sy")
         mo.click(ox + cw - 40, oy + syy + 5)
         check(wait(lambda: rb("wc_notify") == 0 and rb("wc_save") == 0,
                    "the notification switch and its save"),
-              "11 Notifications: off, and the save done")
-        shot("4-end")
+              "12 Notifications: off, and the save done")
+        shot("5-end")
     finally:
         if not a.keep:
             m.quit()
@@ -582,8 +614,9 @@ def main():
     if not a.keep:
         files = fat12_files(os.path.join(ROOT, "build", "wirechatdata.img"))
         cfg = files.get("SYSTEM/APPDATA/WIRECHAT.CFG", b"(no file)").decode("latin1")
-        check("notify 0" in cfg and "friend Alin" in cfg and "nick Tester" in cfg,
-              "11 ...and WIRECHAT.CFG on B: says so (%r)" % cfg)
+        check("notify 0" in cfg and "friend Alin" in cfg and "nick Tester" in cfg
+              and "code 0b5e-c0de-42" in cfg,
+              "12 ...and WIRECHAT.CFG on B: says so (%r)" % cfg)
 
     if fails:
         say("wirechat: %d failure(s)" % len(fails))
