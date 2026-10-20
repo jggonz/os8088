@@ -196922,3 +196922,100 @@ own is `wc_nstep` → `wc_take` → `wc_hdrline` → `wc_dec32`.
 | row | tier | what |
 |---|---|---|
 | `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code |
+
+## 114. WireFleet — naval battles over a null modem (`apps/wirefleet/`)
+
+`WIREFLET.O88` (the eight-character DOS stem) is WireFleet: **Two PCs. Two
+fleets. One winner.** This section is the contract for the delivery waves in
+`docs/plans/WIREFLEET-PLAN.md`; unchecked stories there are not yet shipped
+behavior. The build diary is `docs/HOW-WIREFLEET-WAS-BUILT.md`.
+
+### 114.1 Rules and deployment
+
+Each player has a private 10 by 10 grid: columns A–J, rows 1–10. There are
+five straight ships, of lengths 5 (carrier), 4 (battleship), 3 (cruiser),
+3 (submarine) and 2 (destroyer). Ships may touch, never overlap, and never
+extend past an edge. Horizontal and vertical are the only orientations.
+The local board holds 0 for water and ship IDs 1–5. Each placement record
+holds its anchor (0–99, row-major, FFh absent) and orientation (0 horizontal,
+1 vertical). Every cell of a ship holds its ID. Placement is validated in
+full before any cell changes. Removing a ship clears all its cells.
+
+The selected ship can be rotated, placed with a click or the keyboard, and
+removed again before Ready. Auto-place clears the board and constructs one
+legal fleet; it has bounded work, with a deterministic legal fallback.
+Clear removes the fleet. Ready is available only when all five ships are
+placed and prevents subsequent edits until a new match is explicitly begun.
+
+One shot per turn, including after a hit. Repeated shots and shots while it
+is the opponent's turn are refused. Miss, hit and sunk have different shapes
+as well as colors. All 17 occupied squares hit ends the game. The defending
+computer judges its fleet; undiscovered ship coordinates never cross the
+wire. A sunken ship may reveal its complete extent. Neither timeouts nor a
+disconnected cable change the turn or choose a new winner.
+
+### 114.2 Display and input
+
+One binary uses the window's actual display (§39.16.4). VGA has navy water,
+cyan grid lines, gray pixel ships, white misses, red hits and a yellow
+target. Hercules and windowed CGA use explicit 1bpp assets with readable
+ship outlines and shot shapes. Coordinates, target state and disabled
+controls remain readable without color. Layout follows the actual content
+height, including the 200-line CGA desktop; no control may sit below it.
+
+Native menus, release-fired buttons (`os88ui.inc`), clipped opaque text
+(`OSAPI_FONT_RUN`) and `OSAPI_ABOUT_SET` follow the system conventions.
+Arrow keys move the target, R rotates, Enter places or fires, A auto-places,
+C clears, digits 1–5 choose a ship, and M toggles sound. Chat editing is an
+explicit mode so printable game shortcuts cannot change a typed message.
+Escape leaves chat or About first. Fullscreen follows §11.2.1; a foreign
+CGA four-color framebuffer is exclusively inside §53 and never receives
+desktop drawing calls.
+
+Generated source art, its exact prompt and deterministic conversion are
+kept under `apps/wirefleet/art/` and `tools/wirefleet_assets.py`. Runtime
+assets are embedded; the game needs neither PNG decoding nor a sidecar.
+The board renderer composes opaque cells, redraws only changed cells during
+interaction, and coalesces full board painting by row. Presentation must not
+erase the board before replacing it. No animation requires continuous idle
+repainting.
+
+### 114.3 Link and persistence requirements
+
+Serial uses a crossed TX/RX null modem with shared signal ground, standard
+BIOS-advertised COM1 or COM2, 9600 baud, 8N1, no hardware flow control, and
+an original 8250 as the minimum UART. A live desktop mouse must continue to
+work. The active mouse port and an already leased port must be refused.
+UART/PIC state and every lease must be released on ordinary and forced close.
+The coordinated serial service's ABI will be pinned before its implementation;
+WireBall's FSX-only ownership is not a desktop serial API (§109.1).
+
+The link protocol must validate magic, version, bounded length, checksum,
+sender, recipient, match identity and turn before mutating game state.
+Messages are delimited and escaped, with resynchronization after garbage,
+truncation, overflow or UART line errors. Commands are acknowledged and
+retried; duplicate fire/result/chat messages must not apply twice.
+Silence pauses local battle input while retaining the fleet, transcript,
+turn and pending command. Rejoining the same match reconciles the last
+committed turn; unrelated peers must not overwrite it. Conflicting histories
+must refuse resume visibly. No disconnect automatically starts a new match.
+
+A versioned, checksummed saved match contains the private fleet, both shot
+grids, match/peer identity, committed turn and any unresolved command.
+Validate the entire file before replacing live state. Saving and loading are
+UI-task file operations (§20.6 rule 7). No write on every retry or heartbeat.
+
+### 114.4 Sound and validation
+
+Placement, ready, fire, miss, hit, sunk, link restoration and victory get
+finite nonblocking cues through the OS sound router (§34). The system's
+selected PC Speaker, AdLib or Sound Blaster route is respected; the game
+does not probe cards or program sound ports. Mute and close release only
+the instance's own grants. Repeated protocol messages do not repeat cues.
+
+The standalone application disk is built in all four geometries. The
+package belongs to the games category and live payload. Host checks cover
+asset reproducibility and bounds. Emulator acceptance uses the shipped
+assembly, real serial bytes between two OS instances, deliberate transport
+faults, three desktop adapters and CGA four-color fullscreen. Final row
+names and measured package/RAM sizes are recorded as their waves land.

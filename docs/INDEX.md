@@ -519,6 +519,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 111 | TIMER — the stopwatch (`apps/timer/timer.asm`) |
 | 112 | BOUNCE — the square (`apps/bounce/bounce.asm`) |
 | 113 | WIRECHAT — chat rooms on the wire (`apps/wirechat/wirechat.asm`) |
+| 114 | WireFleet — naval battles over a null modem (`apps/wirefleet/`) |
 
 ## docs/
 
