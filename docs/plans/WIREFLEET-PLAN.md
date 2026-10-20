@@ -14,7 +14,7 @@ diary is [HOW-WIREFLEET-WAS-BUILT.md](../HOW-WIREFLEET-WAS-BUILT.md).
 
 - [x] **Foundation:** isolated worktree, contract, delivery plan and generated
   ship source. Establish the draft PR before implementation waves.
-- [ ] **Deployment:** as a captain I can select, rotate, place, remove and
+- [x] **Deployment:** as a captain I can select, rotate, place, remove and
   auto-place a legal fleet. A native window, About card, controls and color
   and monochrome artwork work on VGA, CGA and Hercules.
 - [ ] **Battle:** as two captains we can join over serial, ready our fleets,
@@ -49,6 +49,11 @@ and release on forced close. Its API and budget will be specified before
 implementation. No dependency on a 16550 FIFO or scratch register is allowed.
 
 ## Verification discipline
+
+Deployment's final rows are `wirefleetdeploy` and `wirefleetart`. They are
+registered, with the emulator pass deferred to final acceptance. Wave host
+validation is `make` and `make wirefleetdisk`; visual inspection booted
+VGA, CGA and Hercules XTs on MartyPC and captured empty/auto-placed fleets.
 
 During waves: assemble with `cpu 8086` and warnings as errors, run host
 checks, and boot to inspect the result. Name the affected rows as they are

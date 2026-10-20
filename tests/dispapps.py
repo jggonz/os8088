@@ -168,7 +168,7 @@ def _map(app, defines=()):
     # `build/` may hold another build's.
     sub = os.path.join("build", "smallapp") if defines else "build"
     o88 = os88build.at("%s/%s.o88"
-                       % (sub, {"solitaire": "solitair"}.get(app, app)))
+                       % (sub, {"solitaire": "solitair", "wirefleet": "wireflet"}.get(app, app)))
     if not os.path.isabs(o88):
         o88 = os.path.join(ROOT, o88)
     #

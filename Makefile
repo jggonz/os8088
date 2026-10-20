@@ -13122,7 +13122,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
 # unchanged.
 DM_NATIVE := apps/drmario/art/native
 DM_SHIP := $(BUILD)/drmarco.o88
-APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
+APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/wireflet.o88 $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
               $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
@@ -16180,6 +16180,25 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 	$(BOX) -P $(VM386PIXEL) -N
 
 # WireBall: serial null-modem Pong (SPEC.md 109).
+# WireFleet (SPEC.md 114). One embedded-art package; all four disk sizes.
+.PHONY: wirefleet wirefleetdisk
+wirefleet: $(BUILD)/wireflet.o88
+$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wfvideo.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
+$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+apps/wirefleet/art/tiles.inc: apps/wirefleet/art/ships-source.png tools/wirefleet_assets.py
+	python3 tools/wirefleet_assets.py
+wirefleetdisk: $(BUILD)/wireflet.img $(BUILD)/wireflet720.img $(BUILD)/wireflet120.img $(BUILD)/wireflet360.img
+$(BUILD)/wireflet.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $< apps/wirefleet/README.TXT
+$(BUILD)/wireflet720.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $< apps/wirefleet/README.TXT
+$(BUILD)/wireflet120.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $< apps/wirefleet/README.TXT
+$(BUILD)/wireflet360.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $< apps/wirefleet/README.TXT
+
 .PHONY: wireball wireballdisk wireballtest wireball-pair
 wireball-pair:
 	python3 tools/wireball-pair.py

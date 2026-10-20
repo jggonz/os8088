@@ -197019,3 +197019,19 @@ asset reproducibility and bounds. Emulator acceptance uses the shipped
 assembly, real serial bytes between two OS instances, deliberate transport
 faults, three desktop adapters and CGA four-color fullscreen. Final row
 names and measured package/RAM sizes are recorded as their waves land.
+
+### 114.5 Deployment implementation
+
+The desktop frame preferences are 600×414 (VGA), 600×304 (Hercules), and
+600×154 (CGA), subject to the window manager's fit. Board cells are 24 pixels
+wide and 24, 18 or 8 high according to the actual content height. The compact
+grid begins at content y=25; taller grids at y=40. Buttons sit four pixels
+below the grid. There is no worker or serial lease in the deployment wave;
+Ready explicitly reports that the link is a subsequent delivery story.
+
+`wirefleetdeploy` (soak) drives the shipped assembly on all three adapters:
+positive placement before overlap/edge refusals, moving without losing an
+old ship, vertical placement, removal, auto fleet geometry, Ready locking,
+button press/cancel, About and close. `wirefleetart` (soak) checks conversion
+reproducibility, bounds and distinct shot shapes in color and monochrome.
+During waves these are named, not re-run; the final pass runs their union.

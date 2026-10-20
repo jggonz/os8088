@@ -124,6 +124,7 @@ EXEMPT_DIRS.update(_registry())
 # needs the Makefile rule that says so, or the gate would be checking a name
 # nothing builds.
 PKG_FILE = {
+    "wirefleet": "WIREFLET.O88",  # SPEC.md 114: explicit eight-character stem
     "pixelstein": "PXSTEIN.O88",   # SPEC.md 97.9: $(BUILD)/pxstein.o88 out of
                                    # apps/pixelstein/ - the folder carries the
                                    # game's name, the file its 8.3 one

@@ -127,3 +127,4 @@
 1 apps/pixel/pxui.inc              # every PiXEL control, through px_btn; SDK arm/track/release
 1 kernel/shutdown.inc              # modal confirmation; release inside the armed control
 5 apps/wireball/wbfront.inc        # splash play/help/sound controls; SDK init installs press/drag/release, launch only on release
+1 apps/wirefleet/wfvideo.inc      # deployment controls; SDK init installs press/drag/release, shared model predicates refuse disabled actions

@@ -1914,6 +1914,13 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("wirefleetart", "soak", py("tests/wirefleet.py", "--art"), 1.0,
+        "WireFleet generated tiles: reproducibility, palette/bounds, distinct color/mono shot shapes (SPEC.md 114)",
+        needs=("pil",)),
+    Row("wirefleetdeploy", "soak", py("tests/wirefleet.py"), 80.0,
+        "WireFleet on VGA/CGA/Hercules: native deployment, bounds/overlap refusal, rotation, removal, auto, Ready, release/cancel and About (SPEC.md 114)",
+        needs=("marty", "nasm", "pil"),
+        wants=("build/wireflet360.img", "build/os8088-360.img"), timeout=240),
     Row("wireballphysics", "soak", py("tests/wireball.py", "--physics"), 65.0,
         "WireBall 8088 physics: center/end contact, paddle motion, ball extent, "
         "rally acceleration, swept end contact and remaining substep motion (SPEC.md 109)",

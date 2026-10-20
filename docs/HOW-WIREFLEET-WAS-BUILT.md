@@ -38,3 +38,43 @@ in the build or on the old computer.
 The first delivery is a contract and reviewable work plan. The game,
 reconnection, saved matches and sound are still implementation stories at
 this point; this entry does not claim they have been tested.
+
+## 2026-10-20 — Deployment on three desktops
+
+The first executable wave puts all five ships on a native desktop grid.
+Placement checks the entire proposed ship before removing its old position:
+an invalid move cannot make a carrier disappear. Auto-placement tries a
+bounded number of candidates, then has a simple legal fallback. Ready locks
+the fleet until the captain explicitly starts a new one.
+
+The runtime uses 38 opaque tiles: water, three shot shapes, and 17 ship
+squares in each orientation. The selected generated source becomes packed
+4bpp color plus explicit 1bpp tiles. A full board is assembled into ten row
+spans. On a change, cached tile identities find the affected range first;
+only that range is composed and blitted. There is no timer-driven repaint
+of an idle sea.
+
+The layouts are based on the actual content height. VGA cells are 24 by 24;
+Hercules cells are 24 by 18; CGA desktop cells are 24 by 8. The last sounds
+flat until the 640 by 200 display's pixel aspect is taken into account.
+The compact layout keeps buttons and its status line above the dock.
+
+We booted the package on MartyPC's VGA, CGA and Hercules XTs, inspected the
+empty and auto-placed fleets, and read 17 occupied cells with the expected
+five ship lengths. All four standalone disk sizes build. The package's
+early image was 18.3 KB before compression, about 8.6 KB on disk, plus
+3.5 KB of zeroed working storage. These are build observations, not timing
+measurements or final acceptance. The registered `wirefleetdeploy` and
+`wirefleetart` rows are deferred to the final test pass.
+
+The repository's host checks caught a naming detail: the product name is
+nine letters, while FAT's stem allows eight. The explicit `WIREFLET.O88`
+name now follows through the build, live-media inventory and symbol checks.
+The standard button registry also required its painter to declare its own
+record. Both checks prevented apparently correct UI code from becoming an
+inconsistent shipping package.
+
+At the owner's request, this approach is now a shared repository rule in
+both AGENTS.md and CLAUDE.md: isolated worktree, contract first, reviewable
+story waves through one draft PR, retained art sources and a continuing
+diary. The existing final-pass-only regression rule stays in force.
