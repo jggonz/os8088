@@ -499,18 +499,32 @@ def main():
                                "places" % (what, frame, " with %r" % text
                                            if text else "", d))
 
-            def press(key, cond, what):
+            def press(key, cond, what, arrived=None, guest=60.0):
                 """a key, and what it does: pressed again, a few guest seconds
                 on, if it plainly never arrived - a key made and broken while
                 the Mode X flipper had the machine was lost now and then
-                (counted and printed, so it cannot hide)"""
+                (counted and printed, so it cannot hide).
+
+                `arrived` is for a key whose EFFECT takes longer than that:
+                its first sign, so a key that did arrive is waited out for
+                `guest` seconds and never sent again. Pressing a seek's key a
+                second time while the first is still landing is a second
+                seek, after which `cond` cannot hold - which is how `,` on a
+                key in fifteen parts (~5 guest seconds to land) failed three
+                times against a 6-second re-send"""
                 for n in range(3):
                     m.key(key)
                     try:
-                        wait(cond, what, 6.0)
-                        return
+                        if arrived is None:
+                            wait(cond, what, 6.0)
+                            return
+                        wait(lambda mm: cond(mm) or arrived(mm),
+                             what + " to start", 6.0)
                     except Stop:
                         retries[0] += 1
+                        continue
+                    wait(cond, what, guest)
+                    return
                 raise Stop("%s never happened, pressed three times" % what)
 
             def hold(n, what):
@@ -683,7 +697,8 @@ def main():
                     check("8: . %d from the key" % i, keyf[k] + i, "Paused")
                 press("Comma", lambda mm: rb("vo_skp") == 0 and
                       rw("vp_sttgt") == 0xFFFF and rw("vp_stepq") == 0 and
-                      rw("vp_done") == keyf[k] + 3, "the , step")
+                      rw("vp_done") == keyf[k] + 3, "the , step",
+                      arrived=lambda mm: rw("vp_sttgt") != 0xFFFF)
                 check("8: , back one", keyf[k] + 2, "Paused")
                 if rb("vp_upause") != 1:
                     bad.append("8: a frame step did not stay paused")
