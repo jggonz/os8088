@@ -60,8 +60,13 @@ import subprocess
 import sys
 
 # "Part N" is PERFORMANCE.md's numbering; SPEC.md and the plans use a bare N.
-HEAD = re.compile(r"^#{2,6}\s+(?:Part\s+)?(\d{1,2}(?:\.\d+)*)\.?\s")
-CITE = re.compile(r"(?:SPEC\.md\s+§?|§)(\d{1,2}(?:\.\d+)*(?:/\d{1,2}(?:\.\d+)*)*)")
+# THREE digits, not two: SPEC.md passed section 99 and both patterns stopped
+# at two, so section 100 and up was invisible - a repeated `### 105.9` passed
+# (PR #269), and a citation of 105.9.3 was read as one of 10 and resolved.
+# `(?!\d)` keeps a LINE number written where a section goes (SPEC.md's
+# "74240") from being read as section 742.
+HEAD = re.compile(r"^#{2,6}\s+(?:Part\s+)?(\d{1,3}(?:\.\d+)*)\.?\s")
+CITE = re.compile(r"(?:SPEC\.md\s+§?|§)(\d{1,3}(?!\d)(?:\.\d+)*(?:/\d{1,3}(?!\d)(?:\.\d+)*)*)")
 # The document a citation is qualified with, immediately before it. Upper-case
 # only, so an ordinary word ending a sentence cannot be read as a file name -
 # and the whole token is taken, so "REDRAW-SPEC.md" is never "SPEC.md".

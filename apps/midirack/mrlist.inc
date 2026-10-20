@@ -586,7 +586,7 @@ mrl_ffind:
     ret
 
 ; -----------------------------------------------------------------------------
-; mrl_dry - the song walked end to end with NO output (SPEC.md 105.5.5):
+; mrl_dry - the song walked end to end with NO output (SPEC.md 105.4):
 ; its length in ms, its measures, the first program of every channel, its
 ; notes and its first text. Then rewound, and its tick-0 events played dry
 ; too, so the window shows the tempo and the instruments it starts with.
