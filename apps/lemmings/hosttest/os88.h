@@ -151,6 +151,9 @@ void os88_about_card_d(void *win, const char **lines);
 /* the machine */
 void os88_video(struct os88_video *v);
 int  os88_snd_caps(void);
+int  os88_snd_tone(int hz, int ticks, int prio);
+int  os88_key_down(int scan);
+unsigned os88_ticks(void);
 int  os88_toast(const char *text, int ticks);
 int  os88_fsx_caps(void *win, int *kind);
 int  os88_fsx_run(void (*entry)(void), void *win, int flags);
@@ -185,17 +188,25 @@ void lem_clear_pixel(int x, int y);
 int  lem_probe4(int x, int y, const char *offs);
 void lem_m_span(int x, int y, int w, int set);
 void lem_m_apply(unsigned seg, unsigned off, int x, int y, int w, int h);
-void lem_m_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-                 int flags);
+int  lem_m_dig(int x, int y, int w);
 void lem_m_derive(unsigned dstseg, int kind);
+void lem_o_setup(unsigned seg);
+void lem_o_clear(void);
+int  lem_o_get(int x, int y);
+void lem_o_set(int x, int y, int v);
+void lem_o_fill(int x, int y, int w, int h, int v);
 void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
                  unsigned shadowseg);
 void lem_r_prep(void);
 void lem_r_unprep(void);
 void lem_r_pal(unsigned seg, unsigned stdoff, unsigned cusoff);
 void lem_r_clearworld(void);
-void lem_r_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-                 int flags);
+void lem_r_wsetup(unsigned p0, unsigned p3);
+void lem_r_tsetup(unsigned t);
+void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
+                  int flags);
+void lem_r_tload(void);
+void lem_r_tmask(void);
 void lem_r_derive(void);
 void lem_r_scroll(int x);
 void lem_r_dirty(int row, int b0, int b1);
@@ -204,6 +215,18 @@ void lem_r_present(void);
 void lem_r_panel(unsigned seg, unsigned off);
 void lem_r_rect(int x, int y, int w, int h, int colour, int fill);
 void lem_r_batch(int on);
+void lem_r_sprite(unsigned seg, unsigned off, int x, int y, int w, int h,
+                  int mode);
+void lem_r_srest(void);
+void lem_r_sforget(void);
+void lem_r_cursor(const unsigned char *bits, int sx, int sy);
+void lem_r_bgrect(int x, int y, int w, int h, int sync);
+void lem_r_show(int x, int y, int w, int h);
+void lem_r_obj(unsigned seg, unsigned off, int x, int y, int w, int h,
+               int flags);
+void lem_r_glyph8(const unsigned char *bits, int x, int y, int h, int ink,
+                  int paper);
+void lem_r_panrect(unsigned seg, unsigned off, int x, int y, int w, int h);
 int  lem_f_index(int ch);
 void lem_f_cell(unsigned seg, unsigned off, int col, int row, int ch);
 void lem_f_run(unsigned seg, unsigned off, int col, int row, const char *s,

@@ -33,10 +33,20 @@
 # tree that has never run tools/getlemmings.py. Only `make lemmingsdisk` needs
 # the real data (SPEC.md 114.12).
 #
-# WAVE 2 ADDS a third: the raw-x86 harness for lemmask.inc's probes and
-# lemblit.inc's movers, run in QEMU with SS != DS and with negative controls,
-# because that is the one place ES is loaded (apps/cword/hosttest/cwmovetest.asm
-# is the shape).
+#   tools/lemsim.py + lemtest --mech    THE MECHANICS REPLAY (wave 3): three
+#                                       fixture levels driven for up to 2,000
+#                                       frames by committed command scripts,
+#                                       once by the package's C and once by an
+#                                       independent Python reading of the
+#                                       mechanics, diffed frame by frame and
+#                                       lemming by lemming, with the reference's
+#                                       own trace pinned by a committed SHA-256
+#
+# STILL OWED (wave 2's plan, not built): a raw-x86 harness for lemmask.inc's
+# probes and lemblit.inc's movers, run in QEMU with SS != DS and with negative
+# controls, because that is the one place ES is loaded (apps/cword/hosttest/
+# cwmovetest.asm is the shape). tests/lembench exercises the same routines on
+# MartyPC and the glass checks exercise them on all three adapters.
 # =============================================================================
 set -e
 
@@ -94,3 +104,37 @@ done
 $HOSTCC -O1 -w -I apps/lemmings/hosttest -I apps/lemmings -I $BUILD \
     -o $BUILD/lemtest apps/lemmings/hosttest/lemtest.c
 $BUILD/lemtest
+
+# (2) THE MECHANICS REPLAY (SPEC.md 114.12). Three fixture levels, each driven
+#     for up to 2,000 frames by a committed command script (hosttest/mech/
+#     levelN.txt), TWICE: by tools/lemsim.py - the mechanics read again from
+#     lemmings_3ds src/lemming.c under the rulings its header names - and by
+#     the package's own C through `lemtest --mech`. Every frame's counts and
+#     every lemming's x, y, action, frame, flags and fuse must agree, and the
+#     reference's own trace must hash to the committed value, so neither side
+#     can move without the build saying which frame, which lemming and which
+#     field. A slip in the C - a fall limit three high, a fuse one short - is
+#     a divergence here (both were tried); the scripts reach all eighteen
+#     actions, the eight skills and their refusals, a trap, water, steel, the
+#     nuke, the pause and the rate's clamps. lemtest prints each level's
+#     probe calls a frame, priced at tests/lembench's 178 us a call - the
+#     mechanics' cost-table row (SPEC.md 114.7.3).
+M=$BUILD/lemmech
+mkdir -p $M
+# EVERY SCRIPT IN THE FOLDER, keyed by its name: levelN.txt drives fixture
+# level N and levelN<tag>.txt drives it again under another script (level2n is
+# the early nuke the NUKE GLITCH needs), each with its own pinned hash.
+for S in apps/lemmings/hosttest/mech/level*.txt; do
+    K=$(basename "$S" .txt)
+    K=${K#level}
+    L=${K%%[!0-9]*}
+    H=$(awk -v k="$K" '$1 == k { print $2 }' apps/lemmings/hosttest/mech/traces.sha256)
+    if [ -z "$H" ]; then
+        echo "build.sh: $S has no pinned hash in hosttest/mech/traces.sha256"
+        exit 1
+    fi
+    $BUILD/lemtest --mech $L "$S" 2000 $M/c$K.trace
+    python3 tools/lemsim.py --fixture apps/lemmings/hosttest/fixture \
+        --level $L --script "$S" \
+        --frames 2000 -o $M/sim$K.trace --sha256 "$H" --compare $M/c$K.trace
+done

@@ -86,7 +86,7 @@ def _png(path, w, h, px):
     return path
 
 
-def run(machine, what, png_dir, wait):
+def run(machine, what, png_dir, wait, tag="wave3"):
     print("== %s (%s)" % (machine, what))
     if not os.path.exists(BENCH):
         print("   %s is missing - run `make lembench` first" % BENCH)
@@ -110,7 +110,7 @@ def run(machine, what, png_dir, wait):
         time.sleep(2)
         mo.dblclick(165, row_y)                 # LEMBENCH.O88, the first row
         time.sleep(3)
-        _png(os.path.join(png_dir, "wave2-lembench-%s-idle.png" % machine),
+        _png(os.path.join(png_dir, "%s-lembench-%s-idle.png" % (tag, machine)),
              *m.fbuf())
         m.key("Space")
         # THE BENCH IS MINUTES ON A 4.77 MHz 8088 and there is nothing to poll:
@@ -136,7 +136,7 @@ def run(machine, what, png_dir, wait):
             except Exception:                               # noqa: BLE001
                 pass
         time.sleep(2)
-        path = _png(os.path.join(png_dir, "wave2-lembench-%s.png" % machine),
+        path = _png(os.path.join(png_dir, "%s-lembench-%s.png" % (tag, machine)),
                     *m.fbuf())
         print("   wrote %s" % path)
     return 0
@@ -146,6 +146,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine")
     ap.add_argument("--png-dir", default="build/port-shots")
+    ap.add_argument("--tag", default="wave3",
+                    help="the prefix the two PNGs are written under")
     ap.add_argument("--wait", type=int, default=420,
                     help="seconds to let the bench run before the picture")
     a = ap.parse_args()
@@ -158,7 +160,7 @@ def main():
         if a.machine and a.machine != name:
             continue
         try:
-            bad |= run(name, what, a.png_dir, a.wait)
+            bad |= run(name, what, a.png_dir, a.wait, a.tag)
         except Exception as e:                              # noqa: BLE001
             print("   %s: %s" % (name, str(e)[:200]))
             bad = 1

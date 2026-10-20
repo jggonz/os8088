@@ -24,10 +24,19 @@
 ;
 ;     VRAM offset      0     the 320x40 skill panel, 40 bytes of each 200
 ;                  8,000     the 1,584x160 world, 200 bytes a row
-;                 40,000     the sprite save-under scratch
+;                 40,000     the frame's compose scratch (125 rows)
+;                 65,000     the pointer's save-under
 ;
-; The CRTC LINE COMPARE is set to scanline 320. Mode 0Dh is 200 rows double
-; scanned, so scanline 320 is pixel row 160: above it the CRTC shows the world
+; The CRTC LINE COMPARE is set to scanline 319, SO THAT THE SPLIT BEGINS AT
+; SCANLINE 320. The VGA resets its address counter at the start of the scanline
+; AFTER the one the compare matches, so the register holds the split row minus
+; one - in a double-scanned mode 2 * 160 - 1 = 319. Wave 2 wrote 320 and the
+; panel's top glyph row came out at HALF HEIGHT: scanline 320 was the world's
+; row 160 (VRAM 8000 + 160 * 200 = 40,000, the compose scratch, which
+; is a strip of the frame's compose scratch in wave 3) and glyph row 0 had
+; only scanline 321 (build/port-shots/wave2g-vga-fun1.png, read scanline by
+; scanline). Mode 0Dh is 200 rows double scanned, so scanline 320 is pixel row
+; 160: above it the CRTC shows the world
 ; from the start address, below it it restarts its address counter at 0 and
 ; shows the panel - and with the Attribute Controller's Pixel Panning Mode bit
 ; set the panel does not pan with the world. The whole 160-row world height is
@@ -84,8 +93,23 @@ LEM_KIND_HERC equ 2
 
 LEM_VSTRIDE   equ 200               ; VGA bytes per world row
 LEM_VTERR     equ 8000              ; ...and where the world starts in VRAM
-LEM_VSAVE     equ 40000             ; the sprite save-under scratch
-LEM_VSPLIT    equ 320               ; the line compare, in SCANLINES
+LEM_VCOMP     equ 40000             ; THE FRAME'S COMPOSE SCRATCH: every
+LEM_VCOMPH    equ 125               ; rectangle a game frame changes - T, the
+                                    ; objects over it, the lemmings and the
+                                    ; pointer - is built here, off the glass,
+                                    ; and latch-copied on in one pass, so no
+                                    ; pixel of any of them is ever missing
+                                    ; from the glass (lemsprite.inc
+                                    ; lem_r_cband). 125 rows of the world's
+                                    ; 200-byte stride, 40,000-64,999, up to
+                                    ; the pointer's save-under at 65,000. The
+                                    ; sprites keep NO save-under on VGA any
+                                    ; more, which is what freed the 7,400
+                                    ; bytes the band grew into
+LEM_VSPLIT    equ 319               ; the line compare, in SCANLINES - the
+                                    ; split STARTS one scanline after the
+                                    ; match, so this is 2 * 160 - 1 (see the
+                                    ; header: 320 halved the panel's top row)
 
 LEM_SSTRIDE   equ 80                ; the 1bpp/2bpp shadow, bytes per row
 LEM_SROWS     equ 200
@@ -182,6 +206,11 @@ _lem_r_setup:
     mov [lb_shadow], ax
     mov word [lb_scroll], -1        ; "no view yet", so the first lem_r_scroll
                                     ; always composes
+    xor ax, ax                      ; ...and no sprite or pointer is on a glass
+    mov [lb_spn], ax                ; that a mode set has just cleared: a
+    mov [lb_curn0], ax              ; stale save-under from the last bracket
+                                    ; would be restored over the new one
+    mov [lb_curn1], ax
     pop bp
     ret
 
@@ -400,6 +429,60 @@ lem_r_start:
     pop bp
     ret
 
+; void lem_r_vstart(int x) / void lem_r_vpan(void) - ONE VGA SCROLL STEP IN
+; TWO HALVES, so the C can put a retrace between them (SPEC.md 114.4.6). The
+; CRTC latches the Start Address at the start of vertical retrace and the
+; Attribute Controller's pel pan takes effect AT ONCE, so writing both
+; together showed every 4-pixel step as one refresh of the old start with the
+; new pan - a shear of up to seven pixels. lem_r_vstart sets [lb_scroll] and
+; the Start Address only; the caller waits for retrace (os88_fsx_wait,
+; FSXW_VSYNC) and then lem_r_vpan writes the pel pan, so both land on the same
+; frame - Abrash's order. Neither touches a byte of VRAM.
+_lem_r_vstart:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    cmp ax, 0
+    jge .lo
+    xor ax, ax
+.lo:
+    cmp ax, LEM_MWORLD - 320
+    jle .hi
+    mov ax, LEM_MWORLD - 320
+.hi:
+    mov [lb_scroll], ax
+    sar ax, 1
+    sar ax, 1
+    sar ax, 1
+    add ax, LEM_VTERR
+    mov bx, ax
+    call lb_crtc
+    mov al, 0x0C
+    out dx, al
+    inc dx
+    mov al, bh
+    out dx, al
+    dec dx
+    mov al, 0x0D
+    out dx, al
+    inc dx
+    mov al, bl
+    out dx, al
+    pop bp
+    ret
+
+_lem_r_vpan:
+    call lb_crtc
+    add dx, 6
+    in al, dx                       ; reset the AC's flip-flop
+    mov dx, VGA_AC_IDX
+    mov al, 0x13 | 0x20
+    out dx, al
+    mov ax, [lb_scroll]
+    and al, 7
+    out dx, al
+    ret
+
 ; -----------------------------------------------------------------------------
 ; void lem_r_pal(unsigned seg, unsigned stdoff, unsigned cusoff)
 ;
@@ -505,6 +588,21 @@ _lem_r_clearworld:
     mov cx, (LEM_VSTRIDE * LEM_VIEWH) / 2
     cld
     rep stosw
+    ; ...and T's three colour planes, which the RAM composer draws into (plane
+    ; 3 is the mask's, cleared by lem_m_clear and copied over by lem_r_tmask)
+    mov bx, [lb_t]
+    cmp bx, 0
+    je .out
+    mov dx, 3
+.tp:
+    mov es, bx
+    xor di, di
+    xor ax, ax
+    mov cx, (LEM_MSTRIDE * LEM_MROWS) / 2
+    rep stosw
+    add bx, LEM_TPLANE
+    dec dx
+    jnz .tp
 .out:
     pop es
     pop di
@@ -512,97 +610,338 @@ _lem_r_clearworld:
     ret
 
 ; -----------------------------------------------------------------------------
-; void lem_r_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-;                  int flags)
+; THE WORLD IS COMPOSED IN RAM AND COPIED TO THE CARD ONCE (SPEC.md 114.7.2 -
+; wave 3's first design decision, and a measured one: 22.0 ms a 32x16 piece
+; into T and the mask together, 330 ms for the copy, on a 4.77 MHz 8088).
 ;
-; ONE TERRAIN PIECE'S PICTURE. VGA only - the 1bpp backends take their whole
-; world from lem_m_derive() in one pass (see the file header).
+; Wave 2 composed straight into the four VGA planes, a read-modify-write per
+; byte per plane under the Read Map Select and the Map Mask, and measured it at
+; 53.8 ms a 32x16 piece plus 8.8 ms more for the same piece into the solid mask
+; - ~25 seconds for a 400-piece level on a 4.77 MHz 8088, with the machine
+; looking dead for all of it. The design that replaced it is in two halves:
 ;
-; IT IS CALLED BEFORE lem_m_piece(), AND THE ORDER IS LOan-BEARING. The
-; no-overwrite flag means "draw only where there is no terrain yet", and the
-; cheapest place to ask that is the solid MASK, which at this instant still
-; describes the world WITHOUT this piece. Asking VRAM instead would be a read
-; through the Read Map Select register per byte.
+;   lem_r_wpiece   one terrain piece into the world PLANES IN RAM: the T claim's
+;                  planes 0..2 (a VGA only - the shadow backends have no colour
+;                  planes and pass 0) and plane 3, which is the SOLID MASK
+;                  itself. One pass per plane per row, no port I/O anywhere, and
+;                  the mask is written by the same pass that writes the picture
+;                  rather than by a second routine walking the same piece again
+;   lem_r_tload    the four RAM planes into VRAM, once: four `rep movsw` of
+;                  16,000 words under the Map Mask
 ;
-; FOUR PLANE PASSES. Each sets the Read Map Select and the Map Mask to one
-; plane and walks the row doing d = (d & ~m) | (s & m), so a masked planar
-; write is two VRAM accesses a byte a plane and NO port I/O in the inner loop.
-; Write mode 2 would be a bit mask and a colour per PIXEL - two `out`s each,
-; and a level is 400 pieces of ~800 pixels.
+; THE PLANES ARE KEPT IN RAM FOR THE LEVEL'S LIFE on a VGA (the T claim), and
+; that is what pays for most of wave 3's raster: an animated object or a
+; destroyed rectangle is put back by COPYING T into VRAM, and leaving the
+; bracket with 'f' and coming back in is one more lem_r_tload rather than a
+; second compose (SPEC.md 114.4.1).
 ;
-; Locals: [bp-2] srow, [bp-4] bytes/row (source), [bp-6] shift, [bp-8] first
-; dest byte column, [bp-10] dest row base, [bp-12] plane stride, [bp-14] dest
-; bytes this row, [bp-16] plane.
+; THE PACKED-NIBBLE ALTERNATIVE WAS BENCHED AND LOST (tests/lembench's two LUT
+; rows): it composes into a 126,720-byte packed world and then converts it to
+; planes through a 256-entry table. Its conversion pass ALONE is 7,810 ms -
+; 24 times this file's whole tload - before the swizzle a planar piece needs on the way
+; in - and planar RAM is the SAME claim size, needs no table and lets plane 3
+; be the mask.
+;
+; THE FLAG RULE IS LEMMIX'S (src/Game.Rendering.pas PrepareTerrainBitmap):
+; no-overwrite WINS over erase when a piece carries both. Wave 2 let erase win,
+; which turned an (erase | no-overwrite) piece - lemmings_3ds notes one in
+; LEVEL002.DAT section 2 - into a piece that drew nothing, where Lemmix draws
+; it under the existing terrain.
 ; -----------------------------------------------------------------------------
-_lem_r_piece:
+
+; void lem_r_wsetup(unsigned p0, unsigned p3) - where lem_r_wpiece writes.
+; p0 = plane 0 of the T claim, planes 1 and 2 following at +LEM_TPLANE
+; paragraphs each, or 0 = no colour planes; p3 = plane 3, the solid mask.
+LEM_TPLANE    equ 2000              ; 32,000 bytes = one world plane, paragraphs
+
+_lem_r_wsetup:
     push bp
     mov bp, sp
-    sub sp, 16
+    mov ax, [bp+4]
+    mov [lb_wp0], ax
+    mov ax, [bp+6]
+    mov [lb_wp3], ax
+    pop bp
+    ret
+
+; void lem_r_tsetup(unsigned t) - the T claim for the backends that keep one
+; (VGA): four planes of 32,000 bytes at t, t+2000, t+4000, t+6000. 0 = none.
+_lem_r_tsetup:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    mov [lb_t], ax
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
+;                   int flags)
+;
+; `seg:off` is the piece's PLANE 0 in the style bank; planes 1..3 follow at
+; one plane stride each (w/8 * h bytes) and plane 3 IS the transparency mask
+; (docs/lemband-format.md). `flags` is the LVL entry's top nibble.
+;
+; The shift identity is dest[i] = LOW BYTE OF ((src[i-1] << 8) | src[i]) >> s,
+; src[-1] = src[bpr] = 0, and a negative x reconstructs through `sar` and
+; `and 7` (wave 2's lem_m_piece header has the worked case). The clip in x is
+; done ONCE per piece as a byte range [i0, i1] of the bpr+1 destination bytes a
+; shifted row touches, so the inner loops carry no bounds test at all.
+;
+; Locals:
+;   [bp-2]  source row r           [bp-14] i1, the last byte index
+;   [bp-4]  bpr                    [bp-16] this row's dest offset (at i0)
+;   [bp-6]  plane stride           [bp-18] plane index p
+;   [bp-8]  shift s                [bp-20] this row's source offset (plane 0)
+;   [bp-10] first dest byte col    [bp-22] mode: 0 draw, 1 erase, 2 no-overwrite
+;   [bp-12] i0, the first index    [bp-24] main count: bytes i0.. with a cur
+;   [bp-26] tail: 1 = byte bpr (cur = 0) is inside [i0, i1]
+; -----------------------------------------------------------------------------
+_lem_r_wpiece:
+    push bp
+    mov bp, sp
+    sub sp, 26
     push si
     push di
     push es
     push ds
-    cmp word [lb_kind], LEM_KIND_VGA
-    jne .out
     mov ax, [bp+14]                 ; h
     cmp ax, 0
-    jle .out
+    jg .hok
+    jmp .out
+.hok:
     mov ax, [bp+12]                 ; w
     cmp ax, 0
-    jle .out
+    jg .wok
+    jmp .out
+.wok:
     add ax, 7
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    mov [bp-4], ax
+    mov cl, 3
+    shr ax, cl
+    mov [bp-4], ax                  ; bpr
     mul word [bp+14]
-    mov [bp-12], ax                 ; plane stride = (w/8) * h
-
+    mov [bp-6], ax                  ; plane stride
     mov ax, [bp+8]                  ; x
     mov cx, ax
     and cx, 7
-    mov [bp-6], cx
+    mov [bp-8], cx                  ; s
     sar ax, 1
     sar ax, 1
     sar ax, 1
-    mov [bp-8], ax
-
+    mov [bp-10], ax                 ; bx0
+    ; i0 = max(0, -bx0)
+    neg ax
+    cmp ax, 0
+    jge .i0ok
+    xor ax, ax
+.i0ok:
+    mov [bp-12], ax
+    ; i1 = min(bpr, LEM_MSTRIDE - 1 - bx0)
+    mov ax, LEM_MSTRIDE - 1
+    sub ax, [bp-10]
+    cmp ax, [bp-4]
+    jle .i1ok
     mov ax, [bp-4]
+.i1ok:
+    mov [bp-14], ax
+    cmp ax, [bp-12]
+    jge .rngok
+    jmp .out                        ; wholly off the world's left or right
+.rngok:
+    ; the tail byte (index bpr, whose cur is 0) is in range iff i1 == bpr
+    xor bx, bx
+    cmp ax, [bp-4]
+    jne .notail
+    inc bx
+    dec ax                          ; the main loop's last index is bpr - 1
+.notail:
+    mov [bp-26], bx
+    sub ax, [bp-12]
     inc ax
-    mov [bp-14], ax                 ; dest bytes this row = source bytes + 1
-
+    mov [bp-24], ax                 ; main count, may be 0 (i0 == bpr)
+    ; the mode, Lemmix's precedence: no-overwrite, then erase, then draw
+    xor ax, ax
+    test word [bp+16], LEM_TF_NOOVER
+    jz .noover0
+    mov al, 2
+    jmp .modeok
+.noover0:
+    test word [bp+16], LEM_TF_ERASE
+    jz .modeok
+    mov al, 1
+.modeok:
+    mov [bp-22], ax
+    mov ax, [bp+6]                  ; off
+    add ax, [bp-12]                 ; + i0: every source row starts there
+    mov [bp-20], ax
     mov word [bp-2], 0
 .row:
-    mov bx, [bp-2]
-    cmp bx, [bp+14]
-    jge .out
-
+    mov ax, [bp-2]
+    cmp ax, [bp+14]
+    jl .rowgo
+    jmp .out
+.rowgo:
     test word [bp+16], LEM_TF_UPDOWN
     jz .plain
     mov ax, [bp+14]
     dec ax
-    sub ax, bx
-    jmp .havedy
+    sub ax, [bp-2]
 .plain:
-    mov ax, bx
-.havedy:
     add ax, [bp+10]                 ; + y
-    cmp ax, LEM_VIEWH
-    jae .nextrow
-    call lem_rowoff                 ; DI = row * 200 (lemmask.inc)
-    add di, LEM_VTERR
-    mov [bp-10], di
+    cmp ax, LEM_MROWS
+    jb .inrow
+    jmp .nextrow                    ; unsigned: catches a negative row too
+.inrow:
+    call lem_rowoff                 ; DI = dy * 200
+    add di, [bp-10]
+    add di, [bp-12]
+    mov [bp-16], di
 
-    ; --- the effective mask for this row, into lb_mrow --------------------
-    call lb_pmask
-    ; --- and then the four planes ----------------------------------------
-    mov word [bp-16], 0
+    ; --- M: plane 3 shifted, into lb_mrow, and the no-overwrite AND -------
+    mov si, [bp-20]
+    mov ax, [bp-6]
+    add si, ax
+    add si, ax
+    add si, ax                      ; plane 3
+    mov ax, [bp+4]
+    mov cx, [bp-8]                  ; CL = s
+    push cs
+    pop es
+    mov di, lb_mrow
+    mov ds, ax                      ; the bank
+    call lb_wshift                  ; lb_mrow[0..n-1], DS left as the bank
+    push cs
+    pop ds
+    cmp word [bp-22], 2
+    jne .mdone
+    ; M &= ~dest3, against the mask as it is BEFORE this piece
+    mov ax, [lb_wp3]
+    mov es, ax
+    mov di, [bp-16]
+    mov si, lb_mrow
+    mov cx, [bp-24]
+    add cx, [bp-26]
+.nov:
+    mov al, [es:di]
+    not al
+    and [si], al
+    inc si
+    inc di
+    loop .nov
+.mdone:
+
+    ; --- the planes: 0..2 where there is a T claim, then 3 ----------------
+    mov word [bp-18], 0
+    cmp word [lb_wp0], 0
+    jne .plane
+    mov word [bp-18], 3
 .plane:
-    call lb_pplane
-    inc word [bp-16]
-    cmp word [bp-16], 4
-    jb .plane
+    ; the destination segment
+    mov ax, [bp-18]
+    cmp ax, 3
+    jne .pcol
+    mov ax, [lb_wp3]
+    jmp .pseg
+.pcol:
+    mov bx, ax
+    mov ax, [lb_wp0]
+    cmp bx, 0
+    je .pseg
+    add ax, LEM_TPLANE
+    cmp bx, 1
+    je .pseg
+    add ax, LEM_TPLANE
+.pseg:
+    mov es, ax
+    mov di, [bp-16]
+    mov bx, lb_mrow
+    cmp word [bp-22], 1
+    jne .pdraw
+    ; --- erase: d &= ~M, no source at all --------------------------------
+    mov cx, [bp-24]
+    add cx, [bp-26]
+.er:
+    mov al, [bx]
+    not al
+    and [es:di], al
+    inc bx
+    inc di
+    loop .er
+    jmp .pnext
+.pdraw:
+    ; --- plane 3 is M itself: the shifted plane 3 AND M is M, so the
+    ; picture's plane 3 and the mask both take d |= M with no source read at
+    ; all - which is the whole of the compose on CGA and Hercules -------------
+    cmp word [bp-18], 3
+    jne .pcolour
+    mov cx, [bp-24]
+    add cx, [bp-26]
+.p3:
+    mov al, [bx]
+    or [es:di], al
+    inc bx
+    inc di
+    loop .p3
+    jmp .pnext
+.pcolour:
+    ; --- draw: d = (d & ~M) | (shifted src_p & M) -------------------------
+    mov si, [bp-20]
+    mov cx, [bp-18]
+    jcxz .p0
+.pp:
+    add si, [bp-6]
+    loop .pp
+.p0:
+    mov cx, [bp-8]                  ; CL = s, CH is the loop's temporary
+    mov dx, [bp-24]                 ; DX = the main count
+    mov ax, [bp+4]
+    push bp
+    mov bp, [bp-26]                 ; BP = tail flag: the frame is not read
+    mov ds, ax                      ; again until it is popped
+    xor ah, ah
+    cmp word [cs:lb_wi0], 0         ; prev = src[i0 - 1] when i0 > 0
+    je .noprev
+    mov ah, [si-1]
+.noprev:
+    cmp dx, 0
+    je .ptail
+.pd:
+    lodsb                           ; AL = cur
+    mov ch, al
+    shr ax, cl                      ; AL = the shifted byte
+    and al, [cs:bx]
+    mov ah, [cs:bx]
+    not ah
+    and ah, [es:di]
+    or al, ah
+    stosb
+    mov ah, ch                      ; prev = cur
+    inc bx
+    dec dx
+    jnz .pd
+.ptail:
+    cmp bp, 0
+    je .pend
+    xor al, al                      ; cur = src[bpr] = 0
+    shr ax, cl
+    and al, [cs:bx]
+    mov ah, [cs:bx]
+    not ah
+    and ah, [es:di]
+    or al, ah
+    stosb
+.pend:
+    pop bp
+    push cs
+    pop ds
+.pnext:
+    inc word [bp-18]
+    cmp word [bp-18], 4
+    jae .nextrow
+    jmp .plane
 .nextrow:
+    mov ax, [bp-4]
+    add [bp-20], ax                 ; the next source row
     inc word [bp-2]
     jmp .row
 .out:
@@ -610,183 +949,123 @@ _lem_r_piece:
     pop es
     pop di
     pop si
-    add sp, 16                        ; the `sub sp` at the top, undone EXPLICITLY
+    add sp, 26                      ; the `sub sp` at the top, undone EXPLICITLY
     pop bp
     ret
 
-; lb_pmask - internal to _lem_r_piece: build lb_mrow[0..destbytes-1], the
-; shifted plane-3 bytes, ANDed with the complement of the solid mask when the
-; no-overwrite flag is set. Uses the caller's frame through BP.
-lb_pmask:
-    push si
-    push di
-    push es
-    push ds
-    ; the source: plane 3 = off + 3 * plane stride, row srow
-    mov ax, [bp-4]
-    mul word [bp-2]
-    add ax, [bp+6]
-    mov si, ax
+; lb_wshift - internal to _lem_r_wpiece: one source row, shifted, out to ES:DI.
+; in: DS:SI = src[i0], CL = s, [bp-12] i0, [bp-24] main count, [bp-26] tail.
+; It writes main + tail bytes. It sets lb_wi0 = i0, which the plane loop reads
+; through CS once DS is the bank's. Clobbers AX, CH, DX, SI, DI.
+lb_wshift:
     mov ax, [bp-12]
-    add si, ax
-    add si, ax
-    add si, ax
-    mov ax, [bp+4]
-    mov ds, ax
-    push cs
-    pop es                          ; lb_mrow is ours, and a package is one
-                                    ; flat segment
-    mov di, lb_mrow
+    mov [cs:lb_wi0], ax
     xor ah, ah
-    xor bx, bx
-.b:
-    mov al, 0
-    cmp bx, [bp-4]
-    jge .have
-    mov al, [si+bx]
-.have:
-    push ax
-    mov cx, [bp-6]
-    jcxz .nos
+    cmp word [bp-12], 0
+    je .nop
+    mov ah, [si-1]
+.nop:
+    mov dx, [bp-24]
+    cmp dx, 0
+    je .tail
+.l:
+    lodsb
+    mov ch, al
     shr ax, cl
-.nos:
-    mov [es:di], al
-    pop ax
-    mov ah, al
-    inc di
-    inc bx
-    cmp bx, [bp-14]
-    jl .b
-    push cs
-    pop ds
-
-    test word [bp+16], LEM_TF_NOOVER
-    jz .done
-    ; AND with the complement of the solid mask's own row
-    mov ax, [bp-10]
-    sub ax, LEM_VTERR               ; back to a mask offset: the two strides
-    mov di, ax                      ; are both 200, which is why this is a
-                                    ; subtraction and not a second walk
-    mov ax, [lm_seg]
-    mov es, ax
-    mov si, lb_mrow
-    mov cx, 0
-    mov bx, [bp-8]
-.nb:
-    cmp bx, 0
-    jl .nskip
-    cmp bx, LEM_MSTRIDE
-    jge .nskip
-    push bx
-    add bx, di
-    mov al, [es:bx]
-    not al
-    and [cs:si], al
-    pop bx
-.nskip:
-    inc si
-    inc bx
-    inc cx
-    cmp cx, [bp-14]
-    jl .nb
-.done:
-    pop ds
-    pop es
-    pop di
-    pop si
+    stosb
+    mov ah, ch
+    dec dx
+    jnz .l
+.tail:
+    cmp word [bp-26], 0
+    je .r
+    xor al, al
+    shr ax, cl
+    stosb
+.r:
     ret
 
-; lb_pplane - internal to _lem_r_piece: one plane of one row.
-lb_pplane:
+; -----------------------------------------------------------------------------
+; void lem_r_tload(void) - the T claim's four planes into the VGA world, whole.
+; A no-op on the shadow backends, which keep no T claim.
+; -----------------------------------------------------------------------------
+_lem_r_tload:
+    push bp
+    mov bp, sp
     push si
     push di
     push es
     push ds
-    ; select the plane for reading and for writing
-    mov ax, [bp-16]
-    mov cl, al
-    mov ah, al
-    mov al, 4                       ; Read Map Select
-    call lb_gc
-    mov ax, 1
-    shl ax, cl
-    mov ah, al
-    mov al, 2                       ; Map Mask
-    call lb_seq
-
-    ; the source row for this plane
-    mov ax, [bp-4]
-    mul word [bp-2]
-    add ax, [bp+6]
-    mov si, ax
-    mov ax, [bp-12]
-    mov cx, [bp-16]
-    jcxz .nop
-.mulp:
-    add si, ax
-    loop .mulp
-.nop:
-    ; THE FRAMEBUFFER SEGMENT IS READ BEFORE DS MOVES, and that ordering is
-    ; the whole of a defect this file shipped once: lb_fb is ordinary .bss and
-    ; therefore DS-RELATIVE, so reading it with DS already pointed at the style
-    ; bank reads two bytes of TERRAIN as a segment. What it looked like was a
-    ; correctly set mode 0Dh, a correct split, a correct start address and a
-    ; completely black screen (build/port-shots/wave2-vga-black.png).
-    mov ax, [lb_fb]
-    mov es, ax
-    mov ax, [bp+4]
-    mov ds, ax
-
-    xor ah, ah
-    xor bx, bx
-.b:
-    mov al, 0
-    cmp bx, [bp-4]
-    jge .have
-    mov al, [si+bx]
-.have:
-    push ax
-    mov cx, [bp-6]
-    jcxz .nos
-    shr ax, cl
-.nos:
-    ; AL is this byte's source contribution; the mask is lb_mrow[bx]
-    mov dx, [bp-8]
-    add dx, bx
-    cmp dx, 0
-    jl .skip
-    cmp dx, LEM_MSTRIDE
-    jge .skip
-    add dx, [bp-10]
-    mov di, dx
-    mov dx, bx
-    add dx, lb_mrow
+    cmp word [lb_kind], LEM_KIND_VGA
+    jne .out
+    mov bx, [lb_t]
+    cmp bx, 0
+    je .out
+    mov dx, 1                       ; the Map Mask bit
+.pl:
+    push dx
     push bx
-    mov bx, dx
-    mov ah, [cs:bx]                 ; the effective mask byte
+    mov ah, dl
+    mov al, 2
+    call lb_seq
     pop bx
-    test word [bp+16], LEM_TF_ERASE
-    jz .draw
-    not ah
-    and [es:di], ah
-    jmp .skip
-.draw:
-    and al, ah
-    not ah
-    mov cl, [es:di]
-    and cl, ah
-    or al, cl
-    mov [es:di], al
-.skip:
-    pop ax
-    mov ah, al
-    inc bx
-    cmp bx, [bp-14]
-    jl .b
+    pop dx
+    mov ax, [lb_fb]                 ; ...before DS moves: see lb_wshift
+    mov es, ax
+    mov di, LEM_VTERR
+    xor si, si
+    mov ds, bx
+    mov cx, (LEM_MSTRIDE * LEM_MROWS) / 2
+    cld
+    rep movsw
+    push cs
+    pop ds
+    add bx, LEM_TPLANE
+    shl dl, 1
+    cmp dl, 16
+    jb .pl
+    mov ah, 0x0F                    ; every plane again, the state the rest of
+    mov al, 2                       ; this file assumes
+    call lb_seq
+.out:
     pop ds
     pop es
     pop di
     pop si
+    pop bp
+    ret
+
+; void lem_r_tmask(void) - the solid mask into T's plane 3, after a compose.
+; Plane 3 of the PICTURE starts equal to solidity and then parts from it the
+; first time a builder lays a brick, which is colour 7: solid, and plane 3
+; clear (lemmings_main_dat_file_format.txt section 2). VGA only.
+_lem_r_tmask:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    cmp word [lb_kind], LEM_KIND_VGA
+    jne .out
+    mov ax, [lb_t]
+    cmp ax, 0
+    je .out
+    add ax, 3 * LEM_TPLANE
+    mov es, ax
+    xor di, di
+    xor si, si
+    mov ax, [lm_seg]
+    mov ds, ax
+    mov cx, (LEM_MSTRIDE * LEM_MROWS) / 2
+    cld
+    rep movsw
+.out:
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop bp
     ret
 
 ; -----------------------------------------------------------------------------
@@ -959,6 +1238,12 @@ lb_compose:
     push word [bp-2]
     call lem_r_dirty
     add sp, 6
+    mov ax, [bp-2]
+    and ax, 15
+    cmp ax, 15
+    jne .nms
+    call lb_msample                 ; the pointer's buttons, every 16 rows
+.nms:
     inc word [bp-2]
     jmp .row
 .done:
@@ -968,6 +1253,32 @@ lb_compose:
     pop si
     add sp, 4                       ; the `sub sp` at the top, undone EXPLICITLY
     pop bp
+    ret
+
+; lb_msample - THE BUTTONS, LATCHED, IN THE MIDDLE OF A LONG DRAW (SPEC.md
+; 114.7 point 3). os88_mouse() answers a LEVEL and has no press latch, and on
+; the two shadow backends a scrolling tick is ~178 ms of compose and present
+; (SPEC.md 114.7.1) - longer than a click. So the compose and the present ask
+; OSAPI_MOUSE every sixteen rows they move and OR the buttons in here, and
+; lem_r_mlatch() hands the C the union: a click that went down and up inside
+; one long draw is still a press. A far call (46.7 us) a sixteenth of the
+; rows; nothing at all on a tick that moved no row. Every register kept.
+lb_msample:
+    push ax
+    push cx
+    push dx
+    call OSAPI_MOUSE
+    or [cs:lb_mlatch], al
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; int lem_r_mlatch(void) - the buttons lb_msample saw since the last call,
+; and the latch cleared.
+_lem_r_mlatch:
+    xor ax, ax
+    xchg al, [cs:lb_mlatch]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1134,6 +1445,11 @@ _lem_r_present:
     rep movsb
     pop ds
     mov si, [bp-2]
+    mov ax, si
+    and ax, 15
+    cmp ax, 15
+    jne .next
+    call lb_msample                 ; a press inside a long present is kept
 .next:
     inc word [bp-2]
     jmp .row
@@ -1154,7 +1470,7 @@ _lem_r_present:
 ; tools/os88lem.py's LEMMAIN bank. It is FOUR PLANES of 1,600 bytes - 40 bytes
 ; a row, 40 rows - which on VGA is four straight copies and on the two
 ; paletteless adapters is a colour-CLASS conversion, because those cards have
-; no palette to put it in (SPEC.md 39.4, 92.4.2): nibble 0 is black, 1..7 is
+; no palette to put it in (SPEC.md 39.4, 114.4.2): nibble 0 is black, 1..7 is
 ; the SPRITE/panel/text class - the panel, its buttons and their captions - and
 ; 8..15 the TERRAIN class, which is the direction lb_spix, SPEC.md 114.4 and
 ; README.TXT all state. THE FIRST VERSION OF THIS COMMENT HAD IT THE OTHER WAY
@@ -1673,11 +1989,17 @@ lb_world:   resw 1
 lb_shadow:  resw 1
 lb_scroll:  resw 1
 lb_batch:   resw 1                  ; the VGA state bracket's DEPTH (lb_batch_in)
+lb_wp0:     resw 1                  ; lem_r_wpiece's colour planes, or 0
+lb_wp3:     resw 1                  ; ...and its plane 3, the solid mask
+lb_wi0:     resw 1                  ; this piece's first byte index (lb_wshift)
+lb_t:       resw 1                  ; the T claim (VGA): the world's four planes
+                                    ; in RAM, kept for the level's life
 lb_mrow:    resb 96                 ; one row's effective mask - the widest
                                     ; terrain piece in the five sets is 80
                                     ; pixels, so 11 bytes plus the shift's
                                     ; extra; 96 is the round number above it
 lb_dlo:     resb LEM_SROWS          ; the dirty span per shadow row, 0xFF =
 lb_dhi:     resb LEM_SROWS          ; clean (SPEC.md 85.3.1)
+lb_mlatch:  resb 1                  ; lb_msample's buttons since lem_r_mlatch
 
 section .text

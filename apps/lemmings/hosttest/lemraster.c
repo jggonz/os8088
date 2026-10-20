@@ -153,6 +153,7 @@ void os88_poke(unsigned seg, unsigned off, int v) { *h_ptr(seg, off) = (unsigned
 
 static unsigned char h_solid[H_WORLD_H][H_WORLD_W];
 static unsigned char h_world[H_WORLD_H][H_WORLD_W];
+static unsigned char h_t[H_WORLD_H][H_WORLD_W];
 static unsigned char h_screen[H_SCR_H][H_SCR_W];
 static unsigned short h_wrote[H_SCR_H][H_SCR_W];
 
@@ -284,30 +285,78 @@ void lem_m_apply(unsigned seg, unsigned off, int x, int y, int w, int h)
     for (gy = 0; gy < h; gy++)
         for (gx = 0; gx < w; gx++) {
             p = h_ptr(seg, off + gy * bpr + (gx >> 3));
-            /* A SET BIT MEANS LEAVE ALONE (Lemmings.ts mask-provider Mask.at) */
-            if (((*p >> (7 - (gx & 7))) & 1) == 0)
+            /* A SET BIT REMOVES (Lemmix CombineMask, src/Game.pas:1812 - and
+             * the data: the explosion stencil's set bits are the crater) */
+            if ((*p >> (7 - (gx & 7))) & 1)
                 lem_clear_pixel(x + gx, y + gy);
         }
 }
 
-void lem_m_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-                 int flags)
+int lem_m_dig(int x, int y, int w)
 {
-    int gx, gy, dy, bpr = (w + 7) >> 3;
-    const unsigned char *p;
+    int i, hit = 0;
 
-    for (gy = 0; gy < h; gy++) {
-        dy = (flags & 4) ? (y + h - 1 - gy) : (y + gy);
-        for (gx = 0; gx < w; gx++) {
-            p = h_ptr(seg, off + gy * bpr + (gx >> 3));
-            if (((*p >> (7 - (gx & 7))) & 1) == 0)
-                continue;
-            if (flags & 2)
-                lem_clear_pixel(x + gx, dy);
-            else
-                lem_set_pixel(x + gx, dy);
+    if (y < 0)
+        y = 0;
+    for (i = 0; i < w; i++)
+        if (x + i >= 0 && x + i < LEM_WORLD_W && y < LEM_WORLD_H &&
+            h_solid[y][x + i]) {
+            h_solid[y][x + i] = 0;
+            hit = 1;
         }
-    }
+    return hit;
+}
+
+/* the OBJECT MAP, modelled INSIDE the claim the program hands it, so a write
+ * the program makes outside its 15,840 bytes is a read-past-the-claim failure
+ * here rather than a silent overwrite */
+static unsigned h_o_seg;
+
+void lem_o_setup(unsigned seg) { h_o_seg = seg; (void)h_ptr(seg, 15839); }
+
+void lem_o_clear(void)
+{
+    int i;
+
+    for (i = 0; i < 396 * 40; i++)
+        *h_ptr(h_o_seg, (unsigned)i) = 128;
+}
+
+static int h_o_idx(int x, int y)
+{
+    int cx = x >> 2, cy = y >> 2;       /* an arithmetic shift: floor */
+
+    if (x < 0)
+        cx = -((-x + 3) >> 2);
+    if (y < 0)
+        cy = -((-y + 3) >> 2);
+    if (cx < 0 || cx >= 396 || cy < 0 || cy >= 40)
+        return -1;
+    return cy * 396 + cx;
+}
+
+int lem_o_get(int x, int y)
+{
+    int i = h_o_idx(x, y);
+
+    return i < 0 ? 128 : *h_ptr(h_o_seg, (unsigned)i);
+}
+
+void lem_o_set(int x, int y, int v)
+{
+    int i = h_o_idx(x, y);
+
+    if (i >= 0)
+        *h_ptr(h_o_seg, (unsigned)i) = (unsigned char)v;
+}
+
+void lem_o_fill(int x, int y, int w, int h, int v)
+{
+    int px, py;
+
+    for (py = y; py < y + h; py++)
+        for (px = x; px < x + w; px++)
+            lem_o_set(px, py, v);
 }
 
 void lem_m_derive(unsigned dstseg, int kind)
@@ -350,7 +399,7 @@ void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
  * On the machine _lem_r_prep() moves the CRTC Offset to 200 bytes a row, sets
  * the line compare and the pan mode, AND points the Start Address at the world
  * (LEM_VTERR). The first version did not do the last of those, so from the
- * mode set until the first lem_r_scroll() - which is in lem_frame_first(),
+ * mode set until the first lem_r_scroll() - which is in ovl_frame_first(),
  * AFTER the ~25-second compose - the card displayed VRAM 0 with a 200-byte
  * row: the skill panel twice and world x 0 under it
  * (build/port-shots/wave2f-vga-loading.png).
@@ -383,12 +432,72 @@ void lem_r_pal(unsigned seg, unsigned stdoff, unsigned cusoff)
 void lem_r_clearworld(void)
 {
     memset(h_world, 0, sizeof(h_world));
+    memset(h_t, 0, sizeof(h_t));
 }
 
-void lem_r_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-                 int flags)
+/* --- wave 3's composer: T and the mask, in RAM (lemblit.inc lem_r_wpiece) ---
+ * h_t is T, the terrain picture (VGA) - the background a destroyed or animated
+ * rectangle is put back from. On VGA h_world is VRAM: T + objects + sprites.
+ * On the shadow backends h_world is W: the mask by class + the objects. */
+static unsigned h_wp0, h_wp3, h_tseg;
+
+void lem_r_wsetup(unsigned p0, unsigned p3) { h_wp0 = p0; h_wp3 = p3; }
+void lem_r_tsetup(unsigned t) { h_tseg = t; }
+
+/* THE VGA COMPOSE (lemsprite.inc lem_r_cband): between lem_r_cband and
+ * lem_r_cend the machine draws into a VRAM SCRATCH a band of the world's rows
+ * high, and copies each rectangle on in one latch pass (lem_r_clatch). So the
+ * model keeps the scratch as a world-sized picture of its own - h_cs - and a
+ * compose writes THERE, never the world and never the screen; only a latch
+ * moves pixels into the world, and the screen with it. The BAND clips a
+ * sprite and the pointer (rows only); the CLIP rectangle clips an object, the
+ * latch and the pointer's save update, which is the machine's arithmetic. */
+static unsigned char h_cs[H_WORLD_H][H_WORLD_W];
+static int h_comp, h_comp_y0, h_comp_h, h_comp_b0, h_comp_b1;
+static int h_band_y0, h_band_h;
+static int h_r_bgglass;             /* VGA lem_r_bgrect calls made straight
+                                     * onto the glass, outside a compose */
+static int h_r_comps;               /* bands and rectangles begun */
+static int h_r_direct;              /* VGA sprite/object/background draws made
+                                     * straight onto the glass, outside a
+                                     * compose - the defect wave 3's second
+                                     * review found: a lemming off the glass
+                                     * from its restore to its draw */
+static int h_r_latches;             /* lem_r_clatch calls */
+
+/* h_wpx - one pixel of the VGA world, which IS the screen inside the view -
+ * or, composing, one pixel of the scratch, inside the band */
+static void h_wpx(int x, int y, int c)
 {
-    int gx, gy, dy, p, nib, bpr = (w + 7) >> 3, stride = (w >> 3) * h;
+    if (x < 0 || x >= H_WORLD_W || y < 0 || y >= H_WORLD_H)
+        return;
+    if (h_comp) {
+        if (y < h_band_y0 || y >= h_band_y0 + h_band_h)
+            return;                 /* the scratch holds the band and no more */
+        h_cs[y][x] = (unsigned char)c;
+        return;
+    }
+    h_world[y][x] = (unsigned char)c;
+    h_r_worldpix++;
+    if (h_r_kind == 0 && h_r_scroll >= 0 && x >= h_r_scroll &&
+        x < h_r_scroll + H_SCR_W) {
+        h_screen[y][x - h_r_scroll] = (unsigned char)c;
+        h_wrote[y][x - h_r_scroll]++;
+        h_r_pixels++;
+    }
+}
+
+/* h_inclip - is world pixel (x, y) inside the compose's CLIP rectangle? */
+static int h_inclip(int x, int y)
+{
+    return y >= h_comp_y0 && y < h_comp_y0 + h_comp_h &&
+           (x >> 3) >= h_comp_b0 && (x >> 3) <= h_comp_b1;
+}
+
+void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
+                  int flags)
+{
+    int gx, gy, dy, p, nib, m, bpr = (w + 7) >> 3, stride = (w >> 3) * h;
     const unsigned char *b;
 
     for (gy = 0; gy < h; gy++) {
@@ -396,33 +505,60 @@ void lem_r_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
         if (dy < 0 || dy >= H_WORLD_H)
             continue;
         for (gx = 0; gx < w; gx++) {
-            b = h_ptr(seg, off + 3 * stride + gy * bpr + (gx >> 3));
-            if (((*b >> (7 - (gx & 7))) & 1) == 0)
-                continue;           /* plane 3 IS the transparency mask */
             if (x + gx < 0 || x + gx >= H_WORLD_W)
                 continue;
-            if ((flags & 8) && h_solid[dy][x + gx])
-                continue;           /* no-overwrite, against the mask as it is
-                                     * BEFORE this piece - which is why the C
-                                     * calls lem_r_piece before lem_m_piece */
-            if (flags & 2) {
-                h_world[dy][x + gx] = 0;
-                h_r_worldpix++;
+            b = h_ptr(seg, off + 3 * stride + gy * bpr + (gx >> 3));
+            m = (*b >> (7 - (gx & 7))) & 1;   /* plane 3 IS the mask */
+            if (!m)
+                continue;
+            /* Lemmix's precedence: no-overwrite, then erase, then draw */
+            if (flags & 8) {
+                if (h_solid[dy][x + gx])
+                    continue;
+            } else if (flags & 2) {
+                h_solid[dy][x + gx] = 0;
+                h_t[dy][x + gx] = 0;
                 continue;
             }
-            nib = 8;                /* plane 3 is set, so the nibble is 8..15 */
+            nib = 8;
             for (p = 0; p < 3; p++) {
                 b = h_ptr(seg, off + p * stride + gy * bpr + (gx >> 3));
                 if ((*b >> (7 - (gx & 7))) & 1)
                     nib |= 1 << p;
             }
-            h_world[dy][x + gx] = (unsigned char)nib;
+            h_solid[dy][x + gx] = 1;
+            if (h_wp0)
+                h_t[dy][x + gx] = (unsigned char)nib;
             h_r_worldpix++;
         }
     }
 }
 
-void lem_r_derive(void) { }
+void lem_r_tmask(void) { }          /* T's plane 3 is the nibble's bit 3 here */
+
+void lem_r_tload(void)
+{
+    int x, y;
+
+    if (h_r_kind != 0)
+        return;
+    for (y = 0; y < H_WORLD_H; y++)
+        for (x = 0; x < H_WORLD_W; x++)
+            h_world[y][x] = h_t[y][x];
+    if (h_r_scroll >= 0)
+        h_vga_window();
+}
+
+void lem_r_derive(void)
+{
+    int x, y;
+
+    if (h_r_kind == 0)
+        return;
+    for (y = 0; y < H_WORLD_H; y++)
+        for (x = 0; x < H_WORLD_W; x++)
+            h_world[y][x] = h_solid[y][x] ? 8 : 0;
+}
 
 void lem_r_scroll(int x)
 {
@@ -478,12 +614,24 @@ void lem_r_present(void)
      * window of it, so anything composed after the scroll is on the glass the
      * instant it is written. A model that only refreshes h_screen inside
      * lem_r_scroll() gets that wrong the moment a caller scrolls BEFORE the
-     * compose, which lem_frame_panel() now does so that the level builds in
+     * compose, which ovl_frame_panel() now does so that the level builds in
      * the window it will open in. */
     if (h_r_kind == 0 && h_r_scroll >= 0)
         h_vga_window();
     h_r_presents++;
     lem_r_undirty();
+}
+
+/* the buttons lb_msample latches inside a long compose or present: the model
+ * has no long draws, so a row sets h_r_mlatch to stand for one */
+static int h_r_mlatch;
+
+int lem_r_mlatch(void)
+{
+    int v = h_r_mlatch;
+
+    h_r_mlatch = 0;
+    return v;
 }
 
 void lem_r_panel(unsigned seg, unsigned off)
@@ -537,6 +685,409 @@ void lem_r_batch(int on)
              "write mode 2 for the composer");
     else
         h_r_batch--;
+}
+
+/* ============================================================================
+ * lemsprite.inc, modelled (SPEC.md 114.4.6)
+ * ==========================================================================*/
+
+/* the records: the shadow backends' rectangles, put back from W. VGA keeps
+ * none - its frame is composed (SPEC.md 114.4.6) */
+#define H_SPMAX 168
+unsigned char lem_sprec[H_SPMAX * 6];  /* lemsprite.inc's lb_sprec, which on
+                                        * VGA holds the C's boxes */
+static int h_sp_x[H_SPMAX], h_sp_y[H_SPMAX], h_sp_w[H_SPMAX], h_sp_h[H_SPMAX];
+static int h_spn;
+static int h_r_sprites;             /* lem_r_sprite calls since the reset */
+static int h_r_objs;                /* lem_r_obj calls */
+static int h_r_bgs;                 /* lem_r_bgrect calls */
+
+/* h_sprite_pix - one source pixel's colour, or -1 transparent */
+static int h_sprite_pix(unsigned seg, unsigned off, int w, int h, int np,
+                        int ink, int gx, int gy)
+{
+    int p, c = 0, bpr = (w + 7) >> 3, ps = bpr * h;
+    const unsigned char *b;
+
+    for (p = 0; p < np; p++) {
+        b = h_ptr(seg, off + p * ps + gy * bpr + (gx >> 3));
+        if ((*b >> (7 - (gx & 7))) & 1)
+            c |= 1 << p;
+    }
+    if (c == 0)
+        return -1;
+    return np == 1 ? ink : c;
+}
+
+void lem_r_sprite(unsigned seg, unsigned off, int x, int y, int w, int h,
+                  int mode)
+{
+    int gx, gy, c, np = mode & 15, ink = mode >> 4, k;
+
+    h_r_sprites++;
+    if (h_r_kind == 0) {
+        /* VGA: NO SAVE-UNDER AND NO RECORD - composed into the scratch, or
+         * (the first frame, 'f') straight onto the world */
+        if (!h_comp)
+            h_r_direct++;
+        for (gy = 0; gy < h; gy++)
+            for (gx = 0; gx < w; gx++) {
+                c = h_sprite_pix(seg, off, w, h, np, ink, gx, gy);
+                if (c < 0 || y + gy < 0 || y + gy >= H_VIEW_H ||
+                    x + gx >= 1600)
+                    continue;
+                h_wpx(x + gx, y + gy, c);
+            }
+        return;
+    }
+    if (h_spn >= H_SPMAX)
+        return;
+    if (w > 32 || h > 32) {
+        fail("a sprite bigger than the record model holds");
+        return;
+    }
+    k = h_spn++;
+    h_sp_x[k] = x;
+    h_sp_y[k] = y;
+    h_sp_w[k] = w;
+    h_sp_h[k] = h;
+    for (gy = 0; gy < h; gy++)
+        for (gx = 0; gx < w; gx++) {
+            c = h_sprite_pix(seg, off, w, h, np, ink, gx, gy);
+            if (c < 0 || y + gy < 0 || y + gy >= H_VIEW_H)
+                continue;
+            if (h_r_scroll >= 0)
+                h_scr(x + gx - h_r_scroll, y + gy, 3);
+        }
+}
+
+/* the shadow backends' records, put back out of W; VGA keeps none */
+void lem_r_srest(void)
+{
+    int k, gx, gy, x, y;
+
+    while (h_spn > 0) {
+        k = --h_spn;
+        for (gy = 0; gy < h_sp_h[k]; gy++)
+            for (gx = 0; gx < h_sp_w[k]; gx++) {
+                x = h_sp_x[k] + gx;
+                y = h_sp_y[k] + gy;
+                if (x < 0 || x >= H_WORLD_W || y < 0 || y >= H_VIEW_H)
+                    continue;
+                if (h_r_scroll >= 0 && x - h_r_scroll >= 0 &&
+                    x - h_r_scroll < H_SCR_W)
+                    h_scr(x - h_r_scroll, y, h_world[y][x]);
+            }
+    }
+}
+
+void lem_r_sforget(void) { h_spn = 0; }
+
+int lem_r_cband(int y0, int h)
+{
+    if (h_r_kind != 0 || h <= 0 || h > 125)
+        return 0;
+    if (h_comp)
+        fail("lem_r_cband inside a compose - the scratch is one band");
+    if (y0 < 0 || y0 + h > H_VIEW_H)
+        fail("a compose band outside the world's 160 rows");
+    h_comp = 1;
+    h_band_y0 = y0;
+    h_band_h = h;
+    h_comp_y0 = y0;
+    h_comp_h = h;
+    h_comp_b0 = 0;
+    h_comp_b1 = 199;
+    h_r_comps++;
+    return 1;
+}
+
+int lem_r_cbegin(int y0, int h, int b0, int b1)
+{
+    if (!lem_r_cband(y0, h))
+        return 0;
+    h_comp_b0 = b0;
+    h_comp_b1 = b1;
+    return 1;
+}
+
+void lem_r_cclip(int y0, int h, int b0, int b1)
+{
+    if (!h_comp)
+        fail("lem_r_cclip outside a compose");
+    if (y0 < h_band_y0 || y0 + h > h_band_y0 + h_band_h)
+        fail("a compose clip reaches outside its band - the latch would "
+             "copy scratch rows nothing composed");
+    h_comp_y0 = y0;
+    h_comp_h = h;
+    h_comp_b0 = b0;
+    h_comp_b1 = b1;
+}
+
+void lem_r_clatch(void)
+{
+    int x, y;
+
+    if (!h_comp)
+        return;
+    h_r_latches++;
+    for (y = h_comp_y0; y < h_comp_y0 + h_comp_h; y++)
+        for (x = h_comp_b0 * 8; x < h_comp_b1 * 8 + 8; x++) {
+            if (x < 0 || x >= H_WORLD_W || y < 0 || y >= H_VIEW_H)
+                continue;
+            h_world[y][x] = h_cs[y][x];
+            if (h_r_scroll >= 0 && x >= h_r_scroll &&
+                x < h_r_scroll + H_SCR_W) {
+                h_screen[y][x - h_r_scroll] = h_cs[y][x];
+                h_wrote[y][x - h_r_scroll]++;
+                h_r_pixels++;
+            }
+        }
+}
+
+void lem_r_cend(void) { h_comp = 0; }
+
+/* lem_r_shit - does a SHADOW record cross the screen rectangle? The model's
+ * records are pixel rectangles; the machine's are whole bytes, so the model
+ * widens by a byte and answers yes at least as often. VGA keeps none. */
+int lem_r_shit(int sx0, int sy0, int sx1, int sy1)
+{
+    int k, x0, x1;
+
+    for (k = 0; k < h_spn; k++) {
+        x0 = h_sp_x[k] - h_r_scroll - 8;
+        x1 = h_sp_x[k] + h_sp_w[k] - h_r_scroll + 8;
+        if (x0 <= sx1 && sx0 <= x1 && h_sp_y[k] <= sy1 &&
+            sy0 <= h_sp_y[k] + h_sp_h[k] - 1)
+            return 1;
+    }
+    return 0;
+}
+
+/* lem_r_vstart / lem_r_vpan - the VGA scroll in two halves: the model's view
+ * moves on the first and the second is the pel pan, which writes nothing */
+static int h_r_vpans;
+
+void lem_r_vstart(int x)
+{
+    if (x < 0)
+        x = 0;
+    if (x > LEM_WORLD_W - 320)
+        x = LEM_WORLD_W - 320;
+    if (h_r_kind != 0)
+        fail("lem_r_vstart on a shadow backend - it is the CRTC's");
+    h_r_scroll = x;
+    h_r_hwpan++;
+    h_vga_window();
+}
+
+void lem_r_vpan(void) { h_r_vpans++; }
+
+/* the background rectangle: VGA syncs T with the mask (a lost pixel cleared,
+ * a gained one a colour-7 brick) and copies T in; the shadow re-derives W */
+void lem_r_bgrect(int x, int y, int w, int h, int sync)
+{
+    int gx, gy, x0, x1;
+
+    h_r_bgs++;
+    if (h_r_kind == 0 && !h_comp && sync != 2) {
+        h_r_bgglass++;
+        h_r_direct++;
+    }
+    x0 = x & ~7;
+    x1 = (x + w + 7) & ~7;
+    for (gy = y; gy < y + h; gy++) {
+        if (gy < 0 || gy >= H_VIEW_H)
+            continue;
+        for (gx = x0; gx < x1; gx++) {
+            if (gx < 0 || gx >= H_WORLD_W)
+                continue;
+            if (h_r_kind == 0) {
+                if (sync) {
+                    if (!h_solid[gy][gx])
+                        h_t[gy][gx] = 0;
+                    else if (h_t[gy][gx] == 0)
+                        h_t[gy][gx] = 7;
+                }
+                if (sync != 2)      /* 2: the sync alone */
+                    h_wpx(gx, gy, h_t[gy][gx]);
+            } else {
+                h_world[gy][gx] = h_solid[gy][gx] ? 8 : 0;
+            }
+        }
+    }
+}
+
+void lem_r_show(int x, int y, int w, int h)
+{
+    int gx, gy;
+
+    if (h_r_kind == 0 || h_r_scroll < 0)
+        return;
+    for (gy = y; gy < y + h; gy++)
+        for (gx = x; gx < x + w; gx++)
+            if (gy >= 0 && gy < H_VIEW_H && gx >= h_r_scroll &&
+                gx < h_r_scroll + H_SCR_W && gx < H_WORLD_W)
+                h_scr(gx - h_r_scroll, gy, h_world[gy][gx]);
+}
+
+void lem_r_obj(unsigned seg, unsigned off, int x, int y, int w, int h,
+               int flags)
+{
+    int gx, gy, sy, c, p, m, bpr = (w + 7) >> 3, ps = bpr * h;
+    const unsigned char *b;
+
+    h_r_objs++;
+    if (h_r_kind == 0 && !h_comp)
+        h_r_direct++;
+    for (gy = 0; gy < h; gy++) {
+        sy = (flags & 2) ? h - 1 - gy : gy;
+        for (gx = 0; gx < w; gx++) {
+            if (x + gx < 0 || x + gx >= H_WORLD_W || y + gy < 0 ||
+                y + gy >= H_VIEW_H)
+                continue;
+            b = h_ptr(seg, off + 4 * ps + sy * bpr + (gx >> 3));
+            m = (*b >> (7 - (gx & 7))) & 1;
+            if (!m)
+                continue;
+            if ((flags & 1) && !h_solid[y + gy][x + gx])
+                continue;
+            if (!(flags & 1) && (flags & 4) && h_solid[y + gy][x + gx])
+                continue;
+            c = 0;
+            for (p = 0; p < 4; p++) {
+                b = h_ptr(seg, off + p * ps + sy * bpr + (gx >> 3));
+                if ((*b >> (7 - (gx & 7))) & 1)
+                    c |= 1 << p;
+            }
+            if (h_r_kind == 0) {
+                if (!h_comp || h_inclip(x + gx, y + gy))
+                    h_wpx(x + gx, y + gy, c);
+            } else {
+                h_world[y + gy][x + gx] = (unsigned char)c;
+            }
+        }
+    }
+}
+
+/* the pointer: saved under on every card, the world part on VGA in the
+ * world at the view's offset and the panel part on the screen */
+static unsigned char h_cur_save[14 * 14];
+static int h_cur_x = -1000, h_cur_y, h_cur_on;
+static int h_r_curdraws;
+static const unsigned char *h_cur_last;
+
+static int h_cur_bits_was(int gx, int gy)
+{
+    return h_cur_last &&
+           ((h_cur_last[gy * 2 + (gx >> 3)] >> (7 - (gx & 7))) & 1);
+}
+
+static void h_cur_px(int sx, int sy, int c, int save, int k)
+{
+    if (sx < 0 || sx >= H_SCR_W || sy < 0 || sy >= H_SCR_H)
+        return;
+    if (h_r_kind == 0 && sy < H_VIEW_H) {
+        if (h_r_scroll < 0)
+            return;
+        if (save)
+            h_cur_save[k] = h_world[sy][h_r_scroll + sx];
+        h_wpx(h_r_scroll + sx, sy, c);
+    } else {
+        if (save)
+            h_cur_save[k] = h_screen[sy][sx];
+        h_scr(sx, sy, c);
+    }
+}
+
+void lem_r_cursor(const unsigned char *bits, int sx, int sy)
+{
+    int gx, gy;
+
+    if (h_cur_on) {
+        for (gy = 0; gy < 14; gy++)
+            for (gx = 0; gx < 14; gx++)
+                if (h_cur_bits_was(gx, gy))
+                    h_cur_px(h_cur_x + gx, h_cur_y + gy,
+                             h_cur_save[gy * 14 + gx], 0, 0);
+        h_cur_on = 0;
+    }
+    if (bits == 0)
+        return;
+    h_r_curdraws++;
+    h_cur_last = bits;
+    for (gy = 0; gy < 14; gy++)
+        for (gx = 0; gx < 14; gx++)
+            if ((bits[gy * 2 + (gx >> 3)] >> (7 - (gx & 7))) & 1)
+                h_cur_px(sx + gx, sy + gy, 3, 1, gy * 14 + gx);
+    h_cur_x = sx;
+    h_cur_y = sy;
+    h_cur_on = 1;
+}
+
+/* lem_r_csave - the CLIP's share of the lit pointer's world pixels, saved
+ * again out of the scratch (the picture the glass is about to hold) */
+void lem_r_csave(void)
+{
+    int gx, gy, x, y;
+
+    if (!h_comp || !h_cur_on || h_r_kind != 0)
+        return;
+    for (gy = 0; gy < 14; gy++)
+        for (gx = 0; gx < 14; gx++) {
+            if (!h_cur_bits_was(gx, gy))
+                continue;
+            x = h_r_scroll + h_cur_x + gx;
+            y = h_cur_y + gy;
+            if (h_cur_x + gx < 0 || h_cur_x + gx >= H_SCR_W || y < 0 ||
+                y >= H_VIEW_H || !h_inclip(x, y))
+                continue;
+            h_cur_save[gy * 14 + gx] = h_cs[y][x];
+        }
+}
+
+/* lem_r_cdraw - the lit pointer drawn INTO the scratch, inside the band */
+void lem_r_cdraw(void)
+{
+    int gx, gy;
+
+    if (!h_comp || !h_cur_on || h_r_kind != 0)
+        return;
+    for (gy = 0; gy < 14; gy++)
+        for (gx = 0; gx < 14; gx++)
+            if (h_cur_bits_was(gx, gy) && h_cur_x + gx >= 0 &&
+                h_cur_x + gx < H_SCR_W && h_cur_y + gy < H_VIEW_H)
+                h_wpx(h_r_scroll + h_cur_x + gx, h_cur_y + gy, 3);
+}
+
+void lem_r_glyph8(const unsigned char *bits, int x, int y, int h, int ink,
+                  int paper)
+{
+    int gx, gy;
+
+    for (gy = 0; gy < h; gy++)
+        for (gx = 0; gx < 8; gx++)
+            h_scr(x + gx, H_VIEW_H + y + gy,
+                  ((bits[gy] >> (7 - gx)) & 1) ? ink : paper);
+}
+
+void lem_r_panrect(unsigned seg, unsigned off, int x, int y, int w, int h)
+{
+    int gx, gy, p, nib;
+    const unsigned char *b;
+
+    for (gy = y; gy < y + h; gy++)
+        for (gx = x; gx < x + w; gx++) {
+            if (gy != y && gy != y + h - 1 && gx != x && gx != x + w - 1)
+                continue;
+            nib = 0;
+            for (p = 0; p < 4; p++) {
+                b = h_ptr(seg, off + p * 1600 + gy * 40 + (gx >> 3));
+                if ((*b >> (7 - (gx & 7))) & 1)
+                    nib |= 1 << p;
+            }
+            h_scr(gx, H_VIEW_H + gy, nib);
+        }
 }
 
 /* ============================================================================

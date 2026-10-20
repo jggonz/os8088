@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemtext.c   (#included by lemmings.c)
  *
- * THE STRING ACCESSOR, AND NOT THE STRINGS (SPEC.md 114.3, 92.6).
+ * THE STRING ACCESSOR, AND NOT THE STRINGS (SPEC.md 114.3, 114.6).
  *
  * Every literal this program shows - the preview's seven format strings, the
  * postview's header and its nine result texts, the congratulation, the

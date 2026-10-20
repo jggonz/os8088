@@ -195755,14 +195755,35 @@ design and not a defect. And the Wire record is **kind 1 (game)**, at **tier 0
 if wave 2's XT measurement is playable and tier 1 otherwise** — the one field
 of the record that waits on §114.7's number.
 
+**TWO THINGS MOVED UNDER THIS TABLE WHILE THE PORT WAS PAUSED, AND NEITHER
+CHANGES WHAT THE CONVERTER WRITES.** (1) The Wire's archive format **version 2**
+(§92.13.1) carries a file larger than `WIRE_FILEMAX`, so The Wire no longer
+forces the 64,512-byte bound. The bound stays anyway, because it is also the
+package's: each part is ONE `os88_file_read_seg` into ONE claim at a 512-aligned
+offset, and a read is a word count of bytes. Wave 4 may revisit it with a
+chunked read; nothing here needs to. (2) A plain `make` LZ4-packs every package
+and data file it ships (§20.13.5), and the transparent read answers the
+UNPACKED size (§20.13.3), so a packed band would read back whole with no change
+to the package. **The `.LEM` bands are not packed**: `tools/os88disk.py` packs
+nothing itself, the bands go from `build/lemband/<geometry>/` to the image
+exactly as the converter wrote them, so the per-geometry cluster manifests the
+converter prints and `LEVELS.TXT` carries are still the truth about the disk.
+Packing them is a size win left for wave 4, and it would move those manifests.
+
 ### 114.4 The three rasters, over one game
 
 The game runs inside §53's bracket, which grants the card outright excepting
 PIT channel 0, the sound ports and `int 10h` mode sets. `apps/lemmings/lemblit.inc`
 is hand-written 8086 behind ONE set of entries with three backends behind them
 — `lem_r_setup`, `lem_r_prep`/`_unprep`, `lem_r_pal`, `lem_r_clearworld`,
-`lem_r_piece`, `lem_r_derive`, `lem_r_scroll`, `lem_r_dirty`/`_undirty`,
-`lem_r_present`, `lem_r_panel`, `lem_r_rect`, `lem_r_batch` — and C calls each
+the RAM composer `lem_r_wsetup`/`_tsetup`/`_wpiece`/`_tload`/`_tmask` (wave 3,
+§114.7.2; it replaced wave 2's `lem_r_piece`), `lem_r_derive`, `lem_r_scroll`,
+`lem_r_dirty`/`_undirty`, `lem_r_present`, `lem_r_panel`, `lem_r_rect`,
+`lem_r_batch`, and wave 3's `apps/lemmings/lemsprite.inc` beside it —
+`lem_r_sprite`, `lem_r_srest`/`_sforget`, `lem_r_obj`, `lem_r_bgrect`,
+the VGA compose `lem_r_cbegin`/`_cband`/`_cclip`/`_clatch`/`_cend`/`_csave`/`_cdraw`,
+`lem_r_cursor`, `lem_r_show`, `lem_r_glyph8`, `lem_r_panrect` (§114.4.6) — and
+C calls each
 once per piece, once per sprite, once per frame or once per RUN of pixels,
 never per pixel (§73.11). `lb_kind` is read
 once per call and the routine branches, which is the shape §39 asks of
@@ -195785,15 +195806,20 @@ screen**:
 
 | VRAM offset | holds | shown |
 |---|---|---|
-| 0 | the 320x40 skill panel | below a CRTC **line compare at scanline 320**, unscrolled, with the Attribute Controller's Pixel Panning Mode bit set so it does not shift with the pel pan |
+| 0 | the 320x40 skill panel | below a CRTC **line compare of 319**, so the split STARTS at scanline 320 (the address counter resets on the scanline AFTER the match, so the register holds 2 × 160 − 1; wave 2's 320 put the panel's top glyph row on the glass at half height), unscrolled, with the Attribute Controller's Pixel Panning Mode bit set so it does not shift with the pel pan |
 | 8,000 | the whole **1584x160** level terrain, 32,000 bytes a plane of the 65,536 available | scrolled by the start address plus pel panning |
-| 40,000 | sprite save-under scratch | never displayed |
+| 40,000 | the frame's COMPOSE scratch, 125 rows of the world's 200-byte stride, to 64,999 (§114.4.6) | never displayed |
+| 65,000 | the pointer's own save-under | never displayed |
 
 **Terrain therefore costs ZERO drawing per frame.** It is composed once when
 the level loads and only destruction writes it again. Scrolling is two register
-writes. Lemmings, objects and the cursor are save-under sprites, saved and
-restored with VGA **write mode 1** (the latches) and drawn with **write mode 2**
-per colour, with a runtime shift into the byte phase.
+writes. A game frame's changes — each lemming's old and new box, each crater,
+each moved object — are rebuilt in the compose scratch from a RAM copy of the
+terrain (T), the objects drawn over it, every lemming drawn plane by plane
+through a per-sprite mask with a runtime shift into the byte phase, and the
+pointer; then each rectangle is copied onto the glass with VGA **write mode 1**
+(the latches: one byte moves four planes). Nothing is saved under but the
+pointer (§114.4.6 says why).
 
 Nothing in this tree has ever driven the line compare, the start address or pel
 panning, and nothing has ever changed mode mid-bracket. `tests/cfsx` is the
@@ -195850,7 +195876,8 @@ dither on Hercules, and byte for byte the VGA that was already right.
 nothing else**, because every terrain pixel is the same class. So it is
 derived in ONE pass over 32,000 bytes (`lem_m_derive`) rather than composed
 piece by piece beside the mask, which at 400 pieces a level is both simpler and
-faster; `lem_r_piece` does nothing at all on those two backends.
+faster; the composer's picture half (`lem_r_wpiece`'s planes) is not asked
+for on those two backends at all.
 
 **THE SCROLL STEP IS COARSER ON THEM, and that is a stated fact rather than a
 defect.** The compose is a byte-aligned windowed copy, so the step is 4 pixels
@@ -195880,8 +195907,9 @@ moving: **two `out`s a pixel**. `_lem_r_rect` opens one for itself, so a
 rectangle is one setup whatever it covers, and `lem_mm_draw`/`lem_view_rect`
 open one around a whole group. A bare `lb_rpix` outside any bracket still sets
 and restores the state itself, so the fast path is an optimisation and not a
-contract the caller can break. The technique is `lem_r_piece`'s own, stated in
-its header 900 lines up and then not used on the panel side.
+contract the caller can break. The technique was wave 2's VGA terrain
+composer's own, stated in its header 900 lines up and then not used on the
+panel side.
 
 **2. THE STATUS FONT IS WRITTEN AS BYTES.** MAIN.DAT's status glyphs are THREE
 PLANES of 8x16, and bit p of the colour is source plane p — so on a VGA the
@@ -196009,6 +196037,211 @@ nothing here needs a kernel change. Text inside the bracket is drawn by
 glyphs, each composed into a band and written once — because no kernel font
 slot is legal in a foreign mode (§85.7).
 
+#### 114.4.6 Sprites, objects and the background (wave 3)
+
+`apps/lemmings/lemsprite.inc` is the live half of the raster, and its rule is
+that **a frame rebuilds everything it changed in the original's order** — the
+background repaired where the mechanics destroyed it, the objects over it, the
+lemmings, their countdown digits, and the pointer last — **somewhere the glass
+does not show, and only then puts it on the glass**: on VGA a VRAM scratch
+latch-copied on a rectangle at a time, on the two shadow cards the shadow the
+present copies out.
+
+| backend | the BACKGROUND (what a sprite is taken off onto) | how a sprite comes off |
+|---|---|---|
+| VGA | **T**, the four world planes in RAM — terrain only, in the level's own colours, the builder's bricks in colour 7 — kept for the level's life (125 KB, §114.6.1) | **never taken off at all, and never saved under.** Its old box is rebuilt from T and the objects in the frame's COMPOSE SCRATCH (VRAM 40,000-64,999: 125 rows of the world's 200-byte stride), every lemming is drawn into the scratch over it, and the box is latch-copied onto the glass (`ovl_vframe`, below). The 6-byte records that used to hold VGA save-unders at 57,600 are gone with them; on VGA those 1,008 bytes of bss hold the C's last-drawn box per lemming instead (`lem_obox`, 80 x 4) |
+| CGA, Hercules | **W**, the world claim — the solid mask by colour class plus the objects | copied back out of W into the shadow; no save-under at all and the order does not matter |
+
+**The pointer is the one sprite with a save-under on every card**, because it
+is the one that crosses onto the PANEL, and the panel is MAIN.DAT's bitmap plus
+the status line, the counts and the minimap — in neither T nor W. It is
+restored first and drawn last on every TICK, not every frame, so it moves at
+18.2 Hz however long a game frame takes (§114.7 point 3). It is this port's own
+14x14 bitmap at the original's geometry: a cross, and a box once the status
+line names a lemming (Lemmix `HitTest`: HitCount > 0 AND Lemming1 <> nil, so
+the right button over nothing but working lemmings keeps the cross and a blank
+word), with the original's hotspot moved the original's way (Lemmix
+`GameScreen.Player.pas:590`, "4,9 instead of 7,7"). On VGA a game frame does
+not take it off either: before a rectangle is latched on, the part of the
+pointer's box inside it is copied into the pointer's save-under FROM THE
+SCRATCH (`lem_r_csave` — the picture the glass is about to hold, without the
+pointer in it) and the pointer is then drawn into the scratch (`lem_r_cdraw`),
+so the latch puts it back where it already was.
+
+**Objects are drawn again, not saved under.** An object animates under
+lemmings that walk across it, so a save-under would capture a lemming; instead
+a rectangle that changed — an object's frame, or terrain a lemming destroyed —
+is put back by COPYING T (VGA) or re-deriving W (the other two) and then
+drawing every object that touches it again, in Lemmix `DrawAnimatedObjects`'
+order (hatches only-on-terrain, the rest only-on-terrain, the hatches, the
+rest — an order taken once a level, `lem_oord`, and cut each frame to the
+objects the frame's rectangles can touch, `lem_ovis`). `lem_r_bgrect` does the
+copy; a destruction rectangle also SYNCHRONISES T with the mask first (its
+sync-only form, 2), because a builder's brick exists in the mask the instant
+it is laid and in the picture only at the frame's end
+(`nb = mask & ~(t0|t1|t2|t3)` is the brick, in colour 7). **The frame's
+rectangles MERGE where they overlap** (`ovl_rc_add`): the destruction and the
+moved objects merge with every rectangle they touch until none does, so an
+exit and its torch, or a row of water tiles, is one rectangle and each object
+over it is drawn ONCE a frame (wave 3 drew each about three times, and on a
+shadow card a whole object into W each time — the harness's overlap row
+counts it); a lemming's box merges with the LAST rectangle only, which folds a
+hatch's stream at one compare a lemming. An object reaching outside a
+rectangle is only part-drawn by it; every object the frame owed a redraw is
+marked drawn once all its rectangles are done (`ovl_objs_mark`).
+
+**Destruction is three writes, and only the mask's is immediate.** A digger,
+basher, miner or bomber writes the SOLID MASK the moment it acts — the next
+lemming's probe must see it — and records the rectangle (`lem_damage`, sixteen
+of them, the seventeenth and after FOLDED into the slot whose union grows
+least, `ovl_dmg_fold` — it used to widen slot 15 whatever the distance, so a
+digger at x 40 and one at x 1,500 became a 1,470-pixel rectangle synced byte by
+byte); the frame's end puts the PICTURE right through `lem_r_bgrect`, and the MINIMAP's
+cell is MARKED (`lem_mmc`) when its bit actually changes and drawn with the
+dots at the frame's end — never plotted from the mechanics, which run before
+the pointer's bracket and used to plot under a lit pointer's save-under, where
+the restore undid the plot for good. A frame with nothing changed draws
+nothing (`ovl_tick_draw` returns at its first test).
+
+**WHAT IS OFF THE GLASS, AND FOR HOW LONG** — wave 3 shipped its frame erasing
+and redrawing straight on the displayed buffer, and its first review counted
+the cost: the pointer off for the whole of every game frame, every changed
+object shown as bare terrain until it was drawn over, and on a shadow card a
+scrolling tick that drew every sprite twice. The fix that answered it still
+restored every VGA save-under onto the glass and drew the frame there, and the
+SECOND review found what that left: each lemming off the glass from its
+restore to its draw — the restores run in reverse, so the first lemming taken
+off was the last drawn, and its window was the whole frame (the damage, the
+objects and N four-plane sprite draws: tens of milliseconds on an XT, against
+a 1.4 ms blanking interval, 17 times a second) — and the pointer off with them
+whenever a lemming was near it, which is to say while the player aims. What
+ships now (`lemdraw.c` `ovl_vframe`, `ovl_tick_draw`, `ovl_pan_hit`;
+`lemsprite.inc` `lem_r_cband` and its five siblings):
+
+| what | off the glass | how |
+|---|---|---|
+| a lemming, VGA | **never** | `ovl_vframe`: the frame's rectangles — each lemming's last box joined with its new one, each destruction, each moved object — are built in the compose scratch a BAND of up to 125 rows at a time (one band unless the frame changed rows more than 125 apart): every rectangle's T and the objects over it, then EVERY lemming whose box is in the band, once, in the pool's order, then each rectangle latch-copied on (`lem_r_clatch`, write mode 1: a byte moves four planes). The glass only ever receives a finished picture |
+| a changed object or a dug rectangle, VGA | **never** | the same compose. A rectangle taller than the band is cut into bands (`ovl_bg_redraw` too) — it used to fall back to drawing in place |
+| the pointer, VGA | not by a game frame | `lem_r_csave` + `lem_r_cdraw`, above. It comes off at a scroll's retrace and goes straight back on at its place (its world piece moves with the Start Address), and around a PANEL write inside the bytes its save-under holds |
+| the pointer, on the panel side | only around a write **inside the bytes it holds** | `ovl_pan_hit`, asked right before the minimap and the panel are drawn: each CHANGED status cell under it, each dirty count's 8x8 cell, the old and new selection frame, each minimap cell under it whose dot came or went or that the mechanics cleared (`lem_mmn` is built first, `ovl_mm_build`), and the view rectangle's old and new outline. "Any panel change" took a pointer resting on the skill buttons or the minimap off every frame — the clock, a held release rate, the dots — and that is exactly where it rests when it is not aiming. A pointer that only moved comes off and goes back on as one adjacent pair at the very end |
+| everything, CGA and Hercules | — | drawn into the shadow, which the glass sees only at `lem_r_present()`; the pointer's save-under is in the shadow too, so taking it off there (`ovl_cur_hit`, the shadow cards' world test) is a question about the save, never something seen |
+| the beam, VGA | — | a frame waits for a vertical retrace ONLY TO SCROLL: the Start Address goes out before the wait (`lem_r_vstart`) and the pel pan after it (`lem_r_vpan`), so both land on one refresh — written together, the pan took effect at once and the address a refresh later, a shear of up to seven pixels on every 4-pixel step. A frame that does not scroll does not wait: the compose needs no retrace, and the wait was up to 14.3 ms (7 on average) of every 59 ms frame |
+| a shadow scroll | — | when a game frame is drawn the same tick, the recompose draws no sprites: the frame's own pass does (one sprite pass, not two and a restore) |
+
+**The host harness holds all of it** (§114.12): 300 played VGA frames with 0
+draws made onto the glass outside a compose and the glass equal to the world
+after every one, the lit pointer's every pixel on the glass after every frame,
+a pointer parked over walking lemmings for 40 frames taken off by none of them
+(it redraws only when its SHAPE changes), a pointer steered through the crowd
+leaving 0 stale pixels against a fresh rebuild of the view, and a pointer
+resting on a quiet skill button or on the minimap taken off by none of 30
+frames. Each of those rows was run against the defect it names — the frame
+drawn onto the glass, `lem_r_csave` skipped, `lem_r_cdraw` skipped, the
+panel's test answering "any change" — and fails. **What the harness cannot
+give is time**: the off-glass fraction on an XT is what MartyPC's
+`flicker()`/`pace()` measure (PERFORMANCE.md Part 3.1/3.2), and §114.7 names
+the row for the final pass.
+
+#### 114.4.7 The mechanics
+
+`apps/lemmings/lemgame.c` (the frame), `lemact.c` (the eighteen actions, the
+eight skills and the hit test) and `lemobj.c` (objects, triggers, the object
+map) are **transliterated from Lemmix's `src/Game.pas`** — `InternalUpdate`'s
+order, `IncrementIteration`, `CheckSpawnLemming`, `Transition`,
+`HandleLemming` and the eighteen `Handle*`, `CheckForInteractiveObjects`, the
+`Assign*`, `PrioritizedHitTest`, `CheckUpdateNuking`, `CheckForGameFinished` —
+under **Lemmix's ORIG mechanics set**, which is the DOS original modelled bug
+for bug: the faller that starts at 3, the miner's one-way-right bug, a climber
+assigned to a shrugger, only four hatches in the ABBA order, objects past the
+fifteenth non-hatch inert, and a triggered trap starting at frame 0. **Two
+options Lemmix keeps outside that set ARE modelled, because decision 1 is the
+1991 game and not Lemmix's defaults** — its own source says the original does
+both (§114.8):
+
+- **the right-click glitch** (`Game.pas:3626`, `:3685-3689`): Lemmix's hit
+  test remembers the last non-prioritised lemming it saw (`lem_hit_last`,
+  reset at the level's start), and an assignment made with the right button
+  held over nothing but working lemmings — Lemming1 nil — goes to THAT lemming,
+  wherever it is now. **Only Lemmix's own hit tests record it**: `HitTest` at
+  the end of `UpdateLemmings` (`:2646`, a frame boundary), `HitTest` from
+  `Img_MouseMove` while paused (`Player.pas:654`) and the assignment's own
+  `PrioritizedHitTest` (`:3683`). This port's pointer also asks on every TICK —
+  between frames, and in the middle of a part-stepped one — to keep the status
+  word and the pointer's shape current, and those calls pass `rec` = 0
+  (`ovl_hittest`'s fourth argument), or the glitch could pick a walker
+  Lemmix's own hit tests never saw (wave 3's second review). One case is
+  narrower than Lemmix's: with the pointer on the panel Lemmix keeps testing at
+  the last in-image point, and this port tests nothing;
+- **the nuke glitch** (`:3990-3994`, "just like the actual game"): the nuke
+  sets MaxNumLemmings to the lemmings released so far, so the finish test and
+  the postview's "You rescued" (`SetGameResult :4477`) count against it. The
+  IN field does too, but only from the NEXT exit: Lemmix calls
+  `SetInfoLemmingsSaved` at the level's start (`:1635`) and when an exiter is
+  removed (`HandleExiting :3308`) and nowhere else, so the port caches the
+  per cent there (`lem_inpct`) rather than recomputing it every tick — wave 3
+  recomputed it, and the field jumped the instant the nuke was pressed (10
+  lemmings, 3 out, 1 saved: 10% became 33%).
+
+Lemmix's skip-a-minute key is a cheat and is not modelled.
+
+**The trigger lookup is the original's OBJECT MAP, not a list.** The plan
+proposed per-column buckets of trigger rectangles because the references walk
+every trigger for every lemming; the DOS original itself keeps a 4-pixel map —
+Lemmix `ReadObjectMap`, lemmings_3ds `object_map[]` — and that is one byte read
+a probe, exact by construction (a blocker writes its field into it too). It
+lives in the 16 KB claim the level's raw record was read into
+(`lemmask.inc`'s `lem_o_*`, 396 x 40 bytes, 128 = nothing).
+
+**THE TWO REFERENCES DISAGREE IN EIGHT PLACES and this port follows Lemmix in
+each**, because Lemmix models the original and lemmings_3ds says "really?" at
+three of them. `tools/lemsim.py` — the mechanics written a second time, from
+lemmings_3ds `src/lemming.c` — applies the same eight rulings, each named at
+the line that applies it, so a transcription slip on either side is a
+divergence and a genuine disagreement is a ruling written down:
+
+| # | where | lemmings_3ds | this port (Lemmix) |
+|---|---|---|---|
+| R1 | a walker leaving the world | tests x < 0 only, and only turns right | turns at x < 0 and x > 1647 |
+| R2 | every terrain probe | reads the probe row as is | `HasPixelAt_ClipY`: a probe above `miny` reads row `miny` |
+| R3 | the jumper's second probe | re-reads y + 0 ("really -1?") | one row higher, because the loop moved y |
+| R4 | a faller and a bomber | keeps the exploder 52 frames for particles | removed past y 163 after the step; the crater is cut and the lemming removed on the explosion's first frame |
+| R5 | basher, miner and builder at the world's end | the basher tests 1584 | all three test 1647 |
+| R6 | the exit | refuses a faller AND a floater | refuses only a faller |
+| R7 | the ORIG set's three bugs | not modelled | modelled (the list above) |
+| R8 | the right-click and nuke glitches | not modelled | modelled (the list above) — `lemsim.py` takes them from Lemmix, and the replay drives them: an `H x y r` command is the assignment's own hit test (one that records), and fixture level 0's frame 345 is the glitch (a builder through the right button over a blocker alone, to the walker an earlier hit test saw); `level2n.txt` nukes mid-frame at frame 80 (so at frame 81's start) with seven of twelve out, and the trace's ninth field is MaxNumLemmings |
+
+**THE STEP IS SPREAD, NOT SHORTENED (decision 7).** `ovl_frame_begin()` does
+the frame-level work, `lem_frame_chunk()` steps at most `LEM_STEP_MAX` = 20
+lemmings and `ovl_frame_end()` the rest; the bracket's loop polls input and
+moves the pointer between chunks. Every lemming is still stepped exactly once
+a frame in the original's order, so the mechanics are the original's on every
+machine and only the frame RATE moves. **A press or a nuke that arrives while
+a frame is part-stepped is QUEUED** (`ovl_view_press`, `ovl_nuke_press`) and
+applied at the next frame's start (`ovl_q_apply`, the top of
+`ovl_frame_begin`), because Lemmix only ever assigns BETWEEN frames — applied
+at once it could land on a lemming already stepped this frame or on one still
+to step. The replay's `h` and `n` commands are exactly that road: the frame is
+begun, five lemmings stepped, the command made through the bracket's own
+routine (which must queue it), and the frame finished. The frame accumulator adds 170 per tick
+and runs a frame per 182 — 17 frames a second at 18.2 ticks — and never bursts
+to catch up: a machine that is behind plays slower, which every clock in the
+game (release, spawn, time limit) follows.
+
+**The status line is Lemmix's five setters**, at their offsets
+(`Game.SkillPanel.pas:501-563`): the word and the hit count PadRight 14 at
+cell 0, OUT PadRight 5 at 18, IN as a per cent PadRight 5 at 26 (cells 26-30,
+so the field's LAST cell is 30 counted from 0 — column 31 counted from 1), the
+minutes at 35 and the seconds at 38. Only changed cells are lettered
+(`ovl_stat_delta`, `DrawNewStr`'s rule), so an ordinary tick re-letters the
+clock's two cells and nothing else. Every character is upper case because
+MAIN.DAT's font has nothing else, and anything outside its 38 glyphs is the
+fourth arm's black cell.
+
+**The sounds are one tone a frame**, the most important cue the frame raised
+(`lem_snd_cue` keeps the lowest event number), through `os88_snd_tone` — the
+speaker has one voice. The events are the original's and no others (§114.11);
+the pitches and lengths are this port's own.
+
 ### 114.5 The C SDK additions — three thunks beside the bracket's four
 
 `apps/cc/os88.h` wraps §53's bracket itself now: `os88_fsx_caps`, `_run`,
@@ -196074,7 +196307,7 @@ resident   image  ~36,000   lemmings.c (root, claims, the session state
                             scratch and the FSI block
            -------------
            total  ~50,000   81% of APP_MAX_SIZE; ~11,440 spare
-LEMMINGS.OVL   ~14,000      ovl_preview, ovl_postview, ovl_about,
+module         ~14,000      ovl_preview, ovl_postview, ovl_about,
                             ovl_greyfact, ovl_progress_read/write,
                             ovl_compose (the terrain-list walk, once per
                             level and never during play), ovl_chrome and
@@ -196115,32 +196348,123 @@ word on the glass for the thirty seconds a level takes to compose.) The mechanic
 handlers are what the estimate above is mostly made of and they arrive in
 wave 3.
 
-**THE bss LINE, AT ITS MEASURED COMPOSITION, because the plan's ~14,000 was
-for the WHOLE program and wave 1 spent 14,866 of it before the raster
-existed.** Seven buffers are 11,060 of the **12,708** there are, and the column
-below adds to that figure — which is the one the `os88pkg` line prints:
+**MEASURED AT WAVE 3**, with the mechanics, the eighteen action handlers, the
+object model, the sprites, the pointer, the live panel and the sound in it:
+`os88pkg: 'LEMMINGS' entry=+0x0020 image=32956 bss=19708` and **part 0, the
+module, 15,073 bytes (9,279 packed) inside `LEMMINGS.O88`** — **52,664 resident
+of 61,440, 85.7%, and 8,776 spare**, under the 55,000 move-out trigger.
+`tools/cc8086.py` reports **232 functions**, a **34-byte** maximum frame against
+the 96-byte cap, and **60 functions moved to the module** behind 120 resident
+shims. Against wave 2's post-merge line (`image=20324 bss=12680`, module 2,698)
+that is +12,632 image, +7,028 bss and +12,375 module.
+
+**MEASURED AFTER WAVE 3'S FIRST REVIEW**: `os88pkg: 'LEMMINGS'
+entry=+0x0020 image=33516 bss=19993` and part 0
+**16,838 bytes (10,359 packed)** — **53,509 resident of 61,440, 87.1%, 7,931
+spare and 1,491 under the 55,000 trigger**. `tools/cc8086.py`: **238
+functions**, a **34-byte** maximum frame, **65 functions in the module behind
+128 resident shims**. Against wave 3's own line that is **+560 image and +285
+bss**: ~480 bytes of new assembly (the VGA object compose `lem_r_cbegin`/
+`lem_r_cend` and its clipped `lem_r_obj` arm, the save-record test
+`lem_r_shit`, the split scroll `lem_r_vstart`/`lem_r_vpan`, the button latch
+`lb_msample`/`lem_r_mlatch`), ~180 of resident C (the pointer's hit test's
+resident half, the mid-frame queue, the two glitches, the refused-bracket
+arm) net of the ~100 the overlay-file machinery gave back, and in bss the
+minimap's owed-cell bitset (`lem_mmc`, 260) and the compose's seven words.
+
+**MEASURED AFTER WAVE 3'S SECOND REVIEW** (the line every later wave is held
+against): `os88pkg: 'LEMMINGS' entry=+0x0020 image=33840 bss=20251` and part 0
+**21,857 bytes (12,866 packed)** inside a 36,418-byte `LEMMINGS.O88` —
+**54,091 resident of 61,440, 88.0%, 7,349 spare and 909 under the 55,000
+trigger**. `tools/cc8086.py`: **252 functions**, a **34-byte** maximum frame,
+**79 functions in the module behind 133 resident shims**. Against the first
+review's line that is **+324 image and +258 bss**. The image: the VGA compose's
+five new entries (`lem_r_cband`, `lem_r_cclip`, `lem_r_clatch`, `lem_r_csave`,
+`lem_r_cdraw`, ~400 bytes with the shared `lb_curset`, and a 10-byte stub and
+vector each because the module calls them) less the VGA save-under, restore
+and record-test arms they replace (~180), and five more resident shims. The
+bss: the frame's forty rectangles (`lem_rc`, 160), the objects' drawing order
+and the frame's short list of it (`lem_oord`, `lem_ovis`, 32 each), thirteen
+words, and twelve bytes of `lemsprite.inc` words (the band, the pointer's world
+row, byte, shape and place) less the save scratch's one. The per-lemming box
+store the compose needs is **320 bytes that cost nothing**: on VGA they live in
+`lemsprite.inc`'s sprite records (`lb_sprec`), which only the shadow cards use
+any more. The module grew **+5,019**: the frame's rectangles, the compose, the
+pointer's panel test and the panel's hit boxes.
+
+**What crossed 55,000 and came back.** The first whole build of wave 3 was
+**59,540 resident** — the trigger this section set — and the move-out was
+**not** the panel composition and the colour maps named above but forty
+functions renamed `ovl_*` (the level loader and composer, the object setup,
+the assignment and hit test, the panel's live drawing, the bracket's key and
+mouse handlers, the postview). That is §73.14's split by FREQUENCY only on the
+MECHANICS side, where what runs per lemming per frame (`lem_handle` and the
+eighteen handlers, the probes, `lem_frame_chunk`) stayed resident. **On the
+drawing side it is not**: the play loop and the frame's whole drawing —
+`ovl_tick_draw`, `ovl_vframe` and its rectangles, `ovl_sprites_all`,
+`ovl_sprite_one`, the minimap's dots, the panel's cells — are in the module and
+run every frame, and `ovl_sprite_one` crosses into the resident raster through
+`cc_ovthunk` two or three times a lemming (`lem_anim_at`, `lem_r_sprite`, and
+`lem_mask_at` + `lem_r_sprite` for a fuse) and each rectangle five or six times
+(`lem_r_cclip`, `lem_r_bgrect`, the object draws, `lem_r_csave`,
+`lem_r_clatch`): ~250 crossings a frame at 80 lemmings. That is a cost nobody
+has priced, and §114.7 puts "module-to-resident crossings per frame" among
+the counters the final MartyPC pass reports, beside the frame's own time, so
+the trade is decided on a number (moving `ovl_sprites_all`/`ovl_sprite_one`
+back is a few hundred resident bytes the levers below would have to find). The bss is the lemming pool (80 x 32 =
+2,560), the object instances and types (32 x 16 + 16 x 32), the sprite save
+records (168 x 6 = 1,008), the 800-byte sprite mask buffer, the minimap's two
+bitsets and the status line's two shadows.
+
+**THE MODULE IS A PART NOW, NOT A FILE** (§73.14.2, CWORD's shape since the
+merge): `%define CC_OVL_PART` in `lemmings.asm` and one `--part` on the
+`os88pkg` line, so there is no `LEMMINGS.OVL` beside the package to lose, one
+directory row fewer on every disk, and the module rides packed inside the
+package where the sidecar was raw (`$(CC_PARTZ)`, so `make CCPARTZ=` reaches
+it as it reaches every `CC_PACKAGE`).
+
+**AND IT HAS TO STAY EAGER — the one exemption this package takes from
+LESSONS.md's overlay rule.** About eighty `ovl_` functions are `void`,
+`ovl_tick_draw`, `ovl_frame_end` and `ovl_mm_clear` among them, called inside
+the bracket, which breaks "an overlay function answers a status, 0 = it did
+not happen". It is safe only because the eager part makes `cc_ovneed` a bare
+`ret` and this package has no worker; under `CC_OVL_LAZY` — the SDK's other
+arm, one `%define` — a refused fetch would make each of them silently do
+nothing, mid-frame. So `lemmings.asm` refuses that define by name
+(`%fatal`), on the last line before `crt0.asm` where one could take effect.
+
+**THE bss LINE, AT ITS MEASURED COMPOSITION** — re-measured after wave 3's
+second review the way wave 2 measured its 12,708, so the column adds to the
+**20,251** the `os88pkg` line prints:
 
 | bytes | | |
 |---:|---|---|
 | 5,120 | `lem_strbuf` | `LEMSTR.LEM` read whole (see below) |
+| 2,560 | `lem_lm` | the lemming pool, 80 x 32 (§114.4.7) |
 | 2,048 | `lem_ratbuf` | one rating's thirty 64-byte entries |
 | 1,280 + 1,280 | `lem_sh`, `lem_sha` | the launcher's 64×20 glass shadow |
+| 512 + 512 | `lem_ob`, `lem_ty` | 32 object instances x 16, 16 object types x 32 |
 | 560 | `lem_para` | the wrapped paragraph the two text screens draw |
 | 512 | `lem_manbuf` | `LEMMAN.LEM`'s header and its cost table |
-| 260 | `lem_mm` | the minimap's own shadow, 104×20 bits (§114.4) |
-| 526 | `lb_*`, `lf_mask`, `lm_seg` | the raster's own, and it is the only row here that is NOT C: the dirty spans (200+200), one row's effective mask (96), one status cell's ink (16), `lemmask.inc`'s `lm_seg` (2) and the six words `lemblit.inc` keeps (12) |
-| 40 | `lem_dc0`, `lem_dc1` | the launcher's per-row COLUMN bound (§114.4.4's rule 1 one level up: a selection move scans 82 columns rather than 189) |
-| 1,082 | everything else | 1,011 of further C objects — 96 of them, none over 128 bytes — plus 71 of `crt0.asm` and the `os88ui` shim |
+| 260 x 4 | `lem_mm`, `lem_mmd`, `lem_mmn`, `lem_mmc` | the minimap's terrain, the dots on the glass, this frame's dots, and the cells the mechanics cleared and the frame's end owes (§114.4.6) |
+| 240 + 48 | `lem_ar`, `lem_mk` | the 30 animation rows and 6 stencil rows |
+| 128 + 128 | `lem_dmg`, `lem_steel` | sixteen destruction rectangles; the record's 32 steel slots |
+| 160 + 32 + 32 | `lem_rc`, `lem_oord`, `lem_ovis` | the frame's forty merged rectangles (§114.4.6), the objects' drawing order, and the frame's short list of it |
+| 40 | `lem_dc0`, `lem_dc1` | the launcher's per-row COLUMN bound (§114.4.4's rule 1 one level up) |
+| 1,296 | the rest of the C | ~120 further objects, none over 128 bytes, and 3 bytes of `alignb` |
+| 2,042 | `lemsprite.inc` | the sprite records (168 x 6 = 1,008 — the shadow cards' records, and on VGA the C's 80 last-drawn boxes, `lem_obox`), the mask rows (`LEM_SMK`, 800), the shadow cards' pointer save-under (70), three 24-byte row buffers (72) and 92 bytes of words — the compose's band and clip among them |
+| 537 | `lemblit.inc`, `lemmask.inc`, `lemfont.inc` | the dirty spans (200 + 200), one row's effective mask (96), one status cell's ink (16), the button latch (1) and 24 bytes of segment and state words |
+| 144 | `crt0.asm`, the parts standard, the `os88ui` shim | 71 before the overlay became a part; the parts table's own bss is the rest |
 
 **HOW THAT WAS MEASURED, so the next wave re-measures it the same way.** The C
-half is the `.bss` of `build/lemmings.gen.asm`, which is **12,111**; the
-assembly half is the `res*` in the three `.inc` files, which is **526**
-(`lemblit.inc` 12 + 96 + 200 + 200, `lemmask.inc` 2, `lemfont.inc` 16); the
-remaining **71** is `crt0.asm` and the shim. 12,111 + 526 + 71 = **12,708**,
-which is the header's own `bss=`. `lem_dc0`/`lem_dc1`'s 40 bytes are C objects
-and are therefore INSIDE the 12,111 — they are pulled out into a row of their
-own above because §114.4.4 argues from them, and "everything else" is net of
-them, so nothing here is counted twice.
+half is the `.bss` of `build/lemmings.gen.asm` summed WITH its `alignb 2`
+padding, which is **17,528**; the assembly half is the `res*` in the four
+`.inc` files with their `equ`s substituted (`LEM_SROWS` 200, `LEM_SPMAX` 168,
+`LEM_SPREC` 6, `LEM_SMK` 800), which is **2,579** (`lemsprite.inc` 2,042,
+`lemblit.inc` 517, `lemfont.inc` 16, `lemmask.inc` 4); the remaining **144**
+is `crt0.asm`, the parts standard and the shim. 17,528 + 2,579 + 144 =
+**20,251**, the header's own `bss=`. Every C row above is inside the 17,528
+and "the rest of the C" is net of them, so nothing is counted twice.
 
 **WAVE 1 SPENT 4,096 OF THOSE BYTES ON HEADROOM IT DID NOT HAVE, AND WAVE 2
 TOOK 3,072 BACK.** `LEMSTR.LEM` is read whole into `LEM_STRBUF` and
@@ -196156,15 +196480,60 @@ reached the CONVERTER fails by name rather than the shipped package failing on
 the glass. Wave 2's own two launch refusals (`LEMS_NO_MEM`, `LEMS_NO_BANK`)
 took the band to 4,608, which is the step that would have hit the old wall.
 
-**THE 55,000 MOVE-OUT IS STILL OWED AND IS NOW CLOSER THAN THE HEADLINE
-LOOKS.** 39,670 resident with the mechanics, the eighteen action handlers, the
-object model and the sprite half of `lemdraw.c` still to come — the plan's own
-estimate puts those at ~2,600 lines of resident C, which at cword's measured
-5.7 bytes a line is ~15,000 more — lands at ~53,000 before the lemming pool,
-the object instances, the terrain list and the sprite save-under add their
-~6,000 of bss. Wave 3's first job when it crosses 55,000 is the split, and
-what moves is `lemdraw.c`'s panel composition and `lemtab.c`'s per-adapter
-colour maps.
+**THE NEXT LEVER, AND THE ONE AFTER IT, PRICED — AND RE-PRICED** (wave 3's
+second review found the first pricing of lever 1 low by a third and its
+conclusion wrong in both directions). Wave 2 named `lemdraw.c`'s panel
+composition and `lemtab.c`'s colour maps; neither is a lever any more — the
+panel's live drawing went to the module in wave 3, and a `const` table is data,
+which §73.14 cannot move. At **54,091** the trigger is **909** away, and waves
+4 and 5 add hand-written `.inc`, which is always resident.
+
+1. **The resident helpers only the module calls, renamed `ovl_`: up to
+   ~1,000 bytes**, and it is the PRIMARY lever because it is a rename and
+   nothing else. cc8086 reports 133 shims; a resident C function called only
+   from the module and not per lemming per frame — the panel's `lem_mm_*`,
+   `lem_view_rect`, `lem_status_*` and the like — takes its own code AND its
+   10-byte stub and vector with it when it becomes `ovl_`.
+2. **The once-a-level assembly into the module: ~1,050 net, not the ~1,550
+   first quoted, and a rewrite rather than a move.** The routines that run once
+   per level or once per 'f' — `lem_r_wpiece` 512, `lem_r_panel` 173,
+   `lem_m_derive` 135, `lem_r_pal` 97, `lem_o_fill` 85, `lem_r_prep` 83,
+   `lem_r_tload` 81, `lem_r_clearworld` 69, `lem_r_unprep` 51, `lem_r_setup`
+   46, `lem_r_tmask` 48, `lem_r_derive` 27 and five small ones — are still
+   ~1,480 bytes, and each sheds a 10-byte stub and vector. But they call
+   **twelve** resident helpers, not four: `lem_rowoff` 23, `lb_wshift` 49,
+   `lb_pnib` 84, `lb_rowoff8` 21, `lb_seq` 9, `lb_spix` 181, `lb_crtc` 15,
+   `lb_gc` 9, `lem_r_panmode` 36, `lem_r_split` 54, `lem_r_start` 43 and
+   `lo_idx` 52 — ~576 bytes, most of them also called every frame
+   (`lem_r_split` and `lem_r_start` by the scroll, `lb_seq`/`lb_gc`/`lb_spix`
+   by every draw), so they must be COPIED into `.modc`, not moved (a module
+   routine cannot near-call resident code). Three things then have to be
+   solved before a byte moves: `lem_r_wpiece` reads package data through
+   `cs:` six times while DS is borrowed for the bank and ES is the
+   destination — in `.modc`, CS is the module, and there is no free segment
+   register, so that is a rewrite; `tests/lembench/lembench.asm` `%include`s
+   the same `.inc` files, so sectioning them into `.modc` means `%ifdef`-ing a
+   shared include; and whether `cc8086` treats an asm-defined `ovl_` label as
+   a module function, rather than routing the C's call through a `cc_ovs_`
+   stub to resident CS, has not been checked. **So it is prototyped on ONE
+   routine first** — `lem_r_tload`: no `cs:` reference, one 9-byte helper —
+   and wave 4 commits to it only on what that prototype measures.
+
+**WHAT WAVES 4 AND 5 WILL COST, AND WHAT THE NUMBERS DO AND DO NOT REQUIRE.**
+The preview and postview move into the bracket's second foreign mode in wave
+5 (mode 12h, CGA640, Hercules): MAIN.DAT's purple 16x16 font and the brown
+tile on three cards. `lemfont.inc` is **501 bytes** for one 8x16 font on three
+cards, so the estimate is **~1,500-2,000 bytes** of resident assembly; wave
+4's VGASPEC compose and superlemming are **~800** by the same reckoning.
+Without ANY lever that is 54,091 + 800 + 2,000 = **~56,900 resident, ~4,500
+under the ceiling** — so **decision 5's 1,500-byte particle gate holds
+without a lever**; it never depended on the assembly move, which the first
+pricing said it did. What does not hold is
+the **55,000 trigger**: wave 4 lands at ~54,900, just under it, and **wave 5
+crosses it by ~1,400-1,900**. The rename's ~1,000 alone does not cover that;
+the rename and the assembly move together (~2,000) do, and that is the order
+to take them in — the rename first, the `lem_r_tload` prototype beside it,
+both before wave 5's raster is written.
 
 **THE LAUNCHER'S REDRAW BUDGET (PERFORMANCE.md Part 5's shape), measured by the
 host harness and priced at 756 us a drawing call and ~900 us a glyph cell.**
@@ -196172,13 +196541,13 @@ These are the rows the next change to `lemui.c` is held against:
 
 | operation | calls | cells | on a 4.77 MHz 8088 |
 |---|---|---|---|
-| full repaint, 189px content box (20 rows, 12 list rows) | 28 | 735 | ~682 ms |
-| full repaint, 137px box — a CGA (15 rows, 7 list rows) | 23 | 560 | ~521 ms |
-| full repaint, 100px box (11 rows, 3 list rows) | 15 | 371 | ~345 ms |
-| **selection move** (an arrow key), the selection staying on the page | **3** | **78** | **~72 ms** |
-| ...and the preview pane, once the arrow STOPS | 6 | 102 | ~96 ms |
-| **rows COMPOSED AND SCANNED** on that selection move | **3** of 20 | 189 columns | ~60-85 ms |
-| ...and on a rating key | **5** of 20 | 320 columns | ~100-140 ms |
+| full repaint, 189px content box (20 rows, 12 list rows) | 28 | 726 | ~674 ms |
+| full repaint, 137px box — a CGA (15 rows, 7 list rows) | 23 | 551 | ~513 ms |
+| full repaint, 100px box (11 rows, 3 list rows) | 15 | 362 | ~337 ms |
+| **selection move** (an arrow key), the selection staying on the page | **2** | **70** | **~65 ms** |
+| ...and the preview pane, once the arrow STOPS | 4 | 71 | ~67 ms |
+| **rows COMPOSED AND SCANNED** on that selection move | **3** of 20 | **78** columns (the `lem_dc0`/`lem_dc1` bound; 189 before it) | ~23-35 ms |
+| ...and on a rating key | **5** of 20 | whole rows - `lem_mark()` is not narrowed there, so this is ~320 columns by arithmetic and the harness counts the rows, not the columns | ~100-140 ms |
 | **selection move that SCROLLS**, 189px box — the worst keystroke there is, and paid once per 12 keys | ~12 | **420** | **~387 ms** |
 | ...the same on the 137px CGA box, once per 7 keys | ~7 | 245 | ~231 ms |
 | **rating key** (Left/Right, or a tab click) — the tab strip and the four state rows | 2 | **13** | ~14 ms |
@@ -196260,7 +196629,7 @@ inside one:
 
 | the path | what it was | where it is now |
 |---|---|---|
-| the FIRST `W_PAINT` forcing the module resident | `cc_ovneed`: a heap claim, a directory walk of a 39-entry folder and a 2,752-byte read, on every launch, with every other window's painter stopped behind the lock | `os88_onwake()`. The first frame composes the preview pane empty and the wake repaints in FULL, so `ovl_chrome()`'s vertical rule goes down with it |
+| the FIRST `W_PAINT` forcing the module resident | `cc_ovneed`: a heap claim, a directory walk of a 39-entry folder and a 2,752-byte read, on every launch, with every other window's painter stopped behind the lock | **gone with the file.** The module is an EAGER part of `LEMMINGS.O88` (§73.14.2): `op_load` reads it with the package and `cc_ovinit` binds it before `os88_main()` runs, so there is nothing to force and no state in which an `ovl_` call can refuse. The first `W_PAINT` draws the pane and the chrome; the first wake owes only the progress file, and repaints only the state rows its answer changes |
 | **Left / Right / a tab click** — `lem_rating_load()` | `os88_file_read()` on `LEMR<n>.LEM`: a directory walk, a FAT walk and the data run, 3+ `int 13h` at ~400 ms each — on keys that AUTOREPEAT at ~100 ms | `os88_onwake()`. The keystroke moves `lem_rating` and repaints the tab strip alone (29 cells) so the press is acknowledged; the level rows are HELD exactly as the shadow has them, because blanking them would be ~260 cells and then the same rows lettered again. The flag is RE-ARMED and never stacked, so a held Left is ONE file read |
 | **Enter / Space / a Play click** — `ovl_progress_write()` | two ordinal walks (`os88_file_find` has no cursor, so every step between two of them walks directories itself) and a write that rewrites the FAT and a directory entry. `lem_prog[]` starts at −1, so the FIRST Play of every session always wrote | `os88_onwake()`. `lem_prog[]` is updated in memory at the keystroke — which is what the Save Progress row is lettered from — so nothing on the glass waits for the write and there is no ordering to preserve |
 
@@ -196269,18 +196638,21 @@ one the file slots are legal in; `os88_wm_wake()` queues at most one per window,
 so three errands owed at once are drained by one wake. None of this is visible
 in an emulator, whose floppy answers instantly.
 
-The overlay is resolved in the LAUNCHING instance's directory (§19.2.1,
-§73.14), so the package, `LEMMINGS.OVL` and every band file are in **ONE
-folder** on every disk. A disk carrying the package without its overlay is
-worse than politely refusing, because the Play action would refuse in a window
-and the disk would be unplayable rather than partly playable.
+The band files are resolved in the LAUNCHING instance's directory (§19.2.1,
+§73.14), so the package and every band file are in **ONE folder** on every
+disk. The overlay is no file at all: it is part 0 of `LEMMINGS.O88`, eager, so
+a machine without the RAM for it refuses the LAUNCH in the kernel's own words
+(`op_load`) before a window exists, and a disk cannot carry the package
+without its module.
 
 #### 114.6.1 The four claims, and `MEM_MAX`
 
 Claim RECORDS are a budget too: `kernel/memory.inc:34/45` gives **`MEM_MAX` =
 32 on `kern_big` and 20 on `kern_small`**, system-wide and shared with every
-Disk window and driver already open. This program's claim list is merged down
-to **four**:
+Disk window and driver already open. This program's claim list was merged down
+to **four** at wave 2, and wave 3 measures it at **five on a VGA and six on
+the two 1bpp adapters** (the table below the wave-2 one says which two it
+added and why):
 
 | claim | worst case | on |
 |---|---:|---|
@@ -196289,12 +196661,35 @@ to **four**:
 | the adapter terrain copy | 63,360 CGA (2bpp), 31,680 Hercules (1bpp), none on VGA — it lives in VRAM | CGA, Hercules |
 | the 80-byte-stride screen shadow | 16,000 | CGA, Hercules |
 
-Four records, plus the package's own region and the overlay module's, is
-**six** — which fits 20 with room, and the refusal text says so. Worst case is
-about 255KB on CGA, comfortably inside the ~532KB a 640KB machine has free
-after boot (docs/KERNEL-MEMORY.md), and refused **before any I/O** with that
-arithmetic on the glass on a 256KB machine, which is WEAVE-SPEC §1.4's
-precedent.
+(That was wave 2's table and its count — four records, six with the package's
+own region and the module's. The current figures are the table below, and
+only those.)
+
+**WAVE 3'S CLAIMS, as `lem_claim_all()` takes them and `lem_need_kb()` quotes
+them** — every one taken OUTSIDE the bracket, before any I/O, so a refusal is
+a sentence in a window with the arithmetic in it (the wave-2 review's finding
+was that the record claim was taken inside the bracket, where a refusal could
+say nothing; it is in both functions now):
+
+| claim | KB | on |
+|---|---:|---|
+| the solid mask | 32 | every adapter |
+| the bank (terrain, then objects) | 96 | every adapter |
+| `LEMMAIN.LEM` — the lemmings' animations, the stencils, the panel, the font | 52 | every adapter |
+| the level record — read raw, then REUSED as the 396 x 40 object map (§114.4.7) | 16 | every adapter |
+| **T**, the world's four planes in RAM, the composer's target and the sprites' background (§114.4.6, §114.7.2) | 125 | VGA |
+| the shadow, 80-byte stride | 16 | CGA, Hercules |
+| W, the world by colour class | 63 CGA / 32 Hercules | CGA, Hercules |
+
+**321 KB on a VGA, 275 on a CGA and 244 on a Hercules**, five records or six,
+plus the package's own and the module's — eight of `kern_small`'s 20 at
+worst. A 640 KB machine has ~532 KB free after boot; a machine with less is
+refused before any I/O with the number on the glass. T is what a VGA pays for
+a background that needs no VRAM read: it is the composer's target, so it
+costs nothing to have, and keeping it is what lets an object or a crater be
+put back by a copy rather than by drawing terrain again. A machine too small
+for its adapter's figure (321, 275 or 244 KB) is refused **before any I/O**
+with that arithmetic on the glass, which is WEAVE-SPEC §1.4's precedent.
 
 ### 114.7 The frame arithmetic, and the XT
 
@@ -196321,7 +196716,22 @@ Three things follow, and all three are designed rather than hoped for:
    walking lemming with a 2 fps pointer is a different input device. So the
    cursor and the mouse poll run **once per `FSXW_TICK` unconditionally**,
    whether or not a game frame completed, and pointer latency is one tick
-   whatever the world costs.
+   whatever the world costs. **A pass of the loop is not a tick on the two
+   shadow cards, though**: a tick that scrolls there is the ~178 ms compose
+   and present §114.7.1 measured (~3.2 ticks), and `os88_mouse()` answers a
+   LEVEL with no press latch, so a click shorter than one such pass was never
+   seen. The compose and the present therefore ask `OSAPI_MOUSE` every
+   sixteen rows they move and latch the buttons (`lb_msample`;
+   `lem_r_mlatch` hands the union to `ovl_mouse_input`, which treats it as a
+   press this pass and sees the release the next) — so a click inside a long
+   pass is kept whatever the pass costs, at one 46.7 µs far call a sixteenth
+   of the rows and nothing on a tick that moved none. The edge scroll is
+   multiplied by the ticks a pass took (`LEM_SCROLL_STEP` x dt, dt clamped to
+   4), so it is 72.8 px a second whatever a pass costs, where a fixed step a
+   PASS was ~17-22 px a second on a scrolling CGA. **The loop's period while
+   scrolling on CGA and Hercules is NOT measured yet**: the arithmetic above
+   is wave 2's 178 ms, and the number is taken in the final pass by
+   `tests/lembenchmarty.py`'s row, with the in-bracket fps below.
 
 **The XT is the target machine and it ships at whatever rate this measures.**
 That is a decision taken with the numbers in hand: there is no frame-rate floor
@@ -196421,7 +196831,7 @@ conclusion 7.
    `LEM_SCROLL_STEP` is four pixels rather than one on those cards and why the
    coarse step in §114.4.2 is a design decision rather than laziness.
 6. **A SEVEN-ARGUMENT cdecl CALL THAT DOES NOTHING IS 137 µs.** That is the
-   CGA column's `lem_r_piece`, which returns at its first compare. It is the
+   CGA column's wave-2 `lem_r_piece`, which returned at its first compare. It is the
    floor under every number in this table and it is the reason `lem_probe4`
    exists at all — and, read beside row 1's 192 µs for a two-argument call
    that does real work, it is also why the batch only saved 27%: the boundary
@@ -196444,10 +196854,102 @@ conclusion 7.
 |---|---|
 | busy level (60 live lemmings), VGA mode 0Dh, 4.77 MHz 8088 | *(wave 3: the mechanics do not exist yet. The RASTER's share is 755 µs on a still frame and ~12.7 ms on the one frame in four that moves the view rectangle, plus the sprites; the PROBE's share is 51 ms a tick at 60 lemmings, which is row 1 above)* |
 | quiet level, VGA mode 0Dh, 4.77 MHz 8088 | *(wave 3, for the same reason)* |
-| busy level, CGA / Hercules shadow backend | *(wave 3; wave 2 measured the backend's own per-frame cost — see 92.7.1)* |
-| loading a level, VGA mode 0Dh, 4.77 MHz 8088 | **~30 s** — 3.5 s of mask, 21.5 s of picture, 4.0 s of minimap sample, ~0.4 s of minimap draw, with §114.4.5's panel, LOADING and progress bar on the glass for all of it |
+| busy level, CGA / Hercules shadow backend | *(wave 3; wave 2 measured the backend's own per-frame cost — see 114.7.1)* |
+| loading a level, VGA mode 0Dh, 4.77 MHz 8088 | wave 2: **~30 s** — 3.5 s of mask, 21.5 s of picture, 4.0 s of minimap sample, ~0.4 s of minimap draw. **Wave 3: ~8.9 s for Fun 1** (191 pieces) — see §114.7.2 |
 | the status line, one tick's delta (5 cells) | **8.6 ms** VGA / **16.1 ms** CGA |
-| `LEM_STEP_MAX` as shipped | **~20**, sized from the 141 µs batched probe above and re-measured in wave 3 |
+| `LEM_STEP_MAX` as shipped | **20**, sized from the 141 µs batched probe above; wave 3 re-measured the probe at **178 µs** a call (§114.7.2) and kept 20, because it gates nothing (decision 7) |
+
+#### 114.7.2 What wave 3 measured, and the compose it decided
+
+**ONE MEASUREMENT DECIDED THE COMPOSE, and it was taken once** (CLAUDE.md
+Testing's exception for a number that decides a design), on `os8088_xt_vga`
+with the same instrument as §114.7.1. Wave 2's compose was 53.8 ms a 32x16
+piece into VGA memory — the per-pixel latch and map-mask path — and 8.8 ms more
+into the mask; ~25 s a level. The brief proposed composing the world as PACKED
+4bpp nibbles in RAM and converting once to the four planes through a 256-entry
+table. The bench priced both that and the alternative before either was built
+on (`tests/lembench`, rows added this wave; read off
+`build/port-shots/wave3b-lembench-os8088_xt_vga.png`):
+
+| row | 4.77 MHz 8088 |
+|---|---:|
+| one probe, `lem_has_pixel` (re-measured; §114.7.1's 192 was the first build's) | **178 µs** |
+| four batched, `lem_probe4` | **549 µs** |
+| a 32x16 piece → the mask, in RAM (`lem_r_wpiece` with no picture: the plane-3 fast path) | **7.7 ms** |
+| a 32x16 piece → **T and the mask together**, in RAM, x odd | **22.0 ms** |
+| ...x a multiple of 8 | **22.0 ms** |
+| T → VRAM, the whole 1584x160 world, four planes (`lem_r_tload`) | **330 ms** |
+| the packed-nibble world → the four planes through the 256-entry table — the brief's design, its conversion ALONE | **7,810 ms** |
+| (unchanged from §114.7.1: scroll 240 µs, scroll + present 755 µs, a minimap cell 721 µs, a 104-cell row 55 ms, the view outline 26.9 ms, a five-cell status field 8.6 ms) | |
+
+**THE BRIEF'S DESIGN LOST TO ITS OWN CONVERSION.** Splitting 126,720 packed
+bytes into four bit-planes is a shift, a mask and a table read for every
+pixel, and at 7.8 s it costs more than the whole wave-3 compose of most
+levels. What shipped composes into **T — four PLANE-major world planes in RAM,
+32,000 bytes each** — so a piece is already in the card's own form: each source
+byte is shifted once and OR'd or masked into five places (four planes and the
+mask) with no port I/O, and the copy to VRAM is four `rep movsw` under four map
+masks, 330 ms. A piece is **2.4x faster than wave 2's** (22.0 ms against
+53.8 + 8.8) and the per-level cost is now pieces x 22 ms + 0.33 s + the
+minimap's 4.0 s sample and 0.4 s draw:
+
+| level | pieces | wave 2 | wave 3 |
+|---|---:|---:|---:|
+| Fun 1, 'Just dig!' | 191 | ~16 s | **~8.9 s** |
+| the median of the 80 records | 140 | ~13 s | **~7.8 s** |
+| the largest | 399 | ~29 s | **~13.5 s** |
+
+What it costs is the T claim — 125 KB on a VGA (§114.6.1) — and that is not a
+cost the design pays for the compose alone: T is also the BACKGROUND every
+sprite, object and crater is put back from (§114.4.6), which would otherwise
+need a VRAM read through the Read Map Select register for every plane of every
+restored byte. The CGA and Hercules compose is unchanged in shape — the mask
+alone (7.7 ms a piece now) and one 1,388 ms derive — so it got faster too and
+nothing about it was redesigned.
+
+**The loading bar runs to the end of the WAIT, not the compose** (the wave-2
+review's finding): it is VGA-only — on the shadow backends nothing is presented
+until the first frame — and the minimap sample takes its last share, so the
+longest silent stretch is gone.
+
+#### 114.7.3 The mechanics' share, and what the XT frame is made of
+
+The host replay (§114.12 item 3) counts the probe CALLS each frame makes and
+prices them at the 178 µs above — a FLOOR for the mechanics, because the
+handlers' own C is not counted:
+
+| fixture level | most lemmings out | probe calls a frame, worst / mean | on the XT, worst / mean |
+|---|---:|---:|---:|
+| 0 — a flat ledge, eight skills | 10 | 22 / 9 | 3.9 ms / 1.6 ms |
+| 1 — water and steel | 10 | 26 / 15 | 4.6 ms / 2.7 ms |
+| 2 — the bombers, two hatches | 12 | 29 / 13 | 5.2 ms / 2.3 ms |
+
+That is about **0.4 ms of probes a live lemming a frame**, so sixty is ~25 ms
+of probes plus the handlers — inside one tick of 55 ms, which is what
+`LEM_STEP_MAX` = 20 splits a frame of sixty into three chunks around. On VGA
+the raster's share of a still frame is 755 µs; a lemming's box is now a T
+copy into the compose scratch, its plane-major draw and its share of a latch
+copy onto the glass (§114.4.6) where it used to be a latch save, the draw and
+a latch restore — the arithmetic says about the same bytes moved, with a
+per-row overhead the compose adds, and only the clock can say which way it
+went. **The in-bracket frame rate on a busy and a quiet level is the final
+pass's MartyPC row** and is not quoted here until it is taken — the replay is
+a count, and a count is not a timer (PERFORMANCE.md rule 4).
+
+**WHAT THE FINAL PASS REPORTS, beside the frame rate** — every one of them
+named by wave 3's second review and none of them takeable on a host:
+
+| counter | why it is owed |
+|---|---|
+| **the off-glass fraction**, `xt_vga` | MartyPC's `flicker()`/`pace()` (PERFORMANCE.md Part 3.1/3.2) over a played Fun 1 with the pointer parked on the walkers. The harness proves no lemming or pointer pixel is ever absent between two latches; the clock says how long a latch takes on the glass, which is the one window left |
+| **the compose's cost a frame**, VGA | rectangles, bands, T bytes copied and latch bytes, against the save/restore pair it replaced — the redraw budget's row for the frame |
+| **module-to-resident crossings a frame** | ~250 at 80 lemmings by the arithmetic of §114.6 (`ovl_sprite_one` two or three a lemming, a rectangle five or six); `cc_ovthunk`'s cost times that is what decides whether `ovl_sprites_all`/`ovl_sprite_one` go back to resident |
+| **the loop's period while scrolling**, CGA and Hercules | §114.7 point 3 above |
+
+The VSYNC wait a non-scrolling VGA frame used to begin with is gone and needs
+no measurement to justify that: the compose never draws onto the displayed
+buffer, so there is no beam to race, and the wait was up to 14.3 ms of every
+59 ms frame.
 
 ### 114.8 What ships, what is greyed, what is absent
 
@@ -196509,8 +197011,16 @@ rather than a greyed control:
   player could click, so §47's present-and-greyed has nothing to attach to.
 - **Two-player over local wireless**, and the 3DS port's settings screen and
   per-glitch toggles. The glitches the original DOS release actually has (the
-  ABBA entrance order, the right-click priority glitch) are carried as
-  behaviour, unswitchable, because levels are solved with them.
+  ABBA entrance order, the right-click glitch, the nuke glitch) are carried as
+  behaviour, unswitchable, because levels are solved with them (§114.4.7 says
+  how each is modelled, and why Lemmix's ORIG set leaving the last two to an
+  option does not decide it).
+- **The postview's last line, "Press right mouse button for menu", in the
+  window.** A right click in an os8088 window is the kernel's `EVT_RDOWN` and
+  never reaches `os88_onclick` (§12.4), so the line would name a control this
+  screen does not have; Esc is what leaves it, and `README.TXT` says so. Wave 5
+  moves the postview into the bracket, where `os88_mouse()`'s bit 1 is the
+  program's, and the line comes back with a button that does what it says.
 - **Lemmix's replay recorder, hyperspeed rewind and save states** — a Lemmix
   addition, not the 1991 game. Lemmix's own `F` (skip one minute) goes with
   them, which is what leaves the letter free for §11.2.1's fullscreen door.
@@ -196522,11 +197032,11 @@ rather than a greyed control:
 |---|---|
 | package | `LEMMINGS` |
 | directory | `apps/lemmings/` |
-| overlay | `LEMMINGS.OVL`, in the same folder as the package and the band files |
-| that folder | **`LEMMINGS/` on every disk, and not the root.** The 1.44MB set is 36 band files plus the package and the module, and `tools/os88disk.py` refuses 38 root entries against the kernel's 32-row LISTING cap. `--deep-folders` lifts that cap for a SUBFOLDER only — the Disk window then shows the first 31 rows and the file API reaches them all — and the sort puts at most 22 band names (`LEMGR*`, `LEMLV*`, `LEMMAIN`, `LEMMAN`) ahead of `LEMMINGS.O88`, so the package is the 24th row of 31 and is always on the glass |
+| overlay | **part 0 of `LEMMINGS.O88`** (§73.14.2, `CC_OVL_PART`, eager) — no file of its own |
+| that folder | **`LEMMINGS/` on every disk, and not the root.** The 1.44MB set is 36 band files plus the package, `README.TXT` and `LEVELS.TXT`, and `tools/os88disk.py` refuses 38 root entries against the kernel's 32-row LISTING cap. `--deep-folders` lifts that cap for a SUBFOLDER only — the Disk window then shows the first 31 rows and the file API reaches them all — and the sort puts at most 22 band names (`LEMGR*`, `LEMLV*`, `LEMMAIN`, `LEMMAN`) ahead of `LEMMINGS.O88`, so the package is the 24th row of 31 and is always on the glass |
 | images | `build/lemmings.img` / `lemmings720.img` / `lemmings120.img` / `lemmings360.img` |
 | targets | `make lemmings`, `make lemmingsdisk` — **on demand**, like `cworddisk` and `runcpmdisk`; nothing in `all` needs the compiler or the fetch |
-| machines | `vm/xt-lemmings` (4.77 MHz XT, VGA, 640KB) and `vm/386-lemmings` — **neither exists yet, and neither is a make target yet**. An 86Box profile is for LOOKING at the raster on period hardware and there is no raster before wave 2, so both directories and both targets arrive in the same edit as `lemblit.inc`. Wave 1's launcher is driven under QEMU and MartyPC, which is what can be asserted (`docs/TESTING.md`). The `.PHONY` line names only `lemmings`, `lemmingsdisk` and `lemmings-data`: a phony target with no rule answers `Nothing to be done` and **exits 0**, so a machine named here before it is built would read as a target that ran |
+| machines | `vm/xt-lemmings` (4.77 MHz XT, VGA, 640KB) and `vm/386-lemmings` — **neither exists yet, and neither is a make target yet: deferred to wave 6**, where `docs/LEMMINGS-PORT-PLAN.md` puts them (its "Polish, disks, machines and the record" wave), the XT one only on wave 2's measurement. (This row used to say they would arrive in the same edit as `lemblit.inc`; that landed in wave 2 without them.) The raster is driven under QEMU and MartyPC, which is what can be asserted (`docs/TESTING.md`). The `.PHONY` line names only `lemmings`, `lemmingsdisk` and `lemmings-data`: a phony target with no rule answers `Nothing to be done` and **exits 0**, so a machine named here before it is built would read as a target that ran |
 | saved state | `SYSTEM/APPDATA/LEMMINGS.SAV` (§19.9). **The folder is BUILT onto all four images and not created on demand**, which is the rule at the Makefile's own `APPDATAFOLDER` — every disk that carries an application carries it too. `ovl_data_enter()` dives SYSTEM then APPDATA on the LAUNCHING volume, so a disk without it refuses on every geometry, `lem_savable` stays 0 and the Save Progress row greys forever with a sentence about a live CD, in front of a reader with a writable floppy in B:. It also falsifies the greyed fact beside it, which tells the reader the original's access codes were dropped BECAUSE progress is kept in `SYSTEM/APPDATA/LEMMINGS.SAV`. One directory cluster a disk; the FTPD disk (§77.12) is where the same omission hid a feature for a whole run |
 
 **It lives on its own on-demand images and nowhere else on the shipped
@@ -196546,7 +197056,7 @@ rather than merely describing it — §114.3.2.
 |---|---:|---|
 | 1.44MB and 1.2MB | — | everything: all 120 levels, all five styles, all four special pictures |
 | 720KB | 713 | everything **except the four VGASPEC pictures** — they are 307,200 bytes = 300 clusters, and the rest takes the disk to ~517 of 713 |
-| 360KB | 354 | **two graphic sets and only the levels that use them**. Package plus overlay is ~57,000 bytes = 56 clusters, leaving ~298 for the art, two styles and the surviving level records |
+| 360KB | 354 | **two graphic sets and only the levels that use them**. The package with its module packed inside it is **36,418 bytes = 36 clusters** at wave 3's second review (it was ~57,000 = 56 as a package and a raw sidecar), and `make lemmingsdisk` measures the disk at **335 of 354 clusters** on that build, with the converter's reserve still held for the package |
 
 Every level whose style or special picture is not on the disk is present in the
 chooser and **greyed with the fact**, and a `LEVELS.TXT` on each disk says the
@@ -196585,10 +197095,23 @@ the four are the platform's doing rather than a decision:
   It is **Lemmix's** binding — `src/GameScreen.Player.pas:498-509` and
   `:548-560` set `KeyBoardScroll := True` and a `TGameScroll` direction —
   rather than anything in the 1991 game, which scrolls from the screen edge and
-  from the minimap. The original's own gesture is carried too (`lem_mouse_map`
-  plus `LEM_EDGE` in `lemmings.c`), so this is an addition and displaces
-  nothing; it is recorded here because §114.10 is the one place a reader looks
-  for what this port's keyboard does that the original's did not.
+  from the minimap. The original's own gesture is carried too, and as Lemmix
+  has it (`GameScreen.Player.pas:657-666`, and `:1156-1168` wants Y inside the
+  game image): the pointer in the **edge column** of the game image — x 0 or
+  x 319, above the panel — and **never from the panel**, whose Slower button
+  is x 1..15. Wave 3 first scrolled from an 8-pixel band at any height, which
+  scrolled the level under a click on Slower and under a lemming at the
+  world's edge being aimed at; its review struck it. The arrow keys are an
+  addition and displace nothing; they are recorded here because §114.10 is
+  the one place a reader looks for what this port's keyboard does that the
+  original's did not.
+
+**The panel's click boxes are Lemmix's, to the pixel, and right and bottom
+EXCLUSIVE**: a button is `Rect(1,16,15,38)` + 16n under `PtInRectEx`
+(`Game.SkillPanel.pas:89`), so x 16n+1..16n+14 and y 16..37, and the minimap is
+`DosMiniMapCorners` (208,18)-(311,37) under `TRect.Contains`, so x 208..310 and
+y 18..36 — one column and one row short of the 104 x 20 it is DRAWN at. Wave 3
+took both one pixel wide and one tall; its second review struck it.
 
 This is not fully closed: no machine in this tree can be booted with an 83-key
 keyboard, so the fallback path is verified by reading the BIOS call and by an
@@ -196596,8 +197119,17 @@ keyboard, so the fallback path is verified by reading the BIOS call and by an
 
 ### 114.11 Sound
 
-The original's sound EVENTS are carried — let's go, oh no, explosion, door
-open, yippee, splat, exit, and the per-trap sounds — through `os88_snd_tone`.
+The original's sound EVENTS are carried, and only those — let's go, the
+entrance opening, the skill button, the assignment, yippee, splat, oh no,
+explosion, drowning, the fire, steel hit, the builder's last-three warning and
+the per-trap sound: the non-custom `TSoundEffect` set Lemmix loads by default
+(`Dos.Consts.pas:275-300`) — through `os88_snd_tone`. **Its Miner, Digger,
+Basher, OpenUmbrella and Nuke slots are "// custom sound"**, kept out by
+`IsCustom` (`:348-351`) and loaded only from a user's custom-sounds folder
+(`Game.Sound.pas:478`, `:494`), so a stock Lemmix — like the 1991 game — is
+silent at a dig, a bash, a mine stroke, an umbrella and a nuke. Wave 3 cued
+three of them and so lost the trap's sound to a digger at work (one tone a
+frame, the lowest event number wins); its review struck them.
 That is legal inside the bracket in §53.1's own words: every sound grant the
 app takes inside the bracket is billed to its instance.
 
@@ -196614,8 +197146,8 @@ how the build renders or what it synthesises (§73.12).
 `apps/lemmings/build.sh` runs four checks in `apps/runcpm`'s pattern — every
 one stops the build, and a failure leaves no stamp so the 8086 compile never
 runs. **Two of the four were live from wave 1** (1 and 2 below) and wave 2 grew the
-second one to the raster; **3 and 4 are still owed** and arrive with the
-mechanics that make a recorded ceiling mean anything. They run against the **committed synthetic fixture**
+second one to the raster; **wave 3 built 3 as the mechanics replay** (below)
+and the status-string audit inside 2; **4 is still owed**. They run against the **committed synthetic fixture**
 (`apps/lemmings/hosttest/fixture/`, written by `tools/os88lem.py --fixture`,
 carrying no bytes derived from the original), which is what makes `make
 lemmings` need no network fetch:
@@ -196639,10 +197171,39 @@ lemmings` need no network fetch:
    substituted out of `LEMMAN.LEM`'s cost table; the About card at or under
    twelve rows; the Mode row greying on `fsx_caps`' own bit; and the cost table
    printed;
-3. a raw-x86 harness for `lemmask.inc`'s probes and `lemblit.inc`'s movers, run
+3. **the mechanics replay** (wave 3): every `apps/lemmings/hosttest/mech/
+   level*.txt` — `level0-2.txt` drive the fixture's three playable levels for
+   up to 2,000 frames each and `level2n.txt` drives level 2 again under an
+   early nuke — `FRAME VERB ARG`: select a skill, assign it to a NAMED lemming,
+   `H x y r` the HIT TEST at a world point with the right button as given and
+   the assignment through it (the right-click glitch's road), nuke, the release
+   rate's direction, pause, and `h` / `n`, a press or a nuke made MID-FRAME
+   through the bracket's own routines, which must queue it to the next frame —
+   through the package's own C (`lemtest --mech`) and through
+   `tools/lemsim.py`, the mechanics written a second time from lemmings_3ds
+   under §114.4.7's eight rulings. Every frame's counts, rate and clock and every lemming's x, y,
+   action, frame, flags and fuse must agree, and lemsim's own trace must hash
+   to the value committed in `mech/traces.sha256`, so neither side can move
+   without the build naming the frame, the lemming and the field. The trace
+   carries MaxNumLemmings, which the nuke glitch moves; the right-click glitch
+   is shown to bite by taking it out of lemsim alone (level 0 diverges at frame
+   345: action 2 against the package's 6). The scripts reach **all eighteen
+   actions** (fixture level 1 carries water,
+   steel, a trap whose 24-frame animation a second walker passes through, and
+   level 2 fire), every skill, two steel refusals, a blocker bombed out of
+   its field, the nuke, a pause and both clamps of the release rate. **It was
+   shown to bite**: a fall limit three high diverges at frame 622 of level 2,
+   and a fuse of 78 rather than 79 at frame 300, 1,080 and 471 of the three;
+   the **status-string audit** builds every line `ovl_stat_build()` can compose
+   — 18 actions x the four climber/floater combinations, a two-digit count,
+   OUT 80, IN 100%, a 99-minute clock, and the quiet line — and asserts forty
+   cells, every one a glyph or the black cell, the word never clipped, the
+   template's own cells never written and each field at its setter's offset;
+4. a raw-x86 harness for `lemmask.inc`'s probes and `lemblit.inc`'s movers, run
    in QEMU with **SS ≠ DS** and with negative controls, because that is the one
-   place ES is loaded;
-4. the cost table against a recorded ceiling.
+   place ES is loaded — **still owed**; `tests/lembench` runs the same
+   routines on MartyPC and the glass checks run them on all three adapters,
+   which is coverage but not that gate.
 
 The stub `os88.h` **models the raster** rather than refusing — a stub that
 always refuses measures the fallback path — and wave 2's model is
@@ -196660,6 +197221,40 @@ modelled claim and FAILS THE BUILD on one that is not inside a live claim.
 that is not 512-byte aligned is a failure, because `int 13h` answers a run that
 then straddles a 64 KB page with error 09h ON REAL HARDWARE and QEMU never
 shows it.
+
+**What wave 3's review added to the rows.** A REFUSED bracket with a stale
+verdict left in `lem_exit` (the Esc row's DONE): no postview, no progress
+written, and `LEMS_NO_FSX` in the toast; `os88_fsx_mode()` refusing INSIDE a
+bracket that ran: `LEMS_NO_MODE` in the window, ending "The level was read,
+and let go." and never "Nothing was loaded" (which is true, and said, only of
+the refusal BEFORE the bracket — the second review's row), and no toast at
+all; the same refusal on a RESUME keeping the level, its preview back and
+`LEMS_NO_MODE_KEPT` toasted; and **a
+played stretch on VGA** — 300 game frames of fixture level 0 drawn tick by
+tick, a digger at frame 120 — asserting the glass equals the world after every
+tick, **no VGA background rectangle written onto the glass outside a compose**,
+no minimap cell left owed, and a pointer parked away from everything redrawn
+on fewer than a quarter of the frames (it reads 0 of 300; the unconditional
+off-and-on it replaced reads 300, and the row fails on it). `ovl_mm_clear()`
+is held to plotting nothing and owing only a cell whose bit changed.
+
+**What wave 3's SECOND review added.** The played stretch now also asserts
+**no sprite, object or background draw onto the VGA glass outside a compose**
+and the lit pointer's every pixel on the glass after every frame; a pointer
+parked over walking lemmings for 40 frames is redrawn only when its shape
+changes; the steered pointer's stale check compares the view against a fresh
+background plus every lemming drawn over it; a pointer resting on a quiet skill
+button and on the minimap is taken off by none of 30 frames; a VGA frame that
+does not scroll waits for no retrace; the per-tick hit test between frames
+does not record the right-click glitch's lemming and the paused one does; a
+press on a walker through the bracket's own mouse path assigns the skill; the
+buttons' and the minimap's hit boxes are Lemmix's, right and bottom exclusive;
+two overlapping animated objects are one rectangle and one draw each; the
+seventeenth destruction rectangle folds into the slot it grows least; IN stays
+where the last exit left it across a nuke; and the postview's next level
+across a section's end is the next section's first, with the progress written
+for it, a loss retrying and Mayhem 30 inventing no next. Every one of those
+was run against the defect it names and fails on it.
 
 **What wave 2's rows hold.** The claim count against §114.6.1's three-on-a-VGA
 and the KB the refusal quotes against the KB actually claimed — a sentence that
@@ -196705,7 +197300,7 @@ against both reference tables, and every converted band's header against what
 the converter claims. It is a **fast-tier** row in `tests/suite.py` with its
 measured seconds and a clean SKIP when `build/lemdata.stamp` is absent — the
 tier's 30-second wall clock is enforced, and no row in it may depend on a
-network fetch. A `lemmings` boot-and-screendump row is registered in soak.
+network fetch. A `lemmings` boot-and-screendump row in soak is **owed** — `tests/suite.py` carries none yet (found at wave 3); the glass checks of §114.12's last paragraph are taken by hand until it exists.
 
 **On the glass**, per adapter, cropped and zoomed — the status line's five
 fields with their exact columns (the IN field's last cell is column **31**, not

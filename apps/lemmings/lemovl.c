@@ -1,29 +1,47 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemovl.c   (#included by lemmings.c)
  *
- * EVERYTHING ovl_*, WHICH IS EVERYTHING IN LEMMINGS.OVL (SPEC.md 73.14, 92.6).
+ * EVERYTHING ovl_*, WHICH IS EVERYTHING IN THE OVERLAY PART (SPEC.md 73.14.2,
+ * 114.6).
  *
  * A function whose name begins with `ovl_` has its CODE emitted into a second
- * segment that ships beside the package as LEMMINGS.OVL and is far-called both
+ * segment that ships INSIDE the package as part 0 and is far-called both
  * ways; every global, literal and bss byte it names stays RESIDENT and
  * DS-relative, which is what makes the mechanism possible in C at all. The
  * rename is the entire mechanism - there is nothing else to declare
  * (LESSONS.md 5).
  *
- * THE SPLIT IS BY FREQUENCY AND NEVER BY SIZE. Nothing here runs on a game
- * frame and nothing here runs on a keystroke that could not afford a far call:
- * the About card, the sentence behind a greyed control, the preview screen's
- * text, the launcher's chrome, the progress file and - in wave 2 -
- * ovl_compose(), the terrain-list walk that runs once per level and never
- * during play. At cword's MEASURED 5.7 bytes a line of resident C this program
- * does not fit one segment and never could, so the split is from wave 1 rather
- * than from the wave the ceiling binds in (SPEC.md 114.6).
+ * THE SPLIT IS BY FREQUENCY AND NEVER BY SIZE, and it is NOT "nothing here
+ * runs on a game frame" any more - that sentence was wave 2's and wave 3 made
+ * it false. In the module, by how often each runs:
  *
- * AN OVERLAY FUNCTION ANSWERS A STATUS AND 0 MEANS IT DID NOT HAPPEN. A refused
- * load - no heap, no file, a stale module, a worker task asking - toasts the
- * reason and returns without running (SPEC.md 47). Every caller here is
- * designed so 0 is a normal path, and lem_ovl remembers a refusal so the
- * toast happens ONCE rather than on every keystroke.
+ *   once        the About card, the sentence behind a greyed control, the
+ *               preview and postview text, the launcher's chrome, the
+ *               progress file, the level's load and its compose
+ *               (ovl_compose), the object setup
+ *   per key     the bracket's key and mouse handlers, the assignment and the
+ *               hit test, the queue
+ *   per FRAME   the play loop and the frame's whole drawing side - lemdraw.c's
+ *               ovl_tick_draw, ovl_vframe and its rectangles, ovl_sprites_all
+ *               and ovl_sprite_one, the minimap's dots and the panel's live
+ *               cells - plus ovl_frame_begin/end and the objects' step
+ *
+ * What stays resident is what runs per LEMMING per frame on the mechanics
+ * side: lem_handle and the eighteen handlers, the probes, lem_frame_chunk.
+ * The drawing side's per-lemming call (ovl_sprite_one) is in the module and
+ * crosses into the resident raster through cc_ovthunk two or three times a
+ * lemming (lem_anim_at, lem_r_sprite, and lem_mask_at + lem_r_sprite for a
+ * fuse) and five or six times a rectangle - a cost nobody has measured yet,
+ * which is why SPEC.md 114.7 names "module-to-resident crossings per frame"
+ * among the counters the final MartyPC pass reports. The once-a-level split
+ * was from wave 1 rather than from the wave the ceiling binds in: at cword's
+ * MEASURED 5.7 bytes a line of resident C this program does not fit one
+ * segment and never could (SPEC.md 114.6).
+ *
+ * THE MODULE IS A PART AND AN EAGER ONE (CC_OVL_PART, SPEC.md 73.14.2): it is
+ * read with LEMMINGS.O88 at launch and bound before os88_main() runs, so no
+ * ovl_ call here can refuse - a machine without the RAM refuses the LAUNCH,
+ * in the kernel's own words (op_load), before a window exists.
  *
  * NEVER FROM A WORKER, AND NEVER ITS ADDRESS. The worker gate is decided from
  * SP rather than from a flag (LESSONS.md 5); this package has no worker, which
@@ -36,20 +54,6 @@
  * GameScreen.Preview.pas GetScreenLinesAndColors and its wording
  * Base.Strings.pas:411-418. README.TXT carries the full list.
  * ==========================================================================*/
-
-/* ovl_ready - the cheapest thing in the module, and its only job is to BE in
- * the module. Calling it from the first wake forces LEMMINGS.OVL resident while
- * a window is up and a toast is an ordinary thing; from then on cc_ovneed is a
- * four-byte no-op and no later call can reach its refusal path. That matters
- * more than it looks: cc_ovneed TOASTS ITS OWN REFUSAL, a kernel drawing call
- * this C never wrote and cannot intercept, and once wave 2's bracket owns the
- * screen a kernel toast is painted with DESKTOP geometry into a foreign mode
- * (SPEC.md 114.5, 53.1). It cannot be called from os88_main() either - there is
- * no instance yet to resolve a module for (SPEC.md 73.14, LESSONS.md 13). */
-static int ovl_ready(void)
-{
-    return 1;
-}
 
 /* --- the chrome ------------------------------------------------------------
  * The launcher's two rules: the one between the level list and the preview
@@ -248,6 +252,10 @@ static int ovl_greyfact(int labelid, int strid, int level)
         lem_arg_num((unsigned)lem_man_u16(LEM_MAN_SPECCLUS));
         lem_arg_num((unsigned)lem_man_u16(LEM_MAN_DISKCLUS));
         lem_arg_num((unsigned)lem_man_u16(LEM_MAN_SETCLUS));
+    } else if (strid == LEMS_NO_MODE) {
+        /* "...on the level list. %s" - what happened to the level, which the
+         * caller knows and the sentence must not guess (SPEC.md 47) */
+        lem_arg_add(lem_str(lem_mode_end));
     } else if (strid == LEMS_MISS_ROOM) {
         /* "This level's own record is not on a %s disk: the graphic sets and
          *  the levels that fit took %s of this disk's %s clusters, and a group
@@ -277,7 +285,7 @@ static int ovl_greyfact(int labelid, int strid, int level)
     return 1;
 }
 
-/* --- the About card (SPEC.md 12.2, 20.5.1.1, 92.1's last row) --------------
+/* --- the About card (SPEC.md 12.2, 20.5.1.1, 114.1's last row) --------------
  * TWELVE ROWS IS THE CEILING and it is a 640x200 number: the panel clamps to
  * the content box but a control's y is 6 + row*10 and nothing clamps THAT, so a
  * 19-row card put its OK button on the DESKTOP on CGA and Hercules
@@ -331,7 +339,7 @@ static void ovl_about(void *win)
     os88_about_card(win, lem_ab);
 }
 
-/* --- progress (SPEC.md 19.9, 92.9) -----------------------------------------
+/* --- progress (SPEC.md 19.9, 114.9) -----------------------------------------
  * SYSTEM/APPDATA/LEMMINGS.SAV, reached by SPEC.md 19.9's bank / GOTO / act /
  * come-back, which is apps/weave/wstate.c's worked example. The instance's
  * current directory is where every unqualified name it passes the file API
@@ -487,83 +495,49 @@ static int ovl_progress_write(int rating, int level)
  * in lemtool/REPORT.md. Lemmings is (C) 1991 DMA Design / Psygnosis.
  * ==========================================================================*/
 
-/* ovl_far_add - lem_far_seg/off advanced by `n` bytes, renormalised.
+/* ovl_compose - 0 = nothing was composed, and the caller leaves the bracket
+ * and says so IN THE WINDOW (finding (1) of wave 2's last review: the status
+ * used to be thrown away and the refusal happened in here, where nothing can
+ * be said - a fully drawn panel over a black level, and no sentence).
  *
- * A piece's offset inside the bank is a DWORD (the bank is bigger than a
- * segment) and this dialect has no `long`, so the only 32-bit arithmetic in
- * this program is lem_far()'s and this. `n` is at most 3 * 1,024 here, so the
- * sum cannot overflow the 16-bit offset it is added to. */
-static void ovl_far_add(unsigned n)
-{
-    unsigned o = lem_far_off + n;
-
-    lem_far_seg += o >> 4;
-    lem_far_off = o & 15;
-}
-
-/* ovl_compose - 0 = nothing was drawn and the caller says so IN A WINDOW.
- *
- * The transient 16 KB claim is taken and freed inside this call. A whole
- * LEMLV<n>.LEM is read rather than the 2,048 bytes wanted, because
- * os88_file_read_at()'s offset must be a whole number of CLUSTERS and the
- * cluster is 512 on two geometries, 1,024 on the other two and neither on the
- * RAM disk The Wire unpacks this onto (SPEC.md 114.3.2). One extra revolution
- * once per level against a read that is wrong on one medium in three. */
+ * NOTHING HERE CAN REFUSE FOR WANT OF A RESOURCE ANY MORE. Every claim was
+ * taken and the level's record READ by ovl_level_load(), outside the bracket,
+ * where a refusal is a toast; what is left is the data itself - a record that
+ * names a piece the style bank has not got draws without it, exactly as an
+ * unused slot does. */
 static int ovl_compose(int level)
 {
-    unsigned rec, base, seg, off;
+    unsigned base, seg, off;
     int i, slot, b0, b1, b2, b3;
-    int x, y, yv, id, flags, w, h, row, stride;
+    int x, yv, y, id, flags, w, h, row;
 
-    if (!lem_rat_ok || !lem_ent_here(level))
+    if (!lem_rat_ok || !lem_ent_here(level) || !lem_claimed)
         return 0;
-
-    rec = os88_mem_claim(LEM_KB_REC);
-    if (rec == 0)
-        return 0;
-
-    lem_f_scratch[0] = 'L';
-    lem_f_scratch[1] = 'E';
-    lem_f_scratch[2] = 'M';
-    lem_f_scratch[3] = 'L';
-    lem_f_scratch[4] = 'V';
-    lem_f_scratch[5] = (char)('0' + (lem_ent_u8(level, LEM_E_RAWFILE) % 10));
-    lem_f_scratch[6] = '.';
-    lem_f_scratch[7] = 'L';
-    lem_f_scratch[8] = 'E';
-    lem_f_scratch[9] = 'M';
-    lem_f_scratch[10] = 0;
-    if (os88_file_read_seg(lem_f_scratch, rec,
-                           (unsigned)(LEM_LVL_GROUP * LEM_LVL_SIZE)) == 0) {
-        os88_mem_free(rec);
-        return 0;
-    }
     base = (unsigned)lem_ent_u8(level, LEM_E_RAWSECT) * LEM_LVL_SIZE;
 
+    /* THE WORLD IN RAM (SPEC.md 114.7.2's composer rows): on VGA the T
+     * claim's three colour planes and the mask as plane 3, on the two shadow
+     * backends the mask alone - one routine, one pass a piece. */
+    lem_r_wsetup(lem_kind_id() == LEM_RKIND_VGA ? lem_cl_t : 0, lem_cl_mask);
+
     for (i = 0; i < LEM_LVL_NTERR; i++) {
-        /* THE ONLY THING THE USER CAN SEE FOR THE NEXT TWENTY-FIVE SECONDS
-         * (SPEC.md 114.7.1 conclusion 2). One cell of the loading bar every
-         * fourth slot is one lb_rpix against 53.8 ms for the piece beside it,
-         * and it is a call from the module back into the resident image, which
-         * is an ordinary far call the toolchain makes (never the reverse: an
-         * ovl_ ADDRESS is refused by name). */
+        /* the bar: the compose's share of the minimap's well is 0..75 */
         if ((i & 3) == 0)
-            lem_load_bar(i >> 2);
+            lem_load_bar((i >> 2) - (i >> 4));
         slot = LEM_LVL_TERR + 4 * i;
-        b0 = lem_pk(rec, base + slot);
-        b1 = lem_pk(rec, base + slot + 1);
+        b0 = lem_pk(lem_cl_rec, base + slot);
+        b1 = lem_pk(lem_cl_rec, base + slot + 1);
         /* SPEC.md 114.3.1: a slot whose first WORD is 0xFFFF is SKIPPED and
-         * never breaks the walk. Breaking renders Taxing 27 with 68 of its
-         * 395 pieces (lemtool/REPORT.md measured it). */
+         * never breaks the walk (Taxing 27, lemtool/REPORT.md) */
         if (b0 == 0xFF && b1 == 0xFF)
             continue;
-        b2 = lem_pk(rec, base + slot + 2);
-        b3 = lem_pk(rec, base + slot + 3);
+        b2 = lem_pk(lem_cl_rec, base + slot + 2);
+        b3 = lem_pk(lem_cl_rec, base + slot + 3);
 
         flags = b0 >> 4;                    /* 8 no-overwrite, 4 upside-down,
                                              * 2 erase - the format document's
                                              * own words */
-        x = (((b0 & 0x0F) << 8) | b1) - 16; /* the 12-bit mask, and 0x0010 = 0 */
+        x = (((b0 & 0x0F) << 8) | b1) - 16; /* the 12-bit mask, 0x0010 = 0 */
         yv = (b2 << 1) | (b3 >> 7);         /* nine bits, bleeding into b3 */
         y = yv - ((yv >= 0x100) ? 516 : 4);
         id = b3 & 0x3F;
@@ -573,25 +547,352 @@ static int ovl_compose(int level)
         h = lem_pk(lem_cl_bank, row + LEM_GT_H);
         if (w == 0 || h == 0)
             continue;                       /* an unused slot in this set */
-
         lem_far(lem_cl_bank,
                 lem_pk16(lem_cl_bank, row + LEM_GT_OFF),
                 lem_pk16(lem_cl_bank, row + LEM_GT_OFF + 2));
         seg = lem_far_seg;
         off = lem_far_off;
-
-        /* THE PICTURE FIRST AND THE MASK SECOND, and the order is load-bearing:
-         * the no-overwrite flag means "draw only where there is no terrain
-         * yet", and the cheapest place to ask that is the solid mask, which at
-         * this instant still describes the world WITHOUT this piece
-         * (lemblit.inc's lb_pmask). */
-        lem_r_piece(seg, off, x, y, w, h, flags);
-
-        stride = (w >> 3) * h;
-        ovl_far_add((unsigned)(3 * stride));    /* plane 3 IS the mask */
-        lem_m_piece(lem_far_seg, lem_far_off, x, y, w, h, flags);
+        lem_r_wpiece(seg, off, x, y, w, h, flags);
     }
 
-    os88_mem_free(rec);
+    /* the objects and the steel, out of the record - BEFORE the object map
+     * overwrites the claim the record is in */
+    ovl_types();
+    ovl_objects(base);
+    ovl_objmap();
+    ovl_game_init(level);
     return 1;
+}
+
+/* ovl_types - the sixteen object types of the set, the 30 lemming animation
+ * rows and the six stencils, out of the two banks into bss. */
+/* lem_dims_ok - can lemsprite.inc's fixed row buffers hold a w x h picture?
+ * EVERY BYTE READ OFF A DISK IS HOSTILE, and these two come straight out of a
+ * band file into routines whose buffers are fixed: a row of (w + 7) / 8 bytes,
+ * shifted, is one more (lb_srow, 24), DOUBLED on a CGA it is 2 x bpr + 1
+ * (lb_sorb, lb_srow), and a VGA draw keeps every shifted mask row in lb_smk
+ * (LEM_SMK = 800). So bpr <= 11 and (bpr + 1) x h <= 800, which also keeps
+ * w x h far below the 32,767 the per-frame size is computed in. The largest
+ * object in the five sets is 10 bytes x 20 rows and the tallest 3 x 71
+ * (tools/os88lem.py asserts the same limits by name first, and
+ * tests/unit/t_lemdat.py a third time). A picture that fails is ZEROED, and a
+ * zero-width entry is never drawn. */
+#define LEM_BPR_MAX 11
+#define LEM_SMK_MAX 800
+static int lem_dims_ok(int w, int h)
+{
+    int bpr = (w + 7) >> 3;
+
+    return bpr <= LEM_BPR_MAX && (bpr + 1) * h <= LEM_SMK_MAX;
+}
+
+static void ovl_types(void)
+{
+    int i, r, a, b;
+    struct lem_ot *t;
+    struct lem_ar *q;
+
+    for (i = 0; i < 16; i++) {
+        t = &lem_ty[i];
+        r = LEM_GR_OBJTAB + (i << 4);
+        t->w = (unsigned char)lem_pk(lem_cl_bank, r + LEM_GO_W);
+        t->h = (unsigned char)lem_pk(lem_cl_bank, r + LEM_GO_H);
+        t->frames = (unsigned char)lem_pk(lem_cl_bank, r + LEM_GO_FRAMES);
+        t->eff = (unsigned char)lem_pk(lem_cl_bank, r + LEM_GO_EFFECT);
+        t->sound = (unsigned char)lem_pk(lem_cl_bank, r + LEM_GO_SOUND);
+        t->start = (unsigned char)lem_pk(lem_cl_bank, r + LEM_GO_START);
+        t->anim = (unsigned char)lem_pk(lem_cl_bank, LEM_GR_ANIMFL + i);
+        t->off_lo = (unsigned)lem_pk16(lem_cl_bank, r + LEM_GO_OFF);
+        t->off_hi = (unsigned)lem_pk16(lem_cl_bank, r + LEM_GO_OFF + 2);
+        if (!lem_dims_ok((int)t->w, (int)t->h)) {
+            t->w = 0;               /* ovl_obj_draw() skips a zero width */
+            t->h = 0;
+        }
+        t->per = (unsigned)((((unsigned)t->w * t->h) >> 3) * 5);
+        /* GRND's encoding, decoded as Lemmix TMetaObject.AssignFromDos does:
+         * left * 4, top * 4 - 4, width * 4, height * 4 */
+        t->tl = lem_pk16(lem_cl_bank, r + LEM_GO_TRIGL) * 4;
+        t->tt = lem_pk16(lem_cl_bank, r + LEM_GO_TRIGT) * 4 - 4;
+        t->tw = lem_pk(lem_cl_bank, r + LEM_GO_TRIGW) * 4;
+        t->th = lem_pk(lem_cl_bank, r + LEM_GO_TRIGH) * 4;
+        if (t->frames == 0)
+            t->frames = 1;
+    }
+    lem_gfx_ok = 0;
+    if (!lem_item(LEM_ITEM_ANIMTAB))
+        return;
+    a = 0;
+    for (i = 0; i < LEM_NANIM; i++) {
+        q = &lem_ar[i];
+        b = lem_far_off + (i << 3);
+        q->frames = (unsigned char)lem_pk(lem_far_seg, b);
+        q->w = (unsigned char)lem_pk(lem_far_seg, b + 1);
+        q->h = (unsigned char)lem_pk(lem_far_seg, b + 2);
+        q->bpp = (unsigned char)lem_pk(lem_far_seg, b + 3);
+        q->off = (unsigned)lem_pk16(lem_far_seg, b + 4);
+        q->per = (unsigned)lem_pk16(lem_far_seg, b + 6);
+        if (!lem_dims_ok((int)q->w, (int)q->h) || q->bpp > 4)
+            q->w = 0;               /* lem_anim_at() refuses a zero width */
+    }
+    if (!lem_item(LEM_ITEM_MASKTAB))
+        return;
+    for (i = 0; i < LEM_NMASK; i++) {
+        q = &lem_mk[i];
+        b = lem_far_off + (i << 3);
+        q->frames = (unsigned char)lem_pk(lem_far_seg, b);
+        q->w = (unsigned char)lem_pk(lem_far_seg, b + 1);
+        q->h = (unsigned char)lem_pk(lem_far_seg, b + 2);
+        q->bpp = (unsigned char)lem_pk(lem_far_seg, b + 3);
+        q->off = (unsigned)lem_pk16(lem_far_seg, b + 4);
+        q->per = (unsigned)lem_pk16(lem_far_seg, b + 6);
+        if (!lem_dims_ok((int)q->w, (int)q->h))
+            q->w = 0;               /* lem_mask_at() refuses it the same way */
+    }
+    if (!lem_item(LEM_ITEM_ANIM))
+        return;
+    lem_anseg = lem_far_seg;
+    lem_anoff = lem_far_off;
+    if (!lem_item(LEM_ITEM_MASKS))
+        return;
+    lem_mkseg = lem_far_seg;
+    lem_mkoff = lem_far_off;
+    lem_gfx_ok = 1;
+    (void)a;
+}
+
+/* ovl_objects - Level.Loader.pas TranslateLevel's objects: 32 slots of eight
+ * bytes at 0x20, BIG-ENDIAN like the rest of the record; an all-zero slot is
+ * skipped. Left is the word less 16, the type is the low nibble of byte 5,
+ * modifier bit 0x80 is no-overwrite and 0x40 only-on-terrain, and display
+ * mode 0x8F is upside down. The 32 steel slots at 0x760 are copied out raw for
+ * ovl_objmap(), because the map is about to overwrite the record. */
+static unsigned char lem_steel[128];
+
+static void ovl_objects(unsigned base)
+{
+    int i, k, z, info;
+    unsigned r;
+    struct lem_o *o;
+
+    lem_nob = 0;
+    lem_nord = -1;                  /* the drawing order is this level's */
+    lem_nvis = -1;
+    lem_nent = 0;
+    info = 0;
+    for (i = 0; i < 32; i++) {
+        r = base + 0x20 + (i << 3);
+        z = 0;
+        for (k = 0; k < 8; k++)
+            z |= lem_pk(lem_cl_rec, r + k);
+        if (z == 0)
+            continue;
+        o = &lem_ob[lem_nob];
+        o->x = ((lem_pk(lem_cl_rec, r) << 8) | lem_pk(lem_cl_rec, r + 1)) - 16;
+        o->y = (lem_pk(lem_cl_rec, r + 2) << 8) | lem_pk(lem_cl_rec, r + 3);
+        o->id = (unsigned char)(lem_pk(lem_cl_rec, r + 5) & 15);
+        o->fl = 0;
+        k = lem_pk(lem_cl_rec, r + 6);
+        if (k & 0x80)
+            o->fl |= 4;
+        if (k & 0x40)
+            o->fl |= 1;
+        if (lem_pk(lem_cl_rec, r + 7) == 0x8F)
+            o->fl |= 2;
+        o->frame = lem_ty[o->id].start;
+        if (o->frame >= lem_ty[o->id].frames)
+            o->frame = 0;
+        o->trig = 0;
+        o->drawn = 0xFF;
+        o->dirty = 0;
+        o->ent = (unsigned char)(o->id == LEM_OTYPE_ENTRANCE);
+        if (o->ent) {
+            if (lem_nent < 4)       /* Max4EnabledEntrances */
+                lem_ent[lem_nent++] = (unsigned char)lem_nob;
+        } else {
+            if (info < 16)          /* DisableObjectsAfter15 */
+                lem_oinfo[info] = (unsigned char)lem_nob;
+            info++;
+        }
+        lem_nob++;
+    }
+    lem_noinfo = info;
+    for (i = 0; i < 128; i++)
+        lem_steel[i] = (unsigned char)lem_pk(lem_cl_rec, base + 0x760 + i);
+    /* the release order: the ORIG set's OldEntranceABBAOrder (Game.pas:1557) */
+    lem_entord[0] = 0;
+    lem_entord[1] = 0;
+    lem_entord[2] = 0;
+    lem_entord[3] = 0;
+    if (lem_nent == 2) {
+        lem_entord[1] = 1;
+        lem_entord[2] = 1;
+    } else if (lem_nent == 3) {
+        lem_entord[1] = 1;
+        lem_entord[2] = 2;
+        lem_entord[3] = 1;
+    } else if (lem_nent == 4) {
+        lem_entord[1] = 1;
+        lem_entord[2] = 2;
+        lem_entord[3] = 3;
+    }
+}
+
+/* ovl_objmap - InitializeObjectMap (:2251): DOM_NONE everywhere, the steel,
+ * then each of the first sixteen non-hatch objects' trigger rectangle - a
+ * triggered trap writes its own index, everything else 128 + its effect.
+ * Steel's left is the high nine bits of word 0 times 4 less 16 and its width
+ * the high nibble of byte 2, in 4-pixel units plus one (TranslateLevel). */
+static void ovl_objmap(void)
+{
+    int i, b0, b1, b2, v, n;
+    struct lem_o *o;
+    struct lem_ot *t;
+
+    lem_o_setup(lem_cl_rec);
+    lem_o_clear();
+    for (i = 0; i < 32; i++) {
+        b0 = lem_steel[i * 4];
+        b1 = lem_steel[i * 4 + 1];
+        b2 = lem_steel[i * 4 + 2];
+        if ((b0 | b1 | b2 | lem_steel[i * 4 + 3]) == 0)
+            continue;
+        lem_o_fill(((b0 << 1) + (b1 >> 7)) * 4 - 16, (b1 & 0x7F) * 4,
+                   (b2 >> 4) * 4 + 4, (b2 & 15) * 4 + 4, DOM_STEEL);
+    }
+    n = lem_noinfo < 16 ? lem_noinfo : 16;
+    for (i = 0; i < n; i++) {
+        o = &lem_ob[(int)lem_oinfo[i]];
+        t = &lem_ty[o->id];
+        v = (t->eff == 4) ? i : t->eff + 128;
+        lem_o_fill((o->x & ~3) + t->tl, (o->y & ~3) + t->tt, t->tw, t->th, v);
+    }
+}
+
+/* ovl_game_init - Start (:1473) for this level's header. */
+static void ovl_game_init(int level)
+{
+    int k;
+
+    lem_rr = lem_ent_u16(level, LEM_E_RATE);
+    if (lem_rr < 1)
+        lem_rr = 1;
+    if (lem_rr > 99)
+        lem_rr = 99;
+    lem_rrmin = lem_rr;
+    lem_maxlem = lem_ent_u16(level, LEM_E_COUNT);
+    if (lem_maxlem > LEM_MAXLEM)
+        lem_maxlem = LEM_MAXLEM;
+    if (lem_maxlem < 1)
+        lem_maxlem = 1;
+    lem_save = lem_ent_u16(level, LEM_E_SAVE);
+    lem_min = lem_ent_u16(level, LEM_E_MINUTES);
+    if (lem_min < 1)
+        lem_min = 1;
+    if (lem_min > 99)
+        lem_min = 99;
+    lem_sec = 0;
+    for (k = 0; k < 8; k++)
+        lem_cnt[k] = lem_ent_u8(level, LEM_E_SKILLS + k);
+    lem_iter = 0;
+    lem_clockf = 0;
+    lem_released = 0;
+    lem_out = 0;
+    lem_saved = 0;
+    lem_inpct = 0;                  /* SetInfoLemmingsSaved(0, 1) (:1635) */
+    lem_removed = 0;
+    lem_rrdir = 0;
+    lem_skill = LB_CLIMBER;         /* "BtnClimber; // this is not recorded
+                                     * because not playing yet" */
+    lem_countdown = 20;
+    lem_opened = 0;
+    lem_entdone = 0;
+    lem_paused = 0;
+    lem_nuked = 0;
+    lem_nukeing = 0;
+    lem_nukeix = 0;
+    lem_finished = 0;
+    lem_timeup = 0;
+    lem_cursor = 0;
+    lem_infr = 0;
+    lem_ndmg = 0;
+    lem_tmin = lem_min;
+    lem_tsec = 0;
+    lem_hit_n = 0;
+    lem_hit_l1 = -1;
+    lem_hit_l2 = -1;
+    lem_hit_last = -1;              /* Start (:1562) */
+    lem_sndq = -1;
+    for (k = 0; k < LEM_MM_H * LEM_MM_STRIDE; k++)
+        lem_mmd[k] = 0;
+}
+
+/* ovl_postview - the results, as Lemmix src/GameScreen.Postview.pas
+ * GetScreenText builds them: the top line, "You rescued", "You needed", the
+ * result text the per cent earns, and the footer. IN THE WINDOW in wave 3,
+ * as wave 1 put the preview there; wave 5 moves exactly this content into
+ * the bracket's second foreign mode (SPEC.md 114.4.3). The access-code line is
+ * omitted with the Level Code row's fact (SPEC.md 114.8), and with it the
+ * forced footer position, which only a 640x350 surface can honour. */
+static int ovl_postview(int rating, int level)
+{
+    int cnt, lc, target, done, ix, success;
+
+    cnt = lem_ent_u16(level, LEM_E_COUNT);
+    target = cnt ? (lem_ent_u16(level, LEM_E_SAVE) * 100) / cnt : 0;
+    lc = lem_nuked ? lem_maxlem : cnt;  /* SetGameResult's NUKE GLITCH (:4477):
+                                     * after a nuke the per cent is of the
+                                     * lemmings released, not of the level's */
+    done = lc ? (lem_saved * 100) / lc : 0;
+    success = done >= target;
+    lem_para_reset();
+    if (success && rating == LEM_RATINGS - 1 && level == LEM_PERRAT - 1) {
+        lem_para_add(lem_str(LEMS_PO_CONGRATS));
+        lem_para_nl();
+        lem_para_nl();
+        lem_para_add(lem_str(LEMS_PO_CONTINUE));
+        return success;
+    }
+    lem_para_add(lem_str(lem_timeup ? LEMS_PO_TIMEUP : LEMS_PO_ACCOUNTEDFOR));
+    lem_para_nl();
+    lem_para_nl();
+    lem_arg_reset();
+    lem_arg_pct((unsigned)lem_saved, (unsigned)lc);
+    lem_para_fmt(lem_str(LEMS_PO_YOURESCUED));
+    lem_para_nl();
+    lem_arg_reset();
+    lem_arg_pct((unsigned)lem_ent_u16(level, LEM_E_SAVE), (unsigned)cnt);
+    lem_para_fmt(lem_str(LEMS_PO_YOUNEEDED));
+    lem_para_nl();
+    lem_para_nl();
+    /* GetResultText's ladder, word for word */
+    if (done == 100)
+        ix = 8;
+    else if (done == 0)
+        ix = 0;
+    else if (done < target / 2)
+        ix = 1;
+    else if (done < target - 5)
+        ix = 2;
+    else if (done < target - 1)
+        ix = 3;
+    else if (done == target - 1)
+        ix = 4;
+    else if (done == target)
+        ix = 5;
+    else if (done < target + 20)
+        ix = 6;
+    else
+        ix = 7;
+    lem_para_add(lem_str(LEMS_PO_RESULT0 + ix));
+    lem_para_nl();
+    lem_para_nl();
+    lem_para_add(lem_str(success ? LEMS_PO_NEXTLEVEL : LEMS_PO_RETRYLEVEL));
+    /* THE ORIGINAL'S LAST LINE IS NOT CARRIED IN THE WINDOW, and it is a fact
+     * rather than a cut: "Press right mouse button for menu" names a control
+     * this screen does not have, because a right click in an os8088 window is
+     * the kernel's EVT_RDOWN and never reaches os88_onclick (SPEC.md 12.4).
+     * Esc leaves this screen. Wave 5 moves the postview into the bracket,
+     * where os88_mouse()'s bit 1 is ours, and LEMS_PO_MENU comes back with a
+     * button that does what it says (SPEC.md 114.8). */
+    return success;
 }

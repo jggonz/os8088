@@ -197,7 +197,7 @@ static void lem_sh_blank(void)
  * autorepeats every ~100 ms. The two level rows only ever change their LIST
  * half: lem_gutc already splits every level row at the gutter and the pane half
  * beyond it is untouched by a selection. Forty bytes of bss carry the bound and
- * take the keystroke's scan from 189 columns to ~78. lem_mark() itself marks
+ * take the keystroke's scan from 189 columns to 78 (the harness's count). lem_mark() itself marks
  * the WHOLE row, so every other caller is unchanged and a narrow mark is
  * something a caller opts into. */
 static unsigned char lem_dirty[LEM_SH_ROWS];
@@ -542,13 +542,12 @@ static void lem_row_level(int row)
  * GameScreen.Preview.pas GetScreenLinesAndColors, Base.Strings.pas:411-418),
  * formatted in the overlay because formatting is not on a keystroke's critical
  * path in any sense that matters here and the resident half is the budget
- * (SPEC.md 114.6). With no module the pane is blank and the launcher has already
- * said so once. */
+ * (SPEC.md 114.6). The module is a PART, resident from launch (SPEC.md
+ * 73.14.2), so this cannot refuse. */
 static void lem_pvline(int line, char *dst, unsigned cap)
 {
     dst[0] = 0;
-    if (lem_ovl == 1)
-        ovl_fmt(line, lem_sel, dst, cap);
+    ovl_fmt(line, lem_sel, dst, cap);
 }
 
 /* --- the four state rows ---------------------------------------------------
@@ -732,7 +731,10 @@ static void lem_row_text(int row)
     int i, n;
 
     lem_row_clear();
-    if (row == lem_rows - 1) {
+    if (row == lem_rows - 1 && lem_screen != LEM_SC_POST) {
+        /* the postview carries its own footers in its paragraph (Lemmix
+         * GameScreen.Postview.pas: two of them, which a fixed one-line
+         * footer cannot hold) */
         lem_fit(lem_line, sizeof(lem_line), lem_str(LEMS_PV_PRESS), lem_cols - 2);
         n = (lem_cols - (int)os88_strlen(lem_line)) >> 1;
         if (n < 0)
@@ -832,7 +834,7 @@ static void lem_repaint(void *win, int full, int arm)
      * a full repaint re-letters the gutter cell (the shadow was blanked) and
      * would rub the vertical rule out again. On a PARTIAL repaint neither is
      * needed at all: nothing composed can reach either of them. */
-    if (lem_screen != LEM_SC_LIST && full && lem_ovl == 1 && !lem_glass_blank)
+    if (lem_screen != LEM_SC_LIST && full && !lem_glass_blank)
         ovl_chrome(lem_screen);
     lem_glass_blank = 0;
 
@@ -875,7 +877,7 @@ static void lem_repaint(void *win, int full, int arm)
     lem_rlo = 0;
     lem_rhi = -1;
 
-    if (lem_screen == LEM_SC_LIST && full && lem_ovl == 1)
+    if (lem_screen == LEM_SC_LIST && full)
         ovl_chrome(lem_screen);
     lem_sh_ok = 1;
 }
@@ -1063,7 +1065,7 @@ static int lem_blank_glass(void *win)
 
 static void lem_show_fact(void *win, int labelid, int strid, int level)
 {
-    if (lem_ovl != 1 || strid == LEMS_NONE)
+    if (strid == LEMS_NONE)
         return;
     if (!ovl_greyfact(labelid, strid, level))
         return;
@@ -1090,45 +1092,15 @@ static void lem_back(void *win)
  * (SPEC.md 114.4.3) - and the raster the level itself needs arrives in wave 2.
  * What is here now is the content and the transition, not a placeholder.
  *
- * THE MODULE IS FORCED RESIDENT BEFORE ANY OF IT, and that is not tidiness:
- * cc_ovneed TOASTS ITS OWN REFUSAL, a kernel drawing call this C never wrote
- * and cannot intercept, and once the bracket owns the screen that toast is
- * painted with desktop geometry into a foreign mode (SPEC.md 114.5). So the
- * launch refuses IN A WINDOW here, where a toast is an ordinary thing. */
+ * Everything that can REFUSE a launch is said IN A WINDOW (ovl_launch), because
+ * once the bracket owns the screen nothing can be said at all (SPEC.md
+ * 114.5). */
 static void lem_play(void *win)
 {
-    /* THE MODULE IS NOT MADE RESIDENT HERE, AND IT USED TO BE. lem_first_wake()
-     * calls ovl_ready(), which tools/cc8086.py fronts with cc_ovneed: an
-     * OSAPI_MEM_CLAIM, then a directory walk of a 39-entry folder and a
-     * 2,760-byte read of LEMMINGS.OVL - 3+ int 13h at ~400 ms apiece on the
-     * target - and Enter, Space and a Play click all arrive with the GFX LOCK
-     * HELD, so every other window's painter stops behind it. That is exactly
-     * the defect SPEC.md 114.6's first table row records as removed from
-     * W_PAINT, put back one callback along.
-     *
-     * IT WAS ALSO REDUNDANT AS THE NET IT WAS WRITTEN TO BE: lem_kick() tests
-     * !lem_waked and re-posts the wake from os88_onclick and os88_onkey before
-     * either of this function's callers reaches it, so a REFUSED post (os88.h:
-     * -1, the ring full) is already recovered - and on that one path the guard
-     * did the freezing instead of the deferring. A first Play press with the
-     * module still owed returns silently at the lem_ovl test below and the
-     * second one works. */
     if (!lem_play_ok()) {
         if (lem_rat_ok && !lem_ent_here(lem_sel))
             lem_show_fact(win, LEMS_NONE,
                           lem_ent_u8(lem_sel, LEM_E_MISSING), lem_sel);
-        return;
-    }
-    if (lem_ovl != 1) {
-        /* NOTHING IS SAID HERE, and the version that said something said the
-         * wrong thing. What refused is LEMMINGS.OVL, and cc_ovneed already
-         * toasted the true reason with the file named - "LEMMINGS.OVL is not on
-         * this disk", "does not match this program", "Not enough memory for
-         * LEMMINGS.OVL" (crt0.asm:1157-1159) - at the first wake. The sentence
-         * that used to go here is about the BAND FILES, which on such a disk
-         * are all present, and a second toast retires the first (SPEC.md 59):
-         * the accurate sentence was replaced by an inaccurate one. SPEC.md 47's
-         * rule in its toast form - name a fact, never a guess. */
         return;
     }
     /* NOTHING IS RECORDED HERE, AND SOMETHING USED TO BE. This keystroke merely

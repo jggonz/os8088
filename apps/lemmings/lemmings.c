@@ -141,7 +141,7 @@
 #define LEM_BANK_STYLE   0          /* which half of LEMMAN's cost table */
 #define LEM_BANK_SPEC    1
 
-/* --- the world, and the raster's own numbers (SPEC.md 114.3.1, 92.4) --------
+/* --- the world, and the raster's own numbers (SPEC.md 114.3.1, 114.4) --------
  * 1,584 x 160, which is lemmings_3ds's and Lemmix's figure and not
  * Lemmings.ts's 1,600 (lemtool/REPORT.md measured all 120 levels). The C says
  * WHAT to draw and lemblit.inc/lemmask.inc touch the pixels, so these three are
@@ -203,6 +203,10 @@
 #define LEM_SC_PREVIEW  1           /* the level's own preview, wave 5 moves it
                                      * inside the bracket (SPEC.md 114.4.3) */
 #define LEM_SC_FACT     2           /* the sentence behind a greyed control */
+#define LEM_SC_POST     3           /* the level's RESULT - the original's
+                                     * postview text, in the window in wave 3
+                                     * as the preview is (wave 5 moves both
+                                     * into the bracket, SPEC.md 114.4.3) */
 
 /* ------------------------------------------------------------------------- */
 /* Prototypes for everything. They are here rather than scattered because the
@@ -257,14 +261,15 @@ static int  lem_data_load(void);
 static void lem_far(unsigned base, int lo, int hi);
 static int  lem_pk(unsigned seg, unsigned off);
 static int  lem_pk16(unsigned seg, unsigned off);
-static int  lem_claim_all(void);
+static int  ovl_claim_all(void);
 static void lem_free_all(void);
 static int  lem_need_kb(void);
-static int  lem_parts_read(int nparts, unsigned seg);
+static int  ovl_parts_read(int nparts, unsigned seg);
+static int  ovl_rec_read(int level);
 static void lem_stem_gr(int n);
 static void lem_stem_main(void);
-static int  lem_main_read(void);
-static int  lem_bank_read(int style);
+static int  ovl_main_read(void);
+static int  ovl_bank_read(int style);
 static int  lem_item(int id);
 
 /* lemui.c */
@@ -288,19 +293,125 @@ static void lem_show_fact(void *win, int labelid, int strid, int level);
 static void lem_back(void *win);
 static void lem_play(void *win);
 
+/* lemgame.c - the per-frame step (SPEC.md 114.4.7) */
+static void lem_snd_cue(int ev);
+static void lem_snd_flush(void);
+static void lem_rr_adjust(void);
+static void ovl_increment(void);
+static void ovl_spawn(void);
+static void ovl_nuke_step(void);
+static void ovl_finished_check(void);
+static int  ovl_frame_begin(void);
+static int  lem_frame_chunk(int n);
+static void ovl_frame_end(void);
+static void lem_game_frame(void);
+static void lem_select_skill(int b);
+static void lem_toggle_pause(void);
+static void lem_nuke(void);
+static void lem_rr_extreme(int up);
+
+/* lemobj.c - the objects and the frames everything is drawn from */
+static void lem_far_add(unsigned n);
+static void lem_far_mul(unsigned n, unsigned per);
+static int  lem_anim_at(int act, int rtl, int f);
+static int  lem_mask_at(int row, int f);
+static void lem_trap(int i);
+static void ovl_obj_step(void);
+static void ovl_obj_draw(int i);
+static int  lem_obj_hits(int i, int x, int y, int w, int h);
+static void ovl_obj_redraw_rect(int x, int y, int w, int h);
+static void ovl_obj_all(void);
+
+/* lemact.c - the eighteen actions, the skills, the pick */
+static int  lem_hp(int x, int y, int miny);
+static void lem_remove(void);
+static void lem_turn(void);
+static void lem_trans(int act, int turn);
+static void lem_topcheck(void);
+static void lem_field(int on);
+static int  lem_field_over(void);
+static int  lem_dig_row(int y);
+static void lem_lay_brick(void);
+static void lem_stencil(int row, int frame, int x, int y);
+static int  lem_walk(void);
+static int  lem_jump(void);
+static int  lem_dig(void);
+static int  lem_climb(void);
+static int  lem_drown(void);
+static int  lem_hoist(void);
+static int  lem_build(void);
+static int  lem_stopped(int obj);
+static int  lem_bash(void);
+static int  lem_mine(void);
+static int  lem_fall(void);
+static int  lem_float(void);
+static int  lem_block(void);
+static int  lem_ohno(void);
+static int  lem_bomb(void);
+static int  lem_handle(void);
+static int  lem_fuse(void);
+static void lem_objects(void);
+static int  ovl_assign(void);
+static void ovl_hittest(int cx, int cy, int right, int rec);
+static int  ovl_word(int i);
+
 /* lemdraw.c - the frame (SPEC.md 114.4) */
-static int  lem_level_load(int level);
-static void lem_compose_level(int level);
-static void lem_mm_sample(void);
+static int  ovl_level_load(int level);
+static int  lem_compose_level(int level);
+static void lem_world_clear(void);
+static void ovl_mm_sample(void);
 static int  lem_mm_bit(int mx, int my);
+static int  lem_mm_ink(int v, int on);
 static void lem_mm_row(int my, int c0, int c1);
+static void lem_mm_col(int mx, int r0, int r1);
 static void lem_mm_draw(void);
 static void lem_view_rect(int erase_from);
 static void lem_status_template(void);
 static void lem_status_field(int col, const char *s, int n);
 static void lem_panel_draw(void);
-static void lem_frame_first(void);
-static void lem_frame_step(void);
+static void ovl_frame_panel(void);
+static void lem_load_bar(int n);
+static void lem_damage(int x, int y, int w, int h);
+static int  lem_mm_vr(int mx, int my);
+static void lem_mm_cell(int mx, int my);
+static void ovl_mm_clear(int x, int y, int big);
+static void ovl_mm_dots(void);
+static void lem_dirty_count(int b);
+static void lem_dirty_sel(int b);
+static void lem_dirty_stat(void);
+static void lem_stat_time(void);
+static void ovl_count_draw(int b);
+static void ovl_sel_draw(int b, int on);
+static void lem_padr(char *dst, const char *s, int n);
+static void ovl_stat_build(void);
+static void ovl_stat_delta(void);
+static void ovl_panel_live(void);
+static void ovl_sprite_one(int i);
+static void ovl_sprites_all(void);
+static void ovl_rc_add(int b0, int b1, int r0, int r1, int near);
+static void ovl_rc_px(int x, int y, int w, int h, int near);
+static int  ovl_rc_clip(int k, int y0, int h);
+static int  ovl_obj_due(int i);
+static void ovl_rc_world(void);
+static void ovl_objs_mark(void);
+static void ovl_obj_vis(void);
+static int  ovl_sbox(int i);
+static void ovl_obox_forget(void);
+static void ovl_vframe(void);
+static void ovl_dmg_fold(int x, int y, int w, int h);
+static void ovl_mm_build(void);
+static void ovl_mm_cells(void);
+static int  ovl_pan_hit(int cx, int cy, int vr, int ox);
+static void lem_cursor_off(void);
+static int  lem_cur_shape(void);
+static void lem_cursor_on(void);
+static void ovl_frame_first(int resume);
+static void ovl_frame_draw(void);
+static int  ovl_view_follow(int drew);
+static void ovl_bg_redraw(int x, int y, int w, int h, int sync);
+static int  ovl_rhit(int x0, int y0, int x1, int y1, int bx0, int by0,
+                     int bx1, int by1);
+static int  ovl_cur_hit(int cx, int cy, int drew);
 static void lem_view_move(int dx);
 static void lem_mouse_map(void);
 
@@ -320,9 +431,13 @@ void lem_clear_pixel(int x, int y);
 int  lem_probe4(int x, int y, const char *offs);
 void lem_m_span(int x, int y, int w, int set);
 void lem_m_apply(unsigned seg, unsigned off, int x, int y, int w, int h);
-void lem_m_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-                 int flags);
+int  lem_m_dig(int x, int y, int w);
 void lem_m_derive(unsigned dstseg, int kind);
+void lem_o_setup(unsigned seg);
+void lem_o_clear(void);
+int  lem_o_get(int x, int y);
+void lem_o_set(int x, int y, int v);
+void lem_o_fill(int x, int y, int w, int h, int v);
 
 void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
                  unsigned shadowseg);
@@ -330,24 +445,52 @@ void lem_r_prep(void);
 void lem_r_unprep(void);
 void lem_r_pal(unsigned seg, unsigned stdoff, unsigned cusoff);
 void lem_r_clearworld(void);
-void lem_r_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-                 int flags);
+void lem_r_wsetup(unsigned p0, unsigned p3);
+void lem_r_tsetup(unsigned t);
+void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
+                  int flags);
+void lem_r_tload(void);
+void lem_r_tmask(void);
 void lem_r_derive(void);
 void lem_r_scroll(int x);
 void lem_r_dirty(int row, int b0, int b1);
 void lem_r_undirty(void);
 void lem_r_present(void);
+int  lem_r_mlatch(void);
 void lem_r_panel(unsigned seg, unsigned off);
 void lem_r_rect(int x, int y, int w, int h, int colour, int fill);
 void lem_r_batch(int on);
+void lem_r_sprite(unsigned seg, unsigned off, int x, int y, int w, int h,
+                  int mode);
+void lem_r_srest(void);
+void lem_r_sforget(void);
+int  lem_r_shit(int sx0, int sy0, int sx1, int sy1);
+int  lem_r_cbegin(int y0, int h, int b0, int b1);
+int  lem_r_cband(int y0, int h);
+void lem_r_cclip(int y0, int h, int b0, int b1);
+void lem_r_clatch(void);
+void lem_r_cend(void);
+void lem_r_csave(void);
+void lem_r_cdraw(void);
+void lem_r_vstart(int x);
+void lem_r_vpan(void);
+void lem_r_cursor(const unsigned char *bits, int sx, int sy);
+extern unsigned char lem_sprec[];   /* lemsprite.inc's records: on VGA, the
+                                     * frame's boxes (lemdraw.c lem_obox) */
+void lem_r_bgrect(int x, int y, int w, int h, int sync);
+void lem_r_show(int x, int y, int w, int h);
+void lem_r_obj(unsigned seg, unsigned off, int x, int y, int w, int h,
+               int flags);
+void lem_r_glyph8(const unsigned char *bits, int x, int y, int h, int ink,
+                  int paper);
+void lem_r_panrect(unsigned seg, unsigned off, int x, int y, int w, int h);
 
 int  lem_f_index(int ch);
 void lem_f_cell(unsigned seg, unsigned off, int col, int row, int ch);
 void lem_f_run(unsigned seg, unsigned off, int col, int row, const char *s,
                int n);
 
-/* lemovl.c - everything in LEMMINGS.OVL (SPEC.md 73.14, 92.6) */
-static int  ovl_ready(void);
+/* lemovl.c - everything in the overlay part (SPEC.md 73.14.2, 114.6) */
 static void ovl_chrome(int screen);
 static void ovl_fmt(int line, int level, char *dst, unsigned cap);
 static void ovl_preview(int level);
@@ -356,23 +499,38 @@ static void ovl_about(void *win);
 static void ovl_data_leave(void);
 static int  ovl_progress_read(void);
 static int  ovl_progress_write(int rating, int level);
-static void ovl_far_add(unsigned n);
 static int  ovl_compose(int level);
+static void ovl_types(void);
+static void ovl_objects(unsigned base);
+static void ovl_objmap(void);
+static void ovl_game_init(int level);
+static int  ovl_postview(int rating, int level);
 
 /* this file */
 static int  lem_probe_mode(void *win);
 static int  lem_mode_id(void);
 static int  lem_kind_id(void);
 static int  lem_raster_ok(void);
-static void lem_launch(void *win);
+static void ovl_launch(void *win);
 static void lem_ask_launch(void *win);
+static void lem_abandon(void);
+static int  ovl_post_target(int success, int level);
+static void lem_continue(void *win);
+static int  ovl_key(int k);
+static void ovl_panel_press(int px, int py);
+static void ovl_mouse_input(int dt);
+static void ovl_view_press(int x, int y, int right);
+static void ovl_nuke_press(void);
+static void ovl_q_apply(void);
+static void ovl_play_loop(void);
+static void ovl_tick_draw(int drew, int right);
+static void lem_fsx_main(void);
 
-/* what lem_launch() decided, before it takes the lock to act on it */
+/* what ovl_launch() decided, before it takes the lock to act on it */
 #define LEM_LR_GO     0             /* the bracket */
 #define LEM_LR_FILE   1             /* a claim or a band file refused */
 #define LEM_LR_MODE   2             /* os88_fsx_mode() would refuse */
 #define LEM_LR_GONE   3             /* the module or the level went away */
-static void lem_first_wake(void);
 static void lem_kick(void *win);
 static void lem_abdismiss(void *win);
 
@@ -400,7 +558,6 @@ static int   lem_playw = 8;         /* ...and the Play control's width, written
 static int   lem_tabx[LEM_RATINGS];
 static int   lem_tabw[LEM_RATINGS];
 static int   lem_ok;                /* the band files were read */
-static int   lem_ovl;               /* 0 not asked, 1 resident, -1 refused */
 static int   lem_savable;           /* SYSTEM/APPDATA answered */
 static int   lem_prog[LEM_RATINGS]; /* furthest level reached per rating, -1 */
 static int   lem_mode_ok;           /* this display can set 320x200x16 */
@@ -428,12 +585,31 @@ static int   lem_launchpend;        /* ...AND A LAUNCH, which is the largest of
                                      * the three by a factor of fifty: ~131 KB
                                      * of floppy I/O, and Enter, Space and a
                                      * Play click all arrive with the gfx lock
-                                     * HELD (lem_launch's own header) */
+                                     * HELD (ovl_launch's own header) */
 static int   lem_pw_rat;            /* ...and what it was asked to record, taken
                                      * at the keystroke rather than read back at
                                      * the wake, where the rating may have moved
                                      * on */
 static int   lem_pw_lvl;
+static int lem_playing = -1;        /* the level in hand, or -1 */
+static int lem_resume;              /* this entry brings a kept level back */
+static int lem_suspended;           /* a level is kept and the window is up */
+static int lem_exit;                /* LEM_X_* */
+static int   lem_post_next;         /* the level the postview's "continue"
+                                     * goes to: the next on success, this one
+                                     * again on failure (Lemmix
+                                     * GameScreen.Postview.pas: "Press left
+                                     * mouse button for next level / to retry
+                                     * level") */
+static int   lem_post_nrat;         /* ...and its RATING: a section's last
+                                     * level leads to the next section's first
+                                     * (Lemmix Styles.Base.pas:964-968,
+                                     * TSection.DoAddLevelInfo), so Fun 30 won
+                                     * goes on to Tricky 1 */
+static int   lem_post_play;         /* the wake owes a preview of lem_post_next
+                                     * once the new rating's file is read */
+static int   lem_mode_end;          /* NO_MODE's ending: what happened to the
+                                     * level (lemovl.c ovl_greyfact) */
 static int   lem_gutc;              /* the GUTTER column between the two panes,
                                      * or -1. No composed run may cross it, so
                                      * the cell is always blank, always matches
@@ -489,7 +665,7 @@ static int lem_c_rows;              /* rows composed and scanned this repaint */
 static int lem_c_cols;              /* ...and columns scanned in them */
 
 /* THE SIX LITERALS THIS PROGRAM OWNS. Everything else the user reads is in
- * LEMSTR.LEM (SPEC.md 114.3, 92.6). These six cannot be:
+ * LEMSTR.LEM (SPEC.md 114.3, 114.6). These six cannot be:
  *   - the window TITLE has to outlive the window (os88.h's own rule) and so
  *     cannot point into a buffer anything reloads;
  *   - the no-data refusal is what is said when the BAND could not be read;
@@ -530,16 +706,12 @@ static struct os88_menuset lem_menus = { lem_title, 0, 0, { { 0, 0, 0 } } };
 #include "lemtab.c"                 /* const tables and field offsets only */
 #include "lemtext.c"                /* the string ACCESSOR, not the strings */
 #include "lemload.c"                /* the band reader, resident half */
+#include "lemgame.c"                /* the level's state and the frame step */
+#include "lemobj.c"                 /* the objects, and the frames' rows */
+#include "lemact.c"                 /* the eighteen actions and the skills */
 #include "lemui.c"                  /* the launcher */
 #include "lemdraw.c"                /* the frame (SPEC.md 114.4) */
-#include "lemovl.c"                 /* everything ovl_* -> LEMMINGS.OVL */
-
-/* WAVE 2 AND 3 ADD, in this order and between lemload.c and lemui.c:
- *   #include "lemgame.c"           the per-tick step
- *   #include "lemact.c"            the eighteen action handlers
- *   #include "lemobj.c"            objects and triggers
- *   #include "lemdraw.c"           the frame
- * ...each with its own prerequisite line in the Makefile before it exists. */
+#include "lemovl.c"                 /* everything ovl_* -> the overlay PART */
 
 /* ============================================================================
  * The two things this file decides for itself
@@ -608,53 +780,16 @@ static int lem_raster_ok(void)
     return lem_caps > 0 && (lem_caps & (1 << lem_mode_id())) != 0;
 }
 
-/* lem_first_wake - THE MODULE, and nothing else.
- *
- * THE MODULE IS FORCED RESIDENT HERE. There is no instance to resolve a module
- * for while the entry proc runs (SPEC.md 73.14; RunCPM paid for this one,
- * LESSONS.md 13), and cc_ovneed TOASTS ITS OWN REFUSAL - a kernel drawing call
- * this C never wrote and cannot intercept. In a window that toast is an
- * ordinary thing; inside wave 2's bracket it would be painted with DESKTOP
- * geometry into a foreign mode (SPEC.md 114.5). So it happens once, here, with
- * the window up, and lem_ovl remembers the answer so no later call can reach
- * that path again.
- *
- * IT DOES NOT TOAST A REASON OF ITS OWN, and the version that did said the
- * WRONG one: cc_ovneed has already toasted 'LEMMINGS.OVL is not on this disk',
- * 'does not match this program' or 'Not enough memory for LEMMINGS.OVL'
- * (crt0.asm:1157-1159) - the true cause, with the file named - and a second
- * toast RETIRES the first (SPEC.md 59), replacing an accurate sentence about
- * the module with an inaccurate one about the band files, which are all
- * present. SPEC.md 47's "grey a fact, never a guess" in its toast form.
- *
- * IT IS NOT CALLED FROM W_PAINT AND IT USED TO BE. ovl_ready() is cc_ovneed:
- * an OSAPI_MEM_CLAIM, a directory walk of a 39-entry folder and a 2,752-byte
- * read - unbounded floppy I/O, between the kernel's own gfx_lock and
- * gfx_unlock, on the FIRST paint of every launch, with every other window's
- * painter stopped behind the lock. That is hundreds of milliseconds to a couple
- * of seconds of frozen desktop on the target (PERFORMANCE.md: ~400 ms an
- * int 13h), and it is the same cost the paragraph below refuses to pay for the
- * progress file - the smaller of the two reads. tests/covl is not the
- * precedent it looked like: covl is a capability gate whose whole subject is
- * the far call, and cword enters its module from a menu command or with it
- * already resident.
- *
- * SO THE FIRST PAINT COMPOSES THE PREVIEW PANE EMPTY, and os88_onwake() - the
- * one lock-free callback - makes the module resident and repaints in FULL, so
- * ovl_chrome() goes down with it. A launch is two frames instead of one and
- * neither of them holds the machine.
- *
- * THE PROGRESS FILE IS NOT READ HERE EITHER, for the same reason one level
- * along: reading it is a dive into SYSTEM/APPDATA - two directory walks and
- * four folder changes. os88_onwake() does that half too, and by SPEC.md 74.1 it
- * is on the UI task, lock free, and "may call the file slots". */
-static void lem_first_wake(void)
-{
-    if (lem_waked)
-        return;
-    lem_waked = 1;
-    lem_ovl = ovl_ready() ? 1 : -1;
-}
+/* THE MODULE NEEDS NOTHING FROM ANY CALLBACK. It is a PART of LEMMINGS.O88
+ * (CC_OVL_PART, SPEC.md 73.14.2), and an EAGER one: op_load reads it with the
+ * package at launch and cc_ovinit binds it before os88_main() runs
+ * (apps/cc/crt0.asm), so there is no state of this program in which an ovl_
+ * call can refuse - a machine without the RAM for it refuses the LAUNCH, in
+ * the kernel's own words, before a window exists. Waves 1 and 2 shipped it as
+ * LEMMINGS.OVL beside the package and forced it resident on the first wake;
+ * that machinery (lem_ovl, ovl_ready, a first W_PAINT that drew the preview
+ * pane empty and waited) is gone with the file. What the first wake still owes
+ * is the progress file's dive (os88_onwake). */
 
 /* lem_kick - re-post the wake when an errand is still owed.
  *
@@ -729,16 +864,10 @@ void os88_paint(void *win)          /* W_PAINT: the gfx lock is ALREADY held */
     lem_kick(win);                  /* free when one is queued, and the only
                                      * thing that recovers a REFUSED post */
 
-    /* NO DISK I/O HERE, AND THERE WAS. This used to call lem_first_wake() so
-     * that the very first frame had the module behind it - the kick posted from
-     * os88_main() is delivered "a few event-loop passes later" (SPEC.md 74.1)
-     * and the first W_PAINT beats it, so the launcher came up with the level
-     * names on it and an EMPTY preview pane. The cure was worse: cc_ovneed is a
-     * heap claim, a directory walk and a 2,752-byte read, and W_PAINT arrives
-     * with the gfx lock HELD and must not block. What is on the glass for those
-     * few passes is a launcher with an empty pane; what it was is a frozen
-     * machine. The wake repaints in FULL and the pane and the rule arrive with
-     * it (lem_first_wake, os88_onwake).
+    /* NO DISK I/O HERE: W_PAINT arrives with the gfx lock HELD and must not
+     * block, so the progress file is the first wake's (os88_onwake). The
+     * module is not a read at all any more - it is resident since launch
+     * (CC_OVL_PART), so this first paint draws the pane and the chrome too.
      *
      * The kernel has just white-filled the whole content under us, so the
      * shadow does not describe the glass any more - but it is not UNKNOWN
@@ -803,14 +932,11 @@ void os88_onclick(int x, int y, void *win)
     if (lem_screen != LEM_SC_LIST) {
         /* The original's own footer on both screens: "Press mouse button to
          * continue" (Lemmix Base.Strings.pas SPreviewScreen_...), and on the
-         * PREVIEW screen "continue" means START THE LEVEL - which is what it
-         * means in the original too. The FACT screen has nothing to continue
-         * into and goes back to the list. */
-        if (lem_screen == LEM_SC_PREVIEW) {
-            lem_ask_launch(win);
-        } else {
-            lem_back(win);
-        }
+         * PREVIEW screen "continue" means START THE LEVEL - or bring a kept
+         * one back - which is what it means in the original too. The
+         * POSTVIEW's left button is the next level or the retry; the FACT
+         * screen has nothing to continue into and goes back to the list. */
+        lem_continue(win);
         return;
     }
 
@@ -848,13 +974,15 @@ void os88_onkey(int ascii, int scan, void *win)
     }
     if (lem_screen != LEM_SC_LIST) {
         if (ascii == 27) {
+            /* Esc is the original's "menu": a kept level or a finished one
+             * is let go, and its claims with it */
+            if (lem_suspended || lem_screen == LEM_SC_POST)
+                lem_abandon();
             lem_back(win);
-        } else if (ascii == 13 || ascii == ' ') {
-            if (lem_screen == LEM_SC_PREVIEW) {
-                lem_ask_launch(win);
-            } else {
-                lem_back(win);
-            }
+        } else if (ascii == 13 || ascii == ' ' ||
+                   (lem_suspended && (ascii == 'f' || ascii == 'F'))) {
+            /* 'f' is SPEC.md 11.2.1's door BACK IN for a level 'f' took out */
+            lem_continue(win);
         }
         return;
     }
@@ -892,8 +1020,7 @@ void os88_onkey(int ascii, int scan, void *win)
     lem_select(win, n);
 }
 
-/* W_ONWAKE (SPEC.md 74.1) - the one callback that runs WITHOUT the gfx lock,
- * and the first one this instance gets. See lem_first_wake().
+/* W_ONWAKE (SPEC.md 74.1) - the one callback that runs WITHOUT the gfx lock.
  *
  * THE DISK TIME LIVES HERE AND NOWHERE ELSE. os88.h: W_ONWAKE is lock free, on
  * the UI task, "may call the file slots", and may take the lock itself around a
@@ -904,16 +1031,16 @@ void os88_onkey(int ascii, int scan, void *win)
  * the Save Progress row's greying and its value. */
 void os88_onwake(void *win)
 {
-    int drew;
+    int drew, full;
 
-    lem_first_wake();               /* the MODULE: a claim, a directory walk and
-                                     * a 2,752-byte read, and this is the only
-                                     * callback that may spend them */
+    lem_waked = 1;
     drew = 0;
+    full = 0;
 
-    if (!lem_progread && lem_ovl == 1) {
+    if (!lem_progread) {
         lem_progread = 1;
         lem_savable = ovl_progress_read();
+        lem_mark_range(lem_staterow, lem_staterow + LEM_STATE_ROWS - 1);
         drew = 1;
     }
 
@@ -931,6 +1058,7 @@ void os88_onwake(void *win)
         lem_sel = 0;
         lem_top = 0;
         drew = 1;
+        full = 1;                   /* every level row and the pane */
     }
 
     /* ...AND THE PROGRESS WRITE, which is the same defect one size down: two
@@ -939,9 +1067,26 @@ void os88_onwake(void *win)
      * on the glass waits for it - lem_prog[] was updated in memory at the
      * keystroke and the Save Progress row is lettered from THAT - so there is
      * no ordering to preserve and nothing to repaint for. */
-    if (lem_progwrite && lem_ovl == 1) {
+    if (lem_progwrite) {
         lem_progwrite = 0;
         ovl_progress_write(lem_pw_rat, lem_pw_lvl);
+    }
+
+    /* ...AND THE POSTVIEW'S "next level" ACROSS A SECTION'S END, once the
+     * next rating's file is in: its first level's preview, as Lemmix's
+     * NextInfo has it (lem_continue owed it here, because the keystroke may
+     * not read the file). */
+    if (lem_post_play && !lem_ratpend) {
+        lem_post_play = 0;
+        lem_sel = lem_post_next;
+        lem_top = 0;
+        os88_gfx_lock();
+        if (lem_play_ok())
+            lem_play(win);
+        else
+            lem_back(win);          /* the list says why, row by row */
+        os88_gfx_unlock();
+        return;
     }
 
     /* ...AND THE LAUNCH, which is the largest of the four by a factor of fifty
@@ -949,13 +1094,12 @@ void os88_onwake(void *win)
      * 52,224 bytes and a style bank up to 78,848 more, ~131 KB and ~330
      * int 13h calls at PERFORMANCE.md's ~400 ms apiece. lem_ask_launch()'s
      * header says what doing it on the keystroke cost. It is LAST because the
-     * three errands above are what a launch depends on - the module most of
-     * all - and it does not fall through to the repaint below: what follows a
+     * errands above are what a launch depends on, and it does not fall through to the repaint below: what follows a
      * launch is either the kernel's own W_PAINT out of the bracket or a refusal
      * that drew itself. */
     if (lem_launchpend) {
         lem_launchpend = 0;
-        lem_launch(win);
+        ovl_launch(win);
         return;
     }
 
@@ -971,10 +1115,12 @@ void os88_onwake(void *win)
                                      * about. The dismissal repaints in full and
                                      * picks all of this up */
     os88_gfx_lock();
-    /* FULL, because this is the first repaint with the module behind it and
-     * ovl_chrome() is gated on `full` (lemui.c): the vertical rule between the
-     * two panes goes down here. */
-    lem_repaint(win, 1, 1);
+    /* PARTIAL when the only news is the progress file: its answer changes the
+     * Save Progress row and the Play row's level number and nothing else, and
+     * the first W_PAINT has already drawn the rest - pane and chrome
+     * included, the module being resident since launch (CC_OVL_PART). A
+     * rating change re-letters the whole list and goes FULL. */
+    lem_repaint(win, full, 1);
     os88_gfx_unlock();
 }
 
@@ -1019,261 +1165,628 @@ void os88_oncmd(int item, int menu, void *win)
 
 void os88_about(void *win)
 {
-    /* NO lem_first_wake() HERE, AND THERE WAS. os88.h pins this callback as a
-     * menu-command environment - the gfx lock HELD - and ovl_ready() is
-     * cc_ovneed: a heap claim, a directory walk and a 2,760-byte read, 3+
-     * int 13h at ~400 ms apiece on the target, with every other window's
-     * painter stopped behind the lock (lem_first_wake's own header forbids
-     * exactly this, in capitals, one function up). The module is owed to
-     * os88_onwake(), os88_paint()'s lem_kick() re-posts a refused wake on the
-     * very first frame, and the fallback below is the one sentence a reader
-     * most needs off this card until it lands. */
-    if (lem_ovl != 1) {
-        /* THE ATTRIBUTION SURFACE DEGRADES TO THE CREDIT AND NOT TO THE PORT'S
-         * OWN NAME. With no module there is no card, and what a reader most
-         * needs off it is whose work this is - which is a RESIDENT band string
-         * and needs no module to read (SPEC.md 114.2). lem_prodline is the
-         * fallback's fallback, for a disk with no band on it either. */
-        os88_toast(lem_ok ? lem_str(LEMS_CREDIT1) : lem_prodline, 0);
-        return;
-    }
     lem_abon = 1;
     ovl_about(win);                 /* the plain form: os88_about() arrives with
                                      * NO clip region armed (SPEC.md 20.5.1.1) */
 }
 
 /* ============================================================================
- * THE EXCLUSIVE BRACKET (SPEC.md 53.1, 92.5)
+ * THE EXCLUSIVE BRACKET (SPEC.md 53.1, 114.5)
  *
  * os88_fsx_run() calls this and does not return until it rets. While it runs
  * the scheduler passes only this task, the video mode is ours, and EVERY
  * KERNEL DRAWING SLOT IS REFUSED - os88_gfx_*, os88_font_*, the window slots
  * and a kernel TOAST, which would paint desktop geometry into a foreign mode.
- * So everything that can refuse has already happened in lem_launch(), outside,
- * where a refusal is a sentence in a window.
+ * So everything that can refuse has already happened in ovl_launch(), outside,
+ * where a refusal is a sentence in a window - the claims, the banks AND the
+ * level's record, which wave 2 read in here (finding (1) of its last review).
  *
- * WHAT THE LOOP IS SHAPED BY is the frame budget: a tick on a 4.77 MHz 8088 is
- * ~16,000 instructions and one displayed frame of this world costs more than
- * that (SPEC.md 114.7's measurements). So the CURSOR AND THE INPUT POLL RUN ONCE
- * PER TICK UNCONDITIONALLY and the world's own step may take several - which is
- * what keeps pointer latency at 55 ms when the world is at 300. Wave 2 has no
- * world step yet; the shape is here so wave 3's mechanics drop into it rather
- * than around it.
+ * THE LOOP TURNS ONCE A TICK AND THE WORLD STEPS WHEN IT IS DUE. Each pass
+ * drains EVERY key the BIOS holds (finding (3) of that review: one key a frame
+ * was a backlog on the two cards whose scrolling frame is 178 ms, and Esc sat
+ * behind it), samples the mouse, moves the view, steps at most LEM_STEP_MAX
+ * lemmings of the current game frame, and repaints the pointer - so pointer
+ * latency is one tick whatever a frame of the world costs, and a frame of
+ * sixty lemmings on an XT simply takes several passes (SPEC.md 114.7 point 3).
+ * The game frame is due 17 times a second (Lemmix's clock) by an accumulator
+ * of ticks; a frame that ran late is NOT repaid in a burst, so a slow machine
+ * plays slower and never in fits - decision 7.
  *
  * It is a plain RESIDENT function whose address os88_fsx_run() is handed -
  * never an ovl_, which tools/cc8086.py refuses by name, because the bracket
  * has parked the machine that would load the module (os88.h, SPEC.md 73.14).
+ * The module is resident long before (it is a PART of the package, eager -
+ * SPEC.md 73.14.2), so the ovl_ calls made from in here are four-byte no-op
+ * guards and a far call.
  * ==========================================================================*/
 
 /* The scan codes this loop reads. os88_fsx_key() answers (scan << 8) | ascii
  * and uses the ENHANCED BIOS pair where the BIOS says it has one, which is why
  * F11 and F12 arrive on an AT and are absent on an 83-key XT - a fact the Mode
- * row states rather than a defect (SPEC.md 114.8). */
+ * row states rather than a defect (SPEC.md 114.8). The map is Lemmix's
+ * src/GameScreen.Player.pas:519-531 (F1-F12) and :476-487 (Ctrl+F1/F2). */
 #define LEM_K_ESC    0x01
 #define LEM_K_LEFT   0x4B
 #define LEM_K_RIGHT  0x4D
+#define LEM_K_F1     0x3B
+#define LEM_K_F2     0x3C
+#define LEM_K_F3     0x3D
+#define LEM_K_F10    0x44
+#define LEM_K_F11    0x85
+#define LEM_K_F12    0x86
+#define LEM_K_CF1    0x5E
+#define LEM_K_CF2    0x5F
+/* ...and the MAKE codes the kernel's key map is indexed by (os88_key_down),
+ * which is how a held F1 is told from a released one: int 16h has presses
+ * and no releases */
+#define LEM_M_F1     0x3B
+#define LEM_M_F2     0x3C
+#define LEM_M_F11    0x57
+#define LEM_M_F12    0x58
 
-#define LEM_SCROLL_STEP  4          /* world pixels a keypress or an edge tick,
-                                     * and FOUR rather than eight for two
-                                     * reasons. It is the CGA's own snap - 4
-                                     * pixels is one byte of 2bpp - so that
-                                     * adapter moves exactly one step per tick
-                                     * and Hercules exactly one per two, which
-                                     * is the same SPEED on all three rather
-                                     * than the same step (lemblit.inc's header
-                                     * says why the two 1bpp backends snap at
-                                     * all). And on VGA it is NOT a multiple of
-                                     * eight, so the pel pan takes a non-zero
-                                     * value on every other step - which is what
-                                     * makes a screendump of a scrolled level
-                                     * evidence that the hardware pan is doing
-                                     * the work rather than the start address
-                                     * alone. 4 a tick at 18.2 Hz is ~73 px a
-                                     * second. */
-#define LEM_EDGE         8          /* how close to the edge starts a scroll */
+#define LEM_SCROLL_STEP  4          /* world pixels a TICK, of a held key's
+                                     * repeat or of the pointer against the
+                                     * edge. FOUR rather than eight: it is the
+                                     * CGA's own snap (one byte of 2bpp),
+                                     * Hercules moves one 8-pixel snap every
+                                     * other step, and VGA pans in hardware.
+                                     * The edge scroll is multiplied by the
+                                     * ticks the pass took (ovl_mouse_input),
+                                     * so it is 4 x 18.2 = 72.8 px a second
+                                     * whatever a pass costs, up to the four
+                                     * ticks ovl_play_loop clamps dt to - a
+                                     * 178 ms shadow-scrolling pass is ~3.2
+                                     * ticks and moves 12 px. A shadow scroll
+                                     * is priced per COMPOSE, not per pixel, so
+                                     * a late pass moving further is free */
+#define LEM_SCROLL_MAX  (8 * LEM_SCROLL_STEP)   /* a tick's whole fold */
+#define LEM_DBL          5          /* ticks: Lemmix's INTERVAL_NUKE_KEY is
+                                     * 250 ms, and the panel's nuke wants a
+                                     * double click inside the same */
 
-static int lem_playing = -1;        /* the level inside the bracket, or -1 */
+#define LEM_X_FAIL     0            /* why the bracket returned: the compose
+                                     * refused (a band read) */
+#define LEM_X_SUSPEND  1            /* 'f': the level is kept */
+#define LEM_X_DONE     2            /* the verdict, or Esc */
+#define LEM_X_MODE     3            /* os88_fsx_mode() answered no */
+
+static int lem_rrkey;               /* the make code holding the rate, or 0 */
+static int lem_rrbtn;               /* ...or the panel button holding it */
+static int lem_mbtn;                /* the mouse buttons last tick */
+static int lem_mmdrag;              /* a left press began in the minimap */
+static unsigned lem_nuket;          /* the last nuke press, in ticks */
+static int lem_f11up, lem_f12up;    /* the key was seen UP since its last press */
+static int lem_dx;                  /* this tick's scroll, folded from every
+                                     * key and the pointer - a static, because
+                                     * an automatic's address is refused
+                                     * (SPEC.md 73.5) */
+
+/* ovl_key - one key out of the BIOS. LEM_X_* to leave, or -1; lem_dx is the
+ * scroll this tick so far. */
+static int ovl_key(int k)
+{
+    int scan = (k >> 8) & 0xFF;
+    int ascii = k & 0xFF;
+    unsigned now;
+
+    if (scan == LEM_K_ESC) {
+        lem_finished = 1;           /* Lemmix: "if Key = VK_ESCAPE then
+                                     * Game.Finish" (:463) */
+        return LEM_X_DONE;
+    }
+    if (ascii == 'f' || ascii == 'F')
+        return LEM_X_SUSPEND;       /* SPEC.md 11.2.1's fullscreen door, a
+                                     * BINDING reservation in both directions */
+    if (scan == LEM_K_LEFT)
+        lem_dx -= LEM_SCROLL_STEP;
+    else if (scan == LEM_K_RIGHT)
+        lem_dx += LEM_SCROLL_STEP;
+    else if (scan == LEM_K_F1) {
+        lem_rrdir = -1;
+        lem_rrkey = LEM_M_F1;
+    } else if (scan == LEM_K_F2) {
+        lem_rrdir = 1;
+        lem_rrkey = LEM_M_F2;
+    } else if (scan == LEM_K_CF1) {
+        lem_rr_extreme(0);
+    } else if (scan == LEM_K_CF2) {
+        lem_rr_extreme(1);
+    } else if (scan >= LEM_K_F3 && scan <= LEM_K_F10) {
+        lem_select_skill(LB_CLIMBER + (scan - LEM_K_F3));
+    } else if (scan == LEM_K_F11) {
+        if (lem_f11up)              /* "if fKeyIsDown < 2": a typematic
+                                     * repeat does not toggle again */
+            lem_toggle_pause();
+        lem_f11up = 0;
+    } else if (scan == LEM_K_F12) {
+        /* "double keypress needed to prevent accidently nuking" (:449) */
+        if (lem_f12up) {
+            now = os88_ticks();
+            if (now - lem_nuket <= LEM_DBL)
+                ovl_nuke_press();
+            lem_nuket = now;
+        }
+        lem_f12up = 0;
+    }
+    return -1;
+}
+
+/* ovl_panel_press - a left press on the panel at (px, py): the minimap, or
+ * one of the twelve buttons (Game.SkillPanel.pas ImgMouseDown, and
+ * GameScreen.Player.pas ToolBar_MouseDown with Lemmix's default
+ * SkillButtonsEnabledWhenPaused). */
+static void ovl_panel_press(int px, int py)
+{
+    int b;
+    unsigned now;
+
+    /* LEMMIX'S BOXES, RIGHT AND BOTTOM EXCLUSIVE. The minimap is
+     * DosMiniMapCorners (208,18)-(311,37) under TRect.Contains, so x 208..310
+     * and y 18..36 - one short of the 104x20 it is DRAWN at. A button is
+     * Rect(1,16,15,38) + 16n under PtInRectEx (Game.SkillPanel.pas:89), so
+     * x 16n+1..16n+14 and y 16..37. */
+    if (px >= LEM_MM_X && px < LEM_MM_X + LEM_MM_W - 1 && py >= LEM_MM_Y &&
+        py < LEM_MM_Y + LEM_MM_H - 1) {
+        lem_mmdrag = 1;
+        return;
+    }
+    if (px < 1 || py < 16 || py >= 38)
+        return;
+    b = (px - 1) >> 4;
+    if (b >= LB_COUNT || px >= b * 16 + 15)
+        return;
+    switch (b) {
+    case LB_SLOWER:
+        lem_rrdir = -1;
+        lem_rrbtn = 1;
+        break;
+    case LB_FASTER:
+        lem_rrdir = 1;
+        lem_rrbtn = 1;
+        break;
+    case LB_PAUSE:
+        lem_toggle_pause();
+        break;
+    case LB_NUKE:
+        now = os88_ticks();
+        if (now - lem_nuket <= LEM_DBL)     /* "nuke requires doubleclick" */
+            ovl_nuke_press();
+        lem_nuket = now;
+        break;
+    default:
+        lem_select_skill(b);
+        break;
+    }
+}
+
+/* ovl_view_press - a left press in the view at world (x, y): the hit test and
+ * the assignment, AT A FRAME BOUNDARY. While a frame is part-stepped
+ * (lem_infr, more than LEM_STEP_MAX lemmings out) some lemmings have moved this
+ * frame and some have not, and Lemmix only ever assigns BETWEEN frames - so the
+ * press is queued and ovl_frame_begin() applies it before the next frame steps
+ * a lemming (SPEC.md 114.7 point 3). The nuke takes the same road. */
+static int lem_qhit, lem_qx, lem_qy, lem_qr, lem_qnuke;
+
+static void ovl_view_press(int x, int y, int right)
+{
+    if (lem_infr) {
+        lem_qhit = 1;
+        lem_qx = x;
+        lem_qy = y;
+        lem_qr = right;
+        return;
+    }
+    ovl_hittest(x, y, right, 1);
+    ovl_assign();
+}
+
+static void ovl_nuke_press(void)
+{
+    if (lem_infr)
+        lem_qnuke = 1;
+    else
+        lem_nuke();
+}
+
+/* ovl_q_apply - the queue, at the frame boundary (ovl_frame_begin). */
+static void ovl_q_apply(void)
+{
+    if (lem_qhit) {
+        lem_qhit = 0;
+        ovl_hittest(lem_qx, lem_qy, lem_qr, 1);
+        ovl_assign();
+    }
+    if (lem_qnuke) {
+        lem_qnuke = 0;
+        lem_nuke();
+    }
+}
+
+/* ovl_mouse_input - the pointer, the buttons' edges and the edge scroll. `dt`
+ * is the ticks this pass took. */
+static void ovl_mouse_input(int dt)
+{
+    static struct os88_mouse m;
+    int left, right, press, btn;
+
+    os88_mouse(&m);
+    lem_mouse_map();
+    /* THE BUTTONS ARE THE LEVEL NOW OR'D WITH WHAT THE LAST LONG DRAW SAW
+     * (lemblit.inc lb_msample): a click that went down and up inside a 178 ms
+     * shadow scroll is a press here and a release on the next pass */
+    btn = m.btn | lem_r_mlatch();
+    left = btn & 1;
+    right = (btn >> 1) & 1;
+    press = left && !(lem_mbtn & 1);
+    if (!left && (lem_mbtn & 1)) {
+        if (lem_rrbtn) {            /* ToolBar_MouseUp: BtnStopChangingRR */
+            lem_rrbtn = 0;
+            if (!lem_rrkey)
+                lem_rrdir = 0;
+        }
+        lem_mmdrag = 0;
+    }
+    lem_mbtn = btn;
+    if (press) {
+        if (lem_my >= LEM_VIEWH_PX) {
+            ovl_panel_press(lem_mx, lem_my - LEM_VIEWH_PX);
+        } else if (!lem_paused) {
+            /* Img_MouseDown: the assignment happens ON THE PRESS, at the game
+             * cursor point, with the right button's state for the priority */
+            ovl_view_press(lem_view + lem_mx - 3, lem_my + 2, right);
+        }
+    }
+    if (lem_mmdrag && left) {
+        /* ToolBar_MinimapClick: the view CENTRED on the cell, clamped */
+        if (lem_mx >= LEM_MM_X && lem_mx < LEM_MM_X + LEM_MM_W) {
+            lem_view = (lem_mx - LEM_MM_X) * LEM_MM_XSTEP - LEM_VIEW_W / 2;
+            lem_view_move(0);
+        }
+        return;
+    }
+    /* THE EDGE COLUMN OF THE GAME IMAGE AND NOTHING ELSE (Lemmix
+     * GameScreen.Player.pas:657-666, X <= 0 / X >= Img.Width - 1, and its
+     * Form_MouseMove net at :1156-1168 wants Y inside Img): never from the
+     * panel, whose Slower button is x 1..15, and never from a band a lemming
+     * at the world's edge could not be aimed through */
+    if (lem_my < LEM_VIEWH_PX) {
+        if (lem_mx <= 0)
+            lem_dx -= LEM_SCROLL_STEP * dt;
+        else if (lem_mx >= LEM_VIEW_W - 1)
+            lem_dx += LEM_SCROLL_STEP * dt;
+    }
+}
+
+/* ovl_play_loop - the loop the header describes. */
+static void ovl_play_loop(void)
+{
+    unsigned now, last;
+    int dt, acc, k, r, drew;
+
+    acc = 0;
+    last = os88_ticks();
+    lem_rrkey = 0;
+    lem_rrbtn = 0;
+    lem_mmdrag = 0;
+    lem_f11up = 0;
+    lem_f12up = 0;
+    lem_mbtn = 0xFF;                /* a button already down is not a press */
+    lem_exit = -1;
+    for (;;) {
+        os88_fsx_wait(OS88_FSXW_TICK);
+        now = os88_ticks();
+        dt = (int)(now - last);
+        last = now;
+        if (dt < 0 || dt > 4)
+            dt = 4;
+
+        /* --- input: EVERY key, then the mouse ---------------------------- */
+        lem_dx = 0;
+        while ((k = os88_fsx_key(0)) != 0) {
+            r = ovl_key(k);
+            if (r >= 0) {
+                lem_exit = r;
+                break;
+            }
+        }
+        if (lem_exit >= 0)
+            break;
+        ovl_mouse_input(dt);
+        if (lem_rrkey && !os88_key_down(lem_rrkey)) {
+            lem_rrkey = 0;          /* Form_KeyUp: BtnStopChangingReleaseRate */
+            if (!lem_rrbtn)
+                lem_rrdir = 0;
+        }
+        if (!os88_key_down(LEM_M_F11))
+            lem_f11up = 1;
+        if (!os88_key_down(LEM_M_F12))
+            lem_f12up = 1;
+        if (lem_dx > LEM_SCROLL_MAX)
+            lem_dx = LEM_SCROLL_MAX;
+        if (lem_dx < -LEM_SCROLL_MAX)
+            lem_dx = -LEM_SCROLL_MAX;
+        if (lem_dx)
+            lem_view_move(lem_dx);
+
+        /* --- the world: one game frame, a chunk at a time ---------------- */
+        drew = 0;
+        acc += dt * 170;            /* 17 frames in 18.2 ticks: 170 a tick */
+        if (!lem_infr && acc >= 182) {
+            acc -= 182;
+            if (acc > 182)
+                acc = 182;          /* late is late: no burst to catch up */
+            if (!ovl_frame_begin() && lem_finished) {
+                lem_exit = LEM_X_DONE;
+                break;
+            }
+        }
+        if (lem_infr && lem_frame_chunk(LEM_STEP_MAX)) {
+            ovl_frame_end();
+            drew = 1;
+        }
+
+        /* --- the glass ---------------------------------------------------- */
+        ovl_tick_draw(drew, (lem_mbtn >> 1) & 1);
+        lem_snd_flush();
+        if (lem_finished) {
+            lem_exit = LEM_X_DONE;
+            break;
+        }
+    }
+    lem_cursor_off();
+}
 
 static void lem_fsx_main(void)
 {
     static char fsi[OS88_FSI_SIZE];  /* SPEC.md 53.4's block, by byte offset */
     unsigned seg;
-    int k, done;
 
+    lem_exit = LEM_X_FAIL;
     if (lem_playing < 0)
         return;
-    if (os88_fsx_mode(lem_mode_id(), fsi) != 0)
-        return;                     /* the same bit that greys the Mode row */
+    if (os88_fsx_mode(lem_mode_id(), fsi) != 0) {
+        lem_exit = LEM_X_MODE;      /* the same bit that greys the Mode row -
+                                     * and its OWN fact, never NO_BANK's */
+        return;
+    }
     seg = (unsigned)(unsigned char)fsi[OS88_FSI_SEG]
         | (((unsigned)(unsigned char)fsi[OS88_FSI_SEG + 1]) << 8);
 
     lem_r_setup(lem_kind_id(), seg, lem_cl_world, lem_cl_shadow);
+    lem_r_tsetup(lem_cl_t);
     lem_r_prep();
     if (lem_kind_id() == LEM_RKIND_VGA)
         lem_r_pal(lem_cl_bank, LEM_GR_STDPAL, LEM_GR_CUSTOM);
+    lem_m_setup(lem_cl_mask);
+    lem_o_setup(lem_cl_rec);
 
-    /* THE LVL RECORD'S 0x0018 IS THE VIEW'S LEFT EDGE, NOT ITS CENTRE, and the
-     * first build treated it as the centre - so every level opened 160 world
-     * pixels, half the visible width, to the left of where the original opens
-     * it. Both authorities say left edge: Lemmix GameScreen.Player.pas:857 is
-     * `Img.OffsetHorz := -App.Level.Info.ScreenPosition * Sca`, and
-     * lemmings_3ds/src/import/import_level.c:510-527 assigns
-     * `player.x_pos = level[24..25]` and uses it as the scroll offset. Fun 1
-     * ('Just dig!') carries 624 in the shipped band, and the port opened at
-     * 464. The port's own minimap maths already treated lem_view as a left
-     * edge (lemdraw.c: x0 = lem_view / LEM_MM_XSTEP, which is Lemmix
-     * Game.SkillPanel.pas:582's -Round(OffsetHorz/16)), so this was the one
-     * line where the two conventions disagreed.
-     *
-     * THEN CLAMPED AND ROUNDED TO A MULTIPLE OF EIGHT, which is
-     * import_level.c:520-527 exactly, in that order: clamp to 1264 (which is
-     * LEM_WORLD_W - LEM_VIEW_W and is itself a multiple of 8, so the rounding
-     * cannot push the view back off the end) and then round to NEAREST 8. */
-    lem_view = 0;
-    lem_view_move(lem_ent_u16(lem_playing, LEM_E_STARTX));
-    lem_view = (lem_view + 4) & ~7;
+    if (!lem_resume) {
+        /* THE LVL RECORD'S 0x0018 IS THE VIEW'S LEFT EDGE, NOT ITS CENTRE
+         * (Lemmix GameScreen.Player.pas:857, lemmings_3ds
+         * import_level.c:510-527), clamped and then rounded to a multiple of
+         * eight, in that order. */
+        lem_view = 0;
+        lem_view_move(lem_ent_u16(lem_playing, LEM_E_STARTX));
+        lem_view = (lem_view + 4) & ~7;
 
-    /* THE PANEL AND A WORD BEFORE THE WAIT (SPEC.md 114.7.1 conclusion 2):
-     * composing a level is ~25 s on an XT and nothing inside the bracket can
-     * say so - every kernel slot is refused there, so a toast is impossible
-     * (SPEC.md 53.1). lem_frame_panel() draws the panel and writes LOADING into
-     * the status line's first field, ovl_compose() advances a bar in the
-     * minimap's well as it walks the 400 slots, and lem_frame_first() takes the
-     * word down with the level's first frame. */
-    lem_world_clear();
-    lem_frame_panel();
-    lem_compose_level(lem_playing);
-    lem_lvl_ok = 1;
-    lem_frame_first();
-
-    done = 0;
-    while (!done) {
-        os88_fsx_wait(OS88_FSXW_TICK);
-
-        /* THE INPUT POLL IS ONCE PER TICK AND UNCONDITIONAL. */
-        k = os88_fsx_key(0);
-        if (k != 0) {
-            if ((k >> 8) == LEM_K_ESC)
-                done = 1;
-            else if ((k & 0xFF) == 'f' || (k & 0xFF) == 'F')
-                done = 1;           /* SPEC.md 11.2.1's fullscreen door, and
-                                     * it is a BINDING reservation: an app that
-                                     * keeps letters for gameplay is not an
-                                     * exception */
-            else if ((k >> 8) == LEM_K_LEFT)
-                lem_view_move(-LEM_SCROLL_STEP);
-            else if ((k >> 8) == LEM_K_RIGHT)
-                lem_view_move(LEM_SCROLL_STEP);
+        /* THE PANEL AND A WORD BEFORE THE WAIT (SPEC.md 114.4.5) */
+        lem_world_clear();
+        ovl_frame_panel();
+        if (!lem_compose_level(lem_playing)) {
+            lem_r_unprep();
+            return;                 /* LEM_X_FAIL: the window says why */
         }
-
-        /* ...and so is the mouse. Scrolling from the screen EDGE is the
-         * original's own gesture and the only one this wave has; the cursor
-         * and the skill picks are wave 3's. */
-        lem_mouse_map();
-        if (lem_mx <= LEM_EDGE)
-            lem_view_move(-LEM_SCROLL_STEP);
-        else if (lem_mx >= LEM_VIEW_W - 1 - LEM_EDGE)
-            lem_view_move(LEM_SCROLL_STEP);
-
-        lem_frame_step();
     }
-
+    lem_lvl_ok = 1;
+    ovl_frame_first(lem_resume);
+    ovl_play_loop();
     lem_lvl_ok = 0;
+    lem_r_sforget();
     lem_r_unprep();
 }
 
 /* lem_ask_launch - the keystroke's whole share of a launch: a flag.
  *
- * IT DRAWS NOTHING AND IT READS NOTHING. Both launching arms used to call
- * lem_back(win) - a full blank-fill of the content box and a full repaint of
- * the list, 728 cells and ~20 calls, ~670 ms on a 4.77 MHz 8088 - immediately
- * before the bracket took the screen into mode 0Dh, so not one of those cells
- * was ever seen; and lem_launch() then invalidated the shadow, so the W_PAINT
- * that follows the bracket lettered the same list a SECOND time. Two full
- * repaints, both thrown away, on the one keystroke a player most wants to be
- * instant. Changing screens is two assignments; the list arrives with the
- * W_PAINT the bracket's exit already causes.
- *
- * ...AND THE DISK I/O GOES TO THE WAKE, which is the larger half. lem_launch()
- * reads LEMMAIN.LEM (52,224 bytes, ~130 int 13h calls on the target) and a
- * two-part style bank (up to 78,848 more) - ~131 KB and TENS OF SECONDS of
- * frozen desktop at PERFORMANCE.md's ~400 ms an int 13h - and os88.h pins
- * W_ONCLICK and W_ONKEY as "the UI task, the gfx lock HELD ... must not take
- * long", with every other window's painter stopped behind that lock. It is the
- * same defect SPEC.md 114.6's first table row records as removed from W_PAINT
- * for a 2,752-byte read, put back one callback along at forty-eight times the
- * size. os88_onwake() is the one lock-free callback (SPEC.md 74.1) and it
- * already carries the module, the rating file and the progress write; this is
- * the fourth errand and by far the biggest. */
+ * IT DRAWS NOTHING AND IT READS NOTHING: the disk I/O of a launch is ~131 KB
+ * and tens of seconds on the target, and os88.h pins W_ONCLICK and W_ONKEY as
+ * "the UI task, the gfx lock HELD ... must not take long". os88_onwake() is
+ * the one lock-free callback (SPEC.md 74.1), and the launch is its errand. */
+/* lem_continue - "continue" on whichever screen is up (see os88_onclick). */
+static void lem_continue(void *win)
+{
+    if (lem_screen == LEM_SC_PREVIEW) {
+        lem_ask_launch(win);
+    } else if (lem_screen == LEM_SC_POST) {
+        if (lem_post_nrat != lem_rating) {
+            /* the NEXT SECTION: its file is read on the wake (no keystroke
+             * touches a file, SPEC.md 114.6), and the wake opens its first
+             * level's preview once it is in */
+            lem_rating = lem_post_nrat;
+            lem_ratpend = 1;
+            lem_post_play = 1;
+            os88_wm_wake(win);
+            return;
+        }
+        lem_sel = lem_post_next;
+        if (lem_sel < lem_top || lem_sel >= lem_top + lem_nlist)
+            lem_top = lem_sel;
+        lem_play(win);
+    } else {
+        lem_back(win);
+    }
+}
+
 static void lem_ask_launch(void *win)
 {
     lem_screen = LEM_SC_LIST;
-    lem_sh_ok = 0;                  /* the preview is still on the glass and
-                                     * nothing here is going to letter over it:
-                                     * whatever draws next draws in full */
+    lem_sh_ok = 0;                  /* whatever draws next draws in full */
     lem_launchpend = 1;
     lem_kick(win);
 }
 
-/* lem_launch - everything that can REFUSE, and then the bracket.
+/* ovl_post_target - where the postview's "continue" goes, and the progress
+ * the result records. 1 = a progress write is owed.
  *
- * CALLED FROM os88_onwake() AND FROM NOWHERE ELSE (lem_ask_launch above), which
- * is what lets the file half run with the lock FREE. It is the whole of
- * SPEC.md 114.5 in one function: the module is already resident (the first wake
- * did it), the claims are taken and the banks read HERE, in a window, and only
- * then is the machine borrowed. A SPEC.md 11.2 fullscreen window is stacked
- * under the bracket the way apps/missile/missile.asm:1186-1227 does - which
- * gives the screen back looking like this app rather than like the desktop, and
- * which the wave-1 fsx gate found is ALSO what keeps a kernel toast off a
- * foreign mode (build/port-shots/wave1-cfsxnoovl-s1-toast-in-foreign-mode.png
- * is the picture of the arm that does not stack one).
- *
- * THE LOCK IS TAKEN FOR THE SECOND HALF AND ONLY THE SECOND HALF: os88.h
- * requires os88_fullscreen() and os88_fsx_run() be entered with it held, and
- * lem_show_fact() / lem_back() draw. Everything above os88_gfx_lock() is file
- * work and arithmetic.
- *
- * EVERY ARM THAT DOES NOT ENTER THE BRACKET PUTS THE LIST BACK, because
- * lem_ask_launch() left the preview on the glass with the shadow invalidated
- * and nothing has drawn since. */
-static void lem_launch(void *win)
+ * THE NEXT LEVEL, ACROSS A SECTION'S END: Lemmix links each section's last
+ * level to the next section's first (Styles.Base.pas:964-968,
+ * TSection.DoAddLevelInfo) and the postview's click goes to NextInfo, so Fun
+ * 30 won is Tricky 1 - not Fun 30 again under a footer that says "next
+ * level", which is what wave 3 shipped. Only Mayhem 30 has no next, and its
+ * postview says "continue" instead (ovl_postview). A failure retries. */
+static int ovl_post_target(int success, int level)
 {
-    int ok;
+    lem_post_nrat = lem_rating;
+    lem_post_next = level;
+    if (success && level + 1 < LEM_PERRAT) {
+        lem_post_next = level + 1;
+    } else if (success && lem_rating + 1 < LEM_RATINGS) {
+        lem_post_nrat = lem_rating + 1;
+        lem_post_next = 0;
+    }
+    if (!success || lem_post_next <= lem_prog[lem_post_nrat])
+        return 0;
+    /* the RESULT records progress (lem_play's own note) - for the rating the
+     * next level is IN */
+    lem_pw_rat = lem_post_nrat;
+    lem_pw_lvl = lem_post_next;
+    lem_progwrite = 1;
+    return 1;
+}
 
-    if (lem_ovl != 1 || !lem_play_ok())
+/* lem_abandon - a kept level, let go: its claims back to the heap. */
+static void lem_abandon(void)
+{
+    lem_suspended = 0;
+    lem_playing = -1;
+    lem_free_all();
+}
+
+/* ovl_launch - everything that can REFUSE, and then the bracket.
+ *
+ * CALLED FROM os88_onwake() AND FROM NOWHERE ELSE, which is what lets the file
+ * half run with the lock FREE. A kept level ('f' out of the bracket) skips the
+ * whole file half: its claims, its record turned object map and its lemmings
+ * are all where they were.
+ *
+ * WHAT THE WINDOW SHOWS AFTERWARDS is the bracket's own exit: the postview's
+ * text for a finished level (wave 5 moves it into the bracket's second foreign
+ * mode), the level's preview screen for a kept one - where a click, or 'f',
+ * brings it back - and the list for a refusal, with the refusal toasted. */
+static void ovl_launch(void *win)
+{
+    int ok, level, success;
+
+    level = lem_suspended ? lem_playing : lem_sel;
+    if (!lem_suspended && !lem_play_ok())
         ok = LEM_LR_GONE;
     else if (!lem_raster_ok())
         ok = LEM_LR_MODE;
+    else if (lem_suspended)
+        ok = LEM_LR_GO;
     else
-        ok = lem_level_load(lem_sel) ? LEM_LR_GO : LEM_LR_FILE;
+        ok = ovl_level_load(level) ? LEM_LR_GO : LEM_LR_FILE;
 
     os88_gfx_lock();
     if (ok == LEM_LR_GO) {
-        lem_playing = lem_sel;
+        lem_resume = lem_suspended;
+        lem_suspended = 0;
+        lem_playing = level;
         os88_fullscreen(win, 1);
-        os88_fsx_run(lem_fsx_main, win, 0);
+        /* THE EXIT IS RESET BEFORE THE CALL AND THE CALL'S OWN ANSWER IS READ.
+         * os88_fsx_run() answers -1 WITHOUT running the entry - already in a
+         * bracket, the file dialog up, not task 0, or the ownership fence
+         * (apps/cc/os88thunk.asm's contract) - and lem_exit then still held
+         * the LAST session's verdict: a finished level's DONE showed the
+         * postview of one never played and recorded it as reached in
+         * LEMMINGS.SAV. APPLE2's a2scr.c is the shape. */
+        lem_exit = LEM_X_FAIL;
+        if (os88_fsx_run(lem_fsx_main, win, 0) < 0) {
+            os88_fullscreen(win, 0);
+            lem_sh_ok = 0;
+            if (lem_resume) {
+                lem_suspended = 1;  /* a kept level stays kept */
+                ovl_preview(level);
+                lem_wrap();
+                lem_screen = LEM_SC_PREVIEW;
+                if (lem_blank_glass(win))
+                    lem_repaint(win, 1, 0);
+            } else {
+                lem_abandon();
+                lem_back(win);
+            }
+            os88_gfx_unlock();
+            os88_toast(lem_str(LEMS_NO_FSX), 0);
+            return;
+        }
         os88_fullscreen(win, 0);
-        lem_playing = -1;
-        /* The desktop is back and nothing of ours is on it. The shadow
-         * describes a screen that no longer exists, so it is INVALIDATED
-         * rather than seeded: what is under the window now is the kernel's own
-         * restore, and the W_PAINT that follows redraws every cell. */
+        /* THE KERNEL HAS ALREADY REPAINTED US, inside os88_fsx_run() - the
+         * exit's wm_paint_all (os88.h: "the ~200 ms wm_paint_all the exit
+         * costs") - while lem_screen still said LIST, so the glass is the list
+         * and the screen chosen below is drawn HERE, over a blanked box.
+         * Without this the postview existed, took the next keystroke, and was
+         * never seen (build/port-shots/wave3-post.png, before this). */
         lem_sh_ok = 0;
+        if (lem_exit == LEM_X_SUSPEND) {
+            lem_suspended = 1;
+            ovl_preview(level);
+            lem_wrap();
+            lem_screen = LEM_SC_PREVIEW;
+        } else if (lem_exit == LEM_X_DONE) {
+            success = ovl_postview(lem_rating, level);
+            lem_wrap();
+            lem_screen = LEM_SC_POST;
+            if (ovl_post_target(success, level))
+                lem_kick(win);
+        } else if (lem_exit == LEM_X_MODE && lem_resume) {
+            /* the mode was refused INSIDE the bracket, on a RESUME: the kept
+             * level stays kept, as the NO_FSX arm keeps it, and the toast
+             * says so (SPEC.md 47 - what happened, not a guess) */
+            lem_suspended = 1;
+            ovl_preview(level);
+            lem_wrap();
+            lem_screen = LEM_SC_PREVIEW;
+            if (lem_blank_glass(win))
+                lem_repaint(win, 1, 0);
+            os88_gfx_unlock();
+            os88_toast(lem_str(LEMS_NO_MODE_KEPT), 0);
+            return;
+        } else if (lem_exit == LEM_X_MODE) {
+            /* ...on a FIRST launch: the level had been read and claimed, and
+             * it is let go - said here, in the window, as its own fact, with
+             * the ending that is TRUE here ("nothing was loaded" is not) */
+            lem_abandon();
+            lem_screen = LEM_SC_LIST;
+            lem_mode_end = LEMS_MODE_GONE;
+            lem_show_fact(win, LEMS_NONE, LEMS_NO_MODE, -1);
+            os88_gfx_unlock();
+            return;
+        } else {
+            lem_abandon();          /* the compose refused: say so */
+            lem_screen = LEM_SC_LIST;
+            os88_gfx_unlock();
+            lem_arg_reset();
+            lem_arg_add(lem_f_scratch);
+            lem_fmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_BANK));
+            os88_toast(lem_line, 0);
+            return;
+        }
+        if (lem_blank_glass(win))
+            lem_repaint(win, 1, 0);         /* 0: the region above is ours */
         os88_gfx_unlock();
         return;
     }
     if (ok == LEM_LR_MODE) {
-        /* ITS OWN FACT AND NOT THE MODE ROW'S, and the first version reused
-         * the Mode row's sentence - which on a Hercules ends "...the game is
-         * drawn through the shadow backend instead", i.e. it told the reader
-         * the game DOES play, offered as the reason it had just refused to.
-         * SPEC.md 47's rule is that a refusal names the fact the ACTION
-         * refused on, and the action here is os88_fsx_mode() answering no on
-         * the mode this adapter would have played in. */
+        /* ITS OWN FACT AND NOT THE MODE ROW'S (SPEC.md 47): the action here is
+         * os88_fsx_mode() answering no on the mode this adapter would have
+         * played in - before anything was read, which is the one place
+         * "nothing was loaded" is true. */
+        lem_mode_end = LEMS_MODE_NONE;
         lem_show_fact(win, LEMS_NONE, LEMS_NO_MODE, -1);
         os88_gfx_unlock();
         return;
     }
+    if (lem_suspended)
+        lem_abandon();
     lem_back(win);                  /* the list: nobody has drawn it yet */
     os88_gfx_unlock();
     if (ok == LEM_LR_FILE) {
@@ -1284,7 +1797,7 @@ static void lem_launch(void *win)
             lem_fmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_MEM));
         } else {
             lem_arg_reset();
-            lem_arg_add(lem_f_scratch);   /* the name lem_parts_read left */
+            lem_arg_add(lem_f_scratch);   /* the name the reader left */
             lem_fmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_BANK));
         }
         os88_toast(lem_line, 0);
@@ -1294,9 +1807,10 @@ static void lem_launch(void *win)
 /* --- the entry point (SPEC.md 20.2) ----------------------------------------
  * The gfx lock is NOT held here and the window does not exist yet. The FILE
  * slots ARE legal, so this is where the band files are read: the manifest, the
- * string band and the first rating. What may NOT happen here is the overlay
- * load (there is no instance to resolve a module for) - that is the first
- * wake's job.
+ * string band and the first rating. The overlay module is already resident:
+ * it is part 0 of LEMMINGS.O88, read by op_load and bound by cc_ovinit before
+ * this function runs (SPEC.md 73.14.2), so an ovl_ call is legal from here on
+ * and nothing about it is owed to a wake.
  *
  * A REFUSAL HERE IS NOT FATAL. The window comes up and says what is missing,
  * which is SPEC.md 47's ordinary path and a great deal more use than a launch
@@ -1349,8 +1863,9 @@ void *os88_main(void)
     lem_mode_ok = lem_probe_mode(lem_win);
 
     lem_sh_ok = 0;
-    os88_wm_wake(lem_win);              /* ask for the first wake: the overlay
-                                         * and the progress file are read there
-                                         * and neither may happen here */
+    os88_wm_wake(lem_win);              /* ask for the first wake: the progress
+                                         * file is read there, off the gfx lock
+                                         * (the module is part 0 and already
+                                         * resident - SPEC.md 73.14.2) */
     return lem_win;
 }

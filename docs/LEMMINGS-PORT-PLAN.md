@@ -469,6 +469,24 @@ Three screendumps of Fun 1 'Just dig!': mode 0Dh in colour with the panel and mi
 
 Fun 1 is completable over QMP: a screendump after 100 ticks shows lemmings walking out of the entrance, the status line reading OUT and IN and TIME with the right values IN THE RIGHT COLUMNS (crop and zoom the 40 cells; the IN field's last cell is column 31 and the template's stale '.' must be gone from it), a digger assigned by clicking the panel then the lemming, a hole appearing in the terrain and the minimap losing the pixel under it, and the level ending with all ten saved. Pressing 'f' leaves the bracket and pressing it again re-enters; Esc finishes the level to the postview and Esc from the postview leaves. The headless harness replays a fixture for 2,000 ticks on three levels with zero divergence, and its status-string audit passes. The cost table prints calls, VRAM bytes, sprites and MECHANICS INSTRUCTIONS per frame, and wave 2's microseconds turn them into a measured XT frame time to compare against wave 2's prediction.
 
+**What shipped (wave 3, 2026-10-20)** — SPEC.md §114.4.6, §114.4.7, §114.6, §114.7.2 and §114.12 are the record; this is the index to it.
+
+- The eighteen actions, the eight skills with their refusals, the prioritised pick with the right button, the word in Lemmix's test order: `lemact.c`, transliterated from Lemmix Game.pas under its ORIG mechanics set and checked against lemmings_3ds by `tools/lemsim.py` (eight rulings where the two disagree, SPEC §114.4.7's table).
+- Objects and triggers through the original's **object map** (4-pixel cells, in the record's own claim) instead of the column bucket this plan proposed - one byte a probe and exact by construction; the blocker writes its field into it.
+- Destruction into the mask at once and into the picture and the minimap at the frame's end (`lem_damage`, `lem_r_bgrect`, `ovl_mm_cell`).
+- The per-tick step: the opening at 15/34/35, spawning, the release rate while held, the nuke, the 17 fps clock, the verdict, and `LEM_STEP_MAX` = 20 as a round robin that spreads a frame and gates nothing (decision 7).
+- The live panel: twelve buttons at Lemmix's hit boxes, two-digit counts, the selection frame, the 40-cell status line delta-drawn at the five setters' offsets, minimap dots for the lemmings, pause and the double-click nuke.
+- Sprites with save-under restored in reverse on VGA and copied back out of the world on CGA/Hercules, objects drawn again over a RAM background, the app's own 14x14 pointer every tick (`lemsprite.inc`).
+- The keyboard per Player.pas plus `f`/`F` both ways and Esc cancel-first; the speaker's tones (the port's own, one a frame).
+- The headless mechanics replay (three fixture levels, all eighteen actions, a committed trace hash, proved to bite) and the status-string audit.
+- The wave-2 carried findings, all five applied: the compose refusal moved outside the bracket (the record claim is in `lem_claim_all`/`lem_need_kb`), the launcher's redraw figures corrected to the harness's, input drained every tick, the VGA line compare at 319, and sprites plus the pointer.
+- The compose redesigned on the measurement it was owed: pieces into RAM (`lem_r_wpiece` into T and the mask together) and one copy to VRAM, not the packed-nibble world the brief proposed - the bench priced that design's conversion alone at 7.8 s a world (SPEC §114.7.2).
+- The overlay rides inside the package as part 0 (`CC_OVL_PART`); the bands stay unpacked on the disk (SPEC §114.3.2).
+
+- Wave 3's SECOND review: the VGA frame is now composed off the glass and latch-copied on (no lemming or pointer pixel is ever missing between two frames, SPEC §114.4.6), the pointer's panel test asks only about what changes under it, the VSYNC wait is taken only to scroll, the frame's rectangles merge (an object over overlapping rectangles is drawn once), the damage table folds by least growth, the postview's next level crosses a section's end, a mode refused inside the bracket says what happened to the level, the right-click glitch records only on Lemmix's own hit tests, IN is cached at Lemmix's two setters, and the panel's hit boxes are right/bottom exclusive.
+
+**Not done in wave 3, carried**: the raw-x86 movers/probes harness (SPEC §114.12 item 4); the in-bracket fps figure for a busy and a quiet level on MartyPC, the off-glass fraction on `xt_vga`, the compose's cost a frame and the module-to-resident crossings a frame, which the final pass's row takes (SPEC §114.7.3); an XT 86Box machine (`vm/xt-lemmings`) - nothing under `vm/` was touched, by rule. **Wave 4 starts with the resident budget** (SPEC §114.6, re-priced): 909 bytes under the 55,000 trigger, so the rename lever (~1,000) first and the `lem_r_tload` prototype of the assembly move beside it, before wave 5's raster crosses the trigger by ~1,400-1,900.
+
 ### Wave 4 — The whole level set, and what each disk can hold
 
 **Features**

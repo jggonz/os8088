@@ -85,7 +85,7 @@ over (and a fourth, the ODDTABLE fold, under LEVEL RECORDS below):
 
 STYLE BANK - LEMGR<n>[_<part>].LEM, magic "LGRB"
     0   4  "LGRB"
-    4   2  version 1
+    4   2  version 2 (wave 3 filled 896..927 below; the package refuses 1)
     6   1  style 0..4
     7   1  nterrain, used pieces (the table still has all 64 rows)
     8   1  nobjects, used (all 16 rows)
@@ -120,7 +120,15 @@ STYLE BANK - LEMGR<n>[_<part>].LEM, magic "LGRB"
              10 1 sound       trap sound id
              11 1 startframe
              12 4 off         from the START of the logical bank
-  896 128  reserved zero
+  896  16  animation flags, one byte per object slot - GRND animation_flags'
+           low byte: 0 none, 1 triggered, 2 continuous, 3 the hatch (wave 3:
+           the object table's 16 bytes a row had no room, and Lemmix's
+           UpdateInteractiveObjects animates by exactly this)
+  912  16  preview frame, one byte per object slot - GRND
+           (preview_image_index - animation_frames_base_loc) /
+           animation_frame_data_size, Lemmix TMetaObject.AssignFromDos (wave 5's
+           preview screen draws each object at it)
+  928  96  reserved zero
  1024 ...  pixel data: every USED terrain piece in slot order, then every used
            object's frames in slot order.
              a terrain piece is FOUR planes of w*h/8 bytes and plane 3 IS the
@@ -221,6 +229,13 @@ import tempfile
 # device along) - every offset inside a RAM-disk file is a word. The converter
 # refuses on it rather than discovering it at publication.
 FILEMAX = 64512
+
+# The style bank's layout version (the docstring's STYLE BANK block). 2 is wave
+# 3's: the object slots' animation flags and preview frames at 896 and 912.
+# apps/lemmings/lemload.c refuses any other, so a disk built by an older
+# converter says "LEMGR<n>.LEM could not be read" instead of animating a trap
+# for ever.
+LGRB_VERSION = 2
 # SPEC.md 92.13: the whole archive, the first size refused.
 ARCMAX = 1048575
 # SPEC.md 114.3.2: directory rows over the whole RAM-disk volume.
@@ -270,6 +285,21 @@ SPEC_W, SPEC_H, SPEC_BPP = 960, 160, 3
 SPEC_CHUNK_BYTES = SPEC_W * 40 * SPEC_BPP // 8      # 14,400
 SPEC_PALETTE_BYTES = 40
 SPEC_X, SPEC_Y = 304, 0
+
+
+# THE RASTER'S ROW BUFFERS, asserted here BY NAME before a band is written
+# (apps/lemmings/lemovl.c lem_dims_ok, which refuses the same picture at run
+# time, and tests/unit/t_lemdat.py a third time): a picture's row is
+# (w + 7) // 8 bytes, at most RASTER_BPR_MAX so that shifted (+1) and doubled
+# on a CGA (2 x bpr + 1) it fits lemsprite.inc's 24-byte lb_sorb/lb_srow, and
+# (bpr + 1) x h shifted mask bytes fit LEM_SMK = 800 for a VGA draw.
+RASTER_BPR_MAX = 11
+RASTER_SMK = 800
+
+
+def raster_fits(w, h):
+    bpr = (w + 7) // 8
+    return bpr <= RASTER_BPR_MAX and (bpr + 1) * h <= RASTER_SMK
 
 
 class Refused(Exception):
@@ -1039,13 +1069,39 @@ STRINGS = [
     # SPEC.md 47's rule is that a refusal names the fact the ACTION refused
     # on, and the action here is os88_fsx_mode() answering no.
     ("NO_MODE",
-     "This display cannot be borrowed for the game. os88_fsx_mode() refused "
-     "the graphics mode this adapter would have played in - the same bit "
-     "os88_fsx_caps() answers with, and the same one that greys the mode row "
-     "on the level list. Nothing was loaded and nothing was changed.",
+     "This display cannot be borrowed for the game: os88_fsx_mode() refused "
+     "the graphics mode this adapter plays in - the bit that greys the mode "
+     "row on the level list. %s",
      "SPEC.md 47 and 53.1: the launch's own refusal, named on the slot that "
      "refused rather than borrowed from the greyed Mode row (which is about "
-     "COLOUR and, on a Hercules, says the game plays)"),
+     "COLOUR and, on a Hercules, says the game plays). A TEMPLATE: its one "
+     "marker is what happened to the level, which depends on WHERE the mode "
+     "was refused (MODE_NONE, MODE_GONE) - wave 3's second review found the "
+     "sentence 'nothing was loaded' shown after a level had been read"),
+    ("MODE_NONE",
+     "Nothing was loaded and nothing was changed.",
+     "NO_MODE's ending when the refusal came BEFORE the bracket (the caps "
+     "check, lemmings.c ovl_launch's LEM_LR_MODE)"),
+    ("MODE_GONE",
+     "The level was read, and let go.",
+     "NO_MODE's ending when os88_fsx_mode() refused INSIDE the bracket on a "
+     "first launch: the level had been read and claimed, and is freed"),
+    # ...and the FOURTH, which wave 3 did not have and said the wrong thing
+    # for: os88_fsx_run() itself refusing - already in a bracket, the file
+    # dialog up, not task 0, or the ownership fence (apps/cc/os88thunk.asm's
+    # contract) - used to fall into the compose arm and toast NO_BANK with
+    # whatever band name the reader last left, about a read that succeeded.
+    ("NO_FSX",
+     "The game could not take the screen: os88_fsx_run() refused it.",
+     "SPEC.md 47 and 53.1: the bracket's own refusal, named on the slot that "
+     "refused. A toast, for NO_MEM's reason - one line, the fact and nothing "
+     "else - and the level is not lost: a kept one stays kept"),
+    # ...and the mode refused INSIDE the bracket on a RESUME, where the kept
+    # level is kept (the NO_FSX arm's shape) and the preview screen is back.
+    ("NO_MODE_KEPT",
+     "os88_fsx_mode() refused the game's screen mode. The level is kept.",
+     "SPEC.md 47 and 53.1: a toast, NO_FSX's shape - one line, the fact and "
+     "what happened to the level"),
     # The one word the status line carries while a level composes. It is
     # CAPITALS because MAIN.DAT's status font has no lowercase glyph at all
     # (lemfont.inc), and short because the field Lemmix writes it in is 14
@@ -1477,7 +1533,7 @@ class DataSet(object):
         terr_src, obj_src = self.vgagr[s]
         head = bytearray(1024)
         head[0:4] = b"LGRB"
-        struct.pack_into("<H", head, 4, 1)
+        struct.pack_into("<H", head, 4, LGRB_VERSION)
         head[6] = s
         head[9] = 0                                 # parts, filled below
         struct.pack_into("<HHH", head, 14, 128, 640, 1024)
@@ -1535,6 +1591,12 @@ class DataSet(object):
             if o.base_loc + n > len(obj_src):
                 raise Refused("set %d object %d runs past VGAGR section 1"
                               % (s, o.index))
+            if not raster_fits(o.width, o.height):
+                raise Refused("set %d object %d is %dx%d: the raster's row "
+                              "buffers hold %d bytes a row and %d mask bytes "
+                              "(raster_fits)" % (s, o.index, o.width,
+                                                 o.height, RASTER_BPR_MAX,
+                                                 RASTER_SMK))
             head[row] = o.width
             head[row + 1] = o.height
             head[row + 2] = o.frames
@@ -1546,6 +1608,11 @@ class DataSet(object):
             head[row + 10] = o.sound
             head[row + 11] = o.start_frame
             struct.pack_into("<I", head, row + 12, 1024 + len(data))
+            head[896 + o.index] = o.animation_flags & 0xFF
+            pv = (o.preview_image_index - o.base_loc) // o.frame_data_size
+            if pv < 0 or pv >= max(o.frames, 1):
+                pv = 0
+            head[912 + o.index] = pv
             data += obj_src[o.base_loc:o.base_loc + n]
 
         head[7] = nterr
@@ -1562,7 +1629,10 @@ class DataSet(object):
         def reg_table(rows):
             out = bytearray()
             off = 0
-            for (_name, frames, w, h, bpp) in rows:
+            for (name, frames, w, h, bpp) in rows:
+                if not raster_fits(w, h):
+                    raise Refused("MAIN row %s is %dx%d: past the raster's "
+                                  "row buffers (raster_fits)" % (name, w, h))
                 per = frame_bytes(w, h, bpp)
                 out += struct.pack("<BBBBHH", frames, w, h, bpp, off, per)
                 off += frames * per
@@ -2087,38 +2157,95 @@ def print_manifest(geom, disk, levels, styles, specials, reserve, verbose):
 #  missing) - `missing` 0 is playable, and the second row is GREYED with
 # LEMS_MISS_SPEC so the host harness has a greyed row to draw. Both names are
 # invented; neither is any of the original's 120.
+# THE SYNTHETIC FIXTURE (SPEC.md 114.12): every byte invented here, none of it
+# derived from the original. Wave 3 grew it into three PLAYABLE levels - a
+# floor, a wall, a pit of water, a steel block, a trap, the four object kinds
+# the mechanics branch on - because the host harness replays the eighteen
+# actions on it tick by tick against tools/lemsim.py's independent reading
+# (apps/lemmings/hosttest/lemtest.c), and a level with nothing in it would
+# exercise nothing. The fourth row is the greyed one the launcher's facts are
+# tested on, as before.
+#
+# A row: rating, number, style, release rate, count, to save, minutes, the
+# eight skills, start x, name, missing, terrain [(piece, x, y, flags)],
+# objects [(type, x, y, modifier, display)], steel [(x, y, w, h)].
+FIX_FLOOR = [(0, x, 120, 0) for x in range(0, 640, 32)]
 FIXTURE_LEVELS = [
-    (0, 0, 0, 50, 10, 1, 5, [1, 2, 3, 4, 5, 6, 7, 8], 160,
-     "Fixture one - a flat ledge", 0),
+    (0, 0, 0, 50, 10, 5, 5, [2, 2, 3, 2, 3, 2, 2, 4], 0,
+     "Fixture one - a flat ledge", 0,
+     FIX_FLOOR + [(3, 560, 56, 0), (1, 200, 104, 0)],
+     [(1, 40, 60, 0, 0x0F), (0, 440, 112, 0, 0x0F)],
+     []),
+    (0, 1, 0, 80, 10, 2, 4, [3, 3, 2, 2, 3, 3, 2, 3], 160,
+     "Fixture three - water and steel", 0,
+     [t for t in FIX_FLOOR if not 256 <= t[1] < 320] +
+     [(1, 480, 104, 0), (3, 24, 56, 0)],
+     [(1, 100, 60, 0, 0x0F), (2, 256, 120, 0, 0x0F), (3, 520, 104, 0, 0x0F),
+      (0, 592, 112, 0x80, 0x0F)],
+     [(480, 104, 16, 16)]),
+    (0, 2, 0, 99, 12, 3, 6, [4, 4, 4, 4, 4, 4, 4, 4], 320,
+     "Fixture four - the bombers", 0,
+     FIX_FLOOR + [(3, 300, 56, 0), (3, 316, 56, 0), (0, 96, 40, 8),
+                  (1, 160, 64, 2)],
+     [(1, 380, 50, 0, 0x0F), (1, 420, 50, 0, 0x0F), (0, 40, 112, 0x40, 0x0F),
+      (4, 600, 104, 0, 0x0F)],
+     []),
     (0, 3, 1, 75, 20, 10, 3, [0, 0, 5, 0, 10, 0, 0, 5], 320,
-     "Fixture two - the greyed row", "MISS_SPEC"),
+     "Fixture two - the greyed row", "MISS_SPEC", [], [], []),
+]
+
+# The synthetic style bank's four terrain pieces and four object types.
+# (w, h, fill per plane 0..3 - plane 3 set means opaque, so the colour is the
+# 8..15 class the real terrain has)
+FIX_PIECES = [
+    (32, 16, (0xFF, 0x00, 0xFF, 0xFF)),     # 0: a solid slab
+    (16, 16, (0xAA, 0x55, 0x00, 0xFF)),     # 1: a checkered block
+    (16, 8, (0x00, 0xFF, 0x00, 0xFF)),      # 2: a short ledge
+    (16, 64, (0x0F, 0xF0, 0xFF, 0xFF)),     # 3: a wall
+]
+# (w, h, frames, effect, trig l, t, w, h (GRND units), sound, start, anim)
+FIX_OBJECTS = [
+    (32, 16, 1, 1, 2, 3, 2, 3, 0, 0, 0),     # 0: the exit
+    (48, 24, 10, 0, 0, 0, 1, 1, 0, 1, 3),    # 1: the hatch
+    (64, 16, 8, 5, 0, 2, 16, 2, 0, 0, 2),    # 2: water, continuous
+    (16, 16, 24, 4, 1, 4, 2, 2, 7, 0, 1),    # 3: a triggered trap, whose 24
+                                             # frames outlast a 13-frame
+                                             # release interval plus the 8
+                                             # a walker spends in its
+                                             # trigger (the mechanics
+                                             # replay's level 1)
+    (16, 16, 4, 6, 0, 4, 4, 2, 0, 0, 2),     # 4: fire, continuous
 ]
 
 
 def build_fixture(out_dir):
-    """Two synthetic levels, a stub style bank, and the real string band."""
+    """Three playable synthetic levels and a greyed one, a stub style bank,
+    a stub MAIN bank and the real string band."""
     os.makedirs(out_dir, exist_ok=True)
     files = []
 
-    # Two synthetic 2,048-byte records. Big-endian like the real thing, with
-    # invented terrain: one 32x16 slab per level, terrain id 0, so the record
-    # exercises the reader without carrying a byte of anyone's data.
     records = []
     for (rating, number, style, rate, count, save, mins, skills, startx,
-         name, _missing) in FIXTURE_LEVELS:
+         name, _missing, terrain, objects, steel) in FIXTURE_LEVELS:
         rec = bytearray(LVL_SIZE)
         struct.pack_into(">HHHH", rec, 0, rate, count, save, mins)
         for i, v in enumerate(skills):
             struct.pack_into(">H", rec, 8 + 2 * i, v)
         struct.pack_into(">HHHH", rec, 0x18, startx, style, 0, 0)
-        # one object: an exit at (64, 100), slot 0
-        struct.pack_into(">HHHH", rec, 0x20, 64 + 16, 100, 0, 0x000F)
-        # terrain slots: fill with 0xFF, then two real pieces
+        for i, (otype, ox, oy, mod, disp) in enumerate(objects):
+            struct.pack_into(">HHBBBB", rec, 0x20 + 8 * i, ox + 16, oy & 0xFFFF,
+                             0, otype, mod, disp)
         for i in range(400):
             struct.pack_into(">I", rec, 0x120 + 4 * i, 0xFFFFFFFF)
-        for i, (tx, ty) in enumerate(((80, 120), (240, 120))):
-            v = (((tx + 16) & 0x0FFF) << 16) | (((ty + 4) & 0x1FF) << 7) | 0
+        for i, (pid, tx, ty, fl) in enumerate(terrain):
+            v = ((fl & 0xF) << 28) | (((tx + 16) & 0x0FFF) << 16) | \
+                (((ty + 4) & 0x1FF) << 7) | (pid & 0x3F)
             struct.pack_into(">I", rec, 0x120 + 4 * i, v)
+        for i, (sx, sy, sw, sh) in enumerate(steel):
+            x9 = (sx + 16) // 4
+            rec[0x760 + 4 * i] = (x9 >> 1) & 0xFF
+            rec[0x760 + 4 * i + 1] = ((x9 & 1) << 7) | (sy // 4)
+            rec[0x760 + 4 * i + 2] = (((sw // 4) - 1) << 4) | ((sh // 4) - 1)
         rec[0x7E0:0x800] = name.ljust(32).encode("ascii")[:32]
         records.append(bytes(rec))
 
@@ -2126,11 +2253,11 @@ def build_fixture(out_dir):
     blob += b"\0" * (LEVELS_PER_FILE * LVL_SIZE - len(blob))
     files.append(("LEMLV0.LEM", blob))
 
-    # A stub style bank: the header, two terrain slots and one object, with
-    # invented pixels (a solid slab and a checkerboard).
+    # A stub style bank: the header, four terrain slots and four object
+    # types, with invented pixels.
     head = bytearray(1024)
     head[0:4] = b"LGRB"
-    struct.pack_into("<H", head, 4, 1)
+    struct.pack_into("<H", head, 4, LGRB_VERSION)
     head[6] = 0
     struct.pack_into("<HHH", head, 14, 128, 640, 1024)
     for i in range(8):                       # a palette of eight greys
@@ -2138,28 +2265,42 @@ def build_fixture(out_dir):
         head[56 + 3 * i] = head[57 + 3 * i] = head[58 + 3 * i] = i * 9
         head[80 + 3 * i] = head[81 + 3 * i] = head[82 + 3 * i] = i * 9
     data = bytearray()
-    for slot, (w, h, fill) in enumerate(((32, 16, 0xFF), (16, 16, 0xAA))):
+    for slot, (w, h, fills) in enumerate(FIX_PIECES):
         n = w * h // 2
         row = 128 + slot * 8
         head[row] = w
         head[row + 1] = h
         struct.pack_into("<I", head, row + 2, 1024 + len(data))
         struct.pack_into("<H", head, row + 6, n)
-        data += bytes([fill]) * n
-    head[7] = 2
-    ow, oh, oframes = 32, 16, 2
-    per = ow * oh * 5 // 8
-    row = 640
-    head[row] = ow
-    head[row + 1] = oh
-    head[row + 2] = oframes
-    head[row + 3] = 1                        # GRND effect 1 = exit
-    struct.pack_into("<HH", head, row + 4, 16, 16)
-    head[row + 8] = 8
-    head[row + 9] = 4
-    struct.pack_into("<I", head, row + 12, 1024 + len(data))
-    data += bytes([0x5A]) * (per * oframes)
-    head[8] = 1
+        for f in fills:
+            data += bytes([f]) * (w * h // 8)
+    head[7] = len(FIX_PIECES)
+    for slot, (ow, oh, frames, eff, tl, tt, tw, th, snd, start, anim) in \
+            enumerate(FIX_OBJECTS):
+        per = ow * oh * 5 // 8
+        row = 640 + slot * 16
+        head[row] = ow
+        head[row + 1] = oh
+        head[row + 2] = frames
+        head[row + 3] = eff
+        struct.pack_into("<HH", head, row + 4, tl, tt)
+        head[row + 8] = tw
+        head[row + 9] = th
+        head[row + 10] = snd
+        head[row + 11] = start
+        struct.pack_into("<I", head, row + 12, 1024 + len(data))
+        head[896 + slot] = anim
+        head[912 + slot] = start
+        for fr in range(frames):
+            plane = ow * oh // 8
+            # four colour planes and a mask: a frame number's own stripes in
+            # plane 0, the mask a frame of the object's outline and a centre
+            data += bytes([(0x11 << (fr & 3)) & 0xFF]) * plane
+            data += bytes([0x0F]) * plane
+            data += bytes([0x00]) * plane
+            data += bytes([0x00]) * plane
+            data += bytes([0xFF if fr & 1 else 0x7E]) * plane
+    head[8] = len(FIX_OBJECTS)
     logical = bytes(head) + bytes(data)
     struct.pack_into("<I", head, 10, len(logical))
     head[9] = 1
@@ -2178,9 +2319,20 @@ def build_fixture(out_dir):
     mhead = bytearray(512)
     mhead[0:4] = b"LMNB"
     struct.pack_into("<H", mhead, 4, 1)
-    mhead[6] = 2
+    mhead[6] = 7
     mhead[7] = 1
     mdata = bytearray()
+
+    def mitem(row, item_id, bpp, w, h, frames, blob):
+        # THE OFFSET IS FROM THE BANK'S START, as the real bank's is
+        # (main_bank: 512 + len(data)). Wave 2's stub wrote len(mdata) and so
+        # pointed every item at the header - which the harness drew without
+        # looking, because it asserts the INDEX MAP and not the pixels.
+        struct.pack_into("<BBHHH", mhead, 32 + row * 16, item_id, bpp, w, h,
+                         frames)
+        struct.pack_into("<II", mhead, 32 + row * 16 + 8, 512 + len(mdata),
+                         len(blob))
+        mdata.extend(blob)
 
     # item 0: 320x40, four planes of 1,600 bytes. Plane 3 alone is set over
     # the whole panel and cleared inside the minimap's well, so a reader sees
@@ -2193,9 +2345,7 @@ def build_fixture(out_dir):
     for row in range(18, 38):                    # DosMiniMapCorners' well
         for byte in range(26, 39):
             panel[3 * 1600 + row * 40 + byte] = 0x00
-    struct.pack_into("<BBHHH", mhead, 32, 0, 4, 320, 40, 1)
-    struct.pack_into("<II", mhead, 32 + 8, len(mdata), len(panel))
-    mdata += panel
+    mitem(0, 0, 4, 320, 40, 1, panel)
 
     # item 1: 38 glyphs, 8x16, three planes of 16 bytes each. Glyph n is a
     # box with n vertical bars in it, which is not readable as a character
@@ -2210,9 +2360,64 @@ def build_fixture(out_dir):
                     font.append(0xFF if plane == 1 else 0x00)
                 else:
                     font.append(((g + 1) * 0x11) & 0xFF if plane == 1 else 0)
-    struct.pack_into("<BBHHH", mhead, 48, 1, 3, 8, 16, 38)
-    struct.pack_into("<II", mhead, 48 + 8, len(mdata), len(font))
-    mdata += font
+    mitem(1, 1, 3, 8, 16, 38, font)
+
+    # item 2: twenty 8x8 1bpp digit halves, glyph 2d the right half of digit
+    # d and 2d + 1 its left (the real bank's pairing): invented stripes.
+    digits = bytearray()
+    for g in range(20):
+        for r in range(8):
+            digits.append(((g // 2 + 1) * 0x0B + r * 3) & 0xFF)
+    mitem(2, 2, 1, 8, 8, 20, digits)
+
+    # items 3 and 8: the lemmings' 30 animation rows, with the real FRAME
+    # COUNTS (the program's own table steps them) and a small invented
+    # geometry - every frame 16x8 at one plane, a box with the frame number
+    # in it - so the stub stays a few kilobytes.
+    anim = bytearray()
+    anim_tab = bytearray()
+    for (_name, frames, _w, _h, _bpp) in MAIN_ANIMS:
+        per = 16 * 8 // 8
+        anim_tab += struct.pack("<BBBBHH", frames, 16, 8, 1, len(anim), per)
+        for fr in range(frames):
+            for r in range(8):
+                anim += bytes([0xFF if r in (0, 7) else 0x81 | (fr << 1),
+                               0xFF if r in (0, 7) else 0x81])
+    mitem(3, 3, 0, 16, 0, len(MAIN_ANIMS), anim)
+
+    # items 4 and 9: the six stencils with the real geometry and INVENTED
+    # shapes - the bash slice, the mine slope, a round crater and the ten
+    # countdown digits - because the mechanics harness replays destruction
+    # with them on both sides (lemtest.c and tools/lemsim.py).
+    def stencil(w, h, fn):
+        out = bytearray()
+        for y in range(h):
+            for xb in range((w + 7) // 8):
+                b = 0
+                for bit in range(8):
+                    x = xb * 8 + bit
+                    if x < w and fn(x, y):
+                        b |= 0x80 >> bit
+                out.append(b)
+        return bytes(out)
+    masks = bytearray()
+    mask_tab = bytearray()
+    shapes = [
+        (4, 16, 10, lambda f: lambda x, y: 8 <= x < 12 + f and 1 <= y < 9),
+        (4, 16, 10, lambda f: lambda x, y: 4 - f <= x < 8 and 1 <= y < 9),
+        (2, 16, 13, lambda f: lambda x, y: 7 <= x < 15 and y < 12 - f),
+        (2, 16, 13, lambda f: lambda x, y: 1 <= x < 9 and y < 12 - f),
+        (1, 16, 22, lambda f: lambda x, y: (x - 8) ** 2 + (y - 11) ** 2 < 60),
+        (10, 8, 8, lambda f: lambda x, y: x < 4 and y >= 3 and (x + y + f) & 1),
+    ]
+    for (frames, w, h, fn) in shapes:
+        per = ((w + 7) // 8) * h
+        mask_tab += struct.pack("<BBBBHH", frames, w, h, 1, len(masks), per)
+        for f in range(frames):
+            masks += stencil(w, h, fn(f))
+    mitem(4, 4, 1, 16, 0, len(shapes), masks)
+    mitem(5, 8, 0, 8, 0, len(MAIN_ANIMS), anim_tab)
+    mitem(6, 9, 0, 8, 0, len(shapes), mask_tab)
 
     mlogical = bytes(mhead) + bytes(mdata)
     struct.pack_into("<I", mhead, 8, len(mlogical))
@@ -2230,7 +2435,7 @@ def build_fixture(out_dir):
     for rating in range(4):
         body = bytearray()
         for i, (rt, number, style, rate, count, save, mins, skills, startx,
-                name, missing) in enumerate(FIXTURE_LEVELS):
+                name, missing, _t, _o, _s) in enumerate(FIXTURE_LEVELS):
             if rt != rating:
                 continue
             row = bytearray(ENTRY_SIZE)

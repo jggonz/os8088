@@ -29,7 +29,7 @@
 ; microseconds (SPEC.md 114.7).
 ;
 ; THE MASK IS ALSO WHAT THE 1bpp ADAPTERS' PICTURE IS MADE OF. On CGA and
-; Hercules terrain is drawn by COLOUR CLASS (SPEC.md 39.4, 92.4.2) rather than
+; Hercules terrain is drawn by COLOUR CLASS (SPEC.md 39.4, 114.4.2) rather than
 ; in the level's palette, and every terrain pixel is the same class - so the
 ; whole world picture on those two adapters is a function of this array and
 ; nothing else. lem_m_derive() writes it in ONE pass over 32,000 bytes instead
@@ -367,90 +367,79 @@ _lem_m_span:
 ; -----------------------------------------------------------------------------
 ; void lem_m_apply(unsigned seg, unsigned off, int x, int y, int w, int h)
 ;
-; A DESTRUCTION STENCIL over the mask: bash, mine and the explosion crater. The
-; source is a 1bpp bitmap of w x h bits with w rounded up to a byte, and A SET
-; BIT MEANS LEAVE ALONE (Lemmings.ts src/game/resources/mask-provider.ts
-; Mask.at() - the sense is the opposite of what the word suggests, and getting
-; it backwards erases exactly what a bash was supposed to keep).
+; A DESTRUCTION STENCIL over the mask: bash, mine and the explosion crater
+; (MAIN section 1, through LEMMAIN item 4). The source is a 1bpp bitmap of
+; w x h bits, w rounded up to a byte, and A SET BIT REMOVES THE TERRAIN UNDER
+; IT. Wave 2's header said the opposite - "a set bit means leave alone", after
+; Lemmings.ts's Mask.at() - and nothing called this routine until wave 3, so
+; nothing showed it. The data settles it: printed bit by bit, the explosion
+; stencil's SET bits are the round crater and the basher's are the slice it
+; takes out of the wall, and Lemmix's CombineMask (src/Game.pas:1812, "if F <>
+; 0 then B := 0") clears where the stencil is set.
 ;
-; Bit at a time for lem_m_span's reason one size up: the largest stencil in
-; MAIN.DAT section 1 is 16x22, so 352 bits, and the shifted-byte form would win
-; perhaps a third of that on a routine that runs a few times a second.
-;
-; Locals: [bp-2] srow, [bp-4] scol, [bp-6] source bytes per row, [bp-8] maskseg.
+; BYTE AT A TIME NOW, through the same shifted-row identity the composer uses
+; (lemsprite.inc's lb_shrow and lb_clipx): the first version walked a bit at a
+; time with a `mul` per bit, ~350 bits a crater.
 ; -----------------------------------------------------------------------------
 _lem_m_apply:
     push bp
     mov bp, sp
-    sub sp, 8
+    sub sp, 2                       ; [bp-2] k
     push si
     push di
     push es
     push ds
-    mov ax, [lm_seg]
-    mov [bp-8], ax
-    mov ax, [bp+16]                 ; w
-    cmp ax, 0
-    jle .out
+    cld
+    mov ax, [bp+12]                 ; w
     add ax, 7
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    mov [bp-6], ax
+    mov cl, 3
+    shr ax, cl
+    mov [lbp_bpr], ax
+    mov ax, [bp+10]                 ; y
+    mov bx, [bp+14]                 ; h
+    mov dx, LEM_MROWS
+    call lb_clipy
+    jc .out
+    mov ax, [bp+8]                  ; x
+    mov bx, [lbp_bpr]
+    mov dx, LEM_MSTRIDE - 1
+    call lb_clipx
+    jc .out
     mov word [bp-2], 0
 .row:
     mov ax, [bp-2]
-    cmp ax, [bp+14]                 ; h
-    jge .out
-    mov word [bp-4], 0
-.col:
-    mov ax, [bp-4]
-    cmp ax, [bp+16]                 ; w
-    jge .rowdone
-
-    ; --- the source bit, read with DS on the stencil's own segment --------
-    mov ax, [bp-6]
-    mul word [bp-2]
+    cmp ax, [lbp_n]
+    jae .out
+    add ax, [lbp_r0]
+    mul word [lbp_bpr]
+    add ax, [bp+6]
+    add ax, [lbp_i0]
     mov si, ax
-    mov ax, [bp-4]
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    add si, ax
-    add si, [bp+6]                  ; + off
-    mov cl, [bp-4]
-    and cl, 7
-    xor cl, 7
+    push cs
+    pop es
+    mov di, lb_mrow
+    mov cx, [lbp_s]
     mov ax, [bp+4]
     mov ds, ax
-    mov al, [si]
-    shr al, cl
+    call lb_shrow
     push cs
-    pop ds                          ; a package is ONE flat segment, so CS is
-                                    ; our DS - and SS is NOT (see the header)
-    test al, 1
-    jnz .nextcol                    ; a SET source bit means LEAVE ALONE
-
-    ; --- and the mask bit it clears ---------------------------------------
-    mov bx, [bp+12]                 ; y
-    add bx, [bp-2]
-    cmp bx, LEM_MROWS
-    jae .nextcol
-    mov ax, [bp+8]                  ; x
-    add ax, [bp-4]
-    cmp ax, LEM_MWORLD
-    jae .nextcol
-    call lem_moff
-    mov ax, [bp-8]
+    pop ds
+    mov ax, [bp+10]
+    add ax, [lbp_r0]
+    add ax, [bp-2]
+    call lem_rowoff                 ; DI = the mask row
+    add di, [lbp_bx0]
+    add di, [lbp_i0]
+    mov ax, [lm_seg]
     mov es, ax
-    mov al, 1
-    shl al, cl
+    mov si, lb_mrow
+    mov cx, [lbp_cnt]
+.b:
+    lodsb
     not al
     and [es:di], al
-.nextcol:
-    inc word [bp-4]
-    jmp .col
-.rowdone:
+    inc di
+    loop .b
     inc word [bp-2]
     jmp .row
 .out:
@@ -458,152 +447,229 @@ _lem_m_apply:
     pop es
     pop di
     pop si
-    add sp, 8                        ; the `sub sp` at the top, undone EXPLICITLY
+    add sp, 2
     pop bp
     ret
 
 ; -----------------------------------------------------------------------------
-; void lem_m_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-;                  int flags)
-;
-; ONE TERRAIN PIECE INTO THE MASK. `off` points at the piece's PLANE 3 inside
-; the style bank, which is the piece's own transparency mask and its high
-; colour bit at once (docs/lemband-format.md: "plane 3 IS the mask ... which
-; makes the stored nibble the mode-0Dh colour directly"). `flags` is the LVL
-; entry's top nibble.
-;
-; NO-OVERWRITE IS THE SAME AS NORMAL HERE, and that is arithmetic rather than a
-; shortcut: "draw only where there is no terrain" is `dest |= (m & ~dest)`,
-; which is `dest |= m`. The flag changes the PICTURE, where the colour under it
-; matters, and lemblit.inc's VGA composer honours it there.
-;
-; BYTE AT A TIME WITH A RUNTIME SHIFT, unlike the two routines above, and the
-; arithmetic says why: a level is up to 400 pieces averaging ~800 pixels, so
-; bit at a time is ~320,000 iterations - about two and a half seconds on a
-; 4.77 MHz 8088. Once per level, but visibly once per level.
-;
-; The shift identity is dest[i] = (src[i-1] << (8-s)) | (src[i] >> s), which is
-; the LOW BYTE of ((src[i-1] << 8) | src[i]) >> s, with src[-1] and src[n] both
-; zero. A negative x works unchanged: `sar` by 3 and `and 7` reconstruct it
-; (x = -13 is byte -2, bit 3).
-;
-; Locals: [bp-2] srow, [bp-4] bytes/row, [bp-6] shift, [bp-8] first dest byte
-; column (signed), [bp-10] maskseg, [bp-12] this dest row's base offset.
+; int lem_m_dig(int x, int y, int w) - THE DIGGER'S ROW: w pixels from (x, y)
+; cleared, and 1 if any of them was terrain (Lemmix src/Game.pas DigOneRow,
+; which is also where y < 0 is taken as 0). Bit at a time: w is 9.
 ; -----------------------------------------------------------------------------
-_lem_m_piece:
+_lem_m_dig:
     push bp
     mov bp, sp
-    sub sp, 12
     push si
     push di
     push es
-    push ds
-
+    xor si, si                      ; the answer
     mov ax, [lm_seg]
-    mov [bp-10], ax
-    mov ax, [bp+14]                 ; h
-    cmp ax, 0
-    jle .out
-    mov ax, [bp+12]                 ; w
-    cmp ax, 0
-    jle .out
-    add ax, 7
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    mov [bp-4], ax                  ; source bytes per row
-
-    mov ax, [bp+8]                  ; x
-    mov cx, ax
-    and cx, 7
-    mov [bp-6], cx
-    sar ax, 1
-    sar ax, 1
-    sar ax, 1
-    mov [bp-8], ax                  ; first dest byte column, maybe negative
-
-    mov word [bp-2], 0
-.row:
-    mov bx, [bp-2]
-    cmp bx, [bp+14]                 ; h
-    jge .out
-
-    ; the destination row: y + srow, or y + h-1 - srow upside-down
-    test word [bp+16], LEM_TF_UPDOWN
-    jz .plain
-    mov ax, [bp+14]
-    dec ax
-    sub ax, bx
-    jmp .havedy
-.plain:
-    mov ax, bx
-.havedy:
-    add ax, [bp+10]                 ; + y
-    cmp ax, LEM_MROWS
-    jae .nextrow                    ; clipped off the top or the bottom
-    call lem_rowoff
-    mov [bp-12], di
-
-    ; the source row's first byte
-    mov ax, [bp-4]
-    mul word [bp-2]
-    add ax, [bp+6]
-    mov si, ax
-
-    mov ax, [bp-10]
     mov es, ax
-    mov ax, [bp+4]
-    mov ds, ax                      ; DS = the style bank from here to .rowend
-
-    xor ah, ah                      ; src[i-1], zero before the first byte
-    xor bx, bx                      ; the byte index inside the row
-.byte:
-    mov al, 0
-    cmp bx, [bp-4]
-    jge .haveal
-    mov al, [si+bx]
-.haveal:
-    push ax
-    mov cx, [bp-6]
-    jcxz .noshift
-    shr ax, cl                      ; AL becomes this dest byte's contribution
-.noshift:
-    mov cx, [bp-8]
-    add cx, bx
-    cmp cx, 0
-    jl .skip
-    cmp cx, LEM_MSTRIDE
-    jge .skip
-    add cx, [bp-12]
-    mov di, cx
-    test word [bp+16], LEM_TF_ERASE
-    jz .orin
+    mov bx, [bp+6]
+    cmp bx, 0
+    jge .yok
+    xor bx, bx
+.yok:
+    cmp bx, LEM_MROWS
+    jae .out
+    mov cx, [bp+8]
+    mov dx, [bp+4]
+.px:
+    jcxz .out
+    push cx
+    mov ax, dx
+    cmp ax, LEM_MWORLD
+    jae .next                       ; unsigned: a negative x too
+    call lem_moff                   ; DI, CL; BX and DX kept
+    mov al, 1
+    shl al, cl
+    test [es:di], al
+    jz .next
     not al
     and [es:di], al
-    jmp .skip
-.orin:
-    or [es:di], al
-.skip:
-    pop ax
-    mov ah, al                      ; the RAW byte becomes src[i-1]
-    inc bx
-    cmp bx, [bp-4]
-    jle .byte                       ; <= : one dest byte past the last source
-
-    push cs
-    pop ds
-.nextrow:
-    inc word [bp-2]
-    jmp .row
+    mov si, 1
+.next:
+    pop cx
+    inc dx
+    dec cx
+    jmp .px
 .out:
-    pop ds
+    mov ax, si
     pop es
     pop di
     pop si
-    add sp, 12                        ; the `sub sp` at the top, undone EXPLICITLY
     pop bp
     ret
 
+; -----------------------------------------------------------------------------
+; THE OBJECT MAP (SPEC.md 114.4.7): the original's 4-pixel-resolution map of
+; trigger areas, steel and blocker fields - one byte a cell, 396 x 40 cells
+; for the 1,584 x 160 world, 15,840 bytes in the claim the level's raw record
+; was read into (it is read, parsed and then overwritten with this). The
+; values are Lemmix's (src/Game.pas:768-778): 0..127 a triggered trap's object
+; index, 128 nothing (DOM_NONE), 128 + the GROUND trigger effect otherwise,
+; 128 + 10 the middle of a blocker. Off the map is DOM_NONE, as Lemmix's
+; ReadObjectMap answers "whoops, important".
+;
+; IT IS ASSEMBLY for the probe's reason: every lemming reads it twice a step
+; (below and in front), and a cell is (x and not 3) div 4 - an arithmetic
+; shift, which rounds a negative coordinate DOWN as the original's does.
+; -----------------------------------------------------------------------------
+LEM_OCOLS   equ 396
+LEM_OROWS   equ 40
+LEM_DOMNONE equ 128
+
+_lem_o_setup:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    mov [lo_seg], ax
+    pop bp
+    ret
+
+_lem_o_clear:
+    push di
+    push es
+    mov ax, [lo_seg]
+    mov es, ax
+    xor di, di
+    mov ax, LEM_DOMNONE | (LEM_DOMNONE << 8)
+    mov cx, (LEM_OCOLS * LEM_OROWS) / 2
+    cld
+    rep stosw
+    pop es
+    pop di
+    ret
+
+; lo_idx - in: AX = x, BX = y (pixels). out: DI = the cell's index, CF = 1 off
+; the map. Clobbers AX, BX.
+lo_idx:
+    sar ax, 1
+    sar ax, 1
+    sar bx, 1
+    sar bx, 1
+    cmp ax, LEM_OCOLS
+    jae .off                        ; unsigned: a negative cell too
+    cmp bx, LEM_OROWS
+    jae .off
+    mov di, bx
+    push cx
+    mov cl, 8
+    shl di, cl                      ; y*256
+    mov cl, 7
+    shl bx, cl                      ; y*128
+    add di, bx
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1                       ; y*8
+    add di, bx
+    shr bx, 1                       ; y*4
+    add di, bx
+    pop cx
+    add di, ax
+    clc
+    ret
+.off:
+    stc
+    ret
+
+; int lem_o_get(int x, int y)
+_lem_o_get:
+    push bp
+    mov bp, sp
+    push di
+    push es
+    mov ax, [bp+4]
+    mov bx, [bp+6]
+    call lo_idx
+    mov ax, LEM_DOMNONE
+    jc .out
+    mov bx, [lo_seg]
+    mov es, bx
+    mov al, [es:di]
+    xor ah, ah
+.out:
+    pop es
+    pop di
+    pop bp
+    ret
+
+; void lem_o_set(int x, int y, int v)
+_lem_o_set:
+    push bp
+    mov bp, sp
+    push di
+    push es
+    mov ax, [bp+4]
+    mov bx, [bp+6]
+    call lo_idx
+    jc .out
+    mov bx, [lo_seg]
+    mov es, bx
+    mov al, [bp+8]
+    mov [es:di], al
+.out:
+    pop es
+    pop di
+    pop bp
+    ret
+
+; void lem_o_fill(int x, int y, int w, int h, int v) - a rectangle of PIXELS,
+; every cell any of whose (x and not 3, y and not 3) corners it covers, which
+; is Lemmix's InitializeObjectMap writing each pixel of the area in turn
+; (src/Game.pas:2251) without the 16x repetition: the cell range is
+; floor(x/4) .. floor((x+w-1)/4), and the same in y.
+_lem_o_fill:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov ax, [lo_seg]
+    mov es, ax
+    cmp word [bp+8], 0
+    jle .out
+    cmp word [bp+10], 0
+    jle .out
+    mov si, [bp+6]                  ; y
+.row:
+    mov ax, [bp+6]
+    add ax, [bp+10]
+    cmp si, ax
+    jge .out
+    mov dx, [bp+4]                  ; x
+.col:
+    mov ax, [bp+4]
+    add ax, [bp+8]
+    cmp dx, ax
+    jge .rnext
+    mov ax, dx
+    mov bx, si
+    call lo_idx
+    jc .cnext
+    mov al, [bp+12]
+    mov [es:di], al
+.cnext:
+    add dx, 4
+    and dx, 0xFFFC
+    jmp .col
+.rnext:
+    add si, 4
+    and si, 0xFFFC
+    jmp .row
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; lem_m_piece IS GONE (wave 3). It wrote one terrain piece into the mask at
+; 8.8 ms a 32x16 piece, as a SECOND walk of the same piece after the picture's;
+; lemblit.inc's lem_r_wpiece now writes the mask as the picture's own plane 3
+; in the same pass (SPEC.md 114.7.2's composer rows say what that bought).
 ; -----------------------------------------------------------------------------
 ; void lem_m_derive(unsigned dstseg, int kind)
 ;
@@ -708,6 +774,7 @@ lm_nib2:
     db 0x80, 0x82, 0x88, 0x8A, 0xA0, 0xA2, 0xA8, 0xAA
 
 section .bss
+lo_seg:     resw 1                  ; the object map's claim
 lm_seg:     resw 1                  ; inside .bss and before CC_IMAGE_END, so
                                     ; crt0's cc_bss_end counts it and the loader
                                     ; zeroes it with everything else

@@ -224,10 +224,8 @@ static int lem_rating_load(int rating)
 /* lem_data_load - the manifest, the string band and rating 0, in that order.
  *
  * IT IS CALLED FROM os88_main(), WHERE THE FILE SLOTS ARE LEGAL AND THE GFX
- * LOCK IS NOT HELD (SPEC.md 20.2). What may NOT be done there is load the
- * overlay: there is no instance yet to resolve a module for, which is RunCPM's
- * lesson one level up (LESSONS.md 13), so ovl_ready() is called from the first
- * wake instead.
+ * LOCK IS NOT HELD (SPEC.md 20.2). The overlay needs nothing here: it is an
+ * eager PART, bound before this runs (SPEC.md 73.14.2).
  *
  * 0 = the launcher comes up and says the data is not in this folder. */
 static int lem_data_load(void)
@@ -281,8 +279,14 @@ static int lem_data_load(void)
  * CLAIM RECORDS ARE A BUDGET TOO and this is where they are counted:
  * kernel/memory.inc gives MEM_MAX = 32 on kern_big and 20 on kern_small,
  * SYSTEM-WIDE, shared with every Disk window and driver already open. This
- * program takes THREE on a VGA and FIVE on the two 1bpp adapters, plus the
- * package's own region and the overlay module's, and says so in its refusal.
+ * program takes FIVE on every adapter - the mask, the style bank, LEMMAIN, the
+ * level record (which becomes the object map) and, on a VGA, the T planes or,
+ * on the two 1bpp adapters, the world and the shadow (six there) - plus the
+ * package's own region, whose overlay is a PART of it since wave 3 (SPEC.md
+ * 73.14.2) and so is no seventh. EVERY ONE IS TAKEN HERE, before the bracket:
+ * wave 2 took the record's claim inside ovl_compose(), inside the bracket,
+ * where its refusal could not be said (finding (1) of that wave's last
+ * review).
  * ==========================================================================*/
 
 /* The claim sizes, in KB, and every one of them is arithmetic rather than a
@@ -297,10 +301,13 @@ static int lem_data_load(void)
  *           Hercules 200 x 160 = 32,000. VGA has none - its world lives in
  *           VRAM, which is the whole point of the mode 0Dh backend
  *   SHADOW  the composed screen on those two, 80 bytes x 200 rows = 16,000
- *   REC     transient, and freed before the level starts: one LEMLV<n>.LEM,
- *           16,384 bytes, read whole because the record inside it is at a
- *           2,048-byte offset that os88_file_read_at() cannot express on
- *           every medium (see the header above) */
+ *   REC     one LEMLV<n>.LEM, 16,384 bytes, read whole because the record
+ *           inside it is at a 2,048-byte offset that os88_file_read_at()
+ *           cannot express on every medium (see the header above) - and then,
+ *           once the compose has taken the terrain, the objects and the steel
+ *           out of it, THE OBJECT MAP: 396 x 40 cells = 15,840 bytes, the
+ *           same claim (lemmask.inc's lem_o_*)
+ *   T       VGA only: the four world planes in RAM (wave 3) */
 #define LEM_KB_MASK    32
 #define LEM_KB_BANK    96
 #define LEM_KB_MAIN    52
@@ -308,12 +315,18 @@ static int lem_data_load(void)
 #define LEM_KB_WORLD_H 32
 #define LEM_KB_SHADOW  16
 #define LEM_KB_REC     16
+#define LEM_KB_T      125           /* VGA: the world's four planes in RAM, 4 x
+                                     * 32,000 bytes, for the level's life - T,
+                                     * lemsprite.inc's background (SPEC.md
+                                     * 114.4.6) */
 
 static unsigned lem_cl_mask;
 static unsigned lem_cl_bank;
 static unsigned lem_cl_main;
 static unsigned lem_cl_world;       /* 0 on VGA */
 static unsigned lem_cl_shadow;      /* 0 on VGA */
+static unsigned lem_cl_rec;         /* the record, then the object map */
+static unsigned lem_cl_t;           /* VGA: T; 0 on the other two */
 static int      lem_claimed;
 static int      lem_bank_have;      /* the style in lem_cl_bank, or -1 */
 static int      lem_main_have;
@@ -352,14 +365,14 @@ static int lem_pk16(unsigned seg, unsigned off)
     return lem_pk(seg, off) | (lem_pk(seg, off + 1) << 8);
 }
 
-/* lem_claim_all - the three or five claims, or 0 with the arithmetic said.
+/* ovl_claim_all - the three or five claims, or 0 with the arithmetic said.
  *
  * IT IS ALL OR NOTHING. A program that got the mask and not the bank would
  * refuse later, further in, with the machine already in a foreign mode - so
  * every claim is taken here, before the bracket, and a refusal frees what it
  * got and answers 0 with a sentence the user can act on (SPEC.md 47,
  * WEAVE-SPEC 1.4's precedent). */
-static int lem_claim_all(void)
+static int ovl_claim_all(void)
 {
     if (lem_claimed)
         return 1;
@@ -376,7 +389,18 @@ static int lem_claim_all(void)
         lem_free_all();
         return 0;
     }
-    if (lem_kind_id() != LEM_RKIND_VGA) {
+    lem_cl_rec = os88_mem_claim(LEM_KB_REC);
+    if (lem_cl_rec == 0) {
+        lem_free_all();
+        return 0;
+    }
+    if (lem_kind_id() == LEM_RKIND_VGA) {
+        lem_cl_t = os88_mem_claim(LEM_KB_T);
+        if (lem_cl_t == 0) {
+            lem_free_all();
+            return 0;
+        }
+    } else {
         lem_cl_world = os88_mem_claim(lem_kind_id() == LEM_RKIND_CGA
                                       ? LEM_KB_WORLD_C : LEM_KB_WORLD_H);
         if (lem_cl_world == 0) {
@@ -397,6 +421,10 @@ static int lem_claim_all(void)
 
 static void lem_free_all(void)
 {
+    if (lem_cl_t)
+        os88_mem_free(lem_cl_t);
+    if (lem_cl_rec)
+        os88_mem_free(lem_cl_rec);
     if (lem_cl_shadow)
         os88_mem_free(lem_cl_shadow);
     if (lem_cl_world)
@@ -407,6 +435,8 @@ static void lem_free_all(void)
         os88_mem_free(lem_cl_bank);
     if (lem_cl_mask)
         os88_mem_free(lem_cl_mask);
+    lem_cl_t = 0;
+    lem_cl_rec = 0;
     lem_cl_shadow = 0;
     lem_cl_world = 0;
     lem_cl_main = 0;
@@ -422,15 +452,17 @@ static void lem_free_all(void)
  * granted those or this code would not be running. */
 static int lem_need_kb(void)
 {
-    int n = LEM_KB_MASK + LEM_KB_BANK + LEM_KB_MAIN;
+    int n = LEM_KB_MASK + LEM_KB_BANK + LEM_KB_MAIN + LEM_KB_REC;
 
-    if (lem_kind_id() != LEM_RKIND_VGA)
+    if (lem_kind_id() == LEM_RKIND_VGA)
+        n += LEM_KB_T;
+    else
         n += LEM_KB_SHADOW + (lem_kind_id() == LEM_RKIND_CGA
                               ? LEM_KB_WORLD_C : LEM_KB_WORLD_H);
     return n;
 }
 
-/* lem_parts_read - a banded file, part after part, into ONE claim.
+/* ovl_parts_read - a banded file, part after part, into ONE claim.
  *
  * `base` is the 8.3 stem without its extension ("LEMGR0", "LEMMAIN"), already
  * in lem_f_scratch. A bank of ONE part keeps its plain name and a bank of more
@@ -439,7 +471,7 @@ static int lem_need_kb(void)
  *
  * 0 = a part was short or missing, which means the disk is not the one the
  * manifest describes; the caller says so and stays in the window. */
-static int lem_parts_read(int nparts, unsigned seg)
+static int ovl_parts_read(int nparts, unsigned seg)
 {
     int p, n, i;
 
@@ -479,7 +511,7 @@ static int lem_parts_read(int nparts, unsigned seg)
 }
 
 /* lem_stem - "LEMGR<n>" or "LEMMAIN" into lem_f_scratch, ready for
- * lem_parts_read to hang a part number and an extension off. */
+ * ovl_parts_read to hang a part number and an extension off. */
 static void lem_stem_gr(int n)
 {
     lem_f_scratch[0] = 'L';
@@ -503,10 +535,10 @@ static void lem_stem_main(void)
     lem_f_scratch[7] = 0;
 }
 
-/* lem_main_read - LEMMAIN.LEM into its claim, once per session. It is the same
+/* ovl_main_read - LEMMAIN.LEM into its claim, once per session. It is the same
  * bytes for every level, so a retry or the next level does not re-read it -
  * which matters because it is 52 KB and ~130 int 13h calls on the target. */
-static int lem_main_read(void)
+static int ovl_main_read(void)
 {
     if (lem_main_have)
         return 1;
@@ -516,7 +548,7 @@ static int lem_main_read(void)
      * that, the converter refuses on the host before this could read half of
      * it (tools/os88lem.py's Disk.add). */
     lem_stem_main();
-    if (!lem_parts_read(1, lem_cl_main))
+    if (!ovl_parts_read(1, lem_cl_main))
         return 0;
     if (lem_pk(lem_cl_main, 0) != 'L' || lem_pk(lem_cl_main, 1) != 'M' ||
         lem_pk(lem_cl_main, 2) != 'N' || lem_pk(lem_cl_main, 3) != 'B')
@@ -525,11 +557,11 @@ static int lem_main_read(void)
     return 1;
 }
 
-/* lem_bank_read - one STYLE bank into its claim, and only when it is not
+/* ovl_bank_read - one STYLE bank into its claim, and only when it is not
  * already the one in there. Five sets, one claim, and a level is much more
  * likely to reuse the last style than not (the four ratings are grouped by
  * difficulty, not by set, but a retry always is). */
-static int lem_bank_read(int style)
+static int ovl_bank_read(int style)
 {
     if (lem_bank_have == style)
         return 1;
@@ -537,15 +569,38 @@ static int lem_bank_read(int style)
     if (style < 0 || style > 4)
         return 0;
     lem_stem_gr(style);
-    if (!lem_parts_read(lem_cost_parts(LEM_BANK_STYLE, style), lem_cl_bank))
+    if (!ovl_parts_read(lem_cost_parts(LEM_BANK_STYLE, style), lem_cl_bank))
         return 0;
     if (lem_pk(lem_cl_bank, 0) != 'L' || lem_pk(lem_cl_bank, 1) != 'G' ||
         lem_pk(lem_cl_bank, 2) != 'R' || lem_pk(lem_cl_bank, 3) != 'B')
         return 0;
     if (lem_pk(lem_cl_bank, LEM_GR_STYLE) != style)
         return 0;
+    if (lem_pk16(lem_cl_bank, LEM_GR_VERSION) != LEM_GR_VER)
+        return 0;                   /* a bank from before wave 3 carries no
+                                     * object animation flags */
     lem_bank_have = style;
     return 1;
+}
+
+/* ovl_rec_read - the level's group of eight raw records, LEMLV<n>.LEM, into
+ * the REC claim. EVERY LAUNCH reads it again, a retry included: the claim is
+ * the OBJECT MAP once the compose is done with it (lemmask.inc's lem_o_*). */
+static int ovl_rec_read(int level)
+{
+    lem_f_scratch[0] = 'L';
+    lem_f_scratch[1] = 'E';
+    lem_f_scratch[2] = 'M';
+    lem_f_scratch[3] = 'L';
+    lem_f_scratch[4] = 'V';
+    lem_f_scratch[5] = (char)('0' + (lem_ent_u8(level, LEM_E_RAWFILE) % 10));
+    lem_f_scratch[6] = '.';
+    lem_f_scratch[7] = 'L';
+    lem_f_scratch[8] = 'E';
+    lem_f_scratch[9] = 'M';
+    lem_f_scratch[10] = 0;
+    return os88_file_read_seg(lem_f_scratch, lem_cl_rec,
+                              (unsigned)(LEM_LVL_GROUP * LEM_LVL_SIZE)) != 0;
 }
 
 /* lem_item - one LEMMAIN item's segment and offset, into lem_far_seg/off.

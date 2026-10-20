@@ -14982,3 +14982,72 @@ host a thousand times faster. Two arithmetic traps were paid for on the way:
 iterations (14 ticks over 4,000 printed **12 µs** for a probe that is 192 —
 every row wrong and every one plausible), and the iteration count itself
 overflows if the growth is allowed a fourth doubling.
+
+**Wave 3's readings (2026-10-20), same machine, same instrument**
+(`build/port-shots/wave3b-lembench-os8088_xt_vga.png`; SPEC.md §114.7.2 and
+§114.7.3 carry the argument):
+
+| row | VGA mode 0Dh, 4.77 MHz 8088 |
+|---|---:|
+| one probe, re-measured on the wave-3 build | **178 µs** (192 at wave 2) |
+| four batched | **549 µs** |
+| a 32x16 piece → the mask, in RAM | **7.7 ms** |
+| a 32x16 piece → T (four world planes in RAM) and the mask | **22.0 ms**, x odd or x a multiple of 8 alike |
+| T → VRAM, the whole world | **330 ms** |
+| a packed-nibble world → four planes through a 256-entry table | **7,810 ms** |
+
+8. **THE PACKED WORLD LOST TO ITS OWN CONVERSION.** The design proposed for
+   the 25-second compose — compose packed 4bpp nibbles in RAM, then one table
+   pass to the planes — spends 7.8 s on the table pass alone, because
+   splitting a packed pixel into four planes is a shift, a mask and a table
+   read for every pixel however the table is shaped. Composing PLANE-MAJOR in
+   RAM keeps every piece already in the card's form, and the one copy is four
+   `rep movsw` under four map masks. A piece is **22.0 ms against wave 2's
+   62.6** and Fun 1 loads in **~8.9 s against ~16**; the largest level in the
+   set in ~13.5 s against ~29.
+9. **THE MECHANICS' PROBES ARE ~0.4 ms A LEMMING A FRAME**, counted by the
+   host replay over three fixture levels (22-29 calls a frame at worst for
+   10-12 lemmings) and priced at 178 µs a call — a floor, the handlers' own C
+   uncounted. Sixty lemmings is ~25 ms of probes, inside one tick, which is
+   what `LEM_STEP_MAX` = 20 spreads a crowded frame around. The frame RATE on
+   a busy and a quiet level is the final pass's MartyPC row and is not
+   quoted until it is taken.
+10. **WAVE 3'S REVIEW: WHAT THE LIVE FRAME TAKES OFF THE GLASS** (counted by
+    the host harness, not timed; SPEC.md §114.4.6's table is the argument).
+    A changed object or a dug rectangle on VGA is composed in a VRAM scratch
+    and latch-copied on in one pass — **0 background rectangles onto the
+    glass in 300 drawn frames**, where the first build wrote every one there
+    as bare terrain; a pointer parked away from everything is redrawn on **0
+    of 300** frames, where taking it off around every frame was 300; a
+    shadow card's tick that both scrolls and draws a game frame draws its
+    sprites ONCE (it was a full sprite pass and a full restore more, on the
+    178 ms tick of reading 5); and a minimap cell the mechanics clear is a
+    bit in a bitset until the frame's end, where it was a 721 µs plot from
+    inside the mechanics on every dig row of one cell. The costs it adds are
+    a VSYNC wait (≤ 14 ms of a 70 Hz refresh) on a VGA tick that draws or
+    scrolls, the latch copy of each composed rectangle, and one
+    `OSAPI_MOUSE` far call per sixteen rows a shadow compose or present
+    moves. None of them is timed yet; the final pass's MartyPC row takes
+    them with the frame rate.
+11. **WAVE 3'S SECOND REVIEW: THE LEMMINGS WERE STILL OFF THE GLASS, AND
+    NOW THEY ARE NOT** (counted by the host harness, not timed). Reading 10's
+    frame still restored every VGA save-under onto the glass and drew the
+    frame there, so each lemming was off the glass from its restore to its
+    draw — in reverse order, so the first one off was the last one back and
+    its window was the whole frame — and the pointer went with them whenever
+    a lemming was near it. The frame is now COMPOSED: every rectangle it
+    changes (each lemming's last box with its new one, each crater, each
+    moved object, merged where they overlap) is built in a 125-row VRAM band
+    — T, the objects, every lemming once, the pointer — and latch-copied on,
+    so the glass only ever receives a finished picture: **0 draws onto the
+    glass outside a compose in 300 frames**, the lit pointer whole after
+    every one, a pointer parked over walking lemmings redrawn only when its
+    shape changes, and a pointer resting on the skill panel or the minimap
+    taken off by **0 of 30** frames (any panel change took it off before).
+    The VSYNC wait on a non-scrolling VGA frame is gone (the compose races
+    no beam). Two overlapping animated objects are **one rectangle and one
+    draw each** where they were ~3. What it costs — a T copy and a latch per
+    rectangle where a lemming used to cost a latch save and a latch
+    restore, and ~250 module-to-resident crossings a frame at 80 lemmings —
+    is the final pass's to time, with the off-glass fraction `flicker()` and
+    `pace()` give on `xt_vga` (SPEC.md §114.7.3's table).

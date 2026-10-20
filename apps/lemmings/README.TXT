@@ -9,9 +9,11 @@ and the behaviour those describe.
 
 WHAT IS ON THIS DISK
 --------------------
-LEMMINGS.O88   the package
-LEMMINGS.OVL   its second segment - the About card, the preview text, the
-               greying facts, the launcher's chrome and the progress file
+LEMMINGS.O88   the package. Its second segment - the About card, the preview
+               and postview text, the greying facts, the level loader and
+               composer, the panel's live drawing and the bracket's input -
+               rides INSIDE it as a part, so there is no separate file to
+               lose
 README.TXT     this file
 LEVELS.TXT     what THIS disk's geometry carries, level by level, with the
                cluster arithmetic that decided it
@@ -29,9 +31,9 @@ LEMLVn.LEM     the raw level records, eight to a file - what a LEVEL is built
                from once one is chosen
 LEMMAIN.LEM    the shared bank out of MAIN.DAT
 
-All of them must be in the SAME FOLDER: LEMMINGS.OVL and every band file are
-resolved in the launching instance's own directory, so a copy that takes the
-package and leaves a band behind is a program that comes up and says so.
+All of them must be in the SAME FOLDER: every band file is resolved in the
+launching instance's own directory, so a copy that takes the package and
+leaves a band behind is a program that comes up and says so.
 
 A smaller disk carries less. The 720KB disk has everything but the four
 special pictures; the 360KB disk has two graphic sets and only the levels
@@ -66,15 +68,69 @@ line that carries it, in the source tree and in this port's design record:
 
     Lemmix (Eric Langedijk) - the level record's bit unpacking, the preview
         and postview screens' wording and layout, the rating names, the
-        level order and its odd-table overrides
+        level order and its odd-table overrides, and the GAME: the eighteen
+        actions, the skills, the objects, the clock and the release rate,
+        as its ORIG mechanics set models the DOS original, bugs included
     Lemmings.ts - a second reading of the same records
-    lemmings_3ds - a third, and the graphic-set decoding
+    lemmings_3ds - a third, the graphic-set decoding, and a second reading
+        of the mechanics: the build replays three test levels through this
+        port and through a separate program written from lemmings_3ds, and
+        stops if a single lemming on a single frame disagrees
     lemmings_lvl_file_format.txt - the LVL record, field by field
 
 None of those is copied into this program and nothing under a GPL or LGPL
 licence is in it. The original's own on-screen strings ARE carried verbatim -
 the level names, the preview wording, the result texts - because a paraphrase
 of them would be a knock-off rather than a port.
+
+PLAYING
+-------
+Choose a rating and a level and press Enter or click Play. The level comes up
+full screen: the terrain above, the skill panel below, the status line across
+the top of the panel.
+
+    the mouse      the pointer. Click a skill button, then click a lemming
+                   to give it that skill. Hold the RIGHT button while you
+                   click to pick a lemming that is NOT already working -
+                   and, as in the 1991 game, holding it over nothing but
+                   working lemmings gives the skill to the last non-working
+                   lemming the game saw under the pointer at the end of a
+                   frame (or while paused), wherever it is now.
+                   Push the pointer against the left or right edge of the
+                   level picture (not the panel) to scroll; click or drag
+                   in the map at the bottom right to jump there
+    F1 / F2        release rate down / up, while held
+    Ctrl+F1 / F2   release rate to its minimum / maximum, while paused
+    F3 - F10       the eight skills, in the panel's order
+    F11            pause (the panel's paws button on every machine)
+    F12            nuke - press it twice, quickly (or double-click the
+                   mushroom button). An XT keyboard has no F11 or F12; the
+                   two panel buttons are the original's own way to both
+    Left / Right   scroll the view
+    f or F         leave the full screen for the window; the level waits
+                   exactly where it was. f, Enter or Space in the window
+                   goes back in, and Esc there lets the level go
+    Esc            finish the level now, and then leave the results. On
+                   the results, which are in the window for now, Esc is
+                   what the original's "Press right mouse button for
+                   menu" did: a right click in an os8088 window belongs to
+                   the desktop, so that line is left off rather than
+                   naming a button that would do nothing
+
+The status line says what is under the pointer and how many, how many
+lemmings are OUT, what share of the level's lemmings are IN, and the time
+left. Every one of those is the original's own wording and position.
+
+The sounds are short tones on the PC speaker, one for each of the original's
+events and for no others - let's go, the trap door opening, a skill chosen
+and given, oh no, an explosion, a splat, a lemming home, a drowning, the
+fire, a tool striking steel, the builder's last three bricks and a trap.
+The original is silent while a lemming digs, bashes or mines, opens its
+umbrella or is nuked, and so is this. The tones are this port's own: the
+original's sound is AdLib music and effects this OS has no way to play.
+
+The nuke behaves as the 1991 game's does: after it, the per cent rescued is
+counted against the lemmings already released, not the level's total.
 
 THE DATA FILES ARE NOT DISTRIBUTED WITH THE SOURCE
 --------------------------------------------------
@@ -111,23 +167,37 @@ readable. It is the only thing telling you where you are in a level 1,584
 pixels wide.
 
 Neither of those two cards can scroll, either, so the picture is composed in
-memory and blitted. That makes the scroll step 4 pixels on a CGA and 8 on a
-Hercules, against 1 on a VGA. It is a real difference and it is deliberate: a
-pixel-exact scroll on those cards would cost about 40% of every frame to make
-a scroll that is already smooth at 17 frames a second smoother.
+memory and blitted. The game asks for the same 4 pixels a step on every
+card, which is what makes the scroll SPEED the same on all three; what differs
+is the granularity the card can honour. A CGA takes every 4-pixel step
+exactly, a Hercules moves 8 pixels on every other step, and a VGA pans in
+hardware - it could go one pixel at a time and is simply not asked to. A
+pixel-exact scroll on the two cards that cannot pan would cost about 40% of
+every frame to make a scroll that is already smooth smoother.
 
 MEASURED on a 4.77 MHz 8088 (an IBM 5160, under a cycle-accurate emulator):
-one terrain probe is 192 microseconds on either card. On the VGA a scrolled
+one terrain probe is 178 microseconds on either card. On the VGA a scrolled
 frame is 755 microseconds, because the card does the scrolling; on the CGA it
 is 178 milliseconds, because the CPU does.
 
-Building a level's terrain out of its 400 pieces takes about 25 seconds on the
-VGA and 5 on the CGA. The skill panel and the word LOADING go down before that
-starts, and a bar creeps across the map window while it runs, because once the
-game has the machine the system cannot put a message on the screen for it. On
-a VGA the level is composed straight into the framebuffer the card is
-displaying, so you watch it build; on a CGA and a Hercules it is composed in
-memory and the screen stays black until it is done.
+Loading a level takes about 9 seconds on the VGA for Fun 1 - 191 terrain
+pieces at 22 milliseconds each, a third of a second to copy the finished
+terrain to the card, and about 4 seconds to sample the map at the bottom
+right - and up to about 13 seconds for the largest level in the set. The CGA
+and Hercules are a few seconds quicker, because they draw no colour. The
+skill panel and the word LOADING go down before that starts, and on a VGA a
+bar creeps across the map window for the whole wait, because once the game
+has the machine the system cannot put a message on the screen for it. The
+terrain is built in memory and appears all at once.
+
+While a level plays, each lemming costs the mechanics a fraction of a
+millisecond of terrain tests a frame. A frame is 17 a second in the original;
+here a crowded level plays slower on an 8088, and everything in the game -
+the release rate, the time limit - slows with it, so no level becomes harder
+because the machine is slow. The pointer follows the mouse 18 times a second
+whatever the level is doing, and stays lit while the game draws around it -
+it comes off only when something is drawn underneath it. A click is caught
+even in the middle of a long scroll on the two cards that compose one.
 
 This is a 1991 game on a 1981 processor and it plays at what that costs; the
 design record has the whole table.

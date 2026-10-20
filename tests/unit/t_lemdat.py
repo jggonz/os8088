@@ -242,7 +242,8 @@ def read_ground(path):
              "<HBBBBHHHHHHBBBHHHB", blob, i * 28)
         objects.append(dict(index=i, w=w, h=h, frames=last, first=first,
                             fsize=fsize, mask_off=mask_off, base=base,
-                            effect=eff, tl=tl, tt=tt, tw=tw, th=th, sound=snd))
+                            effect=eff, tl=tl, tt=tt, tw=tw, th=th, sound=snd,
+                            flags=flags, prev=prev))
     terrain = []
     for i in range(64):
         w, h, image, mask, _u = struct.unpack_from("<BBHHH", blob, 448 + i * 8)
@@ -459,8 +460,11 @@ def check_bands(sections, lem, out_dir, geom):
         check(body[0:4] == magic,
               "%s/%s starts %r, not %r" % (geom, parts[0], body[0:4], magic))
         version = struct.unpack_from("<H", body, 4)[0]
-        check(version == 1, "%s/%s is version %d, not 1"
-              % (geom, parts[0], version))
+        # LGRB went to 2 in wave 3 (bytes 896 and 912, checked below against
+        # GROUNDxO itself); every other bank is still 1
+        want = 2 if magic == b"LGRB" else 1
+        check(version == want, "%s/%s is version %d, not %d"
+              % (geom, parts[0], version, want))
         return parts, body
 
     # --- the style banks --------------------------------------------------
@@ -515,6 +519,28 @@ def check_bands(sections, lem, out_dir, geom):
             check(body[off:off + n] == obj_sec[o["base"]:o["base"] + n],
                   "%s/LEMGR%d object %d: the band's frames are not VGAGR "
                   "section 1's" % (geom, s, o["index"]))
+            # THE RASTER'S ROW BUFFERS, a third time and from GROUNDxO's own
+            # width and height (apps/lemmings/lemovl.c lem_dims_ok refuses
+            # the picture at run time; tools/os88lem.py raster_fits by name):
+            # a row of at most 11 bytes and 800 shifted mask bytes
+            bpr = (o["w"] + 7) // 8
+            check(bpr <= 11 and (bpr + 1) * o["h"] <= 800,
+                  "%s/LEMGR%d object %d is %dx%d - past lemsprite.inc's row "
+                  "buffers (24 bytes doubled, LEM_SMK 800)"
+                  % (geom, s, o["index"], o["w"], o["h"]))
+            # wave 3's two header rows, read off GRND's own fields here
+            # rather than out of the converter: the animation flags' low
+            # byte, and the preview frame Lemmix AssignFromDos derives
+            check(body[896 + o["index"]] == o["flags"] & 0xFF,
+                  "%s/LEMGR%d object %d: animation flags %d, GROUNDxO says %d"
+                  % (geom, s, o["index"], body[896 + o["index"]],
+                     o["flags"] & 0xFF))
+            pv = (o["prev"] - o["base"]) // o["fsize"] if o["fsize"] else 0
+            if pv < 0 or pv >= max(o["frames"], 1):
+                pv = 0
+            check(body[912 + o["index"]] == pv,
+                  "%s/LEMGR%d object %d: preview frame %d, GROUNDxO says %d"
+                  % (geom, s, o["index"], body[912 + o["index"]], pv))
 
     # --- the MAIN bank ----------------------------------------------------
     got = bank("LEMMAIN", b"LMNB")

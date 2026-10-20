@@ -17,7 +17,7 @@
 ;
 ; ATTRIBUTION. Lemmings is (C) 1991 DMA Design / Psygnosis. Nothing in this
 ; file is derived from the original; the derived tables, strings and offsets
-; are in the converted band files (SPEC.md 114.2, 92.3) and in the .c files that
+; are in the converted band files (SPEC.md 114.2, 114.3) and in the .c files that
 ; read them, each naming its source at the line that carries it. The full
 ; attribution list is in README.TXT beside the package (SPEC.md 114.2).
 ; =============================================================================
@@ -40,10 +40,10 @@
                                     ; package's resident budget is 81% spent
                                     ; before it starts (SPEC.md 114.6)
 
-%define CC_PKG_NAME 'LEMMINGS'      ; <= 15 chars, and the stem of LEMMINGS.OVL:
-                                    ; crt0.asm builds the module's file name out
-                                    ; of this and '.OVL', so the disk and the
-                                    ; loader cannot disagree about it
+%define CC_PKG_NAME 'LEMMINGS'      ; <= 15 chars: the package's own name in the
+                                    ; header. The overlay is a PART of this
+                                    ; file (CC_OVL_PART below), so no module
+                                    ; file name is built from it
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *)
 %define CC_HAS_ONCLICK              ; void os88_onclick(int, int, void *)
@@ -53,11 +53,10 @@
                                     ; from its own length (LESSONS.md 8's Font
                                     ; list), so a content box that changes under
                                     ; us changes the page
-%define CC_HAS_ONWAKE               ; void os88_onwake(void *) - the FIRST
-                                    ; callback, and the only place the overlay
-                                    ; may be forced resident: there is no
-                                    ; instance to resolve a module for while
-                                    ; os88_main() is running (SPEC.md 73.14,
+%define CC_HAS_ONWAKE               ; void os88_onwake(void *) - the one
+                                    ; lock-free callback, and where the disk
+                                    ; errands go: the progress file, a rating,
+                                    ; the launch (SPEC.md 74.1,
                                     ; LESSONS.md 13)
 %define CC_HAS_ONTIMER              ; void os88_ontimer(void *) - SPEC.md 13.9,
                                     ; ONE-SHOT, and it exists for exactly one
@@ -98,11 +97,39 @@
                                     ; lem_fsx_main, a RESIDENT function. The
                                     ; C's own use set (SPEC.md 73.9.1) trims
                                     ; the thunks to the ones it names
-%define CC_HAS_OVL                  ; ...and LEMMINGS.OVL (SPEC.md 73.14, 92.6).
-                                    ; The split is from wave 1 rather than from
-                                    ; the wave the ceiling binds in: at cword's
-                                    ; MEASURED 5.7 bytes a line this program does
-                                    ; not fit one segment and never could
+%define CC_HAS_OVL                  ; ...and the overlay (SPEC.md 73.14,
+                                    ; 114.6). The split is from wave 1 rather
+                                    ; than from the wave the ceiling binds in:
+                                    ; at cword's MEASURED 5.7 bytes a line this
+                                    ; program does not fit one segment and
+                                    ; never could
+%define CC_OVL_PART                 ; ...which is PART 0 of LEMMINGS.O88 and
+                                    ; not a LEMMINGS.OVL beside it (SPEC.md
+                                    ; 73.14.2, CWORD's shape since main's
+                                    ; drift), and EAGER: op_load reads it at
+                                    ; launch, behind the image. A disk can no
+                                    ; longer carry the package without its
+                                    ; module - wave 1's "Play refuses in a
+                                    ; window" case is gone with the file - and
+                                    ; the folder is one row shorter. Every
+                                    ; ovl_ call from inside the bracket finds
+                                    ; it resident, which the bracket requires
+                                    ; (SPEC.md 114.5)
+
+%ifdef CC_OVL_LAZY                  ; THE PART HAS TO STAY EAGER, and this is
+                                    ; the last line a define can precede crt0
+                                    ; at, so nothing above slips past it. About
+                                    ; eighty
+%fatal "LEMMINGS: its void ovl_ functions require the EAGER part (SPEC.md 114.6)"
+%endif                              ; ovl_ functions are `void` - ovl_tick_draw,
+                                    ; ovl_frame_end, ovl_mm_clear among them,
+                                    ; called inside the bracket - which breaks
+                                    ; LESSONS.md's "an overlay function answers
+                                    ; a status, 0 = it did not happen". That is
+                                    ; safe ONLY because the eager part makes
+                                    ; cc_ovneed a bare `ret`; under the lazy arm
+                                    ; a refused fetch would make each of them
+                                    ; silently do nothing, mid-frame
 
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the entry
                                     ; and callback trampolines, the overlay
@@ -138,6 +165,8 @@
 %include "lemmings/lemmask.inc"     ; the solid mask, and the probe
 %include "lemmings/lemblit.inc"     ; the three backends
 %include "lemmings/lemfont.inc"     ; text in a foreign mode (SPEC.md 85.7)
+%include "lemmings/lemsprite.inc"   ; sprites, objects, the background, the
+                                    ; pointer (SPEC.md 114.4.6)
 
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end -
                                     ; the three forward references the header

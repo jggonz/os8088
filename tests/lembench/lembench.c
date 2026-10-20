@@ -42,16 +42,23 @@ int  lem_has_pixel(int x, int y);
 void lem_set_pixel(int x, int y);
 int  lem_probe4(int x, int y, const char *offs);
 void lem_m_span(int x, int y, int w, int set);
-void lem_m_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-                 int flags);
 void lem_m_derive(unsigned dstseg, int kind);
 void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
                  unsigned shadowseg);
 void lem_r_prep(void);
 void lem_r_unprep(void);
 void lem_r_clearworld(void);
-void lem_r_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
-                 int flags);
+void lem_r_wsetup(unsigned p0, unsigned p3);
+void lem_r_tsetup(unsigned t);
+void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
+                  int flags);
+void lem_r_tload(void);
+
+/* THE PACKED-NIBBLE ALTERNATIVE, timed and shipped nowhere (lembench.asm):
+ * the conversion pass alone, through a 256 x 4 table this file fills. NOT
+ * static, because the assembly names it. */
+void lbb_lutconv(unsigned src);
+unsigned char lbb_lut[1024];
 void lem_r_scroll(int x);
 void lem_r_present(void);
 void lem_r_rect(int x, int y, int w, int h, int colour, int fill);
@@ -65,10 +72,13 @@ static struct os88_size lb_sz;
 /* the claims: the mask, a scratch that holds the synthetic piece and the font,
  * and - on the two 1bpp backends - the world and the shadow */
 static unsigned lb_mask, lb_data, lb_world, lb_shadow;
+static unsigned lb_t;               /* the T claim: 125 KB, four world planes on
+                                     * VGA - and the packed row's SOURCE, which
+                                     * is 128,000 bytes of it */
 static int lb_kindnow;
 static int lb_ready;
 
-#define LB_ROWS 12
+#define LB_ROWS 15
 static unsigned lb_ticks[LB_ROWS];
 static unsigned lb_iters[LB_ROWS];
 static const char *lb_name[LB_ROWS];
@@ -137,15 +147,38 @@ static void lb_do(int row, unsigned n)
         for (i = 0; i < n; i++)
             lem_probe4(100 + (int)(i & 255), 40 + (int)(i & 63), lb_off4);
         break;
-    case 2:                                     /* a terrain piece -> mask */
+    case 2:                                     /* a piece -> the MASK only,
+                                                 * which is the whole compose
+                                                 * on CGA and Hercules */
+        lem_r_wsetup(0, lb_mask);
         for (i = 0; i < n; i++)
-            lem_m_piece(lb_data, LB_PIECE_OFF, (int)(i & 511), (int)(i & 127),
-                        LB_PIECE_W, LB_PIECE_H, 0);
+            lem_r_wpiece(lb_data, LB_PIECE_OFF, (int)(i & 511) + 1,
+                         (int)(i & 127), LB_PIECE_W, LB_PIECE_H, 0);
         break;
-    case 3:                                     /* ...and -> the picture */
+    case 3:                                     /* ...and -> T's three colour
+                                                 * planes AND the mask, which
+                                                 * is the whole of it on VGA */
+        lem_r_wsetup(lb_t, lb_mask);
         for (i = 0; i < n; i++)
-            lem_r_piece(lb_data, LB_PIECE_OFF, (int)(i & 511), (int)(i & 127),
-                        LB_PIECE_W, LB_PIECE_H, 0);
+            lem_r_wpiece(lb_data, LB_PIECE_OFF, (int)(i & 511) + 1,
+                         (int)(i & 127), LB_PIECE_W, LB_PIECE_H, 0);
+        break;
+    case 11:                                    /* T -> VRAM, the whole world */
+        for (i = 0; i < n; i++)
+            lem_r_tload();
+        break;
+    case 12:                                    /* the PACKED alternative's
+                                                 * conversion pass alone */
+        for (i = 0; i < n; i++)
+            lbb_lutconv(lb_t);
+        break;
+    case 13:                                    /* a piece -> the colour planes
+                                                 * at a BYTE-ALIGNED x, which
+                                                 * is the shift's whole worth */
+        lem_r_wsetup(lb_t, lb_mask);
+        for (i = 0; i < n; i++)
+            lem_r_wpiece(lb_data, LB_PIECE_OFF, (int)(i & 63) << 3,
+                         (int)(i & 127), LB_PIECE_W, LB_PIECE_H, 0);
         break;
     case 4:                                     /* the whole world derived */
         for (i = 0; i < n; i++)
@@ -180,9 +213,11 @@ static void lb_do(int row, unsigned n)
         for (i = 0; i < n; i++)
             lem_r_rect(208 + (int)(i % 79), 18, 25, 20, 3, 0);
         break;
-    default:                                    /* a five-cell status field */
+    case 10:                                    /* a five-cell status field */
         for (i = 0; i < n; i++)
             lem_f_run(lb_data, LB_FONT_OFF, 18, 0, lb_field, 5);
+        break;
+    default:
         break;
     }
 }
@@ -241,8 +276,11 @@ static void lb_fsx_main(void)
      *      source bytes, which is the five sets' 273 pieces to within a factor
      *      of two, and a level is up to 400 of them. On the 1bpp backends row
      *      3 is nothing at all - their whole world is row 4. */
-    lb_row(2, "terrain piece -> mask", 100);
-    lb_row(3, "terrain piece -> picture", 50);
+    lb_row(2, "piece -> mask (RAM)", 100);
+    if (lb_kindnow == 0 && lb_t != 0) {
+        lb_row(3, "piece -> T+mask, x odd", 50);
+        lb_row(13, "piece -> T+mask, x %8", 50);
+    }
 
     /* 4    THE 1bpp/2bpp WORLD out of the mask, 32,000 bytes in. Once per
      *      level, and nothing on VGA. */
@@ -270,6 +308,18 @@ static void lb_fsx_main(void)
     lb_row(8, "minimap row, 104 cells", 20);
     lb_row(9, "view rect outline", 100);
     lb_row(10, "status field, 5 cells", 20);
+
+    /* 11-12 THE COMPOSER'S OTHER HALF, and the design it was chosen against
+     *      (SPEC.md 114.7.1). Row 11 is the shipping T -> VRAM copy, four
+     *      `rep movsw` of 16,000 words; row 12 is the PACKED-NIBBLE design's
+     *      conversion pass through its 256-entry table, which that design
+     *      pays on top of composing (and of swizzling every planar piece into
+     *      nibbles on the way in, which is not timed because the conversion
+     *      alone decides it). VGA only: the shadow backends have no planes. */
+    if (lb_kindnow == 0 && lb_t != 0) {
+        lb_row(11, "T -> VRAM, whole world", 1);
+        lb_row(12, "packed LUT -> VRAM (alt)", 1);
+    }
 
     lem_r_unprep();
 }
@@ -431,6 +481,21 @@ static void lb_poke_data(void)
         os88_poke(lb_data, LB_FONT_OFF + i, (int)((i & 1) ? 0x3C : 0x18));
 }
 
+/* lb_fill_lut - the packed design's table: entry b, byte p, is plane p's
+ * bits for the two pixels in b - pixel (b >> 4) in bit 1, pixel (b & 15) in
+ * bit 0 - so four lookups a byte shift two bits into each of four plane
+ * accumulators (lembench.asm's lbb_lutconv). */
+static void lb_fill_lut(void)
+{
+    unsigned b, p, v;
+
+    for (b = 0; b < 256; b++)
+        for (p = 0; p < 4; p++) {
+            v = (((b >> (4 + p)) & 1) << 1) | ((b >> p) & 1);
+            lbb_lut[(b << 2) + p] = (unsigned char)v;
+        }
+}
+
 void *os88_main(void)
 {
     static struct os88_video vid;
@@ -451,6 +516,13 @@ void *os88_main(void)
 
     lb_mask = os88_mem_claim(32);
     lb_data = os88_mem_claim(4);
+    if (lb_kindnow == 0) {
+        lb_t = os88_mem_claim(125);
+        lem_r_tsetup(lb_t);         /* tload is a no-op without it, and the
+                                     * first wave-3 run timed exactly that:
+                                     * "0 us (512 in 0 ticks)" */
+    }
+    lb_fill_lut();
     if (lb_kindnow != 0) {
         lb_world = os88_mem_claim(lb_kindnow == 1 ? 63 : 32);
         lb_shadow = os88_mem_claim(16);

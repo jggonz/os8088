@@ -16,7 +16,7 @@ and **no file exceeds 64,512 bytes** (§114.3.2). Every name is uppercase 8.3 in
 | `LEMR0.LEM` … `LEMR3.LEM` | one file per RATING: 30 level entries of 64 bytes with the preview fields already unpacked | wave 1 |
 | `LEMSTR.LEM` | the string resource band (§114.3, "the string resource band is written here too") | wave 1 |
 | `LEMLV0.LEM` … `LEMLV9.LEM` | the 80 raw 2048-byte level records, **eight to a file** (§114.3.2), ODDTABLE already folded in | wave 4 |
-| `LEMGR0.LEM` … `LEMGR4.LEM` | one style bank per graphic set: palette, terrain pieces, object metadata and frames | wave 2 |
+| `LEMGR0.LEM` … `LEMGR4.LEM` | one style bank per graphic set: palette, terrain pieces, object metadata and frames. Header magic `LGRB`, **version 2** since wave 3, which added each object slot's GRND animation flags at byte 896 and its preview frame at 912 (the layout is `tools/os88lem.py`'s STYLE BANK block); the package refuses version 1 rather than reading zeros as "never animates" | wave 2, v2 in wave 3 |
 | `LEMMAIN.LEM` | the MAIN.DAT-derived bank: panel bitmap, both fonts, the 28 animations, the masks, the rating signs, the brown background | wave 2 |
 | `LEMSP0_0.LEM` … | the four VGASPEC pictures, in numbered parts (`LEMSP<n>_<part>.LEM`) because one is 76,800 bytes | wave 4 |
 | `LEVELS.TXT` | plain text: what this disk carries and why the rest is not on it | the reader |
@@ -121,8 +121,14 @@ string, each row carrying **the reference file that defines it** in a comment
 ## `--fixture`
 
 `python3 tools/os88lem.py --fixture apps/lemmings/hosttest/fixture` writes a
-tiny SYNTHETIC set — `LEMMAN.LEM` with two levels, `LEMSTR.LEM` with the whole
-real string table (the strings are the port's own text and the reference's
-verbatim on-screen wording, not decoded data), one style bank stub — carrying
-**no bytes derived from the original data files**, so it can be committed and
-the host harness runs with no fetch.
+tiny SYNTHETIC set — `LEMMAN.LEM`, a rating file with **three playable levels
+and one greyed row**, `LEMLV0.LEM` with their records, `LEMSTR.LEM` with the
+whole real string table (the strings are the port's own text and the
+reference's verbatim on-screen wording, not decoded data), one style bank stub
+with four invented terrain pieces and five object types (exit, hatch, water,
+a trap, fire), and a `LEMMAIN.LEM` stub with synthetic lemming animations and
+destruction stencils — carrying **no bytes derived from the original data
+files**, so it can be committed and the host harness runs with no fetch. The
+three playable levels are what the mechanics replay drives (SPEC.md 114.12,
+`apps/lemmings/hosttest/mech/`): a change to them moves the replay's committed
+trace hashes, and `apps/lemmings/build.sh` says so by name.

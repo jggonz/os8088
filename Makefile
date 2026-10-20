@@ -8331,7 +8331,7 @@ covl: $(BUILD)/covl.img $(BUILD)/covl360.img
 # the dependency silently is not one. They are NAMED rather than wildcarded for
 # the reason spelled out at $(BUILD)/lemmings.raw.asm's own comment.
 LEMINC := apps/lemmings/lemmask.inc apps/lemmings/lemblit.inc \
-          apps/lemmings/lemfont.inc
+          apps/lemmings/lemfont.inc apps/lemmings/lemsprite.inc
 
 # --- LEMBENCH, the LEMMINGS raster's BENCH (ON DEMAND: `make lembench`) --------
 # SPEC.md 114.7 and PERFORMANCE.md rule 4: measure before redesigning, and a
@@ -10271,8 +10271,10 @@ lemmings-data: $(BUILD)/lemband.stamp
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD (apps/runcpm's pattern, not
 # cword's): a check that fails leaves no stamp, and the compile does not run.
 LEMSRC  := apps/lemmings/lemtab.c apps/lemmings/lemtext.c \
-           apps/lemmings/lemload.c apps/lemmings/lemui.c \
-           apps/lemmings/lemdraw.c apps/lemmings/lemovl.c
+           apps/lemmings/lemload.c apps/lemmings/lemgame.c \
+           apps/lemmings/lemobj.c apps/lemmings/lemact.c \
+           apps/lemmings/lemui.c apps/lemmings/lemdraw.c \
+           apps/lemmings/lemovl.c
 # ...and hosttest/lemraster.c is NAMED here for the same reason LEMINC names
 # every %include below: lemtest.c #includes it, make cannot see through that,
 # and a stale build/.lemmings-hostchecks means the raster's MODEL still
@@ -10280,6 +10282,11 @@ LEMSRC  := apps/lemmings/lemtab.c apps/lemmings/lemtext.c \
 LEMHOST := apps/lemmings/build.sh apps/lemmings/hosttest/os88.h \
            apps/lemmings/hosttest/lemtest.c \
            apps/lemmings/hosttest/lemraster.c tools/os88lem.py \
+           tools/lemsim.py apps/lemmings/hosttest/mech/traces.sha256 \
+           apps/lemmings/hosttest/mech/level0.txt \
+           apps/lemmings/hosttest/mech/level1.txt \
+           apps/lemmings/hosttest/mech/level2.txt \
+           apps/lemmings/hosttest/mech/level2n.txt \
            $(wildcard apps/lemmings/hosttest/fixture/*)
 $(BUILD)/.lemmings-hostchecks: apps/lemmings/lemmings.c $(LEMSRC) $(LEMHOST) \
                                $(BUILD)/lemstr.h | $(BUILD)
@@ -10295,8 +10302,8 @@ $(BUILD)/.lemmings-hostchecks: apps/lemmings/lemmings.c $(LEMSRC) $(LEMHOST) \
 # stops covering a file the day one is renamed, and the whole point of the line
 # is that an edit to the raster cannot leave a stale build/lemmings.o88 reading
 # exactly like a change that did nothing (LESSONS.md 9).
-# WAVE 3 ADDS lemgame.c, lemact.c and lemobj.c to LEMSRC, in the same edit as
-# the file itself.
+# WAVE 3 ADDED lemgame.c, lemobj.c and lemact.c to LEMSRC, in the same edit as
+# the files themselves, and lemsprite.inc to LEMINC.
 #
 # LEMINC ITSELF IS DEFINED ABOVE, BESIDE THE LEMBENCH BLOCK, and that is not
 # tidiness: `make` expands a prerequisite list when it READS the rule, so a
@@ -10320,15 +10327,28 @@ $(BUILD)/lemmings.bin: apps/lemmings/lemmings.asm $(BUILD)/lemmings.gen.asm \
 	@echo "lemmings: $(call FILESIZE,$@) bytes (image + module)"
 
 # THE OVERLAY CUT (SPEC.md 73.14, 114.6). Everything from `.modc` on becomes
-# LEMMINGS.OVL, a file beside the package: the About card, the greying facts,
-# the preview text, the chrome and the progress file. os88ovl.py finds the
+# the module: the About card, the greying facts, the preview and postview text,
+# the chrome, the progress file, the level's compose and every once-a-level or
+# once-a-frame routine of the game (lemmings.c's renames say which). os88ovl.py finds the
 # boundary in the image size word the header already carries, and os88pkg.py
 # then refuses a package whose header and file disagree - which is what stops
 # this step being skippable.
-$(BUILD)/lemmings.o88: $(BUILD)/lemmings.bin tools/os88pkg.py tools/os88ovl.py
+#
+# ...AND THE MODULE IS A PART OF THE PACKAGE SINCE WAVE 3 (SPEC.md 73.14.2,
+# `%define CC_OVL_PART` in the shim, CC_PACKAGE's fifth argument `part` open-
+# coded): the cut module goes back in as the LAST --part, LZ4-packed, and
+# os88pkg.py refuses a --part count that is not the table's file-backed rows,
+# so the shim and this rule cannot drift apart silently. $(BUILD)/LEMMINGS.OVL
+# is still written, plain, because the host readers want the module's bytes;
+# no disk carries it. The part's packing is $(CC_PARTZ), the template's, so
+# `make CCPARTZ=...` - the A/B for that packing (apps/cc/Makefile.inc) -
+# reaches this package as it reaches every CC_PACKAGE one.
+$(BUILD)/lemmings.o88: $(BUILD)/lemmings.bin tools/os88pkg.py tools/os88ovl.py \
+                       $(PKGZSTAMP)
 	python3 tools/os88ovl.py $< -o $(BUILD)/LEMMINGS.OVL \
 		--trim $(BUILD)/lemmings.trim.bin
-	python3 tools/os88pkg.py $(BUILD)/lemmings.trim.bin -o $@
+	python3 tools/os88pkg.py $(PKGZARG) $(BUILD)/lemmings.trim.bin -o $@ \
+		$(CC_PARTZ) --part $(BUILD)/LEMMINGS.OVL
 
 lemmings: $(BUILD)/lemmings.o88
 
@@ -10337,17 +10357,19 @@ lemmings: $(BUILD)/lemmings.o88
 # 5.25" HD (SPEC.md 19) for the AT-class machine.
 #
 # ONE FOLDER PER DISK, AND THAT IS A CORRECTNESS REQUIREMENT rather than a
-# layout choice. LEMMINGS.OVL is resolved in the LAUNCHING instance's own
-# directory (SPEC.md 19.2.1, 73.14) and so is every band file the package opens
-# by name, so the package, the module and the bands are ONE folder on every disk
-# (SPEC.md 114.6) - which is WEAVE's and LOOM's rule for the same reason.
+# layout choice. Every band file the package opens by name is resolved in the
+# LAUNCHING instance's own directory (SPEC.md 19.2.1, 73.14), so the package
+# and the bands are ONE folder on every disk (SPEC.md 114.6) - which is WEAVE's
+# and LOOM's rule for the same reason. The module is no file at all: it is
+# part 0 of LEMMINGS.O88, read by op_load before os88_main() runs (SPEC.md
+# 73.14.2).
 #
 # IT IS A SUBFOLDER AND NOT THE ROOT, and the build refused the other way round
-# before it was: the 1.44MB set is 36 band files plus the package and the module,
+# before it was: the 1.44MB set is 36 band files plus the package and README.TXT,
 # and os88disk.py stops at "38 listed root entries; the kernel lists at most 32
 # per directory". `--deep-folders` lifts that cap for a SUBFOLDER only - the
 # Disk window then shows the first 31 rows and the file API reaches them all -
-# so LEMMINGS.O88 and LEMMINGS.OVL are passed FIRST and are therefore the first
+# so LEMMINGS.O88 and README.TXT are passed FIRST and are therefore the first
 # two rows the user sees, which is the whole of what those 31 rows have to
 # carry. The 720KB and 360KB disks are inside the cap anyway; the flag costs
 # them nothing and having one rule shape for all four is worth more than
@@ -10370,7 +10392,7 @@ lemmings: $(BUILD)/lemmings.o88
 # About card is twelve rows and names the two principals and points HERE. A
 # disk without it is a product whose stated attribution exists nowhere on it.
 # apps/c64/README.TXT + COPYING is the worked precedent.
-LEMPKG  := $(BUILD)/lemmings.o88 $(BUILD)/LEMMINGS.OVL apps/lemmings/README.TXT
+LEMPKG  := $(BUILD)/lemmings.o88 apps/lemmings/README.TXT
 LEMHEAD := $(addprefix LEMMINGS:,$(LEMPKG))
 
 # ...AND SYSTEM/APPDATA ON EVERY ONE OF THEM (SPEC.md 19.9), which is the rule
