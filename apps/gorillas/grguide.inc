@@ -74,6 +74,7 @@ gr_guideerase:
     or bx, bx
     jnz .undo
     mov [gr_guidedots], bl
+    mov byte [gr_guideowed], 1  ; the box still spans the dots just restored
 .out:
     ret
 
@@ -99,21 +100,25 @@ gr_guideblit:
     ret
 
 ; Plot the dots for [gr_turn] at [gr_angle] into the scene (none drawn
-; yet), saving each ink underneath and growing the owed box over them. Q8 direction: x along cos, mirrored
-; for the right gorilla; y along sin at the scene's 15/16 aspect.
+; yet), saving each ink underneath and growing the owed box over them. Q8
+; direction: x along cos, mirrored for the right gorilla; y along sin at the
+; scene's 15/16 aspect. The ray starts beside the thrower's shoulder rather
+; than at the release point above its head: on the tallest roof that point
+; is inside the HUD rows, and the first dots - the ones that ARE the angle -
+; would be clipped away. From the shoulder (at least row 32) they never are.
 gr_guidedraw:
     xor bx, bx
     mov bl, [gr_turn]
     shl bx, 1
-    mov ax, [gr_gx+bx]          ; gr_initmotion's release point
-    add ax, 2
+    mov ax, [gr_gx+bx]
+    add ax, 17                  ; one clear of the 16-wide art, either side
     or bx, bx
     jz .x
-    add ax, 8
+    sub ax, 19
 .x:
     mov [gr_guidex], ax
     mov ax, [gr_gy+bx]
-    sub ax, 7
+    add ax, 4
     mov [gr_guidey], ax
     mov ax, [gr_angle]
     push ax

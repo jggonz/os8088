@@ -183029,7 +183029,9 @@ Pause, focus and About suspend aiming.
 
 Setup's seventh question, `Show aim guides? Yes or No` (default No, `gr_guide`),
 draws the active player's exit angle in `grguide.inc`. It is a straight ray of
-eight dots from `gr_initmotion`'s release point, at the scene's 15/16 aspect.
+eight dots, at the scene's 15/16 aspect. The ray starts beside the thrower's
+shoulder, not at the release point above its head. On the tallest roof that point
+is in the HUD rows, and the ray's first three dots would be clipped.
 No gravity, wind or velocity enters it, so it says nothing of the landing. The
 dots sit 4..33 pixels out with widening gaps and stray up to 3 pixels off the
 line. The first four are ink 15 and the last four ink 7. They are drawn into

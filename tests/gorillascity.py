@@ -291,20 +291,27 @@ def check_guide(m, p, code, tag):
     call(m, code, 'gr_guideshow')
     assert p.b('guidedots') == 0 and p.data('scene', 16384) == clean, 'guide drawn while off'
     B('guide', 1)
-    for turn, angle in ((0, 45), (0, 70), (1, 30), (1, 60)):
+    for turn, angle in ((0, 0), (0, 45), (0, 70), (1, 30), (1, 60)):
         B('turn', turn); W('angle', angle)
         call(m, code, 'gr_guideshow')
         assert p.w('guideat') == angle + 512*turn
         scene, seen = p.data('scene', 16384), dots()
-        assert len(seen) >= 6, (turn, angle, seen)
-        x0 = gx[turn] + 2 + 8*turn
-        y0 = gy[turn] - 7
+        # The first three dots are the angle, and room for them is promised
+        # even on the tallest roof; the far ones may leave into the HUD rows.
+        assert len(seen) >= 3, (turn, angle, seen)
+        x0 = gx[turn] + (-2 if turn else 17)
+        y0 = gy[turn] + 4
         side = -1 if turn else 1
         reach = [((x-x0)**2 + (y-y0)**2) ** .5 for x, y, _ in seen]
         assert all(a < b for a, b in zip(reach, reach[1:])), ('not outward', seen)
         assert max(reach) <= 36, ('guide runs on toward the landing', seen)
         gaps = [b - a for a, b in zip(reach, reach[1:])]
-        assert gaps[-1] > 2*gaps[0], ('guide does not thin out', gaps)
+        if len(seen) >= 6:
+            assert gaps[-1] > 2*gaps[0], ('guide does not thin out', gaps)
+        if angle == 0:
+            assert len(seen) == 8 and all(abs(y - y0) <= 3 for _, y, _ in seen)
+            assert {ink(scene, x, y) for x, y, _ in seen[4:]} == {7}
+            continue
         for x, y, _ in seen[:3]:              # the first dots ARE the angle
             assert side*(x - x0) > 0 and y < y0
             # slope in the scene's aspect: dy/dx = tan(angle) * 15/16
@@ -314,7 +321,7 @@ def check_guide(m, p, code, tag):
             got = math.atan2(y0 - y, side*(x - x0))
             assert abs(got - want) < .3, (angle, x, y, got, want)
         assert {ink(scene, x, y) for x, y, _ in seen[:3]} == {15}
-        assert {ink(scene, x, y) for x, y, _ in seen[4:]} == {7}, 'far dots do not fade'
+        assert {ink(scene, x, y) for x, y, _ in seen[4:]} <= {7}, 'far dots do not fade'
         drawn = {(x, y) for x, y, _ in seen}
         for y in range(128):
             for x in range(256):

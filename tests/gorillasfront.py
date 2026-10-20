@@ -120,7 +120,7 @@ def arm(tag, off, disk, out):
         G.M.pace(m, .4)
         assert p.w('aipower') == aim, 'paused computer kept aiming'
         # Its choice is on the glass for the whole of its thought.
-        assert p.w('guideat') == p.w('angle') + 512 and p.b('guidedots') >= 6
+        assert p.w('guideat') == p.w('angle') + 512 and p.b('guidedots') >= 3
         screenshot(m, p, out / (tag + '-guide.png'))
         G.key(m, 'KeyP')
         G.wait(m, lambda: p.b('state') == 1, 'computer launches its own throw')
