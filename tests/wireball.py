@@ -71,7 +71,7 @@ def settle(m, **kw):
 
 
 class Machine(Qemu):
-    def __init__(self, directory, index, *, app='wireball', filename='WIREBALL.O88', disk=None, prefix='wb_'):
+    def __init__(self, directory, index, *, app='wireball', filename='WIREBALL.O88', disk=None, prefix='wb_', ps2=False):
         self.directory = directory
         self.app = app
         self.varprefix = prefix
@@ -84,7 +84,11 @@ class Machine(Qemu):
                 '-drive', f'file={artifact("os8088.img")},if=floppy,index=0,format=raw,snapshot=on',
                 '-drive', f'file={(disk or DISK_OVERRIDE or artifact("wireball.img"))},if=floppy,index=1,format=raw,snapshot=on',
                 '-boot', 'a', '-display', 'none', '-nic', 'none',
-                '-chardev', 'msmouse,id=mouse', '-device', f'isa-serial,chardev=mouse,index={1-self.linkport}',
+                # ps2: the pointer is the i8042's and the other UART is a
+                # silent null modem with nothing on it, so BOTH ports are
+                # free and a desktop serial game has to find the right one.
+                '-chardev', 'null,id=mouse' if ps2 else 'msmouse,id=mouse',
+                '-device', f'isa-serial,chardev=mouse,index={1-self.linkport}',
                 '-chardev', f'socket,id=link,path={self.linkpath},server=on,wait=off',
                 '-device', f'isa-serial,chardev=link,index={self.linkport}',
                 '-qmp', f'unix:{path},server=on,wait=off',

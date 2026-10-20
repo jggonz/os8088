@@ -153,7 +153,7 @@ def arm(tag, disk, off, code, driver, clobber):
                 assert p.b('state') == 5 and p.b('setupfield') == 5
                 assert b'Enter Yes or No' in p.data('hudchars', 512)
             else:
-                assert p.b('state') == 6 and p.b('bgmenabled') == enabled
+                assert p.b('setupfield') == 6 and p.b('bgmenabled') == enabled
         call('new')
         call('bgmtick')
 

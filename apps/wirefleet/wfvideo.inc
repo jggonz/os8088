@@ -1,4 +1,5 @@
 ; Opaque tile rows, native clipping, no idle repaint. SPEC.md 114.2.
+WF_PSTEP equ 720                ; a plane of wf_rowbuf: 24 scanlines of 30
 wf_geometry:
     cmp byte [wf_infs], 0
     jne wf_fs_geometry
@@ -71,6 +72,11 @@ wf_geometry:
     add ax, 114
     add di, 8
     loop .rect
+    call wf_c_geometry          ; 114.10's verdict and layout
+    cmp byte [wf_colour], 0
+    je .chat
+    call wf_c_rects
+.chat:
     call wf_chat_geometry
     ret
 
@@ -99,16 +105,16 @@ wf_ground:
     dec dx
     call wf_fill
     mov ax, 264
-    mov cx, 325
+    mov cx, WF_MGX1-1
     call wf_fill
-    mov ax, 566
+    mov ax, WF_MGX1+240
     mov cx, [wf_w]
     dec cx
     call wf_fill
     cmp byte [wf_ready], 0
     jne .out
-    mov ax, 326
-    mov cx, 565
+    mov ax, WF_MGX1
+    mov cx, WF_MGX1+239
     call wf_fill
 .out:
     ret
@@ -132,17 +138,24 @@ wf_boards:
     mov byte [wf_drawboard], 0
 .board:
     mov byte [wf_drawrow], 0
-    mov word [wf_destx], 24
+    mov ax, [wf_gx0]
+    mov [wf_destx], ax
     cmp byte [wf_infs], 0
     je .which
     mov word [wf_destx], 20
 .which:
     cmp byte [wf_drawboard], 0
     je .row
-    mov word [wf_destx], 326
+    mov ax, [wf_gx1]
+    mov [wf_destx], ax
     cmp byte [wf_infs], 0
     je .row
     mov word [wf_destx], 176
+    mov ax, [wf_destx]          ; BLITP, if the whole board may have it
+    mov bx, [wf_gridy]
+    mov cx, 240
+    mov dx, [wf_gridh]
+    call wf_planarprobe
 .row:
     xor ax, ax
     mov al, [wf_drawrow]
@@ -294,22 +307,37 @@ wf_buildrow:
     pop es
     ret
 
+; A hit ship segment (WF_TILE_HIT0 up) is not stored: it is its segment with
+; the X STAMPED on, (pixel & AND) | OR per byte, the tables laid out as a
+; tile. tools/wirefleet_assets.py proves the stamp exact for all 34.
 wf_copytile:
     xor ax, ax
     mov al, [wf_tile]
     and al, 0x7f
+    mov byte [wf_hitx], 0
+    cmp al, WF_TILE_HIT0
+    jb .stored
+    sub al, WF_TILE_HITBASE
+    mov byte [wf_hitx], 1
+.stored:
     mov bx, WF_TILE_COLOR
     mov si, wf_tiles_color
+    mov word [wf_hitand], wf_hitand_color
+    mov word [wf_hitor], wf_hitor_color
     cmp byte [wf_infs], 0
     je .native
     mov bx, WF_TILE_MONO
     mov si, wf_tiles_cga
+    mov word [wf_hitand], wf_hitand_cga
+    mov word [wf_hitor], wf_hitor_cga
     jmp .source
 .native:
     cmp byte [wf_monochrome], 0
     je .source
     mov bx, WF_TILE_MONO
     mov si, wf_tiles_mono
+    mov word [wf_hitand], wf_hitand_mono
+    mov word [wf_hitor], wf_hitor_mono
 .source:
     mul bx
     add ax, si
@@ -319,15 +347,36 @@ wf_copytile:
     mul word [wf_tstride]
     add ax, wf_rowbuf
     mov [wf_rowdest], ax
+    cmp byte [wf_planar], 0
+    jne wf_copytile_p
     xor dx, dx                  ; twice the destination scanline
 .scan:
     mov si, wf_rowmap
     add si, dx
     mov si, [si]
+    mov bp, si                  ; the source row's offset inside a tile
     add si, [wf_source]
     mov di, [wf_rowdest]
     mov cx, [wf_tstride]
     rep movsb
+    cmp byte [wf_hitx], 0
+    je .mark
+    mov si, [wf_hitand]
+    add si, bp
+    mov bx, [wf_hitor]
+    add bx, bp
+    mov di, [wf_rowdest]
+    mov cx, [wf_tstride]
+.stamp:
+    mov al, [di]
+    and al, [si]
+    or al, [bx]
+    mov [di], al
+    inc si
+    inc bx
+    inc di
+    loop .stamp
+.mark:
     test byte [wf_tile], 0x80
     jz .next
     mov ax, dx
@@ -391,6 +440,292 @@ wf_copytile:
     jb .scan
     ret
 
+; The PLANAR copier (BLITP): wf_ptiles holds the stored tiles converted once
+; (wf_planarinit), each row as plane 0's three bytes then planes 1..3 - so a
+; tile row is still 12 bytes and wf_rowmap's offsets index it unchanged. A
+; scanline is four 3-byte moves into the plane rows of wf_rowbuf, WF_PSTEP
+; apart; the hit X is the same stamp in the same layout, and the yellow
+; cursor (colour 14: planes 1-3 lit, plane 0 dark) is two masks.
+wf_copytile_p:
+    xor ax, ax
+    mov al, [wf_tile]
+    and al, 0x7f
+    cmp al, WF_TILE_HIT0
+    jb .stored
+    sub al, WF_TILE_HITBASE
+.stored:
+    mov bx, WF_TILE_COLOR
+    mul bx
+    add ax, wf_ptiles
+    mov [wf_source], ax
+    xor ax, ax
+    mov al, [wf_drawcol]
+    mov bx, 3
+    mul bx
+    add ax, wf_rowbuf
+    mov [wf_pdest], ax
+    xor dx, dx                  ; twice the destination scanline
+.scan:
+    mov bx, wf_rowmap
+    add bx, dx
+    mov bp, [bx]                ; the source row's offset inside a tile
+    mov si, [wf_source]
+    add si, bp
+    mov di, [wf_pdest]
+%rep 3
+    movsw
+    movsb
+    add di, WF_PSTEP-3
+%endrep
+    movsw
+    movsb
+    cmp byte [wf_hitx], 0
+    je .cursor
+    mov si, wf_pand
+    add si, bp
+    lea bx, [si+wf_por-wf_pand]
+    mov di, [wf_pdest]
+    mov cx, 4
+.plane:
+%rep 3
+    mov al, [di]
+    and al, [si]
+    or al, [bx]
+    mov [di], al
+    inc si
+    inc bx
+    inc di
+%endrep
+    add di, WF_PSTEP-3
+    loop .plane
+.cursor:
+    test byte [wf_tile], 0x80
+    jz .next
+    mov ax, dx
+    shr ax, 1                   ; the scanline
+    mov cx, [wf_cellh]
+    sub cx, 2
+    mov si, wf_curh             ; rows 1 and cellh-2: the top and bottom
+    cmp ax, 1
+    je .mask
+    cmp ax, cx
+    je .mask
+    jb .inside
+    jmp short .next
+.inside:
+    cmp ax, 1
+    jb .next
+    mov si, wf_curv             ; between them: the two sides
+.mask:
+    mov di, [wf_pdest]
+    mov cx, 3
+.p0:
+    lodsb                       ; plane 0 dark under the mask...
+    not al
+    and [di], al
+    inc di
+    loop .p0
+    sub si, 3
+    add di, WF_PSTEP-3
+    mov cx, 3
+.lit:
+    push cx
+    mov cx, 3
+.byte:
+    lodsb                       ; ...planes 1-3 lit
+    or [di], al
+    inc di
+    loop .byte
+    sub si, 3
+    add di, WF_PSTEP-3
+    pop cx
+    loop .lit
+.next:
+    add word [wf_pdest], 30
+    inc dx
+    inc dx
+    mov ax, [wf_cellh]
+    shl ax, 1
+    cmp dx, ax
+    jb .scan
+    ret
+wf_curh: db 0x3f,0xff,0xfc      ; pixels 2..21, as the packed path draws
+wf_curv: db 0x40,0x00,0x02      ; pixels 1 and 22
+
+; The planar cache, once an instance and only on a colour display: the 38
+; stored tiles and the stamp's two tables, each packed row spread to planes.
+wf_planarinit:
+    cmp byte [wf_spreadok], 1
+    je .out
+    push ax
+    push cx
+    push si
+    push di
+    call wf_spreadinit
+    mov si, wf_tiles_color
+    mov di, wf_ptiles
+    mov cx, WF_TILE_STORED*24
+    call wf_spreadrows
+    mov si, wf_hitand_color
+    mov di, wf_pand
+    mov cx, 24
+    call wf_spreadrows
+    mov si, wf_hitor_color
+    mov di, wf_por
+    mov cx, 24
+    call wf_spreadrows
+    mov byte [wf_spreadok], 1
+    pop di
+    pop si
+    pop cx
+    pop ax
+.out:
+    ret
+
+; CX packed rows of 12 bytes at SI -> CX planar rows of 12 at DI.
+wf_spreadrows:
+.row:
+    push cx
+    push si
+    push di
+    mov [wf_pdest], di
+    push es
+    push ds
+    pop es
+    mov di, wf_cellbuf
+    mov cx, 6
+    rep movsw
+    pop es
+    call wf_spread
+    pop di
+    pop si
+    pop cx
+    add si, 12
+    add di, 12
+    loop .row
+    ret
+
+; A whole-rect question: may BLITP draw AX,BX (content-relative), CX wide
+; and DX rows here? Its probe (DI bit 15, SPEC.md 5.4.3.2) refuses exactly
+; what the blit would - kern_small, a display straddle, an x off the 8 grid
+; - and then this board takes the packed BLIT4 path it always had.
+wf_planarprobe:
+    mov byte [wf_planar], 0
+    cmp byte [wf_monochrome], 0
+    jne .out
+    cmp byte [wf_infs], 0
+    jne .out
+    push ax
+    push bx
+    push di
+    add ax, [wf_ox]
+    add bx, [wf_oy]
+    mov di, 0xc000 | WF_PSTEP
+    call OSAPI_GFX_BLITP
+    jc .no
+    mov byte [wf_planar], 1
+    call wf_planarinit
+.no:
+    pop di
+    pop bx
+    pop ax
+.out:
+    ret
+
+; wf_cellbuf's 24 packed pixels (one tile row) -> three bytes of each plane
+; at [wf_pdest], plane after plane: the planar cache's row layout.
+; wf_spreadt[b] is packed byte b's two pixels as two bits in each plane's
+; byte; four of them shifted in turn are eight pixels, and no field ever
+; reaches its neighbour's byte, so word shifts need no carry handling.
+; Preserves every register.
+wf_spread:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov si, wf_cellbuf
+    mov di, [wf_pdest]
+    mov cx, 3
+.group:
+    lodsb
+    xor bh, bh
+    mov bl, al
+    shl bx, 1
+    shl bx, 1
+    mov bp, [wf_spreadt+bx]
+    mov dx, [wf_spreadt+bx+2]
+%rep 3
+    lodsb
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    shl bp, 1
+    shl bp, 1
+    shl dx, 1
+    shl dx, 1
+    or bp, [wf_spreadt+bx]
+    or dx, [wf_spreadt+bx+2]
+%endrep
+    mov ax, bp
+    mov [di], al
+    mov [di+3], ah
+    mov [di+6], dl
+    mov [di+9], dh
+    inc di
+    loop .group
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wf_spreadt, once an instance: 256 entries of four plane bytes.
+wf_spreadinit:
+    push ax
+    push bx
+    push cx
+    push di
+    push si
+    mov di, wf_spreadt
+    xor si, si
+.entry:
+    mov ax, si
+    mov bl, al                  ; BL = the low (right) pixel
+    mov bh, al
+    shr bh, 1
+    shr bh, 1
+    shr bh, 1
+    shr bh, 1                   ; BH = the high (left) pixel
+    mov cx, 4
+.plane:
+    mov al, bh
+    and al, 1
+    shl al, 1
+    mov ah, bl
+    and ah, 1
+    or al, ah
+    mov [di], al
+    inc di
+    shr bl, 1
+    shr bh, 1
+    loop .plane
+    inc si
+    cmp si, 256
+    jb .entry
+    pop si
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 wf_blitrow:
     cmp byte [wf_infs], 0
     jne wf_fs_blitrow
@@ -425,6 +760,22 @@ wf_blitrow:
     mov bp, [wf_rowstride]
     cmp byte [wf_monochrome], 0
     jne .mono
+    cmp byte [wf_planar], 0
+    je .packed
+    xor si, si                  ; planar: plane 0's first row is the first
+    mov bl, [wf_first]          ; changed cell's, the planes WF_PSTEP apart.
+    mov bh, 0                   ; (No mul: DX is already the row count.)
+    add si, bx
+    add si, bx
+    add si, bx
+    add si, wf_rowbuf
+    mov bx, [wf_desty]
+    add bx, [wf_oy]
+    mov bp, 30
+    mov di, WF_PSTEP | 0x4000   ; bit 14: walk an armed clip (5.4.3.6)
+    call OSAPI_GFX_BLITP
+    jmp .done
+.packed:
     call OSAPI_GFX_BLIT4
     jmp .done
 .mono:
@@ -535,7 +886,7 @@ wf_header:
 .labels:
     mov si, wf_yourfleet
     call wf_text
-    mov cx, 326
+    mov cx, WF_MGX1
     mov si, wf_yourships
     cmp byte [wf_ready], 0
     je .right
@@ -563,7 +914,7 @@ wf_header:
     call wf_text
     cmp byte [wf_ready], 0
     je .nextcol
-    add cx, 302
+    add cx, WF_MGX1-24
     call wf_text
 .nextcol:
     inc byte [wf_drawcol]
@@ -597,7 +948,7 @@ wf_header:
     call wf_text
     cmp byte [wf_ready], 0
     je .nextrow
-    add cx, 302
+    add cx, WF_MGX1-24
     call wf_text
 .nextrow:
     inc byte [wf_drawrow]
@@ -633,6 +984,13 @@ wf_roster:
     mov [wf_rostershown+bx], al
     cmp byte [wf_fullpaint], 0
     je .name
+    push bx
+    mov ax, 308
+    mov bx, [wf_gridy]
+    mov cx, 120
+    mov dx, [wf_cellh]
+    call wf_planarprobe
+    pop bx
     mov al, [wf_lengths+bx]
     mov [wf_rowlimit], al
     mov [wf_drawrow], bl

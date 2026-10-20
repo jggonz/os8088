@@ -464,9 +464,9 @@
   "sources": [
    "apps/gorillas"
   ],
-  "stamped": "e4576a70",
-  "strings": "a42f0c9c00a04c78",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "eb3a53c1",
+  "strings": "32a3e259cd3ebe70",
+  "why": "#281 edited the page with the change (seventh setup question for aim guides, the learning computer opponent) and did not restamp; checked against apps/gorillas README and setup"
  },
  "GUIDE_TEX": {
   "sources": [],
@@ -1196,9 +1196,9 @@
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "0517180f",
-  "strings": "852ffb65a027daaa",
-  "why": "Checked the complete game manual against final adapter, recovery and sound acceptance"
+  "stamped": "e3e1efbf",
+  "strings": "24bef22c86f73ff1",
+  "why": "2400 baud and Link > Statistics described"
  },
  "WORD": {
   "sources": [],

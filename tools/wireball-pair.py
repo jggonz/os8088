@@ -151,8 +151,9 @@ def main():
                 raise RuntimeError('Both 86Box processes did not start. Check the installed ROMs and pc1/pc2 host.log (Linux).')
             time.sleep(0.1)
         if args.game == 'wirefleet':
-            print('Open B: → WIREFLET on each PC. Choose Link → Connect COM2, place or auto-place (A), then Ready (Y).\n'
-                  'The lower-identity captain fires first. T: chat, F: fullscreen, S/O: save/load.')
+            print('Open B: → WIREFLET on each PC; each finds the other on COM2 by itself (move the mouse once).\n'
+                  'Place or auto-place (A), then Ready (Y). The lower-identity captain fires first.\n'
+                  'T: chat, F: fullscreen, S/O: save/load. Link → Connect COM2 is the manual fallback.')
         else:
             print('Open B: → WIREBALL and choose Serial Match (S) on each PC.\n'
                   'COM2 is linked; click a VM to control its paddle with Up/Down or W/S.')

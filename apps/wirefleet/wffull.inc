@@ -20,8 +20,9 @@ wf_fullscreen:
     je wf_load
     ret
 .native:
-    mov al, [wf_nativefull]
-    xor al, 1
+    mov bx, [wf_win]            ; OSAPI_WM_DISPLAY answered the HEIGHT in BX,
+    mov al, [wf_nativefull]     ; and FULLSCREEN takes BX as the window: F hung
+    xor al, 1                   ; a VGA or Hercules desktop on a divide fault
     call OSAPI_FULLSCREEN
     jc .out
     mov [wf_nativefull], al
@@ -473,10 +474,10 @@ wf_phase:
     je .won
     cmp byte [wf_finished], 2
     je .lost
-    mov si, wf_fslinkoff
-    cmp byte [wf_connected], 0
-    je .out
-    mov si, wf_readytitle
+    mov si, wf_caplooking       ; the phase, not the link line (which
+    cmp byte [wf_connected], 0  ; fullscreen prints under it, and a window
+    je .out                     ; header cut to "F: deskto")
+    mov si, wf_capwaiting
     cmp byte [wf_peerready], 0
     je .out
     mov si, wf_phasepending
@@ -750,7 +751,7 @@ wf_fsfooter: db 'F:desktop M:sound S:save O:load',0
 wf_fsmuted: db 'F:desktop M:muted S:save O:load',0
 wf_fslegend: db '. miss  X hit  # sunk   Arrows:target',0
 wf_fslinkoff: db 'WireFleet | Link paused - F: desktop',0
-wf_fslinkon: db 'WireFleet | 9600 baud 8N1 | linked',0
+wf_fslinkon: db 'WireFleet | 2400 baud 8N1 | linked',0
 wf_phaseyours: db 'YOUR TURN',0
 wf_phaseenemy: db 'ENEMY TURN',0
 wf_phasepending: db 'SHOT SENT - WAITING FOR RESULT',0

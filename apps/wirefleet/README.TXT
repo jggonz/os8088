@@ -1,9 +1,11 @@
 WireFleet -- Two PCs. Two fleets. One winner.
 
-Join two PCs with a null modem cable, 9600 baud, 8N1, no flow control.
-Keep the serial mouse on one port and use the other for the game. Wait
-for the mouse to be detected, then choose Link / Connect COM1 or COM2 on
-each PC. A port used by the mouse or another game is refused.
+Join two PCs with a null modem cable, 2400 baud, 8N1, no flow control.
+Keep the serial mouse on one port and use the other for the game. Open
+WIREFLET.O88 on both PCs: each one looks for the other by itself, on
+whichever COM port is free, and says when the opponent is found. If the
+mouse has not moved yet, move it once. Link / Automatic starts looking
+again; Link / Connect COM1 or COM2 uses one port only.
 
 Open WIREFLET.O88. Place five ships on the left grid. They may touch, but
 must not overlap or extend off the grid. Select a ship with 1-5 or click
@@ -21,10 +23,12 @@ in memory. Reconnect the same opponents to continue. A history mismatch
 pauses the match rather than guessing whose board to keep.
 
 S saves FLEET.WFL through the file chooser; O loads a saved match. Save
-on BOTH PCs before closing. Load each PC's own file, then connect them.
+on BOTH PCs before closing. Load each PC's own file; each looks for the
+same opponent by itself.
 The local fleet, both shot grids, turn, peer identity and pending command
 are preserved. Files contain your private fleet; do not give one to the
-opponent. N starts a fresh match; both captains must start fresh together.
+opponent. N starts a fresh match. Before the first shot the other PC
+follows by itself; after a finished match both captains press N.
 
 H opens controls/About. M mutes or enables the finite sound effects.
 The system Sound setting selects PC Speaker, AdLib or Sound Blaster.

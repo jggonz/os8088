@@ -113,6 +113,7 @@ srl_ier: db 0
 srl_dll: db 0
 srl_dlm: db 0
 srl_mcr: db 0
+srl_div: db 12
 srl_pic: db 0
 srl_mask: db 0
 
@@ -213,7 +214,18 @@ srl_body:
 
 srl_open:
     cmp word [cs:srl_base], 0
-    jne srl_body.busy
+    je .fresh
+    cmp dh, [cs:srl_owner]      ; the holder MOVES its lease (115.1): the old
+    jne srl_body.busy           ; port is put back as Close would, the module
+    push dx                     ; stays, and a refusal below leaves it closed
+    call srl_close
+    pop dx
+.fresh:
+    or bh, bh                   ; BH = the divisor (115.1); 0 is 9600
+    jnz .div
+    mov bh, 12
+.div:
+    mov [cs:srl_div], bh
     cmp byte [di+I_STATE], 0
     je srl_body.bad
     mov ax, es
@@ -280,7 +292,7 @@ srl_open:
     sub dx, 3
     in al, dx
     mov [cs:srl_dll], al
-    mov al, 12                 ; 115200/9600
+    mov al, [cs:srl_div]       ; 115200/divisor: 12 = 9600, 48 = 2400
     out dx, al
     inc dx
     in al, dx

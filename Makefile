@@ -7328,7 +7328,7 @@ $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBST
 .PHONY: gorillas
 gorillas: $(BUILD)/gorillas.o88
 
-$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/gorillas/grfront.inc apps/gorillas/grdraw.inc apps/gorillas/grmusic.inc apps/gorillas/grbgm.inc apps/gorillas/grbgmdata.inc apps/gorillas/grai.inc apps/gorillas/grplay.inc apps/gorillas/grphysics.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
+$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/gorillas/grfront.inc apps/gorillas/grdraw.inc apps/gorillas/grmusic.inc apps/gorillas/grbgm.inc apps/gorillas/grbgmdata.inc apps/gorillas/grai.inc apps/gorillas/grguide.inc apps/gorillas/grplay.inc apps/gorillas/grphysics.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/gorillas/ -o $@ apps/gorillas/gorillas.asm
 
 $(BUILD)/gorillas.o88: $(BUILD)/gorillas.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
@@ -16189,7 +16189,7 @@ wirefleet-pair:
 wirefleettest: wirefleetdisk $(IMG)
 	python3 tests/wirefleetlink.py
 wirefleet: $(BUILD)/wireflet.o88
-$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc | $(BUILD)
+$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
 $(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@

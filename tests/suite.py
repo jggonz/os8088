@@ -1923,6 +1923,18 @@ SOAK = [
     Row("wirefleetart", "soak", py("tests/wirefleet.py", "--art"), 1.0,
         "WireFleet generated tiles: reproducibility, palette/bounds, distinct color/mono shot shapes (SPEC.md 114)",
         needs=("pil",)),
+    Row("wfdraw", "soak", py("tests/wfdraw.py"), 120.0,
+        "WireFleet's colour face priced in drawing calls (SPEC.md 114.10): five "
+        "seconds of the automatic search draws nothing, each gesture under a "
+        "ceiling a repaint blows through, and the cached picture pixel-identical "
+        "to a forced full repaint. The 4.77 MHz VGA XT",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/wireflet360.img")),
+    Row("wfdrawherc", "soak", py("tests/wfdraw.py", "--herc"), 120.0,
+        "wfdraw on the Hercules 5150: 114.2's mono face, the same idle, ceilings "
+        "and incremental-equals-repaint identity",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/wireflet360.img")),
     Row("wirefleetdeploy", "soak", py("tests/wirefleet.py"), 80.0,
         "WireFleet on VGA/CGA/Hercules: native deployment, bounds/overlap refusal, rotation, removal, auto, Ready, release/cancel and About (SPEC.md 114)",
         needs=("marty", "nasm", "pil"),

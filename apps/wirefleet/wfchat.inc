@@ -4,6 +4,12 @@ wf_chat_begin:
     mov word [wf_buttons+OS88UI_BT_N], 0
     mov byte [wf_line+LN_FOCUS], 1
     call wf_geometry
+    cmp byte [wf_colour], 0
+    je .mono
+    mov word [wf_buttons+OS88UI_BT_N], 5
+    call wf_update              ; Send lights, the rest grey
+    jmp wf_c_entry
+.mono:
     cmp word [wf_cellh], 8
     je .field
     mov word [wf_buttons+OS88UI_BT_N], 5
@@ -17,8 +23,9 @@ wf_chat_key:
     cmp al, 13
     je .send
     mov si, wf_line
-    call os88line_key
-    ret
+    call os88line_key           ; it EDITS; drawing is the caller's, and
+    jc .out                     ; nothing drew the typed text before
+    jmp wf_c_entry
 .send:
     call wf_chat_submit
     jc .out
@@ -65,6 +72,11 @@ wf_chat_end:
     mov byte [wf_chatmode], 0
     mov byte [wf_line+LN_FOCUS], 0
     mov word [wf_buttons+OS88UI_BT_N], 5
+    cmp byte [wf_colour], 0
+    je .mono
+    call wf_update
+    jmp wf_c_entry
+.mono:
     mov al, CWHITE
     call OSAPI_SET_COLOR
     xor ax, ax
@@ -83,9 +95,35 @@ wf_chat_end:
     mov word [wf_footershown], 0
     jmp wf_update
 
+; The entry's own focus look, after the buttons have changed.
+wf_c_entry:
+    mov bx, [wf_win]
+    call OSAPI_WM_CLIP_SET
+    jc .out
+    mov si, wf_line
+    jmp os88line_draw
+.out:
+    ret
+
 wf_chat_geometry:
     mov word [wf_line+LN_BUF], wf_input
     mov word [wf_line+LN_MAX], 33
+    cmp byte [wf_colour], 0
+    je .mono
+    mov ax, [wf_ox]             ; 114.10: in the chat card, beside Send
+    add ax, 8
+    mov [wf_line+LN_X1], ax
+    add ax, [wf_w]
+    sub ax, 88
+    mov [wf_line+LN_X2], ax
+    mov ax, [wf_oy]
+    add ax, [wf_h]
+    sub ax, 31
+    mov [wf_line+LN_Y1], ax
+    add ax, 14
+    mov [wf_line+LN_Y2], ax
+    ret
+.mono:
     mov ax, [wf_ox]
     add ax, 16
     mov [wf_line+LN_X1], ax

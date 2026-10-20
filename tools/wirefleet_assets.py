@@ -29,12 +29,30 @@ def water():
     return tile
 
 
+def bands(source):
+    """The five ships' row ranges, top to bottom. The atlas is NOT five equal
+    strips: the carrier overhangs the second fifth, and cutting at fifths
+    gave every later ship the previous one's keel as a grey line."""
+    full = [sum(1 for r, g, b in source.crop((0, y, source.width, y + 1)).getdata()
+                if not (r > g + 60 and b > g + 60)) for y in range(source.height)]
+    runs, start = [], None
+    for y, n in enumerate(full + [0]):
+        if n and start is None:
+            start = y
+        elif not n and start is not None:
+            runs.append((sum(full[start:y]), start, y))
+            start = None
+    picked = sorted(sorted(runs, reverse=True)[:5], key=lambda r: r[1])
+    if len(picked) != 5:
+        raise ValueError('expected five ships, found %d' % len(picked))
+    return [(a, b) for _, a, b in picked]
+
+
 def ships():
     source = Image.open(SOURCE).convert('RGB')
     result = []
-    for i, length in enumerate(LENGTHS):
-        strip = source.crop((0, i * source.height // 5,
-                             source.width, (i + 1) * source.height // 5))
+    for i, (length, (top, bottom)) in enumerate(zip(LENGTHS, bands(source))):
+        strip = source.crop((0, top, source.width, bottom))
         # This source has a flat magenta matte, including JPEG-like edge
         # variation. Key by chroma, never a coordinate-specific silhouette.
         mask = Image.new('L', strip.size)
@@ -43,15 +61,26 @@ def ships():
         bounds = mask.getbbox()
         if bounds is None:
             raise ValueError('empty ship row %d' % i)
-        strip = strip.crop(bounds).resize((length * CELL - 6, 16),
-                                           Image.Resampling.LANCZOS)
-        mask = mask.crop(bounds).resize(strip.size, Image.Resampling.NEAREST)
+        # The HULL's rows, not the mast's: a mast and its yard are a few
+        # pixels wide, and squashed into 18 rows they became a grey line
+        # along the whole ship. A row belongs to the hull when it is at
+        # least 40% as wide as the widest row.
+        widths = [sum(1 for x in range(strip.width) if mask.getpixel((x, y)))
+                  for y in range(strip.height)]
+        rows = [y for y, w in enumerate(widths) if w >= 0.4 * max(widths)]
+        bounds = (bounds[0], rows[0], bounds[2], rows[-1] + 1)
+        size = (length * CELL - 6, 18)
+        # Area-averaged, not LANCZOS: ringing on the black outline made
+        # bright fringes at this reduction.
+        strip = strip.crop(bounds).resize(size, Image.Resampling.BOX)
+        mask = mask.crop(bounds).resize(size, Image.Resampling.BOX)
+        mask = mask.point(lambda v: 255 if v >= 128 else 0)
         indexed = Image.new('L', strip.size)
         palette = (0, 8, 7, 15)
         indexed.putdata([palette[min(3, (r * 3 + g * 6 + b) // 640)]
                          for r, g, b in strip.getdata()])
         hull = Image.new('L', (length * CELL, CELL), 1)
-        hull.paste(indexed, (3, 4), mask)
+        hull.paste(indexed, (3, 3), mask)
         result.append(hull)
     return result
 
@@ -140,14 +169,79 @@ def cga(tile):
     return bytes(out)
 
 
+STORED = 38                     # water, three marks, 34 ship segments
+HIT0 = STORED                   # tiles 38..71: a ship segment, hit
+
+
+def overlay(art, form):
+    """One AND table and one OR table, in `form`'s layout, such that EVERY
+    hit tile is (its ship segment & AND) | OR. Built from the X itself and
+    then CHECKED against all 34, so a converter change that breaks the
+    identity fails here rather than drawing a different picture."""
+    water = art[0]
+    xmark = art[2]                  # water with the hit X on it
+    base, mark = form(water), form(xmark)
+    andt, ort = bytearray(len(base)), bytearray(len(base))
+    for i, (b, m) in enumerate(zip(base, mark)):
+        # Pixels the X changed are forced to the mark's bits; every other
+        # pixel keeps the segment's.
+        changed = b ^ m
+        if form is packed:
+            # a nibble is a pixel: mask whole nibbles the X touches
+            mask = (0xf0 if changed & 0xf0 else 0) | (0x0f if changed & 0x0f else 0)
+        elif form is cga:
+            mask = 0
+            for shift in (6, 4, 2, 0):
+                if changed & (3 << shift):
+                    mask |= 3 << shift
+        else:
+            mask = changed
+        andt[i] = 255 & ~mask
+        ort[i] = m & mask
+    if form is mono:
+        # packed()'s mono rule: an X pixel is dark and a pixel beside one is
+        # lit, WHATEVER is under it - so the stamp is the X and its 1-pixel
+        # halo, not what changed on water (an X pixel is dark there too).
+        v = list(xmark.tobytes())
+        x = {(px, py) for py in range(CELL) for px in range(CELL)
+             if v[py * CELL + px] == 12}
+        halo = {(px + dx, py + dy) for px, py in x for dx in (-1, 0, 1)
+                for dy in (-1, 0, 1)} & {(a, b) for a in range(CELL) for b in range(CELL)}
+        andt, ort = bytearray(len(base)), bytearray(len(base))
+        for py in range(CELL):
+            for px in range(CELL):
+                i, bit = py * 3 + px // 8, 0x80 >> (px % 8)
+                if (px, py) in halo:
+                    andt[i] |= 0
+                    if (px, py) not in x:
+                        ort[i] |= bit
+                else:
+                    andt[i] |= bit
+    return bytes(andt), bytes(ort)
+
+
+def mono(tile):
+    return packed(tile, True)
+
+
 def build():
     art = tiles()
     assert len(art) == 72
-    return ('; Generated by tools/wirefleet_assets.py; do not edit.\n'
-            'WF_TILE_COUNT equ 72\nWF_TILE_COLOR equ 288\nWF_TILE_MONO equ 72\n'
-            + emit('wf_tiles_color', b''.join(packed(t) for t in art))
-            + emit('wf_tiles_mono', b''.join(packed(t, True) for t in art))
-            + emit('wf_tiles_cga', b''.join(cga(t) for t in art)))
+    out = ('; Generated by tools/wirefleet_assets.py; do not edit.\n'
+           'WF_TILE_COUNT equ 72\nWF_TILE_STORED equ %d\nWF_TILE_HIT0 equ %d\n'
+           'WF_TILE_HITBASE equ %d\n'
+           'WF_TILE_COLOR equ 288\nWF_TILE_MONO equ 72\n' % (STORED, HIT0, HIT0 - 4))
+    for name, form in (('color', packed), ('mono', mono), ('cga', cga)):
+        andt, ort = overlay(art, form)
+        for k in range(HIT0, 72):
+            seg = form(art[k - (HIT0 - 4)])
+            want = form(art[k])
+            got = bytes((a & n) | o for a, n, o in zip(seg, andt, ort))
+            if got != want:
+                raise ValueError('%s: hit tile %d is not its segment stamped' % (name, k))
+        out += emit('wf_tiles_' + name, b''.join(form(t) for t in art[:STORED]))
+        out += emit('wf_hitand_' + name, andt) + emit('wf_hitor_' + name, ort)
+    return out
 
 
 def main():
@@ -169,7 +263,7 @@ def main():
     (ROOT / 'build').mkdir(exist_ok=True)
     preview.resize((864, 192), Image.Resampling.NEAREST).save(
         ROOT / 'build/wirefleet-tiles.png')
-    print('wirefleet_assets: 72 tiles, 20736 color + 5184 mono bytes')
+    print('wirefleet_assets: 72 tiles, %d stored, hits stamped' % STORED)
 
 
 if __name__ == '__main__':

@@ -224,3 +224,116 @@ These are emulator results. A physical null modem, cable quality, real
 8250 interrupt margin and the sound of actual cards still need a field run.
 The two 86Box profiles were prepared and checked without starting an
 interactive session or changing the owner's existing VM settings.
+
+## 2026-10-20 — Part two: "they could not find each other"
+
+The owner tried the merged game on two 86Box XTs and the captains never
+met. The second brief asked for two things: link by itself, the way
+WireBall's Serial Match does, and look the part on a colour screen — a
+mock-up came with it, navy title bar and all.
+
+Reading the link code again before touching it found two ways to get
+stuck that a scripted test never meets, because a script always does the
+right thing in the right order. Nothing linked until Link → Connect was
+chosen, and the first port that menu offers, COM1, is the serial mouse on
+most machines. Worse, Game → New fleet after linking gives that captain a
+fresh identity: the other PC, still bound to the old one, refuses every
+new frame, and the new one refuses every frame addressed to the old one.
+Neither can recover until the other also presses N. Turn 0 has nothing to
+protect, so the contract (SPEC.md §114.9) now lets a peer rebind there.
+
+This host cannot drive an 86Box window (no accessibility grant), so the
+86Box pair is not reproduced here; the QEMU two-PC harness is the
+instrument, and the PR says which is which. The plan is
+docs/plans/WIREFLEET-FACE-PLAN.md.
+
+## 2026-10-20 — Linking without a menu
+
+WireBall's Serial Match scans both ports; WireFleet waited for Link →
+Connect. Now the window's first tick starts a search (SPEC.md §114.9): the
+saved or chosen port first, else COM2, and a port the serial lease refuses
+as the mouse's or absent simply leaves the list. On a machine with the
+mouse on one port that leaves exactly one candidate, which is the common
+case and the 86Box pair's. With no serial mouse both ports are candidates,
+and the search moves its lease between them on a jittered 40–71 tick dwell
+until a WireFleet frame that is not its own echo arrives.
+
+Moving a lease used to mean Close then Open, and Close unloads SERIAL.DRV —
+so every move would have read the system disk. The lease's holder may now
+Open again to move it (§115.1); the module stays, and the kernel's resident
+size did not move a byte. The other stuck state from the diagnosis is gone
+too: before any result is committed, a HELLO from a new identity rebinds
+the match, so New fleet after linking no longer strands the other PC.
+
+The QEMU two-PC row grew two legs: both PCs with a PS/2 pointer and two free
+UARTs, finding the cable's port by themselves; and New fleet after linking.
+
+## 2026-10-20 — A colour face, flat
+
+The mock-up asked for a navy title bar, cards, a ships list with check
+boxes and a big Ready. MIDIRack's face was bevelled hardware; a naval game
+reads better flat, so the elements went into a shared include,
+`apps/os88flat.inc` (§20.5.3) — a card, a lamp, a check box in one blit, a
+button painter and a double-size caption in one blit — and the `vga-face`
+skill now teaches both looks.
+
+![Deployment on VGA: the ships card, a framed board, the link lamp.](wirefleet/face-deploy-vga.png)
+
+![A battle a few turns in: whose turn, what just happened, chat.](wirefleet/face-battle-vga.png)
+
+EGA gets the same face at 16-pixel cells; with no room for a chat log there,
+an incoming line is news in the notice strip.
+
+![The same battle on EGA's 350 lines.](wirefleet/face-battle-ega.png)
+
+Looking at the ships zoomed in found a grey line above every hull. The
+atlas is not five equal strips — the carrier overhangs the second fifth — so
+each ship after it carried its predecessor's keel. The converter now finds
+each ship's own rows. And 34 of the 72 tiles turned out to be a ship
+segment with the same red X: they are stamped at draw time now, which the
+converter proves exact for all 34, and the art shrank from 31 KB to 17 KB.
+That is what paid for the face on a 360 KB disk with no cluster to spare.
+
+## 2026-10-20 — The board was the paint
+
+Timed on MartyPC's 4.77 MHz VGA XT, a battle repaint took 3.9 seconds, 3.46
+of them the two boards. The blit was not the cost: OSAPI_GFX_BLITP puts a
+240×24 row up in 0.7 ms. Composing that row a pixel row at a time took 150.
+So the tiles are spread to VGA's four planes once per instance, and a row
+becomes four three-byte copies a scanline. The repaint is 1.39 seconds now,
+deployment 1.1.
+
+Driving the face found three bugs that were already on `main`: F hung a
+VGA or Hercules desktop (the window handle had been replaced by the screen
+height), typed chat was never drawn, and every cursor move on the Hercules
+enemy board left 22 stray pixels — the board sat two pixels off the byte
+grid, and the blit lit pixels past its own width. Hercules keeps its face,
+with the board two pixels right and a header that says what it is doing.
+
+![Hercules after Ready, while the search runs.](wirefleet/face-ready-hercules.png)
+
+![CGA's four-colour fullscreen bracket, unchanged but for the ships.](wirefleet/face-fullscreen-cga.png)
+
+`tests/wfdraw.py` holds the face to it: five seconds of searching draws
+nothing, every gesture stays under a ceiling, and the picture the caches
+drew is identical to a full repaint — on VGA and on Hercules.
+
+## 2026-10-20 — Why Pong linked and WireFleet did not
+
+The owner tried the face on two 86Box XTs and both sat in FINDING
+OPPONENT. A logging relay spliced into the cable showed valid HELLO frames
+crossing in both directions, CRCs good, identities distinct — so the frames
+were arriving and being thrown away. A new Link > Statistics line read
+`RX 7139, err 628 (bits 82)`: 9% of received bytes carried a UART overrun
+or a ring overflow, and since one bad byte spoils a 66-byte frame, not one
+frame had survived.
+
+The mouse interrupt was not the culprit (0.28 ms a byte, measured). The
+rate was: at 9600 baud an XT's one-byte 8250 has 1.04 ms to be read before
+the next byte overwrites it, and QEMU — a thousand times faster — never
+came close to that edge. WireBall had always run at 2400. The owner's
+suggestion was to do the same, since a naval game sends far less than a
+ball does. The serial lease now takes the divisor (BH), WireFleet asks for
+2400, and its heartbeat slows from every three ticks to every nine so a
+66-byte frame (275 ms on the wire) leaves the line half idle. On the same
+two 86Box XTs the captains found each other within seconds.

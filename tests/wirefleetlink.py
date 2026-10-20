@@ -97,9 +97,9 @@ class UI(os88ui.UI):
 
 
 class Machine(W.Machine):
-    def __init__(self,directory,index):
+    def __init__(self,directory,index,ps2=False):
         super().__init__(directory,index,app='wirefleet',filename='WIREFLET.O88',
-                         disk=W.artifact('wireflet.img'),prefix='wf_')
+                         disk=W.artifact('wireflet.img'),prefix='wf_',ps2=ps2)
         self.mo = Mouse(self)
         self.ui = UI(self,mouse=self.mo,sym=W.S,verbose=False)
 
@@ -116,7 +116,8 @@ class Machine(W.Machine):
         return {name:self.v(name,n) for name,n in
                 [('linkopen',1),('connected',1),('side',1),('ready',1),('peerready',1),
                  ('turn',2),('peerturn',2),('pending',1),('cachevalid',1),('hash',2),
-                 ('badframes',2),('chatpending',1),('chatcount',2),('conflict',1),('finished',1)]}
+                 ('badframes',2),('chatpending',1),('chatcount',2),('conflict',1),('finished',1),
+                 ('linkmode',1),('cands',1),('curport',1),('heard',1)]}
 
     def key(self,key):
         super().key('Return' if key=='Enter' else key)
@@ -189,7 +190,31 @@ class DropResult:
         return bytes(out)
 
 
+def free_ports():
+    """SPEC.md 114.9: no serial mouse, so COM1 and COM2 are both free. Each
+    PC must move its lease between them and stop on the cable's port."""
+    with tempfile.TemporaryDirectory(prefix='wf-free-') as td:
+        machines=[]
+        cable=None
+        try:
+            machines=[Machine(Path(td),0,ps2=True),Machine(Path(td),1,ps2=True)]
+            cable=W.Cable(machines)
+            for m in machines:
+                assert m.read(W.S('mou_port'),1)==b'\4','PS/2 pointer did not win'
+                m.wait_for(lambda m=m:m.v('connected')==1,'automatic link over two free ports',secs=40)
+            for m in machines:
+                assert m.v('curport')==m.linkport+1 and m.v('cands')==m.linkport+1,m.state()
+                assert m.v('linkmode')==1
+            print('wirefleetlink: two free ports, each PC found the cable port by itself')
+        finally:
+            if cable:
+                cable.close()
+            for m in machines:
+                m.cleanup()
+
+
 def main():
+    free_ports()
     with tempfile.TemporaryDirectory(prefix='wf-link-') as td:
         directory=Path(td)
         machines=[]
@@ -198,13 +223,24 @@ def main():
             machines=[Machine(directory,0),Machine(directory,1)]
             a,b=machines
             cable=W.Cable(machines)
+            # SPEC.md 114.9: no menu use. Each PC is already looking.
             for m in machines:
                 m.key('a')
                 assert sorted(m.data('board',100)).count(0)==83
-                m.connect()
             assert a.data('board',100)!=b.data('board',100),'fresh PCs inherited an identical auto fleet'
             for m in machines:
-                m.wait_for(lambda m=m:m.v('connected')==1,'addressed handshake')
+                m.wait_for(lambda m=m:m.v('connected')==1,'automatic addressed handshake',secs=20)
+                assert m.v('curport')==m.linkport+1 and m.v('linkmode')==1,m.state()
+            # New fleet after linking used to strand the other PC for good:
+            # its identity changes, and before any shot the peer rebinds.
+            old=a.data('identity',4)
+            a.key('n')
+            assert a.data('identity',4)!=old
+            for m in machines:
+                m.wait_for(lambda m=m:m.v('connected')==1,'rebind at turn 0 after New fleet',secs=20)
+            assert b.data('peer',4)==a.data('identity',4)
+            a.key('a')
+            for m in machines:
                 m.key('y')
             for m in machines:
                 m.wait_for(lambda m=m:m.v('peerready')==1,'both ready')

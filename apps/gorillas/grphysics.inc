@@ -93,6 +93,7 @@ gr_aimkey:
 .store:
     mov [gr_angle+bx], ax
     mov byte [gr_edit], 1
+    call gr_guideshow           ; keeps AX, BX for the paint
     jmp gr_inputpaint
 .out:
     ret

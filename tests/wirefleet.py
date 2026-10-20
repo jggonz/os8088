@@ -65,7 +65,7 @@ def deployment():
                 m.key(name)
                 ui.settle()
             def square(x, y, right=False):
-                px = val('ox', 2) + 24 + x*24 + 12
+                px = val('ox', 2) + val('gx0', 2) + x*24 + 12   # 114.10 moves it
                 py = val('oy', 2) + val('gridy', 2) + y*val('cellh', 2) + val('cellh', 2)//2
                 if right:
                     ui.mo.to(px, py, r=True)
@@ -74,6 +74,7 @@ def deployment():
                     ui.mo.click(px, py)
                 ui.settle()
             assert val('placed') == 0 and fleet() == bytes(100)
+            assert val('colour') == (adapter == 'vga'), 'colour face on the wrong adapter (114.10)'
             assert val('controlsy', 2) + 26 <= val('h', 2), 'CGA controls/footer clipped'
             square(0, 0)
             assert val('placed') == 1 and fleet()[:5] == b'\1'*5, 'valid carrier refused'

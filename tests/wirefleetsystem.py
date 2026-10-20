@@ -64,9 +64,21 @@ def systems():
     sy = dispapps._map('wirefleet')
     with os88ui.boot(artifact('os8088-360.img'), apps=artifact('wireflet360.img'),
                     machine='os8088_5150_cga_gla') as ui:
+        m = ui.m
+        # Before the game opens: SPEC.md 114.9 leases a free port by itself
+        # on the window's first tick, so "as it was" has to be read first -
+        # but AFTER the mouse contest settles, because settling is what
+        # silences the losing UART (mou_lockon writes its IER).
+        ui.mo.to(120,100)
+        M.until(m,lambda _:m.read(m.sym('mou_hpst'),1)==b'\2','mouse settled',guest=10,poll=.05)
+        m.pause()
+        saved = uart(m,0x2f8)
+        pic = m.inb(0x21)
+        m.outb(0x2ff,0x5a)
+        assert m.inb(0x2ff)!=0x5a,'needs original 8250'
+        m.run()
         w = ui.path('B:/WIREFLET.O88')
         ui.settle()
-        m = ui.m
         seg = dispapps.pkg_seg(m,0)[1]
         def data(name,n): return m.readseg(dispapps.pkg_seg(m,0)[1],sy['wf_'+name],n)
         def val(name,n=1): return int.from_bytes(data(name,n),'little')
@@ -74,19 +86,14 @@ def systems():
             m.key(name)
             ui.settle()
         def wait(cond,what): M.until(m,lambda _:cond(),what,guest=10,poll=.02)
-        m.pause()
-        saved = uart(m,0x2f8)
-        pic = m.inb(0x21)
-        m.outb(0x2ff,0x5a)
-        assert m.inb(0x2ff)!=0x5a,'needs original 8250'
-        m.run()
+        wait(lambda:val('linkopen')==1 and val('curport')==2,'automatic search leased the free COM2')
         ui.menu_pick('Link','Connect COM1')
         assert val('linkopen')==0,'mouse port was leased'
         ui.menu_pick('Link','Connect COM2')
         wait(lambda:val('linkopen')==1,'lease free original 8250')
         m.pause()
         active = uart(m,0x2f8)
-        assert active[0]==3 and active[2:]==(12,0,11),active
+        assert active[0]==3 and active[2:]==(48,0,11),active   # 2400 baud (SPEC.md 114.3)
         assert active[1]&1,'RX interrupt disabled'
         assert m.read(m.sym('ser_row'),2)==b'\2\0'
         m.run()
@@ -172,7 +179,8 @@ def systems():
         ui.chooser_select('FLEET.WFL')
         m.key('Enter')
         ui.settle()
-        assert val('message',2)==sy['wf_loadedmessage']
+        assert val('message',2)==sy['wf_loadedmessage'], (
+            [k for k,v in sy.items() if v==val('message',2)], val('linkmode'), val('linkopen'), val('cands'))
         assert data('board',100)==board and val('ready')==1 and val('connected')==0
         seg=dispapps.pkg_seg(m,0)[1]
         m.pause()
