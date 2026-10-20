@@ -208,14 +208,14 @@ wf_autolink:
 ; AX=refusal during a search. 3/4: this port is not a candidate. 1/2:
 ; wait and retry. Anything else ends the search with its line.
 wf_refusal:
+    cmp ax, 3                   ; the mouse's or no UART: a candidate fewer,
+    je .drop                    ; which a search expects - said only when
+    cmp ax, 4                   ; none is left (.drop's end)
+    je .drop
     push ax
     call wf_leaseerror
     pop ax
     mov bx, [wf_now]
-    cmp ax, 3
-    je .drop
-    cmp ax, 4
-    je .drop
     add bx, 18
     mov [wf_retry], bx
     cmp ax, 2
@@ -224,6 +224,7 @@ wf_refusal:
 .out:
     ret
 .drop:
+    mov bx, [wf_now]
     mov [wf_retry], bx          ; the next candidate, at once
     mov al, [wf_curport]
     not al
@@ -233,6 +234,7 @@ wf_refusal:
     jnz .out
     mov byte [wf_linkmode], 0
     mov word [wf_message], wf_nofreeport
+    mov byte [wf_dirty], 1
     ret
 
 wf_disconnect:

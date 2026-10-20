@@ -66,7 +66,11 @@ def systems():
                     machine='os8088_5150_cga_gla') as ui:
         m = ui.m
         # Before the game opens: SPEC.md 114.9 leases a free port by itself
-        # on the window's first tick, so "as it was" has to be read first.
+        # on the window's first tick, so "as it was" has to be read first -
+        # but AFTER the mouse contest settles, because settling is what
+        # silences the losing UART (mou_lockon writes its IER).
+        ui.mo.to(120,100)
+        M.until(m,lambda _:m.read(m.sym('mou_hpst'),1)==b'\2','mouse settled',guest=10,poll=.05)
         m.pause()
         saved = uart(m,0x2f8)
         pic = m.inb(0x21)
@@ -175,7 +179,8 @@ def systems():
         ui.chooser_select('FLEET.WFL')
         m.key('Enter')
         ui.settle()
-        assert val('message',2)==sy['wf_loadedmessage']
+        assert val('message',2)==sy['wf_loadedmessage'], (
+            [k for k,v in sy.items() if v==val('message',2)], val('linkmode'), val('linkopen'), val('cands'))
         assert data('board',100)==board and val('ready')==1 and val('connected')==0
         seg=dispapps.pkg_seg(m,0)[1]
         m.pause()
