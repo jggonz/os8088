@@ -43,6 +43,10 @@ wc_next:
 .go:
     mov [wc_rq], al
     mov word [wc_age], 0
+    cmp al, RQ_POLL                     ; a request we MADE lights activity's
+    je .start                           ; lamp (wc_lamps); a poll is waiting
+    or word [wc_dirty], WCD_STAT
+.start:
     call wc_compose
     call wc_start
 .out:
@@ -152,6 +156,10 @@ wc_ondone:
     xchg al, [wc_rq]
     mov [wc_rqdone], al
     call wc_reply                       ; the stores, [wc_ercode], [wc_erwait]
+    test word [wc_dirty], WCD_PANE | WCD_TAIL | WCD_LEFT | WCD_RIGHT | WCD_NOTE
+    jz .quiet
+    mov byte [wc_act], 2                ; it brought something: the lamp, for a
+.quiet:                                 ; second or two (wc_ontimer)
     or word [wc_dirty], WCD_HDR | WCD_STAT
     mov ax, [wc_ercode]
     cmp ax, 0xFFFF
@@ -281,6 +289,12 @@ wc_ontimer:
     mov bx, si
     mov ax, 18
     call OSAPI_WM_TIMER                 ; one-shot: re-armed first
+    cmp byte [wc_act], 0                ; activity's lamp goes out
+    je .wait
+    dec byte [wc_act]
+    jnz .wait
+    or word [wc_dirty], WCD_STAT
+.wait:
     ; --- a wait owed ---------------------------------------------------------
     cmp word [wc_wait], 0
     je .age
@@ -398,6 +412,12 @@ wc_setview:
     pop ax
 .room:
     mov [wc_view], al
+    cmp al, WC_NROOM                    ; a room looked at is a mention read
+    jae .nm
+    xor ah, ah
+    mov di, ax
+    mov byte [wc_ment+di], 0
+.nm:
     inc byte [wc_vgen]
     mov byte [wc_hist], 1
     call wc_mclear
@@ -661,16 +681,12 @@ wc_efind:
     push bx
     push cx
     mov bx, cx
-    call wc_mlines
+    call wc_mtot
     mov dx, ax
     pop cx
     pop bx
     pop ax
     add ax, dx
-    cmp cl, [wc_divi]
-    jne .s
-    inc ax
-.s:
     inc cx
     jmp short .sum
 .top:
@@ -827,6 +843,9 @@ wc_onkey:
     call wc_popdown
     jmp wc_repaint
 .npop:
+    cmp al, 9                           ; Tab: an @nick, or the next room
+    je .tab
+    mov byte [wc_cpl], 0                ; any other key ends a completion run
     cmp ah, 0x49                        ; PgUp
     je .pgup
     cmp ah, 0x51                        ; PgDn
@@ -835,8 +854,6 @@ wc_onkey:
     je .up
     cmp ah, KSC_DOWN
     je .down
-    cmp al, 9                           ; Tab: the next room
-    je .tab
     ; --- the field's (the deskcal.asm idiom) ---------------------------------
     mov si, wc_ln
     push word [si+LN_VIEW]
@@ -918,6 +935,8 @@ wc_onkey:
     call wc_scrollby
     jmp wc_cbflush
 .tab:
+    call wc_complete                    ; CF = 0: it was an @nick, completed
+    jnc .out
     cmp byte [wc_view], WV_DM
     mov al, 0
     je .t
@@ -929,6 +948,135 @@ wc_onkey:
 .t:
     call wc_setview
     jmp wc_cbflush
+
+; -----------------------------------------------------------------------------
+; wc_complete - Tab right after '@' and part of a nick: the nick, off the
+;               roster (SPEC.md 113.6.3)
+; in:  the lock held, no clip. out: CF = 0 the field was completed and drawn;
+;      CF = 1 the caret is not after an @ and a nick's characters, or nothing
+;      on the roster begins that way - Tab then does what it always did
+;
+; Tab AGAIN goes round the others that begin the same way: [wc_cpl] keeps the
+; length of the prefix the user typed and [wc_cpi] the roster record the last
+; Tab took, and any other key clears the first. Never ourselves: a mention of
+; our own nick notifies nobody.
+; -----------------------------------------------------------------------------
+wc_complete:
+    cmp byte [wc_mode], MD_MSG
+    jne .no
+    mov di, wc_lbuf
+    add di, [wc_ln+LN_CAR]              ; DI = the caret
+    mov si, di
+.back:
+    cmp si, wc_lbuf                     ; back over nick characters to the @
+    je .no
+    mov al, [si-1]
+    cmp al, '@'
+    je .at
+    call wc_nickch
+    jc .no
+    dec si
+    jmp short .back
+.at:
+    mov cx, di
+    sub cx, si                          ; CX = what is typed after the @
+    mov [wc_cpart], cx
+    xor ax, ax
+    mov al, [wc_cpl]
+    or al, al
+    jz .fresh
+    cmp ax, cx                          ; a run: the prefix is the first CPL
+    ja .fresh                           ; characters, the search after the last
+    mov cx, ax
+    mov dl, [wc_cpi]
+    inc dl
+    jmp short .find
+.fresh:
+    or cx, cx                           ; '@' alone is not a start
+    jz .no
+    xor dl, dl
+.find:
+    ; DL = the record to try first, CX = the prefix's length; at most a whole
+    ; lap of the roster
+    xor dh, dh
+.try:
+    cmp dh, [wc_rn]
+    jae .no
+    cmp dl, [wc_rn]
+    jb .in
+    xor dl, dl
+.in:
+    push cx
+    push si
+    mov al, dl
+    mov bl, WC_RREC
+    mul bl
+    add ax, wc_ros
+    mov bx, ax                          ; BX = the record's nick
+    call wc_isme
+    je .skip
+    mov di, bx
+.cmp:
+    jcxz .hit
+    mov al, [si]
+    call wc_lower
+    mov ah, al
+    mov al, [di]
+    call wc_lower
+    cmp al, ah
+    jne .skip
+    inc si
+    inc di
+    dec cx
+    jmp short .cmp
+.skip:
+    pop si
+    pop cx
+    inc dl
+    inc dh
+    jmp short .try
+.hit:
+    pop si
+    pop cx
+    mov [wc_cpl], cl                    ; the run's prefix, and where it is
+    mov [wc_cpi], dl
+    ; --- the typed part out, the nick in -------------------------------------
+    push bx
+    mov cx, [wc_cpart]
+    jcxz .ins
+.bs:
+    push cx
+    mov ax, 8
+    mov si, wc_ln
+    call os88line_key
+    pop cx
+    loop .bs
+.ins:
+    pop bx
+.ch:
+    mov al, [bx]
+    or al, al
+    jz .draw
+    push bx
+    xor ah, ah
+    mov si, wc_ln
+    call os88line_key
+    pop bx
+    inc bx
+    jmp short .ch
+.draw:
+    mov bx, [wc_win]
+    call OSAPI_WM_CLIP_SET
+    jc .done
+    mov si, wc_ln
+    call os88line_draw
+    call wc_buttons_send
+.done:
+    clc
+    ret
+.no:
+    stc
+    ret
 
 ; --- wc_buttons_send - Send again, its grey from the predicate (SPEC.md 47) -
 wc_buttons_send:

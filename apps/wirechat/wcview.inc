@@ -75,11 +75,11 @@ wc_geom:
     mov byte [wc_topic], 0
     mov ax, WC_HDRH + 3                 ; the title's band
     mov [wc_ty], ax
-    add ax, WC_LH + 3                   ; one band and its rule...
-    cmp word [wc_ch], WC_HTOPIC
-    jb .tp
-    mov byte [wc_topic], 1
-    add ax, WC_LH + WC_TOPICDY          ; ...or two, the second clear of the
+    add ax, WC_LH + 4                   ; one band and its rule, and clear of
+    cmp word [wc_ch], WC_HTOPIC         ; the Search button's last row - the
+    jb .tp                              ; pane's first band drawn over it took
+    mov byte [wc_topic], 1              ; the button's bottom edge away...
+    add ax, WC_LH + WC_TOPICDY - 1      ; ...or two, the second clear of the
 .tp:                                    ; Search button so it has the width
     mov [wc_py1], ax
     mov ax, [wc_ch]
@@ -340,99 +340,21 @@ wc_sbnum:
     ret
 
 ; -----------------------------------------------------------------------------
-; wc_band - draw wc_sbuf as one band
-; in:  CX = x, DX = the band's top (both CONTENT-relative), AL = 1 inverse,
-;      0 normal; the lock held, the clip armed
+; wc_band - draw wc_sbuf as one band in style AL, remembered nowhere (the
+;           popups and the field's prompt, which are drawn whole or not at
+;           all). wcband.inc's wc_bandc is the band; this is its plain call.
+; in:  CX = x, DX = the band's top (both CONTENT-relative), AL = WS_*; the lock
+;      held, the clip armed
 ; out: every register preserved
 ; -----------------------------------------------------------------------------
 wc_band:
-    push ax
     push bx
-    push cx
-    push dx
-    push si
-    add cx, [wc_ox]
-    add dx, [wc_oy]
-    push ax
-    push cx
-    push dx
-    ; --- the two rows of air, in the band's ground --------------------------
-    mov si, wc_sbuf
-    push cx
-    call wc_slen
-    mov bx, cx                          ; BX = the run's pixel width
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-    pop cx
-    or bx, bx
-    jz .air
-    or al, al
-    mov al, CWHITE
-    jz .ground
-    mov al, CBLACK
-.ground:
-    call OSAPI_SET_COLOR
-    mov ax, cx
-    add bx, cx
-    dec bx                              ; AX = x1, BX = x2
-    call OSAPI_GFX_HLINE                ; DX = the top row
-    add dx, WC_LH - 1
-    call OSAPI_GFX_HLINE
-.air:
-    pop dx
-    pop cx
-    pop ax
-    inc dx                              ; the glyph row
-    mov si, wc_sbuf
-    or al, al
-    mov ax, (CWHITE << 8) | CBLACK      ; AL = ink, AH = ground
-    jz .run
-    mov ax, (CBLACK << 8) | CWHITE
-.run:
-    push ax
-    mov al, CBLACK                      ; a button drawn just before may have
-    call OSAPI_SET_COLOR                ; left the pen DISABLED (timer.asm)
-    pop ax
-    call OSAPI_FONT_RUN
-    pop si
-    pop dx
-    pop cx
+    call wc_mreset
+    xor bx, bx
+    call wc_bandc
     pop bx
-    pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; wc_bold - overstrike the NUL string at SI at x+1 (SPEC.md 6.6.2 case 6)
-; in:  CX = x, DX = the band's top (content-relative), AL = 1 inverse
-; out: every register preserved
-; -----------------------------------------------------------------------------
-wc_bold:
-    push ax
-    push cx
-    push dx
-    add cx, [wc_ox]
-    inc cx
-    add dx, [wc_oy]
-    inc dx
-    or al, al
-    mov al, CBLACK
-    jz .ink
-    mov al, CWHITE
-.ink:
-    call OSAPI_SET_COLOR
-    call OSAPI_FONT_STR_XPARENT         ; the overstrike: it ADDS to the glyphs
-    pop dx                              ; already down (tests/textsites.txt)
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; wc_glyph - one 8x8 glyph over a band's cell
-; in:  CX = x, DX = the band's top (content-relative), BL = the glyph (GL_*),
-;      AL = 1 inverse
-; out: every register preserved
-; -----------------------------------------------------------------------------
 GL_PERSON   equ 0
 GL_ONLINE   equ 1
 GL_AWAY     equ 2
@@ -440,39 +362,7 @@ GL_BUSY     equ 3
 GL_GONE     equ 4
 GL_PLUG     equ 5
 GL_CUT      equ 6
-
-wc_glyph:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    add cx, [wc_ox]
-    add dx, [wc_oy]
-    inc dx
-    xor bh, bh
-    mov si, bx                          ; the record: 2 + 8 + 8 words = 34
-    shl bx, 1                           ; bytes, so index * 34 = *32 + *2
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    add si, bx
-    add si, wc_glyphs
-    or al, al
-    mov ax, (CBLACK << 8) | CWHITE      ; the mask's ground, the data's ink
-    jz .pen
-    mov ax, (CWHITE << 8) | CBLACK
-.pen:
-    call OSAPI_ICON_PEN
-    call OSAPI_ICON_DRAW
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+GL_LED      equ 7                       ; + LED_*: wcband.inc's lamps
 
 ; --- wc_stglyph - AL = a status (ST_*) -> BL = its glyph --------------------
 wc_stglyph:
@@ -494,6 +384,7 @@ wc_stglyph:
 wc_paint:
     push si
     call wc_hire                        ; the worker, once (SPEC.md 20.6)
+    call wc_face                        ; mono or colour, and every slot owed
     call wc_geom
     jc .out
     call wc_rules
@@ -513,8 +404,45 @@ wc_paint:
     ret
 
 ; --- wc_rules - the header's, the panes' and the status bar's rules ---------
+; On the colour face the header and the status bar are a grey STRIP first -
+; a full paint's decoration, which its bands then letter over (SPEC.md
+; 113.5.2) - and the rules are dark grey.
 wc_rules:
     mov al, CBLACK
+    cmp byte [wc_col], 0
+    je .ink
+    mov al, CLGRAY
+    call OSAPI_SET_COLOR
+    mov ax, [wc_ox]
+    mov bx, [wc_oy]
+    mov cx, ax
+    add cx, [wc_cw]
+    dec cx
+    mov dx, bx
+    add dx, WC_HDRH - 1
+    call OSAPI_GFX_FILL
+    mov bx, [wc_oy]
+    add bx, [wc_sy]
+    inc bx
+    mov dx, [wc_oy]
+    add dx, [wc_ch]
+    dec dx
+    call OSAPI_GFX_FILL
+    mov ax, [wc_rx1]                    ; MEMBERS' strip runs back to its rule
+    or ax, ax
+    jz .nr
+    add ax, [wc_ox]
+    inc ax
+    mov cx, ax
+    add cx, 6
+    mov bx, [wc_oy]
+    add bx, WC_HDRH + 3
+    mov dx, bx
+    add dx, WC_LH - 1
+    call OSAPI_GFX_FILL
+.nr:
+    mov al, CDGRAY
+.ink:
     call OSAPI_SET_COLOR
     mov dx, WC_HDRH                     ; the header's
     call wc_hrule
@@ -665,8 +593,12 @@ wc_bflags_set:
     xor ax, ax
     mov bx, wc_bflags
 .f:
-    call wc_bok                         ; CF = 1 refused
     mov dx, OS88UI_FILL
+    cmp byte [wc_col], 0                ; the colour face paints its own
+    je .face                            ; (SPEC.md 13.8.10)
+    or dx, OS88UI_OWN
+.face:
+    call wc_bok                         ; CF = 1 refused
     jnc .live
     or dx, OS88UI_DIS
 .live:
@@ -718,11 +650,15 @@ wc_bok:
 ; -----------------------------------------------------------------------------
 wc_phdr:
     call wc_sbclr
+    call wc_rclr
+    mov byte [wc_rinv], WS_STRIP
     mov al, ' '
     call wc_sbch
     call wc_sbch
     call wc_sbch
     mov si, wc_nick
+    mov [wc_rbold], si                  ; bold, when there is a nick
+    mov byte [wc_rbcol], 3
     cmp byte [si], 0
     jne .n
     mov si, wc_s_nonick
@@ -733,6 +669,23 @@ wc_phdr:
     mov al, ' '
     call wc_sbch
     call wc_sbch
+    mov al, [wc_st]                     ; the status's glyph and colour
+    cmp byte [wc_link], LK_LIVE
+    je .g
+    mov al, ST_GONE
+.g:
+    push ax
+    call wc_stglyph
+    mov [wc_rgl2], bl
+    mov byte [wc_rgcol2], 16
+    mov bl, al                          ; the word in the glyph's own ink
+    xor bh, bh
+    shl bx, 1
+    mov al, [wc_glink+bx+2]
+    mov ah, 0xFF
+    mov cl, 18
+    call wc_rspan
+    pop ax
     call wc_stword                      ; SI = 'Online', 'Away', ...
     call wc_sbstr
     mov cx, [wc_brects + 8 * WB_STATUS] ; to the button, on the byte grid
@@ -742,25 +695,12 @@ wc_phdr:
     shr cx, 1
     dec cx
     call wc_sbto
+    mov byte [wc_rgl], GL_PERSON
+    mov byte [wc_rgcol], 1
     xor cx, cx
     mov dx, 4
-    xor al, al
-    call wc_band
-    mov cx, 8
-    mov bl, GL_PERSON
-    call wc_glyph
-    mov cx, 3 * 8
-    mov si, wc_nick
-    call wc_bold
-    mov cx, 16 * 8
-    mov al, [wc_st]
-    cmp byte [wc_link], LK_LIVE
-    je .g
-    mov al, ST_GONE
-.g:
-    call wc_stglyph
-    xor al, al
-    jmp wc_glyph
+    mov ax, WCSL_HDR
+    jmp wc_rowout
 
 ; --- wc_stword - SI = the word for our state: the status, or why we have none
 wc_stword:
@@ -946,6 +886,7 @@ wc_pleft:
     ja .out
     push cx
     push dx
+    mov [wc_rband], cx
     call wc_lband                       ; AL = what, AH = which
     pop dx
     call wc_lrow
@@ -955,13 +896,13 @@ wc_pleft:
 .out:
     ret
 
-; --- wc_lrow - draw left band DX holding AL/AH (wc_lband's answer) ---------
+; --- wc_lrow - draw left band DX holding AL/AH (wc_lband's answer); the band's
+; number in [wc_rband] names its slot
 wc_lrow:
     push dx
     call wc_sbclr
-    mov byte [wc_rinv], 0
-    mov byte [wc_rgl], 0xFF
-    mov word [wc_rbold], 0
+    call wc_rclr
+    mov byte [wc_rlead], 1              ; the colour face runs it to the rule
     cmp al, LB_TROOMS
     je .troom
     cmp al, LB_ROOM
@@ -982,11 +923,13 @@ wc_lrow:
     mov si, wc_s_msgs
 .title:
     mov [wc_rbold], si
+    mov byte [wc_rinv], WS_STRIP
     call wc_sbstr
     jmp .draw
 .tfr:
     mov si, wc_s_frnds
     mov [wc_rbold], si
+    mov byte [wc_rinv], WS_STRIP
     call wc_sbstr
     mov cx, WC_LCELLS - 2
     call wc_sbto
@@ -1000,8 +943,10 @@ wc_lrow:
     push ax
     cmp al, [wc_view]
     jne .rnot
-    mov byte [wc_rinv], 1
+    mov byte [wc_rinv], WS_INV
 .rnot:
+    mov cl, 0                           ; the colour face's '#' is grey
+    call wc_rdim
     mov si, wc_s_hash
     call wc_sbstr
     pop ax
@@ -1011,10 +956,36 @@ wc_lrow:
     mov cx, WC_LCELLS - 3
     call wc_sbto
     pop bx
+    cmp byte [wc_ment+bx], 0            ; named there (SPEC.md 113.2.4): an @
+    jne .rment                          ; ahead of the count
     shl bx, 1
     mov ax, [wc_cnt+bx]
     sub ax, [wc_seen+bx]
-    jmp short .count
+    jmp .count
+.rment:
+    shl bx, 1
+    mov ax, [wc_cnt+bx]
+    sub ax, [wc_seen+bx]
+    cmp ax, 99
+    jbe .rm1
+    mov ax, 99
+.rm1:
+    dec di                              ; the badge takes the pad before it:
+    mov byte [wc_rbadc], CMAGENTA       ; ' @3' or '@12'
+    call wc_rbad0
+    push ax
+    cmp ax, 10
+    jae .rm2
+    mov al, ' '
+    call wc_sbch
+.rm2:
+    mov al, '@'
+    call wc_sbch
+    pop ax
+    or ax, ax
+    jz .badge
+    call wc_sbnum
+    jmp short .badge
 .dm:
     mov al, ah
     xor ah, ah
@@ -1025,7 +996,7 @@ wc_lrow:
     push si
     call wc_isview                      ; ZF = 1: this is the view
     jne .dnot
-    mov byte [wc_rinv], 1
+    mov byte [wc_rinv], WS_INV
 .dnot:
     call wc_pglyph                      ; the partner's glyph from the roster
     mov al, ' '                         ; (and a cell for it); then a space
@@ -1036,14 +1007,14 @@ wc_lrow:
     pop si
     mov al, [si+WC_DUNR]
     xor ah, ah
-    jmp short .count
+    jmp .count
 .fr:
     mov al, ah
     call wc_frrec                       ; SI = the friend
     push si
     call wc_isview
     jne .fnot
-    mov byte [wc_rinv], 1
+    mov byte [wc_rinv], WS_INV
 .fnot:
     call wc_pglyph
     mov al, ' '
@@ -1058,6 +1029,8 @@ wc_lrow:
     jbe .num
     mov ax, 99
 .num:
+    mov byte [wc_rbadc], CRED           ; unread: a red badge (SPEC.md 113.5.2)
+    call wc_rbad0
     cmp ax, 10
     jae .two
     push ax
@@ -1066,28 +1039,194 @@ wc_lrow:
     pop ax
 .two:
     call wc_sbnum
+.badge:
+    call wc_rbad1
 .draw:
     mov cx, WC_LCELLS
     call wc_sbto
     pop dx
+    mov ax, [wc_rband]
+    add ax, WCSL_LEFT
+    cmp word [wc_rband], WC_MAXB
+    jb .slot
+    mov ax, 0xFFFF
+.slot:
     mov cx, 8
     jmp wc_rowout
 
-; --- wc_rowout - draw the composed row at CX,DX with [wc_rinv], its glyph at
-; column 0 ([wc_rgl], 0xFF none) and its title bold ([wc_rbold], 0 none)
+; --- wc_rclr - a row with nothing to say about itself yet: the normal style,
+; no glyph, no bold, no spans, at the left. Preserves all.
+wc_rclr:
+    mov byte [wc_rinv], WS_NORM
+    mov byte [wc_rgl], 0xFF
+    mov byte [wc_rgl2], 0xFF
+    mov byte [wc_rgcol], 0
+    mov word [wc_rbold], 0
+    mov byte [wc_rbcol], 0
+    mov byte [wc_rspn], 0
+    mov byte [wc_rlead], 0
+    ret
+
+; --- wc_rspan - a span for the row: from cell CL, ink AL, ground AH (0xFF the
+; style's). THE COLOUR FACE'S ONLY: the mono face has none, which is what
+; keeps its pictures what they were. Preserves all.
+wc_rspan:
+    cmp byte [wc_col], 0
+    je .out
+    push bx
+    push dx
+    mov bl, [wc_rspn]
+    cmp bl, WC_NSPAN - 1
+    jae .full
+    inc byte [wc_rspn]
+    xor bh, bh
+    mov dx, bx
+    shl bx, 1
+    add bx, dx
+    mov [wc_rsps+bx], cl
+    mov [wc_rsps+bx+1], al
+    mov [wc_rsps+bx+2], ah
+.full:
+    pop dx
+    pop bx
+.out:
+    ret
+
+; --- wc_rdim - cell CL grey (the colour face's '#' and '@'), the next one the
+; style's again. Preserves all.
+wc_rdim:
+    push ax
+    push cx
+    mov al, CDGRAY
+    cmp byte [wc_rinv], WS_INV          ; ...not on a selection's blue
+    jne .g
+    mov al, CLGRAY
+.g:
+    mov ah, 0xFF
+    call wc_rspan
+    inc cl
+    mov ax, 0xFFFF
+    call wc_rspan
+    pop cx
+    pop ax
+    ret
+
+; --- wc_rbad0 / wc_rbad1 - a badge from here (DI) / to here: white on
+; [wc_rbadc]. Preserve all.
+wc_rbad0:
+    push ax
+    push cx
+    mov cx, di
+    sub cx, wc_sbuf
+    mov al, CWHITE
+    mov ah, [wc_rbadc]
+    call wc_rspan
+    pop cx
+    pop ax
+    ret
+wc_rbad1:
+    push ax
+    push cx
+    mov cx, di
+    sub cx, wc_sbuf
+    mov ax, 0xFFFF
+    call wc_rspan
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wc_rowout - draw the composed row at CX, DX through slot AX (0xFFFF none):
+; the style [wc_rinv], glyph [wc_rgl] at cell [wc_rgcol] and [wc_rgl2] at
+; [wc_rgcol2] (0xFF none), the bold [wc_rbold] (a string, 0 none) at cell
+; [wc_rbcol], the spans wc_rspan collected - and on the colour face, a row
+; with [wc_rlead] set moves a cell right and starts at x - 8, so its ground
+; runs from the pane's edge to its rule
+; -----------------------------------------------------------------------------
 wc_rowout:
+    push ax
+    push cx
     mov al, [wc_rinv]
-    call wc_band
+    call wc_mreset
+    mov bx, wc_rsps
+    mov ch, [wc_rspn]
+.sp:
+    or ch, ch
+    jz .gl
+    mov cl, [bx]
+    mov ax, [bx+1]
+    call wc_span
+    add bx, 3
+    dec ch
+    jmp short .sp
+.gl:
+    mov cl, [wc_rgcol]
     mov bl, [wc_rgl]
     cmp bl, 0xFF
+    je .g2
+    call wc_mglyph
+.g2:
+    mov cl, [wc_rgcol2]
+    mov bl, [wc_rgl2]
+    cmp bl, 0xFF
     je .b
-    call wc_glyph
+    call wc_mglyph
 .b:
     mov si, [wc_rbold]
     or si, si
-    jz .out
-    jmp wc_bold
-.out:
+    jz .lead
+    call wc_slen
+    mov ch, [wc_rbcol]
+    call wc_mbold
+.lead:
+    pop cx
+    cmp byte [wc_col], 0
+    je .go
+    cmp byte [wc_rlead], 0
+    je .go
+    call wc_lead
+    sub cx, 8
+.go:
+    pop ax
+    call wc_slot
+    jmp wc_bandc
+
+; --- wc_lead - the composition a cell right, a space in front, and every cell
+; the meta names with it. Preserves all.
+wc_lead:
+    push ax
+    push bx
+    push si
+    mov si, wc_sbuf + WC_SBUFN - 2
+.m:
+    mov al, [si-1]
+    mov [si], al
+    dec si
+    cmp si, wc_sbuf
+    ja .m
+    mov byte [si], ' '
+    mov byte [wc_sbuf+WC_SBUFN-1], 0
+    mov bx, wc_meta + WCX_SP + 3        ; the spans after the first
+    mov al, [wc_meta+WCX_NSP]
+.s:
+    dec al
+    jz .g
+    inc byte [bx]
+    add bx, 3
+    jmp short .s
+.g:
+    cmp byte [wc_meta+WCX_G0], 0xFF
+    je .g1
+    inc byte [wc_meta+WCX_G0]
+.g1:
+    cmp byte [wc_meta+WCX_G1], 0xFF
+    je .b
+    inc byte [wc_meta+WCX_G1]
+.b:
+    inc byte [wc_meta+WCX_BC]
+    pop si
+    pop bx
+    pop ax
     ret
 
 ; --- wc_pglyph - SI = a nick: its status glyph into [wc_rgl], a space for it
@@ -1138,15 +1277,20 @@ wc_roomname:
 ; -----------------------------------------------------------------------------
 wc_ptitle:
     call wc_sbclr
+    call wc_rclr
     mov al, ' '
     call wc_sbch
+    mov cl, 1                           ; the colour face's '#' or '@' is grey
+    call wc_rdim
     mov si, wc_s_at
     cmp byte [wc_view], WV_DM
     je .t
     mov si, wc_s_hash
 .t:
     call wc_sbstr
-    push di
+    mov ax, di
+    sub ax, wc_sbuf                     ; the name's column, for the bold
+    mov [wc_rbcol], al
     mov si, wc_vdm
     cmp byte [wc_view], WV_DM
     je .n
@@ -1154,37 +1298,20 @@ wc_ptitle:
     xor ah, ah
     call wc_roomname
 .n:
+    mov [wc_rbold], si
     call wc_sbstr
-    pop ax
-    sub ax, wc_sbuf                     ; the name's column, for the bold
-    push ax
-    push si
     call wc_titlecells                  ; CX = cells up to the Search button
     call wc_sbto
     mov cx, [wc_tx]
     mov dx, [wc_ty]
-    xor al, al
-    call wc_band
-    pop si
-    pop ax
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1
-    add cx, ax
-    ; the name again, for the overstrike: SI is past it, so recompute
-    mov si, wc_vdm
-    cmp byte [wc_view], WV_DM
-    je .b
-    mov al, [wc_view]
-    xor ah, ah
-    call wc_roomname
-.b:
-    xor al, al
-    call wc_bold
+    mov ax, WCSL_TITLE
+    call wc_rowout
     cmp byte [wc_topic], 0
     je .out
     ; --- the topic ----------------------------------------------------------
     call wc_sbclr
+    call wc_rclr
+    mov byte [wc_rinv], WS_DIM
     mov al, ' '
     call wc_sbch
     mov si, wc_s_private
@@ -1207,8 +1334,8 @@ wc_ptitle:
     mov cx, [wc_tx]
     mov dx, [wc_ty]
     add dx, WC_LH + WC_TOPICDY
-    xor al, al
-    jmp wc_band
+    mov ax, WCSL_TOPIC
+    jmp wc_rowout
 .out:
     ret
 
@@ -1228,14 +1355,16 @@ wc_titlecells:
 ; -----------------------------------------------------------------------------
 wc_pnote:
     call wc_sbclr
+    call wc_rclr
+    mov byte [wc_rinv], WS_NOTE
     mov si, wc_note
     call wc_sbstr
     mov cx, [wc_cols]
     call wc_sbto
     mov cx, [wc_tx]
     mov dx, [wc_ny]
-    xor al, al
-    jmp wc_band
+    mov ax, WCSL_NOTE
+    jmp wc_rowout
 
 ; -----------------------------------------------------------------------------
 ; wc_pfield - the input row: the mode's prompt, then the field
@@ -1266,7 +1395,7 @@ wc_pfield:
     mov cx, [wc_tx]
     mov dx, [wc_iy]
     add dx, 3
-    xor al, al
+    mov al, WS_NOTE                     ; the prompt: blue on the colour face
     call wc_band
 .f:
     mov si, wc_ln
@@ -1302,24 +1431,25 @@ wc_pright:
     mov cx, WC_RCELLS
     call wc_sbto
     pop si
+    call wc_rclr
     mov [wc_rbold], si
-    mov byte [wc_rinv], 0
-    mov byte [wc_rgl], 0xFF
+    mov byte [wc_rinv], WS_STRIP
     mov cx, [wc_rx1]
     add cx, 8
     mov dx, WC_HDRH + 3
+    mov ax, WCSL_RIGHT
     call wc_rowout
     ; --- the members, a band each, to the status bar ----------------------
     xor bx, bx                          ; BX = the roster record to look at
     mov word [wc_rowy], WC_HDRH + 3 + WC_LH
+    mov word [wc_rband], 1
 .m:
     mov ax, [wc_rowy]
     add ax, WC_LH
     cmp ax, [wc_sy]
     ja .out
     call wc_sbclr
-    mov byte [wc_rgl], 0xFF
-    mov word [wc_rbold], 0
+    call wc_rclr
 .seek:
     cmp bl, [wc_rn]
     jae .blank
@@ -1349,10 +1479,16 @@ wc_pright:
     mov cx, [wc_rx1]
     add cx, 8
     mov dx, [wc_rowy]
-    mov byte [wc_rinv], 0
+    mov ax, [wc_rband]
+    add ax, WCSL_RIGHT
+    cmp word [wc_rband], WC_MAXB
+    jb .slot
+    mov ax, 0xFFFF
+.slot:
     call wc_rowout
     pop bx
     add word [wc_rowy], WC_LH
+    inc word [wc_rband]
     jmp short .m
 .out:
     ret
@@ -1400,10 +1536,17 @@ wc_members:
 ; -----------------------------------------------------------------------------
 wc_pstat:
     call wc_sbclr
-    mov al, ' '                         ; the glyph's cell and a space
+    call wc_rclr
+    mov byte [wc_rinv], WS_STRIP
+    mov al, ' '                         ; the glyph's cell and a space - and on
+    call wc_sbch                        ; the colour face, two lamps' (SPEC.md
+    call wc_sbch                        ; 113.5.2)
+    call wc_sbch
+    cmp byte [wc_col], 0
+    je .word
     call wc_sbch
     call wc_sbch
-    call wc_sbch
+.word:
     call wc_linkword                    ; SI = 'Connected', ...
     call wc_sbstr
     cmp byte [wc_link], LK_LIVE
@@ -1428,30 +1571,82 @@ wc_pstat:
     call wc_sbto
     mov si, wc_s_notify
     call wc_sbstr
+    mov cx, di                          ; On green, Off red
+    sub cx, wc_sbuf
+    mov ax, 0xFF00 | CGREEN
     mov si, wc_s_on
     cmp byte [wc_notify], 0
     jne .o
+    mov al, CRED
     mov si, wc_s_off
 .o:
+    call wc_rspan
     call wc_sbstr
+    mov cx, di
+    sub cx, wc_sbuf
+    mov ax, 0xFFFF
+    call wc_rspan
     mov cx, [wc_cw]
     shr cx, 1
     shr cx, 1
     shr cx, 1
     sub cx, WC_GROWC
     call wc_sbto
-    xor cx, cx
-    mov dx, [wc_sy]
-    inc dx
-    xor al, al
-    call wc_band
-    mov cx, 8
+    mov byte [wc_rgcol], 1
+    cmp byte [wc_col], 0
+    jne .lamps
     mov bl, GL_PLUG
     cmp byte [wc_link], LK_LIVE
     je .g
     mov bl, GL_CUT
 .g:
-    jmp wc_glyph
+    mov [wc_rgl], bl
+    jmp short .out
+.lamps:
+    call wc_lamps                       ; BL = the link's, BH = activity's
+    mov [wc_rgl], bl
+    mov [wc_rgl2], bh
+    mov byte [wc_rgcol2], 3
+.out:
+    xor cx, cx
+    mov dx, [wc_sy]
+    inc dx
+    mov ax, WCSL_STAT
+    jmp wc_rowout
+
+; --- wc_lamps - the two lamps' glyphs: BL the link's, BH activity's ---------
+; THE LINK: green with a session, amber while one is being made or the server
+; asked us to rest, red with no card or after a failure, dark with no nick.
+; ACTIVITY: amber while a request we MADE is on the wire (a join, a message,
+; a flag - a held poll is waiting, not activity) and for a second after a
+; reply that brought something (wc_ondone's [wc_act]); dark otherwise.
+wc_lamps:
+    mov al, [wc_link]
+    mov bl, GL_LED + LED_GREEN
+    cmp al, LK_LIVE
+    je .act
+    mov bl, GL_LED + LED_OFF
+    cmp al, LK_NONICK
+    je .act
+    mov bl, GL_LED + LED_RED
+    cmp al, LK_NODRV
+    je .act
+    cmp al, LK_OFF
+    je .act
+    mov bl, GL_LED + LED_AMBER
+.act:
+    mov bh, GL_LED + LED_AMBER
+    cmp byte [wc_act], 0
+    jne .out
+    mov al, [wc_rq]
+    cmp al, RQ_NONE
+    je .dark
+    cmp al, RQ_POLL
+    jne .out
+.dark:
+    mov bh, GL_LED + LED_OFF
+.out:
+    ret
 
 ; --- wc_linkword - SI = the status bar's word for [wc_link] ------------------
 wc_linkword:
@@ -1602,27 +1797,70 @@ wc_w0:
 .out:
     ret
 
-; --- wc_relines - every cache good, and [wc_total] their sum and the divider's
+; --- wc_relines - every cache good, and [wc_total] their sum and the dividers'
 ; in: an invalidate first (wc_dirtylines) when the width or the style moved
 ; clobbers AX, BX, CX, DX, SI, DI
 wc_relines:
+    call wc_dayflags
     xor bx, bx
     xor dx, dx
 .m:
     cmp bl, [wc_mn]
     jae .out
     push dx
-    call wc_mlines
+    call wc_mtot
     pop dx
     add dx, ax
-    cmp bl, [wc_divi]
-    jne .n
-    inc dx                              ; the divider is one line of its own
-.n:
     inc bx
     jmp short .m
 .out:
     mov [wc_total], dx
+    ret
+
+; --- wc_mtot - message BX (an index): ALL its lines - its day divider, the
+; new-messages divider, its header and its text. Preserves BX; clobbers CX,
+; DX, SI, DI
+wc_mtot:
+    call wc_mlines
+    cmp bl, [wc_divi]
+    jne .d
+    inc ax                              ; the divider is one line of its own
+.d:
+    push bx
+    call wc_mrec
+    test byte [bx+WC_MFLG], WCM_DAY
+    pop bx
+    jz .out
+    inc ax                              ; ...and so is a new day
+.out:
+    ret
+
+; --- wc_dayflags - WCM_DAY on each message whose LOCAL day is not the day of
+; the one before it (SPEC.md 113.5): the first dated message has one, and a
+; history from a server without dates has none. clobbers AX, BX, CX, DX
+wc_dayflags:
+    push di
+    xor cx, cx                          ; CX = the day before
+    xor di, di                          ; DI = the index
+    mov bx, wc_msgs
+.m:
+    mov ax, di
+    cmp al, [wc_mn]
+    jae .out
+    and byte [bx+WC_MFLG], ~WCM_DAY & 0xFF
+    call wc_lday
+    or ax, ax
+    jz .n
+    cmp ax, cx
+    je .n
+    or byte [bx+WC_MFLG], WCM_DAY
+.n:
+    mov cx, ax
+    add bx, WC_MREC
+    inc di
+    jmp short .m
+.out:
+    pop di
     ret
 
 ; --- wc_dirtylines - forget every cached line count ---------------------------
@@ -1669,44 +1907,26 @@ wc_ppane:
     jbe .t
     mov [wc_top], ax
 .t:
-    xor cx, cx
-.r:
+    ; --- the lines on the glass, moved to where they now belong -------------
+    ; [wc_dtop] is the top the glass shows. Fewer lines apart than the pane is
+    ; tall, OSAPI_GFX_SCROLL moves them and the slots move with them, so the
+    ; rows below draw only what the move uncovered (SPEC.md 113.5.1)
+    mov ax, [wc_top]
+    cmp word [wc_dtop], 0xFFFF
+    je .rows
+    cmp byte [wc_pop], PP_NONE          ; a popup over the pane would move with
+    jne .rows                           ; it
+    sub ax, [wc_dtop]
+    jz .rows
+    mov cx, ax
+    jns .abs
+    neg cx
+.abs:
     cmp cx, [wc_rows]
-    jae .bar
-    push cx
-    call wc_prow
-    pop cx
-    inc cx
-    jmp short .r
-.bar:
-    call wc_sbar
-    ret
-
-; -----------------------------------------------------------------------------
-; wc_ptail - only what was appended: the pane moves up by the new lines and
-;            they are lettered below it - or, when the user has scrolled up
-;            to read, nothing moves and only the bar says there is more
-; -----------------------------------------------------------------------------
-wc_ptail:
-    mov ax, [wc_total]
-    mov [wc_otot], ax                   ; the total the glass shows
-    call wc_maxtop
-    cmp [wc_top], ax                    ; at the bottom (or the pane not full)?
-    pushf
-    call wc_relines
-    popf
-    jb .bar                             ; reading further up: leave it be
-    mov dx, [wc_top]                    ; DX = the old top
-    call wc_maxtop                      ; AX = the new one
-    mov [wc_top], ax
-    sub ax, dx                          ; AX = lines to move up
-    jz .letter
-    cmp ax, [wc_rows]
-    jae .whole
-    ; --- move the pane up AX bands ---------------------------------------
+    jae .rows
     push ax
     mov cx, WC_LH
-    mul cx
+    imul cx
     mov si, ax                          ; SI = rows, positive: up
     mov ax, [wc_tx]
     add ax, [wc_ox]
@@ -1728,26 +1948,41 @@ wc_ptail:
     pop ax
     call OSAPI_GFX_SCROLL
     pop ax
-    jc .whole                           ; refused (a covered pane): all of it
-.letter:
-    mov cx, [wc_otot]                   ; the first new line, as a row
-    sub cx, [wc_top]
-    jge .from
+    jc .rows                            ; refused (a covered pane): the slots
+    call wc_pshift                      ; stay, and the rows draw what differs
+.rows:
+    mov ax, [wc_top]
+    mov [wc_dtop], ax
     xor cx, cx
-.from:
+.r:
     cmp cx, [wc_rows]
     jae .bar
     push cx
     call wc_prow
     pop cx
     inc cx
-    jmp short .from
-.whole:
-    jmp wc_ppane
+    jmp short .r
 .bar:
     jmp wc_sbar
 
-; --- wc_sbar - the scroll bar from [wc_total], [wc_rows] and [wc_top] -------
+; -----------------------------------------------------------------------------
+; wc_ptail - what was appended: at the bottom the pane follows the end, and
+;            reading further up it stays where it is and only the bar says
+;            there is more. wc_ppane moves what can be moved and draws only
+;            what the slots say is new.
+; -----------------------------------------------------------------------------
+wc_ptail:
+    call wc_maxtop                      ; the end, before the new lines
+    cmp [wc_top], ax
+    jb .read
+    mov byte [wc_tobot], 1              ; at it: follow it
+.read:
+    jmp wc_ppane
+
+; --- wc_sbar - the scroll bar from [wc_total], [wc_rows] and [wc_top]: the
+; library's os88ui_sbupd (SPEC.md 13.10.5.6), so a move is the thumb's three
+; calls or none, and only a total or a fit that moved draws the whole bar -
+; which a W_PAINT owes ([wc_sbk], wcband.inc's wc_owe)
 wc_sbar:
     mov ax, [wc_total]
     mov [wc_sb+8], ax
@@ -1756,25 +1991,43 @@ wc_sbar:
     mov ax, [wc_top]
     mov [wc_sb+12], ax
     mov bx, wc_sb
-    jmp os88ui_sbar
+    cmp byte [wc_sbk], 0
+    je .whole
+    jmp os88ui_sbupd
+.whole:
+    mov byte [wc_sbk], 1
+    jmp os88ui_sbupdw
 
 ; -----------------------------------------------------------------------------
-; wc_prow - draw pane row CX (0 = the top band), which shows line top + CX
+; wc_prow - draw pane row CX (0 = the top band), which shows line top + CX,
+;           through its slot
 ; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wc_prow:
+    mov [wc_rband], cx
     mov ax, WC_LH
     mul cx
     add ax, [wc_py1]
     mov [wc_rowy], ax                   ; the band's top, content-relative
     mov ax, [wc_top]
     add ax, cx                          ; AX = the line
-    call wc_lfind                       ; BX = the message, CX = the part, CF none
-    jc .blank
-    mov byte [wc_rinv], 0
-    mov byte [wc_rgl], 0xFF
-    mov word [wc_rbold], 0
+    call wc_rclr
     call wc_sbclr
+    call wc_lfind                       ; BX = the message, CX = the part, CF none
+    jc .out
+    ; --- a new day? -------------------------------------------------------
+    push bx
+    call wc_mrec
+    test byte [bx+WC_MFLG], WCM_DAY
+    mov [wc_rrec], bx
+    pop bx
+    jz .noday
+    or cx, cx
+    jnz .afterday
+    jmp .dayline
+.afterday:
+    dec cx
+.noday:
     ; --- the divider? -----------------------------------------------------
     cmp bl, [wc_divi]
     jne .nodiv
@@ -1790,8 +2043,14 @@ wc_prow:
     pop ax
     cmp al, [wc_sel]
     jne .ns
-    mov byte [wc_rinv], 1
+    mov byte [wc_rinv], WS_INV
+    jmp short .nm
 .ns:
+    mov bx, [wc_rrec]                   ; a header that names us: yellow on
+    test byte [bx+WC_MFLG], WCM_MENT    ; the colour face
+    jz .nm
+    mov byte [wc_rinv], WS_MENT
+.nm:
     cmp byte [wc_compact], 0
     jne .compact
     jcxz .header
@@ -1801,7 +2060,7 @@ wc_prow:
     mov cx, WC_TIME
     call wc_sbto
     pop cx
-    mov byte [wc_rinv], 0               ; only the header carries the selection
+    mov byte [wc_rinv], WS_NORM         ; only the header carries the selection
     jmp short .segment
 .compact:
     jcxz .chead
@@ -1809,14 +2068,10 @@ wc_prow:
     mov cx, WC_TIME
     call wc_sbto
     pop cx
-    mov byte [wc_rinv], 0
+    mov byte [wc_rinv], WS_NORM
     jmp short .segment
 .chead:
-    call wc_sbtime                      ; 'hh:mm ' 'nick: ' then segment 0
-    mov si, [wc_rrec]
-    add si, WC_MNICK
-    mov [wc_rbold], si
-    call wc_sbstr
+    call wc_phead                       ; 'hh:mm ' 'nick' then ': ' segment 0
     mov al, ':'
     call wc_sbch
     mov al, ' '
@@ -1850,34 +2105,82 @@ wc_prow:
     loop .copy
     jmp short .out
 .header:
-    call wc_sbtime
-    mov si, [wc_rrec]
-    add si, WC_MNICK
-    mov [wc_rbold], si
-    call wc_sbstr
+    call wc_phead
     jmp short .out
 .divider:
+    mov byte [wc_rinv], WS_ALERT
     call wc_sbdivider
     jmp short .out
-.blank:
-    mov byte [wc_rinv], 0
-    mov byte [wc_rgl], 0xFF
-    mov word [wc_rbold], 0
-    call wc_sbclr
+.dayline:
+    mov byte [wc_rinv], WS_DIM
+    call wc_sbdayline
 .out:
     mov cx, [wc_cols]
     call wc_sbto
     mov cx, [wc_tx]
     mov dx, [wc_rowy]
-    mov al, [wc_rinv]
-    call wc_band
-    mov si, [wc_rbold]
-    or si, si
-    jz .done
-    add cx, WC_TIME * 8                 ; the nick sits at the text column
-    jmp wc_bold
-.done:
+    mov ax, [wc_rband]
+    add ax, WCSL_PANE
+    cmp word [wc_rband], WC_MAXB
+    jb .slot
+    mov ax, 0xFFFF
+.slot:
+    jmp wc_rowout
+
+; --- wc_phead - a header's 'hh:mm nick', the nick bold at the text column;
+; on the colour face the time grey and the nick in its own colour, unless the
+; header is the selection's blue
+wc_phead:
+    call wc_sbtime
+    cmp byte [wc_rinv], WS_INV
+    je .nick
+    xor cl, cl
+    mov ax, 0xFF00 | CDGRAY
+    call wc_rspan
+    mov cl, WC_TIME
+    mov si, [wc_rrec]
+    add si, WC_MNICK
+    call wc_nickcol                     ; AL = the nick's colour
+    mov ah, 0xFF
+    call wc_rspan
+.nick:
+    mov si, [wc_rrec]
+    add si, WC_MNICK
+    mov [wc_rbold], si
+    mov byte [wc_rbcol], WC_TIME
+    call wc_sbstr
+    mov cx, di
+    sub cx, wc_sbuf
+    mov ax, 0xFFFF
+    jmp wc_rspan
+
+; --- wc_nickcol - AL = the colour face's ink for the nick at SI: one of six
+; that read on white, by a sum of its letters - so a nick is always the same
+; colour, on every machine (SPEC.md 113.5.2). Preserves the rest.
+wc_nickcol:
+    push bx
+    push si
+    xor bx, bx
+.c:
+    lodsb
+    or al, al
+    jz .d
+    call wc_lower
+    add bl, al
+    jmp short .c
+.d:
+    mov al, bl
+    xor ah, ah
+    mov bl, 6
+    div bl
+    mov bl, ah
+    xor bh, bh
+    mov al, [wc_nickcols+bx]
+    pop si
+    pop bx
     ret
+
+wc_nickcols:    db CBLUE, CGREEN, CRED, CMAGENTA, CBROWN, CCYAN
 
 ; --- wc_sbtime - 'h:mm ' for the record at [wc_rrec], local, right-aligned ---
 wc_sbtime:
@@ -1927,6 +2230,22 @@ wc_sbtime:
     mov al, ' '
     jmp wc_sbch
 
+; --- wc_sbdayline - '---- Tue Oct 20 ----' across the pane, for [wc_rrec] ---
+wc_sbdayline:
+    mov al, '-'
+    mov cx, 4
+.l:
+    call wc_sbch
+    loop .l
+    mov al, ' '
+    call wc_sbch
+    mov bx, [wc_rrec]
+    call wc_lday
+    call wc_sbday
+    mov al, ' '
+    call wc_sbch
+    jmp short wc_sbdivider.r
+
 ; --- wc_sbdivider - '---- N new messages ----' across the pane --------------
 wc_sbdivider:
     mov al, '-'
@@ -1958,8 +2277,9 @@ wc_sbdivider:
 
 ; -----------------------------------------------------------------------------
 ; wc_lfind - which message, and which of its lines, is line AX?
-; out: CF = 0, BX = the message's index, CX = the part (0 = its divider when
-;      it has one, then its header unless compact, then its segments);
+; out: CF = 0, BX = the message's index, CX = the part (0 = its day divider
+;      when it has one, then its new-messages divider when it has that, then
+;      its header unless compact, then its segments);
 ;      CF = 1 past the end. clobbers AX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wc_lfind:
@@ -1968,13 +2288,9 @@ wc_lfind:
     cmp bl, [wc_mn]
     jae .no
     push ax
-    call wc_mlines                      ; AX = its lines (cached)
+    call wc_mtot                        ; AX = its lines (cached)
     mov cx, ax
     pop ax
-    cmp bl, [wc_divi]
-    jne .n
-    inc cx
-.n:
     cmp ax, cx
     jb .yes
     sub ax, cx

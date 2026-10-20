@@ -108,6 +108,14 @@ WC_MNICK    equ 8
 WC_MTEXT    equ 21
 WCM_DM      equ 1               ; WC_MFLG: a private message...
 WCM_MINE    equ 2               ; ...one this session sent
+WCM_MENT    equ 4               ; ...one that names us (wc_mention)
+WCM_DAY     equ 8               ; ...the first of its local day: a divider
+                                ; above it (wc_dayflags, SPEC.md 113.5)
+WC_MDAY     equ 222             ; +222 dw its UTC day, 1 = 2000-01-01, 0 =
+                                ; none (SPEC.md 113.2.4)
+%if WC_MDAY + 2 > WC_MREC
+  %error "WC_MDAY runs past the record"
+%endif
 WC_NROS     equ 50              ; the roster: the server's session ceiling
 WC_RREC     equ 16              ; +0 the nick, +13 room, +14 status
 WC_RROOM    equ 13
@@ -129,6 +137,39 @@ WC_PFXMAX   equ 32
 WC_NOTEN    equ 64              ; the notice line
 WC_CFGMAX   equ 512
 WC_SBUFN    equ 96              ; a composed row
+
+; --- a band's META (wcband.inc): how a composed row is drawn -----------------
+WC_NSPAN    equ 4               ; colour spans a band may have
+WCX_LEN     equ 0               ; db the composition's cells
+WCX_STY     equ 1               ; db WS_*
+WCX_NSP     equ 2               ; db spans, 1..WC_NSPAN (0 = a slot owed)
+WCX_SP      equ 3               ; (cell, ink, ground) x WC_NSPAN; 0xFF = the
+                                ; style's
+WCX_G0      equ WCX_SP + 3 * WC_NSPAN   ; (cell, glyph), cell 0xFF = none
+WCX_G1      equ WCX_G0 + 2
+WCX_BC      equ WCX_G1 + 2      ; db the overstrike's first cell...
+WCX_BL      equ WCX_BC + 1      ; db ...and its length, 0 = none
+WC_METAN    equ WCX_BL + 1
+; --- the SLOTS (SPEC.md 113.5.1): a band's meta and cells as on the glass ----
+WC_MAXB     equ 44              ; bands a pane may have slots for: a VGA's
+                                ; tallest window has 40 (the rest draw whole)
+WC_NCAP     equ 18              ; a narrow slot's cells: a left row and its
+                                ; lead (WC_LCELLS + 1)
+WC_SLOTW    equ WC_METAN + WC_SBUFN     ; a wide slot
+WC_SLOTNN   equ WC_METAN + WC_NCAP      ; a narrow one
+WCSL_HDR    equ 0               ; the wide: the header...
+WCSL_TITLE  equ 1               ; ...the title, the topic, the notice line,
+WCSL_TOPIC  equ 2               ; the status bar
+WCSL_NOTE   equ 3
+WCSL_STAT   equ 4
+WCSL_PANE   equ 5               ; ...and the message pane's rows
+WC_NWIDE    equ WCSL_PANE + WC_MAXB
+WCSL_LEFT   equ WC_NWIDE        ; the narrow: the left pane's bands...
+WCSL_RIGHT  equ WCSL_LEFT + WC_MAXB     ; ...and the right's
+WC_NSLOT    equ WCSL_RIGHT + WC_MAXB
+%if WC_LCELLS + 1 > WC_NCAP || WC_RCELLS > WC_NCAP
+  %error "a pane's row does not fit a narrow slot"
+%endif
 
 ; --- the worker's states (wcnet.inc) - WS_OPEN..WS_BODY is "in flight" -------
 WS_IDLE     equ 0
@@ -278,6 +319,7 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_h12, 1               ; the clock's 12-hour choice
     WCV wc_rooms, WC_NROOM * (WC_ROOMN + WC_TOPICN)
     WCV wc_cnt, 2 * WC_NROOM    ; each room's counter (C)
+    WCV wc_ment, WC_NROOM       ; ...and 1 = an A named us there, unread
     WCV wc_seen, 2 * WC_NROOM   ; ...as it was when last the view
     WCV wc_rn, 1                ; the roster
     WCV wc_ros, WC_NROS * WC_RREC
@@ -305,6 +347,7 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     ; --- the parser's fields (wcproto.inc) --------------------------------
     WCV wc_pseq, 4              ; a record's seq
     WCV wc_pmin, 2              ; ...its UTC minute
+    WCV wc_pday, 2              ; ...its UTC day, 0 = none (SPEC.md 113.2.4)
     WCV wc_proom, 1             ; ...its room
     WCV wc_pflg, 1              ; ...the store's WCM_* for it
     WCV wc_pmine, 1             ; ...1 = this session sent it
@@ -313,13 +356,46 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_pother, 2            ; ...a private message's other end
     WCV wc_dbuf, 12             ; a dword in decimal
     ; --- the painters' row (wcview.inc) ------------------------------------
-    WCV wc_rinv, 1              ; the row is inverted
-    WCV wc_rgl, 1               ; ...its column-0 glyph, 0xFF none
-    WCV wc_rbold, 2             ; ...its bold string, 0 none
+    WCV wc_rinv, 1              ; the row's style, WS_*
+    WCV wc_rgl, 1               ; ...its glyph, 0xFF none...
+    WCV wc_rgcol, 1             ; ...at this cell
+    WCV wc_rgl2, 1              ; ...a second glyph, 0xFF none...
+    WCV wc_rgcol2, 1            ; ...at this cell
+    WCV wc_rbold, 2             ; ...its bold string, 0 none...
+    WCV wc_rbcol, 1             ; ...at this cell
+    WCV wc_rlead, 1             ; ...1 = a left pane row (wc_rowout)
+    WCV wc_rspn, 1              ; ...the colour spans wc_rspan collected
+    WCV wc_rsps, 3 * (WC_NSPAN - 1)
+    WCV wc_rbadc, 1             ; ...a badge's ground
+    WCV wc_rband, 2             ; ...and the band's number, for its slot
     WCV wc_rrec, 2              ; the message record a pane row draws
     WCV wc_rowy, 2              ; the band being drawn
-    WCV wc_otot, 2              ; the pane's total before an append
     WCV wc_rbuf, 32             ; a composed status word
+    ; --- the band and the faces (wcband.inc) --------------------------------
+    WCV wc_col, 1               ; 1 = the colour face (wc_face, each W_PAINT)
+    WCV wc_meta, WC_METAN       ; the band being drawn: its meta...
+    WCV wc_bx, 2                ; ...where (screen)
+    WCV wc_by, 2
+    WCV wc_bslot, 2             ; ...through which slot, 0 none
+    WCV wc_bfirst, 2            ; ...the cells that differ, first and last
+    WCV wc_blast, 2
+    WCV wc_bn, 1                ; ...a span count down
+    WCV wc_bgid, 1              ; ...a glyph
+    WCV wc_bair, 2              ; ...the air's run: its first cell...
+    WCV wc_bend, 2              ; ...one past its last...
+    WCV wc_bgnd, 1              ; ...and its ground
+    WCV wc_dtop, 2              ; the pane's top line AS DRAWN, 0xFFFF owed
+    WCV wc_sbk, 1               ; 1 = the scroll bar is on the glass as
+                                ; wc_sb's last three words say (wc_sbar)
+    WCV wc_act, 1               ; the activity lamp's seconds left
+    WCV wc_bv, 8                ; a bevelled button: its rect...
+    WCV wc_bf, 8                ; ...its face
+    WCV wc_btw, 2               ; ...its caption's width and place
+    WCV wc_btx, 2
+    WCV wc_bty, 2
+    WCV wc_ink, 1               ; ...a fill's colour
+    WCV wc_slw, WC_NWIDE * WC_SLOTW     ; the slots (SPEC.md 113.5.1)
+    WCV wc_sln, 2 * WC_MAXB * WC_SLOTNN
     ; --- the actions (wcact.inc) ------------------------------------------
     WCV wc_rqdone, 1            ; the request a reply answered
     WCV wc_rqnote, 1            ; ...and whether it set the notice line
@@ -327,6 +403,10 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_askn, WC_NICKN       ; the nick an alert asks about...
     WCV wc_askwhat, 1           ; ...and what it asks: 1 add, 2 remove, 3 flag
     WCV wc_askbuf, 40           ; ...in its words
+    WCV wc_mbuf, WC_NOTEN       ; '<nick> mentioned you in #<room>'
+    WCV wc_cpl, 1               ; Tab's @nick run: the typed prefix, 0 none
+    WCV wc_cpi, 1               ; ...the roster record it took last
+    WCV wc_cpart, 2             ; ...what was typed after the @ this time
     ; --- the worker and the HTTP client (wcnet.inc) ----------------------------
     WCV wc_state, 1             ; WS_*
     WCV wc_gen, 1               ; the generation (SPEC.md 71.11)
@@ -478,6 +558,7 @@ wc_about:
 %include "wcnet.inc"
 %include "wcproto.inc"
 %include "wcview.inc"
+%include "wcband.inc"
 %include "wcact.inc"
 
 ; the buttons' record (SPEC.md 20.5.1.3): rects and flags in the bss, filled
@@ -497,8 +578,10 @@ wc_btn:
 
 ; --- the shared code --------------------------------------------------------------
 %define OS88UI_ABOUT
+%define OS88UI_BOWN                 ; the colour face paints its own buttons
 %define OS88UI_ALERT
 %define OS88UI_SCROLL
+%define OS88UI_SBUPD                ; the thumb alone when only it moved
 %define OS88UI_NOGLYPH              ; no check box or radio drawn here
 %include "os88ui.inc"
 %include "os88line.inc"

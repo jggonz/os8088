@@ -106,6 +106,8 @@ wc_compose:
     call wc_putst
     mov byte [wc_rqh], 1                ; a join always answers with history
 .qend:
+    mov si, wc_q_x                      ; &x=1 on every verb: we read dates
+    call wc_put                         ; and mentions (SPEC.md 113.2.4)
     ; --- the headers ----------------------------------------------------------
     mov si, wc_s_http                   ; ' HTTP/1.0' CRLF 'Host: '
     call wc_put
@@ -365,6 +367,8 @@ wc_rtab:
     dw wc_rec_j
     db 'L'
     dw wc_rec_l
+    db 'A'
+    dw wc_rec_a
     db 0
 
 ; --- wc_forview - ZF = 1 when the reply is for the view on the glass --------
@@ -581,7 +585,7 @@ wc_rec_m:
 .out:
     ret
 
-; --- wc_seqmin - an M record's seq, room and hhmm into the scratch ------------
+; --- wc_seqmin - an M record's seq, room and [date] hhmm into the scratch -----
 ; A D record has no room, and wc_rec_d reads its two numbers itself.
 wc_seqmin:
     call wc_dec32
@@ -589,7 +593,25 @@ wc_seqmin:
     mov [wc_pseq+2], dx
     call wc_dec32
     mov [wc_proom], al
+    ; fall through
+; --- wc_ptime - [date] hhmm at SI: [wc_pday] and [wc_pmin] (SPEC.md 113.2.4)
+; A server that knows x=1 puts yyyymmdd ahead of the hhmm and one that does
+; not sends the hhmm alone. The NUMBER says which: a hhmm is at most 2359 and
+; a date at least 19700101. out: SI past the space after the hhmm
+wc_ptime:
     call wc_dec32
+    mov word [wc_pday], 0
+    or dx, dx
+    jnz .date
+    cmp ax, 2400
+    jb .hhmm
+.date:
+    push si
+    call wc_civday                      ; DX:AX = yyyymmdd -> AX = the day
+    pop si
+    mov [wc_pday], ax
+    call wc_dec32                       ; ...and the hhmm after it
+.hhmm:
     push si
     call wc_hhmm2min
     pop si
@@ -619,12 +641,7 @@ wc_rec_d:
     call wc_dec32
     mov [wc_pseq], ax
     mov [wc_pseq+2], dx
-    call wc_dec32
-    push si
-    call wc_hhmm2min
-    pop si
-    mov [wc_pmin], ax
-    inc si
+    call wc_ptime
     call wc_fld                         ; from
     mov [wc_pnick], bx
     call wc_fld                         ; to
@@ -674,9 +691,10 @@ wc_rec_d:
 ; 880 Hz for two ticks, Telnet's bell (teansi.inc), at a package's priority.
 wc_chirp:
     cmp byte [wc_notify], 0
-    je .out
+    je wc_tone.out
     cmp byte [wc_front], 0
-    jne .out
+    jne wc_tone.out
+wc_tone:
     push ax
     push cx
     push dx
@@ -691,9 +709,12 @@ wc_chirp:
     ret
 
 ; -----------------------------------------------------------------------------
-; wc_mention - the message just added names us, as a word: chirp
+; wc_mention - the message just added names us, as a word: mark it, and chirp
 ; A word is a run the nick's own characters do not continue, so "Al" is not
-; mentioned by "Alan". Case-blind.
+; mentioned by "Alan". Case-blind. `@George` names George by this rule - the
+; `@` is not a nick character - and so does a bare `George`, as it always did;
+; the server's `A` (wc_rec_a) is the `@` form alone, because it reaches a
+; reader who is not looking (SPEC.md 113.2.4)
 ; -----------------------------------------------------------------------------
 wc_mention:
     mov si, [wc_ptext]
@@ -722,16 +743,63 @@ wc_mention:
     pop si
     jnc .next
     cmp si, [wc_ptext]                  ; ...and the one before
-    je wc_chirp
+    je .hit
     mov al, [si-1]
     call wc_nickch
-    jc wc_chirp
+    jc .hit
     jmp short .next
 .miss:
     pop si
 .next:
     inc si
     jmp short .at
+.hit:
+    mov bl, [wc_mn]                     ; the newest is the one just added
+    xor bh, bh
+    dec bx
+    call wc_mrec
+    or byte [bx+WC_MFLG], WCM_MENT
+    jmp wc_chirp
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; A seq room date hhmm nick - nick named us in a room we are not looking at
+; (SPEC.md 113.2.4). The room's row takes the mention mark until it is the
+; view, the notice line says who and where, and it chirps - in front or not,
+; because a room we are not looking at cannot be seen from here.
+; -----------------------------------------------------------------------------
+wc_rec_a:
+    call wc_dec32                       ; the seq: where to look is enough
+    call wc_dec32
+    cmp ax, WC_NROOM
+    jae .out
+    push ax
+    call wc_ptime                       ; consumed, not kept
+    call wc_fld                         ; BX = the nick
+    pop ax
+    cmp al, [wc_view]                   ; the view: its M carries it already
+    je .out
+    push ax
+    mov di, ax
+    mov byte [wc_ment+di], 1
+    or word [wc_dirty], WCD_LEFT
+    ; '<nick> mentioned you in #<room>'
+    mov di, wc_mbuf
+    mov si, bx
+    mov bx, wc_mbuf + WC_NOTEN - 1
+    call wc_put
+    mov si, wc_s_ment
+    call wc_put
+    pop ax
+    call wc_roomname
+    call wc_put
+    mov byte [di], 0
+    mov si, wc_mbuf
+    call wc_setnote
+    cmp byte [wc_notify], 0
+    je .out
+    jmp wc_tone
 .out:
     ret
 
@@ -897,6 +965,142 @@ wc_hhmm2min:
     ret
 
 ; -----------------------------------------------------------------------------
+; THE DATE (SPEC.md 113.2.4). A day is a WORD: 1 is 2000-01-01, and 0 is "no
+; date" - a server from before x=1, or a date outside 2000..2099, which is the
+; range the leap rule below (every fourth year) is right for.
+; -----------------------------------------------------------------------------
+; --- wc_civday - DX:AX = yyyymmdd -> AX = its day, 0 for none. clobbers BX,
+; CX, DX
+wc_civday:
+    mov cx, 10000
+    cmp dx, cx                          ; the quotient must fit 16 bits
+    jae .none
+    div cx                              ; AX = yyyy, DX = mmdd
+    sub ax, 2000
+    jb .none
+    cmp ax, 99
+    ja .none
+    mov bx, ax                          ; BX = years since 2000
+    mov ax, dx
+    xor dx, dx
+    mov cx, 100
+    div cx                              ; AX = mm, DX = dd
+    dec ax
+    cmp ax, 11
+    ja .none
+    dec dx
+    cmp dx, 30
+    ja .none
+    push dx                             ; the day of the month, from 0
+    push ax                             ; the month, from 0
+    mov ax, 365
+    mul bx
+    mov cx, bx
+    add cx, 3
+    shr cx, 1
+    shr cx, 1
+    add ax, cx                          ; ...and the leap days before it
+    pop cx
+    push bx
+    mov bx, cx
+    shl bx, 1
+    add ax, [wc_mcum+bx]                ; the months before
+    pop bx
+    test bl, 3
+    jnz .nl
+    cmp cx, 1                           ; a leap year, past February
+    jbe .nl
+    inc ax
+.nl:
+    pop dx
+    add ax, dx
+    inc ax                              ; 2000-01-01 is day 1
+    ret
+.none:
+    xor ax, ax
+    ret
+
+wc_mcum:        dw 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+
+; --- wc_lday - BX = a message record -> AX = its LOCAL day, 0 for none ------
+; The minute and the offset carry into the day: a UTC 23:30 is tomorrow east
+; of Greenwich. clobbers DX
+wc_lday:
+    mov ax, [bx+WC_MDAY]
+    or ax, ax
+    jz .out
+    mov dx, [bx+WC_MMIN]
+    add dx, [wc_tzo]
+    jns .pos
+    dec ax                              ; before local midnight
+    ret
+.pos:
+    cmp dx, 1440
+    jb .out
+    inc ax                              ; past it
+.out:
+    ret
+
+; --- wc_sbday - append day AX as 'Tue Oct 20' (wc_sb* composition, DI) -------
+; clobbers AX, BX, CX, DX, SI
+wc_sbday:
+    dec ax                              ; days since 2000-01-01, a Saturday
+    push ax
+    add ax, 6
+    xor dx, dx
+    mov cx, 7
+    div cx
+    mov si, dx
+    shl si, 1
+    shl si, 1
+    add si, wc_s_days
+    call wc_sbstr
+    pop ax
+    mov bx, 2000                        ; the year...
+.y:
+    mov cx, 365
+    test bl, 3
+    jnz .y1
+    inc cx
+.y1:
+    cmp ax, cx
+    jb .m0
+    sub ax, cx
+    inc bx
+    jmp short .y
+.m0:
+    xor si, si                          ; ...the month...
+.m:
+    mov cx, [wc_mlen+si]
+    cmp si, 2                           ; February, in a leap year
+    jne .m1
+    test bl, 3
+    jnz .m1
+    inc cx
+.m1:
+    cmp ax, cx
+    jb .d
+    sub ax, cx
+    inc si
+    inc si
+    cmp si, 24
+    jb .m
+.d:
+    push ax                             ; ...and the day
+    mov al, ' '
+    call wc_sbch
+    shl si, 1
+    add si, wc_s_months
+    call wc_sbstr
+    mov al, ' '
+    call wc_sbch
+    pop ax
+    inc ax
+    jmp wc_sbnum
+
+wc_mlen:        dw 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+
+; -----------------------------------------------------------------------------
 ; wc_tzcalc - the server's UTC hhmm is in AX: the offset to the local clock
 ; out: [wc_tzo] = local - UTC in minutes, rounded to 15, in -720..+720;
 ;      [wc_h12] = the clock's 12-hour choice. clobbers AX, BX, CX, DX
@@ -1005,6 +1209,8 @@ wc_madd:
     mov al, [wc_pflg]
     mov [bx+WC_MFLG], al
     mov byte [bx+WC_MLINES], 0          ; wrapped when it is drawn
+    mov ax, [wc_pday]
+    mov [bx+WC_MDAY], ax
     lea di, [bx+WC_MTEXT]
     push bx
     mov bx, [wc_ptext]

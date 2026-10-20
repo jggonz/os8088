@@ -5935,7 +5935,8 @@ $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBST
 $(BUILD)/wirechat.bin: apps/wirechat/wirechat.asm apps/wirechat/wcnet.inc \
                        apps/wirechat/wcproto.inc apps/wirechat/wcview.inc \
                        apps/wirechat/wcact.inc apps/wirechat/wccfg.inc \
-                       apps/wirechat/wctxt.inc apps/os88api.inc \
+                       apps/wirechat/wctxt.inc apps/wirechat/wcband.inc \
+                       apps/os88api.inc \
                        apps/os88ui.inc apps/os88line.inc apps/os88data.inc \
                        apps/os88sock.inc drivers/net/netpkg.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/wirechat/ -I drivers/net/ -o $@ apps/wirechat/wirechat.asm

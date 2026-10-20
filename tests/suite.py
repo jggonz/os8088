@@ -14430,7 +14430,7 @@ SOAK = [
         "WIRECHAT end to end over a real card (SPEC.md 113.12): the test's "
         "own fixture - a literal stdlib reading of SPEC.md 113.2 - on 8093, "
         "and `make wirechattest`'s B: carrying the package and a "
-        "WIRECHAT.CFG aimed at it. Eleven assertions: the join is 113.3's "
+        "WIRECHAT.CFG aimed at it. Fifteen assertions: the join is 113.3's "
         "request to the byte, the session goes live with the issued token, "
         "the lobby's history is in the store in order, a HELD poll is "
         "answered by a second session's message, a sent message is the "
@@ -14440,9 +14440,35 @@ SOAK = [
         "makes an unread conversation, a right press and Yes flag the "
         "message by its seq and the fixture's X removes it, a 401 is "
         "joined again with the same nick, and the Notifications switch is "
-        "written to the floppy's WIRECHAT.CFG. QEMU by name: MartyPC has "
-        "no network card (SPEC.md 72.9).",
+        "written to the floppy's WIRECHAT.CFG. Then SPEC.md 113.2.4: x=1 on "
+        "every request, a message stored with its date, a mention in the "
+        "view marked, an A from another room marking that room and saying "
+        "who, and Tab completing @ret to @RetroAmy off the roster. QEMU by "
+        "name: MartyPC has no network card (SPEC.md 72.9).",
         needs=("qemu",), serial=True, builds=True),
+    Row("wcdraw", "soak", py("tests/wcdraw.py"), 200.0,
+        "WireChat's redraw, priced in drawing calls (SPEC.md 113.5.1): every "
+        "far call the PACKAGE makes into a drawing cell of the API table, "
+        "per gesture - a message arriving, a member going Away, a key, a "
+        "page, a line, a status, a press on Notifications - each under a "
+        "ceiling a region repaint blows through, and the picture the slots "
+        "drew pixel-identical to a forced full repaint. MartyPC has no card, "
+        "so the window is filled by injecting replies (tests/wcprobe.py). "
+        "Hercules",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
+    Row("wcdrawcga", "soak", py("tests/wcdraw.py", "--cga"), 200.0,
+        "wcdraw on the 5150's CGA: the compact layout (one-line title, "
+        "compact messages) and the Search button's edge the first band used "
+        "to draw over (SPEC.md 113.5)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
+    Row("wcdrawvga", "soak", py("tests/wcdraw.py", "--vga"), 200.0,
+        "wcdraw on the VGA XT, the colour face (SPEC.md 113.5.2): the same "
+        "ceilings and the same incremental-equals-repaint identity, with "
+        "the badges, the lamps and the package's bevelled buttons in it",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
     Row("telansi", "soak", py("tests/telansi.py"), 210.0,
         "SPEC.md 70.9/70.10/70.12: the ANSI-BBS PARSER on the machine, against "
         "tools/ansisim.py - the same state machine in Python, and the "

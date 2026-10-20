@@ -17,15 +17,29 @@ for tests/ (CLAUDE.md). It does not moderate (that is hub.js's, and its own
 tests'); it refuses one word, `badword`, so the 422 path has a trigger, and
 it owns a nick only when assertion 11 gives it one, so the 428 path has one.
 
+**IT SPEAKS SPEC.md 113.2.4 TOO** - `x=1`'s dates and mentions, to a request
+that carries `x=1` and to no other, exactly as hub.js does: a `yyyymmdd`
+ahead of every `hhmm` in `M` and `D` (the fixture's clock is fixed - `DAY`
+and the hhmm each record was stored with - so every byte is predictable; pass
+`date=` to `post`/`dm` for a history that crosses a day), and `A seq room date
+hhmm nick` for a live x=1 session a ROOM message names (`@nick`, case-blind,
+not continued by a nick character) whose view is not that room and that did
+not send it. A mention is kept on the session - 20 at most, ten minutes - and
+is delivered once: a request whose `s` is at or past it says the client has
+it. `HUB.post(room, nick, text)` mentions as a `say` does, its `nick` standing
+in for the sender. A request WITHOUT `x=1` gets the format above it to the
+byte, so the package before 113.2.4 still passes against this fixture.
+
 What QEMU costs is what it always costs: the machine is not an 8088 and no
 timing here means anything. Every assertion is about BYTES - guest memory read
 through the package's own map, and the requests the fixture logged.
 
-TWELVE ASSERTIONS.
+FIFTEEN ASSERTIONS.
 
 1.  THE JOIN is SPEC.md 113.3's request to the byte: `POST
-    /chat/v1/join?v=0&st=0 HTTP/1.0`, the Host, the User-Agent, `Connection:
-    close`, and a Content-Length that is the nick's own length.
+    /chat/v1/join?v=0&st=0&x=1 HTTP/1.0` (the `x=1` since SPEC.md 113.2.4,
+    which the client sends on every request), the Host, the User-Agent,
+    `Connection: close`, and a Content-Length that is the nick's own length.
 2.  THE SESSION: [wc_link] reaches LK_LIVE and [wc_tok] holds the token the
     fixture issued.
 3.  THE HISTORY: the lobby's three seeded messages are in the store, in
@@ -46,8 +60,17 @@ TWELVE ASSERTIONS.
     as the join body's second line.
 12. THE SETTINGS FILE: a press on `Notifications:` turns them off, and the
     WIRECHAT.CFG on the floppy says `notify 0` - and the code - afterwards.
+13. THE DATE (SPEC.md 113.2.4): every request carried `x=1`, and a message
+    the fixture dated 2026-10-19 is stored with that day - and, the first of
+    its day, with the day divider's flag (SPEC.md 113.5).
+14. A MENTION: a message in the view that names us is marked as one, and an
+    `@Tester` in a room we are NOT looking at arrives as an `A` - the room
+    marked, the notice line saying who and where.
+15. TAB COMPLETES AN @NICK: `@ret` and Tab is `@RetroAmy` off the roster,
+    and the view stays where it was.
 """
 import argparse
+import datetime
 import os
 import re
 import socket
@@ -81,7 +104,11 @@ MD_KEY = 4
 WV_DM = 0xFF
 WC_MREC, WC_MSEQ, WC_MFLG, WC_MNICK, WC_MTEXT = 224, 0, 6, 8, 21
 WCM_MINE = 2
+WCM_MENT, WCM_DAY, WC_MDAY = 4, 8, 222
 WC_DREC, WC_DUNR = 16, 13
+DAY = "20261019"                # the fixture's date, SPEC.md 113.2.4's yyyymmdd
+MENTION_KEEP = 20               # a session's unread mentions (SPEC.md 113.2.4)
+MENTION_AGE = 600.0             # ...and for this many seconds
 
 
 def say(*a):
@@ -107,10 +134,10 @@ class Hub:
     def __init__(self):
         self.lock = threading.Condition()
         self.seq = 1000
-        self.msgs = []              # (seq, room, hhmm, nick, text, deleted)
-        self.dms = []               # (seq, hhmm, from, to, text)
+        self.msgs = []              # (seq, room, hhmm, nick, text, deleted, date)
+        self.dms = []               # (seq, hhmm, from, to, text, date)
         self.dels = []              # (delseq, seq)
-        self.sessions = {}          # token -> {nick, room, st}
+        self.sessions = {}          # token -> {nick, room, st, view, x, ments}
         self.rver = 1
         self.log = []               # (verb, query dict, headers text, body)
         self.held = 0               # polls being held right now
@@ -118,18 +145,41 @@ class Hub:
         self.owned = {}             # lowercase nick -> its code
 
     # --- the fixture's own hand ------------------------------------------
-    def post(self, room, nick, text):
+    def post(self, room, nick, text, date=DAY):
         with self.lock:
             self.seq += 1
-            self.msgs.append([self.seq, room, "1200", nick, text, False])
+            m = [self.seq, room, "1200", nick, text, False, date]
+            self.msgs.append(m)
+            self.mention(m, None)
             self.lock.notify_all()
             return self.seq
 
-    def dm(self, frm, to, text):
+    def dm(self, frm, to, text, date=DAY):
         with self.lock:
             self.seq += 1
-            self.dms.append((self.seq, "1201", frm, to, text))
+            self.dms.append((self.seq, "1201", frm, to, text, date))
             self.lock.notify_all()
+
+    # --- SPEC.md 113.2.4: who a room message names ------------------------------
+    @staticmethod
+    def names(text, nick):
+        """`@nick`, case-blind, not continued by a nick character."""
+        return re.search(r"@" + re.escape(nick) + r"(?![A-Za-z0-9_-])", text,
+                         re.IGNORECASE) is not None
+
+    def mention(self, m, sender):
+        """Room message `m`, said by session `sender` (None: the fixture's own
+        hand, whose sender is `m`'s nick). Under the lock."""
+        seq, room, hhmm, nick, text = m[0], m[1], m[2], m[3], m[4]
+        for s in self.sessions.values():
+            if s is sender or not s["x"] or (sender is None and s["nick"].lower() == nick.lower()):
+                continue
+            if s["view"].isdigit() and int(s["view"]) == room:
+                continue
+            if self.names(text, s["nick"]):
+                s["ments"].append({"seq": seq, "room": room, "date": m[6], "hhmm": hhmm,
+                                   "nick": nick, "at": time.time()})
+                del s["ments"][:-MENTION_KEEP]
 
     def remove(self, seq):
         with self.lock:
@@ -138,6 +188,18 @@ class Hub:
                     m[5] = True
             self.seq += 1
             self.dels.append((self.seq, seq))
+            self.lock.notify_all()
+
+    def visit(self, nick, room):
+        """A second session, so the roster has someone to complete (15); the
+        seq moves so a held poll answers with the roster now."""
+        with self.lock:
+            self.ntok += 1
+            self.sessions["vis%09d" % self.ntok] = {
+                "nick": nick, "room": room, "st": 0, "view": str(room), "x": False,
+                "ments": []}
+            self.rver += 1
+            self.seq += 1
             self.lock.notify_all()
 
     def drop_all(self):
@@ -151,14 +213,20 @@ class Hub:
         since = int(q.get("s", "0") or 0)
         rver = int(q.get("r", "0") or 0)
         hist = q.get("h") == "1"
+        x = q.get("x") == "1"
         view = s["view"]
+
+        def dfmt(d):            # D seq [date] hhmm from to text
+            if x:
+                return "D %d %s %s %s %s %s" % (d[0], d[5], d[1], d[2], d[3], d[4])
+            return "D %d %s %s %s %s" % d[:5]
         out = ["C %d 0 0 0" % sum(1 for m in self.msgs if m[1] == 0)]
         if view.startswith("@"):
             other = view[1:].lower()
             for d in self.dms:
                 if (hist or d[0] > since) and other in (d[2].lower(), d[3].lower()) \
                         and s["nick"].lower() in (d[2].lower(), d[3].lower()):
-                    out.append("D %d %s %s %s %s" % d)
+                    out.append(dfmt(d))
         else:
             room = int(view)
             mine = [m for m in self.msgs if m[1] == room and not m[5]]
@@ -167,13 +235,22 @@ class Hub:
             else:
                 mine = [m for m in mine if m[0] > since]
             for m in mine:
-                out.append("M %d %d %s %s %s" % tuple(m[:5]))
+                if x:
+                    out.append("M %d %d %s %s %s %s" % (m[0], m[1], m[6], m[2], m[3], m[4]))
+                else:
+                    out.append("M %d %d %s %s %s" % tuple(m[:5]))
             for d in self.dms:
                 if d[0] > since and d[3].lower() == s["nick"].lower():
-                    out.append("D %d %s %s %s %s" % d)
+                    out.append(dfmt(d))
         for delseq, seq in self.dels:
             if delseq > since:
                 out.append("X %d" % seq)
+        if x:
+            gone = {m[0] for m in self.msgs if m[5]}
+            for a in s["ments"]:
+                if a["seq"] > since and a["seq"] not in gone:
+                    out.append("A %d %d %s %s %s" % (a["seq"], a["room"], a["date"],
+                                                     a["hhmm"], a["nick"]))
         if rver != self.rver:
             out.append("R %d %d" % (self.rver, len(self.sessions)))
             for t, x in sorted(self.sessions.items(), key=lambda kv: kv[1]["nick"].lower()):
@@ -196,7 +273,8 @@ class Hub:
                 tok = ("tok%09d" % self.ntok)[:12]
                 v = q.get("v", "0")
                 self.sessions[tok] = {"nick": nick, "room": int(v) if v.isdigit() else 0,
-                                      "st": int(q.get("st", "0")), "view": v}
+                                      "st": int(q.get("st", "0")), "view": v,
+                                      "x": q.get("x") == "1", "ments": []}
                 self.rver += 1
                 lines = ["J %s %s" % (tok, nick)]
                 lines += ["L %d %s %s" % (i, n, t) for i, (n, t) in enumerate(self.ROOMS)]
@@ -205,6 +283,12 @@ class Hub:
             s = self.sessions.get(q.get("t", ""))
             if not s:
                 return ["ER 401 0 Session ended - joining again"]
+            # SPEC.md 113.2.4: x rides on every request; an `s` at or past a
+            # mention says the client has read it; ten minutes is the most
+            s["x"] = q.get("x") == "1"
+            since = int(q.get("s", "0") or 0)
+            old = time.time() - MENTION_AGE
+            s["ments"] = [a for a in s["ments"] if a["seq"] > since and a["at"] >= old]
             if "v" in q:
                 s["view"] = q["v"]
                 if q["v"].isdigit() and int(q["v"]) != s["room"]:
@@ -219,9 +303,11 @@ class Hub:
                     return ["ER 422 0 Not sent - watch the language"]
                 self.seq += 1
                 if s["view"].startswith("@"):
-                    self.dms.append((self.seq, "1202", s["nick"], s["view"][1:], text))
+                    self.dms.append((self.seq, "1202", s["nick"], s["view"][1:], text, DAY))
                 else:
-                    self.msgs.append([self.seq, s["room"], "1202", s["nick"], text, False])
+                    m = [self.seq, s["room"], "1202", s["nick"], text, False, DAY]
+                    self.msgs.append(m)
+                    self.mention(m, s)
                 self.lock.notify_all()
             elif verb == "flag":
                 pass                        # logged; the test removes it itself
@@ -366,7 +452,7 @@ def settle(m, card=None):
 
 
 KEYMAP = {" ": "spc", ".": "dot", ",": "comma", "!": "shift-1", "?": "shift-slash",
-          "-": "minus", "\n": "ret"}
+          "-": "minus", "@": "shift-2", "\n": "ret"}
 
 
 def typetext(text):
@@ -393,7 +479,8 @@ def wc_syms():
             syms[mm.group(3)] = int(mm.group(1), 16)
     for n in ("wc_link", "wc_tok", "wc_mn", "wc_msgs", "wc_view", "wc_dn", "wc_dms",
               "wc_note", "wc_lbuf", "wc_ox", "wc_oy", "wc_tx", "wc_py1", "wc_cw",
-              "wc_sy", "wc_notify", "wc_save", "wc_cfgld", "wc_hist", "wc_mode", "wc_key"):
+              "wc_sy", "wc_notify", "wc_save", "wc_cfgld", "wc_hist", "wc_mode", "wc_key",
+              "wc_ment", "wc_rn"):
         if n not in syms:
             sys.exit("wirechat: %s is not in build/wirechat.map" % n)
     return syms
@@ -488,7 +575,7 @@ def main():
         live = wait(lambda: rb("wc_link") == LK_LIVE, "the session", secs=45)
         joins = [e for e in HUB.log if e[0] == "join"]
         head = joins[0][2] if joins else ""
-        check(bool(joins) and head.startswith("POST /chat/v1/join?v=0&st=0 HTTP/1.0\n"),
+        check(bool(joins) and head.startswith("POST /chat/v1/join?v=0&st=0&x=1 HTTP/1.0\n"),
               "1  the join's request line is SPEC.md 113.3's")
         check(bool(joins) and "Host: 10.0.2.2:8093" in head
               and "User-Agent: os8088 WireChat 1.0" in head
@@ -604,6 +691,39 @@ def main():
         check(wait(lambda: rb("wc_notify") == 0 and rb("wc_save") == 0,
                    "the notification switch and its save"),
               "12 Notifications: off, and the save done")
+
+        # --- 13, 14: dates and mentions (SPEC.md 113.2.4) ------------------------------
+        check(all(e[1].get("x") == "1" for e in HUB.log),
+              "13 every request carried x=1")
+        n0 = rb("wc_mn")
+        HUB.post(rb("wc_view"), "Bot", "hello Tester, WireBall later?")
+        check(wait(lambda: rb("wc_mn") == n0 + 1, "the dated message"),
+              "13 a message in the view arrives")
+        b = m.readseg(pseg, sy["wc_msgs"] + n0 * WC_MREC, WC_MREC)
+        want = (datetime.date(2026, 10, 19) - datetime.date(2000, 1, 1)).days + 1
+        check(struct.unpack_from("<H", b, WC_MDAY)[0] == want,
+              "13 ...stored with its day, %d (got %d)"
+              % (want, struct.unpack_from("<H", b, WC_MDAY)[0]))
+        check(n0 > 0 or b[WC_MFLG] & WCM_DAY,
+              "13 ...and the first of its day has the divider's flag")
+        check(b[WC_MFLG] & WCM_MENT,
+              "14 a message in the view that names us is marked")
+        HUB.post(2, "Alin", "@tester the 5150 build is up")
+        check(wait(lambda: rb("wc_ment", 2) == 1
+                   and rs("wc_note", 64).startswith("Alin mentioned you in #"),
+                   "the mention"),
+              "14 an @mention in another room marks it and says who (%r)"
+              % rs("wc_note", 64))
+
+        # --- 15: an @nick completed --------------------------------------------------
+        HUB.visit("RetroAmy", rb("wc_view"))
+        wait(lambda: rb("wc_rn") >= 2, "the roster")
+        view = rb("wc_view")
+        typetext("@ret")
+        m.key("tab")
+        check(wait(lambda: rs("wc_lbuf", 201) == "@RetroAmy", "the completion"),
+              "15 Tab after @ret is @RetroAmy (got %r)" % rs("wc_lbuf", 201))
+        check(rb("wc_view") == view, "15 ...and the view stays")
         shot("5-end")
     finally:
         if not a.keep:

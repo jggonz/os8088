@@ -737,8 +737,20 @@ against a daily budget, slowing every client down as it fills, so the chat
 stays inside the Workers Free plan. A few nicks are owned. Joining as one
 makes WireChat ask for that nick's code, which the server checks.
 
+Type `@` and a nick to mention someone — `Tab` finishes the nick off the
+member list — and they hear about it in whichever room they are in: the
+server tells that one client (an `A` record, §113.2.4), which marks the room
+with `@` and chirps. Every message carries its date as well as its time, so
+the pane says where each day begins (`---- Tue Oct 20 ----`), in local time.
+
 The window follows the screen: three panes on VGA and Hercules, the side panes
-going as the window narrows, and a compact one-line message form on a CGA. The
+going as the window narrows, and a compact one-line message form on a CGA. On
+a VGA or EGA it is drawn in **colour** (§113.5.2) — red unread badges, nicks
+in their own colours, the view in blue, a yellow header on a message that
+names you, and two lamps in the status bar for the link and for activity —
+and on CGA and Hercules it is the mono window it always was. Every row is
+drawn through a cache of what is already on the glass (§113.5.1), so a message
+arriving draws a few rows rather than the panes. The
 nick (and its code, if it has one), the friends and the notification switch live in `WIRECHAT.CFG` beside
 the program. It is on every apps disk but the 360KB one, where it rides the
 network disk. SPEC.md §113 is the protocol and the contract.

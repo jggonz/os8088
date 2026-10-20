@@ -45,7 +45,7 @@ the disk, so anyone with the disk has the code too.
 | Part | What it shows |
 |---|---|
 | Header | Your nick, your status (**Offline** until connected) and the **Set status...** button |
-| ROOMS | The four rooms, each with how many messages you have not read |
+| ROOMS | The four rooms, each with how many messages you have not read, and `@` when someone has mentioned you there |
 | MESSAGES | Your private conversations, each with its unread count |
 | FRIENDS ONLINE | Your friends who are connected now, and **+ Add friend** at the foot |
 | Centre | The room's name and topic, the **Search** button, the messages, a line for notices, and the field with **:)** and **Send** |
@@ -53,9 +53,20 @@ the disk, so anyone with the disk has the code too.
 | Status bar | The connection, how many are in the room, and **Notifications: On** or **Off** |
 
 Each message shows its time and the sender's nick in bold, with the text
-below. Times are local, worked out from the machine's clock. The status
-glyphs are a filled circle for Online, a clock for Away and a barred circle
-for Busy.
+below. Times are local, worked out from the machine's clock, and a line such
+as `---- Tue Oct 20 ----` above a message starts each new day, so you can
+tell yesterday's messages from today's. The status glyphs are a filled
+circle for Online, a clock for Away and a barred circle for Busy.
+
+On a VGA or EGA screen WireChat is in colour. Unread counts are red badges,
+and a room where you were mentioned has a magenta one. The room you are in
+is blue. Each person's nick always has the same colour, and a message that
+mentions you has a yellow header. Online is green, Away brown and Busy red.
+Two lamps at the left of the status bar replace the link glyph. The first is
+the connection: green when connected, amber while connecting, red with no
+network card or when the server does not answer. The second lights amber
+while a message you sent is on its way and for a moment when something
+arrives. On a CGA or Hercules screen WireChat looks as it always did.
 
 The window can be resized. A narrow window drops the MEMBERS pane, and a
 narrower one drops the left pane too; the **Rooms** menu still changes room.
@@ -70,6 +81,11 @@ button opens eight emoticons; click one to type it where the caret is.
 
 Click a room in ROOMS, choose it from the **Rooms** menu, or press `Tab` for
 the next room. The room's recent messages come with it.
+
+To mention someone, type `@` and their nick: `@RetroAmy are you there?`.
+Type `@` and the first letters of a nick and press `Tab` to finish it from
+the people who are connected; press `Tab` again for the next nick that starts
+the same way.
 
 When messages arrive while another window is in front, WireChat marks where
 you stopped reading with a line saying how many are new. The line goes when
@@ -125,6 +141,11 @@ when someone in the room writes your nick, while another window is in front.
 Click **Notifications:** in the status bar, or choose **Chat >
 Notifications Off** or **Notifications On**, to switch.
 
+When someone mentions you with `@` and your nick in a room you are not
+looking at, WireChat chirps even if its window is in front. The line above
+the field says who and where, for example `RetroAmy mentioned you in
+#hardware`, and the room shows `@` in ROOMS until you go to it.
+
 ## The menus
 
 | Menu | Item | What it does |
@@ -149,7 +170,7 @@ window back.
 |---|---|
 | `Return` | Send, or finish the nick, code, search or friend |
 | `Esc` | Clear the field, or leave search and Add Friend |
-| `Tab` | The next room |
+| `Tab` | After `@` and part of a nick, finish the nick; otherwise the next room |
 | `Up`, `Down` | Scroll the messages a line |
 | `PgUp`, `PgDn` | Scroll the messages a page |
 

@@ -1188,9 +1188,9 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "a805ac61",
-  "strings": "455f0b5acdca7829",
-  "why": "first page: written from SPEC.md 113 and apps/wirechat (menus, field modes, keys, wheel, status bar words, WIRECHAT.CFG, net_find's card-then-link)"
+  "stamped": "2edd2c29",
+  "strings": "9f00405fd48854f1",
+  "why": "dates and day dividers, @mentions and Tab completion, the colour face and its lamps (SPEC.md 113.2.4, 113.5.1, 113.5.2)"
  },
  "WIREFLET_O88": {
   "sources": [
