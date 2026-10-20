@@ -89,6 +89,7 @@ wf_filedone:
     mov byte [wf_connected], 0
     mov byte [wf_conflict], 0
     mov byte [wf_linkopen], 0
+    mov byte [wf_lastout], 0xff
     call wf_autostart           ; the saved port first (114.9)
     mov byte [wf_chatmode], 0
     mov byte [wf_abon], 0

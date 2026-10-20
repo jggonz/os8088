@@ -71,6 +71,11 @@ wf_geometry:
     add ax, 114
     add di, 8
     loop .rect
+    call wf_c_geometry          ; 114.10's verdict and layout
+    cmp byte [wf_colour], 0
+    je .chat
+    call wf_c_rects
+.chat:
     call wf_chat_geometry
     ret
 
@@ -132,14 +137,16 @@ wf_boards:
     mov byte [wf_drawboard], 0
 .board:
     mov byte [wf_drawrow], 0
-    mov word [wf_destx], 24
+    mov ax, [wf_gx0]
+    mov [wf_destx], ax
     cmp byte [wf_infs], 0
     je .which
     mov word [wf_destx], 20
 .which:
     cmp byte [wf_drawboard], 0
     je .row
-    mov word [wf_destx], 326
+    mov ax, [wf_gx1]
+    mov [wf_destx], ax
     cmp byte [wf_infs], 0
     je .row
     mov word [wf_destx], 176
@@ -294,22 +301,37 @@ wf_buildrow:
     pop es
     ret
 
+; A hit ship segment (WF_TILE_HIT0 up) is not stored: it is its segment with
+; the X STAMPED on, (pixel & AND) | OR per byte, the tables laid out as a
+; tile. tools/wirefleet_assets.py proves the stamp exact for all 34.
 wf_copytile:
     xor ax, ax
     mov al, [wf_tile]
     and al, 0x7f
+    mov byte [wf_hitx], 0
+    cmp al, WF_TILE_HIT0
+    jb .stored
+    sub al, WF_TILE_HITBASE
+    mov byte [wf_hitx], 1
+.stored:
     mov bx, WF_TILE_COLOR
     mov si, wf_tiles_color
+    mov word [wf_hitand], wf_hitand_color
+    mov word [wf_hitor], wf_hitor_color
     cmp byte [wf_infs], 0
     je .native
     mov bx, WF_TILE_MONO
     mov si, wf_tiles_cga
+    mov word [wf_hitand], wf_hitand_cga
+    mov word [wf_hitor], wf_hitor_cga
     jmp .source
 .native:
     cmp byte [wf_monochrome], 0
     je .source
     mov bx, WF_TILE_MONO
     mov si, wf_tiles_mono
+    mov word [wf_hitand], wf_hitand_mono
+    mov word [wf_hitor], wf_hitor_mono
 .source:
     mul bx
     add ax, si
@@ -324,10 +346,29 @@ wf_copytile:
     mov si, wf_rowmap
     add si, dx
     mov si, [si]
+    mov bp, si                  ; the source row's offset inside a tile
     add si, [wf_source]
     mov di, [wf_rowdest]
     mov cx, [wf_tstride]
     rep movsb
+    cmp byte [wf_hitx], 0
+    je .mark
+    mov si, [wf_hitand]
+    add si, bp
+    mov bx, [wf_hitor]
+    add bx, bp
+    mov di, [wf_rowdest]
+    mov cx, [wf_tstride]
+.stamp:
+    mov al, [di]
+    and al, [si]
+    or al, [bx]
+    mov [di], al
+    inc si
+    inc bx
+    inc di
+    loop .stamp
+.mark:
     test byte [wf_tile], 0x80
     jz .next
     mov ax, dx

@@ -49,6 +49,7 @@ wf_link_new:
     mov [wf_line+LN_VIEW], ax
     mov [wf_line+LN_FOCUS], al
     mov [wf_chatcount], ax
+    mov byte [wf_lastout], 0xff
     mov byte [wf_chatline], 0
     mov byte [wf_chatlog], 0
     mov byte [wf_chatlog+40], 0
@@ -900,6 +901,7 @@ wf_result_take:
     mov bl, [wf_pendingcell]
     mov al, [wf_rxbuf+20]
     mov [wf_outshots+bx], al
+    mov [wf_lastout], bl        ; 114.10's "You fired F7: HIT!"
     cmp al, 3
     jne .commit
     call wf_reveal_apply

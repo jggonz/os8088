@@ -63,6 +63,12 @@ wf_paint:
     OS88_WORKER_RESTARTABLE_NOKEEP wf_wakeworker
 .clock:
     call wf_geometry
+    cmp byte [wf_colour], 0
+    je .mono
+    mov byte [wf_fullpaint], 1  ; 114.10: the colour face, whole
+    call wf_c_draw
+    jmp short .about
+.mono:
     ; Only the margins/body are filled. Grids compose their own opaque
     ; ground; there is no white rectangle underneath the new board.
     call wf_ground
@@ -72,6 +78,7 @@ wf_paint:
     call wf_roster
     call wf_controls
     call wf_footer
+.about:
     cmp byte [wf_abon], 0
     je .out
     mov bx, [wf_win]
@@ -91,6 +98,11 @@ wf_update:
     jc .out
     call wf_geometry
     mov byte [wf_fullpaint], 0
+    cmp byte [wf_colour], 0
+    je .mono
+    call wf_c_draw
+    jmp short .out
+.mono:
     call wf_boards
     call wf_header
     call wf_roster
@@ -310,12 +322,12 @@ wf_click:
     cmp byte [wf_ready], 0
     jne .out
     sub cx, [wf_ox]
-    cmp cx, 310
+    cmp cx, [wf_rostx1]
     jb .out
-    cmp cx, 580
+    cmp cx, [wf_rostx2]
     jae .out
     sub dx, [wf_oy]
-    sub dx, [wf_gridy]
+    sub dx, [wf_rosty]
     jc .out
     mov ax, dx
     xor dx, dx
@@ -349,10 +361,10 @@ wf_rightclick:
 ; CX/DX=absolute pointer. CF=outside left grid; AL=0..99 inside.
 wf_hitboard:
     sub cx, [wf_ox]
-    mov ax, 24
+    mov ax, [wf_gx0]
     cmp byte [wf_ready], 0
     je .origin
-    mov ax, 326
+    mov ax, [wf_gx1]
 .origin:
     sub cx, ax
     jc .bad
@@ -390,6 +402,15 @@ wf_buttonup:
     call os88ui_btnup
     or ax, ax
     jz .out
+    cmp byte [wf_colour], 0     ; 114.10: 5 is Chat, or Send while typing
+    je .phase
+    cmp al, 5
+    jne .phase
+    cmp byte [wf_chatmode], 0
+    je wf_chat_begin
+    mov al, 13
+    jmp wf_chat_key
+.phase:
     cmp byte [wf_ready], 0
     je .deployment
     cmp al, 1
@@ -506,7 +527,7 @@ wf_clearlabel: db 'Clear C',0
 wf_soundlabel: db 'Sound M',0
 wf_soundoff: db 'Muted M',0
 wf_firelabel: db 'Fire Enter',0
-wf_chatlabel: db 'Chat T',0
+wf_chatlabel: db 'Chat [T]',0
 wf_connectlabel: db 'Connect',0
 wf_savelabel: db 'Save S',0
 wf_loadlabel: db 'Load O',0
@@ -539,6 +560,7 @@ wf_digit: db '  ',0
 
 %define OS88UI_ABOUT
 %define OS88UI_ARM
+%define OS88UI_BOWN
 %include "os88ui.inc"
 %include "os88line.inc"
 %include "os88alt.inc"
@@ -549,6 +571,20 @@ wf_digit: db '  ',0
 %include "wirefleet/wfsave.inc"
 %include "wirefleet/wffull.inc"
 %include "wirefleet/wfvideo.inc"
+%include "wirefleet/wfcolor.inc"
+%define GFXE_TEXT
+%define GFXE_SCALE
+%define GFXE_BITS
+%define GFXE_BAND_W   304       ; the title bar's icon and longest caption
+%define GFXE_BAND_H   16
+%define GFXE_BAND_BUF wf_band
+%include "os88gfx.inc"
+%define DEC_U16
+%include "os88dec.inc"
+%define FLAT_BCAP wf_ccap
+%define FLAT_BSTY wf_cstyle
+%define FLAT_BIG
+%include "os88flat.inc"
 %include "wirefleet/art/tiles.inc"
 
 ; The region can move: no segment pointers outlive a callback in this wave.
@@ -707,6 +743,40 @@ WF_VAR wf_buttonshown,20
 WF_VAR wf_footershown,2
 WF_VAR wf_chatshown,2
 WF_VAR wf_chatmodeshown,1
+WF_VAR wf_colour,1
+WF_VAR wf_hitx,1
+WF_VAR wf_hitand,2
+WF_VAR wf_hitor,2
+WF_VAR wf_gx0,2
+WF_VAR wf_gx1,2
+WF_VAR wf_rostx1,2
+WF_VAR wf_rostx2,2
+WF_VAR wf_rosty,2
+WF_VAR wf_cardb,2
+WF_VAR wf_chatt,2
+WF_VAR wf_chatn,1
+WF_VAR wf_cbx,2
+WF_VAR wf_rowy,2
+WF_VAR wf_rowsig,1
+WF_VAR wf_placedshown,1
+WF_VAR wf_capshown,2
+WF_VAR wf_capink,1
+WF_VAR wf_lampshown,1
+WF_VAR wf_msgseen,2
+WF_VAR wf_chatnews,2
+WF_VAR wf_chatlogshown,2
+WF_VAR wf_fireshown,1
+WF_VAR wf_lastout,1
+WF_VAR wf_ccap,10
+WF_VAR wf_cstyle,5
+WF_VAR wf_firecap,12
+WF_VAR wf_turnbuf,11
+WF_VAR wf_turnshown,10
+WF_VAR wf_evbuf,74
+WF_VAR wf_evshown,74
+WF_VAR wf_statbuf,75
+WF_VAR wf_statshown,74
+WF_VAR wf_band,38*16
 wf_savepad equ (512-((os88_image_end-$$+WF_BSS)&511))&511
 wf_savebuf equ os88_image_end+WF_BSS+wf_savepad
     OS88_BSS WF_BSS+wf_savepad+512
