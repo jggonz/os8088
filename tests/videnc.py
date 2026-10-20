@@ -1949,6 +1949,62 @@ def main():
             print("   5m: spk_reshape: %s" % e)
         if not ok:
             bad.append("spk_reshape lost a file's desktop posters")
+        # ...and three files the GasGas did not have (PR #277's review): a
+        # key-poster table with no key kept wrote flags every Reader
+        # refused; a 16-colour file in the desktop's own sixteen had no
+        # palette to slice; a resident file's options, its last block, had
+        # no room before a stream and raised
+        g1 = vid.Geom(vid.LAY_LIN80, 8, 16)
+        g4 = vid.Geom(vid.LAY_LIN80, 8, 16, bitplanes=True)
+        g4.sub2 = True
+
+        def wr(g, pf):
+            w = vid.Writer(g, 1500, 100, vid.AUD_NONE, 0, pf, title="5m",
+                           keysecs=100.0)
+            surf, prev = g.surface(), bytes(g.w * g.h)
+            for f in range(6):
+                cv = bytes((1 + (x // 4 + y + f) % 15) if g.bitplanes else
+                           (0xFF if (x + y + f) % 3 == 0 else 0)
+                           for y in range(g.h) for x in range(
+                               g.w if g.bitplanes else g.wb))
+                if g.bitplanes:
+                    g.put(surf, cv)
+                    w.frame(vid.vga4_subs(cv, prev, g), surf)
+                    prev = cv
+                    continue
+                ch = [b + x for y, b in enumerate(g.base)
+                      for x in range(g.wb) if surf[b + x] != cv[y * g.wb + x]]
+                for y, b in enumerate(g.base):
+                    surf[b:b + g.wb] = cv[y * g.wb:(y + 1) * g.wb]
+                w.frame(vid.spans(ch, surf, g), surf)
+            return w
+        w = wr(g1, vid.PF_MONO1)
+        w.key0 = 100                    # (past the last frame: no key)
+        w.thumbs = dict(scale=1, flags=vid.TH_KEYS | vid.TH_MONO,
+                        make=None, custom=None)
+        f5 = os.path.join(mtmp, "nokey.V88")
+        w.write(f5)
+        f6 = os.path.join(mtmp, "std16.V88")
+        wr(g4, vid.PF_VGA4).write(f6)
+        redo(f6, f6, "colour")
+        f7 = os.path.join(mtmp, "res.V88")
+        vid.write_resident(f7, [wr(g1, vid.PF_MONO1)], title="5m",
+                           opts=vid.pack_options({
+                               "v": venc.OPTS_VERSION, "src": "5m",
+                               "o": {"desktop_posters": "auto"}}))
+        redo(f7, f7, "mono")
+        for f in (f5, f6, f7):
+            vid.verify_v88(f)
+        r7 = vid.Reader(f7)
+        if vid.Reader(f5).thumb is not None or not pics(f6) or \
+                not pics(f7) or r7.optsat + r7.optslen != \
+                os.path.getsize(f7) or \
+                r7.options()["o"].get("desktop_posters") != "mono":
+            bad.append("--posters-only: a keyless table %s, desktop-colour "
+                       "posters %s, resident posters %s and options %s"
+                       % (vid.Reader(f5).thumb, bool(pics(f6)),
+                          bool(pics(f7)), r7.options()["o"].get(
+                              "desktop_posters")))
     except vid.V88Error as e:
         bad.append("--posters-only: %s" % e)
     shutil.rmtree(mtmp, ignore_errors=True)

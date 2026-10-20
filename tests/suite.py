@@ -1031,7 +1031,9 @@ FAST = [
         "ROM reports moves exactly ten bytes, round-trips, refuses a foreign "
         "disk, and --verify-hdd fails the CHS/BPB disagreement note 33 was; "
         "and SPEC.md 52.10.15.1: a --hdd volume carries the installer's "
-        "attributes, nothing read-only"),
+        "attributes, nothing read-only; and SPEC.md 18.7.5: a --hdd "
+        "--geometry disk past the 32-64MB band is one TotSec32, type-06h "
+        "FAT16 volume that --verify-hdd passes"),
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),

@@ -2419,8 +2419,10 @@ def thumb_block(th, keys, at, pw, ph):
         if len(p_) > THUMB_MAX:
             raise V88Error("a desktop poster of %d x %d is %d bytes: %d at "
                            "most" % (ow, oh, len(p_), THUMB_MAX))
-    if not pics:
-        return b"", (0, ts, fl)
+    if not pics:                        # (no key kept: the flags may not
+        if fl & TH_SIZE:                # promise pictures, or every Reader
+            return b"", (0, ts, TH_SIZE)    # refuses the file)
+        return b"", (0, 0, 0)
     ents, data = [], b""
     o0 = at + struct.calcsize(TH_ENT) * len(pics)
     for p_ in pics:
@@ -5036,7 +5038,8 @@ def _reshape_options(d, r, changed):
     """A streamed file's stored options (98.1.1.4) with `changed` put in,
     written into the sectors the block has before the stream (bytes `d`,
     patched in place); the block and its pointer cleared when the new one
-    does not fit, or the old one does not read"""
+    does not fit, or the old one does not read. A resident file's go at
+    the end of `d`, still the last block"""
     if not r.optsat:
         return
     import os88venc                     # (the schema is the encoder's)
@@ -5058,6 +5061,14 @@ def _reshape_options(d, r, changed):
                              "src": doc.get("src", ""), "o": o})
     except V88Error:
         blob = b""
+    if r.resident:                      # (98.1.7: the file's LAST block,
+        d[r.optsat:r.optsat + r.optslen] = bytes(r.optslen)  # so no room
+        if r.optsat + r.optslen == len(d):  # of its own - the old one
+            del d[r.optsat:]            # zeroed, or dropped when still last,
+        at = len(d) if blob else 0      # and the new one after whatever the
+        d[len(d):] = blob               # caller put at the end: posters)
+        struct.pack_into("<IH", d, H_OPTS, at, len(blob))
+        return
     if not 0 < len(blob) <= room:
         blob = b""
     d[r.optsat:r.optsat + room] = blob + bytes(room - len(blob))

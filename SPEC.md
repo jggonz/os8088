@@ -173566,7 +173566,9 @@ it is cheaper than the decode it replaces.
   desktop's sixteen; bit 3 `TH_MONO`, each in black and white; bit 4
   `TH_SIZE`, the scale is the Preview's own (see below). The other bits
   are 0. A table with pictures has at least one set, and one with neither
-  pictures nor `TH_SIZE` is not there at all.
+  pictures nor `TH_SIZE` is not there at all - so a file whose key table
+  came out EMPTY stores `TH_SIZE` alone or nothing, never `TH_KEYS` with
+  no picture behind it, which a reader refuses (`thumb_block`).
 - **The pictures are the Preview's own size over the scale**: the
   player's `vp_pwb` x 8 by `vp_ph` (98.4) - a CGA4 or C160 pixel is two
   wide, a C512 or TEXT cell four pixels, VGA8's rows its row scale's and
@@ -173673,7 +173675,10 @@ file's setting. It takes seconds.
   fits in place.
 - **The stored options** (98.1.1.4) learn the four settings, so a
   re-encode from the file keeps them; every picture is read back and every
-  rendition's stream walked before the file replaces the old.
+  rendition's stream walked before the file replaces the old. A RESIDENT
+  file's options are its last block (98.1.7), with no room of their own,
+  so the new ones go after everything - after a table just put at the
+  end - and the old ones are zeroed.
 - **And a defect it found**: `_reshape_options` - `spk_reshape`'s
   (98.2.15.1) - took the room from the options to the STREAM as its own and
   zeroed it, and the poster table is in that gap, so a speaker file
@@ -173684,6 +173689,11 @@ file's setting. It takes seconds.
 encode's pictures (after the end), colour to mono the mono encode's (in
 place), `off` no table, the stream untouched, the options saying each; and
 a speaker file's posters must survive `spk_reshape`, which they did not.
+Three more from PR #277's review: a key-poster file with no key kept must
+read, a 16-colour file in the desktop's own sixteen (no palette of its own)
+must take colour posters, and a resident file with stored options must
+take mono ones with its options still last and saying so - the first was
+refused by every reader, the other two raised.
 
 #### 98.1.4 The stream: chained super-packets
 

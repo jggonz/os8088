@@ -8786,9 +8786,9 @@ def reposter(a, say=print):
 
         def make(cv, kind, keys=keys, r=r, pf=pf, g=g, rs=rs, ts=ch and ch[0]):
             f = next(k for k, _, c in keys if c is cv)
-            pal = vid.palette_at(r, f)
-            rgb = vid.canvas_rgb(pf, cv, g, pal[:48] if pf == vid.PF_VGA4
-                                 else pal, r.cgapal, rs)
+            pal = vid.palette_at(r, f)      # (None: the desktop's sixteen)
+            rgb = vid.canvas_rgb(pf, cv, g, (pal[:48] if pal else None)
+                                 if pf == vid.PF_VGA4 else pal, r.cgapal, rs)
             return desk_picture(rgb, pw, ph, ts, kind, dclip)
         slot = r.slot + (vid.R_THUMBR if r.resident else vid.R_THUMB)
         if ch is None:
