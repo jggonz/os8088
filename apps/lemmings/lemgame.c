@@ -147,6 +147,8 @@ static int lem_countdown;           /* NextLemmingCountdown */
 static int lem_opened;              /* EntrancesOpened */
 static int lem_entdone;             /* fEntranceAnimationCompleted */
 static int lem_paused;
+static int lem_glitchp;             /* the PAUSE GLITCH's frames still owed */
+static int lem_super;               /* the level is a SUPERLEMMING level */
 static int lem_nuked;               /* fIsNukedByUser */
 static int lem_nukeing;             /* fIsExploderAssignInProgress */
 static int lem_nukeix;              /* fIndexOfLemmingToBeNuked */
@@ -173,7 +175,7 @@ static void lem_snd_cue(int ev)
         lem_sndq = ev;
 }
 
-static void lem_snd_flush(void)
+static void ovl_snd_flush(void)
 {
     if (lem_sndq >= 0 && lem_snd)
         os88_snd_tone((int)lem_sndhz[lem_sndq], (int)lem_sndt[lem_sndq], 0x40);
@@ -183,7 +185,7 @@ static void lem_snd_flush(void)
 /* --- the release rate (Lemmix BtnSlower/BtnFaster/AdjustReleaseRate) ------
  * A press starts the rate moving one a FRAME and a release stops it, which is
  * how a held F1 or a held Slower button behaves in the original. */
-static void lem_rr_adjust(void)
+static void ovl_rr_adjust(void)
 {
     int n;
 
@@ -196,7 +198,7 @@ static void lem_rr_adjust(void)
         n = 99;
     if (n != lem_rr) {
         lem_rr = n;
-        lem_dirty_count(LB_FASTER);
+        ovl_dirty_count(LB_FASTER);
     }
 }
 
@@ -210,7 +212,15 @@ static void ovl_increment(void)
     int i;
 
     lem_iter++;
-    lem_clockf++;
+    /* THE PAUSE GLITCH (Lemmix TMechanic.PauseGlitch, Dos.Consts.pas:206-208,
+     * "#EL 2020: finally"; IncrementIteration :3502-3506): a pause begun
+     * before frame 34 holds the clock for 34 - that frame frames once play
+     * resumes. Carried as the 1991 game's, as the other two are (SPEC.md
+     * 114.4.7) */
+    if (lem_glitchp <= 0)
+        lem_clockf++;
+    else
+        lem_glitchp--;
     if (lem_clockf >= LEM_FPS) {
         lem_clockf = 0;
         lem_sec--;
@@ -224,7 +234,7 @@ static void ovl_increment(void)
             }
         }
     } else if (lem_clockf == 1) {
-        lem_stat_time();
+        ovl_stat_time();
     }
 
     if (lem_iter == LEM_IT_LETSGO && !lem_paused)
@@ -322,7 +332,7 @@ static int ovl_frame_begin(void)
     ovl_finished_check();
     if (lem_finished)
         return 0;
-    lem_rr_adjust();                /* CheckAdjustReleaseRate runs paused too */
+    ovl_rr_adjust();                /* CheckAdjustReleaseRate runs paused too */
     if (lem_paused)
         return 0;
     ovl_increment();
@@ -360,38 +370,32 @@ static void ovl_frame_end(void)
     lem_infr = 0;
     ovl_nuke_step();
     ovl_obj_step();
-    lem_snd_flush();
-}
-
-/* lem_game_frame - one whole frame at once, for the harness and for a machine
- * fast enough that the round robin never splits one. */
-static void lem_game_frame(void)
-{
-    if (!ovl_frame_begin())
-        return;
-    lem_frame_chunk(LEM_MAXLEM);
-    ovl_frame_end();
+    ovl_snd_flush();
 }
 
 /* --- the player's own controls (Lemmix's Btn*) ----------------------------- */
 
-/* lem_select_skill - a skill button or F3..F10, which also cues the click. */
-static void lem_select_skill(int b)
+/* ovl_select_skill - a skill button or F3..F10, which also cues the click. */
+static void ovl_select_skill(int b)
 {
     if (b < LB_CLIMBER || b > LB_DIGGER || b == lem_skill)
         return;
-    lem_dirty_sel(lem_skill);
+    ovl_dirty_sel(lem_skill);
     lem_skill = b;
-    lem_dirty_sel(b);
+    ovl_dirty_sel(b);
     lem_snd_cue(SND_SKILLBTN);
 }
 
-static void lem_toggle_pause(void)
+static void ovl_toggle_pause(void)
 {
     lem_paused = !lem_paused;
+    /* BtnPause (:3941-3958): the glitch is armed once, by the first pause
+     * that begins before frame 34 */
+    if (lem_paused && lem_iter < 34 && lem_glitchp == 0)
+        lem_glitchp = 34 - lem_iter;
 }
 
-/* lem_nuke - BtnNuke (:3987), WITH THE ORIGINAL'S NUKE GLITCH. Lemmix makes
+/* ovl_nuke - BtnNuke (:3987), WITH THE ORIGINAL'S NUKE GLITCH. Lemmix makes
  * it an option (TOptionalMechanic.NukeGlitch, off in its ORIG set), but its
  * own comment at :3990-3992 says what the 1991 game does - "Changing
  * MaxNumLemmings also allows IN % to be calculated and displayed in-game using
@@ -399,7 +403,7 @@ static void lem_toggle_pause(void)
  * original and not Lemmix's defaults: MaxNumLemmings becomes the number
  * released so far, so the IN field, the finish test and the postview's
  * "You rescued" all count against it (SetGameResult :4477, SPEC.md 114.8). */
-static void lem_nuke(void)
+static void ovl_nuke(void)
 {
     if (lem_nuked)
         return;
@@ -409,12 +413,12 @@ static void lem_nuke(void)
     lem_nukeix = 0;
 }
 
-/* lem_rr_extreme - Ctrl+F1 / Ctrl+F2, only while paused (Player.pas:476-487). */
-static void lem_rr_extreme(int up)
+/* ovl_rr_extreme - Ctrl+F1 / Ctrl+F2, only while paused (Player.pas:476-487). */
+static void ovl_rr_extreme(int up)
 {
     if (!lem_paused)
         return;
     lem_rr = up ? 99 : lem_rrmin;
     lem_rrdir = 0;
-    lem_dirty_count(LB_FASTER);
+    ovl_dirty_count(LB_FASTER);
 }

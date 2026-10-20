@@ -56,7 +56,7 @@
  * Byte offsets rather than a struct, because a struct read out of a byte buffer
  * means either a cast that assumes alignment or a copy - and a copy is a string
  * instruction, which is refused (SPEC.md 73.5.1, os88.h rule 2). lem_u16() and
- * lem_u8() are the only things that read them.
+ * ovl_u8() are the only things that read them.
  *
  * THE FILE IS 512 BYTES AND IS READ WHOLE, with os88_file_read() and never
  * os88_file_read_at(): that call's offset AND cap must each be a whole number
@@ -121,6 +121,7 @@
 #define LEM_E_FLAGS      24        /* bit 0 = playable on THIS disk */
 #define LEM_E_MISSING    25        /* LEMS_MISS_* naming what is missing, or 0 */
 #define LEM_E_ODDTABLE   26
+#define LEM_E_FLAGS2     28        /* bit 0 = SUPERLEMMING (wave 4) */
 #define LEM_E_NAME       32        /* the original's 32 bytes. A NAME OF EXACTLY
                                     * 32 CHARACTERS HAS NO TERMINATOR - four of
                                     * the 120 are that long - so a reader takes
@@ -130,6 +131,9 @@
 #define LEM_E_NAMELEN    32
 
 #define LEM_EF_HERE    0x01
+#define LEM_EF2_SUPER  0x01        /* LVL 0x001E-0x001F = 0xFFFF: Lemmix
+                                    * Level.Loader.pas:104. No level of the 120
+                                    * sets it (measured, tools/os88lem.py) */
 
 /* --- LEMSTR.LEM's header ---------------------------------------------------- */
 #define LEM_STR_MAGIC   0          /* "LSTR" */
@@ -144,7 +148,7 @@
  * overlay is a PART inside LEMMINGS.O88 and no file of its own.
  *
  * The two patched ones are not const: lem_rating_load() writes the rating's
- * digit into lem_f_rat, and lem_bandname() writes a set number and a part digit
+ * digit into lem_f_rat, and ovl_bandname() writes a set number and a part digit
  * into lem_f_scratch when a greyed row has to NAME the file that is missing.
  * Both are single-buffer and neither may be live across a call that reuses it
  * (LESSONS.md 13's shared-scratch trap). */
@@ -209,7 +213,7 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
  *   itself 126 sectors.
  *
  *   A PIECE'S OFFSET IS A DWORD, and it has to be: the bank is bigger than a
- *   segment. lem_far() turns one into a segment and a 0..15 offset, which is
+ *   segment. ovl_far() turns one into a segment and a 0..15 offset, which is
  *   what the assembly rasters take.
  *
  * A terrain piece is FOUR PLANES of w*h/8 bytes and PLANE 3 IS THE MASK, which
@@ -233,6 +237,22 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
                                     * flags (wave 3, LGRB version 2) */
 #define LEM_GR_PREVIEW  912        /* 16 bytes, their preview frames */
 #define LEM_GR_VER        2
+
+/* --- a SPECIAL picture's bank, LEMSP<n> (wave 4, docs/lemband-format.md) ----
+ * A 512-byte header and then the 960x160 picture as PIECES, row-major, each
+ * laid out as a terrain piece is - planes 0-3 one plane stride apart - so
+ * lem_r_wpiece composes a special level exactly as it composes a terrain
+ * piece. The two palettes sit at the STYLE bank's own offsets (LEM_GR_CUSTOM,
+ * LEM_GR_STDPAL), so lem_r_pal reads either bank the same way. */
+#define LEM_SP_VERSION    4
+#define LEM_SP_INDEX      6
+#define LEM_SP_COLS      17
+#define LEM_SP_ROWS      18
+#define LEM_SP_PW        20        /* word */
+#define LEM_SP_PH        22        /* word */
+#define LEM_SP_X         24        /* word: 304, where every reader draws it */
+#define LEM_SP_HEAD     512
+#define LEM_SP_VER        2
 #define LEM_GO_W          0        /* an object table row, 16 bytes */
 #define LEM_GO_H          1
 #define LEM_GO_FRAMES     2
@@ -369,7 +389,7 @@ static int lem_state_label(int row)
     return (int)lem_state[row].label;
 }
 
-static int lem_style_name(int style)
+static int ovl_style_name(int style)
 {
     if (style < 0 || style > 4)
         return LEMS_NONE;

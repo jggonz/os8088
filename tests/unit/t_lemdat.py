@@ -363,6 +363,23 @@ def check_specials(sections):
           "chunks of 14,400 bytes with nothing left over")
 
 
+def special_planes(sections, i):
+    """VGASPEC<i>'s picture as THIS file decodes it: its three colour planes,
+    each 160 rows of 120 bytes - a chunk is 40 rows of three consecutive
+    4,800-byte planes. None when the file did not decode."""
+    parts = sections.get("VGASPEC%d.DAT" % i)
+    if not parts or len(parts) != 1:
+        return None
+    data, pos, planes = parts[0], 40, [bytearray(), bytearray(), bytearray()]
+    for _ in range(4):
+        chunk, pos = rle(data, pos)
+        if len(chunk) != 14400:
+            return None
+        for p in range(3):
+            planes[p] += chunk[p * 4800:(p + 1) * 4800]
+    return [bytes(p) for p in planes]
+
+
 # ---------------------------------------------------------------------------
 # 4. The 120-level order, against BOTH reference tables
 # ---------------------------------------------------------------------------
@@ -461,8 +478,9 @@ def check_bands(sections, lem, out_dir, geom):
               "%s/%s starts %r, not %r" % (geom, parts[0], body[0:4], magic))
         version = struct.unpack_from("<H", body, 4)[0]
         # LGRB went to 2 in wave 3 (bytes 896 and 912, checked below against
-        # GROUNDxO itself); every other bank is still 1
-        want = 2 if magic == b"LGRB" else 1
+        # GROUNDxO itself) and LSPB to 2 in wave 4 (the picture as pieces,
+        # checked below against this file's own decode); LMNB is still 1
+        want = 2 if magic in (b"LGRB", b"LSPB") else 1
         check(version == want, "%s/%s is version %d, not %d"
               % (geom, parts[0], version, want))
         return parts, body
@@ -578,14 +596,48 @@ def check_bands(sections, lem, out_dir, geom):
         check(totlen == 512 + 960 * 160 * 4 // 8,
               "%s/LEMSP%d declares %d bytes and 512 + four planes is %d"
               % (geom, i, totlen, 512 + 960 * 160 * 4 // 8))
-        # Plane 3 must be the OR of planes 0..2 (C import_level.c:590-592).
-        plane = 960 * 160 // 8
-        p0 = body[512:512 + plane]
-        p1 = body[512 + plane:512 + 2 * plane]
-        p2 = body[512 + 2 * plane:512 + 3 * plane]
-        p3 = body[512 + 3 * plane:512 + 4 * plane]
-        check(bytes(a | b | c for (a, b, c) in zip(p0, p1, p2)) == p3,
-              "%s/LEMSP%d: plane 3 is not the OR of planes 0-2" % (geom, i))
+        # VERSION 2 (wave 4): the picture is pieces, each laid out as a
+        # terrain piece is (planes 0..3, one plane stride apart), row-major,
+        # so lem_r_wpiece composes it (docs/lemband-format.md).
+        ver = struct.unpack_from("<H", body, 4)[0]
+        cols, rows = body[17], body[18]
+        pw, ph, px = struct.unpack_from("<HHH", body, 20)
+        check((ver, cols * pw, rows * ph, px) == (2, 960, 160, 304),
+              "%s/LEMSP%d: version %d, %d x %d pieces of %dx%d at x %d - not "
+              "version 2 tiling 960x160 at x 304"
+              % (geom, i, ver, cols, rows, pw, ph, px))
+        check(pw % 8 == 0 and pw // 8 + 1 <= 96,
+              "%s/LEMSP%d: a %d-pixel piece does not fit lem_r_wpiece's "
+              "96-byte shifted row" % (geom, i, pw))
+        # Plane 3 must be the OR of planes 0..2 (C import_level.c:590-592),
+        # in every piece; and the pieces, put back together, must be the
+        # picture this file decoded on its own.
+        pl = pw // 8 * ph
+        pic = [bytearray(960 * 160 // 8) for _ in range(4)]
+        o = 512
+        for r in range(rows):
+            for c in range(cols):
+                pp = [body[o + k * pl:o + (k + 1) * pl] for k in range(4)]
+                o += 4 * pl
+                check(bytes(a | b | d for (a, b, d) in
+                            zip(pp[0], pp[1], pp[2])) == pp[3],
+                      "%s/LEMSP%d piece (%d,%d): plane 3 is not the OR of "
+                      "planes 0-2" % (geom, i, r, c))
+                for k in range(4):
+                    for y in range(ph):
+                        d0 = (r * ph + y) * 120 + c * (pw // 8)
+                        pic[k][d0:d0 + pw // 8] = \
+                            pp[k][y * (pw // 8):(y + 1) * (pw // 8)]
+        want = special_planes(sections, i)
+        if want is not None:
+            check([bytes(x) for x in pic[0:3]] == want,
+                  "%s/LEMSP%d: the pieces do not reassemble into VGASPEC%d's "
+                  "own three planes" % (geom, i, i))
+        # the palette: the picture's own eight with entry 0 Lemmix's
+        # hardcoded Color32(124, 124, 0) - 31, 31, 0 in six bits
+        check(body[32:35] == bytes([31, 31, 0]),
+              "%s/LEMSP%d: custom entry 0 is %s, Lemmix's AssemblePalette "
+              "hardcodes 31, 31, 0" % (geom, i, list(body[32:35])))
 
     # --- the manifest, against records this file decoded -------------------
     man = blobs.get("LEMMAN.LEM")

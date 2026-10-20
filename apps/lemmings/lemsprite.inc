@@ -816,15 +816,27 @@ _lem_r_sforget:
 ; THE APP'S OWN 14x14 POINTER (SPEC.md 114.4.6), in SCREEN coordinates - 0..319
 ; by 0..199, the world view above row 160 and the panel below it - top left.
 ; Whatever the last call drew is taken off first; `bits` 0 draws nothing new.
-; `bits` is DS-relative: 14 rows of 2 bytes, drawn in colour 3 (the panel's
-; white - Lemmix Game.SkillPanel.pas:127's own rectangle colour) on VGA and
-; in the solid class on the shadow backends.
+; `bits` is DS-relative: TWO PLANES of 14 rows of 2 bytes, plane 0 first, so a
+; pixel is colour p0 | p1 << 1 - Lemmix's three pointer colours, palette 1, 2
+; and 3 (lemdraw.c's lem_cur0) - drawn as colours on VGA, the way a 2bpp
+; lemming is, and as their OR in the solid class on the shadow backends.
+;
+; void lem_r_cplace(bits, sx, sy) - THE SAME PLACE AND SHAPE, SET AND NOT
+; DRAWN, for a VGA compose that moves the pointer inside itself (lemdraw.c
+; ovl_vframe): nothing is taken off the glass (the compose recomposes the old
+; box), nothing is saved and nothing drawn (lem_r_csave and lem_r_cdraw do
+; both, into the scratch). The caller keeps both boxes wholly in the world, so
+; there is no panel piece to place.
 ;
 ; ON VGA IT IS TWO PIECES, because the screen is two places in VRAM: the rows
 ; above the line compare are the WORLD at the view's own panned offset and the
 ; rows below it are the PANEL at offset 0, unpanned. Each piece is saved under
 ; and drawn separately, and taken off the same way.
 ; -----------------------------------------------------------------------------
+_lem_r_cplace:
+    mov byte [lb_cnod], 1
+    mov word [lb_curn0], 0          ; nothing of it is on the glass to take
+    mov word [lb_curn1], 0          ; off: the compose rebuilds the old box
 _lem_r_cursor:
     push bp
     mov bp, sp
@@ -833,7 +845,10 @@ _lem_r_cursor:
     push es
     push ds
     cld
+    cmp byte [lb_cnod], 0
+    jne .noff
     call lb_curoff
+.noff:
     cmp word [bp+4], 0
     jne .on
     jmp .out
@@ -879,6 +894,8 @@ _lem_r_cursor:
     mov [lb_curc0], ax
     mov ax, [lbp_n]
     mov [lb_curn0], ax
+    cmp byte [lb_cnod], 0           ; lem_r_cplace: placed, and that is all
+    jne .out
     mov ax, [lbp_cnt]
     mov bx, LEM_VSTRIDE
     mov dx, ax
@@ -891,6 +908,8 @@ _lem_r_cursor:
     pop ds
     call lb_vcore
 .panel:
+    cmp byte [lb_cnod], 0
+    jne .out
     ; --- the panel piece: rows 160 .. sy+13, as panel rows 0.. ---------
     mov ax, [bp+8]
     sub ax, LEM_VIEWH
@@ -1005,6 +1024,7 @@ _lem_r_cursor:
     mov [lb_spn], bx                ; ...and gone again: the cursor is not a
                                     ; sprite the frame restores
 .out:
+    mov byte [lb_cnod], 0
     pop ds
     pop es
     pop di
@@ -1012,8 +1032,9 @@ _lem_r_cursor:
     pop bp
     ret
 
-; lb_curset - the pointer's bitmap (DS:AX, 14 rows of 2 bytes) as the source
-; lb_vcore / lb_score draw: one plane, in colour 3. Clobbers AX.
+; lb_curset - the pointer's bitmap (DS:AX, two planes of 14 rows of 2 bytes)
+; as the source lb_vcore / lb_score draw: a 2bpp sprite, colours 1-3. Clobbers
+; AX.
 lb_curset:
     mov [lbp_off], ax
     mov ax, ds
@@ -1021,8 +1042,8 @@ lb_curset:
     mov word [lbp_bpr], 2
     mov word [lbp_ps], 28
     mov word [lbp_h], 14
-    mov word [lbp_np], 1
-    mov word [lbp_ink], 3
+    mov word [lbp_np], 2
+    mov word [lbp_ink], 0
     xor ax, ax
     mov [lbp_mp], ax
     mov [lbp_flip], ax
@@ -2337,6 +2358,7 @@ lb_curb:    resw 1
 lb_curbits: resw 1                  ; ...and the shape and the place it is lit
 lb_cursx:   resw 1                  ; at (lem_r_cdraw)
 lb_cursy:   resw 1
+lb_cnod:    resw 1                  ; 1 = lem_r_cplace: place, do not draw
 lb_cursv:   resb 14 * 5             ; the shadow backends' pointer save-under
 _lem_sprec:                         ; THE SAME BYTES TWICE, ONE CARD AT A TIME:
 lb_sprec:   resb LEM_SPMAX * LEM_SPREC  ; the shadow cards' sprite records,
@@ -2346,8 +2368,13 @@ lb_sprec:   resb LEM_SPMAX * LEM_SPREC  ; the shadow cards' sprite records,
                                     ; these 1,008), so the VGA compose's own
                                     ; bookkeeping costs no bss of its own
 %if LEM_SPMAX * LEM_SPREC < 80 * 4
-  %error "lb_sprec no longer holds lemdraw.c's 80 four-byte boxes"
-%endif
+  %fatal "lb_sprec no longer holds lemdraw.c's 80 four-byte boxes"
+%endif                              ; ...and the 80 is lemgame.c's LEM_MAXLEM,
+                                    ; which this file cannot see: the host
+                                    ; harness reads LEM_SPMAX and LEM_SPREC
+                                    ; out of THIS file and checks them against
+                                    ; the C's own number (lemtest.c
+                                    ; check_sprec), so neither moves alone
 lb_smk:     resb LEM_SMK            ; one draw's mask rows (lb_vcore)
 lbw_lo:     resb 1                  ; lb_wobj's three bytes of one source
 lbw_hi:     resb 1                  ; byte, kept in memory because the

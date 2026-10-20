@@ -34,12 +34,16 @@ own ORIG mechanics set and 3ds says "really?" at three of these):
       (3ds's glitch_direct_drop off would refuse both)
   R7  the miner's one-way-right bug and the climber-on-a-shrugger bug are on,
       and objects past the fifteenth non-hatch are inert (Lemmix's ORIG set)
-  R8  the 1991 game's two glitches are ON, because decision 1 is the original
-      and not Lemmix's defaults (3ds models neither): the RIGHT-CLICK glitch -
-      the right button held over only working lemmings assigns to the last
-      non-prioritised lemming any hit test saw (Lemmix src/Game.pas:3626,
-      :3685-3689) - and the NUKE glitch, MaxNumLemmings := LemmingsReleased
-      at the nuke (:3993), which the finish test and the result count against
+  R8  the 1991 game's three glitches are ON, because decision 1 is the
+      original and not Lemmix's defaults (3ds models none): the RIGHT-CLICK
+      glitch - the right button held over only working lemmings assigns to the
+      last non-prioritised lemming any hit test saw (Lemmix src/Game.pas:3626,
+      :3685-3689) - the NUKE glitch, MaxNumLemmings := LemmingsReleased at the
+      nuke (:3993), which the finish test and the result count against - and
+      the PAUSE glitch (TMechanic.PauseGlitch, Dos.Consts.pas:206-208, "#EL
+      2020: finally"): a pause begun before frame 34 holds the CLOCK for
+      34 - frame frames once play resumes (BtnPause :3941-3958 sets the count,
+      IncrementIteration :3502-3506 spends it instead of a clock frame)
 
 What this file does NOT model, because the harness drives the mechanics only:
 the sound, the panel and every
@@ -152,6 +156,7 @@ class Game:
         self.countdown = 20
         self.opened = self.entdone = False
         self.paused = self.nuked = self.nukeing = False
+        self.glitchp = 0                       # R8, the pause glitch
         self.nukeix = 0
         self.finished = self.timeup = False
         self.lems = []
@@ -800,7 +805,10 @@ class Game:
         if self.paused:
             return
         self.it += 1
-        self.clockf += 1
+        if self.glitchp <= 0:                  # R8, the pause glitch
+            self.clockf += 1
+        else:
+            self.glitchp -= 1
         if self.clockf >= 17:
             self.clockf = 0
             self.secs -= 1
@@ -905,6 +913,8 @@ def run(fx, level, script, frames):
                 g.rrdir = int(c[1])
             elif c[0] == "P":
                 g.paused = not g.paused
+                if g.paused and g.it < 34 and g.glitchp == 0:
+                    g.glitchp = 34 - g.it          # R8, the pause glitch
         g.frame()
         lines.append(g.line(n))
         if g.finished:

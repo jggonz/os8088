@@ -537,9 +537,13 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
     return (unsigned)n;
 }
 
+static int h_write_fail;                /* the disk refuses (full, protected) */
+
 int os88_file_write(const char *name, const void *buf, unsigned count)
 {
     h_writes++;
+    if (h_write_fail)
+        return -1;
     if (!h_in_appdata || strcmp(name, "LEMMINGS.SAV") != 0)
         return -1;
     if (count > sizeof(h_sav))
@@ -646,6 +650,18 @@ char *os88_utoa(unsigned v, char *dst6)
  * ==========================================================================*/
 #include "lemmings.c"
 
+/* lem_game_frame - one whole frame at once. THE HARNESS'S, and only the
+ * harness's: the bracket's loop steps a frame a chunk at a time
+ * (ovl_play_loop), so this lived in lemgame.c as ~40 resident bytes nothing on
+ * the machine called (wave 3's third review) and lives here now. */
+static void lem_game_frame(void)
+{
+    if (!ovl_frame_begin())
+        return;
+    lem_frame_chunk(LEM_MAXLEM);
+    ovl_frame_end();
+}
+
 /* frame_shows_world - the view window of the world IS what is on the screen.
  *
  * THE ASSERTION THE HARNESS DID NOT HAVE, and a wave-2 review defect walked
@@ -679,7 +695,7 @@ static int h_cur_missing(void)
             sy = h_cur_y + gy;
             if (sx < 0 || sx >= H_SCR_W || sy < 0 || sy >= H_SCR_H)
                 continue;
-            if (h_screen[sy][sx] != 3)
+            if (h_screen[sy][sx] != h_cur_ink(gx, gy))
                 n++;
         }
     return n;
@@ -1154,7 +1170,7 @@ static int mech_run(int level, const char *script, int frames, const char *out)
                 continue;
             switch (cv[k]) {
             case 'S':
-                lem_select_skill(ca[k]);
+                ovl_select_skill(ca[k]);
                 break;
             case 'A':
                 lem_hit_n = (ca[k] < lem_released) ? 1 : 0;
@@ -1170,13 +1186,13 @@ static int mech_run(int level, const char *script, int frames, const char *out)
                 ovl_assign();
                 break;
             case 'N':
-                lem_nuke();
+                ovl_nuke();
                 break;
             case 'R':
                 lem_rrdir = ca[k];
                 break;
             case 'P':
-                lem_toggle_pause();
+                ovl_toggle_pause();
                 break;
             }
         }
@@ -1248,9 +1264,52 @@ static int mech_run(int level, const char *script, int frames, const char *out)
     return 0;
 }
 
+/* h_inc_equ - the value of `NAME equ N` in an assembly include, or -1. */
+static long h_inc_equ(const char *path, const char *name)
+{
+    FILE *f = fopen(path, "r");
+    char ln[256], nm[64];
+    long v;
+
+    if (f == 0)
+        return -1;
+    while (fgets(ln, sizeof ln, f)) {
+        if (sscanf(ln, "%63s equ %ld", nm, &v) == 2 && strcmp(nm, name) == 0) {
+            fclose(f);
+            return v;
+        }
+    }
+    fclose(f);
+    return -1;
+}
+
+/* check_sprec - THE ONE SHARED LAYOUT THE ASSEMBLY CANNOT CHECK FOR ITSELF.
+ * On VGA the C keeps each lemming's last-drawn box in lemsprite.inc's sprite
+ * records (lemdraw.c's lem_obox = lem_sprec), LEM_MAXLEM x 4 bytes of them.
+ * The .inc's own guard compares against a literal 80, because LEM_MAXLEM is a
+ * C #define it cannot see - so a pool raised in lemgame.c would assemble and
+ * write past lb_sprec into lb_smk (wave 3's third review). Read both halves
+ * here, from the files themselves, so neither side can move alone. */
+static void check_sprec(void)
+{
+    long spmax = h_inc_equ("apps/lemmings/lemsprite.inc", "LEM_SPMAX");
+    long sprec = h_inc_equ("apps/lemmings/lemsprite.inc", "LEM_SPREC");
+
+    if (spmax < 0 || sprec < 0) {
+        fail("check_sprec: LEM_SPMAX / LEM_SPREC not found in "
+             "apps/lemmings/lemsprite.inc");
+        return;
+    }
+    if ((long)LEM_MAXLEM * 4 > spmax * sprec)
+        fail("LEM_MAXLEM x 4 (lemdraw.c lem_obox) no longer fits lemsprite.inc's "
+             "LEM_SPMAX x LEM_SPREC sprite records - raise LEM_SPMAX");
+}
+
 int main(int argc, char **argv)
 {
     int i, seen, seenrows, tc, tn, tf;
+
+    check_sprec();
 
     if (argc == 6 && strcmp(argv[1], "--mech") == 0)
         return mech_run(atoi(argv[2]), argv[3], atoi(argv[4]), argv[5]);
@@ -1499,6 +1558,39 @@ int main(int argc, char **argv)
     glass_clear();
     repaint("the list");
 
+    /* --- A PROGRESS WRITE THAT FAILS IS SAID, AND TAKEN BACK (wave 4's
+     * second review): a replace needs a free cluster before it frees the old
+     * one, and a full or protected disk refuses it. The wake used to drop
+     * the status while the glass showed the level as recorded. Now the record
+     * goes back to the file's, the row greys, and the toast is its fact. */
+    lem_savable = 1;
+    lem_prog[1] = 2;
+    lem_pw_rat = 1;
+    lem_pw_lvl = 5;
+    lem_progwrite = 1;
+    h_write_fail = 1;
+    h_toasts = 0;
+    os88_onwake(lem_win);
+    h_write_fail = 0;
+    printf("  a progress write the disk refused: record %d, savable %d, "
+           "%d toast(s)\n", lem_prog[1], lem_savable, h_toasts);
+    if (lem_prog[1] != 2)
+        fail("a refused progress write left the new level in memory - the "
+             "glass shows progress the file does not hold");
+    if (lem_savable)
+        fail("a refused progress write left Save Progress enabled");
+    if (h_toasts != 1 || strcmp(h_lasttoast, lem_str(LEMS_GREY_SAVE)) != 0)
+        fail("a refused progress write was not said with the row's fact");
+    lem_savable = 1;
+    lem_progwrite = 1;
+    os88_onwake(lem_win);
+    if (lem_prog[1] != 5 || h_savn != LEM_SAV_SIZE || h_sav[4 + 1] != 6)
+        fail("a progress write the disk took did not record the level");
+    lem_prog[1] = -1;
+    lem_savable = 1;
+    glass_clear();
+    repaint("the list");
+
     /* --- A BAND TOO BIG FOR THE BUFFER IS A REFUSAL, NOT A TRUNCATION ------
      * os88_file_read() "refuses a short buffer with FERR_BIG and reads
      * nothing", so lem_str_load()'s ceiling is what stands between a grown
@@ -1672,12 +1764,12 @@ int main(int argc, char **argv)
         fail("the level's banks did not load off the fixture");
     printf("  claims: %d live, %d peak, %d KB of the harness's %d; the "
            "arithmetic the refusal quotes is %d KB\n",
-           h_claims_now, h_claims_peak, h_mem_kb_used, H_MEM_KB, lem_need_kb());
+           h_claims_now, h_claims_peak, h_mem_kb_used, H_MEM_KB, ovl_need_kb());
     if (h_claims_peak > 6)
         fail("more than six claim records - SPEC.md 114.6.1 says three on a "
              "VGA and five on the two 1bpp adapters, and MEM_MAX is 20 on a "
              "kern_small machine SYSTEM-WIDE");
-    if (lem_need_kb() != h_mem_kb_used)
+    if (ovl_need_kb() != h_mem_kb_used)
         fail("the KB the refusal quotes is not the KB actually claimed - a "
              "sentence that is wrong is worse than no sentence (SPEC.md 47)");
 
@@ -1810,7 +1902,7 @@ int main(int argc, char **argv)
      * outline was erased and the whole new one drawn, so on a one-cell step 84
      * of the 86 cells took two writes - PERFORMANCE.md's double-draw flash on
      * the rectangle's top and bottom edges, every fourth tick of a scroll.
-     * lem_view_rect() now erases only what the new outline will not cover, so
+     * ovl_view_rect() now erases only what the new outline will not cover, so
      * the bound is ZERO and a real double-draw anywhere on the screen has
      * nothing to hide behind. */
     {
@@ -1901,6 +1993,32 @@ int main(int argc, char **argv)
              "is no hardware pan on that card");
     if (h_twice_nocur() != 0)
         fail("a CGA scrolling frame wrote a pixel twice");
+    /* ...and a ONE-PIXEL step (Ctrl+arrow) inside the card's 4-pixel snap
+     * scrolls nothing, so it must redraw nothing (wave 4 review: every
+     * sprite dropped, drawn again and presented for no pixel) */
+    {
+        int j, cd, v0 = lem_view & ~15;     /* one minimap step: vr stays */
+
+        lem_view = v0;
+        lem_mx = 160;                       /* the pointer lit in the world */
+        lem_my = 80;
+        ovl_tick_draw(0, 0);
+        lem_c_sprites = 0;
+        cd = h_r_curdraws;
+        for (j = 0; j < 3; j++) {
+            lem_view_move(1);
+            ovl_tick_draw(0, 0);
+        }
+        printf("  three 1-px steps inside the CGA snap: %d sprite draws, "
+               "%d pointer redraws\n", lem_c_sprites, h_r_curdraws - cd);
+        if (lem_c_sprites != 0 || h_r_curdraws != cd)
+            fail("a sub-snap scroll on CGA redrew and showed nothing "
+                 "(ovl_scroll_due)");
+        lem_view_move(1);
+        ovl_tick_draw(0, 0);
+        if (lem_scrolled != v0 + 4)
+            fail("the fourth 1-px step on CGA did not scroll");
+    }
     h_caps = (1 << OS88_FSXM_VGA0D) | (1 << OS88_FSXM_CGA320);
     lem_caps = h_caps;
     lem_vidkind = OS88_VID_VGA;
@@ -1939,7 +2057,7 @@ int main(int argc, char **argv)
         h_r_comps = 0;
         for (f = 0; f < 300 && !lem_finished; f++) {
             if (f == 120 && lem_released > 0) {
-                lem_select_skill(LB_DIGGER);    /* destruction to compose */
+                ovl_select_skill(LB_DIGGER);    /* destruction to compose */
                 lem_hit_n = 1;
                 lem_hit_l1 = 0;
                 lem_hit_l2 = -1;
@@ -2031,6 +2149,182 @@ int main(int argc, char **argv)
             }
         }
 
+        /* ...and a PAUSED pan shows the lemmings it reaches (wave 3's third
+         * review). VRAM holds lemmings only within the view +- 32 (ovl_sbox's
+         * margin cull), and a scroll with no game frame used to move the
+         * Start Address and draw nothing - terrain with no lemmings, while the
+         * status line named the one under the pointer. Cull one away, pause,
+         * pan to it, and require it composed. */
+        {
+            int k, gx, was, pans;
+
+            for (k = 0; k < lem_released; k++)
+                if (!(lem_lm[k].fl & LF_GONE))
+                    break;
+            if (k < lem_released) {
+                was = lem_view;
+                lem_view = lem_lm[k].x < LEM_WORLD_W / 2
+                           ? LEM_WORLD_W - LEM_VIEW_W : 0;
+                lem_game_frame();
+                ovl_tick_draw(1, 0);        /* it leaves VRAM */
+                if (lem_obox[k * 4] != 0xFF)
+                    fail("the paused-pan row could not cull its lemming - it "
+                         "tests nothing");
+                ovl_toggle_pause();
+                gx = lem_lm[k].x - LEM_VIEW_W / 2;
+                if (gx < 0)
+                    gx = 0;
+                if (gx > LEM_WORLD_W - LEM_VIEW_W)
+                    gx = LEM_WORLD_W - LEM_VIEW_W;
+                pans = 0;
+                while (lem_view != gx && pans < 200) {
+                    int cross, meets, c0, j, q;
+
+                    /* the most a tick moves: LEM_SCROLL_MAX */
+                    lem_view_move(gx > lem_view
+                                  ? (gx - lem_view > LEM_SCROLL_MAX
+                                     ? LEM_SCROLL_MAX : gx - lem_view)
+                                  : (lem_view - gx > LEM_SCROLL_MAX
+                                     ? -LEM_SCROLL_MAX : gx - lem_view));
+                    /* THE COST IS THE CROSSERS' (wave 4 review): the
+                     * lemmings whose margin membership changes, and those
+                     * that touch their rectangles - never the crowd */
+                    cross = 0;
+                    for (j = 0; j < lem_released; j++)
+                        if ((lem_obox[j * 4] == 0xFF) ==
+                            ovl_inmargin(&lem_lm[j]))
+                            cross++;
+                    c0 = h_r_comps;
+                    ovl_tick_draw(0, 0);
+                    meets = 0;
+                    for (j = 0; j < lem_released; j++)
+                        if (lem_obox[j * 4] != 0xFF)
+                            for (q = 0; q < lem_nrc; q++)
+                                if (lem_obox[j * 4] <= lem_rc[q * 4 + 1] &&
+                                    lem_rc[q * 4] <= lem_obox[j * 4 + 1] &&
+                                    lem_obox[j * 4 + 2] <= lem_rc[q * 4 + 3] &&
+                                    lem_rc[q * 4 + 2] <= lem_obox[j * 4 + 3]) {
+                                    meets++;
+                                    break;
+                                }
+                    if (cross == 0 && (h_r_comps != c0 || lem_c_sprites))
+                        fail("a paused pan step that took no lemming across "
+                             "the margin composed anyway (ovl_vframe(0))");
+                    if (cross && lem_c_sprites > 4 * meets) {
+                        printf("  pan step: %d crossed, %d meet a rectangle, "
+                               "%d sprites drawn\n", cross, meets,
+                               lem_c_sprites);
+                        fail("a paused pan step composed lemmings that meet "
+                             "no rectangle - one crossing recomposed the "
+                             "crowd (ovl_vframe(0)'s band loop)");
+                    }
+                    pans++;
+                }
+                /* ...and an 8-pixel pan that takes nobody across makes no
+                 * raster call at all */
+                {
+                    int j, d, cross = 1, c0, vw = lem_view;
+
+                    for (d = 0; d < 40 && cross; d++) {
+                        lem_view = vw;
+                        lem_view_move(d & 1 ? -8 * (d / 2 + 1)
+                                            : 8 * (d / 2 + 1));
+                        cross = 0;
+                        for (j = 0; j < lem_released; j++)
+                            if ((lem_obox[j * 4] == 0xFF) ==
+                                ovl_inmargin(&lem_lm[j]))
+                                cross++;
+                    }
+                    lem_view = vw;
+                    if (!cross) {
+                        d--;
+                        lem_view_move(d & 1 ? -8 * (d / 2 + 1)
+                                            : 8 * (d / 2 + 1));
+                        c0 = h_r_comps;
+                        ovl_tick_draw(0, 0);
+                        printf("  an 8-px-step pan to %d with nobody "
+                               "crossing: %d composes, %d sprites\n",
+                               lem_view, h_r_comps - c0, lem_c_sprites);
+                        if (h_r_comps != c0 || lem_c_sprites)
+                            fail("a paused pan with no lemming crossing the "
+                                 "margin made raster calls");
+                        lem_view = vw;
+                        ovl_tick_draw(0, 0);
+                    }
+                }
+                printf("  a paused pan: %d ticks to lemming %d at x %d, its "
+                       "box %s\n", pans, k, lem_lm[k].x,
+                       lem_obox[k * 4] == 0xFF ? "NOT composed" : "composed");
+                if (lem_obox[k * 4] == 0xFF)
+                    fail("a paused pan reached a lemming and did not compose "
+                         "it - terrain with no lemmings on the glass "
+                         "(ovl_tick_draw's scroll arm, ovl_vframe(0))");
+                for (y = 0; y < H_VIEW_H; y++)
+                    for (x = 0; x < H_SCR_W; x++)
+                        if (h_screen[y][x] != h_world[y][lem_view + x])
+                            bad++;
+                if (bad)
+                    fail("after a paused pan the glass is not the world");
+                /* ...ONE CROSSER IN A CROWD: the crowd parked on the same
+                 * rows at the view's left, one lemming just past the right
+                 * margin, and an 8-pixel pan brings it in. Only it (and its
+                 * digit) is composed - the crowd meets no rectangle */
+                {
+                    static struct lem_l keep[LEM_MAXLEM];
+                    int j, n = 0, c, vw = lem_view, cy = lem_lm[k].y;
+                    int rel = lem_released;
+
+                    memcpy(keep, lem_lm, sizeof keep);
+                    if (lem_view > LEM_WORLD_W - LEM_VIEW_W - 16)
+                        lem_view = LEM_WORLD_W - LEM_VIEW_W - 16;
+                    /* the fixture has released few: the crowd is copies of
+                     * lemming k, put back afterwards */
+                    while (lem_released < rel + 6 && lem_released < LEM_MAXLEM) {
+                        lem_lm[lem_released] = lem_lm[k];
+                        lem_obox[lem_released * 4] = 0xFF;
+                        lem_released++;
+                    }
+                    for (j = 0; j < lem_released; j++) {
+                        if (lem_lm[j].fl & LF_GONE)
+                            continue;
+                        lem_lm[j].y = cy;
+                        lem_lm[j].x = j == k ? lem_view + LEM_VIEW_W + 36
+                                             : lem_view + 40 + 6 * n++;
+                    }
+                    ovl_tick_draw(1, 0);
+                    lem_view_move(8);
+                    ovl_tick_draw(0, 0);
+                    c = lem_c_sprites;
+                    printf("  one crosser beside a crowd of %d: %d sprite "
+                           "draws\n", n, c);
+                    if (n < 3)
+                        fail("the one-crosser row has no crowd - it tests "
+                             "nothing");
+                    if (lem_obox[k * 4] == 0xFF)
+                        fail("the one-crosser row's lemming was not composed");
+                    if (c > 2)
+                        fail("one lemming crossing the margin recomposed "
+                             "the crowd's sprites (ovl_vframe(0)'s band "
+                             "loop)");
+                    /* the copies off the glass first, while they are
+                     * still records, then the pool as it was */
+                    for (j = rel; j < lem_released; j++)
+                        lem_lm[j].fl |= LF_GONE;
+                    ovl_tick_draw(1, 0);
+                    lem_released = rel;
+                    memcpy(lem_lm, keep, sizeof keep);
+                    lem_view = vw;
+                    ovl_tick_draw(1, 0);
+                }
+                ovl_toggle_pause();
+                lem_view = was;
+                lem_game_frame();
+                ovl_tick_draw(1, 0);
+            } else {
+                fail("no lemming to pan to");
+            }
+        }
+
         /* ...and a pointer STEERED through the crowd for sixty frames leaves
          * nothing behind: a stale save-under - not brought up to date from
          * the scratch before the latch, then restored - is the defect to
@@ -2039,7 +2333,7 @@ int main(int argc, char **argv)
          * make. */
         {
             static unsigned char before[H_VIEW_H][H_SCR_W];
-            int stale = 0;
+            int stale = 0, pairs = 0, moves = 0;
 
             int k, near = 0;
 
@@ -2060,11 +2354,30 @@ int main(int argc, char **argv)
                 ovl_tick_draw(1, 0);
                 if (h_cur_missing())
                     stale += 1000;  /* reported with the leftovers below */
+                /* ...and a move on a tick with NO game frame - most aiming
+                 * ticks on an XT - rides a compose too: no glass pair */
+                {
+                    int cd = h_r_curdraws;
+
+                    lem_mx += (f & 1) ? 2 : -2;
+                    ovl_tick_draw(0, 0);
+                    if (h_cur_missing())
+                        stale += 1000;
+                    if (lem_my + 7 <= LEM_VIEWH_PX && h_r_curdraws != cd)
+                        pairs++;
+                    moves++;
+                }
             }
+            printf("  a pointer moved between frames: %d of %d moves taken "
+                   "off and put back on the glass\n", pairs, moves);
+            if (pairs)
+                fail("a pointer move with no game frame erased and redrew "
+                     "the pointer on the glass - rule 2 on the XT's aiming "
+                     "ticks (ovl_vframe(0) with lem_cmv)");
             if (near < 30)
                 fail("the steered pointer found nobody to steer through - "
                      "the row tests nothing");
-            lem_cursor_off();
+            ovl_cursor_off();
             for (y = 0; y < H_VIEW_H; y++)
                 for (x = 0; x < H_SCR_W; x++)
                     before[y][x] = h_world[y][lem_view + x];
@@ -2124,6 +2437,135 @@ int main(int argc, char **argv)
             fail("the second stretch has nobody walking - the rows below "
                  "test nothing");
 
+        /* --- a pointer moved IN THE MIDDLE OF A PART-STEPPED FRAME (more
+         * than LEM_STEP_MAX lemmings out, lem_infr): the lemmings already
+         * stepped have a new x and frame while their boxes still say where
+         * the glass shows them. One whose old box meets the pointer's
+         * rectangles must be erased and drawn WHOLE at its new state - drawn
+         * clipped to the rectangles over a clipped erasure it is torn
+         * between two places under the pointer (wave 4's second review). So:
+         * every stepped lemming whose old box met a rectangle has its new box
+         * as its box, and both boxes inside one rectangle. */
+        {
+            static struct lem_l keep[LEM_MAXLEM];
+            static unsigned char ob[LEM_MAXLEM * 4];
+            int j, k, n = 0, rel = lem_released, met = 0, torn = 0, moved = 0;
+            int cy, b0, b1, r0, r1, q;
+
+            memcpy(keep, lem_lm, sizeof keep);
+            for (k = 0; k < lem_released; k++)
+                if (!(lem_lm[k].fl & LF_GONE))
+                    break;
+            if (k >= lem_released)
+                fail("the part-stepped row found no lemming to copy");
+            cy = lem_lm[k].y;
+            while (lem_released < 32 && lem_released < LEM_MAXLEM) {
+                lem_lm[lem_released] = lem_lm[k];
+                lem_obox[lem_released * 4] = 0xFF;
+                lem_released++;
+            }
+            for (j = 0; j < lem_released; j++) {
+                if (lem_lm[j].fl & LF_GONE)
+                    continue;
+                lem_lm[j].y = cy;
+                lem_lm[j].x = lem_view + 40 + 5 * n++;
+            }
+            ovl_tick_draw(1, 0);            /* every box is the glass's */
+            if (!ovl_frame_begin())
+                fail("the part-stepped row could not begin a frame");
+            lem_frame_chunk(LEM_STEP_MAX);
+            if (!lem_infr)
+                fail("the part-stepped row's frame finished in one chunk - "
+                     "it tests nothing");
+            /* the pointer onto a STEPPED lemming whose byte box moved */
+            for (j = 0; j < lem_cursor; j++) {
+                if (lem_obox[j * 4] == 0xFF || !ovl_sbox(j))
+                    continue;
+                if (lem_bb0 != lem_obox[j * 4] ||
+                    lem_bb1 != lem_obox[j * 4 + 1])
+                    break;
+            }
+            if (j >= lem_cursor)
+                fail("no stepped lemming changed its box - the row tests "
+                     "nothing");
+            memcpy(ob, lem_obox, sizeof ob);
+            lem_mx = (lem_obox[j * 4] << 3) + 4 - lem_view;
+            lem_my = cy - 6;
+            ovl_tick_draw(0, 0);
+            for (j = 0; j < lem_cursor; j++) {
+                if (ob[j * 4] == 0xFF || !ovl_rc_meets(&ob[j * 4]))
+                    continue;
+                met++;
+                if (!ovl_sbox(j)) {
+                    if (lem_obox[j * 4] != 0xFF)
+                        torn++;
+                    continue;
+                }
+                if (lem_bb0 != ob[j * 4] || lem_bb1 != ob[j * 4 + 1])
+                    moved++;
+                if (lem_obox[j * 4] != lem_bb0 ||
+                    lem_obox[j * 4 + 1] != lem_bb1 ||
+                    lem_obox[j * 4 + 2] != lem_br0 ||
+                    lem_obox[j * 4 + 3] != lem_br1) {
+                    torn++;
+                    continue;
+                }
+                b0 = ob[j * 4] < lem_bb0 ? ob[j * 4] : lem_bb0;
+                b1 = ob[j * 4 + 1] > lem_bb1 ? ob[j * 4 + 1] : lem_bb1;
+                r0 = ob[j * 4 + 2] < lem_br0 ? ob[j * 4 + 2] : lem_br0;
+                r1 = ob[j * 4 + 3] > lem_br1 ? ob[j * 4 + 3] : lem_br1;
+                for (q = 0; q < lem_nrc; q++)
+                    if (lem_rc[q * 4] <= b0 && b1 <= lem_rc[q * 4 + 1] &&
+                        lem_rc[q * 4 + 2] <= r0 && r1 <= lem_rc[q * 4 + 3])
+                        break;
+                if (q >= lem_nrc)
+                    torn++;
+            }
+            printf("  a pointer moved mid-frame (%d of %d stepped): %d "
+                   "stepped lemmings under it, %d moved, %d torn\n",
+                   lem_cursor, lem_released, met, moved, torn);
+            if (!met || !moved)
+                fail("the mid-frame pointer met no stepped lemming that "
+                     "moved - the row tests nothing");
+            if (torn)
+                fail("a pointer move between the passes of a part-stepped "
+                     "frame drew a stepped lemming clipped at its new state "
+                     "over its old box (ovl_vframe(0), ovl_infr_whole)");
+            lem_frame_chunk(LEM_MAXLEM);
+            ovl_frame_end();
+            ovl_tick_draw(1, 0);
+            for (j = rel; j < lem_released; j++)
+                lem_lm[j].fl |= LF_GONE;
+            ovl_tick_draw(1, 0);
+            lem_released = rel;
+            memcpy(lem_lm, keep, sizeof keep);
+            ovl_tick_draw(1, 0);
+        }
+
+        /* --- A BAND READ IS HELD INSIDE ITS CLAIM (wave 4's second review):
+         * the part count is a LEMMAN byte and the files are the disk's, so
+         * ovl_parts_read caps every part at what the claim has left and
+         * refuses a count that cannot start inside it. LEMMAIN.LEM is 15,360
+         * bytes in the fixture: an 8 KB claim must refuse it, its own 52 KB
+         * must take it, and no part count of 0 or past the claim may read */
+        {
+            int r8, r52, r0, rmany;
+
+            ovl_stem_main();
+            r8 = ovl_parts_read(1, lem_cl_main, 8);
+            ovl_stem_main();
+            r52 = ovl_parts_read(1, lem_cl_main, LEM_KB_MAIN);
+            ovl_stem_main();
+            r0 = ovl_parts_read(0, lem_cl_main, LEM_KB_MAIN);
+            ovl_stem_main();
+            rmany = ovl_parts_read(200, lem_cl_main, 1);
+            printf("  a band read held to its claim: 8 KB %d, 52 KB %d, "
+                   "0 parts %d, 200 parts in 1 KB %d\n", r8, r52, r0, rmany);
+            if (r8 || !r52 || r0 || rmany)
+                fail("ovl_parts_read read past its claim, or refused a band "
+                     "that fits it");
+        }
+
         /* --- a VGA frame that does not scroll does not wait for a retrace:
          * the compose needs none, and the wait was up to 14.3 ms of a 59 ms
          * frame on the XT (wave 3's second review) */
@@ -2182,7 +2624,7 @@ int main(int argc, char **argv)
                 {
                     int c0;
 
-                    lem_select_skill(LB_DIGGER);
+                    ovl_select_skill(LB_DIGGER);
                     lem_cnt[LB_DIGGER - LB_CLIMBER] = 5;
                     c0 = lem_cnt[LB_DIGGER - LB_CLIMBER];
                     h_mouse.x = lem_mx * 2;
@@ -2251,7 +2693,7 @@ int main(int argc, char **argv)
         {
             int sk = lem_skill;
 
-            lem_select_skill(LB_CLIMBER);
+            ovl_select_skill(LB_CLIMBER);
             ovl_panel_press(LB_DIGGER * 16 + 15, 20);
             if (lem_skill != LB_CLIMBER)
                 fail("x = 16n + 15 selected a button - Lemmix's rect is "
@@ -2273,7 +2715,7 @@ int main(int argc, char **argv)
             if (!lem_mmdrag)
                 fail("(310, 36) did not start a minimap drag");
             lem_mmdrag = 0;
-            lem_select_skill(sk);
+            ovl_select_skill(sk);
         }
 
         /* --- OVERLAPPING ANIMATED OBJECTS ARE DRAWN ONCE A FRAME: their
@@ -2631,6 +3073,38 @@ int main(int argc, char **argv)
                  "(MODE_NONE)");
     }
 
+    /* --- THE POSTVIEW'S SPACING (wave 4 review) ----------------------------
+     * Lemmix GetScreenText's AddLineFeed(18 - CountChar(CR)) puts the footer
+     * on line 18 whatever came above, counting the result texts' own CRs. A
+     * 20-row box (the VGA window's) holds it; the threshold used to need 21,
+     * which LEM_SH_ROWS never gives, so the branch was dead. */
+    {
+        int kr = lem_rows, kc = lem_cols, w, j;
+        static const int rats[2] = { 0, LEM_RATINGS - 1 };
+        static const int lvls[2] = { 0, LEM_PERRAT - 1 };
+
+        lem_rows = LEM_SH_ROWS;
+        lem_cols = LEM_SH_COLS;
+        lem_nuked = 0;
+        lem_timeup = 0;
+        for (j = 0; j < 2; j++) {
+            lem_saved = 0;
+            w = ovl_postview(rats[j], lvls[j]);
+            lem_wrap();
+            printf("  postview %s, 20-row box: %d lines, line 18 \"%s\"\n",
+                   j ? "of Mayhem 30" : "of Fun 1", lem_wrapn,
+                   lem_wrap_line(LEM_PO_FOOT));
+            if (strcmp(lem_wrap_line(LEM_PO_FOOT),
+                       lem_str(j && w ? LEMS_PO_CONTINUE
+                                      : w ? LEMS_PO_NEXTLEVEL
+                                          : LEMS_PO_RETRYLEVEL)) != 0)
+                fail("the postview's footer is not on line 18 in a box that "
+                     "holds it (Lemmix GetScreenText's AddLineFeed)");
+        }
+        lem_rows = kr;
+        lem_cols = kc;
+    }
+
     /* --- THE POSTVIEW'S NEXT LEVEL ACROSS A SECTION'S END ------------------
      * Lemmix Styles.Base.pas:964-968 links a section's last level to the
      * next section's first: Fun 30 won is Tricky 1, and the progress write is
@@ -2664,6 +3138,78 @@ int main(int argc, char **argv)
         if (lem_post_nrat != 0 || lem_post_next != 5)
             fail("an ordinary win does not lead to the next level");
         lem_progwrite = 0;
+    }
+
+    /* --- A SPECIAL, THEN AN ORDINARY LEVEL OF ITS SET (wave 4 review) ------
+     * ovl_spec_compose reads the style bank over the picture and pokes the
+     * picture's eight colours over its custom palette. The claims outlive the
+     * level (Continue on the postview, a pick from the list), so the next
+     * ovl_bank_read of that style must NOT answer "already in" - or an
+     * ordinary level is drawn in the special picture's colours. A synthetic
+     * LSPB in the bank claim stands in for LEMSP0 (the fixture has none). */
+    {
+        unsigned char own[24];
+        int k, ok;
+        unsigned o;
+
+        if (!ovl_level_load(0))
+            fail("the special-palette row could not load level 1");
+        for (k = 0; k < 24; k++)
+            own[k] = (unsigned char)os88_peek(lem_cl_bank, LEM_GR_CUSTOM + k);
+        lem_bank_have = -1;             /* what ovl_spec_read leaves */
+        os88_poke(lem_cl_bank, 0, 'L');
+        os88_poke(lem_cl_bank, 1, 'S');
+        os88_poke(lem_cl_bank, 2, 'P');
+        os88_poke(lem_cl_bank, 3, 'B');
+        os88_poke(lem_cl_bank, LEM_SP_VERSION, LEM_SP_VER);
+        os88_poke(lem_cl_bank, LEM_SP_VERSION + 1, 0);
+        os88_poke(lem_cl_bank, LEM_SP_INDEX, 0);
+        os88_poke(lem_cl_bank, LEM_SP_COLS, 2);
+        os88_poke(lem_cl_bank, LEM_SP_ROWS, 4);
+        os88_poke(lem_cl_bank, LEM_SP_PW, 480 & 255);
+        os88_poke(lem_cl_bank, LEM_SP_PW + 1, 480 >> 8);
+        os88_poke(lem_cl_bank, LEM_SP_PH, 40);
+        os88_poke(lem_cl_bank, LEM_SP_PH + 1, 0);
+        os88_poke(lem_cl_bank, LEM_SP_X, 304 & 255);
+        os88_poke(lem_cl_bank, LEM_SP_X + 1, 304 >> 8);
+        for (k = 0; k < 24; k++)
+            os88_poke(lem_cl_bank, LEM_GR_CUSTOM + k, (own[k] ^ 0x15) & 63);
+        for (k = 0; k < 8; k++)         /* eight 480x40 pieces, all clear */
+            for (o = 0; o < 4u * 60u * 40u; o++)
+                os88_poke(lem_cl_bank + (LEM_SP_HEAD >> 4) +
+                          (unsigned)k * (60u * 40u / 4u) + (o >> 4),
+                          o & 15, 0);
+        if (!ovl_spec_compose(0))
+            fail("a well-formed synthetic LSPB was refused by "
+                 "ovl_spec_compose");
+        if (os88_peek(lem_cl_bank, LEM_GR_CUSTOM) != ((own[0] ^ 0x15) & 63))
+            fail("ovl_spec_compose did not carry the picture's palette over "
+                 "the style bank (Lemmix AssemblePalette)");
+        ovl_bank_read(0);               /* the next ordinary level of set 0 */
+        ok = 1;
+        for (k = 0; k < 24; k++)
+            if (os88_peek(lem_cl_bank, LEM_GR_CUSTOM + k) != own[k])
+                ok = 0;
+        printf("  special then ordinary, same set: custom palette %s\n",
+               ok ? "re-read from the set's band" : "STILL THE PICTURE'S");
+        if (!ok)
+            fail("after a special level an ordinary level of the same set "
+                 "kept the picture's colours - ovl_bank_read answered from a "
+                 "bank ovl_spec_compose had poked");
+        /* ...and a hostile header with a NEGATIVE width is refused: cols 2 x
+         * pw -32288 wraps to 960 in sixteen bits */
+        lem_bank_have = -1;
+        os88_poke(lem_cl_bank, 0, 'L');
+        os88_poke(lem_cl_bank, 1, 'S');
+        os88_poke(lem_cl_bank, 2, 'P');
+        os88_poke(lem_cl_bank, 3, 'B');
+        os88_poke(lem_cl_bank, LEM_SP_PW, (-32288) & 255);
+        os88_poke(lem_cl_bank, LEM_SP_PW + 1, ((-32288) >> 8) & 255);
+        if (ovl_spec_compose(0))
+            fail("an LSPB header with a negative piece width was composed");
+        lem_bank_have = -1;
+        ovl_bank_read(0);
+        lem_abandon();
     }
 
     /* ...and with no memory it refuses in the window, with the arithmetic. */

@@ -44,15 +44,12 @@
  * kernel's; no long, float, double, bit-field or anonymous union; and frames
  * stay under 96 bytes.
  *
- * ONE ASSUMPTION RECORDED HERE RATHER THAN GUESSED AT. LEMS_GREY_SAVE, the
- * sentence behind the Save Progress row, names the live CD specifically ("The
- * live CD cannot be written..."), while the predicate this program greys on is
- * the broader one it can actually test: whether SYSTEM/APPDATA answered at all
- * (SPEC.md 19.9, lemovl.c's ovl_progress_read). On a floppy carrying only this
- * package and its bands there is no such folder, so the row greys with a
- * sentence one case narrower than the fact. Closing that is a one-line change
- * to tools/os88lem.py's string table - another agent's file in this wave - and
- * belongs with wave 4's progress work.
+ * LEMS_GREY_SAVE, the sentence behind the Save Progress row, says what the
+ * row is greyed ON - this disk's SYSTEM/APPDATA did not answer (SPEC.md 19.9,
+ * lemovl.c's ovl_progress_read) - and names the live CD as the one case of it
+ * that cannot be cured. Waves 1-3 carried a sentence about the live CD alone,
+ * one case narrower than the predicate; wave 4 broadened it in
+ * tools/os88lem.py's table (SPEC.md 114.8).
  * ==========================================================================*/
 
 #include "os88.h"
@@ -79,10 +76,14 @@
 #define LEM_RATBUF    2048          /* LEMR<n>.LEM is exactly this on every
                                      * disk and every geometry, so one rating's
                                      * bss is a constant */
-#define LEM_STRBUF    5120          /* LEMSTR.LEM is 4,608 today - 4,489 bytes
-                                     * of table in a 512-padded band - and is
-                                     * read WHOLE; it is the same on every
-                                     * geometry (tools/os88lem.py).
+#define LEM_STRBUF    5120          /* LEMSTR.LEM is 4,608 - the table
+                                     * padded to 512 - and is read WHOLE; it
+                                     * is the same on every geometry
+                                     * (tools/os88lem.py). Wave 4 broadened
+                                     * the Save Progress fact past the pad and
+                                     * raised this to 5,632 - 512 bytes of bss
+                                     * for 80 of text - and its review put it
+                                     * back by trimming the sentence instead.
                                      *
                                      * ONE 512-STEP ABOVE THE BAND, WHICH IS
                                      * EXACTLY WHAT THE REFUSAL NEEDS. The
@@ -218,39 +219,39 @@
 /* lemtab.c */
 static int  lem_state_fact(int row);
 static int  lem_state_label(int row);
-static int  lem_style_name(int style);
+static int  ovl_style_name(int style);
 
 /* lemtext.c */
 static int  lem_u16(const unsigned char *p, int off);
-static int  lem_u8(const unsigned char *p, int off);
-static void lem_u32dec(const unsigned char *p, int off, char *dst, unsigned cap);
+static int  ovl_u8(const unsigned char *p, int off);
+static void ovl_u32dec(const unsigned char *p, int off, char *dst, unsigned cap);
 static const char *lem_str(int id);
 static int  lem_str_load(void);
-static void lem_arg_reset(void);
-static void lem_arg_add(const char *s);
-static char *lem_arg_slot(void);
-static void lem_arg_num(unsigned v);
-static void lem_arg_pct(unsigned num, unsigned den);
-static void lem_arg_u32(const unsigned char *buf, int off);
-static void lem_fmt(char *dst, unsigned cap, const char *fmt);
-static void lem_para_fmt(const char *fmt);
+static void ovl_arg_reset(void);
+static void ovl_arg_add(const char *s);
+static char *ovl_arg_slot(void);
+static void ovl_arg_num(unsigned v);
+static void ovl_arg_pct(unsigned num, unsigned den);
+static void ovl_arg_u32(const unsigned char *buf, int off);
+static void ovl_sfmt(char *dst, unsigned cap, const char *fmt);
+static void ovl_para_fmt(const char *fmt);
 static void lem_setn(char *dst, unsigned cap, unsigned v);
 static void lem_fit(char *dst, unsigned cap, const char *src, int cols);
 static const char *lem_trim(const char *s);
-static void lem_para_reset(void);
-static void lem_para_add(const char *s);
-static void lem_para_nl(void);
+static void ovl_para_reset(void);
+static void ovl_para_add(const char *s);
+static void ovl_para_nl(void);
 static void lem_wrap(void);
 static const char *lem_wrap_line(int i);
 
 /* lemload.c */
-static int  lem_man_u16(int off);
-static int  lem_man_u8(int off);
-static const char *lem_geom(void);
-static int  lem_cost_row(int kind, int n);
-static int  lem_cost_clus(int kind, int n);
-static int  lem_cost_parts(int kind, int n);
-static const char *lem_bandname(int kind, int n);
+static int  ovl_man_u16(int off);
+static int  ovl_man_u8(int off);
+static const char *ovl_geom(void);
+static int  ovl_cost_row(int kind, int n);
+static int  ovl_cost_clus(int kind, int n);
+static int  ovl_cost_parts(int kind, int n);
+static const char *ovl_bandname(int kind, int n);
 static const unsigned char *lem_entry(int row);
 static int  lem_ent_u8(int row, int off);
 static int  lem_ent_u16(int row, int off);
@@ -258,19 +259,21 @@ static const char *lem_ent_name(int row);
 static int  lem_ent_here(int row);
 static int  lem_rating_load(int rating);
 static int  lem_data_load(void);
-static void lem_far(unsigned base, int lo, int hi);
-static int  lem_pk(unsigned seg, unsigned off);
-static int  lem_pk16(unsigned seg, unsigned off);
+static void ovl_far(unsigned base, int lo, int hi);
+static int  ovl_pk(unsigned seg, unsigned off);
+static int  ovl_pk16(unsigned seg, unsigned off);
 static int  ovl_claim_all(void);
 static void lem_free_all(void);
-static int  lem_need_kb(void);
-static int  ovl_parts_read(int nparts, unsigned seg);
+static int  ovl_need_kb(void);
+static int  ovl_parts_read(int nparts, unsigned seg, unsigned kb);
 static int  ovl_rec_read(int level);
-static void lem_stem_gr(int n);
-static void lem_stem_main(void);
+static void ovl_stem_gr(int n);
+static void ovl_stem_main(void);
 static int  ovl_main_read(void);
 static int  ovl_bank_read(int style);
-static int  lem_item(int id);
+static int  ovl_spec_read(int spec);
+static void ovl_stem_sp(int n);
+static int  ovl_item(int id);
 
 /* lemui.c */
 static int  lem_rowy(int row);
@@ -295,8 +298,8 @@ static void lem_play(void *win);
 
 /* lemgame.c - the per-frame step (SPEC.md 114.4.7) */
 static void lem_snd_cue(int ev);
-static void lem_snd_flush(void);
-static void lem_rr_adjust(void);
+static void ovl_snd_flush(void);
+static void ovl_rr_adjust(void);
 static void ovl_increment(void);
 static void ovl_spawn(void);
 static void ovl_nuke_step(void);
@@ -304,11 +307,10 @@ static void ovl_finished_check(void);
 static int  ovl_frame_begin(void);
 static int  lem_frame_chunk(int n);
 static void ovl_frame_end(void);
-static void lem_game_frame(void);
-static void lem_select_skill(int b);
-static void lem_toggle_pause(void);
-static void lem_nuke(void);
-static void lem_rr_extreme(int up);
+static void ovl_select_skill(int b);
+static void ovl_toggle_pause(void);
+static void ovl_nuke(void);
+static void ovl_rr_extreme(int up);
 
 /* lemobj.c - the objects and the frames everything is drawn from */
 static void lem_far_add(unsigned n);
@@ -318,7 +320,7 @@ static int  lem_mask_at(int row, int f);
 static void lem_trap(int i);
 static void ovl_obj_step(void);
 static void ovl_obj_draw(int i);
-static int  lem_obj_hits(int i, int x, int y, int w, int h);
+static int  ovl_obj_hits(int i, int x, int y, int w, int h);
 static void ovl_obj_redraw_rect(int x, int y, int w, int h);
 static void ovl_obj_all(void);
 
@@ -360,29 +362,29 @@ static int  ovl_level_load(int level);
 static int  lem_compose_level(int level);
 static void lem_world_clear(void);
 static void ovl_mm_sample(void);
-static int  lem_mm_bit(int mx, int my);
-static int  lem_mm_ink(int v, int on);
-static void lem_mm_row(int my, int c0, int c1);
-static void lem_mm_col(int mx, int r0, int r1);
-static void lem_mm_draw(void);
-static void lem_view_rect(int erase_from);
-static void lem_status_template(void);
-static void lem_status_field(int col, const char *s, int n);
-static void lem_panel_draw(void);
+static int  ovl_mm_bit(int mx, int my);
+static int  ovl_mm_ink(int v, int on);
+static void ovl_mm_row(int my, int c0, int c1);
+static void ovl_mm_col(int mx, int r0, int r1);
+static void ovl_mm_draw(void);
+static void ovl_view_rect(int erase_from);
+static void ovl_status_template(void);
+static void ovl_status_field(int col, const char *s, int n);
+static void ovl_panel_draw(void);
 static void ovl_frame_panel(void);
-static void lem_load_bar(int n);
+static void ovl_load_bar(int n);
 static void lem_damage(int x, int y, int w, int h);
-static int  lem_mm_vr(int mx, int my);
-static void lem_mm_cell(int mx, int my);
+static int  ovl_mm_vr(int mx, int my);
+static void ovl_mm_cell(int mx, int my);
 static void ovl_mm_clear(int x, int y, int big);
 static void ovl_mm_dots(void);
-static void lem_dirty_count(int b);
-static void lem_dirty_sel(int b);
+static void ovl_dirty_count(int b);
+static void ovl_dirty_sel(int b);
 static void lem_dirty_stat(void);
-static void lem_stat_time(void);
+static void ovl_stat_time(void);
 static void ovl_count_draw(int b);
 static void ovl_sel_draw(int b, int on);
-static void lem_padr(char *dst, const char *s, int n);
+static void ovl_padr(char *dst, const char *s, int n);
 static void ovl_stat_build(void);
 static void ovl_stat_delta(void);
 static void ovl_panel_live(void);
@@ -397,14 +399,14 @@ static void ovl_objs_mark(void);
 static void ovl_obj_vis(void);
 static int  ovl_sbox(int i);
 static void ovl_obox_forget(void);
-static void ovl_vframe(void);
+static void ovl_vframe(int step);
 static void ovl_dmg_fold(int x, int y, int w, int h);
 static void ovl_mm_build(void);
 static void ovl_mm_cells(void);
 static int  ovl_pan_hit(int cx, int cy, int vr, int ox);
-static void lem_cursor_off(void);
-static int  lem_cur_shape(void);
-static void lem_cursor_on(void);
+static void ovl_cursor_off(void);
+static int  ovl_cur_shape(void);
+static void ovl_cursor_on(void);
 static void ovl_frame_first(int resume);
 static void ovl_frame_draw(void);
 static int  ovl_view_follow(int drew);
@@ -413,7 +415,7 @@ static int  ovl_rhit(int x0, int y0, int x1, int y1, int bx0, int by0,
                      int bx1, int by1);
 static int  ovl_cur_hit(int cx, int cy, int drew);
 static void lem_view_move(int dx);
-static void lem_mouse_map(void);
+static void ovl_mouse_map(void);
 
 /* THE RASTER, and none of it is C (SPEC.md 73.11). These are the entry points
  * apps/lemmings/lemblit.inc, lemmask.inc and lemfont.inc define; they are NOT
@@ -475,6 +477,7 @@ void lem_r_cdraw(void);
 void lem_r_vstart(int x);
 void lem_r_vpan(void);
 void lem_r_cursor(const unsigned char *bits, int sx, int sy);
+void lem_r_cplace(const unsigned char *bits, int sx, int sy);
 extern unsigned char lem_sprec[];   /* lemsprite.inc's records: on VGA, the
                                      * frame's boxes (lemdraw.c lem_obox) */
 void lem_r_bgrect(int x, int y, int w, int h, int sync);
@@ -500,6 +503,7 @@ static void ovl_data_leave(void);
 static int  ovl_progress_read(void);
 static int  ovl_progress_write(int rating, int level);
 static int  ovl_compose(int level);
+static int  ovl_spec_compose(int style);
 static void ovl_types(void);
 static void ovl_objects(unsigned base);
 static void ovl_objmap(void);
@@ -510,7 +514,7 @@ static int  ovl_postview(int rating, int level);
 static int  lem_probe_mode(void *win);
 static int  lem_mode_id(void);
 static int  lem_kind_id(void);
-static int  lem_raster_ok(void);
+static int  ovl_raster_ok(void);
 static void ovl_launch(void *win);
 static void lem_ask_launch(void *win);
 static void lem_abandon(void);
@@ -742,7 +746,7 @@ static int lem_probe_mode(void *win)
     return (caps & (1 << OS88_FSXM_VGA0D)) != 0;
 }
 
-/* lem_mode_id / lem_kind_id / lem_raster_ok - WHICH MODE THIS ADAPTER PLAYS IN,
+/* lem_mode_id / lem_kind_id / ovl_raster_ok - WHICH MODE THIS ADAPTER PLAYS IN,
  * and it is not the one the Mode row is about.
  *
  * The Mode ROW is greyed by lem_mode_ok, which asks specifically for
@@ -775,7 +779,7 @@ static int lem_kind_id(void)
                                      * 0x000F, the CGA-compatible modes only */
 }
 
-static int lem_raster_ok(void)
+static int ovl_raster_ok(void)
 {
     return lem_caps > 0 && (lem_caps & (1 << lem_mode_id())) != 0;
 }
@@ -1042,6 +1046,13 @@ void os88_onwake(void *win)
         lem_savable = ovl_progress_read();
         lem_mark_range(lem_staterow, lem_staterow + LEM_STATE_ROWS - 1);
         drew = 1;
+        /* the saved progress is where the player starts, as the original's
+         * code entry would put them (wave 4 review) - unless they have
+         * already moved */
+        if (lem_sel == 0 && lem_prog[lem_rating] > 0) {
+            lem_sel = lem_prog[lem_rating];
+            full = 1;
+        }
     }
 
     /* THE RATING THE USER ASKED FOR, read here rather than on the key that
@@ -1055,21 +1066,22 @@ void os88_onwake(void *win)
     if (lem_ratpend) {
         lem_ratpend = 0;
         lem_rating_load(lem_rating);
-        lem_sel = 0;
-        lem_top = 0;
+        lem_sel = lem_prog[lem_rating] > 0 ? lem_prog[lem_rating] : 0;
+        lem_top = 0;                /* lem_layout pages to lem_sel */
         drew = 1;
         full = 1;                   /* every level row and the pane */
     }
 
     /* ...AND THE PROGRESS WRITE, which is the same defect one size down: two
      * ordinal walks to find SYSTEM and APPDATA and then a write that rewrites
-     * the FAT and a directory entry, on Enter, Space or a Play click. Nothing
-     * on the glass waits for it - lem_prog[] was updated in memory at the
-     * keystroke and the Save Progress row is lettered from THAT - so there is
-     * no ordering to preserve and nothing to repaint for. */
+     * the FAT and a directory entry, on Enter, Space or a Play click. A write
+     * that did not happen is said by ovl_progress_write itself (the record
+     * back to the file's, the row greyed, its fact as a toast), and its rows
+     * are repainted here (wave 4 review: the status was dropped). */
     if (lem_progwrite) {
         lem_progwrite = 0;
-        ovl_progress_write(lem_pw_rat, lem_pw_lvl);
+        if (!ovl_progress_write(lem_pw_rat, lem_pw_lvl))
+            drew = 1;
     }
 
     /* ...AND THE POSTVIEW'S "next level" ACROSS A SECTION'S END, once the
@@ -1216,6 +1228,8 @@ void os88_about(void *win)
 #define LEM_K_F12    0x86
 #define LEM_K_CF1    0x5E
 #define LEM_K_CF2    0x5F
+#define LEM_K_CLEFT  0x73           /* Ctrl+Left / Ctrl+Right: int 16h's own */
+#define LEM_K_CRIGHT 0x74           /* codes for the pair, on both BIOS pairs */
 /* ...and the MAKE codes the kernel's key map is indexed by (os88_key_down),
  * which is how a held F1 is told from a released one: int 16h has presses
  * and no releases */
@@ -1223,26 +1237,60 @@ void os88_about(void *win)
 #define LEM_M_F2     0x3C
 #define LEM_M_F11    0x57
 #define LEM_M_F12    0x58
+#define LEM_M_CTRL   0x1D
 
-#define LEM_SCROLL_STEP  4          /* world pixels a TICK, of a held key's
-                                     * repeat or of the pointer against the
-                                     * edge. FOUR rather than eight: it is the
-                                     * CGA's own snap (one byte of 2bpp),
-                                     * Hercules moves one 8-pixel snap every
-                                     * other step, and VGA pans in hardware.
-                                     * The edge scroll is multiplied by the
-                                     * ticks the pass took (ovl_mouse_input),
-                                     * so it is 4 x 18.2 = 72.8 px a second
-                                     * whatever a pass costs, up to the four
-                                     * ticks ovl_play_loop clamps dt to - a
-                                     * 178 ms shadow-scrolling pass is ~3.2
-                                     * ticks and moves 12 px. A shadow scroll
-                                     * is priced per COMPOSE, not per pixel, so
-                                     * a late pass moving further is free */
+/* LEMMIX'S THREE ADDITIONS TO THE KEYBOARD, carried and named as such
+ * (SPEC.md 114.10): Left / Right scroll the view and Ctrl+Left / Ctrl+Right
+ * scroll it one pixel (GameScreen.Player.pas:493-509 and :548-560, KeyDown
+ * sets KeyBoardScroll and CheckScroll moves SCROLL_PIXELS_NORMAL = 8, or
+ * SCROLL_PIXELS_PRECISE = 1 with Ctrl, every INTERVAL_SCROLL = 58 ms until
+ * KeyUp), and Ctrl+F1 / Ctrl+F2 set the release rate to its extreme while
+ * paused (:475, "#EL 2008-04-28 ... *only* when pausing!"). None of them is
+ * the 1991 game's, whose keys are F1-F12; each displaces nothing. */
+#define LEM_SCROLL_STEP  8          /* world pixels a TICK, of a HELD arrow
+                                     * or of the pointer against the edge:
+                                     * Lemmix's SCROLL_PIXELS_NORMAL, every
+                                     * INTERVAL_SCROLL = 58 ms
+                                     * (GameScreen.Player.pas:251, :37), so
+                                     * 8 x 18.2 = 146 px a second against
+                                     * Lemmix's ~138. Eight is also a whole
+                                     * snap on every card - two CGA bytes, one
+                                     * Hercules byte - so Hercules moves on
+                                     * every step. The step is multiplied by
+                                     * the ticks the pass took
+                                     * (ovl_mouse_input, ovl_arrow_hold), up to
+                                     * the four ticks ovl_play_loop clamps dt
+                                     * to - a 178 ms shadow-scrolling pass is
+                                     * ~3.2 ticks and moves 24 px. A shadow
+                                     * scroll is priced per COMPOSE, not per
+                                     * pixel, so a late pass moving further is
+                                     * free. (Wave 3 took 4, the CGA's snap,
+                                     * which was half Lemmix's speed and a
+                                     * number from neither reference.) */
 #define LEM_SCROLL_MAX  (8 * LEM_SCROLL_STEP)   /* a tick's whole fold */
-#define LEM_DBL          5          /* ticks: Lemmix's INTERVAL_NUKE_KEY is
-                                     * 250 ms, and the panel's nuke wants a
-                                     * double click inside the same */
+
+/* THE SUPERLEMMING (LVL 0x001E, wave 4): the level runs fast, at LEMMIX'S
+ * ratio, because the base credit of 170 a tick IS Lemmix's 58 ms frame:
+ * INTERVAL_FRAME_SUPERLEMMING 20 against INTERVAL_FRAME 58
+ * (GameScreen.Player.pas:34-35, read at :849-851 and :1046-1049), so the
+ * frame credit a tick is 170 x 58 / 20 = 493 - up to three game frames a
+ * pass, and on an XT still one frame however long it takes. (Wave 4 first
+ * took lemmings_3ds's 71/28 = 431 on top of Lemmix's base, two references
+ * mixed, and said Lemmix never read its constant; review.) No level of the
+ * 120 sets the flag (measured, tools/os88lem.py); it is carried so the
+ * record's every field means what it says. */
+#define LEM_SUPER_CREDIT 493
+#define LEM_SUPER_MAX      3
+#define LEM_DBLKEY       5          /* ticks, F12 twice: Lemmix's
+                                     * INTERVAL_NUKE_KEY, 250 ms
+                                     * (GameScreen.Player.pas:38, :453) */
+#define LEM_DBLBTN       9          /* ticks, the panel's mushroom clicked
+                                     * twice: Lemmix asks the OS for a double
+                                     * click (ssDouble, Player.pas:928-930),
+                                     * 500 ms by default, which is also this
+                                     * kernel's own double-click window
+                                     * (UI_TDBLT, DESK_DBLT and FM_DBLCLK are
+                                     * all 9 ticks - SPEC.md 11.95) */
 
 #define LEM_X_FAIL     0            /* why the bracket returned: the compose
                                      * refused (a band read) */
@@ -1256,6 +1304,10 @@ static int lem_mbtn;                /* the mouse buttons last tick */
 static int lem_mmdrag;              /* a left press began in the minimap */
 static unsigned lem_nuket;          /* the last nuke press, in ticks */
 static int lem_f11up, lem_f12up;    /* the key was seen UP since its last press */
+static int lem_arkey;               /* the arrow's make code held, or 0 */
+static int lem_arsign;              /* ...its direction, -1 or 1 */
+static int lem_arnew;               /* ...pressed THIS pass: one step owed
+                                     * even if it is already up again */
 static int lem_dx;                  /* this tick's scroll, folded from every
                                      * key and the pointer - a static, because
                                      * an automatic's address is refused
@@ -1277,32 +1329,38 @@ static int ovl_key(int k)
     if (ascii == 'f' || ascii == 'F')
         return LEM_X_SUSPEND;       /* SPEC.md 11.2.1's fullscreen door, a
                                      * BINDING reservation in both directions */
-    if (scan == LEM_K_LEFT)
-        lem_dx -= LEM_SCROLL_STEP;
-    else if (scan == LEM_K_RIGHT)
-        lem_dx += LEM_SCROLL_STEP;
-    else if (scan == LEM_K_F1) {
+    if (scan == LEM_K_LEFT || scan == LEM_K_CLEFT) {
+        /* KeyDown sets KeyBoardScroll and the TICK scrolls (ovl_arrow_hold):
+         * a typematic repeat only says the key is still down */
+        lem_arkey = LEM_K_LEFT;
+        lem_arsign = -1;
+        lem_arnew = 1;
+    } else if (scan == LEM_K_RIGHT || scan == LEM_K_CRIGHT) {
+        lem_arkey = LEM_K_RIGHT;
+        lem_arsign = 1;
+        lem_arnew = 1;
+    } else if (scan == LEM_K_F1) {
         lem_rrdir = -1;
         lem_rrkey = LEM_M_F1;
     } else if (scan == LEM_K_F2) {
         lem_rrdir = 1;
         lem_rrkey = LEM_M_F2;
     } else if (scan == LEM_K_CF1) {
-        lem_rr_extreme(0);
+        ovl_rr_extreme(0);
     } else if (scan == LEM_K_CF2) {
-        lem_rr_extreme(1);
+        ovl_rr_extreme(1);
     } else if (scan >= LEM_K_F3 && scan <= LEM_K_F10) {
-        lem_select_skill(LB_CLIMBER + (scan - LEM_K_F3));
+        ovl_select_skill(LB_CLIMBER + (scan - LEM_K_F3));
     } else if (scan == LEM_K_F11) {
         if (lem_f11up)              /* "if fKeyIsDown < 2": a typematic
                                      * repeat does not toggle again */
-            lem_toggle_pause();
+            ovl_toggle_pause();
         lem_f11up = 0;
     } else if (scan == LEM_K_F12) {
         /* "double keypress needed to prevent accidently nuking" (:449) */
         if (lem_f12up) {
             now = os88_ticks();
-            if (now - lem_nuket <= LEM_DBL)
+            if (now - lem_nuket <= LEM_DBLKEY)
                 ovl_nuke_press();
             lem_nuket = now;
         }
@@ -1345,16 +1403,16 @@ static void ovl_panel_press(int px, int py)
         lem_rrbtn = 1;
         break;
     case LB_PAUSE:
-        lem_toggle_pause();
+        ovl_toggle_pause();
         break;
     case LB_NUKE:
         now = os88_ticks();
-        if (now - lem_nuket <= LEM_DBL)     /* "nuke requires doubleclick" */
+        if (now - lem_nuket <= LEM_DBLBTN)  /* "nuke requires doubleclick" */
             ovl_nuke_press();
         lem_nuket = now;
         break;
     default:
-        lem_select_skill(b);
+        ovl_select_skill(b);
         break;
     }
 }
@@ -1385,7 +1443,7 @@ static void ovl_nuke_press(void)
     if (lem_infr)
         lem_qnuke = 1;
     else
-        lem_nuke();
+        ovl_nuke();
 }
 
 /* ovl_q_apply - the queue, at the frame boundary (ovl_frame_begin). */
@@ -1398,7 +1456,7 @@ static void ovl_q_apply(void)
     }
     if (lem_qnuke) {
         lem_qnuke = 0;
-        lem_nuke();
+        ovl_nuke();
     }
 }
 
@@ -1410,7 +1468,7 @@ static void ovl_mouse_input(int dt)
     int left, right, press, btn;
 
     os88_mouse(&m);
-    lem_mouse_map();
+    ovl_mouse_map();
     /* THE BUTTONS ARE THE LEVEL NOW OR'D WITH WHAT THE LAST LONG DRAW SAW
      * (lemblit.inc lb_msample): a click that went down and up inside a 178 ms
      * shadow scroll is a press here and a release on the next pass */
@@ -1457,6 +1515,33 @@ static void ovl_mouse_input(int dt)
     }
 }
 
+/* ovl_arrow_hold - a held arrow scrolls every tick until it reads UP, the
+ * way F1/F2 are driven (int 16h has presses and no releases, so the kernel's
+ * key map says when it let go). Ctrl held is Lemmix's precise step. */
+static void ovl_arrow_hold(int dt)
+{
+    int step;
+
+    if (!lem_arkey)
+        return;
+    if (!lem_arnew && !os88_key_down(lem_arkey)) {
+        lem_arkey = 0;
+        return;
+    }
+    lem_arnew = 0;
+    /* THE PRECISE STEP IS THE CARD'S OWN SMALLEST PAN: one pixel on VGA,
+     * the snap on the other two (4 on CGA, 8 on Hercules, lemblit.inc .snap).
+     * A one-pixel step there left lem_view off the snap the glass is drawn
+     * at, and the hit test, the margin and the pointer's lemming all read the
+     * raw view - so a skill could go to the lemming up to 7 pixels beside the
+     * one drawn under the pointer (wave 4 review). */
+    step = LEM_SCROLL_STEP;
+    if (os88_key_down(LEM_M_CTRL))
+        step = lem_kind_id() == LEM_RKIND_VGA ? 1
+             : lem_kind_id() == LEM_RKIND_CGA ? 4 : 8;
+    lem_dx += lem_arsign * step * dt;
+}
+
 /* ovl_play_loop - the loop the header describes. */
 static void ovl_play_loop(void)
 {
@@ -1470,6 +1555,8 @@ static void ovl_play_loop(void)
     lem_mmdrag = 0;
     lem_f11up = 0;
     lem_f12up = 0;
+    lem_arkey = 0;
+    lem_arnew = 0;
     lem_mbtn = 0xFF;                /* a button already down is not a press */
     lem_exit = -1;
     for (;;) {
@@ -1492,6 +1579,7 @@ static void ovl_play_loop(void)
         if (lem_exit >= 0)
             break;
         ovl_mouse_input(dt);
+        ovl_arrow_hold(dt);
         if (lem_rrkey && !os88_key_down(lem_rrkey)) {
             lem_rrkey = 0;          /* Form_KeyUp: BtnStopChangingReleaseRate */
             if (!lem_rrbtn)
@@ -1510,30 +1598,39 @@ static void ovl_play_loop(void)
 
         /* --- the world: one game frame, a chunk at a time ---------------- */
         drew = 0;
-        acc += dt * 170;            /* 17 frames in 18.2 ticks: 170 a tick */
-        if (!lem_infr && acc >= 182) {
-            acc -= 182;
-            if (acc > 182)
-                acc = 182;          /* late is late: no burst to catch up */
-            if (!ovl_frame_begin() && lem_finished) {
-                lem_exit = LEM_X_DONE;
-                break;
+        acc += dt * (lem_super ? LEM_SUPER_CREDIT : 170);
+                                    /* 17 frames in 18.2 ticks: 170 a tick */
+        for (k = 0; k < (lem_super ? LEM_SUPER_MAX : 1); k++) {
+            if (!lem_infr && acc >= 182) {
+                acc -= 182;
+                if (acc > (lem_super ? LEM_SUPER_MAX * 182 : 182))
+                    acc = lem_super ? LEM_SUPER_MAX * 182 : 182;
+                                    /* late is late: no burst to catch up */
+                if (!ovl_frame_begin() && lem_finished)
+                    break;
             }
+            if (lem_infr && lem_frame_chunk(LEM_STEP_MAX)) {
+                ovl_frame_end();
+                drew = 1;
+            }
+            if (lem_infr || acc < 182)
+                break;              /* a frame still being stepped, or none
+                                     * due: the next pass */
         }
-        if (lem_infr && lem_frame_chunk(LEM_STEP_MAX)) {
-            ovl_frame_end();
-            drew = 1;
+        if (lem_finished && !drew && !lem_infr) {
+            lem_exit = LEM_X_DONE;
+            break;
         }
 
         /* --- the glass ---------------------------------------------------- */
         ovl_tick_draw(drew, (lem_mbtn >> 1) & 1);
-        lem_snd_flush();
+        ovl_snd_flush();
         if (lem_finished) {
             lem_exit = LEM_X_DONE;
             break;
         }
     }
-    lem_cursor_off();
+    ovl_cursor_off();
 }
 
 static void lem_fsx_main(void)
@@ -1679,7 +1776,7 @@ static void ovl_launch(void *win)
     level = lem_suspended ? lem_playing : lem_sel;
     if (!lem_suspended && !lem_play_ok())
         ok = LEM_LR_GONE;
-    else if (!lem_raster_ok())
+    else if (!ovl_raster_ok())
         ok = LEM_LR_MODE;
     else if (lem_suspended)
         ok = LEM_LR_GO;
@@ -1764,9 +1861,9 @@ static void ovl_launch(void *win)
             lem_abandon();          /* the compose refused: say so */
             lem_screen = LEM_SC_LIST;
             os88_gfx_unlock();
-            lem_arg_reset();
-            lem_arg_add(lem_f_scratch);
-            lem_fmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_BANK));
+            ovl_arg_reset();
+            ovl_arg_add(lem_f_scratch);
+            ovl_sfmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_BANK));
             os88_toast(lem_line, 0);
             return;
         }
@@ -1791,14 +1888,14 @@ static void ovl_launch(void *win)
     os88_gfx_unlock();
     if (ok == LEM_LR_FILE) {
         if (lem_load_err == LEM_LE_MEM) {
-            lem_arg_reset();
-            lem_arg_num((unsigned)lem_need_kb());
-            lem_arg_num(os88_mem_largest_kb());
-            lem_fmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_MEM));
+            ovl_arg_reset();
+            ovl_arg_num((unsigned)ovl_need_kb());
+            ovl_arg_num(os88_mem_largest_kb());
+            ovl_sfmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_MEM));
         } else {
-            lem_arg_reset();
-            lem_arg_add(lem_f_scratch);   /* the name the reader left */
-            lem_fmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_BANK));
+            ovl_arg_reset();
+            ovl_arg_add(lem_f_scratch);   /* the name the reader left */
+            ovl_sfmt(lem_line, sizeof(lem_line), lem_str(LEMS_NO_BANK));
         }
         os88_toast(lem_line, 0);
     }

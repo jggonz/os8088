@@ -266,8 +266,52 @@ def cluster_bytes(geom):
 
 
 # SPEC.md 114.9: "Package plus overlay is ~57,000 bytes = 56 clusters". Plus
-# LEVELS.TXT and README.TXT, which are small and are still files.
+# LEVELS.TXT and README.TXT, which are small and are still files. ONLY THE
+# FALLBACK now: the Makefile hands the built package's files over with --pkg,
+# and the disk's clusters are then MEASURED (class Reserve) - the estimate,
+# rounded once, said 340 spent where the built 360KB disk used 336, and greyed
+# two levels that fitted (wave 4 review).
 PKG_RESERVE = 57000 + 4096
+
+# LEMMINGS.SAV (SPEC.md 114.8): written at run time into SYSTEM/APPDATA, so it
+# is on no image as built and every plan leaves it TWO clusters - one for the
+# file, and one for the chain a REPLACE puts down before it frees the old one
+# (SPEC.md 18.4's write order, steps 1-4). With one, the first save took the
+# last cluster and every save after it failed on a full disk (wave 4 review).
+SAV_CLUSTERS = 2
+
+
+class Reserve(object):
+    """What a LEMMINGS disk carries besides the band files, in CLUSTERS of the
+    geometry at hand.
+
+    With `pkg` (the sizes of the files the image recipe puts beside the bands -
+    LEMMINGS.O88 and README.TXT) it is the image's own arithmetic, mirroring
+    the Makefile's $(BUILD)/lemmings*.img recipes: every file in ONE LEMMINGS
+    folder, whose directory is (2 + files) x 32 bytes of clusters; SYSTEM and
+    SYSTEM/APPDATA beside it, a cluster each; and the warm ASSOC.DAT
+    tools/os88disk.py writes at the root for any package it is handed (SPEC.md
+    54.7), one cluster. `--check-image` holds the mirror to the built image,
+    so a change on either side refuses rather than printing a wrong fact.
+    Without `pkg`, the old byte estimate (the fixture, a standalone run)."""
+
+    def __init__(self, pkg=None, nbytes=PKG_RESERVE):
+        self.pkg = pkg
+        self.est = nbytes
+
+    @property
+    def nbytes(self):
+        return sum(self.pkg) if self.pkg is not None else self.est
+
+    def clusters(self, geom, nbandfiles):
+        cb = cluster_bytes(geom)
+        if self.pkg is None:
+            return (self.est + cb - 1) // cb
+        n = sum((size + cb - 1) // cb for size in self.pkg)
+        n += ((2 + nbandfiles + len(self.pkg)) * 32 + cb - 1) // cb
+        n += 2                          # SYSTEM, SYSTEM/APPDATA
+        n += 1                          # ASSOC.DAT
+        return n
 
 # SPEC.md 114.3.1: the world, and the five sets.
 WORLD_W, WORLD_H = 1584, 160
@@ -284,11 +328,16 @@ MANIFEST_HEADER = 512
 SPEC_W, SPEC_H, SPEC_BPP = 960, 160, 3
 SPEC_CHUNK_BYTES = SPEC_W * 40 * SPEC_BPP // 8      # 14,400
 SPEC_PALETTE_BYTES = 40
+SPEC_X = 304                    # where every reader draws it (SPEC.md 114.3.1)
+SPEC_PW, SPEC_PH = 480, 40      # one piece: lem_r_wpiece's widest row and
+SPEC_PCOLS = SPEC_W // SPEC_PW  # the DAT's own 40-row chunk
+SPEC_PROWS = SPEC_H // SPEC_PH
+LSPB_VERSION = 2                # 2: pieces (wave 4); 1 was whole planes
 SPEC_X, SPEC_Y = 304, 0
 
 
 # THE RASTER'S ROW BUFFERS, asserted here BY NAME before a band is written
-# (apps/lemmings/lemovl.c lem_dims_ok, which refuses the same picture at run
+# (apps/lemmings/lemovl.c ovl_dims_ok, which refuses the same picture at run
 # time, and tests/unit/t_lemdat.py a third time): a picture's row is
 # (w + 7) // 8 bytes, at most RASTER_BPR_MAX so that shifted (+1) and doubled
 # on a CGA (2 x bpr + 1) it fits lemsprite.inc's 24-byte lb_sorb/lb_srow, and
@@ -571,7 +620,12 @@ def parse_level(rec):
     L.start_x = u16(0x18)
     L.ground_set = u16(0x1A)
     L.extended_set = u16(0x1C)                  # non-zero => VGASPEC(n-1)
-    L.superlemming = (u16(0x1E) != 0)
+    # LVL 0x001E-0x001F: the SUPERLEMMING flag. Lemmix Level.Loader.pas:104
+    # `SuperLemming := (LVL.Reserved = $FFFF)`, lemmings_3ds
+    # import_level.c:541-542 the same two bytes 0xFF - the value, not
+    # "non-zero" (wave 4). No level of the 120 sets it, MEASURED; the flag is
+    # carried so the format is whole (SPEC.md 114.3).
+    L.superlemming = (u16(0x1E) == 0xFFFF)
 
     L.objects = []
     for i in range(32):
@@ -929,7 +983,10 @@ STRINGS = [
     # style PACK's description there (GameScreen.Preview.pas
     # StyleDecriptor = Style.StyleInformation.Description). For the DOS
     # original that is "Lemmings" on all 120 rows and says nothing, so this
-    # port carries the GRAPHIC SET instead (SPEC.md 114.1's Style row).
+    # port carries the GRAPHIC SET instead (SPEC.md 114.1's Style row). A
+    # SPECIAL level has no terrain set - its terrain is the 960x160 picture
+    # and the set lends only the objects - so on its four rows the line is
+    # LEFT OUT (lemovl.c ovl_fmt) rather than given a name of the port's own.
     ("STYLE0", "Dirt", "lemmings_lvl_file_format.txt, bytes 0x001A-0x001B"),
     ("STYLE1", "Fire", "lemmings_lvl_file_format.txt, bytes 0x001A-0x001B"),
     ("STYLE2", "Squasher", "lemmings_lvl_file_format.txt, bytes 0x001A-0x001B"),
@@ -1034,10 +1091,18 @@ STRINGS = [
      "SPEC.md 114.8, the greyed table, the preview and postview LAYOUT on "
      "CGA and EGA - the whole cell but its cross-reference"),
     ("GREY_SAVE",
-     "The live CD cannot be written; the session is played and the result "
-     "is shown, and nothing is recorded.",
+     "LEMMINGS.SAV could not be written in SYSTEM/APPDATA (a live CD never "
+     "can); nothing more is recorded.",
      "SPEC.md 114.8, the greyed table, Save Progress on a read-only medium - "
-     "the whole cell but its cross-reference"),
+     "the cell's sentence, BROADENED in wave 4 to the predicate the row is "
+     "greyed on (whether SYSTEM/APPDATA answered on this instance's own "
+     "volume, lemovl.c ovl_data_enter), of which the live CD is one case. "
+     "Trimmed in wave 4's review so LEMSTR.LEM stays inside LEM_STRBUF = "
+     "5,120 (512 bytes of bss for 80 of text was the alternative). "
+     "Reworded in wave 4's second review to cover the OTHER way the row "
+     "greys: a write that failed after SYSTEM/APPDATA answered (a full "
+     "disk, a write-protected one), which ovl_progress_write now says with "
+     "this sentence and then greys the row on"),
     ("GREY_SOUND",
      "os88_snd_caps() answered no tone capability - the same predicate "
      "os88_snd_tone would refuse on.",
@@ -1133,9 +1198,9 @@ STRINGS = [
      "bytes and clusters (LEMMAN offsets 132 and 136), this disk's clusters "
      "and the clusters already spent"),
     ("MISS_ROOM",
-     "This level's own record is not on a %s disk: the graphic sets and the "
-     "levels that fit took %s of this disk's %s clusters, and a group of "
-     "eight more records costs %s.",
+     "This level's own record is not on a %s disk: what is on it takes %s of "
+     "this disk's %s clusters, LEMMINGS.SAV keeps two, and a group of eight "
+     "more records costs %s.",
      "the third reason, which SPEC.md 114.8's table does not have a row for "
      "because 114.9 states it as the 360KB rule instead: two graphic sets "
      "and ONLY THE LEVELS THAT USE THEM. Some of those levels still do not "
@@ -1351,6 +1416,18 @@ def write_lemstr_h(path):
     lines.append("")
     lines.append("#endif /* LEMSTR_H */")
     text = "\n".join(lines) + "\n"
+    # WRITTEN ONLY WHEN IT CHANGED. The header is a prerequisite of the
+    # package's compile and of its host checks, and the band conversion runs
+    # AFTER the package (it measures LEMMINGS.O88, --pkg): re-stamping an
+    # identical header there made every `make lemmingsdisk` rebuild the
+    # package, which re-ran the conversion, which re-stamped the header
+    # (wave 4 review).
+    try:
+        with open(path) as fh:
+            if fh.read() == text:
+                return text
+    except (IOError, OSError):
+        pass
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -1432,10 +1509,15 @@ class Disk(object):
     def nbytes(self):
         return sum(len(d) for (_, d) in self.files)
 
-    def nclusters(self, extra_bytes=0):
+    def nclusters(self, reserve=None, pending=0):
+        """The clusters the band files take, and with `reserve` everything
+        else the image carries; `pending` band files are still to be added
+        and count in the LEMMINGS folder's directory."""
         cb = cluster_bytes(self.geom)
         n = sum((len(d) + cb - 1) // cb for (_, d) in self.files)
-        return n + (extra_bytes + cb - 1) // cb
+        if reserve is not None:
+            n += reserve.clusters(self.geom, len(self.files) + pending)
+        return n
 
 
 # ---------------------------------------------------------------------------
@@ -1692,24 +1774,65 @@ class DataSet(object):
         return bytes(head) + bytes(data)
 
     def special_bank(self, i):
-        """LEMSP<i>: a 960x160 picture at 4bpp planar."""
+        """LEMSP<i>: a 960x160 picture at 4bpp planar, WRITTEN AS PIECES.
+
+        Version 2 (wave 4, SPEC.md 114.3.1's VGASPEC row): the picture is
+        SPEC_PCOLS x SPEC_PROWS pieces of SPEC_PW x SPEC_PH, row-major, each
+        laid out exactly as a terrain piece is - plane 0, 1, 2, then plane 3,
+        the mask, one plane stride (w/8 * h) apart - so the package composes a
+        special level with the SAME routine, lem_r_wpiece, at x = 304 + c *
+        SPEC_PW, y = r * SPEC_PH, and no new assembly. 480 and not 960, because
+        lem_r_wpiece shifts one row of the mask through a 96-byte buffer
+        (lemblit.inc lb_mrow) and a 960-pixel row is 121 bytes shifted; 40
+        rows, because that is the DAT's own chunk. The total is unchanged,
+        76,800 bytes, so the cluster arithmetic is too.
+
+        THE PALETTE IS LEMMIX'S (Styles.Base.pas AssemblePalette and the
+        special arm above it): the picture's own eight colours REPLACE the
+        ground set's custom eight, entry 8 is then the hardcoded
+        Color32(124, 124, 0) ("for special graphics we use a hardcoded color
+        for now"), which is 31, 31, 0 in the DAC's six bits, and the standard
+        eight are the level's ground set's - written at the style bank's own
+        offsets, 32 and 56, so lem_r_pal reads a special bank exactly as it
+        reads a style bank."""
         pal, ega, chunks = self.specs[i]
         pixels = spec_planes(chunks)
         if len(pixels) != SPEC_W * SPEC_H * 4 // 8:
             raise Refused("special %d assembled to %d bytes, not %d"
                           % (i, len(pixels), SPEC_W * SPEC_H * 4 // 8))
+        grounds = sorted(set(lev["style"] for lev in self.levels
+                             if lev["special"] == i))
+        if len(grounds) != 1:
+            raise Refused("special %d is used by levels of %d ground sets %s; "
+                          "its bank carries ONE standard palette"
+                          % (i, len(grounds), grounds))
+        plane = SPEC_W * SPEC_H // 8
+        stride = SPEC_W // 8
+        pbpr = SPEC_PW // 8
+        pieces = bytearray()
+        for r in range(SPEC_PROWS):
+            for c in range(SPEC_PCOLS):
+                for p in range(4):
+                    for y in range(r * SPEC_PH, (r + 1) * SPEC_PH):
+                        o = p * plane + y * stride + c * pbpr
+                        pieces += pixels[o:o + pbpr]
+        assert len(pieces) == len(pixels)
         head = bytearray(512)
         head[0:4] = b"LSPB"
-        struct.pack_into("<H", head, 4, 1)
+        struct.pack_into("<H", head, 4, LSPB_VERSION)
         head[6] = i
         struct.pack_into("<HH", head, 12, SPEC_W, SPEC_H)
         head[16] = 4
-        head[32:56] = pal
-        head[56:72] = ega
-        logical = bytes(head) + pixels
+        head[17] = SPEC_PCOLS
+        head[18] = SPEC_PROWS
+        struct.pack_into("<HHH", head, 20, SPEC_PW, SPEC_PH, SPEC_X)
+        head[32:56] = bytes([31, 31, 0]) + bytes(pal[3:24])
+        head[56:80] = self.grounds[grounds[0]].vga_standard
+        head[80:104] = ega[0:16] + bytes(8)
+        logical = bytes(head) + bytes(pieces)
         struct.pack_into("<I", head, 8, len(logical))
         head[7] = (len(logical) + FILEMAX - 1) // FILEMAX
-        return bytes(head) + pixels
+        return bytes(head) + bytes(pieces)
 
 
 # ---------------------------------------------------------------------------
@@ -1717,7 +1840,7 @@ class DataSet(object):
 # ---------------------------------------------------------------------------
 
 
-def plan_geometry(ds, geom, reserve=PKG_RESERVE, styles=None):
+def plan_geometry(ds, geom, reserve=None, styles=None):
     """Decide what this disk carries, then build every file for it.
 
     SPEC.md 114.9, decided in CLUSTERS and not in bytes:
@@ -1727,6 +1850,8 @@ def plan_geometry(ds, geom, reserve=PKG_RESERVE, styles=None):
     """
     clus = data_clusters(geom)
     cb = cluster_bytes(geom)
+    if reserve is None:
+        reserve = Reserve()
 
     specials = list(range(4))
     if styles is None:
@@ -1818,7 +1943,23 @@ def plan_geometry(ds, geom, reserve=PKG_RESERVE, styles=None):
         if nlevfiles > 10:
             raise Refused("%d level records need %d LEMLVn.LEM files and the "
                           "name has one digit" % (len(order), nlevfiles))
-        if disk.nclusters(reserve) + lev_clusters + head_clusters <= clus:
+        # LEVELS.TXT at its widest numbers, the files still to come (the
+        # level groups, four rating files, LEMSTR, LEMMAN and LEVELS.TXT) in
+        # the folder's directory, and LEMMINGS.SAV's two clusters
+        # A LEVEL IS WORTH MORE THAN ITS NAME IN A TEXT FILE: LEVELS.TXT
+        # names every level when the disk has the room, and lists them by
+        # number when naming them would cost a level (the 360KB disk, where
+        # the names are ~4 clusters and the chooser shows them anyway).
+        fits = False
+        for names in (True, False):
+            txt = levels_txt(ds, geom, playable, styles, specials, 99,
+                             9999999, 99999, clus, names)
+            txt_clusters = (len(txt) + cb - 1) // cb
+            if (disk.nclusters(reserve, nlevfiles + 7) + lev_clusters +
+                    head_clusters + txt_clusters + SAV_CLUSTERS) <= clus:
+                fits = True
+                break
+        if fits:
             break
         live = [e for e in playable if e["playable"]]
         if not live:
@@ -1869,13 +2010,31 @@ def plan_geometry(ds, geom, reserve=PKG_RESERVE, styles=None):
     strband, nstrings = build_string_band()
     disk.add("LEMSTR.LEM", pad512(strband))
 
-    manifest = build_manifest(ds, geom, playable, styles, specials,
-                              style_parts, spec_parts, len(strband),
-                              nstrings, nlevfiles, disk, reserve)
+    # LEMMAN AND LEVELS.TXT BOTH STATE THE CLUSTERS THE DISK USES, and both
+    # are on it: settled by iterating on LEVELS.TXT's own cluster count
+    # (which its numbers' widths can move), so offset 20 is exactly what
+    # `os88disk.py --verify` will count on the built image.
+    man_clusters = (MANIFEST_HEADER + cb - 1) // cb
+    txt_clusters = 1
+    for _ in range(8):
+        used = disk.nclusters(reserve, 2) + man_clusters + txt_clusters
+        manifest = build_manifest(ds, geom, playable, styles, specials,
+                                  style_parts, spec_parts, len(strband),
+                                  nstrings, nlevfiles, disk, used)
+        txt = levels_txt(ds, geom, playable, styles, specials,
+                         len(disk.files) + 2,
+                         disk.nbytes + MANIFEST_HEADER, used, clus, names)
+        if (len(txt) + cb - 1) // cb == txt_clusters:
+            break
+        txt_clusters = (len(txt) + cb - 1) // cb
+    else:
+        raise Refused("LEVELS.TXT's size did not settle")
     disk.files.insert(0, ("LEMMAN.LEM", pad512(manifest)))
-
-    disk.add("LEVELS.TXT", levels_txt(geom, playable, styles, specials,
-                                      disk, clus, reserve))
+    disk.add("LEVELS.TXT", txt)
+    if disk.nclusters(reserve) != used:
+        raise Refused("a %s disk's clusters moved after LEMMAN was written "
+                      "(%d, LEMMAN says %d)"
+                      % (geom_name(geom), disk.nclusters(reserve), used))
     return disk, playable, styles, specials
 
 
@@ -1934,6 +2093,7 @@ def level_entry(e):
                       % e["missing"])
     row[25] = e["missing"]
     struct.pack_into("<H", row, 26, 1 if e["odd"] else 0)
+    row[28] = 1 if L.superlemming else 0    # flags2: bit 0 superlemming
     # The field is 32 bytes and the original's name is 32 bytes, so a name
     # that fills it has NO terminator: "NUL padded" means padded when it is
     # short. Four of the 120 are exactly 32 characters (`A task for blockers
@@ -1945,7 +2105,7 @@ def level_entry(e):
 
 
 def build_manifest(ds, geom, levels, styles, specials, style_parts,
-                   spec_parts, strbytes, nstrings, nlevfiles, disk, reserve):
+                   spec_parts, strbytes, nstrings, nlevfiles, disk, used):
     """LEMMAN.LEM - the 512-byte header and nothing else.
 
     The 120 entries moved out into LEMR0-3.LEM, so `leoff` is the offset of
@@ -1988,7 +2148,12 @@ def build_manifest(ds, geom, levels, styles, specials, style_parts,
     head[17] = sum(1 << i for i in specials)
 
     total = disk.nbytes + MANIFEST_HEADER
-    clusters = disk.nclusters(reserve) + (MANIFEST_HEADER + cb - 1) // cb
+    # THE DISK'S OWN COUNT (plan_geometry settles it): the bands, LEMMAN,
+    # LEVELS.TXT, the package's files, the three directories and ASSOC.DAT -
+    # exactly what `os88disk.py --verify` counts on the built image, which
+    # `--check-image` asserts. LEMMINGS.SAV is not in it: no image as built
+    # has one.
+    clusters = used
 
     # docs/lemband-format.md gives offset 18 two bytes and this disk carries
     # about 950,000 of them, so 18 is KILOBYTES rounded up and the exact
@@ -2031,67 +2196,148 @@ def build_manifest(ds, geom, levels, styles, specials, style_parts,
     return bytes(head)
 
 
-def levels_txt(geom, levels, styles, specials, disk, clus, reserve):
-    """The player's own copy of the arithmetic (SPEC.md 114.9). CRLF, because a
-    .TXT on a FAT floppy is expected to have it (SPEC.md 19)."""
+def bank_cost(ds, kind, n, geom):
+    """A bank's files as the chooser names them, its bytes and its clusters
+    on THIS geometry - whether it is on the disk or not (build_manifest's
+    cost table is the same arithmetic, and the chooser's greyed fact reads
+    it there)."""
+    cb = cluster_bytes(geom)
+    parts = split_parts(ds.bank(kind, n))
+    base = ("LEMGR%d" if kind == "style" else "LEMSP%d") % n
+    # ONE SPELLING FOR BOTH SURFACES: a bank in parts is LEMGR0_*.LEM here
+    # and in the chooser's fact (lemload.c ovl_bandname), so a reader can tie
+    # the two together (wave 4 review)
+    name = base + (".LEM" if len(parts) == 1 else "_*.LEM")
+    return (name, sum(len(q) for q in parts),
+            sum((len(q) + cb - 1) // cb for q in parts))
+
+
+def levels_txt(ds, geom, levels, styles, specials, nfiles, nbytes, used,
+               clus, names=True):
+    """The player's own copy of the arithmetic (SPEC.md 114.9): which levels
+    this disk carries, and for each one it does not, why - in the chooser's
+    own terms, with the missing bank's files and what they would cost here.
+    CRLF, because a .TXT on a FAT floppy is expected to have it (SPEC.md
+    19).
+
+    `names` = False lists the levels by NUMBER, a line a rating, and the
+    absent ones grouped by reason: plan_geometry asks for that only when the
+    names would cost the disk a level."""
     out = []
     out.append("LEMMINGS - %s DISK" % geom_name(geom))
     out.append("=" * 28)
     out.append("")
     playable = sum(1 for e in levels if e["playable"])
-    out.append("This disk carries %d of the 120 levels, %d of the five "
-               "graphic sets and %d of the four special pictures."
-               % (playable, len(styles), len(specials)))
+    out.append("This disk carries %d of 120 levels, %d of 5 graphic sets "
+               "and %d of 4" % (playable, len(styles), len(specials)))
+    out.append("special pictures. A level that is not here is still in the "
+               "chooser, greyed,")
+    out.append("and the chooser names the missing files and what they cost, "
+               "as below.")
     out.append("")
-    out.append("A level whose graphic set or special picture is not here is "
-               "still in the chooser and is greyed with the reason. The "
-               "reason is the arithmetic, not an apology.")
-    out.append("")
+    # which level each special picture is for (the entry's `special`)
+    spec_level = {}
+    for e in levels:
+        if e["special"] is not None:
+            spec_level[e["special"]] = "%s %d" % (RATINGS[e["rating"]],
+                                                  e["number"] + 1)
     out.append("GRAPHIC SETS")
     out.append("-" * 28)
     for s in range(5):
-        out.append("  %-9s %s" % (STYLE_NAMES[s],
-                                  "on this disk" if s in styles else "not here"))
+        name, nb, nc = bank_cost(ds, "style", s, geom)
+        out.append("  %-9s %-13s %7s bytes = %3d clusters  %s"
+                   % (STYLE_NAMES[s], name, "{:,}".format(nb), nc,
+                      "here" if s in styles else "not here"))
     out.append("")
     out.append("SPECIAL PICTURES")
     out.append("-" * 28)
     for i in range(4):
-        out.append("  VGASPEC%d  %s"
-                   % (i, "on this disk" if i in specials else "not here"))
-    absent = [s for s in range(5) if s not in styles]
-    if absent or len(specials) < 4:
-        out.append("")
-        out.append("WHY NOT")
-        out.append("-" * 28)
-        out.append("")
-        out.append("A floppy holds what it holds. The graphic sets and the "
-                   "special pictures are the big things on this disk, and "
-                   "what is missing is missing because the clusters ran "
-                   "out - the chooser says the same arithmetic on the row "
-                   "of every level it cannot start.")
+        name, nb, nc = bank_cost(ds, "spec", i, geom)
+        out.append("  %-9s %-13s %7s bytes = %3d clusters  %s"
+                   % (spec_level.get(i, "VGASPEC%d" % i), name,
+                      "{:,}".format(nb), nc,
+                      "here" if i in specials else "not here"))
     out.append("")
     out.append("THE ARITHMETIC")
     out.append("-" * 28)
     out.append("")
-    out.append("  data files      %d" % len(disk.files))
-    out.append("  converted bytes %d" % disk.nbytes)
-    out.append("  clusters used   %d of %d" % (disk.nclusters(reserve), clus))
+    out.append("  data files      %d" % nfiles)
+    out.append("  converted bytes %s" % "{:,}".format(nbytes))
+    out.append("  clusters used   %d of %d (package, README, folders, "
+               "ASSOC.DAT)" % (used, clus))
+    out.append("  LEMMINGS.SAV    %d more kept free (the file, and the copy "
+               "a save writes)" % SAV_CLUSTERS)
     out.append("  cluster size    %d bytes" % cluster_bytes(geom))
     out.append("")
+    absent = [e for e in levels if not e["playable"]]
+
+    def why(e):
+        # the chooser's own three reasons (LEMS_MISS_*), by the bank each
+        # one names
+        if e["missing"] == SID["MISS_SPEC"]:
+            return "%s not here" % bank_cost(ds, "spec", e["special"],
+                                             geom)[0]
+        if e["missing"] == SID["MISS_STYLE"]:
+            return "%s (%s) not here" % (
+                bank_cost(ds, "style", e["style"], geom)[0],
+                STYLE_NAMES[e["style"]])
+        return "no room for its record"
+
+    def numbers(rows, lead):
+        # "  Fun     2 3 4 7 ..." a rating a line, wrapped at 78
+        for r in range(4):
+            nums = [str(e["number"] + 1) for e in rows if e["rating"] == r]
+            if not nums:
+                continue
+            line = "%s%-7s" % (lead, RATINGS[r])
+            for n in nums:
+                if len(line) + 1 + len(n) > 78:
+                    out.append(line)
+                    line = lead + " " * 7
+                line += " " + n
+            out.append(line)
+
     out.append("PLAYABLE HERE")
     out.append("-" * 28)
-    for e in levels:
-        if e["playable"]:
-            # TRIMMED, the way every other surface shows a level name:
-            # lemui.c's lem_row_level() and lemovl.c's ovl_fmt() both call
-            # lem_trim() on Lemmix's own rule (GameScreen.Preview.pas calls
-            # Title.Trim before it draws). The 64-byte ENTRY keeps the
-            # original's centring spaces - that is the record, and the record
-            # is not edited - but this file is a column of names a reader
-            # reads, and untrimmed it is ragged.
-            out.append("  %-6s %2d  %s"
-                       % (RATINGS[e["rating"]], e["number"] + 1,
-                          e["level"].name.strip()))
+    if names:
+        for e in levels:
+            if e["playable"]:
+                # TRIMMED, the way every other surface shows a level name:
+                # lemui.c's lem_row_level() and lemovl.c's ovl_fmt() both
+                # call lem_trim() on Lemmix's own rule
+                # (GameScreen.Preview.pas calls Title.Trim before it draws).
+                # The 64-byte ENTRY keeps the original's centring spaces -
+                # that is the record, and the record is not edited - but
+                # this file is a column of names a reader reads, and
+                # untrimmed it is ragged.
+                out.append("  %-6s %2d  %s"
+                           % (RATINGS[e["rating"]], e["number"] + 1,
+                              e["level"].name.strip()))
+    else:
+        numbers([e for e in levels if e["playable"]], "  ")
+    if absent:
+        out.append("")
+        out.append("NOT HERE")
+        out.append("-" * 28)
+        if names:
+            for e in absent:
+                out.append("  %-6s %2d  %-32s %s"
+                           % (RATINGS[e["rating"]], e["number"] + 1,
+                              e["level"].name.strip()[:32], why(e)))
+        else:
+            # grouped by reason, and the four special levels under ONE: the
+            # SPECIAL PICTURES table above already names each one's file
+            def group(e):
+                if e["missing"] == SID["MISS_SPEC"]:
+                    return "its special picture (above) not here"
+                return why(e)
+            reasons = []
+            for e in absent:
+                if group(e) not in reasons:
+                    reasons.append(group(e))
+            for r in reasons:
+                out.append("  " + r + ":")
+                numbers([e for e in absent if group(e) == r], "    ")
     out.append("")
     return ("\r\n".join(out) + "\r\n").encode("ascii", "replace")
 
@@ -2130,9 +2376,10 @@ def print_manifest(geom, disk, levels, styles, specials, reserve, verbose):
           "%3d/120 levels  %d styles  %d specials"
           % (geom_name(geom), len(disk.files), disk.nbytes, used, clus, cb,
              playable, len(styles), len(specials)))
-    if used > clus:
-        raise Refused("a %s disk needs %d clusters and has %d"
-                      % (geom_name(geom), used, clus))
+    if used + SAV_CLUSTERS > clus:
+        raise Refused("a %s disk needs %d clusters and LEMMINGS.SAV %d "
+                      "more, and it has %d"
+                      % (geom_name(geom), used, SAV_CLUSTERS, clus))
     if len(disk.files) > RD_MAXENT:
         raise Refused("%d files and RD_MAXENT is %d (SPEC.md 114.3.2)"
                       % (len(disk.files), RD_MAXENT))
@@ -2617,6 +2864,41 @@ def selfcheck(src, verbose):
 # ---------------------------------------------------------------------------
 
 
+def check_image(img_path, lemman_path):
+    """The image recipe's gate (wave 4 review): the clusters the built FAT12
+    image uses must be LEMMAN.LEM's offset 20 - the number every greyed fact
+    calls "already spent" - and LEMMINGS.SAV's two clusters must still be free. A
+    mismatch means class Reserve no longer mirrors the recipe or os88disk.py,
+    and the fact on the glass would be a guess (SPEC.md 47 rule 5)."""
+    with open(img_path, "rb") as fh:
+        img = fh.read()
+    with open(lemman_path, "rb") as fh:
+        man = fh.read()
+    bps, spc, rsv, nfat, rootent, tot, _media, fatsz = struct.unpack_from(
+        "<HBHBHHBH", img, 11)
+    fat = img[rsv * bps:(rsv + fatsz) * bps]
+    data0 = (rsv + nfat * fatsz) * bps + rootent * 32
+    ncl = (tot * bps - data0) // (spc * bps)
+    used = 0
+    for n in range(2, ncl + 2):
+        v = struct.unpack_from("<H", fat, n * 3 // 2)[0]
+        if ((v >> 4) if n & 1 else (v & 0xFFF)) != 0:
+            used += 1
+    said = struct.unpack_from("<H", man, 20)[0]
+    print("os88lem: %s uses %d of %d clusters; LEMMAN offset 20 says %d"
+          % (img_path, used, ncl, said))
+    if used != said:
+        raise Refused("%s uses %d clusters and its LEMMAN.LEM says %d: the "
+                      "greyed facts' 'already spent' would be wrong. "
+                      "tools/os88lem.py's Reserve no longer mirrors the image "
+                      "recipe (or the bands are from another --pkg)"
+                      % (img_path, used, said))
+    if used + SAV_CLUSTERS > ncl:
+        raise Refused("%s has not the %d clusters LEMMINGS.SAV needs left"
+                      % (img_path, SAV_CLUSTERS))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("-s", "--src", metavar="DIR", default="build/lemdata",
@@ -2634,13 +2916,24 @@ def main():
                     help="write the committed synthetic set and exit")
     ap.add_argument("--reserve", metavar="BYTES", type=int,
                     default=PKG_RESERVE,
-                    help="bytes to leave for the package, the overlay and "
-                         "README.TXT (default %d)" % PKG_RESERVE)
+                    help="with no --pkg: bytes to leave for the package, the "
+                         "overlay and README.TXT (default %d, an estimate)"
+                         % PKG_RESERVE)
+    ap.add_argument("--pkg", metavar="FILE", action="append",
+                    help="a file the image recipe puts beside the bands "
+                         "(LEMMINGS.O88, README.TXT; repeatable) - the disk's "
+                         "clusters are then measured, not estimated")
+    ap.add_argument("--check-image", nargs=2, metavar=("IMG", "LEMMAN"),
+                    help="refuse unless the built image's used clusters are "
+                         "LEMMAN.LEM's offset 20 and LEMMINGS.SAV still fits")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="list every file with its size and cluster cost")
     args = ap.parse_args()
 
     try:
+        if args.check_image:
+            return check_image(args.check_image[0], args.check_image[1])
+
         if args.fixture:
             # build/lemstr.h is written here TOO: `make lemmings` must build
             # with no fetch, and the fixture is all it has (SPEC.md 114.12).
@@ -2667,6 +2960,13 @@ def main():
         print("os88lem: %d string ids -> %s (%d bytes)"
               % (len(STRINGS), args.header, len(header)))
 
+        if args.pkg:
+            reserve = Reserve([os.path.getsize(f) for f in args.pkg])
+        else:
+            reserve = Reserve(nbytes=args.reserve)
+            print("os88lem: no --pkg - the package's clusters are ESTIMATED "
+                  "from %d bytes; `make lemmingsdisk` measures them"
+                  % args.reserve)
         ds = DataSet(args.src)
         geoms = args.geom or GEOM_ORDER
         print("os88lem: per-geometry manifest "
@@ -2674,18 +2974,19 @@ def main():
         archive = 0
         for geom in geoms:
             disk, levels, styles, specials = plan_geometry(
-                ds, geom, args.reserve)
+                ds, geom, reserve)
             print_manifest(geom, disk, levels, styles, specials,
-                           args.reserve, args.verbose)
+                           reserve, args.verbose)
             write_disk(disk, os.path.join(args.output, str(geom)))
             if geom == 1440:
                 archive = disk.nbytes
         if archive:
-            whole = archive + args.reserve
+            whole = archive + reserve.nbytes
             print("os88lem: whole archive %d bytes of WIRE_ARCMAX %d "
                   "(%d spare) - converted data %d plus %d reserved for the "
                   "package, the overlay and README.TXT"
-                  % (whole, ARCMAX, ARCMAX - whole, archive, args.reserve))
+                  % (whole, ARCMAX, ARCMAX - whole, archive,
+                     reserve.nbytes))
             if whole > ARCMAX:
                 raise Refused("the archive is %d bytes and WIRE_ARCMAX is %d"
                               % (whole, ARCMAX))

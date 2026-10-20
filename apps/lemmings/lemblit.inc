@@ -1895,7 +1895,7 @@ lb_batch_out:
 ; -----------------------------------------------------------------------------
 ; void lem_r_batch(int on) - the bracket, from C.
 ;
-; lem_view_rect() and lem_mm_draw() each make dozens of one-pixel lem_r_rect
+; ovl_view_rect() and ovl_mm_draw() each make dozens of one-pixel lem_r_rect
 ; calls; wrapping the group in one batch takes the VGA state out of every one of
 ; them. It is REFERENCE COUNTED, so a caller need not know whether it is already
 ; inside one.

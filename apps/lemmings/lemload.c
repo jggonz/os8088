@@ -43,24 +43,24 @@ static int lem_rat_have;            /* which rating that is, or -1 */
 
 /* --- the manifest ---------------------------------------------------------- */
 
-static int lem_man_u16(int off)
+static int ovl_man_u16(int off)
 {
     if (!lem_man_ok)
         return 0;
     return lem_u16(lem_manbuf, off);
 }
 
-static int lem_man_u8(int off)
+static int ovl_man_u8(int off)
 {
     if (!lem_man_ok)
         return 0;
-    return lem_u8(lem_manbuf, off);
+    return ovl_u8(lem_manbuf, off);
 }
 
-/* lem_geom - "1440K" / "1200K" / "720K" / "360K", NUL-padded in the header. It
+/* ovl_geom - "1440K" / "1200K" / "720K" / "360K", NUL-padded in the header. It
  * is what every greying fact's second marker prints, so it is read rather than
  * guessed from a disk size this program never asks for. */
-static const char *lem_geom(void)
+static const char *ovl_geom(void)
 {
     if (!lem_man_ok)
         return "";
@@ -72,7 +72,7 @@ static const char *lem_geom(void)
  * whether the bank is on this disk or not - which is the whole reason it is
  * there. A greyed level row asks how big the bank it is missing WOULD have
  * been, and that cannot be measured from a disk the bank is not on. */
-static int lem_cost_row(int kind, int n)
+static int ovl_cost_row(int kind, int n)
 {
     int row;
 
@@ -82,32 +82,34 @@ static int lem_cost_row(int kind, int n)
     return LEM_MAN_COSTS + row * LEM_COST_STRIDE;
 }
 
-static int lem_cost_clus(int kind, int n)
+static int ovl_cost_clus(int kind, int n)
 {
-    int off = lem_cost_row(kind, n);
+    int off = ovl_cost_row(kind, n);
 
     if (off < 0)
         return 0;
-    return lem_man_u16(off + LEM_COST_CLUS);
+    return ovl_man_u16(off + LEM_COST_CLUS);
 }
 
-static int lem_cost_parts(int kind, int n)
+static int ovl_cost_parts(int kind, int n)
 {
-    int off = lem_cost_row(kind, n);
+    int off = ovl_cost_row(kind, n);
 
     if (off < 0)
         return 0;
-    return lem_man_u8(off + LEM_COST_PARTS);
+    return ovl_man_u8(off + LEM_COST_PARTS);
 }
 
-/* lem_bandname - the 8.3 name of a bank's FIRST file, for a fact that has to
- * say which file is not here. A bank that fits one 64,512-byte band keeps its
- * plain name and a bank written as numbered parts is LEMGR<n>_0.LEM
- * (SPEC.md 114.3.2). Uppercase 8.3 in [A-Z0-9_-] by construction.
+/* ovl_bandname - the name of a bank's files, for a fact that has to say which
+ * files are not here. A bank that fits one 64,512-byte band keeps its plain
+ * name, and a bank written as numbered parts is named as ALL of them,
+ * LEMGR<n>_*.LEM (SPEC.md 114.3.2) - the fact costs the whole bank, and naming
+ * its first part named one file of two (wave 4 review). LEVELS.TXT spells
+ * them the same way (tools/os88lem.py bank_cost).
  *
  * ONE BUFFER, so the answer may not be live across the next call - the caller
  * here stages it as a format argument and formats immediately (LESSONS.md 13). */
-static const char *lem_bandname(int kind, int n)
+static const char *ovl_bandname(int kind, int n)
 {
     int i = 0;
 
@@ -122,9 +124,9 @@ static const char *lem_bandname(int kind, int n)
         lem_f_scratch[i++] = 'R';
     }
     lem_f_scratch[i++] = (char)('0' + (n & 7));
-    if (lem_cost_parts(kind, n) > 1) {
+    if (ovl_cost_parts(kind, n) > 1) {
         lem_f_scratch[i++] = '_';
-        lem_f_scratch[i++] = '0';
+        lem_f_scratch[i++] = '*';
     }
     lem_f_scratch[i++] = '.';
     lem_f_scratch[i++] = 'L';
@@ -331,7 +333,7 @@ static int      lem_claimed;
 static int      lem_bank_have;      /* the style in lem_cl_bank, or -1 */
 static int      lem_main_have;
 
-/* lem_far - a dword offset inside a claim as a SEGMENT and a 0..15 offset.
+/* ovl_far - a dword offset inside a claim as a SEGMENT and a 0..15 offset.
  *
  * A bank is bigger than a segment, so a piece's offset genuinely needs 32 bits
  * and this dialect has no `long` (docs/C-TOOLCHAIN.md). The two halves are read
@@ -343,26 +345,26 @@ static int      lem_main_have;
 static unsigned lem_far_seg;
 static unsigned lem_far_off;
 
-static void lem_far(unsigned base, int lo, int hi)
+static void ovl_far(unsigned base, int lo, int hi)
 {
     lem_far_seg = base + ((unsigned)hi << 12) + ((unsigned)lo >> 4);
     lem_far_off = (unsigned)lo & 15;
 }
 
-/* lem_pk / lem_pk16 - one byte or one little-endian word out of a claim.
+/* ovl_pk / ovl_pk16 - one byte or one little-endian word out of a claim.
  *
  * ~11 us of near call each (apps/cc/os88.h), so this is right for a HEADER and
  * wrong for a copy. The whole of what it reads is the bank headers and the
  * terrain list, which is ~600 reads once per level; the pixels are moved by
  * the assembly rasters, which take a segment. */
-static int lem_pk(unsigned seg, unsigned off)
+static int ovl_pk(unsigned seg, unsigned off)
 {
     return os88_peek(seg, off) & 0xFF;
 }
 
-static int lem_pk16(unsigned seg, unsigned off)
+static int ovl_pk16(unsigned seg, unsigned off)
 {
-    return lem_pk(seg, off) | (lem_pk(seg, off + 1) << 8);
+    return ovl_pk(seg, off) | (ovl_pk(seg, off + 1) << 8);
 }
 
 /* ovl_claim_all - the three or five claims, or 0 with the arithmetic said.
@@ -447,10 +449,10 @@ static void lem_free_all(void)
     lem_main_have = 0;
 }
 
-/* lem_need_kb - what this adapter's claims add up to, for the refusal to say.
+/* ovl_need_kb - what this adapter's claims add up to, for the refusal to say.
  * The package's own region and the module's are NOT in it: the kernel already
  * granted those or this code would not be running. */
-static int lem_need_kb(void)
+static int ovl_need_kb(void)
 {
     int n = LEM_KB_MASK + LEM_KB_BANK + LEM_KB_MAIN + LEM_KB_REC;
 
@@ -470,14 +472,32 @@ static int lem_need_kb(void)
  * the reason this takes the part count rather than probing for files.
  *
  * 0 = a part was short or missing, which means the disk is not the one the
- * manifest describes; the caller says so and stays in the window. */
-static int ovl_parts_read(int nparts, unsigned seg)
+ * manifest describes; the caller says so and stays in the window.
+ *
+ * `kb` IS THE CLAIM'S SIZE, and every read is held inside it (wave 4 review):
+ * the part count is a LEMMAN.LEM byte and the files are whatever is on the
+ * disk, both hostile (CLAUDE.md), and the kernel cannot hold a read to a claim
+ * whose end it does not know. A part that would START past the claim refuses
+ * the whole read; the last part is capped at what the claim has left. Done in
+ * PARAGRAPHS, which a 96 KB claim (6,144) keeps inside an unsigned. */
+static int lem_pbar;                /* the bar's base while a read is inside
+                                     * the bracket (ovl_spec_compose), else 0 */
+
+static int ovl_parts_read(int nparts, unsigned seg, unsigned kb)
 {
     int p, n, i;
+    unsigned off, left, cap;
 
     if (nparts < 1)
-        nparts = 1;
+        return 0;
+    off = 0;
     for (p = 0; p < nparts; p++) {
+        if (off >= kb * 64u)
+            return 0;               /* more parts than can start inside it */
+        left = kb * 64u - off;      /* paragraphs the claim has left */
+        cap = (unsigned)LEM_PARTMAX;
+        if (left < 4032u)
+            cap = left << 4;
         i = 0;
         while (lem_f_scratch[i] != 0)
             i++;
@@ -492,10 +512,12 @@ static int ovl_parts_read(int nparts, unsigned seg)
         lem_f_scratch[i] = 0;
         /* 4,032 paragraphs a part: 64,512 bytes, which is 126 sectors, so
          * every part's base is 512-aligned by construction (see the header). */
-        n = os88_file_read_seg(lem_f_scratch, seg + (unsigned)p * 4032,
-                              (unsigned)LEM_PARTMAX);
+        n = os88_file_read_seg(lem_f_scratch, seg + off, cap);
         if (n == 0)
             return 0;
+        off += 4032u;
+        if (lem_pbar)
+            ovl_load_bar(lem_pbar + 11 * (p + 1) / nparts);
         while (i > 0 && lem_f_scratch[i] != '_')
             i--;
         if (nparts > 1 && lem_f_scratch[i] == '_')
@@ -512,7 +534,7 @@ static int ovl_parts_read(int nparts, unsigned seg)
 
 /* lem_stem - "LEMGR<n>" or "LEMMAIN" into lem_f_scratch, ready for
  * ovl_parts_read to hang a part number and an extension off. */
-static void lem_stem_gr(int n)
+static void ovl_stem_gr(int n)
 {
     lem_f_scratch[0] = 'L';
     lem_f_scratch[1] = 'E';
@@ -523,7 +545,18 @@ static void lem_stem_gr(int n)
     lem_f_scratch[6] = 0;
 }
 
-static void lem_stem_main(void)
+static void ovl_stem_sp(int n)
+{
+    lem_f_scratch[0] = 'L';
+    lem_f_scratch[1] = 'E';
+    lem_f_scratch[2] = 'M';
+    lem_f_scratch[3] = 'S';
+    lem_f_scratch[4] = 'P';
+    lem_f_scratch[5] = (char)('0' + (n & 3));
+    lem_f_scratch[6] = 0;
+}
+
+static void ovl_stem_main(void)
 {
     lem_f_scratch[0] = 'L';
     lem_f_scratch[1] = 'E';
@@ -547,11 +580,11 @@ static int ovl_main_read(void)
      * rule - a bank that fits one part is not numbered). If it ever grows past
      * that, the converter refuses on the host before this could read half of
      * it (tools/os88lem.py's Disk.add). */
-    lem_stem_main();
-    if (!ovl_parts_read(1, lem_cl_main))
+    ovl_stem_main();
+    if (!ovl_parts_read(1, lem_cl_main, LEM_KB_MAIN))
         return 0;
-    if (lem_pk(lem_cl_main, 0) != 'L' || lem_pk(lem_cl_main, 1) != 'M' ||
-        lem_pk(lem_cl_main, 2) != 'N' || lem_pk(lem_cl_main, 3) != 'B')
+    if (ovl_pk(lem_cl_main, 0) != 'L' || ovl_pk(lem_cl_main, 1) != 'M' ||
+        ovl_pk(lem_cl_main, 2) != 'N' || ovl_pk(lem_cl_main, 3) != 'B')
         return 0;
     lem_main_have = 1;
     return 1;
@@ -568,19 +601,43 @@ static int ovl_bank_read(int style)
     lem_bank_have = -1;
     if (style < 0 || style > 4)
         return 0;
-    lem_stem_gr(style);
-    if (!ovl_parts_read(lem_cost_parts(LEM_BANK_STYLE, style), lem_cl_bank))
+    ovl_stem_gr(style);
+    if (!ovl_parts_read(ovl_cost_parts(LEM_BANK_STYLE, style), lem_cl_bank,
+                        LEM_KB_BANK))
         return 0;
-    if (lem_pk(lem_cl_bank, 0) != 'L' || lem_pk(lem_cl_bank, 1) != 'G' ||
-        lem_pk(lem_cl_bank, 2) != 'R' || lem_pk(lem_cl_bank, 3) != 'B')
+    if (ovl_pk(lem_cl_bank, 0) != 'L' || ovl_pk(lem_cl_bank, 1) != 'G' ||
+        ovl_pk(lem_cl_bank, 2) != 'R' || ovl_pk(lem_cl_bank, 3) != 'B')
         return 0;
-    if (lem_pk(lem_cl_bank, LEM_GR_STYLE) != style)
+    if (ovl_pk(lem_cl_bank, LEM_GR_STYLE) != style)
         return 0;
-    if (lem_pk16(lem_cl_bank, LEM_GR_VERSION) != LEM_GR_VER)
+    if (ovl_pk16(lem_cl_bank, LEM_GR_VERSION) != LEM_GR_VER)
         return 0;                   /* a bank from before wave 3 carries no
                                      * object animation flags */
     lem_bank_have = style;
     return 1;
+}
+
+/* ovl_spec_read - a SPECIAL picture into the BANK claim (wave 4). A special
+ * level still needs its ground set's OBJECTS - the hatch, the exit - and the
+ * two do not fit one claim together (the fire set alone is 94 KB of the 96),
+ * so the picture is read here, OUTSIDE the bracket where a refusal can be said,
+ * composed from the claim inside it, and the style bank is read over it after
+ * the compose (ovl_compose). 0 = the parts did not read or are not a version-2
+ * picture of this index. */
+static int ovl_spec_read(int spec)
+{
+    lem_bank_have = -1;
+    if (spec < 0 || spec > 3)
+        return 0;
+    ovl_stem_sp(spec);
+    if (!ovl_parts_read(ovl_cost_parts(LEM_BANK_SPEC, spec), lem_cl_bank,
+                        LEM_KB_BANK))
+        return 0;
+    if (ovl_pk(lem_cl_bank, 0) != 'L' || ovl_pk(lem_cl_bank, 1) != 'S' ||
+        ovl_pk(lem_cl_bank, 2) != 'P' || ovl_pk(lem_cl_bank, 3) != 'B')
+        return 0;
+    return ovl_pk16(lem_cl_bank, LEM_SP_VERSION) == LEM_SP_VER &&
+           ovl_pk(lem_cl_bank, LEM_SP_INDEX) == spec;
 }
 
 /* ovl_rec_read - the level's group of eight raw records, LEMLV<n>.LEM, into
@@ -603,10 +660,10 @@ static int ovl_rec_read(int level)
                               (unsigned)(LEM_LVL_GROUP * LEM_LVL_SIZE)) != 0;
 }
 
-/* lem_item - one LEMMAIN item's segment and offset, into lem_far_seg/off.
+/* ovl_item - one LEMMAIN item's segment and offset, into lem_far_seg/off.
  * 0 = this bank does not carry it, which is how a wave that has not converted
  * its item yet finds out rather than drawing a bank header as a bitmap. */
-static int lem_item(int id)
+static int ovl_item(int id)
 {
     int i, off;
 
@@ -614,14 +671,14 @@ static int lem_item(int id)
         return 0;
     for (i = 0; i < 16; i++) {
         off = LEM_MN_ITEMS + i * LEM_MN_ISTRIDE;
-        if (lem_pk(lem_cl_main, off + LEM_MI_ID) != id)
+        if (ovl_pk(lem_cl_main, off + LEM_MI_ID) != id)
             continue;
-        if (lem_pk16(lem_cl_main, off + LEM_MI_NBYTES) == 0 &&
-            lem_pk16(lem_cl_main, off + LEM_MI_NBYTES + 2) == 0)
+        if (ovl_pk16(lem_cl_main, off + LEM_MI_NBYTES) == 0 &&
+            ovl_pk16(lem_cl_main, off + LEM_MI_NBYTES + 2) == 0)
             return 0;
-        lem_far(lem_cl_main,
-                lem_pk16(lem_cl_main, off + LEM_MI_OFF),
-                lem_pk16(lem_cl_main, off + LEM_MI_OFF + 2));
+        ovl_far(lem_cl_main,
+                ovl_pk16(lem_cl_main, off + LEM_MI_OFF),
+                ovl_pk16(lem_cl_main, off + LEM_MI_OFF + 2));
         return 1;
     }
     return 0;

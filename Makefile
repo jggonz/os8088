@@ -10209,7 +10209,8 @@ $(BUILD)/loom360.img: $(LOOMDISK) tools/os88disk.py
 # exclusive bracket the game runs inside. `make lemmings` runs the host checks
 # (apps/lemmings/build.sh) and then builds the package; `make lemmingsdisk` the
 # floppy in all four geometries; `make lemmings-data` fetches and converts the
-# data set on its own.
+# data set without making a floppy (it builds the package first: the plan is
+# measured against it, below).
 #
 # NOTHING IN `all` REACHES ANY OF IT, for cworddisk's reason: a C package needs
 # SmallerC, which tools/setup-cc.sh fetches and which is deliberately not in
@@ -10243,8 +10244,20 @@ $(BUILD)/loom360.img: $(LOOMDISK) tools/os88disk.py
 # to another wave, from inside the wave that lands this one. The four rules are
 # written out below, the note is carried forward, and a THIRD such package is
 # where somebody should stop copying and write the macro.
-$(BUILD)/lemstr.h: tools/os88lem.py | $(BUILD)
-	python3 tools/os88lem.py --fixture $(BUILD)/lemfixture --header $@
+#
+# A STAMP IN FRONT OF THE HEADER: tools/os88lem.py writes lemstr.h only when
+# its text changed (wave 4's second review - the band conversion re-stamping an
+# identical header after the package made every `make lemmingsdisk` rebuild
+# everything), so the header's own mtime cannot say the script ran. The stamp
+# says that; the header keeps the mtime of its last real change, and only a
+# change rebuilds what includes it.
+$(BUILD)/lemstr.stamp: tools/os88lem.py | $(BUILD)
+	python3 tools/os88lem.py --fixture $(BUILD)/lemfixture \
+		--header $(BUILD)/lemstr.h
+	@touch $@
+
+$(BUILD)/lemstr.h: $(BUILD)/lemstr.stamp
+	@:
 
 # The 26 DOS files, fetched and NEVER committed - and `--from <dir-or-zip>` is
 # the offline route for a machine that has the set already (tools/getlemmings.py
@@ -10262,8 +10275,19 @@ $(BUILD)/lemdata.stamp: tools/getlemmings.py | $(BUILD)
 # CLUSTERS as well as bytes on every run (SPEC.md 114.3): both small geometries
 # have spc = 2, so every band file rounds up to 1,024 bytes and the byte
 # arithmetic is the wrong currency.
-$(BUILD)/lemband.stamp: tools/os88lem.py $(BUILD)/lemdata.stamp | $(BUILD)
-	python3 tools/os88lem.py -s $(LEMDATADIR) -o $(LEMBANDDIR)
+#
+# THE PACKAGE'S OWN FILES GO IN (--pkg), because every greyed fact says how
+# many of the disk's clusters are "already spent" and the 360KB plan drops
+# levels for room: both are the BUILT image's numbers, measured from the
+# package and README.TXT the image recipe puts beside the bands, never a byte
+# estimate (wave 4 review: the estimate said 340 where the disk used 336, and
+# greyed two levels that fitted). Each image recipe then holds the converter
+# to it with --check-image. So the bands follow the package, and a rebuilt
+# LEMMINGS.O88 that crosses a cluster re-plans every geometry.
+$(BUILD)/lemband.stamp: tools/os88lem.py $(BUILD)/lemdata.stamp \
+                        $(BUILD)/lemmings.o88 apps/lemmings/README.TXT | $(BUILD)
+	python3 tools/os88lem.py -s $(LEMDATADIR) -o $(LEMBANDDIR) \
+		--pkg $(BUILD)/lemmings.o88 --pkg apps/lemmings/README.TXT
 	@touch $@
 
 lemmings-data: $(BUILD)/lemband.stamp
@@ -10287,6 +10311,7 @@ LEMHOST := apps/lemmings/build.sh apps/lemmings/hosttest/os88.h \
            apps/lemmings/hosttest/mech/level1.txt \
            apps/lemmings/hosttest/mech/level2.txt \
            apps/lemmings/hosttest/mech/level2n.txt \
+           apps/lemmings/hosttest/mech/level0p.txt \
            $(wildcard apps/lemmings/hosttest/fixture/*)
 $(BUILD)/.lemmings-hostchecks: apps/lemmings/lemmings.c $(LEMSRC) $(LEMHOST) \
                                $(BUILD)/lemstr.h | $(BUILD)
@@ -10409,6 +10434,12 @@ LEMHEAD := $(addprefix LEMMINGS:,$(LEMPKG))
 # SYSTEM/APPDATA/LEMMINGS.SAV instead, which cannot work on a disk with no such
 # folder. One directory cluster a disk; --verify prints what is left.
 #
+# A CHECK THAT REFUSES TAKES THE IMAGE WITH IT: os88disk.py has already
+# written $@ by then and this Makefile has no .DELETE_ON_ERROR, so a refused
+# image left on disk was up to date to the next make and never checked again -
+# and --check-image is the only thing holding LEMMAN offset 20 to the truth
+# (wave 4's second review).
+#
 # IT GOES LAST, and that is argparse rather than taste (the note above APPSARGS):
 # an option that takes a value in the MIDDLE of a positional list stops the list
 # being collected, and the band files are that list.
@@ -10416,25 +10447,33 @@ $(BUILD)/lemmings.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --deep-folders $(LEMHEAD) \
 		$$(for f in $(LEMBANDDIR)/1440/*; do echo "LEMMINGS:$$f"; done) \
 		$(APPDATAFOLDER)
-	@python3 tools/os88disk.py --verify $@
+	@python3 tools/os88disk.py --verify $@ || { rm -f $@; exit 1; }
+	@python3 tools/os88lem.py --check-image $@ \
+		$(LEMBANDDIR)/1440/LEMMAN.LEM || { rm -f $@; exit 1; }
 
 $(BUILD)/lemmings720.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 --deep-folders $(LEMHEAD) \
 		$$(for f in $(LEMBANDDIR)/720/*; do echo "LEMMINGS:$$f"; done) \
 		$(APPDATAFOLDER)
-	@python3 tools/os88disk.py --verify $@
+	@python3 tools/os88disk.py --verify $@ || { rm -f $@; exit 1; }
+	@python3 tools/os88lem.py --check-image $@ \
+		$(LEMBANDDIR)/720/LEMMAN.LEM || { rm -f $@; exit 1; }
 
 $(BUILD)/lemmings120.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 --deep-folders $(LEMHEAD) \
 		$$(for f in $(LEMBANDDIR)/1200/*; do echo "LEMMINGS:$$f"; done) \
 		$(APPDATAFOLDER)
-	@python3 tools/os88disk.py --verify $@
+	@python3 tools/os88disk.py --verify $@ || { rm -f $@; exit 1; }
+	@python3 tools/os88lem.py --check-image $@ \
+		$(LEMBANDDIR)/1200/LEMMAN.LEM || { rm -f $@; exit 1; }
 
 $(BUILD)/lemmings360.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 --deep-folders $(LEMHEAD) \
 		$$(for f in $(LEMBANDDIR)/360/*; do echo "LEMMINGS:$$f"; done) \
 		$(APPDATAFOLDER)
-	@python3 tools/os88disk.py --verify $@
+	@python3 tools/os88disk.py --verify $@ || { rm -f $@; exit 1; }
+	@python3 tools/os88lem.py --check-image $@ \
+		$(LEMBANDDIR)/360/LEMMAN.LEM || { rm -f $@; exit 1; }
 
 lemmingsdisk: $(BUILD)/lemmings.img $(BUILD)/lemmings720.img \
               $(BUILD)/lemmings120.img $(BUILD)/lemmings360.img

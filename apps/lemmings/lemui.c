@@ -601,7 +601,8 @@ static const char *lem_modename(void)
 
 static void lem_row_state(int row)
 {
-    int at, n;
+    int at, n, i;
+    const char *s;
 
     lem_row_clear();
     at = lem_state_grey(row) ? LEM_AT_GREY : LEM_AT_TEXT;
@@ -618,9 +619,21 @@ static void lem_row_state(int row)
             lem_put(n, lem_cols - n, lem_modename(), at);
     } else if (row == LEM_ROW_SAVE && lem_savable &&
                lem_prog[lem_rating] >= 0) {
-        lem_setn(lem_line, sizeof(lem_line),
+        /* THE ORIGINAL'S WORDS FOR THE SAME FACT: the level reached, in its
+         * rating - Lemmix SLevelCodeScreen_CodeForSectionLevel_ss "Code for
+         * %s" + CR + "Level %s" - so "Fun Level 2", the rating's own name and
+         * the first word of LEMS_PV_LEVEL ("Level %s %s"). A bare "2" said
+         * nothing a reader could tie to a level (wave 4 review). */
+        s = lem_str(lem_rating_str[lem_rating]);
+        lem_put(n, lem_cols - n, s, at);
+        n += (int)os88_strlen(s) + 1;
+        s = lem_str(LEMS_PV_LEVEL);
+        for (i = 0; s[i] != 0 && s[i] != '%' && i < 15; i++)
+            lem_line[i] = s[i];
+        lem_setn(lem_line + i, sizeof(lem_line) - i,
                  (unsigned)(lem_prog[lem_rating] + 1));
-        lem_put(n, lem_cols - n, lem_line, at);
+        if (n < lem_cols)
+            lem_put(n, lem_cols - n, lem_line, at);
     }
 }
 
@@ -746,7 +759,16 @@ static void lem_row_text(int row)
     if (i < 0 || i >= lem_wrapn)
         return;
     lem_fit(lem_line, sizeof(lem_line), lem_wrap_line(i), lem_cols - 2);
-    lem_put(1, lem_cols - 1, lem_line, LEM_AT_TEXT);
+    n = 1;
+    if (lem_screen == LEM_SC_POST) {
+        /* THE POSTVIEW IS CENTRED, every line of it: Lemmix
+         * GameScreen.Postview.pas:62 draws GetScreenText through
+         * DrawPurpleTextCentered (wave 3's third review - it was flush left) */
+        n = (lem_cols - (int)os88_strlen(lem_line)) >> 1;
+        if (n < 1)
+            n = 1;
+    }
+    lem_put(n, lem_cols - n, lem_line, LEM_AT_TEXT);
 }
 
 /* lem_row_compose - and the gutter break is decided PER ROW, not per screen.

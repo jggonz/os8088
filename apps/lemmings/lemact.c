@@ -819,7 +819,7 @@ static int ovl_assign(void)
     if (!ovl_assign_to(lem_skill, &lem_lm[l1], l2))
         return 0;
     lem_cnt[k]--;
-    lem_dirty_count(lem_skill);
+    ovl_dirty_count(lem_skill);
     lem_snd_cue(SND_ASSIGN);
     return 1;
 }

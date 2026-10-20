@@ -125,7 +125,7 @@
  * solid class, the opposite of the map's, so a dot reads on both. */
 #define LEM_C_DOT        2
 
-static int lem_c_map(void)
+static int ovl_c_map(void)
 {
     return lem_kind_id() == LEM_RKIND_VGA ? LEM_C_MAP : LEM_C_MAP1BPP;
 }
@@ -137,7 +137,7 @@ static unsigned char lem_mmn[LEM_MM_H * LEM_MM_STRIDE];   /* ...and this
                                                            * they are drawn */
 static int lem_view;                /* the view's left edge, in world pixels */
 static int lem_mx, lem_my;          /* the pointer, in SCREEN pixels: 0..319,
-                                     * and 160.. is the panel (lem_mouse_map) */
+                                     * and 160.. is the panel (ovl_mouse_map) */
 #define LEM_VIEWH_PX   160          /* the screen's world rows; the panel
                                      * is the forty below them */
 static int lem_view_drawn;          /* ...and the MINIMAP CELL the view
@@ -185,14 +185,23 @@ static int lem_load_err;
 
 static int ovl_level_load(int level)
 {
+    int spec;
+
     lem_load_err = LEM_LE_MEM;
     if (!ovl_claim_all())
         return 0;
     lem_load_err = LEM_LE_BANK;
     if (!ovl_main_read())
         return 0;
-    if (!ovl_bank_read(lem_ent_u8(level, LEM_E_STYLE)))
+    /* A SPECIAL LEVEL READS ITS PICTURE HERE AND ITS STYLE BANK LATER: both
+     * go in the one bank claim, in that order (ovl_spec_read) */
+    spec = lem_ent_u8(level, LEM_E_SPECIAL);
+    if (spec != 0xFF) {
+        if (!ovl_spec_read(spec))
+            return 0;
+    } else if (!ovl_bank_read(lem_ent_u8(level, LEM_E_STYLE))) {
         return 0;
+    }
     /* ...AND THE RECORD, which wave 2 read inside the bracket (ovl_compose):
      * a refusal there could not be said (finding (1) of its last review) */
     if (!ovl_rec_read(level))
@@ -253,7 +262,7 @@ static void ovl_mm_sample(void)
                 break;
             n = lem_pop4[lem_probe4(wx, wy, lem_off4)];
             if (mx == 0)
-                lem_load_bar(LEM_LB_SAMPLE + my);   /* the sample's own share
+                ovl_load_bar(LEM_LB_SAMPLE + my);   /* the sample's own share
                                                      * of the well: 4.0 s on
                                                      * an XT and the longest
                                                      * wait after the compose
@@ -268,12 +277,12 @@ static void ovl_mm_sample(void)
     }
 }
 
-/* lem_mm_bit - what minimap cell (mx, my) shows: 0 black, 1 terrain, 2 a
+/* ovl_mm_bit - what minimap cell (mx, my) shows: 0 black, 1 terrain, 2 a
  * lemming's dot. THE DOTS ARE OVER THE TERRAIN AND UNDER THE VIEW RECTANGLE,
  * which is Lemmix's order (DrawLemmings paints them into the minimap buffer,
  * DrawMinimap frames the rectangle over it) - so every routine that puts a
  * cell back asks this one question and gets the dot back with it. */
-static int lem_mm_bit(int mx, int my)
+static int ovl_mm_bit(int mx, int my)
 {
     int b;
 
@@ -285,31 +294,31 @@ static int lem_mm_bit(int mx, int my)
     return (lem_mm[b] >> (7 - (mx & 7))) & 1;
 }
 
-/* lem_mm_ink - the colour of a lem_mm_bit() answer. */
-static int lem_mm_ink(int v, int on)
+/* ovl_mm_ink - the colour of a ovl_mm_bit() answer. */
+static int ovl_mm_ink(int v, int on)
 {
     if (v == 2)
         return LEM_C_DOT;
     return v ? on : LEM_C_BLACK;
 }
 
-/* lem_mm_row - one minimap row's cells, from column c0 to c1 inclusive, out of
+/* ovl_mm_row - one minimap row's cells, from column c0 to c1 inclusive, out of
  * the shadow. It is what erases the view rectangle when it moves: what is
  * under a view rectangle is exactly this.
  *
  * `my` MAY BE -1 OR LEM_MM_ROWS..: the rectangle is twenty rows and the sample
  * is eighteen inset by one (LEM_MM_YOFF), so its top and bottom edges sit on
- * panel rows no cell was ever drawn on. lem_mm_bit() answers 0 outside the
+ * panel rows no cell was ever drawn on. ovl_mm_bit() answers 0 outside the
  * sampled rows, which is what those two rows are: black. */
-static void lem_mm_row(int my, int c0, int c1)
+static void ovl_mm_row(int my, int c0, int c1)
 {
     int mx, run0, cur, v, on;
 
-    /* ONCE PER ROW AND NOT ONCE PER RUN. lem_c_map() is two near calls and a
+    /* ONCE PER ROW AND NOT ONCE PER RUN. ovl_c_map() is two near calls and a
      * compare, which is nothing beside a run's own lem_r_rect - but a run is
      * 150-550 us (§114.7.1) and a per-run call would put a fifth of that back
      * on the one path this wave measured. */
-    on = lem_c_map();
+    on = ovl_c_map();
     if (c0 < 0)
         c0 = 0;
     if (c1 > LEM_MM_W - 1)
@@ -317,19 +326,19 @@ static void lem_mm_row(int my, int c0, int c1)
     if (c1 < c0)
         return;
     run0 = c0;
-    cur = lem_mm_bit(c0, my);
+    cur = ovl_mm_bit(c0, my);
     for (mx = c0 + 1; mx <= c1 + 1; mx++) {
-        v = (mx <= c1) ? lem_mm_bit(mx, my) : -1;
+        v = (mx <= c1) ? ovl_mm_bit(mx, my) : -1;
         if (v == cur)
             continue;
         lem_r_rect(LEM_MM_X + run0, LEM_MM_Y + LEM_MM_YOFF + my,
-                   mx - run0, 1, lem_mm_ink(cur, on), 1);
+                   mx - run0, 1, ovl_mm_ink(cur, on), 1);
         run0 = mx;
         cur = v;
     }
 }
 
-/* lem_mm_col - the same thing down a COLUMN, in RECTANGLE rows.
+/* ovl_mm_col - the same thing down a COLUMN, in RECTANGLE rows.
  *
  * IT IS A RUN AND NOT A CELL, AND THE BENCH IS WHY. SPEC.md 114.7.1 measured a
  * bracketed one-cell `lem_r_rect` at 548 us and a plot INSIDE one call at
@@ -338,37 +347,37 @@ static void lem_mm_row(int my, int c0, int c1)
  * per-cell caller. Coalescing runs of one colour is what actually pays - a
  * minimap column of eighteen cells is typically three or four runs, so the
  * view rectangle's two erased columns go from 36 calls to about 8. */
-static void lem_mm_col(int mx, int r0, int r1)
+static void ovl_mm_col(int mx, int r0, int r1)
 {
     int r, run0, cur, v, on;
 
-    on = lem_c_map();               /* once per column - see lem_mm_row */
+    on = ovl_c_map();               /* once per column - see ovl_mm_row */
     if (mx < 0 || mx >= LEM_MM_W || r1 < r0)
         return;
     run0 = r0;
-    cur = lem_mm_bit(mx, r0 - LEM_MM_YOFF);
+    cur = ovl_mm_bit(mx, r0 - LEM_MM_YOFF);
     for (r = r0 + 1; r <= r1 + 1; r++) {
-        v = (r <= r1) ? lem_mm_bit(mx, r - LEM_MM_YOFF) : -1;
+        v = (r <= r1) ? ovl_mm_bit(mx, r - LEM_MM_YOFF) : -1;
         if (v == cur)
             continue;
         lem_r_rect(LEM_MM_X + mx, LEM_MM_Y + run0, 1, r - run0,
-                   lem_mm_ink(cur, on), 1);
+                   ovl_mm_ink(cur, on), 1);
         run0 = r;
         cur = v;
     }
 }
 
-static void lem_mm_draw(void)
+static void ovl_mm_draw(void)
 {
     int my;
 
     lem_r_batch(1);
     for (my = 0; my < LEM_MM_ROWS; my++)
-        lem_mm_row(my, 0, LEM_MM_W - 1);
+        ovl_mm_row(my, 0, LEM_MM_W - 1);
     lem_r_batch(0);
 }
 
-/* lem_view_rect - the view rectangle inside the minimap, moved.
+/* ovl_view_rect - the view rectangle inside the minimap, moved.
  *
  * THE RECTANGLE IS 25 CELLS AND NOT 320/16, and that is the original's own
  * fudge rather than arithmetic. Lemmix src/Dos.Consts.pas:71-79 documents it in
@@ -408,20 +417,20 @@ static void lem_mm_draw(void)
 /* lem_vr_edge - the outline's four pieces, drawn or erased.
  * `r` is a RECTANGLE row 0..LEM_MM_H-1; the sample is inset by LEM_MM_YOFF, so
  * cell row = r - LEM_MM_YOFF and the two edge rows fall outside the sample. */
-static void lem_vr_erase_span(int r, int c0, int c1)
+static void ovl_vr_erase_span(int r, int c0, int c1)
 {
     if (c1 >= c0)
-        lem_mm_row(r - LEM_MM_YOFF, c0, c1);
+        ovl_mm_row(r - LEM_MM_YOFF, c0, c1);
 }
 
-static void lem_vr_draw_span(int r, int c0, int c1)
+static void ovl_vr_draw_span(int r, int c0, int c1)
 {
     if (c1 >= c0)
         lem_r_rect(LEM_MM_X + c0, LEM_MM_Y + r, c1 - c0 + 1, 1,
                    LEM_C_VIEW, 1);
 }
 
-static void lem_view_rect(int erase_x0)
+static void ovl_view_rect(int erase_x0)
 {
     int x0, c0, c1, el, er;
 
@@ -441,9 +450,9 @@ static void lem_view_rect(int erase_x0)
         el = (erase_x0 != x0 + LEM_VR_W - 1);
         er = (erase_x0 + LEM_VR_W - 1 != x0);
         if (el)
-            lem_mm_col(erase_x0, 1, LEM_MM_H - 2);
+            ovl_mm_col(erase_x0, 1, LEM_MM_H - 2);
         if (er)
-            lem_mm_col(erase_x0 + LEM_VR_W - 1, 1, LEM_MM_H - 2);
+            ovl_mm_col(erase_x0 + LEM_VR_W - 1, 1, LEM_MM_H - 2);
         /* ...and the part of the old top and bottom rows the new rectangle no
          * longer reaches, CLAMPED to the old rectangle so that a jump bigger
          * than the rectangle does not erase cells the draw below covers. */
@@ -451,14 +460,14 @@ static void lem_view_rect(int erase_x0)
             c1 = x0 - 1;
             if (c1 > erase_x0 + LEM_VR_W - 1)
                 c1 = erase_x0 + LEM_VR_W - 1;
-            lem_vr_erase_span(0, erase_x0, c1);
-            lem_vr_erase_span(LEM_MM_H - 1, erase_x0, c1);
+            ovl_vr_erase_span(0, erase_x0, c1);
+            ovl_vr_erase_span(LEM_MM_H - 1, erase_x0, c1);
         } else {
             c0 = x0 + LEM_VR_W;
             if (c0 < erase_x0)
                 c0 = erase_x0;
-            lem_vr_erase_span(0, c0, erase_x0 + LEM_VR_W - 1);
-            lem_vr_erase_span(LEM_MM_H - 1, c0, erase_x0 + LEM_VR_W - 1);
+            ovl_vr_erase_span(0, c0, erase_x0 + LEM_VR_W - 1);
+            ovl_vr_erase_span(LEM_MM_H - 1, c0, erase_x0 + LEM_VR_W - 1);
         }
     }
 
@@ -467,20 +476,20 @@ static void lem_view_rect(int erase_x0)
     lem_r_rect(LEM_MM_X + x0 + LEM_VR_W - 1, LEM_MM_Y + 1, 1, LEM_MM_H - 2,
                LEM_C_VIEW, 1);
     if (erase_x0 < 0) {
-        lem_vr_draw_span(0, x0, x0 + LEM_VR_W - 1);
-        lem_vr_draw_span(LEM_MM_H - 1, x0, x0 + LEM_VR_W - 1);
+        ovl_vr_draw_span(0, x0, x0 + LEM_VR_W - 1);
+        ovl_vr_draw_span(LEM_MM_H - 1, x0, x0 + LEM_VR_W - 1);
     } else if (x0 > erase_x0) {
         c0 = erase_x0 + LEM_VR_W;
         if (c0 < x0)
             c0 = x0;
-        lem_vr_draw_span(0, c0, x0 + LEM_VR_W - 1);
-        lem_vr_draw_span(LEM_MM_H - 1, c0, x0 + LEM_VR_W - 1);
+        ovl_vr_draw_span(0, c0, x0 + LEM_VR_W - 1);
+        ovl_vr_draw_span(LEM_MM_H - 1, c0, x0 + LEM_VR_W - 1);
     } else {
         c1 = erase_x0 - 1;
         if (c1 > x0 + LEM_VR_W - 1)
             c1 = x0 + LEM_VR_W - 1;
-        lem_vr_draw_span(0, x0, c1);
-        lem_vr_draw_span(LEM_MM_H - 1, x0, c1);
+        ovl_vr_draw_span(0, x0, c1);
+        ovl_vr_draw_span(LEM_MM_H - 1, x0, c1);
     }
     lem_r_batch(0);
 }
@@ -511,11 +520,11 @@ static int lem_stat_have;           /* the template is on the glass */
 
 static int lem_load_n;              /* how far the loading bar has got */
 
-static void lem_status_template(void)
+static void ovl_status_template(void)
 {
     unsigned seg, off;
 
-    if (!lem_item(LEM_ITEM_STATFONT))
+    if (!ovl_item(LEM_ITEM_STATFONT))
         return;
     seg = lem_far_seg;
     off = lem_far_off;
@@ -528,16 +537,16 @@ static void lem_status_template(void)
     lem_stat_have = 1;
 }
 
-/* lem_status_field - `n` cells at column `col`, delta-drawn.
+/* ovl_status_field - `n` cells at column `col`, delta-drawn.
  *
  * ONE CALL PER FIELD AND NOT ONE PER CELL: lem_f_run() exists for the same
  * reason os88_font_run() does on the desktop side, and a cell is ~900 us of
  * plotting whoever draws it (lemfont.inc's header). */
-static void lem_status_field(int col, const char *s, int n)
+static void ovl_status_field(int col, const char *s, int n)
 {
     if (!lem_stat_have)
         return;
-    if (!lem_item(LEM_ITEM_STATFONT))
+    if (!ovl_item(LEM_ITEM_STATFONT))
         return;
     lem_f_run(lem_far_seg, lem_far_off, col, LEM_STAT_ROW, s, n);
 }
@@ -546,9 +555,9 @@ static void lem_status_field(int col, const char *s, int n)
  * The panel, and the whole first frame
  * ==========================================================================*/
 
-static void lem_panel_draw(void)
+static void ovl_panel_draw(void)
 {
-    if (!lem_item(LEM_ITEM_PANEL))
+    if (!ovl_item(LEM_ITEM_PANEL))
         return;
     lem_r_panel(lem_far_seg, lem_far_off);
 }
@@ -595,10 +604,10 @@ static void ovl_frame_panel(void)
      * `out`s. */
     if (lem_kind_id() == LEM_RKIND_VGA)
         lem_r_scroll(lem_view);
-    lem_panel_draw();
+    ovl_panel_draw();
     lem_stat_have = 0;
-    lem_status_template();
-    lem_status_field(LEM_STAT_F0, lem_str(LEMS_LOADING), LEM_STAT_N0);
+    ovl_status_template();
+    ovl_status_field(LEM_STAT_F0, lem_str(LEMS_LOADING), LEM_STAT_N0);
     lem_load_n = 0;
     /* ...and PRESENT it, because on the two shadow backends everything above
      * went into the shadow and the glass is still the BIOS's black; the panel's
@@ -611,13 +620,13 @@ static void ovl_frame_panel(void)
     lem_r_present();
 }
 
-/* lem_load_bar - the compose's own progress, one cell at a time.
+/* ovl_load_bar - the compose's own progress, one cell at a time.
  *
  * ovl_compose() calls it every fourth terrain slot, which is ~100 cells over
  * the 400 - and a cell is one lb_rpix, against 22.0 ms for the piece beside it
  * (SPEC.md 114.7.2).
  * It is drawn in the minimap's own well, which is black at this point and which
- * lem_mm_draw() covers completely afterwards, so it needs no erase of its own.
+ * ovl_mm_draw() covers completely afterwards, so it needs no erase of its own.
  *
  * IT DOES NOT PRESENT. On VGA the well IS video memory and the bar is live; on
  * the two shadow backends a present is 178 ms (SPEC.md 114.7.1 row 7) and the
@@ -625,10 +634,10 @@ static void ovl_frame_panel(void)
  * word above are what those cards show and the bar arrives with the first
  * frame. Paying 100 presents to animate a five-second wait is the trade this
  * refuses. */
-static void lem_load_bar(int n)
+static void ovl_load_bar(int n)
 {
     /* VGA ONLY, which is finding (a) of wave 2's last review: on the two
-     * shadow backends the bar's cells went into the shadow and lem_mm_draw()
+     * shadow backends the bar's cells went into the shadow and ovl_mm_draw()
      * covered every one of them before the first present, so ~100 plots a
      * level reached no glass at all. The panel and LOADING are what those
      * cards show, and the compose there is the mask alone. */
@@ -681,9 +690,9 @@ static void lem_damage(int x, int y, int w, int h)
     lem_ndmg++;
 }
 
-/* lem_mm_vr - is minimap cell (mx, my) on the view rectangle's OUTLINE, which
+/* ovl_mm_vr - is minimap cell (mx, my) on the view rectangle's OUTLINE, which
  * stays on top of everything the minimap shows? */
-static int lem_mm_vr(int mx, int my)
+static int ovl_mm_vr(int mx, int my)
 {
     int x0 = lem_view / LEM_MM_XSTEP;
     int r = my + LEM_MM_YOFF;
@@ -693,15 +702,15 @@ static int lem_mm_vr(int mx, int my)
     return mx == x0 || mx == x0 + LEM_VR_W - 1 || r == 0 || r == LEM_MM_H - 1;
 }
 
-/* lem_mm_cell - one minimap cell redrawn from what it now shows. */
-static void lem_mm_cell(int mx, int my)
+/* ovl_mm_cell - one minimap cell redrawn from what it now shows. */
+static void ovl_mm_cell(int mx, int my)
 {
     if (mx < 0 || mx >= LEM_MM_W || my < 0 || my >= LEM_MM_ROWS)
         return;
-    if (lem_mm_vr(mx, my))
+    if (ovl_mm_vr(mx, my))
         return;
     lem_r_rect(LEM_MM_X + mx, LEM_MM_Y + LEM_MM_YOFF + my, 1, 1,
-               lem_mm_ink(lem_mm_bit(mx, my), lem_c_map()), 1);
+               ovl_mm_ink(ovl_mm_bit(mx, my), ovl_c_map()), 1);
 }
 
 /* ovl_mm_clear - Lemmix's "fake draw mask in fMiniMap": the cell under a
@@ -806,7 +815,7 @@ static void ovl_mm_cells(void)
         lem_mmc[b] = 0;
         for (bit = 0; bit < 8; bit++)
             if (d & (0x80 >> bit))
-                lem_mm_cell(((b % LEM_MM_STRIDE) << 3) + bit,
+                ovl_mm_cell(((b % LEM_MM_STRIDE) << 3) + bit,
                             b / LEM_MM_STRIDE);
     }
     lem_r_batch(0);
@@ -824,12 +833,12 @@ static char lem_stnew[LEM_STAT_CELLS + 1];
 static char lem_stold[LEM_STAT_CELLS + 1];
 static unsigned char lem_dig8[8];
 
-static void lem_dirty_count(int b)
+static void ovl_dirty_count(int b)
 {
     lem_cdirty |= 1 << b;
 }
 
-static void lem_dirty_sel(int b)
+static void ovl_dirty_sel(int b)
 {
     (void)b;                        /* ovl_panel_live() compares the two */
 }
@@ -838,7 +847,7 @@ static void lem_dirty_stat(void)
 {
 }
 
-static void lem_stat_time(void)
+static void ovl_stat_time(void)
 {
     lem_tmin = lem_min;
     lem_tsec = lem_sec;
@@ -870,7 +879,7 @@ static void ovl_count_draw(int b)
         lem_r_rect(b * 16 + 4, 17, 8, 8, 3, 1);
         return;
     }
-    if (!lem_item(LEM_ITEM_DIGITS))
+    if (!ovl_item(LEM_ITEM_DIGITS))
         return;
     seg = lem_far_seg;
     off = lem_far_off;
@@ -878,8 +887,8 @@ static void ovl_count_draw(int b)
     lo = n % 10;
     for (r = 0; r < 8; r++)
         lem_dig8[r] = (unsigned char)
-            ((lem_pk(seg, off + ((hi * 2 + 1) << 3) + r) & 0xF0) |
-             (lem_pk(seg, off + ((lo * 2) << 3) + r) & 0x0F));
+            ((ovl_pk(seg, off + ((hi * 2 + 1) << 3) + r) & 0xF0) |
+             (ovl_pk(seg, off + ((lo * 2) << 3) + r) & 0x0F));
     lem_r_glyph8(lem_dig8, b * 16 + 4, 17, 8, 3, 0);
 }
 
@@ -894,12 +903,12 @@ static void ovl_sel_draw(int b, int on)
         lem_r_rect(b * 16 + 1, 16, 15, 24, 3, 0);
         return;
     }
-    if (lem_item(LEM_ITEM_PANEL))
+    if (ovl_item(LEM_ITEM_PANEL))
         lem_r_panrect(lem_far_seg, lem_far_off, b * 16 + 1, 16, 15, 24);
 }
 
 /* lem_pad - n characters of `s` into dst, padded RIGHT with spaces. */
-static void lem_padr(char *dst, const char *s, int n)
+static void ovl_padr(char *dst, const char *s, int n)
 {
     int i = 0;
 
@@ -934,12 +943,12 @@ static void ovl_stat_build(void)
         }
         lem_line[i++] = ' ';
         os88_utoa((unsigned)lem_hit_n, lem_line + i);
-        lem_padr(lem_stnew, lem_line, 14);
+        ovl_padr(lem_stnew, lem_line, 14);
     } else {
-        lem_padr(lem_stnew, "", 14);
+        ovl_padr(lem_stnew, "", 14);
     }
     os88_utoa((unsigned)lem_out, lem_num);
-    lem_padr(lem_stnew + 18, lem_num, 5);
+    ovl_padr(lem_stnew + 18, lem_num, 5);
     /* IN AS LEMMIX LAST SET IT, not as it would read now: SetInfoLemmingsSaved
      * is called at the level's start (Game.pas:1635, 0 of 1) and when an
      * exiter is removed (HandleExiting :3308) and nowhere else, so a nuke -
@@ -949,7 +958,7 @@ static void ovl_stat_build(void)
     n = (int)os88_strlen(lem_num);
     lem_num[n] = '%';
     lem_num[n + 1] = 0;
-    lem_padr(lem_stnew + 26, lem_num, 5);
+    ovl_padr(lem_stnew + 26, lem_num, 5);
     lem_stnew[35] = (char)(lem_tmin >= 10 ? '0' + lem_tmin / 10 : ' ');
     lem_stnew[36] = (char)('0' + lem_tmin % 10);
     lem_stnew[38] = (char)('0' + lem_tsec / 10);
@@ -974,7 +983,7 @@ static void ovl_stat_delta(void)
         j = i;
         while (j < LEM_STAT_CELLS && lem_stnew[j] != lem_stold[j])
             j++;
-        lem_status_field(i, lem_stnew + i, j - i);
+        ovl_status_field(i, lem_stnew + i, j - i);
         while (i < j) {
             lem_stold[i] = lem_stnew[i];
             i++;
@@ -1267,6 +1276,18 @@ static void ovl_obj_vis(void)
     }
 }
 
+/* ovl_inmargin - is lemming p inside the view's margin, the +- 32 pixels VRAM
+ * keeps lemmings in (and the shadow cards draw them in)? The two compares
+ * ovl_sbox opens with, alone: ovl_vframe(0) asks it of every lemming BEFORE
+ * paying for a box (wave 4 review). The margin need not cover a scroll's step:
+ * every compose runs at the NEW view before the Start Address shows it
+ * (ovl_tick_draw). */
+static int ovl_inmargin(struct lem_l *p)
+{
+    return !(p->fl & LF_GONE) && p->x >= lem_view - 32 &&
+           p->x <= lem_view + LEM_VIEW_W + 32;
+}
+
 /* ovl_sbox - lemming i's box as it is drawn this frame: its sprite and its
  * countdown digit, in whole bytes, clipped to the VRAM world. 0 = it is not
  * drawn at all (gone, outside the view's margin, or no frame in the bank). */
@@ -1275,9 +1296,7 @@ static int ovl_sbox(int i)
     struct lem_l *p = &lem_lm[i];
     int row, x0, y0, x1, y1;
 
-    if (p->fl & LF_GONE)
-        return 0;
-    if (p->x < lem_view - 32 || p->x > lem_view + LEM_VIEW_W + 32)
+    if (!ovl_inmargin(p))
         return 0;
     if (!lem_gfx_ok)
         return 0;
@@ -1332,7 +1351,6 @@ static void ovl_sprites_all(void)
 {
     int i, vga;
     unsigned char *b;
-    struct lem_l *p;
 
     vga = lem_kind_id() == LEM_RKIND_VGA;
     for (i = 0; i < lem_released; i++) {
@@ -1345,15 +1363,67 @@ static void ovl_sprites_all(void)
             b[2] = (unsigned char)lem_br0;
             b[3] = (unsigned char)lem_br1;
         } else {
-            p = &lem_lm[i];
-            if (p->fl & LF_GONE)
-                continue;
-            if (p->x < lem_view - 32 || p->x > lem_view + LEM_VIEW_W + 32)
+            if (!ovl_inmargin(&lem_lm[i]))
                 continue;
         }
         ovl_sprite_one(i);
     }
 }
+
+/* --- the pointer -------------------------------------------------------------
+ * Lemmix's own two 14x14 cursors, hotspot (7, 7) (src/GameScreen.Player.pas
+ * InitializeCursor; the bitmaps are src/Data/Cursors/Cursors.zip's
+ * CursorDefault / CursorHighlight and their masks, zlib licence): a dashed
+ * cross, and the boxed form shown while a lemming is under it. IN THREE
+ * COLOURS, as both references draw them - palette 1 the blue centre, 2 green
+ * and 3 white on the arms and the box corners (the left arm green over white,
+ * the right white over green, the bar white | green) - stored as TWO PLANES of
+ * fourteen 2-byte rows, plane 0 first: a pixel's colour is p0 | p1 << 1 and it
+ * is opaque where either is set. The VGA draws the colours; the two shadow
+ * cards draw the OR, their solid class (lemsprite.inc lb_score). Nothing is
+ * taken from lemmings_3ds's src/data/cursor.c, which that project's LICENCE.txt
+ * excludes from its dedication (SPEC.md 114.1) - it agrees with these. Wave 3
+ * drew one colour, the panel's white. */
+static const unsigned char lem_cur0[56] = {
+    0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+    0x03, 0x54, 0xAB, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+    0x03, 0x00, 0x00, 0x00, 0xA8, 0x54, 0xA8, 0x54, 0x00, 0x00, 0x03, 0x00,
+    0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x00
+};
+static const unsigned char lem_cur1[56] = {
+    0x33, 0x30, 0x00, 0x00, 0x80, 0x04, 0x80, 0x04, 0x00, 0x00, 0x00, 0x00,
+    0x80, 0x04, 0x80, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x04, 0x80, 0x04,
+    0x00, 0x00, 0x33, 0x30, 0xF0, 0x3C, 0x80, 0x04, 0x80, 0x04, 0x80, 0x04,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x80, 0x04, 0x80, 0x04, 0x80, 0x04, 0xF0, 0x3C
+};
+
+
+static void ovl_cursor_off(void)
+{
+    if (lem_cur_on)
+        lem_r_cursor(0, 0, 0);
+    lem_cur_on = 0;
+}
+
+/* ovl_cur_shape - the boxed form only when the status line names a lemming:
+ * Lemmix HitTest (Game.pas:3641-3668) sets GAME_CURSOR_LEMMING on HitCount > 0
+ * AND Lemming1 <> nil, and with the right button held over nothing but
+ * working lemmings Lemming1 is nil - the default cross, and a blank word. */
+static int ovl_cur_shape(void)
+{
+    return lem_hit_n > 0 && lem_hit_l1 >= 0;
+}
+
+static void ovl_cursor_on(void)
+{
+    lem_r_cursor(ovl_cur_shape() ? lem_cur1 : lem_cur0, lem_mx - 7,
+                 lem_my - 7);
+    lem_cur_on = 1;
+}
+
+static int lem_curx = -1, lem_cury = -1, lem_curshape = -1;
 
 /* ovl_vframe - ONE VGA GAME FRAME, COMPOSED OFF THE GLASS (SPEC.md 114.4.6).
  *
@@ -1372,15 +1442,121 @@ static void ovl_sprites_all(void)
  * and a lemming was off the glass from its restore to its draw - the whole
  * frame on an XT - with the pointer off with it whenever it was near one,
  * which is to say while the player aimed (wave 3's second review). */
-static void ovl_vframe(void)
+static int lem_cmv;                 /* this frame moves the pointer too */
+
+/* ovl_rc_meets - does a byte box (b0, b1, r0, r1) meet any of the frame's
+ * rectangles? A lemming that meets none is not latched anywhere, so composing
+ * its sprite into the scratch is work for no pixel (ovl_vframe(0)). */
+static int ovl_rc_meets(unsigned char *b)
 {
-    int i, k, y0, h, ymin, ymax;
+    int k;
+    unsigned char *q;
+
+    for (k = 0; k < lem_nrc; k++) {
+        q = &lem_rc[k * 4];
+        if (b[0] <= q[1] && q[0] <= b[1] && b[2] <= q[3] && q[2] <= b[3])
+            return 1;
+    }
+    return 0;
+}
+
+/* ovl_rc_holds - is the byte box (b0, b1, r0, r1) wholly inside ONE of the
+ * frame's rectangles? Then it is erased and drawn whole by the band loop. */
+static int ovl_rc_holds(int b0, int b1, int r0, int r1)
+{
+    int k;
+    unsigned char *q;
+
+    for (k = 0; k < lem_nrc; k++) {
+        q = &lem_rc[k * 4];
+        if (q[0] <= b0 && b1 <= q[1] && q[2] <= r0 && r1 <= q[3])
+            return 1;
+    }
+    return 0;
+}
+
+/* ovl_infr_whole - A COMPOSE BETWEEN THE TICKS OF A PART-STEPPED FRAME
+ * (lem_infr: more than LEM_STEP_MAX lemmings out, so one game frame is
+ * several passes). Lemmings before lem_cursor have STEPPED - a new x and a
+ * new frame - while lem_obox still holds the box the glass shows. One of
+ * those whose old box meets a rectangle would be drawn in its NEW state
+ * clipped to the rectangle over an erasure of its OLD one clipped the same
+ * way: half a lemming in each place, under the pointer, while the player
+ * aims (wave 4's second review). So each such lemming becomes a crosser:
+ * the union of its two boxes is a rectangle, and its box is the new one -
+ * erased and drawn whole. A union can meet more of the stepped crowd, so
+ * this runs until a pass adds nothing; it ends, because every rectangle
+ * only grows inside the world. One not yet stepped is in the state the glass
+ * shows, and drawing it clipped draws what is there. */
+static void ovl_infr_whole(void)
+{
+    int i, k, b0, b1, r0, r1, grew;
+    unsigned char *b;
+
+    do {
+        grew = 0;
+        for (i = 0; i < lem_cursor && i < lem_released; i++) {
+            b = &lem_obox[i * 4];
+            if (b[0] == 0xFF || !ovl_rc_meets(b))
+                continue;
+            b0 = b[0];
+            b1 = b[1];
+            r0 = b[2];
+            r1 = b[3];
+            k = ovl_sbox(i);
+            if (k) {
+                if (lem_bb0 < b0)
+                    b0 = lem_bb0;
+                if (lem_bb1 > b1)
+                    b1 = lem_bb1;
+                if (lem_br0 < r0)
+                    r0 = lem_br0;
+                if (lem_br1 > r1)
+                    r1 = lem_br1;
+                b[0] = (unsigned char)lem_bb0;
+                b[1] = (unsigned char)lem_bb1;
+                b[2] = (unsigned char)lem_br0;
+                b[3] = (unsigned char)lem_br1;
+            } else {
+                b[0] = 0xFF;
+            }
+            if (!ovl_rc_holds(b0, b1, r0, r1)) {
+                ovl_rc_add(b0, b1, r0, r1, 0);
+                grew = 1;
+            }
+        }
+    } while (grew);
+}
+
+static void ovl_vframe(int step)
+{
+    int i, k, y0, h, ymin, ymax, vmoved;
     unsigned char *b, *q;
 
     lem_nrc = 0;
-    ovl_rc_world();
-    for (i = 0; i < lem_released; i++) {
+    if (step)
+        ovl_rc_world();
+    /* NOT A GAME FRAME (a scroll, a minimap jump or a pointer move while
+     * nothing stepped, ovl_tick_draw): the membership loop below runs only
+     * when the VIEW moved - a pointer move alone cannot change who is in the
+     * margin (wave 4's second review: it paid an intra-module far call a
+     * lemming on every aiming tick). This is the VGA's arm, which pans a
+     * pixel at a time, so the view moved exactly when it is not the one on
+     * the glass (ovl_scroll_due with no snap). */
+    vmoved = step || lem_view != lem_scrolled;
+    for (i = 0; i < lem_released && vmoved; i++) {
         b = &lem_obox[i * 4];
+        /* ...and then only the lemmings newly IN the view's margin, asked with
+         * ovl_inmargin's two compares BEFORE a box is paid for (wave 4
+         * review: ovl_sbox over the whole crowd was ~20 ms of an XT tick on
+         * every scroll step). One newly OUT keeps its box: composing its
+         * erasure is a whole compose-and-latch of VRAM 32 pixels beyond the
+         * glass, the next game frame's step erases a box whose ovl_sbox
+         * answers 0 anyway, and a paused view that comes back finds it still
+         * drawn where it stands (wave 4's second review). One that stayed is
+         * on the glass where its box says. */
+        if (!step && (b[0] != 0xFF || !ovl_inmargin(&lem_lm[i])))
+            continue;
         k = ovl_sbox(i);
         if (b[0] == 0xFF && !k)
             continue;
@@ -1403,6 +1579,22 @@ static void ovl_vframe(void)
             b[0] = 0xFF;
         }
     }
+    if (lem_cmv) {
+        /* THE POINTER MOVES INSIDE THE COMPOSE (wave 3's third review): its
+         * old box and its new one are rectangles of this frame, and the asm
+         * is told the new place before anything is drawn - so the latch puts
+         * the erasure and the new pointer down in ONE write a byte, where the
+         * frame used to compose it at the old place and the tick then took it
+         * off and drew it again (rule 2's erase-then-draw on every aiming
+         * move). ovl_tick_draw only asks for this when both boxes are wholly
+         * in the world, so the panel piece never moves here. */
+        ovl_rc_px(lem_view + lem_curx - 7, lem_cury - 7, 14, 14, 0);
+        ovl_rc_px(lem_view + lem_mx - 7, lem_my - 7, 14, 14, 0);
+        lem_r_cplace(ovl_cur_shape() ? lem_cur1 : lem_cur0, lem_mx - 7,
+                     lem_my - 7);
+    }
+    if (!step && lem_infr && lem_nrc)
+        ovl_infr_whole();
     if (lem_nrc == 0)
         return;
     ovl_obj_vis();
@@ -1434,6 +1626,12 @@ static void ovl_vframe(void)
             b = &lem_obox[i * 4];
             if (b[0] == 0xFF || b[3] < y0 || b[2] >= y0 + h)
                 continue;
+            /* a game frame made every lemming a rectangle of its own; with
+             * no step only the crossers are, and a lemming that meets no
+             * rectangle is latched nowhere (wave 4 review: one crossing
+             * recomposed the whole crowd's sprites) */
+            if (!step && !ovl_rc_meets(b))
+                continue;
             ovl_sprite_one(i);
         }
         if (lem_cur_on) {
@@ -1448,7 +1646,8 @@ static void ovl_vframe(void)
         lem_r_cend();
     }
     lem_nvis = -1;
-    ovl_objs_mark();
+    if (step)
+        ovl_objs_mark();
 }
 
 /* ovl_bg_redraw - a world rectangle's background put back and every object
@@ -1529,50 +1728,7 @@ static void ovl_dmg_fold(int x, int y, int w, int h)
     d[3] = y1 - d[1];
 }
 
-/* --- the pointer -------------------------------------------------------------
- * GEOMETRY ONLY from Lemmix (src/GameScreen.Player.pas InitializeCursor: two
- * 14x14 cursors, hotspot (7, 7)): a dashed cross, and the boxed form shown
- * while a lemming is under it. The bitmaps are DRAWN HERE for this port -
- * lemmings_3ds's src/data/cursor.c is third party and excluded from that
- * project's dedication (SPEC.md 114.1), so nothing is taken from it. */
-static const unsigned char lem_cur0[28] = {
-    0x03, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
-    0xAB, 0x54, 0xAB, 0x54, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x00,
-    0x00, 0x00, 0x03, 0x00
-};
-static const unsigned char lem_cur1[28] = {
-    0xF3, 0x3C, 0x80, 0x04, 0x80, 0x04, 0x80, 0x04, 0x00, 0x00, 0x00, 0x00,
-    0x80, 0x04, 0x80, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x04, 0x80, 0x04,
-    0x80, 0x04, 0xF3, 0x3C
-};
-
-
-static void lem_cursor_off(void)
-{
-    if (lem_cur_on)
-        lem_r_cursor(0, 0, 0);
-    lem_cur_on = 0;
-}
-
-/* lem_cur_shape - the boxed form only when the status line names a lemming:
- * Lemmix HitTest (Game.pas:3641-3668) sets GAME_CURSOR_LEMMING on HitCount > 0
- * AND Lemming1 <> nil, and with the right button held over nothing but
- * working lemmings Lemming1 is nil - the default cross, and a blank word. */
-static int lem_cur_shape(void)
-{
-    return lem_hit_n > 0 && lem_hit_l1 >= 0;
-}
-
-static void lem_cursor_on(void)
-{
-    lem_r_cursor(lem_cur_shape() ? lem_cur1 : lem_cur0, lem_mx - 7,
-                 lem_my - 7);
-    lem_cur_on = 1;
-}
-
 /* --- the whole frame --------------------------------------------------------- */
-
-static int lem_curx = -1, lem_cury = -1, lem_curshape = -1;
 
 /* ovl_frame_first - everything that is drawn once, in the order it has to be:
  * the background (T into VRAM, or W out of the mask), every object on it, the
@@ -1580,7 +1736,7 @@ static int lem_curx = -1, lem_cury = -1, lem_curshape = -1;
  * selection frame - and the same again when 'f' brings the level back. The
  * pointer is OWED afterwards: its cached position is forgotten, so the first
  * tick puts it back even if the mouse has not moved (after 'f' and resume the
- * loop's own lem_cursor_off() had left it off, and a still mouse kept it off). */
+ * loop's own ovl_cursor_off() had left it off, and a still mouse kept it off). */
 static void ovl_frame_first(int resume)
 {
     int b;
@@ -1599,16 +1755,16 @@ static void ovl_frame_first(int resume)
     if (!resume)
         ovl_mm_sample();
     else {
-        lem_panel_draw();
+        ovl_panel_draw();
         lem_stat_have = 0;
-        lem_status_template();
+        ovl_status_template();
     }
-    lem_mm_draw();
+    ovl_mm_draw();
     for (b = 0; b < LEM_MM_H * LEM_MM_STRIDE; b++)
-        lem_mmc[b] = 0;             /* lem_mm_draw() drew every cell */
+        lem_mmc[b] = 0;             /* ovl_mm_draw() drew every cell */
     lem_mmpend = 0;
     lem_view_drawn = -1;
-    lem_view_rect(-1);
+    ovl_view_rect(-1);
     lem_view_drawn = lem_view / LEM_MM_XSTEP;
     for (b = 0; b < LEM_STAT_CELLS; b++)
         lem_stold[b] = (char)0xFF;  /* every cell differs: the line is drawn */
@@ -1640,7 +1796,7 @@ static void ovl_frame_draw(void)
     lem_c_sprites = 0;
     lem_c_objects = 0;
     if (lem_kind_id() == LEM_RKIND_VGA) {
-        ovl_vframe();
+        ovl_vframe(1);
         return;
     }
     lem_r_srest();
@@ -1661,9 +1817,25 @@ static void ovl_frame_draw(void)
  * drew every sprite twice and restored it once on the most expensive tick
  * there is (SPEC.md 114.7.1's 178 ms scrolling frame). On VGA the scroll is
  * the Start Address now and the pel pan after the retrace (ovl_tick_draw). */
+/* ovl_scroll_due - will the scroll move a pixel? VGA pans one pixel at a
+ * time; CGA snaps the view to 4 pixels and Hercules to 8 (lemblit.inc .snap),
+ * so a Ctrl+arrow's one-pixel step there scrolls nothing until the snap moves
+ * - and the shadow arm below used to drop and redraw every sprite and present
+ * their rows for it, 3 passes of 4 on CGA and 7 of 8 on Hercules, showing
+ * nothing (wave 4 review). lem_scrolled keeps the last view that DID scroll,
+ * whose snap is the one on the glass. */
+static int ovl_scroll_due(void)
+{
+    int m;
+
+    m = lem_kind_id() == LEM_RKIND_VGA ? 0
+      : lem_kind_id() == LEM_RKIND_CGA ? 3 : 7;
+    return (lem_view & ~m) != (lem_scrolled & ~m);
+}
+
 static int ovl_view_follow(int drew)
 {
-    if (lem_view == lem_scrolled)
+    if (!ovl_scroll_due())
         return 0;
     lem_scrolled = lem_view;
     if (lem_kind_id() == LEM_RKIND_VGA) {
@@ -1837,7 +2009,9 @@ static int ovl_pan_hit(int cx, int cy, int vr, int ox)
  *                 moves with the Start Address; (b) around a PANEL write
  *                 inside the bytes it holds (ovl_pan_hit), right before the
  *                 minimap and the panel are drawn; (c) as one adjacent pair
- *                 at the very end when it moved or changed shape.
+ *                 at the very end when it moved or changed shape with a box
+ *                 reaching the panel - a move wholly in the world, drawn
+ *                 frame or not, rides a compose instead (lem_cmv).
  *   the beam      VGA waits for a vertical retrace ONLY to scroll - the Start
  *                 Address goes out before the wait and the pel pan after it,
  *                 so both land on one refresh. A frame that does not scroll
@@ -1863,8 +2037,8 @@ static void ovl_tick_draw(int drew, int right)
     for (i = 0; i < LEM_STAT_CELLS && !pd; i++)
         if (lem_stnew[i] != lem_stold[i])
             pd = 1;
-    shape = lem_cur_shape();
-    scroll = lem_view != lem_scrolled;
+    shape = ovl_cur_shape();
+    scroll = ovl_scroll_due();
     ox = lem_view_drawn;
     vr = lem_view / LEM_MM_XSTEP != lem_view_drawn;
     moved = lem_mx != lem_curx || lem_my != lem_cury || shape != lem_curshape;
@@ -1872,27 +2046,66 @@ static void ovl_tick_draw(int drew, int right)
     if (!drew && !pd && !scroll && !vr && !moved && !mm && lem_cur_on)
         return;
     if (lem_kind_id() == LEM_RKIND_VGA) {
+        /* A MOVING POINTER RIDES A COMPOSE when both its boxes are wholly in
+         * the world and the view stays put: on a game frame's, and on a tick
+         * with no frame through ovl_vframe(0), whose rectangles are then the
+         * pointer's two boxes and whose sprites are only the lemmings that
+         * touch them - so the latch puts the erasure and the new pointer down
+         * in one write a byte, on the XT's many aiming ticks between drawn
+         * frames as well as on the drawn one (wave 4 review). A scroll's tick
+         * leaves it to the scroll's own pair below. */
+        lem_cmv = !scroll && lem_cur_on && moved &&
+                  lem_cury + 7 <= LEM_VIEWH_PX && lem_my + 7 <= LEM_VIEWH_PX;
+        /* THE COMPOSE GOES FIRST, AT THE NEW VIEW, and the Start Address
+         * after it: ovl_sbox already reads the new lem_view, and every byte
+         * composed is off the visible window until the pan shows it - so a
+         * lemming a step brings into view is on the glass the moment its
+         * terrain is (wave 4 review: composed after the pan, it was bare
+         * terrain for the length of the compose). The pointer is composed at
+         * the old offset, where its save-under is, and the pair after the
+         * pan moves it. */
+        if (drew) {
+            ovl_frame_draw();
+        } else if (scroll || lem_cmv) {
+            /* A SCROLL WITH NO GAME FRAME - paused, or a frame still being
+             * stepped on an XT - shows world the margin cull left without
+             * lemmings: the ones that crossed into it are composed, and only
+             * those (wave 3's third review) - or the pointer moved */
+            lem_c_sprites = 0;
+            lem_c_objects = 0;
+            ovl_vframe(0);
+        }
+        if (lem_cmv) {
+            lem_cmv = 0;
+            lem_curx = lem_mx;
+            lem_cury = lem_my;
+            lem_curshape = shape;
+            moved = 0;
+        }
         if (scroll) {
             ovl_view_follow(drew);  /* the Start Address */
             os88_fsx_wait(OS88_FSXW_VSYNC);
             lem_r_vpan();
-            if (lem_cur_on) {       /* its world piece moved with the world:
-                                     * back at its place on the same retrace */
-                lem_cursor_off();
-                lem_cursor_on();
+            /* its world piece moved with the world: back at its place on the
+             * same retrace - but ONLY when it reaches the world. Wholly in
+             * the panel it is at an unpanned offset the Start Address does not
+             * move, and the pair would put back and redraw the same pixels:
+             * a flash on every tick of a scroll while it rests on the skill
+             * buttons (wave 3's third review) */
+            if (lem_cur_on && lem_cury - 7 < LEM_VIEWH_PX) {
+                ovl_cursor_off();
+                ovl_cursor_on();
                 lem_curx = lem_mx;
                 lem_cury = lem_my;
                 lem_curshape = shape;
                 moved = 0;
             }
         }
-        if (drew)
-            ovl_frame_draw();
     } else {
         /* the pointer's save-under is in the shadow: off before anything
          * writes under it there, which no glass ever shows */
         if (lem_cur_on && (scroll || ovl_cur_hit(lem_curx, lem_cury, drew)))
-            lem_cursor_off();
+            ovl_cursor_off();
         ovl_view_follow(drew);
         if (drew)
             ovl_frame_draw();
@@ -1901,18 +2114,18 @@ static void ovl_tick_draw(int drew, int right)
         ovl_mm_build();
     if (lem_cur_on && (pd || mm || vr) &&
         ovl_pan_hit(lem_curx, lem_cury, vr, ox))
-        lem_cursor_off();
+        ovl_cursor_off();
     if (vr) {
-        lem_view_rect(lem_view_drawn);
+        ovl_view_rect(lem_view_drawn);
         lem_view_drawn = lem_view / LEM_MM_XSTEP;
     }
     if (mm)
         ovl_mm_cells();
     ovl_panel_live();
     if (lem_cur_on && moved)
-        lem_cursor_off();
+        ovl_cursor_off();
     if (!lem_cur_on)
-        lem_cursor_on();
+        ovl_cursor_on();
     lem_curx = lem_mx;
     lem_cury = lem_my;
     lem_curshape = shape;
@@ -1933,7 +2146,7 @@ static void lem_view_move(int dx)
         lem_view = LEM_WORLD_W - LEM_VIEW_W;
 }
 
-/* lem_mouse_map - the desktop pointer into game raster coordinates.
+/* ovl_mouse_map - the desktop pointer into game raster coordinates.
  *
  * The mouse ISR keeps running inside the bracket and os88_mouse() keeps
  * answering in DESKTOP pixels - the kernel's [vid_*] block is never touched by
@@ -1946,7 +2159,7 @@ static void lem_view_move(int dx)
  *
  * It answers through two statics, because half this API is out-parameters and
  * every one of them is a static (rule 1). */
-static void lem_mouse_map(void)
+static void ovl_mouse_map(void)
 {
     static struct os88_mouse m;
 

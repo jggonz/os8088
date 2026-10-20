@@ -142,7 +142,7 @@ static void ovl_obj_draw(int i)
 
     if (t->w == 0)
         return;
-    lem_far(lem_cl_bank, (int)t->off_lo, (int)t->off_hi);
+    ovl_far(lem_cl_bank, (int)t->off_lo, (int)t->off_hi);
     lem_far_mul((unsigned)o->frame, t->per);
     lem_r_obj(lem_far_seg, lem_far_off, o->x, o->y, (int)t->w, (int)t->h,
               (int)o->fl);
@@ -150,8 +150,8 @@ static void ovl_obj_draw(int i)
     o->dirty = 0;
 }
 
-/* lem_obj_hits - does object i's picture touch the rectangle? */
-static int lem_obj_hits(int i, int x, int y, int w, int h)
+/* ovl_obj_hits - does object i's picture touch the rectangle? */
+static int ovl_obj_hits(int i, int x, int y, int w, int h)
 {
     struct lem_o *o = &lem_ob[i];
     struct lem_ot *t = &lem_ty[o->id];
@@ -214,7 +214,7 @@ static void ovl_obj_redraw_rect(int x, int y, int w, int h)
     }
     for (k = 0; k < n; k++) {
         i = list[k];
-        if (!lem_obj_hits(i, x, y, w, h))
+        if (!ovl_obj_hits(i, x, y, w, h))
             continue;
         o = &lem_ob[i];
         d = o->drawn;

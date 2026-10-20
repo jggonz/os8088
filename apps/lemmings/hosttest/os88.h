@@ -23,7 +23,7 @@
  * assembly entry over a byte-per-pixel model of the mask, the world and the
  * screen - and a per-pixel WRITE COUNTER, which is what makes "no pixel is
  * written twice in a frame" an assertion rather than a hope. The claims are
- * modelled with it, because every raster entry takes a SEGMENT and lem_far()
+ * modelled with it, because every raster entry takes a SEGMENT and ovl_far()
  * does real paragraph arithmetic on one.
  * ==========================================================================*/
 #ifndef OS88_H
@@ -220,6 +220,7 @@ void lem_r_sprite(unsigned seg, unsigned off, int x, int y, int w, int h,
 void lem_r_srest(void);
 void lem_r_sforget(void);
 void lem_r_cursor(const unsigned char *bits, int sx, int sy);
+void lem_r_cplace(const unsigned char *bits, int sx, int sy);
 void lem_r_bgrect(int x, int y, int w, int h, int sync);
 void lem_r_show(int x, int y, int w, int h);
 void lem_r_obj(unsigned seg, unsigned off, int x, int y, int w, int h,

@@ -15,8 +15,9 @@ LEMMINGS.O88   the package. Its second segment - the About card, the preview
                rides INSIDE it as a part, so there is no separate file to
                lose
 README.TXT     this file
-LEVELS.TXT     what THIS disk's geometry carries, level by level, with the
-               cluster arithmetic that decided it
+LEVELS.TXT     what THIS disk's geometry carries, level by level, which
+               levels it does not and why, and what each graphic set and
+               special picture costs here in bytes and clusters
 LEMMAN.LEM     the converted data's manifest and its cost table
 LEMSTR.LEM     every sentence the program letters
 LEMR0-3.LEM    one file per rating - Fun, Tricky, Taxing, Mayhem - thirty
@@ -25,7 +26,8 @@ LEMR0-3.LEM    one file per rating - Fun, Tricky, Taxing, Mayhem - thirty
                level's pictures
 LEMGRn_p.LEM   a graphic set, in numbered parts - no band file exceeds 64,512
                bytes, so a bank that would is written as LEMGR0_0.LEM,
-               LEMGR0_1.LEM and so on and read back in sequence
+               LEMGR0_1.LEM and so on and read back in sequence. The
+               chooser and LEVELS.TXT name such a bank LEMGR0_*.LEM
 LEMSPn_p.LEM   a special picture, in numbered parts, the same way
 LEMLVn.LEM     the raw level records, eight to a file - what a LEVEL is built
                from once one is chosen
@@ -100,13 +102,11 @@ the top of the panel.
                    level picture (not the panel) to scroll; click or drag
                    in the map at the bottom right to jump there
     F1 / F2        release rate down / up, while held
-    Ctrl+F1 / F2   release rate to its minimum / maximum, while paused
     F3 - F10       the eight skills, in the panel's order
     F11            pause (the panel's paws button on every machine)
     F12            nuke - press it twice, quickly (or double-click the
                    mushroom button). An XT keyboard has no F11 or F12; the
                    two panel buttons are the original's own way to both
-    Left / Right   scroll the view
     f or F         leave the full screen for the window; the level waits
                    exactly where it was. f, Enter or Space in the window
                    goes back in, and Esc there lets the level go
@@ -116,6 +116,17 @@ the top of the panel.
                    menu" did: a right click in an os8088 window belongs to
                    the desktop, so that line is left off rather than
                    naming a button that would do nothing
+
+Those are the 1991 game's keys, F1 to F12 and Esc, plus the full-screen key
+this desktop gives every program. Three more come from Lemmix, the Windows
+reimplementation this port's screens are taken from, and each displaces
+nothing of the original's:
+
+    Left / Right   scroll the view, eight pixels a step for as long as the
+                   key is held
+    Ctrl+Left /    scroll it one pixel a step
+      Ctrl+Right
+    Ctrl+F1 / F2   release rate to its minimum / maximum, while paused
 
 The status line says what is under the pointer and how many, how many
 lemmings are OUT, what share of the level's lemmings are IN, and the time
@@ -130,7 +141,10 @@ umbrella or is nuked, and so is this. The tones are this port's own: the
 original's sound is AdLib music and effects this OS has no way to play.
 
 The nuke behaves as the 1991 game's does: after it, the per cent rescued is
-counted against the lemmings already released, not the level's total.
+counted against the lemmings already released, not the level's total. So does
+an early pause: pausing before frame 34 (the trap door) stops the clock, once
+play resumes, for as many frames as were left until 34 - the 1991 game's own
+behaviour, carried as the nuke glitch is.
 
 THE DATA FILES ARE NOT DISTRIBUTED WITH THE SOURCE
 --------------------------------------------------
@@ -167,13 +181,15 @@ readable. It is the only thing telling you where you are in a level 1,584
 pixels wide.
 
 Neither of those two cards can scroll, either, so the picture is composed in
-memory and blitted. The game asks for the same 4 pixels a step on every
-card, which is what makes the scroll SPEED the same on all three; what differs
-is the granularity the card can honour. A CGA takes every 4-pixel step
-exactly, a Hercules moves 8 pixels on every other step, and a VGA pans in
-hardware - it could go one pixel at a time and is simply not asked to. A
-pixel-exact scroll on the two cards that cannot pan would cost about 40% of
-every frame to make a scroll that is already smooth smoother.
+memory and blitted. The game scrolls 8 pixels a step - Lemmix's own step -
+about 146 pixels a second here (Lemmix ~138), on every card, which is what
+makes the scroll SPEED the same on all three, and 8 is a whole step on each
+of them: two bytes on a CGA, one on a Hercules, and a VGA pans in hardware.
+What differs is the precise one-pixel scroll (Ctrl+Left / Right): a VGA
+honours every pixel, a CGA
+moves on every fourth and a Hercules on every eighth. A pixel-exact scroll on
+the two cards that cannot pan would cost about 40% of every frame to make a
+scroll that is already smooth smoother.
 
 MEASURED on a 4.77 MHz 8088 (an IBM 5160, under a cycle-accurate emulator):
 one terrain probe is 178 microseconds on either card. On the VGA a scrolled
@@ -194,10 +210,13 @@ While a level plays, each lemming costs the mechanics a fraction of a
 millisecond of terrain tests a frame. A frame is 17 a second in the original;
 here a crowded level plays slower on an 8088, and everything in the game -
 the release rate, the time limit - slows with it, so no level becomes harder
-because the machine is slow. The pointer follows the mouse 18 times a second
-whatever the level is doing, and stays lit while the game draws around it -
-it comes off only when something is drawn underneath it. A click is caught
-even in the middle of a long scroll on the two cards that compose one.
+because the machine is slow. The pointer is the original's own, in its
+three colours on a VGA - the blue centre and the green and white arms - and
+in one solid colour on the other two cards, which have no third. It follows
+the mouse 18 times a second whatever the level is doing, and stays lit while
+the game draws around it - it comes off only when something is drawn
+underneath it. A click is caught even in the middle of a long scroll on the
+two cards that compose one.
 
 This is a 1991 game on a 1981 processor and it plays at what that costs; the
 design record has the whole table.
@@ -210,7 +229,11 @@ path in this OS. The Music row on the launcher is greyed and says so.
 
 The original's access codes. That algorithm lives in the game's executable
 and in none of its data files. Progress is kept in
-SYSTEM/APPDATA/LEMMINGS.SAV instead, on a disk that can be written.
+SYSTEM/APPDATA/LEMMINGS.SAV instead, on a disk that can be written: the
+Save Progress row names the level reached ("Fun Level 2"), and the list
+opens on it. Every disk keeps two clusters free for the file - a save
+writes the new copy before it lets the old one go. A save the disk refuses
+is said at once, and the row greys.
 
 Oh No! More Lemmings. This port is the original 120 levels.
 

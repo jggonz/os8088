@@ -34,11 +34,11 @@ static unsigned char lem_strbuf[LEM_STRBUF];
 static int  lem_strn;               /* rows the band actually carries */
 static int  lem_strbytes;           /* what was read */
 
-/* lem_u16 / lem_u8 - one little-endian word or byte out of a byte buffer. They
+/* lem_u16 / ovl_u8 - one little-endian word or byte out of a byte buffer. They
  * are functions and not casts because a cast would assume the buffer is
  * word-aligned, which a byte array read off a disk is not obliged to be, and an
  * unaligned word read is a silent two-byte penalty on an 8088 rather than a
- * fault. lem_u32dec() below is how this dialect reads a DWORD at all: there is
+ * fault. ovl_u32dec() below is how this dialect reads a DWORD at all: there is
  * no `long` here (SPEC.md 73.7), so a 32-bit count never becomes a number - it
  * becomes its decimal text, which is the only form anything here prints. */
 static int lem_u16(const unsigned char *p, int off)
@@ -46,12 +46,12 @@ static int lem_u16(const unsigned char *p, int off)
     return (int)((unsigned)p[off] | ((unsigned)p[off + 1] << 8));
 }
 
-static int lem_u8(const unsigned char *p, int off)
+static int ovl_u8(const unsigned char *p, int off)
 {
     return (int)p[off];
 }
 
-/* lem_u32dec - the EXACT decimal of a little-endian dword, into `dst`.
+/* ovl_u32dec - the EXACT decimal of a little-endian dword, into `dst`.
  *
  * It is here because two of the three greying templates ask for a byte count in
  * BYTES - "the dirt graphic set is 96804 bytes = 95 clusters" - and the number
@@ -64,7 +64,7 @@ static int lem_u8(const unsigned char *p, int off)
  * type wider than an int: a remainder is under 10, so `rem * 256 + byte` is
  * under 2,560 and every intermediate fits. Ten digits at most; `dst` is written
  * even for zero. */
-static void lem_u32dec(const unsigned char *p, int off, char *dst, unsigned cap)
+static void ovl_u32dec(const unsigned char *p, int off, char *dst, unsigned cap)
 {
     /* static, not automatic: SS != DS in this model, so every addressable
      * object is a static and tools/cc8086.py refuses the other kind
@@ -173,18 +173,18 @@ static int lem_str_load(void)
 static const char *lem_arg[LEM_FMT_ARGS];
 static int         lem_argn;
 
-static void lem_arg_reset(void)
+static void ovl_arg_reset(void)
 {
     lem_argn = 0;
 }
 
-static void lem_arg_add(const char *s)
+static void ovl_arg_add(const char *s)
 {
     if (lem_argn < LEM_FMT_ARGS)
         lem_arg[lem_argn++] = s;
 }
 
-/* lem_arg_num - stage an unsigned decimal. Each number needs its OWN buffer,
+/* ovl_arg_num - stage an unsigned decimal. Each number needs its OWN buffer,
  * because every argument is still live when the format runs: one shared
  * os88_utoa() scratch would give every marker the last number staged, which is
  * the shared-scratch defect LESSONS.md 13 names one level down.
@@ -193,11 +193,11 @@ static void lem_arg_add(const char *s)
  * compiler to lower and `buf + (n << 3)` is a shift the gate never has to find
  * a scratch register for (LESSONS.md 3's imul refusals). */
 #define LEM_NUMW     16             /* ten digits and a NUL, rounded to a
-                                     * SHIFT: lem_u32dec writes up to ten */
+                                     * SHIFT: ovl_u32dec writes up to ten */
 #define LEM_NUMSHIFT  4
 static char lem_numbuf[LEM_FMT_ARGS * LEM_NUMW];
 
-static char *lem_arg_slot(void)
+static char *ovl_arg_slot(void)
 {
     char *p;
 
@@ -209,15 +209,15 @@ static char *lem_arg_slot(void)
     return p;
 }
 
-static void lem_arg_num(unsigned v)
+static void ovl_arg_num(unsigned v)
 {
-    char *p = lem_arg_slot();
+    char *p = ovl_arg_slot();
 
     if (p != 0)
         os88_utoa(v, p);
 }
 
-/* lem_arg_pct - stage "NN%", the share of `den` that `num` is.
+/* ovl_arg_pct - stage "NN%", the share of `den` that `num` is.
  *
  * THE ORIGINAL'S THIRD PREVIEW LINE IS A PERCENTAGE AND NOT A COUNT. Lemmix
  * GameScreen.Preview.pas:275-278 computes
@@ -235,9 +235,9 @@ static void lem_arg_num(unsigned v)
  *
  * The same number is what waves 3 and 4's postview 'You rescued %s' and
  * 'You needed  %s' want, which is why it is one helper from the start. */
-static void lem_arg_pct(unsigned num, unsigned den)
+static void ovl_arg_pct(unsigned num, unsigned den)
 {
-    char *p = lem_arg_slot();
+    char *p = ovl_arg_slot();
     unsigned i;
 
     if (p == 0)
@@ -256,19 +256,19 @@ static void lem_arg_pct(unsigned num, unsigned den)
     p[i + 1] = 0;
 }
 
-/* lem_arg_u32 - stage the exact decimal of a dword out of a byte buffer. It is
+/* ovl_arg_u32 - stage the exact decimal of a dword out of a byte buffer. It is
  * what puts "96804 bytes" rather than "95 KB" in a greying fact. */
-static void lem_arg_u32(const unsigned char *buf, int off)
+static void ovl_arg_u32(const unsigned char *buf, int off)
 {
-    char *p = lem_arg_slot();
+    char *p = ovl_arg_slot();
 
     if (p != 0)
-        lem_u32dec(buf, off, p, LEM_NUMW);
+        ovl_u32dec(buf, off, p, LEM_NUMW);
 }
 
-/* lem_fmt - substitute the staged arguments into `fmt`. A %s with no argument
+/* ovl_sfmt - substitute the staged arguments into `fmt`. A %s with no argument
  * left copies nothing. Always NUL-terminated; never writes past `cap`. */
-static void lem_fmt(char *dst, unsigned cap, const char *fmt)
+static void ovl_sfmt(char *dst, unsigned cap, const char *fmt)
 {
     unsigned o = 0;
     const char *arg;
@@ -354,37 +354,37 @@ static int  lem_wraplen[LEM_WRAP_MAX];
 static int  lem_wrapn;
 static char lem_wrapbuf[LEM_SH_COLS + 1];
 
-static void lem_para_reset(void)
+static void ovl_para_reset(void)
 {
     lem_paran = 0;
     lem_para[0] = 0;
     lem_wrapn = 0;
 }
 
-/* lem_para_add - append, and a NUL is kept at the end so the buffer is always a
+/* ovl_para_add - append, and a NUL is kept at the end so the buffer is always a
  * C string whatever the caller does next. Silently truncates: this is a display
  * buffer and a sentence that will not fit is a shorter sentence, not a fault. */
-static void lem_para_add(const char *s)
+static void ovl_para_add(const char *s)
 {
     while (*s != 0 && lem_paran < LEM_PARA_MAX - 1)
         lem_para[lem_paran++] = *s++;
     lem_para[lem_paran] = 0;
 }
 
-static void lem_para_nl(void)
+static void ovl_para_nl(void)
 {
     if (lem_paran < LEM_PARA_MAX - 1)
         lem_para[lem_paran++] = '\n';
     lem_para[lem_paran] = 0;
 }
 
-/* lem_para_fmt - the same substitution, APPENDING to the paragraph buffer.
+/* ovl_para_fmt - the same substitution, APPENDING to the paragraph buffer.
  * A greying fact is 200-260 characters (tools/os88lem.py's table) and lem_line
  * is one screen row wide, so the templates cannot be formatted into a row
  * buffer and then copied: they are formatted straight into the paragraph the
- * wrap reads. Declared beside lem_fmt because the two are one substitution with
+ * wrap reads. Declared beside ovl_sfmt because the two are one substitution with
  * two destinations, and neither may drift from the other's idea of a marker. */
-static void lem_para_fmt(const char *fmt)
+static void ovl_para_fmt(const char *fmt)
 {
     const char *arg;
     int used = 0;

@@ -30,7 +30,7 @@
  *                        three defects that never show in a screendump.
  *
  * THE CLAIMS ARE MODELLED TOO, and they have to be: every raster entry takes a
- * SEGMENT, and lem_far() does real paragraph arithmetic on one to reach past
+ * SEGMENT, and ovl_far() does real paragraph arithmetic on one to reach past
  * 64 KB. h_ptr() turns a (segment, offset) pair back into a byte of a modelled
  * claim and FAILS THE BUILD on one that is not inside a live claim, which is
  * the check no screendump can make.
@@ -974,13 +974,30 @@ void lem_r_obj(unsigned seg, unsigned off, int x, int y, int w, int h,
  * world at the view's offset and the panel part on the screen */
 static unsigned char h_cur_save[14 * 14];
 static int h_cur_x = -1000, h_cur_y, h_cur_on;
+static int h_cur_sc;                /* the scroll it was drawn at: the asm takes
+                                     * it off at the VRAM offset it saved
+                                     * (lb_cur0), not at the view's new one */
 static int h_r_curdraws;
 static const unsigned char *h_cur_last;
 
+/* the pointer's two planes (lemdraw.c lem_cur0): p0 | p1 << 1, opaque
+ * where either is set */
+static int h_cur_col(const unsigned char *bits, int gx, int gy)
+{
+    int k = gy * 2 + (gx >> 3), sh = 7 - (gx & 7);
+
+    return ((bits[k] >> sh) & 1) | (((bits[28 + k] >> sh) & 1) << 1);
+}
+
 static int h_cur_bits_was(int gx, int gy)
 {
-    return h_cur_last &&
-           ((h_cur_last[gy * 2 + (gx >> 3)] >> (7 - (gx & 7))) & 1);
+    return h_cur_last && h_cur_col(h_cur_last, gx, gy) != 0;
+}
+
+/* VGA draws the colour; the shadow cards their solid class (3) */
+static int h_cur_ink(int gx, int gy)
+{
+    return h_r_kind == 0 ? h_cur_col(h_cur_last, gx, gy) : 3;
 }
 
 static void h_cur_px(int sx, int sy, int c, int save, int k)
@@ -1005,11 +1022,15 @@ void lem_r_cursor(const unsigned char *bits, int sx, int sy)
     int gx, gy;
 
     if (h_cur_on) {
+        int sc = h_r_scroll;
+
+        h_r_scroll = h_cur_sc;
         for (gy = 0; gy < 14; gy++)
             for (gx = 0; gx < 14; gx++)
                 if (h_cur_bits_was(gx, gy))
                     h_cur_px(h_cur_x + gx, h_cur_y + gy,
                              h_cur_save[gy * 14 + gx], 0, 0);
+        h_r_scroll = sc;
         h_cur_on = 0;
     }
     if (bits == 0)
@@ -1018,8 +1039,22 @@ void lem_r_cursor(const unsigned char *bits, int sx, int sy)
     h_cur_last = bits;
     for (gy = 0; gy < 14; gy++)
         for (gx = 0; gx < 14; gx++)
-            if ((bits[gy * 2 + (gx >> 3)] >> (7 - (gx & 7))) & 1)
-                h_cur_px(sx + gx, sy + gy, 3, 1, gy * 14 + gx);
+            if (h_cur_col(bits, gx, gy))
+                h_cur_px(sx + gx, sy + gy, h_cur_ink(gx, gy), 1,
+                         gy * 14 + gx);
+    h_cur_sc = h_r_scroll;
+    h_cur_x = sx;
+    h_cur_y = sy;
+    h_cur_on = 1;
+}
+
+/* lem_r_cplace - the place and the shape, set and NOT drawn: nothing taken
+ * off the glass and nothing saved (the VGA compose rebuilds the old box and
+ * lem_r_csave / lem_r_cdraw do the rest, lemsprite.inc) */
+void lem_r_cplace(const unsigned char *bits, int sx, int sy)
+{
+    h_cur_last = bits;
+    h_cur_sc = h_r_scroll;
     h_cur_x = sx;
     h_cur_y = sy;
     h_cur_on = 1;
@@ -1056,8 +1091,10 @@ void lem_r_cdraw(void)
     for (gy = 0; gy < 14; gy++)
         for (gx = 0; gx < 14; gx++)
             if (h_cur_bits_was(gx, gy) && h_cur_x + gx >= 0 &&
-                h_cur_x + gx < H_SCR_W && h_cur_y + gy < H_VIEW_H)
-                h_wpx(h_r_scroll + h_cur_x + gx, h_cur_y + gy, 3);
+                h_cur_x + gx < H_SCR_W && h_cur_y + gy >= 0 &&
+                h_cur_y + gy < H_VIEW_H)
+                h_wpx(h_r_scroll + h_cur_x + gx, h_cur_y + gy,
+                      h_cur_ink(gx, gy));
 }
 
 void lem_r_glyph8(const unsigned char *bits, int x, int y, int h, int ink,
