@@ -1176,6 +1176,14 @@
   "strings": "72c6168584fb83c1",
   "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
  },
+ "WIRECHAT_O88": {
+  "sources": [
+   "apps/wirechat"
+  ],
+  "stamped": "a805ac61",
+  "strings": "455f0b5acdca7829",
+  "why": "first page: written from SPEC.md 113 and apps/wirechat (menus, field modes, keys, wheel, status bar words, WIRECHAT.CFG, net_find's card-then-link)"
+ },
  "WORD": {
   "sources": [],
   "stamped": "e4576a70",

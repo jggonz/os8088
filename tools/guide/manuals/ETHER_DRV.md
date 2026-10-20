@@ -2,8 +2,8 @@
 
 `ETHER.DRV` connects the machine to a network, and through it to the
 internet. It drives an Ethernet card and carries the network protocols
-programs need, so the Browser, Telnet, the FTP Server and The Wire can
-reach other computers.
+programs need, so the Browser, Telnet, the FTP Server, The Wire and
+WireChat can reach other computers.
 
 ![The Drivers page on a machine with no network card: Ethernet is unticked and says No hardware found.](shot:ether-drv-row)
 

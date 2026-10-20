@@ -192,7 +192,7 @@ needs = "A hard disk"
 ["ETHER.DRV"]
 title = "Ethernet driver"
 kind = "driver"
-summary = "Connects the machine to a network and the internet, for the Browser, Telnet, the FTP server and The Wire."
+summary = "Connects the machine to a network and the internet, for the Browser, Telnet, the FTP server, The Wire and WireChat."
 short = "Network and internet access"
 needs = "An NE1000 or NE2000 network card"
 
@@ -409,6 +409,13 @@ title = "FTP Server"
 kind = "program"
 summary = "Turns the machine into an FTP server, so a modern computer can send and fetch files from its disks."
 short = "Serve your files over FTP"
+needs = "A network card or parallel link"
+
+["WIRECHAT.O88"]
+title = "WireChat"
+kind = "program"
+summary = "Chat rooms for os8088 users: four public rooms, private messages, friends and a status, over the network."
+short = "Chat rooms on the network"
 needs = "A network card or parallel link"
 
 # --- programs: games ----------------------------------------------------------

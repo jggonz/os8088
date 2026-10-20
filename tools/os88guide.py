@@ -83,7 +83,7 @@ BLURB = {
     "Software disk": "The everyday programs, with sample documents. Goes in drive B.",
     "Music disk": "Songs and a tracker module for the music programs.",
     "Office disk": "Writing, spreadsheet, chart and drawing programs.",
-    "Network disk": "Browser, Telnet, FTP server and The Wire, for an Ethernet card.",
+    "Network disk": "Browser, Telnet, FTP server, The Wire and WireChat, for an Ethernet card.",
     "Games disk": "Every game on one floppy.",
     "Emulator system disk": "A system disk whose pointer needs no mouse capture in an emulator.",
     "Live USB image": "The whole system and every program, for a USB stick.",
