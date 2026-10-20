@@ -44,6 +44,7 @@ OUT = os.path.join(ROOT, "docs", "INDEX.md")
 # fails the run by name (see build()) rather than being filed under a heading
 # nobody reads. Add the prefix here when a slot is added there.
 GROUPS = [
+    ("Serial ports", ["115"], ["SERIAL"]),
     ("Windows", ["11", "20"],
      ["WM_", "ABOUT_SET"]),
     ("Packages and the desktop", ["21", "26", "110"],

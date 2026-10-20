@@ -2063,7 +2063,7 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/diskops.drv $(BUILD)/hiber.drv \
                                       $(BUILD)/dock.drv $(BUILD)/extd.drv \
                                       $(BUILD)/win95.drv $(BUILD)/desk.drv \
-                                      $(BUILD)/stikmenu.drv \
+                                      $(BUILD)/stikmenu.drv $(BUILD)/serial.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -2437,7 +2437,7 @@ $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 # (SPEC.md 2.8.2), so shipping the wrong one is refused rather than executed;
 # this is what stops it happening in the first place.
 KMODDIR = $(BUILD)
-KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv
+KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODDIR)/serial.drv
 # ...and kern_big's FOURTH, hibernate (SPEC.md 87, MOD_HIBER). It is NOT in
 # $(KMODS) because $(SMALLDRIVERS) is $(KMODS) and kern_small has no hibernate
 # at all now - no mod_tab row, no name and no module - so a small floppy that
@@ -2482,10 +2482,11 @@ KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
 ifneq ($(KERN_SMALL),)
 KMODARGS += -m 3=$(BUILD)/filecp.drv
 KMODARGS += -m 4=$(BUILD)/fdlg.drv
+KMODARGS += -m 5=$(BUILD)/serial.drv
 else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
             -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv \
-            -m 8=$(BUILD)/stikmenu.drv
+            -m 8=$(BUILD)/stikmenu.drv -m 9=$(BUILD)/serial.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint

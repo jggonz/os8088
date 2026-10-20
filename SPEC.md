@@ -3944,6 +3944,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/softgfx.inc`  | the software renderer (§32/§39.3): the software planar primitives, and the only video driver on a 1bpp adapter |
 | `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
 | `kernel/mouse.inc`  | COM1/COM2 UARTs, IRQ4/IRQ3 ISRs, the 8042 auxiliary port and its IRQ12 ISR (§9.9), both packet decoders and the `mou_apply` back end they share, the keyboard mouse (§9.6), cursor (save-under) |
+| `kernel/serial.inc` | Desktop UART lease, routed through the mouse IRQ scan; on-demand `SERIAL.DRV`, instance cleanup (§115) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
 | `kernel/events.inc` | 8-byte event records (`EVT_MDOWN`/`MUP`/`RDOWN`, and `EVT_WAKE` — a package's own kick, §74.1), the system event ring queue, its two shared drains `evq_drain`/`evq_mup` (§10.3) and `evq_pending` (§13.4) |
 | `kernel/clock.inc`  | system clock (§37): the RTC ladder (§37.90 — MC146818 at 70h/71h, MM58167 and RP5C01 at 2C0h, int 1Ah last), the wall-clock date + time advanced from `[ticks]`, and formatting — prefix `clk_`. **Neither the field editor nor the RTC WRITE half is here**: `clk_fld_str`/`clk_fld_adj`/`clk_step` (§37.93) and the four rungs' writers (§37.94) are §37's code hosted in `CTRL.DRV`. What stays is the tick, the snapshot, the menu bar's formatter and the six port helpers **both** the boot overlay and that module need |
@@ -42506,7 +42507,9 @@ same tail: `OSAPI_MEM_HMA` (§2.10.8) at `0x0487`, a 103rd rare cell, and
 which is what `kernel.asm`'s length guard asserts from the counts.
 `OSAPI_ASSOC_FLUSH` (§54.7.6, at `0x0493`) is a 105th rare cell, 1,161, and
 `OSAPI_WM_ONWHEEL` (§13.18, at `0x0499`) a seventeenth INLINE cell, of six
-for parity, **1,167 bytes**. `osapi_table_end` is `0x049F`.
+for parity, **1,167 bytes**. The subsequent desktop serial lease (§115)
+appends one six-byte RXCELL at `0x049F`: **1,173 bytes**, with
+`osapi_table_end` at `0x04A5`. Earlier cell addresses are unchanged.
 Those counts are the tree it landed on, not a contract; `t_api_abi` prints
 the span it walked.
 
@@ -197024,7 +197027,7 @@ names and measured package/RAM sizes are recorded as their waves land.
 
 The desktop frame preferences are 600×414 (VGA), 600×304 (Hercules), and
 600×154 (CGA), subject to the window manager's fit. Board cells are 24 pixels
-wide and 24, 18 or 8 high according to the actual content height. The compact
+wide and 24, 16 or 8 high according to the actual content height. The compact
 grid begins at content y=25; taller grids at y=40. Buttons sit four pixels
 below the grid. There is no worker or serial lease in the deployment wave;
 Ready explicitly reports that the link is a subsequent delivery story.
@@ -197035,3 +197038,176 @@ old ship, vertical placement, removal, auto fleet geometry, Ready locking,
 button press/cancel, About and close. `wirefleetart` (soak) checks conversion
 reproducibility, bounds and distinct shot shapes in color and monochrome.
 During waves these are named, not re-run; the final pass runs their union.
+
+### 114.6 Serial protocol v1
+
+Frames begin and end with 7Eh; body bytes 7Eh/7Dh are escaped as 7Dh then
+byte XOR 20h. The decoded body is exactly 64 bytes. Bytes 0..1 are `WF`,
+2 version 1, 3 type (0 HELLO, 1 SYNC, 2 SHOT, 3 RESULT, 4 CHAT). Sender,
+recipient and match are little-endian 32-bit identities at 4, 8 and 12.
+The committed turn is a word at 16 (0..200); 18 is readiness (0/1),
+19 target (0..99), 20 result (1 miss, 2 hit, 3 sunk), 21 ship ID (1..5
+only for sunk), 22 sunk anchor, 23 direction. Bytes 24..25 are a chat
+sequence: CHAT's own sequence, otherwise the last received chat sequence.
+26 is CHAT length (1..32), 27..58 its printable ASCII text; unused bytes
+are zero. 59..60 is the committed shot-history hash, 61 reserved zero.
+62..63 is CRC-16/CCITT-FALSE (initial FFFFh, polynomial 1021h) over 0..61.
+
+HELLO may have recipient zero while discovering. A bound peer sends addressed
+traffic; state-bearing messages require the exact sender, recipient and match.
+The lower unsigned sender identity is captain 0 and fires first. The match
+identity is that captain's identity. Equal identities are regenerated before
+any battle. New match assigns a fresh identity and clears game history; both
+captains deliberately start a new match. Disconnect never does this.
+
+The shooter repeats SHOT for the current turn without advancing locally.
+The defender validates the turn, side and unused target, judges its private
+fleet, caches RESULT, applies it once and advances the committed turn. The
+shooter applies a matching pending RESULT once and advances, then its next
+SYNC acknowledges that turn. The defender cannot fire its next shot until
+that acknowledgment arrives. It repeats the cached result while the peer is
+one turn behind. Duplicate SHOT for that cached turn replays the result and
+never judges a square twice. No more than one shot may be in flight.
+
+The rolling history hash starts at FFFFh. Each committed result updates the
+same CRC with its turn word, target, result, sunk ship/anchor/direction; both
+peers use those seven canonical bytes in that order. SYNC at the same turn
+must have the same history hash; a difference beyond one turn or conflicting
+hash refuses play visibly. A one-turn gap is repaired only by the cached
+result for the pending shot, never by copying a peer's turn counter.
+
+Only a completely sunk ship reveals its ID, anchor and direction; other
+RESULTs have all three zero. The receiver validates the revealed extent and
+its previous hits before marking it sunk. Chat is independently sequenced:
+one outstanding message, repeated until a peer SYNC acknowledges it; a
+duplicate cannot append another transcript line. Heartbeats are no more
+frequent than three ticks. Fifty-five ticks without valid addressed traffic
+pauses battle input, preserving the pending shot and chat. Reconnect resumes
+the same identities/history; unexpected peers cannot replace an existing game.
+
+### 114.7 Saved match v1 (`.WFL`)
+
+Save and Load use the Standard File dialog, initially `FLEET.WFL`. A record
+is exactly 512 bytes, little endian, with CRC-16/CCITT-FALSE over 0..509
+at 510. Header 0..3 is `WFLT`, 4 version 1, 5 zero, 6..7 size 512.
+The data fields are:
+
+| offset | bytes | meaning |
+|---|---|---|
+| 8, 10 | 2 each | committed turn, history hash |
+| 12..15 | 1 each | captain side, ready, peer ready, finished (0/1 won/2 lost) |
+| 16, 20, 24 | 4 each | own identity, peer identity, match identity |
+| 28..31 | 1 each | pending shot flag, its cell, result-cache flag, sunk enemy bit mask |
+| 32 | 2 | cached result's turn |
+| 34..38 | 1 each | cached cell, result, ship ID, anchor, direction |
+| 39..43 | 1 each | selected ship, placement direction, cursor cell, placed count, mute |
+| 44, 49 | 5 each | own anchors, directions |
+| 54, 154, 254 | 100 each | private fleet, incoming shots, outgoing shots |
+| 354, 356 | 2 each | outgoing chat sequence, received chat sequence |
+| 358, 359 | 1 each | pending-chat flag, length |
+| 360 | 32 | pending chat text |
+| 392 | 1 | selected COM port (0 unset, 1/2) |
+
+393..509 are reserved zero. Shot values are 0 unknown, 1 miss, 2 hit, 3
+sunk. A load first validates header, CRC, all ranges, exact legal private
+fleet reconstruction, Ready's five ships, shot/fleet consistency, committed
+shot counts and turn parity, and pending-command bounds. It rejects a file
+of any other size before reading it. Only a valid record can disconnect the
+old lease and replace live fields. No serial pointer, ring index, displayed
+pixel, timer, current connection flag or sound ownership is restored from a
+file. The game starts paused until Connect reaches the saved peer and its
+history agrees. Both PCs save their own private record; one PC's file is
+not a replacement for the other PC's fleet. The transcript is retained across
+a cable interruption in memory; only its sequence/undelivered message is
+persisted to disk. Saving is explicit, not a heartbeat side effect.
+
+### 114.8 Fullscreen and cues
+
+F or Alt+Enter toggles fullscreen. VGA and Hercules use the native fullscreen
+window (§11.2). A 1bpp display offering `FSXM_CGA320` gets a §53 bracket in
+320×200 four-color mode, with 12×10 cells at x=20/176, y=40. The mode's
+`FSI_SEG`, stride and bank step define the framebuffer. Palette 1, bright,
+has black water, cyan grid, magenta hits and white ships/marks. Explicit
+packed 2bpp assets are derived from the same retained source; grays use
+black/white stipple so magenta remains an impact cue. The selected cell uses
+a border and all shot shapes remain distinct. This is one VRAM page; it
+redraws changed spans, with no full clear during ordinary play.
+
+The bracket copies the OS's ASCII glyphs before changing mode and renders
+its own text afterward. No desktop drawing/window slot is called in the
+foreign mode. Arrow keys and Enter work, mouse movement selects cells,
+left-click places before Ready, and an on-screen Fire target confirms battle
+shots. R/A/C/Y/1–5 remain deployment controls. T opens chat; while editing,
+printable keys and Backspace edit the message, Enter submits, Escape cancels
+editing. F/Escape or a fresh Alt+Enter edge returns to the desktop. S/O return
+to the native window before opening Save/Load dialogs. The lease and game
+state survive both directions. Serial service continues through IRQ3/4 while
+the foreground waits at `OSAPI_FSX_WAIT`; no rate hook or PIT rate change is
+needed for a turn-based game.
+
+Cues are finite tone sequences, priority 40h, through `OSAPI_SND_TONE`:
+place 660; ready 660/880; fire 165/110; miss 440/220; hit 110/82; sunk
+220/165/110; connection 440/880; victory 784/988/1175; defeat 330/220/165 Hz.
+The sequencer advances on OS ticks and never waits. The system routes these
+to its PC Speaker, AdLib or Sound Blaster FM sink. Mute, close and fullscreen
+exit stop this instance's sequence; finite durations and kernel instance
+teardown release the actual device grants even on forced close.
+
+## 115. Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`)
+
+An on-demand kernel module (§2.8), on both kernels. Connecting may require
+the system disk; once open, no disk access is needed to move serial bytes.
+This qualifies as a module because inserting the boot disk during the
+explicit Connect gesture does not interrupt an active conversation. No UART
+ring or game state is resident in the kernel. One port may be leased at a
+time; a second application receives busy. The caller must pin its own region
+with `OSAPI_MEM_MOVABLE`, AX=0, before opening and keep its buffer there until
+close. It may opt back into movement after the lease is released.
+
+### 115.1 API and buffer
+
+`OSAPI_SERIAL`, appended at 049Fh (X cell), runs in UI-task context. It keeps
+all registers except AX and CF. AL is the verb; BL is COM1=1 or COM2=2 for
+Open, ignored for the other verbs. Every operation is bound to the calling
+instance. A winning serial mouse's port is never eligible. Until the mouse
+contest is settled, Open refuses with a distinct error; the caller tells the
+user to move the mouse. Nonstandard or unadvertised bases are refused.
+
+| AL | verb | arguments and result |
+|---|---|---|
+| 0 | Open | SI=offset of a 517-byte buffer in the pinned package region; CF=0 AX=0 on success |
+| 1 | Close | restores UART/PIC state, releases the lease and drops the module; idempotent for an instance with no lease |
+| 2 | Read | CF=0 AL=byte, AH=line/overflow status accumulated since the preceding Read; CF=1 AX=6 if empty |
+| 3 | Write | CL=byte; CF=0 AX=0 queued; CF=1 AX=7 if the TX queue is full |
+
+Refusals are AX=1 busy/wrong owner, 2 mouse not settled, 3 mouse port,
+4 absent/unsupported port, 5 invalid caller/buffer, 8 module unavailable.
+The buffer is 0 RX head, 1 RX tail, 2 sticky error bits, 3 TX head, 4 TX tail,
+5..260 RX bytes, 261..516 TX bytes. Each 256-byte ring holds at most 255
+bytes. Original LSR error bits 1–4 are sticky at byte 2; bit 7 is RX overflow.
+The kernel and module own these bytes while leased. Publication advances the
+producer index last; a consumer advances its tail only after reading data.
+The API validates the complete buffer against the instance's region size.
+
+### 115.2 Hardware and lifetime
+
+Open saves LCR, IER, DLL, DLM, MCR and the standard port's PIC mask bit, then
+sets 9600 baud, 8N1, DTR/RTS and OUT2, with RX interrupts enabled. THRE
+interrupts run only while queued TX needs service. No FIFO, scratch register,
+CTS/DSR gating, delay loop or new interrupt vector is required. The boot
+mouse probe already proves the standard 8250 divisor latches (§9.5).
+
+The existing IRQ3/IRQ4 mouse scan routes a leased row to the module before
+reading its UART; the module handles bounded RX/TX service and the existing
+mouse ISR owns EOI. Mouse register broadcasts skip the leased row. This
+preserves the cross-wired IRQ handling in §9.5.2.1 and keeps mouse movement
+from stealing serial data. The lease does not mask the winning mouse's line.
+Line errors or an overflowing ring are reported to the application so its
+framer can discard a partial message and resynchronize.
+
+Close first withdraws the row from serial dispatch with interrupts disabled,
+then restores the UART/PIC state before the module can be freed. Instance
+teardown force-releases its lease before freeing package memory; reboot
+silences it before mouse vectors are unhooked. A lease survives §53 entry.
+Hibernate is refused while a serial lease is active: UART registers and
+an attached peer cannot be restored by a RAM snapshot on another machine.

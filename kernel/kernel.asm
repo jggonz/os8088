@@ -1372,6 +1372,7 @@ section .modwb   nobits vfollows=.modw ; WIN95.DRV's own scratch: one title
                                 ; before it is read (kernel size pass 12)
 section .modn    start=MODN_START vstart=0  ; STIKMENU.DRV (SPEC.md 110.12)
 %endif
+section .mods    start=MODSER_START vstart=0 ; SERIAL.DRV (SPEC.md 115)
 section .modmap  start=MODMAP_START vstart=0
 section .text
 
@@ -3290,7 +3291,9 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
     times 5 nop
 %endif
     OSAPI_IEND
-osapi_table_end:                  ; 0x049F today (0x0499 before the wheel;
+    OSAPI_RXCELL osapi_serial     ; 0x049F - desktop serial lease (SPEC.md 115)
+osapi_table_end:                  ; 0x04A5 today (0x049F before serial;
+                                  ; 0x0499 before the wheel;
                                   ; 0x0493 before the ASSOC.DAT
                                   ; flush; 0x0487 before the HMA and
                                   ; quiet cells, appended after main's at the
@@ -3316,8 +3319,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 105*6 + 6*3 + 6 + 12*5 + 4*6 + 8
-%error "os8088 API jump table must be exactly 0x048F bytes: 43 SLOT (8), 11 XCELL (7), 105 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 106*6 + 6*3 + 6 + 12*5 + 4*6 + 8
+%error "os8088 API jump table must be exactly 0x0495 bytes: 43 SLOT (8), 11 XCELL (7), 106 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
 %endif
 
 ; =============================================================================
@@ -5588,6 +5591,7 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 %include "deskmod.inc"            ; DESK.DRV, the desk layer (SPEC.md 11.103.10)
 %include "stikmenu.inc"           ; STIKMENU.DRV, the Sticky Apps menu (110.12)
                                   ; (SPEC.md 39.19.6) - kern_big only
+%include "serial.inc"             ; SERIAL.DRV, desktop UART lease (115)
 %include "ctrl.inc"
 %include "desksc.inc"           ; desktop shortcuts (SPEC.md 26.8): empty
                                 ; unless OS88_SHORTCUTS (kern_big). AFTER
@@ -5642,6 +5646,7 @@ mod_fpt:
     MODFP DKDFP, MOD_DESK, DKD_NENT
     MODFP SMNFP, MOD_STIKM, SMN_NENT
 %endif
+    MODFP SERFP, MOD_SER, SER_NENT
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
 %endif
@@ -7058,7 +7063,7 @@ MODK_START   equ MODH_START + MODH_SIZE
 %else
 MODP_START   equ MODL_START + MODL_SIZE   ; Cut/Copy/Paste, kern_small's alone
 MODD_START   equ MODP_START + MODP_SIZE   ; ...and the file dialog after it
-MODMAP_START equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
+MODSER_START equ MODD_START + MODD_SIZE   ; serial follows small's file dialog
 %endif                                    ; The
                                           ; compressor has no image of its
                                           ; own: it rides in the cloner's
@@ -7069,8 +7074,9 @@ MODX_START   equ MODK_START + MODK_SIZE   ; EXTD.DRV (SPEC.md 39.19.6),
 MODW_START   equ MODX_START + MODX_SIZE   ; WIN95.DRV (SPEC.md 76.14) and
 MODJ_START   equ MODW_START + MODW_SIZE   ; DESK.DRV (SPEC.md 11.103.10) and
 MODN_START   equ MODJ_START + MODJ_SIZE   ; STIKMENU.DRV (SPEC.md 110.12) are
-MODMAP_START equ MODN_START + MODN_SIZE   ; always the last four images there
+MODSER_START equ MODN_START + MODN_SIZE   ; serial follows the big desktop modules
 %endif
+MODMAP_START equ MODSER_START + SER_IMAGE_SIZE
 
 %ifdef KERN_BIG
 section .modx
@@ -7305,6 +7311,8 @@ mod_map:
     dd MODN_START, MODN_SIZE    ; the Sticky Apps menu (SPEC.md 110.12)
     dw SMN_NENT
 %endif
+    dd MODSER_START, SER_IMAGE_SIZE
+    dw SER_NENT
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
 modmap_end:

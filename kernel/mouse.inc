@@ -413,6 +413,8 @@ MOU_PSTK    equ 128             ; 2.4x the 54 the chain measures on the deepest
 ; -----------------------------------------------------------------------------
 mou_pout:
     push dx
+    cmp bx, [ser_row]           ; the leased UART belongs to SERIAL.DRV
+    je .out
     mov dx, [bx+mou_bases]
     or  dx, dx
     jz .out
@@ -1374,6 +1376,9 @@ mouse_unhook:
     push si
     push es
 
+    mov al, 0xff
+    call ser_release_inst      ; close UART lease before restoring IRQ vectors
+
     mov ax, 0x0100              ; IER = 0: no more UART interrupts
     call mou_pall
 
@@ -1440,6 +1445,8 @@ mouse_unhook:
     pop es
     pop si
     jmp kret_cx
+
+    db 0                       ; PARITY: serial cleanup added five bytes above
 
 ; mou_vset - ES:SI = CX:AX, the one IVT write the three restores above share,
 ; under pushf/cli so no interrupt can take the vector half-written.
@@ -3426,6 +3433,13 @@ mou_isr_body:
     mov dx, [bx+mou_bases]
     or  dx, dx
     jz .next                    ; the probe rejected this row
+    cmp bx, [ser_row]
+    jne .mouse
+    push bx
+    call far [SERFP+SER_IRQ]    ; capture before any mouse read of this UART
+    pop bx
+    jmp short .next
+.mouse:
     add dx, 5
     in  al, dx                  ; LSR: is anything waiting here?
 %ifdef MOU_DIAG

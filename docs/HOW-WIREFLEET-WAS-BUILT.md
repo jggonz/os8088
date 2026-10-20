@@ -78,3 +78,60 @@ At the owner's request, this approach is now a shared repository rule in
 both AGENTS.md and CLAUDE.md: isolated worktree, contract first, reviewable
 story waves through one draft PR, retained art sources and a continuing
 diary. The existing final-pass-only regression rule stays in force.
+
+## 2026-10-20 — Keeping the mouse alive beside the cable
+
+The serial boundary became a reusable OS facility rather than a private
+WireFleet interrupt handler. The mouse owns its detected UART; a desktop
+program can lease the other one at 9600 baud, 8N1. The existing interrupt
+handler routes that port to bounded byte queues before examining mouse
+packets. Both queues live in the pinned application region. The OS releases
+the lease before freeing an instance, even on forced close.
+
+Most of this service lives in an on-demand `SERIAL.DRV`, available to both
+kernels. Its measured resident cost crosses one 512-byte allocation rung:
+the big kernel occupies 97,792 of its fixed 100,864-byte budget, leaving
+3,072 bytes; the small kernel occupies 61,440 of 64,000, leaving 2,560.
+The active module itself needs a 1KB heap claim. These are build and budget
+measurements; the adapter, IRQ and forced-close assertions belong to the
+final integration pass. Hibernate refuses an active serial lease rather
+than restoring a half-old hardware connection from a memory image.
+
+## 2026-10-20 — Battles and a recoverable unanswered shot
+
+Each captain keeps the private fleet locally. Fixed-size escaped frames
+carry identities, a turn, a command and a CRC. The defending PC judges a
+shot. Only a sunk ship reveals its extent. A turn history hash detects
+disagreement without transmitting either private board.
+
+The awkward reconnect case is a defender that has recorded a hit while
+the shooter never received its answer. The defender caches that answer;
+the shooter retains the unanswered command. Reconnection repairs that one
+turn through replay and acknowledgment. Duplicate commands must not add
+shots or sound twice. Chat has its own sequence and acknowledgment so a
+lost message cannot starve turn synchronization.
+
+Both captains can save their own 512-byte `.WFL` record. It includes the
+pending shot and cached answer, rather than only the visible grids. Loading
+checks the checksum, fleet geometry, shot counts, turn parity and sunk
+markers before replacing live state. The final fault fixture deliberately
+loses a result, saves and closes both apps, loads each PC's own file and
+reconnects the same peers. At this entry that fixture is written, with its
+result still to be established.
+
+## 2026-10-20 — A fourth visual form and routed sound
+
+The original art now produces 72 tiles, including hits over visible ships,
+plus a 12-pixel-wide, packed two-bit form for CGA's 320-by-200 color mode.
+Monochrome hits have a white halo around a dark cross so they survive a
+gray hull. Hercules rows were shortened to 16 pixels to leave space for
+chat. The desktop and color fullscreen paths share model and tile selection;
+only the output backend differs. Headers, buttons and chat rows are cached
+as well as the sea, so an idle timer does not redraw the whole interface.
+
+Sound cues are finite note sequences through the existing sound router.
+That gives PC Speaker, AdLib and Sound Blaster effects while respecting the
+user's system setting. The game does not take over the timer or program a
+sound card itself. Fullscreen returns through FSX and releases its tone.
+These paths compile; the final machine checks will distinguish that from
+observed display, input and sound behavior.
