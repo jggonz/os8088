@@ -813,6 +813,50 @@ and picture-faced buttons, with the mono faces left as they were — is
 `.claude/skills/vga-face` (`/vga-face <package>`, **manual invocation only**),
 whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
 
+## Building an app or game in waves
+
+Use WireFleet's delivery workflow for new applications and games, unless the
+user gives a different workflow. The worked example is
+[docs/plans/WIREFLEET-PLAN.md](docs/plans/WIREFLEET-PLAN.md), with its companion
+[build diary](docs/HOW-WIREFLEET-WAS-BUILT.md).
+
+1. **Isolate the work.** Read `docs/UPSTREAM.md`, fetch the current base and
+   create a named feature branch in a separate git worktree. Leave the user's
+   existing checkout, local changes and running VMs alone.
+2. **Map the OS before designing.** Read `docs/INDEX.md`, the applicable
+   contracts and a shipped package that already solves the closest problem.
+   Reuse APIs, shared source and interaction conventions. Record a missing
+   facility or ownership boundary explicitly; do not copy a peer's mechanism
+   into a context where its guarantees no longer apply.
+3. **Write the contract and delivery stories first.** Pin interfaces, data
+   formats, rules, memory costs and adapter behavior in the appropriate SPEC
+   before implementation. Keep a checked story list in `docs/plans/`, with
+   concrete user-visible outcomes and verification for each wave. Distinguish
+   planned behavior from behavior that actually works.
+4. **Keep one review thread.** Open a draft PR for the foundation, then commit
+   and push each reviewable wave to that same branch and PR. Update its
+   description and checklist to reflect the current implementation and actual
+   evidence. Keep working through the authorized stories; a wave boundary is
+   not a reason to ask permission to continue. Do not merge without the user's
+   instruction.
+5. **Treat artwork as source.** When bitmap artwork benefits the product, use
+   image generation as requested or appropriate, retain the selected source
+   and exact prompt, and build runtime assets through a deterministic host
+   converter. Include explicit monochrome assets when the supported adapters
+   need them. No generation service belongs in `make` or on the guest.
+6. **Keep a "How It Was Built" diary as the work happens.** Store it with the
+   repository documentation, link it from the plan, and write for later reuse
+   on the website: user stories, decisions, constraints, discoveries, pictures
+   and measured results. Separate observations from intentions, and name what
+   was actually tested. Updating the diary does not authorize website
+   publication.
+7. **Verify each wave at the right level.** Use host builds/checks and a boot
+   to look during implementation; name the affected suite rows. Respect the
+   Testing section below: run the deduplicated soak union and `test-full`
+   after the final batch, not once per wave. Finish with the actual supported
+   adapters, sound/link configurations and resource cleanup checked, and report
+   hardware-only limitations honestly. Do not mark unfinished stories done.
+
 ## Hard rules (§1 — these break silently if violated)
 
 - **8086 only.** `cpu 8086` plus `-w+error`: no `pusha`, no `push imm`, no
