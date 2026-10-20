@@ -7,17 +7,23 @@ WF_SHOT equ 2
 WF_RESULT equ 3
 WF_CHAT equ 4
 
-wf_link_new:
-    call OSAPI_RAND
-    mov [wf_identity], ax
+; Local timing entropy. The PIT is latched, never reprogrammed. Call anew
+; when placing ships: a discovery identity has already been made public.
+wf_entropy:
     call OSAPI_GET_TICKS
     mov bx, ax
     xor al, al
-    out 0x43, al               ; latch only, never change PIT rate
+    out 0x43, al
     in al, 0x40
     mov ah, al
     in al, 0x40
     xor ax, bx
+    ret
+
+wf_link_new:
+    call OSAPI_RAND
+    mov [wf_identity], ax
+    call wf_entropy
     or ax, 1
     mov [wf_identity+2], ax
     xor ax, ax

@@ -197067,6 +197067,12 @@ sequence; if timer registration is refused, a restartable worker only posts
 window wakes. Parsing, drawing and file access stay on the UI task. Ready
 locks a complete fleet and waits for both captains and the serial link.
 
+Auto-placement seeds the OS random generator from a fresh private PIT latch
+mixed with OS ticks at the Auto gesture. It does not reuse the discovery
+identity as a seed: that identity travels over the wire. Freshly booted PCs
+must not inherit identical fleets from the OS generator's default seed.
+The existing 64-attempt bound and legal fallback remain unchanged.
+
 `wirefleetdeploy` (soak) drives the shipped assembly on all three adapters:
 positive placement before overlap/edge refusals, moving without losing an
 old ship, vertical placement, removal, auto fleet geometry, Ready locking,

@@ -137,6 +137,8 @@ wf_place:
 wf_auto:
     cmp byte [wf_ready], 0
     jne .out
+    call wf_entropy            ; private gesture timing, never sent to the peer
+    call OSAPI_SRAND           ; fresh PCs must not share the default fleet
     call wf_clearfleet
 .ship:
     mov byte [wf_attempts], 64

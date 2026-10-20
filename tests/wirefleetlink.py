@@ -202,6 +202,7 @@ def main():
                 m.key('a')
                 assert sorted(m.data('board',100)).count(0)==83
                 m.connect()
+            assert a.data('board',100)!=b.data('board',100),'fresh PCs inherited an identical auto fleet'
             for m in machines:
                 m.wait_for(lambda m=m:m.v('connected')==1,'addressed handshake')
                 m.key('y')
