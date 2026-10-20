@@ -751,7 +751,7 @@ wf_fsfooter: db 'F:desktop M:sound S:save O:load',0
 wf_fsmuted: db 'F:desktop M:muted S:save O:load',0
 wf_fslegend: db '. miss  X hit  # sunk   Arrows:target',0
 wf_fslinkoff: db 'WireFleet | Link paused - F: desktop',0
-wf_fslinkon: db 'WireFleet | 9600 baud 8N1 | linked',0
+wf_fslinkon: db 'WireFleet | 2400 baud 8N1 | linked',0
 wf_phaseyours: db 'YOUR TURN',0
 wf_phaseenemy: db 'ENEMY TURN',0
 wf_phasepending: db 'SHOT SENT - WAITING FOR RESULT',0

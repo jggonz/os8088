@@ -1,6 +1,6 @@
 WireFleet -- Two PCs. Two fleets. One winner.
 
-Join two PCs with a null modem cable, 9600 baud, 8N1, no flow control.
+Join two PCs with a null modem cable, 2400 baud, 8N1, no flow control.
 Keep the serial mouse on one port and use the other for the game. Open
 WIREFLET.O88 on both PCs: each one looks for the other by itself, on
 whichever COM port is free, and says when the opponent is found. If the

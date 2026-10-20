@@ -93,7 +93,7 @@ def systems():
         wait(lambda:val('linkopen')==1,'lease free original 8250')
         m.pause()
         active = uart(m,0x2f8)
-        assert active[0]==3 and active[2:]==(12,0,11),active
+        assert active[0]==3 and active[2:]==(48,0,11),active   # 2400 baud (SPEC.md 114.3)
         assert active[1]&1,'RX interrupt disabled'
         assert m.read(m.sym('ser_row'),2)==b'\2\0'
         m.run()

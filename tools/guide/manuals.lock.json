@@ -1196,9 +1196,9 @@
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "554028b0",
-  "strings": "b130c36c9f464476",
-  "why": "Rewrote Connect, Chat, New fleet, Load and Display for the automatic link (SPEC 114.9), Send, and the VGA/EGA colour layout (114.10); capture is keyboard-only and still valid"
+  "stamped": "e3e1efbf",
+  "strings": "24bef22c86f73ff1",
+  "why": "2400 baud and Link > Statistics described"
  },
  "WORD": {
   "sources": [],

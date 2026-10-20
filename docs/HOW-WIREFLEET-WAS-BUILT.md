@@ -317,3 +317,23 @@ with the board two pixels right and a header that says what it is doing.
 `tests/wfdraw.py` holds the face to it: five seconds of searching draws
 nothing, every gesture stays under a ceiling, and the picture the caches
 drew is identical to a full repaint — on VGA and on Hercules.
+
+## 2026-10-20 — Why Pong linked and WireFleet did not
+
+The owner tried the face on two 86Box XTs and both sat in FINDING
+OPPONENT. A logging relay spliced into the cable showed valid HELLO frames
+crossing in both directions, CRCs good, identities distinct — so the frames
+were arriving and being thrown away. A new Link > Statistics line read
+`RX 7139, err 628 (bits 82)`: 9% of received bytes carried a UART overrun
+or a ring overflow, and since one bad byte spoils a 66-byte frame, not one
+frame had survived.
+
+The mouse interrupt was not the culprit (0.28 ms a byte, measured). The
+rate was: at 9600 baud an XT's one-byte 8250 has 1.04 ms to be read before
+the next byte overwrites it, and QEMU — a thousand times faster — never
+came close to that edge. WireBall had always run at 2400. The owner's
+suggestion was to do the same, since a naval game sends far less than a
+ball does. The serial lease now takes the divisor (BH), WireFleet asks for
+2400, and its heartbeat slows from every three ticks to every nine so a
+66-byte frame (275 ms on the wire) leaves the line half idle. On the same
+two 86Box XTs the captains found each other within seconds.

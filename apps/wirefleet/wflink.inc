@@ -6,6 +6,13 @@ WF_SYNC equ 1
 WF_SHOT equ 2
 WF_RESULT equ 3
 WF_CHAT equ 4
+; 2400 baud, Pong's rate (SPEC.md 114.3): a byte is 4.2 ms on the wire, so an
+; XT's one-byte 8250 has four times the time 9600 gave it to be read - 86Box
+; XTs lost ~9% of bytes at 9600 and no frame survived. A frame is 66 bytes,
+; 275 ms; a heartbeat every nine ticks keeps the line half idle, and SHOT,
+; RESULT and CHAT still go at once (urgent).
+WF_DIVISOR equ 48
+WF_BEAT equ 9
 
 ; Local timing entropy. The PIT is latched, never reprogrammed. Call anew
 ; when placing ships: a discovery identity has already been made public.
@@ -102,6 +109,7 @@ wf_lease:
     pop ax
 .open:
     mov bl, al
+    mov bh, WF_DIVISOR
     xor ax, ax
     mov si, wf_serialbuf
     call OSAPI_SERIAL
@@ -115,7 +123,7 @@ wf_lease:
     mov word [wf_txpos], 0
     call OSAPI_GET_TICKS
     mov [wf_seen], ax
-    sub ax, 9
+    sub ax, WF_BEAT
     mov [wf_sendtime], ax
     call OSAPI_RAND             ; 40..71 ticks on this port before moving,
     and ax, 31                  ; drawn afresh at every move so two searches
@@ -237,6 +245,58 @@ wf_refusal:
     mov byte [wf_dirty], 1
     ret
 
+; Link > Statistics: what the cable delivered, as a line of news.
+wf_stats:
+    push ds
+    pop es
+    mov di, wf_statline
+    mov si, wf_stlabel
+    call wf_c_copy
+    mov ax, [wf_strx]
+    call dec_u16
+    mov si, wf_sterrlabel
+    call wf_c_copy
+    mov ax, [wf_sterr]
+    call dec_u16
+    mov si, wf_stbitslabel
+    call wf_c_copy
+    mov al, [wf_stbits]
+    call wf_hexbyte
+    mov si, wf_stframelabel
+    call wf_c_copy
+    mov ax, [wf_stframes]
+    call dec_u16
+    mov si, wf_strefusedlabel
+    call wf_c_copy
+    mov ax, [wf_badframes]
+    call dec_u16
+    mov si, wf_sthellolabel
+    call wf_c_copy
+    mov ax, [wf_sthello]
+    call dec_u16
+    mov byte [di], 0
+    mov word [wf_message], wf_statline
+    mov word [wf_footershown], 0   ; the same pointer, new text: redraw it
+    mov byte [wf_dirty], 1
+    ret
+wf_hexbyte:
+    push ax
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    call .digit
+    pop ax
+    and al, 15
+.digit:
+    add al, '0'
+    cmp al, '9'
+    jbe .put
+    add al, 7
+.put:
+    stosb
+    ret
+
 wf_disconnect:
     cmp byte [wf_linkopen], 0
     je .out
@@ -278,8 +338,11 @@ wf_poll:
     mov al, 2
     call OSAPI_SERIAL
     jc .schedule
+    inc word [wf_strx]          ; Link > Statistics
     or ah, ah
     jz .byte
+    inc word [wf_sterr]
+    or [wf_stbits], ah
     mov byte [wf_rlen], 255
     mov byte [wf_rescape], 0
 .byte:
@@ -305,7 +368,7 @@ wf_poll:
     jb .out
     mov ax, [wf_now]
     sub ax, [wf_sendtime]
-    cmp ax, 3
+    cmp ax, WF_BEAT
     jae .make
     cmp byte [wf_urgent], 0
     je .out
@@ -482,6 +545,7 @@ wf_receive:
     jne .reset
     cmp byte [wf_rlen], WF_PACKET
     jne .reset
+    inc word [wf_stframes]
     call wf_packet_take
 .reset:
     mov byte [wf_rlen], 0
@@ -556,6 +620,7 @@ wf_equal4:
     ret
 
 wf_hello_take:
+    inc word [wf_sthello]
     mov ax, [wf_rxbuf+4]
     or ax, [wf_rxbuf+6]
     jz wf_packet_take.bad
@@ -1110,6 +1175,12 @@ wf_noport: db 'No supported BIOS-advertised UART on that port.',0
 wf_badbuffer: db 'Serial lease refused this application buffer.',0
 wf_needsserial: db 'Linking needs SERIAL.DRV: insert the system disk, Link > Automatic.',0
 wf_nofreeport: db 'No free serial port for the cable. Link menu: choose a port.',0
+wf_stlabel: db 'RX ',0
+wf_sterrlabel: db ', err ',0
+wf_stbitslabel: db ' (bits ',0
+wf_stframelabel: db '), frames ',0
+wf_strefusedlabel: db ', refused ',0
+wf_sthellolabel: db ', hello ',0
 wf_rematch: db 'Your opponent started a new match. Press N to join it.',0
 wf_foundplace: db 'Opponent found! Place your fleet, then Ready [Y].',0
 wf_peerreadyline: db 'Opponent is ready and waiting. Place your fleet, then Ready.',0

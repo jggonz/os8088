@@ -6004,7 +6004,9 @@ FSIF_BANKED equ 4
 ; --- THE THEME (SPEC.md 76, 76.14.14) --------------------------------------
 ; --- Desktop serial lease (SPEC.md 115), UI-task context -------------------
 %define OSAPI_SERIAL KERNEL_SEG:0x049F ; AL=0 Open (BL=COM1/2, SI=517-byte
-                                 ; pinned-region buffer), 1 Close, 2 Read
+                                 ; pinned-region buffer, BH=the 8250 divisor
+                                 ; of 115200: 0 or 12 = 9600, 48 = 2400 -
+                                 ; SPEC.md 115.1), 1 Close, 2 Read
                                  ; (AL byte, AH sticky LSR/overflow), 3 Write
                                  ; (CL byte). AX/CF outputs, every other
                                  ; register kept. Open may read SERIAL.DRV

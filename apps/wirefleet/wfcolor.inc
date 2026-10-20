@@ -1204,7 +1204,7 @@ wf_evsank: db ': sunk yours!',0
 wf_evsunk: db ': SUNK!',0
 wf_stnolink: db 'No serial port open',0
 wf_stcom: db 'COM',0
-wf_stbaud: db '  9600 baud 8N1',0
+wf_stbaud: db '  2400 baud 8N1',0
 wf_stlooking: db 'Looking for opponent',0
 wf_stoff: db 'Link off - Link menu',0
 wf_stplacing: db 'Opponent placing ships',0

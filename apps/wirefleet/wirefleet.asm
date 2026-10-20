@@ -279,7 +279,12 @@ wf_command:
     je .automatic
     cmp al, 3
     je .disconnect
+    cmp al, 4
+    je .stats
     jmp wf_connect              ; 1 = COM1, 2 = COM2
+.stats:
+    call wf_stats
+    jmp wf_update
 .automatic:
     call wf_disconnect
     mov byte [wf_wantport], 0
@@ -505,11 +510,11 @@ wf_prefs: dw 600,414, 600,304, 600,154
     OS88_MENUSET wf_menus, wf_title, wf_commandentry
         OS88_MENU wf_gamemenu, wf_gameitems, 5
         OS88_MENU wf_fleetmenu, wf_fleetitems, 3
-        OS88_MENU wf_linkmenu, wf_linkitems, 4
+        OS88_MENU wf_linkmenu, wf_linkitems, 5
     OS88_MENUSET_END wf_menus
 wf_gameitems: dw wf_newlabel,wf_readylabel,wf_savelabel,wf_loadlabel,wf_soundlabel
 wf_fleetitems: dw wf_rotatelabel,wf_autolabel,wf_clearlabel
-wf_linkitems: dw wf_autolinklabel,wf_com1label,wf_com2label,wf_disconnectlabel
+wf_linkitems: dw wf_autolinklabel,wf_com1label,wf_com2label,wf_disconnectlabel,wf_statslabel
 wf_title: db 'WireFleet',0
 wf_gamemenu: db 'Game',0
 wf_fleetmenu: db 'Fleet',0
@@ -518,6 +523,7 @@ wf_autolinklabel: db 'Automatic',0
 wf_com1label: db 'Connect COM1',0
 wf_com2label: db 'Connect COM2',0
 wf_disconnectlabel: db 'Disconnect',0
+wf_statslabel: db 'Statistics',0
 wf_readywaiting: db 'Fleet locked. Waiting for your opponent...',0
 wf_newlabel: db 'New fleet [N]',0
 wf_readylabel: db 'Ready [Y]',0
@@ -744,6 +750,12 @@ WF_VAR wf_footershown,2
 WF_VAR wf_chatshown,2
 WF_VAR wf_chatmodeshown,1
 WF_VAR wf_colour,1
+WF_VAR wf_strx,2
+WF_VAR wf_sterr,2
+WF_VAR wf_stbits,1
+WF_VAR wf_stframes,2
+WF_VAR wf_sthello,2
+WF_VAR wf_statline,80
 WF_VAR wf_cbx1,2
 WF_VAR wf_planar,1
 WF_VAR wf_pdest,2

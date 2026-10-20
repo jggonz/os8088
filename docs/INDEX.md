@@ -12,7 +12,7 @@ Read first: [§115 Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`)](../
 
 | slot | call | takes |
 |---|---|---|
-| `0x049F` | `OSAPI_SERIAL` | AL=0 Open (BL=COM1/2, SI=517-byte pinned-region buffer), 1 Close, 2 Read (AL byte, AH sticky LSR/overflow), 3 Write (CL byte)... |
+| `0x049F` | `OSAPI_SERIAL` | AL=0 Open (BL=COM1/2, SI=517-byte pinned-region buffer, BH=the 8250 divisor of 115200: 0 or 12 = 9600, 48 = 2400... |
 
 ### Windows
 

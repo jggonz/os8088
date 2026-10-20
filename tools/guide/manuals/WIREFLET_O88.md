@@ -11,12 +11,13 @@ Each PC keeps its own ships private. Chat shares the cable.
 Open `WIREFLET.O88` on each PC. Each one looks for the other by itself on
 whichever COM port the mouse is not using; if the mouse has not moved yet,
 move it once. The status line names the port, and a light shows the link:
-green connected, yellow looking, red stopped. The connection uses 9600
+green connected, yellow looking, red stopped. The connection uses 2400
 baud, 8N1, without flow control.
 
 The **Link** menu is the manual route: **Automatic** looks again,
 **Connect COM1** or **Connect COM2** uses that port only, and
-**Disconnect** releases the port.
+**Disconnect** releases the port, and **Statistics** shows what the cable
+has delivered: bytes, bytes with line errors, frames and refused frames.
 
 Select a ship with `1` through `5` or its name. Click your grid to place
 it, or move with the arrows and press `Enter`. `R` rotates. Right-click

@@ -197042,12 +197042,20 @@ repainting.
 ### 114.3 Link and persistence requirements
 
 Serial uses a crossed TX/RX null modem with shared signal ground, standard
-BIOS-advertised COM1 or COM2, 9600 baud, 8N1, no hardware flow control, and
+BIOS-advertised COM1 or COM2, 2400 baud, 8N1, no hardware flow control, and
 an original 8250 as the minimum UART. A live desktop mouse must continue to
 work. The active mouse port and an already leased port must be refused.
 UART/PIC state and every lease must be released on ordinary and forced close.
 The coordinated serial service's ABI will be pinned before its implementation;
 WireBall's FSX-only ownership is not a desktop serial API (§109.1).
+
+2400 is WireBall's rate, and it is chosen for the 4.77 MHz XT: an original
+8250 holds one received byte, and at 9600 the next one overwrites it 1.04 ms
+later. Two 86Box XTs linked at 9600 lost about 9% of received bytes (Link >
+Statistics read `err 628` of 7,139, bits 82h - UART overrun and ring
+overflow), and no 66-byte frame survived whole, while the same build linked
+at once in QEMU, whose CPU is a thousand times faster. At 2400 a byte waits
+4.17 ms.
 
 The link protocol must validate magic, version, bounded length, checksum,
 sender, recipient, match identity and turn before mutating game state.
@@ -197145,7 +197153,8 @@ RESULTs have all three zero. The receiver validates the revealed extent and
 its previous hits before marking it sunk. Chat is independently sequenced:
 one outstanding message, repeated until a peer SYNC acknowledges it; a
 duplicate cannot append another transcript line. Heartbeats are no more
-frequent than three ticks. Fifty-five ticks without valid addressed traffic
+frequent than nine ticks (a frame is 275 ms at 2400 baud; SHOT, RESULT and
+CHAT go at once). Fifty-five ticks without valid addressed traffic
 pauses battle input, preserving the pending shot and chat. Reconnect resumes
 the same identities/history; unexpected peers cannot replace an existing game.
 
@@ -197362,7 +197371,7 @@ user to move the mouse. Nonstandard or unadvertised bases are refused.
 
 | AL | verb | arguments and result |
 |---|---|---|
-| 0 | Open | SI=offset of a 517-byte buffer in the pinned package region; CF=0 AX=0 on success |
+| 0 | Open | SI=offset of a 517-byte buffer in the pinned package region, BH=the divisor of 115200 (0 = 12, 9600 baud; 48 = 2400); CF=0 AX=0 on success |
 | 1 | Close | restores UART/PIC state, releases the lease and drops the module; succeeds if already closed; a foreign lease returns busy |
 | 2 | Read | CF=0 AL=byte, AH=line/overflow status accumulated since the preceding Read; CF=1 AX=6 if empty |
 | 3 | Write | CL=byte; CF=0 AX=0 queued; CF=1 AX=7 if the TX queue is full |
@@ -197384,7 +197393,8 @@ The API validates the complete buffer against the instance's region size.
 ### 115.2 Hardware and lifetime
 
 Open saves LCR, IER, DLL, DLM, MCR and the standard port's PIC mask bit, then
-sets 9600 baud, 8N1, DTR/RTS and OUT2, with RX interrupts enabled. THRE
+sets the divisor Open was given in BH (0 means 12, 9600 baud; WireFleet asks
+for 48, 2400), 8N1, DTR/RTS and OUT2, with RX interrupts enabled. THRE
 interrupts run only while queued TX needs service. No FIFO, scratch register,
 CTS/DSR gating, delay loop or new interrupt vector is required. The boot
 mouse probe already proves the standard 8250 divisor latches (§9.5).
