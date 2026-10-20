@@ -62,31 +62,80 @@ wf_link_new:
     mov byte [wf_urgent], 1
     ret
 
-; AL=COM number. Retains the match; switching a port is reconnecting it.
+; AL=COM number, from the Link menu: the search is PINNED to that port
+; (114.9). Retains the match; switching a port is reconnecting it.
 wf_connect:
     mov [wf_wantport], al
+    mov byte [wf_linkmode], 2
+    mov cl, al
+    mov byte [wf_cands], cl     ; COM1 = bit 0 = 1, COM2 = bit 1 = 2
     call wf_disconnect
+    mov al, [wf_wantport]
+    call wf_lease
+    jc .failed
+    mov word [wf_message], wf_searching
+    jmp wf_update
+.failed:
+    call wf_leaseerror
+    jmp wf_update
+
+; Link -> Automatic, and the window's first tick: search both ports.
+wf_autostart:
+    mov byte [wf_linkmode], 1
+    mov byte [wf_cands], 3
+    mov byte [wf_heard], 0
+    call OSAPI_GET_TICKS
+    mov [wf_retry], ax          ; due now
+    ret
+
+; AL=port. Opens, or MOVES a lease this instance already holds (115.1).
+; CF=refused with AX=error and the lease closed; else the port is live.
+wf_lease:
+    mov [wf_curport], al
+    cmp byte [wf_linkopen], 0
+    jne .open
+    push ax
     mov dx, cs
     xor ax, ax
     call OSAPI_MEM_MOVABLE      ; pin the region before publishing its ring
+    pop ax
+.open:
+    mov bl, al
     xor ax, ax
-    mov bl, [wf_wantport]
     mov si, wf_serialbuf
     call OSAPI_SERIAL
-    jc .failed
+    jc .refused
     mov byte [wf_linkopen], 1
     mov byte [wf_urgent], 1
+    mov byte [wf_heard], 0
     mov byte [wf_rlen], 0
     mov byte [wf_rescape], 0
     mov word [wf_txlen], 0
     mov word [wf_txpos], 0
-    mov word [wf_message], wf_searching
     call OSAPI_GET_TICKS
     mov [wf_seen], ax
     sub ax, 9
     mov [wf_sendtime], ax
-    jmp wf_update
-.failed:
+    call OSAPI_RAND             ; 40..71 ticks on this port before moving,
+    and ax, 31                  ; drawn afresh at every move so two searches
+    add ax, 40                  ; cannot stay in step on opposite ports
+    mov [wf_dwell], ax
+    call OSAPI_GET_TICKS
+    add [wf_dwell], ax
+    mov byte [wf_dirty], 1
+    clc
+    ret
+.refused:
+    push ax
+    mov byte [wf_linkopen], 0
+    mov byte [wf_connected], 0
+    OS88_REGION_MOVABLE
+    pop ax
+    stc
+    ret
+
+; AX=lease error -> the line that says what to do about it.
+wf_leaseerror:
     cmp ax, 8
     jbe .known
     mov ax, 5
@@ -95,8 +144,95 @@ wf_connect:
     mov bx, ax
     mov ax, [wf_linkerrors+bx]
     mov [wf_message], ax
-    OS88_REGION_MOVABLE
-    jmp wf_update
+    mov byte [wf_dirty], 1
+    ret
+
+; One tick of the automatic search (114.9). Only mode 1 moves anything.
+wf_autolink:
+    cmp byte [wf_linkmode], 1
+    jne .out
+    cmp byte [wf_linkopen], 0
+    jne .live
+    mov ax, [wf_now]
+    sub ax, [wf_retry]
+    js .out                     ; a refusal is waited out
+    mov al, [wf_cands]
+    or al, al
+    jz .none
+    mov ah, [wf_wantport]       ; the chosen or saved port first, then COM2
+    or ah, ah                   ; (COM1 is the mouse on most machines)
+    jnz .first
+    mov ah, 2
+.first:
+    test al, ah
+    jnz .try
+    xor ah, 3
+.try:
+    mov al, ah
+    call wf_lease
+    jnc .opened
+    call wf_refusal
+.out:
+    ret
+.opened:
+    cmp word [wf_message], wf_loadedmessage
+    je .out                     ; a loaded match keeps saying what it waits for
+    mov word [wf_message], wf_searching
+    ret
+.none:
+    mov byte [wf_linkmode], 0
+    mov word [wf_message], wf_nofreeport
+    mov byte [wf_dirty], 1
+    ret
+.live:
+    cmp byte [wf_heard], 0
+    jne .found
+    cmp byte [wf_cands], 3      ; one candidate: nothing to move between
+    jne .out
+    mov ax, [wf_now]
+    sub ax, [wf_dwell]
+    js .out
+    mov al, [wf_curport]
+    xor al, 3
+    call wf_lease               ; MOVE to the other port
+    jnc .opened
+    call wf_refusal             ; that one is gone; the next tick reopens
+    ret                         ; the remaining one (the lease is closed)
+.found:
+    mov al, [wf_curport]        ; a WireFleet answered here: this is the
+    mov [wf_wantport], al       ; port, for this search and for Save
+    mov [wf_cands], al
+    ret
+
+; AX=refusal during a search. 3/4: this port is not a candidate. 1/2:
+; wait and retry. Anything else ends the search with its line.
+wf_refusal:
+    push ax
+    call wf_leaseerror
+    pop ax
+    mov bx, [wf_now]
+    cmp ax, 3
+    je .drop
+    cmp ax, 4
+    je .drop
+    add bx, 18
+    mov [wf_retry], bx
+    cmp ax, 2
+    jbe .out
+    mov byte [wf_linkmode], 0
+.out:
+    ret
+.drop:
+    mov [wf_retry], bx          ; the next candidate, at once
+    mov al, [wf_curport]
+    not al
+    and [wf_cands], al
+    mov ah, [wf_cands]
+    or ah, ah
+    jnz .out
+    mov byte [wf_linkmode], 0
+    mov word [wf_message], wf_nofreeport
+    ret
 
 wf_disconnect:
     cmp byte [wf_linkopen], 0
@@ -129,6 +265,9 @@ wf_tick:
 
 wf_poll:
     call wf_soundtick
+    call OSAPI_GET_TICKS
+    mov [wf_now], ax
+    call wf_autolink
     cmp byte [wf_linkopen], 0
     je .out
     mov byte [wf_rxwork], 128
@@ -365,6 +504,12 @@ wf_packet_take:
     ja .bad
     cmp word [wf_rxbuf+16], 200
     ja .bad
+    mov si, wf_rxbuf+4          ; a WireFleet that is not our own echo is
+    mov di, wf_identity         ; on this port: the search can stop (114.9)
+    call wf_equal4
+    je .heardself
+    mov byte [wf_heard], 1
+.heardself:
     mov ax, [wf_rxbuf+8]
     or ax, [wf_rxbuf+10]
     jz .unaddressed
@@ -426,9 +571,32 @@ wf_hello_take:
     mov si, wf_rxbuf+4
     mov di, wf_peer
     call wf_equal4
-    jne wf_packet_take.bad
+    jne .stranger
     mov byte [wf_urgent], 1
     ret
+.stranger:
+    ; 114.9: before a result is committed there is nothing to protect, so
+    ; an opponent that relaunched or chose New fleet is simply found again.
+    cmp byte [wf_finished], 0
+    jne .rematch
+    cmp word [wf_turn], 0
+    jne wf_packet_take.bad
+    cmp byte [wf_pending], 0
+    jne wf_packet_take.bad
+    cmp byte [wf_cachevalid], 0
+    jne wf_packet_take.bad
+    xor ax, ax
+    mov [wf_peerready], al
+    mov [wf_connected], al
+    mov [wf_chatrxseq], ax
+    mov word [wf_chatseq], 1
+    jmp .bind
+.rematch:
+    cmp word [wf_message], wf_rematch
+    je wf_packet_take.bad
+    mov word [wf_message], wf_rematch
+    mov byte [wf_dirty], 1
+    jmp wf_packet_take.bad
 .bind:
     push ds
     pop es
@@ -485,6 +653,9 @@ wf_sync_take:
     je .ready
     mov [wf_peerready], al
     mov byte [wf_dirty], 1
+    cmp byte [wf_connected], 0
+    je .ready
+    call wf_readyline
 .ready:
     cmp byte [wf_conflict], 0
     jne .out
@@ -493,6 +664,10 @@ wf_sync_take:
     mov byte [wf_connected], 1
     mov byte [wf_dirty], 1
     mov word [wf_message], wf_linkrestored
+    cmp word [wf_turn], 0
+    jne .cue
+    call wf_readyline
+.cue:
     mov al, 7
     call wf_sfx
 .chatack:
@@ -506,6 +681,32 @@ wf_sync_take:
     mov byte [wf_dirty], 1
 .seen:
     call wf_touch
+.out:
+    ret
+
+; Linked, before the first shot: say whose move it is (114.9).
+wf_readyline:
+    cmp word [wf_turn], 0
+    jne .out
+    cmp byte [wf_finished], 0
+    jne .out
+    mov ax, wf_foundplace
+    cmp byte [wf_peerready], 0
+    je .mine
+    mov ax, wf_peerreadyline
+.mine:
+    cmp byte [wf_ready], 0
+    je .set
+    mov ax, wf_waitpeer
+    cmp byte [wf_peerready], 0
+    je .set
+    mov ax, wf_battlefirst
+    cmp byte [wf_side], 0
+    je .set
+    mov ax, wf_battlesecond
+.set:
+    mov [wf_message], ax
+    mov byte [wf_dirty], 1
 .out:
     ret
 
@@ -897,15 +1098,22 @@ wf_crc:
     ret
 
 wf_linkerrors: dw wf_searching,wf_linkbusy,wf_movemouse,wf_mouseport,wf_noport,wf_badbuffer,wf_searching,wf_searching,wf_needsserial
-wf_searching: db 'Searching for your opponent - null modem, 9600 baud, 8N1',0
-wf_linkbusy: db 'Serial port is owned by another application.',0
-wf_movemouse: db 'Move the mouse so the OS can identify its port, then Connect.',0
+wf_searching: db 'Looking for your opponent on the null-modem cable...',0
+wf_linkbusy: db 'Another program is using the serial port. Trying again...',0
+wf_movemouse: db 'Move the mouse once so the OS can tell it from the cable.',0
 wf_mouseport: db 'That COM port is the mouse. Connect using the other port.',0
 wf_noport: db 'No supported BIOS-advertised UART on that port.',0
 wf_badbuffer: db 'Serial lease refused this application buffer.',0
-wf_needsserial: db 'Connect needs SERIAL.DRV from the system disk.',0
+wf_needsserial: db 'Linking needs SERIAL.DRV: insert the system disk, Link > Automatic.',0
+wf_nofreeport: db 'No free serial port for the cable. Link menu: choose a port.',0
+wf_rematch: db 'Your opponent started a new match. Press N to join it.',0
+wf_foundplace: db 'Opponent found! Place your fleet, then Ready [Y].',0
+wf_peerreadyline: db 'Opponent is ready and waiting. Place your fleet, then Ready.',0
+wf_waitpeer: db 'Fleet locked. Waiting for your opponent to finish placing.',0
+wf_battlefirst: db 'Battle stations! You fire first: choose a square in enemy waters.',0
+wf_battlesecond: db 'Battle stations! Your opponent fires first.',0
 wf_linkpaused: db 'Link paused. Reconnect to resume; your fleet and turn are kept.',0
-wf_linkrestored: db 'Link restored. Ready both fleets to play.',0
+wf_linkrestored: db 'Link restored. Match resumed.',0
 wf_historyerror: db 'Match histories differ. Resume refused; no state was replaced.',0
 wf_shotpending: db 'Shot sent. Waiting for its result; do not fire again.',0
 wf_resultmessage: db 'Shot resolved. One shot per turn, including after a hit.',0

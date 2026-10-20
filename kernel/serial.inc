@@ -213,7 +213,13 @@ srl_body:
 
 srl_open:
     cmp word [cs:srl_base], 0
-    jne srl_body.busy
+    je .fresh
+    cmp dh, [cs:srl_owner]      ; the holder MOVES its lease (115.1): the old
+    jne srl_body.busy           ; port is put back as Close would, the module
+    push dx                     ; stays, and a refusal below leaves it closed
+    call srl_close
+    pop dx
+.fresh:
     cmp byte [di+I_STATE], 0
     je srl_body.bad
     mov ax, es

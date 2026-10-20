@@ -45,6 +45,7 @@ wf_entry:
     mov byte [wf_fallback], 1
 .clock:
     call wf_new
+    call wf_autostart           ; 114.9: look for the opponent at once
     mov bx, [wf_win]
     clc
 .out:
@@ -228,6 +229,10 @@ wf_onkey:
     jne .out
     mov byte [wf_ready], 1
     mov word [wf_message], wf_readywaiting
+    cmp byte [wf_connected], 0
+    je .readycue
+    call wf_readyline
+.readycue:
     mov byte [wf_urgent], 1
     mov al, 2
     call wf_sfx
@@ -258,11 +263,19 @@ wf_command:
     je wf_onkey.auto
     jmp wf_onkey.clear
 .link:
-    cmp al, 2
+    cmp al, 0
+    je .automatic
+    cmp al, 3
     je .disconnect
-    inc al
-    jmp wf_connect
+    jmp wf_connect              ; 1 = COM1, 2 = COM2
+.automatic:
+    call wf_disconnect
+    mov byte [wf_wantport], 0
+    call wf_autostart
+    mov word [wf_message], wf_searching
+    jmp wf_update
 .disconnect:
+    mov byte [wf_linkmode], 0
     call wf_disconnect
     jmp wf_update
 
@@ -394,10 +407,11 @@ wf_buttonup:
 .out:
     ret
 .connect:
-    mov al, [wf_wantport]
-    or al, al
-    jnz .port
-    mov al, 2
+    mov al, [wf_wantport]       ; a pinned port reconnects to itself; else
+    cmp byte [wf_linkmode], 2   ; the search starts over (114.9)
+    je .port
+    mov al, 0
+    jmp wf_command.link
 .port:
     jmp wf_connect
 wf_buttondrag:
@@ -470,19 +484,20 @@ wf_prefs: dw 600,414, 600,304, 600,154
     OS88_MENUSET wf_menus, wf_title, wf_commandentry
         OS88_MENU wf_gamemenu, wf_gameitems, 5
         OS88_MENU wf_fleetmenu, wf_fleetitems, 3
-        OS88_MENU wf_linkmenu, wf_linkitems, 3
+        OS88_MENU wf_linkmenu, wf_linkitems, 4
     OS88_MENUSET_END wf_menus
 wf_gameitems: dw wf_newlabel,wf_readylabel,wf_savelabel,wf_loadlabel,wf_soundlabel
 wf_fleetitems: dw wf_rotatelabel,wf_autolabel,wf_clearlabel
-wf_linkitems: dw wf_com1label,wf_com2label,wf_disconnectlabel
+wf_linkitems: dw wf_autolinklabel,wf_com1label,wf_com2label,wf_disconnectlabel
 wf_title: db 'WireFleet',0
 wf_gamemenu: db 'Game',0
 wf_fleetmenu: db 'Fleet',0
 wf_linkmenu: db 'Link',0
+wf_autolinklabel: db 'Automatic',0
 wf_com1label: db 'Connect COM1',0
 wf_com2label: db 'Connect COM2',0
 wf_disconnectlabel: db 'Disconnect',0
-wf_readywaiting: db 'Fleet locked. Connect in Link menu; both captains must be ready.',0
+wf_readywaiting: db 'Fleet locked. Waiting for your opponent...',0
 wf_newlabel: db 'New fleet [N]',0
 wf_readylabel: db 'Ready [Y]',0
 wf_rotatelabel: db 'Rotate R',0
@@ -598,6 +613,12 @@ WF_VAR wf_connected,1
 WF_VAR wf_conflict,1
 WF_VAR wf_peerready,1
 WF_VAR wf_wantport,1
+WF_VAR wf_linkmode,1
+WF_VAR wf_cands,1
+WF_VAR wf_curport,1
+WF_VAR wf_heard,1
+WF_VAR wf_retry,2
+WF_VAR wf_dwell,2
 WF_VAR wf_turn,2
 WF_VAR wf_peerturn,2
 WF_VAR wf_hash,2

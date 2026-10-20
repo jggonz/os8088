@@ -197179,8 +197179,8 @@ shot counts and turn parity, and pending-command bounds. It rejects a file
 of any other size before reading it. Only a valid record can disconnect the
 old lease and replace live fields. No serial pointer, ring index, displayed
 pixel, timer, current connection flag or sound ownership is restored from a
-file. The game starts paused until Connect reaches the saved peer and its
-history agrees. Both PCs save their own private record; one PC's file is
+file. The game starts paused until the link (§114.9's search, the saved
+port first) reaches the saved peer and its history agrees. Both PCs save their own private record; one PC's file is
 not a replacement for the other PC's fleet. The transcript is retained across
 a cable interruption in memory; only its sequence/undelivered message is
 persisted to disk. Saving is explicit, not a heartbeat side effect.

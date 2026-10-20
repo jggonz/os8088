@@ -89,6 +89,7 @@ wf_filedone:
     mov byte [wf_connected], 0
     mov byte [wf_conflict], 0
     mov byte [wf_linkopen], 0
+    call wf_autostart           ; the saved port first (114.9)
     mov byte [wf_chatmode], 0
     mov byte [wf_abon], 0
     mov byte [wf_rlen], 0
@@ -559,7 +560,7 @@ wf_savebounds:
     dw 0
 wf_defaultfile: db 'FLEET.WFL',0
 wf_savedmessage: db 'Match saved. Save the other captain on the other PC too.',0
-wf_loadedmessage: db 'Saved match loaded, paused. Connect to the saved opponent.',0
+wf_loadedmessage: db 'Saved match loaded, paused until the same opponent answers.',0
 wf_badmatch: db 'Invalid saved match. Your current fleet and turn were kept.',0
 wf_diskerror: db 'Could not read or write the match file.',0
 wf_dialogbusy: db 'File dialog unavailable. Finish the open dialog and try again.',0
