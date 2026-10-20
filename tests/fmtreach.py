@@ -113,7 +113,13 @@ def arm(wrong, tmp):
         row = m.read(m.sym("fm_fmtrow"), 1)[0]
         check(row == 3, "arm %s: the probe offers 360K (no AH=08h)" % tag,
               "", got=row, want=3)
-        m.write(m.sym("fm_fmtrow"), bytes([2]))   # the user's Space: 720K
+        # the user's Space on an EXTERNAL 9-sector drive: 720K, with 360K
+        # the other size. This fixture's GLaBIOS answers no AH=08h, so the
+        # probe leaves fm_fmtalt at 0FFh and offers no Space - poke BOTH
+        # bytes Space swaps, because the reach test falls back to 360K only
+        # where 360K is the drive's other format (SPEC.md 18.96.4)
+        m.write(m.sym("fm_fmtrow"), bytes([2]))
+        m.write(m.sym("fm_fmtalt"), bytes([3]))
 
         seen = {"tracks": 0, "rd79": 0, "wr79": 0}
 

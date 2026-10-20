@@ -306,6 +306,10 @@ def capabilities():
     if shutil.which("ffmpeg") and shutil.which("ffprobe") and \
             os88build.have_numpy():
         caps.add("ffmpeg")
+    # ...and numpy alone, for a row that builds its fixtures with the
+    # encoder's picture code but never runs ffmpeg (tests/vidposter.py).
+    if os88build.have_numpy():
+        caps.add("numpy")
     # mtools, which tests/instkeep.py plants a user's files with on a copy of
     # the fixture partition (SPEC.md 52.10.15) - a HOST-side FAT writer that
     # is not os88disk.py, so the fixture is not built by the tree under test.

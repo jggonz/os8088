@@ -13087,7 +13087,7 @@ SOAK = [
         "white on a CGA; colour and black and white halved twice. Broken on "
         "purpose - the posters ignored, the size or the desktop not asked, "
         "a halving's turn or second pass taken out - those arms FAIL",
-        needs=("marty", "nasm"), serial=True,
+        needs=("marty", "nasm", "numpy"), serial=True,
         wants=("build/video.o88",)),
     Row("vidscreeno", "soak", py("tests/vidscreen.py", "--own"), 160.0,
         "SPEC.md 98.1.3.10, 98.3.8.7: vidscreen's clips AGAINST THEIR OWN "
