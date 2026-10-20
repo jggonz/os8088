@@ -153,7 +153,12 @@ ui_task:
     ; the same lock, the same billing and the same target, through W_ONWH
     ; instead of W_ONKEY. However many notches came since the last pass, the
     ; window gets ONE call: a flick on an 8088 is one scroll, not a queue of
-    ; them. No blk_wake: the packet that carried the notch already counted
+    ; them. No blk_wake: the packet that carried the notch already counted,
+    ; and blk_pass below spends it. But a notch out of a DARK screen is the
+    ; input that wakes it, and SPEC.md 64.2 drops that: left in the level, it
+    ; is cleared by blk_pass's wake. AL is 0, so the compare is even (PARITY)
+    cmp [blk_on], al
+    jne .events
     xchg ax, [mou_whl]
     or ax, ax
     jz .events

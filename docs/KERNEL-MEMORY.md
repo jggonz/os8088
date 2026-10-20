@@ -277,7 +277,7 @@ had added.
     "bss": 5253,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37459,
+    "cold": 37473,
     "coldpara": 2368,
     "colds": 3776,
     "fatpara": 288,
@@ -293,7 +293,7 @@ had added.
     "minramkb": 128,
     "ovl": 5118,
     "stk0": 512,
-    "text": 42798,
+    "text": 42816,
     "vgabuf": 336,
     "vgabufpara": 32,
     "vgas": 6144
@@ -723,14 +723,14 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,507 | 36.8% |
-| the window system and its furniture | 22,403 | 27.9% |
-| drawing: adapters, primitives, glyphs, icons | 12,628 | 15.7% |
+| the file system, end to end | 29,521 | 36.8% |
+| the window system and its furniture | 22,409 | 27.9% |
+| drawing: adapters, primitives, glyphs, icons | 12,640 | 15.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 7,951 | 9.9% |
 | the kernel proper: API table, heap, scheduler, events | 7,115 | 8.9% |
 | the Control Panel | 353 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 300 | 0.4% |
-| **total** | **80,257** | |
+| **total** | **80,289** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -739,11 +739,11 @@ there and nowhere else.
 | `files.inc` — the Disk window (§22) | 1,159 | 8,141 | **9,300** | 574 | — | — |
 | `wm.inc` — the window manager (§11) | 9,113 | 141 | **9,254** | 1,156 | — | 34 |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 393 | 6,565 | **6,958** | 416 | — | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 5,134 | 1,394 | **6,528** | 38 | 526 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 5,140 | 1,394 | **6,534** | 38 | 526 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 4,985 | **5,009** | 180 | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,905 | — | **3,905** | 109 | 128 | — |
 | `memory.inc` — the claim heap (§50) | 276 | 2,565 | **2,841** | 24 | 324 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,749 | 9 | **2,758** | 56 | — | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,755 | 9 | **2,764** | 56 | — | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,584 | 165 | **2,749** | 173 | 84 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,055 | **2,572** | 31 | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,118 | **2,153** | 86 | — | — |
@@ -751,7 +751,7 @@ there and nowhere else.
 | `font.inc` — the 8×8 glyph renderer (§6) | 1,984 | — | **1,984** | 22 | 16 | 236 |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,947 | **1,970** | 91 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,629 | 126 | **1,755** | 721 | — | — |
-| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 1,666 | **1,666** | 152 | — | — |
+| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 1,680 | **1,680** | 152 | — | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,357 | — | **1,357** | 212 | 2,944 | — |
 | `loader.inc` — the package loader (§21) | 4 | 1,347 | **1,351** | 48 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,260 | — | **1,260** | 20 | — | — |
@@ -766,7 +766,7 @@ there and nowhere else.
 | `clock.inc` — the clock ladder (§37) | 490 | 30 | **520** | 59 | — | — |
 | `mod.inc` — on-demand kernel modules (§2.8) | 140 | 354 | **494** | — | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 456 | **456** | — | — | — |
-| `blank.inc` — the idle screen blanker (§64) | 199 | 242 | **441** | — | — | — |
+| `blank.inc` — the idle screen blanker (§64) | 205 | 242 | **447** | — | — | — |
 | `toast.inc` — the menu bar's transient message (§59) | 417 | — | **417** | 25 | — | — |
 | `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 67 | 288 | **355** | 223 | — | 76 |
 | `ctrl.inc` — the Control Panel (§31) | 133 | 220 | **353** | 28 | — | — |
@@ -793,7 +793,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,115 | 159 | **2,274** | — | — | 629 |
-| **total** | **42,798** | **37,459** | **80,257** | **5,253** | **5,358** | **5,929** |
+| **total** | **42,816** | **37,473** | **80,289** | **5,253** | **5,358** | **5,929** |
 <!-- END generated table -->
 
 ### Reading it

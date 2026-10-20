@@ -4606,12 +4606,25 @@ find that: a budget of 2 made a flat three-run row 1.84x slower, a budget of
 one-pixel border, then a long run - to the decoder on the first-run probe.
 What separates detail from flat in a short row is how many pixels its runs
 have spent: a narrow row hands the rest to the decoder when the runs before
-the current one have spent fewer than **4 x runs - 3** pixels - never on one
-run, so an outline pixel stays a run, and a dither at its third.
+the current one have spent fewer than **4 x runs - 3** pixels, and it asks
+only from the row's **fourth run**: an outline pixel and a highlight beside
+it stay runs, and a dither goes at its fourth.
+
+**The third-run rule is what a review found missing.** Asked from the third
+run, the test handed over any row that OPENS on two short runs - `1,1,N`,
+the corner row of an outlined card or icon, or `1,2,N`, `2,2,N` - and sent a
+flat body to the decoder's fixed cost: a 40-pixel `1,1,38` row took a
+dither's path, where before this section it was three runs. It now stays on
+runs. **The boundary moved and did not go away**: `1,1,1,N` (an outline, a
+highlight and a shadow, then a body) still hands over at its fourth run, and
+a dither pays one run writer call a row more than the table below says
+(§5.4.1.3's ~1,800 cycles a run). Neither is re-measured; the table is the
+rule as it was first measured.
 
 - **It costs nothing to decide.** Under 64, `W / 32` is 0 or 1, so the probe
   cannot fire and the budget is reached from the second run: the density
-  test sits behind the budget's own compare, and a wide block passes it with
+  test sits behind the budget's own compare (and asks from the fourth run),
+  and a wide block passes it with
   one `cmp`/`jae` once a row and decides exactly as it did.
 - **Under 16 nothing changed**, and that is a measurement boundary rather
   than a crossover: 16 is the narrowest width measured, where a dither is
@@ -4619,8 +4632,9 @@ run, so an outline pixel stays a run, and a dither at its third.
   somebody measures them - and checks the decoder for a block whose two edges
   share a byte column, which nothing narrower than 16 has ever asked of it.
 
-**+18 resident bytes** of `.text`, no rung, every hot routine identical at an
-even shift (PERFORMANCE.md Part 7); `kern_small` has no decoder and is
+**+18 resident bytes** of `.text`, and 6 more for the third-run rule (its
+`cmp`/`jb` and a never-executed parity `nop`), no rung, every hot routine
+identical at an even shift (PERFORMANCE.md Part 7); `kern_small` has no decoder and is
 byte-identical. Measured on `os8088_xt_vga`, cycles a row of a 64-row block
 at an odd x, before -> after:
 
@@ -4635,7 +4649,9 @@ at an odd x, before -> after:
 
 The flat rows' few percent is the hybrid's own per-run test (§5.4.1.3's
 4.2% on a wide block), now paid by narrow ones; every row in the table that
-has detail in it is faster, and none is slower by more than that. A first
+has detail in it is faster, and none is slower by more than that - which is
+a claim about these rows: an opening the table does not carry, `1,1,1,N`
+above, can be. A first
 narrow blit of a session also builds `vga_p4build`'s table (~147,000 cycles,
 once), which used to wait for a wide one.
 
@@ -16264,7 +16280,8 @@ in:  AL = VMMV_READ
 out: CF = 1                nothing queued - stop asking this pass
      CF = 0                a report:
        AX = x, BX = y      RAW, 0..0xFFFF, UNSCALED
-       CL                  buttons, in mouse_btn's own bits (1 left, 2 right)
+       CL                  bits 0-1 buttons, in mouse_btn's own bits (1 left,
+                           2 right); bits 2-7 the wheel (§9.12.8)
        CH                  0 = an absolute POSITION, 1 = a signed relative
                            DELTA (v86 sends these while the host pointer is
                            locked - the user hit "capture pointer")
@@ -17006,6 +17023,12 @@ grows with no `DRV_VER` bump (§20.2.0.1). The kernel decodes it once, in
 `mou_apply`'s shared tail: two `sar`s, §10.4's add, and `and cl, 3`. That is
 also where VMware's absolute arm joins (§9.11), so both backends share the
 same twelve bytes.
+
+**`VMMOUSE.DRV`'s private ABI is a different matter**, and `VMM_ABI_VER` went
+from 1 to 2 with it (`kernel/vmmabi.inc`, §9.11.2): an old kernel stores CL
+whole into `[mouse_btn]`, so a NEW image beside it would leave a notch held
+as a button. The bump makes that pair a refused load with a Drivers-page
+line, and both sides include the file, so it costs no byte.
 
 **The CH375 reads it from a fourth boot-report byte.** The HID boot protocol
 permits a mouse to send more than three bytes but does not require it. Many
@@ -30240,7 +30263,9 @@ window opens. It is `fm_onkey_x`'s own `.scr_move` entered with its own count:
 in the list and one in the icon grid**, where a row is an icon cell about three
 list rows tall. A window being NAMED swallows the wheel as it swallows every
 key, because the editor's box is drawn at its row. The Standard File chooser
-is a Disk window (§38.1), so it scrolls too.
+is a Disk window (§38.1), so it scrolls too - the Save form's name box
+included, `FS_EDIT` = `FM_ESAVE`, which is on the status line and not at a
+row.
 
 #### 13.18.4 What it cost
 
@@ -38482,7 +38507,8 @@ boot-time picture still reads CL, because at boot no medium is established.
 9-sector read is a DD disk in an HD drive as often as it is noise — and a
 format that cannot write and read back its own last sector is reported
 (`FERR_IO`) rather than mounted. 720KB still falls back to 360KB where 360KB
-is the drive's other format; an HD drive's 720KB that fails is a bad disk.
+is the drive's other format (an external 9-sector unit, `[fm_fmtalt]` = 3);
+an HD drive's or an internal 720KB drive's 720KB that fails is a bad disk.
 Two `int 13h` calls against a format that is ~80 seconds of tracks.
 
 What it costs, measured against the commit before it on both kernels:
@@ -108235,6 +108261,12 @@ different routes:
   wake through `wm_wake_eaten` (§74.1.1) — and drops the lot. It reset the ring
   outright until that section; a reset wiped `EVT_WAKE` records and deafened
   the window behind them for good.
+- **Wheel** (`kern_big`, §10.4). The level is read at the TOP of the pass,
+  ahead of `blk_pass`, so the arm asks `[blk_on]` first and leaves a dark
+  screen's notch in the level; `blk_pass`'s wake then lights the screen on
+  the packet's `[blk_act]` and zeroes `[mou_whl]`, which also drops a notch
+  `VMM_POLL` or a serial wheel's later byte added in the same window.
+  12 bytes of `.text`.
 
 **That is why `blk_pass` sits ahead of `evq_pop`.** Below it, the feature
 still blanks and still wakes and still looks correct on a screenshot — and

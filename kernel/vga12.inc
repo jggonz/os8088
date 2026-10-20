@@ -2189,6 +2189,10 @@ gfx_blit4:
     jb .run
 %ifdef GFX_PLANE
     jmp short .nextrow
+    nop                         ; PARITY: never executed. The density test's
+                                ; third-run guard below is 5 bytes, and this
+                                ; keeps all of .text after it at an even shift
+                                ; (PERFORMANCE.md Part 7)
 
     ; --- ...and the handover, out of line because a flat row never takes it
     ; The point is rounded DOWN to an even pixel: the decoder takes source
@@ -2198,11 +2202,13 @@ gfx_blit4:
     jb .emitrun                 ; the row has spent its runs: the rest of it
     cmp word [gfx_blit_w], 64   ; is the decoder's, from this one - WIDE. A
     jae .eplanar                ; NARROW row asks how DENSE its runs were
-    shl di, 1                   ; (SPEC.md 5.4.1.6): DX, the pixels spent,
-    shl di, 1                   ; under 4 x DI - 3, DI the runs before this
-    sub di, 3                   ; one, hands the rest over - so one short run
-    cmp dx, di                  ; (an outline pixel) never does, and a
-    jae .emitrun                ; dither does at its third
+    cmp di, 3                   ; (SPEC.md 5.4.1.6), and only from its FOURTH
+    jb .emitrun                 ; run, so two short ones opening a flat row
+    shl di, 1                   ; (an outline and a highlight) stay runs. DX,
+    shl di, 1                   ; the pixels spent, under 4 x DI - 3, DI the
+    sub di, 3                   ; runs before this one, hands the rest over -
+    cmp dx, di                  ; so a dither goes at its fourth
+    jae .emitrun
 .eplanar:
     mov ax, dx
     and al, 0xFE

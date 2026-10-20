@@ -344,6 +344,11 @@ blk_pass:
                                 ; with no record behind it, and the window -
                                 ; ftpd's, mid-transfer, first among them -
                                 ; was deaf for the rest of its life
+%ifdef KERN_BIG
+    mov word [mou_whl], 0       ; ...and a WHEEL notch is dropped with it: one
+%endif                          ; a poll or a later byte added beside the wake
+                                ; would scroll the window a pass later, unseen
+                                ; (SPEC.md 64.2; ui_task's arm drops the rest)
     ; THE BUFFER BELOW IS BORROWED, AND HERE IS THE WHOLE OF WHY IT IS SAFE.
     ; fsx_evtmp is fsx_restore's drain scratch. Both drains run on the UI task
     ; and can never be live at once - fsx_run refuses any other task in code

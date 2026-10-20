@@ -1802,6 +1802,14 @@ fcp_xfer:
 .chunk:
     call fcp_rdnext             ; AX = bytes; a chain that ended early says so
     jc .err
+%ifdef KERN_BIG
+    or ax, ax                   ; 0 bytes AFTER the first chunk is a source
+    jnz .got                    ; that shrank under the copy (a host file
+    cmp byte [fcp_made], 0      ; rewritten, a disk swapped): the cursor would
+    mov ax, FERR_IO             ; never reach the size and the loop would spin
+    jne .err                    ; for ever, so it is a short source, and .err
+.got:                           ; deletes the partial copy (SPEC.md 22.5)
+%endif
     mov FCV(fcp_flen), ax
     call fcp_gofd               ; the destination, with the chunk in hand
     jc .err

@@ -3937,8 +3937,8 @@ fm_hit:
 fm_onwheel_x:
     call kentc_di
     call fm_svp_set             ; DI = this window's state, as fm_onkey_x has
-    cmp byte [di+FS_EDIT], 0
-    jne .x
+    test byte [di+FS_EDIT], ~FM_ESAVE & 0xFF ; 0 (none) and 8 (the Save
+    jnz .x                      ; box, on the status line) scroll; 1-7 do not
     call fm_slayout             ; fm_scroll_by clamps against the live layout
     call fm_isicon
     jne .grid
@@ -5227,8 +5227,9 @@ fm_fmt_reach:
     mov ax, FERR_IO
     cmp byte [fm_fmtrow], 2     ; only 720K falls back, and only where 360K
     jne .bad                    ; is the drive's other format - an HD
-    cmp byte [fm_fmtalt], 0     ; drive's 720K that cannot reach its end is
-    je .bad                     ; a bad disk, not a 40-cylinder drive
+    cmp byte [fm_fmtalt], 3     ; drive's or an internal 720K drive's 720K
+    jne .bad                    ; that cannot reach its end is a bad disk,
+                                ; not a 40-cylinder drive
     mov byte [fm_fmtrow], 3     ; 360K - and the caller re-lists and re-titles
     mov al, 3                   ; from this, so the window describes the disk
     call dskw_format            ; that exists rather than the one asked for
