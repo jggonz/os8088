@@ -505,6 +505,19 @@ summary = "Pong full screen. Play another computer over a null modem cable, or p
 short = "Full-screen Pong, two players"
 needs = "A null modem cable and a second machine for two players"
 
+["WIREFLET.O88"]
+title = "WireFleet"
+kind = "program"
+summary = "Place five ships, take alternate shots and chat with a friend over a serial null modem. Reconnect to continue the same match, or save it on each PC and load it later. F toggles fullscreen, including four-color CGA."
+short = "Naval battles between two PCs"
+needs = "Two machines, a null modem cable, and a free COM1 or COM2; Connect may ask for the system disk"
+
+["SERIAL.DRV"]
+title = "Desktop serial service"
+kind = "system"
+summary = "Loaded from the system disk when a desktop program connects to a COM port. Keeps serial traffic separate from the mouse and releases the port when the program closes."
+short = "On-demand desktop COM-port service"
+
 # --- DOS tools ----------------------------------------------------------------
 
 ["OS88CZ.COM"]

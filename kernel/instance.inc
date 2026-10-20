@@ -861,6 +861,7 @@ inst_rel_rec:
     push ax
     call inst_idx               ; AL = the instance slot, once for the pair
     call snd_release_inst       ; "clobbers: nothing", so AL survives it
+    call ser_release_inst       ; no IRQ may retain the soon-to-be-freed region
     pop ax
 %ifdef KERN_BIG
     jmp xm_release_rec          ; ...and every extended-memory block with it
@@ -870,6 +871,8 @@ inst_rel_rec:
 
 ; -----------------------------------------------------------------------------
 ; inst_of_win - find the instance owning a window
+; PARITY: serial's teardown call adds three bytes before the UI hot entry.
+    db 0
 ; in:  BX = window ptr (record-aligned)
 ; out: CF = 0, DI = instance record ptr; CF = 1 if the window is unowned
 ;      (DI undefined). BX preserved.

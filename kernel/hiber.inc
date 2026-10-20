@@ -1502,6 +1502,11 @@ hbm_wrimg:
                                 ; spend - both callers reload what they use
     call hbm_lock               ; 2. held from here: the machine is one
     inc byte [sch_lock]         ;    instant from here on - and only NOW
+    cmp word [ser_row], 0xffff
+    je .serialclear
+    mov si, hbm_s_serial
+    jmp .nos                   ; unwind the same locks and suspended drivers
+.serialclear:
     call hbm_root               ; 3. the root of the disk the boot picked:
     jc .no                      ;    the detach yields, and a task that took
                                 ;    the turn could have moved the current
@@ -3929,6 +3934,7 @@ hbm_s_bdis: db 'Discard', 0         ; than choosing between four (NULs pad)
 hbm_s_nobios: db 'Needs a BIOS hard disk', 0
 hbm_s_noroom: db 'Not enough room on disk', 0
 hbm_s_failed: db 'Hibernate failed', 0
+hbm_s_serial: db 'Disconnect serial before hibernating',0
 %ifdef HMA_DRV
 hbm_s_nomem:  db 'Not enough memory', 0  ; the HMA pool's copy (87.4 step 3b)
 %endif

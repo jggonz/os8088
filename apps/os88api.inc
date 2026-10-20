@@ -6002,6 +6002,18 @@ FSIF_BANKED equ 4
 %endmacro
 
 ; --- THE THEME (SPEC.md 76, 76.14.14) --------------------------------------
+; --- Desktop serial lease (SPEC.md 115), UI-task context -------------------
+%define OSAPI_SERIAL KERNEL_SEG:0x049F ; AL=0 Open (BL=COM1/2, SI=517-byte
+                                 ; pinned-region buffer), 1 Close, 2 Read
+                                 ; (AL byte, AH sticky LSR/overflow), 3 Write
+                                 ; (CL byte). AX/CF outputs, every other
+                                 ; register kept. Open may read SERIAL.DRV
+                                 ; from the system disk. CF=1 AX=1 busy,
+                                 ; 2 move mouse to settle, 3 mouse port,
+                                 ; 4 absent, 5 bad buffer/caller, 6 empty,
+                                 ; 7 TX full, 8 module unavailable.
+SER_BUFFER_SIZE equ 517
+
 %define OSAPI_THM_SET        KERNEL_SEG:0x046D   ; AL = THM_BRIGHT(0)/DARK(1)/
                                  ; COLOR(2)/WIN(3): adopts it as the system
                                  ; theme, repaints the desktop's chrome and

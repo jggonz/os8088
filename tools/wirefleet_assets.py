@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""WireFleet's generated ship source -> reproducible opaque 24x24 tiles.
+
+The runtime embeds VGA 4bpp and explicit 1bpp forms. Each ship is split into
+board cells in both orientations; water and shot marks use the same tiles.
+No image generation service is used by the build. --check detects drift.
+"""
+import argparse
+from pathlib import Path
+from PIL import Image, ImageDraw
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / 'apps/wirefleet/art/ships-source.png'
+OUTPUT = ROOT / 'apps/wirefleet/art/tiles.inc'
+LENGTHS = (5, 4, 3, 3, 2)
+CELL = 24
+EGA = ((0, 0, 0), (0, 0, 170), (0, 170, 0), (0, 170, 170),
+       (170, 0, 0), (170, 0, 170), (170, 85, 0), (170, 170, 170),
+       (85, 85, 85), (85, 85, 255), (85, 255, 85), (85, 255, 255),
+       (255, 85, 85), (255, 85, 255), (255, 255, 85), (255, 255, 255))
+
+
+def water():
+    tile = Image.new('L', (CELL, CELL), 1)
+    d = ImageDraw.Draw(tile)
+    d.line((0, 0, 23, 0), fill=11)
+    d.line((0, 0, 0, 23), fill=11)
+    d.point(((6, 13), (7, 12), (8, 13), (9, 13), (10, 12)), fill=3)
+    return tile
+
+
+def ships():
+    source = Image.open(SOURCE).convert('RGB')
+    result = []
+    for i, length in enumerate(LENGTHS):
+        strip = source.crop((0, i * source.height // 5,
+                             source.width, (i + 1) * source.height // 5))
+        # This source has a flat magenta matte, including JPEG-like edge
+        # variation. Key by chroma, never a coordinate-specific silhouette.
+        mask = Image.new('L', strip.size)
+        mask.putdata([255 if not (r > g + 60 and b > g + 60) else 0
+                      for r, g, b in strip.getdata()])
+        bounds = mask.getbbox()
+        if bounds is None:
+            raise ValueError('empty ship row %d' % i)
+        strip = strip.crop(bounds).resize((length * CELL - 6, 16),
+                                           Image.Resampling.LANCZOS)
+        mask = mask.crop(bounds).resize(strip.size, Image.Resampling.NEAREST)
+        indexed = Image.new('L', strip.size)
+        palette = (0, 8, 7, 15)
+        indexed.putdata([palette[min(3, (r * 3 + g * 6 + b) // 640)]
+                         for r, g, b in strip.getdata()])
+        hull = Image.new('L', (length * CELL, CELL), 1)
+        hull.paste(indexed, (3, 4), mask)
+        result.append(hull)
+    return result
+
+
+def tiles():
+    result = [water()]
+    for kind in ('miss', 'hit', 'sunk'):
+        tile = water()
+        d = ImageDraw.Draw(tile)
+        if kind == 'miss':
+            d.ellipse((9, 9, 14, 14), fill=15)
+        elif kind == 'hit':
+            d.line((7, 7, 17, 17), fill=12, width=3)
+            d.line((17, 7, 7, 17), fill=12, width=3)
+        else:
+            for offset in (9, 14):
+                d.line((offset, 6, offset, 18), fill=15, width=2)
+                d.line((6, offset, 18, offset), fill=15, width=2)
+        result.append(tile)
+    hulls = ships()
+    for vertical in (False, True):
+        for hull, length in zip(hulls, LENGTHS):
+            if vertical:
+                hull = hull.transpose(Image.Transpose.ROTATE_270)
+            for segment in range(length):
+                box = ((0, segment * CELL, CELL, (segment + 1) * CELL)
+                       if vertical else
+                       (segment * CELL, 0, (segment + 1) * CELL, CELL))
+                tile = hull.crop(box)
+                # Cell borders belong to the opaque tile, not a second pass.
+                d = ImageDraw.Draw(tile)
+                d.line((0, 0, 23, 0), fill=11)
+                d.line((0, 0, 0, 23), fill=11)
+                result.append(tile)
+    for original in result[4:].copy():
+        hit = original.copy()
+        d = ImageDraw.Draw(hit)
+        d.line((7, 7, 17, 17), fill=12, width=3)
+        d.line((17, 7, 7, 17), fill=12, width=3)
+        result.append(hit)
+    return result
+
+
+def packed(tile, mono=False):
+    values = list(tile.getdata())
+    if not mono:
+        return bytes(values[i] * 16 + values[i + 1]
+                     for i in range(0, len(values), 2))
+    out = bytearray()
+    for y in range(CELL):
+        for x in range(0, CELL, 8):
+            byte = 0
+            for bit in range(8):
+                c = values[y * CELL + x + bit]
+                # Water black; grid and marks white; gray ship faces use
+                # fixed stipple, preserving a dark silhouette at the outline.
+                px = x + bit
+                halo = any(values[ny * CELL + nx] == 12
+                           for ny in range(max(0,y-1),min(CELL,y+2))
+                           for nx in range(max(0,px-1),min(CELL,px+2)))
+                lit = c != 12 and (halo or c in (7, 11, 15)
+                                    or (c == 8 and (px + y) % 2 == 0))
+                byte = byte * 2 + lit
+            out.append(byte)
+    return bytes(out)
+
+
+def emit(label, payload):
+    return label + ':\n' + ''.join(
+        '    db ' + ','.join('0x%02x' % v for v in payload[i:i + 24]) + '\n'
+        for i in range(0, len(payload), 24))
+
+
+def cga(tile):
+    values = tile.tobytes()
+    out = bytearray()
+    for y in range(CELL):
+        for x in range(0, CELL, 8):
+            byte = 0
+            for step in range(0, 8, 2):
+                c = values[y * CELL + x + step]
+                ink = (1 if c in (3, 11) else 2 if c == 12 else
+                       3 if c in (7, 14, 15) or (c == 8 and (x//2+step//2+y) % 2) else 0)
+                byte = byte * 4 + ink
+            out.append(byte)
+    return bytes(out)
+
+
+def build():
+    art = tiles()
+    assert len(art) == 72
+    return ('; Generated by tools/wirefleet_assets.py; do not edit.\n'
+            'WF_TILE_COUNT equ 72\nWF_TILE_COLOR equ 288\nWF_TILE_MONO equ 72\n'
+            + emit('wf_tiles_color', b''.join(packed(t) for t in art))
+            + emit('wf_tiles_mono', b''.join(packed(t, True) for t in art))
+            + emit('wf_tiles_cga', b''.join(cga(t) for t in art)))
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--check', action='store_true')
+    args = p.parse_args()
+    data = build()
+    if args.check:
+        if not OUTPUT.exists() or OUTPUT.read_text() != data:
+            p.error('stale tiles.inc; run python3 tools/wirefleet_assets.py')
+    else:
+        OUTPUT.write_text(data)
+    # Preview is an inspection artifact, never a runtime dependency.
+    preview = Image.new('RGB', (24 * 18, 96))
+    for i, tile in enumerate(tiles()):
+        rgb = Image.new('RGB', tile.size)
+        rgb.putdata([EGA[v] for v in tile.getdata()])
+        preview.paste(rgb, ((i % 18) * 24, (i // 18) * 24))
+    (ROOT / 'build').mkdir(exist_ok=True)
+    preview.resize((864, 192), Image.Resampling.NEAREST).save(
+        ROOT / 'build/wirefleet-tiles.png')
+    print('wirefleet_assets: 72 tiles, 20736 color + 5184 mono bytes')
+
+
+if __name__ == '__main__':
+    main()

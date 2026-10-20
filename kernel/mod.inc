@@ -39,7 +39,8 @@
 ; =============================================================================
 
 %ifdef FCP_MOD
-MOD_NIMG    equ 5               ; SMALL: file operations, no hibernate, and
+MOD_SER     equ 5
+MOD_NIMG    equ 6               ; SMALL: file operations, no hibernate, and
                                 ; no Dock module (SPEC.md 30.5)
 %else
 MOD_DOCK    equ 4
@@ -47,7 +48,8 @@ MOD_EXT     equ 5               ; ...and the extended desktop (SPEC.md 39.19.6)
 MOD_WIN     equ 6               ; ...and the Windows theme's chrome (76.14)
 MOD_DESK    equ 7               ; ...and the desk layer's verbs (11.103.10)
 MOD_STIKM   equ 8               ; ...and the Sticky Apps menu (SPEC.md 110.12)
-MOD_NIMG    equ 9               ; BIG: hibernate, resident file operations,
+MOD_SER     equ 9
+MOD_NIMG    equ 10              ; BIG: hibernate, resident file operations,
                                 ; the optional Dock, EXTD.DRV, WIN95.DRV,
                                 ; DESK.DRV and STIKMENU.DRV
 %endif
@@ -198,6 +200,7 @@ mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
             dw BUILD_NUM        ; MOD_H_BUILD
             dw MOD_STAMP        ; MOD_H_STAMP
 
+mod_f_serial: db 'SERIAL.DRV',0 ; SPEC.md 115: explicit Connect loads it
 mod_tab:
     dw 0, mod_f_ctrl            ; MOD_CTRL
     dw 0, mod_f_fmt             ; MOD_FMT
@@ -231,6 +234,7 @@ mod_r_dock:
     dw 0, mod_f_desk            ; MOD_DESK, kern_big's alone (SPEC.md 11.103.10)
     dw 0, mod_f_stikm           ; MOD_STIKM, kern_big's alone (SPEC.md 110.12)
 %endif
+    dw 0, mod_f_serial          ; MOD_SER, both builds (SPEC.md 115)
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
 %endif

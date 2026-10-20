@@ -271,41 +271,13 @@ had added.
 ```json
 {
   "big": {
-    "blobseg": 6272,
+    "blobseg": 6304,
     "boot2": 5929,
     "bootmax": 120832,
-    "bss": 5253,
+    "bss": 5265,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37473,
-    "coldpara": 2368,
-    "colds": 3776,
-    "fatpara": 288,
-    "fats": 3104,
-    "grace": 2048,
-    "imgpara": 3008,
-    "kend": 6176,
-    "kseg": 96,
-    "ksize": 97280,
-    "lowbss": 5358,
-    "lowpara": 384,
-    "lows": 3392,
-    "minramkb": 128,
-    "ovl": 5118,
-    "stk0": 512,
-    "text": 42818,
-    "vgabuf": 336,
-    "vgabufpara": 32,
-    "vgas": 6144
-  },
-  "emu": {
-    "blobseg": 6304,
-    "boot2": 6029,
-    "bootmax": 120320,
-    "bss": 5253,
-    "budget": 100864,
-    "codemax": 65536,
-    "cold": 37459,
+    "cold": 37543,
     "coldpara": 2368,
     "colds": 3808,
     "fatpara": 288,
@@ -321,38 +293,66 @@ had added.
     "minramkb": 128,
     "ovl": 5118,
     "stk0": 512,
-    "text": 43057,
+    "text": 42928,
+    "vgabuf": 336,
+    "vgabufpara": 32,
+    "vgas": 6176
+  },
+  "emu": {
+    "blobseg": 6304,
+    "boot2": 6029,
+    "bootmax": 120320,
+    "bss": 5265,
+    "budget": 100864,
+    "codemax": 65536,
+    "cold": 37543,
+    "coldpara": 2368,
+    "colds": 3808,
+    "fatpara": 288,
+    "fats": 3136,
+    "grace": 2048,
+    "imgpara": 3040,
+    "kend": 6208,
+    "kseg": 96,
+    "ksize": 97792,
+    "lowbss": 5358,
+    "lowpara": 384,
+    "lows": 3424,
+    "minramkb": 128,
+    "ovl": 5118,
+    "stk0": 512,
+    "text": 43185,
     "vgabuf": 336,
     "vgabufpara": 32,
     "vgas": 6176
   },
   "small": {
-    "blobseg": 4000,
+    "blobseg": 4032,
     "boot2": 4387,
     "bootmax": 121344,
-    "bss": 2979,
+    "bss": 2991,
     "budget": 64000,
     "codemax": 65536,
-    "cold": 21970,
-    "coldpara": 1376,
+    "cold": 22040,
+    "coldpara": 1408,
     "colds": 2528,
     "fatpara": 64,
     "fats": 2240,
     "grace": 2048,
     "imgpara": 2144,
-    "kend": 3904,
+    "kend": 3936,
     "kseg": 96,
-    "ksize": 60928,
+    "ksize": 61440,
     "lowbss": 2868,
     "lowpara": 224,
     "lows": 2304,
     "minramkb": 128,
     "ovl": 1486,
     "stk0": 512,
-    "text": 31138,
+    "text": 31247,
     "vgabuf": 0,
     "vgabufpara": 0,
-    "vgas": 3904
+    "vgas": 3936
   }
 }
 ```
@@ -723,14 +723,14 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,521 | 36.8% |
-| the window system and its furniture | 22,409 | 27.9% |
+| the file system, end to end | 29,522 | 36.7% |
+| the window system and its furniture | 22,413 | 27.9% |
 | drawing: adapters, primitives, glyphs, icons | 12,642 | 15.7% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,951 | 9.9% |
-| the kernel proper: API table, heap, scheduler, events | 7,115 | 8.9% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,105 | 10.1% |
+| the kernel proper: API table, heap, scheduler, events | 7,136 | 8.9% |
 | the Control Panel | 353 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 300 | 0.4% |
-| **total** | **80,291** | |
+| **total** | **80,471** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -738,10 +738,10 @@ there and nowhere else.
 |---|---:|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,159 | 8,141 | **9,300** | 574 | — | — |
 | `wm.inc` — the window manager (§11) | 9,113 | 141 | **9,254** | 1,156 | — | 34 |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 393 | 6,565 | **6,958** | 416 | — | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 394 | 6,565 | **6,959** | 416 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,140 | 1,394 | **6,534** | 38 | 526 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 4,985 | **5,009** | 180 | — | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,905 | — | **3,905** | 109 | 128 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,931 | — | **3,931** | 109 | 128 | — |
 | `memory.inc` — the claim heap (§50) | 276 | 2,565 | **2,841** | 24 | 324 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,755 | 9 | **2,764** | 56 | — | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,584 | 165 | **2,749** | 173 | 84 | — |
@@ -750,7 +750,7 @@ there and nowhere else.
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 457 | 1,665 | **2,122** | 311 | — | 1,942 |
 | `font.inc` — the 8×8 glyph renderer (§6) | 1,984 | — | **1,984** | 22 | 16 | 236 |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,947 | **1,970** | 91 | — | — |
-| `instance.inc` — instances and the built-in kinds (§29) | 1,629 | 126 | **1,755** | 721 | — | — |
+| `instance.inc` — instances and the built-in kinds (§29) | 1,633 | 126 | **1,759** | 721 | — | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 1,680 | **1,680** | 152 | — | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,357 | — | **1,357** | 212 | 2,944 | — |
 | `loader.inc` — the package loader (§21) | 4 | 1,347 | **1,351** | 48 | — | — |
@@ -764,16 +764,17 @@ there and nowhere else.
 | `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 90 | 531 | **621** | 3 | — | 481 |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 566 | — | **566** | 74 | — | 427 |
 | `clock.inc` — the clock ladder (§37) | 490 | 30 | **520** | 59 | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 140 | 354 | **494** | — | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 155 | 354 | **509** | — | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 456 | **456** | — | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 205 | 242 | **447** | — | — | — |
 | `toast.inc` — the menu bar's transient message (§59) | 417 | — | **417** | 25 | — | — |
-| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 67 | 288 | **355** | 223 | — | 76 |
+| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 69 | 288 | **357** | 235 | — | 76 |
 | `ctrl.inc` — the Control Panel (§31) | 133 | 220 | **353** | 28 | — | — |
 | `apps.inc` — the three built-in kinds (§14) | 210 | 90 | **300** | — | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 247 | — | **247** | 22 | — | 102 |
 | `clip.inc` — the system clipboard (§55) | 167 | — | **167** | 5 | — | — |
 | `events.inc` — the event ring (§10) | 149 | — | **149** | 3 | 128 | — |
+| `serial.inc` — **(undescribed)** | 56 | 70 | **126** | — | — | — |
 | `deskmod.inc` — `DESK.DRV`, the desk layer's code that runs only where a widget exists (§11.103.10) - `OSAPI_WM_DESK`'s make, drag and release, a desk window's show and the widget's key arm - an on-demand module on `kern_big`, dropped with the last widget; what is resident is its doors | — | 64 | **64** | — | — | — |
 | `winmod.inc` — `WIN95.DRV`, the Windows theme's five chrome doors (§76.14), an on-demand module on `kern_big` | 24 | 24 | **48** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | 46 | **46** | — | — | — |
@@ -792,8 +793,8 @@ there and nowhere else.
 | `ascw.inc` — the ASSOC.DAT flush (§54.7.6.4), `FORMAT.DRV`'s fifth entry: it rebuilds a volume's ASSOC.DAT from what is on it, so it is all module image and 0 resident | — | — | **0** | — | — | — |
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,115 | 159 | **2,274** | — | — | 629 |
-| **total** | **42,818** | **37,473** | **80,291** | **5,253** | **5,358** | **5,929** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,121 | 159 | **2,280** | — | — | 629 |
+| **total** | **42,928** | **37,543** | **80,471** | **5,265** | **5,358** | **5,929** |
 <!-- END generated table -->
 
 ### Reading it

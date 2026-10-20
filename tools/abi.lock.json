@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "1d904d1424376c8384befbd97dfe0a521813948282fc89b2bed2fb7ab96b002a",
+  "fingerprint": "82706a356897db9db6749b088a50aeed65d75ea66f2870bf7317395f9a6111cc",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "2b15ba62995727879529b0464161a14746dc4fb573ed6e7f19a7c825b3133761",
+  "fingerprint": "f708ee233b6fc3c4eaf2b090e93ed2389792b976c67370dc131369e53269e4b1",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -343,6 +343,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "SPEC.md 13.18: WHEEL_STEPS is LINES a notch (the owner's three), and OSAPI_WM_ONWHEEL's comment says so - wording only, nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "f708ee233b6fc3c4eaf2b090e93ed2389792b976c67370dc131369e53269e4b1",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "Append the compatible desktop serial lease API; existing cells and contracts keep their addresses.",
+   "to": 10
+  },
+  {
+   "fingerprint": "82706a356897db9db6749b088a50aeed65d75ea66f2870bf7317395f9a6111cc",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "Append the compatible desktop serial lease API; existing cells and contracts keep their addresses.",
    "to": 11
   }
  ]
