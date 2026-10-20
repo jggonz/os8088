@@ -348,7 +348,8 @@ make vencbundle #   every apps disk and plays `.V88` files, made on the host
                 #   by tools/os88venc.py or by the encoder's own window,
                 #   tools/os88vencgui.py. `viddemo` builds one hard disk per
                 #   directory of apps/video/demo/ - a whole install with the
-                #   COMMITTED demo videos in MEDIA/ - for 86Box's ST11R XTs;
+                #   COMMITTED demo videos in MEDIA/ - for 86Box's ST11R XTs,
+                #   and VGA's on a 504 MB IDE disk for a 286;
                 #   `vencbundle` zips the encoder, the tools it runs and
                 #   VIDEO.O88 for someone with no os8088 tree (§98.2.13).
                 #   Both on demand
