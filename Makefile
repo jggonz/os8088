@@ -10256,8 +10256,15 @@ $(BUILD)/lemstr.stamp: tools/os88lem.py | $(BUILD)
 		--header $(BUILD)/lemstr.h
 	@touch $@
 
+# ...AND THE HEADER IS RECREATED IF IT IS GONE (wave 4's third review): with a
+# bare `@:` here a deleted build/lemstr.h under a stamp newer than the script
+# was never written again, and lemmings.c and build.sh failed on a missing
+# file. The stamp's own recipe is the one that writes it, so this one runs that
+# command only when the file is absent - an mtime that did not move is still
+# what keeps an unchanged header from rebuilding everything that includes it.
 $(BUILD)/lemstr.h: $(BUILD)/lemstr.stamp
-	@:
+	@test -f $@ || python3 tools/os88lem.py --fixture $(BUILD)/lemfixture \
+		--header $@
 
 # The 26 DOS files, fetched and NEVER committed - and `--from <dir-or-zip>` is
 # the offline route for a machine that has the set already (tools/getlemmings.py

@@ -76,7 +76,7 @@
                                     * exact 32-bit count is at 42 and this
                                     * dialect has no `long` to read it with */
 #define LEM_MAN_SETCLUS  20        /* clusters ALREADY SPENT on this disk */
-#define LEM_MAN_GEOM     22        /* "1440K" / "720K" / "360K" / "1200K" */
+#define LEM_MAN_GEOM     22        /* "1.44MB" / "720KB" / "360KB" / "1.2MB" */
 #define LEM_MAN_STRBYTES 30
 #define LEM_MAN_NSTYLES  32
 #define LEM_MAN_NPARTS   34        /* four words, one per special picture */
@@ -270,13 +270,16 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
 #define LEM_GT_NBYTES     6
 
 /* --- the MAIN BANK, LEMMAIN.LEM, magic "LMNB" -------------------------------
- * Ten items in a sixteen-row table, each a dword offset and a dword length. The
- * two this wave draws are item 0, the 320x40 4bpp skill panel (MAIN.DAT section
- * 6 offset 0), and item 1, the 38-glyph 8x16 3bpp green status font (section 6
- * offset 0x1900). The other eight - the animations, the destruction masks, the
- * rating signs, the purple font and the brown background - arrive with the
- * waves that draw them. */
+ * Ten items in a sixteen-row table, each a dword offset and a dword length:
+ * the 320x40 4bpp skill panel (MAIN.DAT section 6 offset 0), the 38-glyph 8x16
+ * 3bpp green status font (section 6 offset 0x1900), the count digits, the
+ * animations and the destruction masks with their two registration tables,
+ * the rating signs - and, drawn since wave 5 on the preview and postview
+ * screens, the 94-glyph 16x16 3bpp purple font (section 4 offset 0x69B0) and
+ * the 320x104 2bpp brown background (section 3 offset 0). */
 #define LEM_MN_MAGIC      0        /* "LMNB" */
+#define LEM_MN_VERSION    4
+#define LEM_MN_VER        2        /* 2: the menu palette (wave 5) */
 #define LEM_MN_NITEMS     6
 #define LEM_MN_PARTS      7
 #define LEM_MN_ITEMS     32        /* 16 rows of 16 */
@@ -288,6 +291,13 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
 #define LEM_MI_FRAMES     6
 #define LEM_MI_OFF        8        /* dword */
 #define LEM_MI_NBYTES    12        /* dword */
+#define LEM_SCR_INK       7        /* the preview's load bar: the font's
+                                    * lightest purple, the menu palette's 7 */
+#define LEM_MN_MENUPAL  288        /* the MAIN-MENU palette, 16 x 3 six-bit
+                                    * (wave 5: the preview and postview
+                                    * screens' colours - MAIN.DAT does not
+                                    * carry it, tools/os88lem.py writes the
+                                    * format document's table here) */
 
 #define LEM_ITEM_PANEL     0
 #define LEM_ITEM_STATFONT  1

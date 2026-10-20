@@ -46,8 +46,11 @@ FIVE ASSERTIONS, and each is a different half of the change:
      window (cwmenu.c).
 
 VERIFIED TO FAIL (before wave 4 of LEMMINGS, against the opposite sign):
-with the OSAPI_MEM_MOVABLE call taken out of cc_ovinit, assertion 4 went red -
-so with it put back, the pinned assertion goes red; with CC_OVL_PART taken out of apps/cword/cword.asm (and
+with the OSAPI_MEM_MOVABLE call taken out of cc_ovinit, assertion 4 went red.
+THE INVERTED CONTROL IS OWED TO THE FINAL PASS and is NOT verified: put the
+OSAPI_MEM_MOVABLE call back into crt0's eager arm and assertion 4 (MC_RLOC
+0) must go red - wave 4 reasoned it and nobody has run it, and runs are the
+final pass's (CLAUDE.md, Testing). With CC_OVL_PART taken out of apps/cword/cword.asm (and
 `part` out of the CC_PACKAGE call), the disk carries no overlay part, nothing
 new holds the module after launch, and assertion 1 stops the row.
 

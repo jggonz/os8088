@@ -57,9 +57,10 @@ src/Base.Strings.pas SCredits, the "Original credits..." block):
     PC Music By Tony Williams
     Copyright 1991 Psygnosis Ltd.
 
-The About card names the first two of those and points at this file, because
-the whole block plus a product line and a port line is past the twelve-row
-ceiling a dialog has on a 640x200 screen.
+The About card names the first two of those, the copyright and Lemmix's
+author, and points at this file, because the whole block plus a product line
+and a port line is past the twelve-row ceiling a dialog has on a 640x200
+screen.
 
 THIS PORT
 ---------
@@ -87,9 +88,25 @@ of them would be a knock-off rather than a port.
 
 PLAYING
 -------
-Choose a rating and a level and press Enter or click Play. The level comes up
-full screen: the terrain above, the skill panel below, the status line across
-the top of the panel.
+Choose a rating and a level and press Enter or click Play. The screen
+becomes the original's: the level's PREVIEW - its number and name, its
+lemmings, what must be saved, the release rate, the time, the rating and the
+graphic set, over a picture of the level - while the level is built behind
+it. The picture is the level's terrain only: the original also draws its
+entrance, exit and traps there, and this one does not (SPEC.md 114.4.3.1
+says what drawing them would cost). Click (or press Enter) and the level
+comes up: the terrain above, the skill panel below, the status line across
+the top of the panel. When it ends, the original's RESULTS screen says how
+many you saved against how many you needed, in the original's words: click
+the left button (or press Enter) for the next level - or to try this one
+again, if you fell short - and the right button, or Esc, for the level list,
+which after a success is already on the next level, as in the original
+(after Mayhem 30, on Fun 1). Esc on the preview goes back to the list too.
+
+On a CGA or an EGA those two screens are 640x200 rather than the original's
+640x350: every line keeps its width and its height and the blank lines
+between them are left out, and the preview's picture is 64 rows rather than
+80. The level list's greyed Mode row says so.
 
     the mouse      the pointer. Click a skill button, then click a lemming
                    to give it that skill. Hold the RIGHT button while you
@@ -107,15 +124,14 @@ the top of the panel.
     F12            nuke - press it twice, quickly (or double-click the
                    mushroom button). An XT keyboard has no F11 or F12; the
                    two panel buttons are the original's own way to both
-    f or F         leave the full screen for the window; the level waits
-                   exactly where it was. f, Enter or Space in the window
-                   goes back in, and Esc there lets the level go
-    Esc            finish the level now, and then leave the results. On
-                   the results, which are in the window for now, Esc is
-                   what the original's "Press right mouse button for
-                   menu" did: a right click in an os8088 window belongs to
-                   the desktop, so that line is left off rather than
-                   naming a button that would do nothing
+    f or F         leave the full screen for the window - from the
+                   level, its preview or its results; a level waits exactly
+                   where it was. f, Enter or Space in the window goes back
+                   in, and Esc there lets the level go. Results shown in
+                   the window leave off the original's "Press right mouse
+                   button for menu": a right click in an os8088 window
+                   belongs to the desktop, and Esc is what leaves them
+    Esc            finish the level now
 
 Those are the 1991 game's keys, F1 to F12 and Esc, plus the full-screen key
 this desktop gives every program. Three more come from Lemmix, the Windows
@@ -138,7 +154,8 @@ and given, oh no, an explosion, a splat, a lemming home, a drowning, the
 fire, a tool striking steel, the builder's last three bricks and a trap.
 The original is silent while a lemming digs, bashes or mines, opens its
 umbrella or is nuked, and so is this. The tones are this port's own: the
-original's sound is AdLib music and effects this OS has no way to play.
+original's AdLib music and effects are its own driver's code (ADLIB.DAT),
+which is not in the data this port fetches.
 
 The nuke behaves as the 1991 game's does: after it, the per cent rescued is
 counted against the lemmings already released, not the level's total. So does
@@ -224,8 +241,9 @@ design record has the whole table.
 WHAT IS NOT HERE
 ----------------
 Music. ADLIB.DAT is a compiled x86 sound driver plus its data rather than a
-score, and it is not in the 26-file data set at all; there is no FM score
-path in this OS. The Music row on the launcher is greyed and says so.
+score - the music is that program's code, not a score this OS's FM voices
+could play - and it is not in the 26-file data set at all. The Music row on
+the launcher is greyed and says so.
 
 The original's access codes. That algorithm lives in the game's executable
 and in none of its data files. Progress is kept in

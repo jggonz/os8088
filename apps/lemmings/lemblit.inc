@@ -508,21 +508,7 @@ _lem_r_pal:
     cmp word [lb_kind], LEM_KIND_VGA
     jne .out
 
-    ; --- the AC palette registers, identity ------------------------------
-    call lb_crtc
-    add dx, 6
-    in al, dx
-    xor bx, bx
-.acp:
-    mov dx, VGA_AC_IDX
-    mov al, bl
-    or al, 0x20                     ; keep the palette ENABLED throughout
-    out dx, al
-    mov al, bl
-    out dx, al
-    inc bx
-    cmp bx, 16
-    jb .acp
+    call lb_acid                    ; the AC palette registers, identity
 
     ; --- the DAC, sixteen entries of three 6-bit components ---------------
     mov dx, VGA_DAC_WIDX
@@ -564,12 +550,38 @@ _lem_r_pal:
     pop bp
     ret
 
+; lb_acid - the Attribute Controller's sixteen palette registers to the
+; IDENTITY, so DAC entry n is colour n (lem_r_pal's header says why: mode 0Dh,
+; and mode 12h with it, boot with the EGA's 16-of-64 default). SHARED with
+; lemfont.inc's lem_p_pal, which needs the same sixteen writes for the two
+; screens' mode 12h (wave 5). Clobbers AX, BX, DX.
+lb_acid:
+    call lb_crtc
+    add dx, 6
+    in al, dx                       ; reset the AC's index/data flip-flop
+    xor bx, bx
+.acp:
+    mov dx, VGA_AC_IDX
+    mov al, bl
+    or al, 0x20                     ; keep the palette ENABLED throughout
+    out dx, al
+    mov al, bl
+    out dx, al
+    inc bx
+    cmp bx, 16
+    jb .acp
+    ret
+
 ; -----------------------------------------------------------------------------
-; void lem_r_clearworld(void) - the world surface to colour 0.
+; void lem_r_clearworld(int vram) - the world surface to colour 0.
 ;
-; VGA: 32,000 bytes of all four planes at once, which the Sequencer's Map Mask
-; makes one `rep stosw` rather than four. The two 1bpp backends have nothing to
-; do: their world claim is written whole by lem_m_derive().
+; VGA: T's three colour planes in RAM, and with vram != 0 the world's 32,000
+; bytes of VRAM too - all four planes at once, which the Sequencer's Map Mask
+; makes one `rep stosw` rather than four. The preview passes 0: its mode is
+; 12h, where those bytes are its own rows 35 on, and the play mode's BIOS set
+; clears them before ovl_frame_first copies T over them anyway. The two 1bpp
+; backends have nothing to do: their world claim is written whole by
+; lem_m_derive().
 ; -----------------------------------------------------------------------------
 _lem_r_clearworld:
     push bp
@@ -578,6 +590,8 @@ _lem_r_clearworld:
     push es
     cmp word [lb_kind], LEM_KIND_VGA
     jne .out
+    cmp word [bp+4], 0
+    je .tonly
     mov ah, 0x0F                    ; Map Mask: every plane
     mov al, 2
     call lb_seq
@@ -590,6 +604,8 @@ _lem_r_clearworld:
     rep stosw
     ; ...and T's three colour planes, which the RAM composer draws into (plane
     ; 3 is the mask's, cleared by lem_m_clear and copied over by lem_r_tmask)
+.tonly:
+    cld
     mov bx, [lb_t]
     cmp bx, 0
     je .out

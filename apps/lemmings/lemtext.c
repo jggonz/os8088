@@ -344,7 +344,13 @@ static const char *lem_trim(const char *s)
  * that level.") and the congratulation carries fifteen, so the character is
  * already the original's line separator and wave 5 needs no second convention.
  * '\n' is treated the same way, which is what the preview builder uses. */
-#define LEM_PARA_MAX   560
+#define LEM_PARA_MAX   640          /* 560 until wave 5: the Mode row's
+                                     * fact carries up to three sentences
+                                     * now - the mode's, the CGA/EGA layout's
+                                     * and an 83-key keyboard's - and an EGA
+                                     * on an XT keyboard is 564 with its
+                                     * label (lemovl.c ovl_grey_more), +80
+                                     * of bss */
 #define LEM_WRAP_MAX    22
 
 static char lem_para[LEM_PARA_MAX];

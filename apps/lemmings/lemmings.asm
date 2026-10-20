@@ -28,6 +28,12 @@
 ; BELOW every %ifdef that reads it: the guarded bodies assemble anyway - the
 ; binary GROWS - while the file's own guarded blocks silently vanish
 ; (SPEC.md 13.10.7.4, apps/weave/weave.asm's header says it at length).
+%define OS88UI_ABFIT                ; ...whose pitch steps DOWN to fit the
+                                    ; content box: the card is TWELVE rows
+                                    ; (wave 5, SPEC.md 114.1), 158 pixels at
+                                    ; the standard pitch of 12 against a
+                                    ; CGA's 137, and 134 at 10. TameGram's
+                                    ; opt-in (apps/os88ui.inc)
 %define OS88UI_ABOUT                ; the standard About card (SPEC.md
                                     ; 20.5.1.1), reached from C through
                                     ; os88_about_card()

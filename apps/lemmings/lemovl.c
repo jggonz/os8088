@@ -145,6 +145,32 @@ static void ovl_fmt(int line, int level, char *dst, unsigned cap)
     ovl_sfmt(dst, cap, lem_str((int)lem_pv[line].strid));
 }
 
+/* ovl_pvline - one of the seven lines for the launcher's PANE, which is
+ * narrower than the original's 40 columns: "Level 27 Call in the bomb squad"
+ * is 31 characters and the pane on the authored window is 28, so the first
+ * version cut it mid-word ("...the bomb s", wave 4's verifier). A line that
+ * does not fit is ELIDED - cut three cells short and closed with three full
+ * stops, which is how this launcher already spells an ellipsis ("Level
+ * Code...", SPEC.md 114's state rows; latin-1 and the OS face have no ellipsis
+ * character). The original has no pane and so no rule of its own here; the
+ * whole name is on the preview SCREEN, inside the bracket, where the 40-column
+ * surface holds every title of the 120 (the longest, "Level 15 Don't let your
+ * eyes deceive you" and "Level 27 The Island of the Wicker people", are 40
+ * exactly - measured over the converted set). */
+static void ovl_pvline(int line, int level, char *dst, unsigned cap, int cols)
+{
+    int n;
+
+    ovl_fmt(line, level, dst, cap);
+    n = (int)os88_strlen(dst);
+    if (cols < 4 || n <= cols || cols >= (int)cap)
+        return;
+    dst[cols - 3] = '.';
+    dst[cols - 2] = '.';
+    dst[cols - 1] = '.';
+    dst[cols] = 0;
+}
+
 /* ovl_preview - the level preview screen's TEXT, into the paragraph buffer.
  *
  * WAVE 1 DRAWS IT IN THE WINDOW, in the kernel's own face. Wave 5 draws this
@@ -224,10 +250,29 @@ static void ovl_preview(int level)
  * 0 = nothing was built and the caller stays where it is. */
 static int ovl_greyfact(int labelid, int strid, int level)
 {
-    int style, spec;
+    int style, spec, head;
 
     if (strid == LEMS_NONE)
         return 0;
+
+    /* THE HEADING FIRST: ovl_fmt resets the argument list it formats with,
+     * and the template's own arguments are taken after it */
+    ovl_para_reset();
+    if (labelid != LEMS_NONE) {
+        ovl_para_add(lem_str(labelid));
+        ovl_para_nl();
+        ovl_para_nl();
+    } else if (level >= 0 && lem_rat_ok) {
+        /* THE LEVEL IS NAMED THE WAY EVERY OTHER SURFACE NAMES IT - "Level 1
+         * Just dig!", LEMS_PV_LEVEL, Lemmix SPreviewScreen_Level_ss - and not
+         * "1 Just dig!", which was this port's own form and nobody else's
+         * (wave 4's third review): ovl_fmt's line 0, word for word. */
+        ovl_fmt(0, level, lem_line, sizeof(lem_line));
+        ovl_para_add(lem_line);
+        ovl_para_nl();
+        ovl_para_nl();
+    }
+    head = lem_paran;
     ovl_arg_reset();
 
     if (strid == LEMS_MISS_STYLE) {
@@ -249,15 +294,22 @@ static int ovl_greyfact(int labelid, int strid, int level)
         ovl_arg_num((unsigned)ovl_man_u16(LEM_MAN_DISKCLUS));
         ovl_arg_num((unsigned)ovl_man_u16(LEM_MAN_SETCLUS));
     } else if (strid == LEMS_MISS_SPEC) {
-        /* "%s is not on a %s disk: the four special pictures are %s bytes = %s
-         *  clusters of this disk's %s, with %s already spent." */
+        /* "%s is not on a %s disk: its special picture is %s bytes = %s
+         *  clusters of this disk's %s, with %s already spent."
+         *
+         * ONE PICTURE'S COST, under that picture's file name (wave 4's third
+         * review): the first form quoted all four pictures' total (LEMMAN 132
+         * and 136) beside one file, and LEVELS.TXT listed that file at a
+         * quarter of it. The cost table carries every bank's own row, absent
+         * or not, which is what it is there for. */
         spec = lem_ent_u8(level, LEM_E_SPECIAL);
         if (spec > 3)
             spec = 0;
         ovl_arg_add(ovl_bandname(LEM_BANK_SPEC, spec));
         ovl_arg_add(ovl_geom());
-        ovl_arg_u32(lem_manbuf, LEM_MAN_SPECBYTE);
-        ovl_arg_num((unsigned)ovl_man_u16(LEM_MAN_SPECCLUS));
+        ovl_arg_u32(lem_manbuf, ovl_cost_row(LEM_BANK_SPEC, spec) +
+                                LEM_COST_BYTES);
+        ovl_arg_num((unsigned)ovl_cost_clus(LEM_BANK_SPEC, spec));
         ovl_arg_num((unsigned)ovl_man_u16(LEM_MAN_DISKCLUS));
         ovl_arg_num((unsigned)ovl_man_u16(LEM_MAN_SETCLUS));
     } else if (strid == LEMS_NO_MODE) {
@@ -274,38 +326,71 @@ static int ovl_greyfact(int labelid, int strid, int level)
         ovl_arg_num((unsigned)ovl_man_u16(LEM_MAN_LEVCLUS));
     }
 
-    ovl_para_reset();
-    if (labelid != LEMS_NONE) {
-        ovl_para_add(lem_str(labelid));
-        ovl_para_nl();
-        ovl_para_nl();
-    } else if (level >= 0 && lem_rat_ok) {
-        lem_setn(lem_num2, sizeof(lem_num2), (unsigned)(level + 1));
-        ovl_para_add(lem_num2);
-        ovl_para_add(" ");
-        ovl_para_add(lem_trim(lem_ent_name(level)));
-        ovl_para_nl();
-        ovl_para_nl();
-    }
     /* Straight into the paragraph and not through lem_line: a fact is 200-260
-     * characters and lem_line is one screen row wide. */
-    ovl_para_fmt(lem_str(strid));
+     * characters and lem_line is one screen row wide. The Mode row's mode
+     * sentence only where the MODE is what greys it (below). */
+    if (labelid != LEMS_ROW_MODE || !lem_mode_ok)
+        ovl_para_fmt(lem_str(strid));
+
+    /* ...AND A ROW THAT IS GREYED FOR MORE THAN ONE REASON SAYS EVERY ONE
+     * (SPEC.md 114.8, wave 5). The Mode row carries three: the 320x200x16
+     * mode, the CGA/EGA screens' layout (the CGA640 surface holds 12 of the
+     * original's 22 rows), and an 83-key keyboard's missing F11, F12 and Pause
+     * - "the Mode row's second line" in SPEC.md 114.8's table. The Music row
+     * carries the speaker's own when os88_snd_caps() answered none. Each is
+     * shown only where it is TRUE of this machine (SPEC.md 47: a fact, never
+     * a guess) - which is lem_state_grey's own predicate, so a row the reader
+     * can click always has at least one. */
+    if (labelid == LEMS_ROW_MODE) {
+        ovl_grey_more(head, ovl_scr_cga(), LEMS_GREY_EGA);
+        ovl_grey_more(head, !lem_kbd101(), LEMS_GREY_KEYS);
+    } else if (labelid == LEMS_ROW_MUSIC) {
+        ovl_grey_more(head, !lem_snd, LEMS_GREY_SOUND);
+    }
     return 1;
 }
 
-/* --- the About card (SPEC.md 12.2, 20.5.1.1, 114.1's last row) --------------
- * TWELVE ROWS IS THE CEILING and it is a 640x200 number: the panel clamps to
- * the content box but a control's y is 6 + row*10 and nothing clamps THAT, so a
- * 19-row card put its OK button on the DESKTOP on CGA and Hercules
- * (LESSONS.md 8). This one is nine.
+/* ovl_grey_more - one more fact on a line of its own, when `on`.
  *
- * IT CARRIES THE PRODUCT, WHAT THIS PORT IS, AND THE TWO PRINCIPALS, and
- * nothing about how the build renders: the frame rate goes to PERFORMANCE.md
- * and SPEC.md 114.7, the synthesised tones to the greyed Music row and to
- * README.TXT. Lemmix's SCredits block is EIGHT lines on its own, which with a
- * product and a port line is already twelve, so the full attribution list lives
- * in README.TXT beside the package and this names the two principals and points
- * at it (SPEC.md 114.2).
+ * A LINE BREAK AND NOT A BLANK LINE, because the three Mode facts have to fit
+ * the narrowest launcher there is: a CGA's 137-pixel content box is 15 rows,
+ * 13 of them between the label's and the footer's, and the label, its blank,
+ * the CGA mode's four wrapped lines, the layout's four and the keyboard's three
+ * are 13 exactly with no blank between them (the harness asserts it). The
+ * paragraph is lem_para's 640 bytes and the longest form - an EGA on an 83-key
+ * keyboard, all three with the label - is 564 (tools/os88lem.py's table). */
+static void ovl_grey_more(int head, int on, int strid)
+{
+    if (!on)
+        return;
+    if (lem_paran > head)
+        ovl_para_nl();
+    ovl_para_add(lem_str(strid));
+}
+
+/* --- the About card (SPEC.md 12.2, 20.5.1.1, 114.1's last row) --------------
+ * TWELVE ROWS, AND TWELVE IS THE CEILING: it is a 640x200 number (LESSONS.md
+ * 8 - a 19-row card put its OK button on the DESKTOP on CGA and Hercules). This
+ * card is apps/os88ui.inc's standard one, measured from its lines and clamped
+ * to the content box, and with OS88UI_ABFIT (lemmings.asm) its pitch steps
+ * down from 12 to fit: a CGA's 137-pixel box takes twelve lines at 10, 134
+ * pixels with the frame, so every row is inside the card and the card inside
+ * the window. The card has no button of its own: a click or a key anywhere
+ * dismisses it (lemmings.c lem_abdismiss).
+ *
+ *   0  Lemmings for os8088            the product, in the house form
+ *   1  The DOS release, 1991          what it is a port OF
+ *   3  the port line, in two halves
+ *   6  Lemmings By DMA Design         the original's two principals and its
+ *   7  Programming By Russell Kay     rightsholder - Lemmix SCredits' "Original
+ *   8  Copyright 1991 Psygnosis Ltd.  credits..." block, verbatim
+ *   9  Screens, strings and level order:
+ *  10  Lemmix By Eric Langedijk (zlib)  the second principal (decision 4)
+ *  11  See README.TXT for the full credits.
+ *
+ * AND NOTHING ABOUT HOW THE BUILD RENDERS: the frame rate goes to
+ * PERFORMANCE.md and SPEC.md 114.7, the synthesised tones to the greyed Music
+ * row and to README.TXT (LESSONS.md 8).
  *
  * The lines array is RESIDENT (only code moves to the module) and is filled
  * here so that os88_paint() can redraw the card with os88_about_card_d()
@@ -330,20 +415,18 @@ static void ovl_about(void *win)
             (int)sizeof(lem_ab2) - 1);
 
     lem_ab[0] = lem_prodline;
-    lem_ab[1] = "";
-    lem_ab[2] = lem_ab1;
-    lem_ab[3] = lem_ab2;
-    lem_ab[4] = "";
-    lem_ab[5] = lem_str(LEMS_CREDIT1);
-    lem_ab[6] = lem_str(LEMS_CREDIT2);
-    /* THE RIGHTSHOLDER, AND IT REPLACES A BLANK SPACER RATHER THAN ADDING A
-     * ROW. The card is capped at twelve (SPEC.md 114.1) and this uses nine
-     * either way, so the CGA card - the narrow one, and already nearly full -
-     * does not grow by a pixel. apps/cword/cwovl.c names Microsoft on cword's
-     * card and this port's posture is cword's (SPEC.md 114.2). */
-    lem_ab[7] = lem_str(LEMS_COPYRIGHT);
-    lem_ab[8] = lem_str(LEMS_README);
-    lem_ab[9] = 0;
+    lem_ab[1] = lem_str(LEMS_VERSION);
+    lem_ab[2] = "";
+    lem_ab[3] = lem_ab1;
+    lem_ab[4] = lem_ab2;
+    lem_ab[5] = "";
+    lem_ab[6] = lem_str(LEMS_CREDIT1);
+    lem_ab[7] = lem_str(LEMS_CREDIT2);
+    lem_ab[8] = lem_str(LEMS_COPYRIGHT);
+    lem_ab[9] = lem_str(LEMS_CREDIT3);
+    lem_ab[10] = lem_str(LEMS_CREDIT4);
+    lem_ab[11] = lem_str(LEMS_README);
+    lem_ab[12] = 0;
     os88_about_card(win, lem_ab);
 }
 
@@ -456,14 +539,19 @@ static int ovl_progress_read(void)
 }
 
 /* ovl_progress_write - 1 = LEMMINGS.SAV holds the new record. 0 = it does
- * not, and the program SAYS so here rather than leaving it to a caller that
- * cannot draw: the progress goes back to what the file holds, the Save
- * Progress row greys and repaints, and the toast is the row's own fact. A
- * replace puts its new chain down before it frees the old one (SPEC.md 18.4),
- * which is why the disks keep two clusters for the file (SAV_CLUSTERS); a
- * write that fails anyway - a write-protected floppy, a disk filled from
- * outside - used to be dropped by os88_onwake while the glass showed the
- * level as recorded (wave 4 review). */
+ * not: the progress goes back to what the file holds, the Save Progress row
+ * is greyed (lem_savable) and lem_savfail is raised, and the CALLER says so -
+ * because since wave 5 one caller is inside SPEC.md 53's bracket, where a
+ * kernel toast would paint desktop geometry into a foreign mode. The window
+ * side's two callers (os88_onwake, ovl_launch) toast LEMS_SAV_FAIL - 24
+ * characters, which is TOAST_MAX; it used to be the row's whole 100-character
+ * sentence, cut to "LEMMINGS.SAV could not b" on the glass (wave 4's third
+ * review) - and the greyed row carries the sentence. A replace puts its new
+ * chain down before it frees the old one (SPEC.md 18.4), which is why the
+ * disks keep two clusters for the file (SAV_CLUSTERS); a write that fails
+ * anyway - a write-protected floppy, a disk filled from outside - used to be
+ * dropped by os88_onwake while the glass showed the level as recorded (wave 4
+ * review). */
 static int ovl_progress_write(int rating, int level)
 {
     int i, ok, was;
@@ -487,8 +575,7 @@ static int ovl_progress_write(int rating, int level)
     if (!ok) {
         lem_prog[rating] = was;
         lem_savable = 0;
-        lem_mark_range(lem_staterow, lem_staterow + LEM_STATE_ROWS - 1);
-        os88_toast(lem_str(LEMS_GREY_SAVE), 0);
+        lem_savfail = 1;
     }
     return ok;
 }
@@ -951,21 +1038,34 @@ static void ovl_game_init(int level)
 
 /* ovl_postview - the results, as Lemmix src/GameScreen.Postview.pas
  * GetScreenText builds them: the top line, "You rescued", "You needed", the
- * result text the per cent earns, and the footer. IN THE WINDOW in wave 3,
- * as wave 1 put the preview there; wave 5 moves exactly this content into
- * the bracket's second foreign mode (SPEC.md 114.4.3). The access-code line is
- * omitted with the Level Code row's fact (SPEC.md 114.8).
+ * result text the per cent earns, and the footer. The access-code line is
+ * omitted with the Level Code row's fact (SPEC.md 114.8), and both branches
+ * then take the failure branch's AddLineFeed(5), so the two are identical.
  *
- * THE SPACING IS THE ORIGINAL'S WHERE THE SURFACE HOLDS IT, as the preview's
- * is (ovl_preview): one blank after the top line, one after "You needed",
- * then :189's AddLineFeed(18 - CountChar(CR)) FORCES the footer to line 18
- * whatever came above - which is also why dropping the code line and taking
- * the failure branch's AddLineFeed(5) on both branches moves nothing. Line 18
- * plus the footer is LEM_PO_ROWS rows; a box that does not hold them gets one
- * blank before the footer instead, which is the compression LEMS_GREY_EGA
- * names. Every line is CENTRED (lem_row_text). */
+ * TWO FORMS SINCE WAVE 5:
+ *
+ *   LEM_PO_SCR   the original's screen, inside the bracket (SPEC.md 114.4.3):
+ *                the top line at row 0, AddLineFeed(1), the two counts,
+ *                AddLineFeed(1), the result text's two lines, then :189's
+ *                AddLineFeed(18 - CountChar(CR)) FORCES the footer to line 18
+ *                whatever came above - and "Press right mouse button for
+ *                menu" on line 19, because inside the bracket os88_mouse()'s
+ *                bit 1 is this program's and the button does what the line
+ *                says. The CGA's 12-row surface collapses the blank runs of
+ *                this same text (ovl_scr_lines), so there is one text and two
+ *                layouts of it, as there is for the preview.
+ *   LEM_PO_WIN   the WINDOW's: what the launcher shows when 'f' takes the
+ *                postview out of the bracket or the screens' mode was refused
+ *                (lem_r_mode's failure, a normal path). The original's spacing
+ *                where the box holds line 18, else one blank before the footer
+ *                (the compression LEMS_GREY_EGA names); and NO menu line,
+ *                because a right click in an os8088 window is the kernel's
+ *                EVT_RDOWN and never reaches os88_onclick (SPEC.md 12.4) - Esc
+ *                leaves that screen. */
 #define LEM_PO_FOOT 18              /* the footer's forced line, :189 */
 #define LEM_PO_ROWS (LEM_PO_FOOT + 1)
+#define LEM_PO_WIN   0
+#define LEM_PO_SCR   1
 
 static void ovl_po_foot(int spaced)
 {
@@ -986,7 +1086,7 @@ static void ovl_po_foot(int spaced)
         ovl_para_nl();
 }
 
-static int ovl_postview(int rating, int level)
+static int ovl_postview(int rating, int level, int form)
 {
     int cnt, lc, target, done, ix, success, spaced;
 
@@ -997,11 +1097,9 @@ static int ovl_postview(int rating, int level)
                                      * lemmings released, not of the level's */
     done = lc ? (lem_saved * 100) / lc : 0;
     success = done >= target;
-    /* rows 1..lem_rows-1 carry the text: the postview has no footer row of
-     * its own (lem_row_text), so a 20-row box holds line 18 - the preview's
-     * `- 2` kept its footer row and made this branch unreachable (wave 4
-     * review) */
-    spaced = (lem_rows - 1) >= LEM_PO_ROWS;
+    /* rows 1..lem_rows-1 carry the window's text: the postview has no footer
+     * row of its own there (lem_row_text), so a 20-row box holds line 18 */
+    spaced = form == LEM_PO_SCR || (lem_rows - 1) >= LEM_PO_ROWS;
     ovl_para_reset();
     if (success && rating == LEM_RATINGS - 1 && level == LEM_PERRAT - 1) {
         ovl_para_add(lem_str(LEMS_PO_CONGRATS));
@@ -1041,16 +1139,224 @@ static int ovl_postview(int rating, int level)
         ix = 6;
     else
         ix = 7;
+    lem_po_ix = ix;                 /* the harness reads which text it was */
     ovl_para_add(lem_str(LEMS_PO_RESULT0 + ix));
     ovl_para_nl();
     ovl_po_foot(spaced);
     ovl_para_add(lem_str(success ? LEMS_PO_NEXTLEVEL : LEMS_PO_RETRYLEVEL));
-    /* THE ORIGINAL'S LAST LINE IS NOT CARRIED IN THE WINDOW, and it is a fact
-     * rather than a cut: "Press right mouse button for menu" names a control
-     * this screen does not have, because a right click in an os8088 window is
-     * the kernel's EVT_RDOWN and never reaches os88_onclick (SPEC.md 12.4).
-     * Esc leaves this screen. Wave 5 moves the postview into the bracket,
-     * where os88_mouse()'s bit 1 is ours, and LEMS_PO_MENU comes back with a
-     * button that does what it says (SPEC.md 114.8). */
+    if (form == LEM_PO_SCR) {
+        ovl_para_nl();
+        ovl_para_add(lem_str(LEMS_PO_MENU));
+    }
+    return success;
+}
+
+/* ============================================================================
+ * WAVE 5: THE ORIGINAL'S TWO SCREENS, INSIDE THE BRACKET (SPEC.md 114.4.3)
+ *
+ * Drawn in MAIN.DAT's own 16x16 purple font over its own brown tile, by
+ * lemfont.inc's lem_p_* - no kernel drawing slot is legal in a foreign mode
+ * (SPEC.md 53.1) - on the 640x350 surface each adapter's second mode gives
+ * them. These functions say WHERE, in the original's own coordinates, and
+ * never which card it is: the one decision about the card is the CGA's, whose
+ * 640x200 holds 12 of the original's 22 rows, and it is made by name here
+ * (lem_scr_cga) and stated on the greyed Mode row (LEMS_GREY_EGA).
+ *
+ * THE COLOURS - A DEPARTURE, THE OWNER'S TO ACCEPT. Lemmix's source records
+ * the 1991 screen's recolour per preview line - the title Red, Number of
+ * Lemmings Blue, To Be Saved Green, Release Rate Brown (GameScreen.Preview.pas
+ * :301-316, aColors) - and its TFontRecolor type is commented "// not used
+ * yet" (GameScreen.Base.pas:25): the recolour is unfinished in Lemmix, and
+ * DrawPurpleText takes the argument and never reads it (:230-282). Every line
+ * here is the font's own purple, which matches Lemmix's unfinished build and
+ * not the original's look. The recolours would want hue-shifted copies of the
+ * four purples in a sixteen-entry palette whose 8..15 are the level picture's
+ * (lem_p_pal), and one recolour pass a glyph (SPEC.md 114.4.3.1).
+ *
+ * ATTRIBUTION. The layout is Lemmix's - GameScreen.Preview.pas BuildScreen
+ * and GetScreenLinesAndColors, GameScreen.Postview.pas BuildScreen and
+ * GetScreenText - and the words are the band's (LEMSTR.LEM). Lemmings is (C)
+ * 1991 DMA Design / Psygnosis.
+ * ==========================================================================*/
+#define LEM_PV_PICH    80           /* the picture's rows: Lemmix's previewLevel
+                                     * Height without KeepLevelRatio, which is
+                                     * not in its MiscOptions DEFAULT */
+#define LEM_PV_PICHC   64           /* ...on the CGA's 200 rows (GREY_EGA) */
+#define LEM_PV_Y       82           /* y := 80 + 2 */
+#define LEM_PV_YC      66           /* ...64 + 2 on the CGA */
+#define LEM_SCR_PITCH  16
+#define LEM_PH_ROWS   350           /* the original's surface */
+#define LEM_PCGA_ROWS 200           /* ...and what a CGA shows of it */
+
+/* for each of ovl_fmt's seven lines, its row in GetScreenLinesAndColors'
+ * sixteen (aLines[]), so line i is drawn at y = 82 + lem_pv_slot[i] * 16.
+ * aLines[02] is the Replay string, empty in ordinary play, and no line maps
+ * to it; the footer is row 15 and is drawn by the caller; an empty line (a
+ * special level's Style) is skipped by the caller, not marked here. */
+static const signed char lem_pv_slot[LEM_PV_LINES] = {
+    0, 3, 5, 7, 9, 11, 13
+};
+
+/* ovl_scr_id - THE SECOND MODE, the one the two screens are drawn in
+ * (SPEC.md 114.4.3's table): mode 12h on a VGA, the Hercules' own 720x348 on
+ * a Hercules, mode 6 on a CGA and on an EGA (kernel/fsx.inc gives an EGA the
+ * CGA-compatible modes only). -1 = this display offers none of them, and the
+ * session goes straight to the level and leaves the postview to the window -
+ * lem_r_mode's failure as a normal path (ovl_r_mode). */
+static int ovl_scr_id(void)
+{
+    if (lem_vidkind == OS88_VID_HERC)
+        return (lem_caps > 0 && (lem_caps & (1 << OS88_FSXM_HERC)))
+             ? OS88_FSXM_HERC : -1;
+    if (lem_caps > 0 && (lem_caps & (1 << OS88_FSXM_VGA12)))
+        return OS88_FSXM_VGA12;
+    if (lem_caps > 0 && (lem_caps & (1 << OS88_FSXM_CGA640)))
+        return OS88_FSXM_CGA640;
+    return -1;
+}
+
+/* ovl_scr_cga - is that surface the CGA's 640x200? */
+static int ovl_scr_cga(void)
+{
+    return ovl_scr_id() == OS88_FSXM_CGA640;
+}
+
+/* ovl_scr_pal - the screens' sixteen colours (VGA; lem_p_pal is a no-op on
+ * the other two): the menu palette out of LEMMAIN's header, the level's own
+ * custom eight out of the bank claim - which holds a SPECIAL level's picture
+ * header before its compose and the style bank with the picture's colours
+ * poked over it after (ovl_spec_compose), at the same offset either way. */
+static void ovl_scr_pal(void)
+{
+    lem_p_pal(lem_cl_main, LEM_MN_MENUPAL, lem_cl_bank, LEM_GR_CUSTOM);
+}
+
+/* ovl_scr_text - one line of text at surface row y: centred, or at column
+ * `col` (16 pixels each). */
+static void ovl_scr_text(const char *t, int n, int col, int y)
+{
+    int x;
+
+    if (!ovl_item(LEM_ITEM_PURPLE))
+        return;
+    if (col < 0) {
+        x = 320 - 8 * n;            /* DrawPurpleTextCentered: (640 - 16n) / 2 */
+        if (x < 0)
+            x = 0;
+    } else {
+        x = col << 4;
+    }
+    lem_p_text(lem_far_seg, lem_far_off, x, y, t, n);
+}
+
+/* ovl_scr_tile - the brown tile from row y down (TileBackgroundBitmap). */
+static void ovl_scr_tile(int y)
+{
+    if (ovl_item(LEM_ITEM_BROWN))
+        lem_p_tile(lem_far_seg, lem_far_off, y, LEM_PH_ROWS);
+}
+
+/* ovl_pv_draw - the preview screen's background and its lines, the picture's
+ * well left black for the compose (GameScreen.Preview.pas BuildScreen:
+ * target.Clear(0), the picture into 0..79, TileBackgroundBitmap(0, 80), the
+ * lines from y = 82 at 16 a line, the first fifteen at x = 0 - the ten-space
+ * IndentStr is IN the value lines - and the sixteenth centred). The CGA keeps
+ * every line's 16-pixel pitch and true width and compresses only the blank
+ * lines out: eight content lines and a 64-row picture are 192 of its 200. */
+static void ovl_pv_draw(int level)
+{
+    int i, y, n, cga, k;
+
+    cga = ovl_scr_cga();
+    lem_p_clear(0, cga ? LEM_PV_PICHC : LEM_PV_PICH);  /* the well: the tile
+                                     * covers the rest (lemfont.inc) */
+    ovl_scr_pal();
+    ovl_scr_tile(cga ? LEM_PV_PICHC : LEM_PV_PICH);
+    k = 0;
+    for (i = 0; i < LEM_PV_LINES; i++) {
+        ovl_fmt(i, level, lem_line, sizeof(lem_line));
+        if (lem_line[0] == 0)
+            continue;               /* a special level's Style line */
+        y = cga ? LEM_PV_YC + k * LEM_SCR_PITCH
+                : LEM_PV_Y + lem_pv_slot[i] * LEM_SCR_PITCH;
+        n = (int)os88_strlen(lem_line);
+        /* the value rows' IndentStr is ten SPACES, which DrawPurpleText
+         * advances over without drawing - so it is a column, not text */
+        ovl_scr_text(lem_line, n, lem_pv[i].indent ? 10 : 0, y);
+        k++;
+    }
+    y = cga ? LEM_PV_YC + k * LEM_SCR_PITCH : LEM_PV_Y + 15 * LEM_SCR_PITCH;
+    lem_scr_fy = y;                 /* the harness checks the footer's row */
+    ovl_scr_text(lem_str(LEMS_PV_PRESS),
+                 (int)os88_strlen(lem_str(LEMS_PV_PRESS)), -1, y);
+}
+
+/* ovl_pv_pic - one row of the shrunk level picture (lemfont.inc lem_p_mini):
+ * row k of 80 is world row 2k, of the CGA's 64 world row 5k/2 - 160 rows
+ * either way. */
+static void ovl_pv_pic(int k)
+{
+    if (ovl_scr_cga())
+        lem_p_mini(k, (k * 5) >> 1);
+    else
+        lem_p_mini(k, k << 1);
+}
+
+/* ovl_scr_lines - lem_para's lines, every one CENTRED (DrawPurpleTextCentered,
+ * GameScreen.Postview.pas:62), from row y at 16 a line. On the CGA the runs of
+ * blank lines collapse to ONE and the leading ones go, and the block is
+ * centred in the 200 rows: the postview is ten lines there, the
+ * congratulation ten (SPEC.md 114.4.3). */
+static void ovl_scr_lines(int y)
+{
+    int i, s, n, cga, blank, pass, rows;
+
+    cga = ovl_scr_cga();
+    rows = 0;
+    for (pass = cga ? 0 : 1; pass < 2; pass++) {
+        if (pass == 1 && cga)
+            y = (LEM_PCGA_ROWS - rows * LEM_SCR_PITCH) >> 1;
+        blank = 1;                  /* a leading blank run is dropped */
+        s = 0;
+        for (i = 0; i <= lem_paran; i++) {
+            if (i < lem_paran && lem_para[i] != '\n' && lem_para[i] != '\r')
+                continue;
+            n = i - s;
+            if (n == 0 && cga) {
+                if (!blank) {
+                    blank = 1;
+                    if (pass == 1)
+                        y += LEM_SCR_PITCH;
+                    else
+                        rows++;
+                }
+            } else {
+                blank = 0;
+                if (pass == 1) {
+                    if (n)
+                        ovl_scr_text(lem_para + s, n, -1, y);
+                    lem_scr_fy = y;
+                    y += LEM_SCR_PITCH;
+                } else {
+                    rows++;
+                }
+            }
+            s = i + 1;
+        }
+    }
+}
+
+/* ovl_po_draw - the postview: the tile over the whole surface and the text
+ * from y = 16 (GameScreen.Postview.pas BuildScreen: TileBackgroundBitmap(0,
+ * 0), DrawPurpleTextCentered(Temp, GetScreenText, 16)). */
+static int ovl_po_draw(int level)
+{
+    int success;
+
+    success = ovl_postview(lem_rating, level, LEM_PO_SCR);
+    lem_p_clear(0, 0);              /* a VGA's margins: the tile is the rest */
+    ovl_scr_pal();
+    ovl_scr_tile(0);
+    ovl_scr_lines(16);
     return success;
 }

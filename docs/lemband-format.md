@@ -17,7 +17,7 @@ and **no file exceeds 64,512 bytes** (§114.3.2). Every name is uppercase 8.3 in
 | `LEMSTR.LEM` | the string resource band (§114.3, "the string resource band is written here too") | wave 1 |
 | `LEMLV0.LEM` … `LEMLV9.LEM` | the 80 raw 2048-byte level records, **eight to a file** (§114.3.2), ODDTABLE already folded in | wave 4 |
 | `LEMGR0.LEM` … `LEMGR4.LEM` | one style bank per graphic set: palette, terrain pieces, object metadata and frames. Header magic `LGRB`, **version 2** since wave 3, which added each object slot's GRND animation flags at byte 896 and its preview frame at 912 (the layout is `tools/os88lem.py`'s STYLE BANK block); the package refuses version 1 rather than reading zeros as "never animates" | wave 2, v2 in wave 3 |
-| `LEMMAIN.LEM` | the MAIN.DAT-derived bank: panel bitmap, both fonts, the 28 animations, the masks, the rating signs, the brown background | wave 2 |
+| `LEMMAIN.LEM` | the MAIN.DAT-derived bank: panel bitmap, both fonts, the 28 animations, the masks, the rating signs, the brown background. Header magic `LMNB`, **version 2** since wave 5, which added the MAIN-MENU palette at byte 288 (16 entries of three 6-bit components, the format document's own table - MAIN.DAT does not carry it); the preview and postview screens are drawn in it and the package refuses version 1 rather than lettering them in black | wave 2, v2 in wave 5 |
 | `LEMSP0_0.LEM` … | the four VGASPEC pictures, in numbered parts (`LEMSP<n>_<part>.LEM`) because one is 76,800 bytes. Header magic `LSPB`, **version 2** since wave 4: the 512-byte header (8 total length, 12 width 960, 14 height 160, 16 bpp 4, 17 piece columns, 18 piece rows, 20 piece width 480, 22 piece height 40, 24 x 304; 32 the custom palette with entry 0 Lemmix's hardcoded 31, 31, 0, 56 the level's ground set's standard palette - the style bank's own two offsets) and then the picture as 2 x 4 PIECES, row-major, each laid out as a terrain piece is (planes 0-3, one plane stride apart), so `lem_r_wpiece` composes it. Version 1 was four whole planes | wave 4 |
 | `LEVELS.TXT` | plain text: what this disk carries and why the rest is not on it | the reader |
 
@@ -51,7 +51,9 @@ there is room.
                     README.TXT, the folders and ASSOC.DAT - exactly what
                     os88disk.py --verify counts (os88lem.py --check-image
                     refuses otherwise); LEMMINGS.SAV's two clusters are not in it
- 22   8   geom      "1440K" / "720K" / "360K" / "1200K", NUL-padded
+ 22   8   geom      "1.44MB" / "720KB" / "360KB" / "1.2MB", NUL-padded - the OS's
+                    own spelling, which LEVELS.TXT uses too (wave 5; it was
+                    "1440K" / "720K" / "360K" / "1200K")
  30   2   strbytes  the length of LEMSTR.LEM's payload (before its 512 pad)
  32   2   nstyles   how many style banks were converted at all (5)
  34   2   nparts0..3 (4 words) parts per special picture, 0 = not on this disk

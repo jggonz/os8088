@@ -142,7 +142,7 @@ STYLE BANK - LEMGR<n>[_<part>].LEM, magic "LGRB"
 
 MAIN BANK - LEMMAIN.LEM, magic "LMNB"
     0   4  "LMNB"
-    4   2  version 1
+    4   2  version 2 (wave 5: the menu palette at 288; 1 had none)
     6   1  nitems
     7   1  parts
     8   4  totlen
@@ -155,7 +155,10 @@ MAIN BANK - LEMMAIN.LEM, magic "LMNB"
               6 2 frames
               8 4 off     from the START of the logical bank
              12 4 nbytes
-  288 224  reserved zero
+  288  48  the MAIN-MENU palette, 16 entries x 3 bytes, 6-bit (MENU_PALETTE:
+           the preview and postview screens' colours, which MAIN.DAT does not
+           carry)
+  336 176  reserved zero
   512 ...  the item bytes, in id order
 
     id  item                             source                    bytes
@@ -906,6 +909,28 @@ DIGIT_W, DIGIT_H, DIGIT_BPP = 8, 8, 1
 PANEL_W, PANEL_H, PANEL_BPP = 320, 40, 4
 BROWN_W, BROWN_H, BROWN_BPP = 320, 104, 2
 
+# THE MAIN-MENU PALETTE (wave 5): the sixteen colours the preview and postview
+# screens are drawn in, which is NOT the in-level palette the style banks
+# carry. lemmings_3ds/doc/data/lemmings_main_dat_file_format.txt section 2:
+# "The game uses two 16-color palettes. One is for the main menu and level
+# preview screen, the other is when you're in a level itself" - and its table,
+# VGA values, transcribed here. MAIN.DAT does not carry it (it is in the
+# game's executable), so the converter writes it into LEMMAIN's header at
+# MENUPAL_OFF, six-bit as the DAC takes it. The screens use entries 0-7 of it
+# - black and the three browns of the background tile (2bpp, 0..3), the four
+# purples of the font (3bpp, measured: every glyph pixel is 0 or 4..7) - and
+# take 8..15 from the LEVEL's own custom palette, where the shrunk level
+# picture's terrain colours are (SPEC.md 114.4.3).
+MENU_PALETTE = [
+    (0, 0, 0), (128, 64, 32), (96, 48, 32), (48, 0, 16),
+    (32, 8, 124), (64, 44, 144), (104, 88, 164), (152, 140, 188),
+    (0, 80, 0), (0, 96, 16), (0, 112, 32), (0, 128, 64),
+    (208, 208, 208), (176, 176, 0), (64, 80, 176), (224, 128, 144),
+]
+MENUPAL_OFF = 288
+LMNB_VERSION = 2            # 2: the menu palette at MENUPAL_OFF (wave 5);
+                            # apps/lemmings/lemload.c refuses any other
+
 
 def frame_bytes(w, h, bpp):
     """Lemmings planar bitmaps have NO row padding: one plane is w*h bits."""
@@ -958,6 +983,22 @@ STRINGS = [
     # the attribution is on the glass, not only beside it.
     ("COPYRIGHT", "Copyright 1991 Psygnosis Ltd.",
      "Lemmix src/Base.Strings.pas SCredits, the 'Original credits...' block"),
+    # WAVE 5: THE CARD IS TWELVE ROWS (SPEC.md 114.1's About row, and the
+    # twelve-row ceiling LESSONS.md 8 states): the product, what release it
+    # is, the port line in two halves, the original's two principals and its
+    # rightsholder, LEMMIX'S AUTHOR - the second principal, whose screens,
+    # strings and level order this port carries (decision 4) - and the
+    # pointer at README.TXT for everyone else. "By Eric Langedijk" is SCredits'
+    # own first line, under its own product name.
+    ("VERSION", "The DOS release, 1991",
+     "SPEC.md 114's opening line - the release this port is of; the About "
+     "card's version row (lemovl.c ovl_about)"),
+    ("CREDIT3", "Screens, strings and level order:",
+     "this port's own text: what it carries of Lemmix (SPEC.md 114.1's "
+     "authority table), on the About card above CREDIT4"),
+    ("CREDIT4", "Lemmix By Eric Langedijk (zlib)",
+     "Lemmix src/Base.Strings.pas SCredits' first line, 'By Eric Langedijk', "
+     "after the program's own name, and its licence (Lemmix Licence.txt)"),
     ("README", "See README.TXT for the full credits.",
      "this port's own text; SPEC.md 114.1's About row and SPEC.md 114.2's "
      "attribution posture"),
@@ -1040,8 +1081,9 @@ STRINGS = [
     ("GREY_MUSIC",
      "ADLIB.DAT is a compiled x86 sound driver plus its data, not a score - "
      "the game installs an interrupt vector at its offset 0 and calls into "
-     "it - and there is no FM score path in this OS. It is also not in the "
-     "26-file data set this port fetches at all.",
+     "it - so the music is that program's code and private data, not a "
+     "score this OS's FM voices (SPEC.md 34.12) could play. It is also not "
+     "in the 26-file data set this port fetches at all.",
      "SPEC.md 114.8, the greyed table, Music - the whole cell"),
     ("GREY_CODE",
      "The original's access-code algorithm lives in the game's executable, "
@@ -1066,9 +1108,9 @@ STRINGS = [
     # the row from the adapter kind fsx_caps answered with.
     ("GREY_MODE_CGA",
      "kernel/fsx.inc gives a CGA 0x000F - the four modes an IBM CGA has - so "
-     "mode 0Dh has no FSXM_* id on that row. 320x200 is four colours on this "
-     "card because that is what the card is, not because anything was taken "
-     "away. The bit that greys the row is the bit fsx_mode would refuse on.",
+     "mode 0Dh has no FSXM_* id on that row: 320x200 is four colours because "
+     "that is what the card is. The bit that greys the row is the bit "
+     "fsx_mode would refuse on.",
      "SPEC.md 114.8, the greyed table, the 320x200x16 mode, read off "
      "kernel/fsx.inc's fsx_capstab CGA row (0x000F)"),
     ("GREY_MODE_HERC",
@@ -1085,11 +1127,16 @@ STRINGS = [
      "SPEC.md 114.8, the greyed table, F11 / F12 / Pause - the whole cell "
      "but its cross-reference"),
     ("GREY_EGA",
-     "The original's screens are 640x350 and FSXM_CGA640 is 640x200, which "
-     "holds the 40-character lines at their true width but 12 of the 22 "
-     "rows - so the blank-line spacing is compressed out.",
+     "The original's screens are 640x350 and FSXM_CGA640 is 640x200: the "
+     "40-character lines keep their width but 12 of the 22 rows fit, so the "
+     "blank lines are compressed out and the level picture is 64 rows, not "
+     "80.",
      "SPEC.md 114.8, the greyed table, the preview and postview LAYOUT on "
-     "CGA and EGA - the whole cell but its cross-reference"),
+     "CGA and EGA - the whole cell but its cross-reference, and the 64-row "
+     "picture wave 5 drew there. Shown on the Mode row with the mode's own "
+     "fact and the keyboard's (lemovl.c ovl_greyfact), and SHORT because the "
+     "three together have to fit a CGA's 137-pixel launcher: 13 rows of ~62 "
+     "cells between the label and the footer"),
     ("GREY_SAVE",
      "LEMMINGS.SAV could not be written in SYSTEM/APPDATA (a live CD never "
      "can); nothing more is recorded.",
@@ -1115,18 +1162,20 @@ STRINGS = [
     # framebuffer. NO_MEM is a TEMPLATE with two %s markers, in the order
     # the comment gives; NO_BANK takes one.
     ("NO_MEM",
-     "Not enough memory: this level needs %s KB and %s KB is free.",
+     "Need %sKB, %sKB free",
      "SPEC.md 114.6.1's claim arithmetic, said on the glass (WEAVE-SPEC 1.4's "
      "precedent). The two markers are the total this adapter's claims come "
-     "to and os88_mem_largest_kb(). IT IS SHORT ON PURPOSE: this one is said "
-     "as a TOAST, which is an inverse-video strip at the right end of the "
-     "menu bar (SPEC.md 59) - the medium is a line and not a paragraph, so "
-     "the sentence carries the fact and the arithmetic and nothing else"),
+     "to and os88_mem_largest_kb(). IT IS A TOAST AND A TOAST IS 24 "
+     "CHARACTERS (kernel/toast.inc TOAST_MAX; OSAPI_TOAST truncates): the "
+     "first wording was 60 and the glass read 'Not enough memory: this ' "
+     "(wave 4's third review). 'Need 321KB, 640KB free' is 22 at the "
+     "largest figures this program can print"),
     ("NO_BANK",
-     "%s could not be read - it has to be in this folder.",
+     "%s missing",
      "SPEC.md 19.2.1 and 73.14: an overlay and its data are resolved in the "
      "LAUNCHING instance's own directory. The one marker is the band file's "
-     "name, and it is a toast for NO_MEM's reason"),
+     "name - at most 12 characters, so the toast is at most 20 of TOAST_MAX's "
+     "24 - and it is a toast for NO_MEM's reason"),
     # ...and the THIRD, which used to borrow the Mode row's sentence and so
     # said the opposite of the refusal: on a Hercules that string ends "the
     # game is drawn through the shadow backend instead", i.e. it told the
@@ -1157,16 +1206,33 @@ STRINGS = [
     # contract) - used to fall into the compose arm and toast NO_BANK with
     # whatever band name the reader last left, about a read that succeeded.
     ("NO_FSX",
-     "The game could not take the screen: os88_fsx_run() refused it.",
+     "os88_fsx_run() refused",
      "SPEC.md 47 and 53.1: the bracket's own refusal, named on the slot that "
-     "refused. A toast, for NO_MEM's reason - one line, the fact and nothing "
-     "else - and the level is not lost: a kept one stays kept"),
+     "refused. A toast, for NO_MEM's reason - 22 of TOAST_MAX's 24, the slot "
+     "and nothing else - and the level is not lost: a kept one stays kept"),
     # ...and the mode refused INSIDE the bracket on a RESUME, where the kept
     # level is kept (the NO_FSX arm's shape) and the preview screen is back.
     ("NO_MODE_KEPT",
-     "os88_fsx_mode() refused the game's screen mode. The level is kept.",
-     "SPEC.md 47 and 53.1: a toast, NO_FSX's shape - one line, the fact and "
-     "what happened to the level"),
+     "Mode refused; level kept",
+     "SPEC.md 47 and 53.1: a toast, NO_FSX's shape - exactly TOAST_MAX's 24, "
+     "the fact and what happened to the level"),
+    # ...AND THE PROGRESS WRITE'S, which toasted GREY_SAVE - a 100-character
+    # sentence the glass cut to "LEMMINGS.SAV could not b" (wave 4's third
+    # review). The toast says what happened in 24; the greyed Save Progress
+    # row it leaves behind carries GREY_SAVE whole.
+    ("SAV_FAIL",
+     "LEMMINGS.SAV not written",
+     "SPEC.md 59.10's 24-character toast for SPEC.md 114.8's Save Progress "
+     "row: exactly TOAST_MAX, the file and the fact; GREY_SAVE is the "
+     "sentence behind the row"),
+    # ...and a bank that IS there but is not this program's version (an
+    # LMNB from before wave 5, which carries no menu palette): NO_BANK's
+    # "missing" would name the wrong fact about a file that read whole.
+    ("OLD_BANK",
+     "%s is too old",
+     "SPEC.md 47 and 114.8: LEMMAIN.LEM read, and its LMNB version is not "
+     "the one this package draws its two screens from. A toast, for "
+     "NO_MEM's reason - 'LEMMAIN.LEM is too old' is 22 of TOAST_MAX's 24"),
     # The one word the status line carries while a level composes. It is
     # CAPITALS because MAIN.DAT's status font has no lowercase glyph at all
     # (lemfont.inc), and short because the field Lemmix writes it in is 14
@@ -1191,12 +1257,15 @@ STRINGS = [
      "cost table rows 0-4), this disk's clusters (LEMMAN offset 56) and the "
      "clusters already spent (LEMMAN offset 20)"),
     ("MISS_SPEC",
-     "%s is not on a %s disk: the four special pictures are %s bytes = %s "
+     "%s is not on a %s disk: its special picture is %s bytes = %s "
      "clusters of this disk's %s, with %s already spent.",
      "SPEC.md 114.8's own example sentence, verbatim in shape. The six "
-     "markers are: the band's file name, the geometry, all four pictures' "
-     "bytes and clusters (LEMMAN offsets 132 and 136), this disk's clusters "
-     "and the clusters already spent"),
+     "markers are: the band's file name, the geometry, THIS picture's bytes "
+     "and clusters (its LEMMAN cost row, 5 + n), this disk's clusters and "
+     "the clusters already spent. Wave 4 quoted all four pictures' total "
+     "(LEMMAN offsets 132 and 136) under one picture's file name, and "
+     "LEVELS.TXT listed that file at a quarter of it (wave 4's third "
+     "review)"),
     ("MISS_ROOM",
      "This level's own record is not on a %s disk: what is on it takes %s of "
      "this disk's %s clusters, LEMMINGS.SAV keeps two, and a group of eight "
@@ -1758,8 +1827,11 @@ class DataSet(object):
 
         head = bytearray(512)
         head[0:4] = b"LMNB"
-        struct.pack_into("<H", head, 4, 1)
+        struct.pack_into("<H", head, 4, LMNB_VERSION)
         head[6] = len(items)
+        for k, (r, g, b) in enumerate(MENU_PALETTE):
+            head[MENUPAL_OFF + 3 * k:MENUPAL_OFF + 3 * k + 3] = bytes(
+                [r >> 2, g >> 2, b >> 2])
         data = bytearray()
         for i, (item_id, bpp, w, h, frames, blob) in enumerate(items):
             row = 32 + i * 16
@@ -1953,7 +2025,7 @@ def plan_geometry(ds, geom, reserve=None, styles=None):
         fits = False
         for names in (True, False):
             txt = levels_txt(ds, geom, playable, styles, specials, 99,
-                             9999999, 99999, clus, names)
+                             9999999, 99999, clus, names, 99999)
             txt_clusters = (len(txt) + cb - 1) // cb
             if (disk.nclusters(reserve, nlevfiles + 7) + lev_clusters +
                     head_clusters + txt_clusters + SAV_CLUSTERS) <= clus:
@@ -2023,7 +2095,8 @@ def plan_geometry(ds, geom, reserve=None, styles=None):
                                   nstrings, nlevfiles, disk, used)
         txt = levels_txt(ds, geom, playable, styles, specials,
                          len(disk.files) + 2,
-                         disk.nbytes + MANIFEST_HEADER, used, clus, names)
+                         disk.nbytes + MANIFEST_HEADER, used, clus, names,
+                         disk.nclusters() + man_clusters + txt_clusters)
         if (len(txt) + cb - 1) // cb == txt_clusters:
             break
         txt_clusters = (len(txt) + cb - 1) // cb
@@ -2043,7 +2116,12 @@ def geom_name(geom):
 
 
 def geom_tag(geom):
-    return {1440: "1440K", 1200: "1200K", 720: "720K", 360: "360K"}[geom]
+    """LEMMAN offset 22, the geometry the chooser's greyed facts name. ONE
+    SPELLING ON BOTH SURFACES, and it is the OS's own (wave 4's third review):
+    it was "360K" in the chooser against "360KB DISK" in LEVELS.TXT, and
+    "1440K"/"1200K" are how this OS names those disks nowhere. Eight bytes,
+    NUL-padded: "1.44MB" is six."""
+    return geom_name(geom)
 
 
 def choose_two_styles(ds, geom, reserve):
@@ -2213,7 +2291,7 @@ def bank_cost(ds, kind, n, geom):
 
 
 def levels_txt(ds, geom, levels, styles, specials, nfiles, nbytes, used,
-               clus, names=True):
+               clus, names=True, dclus=0):
     """The player's own copy of the arithmetic (SPEC.md 114.9): which levels
     this disk carries, and for each one it does not, why - in the chooser's
     own terms, with the missing bank's files and what they would cost here.
@@ -2246,7 +2324,7 @@ def levels_txt(ds, geom, levels, styles, specials, nfiles, nbytes, used,
     for s in range(5):
         name, nb, nc = bank_cost(ds, "style", s, geom)
         out.append("  %-9s %-13s %7s bytes = %3d clusters  %s"
-                   % (STYLE_NAMES[s], name, "{:,}".format(nb), nc,
+                   % (STYLE_NAMES[s], name, "%d" % nb, nc,
                       "here" if s in styles else "not here"))
     out.append("")
     out.append("SPECIAL PICTURES")
@@ -2255,16 +2333,26 @@ def levels_txt(ds, geom, levels, styles, specials, nfiles, nbytes, used,
         name, nb, nc = bank_cost(ds, "spec", i, geom)
         out.append("  %-9s %-13s %7s bytes = %3d clusters  %s"
                    % (spec_level.get(i, "VGASPEC%d" % i), name,
-                      "{:,}".format(nb), nc,
+                      "%d" % nb, nc,
                       "here" if i in specials else "not here"))
     out.append("")
     out.append("THE ARITHMETIC")
     out.append("-" * 28)
     out.append("")
-    out.append("  data files      %d" % nfiles)
-    out.append("  converted bytes %s" % "{:,}".format(nbytes))
-    out.append("  clusters used   %d of %d (package, README, folders, "
-               "ASSOC.DAT)" % (used, clus))
+    # THE LINES ADD UP (wave 4's third review): "clusters used 352 of 354
+    # (package, README, folders, ASSOC.DAT)" put the WHOLE image's count
+    # beside a parenthesis naming only what is not a data file. The data
+    # files' clusters and everything else's are two lines now, and they sum
+    # to the third. The byte counts carry no thousands separator because the
+    # chooser's greyed facts print none (ovl_arg_u32) - one spelling on both
+    # surfaces.
+    out.append("  data files      %d (the bands, LEMMAN.LEM and LEVELS.TXT)"
+               % nfiles)
+    out.append("  their bytes     %d" % nbytes)
+    out.append("  their clusters  %d" % dclus)
+    out.append("  everything else %d (the package, README.TXT, the folders, "
+               "ASSOC.DAT)" % (used - dclus))
+    out.append("  clusters used   %d of %d" % (used, clus))
     out.append("  LEMMINGS.SAV    %d more kept free (the file, and the copy "
                "a save writes)" % SAV_CLUSTERS)
     out.append("  cluster size    %d bytes" % cluster_bytes(geom))
@@ -2565,9 +2653,14 @@ def build_fixture(out_dir):
     # MAIN.DAT.
     mhead = bytearray(512)
     mhead[0:4] = b"LMNB"
-    struct.pack_into("<H", mhead, 4, 1)
-    mhead[6] = 7
+    struct.pack_into("<H", mhead, 4, LMNB_VERSION)
+    mhead[6] = 9
     mhead[7] = 1
+    # an INVENTED menu palette - sixteen greys - because nothing in this
+    # directory may derive from the original (the real one is the format
+    # document's table, MENU_PALETTE)
+    for k in range(16):
+        mhead[MENUPAL_OFF + 3 * k:MENUPAL_OFF + 3 * k + 3] = bytes([k * 4] * 3)
     mdata = bytearray()
 
     def mitem(row, item_id, bpp, w, h, frames, blob):
@@ -2666,6 +2759,40 @@ def build_fixture(out_dir):
     mitem(5, 8, 0, 8, 0, len(MAIN_ANIMS), anim_tab)
     mitem(6, 9, 0, 8, 0, len(shapes), mask_tab)
 
+    # items 6 and 7 (wave 5): the purple font and the background tile the
+    # preview and postview screens are drawn in, at the real geometry and
+    # with INVENTED pixels. Glyph n (ASCII 33 + n) is a 14x14 box with n's
+    # low four bits as bars in it, plane 2 set wherever any plane is - the
+    # real font's own property (every pixel 0 or 4..7), which the shadow
+    # cards' ink rule reads; the tile is diagonal stripes in colours 1..3.
+    pfont = bytearray()
+    for g in range(PURPLE_N):
+        planes = [bytearray(32) for _ in range(3)]
+        for y in range(16):
+            for x in range(16):
+                box = 1 <= x <= 14 and 1 <= y <= 14 and (
+                    x in (1, 14) or y in (1, 14) or
+                    (x >= 3 and (x - 3) // 3 < 4 and
+                     (g >> ((x - 3) // 3)) & 1 and (x - 3) % 3 == 0))
+                if not box:
+                    continue
+                v = 4 + ((x + y + g) & 3)
+                for p in range(3):
+                    if v & (1 << p):
+                        planes[p][y * 2 + x // 8] |= 0x80 >> (x & 7)
+        for p in range(3):
+            pfont += planes[p]
+    mitem(7, 6, PURPLE_BPP, PURPLE_W, PURPLE_H, PURPLE_N, pfont)
+    tile = bytearray(2 * BROWN_W * BROWN_H // 8)
+    for y in range(BROWN_H):
+        for x in range(BROWN_W):
+            v = ((x + y) >> 2) & 3
+            for p in range(2):
+                if v & (1 << p):
+                    tile[p * (BROWN_W * BROWN_H // 8) + (y * BROWN_W + x) // 8] \
+                        |= 0x80 >> (x & 7)
+    mitem(8, 7, BROWN_BPP, BROWN_W, BROWN_H, 1, tile)
+
     mlogical = bytes(mhead) + bytes(mdata)
     struct.pack_into("<I", mhead, 8, len(mlogical))
     mlogical = bytes(mhead) + bytes(mdata)
@@ -2719,7 +2846,7 @@ def build_fixture(out_dir):
     total = sum(len(d) for (_, d) in files) + MANIFEST_HEADER
     struct.pack_into("<H", head, 18, (total + 1023) // 1024)
     struct.pack_into("<H", head, 20, (total + 511) // 512)
-    head[22:27] = b"1440K"
+    head[22:28] = b"1.44MB"
     struct.pack_into("<H", head, 30, len(strband))
     struct.pack_into("<H", head, 32, 1)
     struct.pack_into("<I", head, 42, total)

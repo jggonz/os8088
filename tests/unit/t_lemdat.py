@@ -478,9 +478,11 @@ def check_bands(sections, lem, out_dir, geom):
               "%s/%s starts %r, not %r" % (geom, parts[0], body[0:4], magic))
         version = struct.unpack_from("<H", body, 4)[0]
         # LGRB went to 2 in wave 3 (bytes 896 and 912, checked below against
-        # GROUNDxO itself) and LSPB to 2 in wave 4 (the picture as pieces,
-        # checked below against this file's own decode); LMNB is still 1
-        want = 2 if magic in (b"LGRB", b"LSPB") else 1
+        # GROUNDxO itself), LSPB to 2 in wave 4 (the picture as pieces,
+        # checked below against this file's own decode) and LMNB to 2 in
+        # wave 5 (the menu palette at 288, checked below against the format
+        # document's table)
+        want = 2
         check(version == want, "%s/%s is version %d, not %d"
               % (geom, parts[0], version, want))
         return parts, body
@@ -567,6 +569,19 @@ def check_bands(sections, lem, out_dir, geom):
         nitems = body[6]
         check(nitems == 10, "%s/LEMMAIN carries %d items, not 10"
               % (geom, nitems))
+        # THE MAIN-MENU PALETTE (wave 5), read again from the format
+        # document's own table - lemmings_main_dat_file_format.txt section 2,
+        # VGA values, shifted to the DAC's six bits - and not out of the
+        # converter
+        menu = [(0, 0, 0), (128, 64, 32), (96, 48, 32), (48, 0, 16),
+                (32, 8, 124), (64, 44, 144), (104, 88, 164), (152, 140, 188),
+                (0, 80, 0), (0, 96, 16), (0, 112, 32), (0, 128, 64),
+                (208, 208, 208), (176, 176, 0), (64, 80, 176),
+                (224, 128, 144)]
+        want_pal = bytes(c >> 2 for rgb in menu for c in rgb)
+        check(body[288:288 + 48] == want_pal,
+              "%s/LEMMAIN's menu palette at 288 is not the format document's "
+              "table" % geom)
         main = sections["MAIN.DAT"]
         # item 3 is MAIN section 0 whole; item 4 is section 1 whole.
         for (item, want) in ((3, main[0]), (4, main[1])):

@@ -21,9 +21,12 @@
 ; after UpCase'ing both the old and the new character - so the whole line is
 ; uppercase on the glass whatever case it is stored in.
 ;
-; THE PURPLE 16x16 FONT of the preview and postview screens is WAVE 5's, with
-; those two screens (SPEC.md 114.4.3). It is a second index map over the same
-; per-pixel plotter and nothing here changes to accept it.
+; THE PURPLE 16x16 FONT of the preview and postview screens arrived in wave 5,
+; with those two screens (SPEC.md 114.4.3), and it is NOT a second index map
+; over this file's status cell, which wave 1 expected: the two screens are in a
+; different MODE (12h, the Hercules' own, mode 6) with a different row
+; addressing, a 16-pixel cell and a transparent draw on a VGA. They are the
+; "TWO SCREENS' SURFACE" section at the end of this file.
 ;
 ; IT DOES NOT PLOT PER PIXEL, AND THE FIRST VERSION DID. That version's header
 ; estimated a plot at "~50 cycles on an 8088, so a whole 40-character line is
@@ -399,4 +402,759 @@ _lem_f_run:
     pop bp
     ret
 
+section .text
+
+; =============================================================================
+; WAVE 5: THE TWO SCREENS' SURFACE (SPEC.md 114.4.3)
+;
+; The preview and the postview are the original's 640x350 screens (Lemmix
+; GameScreen.Preview.pas:114 / Postview.pas:59, "the original dos-screen
+; size"), drawn inside the bracket in the SECOND foreign mode each adapter has
+; for them: mode 12h on a VGA (640x480, the layout unscaled and centred, 65
+; rows of margin above and below), the Hercules' own 720x348 (letterboxed at
+; x = 40, rows 348 and 349 off the bottom - the lowest glyph row the screens
+; letter is 337), and mode 6 on a CGA or an EGA (640x200: the C compresses the
+; layout to fit, lemovl.c). The C speaks in the ORIGINAL'S coordinates and
+; never knows which card it is on; lp_row is the one place the three meet.
+;
+; WHAT IS DRAWN, and with what:
+;
+;   lem_p_clear  the rows the tile does not cover: the picture's well, and a
+;                VGA's margins
+;   lem_p_tile   MAIN.DAT section 3's 320x104 2bpp brown tile, tiled down from
+;                a row (Lemmix TileBackgroundBitmap) two tiles across
+;   lem_p_text   the 16x16 3bpp purple glyphs of section 4 (94 of them, ASCII
+;                33..126); a space advances 16 and draws nothing, which is
+;                DrawPurpleText's own rule
+;   lem_p_rect   a filled box: the level picture's black well, the load bar
+;   lem_p_mini   ONE ROW of the shrunk level picture, out of the world the
+;                compose left in RAM (T and the mask on a VGA, the mask on the
+;                other two)
+;   lem_p_pal    the sixteen colours: the menu palette's 0..7 and the level's
+;                own 8..15 (VGA only)
+;
+; THE TWO MONOCHROME CARDS GET COLOUR CLASSES, NOT SHADES (SPEC.md 39.4), and
+; what the classes are was decided by LOOKING: the tile is colours 0..3 -
+; black, (128,64,32), (96,48,32) and (48,0,16) - and only colour 1, the
+; lightest brown and 1.7% of the tile, is lit; lit at 1, 2 AND 3 the text sat
+; in a field of speckle as dense as itself. Every purple glyph pixel is 4..7
+; (measured over all 94), so PLANE 2 IS THE GLYPH'S INK, and on the two mono
+; cards a glyph is drawn OPAQUE - its 16x16 cell black, its ink lit - so a
+; speckle never touches a letter. On a VGA it is transparent, as Lemmix draws
+; it, through the latches: bit mask = the ink, one write a plane.
+;
+; ATTRIBUTION. The tile and the glyphs are the original's, read off MAIN.DAT
+; by tools/os88lem.py and never committed; the layout they are put in is
+; Lemmix's (lemovl.c). Lemmings is (C) 1991 DMA Design / Psygnosis.
+; =============================================================================
+
+LEM_PVGAY   equ 65                  ; (480 - 350) / 2: mode 12h, centred
+LEM_PHERCX  equ 5                   ; 40 pixels: the Hercules letterbox
+LEM_PROWS   equ 350                 ; the original's surface...
+LEM_PHERCH  equ 348                 ; ...what a Hercules shows of it
+LEM_PCGAH   equ 200                 ; ...and a CGA (the C fits the layout)
+LEM_PTILEH  equ 104                 ; the brown tile's rows
+LEM_PTPLANE equ 4160                ; ...and one of its two planes, 320x104/8
+LEM_PGLYPH  equ 96                  ; one purple glyph: three planes of 32
+
+; -----------------------------------------------------------------------------
+; void lem_p_setup(int kind, unsigned fbseg) - which card, and its framebuffer
+; as os88_fsx_mode() just described it (FSI_SEG). `kind` is lb_kind's code.
+; -----------------------------------------------------------------------------
+_lem_p_setup:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    mov [lp_kind], ax
+    mov ax, [bp+6]
+    mov [lp_fb], ax
+    mov ax, LEM_PROWS
+    cmp word [lp_kind], LEM_KIND_HERC
+    jne .nh
+    mov ax, LEM_PHERCH
+.nh:
+    cmp word [lp_kind], LEM_KIND_CGA
+    jne .nc
+    mov ax, LEM_PCGAH
+.nc:
+    mov [lp_h], ax
+    pop bp
+    ret
+
+; lp_row - in: AX = a row of the 640x350 surface. out: DI = the framebuffer
+; offset of its first byte (the Hercules letterbox included), CF = 1 when the
+; card does not show that row. Everything else preserved. A `mul` a row is
+; ~130 cycles against a glyph's sixteen rows of drawing; nothing calls it per
+; pixel.
+lp_row:
+    cmp ax, 0
+    jl .clip
+    cmp ax, [lp_h]
+    jge .clip
+    push ax
+    push cx
+    push dx
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .nvga
+    add ax, LEM_PVGAY
+    mov cx, 80
+    mul cx
+    mov di, ax
+    jmp .ok
+.nvga:
+    mov di, ax
+    cmp word [lp_kind], LEM_KIND_HERC
+    jne .cga
+    and di, 3                       ; four banks of 0x2000, 90 bytes a row
+    mov cl, 13
+    shl di, cl
+    shr ax, 1
+    shr ax, 1
+    mov cx, 90
+    mul cx
+    add di, ax
+    add di, LEM_PHERCX
+    jmp .ok
+.cga:
+    and di, 1                       ; two banks of 0x2000, 80 bytes a row
+    mov cl, 13
+    shl di, cl
+    shr ax, 1
+    mov cx, 80
+    mul cx
+    add di, ax
+.ok:
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+.clip:
+    stc
+    ret
+
+; lp_vga0 - write mode 0, the whole Bit Mask, no Set/Reset, no rotate: the
+; ambient state every routine here assumes, stated once on a freshly set mode
+; 12h rather than trusted. Clobbers AX, DX.
+lp_vga0:
+    mov ax, 0x0005                  ; AL = index, AH = value (lb_gc's order)
+    call lb_gc
+    mov ax, 0xFF08
+    call lb_gc
+    mov ax, 0x0001
+    call lb_gc
+    mov ax, 0x0003
+    call lb_gc
+    mov ax, 0x0F02                  ; ...and the Map Mask: every plane
+    jmp lb_seq
+
+; -----------------------------------------------------------------------------
+; void lem_p_clear(int y0, int y1) - surface rows [y0, y1) black, and on a VGA
+; mode 12h's two 65-row margins around the surface as well.
+;
+; ONLY WHAT NOTHING ELSE WRITES (wave 5 review): the brown tile is opaque over
+; every row it covers, so clearing the whole page first wrote most of it twice
+; - 38,400 bytes a VGA screen, 32 KB a Hercules one, 16 KB a CGA one, on every
+; preview and postview. The callers clear the picture's WELL (the preview) and
+; nothing on the mono cards for the postview. The VGA margins are cleared on
+; every screen because they are the one place a BIOS that leaves mode 12h
+; dirty (SPEC.md 39.23 - the mode 3 character generator in plane 2) would
+; show. The Hercules letterbox is never written here: FSXM_HERC's vid_setmode
+; wipes the whole 32 KB page itself (kernel/fsx.inc), and a screen that skips
+; the mode set (ovl_r_mode) is following one that left the border black.
+; -----------------------------------------------------------------------------
+_lem_p_clear:
+    push bp
+    mov bp, sp
+    push di
+    push es
+    mov ax, [lp_fb]
+    mov es, ax
+    cld
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .rows
+    call lp_vga0
+    xor ax, ax
+    xor di, di                      ; the top margin
+    mov cx, (LEM_PVGAY * 80) / 2
+    rep stosw
+    mov di, (LEM_PVGAY + LEM_PROWS) * 80
+    mov cx, ((480 - LEM_PVGAY - LEM_PROWS) * 80) / 2
+    rep stosw                       ; ...and the bottom one
+.rows:
+    mov ax, [bp+4]
+.row:
+    cmp ax, [bp+6]
+    jge .out
+    call lp_row                     ; DI; CF = the card does not show it
+    jc .next
+    push ax
+    xor ax, ax
+    mov cx, 40                      ; the surface's 640 pixels on every card
+    rep stosw
+    pop ax
+.next:
+    inc ax
+    jmp .row
+.out:
+    pop es
+    pop di
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void lem_p_rect(int x, int y, int w, int h, int colour) - x and w in pixels,
+; multiples of 8. On a VGA `colour` is the palette index (the colour's planes
+; set, the others clear: two passes a row); on the mono cards 0 is black and
+; anything else is lit.
+; -----------------------------------------------------------------------------
+_lem_p_rect:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov ax, [lp_fb]
+    mov es, ax
+    cld
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .go
+    call lp_vga0
+.go:
+    mov si, [bp+10]
+.row:
+    cmp si, 0
+    jle .out
+    mov ax, [bp+6]
+    call lp_row
+    jc .next
+    mov ax, [bp+4]
+    mov cl, 3
+    shr ax, cl
+    add di, ax
+    mov cx, [bp+8]
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .mono
+    push cx
+    push di
+    mov ah, [bp+12]
+    and ah, 0x0F
+    mov al, 2
+    call lb_seq
+    pop di
+    pop cx
+    push cx
+    push di
+    mov al, 0xFF
+    rep stosb
+    mov ah, [bp+12]
+    not ah
+    and ah, 0x0F
+    mov al, 2
+    call lb_seq
+    pop di
+    pop cx
+    xor al, al
+    rep stosb
+    jmp .next
+.mono:
+    xor al, al
+    cmp word [bp+12], 0
+    je .fill
+    mov al, 0xFF
+.fill:
+    rep stosb
+.next:
+    inc word [bp+6]
+    dec si
+    jmp .row
+.out:
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .done
+    mov ax, 0x0F02                  ; the Map Mask back to every plane
+    call lb_seq
+.done:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void lem_p_tile(unsigned seg, unsigned off, int y0, int y1) - the brown tile
+; at seg:off, its first row at surface row y0 and repeated down to y1 (Lemmix
+; TileBackgroundBitmap(0, y0)), two copies across the 640.
+;
+; VGA: tile planes 0 and 1 straight into VGA planes 0 and 1, and planes 2 and 3
+; zeroed - the tile is colours 0..3. Mono: lit where the colour is 1 (plane 0
+; set, plane 1 clear) - see the section header for why only 1.
+;
+; Locals: [bp-2] the tile row.
+; -----------------------------------------------------------------------------
+_lem_p_tile:
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push si
+    push di
+    push es
+    mov ax, [lp_fb]
+    mov es, ax
+    cld
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .start
+    call lp_vga0
+.start:
+    mov word [bp-2], 0
+.row:
+    mov ax, [bp+8]
+    cmp ax, [bp+10]
+    jge .out
+    call lp_row
+    jc .next
+    mov ax, [bp-2]
+    mov cx, 40
+    mul cx
+    add ax, [bp+6]
+    mov si, ax                      ; the tile row's plane 0
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .mono
+    mov ax, 0x0102                  ; plane 0
+    call lb_seq
+    call lp_cpy2
+    add si, LEM_PTPLANE
+    mov ax, 0x0202                  ; plane 1
+    call lb_seq
+    call lp_cpy2
+    mov ax, 0x0C02                  ; planes 2 and 3: the tile has none
+    call lb_seq
+    xor ax, ax
+    mov cx, 40
+    rep stosw
+    jmp .next
+.mono:
+    push ds
+    mov ax, [bp+4]
+    mov ds, ax
+    mov cx, 40
+.mb:
+    mov al, [si]
+    mov ah, [si+LEM_PTPLANE]
+    not ah
+    and al, ah                      ; colour 1: plane 0 and not plane 1
+    mov [es:di], al
+    mov [es:di+40], al
+    inc si
+    inc di
+    loop .mb
+    pop ds
+.next:
+    inc word [bp+8]
+    inc word [bp-2]
+    cmp word [bp-2], LEM_PTILEH
+    jb .row
+    mov word [bp-2], 0
+    jmp .row
+.out:
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .done
+    mov ax, 0x0F02
+    call lb_seq
+.done:
+    pop es
+    pop di
+    pop si
+    add sp, 2                        ; the `sub sp` at the top, undone EXPLICITLY
+    pop bp
+    ret
+
+; lp_cpy2 - one 40-byte tile row at [bp+4]:SI into ES:DI and again 40 bytes
+; along. SI and DI preserved; clobbers AX, CX. Reads the CALLER'S [bp+4],
+; which is the tile's segment (lem_p_tile's frame - BP is its).
+lp_cpy2:
+    push ds
+    push si
+    push di
+    mov ax, [bp+4]
+    mov ds, ax
+    mov cx, 20
+    rep movsw
+    sub si, 40
+    mov cx, 20
+    rep movsw
+    pop di
+    pop si
+    pop ds
+    ret
+
+; -----------------------------------------------------------------------------
+; void lem_p_text(unsigned seg, unsigned off, int x, int y, const char *s,
+;                 int n)
+;
+; `n` characters of `s` from surface pixel (x, y), x a multiple of 8 - every
+; place the C letters is one (16 x a column, or 320 - 8 x a length when
+; centred). `seg:off` is the 94-glyph bank. A space advances 16 and draws
+; nothing; a character outside 33..126 advances nothing (DrawPurpleText's
+; `case`, which a CR in the middle of a line would otherwise turn into a
+; glyph); a NUL ends the string early.
+; -----------------------------------------------------------------------------
+_lem_p_text:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov ax, [bp+4]
+    mov [lp_fseg], ax
+    mov ax, [lp_fb]
+    mov es, ax
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .go
+    call lp_vga0
+.go:
+    mov si, [bp+12]
+.ch:
+    cmp word [bp+14], 0
+    jle .out
+    dec word [bp+14]
+    mov al, [si]
+    inc si
+    cmp al, 0
+    je .out
+    cmp al, ' '
+    je .adv
+    cmp al, '!'
+    jb .ch
+    cmp al, '~'
+    ja .ch
+    sub al, '!'
+    xor ah, ah
+    mov cx, LEM_PGLYPH
+    mul cx
+    add ax, [bp+6]
+    mov bx, [bp+8]
+    mov dx, [bp+10]
+    push si
+    mov si, ax
+    call lp_glyph
+    pop si
+.adv:
+    add word [bp+8], 16
+    jmp .ch
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; lp_glyph - one glyph whose plane 0 starts at [lp_fseg]:SI, at surface
+; (BX, DX), BX a multiple of 8. ES = the framebuffer. Clobbers AX, BX, CX, DX,
+; SI, DI. A glyph whose cell is not wholly inside the 640 columns is not drawn
+; (every caller centres or indents within them).
+lp_glyph:
+    cmp bx, 624
+    ja .out                         ; unsigned: a negative x too
+    mov cl, 3
+    shr bx, cl                      ; the byte column
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .mono
+
+    ; --- VGA: transparent, through the latches ----------------------------
+    ; mode 12h is linear and LEM_PVGAY keeps every row of a 350-row surface on
+    ; its 480, so row 0's offset and +80 a row is the whole address
+    mov ax, dx
+    call lp_row
+    jc .out
+    add di, bx
+    xor bx, bx                      ; BX = the plane's offset in the glyph
+    mov cx, 1                       ; CX = the Map Mask bit
+.vp:
+    push cx
+    mov ah, cl
+    mov al, 2
+    call lb_seq
+    push si
+    push di
+    push ds
+    mov ax, [lp_fseg]
+    mov ds, ax
+    mov cx, 16
+    mov dx, VGA_GC_IDX
+.vr:
+    mov ah, [si+64]                 ; plane 2: the ink of the left byte
+    mov al, 8
+    out dx, ax                      ; Bit Mask = the ink
+    mov al, [es:di]                 ; the latches: what is there now
+    mov al, [si+bx]
+    mov [es:di], al
+    mov ah, [si+65]                 ; ...and the right byte
+    mov al, 8
+    out dx, ax
+    mov al, [es:di+1]
+    mov al, [si+bx+1]
+    mov [es:di+1], al
+    add si, 2
+    add di, 80
+    loop .vr
+    pop ds
+    pop di
+    pop si
+    pop cx
+    add bx, 32
+    shl cx, 1
+    cmp cx, 8
+    jb .vp
+    mov ax, 0xFF08                  ; the Bit Mask back to whole bytes
+    call lb_gc
+    mov ax, 0x0F02                  ; ...and the Map Mask to every plane
+    jmp lb_seq
+
+    ; --- mono: opaque, the ink lit and the rest of the cell black ----------
+.mono:
+    mov cx, 16
+.mr:
+    mov ax, dx
+    call lp_row
+    jc .mnext
+    add di, bx
+    push ds
+    mov ax, [lp_fseg]
+    mov ds, ax
+    mov ax, [si+64]                 ; plane 2's two bytes, in screen order
+    pop ds
+    mov [es:di], ax
+.mnext:
+    add si, 2
+    inc dx
+    loop .mr
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; void lem_p_mini(int y, int srow) - ONE ROW of the shrunk level picture: world
+; row `srow` into surface row y, the world's 1,600-pixel stride 2:5 into 640.
+;
+; 2:5 AND NOT LEMMIX'S 1,584:640, and on purpose. Lemmix stretches the world
+; to the 640 exactly (GameScreen.Preview.pas: DrawTo(target, DstRect,
+; fullLevel.BoundsRect)) - 2.475 world pixels a screen pixel, a phase that
+; returns to a byte boundary only every 320 pixels. At 2.5 it returns every 16:
+; five world bytes are two screen bytes, and the sixteen picked bits are fixed
+; positions (lp_samp), so a row is 40 groups of straight-line shifts with no
+; per-pixel test or branch - about four times fewer cycles than a nearest-
+; neighbour walk, which was priced at ~6 s a VGA picture on a 4.77 MHz 8088
+; (204,800 samples at ~140 cycles). What it costs the picture is its right
+; edge: 640 x 2.5 is 1,600, so the last six columns are the sixteen world
+; pixels past x 1,583, which are never terrain (SPEC.md 114.4.3).
+;
+; A VGA row is four passes, one a plane: T's planes 0..2 (lem_r_tsetup) and
+; the solid mask as plane 3 - so a terrain pixel is colour 8..15 and the
+; preview's palette entries 8..15 are the level's own (lem_p_pal). On the
+; mono cards it is the mask alone, 50% dithered by the screen row - the
+; Hercules world's own class (lemmask.inc lem_m_derive).
+;
+; Locals: [bp-2] the screen row's offset, [bp-4] the world row's.
+; -----------------------------------------------------------------------------
+_lem_p_mini:
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push si
+    push di
+    push es
+    mov ax, [bp+4]
+    call lp_row
+    jc .out
+    mov [bp-2], di
+    mov ax, [bp+6]
+    cmp ax, LEM_MROWS
+    jae .out
+    call lem_rowoff
+    mov [bp-4], di
+    mov ax, [lp_fb]
+    mov es, ax
+    cld
+    cmp word [lp_kind], LEM_KIND_VGA
+    je .vga
+    mov bh, 0xAA
+    test byte [bp+4], 1
+    jz .dith
+    mov bh, 0x55
+.dith:
+    mov ax, [lm_seg]
+    mov si, [bp-4]
+    mov di, [bp-2]
+    push ds
+    mov ds, ax
+    call lp_samp
+    pop ds
+    jmp .out
+.vga:
+    xor cx, cx                      ; the plane
+.vp:
+    push cx
+    mov ah, 1
+    shl ah, cl
+    mov al, 2
+    call lb_seq
+    pop cx
+    push cx
+    mov ax, [lm_seg]
+    cmp cx, 3
+    je .seg
+    mov ax, LEM_TPLANE
+    mul cx
+    add ax, [lb_t]
+.seg:
+    mov si, [bp-4]
+    mov di, [bp-2]
+    mov bh, 0xFF
+    push ds
+    mov ds, ax
+    call lp_samp
+    pop ds
+    pop cx
+    inc cx
+    cmp cx, 4
+    jb .vp
+    mov ax, 0x0F02
+    call lb_seq
+.out:
+    pop es
+    pop di
+    pop si
+    add sp, 4                        ; the `sub sp` at the top, undone EXPLICITLY
+    pop bp
+    ret
+
+; lp_samp - 1,600 bits at DS:SI to 640 at ES:DI, 2:5. BH = an AND mask for
+; every output byte (0xFF, or a dither). Screen pixel i of a 16-pixel group
+; takes world bit floor(5i / 2): 0 2 5 7 | 10 12 15 | 17 20 22 | 25 27 30 |
+; 32 35 37 of the group's five bytes, MSB first - so each byte is loaded once
+; and shifted left, a `shl` a bit it passes and an `rcl` into DX for each bit
+; it gives. Clobbers AX, CX, DX, SI, DI.
+lp_samp:
+    mov cx, 40
+.grp:
+    lodsb                           ; bits 0..7: 0 2 5 7
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    lodsb                           ; 8..15: 10 12 15
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    lodsb                           ; 16..23: 17 20 22
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    lodsb                           ; 24..31: 25 27 30
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    lodsb                           ; 32..39: 32 35 37
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    shl al, 1
+    shl al, 1
+    rcl dx, 1
+    mov al, dh                      ; the first eight pixels are DX's top
+    mov ah, dl
+    and al, bh
+    and ah, bh
+    stosw
+    loop .grp
+    ret
+
+; -----------------------------------------------------------------------------
+; void lem_p_pal(unsigned mseg, unsigned moff, unsigned bseg, unsigned coff)
+;
+; THE SCREENS' SIXTEEN COLOURS (VGA only): entries 0..7 are the MAIN-MENU
+; palette's (LEMMAIN's header, tools/os88lem.py MENU_PALETTE - black, the
+; tile's three browns, the font's four purples) and 8..15 are the LEVEL'S own
+; custom eight, which are the colours the shrunk picture's terrain pixels carry
+; (8 + planes 0..2). Sixteen fits exactly: the menu palette's own 8..15 - its
+; greens, white, yellow, blue and pink - are colours neither screen draws.
+; -----------------------------------------------------------------------------
+_lem_p_pal:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push ds
+    cmp word [lp_kind], LEM_KIND_VGA
+    jne .out
+    call lb_acid
+    mov dx, VGA_DAC_WIDX
+    xor al, al
+    out dx, al
+    mov dx, VGA_DAC_DATA
+    cld
+    mov ax, [bp+4]
+    mov si, [bp+6]
+    mov bx, [bp+8]
+    mov di, [bp+10]                 ; the second source's offset, held
+    mov ds, ax
+    mov cx, 24
+.a:
+    lodsb
+    out dx, al
+    loop .a
+    mov ds, bx
+    mov si, di
+    mov cx, 24
+.b:
+    lodsb
+    out dx, al
+    loop .b
+.out:
+    pop ds
+    pop di
+    pop si
+    pop bp
+    ret
+
+section .bss
+lp_kind:    resw 1                  ; LEM_KIND_* of the screens' surface
+lp_fb:      resw 1                  ; ...its framebuffer segment
+lp_h:       resw 1                  ; ...the surface rows it shows
+lp_fseg:    resw 1                  ; the purple font's segment, per call
 section .text

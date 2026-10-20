@@ -57,7 +57,8 @@ static int ovl_man_u8(int off)
     return ovl_u8(lem_manbuf, off);
 }
 
-/* ovl_geom - "1440K" / "1200K" / "720K" / "360K", NUL-padded in the header. It
+/* ovl_geom - "1.44MB" / "1.2MB" / "720KB" / "360KB" - the OS's own spelling,
+ * which LEVELS.TXT uses too (wave 5) - NUL-padded in the header. It
  * is what every greying fact's second marker prints, so it is read rather than
  * guessed from a disk size this program never asks for. */
 static const char *ovl_geom(void)
@@ -568,6 +569,28 @@ static void ovl_stem_main(void)
     lem_f_scratch[7] = 0;
 }
 
+/* ovl_rat_name - LEMR<n>.LEM, the rating file lem_rating_load last asked
+ * for, into lem_f_scratch: the name a refused NEXT level is toasted under
+ * when the next level is the next rating's first (lemmings.c
+ * ovl_post_move, wave 5). It takes no rating: the name is the one the read
+ * that failed asked for, which is the only one it can truthfully give. */
+static void ovl_rat_name(void)
+{
+    int i;
+
+    /* lem_f_rat already carries its digit: lem_rating_load() wrote it */
+    for (i = 0; i < (int)sizeof(lem_f_rat); i++)
+        lem_f_scratch[i] = lem_f_rat[i];
+}
+
+/* why a level did not load - ovl_level_load's status, which lemmings.c's
+ * ovl_said_load turns into one of three different sentences (SPEC.md 47) */
+#define LEM_LE_MEM   1              /* a claim refused */
+#define LEM_LE_BANK  2              /* a band file did not read */
+#define LEM_LE_OLD   3              /* ...or read, and is the wrong version */
+
+static int lem_load_err;
+
 /* ovl_main_read - LEMMAIN.LEM into its claim, once per session. It is the same
  * bytes for every level, so a retry or the next level does not re-read it -
  * which matters because it is 52 KB and ~130 int 13h calls on the target. */
@@ -586,6 +609,13 @@ static int ovl_main_read(void)
     if (ovl_pk(lem_cl_main, 0) != 'L' || ovl_pk(lem_cl_main, 1) != 'M' ||
         ovl_pk(lem_cl_main, 2) != 'N' || ovl_pk(lem_cl_main, 3) != 'B')
         return 0;
+    if (ovl_pk16(lem_cl_main, LEM_MN_VERSION) != LEM_MN_VER) {
+        lem_load_err = LEM_LE_OLD;  /* a bank from before wave 5 carries no
+                                     * menu palette, and the two screens
+                                     * would be lettered in black - and it is
+                                     * not MISSING, so it is its own toast */
+        return 0;
+    }
     lem_main_have = 1;
     return 1;
 }

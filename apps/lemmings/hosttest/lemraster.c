@@ -141,7 +141,20 @@ int os88_mem_free(unsigned seg)
     return 0;
 }
 
-int os88_peek(unsigned seg, unsigned off) { return *h_ptr(seg, off); }
+/* THE BIOS DATA AREA's one byte this program reads: 0040:0096, whose bit 4
+ * says the keyboard has F11 and F12 (lemui.c lem_kbd101, wave 5). Anything
+ * else at segment 0x40 is a read this program has no business making. */
+static unsigned char h_bda96 = 0x10;    /* an AT keyboard, as QEMU's */
+
+int os88_peek(unsigned seg, unsigned off)
+{
+    if (seg == 0x40) {
+        if (off != 0x96)
+            fail("os88_peek read a BIOS data byte other than 0040:0096");
+        return h_bda96;
+    }
+    return *h_ptr(seg, off);
+}
 void os88_poke(unsigned seg, unsigned off, int v) { *h_ptr(seg, off) = (unsigned char)v; }
 
 /* --- the modelled glass ---------------------------------------------------- */
@@ -429,9 +442,14 @@ void lem_r_pal(unsigned seg, unsigned stdoff, unsigned cusoff)
     h_r_pal = 1;
 }
 
-void lem_r_clearworld(void)
+static int h_r_vclears;                 /* the VRAM half's runs */
+
+void lem_r_clearworld(int vram)
 {
-    memset(h_world, 0, sizeof(h_world));
+    if (vram) {
+        memset(h_world, 0, sizeof(h_world));
+        h_r_vclears++;
+    }
     memset(h_t, 0, sizeof(h_t));
 }
 
@@ -1173,4 +1191,155 @@ void lem_f_run(unsigned seg, unsigned off, int col, int row, const char *s,
         if (s && !s[i])
             s = 0;
     }
+}
+
+/* ============================================================================
+ * WAVE 5: the two screens' surface (lemfont.inc lem_p_*), modelled
+ *
+ * In the ORIGINAL'S coordinates, 640x350, one byte a pixel: 0 black, 1 the
+ * brown tile (a pixel the mono cards light), 2 the picture, 3 the load bar,
+ * 0x40 + n a purple glyph of character n. What is asserted from it is the
+ * layout - which row each line sits on, how wide it is, that nothing is
+ * lettered on a row the card does not show - and that every byte the assembly
+ * would read is inside a live claim (h_ptr).
+ * ==========================================================================*/
+#define H_P_W 640
+#define H_P_H 350
+static unsigned char h_p[H_P_H][H_P_W];
+static int h_p_kind = -1;
+static int h_p_h;                       /* the rows this card shows */
+static int h_p_clears, h_p_tiles, h_p_rects, h_p_minis, h_p_pals;
+static int h_p_texts, h_p_glyphs;
+static int h_p_lowest;                  /* the lowest glyph row lettered + 1 */
+static int h_p_clipped;                 /* glyph rows the card does not show */
+static int h_p_wide;                    /* glyphs past column 639 */
+#define H_P_LINES 24
+static char h_p_line[H_P_LINES][48];    /* this screen's text calls, in order */
+static int  h_p_lx0[H_P_LINES], h_p_lx1[H_P_LINES], h_p_ly[H_P_LINES];
+static int  h_p_nl;
+
+void lem_p_setup(int kind, unsigned fbseg)
+{
+    (void)fbseg;
+    h_p_kind = kind;
+    h_p_h = kind == 2 ? 348 : kind == 1 ? 200 : 350;
+}
+
+static int h_p_clrows;                  /* the surface rows cleared */
+
+void lem_p_clear(int y0, int y1)
+{
+    int y;
+
+    for (y = y0; y < y1 && y < H_P_H; y++)
+        if (y >= 0) {
+            memset(h_p[y], 0, H_P_W);
+            h_p_clrows++;
+        }
+    h_p_clears++;
+    h_p_nl = 0;
+    h_p_lowest = 0;
+}
+
+void lem_p_rect(int x, int y, int w, int h, int colour)
+{
+    int gx, gy;
+
+    h_p_rects++;
+    if ((x & 7) || (w & 7))
+        fail("lem_p_rect was given an x or a width that is not byte aligned");
+    for (gy = y; gy < y + h; gy++)
+        for (gx = x; gx < x + w; gx++)
+            if (gy >= 0 && gy < h_p_h && gx >= 0 && gx < H_P_W)
+                h_p[gy][gx] = colour ? 3 : 0;
+}
+
+void lem_p_tile(unsigned seg, unsigned off, int y0, int y1)
+{
+    int gx, gy;
+
+    h_p_tiles++;
+    (void)h_ptr(seg, off + 2 * (320 * 104 / 8) - 1);
+    for (gy = y0; gy < y1 && gy < h_p_h; gy++)
+        for (gx = 0; gx < H_P_W; gx++)
+            h_p[gy][gx] = 1;
+}
+
+void lem_p_text(unsigned seg, unsigned off, int x, int y, const char *s,
+                int n)
+{
+    int i, gx, gy, c, k;
+
+    h_p_texts++;
+    (void)h_ptr(seg, off + 94 * 96 - 1);
+    if (x & 7)
+        fail("lem_p_text was given an x that is not a multiple of 8");
+    k = h_p_nl < H_P_LINES ? h_p_nl++ : H_P_LINES - 1;
+    for (i = 0; i < n && i < 47 && s[i]; i++)
+        h_p_line[k][i] = s[i];
+    h_p_line[k][i] = 0;
+    h_p_lx0[k] = -1;
+    h_p_lx1[k] = -1;
+    h_p_ly[k] = y;
+    for (i = 0; i < n && s[i]; i++, x += 16) {
+        c = (unsigned char)s[i];
+        if (c == ' ')
+            continue;
+        if (c < '!' || c > '~') {
+            x -= 16;                /* advances nothing (DrawPurpleText) */
+            continue;
+        }
+        if (x < 0 || x > 624) {
+            h_p_wide++;
+            continue;
+        }
+        h_p_glyphs++;
+        if (h_p_lx0[k] < 0)
+            h_p_lx0[k] = x;
+        h_p_lx1[k] = x + 15;
+        for (gy = y; gy < y + 16; gy++) {
+            if (gy < 0 || gy >= h_p_h) {
+                h_p_clipped++;
+                continue;
+            }
+            if (gy + 1 > h_p_lowest)
+                h_p_lowest = gy + 1;
+            for (gx = x; gx < x + 16; gx++)
+                h_p[gy][gx] = (unsigned char)(0x40 + (c & 0x3F));
+        }
+    }
+}
+
+/* one row of the picture: world row srow, 2:5 across (lemfont.inc lp_samp) */
+void lem_p_mini(int y, int srow)
+{
+    int gx;
+
+    h_p_minis++;
+    if (srow < 0 || srow >= LEM_WORLD_H)
+        fail("lem_p_mini was asked for a world row outside the world");
+    if (y < 0 || y >= h_p_h)
+        return;
+    for (gx = 0; gx < H_P_W; gx++)
+        h_p[y][gx] = ((gx * 5) >> 1) < LEM_WORLD_W &&
+                     h_solid[srow < 0 ? 0 : srow % LEM_WORLD_H][(gx * 5) >> 1]
+                     ? 2 : 0;
+}
+
+void lem_p_pal(unsigned mseg, unsigned moff, unsigned bseg, unsigned coff)
+{
+    h_p_pals++;
+    (void)h_ptr(mseg, moff + 47);
+    (void)h_ptr(bseg, coff + 23);
+}
+
+/* h_p_find - the text call whose line starts with `what`, or -1 */
+static int h_p_find(const char *what)
+{
+    int k;
+
+    for (k = 0; k < h_p_nl; k++)
+        if (strncmp(h_p_line[k], what, strlen(what)) == 0)
+            return k;
+    return -1;
 }

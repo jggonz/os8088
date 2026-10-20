@@ -368,17 +368,68 @@ static int h_fsx_keys[8];
 static int h_fsx_keyn;
 static int h_fsx_keyi;
 static int h_fullscreen;
+static int lem_onscr;
+static int lem_started;
+static int h_pv_keys[4] = { 0x1C0D, 0, 0, 0 };  /* Enter: play */
+static int h_po_keys[4];                        /* none: Esc, the menu */
+static int h_pv_ki, h_po_ki;
+static int h_pv_asked, h_po_asked;              /* the screens that ran */
+static int h_scr_up;            /* the screen has seen the buffer EMPTY: its
+                                 * script keys are typed only from then on -
+                                 * a BIOS buffer, where what the last screen
+                                 * (or play) left is read first */
+static int h_pv_hold;           /* asks the preview gets NOTHING for first -
+                                 * the picture asks every eighth row, and a
+                                 * key there cuts it short, as it should */
+
+/* THE KERNEL'S OWN PAINTS ON THE WAY OUT ARE MODELLED (wave 5 review): the
+ * fsx exit's wm_paint_all inside os88_fsx_run() and os88_fullscreen(win, 0)'s
+ * both deliver W_PAINT, over the WF_OWNBG white fill, which is the kernel's
+ * and not the program's - so the fill is not counted. A stub that skipped them
+ * let the program's own THIRD repaint after the bracket look like the only
+ * one. h_kp_calls / h_kp_fills are the counters just after the last kernel
+ * paint: anything past them was issued by the program. */
+static int h_kpaints, h_kp_calls, h_kp_fills;
+/* ...AND WHAT THE PROGRAM DREW INSIDE EACH ONE (wave 5's second review): the
+ * counters above move past a kernel paint, so a program that lettered a
+ * whole screen INSIDE os88_paint() was never charged for it - and the two
+ * paints that land while the window is fullscreen around the bracket were
+ * each a full LIST at the fullscreen width (~28 calls, 726 cells). Indexed by
+ * h_kpaints, a ring of 16. */
+static int h_kp_pcalls[16], h_kp_pcells[16];
+
+static void h_kernel_paint(void *w)
+{
+    int r, c, c0, n0;
+
+    for (r = 0; r < G_ROWS; r++)
+        for (c = 0; c < G_COLS; c++) {
+            g_ch[r][c] = ' ';
+            g_at[r][c] = 0;
+        }
+    c0 = g_calls;
+    n0 = g_cells;
+    os88_paint(w);
+    h_kp_pcalls[h_kpaints & 15] = g_calls - c0;
+    h_kp_pcells[h_kpaints & 15] = g_cells - n0;
+    h_kpaints++;
+    h_kp_calls = g_calls;
+    h_kp_fills = g_fills;
+}
 
 int os88_fsx_run(void (*entry)(void), void *w, int f)
 {
     (void)f;
-    (void)w;
     if (h_fsx_refuse)
         return -1;
     h_fsx_runs++;
     h_fsx_ticks = 0;
     h_fsx_keyi = 0;
+    h_pv_ki = 0;
+    h_po_ki = 0;
+    h_scr_up = 0;
     entry();
+    h_kernel_paint(w);              /* SPEC.md 53.6: the restore's paint */
     return 0;
 }
 
@@ -388,12 +439,15 @@ static void h_fsi_w(unsigned char *f, int o, unsigned v)
     f[o + 1] = (unsigned char)(v >> 8);
 }
 
+static int h_modesets;                  /* modes SET (each one a page wipe) */
+
 int os88_fsx_mode(int id, void *fsi)
 {
     unsigned char *f = (unsigned char *)fsi;
 
     if (h_fsx_refuse || h_fsx_moderefuse || (h_caps & (1 << id)) == 0)
         return -1;
+    h_modesets++;
     memset(f, 0, OS88_FSI_SIZE);
     h_fsi_w(f, OS88_FSI_SEG, 0xA000);
     h_fsi_w(f, OS88_FSI_W, (id == OS88_FSXM_HERC) ? 720 : 320);
@@ -416,9 +470,52 @@ int os88_fsx_wait(int k)
 
 unsigned os88_ticks(void) { return (unsigned)h_fsx_ticks; }
 
+/* THE TWO SCREENS ARE ANSWERED FROM SCRIPTS OF THEIR OWN (wave 5): the
+ * play loop drains EVERY key the BIOS holds each tick, so a key meant for the
+ * postview put in the play script would be eaten by the level ('f' would keep
+ * it). While the screens' mode is up the stub reads lem_onscr - the program's
+ * own flag, declared here ahead of it (a tentative definition; lemmings.c's
+ * is the same object) - and answers the preview from h_pv_keys and the
+ * postview from h_po_keys, one key each time either asks, and Esc once a
+ * script is spent, so every screen is bounded the way the loop is.
+ *
+ * A SCREEN STARTS ON A BUFFER THE LAST ONE LEFT (wave 5's second review):
+ * until a screen has been answered 0 (h_scr_up), the stub hands it what the
+ * play script still holds once play has run (the preview before it has not
+ * seen play's keys yet) - the typematic Esc queued behind the one that
+ * ended play - and then 0. A screen that does not drain the buffer first
+ * reads that stale key as its answer. Each screen's own script starts after
+ * the 0, and the key that answers a screen ends it, so the next one starts
+ * on a buffer again. */
+
 int os88_fsx_key(int wait)
 {
+    int k;
+
     (void)wait;
+    if (lem_onscr) {
+        if (!h_scr_up) {
+            if (lem_started && h_fsx_keyi < h_fsx_keyn)
+                return h_fsx_keys[h_fsx_keyi++];
+            h_scr_up = 1;
+            return 0;
+        }
+        if (!lem_started) {
+            h_pv_asked++;
+            if (h_pv_hold > 0) {
+                h_pv_hold--;
+                return 0;
+            }
+            k = (h_pv_ki < 4 && h_pv_keys[h_pv_ki]) ? h_pv_keys[h_pv_ki++]
+                                                    : 0x011B;
+        } else {
+            h_po_asked++;
+            k = (h_po_ki < 4 && h_po_keys[h_po_ki]) ? h_po_keys[h_po_ki++]
+                                                    : 0x011B;
+        }
+        h_scr_up = 0;                   /* every script key ends its screen */
+        return k;                       /* Esc: the screen has to be bounded */
+    }
     if (h_fsx_keyi < h_fsx_keyn)
         return h_fsx_keys[h_fsx_keyi++];
     if (h_fsx_ticks >= h_fsx_maxticks)
@@ -435,8 +532,12 @@ int os88_fsx_surf(struct os88_rect *r)
 
 int os88_fullscreen(void *win, int enter)
 {
-    (void)win;
+    int was = h_fullscreen;
+
     h_fullscreen = enter;
+    if (was != enter)
+        h_kernel_paint(win);        /* wm_raise drawing it whole / the exit's
+                                     * wm_paint_all (kernel/wm.inc) */
     return 0;
 }
 
@@ -1154,7 +1255,7 @@ static int mech_run(int level, const char *script, int frames, const char *out)
         return printf("lemtest: --mech: level %d did not load\n", level), 1;
     lem_r_setup(LEM_RKIND_VGA, 0xA000, 0, 0);
     lem_r_tsetup(lem_cl_t);
-    lem_world_clear();
+    lem_world_clear(1);
     if (!lem_compose_level(level))
         return printf("lemtest: --mech: level %d did not compose\n", level), 1;
     lem_snd = 1;                    /* the speaker answers: every frame's cue
@@ -1357,6 +1458,25 @@ int main(int argc, char **argv)
     if (!glass_has("Fixture two"))
         fail("the second fixture level's name is not on the glass");
 
+    /* --- the pane's title line is ELIDED, never cut mid-word (wave 4's
+     * verifier: "Level 27 Call in the bomb s"). The fixture's second level
+     * is 39 characters with its number, wider than the pane. */
+    {
+        int keep = lem_sel;
+
+        lem_sel = 1;
+        lem_pvline(0, lem_line, sizeof(lem_line));
+        printf("  the pane's title line, %d columns: '%s'\n", lem_pvw,
+               lem_line);
+        if ((int)strlen(lem_line) > lem_pvw ||
+            ((int)strlen("Level 2 Fixture three - water and steel") >
+                 lem_pvw &&
+             strcmp(lem_line + strlen(lem_line) - 3, "...") != 0))
+            fail("a level title wider than the pane is cut rather than "
+                 "elided with three full stops");
+        lem_sel = keep;
+    }
+
     /* --- the preview fields, in the original's wording -------------------- */
     if (!glass_has("Number of Lemmings"))
         fail("the preview pane does not carry the original's second line");
@@ -1391,6 +1511,12 @@ int main(int argc, char **argv)
         fail("Play on a greyed row did not show its fact");
     if (!glass_has("LEMSP"))
         fail("the fact does not name the band file that is missing");
+    if (!glass_has("Level 4 Fixture two"))
+        fail("the greyed level's fact is not headed the way every other "
+             "surface names a level - 'Level 4 ...' (LEMS_PV_LEVEL)");
+    if (!glass_has("its special picture is"))
+        fail("a missing special picture's fact quotes something other than "
+             "that ONE picture's cost (wave 4's third review)");
     if (!glass_has("disk"))
         fail("the fact does not name the geometry");
     if (!glass_has("Press mouse button to continue"))
@@ -1426,24 +1552,25 @@ int main(int argc, char **argv)
     if (lem_screen != LEM_SC_LIST)
         fail("a click did not leave the fact screen");
 
-    /* --- Play on a playable row shows the preview screen ------------------- */
+    /* --- Play on a playable row LAUNCHES (wave 5) ---------------------------
+     * The level's preview is the first screen INSIDE the bracket now, in the
+     * second foreign mode (SPEC.md 114.4.3), so the keystroke's whole share is
+     * the launch flag and a wake: nothing drawn, nothing read. */
     lem_sel = 0;
+    lem_launchpend = 0;
+    h_reads = 0;
     counters_reset();
     lem_play(lem_win);
-    printf("  list -> preview %2d calls %4d cells (%d fill)\n",
+    printf("  list -> launch  %2d calls %4d cells (%d fill)\n",
            g_calls, g_cells, g_fills);
-    if (g_fills != 1)
-        fail("Play did not blank the glass before the preview screen");
-    repaint("the preview screen");
-    if (lem_screen != LEM_SC_PREVIEW)
-        fail("Play did not show the preview screen");
-    if (!glass_has("Fixture one"))
-        fail("the preview screen does not name the level");
-    if (!glass_has("Press mouse button to continue"))
-        fail("the preview screen has no footer");
-    os88_onkey(27, 0, lem_win);
+    if (!lem_launchpend)
+        fail("Play on a playable row did not post the launch");
+    if (g_calls != 0 || h_reads != 0)
+        fail("Play drew or read on the keystroke - the preview is the "
+             "bracket's first screen and the bands are the wake's");
     if (lem_screen != LEM_SC_LIST)
-        fail("Esc did not leave the preview screen");
+        fail("Play left the list for a screen the window no longer has");
+    lem_launchpend = 0;
 
     /* --- NO KEYSTROKE TOUCHES A FILE (the gfx lock is HELD on all of them) --
      * os88.h pins os88_onkey and os88_onclick as "the UI task, the gfx lock
@@ -1579,8 +1706,12 @@ int main(int argc, char **argv)
              "glass shows progress the file does not hold");
     if (lem_savable)
         fail("a refused progress write left Save Progress enabled");
-    if (h_toasts != 1 || strcmp(h_lasttoast, lem_str(LEMS_GREY_SAVE)) != 0)
-        fail("a refused progress write was not said with the row's fact");
+    if (h_toasts != 1 || strcmp(h_lasttoast, lem_str(LEMS_SAV_FAIL)) != 0)
+        fail("a refused progress write was not said with its own toast "
+             "(LEMS_SAV_FAIL)");
+    if (strlen(h_lasttoast) > 24)
+        fail("the progress write's toast is longer than TOAST_MAX's 24 - "
+             "the kernel cuts it mid-word (kernel/toast.inc)");
     lem_savable = 1;
     lem_progwrite = 1;
     os88_onwake(lem_win);
@@ -1781,7 +1912,7 @@ int main(int argc, char **argv)
      * y = ((v>>7) & 0x1FF) - 4. */
     lem_r_setup(LEM_RKIND_VGA, 0xA000, 0, 0);
     lem_r_tsetup(lem_cl_t);
-    lem_world_clear();
+    lem_world_clear(1);
     if (!lem_compose_level(0))
         fail("the fixture's first level did not compose");
     {
@@ -1976,7 +2107,7 @@ int main(int argc, char **argv)
      * defect was about: clear, panel + LOADING + present, compose, first
      * frame. Composing once for the VGA arm and reusing it here would let a
      * stale shadow pass. */
-    lem_world_clear();
+    lem_world_clear(1);
     ovl_frame_panel();
     lem_compose_level(0);
     ovl_frame_first(0);
@@ -2042,7 +2173,7 @@ int main(int argc, char **argv)
         lem_view_move(lem_ent_u16(0, LEM_E_STARTX));
         lem_view = (lem_view + 4) & ~7;
         ovl_level_load(0);
-        lem_world_clear();
+        lem_world_clear(1);
         ovl_frame_panel();
         lem_compose_level(0);
         lem_mx = 316;               /* the top right corner of the view */
@@ -2422,7 +2553,7 @@ int main(int argc, char **argv)
         lem_view_move(lem_ent_u16(0, LEM_E_STARTX));
         lem_view = (lem_view + 4) & ~7;
         ovl_level_load(0);
-        lem_world_clear();
+        lem_world_clear(1);
         ovl_frame_panel();
         lem_compose_level(0);
         lem_mx = 316;
@@ -2450,7 +2581,7 @@ int main(int argc, char **argv)
             static struct lem_l keep[LEM_MAXLEM];
             static unsigned char ob[LEM_MAXLEM * 4];
             int j, k, n = 0, rel = lem_released, met = 0, torn = 0, moved = 0;
-            int cy, b0, b1, r0, r1, q;
+            int cy, b0, b1, r0, r1, q, fb, comps, ncas, capc, capf;
 
             memcpy(keep, lem_lm, sizeof keep);
             for (k = 0; k < lem_released; k++)
@@ -2488,10 +2619,40 @@ int main(int argc, char **argv)
             if (j >= lem_cursor)
                 fail("no stepped lemming changed its box - the row tests "
                      "nothing");
-            memcpy(ob, lem_obox, sizeof ob);
             lem_mx = (lem_obox[j * 4] << 3) + 4 - lem_view;
             lem_my = cy - 6;
+            /* THE BOUND (wave 4's third review): a pointer-only tick over
+             * stepped lemmings takes the glass pair and composes NOTHING, so
+             * ovl_infr_whole's ride across the crowd cannot start */
+            fb = lem_c_cmvfb;
+            comps = h_r_comps;
             ovl_tick_draw(0, 0);
+            capc = h_r_comps - comps;
+            capf = lem_c_cmvfb - fb;
+            if (capf != 1 || capc != 0)
+                fail("a pointer move over STEPPED lemmings of a part-stepped "
+                     "frame rode the compose - unbounded across a crowd "
+                     "(lemdraw.c LEM_CMV_CAP)");
+            if (lem_curx != lem_mx || lem_cury != lem_my)
+                fail("the capped pointer move did not put the pointer where "
+                     "the mouse is (the glass pair)");
+            /* ...and the NEGATIVE CONTROL: the cap lifted, the same kind of
+             * move rides the compose, and ovl_infr_whole turns the stepped
+             * lemmings it meets into rectangles - the count the cap exists to
+             * hold at zero. It must still draw nobody torn. */
+            lem_cmv_cap = 99;
+            memcpy(ob, lem_obox, sizeof ob);
+            lem_mx += 8;
+            ovl_tick_draw(0, 0);
+            ncas = lem_c_infr;
+            lem_cmv_cap = LEM_CMV_CAP;
+            printf("  a pointer over a part-stepped crowd: capped, %d glass "
+                   "pair and %d composes; uncapped (negative control), %d "
+                   "stepped lemmings ridden into the compose\n",
+                   capf, capc, ncas);
+            if (ncas == 0)
+                fail("the negative control's uncapped pointer compose rode no "
+                     "stepped lemming - the cap's row tests nothing");
             for (j = 0; j < lem_cursor; j++) {
                 if (ob[j * 4] == 0xFF || !ovl_rc_meets(&ob[j * 4]))
                     continue;
@@ -2926,15 +3087,13 @@ int main(int argc, char **argv)
     lem_top = 0;
     glass_clear();
     repaint("the list, before a launch");
-    lem_play(lem_win);
-    if (lem_screen != LEM_SC_PREVIEW)
-        fail("Play did not reach the preview screen");
     h_reads = 0;
     h_wakes = 0;
     h_fsx_runs = 0;
     h_toasts = 0;
     counters_reset();
-    os88_onkey(13, 0, lem_win);
+    os88_onkey(13, 0, lem_win);     /* Enter on the list: Play (wave 5 - the
+                                     * preview is the bracket's first screen) */
     if (h_reads != 0)
         fail("a launch keystroke read a file - ~131 KB of band with the gfx "
              "lock HELD, which is SPEC.md 114.6's first table row put back one "
@@ -2964,11 +3123,13 @@ int main(int argc, char **argv)
     ovl_launch(lem_win);
     if (h_fsx_runs != 1)
         fail("the launch did not enter the bracket");
-    printf("  after Esc: screen %d, exit %d, finished %d\n", lem_screen,
+    printf("  after Esc: screen %d, exit %d, finished %d (no screens' mode "
+           "on this display: the postview is the window's)\n", lem_screen,
            lem_exit, lem_finished);
     if (lem_screen != LEM_SC_POST)
-        fail("Esc out of a level did not reach the postview (Lemmix :463, "
-             "'if Key = VK_ESCAPE then Game.Finish')");
+        fail("Esc out of a level, on a display with no screens' mode, did not "
+             "reach the WINDOW's postview (Lemmix :463, 'if Key = VK_ESCAPE "
+             "then Game.Finish'; ovl_r_mode's refusal is a normal path)");
     if (!h_fsx_ticks)
         fail("the bracket never waited for a tick - the input poll and the "
              "cursor are once per TICK and unconditional");
@@ -3089,7 +3250,7 @@ int main(int argc, char **argv)
         lem_timeup = 0;
         for (j = 0; j < 2; j++) {
             lem_saved = 0;
-            w = ovl_postview(rats[j], lvls[j]);
+            w = ovl_postview(rats[j], lvls[j], LEM_PO_WIN);
             lem_wrap();
             printf("  postview %s, 20-row box: %d lines, line 18 \"%s\"\n",
                    j ? "of Mayhem 30" : "of Fun 1", lem_wrapn,
@@ -3130,9 +3291,14 @@ int main(int argc, char **argv)
         if (lem_post_nrat != 0 || lem_post_next != LEM_PERRAT - 1)
             fail("losing a section's last level does not retry it");
         lem_rating = LEM_RATINGS - 1;
-        ovl_post_target(1, LEM_PERRAT - 1);
-        if (lem_post_nrat != LEM_RATINGS - 1)
-            fail("Mayhem 30 has no next section, and the port invented one");
+        lem_progwrite = 0;
+        if (ovl_post_target(1, LEM_PERRAT - 1) || lem_progwrite)
+            fail("winning Mayhem 30 posted a progress write for Fun 1, which "
+                 "is no level reached");
+        if (lem_post_nrat != 0 || lem_post_next != 0)
+            fail("continuing from the congratulation is not Fun 1 - Lemmix's "
+                 "NextInfo is nil after Mayhem 30 and its preview falls back to "
+                 "LevelSystem.FirstLevel (GameScreen.Preview.pas:89-90)");
         lem_rating = 0;
         ovl_post_target(1, 4);
         if (lem_post_nrat != 0 || lem_post_next != 5)
@@ -3216,16 +3382,33 @@ int main(int argc, char **argv)
     lem_free_all();
     {
         unsigned hog[8];
-        int k, n = 0;
+        int k, n = 0, c0, f0, n0;
 
         for (k = 0; k < 8; k++) {
             hog[k] = os88_mem_claim(64);
             if (hog[k])
                 n++;
         }
+        /* ASKED FROM THE LIST, A REFUSAL DRAWS NOTHING (wave 5's second
+         * review): the list is already the glass and its shadow says so, so
+         * the toast is the whole answer - a blank-and-repaint here was ~674
+         * ms and a white flash on every refused Play */
+        lem_screen = LEM_SC_LIST;
+        lem_repaint(lem_win, 1, 1);
+        lem_ask_launch(lem_win);
+        lem_launchpend = 0;
         h_toasts = 0;
         h_fsx_runs = 0;
+        c0 = g_calls;
+        f0 = g_fills;
+        n0 = g_cells;
         ovl_launch(lem_win);
+        printf("  a refused Play from the list: %d call(s), %d fill(s), %d "
+               "cell(s); shadow %s\n", g_calls - c0, g_fills - f0,
+               g_cells - n0, lem_sh_ok ? "still the glass" : "INVALIDATED");
+        if (g_calls != c0 || g_fills != f0 || g_cells != n0 || !lem_sh_ok)
+            fail("a launch refused from the list repainted the list it was "
+                 "asked from - only the toast changes");
         if (h_fsx_runs != 0)
             fail("the launch entered the bracket with no memory for the level");
         if (h_toasts == 0)
@@ -3233,10 +3416,516 @@ int main(int argc, char **argv)
                  "the arithmetic, said in a WINDOW");
         else
             printf("  refusal: %s\n", h_lasttoast);
+        if (strlen(h_lasttoast) > 24)
+            fail("the launch's refusal toast is longer than TOAST_MAX's 24 "
+                 "- the kernel cuts it mid-word (wave 4's third review)");
         for (k = 0; k < 8; k++)
             if (hog[k])
                 os88_mem_free(hog[k]);
         (void)n;
+    }
+
+    /* ======================================================================
+     * WAVE 5: THE ORIGINAL'S TWO SCREENS, INSIDE THE BRACKET (SPEC.md 114.4.3)
+     *
+     * Driven through the same ovl_launch() the wake runs, against
+     * hosttest/lemraster.c's model of the 640x350 surface: which row each
+     * line sits on, how wide it is, and that nothing is lettered on a row the
+     * card does not show. The screens are answered from their own scripts
+     * (os88_fsx_key's h_pv_keys / h_po_keys), so each leaves when the row
+     * says.
+     * ====================================================================*/
+    {
+        int k, x0, x1, y, runs, pv, ok, keepcaps, keepkind, before, kp0, cr0;
+        static const char congr[] = "Everybody here at DMA Design salutes you";
+
+        keepcaps = h_caps;
+        keepkind = h_vidkind;
+        h_caps = (1 << OS88_FSXM_VGA0D) | (1 << OS88_FSXM_VGA12) |
+                 (1 << OS88_FSXM_CGA320) | (1 << OS88_FSXM_CGA640);
+        h_vidkind = OS88_VID_VGA;
+        lem_mode_ok = lem_probe_mode(lem_win);
+        lem_rating = 0;
+        lem_rating_load(0);
+
+        /* --- the preview, on a VGA: Esc from it is the menu --------------- */
+        h_pv_keys[0] = 0;               /* no script: Esc */
+        h_pv_hold = 80 / 8;             /* ...once the picture is drawn */
+        h_pv_asked = 0;
+        h_fsx_runs = 0;
+        h_p_minis = 0;
+        h_p_pals = 0;
+        lem_sel = 0;
+        lem_screen = LEM_SC_LIST;
+        ovl_launch(lem_win);
+        k = h_p_find("Level 1 Fixture one");
+        printf("  preview, VGA: title row %d x %d, footer row %d x %d..%d, "
+               "lowest glyph row %d, %d picture rows, exit %d\n",
+               k >= 0 ? h_p_ly[k] : -1, k >= 0 ? h_p_lx0[k] : -1,
+               lem_scr_fy, h_p_find("Press mouse button") >= 0
+                   ? h_p_lx0[h_p_find("Press mouse button")] : -1,
+               h_p_find("Press mouse button") >= 0
+                   ? h_p_lx1[h_p_find("Press mouse button")] : -1,
+               h_p_lowest - 1, h_p_minis, lem_exit);
+        if (h_fsx_runs != 1 || !h_pv_asked)
+            fail("the preview did not run inside the bracket");
+        if (k < 0 || h_p_ly[k] != 82 || h_p_lx0[k] != 0)
+            fail("the preview's title is not Lemmix's line 0 - x 0, y 82 "
+                 "(GameScreen.Preview.pas BuildScreen)");
+        k = h_p_find("Number of Lemmings");
+        if (k < 0 || h_p_ly[k] != 82 + 3 * 16 || h_p_lx0[k] != 160)
+            fail("the preview's value lines are not at aLines[03]'s row with "
+                 "the ten-space IndentStr");
+        k = h_p_find("Press mouse button to continue");
+        if (k < 0 || h_p_ly[k] != 322 || h_p_lx0[k] != 80 ||
+            h_p_lx1[k] != 559)
+            fail("the preview's footer is not aLines[15] centred at y 322");
+        if (h_p_lowest != 338 || h_p_clipped || h_p_wide)
+            fail("the preview's lowest glyph row is not 337, or a glyph was "
+                 "lettered off the surface");
+        if (h_p_minis != 80 || !h_p_pals)
+            fail("the preview did not draw its 80-row picture in its own "
+                 "palette");
+        if (lem_exit != LEM_X_MENU || lem_screen != LEM_SC_LIST ||
+            lem_playing >= 0)
+            fail("Esc on the preview is the original's menu - the list, the "
+                 "level let go (GameScreen.Preview.pas Form_KeyDown)");
+
+        /* --- the session: preview, play, postview, RETRY, preview, menu ---
+         * One bracket. The postview's left button (Enter here) on a failure
+         * retries: the level is read again INSIDE the bracket (SPEC.md 53.1)
+         * and the preview comes back - and Esc there leaves. */
+        h_pv_keys[0] = 0x1C0D;          /* Enter: play */
+        h_pv_keys[1] = 0;               /* ...then Esc on the second preview */
+        h_po_keys[0] = 0x1C0D;          /* Enter on the postview: retry */
+        h_po_keys[1] = 0;
+        h_fsx_runs = 0;
+        h_pv_asked = 0;
+        h_po_asked = 0;
+        h_reads = 0;
+        h_writes = 0;
+        h_toasts = 0;
+        pv = h_p_clears;
+        kp0 = h_kpaints;
+        cr0 = h_p_clrows;
+        lem_sel = 0;
+        lem_progwrite = 0;
+        lem_screen = LEM_SC_LIST;
+        ovl_launch(lem_win);
+        runs = h_fsx_runs;
+        /* THE PAGE IS CLEARED ONLY WHERE THE TILE DOES NOT GO: the preview's
+         * 80-row well twice, the postview not at all (lemfont.inc
+         * lem_p_clear) - it was the whole page under every screen */
+        printf("  page clears: %d surface rows over %d screens\n",
+               h_p_clrows - cr0, h_p_clears - pv);
+        if (h_p_clrows - cr0 > 2 * 80)
+            fail("a screen cleared rows the brown tile writes anyway");
+        printf("  a session: %d bracket(s), %d screens drawn, preview asked "
+               "%d, postview asked %d, %d reads, exit %d\n", runs,
+               h_p_clears - pv, h_pv_asked, h_po_asked, h_reads, lem_exit);
+        if (runs != 1 || !h_po_asked || h_p_clears - pv < 3)
+            fail("preview -> play -> postview -> retry -> preview did not run "
+                 "as one bracket");
+        if (lem_exit != LEM_X_MENU || lem_screen != LEM_SC_LIST)
+            fail("Esc on the retried level's preview did not reach the list");
+        /* ...AND THE KERNEL'S PAINT IS THE LIST'S ONLY ONE: the screen is
+         * chosen before os88_fullscreen(win, 0), whose W_PAINT draws it, so
+         * the program issues nothing after it (SPEC.md 114.4.6's "leave the
+         * bracket" row - it was a third full repaint, a fill and 28 calls) */
+        printf("  leaving the bracket (Esc): %d kernel paint(s) this launch, "
+               "then %d call(s) and %d fill(s) of the program's\n",
+               h_kpaints - kp0, g_calls - h_kp_calls, g_fills - h_kp_fills);
+        if (g_calls != h_kp_calls || g_fills != h_kp_fills)
+            fail("leaving the bracket for the list repainted after the "
+                 "kernel's own paint had drawn it");
+        if (h_kpaints - kp0 < 3)
+            fail("the harness did not model the three kernel paints of a "
+                 "launch - the row above measures nothing");
+        /* ...AND INSIDE THE KERNEL'S PAINTS: the two that land while the
+         * window is fullscreen around the bracket (wm_raise on the way in,
+         * the fsx exit's on the way out) are the kernel's fill and nothing
+         * of ours - each was a whole LIST at the fullscreen width, ~674 ms,
+         * the second visible. The third is the list the glass keeps. */
+        for (k = kp0; k < h_kpaints; k++)
+            printf("  kernel paint %d of the launch: the program's %d "
+                   "call(s), %d cell(s)\n", k - kp0 + 1,
+                   h_kp_pcalls[k & 15], h_kp_pcells[k & 15]);
+        if (h_kp_pcells[kp0 & 15] || h_kp_pcells[(kp0 + 1) & 15] ||
+            h_kp_pcalls[kp0 & 15] || h_kp_pcalls[(kp0 + 1) & 15])
+            fail("a kernel paint while the window was fullscreen around the "
+                 "bracket drew the program's screen - nobody sees it, and "
+                 "the exit's is the wrong screen flashing (lem_fsq)");
+        if (!h_kp_pcells[(kp0 + 2) & 15])
+            fail("os88_fullscreen(win, 0)'s paint drew nothing - the list "
+                 "is not on the glass");
+        audit_shadow("leaving the bracket (Esc)");
+        if (h_toasts != 0)
+            fail("the session toasted - nothing may be said inside the "
+                 "bracket, and nothing went wrong");
+        h_po_keys[0] = 0;
+
+        /* --- A HELD Esc DOES NOT ANSWER THE POSTVIEW (wave 5's second
+         * review). The play loop stops at the first exit key; a typematic
+         * repeat queued behind it was read by the postview as the menu
+         * before the result had been seen. Esc is scan 01, no E0 prefix, so
+         * this is not SPEC.md 9.7's doubled-key class. Play ends on the
+         * first of two Escs; the postview must drain the second and answer
+         * its OWN key (Enter: retry), and the retried preview its own (Esc). */
+        h_fsx_keys[0] = 0x011B;
+        h_fsx_keys[1] = 0x011B;
+        h_fsx_keyn = 2;
+        h_pv_keys[0] = 0x1C0D;
+        h_pv_keys[1] = 0;
+        h_po_keys[0] = 0x1C0D;
+        h_po_keys[1] = 0;
+        pv = h_p_clears;
+        lem_sel = 0;
+        lem_progwrite = 0;
+        lem_screen = LEM_SC_LIST;
+        ovl_launch(lem_win);
+        printf("  a held Esc: play read %d of 2 queued, the postview "
+               "answered %s, %d screens drawn, exit %d\n", h_fsx_keyi,
+               h_po_ki ? "its own key" : "THE STALE Esc", h_p_clears - pv,
+               lem_exit);
+        if (h_po_ki != 1 || h_fsx_keyi != 2 || h_p_clears - pv < 3)
+            fail("a typematic Esc queued behind the one that ended play "
+                 "answered the postview - the screens drain the buffer the "
+                 "way lem_sbtn = 0xFF guards the buttons");
+        h_fsx_keyn = 0;
+        h_fsx_keyi = 0;
+        h_po_keys[0] = 0;
+
+        /* --- A HERCULES SCREEN AFTER PLAY SETS NO MODE (wave 5's second
+         * review): play and the screens are the same FSXM_HERC, and the set
+         * was a black frame between the last game frame and the postview and
+         * a 32 KB wipe of a surface the tile covers. A VGA's 0Dh -> 12h is a
+         * real change and is still set. Play always sets its own. */
+        {
+            int hm, vm, sm;
+
+            h_caps = (1 << OS88_FSXM_HERC);
+            h_vidkind = OS88_VID_HERC;
+            lem_mode_ok = lem_probe_mode(lem_win);
+            if (!ovl_level_load(0))
+                fail("fixture level 0 did not load on a Hercules");
+            lem_live_id = -1;           /* lem_fsx_main's two resets */
+            lem_onscr = 0;
+            sm = h_modesets;
+            ovl_r_mode(1);              /* the preview */
+            ovl_r_mode(0);              /* play */
+            lem_r_unprep();
+            ovl_r_mode(1);              /* the postview */
+            ovl_r_mode(1);              /* the next preview */
+            hm = h_modesets - sm;
+            lem_abandon();
+            h_caps = (1 << OS88_FSXM_VGA0D) | (1 << OS88_FSXM_VGA12) |
+                     (1 << OS88_FSXM_CGA320) | (1 << OS88_FSXM_CGA640);
+            h_vidkind = OS88_VID_VGA;
+            lem_mode_ok = lem_probe_mode(lem_win);
+            if (!ovl_level_load(0))
+                fail("fixture level 0 did not load on a VGA");
+            lem_live_id = -1;           /* lem_fsx_main's two resets */
+            lem_onscr = 0;
+            sm = h_modesets;
+            ovl_r_mode(1);
+            ovl_r_mode(0);
+            lem_r_unprep();
+            ovl_r_mode(1);
+            ovl_r_mode(1);
+            vm = h_modesets - sm;
+            lem_abandon();
+            lem_onscr = 0;
+            printf("  mode sets over preview, play, postview, preview: "
+                   "Hercules %d, VGA %d\n", hm, vm);
+            if (hm != 2)
+                fail("a Hercules screen after play set FSXM_HERC again - the "
+                     "mode is up, and the set is a black frame and a 32 KB "
+                     "wipe the tile covers anyway");
+            if (vm != 3)
+                fail("a VGA's play -> postview did not set mode 12h, or a "
+                     "screen after a screen set it again");
+        }
+
+        /* --- THE MENU AFTER A SUCCESS IS ON THE NEXT LEVEL ----------------
+         * Lemmix's GetScreenText moves CurrentLevelInfo to NextInfo before
+         * the postview is drawn, so the menu's next Play is the next level;
+         * after Mayhem 30 the preview falls back to FirstLevel. The bracket's
+         * postview (ovl_post_move) and the window's (ovl_post_menu, whose
+         * section crossing is owed to the wake) must both leave it there. */
+        lem_rating_load(0);
+        lem_rating = 0;
+        lem_progwrite = 0;
+        (void)ovl_post_target(1, 4);
+        lem_progwrite = 0;
+        k = ovl_post_move();
+        x1 = lem_sel;
+        if (k >= 0 || lem_sel != 5 || lem_rating != 0)
+            fail("the postview's menu after Fun 5 won is not on Fun 6 "
+                 "(Postview.pas GetScreenText: CurrentLevelInfo := NextInfo)");
+        lem_rating = 3;
+        (void)ovl_post_target(1, LEM_PERRAT - 1);
+        lem_progwrite = 0;
+        k = ovl_post_move();
+        printf("  menu after a success: Fun 5 -> sel %d; Mayhem 30 -> rating "
+               "%d sel %d\n", x1, lem_rating, lem_sel);
+        if (k >= 0 || lem_rating != 0 || lem_sel != 0 || !lem_rat_ok)
+            fail("the menu after Mayhem 30's congratulation is not on Fun 1 "
+                 "(Preview.pas :89-90's FirstLevel fallback)");
+        /* ...the WINDOW's postview, across a section: selected by the wake,
+         * never launched */
+        lem_rating = 0;
+        (void)ovl_post_target(1, LEM_PERRAT - 1);   /* Fun 30 won: Tricky 1 */
+        lem_progwrite = 0;
+        lem_po_succ = 1;
+        lem_screen = LEM_SC_POST;
+        h_fsx_runs = 0;
+        os88_onkey(27, 1, lem_win);
+        if (lem_screen != LEM_SC_LIST || lem_rating != 1 || !lem_ratpend ||
+            lem_post_play != 2)
+            fail("Esc on the window's postview after Fun 30 did not owe the "
+                 "wake Tricky's first level");
+        os88_onwake(lem_win);
+        if (lem_sel != 0 || lem_rating != 1 || lem_post_play || h_fsx_runs)
+            fail("the wake did not select Tricky 1 without launching it");
+        /* ...and within a section, at once */
+        lem_rating_load(0);
+        lem_rating = 0;
+        (void)ovl_post_target(1, 2);
+        lem_progwrite = 0;
+        lem_po_succ = 1;
+        lem_screen = LEM_SC_POST;
+        os88_onkey(27, 1, lem_win);
+        if (lem_screen != LEM_SC_LIST || lem_sel != 3 || lem_ratpend)
+            fail("Esc on the window's postview after Fun 3 won is not on "
+                 "Fun 4");
+        lem_po_succ = 0;
+        lem_sel = 0;
+
+        /* --- the postview, in the original's coordinates ----------------- */
+        if (!ovl_level_load(0))
+            fail("the postview row could not load level 1");
+        lem_playing = 0;
+        lem_p_setup(LEM_RKIND_VGA, 0xA000);
+        lem_nuked = 0;
+        lem_timeup = 0;
+        lem_saved = 10;                 /* 10 of 10: text 8 */
+        ovl_po_draw(0);
+        ok = lem_po_ix == 8 && h_p_find("Superb!") >= 0;
+        k = h_p_find("All lemmings accounted for.");
+        if (k < 0 || h_p_ly[k] != 16 || h_p_lx0[k] != 320 - 8 * 27)
+            fail("the postview's top line is not centred at y 16 "
+                 "(Postview.pas BuildScreen)");
+        k = h_p_find("Press left mouse button for next level");
+        x0 = h_p_find("Press right mouse button for menu");
+        printf("  postview, VGA, 10 of 10: text %d, footer row %d, menu row "
+               "%d, lowest %d\n", lem_po_ix, k >= 0 ? h_p_ly[k] : -1,
+               x0 >= 0 ? h_p_ly[x0] : -1, h_p_lowest - 1);
+        if (!ok)
+            fail("10 of 10 is not result text 8 (GetResultText: Done = 100)");
+        if (k < 0 || h_p_ly[k] != 16 + 18 * 16)
+            fail("the postview's footer is not on :189's forced line 18");
+        if (x0 < 0 || h_p_ly[x0] != 16 + 19 * 16)
+            fail("the bracket's postview does not carry 'Press right mouse "
+                 "button for menu' on line 19");
+        lem_saved = 2;                  /* 20% of a 50% level: text 1 */
+        ovl_po_draw(0);
+        if (lem_po_ix != 1 || h_p_find("Better rethink") < 0)
+            fail("a fifth of the target is not result text 1 (GetResultText: "
+                 "Done < Target div 2)");
+        k = h_p_find("Press left mouse button to retry level");
+        if (k < 0 || h_p_ly[k] != 16 + 18 * 16 || h_p_clipped)
+            fail("the failure footer moved - both branches take the failure "
+                 "branch's AddLineFeed(5) (SPEC.md 114.8)");
+
+        /* --- the congratulation: its middle line is the surface's width --- */
+        lem_rating = LEM_RATINGS - 1;
+        lem_saved = 0;
+        ovl_po_draw(LEM_PERRAT - 1);
+        k = h_p_find(congr);
+        x0 = k >= 0 ? h_p_lx0[k] : -1;
+        x1 = k >= 0 ? h_p_lx1[k] : -1;
+        printf("  congratulation, VGA: '%s' spans x %d..%d\n", congr, x0, x1);
+        if (x0 != 0 || x1 != 639)
+            fail("'Everybody here at DMA Design salutes you' is not exactly "
+                 "640 pixels of the purple font - the second confirmation of "
+                 "the 640x350 surface (SPEC.md 114.1)");
+
+        /* --- a Hercules: the same layout, its lowest glyph row on the glass */
+        lem_p_setup(LEM_RKIND_HERC, 0xB000);
+        lem_rating = 0;
+        ovl_pv_draw(0);
+        y = h_p_lowest - 1;
+        k = h_p_clipped;
+        lem_rating = LEM_RATINGS - 1;
+        ovl_po_draw(LEM_PERRAT - 1);
+        x0 = h_p_find(congr) >= 0 ? h_p_lx0[h_p_find(congr)] : -1;
+        x1 = h_p_find(congr) >= 0 ? h_p_lx1[h_p_find(congr)] : -1;
+        printf("  Hercules: preview lowest glyph row %d of 348, %d clipped; "
+               "congratulation x %d..%d\n", y, k + h_p_clipped, x0, x1);
+        if (y != 337 || k || h_p_clipped || x0 != 0 || x1 != 639)
+            fail("the Hercules layout is not the original's, or it letters a "
+                 "row past 347");
+        lem_rating = 0;
+
+        /* --- a CGA: 12 rows of 16 in 200, the blank lines compressed out --
+         * (SPEC.md 114.4.3, LEMS_GREY_EGA): nothing past row 199, every
+         * content line at its true width and pitch */
+        h_caps = (1 << OS88_FSXM_CGA320) | (1 << OS88_FSXM_CGA640);
+        h_vidkind = OS88_VID_CGA;
+        lem_mode_ok = lem_probe_mode(lem_win);
+        lem_p_setup(LEM_RKIND_CGA, 0xB800);
+        ovl_pv_draw(0);
+        k = h_p_find("Press mouse button to continue");
+        printf("  CGA preview: %d lines, footer row %d, lowest %d of 200, %d "
+               "clipped\n", h_p_nl, k >= 0 ? h_p_ly[k] : -1, h_p_lowest - 1,
+               h_p_clipped);
+        if (k < 0 || h_p_lowest > 200 || h_p_clipped || h_p_nl != 8)
+            fail("the CGA preview lost a line or lettered past row 199");
+        for (k = 1; k < h_p_nl; k++)
+            if (h_p_ly[k] != h_p_ly[k - 1] + 16)
+                fail("the CGA preview's lines are not at their 16-pixel "
+                     "pitch with the blank lines compressed out");
+        lem_saved = 10;
+        ovl_po_draw(0);
+        printf("  CGA postview: %d lines from row %d, lowest %d of 200, %d "
+               "clipped\n", h_p_nl, h_p_nl ? h_p_ly[0] : -1, h_p_lowest - 1,
+               h_p_clipped);
+        if (h_p_lowest > 200 || h_p_clipped ||
+            h_p_find("Press right mouse button for menu") < 0 ||
+            h_p_find("Press left mouse button for next level") < 0)
+            fail("the CGA postview lost its footers or lettered past row 199");
+        lem_rating = LEM_RATINGS - 1;
+        ovl_po_draw(LEM_PERRAT - 1);
+        lem_rating = 0;
+        if (h_p_lowest > 200 || h_p_clipped || h_p_find(congr) < 0 ||
+            h_p_find("Now hold your breath") < 0 ||
+            h_p_find("Press mouse button to continue") < 0)
+            fail("the CGA congratulation lost a line or lettered past row "
+                 "199");
+        /* ...and a real launch there draws the 64-row picture */
+        h_pv_keys[0] = 0;
+        h_pv_hold = 64 / 8;
+        h_p_minis = 0;
+        lem_sel = 0;
+        lem_screen = LEM_SC_LIST;
+        ovl_launch(lem_win);
+        if (h_p_minis != 64)
+            fail("the CGA preview's picture is not 64 rows (GREY_EGA)");
+
+        /* --- the Mode row's facts on that CGA, with an 83-key keyboard: all
+         * three, and all of them inside the 137-pixel launcher ------------ */
+        h_bda96 = 0;
+        h_h = 137;
+        glass_clear();
+        lem_screen = LEM_SC_LIST;
+        repaint("a CGA, an XT keyboard");
+        if (!lem_state_grey(LEM_ROW_MODE))
+            fail("the Mode row is not greyed on a CGA");
+        lem_show_fact(lem_win, lem_state_label(LEM_ROW_MODE),
+                      lem_state_fact(LEM_ROW_MODE), -1);
+        printf("  the Mode row's fact, CGA + 83-key keyboard: %d lines in a "
+               "%d-row box (%d bytes)\n", lem_wrapn, lem_rows, lem_paran);
+        if (!strstr(lem_para, "a CGA 0x000F") ||
+            !strstr(lem_para, "640x350") || !strstr(lem_para, "F11"))
+            fail("the CGA Mode row does not name its three facts");
+        if (lem_wrapn > lem_rows - 2)
+            fail("the Mode row's three facts do not fit a CGA's launcher - "
+                 "the last of them is under the footer");
+        lem_back(lem_win);
+        /* ...and on a VGA with an AT keyboard the row is not greyed at all;
+         * with an XT keyboard it is, for the keyboard alone */
+        h_caps = keepcaps | (1 << OS88_FSXM_VGA12);
+        h_vidkind = OS88_VID_VGA;
+        lem_mode_ok = lem_probe_mode(lem_win);
+        h_h = 189;
+        if (!lem_state_grey(LEM_ROW_MODE))
+            fail("a VGA with an 83-key keyboard does not grey the Mode row");
+        lem_show_fact(lem_win, lem_state_label(LEM_ROW_MODE),
+                      lem_state_fact(LEM_ROW_MODE), -1);
+        if (strstr(lem_para, "0x000F") || !strstr(lem_para, "F11"))
+            fail("a VGA's Mode row says a mode sentence that is not true of "
+                 "it, or not the keyboard's");
+        lem_back(lem_win);
+        h_bda96 = 0x10;
+        if (lem_state_grey(LEM_ROW_MODE))
+            fail("a VGA with an AT keyboard greys the Mode row");
+        /* ...and the Music row carries the speaker's fact where it is true */
+        lem_snd = 0;
+        lem_show_fact(lem_win, lem_state_label(LEM_ROW_MUSIC),
+                      lem_state_fact(LEM_ROW_MUSIC), -1);
+        if (!strstr(lem_para, "ADLIB.DAT") ||
+            !strstr(lem_para, "os88_snd_caps()"))
+            fail("the Music row on a machine with no tone path does not name "
+                 "both its facts");
+        lem_back(lem_win);
+        lem_snd = 1;
+        lem_show_fact(lem_win, lem_state_label(LEM_ROW_MUSIC),
+                      lem_state_fact(LEM_ROW_MUSIC), -1);
+        if (strstr(lem_para, "os88_snd_caps()"))
+            fail("the Music row names a speaker fact on a machine that has "
+                 "the tone path");
+        lem_back(lem_win);
+
+        /* --- 'f' on the preview keeps the level; the door back in draws the
+         * preview again WITHOUT composing ------------------------------- */
+        h_pv_keys[0] = 'f';
+        h_pv_keys[1] = 0;
+        lem_sel = 0;
+        lem_screen = LEM_SC_LIST;
+        ovl_launch(lem_win);
+        if (lem_exit != LEM_X_SUSPEND || !lem_suspended ||
+            lem_screen != LEM_SC_PREVIEW || lem_started)
+            fail("'f' on the preview did not keep the level (SPEC.md "
+                 "11.2.1's door)");
+        before = h_r_worldpix;
+        h_pv_keys[0] = 0;
+        ovl_launch(lem_win);            /* the door back in, Esc on it */
+        printf("  'f' on the preview: kept, then back in with %d world "
+               "pixels composed again\n", h_r_worldpix - before);
+        if (h_r_worldpix != before)
+            fail("bringing a kept preview back composed the level again");
+        if (lem_exit != LEM_X_MENU || lem_suspended)
+            fail("Esc on the kept level's preview did not let it go");
+
+        /* --- the result is RECORDED inside the bracket; a write the disk
+         * refuses is said OUTSIDE it, in 24 characters ------------------ */
+        if (!ovl_level_load(0))
+            fail("the progress row could not load level 1");
+        lem_playing = 0;
+        lem_rating = 0;
+        lem_started = 1;
+        lem_saved = 10;
+        lem_prog[0] = -1;
+        lem_savable = 1;
+        lem_savfail = 0;
+        h_writes = 0;
+        h_toasts = 0;
+        h_po_keys[0] = 0;
+        ovl_po_screen();
+        if (h_writes != 1 || lem_progwrite || !lem_po_saved || h_toasts)
+            fail("the bracket's postview did not record the level while it "
+                 "was read, or toasted inside the bracket");
+        lem_prog[0] = -1;
+        h_write_fail = 1;
+        ovl_po_screen();
+        h_write_fail = 0;
+        if (!lem_savfail || h_toasts)
+            fail("a write the disk refused inside the bracket was not held "
+                 "for the window, or was toasted into the foreign mode");
+        ovl_said_save();
+        if (h_toasts != 1 || strcmp(h_lasttoast, lem_str(LEMS_SAV_FAIL)) ||
+            lem_savfail)
+            fail("the held write failure was not said once, as SAV_FAIL");
+        lem_started = 0;
+        lem_onscr = 0;
+        lem_savable = 1;
+        lem_abandon();
+
+        h_caps = keepcaps;
+        h_vidkind = keepkind;
+        lem_mode_ok = lem_probe_mode(lem_win);
+        h_pv_keys[0] = 0x1C0D;
+        h_pv_keys[1] = 0;
     }
 
     if (g_bad) {

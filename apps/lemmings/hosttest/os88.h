@@ -200,7 +200,7 @@ void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
 void lem_r_prep(void);
 void lem_r_unprep(void);
 void lem_r_pal(unsigned seg, unsigned stdoff, unsigned cusoff);
-void lem_r_clearworld(void);
+void lem_r_clearworld(int vram);
 void lem_r_wsetup(unsigned p0, unsigned p3);
 void lem_r_tsetup(unsigned t);
 void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
@@ -232,6 +232,14 @@ int  lem_f_index(int ch);
 void lem_f_cell(unsigned seg, unsigned off, int col, int row, int ch);
 void lem_f_run(unsigned seg, unsigned off, int col, int row, const char *s,
                int n);
+void lem_p_setup(int kind, unsigned fbseg);
+void lem_p_clear(int y0, int y1);
+void lem_p_rect(int x, int y, int w, int h, int colour);
+void lem_p_tile(unsigned seg, unsigned off, int y0, int y1);
+void lem_p_text(unsigned seg, unsigned off, int x, int y, const char *s,
+                int n);
+void lem_p_mini(int y, int srow);
+void lem_p_pal(unsigned mseg, unsigned moff, unsigned bseg, unsigned coff);
 
 /* files */
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);

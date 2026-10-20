@@ -547,7 +547,7 @@ static void lem_row_level(int row)
 static void lem_pvline(int line, char *dst, unsigned cap)
 {
     dst[0] = 0;
-    ovl_fmt(line, lem_sel, dst, cap);
+    ovl_pvline(line, lem_sel, dst, cap, lem_pvw);   /* elided to the pane */
 }
 
 /* --- the four state rows ---------------------------------------------------
@@ -555,10 +555,21 @@ static void lem_pvline(int line, char *dst, unsigned cap)
  * and, where it is greyed, is drawn with the disabled pen; clicking it shows
  * the FACT that greys it, which is a sentence the converter wrote and this
  * program never composed. */
+/* lem_kbd101 - does this machine's keyboard have F11 and F12? The BIOS says
+ * so at 0040:0096 bit 4 (a 101/102-key keyboard), and it is the very bit
+ * os88_fsx_key() picks the enhanced int 16h pair by (apps/cc/os88.h) - so it
+ * is the predicate the in-level F11, F12 and Pause would answer on, which is
+ * SPEC.md 47 rule 4's one predicate for the greying and the action. */
+static int lem_kbd101(void)
+{
+    return (os88_peek(0x40, 0x96) & 0x10) != 0;
+}
+
 static int lem_state_grey(int row)
 {
     if (row == LEM_ROW_MODE)
-        return !lem_mode_ok;
+        return !lem_mode_ok || !lem_kbd101();   /* the row's second line,
+                                                 * SPEC.md 114.8 */
     if (row == LEM_ROW_SAVE)
         return !lem_savable;
     return 1;                       /* Music and Level Code on every machine:
@@ -830,9 +841,15 @@ static void lem_repaint(void *win, int full, int arm)
      * lem_layout says what a page turn costs and why it is a page and not a
      * row). Neither is knowable at the call site, which is why both are decided
      * here and the callers stay two lem_mark()s long. */
-    if (lem_rows != oldrows || lem_cols != oldcols)
+    if (lem_rows != oldrows || lem_cols != oldcols) {
         full = 1;
-    else if (lem_top != oldtop)
+        /* ...AND A PARAGRAPH IS RE-WRAPPED to the width it is now drawn at:
+         * a fullscreen exit changes the box with no W_ONRESIZE (kernel/wm.inc
+         * wm_fs_drop), and ovl_launch() chooses and wraps the screen BEFORE
+         * os88_fullscreen(win, 0) so that one kernel paint draws it */
+        if (lem_cols != oldcols && lem_screen != LEM_SC_LIST)
+            lem_wrap();
+    } else if (lem_top != oldtop)
         lem_mark_range(LEM_LISTTOP, lem_playrow - 1);
 
     /* ARM THE CLIP REGION UNLESS THE KERNEL ALREADY DID (SPEC.md 11.3). It arms
@@ -1085,14 +1102,24 @@ static int lem_blank_glass(void *win)
     return 1;
 }
 
-static void lem_show_fact(void *win, int labelid, int strid, int level)
+/* lem_set_fact - CHOOSE the fact screen and draw nothing: 1 = it is chosen.
+ * ovl_launch() calls it before os88_fullscreen(win, 0), whose kernel paint
+ * then draws it once (SPEC.md 114.4.6's "leave the bracket" row). */
+static int lem_set_fact(int labelid, int strid, int level)
 {
     if (strid == LEMS_NONE)
-        return;
+        return 0;
     if (!ovl_greyfact(labelid, strid, level))
-        return;
+        return 0;
     lem_wrap();
     lem_screen = LEM_SC_FACT;
+    return 1;
+}
+
+static void lem_show_fact(void *win, int labelid, int strid, int level)
+{
+    if (!lem_set_fact(labelid, strid, level))
+        return;
     if (!lem_blank_glass(win))
         return;
     lem_repaint(win, 1, 0);             /* 0: the region above is ours */
@@ -1106,17 +1133,17 @@ static void lem_back(void *win)
     lem_repaint(win, 1, 0);
 }
 
-/* lem_play - what the Play control does in WAVE 1: the level's own preview
- * screen, in the original's wording and its own seven lines, drawn in the
- * window. Wave 5 moves exactly this content inside SPEC.md 53's bracket, into
- * the second foreign mode each adapter needs to hold the original's 640x350
- * layout, lettered in MAIN.DAT's own purple font over its own brown background
- * (SPEC.md 114.4.3) - and the raster the level itself needs arrives in wave 2.
- * What is here now is the content and the transition, not a placeholder.
+/* lem_play - what the Play control does: THE LAUNCH, and the level's preview
+ * is the first screen inside the bracket (wave 5, SPEC.md 114.4.3) - drawn in
+ * the second foreign mode each adapter has for the original's 640x350 layout,
+ * in MAIN.DAT's own purple font over its own brown tile, with the level's
+ * picture over it. Waves 1-4 drew the preview's text IN THE WINDOW here, and
+ * the window keeps that screen for one case only: a level 'f' took out of the
+ * bracket, kept, which a click or 'f' brings back (lem_continue).
  *
  * Everything that can REFUSE a launch is said IN A WINDOW (ovl_launch), because
  * once the bracket owns the screen nothing can be said at all (SPEC.md
- * 114.5). */
+ * 114.5); a greyed row's Play is its fact, as a click on the row is. */
 static void lem_play(void *win)
 {
     if (!lem_play_ok()) {
@@ -1140,10 +1167,5 @@ static void lem_play(void *win)
      * lem_progwrite and os88_onwake()'s deferred ovl_progress_write() stay
      * exactly as they are - the write is still owed to the one lock-free
      * callback, and it is the trigger that moves, not the mechanism. */
-    ovl_preview(lem_sel);
-    lem_wrap();
-    lem_screen = LEM_SC_PREVIEW;
-    if (!lem_blank_glass(win))
-        return;
-    lem_repaint(win, 1, 0);             /* 0: the region above is ours */
+    lem_ask_launch(win);
 }

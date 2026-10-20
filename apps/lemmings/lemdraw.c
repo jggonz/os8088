@@ -163,11 +163,13 @@ static const unsigned char lem_pop4[16] = {
 
 /* ovl_level_load - the banks this level needs, into their claims.
  *
- * IT IS THE FILE HALF AND NOTHING ELSE, so it can run OUTSIDE the bracket
- * where a refusal can be said in a window. Reading a file mid-bracket is legal
- * (SPEC.md 53.1) and composing has to be, because on VGA the picture IS video
- * memory and there is none until the mode is set - but a REFUSAL cannot be
- * said in a foreign mode, so everything that can refuse happens here.
+ * IT IS THE FILE HALF AND NOTHING ELSE. On a launch it runs OUTSIDE the
+ * bracket (ovl_launch); since wave 5 it also runs INSIDE it, for the session's
+ * next level or retry (lemmings.c ovl_next_level, SPEC.md 114.4.3) - legal,
+ * because the file and mem slots are legal throughout a bracket (SPEC.md
+ * 53.7). Either way a refusal DRAWS NOTHING, because nothing can be said in a
+ * foreign mode: it sets lem_load_err and returns 0, and the window says it
+ * after the bracket (ovl_launch's LEM_X_LOAD arm -> ovl_said_load).
  *
  * 0 = something is missing, and the caller says which in the window - WHICH is
  * lem_load_err, because the two refusals are different sentences (SPEC.md 47:
@@ -178,10 +180,7 @@ static const unsigned char lem_pop4[16] = {
  * exercised that copy, and this one was emitted resident and never called -
  * SmallerC does not drop an unreferenced static. Two copies of one sequence
  * drift the moment either grows a step (a sixth claim, a retry, a refusal). */
-#define LEM_LE_MEM   1              /* a claim refused */
-#define LEM_LE_BANK  2              /* a band file did not read */
-
-static int lem_load_err;
+/* (LEM_LE_* and lem_load_err are lemload.c's: ovl_main_read sets the third) */
 
 static int ovl_level_load(int level)
 {
@@ -222,11 +221,11 @@ static int ovl_level_load(int level)
  * down between them (ovl_frame_panel), and on the two shadow backends the
  * present that puts them there composes the world window - which has to be a
  * cleared world and not a fresh claim's contents. */
-static void lem_world_clear(void)
+static void lem_world_clear(int vram)
 {
     lem_m_setup(lem_cl_mask);
     lem_m_clear();
-    lem_r_clearworld();
+    lem_r_clearworld(vram);
 }
 
 /* 1 = composed; 0 = the caller leaves the bracket and the window says so */
@@ -636,6 +635,25 @@ static void ovl_frame_panel(void)
  * refuses. */
 static void ovl_load_bar(int n)
 {
+    int b0, b1;
+
+    /* ON THE PREVIEW SCREEN (wave 5) the compose runs under the original's
+     * own screen, and the bar is in the level picture's black well, which the
+     * picture covers afterwards: four rows across the middle of it in the
+     * font's lightest purple, a byte column at a time (lem_p_rect is byte
+     * aligned), the minimap well's 104 steps scaled to the screen's 80 bytes.
+     * Every card draws it - the surface is the framebuffer, there is no
+     * shadow to present - so a CGA and a Hercules have a bar now too. */
+    if (lem_onscr) {
+        if (n <= lem_load_n || n > LEM_MM_W)
+            return;
+        b0 = (lem_load_n * 80) / LEM_MM_W;
+        b1 = (n * 80) / LEM_MM_W;
+        if (b1 > b0)
+            lem_p_rect(b0 << 3, 38, (b1 - b0) << 3, 4, LEM_SCR_INK);
+        lem_load_n = n;
+        return;
+    }
     /* VGA ONLY, which is finding (a) of wave 2's last review: on the two
      * shadow backends the bar's cells went into the shadow and ovl_mm_draw()
      * covered every one of them before the first present, so ~100 plots a
@@ -1444,6 +1462,30 @@ static int lem_curx = -1, lem_cury = -1, lem_curshape = -1;
  * which is to say while the player aimed (wave 3's second review). */
 static int lem_cmv;                 /* this frame moves the pointer too */
 
+/* THE POINTER'S COMPOSE IS BOUNDED (wave 4's third review). Between the
+ * passes of a part-stepped frame (lem_infr) a pointer move that rode
+ * ovl_vframe(0) could make ovl_infr_whole ride across a stepped crowd: each
+ * stepped lemming under the pointer becomes a rectangle of its two boxes, a
+ * rectangle meets more of the crowd, and nothing bounded the ride or counted
+ * it - on the XT's many aiming ticks, which is exactly when the player is
+ * looking at the pointer. So a pointer-only tick (no game frame, no scroll)
+ * rides the compose only while at most LEM_CMV_CAP stepped lemmings meet its
+ * two boxes, and the cap is ZERO: none, so the cascade cannot start - a
+ * lemming that has not stepped is in the state the glass shows and composes
+ * clipped like any other. Past the cap the tick takes the constant-cost glass
+ * pair instead (ovl_cursor_off/on, 14x14 restored and drawn, which is what
+ * wave 3 did on every tick): correct whatever the crowd, one erase-then-draw
+ * of the pointer where it meets lemmings that moved this frame. The scroll
+ * keeps the cascade, which correctness needs there and which a scroll pays for
+ * anyway. lem_cmv_cap is a variable so the harness can lift it for its
+ * negative control, and the two counters are what lemtest prints. */
+#define LEM_CMV_CAP 0
+static int lem_cmv_cap = LEM_CMV_CAP;
+static int lem_c_infr;              /* lemmings ovl_infr_whole made rectangles
+                                     * of, this compose */
+static int lem_c_cmvfb;             /* pointer moves the cap sent to the glass
+                                     * pair (cumulative) */
+
 /* ovl_rc_meets - does a byte box (b0, b1, r0, r1) meet any of the frame's
  * rectangles? A lemming that meets none is not latched anywhere, so composing
  * its sprite into the scratch is work for no pixel (ovl_vframe(0)). */
@@ -1522,6 +1564,7 @@ static void ovl_infr_whole(void)
             }
             if (!ovl_rc_holds(b0, b1, r0, r1)) {
                 ovl_rc_add(b0, b1, r0, r1, 0);
+                lem_c_infr++;
                 grew = 1;
             }
         }
@@ -1534,6 +1577,7 @@ static void ovl_vframe(int step)
     unsigned char *b, *q;
 
     lem_nrc = 0;
+    lem_c_infr = 0;
     if (step)
         ovl_rc_world();
     /* NOT A GAME FRAME (a scroll, a minimap jump or a pointer move while
@@ -2023,6 +2067,44 @@ static int ovl_pan_hit(int cx, int cy, int vr, int ox)
  * calls run - at a frame boundary (UpdateLemmings :2646) and while paused
  * (Img_MouseMove :654); on every other tick it refreshes the status word and
  * the pointer's shape and leaves the right-click glitch's lemming alone. */
+/* ovl_cmv_stepped - how many STEPPED lemmings of a part-stepped frame (the
+ * pool before lem_cursor) have a drawn box meeting either of the pointer's
+ * two 14x14 boxes - the old one where its save-under is, and the new one. One
+ * compare a lemming and no box computed (ovl_sbox is what costs); it is asked
+ * only on a pointer-only tick while lem_infr holds. */
+static int ovl_cmv_stepped(void)
+{
+    static unsigned char pb[8];
+    int i, k, n, x, y;
+    unsigned char *b;
+
+    for (k = 0; k < 2; k++) {
+        x = lem_view + (k ? lem_mx : lem_curx) - 7;
+        y = (k ? lem_my : lem_cury) - 7;
+        if (x < 0)
+            x = 0;
+        if (y < 0)
+            y = 0;
+        pb[k * 4] = (unsigned char)(x >> 3);
+        pb[k * 4 + 1] = (unsigned char)((x + 13) >> 3);
+        pb[k * 4 + 2] = (unsigned char)y;
+        pb[k * 4 + 3] = (unsigned char)(y + 13);
+    }
+    n = 0;
+    for (i = 0; i < lem_cursor && i < lem_released; i++) {
+        b = &lem_obox[i * 4];
+        if (b[0] == 0xFF)
+            continue;
+        for (k = 0; k < 8; k += 4)
+            if (b[0] <= pb[k + 1] && pb[k] <= b[1] && b[2] <= pb[k + 3] &&
+                pb[k + 2] <= b[3]) {
+                n++;
+                break;
+            }
+    }
+    return n;
+}
+
 static void ovl_tick_draw(int drew, int right)
 {
     int pd, shape, i, scroll, vr, moved, mm, ox;
@@ -2056,6 +2138,10 @@ static void ovl_tick_draw(int drew, int right)
          * leaves it to the scroll's own pair below. */
         lem_cmv = !scroll && lem_cur_on && moved &&
                   lem_cury + 7 <= LEM_VIEWH_PX && lem_my + 7 <= LEM_VIEWH_PX;
+        if (lem_cmv && !drew && lem_infr && ovl_cmv_stepped() > lem_cmv_cap) {
+            lem_cmv = 0;            /* the glass pair below (LEM_CMV_CAP) */
+            lem_c_cmvfb++;
+        }
         /* THE COMPOSE GOES FIRST, AT THE NEW VIEW, and the Start Address
          * after it: ovl_sbox already reads the new lem_view, and every byte
          * composed is off the visible window until the pan shows it - so a
