@@ -60,8 +60,9 @@ checks competing instances, a real 8250 with both serial IRQs masked,
 CRC-valid invalid saves and actual speaker/FM note grants.
 
 The clean build passed 52 host checks. All 60 full-suite rows passed; the
-final PS/2 row needed a separate retry after overlapping QEMU sessions held
-the same image's write lock. The fixed big/small/emulator memory budgets
+earlier PS/2 run needed a separate retry after overlapping QEMU sessions held
+the same image's write lock; the merged-base full run passed all 60 together.
+The fixed big/small/emulator memory budgets
 pass, with 3,072 / 2,560 / 3,072 bytes spare. The diary contains screenshots
 and the remaining physical-hardware limits.
 

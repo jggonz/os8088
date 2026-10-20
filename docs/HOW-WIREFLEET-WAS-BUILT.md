@@ -151,7 +151,7 @@ and reconnecting completes that same shot once. It then replays shot,
 result and chat frames, injects malformed frames, types game shortcuts as
 chat text, and plays through all five enemy ships to victory. The final
 history hashes agree and shots after the ending are refused. This complete
-session passed; the final run took 91 seconds of host time, not an XT speed
+session passed; the final run took 94 seconds of host time, not an XT speed
 measurement.
 
 ![The winning captain after a complete serial match.](wirefleet/victory-vga.png)
@@ -196,15 +196,16 @@ and lets the current note expire within three ticks. Closing the instance
 releases its own grant immediately. This avoids a blanket tone-off after
 another application has won the sound router.
 
-The final package is about 22KB compressed. Its image and zeroed working
-storage occupy exactly 52KB, with a further 1KB module claim while connected.
+The final package is 21,962 bytes compressed. Its 46,227-byte image and
+7,021 bytes of zeroed working storage occupy exactly 52KB, with a further
+1KB module claim while connected.
 All four disk sizes build. The big,
 small and emulator kernels remain inside their fixed memory budgets.
 
 The clean build passed 52 host checks; the final host pass covered 54 with
 the additional built artifacts present. All nine selected soak rows passed
 after repairing failures and rerunning only those rows. All 60 full-suite
-checks passed too. One final PS/2 attempt hit a shared-image write lock when
+checks passed too. One earlier PS/2 attempt hit a shared-image write lock when
 two test runs overlapped; it passed when rerun alone. The big and emulator
 kernels each retain 3,072 bytes of budget, the small kernel 2,560. No budget
 was raised.
@@ -213,7 +214,11 @@ Comparing the two captains' screenshots exposed another practical issue:
 fresh PCs began with the same OS random seed and could auto-place identical
 fleets. Auto now seeds the existing OS generator from fresh private local
 timing. It does not use the discovery identity, which the opponent receives.
-The two-PC check requires different complete fleets before connecting them.
+The two-PC check requires different complete fleets before play. All three
+affected game rows passed after the seed change. The branch also absorbed
+the intervening main changes: its sole conflict was the generated memory
+ledger, which was regenerated from the combined source. Adapter/system
+acceptance and all 60 full-suite rows passed against that merged base.
 
 These are emulator results. A physical null modem, cable quality, real
 8250 interrupt margin and the sound of actual cards still need a field run.
