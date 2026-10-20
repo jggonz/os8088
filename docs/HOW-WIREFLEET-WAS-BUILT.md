@@ -246,3 +246,74 @@ This host cannot drive an 86Box window (no accessibility grant), so the
 86Box pair is not reproduced here; the QEMU two-PC harness is the
 instrument, and the PR says which is which. The plan is
 docs/plans/WIREFLEET-FACE-PLAN.md.
+
+## 2026-10-20 — Linking without a menu
+
+WireBall's Serial Match scans both ports; WireFleet waited for Link →
+Connect. Now the window's first tick starts a search (SPEC.md §114.9): the
+saved or chosen port first, else COM2, and a port the serial lease refuses
+as the mouse's or absent simply leaves the list. On a machine with the
+mouse on one port that leaves exactly one candidate, which is the common
+case and the 86Box pair's. With no serial mouse both ports are candidates,
+and the search moves its lease between them on a jittered 40–71 tick dwell
+until a WireFleet frame that is not its own echo arrives.
+
+Moving a lease used to mean Close then Open, and Close unloads SERIAL.DRV —
+so every move would have read the system disk. The lease's holder may now
+Open again to move it (§115.1); the module stays, and the kernel's resident
+size did not move a byte. The other stuck state from the diagnosis is gone
+too: before any result is committed, a HELLO from a new identity rebinds
+the match, so New fleet after linking no longer strands the other PC.
+
+The QEMU two-PC row grew two legs: both PCs with a PS/2 pointer and two free
+UARTs, finding the cable's port by themselves; and New fleet after linking.
+
+## 2026-10-20 — A colour face, flat
+
+The mock-up asked for a navy title bar, cards, a ships list with check
+boxes and a big Ready. MIDIRack's face was bevelled hardware; a naval game
+reads better flat, so the elements went into a shared include,
+`apps/os88flat.inc` (§20.5.3) — a card, a lamp, a check box in one blit, a
+button painter and a double-size caption in one blit — and the `vga-face`
+skill now teaches both looks.
+
+![Deployment on VGA: the ships card, a framed board, the link lamp.](wirefleet/face-deploy-vga.png)
+
+![A battle a few turns in: whose turn, what just happened, chat.](wirefleet/face-battle-vga.png)
+
+EGA gets the same face at 16-pixel cells; with no room for a chat log there,
+an incoming line is news in the notice strip.
+
+![The same battle on EGA's 350 lines.](wirefleet/face-battle-ega.png)
+
+Looking at the ships zoomed in found a grey line above every hull. The
+atlas is not five equal strips — the carrier overhangs the second fifth — so
+each ship after it carried its predecessor's keel. The converter now finds
+each ship's own rows. And 34 of the 72 tiles turned out to be a ship
+segment with the same red X: they are stamped at draw time now, which the
+converter proves exact for all 34, and the art shrank from 31 KB to 17 KB.
+That is what paid for the face on a 360 KB disk with no cluster to spare.
+
+## 2026-10-20 — The board was the paint
+
+Timed on MartyPC's 4.77 MHz VGA XT, a battle repaint took 3.9 seconds, 3.46
+of them the two boards. The blit was not the cost: OSAPI_GFX_BLITP puts a
+240×24 row up in 0.7 ms. Composing that row a pixel row at a time took 150.
+So the tiles are spread to VGA's four planes once per instance, and a row
+becomes four three-byte copies a scanline. The repaint is 1.39 seconds now,
+deployment 1.1.
+
+Driving the face found three bugs that were already on `main`: F hung a
+VGA or Hercules desktop (the window handle had been replaced by the screen
+height), typed chat was never drawn, and every cursor move on the Hercules
+enemy board left 22 stray pixels — the board sat two pixels off the byte
+grid, and the blit lit pixels past its own width. Hercules keeps its face,
+with the board two pixels right and a header that says what it is doing.
+
+![Hercules after Ready, while the search runs.](wirefleet/face-ready-hercules.png)
+
+![CGA's four-colour fullscreen bracket, unchanged but for the ships.](wirefleet/face-fullscreen-cga.png)
+
+`tests/wfdraw.py` holds the face to it: five seconds of searching draws
+nothing, every gesture stays under a ceiling, and the picture the caches
+drew is identical to a full repaint — on VGA and on Hercules.

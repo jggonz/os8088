@@ -474,10 +474,10 @@ wf_phase:
     je .won
     cmp byte [wf_finished], 2
     je .lost
-    mov si, wf_fslinkoff
-    cmp byte [wf_connected], 0
-    je .out
-    mov si, wf_readytitle
+    mov si, wf_caplooking       ; the phase, not the link line (which
+    cmp byte [wf_connected], 0  ; fullscreen prints under it, and a window
+    je .out                     ; header cut to "F: deskto")
+    mov si, wf_capwaiting
     cmp byte [wf_peerready], 0
     je .out
     mov si, wf_phasepending
