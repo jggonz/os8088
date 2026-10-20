@@ -576,6 +576,34 @@ class Mouse:
                self.DBL_TRIES * self.DBL_STEP, self.where()[2],
                self.DBL_RESEND * self.DBL_STEP))
 
+    QUIET_GUEST = 3.0               # guest seconds _quiet will wait, at most
+
+    def _quiet(self):
+        """Let the UI task finish what it was given before a double-click.
+
+        The two presses are stepped in guest cycles and must land inside
+        DBL_TICKS, and they cannot if the guest is mid-way through work that
+        keeps the mouse ISR from decoding them - a mount, a listing, an
+        ASSOC.DAT flush the verb before posted. A verb that returns the moment
+        a window EXISTS (open_drive, open) can return while that work is
+        still in flight, and the double-click then raced it: `assocflush`'s
+        LOCATE leg lost that race about one run in three, the presses landing
+        9 ticks apart. So this waits for os88marty.ui_idle - guest STATE, on
+        the guest's clock - and gives up silently after QUIET_GUEST seconds,
+        because a package that animates for ever can keep the gfx lock busy
+        and the presses are still worth trying (the span check below is the
+        judge). Not inside a bp_trace pump, nor on a paused guest.
+        """
+        if getattr(self.m, "_pumping", 0):
+            return
+        try:
+            if self.m.status().get("state") != "running":
+                return
+            os88marty.until(self.m, os88marty.ui_idle, "the UI task to idle",
+                            poll=0.05, guest=self.QUIET_GUEST)
+        except Exception:                                   # noqa: BLE001
+            pass                        # busy for good, or no symbols: try
+
     def dblclick(self, x, y, settle=None):
         """Two presses inside the kernel's own double-click window.
 
@@ -586,6 +614,8 @@ class Mouse:
         self.to(x, y)
         if self.where()[2] & 1:         # a button left down by something else
             self._edge(False)           # would make the first press no edge
+        self._quiet()                   # ...nothing pending that could hold
+                                        # the ISR off between the two presses
         self._sep()                     # ...the FIRST press is separated from
                                         # whatever came before; the second is
                                         # deliberately not (see _sep)
