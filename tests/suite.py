@@ -14274,6 +14274,23 @@ SOAK = [
         "`fbuf`. Every cell is rendered on the HOST out of the guest's own "
         "glyph table and compared pixel for pixel",
         needs=("marty",), serial=True),
+    Row("wirechat", "soak", py("tests/wirechat.py"), 120.0,
+        "WIRECHAT end to end over a real card (SPEC.md 113.12): the test's "
+        "own fixture - a literal stdlib reading of SPEC.md 113.2 - on 8093, "
+        "and `make wirechattest`'s B: carrying the package and a "
+        "WIRECHAT.CFG aimed at it. Eleven assertions: the join is 113.3's "
+        "request to the byte, the session goes live with the issued token, "
+        "the lobby's history is in the store in order, a HELD poll is "
+        "answered by a second session's message, a sent message is the "
+        "say's whole body and comes back marked ours, a 422's sentence "
+        "reaches the notice line with the message back in the field, Tab "
+        "asks v=1&h=1 and the store becomes room 1's, a private message "
+        "makes an unread conversation, a right press and Yes flag the "
+        "message by its seq and the fixture's X removes it, a 401 is "
+        "joined again with the same nick, and the Notifications switch is "
+        "written to the floppy's WIRECHAT.CFG. QEMU by name: MartyPC has "
+        "no network card (SPEC.md 72.9).",
+        needs=("qemu",), serial=True, builds=True),
     Row("telansi", "soak", py("tests/telansi.py"), 210.0,
         "SPEC.md 70.9/70.10/70.12: the ANSI-BBS PARSER on the machine, against "
         "tools/ansisim.py - the same state machine in Python, and the "

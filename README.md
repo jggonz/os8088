@@ -691,6 +691,35 @@ and says `Catalog not understood`.
 SPEC.md §92 is the format and the contract; `docs/WIRE-PLAN.md` is why it
 reads that way.
 
+### WireChat — chat rooms on the wire
+
+`WIRECHAT.O88` is a chat client: four public rooms (lobby, hardware,
+development, games), private messages, a member list with each person's
+status, a friends list, a search through what is on screen, and a status of
+your own — Online, Away or Busy, and Away on its own after ten idle minutes. It
+talks plain HTTP/1.0 over `ETHER.DRV` to one server at **os8088.com/chat/**, a
+Cloudflare Durable Object in the website's repository, by **long poll**: the
+server holds each request until there is something to say, so a message
+arrives in about a second while an idle machine sends one request every fifty.
+One socket at a time — a message sent while a poll is held closes the poll, and
+the answer carries everything the poll would have.
+
+The lobby is open and public, so the server moderates it, not the 8088: every
+message and nick goes through a language scanner — LDNOOBW's lists in every
+language they have, folded to ASCII, and WireChat's own lists of evasion
+spellings and of the phrases of harassment and hate — and anything it misses
+can be flagged. A message flagged from **two different addresses**, neither the
+author's, is removed for everyone, and blocked or removed messages become
+mutes that grow. Every rate is limited, and the server counts its own requests
+against a daily budget, slowing every client down as it fills, so the chat
+stays inside the Workers Free plan.
+
+The window follows the screen: three panes on VGA and Hercules, the side panes
+going as the window narrows, and a compact one-line message form on a CGA. The
+nick, the friends and the notification switch live in `WIRECHAT.CFG` beside
+the program. It is on every apps disk but the 360KB one, where it rides the
+network disk. SPEC.md §113 is the protocol and the contract.
+
 ### A package can also be written in C
 
 The OS itself is assembly and stays that way. But a **package** can be written

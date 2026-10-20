@@ -4832,6 +4832,26 @@ telnettest: $(BUILD)/telnetsys.img $(BUILD)/telnetdata.img
 	@echo "            build/telnetdata.img is the scratch B: a download writes."
 	@echo "            Run it with: python3 tests/telansi.py"
 
+# WIRECHATTEST - WireChat's gate (SPEC.md 113.12): telnettest's system disk,
+# whose SYSTEM.CFG already wants ETHER.DRV, and a scratch B: carrying the
+# package and a WIRECHAT.CFG aimed at tests/wirechat.py's fixture on the
+# host. The configuration is on the PACKAGE'S volume because that is where
+# WireChat reads it (SPEC.md 113.8, os88data.inc's own-volume rule), and the
+# B: is scratch because the package writes the file back.
+$(BUILD)/wirechatcfg/WIRECHAT.CFG: Makefile | $(BUILD)
+	@mkdir -p $(dir $@)
+	printf 'host 10.0.2.2:8093/chat/\r\nnick Tester\r\nfriend Alin\r\n' > $@
+
+$(BUILD)/wirechatdata.img: $(BUILD)/wirechat.o88 $(BUILD)/wirechatcfg/WIRECHAT.CFG tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/wirechat.o88 SYSTEM/APPDATA:$(BUILD)/wirechatcfg/WIRECHAT.CFG
+
+.PHONY: wirechattest
+wirechattest: $(BUILD)/telnetsys.img $(BUILD)/wirechatdata.img
+	@echo "wirechattest: build/telnetsys.img - ETHER.DRV already wanted, and"
+	@echo "              build/wirechatdata.img is B:, WIRECHAT.O88 at its root."
+	@echo "              Run it with: python3 tests/wirechat.py"
+
 # MIDITEST - the MIDI gate's system disk (SPEC.md 34.13, 105.8.5): the 720KB
 # system disk with a SYSTEM.CFG asking for SOUND.DRV (bit 0), for the one
 # machine the kernel's boot sniff cannot see - an MPU-401 with NO FM chip
@@ -5908,6 +5928,20 @@ $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
 
 $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $(BUILD)/telnet.bin -o $@
+
+# WIRECHAT (SPEC.md 113) - Telnet's include set for Telnet's reason: netpkg.inc
+# is the driver's ABI header, included by both ends so they cannot drift.
+$(BUILD)/wirechat.bin: apps/wirechat/wirechat.asm apps/wirechat/wcnet.inc \
+                       apps/wirechat/wcproto.inc apps/wirechat/wcview.inc \
+                       apps/wirechat/wcact.inc apps/wirechat/wccfg.inc \
+                       apps/wirechat/wctxt.inc apps/os88api.inc \
+                       apps/os88ui.inc apps/os88line.inc apps/os88data.inc \
+                       apps/os88sock.inc drivers/net/netpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/wirechat/ -I drivers/net/ -o $@ apps/wirechat/wirechat.asm
+	@echo "wirechat: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/wirechat.bin -o $@
 
 # THE WIRE (SPEC.md 92) - Telnet's include set for Telnet's reason: netpkg.inc
 # is the DRIVER's own ABI header and both ends include it, so the two cannot
@@ -11875,7 +11909,7 @@ budget-check: $(BUILD)/kernel.bin small emu
 # The programs that could not have started (SPEC.md 24.5 has the same
 # figures, re-measured together).
 SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
-             $(BUILD)/thewire.o88 \
+             $(BUILD)/thewire.o88 $(BUILD)/wirechat.o88 \
              $(BUILD)/tracker.o88 \
              $(BUILD)/audio.o88 $(BUILD)/sheet.o88 $(BUILD)/video.o88 \
              $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88
@@ -13014,6 +13048,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
+              $(BUILD)/wirechat.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
               $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
               $(BUILD)/timer.o88 $(BUILD)/bounce.o88
@@ -13520,8 +13555,12 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     dated 2026-10-02): that disk had 12 clusters spare and the player with
 #     its songs is ~50. It rides the MEDIA DISK instead (MEDIAARGS360) - the
 #     floppy whose subject is music already - at its root, songs in MEDIA/MIDI.
+#     WIRECHAT IS NOT CURATED ONTO IT (SPEC.md 113.11, 24.6.1's rule, dated
+#     2026-10-19): a chat client is the NETWORK disk's subject, and it rides
+#     network360.img beside Telnet and the Browser.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-                    $(BUILD)/midirack.o88 $(BUILD)/pixel.o88,$(APPS_TOOLS))
+                    $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
+                    $(BUILD)/wirechat.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -13721,7 +13760,7 @@ OFFICEARGS360 := $(OFFICE_PKGS) \
 # user it has nothing to serve here (it answered 'Bad package' once). The
 # root of this disk is for programs that run on this machine.
 NETWORK_PKGS := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
-                $(BUILD)/thewire.o88
+                $(BUILD)/thewire.o88 $(BUILD)/wirechat.o88
 NETWORK360 := $(NETWORK_PKGS) $(NETWORK_DATA) $(APPS_DOS)
 NETWORKARGS360 := $(NETWORK_PKGS) \
                   $(addprefix MEDIA:,$(NETWORK_DATA)) \
@@ -14459,10 +14498,14 @@ imager:
 #
 # ISOTRON (SPEC.md 108) goes on the same ground, added 2026-10-13: a game, not
 # a calibration instrument, and games360.img carries it at this geometry.
+#
+# WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
+# chat client is the network disk's subject, and network360.img carries it.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88
+              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
+              $(BUILD)/wirechat.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 

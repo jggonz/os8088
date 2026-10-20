@@ -52929,12 +52929,12 @@ turned that refusal into the whole point of Paint's small build. A package
 that cannot reach its **driver** can say nothing at all; it is a name in a
 list that does nothing when you double-click it.
 
-Ten packages fail that test (eight, PIXELSTEIN 3D as of §97 and MIDIRACK as
-of §105; RECORDER was a row once and is not, below):
+Eleven packages fail that test (eight, PIXELSTEIN 3D as of §97, MIDIRACK as
+of §105 and WIRECHAT as of §113; RECORDER was a row once and is not, below):
 
 | omitted | requirement `kern_small` cannot meet |
 |---|---|
-| `BROWSER`, `FTPD`, `TELNET` | `ETHER.DRV`. The NIC is not in `$(SMALLDRIVERS)`, and §72's whole surface is driver verbs, so there is no socket to refuse on |
+| `BROWSER`, `FTPD`, `TELNET`, `WIRECHAT` | `ETHER.DRV`. The NIC is not in `$(SMALLDRIVERS)`, and §72's whole surface is driver verbs, so there is no socket to refuse on |
 | `MODPLUG`, `TRACKER`, `AUDIO` | `SOUND.DRV`, which a 128–256KB machine has nothing to spare for — the judgement that already took `RAMDISK.DRV` and `RAMPAGE.DRV` out of the small driver set |
 | `MIDIRACK` | `SOUND.DRV` for its FM and Sound Blaster outputs, and an `FSXF_RATE` bracket (kern_big's alone, §34.11) for its speaker synth: what is left is one square wave of melody, and a MIDI player that can only whistle the tune is not the program the disk would be offering (§105.10) |
 | `SKIES` | a **16KB heap claim** for its frame shadow (8KB in C160, §88 - it was written here as 32KB, which it never was) on top of a ~55KB region, against the 17.5KB largest run a claimant can have on the floor machine once `mem_claim` has shed the purgeable caches (§50.6.2). Unlike PAINT it cannot refuse in its own words: the claim is made INSIDE the fsx bracket, after the mode is set, so what a player gets is a mode switch, a black screen and a bounce back to the desktop |
@@ -195164,3 +195164,360 @@ it"; it points here now, and the reference is a package.
 
 The standard card, two lines; the window's W_ONCLICK is its dismissal, as
 Hello's is (§27).
+
+## 113. WIRECHAT — chat rooms on the wire (`apps/wirechat/wirechat.asm`)
+
+`WIRECHAT.O88`, in `APPS/` on every apps disk except the 360KB one
+(§113.11), header name `WireChat`, label prefix `wc_`. A chat client: four
+public rooms, private messages, a member list, friends, a status, and a
+flag that takes an abusive message down. It talks HTTP/1.0 to one server,
+`os8088.com/chat/v1/`, which is a Cloudflare Durable Object in the website's
+repository (`os8088-web/src/chat/hub.js`). That repository implements this
+section; **this section is the contract**, and a change to the wire format
+is made here first, then in `hub.js`, then in the fixture `tests/wirechat.py`
+serves — three implementations of one page.
+
+It is not on `kern_small` (`SMALLOMIT`, §24.5): no NIC there. It calls
+`OSAPI_CLK_GET` (§37.96), so it ships beside its own kernel and is not
+offered on The Wire (§20.2.0.1's gap).
+
+### 113.1 The parts
+
+| part | where | what |
+|---|---|---|
+| the package | `apps/wirechat/` | the window, the worker, the HTTP client, the parser |
+| the server | `os8088-web/src/chat/` | `hub.js` (the rooms), `filter.js` + `words.js` + `ldnoobw.js` (the language scanner) |
+| the fixture | `tests/wirechat.py` | this section's protocol on 10.0.2.2:8093, for the gate |
+
+Files of the package: `wirechat.asm` (header, entry, template, menus, About,
+the bss), `wcnet.inc` (the worker and the HTTP client, §113.4),
+`wcproto.inc` (the reply parser, §113.2.3), `wcview.inc` (layout and every
+painter, §113.5), `wcact.inc` (keys, clicks, menus, popups, §113.6),
+`wccfg.inc` (`WIRECHAT.CFG`, §113.8), `wctxt.inc` (every string).
+
+### 113.2 The wire format
+
+Every request is `POST /chat/v1/<verb>?<query>` (a `GET` is accepted for
+`poll` and nothing else). Every reply is **200** with
+`Content-Type: text/plain; charset=us-ascii`, `Cache-Control: no-store` and
+a `Content-Length` — success and refusal alike, so the client has one path
+for "the server answered" and HTTP's own status means only "the server is
+there". The body is LINES ending in LF, printable ASCII (0x20–0x7E) between
+them. The first line is the verdict; the rest are records, one per line,
+each a one-character type, a space, and space-separated fields whose LAST
+field may itself contain spaces.
+
+#### 113.2.1 The query
+
+| key | value | sent by |
+|---|---|---|
+| `t` | the session token, 12 of `[a-z0-9]` | every verb but `join` |
+| `v` | the VIEW: `0`..`3` a room, or `@nick` a private conversation | `join`, `poll`, `say`, `flag` |
+| `s` | the last sequence number the client holds, decimal, 32 bits | `poll`, `say`, `flag` |
+| `r` | the roster version the client holds, decimal (0 = none) | `poll`, `say`, `flag` |
+| `st` | the status: `0` online, `1` away, `2` busy | `join`, `poll` |
+| `h` | `1` = send this view's history too | `poll` |
+| `m` | the sequence number of the message being flagged | `flag` |
+
+A status or a view change RIDES ON THE NEXT REQUEST: there is no verb for
+either, so changing room or going Away costs one request, not two.
+
+#### 113.2.2 The verbs
+
+| verb | body | does |
+|---|---|---|
+| `join` | the nick | opens a session; answers `J`, four `L`, then a delta with history |
+| `poll` | empty | answers the delta at once when there is one, else HOLDS up to 50 s for one |
+| `say` | the message | posts it to the view (a room, or `@nick` privately); answers the delta |
+| `flag` | empty | flags message `m`; answers `N` and the delta |
+| `leave` | empty | ends the session |
+
+A nick is 2–12 of `[A-Za-z0-9_-]`, beginning with a letter, unique among
+live sessions without regard to case. A message is 1–200 printable ASCII
+characters after runs of white space are folded to one.
+
+#### 113.2.3 The reply
+
+The verdict:
+
+    OK <seq> <hhmm> <wait>
+    ER <code> <wait> <text>
+
+`seq` is the server's sequence number NOW — the client's next `s`. `hhmm` is
+the server's UTC time, four digits. `wait` is seconds the client must let
+pass before its next `poll` (0 = none); it is how the server spends its
+daily budget (§113.7). `text` is a sentence for the user, at most 60
+characters. The records:
+
+| record | fields | meaning |
+|---|---|---|
+| `J` | token nick | the session (`join` only); `nick` is the canonical spelling |
+| `L` | i name topic | room `i`'s name and topic (`join` only) |
+| `C` | c0 c1 c2 c3 | each room's message counter, mod 65536 — unread is the difference |
+| `M` | seq room hhmm nick text | a room message (always the view's room) |
+| `D` | seq hhmm from to text | a private message to or from this session |
+| `X` | seq | message `seq` was removed: drop it |
+| `R` | ver n | the roster follows: `n` `P` lines, version `ver` |
+| `P` | nick room st | one live session, its room and its status |
+| `N` | text | a notice for the user |
+
+`M` and `D` arrive in sequence order. A history (`h=1`, and every `join`)
+is the view's last 30 messages. `D` records for conversations OTHER than the
+view arrive too, so the client can mark the conversation unread; a `D` for
+the view appends. The body is at most 6,144 bytes: the server drops the
+OLDEST `M`/`D` lines to fit, never a `C`, `X`, `N` or roster line.
+
+The codes, and what the client does with each:
+
+| code | means | the client |
+|---|---|---|
+| 400 | malformed, or a nick that does not parse | says `text` |
+| 401 | no such session (expired, or the server restarted) | joins again with the same nick, silently |
+| 403 | muted, or flagging what may not be flagged | says `text` |
+| 404 | the message or the private partner is gone | says `text` |
+| 409 | the nick is in use / already flagged | `join`: asks for another nick |
+| 413 | the message is over 200 characters | says `text` (the field cannot produce one) |
+| 422 | the language scanner refused it | says `text`; the text stays in the field |
+| 429 | rate limited | says `text`; the text stays in the field |
+| 503 | full, or resting until 00:00 UTC | waits `wait` seconds (at most an hour), then tries again |
+
+### 113.3 The HTTP profile
+
+§92.4's, with a body. Exactly:
+
+    POST /chat/v1/<verb>?<query> HTTP/1.0\r\n
+    Host: <host>\r\n
+    User-Agent: os8088 WireChat 1.0\r\n
+    Connection: close\r\n
+    Content-Length: <n>\r\n
+    \r\n
+    <n bytes>
+
+The body is RAW: the nick or the message as typed, no form encoding — the
+server reads the whole body as the text, so there is nothing to escape and
+the encoder is one copy. The query's only free-form field is `v=@nick`,
+and a nick is `[A-Za-z0-9_-]`, which needs no escaping either.
+
+The reply is read §92.4's way — headers a line at a time into a 32-byte
+buffer, the status from columns 9–11, `Content-Length` required — but the
+body has a ceiling of `WC_RESPMAX` = 6,144 rather than an exact size, and a
+body under the ceiling is the ordinary case. **One socket at a time**: a
+`say` or a `flag` while a `poll` is held CLOSES the poll (§113.4) and the
+answer to the `say` carries everything the poll would have.
+
+### 113.4 The task division
+
+§92.5's, with a conductor. The WORKER (`wc_worker`, `OS88_STACK_256`) runs
+one request — open, send, read the head, drain the body into `wc_resp` —
+and posts `WW_DONE` or `WW_FAIL` in the one byte `[wc_wake]`, written last,
+then `OSAPI_WM_WAKE`. It knows nothing of chat. The UI TASK's wake handler
+parses the reply (§113.2.3) into the stores, decides the NEXT request — the
+CONDUCTOR, `wc_next` — and paints what changed. Its order: a queued `flag`,
+then a queued `say`, then a `poll`. A `say` or `flag` queued while a `poll`
+is in flight bumps the generation (§71.11) and closes the socket, and the
+conductor starts the `say` on the same pass.
+
+Between requests the conductor honours the server's `wait`, and after a
+failure backs off 5, 10, 20, 40, then 60 seconds; both are counted by the
+window's timer (`OSAPI_WM_TIMER`, 18 ticks), which also drives auto-away
+(§113.6.5).
+
+### 113.5 The window
+
+Resizable. `OS88_PREFER` 608×400 VGA, 688×296 Hercules, 608×150 CGA;
+`OSAPI_WM_MINSIZE` 320×147. Content-relative, 8×8 cells at a 10px pitch,
+`WF_SNAP` so every column is a multiple of 8 (§11.94):
+
+    +-----------------------------------------------------------------+
+    | [o] George  * Online                          [ Set status... ] |  header, 18
+    +-------------+-------------------------------------+-------------+
+    | ROOMS       | # lobby                    [Search] | MEMBERS   4 |
+    | # lobby   2 | The os8088 community                | o George  * |
+    | # hardware  +-------------------------------------+ o Alin    * |
+    | # develop.. | 4:02 RetroAmy                      ^| o Daniel  * |
+    | # games     |      Hello from a real IBM XT!     || o RetroAmy@ |
+    | MESSAGES    | 4:03 George                        ||             |
+    | * Alin      |      Nice! Which video card?       ||             |
+    | @ RetroAmy  | ----------- 2 new messages ------- ||             |
+    | FRIENDS   2 | 4:08 Daniel                        ||             |
+    | * Alin      |      Just joined from my 8088.     v|             |
+    |             | Daniel joined                       |             |  notice line
+    |[+Add friend]| [Hello from os8088!_    ] [:)][Send]|             |  input row, 16
+    +-------------+-------------------------------------+-------------+
+    | = Connected | 4 users in room          Notifications: On        |  status, 12
+    +-----------------------------------------------------------------+
+
+| element | where | notes |
+|---|---|---|
+| header | top 18 rows | person glyph, the nick (bold), status glyph and word, `Set status...` |
+| left pane | x 0..143 | ROOMS (4 rows, unread count right-aligned), MESSAGES (the private conversations, up to 8), FRIENDS ONLINE (friends with a live session); `+ Add friend` pinned to its foot. A section that runs out of rows stops |
+| center | the rest | title (`# room` bold, or `@ nick`) and topic; `Search`; the message pane with a 14px scroll bar; the notice line; the input row |
+| right pane | the right 128px | MEMBERS: the live sessions in the view's room, glyph per status |
+| status bar | bottom 12 rows | link glyph and state, users in the room, `Notifications: On/Off` |
+
+**Panes collapse by WIDTH**: content under 560px drops the right pane, under
+400 the left one too — rooms then come from the Rooms menu. **The topic line
+goes by HEIGHT**: under 200 rows of content (a CGA) the title is one row.
+A message is a HEADER LINE — `hh:mm` and the nick, bold — then its text
+word-wrapped from column 6; under 8 pane rows (a CGA) it is COMPACT, `hh:mm
+nick: text` on the first line. A word longer than the line is cut where the
+line ends.
+
+The status glyphs are 8×8: a filled circle Online, a clock Away, a barred
+circle Busy, a hollow circle for a private partner who is not in the roster.
+`#` is the font's.
+
+**Drawing.** Every row is one opaque `OSAPI_FONT_RUN` padded with spaces to
+its region's width, so nothing is filled and then lettered (PERFORMANCE.md
+rule 2). Bold is §6.6.2 case 6, an overstrike: the run, then the same
+string transparent at x+1 (`tests/textsites.txt`). Each region has its own
+painter and a DIRTY bit (`WCD_*`); a state change sets bits and `wc_flush`
+paints only those. A message arriving while the pane shows its last line
+moves the pane up by `OSAPI_GFX_SCROLL` and letters only the new rows; a
+refused scroll repaints the pane.
+
+### 113.6 What the user does
+
+#### 113.6.1 The field
+
+One `os88line` field with four MODES, its prompt drawn to its left:
+
+| mode | prompt | Enter | Esc |
+|---|---|---|---|
+| message | — | sends to the view | clears the field |
+| nick | `Nick:` | joins with it (and saves it) | — (there is no session without one) |
+| find | `Find:` | scrolls to the next older message containing it, case-blind | back to message |
+| friend | `Friend:` | adds the nick to the friends list (and saves it) | back to message |
+
+The first run, with no nick in `WIRECHAT.CFG`, opens in nick mode.
+
+#### 113.6.2 Clicks
+
+| where | press | right press |
+|---|---|---|
+| a room row | the view becomes that room (`h=1`) | — |
+| a conversation, a friend, a member | the view becomes `@nick` (not your own) | a member: `Add <nick> as a friend?`; a friend: `Remove <nick> from friends?` |
+| a message | selects it (its header inverted) | selects it and asks `Flag this message?` |
+| `Set status...` | a popup: Online, Away, Busy | — |
+| `Search` | find mode | — |
+| `:)` | a popup of eight ASCII emoticons; a pick is typed at the caret | — |
+| `Send` | Enter | — |
+| `Notifications:` | toggles them (and saves it) | — |
+
+A popup is drawn over the content; a press inside it picks, a press anywhere
+else dismisses it, and either repaints what it covered.
+
+#### 113.6.3 Keys
+
+Enter, Esc as §113.6.1; PgUp/PgDn a pane page, Up/Down a line; Tab the next
+room; everything else to the field.
+
+#### 113.6.4 Menus
+
+| menu | items |
+|---|---|
+| Chat | Change Nick..., Flag Message..., Notifications On/Off, Reconnect |
+| Rooms | lobby, hardware, development, games (the `L` names) |
+| Status | Online, Away, Busy |
+| Friends | Add Friend..., Remove Friend |
+
+#### 113.6.5 What it does on its own
+
+- **Unread.** A room's count is its `C` counter less the counter when it was
+  last the view. A conversation's is the `D` records for it since.
+- **The new-messages divider.** Messages that arrive while the window is
+  not frontmost (`OSAPI_WM_TOP`) start a divider, `--- N new messages ---`,
+  above the first of them; it goes when the view changes or the user sends.
+- **Notifications** (on by default): a 880 Hz chirp for a private message,
+  or a room message naming the user's nick as a word, while the window is
+  not frontmost.
+- **Auto-away.** Ten minutes with no key and no press turns Online into Away;
+  the next key or press turns it back. A status the user chose is left alone.
+- **Local time.** Times arrive in UTC (`hhmm`). The offset is the machine's
+  clock (`OSAPI_CLK_GET`) less the server's `hhmm` in the verdict, rounded
+  to 15 minutes; a machine whose clock was never set shows a consistent
+  wrong time rather than none.
+
+### 113.7 Moderation and limits — what the server does
+
+Not the client's to enforce — a client cannot be trusted with its own limits
+— and written here so a user's question has an answer in this tree.
+
+- **The language scanner** runs on every message and nick: LDNOOBW's lists
+  in every language they have, folded to ASCII, and WireChat's own lists of
+  evasion spellings and of the phrases of harassment and hate. It undoes
+  case, leetspeak, stretched letters, spaced letters and censor stars. A
+  refused message is `422` and a strike.
+- **Flagging.** A room message flagged from TWO addresses, neither the
+  author's, is removed for everyone (`X`). A private message is removed by
+  one flag from its reader — it has no second reader. A removal is two
+  strikes against the author.
+- **Strikes.** Three strikes mute an address: 10 minutes, then an hour,
+  then a day. A quiet day forgives the strikes, a quiet week the record.
+- **Rates.** Per address: 30 requests a minute; 3 messages, then one per 8 s,
+  and 60 an hour; 10 flags an hour; 6 joins an hour; 3 sessions. Everyone
+  together: 20 messages a minute, 50 sessions.
+- **The daily budget.** The server counts its requests per UTC day against
+  a cap (40,000 by default, of the Workers Free plan's 100,000 the whole
+  site shares). Past half of it every client is told `wait` 5; past three
+  quarters, 20; past 90%, 60; at the cap, `503` until midnight UTC.
+
+### 113.8 `WIRECHAT.CFG`
+
+`SYSTEM\APPDATA\WIRECHAT.CFG` on the package's own volume (§19.9,
+`apps/os88data.inc`), read in the first wake, written whenever the nick,
+the friends or the notification switch change. Lines of `key value`:
+
+    host os8088.com:80/chat/
+    nick George
+    notify 1
+    friend Alin
+    friend Daniel
+
+`host` is §92.4's `host[:port][/prefix/]`, default `os8088.com:80/chat/`;
+the gate's disk carries `10.0.2.2:8093/chat/`. Unknown keys are kept on no
+rewrite — the file is the package's own and is written whole. Up to 8
+friends; at most 512 bytes.
+
+### 113.9 No driver, no link
+
+`net_find` CF=1 or no `NSTF_SOCK`: the status bar says
+`No network card - see Control Panel`, the field still takes a nick and
+nothing is sent. A failure after that is `Offline - retrying in Ns` with the
+back-off of §113.4; a `503` is `Resting until 00:00 UTC` or `WireChat is
+full`. The messages already shown stay shown.
+
+### 113.10 Sizes
+
+Measured on the tree that added it: **image 15,619 bytes, bss 19,859 —
+35,478 of `APP_MAX_SIZE`'s 61,440**; `WIRECHAT.O88` is 13,609 bytes packed.
+No heap claim: every buffer is in the package's own segment, which is what
+`OSAPI_DRV_CALL` wants of a socket buffer anyway (§72, `netpkg.inc`). The bss,
+largest first:
+
+| store | bytes | why that many |
+|---|---|---|
+| `wc_msgs` | 8,960 | 40 messages of 224 (`WC_MREC`): the server's history is 30 (§113.2.3) and ten more is what arrives while they are read |
+| `wc_resp` | 6,146 | one reply body, `WC_RESPMAX` + the parser's NUL — the server's own ceiling |
+| `wc_rxb` | 1,024 | one `NETV_RECV`, `NET_SKMAX` |
+| `wc_ros` | 800 | the roster: 50 sessions, the server's limit (§113.7), at 16 |
+| `wc_reqb` | 640 | a request: line, headers, a 200-character body |
+| `wc_cfgb` | 514 | `WIRECHAT.CFG` read or written whole |
+| the rest | ~1,775 | the field and its draft, the rooms, the conversations, the friends, the geometry, the client's state |
+
+The worker's stack is `OS88_STACK_256` (§113.4): ETHER.DRV's verbs are ~126
+bytes of it and the interrupt floor 64, and the deepest chain of this file's
+own is `wc_nstep` → `wc_take` → `wc_hdrline` → `wc_dec32`.
+
+### 113.11 Where it ships
+
+`APPS_TOOLS`, so the 1.44MB, 720KB and 1.2MB apps disks and the live media;
+`NETWORK_PKGS`, so the network category disk. Not the 360KB apps disk
+(§24.6.1): it is full, and a chat client is the network disk's. Not
+`kern_small` (`SMALLOMIT`, `t_smallreq`'s `FORBIDDEN`).
+
+### 113.12 The tests
+
+| row | tier | what |
+|---|---|---|
+| `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined |
