@@ -58988,7 +58988,7 @@ walk ran to the bottom of the view when only the band is drawn. Nothing below
 descriptions already match the glass.
 
 **It is 13.6x and it is still 3.8x over budget**, the target being one
-typematic repeat (~100 ms, §2951) so that no held key can outrun the editor.
+typematic repeat (~100 ms, §9.6.2) so that no held key can outrun the editor.
 What is left is 155 ms of pass 1 and 186 ms of drawing, and neither is a
 seeding problem — see docs/plans/completed/NOTEPAD-NOTES.md §7.
 

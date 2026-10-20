@@ -48,7 +48,7 @@
 ;    ...AND BANK ES ACROSS IT IF YOU GO ON TO CALL OSAPI_ARG_FILE. ES arrives
 ;    holding KERNEL_SEG and that slot answers with an SI into THAT segment
 ;    WITHOUT reloading it - it is documented as read through the ES a package
-;    proc was entered with (SPEC.md 74240). Every OSAPI slot preserves ES, so
+;    proc was entered with (SPEC.md 54.5). Every OSAPI slot preserves ES, so
 ;    an entry proc may rely on it across wm_create and about_set; op_load is
 ;    package code and its clobber list says ES. So `push es` / `call op_load`
 ;    / `pop es`, or load KERNEL_SEG yourself the way apps/cc/os88thunk.asm
