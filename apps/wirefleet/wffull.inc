@@ -20,8 +20,9 @@ wf_fullscreen:
     je wf_load
     ret
 .native:
-    mov al, [wf_nativefull]
-    xor al, 1
+    mov bx, [wf_win]            ; OSAPI_WM_DISPLAY answered the HEIGHT in BX,
+    mov al, [wf_nativefull]     ; and FULLSCREEN takes BX as the window: F hung
+    xor al, 1                   ; a VGA or Hercules desktop on a divide fault
     call OSAPI_FULLSCREEN
     jc .out
     mov [wf_nativefull], al

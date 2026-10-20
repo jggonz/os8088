@@ -23,8 +23,9 @@ wf_chat_key:
     cmp al, 13
     je .send
     mov si, wf_line
-    call os88line_key
-    ret
+    call os88line_key           ; it EDITS; drawing is the caller's, and
+    jc .out                     ; nothing drew the typed text before
+    jmp wf_c_entry
 .send:
     call wf_chat_submit
     jc .out

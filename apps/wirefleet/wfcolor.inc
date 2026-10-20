@@ -837,10 +837,12 @@ wf_c_controls:
     mov [di+2], ax
     mov [di+4], ax
     mov [di+6], ax
-    call wf_canfire
+    call wf_canfire             ; (it spends AX)
+    mov ax, OS88UI_OWN
     jnc .fire
     or ax, OS88UI_DIS
 .fire:
+    mov di, wf_btnflags
     mov [di], ax
 .chat:
     mov ax, OS88UI_OWN
