@@ -132,6 +132,84 @@ as well as the sea, so an idle timer does not redraw the whole interface.
 Sound cues are finite note sequences through the existing sound router.
 That gives PC Speaker, AdLib and Sound Blaster effects while respecting the
 user's system setting. The game does not take over the timer or program a
-sound card itself. Fullscreen returns through FSX and releases its tone.
+sound card itself. Fullscreen returns through FSX and stops its sequence.
 These paths compile; the final machine checks will distinguish that from
 observed display, input and sound behavior.
+
+## 2026-10-20 — Playing the whole match, including its broken cable
+
+The two-PC test runs the actual game on two OS instances, with one using
+COM1 and the other COM2. The host bridge forwards UART bytes. It does not
+decide shots or substitute a host implementation of the game. An independent
+frame reader checks CRCs and confirms that unhit ship coordinates never
+cross the wire.
+
+The match begins with a wrong-turn shot that must be refused. The fixture
+then drops a result after the defender commits it, cuts the cable, saves
+both private files, closes both applications and opens them again. Loading
+and reconnecting completes that same shot once. It then replays shot,
+result and chat frames, injects malformed frames, types game shortcuts as
+chat text, and plays through all five enemy ships to victory. The final
+history hashes agree and shots after the ending are refused. This complete
+session passed; the final run took 91 seconds of host time, not an XT speed
+measurement.
+
+![The winning captain after a complete serial match.](wirefleet/victory-vga.png)
+
+Deployment passed on VGA, CGA and Hercules XTs: legal placement, overlap and
+edge refusal, moving a ship without losing it, rotation, removal, bounded
+auto-placement, Ready locking, button drag-cancel, About and close. CGA's
+separate color path preserves the fleet, lease and input through fullscreen
+entry and return. Chat text does not activate game shortcuts.
+
+![VGA deployment after Ready.](wirefleet/deployment-vga.png)
+
+![CGA's native monochrome desktop.](wirefleet/desktop-cga.png)
+
+![The same native game on Hercules.](wirefleet/desktop-hercules.png)
+
+![CGA's packed four-color fullscreen layout.](wirefleet/fullscreen-cga.png)
+
+The early acceptance failures were useful. The About item belongs to the
+application's own menu. A closed menu has only posted its command; a test
+must wait for the resulting state. A snapshot fixture needed the full CPU
+register context and current movable package segment. The cached MartyPC
+binary lacked the repository's Hercules page-mapping patch: rebuilding the
+pinned instrument brought WireBall's missing sprites back without changing
+the renderer. These are reasons to test what the machine actually does,
+including the test instrument itself.
+
+The serial review added explicit interrupt acknowledgment and a bounded
+foreground service call beside the IRQ path. Read and Write use the same
+queues and byte-service routine; a missed edge cannot leave a transmission
+waiting for another mouse movement. The final original-8250 fixture masks
+both serial IRQs and uses hardware loopback to check this path. It passed,
+along with mouse-port refusal, competing-instance refusal, closing a
+non-owner, complete UART restoration and forced-close release. CRC-valid
+saved files with invalid versions, flags, placement, shot counts or pending
+commands are rejected without changing the live board. Speaker, AdLib and
+Sound Blaster checks observed the Ready cue's actual note grants, speaker
+gate or FM key-on, finite expiry, mute and cleanup.
+
+Finite durations also settle sound ownership. Mute cancels future notes
+and lets the current note expire within three ticks. Closing the instance
+releases its own grant immediately. This avoids a blanket tone-off after
+another application has won the sound router.
+
+The final package is 21,954 bytes compressed. Its 46,215-byte image and
+7,033 bytes of zeroed working storage occupy exactly 52KB, with a further
+1KB module claim while connected. All four disk sizes build. The big,
+small and emulator kernels remain inside their fixed memory budgets.
+
+The clean build passed 52 host checks; the final host pass covered 54 with
+the additional built artifacts present. All nine selected soak rows passed
+after repairing failures and rerunning only those rows. All 60 full-suite
+checks passed too. One final PS/2 attempt hit a shared-image write lock when
+two test runs overlapped; it passed when rerun alone. The big and emulator
+kernels each retain 3,072 bytes of budget, the small kernel 2,560. No budget
+was raised.
+
+These are emulator results. A physical null modem, cable quality, real
+8250 interrupt margin and the sound of actual cards still need a field run.
+The two 86Box profiles were prepared and checked without starting an
+interactive session or changing the owner's existing VM settings.

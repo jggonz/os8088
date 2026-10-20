@@ -1914,7 +1914,7 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
-    Row("wirefleetlink", "soak", py("tests/wirefleetlink.py"), 80.0,
+    Row("wirefleetlink", "soak", py("tests/wirefleetlink.py"), 100.0,
         "WireFleet two UART peers: turn rules, private fleets, lost result, save/load/reconnect, duplicate commands/chat, malformed frames, victory and cleanup (SPEC.md 114/115)",
         needs=("qemu", "nasm", "pil"), wants=("build/wireflet.img", "build/os8088.img"), timeout=300),
     Row("wirefleetsystem", "soak", py("tests/wirefleetsystem.py"), 120.0,

@@ -66,15 +66,11 @@ wf_soundnote:
 wf_soundquiet:
     mov word [wf_soundseq], 0
     mov byte [wf_soundwait], 0
-    cmp byte [wf_soundactive], 0
-    je .out
     mov byte [wf_soundactive], 0
     mov word [wf_soundhz], 0
-    xor ax, ax
-    xor cx, cx
-    mov dl, 0x40
-    call OSAPI_SND_TONE
-.out:
+    ; Every note is finite (at most three ticks). An unconditional off could
+    ; silence another instance that has since won the same-priority router.
+    ; Close's instance teardown releases only our own actual grant.
     ret
 wf_cues: dw wf_cueplace,wf_cueready,wf_cuefire,wf_cuemiss,wf_cuehit,wf_cuesunk,wf_cuelink,wf_cuewin,wf_cuelose
 wf_cueplace: dw 660

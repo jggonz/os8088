@@ -113,7 +113,7 @@ def deployment():
             assert val('ready') == 1
             key('KeyC')
             assert fleet() == before and val('ready') == 1, 'Ready fleet remained editable'
-            ui.menu_pick('System', 'About WireFleet')
+            ui.menu_pick('WireFleet', 'About WireFleet')
             ui.settle()
             assert val('abon') == 1
             key('Escape')

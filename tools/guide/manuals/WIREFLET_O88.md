@@ -50,4 +50,4 @@ and Hercules uses monochrome. Save and Load return to the desktop chooser.
 
 **Game > Sound M** mutes or enables effects. The system Sound setting
 chooses PC Speaker, AdLib or Sound Blaster. `H` opens controls; **About
-WireFleet** is in the System menu.
+WireFleet** is in the WireFleet menu.

@@ -1196,9 +1196,9 @@
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "f8bfc2b1",
+  "stamped": "0517180f",
   "strings": "852ffb65a027daaa",
-  "why": "Document complete game and remove the deployment-only placeholder"
+  "why": "Checked the complete game manual against final adapter, recovery and sound acceptance"
  },
  "WORD": {
   "sources": [],

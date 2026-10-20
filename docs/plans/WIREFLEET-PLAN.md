@@ -17,16 +17,16 @@ diary is [HOW-WIREFLEET-WAS-BUILT.md](../HOW-WIREFLEET-WAS-BUILT.md).
 - [x] **Deployment:** as a captain I can select, rotate, place, remove and
   auto-place a legal fleet. A native window, About card, controls and color
   and monochrome artwork work on VGA, CGA and Hercules.
-- [ ] **Battle:** as two captains we can join over serial, ready our fleets,
+- [x] **Battle:** as two captains we can join over serial, ready our fleets,
   take alternate shots, see misses/hits/sunk ships, and reach one winner.
   The defending computer judges its private fleet; the peer never receives
   unhit ship positions. Chat shares the same framed connection.
-- [ ] **Recovery:** silence pauses input without losing a pending shot.
+- [x] **Recovery:** silence pauses input without losing a pending shot.
   Duplicate messages are harmless, reconnect reconciles acknowledged turns,
   and saved matches restore ships, shots and whose turn it is.
-- [ ] **Presentation:** finite sound cues follow the system's PC Speaker,
+- [x] **Presentation:** finite sound cues follow the system's PC Speaker,
   AdLib or Sound Blaster route; CGA has a four-color fullscreen renderer.
-- [ ] **Acceptance:** independent protocol faults, two real OS instances,
+- [x] **Acceptance:** independent protocol faults, two real OS instances,
   three desktop adapters, CGA fullscreen, cleanup, final soak union and full
   gate. Record observations and limitations, with screenshots.
 
@@ -45,15 +45,25 @@ Therefore a desktop link needs an explicit lease coordinated with the mouse
 owner and instance teardown. A naked package IRQ hook is insufficient.
 The lease must refuse the active mouse port, avoid changing a winning
 mouse's shared IRQ mask, restore UART settings, survive fullscreen entry,
-and release on forced close. Its API and budget will be specified before
-implementation. No dependency on a 16550 FIFO or scratch register is allowed.
+and release on forced close. SPEC.md §115 pins its API, ownership and budget;
+`SERIAL.DRV` implements the lease for both kernels. No dependency on a 16550
+FIFO or scratch register is allowed.
 
 ## Verification discipline
 
-Deployment's final rows are `wirefleetdeploy` and `wirefleetart`. They are
-registered, with the emulator pass deferred to final acceptance. Wave host
-validation is `make` and `make wirefleetdisk`; visual inspection booted
-VGA, CGA and Hercules XTs on MartyPC and captured empty/auto-placed fleets.
+Wave host validation used `make` and `make wirefleetdisk`; visual inspection
+booted VGA, CGA and Hercules XTs on MartyPC. Final acceptance passed all nine
+affected rows: `wirefleetart`, `wirefleetdeploy`, `wirefleetlink`,
+`wirefleetsystem`, `wireball`, `wireballmono`, `kernmods`, `mouwheel` and
+`hibernate`. Failed rows alone were rerun after repairs. The system row also
+checks competing instances, a real 8250 with both serial IRQs masked,
+CRC-valid invalid saves and actual speaker/FM note grants.
+
+The clean build passed 52 host checks. All 60 full-suite rows passed; the
+final PS/2 row needed a separate retry after overlapping QEMU sessions held
+the same image's write lock. The fixed big/small/emulator memory budgets
+pass, with 3,072 / 2,560 / 3,072 bytes spare. The diary contains screenshots
+and the remaining physical-hardware limits.
 
 During waves: assemble with `cpu 8086` and warnings as errors, run host
 checks, and boot to inspect the result. Name the affected rows as they are

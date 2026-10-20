@@ -99012,7 +99012,8 @@ first thing to rely on it.
 ### 53.7 What a bracket may call (binding)
 
 Legal throughout: the file slots (UI-task context — this is it),
-`osapi_mouse`, `osapi_get_ticks`, the snd slots, mem/cm/xm slots,
+`osapi_mouse`, `osapi_get_ticks`, `osapi_serial` Read/Write on a lease
+opened before entry (§115), the snd slots, mem/cm/xm slots,
 `cpu_info`, `osapi_video`, `wm_top`, `osapi_font_glyphs` (the glyph
 *data* — how an app letters mode 13h without a renderer of its own), and
 the four `fsx_*` slots. Legal **until the first `fsx_mode` call**, and
@@ -197029,8 +197030,10 @@ The desktop frame preferences are 600×414 (VGA), 600×304 (Hercules), and
 600×154 (CGA), subject to the window manager's fit. Board cells are 24 pixels
 wide and 24, 16 or 8 high according to the actual content height. The compact
 grid begins at content y=25; taller grids at y=40. Buttons sit four pixels
-below the grid. There is no worker or serial lease in the deployment wave;
-Ready explicitly reports that the link is a subsequent delivery story.
+below the grid. A one-tick window timer polls the link and finite sound
+sequence; if timer registration is refused, a restartable worker only posts
+window wakes. Parsing, drawing and file access stay on the UI task. Ready
+locks a complete fleet and waits for both captains and the serial link.
 
 `wirefleetdeploy` (soak) drives the shipped assembly on all three adapters:
 positive placement before overlap/edge refusals, moving without losing an
@@ -197149,9 +197152,11 @@ Cues are finite tone sequences, priority 40h, through `OSAPI_SND_TONE`:
 place 660; ready 660/880; fire 165/110; miss 440/220; hit 110/82; sunk
 220/165/110; connection 440/880; victory 784/988/1175; defeat 330/220/165 Hz.
 The sequencer advances on OS ticks and never waits. The system routes these
-to its PC Speaker, AdLib or Sound Blaster FM sink. Mute, close and fullscreen
-exit stop this instance's sequence; finite durations and kernel instance
-teardown release the actual device grants even on forced close.
+to its PC Speaker, AdLib or Sound Blaster FM sink. Mute and fullscreen exit
+stop further notes; the current finite note expires within three OS ticks.
+They do not send an unconditional tone-off, which could silence another
+instance that has since won the router. Kernel instance teardown releases
+this instance's actual device grants immediately, including on forced close.
 
 ## 115. Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`)
 
@@ -197176,7 +197181,7 @@ user to move the mouse. Nonstandard or unadvertised bases are refused.
 | AL | verb | arguments and result |
 |---|---|---|
 | 0 | Open | SI=offset of a 517-byte buffer in the pinned package region; CF=0 AX=0 on success |
-| 1 | Close | restores UART/PIC state, releases the lease and drops the module; idempotent for an instance with no lease |
+| 1 | Close | restores UART/PIC state, releases the lease and drops the module; succeeds if already closed; a foreign lease returns busy |
 | 2 | Read | CF=0 AL=byte, AH=line/overflow status accumulated since the preceding Read; CF=1 AX=6 if empty |
 | 3 | Write | CL=byte; CF=0 AX=0 queued; CF=1 AX=7 if the TX queue is full |
 
@@ -197204,6 +197209,12 @@ preserves the cross-wired IRQ handling in §9.5.2.1 and keeps mouse movement
 from stealing serial data. The lease does not mask the winning mouse's line.
 Line errors or an overflowing ring are reported to the application so its
 framer can discard a partial message and resynchronize.
+
+Read and successful Write also run the same bounded service with interrupts
+disabled: acknowledge IIR, capture at most 16 RX bytes and start at most one
+ready TX byte. This starts a newly queued transmission immediately and
+recovers from a missed IRQ edge without waiting for another mouse event.
+The rings and their publication order are identical on both paths.
 
 Close first withdraws the row from serial dispatch with interrupts disabled,
 then restores the UART/PIC state before the module can be freed. Instance

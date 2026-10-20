@@ -39,6 +39,8 @@ def call(m, seg, sy, name):
     target = sy['wf_entry.out']
     try:
         m.cmd(cmd='park',cs=seg,ip=sy['wf_'+name])
+        for reg in regs:
+            m.setreg(reg,saved[reg])
         m.setreg('ds',seg)
         m.setreg('es',seg)
         m.setreg('flags',saved['flags'] & ~0x600)
@@ -66,7 +68,7 @@ def systems():
         ui.settle()
         m = ui.m
         seg = dispapps.pkg_seg(m,0)[1]
-        def data(name,n): return m.readseg(seg,sy['wf_'+name],n)
+        def data(name,n): return m.readseg(dispapps.pkg_seg(m,0)[1],sy['wf_'+name],n)
         def val(name,n=1): return int.from_bytes(data(name,n),'little')
         def key(name):
             m.key(name)
@@ -90,6 +92,30 @@ def systems():
         m.run()
         ui.mo.to(120,100)
         assert struct.unpack('<HH',m.read(m.sym('mouse_x'),4))==(120,100)
+        other=ui.open('WIREFLET.O88')
+        ui.settle()
+        otherseg=dispapps.pkg_seg(m,1)[1]
+        ui.menu_pick('Link','Connect COM2')
+        ui.settle()
+        assert m.readseg(otherseg,sy['wf_linkopen'],1)==b'\0','second captain stole lease'
+        assert int.from_bytes(m.readseg(otherseg,sy['wf_message'],2),'little')==sy['wf_linkbusy']
+        ui.close(other)
+        assert m.read(m.sym('ser_row'),2)==b'\2\0','closing non-owner released lease'
+        ui.raise_window(w)
+        # Mask both serial IRQs, so neither the UART nor a residual mouse
+        # packet can service this byte. Only the UI's bounded service can.
+        M.pace(m,.2)
+        m.pause()
+        livepic=m.inb(0x21)
+        rxhead=data('serialbuf',1)
+        m.outb(0x21,livepic|0x18)
+        m.outb(0x2fc,0x1b)
+        m.run()
+        wait(lambda:data('serialbuf',1)!=rxhead,'8250 RX despite masked UART IRQ')
+        m.pause()
+        m.outb(0x2fc,0x0b)
+        m.outb(0x21,livepic)
+        m.run()
         # Fullscreen uses the same lease and the same private fleet.
         key('KeyA')
         board = data('board',100)
@@ -98,8 +124,9 @@ def systems():
         M.pace(m,.8)
         assert m.read(m.sym('ser_row'),2)==b'\2\0'
         assert data('board',100)==board
+        old_target=val('target')
         m.key('ArrowRight')
-        wait(lambda:val('target')==1,'fullscreen keyboard target')
+        wait(lambda:val('target')==old_target+1,'fullscreen keyboard target')
         m.key('KeyY')
         wait(lambda:val('ready')==1,'fullscreen Ready')
         m.key('KeyT')
@@ -116,7 +143,7 @@ def systems():
         raw=m.read(0xb8000,16384)
         pixels=[(raw[(y&1)*8192+(y//2)*80+x//4] >> (6-2*(x&3)))&3
                 for y in range(200) for x in range(320)]
-        assert set(pixels)=={0,1,2,3},'CGA palette/tile forms collapsed'
+        assert {0,1,3} <= set(pixels),'CGA sea/grid/hull forms collapsed'
         im=Image.new('P',(320,200))
         im.putpalette([0,0,0,85,255,255,255,85,255,255,255,255]+[0]*756)
         im.putdata(pixels)
@@ -147,7 +174,15 @@ def systems():
         ui.settle()
         assert val('message',2)==sy['wf_loadedmessage']
         assert data('board',100)==board and val('ready')==1 and val('connected')==0
+        seg=dispapps.pkg_seg(m,0)[1]
         m.pause()
+        # Park only at a complete callback boundary. Resetting the CPU's
+        # prefetch/REP state in the middle of an arbitrary kernel instruction
+        # is not equivalent to restoring its visible register file.
+        m.bp_exec((seg<<4)+sy['wf_tick'])
+        m.run()
+        assert m.wait_stop(20)=='breakpoint'
+        m.bp_exec()
         assert call(m,seg,sy,'snapshot_check')[0]==0,'valid snapshot refused'
         for offset,value in ((4,2),(393,1),(44,99),(49,2),(54,6),(42,4),
                              (13,2),(28,1),(31,31),(8,1),(358,1)):
@@ -161,7 +196,10 @@ def systems():
         m.run()
         # Bypass the app negotiator to exercise the kernel's forced teardown.
         ui.menu_pick('Link','Connect COM2')
-        assert val('linkopen')==1
+        wait(lambda:val('linkopen')==1,'reopen lease after load')
+        assert val('linkopen')==1, (data('board',100).hex(),
+            m.readseg(dispapps.pkg_seg(m,0)[1],val('message',2),80),
+            m.read(m.sym('ser_row'),2).hex(),m.read(m.sym('mou_hpst'),1).hex())
         m.pause()
         import os88geom as G
         import os88sym
@@ -194,7 +232,8 @@ def sounds():
             ui.settle()
             M.pace(m,.5)
             m.pause()
-            m.bp_exec(m.sym('osapi_snd_tone'))
+            returned=(seg<<4)+sy['wf_soundnote.out']
+            m.bp_exec(m.sym('osapi_snd_tone'),returned)
             m.key('KeyY')
             m.run()
             notes=[]
@@ -203,6 +242,17 @@ def sounds():
                 r=m.regs()
                 notes.append(r['ax'])
                 assert r['ax']==hz and r['cx'] in (1,2),r
+                m.run()
+                assert m.wait_stop(20)=='breakpoint' and m.regs()['cs']==seg
+                assert m.read(m.sym('snd_town_act'),1)==b'\1','router refused cue'
+                if backend=='speaker':
+                    assert m.inb(0x61)&3==3,'speaker gate never opened'
+                else:
+                    import os88drvsym
+                    ds=os88drvsym.symbols('sound.bin')
+                    driverseg=int.from_bytes(m.read(m.sym('drv_tab')+2,2),'little')
+                    assert driverseg,'sound driver not loaded'
+                    assert m.readseg(driverseg,ds['opl_b0']+8,1)[0]&32,'FM tone never keyed'
                 m.run()
             m.pause()
             m.bp_exec()

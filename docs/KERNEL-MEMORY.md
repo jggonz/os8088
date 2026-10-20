@@ -302,10 +302,10 @@ had added.
     "blobseg": 6304,
     "boot2": 6029,
     "bootmax": 120320,
-    "bss": 5253,
+    "bss": 5265,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37459,
+    "cold": 37543,
     "coldpara": 2368,
     "colds": 3808,
     "fatpara": 288,
@@ -321,38 +321,38 @@ had added.
     "minramkb": 128,
     "ovl": 5118,
     "stk0": 512,
-    "text": 43057,
+    "text": 43183,
     "vgabuf": 336,
     "vgabufpara": 32,
     "vgas": 6176
   },
   "small": {
-    "blobseg": 4000,
+    "blobseg": 4032,
     "boot2": 4387,
     "bootmax": 121344,
-    "bss": 2979,
+    "bss": 2991,
     "budget": 64000,
     "codemax": 65536,
-    "cold": 21970,
-    "coldpara": 1376,
+    "cold": 22040,
+    "coldpara": 1408,
     "colds": 2528,
     "fatpara": 64,
     "fats": 2240,
     "grace": 2048,
     "imgpara": 2144,
-    "kend": 3904,
+    "kend": 3936,
     "kseg": 96,
-    "ksize": 60928,
+    "ksize": 61440,
     "lowbss": 2868,
     "lowpara": 224,
     "lows": 2304,
     "minramkb": 128,
     "ovl": 1486,
     "stk0": 512,
-    "text": 31138,
+    "text": 31247,
     "vgabuf": 0,
     "vgabufpara": 0,
-    "vgas": 3904
+    "vgas": 3936
   }
 }
 ```
@@ -726,7 +726,7 @@ there and nowhere else.
 | the file system, end to end | 29,522 | 36.7% |
 | the window system and its furniture | 22,413 | 27.9% |
 | drawing: adapters, primitives, glyphs, icons | 12,640 | 15.7% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,979 | 9.9% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,105 | 10.1% |
 | the kernel proper: API table, heap, scheduler, events | 7,136 | 8.9% |
 | the Control Panel | 353 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 300 | 0.4% |

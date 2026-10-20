@@ -18,6 +18,7 @@ import os88ui
 import os88qemu as Q
 import dispapps
 import dispcp
+import os88geom as G
 
 
 def encode(body):
@@ -61,6 +62,9 @@ class Mouse(W.Mouse):
     def click(self,x,y,settle=None):
         super().click(x,y)
 
+    def dblclick(self,x,y,settle=None):
+        super().dblclick(x,y)
+
 
 class UI(os88ui.UI):
     def _wait(self,cond,what,guest,snapshot=None):
@@ -68,6 +72,28 @@ class UI(os88ui.UI):
 
     def settle(self, **kw):
         return W.settle(self.m)
+
+    def scroll_to(self,entry,limit=10,win=None):
+        # os88ui's algorithm, using QEMU's guest tick clock for each key.
+        def position():
+            base=self._fsblk(win) if win is not None else None
+            if base is None:
+                base=(G.KERNEL_SEG<<4)+self._word('fm_vp')
+            return self.scroll(win),int.from_bytes(self.m.read(base+G.FS_SEL,2),'little')
+        def step(key):
+            before=position()
+            self.m.key(key)
+            return Q.acted(self.m,lambda:position()!=before,secs=3,what='directory scroll')
+        for _ in range(200):
+            if self.scroll(win)==0 or not step('ArrowUp'):
+                break
+        for _ in range(200):
+            if self.scroll(win)>=entry or not step('ArrowDown'):
+                break
+        self.settle()
+        row=entry-self.scroll(win)
+        assert row>=0
+        return row
 
 
 class Machine(W.Machine):
@@ -93,9 +119,12 @@ class Machine(W.Machine):
                  ('badframes',2),('chatpending',1),('chatcount',2),('conflict',1),('finished',1)]}
 
     def key(self,key):
-        self.hmp('sendkey '+key)
+        super().key('Return' if key=='Enter' else key)
         Q.pace(self,.14)
         W.settle(self)
+        live=dispapps.pkg_seg(self,0)
+        if live:
+            self.seg=live[1]
 
     def connect(self):
         self.ui.menu_pick('Link','Connect COM'+str(self.linkport+1))
@@ -277,6 +306,20 @@ def main():
                 m.mo.to(100,100)
                 assert m.mo.where()[:2]==(100,100),'serial mouse lost after match close'
             print('wirefleetlink: two ports, turn rules, lost result, save/close/load/reconnect, duplicate shots/chat, invalid frames, all ships sunk, victory and cleanup')
+        except BaseException:
+            for i,m in enumerate(machines):
+                print('wirefleet failure PC',i,m.state(),
+                      'ring',m.data('serialbuf',5).hex(),
+                      'tx',m.v('txpos',2),m.v('txlen',2),
+                      'identity/peer/match',m.data('identity',12).hex(),flush=True)
+                print('UART',m.hmp('i /b '+hex((0x3f8,0x2f8)[m.linkport]+5)),
+                      m.hmp('info pic').splitlines()[-2:],flush=True)
+                m.hmp('screendump "'+W.artifact('wirefleet-failure-%d.ppm'%i)+'"')
+            if cable:
+                for i,wire in enumerate(cable.observed):
+                    print('wirefleet wire',i,len(wire),'bytes',
+                          [(p[3],p[4:16].hex()) for p in list(frames(wire))[-6:]],flush=True)
+            raise
         finally:
             if cable:
                 cable.close()

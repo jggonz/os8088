@@ -693,6 +693,26 @@ and says `Catalog not understood`.
 SPEC.md §92 is the format and the contract; `docs/WIRE-PLAN.md` is why it
 reads that way.
 
+### WireFleet — Two PCs. Two fleets. One winner.
+
+`WIREFLET.O88` is a two-player naval game over a null modem cable. Place or
+auto-place five ships, ready both fleets, and take alternate shots. Dots,
+crosses and sunk markers keep both grids readable in color or monochrome.
+Chat shares the connection. A lost cable pauses the match; reconnecting the
+same peers preserves ships, shots and an unanswered shot. Save each PC's own
+`.WFL` file before closing, then load both files and connect to resume.
+
+VGA has a color desktop window; CGA and Hercules have monochrome desktop
+art, and CGA adds four-color fullscreen with `F` or `Alt+Enter`. Finite cues
+follow the system's PC Speaker, AdLib or Sound Blaster route. `M` mutes.
+Choose the free port in **Link** after the serial mouse is detected:
+9600 baud, 8N1, no flow control.
+
+`make wirefleetdisk` builds all four standalone disk sizes;
+`make wirefleet-pair` opens two linked 86Box XTs. The
+[build diary](docs/HOW-WIREFLEET-WAS-BUILT.md) records the design, generated
+art, recovery protocol and acceptance results.
+
 ### WireChat — chat rooms on the wire
 
 `WIRECHAT.O88` is a chat client: four public rooms (lobby, hardware,

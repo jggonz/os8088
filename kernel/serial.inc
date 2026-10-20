@@ -149,6 +149,12 @@ srl_body:
     jne .busy
     cmp al, 1
     je srl_close
+    cmp al, 2
+    jne .ring
+    push ax
+    call srl_pump              ; a missed IRQ edge cannot strand pending bytes
+    pop ax
+.ring:
     mov bx, [cs:srl_buf]
     mov dx, [cs:srl_seg]
     mov es, dx
@@ -171,6 +177,7 @@ srl_body:
     inc dx
     mov al, 3                  ; RX+THRE; IRQ starts a stopped transmitter
     out dx, al
+    call srl_pump              ; also kick the first ready byte immediately
     xor ax, ax
     ret
 .read:
@@ -353,6 +360,12 @@ srl_close:
 ; The mouse ISR has saved all registers and owns EOI. At most 16 RX bytes
 ; per entry, then one TX byte; original 8250s normally have one waiting.
 srl_irq:
+    call srl_pump
+    retf
+srl_pump:
+    mov dx, [cs:srl_base]
+    add dx, 2
+    in al, dx                  ; acknowledge THRE before queuing its next byte
     mov ax, [cs:srl_seg]
     mov es, ax
     mov bx, [cs:srl_buf]
@@ -403,13 +416,13 @@ srl_irq:
     out dx, al
     inc byte [es:bx+4]
 .out:
-    retf
+    ret
 .idle:
     mov dx, [cs:srl_base]
     inc dx
     mov al, 1                  ; RX only; no empty THRE interrupt storm
     out dx, al
-    retf
+    ret
 
 ; AL=instance, or FFh reboot sweep. Every register and FLAGS preserved
 ; except CF (clear means a lease was closed).
