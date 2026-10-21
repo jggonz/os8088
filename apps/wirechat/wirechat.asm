@@ -61,10 +61,16 @@
 ; =============================================================================
 ; GEOMETRY (SPEC.md 113.5) - content-relative throughout. The content origin
 ; is 8-aligned (WF_SNAP, SPEC.md 11.94), so a column that is a multiple of 8
-; here is a multiple of 8 on the glass, where font_run's single store lives.
+; here is a multiple of 8 on the glass, where a cell of the face is one byte
+; of each of its rows (SPEC.md 113.5.3).
 ; =============================================================================
-WC_LH       equ 10              ; a row: an 8-row glyph, one row of air above
-                                ; and one below (wc_bandc fills them)
+WC_LH       equ 10              ; a row: one cell of WireChat's face, 8 x 10
+                                ; (SPEC.md 113.5.3) - row 0 air, the capitals
+                                ; on 1..7, the descenders on 8..9
+WC_FROWS    equ WC_LH           ; the face's rows: a cell IS a band
+WC_FSTR     equ WC_SBUFN        ; wc_fband's stride: the longest composition
+WC_FFIRST   equ 32              ; the face's characters, as the kernel's
+WC_FLAST    equ 126
 WC_STH      equ 12              ; the status bar: its rule and one band
 WC_INH      equ 24              ; the input row: its rule, the box (16 rows,
                                 ; WC_BOXY down), and air
@@ -147,9 +153,9 @@ WCX_SP      equ 3               ; (cell, ink, ground) x WC_NSPAN; 0xFF = the
                                 ; style's
 WCX_G0      equ WCX_SP + 3 * WC_NSPAN   ; (cell, glyph), cell 0xFF = none
 WCX_G1      equ WCX_G0 + 2
-WCX_BC      equ WCX_G1 + 2      ; db the overstrike's first cell...
+WCX_BC      equ WCX_G1 + 2      ; db the bold's first cell...
 WCX_BL      equ WCX_BC + 1      ; db ...and its length, 0 = none
-WCX_UL      equ WCX_BL + 1      ; db the lower air row's colour, 0xFF = the
+WCX_UL      equ WCX_BL + 1      ; db the cell's last row's colour, 0xFF = the
                                 ; ground: a section title's rule
 WC_METAN    equ WCX_UL + 1
 ; --- the SLOTS (SPEC.md 113.5.1): a band's meta and cells as on the glass ----
@@ -322,7 +328,15 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_mid, 2               ; the first row under the tabs' rule
     WCV wc_ty, 2                ; the title row
     WCV wc_py1, 2               ; the pane's first band
-    WCV wc_rows, 2              ; ...how many
+    WCV wc_ph, 2                ; ...its height, to the notice line
+    WCV wc_srows, 2             ; ...its scroll column's cells
+    WCV wc_rows, 2              ; ...the bands its lines take, from wc_top
+    WCV wc_gap, 2               ; ...the air under a message (wc_face)
+    WCV wc_pby, 2 * (WC_MAXB + 1)   ; ...each band's top, then the end
+    WCV wc_gby, 2 * (WC_MAXB + 1)   ; ...as on the glass (wc_gshift)
+    WCV wc_grows, 2             ; ...and its bands there
+    WCV wc_gused, 2             ; ...the rows below them that are not ground
+    WCV wc_sbg, WC_MAXB         ; ...and the scroll column's glyphs there
     WCV wc_tx, 2                ; ...its text column (8-aligned)
     WCV wc_cols, 2              ; ...and how many cells wide
     WCV wc_ny, 2                ; the notice line
@@ -450,9 +464,17 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_bn, 1                ; ...a span count down
     WCV wc_binkd, 1             ; ...1 = only span inks moved (wc_inkrun)
     WCV wc_bgid, 1              ; ...a glyph
-    WCV wc_bair, 2              ; ...the air's run: its first cell...
-    WCV wc_bend, 2              ; ...one past its last...
-    WCV wc_bgnd, 1              ; ...and its ground
+    WCV wc_bps, 2               ; ...the run wc_bspans holds: its first
+    WCV wc_bpe, 2               ; cell, one past its last...
+    WCV wc_bpc, 2               ; ...and its ink and ground
+    WCV wc_fx, 2                ; the face (SPEC.md 113.5.3): a run's x...
+    WCV wc_fy, 2                ; ...its cell's top...
+    WCV wc_fcnt, 2              ; ...its characters...
+    WCV wc_fpen, 2              ; ...the blit's pen: set bits, clear bits
+    WCV wc_fbc, 2               ; ...its bold, [first, end), signed
+    WCV wc_fbe, 2
+    WCV wc_ful, 1               ; ...its last row's colour, 0xFF = none
+    WCV wc_fband, WC_FSTR * WC_FROWS    ; ...composed, at a fixed stride
     WCV wc_dtop, 2              ; the pane's top line AS DRAWN, 0xFFFF owed
     WCV wc_act, 1               ; the activity lamp's seconds left
     WCV wc_bv, 8                ; a button's rect, as its painter has it
@@ -653,6 +675,9 @@ wc_btn:
 %define OS88UI_NOGLYPH              ; no check box or radio drawn here
 %include "os88ui.inc"
 %define OS88LINE_PENS               ; the field in the theme (SPEC.md 83.5)
+%define OS88LINE_RUN wc_frun        ; ...lettered in our face (SPEC.md 83.6):
+%define OS88LINE_RUNUP 1            ; its cell starts a row above font_run's
+%define OS88LINE_RUNH WC_FROWS      ; and is WC_FROWS rows deep
 %include "os88line.inc"
 %include "os88data.inc"
 %define OS88SOCK_STATE              ; net_find asks NETV_STATE too

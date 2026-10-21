@@ -8,6 +8,7 @@ floppy.
 
     python3 tools/os88face.py faces/charter12.t88 -o build/CHARTER.F88
     python3 tools/os88face.py faces/charter12.t88 --preview /tmp/sheet.png --cga
+    python3 tools/os88face.py apps/wirechat/wcface.t88 --bitmap build/wcface.bin
 
 The art is the source for the same reason tools/os88font.py's is (SPEC.md 6.2):
 a typeface is the one asset in this tree whose defects are entirely visual, and
@@ -391,6 +392,11 @@ def main():
     ap.add_argument('--cga', action='store_true',
                     help='preview at CGA 640x200 pixel aspect (2.4:1 tall)')
     ap.add_argument('--zoom', type=int, default=2)
+    ap.add_argument('--bitmap', metavar='BIN',
+                    help='write the regular style\'s bitmap block ALONE - '
+                         '95 x rows bytes, glyph-major, 1 = ink - for a '
+                         'package that carries its face inside itself and '
+                         'incbins it (SPEC.md 113.5.3); stride 1 only')
     ap.add_argument('--quiet', action='store_true')
     a = ap.parse_args()
 
@@ -411,6 +417,19 @@ def main():
                   % (a.source, a.out, head['face'], head['rows'], len(styles),
                      facts['minadv'], facts['maxadv'], facts['maxover'],
                      len(blob)))
+    if a.bitmap:
+        if head['stride'] != 1:
+            sys.stderr.write("os88face: --bitmap is a stride-1 face's rows; "
+                             "%s is stride %d\n" % (a.source, head['stride']))
+            return 1
+        gl = styles['regular']
+        blob = bytes(r for c in range(FIRST, LAST + 1) for r in gl[c][2])
+        with open(a.bitmap, 'wb') as fh:
+            fh.write(blob)
+        if not a.quiet:
+            print("os88face: %s -> %s (the regular style's %d glyphs x %d "
+                  "rows, %d bytes)" % (a.source, a.bitmap, NGLYPH,
+                                       head['rows'], len(blob)))
     if a.preview:
         render(head, styles, a.preview, a.zoom, a.cga)
         if not a.quiet:

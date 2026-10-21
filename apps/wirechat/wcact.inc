@@ -1219,7 +1219,7 @@ wc_opendm:
 .out:
     ret
 
-; --- wc_sbpress - a press on band BX of the scroll column: an arrow is a
+; --- wc_sbpress - a press on cell BX of the scroll column: an arrow is a
 ; line, the track above or below the thumb a page (SPEC.md 113.6.2)
 wc_sbpress:
     cmp byte [wc_sbon], 0
@@ -1227,7 +1227,7 @@ wc_sbpress:
     mov ax, -1
     or bx, bx
     jz .go
-    mov ax, [wc_rows]
+    mov ax, [wc_srows]
     dec ax
     cmp bx, ax
     mov ax, 1
@@ -1334,13 +1334,10 @@ wc_where:
     mov ax, dx
     sub ax, [wc_py1]
     jb .no
-    xor dx, dx
-    mov bx, WC_LH
-    div bx
-    cmp ax, [wc_rows]
+    cmp ax, [wc_ph]
     jae .no
-    mov bx, [wc_cols]                   ; the last cell: the scroll column
-    dec bx
+    mov bx, [wc_cols]                   ; the last cell: the scroll column,
+    dec bx                              ; on its own grid
     shl bx, 1
     shl bx, 1
     shl bx, 1
@@ -1350,10 +1347,27 @@ wc_where:
     add bx, 8
     cmp cx, bx
     jae .no
+    xor dx, dx
+    mov bx, WC_LH
+    div bx
+    cmp ax, [wc_srows]
+    jae .no
     mov bx, ax
     mov al, WH_SB
     ret
 .msg:
+    xor bx, bx                          ; the band the row is in - its gap is
+.band:                                  ; its message's - as wc_play laid it
+    cmp bx, [wc_rows]
+    jae .empty
+    mov si, bx
+    shl si, 1
+    cmp ax, [wc_pby+si+2]
+    jb .hit
+    inc bx
+    jmp short .band
+.hit:
+    mov ax, bx
     add ax, [wc_top]
     call wc_lfind                       ; BX = the message
     mov ah, 0xFF
@@ -1362,6 +1376,9 @@ wc_where:
 .pane:
     mov al, WH_PANE
     ret
+.empty:
+    mov ah, 0xFF
+    jmp short .pane
 .no:
     mov al, WH_NONE
     ret

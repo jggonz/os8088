@@ -14,12 +14,11 @@
 ; painter records (wc_tabc, wc_fkc), so the hit test reads what is on the
 ; glass.
 ;
-; EVERY ROW IS A BAND: WC_LH = 10 rows, a glyph row of 8 with one row of air
-; above and below. wcband.inc's wc_bandc letters it span by span with opaque
-; OSAPI_FONT_RUNs, padded to the region's width, and fills the two air rows in
-; the band's ground - so a band repaints every pixel it owns exactly once
-; (PERFORMANCE.md rules 1 and 2). Bold is SPEC.md 6.6.2 case 6, an overstrike
-; at x+1 (tests/textsites.txt).
+; EVERY ROW IS A BAND: WC_LH = 10 rows, one cell of WireChat's own 8 x 10
+; face (SPEC.md 113.5.3). wcband.inc's wc_bandc letters it a colour pair at a
+; time, each run composed - air, glyphs and bold - and put down by one
+; OSAPI_GFX_BLIT1, padded to the region's width, so a band repaints every
+; pixel it owns exactly once (PERFORMANCE.md rules 1 and 2).
 ;
 ; THE DIRTY BITS (WCD_*). A state change ORs the bits for the regions it
 ; changed; wc_flush paints exactly those, under a lock its caller holds.
@@ -90,15 +89,23 @@ wc_geom:
     mov [wc_iy], ax
     sub ax, WC_LH + 1
     mov [wc_ny], ax
-    sub ax, [wc_py1]                    ; the pane's bands
-    xor dx, dx
-    mov cx, WC_LH
-    div cx
-    cmp ax, 1
+    sub ax, [wc_py1]                    ; the pane's height...
+    jge .ph
+    xor ax, ax
+.ph:
+    mov [wc_ph], ax
+    xor dx, dx                          ; ...and its scroll column's cells,
+    mov cx, WC_LH                       ; on a grid of their own: the bands'
+    div cx                              ; are wc_play's, and move with the
+    cmp ax, 1                           ; messages' gaps
     jge .rw
     mov ax, 1
 .rw:
-    mov [wc_rows], ax
+    cmp ax, WC_MAXB
+    jbe .rw2
+    mov ax, WC_MAXB
+.rw2:
+    mov [wc_srows], ax
     mov word [wc_tx], 8                 ; the text column, one cell in...
     mov cx, [wc_mx2]                    ; ...and its cells to the scroll
     sub cx, 8 + 4 - 1                   ; column, the last of them, four
@@ -2012,31 +2019,76 @@ wc_dirtylines:
     pop bx
     ret
 
-; --- wc_maxtop - AX = the largest top line that still fills the pane -------
+; --- wc_maxtop - AX = the largest top line from which every line to the end
+; is on the glass: wc_play's rule - a band whole, and a message's last line
+; with its gap - counted back from the end. Preserves the rest
 wc_maxtop:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, [wc_ph]                     ; DI = the rows still free
+    xor si, si                          ; SI = the lines they hold, from the end
+    xor bx, bx
+    mov bl, [wc_mn]
+.m:
+    or bx, bx
+    jz .done
+    dec bx
+    push si
+    push di
+    call wc_mtot                        ; AX = message BX's lines...
+    pop di
+    pop si
+    mov cx, ax
+    mov dx, WC_LH
+    mul dx
+    add ax, [wc_gap]                    ; ...and the rows they take
+    cmp ax, di
+    ja .part
+    sub di, ax
+    add si, cx
+    jmp short .m
+.part:
+    mov ax, di                          ; the end of it that fits: its last
+    sub ax, [wc_gap]                    ; line carries the gap
+    jb .done
+    xor dx, dx
+    mov cx, WC_LH
+    div cx
+    add si, ax
+.done:
     mov ax, [wc_total]
-    sub ax, [wc_rows]
+    sub ax, si
     jge .out
     xor ax, ax
 .out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
-; --- wc_sbcalc - the scroll column's thumb from [wc_total], [wc_rows] and
-; [wc_top]: between the arrows, as tall as the pane's share of the lines and
-; as far down as the top's share of the rest. Nothing when it all fits.
-; clobbers AX, BX, CX, DX
+; --- wc_sbcalc - the scroll column's thumb from [wc_total], wc_maxtop and
+; [wc_top]: between the arrows, as tall as the lines the end shows are a share
+; of them all, and as far down as the top is of the way to the end. Nothing
+; when it all fits. clobbers AX, BX, CX, DX
 wc_sbcalc:
     mov byte [wc_sbon], 0
-    mov bx, [wc_rows]
+    mov bx, [wc_srows]
     cmp bx, 3
     jb .out
-    mov cx, [wc_total]
-    cmp cx, bx
-    jbe .out
+    call wc_maxtop                      ; AX = the lines the top moves over
+    or ax, ax
+    jz .out
+    mov cx, ax
     sub bx, 2                           ; BX = the track
-    mov ax, bx
-    mul word [wc_rows]
-    div cx                              ; AX = the thumb
+    mov ax, [wc_total]
+    sub ax, cx                          ; the lines the end shows
+    mul bx
+    div word [wc_total]                 ; AX = the thumb
     or ax, ax
     jnz .s1
     inc ax
@@ -2049,7 +2101,6 @@ wc_sbcalc:
     sub bx, ax                          ; BX = the room it moves in
     mov ax, [wc_top]
     mul bx
-    sub cx, [wc_rows]                   ; CX = the lines it moves over
     div cx
     inc ax
     mov [wc_sbt], ax
@@ -2057,7 +2108,7 @@ wc_sbcalc:
 .out:
     ret
 
-; --- wc_sbglyph - CX = a pane band -> BL = its scroll cell's glyph ----------
+; --- wc_sbglyph - CX = a scroll column cell -> BL = its glyph ---------------
 wc_sbglyph:
     mov bl, GL_BLANK
     cmp byte [wc_sbon], 0
@@ -2066,7 +2117,7 @@ wc_sbglyph:
     jcxz .out
     mov bl, GL_SBDN
     push ax
-    mov ax, [wc_rows]
+    mov ax, [wc_srows]
     dec ax
     cmp cx, ax
     pop ax
@@ -2086,6 +2137,13 @@ wc_sbglyph:
 
 ; -----------------------------------------------------------------------------
 ; wc_ppane - the whole pane, from [wc_top], with its scroll column
+;
+; THE BANDS ARE NOT A GRID (SPEC.md 113.5.1): a message's last line carries
+; [wc_gap] rows of the pane's ground under it, so wc_play lays the bands out
+; from the top each pass and wc_gby is the same table as the glass has it.
+; A band whose place and height the glass already has is drawn through its
+; slot as before; one that moved is owed, drawn whole, and its gap filled;
+; and whatever the glass had past the last band is ground again.
 ; -----------------------------------------------------------------------------
 wc_ppane:
     call wc_dirtylines                  ; the width may have moved since
@@ -2103,31 +2161,48 @@ wc_ppane:
     mov [wc_top], ax
 .t:
     call wc_sbcalc
+    call wc_play                        ; the bands, from the top
     ; --- the lines on the glass, moved to where they now belong -------------
-    ; [wc_dtop] is the top the glass shows. Fewer lines apart than the pane is
-    ; tall, OSAPI_GFX_SCROLL moves them and the slots move with them, so the
-    ; rows below draw only what the move uncovered (SPEC.md 113.5.1) - and
-    ; the scroll column's cells, which are glyphs, only where they changed
+    ; [wc_dtop] is the top the glass shows. While some of what it shows stays
+    ; on it, OSAPI_GFX_SCROLL moves the [wc_gused] rows that are not ground,
+    ; and the slots and the glass's table move with them (SPEC.md 113.5.1)
     mov ax, [wc_top]
     cmp word [wc_dtop], 0xFFFF
     je .rows
     cmp byte [wc_pop], PP_NONE          ; a popup over the pane would move with
     jne .rows                           ; it
-    sub ax, [wc_dtop]
+    sub ax, [wc_dtop]                   ; AX = the lines, + up
     jz .rows
-    mov cx, ax
+    jns .up
+    neg ax
+    cmp ax, [wc_rows]                   ; down: the lines that come in are the
+    ja .rows                            ; top bands, as wc_play laid them
+    mov si, ax
+    shl si, 1
+    mov si, [wc_pby+si]
+    neg si
+    neg ax
+    jmp short .mv
+.up:
+    cmp ax, [wc_grows]                  ; up: the ones that go out are the
+    ja .rows                            ; glass's top bands
+    mov si, ax
+    shl si, 1
+    mov si, [wc_gby+si]                 ; SI = the rows, + up
+.mv:
+    mov cx, si
+    or cx, cx
     jns .abs
     neg cx
 .abs:
-    cmp cx, [wc_rows]
+    cmp cx, [wc_gused]                  ; nothing would stay
     jae .rows
     push ax
-    mov cx, WC_LH
-    imul cx
-    mov si, ax                          ; SI = rows, positive: up
+    push si
     mov ax, [wc_tx]
     add ax, [wc_ox]
-    mov cx, [wc_cols]
+    mov cx, [wc_cols]                   ; the text's cells: the scroll column
+    dec cx                              ; is on a grid of its own
     shl cx, 1
     shl cx, 1
     shl cx, 1
@@ -2135,30 +2210,278 @@ wc_ppane:
     dec cx                              ; x2 + 1 is a multiple of 8: tx is
     mov bx, [wc_py1]                    ; and so is a whole number of cells
     add bx, [wc_oy]
-    push ax
-    mov ax, [wc_rows]
-    mov dx, WC_LH
-    mul dx
-    add ax, bx
-    dec ax
-    mov dx, ax
-    pop ax
+    mov dx, bx
+    add dx, [wc_gused]
+    dec dx
     call OSAPI_GFX_SCROLL
+    pop si
     pop ax
-    jc .rows                            ; refused (a covered pane): the slots
-    call wc_pshift                      ; stay, and the rows draw what differs
+    jc .rows                            ; refused: nothing moved, and the rows
+    call wc_pshift                      ; draw what differs
+    call wc_gshift
 .rows:
     mov ax, [wc_top]
     mov [wc_dtop], ax
     xor cx, cx
 .r:
     cmp cx, [wc_rows]
-    jae .out
+    jae .tail
     push cx
+    call wc_gsame                       ; where the glass has it?
+    jnc .same
+    mov ax, cx                          ; no: owed, drawn whole, and its gap
+    add ax, WCSL_PANE
+    call wc_slot
+    or bx, bx
+    jz .whole
+    mov byte [bx+WCX_NSP], 0
+.whole:
     call wc_prow
+    pop cx
+    push cx
+    call wc_pgap
+    jmp short .nx
+.same:
+    call wc_prow
+.nx:
     pop cx
     inc cx
     jmp short .r
+.tail:
+    mov si, [wc_rows]                   ; past the last band: ground, which
+    shl si, 1                           ; the glass is beyond [wc_gused]
+    mov bx, [wc_pby+si]
+    mov dx, [wc_gused]
+    mov [wc_gused], bx
+    cmp bx, dx
+    jae .copy
+    cmp byte [wc_fresh], 0
+    jne .copy
+    dec dx
+    call wc_pfill
+.copy:
+    mov cx, [wc_rows]                   ; the glass has this layout now
+    mov [wc_grows], cx
+    inc cx
+    mov si, wc_pby
+    mov di, wc_gby
+.cp:
+    lodsw
+    mov [di], ax
+    inc di
+    inc di
+    loop .cp
+    jmp wc_psbc
+
+; --- wc_play - the bands from [wc_top]: band N shows line top + N at
+; wc_pby[N] (pane-relative), WC_LH rows - and, under a message's last line,
+; [wc_gap] rows of the pane's ground, the air between two messages whoever
+; sent them. A band is laid only whole, its gap with it. out: [wc_rows] and
+; wc_pby[0..rows], the last its end. clobbers AX, BX, CX, DX, SI, DI
+wc_play:
+    xor ax, ax
+    mov [wc_pby], ax
+    mov [wc_rows], ax
+    mov ax, [wc_top]
+    call wc_lfind                       ; BX = the message, CX = the part
+    jc .out
+.m:
+    push cx
+    call wc_mtot                        ; AX = its lines
+    pop cx
+    mov dx, ax
+.l:
+    mov si, [wc_rows]
+    cmp si, WC_MAXB
+    jae .out
+    shl si, 1
+    mov ax, [wc_pby+si]
+    add ax, WC_LH
+    inc cx
+    cmp cx, dx
+    jb .fit                             ; not its last line
+    add ax, [wc_gap]
+.fit:
+    cmp ax, [wc_ph]
+    ja .out
+    mov [wc_pby+si+2], ax
+    inc word [wc_rows]
+    cmp cx, dx
+    jb .l
+    xor cx, cx
+    inc bx
+    cmp bl, [wc_mn]
+    jb .m
+.out:
+    ret
+
+; --- wc_gsame - CF = 0 when band CX's place and height are the glass's
+; (wc_gby). Preserves CX; clobbers AX, BX
+wc_gsame:
+    cmp cx, [wc_grows]
+    jae .no
+    mov bx, cx
+    shl bx, 1
+    mov ax, [wc_pby+bx]
+    cmp ax, [wc_gby+bx]
+    jne .no
+    mov ax, [wc_pby+bx+2]
+    cmp ax, [wc_gby+bx+2]
+    jne .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; --- wc_gshift - the glass moved AX bands and SI rows (signed, + up) inside
+; the [wc_gused] rows OSAPI_GFX_SCROLL was given: its table moves with them,
+; keeping the bands still whole inside those rows. Down, the first AX are the
+; ones coming in and match nothing. clobbers AX, BX, CX, DX, DI
+wc_gshift:
+    mov cx, [wc_grows]
+    or ax, ax
+    js .down
+    sub cx, ax                          ; CX = the bands that stay
+    mov [wc_grows], cx
+    mov bx, ax
+    shl bx, 1                           ; from the first of them...
+    xor di, di
+    inc cx                              ; ...with their end
+.u:
+    mov ax, [wc_gby+bx]
+    sub ax, si
+    mov [wc_gby+di], ax
+    inc bx
+    inc bx
+    inc di
+    inc di
+    loop .u
+    ret
+.down:
+    neg ax
+    mov dx, ax                          ; DX = the bands
+    mov bx, cx                          ; BX = an entry, from the end
+.d:
+    mov di, bx
+    add di, dx
+    cmp di, WC_MAXB
+    ja .dn                              ; past the table
+    shl di, 1
+    push bx
+    shl bx, 1
+    mov ax, [wc_gby+bx]
+    pop bx
+    sub ax, si
+    mov [wc_gby+di], ax
+.dn:
+    dec bx
+    jns .d
+    add cx, dx                          ; CX = the most there can be now
+    cmp cx, WC_MAXB
+    jbe .w0
+    mov cx, WC_MAXB
+.w0:
+    mov bx, dx                          ; the bands still whole, from AX on
+.w:
+    cmp bx, cx
+    jae .wd
+    mov di, bx
+    shl di, 1
+    mov ax, [wc_gby+di+2]
+    cmp ax, [wc_gused]
+    ja .wd
+    inc bx
+    jmp short .w
+.wd:
+    mov [wc_grows], bx
+    mov cx, dx
+    xor di, di
+.f:
+    mov word [wc_gby+di], 0xFFFF
+    inc di
+    inc di
+    loop .f
+    ret
+
+; --- wc_pgap - band CX's gap, in the pane's ground, unless a full paint has
+; just laid it. clobbers AX, BX, CX, DX
+wc_pgap:
+    cmp byte [wc_fresh], 0
+    jne .out
+    mov bx, cx
+    shl bx, 1
+    mov dx, [wc_pby+bx+2]
+    mov bx, [wc_pby+bx]
+    add bx, WC_LH                       ; BX = the gap's first row
+    cmp bx, dx
+    jae .out
+    dec dx
+    jmp short wc_pfill
+.out:
+    ret
+
+; --- wc_pfill - the pane's ground across its text's cells, rows BX..DX
+; (pane-relative, inclusive). clobbers AX, BX, CX, DX
+wc_pfill:
+    mov ax, [wc_py1]
+    add ax, [wc_oy]
+    add bx, ax
+    add dx, ax
+    mov al, R_BG
+    call wc_penc
+    mov ax, [wc_tx]
+    add ax, [wc_ox]
+    mov cx, [wc_cols]
+    dec cx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, ax
+    dec cx
+    call OSAPI_GFX_FILL
+    ret
+
+; --- wc_psbc - the scroll column: a glyph a cell on a grid of its own, WC_LH
+; apart from the pane's top, each drawn only when it is not the one the glass
+; has (wc_sbg). The rows round the glyphs are ground and nothing else draws
+; there: the bands stop a cell short, and OSAPI_GFX_SCROLL is given the text.
+; clobbers AX, BX, CX, DX, SI, DI
+wc_psbc:
+    xor di, di                          ; DI = the cell
+.c:
+    cmp di, [wc_srows]
+    jae .out
+    mov cx, di
+    call wc_sbglyph                     ; BL = its glyph
+    cmp bl, [wc_sbg+di]
+    je .n
+    mov [wc_sbg+di], bl
+    mov al, R_BG
+    call wc_pen
+    mov ah, al                          ; AH = the ground
+    xor bh, bh
+    mov al, [wc_glrole+bx]
+    call wc_pen                         ; AL = the glyph's ink
+    push ax
+    mov ax, WC_LH
+    mul di
+    mov dx, ax
+    pop ax
+    add dx, [wc_py1]
+    add dx, [wc_oy]
+    inc dx                              ; its eight rows inside the cell's ten
+    mov cx, [wc_cols]
+    dec cx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, [wc_tx]
+    add cx, [wc_ox]
+    call wc_glyphat
+.n:
+    inc di
+    jmp short .c
 .out:
     ret
 
@@ -2177,14 +2500,16 @@ wc_ptail:
     jmp wc_ppane
 
 ; -----------------------------------------------------------------------------
-; wc_prow - draw pane row CX (0 = the top band), which shows line top + CX,
-;           through its slot
+; wc_prow - draw pane band CX (0 = the top one), which shows line top + CX,
+;           at wc_pby[CX], through its slot - its text, a cell short of the
+;           scroll column (wc_psbc's); its gap is wc_ppane's
 ; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wc_prow:
     mov [wc_rband], cx
-    mov ax, WC_LH
-    mul cx
+    mov bx, cx
+    shl bx, 1
+    mov ax, [wc_pby+bx]
     add ax, [wc_py1]
     mov [wc_rowy], ax                   ; the band's top, content-relative
     mov ax, [wc_top]
@@ -2274,29 +2599,8 @@ wc_prow:
     mov byte [wc_rinv], WS_DIM
     call wc_sbdayline
 .out:
-    ; --- the scroll column: the band's last cell, a glyph ------------------
-    mov cx, [wc_cols]
-    dec cx
-    call wc_sbto
-    mov [wc_rgcol2], cl
-    cmp byte [wc_rinv], WS_INV          ; on a highlighted line its cell
-    je .own                             ; keeps the pane's own ground
-    cmp byte [wc_rinv], WS_MENT
-    jne .sbg
-.own:
-    mov al, R_BG
-    call wc_pen
-    mov ah, al
-    mov al, R_FG
-    call wc_pen
-    call wc_rspan
-.sbg:
-    push cx
-    mov cx, [wc_rband]
-    call wc_sbglyph
-    pop cx
-    mov [wc_rgl2], bl
-    inc cx
+    mov cx, [wc_cols]                   ; to the scroll column, which is
+    dec cx                              ; wc_psbc's
     call wc_sbto
     mov cx, [wc_tx]
     mov dx, [wc_rowy]

@@ -6003,14 +6003,23 @@ $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBST
 
 # WIRECHAT (SPEC.md 113) - Telnet's include set for Telnet's reason: netpkg.inc
 # is the driver's ABI header, included by both ends so they cannot drift.
+# Its FACE (SPEC.md 113.5.3) is apps/wirechat/wcface.t88 - the art is the
+# source, as faces/'s are, but it is the package's and not a system face, so
+# it is not in faces/ (FACESRC is a wildcard of that directory and every face
+# in it ships in SYSTEM/FONTS/). --bitmap writes the 950 bytes wctxt.inc
+# incbins; --quiet because its one-pixel stems are the point (113.5.3).
+$(BUILD)/wcface.bin: apps/wirechat/wcface.t88 tools/os88face.py | $(BUILD)
+	python3 tools/os88face.py --quiet $< --bitmap $@
+
 $(BUILD)/wirechat.bin: apps/wirechat/wirechat.asm apps/wirechat/wcnet.inc \
                        apps/wirechat/wcproto.inc apps/wirechat/wcview.inc \
                        apps/wirechat/wcact.inc apps/wirechat/wccfg.inc \
                        apps/wirechat/wctxt.inc apps/wirechat/wcband.inc \
+                       $(BUILD)/wcface.bin \
                        apps/os88api.inc \
                        apps/os88ui.inc apps/os88line.inc apps/os88data.inc \
                        apps/os88sock.inc drivers/net/netpkg.inc | $(BUILD)
-	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/wirechat/ -I drivers/net/ -o $@ apps/wirechat/wirechat.asm
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/wirechat/ -I drivers/net/ -I $(BUILD)/ -o $@ apps/wirechat/wirechat.asm
 	@echo "wirechat: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP)

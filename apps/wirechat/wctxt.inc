@@ -197,6 +197,17 @@ wc_h6:          db 'Right-click: flag, friend', 0
 wc_h7:          db 'Theme menu: five looks', 0
 
 ; =============================================================================
+; THE FACE (SPEC.md 113.5.3): 95 characters, 32..126, of WC_FROWS rows each,
+; bit 7 the leftmost and 1 = ink - apps/wirechat/wcface.t88's regular style,
+; written by tools/os88face.py --bitmap. wcband.inc's wc_fput sets it.
+; =============================================================================
+wc_font:
+    incbin "wcface.bin"
+%if $ - wc_font != (WC_FLAST - WC_FFIRST + 1) * WC_FROWS
+  %error "wcface.bin is not 95 characters of WC_FROWS rows: is wcface.t88's rows WC_LH?"
+%endif
+
+; =============================================================================
 ; THE GLYPHS (wcview.inc's GL_* order): eight rows of eight pixels each, drawn
 ; over a mask of the whole cell (wcband.inc's wc_glrec builds the record) -
 ; so a glyph is its own ground and leaves nothing of the space it is drawn on

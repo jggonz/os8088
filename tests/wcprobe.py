@@ -25,7 +25,9 @@ sys.path.insert(0, os.path.join(ROOT, 'tests'))
 import mrprobe                                                   # noqa: E402
 
 SRC = os.path.join(ROOT, 'apps', 'wirechat', 'wirechat.asm')
-INCS = ('apps/', 'apps/wirechat/', 'drivers/net/')
+# build/ for wcface.bin, the face wctxt.inc incbins (SPEC.md 113.5.3) - the
+# Makefile's -I $(BUILD)/, and `make` has written it before any row runs
+INCS = ('apps/', 'apps/wirechat/', 'drivers/net/', 'build/')
 
 RQ_POLL = 2
 WW_DONE = 1

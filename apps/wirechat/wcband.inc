@@ -6,17 +6,17 @@
 ; Every row WireChat draws is a BAND: a composition of cells (wc_sbuf, built by
 ; the wc_sb* helpers in wcview.inc) and a META block (wc_meta) that says how
 ; to draw it - a STYLE, up to WC_NSPAN colour SPANS, up to two 8x8 GLYPHS and
-; one BOLD run. wc_bandc draws the pair as one band: for each span the two
-; rows of air in its ground and one opaque OSAPI_FONT_RUN, then the glyphs,
-; then the overstrike - so a band repaints every pixel it owns exactly once
-; (PERFORMANCE.md rules 1 and 2), as wcview.inc's wc_band always did.
+; one BOLD run. wc_bandc draws the pair as one band: a run of WireChat's own
+; face (THE FACE, below; SPEC.md 113.5.3) per colour pair - its air, its
+; glyphs and its bold one composed blit - then the glyphs, so a band
+; repaints every pixel it owns exactly once (PERFORMANCE.md rules 1 and 2).
 ;
 ; THE SLOTS. A band drawn with a SLOT (BX) is drawn THROUGH it: the slot
 ; holds the meta and the cells as they are on the glass, so a band whose
 ; meta and cells are what the slot holds draws NOTHING, and one whose meta
-; matches and whose cells do not draws ONE font_run of the run between the
-; first cell that differs and the last (split at the spans it crosses, the
-; overstrike and the glyphs inside it put back) - MIDIRack's field slots
+; matches and whose cells do not draws ONE run of the cells between the
+; first that differs and the last (split at the colours it crosses, the
+; glyphs inside it put back) - MIDIRack's field slots
 ; (SPEC.md 105.9.4), for every row of the window. A slot whose meta moved is
 ; drawn whole. A W_PAINT owes every slot (wc_owe): the kernel white-filled
 ; the content before calling it, so nothing the slots say is true any more.
@@ -151,7 +151,7 @@ wc_mglyph:
     mov [wc_meta+WCX_G1+1], bl
     ret
 
-; --- wc_mbold - the overstrike: CL cells from cell CH. Preserves all --------
+; --- wc_mbold - the bold: CL cells from cell CH. Preserves all -------------
 wc_mbold:
     mov [wc_meta+WCX_BC], ch
     mov [wc_meta+WCX_BL], cl
@@ -431,149 +431,47 @@ wc_bglyphs:
     mov dl, cl
     cmp dx, [wc_bfirst]
     jb .draw
-    cmp dx, [wc_blast]
-    jbe .out
+    cmp dx, [wc_blast]                  ; one past the run (wc_bpart)
+    jb .out
 .draw:
     mov bl, al
     jmp wc_bglyph
 .out:
     ret
 
-; --- wc_bfull - the air, every span's run, the glyphs, the overstrike -------
-; The air is one pair of rows per run of spans that share a ground: the colour
-; face's message header is three spans on one white, and three pairs of rows
-; would be four calls it does not need.
+; --- wc_bfull - every span's run, then the glyphs ----------------------------
+; A run is the whole band's height (SPEC.md 113.5.3), its air and its bold
+; inside it, so there is nothing else to draw: what used to be an air pair
+; per ground, a run per span and an overstrike is a run per COLOUR PAIR now -
+; wc_bspans puts adjacent spans of one ink and ground down as one.
 wc_bfull:
-    mov bx, wc_meta + WCX_SP
-    mov al, [wc_meta+WCX_NSP]
-    mov [wc_bn], al
-    mov word [wc_bair], 0xFFFF
-.ap:
-    call wc_spse                        ; SI, DI = [start, end)
-    cmp si, di
-    jae .anext
-    call wc_spcol                       ; AH = the ground
-    cmp word [wc_bair], 0xFFFF
-    je .astart
-    cmp ah, [wc_bgnd]
-    je .acont
-    push si                             ; another ground: the run so far
-    push ax
-    mov di, [wc_bend]
-    mov si, [wc_bair]
-    mov al, [wc_bgnd]
-    call wc_bairl
-    pop ax
-    pop si
-.astart:
-    mov [wc_bair], si
-    mov [wc_bgnd], ah
-.acont:
-    call wc_spse
-    mov [wc_bend], di
-.anext:
-    add bx, 3
-    dec byte [wc_bn]
-    jnz .ap
-    cmp word [wc_bair], 0xFFFF
-    je .runs
-    mov si, [wc_bair]
-    mov di, [wc_bend]
-    mov al, [wc_bgnd]
-    call wc_bairl
-.runs:
-    mov bx, wc_meta + WCX_SP
-    mov al, [wc_meta+WCX_NSP]
-    mov [wc_bn], al
-.sp:
-    call wc_spse
-    cmp si, di
-    jae .next
-    call wc_spcol                       ; AL = ink, AH = ground
-    call wc_brun
-.next:
-    add bx, 3
-    dec byte [wc_bn]
-    jnz .sp
-    xor si, si                          ; the glyphs and the overstrike: the
-    mov di, 0x7FFF                      ; whole band
+    mov word [wc_bfirst], 0
+    mov ax, 0x7FFF
+    mov [wc_blast], ax
+    call wc_bspans
+    xor si, si                          ; the glyphs: the whole band
+    mov di, 0x7FFF
     jmp wc_bdeco
 
 ; --- wc_bpart - the run [wc_bfirst, wc_blast] again, span by span -----------
+; A bold cell is bold in the run that draws it, so a run cuts through the
+; bold anywhere and nothing has to be widened to take it in (the overstrike
+; this replaced spilled a pixel into the cell after it, and did). On the way
+; out [wc_blast] is one PAST the run, which is what wc_bglyphs reads.
 wc_bpart:
+    inc word [wc_blast]                 ; [first, last + 1)
+    call wc_bspans
     mov si, [wc_bfirst]
     mov di, [wc_blast]
-    inc di                              ; [SI, DI)
-    mov cl, [wc_meta+WCX_BL]            ; an overstrike the run touches is
-    or cl, cl                           ; erased by it: take all of it in
-    jz .runs
-    xor ch, ch
-    xor ax, ax
-    mov al, [wc_meta+WCX_BC]
-    add cx, ax                          ; [AX, CX): the bold cells
-    cmp ax, di
-    jae .runs
-    cmp cx, si
-    jbe .runs
-    cmp ax, si
-    jae .lo
-    mov si, ax
-.lo:
-    cmp cx, di
-    jbe .runs
-    mov di, cx
-.runs:
-    mov [wc_bfirst], si
-    mov [wc_blast], di
-    mov bx, wc_meta + WCX_SP
-    mov al, [wc_meta+WCX_NSP]
-    mov [wc_bn], al
-.sp:
-    mov cl, [bx]
-    xor ch, ch
-    mov si, cx                          ; the span's [start, end)...
-    call wc_spend
-    xor ch, ch
-    mov di, cx
-    cmp si, [wc_bfirst]                 ; ...cut to the run's
-    jae .s1
-    mov si, [wc_bfirst]
-.s1:
-    cmp di, [wc_blast]
-    jbe .s2
-    mov di, [wc_blast]
-.s2:
-    cmp si, di
-    jae .next
-    call wc_spcol
-    call wc_brun
-.next:
-    add bx, 3
-    dec byte [wc_bn]
-    jnz .sp
-    mov si, [wc_bfirst]
-    mov di, [wc_blast]
-    ; fall through: the decoration inside [SI, DI)
+    ; fall through: the glyphs inside [SI, DI)
 
-; --- wc_bdeco - the glyphs whose cell is in [SI, DI), and the overstrike when
-; it starts there
+; --- wc_bdeco - the glyphs whose cell is in [SI, DI) -------------------------
 wc_bdeco:
     mov cl, [wc_meta+WCX_G0]
     mov bl, [wc_meta+WCX_G0+1]
     call .g
     mov cl, [wc_meta+WCX_G1]
     mov bl, [wc_meta+WCX_G1+1]
-    call .g
-    mov cl, [wc_meta+WCX_BL]
-    or cl, cl
-    jz .out
-    xor ax, ax
-    mov al, [wc_meta+WCX_BC]
-    cmp ax, si
-    jb .out
-    cmp ax, di
-    jae .out
-    jmp wc_bbold
 .g:
     cmp cl, 0xFF
     je .out
@@ -589,6 +487,64 @@ wc_bdeco:
 .out:
     ret
 
+; --- wc_bspans - the cells [[wc_bfirst], [wc_blast]) of every span, cut to
+; them, as runs: a span whose ink and ground are the run before it's, and
+; which starts where that run ends, JOINS it (Wired's message line is a
+; time, a nick and a text all black on white - one blit, not three).
+; clobbers AX, BX, CX, SI, DI
+wc_bspans:
+    mov bx, wc_meta + WCX_SP
+    mov al, [wc_meta+WCX_NSP]
+    mov [wc_bn], al
+    mov word [wc_bps], 0xFFFF           ; nothing pending
+.sp:
+    call wc_spse                        ; the span's [start, end)...
+    cmp si, [wc_bfirst]                 ; ...cut to the run's
+    jae .s1
+    mov si, [wc_bfirst]
+.s1:
+    cmp di, [wc_blast]
+    jbe .s2
+    mov di, [wc_blast]
+.s2:
+    cmp si, di
+    jae .next
+    call wc_spcol                       ; AL = ink, AH = ground
+    cmp word [wc_bps], 0xFFFF
+    je .start
+    cmp ax, [wc_bpc]
+    jne .flush
+    cmp si, [wc_bpe]
+    je .join
+.flush:
+    push si
+    push di
+    push ax
+    mov si, [wc_bps]
+    mov di, [wc_bpe]
+    mov ax, [wc_bpc]
+    call wc_brun
+    pop ax
+    pop di
+    pop si
+.start:
+    mov [wc_bps], si
+    mov [wc_bpc], ax
+.join:
+    mov [wc_bpe], di
+.next:
+    add bx, 3
+    dec byte [wc_bn]
+    jnz .sp
+    cmp word [wc_bps], 0xFFFF
+    je .out
+    mov si, [wc_bps]
+    mov di, [wc_bpe]
+    mov ax, [wc_bpc]
+    jmp wc_brun
+.out:
+    ret
+
 ; --- wc_spse - span BX's cells: SI = its start, DI = one past its end.
 ; clobbers CX
 wc_spse:
@@ -600,35 +556,9 @@ wc_spse:
     mov di, cx
     ret
 
-; --- wc_bairl - the two rows of air over cells [SI, DI) in colour AL - the
-; lower one in the band's UNDERLINE when it has one (a section title's rule,
-; SPEC.md 113.5). Preserves BX, SI, DI.
-wc_bairl:
-    push bx
-    call OSAPI_SET_COLOR
-    mov ax, si
-    mov bx, di
-    mov cl, 3
-    shl ax, cl
-    shl bx, cl
-    add ax, [wc_bx]
-    add bx, [wc_bx]
-    dec bx
-    mov dx, [wc_by]
-    call OSAPI_GFX_HLINE
-    push ax
-    mov al, [wc_meta+WCX_UL]
-    cmp al, 0xFF
-    je .ul
-    call OSAPI_SET_COLOR
-.ul:
-    pop ax
-    add dx, WC_LH - 1
-    call OSAPI_GFX_HLINE
-    pop bx
-    ret
-
-; --- wc_brun - cells [SI, DI) in AL = ink, AH = ground: one font_run --------
+; --- wc_brun - cells [SI, DI) in AL = ink, AH = ground: one wc_fput --------
+; The band's bold cells are bold where they fall inside the run, and its
+; UNDERLINE (a section title's rule, SPEC.md 113.5) is the run's last row.
 ; Preserves every register.
 wc_brun:
     push ax
@@ -636,24 +566,27 @@ wc_brun:
     push cx
     push dx
     push si
-    mov bl, [wc_sbuf+di]                ; cut the composition at DI
-    mov byte [wc_sbuf+di], 0
-    push bx
-    push ax
-    mov al, CBLACK                      ; a button drawn just before may have
-    call OSAPI_SET_COLOR                ; left the pen DISABLED (timer.asm)
-    pop ax
-    mov cx, si
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    add cx, [wc_bx]
-    mov dx, [wc_by]
-    inc dx                              ; the glyph row
+    mov dx, ax                          ; DL = ink, DH = ground
+    xor ax, ax                          ; the bold cells, counted from SI
+    mov al, [wc_meta+WCX_BC]
+    sub ax, si
+    mov [wc_fbc], ax
+    xor cx, cx
+    mov cl, [wc_meta+WCX_BL]
+    add ax, cx
+    mov [wc_fbe], ax
+    mov al, [wc_meta+WCX_UL]
+    mov [wc_ful], al
+    mov cx, di
+    sub cx, si                          ; CX = the cells
+    mov ax, si
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, [wc_bx]
+    mov bx, [wc_by]
     add si, wc_sbuf
-    call OSAPI_FONT_RUN
-    pop bx
-    mov [wc_sbuf+di], bl
+    call wc_fput
     pop si
     pop dx
     pop cx
@@ -661,47 +594,209 @@ wc_brun:
     pop ax
     ret
 
-; --- wc_bbold - the overstrike: the bold cells again, transparent, at x+1 ----
-; SPEC.md 6.6.2 case 6 (tests/textsites.txt). Preserves SI and DI.
-wc_bbold:
+; =============================================================================
+; THE FACE (SPEC.md 113.5.3): WireChat's own type, 8 x 10 cells - a cell is a
+; band - in apps/wirechat/wcface.t88, carried in the package as 95 glyphs of
+; WC_FROWS rows (wc_font, wctxt.inc). A run of it is COMPOSED here, cell by
+; cell into wc_fband at the band's fixed stride, and put down by ONE
+; OSAPI_GFX_BLIT1 in the run's two colours (SPEC.md 5.4.2, 5.4.2.2): the
+; ground, the air above and below and the glyphs are one pass, as font_run's
+; were, and bold is ORed in at compose time rather than struck over.
+; Every x is on the byte grid (WF_SNAP; a band's cells, the field's pen,
+; Send's and Search's captions), so a cell is one byte of every band row and
+; the compose shifts nothing.
+; =============================================================================
+
+; --- wc_flit - CF = 1 when colour AL is LIT on a display of one bit a pixel:
+; light red, yellow and white (SPEC.md 39.4). Preserves every register
+wc_flit:
+    cmp al, CWHITE
+    je .lit
+    cmp al, CYELLOW
+    je .lit
+    cmp al, CLRED
+    je .lit
+    clc
+    ret
+.lit:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; wc_fput - CX characters at DS:SI, in WireChat's face, as one band
+; in:  AX = x (screen, a multiple of 8), BX = y: the CELL's top, the row
+;      above where an 8x8 glyph would stand; DL = ink, DH = ground;
+;      [wc_fbc], [wc_fbe] = the bold characters [first, end), counted from
+;      SI and SIGNED; [wc_ful] = the last row's colour, 0xFF = the ground's.
+;      The lock held, the clip armed. CX above WC_FSTR draws WC_FSTR
+; out: every register preserved
+;
+; THE POLARITY. A set bit is the blit's INK, and on a display of one bit the
+; pen is not read at all: a set bit is LIT (SPEC.md 5.4.2.2). So the set
+; bits are always whichever of the two colours a one-bit display lights - the
+; glyph's on a dark ground, the GROUND's on a light one (Wired: black on
+; white), the compose complementing every row for it - and the pen is turned
+; round to match, so a colour display draws the same picture either way.
+; -----------------------------------------------------------------------------
+wc_fput:
+    jcxz .none                          ; nothing to draw
+    jmp short .go
+.none:
+    ret
+.go:
+    push ax
+    push bx
+    push cx
+    push dx
     push si
     push di
-    xor si, si
-    mov cx, si
-    mov cl, [wc_meta+WCX_BC]
-    mov si, cx
-    add cl, [wc_meta+WCX_BL]
-    cmp cl, [wc_meta+WCX_LEN]
-    jbe .end
-    mov cl, [wc_meta+WCX_LEN]
-.end:
-    mov di, cx
-    cmp si, di
-    jae .out
-    mov bl, [wc_sbuf+di]
-    mov byte [wc_sbuf+di], 0
-    push bx
-    push si
-    mov cx, si
-    call wc_spanat
-    call wc_spcol                       ; the span's ink
+    push bp
+    push es
+    mov [wc_fx], ax
+    mov [wc_fy], bx
+    cmp cx, WC_FSTR
+    jbe .n
+    mov cx, WC_FSTR
+.n:
+    mov [wc_fcnt], cx
+    xor bl, bl                          ; BL = the rows' complement
+    mov al, dh
+    call wc_flit
+    jnc .pen                            ; a dark ground: the glyph is lit
+    mov al, dl
+    call wc_flit
+    jc .pen                             ; both lit: no theme draws that
+    not bl
+    xchg dl, dh
+.pen:
+    mov [wc_fpen], dx
+    mov dl, bl
+    mov di, wc_fband
+    xor bp, bp                          ; BP = the character's index
+.c:
+    lodsb
+    sub al, WC_FFIRST
+    cmp al, WC_FLAST - WC_FFIRST
+    jbe .g
+    xor al, al                          ; outside 32..126: a space
+.g:
+    xor ah, ah
+    shl ax, 1
+    mov bx, ax
+    shl ax, 1
+    shl ax, 1
+    add bx, ax                          ; * WC_FROWS
+    add bx, wc_font
+    cmp bp, [wc_fbc]
+    jl .plain
+    cmp bp, [wc_fbe]
+    jge .plain
+    jmp .bold                           ; (the bodies are past a short jump)
+.plain:
+%assign WC_R 0
+%rep WC_FROWS
+    mov al, [bx+WC_R]
+    xor al, dl
+    mov [di+WC_R*WC_FSTR], al
+  %assign WC_R WC_R+1
+%endrep
+    jmp .nx
+.bold:
+%assign WC_R 0
+%rep WC_FROWS
+    mov al, [bx+WC_R]                    ; the row, and itself a pixel right
+    mov ah, al
+    shr ah, 1
+    or al, ah
+    xor al, dl
+    mov [di+WC_R*WC_FSTR], al
+  %assign WC_R WC_R+1
+%endrep
+.nx:
+    inc di
+    inc bp
+    dec cx
+    jz .blitp
+    jmp .c
+.blitp:
+    mov ax, [wc_fpen]                   ; AL = what a set bit becomes
+    call OSAPI_GFX_BLIT1_PEN
+    push ds
+    pop es
+    mov si, wc_fband
+    mov bp, WC_FSTR
+    mov ax, [wc_fx]
+    mov bx, [wc_fy]
+    mov cx, [wc_fcnt]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    mov dx, WC_FROWS
+    cmp byte [wc_ful], 0xFF
+    je .blit
+    dec dx                              ; the last row is the underline's
+.blit:
+    call OSAPI_GFX_BLIT1
+    cmp byte [wc_ful], 0xFF
+    je .out
+    mov al, [wc_ful]                    ; ...one line in its colour
     call OSAPI_SET_COLOR
-    pop si
-    mov cx, si
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    add cx, [wc_bx]
-    inc cx
-    mov dx, [wc_by]
-    inc dx
-    add si, wc_sbuf
-    call OSAPI_FONT_STR_XPARENT         ; the overstrike: it ADDS to the glyphs
-    pop bx                              ; already down (tests/textsites.txt)
-    mov [wc_sbuf+di], bl
+    mov ax, [wc_fx]
+    mov bx, ax
+    add bx, cx
+    dec bx
+    mov dx, [wc_fy]
+    add dx, WC_FROWS - 1
+    call OSAPI_GFX_HLINE
 .out:
+    pop es
+    pop bp
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%if WC_FROWS != 10
+  %error "wc_fput multiplies a character by WC_FROWS with two shifts and an add"
+%endif
+
+; --- wc_frun - OSAPI_FONT_RUN's contract, in WireChat's face: CX = x, DX =
+; the top of the 8x8 cell font_run would draw, SI = a NUL string, AL = ink,
+; AH = ground. The cell is drawn from the row above DX, WC_FROWS rows, the way
+; a band draws it - so a caller that placed font_run's glyph places this one.
+; It is os88line.inc's OS88LINE_RUN (SPEC.md 83.6), and Send's and Search's
+; captions. Preserves every register
+wc_frun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    xor di, di
+    mov [wc_fbc], di                    ; nothing bold...
+    mov [wc_fbe], di
+    mov byte [wc_ful], 0xFF             ; ...nothing underlined
+    mov bx, dx
+    dec bx
+    mov dx, ax
+    mov ax, cx
+    mov di, si
+.len:
+    cmp byte [di], 0
+    je .put
+    inc di
+    jmp short .len
+.put:
+    mov cx, di
+    sub cx, si
+    call wc_fput
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; --- wc_bglyph - glyph BL at cell CL, over the span it sits in: the glyph's
@@ -895,8 +990,9 @@ wc_glinit:
 ; =============================================================================
 ; THE SLOTS
 ; =============================================================================
-; --- wc_owe - every slot owed, and the pane's top as drawn (a full paint:
-; the content was filled in the ground). Preserves all.
+; --- wc_owe - every slot owed, the pane's top and its layout as drawn, and
+; its scroll column blank (a full paint: the content was filled in the
+; ground). Preserves all.
 wc_owe:
     push bx
     push cx
@@ -913,6 +1009,15 @@ wc_owe:
     add bx, WC_SLOTNN
     loop .n
     mov word [wc_dtop], 0xFFFF
+    xor cx, cx                          ; the pane's glass: no band known, and
+    mov [wc_grows], cx                  ; all of it ground
+    mov [wc_gused], cx
+    mov bx, wc_sbg
+    mov cx, WC_MAXB
+.g:
+    mov byte [bx], GL_BLANK
+    inc bx
+    loop .g
     pop cx
     pop bx
     ret
@@ -945,7 +1050,9 @@ wc_slot:
     ret
 
 ; --- wc_pshift - the pane moved AX bands (signed: + up) on the glass: move
-; its slots with it, and owe the ones it vacated. Preserves all.
+; its slots with it, and owe the ones it vacated. Every slot moves, laid out
+; or not: a band past the last one laid matches nothing in wc_gby, so its
+; slot is owed before it is drawn. Preserves all.
 wc_pshift:
     push ax
     push bx
@@ -956,11 +1063,7 @@ wc_pshift:
     push es
     push ds
     pop es
-    mov cx, [wc_rows]
-    cmp cx, WC_MAXB
-    jbe .r
     mov cx, WC_MAXB
-.r:
     or ax, ax
     js .down
     sub cx, ax                          ; the bands that stay: CX of them,
@@ -1018,7 +1121,7 @@ wc_pshift:
     jmp short .tail
 .owe:
     mov bx, WCSL_PANE                   ; nothing stays: owe them all
-    mov cx, [wc_rows]
+    mov cx, WC_MAXB
 .tail:
     jcxz .out
 .o:
@@ -1130,7 +1233,7 @@ wc_srbtn:
     mov cx, [wc_bv]
     add cx, 20
     mov si, wc_b_search
-    call OSAPI_FONT_RUN
+    call wc_frun
     pop di
     pop si
     pop dx
@@ -1140,8 +1243,8 @@ wc_srbtn:
     ret
 
 ; --- wc_sdbtn - SEND: a solid block in the highlight, the caption a run as
-; wide as the block (so it is the block's middle rows), the rows above and
-; below it a fill each - every pixel once. Pressed: the text colour. Greyed:
+; wide as the block (so it is the block's middle WC_FROWS rows), the rows
+; above and below it a fill each - every pixel once. Pressed: the text colour. Greyed:
 ; the ground, a dim caption and a dim frame
 wc_sdbtn:
     push ax
@@ -1173,18 +1276,18 @@ wc_sdbtn:
     mov bx, [wc_bv+2]
     mov cx, [wc_bv+4]
     mov dx, bx
-    add dx, (WC_BOXH - 8) / 2 - 1
+    add dx, (WC_BOXH - 8) / 2 - 2       ; to the row over the caption's cell
     call OSAPI_GFX_FILL
-    add dx, 9                           ; below it
+    add dx, WC_FROWS + 1                ; below it
     mov bx, dx
     mov dx, [wc_bv+6]
     call OSAPI_GFX_FILL
     pop ax
     mov cx, [wc_bv]
     mov dx, [wc_bv+2]
-    add dx, (WC_BOXH - 8) / 2
-    mov si, wc_b_sendc
-    call OSAPI_FONT_RUN
+    add dx, (WC_BOXH - 8) / 2           ; font_run's glyph row: the cell is
+    mov si, wc_b_sendc                  ; the row above it and WC_FROWS deep
+    call wc_frun
     pop di
     test di, OS88UI_DIS
     jz .out
@@ -1233,7 +1336,16 @@ wc_rcopy:
 ; -----------------------------------------------------------------------------
 wc_face:
     mov bx, [wc_win]
-    call OSAPI_WM_DISPLAY               ; DH the depth
+    call OSAPI_WM_DISPLAY               ; BX the height, DH the depth
+    mov ax, 1                           ; the air under a message: about three
+    cmp bx, 300                         ; square pixels' worth - one of CGA's
+    jb .gap                             ; 2.4:1, two of Hercules' and EGA's,
+    inc ax                              ; three of VGA's
+    cmp bx, 400
+    jb .gap
+    inc ax
+.gap:
+    mov [wc_gap], ax
     xor al, al
     cmp dh, 1
     jbe .m

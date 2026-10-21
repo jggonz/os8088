@@ -120,10 +120,14 @@ P George 0 0
 P RetroAmy 0 1
 P Zed 0 2
 """
+# "blit1" is every run of text since the window's own face (SPEC.md
+# 113.5.3): a run is composed and put down by OSAPI_GFX_BLIT1, so a ceiling
+# that did not count it would pass by measuring nothing. Its pen (0x393) is
+# a setting and not a drawing call, and is not here.
 CELLS = {"pixel": 0x20, "hline": 0x28, "vline": 0x30, "fill": 0x38,
          "frame": 0x40, "gray": 0x48, "xor": 0x58, "blit4": 0x182,
-         "text": 0x1E5, "textx": 0x68, "icon": 0x39D, "blitp": 0x3A4,
-         "scroll": 0x19C}
+         "blit1": 0x320, "text": 0x1E5, "textx": 0x68, "icon": 0x39D,
+         "blitp": 0x3A4, "scroll": 0x19C}
 
 SYMS = []
 

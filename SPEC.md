@@ -133949,6 +133949,36 @@ the file's colour sites, the literal when it is not defined — so every
 package that does not set it is byte-identical. A disabled field (`LN_DIS`)
 still leaves its frame in the caller's pen.
 
+### 83.6 `OS88LINE_RUN` — a field in the package's face
+
+A package that letters its own content in a face of its own (WireChat's,
+§113.5.3) would otherwise have one line on its window in the kernel's 8×8 —
+the one the user is typing in. So `os88line.inc` takes a substitute for its
+runs: `%define OS88LINE_RUN <routine>` before the include names a near routine
+with `OSAPI_FONT_RUN`'s contract (CX = x, DX = the top of the 8×8 cell, SI = a
+NUL string, AL = ink, AH = ground, every register preserved), and the field's
+three runs — the whole text, the one character a key typed, the character a
+caret is taken off — call it instead.
+
+A face's cell need not be font_run's eight rows, and that is the half that is
+not a rename. A character rubbed out and a caret taken off past the end are
+**blanked**, a fill of the cell, and an eight-row blank under a ten-row face
+leaves a deleted `g`'s descender on the glass. So `OS88LINE_RUNUP` (rows the
+cell starts ABOVE DX) and `OS88LINE_RUNH` (its rows) size both blanks, and
+default to 0 and 8. The caret stays font_run's eight rows from DX: the cell
+covers them, so the run that takes it off still erases it. The pen, the
+column count and every hit test are untouched — a cell is still eight pixels
+wide, and the routine is asked for nothing else.
+
+**It is not asked to grey.** A disabled field (`LN_DIS`) letters in the
+caller's pen and font_run stipples it (§47); a routine that composes a band
+is greying-blind for §5.4.2's reason. A carrier that disables its field and
+wants the stipple keeps font_run. WireChat never disables its field.
+
+It is `OS88LINE_PENS`' shape (§83.5): each site a macro that is the call it
+replaced when nothing is defined, so every other package assembles
+byte-identical.
+
 ## 84. Software floating point (`apps/os88fp.inc`)
 
 An IEEE-754 double, in software, for a machine with no FPU. It is what stage
@@ -196902,7 +196932,8 @@ window's timer (`OSAPI_WM_TIMER`, 18 ticks), which also drives auto-away
 ### 113.5 The window
 
 Resizable. `OS88_PREFER` 608×400 VGA, 688×296 Hercules, 608×150 CGA;
-`OSAPI_WM_MINSIZE` 320×147. Content-relative, 8×8 cells at a 10px pitch,
+`OSAPI_WM_MINSIZE` 320×147. Content-relative, 8×10 cells of its own face
+(§113.5.3), one a row,
 `WF_SNAP` so every column is a multiple of 8 (§11.94). **A BBS terminal**:
 the whole content is the theme's ground (§113.5.2), ruled in its accent, and
 the window is `OSAPI_WM_OWNBG` (§11.90.1) — it paints every pixel itself, so
@@ -196936,7 +196967,7 @@ a dark theme never flashes the kernel's white first:
 |---|---|---|
 | header | the top band (two on a window 200 rows tall or more), its rule under it | band 1: `WireChat` bold and nothing after it (the display it is on and `01 / BBS TERMINAL` were here, and said nothing a user acts on); at the right end our status glyph, the status word and the nick, which together are the STATUS button. Band 2 (tall windows only): the machine's date and time (`OSAPI_CLK_GET`), right-aligned, redrawn when the minute turns |
 | tabs | one band under the header's rule, its own rule under it | a tab a room: `#name`, the view's in the highlight; an unread count is a badge after the name, `@` ahead of it for a mention (§113.2.4). The rooms menu still lists them |
-| center | the rest, left of the right pane | the title band (`#room` bold and the topic dim, or `@nick` and `Private conversation`) with the SEARCH box at its right end; a rule; the message pane, whose last cell on every band is its scroll bar; the notice line |
+| center | the rest, left of the right pane | the title band (`#room` bold and the topic dim, or `@nick` and `Private conversation`) with the SEARCH box at its right end; a rule; the message pane, its scroll bar down its right edge; the notice line |
 | right pane | the right 160px, from the tabs' rule to the input row's | three sections, each a title band underlined in the accent with its count and its glyph: ONLINE (the sessions in the view's room — everyone, in a conversation), FRIENDS (every friend, a status glyph for one on the roster and a hollow one for one who is not), DIRECT (the private conversations, each with its unread badge, or `No direct messages`). A section that runs out of room stops |
 | input row | between the rule above it and the status bar | one box: the mode's prompt (`>` in message mode, else `Nick:`, `Find:`, `Friend:`, `Code:`), a rule, the field, and SEND as a solid block at its right end. An empty field in message mode shows `Message #lobby` (or `Message @nick`) dim |
 | status bar | the bottom band, its rule over it | the F-key legend `F1 Help | F2 Rooms | F3 Friends` (each item a press target too); then the LINK LAMP and the ACTIVITY LAMP, the link's state and `N in #room`; `Notifications: On/Off` at the right end. The legend's items are dropped from the right when the link's words need the room |
@@ -196961,12 +196992,28 @@ selects the message below it, and `Find:` steps over it. A selected message's
 first line is in the highlight; one that names us (§113.6.5), in the mention
 pair.
 
-**The scroll bar is a column of CELLS**, the last of every pane band: `^` on
-the top band and `v` on the bottom one, a solid THUMB, a thin TRACK, and
-blank when everything fits. Each is a GLYPH of the band (§113.5.1), so a
-move of the pane redraws the cells the thumb and the arrows moved through,
-an icon each. A press on an arrow is a line, on the track above or below the
-thumb a page.
+**There is air between two messages**, whoever sent them: a message's last
+line is a band and `[wc_gap]` rows of the pane's ground under it, so two
+messages from one nick read as two and a message's wrapped lines stay
+together. The gap is about three square pixels' worth on every display — one
+row on a CGA (2.4:1), two on Hercules and EGA, three on a VGA — taken from
+the display's height at each full paint (`wc_face`). A line in the highlight
+or the mention pair keeps it in the ground: the gap is between messages, not
+part of one. So the pane's bands are not a grid: `wc_play` lays them out from
+the top line each pass, a band only whole and its gap with it, and the last
+line of the history is where `wc_maxtop` counts back from. The row under the
+pointer is found in that layout too, and a press in a gap is its message's.
+
+**The scroll bar is a column of CELLS** on a grid of its own, `WC_LH` rows
+apart from the pane's top whatever the bands do: `^` in the top cell and `v`
+in the bottom one, a solid THUMB, a thin TRACK, and blank when everything
+fits. The thumb is as tall as the lines a page at the end shows are a share
+of all of them, and as far down as the top is of the way to the end. Each
+cell is a GLYPH drawn only when it is not the one on the glass (`wc_psbc`,
+`wc_sbg`), so a move of the pane redraws the cells the thumb and the arrows
+moved through, an icon each; the bands stop a cell short of it, and the
+pane's scroll moves the text alone. A press on an arrow is a line, on the
+track above or below the thumb a page.
 
 The status glyphs are 8×8: a filled square Online, a clock Away, a barred
 square Busy, a hollow square for a friend or a private partner not on the
@@ -196979,19 +197026,18 @@ brought something, and nothing otherwise. The section titles carry a pair of
 people (ONLINE, FRIENDS) and an envelope (DIRECT); the search box a lens.
 **In Wired every status glyph and both lamps are LEDs** (§113.5.2).
 
-**Drawing.** Every row is a BAND: one opaque `OSAPI_FONT_RUN` per colour span
-padded with spaces to its region's width, and the two rows of air above and
-below the glyphs filled in its ground — or the lower one in the band's
-UNDERLINE colour, which is how a section title carries its rule — so nothing
-is filled and then lettered (PERFORMANCE.md rule 2). Bold is §6.6.2 case 6,
-an overstrike: the run, then the same cells transparent at x+1
-(`tests/textsites.txt`). Each region has its own painter and a DIRTY bit
+**Drawing.** Every row is a BAND: one composed run of the window's face
+(§113.5.3) per colour pair, padded with spaces to its region's width, ten
+rows deep — the air above and below the glyphs is the cell's own — and put
+down by one `OSAPI_GFX_BLIT1`, its bold composed into it; a band with an
+UNDERLINE (a section title's rule) has its last row drawn in that colour
+instead. Nothing is filled and then lettered (PERFORMANCE.md rule 2). Each region has its own painter and a DIRTY bit
 (`WCD_*`); a state change sets bits and `wc_flush` calls only those painters
 — and a painter draws only the bands that changed (§113.5.1). A full paint
 fills the content in the theme's ground once and draws every band over it:
 the same two passes the kernel's white fill and the bands made before, in
-the theme's colour. A move of the pane's top by fewer lines than it is tall
-moves what is on the glass by `OSAPI_GFX_SCROLL` and letters only the rows
+the theme's colour. A move of the pane's top that leaves some of what the
+glass shows on it moves that by `OSAPI_GFX_SCROLL` and letters only the rows
 it uncovered; a refused scroll (a covered pane) and a popup over the pane
 draw the rows through their slots instead.
 
@@ -197060,9 +197106,17 @@ any more. So does a popup going down and the About card, which repaint.
 The pane's slots MOVE: `[wc_dtop]` is the top line the glass shows, and a
 paint whose top is a few lines from it scrolls the glass and shifts the slots
 by the same bands (`wc_pshift`), so the rows that moved find themselves
-already drawn — the scroll column with them, which is why its cells are
-glyphs: a glyph's picture is outside the meta's identity, so a shifted slot
-whose thumb cell is now track redraws that one cell and not the band.
+already drawn. Because a message's gap makes the bands uneven (§113.5),
+WHERE a band is is part of what the glass holds: `wc_gby` is the layout as
+drawn — each band's top and its end — and moves with the scroll, by the
+same bands and the same rows (`wc_gshift`), keeping only the bands still
+whole inside the rows that moved. A band whose place and height are not the
+glass's is owed, drawn whole and its gap filled with it; one that is draws
+through its slot as above. The scroll moves only `[wc_gused]` rows — the
+ones that are not ground — and what the glass had past the last band is
+filled once, so the pane never shows half a band that no longer fits. The
+scroll column is not in any band (§113.5): its cells are glyphs on a grid of
+their own, each drawn only when its picture changed.
 
 **The slots are only sound if drawing through them arrives at the picture a
 paint from nothing does**, and `tests/wcdraw.py` asserts exactly that: after
@@ -197151,6 +197205,84 @@ its ground and its frame are the package's three bytes, the theme's text,
 ground and ground — the frame drawn in the ground is the field's own frame
 put out of sight, because the input row's box around it and its prompt is
 the frame the eye reads.
+
+#### 113.5.3 The face — WireChat's own type
+
+The window is lettered in a face the package carries, not in the machine's
+8×8 (§6). The 8×8 is the ROM's (§6.2): two-pixel stems everywhere, a
+one-row descender — `g`, `j`, `p`, `q` and `y` squashed onto the line — and
+on a VGA it reads heavy. Bold was §6.6.2 case 6, the run struck again a pixel
+right, which on two-pixel stems closes the counters: `ONLINE` and `FRIENDS`
+in the right pane were blobs. A chat window is a screen of other people's
+sentences, so the face is where its legibility is.
+
+**The cell is 8 × 10, and 10 is `WC_LH`** — the row pitch the window was
+already drawn at, an 8-row glyph with a row of air above and below. So the
+layout does not move a pixel: every band, hit test, slot, scroll and popup is
+where it was, and a cell is still eight pixels wide on the byte grid. Inside
+it a letter five pixels wide with **one-pixel stems**: row 0 air, the capitals
+on rows 1..7, the underscore on row 8, the descenders on rows 8..9, columns
+1..5 the letter and column 6 where bold lands.
+
+**The art** is `apps/wirechat/wcface.t88`, in §6.4's `.t88` form so the
+tree's tools read it, drawn from the X11 `misc-fixed` **6×10** — a terminal
+face that has been read on screens for forty years, and **public domain** (its
+own `COPYRIGHT` property: *"Public domain terminal emulator font. Share and
+enjoy."*), so nothing has to travel with it. The art header records its URL
+and SHA-256, and from then on **the art is the source** (§6.4.1). It is not in
+`faces/`: `FACESRC` is a wildcard of that directory and every face in it ships
+in `SYSTEM/FONTS/` for the type library, where this one is the package's.
+`tools/os88face.py --bitmap` writes the regular style's 950 bytes — 95
+glyphs × 10 rows — and `wctxt.inc` `incbin`s them; the build asserts the
+length, so a face drawn at another height fails the assembly.
+
+**One pixel is a choice, and the CGA caveat is answered rather than missed.**
+§6.2 and §6.4.1 find a one-pixel stem reads thin on a 640×200 CGA, whose pixel
+is 2.4:1 tall, and `os88face.py` warns about it — which is why the build runs
+it `--quiet` here. Two-pixel stems were tried, by emboldening the art: at a
+five-pixel letter the counters of `m`, `w`, `e` and `@` close, which is §6.4.1's
+"dead end" again. Fitting an outline face (JetBrains Mono, IBM Plex Mono) to
+an 8 × 10 cell with `tools/os88ttf.py` was tried too: the hinter at 10 ppem
+cut the bowls and stems the cell has no room for. On a CGA the one-pixel face
+is lighter than the ROM's and still a sharper word than an overstruck one.
+
+**The drawing** (`wcband.inc`'s `wc_fput`). A run is composed cell by cell
+into `wc_fband` — a cell is one byte of each of its ten rows, at the band's
+fixed stride (`WC_FSTR`), so the compose shifts nothing and its ten rows are
+ten moves at constant displacements — and put down by **one**
+`OSAPI_GFX_BLIT1` in the run's two colours (§5.4.2.2's pen). The cell is the
+band, so the ground, the two rows of air and the glyphs are one pass, as
+font_run's run was (PERFORMANCE.md rules 1 and 2), and **bold is composed**:
+the row ORed with itself a pixel right, in the cell, so it never spills into
+the next one and a slot's partial run (§113.5.1) cuts through bold anywhere.
+What a band cost before — an air pair a ground, a run a span, an overstrike —
+is now **a run per colour pair**: `wc_bspans` joins adjacent spans of one ink
+and ground, so Wired's message line, a time, a nick and a text all black on
+white, is one blit where it was three runs and three fills. A band with an
+UNDERLINE (a section title's rule) blits nine rows and draws the tenth as one
+line in its colour. §6.6.2 case 6 has no WireChat site any more
+(`tests/textsites.txt`).
+
+**The polarity.** A set bit is the blit's ink, and on a display of one bit
+the pen is not read: a set bit is *lit* (§5.4.2.2). So the set bits are
+whichever of the run's two colours a one-bit display lights — the glyph on a
+dark ground, the GROUND on a light one (Wired is black on white), the compose
+complementing every row for it — and the pen is turned round to match, so a
+colour display draws the same picture either way and a window across two
+displays needs no second answer. A run whose ink and ground round alike is not
+one any theme draws on one bit (§113.5.2).
+
+**The rest of the window's text** comes through `wc_frun`, font_run's contract
+in this face (its cell from the row above DX): Send's caption — whose fills
+above and below now stop at the cell — `Search...`, and the input field,
+through §83.6's `OS88LINE_RUN`. What stays the machine's 8×8 is the
+machine's: the title bar, the menus, the About and alert cards.
+
+**What it costs.** 950 bytes of face and the compose in the image, 960 of
+band and 14 of state in the bss (§113.10). The compose is RAM work — ten
+moves a cell, an `or` and a shift more for bold — against the framebuffer
+work it replaces, and the calls go down: `tests/wcdraw.py` counts
+`OSAPI_GFX_BLIT1` as a drawing call, under the same ceilings (§113.12).
 
 ### 113.6 What the user does
 
@@ -197304,7 +197436,15 @@ and 13,844 when owned nicks were added. Wired (black on white, the default; the 
 Monochrome renamed Mono-Dark), its colour row, LEDs and emoticon colours, the
 Find highlight, and the header's display words gone took it to **20,363 /
 31,385 — 51,748** and 17,981 packed: the four LED pictures are 128 bytes, the
-display words' bss went. The themes cost the image little: the
+display words' bss went. The window's own face (§113.5.3) took it to
+**21,545 / 32,359 — 53,904** and 18,841 packed: +1,182 of image, of which
+950 is the face and the rest its compose and `wc_frun`, less the air pairs
+and the overstrike they replaced; +974 of bss, the 960-byte band
+(`WC_FSTR` × `WC_FROWS`) and its state. The air between messages (§113.5)
+took it to **22,165 / 32,593 — 54,758** and 19,390 packed: +620 of image,
+the layout, the glass's table and its shift, the gap and tail fills and the
+scroll column's own painter; +234 of bss, the two layout tables of 45 words
+and the scroll column's 44 glyphs. The themes cost the image little: the
 LED pictures and the bevel went, the four theme rows, the glyph table, the
 three button painters, the F keys and §113.5.1's ink-only run came, +301
 bytes in all. The bss grew by
@@ -197320,10 +197460,11 @@ largest first:
 | `wc_msgs` | 8,960 | 40 messages of 224 (`WC_MREC`, +222 the UTC day): the server's history is 30 (§113.2.3) and ten more is what arrives while they are read |
 | `wc_resp` | 6,146 | one reply body, `WC_RESPMAX` + the parser's NUL — the server's own ceiling |
 | `wc_rxb` | 1,024 | one `NETV_RECV`, `NET_SKMAX` |
+| `wc_fband` | 960 | a run of the face composed (§113.5.3): `WC_FSTR` = `WC_SBUFN` = 96 cells, the longest composition, × 10 rows |
 | `wc_ros` | 800 | the roster: 50 sessions, the server's limit (§113.7), at 16 |
 | `wc_reqb` | 640 | a request: line, headers, a 200-character body |
 | `wc_cfgb` | 514 | `WIRECHAT.CFG` read or written whole |
-| the rest | ~2,182 | the field and its draft, the rooms, the conversations, the friends, the geometry, the theme's pens and menu items, the client's state |
+| the rest | ~2,430 | the field and its draft, the rooms, the conversations, the friends, the geometry, the theme's pens and menu items, the client's state |
 
 The worker's stack is `OS88_STACK_256` (§113.4): ETHER.DRV's verbs are ~126
 bytes of it and the interrupt floor 64, and the deepest chain of this file's
@@ -197341,7 +197482,7 @@ own is `wc_nstep` → `wc_take` → `wc_hdrline` → `wc_dec32`.
 | row | tier | what |
 |---|---|---|
 | `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code - and §113.2.4: `x=1` on every request, a message stored with its date, a mention in the view marked, an `A` from another room marking it, Tab completing an `@nick` |
-| `wcdraw` | soak | §113.5.1 on MartyPC's Hercules 5150: each gesture's drawing calls under its ceiling, and the incremental picture identical to a repaint's |
+| `wcdraw` | soak | §113.5.1 on MartyPC's Hercules 5150: each gesture's drawing calls under its ceiling — `OSAPI_GFX_BLIT1` counted among them since §113.5.3, which is every run of text — and the incremental picture identical to a repaint's |
 | `wcdrawcga` | soak | the same on its CGA: the short layout, in Wired (the default) |
 | `wcdrawvga` | soak | the same on the VGA XT: the Blue theme, picked from the Theme menu (§113.5.2) |
 | `wcdrawwired` | soak | the same on the VGA XT in Wired (§113.5.2): the LEDs as `OSAPI_GFX_BLITP`s and the emoticons as spans |
