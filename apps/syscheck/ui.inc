@@ -68,7 +68,9 @@ SCG_FCOLS   equ 82                  ; a line's cells, the lamp's two included
 SCG_BTY     equ 84                  ; the button row's top
 SCG_STATX   equ 86                  ; the status text
 SCG_STATC   equ 88
-SCG_SIZE    equ 90
+SCG_VY0     equ 90                  ; the chooser's first row (116.13)
+SCG_VFIT    equ 92                  ; ...and the rows it has room for
+SCG_SIZE    equ 94
 
 SC_BTH      equ 15                  ; a button's height (Timer's, SPEC.md 111.1)
 
@@ -299,6 +301,21 @@ sc_layout:
     mov ax, [sc_geo+SCG_FY2]
     sub ax, 2
     mov [sc_sb+6], ax               ; y2
+    ; ...and the chooser, which takes the Checks and Findings room
+    mov dx, [sc_geo+SCG_PY2]
+    add dx, 4 + 5
+    add dx, bp
+    add dx, 3
+    mov [sc_geo+SCG_VY0], dx
+    mov ax, [sc_geo+SCG_BTY]
+    sub ax, 6
+    sub ax, dx
+    jns .vf
+    xor ax, ax
+.vf:
+    xor dx, dx
+    div bp
+    mov [sc_geo+SCG_VFIT], ax
     mov byte [sc_laid], 1
     pop bp
     pop bx
@@ -341,6 +358,8 @@ sc_drawall:
     mov cx, [sc_geo+SCG_KX2]
     call OSAPI_GFX_FRAME
 .nosys:
+    cmp byte [sc_choose], 0
+    jne .nofind                     ; the chooser draws its own card
     mov ax, [sc_geo+SCG_KX1]
     mov bx, [sc_geo+SCG_KY1]
     or bx, bx
@@ -369,12 +388,18 @@ sc_drawall:
     call sc_drawsys
     call sc_drawpath
     call sc_drawcnt
+    cmp byte [sc_choose], 0
+    je .checks
+    call sc_drawchoose
+    jmp short .btns
+.checks:
     mov ax, SC_NCHK - 1
 .row:
     call sc_drawrow
     dec ax
     jns .row
     call sc_drawfind
+.btns:
     call sc_buttons
     call sc_drawstat
     xor ax, ax
@@ -397,6 +422,12 @@ sc_drawowed:
     call OSAPI_WM_CLIP_SET
     jc .out                         ; not visible: the next paint draws it
     call sc_pen
+    cmp byte [sc_choose], 0
+    je .lists
+    and word [sc_dirty], ~(SYD_FIND | SYD_FADD) ; the chooser covers both
+    mov word [sc_drows], 0
+    jmp .head
+.lists:
     test word [sc_dirty], SYD_FIND
     jz .rows
     call sc_drawfind                ; the whole list (the selection moved)
@@ -630,9 +661,12 @@ sc_drawheads:
     or dx, dx
     jz .chk
     mov di, sc_txt
-    mov si, sc_h_check
-    cmp byte [sc_run], 0
-    jne .h1
+    mov si, sc_h_check              ; Checking / Checked / Stopped, or - with
+    cmp byte [sc_run], 0            ; nothing checked yet - the chooser's
+    jne .h1                         ; invitation
+    mov si, sc_h_ready
+    cmp byte [sc_ended], 0
+    je .h2
     mov si, sc_h_checked
     cmp byte [sc_stopped], 0
     je .h1
@@ -640,9 +674,9 @@ sc_drawheads:
 .h1:
     call sc_scpy
     cmp byte [sc_vlet], 0
-    je .h2
+    je .h4                          ; the first step has not named it yet
     call sc_drive2                  ; "C:"
-    mov si, sc_h_boot
+    mov si, sc_h_dash
     call sc_scpy
     mov si, sc_h_hd
     cmp byte [sc_fixed], 0
@@ -650,9 +684,12 @@ sc_drawheads:
     mov si, sc_h_fl
 .h3:
     call sc_scpy
+    cmp byte [sc_isboot], 0
+    je .h4
+    mov si, sc_v_boot               ; ", the boot volume"
+    call sc_scpy
     jmp short .h4
 .h2:
-    mov si, sc_h_bootvol
     call sc_scpy
 .h4:
     mov si, sc_txt
@@ -1547,10 +1584,10 @@ sc_t100:    db '100%', 0
 sc_h_check:   db 'Checking ', 0
 sc_h_checked: db 'Checked ', 0
 sc_h_stopped: db 'Stopped ', 0
-sc_h_boot:    db ' - boot volume, ', 0
+sc_h_dash:    db ' - ', 0
+sc_h_ready:   db 'Ready to check a drive', 0
 sc_h_hd:      db 'hard disk', 0
 sc_h_fl:      db 'floppy', 0
-sc_h_bootvol: db 'the boot volume', 0
 sc_h_checks:  db 'Checks', 0
 sc_h_find:    db 'Findings - ', 0
 sc_h_sys:     db 'This System', 0

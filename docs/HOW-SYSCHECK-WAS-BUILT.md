@@ -125,3 +125,24 @@ most, since a checker that cries wolf on a clean install is worse than none.
 ![Hercules: shape, not colour, exactly as the mockup asked.](syscheck/herc-clean.png)
 
 ![CGA's 640x200: the short layout, two columns of checks.](syscheck/cga-clean.png)
+
+## 2026-10-20 — It asks which drive
+
+The first version checked the boot volume and nothing else, and the owner
+asked for a question instead: *which drive?*, with the hard disk already
+chosen. That turned out to matter most on exactly the machine the program
+is for. Install a release onto a fresh hard disk and you are still running
+from the floppy, so "the boot volume" is the floppy, and the disk you want
+checked is the other one.
+
+So the window now opens on a chooser in the place of the checks: every drive
+the machine has, the hard disk in inverse video. The rule for the default is
+one line - the boot volume if it is a hard disk, else the first hard disk -
+and "hard disk" had to mean *fixed and not a cable*, because a drive
+redirected over the parallel link answers fixed too. A one-drive machine's
+B: is left out, because the BIOS quietly maps it onto A:.
+
+The planted-disk test now presses Scan once and gets the hard disk it was
+offered; it passes as before.
+
+![The chooser: C:, the hard disk, offered first.](syscheck/vga-chooser.png)

@@ -197699,8 +197699,9 @@ an attached peer cannot be restored by a RAM snapshot on another machine.
 ## 116. SYSCHECK — System Check, the installed system's health (`apps/syscheck/`)
 
 `SYSCHECK.O88`, in `SYSTEM/` on every kern_big system disk and on the live
-media (§116.10), label prefix `sc_`. It reads the volume the machine
-**booted from** and reports what an in-place upgrade (§52.10.15) can leave
+media (§116.10), label prefix `sc_`. It reads the drive you choose - the
+**hard disk** unless you say otherwise (§116.13) - and reports what an
+in-place upgrade (§52.10.15) can leave
 broken or behind: programs and drivers built for another kernel, files a
 release retired or moved, the debris of an interrupted install, a
 hibernation image from another build, file associations that point at
@@ -197897,7 +197898,8 @@ is greyed (§47) until a finished scan has found something §116.8 may remove;
 Save Report until a scan has finished. A click on a Checks row selects it,
 and the Findings card shows that check. Keys: Up/Down select a check,
 PgUp/PgDn scroll the findings, `S` scans or stops, `D` is Details, `R`
-saves, Esc stops a scan. A scan starts by itself when the window opens.
+saves, Esc stops a scan. Nothing is read until a drive is chosen: the window
+opens on §116.13's chooser, and Scan after a scan opens it again.
 
 ### 116.7 The report
 
@@ -197947,7 +197949,7 @@ disks and on the live media, which is where an install takes it from
 | row | tier | what |
 |---|---|---|
 | `t_sysman` | fast | the manifest against every built system disk: each entry present with its size and sum; `SYSCHECK.O88` itself absent from it |
-| `syscheck` | soak | a hard-disk image built from the system disks with a planted package of another format, a retired package, `KPAD.TMP`, a duplicated program, a stale `ASSOC.DAT` row and a hibernation pointer from another build, booted from C:; a scan finds each, the report names each, and Clean Up removes exactly §116.8's |
+| `syscheck` | soak | a hard-disk image built from the system disks with a planted package of another format, a retired package, `KPAD.TMP`, a duplicated program, a stale `ASSOC.DAT` row and an orphaned hibernation image, booted from C:; one Scan press checks the drive the chooser offers (C:), the report names each finding, and Clean Up removes exactly §116.8's |
 
 ### 116.12 What it costs, measured
 
@@ -197963,4 +197965,35 @@ clusters, which leaves that disk 50 free (656 of 706 in use).
 off the floppy to sum them; the screen stays live throughout. Both scans
 found nothing - every row OK, *No problems found* - which is the
 negative control for a release judged against its own manifest.
+
+### 116.13 It asks which drive, and offers the hard disk
+
+**The window opens on a chooser, and nothing is read until a drive is
+chosen.** The chooser takes the Checks and Findings cards' room: a heading,
+then one row per volume this machine has - `C:  hard disk, the boot volume`,
+`A:  floppy` - with the selected row in inverse video. Scan, Enter or `S`
+checks it; a second press on the same row inside 9 ticks does too; the
+arrows and a click choose. Scan after a scan opens the chooser again with the
+drive just checked selected, and Esc there puts that scan's results back.
+While it is up only Scan and Quit are live (§47).
+
+**The default is the hard disk** - this is a program about hard-disk
+installs - by one rule: the boot volume if it is a hard disk, else the first
+hard disk, else the boot volume. "Hard disk" is `OSAPI_VOL_KIND`'s `VK_FIXED`
+**and not** `VT_FILE`: a redirected volume answers fixed and has no sectors
+of its own (§62.9), the distinction `hb_pick` makes for the same reason. So a
+machine that booted a floppy to look at the drive it has just installed to is
+offered that drive, and one that booted its hard disk is offered itself.
+
+The rows are every volume `OSAPI_VOL_KIND` answers for, A: to Z:, with one
+exception: **B: on a one-drive machine** is not offered. The kernel keeps
+that row on every machine and the BIOS aliases it onto A: (§52.10.5), so
+choosing it would check the disk in A: under another name; `int 11h`'s
+floppy count decides, as it does for the installer.
+
+A drive that is not the boot volume is checked by the same nine checks. The
+manifest describes the release, not the drive (§116.1.1), so a hard disk
+installed from this release compares clean whether or not the machine booted
+from it; the progress heading says which it is (`Checking C: - hard disk,
+the boot volume`).
 

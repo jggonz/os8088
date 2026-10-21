@@ -3801,6 +3801,7 @@ $(BUILD)/syscheck_man.inc: $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) \
 
 $(BUILD)/syscheck.bin: apps/syscheck/syscheck.asm apps/syscheck/scan.inc \
                        apps/syscheck/ui.inc apps/syscheck/out.inc \
+                       apps/syscheck/choose.inc \
                        apps/os88api.inc apps/os88ui.inc apps/os88dec.inc \
                        apps/os88rseq.inc $(BUILDINC) $(BUILD)/syscheck_man.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/syscheck/syscheck.asm

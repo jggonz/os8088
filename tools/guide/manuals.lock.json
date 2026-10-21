@@ -966,9 +966,9 @@
   "sources": [
    "apps/syscheck"
   ],
-  "stamped": "92d28e46",
-  "strings": "d89a1cccc7922da7",
-  "why": "System Check, a new program (SPEC.md 116)"
+  "stamped": "b472c02d",
+  "strings": "4861a9b596fffd00",
+  "why": "System Check asks which drive (SPEC.md 116.13)"
  },
  "SYSTEM": {
   "sources": [],

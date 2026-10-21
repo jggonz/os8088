@@ -29,6 +29,9 @@ mockups are [docs/syscheck/design/](../syscheck/design/).
   two folders, a retired program or driver, a hibernation image from another
   build - and about release files that are missing, a `SYSTEM.CFG` that
   wants an absent driver, and file associations that point at nothing.
+- [x] **Choose the drive:** as a user System Check asks which drive to
+  check before it reads anything, with my hard disk already selected, and
+  Scan asks again afterwards (SPEC.md 116.13).
 - [x] **Report:** as a user Save Report writes `SYSCHECK.TXT` naming every
   finding, and a toast tells me where.
 - [x] **Clean Up:** as a user Clean Up asks first, removes only the debris

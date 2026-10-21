@@ -141,6 +141,7 @@ def build_fixture(out):
 # than types: a click lands on what is under it whatever has the focus.
 SOCK = os.path.join(BUILD, "qmp.sock")
 CP_CLOSE = (171, 138)       # the Control Panel's close box
+BTN_SCAN = (35, 441)        # Scan: checks the drive the chooser offers
 BTN_SAVE = (210, 441)       # Save Report
 BTN_CLEAN = (321, 441)      # Clean Up...
 ALERT_PROCEED = (358, 265)  # the alert's Proceed (Cancel is the default)
@@ -208,6 +209,8 @@ def drive(img, keep):
     time.sleep(20)                      # boot, the autostart, the scan
     click(*CP_CLOSE)
     time.sleep(1.5)
+    click(*BTN_SCAN)                    # the chooser (SPEC.md 116.13) offers
+    time.sleep(1.0)                     # C:, the boot hard disk: check it
     text = save_until(img, "Result: 5 broken, 6 warnings")
     if text is None:
         fails.append("the first report never said 5 broken, 6 warnings:\n%s"

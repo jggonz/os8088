@@ -10,8 +10,17 @@ still there.
 
 System Check lives in the `SYSTEM` folder of the system disk, and an
 install copies it there on the hard disk too. Open `C:` (or the system
-floppy), then `SYSTEM`, and double-click **SYSCHECK.O88**. The check
-starts by itself, and the desktop stays usable while it runs.
+floppy), then `SYSTEM`, and double-click **SYSCHECK.O88**.
+
+## Choosing the drive
+
+System Check first asks which drive to check, listing every drive the
+machine has. Your hard disk is already selected, so most of the time you
+just click **Scan** or press Enter. To check another drive, click it (or
+use the arrow keys) first; double-clicking a drive checks it at once.
+
+The check then runs on its own, and the desktop stays usable while it
+does. To check another drive afterwards, click **Scan** again.
 
 ## What it checks
 
@@ -38,7 +47,7 @@ that list the whole window, which helps on a small screen.
 
 | Button | What it does |
 |---|---|
-| Scan | Checks the disk again. While a check is running it reads Stop |
+| Scan | Asks which drive, then checks it. While a check is running it reads Stop |
 | Details | Gives the findings list more room, or puts the checks back |
 | Save Report | Writes `SYSCHECK.TXT`, naming every finding, to the disk it checked |
 | Clean Up... | Removes the leftovers it is safe to remove, after asking |

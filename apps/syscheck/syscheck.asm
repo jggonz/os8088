@@ -138,9 +138,9 @@ sc_entry:
     mov di, sc_ondrag
     mov dx, sc_onclick              ; a press that was not a button's
     call os88ui_btninit             ; keeps every register
-    call sc_scan_begin              ; the scan starts by itself (116.6)...
     xchg ax, bx                     ; BX = the window again
-    call OSAPI_WM_WAKE              ; ...at the first wake
+    call sc_volscan                 ; ASK which drive first (SPEC.md 116.13),
+    mov byte [sc_choose], 1         ; the hard disk already chosen
     clc
 sc_ret:
     ret
@@ -261,6 +261,31 @@ sc_onkey:
     call sc_owe
     mov dl, al
     and dl, 0xDF                    ; a letter, either case
+    cmp byte [sc_choose], 0
+    je .keys
+    cmp al, 0x0D                    ; the chooser: Enter or S checks the drive,
+    je .go                          ; Esc goes back to the last results, the
+    cmp dl, 'S'                     ; arrows choose
+    je .go
+    cmp al, 0x1B
+    je .cesc
+    mov al, [sc_vsel]
+    cmp ah, 0x48
+    je .vup
+    cmp ah, 0x50
+    jne .ret
+    inc ax
+    jmp sc_vmove
+.vup:
+    or al, al
+    jz .ret
+    dec ax
+    jmp sc_vmove
+.go:
+    jmp sc_choose_go
+.cesc:
+    jmp sc_choose_esc
+.keys:
     cmp al, 0x1B
     je .esc
     cmp dl, 'S'
@@ -348,6 +373,15 @@ sc_onup:
 ; sc_bok - would this button do anything? (SPEC.md 47 rule 2's one predicate)
 ; in:  AL = index; out CF = 1 greyed; every register kept
 sc_bok:
+    cmp byte [sc_choose], 0         ; the chooser up: Scan and Quit only
+    je .live
+    cmp al, SB_DET
+    je .no
+    cmp al, SB_SAVE
+    je .no
+    cmp al, SB_CLEAN
+    je .no
+.live:
     cmp al, SB_SAVE
     je .save
     cmp al, SB_CLEAN
@@ -383,15 +417,20 @@ sc_act_scan:
     mov byte [sc_stop], 1           ; honoured at the next step
     ret
 .start:
-    call sc_scan_begin
-    call sc_repaint                 ; everything is new: one paint, not
-    jmp sc_kick                     ; nine little ones
+    cmp byte [sc_choose], 0
+    je .ask
+    jmp sc_choose_go                ; the chooser is up: check its drive
+.ask:
+    jmp sc_choose_open              ; otherwise ask again (SPEC.md 116.13)
 
 ; sc_act_details - the findings take the checks' room as well (116.4)
 sc_act_details:
+    cmp byte [sc_choose], 0
+    jne .out
     xor byte [sc_details], 1
     jmp sc_repaint
-
+.out:
+    ret
 ; -----------------------------------------------------------------------------
 ; sc_onclick - a press that was not a button's: the About card's dismissal,
 ;              a Checks row, or the findings' scroll bar
@@ -406,6 +445,10 @@ sc_onclick:
     stc
     ret
 .live:
+    cmp byte [sc_choose], 0
+    je .rows
+    jmp sc_vclick                   ; the chooser's: CF = 1 when it was
+.rows:
     call sc_hitrow                  ; AL = the check row under CX,DX, CF = none
     jc .sb
     mov byte [sc_seluser], 1
@@ -487,6 +530,7 @@ sc_ab3:     db 'Is it all one release?', 0
 %include "syscheck/scan.inc"
 %include "syscheck/ui.inc"
 %include "syscheck/out.inc"
+%include "syscheck/choose.inc"
 %include "syscheck_man.inc"         ; the release manifest (SPEC.md 116.2)
 %include "os88rseq.inc"
 
@@ -528,6 +572,16 @@ sc_ab3:     db 'Is it all one release?', 0
     OS88_ABYTE sc_depth             ; the walk's depth
     OS88_ABYTE sc_bpp               ; the display's bits per pixel
     OS88_ABYTE sc_compact           ; the short layout (CGA)
+    OS88_ABYTE sc_choose            ; the drive chooser is up (116.13)
+    OS88_ABYTE sc_isboot            ; the drive being checked is the boot one
+    OS88_ABYTE sc_nflop             ; floppy drives, by int 11h
+    OS88_ABYTE sc_nvol              ; the chooser's rows...
+    OS88_ABYTE sc_vsel              ; ...the selected one...
+    OS88_ABYTE sc_vboot             ; ...and the boot volume's, FF none
+    OS88_AWORD sc_vclkt             ; the last chooser press's tick
+    OS88_ABUF  sc_vols, SC_MAXVOL   ; a row's volume index,
+    OS88_ABUF  sc_vkind, SC_MAXVOL  ; ...its medium (VK_*),
+    OS88_ABUF  sc_vtran, SC_MAXVOL  ; ...its transport (VT_*)
     OS88_AWORD sc_t0                ; the tick a wake started in
     OS88_AWORD sc_tui               ; the tick the progress lines were drawn
     OS88_AWORD sc_tstart            ; the tick the scan started

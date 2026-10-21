@@ -180,8 +180,15 @@ sc_p_init:
     call OSAPI_FILE_HERE            ; where we were, to go back to
     mov [sc_homedx], dx
     mov [sc_homebl], bl
-    call OSAPI_VOL_SYS              ; BL = the volume this machine booted from
-    mov [sc_vol], bl
+    mov bl, [sc_vol]                ; the drive the chooser gave us (116.13)
+    call OSAPI_VOL_SYS              ; ...and whether it is the boot one
+    mov al, 0
+    cmp bl, [sc_vol]
+    jne .notboot
+    inc al
+.notboot:
+    mov [sc_isboot], al
+    mov bl, [sc_vol]
     mov al, bl
     add al, 'A'
     mov [sc_vlet], al
