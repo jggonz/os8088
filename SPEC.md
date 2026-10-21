@@ -197711,7 +197711,12 @@ reimplemented in the C this toolchain compiles (§73), plus three hand-written
 the fact that greys it (§47).** Nothing is vendored (CONTRIBUTING.md §6): the
 26 data files are fetched at build time and never committed, and every file
 carrying a derived table, string or offset names its source in its header. The
-design record is `docs/LEMMINGS-PORT-PLAN.md`.
+design record is `docs/LEMMINGS-PORT-PLAN.md`. **It is a developer's build by
+the owner's decision** (2026-10-21; `apps/RETIRED.txt`, kind `local`): the data
+is DMA Design's and still commercially owned, so no shipped image, everything-set
+floppy, live medium or release zip carries LEMMINGS or its bands, where the
+Apple II ROM and the Frotz stories - fetched the same way - do ride the live
+media. `make lemmingsdisk` in a developer's own tree is how it is played.
 
 **The desktop window is a LAUNCHER and nothing else.** It carries the four
 ratings, the level names of the chosen rating paged to the live window height,
