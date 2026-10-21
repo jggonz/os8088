@@ -80,6 +80,8 @@ hd_tentry:
     je hd_page_drag
     cmp al, HDT_KEY
     je hd_page_key
+    cmp al, HDT_PKG             ; the installer, for INSTALL.O88 (SPEC.md
+    je hd_pkgv                  ; 117.4): HDD.DRV's HDV_TOOL, forwarded
     stc                         ; a verb from a newer resident than this image
     ret                         ; - refuse it rather than run another one
 
@@ -197,6 +199,11 @@ hd_tshut:
 ; -----------------------------------------------------------------------------
 hd_tbusy:
     push bx
+    cmp byte [hd_ipkg], 0       ; A PACKAGE'S RUN waiting on its apps disk
+    je .wins                    ; (SPEC.md 117.4): it holds ASSOC.DAT's
+    cmp byte [hd_iw_st], HII_SYSDONE    ; writer and its stage is in this
+    je .busy                    ; image, which no window shows
+.wins:
     mov bx, [hd_twin]
     call hd_win_live
     jc .busy
@@ -243,5 +250,7 @@ hd_win_live:
 %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %define OS88UI_NOGRADIO       ; check boxes only: no radio ring/dot (SPEC.md 13.15.3)
 %include "os88ui.inc"
+%include "ipkg.inc"             ; HDT_PKG (SPEC.md 117.4) - past the sector
+                                ; buffers, where it costs no alignment
 
     OS88_DRV_END

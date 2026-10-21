@@ -34,29 +34,37 @@ actually been run. The build diary is `docs/HOW-INSTALL-WAS-BUILT.md`.
   and the driver is full to its 4KB rung: `hd_mbr_end` is 4,092. A forwarding
   verb has to be paid for inside the driver, or every machine with a hard disk
   pays a kilobyte for a door it uses once.
-- **§116 is taken** by System Check (draft PR #286), so this is §117.
+- **Section 116 is taken** by System Check (draft PR #286, not yet on main), so
+  this is §117.
 
 ## Wave 1 — the doors (engine reachable from a package)
 
-- [ ] `OSAPI_DRV_USE` at `0x04A5`: a rare cell, `.cold` body
+- [x] `OSAPI_DRV_USE` at `0x04A5`: a rare cell, `.cold` body
       `osapi_drv_use_x` (`cpf_need`, `CPE_DRVUP`, drop when no panel is open;
       `DRVU_DONE` sends the class's `DSV_CPCLOSE` unless a panel is open);
       kern_small refuses. `CTRL.DRV` gains `CPE_DRVUP` (kern_big).
       *Verify:* `make`, `make KERN_SMALL=1`, `tools/kernsize.py` both kernels
       (no rung crossed), `t_api_abi` in the fast tier, abilock updated
       without a `PKG_FMT` bump (a cell appended at the end).
-- [ ] `HDV_TOOL` (3) in `HDD.DRV`: two instructions and a tail call into
+- [x] `HDV_TOOL` (3) in `HDD.DRV`: two instructions and a tail call into
       `hd_cp_thunk`, paid for inside `hdxms.inc`. `build/hdd.bin` still 4,096
       bytes with `hd_mbr_end` ≤ `os88_drv_end`.
       *Verify:* host build, the map, `t_install`'s size assertion.
-- [ ] `HDT_PKG` (10) in `HDDTOOL.DRV` with `HDI_DEVS`, `HDI_SLOTS`, `HDI_GO`,
+- [x] `HDT_PKG` (10) in `HDDTOOL.DRV` with `HDI_DEVS`, `HDI_SLOTS`, `HDI_GO`,
       `HDI_APPS`, `HDI_QUIT`; `HD_ABI_VER` 7; `HDT_BUSY` busy at
       `HII_SYSDONE`; `hd_iw_shut` puts the stage back to idle; the install
       verbs refuse while the Install window is visible.
       *Verify:* host build; rows to run in the final pass named here:
       `instdeep`, `instkeep`, `inststate`, `instrest`, `hdauto`, `hddcp`.
-- [ ] SDK: `OSAPI_DRV_USE`, `DRVU_*`, `HDV_TOOL`, `HDI_*`, `HDIV_*`, `HDIS_*`,
+- [x] SDK: `OSAPI_DRV_USE`, `DRVU_*`, `HDV_TOOL`, `HDI_*`, `HDIV_*`, `HDIS_*`,
       `HDS_*`, `HDG_*` in `apps/os88api.inc`; `docs/INDEX.md` regenerated.
+
+  *Measured at the end of the wave:* kern_big `.text` +6, `.bss` +4, `.cold`
+  +67 (77 bytes, no rung crossed: image 437 left, cold 278 left);
+  kern_small `.text` +6 (the cell only). `HDD.DRV` 4,096 bytes, `hd_mbr_end`
+  unmoved at 4,092. `HDDTOOL.DRV` 16,499 -> 17,143 bytes, `HDTOOL_KB` 17 -> 17.
+  `make` green with the fast tier 52/52. Not yet driven by a package: wave 2's
+  boot is the first caller.
 
 ## Wave 2 — the wizard
 

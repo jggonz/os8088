@@ -2780,6 +2780,56 @@ HDV_DISARM   equ 2              ; ES:DI = 8 bytes: bit n set = sector n of the
                                 ; buffer is in XMS and NOT in the buffer. Copy
                                 ; up the rest: a sector the kernel's cache
                                 ; served, or a disk on rung 0, is clear
+HDV_TOOL     equ 3              ; THE INSTALLER (SPEC.md 117.4): AH = an HDI_*
+                                ; below, ES = yours, the rest per verb. It is
+                                ; HDDTOOL.DRV's own engine - the Control
+                                ; Panel's Install window's - read off the
+                                ; system volume on first use. CF=1 = the tool
+                                ; could not be reached (no system disk, no
+                                ; heap, another vintage) or the verb is not
+                                ; one it knows; CF=0 = it ran, answer in AL.
+                                ; Every register but AX preserved. UI task,
+                                ; from a callback: the install verbs copy
+                                ; whole floppies under the frozen interface
+HDI_DEVS     equ 0              ; ES:DI = 4 * HDIV_SIZE. out AL = devices
+HDI_SLOTS    equ 1              ; DL = a device, ES:DI = 4 * HDIS_SIZE. out
+                                ; AL = the slot the Install window would
+                                ; select, 0FFh none would do, 0FEh no such
+                                ; device or its geometry is unknown
+HDI_GO       equ 2              ; DL = device, DH = slot, AL = 1 erase / 0 keep
+                                ; the files; ES:DI = HDI_CAPSZ bytes. out AL =
+                                ; an HDG_* and the engine's caption at ES:DI.
+                                ; The Install window's two clicks in one
+HDI_APPS     equ 3              ; ES:DI = HDI_CAPSZ bytes: the apps phase, once
+                                ; HDI_GO answered HDG_APPS. out as HDI_GO
+HDI_QUIT     equ 4              ; abandon a run waiting on its apps disk (its
+                                ; system part has committed and stays)
+HDI_CAPSZ    equ 48
+HDIV_KIND    equ 0              ; db: 1 = int 13h, 2 = the IDE task file
+HDIV_GEOM    equ 1              ; db: 1 = its geometry is known (installable)
+HDIV_UNIT    equ 2              ; db: the int 13h drive, or the IDE unit
+HDIV_SECS    equ 4              ; dd: cylinders x heads x sectors
+HDIV_SIZE    equ 8
+HDIS_STATE   equ 0              ; db: an HDS_* - may an install take it
+HDIS_VOL     equ 1              ; db: 1 = a FAT volume an install may KEEP
+HDIS_LET     equ 2              ; db: the letter it is mounted as, or 0
+HDIS_TYPE    equ 3              ; db: the partition table's type byte
+HDIS_SECS    equ 4              ; dd: its length (a free slot: what an install
+                                ; would make of it)
+HDIS_TEXT    equ 8              ; 26 bytes: the Install window's State column,
+                                ; NUL-ended ('C: FAT16', 'Unpartitioned', ...)
+HDIS_TEXTSZ  equ 26
+HDIS_SIZE    equ 34
+HDS_OK       equ 0              ; an install may take it
+HDS_SMALL    equ 1              ; under 2MB
+HDS_ALIEN    equ 2              ; somebody else's, or unreadable, or too big
+HDS_NONE     equ 3              ; free, and no room on the disk for it
+HDS_LIVE     equ 4              ; the volume this machine BOOTED from: keep
+                                ; only, never erase (SPEC.md 52.10.4.1)
+HDG_FAIL     equ 0              ; it stopped; the caption says where
+HDG_APPS     equ 2              ; the system part is on and the disk boots:
+                                ; insert the apps disk, then HDI_APPS
+HDG_DONE     equ 3              ; installed
                                 ; 3 was the serial monitor's and is RETIRED,
                                 ; not free: a class number is ABI, and a driver
                                 ; built against the old header would attach as
@@ -6015,6 +6065,28 @@ FSIF_BANKED equ 4
                                  ; 4 absent, 5 bad buffer/caller, 6 empty,
                                  ; 7 TX full, 8 module unavailable.
 SER_BUFFER_SIZE equ 517
+
+%define OSAPI_DRV_USE KERNEL_SEG:0x04A5 ; THE DRIVERS PAGE'S TICK, AS A DOOR
+                                 ; (SPEC.md 117.3). AL = a DRVC_* class, AH =
+                                 ; DRVU_UP: load and attach that class's
+                                 ; driver with the Control Panel's own code,
+                                 ; reading it (and CTRL.DRV) off the system
+                                 ; disk - out CF=0 it is up (or was), CF=1 AX
+                                 ; = the DRVE_* its row banked: 1 no system
+                                 ; disk, 2 not on it, 3 not a driver, 4 no
+                                 ; memory, 5 no hardware, 6 busy, 7 attached
+                                 ; twice, 8 nothing to mount; AX = 0 no driver
+                                 ; layer (kern_small). It RECORDS NOTHING: no
+                                 ; SYSTEM.CFG answer is written for a user who
+                                 ; never answered the Drivers page. AH =
+                                 ; DRVU_DONE: you have finished with that
+                                 ; driver's page tools - it is sent
+                                 ; DSV_CPCLOSE (HDD.DRV gives HDDTOOL.DRV
+                                 ; back) unless a Control Panel is open.
+                                 ; Every register but AX kept. UI task, from
+                                 ; a callback; a worker may not
+DRVU_UP      equ 0
+DRVU_DONE    equ 1
 
 %define OSAPI_THM_SET        KERNEL_SEG:0x046D   ; AL = THM_BRIGHT(0)/DARK(1)/
                                  ; COLOR(2)/WIN(3): adopts it as the system

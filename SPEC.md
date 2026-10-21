@@ -197794,11 +197794,14 @@ files).
   AL = the `DRVE_*` the row banked (1 no system disk, 2 not on it, 3 not a
   driver, 4 no memory, 5 no hardware, 6 busy, 7 attached twice, 8 nothing to
   mount), or AL = 0 for no driver layer at all (kern_small).
-- **`DRVU_DONE`** says *I have finished with your page's tools*: the class's
-  `DSV_CPCLOSE` is sent exactly as the Control Panel's close sends it (§31.9.1)
-  — for `HDD.DRV` that is `hd_tool_reap`, which hands `HDDTOOL.DRV`'s ~19KB
-  back (§52.11.7). **Unless a Control Panel is open**, whose own close will
-  send it. out CF = 0.
+- **`DRVU_DONE`** says *I have finished with your page's tools*, and it IS
+  the Control Panel's close — `drv_cp_closed`, the notifier the panel's
+  teardown calls (§31.9.1), so every loaded driver hears `DSV_CPCLOSE` as it
+  would at a close. For `HDD.DRV` that is `hd_tool_reap`, which hands
+  `HDDTOOL.DRV`'s ~17KB back (§52.11.7). AL is not read. **Skipped while a
+  Control Panel is open**: its own close will send it, and until then *the
+  panel has closed* would be untrue. With none open it is true of every
+  driver, which is why there is no per-class form. out CF = 0.
 
 **It loads; it does not record.** `DRVR_WANT` and `DRVR_ANS` are left as they
 were and `SYSTEM.CFG` is not staged: a session load, which the Drivers page's
@@ -197814,6 +197817,8 @@ held it. The cell is **6 bytes** of table (a rare cell, §20.3), its body
 `osapi_drv_use_x` is `.cold` and is the `cpf_*` idiom (§2.8): `CTRL.DRV` made
 resident, one far call into its new entry `CPE_DRVUP`, and `CTRL.DRV` dropped
 again when no Control Panel is open — the same three lines as `cpf_shutdown`.
+`drv_cp_closed_x` became a four-byte far entry over a near body for DONE to
+call, because `.cold` may name no segment, its own included (§2.6 rule 2).
 What it costs is measured in §117.9.
 
 ### 117.4 `HDV_TOOL` — `HDD.DRV`'s package door, one verb wider

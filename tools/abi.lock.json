@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "0f8ceeb6c870a294a313109520589d935adc2695794bbf3b740a4d13a507e433",
+  "fingerprint": "e9150c9e38123295ea10ec2e00650786973e8754beb85ea1d784065d6b28f4d7",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "d04b64876d68c9c065d4e69ac946a91b9225184368c6ff604e5f3790cddd2654",
+  "fingerprint": "a85d79f557b557b4aa32654395c53cb59f79b6bafbab12ac0df5a13068f78050",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -371,6 +371,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "OSAPI_SERIAL Open takes the 8250 divisor in BH (0 keeps 9600); its only caller, WireFleet, is unreleased (merged after v1.0.20261019) and passes 48 for 2400",
+   "to": 11
+  },
+  {
+   "fingerprint": "a85d79f557b557b4aa32654395c53cb59f79b6bafbab12ac0df5a13068f78050",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_DRV_USE appended at 0x04A5 and HDD.DRV's HDV_TOOL/HDI_* constants added (SPEC.md 117.3, 117.4): nothing moved, nothing built before changes meaning",
+   "to": 10
+  },
+  {
+   "fingerprint": "e9150c9e38123295ea10ec2e00650786973e8754beb85ea1d784065d6b28f4d7",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_DRV_USE appended at 0x04A5 and HDD.DRV's HDV_TOOL/HDI_* constants added (SPEC.md 117.3, 117.4): nothing moved, nothing built before changes meaning",
    "to": 11
   }
  ]
