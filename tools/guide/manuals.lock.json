@@ -1204,9 +1204,9 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "d9e253f7",
-  "strings": "37e2a465c977877a",
-  "why": "redraw-cost change only (ink-only runs, fixed-width fields): nothing a reader sees differently"
+  "stamped": "99a078b7",
+  "strings": "46102694697221e1",
+  "why": "Wired default (LEDs, colour on a colour screen), Mono-Dark, header without the display words, Find highlights the input box: Themes, Searching and the window table rewritten"
  },
  "WIREFLET_O88": {
   "sources": [

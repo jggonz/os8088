@@ -42,12 +42,12 @@ the disk, so anyone with the disk has the code too.
 
 ## The window
 
-WireChat looks like a BBS terminal: a dark screen ruled in a bright colour,
-the rooms as tabs along the top and the people down the right.
+WireChat looks like a BBS terminal: one screen ruled into parts, the rooms
+as tabs along the top and the people down the right.
 
 | Part | What it shows |
 |---|---|
-| Header | **WireChat**, the screen it is running on (for example `VGA 640x480 / 16 COLORS`), and at the right your status and nick. On a tall window a second line shows the date and time |
+| Header | **WireChat**, and at the right your status and nick. On a tall window a second line shows the date and time |
 | Tabs | The four rooms. The room you are in is highlighted; a room with messages you have not read shows how many, and `@` when someone has mentioned you there |
 | Centre | The room's name and topic, the **Search...** box, the messages with a scroll column at their right, a line for notices, and the field with **Send** |
 | ONLINE | Who is in this room, with each person's status. In a private conversation it is everyone connected |
@@ -62,7 +62,7 @@ are local, worked out from the machine's clock, and a line such as
 yesterday's messages from today's. A message that mentions you is
 highlighted. The status glyphs are a filled square for Online, a clock for
 Away and a barred square for Busy; a hollow square is a friend who is not
-connected.
+connected. In the Wired theme they are lamps instead (see Themes).
 
 The lamp in the status bar is the connection: lit when connected, in a
 warning colour while connecting, and in the alarm colour with no network
@@ -77,16 +77,23 @@ to the menu bar's clock.
 
 ## Themes
 
-The **Theme** menu has four looks: **Monochrome**, **Blue**, **Green** and
-**Amber**. Blue is the first one you see: white text on blue, ruled in light
-cyan. Green is a black screen in green, and Amber a black screen in yellow
-and brown, like the monitors of the time. Monochrome is black and white
-alone. The one in use has `*` beside it, and WireChat remembers your choice.
+The **Theme** menu has five looks: **Wired**, **Mono-Dark**, **Blue**,
+**Green** and **Amber**. Wired is the first one you see: black text on
+white, like the rest of the desktop, with every status shown as a lamp. On a
+colour screen the lamps are green for Online, amber for Away and red for
+Busy, and nicks, unread counts and the emoticons from the **Emoticons...**
+list are in colour too. On a black-and-white screen a lamp is solid for
+Online, half lit for Away, crossed for Busy and empty for someone who is not
+connected. Mono-Dark is white text on black. Blue is white text on blue, ruled in light cyan. Green is a
+black screen in green, and Amber a black screen in yellow and brown, like the
+monitors of the time. The one in use has `*` beside it, and WireChat
+remembers your choice.
 
-A CGA or Hercules screen shows only black and white, so there WireChat is
-always Monochrome and the other three are greyed. The choice is kept: on a
-machine with two screens, drag the window onto the colour one and it is
-drawn in your theme again.
+A CGA or Hercules screen shows only black and white, so there you can pick
+Wired or Mono-Dark and the other three are greyed; a colour theme picked
+on another screen is shown as Wired. The choice is kept: on a machine
+with two screens, drag the window onto the colour one and it is drawn in your
+theme again.
 
 ## Talking in a room
 
@@ -139,7 +146,8 @@ friends.
 
 ## Searching
 
-Click the **Search...** box: the field says `Find:`. Type a word and press `Return` to
+Click the **Search...** box: the field says `Find:` and the whole box is
+highlighted, so you can see you are searching rather than writing. Type a word and press `Return` to
 jump to the newest earlier message whose text or nick contains it, in
 capitals or not. Press `Return` again for the one before that. **Not found**
 means there are no more. `Esc` goes back to typing messages, with what you
@@ -177,7 +185,7 @@ the field says who and where, for example `RetroAmy mentioned you in
 | Status | Online, Away, Busy | Set your status |
 | Friends | Add Friend... | Type a nick to add |
 | Friends | Remove Friend | Remove the person in this conversation |
-| Theme | Monochrome, Blue, Green, Amber | Change how WireChat looks |
+| Theme | Wired, Mono-Dark, Blue, Green, Amber | Change how WireChat looks |
 
 ![The Chat menu.](shot:wirechat-menu-chat){left}
 

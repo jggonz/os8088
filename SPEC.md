@@ -196909,7 +196909,7 @@ the window is `OSAPI_WM_OWNBG` (§11.90.1) — it paints every pixel itself, so
 a dark theme never flashes the kernel's white first:
 
     +-----------------------------------------------------------------+
-    | WireChat | 01 / BBS TERMINAL | VGA 640x480 / 16 COLORS  # ONLINE George |  header band 1
+    | WireChat                                       # ONLINE George |  header band 1
     |                                            Oct 20 2026  16:03 |  header band 2
     +-----------------------------------------------------------------+
     |[ #lobby ] | #hardware 2 | #development @1 | #games              |  the tabs
@@ -196934,7 +196934,7 @@ a dark theme never flashes the kernel's white first:
 
 | element | where | notes |
 |---|---|---|
-| header | the top band (two on a window 200 rows tall or more), its rule under it | band 1: `WireChat` bold, then `01 / BBS TERMINAL` and the display the window is ON (`VGA 640x480 / 16 COLORS`, `EGA 640x350 / 16 COLORS`, `HERCULES 720x348 / MONO`, `CGA 640x200 / MONO`, from `OSAPI_WM_DISPLAY` at each full paint) — each dropped when it would run into the right end; at the right end our status glyph, the status word and the nick, which together are the STATUS button. Band 2 (tall windows only): the machine's date and time (`OSAPI_CLK_GET`), right-aligned, redrawn when the minute turns |
+| header | the top band (two on a window 200 rows tall or more), its rule under it | band 1: `WireChat` bold and nothing after it (the display it is on and `01 / BBS TERMINAL` were here, and said nothing a user acts on); at the right end our status glyph, the status word and the nick, which together are the STATUS button. Band 2 (tall windows only): the machine's date and time (`OSAPI_CLK_GET`), right-aligned, redrawn when the minute turns |
 | tabs | one band under the header's rule, its own rule under it | a tab a room: `#name`, the view's in the highlight; an unread count is a badge after the name, `@` ahead of it for a mention (§113.2.4). The rooms menu still lists them |
 | center | the rest, left of the right pane | the title band (`#room` bold and the topic dim, or `@nick` and `Private conversation`) with the SEARCH box at its right end; a rule; the message pane, whose last cell on every band is its scroll bar; the notice line |
 | right pane | the right 160px, from the tabs' rule to the input row's | three sections, each a title band underlined in the accent with its count and its glyph: ONLINE (the sessions in the view's room — everyone, in a conversation), FRIENDS (every friend, a status glyph for one on the roster and a hollow one for one who is not), DIRECT (the private conversations, each with its unread badge, or `No direct messages`). A section that runs out of room stops |
@@ -196977,6 +196977,7 @@ while a request the user made is on the wire (a join, a message, a flag; a
 held poll is waiting, not activity) and for a second or two after a reply that
 brought something, and nothing otherwise. The section titles carry a pair of
 people (ONLINE, FRIENDS) and an envelope (DIRECT); the search box a lens.
+**In Wired every status glyph and both lamps are LEDs** (§113.5.2).
 
 **Drawing.** Every row is a BAND: one opaque `OSAPI_FONT_RUN` per colour span
 padded with spaces to its region's width, and the two rows of air above and
@@ -197017,7 +197018,7 @@ CGA, and the VGA XT, on the layout before this one:
 | **the eight gestures** | **455** | **110** | **244** | **63** | **615** | **188** |
 
 The terminal layout (§113.5) draws through the same slots, measured the same
-way (Hercules and CGA in Monochrome, the VGA in Blue):
+way (Hercules and CGA in Mono-Dark, then the default, the VGA in Blue):
 
 | gesture | Hercules | CGA | VGA |
 |---|---:|---:|---:|
@@ -197076,31 +197077,62 @@ would hand it.
 
 #### 113.5.2 The themes
 
-Four, picked from the **Theme** menu (§113.6.4) and kept in `WIRECHAT.CFG`
+Five, picked from the **Theme** menu (§113.6.4) and kept in `WIRECHAT.CFG`
 (§113.8). Content is the application's (§76), so the ground is the theme's:
 
-| role | Monochrome | Blue | Green | Amber |
-|---|---|---|---|---|
-| ground | black | blue | black | black |
-| text | white | white | light green | yellow |
-| dim: times, the topic, a day divider, the placeholder, the track | white | light grey | green | brown |
-| accent: the rules, the brand line, the section titles, the prompt, the notice line, the arrows and the thumb | white | light cyan | green | brown |
-| highlight: the view's tab, a selection, Send | white, black text | light cyan, blue text | light green, black text | yellow, black text |
-| Online / Away / Busy glyphs, `On`, the link lamp | white | light green / yellow / light red | light green / green / white | yellow / brown / light red |
-| a badge | white, black digits | light red, white digits | white, black digits | light red, black digits |
-| a message that names us | as any other | white on magenta | white on green | white on brown |
-| nicks, by a sum of their letters | white | yellow, light cyan, light green, light magenta | light green, white | yellow |
+| role | Wired | Mono-Dark | Blue | Green | Amber |
+|---|---|---|---|---|---|
+| ground | white | black | blue | black | black |
+| text | black | white | white | light green | yellow |
+| dim: times, the topic, a day divider, the placeholder, the track | black | white | light grey | green | brown |
+| accent: the rules, the brand line, the section titles, the prompt, the notice line, the arrows and the thumb | black | white | light cyan | green | brown |
+| highlight: the view's tab, a selection, Send | black, white text | white, black text | light cyan, blue text | light green, black text | yellow, black text |
+| Online / Away / Busy glyphs, `On`, the link lamp | LEDs (below); `On` black | white | light green / yellow / light red | light green / green / white | yellow / brown / light red |
+| a badge | black, white digits | white, black digits | light red, white digits | white, black digits | light red, black digits |
+| a message that names us | as any other | as any other | white on magenta | white on green | white on brown |
+| nicks, by a sum of their letters | black | white | yellow, light cyan, light green, light magenta | light green, white | yellow |
 
-**Blue is the default.** The theme is a choice the user makes once, so a
-`WIRECHAT.CFG` with no `theme` line is Blue — the look this layout was drawn
-in. **A display of one bit a pixel draws Monochrome whatever is chosen** —
-the one the window is ON (`OSAPI_WM_DISPLAY`, §39.16.4), asked at each full
-paint, which for a window across two displays answers the more restrictive.
-Monochrome uses black and white alone, so it is the same picture on a VGA as
-on a Hercules or a CGA (§39.4: every other colour rounds to black or a
-dither there). On such a display the menu greys Blue, Green and Amber
-(§47: it is a fact about the display, not a guess) and keeps the choice, so
-dragging the window onto a colour display draws it again.
+**Wired is the default**: black on white, the desktop's own look. The
+theme is a choice the user makes once, so a `WIRECHAT.CFG` with no `theme`
+line is Wired. Mono-Dark is the same picture inverted, white on black.
+**A display of one bit a pixel draws Wired or Mono-Dark, whichever was
+chosen, and Wired for a colour theme** — the one the window is ON
+(`OSAPI_WM_DISPLAY`, §39.16.4), asked at each full paint, which for a window
+across two displays answers the more restrictive. The two mono themes use
+black and white alone, so each is the same picture on a VGA as on a Hercules
+or a CGA (§39.4: every other colour rounds to black or a dither there); they
+lead `wc_themes`, so `TH_NMONO` is the line between the two kinds. On such a
+display the menu greys Blue, Green and Amber (§47: it is a fact about the
+display, not a guess) and keeps the choice, so dragging the window onto a
+colour display draws it again.
+
+**Wired on a colour display adds colour where it says something**, and is
+otherwise the same black on white. It is `wc_themes`' last row, `TH_WIREDC`,
+reached only from Wired (`[wc_tint]` = 1), so the menu still has five:
+
+| role | Wired, on colour |
+|---|---|
+| Online / Away / Busy words, `On` / `Off` | green / brown / red, `On` green, `Off` red |
+| a badge | red, white digits |
+| nicks, by a sum of their letters | blue, magenta, green, red |
+| an emoticon the picker offers, in a message and in the picker | `:)` brown, `:(` blue, `;)` magenta, `:D` green, `:P` red, `<3` light red, `^_^` cyan, `o_O` dark grey |
+
+An emoticon is coloured only when no letter, digit, `_` or `-` touches it on
+either side (`:Pa` and `foo_O` are words), not on a selected line, and while
+the band has spans to spare — two each, with one kept for the scroll column;
+past that the rest of the line is plain (`wc_emocol`).
+
+**The LEDs.** In Wired a status glyph and both lamps are LEDs: Online and a
+live link GREEN, Away, a link being made and activity AMBER, Busy and a failed
+link RED, a partner off the roster, no nick and no activity OFF. On a colour
+display each is an 8x8 PLANAR picture — a rim, a body, a shade and a glint,
+four colours no icon pen lays down in one call — put down by ONE
+`OSAPI_GFX_BLITP` (§5.4.3), its corners Wired's white; the picture is in the
+source as eight rows of colour digits (`WC_LED8`, `wcband.inc`), so the source
+IS the picture. On one bit, on a ground other than white (a selection, the
+pressed STATUS) or with the blit refused (a window across two displays), the
+LED is a SHAPE in the span's own ink instead: GREEN solid with a glint, AMBER
+half lit, RED crossed, OFF an empty ring. Mono-Dark keeps the glyphs above.
 
 Every colour is a ROLE: a theme is one row of `wc_themes`, copied to
 `wc_pens` at each full paint, and a style, a span, a glyph or a button asks
@@ -197137,6 +197169,11 @@ One `os88line` field with five MODES, its prompt drawn to its left:
 Code mode is only ever entered by a `428`, and the status bar then says
 `Enter the code for this nick`. A nick changed to a DIFFERENT nick (compared
 case-blind) forgets the code.
+
+**Find is the box in the HIGHLIGHT**: its inside, the `Find:` prompt, the
+prompt's rule and the field's text and ground take the theme's highlight
+pair, on every theme and every display, so the field cannot be mistaken for
+one that sends; leaving the mode puts the ground back (`wc_pfield`).
 
 The first run, with no nick in `WIRECHAT.CFG`, opens in nick mode.
 
@@ -197177,7 +197214,7 @@ and with nobody on the roster to complete, Tab is the next room.
 | Rooms | lobby, hardware, development, games (the `L` names) |
 | Status | Online, Away, Busy |
 | Friends | Add Friend..., Remove Friend |
-| Theme | Monochrome, Blue, Green, Amber — `*` ahead of the one drawn; on a one-bit display the three colour ones greyed (§113.5.2) |
+| Theme | Wired, Mono-Dark, Blue, Green, Amber — `*` ahead of the one drawn; on a one-bit display the three colour ones greyed (§113.5.2) |
 
 #### 113.6.5 What it does on its own
 
@@ -197237,15 +197274,15 @@ its code, the friends, the notification switch or the theme change. Lines of `ke
     nick George
     code 0f1e2d3c-...
     notify 1
-    theme 1
+    theme 2
     friend Alin
     friend Daniel
 
 `host` is §92.4's `host[:port][/prefix/]`, default `os8088.com:80/chat/`;
 the gate's disk carries `10.0.2.2:8093/chat/`. `code` is an owned nick's
 code (§113.2.2), at most 36 characters, stored as plain text. Anyone with the
-disk has it. `theme` is §113.5.2's: 0 Monochrome, 1 Blue, 2 Green, 3 Amber,
-and a file without one is Blue. Unknown keys are kept on no
+disk has it. `theme` is §113.5.2's: 0 Wired, 1 Mono-Dark, 2 Blue, 3 Green,
+4 Amber, and a file without one is Wired. Unknown keys are kept on no
 rewrite — the file is the package's own and is written whole. Up to 8
 friends; at most 512 bytes.
 
@@ -197263,7 +197300,11 @@ Measured on the tree that added the terminal layout and its themes
 (§113.5, §113.5.2): **image 19,959 bytes, bss 31,398 — 51,357 of
 `APP_MAX_SIZE`'s 65,024**; `WIRECHAT.O88` is 17,701 bytes packed. It was
 19,658 / 29,217 and 17,092 with the colour face before it, 15,901 / 19,896
-and 13,844 when owned nicks were added. The themes cost the image little: the
+and 13,844 when owned nicks were added. Wired (black on white, the default; the old
+Monochrome renamed Mono-Dark), its colour row, LEDs and emoticon colours, the
+Find highlight, and the header's display words gone took it to **20,363 /
+31,385 — 51,748** and 17,981 packed: the four LED pictures are 128 bytes, the
+display words' bss went. The themes cost the image little: the
 LED pictures and the bevel went, the four theme rows, the glyph table, the
 three button painters, the F keys and §113.5.1's ink-only run came, +301
 bytes in all. The bss grew by
@@ -197301,8 +197342,9 @@ own is `wc_nstep` → `wc_take` → `wc_hdrline` → `wc_dec32`.
 |---|---|---|
 | `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code - and §113.2.4: `x=1` on every request, a message stored with its date, a mention in the view marked, an `A` from another room marking it, Tab completing an `@nick` |
 | `wcdraw` | soak | §113.5.1 on MartyPC's Hercules 5150: each gesture's drawing calls under its ceiling, and the incremental picture identical to a repaint's |
-| `wcdrawcga` | soak | the same on its CGA: the short layout, in Monochrome |
-| `wcdrawvga` | soak | the same on the VGA XT: the Blue theme (§113.5.2) |
+| `wcdrawcga` | soak | the same on its CGA: the short layout, in Wired (the default) |
+| `wcdrawvga` | soak | the same on the VGA XT: the Blue theme, picked from the Theme menu (§113.5.2) |
+| `wcdrawwired` | soak | the same on the VGA XT in Wired (§113.5.2): the LEDs as `OSAPI_GFX_BLITP`s and the emoticons as spans |
 
 ## 114. WireFleet — naval battles over a null modem (`apps/wirefleet/`)
 

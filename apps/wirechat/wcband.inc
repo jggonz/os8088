@@ -25,12 +25,18 @@
 ; row of wc_themes, copied into wc_pens by wc_face at each full paint, and a
 ; style, a span, a glyph or a button asks wc_pens for its role. A theme change
 ; is a full paint, which owes every slot, so no slot compares across two.
-; Monochrome is black and white alone: the same picture on a VGA as on a
-; Hercules or a CGA, where every other colour rounds (SPEC.md 39.4).
+; Wired and Mono-Dark are black and white alone: the same picture on a VGA as
+; on a Hercules or a CGA, where every other colour rounds (SPEC.md 39.4). They
+; lead the table, so `below TH_NMONO` is "one bit can draw it". On a colour
+; display Wired is the LAST row, TH_WIREDC: the same black on white with its
+; statuses, badges and nicks in colour (and its LEDs and emoticons, wc_tint).
 ; =============================================================================
 
 wc_themes:      ; R_BG FG DIM ACC  HI HIFG  OK WARN BAD BADFG  MENTG MENTF  NICK x4
-    db CBLACK, CWHITE, CWHITE, CWHITE,  CWHITE, CBLACK                ; mono
+    db CWHITE, CBLACK, CBLACK, CBLACK,  CBLACK, CWHITE                ; wired
+    db CBLACK, CBLACK, CBLACK, CWHITE,  CWHITE, CBLACK
+    db CBLACK, CBLACK, CBLACK, CBLACK
+    db CBLACK, CWHITE, CWHITE, CWHITE,  CWHITE, CBLACK                ; dark
     db CWHITE, CWHITE, CWHITE, CBLACK,  CBLACK, CWHITE
     db CWHITE, CWHITE, CWHITE, CWHITE
     db CBLUE, CWHITE, CLGRAY, CLCYAN,  CLCYAN, CBLUE                  ; blue
@@ -42,8 +48,11 @@ wc_themes:      ; R_BG FG DIM ACC  HI HIFG  OK WARN BAD BADFG  MENTG MENTF  NICK
     db CBLACK, CYELLOW, CBROWN, CBROWN,  CYELLOW, CBLACK              ; amber
     db CYELLOW, CBROWN, CLRED, CBLACK,  CBROWN, CWHITE
     db CYELLOW, CYELLOW, CYELLOW, CYELLOW
-%if $ - wc_themes != TH_N * WC_NPEN
-  %error "wc_themes is TH_N rows of WC_NPEN roles"
+    db CWHITE, CBLACK, CBLACK, CBLACK,  CBLACK, CWHITE                ; wired,
+    db CGREEN, CBROWN, CRED, CWHITE,  CWHITE, CBLACK                  ; colour
+    db CBLUE, CMAGENTA, CGREEN, CRED
+%if $ - wc_themes != (TH_N + 1) * WC_NPEN
+  %error "wc_themes is TH_N rows of WC_NPEN roles, and Wired's colour row"
 %endif
 
 ; the styles: (ink, ground) as ROLES
@@ -697,14 +706,16 @@ wc_bbold:
 
 ; --- wc_bglyph - glyph BL at cell CL, over the span it sits in: the glyph's
 ; own ROLE for its ink (wc_glrole), the span's ground for its ground.
-; Preserves SI and DI.
+; In Wired a status or a lamp is an LED (SPEC.md 113.5.2): a colour
+; picture on a colour display where the span's ground is the white it was
+; drawn on, else the LED's shape in the span's own ink. Preserves SI and DI.
 wc_bglyph:
     push si
     push di
     mov [wc_bgid], bl
     push cx
     call wc_spanat
-    call wc_spcol                       ; AH = the span's ground
+    call wc_spcol                       ; AL = the span's ink, AH = its ground
     pop cx
     xor ch, ch
     shl cx, 1
@@ -715,12 +726,122 @@ wc_bglyph:
     inc dx
     mov bl, [wc_bgid]
     xor bh, bh
+    cmp byte [wc_eth], TH_WIRED
+    jne .glyph
+    cmp bl, GL_ACT
+    ja .glyph
+    mov bl, [wc_ledmap+bx]              ; BL = LED_*
+    cmp byte [wc_tint], 0
+    je .shape
+    cmp ah, CWHITE                      ; the picture's corners are white
+    jne .shape
+    call wc_led
+    jnc .out
+.shape:
+    mov bl, [wc_ledgl+bx]
+    jmp short .draw
+.glyph:
     mov al, [wc_glrole+bx]
     call wc_pen                         ; AL = the glyph's ink
+.draw:
     call wc_glyphat
+.out:
     pop di
     pop si
     ret
+
+; =============================================================================
+; THE LEDs (SPEC.md 113.5.2): Wired's statuses and lamps on a colour
+; display, 8x8 PLANAR pictures put down by ONE OSAPI_GFX_BLITP each (SPEC.md
+; 5.4.3) - a rim, a body, a shade and a glint is four colours, which no icon
+; pen lays down in one call. Their corners are Wired's white ground. A
+; blit refused (a window across two displays) draws the LED's shape instead.
+; =============================================================================
+; --- wc_led - LED BL (LED_*) at CX, DX (screen). CF = 1 refused, nothing
+; drawn. Preserves every register
+wc_led:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    xor bh, bh
+    shl bx, 1                           ; * 32: four planes of eight rows
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    lea si, [wc_leds+bx]
+    push ds
+    pop es
+    mov ax, cx
+    mov bx, dx
+    mov cx, 8
+    mov dx, 8
+    mov di, 8 | 0x4000                  ; the plane step; walk an armed clip
+    mov bp, 1                           ; the row stride
+    call OSAPI_GFX_BLITP
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+LED_OFF     equ 0
+LED_GREEN   equ 1
+LED_AMBER   equ 2
+LED_RED     equ 3
+wc_ledmap:  db LED_GREEN, LED_AMBER, LED_RED, LED_OFF   ; the statuses
+            db LED_GREEN, LED_AMBER, LED_RED, LED_OFF   ; the link
+            db LED_AMBER                                ; activity
+wc_ledgl:   db GL_LDOFF, GL_LDLIT, GL_LDHALF, GL_LDX    ; by LED_*: one bit
+%if wc_ledgl - wc_ledmap != GL_ACT + 1 || GL_ONLINE != 0 || GL_LKOK != 4
+  %error "wc_ledmap is GL_ONLINE..GL_ACT"
+%endif
+
+; WC_LED8 - eight rows of eight colour digits (hex, one a pixel), emitted
+; PLANE-MAJOR as OSAPI_GFX_BLITP takes them: plane 0's eight rows, then
+; plane 1's... so the picture in the source IS the picture on the glass
+%macro WC_LED8 8
+  %assign %%p 0
+  %rep 4
+    %rep 8
+      %assign %%b 0
+      %assign %%x 0
+      %rep 8
+        %substr %%ch %1 %%x+1
+        %if %%ch >= 'a'
+          %assign %%c %%ch - 'a' + 10
+        %else
+          %assign %%c %%ch - '0'
+        %endif
+        %assign %%b %%b | (((%%c >> %%p) & 1) << (7 - %%x))
+        %assign %%x %%x + 1
+      %endrep
+      db %%b
+      %rotate 1
+    %endrep
+    %assign %%p %%p + 1
+  %endrep
+%endmacro
+
+; f the white ground and the glint, 8 the rim, 0 black, 7 grey; the body
+; and its shade: light green/green, yellow/brown, light red/red
+wc_leds:
+    WC_LED8 'ff8888ff', 'f800008f', '80777708', '80777008', '80770008', '80700008', 'f800008f', 'ff8888ff'
+    WC_LED8 'ff8888ff', 'f8aaaa8f', '8affaa28', '8afaaa28', '8aaaa228', '8aaa2228', 'f822228f', 'ff8888ff'
+    WC_LED8 'ff8888ff', 'f8eeee8f', '8effee68', '8efeee68', '8eeee668', '8eee6668', 'f866668f', 'ff8888ff'
+    WC_LED8 'ff8888ff', 'f8cccc8f', '8cffcc48', '8cfccc48', '8cccc448', '8ccc4448', 'f844448f', 'ff8888ff'
+%if $ - wc_leds != 4 * 32
+  %error "four LEDs of four planes of eight rows"
+%endif
 
 ; --- wc_glyphat - glyph BL at CX, DX (SCREEN): ink AL over ground AH --------
 ; One opaque 8x8 icon: its mask is the whole cell. clobbers AX, SI
@@ -1106,66 +1227,45 @@ wc_rcopy:
 ; -----------------------------------------------------------------------------
 ; wc_face - what this paint draws (SPEC.md 113.5.2), asked of the display the
 ;           window is ON at each full paint: its depth decides whether the
-;           theme chosen can be drawn, and its kind and size are the header's
-;           words. Every slot owed - the content is about to be filled - and
-;           the menu's greying the display's. clobbers AX, BX, CX, DX, SI, DI
+;           theme chosen can be drawn. Every slot owed - the content is about
+;           to be filled - and the menu's greying the display's.
+;           clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wc_face:
     mov bx, [wc_win]
-    call OSAPI_WM_DISPLAY               ; AX x BX, DL the kind, DH the depth
-    push dx
-    push bx
-    push ax
+    call OSAPI_WM_DISPLAY               ; DH the depth
     xor al, al
     cmp dh, 1
     jbe .m
     inc ax
 .m:
     mov [wc_col], al
-    ; --- the header's words: 'VGA 640x480 / 16 COLORS' ---------------------
-    mov di, wc_adapt
-    mov bx, wc_adapt + WC_ADAPTN - 2
-    mov si, wc_s_vga
-    cmp dl, VID_HERC
-    jne .k1
-    mov si, wc_s_herc
-.k1:
-    cmp dl, VID_CGA
-    jne .k2
-    mov si, wc_s_cga
-.k2:
-    cmp dl, VID_EGA
-    jne .k3
-    mov si, wc_s_ega
-.k3:
-    call wc_put
-    pop ax
-    xor dx, dx
-    call wc_putd32
-    mov al, 'x'
-    call wc_putc
-    pop ax
-    xor dx, dx
-    call wc_putd32
-    pop dx
-    mov si, wc_s_mono
-    cmp dh, 1
-    jbe .d
-    mov si, wc_s_16c
-.d:
-    call wc_put
-    mov byte [di], 0
     ; --- the theme, and its pens ------------------------------------------
     xor ax, ax
-    cmp [wc_col], al
-    je .t
+    mov [wc_tint], al
     mov al, [wc_thm]
     cmp al, TH_N
-    jb .t
+    jb .h
     mov al, TH_DEFAULT
     mov [wc_thm], al
+.h:
+    cmp al, TH_NMONO                    ; one bit draws the mono one chosen,
+    jb .k                               ; and Wired for a colour one
+    cmp ah, [wc_col]
+    jne .t
+    mov al, TH_WIRED
+.k:
+    cmp ah, [wc_col]
+    je .t
+    or al, al                           ; Wired on colour: its colour row
+    jnz .t
+    mov byte [wc_tint], 1
+    mov [wc_eth], al
+    mov al, TH_WIREDC
+    jmp short .p
 .t:
     mov [wc_eth], al
+.p:
     mov cl, 4                           ; * WC_NPEN
     shl ax, cl
     add ax, wc_themes

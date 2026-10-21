@@ -67,13 +67,6 @@ wc_s_haway:     db 'AWAY', 0
 wc_s_hbusy:     db 'BUSY', 0
 wc_hwords:      dw wc_s_hon, wc_s_haway, wc_s_hbusy
 wc_s_brand:     db 'WireChat', 0
-wc_s_bbs:       db ' | 01 / BBS TERMINAL', 0
-wc_s_vga:       db 'VGA ', 0            ; the display the window is on
-wc_s_herc:      db 'HERCULES ', 0
-wc_s_cga:       db 'CGA ', 0
-wc_s_ega:       db 'EGA ', 0
-wc_s_mono:      db ' / MONO', 0
-wc_s_16c:       db ' / 16 COLORS', 0
 wc_s_online:    db 'ONLINE', 0          ; the right pane's sections
 wc_s_frnds:     db 'FRIENDS', 0
 wc_s_direct:    db 'DIRECT', 0
@@ -136,6 +129,11 @@ wc_e5:          db '<3', 0
 wc_e6:          db '^_^', 0
 wc_e7:          db 'o_O', 0
 wc_emos:        dw wc_e0, wc_e1, wc_e2, wc_e3, wc_e4, wc_e5, wc_e6, wc_e7
+wc_emoink:      db CBROWN, CBLUE, CMAGENTA, CGREEN      ; Wired on a colour
+                db CRED, CLRED, CCYAN, CDGRAY           ; display (wc_tint)
+%if $ - wc_emoink != PP_EMON
+  %error "an ink for each emoticon offered"
+%endif
 
 ; --- the buttons' captions (wcband.inc paints them) ---------------------------
 wc_b_search:    db 'Search...', 0
@@ -174,11 +172,13 @@ wc_it_addf:     db 'Add Friend...', 0
 wc_it_remf:     db 'Remove Friend', 0
 wc_m_thm:       db 'Theme', 0           ; composed in wc_thmi (wc_menulabels):
 wc_i_thm:       dw wc_thmi, wc_thmi + 14, wc_thmi + 28, wc_thmi + 42
-wc_thnames:     dw wc_tn0, wc_tn1, wc_tn2, wc_tn3
-wc_tn0:         db 'Monochrome', 0      ; a mark, a space and the name, at
-wc_tn1:         db 'Blue', 0            ; most 14 with the grey byte
-wc_tn2:         db 'Green', 0
-wc_tn3:         db 'Amber', 0
+                dw wc_thmi + 56
+wc_thnames:     dw wc_tn0, wc_tn1, wc_tn2, wc_tn3, wc_tn4
+wc_tn0:         db 'Wired', 0           ; a mark, a space and the name, at
+wc_tn1:         db 'Mono-Dark', 0       ; most 14 with the grey byte
+wc_tn2:         db 'Blue', 0
+wc_tn3:         db 'Green', 0
+wc_tn4:         db 'Amber', 0
 
 ; --- the About card -------------------------------------------------------------------
 wc_ab1:         db 'WireChat for os8088', 0
@@ -194,7 +194,7 @@ wc_h3:          db 'Tab next room, or @nick', 0
 wc_h4:          db 'PgUp PgDn Up Down scroll', 0
 wc_h5:          db 'F2 next room, F3 friend', 0
 wc_h6:          db 'Right-click: flag, friend', 0
-wc_h7:          db 'Theme menu: four looks', 0
+wc_h7:          db 'Theme menu: five looks', 0
 
 ; =============================================================================
 ; THE GLYPHS (wcview.inc's GL_* order): eight rows of eight pixels each, drawn
@@ -220,12 +220,17 @@ wc_glyphs:
     db 0x00, 0x00, 0x00, 0xFF, 0x7E, 0x3C, 0x18, 0x00  ; GL_SBDN
     db 0x3C, 0x3C, 0x3C, 0x3C, 0x3C, 0x3C, 0x3C, 0x3C  ; GL_SBTHM
     db 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18  ; GL_SBTRK
+    db 0x3C, 0x7E, 0xCF, 0xDF, 0xFF, 0xFF, 0x7E, 0x3C  ; GL_LDLIT: lit, a glint
+    db 0x3C, 0x72, 0xF1, 0xF1, 0xF1, 0xF1, 0x72, 0x3C  ; GL_LDHALF: half lit
+    db 0x3C, 0x42, 0xA5, 0x99, 0x99, 0xA5, 0x42, 0x3C  ; GL_LDX: crossed
+    db 0x3C, 0x42, 0x81, 0x81, 0x81, 0x81, 0x42, 0x3C  ; GL_LDOFF: out
 wc_glrole:
     db R_OK, R_WARN, R_BAD, R_DIM                       ; the statuses
     db R_OK, R_WARN, R_BAD, R_DIM                       ; the link lamp
     db R_WARN, R_BG                                     ; activity, blank
     db R_ACC, R_ACC, R_ACC                              ; people, mail, lens
     db R_ACC, R_ACC, R_ACC, R_DIM                       ; the scroll column
-%if wc_glrole - wc_glyphs != 8 * (GL_SBTRK + 1) || $ - wc_glrole != GL_SBTRK + 1
+    db R_FG, R_FG, R_FG, R_FG                           ; the LEDs (the span's)
+%if wc_glrole - wc_glyphs != 8 * GL_N || $ - wc_glrole != GL_N
   %error "wc_glyphs and wc_glrole are GL_* order"
 %endif

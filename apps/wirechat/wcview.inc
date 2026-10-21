@@ -653,10 +653,9 @@ wc_mystat:
     ret
 
 ; -----------------------------------------------------------------------------
-; wc_phdr - the header's first band: 'WireChat', what this is and what it is
-;           on - each dropped when it would reach the status - and at the
-;           right end our glyph, the status word in its colour and the nick,
-;           which are the STATUS button (wcband.inc's wc_stbtn)
+; wc_phdr - the header's first band: 'WireChat', and at the right end our
+;           glyph, the status word in its colour and the nick, which are the
+;           STATUS button (wcband.inc's wc_stbtn)
 ; -----------------------------------------------------------------------------
 wc_phdr:
     call wc_sbclr
@@ -669,35 +668,6 @@ wc_phdr:
     mov [wc_rbold], si
     mov byte [wc_rbcol], 1
     call wc_sbstr
-    ; --- the words between, as many as fit: both, the display alone, none --
-    mov si, wc_adapt
-    call wc_slen
-    add cx, 3 + 9 + 1                   ; ' | ' + the display, after 'WireChat'
-    mov bx, cx
-    mov si, wc_s_bbs
-    call wc_slen
-    add cx, bx
-    pop dx
-    push dx                             ; DX = the status's cell
-    cmp cx, dx
-    jbe .both
-    cmp bx, dx
-    ja .words
-    jmp short .disp
-.both:
-    mov si, wc_s_bbs
-    call wc_sbstr
-.disp:
-    mov si, wc_s_bar
-    call wc_sbstr
-    mov si, wc_adapt
-    call wc_sbstr
-    mov cl, 9                           ; all of it in the accent
-    mov al, R_ACC
-    call wc_pen
-    mov ah, 0xFF
-    call wc_rspan
-.words:
     pop cx
     call wc_sbto
     ; --- the status: its glyph, its word in its colour, the nick ------------
@@ -1029,9 +999,29 @@ wc_pfield:
     ; is the ground again first, unless a full paint has just laid it. This
     ; runs on a MODE change and a field set from behind; a keystroke is
     ; os88line_edit's, which needs none of it.
+    ; FIND is the box in the highlight (SPEC.md 113.6.1): its inside, the
+    ; prompt, its rule and the field, so what Enter does is not a guess -
+    ; which a full paint's ground is not, so that fill is never skipped.
+    mov al, R_FG                        ; the field's pens: the text on the
+    mov ah, R_BG                        ; ground, its frame put out of sight
+    cmp byte [wc_mode], MD_FIND
+    jne .pn
+    mov ax, R_HIFG | (R_HI << 8)
+.pn:
+    push ax
+    call wc_pen
+    xchg al, ah
+    call wc_pen
+    xchg al, ah
+    mov [os88line_pens], ax
+    mov [os88line_pens+2], ah
+    pop ax
+    cmp byte [wc_mode], MD_FIND
+    je .fill
     cmp byte [wc_fresh], 0
     jne .p
-    mov al, R_BG
+.fill:
+    mov al, ah
     call wc_penc
     mov ax, [wc_ox]
     add ax, 9
@@ -1052,8 +1042,15 @@ wc_pfield:
     mov dx, [wc_iy]
     add dx, WC_BOXY + 3
     mov al, WS_ACC                      ; the prompt in the accent
+    mov ah, R_ACC                       ; ...and its rule
+    cmp byte [wc_mode], MD_FIND
+    jne .pr
+    mov ax, WS_INV | (R_HIFG << 8)
+.pr:
+    push ax
     call wc_band
-    mov al, R_ACC                       ; ...and its rule
+    pop ax
+    mov al, ah
     call wc_penc
     mov ax, [wc_ln+LN_X1]
     sub ax, 2
@@ -1765,6 +1762,9 @@ wc_lamps:
     jne .out
 .dark:
     mov bh, GL_BLANK
+    cmp byte [wc_eth], TH_WIRED          ; Wired's is an LED that is out
+    jne .out
+    mov bh, GL_LKOFF
 .out:
     ret
 
@@ -2258,10 +2258,13 @@ wc_prow:
 .take:
     pop di
     jcxz .out
+    push di                             ; where the segment starts
 .copy:
     lodsb
     call wc_sbch
     loop .copy
+    pop si
+    call wc_emocol
     jmp short .out
 .divider:
     mov byte [wc_rinv], WS_ALERT
@@ -2339,6 +2342,93 @@ wc_phead:
     call wc_rspan
 .out:
     pop cx
+    ret
+
+; --- wc_emocol - Wired on a colour display: each emoticon the picker offers in
+; the segment [SI, DI) of wc_sbuf is a span in its own colour (wc_emoink),
+; the text's after it - on any line but the highlight's, while the band has
+; spans to spare (two, and the scroll column's). One inside a word is not one
+; (':Pa', 'foo_O'). Preserves all.
+wc_emocol:
+    cmp byte [wc_tint], 0
+    je .ret
+    cmp byte [wc_rinv], WS_INV
+    je .ret
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, di                          ; DX = the segment's end
+    mov di, si                          ; DI = the cell tried
+.at:
+    cmp di, dx
+    jae .out
+    cmp di, wc_sbuf
+    je .try
+    mov al, [di-1]
+    call wc_nickch                      ; CF = 0: a word's character before
+    jnc .next
+.try:
+    xor cx, cx                          ; CX = the emoticon
+.e:
+    mov bx, cx
+    shl bx, 1
+    mov si, [wc_emos+bx]
+    xor bx, bx                          ; BX = its characters matched
+.c:
+    lodsb
+    or al, al
+    jz .end
+    push ax
+    lea ax, [bx+di]
+    cmp ax, dx
+    pop ax
+    jae .miss
+    cmp al, [bx+di]
+    jne .miss
+    inc bx
+    jmp short .c
+.end:
+    lea si, [bx+di]                     ; ...and none after
+    cmp si, dx
+    jae .hit
+    mov al, [si]
+    call wc_nickch
+    jnc .miss
+.hit:
+    cmp byte [wc_rspn], WC_NSPAN - 4
+    ja .out
+    push cx
+    mov si, cx
+    mov ax, di
+    sub ax, wc_sbuf
+    mov cl, al                          ; CL = its cell
+    mov al, [wc_emoink+si]
+    mov ah, 0xFF
+    call wc_rspan
+    add cl, bl
+    mov ax, 0xFFFF                      ; the text's after it
+    call wc_rspan
+    pop cx
+    add di, bx
+    jmp short .at
+.miss:
+    inc cx
+    cmp cx, PP_EMON
+    jb .e
+.next:
+    inc di
+    jmp short .at
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.ret:
     ret
 
 ; --- wc_nickcol - AL = the theme's ink for the nick at SI: one of four, by a
@@ -2571,11 +2661,34 @@ wc_popdraw:
     push cx
     call wc_poprow                      ; CX, DX = the band, content-relative
     xor al, al
-    call wc_band
+    call wc_mreset
+    call wc_emotint
+    push bx
+    xor bx, bx                          ; no slot: a popup is drawn whole
+    call wc_bandc
+    pop bx
     pop cx
     pop bx
     inc bx
     jmp short .r
+.out:
+    ret
+
+; --- wc_emotint - Wired on a colour display: the picker's row BX in its
+; emoticon's colour, the one wc_emocol gives it in a message. Preserves all
+wc_emotint:
+    cmp byte [wc_tint], 0
+    je .out
+    cmp byte [wc_pop], PP_EMO
+    jne .out
+    push ax
+    push cx
+    mov al, [wc_emoink+bx]
+    mov ah, 0xFF
+    xor cl, cl                          ; span 0, re-coloured
+    call wc_span
+    pop cx
+    pop ax
 .out:
     ret
 

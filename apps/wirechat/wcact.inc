@@ -1780,8 +1780,8 @@ wc_oncmd:
 .theme:
     ; --- Theme (SPEC.md 113.5.2): one a one-bit display cannot draw is greyed
     ; and refused here too - a menu's grey is a picture, not a guard
-    or al, al
-    jz .th
+    cmp al, TH_NMONO
+    jb .th
     cmp byte [wc_col], 0
     je .done
 .th:
@@ -1803,8 +1803,8 @@ wc_menulabels:
     xor bx, bx
 .t:
     push di
-    or bx, bx
-    jz .live
+    cmp bx, TH_NMONO
+    jb .live
     cmp byte [wc_col], 0
     jne .live
     mov byte [di], MENU_DIS

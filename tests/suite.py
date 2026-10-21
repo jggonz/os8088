@@ -14541,15 +14541,24 @@ SOAK = [
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("wcdrawcga", "soak", py("tests/wcdraw.py", "--cga"), 200.0,
         "wcdraw on the 5150's CGA: the short layout (a one-band header, a "
-        "few pane bands) in Monochrome, the only theme one bit can draw "
-        "(SPEC.md 113.5, 113.5.2)",
+        "few pane bands) in Wired, the default and one of the two "
+        "themes one bit can draw (SPEC.md 113.5, 113.5.2)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("wcdrawvga", "soak", py("tests/wcdraw.py", "--vga"), 200.0,
-        "wcdraw on the VGA XT in the Blue theme (SPEC.md 113.5.2): the same "
+        "wcdraw on the VGA XT in the Blue theme, picked from the Theme "
+        "menu (SPEC.md 113.5.2): the same "
         "ceilings and the same incremental-equals-repaint identity, with "
         "the badges, the lamps, the scroll column and the package's own "
         "buttons in it",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
+    Row("wcdrawwired", "soak", py("tests/wcdraw.py", "--vga", "--theme", "0"),
+        200.0,
+        "wcdraw on the VGA XT in Wired, the default (SPEC.md 113.5.2): its "
+        "LEDs one OSAPI_GFX_BLITP each and the emoticons spans of their own "
+        "colour, under the same ceilings and the same incremental-equals-"
+        "repaint identity",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("telansi", "soak", py("tests/telansi.py"), 210.0,

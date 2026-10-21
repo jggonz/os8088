@@ -136,7 +136,6 @@ WC_PFXMAX   equ 32
 WC_NOTEN    equ 64              ; the notice line
 WC_CFGMAX   equ 512
 WC_SBUFN    equ 96              ; a composed row
-WC_ADAPTN   equ 28              ; 'HERCULES 720x348 / MONO', the NUL and air
 
 ; --- a band's META (wcband.inc): how a composed row is drawn -----------------
 WC_NSPAN    equ 16              ; colour spans a band may have: the tabs
@@ -239,6 +238,11 @@ GL_SBUP     equ 13                      ; the scroll column
 GL_SBDN     equ 14
 GL_SBTHM    equ 15
 GL_SBTRK    equ 16
+GL_LDLIT    equ 17                      ; Wired's LEDs on one bit, or on
+GL_LDHALF   equ 18                      ; a ground their pictures were not
+GL_LDX      equ 19                      ; drawn for (wcband.inc's wc_bglyph)
+GL_LDOFF    equ 20
+GL_N        equ 21
 
 ; --- the popups ----------------------------------------------------------------
 PP_NONE     equ 0
@@ -262,12 +266,15 @@ WCD_ALL     equ 0x01FF
                                 ; the friends and conversations the right's)
 
 ; --- the themes (SPEC.md 113.5.2), and the ROLES a theme gives a colour ------
-TH_MONO     equ 0
-TH_BLUE     equ 1
-TH_GREEN    equ 2
-TH_AMBER    equ 3
-TH_N        equ 4
-TH_DEFAULT  equ TH_BLUE
+TH_WIRED    equ 0               ; black on white, its lamps LEDs: the default
+TH_DARK     equ 1               ; white on black (Mono-Dark)
+TH_BLUE     equ 2
+TH_GREEN    equ 3
+TH_AMBER    equ 4
+TH_N        equ 5
+TH_NMONO    equ 2               ; 0..TH_NMONO-1 one bit can draw
+TH_WIREDC   equ TH_N            ; wc_themes' last row: Wired on a colour display
+TH_DEFAULT  equ TH_WIRED
 R_BG        equ 0               ; the ground
 R_FG        equ 1               ; text
 R_DIM       equ 2               ; times, the topic, the placeholder, the track
@@ -428,10 +435,10 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     ; --- the band and the faces (wcband.inc) --------------------------------
     WCV wc_col, 1               ; 1 = the display has colour (wc_face)
     WCV wc_thm, 1               ; the theme chosen (TH_*, WIRECHAT.CFG)
-    WCV wc_eth, 1               ; ...and the one drawn: TH_MONO on 1 bit
+    WCV wc_eth, 1               ; ...and the one drawn: a mono one on 1 bit
+    WCV wc_tint, 1              ; 1 = Wired on colour: its LEDs, nicks, emoticons
     WCV wc_pens, WC_NPEN        ; its colours, by R_*
     WCV os88line_pens, 3        ; the field's (SPEC.md 83.5): ink, ground, frame
-    WCV wc_adapt, WC_ADAPTN     ; 'VGA 640x480 / 16 COLORS'
     WCV wc_glbuf, 34            ; a glyph's icon record, built to draw
     WCV wc_thmi, TH_N * 14      ; the Theme menu's items, composed
     WCV wc_meta, WC_METAN       ; the band being drawn: its meta...
