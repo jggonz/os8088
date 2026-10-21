@@ -17,7 +17,7 @@ gesture below is then one the user makes, or one the server makes - a
 message arriving, a roster changing.
 
 The default machine is MartyPC's 4.77 MHz 5150 with Hercules; --vga is the
-XT with a VGA (the colour face, SPEC.md 113.5.2), --cga the 5150's CGA. All
+XT with a VGA (the Blue theme, SPEC.md 113.5.2), --cga the 5150's CGA. All
 three take the 360KB system disk and network360.img, whose root carries
 WIRECHAT.O88.
 
@@ -33,8 +33,7 @@ TWO ASSERTIONS, mrdraw's:
             nothing does
 
 --shot DIR writes the content (and the whole screen) as PNGs after the
-injection, for the mono pictures' before-and-after (the vga-face skill's
-Step 0) and for looking at the colour face.
+injection, for looking at the theme the machine draws.
 """
 import argparse
 import json
@@ -57,8 +56,13 @@ MACHINES = {"herc": "os8088_5150_herc_gla", "vga": "os8088_xt_vga",
 LK_NODRV, LK_LIVE = 1, 3
 
 # THE CEILINGS: drawing calls a gesture may make. Each is a few times what the
-# gesture draws through the caches and a fraction of a full paint
-CEIL = {"a message arrives": 50, "a member goes Away": 30,
+# gesture draws through the caches and a fraction of a full paint. The two
+# replies below change a room's unread BADGE, and a badge that comes, goes or
+# changes width moves the tabs' spans, so that band is drawn whole - ~25
+# calls of the terminal layout's (SPEC.md 113.5): an air pair per ground and
+# a run per span, the view's highlight and the badges being grounds of their
+# own. The rest of each gesture is what it was
+CEIL = {"a message arrives": 70, "a member goes Away": 45,
         "a key in the field": 12, "Down: the pane a line": 60,
         "PgUp: the pane a page": 160, "Status > Busy": 20,
         "Notifications: a press": 16, "idle 5 s": 0}

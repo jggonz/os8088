@@ -759,7 +759,7 @@ network disk. SPEC.md §113 is the protocol and the contract.
 
 The OS itself is assembly and stays that way. But a **package** can be written
 in C, and several are — the Commodore 64 and the Weave family among them, plus
-the three described here. The first is `apps/cword` — a second reimplementation of **Microsoft Word
+the four described here. The first is `apps/cword` — a second reimplementation of **Microsoft Word
 1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
 line as `apps/word` and RTF as its file format. It has both of the product's
 views — Draft, which wraps to the window, and Page, which wraps to the sheet —
@@ -849,6 +849,29 @@ carries two OS ticks of game rather than one, so it runs at 24% of arcade
 speed where the assembly port runs at 23% while drawing twice as often. On
 CGA and Hercules it keeps nothing: the assembly port is at its 18.2 Hz
 deadline there and asleep.
+
+The fourth is `apps/lemmings` — **Lemmings** (DMA Design / Psygnosis, 1991),
+all 120 levels of the DOS original rebuilt from its own data files: the
+eighteen actions and eight skills transliterated from Eric Langedijk's
+[Lemmix](https://github.com/ericlangedijk/Lemmix) ORIG mechanics (bugs and
+glitches included, and held frame by frame against a second reading written
+from [lemmings_3ds](https://github.com/esoteric-programmer/lemmings_3ds)),
+the skill panel, minimap and status line, and the original's 640x350 preview
+and results screens in a second video mode inside the same exclusive bracket.
+VGA plays in mode 0Dh with the terrain scrolled by the CRTC and the panel held
+under a line compare; CGA and Hercules get a shadow backend. The 26 data
+files are **fetched and never committed** (`tools/getlemmings.py`, pinned by
+SHA-256) and `tools/os88lem.py` converts them on the host into band files the
+8088 reads without decoding a bit; `make lemmingsdisk` builds four
+geometries, the 360KB one carrying two graphic sets and 53 levels and a
+`LEVELS.TXT` saying which. It ships on the XT at what the XT measures: about
+four game frames a second on a quiet level and under one with sixty lemmings
+out, every clock in the game slowing with it so no level gets harder
+(SPEC.md §116.7.4). `make xt-lemmings` and `make 386-lemmings` boot it in
+86Box; `apps/lemmings/README.TXT` carries the full credits. **It is a
+developer's build and stays one** (`apps/RETIRED.txt`, kind `local`): the
+data is DMA Design's, so no release image, everything-set floppy or live
+medium redistributes it - build it from your own tree.
 
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in

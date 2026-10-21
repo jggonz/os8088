@@ -1229,7 +1229,7 @@ list to check yourself against.
 | Scroll the Browser one line, deep in a page | the tier test read the old scroll POSITION rather than the delta, so past one windowful every scroll repainted the whole band, on every page, for the rest of the document. Measured on a cycle-accurate 5150/CGA in a 15-row band, one Down key: **15 `font_run`s and no `gfx_scroll` at all**, **19 frames of visible redraw = 317 ms** | one `gfx_scroll` and the row it exposed, at every depth: **1 `font_run` and 1 `gfx_scroll`**, **5 frames = 83 ms**. Framebuffer **0 differing pixels** against the band repaint on CGA (15 rows) and Hercules (27), 55 scroll steps each | §71.10 |
 | Scroll a Disk window that is already at an end stop | a full repaint to show the same pixels — **266 ms** | **nothing at all**, 0 frames | §22.11 |
 | Type into the file dialog's name box | ~120 glyphs + a 298×151 fill | `font_char` **972 → 36**, scanlines **7,600 → 184** (8 chars) | §38.8 |
-| Word: a Left or Right arrow | `wd_fastcm` parked `[wd_mvbot]` at the 0x7FFF sentinel - they do not go through `wd_move`, which is what sets a real bound - so pass 1 laid out the whole view. Right **186.3 ms** (walk 142.8), Left **216.6** (walk 164.8), against Down's 114.5 (walk 4.3) | §27.4.1's two-row rule applied to them as well, `ckpr + 1`: Right **67.3 ms** (walk 23.8), Left **96.2** (walk 42.2) | §27.4.4 |
+| Word: a Left or Right arrow | `wd_fastcm` parked `[wd_mvbot]` at the 0x7FFF sentinel - they do not go through `wd_move`, which is what sets a real bound - so pass 1 laid out the whole view. Right **186.3 ms** (walk 142.8), Left **216.6** (walk 164.8), against Down's 116.5 (walk 4.3) | §27.4.1's two-row rule applied to them as well, `ckpr + 1`: Right **67.3 ms** (walk 23.8), Left **96.2** (walk 42.2) | §27.4.4 |
 | Word: typing a character mid-line | pass 1 laid out every row from the caret to the bottom of the view, every keystroke, to be told nothing below had changed. On `WELCOME.DOC` in the shipped window (`vrows` = 6): **205.6 ms** at caret row 1, of which `wd_walk` **149.2 ms** | `wd_eoutck` stops the walk where the row indices reconverge - one compare a row, exact, height-agnostic: **80.4 ms**, of which `wd_walk` **29.6 ms** (2.6x and 5.0x). At caret row 3, 224.9 -> **142.8 ms** | §27.4.3 |
 | Word: moving the caret at all | `wd_redraw` is two walks - pass 1 finds the rows whose signatures moved and pass 2 draws them - and the split is there for a REFLOW, which can change a row's height and so needs a band erased before it is lettered. A caret move reflows nothing and pays for it anyway: a Right arrow was **67.6 ms of which pass 1 is 23.5**, drawing not one pixel | `wd_rflush` runs at the row's END, one call before `wd_nextrow` folds the signature, so it asks the question itself: **47.0 ms**, ONE `wd_walk` instead of two (1.44x) | §27.4.6 |
 | Word: a scroll-bar click ABOVE the thumb | A formatted note gave up the upward blit-scroll - the entering rows are above the view and in no bank - so every click above the thumb repainted the whole window, menu bar and ruler included: **622 ms** against the down click's 251 | `wd_upheight` prices those rows with a bounded measure walk instead: **307 ms**, 2.03x, and the chrome is not touched | §27.7.2.2 |
@@ -11912,7 +11912,7 @@ models** (the Seine, the axis road) — a dozen objects.
 | `cs_step` ×ticks | 8.06 | 9.61 | 10.17 | 10.20 | 10.45 |
 | `cs_r_begin` + `cs_matrix` | 1.8 | 1.9 | 1.85 | 1.9 | 1.85 |
 | `cs_skyground` | 8.55 | 9.28 | 8.76 | 30.33 | **47.77** |
-| `cs_scene` | 88.72 | 114.58 | 128.42 | 143.48 | 178.72 |
+| `cs_scene` | 88.72 | 116.58 | 128.42 | 143.48 | 178.72 |
 | …`cs_consider` (47 objects) | 11.18 | 9.90 | 17.27 | 18.18 | 19.02 |
 | …`cs_drawobj` (n) | 74.83 (10) | 102.28 (7) | 108.28 (11) | 122.12 (14) | 156.22 (17) |
 | `cs_panel` | 4.87 | 5.04 | 3.57 | **20.61** | 5.02 |
@@ -11953,7 +11953,7 @@ level.** That is the largest single lever this project has not taken.
 | 10 | ~30° | 250.1 | 38.7 | 38.0 | **2.4** | 156.2 | 43.4 | 31.4 | 6.4 |
 | 14 | ~20° | 215.6 | 23.1 | 30.4 | 2.4 | 145.0 | 41.2 | 29.2 | 3.9 |
 | 18 | ~9° | 165.4 | 10.0 | 15.4 | 2.4 | 122.9 | 40.0 | 25.7 | 2.2 |
-| 22 | ~0° | 150.0 | 9.0 | 9.9 | 2.4 | 114.1 | 37.1 | 25.1 | 2.1 |
+| 22 | ~0° | 150.0 | 9.0 | 9.9 | 2.4 | 116.1 | 37.1 | 25.1 | 2.1 |
 
 **THE PANEL'S CLIFF AT FRAME 10 — 44.7 ms to 2.4 — IS THE ADI, and it is the
 one thing on this page a still frame cannot show.** §88.9's items are redrawn
@@ -14862,3 +14862,274 @@ also saves a right-side hit with a deliberately stale paddle on the left PC
 and confirms that duplicate ownership grants cannot rewind or score twice.
 These are emulator measurements; they do not replace a physical XT/null-modem
 run.
+
+### Set 161 — the LEMMINGS raster, on a 4.77 MHz 8088 (SPEC.md §116.4, §116.7.1)
+
+**What it is.** `tests/lembench` times the SHIPPING raster - its shim
+`%include`s `apps/lemmings/lemmask.inc`, `lemblit.inc` and `lemfont.inc`
+rather than carrying a copy, so a change to either half cannot leave them
+measuring different things. `tests/lembenchmarty.py` runs it under MartyPC,
+which models the 8088's instruction timing, its prefetch queue and its bus
+contention, and writes a PNG of the bench's own screen
+(`build/port-shots/wave2-lembench-os8088_xt_vga.png`).
+
+**IT WAS TAKEN TWICE.** The first pass is what wave 2 shipped on; the four
+panel-side rows were re-taken after the wave's review rebuilt that side
+(SPEC.md §116.4.4), and both figures are given because the difference is the
+whole content of readings 4 and 7.
+
+**Machines**: `os8088_xt_vga` and `os8088_xt_hdd` — both an IBM 5160 at
+4.77 MHz, one with a VGA in mode 0Dh and one with a CGA in mode 4. Every 5150
+machine in `tools/martypc/configs` refuses in this tree (`ROM set
+ibm5150_82_v4 not found in ROM set map`); an XT is the same 8088 at the same
+clock. Hercules is not measured — it needs a two-card machine AND a
+`VIDEO=herc` kernel, and the shadow backend is one composer with two
+presenters, so the CGA column bounds it to within the blit. **Under QEMU every
+row reads 0 µs**, which is what that emulator is for.
+
+| primitive | VGA it/ticks | VGA | CGA it/ticks | CGA |
+|---|---|---|---|---|
+| `lem_has_pixel` — ONE terrain probe, through the SmallerC cdecl boundary | 4,000 / 14 | **192 µs** | 4,000 / 14 | **192 µs** |
+| `lem_probe4` — FOUR of them in one call | 4,000 / 41 | **563 µs = 141 a probe** | 4,000 / 41 | **563 µs** |
+| one 32×16 terrain piece → the solid mask | 100 / 16 | **8.8 ms** | 100 / 16 | **8.8 ms** |
+| ...and → the picture | 50 / 49 | **53.8 ms** (4 VGA planes, RMW per byte) | 3,200 / 8 | **137 µs** (nothing to do) |
+| the whole world derived out of the mask, 32,000 B in | — | — | 4 / 101 | **1,388 ms** |
+| a scroll step | 1,600 / 7 | **240 µs** (Start Address + pel pan) | 200 / 300 | **82 ms** (12,800-byte compose) |
+| a scroll step and the present with it | 800 / 11 | **755 µs** | 100 / 325 | **178 ms** |
+| one minimap cell — `lb_rpix`, no batch (FIRST pass: 583 / 549) | 1,600 / 21 | **721 µs** | 1,600 / 19 | **652 µs** |
+| ...104 of them inside ONE `lem_r_batch()` | 20 / 21 | **57 ms = 548 µs a cell** | 20 / 21 | **57 ms = 548 µs** |
+| the view rectangle's outline, ONE `lem_r_rect` (176 plots) | 100 / 49 | **26.9 ms = 153 µs a plot** | 100 / 51 | **28.0 ms = 159 µs** |
+| a five-cell status field — `lem_f_run` (FIRST pass: 393 / 349 ms) | 160 / 25 | **8.6 ms** | 160 / 47 | **16.1 ms** |
+
+**Seven readings, and five of them contradict the design that produced them.**
+
+1. **THE BATCHED PROBE SAVES 27%, NOT 75%.** `lem_probe4` was built on the
+   argument that a SmallerC cdecl call — the caller's pushes, the callee's
+   `push bp` / `mov bp,sp` / `leave` / `ret`, the caller's `add sp` — dominates
+   a probe's body. Measured, the call is about a quarter of it. The batch is
+   still worth having (27% of the tick that sixty lemmings' 360 probes cost is
+   18 ms), but the reason it is worth having is not the reason it was built.
+   At 141 µs a batched probe, 360 a tick is **51 ms of a 55 ms tick**, which
+   is what sizes `LEM_STEP_MAX` at about twenty lemmings a frame.
+2. **COMPOSING A LEVEL IS ~25 SECONDS.** 400 terrain pieces at 8.8 ms into the
+   mask and 53.8 ms into the four VGA planes. The plane loop is four passes of
+   read-modify-write per byte with the Read Map Select and Map Mask set once
+   per pass — no port I/O in the inner loop, which was the design — and it is
+   still 6.7× the mask's cost for the same pixels, because eight VRAM accesses
+   a byte on an 8088 is eight VRAM accesses a byte.
+3. **A STILL VGA FRAME IS FREE AND A SCROLLING ONE IS NOT**: 755 µs of a
+   55 ms tick for the scroll and the present, which is the whole argument for
+   the mode 0Dh backend — the scroll is the CRTC's work and not the CPU's, and
+   it is the one number that came out as designed. But one scroll step in four
+   moves the VIEW RECTANGLE (a minimap cell is sixteen world pixels and
+   `LEM_SCROLL_STEP` is four), and THAT frame is **8 `lem_r_rect` calls and 76
+   plots ≈ 12.7 ms** off rows 9 and 10 — a quarter of a tick, 3.2 ms averaged.
+   The first version of this reading said "free" full stop while row 8 of the
+   table above it said 583 µs a cell: the same move was then 76 unbracketed
+   cells plus a whole-outline redraw that iterated 400 times to plot 76,
+   **~123 ms, with 84 of its 86 cells written twice** — PERFORMANCE.md Part 1's
+   double-draw flash, on the rectangle's own edges, and invisible in every
+   screendump of it.
+4. **THE STATUS LINE WAS 393 ms AND IS 8.6 ms.** The first pass measured
+   `lb_rpix` at ~570 µs a pixel — VGA write mode 2 with a per-pixel Bit Mask is
+   eight `out`s plus a read-modify-write, the CGA arm a shifted
+   read-modify-write into the shadow — and `lemfont.inc` PLOTTED A GLYPH
+   THROUGH IT, 128 times a cell. A five-cell delta of the status line, which
+   the original redraws every tick, was **393 ms on VGA and 349 on CGA**: six
+   or seven ticks for the OUT count, the IN count and the clock. The cell is
+   now written as BYTES — the glyph's three planes ARE VGA planes 0..2 and a
+   cell column is `col*8`, so it is four map-mask writes and 64 stores; on the
+   shadow backends the three planes OR to one ink mask a row that `lb_dbl`
+   doubles into the two bytes both cards want. **8.6 ms and 16.1 ms, 46x and
+   22x.** The header that priced the plot at "~50 cycles" and the field at
+   "~7 ms" was wrong by 58x, and it now carries the measurement with a
+   cross-reference in both directions.
+5. **THE SHADOW BACKEND'S SCROLLING FRAME IS 178 ms — 5.6 fps BEFORE ANY
+   MECHANICS** — 82 of compose and 96 of blit, because a scroll dirties all
+   160 rows of the view and nothing else it could dirty. A STILL frame costs
+   nothing at all (`hosttest/lemtest.c` asserts exactly that: a frame that
+   changed nothing writes zero screen pixels), so this bounds SCROLLING and
+   not playing. It is also why `LEM_SCROLL_STEP` is four world pixels rather
+   than one on those cards.
+6. **A SEVEN-ARGUMENT cdecl CALL THAT DOES NOTHING IS 137 µs.** That is the
+   CGA column's `lem_r_piece`, which returns at its first compare against
+   `lb_kind`. It is the floor under every number in the table, and read beside
+   row 1's 192 µs — a TWO-argument call that does real work — it is the whole
+   explanation of why the batched probe only saved 27%: the boundary is
+   expensive, and the body is not free either.
+
+7. **THE `out`s WERE NOT THE MINIMAP'S PROBLEM; THE CALL WAS.** Taking the VGA
+   state out of every pixel — ten `out`s to two — moved a bracketed minimap
+   cell from 583 µs to **548**, six per cent. The same plot inside ONE
+   `lem_r_rect` is **153 µs**: three quarters of a per-cell minimap call is the
+   SmallerC cdecl boundary and `_lem_r_rect`'s own prologue, not the card. So
+   the panel side draws RUNS — `lem_mm_row`/`lem_mm_col` coalesce spans of one
+   colour out of the minimap's 260-byte shadow — and the view rectangle's move
+   is **8 calls** where a cell at a time is 38 (the host harness asserts the
+   count), while `lem_mm_draw` is ~0.4 s where a cell at a time was 1.0. It
+   also prices the batch honestly: an isolated single-pixel `lem_r_rect` got
+   **138 µs worse** (721 against 583 — two extra calls for one pixel) and every
+   pixel in a run got 3.8x better. Read beside reading 6, this is the same
+   sentence twice: on this compiler and this CPU the cdecl boundary is the
+   budget, and every design that beats it does so by making one call do more.
+
+**Harness**: `make lembench`, then `python3 tests/lembenchmarty.py --machine
+os8088_xt_vga`. Each row sizes itself — it runs its primitive until the BIOS
+tick has moved at least six times, growing the count eightfold up to three
+times — which is what lets one bench be readable on a 4.77 MHz 8088 and on a
+host a thousand times faster. Two arithmetic traps were paid for on the way:
+`ticks * 54945 / iters` overflows sixteen bits for any row with thousands of
+iterations (14 ticks over 4,000 printed **12 µs** for a probe that is 192 —
+every row wrong and every one plausible), and the iteration count itself
+overflows if the growth is allowed a fourth doubling.
+
+**Wave 3's readings (2026-10-20), same machine, same instrument**
+(`build/port-shots/wave3b-lembench-os8088_xt_vga.png`; SPEC.md §116.7.2 and
+§116.7.3 carry the argument):
+
+| row | VGA mode 0Dh, 4.77 MHz 8088 |
+|---|---:|
+| one probe, re-measured on the wave-3 build | **178 µs** (192 at wave 2) |
+| four batched | **549 µs** |
+| a 32x16 piece → the mask, in RAM | **7.7 ms** |
+| a 32x16 piece → T (four world planes in RAM) and the mask | **22.0 ms**, x odd or x a multiple of 8 alike |
+| T → VRAM, the whole world | **330 ms** |
+| a packed-nibble world → four planes through a 256-entry table | **7,810 ms** |
+
+8. **THE PACKED WORLD LOST TO ITS OWN CONVERSION.** The design proposed for
+   the 25-second compose — compose packed 4bpp nibbles in RAM, then one table
+   pass to the planes — spends 7.8 s on the table pass alone, because
+   splitting a packed pixel into four planes is a shift, a mask and a table
+   read for every pixel however the table is shaped. Composing PLANE-MAJOR in
+   RAM keeps every piece already in the card's form, and the one copy is four
+   `rep movsw` under four map masks. A piece is **22.0 ms against wave 2's
+   62.6** and Fun 1 loads in **~8.9 s against ~16**; the largest level in the
+   set in ~13.5 s against ~29.
+9. **THE MECHANICS' PROBES ARE ~0.4 ms A LEMMING A FRAME**, counted by the
+   host replay over three fixture levels (22-29 calls a frame at worst for
+   10-12 lemmings) and priced at 178 µs a call — a floor, the handlers' own C
+   uncounted. Sixty lemmings is ~25 ms of probes, inside one tick, which is
+   what `LEM_STEP_MAX` = 20 spreads a crowded frame around. The frame RATE on
+   a busy and a quiet level is the final pass's MartyPC row and is not
+   quoted until it is taken.
+10. **WAVE 3'S REVIEW: WHAT THE LIVE FRAME TAKES OFF THE GLASS** (counted by
+    the host harness, not timed; SPEC.md §116.4.6's table is the argument).
+    A changed object or a dug rectangle on VGA is composed in a VRAM scratch
+    and latch-copied on in one pass — **0 background rectangles onto the
+    glass in 300 drawn frames**, where the first build wrote every one there
+    as bare terrain; a pointer parked away from everything is redrawn on **0
+    of 300** frames, where taking it off around every frame was 300; a
+    shadow card's tick that both scrolls and draws a game frame draws its
+    sprites ONCE (it was a full sprite pass and a full restore more, on the
+    178 ms tick of reading 5); and a minimap cell the mechanics clear is a
+    bit in a bitset until the frame's end, where it was a 721 µs plot from
+    inside the mechanics on every dig row of one cell. The costs it adds are
+    a VSYNC wait (≤ 14 ms of a 70 Hz refresh) on a VGA tick that draws or
+    scrolls, the latch copy of each composed rectangle, and one
+    `OSAPI_MOUSE` far call per sixteen rows a shadow compose or present
+    moves. None of them is timed yet; the final pass's MartyPC row takes
+    them with the frame rate.
+11. **WAVE 3'S SECOND REVIEW: THE LEMMINGS WERE STILL OFF THE GLASS, AND
+    NOW THEY ARE NOT** (counted by the host harness, not timed). Reading 10's
+    frame still restored every VGA save-under onto the glass and drew the
+    frame there, so each lemming was off the glass from its restore to its
+    draw — in reverse order, so the first one off was the last one back and
+    its window was the whole frame — and the pointer went with them whenever
+    a lemming was near it. The frame is now COMPOSED: every rectangle it
+    changes (each lemming's last box with its new one, each crater, each
+    moved object, merged where they overlap) is built in a 125-row VRAM band
+    — T, the objects, every lemming once, the pointer — and latch-copied on,
+    so the glass only ever receives a finished picture: **0 draws onto the
+    glass outside a compose in 300 frames**, the lit pointer whole after
+    every one, a pointer parked over walking lemmings redrawn only when its
+    shape changes, and a pointer resting on the skill panel or the minimap
+    taken off by **0 of 30** frames (any panel change took it off before).
+    The VSYNC wait on a non-scrolling VGA frame is gone (the compose races
+    no beam). Two overlapping animated objects are **one rectangle and one
+    draw each** where they were ~3. What it costs — a T copy and a latch per
+    rectangle where a lemming used to cost a latch save and a latch
+    restore, and ~250 module-to-resident crossings a frame at 80 lemmings —
+    is the final pass's to time, with the off-glass fraction `flicker()` and
+    `pace()` give on `xt_vga` (SPEC.md §116.7.3's table).
+
+**Re-taken ONCE on the SHIPPED build (image 31,668, bss 20,421, after the third review) in the Finish (reading 18), same instrument, same levels, no spray in flight: VGA quiet 3.80 game frames/s (a glass update 327.6 ms, compose 280-286 ms a pass, 51 crossings a frame), busy 0.60 (1,046.2 ms, compose 1,391-1,417 ms, 126 crossings) - the button latch's share is inside the ~40 ms the busy compose grew by; CGA quiet 4.60 (263.3 ms), busy 0.90 (710.4 ms), a pass while scrolling 564.8 ms; a launch 24 / 23 `int 13h` calls, the preview picture 1,653 / 366 ms, a retry inside the bracket 2 calls. The spray's cost stays priced: the instrument plays, it does not nuke.**
+
+**The final pass's readings (wave 6, 2026-10-20), on the PRE-REVIEW build**
+(`image=31116 bss=20425`, part 0 32,664 - NOT the shipped line, which is
+SPEC.md §116.6's `image=31668 bss=20421` after wave 6's three reviews; the
+heading said "FINAL build" until the third review) - `tests/lemplaymarty.py`, which
+PLAYS the shipped package off `build/lemmings360.img` on `os8088_xt_vga` and
+`os8088_xt_hdd` and reads the game's own state by symbol (SPEC.md §116.7.4 is
+the table and the argument). Taken once each; nobody re-takes them to confirm.
+The "glass update" rows time `lem_r_present` to `lem_r_present`: a pass of
+the loop that changes nothing returns before the present and is not counted,
+so a figure may span several passes (it said "a pass" until wave 6's review,
+which is why the busy VGA compose, 1,326-1,379 ms, could read longer than
+"a pass", 1,100.9 ms - the mean takes in short undrawn updates). The pointer
+moves once a glass update. **These readings predate wave 6's two reviews**,
+which added the explosion's spray (decision 5) and the VGA compose's button
+latch (~3 far calls a lemming, VGA only). A frame with a spray in flight
+costs more, PRICED and not measured: on VGA its rectangles are one a 16-row
+band since the second review, 828 byte-rows in 76 rows a game frame per spray
+on the real table (`lemtest`; one box was 2,961 in 128), ~40-50 ms of a drawn
+frame on a 4.77 MHz 8088 by the loops' instruction counts (one box ~75-100
+ms). **The bins have a price of their own** (the third review, SPEC.md
+§116.4.6): two 80-pair walks a spray a frame at ~9 ms each (~45 instructions
+a binned pair, ~550 cycles, ~44K a walk) and up to ten `ovl_rc_add` calls for
+one box's one, ~9 ms each on a full list - so a lone spray on a short list
+nets ~20-25 ms from them and a NUKE, which keeps up to 52 in flight on a list
+the crowd has already filled, would have paid ~2.2 s of a game frame for
+14% of compose area (52 walks and 194 adds a frame against 0 and 26.5 as one
+box each, `lemtest`'s nuke leg). `ovl_spray_rects` takes the bins for one
+spray on a list with room and one box otherwise. A reading of it is the
+Finish pass's. SPEC.md §116.6 has the shipped build's line, `image=31668
+bss=20421`.
+
+| | VGA mode 0Dh | CGA mode 4 |
+|---|---:|---:|
+| quiet, Fun 2 (6-7 out): game frames a second | **3.85** | **4.60** |
+| ...between two glass updates (`lem_r_present` to `lem_r_present`) | 330.6 ms | 256.4 ms |
+| ...module crossings a frame (`cc_ovthunk`) | 51 | 41-42 |
+| ...the compose a drawn pass | 263-270 ms | — |
+| busy, Fun 9 (60-61 out, rate 99): game frames a second | **0.60** | **0.90** |
+| ...between two glass updates | 1,100.9 ms | 701.4 ms |
+| ...module crossings a frame | 182 | 110-111 |
+| ...the compose a drawn pass | 1,326-1,379 ms | — |
+| between two glass updates while scrolling, busy (an arrow held) | — | **544.7 ms** |
+| the preview picture (`lem_p_mini`'s rows) | **1,652 ms** / 80 rows | **366 ms** / 64 rows |
+| int 13h calls: a launch / the in-bracket retry | 23 (20 busy) / **2** | 22 (19) / **2** |
+
+12. **THE XT IS ~4 FRAMES A SECOND QUIET AND UNDER ONE BUSY.** Reading 9 put
+    sixty lemmings' probes inside one tick and left the frame RATE to this
+    pass; the rate is 0.60 (VGA) and 0.90 (CGA) on a busy level, because the
+    probes were never the frame - the DRAWING is.
+13. **THE VGA COMPOSE IS THE BUSY FRAME, AND IT LOSES TO THE CGA.** ~1.35 s
+    a drawn pass at ~60 lemmings, ~22 ms a lemming, is ~80% of the VGA's
+    1.67 s frame: every lemming is a rectangle whose T is copied through four
+    planes into the scratch and latched back, and readings 10-11 bought that
+    for correctness (no lemming or pointer pixel ever absent between two
+    latches). The CGA's shadow backend, which draws a sprite in RAM and blits
+    dirty rows, is 1.5x faster on the same level. This is the next lever and
+    the final pass records it rather than pulling it.
+14. **THE CROSSINGS ARE NOT THE LEVER.** 182 a frame at 61 lemmings - about
+    three a lemming, under reading 11's ~250 at 80 - is a few milliseconds of
+    a 1.67 s frame; the sprite path stays in the module.
+15. **THE PICTURE IS 18-22% OVER ITS ESTIMATE**: 1,652 ms on VGA against
+    ~1.4 s and 366 ms mono against ~0.3 s. It is drawn a row at a time with
+    the input asked every eighth row (SPEC.md §116.4.3.1).
+16. **THE NEXT LEVEL INSIDE THE BRACKET IS TWO DISK CALLS**, ~0.8 s at the
+    ~400 ms a call MartyPC does not model (it is cycle-accurate, not
+    disk-accurate - the CALLS are exact); a launch from the window is 19-23.
+17. **`flicker()` CANNOT PRICE CONTINUOUS PLAY.** Over 240 displayed frames
+    of busy VGA play the glass changed on 6 (a drawn frame lands in ~3
+    refreshes, a band a refresh) and `transient` counted 118 frames and
+    123,676 pixels - but Part 3.1's metric assumes ONE operation between two
+    still states, and a lemming's walk cycle returning to its first pose is
+    "transient" by that arithmetic. The off-glass claim stays the harness's
+    structural count (reading 11); what the clock adds is ~50 ms for a frame
+    to land.
+
+**Harness**: `make lemmingsdisk && python3 tests/lemplaymarty.py --machine
+os8088_xt_vga` (and `--machine os8088_xt_hdd`), ~2 minutes a machine, writing
+`build/lemplay-<machine>.txt`. Hercules is not measured (reading 8's reason,
+SPEC.md §116.7.1).

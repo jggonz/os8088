@@ -288,8 +288,9 @@ static int rc_mode = RC_M_CLOCK;
 /* THE CCP rides at the head of the module, the package's one part
  * (RC_CCP_PART/RC_CCP_OFF, SPEC.md 74.3): op_load put it in the carve at
  * launch and it is copied to 0xE400 on every warm boot. Its segment is ASKED
- * each time (os88_part_seg) and never banked, because the carve MOVES (crt0's
- * cc_ovcarve re-binds the module and knows of no word here). */
+ * each time (os88_part_seg) and never banked. The carve used to MOVE; it is
+ * PINNED since SPEC.md 73.14.2.1 (114.6), so asking is no longer needed and
+ * is harmless - one call a warm boot. */
 static int rc_slice_n;                       /* control transfers a slice */
 static unsigned rc_sl_fast;                  /* slices in a row that took no
                                               * tick: the length adapts */

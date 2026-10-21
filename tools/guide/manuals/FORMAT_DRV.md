@@ -15,9 +15,10 @@ Disk...** and put away again when the format is finished or cancelled.
 3. The window reads the disk and asks a question at the bottom, such as
    `Format A: as 360K?`. If the disk already holds files, the question
    starts with `ERASE`.
-4. Press `Space` to switch between 720K and 360K where the drive offers
-   both, `Enter` to format, or `Esc` (or any other key) to leave the disk
-   alone.
+4. Press `Space` to switch to the drive's other size where it has one:
+   1.44M or 720K in a 3.5-inch high-density drive, 1.2M or 360K in a
+   5.25-inch one. Press `Enter` to format, or `Esc` (or any other key) to
+   leave the disk alone.
 
 ![The question at the foot of the Disk window, ready for Enter or Esc.](shot:format-drv-prompt){left}
 

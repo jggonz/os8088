@@ -38,9 +38,10 @@ def capture(ui, shot):
     os88marty.guest_sleep(ui.m, 1)
     shot("wirechat-window", window="WireChat", pad=8)
 
-    # Set status... is the header's button, at its right end.
+    # The status is the header's right end: its glyph, word and nick.
     w = ui.window("WireChat")
-    ui.mo.click(w.x + w.w - 60, w.y + 30)
+    x0, y0, x1, y1 = w.content
+    ui.mo.click(x1 - 40, y0 + 5)
     ui.mo.to(w.x + w.w - 250, w.y + 120)            # the arrow off the popup
     os88marty.guest_sleep(ui.m, 2)
     shot("wirechat-status", rect=(w.x + w.w - 200, w.y, 208, 90))

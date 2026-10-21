@@ -1151,6 +1151,13 @@ FAST = [
         "odd amount with every row green: passes 12 and 13 each found the "
         "whole list odd part-way through. Reads the kernel.map the build "
         "writes, so it assembles nothing"),
+    Row("sysman", "fast", py("tests/unit/t_sysman.py"), 0.3,
+        "SPEC.md 118.2.1: System Check's manifest is written from the system "
+        "disk's INPUTS (the image depends on SYSCHECK.O88), so every manifest "
+        "file is read back off all four built system disks with a walker of "
+        "its own and held to its size and sum - and SYSTEM\\SYSCHECK.O88 is "
+        "on each while the manifest does not name it. Fails on one changed "
+        "sum, which is a fresh install System Check would call broken"),
     Row("canary", "fast", py("tests/unit/t_canary.py"), 0.1,
         "SPEC.md 18.93.1's canary offset re-derived from every shipped image's "
         "own BPB: it has to name a sector a transfer run reads AFTER the head "
@@ -1326,6 +1333,33 @@ FAST = [
         "seconds of every `make` is the wrong place to prove their "
         "compilers agree - `soak -k 'lmpack'`, which is what a change to "
         "either one runs",
+        needs=()),
+    Row("lemdat", "fast", py("tests/unit/t_lemdat.py"), 0.6,
+        "SPEC.md 116.2's standing check, and it is a SECOND READER rather "
+        "than a repeat of the first: the 26 DOS Lemmings data files decoded "
+        "again from Lemmings.ts's semantics - its container walk, its bit "
+        "reader's RUNNING checksum, which is a stronger reading than an XOR "
+        "over the payload because the two agree only if the stream consumed "
+        "exactly the payload - against tools/os88lem.py's, which is "
+        "lemtool/lemdat.py's. 101 sections, the mask == plane 3 identity "
+        "over all 273 terrain pieces plus the tiling of VGAGR section 0 that "
+        "makes it checkable, the four special pictures at exactly 4 chunks "
+        "of 14,400, the 120-level order against BOTH reference tables, and "
+        "every converted band's header held against the bytes it claims to "
+        "carry. It has already caught two defects the converter's own "
+        "selfcheck could not see, both because it reads the ORIGINALS: four "
+        "level names are exactly 32 characters and were losing their last "
+        "letter to a terminator the field has no room for, and a geometry "
+        "that shrank was leaving a stale LEMLVn.LEM the manifest still "
+        "names. Since wave 6's second review it also holds every built "
+        "band to the LEM_KB_* claim apps/lemmings/lemload.c reads it into, "
+        "parsed out of that file, so a band that outgrows its claim fails "
+        "here and not as 'Load failed' on the machine. SKIPS with no "
+        "build/lemdata.stamp, because the data is "
+        "fetched and never committed (CONTRIBUTING.md 6) and a red row in a "
+        "fresh clone would be reporting on the box. 0.6s is wave 6's "
+        "second review's MEASURED figure (0.44s alone, 0.6s in the tier; it "
+        "was 2.4 when registered)",
         needs=()),
     Row("movable", "fast", py("tests/unit/t_movable.py"), 0.6,
         "SPEC.md 66.6.1's ratchet: a package's region is born PINNED, so a "
@@ -4742,6 +4776,28 @@ SOAK = [
         "and that an overlay call (F5) claims nothing more",
         needs=("marty", "cc"), serial=True,
         wants=("build/cword360.img", "build/CWORD.OVL")),
+    Row("lemmings", "soak", py("tests/lemmings.py"), 100.0,
+        "SPEC.md 116.12's boot-and-screendump row: LEMMINGS from the Disk "
+        "window by NAME, Play on Fun 1 into the bracket - the preview in "
+        "mode 12h (told from the desktop by its black top margin, not by its "
+        "size, which they share), the level in 0Dh - and then wave 6's "
+        "carried finding A on the glass: with the game PAUSED the world "
+        "cannot move, so its rows are dumped with the pointer at rest, the "
+        "pointer is swept from 26 places in the world (every x & 7 phase) "
+        "diagonally into the skill panel and the corner and brought back, "
+        "and the world's rows must be IDENTICAL - the defect was an 8x14 "
+        "block of another place's terrain restored into the air by a "
+        "save-under whose tail byte a compose had not brought up to date. "
+        "Then Esc to the postview in 12h and Esc to the launcher window, "
+        "which must be back. QEMU, because it is a behaviour row and asserts "
+        "no speed; a SCRATCH copy of the disk, because a played level writes "
+        "LEMMINGS.SAV. Needs `cc` and the fetched data (wants= builds the "
+        "disk, or the row SKIPS). 100s is its first passing run MEASURED "
+        "here (99s wall, wave 6). NOT run red: its negative control is "
+        "lemtest's leaving-the-world row, which goes red with 64 stale "
+        "pixels on the code before the fix",
+        needs=("qemu", "cc"), serial=True,
+        wants=("build/lemmings.img",)),
     Row("cmemmove", "soak", py("tests/cmemmove.py"), 110.0,
         "A C PACKAGE DECLARES A CLAIM MOVABLE and the compactor moves it "
         "(docs/plans/HEAP-UNPIN-PLAN.md 2.1.1 item 3). os88_mem_claim was the "
@@ -13903,6 +13959,20 @@ SOAK = [
         "paint and its square moves inside the content. Everything is read "
         "out of each package's own bss through its map.",
         needs=("marty",), serial=True, timeout=600),
+    Row("syscheck", "soak", py("tests/syscheck.py"), 120.0,
+        "SPEC.md 118: SYSTEM CHECK on an upgraded install. A hard-disk image "
+        "of the system disk's own files is planted with one of every "
+        "breakage 118.1 names - a package of format 8, one that is not a "
+        "package, a retired program and a retired driver, a program in two "
+        "folders, KPAD.TMP, a driver of version 9, a deleted EMS.DRV that "
+        "SYSTEM.CFG still wants, an ASSOC.DAT row for a deleted package and "
+        "an orphaned HIBERNAT.IMG - and booted from C: with an AUTOSTRT link "
+        "to SYSTEM\\SYSCHECK.O88. The scan must find each, the saved "
+        "SYSCHECK.TXT (read back on the host) must name each, and Clean Up "
+        "must remove exactly 118.8's files and nothing else.",
+        needs=("qemu", "mtools"), serial=True, timeout=600,
+        wants=("build/os8088.img", "build/apps.img", "build/syscheck.o88",
+               "build/mbr.bin", "build/boothd.bin")),
     Row("atkey", "soak", py("tests/atkey.py"), 100.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "
@@ -14471,15 +14541,16 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("wcdrawcga", "soak", py("tests/wcdraw.py", "--cga"), 200.0,
-        "wcdraw on the 5150's CGA: the compact layout (one-line title, "
-        "compact messages) and the Search button's edge the first band used "
-        "to draw over (SPEC.md 113.5)",
+        "wcdraw on the 5150's CGA: the short layout (a one-band header, a "
+        "few pane bands) in Monochrome, the only theme one bit can draw "
+        "(SPEC.md 113.5, 113.5.2)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("wcdrawvga", "soak", py("tests/wcdraw.py", "--vga"), 200.0,
-        "wcdraw on the VGA XT, the colour face (SPEC.md 113.5.2): the same "
+        "wcdraw on the VGA XT in the Blue theme (SPEC.md 113.5.2): the same "
         "ceilings and the same incremental-equals-repaint identity, with "
-        "the badges, the lamps and the package's bevelled buttons in it",
+        "the badges, the lamps, the scroll column and the package's own "
+        "buttons in it",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("telansi", "soak", py("tests/telansi.py"), 210.0,

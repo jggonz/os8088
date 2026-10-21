@@ -117,16 +117,6 @@
  *   OSAPI_XMEM_*                          every argument and answer is a
  *     32-bit linear base, and there is no 32-bit type here (rule 4). The one
  *     part of the API that C genuinely cannot hold.
- *   OSAPI_FSX_PAGE / FSX_SURF             the other two slots of the exclusive
- *     bracket (SPEC.md 53.10, 53.7.1). PAGE spends FSI_PAGES, which only Mode
- *     X and Hercules have; SURF answers the rect a SAME-MODE bracket owns on a
- *     two-display desktop, and a bracket that sets a mode has collapsed the
- *     desktop and is (0,0,w,h). The four below are the bracket itself and ARE
- *     wrapped - os88_fsx_caps/run/mode/wait - because none of the bracket's
- *     rules is checkable from C and all of them are stated where the one
- *     function that obeys them lives (docs/APPLE2-SPEC.md section 13.3).
- *     (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md 11.2, is a different
- *     thing again and is os88_fullscreen() below.)
  *   OSAPI_GFX_LSTEP / LSTEPV              RETIRED - a stock kernel carries the
  *     cells and no body and answers CF=1 (SPEC.md 5.12.6). The resumable walk
  *     is apps/os88gfx.inc's `GFXE_WALK` now, which is NASM and so out of C's
@@ -934,6 +924,30 @@ int os88_fsx_wait(int kind);                     /* ...and it is the PRESENT
 #define OS88_FSI_BSTEP  12                       /* word: bank step in bytes */
 #define OS88_FSI_MODE   14                       /* byte: the id, echoed */
 #define OS88_FSI_SIZE   16
+
+/* The three the bracket's FOUR do not cover, wrapped for LEMMINGS (SPEC.md
+ * 114) and gated like every thunk by the C's own use set (SPEC.md 73.9.1),
+ * so a package that names none of them carries none of them. */
+int os88_fsx_page(int page);                     /* show FSI_PAGES' page n,
+                                                  * latched at retrace and
+                                                  * waited for (53.10): 0 =
+                                                  * on the glass, -1 = no
+                                                  * bracket, no mode, or one
+                                                  * page */
+int os88_fsx_surf(struct os88_rect *r);          /* the rect the bracket
+                                                  * OWNS (53.7.1), inclusive
+                                                  * like every rect here - on
+                                                  * a two-display SAME-MODE
+                                                  * bracket it is not at 0,0.
+                                                  * 0 = filled, -1 = none */
+
+/* Read the keyboard inside the bracket - no event is dispatched there and the
+ * contract is that the app polls (53.1). wait == 0 peeks and answers 0 when
+ * nothing is there. The answer is (scan << 8) | ascii. It uses the enhanced
+ * BIOS pair where the BIOS says it has one (0040:0096 bit 4) and the original
+ * pair where it does not - so F11 and F12 arrive on an AT and are ABSENT on an
+ * 83-key XT, which is a fact to grey with (SPEC.md 47) rather than a defect. */
+int os88_fsx_key(int wait);
 
 /* --- tasks and time (SPEC.md 8, 20.6) ------------------------------------- */
 void os88_task_yield(void);
