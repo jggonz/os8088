@@ -4,7 +4,7 @@
 
 System Check reads the volume a hard-disk install boots from and reports
 what an in-place upgrade (SPEC.md 52.10.15) can leave broken or behind.
-SPEC.md 116 is the binding contract; this file is the delivery record, and
+SPEC.md 118 is the binding contract; this file is the delivery record, and
 an unchecked story here is not yet shipped behaviour. The build diary is
 [docs/HOW-SYSCHECK-WAS-BUILT.md](../HOW-SYSCHECK-WAS-BUILT.md); the design
 mockups are [docs/syscheck/design/](../syscheck/design/).
@@ -31,11 +31,11 @@ mockups are [docs/syscheck/design/](../syscheck/design/).
   wants an absent driver, and file associations that point at nothing.
 - [x] **Choose the drive:** as a user System Check asks which drive to
   check before it reads anything, with my hard disk already selected, and
-  Scan asks again afterwards (SPEC.md 116.13).
+  Scan asks again afterwards (SPEC.md 118.13).
 - [x] **Report:** as a user Save Report writes `SYSCHECK.TXT` naming every
   finding, and a toast tells me where.
 - [x] **Clean Up:** as a user Clean Up asks first, removes only the debris
-  SPEC.md 116.8 lists, rebuilds a stale `ASSOC.DAT`, and scans again; what
+  SPEC.md 118.8 lists, rebuilds a stale `ASSOC.DAT`, and scans again; what
   it cannot repair says how to (install again).
 - [x] **Presentation:** as a user on Hercules or CGA the lamps are shapes
   rather than colours and the layout fits the screen; on VGA they are the
@@ -59,7 +59,7 @@ mockups are [docs/syscheck/design/](../syscheck/design/).
   drivers are checked against a manifest and a retired list rather than
   discovered.
 - **No new kernel facility.** The one thing a slot would add - the running
-  kernel's build - is answered by construction instead (SPEC.md 116.1.1),
+  kernel's build - is answered by construction instead (SPEC.md 118.1.1),
   so the feature costs no resident byte.
 
 ## Verification discipline

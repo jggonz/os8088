@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""t_sysman: System Check's manifest IS the system disk (SPEC.md 116.2.1).
+"""t_sysman: System Check's manifest IS the system disk (SPEC.md 118.2.1).
 
     python3 tests/unit/t_sysman.py
 
@@ -12,7 +12,7 @@ its sum to the manifest's. A packer that moved into the image step, a disk
 that dropped a driver, or a manifest from a stale build all fail here, and
 each would otherwise surface as System Check calling a fresh install broken.
 
-It also holds the two things SPEC.md 116.2 says about SYSCHECK.O88 itself:
+It also holds the two things SPEC.md 118.2 says about SYSCHECK.O88 itself:
 every system disk carries it in SYSTEM\\, and the manifest does not name it.
 """
 import os
@@ -75,7 +75,7 @@ def main():
     check(len(rows) > 20, "the manifest names the system disk's files",
           got=len(rows))
     check(all(r[2] != "SYSCHECK.O88" for r in rows),
-          "SYSCHECK.O88 is not in its own manifest (SPEC.md 116.2)")
+          "SYSCHECK.O88 is not in its own manifest (SPEC.md 118.2)")
     for img in IMAGES:
         path = os.path.join(BUILD, img)
         if not os.path.exists(path):
@@ -101,13 +101,13 @@ def main():
             data = read(fat, hit[0])
             check(len(data) == size and os88sysman.sums(data) == sm,
                   "%s's %s is the manifest's, byte for byte" % (img, name),
-                  "os88disk must copy a file as it is given (SPEC.md 116.2.1)",
+                  "os88disk must copy a file as it is given (SPEC.md 118.2.1)",
                   got=(len(data), os88sysman.sums(data)), want=(size, sm))
         sysf = where.get(1)
         check(sysf is not None and any(
               Fat12.pretty(e[:11]) == "SYSCHECK.O88"
               for e in entries(fat, sysf)),
-              "%s carries SYSTEM\\SYSCHECK.O88 (SPEC.md 116.10)" % img)
+              "%s carries SYSTEM\\SYSCHECK.O88 (SPEC.md 118.10)" % img)
     done("t_sysman: %d files against %d system disks" % (len(rows), len(IMAGES)))
 
 

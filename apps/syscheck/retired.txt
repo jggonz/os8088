@@ -1,5 +1,5 @@
 # apps/syscheck/retired.txt - files an earlier release SHIPPED on the system
-# or apps disks and this one does not (SPEC.md 116.2.2). System Check finds
+# or apps disks and this one does not (SPEC.md 118.2.2). System Check finds
 # them on an installed volume and reports them as leftovers of an upgrade.
 #
 # ONE 8.3 NAME A LINE. A NAME STAYS FOR EVER: a machine can be upgraded from

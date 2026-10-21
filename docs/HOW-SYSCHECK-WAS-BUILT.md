@@ -5,7 +5,7 @@
 This is the record of what was actually built and tested, written as the
 work happened, so that it can later be reused on the website. Plans live in
 [docs/plans/SYSCHECK-PLAN.md](plans/SYSCHECK-PLAN.md) and the contract in
-SPEC.md 116; this file says what happened, and keeps what was measured apart
+SPEC.md 118; this file says what happened, and keeps what was measured apart
 from what was intended.
 
 ## 2026-10-20 — The question came from an upgrade
@@ -100,7 +100,7 @@ Clean Up asks with the standard alert (Cancel is the default, so Enter
 cannot delete anything), removes only the files whose finding says they are
 debris, rebuilds `ASSOC.DAT`, and scans again. On the planted disk it
 removed `KPAD.TMP`, the retired `MODPLUG.O88` and the orphaned hibernation
-image, fixed the associations, and left everything SPEC.md 116.8 says it
+image, fixed the associations, and left everything SPEC.md 118.8 says it
 must leave: the duplicated program, the broken packages, and the hidden
 system files a program cannot touch.
 
@@ -146,3 +146,11 @@ The planted-disk test now presses Scan once and gets the hard disk it was
 offered; it passes as before.
 
 ![The chooser: C:, the hard disk, offered first.](syscheck/vga-chooser.png)
+
+## 2026-10-20 — Section 118, not 116
+
+While this was in review, Lemmings merged as SPEC.md 116 and the INSTALL
+wizard's open pull request had already claimed 117, so System Check's
+contract moved to SPEC.md 118 when main was merged in. Nothing changed
+but the number: every citation in the source, the tests and these
+documents now says 118.

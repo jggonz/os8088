@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""System Check's gate (SPEC.md 116.11) - python3 tests/syscheck.py
+"""System Check's gate (SPEC.md 118.11) - python3 tests/syscheck.py
 
 Builds a HARD-DISK image the way an upgraded install looks - the system
 disk's own files on a FAT16 partition, booted from C: - with one of every
-kind of breakage SPEC.md 116.1 names PLANTED in it, and an AUTOSTRT link that
+kind of breakage SPEC.md 118.1 names PLANTED in it, and an AUTOSTRT link that
 opens SYSTEM\\SYSCHECK.O88 at boot. Then it boots the image under QEMU, lets
 the scan run, saves the report, and holds SYSCHECK.TXT (read back off the
 image on the host) to every planted finding; then Clean Up, and the volume
-must have lost exactly SPEC.md 116.8's files and nothing else.
+must have lost exactly SPEC.md 118.8's files and nothing else.
 
     python3 tests/syscheck.py              the whole gate
     python3 tests/syscheck.py --build OUT  build the fixture image only
@@ -49,7 +49,7 @@ PART_LBA = 63          # os88disk's --hdd partition starts here (SPEC.md 80.1)
 
 def manifest():
     """The system disk's files, from the manifest `make` already wrote for
-    SYSCHECK.O88 (SPEC.md 116.2) - so the fixture is the release's own list
+    SYSCHECK.O88 (SPEC.md 118.2) - so the fixture is the release's own list
     and this file runs nothing that builds. (kind, folder, NAME)."""
     import os88sysman
     inc = os.path.join(BUILD, "syscheck_man.inc")
@@ -135,7 +135,7 @@ def build_fixture(out):
 
 # --- the driving half ----------------------------------------------------------
 # VGA, 640x480: the window opens at its template's place, so its controls are
-# where the layout puts them for that content box (SPEC.md 116.4). The boot
+# where the layout puts them for that content box (SPEC.md 118.4). The boot
 # opens the Control Panel's Drivers page on top - SYSTEM.CFG wants a driver
 # that is not there, which is the Settings breakage - so the row clicks rather
 # than types: a click lands on what is under it whatever has the focus.
@@ -209,7 +209,7 @@ def drive(img, keep):
     time.sleep(20)                      # boot, the autostart, the scan
     click(*CP_CLOSE)
     time.sleep(1.5)
-    click(*BTN_SCAN)                    # the chooser (SPEC.md 116.13) offers
+    click(*BTN_SCAN)                    # the chooser (SPEC.md 118.13) offers
     time.sleep(1.0)                     # C:, the boot hard disk: check it
     text = save_until(img, "Result: 5 broken, 6 warnings")
     if text is None:
@@ -227,7 +227,7 @@ def drive(img, keep):
         if not hit:
             fails.append("the report has no %s line for %s (%s)"
                          % (sev, path, word))
-    # --- Clean Up: removes exactly 116.8's files, rebuilds ASSOC.DAT ----
+    # --- Clean Up: removes exactly 118.8's files, rebuilds ASSOC.DAT ----
     click(*BTN_CLEAN)
     time.sleep(2.0)
     click(*ALERT_PROCEED)
@@ -247,7 +247,7 @@ def drive(img, keep):
             fails.append("Clean Up left %s" % p)
     for p in KEPT:
         if not exists(img, p):
-            fails.append("Clean Up removed %s, which 116.8 says it keeps" % p)
+            fails.append("Clean Up removed %s, which 118.8 says it keeps" % p)
     r = subprocess.run(["python3", os.path.join(ROOT, "tools", "os88disk.py"),
                         "--verify-hdd", img], capture_output=True, text=True)
     if r.returncode:
@@ -276,7 +276,7 @@ def main():
             print("FAIL: " + f)
         return 1
     print("syscheck: every planted breakage found, reported and - where "
-          "SPEC.md 116.8 allows - cleaned up")
+          "SPEC.md 118.8 allows - cleaned up")
     return 0
 
 

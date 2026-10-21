@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/syscheck/scan.inc - the nine checks as a state machine
-;                                   (SPEC.md 116.1, 116.3)
+;                                   (SPEC.md 118.1, 118.3)
 ;
 ; sc_step does ONE bounded piece of the scan - one FIND, one header read, one
 ; 4KB chunk of a sum, one ASSOC.DAT row - and returns; sc_onwake calls it for
@@ -11,7 +11,7 @@
 ;
 ; THE PASSES, and the rows each one runs and finishes:
 ;   P_INIT   the volume, SYSTEM\ and STIKAPPS\, ASSOC.DAT's program count
-;   P_MAN    every manifest file, summed as stored (116.2)  -> rows 0, 1
+;   P_MAN    every manifest file, summed as stored (118.2)  -> rows 0, 1
 ;   P_LEFT   KPAD.TMP, SYSTEM\APPDATA                       -> row 5
 ;   P_RET    the retired drivers, asked for by name
 ;   P_WALK   every folder, every *.O88                      -> rows 2, 3, 4
@@ -144,7 +144,7 @@ sc_goto:
     pop ax
     ret
 
-; sc_probe - is a file here? (SPEC.md 116.3: a zero-capacity read)
+; sc_probe - is a file here? (SPEC.md 118.3: a zero-capacity read)
 ; in:  SI = a NUL 8.3 name in the folder we stand in
 ; out: AL = 0 absent, 1 present, 2 unreadable; DX = its KB when present
 ;      (0 for an empty file); other registers kept
@@ -180,7 +180,7 @@ sc_p_init:
     call OSAPI_FILE_HERE            ; where we were, to go back to
     mov [sc_homedx], dx
     mov [sc_homebl], bl
-    mov bl, [sc_vol]                ; the drive the chooser gave us (116.13)
+    mov bl, [sc_vol]                ; the drive the chooser gave us (118.13)
     call OSAPI_VOL_SYS              ; ...and whether it is the boot one
     mov al, 0
     cmp bl, [sc_vol]
@@ -270,7 +270,7 @@ sc_p_init:
     jmp sc_nextpass
 
 ; =============================================================================
-; P_MAN - every manifest file, summed as stored (SPEC.md 116.2)
+; P_MAN - every manifest file, summed as stored (SPEC.md 118.2)
 ; sub 0: stand in its folder and start; 1: a chunk; 2: read the whole file
 ; for its expanded header (a packed driver whose sum did not match)
 ; =============================================================================
@@ -727,7 +727,7 @@ sc_p_left:
 
 ; =============================================================================
 ; P_RET - the retired drivers, by name: a package cannot LIST a hidden file
-; (SPEC.md 19.7.1), so the names are the only way to find one (116.2.2)
+; (SPEC.md 19.7.1), so the names are the only way to find one (118.2.2)
 ; =============================================================================
 sc_p_ret:
     xor dx, dx
@@ -890,7 +890,7 @@ sc_walkprog:
     jmp sc_setprog
 
 ; sc_chkpkg - one package's header, its name against the retired list, and
-;             the duplicate test (SPEC.md 116.1)
+;             the duplicate test (SPEC.md 118.1)
 sc_chkpkg:
     mov si, sc_fbuf
     mov bx, sc_buf
@@ -1454,7 +1454,7 @@ sc_setprog:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_addf - record a finding (SPEC.md 116.3)
+; sc_addf - record a finding (SPEC.md 118.3)
 ; in:  AL = check, AH = severity, BL = FL_* flags, SI = the reason (NUL),
 ;      DX = the folder it is in; the path is sc_cpath
 ; out: nothing; every register kept
@@ -1808,7 +1808,7 @@ sc_d_vmm:   db 'VMMOUSE.DRV', 0
 sc_d_usbm:  db 'USBMOUSE.DRV', 0
 sc_d_ems:   db 'EMS.DRV', 0
 
-; the reasons (SPEC.md 116.1) - each fits FR_RSNN - 1 = 45 characters
+; the reasons (SPEC.md 118.1) - each fits FR_RSNN - 1 = 45 characters
 sc_r_novol:    db 'the volume will not read', 0
 sc_r_unread:   db 'there, but it will not read', 0
 sc_r_kmiss:    db 'missing - this volume cannot boot', 0

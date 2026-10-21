@@ -1,6 +1,6 @@
 # System Check design mockups - the prompt
 
-These three mockups are the DESIGN for System Check (SPEC.md 116), made
+These three mockups are the DESIGN for System Check (SPEC.md 118), made
 before any code, as CLAUDE.md's "Treat artwork as source" asks. They are a
 guide to layout and look, not a runtime asset: nothing in `make` reads them.
 
@@ -11,7 +11,7 @@ guide to layout and look, not a runtime asset: nothing in `make` reads them.
   from the website's guide (`public/guide/shots/`).
 - `CODEX-PROMPTS.md` is what Codex itself then handed its image tool, one
   prompt per picture, kept verbatim.
-- Where the shipped window differs from a mockup, SPEC.md 116 says so and
+- Where the shipped window differs from a mockup, SPEC.md 118 says so and
   why (the "This System" card cannot name the RUNNING kernel's build, for
   one: no slot reports it, SPEC.md 57.3).
 

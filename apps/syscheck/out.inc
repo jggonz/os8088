@@ -1,13 +1,13 @@
 ; =============================================================================
-; os8088 - apps/syscheck/out.inc - the report and Clean Up (SPEC.md 116.7,
-;                                  116.8)
+; os8088 - apps/syscheck/out.inc - the report and Clean Up (SPEC.md 118.7,
+;                                  118.8)
 ;
 ; Both run on the UI task from a button, a key or the alert's completion,
 ; with the gfx lock held - W_ONCLICK's environment, which may call the file
 ; slots. The report is composed a line at a time in sc_txt with the same
 ; helpers the window uses, then appended to a transient claim and written in
 ; one OSAPI_FILE_WRITE. Clean Up removes only findings carrying FL_RM -
-; visible debris (116.8) - and rebuilds ASSOC.DAT when a finding asked for it.
+; visible debris (118.8) - and rebuilds ASSOC.DAT when a finding asked for it.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -300,7 +300,7 @@ sc_gohome:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_act_clean - Clean Up...: ask first (SPEC.md 116.8)
+; sc_act_clean - Clean Up...: ask first (SPEC.md 118.8)
 ; in:  SI = window; gfx lock held; keeps SI
 ; -----------------------------------------------------------------------------
 sc_act_clean:

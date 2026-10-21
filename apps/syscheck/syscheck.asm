@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/syscheck/syscheck.asm
 ;
-; SYSTEM CHECK (SPEC.md 116): is the installed system all one release? It
+; SYSTEM CHECK (SPEC.md 118): is the installed system all one release? It
 ; reads the volume the machine BOOTED from and reports what an in-place
 ; upgrade (SPEC.md 52.10.15) can leave broken or behind - programs and
 ; drivers built for another kernel, files a release retired or moved, the
@@ -10,14 +10,14 @@
 ; there. Nine checks, a lamp each, the findings of the selected one listed
 ; under them, and a report that names every finding.
 ;
-; THE SCAN RUNS IN WAKE SLICES ON THE UI TASK (SPEC.md 116.3, 74.1): it is
+; THE SCAN RUNS IN WAKE SLICES ON THE UI TASK (SPEC.md 118.3, 74.1): it is
 ; file work, and a worker may not touch a file (SPEC.md 20.6 rule 7). Each
 ; wake runs steps for at most one tick, draws only what those steps changed,
 ; and posts the next wake while work remains - so the desktop stays usable
 ; and Stop is honoured at the next step. REDLINE (SPEC.md 103) was the look;
 ; its scheduling, one blocking call under the gfx lock, was not.
 ;
-; "THIS RELEASE" IS THE ONE THIS PACKAGE WAS BUILT WITH (SPEC.md 116.1.1).
+; "THIS RELEASE" IS THE ONE THIS PACKAGE WAS BUILT WITH (SPEC.md 118.1.1).
 ; No slot reports the running kernel's build, so the manifest
 ; tools/os88sysman.py writes from the system disk's own inputs - and
 ; buildnum.inc's number - describe the release, and the install puts this
@@ -44,7 +44,7 @@
     dw 0xA3C5, 0xA185, 0xA005, 0xFFFF
     OS88_ICON16_END
 
-; --- the checks (SPEC.md 116.1), in row order --------------------------------
+; --- the checks (SPEC.md 118.1), in row order --------------------------------
 SC_KERN     equ 0                   ; Kernel and boot files
 SC_DRV      equ 1                   ; Drivers
 SC_PKG      equ 2                   ; Packages
@@ -60,7 +60,7 @@ SC_NCHK     equ 9
 SV_NOTE     equ 1                   ; information, never counted
 SV_WARN     equ 2                   ; stale, duplicated or wasted - works
 SV_BROKEN   equ 3                   ; something will refuse to work
-FL_RM       equ 1                   ; Clean Up may delete this file (116.8)
+FL_RM       equ 1                   ; Clean Up may delete this file (118.8)
 FL_ASSOC    equ 2                   ; Clean Up rebuilds ASSOC.DAT for this
 
 ; a lamp's states (ui.inc draws them)
@@ -83,7 +83,7 @@ SCF_STIK    equ 2
 DRV_VER     equ 11                  ; drivers/os88drv.inc - the ABI lock binds
 MOD_VER     equ 5                   ; kernel/mod.inc       it to PKG_FMT's era
 
-; --- the findings table (SPEC.md 116.3) ---------------------------------------
+; --- the findings table (SPEC.md 118.3) ---------------------------------------
 SC_MAXF     equ 96
 FR_CHK      equ 0                   ; byte: the check
 FR_SEV      equ 1                   ; byte: SV_*
@@ -139,7 +139,7 @@ sc_entry:
     mov dx, sc_onclick              ; a press that was not a button's
     call os88ui_btninit             ; keeps every register
     xchg ax, bx                     ; BX = the window again
-    call sc_volscan                 ; ASK which drive first (SPEC.md 116.13),
+    call sc_volscan                 ; ASK which drive first (SPEC.md 118.13),
     mov byte [sc_choose], 1         ; the hard disk already chosen
     clc
 sc_ret:
@@ -179,7 +179,7 @@ sc_onwake:
     ret
 
 ; sc_kick - post the next wake; a refused post is retried from the next
-;           callback (sc_owe), so a scan cannot strand (SPEC.md 116.3)
+;           callback (sc_owe), so a scan cannot strand (SPEC.md 118.3)
 sc_kick:
     push bx
     mov bx, [sc_win]
@@ -250,7 +250,7 @@ sc_repaint:
 
 ; -----------------------------------------------------------------------------
 ; sc_onkey - W_ONKEY: S scan/stop, D details, R report, Esc stop, Up/Down
-;            choose a check, PgUp/PgDn scroll its findings (SPEC.md 116.6)
+;            choose a check, PgUp/PgDn scroll its findings (SPEC.md 118.6)
 ; in:  AX = the key (AH scan code, AL character), SI = window, lock held
 ; -----------------------------------------------------------------------------
 sc_onkey:
@@ -421,9 +421,9 @@ sc_act_scan:
     je .ask
     jmp sc_choose_go                ; the chooser is up: check its drive
 .ask:
-    jmp sc_choose_open              ; otherwise ask again (SPEC.md 116.13)
+    jmp sc_choose_open              ; otherwise ask again (SPEC.md 118.13)
 
-; sc_act_details - the findings take the checks' room as well (116.4)
+; sc_act_details - the findings take the checks' room as well (118.4)
 sc_act_details:
     cmp byte [sc_choose], 0
     jne .out
@@ -531,7 +531,7 @@ sc_ab3:     db 'Is it all one release?', 0
 %include "syscheck/ui.inc"
 %include "syscheck/out.inc"
 %include "syscheck/choose.inc"
-%include "syscheck_man.inc"         ; the release manifest (SPEC.md 116.2)
+%include "syscheck_man.inc"         ; the release manifest (SPEC.md 118.2)
 %include "os88rseq.inc"
 
 %define DEC_U16
@@ -572,7 +572,7 @@ sc_ab3:     db 'Is it all one release?', 0
     OS88_ABYTE sc_depth             ; the walk's depth
     OS88_ABYTE sc_bpp               ; the display's bits per pixel
     OS88_ABYTE sc_compact           ; the short layout (CGA)
-    OS88_ABYTE sc_choose            ; the drive chooser is up (116.13)
+    OS88_ABYTE sc_choose            ; the drive chooser is up (118.13)
     OS88_ABYTE sc_isboot            ; the drive being checked is the boot one
     OS88_ABYTE sc_nflop             ; floppy drives, by int 11h
     OS88_ABYTE sc_nvol              ; the chooser's rows...
@@ -593,7 +593,7 @@ sc_ab3:     db 'Is it all one release?', 0
     OS88_AWORD sc_idx               ; the pass's index
     OS88_AWORD sc_mp                ; the manifest entry being read
     OS88_AWORD sc_mi                ; ...and its index
-    OS88_AWORD sc_s1                ; the sum (SPEC.md 116.2)
+    OS88_AWORD sc_s1                ; the sum (SPEC.md 118.2)
     OS88_AWORD sc_s2
     OS88_AWORD sc_offlo             ; ...and the bytes read so far
     OS88_AWORD sc_offhi

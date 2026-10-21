@@ -249,6 +249,22 @@ make covl       #   covl is the OVERLAY gate (§73.14); cword is the
                 #   application — Word 1.1a again, in C, in two segments
                 #   (§73.12). `make clean` SPARES build/cc
                 #   (clean-cc removes it) — it is a pinned upstream instrument
+make lemmings     # LEMMINGS (§116): Lemmings (DMA Design / Psygnosis, 1991)
+make lemmingsdisk #   as a C package - all 120 levels with Lemmix's ORIG
+make xt-lemmings  #   mechanics, VGA mode 0Dh / CGA / Hercules, the original's
+make 386-lemmings #   preview and postview in a second foreign mode. The 26
+                  #   data files (and the spray's PARTICLES.DAT) are FETCHED
+                  #   (`tools/getlemmings.py`, pinned SHA-256) and NEVER
+                  #   committed: `make lemmings` needs no fetched data - the
+                  #   package reads its bands at run time and its host checks
+                  #   run against the committed synthetic fixture - while
+                  #   `make lemmingsdisk` needs the fetch and writes four
+                  #   geometries (the 360KB
+                  #   one two graphic sets and 53 levels, LEVELS.TXT saying
+                  #   which). `xt-lemmings` is the 640KB VGA XT with the
+                  #   360KB disk in B: and `386-lemmings` the 386DX with the
+                  #   1.44MB one - machines to LOOK at; the XT's frame rate
+                  #   is MartyPC's (`tests/lemplaymarty.py`, §116.7.4)
 make paccman      # PACCMAN (§91), the C toolchain's FOURTH application:
 make paccmandisk  #   Andre Weissflog's arcade-faithful pacman.c (MIT, pinned
 make xt-paccman   #   at 0f5ec5a) as a second Pac-Man beside §89's assembly
@@ -689,7 +705,7 @@ controller, so no XT profile can host one),
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
 `xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`,
 `xt-pixel`, `386-pixel`, `xt-isotron`, `xt-isotron-cga`, `xt-isotron-herc`,
-`xt-isotron-ega`;
+`xt-isotron-ega`, `xt-lemmings`, `386-lemmings`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -734,7 +750,7 @@ section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-isotron`/`-cga`/`-herc`/`-ega` isoTron's (§108.15: copies of
 `xt-excitebike`, `xt-pixelstein`, `xt-pixelstein-herc` and `xt-ega` with
 `isotron360.img`; the EGA one is the only place its same-mode EGA bracket
-meets a real EGA) — the twenty-six that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
+meets a real EGA), and `xt-lemmings`/`386-lemmings` LEMMINGS' (§116.9: `vm/xt-weave` with `lemmings360.img`, `vm/386dx` with `lemmings.img`) — the twenty-eight that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
 and **`xt-weave-256` is the same 4.77MHz XT with 256KB** rather than 640,

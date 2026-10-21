@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/syscheck/choose.inc - the drive chooser (SPEC.md 116.13)
+; os8088 - apps/syscheck/choose.inc - the drive chooser (SPEC.md 118.13)
 ;
 ; System Check asks which drive to check before it reads anything. The
 ; chooser takes the room of the Checks and Findings cards: one row per volume

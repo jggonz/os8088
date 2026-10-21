@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/syscheck/ui.inc - layout and drawing (SPEC.md 116.4, 116.5)
+; os8088 - apps/syscheck/ui.inc - layout and drawing (SPEC.md 118.4, 118.5)
 ;
 ; sc_layout derives every rect from the window as it is (OSAPI_WM_GEOM) at
 ; each paint; sc_drawall draws it all once; sc_drawowed draws what the scan
@@ -68,7 +68,7 @@ SCG_FCOLS   equ 82                  ; a line's cells, the lamp's two included
 SCG_BTY     equ 84                  ; the button row's top
 SCG_STATX   equ 86                  ; the status text
 SCG_STATC   equ 88
-SCG_VY0     equ 90                  ; the chooser's first row (116.13)
+SCG_VY0     equ 90                  ; the chooser's first row (118.13)
 SCG_VFIT    equ 92                  ; ...and the rows it has room for
 SCG_SIZE    equ 94
 
@@ -94,7 +94,7 @@ sc_layout:
     mov ax, [sc_geo+SCG_CH]
     mov cx, 12                      ; the pitch: 12 on VGA's height, 10 on
     mov dl, 0                       ; Hercules', 9 and the short layout on
-    cmp ax, 380                     ; CGA's (SPEC.md 116.4)
+    cmp ax, 380                     ; CGA's (SPEC.md 118.4)
     jae .lp
     mov cx, 10
     cmp ax, 250
@@ -712,7 +712,7 @@ sc_drawheads:
     ret
 
 ; sc_drawsys - the This System card (the tall layout): what this package can
-;              know, which is not the running kernel's build (116.1.1)
+;              know, which is not the running kernel's build (118.1.1)
 sc_drawsys:
     mov ax, [sc_geo+SCG_SX1]
     or ax, ax
@@ -1097,7 +1097,7 @@ sc_rowlamp:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_lamp - one lamp, ONE OSAPI_GFX_BLIT1 (SPEC.md 116.5): a coloured square
+; sc_lamp - one lamp, ONE OSAPI_GFX_BLIT1 (SPEC.md 118.5): a coloured square
 ;           on 4bpp; on 1bpp, where every colour but white is black, a SHAPE
 ; in:  AL = LP_*, AH = 1 on a selected (black) row, CX = x, DX = y
 ; out: nothing; every register kept
@@ -1546,7 +1546,7 @@ sc_fscroll:
     pop si
     ret
 
-; --- the lamps (SPEC.md 116.5), eight rows each, in LP_* order -------------------
+; --- the lamps (SPEC.md 118.5), eight rows each, in LP_* order -------------------
 sc_lmono:                           ; 1bpp: SHAPE carries it (inverted on white)
     db 0xFE, 0x82, 0x82, 0x82, 0x82, 0x82, 0xFE, 0x00   ; not run: hollow
     db 0x40, 0x60, 0x70, 0x78, 0x70, 0x60, 0x40, 0x00   ; running: an arrow
@@ -1562,7 +1562,7 @@ sc_lcolsh:                          ; 4bpp: COLOUR carries it
 sc_lcol:    db CDGRAY, CBLUE, CGREEN, CBROWN, CRED
 sc_pat50:   db 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55
 
-; --- the rows' names (SPEC.md 116.1) -------------------------------------------
+; --- the rows' names (SPEC.md 118.1) -------------------------------------------
 sc_rnames:  dw sc_n0, sc_n1, sc_n2, sc_n3, sc_n4, sc_n5, sc_n6, sc_n7, sc_n8
 sc_n0:      db 'Kernel and boot files', 0
 sc_n1:      db 'Drivers', 0

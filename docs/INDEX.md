@@ -370,6 +370,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | GORILLAS | `apps/gorillas/gorillas.asm` | §99 | yes |
 | HELLO | `apps/hello/hello.asm` | §27 | no |
 | IMGTEST | `apps/imgtest/imgtest.asm` |  | no |
+| LEMMINGS | `apps/lemmings/lemmings.asm` | §116 | no |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` | yes |
 | MIDIRack | `apps/midirack/midirack.asm` | §105 | yes |
 | MINES | `apps/mines/mines.asm` | §23 | yes |
@@ -394,7 +395,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | SKIES | `apps/skies/skies.asm` | §88 | yes |
 | SOLITAIRE | `apps/solitaire/solitaire.asm` | §43 | yes |
 | Sticky Note | `apps/stiknote/stiknote.asm` | §110.13 | yes |
-| System Check | `apps/syscheck/syscheck.asm` | §116 | yes |
+| System Check | `apps/syscheck/syscheck.asm` | §118 | yes |
 | TAMEGRAM | `apps/tamegram/tamegram.asm` | §49 | yes |
 | TANK | `apps/tank/tank.asm` | §85 | yes |
 | TELNET | `apps/telnet/telnet.asm` | §70 | yes |
@@ -532,13 +533,14 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 113 | WIRECHAT — chat rooms on the wire (`apps/wirechat/wirechat.asm`) |
 | 114 | WireFleet — naval battles over a null modem (`apps/wirefleet/`) |
 | 115 | Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`) |
-| 116 | SYSCHECK — System Check, the installed system's health (`apps/syscheck/`) |
+| 116 | LEMMINGS — Lemmings (DMA Design, 1991), written in C (`apps/lemmings/`) |
+| 118 | SYSCHECK — System Check, the installed system's health (`apps/syscheck/`) |
 
 ## docs/
 
 **The DIRECTORY says what a document is, and the filename does not.** `docs/` describes how the system works today - instructions, contracts and maintained reference. Everything under `docs/plans/` is a design record: what was considered, including the options that were rejected, and it is never a description of what shipped - SPEC.md is the current state and these are how it got there. `docs/plans/completed/` is the subset whose work has landed; what stays directly in `docs/plans/` still has work open. `docs/history/` is superseded or closed - a record of a moment that has passed, and true of no tree you can check out. `docs/reports/` is a MEASUREMENT taken at a point in time: true of the tree it was taken on, quotable with its date and its box, and never to be read as a description of today.
 
-*How it works today - `docs/` (28):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DOS-DEBUGGING.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `HOW-SYSCHECK-WAS-BUILT.md`, `HOW-WIREFLEET-WAS-BUILT.md`, `IMAGER.md`, `KERNEL-MEMORY.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `README.md`, `REDLINE.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`, `README.md`, `CODEX-PROMPTS.md`, `PROMPT.md`
+*How it works today - `docs/` (30):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DOS-DEBUGGING.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `HOW-SYSCHECK-WAS-BUILT.md`, `HOW-WIREFLEET-WAS-BUILT.md`, `IMAGER.md`, `KERNEL-MEMORY.md`, `LEMMINGS-PORT-PLAN.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `README.md`, `REDLINE.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`, `README.md`, `lemband-format.md`, `CODEX-PROMPTS.md`, `PROMPT.md`
 
 *Plans with work still open - `docs/plans/` (59):* `ARTFUL-PERF-PLAN.md`, `ASSOC-FIND-PLAN.md`, `BUTTON-GESTURE-PLAN.md`, `CGA-SNOW-PLAN.md`, `CONTENT-COORDS-PLAN.md`, `DISK-CPU-PLAN.md`, `DOS-CABLE-NET-PLAN.md`, `DOS-EXEC-PLAN.md`, `EXCITEBIKE-PLAN.md`, `GORILLAS-PARITY-PLAN.md`, `HANDOFF-APPS-SHARED.md`, `HANDOFF-APPS-SIZE-P2.md`, `HANDOFF-STOP-DETECTION.md`, `HDD-RESIDENT-PLAN.md`, `HEAP-UNPIN-PLAN.md`, `HMA-PLAN.md`, `ICON-IDENTITY-PLAN.md`, `ISOTRON-PLAN.md`, `KERN-DOS-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LARGE-LZ4-PLAN.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LISTING-HOME-PLAN.md`, `LOADALL-PLAN.md`, `MARTYPC-PLAN.md`, `MODULE-SELFCONTAIN-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `NAV-COST-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `PATH-WAVE-PLAN.md`, `PIXEL-PLAN.md`, `PIXELSTEIN-PLAN.md`, `REDLINE-TUNE-PLAN.md`, `REGION-SELF-COMPACT-PLAN.md`, `ROM-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `SPEAKER-LEVELLER-NEXT.md`, `STICKY-APPS-NEXT.md`, `STREAM-WRITER-PLAN.md`, `SYSCHECK-PLAN.md`, `UI-MENU-ELEMENT.md`, `UI-TEXTFIELD-PLAN.md`, `VIDEO-386-PLAN.md`, `VIDEO-LATCH-PLAN.md`, `VIDEO-OVERAGE-PLAN.md`, `VIDEO-PAGES-PLAN.md`, `VIDEO-PALETTE-PLAN.md`, `VIDEO-PLAN.md`, `VIDEO-SEEN-PLAN.md`, `VIDEO-TICK-PLAN.md`, `VIDEO-XMS-PLAN.md`, `WIREFLEET-FACE-PLAN.md`, `WIREFLEET-PLAN.md`
 
