@@ -554,6 +554,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "LEMMINGS_O88": {
+  "sources": [
+   "apps/lemmings"
+  ],
+  "stamped": "b63b5892",
+  "strings": "2fd010e1297a645f",
+  "why": "first page: written from README.TXT and the launcher, play and results screens of the shipped build"
+ },
  "LICENSE": {
   "sources": [],
   "stamped": "e4576a70",
@@ -961,6 +969,14 @@
   "stamped": "d0d605c1",
   "strings": "c5eb21b124ad2c07",
   "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "SYSCHECK_O88": {
+  "sources": [
+   "apps/syscheck"
+  ],
+  "stamped": "b4d46a82",
+  "strings": "6c7bfd7a870376d8",
+  "why": "Section renumber 116 to 118 in source comments only; the page already describes the drive chooser and cites no section"
  },
  "SYSTEM": {
   "sources": [],

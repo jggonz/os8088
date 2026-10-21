@@ -1,0 +1,27 @@
+# fixture level 2, "the bombers": two hatches at x 380 and 420 released in the
+# ABBA order, a 32-pixel wall at x 300, the exit at x 40 on the far side of it,
+# fire at x 600 and the floor ending at x 640. FRAME VERB ARG as level0.txt.
+5 R 1           # faster than 99: clamped
+15 R -1         # slower than the level's own 99: clamped
+25 R 0
+200 S 5
+200 A 1         # a blocker short of the floor's end, from hatch B
+420 S 2
+420 A 5         # a climber up the wall, and down 64 the far side: SPLAT
+425 S 2
+425 A 6
+425 S 3
+425 A 6         # a climber that floats: down the far side and to the exit
+447 S 7
+447 A 9         # a basher into the wall, through 32 pixels of it
+455 S 9
+455 A 3         # a digger through the floor
+459 S 8
+459 A 4         # a miner, down and to the left
+471 S 4
+471 A 7         # a bomber
+475 S 6
+475 A 8         # a builder toward the wall
+500 P 0
+510 P 0         # ten paused frames
+900 N 0         # the nuke: one fuse a frame, release order

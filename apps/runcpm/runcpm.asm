@@ -73,8 +73,10 @@
                                     ; DIR or .COM load is an F_OPEN/F_SFIRST.
                                     ; Lazy would only move the read a quarter
                                     ; of a second later. The CCP rides in it
-                                    ; (below), so it is the only part, and the
-                                    ; carve is movable (crt0's cc_ovcarve)
+                                    ; (below), so it is the only part. The
+                                    ; carve is PINNED since SPEC.md 73.14.2.1
+                                    ; (114.6): crt0 declares no eager carve
+                                    ; movable any more
 %define CC_ICON "runcpm/icon.inc"   ; RunCPM.ico, 16x16 at 1bpp (SPEC.md 20.2,
                                     ; 74.5) - crt0 puts it at file offset 32
                                     ; and checks the length

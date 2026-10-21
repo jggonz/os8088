@@ -1217,6 +1217,130 @@ _os88_fsx_wait:
     sbb ax, ax                      ; CF -> 0 / -1
     ret
 %endif
+
+; The three the four above do not cover, added for LEMMINGS (SPEC.md 116):
+; the page flip, the owned rect and the bracket's keyboard read.
+
+; int os88_fsx_page(int page) - show one of the pages FSI_PAGES advertises
+; (SPEC.md 53.10). The write is latched at the next retrace and this waits for
+; it, so you may start drawing on another page the moment it returns. 0 = it
+; is on the glass, -1 = refused (no bracket, no mode set, or this mode has one
+; page).
+CC_GATE _os88_fsx_page
+%ifdef CC_U__os88_fsx_page
+_os88_fsx_page:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call OSAPI_FSX_PAGE
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+%endif
+
+; int os88_fsx_surf(struct os88_rect *r) - THE RECT YOUR BRACKET OWNS
+; (SPEC.md 53.7.1). 0 = filled, -1 = no bracket. The slot answers x, y, w, h;
+; the rect is INCLUSIVE like every other one in this header, so the width and
+; the height are turned into x2/y2 here and there is one convention in C.
+;
+; ASK RATHER THAN ASSUMING (0,0,w,h): a SAME-MODE bracket does not collapse
+; the desktop, so on a two-display machine the coordinate system is still the
+; whole virtual desktop and an app that hard-codes the origin draws on the
+; monitor it is not on. Every one-display machine, and every bracket that has
+; called os88_fsx_mode, answers (0,0,w-1,h-1) anyway.
+CC_GATE _os88_fsx_surf
+%ifdef CC_U__os88_fsx_surf
+_os88_fsx_surf:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    push si
+    call OSAPI_FSX_SURF
+    jc .no
+    mov si, [bp+4]
+    mov [si], ax                    ; x1
+    mov [si+2], bx                  ; y1
+    add cx, ax
+    dec cx
+    mov [si+4], cx                  ; x2, inclusive
+    add dx, bx
+    dec dx
+    mov [si+6], dx                  ; y2, inclusive
+    xor ax, ax
+    jmp short .out
+.no:
+    mov ax, -1
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+%endif
+
+; int os88_fsx_key(int wait) - READ THE KEYBOARD INSIDE THE BRACKET.
+; wait == 0 peeks and answers 0 when nothing is there; wait != 0 blocks. The
+; answer is (scan << 8) | ascii, which is int 16h's own AX.
+;
+; THERE IS NO SLOT AND THERE SHOULD NOT BE ONE. No event is dispatched inside
+; a bracket and the bracket's own contract is that "the app polls the keyboard
+; directly" (SPEC.md 53.1); apps/missile does exactly this in assembly.
+; os88_key_down cannot stand in for it either - it is a LEVEL poll, "advice,
+; not an oracle", and a program that assigns a skill on a TAP of F3 needs the
+; press.
+;
+; THE FALLBACK IS THE POINT. AH=11h/10h are the enhanced-keyboard peek and
+; read; AH=01/00 are the original pair, and they FILTER the 0x85/0x86 scan
+; codes - so F11 and F12, which are the original game's pause and nuke, are
+; unreachable through them. Which pair is used is decided by the BIOS's own
+; flag at 0040:0096 bit 4 rather than by trying AH=11h and hoping, because an
+; XT ROM that has never heard of function 11h returns whatever was in AX. So
+; F11/F12 work where the keyboard has them and are ABSENT on the 83-key XT,
+; which is a fact for SPEC.md 47's greying rather than a bug.
+CC_GATE _os88_fsx_key
+%ifdef CC_U__os88_fsx_key
+_os88_fsx_key:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    push es
+    mov bx, 0x0100                  ; BH = the peek call, BL = the read call:
+    mov ax, 0x40                    ; the ORIGINAL pair by default
+    mov es, ax
+    test byte [es:0x96], 0x10       ; ...the enhanced pair only where the BIOS
+    jz .std                         ; says it has them (bit 4 of the second
+    mov bx, 0x1110                  ; keyboard status byte)
+.std:
+    cmp word [bp+4], 0
+    jne .block
+    mov ah, bh                      ; peek: ZF=1 means the buffer is empty
+    int 0x16
+    jnz .take
+    xor ax, ax
+    jmp short .out
+.take:
+    mov ah, bl                      ; ...and only then take it out
+    int 0x16
+    jmp short .out
+.block:
+    mov ah, bl
+    int 0x16
+.out:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+%endif
 %endif
 
 ; =============================================================================
@@ -1765,6 +1889,7 @@ _os88_file_dlg:
     ret
 %endif
 %endif
+
 
 ; int os88_arg_file(char *name13, struct os88_place *p) - SPEC.md 54.5. The
 ; document this instance was launched to open, READ-AND-CLEAR: the first

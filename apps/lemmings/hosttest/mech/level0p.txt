@@ -1,0 +1,16 @@
+# fixture level 0 again, under THE PAUSE GLITCH (SPEC.md 116.4.7, R8 in
+# tools/lemsim.py): Lemmix TMechanic.PauseGlitch, Dos.Consts.pas:206-208. A
+# pause begun before frame 34 arms 34 - frame clock frames that the clock then
+# spends standing still once play resumes (Game.pas BtnPause :3941-3958,
+# IncrementIteration :3502-3506). Paused at 10 and resumed at 20, with nine
+# frames run: the clock then stands still for 25 frames, so TIME reads 5:00
+# until frame 52 of the trace where it would have turned at frame 27 - which
+# is what shows the glitch bites. The second pause, past frame 34, arms
+# nothing.
+# FRAME VERB ARG as level0.txt says.
+10 P 0
+20 P 0
+100 S 2
+100 A 0         # a climber, so the level runs as level0 does
+400 P 0
+420 P 0         # a pause past frame 34: no glitch the second time
