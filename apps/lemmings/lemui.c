@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemui.c   (#included by lemmings.c)
  *
- * THE LAUNCHER, RESIDENT HALF (SPEC.md 114): the layout, the hit test, the
+ * THE LAUNCHER, RESIDENT HALF (SPEC.md 116): the layout, the hit test, the
  * shadow and the damage-only repaint. Everything here runs on a KEYSTROKE or a
  * CLICK, which is why it is resident and why lemovl.c's chrome, formatting,
  * About card and greying facts are not (SPEC.md 73.14: split by FREQUENCY).
@@ -23,7 +23,7 @@
  * 64x20 box is what a screen of text costs whoever draws it. The row-at-a-time
  * shape is deliberate: a second full-screen compose buffer would be another
  * 2,560 bytes of a budget that is 81% spent before this file starts (SPEC.md
- * 114.6).
+ * 116.6).
  *
  * ONE DECISION PER CELL, ONE CALL PER RUN (PERFORMANCE.md, LESSONS.md 6). Every
  * cell is drawn by os88_font_run(), which puts the paper and the glyph down in
@@ -31,7 +31,7 @@
  * pixels twice with a visible gap between the passes on the target machine.
  *
  * ATTRIBUTION: no derived material is in this file. The wording it draws comes
- * out of LEMSTR.LEM (SPEC.md 114.3); Lemmings is (C) 1991 DMA Design / Psygnosis
+ * out of LEMSTR.LEM (SPEC.md 116.3); Lemmings is (C) 1991 DMA Design / Psygnosis
  * and README.TXT carries the full attribution.
  * ==========================================================================*/
 
@@ -271,7 +271,7 @@ static void lem_mark_level(int lvl)
  * THE SETTLE PATH USED TO MARK THESE ROWS WHOLE and that was the same defect
  * lem_mark_cols was built for, one size up: seven rows at lem_cols = 63 is 441
  * columns scanned for ~140 cells that all live in the 27-column pane, so 252 of
- * them - 76-113 ms at the ~300-450 us a column measured in SPEC.md 114.7.1 - are
+ * them - 76-113 ms at the ~300-450 us a column measured in SPEC.md 116.7.1 - are
  * spent re-scanning a list half that is already right on the glass. It IS
  * already right: lem_pv_defer() composes and flushes the level rows on the
  * keystroke with lem_pv_hold set, and the rows it does not mark are rows whose
@@ -458,7 +458,7 @@ static void lem_layout(void *win)
      * it: input overrun, the third defect an emulator cannot show you.
      *
      * A page costs the same ~260 ms ONCE per lem_nlist keys instead, and the
-     * ordinary keystroke stays what SPEC.md 114.6's table says it is - two level
+     * ordinary keystroke stays what SPEC.md 116.6's table says it is - two level
      * rows. There is no fidelity cost: the original has no level list at all
      * (it is a code entry and a preview screen), so nothing here is copied from
      * it and the cheaper of two honest behaviours wins. The selection lands on
@@ -542,7 +542,7 @@ static void lem_row_level(int row)
  * GameScreen.Preview.pas GetScreenLinesAndColors, Base.Strings.pas:411-418),
  * formatted in the overlay because formatting is not on a keystroke's critical
  * path in any sense that matters here and the resident half is the budget
- * (SPEC.md 114.6). The module is a PART, resident from launch (SPEC.md
+ * (SPEC.md 116.6). The module is a PART, resident from launch (SPEC.md
  * 73.14.2), so this cannot refuse. */
 static void lem_pvline(int line, char *dst, unsigned cap)
 {
@@ -569,19 +569,19 @@ static int lem_state_grey(int row)
 {
     if (row == LEM_ROW_MODE)
         return !lem_mode_ok || !lem_kbd101();   /* the row's second line,
-                                                 * SPEC.md 114.8 */
+                                                 * SPEC.md 116.8 */
     if (row == LEM_ROW_SAVE)
         return !lem_savable;
     return 1;                       /* Music and Level Code on every machine:
                                      * what greys them is a fact about the DATA
-                                     * (SPEC.md 114.8), not about this hardware */
+                                     * (SPEC.md 116.8), not about this hardware */
 }
 
 /* lem_modeval - the Mode row's VALUE: the adapter this window is on and the
  * mode the game will play in on it. It is the one place this program letters
  * words of its own rather than the band's, because these are numbers about THIS
  * BUILD and this machine rather than anything of the original's - and they are
- * short on purpose (SPEC.md 114.6's image is the budget). */
+ * short on purpose (SPEC.md 116.6's image is the budget). */
 static const char lem_ad_vga[]  = "VGA";
 static const char lem_ad_herc[] = "Hercules";
 static const char lem_ad_cga[]  = "CGA";
@@ -1149,7 +1149,7 @@ static int lem_blank_glass(void *win)
 
 /* lem_set_fact - CHOOSE the fact screen and draw nothing: 1 = it is chosen.
  * ovl_leave() calls it inside the bracket, and the fsx exit's kernel paint
- * then draws it once (SPEC.md 114.4.6's "leave the bracket" row). */
+ * then draws it once (SPEC.md 116.4.6's "leave the bracket" row). */
 static int lem_set_fact(int labelid, int strid, int level)
 {
     if (strid == LEMS_NONE)
@@ -1179,7 +1179,7 @@ static void lem_back(void *win)
 }
 
 /* lem_play - what the Play control does: THE LAUNCH, and the level's preview
- * is the first screen inside the bracket (wave 5, SPEC.md 114.4.3) - drawn in
+ * is the first screen inside the bracket (wave 5, SPEC.md 116.4.3) - drawn in
  * the second foreign mode each adapter has for the original's 640x350 layout,
  * in MAIN.DAT's own purple font over its own brown tile, with the level's
  * picture over it. Waves 1-4 drew the preview's text IN THE WINDOW here, and
@@ -1188,7 +1188,7 @@ static void lem_back(void *win)
  *
  * Everything that can REFUSE a launch is said IN A WINDOW (ovl_launch), because
  * once the bracket owns the screen nothing can be said at all (SPEC.md
- * 114.5); a greyed row's Play is its fact, as a click on the row is. */
+ * 116.5); a greyed row's Play is its fact, as a click on the row is. */
 static void lem_play(void *win)
 {
     if (!lem_play_ok()) {
@@ -1199,7 +1199,7 @@ static void lem_play(void *win)
     }
     /* NOTHING IS RECORDED HERE, AND SOMETHING USED TO BE. This keystroke merely
      * OPENS the preview screen; in the original an access code is issued on
-     * COMPLETING a level, and SPEC.md 114.8's Save Progress cell says of the
+     * COMPLETING a level, and SPEC.md 116.8's Save Progress cell says of the
      * refusing case that "the session is played and the result is shown, and
      * nothing is recorded" - i.e. recording belongs to the RESULT. Advancing
      * lem_prog[] on Play credited a level that had not been played: the glass
@@ -1207,7 +1207,7 @@ static void lem_play(void *win)
      * gameplay in it at all.
      *
      * The owner is the POSTVIEW's success path (wave 4's progress work, which
-     * SPEC.md 114.8 names). Until there is a result to record, Save Progress
+     * SPEC.md 116.8 names). Until there is a result to record, Save Progress
      * reads what the file said and nothing moves it. lem_pw_rat / lem_pw_lvl /
      * lem_progwrite and os88_onwake()'s deferred ovl_progress_write() stay
      * exactly as they are - the write is still owed to the one lock-free

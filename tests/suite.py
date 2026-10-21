@@ -1323,7 +1323,7 @@ FAST = [
         "either one runs",
         needs=()),
     Row("lemdat", "fast", py("tests/unit/t_lemdat.py"), 0.6,
-        "SPEC.md 114.2's standing check, and it is a SECOND READER rather "
+        "SPEC.md 116.2's standing check, and it is a SECOND READER rather "
         "than a repeat of the first: the 26 DOS Lemmings data files decoded "
         "again from Lemmings.ts's semantics - its container walk, its bit "
         "reader's RUNNING checksum, which is a stronger reading than an XOR "
@@ -4713,7 +4713,7 @@ SOAK = [
         needs=("marty", "cc"), serial=True,
         wants=("build/cword360.img", "build/CWORD.OVL")),
     Row("lemmings", "soak", py("tests/lemmings.py"), 100.0,
-        "SPEC.md 114.12's boot-and-screendump row: LEMMINGS from the Disk "
+        "SPEC.md 116.12's boot-and-screendump row: LEMMINGS from the Disk "
         "window by NAME, Play on Fun 1 into the bracket - the preview in "
         "mode 12h (told from the desktop by its black top margin, not by its "
         "size, which they share), the level in 0Dh - and then wave 6's "

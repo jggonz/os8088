@@ -1,4 +1,4 @@
-# fixture level 0 again, under THE PAUSE GLITCH (SPEC.md 114.4.7, R8 in
+# fixture level 0 again, under THE PAUSE GLITCH (SPEC.md 116.4.7, R8 in
 # tools/lemsim.py): Lemmix TMechanic.PauseGlitch, Dos.Consts.pas:206-208. A
 # pause begun before frame 34 arms 34 - frame clock frames that the clock then
 # spends standing still once play resumes (Game.pas BtnPause :3941-3958,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tests/lemplaymarty.py - LEMMINGS PLAYED on a 4.77 MHz 8088 (SPEC.md 114.7).
+"""tests/lemplaymarty.py - LEMMINGS PLAYED on a 4.77 MHz 8088 (SPEC.md 116.7).
 
     make lemmingsdisk && python3 tests/lemplaymarty.py
     python3 tests/lemplaymarty.py --machine os8088_xt_hdd   # the CGA arm
@@ -12,7 +12,7 @@ figures are the game's and not a bench's:
 
   * the launch's int 13h CALLS (the level read before the bracket) and the
     in-bracket NEXT-LEVEL read's - a retry from the postview, which re-reads
-    the level inside the bracket (SPEC.md 114.4.3.1). MartyPC is
+    the level inside the bracket (SPEC.md 116.4.3.1). MartyPC is
     cycle-accurate and NOT disk-accurate (tools/os88marty.py), so the CALL
     count is exact and the time is not: priced at PERFORMANCE.md's ~400 ms a
     call instead;
@@ -25,7 +25,7 @@ figures are the game's and not a bench's:
     of the play loop: a pass that changed nothing returns from
     ovl_tick_draw before the present and is not counted, so one interval can
     span several passes (wave 6's review; the printed labels below still say
-    "pass" and SPEC.md 114.7.4 / PERFORMANCE.md Set 161 name the rows
+    "pass" and SPEC.md 116.7.4 / PERFORMANCE.md Set 161 name the rows
     "between two glass updates") - and on the CGA the same WHILE SCROLLING
     (an arrow held);
   * MODULE CROSSINGS a frame (hits on crt0's `cc_ovthunk`, the one door every
@@ -36,7 +36,7 @@ figures are the game's and not a bench's:
 
 IT IS NOT A GATE AND IT IS NOT IN THE SUITE, for tests/lembenchmarty.py's
 reason: it is minutes of emulator and what it produces is a table for
-PERFORMANCE.md Set 161 and SPEC.md 114.7. Breakpoint stops cost host time and
+PERFORMANCE.md Set 161 and SPEC.md 116.7. Breakpoint stops cost host time and
 no guest cycles, so counting by breakpoint prices nothing it counts.
 
 THE LEVEL IS CHOSEN BY WRITING `_lem_sel` before Enter, which is the
@@ -90,7 +90,7 @@ def lemmap():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
-    # THE 360KB DISK CARRIES TWO GRAPHIC SETS AND 53 LEVELS (SPEC.md 114.9),
+    # THE 360KB DISK CARRIES TWO GRAPHIC SETS AND 53 LEVELS (SPEC.md 116.9),
     # and Fun 1 is a Dirt level it does not carry - Enter on it is the
     # missing-files fact, not a launch. Fun 2 (10 lemmings) and Fun 9 (80 at
     # release rate 99) are both Squasher/Pillar levels it does.

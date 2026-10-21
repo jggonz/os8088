@@ -175,7 +175,7 @@ int  os88_fullscreen(void *win, int enter);
 int  os88_fsx_page(int page);
 int  os88_fsx_surf(struct os88_rect *r);
 
-/* THE RASTER (SPEC.md 114.4). These are the entries apps/lemmings/lemblit.inc,
+/* THE RASTER (SPEC.md 116.4). These are the entries apps/lemmings/lemblit.inc,
  * lemmask.inc and lemfont.inc define in assembly; the harness defines the same
  * names over a byte-per-pixel model in hosttest/lemraster.c, so a shim added
  * without a stub beside it is a LINK error here rather than three steps later

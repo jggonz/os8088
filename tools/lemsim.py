@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""lemsim: the LEMMINGS mechanics, a second time, in Python (SPEC.md 114.12).
+"""lemsim: the LEMMINGS mechanics, a second time, in Python (SPEC.md 116.12).
 
     python3 tools/lemsim.py --fixture DIR --level N --script FILE \\
                             --frames 2000 -o TRACE
@@ -9,7 +9,7 @@ apps/lemmings/lemact.c, lemgame.c and lemobj.c is transliterated from Lemmix
 (Eric Langedijk, under Lemmix's own licence - zlib-style with an added clause)
 src/Game.pas; this file is written from lemmings_3ds
 (public domain) src/lemming.c - its structure, its handlers, its object map -
-and then held to the rulings SPEC.md 114.4.7 takes where the two references
+and then held to the rulings SPEC.md 116.4.7 takes where the two references
 DISAGREE, each one named at the line that applies it. So a transcription slip
 on either side - a sign, an off-by-one, a probe one row out - is a DIVERGENCE
 the harness prints, frame and lemming and field, and the build stops; and a
@@ -58,7 +58,7 @@ own ORIG mechanics set and 3ds says "really?" at three of these):
 What this file does NOT model, because the harness drives the mechanics only:
 the sound, the panel and every
 pixel of the picture. The terrain is the MASK, composed from the fixture's
-record the way SPEC.md 114.7.1's composer does it.
+record the way SPEC.md 116.7.1's composer does it.
 
 ATTRIBUTION. Lemmings is (C) 1991 DMA Design / Psygnosis. lemmings_3ds is
 public domain (its LICENCE.txt), Lemmix is under its own Licence.txt (zlib's
@@ -175,7 +175,7 @@ class Game:
         self.lems = []
         self.hitlast = None                    # fLastNonPrioritizedLemming
 
-    # --- the terrain: SPEC.md 114.7.1's composer, the mask half ------------
+    # --- the terrain: SPEC.md 116.7.1's composer, the mask half ------------
     def compose(self, rec):
         gr = self.fx.gr
         for i in range(400):

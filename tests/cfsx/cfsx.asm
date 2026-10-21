@@ -2,7 +2,7 @@
 ; os8088 - tests/cfsx/cfsx.asm
 ;
 ; The assembly shim of the C EXCLUSIVE-BRACKET capability gate (SPEC.md 53,
-; reached from C per SPEC.md 114.2). Same four jobs as every other shim - name
+; reached from C per SPEC.md 116.2). Same four jobs as every other shim - name
 ; the package, declare the callbacks, include the runtime and then the
 ; compiled C, close the image - plus the two %defines this gate exists for and
 ; the one file of hand-written drawing.
@@ -15,7 +15,7 @@
 ;
 ; CC_HAS_OVL is tests/covl's mechanism, here for a reason that gate could not
 ; test: the module is far-called from INSIDE the bracket, which is the case
-; SPEC.md 114.5 is a rule about.
+; SPEC.md 116.5 is a rule about.
 ; =============================================================================
 
 %define CC_PKG_NAME 'CFSX'          ; <= 15 chars, and the stem of CFSX.OVL:

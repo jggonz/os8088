@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/lemmings/lemmings.asm
 ;
-; The assembly shim of LEMMINGS (SPEC.md 114) - Lemmings (DMA Design /
+; The assembly shim of LEMMINGS (SPEC.md 116) - Lemmings (DMA Design /
 ; Psygnosis, 1991, the DOS release) reimplemented as an os8088 C package. It is
 ; the top-level nasm source: apps/lemmings/lemmings.c is never assembled on its
 ; own, because `nasm -f bin` has no notion of an external symbol, so the
@@ -17,9 +17,9 @@
 ;
 ; ATTRIBUTION. Lemmings is (C) 1991 DMA Design / Psygnosis. Nothing in this
 ; file is derived from the original; the derived tables, strings and offsets
-; are in the converted band files (SPEC.md 114.2, 114.3) and in the .c files that
+; are in the converted band files (SPEC.md 116.2, 116.3) and in the .c files that
 ; read them, each naming its source at the line that carries it. The full
-; attribution list is in README.TXT beside the package (SPEC.md 114.2).
+; attribution list is in README.TXT beside the package (SPEC.md 116.2).
 ; =============================================================================
 
 ; --- os88ui.inc's FEATURE DEFINES, AND THEY BELONG AT THE TOP -----------------
@@ -30,7 +30,7 @@
 ; (SPEC.md 13.10.7.4, apps/weave/weave.asm's header says it at length).
 %define OS88UI_ABFIT                ; ...whose pitch steps DOWN to fit the
                                     ; content box: the card is TWELVE rows
-                                    ; (wave 5, SPEC.md 114.1), 158 pixels at
+                                    ; (wave 5, SPEC.md 116.1), 158 pixels at
                                     ; the standard pitch of 12 against a
                                     ; CGA's 137, and 134 at 10. TameGram's
                                     ; opt-in (apps/os88ui.inc)
@@ -44,7 +44,7 @@
                                     ; so os88ui's button drawer and its arm word
                                     ; would be bytes with no caller - and this
                                     ; package's resident budget is 81% spent
-                                    ; before it starts (SPEC.md 114.6)
+                                    ; before it starts (SPEC.md 116.6)
 
 %define CC_PKG_NAME 'LEMMINGS'      ; <= 15 chars: the package's own name in the
                                     ; header. The overlay is a PART of this
@@ -100,7 +100,7 @@
                                     ; anyway, because os88_menu_set() is the
                                     ; slot that patches the trampoline in
 %define CC_HAS_ABOUT                ; void os88_about(void *)
-%define CC_HAS_FSX                  ; the bracket's thunks (SPEC.md 53, 114.5):
+%define CC_HAS_FSX                  ; the bracket's thunks (SPEC.md 53, 116.5):
                                     ; os88_fsx_caps() asked with OUR window is
                                     ; the predicate that greys the Mode row AND
                                     ; the bit os88_fsx_mode() would refuse on,
@@ -110,7 +110,7 @@
                                     ; C's own use set (SPEC.md 73.9.1) trims
                                     ; the thunks to the ones it names
 %define CC_HAS_OVL                  ; ...and the overlay (SPEC.md 73.14,
-                                    ; 114.6). The split is from wave 1 rather
+                                    ; 116.6). The split is from wave 1 rather
                                     ; than from the wave the ceiling binds in:
                                     ; at cword's MEASURED 5.7 bytes a line this
                                     ; program does not fit one segment and
@@ -126,13 +126,13 @@
                                     ; the folder is one row shorter. Every
                                     ; ovl_ call from inside the bracket finds
                                     ; it resident, which the bracket requires
-                                    ; (SPEC.md 114.5)
+                                    ; (SPEC.md 116.5)
 
 %ifdef CC_OVL_LAZY                  ; THE PART HAS TO STAY EAGER, and this is
                                     ; the last line a define can precede crt0
                                     ; at, so nothing above slips past it. About
                                     ; eighty
-%fatal "LEMMINGS: its void ovl_ functions require the EAGER part (SPEC.md 114.6)"
+%fatal "LEMMINGS: its void ovl_ functions require the EAGER part (SPEC.md 116.6)"
 %endif                              ; ovl_ functions are `void` - ovl_tick_draw,
                                     ; ovl_frame_end, ovl_mm_clear among them,
                                     ; called inside the bracket - which breaks
@@ -161,7 +161,7 @@
 ; forward-resolve.
 %include "os88ui.inc"
 
-; --- THE RASTER (SPEC.md 114.4), and it is hand-written for two reasons -------
+; --- THE RASTER (SPEC.md 116.4), and it is hand-written for two reasons -------
 ; Inside SPEC.md 53's bracket every kernel drawing slot is REFUSED, so the only
 ; way to put a pixel on the glass is a write into the framebuffer segment the
 ; FSI block names and a word with the card's own registers - and C can do
@@ -178,7 +178,7 @@
 %include "lemmings/lemblit.inc"     ; the three backends
 %include "lemmings/lemfont.inc"     ; text in a foreign mode (SPEC.md 85.7)
 %include "lemmings/lemsprite.inc"   ; sprites, objects, the background, the
-                                    ; pointer (SPEC.md 114.4.6)
+                                    ; pointer (SPEC.md 116.4.6)
 
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end -
                                     ; the three forward references the header

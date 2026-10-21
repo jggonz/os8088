@@ -2,7 +2,7 @@
  * os8088 - apps/lemmings/lemovl.c   (#included by lemmings.c)
  *
  * EVERYTHING ovl_*, WHICH IS EVERYTHING IN THE OVERLAY PART (SPEC.md 73.14.2,
- * 114.6).
+ * 116.6).
  *
  * A function whose name begins with `ovl_` has its CODE emitted into a second
  * segment that ships INSIDE the package as part 0 and is far-called both
@@ -32,11 +32,11 @@
  * crosses into the resident raster through cc_ovthunk two or three times a
  * lemming (lem_anim_at, lem_r_sprite, and lem_mask_at + lem_r_sprite for a
  * fuse) and five or six times a rectangle - a cost nobody has measured yet,
- * which is why SPEC.md 114.7 names "module-to-resident crossings per frame"
+ * which is why SPEC.md 116.7 names "module-to-resident crossings per frame"
  * among the counters the final MartyPC pass reports. The once-a-level split
  * was from wave 1 rather than from the wave the ceiling binds in: at cword's
  * MEASURED 5.7 bytes a line of resident C this program does not fit one
- * segment and never could (SPEC.md 114.6).
+ * segment and never could (SPEC.md 116.6).
  *
  * THE MODULE IS A PART AND AN EAGER ONE (CC_OVL_PART, SPEC.md 73.14.2): it is
  * read with LEMMINGS.O88 at launch and bound before os88_main() runs, so no
@@ -49,7 +49,7 @@
  *
  * ATTRIBUTION. The preview wording, the level names and the greying sentences
  * this file assembles are the original's own strings and the converter's own
- * prose, read out of LEMSTR.LEM (SPEC.md 114.3). Lemmings is (C) 1991 DMA Design
+ * prose, read out of LEMSTR.LEM (SPEC.md 116.3). Lemmings is (C) 1991 DMA Design
  * / Psygnosis; the layout of the preview screen is Lemmix
  * GameScreen.Preview.pas GetScreenLinesAndColors and its wording
  * Base.Strings.pas:411-418. README.TXT carries the full list.
@@ -135,7 +135,7 @@ static void ovl_fmt(int line, int level, char *dst, unsigned cap)
         /* A SPECIAL LEVEL HAS NO TERRAIN GRAPHIC SET: its terrain is the
          * 960x160 picture and the set lends only the objects, so the row
          * that carries the set (the stated divergence from Lemmix's style
-         * pack description, SPEC.md 114.1) would say something false there
+         * pack description, SPEC.md 116.1) would say something false there
          * - and is left out, rather than given a name of the port's own
          * (wave 4 review) */
         if (lem_ent_u8(level, LEM_E_SPECIAL) != 0xFF)
@@ -151,7 +151,7 @@ static void ovl_fmt(int line, int level, char *dst, unsigned cap)
  * version cut it mid-word ("...the bomb s", wave 4's verifier). A line that
  * does not fit is ELIDED - cut three cells short and closed with three full
  * stops, which is how this launcher already spells an ellipsis ("Level
- * Code...", SPEC.md 114's state rows; latin-1 and the OS face have no ellipsis
+ * Code...", SPEC.md 116's state rows; latin-1 and the OS face have no ellipsis
  * character). The original has no pane and so no rule of its own here; the
  * whole name is on the preview SCREEN, inside the bracket, where the 40-column
  * surface holds every title of the 120 (the longest, "Level 15 Don't let your
@@ -176,7 +176,7 @@ static void ovl_pvline(int line, int level, char *dst, unsigned cap, int cols)
  * WAVE 1 DRAWS IT IN THE WINDOW, in the kernel's own face. Wave 5 draws this
  * same content inside SPEC.md 53's bracket, in the second foreign mode each
  * adapter needs to hold the original's 640x350 surface, lettered in MAIN.DAT's
- * own 16x16 purple font over its own brown background (SPEC.md 114.4.3) - the
+ * own 16x16 purple font over its own brown background (SPEC.md 116.4.3) - the
  * CONTENT and the transition are here from wave 1 and only the surface changes.
  *
  * The layout is the original's: line 0 is the level's number and name and is
@@ -333,10 +333,10 @@ static int ovl_greyfact(int labelid, int strid, int level)
         ovl_para_fmt(lem_str(strid));
 
     /* ...AND A ROW THAT IS GREYED FOR MORE THAN ONE REASON SAYS EVERY ONE
-     * (SPEC.md 114.8, wave 5). The Mode row carries three: the 320x200x16
+     * (SPEC.md 116.8, wave 5). The Mode row carries three: the 320x200x16
      * mode, the CGA/EGA screens' layout (the CGA640 surface holds 12 of the
      * original's 22 rows), and an 83-key keyboard's missing F11, F12 and Pause
-     * - "the Mode row's second line" in SPEC.md 114.8's table. The Music row
+     * - "the Mode row's second line" in SPEC.md 116.8's table. The Music row
      * carries the speaker's own when os88_snd_caps() answered none. Each is
      * shown only where it is TRUE of this machine (SPEC.md 47: a fact, never
      * a guess) - which is lem_state_grey's own predicate, so a row the reader
@@ -368,7 +368,7 @@ static void ovl_grey_more(int head, int on, int strid)
     ovl_para_add(lem_str(strid));
 }
 
-/* --- the About card (SPEC.md 12.2, 20.5.1.1, 114.1's last row) --------------
+/* --- the About card (SPEC.md 12.2, 20.5.1.1, 116.1's last row) --------------
  * TWELVE ROWS, AND TWELVE IS THE CEILING: it is a 640x200 number (LESSONS.md
  * 8 - a 19-row card put its OK button on the DESKTOP on CGA and Hercules). This
  * card is apps/os88ui.inc's standard one, measured from its lines and clamped
@@ -392,7 +392,7 @@ static void ovl_grey_more(int head, int on, int strid)
  *  11  See README.TXT for the full credits.
  *
  * AND NOTHING ABOUT HOW THE BUILD RENDERS: the frame rate goes to
- * PERFORMANCE.md and SPEC.md 114.7, the synthesised tones to the greyed Music
+ * PERFORMANCE.md and SPEC.md 116.7, the synthesised tones to the greyed Music
  * row and to README.TXT (LESSONS.md 8).
  *
  * The lines array is RESIDENT (only code moves to the module) and is filled
@@ -433,7 +433,7 @@ static void ovl_about(void *win)
     os88_about_card(win, lem_ab);
 }
 
-/* --- progress (SPEC.md 19.9, 114.9) -----------------------------------------
+/* --- progress (SPEC.md 19.9, 116.9) -----------------------------------------
  * SYSTEM/APPDATA/LEMMINGS.SAV, reached by SPEC.md 19.9's bank / GOTO / act /
  * come-back, which is apps/weave/wstate.c's worked example. The instance's
  * current directory is where every unqualified name it passes the file API
@@ -584,7 +584,7 @@ static int ovl_progress_write(int rating, int level)
 }
 
 /* ============================================================================
- * WAVE 2: ovl_compose - THE TERRAIN LIST, ONCE PER LEVEL (SPEC.md 114.4)
+ * WAVE 2: ovl_compose - THE TERRAIN LIST, ONCE PER LEVEL (SPEC.md 116.4)
  *
  * IT IS IN THE MODULE BECAUSE IT RUNS ONCE PER LEVEL AND NEVER DURING PLAY,
  * which is SPEC.md 73.14's split by FREQUENCY exactly. It is also the largest
@@ -594,7 +594,7 @@ static int ovl_progress_write(int rating, int level)
  *
  * IT IS CALLED FROM INSIDE THE BRACKET, and that is safe for one reason and
  * one only: the module was forced RESIDENT before the bracket was entered
- * (lem_play, SPEC.md 114.5). cc_ovneed toasts its own refusal, and a kernel
+ * (lem_play, SPEC.md 116.5). cc_ovneed toasts its own refusal, and a kernel
  * toast paints DESKTOP geometry into a foreign mode - so the load may not
  * happen in here, and once the module is in, cc_ovneed is a four-byte no-op
  * that cannot reach that path.
@@ -611,12 +611,12 @@ static int ovl_progress_write(int rating, int level)
  * ATTRIBUTION. The record layout is lemmings_3ds/doc/data/
  * lemmings_lvl_file_format.txt's; the three rulings this walk makes where the
  * readers disagree - skip a 0xFFFF slot rather than break, the 12-bit x mask,
- * the y boundary at 0x100 - are SPEC.md 114.3.1's, measured over all 120 levels
+ * the y boundary at 0x100 - are SPEC.md 116.3.1's, measured over all 120 levels
  * in lemtool/REPORT.md. Lemmings is (C) 1991 DMA Design / Psygnosis.
  * ==========================================================================*/
 
 /* ovl_spec_compose - a VGASPEC picture into the world, then its level's style
- * bank over it (wave 4, SPEC.md 114.3.1's VGASPEC row).
+ * bank over it (wave 4, SPEC.md 116.3.1's VGASPEC row).
  *
  * THE PICTURE IS PIECES (docs/lemband-format.md's LEMSP version 2), each a
  * terrain piece in all but name, so it goes through lem_r_wpiece - the same
@@ -715,13 +715,13 @@ static int ovl_compose(int level)
         return 0;
     base = (unsigned)lem_ent_u8(level, LEM_E_RAWSECT) * LEM_LVL_SIZE;
 
-    /* THE WORLD IN RAM (SPEC.md 114.7.2's composer rows): on VGA the T
+    /* THE WORLD IN RAM (SPEC.md 116.7.2's composer rows): on VGA the T
      * claim's three colour planes and the mask as plane 3, on the two shadow
      * backends the mask alone - one routine, one pass a piece. */
     lem_r_wsetup(lem_kind_id() == LEM_RKIND_VGA ? lem_cl_t : 0, lem_cl_mask);
 
     /* A SPECIAL LEVEL HAS NO TERRAIN LIST (measured over all four, SPEC.md
-     * 114.3.1) and its picture is in the bank claim, so the list's slots
+     * 116.3.1) and its picture is in the bank claim, so the list's slots
      * would index a picture as a piece table: it composes the picture and
      * then reads its ground set's bank over it, for the objects */
     if (lem_ent_u8(level, LEM_E_SPECIAL) != 0xFF) {
@@ -738,7 +738,7 @@ static int ovl_compose(int level)
         slot = LEM_LVL_TERR + 4 * i;
         b0 = ovl_pk(lem_cl_rec, base + slot);
         b1 = ovl_pk(lem_cl_rec, base + slot + 1);
-        /* SPEC.md 114.3.1: a slot whose first WORD is 0xFFFF is SKIPPED and
+        /* SPEC.md 116.3.1: a slot whose first WORD is 0xFFFF is SKIPPED and
          * never breaks the walk (Taxing 27, lemtool/REPORT.md) */
         if (b0 == 0xFF && b1 == 0xFF)
             continue;
@@ -1049,12 +1049,12 @@ static void ovl_game_init(int level)
 /* ovl_postview - the results, as Lemmix src/GameScreen.Postview.pas
  * GetScreenText builds them: the top line, "You rescued", "You needed", the
  * result text the per cent earns, and the footer. The access-code line is
- * omitted with the Level Code row's fact (SPEC.md 114.8), and both branches
+ * omitted with the Level Code row's fact (SPEC.md 116.8), and both branches
  * then take the failure branch's AddLineFeed(5), so the two are identical.
  *
  * TWO FORMS SINCE WAVE 5:
  *
- *   LEM_PO_SCR   the original's screen, inside the bracket (SPEC.md 114.4.3):
+ *   LEM_PO_SCR   the original's screen, inside the bracket (SPEC.md 116.4.3):
  *                the top line at row 0, AddLineFeed(1), the two counts,
  *                AddLineFeed(1), the result text's two lines, then :189's
  *                AddLineFeed(18 - CountChar(CR)) FORCES the footer to line 18
@@ -1162,7 +1162,7 @@ static int ovl_postview(int rating, int level, int form)
 }
 
 /* ============================================================================
- * WAVE 5: THE ORIGINAL'S TWO SCREENS, INSIDE THE BRACKET (SPEC.md 114.4.3)
+ * WAVE 5: THE ORIGINAL'S TWO SCREENS, INSIDE THE BRACKET (SPEC.md 116.4.3)
  *
  * Drawn in MAIN.DAT's own 16x16 purple font over its own brown tile, by
  * lemfont.inc's lem_p_* - no kernel drawing slot is legal in a foreign mode
@@ -1181,7 +1181,7 @@ static int ovl_postview(int rating, int level, int form)
  * here is the font's own purple, which matches Lemmix's unfinished build and
  * not the original's look. The recolours would want hue-shifted copies of the
  * four purples in a sixteen-entry palette whose 8..15 are the level picture's
- * (lem_p_pal), and one recolour pass a glyph (SPEC.md 114.4.3.1).
+ * (lem_p_pal), and one recolour pass a glyph (SPEC.md 116.4.3.1).
  *
  * ATTRIBUTION. The layout is Lemmix's - GameScreen.Preview.pas BuildScreen
  * and GetScreenLinesAndColors, GameScreen.Postview.pas BuildScreen and
@@ -1208,7 +1208,7 @@ static const signed char lem_pv_slot[LEM_PV_LINES] = {
 };
 
 /* ovl_scr_id - THE SECOND MODE, the one the two screens are drawn in
- * (SPEC.md 114.4.3's table): mode 12h on a VGA, the Hercules' own 720x348 on
+ * (SPEC.md 116.4.3's table): mode 12h on a VGA, the Hercules' own 720x348 on
  * a Hercules, mode 6 on a CGA and on an EGA (kernel/fsx.inc gives an EGA the
  * CGA-compatible modes only). -1 = this display offers none of them, and the
  * session goes straight to the level and leaves the postview to the window -
@@ -1318,7 +1318,7 @@ static void ovl_pv_pic(int k)
  * GameScreen.Postview.pas:62), from row y at 16 a line. On the CGA the runs of
  * blank lines collapse to ONE and the leading ones go, and the block is
  * centred in the 200 rows: the postview is ten lines there, the
- * congratulation ten (SPEC.md 114.4.3). */
+ * congratulation ten (SPEC.md 116.4.3). */
 static void ovl_scr_lines(int y)
 {
     int i, s, n, cga, blank, pass, rows;

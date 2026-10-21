@@ -1203,7 +1203,7 @@ _os88_fsx_wait:
     ret
 %endif
 
-; The three the four above do not cover, added for LEMMINGS (SPEC.md 114):
+; The three the four above do not cover, added for LEMMINGS (SPEC.md 116):
 ; the page flip, the owned rect and the bracket's keyboard read.
 
 ; int os88_fsx_page(int page) - show one of the pages FSI_PAGES advertises

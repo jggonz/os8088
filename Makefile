@@ -259,7 +259,7 @@ VM386CWORD := $(CURDIR)/vm/386-c-word
 # substitutes a default and rewrites the config on the way out.
 VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
 VM386PACCMAN := $(CURDIR)/vm/386-paccman
-# The LEMMINGS machines (SPEC.md 114.9, 114.7): vm/xt-lemmings is vm/xt-weave -
+# The LEMMINGS machines (SPEC.md 116.9, 116.7): vm/xt-lemmings is vm/xt-weave -
 # the 640KB VGA XT, 4.77MHz on the ibmxt86 board - with B: =
 # build/lemmings360.img, and vm/386-lemmings is vm/386dx with B: =
 # build/lemmings.img; each the uuid changed and NOTHING else, for the standing
@@ -8344,7 +8344,7 @@ LEMINC := apps/lemmings/lemmask.inc apps/lemmings/lemblit.inc \
           apps/lemmings/lemfont.inc apps/lemmings/lemsprite.inc
 
 # --- LEMBENCH, the LEMMINGS raster's BENCH (ON DEMAND: `make lembench`) --------
-# SPEC.md 114.7 and PERFORMANCE.md rule 4: measure before redesigning, and a
+# SPEC.md 116.7 and PERFORMANCE.md rule 4: measure before redesigning, and a
 # counter is not a timer. It puts MICROSECONDS on the glass for every primitive
 # apps/lemmings/lemblit.inc, lemmask.inc and lemfont.inc define, on whichever
 # backend the machine it boots on uses.
@@ -8387,7 +8387,7 @@ $(BUILD)/lembench360.img: $(BUILD)/lembench.o88 tools/os88disk.py
 lembench: $(BUILD)/lembench.img $(BUILD)/lembench360.img
 
 # --- CFSX, the C EXCLUSIVE-BRACKET capability gate (ON DEMAND: `make cfsx`) --
-# SPEC.md 53 from C (SPEC.md 114.5): the OSAPI_FSX_* thunks behind
+# SPEC.md 53 from C (SPEC.md 116.5): the OSAPI_FSX_* thunks behind
 # %ifdef CC_HAS_FSX, and the three things nothing in this tree had ever done
 # before LEMMINGS needed them - a CRTC line compare with the panel standing
 # still below it while the top scrolls by pel panning, a MODE CHANGE INSIDE a
@@ -8404,7 +8404,7 @@ lembench: $(BUILD)/lembench.img $(BUILD)/lembench360.img
 #
 # The disk carries CFSX.O88 and CFSX.OVL. Delete the second and boot again:
 # the refusal is the other half of the design, and it must NOT toast - a
-# kernel toast paints desktop geometry into a foreign mode (SPEC.md 114.5).
+# kernel toast paints desktop geometry into a foreign mode (SPEC.md 116.5).
 $(BUILD)/cfsx.raw.asm: tests/cfsx/cfsx.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
@@ -10212,7 +10212,7 @@ $(BUILD)/loom360.img: $(LOOMDISK) tools/os88disk.py
 
 
 # =============================================================================
-# LEMMINGS (SPEC.md 114) - ON DEMAND: `make lemmings`, `make lemmingsdisk`
+# LEMMINGS (SPEC.md 116) - ON DEMAND: `make lemmings`, `make lemmingsdisk`
 # =============================================================================
 # The C toolchain's fifth application: Lemmings (DMA Design / Psygnosis, 1991,
 # the DOS release) as a windowed launcher plus - from wave 2 - a SPEC.md 53
@@ -10227,14 +10227,14 @@ $(BUILD)/loom360.img: $(LOOMDISK) tools/os88disk.py
 # this tree (SPEC.md 73.1). A clone with nasm and python3 builds every SHIPPED
 # floppy.
 #
-# NO ORIGINAL DATA IS COMMITTED (CONTRIBUTING.md 6, SPEC.md 114.2). The 26 DOS
+# NO ORIGINAL DATA IS COMMITTED (CONTRIBUTING.md 6, SPEC.md 116.2). The 26 DOS
 # files are fetched by tools/getlemmings.py at a pinned URL and SHA-256 into
 # build/lemdata/ behind a stamp, and tools/os88lem.py converts them into the
 # band files the package reads. The stamp gates the DISK target ONLY, never
 # `make lemmings`: apps/runcpm's runcpm-src.stamp is the shape, and the reason
 # it matters here is that the host harness runs against the COMMITTED SYNTHETIC
 # FIXTURE, so a tree that has never fetched anything still builds and still
-# checks itself (SPEC.md 114.12).
+# checks itself (SPEC.md 116.12).
 #
 # ---------------------------------------------------------------------------
 # OPEN-CODED RATHER THAN CALLED THROUGH CC_PACKAGE, and the reason is ONE -I,
@@ -10281,7 +10281,7 @@ $(BUILD)/lemstr.h: $(BUILD)/lemstr.stamp
 # takes it as LEMDATAFROM= here). A stamp rather than a directory, as the story
 # cache is: make cannot depend on twenty-six files, and the script is idempotent
 # and re-verifies every hash for 0.2s and no network. The explosion's particle
-# table is a SECOND pinned file (decision 5, SPEC.md 114.8): it comes from the
+# table is a SECOND pinned file (decision 5, SPEC.md 116.8): it comes from the
 # --from directory when it is there, from LEMPARTFROM= (Lemmix's
 # src/Data/Particles/Particles.dat) when named, or from its own pinned URL.
 LEMDATADIR := $(BUILD)/lemdata
@@ -10292,7 +10292,7 @@ $(BUILD)/lemdata.stamp: tools/getlemmings.py | $(BUILD)
 
 # ...and the conversion. One stamp for all four geometries, because the
 # converter builds them in one pass and prints the per-geometry manifest in
-# CLUSTERS as well as bytes on every run (SPEC.md 114.3): both small geometries
+# CLUSTERS as well as bytes on every run (SPEC.md 116.3): both small geometries
 # have spc = 2, so every band file rounds up to 1,024 bytes and the byte
 # arithmetic is the wrong currency.
 #
@@ -10376,7 +10376,7 @@ $(BUILD)/lemmings.bin: apps/lemmings/lemmings.asm $(BUILD)/lemmings.gen.asm \
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/lemmings/lemmings.asm
 	@echo "lemmings: $(call FILESIZE,$@) bytes (image + module)"
 
-# THE OVERLAY CUT (SPEC.md 73.14, 114.6). Everything from `.modc` on becomes
+# THE OVERLAY CUT (SPEC.md 73.14, 116.6). Everything from `.modc` on becomes
 # the module: the About card, the greying facts, the preview and postview text,
 # the chrome, the progress file, the level's compose and every once-a-level or
 # once-a-frame routine of the game (lemmings.c's renames say which). os88ovl.py finds the
@@ -10409,7 +10409,7 @@ lemmings: $(BUILD)/lemmings.o88
 # ONE FOLDER PER DISK, AND THAT IS A CORRECTNESS REQUIREMENT rather than a
 # layout choice. Every band file the package opens by name is resolved in the
 # LAUNCHING instance's own directory (SPEC.md 19.2.1, 73.14), so the package
-# and the bands are ONE folder on every disk (SPEC.md 114.6) - which is WEAVE's
+# and the bands are ONE folder on every disk (SPEC.md 116.6) - which is WEAVE's
 # and LOOM's rule for the same reason. The module is no file at all: it is
 # part 0 of LEMMINGS.O88, read by op_load before os88_main() runs (SPEC.md
 # 73.14.2).
@@ -10430,13 +10430,13 @@ lemmings: $(BUILD)/lemmings.o88
 # by the prerequisite above. The content differs per geometry on purpose: the
 # 720KB disk carries everything except the four VGASPEC pictures and the 360KB
 # one two graphic sets and the levels that use them, each stated in that disk's
-# own LEVELS.TXT and greyed in the chooser with the fact (SPEC.md 114.9).
+# own LEVELS.TXT and greyed in the chooser with the fact (SPEC.md 116.9).
 #
 # --verify is a standalone structural fsck of what came out and it is in the
 # recipe rather than a separate target because it costs milliseconds and catches
 # the class of defect - a bad FAT chain, a directory entry pointing at nothing -
 # that otherwise arrives as "Disk error" inside the emulator ten minutes later.
-# ...AND README.TXT, which is not decoration: SPEC.md 114.2 and the port's
+# ...AND README.TXT, which is not decoration: SPEC.md 116.2 and the port's
 # licence posture put the FULL attribution list - the original's own seven
 # credit lines and the Psygnosis copyright - beside the package, because the
 # About card is twelve rows and names the two principals and points HERE. A
@@ -10503,7 +10503,7 @@ $(BUILD)/lemmings360.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
 lemmingsdisk: $(BUILD)/lemmings.img $(BUILD)/lemmings720.img \
               $(BUILD)/lemmings120.img $(BUILD)/lemmings360.img
 
-# THE TWO 86Box MACHINES (SPEC.md 114.9; VMXTLEMMINGS above says what each is a
+# THE TWO 86Box MACHINES (SPEC.md 116.9; VMXTLEMMINGS above says what each is a
 # copy of). Both boot the system floppy with the LEMMINGS disk in B: - the
 # 360KB one on the XT, two graphic sets and the levels that use them, and the
 # 1.44MB one on the 386, all 120. Reaching the game is a double-click on

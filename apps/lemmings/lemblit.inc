@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/lemmings/lemblit.inc      THE THREE RASTERS (SPEC.md 114.4)
+; os8088 - apps/lemmings/lemblit.inc      THE THREE RASTERS (SPEC.md 116.4)
 ;
 ; %included by apps/lemmings/lemmings.asm AFTER lemmask.inc, which it reads
 ; `lm_seg` out of. Everything CLAUDE.md's section discipline and the cdecl
@@ -66,7 +66,7 @@
 ; on Hercules (1bpp), against 1 pixel on VGA where the pel pan does it in
 ; hardware. A shifted copy would cost a shift and a merge on every one of
 ; 12,800 bytes - about 40% of the whole frame on a 4.77 MHz 8088 - to make a
-; scroll that is already smooth at 17 fps smoother. SPEC.md 114.4.2 records it
+; scroll that is already smooth at 17 fps smoother. SPEC.md 116.4.2 records it
 ; and README.TXT says it.
 ;
 ; PER-ROW DIRTY SPANS, in BYTES, and two sets of them (SPEC.md 85.3.1). A
@@ -430,7 +430,7 @@ lem_r_start:
     ret
 
 ; void lem_r_vstart(int x) / void lem_r_vpan(void) - ONE VGA SCROLL STEP IN
-; TWO HALVES, so the C can put a retrace between them (SPEC.md 114.4.6). The
+; TWO HALVES, so the C can put a retrace between them (SPEC.md 116.4.6). The
 ; CRTC latches the Start Address at the start of vertical retrace and the
 ; Attribute Controller's pel pan takes effect AT ONCE, so writing both
 ; together showed every 4-pixel step as one refresh of the old start with the
@@ -626,7 +626,7 @@ _lem_r_clearworld:
     ret
 
 ; -----------------------------------------------------------------------------
-; THE WORLD IS COMPOSED IN RAM AND COPIED TO THE CARD ONCE (SPEC.md 114.7.2 -
+; THE WORLD IS COMPOSED IN RAM AND COPIED TO THE CARD ONCE (SPEC.md 116.7.2 -
 ; wave 3's first design decision, and a measured one: 22.0 ms a 32x16 piece
 ; into T and the mask together, 330 ms for the copy, on a 4.77 MHz 8088).
 ;
@@ -649,7 +649,7 @@ _lem_r_clearworld:
 ; that is what pays for most of wave 3's raster: an animated object or a
 ; destroyed rectangle is put back by COPYING T into VRAM, and leaving the
 ; bracket with 'f' and coming back in is one more lem_r_tload rather than a
-; second compose (SPEC.md 114.4.1).
+; second compose (SPEC.md 116.4.1).
 ;
 ; THE PACKED-NIBBLE ALTERNATIVE WAS BENCHED AND LOST (tests/lembench's two LUT
 ; rows): it composes into a 126,720-byte packed world and then converts it to
@@ -1272,16 +1272,16 @@ lb_compose:
     ret
 
 ; lb_msample - THE BUTTONS, LATCHED, IN THE MIDDLE OF A LONG DRAW (SPEC.md
-; 114.7 point 3). os88_mouse() answers a LEVEL and has no press latch, and on
+; 116.7 point 3). os88_mouse() answers a LEVEL and has no press latch, and on
 ; the two shadow backends a scrolling tick is ~178 ms of compose and present
-; (SPEC.md 114.7.1) - longer than a click. So the compose and the present ask
+; (SPEC.md 116.7.1) - longer than a click. So the compose and the present ask
 ; OSAPI_MOUSE every sixteen rows they move and OR the buttons in here, and
 ; lem_r_mlatch() hands the C the union: a click that went down and up inside
 ; one long draw is still a press. A far call (46.7 us) a sixteenth of the
 ; rows; nothing at all on a tick that moved no row. Every register kept.
 ;
 ; THE VGA COMPOSE ASKS TOO (wave 6's review): a busy VGA pass is ~1.35 s of
-; compose (SPEC.md 114.7.4) and nothing in it sampled, so a click inside one
+; compose (SPEC.md 116.7.4) and nothing in it sampled, so a click inside one
 ; was lost. lemsprite.inc's lem_r_sprite, lem_r_obj, lem_r_bgrect,
 ; lem_r_clatch and lem_r_spray's drawing arm each call lb_msvga once on entry -
 ; ON VGA ONLY, ~3 far calls a lemming, ~9 ms of a 1.35 s compose at sixty. The
@@ -1500,9 +1500,9 @@ _lem_r_present:
 ; tools/os88lem.py's LEMMAIN bank. It is FOUR PLANES of 1,600 bytes - 40 bytes
 ; a row, 40 rows - which on VGA is four straight copies and on the two
 ; paletteless adapters is a colour-CLASS conversion, because those cards have
-; no palette to put it in (SPEC.md 39.4, 114.4.2): nibble 0 is black, 1..7 is
+; no palette to put it in (SPEC.md 39.4, 116.4.2): nibble 0 is black, 1..7 is
 ; the SPRITE/panel/text class - the panel, its buttons and their captions - and
-; 8..15 the TERRAIN class, which is the direction lb_spix, SPEC.md 114.4 and
+; 8..15 the TERRAIN class, which is the direction lb_spix, SPEC.md 116.4 and
 ; README.TXT all state. THE FIRST VERSION OF THIS COMMENT HAD IT THE OTHER WAY
 ; ROUND, which is the fourth on-the-glass defect of this wave left behind in
 ; the one place a reader of the panel path would look
@@ -1856,12 +1856,12 @@ _lem_r_rect:
     ret
 
 ; -----------------------------------------------------------------------------
-; THE BATCH (SPEC.md 114.4.4), and it is a MEASURED fix rather than a tidy-up.
+; THE BATCH (SPEC.md 116.4.4), and it is a MEASURED fix rather than a tidy-up.
 ;
 ; lb_rpix used to reprogram the VGA on EVERY PIXEL - GC 8 (bit mask), GC 5
 ; (write mode 2), Seq 2 (map mask), then GC 5 and GC 8 back again: five indexed
 ; pairs, TEN `out`s, per pixel, around one read and one write. Measured on a
-; 4.77 MHz 8088 that is the whole of SPEC.md 114.7.1's 583 us a minimap cell, and
+; 4.77 MHz 8088 that is the whole of SPEC.md 116.7.1's 583 us a minimap cell, and
 ; everything on the panel side goes through it - the status line, the minimap
 ; and the view rectangle.
 ;

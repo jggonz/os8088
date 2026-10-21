@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """getlemmings: fetch the 26 DOS Lemmings (1991) data files the LEMMINGS
-package is converted from (SPEC.md 114.2).
+package is converted from (SPEC.md 116.2).
 
     python3 tools/getlemmings.py                       # fetch + verify
     python3 tools/getlemmings.py --from ~/lemdata/orig # copy from a local dir
@@ -9,13 +9,13 @@ package is converted from (SPEC.md 114.2).
     python3 tools/getlemmings.py --check               # verify, never fetch
 
 **Nothing this script downloads is committed** (CONTRIBUTING.md 6, SPEC.md
-114.2). The 26 files are DMA Design's and Psygnosis's work, a git repository is
+116.2). The 26 files are DMA Design's and Psygnosis's work, a git repository is
 not a distribution channel for them, and so the bytes land in build/lemdata/,
 which is ignored outright. This is getstories.py's decision taken again for a
 stronger reason: a story file is its author's freeware release and these are
 not released at all.
 
-ONE PINNED URL and ONE SHA-256 (SPEC.md 114.2): Lemmix's own copy of the
+ONE PINNED URL and ONE SHA-256 (SPEC.md 116.2): Lemmix's own copy of the
 original data, `src/Data/Styles/Orig/orig.zip` at commit
 40e9bc34451f0e9127fd53b290a3877e700d143d. Per-file SHA-256s are pinned as
 well, so `--from` verifies a local copy to exactly the same standard the
@@ -29,7 +29,7 @@ directory holding the 26 files, or at a local copy of the zip, and the same
 verification runs. It is the only way to build the LEMMINGS floppies on a
 machine that cannot reach github.
 
-A SECOND PINNED FILE, AND ONLY ONE (decision 5, SPEC.md 114.8): the
+A SECOND PINNED FILE, AND ONLY ONE (decision 5, SPEC.md 116.8): the
 explosion's 80-particle trajectory table is not in the 26 data files - it was
 extracted from the game's executable - and Lemmix carries an extracted copy
 as its own resource, `src/Data/Particles/Particles.dat`, 8,160 bytes, at the
@@ -40,7 +40,7 @@ offline route; without either it is fetched on its own from its pinned URL.
 
 On success it writes build/lemdata.stamp, which is what gates the disk target
 (never `make lemmings`: the package builds against the committed synthetic
-fixture written by `tools/os88lem.py --fixture`, SPEC.md 114.12).
+fixture written by `tools/os88lem.py --fixture`, SPEC.md 116.12).
 """
 import argparse
 import hashlib
@@ -59,7 +59,7 @@ ZIP_SIZE = 336839
 TIMEOUT = 120
 
 # The 26 files, with the size and SHA-256 of each. 358,154 bytes shipped,
-# 956,492 fully decompressed (SPEC.md 114.2), and every one of the 101
+# 956,492 fully decompressed (SPEC.md 116.2), and every one of the 101
 # compressed sections in the 21 compressed files decodes on the first attempt
 # - which is what tests/unit/t_lemdat.py checks rather than assumes.
 #
@@ -160,20 +160,20 @@ def verify(name, data):
         fail("%s: SHA-256 mismatch\n"
              "  expected %s\n"
              "  got      %s\n"
-             "  This is not the file SPEC.md 114.2 pins. Check it by hand."
+             "  This is not the file SPEC.md 116.2 pins. Check it by hand."
              % (name, want, got))
 
 
 def verify_part(data, source):
     if len(data) != PART_SIZE:
-        fail("%s: %d bytes, SPEC.md 114.8 pins %d"
+        fail("%s: %d bytes, SPEC.md 116.8 pins %d"
              % (source, len(data), PART_SIZE))
     got = sha256(data)
     if got != PART_SHA:
         fail("%s: SHA-256 mismatch\n"
              "  expected %s\n"
              "  got      %s\n"
-             "  This is not the particle table SPEC.md 114.8 pins."
+             "  This is not the particle table SPEC.md 116.8 pins."
              % (source, PART_SHA, got))
 
 
@@ -211,7 +211,7 @@ def from_zip(raw, source, check_archive):
     """
     if check_archive:
         if len(raw) != ZIP_SIZE:
-            fail("%s: %d bytes, SPEC.md 114.2 pins %d"
+            fail("%s: %d bytes, SPEC.md 116.2 pins %d"
                  % (source, len(raw), ZIP_SIZE))
         got = sha256(raw)
         if got != ZIP_SHA:
@@ -384,7 +384,7 @@ def part_ok(out_dir, args):
 
 
 def write_stamp(path, out_dir):
-    """The stamp the disk target hangs off (SPEC.md 114.2).
+    """The stamp the disk target hangs off (SPEC.md 116.2).
 
     It names the directory and the commit rather than being empty, so a stale
     stamp beside a moved cache is readable rather than mysterious.

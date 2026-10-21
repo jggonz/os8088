@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemdraw.c   (#included by lemmings.c)
  *
- * THE FRAME (SPEC.md 114.4). What is drawn and when; lemblit.inc, lemmask.inc
+ * THE FRAME (SPEC.md 116.4). What is drawn and when; lemblit.inc, lemmask.inc
  * and lemfont.inc touch the pixels. Nothing in this file writes one, and that
  * is the rule SPEC.md 73.11 states as "the inner loop is never C": a per-pixel
  * loop in C costs 3-5x what the same loop costs in assembly, and inside
@@ -24,7 +24,7 @@
  * the minimap and has to be erased when it moves, and what is under it is the
  * minimap's own cells. Re-sampling them off the world would be sixteen probes
  * a cell, which is what sampling the whole minimap costs and is 4.0 s on a
- * 4.77 MHz 8088 (SPEC.md 114.7.1: 7,128 lem_probe4 calls at 563 us) - per
+ * 4.77 MHz 8088 (SPEC.md 116.7.1: 7,128 lem_probe4 calls at 563 us) - per
  * scroll step.
  *
  * ATTRIBUTION. The minimap's sampling rule, the panel's geometry and the
@@ -116,7 +116,7 @@
  * what it already was on VGA. In the original the rectangle is white against
  * the build-brick colour and is always readable, which is the whole of what it
  * is for - it is the only thing telling the player where they are in a
- * 1,584-pixel level. §114.4.4. */
+ * 1,584-pixel level. §116.4.4. */
 #define LEM_C_MAP1BPP    8
 
 /* ...and the LEMMINGS' DOTS are entry 2, green - lemmings_3ds src/draw.c's
@@ -165,7 +165,7 @@ static const unsigned char lem_pop4[16] = {
  *
  * IT IS THE FILE HALF AND NOTHING ELSE. On a launch it runs OUTSIDE the
  * bracket (ovl_launch); since wave 5 it also runs INSIDE it, for the session's
- * next level or retry (lemmings.c ovl_next_level, SPEC.md 114.4.3) - legal,
+ * next level or retry (lemmings.c ovl_next_level, SPEC.md 116.4.3) - legal,
  * because the file and mem slots are legal throughout a bracket (SPEC.md
  * 53.7). Either way a refusal DRAWS NOTHING, because nothing can be said in a
  * foreign mode: it sets lem_load_err and returns 0, and the window says it
@@ -244,7 +244,7 @@ static int lem_compose_level(int level)
  * 7,128 calls rather than 28,512, and THAT is what the batched probe entry was
  * built for (lemmask.inc's header). It is 7,128 x 563 us = 4.0 s on a
  * 4.77 MHz 8088, once per level, against 28,512 single probes at 192 us =
- * 5.5 s (SPEC.md 114.7.1 conclusion 1: the batch saves 27%, not 75%). */
+ * 5.5 s (SPEC.md 116.7.1 conclusion 1: the batch saves 27%, not 75%). */
 static void ovl_mm_sample(void)
 {
     int mx, my, wx, wy, n, i;
@@ -315,7 +315,7 @@ static void ovl_mm_row(int my, int c0, int c1)
 
     /* ONCE PER ROW AND NOT ONCE PER RUN. ovl_c_map() is two near calls and a
      * compare, which is nothing beside a run's own lem_r_rect - but a run is
-     * 150-550 us (§114.7.1) and a per-run call would put a fifth of that back
+     * 150-550 us (§116.7.1) and a per-run call would put a fifth of that back
      * on the one path this wave measured. */
     on = ovl_c_map();
     if (c0 < 0)
@@ -339,7 +339,7 @@ static void ovl_mm_row(int my, int c0, int c1)
 
 /* ovl_mm_col - the same thing down a COLUMN, in RECTANGLE rows.
  *
- * IT IS A RUN AND NOT A CELL, AND THE BENCH IS WHY. SPEC.md 114.7.1 measured a
+ * IT IS A RUN AND NOT A CELL, AND THE BENCH IS WHY. SPEC.md 116.7.1 measured a
  * bracketed one-cell `lem_r_rect` at 548 us and a plot INSIDE one call at
  * 153 us: the SmallerC cdecl boundary is three quarters of a minimap cell, so
  * the batch that took the VGA's ten `out`s a pixel down to two barely moved a
@@ -563,10 +563,10 @@ static void ovl_panel_draw(void)
 
 /* ovl_frame_panel - THE PANEL AND A WORD, before the level is composed.
  *
- * COMPOSING A LEVEL WAS ~25 SECONDS ON AN XT (SPEC.md 114.7.1 conclusion 2: 400
+ * COMPOSING A LEVEL WAS ~25 SECONDS ON AN XT (SPEC.md 116.7.1 conclusion 2: 400
  * terrain pieces at 8.8 ms into the mask and 53.8 ms into four VGA planes) and
  * wave 3's RAM composer took that to 22.0 ms a piece and ~8.9 s for Fun 1
- * whole (SPEC.md 114.7.2), plus
+ * whole (SPEC.md 116.7.2), plus
  * ~4.0 s to sample the minimap and ~0.4 s to draw it (conclusion 7). Inside SPEC.md 53's
  * bracket every kernel slot is refused, so nothing can be said and no toast can
  * appear: the first build pressed Enter and the machine looked dead for half a
@@ -623,12 +623,12 @@ static void ovl_frame_panel(void)
  *
  * ovl_compose() calls it every fourth terrain slot, which is ~100 cells over
  * the 400 - and a cell is one lb_rpix, against 22.0 ms for the piece beside it
- * (SPEC.md 114.7.2).
+ * (SPEC.md 116.7.2).
  * It is drawn in the minimap's own well, which is black at this point and which
  * ovl_mm_draw() covers completely afterwards, so it needs no erase of its own.
  *
  * IT DOES NOT PRESENT. On VGA the well IS video memory and the bar is live; on
- * the two shadow backends a present is 178 ms (SPEC.md 114.7.1 row 7) and the
+ * the two shadow backends a present is 178 ms (SPEC.md 116.7.1 row 7) and the
  * compose there is five seconds rather than twenty-five, so the panel and the
  * word above are what those cards show and the bar arrives with the first
  * frame. Paying 100 presents to animate a five-second wait is the trade this
@@ -671,7 +671,7 @@ static void ovl_load_bar(int n)
 }
 
 /* ============================================================================
- * WAVE 3: THE LIVE FRAME (SPEC.md 114.4.6)
+ * WAVE 3: THE LIVE FRAME (SPEC.md 116.4.6)
  * ==========================================================================*/
 
 /* the per-frame cost counters the host harness prints (LESSONS.md 6) */
@@ -747,7 +747,7 @@ static void ovl_mm_cell(int mx, int my)
  * every row of one 16x8 cell, a 721 us plot each time that changed nothing.
  * Now a cell whose bit actually CHANGES is marked in lem_mmc, and ovl_mm_dots()
  * draws the marked cells with the dots, at the end of the frame, inside the
- * pointer's own bracket (SPEC.md 114.4.6). */
+ * pointer's own bracket (SPEC.md 116.4.6). */
 static unsigned char lem_mmc[LEM_MM_H * LEM_MM_STRIDE];   /* cells owed */
 static int lem_mmpend;              /* ...and whether any is */
 
@@ -1059,7 +1059,7 @@ static void ovl_sprite_one(int i)
     LEM_COUNT(lem_c_sprites);
 }
 
-/* --- THE FRAME'S RECTANGLES (SPEC.md 114.4.6) --------------------------------
+/* --- THE FRAME'S RECTANGLES (SPEC.md 116.4.6) --------------------------------
  * Everything a game frame changes, as rectangles of WORLD BYTES (0..199) and
  * ROWS (0..159), inclusive: each destruction, each object whose frame moved,
  * and on VGA each lemming's box as the glass showed it last frame joined with
@@ -1368,7 +1368,7 @@ static void ovl_obox_forget(void)
         lem_obox[i * 4] = 0xFF;
 }
 
-/* --- THE EXPLOSION'S SPRAY (decision 5, SPEC.md 114.8, wave 6) -------------
+/* --- THE EXPLOSION'S SPRAY (decision 5, SPEC.md 116.8, wave 6) -------------
  * Eighty single pixels a frame for the 52 frames after a bomber goes off -
  * the table's 51 rows, the last one twice, as Lemmix draws them
  * (LEM_PTIME) - at the foot it left: LEMMAIN item 10 is PARTICLES.DAT's
@@ -1387,7 +1387,7 @@ static void ovl_obox_forget(void)
  *            pixels) - and the band loop draws it into the scratch
  *            in the pool's order with the lemmings, so the latch puts the
  *            erasure and the new pixels down together and the pointer stays
- *            lit over it, the compose's whole contract (SPEC.md 114.4.6). A
+ *            lit over it, the compose's whole contract (SPEC.md 116.4.6). A
  *            compose with no game frame draws it as the glass shows it
  *   CGA/Herc each frame puts the old pixels' bytes back out of W before the
  *            sprites come off, and the sprite pass draws the new ones in the
@@ -1665,7 +1665,7 @@ static void ovl_sprites_all(void)
  * is opaque where either is set. The VGA draws the colours; the two shadow
  * cards draw the OR, their solid class (lemsprite.inc lb_score). Nothing is
  * taken from lemmings_3ds's src/data/cursor.c, which that project's LICENCE.txt
- * excludes from its dedication (SPEC.md 114.1) - it agrees with these. Wave 3
+ * excludes from its dedication (SPEC.md 116.1) - it agrees with these. Wave 3
  * drew one colour, the panel's white. */
 static const unsigned char lem_cur0[56] = {
     0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
@@ -1708,7 +1708,7 @@ static void ovl_cursor_on(void)
 
 static int lem_curx = -1, lem_cury = -1, lem_curshape = -1;
 
-/* ovl_vframe - ONE VGA GAME FRAME, COMPOSED OFF THE GLASS (SPEC.md 114.4.6).
+/* ovl_vframe - ONE VGA GAME FRAME, COMPOSED OFF THE GLASS (SPEC.md 116.4.6).
  *
  *   1. the rectangles: the destruction (synced into T) and the moved objects,
  *      then each lemming's last box joined with its new one;
@@ -2154,7 +2154,7 @@ static void ovl_frame_draw(void)
  * recomposes away. 1 = the view moved. `drew`: a game frame is drawn this
  * tick too, and THAT draws the sprites - a scroll that drew them as well
  * drew every sprite twice and restored it once on the most expensive tick
- * there is (SPEC.md 114.7.1's 178 ms scrolling frame). On VGA the scroll is
+ * there is (SPEC.md 116.7.1's 178 ms scrolling frame). On VGA the scroll is
  * the Start Address now and the pel pan after the retrace (ovl_tick_draw). */
 /* ovl_scroll_due - will the scroll move a pixel? VGA pans one pixel at a
  * time; CGA snaps the view to 4 pixels and Hercules to 8 (lemblit.inc .snap),
@@ -2352,7 +2352,7 @@ static int ovl_pan_hit(int cx, int cy, int vr, int ox)
 
 /* ovl_tick_draw - ONE TICK ONTO THE GLASS, and nothing when nothing changed.
  *
- * WHAT IS OFF THE GLASS, AND FOR HOW LONG (SPEC.md 114.4.6, wave 3's two
+ * WHAT IS OFF THE GLASS, AND FOR HOW LONG (SPEC.md 116.4.6, wave 3's two
  * reviews):
  *   the lemmings  never, on VGA: the frame is composed off the glass and
  *                 latched on (ovl_vframe). On the shadow cards the frame is

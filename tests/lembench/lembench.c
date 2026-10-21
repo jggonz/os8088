@@ -1,5 +1,5 @@
 /* ============================================================================
- * os8088 - tests/lembench/lembench.c      THE LEMMINGS RASTER'S BENCH (SPEC.md 114.7)
+ * os8088 - tests/lembench/lembench.c      THE LEMMINGS RASTER'S BENCH (SPEC.md 116.7)
  *
  * PERFORMANCE.md rule 4: measure before redesigning, and a counter is not a
  * timer. This is the timer. It puts MICROSECONDS on the glass for every
@@ -311,7 +311,7 @@ static void lb_fsx_main(void)
     lb_row(10, "status field, 5 cells", 20);
 
     /* 11-12 THE COMPOSER'S OTHER HALF, and the design it was chosen against
-     *      (SPEC.md 114.7.1). Row 11 is the shipping T -> VRAM copy, four
+     *      (SPEC.md 116.7.1). Row 11 is the shipping T -> VRAM copy, four
      *      `rep movsw` of 16,000 words; row 12 is the PACKED-NIBBLE design's
      *      conversion pass through its 256-entry table, which that design
      *      pays on top of composing (and of swizzling every planar piece into

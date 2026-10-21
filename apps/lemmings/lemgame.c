@@ -1,20 +1,20 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemgame.c   (#included by lemmings.c)
  *
- * THE PER-FRAME STEP (SPEC.md 114.4.7): the opening, the clock, spawning, the
+ * THE PER-FRAME STEP (SPEC.md 116.4.7): the opening, the clock, spawning, the
  * release rate, the nuke, the objects' own animation and the verdict - the
  * frame-level half of Lemmix's TLemmingGame.InternalUpdate (src/Game.pas:3408)
  * in the order it runs them. The eighteen actions are lemact.c's, the object
  * model lemobj.c's and the drawing lemdraw.c's; nothing in this file draws.
  *
- * ONE GAME FRAME IS SPREAD OVER SEVERAL TICKS WHEN IT HAS TO BE (SPEC.md 114.7,
+ * ONE GAME FRAME IS SPREAD OVER SEVERAL TICKS WHEN IT HAS TO BE (SPEC.md 116.7,
  * point 2): ovl_frame_begin() does the frame-level work, lem_frame_chunk()
  * steps at most LEM_STEP_MAX lemmings and answers whether the frame is done,
  * and ovl_frame_end() does what follows the lemmings. The bracket's loop polls
  * the input and moves the pointer between chunks, so the pointer is repainted
  * between the chunks of a frame of sixty lemmings and not only once it is
  * stepped - once a glass update, which on the XT is a pass and not a tick
- * (the drawn pass is the long one: SPEC.md 114.7 point 3). Every
+ * (the drawn pass is the long one: SPEC.md 116.7 point 3). Every
  * lemming is still stepped exactly once a frame, in the original's order, so
  * the MECHANICS are the original's whatever the machine - decision 7: the XT
  * plays at whatever rate it measures, and every clock in Lemmings counts game
@@ -43,7 +43,7 @@ struct lem_l {
     unsigned char fidx;             /* the floater's table index */
     unsigned char below;            /* the object map under the foot */
     unsigned char front;            /* ...and 8 ahead, 8 up */
-    /* THE EXPLOSION'S SPRAY (decision 5, SPEC.md 114.8), in bytes the record
+    /* THE EXPLOSION'S SPRAY (decision 5, SPEC.md 116.8), in bytes the record
      * already had: the 32-byte stride is unchanged and none of it is
      * mechanics - lemsim.py's R4 is Lemmix's, the bomber removed on the
      * explosion's first frame, and the spray is drawn after it at the foot
@@ -176,14 +176,14 @@ static int lem_timeup;
 static int lem_cursor;              /* the round robin's next lemming */
 static int lem_infr;                /* a frame is part-stepped */
 
-/* the STEP budget (SPEC.md 114.7.1 conclusion 1): a batched probe is 141 us
+/* the STEP budget (SPEC.md 116.7.1 conclusion 1): a batched probe is 141 us
  * on a 4.77 MHz 8088, so about twenty lemmings fill a tick at full rate. It
  * gates nothing - decision 7 - it only decides how many ticks one frame of a
  * crowded level is spread across, so the pointer moves between chunks. */
 #define LEM_STEP_MAX 20
 
 /* lem_snd_cue - one tone a frame, the most important one asked for (SPEC.md
- * 114.11): the speaker has one voice and Lemmix's own queue holds eight, so
+ * 116.11): the speaker has one voice and Lemmix's own queue holds eight, so
  * the frame keeps the cue with the LOWEST event number that arrives first in
  * the table's order of importance - which is the table's order. */
 static int lem_sndq = -1;
@@ -235,7 +235,7 @@ static void ovl_increment(void)
      * "#EL 2020: finally"; IncrementIteration :3502-3506): a pause begun
      * before frame 34 holds the clock for 34 - that frame frames once play
      * resumes. Carried as the 1991 game's, as the other two are (SPEC.md
-     * 114.4.7) */
+     * 116.4.7) */
     if (lem_glitchp <= 0)
         lem_clockf++;
     else
@@ -435,7 +435,7 @@ static void ovl_toggle_pause(void)
  * the glitch calculation, just like the actual game" - and decision 1 is the
  * original and not Lemmix's defaults: MaxNumLemmings becomes the number
  * released so far, so the IN field, the finish test and the postview's
- * "You rescued" all count against it (SetGameResult :4477, SPEC.md 114.8). */
+ * "You rescued" all count against it (SetGameResult :4477, SPEC.md 116.8). */
 static void ovl_nuke(void)
 {
     if (lem_nuked)

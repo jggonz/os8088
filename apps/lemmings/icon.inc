@@ -1,10 +1,10 @@
 ; =============================================================================
 ; os8088 - apps/lemmings/icon.inc
 ;
-; LEMMINGS's embedded 16x16 icon (SPEC.md 20.2, 114.9): a walking lemming -
+; LEMMINGS's embedded 16x16 icon (SPEC.md 20.2, 116.9): a walking lemming -
 ; the hair, the face, the robe and the stride - DRAWN FOR THIS PORT, as a 1bpp
 ; silhouette, and not copied: nothing of MAIN.DAT's lemming sprites (which are
-; fetched at build time and never committed, SPEC.md 114.2) and nothing of any
+; fetched at build time and never committed, SPEC.md 116.2) and nothing of any
 ; reference tree's icon is transcribed into it. Grey rounds to black on two
 ; adapters of three (SPEC.md 39.4), so there is nothing here to round.
 ;
@@ -15,7 +15,7 @@
 ; drawing a reader sees.
 ;
 ; Part of LEMMINGS, a reimplementation of Lemmings (DMA Design / Psygnosis,
-; 1991) for os8088 (SPEC.md 114). This file carries no derived material.
+; 1991) for os8088 (SPEC.md 116). This file carries no derived material.
 ;
 ; crt0.asm puts it at file offset 32 and checks the offset and the length:
 ; 16 mask words - the white underlay - then 16 data words. The mask is full

@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - tests/lembench/lembench.asm
 ;
-; The assembly shim of LEMBENCH, the LEMMINGS raster's BENCH (SPEC.md 114.7).
+; The assembly shim of LEMBENCH, the LEMMINGS raster's BENCH (SPEC.md 116.7).
 ;
 ; IT %includes THE SHIPPING RASTER, IT DOES NOT CARRY A COPY OF IT. The three
 ; .inc files below are apps/lemmings' own, included from their own directory,
@@ -33,7 +33,7 @@
 
 ; -----------------------------------------------------------------------------
 ; THE ALTERNATIVE THE COMPOSER WAS CHOSEN AGAINST, timed here and shipped
-; nowhere (SPEC.md 114.7.2's composer rows). Wave 3's brief proposed composing
+; nowhere (SPEC.md 116.7.2's composer rows). Wave 3's brief proposed composing
 ; the world as PACKED 4bpp nibbles in RAM and converting it to the four VGA
 ; planes in one pass through a 256-entry table: one input byte is two pixels,
 ; and four of them make the four plane bytes of an 8-pixel group. This is that

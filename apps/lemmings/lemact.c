@@ -2,9 +2,9 @@
  * os8088 - apps/lemmings/lemact.c   (#included by lemmings.c)
  *
  * THE EIGHTEEN ACTIONS, THE EIGHT SKILLS AND THE CURSOR'S PICK (SPEC.md
- * 114.4.7). The hottest C in the program: every live lemming comes through
+ * 116.4.7). The hottest C in the program: every live lemming comes through
  * lem_handle() once a game frame, and every terrain probe it makes is a near
- * call into lemmask.inc - 178 us apiece on a 4.77 MHz 8088 (SPEC.md 114.7.1),
+ * call into lemmask.inc - 178 us apiece on a 4.77 MHz 8088 (SPEC.md 116.7.1),
  * which is why the handlers below stop probing the moment they have their
  * answer, exactly as the originals' loops do.
  *
@@ -163,7 +163,7 @@ static int lem_field_over(void)
 
 /* --- the destruction (DigOneRow, LayBrick, Apply*Mask) ---------------------
  * Each writes the MASK now and records the rectangle, so lemdraw.c can put the
- * picture right at the end of the frame (SPEC.md 114.4.6: the sprites are on
+ * picture right at the end of the frame (SPEC.md 116.4.6: the sprites are on
  * the glass until then, and the background under them is what changes). The
  * MINIMAP's cells go with them, Lemmix's "fake draw mask in fMiniMap". */
 static int lem_dig_row(int y)
@@ -803,7 +803,7 @@ static int ovl_assign_to(int b, struct lem_l *l1, struct lem_l *l2)
  * button held over nothing but working lemmings leaves Lemming1 nil, and the
  * 1991 game then assigns to the LAST non-prioritised lemming any hit test saw,
  * wherever it is now. Lemmix makes that an option outside its ORIG set;
- * decision 1 is the original, and SPEC.md 114.8 carries the glitches levels
+ * decision 1 is the original, and SPEC.md 116.8 carries the glitches levels
  * are solved with. 1 = something was assigned. */
 static int lem_hit_l1, lem_hit_l2;  /* the hit test's two answers, or -1 */
 static int lem_hit_n;               /* ...and how many it found */

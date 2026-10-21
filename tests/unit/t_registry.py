@@ -214,14 +214,14 @@ UNREGISTERED = {
     #     to read, has no pass or fail, and takes minutes ---
     "lembenchmarty.py": "runs tests/lembench on MartyPC and writes a PNG of the "
                        "bench's own screen for a person to read (SPEC.md "
-                       "114.7.1). It needs `make lembench` AND build/martypc, "
+                       "116.7.1). It needs `make lembench` AND build/martypc, "
                        "takes ~5 minutes a machine, and has no assertion in "
                        "it at all - what it produces is the microsecond table "
                        "SPEC.md and PERFORMANCE.md quote. tools/os88boot.py "
                        "is the same kind of thing one directory along",
     "lemplaymarty.py": "PLAYS the shipped LEMMINGS off build/lemmings360.img "
                        "on MartyPC and reads the game's own state by symbol "
-                       "for the final pass's table (SPEC.md 114.7, "
+                       "for the final pass's table (SPEC.md 116.7, "
                        "PERFORMANCE.md Set 161): int 13h calls of a launch "
                        "and of the in-bracket retry, the preview picture's "
                        "time, game frames a second quiet and busy, the "

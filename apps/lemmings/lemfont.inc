@@ -22,7 +22,7 @@
 ; uppercase on the glass whatever case it is stored in.
 ;
 ; THE PURPLE 16x16 FONT of the preview and postview screens arrived in wave 5,
-; with those two screens (SPEC.md 114.4.3), and it is NOT a second index map
+; with those two screens (SPEC.md 116.4.3), and it is NOT a second index map
 ; over this file's status cell, which wave 1 expected: the two screens are in a
 ; different MODE (12h, the Hercules' own, mode 6) with a different row
 ; addressing, a 16-pixel cell and a transparent draw on a VGA. They are the
@@ -31,7 +31,7 @@
 ; IT DOES NOT PLOT PER PIXEL, AND THE FIRST VERSION DID. That version's header
 ; estimated a plot at "~50 cycles on an 8088, so a whole 40-character line is
 ; ~5,120 plots = ~54 ms" and a five-cell field at "~7 ms". THE BENCH SAID
-; OTHERWISE: SPEC.md 114.7.1 conclusion 4 and PERFORMANCE.md Set 161 measured a
+; OTHERWISE: SPEC.md 116.7.1 conclusion 4 and PERFORMANCE.md Set 161 measured a
 ; five-cell field at 393 ms on VGA and 349 on CGA - 614 us a plot, ~2,900 cycles,
 ; FIFTY-EIGHT TIMES the estimate - which makes the whole line 3.1 s and puts the
 ; per-tick OUT / IN / clock update seven ticks behind the frame it belongs to.
@@ -56,14 +56,14 @@
 ;
 ; AND THAT IS WHAT WAS MEASURED, not what is hoped for: the same five-cell
 ; field is 8.6 ms on VGA and 16.1 ms on CGA (PERFORMANCE.md Set 161's last row,
-; SPEC.md 114.7.1's table and its conclusion 4, both of which carry the first
+; SPEC.md 116.7.1's table and its conclusion 4, both of which carry the first
 ; pass beside it). 46x on VGA, 22x on CGA, and the per-tick update is a fifth
 ; of a tick rather than seven of them.
 ;
 ; THE LINE IS STILL DELTA-DRAWN - Lemmix's own rule, and the five field write
-; offsets in SPEC.md 114's authority table are what make it cheap - so an
+; offsets in SPEC.md 116's authority table are what make it cheap - so an
 ; ordinary tick letters the OUT and IN counts and the clock, about five cells.
-; Cross-referenced BOTH WAYS with SPEC.md 114.7.1 conclusion 4 so the estimate
+; Cross-referenced BOTH WAYS with SPEC.md 116.7.1 conclusion 4 so the estimate
 ; and the measurement cannot drift apart again.
 ;
 ; IT IS SAFE INSIDE A lem_r_batch() BRACKET, and it was not: the VGA arm sets
@@ -405,7 +405,7 @@ _lem_f_run:
 section .text
 
 ; =============================================================================
-; WAVE 5: THE TWO SCREENS' SURFACE (SPEC.md 114.4.3)
+; WAVE 5: THE TWO SCREENS' SURFACE (SPEC.md 116.4.3)
 ;
 ; The preview and the postview are the original's 640x350 screens (Lemmix
 ; GameScreen.Preview.pas:114 / Postview.pas:59, "the original dos-screen
@@ -956,7 +956,7 @@ lp_glyph:
 ; neighbour walk, which was priced at ~6 s a VGA picture on a 4.77 MHz 8088
 ; (204,800 samples at ~140 cycles). What it costs the picture is its right
 ; edge: 640 x 2.5 is 1,600, so the last six columns are the sixteen world
-; pixels past x 1,583, which are never terrain (SPEC.md 114.4.3).
+; pixels past x 1,583, which are never terrain (SPEC.md 116.4.3).
 ;
 ; A VGA row is four passes, one a plane: T's planes 0..2 (lem_r_tsetup) and
 ; the solid mask as plane 3 - so a terrain pixel is colour 8..15 and the

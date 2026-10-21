@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/lemmings/lemmask.inc      THE SOLID MASK (SPEC.md 114.4)
+; os8088 - apps/lemmings/lemmask.inc      THE SOLID MASK (SPEC.md 116.4)
 ;
 ; %included by apps/lemmings/lemmings.asm after the compiled C, exactly as
 ; tests/cfsx/cfsxvga.inc and apps/cword/cwtype.inc are. It defines C-callable
@@ -7,7 +7,7 @@
 ; section discipline requires.
 ;
 ; WHAT THE MASK IS. One bit per world pixel: 1 = solid terrain, 0 = air. The
-; world is 1,584 x 160 (SPEC.md 114.3.1's ruling - lemmings_3ds and Lemmix agree
+; world is 1,584 x 160 (SPEC.md 116.3.1's ruling - lemmings_3ds and Lemmix agree
 ; and Lemmings.ts's 1,600 is wrong) and the STRIDE is 200 bytes = 1,600
 ; addressable pixels, the next multiple of 8 above 1,584, which makes the claim
 ; exactly 32,000 bytes and the 16 pixels past the world a harmless margin that
@@ -26,10 +26,10 @@
 ; BEFORE the body. Sixty lemmings at six probes is 360 calls a tick, 9,000 of
 ; the 16,000 in overhead alone. So lem_probe4() exists: ONE call carrying four
 ; offsets and answering four bits. tests/lembench measures both and prints the
-; microseconds (SPEC.md 114.7).
+; microseconds (SPEC.md 116.7).
 ;
 ; THE MASK IS ALSO WHAT THE 1bpp ADAPTERS' PICTURE IS MADE OF. On CGA and
-; Hercules terrain is drawn by COLOUR CLASS (SPEC.md 39.4, 114.4.2) rather than
+; Hercules terrain is drawn by COLOUR CLASS (SPEC.md 39.4, 116.4.2) rather than
 ; in the level's palette, and every terrain pixel is the same class - so the
 ; whole world picture on those two adapters is a function of this array and
 ; nothing else. lem_m_derive() writes it in ONE pass over 32,000 bytes instead
@@ -502,7 +502,7 @@ _lem_m_dig:
     ret
 
 ; -----------------------------------------------------------------------------
-; THE OBJECT MAP (SPEC.md 114.4.7): the original's 4-pixel-resolution map of
+; THE OBJECT MAP (SPEC.md 116.4.7): the original's 4-pixel-resolution map of
 ; trigger areas, steel and blocker fields - one byte a cell, 396 x 40 cells
 ; for the 1,584 x 160 world, 15,840 bytes in the claim the level's raw record
 ; was read into (it is read, parsed and then overwritten with this). The
@@ -669,7 +669,7 @@ _lem_o_fill:
 ; lem_m_piece IS GONE (wave 3). It wrote one terrain piece into the mask at
 ; 8.8 ms a 32x16 piece, as a SECOND walk of the same piece after the picture's;
 ; lemblit.inc's lem_r_wpiece now writes the mask as the picture's own plane 3
-; in the same pass (SPEC.md 114.7.2's composer rows say what that bought).
+; in the same pass (SPEC.md 116.7.2's composer rows say what that bought).
 ; -----------------------------------------------------------------------------
 ; void lem_m_derive(unsigned dstseg, int kind)
 ;
@@ -682,7 +682,7 @@ _lem_o_fill:
 ;
 ; The CGA arm expands a NIBBLE through a 16-byte table rather than a byte
 ; through a 512-byte one. Sixteen bytes of a resident image that is spent
-; before this file starts (SPEC.md 114.6) against half a kilobyte for one shift
+; before this file starts (SPEC.md 116.6) against half a kilobyte for one shift
 ; saved per byte.
 ;
 ; Locals: [bp-2] row, [bp-4] maskseg.

@@ -11,7 +11,7 @@
  * apps/lemmings/hosttest/fixture/ - two levels, one style, the real string band
  * - so it needs no network fetch and no original data, which is what makes
  * `make lemmings` buildable on a tree that has never run tools/getlemmings.py
- * (SPEC.md 114.12).
+ * (SPEC.md 116.12).
  *
  * WHAT IT CHECKS, and each one stops the build:
  *
@@ -976,7 +976,7 @@ static void spray_run(const char *name, int aim)
            worst, before, after, bad, miss);
     if (miss)
         fail("the pointer lost pixels over a spray - a particle drawn or put "
-             "back under it without its save-under knowing (SPEC.md 114.4.6)");
+             "back under it without its save-under knowing (SPEC.md 116.4.6)");
     if (bombed < 0)
         fail("the spray row never gave lemming 0 the bomb - it tests nothing");
     if (before != 0)
@@ -984,7 +984,7 @@ static void spray_run(const char *name, int aim)
              "counts something other than a lost particle");
     if (frames < LEM_PTIME || h_r_spraypix == px0 || worst == 0)
         fail("the explosion drew no spray, or fewer than its 52 frames - "
-             "decision 5's particles are not on the glass (SPEC.md 114.8)");
+             "decision 5's particles are not on the glass (SPEC.md 116.8)");
     if (after != 0)
         fail("a spray left pixels behind after its last frame - its erasure "
              "missed the box it was drawn in (ovl_spray_rects / "
@@ -1141,7 +1141,7 @@ static void spray_area_nuke(const char *label, int nsp)
     if (held)
         fail("the spray's bins were taken with the list full - every spray "
              "in flight paid a walk or more than one add; ovl_spray_rects "
-             "must fall back to one box there (SPEC.md 114.4.6)");
+             "must fall back to one box there (SPEC.md 116.4.6)");
     if (walks[1] == 0 || adds[1] <= adds[0])
         fail("spray_area_nuke's negative control (the bins unconditionally) "
              "cost no walk or no more adds than the fallback - the row "
@@ -1168,7 +1168,7 @@ static void spray_area_tab(const char *label)
     abox /= 3;
     /* the rows are what the compose pays a fixed price for, four planes a
      * row (lem_r_bgrect's per-row call and setup), and the byte-rows what it
-     * pays by the byte: both are printed, so SPEC.md 114.7.4 can price them */
+     * pays by the byte: both are printed, so SPEC.md 116.7.4 can price them */
     printf("  the spray's VGA compose on the %s table: %ld byte-rows in %ld "
            "rows a game frame, %d.%d rectangles (one a 16-row band), against "
            "%ld in %ld rows, %d.%d, for one box a spray (the negative "
@@ -1181,7 +1181,7 @@ static void spray_area_tab(const char *label)
     if (a > LEMTEST_SPRAY_CEIL)
         fail("a spray's VGA rectangles cover more byte-rows a frame than "
              "the ceiling - the bins are not reaching ovl_spray_rects "
-             "(SPEC.md 114.4.6)");
+             "(SPEC.md 116.4.6)");
     if (abox <= LEMTEST_SPRAY_CEIL)
         fail("spray_area's negative control (one box a spray) did not go "
              "over the ceiling - the row cannot see the regression");
@@ -1607,7 +1607,7 @@ static void check_move(int h)
 }
 
 /* ==========================================================================
- * THE MECHANICS REPLAY (SPEC.md 114.12): `lemtest --mech LEVEL SCRIPT FRAMES
+ * THE MECHANICS REPLAY (SPEC.md 116.12): `lemtest --mech LEVEL SCRIPT FRAMES
  * OUT` loads fixture level LEVEL, composes it exactly as the bracket does, and
  * then runs lem_game_frame() once a tick for up to FRAMES ticks, applying the
  * script's commands at the frame numbers they name and writing one TRACE LINE
@@ -1718,7 +1718,7 @@ static int mech_run(int level, const char *script, int frames, const char *out)
          * stepped, the press or the nuke made through the bracket's own
          * routines - which QUEUE it, a frame being part-stepped - and the
          * frame finished. lemsim applies it before the NEXT frame, which is
-         * where Lemmix makes every assignment (SPEC.md 114.7 point 3). */
+         * where Lemmix makes every assignment (SPEC.md 116.7 point 3). */
         for (i = 0; i < nc; i++)
             if (cf[i] == n && (cv[i] == 'h' || cv[i] == 'n'))
                 break;
@@ -1765,7 +1765,7 @@ static int mech_run(int level, const char *script, int frames, const char *out)
     if (n > frames)
         n = frames;
     /* THE MECHANICS' SHARE OF A FRAME, priced: a probe CALL is 178 us on a
-     * 4.77 MHz 8088 (tests/lembench, SPEC.md 114.7.1 - lem_has_pixel from C,
+     * 4.77 MHz 8088 (tests/lembench, SPEC.md 116.7.1 - lem_has_pixel from C,
      * the call included), and the step's own C is not counted, so this is a
      * floor and the report says so. */
     printf("lemtest: --mech level %d, %d frames -> %s; at most %d lemmings "
@@ -1773,7 +1773,7 @@ static int mech_run(int level, const char *script, int frames, const char *out)
            "%ld us and %ld us of probes on the XT\n", level, n, out, lmax,
            pmax, pmaxf, ptot / n, (long)pmax * 178, ptot / n * 178);
     /* every script assigns skills and lets the hatch open, so a run with no
-     * tone at all is a sound path that came unplugged (SPEC.md 114.11) */
+     * tone at all is a sound path that came unplugged (SPEC.md 116.11) */
     printf("lemtest: --mech level %d, %d speaker tones\n", level, h_tones);
     if (h_tones == 0)
         return printf("lemtest: --mech: not one tone - the cue never reached "
@@ -1976,7 +1976,7 @@ int main(int argc, char **argv)
 
     /* --- Play on a playable row LAUNCHES (wave 5) ---------------------------
      * The level's preview is the first screen INSIDE the bracket now, in the
-     * second foreign mode (SPEC.md 114.4.3), so the keystroke's whole share is
+     * second foreign mode (SPEC.md 116.4.3), so the keystroke's whole share is
      * the launch flag and a wake: nothing drawn, nothing read. */
     lem_sel = 0;
     lem_launchpend = 0;
@@ -2072,7 +2072,7 @@ int main(int argc, char **argv)
      *
      * (2) AND THIS KEYSTROKE HAS NOTHING TO RECORD. It merely opens the preview
      * screen. In the original an access code is issued on COMPLETING a level,
-     * and SPEC.md 114.8's Save Progress cell says of the refusing case that "the
+     * and SPEC.md 116.8's Save Progress cell says of the refusing case that "the
      * session is played and the result is shown, and nothing is recorded" -
      * recording belongs to the RESULT, which is wave 4's postview. The build
      * that advanced lem_prog[] here credited a level nobody had played: "Save
@@ -2095,7 +2095,7 @@ int main(int argc, char **argv)
         fail("Play wrote the progress file with the gfx lock held");
     if (lem_prog[0] != -1)
         fail("Play credited a level that has not been played - progress is "
-             "recorded by the RESULT (SPEC.md 114.8), not by opening the "
+             "recorded by the RESULT (SPEC.md 116.8), not by opening the "
              "preview screen");
     if (lem_progwrite)
         fail("Play posted a progress WRITE for a level that has not been "
@@ -2294,7 +2294,7 @@ int main(int argc, char **argv)
     lem_savable = ovl_progress_read();
 
     /* ======================================================================
-     * WAVE 2: THE RASTER (SPEC.md 114.4)
+     * WAVE 2: THE RASTER (SPEC.md 116.4)
      *
      * Everything above is about the launcher's glass. Everything here is about
      * the LEVEL's, and it is driven against hosttest/lemraster.c's model of
@@ -2311,7 +2311,7 @@ int main(int argc, char **argv)
     lem_sel = 0;
 
     /* --- the claims, and MEM_MAX ------------------------------------------
-     * SPEC.md 114.6.1: claim RECORDS are a budget too, MEM_MAX is 20 on a
+     * SPEC.md 116.6.1: claim RECORDS are a budget too, MEM_MAX is 20 on a
      * kern_small machine and it is SYSTEM-WIDE. */
     if (!ovl_level_load(0))
         fail("the level's banks did not load off the fixture");
@@ -2319,7 +2319,7 @@ int main(int argc, char **argv)
            "arithmetic the refusal quotes is %d KB\n",
            h_claims_now, h_claims_peak, h_mem_kb_used, H_MEM_KB, ovl_need_kb());
     if (h_claims_peak > 6)
-        fail("more than six claim records - SPEC.md 114.6.1 says three on a "
+        fail("more than six claim records - SPEC.md 116.6.1 says three on a "
              "VGA and five on the two 1bpp adapters, and MEM_MAX is 20 on a "
              "kern_small machine SYSTEM-WIDE");
     if (ovl_need_kb() != h_mem_kb_used)
@@ -2406,7 +2406,7 @@ int main(int argc, char **argv)
     }
     h_r_reset();
     ovl_frame_panel();
-    /* THE PANEL AND A WORD BEFORE THE 25-SECOND WAIT (SPEC.md 114.7.1
+    /* THE PANEL AND A WORD BEFORE THE 25-SECOND WAIT (SPEC.md 116.7.1
      * conclusion 2). Inside the bracket nothing can be said - every kernel
      * slot is refused - so LOADING is lettered in the game's own font, on the
      * panel, before the compose starts, and taken down with the first frame.
@@ -2480,7 +2480,7 @@ int main(int argc, char **argv)
                "written twice (must be 0), worst %d cells moved in %d "
                "lem_r_rect calls\n",
                h_r_pixels, worst, wcells, wrects);
-        /* THE CALL COUNT IS A COST (SPEC.md 114.7.1: 137 us of cdecl against
+        /* THE CALL COUNT IS A COST (SPEC.md 116.7.1: 137 us of cdecl against
          * 153 us a plot inside one call), so the erase coalesces RUNS of one
          * colour out of the minimap's shadow. A cell per call would be 38. */
         if (wrects > 24)
@@ -2514,7 +2514,7 @@ int main(int argc, char **argv)
     /* THE C HAS TO BELIEVE IT TOO, and until this round it did not: the arm
      * set the RASTER's kind and left lem_kind_id() answering VGA, so the
      * "CGA" frame ran C that thought it was on a VGA. Nothing depended on it
-     * while lemdraw.c never asked which card it was on; §114.4.4 rule 5's
+     * while lemdraw.c never asked which card it was on; §116.4.4 rule 5's
      * minimap class and ovl_frame_panel()'s scroll guard both ask now, and
      * this arm caught the second of them the hour it was written. */
     h_caps = (1 << OS88_FSXM_CGA320);
@@ -3230,7 +3230,7 @@ int main(int argc, char **argv)
         }
 
         /* --- THE SHARE OF AIMING TICKS THE CAP SENDS TO THE GLASS PAIR (wave
-         * 6, owed by SPEC.md 114.4.6: "lemtest's '1 glass pair' is one tick,
+         * 6, owed by SPEC.md 116.4.6: "lemtest's '1 glass pair' is one tick,
          * not a share"). A crowd of 60 walkers - LEM_STEP_MAX 20, so a frame
          * is three passes and two of them end with lem_infr up - is driven
          * pass by pass the way ovl_play_loop drives it, with the pointer
@@ -3292,7 +3292,7 @@ int main(int argc, char **argv)
                     {
                         int f0 = lem_c_cmvfb;
 
-                        /* WHAT A DRY-PASS BOUND WOULD SEE (SPEC.md 114.4.6):
+                        /* WHAT A DRY-PASS BOUND WOULD SEE (SPEC.md 116.4.6):
                          * a tick the cap sends to the pair is re-run in the
                          * harness with the cap lifted and its cascade
                          * counted - ovl_infr_whole's real growth on that
@@ -3609,7 +3609,7 @@ int main(int argc, char **argv)
                  "are the fourth arm's 8x16 BLACK CELL");
     }
 
-    /* --- THE STATUS-STRING AUDIT (SPEC.md 114.12) --------------------------
+    /* --- THE STATUS-STRING AUDIT (SPEC.md 116.12) --------------------------
      * Every line ovl_stat_build() can compose, built here for every action and
      * every climber/floater combination, with a two-digit hit count, the
      * level's largest OUT, 100% IN and a two-digit clock: forty cells, every
@@ -3702,7 +3702,7 @@ int main(int argc, char **argv)
     }
 
     /* --- the bracket runs, and the launch refuses OUTSIDE it ---------------
-     * SPEC.md 114.5: everything that can refuse happens in a window, because a
+     * SPEC.md 116.5: everything that can refuse happens in a window, because a
      * kernel toast in a foreign mode paints desktop geometry into the game's
      * framebuffer. */
     /* IT IS DEFERRED TO THE WAKE, and that is the largest of the four errands
@@ -3727,7 +3727,7 @@ int main(int argc, char **argv)
                                      * preview is the bracket's first screen) */
     if (h_reads != 0)
         fail("a launch keystroke read a file - ~136 KB of band with the gfx "
-             "lock HELD, which is SPEC.md 114.6's first table row put back one "
+             "lock HELD, which is SPEC.md 116.6's first table row put back one "
              "callback along");
     if (h_fsx_runs != 0)
         fail("a launch keystroke entered SPEC.md 53's bracket straight out of "
@@ -4095,7 +4095,7 @@ int main(int argc, char **argv)
     }
 
     /* ======================================================================
-     * WAVE 5: THE ORIGINAL'S TWO SCREENS, INSIDE THE BRACKET (SPEC.md 114.4.3)
+     * WAVE 5: THE ORIGINAL'S TWO SCREENS, INSIDE THE BRACKET (SPEC.md 116.4.3)
      *
      * Driven through the same ovl_launch() the wake runs, against
      * hosttest/lemraster.c's model of the 640x350 surface: which row each
@@ -4211,7 +4211,7 @@ int main(int argc, char **argv)
          * KERNEL PAINT (wave 6: no fullscreen latch around the bracket). The
          * screen is chosen INSIDE the bracket (ovl_leave), so the fsx exit's
          * wm_paint_all draws it and the program issues nothing after it
-         * (SPEC.md 114.4.6's "leave the bracket" row - it was once a third
+         * (SPEC.md 116.4.6's "leave the bracket" row - it was once a third
          * full repaint, a fill and 28 calls). With the latch there were
          * THREE kernel paints a launch: wm_raise's whole-screen fill on the
          * way in, the fsx exit's with the window still fullscreen, and
@@ -4410,7 +4410,7 @@ int main(int argc, char **argv)
         k = h_p_find("Press left mouse button to retry level");
         if (k < 0 || h_p_ly[k] != 16 + 18 * 16 || h_p_clipped)
             fail("the failure footer moved - both branches take the failure "
-                 "branch's AddLineFeed(5) (SPEC.md 114.8)");
+                 "branch's AddLineFeed(5) (SPEC.md 116.8)");
 
         /* --- the congratulation: its middle line is the surface's width --- */
         lem_rating = LEM_RATINGS - 1;
@@ -4423,7 +4423,7 @@ int main(int argc, char **argv)
         if (x0 != 0 || x1 != 639)
             fail("'Everybody here at DMA Design salutes you' is not exactly "
                  "640 pixels of the purple font - the second confirmation of "
-                 "the 640x350 surface (SPEC.md 114.1)");
+                 "the 640x350 surface (SPEC.md 116.1)");
 
         /* --- a Hercules: the same layout, its lowest glyph row on the glass */
         lem_p_setup(LEM_RKIND_HERC, 0xB000);
@@ -4443,7 +4443,7 @@ int main(int argc, char **argv)
         lem_rating = 0;
 
         /* --- a CGA: 12 rows of 16 in 200, the preview's blank lines out --
-         * (SPEC.md 114.4.3, LEMS_GREY_EGA): nothing past row 199, every
+         * (SPEC.md 116.4.3, LEMS_GREY_EGA): nothing past row 199, every
          * content line at its true width and pitch */
         h_caps = (1 << OS88_FSXM_CGA320) | (1 << OS88_FSXM_CGA640);
         h_vidkind = OS88_VID_CGA;

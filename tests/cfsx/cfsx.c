@@ -2,7 +2,7 @@
  * os8088 - tests/cfsx/cfsx.c
  *
  * THE CAPABILITY GATE FOR THE EXCLUSIVE BRACKET IN C (SPEC.md 53, reached
- * from C per SPEC.md 114.2). tests/chello proved a compiled package can hold a
+ * from C per SPEC.md 116.2). tests/chello proved a compiled package can hold a
  * window and tests/covl proved half of it can live in a second segment; this
  * one proves a compiled package can BORROW THE MACHINE - take the screen away
  * from the desktop, set a foreign video mode, drive the VGA's own registers,
@@ -17,7 +17,7 @@
  * ---------------------------------------------------------------------------
  * Every claim below is the sort that assembles cleanly, boots, and is wrong -
  * a picture that is merely different rather than absent. Three of them had
- * never been done anywhere in this tree before SPEC.md 114 needed them:
+ * never been done anywhere in this tree before SPEC.md 116 needed them:
  *
  *   THE CRTC LINE COMPARE with a panel standing still under a scrolling top
  *   half; a MODE CHANGE INSIDE a bracket; and an ovl_* FAR-CALLED FROM INSIDE
@@ -49,7 +49,7 @@
  *  7. THE OVERLAY FROM INSIDE THE BRACKET, in three arms the operator picks
  *     between - and the third one is the reason this gate found something:
  *
- *       SPACE  force the module resident BEFORE entering (SPEC.md 114.5's
+ *       SPACE  force the module resident BEFORE entering (SPEC.md 116.5's
  *              rule), with a SPEC.md 11.2 fullscreen window stacked under
  *              the bracket the way apps/missile stacks one
  *       L      enter first and load the module INSIDE, fullscreen stacked
@@ -57,7 +57,7 @@
  *
  *     Booted against build/cfsxnoovl.img, which carries no module at all,
  *     SPACE refuses in the app's own words with nothing toasted, which is
- *     114.5 working. L refuses cleanly TOO - and that is not 114.5 working, it
+ *     116.5 working. L refuses cleanly TOO - and that is not 116.5 working, it
  *     is menu_draw_bar's own `wm_fs_vis` guard: a visible fullscreen window
  *     is over the bar, so the toast composes nothing. N takes that guard away
  *     and the kernel's toast lands in the middle of mode 0Dh, drawn at the
@@ -149,7 +149,7 @@ static int cf_modes;                    /* fsx_mode calls that returned 0 */
 static int cf_frames;                   /* scrolled frames */
 
 static int cf_want_pre;                 /* this run forces the module in
-                                         * first (SPEC.md 114.5) */
+                                         * first (SPEC.md 116.5) */
 static int cf_want_fs;                  /* ...and stacks SPEC.md 11.2's
                                          * fullscreen window under the
                                          * bracket, which turns out to be
@@ -228,7 +228,7 @@ static void cf_apph2(unsigned v)
  * What is new here is WHERE it is called from: inside the bracket, with the
  * gfx lock held, the scheduler passing only this task and a foreign video
  * mode on the glass. Getting there costs a floppy read if the module is not
- * already resident, which is why SPEC.md 114.5 says to force it in first - and
+ * already resident, which is why SPEC.md 116.5 says to force it in first - and
  * why this gate can be told to do the opposite.
  * ========================================================================= */
 static int ovl_probe(int a, int b, int c, int d)
@@ -309,7 +309,7 @@ static void cf_head(const char *what)
  * The refusal is the half worth reading: cc_ovneed answers 0 and the program
  * says so in its own words, in the foreign mode, with the BIOS's font. If a
  * kernel toast appears above this line then the module was loaded INSIDE the
- * bracket and failed there, which is exactly what SPEC.md 114.5 forbids and
+ * bracket and failed there, which is exactly what SPEC.md 116.5 forbids and
  * what the L arm of this gate exists to photograph. */
 static void cf_ovl_line(int row)
 {
@@ -402,7 +402,7 @@ static int cf_stage_info(void)
 }
 
 /* ---------------------------------------------------------------------------
- * STAGE 2 - THE SPLIT SCREEN (SPEC.md 114.4's raster, proved)
+ * STAGE 2 - THE SPLIT SCREEN (SPEC.md 116.4's raster, proved)
  *
  * The canvas is 640 pixels wide and the screen shows 320 of it, so the scroll
  * is a scroll and not a shear: without the wider logical line, advancing the
@@ -695,7 +695,7 @@ void os88_paint(void *win)
  * required by it - a refusal here is not a reason not to enter.
  *
  * pre != 0 forces the module resident BEFORE the bracket is entered, which is
- * SPEC.md 114.5's rule. When that fails, the flag says so and the bracket
+ * SPEC.md 116.5's rule. When that fails, the flag says so and the bracket
  * never asks again: cc_ovneed's refusal path ends in a kernel toast, and a
  * toast paints desktop geometry into whatever foreign mode is on the glass. */
 static void cf_enter(void *win, int pre, int full)

@@ -15,7 +15,7 @@
  * ATTRIBUTION. The rating and style names, the preview wording and every
  * greying fact this file names by id are the original's own strings or this
  * port's own text, and they live in LEMSTR.LEM rather than here (SPEC.md
- * 114.3); each carries the reference file that defines it in a comment in
+ * 116.3); each carries the reference file that defines it in a comment in
  * tools/os88lem.py's table and in the generated build/lemstr.h. Lemmings is
  * (C) 1991 DMA Design / Psygnosis; README.TXT carries the full list.
  *
@@ -62,7 +62,7 @@
  * os88_file_read_at(): that call's offset AND cap must each be a whole number
  * of CLUSTERS, the cluster is 512 bytes on a 1.44MB or 1.2MB disk and 1,024 on
  * a 720KB or 360KB one (tools/os88disk.py:124), and it is neither of those on
- * the RAM disk The Wire unpacks this package onto (SPEC.md 114.3.2). A whole
+ * the RAM disk The Wire unpacks this package onto (SPEC.md 116.3.2). A whole
  * small file has no alignment rule of any kind. */
 #define LEM_MAN_MAGIC     0        /* "OS88LEM" and a NUL */
 #define LEM_MAN_VERSION   8
@@ -142,9 +142,9 @@
                                     * OF THE FILE of a NUL-terminated string */
 
 /* --- the band file names ----------------------------------------------------
- * Uppercase 8.3 in [A-Z0-9_-] (SPEC.md 114.3.2), and resolved in the LAUNCHING
+ * Uppercase 8.3 in [A-Z0-9_-] (SPEC.md 116.3.2), and resolved in the LAUNCHING
  * instance's own directory (SPEC.md 19.2.1, 73.14) - which is why the package
- * and every band file are in ONE folder on every disk (SPEC.md 114.6). The
+ * and every band file are in ONE folder on every disk (SPEC.md 116.6). The
  * overlay is a PART inside LEMMINGS.O88 and no file of its own.
  *
  * The two patched ones are not const: lem_rating_load() writes the rating's
@@ -168,7 +168,7 @@ static char lem_f_scratch[14];
  * on it - which is what os88_fsx_caps() answers, asked with OUR window, and is
  * the same bit os88_fsx_mode() would refuse on. Music and Level Code are greyed
  * on EVERY machine, because what greys them is a fact about the DATA (SPEC.md
- * 114.8) and not about the hardware. Save Progress is greyed when the write path
+ * 116.8) and not about the hardware. Save Progress is greyed when the write path
  * refuses.
  *
  * The strings are in the band; this is the id map. */
@@ -190,7 +190,7 @@ static const struct lem_staterow lem_state[LEM_STATE_ROWS] = {
  * squasher, 0x0003 is pillar, 0x0004 is crystal". They are LOWERCASE PROSE
  * there and the band CAPITALISES them, so the preview reads "Style Dirt" beside
  * "Rating Fun" rather than disagreeing with itself one row along - a departure
- * SPEC.md 114.1 records as deliberate, in the wording tools/os88lem.py carries.
+ * SPEC.md 116.1 records as deliberate, in the wording tools/os88lem.py carries.
  * Rating names are Lemmix Styles.Dos.pas SectionTable's.
  * These are the id maps, not the strings. */
 static const unsigned char lem_style_str[5] = {
@@ -207,7 +207,7 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
  *
  *   NO STYLE BANK FITS ONE 64,512-byte file. The smallest is 78,732 and set 1
  *   is 96,804, so every one of the five is written as NUMBERED PARTS
- *   (SPEC.md 114.3.2's own mechanism) that the package reads in sequence into
+ *   (SPEC.md 116.3.2's own mechanism) that the package reads in sequence into
  *   ONE claim at successive 512-aligned offsets. Part p starts at logical
  *   offset p * 64,512, which is 4,032 paragraphs - exact, because 64,512 is
  *   itself 126 sectors.
@@ -279,7 +279,7 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
  * the 320x104 2bpp brown background (section 3 offset 0) - and since wave 6
  * an eleventh, the explosion's spray, out of PARTICLES.DAT (Lemmix's
  * src/Data/Particles/Particles.dat, which was extracted from the game's
- * executable; SPEC.md 114.8). */
+ * executable; SPEC.md 116.8). */
 #define LEM_MN_MAGIC      0        /* "LMNB" */
 #define LEM_MN_VERSION    4
 #define LEM_MN_VER        3        /* 3: item 10, the spray (wave 6); 2:
@@ -337,7 +337,7 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
  * is why lemovl.c reads it a byte at a time and never with lem_u16().
  *
  * The terrain list is 400 four-byte slots; a slot whose first WORD is 0xFFFF is
- * SKIPPED and never breaks the walk (SPEC.md 114.3.1: it is Taxing 27, 'Call in
+ * SKIPPED and never breaks the walk (SPEC.md 116.3.1: it is Taxing 27, 'Call in
  * the bomb squad', whose slot 68 holds 0xFFFF22A6 and whose slots 69-399 hold
  * 327 further normal entries - breaking renders it with 68 pieces of 395). */
 #define LEM_LVL_SIZE   2048
@@ -346,7 +346,7 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
 #define LEM_LVL_STEEL 0x760        /* 32 slots of 4 */
 #define LEM_LVL_GROUP     8        /* records per LEMLV<n>.LEM */
 
-/* WIRE_FILEMAX (The Wire: SPEC.md 92.13; LEMMINGS: 114.3.2): no band file exceeds this, which is
+/* WIRE_FILEMAX (The Wire: SPEC.md 92.13; LEMMINGS: 116.3.2): no band file exceeds this, which is
  * what makes a bank's parts land at exact 4,032-paragraph boundaries and what
  * every os88_file_read_seg() below is capped at. */
 #define LEM_PARTMAX   64512u
@@ -427,7 +427,7 @@ static int ovl_style_name(int style)
 }
 
 /* ============================================================================
- * WAVE 3: THE GAME'S TABLES (SPEC.md 114.4.7)
+ * WAVE 3: THE GAME'S TABLES (SPEC.md 116.4.7)
  *
  * ATTRIBUTION. Every number below is the original's, read out of one of the
  * three reimplementations that document it and cited at the table that carries
@@ -569,7 +569,7 @@ static const unsigned char lem_ffr[16] = {
 #define LEM_MAXY       163
 #define LEM_MAXFALL     60            /* MAX_FALLDISTANCE */
 
-/* --- the sounds (SPEC.md 114.11). The EVENTS are the original's - Lemmix
+/* --- the sounds (SPEC.md 116.11). The EVENTS are the original's - Lemmix
  * src/Game.pas's CueSoundEffect calls, one per place the DOS game plays one -
  * and the TONES are this port's own: the original's are FM patches inside
  * ADLIB.DAT, which is not in the 26 files this port fetches at all. A tone is
@@ -595,7 +595,7 @@ static const unsigned char lem_ffr[16] = {
  * (src/Game.Sound.pas:478, :494) - so a stock Lemmix, like the 1991 game, is
  * SILENT at a dig, a bash, a mine stroke, an umbrella and a nuke. Wave 3 cued
  * all five and lost the trap's sound to the digger's (the lowest number wins
- * a frame); its review struck them (SPEC.md 114.11). */
+ * a frame); its review struck them (SPEC.md 116.11). */
 
 static const unsigned int lem_sndhz[SND_COUNT] = {
     523, 220, 1000, 1500, 1320, 110, 440, 80, 300, 600, 2000, 880, 200

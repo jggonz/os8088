@@ -4,7 +4,7 @@
     make lemmingsdisk && python3 tests/lemmings.py
     python3 tests/lemmings.py --png build/port-shots/   # ...and LOOK at it
 
-SPEC.md 114.12's boot-and-screendump row, in SOAK: LEMMINGS is a PACKAGE and
+SPEC.md 116.12's boot-and-screendump row, in SOAK: LEMMINGS is a PACKAGE and
 `full` carries nothing app-specific. It boots QEMU with a SCRATCH COPY of
 build/lemmings.img in B: (a played level writes SYSTEM/APPDATA/LEMMINGS.SAV
 there, and the build's own image must not change under the next row), and
@@ -15,7 +15,7 @@ then, every step asserted rather than assumed:
      called "Lemmings" is up - the launcher;
   2. Enter on the list is Play on Fun 1: the PREVIEW comes up inside the
      bracket in the screens' second foreign mode - a 640x480 dump on VGA
-     (mode 12h, SPEC.md 114.4.3), the desktop gone;
+     (mode 12h, SPEC.md 116.4.3), the desktop gone;
   3. Enter again plays: the dump becomes mode 0Dh's 640x400 and stays it;
   4. THE POINTER LEAVES THE WORLD AND NOTHING STAYS BEHIND (wave 5's
      verifier, carried finding A of wave 6). With the game PAUSED (F11) the
@@ -32,7 +32,7 @@ then, every step asserted rather than assumed:
   5. Esc ends the level and the POSTVIEW comes up in 12h - 640x480 again,
      the brown tile and the result text on it, not black and not the game;
   6. Esc there is the menu: the bracket returns and the launcher window is
-     the one the desktop shows again (SPEC.md 114.4.6's "leave the bracket"
+     the one the desktop shows again (SPEC.md 116.4.6's "leave the bracket"
      row - one kernel paint, no fullscreen latch since wave 6).
 
 IT IS QEMU AND NOT MartyPC on purpose: this is a behaviour row, and QEMU
@@ -40,7 +40,7 @@ draws mode 0Dh's split screen and pel panning faithfully enough to compare
 pixels (the wave-5 verifier found the defect there). It asserts no speed.
 
 SKIPS - exit 0, saying why - when build/lemmings.img is not there: the 26
-data files are fetched and never committed (SPEC.md 114.2), so a fresh clone
+data files are fetched and never committed (SPEC.md 116.2), so a fresh clone
 without `tools/getlemmings.py` cannot build the disk, and `wants=` in
 tests/suite.py is what builds it when it can.
 """

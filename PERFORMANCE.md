@@ -1229,7 +1229,7 @@ list to check yourself against.
 | Scroll the Browser one line, deep in a page | the tier test read the old scroll POSITION rather than the delta, so past one windowful every scroll repainted the whole band, on every page, for the rest of the document. Measured on a cycle-accurate 5150/CGA in a 15-row band, one Down key: **15 `font_run`s and no `gfx_scroll` at all**, **19 frames of visible redraw = 317 ms** | one `gfx_scroll` and the row it exposed, at every depth: **1 `font_run` and 1 `gfx_scroll`**, **5 frames = 83 ms**. Framebuffer **0 differing pixels** against the band repaint on CGA (15 rows) and Hercules (27), 55 scroll steps each | §71.10 |
 | Scroll a Disk window that is already at an end stop | a full repaint to show the same pixels — **266 ms** | **nothing at all**, 0 frames | §22.11 |
 | Type into the file dialog's name box | ~120 glyphs + a 298×151 fill | `font_char` **972 → 36**, scanlines **7,600 → 184** (8 chars) | §38.8 |
-| Word: a Left or Right arrow | `wd_fastcm` parked `[wd_mvbot]` at the 0x7FFF sentinel - they do not go through `wd_move`, which is what sets a real bound - so pass 1 laid out the whole view. Right **186.3 ms** (walk 142.8), Left **216.6** (walk 164.8), against Down's 114.5 (walk 4.3) | §27.4.1's two-row rule applied to them as well, `ckpr + 1`: Right **67.3 ms** (walk 23.8), Left **96.2** (walk 42.2) | §27.4.4 |
+| Word: a Left or Right arrow | `wd_fastcm` parked `[wd_mvbot]` at the 0x7FFF sentinel - they do not go through `wd_move`, which is what sets a real bound - so pass 1 laid out the whole view. Right **186.3 ms** (walk 142.8), Left **216.6** (walk 164.8), against Down's 116.5 (walk 4.3) | §27.4.1's two-row rule applied to them as well, `ckpr + 1`: Right **67.3 ms** (walk 23.8), Left **96.2** (walk 42.2) | §27.4.4 |
 | Word: typing a character mid-line | pass 1 laid out every row from the caret to the bottom of the view, every keystroke, to be told nothing below had changed. On `WELCOME.DOC` in the shipped window (`vrows` = 6): **205.6 ms** at caret row 1, of which `wd_walk` **149.2 ms** | `wd_eoutck` stops the walk where the row indices reconverge - one compare a row, exact, height-agnostic: **80.4 ms**, of which `wd_walk` **29.6 ms** (2.6x and 5.0x). At caret row 3, 224.9 -> **142.8 ms** | §27.4.3 |
 | Word: moving the caret at all | `wd_redraw` is two walks - pass 1 finds the rows whose signatures moved and pass 2 draws them - and the split is there for a REFLOW, which can change a row's height and so needs a band erased before it is lettered. A caret move reflows nothing and pays for it anyway: a Right arrow was **67.6 ms of which pass 1 is 23.5**, drawing not one pixel | `wd_rflush` runs at the row's END, one call before `wd_nextrow` folds the signature, so it asks the question itself: **47.0 ms**, ONE `wd_walk` instead of two (1.44x) | §27.4.6 |
 | Word: a scroll-bar click ABOVE the thumb | A formatted note gave up the upward blit-scroll - the entering rows are above the view and in no bank - so every click above the thumb repainted the whole window, menu bar and ruler included: **622 ms** against the down click's 251 | `wd_upheight` prices those rows with a bounded measure walk instead: **307 ms**, 2.03x, and the chrome is not touched | §27.7.2.2 |
@@ -11912,7 +11912,7 @@ models** (the Seine, the axis road) — a dozen objects.
 | `cs_step` ×ticks | 8.06 | 9.61 | 10.17 | 10.20 | 10.45 |
 | `cs_r_begin` + `cs_matrix` | 1.8 | 1.9 | 1.85 | 1.9 | 1.85 |
 | `cs_skyground` | 8.55 | 9.28 | 8.76 | 30.33 | **47.77** |
-| `cs_scene` | 88.72 | 114.58 | 128.42 | 143.48 | 178.72 |
+| `cs_scene` | 88.72 | 116.58 | 128.42 | 143.48 | 178.72 |
 | …`cs_consider` (47 objects) | 11.18 | 9.90 | 17.27 | 18.18 | 19.02 |
 | …`cs_drawobj` (n) | 74.83 (10) | 102.28 (7) | 108.28 (11) | 122.12 (14) | 156.22 (17) |
 | `cs_panel` | 4.87 | 5.04 | 3.57 | **20.61** | 5.02 |
@@ -11953,7 +11953,7 @@ level.** That is the largest single lever this project has not taken.
 | 10 | ~30° | 250.1 | 38.7 | 38.0 | **2.4** | 156.2 | 43.4 | 31.4 | 6.4 |
 | 14 | ~20° | 215.6 | 23.1 | 30.4 | 2.4 | 145.0 | 41.2 | 29.2 | 3.9 |
 | 18 | ~9° | 165.4 | 10.0 | 15.4 | 2.4 | 122.9 | 40.0 | 25.7 | 2.2 |
-| 22 | ~0° | 150.0 | 9.0 | 9.9 | 2.4 | 114.1 | 37.1 | 25.1 | 2.1 |
+| 22 | ~0° | 150.0 | 9.0 | 9.9 | 2.4 | 116.1 | 37.1 | 25.1 | 2.1 |
 
 **THE PANEL'S CLIFF AT FRAME 10 — 44.7 ms to 2.4 — IS THE ADI, and it is the
 one thing on this page a still frame cannot show.** §88.9's items are redrawn
@@ -14863,7 +14863,7 @@ and confirms that duplicate ownership grants cannot rewind or score twice.
 These are emulator measurements; they do not replace a physical XT/null-modem
 run.
 
-### Set 161 — the LEMMINGS raster, on a 4.77 MHz 8088 (SPEC.md §114.4, §114.7.1)
+### Set 161 — the LEMMINGS raster, on a 4.77 MHz 8088 (SPEC.md §116.4, §116.7.1)
 
 **What it is.** `tests/lembench` times the SHIPPING raster - its shim
 `%include`s `apps/lemmings/lemmask.inc`, `lemblit.inc` and `lemfont.inc`
@@ -14875,7 +14875,7 @@ contention, and writes a PNG of the bench's own screen
 
 **IT WAS TAKEN TWICE.** The first pass is what wave 2 shipped on; the four
 panel-side rows were re-taken after the wave's review rebuilt that side
-(SPEC.md §114.4.4), and both figures are given because the difference is the
+(SPEC.md §116.4.4), and both figures are given because the difference is the
 whole content of readings 4 and 7.
 
 **Machines**: `os8088_xt_vga` and `os8088_xt_hdd` — both an IBM 5160 at
@@ -14984,8 +14984,8 @@ every row wrong and every one plausible), and the iteration count itself
 overflows if the growth is allowed a fourth doubling.
 
 **Wave 3's readings (2026-10-20), same machine, same instrument**
-(`build/port-shots/wave3b-lembench-os8088_xt_vga.png`; SPEC.md §114.7.2 and
-§114.7.3 carry the argument):
+(`build/port-shots/wave3b-lembench-os8088_xt_vga.png`; SPEC.md §116.7.2 and
+§116.7.3 carry the argument):
 
 | row | VGA mode 0Dh, 4.77 MHz 8088 |
 |---|---:|
@@ -15013,7 +15013,7 @@ overflows if the growth is allowed a fourth doubling.
    a busy and a quiet level is the final pass's MartyPC row and is not
    quoted until it is taken.
 10. **WAVE 3'S REVIEW: WHAT THE LIVE FRAME TAKES OFF THE GLASS** (counted by
-    the host harness, not timed; SPEC.md §114.4.6's table is the argument).
+    the host harness, not timed; SPEC.md §116.4.6's table is the argument).
     A changed object or a dug rectangle on VGA is composed in a VRAM scratch
     and latch-copied on in one pass — **0 background rectangles onto the
     glass in 300 drawn frames**, where the first build wrote every one there
@@ -15050,14 +15050,14 @@ overflows if the growth is allowed a fourth doubling.
     rectangle where a lemming used to cost a latch save and a latch
     restore, and ~250 module-to-resident crossings a frame at 80 lemmings —
     is the final pass's to time, with the off-glass fraction `flicker()` and
-    `pace()` give on `xt_vga` (SPEC.md §114.7.3's table).
+    `pace()` give on `xt_vga` (SPEC.md §116.7.3's table).
 
 **The final pass's readings (wave 6, 2026-10-20), on the PRE-REVIEW build**
 (`image=31116 bss=20425`, part 0 32,664 - NOT the shipped line, which is
-SPEC.md §114.6's `image=31668 bss=20421` after wave 6's three reviews; the
+SPEC.md §116.6's `image=31668 bss=20421` after wave 6's three reviews; the
 heading said "FINAL build" until the third review) - `tests/lemplaymarty.py`, which
 PLAYS the shipped package off `build/lemmings360.img` on `os8088_xt_vga` and
-`os8088_xt_hdd` and reads the game's own state by symbol (SPEC.md §114.7.4 is
+`os8088_xt_hdd` and reads the game's own state by symbol (SPEC.md §116.7.4 is
 the table and the argument). Taken once each; nobody re-takes them to confirm.
 The "glass update" rows time `lem_r_present` to `lem_r_present`: a pass of
 the loop that changes nothing returns before the present and is not counted,
@@ -15072,7 +15072,7 @@ band since the second review, 828 byte-rows in 76 rows a game frame per spray
 on the real table (`lemtest`; one box was 2,961 in 128), ~40-50 ms of a drawn
 frame on a 4.77 MHz 8088 by the loops' instruction counts (one box ~75-100
 ms). **The bins have a price of their own** (the third review, SPEC.md
-§114.4.6): two 80-pair walks a spray a frame at ~9 ms each (~45 instructions
+§116.4.6): two 80-pair walks a spray a frame at ~9 ms each (~45 instructions
 a binned pair, ~550 cycles, ~44K a walk) and up to ten `ovl_rc_add` calls for
 one box's one, ~9 ms each on a full list - so a lone spray on a short list
 nets ~20-25 ms from them and a NUKE, which keeps up to 52 in flight on a list
@@ -15080,7 +15080,7 @@ the crowd has already filled, would have paid ~2.2 s of a game frame for
 14% of compose area (52 walks and 194 adds a frame against 0 and 26.5 as one
 box each, `lemtest`'s nuke leg). `ovl_spray_rects` takes the bins for one
 spray on a list with room and one box otherwise. A reading of it is the
-Finish pass's. SPEC.md §114.6 has the shipped build's line, `image=31668
+Finish pass's. SPEC.md §116.6 has the shipped build's line, `image=31668
 bss=20421`.
 
 | | VGA mode 0Dh | CGA mode 4 |
@@ -15114,7 +15114,7 @@ bss=20421`.
     a 1.67 s frame; the sprite path stays in the module.
 15. **THE PICTURE IS 18-22% OVER ITS ESTIMATE**: 1,652 ms on VGA against
     ~1.4 s and 366 ms mono against ~0.3 s. It is drawn a row at a time with
-    the input asked every eighth row (SPEC.md §114.4.3.1).
+    the input asked every eighth row (SPEC.md §116.4.3.1).
 16. **THE NEXT LEVEL INSIDE THE BRACKET IS TWO DISK CALLS**, ~0.8 s at the
     ~400 ms a call MartyPC does not model (it is cycle-accurate, not
     disk-accurate - the CALLS are exact); a launch from the window is 19-23.
@@ -15130,4 +15130,4 @@ bss=20421`.
 **Harness**: `make lemmingsdisk && python3 tests/lemplaymarty.py --machine
 os8088_xt_vga` (and `--machine os8088_xt_hdd`), ~2 minutes a machine, writing
 `build/lemplay-<machine>.txt`. Hercules is not measured (reading 8's reason,
-SPEC.md §114.7.1).
+SPEC.md §116.7.1).

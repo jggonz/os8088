@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemmings.c
  *
- * LEMMINGS (SPEC.md 114) - Lemmings (DMA Design / Psygnosis, 1991, the DOS
+ * LEMMINGS (SPEC.md 116) - Lemmings (DMA Design / Psygnosis, 1991, the DOS
  * release) as an os8088 C package. This file is the translation unit's ROOT:
  * the constants, the state, the prototypes, the callbacks the shim declares,
  * the empty menu set and the #includes of the rest, in dependency order.
@@ -26,16 +26,16 @@
  *
  * WHERE THE WORDS COME FROM. The level names, the preview fields, the rating
  * and style names and every sentence that greys a control are read off the
- * CONVERTED BAND FILES (SPEC.md 114.3, docs/lemband-format.md). This program
+ * CONVERTED BAND FILES (SPEC.md 116.3, docs/lemband-format.md). This program
  * owns SIX literals and no more, and they are listed at their declaration
- * below; that is what SPEC.md 114.6's resident budget rests on, together with
+ * below; that is what SPEC.md 116.6's resident budget rests on, together with
  * the wave-1 overlay split.
  *
  * ATTRIBUTION. Lemmings is (C) 1991 DMA Design / Psygnosis. Every table, string
  * and offset derived from the original or from the three reimplementations that
  * document it names its source at the line that carries it; the full list is in
  * README.TXT beside the package, and the About card names the two principals
- * and points at it (SPEC.md 114.2). Nothing GPL or LGPL is copied.
+ * and points at it (SPEC.md 116.2). Nothing GPL or LGPL is copied.
  *
  * THE FOUR RULES (apps/cc/os88.h, SPEC.md 73.5, docs/C-TOOLCHAIN.md): every
  * addressable object is static - the address of an automatic is a stack offset
@@ -49,7 +49,7 @@
  * lemovl.c's ovl_progress_read) - and names the live CD as the one case of it
  * that cannot be cured. Waves 1-3 carried a sentence about the live CD alone,
  * one case narrower than the predicate; wave 4 broadened it in
- * tools/os88lem.py's table (SPEC.md 114.8).
+ * tools/os88lem.py's table (SPEC.md 116.8).
  * ==========================================================================*/
 
 #include "os88.h"
@@ -124,7 +124,7 @@
                                      * IT WAS 8,192 AND THE HEADROOM WAS NOT
                                      * THIS FILE'S TO SPEND. bss is the cheap
                                      * half of this budget, but wave 1 measured
-                                     * 14,866 bytes of it against SPEC.md 114.6's
+                                     * 14,866 bytes of it against SPEC.md 116.6's
                                      * plan of ~14,000 for the WHOLE program,
                                      * with the lemming pool, the object
                                      * instances, the terrain list, the sprite
@@ -145,7 +145,7 @@
 #define LEM_BANK_STYLE   0          /* which half of LEMMAN's cost table */
 #define LEM_BANK_SPEC    1
 
-/* --- the world, and the raster's own numbers (SPEC.md 114.3.1, 114.4) --------
+/* --- the world, and the raster's own numbers (SPEC.md 116.3.1, 116.4) --------
  * 1,584 x 160, which is lemmings_3ds's and Lemmix's figure and not
  * Lemmings.ts's 1,600 (lemtool/REPORT.md measured all 120 levels). The C says
  * WHAT to draw and lemblit.inc/lemmask.inc touch the pixels, so these three are
@@ -161,7 +161,7 @@
  * One character and one attribute per cell. 64 columns is 512 pixels, which is
  * the window this launcher is authored at; a wider window is laid out inside
  * 64 cells rather than growing two 1,280-byte arrays, because bss is cheap but
- * it is not free and SPEC.md 114.6's budget is 81% spent before this file
+ * it is not free and SPEC.md 116.6's budget is 81% spent before this file
  * starts. The stride is a power of two so `row * stride` is a SHIFT and never
  * an imul the gate has to find a dead scratch register for (LESSONS.md 3). */
 #define LEM_SH_COLS     64
@@ -205,12 +205,12 @@
 /* The three screens this wave has. */
 #define LEM_SC_LIST     0
 #define LEM_SC_PREVIEW  1           /* the level's own preview, wave 5 moves it
-                                     * inside the bracket (SPEC.md 114.4.3) */
+                                     * inside the bracket (SPEC.md 116.4.3) */
 #define LEM_SC_FACT     2           /* the sentence behind a greyed control */
 #define LEM_SC_POST     3           /* the level's RESULT - the original's
                                      * postview text, in the window in wave 3
                                      * as the preview is (wave 5 moves both
-                                     * into the bracket, SPEC.md 114.4.3) */
+                                     * into the bracket, SPEC.md 116.4.3) */
 
 /* ------------------------------------------------------------------------- */
 /* Prototypes for everything. They are here rather than scattered because the
@@ -302,7 +302,7 @@ static int  lem_set_fact(int labelid, int strid, int level);
 static void lem_back(void *win);
 static void lem_play(void *win);
 
-/* lemgame.c - the per-frame step (SPEC.md 114.4.7) */
+/* lemgame.c - the per-frame step (SPEC.md 116.4.7) */
 static void lem_snd_cue(int ev);
 static void ovl_snd_flush(void);
 static void ovl_rr_adjust(void);
@@ -363,7 +363,7 @@ static int  ovl_assign(void);
 static void ovl_hittest(int cx, int cy, int right, int rec);
 static int  ovl_word(int i);
 
-/* lemdraw.c - the frame (SPEC.md 114.4) */
+/* lemdraw.c - the frame (SPEC.md 116.4) */
 static int  ovl_level_load(int level);
 static int  lem_compose_level(int level);
 static void lem_world_clear(int vram);
@@ -516,7 +516,7 @@ void lem_p_text(unsigned seg, unsigned off, int x, int y, const char *s,
 void lem_p_mini(int y, int srow);
 void lem_p_pal(unsigned mseg, unsigned moff, unsigned bseg, unsigned coff);
 
-/* lemovl.c - everything in the overlay part (SPEC.md 73.14.2, 114.6) */
+/* lemovl.c - everything in the overlay part (SPEC.md 73.14.2, 116.6) */
 static void ovl_chrome(int screen);
 static void ovl_fmt(int line, int level, char *dst, unsigned cap);
 static void ovl_pvline(int line, int level, char *dst, unsigned cap,
@@ -646,7 +646,7 @@ static int lem_playing = -1;        /* the level in hand, or -1 */
 static int lem_resume;              /* this entry brings a kept level back */
 static int lem_suspended;           /* a level is kept and the window is up */
 static int lem_exit;                /* LEM_X_* */
-/* the session's own state (wave 5, SPEC.md 114.4.3) */
+/* the session's own state (wave 5, SPEC.md 116.4.3) */
 static int lem_composed;            /* the level in hand is composed: T and
                                      * the mask hold it, and the preview
                                      * draws its picture without composing */
@@ -762,7 +762,7 @@ static int lem_c_cols;              /* ...and columns scanned in them */
 #endif
 
 /* THE SIX LITERALS THIS PROGRAM OWNS. Everything else the user reads is in
- * LEMSTR.LEM (SPEC.md 114.3, 114.6). These six cannot be:
+ * LEMSTR.LEM (SPEC.md 116.3, 116.6). These six cannot be:
  *   - the window TITLE has to outlive the window (os88.h's own rule) and so
  *     cannot point into a buffer anything reloads;
  *   - the no-data refusal is what is said when the BAND could not be read;
@@ -807,7 +807,7 @@ static struct os88_menuset lem_menus = { lem_title, 0, 0, { { 0, 0, 0 } } };
 #include "lemobj.c"                 /* the objects, and the frames' rows */
 #include "lemact.c"                 /* the eighteen actions and the skills */
 #include "lemui.c"                  /* the launcher */
-#include "lemdraw.c"                /* the frame (SPEC.md 114.4) */
+#include "lemdraw.c"                /* the frame (SPEC.md 116.4) */
 #include "lemovl.c"                 /* everything ovl_* -> the overlay PART */
 
 /* ============================================================================
@@ -846,7 +846,7 @@ static int lem_probe_mode(void *win)
  * FSXM_VGA0D - the 320x200x16 mode - because what that row states is a fact
  * about COLOUR: "kernel/fsx.inc:117 fsx_capstab gives an EGA 0x000F, the
  * CGA-compatible modes only, so a sixteen-colour card gets four" (SPEC.md
- * 114.8). A card that cannot set 0Dh still PLAYS, in four colours or in
+ * 116.8). A card that cannot set 0Dh still PLAYS, in four colours or in
  * monochrome; greying the launch on that predicate would refuse the game on
  * every machine but a VGA.
  *
@@ -1328,7 +1328,7 @@ void os88_about(void *win)
 }
 
 /* ============================================================================
- * THE EXCLUSIVE BRACKET (SPEC.md 53.1, 114.5)
+ * THE EXCLUSIVE BRACKET (SPEC.md 53.1, 116.5)
  *
  * os88_fsx_run() calls this and does not return until it rets. While it runs
  * the scheduler passes only this task, the video mode is ours, and EVERY
@@ -1344,7 +1344,7 @@ void os88_about(void *win)
  * behind it), samples the mouse, moves the view, steps at most LEM_STEP_MAX
  * lemmings of the current game frame, and repaints the pointer - so pointer
  * latency is one tick whatever a frame of the world costs, and a frame of
- * sixty lemmings on an XT simply takes several passes (SPEC.md 114.7 point 3).
+ * sixty lemmings on an XT simply takes several passes (SPEC.md 116.7 point 3).
  * The game frame is due 17 times a second (Lemmix's clock) by an accumulator
  * of ticks; a frame that ran late is NOT repaid in a burst, so a slow machine
  * plays slower and never in fits - decision 7.
@@ -1360,7 +1360,7 @@ void os88_about(void *win)
 /* The scan codes this loop reads. os88_fsx_key() answers (scan << 8) | ascii
  * and uses the ENHANCED BIOS pair where the BIOS says it has one, which is why
  * F11 and F12 arrive on an AT and are absent on an 83-key XT - a fact the Mode
- * row states rather than a defect (SPEC.md 114.8). The map is Lemmix's
+ * row states rather than a defect (SPEC.md 116.8). The map is Lemmix's
  * src/GameScreen.Player.pas:519-531 (F1-F12) and :476-487 (Ctrl+F1/F2). */
 #define LEM_K_ESC    0x01
 #define LEM_K_LEFT   0x4B
@@ -1385,7 +1385,7 @@ void os88_about(void *win)
 #define LEM_M_CTRL   0x1D
 
 /* LEMMIX'S THREE ADDITIONS TO THE KEYBOARD, carried and named as such
- * (SPEC.md 114.10): Left / Right scroll the view and Ctrl+Left / Ctrl+Right
+ * (SPEC.md 116.10): Left / Right scroll the view and Ctrl+Left / Ctrl+Right
  * scroll it one pixel (GameScreen.Player.pas:493-509 and :548-560, KeyDown
  * sets KeyBoardScroll and CheckScroll moves SCROLL_PIXELS_NORMAL = 8, or
  * SCROLL_PIXELS_PRECISE = 1 with Ctrl, every INTERVAL_SCROLL = 58 ms until
@@ -1583,7 +1583,7 @@ static void ovl_panel_press(int px, int py)
  * (lem_infr, more than LEM_STEP_MAX lemmings out) some lemmings have moved this
  * frame and some have not, and Lemmix only ever assigns BETWEEN frames - so the
  * press is queued and ovl_frame_begin() applies it before the next frame steps
- * a lemming (SPEC.md 114.7 point 3). The nuke takes the same road. */
+ * a lemming (SPEC.md 116.7 point 3). The nuke takes the same road. */
 static int lem_qhit, lem_qx, lem_qy, lem_qr, lem_qnuke;
 
 static void ovl_view_press(int x, int y, int right)
@@ -1796,14 +1796,14 @@ static void ovl_play_loop(void)
 
 /* ============================================================================
  * WAVE 5: THE SESSION - preview -> play -> postview -> next / retry / menu,
- * all inside ONE bracket (SPEC.md 114.4.3, docs/LEMMINGS-PORT-PLAN.md wave 5)
+ * all inside ONE bracket (SPEC.md 116.4.3, docs/LEMMINGS-PORT-PLAN.md wave 5)
  *
  * Lemmix's screen order (GameScreen.Preview.pas, .Player.pas, .Postview.pas)
  * on the original's buttons: the preview's left button or Enter plays and Esc
  * goes to the menu; the postview's left button or Enter is the next level on
  * a success and the same one again on a failure, its right button and Esc are
  * the menu. The menu here is the launcher window, which IS this port's menu
- * screen (SPEC.md 114.8). 'f' is SPEC.md 11.2.1's door on every screen: out
+ * screen (SPEC.md 116.8). 'f' is SPEC.md 11.2.1's door on every screen: out
  * of the preview it keeps the level, out of play it keeps the level, out of
  * the postview it shows the result in the window.
  *
@@ -2069,7 +2069,7 @@ static void ovl_session(void)
             return;
         }
         if (!lem_started) {
-            /* THE PANEL AND A WORD BEFORE THE WAIT (SPEC.md 114.4.5): with no
+            /* THE PANEL AND A WORD BEFORE THE WAIT (SPEC.md 116.4.5): with no
              * screens' mode the level composes HERE, as it did before wave 5,
              * and after a preview the minimap's sampling is the wait */
             if (!lem_composed)
@@ -2138,7 +2138,7 @@ static void lem_continue(void *win)
     } else if (lem_screen == LEM_SC_POST) {
         if (lem_post_nrat != lem_rating) {
             /* the NEXT SECTION: its file is read on the wake (no keystroke
-             * touches a file, SPEC.md 114.6), and the wake opens its first
+             * touches a file, SPEC.md 116.6), and the wake opens its first
              * level's preview once it is in */
             lem_rating = lem_post_nrat;
             lem_ratpend = 1;
@@ -2157,7 +2157,7 @@ static void lem_continue(void *win)
 
 /* ovl_post_menu - Esc on the WINDOW's postview: the menu, ON THE NEXT LEVEL
  * after a success, as the bracket's own postview leaves it (ovl_post_move has
- * Lemmix's reference). A keystroke may not read a file (SPEC.md 114.6), so a
+ * Lemmix's reference). A keystroke may not read a file (SPEC.md 116.6), so a
  * section's end is owed to the wake, which selects the next section's level
  * without playing it (lem_post_play = 2); until it lands the level rows are
  * held blank rather than lettered with the section being left. */
@@ -2248,7 +2248,7 @@ static void lem_abandon(void)
 
 /* ovl_leave - THE SCREEN THE WINDOW COMES BACK ON, CHOSEN INSIDE THE BRACKET
  * (lem_fsx_main's last act) so that the fsx exit's one wm_paint_all draws it
- * and nothing is drawn after it (SPEC.md 114.4.6's "leave the bracket" row).
+ * and nothing is drawn after it (SPEC.md 116.4.6's "leave the bracket" row).
  * It DECIDES and draws nothing - no drawing slot is legal in here, and the
  * screens' builders only compose the paragraph. Nothing has re-laid the window
  * out since the list was drawn in it, so the paragraph is wrapped at the
@@ -2365,7 +2365,7 @@ static void ovl_launch(void *win)
          * - the one the glass kept. Without it the fsx exit's single
          * wm_paint_all (SPEC.md 53.6 step 4) is the only paint, and it draws
          * the screen ovl_leave() chose INSIDE the bracket, before the entry
-         * returned (SPEC.md 114.4.6's "leave the bracket" row). APPLE2's
+         * returned (SPEC.md 116.4.6's "leave the bracket" row). APPLE2's
          * a2scr.c enters the bracket the same way.
          *
          * THE EXIT IS RESET BEFORE THE CALL AND THE CALL'S OWN ANSWER IS READ.

@@ -1317,7 +1317,7 @@ cc_ovthunk:
 ;     that call claims (a heap claim, or a file read's sector cache, SPEC.md
 ;     18.95) and the claim compacts, the callee returns into whatever block
 ;     now sits where the module was. LEMMINGS' ovl_launch -> ovl_level_load ->
-;     ovl_claim_all -> os88_mem_claim is exactly that chain (SPEC.md 114.6).
+;     ovl_claim_all -> os88_mem_claim is exactly that chain (SPEC.md 116.6).
 ;
 ; So the EAGER part's carve is PINNED (cc_ovinit, below) - it was declared
 ; movable with this property as its argument, and the argument was the first
@@ -1325,7 +1325,7 @@ cc_ovthunk:
 ; movable - this proc, for the lazy part and for the <NAME>.OVL sidecar - are
 ; safe ONLY while no module function that another module function calls can
 ; claim; that is not checked by anything, and is recorded as open in
-; SPEC.md 114.6. A resident routine calling INTO the module goes through
+; SPEC.md 116.6. A resident routine calling INTO the module goes through
 ; cc_ovm_*, which this routine re-stamps, and a worker never enters at all
 ; (cc_ovneed's first instruction).
 ; -----------------------------------------------------------------------------

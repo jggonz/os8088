@@ -97,7 +97,7 @@ becomes the original's: the level's PREVIEW - its number and name, its
 lemmings, what must be saved, the release rate, the time, the rating and the
 graphic set, over a picture of the level - while the level is built behind
 it. The picture is the level's terrain only: the original also draws its
-entrance, exit and traps there, and this one does not (SPEC.md 114.4.3.1
+entrance, exit and traps there, and this one does not (SPEC.md 116.4.3.1
 says what drawing them would cost). Click (or press Enter) and the level
 comes up: the terrain above, the skill panel below, the status line across
 the top of the panel. When it ends, the original's RESULTS screen says how
@@ -248,7 +248,7 @@ the game draws around it. A click is caught even in the middle of the
 longest redraw, on every card.
 
 This is a 1991 game on a 1981 processor and it plays at what that costs; the
-design record (SPEC.md 114.7.4) has the whole table.
+design record (SPEC.md 116.7.4) has the whole table.
 
 WHAT IS NOT HERE
 ----------------

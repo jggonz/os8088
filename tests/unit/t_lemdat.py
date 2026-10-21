@@ -2,7 +2,7 @@
 """t_lemdat: read the 26 DOS Lemmings data files a SECOND time, independently,
 and hold tools/os88lem.py's output against what this reading says.
 
-SPEC.md 114.2: "Every compressed section in all 21 compressed files decodes on
+SPEC.md 116.2: "Every compressed section in all 21 compressed files decodes on
 the first attempt - 101 sections, every XOR checksum matching its header, every
 decompressed length equalling the header's, both `unused` words zero, and each
 file's section lengths summing to exactly the file length with no slack. That
@@ -31,11 +31,11 @@ It then reads what the converter WROTE and checks it against this reading:
 every band's magic, version, part count and declared length; the manifest's
 120 entries against the raw records this file decoded for itself, with
 ODDTABLE applied here rather than trusted; and every name and size against
-SPEC.md 114.3.2's limits.
+SPEC.md 116.3.2's limits.
 
 SKIPS cleanly - exit 0, saying why - when build/lemdata.stamp is absent. A
 clone with nasm and python3 builds every floppy this project ships, and the
-26 data files are fetched and never committed (SPEC.md 114.2), so a red row
+26 data files are fetched and never committed (SPEC.md 116.2), so a red row
 there would be reporting on the box rather than on the tree.
 
     python3 tests/unit/t_lemdat.py
@@ -218,7 +218,7 @@ def read_all():
             sections.append(data)
         out[name] = sections
     check(nsections == 101,
-          "%d compressed sections in the 21 compressed files; SPEC.md 114.2 "
+          "%d compressed sections in the 21 compressed files; SPEC.md 116.2 "
           "says 101" % nsections)
     print("  101 sections: %d decoded, every running checksum, every declared "
           "length, both unused words zero, no slack in any file" % nsections)
@@ -256,7 +256,7 @@ def check_terrain(sections):
 
     GRND says so - "the last plane (that adds 8 to a pixel) is equal to the
     mask plane ... the mask location is indeed identical to the last plane's
-    location" - and SPEC.md 114.3.1 makes it the port's ruling on terrain bpp.
+    location" - and SPEC.md 116.3.1 makes it the port's ruling on terrain bpp.
     What makes it checkable rather than restatable is that the pieces must
     then TILE VGAGR section 0 with no gap and no overlap at four planes each.
     """
@@ -277,7 +277,7 @@ def check_terrain(sections):
                   % (s, t["index"], t["mask"] - t["image"], t["w"], t["h"],
                      plane * 3))
             check(t["w"] % 16 == 0,
-                  "set %d terrain %d is %d wide; SPEC.md 114.3.1 says every "
+                  "set %d terrain %d is %d wide; SPEC.md 116.3.1 says every "
                   "terrain width in every set is a multiple of 16"
                   % (s, t["index"], t["w"]))
             spans.append((t["image"], plane * 4, t["index"]))
@@ -309,7 +309,7 @@ def check_terrain(sections):
                   "set %d object %d runs past VGAGR section 1"
                   % (s, o["index"]))
     check(total_pieces == 273,
-          "%d used terrain pieces over the five sets; SPEC.md 114.3.1 says 273"
+          "%d used terrain pieces over the five sets; SPEC.md 116.3.1 says 273"
           % total_pieces)
     print("  terrain: %d pieces, mask == plane 3 on every one, every width a "
           "multiple of 16, the pieces tile VGAGR section 0 exactly in all "
@@ -474,7 +474,7 @@ def check_bands(sections, lem, out_dir, geom):
         ok = (1 <= len(stem) <= 8 and 1 <= len(ext) <= 3
               and all(ch in NAME_ALPHABET for ch in stem + ext))
         check(ok, "%s/%s is not an uppercase 8.3 name in [A-Z0-9_-] "
-                  "(SPEC.md 114.3.2)" % (geom, name))
+                  "(SPEC.md 116.3.2)" % (geom, name))
         check(len(blobs[name]) <= FILEMAX,
               "%s/%s is %d bytes and WIRE_FILEMAX is %d"
               % (geom, name, len(blobs[name]), FILEMAX))
@@ -921,7 +921,7 @@ def check_bands(sections, lem, out_dir, geom):
           "%s carries %d playable levels and the pin says %d - the converter "
           "dropped or gained levels without a decision. DROPPING A LEVEL IS "
           "THE OWNER'S CALL (docs/LEMMINGS-PORT-PLAN.md wave 6, SPEC.md "
-          "114.9): tools/os88lem.py's LEVEL_PIN refuses the plan with the "
+          "116.9): tools/os88lem.py's LEVEL_PIN refuses the plan with the "
           "cluster arithmetic, and `make lemmings-data` prints it"
           % (geom, nplay, want_play))
     check(styles_bits == want_sets,
@@ -971,7 +971,7 @@ def main():
     if not os.path.exists(STAMP):
         print("t_lemdat: SKIP - %s is not there.\n"
               "  The 26 DOS Lemmings data files are fetched and never "
-              "committed (SPEC.md 114.2, CONTRIBUTING.md 6). Run\n"
+              "committed (SPEC.md 116.2, CONTRIBUTING.md 6). Run\n"
               "    python3 tools/getlemmings.py\n"
               "  or, with no network,\n"
               "    python3 tools/getlemmings.py --from <dir-or-zip>\n"

@@ -38,7 +38,7 @@
 345 S 6
 345 H 225 115 1  # the RIGHT-CLICK GLITCH: the right button over the blocker
                  # alone leaves Lemming1 nil, and the 1991 game gives the
-                 # builder to the lemming the last hit test saw (SPEC.md 114.8)
+                 # builder to the lemming the last hit test saw (SPEC.md 116.8)
 500 S 2
 500 h 20 115 0   # a climber pressed MID-FRAME, on the walker at x 22: the
                  # package queues it while the frame is part-stepped and

@@ -60,7 +60,7 @@ static unsigned char h_void[16];        /* where a bad pointer lands, once the
 
 /* THE MACHINE'S OWN CEILING, and the harness holds the program to it:
  * kernel/memory.inc gives MEM_MAX = 20 on kern_small, SYSTEM-WIDE and shared
- * with every Disk window and driver already open (SPEC.md 114.6.1). This
+ * with every Disk window and driver already open (SPEC.md 116.6.1). This
  * program may not be most of it. */
 #define H_MEM_KB      512               /* what a 640 KB machine has free */
 #define H_MEM_MAX      20
@@ -186,7 +186,7 @@ static int h_r_vstart;              /* VGA: the CRTC Start Address points at
 static int h_r_rects;               /* lem_r_rect CALLS since the last reset -
                                      * the SmallerC cdecl boundary is three
                                      * quarters of a minimap cell (SPEC.md
-                                     * 114.7.1), so the call count is a cost in
+                                     * 116.7.1), so the call count is a cost in
                                      * its own right and not a proxy */
 static unsigned char h_r_dirty[H_SCR_H];
 
@@ -709,11 +709,11 @@ void lem_r_batch(int on)
 }
 
 /* ============================================================================
- * lemsprite.inc, modelled (SPEC.md 114.4.6)
+ * lemsprite.inc, modelled (SPEC.md 116.4.6)
  * ==========================================================================*/
 
 /* the records: the shadow backends' rectangles, put back from W. VGA keeps
- * none - its frame is composed (SPEC.md 114.4.6) */
+ * none - its frame is composed (SPEC.md 116.4.6) */
 #define H_SPMAX 168
 unsigned char lem_sprec[H_SPMAX * 6];  /* lemsprite.inc's lb_sprec, which on
                                         * VGA holds the C's boxes */

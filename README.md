@@ -833,7 +833,7 @@ geometries, the 360KB one carrying two graphic sets and 53 levels and a
 `LEVELS.TXT` saying which. It ships on the XT at what the XT measures: about
 four game frames a second on a quiet level and under one with sixty lemmings
 out, every clock in the game slowing with it so no level gets harder
-(SPEC.md §114.7.4). `make xt-lemmings` and `make 386-lemmings` boot it in
+(SPEC.md §116.7.4). `make xt-lemmings` and `make 386-lemmings` boot it in
 86Box; `apps/lemmings/README.TXT` carries the full credits.
 
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause

@@ -378,7 +378,7 @@ _cf_acget:
     ret
 
 ; -----------------------------------------------------------------------------
-; void cf_split(unsigned scanline) - THE CRTC LINE COMPARE (SPEC.md 114.4)
+; void cf_split(unsigned scanline) - THE CRTC LINE COMPARE (SPEC.md 116.4)
 ;
 ; Below `scanline` the CRTC restarts its address counter at 0 and, with the
 ; Attribute Controller's Pixel Panning Mode bit set, stops applying the pel
@@ -515,7 +515,7 @@ _cf_offset:
 ;
 ; The start address (0x0C high, 0x0D low) moves the picture eight pixels at a
 ; time and the pel pan (Attribute Controller 0x13) moves it the other seven,
-; so the pair of them is a one-pixel step. That is the mechanism SPEC.md 114.4
+; so the pair of them is a one-pixel step. That is the mechanism SPEC.md 116.4
 ; is built on, and it costs four `out`s a frame whatever the picture is.
 ; -----------------------------------------------------------------------------
 _cf_scroll:

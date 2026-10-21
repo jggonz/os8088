@@ -2,7 +2,7 @@
 # =============================================================================
 # os8088 - apps/lemmings/build.sh
 #
-# LEMMINGS's host checks (SPEC.md 114.12), run by `make lemmings` BEFORE anything
+# LEMMINGS's host checks (SPEC.md 116.12), run by `make lemmings` BEFORE anything
 # is built for the 8086, and each one stops the build: a stale cell, a
 # double-draw or a row that fell past the dock costs an hour in an emulator and
 # a second here, and two of PERFORMANCE.md's three defects cannot be seen in an
@@ -31,7 +31,7 @@
 #
 # NEITHER NEEDS A NETWORK FETCH, which is what makes `make lemmings` work on a
 # tree that has never run tools/getlemmings.py. Only `make lemmingsdisk` needs
-# the real data (SPEC.md 114.12).
+# the real data (SPEC.md 116.12).
 #
 #   tools/lemsim.py + lemtest --mech    THE MECHANICS REPLAY (wave 3): three
 #                                       fixture levels driven for up to 2,000
@@ -134,7 +134,7 @@ else
     $BUILD/lemtest
 fi
 
-# (2) THE MECHANICS REPLAY (SPEC.md 114.12). Three fixture levels, each driven
+# (2) THE MECHANICS REPLAY (SPEC.md 116.12). Three fixture levels, each driven
 #     for up to 2,000 frames by a committed command script (hosttest/mech/
 #     levelN.txt), TWICE: by tools/lemsim.py - the mechanics read again from
 #     lemmings_3ds src/lemming.c under the rulings its header names - and by
@@ -147,7 +147,7 @@ fi
 #     actions, the eight skills and their refusals, a trap, water, steel, the
 #     nuke, the pause and the rate's clamps. lemtest prints each level's
 #     probe calls a frame, priced at tests/lembench's 178 us a call - the
-#     mechanics' cost-table row (SPEC.md 114.7.3).
+#     mechanics' cost-table row (SPEC.md 116.7.3).
 M=$BUILD/lemmech
 mkdir -p $M
 # EVERY SCRIPT IN THE FOLDER, keyed by its name: levelN.txt drives fixture

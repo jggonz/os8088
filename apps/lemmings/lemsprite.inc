@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/lemmings/lemsprite.inc    SPRITES, OBJECTS AND THE BACKGROUND
-;                                         (SPEC.md 114.4.6, wave 3)
+;                                         (SPEC.md 116.4.6, wave 3)
 ;
 ; %included by apps/lemmings/lemmings.asm AFTER lemblit.inc, whose helpers
 ; (lb_gc, lb_seq, lb_dbl, lb_rowoff8, the dirty spans, lb_rpix, lb_pnib) and
@@ -10,7 +10,7 @@
 ; answer, AX/BX/CX/DX the caller's to lose, SI/DI/BP/DS/SS/ES preserved and DF
 ; left clear.
 ;
-; WHAT IS ON THE GLASS AND WHAT IT IS MADE OF, per backend (SPEC.md 114.4.6):
+; WHAT IS ON THE GLASS AND WHAT IT IS MADE OF, per backend (SPEC.md 116.4.6):
 ;
 ;   VGA       T, the four world planes in RAM (terrain only, the level's own
 ;             colours, the bricks in colour 7), is the BACKGROUND. VRAM holds
@@ -548,7 +548,7 @@ _lem_r_sprite:
     push ds
     cld
     call lb_msvga                   ; the buttons, latched through a long
-                                    ; compose (SPEC.md 114.7 point 3)
+                                    ; compose (SPEC.md 116.7 point 3)
     cmp word [lb_spn], LEM_SPMAX
     jb .room
     jmp .out
@@ -589,7 +589,7 @@ _lem_r_sprite:
     je .vga
     jmp .shadow
 
-    ; --- VGA: NO SAVE-UNDER AND NO RECORD (SPEC.md 114.4.6). The frame
+    ; --- VGA: NO SAVE-UNDER AND NO RECORD (SPEC.md 116.4.6). The frame
     ;     composes every rectangle that changed in the scratch - T, the
     ;     objects, then every sprite - and latches it on, so a sprite is never
     ;     taken off the glass at all: its old box is recomposed from T and the
@@ -826,7 +826,7 @@ _lem_r_sforget:
 ; void lem_r_spray(unsigned seg, unsigned off, int x, int y, int b0, int b1,
 ;                  int r0, int r1, int erase)
 ;
-; ONE FRAME OF THE EXPLOSION'S SPRAY (SPEC.md 114.8, decision 5): seg:off is
+; ONE FRAME OF THE EXPLOSION'S SPRAY (SPEC.md 116.8, decision 5): seg:off is
 ; the frame's 160 bytes of LEMMAIN item 10 - eighty signed (dx, dy) pairs out
 ; of PARTICLES.DAT, a pair with EITHER byte -128 not drawn (Lemmix
 ; DrawParticles) - placed at WORLD (x, y), the bomber's foot. Particle p is
@@ -1077,7 +1077,7 @@ _lem_r_spray:
 ; -----------------------------------------------------------------------------
 ; void lem_r_cursor(const unsigned char *bits, int sx, int sy)
 ;
-; THE APP'S OWN 14x14 POINTER (SPEC.md 114.4.6), in SCREEN coordinates - 0..319
+; THE APP'S OWN 14x14 POINTER (SPEC.md 116.4.6), in SCREEN coordinates - 0..319
 ; by 0..199, the world view above row 160 and the panel below it - top left.
 ; Whatever the last call drew is taken off first; `bits` 0 draws nothing new.
 ; `bits` is DS-relative: TWO PLANES of 14 rows of 2 bytes, plane 0 first, so a
@@ -1415,7 +1415,7 @@ _lem_r_bgrect:
     push ds
     cld
     call lb_msvga                   ; the buttons, latched through a long
-                                    ; compose (SPEC.md 114.7 point 3)
+                                    ; compose (SPEC.md 116.7 point 3)
     ; rows y .. y+h-1, clipped to the world
     mov ax, [bp+6]
     mov bx, [bp+10]
@@ -1646,7 +1646,7 @@ _lem_r_bgrect:
     ret
 
 ; -----------------------------------------------------------------------------
-; THE VGA COMPOSE (SPEC.md 114.4.6). Nothing that changes in a game frame is
+; THE VGA COMPOSE (SPEC.md 116.4.6). Nothing that changes in a game frame is
 ; drawn onto the glass: it is built in the scratch at LEM_VCOMP - T, the
 ; objects over it, every lemming, and the pointer - and LATCH-COPIED on in one
 ; pass a rectangle (write mode 1: a byte moves four planes), so no pixel of a
@@ -1761,7 +1761,7 @@ _lem_r_clatch:
     push es
     push ds
     call lb_msvga                   ; the buttons, latched through a long
-                                    ; compose (SPEC.md 114.7 point 3)
+                                    ; compose (SPEC.md 116.7 point 3)
     mov cx, [lb_ch]
     jcxz .none
     mov ax, [lb_cy0]
@@ -2073,7 +2073,7 @@ _lem_r_show:
 ;     2 upside down        the rows flipped
 ;     4 no overwrite       the mask AND NOT the solid mask under it
 ; (Lemmix's no-overwrite also refuses pixels an earlier OBJECT drew; this port
-; keeps no object layer, so it tests the terrain alone - SPEC.md 114.4.6.)
+; keeps no object layer, so it tests the terrain alone - SPEC.md 116.4.6.)
 ;
 ; On the shadow backends a pixel becomes its colour CLASS (lb_spix's rule):
 ; 1..7 solid, 8..15 the terrain class, and an opaque 0 black - built eight
@@ -2089,7 +2089,7 @@ _lem_r_obj:
     push ds
     cld
     call lb_msvga                   ; the buttons, latched through a long
-                                    ; compose (SPEC.md 114.7 point 3)
+                                    ; compose (SPEC.md 116.7 point 3)
     mov ax, [bp+4]
     mov [lbp_seg], ax
     mov ax, [bp+6]

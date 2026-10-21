@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/lemmings/lemtext.c   (#included by lemmings.c)
  *
- * THE STRING ACCESSOR, AND NOT THE STRINGS (SPEC.md 114.3, 114.6).
+ * THE STRING ACCESSOR, AND NOT THE STRINGS (SPEC.md 116.3, 116.6).
  *
  * Every literal this program shows - the preview's seven format strings, the
  * postview's header and its nine result texts, the congratulation, the
@@ -10,7 +10,7 @@
  * 512-padded resource band written by tools/os88lem.py from a source table that
  * carries the defining reference for each row. That is about 2,000 bytes out of
  * the package IMAGE and into the DATA, and it is one of the two things that
- * make SPEC.md 114.6's resident budget close; the other is the wave-1 overlay
+ * make SPEC.md 116.6's resident budget close; the other is the wave-1 overlay
  * split.
  *
  * THE BAND IS READ ONCE INTO BSS AND INDEXED. bss is the cheap half - it costs

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """os88lem: convert the 26 DOS Lemmings (1991) data files into the band files
-the LEMMINGS package reads (SPEC.md 114.3, docs/lemband-format.md).
+the LEMMINGS package reads (SPEC.md 116.3, docs/lemband-format.md).
 
     python3 tools/os88lem.py                       # convert all four geometries
     python3 tools/os88lem.py --geom 720            # just one
     python3 tools/os88lem.py --selfcheck           # the host-side gate
     python3 tools/os88lem.py --fixture DIR         # the committed synthetic set
 
-THE 8088 DOES NO BIT-STREAM DECODING AT ANY POINT (SPEC.md 114.3). Everything
+THE 8088 DOES NO BIT-STREAM DECODING AT ANY POINT (SPEC.md 116.3). Everything
 that needs a decoder happens here: the DAT container's backward bit stream, the
 2,048-byte level record with Lemmix's bit unpacking, GROUNDxO, VGAGRx,
 VGASPECx's second-level byte RLE, MAIN.DAT's seven sections, and ODDTABLE.DAT
@@ -18,7 +18,7 @@ by building twice and comparing.
 
 WHERE THE READERS COME FROM. The DAT/GROUNDxO/level/VGASPEC readers below are
 lemtool/lemdat.py's, reused rather than re-derived (docs/LEMMINGS-PORT-PLAN.md
-decision 9), with SPEC.md 114.3.1's nine rulings applied where the three
+decision 9), with SPEC.md 116.3.1's nine rulings applied where the three
 reimplementations disagree:
 
   world is 1584x160          not 1600 (lemmings_3ds and Lemmix over Lemmings.ts)
@@ -59,7 +59,7 @@ over (and a fourth, the ODDTABLE fold, under LEVEL RECORDS below):
  1. NO STYLE BANK FITS 64,512 BYTES. A bank is its palette, its terrain pieces
     and its object frames, and that is 78,732 bytes for the smallest set and
     96,804 for set 1. So every style bank is written as numbered PARTS, which
-    is SPEC.md 114.3.2's own mechanism for exactly this ("a bank that would
+    is SPEC.md 116.3.2's own mechanism for exactly this ("a bank that would
     exceed it ... is written as numbered parts") and the same mechanism the
     special pictures already need. The names follow the document's own
     special-picture spelling: `LEMGR<n>_<part>.LEM`. A bank that fits in one
@@ -222,7 +222,7 @@ level entry already carries every field ODDTABLE overwrites - the rate, the
 counts, the time, the eight skills and the name - so the entry carries them
 with the override applied and the record is read for its terrain, objects and
 steel, which ODDTABLE never touches. The machine still never sees ODDTABLE.DAT
-and never learns its rule, which is what SPEC.md 114.3 asks for.
+and never learns its rule, which is what SPEC.md 116.3 asks for.
 """
 import argparse
 import filecmp
@@ -236,7 +236,7 @@ import tempfile
 # 0. Limits and geometry
 # ---------------------------------------------------------------------------
 
-# SPEC.md 114.3.2: WIRE_FILEMAX (SPEC.md 92.13) and RD_FILEMAX (SPEC.md 62.9.10, one
+# SPEC.md 116.3.2: WIRE_FILEMAX (SPEC.md 92.13) and RD_FILEMAX (SPEC.md 62.9.10, one
 # device along) - every offset inside a RAM-disk file is a word. The converter
 # refuses on it rather than discovering it at publication.
 FILEMAX = 64512
@@ -249,7 +249,7 @@ FILEMAX = 64512
 LGRB_VERSION = 2
 # SPEC.md 92.13: the whole archive, the first size refused.
 ARCMAX = 1048575
-# SPEC.md 114.3.2: directory rows over the whole RAM-disk volume.
+# SPEC.md 116.3.2: directory rows over the whole RAM-disk volume.
 RD_MAXENT = 96
 
 SECTOR = 512
@@ -276,7 +276,7 @@ def cluster_bytes(geom):
     return GEOM[geom][1] * SECTOR
 
 
-# SPEC.md 114.9: "Package plus overlay is ~57,000 bytes = 56 clusters". Plus
+# SPEC.md 116.9: "Package plus overlay is ~57,000 bytes = 56 clusters". Plus
 # LEVELS.TXT and README.TXT, which are small and are still files. ONLY THE
 # FALLBACK now: the Makefile hands the built package's files over with --pkg,
 # and the disk's clusters are then MEASURED (class Reserve) - the estimate,
@@ -284,7 +284,7 @@ def cluster_bytes(geom):
 # two levels that fitted (wave 4 review).
 PKG_RESERVE = 57000 + 4096
 
-# LEMMINGS.SAV (SPEC.md 114.8): written at run time into SYSTEM/APPDATA, so it
+# LEMMINGS.SAV (SPEC.md 116.8): written at run time into SYSTEM/APPDATA, so it
 # is on no image as built and every plan leaves it TWO clusters - one for the
 # file, and one for the chain a REPLACE puts down before it frees the old one
 # (SPEC.md 18.4's write order, steps 1-4). With one, the first save took the
@@ -295,7 +295,7 @@ SAV_CLUSTERS = 2
 # the end of the play order whenever a disk is short and choose_two_styles
 # picks the pair that leaves the most, and neither ever REFUSES - so a
 # package that grew two clusters would ship the 360KB disk with 38 levels in
-# place of 53 and only LEVELS.TXT would say so (SPEC.md 114.6: 42 clusters
+# place of 53 and only LEVELS.TXT would say so (SPEC.md 116.6: 42 clusters
 # keep 53, 43 drop to 38). Removing a level is the OWNER's call (docs/
 # LEMMINGS-PORT-PLAN.md, wave 6's cluster rule: a wave proposes, it does not
 # decide), so what each disk carries is PINNED here - its playable levels,
@@ -305,7 +305,7 @@ SAV_CLUSTERS = 2
 # numbers in the fast tier, so a stale band directory is caught too. Change a
 # row only by a written decision, the way tools/abi.lock.json is updated.
 # --unpinned plans without the hold: the headroom measurement (SPEC.md
-# 114.6, --pkg padded a cluster at a time) needs to see the drop.
+# 116.6, --pkg padded a cluster at a time) needs to see the drop.
 LEVEL_PIN = {
     1440: (120, None),              # everything
     1200: (120, None),
@@ -350,7 +350,7 @@ def check_pin(geom, disk, levels, styles, reserve):
     lines.append("    %d used + %d held of %d, %d to spare"
                  % (used, SAV_CLUSTERS, clus, clus - used - SAV_CLUSTERS))
     lines.append("  DROPPING A LEVEL IS THE OWNER'S CALL: trim what grew "
-                 "(SPEC.md 114.6's cluster line names the package's bytes "
+                 "(SPEC.md 116.6's cluster line names the package's bytes "
                  "before its next cluster), or change LEVEL_PIN by a written "
                  "decision. --unpinned plans without this hold.")
     raise Refused("\n".join(lines))
@@ -389,12 +389,12 @@ class Reserve(object):
         n += 1                          # ASSOC.DAT
         return n
 
-# SPEC.md 114.3.1: the world, and the five sets.
+# SPEC.md 116.3.1: the world, and the five sets.
 WORLD_W, WORLD_H = 1584, 160
 STYLE_NAMES = ["Dirt", "Fire", "Squasher", "Pillar", "Crystal"]
 RATINGS = ["Fun", "Tricky", "Taxing", "Mayhem"]
 
-LEVELS_PER_FILE = 8          # SPEC.md 114.3.2: grouped eight to a file
+LEVELS_PER_FILE = 8          # SPEC.md 116.3.2: grouped eight to a file
 LVL_SIZE = 2048
 ENTRY_SIZE = 64              # docs/lemband-format.md, level entry
 LEVELS_PER_RATING = 30
@@ -404,7 +404,7 @@ MANIFEST_HEADER = 512
 SPEC_W, SPEC_H, SPEC_BPP = 960, 160, 3
 SPEC_CHUNK_BYTES = SPEC_W * 40 * SPEC_BPP // 8      # 14,400
 SPEC_PALETTE_BYTES = 40
-SPEC_X = 304                    # where every reader draws it (SPEC.md 114.3.1)
+SPEC_X = 304                    # where every reader draws it (SPEC.md 116.3.1)
 SPEC_PW, SPEC_PH = 480, 40      # one piece: lem_r_wpiece's widest row and
 SPEC_PCOLS = SPEC_W // SPEC_PW  # the DAT's own 40-row chunk
 SPEC_PROWS = SPEC_H // SPEC_PH
@@ -598,7 +598,7 @@ class ObjectInfo(object):
 
     @property
     def used(self):
-        # SPEC.md 114.3.1: a non-zero record. GRND: "You can probably detect an
+        # SPEC.md 116.3.1: a non-zero record. GRND: "You can probably detect an
         # unused slot if the bitmap width or height is 0."
         return self.width != 0 and self.height != 0
 
@@ -631,7 +631,7 @@ def read_ground(path):
                       % (path, len(blob), GROUND_SIZE))
     g = Ground()
     g.objects = []
-    # SPEC.md 114.3.1: little-endian. The readers only APPEAR to disagree -
+    # SPEC.md 116.3.1: little-endian. The readers only APPEAR to disagree -
     # Lemmings.ts's readWordBE() is little-endian and its readWord() is big,
     # so the names are inverted and the behaviour agrees. Confirmed by the
     # offsets summing to the section sizes exactly.
@@ -663,7 +663,7 @@ def read_ground(path):
 
 
 # ---------------------------------------------------------------------------
-# 3. The 2,048-byte level record (LVL), with SPEC.md 114.3.1's rulings
+# 3. The 2,048-byte level record (LVL), with SPEC.md 116.3.1's rulings
 # ---------------------------------------------------------------------------
 
 
@@ -700,7 +700,7 @@ def parse_level(rec):
     # `SuperLemming := (LVL.Reserved = $FFFF)`, lemmings_3ds
     # import_level.c:541-542 the same two bytes 0xFF - the value, not
     # "non-zero" (wave 4). No level of the 120 sets it, MEASURED; the flag is
-    # carried so the format is whole (SPEC.md 114.3).
+    # carried so the format is whole (SPEC.md 116.3).
     L.superlemming = (u16(0x1E) == 0xFFFF)
 
     L.objects = []
@@ -712,11 +712,11 @@ def parse_level(rec):
             y -= 0x10000
         obj_id = u16(b + 4)
         flags = u16(b + 6)
-        if flags == 0:                          # SPEC.md 114.3.1: a non-zero
+        if flags == 0:                          # SPEC.md 116.3.1: a non-zero
             continue                            # record is what "in use" means
         L.objects.append((i, x, y, obj_id, flags))
 
-    # SPEC.md 114.3.1: SKIP a slot whose x word is 0xFFFF, never BREAK. It is
+    # SPEC.md 116.3.1: SKIP a slot whose x word is 0xFFFF, never BREAK. It is
     # Taxing 27 (`Call in the bomb squad`), whose slot 68 holds 0xFFFF22A6 and
     # whose slots 69-399 hold 327 further normal entries; breaking renders it
     # with 68 pieces instead of 395.
@@ -731,7 +731,7 @@ def parse_level(rec):
         L.terrain.append((i, x, y, v & 0x3F, (v >> 28) & 0x0F))
 
     # LVL steel: 32 slots of 4 bytes from 0x0760, the last byte always 0.
-    # SPEC.md 114.3.1: x from the HIGH 9 bits of word 0, y from the low 7,
+    # SPEC.md 116.3.1: x from the HIGH 9 bits of word 0, y from the low 7,
     # width the HIGH nibble of byte 2. Lemmings.ts is wrong here.
     L.steel = []
     for i in range(32):
@@ -752,7 +752,7 @@ def parse_level(rec):
 # 4. ODDTABLE.DAT and the 120-level order
 # ---------------------------------------------------------------------------
 #
-# SPEC.md 114.3.1: indexed by file*8 + section, the record's position on disk.
+# SPEC.md 116.3.1: indexed by file*8 + section, the record's position on disk.
 # A record is the first 24 bytes of an .LVL (rate, count, save, time, the 8
 # skill counts) plus the 32-byte name written over 0x07E0
 # (C import_level.c:429-431).
@@ -993,7 +993,7 @@ BROWN_W, BROWN_H, BROWN_BPP = 320, 104, 2
 # - black and the three browns of the background tile (2bpp, 0..3), the four
 # purples of the font (3bpp, measured: every glyph pixel is 0 or 4..7) - and
 # take 8..15 from the LEVEL's own custom palette, where the shrunk level
-# picture's terrain colours are (SPEC.md 114.4.3).
+# picture's terrain colours are (SPEC.md 116.4.3).
 MENU_PALETTE = [
     (0, 0, 0), (128, 64, 32), (96, 48, 32), (48, 0, 16),
     (32, 8, 124), (64, 44, 144), (104, 88, 164), (152, 140, 188),
@@ -1005,7 +1005,7 @@ LMNB_VERSION = 3            # 3: item 10, the explosion's spray (wave 6);
                             # 2: the menu palette at MENUPAL_OFF (wave 5);
                             # apps/lemmings/lemload.c refuses any other
 
-# THE SPRAY (decision 5, SPEC.md 114.8): PARTICLES.DAT, 51 frames of 80
+# THE SPRAY (decision 5, SPEC.md 116.8): PARTICLES.DAT, 51 frames of 80
 # signed (dx, dy) pairs (Lemmix src/Game.pas TParticleTable, :47-51), and a
 # particle with EITHER byte -128 is not drawn - Lemmix DrawParticles
 # (:2492-2515) draws only when `(X <> -128) and (Y <> -128)`, and Lemmings.ts
@@ -1020,7 +1020,7 @@ SPRAY_ID = 10
 def spray_item(table):
     """Item 10: the table byte for byte, then each frame's bounds."""
     if len(table) != PART_BYTES:
-        raise Refused("PARTICLES.DAT is %d bytes; SPEC.md 114.8 says %d"
+        raise Refused("PARTICLES.DAT is %d bytes; SPEC.md 116.8 says %d"
                       % (len(table), PART_BYTES))
     out = bytearray(table)
     for f in range(PART_FRAMES):
@@ -1047,13 +1047,13 @@ def frame_bytes(w, h, bpp):
 # 7. The string table
 # ---------------------------------------------------------------------------
 #
-# SPEC.md 114.3: "the literals ... live in a 512-padded band that lem_str()
+# SPEC.md 116.3: "the literals ... live in a 512-padded band that lem_str()
 # reads into a small bss scratch. They are in the DATA, not in the package
-# image, and that is what makes 114.6's budget close."
+# image, and that is what makes 116.6's budget close."
 #
-# SPEC.md 114.2 on the posture: the original's on-screen wording is lifted
+# SPEC.md 116.2 on the posture: the original's on-screen wording is lifted
 # VERBATIM, because a paraphrase produces a knock-off. Each row names the
-# reference file that defines it (SPEC.md 114.1's authority table). CR inside a
+# reference file that defines it (SPEC.md 116.1's authority table). CR inside a
 # string is 0x0D and separates the two lines of a result text.
 #
 # The ids are GENERATED into build/lemstr.h, so apps/lemmings and this table
@@ -1068,28 +1068,28 @@ STRINGS = [
      "the sentinel: a level entry's `missing` is 0 when the level is playable"),
 
     # --- the About card, and what the launcher calls itself ---------------
-    # SPEC.md 114.1: the About card names the two principals and points at
+    # SPEC.md 116.1: the About card names the two principals and points at
     # README.TXT, because the eight-line SCredits block plus product, version
     # and a port line is already past the twelve-row ceiling (SPEC.md 73.12).
-    ("PROD", "Lemmings", "SPEC.md 114 - the product"),
+    ("PROD", "Lemmings", "SPEC.md 116 - the product"),
     ("PORTLINE",
      "A native reimplementation for the 8086, built from the original's own "
      "data files.",
-     "this port's own text (SPEC.md 114, the port line)"),
+     "this port's own text (SPEC.md 116, the port line)"),
     ("CREDIT1", "Lemmings By DMA Design",
      "Lemmix src/Base.Strings.pas SCredits, the 'Original credits...' block"),
     ("CREDIT2", "Programming By Russell Kay",
      "Lemmix src/Base.Strings.pas SCredits, the 'Original credits...' block"),
     # THE RIGHTSHOLDER IS NAMED ON THE CARD AND NOT ONLY IN README.TXT. The
-    # card is capped at twelve rows (SPEC.md 114.1) and uses nine, one of them a
+    # card is capped at twelve rows (SPEC.md 116.1) and uses nine, one of them a
     # blank spacer, so the row costs the reader nothing and the CGA card - which
     # is the narrow one - does not grow. apps/cword/cwovl.c puts "Copyright (C)
     # Microsoft Corporation" on cword's card and this port's licence posture is
-    # cword's (SPEC.md 114.2, decision 4): the credits are lifted verbatim and
+    # cword's (SPEC.md 116.2, decision 4): the credits are lifted verbatim and
     # the attribution is on the glass, not only beside it.
     ("COPYRIGHT", "Copyright 1991 Psygnosis Ltd.",
      "Lemmix src/Base.Strings.pas SCredits, the 'Original credits...' block"),
-    # WAVE 5: THE CARD IS TWELVE ROWS (SPEC.md 114.1's About row, and the
+    # WAVE 5: THE CARD IS TWELVE ROWS (SPEC.md 116.1's About row, and the
     # twelve-row ceiling LESSONS.md 8 states): the product, what release it
     # is, the port line in two halves, the original's two principals and its
     # rightsholder, LEMMIX'S AUTHOR - the second principal, whose screens,
@@ -1097,10 +1097,10 @@ STRINGS = [
     # pointer at README.TXT for everyone else. "By Eric Langedijk" is SCredits'
     # own first line, under its own product name.
     ("VERSION", "The DOS release, 1991",
-     "SPEC.md 114's opening line - the release this port is of; the About "
+     "SPEC.md 116's opening line - the release this port is of; the About "
      "card's version row (lemovl.c ovl_about)"),
     ("CREDIT3", "Screens, strings and level order:",
-     "this port's own text: what it carries of Lemmix (SPEC.md 114.1's "
+     "this port's own text: what it carries of Lemmix (SPEC.md 116.1's "
      "authority table), on the About card above CREDIT4"),
     ("CREDIT4", "Lemmix By Eric Langedijk",
      "Lemmix src/Base.Strings.pas SCredits' first line, 'By Eric Langedijk', "
@@ -1110,7 +1110,7 @@ STRINGS = [
      "card's '(zlib)' misstated it (wave 5's third review); README.TXT names "
      "it as Lemmix's own licence"),
     ("README", "See README.TXT for the full credits.",
-     "this port's own text; SPEC.md 114.1's About row and SPEC.md 114.2's "
+     "this port's own text; SPEC.md 116.1's About row and SPEC.md 116.2's "
      "attribution posture"),
 
     # --- the four rating names --------------------------------------------
@@ -1134,7 +1134,7 @@ STRINGS = [
     # style PACK's description there (GameScreen.Preview.pas
     # StyleDecriptor = Style.StyleInformation.Description). For the DOS
     # original that is "Lemmings" on all 120 rows and says nothing, so this
-    # port carries the GRAPHIC SET instead (SPEC.md 114.1's Style row). A
+    # port carries the GRAPHIC SET instead (SPEC.md 116.1's Style row). A
     # SPECIAL level has no terrain set - its terrain is the 960x160 picture
     # and the set lends only the objects - so on its four rows the line is
     # LEFT OUT (lemovl.c ovl_fmt) rather than given a name of the port's own.
@@ -1170,18 +1170,18 @@ STRINGS = [
      "rows are indented by"),
 
     # --- the launcher's four state rows, and Play -------------------------
-    # SPEC.md 114: "four state rows (Mode / Music / Level Code / Save
+    # SPEC.md 116: "four state rows (Mode / Music / Level Code / Save
     # Progress) that exist so 47's greying has a control to sit on".
-    ("ROW_MODE", "Mode", "SPEC.md 114 - the launcher's state rows"),
-    ("ROW_MUSIC", "Music", "SPEC.md 114 - the launcher's state rows"),
+    ("ROW_MODE", "Mode", "SPEC.md 116 - the launcher's state rows"),
+    ("ROW_MUSIC", "Music", "SPEC.md 116 - the launcher's state rows"),
     ("ROW_CODE", "Level Code...",
-     "SPEC.md 114 - the launcher's state rows. SPEC writes it with an "
+     "SPEC.md 116 - the launcher's state rows. SPEC writes it with an "
      "ellipsis character; three full stops is what latin-1 and the OS font "
      "have"),
-    ("ROW_SAVE", "Save Progress", "SPEC.md 114 - the launcher's state rows"),
-    ("PLAY", "Play", "SPEC.md 114 - the Play action"),
+    ("ROW_SAVE", "Save Progress", "SPEC.md 116 - the launcher's state rows"),
+    ("PLAY", "Play", "SPEC.md 116 - the Play action"),
 
-    # --- every greying fact in SPEC.md 114.8's table ------------------------
+    # --- every greying fact in SPEC.md 116.8's table ------------------------
     # SPEC.md 47: grey a FACT, never a guess. Taken from the table's own
     # cells with two mechanical substitutions and nothing else: an em dash
     # becomes " - " because latin-1 has no em dash, and the markdown code
@@ -1194,13 +1194,13 @@ STRINGS = [
      "it - so the music is that program's code and private data, not a "
      "score this OS's FM voices (SPEC.md 34.12) could play. It is also not "
      "in the 26-file data set this port fetches at all.",
-     "SPEC.md 114.8, the greyed table, Music - the whole cell"),
+     "SPEC.md 116.8, the greyed table, Music - the whole cell"),
     ("GREY_CODE",
      "The original's access-code algorithm lives in the game's executable, "
      "not in any of its data files. Lemmix's ten-letter code is Lemmix's "
      "own - an MD5 of the 2048-byte record - and is not the code a 1991 "
      "player knows.",
-     "SPEC.md 114.8, the greyed table, Level Code. The cell's last sentence "
+     "SPEC.md 116.8, the greyed table, Level Code. The cell's last sentence "
      "is about the postview's own AddLineFeed and not about this row, so it "
      "is not in the string. Nor is the sentence that ended it until wave 6, "
      "'Progress is kept in SYSTEM/APPDATA/LEMMINGS.SAV instead.': this fact "
@@ -1213,7 +1213,7 @@ STRINGS = [
      "so mode 0Dh has no FSXM_* id on that row and a sixteen-colour card "
      "gets four colours. The bit that greys the row is the bit fsx_mode "
      "would refuse on.",
-     "SPEC.md 114.8, the greyed table, the 320x200x16 mode - the whole cell"),
+     "SPEC.md 116.8, the greyed table, the 320x200x16 mode - the whole cell"),
     # ...AND THE SAME ROW IS GREYED ON TWO OTHER CARDS, FOR TWO OTHER
     # REASONS. SPEC.md 47's rule is that a greyed control names the fact the
     # ACTION would refuse on, and the fact above is about an EGA: shown on a
@@ -1225,7 +1225,7 @@ STRINGS = [
      "mode 0Dh has no FSXM_* id on that row: 320x200 is four colours because "
      "that is what the card is. The bit that greys the row is the bit "
      "fsx_mode would refuse on.",
-     "SPEC.md 114.8, the greyed table, the 320x200x16 mode, read off "
+     "SPEC.md 116.8, the greyed table, the 320x200x16 mode, read off "
      "kernel/fsx.inc's fsx_capstab CGA row (0x000F)"),
     ("GREY_MODE_HERC",
      "kernel/fsx.inc gives a Hercules 0x0011 - mode 7's text page and its own "
@@ -1233,19 +1233,19 @@ STRINGS = [
      "has one bit per pixel and no colour at all, and the game is drawn "
      "through the shadow backend instead. The bit that greys the row is the "
      "bit fsx_mode would refuse on.",
-     "SPEC.md 114.8, the greyed table, the 320x200x16 mode, read off "
+     "SPEC.md 116.8, the greyed table, the 320x200x16 mode, read off "
      "kernel/fsx.inc's fsx_capstab Hercules row (0x0011)"),
     ("GREY_KEYS",
      "An 83-key XT keyboard has no F11 or F12 key, and its Pause is "
      "Ctrl-NumLock, which the BIOS spins on internally and never returns.",
-     "SPEC.md 114.8, the greyed table, F11 / F12 / Pause - the whole cell "
+     "SPEC.md 116.8, the greyed table, F11 / F12 / Pause - the whole cell "
      "but its cross-reference"),
     ("GREY_EGA",
      "The original's screens are 640x350 and FSXM_CGA640 is 640x200: the "
      "40-character lines keep their width but 12 of the 22 rows fit, so the "
      "blank lines are compressed and the level picture is 64 rows, not "
      "80.",
-     "SPEC.md 114.8, the greyed table, the preview and postview LAYOUT on "
+     "SPEC.md 116.8, the greyed table, the preview and postview LAYOUT on "
      "CGA and EGA - the whole cell but its cross-reference, and the 64-row "
      "picture wave 5 drew there. 'Compressed', not 'compressed OUT': the "
      "preview drops its blank lines but the postview and the congratulation "
@@ -1257,7 +1257,7 @@ STRINGS = [
     ("GREY_SAVE",
      "LEMMINGS.SAV could not be written in SYSTEM/APPDATA (a live CD never "
      "can); nothing more is recorded.",
-     "SPEC.md 114.8, the greyed table, Save Progress on a read-only medium - "
+     "SPEC.md 116.8, the greyed table, Save Progress on a read-only medium - "
      "the cell's sentence, BROADENED in wave 4 to the predicate the row is "
      "greyed on (whether SYSTEM/APPDATA answered on this instance's own "
      "volume, lemovl.c ovl_data_enter), of which the live CD is one case. "
@@ -1270,17 +1270,17 @@ STRINGS = [
     ("GREY_SOUND",
      "os88_snd_caps() answered no tone capability - the same predicate "
      "os88_snd_tone would refuse on.",
-     "SPEC.md 114.8, the greyed table, sound - the whole cell"),
+     "SPEC.md 116.8, the greyed table, sound - the whole cell"),
 
     # --- wave 2: the two refusals a LAUNCH can make -----------------------
     # Both are said IN A WINDOW, before SPEC.md 53's bracket is entered,
-    # because a refusal cannot be said in a foreign mode (SPEC.md 114.5) and
+    # because a refusal cannot be said in a foreign mode (SPEC.md 116.5) and
     # a kernel toast in one paints desktop geometry into the game's
     # framebuffer. NO_MEM is a TEMPLATE with two %s markers, in the order
     # the comment gives; NO_BANK takes one.
     ("NO_MEM",
      "Need %sKB, %sKB free",
-     "SPEC.md 114.6.1's claim arithmetic, said on the glass (WEAVE-SPEC 1.4's "
+     "SPEC.md 116.6.1's claim arithmetic, said on the glass (WEAVE-SPEC 1.4's "
      "precedent). The two markers are the total this adapter's claims come "
      "to and os88_mem_largest_kb(). IT IS A TOAST AND A TOAST IS 24 "
      "CHARACTERS (kernel/toast.inc TOAST_MAX; OSAPI_TOAST truncates): the "
@@ -1339,7 +1339,7 @@ STRINGS = [
     # row it leaves behind carries GREY_SAVE whole.
     ("SAV_FAIL",
      "LEMMINGS.SAV not written",
-     "SPEC.md 59.10's 24-character toast for SPEC.md 114.8's Save Progress "
+     "SPEC.md 59.10's 24-character toast for SPEC.md 116.8's Save Progress "
      "row: exactly TOAST_MAX, the file and the fact; GREY_SAVE is the "
      "sentence behind the row"),
     # ...and a bank that IS there but is not this program's version (an
@@ -1347,7 +1347,7 @@ STRINGS = [
     # "missing" would name the wrong fact about a file that read whole.
     ("OLD_BANK",
      "%s is too old",
-     "SPEC.md 47 and 114.8: LEMMAIN.LEM read, and its LMNB version is not "
+     "SPEC.md 47 and 116.8: LEMMAIN.LEM read, and its LMNB version is not "
      "the one this package draws its two screens from. A toast, for "
      "NO_MEM's reason - 'LEMMAIN.LEM is too old' is 22 of TOAST_MAX's 24"),
     # The one word the status line carries while a level composes. It is
@@ -1356,7 +1356,7 @@ STRINGS = [
     # cells (Game.SkillPanel.pas:501).
     ("LOADING",
      "LOADING",
-     "SPEC.md 114.7.1 conclusion 2: composing a level is ~25 s on an XT and "
+     "SPEC.md 116.7.1 conclusion 2: composing a level is ~25 s on an XT and "
      "inside the bracket nothing can be said - so it is said in the game's "
      "own font, on the panel, before the wait starts"),
 
@@ -1368,7 +1368,7 @@ STRINGS = [
     ("MISS_STYLE",
      "%s is not on a %s disk: the %s graphic set is %s bytes = %s clusters "
      "of this disk's %s, with %s already spent.",
-     "SPEC.md 114.8's own example sentence, one row down. The seven markers "
+     "SPEC.md 116.8's own example sentence, one row down. The seven markers "
      "are: the band's file name, the geometry (LEMMAN.LEM offset 22), the "
      "style name (LEMS_STYLE0..4), the bank's bytes and clusters (LEMMAN's "
      "cost table rows 0-4), this disk's clusters (LEMMAN offset 56) and the "
@@ -1376,7 +1376,7 @@ STRINGS = [
     ("MISS_SPEC",
      "%s is not on a %s disk: its special picture is %s bytes = %s "
      "clusters of this disk's %s, with %s already spent.",
-     "SPEC.md 114.8's own example sentence, verbatim in shape. The six "
+     "SPEC.md 116.8's own example sentence, verbatim in shape. The six "
      "markers are: the band's file name, the geometry, THIS picture's bytes "
      "and clusters (its LEMMAN cost row, 5 + n), this disk's clusters and "
      "the clusters already spent. Wave 4 quoted all four pictures' total "
@@ -1387,8 +1387,8 @@ STRINGS = [
      "This level's own record is not on a %s disk: what is on it takes %s of "
      "this disk's %s clusters, LEMMINGS.SAV keeps two, and a group of eight "
      "more records costs %s.",
-     "the third reason, which SPEC.md 114.8's table does not have a row for "
-     "because 114.9 states it as the 360KB rule instead: two graphic sets "
+     "the third reason, which SPEC.md 116.8's table does not have a row for "
+     "because 116.9 states it as the 360KB rule instead: two graphic sets "
      "and ONLY THE LEVELS THAT USE THEM. Some of those levels still do not "
      "fit, and a level dropped for room is a different fact from a level "
      "whose graphic set is absent. The four markers are: the geometry, the "
@@ -1445,7 +1445,7 @@ STRINGS = [
 
     # The Mayhem 30 congratulation. Its middle line is exactly 40 characters
     # = 640 pixels of the purple font, which is the second confirmation of
-    # the 640x350 surface (SPEC.md 114.1).
+    # the 640x350 surface (SPEC.md 116.1).
     ("PO_CONGRATS",
      CR + CR + "Congratulations!" + CR + CR + CR + CR + CR
      + "Everybody here at DMA Design salutes you" + CR
@@ -1457,7 +1457,7 @@ STRINGS = [
 
     # The footers. Lemmix src/GameScreen.Postview.pas:189 force-positions
     # them with AddLineFeed(18 - CountChar(CR)), so dropping the two
-    # access-code lines does not move them (SPEC.md 114.8).
+    # access-code lines does not move them (SPEC.md 116.8).
     ("PO_NEXTLEVEL", "Press left mouse button for next level",
      "Lemmix src/Base.Strings.pas SPostviewScreen_PressLeftMouseForNextLevel"),
     ("PO_RETRYLEVEL", "Press left mouse button to retry level",
@@ -1579,7 +1579,7 @@ def write_lemstr_h(path):
         "/* lemstr.h - GENERATED by tools/os88lem.py. Do not edit.",
         " *",
         " * The string ids in LEMSTR.LEM (docs/lemband-format.md, SPEC.md",
-        " * 114.3). apps/lemmings #includes this so the band and the program",
+        " * 116.3). apps/lemmings #includes this so the band and the program",
         " * cannot drift: a renamed string is a compile error here, not a",
         " * wrong sentence on the glass.",
         " *",
@@ -1630,7 +1630,7 @@ NAME_ALPHABET = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
 
 def check_name(name):
-    """SPEC.md 114.3.2: every name uppercase 8.3 in [A-Z0-9_-]."""
+    """SPEC.md 116.3.2: every name uppercase 8.3 in [A-Z0-9_-]."""
     stem, dot, ext = name.partition(".")
     if not dot or not 1 <= len(stem) <= 8 or not 1 <= len(ext) <= 3:
         raise Refused("%r is not an 8.3 name" % name)
@@ -1653,7 +1653,7 @@ def split_parts(logical):
     FILEMAX is itself a multiple of 512 (64,512 = 126 sectors), so every part
     but the last is already aligned and only the last needs padding. That is
     what lets the package read part after part into ONE claim at successive
-    512-aligned offsets with one os88_file_read_seg each (SPEC.md 114.3.2).
+    512-aligned offsets with one os88_file_read_seg each (SPEC.md 116.3.2).
     """
     parts = [logical[i:i + FILEMAX] for i in range(0, len(logical), FILEMAX)]
     if not parts:
@@ -1730,7 +1730,7 @@ class DataSet(object):
 
         self.odd = read_oddtable(os.path.join(src, "ODDTABLE.DAT"))
         if len(self.odd) != 80:
-            raise Refused("ODDTABLE.DAT has %d records; SPEC.md 114.3 says 80, "
+            raise Refused("ODDTABLE.DAT has %d records; SPEC.md 116.3 says 80, "
                           "one per raw slot" % len(self.odd))
 
         self.grounds = [read_ground(os.path.join(src, "GROUND%dO.DAT" % s))
@@ -1752,7 +1752,7 @@ class DataSet(object):
         ppath = os.path.join(src, "PARTICLES.DAT")
         if not os.path.isfile(ppath):
             raise Refused("%s is missing: the explosion's spray is a second "
-                          "pinned file (tools/getlemmings.py, SPEC.md 114.8)"
+                          "pinned file (tools/getlemmings.py, SPEC.md 116.8)"
                           % ppath)
         with open(ppath, "rb") as fh:
             self.particles = fh.read()
@@ -1769,7 +1769,7 @@ class DataSet(object):
         out = []
         for i, pos in enumerate(POSITION_OF_CLASSIC_LEVEL):
             f, sec, modified = decode_position(pos)
-            slot = f * 8 + sec              # SPEC.md 114.3.1: ODDTABLE index
+            slot = f * 8 + sec              # SPEC.md 116.3.1: ODDTABLE index
             rec = self.records[slot]
             if modified:
                 rec = apply_oddtable(rec, self.odd[slot])
@@ -1973,7 +1973,7 @@ class DataSet(object):
     def special_bank(self, i):
         """LEMSP<i>: a 960x160 picture at 4bpp planar, WRITTEN AS PIECES.
 
-        Version 2 (wave 4, SPEC.md 114.3.1's VGASPEC row): the picture is
+        Version 2 (wave 4, SPEC.md 116.3.1's VGASPEC row): the picture is
         SPEC_PCOLS x SPEC_PROWS pieces of SPEC_PW x SPEC_PH, row-major, each
         laid out exactly as a terrain piece is - plane 0, 1, 2, then plane 3,
         the mask, one plane stride (w/8 * h) apart - so the package composes a
@@ -2040,7 +2040,7 @@ class DataSet(object):
 def plan_geometry(ds, geom, reserve=None, styles=None):
     """Decide what this disk carries, then build every file for it.
 
-    SPEC.md 114.9, decided in CLUSTERS and not in bytes:
+    SPEC.md 116.9, decided in CLUSTERS and not in bytes:
       1.44MB and 1.2MB  everything
       720KB             everything except the four VGASPEC pictures
       360KB             two graphic sets and only the levels that use them
@@ -2109,7 +2109,7 @@ def plan_geometry(ds, geom, reserve=None, styles=None):
     # applied, and the machine reads them there. The record on the disk is
     # read for its terrain, its objects and its steel, and those are the same
     # bytes either way. So the machine still never sees ODDTABLE.DAT and never
-    # learns its rule (SPEC.md 114.3), which is the whole of what that
+    # learns its rule (SPEC.md 116.3), which is the whole of what that
     # sentence asks for.
     #
     # The records are packed per geometry: a 360KB disk carries two graphic
@@ -2250,7 +2250,7 @@ def geom_tag(geom):
 
 
 def choose_two_styles(ds, geom, reserve):
-    """SPEC.md 114.9: a 360KB disk carries TWO graphic sets and only the levels
+    """SPEC.md 116.9: a 360KB disk carries TWO graphic sets and only the levels
     that use them. Which two is decided by TRIAL-PLANNING all ten pairs and
     counting the levels each pair actually leaves playable - not by counting
     the levels each pair covers, which is a different and wrong number: a set
@@ -2417,7 +2417,7 @@ def bank_cost(ds, kind, n, geom):
 
 def levels_txt(ds, geom, levels, styles, specials, nfiles, nbytes, used,
                clus, names=True, dclus=0):
-    """The player's own copy of the arithmetic (SPEC.md 114.9): which levels
+    """The player's own copy of the arithmetic (SPEC.md 116.9): which levels
     this disk carries, and for each one it does not, why - in the chooser's
     own terms, with the missing bank's files and what they would cost here.
     CRLF, because a .TXT on a FAT floppy is expected to have it (SPEC.md
@@ -2594,7 +2594,7 @@ def print_manifest(geom, disk, levels, styles, specials, reserve, verbose):
                       "more, and it has %d"
                       % (geom_name(geom), used, SAV_CLUSTERS, clus))
     if len(disk.files) > RD_MAXENT:
-        raise Refused("%d files and RD_MAXENT is %d (SPEC.md 114.3.2)"
+        raise Refused("%d files and RD_MAXENT is %d (SPEC.md 116.3.2)"
                       % (len(disk.files), RD_MAXENT))
     if verbose:
         for name, data in disk.files:
@@ -2606,18 +2606,18 @@ def print_manifest(geom, disk, levels, styles, specials, reserve, verbose):
 # 12. The fixture
 # ---------------------------------------------------------------------------
 #
-# SPEC.md 114.12: the host checks run against a COMMITTED synthetic fixture, so
+# SPEC.md 116.12: the host checks run against a COMMITTED synthetic fixture, so
 # `make lemmings` needs no network. It carries NO bytes derived from the
 # original data files - synthetic levels with invented names and a stub style
 # bank - plus the real string band, because the strings are the port's own
 # text and the reference's verbatim on-screen wording rather than decoded
-# data (SPEC.md 114.2's posture on strings).
+# data (SPEC.md 116.2's posture on strings).
 
 # (rating, number, style, rate, count, save, minutes, skills, startx, name,
 #  missing) - `missing` 0 is playable, and the second row is GREYED with
 # LEMS_MISS_SPEC so the host harness has a greyed row to draw. Both names are
 # invented; neither is any of the original's 120.
-# THE SYNTHETIC FIXTURE (SPEC.md 114.12): every byte invented here, none of it
+# THE SYNTHETIC FIXTURE (SPEC.md 116.12): every byte invented here, none of it
 # derived from the original. Wave 3 grew it into three PLAYABLE levels - a
 # floor, a wall, a pit of water, a steel block, a trap, the four object kinds
 # the mechanics branch on - because the host harness replays the eighteen
@@ -3023,7 +3023,7 @@ def selfcheck(src, verbose):
     """Deterministic self-consistency, and it runs with NO original data.
 
     apps/lemmings/build.sh runs this against the committed fixture with no
-    network at all (SPEC.md 114.12), so the half that needs the 26 files is
+    network at all (SPEC.md 116.12), so the half that needs the 26 files is
     added only when they are there.
     """
     problems = []
@@ -3210,7 +3210,7 @@ def main():
 
         if args.fixture:
             # build/lemstr.h is written here TOO: `make lemmings` must build
-            # with no fetch, and the fixture is all it has (SPEC.md 114.12).
+            # with no fetch, and the fixture is all it has (SPEC.md 116.12).
             header = write_lemstr_h(args.header)
             files = build_fixture(args.fixture)
             print("os88lem: fixture -> %s" % args.fixture)
@@ -3245,7 +3245,7 @@ def main():
         ds = DataSet(args.src)
         geoms = args.geom or GEOM_ORDER
         print("os88lem: per-geometry manifest "
-              "(clusters as well as bytes, SPEC.md 114.3)")
+              "(clusters as well as bytes, SPEC.md 116.3)")
         archive = 0
         for geom in geoms:
             disk, levels, styles, specials = plan_geometry(
