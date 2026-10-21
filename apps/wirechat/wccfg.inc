@@ -90,6 +90,17 @@ wc_cfgline:
     mov di, wc_k_code
     call wc_pfxci
     jnc .code
+    mov di, wc_k_theme
+    call wc_pfxci
+    jnc .theme
+    jmp short .done
+.theme:
+    call wc_skipsp
+    mov al, [si]
+    sub al, '0'
+    cmp al, TH_N
+    jae .done
+    mov [wc_thm], al
     jmp short .done
 .code:
     call wc_skipsp
@@ -265,6 +276,14 @@ wc_cfgsave:
     mov al, ' '
     call wc_putc
     mov al, [wc_notify]
+    add al, '0'
+    call wc_putc
+    call wc_putnl
+    mov si, wc_k_theme                  ; SPEC.md 113.5.2: the one chosen
+    call wc_put
+    mov al, ' '
+    call wc_putc
+    mov al, [wc_thm]
     add al, '0'
     call wc_putc
     call wc_putnl

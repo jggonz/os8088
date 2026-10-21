@@ -20,6 +20,7 @@
 ;   wcnet.inc     the worker and the HTTP/1.0 client
 ;   wcproto.inc   the request composer and the reply parser
 ;   wcview.inc    the layout and every painter
+;   wcband.inc    the band, its slots, the themes and the buttons' faces
 ;   wcact.inc     keys, clicks, menus, popups, the timer - and the conductor
 ;   wccfg.inc     WIRECHAT.CFG
 ;   wctxt.inc     every string
@@ -63,26 +64,24 @@
 ; here is a multiple of 8 on the glass, where font_run's single store lives.
 ; =============================================================================
 WC_LH       equ 10              ; a row: an 8-row glyph, one row of air above
-                                ; and one below (wc_band fills them)
-WC_HDRH     equ 18              ; the header: rows 0..17, its rule at 18
-WC_STH      equ 12              ; the status bar: the bottom 12 rows
-WC_LPW      equ 144             ; the left pane, 18 cells; its rule at 144
-WC_RPW      equ 128             ; the right pane, 16 cells; its rule left of it
-WC_LCELLS   equ 17              ; ...a left row's cells, inside its rule
-WC_RCELLS   equ 15              ; ...a right row's
-WC_SBW      equ 14              ; the message pane's scroll bar
-WC_BTNH     equ 15              ; a button
-WC_FLDH     equ 14              ; the field: a frame, 3 of air, a glyph row
-WC_INH      equ 18              ; the input row: the field and its buttons
-WC_TIME     equ 6               ; a message's text column: "hh:mm "
-WC_TOPICDY  equ 5               ; the topic's band, below the title's, clear
-                                ; of the Search button's last rows
+                                ; and one below (wc_bandc fills them)
+WC_STH      equ 12              ; the status bar: its rule and one band
+WC_INH      equ 24              ; the input row: its rule, the box (16 rows,
+                                ; WC_BOXY down), and air
+WC_BOXY     equ 4               ; the box's top, below the input row's rule
+WC_BOXH     equ 16
+WC_RPW      equ 160             ; the right pane, its rule on the byte grid
+WC_RCELLS   equ 19              ; ...a right band's cells, from rule + 8
+WC_FLDH     equ 14              ; the field: inside the box, a cell row of air
+WC_TIME     equ 6               ; a message's nick column: "hh:mm "...
+WC_NICKW    equ 10              ; ...10 cells wide...
+WC_TCOL     equ WC_TIME + WC_NICKW  ; ...and its text column
+WC_SENDC    equ 9               ; Send: cells
+WC_SRCHC    equ 11              ; the search box: the lens, a rule, 'Search...'
 WC_GROWC    equ 2               ; cells the grow box takes off the status bar
 WC_NOTIFYC  equ 18 + WC_GROWC   ; ...and where 'Notifications: Off' starts
 WC_WRIGHT   equ 560             ; content narrower than this loses the right
-WC_WLEFT    equ 400             ; ...and narrower than this the left pane
-WC_HTOPIC   equ 200             ; content shorter than this loses the topic
-WC_COMPACT  equ 8               ; a pane of fewer rows draws messages compact
+WC_HTALL    equ 200             ; content this tall has the header's 2nd band
 
 WC_FRW      equ 608             ; the frames OS88_PREFER asks for
 WC_HVGA     equ 400
@@ -137,9 +136,11 @@ WC_PFXMAX   equ 32
 WC_NOTEN    equ 64              ; the notice line
 WC_CFGMAX   equ 512
 WC_SBUFN    equ 96              ; a composed row
+WC_ADAPTN   equ 28              ; 'HERCULES 720x348 / MONO', the NUL and air
 
 ; --- a band's META (wcband.inc): how a composed row is drawn -----------------
-WC_NSPAN    equ 4               ; colour spans a band may have
+WC_NSPAN    equ 16              ; colour spans a band may have: the tabs
+                                ; and the status bar are the many-coloured
 WCX_LEN     equ 0               ; db the composition's cells
 WCX_STY     equ 1               ; db WS_*
 WCX_NSP     equ 2               ; db spans, 1..WC_NSPAN (0 = a slot owed)
@@ -149,26 +150,27 @@ WCX_G0      equ WCX_SP + 3 * WC_NSPAN   ; (cell, glyph), cell 0xFF = none
 WCX_G1      equ WCX_G0 + 2
 WCX_BC      equ WCX_G1 + 2      ; db the overstrike's first cell...
 WCX_BL      equ WCX_BC + 1      ; db ...and its length, 0 = none
-WC_METAN    equ WCX_BL + 1
+WCX_UL      equ WCX_BL + 1      ; db the lower air row's colour, 0xFF = the
+                                ; ground: a section title's rule
+WC_METAN    equ WCX_UL + 1
 ; --- the SLOTS (SPEC.md 113.5.1): a band's meta and cells as on the glass ----
 WC_MAXB     equ 44              ; bands a pane may have slots for: a VGA's
                                 ; tallest window has 40 (the rest draw whole)
-WC_NCAP     equ 18              ; a narrow slot's cells: a left row and its
-                                ; lead (WC_LCELLS + 1)
+WC_NCAP     equ 20              ; a narrow slot's cells: a right band's
 WC_SLOTW    equ WC_METAN + WC_SBUFN     ; a wide slot
 WC_SLOTNN   equ WC_METAN + WC_NCAP      ; a narrow one
-WCSL_HDR    equ 0               ; the wide: the header...
-WCSL_TITLE  equ 1               ; ...the title, the topic, the notice line,
-WCSL_TOPIC  equ 2               ; the status bar
-WCSL_NOTE   equ 3
-WCSL_STAT   equ 4
-WCSL_PANE   equ 5               ; ...and the message pane's rows
+WCSL_HDR    equ 0               ; the wide: the header's two bands...
+WCSL_HDR2   equ 1
+WCSL_TABS   equ 2               ; ...the tabs, the title, the notice line,
+WCSL_TITLE  equ 3               ; the status bar
+WCSL_NOTE   equ 4
+WCSL_STAT   equ 5
+WCSL_PANE   equ 6               ; ...and the message pane's rows
 WC_NWIDE    equ WCSL_PANE + WC_MAXB
-WCSL_LEFT   equ WC_NWIDE        ; the narrow: the left pane's bands...
-WCSL_RIGHT  equ WCSL_LEFT + WC_MAXB     ; ...and the right's
+WCSL_RIGHT  equ WC_NWIDE        ; the narrow: the right pane's bands
 WC_NSLOT    equ WCSL_RIGHT + WC_MAXB
-%if WC_LCELLS + 1 > WC_NCAP || WC_RCELLS > WC_NCAP
-  %error "a pane's row does not fit a narrow slot"
+%if WC_RCELLS > WC_NCAP
+  %error "a right band does not fit a narrow slot"
 %endif
 
 ; --- the worker's states (wcnet.inc) - WS_OPEN..WS_BODY is "in flight" -------
@@ -214,12 +216,29 @@ ST_GONE     equ 3               ; ...and a private partner off the roster
 WV_DM       equ 0xFF            ; [wc_view]: a room 0..3, or this
 
 ; --- the buttons ---------------------------------------------------------------
-WB_STATUS   equ 0
-WB_SEARCH   equ 1
-WB_EMO      equ 2
-WB_SEND     equ 3
-WB_FRIEND   equ 4
-WB_N        equ 5
+WB_STATUS   equ 0               ; the header's right end: glyph, word, nick
+WB_SEARCH   equ 1               ; the title's search box
+WB_SEND     equ 2
+WB_N        equ 3
+
+; --- the glyphs (wctxt.inc's wc_glyphs, in this order) --------------------------
+GL_ONLINE   equ 0                       ; the status glyphs, in ST_* order
+GL_AWAY     equ 1
+GL_BUSY     equ 2
+GL_GONE     equ 3
+GL_LKOK     equ 4                       ; the link lamp
+GL_LKWARN   equ 5
+GL_LKBAD    equ 6
+GL_LKOFF    equ 7
+GL_ACT      equ 8                       ; the activity lamp
+GL_BLANK    equ 9
+GL_PEOPLE   equ 10                      ; ONLINE's and FRIENDS'
+GL_MAIL     equ 11                      ; DIRECT's
+GL_LENS     equ 12                      ; the search box's
+GL_SBUP     equ 13                      ; the scroll column
+GL_SBDN     equ 14
+GL_SBTHM    equ 15
+GL_SBTRK    equ 16
 
 ; --- the popups ----------------------------------------------------------------
 PP_NONE     equ 0
@@ -228,8 +247,8 @@ PP_EMO      equ 2
 PP_EMON     equ 8               ; emoticons offered
 
 ; --- dirty regions (wc_flush) ------------------------------------------------
-WCD_HDR     equ 0x0001
-WCD_LEFT    equ 0x0002
+WCD_HDR     equ 0x0001          ; both header bands (the clock is band 2)
+WCD_TABS    equ 0x0002
 WCD_TITLE   equ 0x0004
 WCD_PANE    equ 0x0008          ; the whole pane
 WCD_TAIL    equ 0x0010          ; ...or only what was appended (the scroll)
@@ -238,6 +257,31 @@ WCD_FIELD   equ 0x0040          ; the input row: the prompt and the field
 WCD_RIGHT   equ 0x0080
 WCD_STAT    equ 0x0100
 WCD_ALL     equ 0x01FF
+                                ; (what the left pane carried is WCD_TABS |
+                                ; WCD_RIGHT now: a room's count is a tab's,
+                                ; the friends and conversations the right's)
+
+; --- the themes (SPEC.md 113.5.2), and the ROLES a theme gives a colour ------
+TH_MONO     equ 0
+TH_BLUE     equ 1
+TH_GREEN    equ 2
+TH_AMBER    equ 3
+TH_N        equ 4
+TH_DEFAULT  equ TH_BLUE
+R_BG        equ 0               ; the ground
+R_FG        equ 1               ; text
+R_DIM       equ 2               ; times, the topic, the placeholder, the track
+R_ACC       equ 3               ; the rules, titles, the prompt, the notice
+R_HI        equ 4               ; the highlight's ground...
+R_HIFG      equ 5               ; ...and its text
+R_OK        equ 6               ; Online, On, the live link
+R_WARN      equ 7               ; Away, connecting, activity
+R_BAD       equ 8               ; Busy, Off, a failure, a badge's ground
+R_BADFG     equ 9               ; ...a badge's digits
+R_MENTG     equ 10              ; a message that names us: ground...
+R_MENTF     equ 11              ; ...and text
+R_NICK      equ 12              ; four nick colours, 12..15
+WC_NPEN     equ 16
 
 WC_AWAYS    equ 600             ; seconds without a key or a press: auto-away
 WC_HOLD     equ 70              ; seconds a request may take before it is
@@ -262,10 +306,13 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_oy, 2
     WCV wc_cw, 2                ; the content box
     WCV wc_ch, 2
-    WCV wc_lx2, 2               ; the left pane's rule, 0 = no left pane
     WCV wc_rx1, 2               ; the right pane's rule, 0 = no right pane
     WCV wc_mx1, 2               ; the center's first and last columns
     WCV wc_mx2, 2
+    WCV wc_hr, 2                ; the header's rule
+    WCV wc_hy2, 2               ; the header's second band, 0 = none
+    WCV wc_tby, 2               ; the tabs' band
+    WCV wc_mid, 2               ; the first row under the tabs' rule
     WCV wc_ty, 2                ; the title row
     WCV wc_py1, 2               ; the pane's first band
     WCV wc_rows, 2              ; ...how many
@@ -274,8 +321,6 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_ny, 2                ; the notice line
     WCV wc_iy, 2                ; the input row
     WCV wc_sy, 2                ; the status bar's rule
-    WCV wc_topic, 1             ; 1 = the topic line is shown
-    WCV wc_compact, 1           ; 1 = messages are one-line-headed
     WCV wc_dirty, 2             ; WCD_*
     WCV wc_abon, 1              ; the About card is up
     WCV wc_pop, 1               ; PP_*
@@ -284,7 +329,15 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_poprc, 8             ; the popup's rect, absolute
     WCV wc_brects, 8 * WB_N     ; the buttons
     WCV wc_bflags, 2 * WB_N
-    WCV wc_sb, 20               ; the pane's scroll bar block (+3 words)
+    WCV wc_sbon, 1              ; the pane's scroll column: 1 = drawn...
+    WCV wc_sbt, 2               ; ...the thumb's first band...
+    WCV wc_sbn, 2               ; ...and how many
+    WCV wc_tabc, WC_NROOM + 1   ; the tabs: each one's first cell, and the end
+    WCV wc_fkc, 4               ; the F-key legend: each item's first cell...
+    WCV wc_fkn, 1               ; ...how many are shown
+    WCV wc_hrs, 2               ; the header's status: its first cell
+    WCV wc_hdown, 1             ; ...pressed (wc_stbtn)
+    WCV wc_clkm, 1              ; the minute the header's clock shows
     WCV wc_ln, 20               ; the field: OS88LINE_SZ, asserted at the end
     WCV wc_lbuf, WC_TEXTN       ; ...its buffer
     WCV wc_mode, 1              ; MD_*
@@ -363,16 +416,24 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_rgcol2, 1            ; ...at this cell
     WCV wc_rbold, 2             ; ...its bold string, 0 none...
     WCV wc_rbcol, 1             ; ...at this cell
-    WCV wc_rlead, 1             ; ...1 = a left pane row (wc_rowout)
+    WCV wc_rul, 1               ; ...its underline, 0xFF none
     WCV wc_rspn, 1              ; ...the colour spans wc_rspan collected
     WCV wc_rsps, 3 * (WC_NSPAN - 1)
-    WCV wc_rbadc, 1             ; ...a badge's ground
     WCV wc_rband, 2             ; ...and the band's number, for its slot
     WCV wc_rrec, 2              ; the message record a pane row draws
     WCV wc_rowy, 2              ; the band being drawn
-    WCV wc_rbuf, 32             ; a composed status word
+    WCV wc_rbuf, 64             ; the link's words, and 'retrying in Ns'
+    WCV wc_lmc, 2               ; the status bar's lamps: their cell
+    WCV wc_fresh, 1             ; 1 = a full paint has just laid the ground
     ; --- the band and the faces (wcband.inc) --------------------------------
-    WCV wc_col, 1               ; 1 = the colour face (wc_face, each W_PAINT)
+    WCV wc_col, 1               ; 1 = the display has colour (wc_face)
+    WCV wc_thm, 1               ; the theme chosen (TH_*, WIRECHAT.CFG)
+    WCV wc_eth, 1               ; ...and the one drawn: TH_MONO on 1 bit
+    WCV wc_pens, WC_NPEN        ; its colours, by R_*
+    WCV os88line_pens, 3        ; the field's (SPEC.md 83.5): ink, ground, frame
+    WCV wc_adapt, WC_ADAPTN     ; 'VGA 640x480 / 16 COLORS'
+    WCV wc_glbuf, 34            ; a glyph's icon record, built to draw
+    WCV wc_thmi, TH_N * 14      ; the Theme menu's items, composed
     WCV wc_meta, WC_METAN       ; the band being drawn: its meta...
     WCV wc_bx, 2                ; ...where (screen)
     WCV wc_by, 2
@@ -385,17 +446,10 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_bend, 2              ; ...one past its last...
     WCV wc_bgnd, 1              ; ...and its ground
     WCV wc_dtop, 2              ; the pane's top line AS DRAWN, 0xFFFF owed
-    WCV wc_sbk, 1               ; 1 = the scroll bar is on the glass as
-                                ; wc_sb's last three words say (wc_sbar)
     WCV wc_act, 1               ; the activity lamp's seconds left
-    WCV wc_bv, 8                ; a bevelled button: its rect...
-    WCV wc_bf, 8                ; ...its face
-    WCV wc_btw, 2               ; ...its caption's width and place
-    WCV wc_btx, 2
-    WCV wc_bty, 2
-    WCV wc_ink, 1               ; ...a fill's colour
+    WCV wc_bv, 8                ; a button's rect, as its painter has it
     WCV wc_slw, WC_NWIDE * WC_SLOTW     ; the slots (SPEC.md 113.5.1)
-    WCV wc_sln, 2 * WC_MAXB * WC_SLOTNN
+    WCV wc_sln, WC_MAXB * WC_SLOTNN
     ; --- the actions (wcact.inc) ------------------------------------------
     WCV wc_rqdone, 1            ; the request a reply answered
     WCV wc_rqnote, 1            ; ...and whether it set the notice line
@@ -459,6 +513,9 @@ wc_entry:
                                         ; its spawn (wc_hire)
     mov al, 1
     call OSAPI_WM_SNAP                  ; 8-aligned content (SPEC.md 11.94)
+    mov bx, [wc_win]
+    mov al, 1                           ; every pixel is ours (SPEC.md 113.5):
+    call OSAPI_WM_OWNBG                 ; a dark theme never flashes white
     mov al, 1
     call OSAPI_WM_SIZABLE
     mov si, wc_sizes
@@ -504,6 +561,7 @@ wc_entry:
     mov [wc_divi], al
     mov [wc_find], al
     mov byte [wc_notify], 1
+    mov byte [wc_thm], TH_DEFAULT
     mov byte [wc_hist], 1
     mov byte [wc_stsent], 0xFF          ; nothing sent: the first request says
     mov word [wc_dirty], WCD_ALL
@@ -527,27 +585,31 @@ wc_ttl      equ 16                      ; the header's name field: 'WireChat'
 
 ; --- the menus (SPEC.md 113.6.4) ---------------------------------------------
     OS88_MENUSET wc_menus, wc_ttl, wc_oncmd
-        OS88_MENU wc_m_chat, wc_i_chat, 4
+        OS88_MENU wc_m_chat, wc_i_chat, 5
         OS88_MENU wc_m_rooms, wc_i_rooms, WC_NROOM
         OS88_MENU wc_m_stat, wc_i_stat, 3
         OS88_MENU wc_m_frnd, wc_i_frnd, 2
+        OS88_MENU wc_m_thm, wc_i_thm, TH_N
     OS88_MENUSET_END wc_menus
 
 WM_CHAT     equ 0                       ; menu indices, in the set's order
 WM_ROOMS    equ 1
 WM_STAT     equ 2
 WM_FRND     equ 3
+WM_THEME    equ 4
 
 ; --- the About card's lines (SPEC.md 12.2, 20.5.1) ----------------------------
 wc_ablines:
     dw wc_ab1, wc_ab2, wc_ab3, wc_ab4, wc_ab5, 0
+wc_hlplines:                            ; F1's card: the keys (SPEC.md 113.6.3)
+    dw wc_h1, wc_h2, wc_h3, wc_h4, wc_h5, wc_h6, wc_h7, 0
 
 ; =============================================================================
 ; 'About WireChat' - the standard card
 ; =============================================================================
 ; wc_about - the OSAPI_ABOUT_SET handler. in: SI = our window; lock HELD
 wc_about:
-    mov byte [wc_abon], 1
+    mov byte [wc_abon], 1               ; 2 is F1's help card (wc_fkey)
     call wc_popdown                     ; a popup and the card cannot both be up
     mov bx, si
     mov si, wc_ablines
@@ -563,7 +625,7 @@ wc_about:
 
 ; the buttons' record (SPEC.md 20.5.1.3): rects and flags in the bss, filled
 ; by wc_layout; labels in wctxt.inc
-    OS88UI_BTNREC wc_btrec, wc_brects, wc_btlbl, wc_bflags, WB_N
+    OS88UI_BTNREC wc_btrec, wc_brects, wc_btown, wc_bflags, WB_N
 
 ; --- wc_btn - draw button AL (its index PLUS ONE, os88ui_btn's convention) -
 ; The one call site, beside the record it draws from: the painters in
@@ -578,12 +640,11 @@ wc_btn:
 
 ; --- the shared code --------------------------------------------------------------
 %define OS88UI_ABOUT
-%define OS88UI_BOWN                 ; the colour face paints its own buttons
+%define OS88UI_BOWN                 ; the themes paint their own buttons
 %define OS88UI_ALERT
-%define OS88UI_SCROLL
-%define OS88UI_SBUPD                ; the thumb alone when only it moved
 %define OS88UI_NOGLYPH              ; no check box or radio drawn here
 %include "os88ui.inc"
+%define OS88LINE_PENS               ; the field in the theme (SPEC.md 83.5)
 %include "os88line.inc"
 %include "os88data.inc"
 %define OS88SOCK_STATE              ; net_find asks NETV_STATE too

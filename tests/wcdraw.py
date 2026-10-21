@@ -17,7 +17,7 @@ gesture below is then one the user makes, or one the server makes - a
 message arriving, a roster changing.
 
 The default machine is MartyPC's 4.77 MHz 5150 with Hercules; --vga is the
-XT with a VGA (the colour face, SPEC.md 113.5.2), --cga the 5150's CGA. All
+XT with a VGA (the Blue theme, SPEC.md 113.5.2), --cga the 5150's CGA. All
 three take the 360KB system disk and network360.img, whose root carries
 WIRECHAT.O88.
 
@@ -33,8 +33,7 @@ TWO ASSERTIONS, mrdraw's:
             nothing does
 
 --shot DIR writes the content (and the whole screen) as PNGs after the
-injection, for the mono pictures' before-and-after (the vga-face skill's
-Step 0) and for looking at the colour face.
+injection, for looking at the theme the machine draws.
 """
 import argparse
 import json

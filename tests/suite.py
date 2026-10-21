@@ -14470,15 +14470,16 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("wcdrawcga", "soak", py("tests/wcdraw.py", "--cga"), 200.0,
-        "wcdraw on the 5150's CGA: the compact layout (one-line title, "
-        "compact messages) and the Search button's edge the first band used "
-        "to draw over (SPEC.md 113.5)",
+        "wcdraw on the 5150's CGA: the short layout (a one-band header, a "
+        "few pane bands) in Monochrome, the only theme one bit can draw "
+        "(SPEC.md 113.5, 113.5.2)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("wcdrawvga", "soak", py("tests/wcdraw.py", "--vga"), 200.0,
-        "wcdraw on the VGA XT, the colour face (SPEC.md 113.5.2): the same "
+        "wcdraw on the VGA XT in the Blue theme (SPEC.md 113.5.2): the same "
         "ceilings and the same incremental-equals-repaint identity, with "
-        "the badges, the lamps and the package's bevelled buttons in it",
+        "the badges, the lamps, the scroll column and the package's own "
+        "buttons in it",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-360.img", "build/network360.img")),
     Row("telansi", "soak", py("tests/telansi.py"), 210.0,

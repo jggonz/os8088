@@ -476,8 +476,9 @@ wc_rec_l:
     mov bx, si
     mov cx, WC_TOPICN
     call wc_ncopy
-    or word [wc_dirty], WCD_LEFT | WCD_TITLE
-.out:
+    or word [wc_dirty], WCD_TABS | WCD_RIGHT | WCD_TITLE | WCD_FIELD
+.out:                                   ; (the field: an empty one's
+                                        ; placeholder names the room)
     ret
 
 ; --- C c0 c1 c2 c3 -----------------------------------------------------------
@@ -495,7 +496,7 @@ wc_rec_c:
     cmp di, 2 * WC_NROOM
     jb .c
     call wc_markseen
-    or word [wc_dirty], WCD_LEFT
+    or word [wc_dirty], WCD_TABS | WCD_RIGHT
     ret
 
 wc_markseen:
@@ -516,7 +517,7 @@ wc_rec_r:
     mov [wc_rver], ax
     mov [wc_rver+2], dx
     mov byte [wc_rn], 0
-    or word [wc_dirty], WCD_RIGHT | WCD_LEFT | WCD_STAT
+    or word [wc_dirty], WCD_RIGHT | WCD_TABS | WCD_STAT
     ret
 
 ; --- P nick room st -----------------------------------------------------------
@@ -682,7 +683,7 @@ wc_rec_d:
     jae .lit
     inc byte [di+WC_DUNR]
 .lit:
-    or word [wc_dirty], WCD_LEFT
+    or word [wc_dirty], WCD_TABS | WCD_RIGHT
     jmp short wc_chirp
 .out:
     ret
@@ -783,7 +784,7 @@ wc_rec_a:
     push ax
     mov di, ax
     mov byte [wc_ment+di], 1
-    or word [wc_dirty], WCD_LEFT
+    or word [wc_dirty], WCD_TABS | WCD_RIGHT
     ; '<nick> mentioned you in #<room>'
     mov di, wc_mbuf
     mov si, bx
@@ -904,7 +905,7 @@ wc_dmconv:
     pop bx
     mov di, wc_dms
     mov byte [di+WC_DUNR], 0
-    or word [wc_dirty], WCD_LEFT
+    or word [wc_dirty], WCD_TABS | WCD_RIGHT
 .out:
     ret
 %if WC_DREC != 16

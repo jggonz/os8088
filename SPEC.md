@@ -133934,6 +133934,19 @@ a package that sets it and calls `os88line_set` does not assemble. The DOS
 box (§96.44.16) and the Desk Calendar (§110.6.2) set it; Browser, ftpd,
 Sheet, Weave, `ETHER.DRV` and `SAVER.DRV` call it.
 
+### 83.5 `OS88LINE_PENS` — a field in the package's colours
+
+`os88line.inc` letters black on white, the colours of a dialog. A package
+whose content is another colour (WireChat's themes, §113.5.2) defines
+`OS88LINE_PENS` before the include and three bytes of its own,
+`os88line_pens: db ink, ground, frame`: every run, fill, caret and frame the
+field draws takes its colour from them instead, read at the draw, so a
+package changes them between two draws and the next draw is in the new
+colours. It is an opt-in in `OS88LINE_NOSET`'s shape — a macro at each of
+the file's colour sites, the literal when it is not defined — so every
+package that does not set it is byte-identical. A disabled field (`LN_DIS`)
+still leaves its frame in the caller's pen.
+
 ## 84. Software floating point (`apps/os88fp.inc`)
 
 An IEEE-754 double, in software, for a machine with no FPU. It is what stage
@@ -196888,77 +196901,96 @@ window's timer (`OSAPI_WM_TIMER`, 18 ticks), which also drives auto-away
 
 Resizable. `OS88_PREFER` 608×400 VGA, 688×296 Hercules, 608×150 CGA;
 `OSAPI_WM_MINSIZE` 320×147. Content-relative, 8×8 cells at a 10px pitch,
-`WF_SNAP` so every column is a multiple of 8 (§11.94):
+`WF_SNAP` so every column is a multiple of 8 (§11.94). **A BBS terminal**:
+the whole content is the theme's ground (§113.5.2), ruled in its accent, and
+the window is `OSAPI_WM_OWNBG` (§11.90.1) — it paints every pixel itself, so
+a dark theme never flashes the kernel's white first:
 
     +-----------------------------------------------------------------+
-    | [o] George  * Online                          [ Set status... ] |  header, 18
-    +-------------+-------------------------------------+-------------+
-    | ROOMS       | # lobby                    [Search] | MEMBERS   4 |
-    | # lobby   2 | The os8088 community                | o George  * |
-    | # hardware  +-------------------------------------+ o Alin    * |
-    | # develop.. | 4:02 RetroAmy                      ^| o Daniel  * |
-    | # games     |      Hello from a real IBM XT!     || o RetroAmy@ |
-    | MESSAGES    | 4:03 George                        ||             |
-    | * Alin      |      Nice! Which video card?       ||             |
-    | @ RetroAmy  | ----------- 2 new messages ------- ||             |
-    | FRIENDS   2 | 4:08 Daniel                        ||             |
-    | * Alin      |      Just joined from my 8088.     v|             |
-    |             | Daniel joined                       |             |  notice line
-    |[+Add friend]| [Hello from os8088!_    ] [:)][Send]|             |  input row, 16
-    +-------------+-------------------------------------+-------------+
-    | = Connected | 4 users in room          Notifications: On        |  status, 12
+    | WireChat | 01 / BBS TERMINAL | VGA 640x480 / 16 COLORS  # ONLINE George |  header band 1
+    |                                            Oct 20 2026  16:03 |  header band 2
+    +-----------------------------------------------------------------+
+    |[ #lobby ] | #hardware 2 | #development @1 | #games              |  the tabs
+    +-----------------------------------------------+-----------------+
+    | #lobby  The os8088 community   [Q| Search...] | ONLINE  04   oo |  title, search
+    +-----------------------------------------------+=================+
+    | 15:55  RetroAmy  Hello from a real IBM XT!   ^| # George        |
+    | 15:56  George    Nice! Which video card?     #| # Daniel        |
+    | 16:01  Daniel    Just joined from my 8088.   #| # RetroAmy      |
+    |                  @George the new build boots |                 |
+    |                  fine here.                  || FRIENDS 01   oo |
+    | ------------- 2 new messages --------------- |=================|
+    | 16:02  Zed       Anyone tried the Covox?     v| # Alin          |
+    | Welcome to WireChat. Be kind.                 |                 |  notice line
+    +-----------------------------------------------+ DIRECT  01   [] |
+    | +-------------------------------------------++-------+          |
+    | | > | Message #lobby                        || Send  |          |  the input row
+    | +-------------------------------------------++-------+          |
+    +-----------------------------------------------------------------+
+    | F1 Help | F2 Rooms | F3 Friends  o Connected: 4 in #lobby | Notifications: On |  status
     +-----------------------------------------------------------------+
 
 | element | where | notes |
 |---|---|---|
-| header | top 18 rows | person glyph, the nick (bold), status glyph and word, `Set status...` |
-| left pane | x 0..143 | ROOMS (4 rows, unread count right-aligned), MESSAGES (the private conversations, up to 8), FRIENDS ONLINE (friends with a live session); `+ Add friend` pinned to its foot. A section that runs out of rows stops |
-| center | the rest | title (`# room` bold, or `@ nick`) and topic; `Search`; the message pane with a 14px scroll bar; the notice line; the input row |
-| right pane | the right 128px | MEMBERS: the live sessions in the view's room, glyph per status |
-| status bar | bottom 12 rows | link glyph and state, users in the room, `Notifications: On/Off` |
+| header | the top band (two on a window 200 rows tall or more), its rule under it | band 1: `WireChat` bold, then `01 / BBS TERMINAL` and the display the window is ON (`VGA 640x480 / 16 COLORS`, `EGA 640x350 / 16 COLORS`, `HERCULES 720x348 / MONO`, `CGA 640x200 / MONO`, from `OSAPI_WM_DISPLAY` at each full paint) — each dropped when it would run into the right end; at the right end our status glyph, the status word and the nick, which together are the STATUS button. Band 2 (tall windows only): the machine's date and time (`OSAPI_CLK_GET`), right-aligned, redrawn when the minute turns |
+| tabs | one band under the header's rule, its own rule under it | a tab a room: `#name`, the view's in the highlight; an unread count is a badge after the name, `@` ahead of it for a mention (§113.2.4). The rooms menu still lists them |
+| center | the rest, left of the right pane | the title band (`#room` bold and the topic dim, or `@nick` and `Private conversation`) with the SEARCH box at its right end; a rule; the message pane, whose last cell on every band is its scroll bar; the notice line |
+| right pane | the right 160px, from the tabs' rule to the input row's | three sections, each a title band underlined in the accent with its count and its glyph: ONLINE (the sessions in the view's room — everyone, in a conversation), FRIENDS (every friend, a status glyph for one on the roster and a hollow one for one who is not), DIRECT (the private conversations, each with its unread badge, or `No direct messages`). A section that runs out of room stops |
+| input row | between the rule above it and the status bar | one box: the mode's prompt (`>` in message mode, else `Nick:`, `Find:`, `Friend:`, `Code:`), a rule, the field, and SEND as a solid block at its right end. An empty field in message mode shows `Message #lobby` (or `Message @nick`) dim |
+| status bar | the bottom band, its rule over it | the F-key legend `F1 Help | F2 Rooms | F3 Friends` (each item a press target too); then the LINK LAMP and the ACTIVITY LAMP, the link's state and `N in #room`; `Notifications: On/Off` at the right end. The legend's items are dropped from the right when the link's words need the room |
 
-**Panes collapse by WIDTH**: content under 560px drops the right pane, under
-400 the left one too — rooms then come from the Rooms menu. **The topic line
-goes by HEIGHT**: under 200 rows of content (a CGA) the title is one row, and
-the pane's first band starts one row below the Search button's last. It
-started ON it, so every redraw of that band took the button's bottom edge
-away until the next full paint — the first thing §113.5.1's identity
-assertion found, on CGA, before a line of this section's caches existed.
-A message is a HEADER LINE — `hh:mm` and the nick, bold — then its text
-word-wrapped from column 6; under 8 pane rows (a CGA) it is COMPACT, `hh:mm
-nick: text` on the first line. A word longer than the line is cut where the
-line ends. **The time is local and so is the DATE**: a DAY DIVIDER,
-`---- Tue Oct 20 ----`, is a line of its own above the first message of each
-local day — §113.2.4's UTC date with §113.6.5's offset carried into it, so a
-message at 23:30 UTC is tomorrow's east of Greenwich — and above the first
-message of the pane, so the pane always says which day it starts on. A
+**The right pane goes by WIDTH**: content under 560px drops it — its
+sessions, friends and conversations are then the menus' and Tab's. **The
+second header band goes by HEIGHT**: under 200 rows of content (a CGA) the
+header is one band, and the date and time are the menu bar's clock.
+
+**A message is a LINE**: `hh:mm`, the nick in its own colour and bold in a
+column 10 cells wide, then the text, word-wrapped onto further lines that
+start under the text column. A nick longer than nine characters pushes its
+first line's text right by what it overhangs. A word longer than the line is
+cut where the line ends. **The time is local and so is the DATE**: a DAY
+DIVIDER, `---- Tue Oct 20 ----`, is a line of its own above the first message
+of each local day — §113.2.4's UTC date with §113.6.5's offset carried into
+it, so a message at 23:30 UTC is tomorrow's east of Greenwich — and above the
+first message of the pane, so the pane always says which day it starts on. A
 server that sends no date gives a pane with no dividers rather than a wrong
 one. The divider is a line like any other: the pane scrolls it, a press on it
-selects the message below it, and `Find:` steps over it.
+selects the message below it, and `Find:` steps over it. A selected message's
+first line is in the highlight; one that names us (§113.6.5), in the mention
+pair.
 
-**Badges.** A room or a conversation with unread messages has the count at
-its row's right end, at most 99. A room in which someone has `@`-named us
-(§113.2.4) since it was last the view has `@` ahead of its count — `@3`, or
-`@` alone — until it is the view again. On the colour face both are badges
-(§113.5.2).
+**The scroll bar is a column of CELLS**, the last of every pane band: `^` on
+the top band and `v` on the bottom one, a solid THUMB, a thin TRACK, and
+blank when everything fits. Each is a GLYPH of the band (§113.5.1), so a
+move of the pane redraws the cells the thumb and the arrows moved through,
+an icon each. A press on an arrow is a line, on the track above or below the
+thumb a page.
 
-The status glyphs are 8×8: a filled circle Online, a clock Away, a barred
-circle Busy, a hollow circle for a private partner who is not in the roster.
-`#` is the font's.
+The status glyphs are 8×8: a filled square Online, a clock Away, a barred
+square Busy, a hollow square for a friend or a private partner not on the
+roster. The two lamps are round: THE LINK — OK with a session, WARN while one
+is being made or the server asked for a rest, BAD with no card or after a
+failure, a hollow ring with no nick — and ACTIVITY, a small diamond in WARN
+while a request the user made is on the wire (a join, a message, a flag; a
+held poll is waiting, not activity) and for a second or two after a reply that
+brought something, and nothing otherwise. The section titles carry a pair of
+people (ONLINE, FRIENDS) and an envelope (DIRECT); the search box a lens.
 
 **Drawing.** Every row is a BAND: one opaque `OSAPI_FONT_RUN` per colour span
 padded with spaces to its region's width, and the two rows of air above and
-below the glyphs filled in its ground, so nothing is filled and then lettered
-(PERFORMANCE.md rule 2) — on the mono face a band is one span, as it always
-was. Bold is §6.6.2 case 6, an overstrike: the run, then the same cells
-transparent at x+1 (`tests/textsites.txt`). Each region has its own painter
-and a DIRTY bit (`WCD_*`); a state change sets bits and `wc_flush` calls only
-those painters — and a painter draws only the bands that changed (§113.5.1).
-A move of the pane's top by fewer lines than it is tall — a message arriving
-while it shows its last line, an arrow key, the wheel, the scroll bar's
-arrows — moves what is on the glass by `OSAPI_GFX_SCROLL` and letters only
-the rows it uncovered; a refused scroll (a covered pane) and a popup over the
-pane draw the rows through their slots instead.
+below the glyphs filled in its ground — or the lower one in the band's
+UNDERLINE colour, which is how a section title carries its rule — so nothing
+is filled and then lettered (PERFORMANCE.md rule 2). Bold is §6.6.2 case 6,
+an overstrike: the run, then the same cells transparent at x+1
+(`tests/textsites.txt`). Each region has its own painter and a DIRTY bit
+(`WCD_*`); a state change sets bits and `wc_flush` calls only those painters
+— and a painter draws only the bands that changed (§113.5.1). A full paint
+fills the content in the theme's ground once and draws every band over it:
+the same two passes the kernel's white fill and the bands made before, in
+the theme's colour. A move of the pane's top by fewer lines than it is tall
+moves what is on the glass by `OSAPI_GFX_SCROLL` and letters only the rows
+it uncovered; a refused scroll (a covered pane) and a popup over the pane
+draw the rows through their slots instead.
 
 #### 113.5.1 A change draws what it changed — the slots
 
@@ -196969,7 +197001,7 @@ the whole status bar for two letters. **Measured** (`tests/wcdraw.py`: every
 far call the package makes into a drawing cell of the API table, armed on the
 cell itself so a menu and the title bar are never counted, each named by the
 package routine that made it), on MartyPC's 4.77 MHz 5150 with Hercules, its
-CGA, and the VGA XT:
+CGA, and the VGA XT, on the layout before this one:
 
 | gesture | Hercules before | after | CGA before | after | VGA before | after (colour) |
 |---|---:|---:|---:|---:|---:|---:|
@@ -196982,108 +197014,89 @@ CGA, and the VGA XT:
 | a press on `Notifications:` | 24 | 1 | 24 | 1 | 24 | 7 |
 | **the eight gestures** | **455** | **110** | **244** | **63** | **615** | **188** |
 
-The "before" column did not count the bold overstrike (`OSAPI_FONT_STR_XPARENT`
-was not armed in that run), so it UNDER-states what the first build cost by
-one call a bold run; the "after" columns count it, and count only calls whose
-far return is into the package's own segment — the planar blit's clip walk
-re-enters its own cell once a fragment, which is the kernel's call and not
-ours. The VGA "before" is the
-mono face that build drew there, and "after" the colour face (§113.5.2), whose
-spans, badges and lamps are calls the mono face does not make — a key in the
-field is 12 there because Send's bevel is painted by the package. A page is
-dear on every face because every band of it is new.
+The terminal layout (§113.5) draws through the same slots;
+`tests/wcdraw.py`'s ceilings are what holds it, and §113.10 carries its
+counts.
 
 **How.** Every band is drawn THROUGH A SLOT (`wcband.inc`, `wc_bandc`): the
 slot holds the band's meta — its style, its colour spans, its glyphs, its
-overstrike — and its cells as they are on the glass. A band whose meta and
-cells are the slot's draws nothing. One whose meta matches and whose cells
-do not draws ONE `font_run` of the run from the first cell that differs to
-the last, split where it crosses a span, with the overstrike and any glyph
-inside it put back — `4` when `retrying in 5s` becomes `4s`. One whose only
-change is a glyph (a status, a lamp) draws that 8x8 cell alone, which is
-opaque. Anything else draws the band whole. There are 137 slots: 49 WIDE
-ones of 117 bytes (the header, the title, the topic, the notice line, the
-status bar and 44 pane rows) and 88 NARROW ones of 39 (44 left-pane bands and
-44 right-pane ones), 9,165 bytes of the bss; a band past the 44th of its pane
-is drawn whole and remembered nowhere, and a VGA's tallest window has 40.
-**A W_PAINT owes every slot** (`wc_owe`): the kernel white-filled the content
-before calling it, so nothing a slot says is true any more. So does a popup
-going down and the About card, which repaint.
+overstrike, its underline — and its cells as they are on the glass. A band
+whose meta and cells are the slot's draws nothing. One whose meta matches and
+whose cells do not draws ONE `font_run` of the run from the first cell that
+differs to the last, split where it crosses a span, with the overstrike and
+any glyph inside it put back — `4` when `retrying in 5s` becomes `4s`. One
+whose only change is a glyph (a status, a lamp, a scroll-bar cell) draws that
+8x8 cell alone, which is opaque. Anything else draws the band whole. There
+are 94 slots: 50 WIDE ones (the two header bands, the tabs, the title, the
+notice line, the status bar and 44 pane rows) and 44 NARROW ones (the right
+pane's bands); a band past the 44th of its pane is drawn whole and remembered
+nowhere, and a VGA's tallest window has 40. **A W_PAINT owes every slot**
+(`wc_owe`): the content was filled before it, so nothing a slot says is true
+any more. So does a popup going down and the About card, which repaint.
 
 The pane's slots MOVE: `[wc_dtop]` is the top line the glass shows, and a
 paint whose top is a few lines from it scrolls the glass and shifts the slots
 by the same bands (`wc_pshift`), so the rows that moved find themselves
-already drawn. The scroll bar is the library's `os88ui_sbupd` (§13.10.5.6):
-three calls for a thumb that moved, none for one that did not, the whole bar
-only for a total or a fit that changed.
+already drawn — the scroll column with them, which is why its cells are
+glyphs: a glyph's picture is outside the meta's identity, so a shifted slot
+whose thumb cell is now track redraws that one cell and not the band.
 
 **The slots are only sound if drawing through them arrives at the picture a
 paint from nothing does**, and `tests/wcdraw.py` asserts exactly that: after
 the gestures it captures the content, forces a full repaint (the status popup
 up and down) and captures again, and the two must be identical to the pixel —
-on Hercules, CGA and the VGA's colour face. It also holds each gesture under a
-CEILING a full repaint or a whole-pane pass would blow through, so a caller
-that goes back to repainting a region fails by name. MartyPC has no network
-card, so the row fills the window by INJECTION (`tests/wcprobe.py`): a reply
-§113.2.3 would send is written into `wc_resp` and handed to the UI task as the
-worker would hand it.
+on Hercules, CGA and the VGA. It also holds each gesture under a CEILING a
+full repaint or a whole-pane pass would blow through, so a caller that goes
+back to repainting a region fails by name. MartyPC has no network card, so
+the row fills the window by INJECTION (`tests/wcprobe.py`): a reply §113.2.3
+would send is written into `wc_resp` and handed to the UI task as the worker
+would hand it.
 
-#### 113.5.2 The colour face
+#### 113.5.2 The themes
 
-On a display of more than one bit a pixel — the one the window is ON
-(`OSAPI_WM_DISPLAY`, §39.16.4), asked at each full paint (`wc_face`), which
-for a window across two displays answers the more restrictive — WireChat is
-drawn as a **colour face**. The LAYOUT is the mono face's, column for column:
-WireChat's columns were already fixed widths on the 8-pixel grid (§113.5), so
-what changes is that colour carries what the mono face had to carry in black,
-and every size gate of §113.5 applies to both faces. A VGA's window is
-608 x 381 of content and an EGA's 640x350 one about 600 x 290, past every
-gate; a CGA and a Hercules are one bit a pixel and never see it. Content is
-the application's (§76), so it is still white paper:
+Four, picked from the **Theme** menu (§113.6.4) and kept in `WIRECHAT.CFG`
+(§113.8). Content is the application's (§76), so the ground is the theme's:
 
-| on the glass | mono | colour |
-|---|---|---|
-| the header and the status bar | white | a light grey STRIP, black text |
-| the rules | black | dark grey |
-| ROOMS, MESSAGES, FRIENDS ONLINE, MEMBERS | bold | bold on a light grey strip, the left pane's run to its rule |
-| the view in the left pane, a selected message | inverted | white on blue |
-| `#` and `@` before a name | black | grey |
-| an unread count | the number | a red BADGE, white digits |
-| a room that named us | `@` ahead of the count | the badge magenta |
-| a status glyph and the header's status word | black | Online green, Away brown, Busy red, gone grey (light ones on blue) |
-| a message's time | black | dark grey |
-| a nick in a header | bold | bold, in one of six colours by a sum of its letters — always the same colour for the same nick, on every machine |
-| a header whose message names us | as any other | yellow |
-| the new-messages divider / a day divider | black | red / dark grey |
-| the notice line, the field's prompt | black | blue |
-| `Notifications: On` / `Off` | black | the word green / red |
-| the buttons | the library's | bevelled, the package's own (§13.8.10) |
+| role | Monochrome | Blue | Green | Amber |
+|---|---|---|---|---|
+| ground | black | blue | black | black |
+| text | white | white | light green | yellow |
+| dim: times, the topic, a day divider, the placeholder, the track | white | light grey | green | brown |
+| accent: the rules, the brand line, the section titles, the prompt, the notice line, the arrows and the thumb | white | light cyan | green | brown |
+| highlight: the view's tab, a selection, Send | white, black text | light cyan, blue text | light green, black text | yellow, black text |
+| Online / Away / Busy glyphs, `On`, the link lamp | white | light green / yellow / light red | light green / green / white | yellow / brown / light red |
+| a badge | white, black digits | light red, white digits | white, black digits | light red, black digits |
+| a message that names us | as any other | white on magenta | white on green | white on brown |
+| nicks, by a sum of their letters | white | yellow, light cyan, light green, light magenta | light green, white | yellow |
 
-**Two LAMPS** take the status bar's link glyph's place: THE LINK — green with a
-session, amber while one is being made or the server asked for a rest, red
-with no card or after a failure, dark with no nick — and ACTIVITY — amber
-while a request the user made is on the wire (a join, a message, a flag; a
-held poll is waiting, not activity) and for a second or two after a reply that
-brought something, dark otherwise. A lamp is a rim, a body, a shade and a
-glint, four colours no icon pen lays down in one call, so each is an 8x8
-PLANAR picture put down by ONE `OSAPI_GFX_BLITP` (§5.4.3) — the picture is in
-the source as eight rows of colour digits (`WC_LED8`, `wcband.inc`), so the
-source IS the picture. A blit refused (a window across two displays) puts
-down the Online glyph in the lamp's colour instead.
+**Blue is the default.** The theme is a choice the user makes once, so a
+`WIRECHAT.CFG` with no `theme` line is Blue — the look this layout was drawn
+in. **A display of one bit a pixel draws Monochrome whatever is chosen** —
+the one the window is ON (`OSAPI_WM_DISPLAY`, §39.16.4), asked at each full
+paint, which for a window across two displays answers the more restrictive.
+Monochrome uses black and white alone, so it is the same picture on a VGA as
+on a Hercules or a CGA (§39.4: every other colour rounds to black or a
+dither there). On such a display the menu greys Blue, Green and Amber
+(§47: it is a fact about the display, not a guess) and keeps the choice, so
+dragging the window onto a colour display draws it again.
 
-**The buttons** are MIDIRack's bevel (§105.9.5): a black frame, a white top
-and left and a grey bottom and right, the caption black on light grey —
-pressed, one grey line in and the caption a pixel down and right; greyed, the
-caption grey — painted through `OS88UI_BOWN` (§13.8.10), so the library's
-press, drag-off and release redraw the package's face. On the mono face the
-record's labels are the captions and every button is the library's.
+Every colour is a ROLE: a theme is one row of `wc_themes`, copied to
+`wc_pens` at each full paint, and a style, a span, a glyph or a button asks
+for a role. A theme change is a full repaint: every slot is owed by it, so
+nothing compares across two themes.
 
-**The mono face is the contract.** It never adds a span — `wc_rspan` returns
-on it — so every band is the one span of its style, which on that face is
-black on white for every style but the selection's inverse: the call sequence
-`wc_band` made before any of this existed. `tests/wcdraw.py`'s Hercules
-picture of the populated window is byte-identical to the first build's, and
-CGA's differs in exactly the one row §113.5's Search-button fix moved.
+**The buttons** are the package's (`OS88UI_BOWN`, §13.8.10) on every theme,
+so the library's press, drag-off and release redraw them: SEND a solid block
+in the highlight (pressed, in the text colour; greyed, a dim frame and a dim
+caption); SEARCH a box in the accent with a lens, a rule and `Search...`
+(pressed, the box in the text colour); STATUS the header's own right end
+(pressed, the word in the highlight).
+
+**The field** is `os88line.inc` with `OS88LINE_PENS` (§83.5): its text,
+its ground and its frame are the package's three bytes, the theme's text,
+ground and ground — the frame drawn in the ground is the field's own frame
+put out of sight, because the input row's box around it and its prompt is
+the frame the eye reads.
 
 ### 113.6 What the user does
 
@@ -197109,35 +197122,40 @@ The first run, with no nick in `WIRECHAT.CFG`, opens in nick mode.
 
 | where | press | right press |
 |---|---|---|
-| a room row | the view becomes that room (`h=1`) | — |
+| a tab | the view becomes that room (`h=1`) | — |
 | a conversation, a friend, a member | the view becomes `@nick` (not your own) | a member: `Add <nick> as a friend?`; a friend: `Remove <nick> from friends?` |
-| a message | selects it (its header inverted) | selects it and asks `Flag this message?` |
-| `Set status...` | a popup: Online, Away, Busy | — |
-| `Search` | find mode | — |
-| `:)` | a popup of eight ASCII emoticons; a pick is typed at the caret | — |
+| a message | selects it (its first line in the highlight) | selects it and asks `Flag this message?` |
+| the scroll column | `^`/`v` a line; the track above or below the thumb a page | — |
+| the header's status (glyph, word, nick) | a popup: Online, Away, Busy | — |
+| the search box | find mode | — |
 | `Send` | Enter | — |
+| `F1 Help`, `F2 Rooms`, `F3 Friends` | the key | — |
 | `Notifications:` | toggles them (and saves it) | — |
 
 A popup is drawn over the content; a press inside it picks, a press anywhere
-else dismisses it, and either repaints what it covered.
+else dismisses it, and either repaints what it covered. The emoticon popup
+(eight ASCII emoticons; a pick is typed at the caret) opens above Send, from
+the Chat menu.
 
 #### 113.6.3 Keys
 
-Enter, Esc as §113.6.1; PgUp/PgDn a pane page, Up/Down a line; everything
-else to the field. **Tab** right after `@` and the first letters of a nick
-COMPLETES the nick off the roster — `@ret` becomes `@RetroAmy` — and Tab
-again goes round the others that begin the same way; it never offers our own
-nick, and any other key ends the round. Anywhere else, and with nobody on the
-roster to complete, Tab is the next room.
+Enter, Esc as §113.6.1; PgUp/PgDn a pane page, Up/Down a line; **F1** the
+help card (the keys, on the About card's frame), **F2** the next room, **F3**
+friend mode; everything else to the field. **Tab** right after `@` and the
+first letters of a nick COMPLETES the nick off the roster — `@ret` becomes
+`@RetroAmy` — and Tab again goes round the others that begin the same way; it
+never offers our own nick, and any other key ends the round. Anywhere else,
+and with nobody on the roster to complete, Tab is the next room.
 
 #### 113.6.4 Menus
 
 | menu | items |
 |---|---|
-| Chat | Change Nick..., Flag Message..., Notifications On/Off, Reconnect |
+| Chat | Change Nick..., Flag Message..., Notifications On/Off, Emoticons..., Reconnect |
 | Rooms | lobby, hardware, development, games (the `L` names) |
 | Status | Online, Away, Busy |
 | Friends | Add Friend..., Remove Friend |
+| Theme | Monochrome, Blue, Green, Amber — `*` ahead of the one drawn; on a one-bit display the three colour ones greyed (§113.5.2) |
 
 #### 113.6.5 What it does on its own
 
@@ -197191,19 +197209,21 @@ Not the client's to enforce — a client cannot be trusted with its own limits
 
 `SYSTEM\APPDATA\WIRECHAT.CFG` on the package's own volume (§19.9,
 `apps/os88data.inc`), read in the first wake, written whenever the nick,
-its code, the friends or the notification switch change. Lines of `key value`:
+its code, the friends, the notification switch or the theme change. Lines of `key value`:
 
     host os8088.com:80/chat/
     nick George
     code 0f1e2d3c-...
     notify 1
+    theme 1
     friend Alin
     friend Daniel
 
 `host` is §92.4's `host[:port][/prefix/]`, default `os8088.com:80/chat/`;
 the gate's disk carries `10.0.2.2:8093/chat/`. `code` is an owned nick's
 code (§113.2.2), at most 36 characters, stored as plain text. Anyone with the
-disk has it. Unknown keys are kept on no
+disk has it. `theme` is §113.5.2's: 0 Monochrome, 1 Blue, 2 Green, 3 Amber,
+and a file without one is Blue. Unknown keys are kept on no
 rewrite — the file is the package's own and is written whole. Up to 8
 friends; at most 512 bytes.
 
@@ -197217,26 +197237,29 @@ full`. The messages already shown stay shown.
 
 ### 113.10 Sizes
 
-Measured on the tree that added the colour face: **image 19,658 bytes, bss
-29,217 — 48,875 of `APP_MAX_SIZE`'s 61,440**; `WIRECHAT.O88` is 17,092 bytes
-packed. It was 15,901 / 19,896 and 13,844 when owned nicks were added; the
-dates, the mentions and Tab's completion are ~1.0 KB of the image,
-§113.5.1's slots 9,165 bytes of the bss and their engine ~1.3 KB of image,
-and §113.5.2's face — the styles, the lamps, the bevel — ~1.4 KB.
+Measured on the tree that added the terminal layout and its themes
+(§113.5, §113.5.2): **image 19,834 bytes, bss 31,397 — 51,231 of
+`APP_MAX_SIZE`'s 61,440**; `WIRECHAT.O88` is 17,590 bytes packed. It was
+19,658 / 29,217 and 17,092 with the colour face before it, 15,901 / 19,896
+and 13,844 when owned nicks were added. The themes cost the image little: the
+LED pictures and the bevel went, the four theme rows, the glyph table, the
+three button painters and the F keys came, +176 bytes in all. The bss grew by
+the slots' wider meta (sixteen spans, an underline) and the Theme menu's
+composed items.
 No heap claim: every buffer is in the package's own segment, which is what
 `OSAPI_DRV_CALL` wants of a socket buffer anyway (§72, `netpkg.inc`). The bss,
 largest first:
 
 | store | bytes | why that many |
 |---|---|---|
-| `wc_slw`, `wc_sln` | 9,165 | §113.5.1's slots: 49 wide of 117 bytes, 88 narrow of 39 |
+| `wc_slw`, `wc_sln` | 11,132 | §113.5.1's slots: 50 wide of 154 bytes, 44 narrow of 78 |
 | `wc_msgs` | 8,960 | 40 messages of 224 (`WC_MREC`, +222 the UTC day): the server's history is 30 (§113.2.3) and ten more is what arrives while they are read |
 | `wc_resp` | 6,146 | one reply body, `WC_RESPMAX` + the parser's NUL — the server's own ceiling |
 | `wc_rxb` | 1,024 | one `NETV_RECV`, `NET_SKMAX` |
 | `wc_ros` | 800 | the roster: 50 sessions, the server's limit (§113.7), at 16 |
 | `wc_reqb` | 640 | a request: line, headers, a 200-character body |
 | `wc_cfgb` | 514 | `WIRECHAT.CFG` read or written whole |
-| the rest | ~1,812 | the field and its draft, the rooms, the conversations, the friends, the geometry, the client's state |
+| the rest | ~2,181 | the field and its draft, the rooms, the conversations, the friends, the geometry, the theme's pens and menu items, the client's state |
 
 The worker's stack is `OS88_STACK_256` (§113.4): ETHER.DRV's verbs are ~126
 bytes of it and the interrupt floor 64, and the deepest chain of this file's
@@ -197255,8 +197278,8 @@ own is `wc_nstep` → `wc_take` → `wc_hdrline` → `wc_dec32`.
 |---|---|---|
 | `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code - and §113.2.4: `x=1` on every request, a message stored with its date, a mention in the view marked, an `A` from another room marking it, Tab completing an `@nick` |
 | `wcdraw` | soak | §113.5.1 on MartyPC's Hercules 5150: each gesture's drawing calls under its ceiling, and the incremental picture identical to a repaint's |
-| `wcdrawcga` | soak | the same on its CGA: the compact layout, and the Search button's edge |
-| `wcdrawvga` | soak | the same on the VGA XT: the colour face (§113.5.2) |
+| `wcdrawcga` | soak | the same on its CGA: the short layout, in Monochrome |
+| `wcdrawvga` | soak | the same on the VGA XT: the Blue theme (§113.5.2) |
 
 ## 114. WireFleet — naval battles over a null modem (`apps/wirefleet/`)
 
