@@ -1096,8 +1096,9 @@ vid_setmode:
     call vx_call                ; caller owes the repaint as on every kind.
     db VX_SETMODE               ; vx_call COMES BACK HERE - the eight pushes
     jmp .done                   ; and the spl_busy count above are still ours
-.notvx:                         ; to undo, at .done
-%endif
+    db 0                        ; to undo, at .done. PARITY, never executed:
+.notvx:                         ; the arm is twelve bytes with it
+%endif                          ; (tests/unit/t_hotpar.py)
     cmp al, VID_HERC            ; AL is idle until `mov ax, 0x0010`, and
     je .herc                    ; `cmp reg,imm8` is 2 bytes where
 %ifdef GFX_VGA                  ; `cmp byte [mem],imm8` is 5

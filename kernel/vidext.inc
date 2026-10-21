@@ -117,6 +117,28 @@ vx_call:
     inc word [vx_tmp]           ; past the selector byte; `inc` keeps CF
     jmp word [vx_tmp]
 
+; vx_callf1 - FAR entry for gfx_blit1_x, a body in `.cold` that CONTINUES
+;             after the hook and is entered near by its own fragment walk. A
+;             selector byte cannot follow the call there (`.cold` holds no
+;             data, SPEC.md 2.6), so the selector is THIS routine's: the far
+;             pointer pushed is to a byte in `.text`, and the exit is an
+;             ordinary `retf` to the cold stub's next instruction. One such
+;             entry per cold body; there is one
+vx_callf1:
+    push cs
+    push word [vx_sel_b1p]      ; (`push imm` is not an 8086 instruction)
+    cmp word [vx_ep+2], 0
+    je .none
+    call far [vx_ep]
+.none:
+    pop word [vx_tmp]
+    pop word [vx_tmp]
+    retf
+vx_sel_b1p  dw vx_sel_b1        ; ...so the selector's address is a word here
+vx_sel_b1   db VX_BLIT1
+            db 0                ; PARITY: the pair keeps this file's .text even
+                                ; (tests/unit/t_hotpar.py)
+
 ; vx_goc - FAR entry for a body in `.cold`: the cold stub is
 ;          `call KERNEL_SEG:vx_goc / db n`, so the far return address on the
 ;          stack IS the selector pointer, and the exit is a `retf` to the
@@ -157,9 +179,39 @@ vx_blk:
     dw ico_c1                       ; VXB_ICOC
     dw vid_kind                     ; VXB_KIND
     dw gfx_pat                      ; VXB_PAT
+    dw gfx_blit_x                   ; VXB_BLIT
+    dw gfx_b1ink                    ; VXB_B1
+    dw gfx_b1hm                     ; VXB_B1HM
+    dw vgas_col                     ; VXB_SCROLL
+    dw gfx_sp_seg                   ; VXB_SPANS
+    dw font_rn_fg                   ; VXB_FONTFG
 %if $ - vx_blk != VXB_SIZE
   %error "vx_blk has drifted from vxabi.inc's VXB_* layout"
 %endif
+
+; VX_LAYOUT_ASSERT - the adjacency every multi-cell pointer in vx_blk relies
+; on, as `%if`s over symbols declared in files included AFTER this one - so it
+; is a macro kernel.asm expands at its foot, where every one of them is known
+%macro VX_LAYOUT_ASSERT 0
+%if gfx_blit_w - gfx_blit_x != 2 || gfx_blit_h - gfx_blit_x != 4 || gfx_blit_sv - gfx_blit_x != 6
+  %error "VXB_BLIT reads gfx_blit_x, _w, _h, _sv as four consecutive words"
+%endif
+%if gfx_b1pap - gfx_b1ink != 1
+  %error "VXB_B1 reads gfx_b1ink then gfx_b1pap"
+%endif
+%if vgas_nb - vgas_col != 2 || vgas_sdy - vgas_col != 4 || vgas_ydst - vgas_col != 6 || vgas_step - vgas_col != 8 || vgas_rows - vgas_col != 10
+  %error "VXB_SCROLL reads the six vgas_* words in declaration order"
+%endif
+%if gfx_sp_si - gfx_sp_seg != 2 || gfx_sp_n - gfx_sp_seg != 4
+  %error "VXB_SPANS reads gfx_sp_seg, _si, _n as three consecutive words"
+%endif
+%if font_rn_bg - font_rn_fg != 1
+  %error "VXB_FONTFG reads font_rn_fg then font_rn_bg"
+%endif
+%if FONT_FIRST != VX_FONT_FIRST || FONT_LAST != VX_FONT_LAST
+  %error "vxabi.inc's glyph range has drifted from font.inc's"
+%endif
+%endmacro
 
 ; -----------------------------------------------------------------------------
 ; vx_boot_x - attach VESA.DRV and switch the desktop onto it (SPEC.md 119.4)
@@ -250,6 +302,8 @@ vx_boot_x:
 section .text
 
 %else                           ; no external renderer in this build
+%macro VX_LAYOUT_ASSERT 0
+%endmacro
 %macro VIDEXT 1
 %endmacro
 %macro VIDEXTC 2

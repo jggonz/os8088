@@ -96,3 +96,33 @@ tail trampolines are exempt, with the reason on them) and the driver memory
 gate (the row's term).
 
 ![The first desktop on the VBE: QEMU's standard VGA at 1024x768, 16 bits a pixel, S1.](vesa/s1-desktop-1024x768x16.png)
+
+## 2026-10-21 — S2, every primitive
+
+**Observed.** The Disk window at 1024x768x16: title band, folder icons,
+captions, buttons, scrollbar; the drive icons and labels on the desktop; the
+dock's tile; the File menu dropped with its greyed items stippled, and gone
+again with the dither whole. `tests/vesa.py` now drives that - a press on
+File (a menu is press, drag, release: a click opens and closes it on the
+release, which is how a run passed and the next failed), a release away, a
+double-click on A:.
+
+**Three bugs the gate caught, all the same kind.** A body that read the
+frame pointer where the caller's BP - the band's stride - was meant, and
+drew noise where the icons go. A text run whose pixel loop spent CX, the
+cell's x, so every row after the first went to the left edge. A restore
+whose sub-rect arithmetic spent AX and put the pixels back at x = 0: the
+menu's box came back half ghost, which the gate's dither check at one point
+missed and now checks at both ends of a row the drop covered.
+
+**The cold body.** `gfx_blit1_x` lives in `.cold`, where no data may go, so
+its hook could not carry a selector byte. It got its own far entry,
+`vx_callf1`, whose selector lives beside it in `.text`; the cold stub is a
+far call and a jump. One such entry per cold body, and there is one.
+
+**Measured** (kern_big against main): `.text` +508, `.cold` +226,
+`.lowbss` +128, `.bss` +4. The image rung crossed once at S2: `KERN_SIZE`
+98,304 against 97,792, 2,560 spare - which is the one rung the contract
+bounded the hook at, spent.
+
+![The Disk window on the VBE: 1024x768, 16 bits a pixel, S2.](vesa/s2-disk-window-1024x768x16.png)

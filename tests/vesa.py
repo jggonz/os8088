@@ -26,6 +26,13 @@ then a 1024 x 768 screendump: the menu bar's band at the top is not black
 (the chrome was painted through the driver's fills and runs), the desktop
 below it carries the 50% dither (gfx_fill_gray's body: a 2x2 block holding
 both black and white), and the dock's band at the bottom is not black.
+
+Then the DRIVING half (S2): the File menu dropped - a white box under the
+bar where the dither was (the menu's save-under went through the driver's
+save, its items through the one-pass run) - and closed again with every
+pixel of the dither back (the restore); then the A: drive icon (a blit1 band,
+at the desktop's right edge) double-clicked, and a Disk window up - a white
+title bar where the dither was.
 """
 import os
 import signal
@@ -93,6 +100,50 @@ def screendump(q, path):
     w, h, pix = shot.read_ppm(ppm)
     os.unlink(ppm)
     return w, h, pix
+
+
+class Mouse:
+    """tools/mouse.py, one process per action, on the 1024 x 768 screen."""
+
+    def run(self, *args):
+        subprocess.run(["python3", "tools/mouse.py", "--screen",
+                        "%dx%d" % (WANT_W, WANT_H), SOCK] + list(args),
+                       cwd=ROOT, check=True, capture_output=True)
+
+    def click(self, x, y):
+        self.run("click", str(x), str(y))
+
+    def press(self, x, y):                  # menus: press, drag, release
+        self.run("to", str(x), str(y))
+        self.run("down")
+
+    def release_at(self, x, y):
+        self.run("to", str(x), str(y))
+        self.run("up")
+
+    def dblclick(self, x, y):
+        self.run("to", str(x), str(y))
+        subprocess.run(["python3", "tools/qmp.py", SOCK,
+                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
+                        "sleep 0.12",
+                        "mouse_button 1", "sleep 0.08", "mouse_button 0"],
+                       cwd=ROOT, check=True, capture_output=True)
+
+
+def dither_at(pix, w, x0, y0):
+    """Is the 2x2 block at (x0, y0) the desktop's 50% dither?"""
+    blk = {px(pix, w, x0 + dx, y0 + dy) for dx in (0, 1) for dy in (0, 1)}
+    return (0, 0, 0) in blk and (255, 255, 255) in blk
+
+
+def white_share(pix, w, x0, y0, x1, y1):
+    n = tot = 0
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            tot += 1
+            if px(pix, w, x, y) == (255, 255, 255):
+                n += 1
+    return n / max(1, tot)
 
 
 def px(pix, w, x, y):
@@ -180,6 +231,55 @@ def main():
             if not ((0, 0, 0) in blk and (255, 255, 255) in blk):
                 fails.append("the desktop at (%d, %d) is %r, want the 50%% "
                              "dither of black and white" % (x0, y0, sorted(blk)))
+
+        # --- the driving half: a menu down and up, a window opened ---------
+        if not fails:
+            m = Mouse()
+            m.press(135, 9)                     # File, on the menu bar: a
+            os88qemu.pace(q, 1.5)               # menu is press, drag, release
+            sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            if out_png:
+                shot.png(out_png.replace(".png", "-menu.png"), sw, sh, pix)
+            # the drop's box sits under the title: a white run where the
+            # dither was (its save-under was taken through the driver)
+            share = white_share(pix, sw, 125, 24, 185, 40)
+            if share < 0.7:
+                fails.append("File menu: %.0f%% white under the title, want a "
+                             "dropped menu's box" % (100 * share))
+            m.release_at(600, 400)              # ...released away: it closes
+            os88qemu.pace(q, 1.5)
+            sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            # ...checked INSIDE the box's rect, at both ends of a row the
+            # drop covered: a restore put back at the wrong x leaves the
+            # right half a ghost (S2 found exactly that)
+            if not (dither_at(pix, sw, 130, 30) and dither_at(pix, sw, 200, 30)
+                    and dither_at(pix, sw, 240, 44)):
+                fails.append("File menu closed: the dither under it did not "
+                             "come back whole (the restore)")
+            # the A: icon at the desktop's right edge (desk zone 0): a Disk
+            # window opens on a double-click
+            m.dblclick(975, 45)
+            os88qemu.pace(q, 4.0)
+            sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            if out_png:
+                shot.png(out_png.replace(".png", "-disk.png"), sw, sh, pix)
+            # a window somewhere on the desktop: a white title band at least
+            # 200 px wide on some row between the bar and the dock
+            found = False
+            for y in range(24, sh - 40, 4):
+                run = best = 0
+                for x in range(0, sw):
+                    if px(pix, sw, x, y) == (255, 255, 255):
+                        run += 1
+                        best = max(best, run)
+                    else:
+                        run = 0
+                if best >= 200:
+                    found = True
+                    break
+            if not found:
+                fails.append("no Disk window after a double-click on A: - no "
+                             "white run of 200 px on any row")
     finally:
         pass
     if fails:

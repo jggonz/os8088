@@ -201474,7 +201474,7 @@ driver.
 | geometry | at most 1024x768, width a multiple of 8, `BytesPerScanLine` ≤ 4,096 |
 | colour model | **the desktop stays 16 colours.** `[gfx_color]` is a 4-bit index everywhere in the kernel and every package; the driver maps index → DAC entry (8bpp) or → an RGB word (16bpp) at the write. One new slot, `OSAPI_GFX_BLITD`, is how a package reaches the real depth (§119.7) |
 | CPU | `cpu 8086` throughout the driver. A 286 with a VBE 1.2 card qualifies; `mul` gives the 32-bit offset as DX:AX and that is all the arithmetic needs |
-| resident cost | the hook of §119.3, **measured at S1 on `kern_big`: `.text` +409, `.cold` +215, `.lowbss` +128, `.bss` +4; no rung crossed, `KERN_SIZE` unchanged at 97,792** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel before it |
+| resident cost | the hook of §119.3, **measured at S2 on `kern_big`: `.text` +508, `.cold` +226, `.lowbss` +128, `.bss` +4 - the image rung crossed once, `KERN_SIZE` 98,304 against 97,792 (2,560 spare)** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel before it |
 
 ### 119.2 Detection and the choice of mode — the driver's attach
 
@@ -201609,32 +201609,34 @@ own refusal, CF = 1, and the driver is not called at all.
 **The register contract of each selector is the planar body's own** (the
 numbers are `kernel/vxabi.inc`'s, shared as source with the driver):
 
-| n | body hooked | takes | S1 |
+| n | body hooked | takes | since |
 |---|---|---|---|
 | 0 `VX_FILL` | `vga_solid_rect` (fill, pixel, hline, vline, frame strips, the menu's XOR highlight, the drag outline's strips) | AX/BX/CX/DX = the rect, `[gfx_color]`, `[vga_xorm]` 0 = replace else XOR | drawn |
-| 1 `VX_GRAY` | `gfx_fill_gray_raw` | the rect; (x+y) even white, odd black | drawn |
-| 2 `VX_PAT` | `gfx_fill_pat_raw` | the rect, the eight bytes at `[gfx_pat]`, a set bit white | drawn |
-| 3 `VX_SAVE` | `vga_save_vram` | the rect, ES:DI the buffer; DI advanced. Row-major at full depth when `[vga_pn]` is the depth, **one bit a pixel** when it is 1 (§11.96.17's one-plane window: only colours 0 and 15) | drawn |
-| 4 `VX_RESTORE` | `vga_restore_vram` | the inverse, ES:SI; `[gfx_sub_st]`/`[gfx_sub_rs]` honoured, scaled from the kernel's 1bpp-per-plane bytes by the bytes a saved byte column takes here | drawn |
-| 5 `VX_FONTCHAR` | `font_char`'s `.vram` arm | CX = x, DX = y + r0, SI = glyph row r0 in `[font_seg]`, `[wm_clip_r0]` (r0, rows), `[wm_clip_cm]`, `[gfx_color]` | drawn |
-| 6 `VX_ICON` | `ico_core`'s planar arm | the `ico_*` cells: rows of words, MSB leftmost, mask rows in `ico_c1` then data rows in `ico_c2`, x signed | drawn |
-| 7 `VX_CURPUT` | `cur_put_1` | save under and draw the arrow at `cur_drawn_x/y` − the hot spot | drawn |
-| 8 `VX_CURGET` | `cur_get_1` | put the save-under back | drawn |
-| 9 `VX_CURMOVE` | `cur_move_1` | AX/BX = the new position: get, store, put | drawn |
-| 10 `VX_SETMODE` | `vid_setmode`'s arm (through `vx_call`) | `4F02h` with the chosen mode, the DAC's first sixteen at 8bpp | drawn |
-| 11 `VX_BLIT4` | `gfx_blit4` | **S1 routes a packed display to the RUN path** (`.slow` with `[gfx_blit_fst]` 0): every coalesced run is a `gfx_hline` the driver fills, correct and slow | S2 |
-| 12 `VX_BLIT1` | `gfx_blit1_x` (cold) | S1 **refuses**, CF = 1, as `kern_small` does | S2 |
-| 13 `VX_SCROLL` | `gfx_scroll` | S1 refuses; the caller repaints (its contract) | S2 |
-| 14 `VX_SPANS` | `gfx_spans` | S1 refuses; the caller's fallback is a fill a row | S2 |
-| 15 `VX_FONTRUN` | `font_run`'s planar arm | S1 sends a packed display to `.slow` — `gfx_fill` + `font_str`, both the driver's; the one-pass run is S2's | S2 |
+| 1 `VX_GRAY` | `gfx_fill_gray_raw` | the rect; (x+y) even white, odd black | S1 |
+| 2 `VX_PAT` | `gfx_fill_pat_raw` | the rect, the eight bytes at `[gfx_pat]`, a set bit white | S1 |
+| 3 `VX_SAVE` | `vga_save_vram` | the rect, ES:DI the buffer; DI advanced. Row-major at full depth when `[vga_pn]` is the depth, **one bit a pixel** when it is 1 (§11.96.17's one-plane window: only colours 0 and 15) | S1 |
+| 4 `VX_RESTORE` | `vga_restore_vram` | the inverse, ES:SI; `[gfx_sub_st]`/`[gfx_sub_rs]` honoured, scaled from the kernel's 1bpp-per-plane bytes by the bytes a saved byte column takes here | S1 |
+| 5 `VX_FONTCHAR` | `font_char`'s `.vram` arm | CX = x, DX = y + r0, SI = glyph row r0 in `[font_seg]`, `[wm_clip_r0]` (r0, rows), `[wm_clip_cm]`, `[gfx_color]` | S1 |
+| 6 `VX_ICON` | `ico_core`'s planar arm | the `ico_*` cells: rows of words, MSB leftmost, mask rows in `ico_c1` then data rows in `ico_c2`, x signed | S1 |
+| 7 `VX_CURPUT` | `cur_put_1` | save under and draw the arrow at `cur_drawn_x/y` − the hot spot | S1 |
+| 8 `VX_CURGET` | `cur_get_1` | put the save-under back | S1 |
+| 9 `VX_CURMOVE` | `cur_move_1` | AX/BX = the new position: get, store, put | S1 |
+| 10 `VX_SETMODE` | `vid_setmode`'s arm (through `vx_call`) | `4F02h` with the chosen mode, the DAC's first sixteen at 8bpp | S1 |
+| 11 `VX_BLIT4` | `gfx_blit4` (through `vx_call`, to `.out`) | BX = y, the `gfx_blit_x/w/h/sv` cells, ES = the source segment, BP = its stride; two pixels a byte, high nibble leftmost; the driver clips both axes (the clip region's case took `.slow` above) | S2 |
+| 12 `VX_BLIT1` | `gfx_blit1_x` (cold) at `.ybot`, through **`vx_callf1`** - its own far entry, because `.cold` holds no data and the selector byte lives beside the entry in `.text` | AX/BX the clipped x/y, CX width, DX rows, ES:SI the band, BP its stride, the pen (`gfx_b1ink`/`gfx_b1pap`, set = ink) and `gfx_b1hm` (nonzero: ONE byte column, the mask's positions only). BEFORE `.pen`, whose port program would be wrong for a packed mode | S2 |
+| 13 `VX_SCROLL` | `gfx_scroll` at `.disp`, to `.ok` | the six `vgas_*` words: left byte column, bytes a row, signed dy, first destination row, step, rows; each row through a bounce buffer | S2 |
+| 14 `VX_SPANS` | `gfx_spans`, before its row base, to `.done` | AX = the first row (clipped), the `gfx_sp_*` list, `[gfx_color]` | S2 |
+| 15 `VX_FONTRUN` | `font_run`'s `.planar`, to `.out` | CX = x, DX = y, ES:SI the string, `font_rn_fg`/`bg`; **only with no region armed and the text not disabled** - either takes `.slow`, the pair, both halves the driver's, because the per-cell clip and the stipple are the kernel's. Leaves `[gfx_color]` at the foreground | S2 |
 | — | `gfx_blitp` | **refused on every wave**: the source is a plane layout this display does not have, and Paint keeps its `gfx_blit4` fallback | — |
 
 The splash's VRAM writers are not hooked: they run before any driver can
 load, on the VGA, always.
 
-The table is the plan's inventory; `tests/unit/t_vidext.py` (S2) is to check
-it against the source, every `cmp byte [vid_mono], 0` in a planar arm being
-followed by a `VIDEXT*` or named in an exempt list with a reason.
+The table is the plan's inventory, and `tests/unit/t_vidext.py` keeps it
+honest (fast tier): every `[vid_mono]`/`[vid_planes]` dispatch in the kernel
+is registered in `tests/vidext.txt` as hooked or exempt with a reason, every
+selector is emitted exactly once, and the driver's jump table answers each
+with a body and never the refusal stub.
 
 #### 119.3.2 The attach answer and the kernel's block
 

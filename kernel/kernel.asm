@@ -7014,6 +7014,10 @@ COLD_START equ BOOT2_PAD + (COLD_RAM - KERNEL_SEG) * 16 ; after the gap
 COLD_START equ BOOT2_PAD + ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 512
 %endif
 
+VX_LAYOUT_ASSERT                ; vidext.inc's adjacency claims (SPEC.md 119.3.2),
+                                ; here because every cell they name is declared
+                                ; by now
+
 section .boot2
 %include "../boot/boot2.asm"    ; STAGE 2 (SPEC.md 2.9), here at the FOOT of
                                 ; the file because B2_KSECS is derived from

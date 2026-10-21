@@ -573,11 +573,11 @@ vx_jt:
     dw vxp_curget               ; VX_CURGET
     dw vxp_curmove              ; VX_CURMOVE
     dw vxp_setmode              ; VX_SETMODE
-    dw vxp_refuse               ; VX_BLIT4 (S2)
-    dw vxp_refuse               ; VX_BLIT1 (S2)
-    dw vxp_refuse               ; VX_SCROLL (S2)
-    dw vxp_refuse               ; VX_SPANS (S2)
-    dw vxp_refuse               ; VX_FONTRUN (S2)
+    dw vxp_blit4                ; VX_BLIT4
+    dw vxp_blit1                ; VX_BLIT1
+    dw vxp_scroll               ; VX_SCROLL
+    dw vxp_spans                ; VX_SPANS
+    dw vxp_fontrun              ; VX_FONTRUN
 %if ($ - vx_jt) / 2 != VX_NSEL
   %error "vx_jt has drifted from vxabi.inc's selectors"
 %endif
@@ -1074,12 +1074,14 @@ vxp_restore:
     jc .out
     mov si, [bp+F_SI]
     ; --- the sub-rect offsets, scaled ----------------------------------------------
+    push bx                     ; (BX is y1 from here to the row loop)
     push ds
     mov ds, [vx_kseg]
     mov bx, [cs:vx_p_sub]
     mov cx, [bx]                ; gfx_sub_st
     mov dx, [bx+2]              ; gfx_sub_rs
     pop ds
+    pop bx
     mov ax, dx
     mul word [vx_sc1]           ; AX = rs * scale ([vx_sc1] is vx_sr_setup's)
     mov [vx_rs], ax
@@ -1087,6 +1089,7 @@ vxp_restore:
     mul word [vx_sc1]
     add si, ax                  ; SI += st * scale
     mov [vx_buf], si
+    mov ax, [vx_x1]             ; x1 again: the arithmetic above spent AX
 .row:
     push ax
     push bx
@@ -1562,6 +1565,449 @@ vxp_setmode:
     clc
     ret
 
+
+; =============================================================================
+; THE S2 BODIES: the blits, the scroll, the span list and the one-pass run
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; VX_BLIT4 - gfx_blit4: BX = y, [gfx_blit_x]/[gfx_blit_w]/[gfx_blit_h]/
+;            [gfx_blit_sv] through the block, ES = the source segment (the
+;            frame's), BP = its stride (the caller's). Two pixels a byte, the
+;            high nibble leftmost. Unclipped in both axes (SPEC.md 5.4)
+; -----------------------------------------------------------------------------
+vxp_blit4:
+    push ds
+    mov ds, [vx_kseg]
+    mov si, [cs:vx_p_blit]
+    mov ax, [si]                ; x
+    mov cx, [si+2]              ; w
+    mov dx, [si+4]              ; h
+    mov di, [si+6]              ; sv
+    pop ds
+    mov [vx_bx0], ax
+    mov [vx_bsrc], di
+    mov ax, [bp]                ; the CALLER's BP, the source stride (BP is
+    mov [vx_bstride], ax        ; our frame pointer here)
+    mov [vx_rows], dx
+    ; --- the visible x range: [xs, xe) --------------------------------------
+    mov di, ax
+    add di, cx                  ; DI = x + w = xe
+    cmp di, [vx_x]
+    jle .xe
+    mov di, [vx_x]
+.xe:
+    or ax, ax
+    jns .xs
+    xor ax, ax
+.xs:
+    cmp ax, di
+    jge .out                    ; nothing of it on the display
+    mov [vx_bxs], ax
+    sub di, ax
+    mov [vx_w], di              ; pixels a row
+    ; --- the visible rows: skip those above the top --------------------------
+    or bx, bx
+    jns .ytop
+    neg bx
+    cmp bx, [vx_rows]
+    jae .out
+    sub [vx_rows], bx
+    mov ax, bx
+    mul word [vx_bstride]
+    add [vx_bsrc], ax
+    xor bx, bx
+.ytop:
+.row:
+    cmp bx, [vx_y]
+    jae .out                    ; off the bottom: the rest is too
+    mov ax, [vx_bxs]
+    push bx
+    call vx_addr                ; ES:DI = (xs, y)
+    pop bx
+    mov si, [vx_bxs]
+    sub si, [vx_bx0]            ; SI = pixels into the block
+    mov cx, si
+    shr si, 1                   ; ...as bytes
+    add si, [vx_bsrc]
+    and cl, 1                   ; CL = 1 when the first pixel is a LOW nibble
+    push ds
+    mov ds, [bp+F_ES]           ; DS:SI = the source row
+    mov dx, [cs:vx_w]
+.px:
+    lodsb
+    mov ah, al
+    or cl, cl
+    jnz .low
+    mov ch, al
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1                   ; the high nibble, leftmost
+    call vx_px
+    dec dx
+    jz .rdone
+    mov al, ch
+.low:
+    and al, 0x0F                ; the low nibble
+    call vx_px
+    xor cl, cl
+    dec dx
+    jnz .px
+.rdone:
+    pop ds
+    mov ax, [vx_bstride]
+    add [vx_bsrc], ax
+    inc bx
+    dec word [vx_rows]
+    jnz .row
+.out:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; VX_BLIT1 - gfx_blit1_x at .ybot: AX = x (on the byte grid), BX = y, CX =
+;            width in pixels, DX = rows, ES:SI = the band's first byte, BP =
+;            its stride - all clipped to the display by the kernel. The pen
+;            through VXB_B1 (ink, paper, adp: 2 = a set bit is the PAPER), the
+;            head column's mask through VXB_B1HM (nonzero: ONE byte column,
+;            and only the mask's set positions are drawn - SPEC.md 5.4.2.8)
+; -----------------------------------------------------------------------------
+vxp_blit1:
+    push ds
+    mov ds, [vx_kseg]
+    mov di, [cs:vx_p_b1]
+    mov di, [di]                ; DL = ink, DH = paper... in DI for a moment
+    mov [cs:vx_ink], di
+    mov di, [cs:vx_p_b1hm]
+    mov di, [di]
+    mov [cs:vx_b1hm], di        ; (the low byte)
+    pop ds
+    mov ax, [bp+F_AX]
+    mov [vx_bx0], ax            ; x
+    mov [vx_rows], dx
+    mov ax, [bp]                ; the CALLER's BP: the band's stride
+    mov [vx_bstride], ax
+    mov [vx_bsrc], si
+    mov di, cx
+    shr di, 1
+    shr di, 1
+    shr di, 1
+    mov [vx_bnb], di            ; whole bytes a row
+    and cx, 7
+    mov ch, 0FFh                ; the tail's mask: its top CL bits
+    jz .nomask
+    shr ch, cl
+    not ch
+    jmp short .maskok
+.nomask:
+    xor ch, ch
+.maskok:
+    cmp byte [vx_b1hm], 0
+    je .mset
+    mov ch, [vx_b1hm]           ; ...or the head column's exact mask
+    mov word [vx_bnb], 0
+.mset:
+    mov [vx_bmask], ch
+    cmp word [vx_rows], 0
+    je .out
+.row:
+    mov ax, [vx_bx0]
+    push bx
+    call vx_addr                ; ES:DI = (x, y)
+    pop bx
+    mov si, [vx_bsrc]
+    mov cx, [vx_bnb]
+    push ds
+    mov ds, [bp+F_ES]           ; DS:SI = the band row
+    jcxz .tail
+.byte:
+    lodsb
+    mov dl, al
+    mov dh, 8
+.bit:
+    shl dl, 1
+    mov al, [cs:vx_ink+1]       ; paper
+    jnc .put
+    mov al, [cs:vx_ink]         ; ink
+.put:
+    call vx_px
+    dec dh
+    jnz .bit
+    loop .byte
+.tail:
+    mov dh, [cs:vx_bmask]
+    or dh, dh
+    jz .rdone
+    lodsb
+    mov dl, al
+.tbit:
+    shl dh, 1
+    jnc .tskip
+    shl dl, 1
+    mov al, [cs:vx_ink+1]
+    jnc .tput
+    mov al, [cs:vx_ink]
+.tput:
+    call vx_px
+    jmp short .tnext
+.tskip:
+    shl dl, 1
+    call vx_skip
+.tnext:
+    or dh, dh
+    jnz .tbit
+.rdone:
+    pop ds
+    mov ax, [vx_bstride]
+    add [vx_bsrc], ax
+    inc bx
+    dec word [vx_rows]
+    jnz .row
+.out:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; VX_SCROLL - gfx_scroll: the six vgas_* words through VXB_SCROLL - the left
+;             byte column, bytes a row, the signed dy (positive = content UP),
+;             the first destination row, the step (+1 top-down, -1 bottom-up)
+;             and the rows to move. Each row goes through a bounce buffer, so
+;             a window edge inside either row is the helpers' business
+; -----------------------------------------------------------------------------
+vxp_scroll:
+    push ds
+    mov ds, [vx_kseg]
+    mov si, [cs:vx_p_scroll]
+    mov ax, [si]                ; col
+    mov cx, [si+2]              ; nb
+    mov dx, [si+4]              ; sdy
+    mov bx, [si+6]              ; ydst
+    mov di, [si+8]              ; step
+    mov si, [si+10]             ; rows
+    pop ds
+    mov [vx_sstep], di
+    mov [vx_rows], si
+    mov [vx_sdy], dx
+    mov cl, 3
+    shl ax, cl                  ; x = col * 8
+    mov [vx_bx0], ax
+    mov ax, cx
+    shl ax, cl                  ; pixels a row = nb * 8
+    mov [vx_w], ax
+    cmp word [vx_rows], 0
+    je .out
+.row:
+    push bx
+    add bx, [vx_sdy]            ; the source row
+    mov ax, [vx_bx0]
+    call vx_addr                ; ES:DI = the source
+    mov si, di
+    push ds
+    mov ax, es
+    mov ds, ax                  ; DS:SI = VRAM
+    push cs
+    pop es
+    mov di, vx_rowbuf           ; ES:DI = the bounce
+    mov cx, [cs:vx_w]
+    cmp byte [cs:vx_bpp], 8
+    jne .r16
+.r8:
+    movsb
+    VXWS
+    loop .r8
+    jmp short .rd
+.r16:
+    movsw
+    VXWS
+    loop .r16
+.rd:
+    pop ds
+    pop bx
+    mov ax, [vx_bx0]
+    push bx
+    call vx_addr                ; ES:DI = the destination
+    pop bx
+    mov si, vx_rowbuf           ; DS:SI = the bounce (DS = CS)
+    mov cx, [vx_w]
+    cmp byte [vx_bpp], 8
+    jne .w16
+.w8:
+    movsb
+    VXW
+    loop .w8
+    jmp short .wd
+.w16:
+    movsw
+    VXW
+    loop .w16
+.wd:
+    add bx, [vx_sstep]
+    dec word [vx_rows]
+    jnz .row
+.out:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; VX_SPANS - gfx_spans: AX = the first row (clipped), [gfx_sp_seg]:[gfx_sp_si]
+;            = [gfx_sp_n] records of x1, x2 (inclusive; x1 > x2 = an empty
+;            row) through VXB_SPANS, [gfx_color] the ink
+; -----------------------------------------------------------------------------
+vxp_spans:
+    mov bx, ax                  ; BX = y
+    push ds
+    mov ds, [vx_kseg]
+    mov si, [cs:vx_p_spans]
+    mov ax, [si]                ; the list's segment
+    mov cx, [si+4]              ; rows
+    mov si, [si+2]              ; ...and offset
+    mov di, [cs:vx_p_color]
+    mov dl, [di]
+    pop ds
+    mov [vx_bsrc], si
+    mov [vx_bstride], ax        ; (the list's segment, banked here)
+    mov [vx_rows], cx
+    mov [vx_ink], dl
+    jcxz .out
+.row:
+    push ds
+    mov ds, [vx_bstride]
+    mov si, [cs:vx_bsrc]
+    lodsw
+    mov cx, ax                  ; x1
+    lodsw
+    mov dx, ax                  ; x2
+    mov [cs:vx_bsrc], si
+    pop ds
+    cmp cx, dx
+    jg .next                    ; empty
+    or cx, cx
+    jns .x1
+    xor cx, cx
+.x1:
+    cmp dx, [vx_x]
+    jl .x2
+    mov dx, [vx_x]
+    dec dx
+.x2:
+    cmp cx, dx
+    jg .next
+    sub dx, cx
+    inc dx                      ; DX = pixels
+    mov ax, cx
+    push bx
+    call vx_addr
+    pop bx
+    mov cx, dx
+    mov al, [vx_ink]
+    call vx_rowfill
+.next:
+    inc bx
+    dec word [vx_rows]
+    jnz .row
+.out:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; VX_FONTRUN - font_run's planar arm, no region armed and not disabled: CX =
+;              x, DX = y, ES:SI the ASCIIZ string, [font_rn_fg]/[font_rn_bg]
+;              through VXB_FONTFG; the glyphs at [font_seg]:[font_base] +
+;              (c - 32) * 8, an unprintable cell painted blank. A cell off
+;              the display's edges is skipped and the run goes on (SPEC.md
+;              6.1); [gfx_color] is left at the foreground, the contract's
+;              "pen spent"
+; -----------------------------------------------------------------------------
+vxp_fontrun:
+    push ds
+    mov ds, [vx_kseg]
+    mov di, [cs:vx_p_fontfg]
+    mov ax, [di]                ; AL = fg, AH = bg
+    mov [cs:vx_ink], ax
+    mov di, [cs:vx_p_color]
+    mov [di], al                ; the pen, spent
+    mov di, [cs:vx_p_font]
+    mov ax, [di]                ; font_seg
+    mov [cs:vx_fseg], ax
+    mov ax, [di+2]              ; font_base
+    mov [cs:vx_fbase], ax
+    pop ds
+    mov ax, [vx_y]
+    sub ax, 8
+    cmp dx, ax
+    ja .out                     ; the run's y does not fit (unsigned: < 0 too)
+    mov [vx_bsrc], si           ; the string cursor
+    mov bx, dx                  ; BX = y
+    mov [vx_bx0], cx            ; ...and the cell's x, which the pixel loop's
+                                ; count spends CX on
+.cell:
+    push ds
+    mov ds, [bp+F_ES]
+    mov si, [cs:vx_bsrc]
+    lodsb
+    mov [cs:vx_bsrc], si
+    pop ds
+    or al, al
+    jz .out
+    mov ah, al
+    mov ax, [vx_x]
+    sub ax, 8
+    cmp cx, ax
+    ja .skip                    ; off either edge: the cell is not drawn
+    push ds
+    mov ds, [bp+F_ES]
+    mov si, [cs:vx_bsrc]
+    mov al, [si-1]              ; the character again
+    pop ds
+    sub al, VX_FONT_FIRST
+    cmp al, VX_FONT_LAST - VX_FONT_FIRST
+    jbe .glyph
+    xor al, al                  ; unprintable: the blank cell, which is SPACE
+.glyph:
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, [vx_fbase]
+    mov [vx_glyph], ax
+    push cx
+    mov dh, 8                   ; rows
+.grow:
+    mov ax, [vx_bx0]
+    push bx
+    push dx
+    call vx_addr
+    pop dx
+    pop bx
+    push ds
+    mov ds, [vx_fseg]
+    mov si, [cs:vx_glyph]
+    mov dl, [si]
+    pop ds
+    inc word [vx_glyph]
+    mov cx, 8
+.gpx:
+    shl dl, 1
+    mov al, [vx_ink+1]          ; bg
+    jnc .gput
+    mov al, [vx_ink]            ; fg
+.gput:
+    call vx_px
+    loop .gpx
+    inc bx
+    dec dh
+    jnz .grow
+    sub bx, 8                   ; the run's y again
+    pop cx
+.skip:
+    add cx, 8
+    mov [vx_bx0], cx
+    jmp .cell
+.out:
+    clc
+    ret
+
 ; --- the DAC's first sixteen: the VGA's own sixteen colours, 6-bit guns ------
 vx_dac16:
     db  0, 0, 0,   0, 0,42,   0,42, 0,   0,42,42
@@ -1611,6 +2057,12 @@ vx_p_icoxy  dw 0
 vx_p_icoc   dw 0
 vx_p_kind   dw 0
 vx_p_pat    dw 0
+vx_p_blit   dw 0
+vx_p_b1     dw 0
+vx_p_b1hm   dw 0
+vx_p_scroll dw 0
+vx_p_spans  dw 0
+vx_p_fontfg dw 0
 %if $ - vx_p_tabrow != VXB_SIZE - 2
   %error "the pointer bank has drifted from vxabi.inc's VXB_* layout"
 %endif
@@ -1648,9 +2100,23 @@ vx_sch      dw 0
 vx_ctab     dw 0
 vx_x1       dw 0
 vx_a1       dd 0
+vx_bx0      dw 0                ; the S2 bodies' scratch
+vx_bxs      dw 0
+vx_bsrc     dw 0
+vx_bstride  dw 0
+vx_bnb      dw 0
+vx_bmask    db 0
+vx_b1adp    db 0
+vx_b1hm     db 0
+            db 0
+vx_sstep    dw 0
+vx_sdy      dw 0
+vx_fbase    dw 0
 vx_patbuf   times 8 db 0
 vx_pal16    times 16 dw 0       ; the 16 desktop colours as RGB words (16bpp)
 vx_cursave_b times CUR_GW * CUR_GH * 2 db 0
+vx_rowbuf   times 2048 db 0     ; one row at the widest and deepest mode, the
+                                ; scroll's bounce
 vx_modes    times VX_NMODES * VM_SIZE db 0
 vx_list     times (VX_LISTMAX + 1) * 2 db 0
 vx_minfo    times 256 db 0

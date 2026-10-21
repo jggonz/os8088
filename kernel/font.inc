@@ -1686,11 +1686,19 @@ font_run_x:
 .planar:
 %ifdef VID_EXT
 .vxp0:
-    cmp byte [vid_ext], 0       ; SPEC.md 119.3: no single-store prologue for
-    jz .plok                    ; a packed display - the pair, gfx_fill and
-    jmp .slow                   ; font_str, both of which the driver draws
-%if ($ - .vxp0) & 1             ; (the run's own one-pass body is a plan story)
-    db 0                        ; PARITY, never executed: whichever jmp NASM
+    cmp byte [vid_ext], 0       ; SPEC.md 119.3: a packed display's run is the
+    jz .plok                    ; driver's ONE PASS - unless a region is armed
+    CLIPQ                       ; (the per-cell test is the kernel's) or the
+    jne .vxslow                 ; text is disabled (the stipple is font_ink's):
+    cmp byte [gfx_dis], 0       ; both take the pair, gfx_fill and font_str,
+    jne .vxslow                 ; which the driver draws cell by cell
+    call vx_call
+    db VX_FONTRUN
+    jmp .out
+.vxslow:
+    jmp .slow
+%if ($ - .vxp0) & 1
+    db 0                        ; PARITY, never executed: whichever jmps NASM
 %endif                          ; picks, the block is even and font_run_cell,
 .plok:                          ; wm_paint_all and ui_task keep their entry
 %endif                          ; parity (tests/unit/t_hotpar.py)

@@ -52,14 +52,27 @@ code does not.
   crossed, `KERN_SIZE` 97,792 unchanged. Not the private driver stack the
   contract first described: the mouse ISR's stack doubled instead (SPEC.md
   §119.3.3 says why).
-- [ ] **S2 Every primitive.** `gfx_fill_gray`, `gfx_fill_pat`, `gfx_xor_fill`
-  (menu highlights), `vga_xor_rect_vram` (drag outline), `gfx_spans`,
-  `gfx_blit4`, `gfx_blit1` with the pen, `gfx_save`/`gfx_restore`,
-  `gfx_scroll`, and `gfx_blitp`'s refusal. Outcome: Paint, Note Pad, the
-  Disk window, Calculator, Solitaire and the Control Panel all draw as they
-  do on VGA; menus open and close without a ghost; a window drags and
-  resizes. `tests/unit/t_vidext.py` keeps the selector inventory honest.
-  Verified by: `tests/vesa.py`'s driving half (a menu, a window, a drag).
+- [x] **S2 Every primitive.** **Shipped:** `gfx_blit4` (nibbles, both axes
+  clipped by the driver), `gfx_blit1` through its own far entry
+  `vx_callf1` at `.ybot` (the pen, the head mask, the tail), `gfx_scroll`
+  (rows through a bounce buffer), `gfx_spans`, and `font_run`'s one-pass
+  body for a run with no region armed and not disabled (either still takes
+  the pair). `gfx_blitp` refuses by contract. `tests/unit/t_vidext.py`
+  (fast) and `tests/vidext.txt`: every dispatch site registered as hooked
+  or exempt with a reason, every selector emitted once, no refusal stub in
+  the driver's table. **Seen:** the drive icons and labels, the dock's
+  tile, the File menu dropped (greyed items stippled through the pair) and
+  closed with the dither back whole, the Disk window with its title band,
+  folder icons, buttons and scrollbar (`docs/vesa/s2-disk-window-1024x768x16.png`).
+  `tests/vesa.py` drives that: a press on File, a release away, a
+  double-click on A:. **Found by the gate and fixed:** a restore that put
+  the pixels back at x = 0 (the sub-rect arithmetic spent AX) - the row the
+  gate now checks at both ends; a frame pointer read where the caller's BP
+  (the band stride) was meant; a run whose pixel count spent its x.
+  **Measured** (kern_big): `.text` +508, `.cold` +226, `.lowbss` +128,
+  `.bss` +4 against main; the image rung crossed once, `KERN_SIZE` 98,304
+  (2,560 spare). **Not yet:** a window drag and resize on the glass
+  (the drag outline is the XOR fill, which S1 drew) - S8's driving pass.
 - [ ] **S3 16-bit colour.** 15/16bpp modes rendered through an RGB-word
   path; the 16-entry table re-derived whenever the kernel writes the DAC
   (Bright/Dark theme, the Color presets of §76.14); Auto takes the deepest

@@ -1001,6 +1001,15 @@ FAST = [
     Row("swallow", "fast", py("tests/unit/t_swallow.py"), 0.1,
         "a statement that ended up inside a block comment: it compiles clean, "
         "runs never, and cost apps/c64 a Paste that outlived a machine reset"),
+    Row("vidext", "fast", py("tests/unit/t_vidext.py"), 0.1,
+        "the external renderer hook's inventory (SPEC.md 119.3.1): every "
+        "[vid_mono]/[vid_planes] dispatch in the kernel is registered in "
+        "tests/vidext.txt as hooked or exempt with a reason, every selector "
+        "kernel/vxabi.inc names is emitted exactly once, and VESA.DRV's jump "
+        "table answers each with a body and never the refusal stub. A new "
+        "planar body that forgot its VIDEXT would program the VGA's ports on "
+        "a packed mode and draw nothing anyone could diagnose",
+        needs=()),
     Row("drvmem", "fast", py("tests/unit/t_drvmem.py"), 0.1,
         "the Drivers page's memory column (SPEC.md 31.6.2) re-derived: every "
         "image term against the .drv this build made, every claim term against "
