@@ -590,6 +590,8 @@ font_char:
 %ifdef GFX_VGA                  ; on the framebuffer. With no VGA in the build
     jmp .done                   ; `.done` is the NEXT instruction, and nasm
 .vram:                          ; spends two bytes on `jmp short $+2`
+    VIDEXTC VX_FONTCHAR, .done  ; SPEC.md 119.3: the cell is the driver's,
+                                ; and the frame above is still ours to pop
     mov di, cx                  ; x/8 goes STRAIGHT into DI and x&7 stays in
     shr di, 1                   ; CL: the old spelling hopped x through BX and
     shr di, 1                   ; back (`mov bx,cx` ... `mov ax,bx` ...
@@ -1682,6 +1684,16 @@ font_run_x:
 ; not a second renderer. That is the whole reason this is a prologue and not
 ; a routine.
 .planar:
+%ifdef VID_EXT
+.vxp0:
+    cmp byte [vid_ext], 0       ; SPEC.md 119.3: no single-store prologue for
+    jz .plok                    ; a packed display - the pair, gfx_fill and
+    jmp .slow                   ; font_str, both of which the driver draws
+%if ($ - .vxp0) & 1             ; (the run's own one-pass body is a plan story)
+    db 0                        ; PARITY, never executed: whichever jmp NASM
+%endif                          ; picks, the block is even and font_run_cell,
+.plok:                          ; wm_paint_all and ui_task keep their entry
+%endif                          ; parity (tests/unit/t_hotpar.py)
     cmp dx, [vid_chm8]          ; the run's y, once, exactly as on the mono
     ja .jout                    ; path (SPEC.md 6.1.6)
     cmp cx, [vid_cwm8]          ; ...and a negative x goes per cell, same rule

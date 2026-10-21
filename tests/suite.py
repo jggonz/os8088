@@ -4352,6 +4352,20 @@ SOAK = [
         "the closed list (entry 4)",
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img")),
+    Row("vesa", "soak", py("tests/vesa.py"), 60.0,
+        "The packed-pixel display (SPEC.md 119): QEMU's standard VGA carries "
+        "a VBE BIOS, so VESA.DRV's probe finds 1024x768x16 and the desktop "
+        "switches onto it before the first paint. Boots build/vesa.img (`make "
+        "vesatest`: the shipped kernel and driver on a disk whose SYSTEM.CFG "
+        "wants bit 8), asserts vid_kind 4, vid_ext 1, 1024x768, vid_planes 16 "
+        "and a clean driver row, then a 1024x768 screendump: the menu bar and "
+        "the dock painted, the desktop's 50% dither present - every pixel "
+        "through the driver's fill, gray, text, icon and cursor bodies. QEMU "
+        "by name on CLAUDE.md's closed list: MartyPC and the 86Box XTs have "
+        "no VBE, and are the negative control for free. SOAK and not full: a "
+        "feature no 8088 can reach, on a disk of its own",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
     Row("vmmouse", "soak", py("tests/vmmouse.py"), 45.0,
         "The VMware absolute pointer (SPEC.md 9.11), the browser's grabless "
         "mouse - and the one CI gate a browser-only feature gets. QEMU's pc "

@@ -27,18 +27,31 @@ code does not.
   branch `feature/vesa`), SPEC.md §119, this plan, the diary, the CLAUDE.md
   and AGENTS.md rows, a draft PR. Outcome: the contract is reviewable before
   a byte of code.
-- [ ] **S1 A desktop at 1024x768.** As a user with a VBE card I tick `VESA`
+- [x] **S1 A desktop at 1024x768.** As a user with a VBE card I tick `VESA`
   on the Drivers page (or boot a disk whose `SYSTEM.CFG` wants it) and the
-  desktop comes up at the largest mode the card offers, at 8bpp, with the
-  menu bar, dock, windows, text, icons and the arrow drawn correctly. Kernel:
-  `VID_VESA`, `vid_tab` row 4, `vid_depth_set`'s `[vid_ext]`, `VIDEXT` at
-  `gfx_fill_raw`, `font_char`, `font_run`, `ico_core`, the cursor and
-  `vid_setmode`; `DRVC_VIDEO`, the `drv_tab` row, `DRV_ATTACH`'s class step
-  arming `vx_ep` and `VID_A_VESA`; `vid_switch`'s ladder accepting kind 4.
-  Driver: probe, mode table, Auto, `DSV_VX_INIT`, the fill/cell/icon/cursor
-  bodies at 8bpp, bank switching on a private stack. `make vesatest` and
-  `tests/vesa.py`'s boot-state half. Verified by: `tests/vesa.py`, a boot to
-  look at, `tools/kernsize.py` before and after (the resident bytes, named).
+  desktop comes up at the largest mode the card offers, with the menu bar,
+  text, the desktop dither and the arrow drawn correctly. **Shipped:**
+  `VID_VESA`, `vid_tab` row 4, `vid_depth_set`'s `[vid_ext]`, the `VIDEXT`
+  hooks at `vga_solid_rect` (fill and XOR), `gfx_fill_gray`, `gfx_fill_pat`,
+  `vga_save_vram`/`vga_restore_vram`, `font_char`, `ico_core`, the three
+  cursor arms and `vid_setmode`; refusals at `gfx_blitp`, `gfx_spans`,
+  `gfx_scroll`, `gfx_blit1`; `gfx_blit4` and `font_run` routed to their
+  slow paths (every run a hooked fill). `vesa_row` (a `DRVC_OVL` row, not a
+  class - the decisions table), `vx_boot_x` attaching and switching at the
+  end of boot, the Drivers page switching back before an untick. Driver:
+  the VBE 1.2+ probe, the 16-record mode table, Auto, `VXV_INIT` filling
+  `vid_tab` row 4, the eleven bodies at 8 and 16bpp, `4F05h` banking. `make
+  vesatest`, `tests/vesa.py` (soak), `NOVIDEXT=1` in the build matrix.
+  **Seen:** QEMU's standard VGA comes up at 1024x768x16 (`build/vesa-s1.png`
+  in the diary): menu bar with its logo, titles, date and clock; the dither;
+  the arrow; the dock's strip. **Not yet:** the dock's tiles and the
+  desktop's drive icons are `gfx_blit1` bands, refused until S2, so both
+  areas are blank. **Measured** (`tools/kernsize.py`, kern_big): `.text`
+  +409, `.cold` +215 (of which `vx_boot_x` is 116 - the blob was full to 2
+  bytes), `.lowbss` +128 (the mouse ISR's stack), `.bss` +4; no rung
+  crossed, `KERN_SIZE` 97,792 unchanged. Not the private driver stack the
+  contract first described: the mouse ISR's stack doubled instead (SPEC.md
+  §119.3.3 says why).
 - [ ] **S2 Every primitive.** `gfx_fill_gray`, `gfx_fill_pat`, `gfx_xor_fill`
   (menu highlights), `vga_xor_rect_vram` (drag outline), `gfx_spans`,
   `gfx_blit4`, `gfx_blit1` with the pen, `gfx_save`/`gfx_restore`,
@@ -89,7 +102,9 @@ code does not.
 | hooks in `kern_big`, ~one image rung, with `NOVIDEXT=1` as the A/B | a fourth kernel, `kern_vesa` (kern_emu's shape), costing the XT nothing | a VESA user boots the standard disk and the card is found; a fourth kernel is a fourth system disk, a fourth live image and a fourth row in every gate that walks "every shipped image". The owner may still prefer it — the hook is written so that `VID_EXT` can be moved under a build define in one line |
 | the desktop stays 16 colours | a 256-colour or RGB desktop | `[gfx_color]` is a nibble in every kernel body and every package; widening it is a rewrite of §5, §6, §25 and the SDK. Depth reaches a package through one slot instead |
 | banked window A, 8086 code | the linear framebuffer through unreal mode | unreal mode is 386 code that any segment load undoes, and this kernel reloads segments on every switch (SPEC.md §119.2.3) |
-| the driver owns the cursor whole | hooking `vga_save_vram`/`vga_restore_vram` under `cur_*` | a 16bpp cell is 512 bytes against `cur_save`'s 192, and the mouse ISR's stack is 128 bytes: the driver's own buffer and private stack are the only place both fit |
+| the driver owns the cursor whole | hooking `vga_save_vram`/`vga_restore_vram` under `cur_*` | a 16bpp cell is 512 bytes against `cur_save`'s 192: the driver's own buffer is where it fits. Its window switch is an `int 10h`, so the mouse ISR's private stack is 256 bytes under `VID_EXT`; a private stack in the driver was refused - two tasks preempted inside one `int 10h` would share it |
+| `vx_boot_x` in `.cold` | the blob, beside `vmm_boot_x` | the blob measured 6,142 of 6,144 bytes; 116 resident bytes inside the cold rung's slack until the blob sheds a sector's worth (S8 names it) |
+| `DRVC_OVL` with a row, no class | a `DRVC_VIDEO` class with a `DSV_*` table | the kernel is the only caller and holds the far pointer; a class costs a publication slot, a copied table and three per-class arrays for nothing to find |
 | `[vid_planes]` = the bpp | a separate depth byte | the three save-under sizers already multiply by `[vid_planes_w]`; at 8 and 16 the formula gives the packed byte count unchanged |
 | `gfx_blitp` refused on VESA | translating plane-major bytes to packed | the source is a VGA plane layout; Paint already carries the `gfx_blit4` fallback the refusal routes to |
 | hibernate greyed while VESA is primary | switching to VGA inside HIBER.DRV's sweep | `vid_switch` is CTRL.DRV's and the blob's; a third expansion is a decision with bytes attached, taken in S5 or deferred with the arithmetic |

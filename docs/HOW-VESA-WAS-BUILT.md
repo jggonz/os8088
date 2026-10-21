@@ -56,3 +56,43 @@ segments on every task switch.
 `installabi`, fails on a clean checkout of `main` before this branch touched
 anything (it wants `build/small*.img`, which a first `make` has not yet
 built when the tier runs).
+
+## 2026-10-21 — S1, the first desktop on the VBE
+
+**Observed.** QEMU's standard VGA, `make vesatest && python3 tests/vesa.py
+--png build/vesa-s1.png`: the desktop at 1024x768, 16 bits a pixel, mode
+`0117h`. The menu bar with its logo, the three titles, the date and the clock;
+the 50% dither over the whole desktop; the arrow; the dock's white strip. The
+dock's tiles and the desktop's drive icons are absent — both are `gfx_blit1`
+bands, which S1 refuses (the band body is S2's) — so the picture is the
+desktop minus its icons. The gate reads `vid_kind` 4, `vid_ext` 1, 1024x768,
+`vid_planes` 16 and a clean driver row, then the screendump.
+
+**Three things the code taught the contract.**
+
+- The boot blob was full: 6,142 of 6,144 bytes. The attach-and-switch body
+  written for it, beside `vmm_boot_x`, went to `.cold` instead — 116 resident
+  bytes — and is called by kmain between `kmain_o`'s return and the blob's
+  release, which is the one window where the blob's `vid_switch` is still
+  there to call. The overlay checker could not see a reference into a label a
+  three-argument macro pastes (`VSW_SWITCH bvs, BSWK, bvw`); it can now, and
+  the one other crossing that surfaced (`bdk_apply`, a macro body defined
+  under `.modc` and expanded only in the blob) is registered with its reason.
+- A private stack in the driver for the `int 10h` window switch was wrong:
+  two tasks preempted inside one BIOS call would share it. The mouse ISR's
+  own private stack doubled to 256 bytes instead, and every other call runs
+  on the task that made it.
+- `drv_attach`'s contract says PRESERVE BX, and the probe spent it. The
+  symptom was a refused driver with `No hardware found` and a mode table of
+  ten accepted modes sitting in the freed image: the init verb went to a
+  garbage row and the range check refused the far call. Both ends now keep
+  the row.
+
+**Measured** (`tools/kernsize.py`, kern_big): `.text` +409, `.cold` +215,
+`.lowbss` +128, `.bss` +4; no rung crossed; `KERN_SIZE` 97,792 unchanged.
+Three gates tripped and were satisfied: the hot-routine parity gate (every
+hook shape is now an even number of bytes), the stack-balance walker (the two
+tail trampolines are exempt, with the reason on them) and the driver memory
+gate (the row's term).
+
+![The first desktop on the VBE: QEMU's standard VGA at 1024x768, 16 bits a pixel, S1.](vesa/s1-desktop-1024x768x16.png)

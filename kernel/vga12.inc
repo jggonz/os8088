@@ -1986,6 +1986,12 @@ gfx_blit4:
                                 ; GFXDISP (SPEC.md 39.14.7)
 .dsp1:
 %endif
+%ifdef VID_EXT
+    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 119.3): the RUN
+    jz .noext                   ; path, every run a gfx_hline the driver
+    jmp .slow                   ; fills - [gfx_blit_fst] is still 0, so .slow
+.noext:                         ; IS that path (the driver's own body is S2)
+%endif
 %ifdef GFX_VGA
     cmp byte [vid_mono], 0
     je .vga                     ; (no test at all without a VGA in the build:
@@ -2834,6 +2840,10 @@ gfx_blitp:
     ; stops being true.
     cmp byte [vid_mono], 0
     jne .no
+    VIDEXTR .no                 ; ...and a packed display refuses too (SPEC.md
+                                ; 119.3.1): the source is a plane layout this
+                                ; display does not have, and Paint keeps its
+                                ; gfx_blit4 fallback for exactly this answer
     ; --- the geometry, once for the whole block. (The first version of this
     ; shifted with `mov cl, 3` and then popped x into CX - a count destroyed by
     ; the value it was going to shift, which made the block one byte too wide
@@ -3221,6 +3231,9 @@ gfx_fill_raw:
 ; The 1bpp arm pays nothing.
 ; -----------------------------------------------------------------------------
 vga_solid_rect:
+    VIDEXT VX_FILL              ; a packed display (SPEC.md 119.3): the driver
+                                ; fills - or XORs, [vga_xorm] being set by
+                                ; both callers above - and returns to OURS
     push ax
     push bx
     push cx
@@ -3410,6 +3423,10 @@ gfx_spans:
 %else
     cmp byte [vid_mono], 0      ; the screen and a hide is owed (7.1.4)
     jne sw_spans                ; 1bpp: softgfx.inc's row loop, then .done
+%ifdef VID_EXT
+    cmp byte [vid_ext], 0       ; a packed display REFUSES (SPEC.md 119.3.1),
+    jne .vxno                   ; having drawn nothing: the caller's fallback
+%endif                          ; is a gfx_fill a row. The driver's body is S2
 .vga:
     mov dx, VGA_GC              ; THE LIST'S, not the row's - four OUTs and a
     mov ah, [gfx_color]         ; GC reset hoisted out of every span but one.
@@ -3446,6 +3463,14 @@ gfx_spans:
     dec word [gfx_sp_n]
     jnz .vrow
     call vga_gc_reset
+%endif
+%ifdef VID_EXT
+.vxno:
+    stc                         ; refused, through the same ladder
+    jmp kret_es
+    db 0                        ; PARITY, never executed: with gfx_blitp's and
+                                ; gfx_scroll's seven-byte refusals this file's
+                                ; hooks are even (tests/unit/t_hotpar.py)
 %endif
 .done:
     clc                         ; (pops write no flag: the ladder keeps CF)
@@ -3563,6 +3588,7 @@ gfx_fill_gray_d:
 gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_gray
+    VIDEXT VX_GRAY              ; ...and a packed display's (SPEC.md 119.3)
     push ax
     push bx
     push cx
@@ -3717,6 +3743,8 @@ gfx_fill_pat_d:
 gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_pat
+    VIDEXT VX_PAT               ; ...and a packed display's (SPEC.md 119.3):
+                                ; the eight bytes at [gfx_pat], unstaged
     push ax
     push bx
     push cx
@@ -4058,6 +4086,8 @@ vga_save_vram:                              ; only renderer gfx_save has
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
     jne sw_save                 ; on mono the framebuffer IS the renderer's
                                 ; target, so one "plane" of sw_xfer is it
+    VIDEXT VX_SAVE              ; ...and a packed display's save is the
+                                ; driver's, in [vga_pn]'s terms (SPEC.md 119.4)
     push ax
     push bx
     push cx
@@ -4314,6 +4344,7 @@ gfx_restore:
 vga_restore_vram:                              ; only renderer gfx_restore has
     cmp byte [vid_mono], 0      ; see vga_save_vram
     jne sw_restore
+    VIDEXT VX_RESTORE           ; ...and the driver's, [gfx_sub_*] honoured
     push ax
     push bx
     push cx
@@ -4903,6 +4934,10 @@ gfx_scroll:
     mov [vgas_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
     mov word [vgas_step], -1     ; bottom-up (source above destination)
 .disp:
+%ifdef VID_EXT
+    cmp byte [vid_ext], 0       ; a packed display refuses (SPEC.md 119.3.1),
+    jne .no                     ; and the caller repaints: the driver's own
+%endif                          ; scroll is S2
 %ifdef GFX_VGA
     cmp byte [vid_planes], 1
     je .mono
@@ -5399,7 +5434,17 @@ gfx_blit1_x:
     stc                         ; short jumps: 38 clocks a blit where the
     ret                         ; five-byte `jcc`s cost 77
 %endif
+%ifdef VID_EXT
+    nop                         ; PARITY, never executed (between a `ret` and
+                                ; a jump target; a `nop` because .cold holds
+                                ; no data): the seven-byte refusal below keeps
+                                ; .cold's dsk_* on their entry parity
+%endif
 .argok:
+%ifdef VID_EXT
+    cmp byte [vid_ext], 0       ; a packed display refuses a band for now
+    jne .refuse                 ; (SPEC.md 119.3.1): its body is S2's, and a
+%endif                          ; caller reads CF as it does on kern_small
 
 %ifdef GFX_VGA                  ; SPEC.md 5.4.2.5: no VGA in this build, so no PEN
     mov word [gfx_b1act], 0     ; SPEC.md 5.4.2.2's two flags, and BOTH in one

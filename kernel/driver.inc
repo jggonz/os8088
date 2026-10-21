@@ -41,8 +41,16 @@
 ; happens.
 ; =============================================================================
 
+%ifdef VID_EXT
+DRV_VX      equ 1               ; ...plus VESA.DRV's row, LAST on both big
+%else                           ; builds (SPEC.md 119.1): a DRVC_OVL row like
+DRV_VX      equ 0               ; the absolute mouse's, with a SYSTEM.CFG bit
+%endif                          ; (drv_cfgbit's 8) and a Drivers-page tick.
+                                ; An `equ` and not a %define, so that
+                                ; tests/unit/t_drvmem.py's expression reader
+                                ; can evaluate DRV_MAX
 %ifdef KERN_EMU
-DRV_MAX     equ 8               ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 8 + DRV_VX      ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -56,7 +64,7 @@ DRV_MAX     equ 8               ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; here so that row keeps index 5. The EIGHTH
                                 ; is kern_big's seventh, EMS.DRV (SPEC.md 107)
 %elifdef KERN_BIG
-DRV_MAX     equ 7               ; ...and kern_big stops at EMS.DRV (SPEC.md
+DRV_MAX     equ 7 + DRV_VX      ; ...and kern_big stops at EMS.DRV (SPEC.md
                                 ; 107), after the CH375 USB mouse (SPEC.md
                                 ; 9.12), appended after the parallel link so
                                 ; rows 0-4 keep their indices.
@@ -951,12 +959,18 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
 %ifdef KERN_EMU
     db 0, 1, 4, 2, 3, 5, 6, 7   ; sound, hdd, ether, ramdisk, net, vmmouse,
                                 ; usbmouse, ems
+%ifdef VID_EXT
+    db 8                        ; ...and VESA.DRV: BIT 8 ON BOTH BUILDS
+%endif
 %elifdef KERN_BIG
     db 0, 1, 4, 2, 3, 6, 7      ; sound, hdd, ether, ramdisk, net, usbmouse,
                                 ; ems - BIT 6 ON BOTH BUILDS, row 5 here and
                                 ; row 6 there: bit 5 is the absolute mouse's
                                 ; even on a build that has no such row (SPEC.md
                                 ; 9.12). And EMS is bit 7 on both (SPEC.md 107)
+%ifdef VID_EXT
+    db 8                        ; ...and VESA.DRV, bit 8 (SPEC.md 119.1)
+%endif
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
 %endif
@@ -1062,6 +1076,10 @@ drv_t_vmm:   db 'Absolute mouse', 0  ; ALONE (SPEC.md 9.11.7) - 27 bytes that
                                 ; mechanism and has no use for this driver
 %endif
 %ifdef KERN_BIG
+%ifdef VID_EXT
+drv_f_vesa:  db 'VESA.DRV', 0    ; SPEC.md 119's packed-pixel display: kern_big's
+drv_t_vesa:  db 'VESA Display', 0 ; and kern_emu's, never kern_small's
+%endif
 drv_f_ems:   db 'EMS.DRV', 0     ; SPEC.md 107's expanded memory: kern_big's
 drv_t_ems:   db 'EMS', 0         ; for the reason the USB mouse's line gives
 drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
@@ -1331,6 +1349,20 @@ usbm_row:                       ; ...a label for tests/usbmouse.py, which finds
                                 ; ports, and 260h is the CH375's on a Book8088
     db DRVE_OK
     db 0
+%ifdef VID_EXT
+vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
+    dw PKG_DISP, 0              ; tests/vesa.py. Row 7 (8 on kern_emu):
+    dw drv_f_vesa, drv_t_vesa   ; VESA.DRV, the packed-pixel display's renderer
+    dw 0, 0                     ; (SPEC.md 119). DRVC_OVL WITH A ROW, the
+    db DRVC_OVL                 ; absolute mouse's shape and for its reason:
+                                ; the kernel is its only caller (vx_ep) so no
+                                ; class is needed, and the tick is the user's
+                                ; decision to put the desktop on the VBE
+    db 0                        ; NOT wanted by default (SPEC.md 51.3): the
+                                ; probe is an int 10h on every boot otherwise
+    db DRVE_OK
+    db 0
+%endif
 %if $ - drv_tab != DRV_MAX * DRVR_SIZE
   %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
 %endif
@@ -1399,6 +1431,7 @@ DRVM_IMG_NET equ 5              ; ceil(build/net.drv     / 1024) - FIVE
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
 DRVM_IMG_USBM equ 2             ; ceil(build/usbmouse.drv / 1024)
 DRVM_IMG_EMS equ 1              ; ceil(build/ems.drv / 1024)
+DRVM_IMG_VESA equ 5             ; ceil(build/vesa.drv / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 16        ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no
@@ -1434,6 +1467,9 @@ DRVM_RAM     equ (DRVM_IMG_RAM + 7 + 8) | DRVM_PLUS
 DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
                                 ; hooks no vector, owns no port and keeps no
                                 ; buffer. The image IS the whole footprint
+DRVM_VESA    equ DRVM_IMG_VESA  ; VESA.DRV claims nothing: its probe buffers,
+                                ; its mode table and the arrow's save-under
+                                ; are bss, inside the image
 DRVM_EMS     equ DRVM_IMG_EMS   ; EMS.DRV claims nothing: its tables are its
                                 ; bss, and the board's memory is not the heap's
 DRVM_USBM    equ DRVM_IMG_USBM  ; the USB mouse claims nothing: its one
@@ -1460,7 +1496,10 @@ drv_memk:                       ; one word per drv_tab row, in the same order
 %endif
 %ifdef KERN_BIG
     dw DRVM_USBM                ; the CH375 USB mouse, and
-    dw DRVM_EMS                 ; EMS.DRV, last on both big builds
+    dw DRVM_EMS                 ; EMS.DRV, last on both big builds...
+%ifdef VID_EXT
+    dw DRVM_VESA                ; ...until VESA.DRV (SPEC.md 119)
+%endif
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"

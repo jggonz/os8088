@@ -218,6 +218,18 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %endif
 %endif
 
+; --- VID_EXT: the external renderer hook (SPEC.md 119.3) ----------------------
+; kern_big's by default: one compare per planar drawing body, a far pointer
+; and a block of pointers (kernel/vidext.inc), so VESA.DRV can draw a fifth
+; adapter kind. `make NOVIDEXT=1` is the A/B that assembles the kernel before
+; it existed; kern_small never has it - no driver layer (SPEC.md 51.0), no
+; planar renderer (39.27), nothing for a hook to hook.
+%ifdef KERN_BIG
+ %ifndef NOVIDEXT
+  %define VID_EXT 1
+ %endif
+%endif
+
 ; BANDCOMP - the 1bpp band composer (SPEC.md 5.9), and since SPEC.md 5.9.6 it
 ; is a KNOB again rather than kern_big's default. `make BAND=1` compiles it in
 ; and puts wm_draw_title's interior on ONE composed blit; the default build
@@ -4828,6 +4840,17 @@ kmain:
     SPLGATE1 kmain_o            ; ...the whole boot, from the blob, up to and
                                 ; including spl_finish (SPEC.md 2.5.3.3). MARK
                                 ; 1-31 are in there, as MARKW
+%ifdef VID_EXT
+    call COLD_SEG:vx_boot_x     ; ...and VESA.DRV, if SYSTEM.CFG asked for it
+                                ; (SPEC.md 119.4): a DRVC_OVL row drv_boot_x
+                                ; read and stopped at, attached here and the
+                                ; desktop switched onto it through the blob's
+                                ; own vid_switch - which is why this sits
+                                ; BETWEEN kmain_o's return and mem_unblob_x
+                                ; below, and after the loading screen is down
+                                ; so the mode change wipes nothing the first
+                                ; paint is not about to cover
+%endif
 
     ; --- ...AND STAGE 2 GOES BACK TO THE HEAP (SPEC.md 2.9.5, 50.6.3) -------
     ; The line above is the last thing that ever wants the loading screen, so
@@ -5454,6 +5477,9 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
                                 ; than merely the same size (docs/
                                 ; KERN-SPLIT-PLAN.md 1.1: a divergence that
                                 ; hides in the rung's padding is still real)
+%include "vidext.inc"           ; the external renderer hook (SPEC.md 119.3):
+                                ; its macros are used in vga12.inc, font.inc,
+                                ; icons.inc and mouse.inc, so it goes first
 %include "vga12.inc"
 %include "softgfx.inc"
 

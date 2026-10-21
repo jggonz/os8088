@@ -6833,6 +6833,16 @@ cp_drv_click:
 
     cmp word [bx+DRVR_SEG], 0
     je .load
+%ifdef VID_EXT
+    cmp bx, vesa_row            ; VESA.DRV IS THE RENDERER (SPEC.md 119.4): the
+    jne .novx                   ; desktop goes back onto the VGA BEFORE the
+    push ax                     ; image that was drawing it is freed, and this
+    mov al, VID_VGA             ; page is the one caller that can detach it
+    CPXF vid_switch             ; (IN THIS IMAGE, KSW_SECT) - a no-op when the
+    pop ax                      ; display was already the VGA's
+    call cp_repost              ; ...and the whole screen is a new shape
+.novx:
+%endif
     call COLD_SEG:drvf_drv_unload             ; it is up: take it down...
     jmp short .off              ; ...and nothing failed - it was turned off
 .load:
