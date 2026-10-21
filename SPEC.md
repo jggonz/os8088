@@ -197260,12 +197260,13 @@ full`. The messages already shown stay shown.
 ### 113.10 Sizes
 
 Measured on the tree that added the terminal layout and its themes
-(§113.5, §113.5.2): **image 19,834 bytes, bss 31,397 — 51,231 of
-`APP_MAX_SIZE`'s 61,440**; `WIRECHAT.O88` is 17,590 bytes packed. It was
+(§113.5, §113.5.2): **image 19,959 bytes, bss 31,398 — 51,357 of
+`APP_MAX_SIZE`'s 65,024**; `WIRECHAT.O88` is 17,701 bytes packed. It was
 19,658 / 29,217 and 17,092 with the colour face before it, 15,901 / 19,896
 and 13,844 when owned nicks were added. The themes cost the image little: the
 LED pictures and the bevel went, the four theme rows, the glyph table, the
-three button painters and the F keys came, +176 bytes in all. The bss grew by
+three button painters, the F keys and §113.5.1's ink-only run came, +301
+bytes in all. The bss grew by
 the slots' wider meta (sixteen spans, an underline) and the Theme menu's
 composed items.
 No heap claim: every buffer is in the package's own segment, which is what
@@ -197281,7 +197282,7 @@ largest first:
 | `wc_ros` | 800 | the roster: 50 sessions, the server's limit (§113.7), at 16 |
 | `wc_reqb` | 640 | a request: line, headers, a 200-character body |
 | `wc_cfgb` | 514 | `WIRECHAT.CFG` read or written whole |
-| the rest | ~2,181 | the field and its draft, the rooms, the conversations, the friends, the geometry, the theme's pens and menu items, the client's state |
+| the rest | ~2,182 | the field and its draft, the rooms, the conversations, the friends, the geometry, the theme's pens and menu items, the client's state |
 
 The worker's stack is `OS88_STACK_256` (§113.4): ETHER.DRV's verbs are ~126
 bytes of it and the interrupt floor 64, and the deepest chain of this file's
