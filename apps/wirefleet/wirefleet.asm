@@ -50,6 +50,8 @@ wf_entry:
     call wf_pcm_open            ; 114.11: the samples, on a Sound Blaster
     call wf_new
     call wf_autostart           ; 114.9: look for the opponent at once
+    call wf_geometry            ; (the stamps' planar copy asks the display)
+    call wf_fx_need             ; 114.11: the stamp bank
     mov bx, [wf_win]
     clc
 .out:

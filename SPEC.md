@@ -197684,11 +197684,15 @@ because its image and bss were 60,416 bytes of their 64KB segment:
 
 | row | part | unpacked | fetched |
 |---|---|---:|---|
-| 0 | `WFLETFX.GFX` | 13,824 | at the first tick in battle, kept until close |
+| 0 | `WFLETFX.GFX` | 13,824 | at window open, kept until close |
 | 1 | `WFLET.SFX` | 12,304 | at launch on a Sound Blaster route; copied, dropped |
 
 The stamp bank is fetched only when `op_lazykb` says the heap holds it;
 otherwise shots are not animated and play exactly as before, with no toast.
+It is fetched at window open, from the disk the package just came off: it
+was first fetched at the first tick in battle, and on a 4.77 MHz XT that
+read held the UI task - the Ready cue, the link and the window - for over a
+second at the moment a captain pressed Ready (`wirefleetsystem` caught it).
 
 **Effects.** Three new cues - launch, explosion, splash - replace fire, hit
 and miss in battle. With the Sound Blaster tier (`OSAPI_SND_CAPS` has
@@ -197730,7 +197734,7 @@ ms on VGA; 13-37 ms and 14-18 ms on Hercules - about one tick a frame.
 from 20,713 to 20,854: **65,024 of the segment's 65,536**, so the next
 feature here is a part or a module, not more image. The file is 26,553 ->
 47,943 bytes (the stamps pack 13,824 -> 5,310, the clips 12,304 -> 11,591).
-At run time the stamp bank is a 14KB claim from the first tick in battle
+At run time the stamp bank is a 14KB claim from window open
 (plus the 9KB planar copy on a colour window), and the clips a 13KB DMA
 claim on a Sound Blaster route only. On disk:
 `games360.img` 269 -> 290 of 354 clusters, `apps720.img` 688 -> 709 of

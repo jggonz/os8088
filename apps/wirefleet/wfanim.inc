@@ -6,15 +6,14 @@
 WF_FXSPR equ 4
 WF_FX_HOVER equ 36              ; ticks a landed missile waits for its result
 
-; The stamp bank, once, at the first tick in battle: only when the heap
-; holds it, and never inside the CGA bracket (a refusal toasts, and a toast
-; is desktop drawing). Without it shots are not animated and play as before.
+; The stamp bank, once, at window open: only when the heap holds it. It was
+; fetched at the first tick in battle, and on a 4.77 MHz XT that read held
+; the UI task - the Ready cue, the link, the window - for over a second at
+; exactly the moment a captain pressed Ready. At open the disk is the one
+; the package just came off. Without it shots are not animated and play as
+; before.
 wf_fx_need:
     cmp byte [wf_fxtried], 0
-    jne .out
-    cmp byte [wf_ready], 0
-    je .out
-    cmp byte [wf_infs], 0
     jne .out
     mov byte [wf_fxtried], 1
     call op_clbget

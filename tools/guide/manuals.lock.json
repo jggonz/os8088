@@ -1196,9 +1196,9 @@
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "e3e1efbf",
-  "strings": "24bef22c86f73ff1",
-  "why": "2400 baud and Link > Statistics described"
+  "stamped": "3f9bc879",
+  "strings": "4f7d7f10c65ff1a8",
+  "why": "missiles, impacts, music and the Music U item added to Connect and deploy and Display and sound (SPEC 114.11)"
  },
  "WORD": {
   "sources": [],

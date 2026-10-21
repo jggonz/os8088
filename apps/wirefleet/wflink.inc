@@ -331,7 +331,6 @@ wf_tick:
 
 wf_poll:
     call wf_soundtick
-    call wf_fx_need             ; 114.11: the stamp bank, once, in battle
     call wf_fx_tick
     call OSAPI_GET_TICKS
     mov [wf_now], ax

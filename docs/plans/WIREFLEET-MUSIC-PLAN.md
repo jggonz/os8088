@@ -27,7 +27,8 @@ The owner's brief, 2026-10-20:
   loop, so all four faces (VGA/EGA packed and planar, 1bpp, the CGA bracket)
   get them from one mechanism and the cell cache stays the only redraw.
 - **Room**: the image and bss were 60,416 of 64KB, so the stamps and clips
-  are lazy parts (§20.12), fetched only when used.
+  are lazy parts (§20.12): the stamps at window open, the clips only on a
+  Sound Blaster.
 
 ## The fork, and why
 
