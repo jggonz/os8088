@@ -478,17 +478,17 @@
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "86cfa38e",
-  "strings": "3cc5041b36daa9bf",
-  "why": "Gained a pointer to INSTALL.O88; the tool's own windows are unchanged (its new package verbs are not user-visible)"
+  "stamped": "ddaef50f",
+  "strings": "caf4859056bcb91b",
+  "why": "The engine gained INSTALL's log hook (SPEC.md 117.4.1); the Control Panel's Install window and the pages' words are unchanged"
  },
  "HDD_DRV": {
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "86cfa38e",
-  "strings": "3cc5041b36daa9bf",
-  "why": "HDD.DRV's XMS arm keeps a segment and its door gained an installer verb; nothing a user sees changed"
+  "stamped": "ddaef50f",
+  "strings": "caf4859056bcb91b",
+  "why": "The engine gained INSTALL's log hook (SPEC.md 117.4.1); the Control Panel's Install window and the pages' words are unchanged"
  },
  "HELV_F88": {
   "sources": [],
@@ -520,9 +520,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "86cfa38e",
-  "strings": "b47a3911d9ad48fe",
-  "why": "New page for the INSTALL wizard (SPEC.md 117)"
+  "stamped": "ddaef50f",
+  "strings": "1dc0fc6f30c645db",
+  "why": "Copying section describes the Installing page's log and its click-Next ending (SPEC.md 117.4.1)"
  },
  "INTRO_MID": {
   "sources": [],

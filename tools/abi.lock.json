@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "effffe19fef5e5270bf174b2b4c06ccb2db18e81900995285e4d8a4a013db1db",
+  "fingerprint": "a1a98cc8c4c660b29d64a5d32803096202d635fc2a890cd293b06ff9f44a1378",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "5e34b492cfdba8334b3b0bbaf7d6bcfd3e7b3f32a3bde41f9b347266b8d6ca79",
+  "fingerprint": "6f95bb35afbfabf08c5edbf31f84daaea91e933c2746f495e9228ba75f15126a",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -413,6 +413,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "HDIV_BIOS named in the unreleased HDI_DEVS record (SPEC.md 117.4)",
+   "to": 11
+  },
+  {
+   "fingerprint": "6f95bb35afbfabf08c5edbf31f84daaea91e933c2746f495e9228ba75f15126a",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "INSTALL's verbose log: HDI_GO/HDI_APPS take an HDIB_* block with a log proc (SPEC.md 117.4.1); unreleased, no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "a1a98cc8c4c660b29d64a5d32803096202d635fc2a890cd293b06ff9f44a1378",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "INSTALL's verbose log: HDI_GO/HDI_APPS take an HDIB_* block with a log proc (SPEC.md 117.4.1); unreleased, no bump",
    "to": 11
   }
  ]

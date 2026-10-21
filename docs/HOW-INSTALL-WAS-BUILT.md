@@ -120,3 +120,53 @@ three kernels.
 
 **A small joke kept.** README.TXT must pack to exactly 8,088 bytes; the new
 hard-disk paragraph was tuned until it did.
+
+## Wave 4 — "so that we can see everything" (2026-10-21)
+
+**The ask.** The owner installed onto 86Box's ST-225 XT (`make xt-mfm`, a
+blank 20MB image) - it worked, 40 files and an active partition read back on
+the host - and then asked for the Installing step to be verbose: *"so that we
+can see everything that is happening behind the scenes."*
+
+**The constraint that shaped it.** The install is ONE call. `HDI_GO` runs the
+whole system phase - and the apps phase too when the apps disk is already in
+B: - inside the wizard's button handler, under the frozen interface (§52.10.4).
+Nothing the wizard draws after the call returns can show what happened during
+it. So the engine has to hand the wizard each line *as it starts the step*,
+and the wizard has to draw it there and then, from inside the engine.
+
+**The decision: a callback, not a drawing engine.** The package boundary
+already has a shape for "call a package proc": far to `segment:PKG_DISP` with
+BP = the proc and DS switched (§20.2) - which is how the kernel calls every
+`W_PAINT`. The engine uses exactly that, with the line copied into the
+package's own block so no pointer crosses a segment. The alternative - the
+engine drawing into the wizard's window - was rejected: the wizard would not
+own its pixels, and a repaint after the call would have nothing to repaint
+from.
+
+**What the Control Panel pays: nothing it can see.** Its Install window runs
+the same engine and never arms the hook; every log site is a compare and a
+branch, and the hook is cleared at the end of every verb, so a Control Panel
+run can never reach a package's code.
+
+**Two defects on the way, both found by looking.**
+
+- *Every file in a folder was 32 KB.* The indent routine left `' '` (32) in
+  AL - the register holding the size. Root files were right only because
+  they have no indent.
+- *The first fix did not run.* `build/hddtool.bin`'s rule never listed
+  `ipkg.inc`, the file wave 1 added, so `make` kept the old tool - and the
+  floppy carried it - while every check stayed green. The rule names it now.
+
+**The page.** Nine lines of 41 cells in a frame, each line one opaque run
+padded to the band; once the box is full, one `OSAPI_GFX_SCROLL` and one run
+a line. When the verb answers, the wizard adds its own last line, the heading
+becomes *Finished - click Next* (or *It stopped*), and Next goes on to Done,
+the apps-disk page or Stopped. That extra click is the point: the end of the
+log is what the owner wants to read.
+
+**Measured.** An erase-install on MartyPC's XT-IDE XT logs 67 files, 711 KB.
+`HDDTOOL.DRV` grew 672 bytes, which crosses its claim from 17 to 18KB (only
+while the tool is loaded); INSTALL grew 385 bytes of image and 428 of bss;
+no kernel byte.
+

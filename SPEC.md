@@ -197741,7 +197741,7 @@ every greyed choice says why (§47 rule 5).
 | **Step 2: where to put it** | the four slots as radio rows — size and `HDI_SLOTS`' State text, the Install window's words exactly — greyed unless an install may take them; a hint for the pick: *os8088 is on it already: Upgrade it*, *It has files: next, keep or erase them*, *Free space: INSTALL makes a partition*, *Not formatted*, *That partition cannot be used* | — |
 | **Step 3: keep or erase** | two radio choices, *Keep them, and upgrade os8088* and *Erase it and install fresh*, two lines on what each does, and the reason when one is greyed (§117.5) | — |
 | **Step 4: ready to install** | the drive, the slot, its size and letter, whether its files are kept or ERASED; `Next` reads **Install** | the copying page, then `HDI_GO` |
-| **Installing** | drawn before the call that freezes the machine: what is being copied, that it takes minutes, that the bar shows the progress; all three buttons greyed | — |
+| **Installing** | drawn before the call that freezes the machine, then written WHILE it runs: a framed log of nine lines that scrolls, one line per thing the engine does (§117.4.1) — the copy buffer it took, the source disk, the format or the keep, every folder made and every file copied with its size, kept and left-alone files by name, the boot sector, the partition table, the apps disk it found, `ASSOC.DAT`, the totals. All three buttons are greyed while it runs; when the verb returns the last line says how it ended, the heading says *click Next*, and `Next` is live — so the end of the log stays on screen until the user has read it | the page the verb's answer names: Apps disk, Done, or Stopped |
 | **Nearly done: the apps disk** | the system part is on and the disk boots (§52.10.10); take the system disk out of A:, put the APPS disk in, `Continue` — or `Skip` | `HDI_APPS`; *Skip* sends `HDI_QUIT` |
 | **os8088 is installed** | take the floppy out; `Next` reads **Restart** | `OSAPI_REBOOT` AL = 1 |
 | **The install stopped** | the engine's own caption — the words the Install window would have shown (`No system disk found - nothing done`, the name of the file a copy stopped on, …) — and whether the disk was made bootable (a system-phase stop) or the system part is on and only programs are missing (an apps-phase stop) | `Back` returns to Step 2, rescanned |
@@ -197754,7 +197754,10 @@ the machine (§52.10.5) or mounted as an image (§52.10.17): the answer is then
 a file operation holds the interface by design). The page that starts it is
 drawn first and says so — *Copying the system disk. This takes several minutes;
 the bar below shows the progress* — and the progress is §12.8's widget, which
-the engine steps from inside the transfer loop.
+the engine steps from inside the transfer loop. **The log is the rest of what
+is happening**, and it is drawn from inside the same call: the engine hands
+each line to the wizard as it starts the step (§117.4.1), so a slow step is
+named while it is slow rather than after it.
 
 **Cancel** is honest about the stage: before Confirm it closes and nothing has
 been touched; on the Apps disk page it is *Skip* (the system part has
@@ -197878,8 +197881,8 @@ preserves every register but AX.
 |---|---|---|---|
 | 0 | `HDI_DEVS` | ES:DI = `HD_MAXDEV` (4) × `HDIV_SIZE` | AL = devices; one `HDIV_*` record each |
 | 1 | `HDI_SLOTS` | DL = a device; ES:DI = 4 × `HDIS_SIZE` | AL = the slot the Install window would select (0..3), `0FFh` none would do, `0FEh` no such device or its geometry is unknown, `0FDh` the Install window is open; one `HDIS_*` record a slot |
-| 2 | `HDI_GO` | DL = device, DH = slot, CH = 1 erase / 0 keep; ES:DI = `HDI_CAPSZ` (48) bytes | AL = an `HDG_*` stage, and the engine's caption at ES:DI |
-| 3 | `HDI_APPS` | ES:DI = `HDI_CAPSZ` bytes | as `HDI_GO` |
+| 2 | `HDI_GO` | DL = device, DH = slot, CH = 1 erase / 0 keep; ES:DI = an `HDIB_*` block (`HDIB_SIZE`, 91 bytes) | AL = an `HDG_*` stage, and the engine's caption at `HDIB_CAP` |
+| 3 | `HDI_APPS` | ES:DI = an `HDIB_*` block | as `HDI_GO` |
 | 4 | `HDI_QUIT` | — | abandons a run waiting on its apps disk; AL = 0 |
 
 `HDIV_*`, a device: `HDIV_KIND` (+0, 1 = int 13h, 2 = the IDE task file),
@@ -197919,6 +197922,49 @@ stage as it always has. **A run waiting on its apps disk pins the tool**:
 `DRVU_DONE` can free the image under a run that still holds `ASSOC.DAT`'s
 writer (§54.7.6.4); `HDI_QUIT`, or the Install window being closed, puts the
 stage back to idle.
+
+#### 117.4.1 The log — `HDIB_LOG`
+
+The two install verbs take a block rather than a bare caption buffer:
+`HDIB_CAP` (+0, `HDI_CAPSZ` = 48, the caption out, exactly as before),
+`HDIB_LOG` (+48, dw, the near offset in the caller's segment of a **log
+proc**, or 0 for none) and `HDIB_LINE` (+50, `HDI_LINESZ` = 41, where each
+line is put). `HDIB_SIZE` = 91.
+
+**With a proc, the engine calls it once per line, from inside the verb.**
+The call is a package callback in every respect (§20.2): far to the caller's
+segment at `PKG_DISP` with BP = the proc, **DS = the caller's segment, ES =
+`KERNEL_SEG`**, SI = the line (`HDIB_LINE`, NUL-ended, at most 40
+characters), the gfx lock held as the verb's caller held it. The proc may
+clobber every register but SS:SP and may DRAW — that is what it is for —
+and **may not touch a file, a volume or the tool**: the engine is between
+two halves of a transfer, with a batch open (§18.9.3), a volume banked
+(§51.5.2) and a write sequence mid-file. Its stack is the engine's, at the
+engine's deepest, so it does one line's work and returns.
+
+**The lines are the engine's own steps, in its order**, each written as the
+step starts: `Copy buffer: 64 KB`; `System disk: drive A:`; `Formatting the
+partition` and `Mounted as C:`, or `Keeping the files on C:`; a folder as
+`NAME\`, two spaces in per level of the walk; a file as its name and its
+size in KB (rounded up) in a column — `kept` there for a kept setting
+(§52.10.15) and `left alone` for a system file the apps phase does not copy
+(§52.10.12); `Writing the boot sector`; `Writing the partition table`;
+`The disk starts os8088 now`; `Apps disk: drive B:`, or `No apps disk in a
+drive`; `Writing ASSOC.DAT`; `Copied 40 files, 512 KB`. A stop is NOT a
+line of the engine's: the verb returns, and the caption is the wizard's to
+add, which it does (`Stopped: <caption>`).
+
+**Without a proc nothing changes**, which is the Control Panel's path: every
+log site is one compare of `hd_ilogp` and a branch, and `hd_pv_out` clears
+the proc at the end of each verb, so a run from the Install window can never
+reach a package's code. The hook is live only between a verb's entry and its
+answer.
+
+**What it costs the copy on an XT**: a line is one opaque 40-cell run (~36 ms)
+and, once the box is full, one `OSAPI_GFX_SCROLL` of the box's 90 rows — so
+about 50 ms a file against the file's own two or more `int 13h` calls
+(~400 ms each, PERFORMANCE.md Part 2). A scroll that is refused (the window
+partly covered) repaints the nine lines instead.
 
 ### 117.5 What the wizard decides by itself
 
@@ -197974,7 +198020,7 @@ wizard to refuse on but its first page. `OSAPI_DRV_USE` exists on both kernels
 
 The package's own region (§117.9), plus — while it is running — `CTRL.DRV`
 for the length of one `DRVU_UP` call, `HDD.DRV`'s 4KB if the wizard is what
-brought it up, and `HDDTOOL.DRV`'s ~19KB from the first `HDI_*` verb until
+brought it up, and `HDDTOOL.DRV`'s 18KB from the first `HDI_*` verb until
 `DRVU_DONE` at Cancel or close. The install's copy buffer is the engine's
 ladder (§52.10.11), claimed and freed inside each install verb.
 
@@ -198001,9 +198047,9 @@ Measured against `main` at `d2d88cd3`, both trees built with `make`:
 | kern_small `.text` | | +6 | the cell; its body is the refusing stub |
 | `CTRL.DRV` | 13,970 | 14,026 | +56, `CPE_DRVUP`; in memory only for one `DRVU_UP` |
 | `HDD.DRV` image | 4,096 | 4,096 | the door's forwarder paid for in `hdxms.inc`; the file is 3,614 → 3,610 |
-| `HDDTOOL.DRV` image | 16,499 | 17,138 | +639, `ipkg.inc`; `HDTOOL_KB` still 17; the packed file +520 |
-| `INSTALL.O88` | — | 7,642 + 632 bss | 5,846 bytes packed on the disk |
-| 360KB system disk | 633 / 706 | 647 / 706 | clusters in use; 59 spare |
+| `HDDTOOL.DRV` image | 16,499 | 17,810 | +1,311: `ipkg.inc`'s verbs +639, then the log (§117.4.1) +672 - which takes `HDTOOL_KB` from 17 to **18**, a KB more heap while the tool is loaded and only then (the Control Panel's Hard Drive page, or INSTALL). The packed file is 13,180 → 13,772 |
+| `INSTALL.O88` | — | 8,027 + 1,060 bss | 6,164 bytes packed on the disk; the log is +385 of image and +428 of bss (nine 42-byte rows, the block's line) |
+| 360KB system disk | 633 / 706 | 648 / 706 | clusters in use; 58 spare |
 
 The resident bytes are the cell, `osapi_drv_use_x` and `drv_cp_closed`'s far
 entry: the load itself is `CTRL.DRV`'s (§2.8) and the install is

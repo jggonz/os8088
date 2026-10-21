@@ -1676,12 +1676,16 @@ hd_inst_step:
                                 ; install one confirm on a two-drive machine
     jmp short .apps
 .swap:
+    mov si, hd_s_laask
+    call hd_ilog
     mov byte [hd_iw_st], HII_SYSDONE
     mov word [hd_imsg], hd_s_iswap
     jmp short .out
 .apps:
     call hd_inst_apps
     jc .failed
+    mov si, hd_s_lasc
+    call hd_ilog
     push dx                     ; ...and the volume's OWN association cache,
     mov dl, [hd_idrv]           ; built from what is actually on it (SPEC.md
     mov al, ASSOC_FL_FULL       ; 52.10.14) - by the kernel's writer in FULL
@@ -1697,6 +1701,7 @@ hd_inst_step:
                                 ; A step that installs MORE disks flushes
                                 ; after each and releases once, at the end
     call hd_ia_rel
+    call hd_ilog_sum
     mov byte [hd_iw_st], HII_DONE
 %ifdef INSTBENCH
     mov word [hd_imsg], hd_s_bdone  ; the rows below are the report now, so the
@@ -1759,6 +1764,9 @@ hd_inst_sys:
                                     ; exactly what it is here for (52.10.12)
     call hd_ibuf_get            ; the buffer FIRST: a format we cannot follow
     jc .nomem                   ; with a copy is a wiped partition
+    mov si, hd_s_lbuf           ; (and the log's first line, SPEC.md 117.4.1)
+    mov ax, [hd_ibufkb]
+    call hd_ilog_kb
                                 ; ...and NO size gate on top of it, which is a
                                 ; deliberate difference from the branch this
                                 ; routine was last reviewed on. That gate read
@@ -1798,6 +1806,9 @@ hd_inst_sys:
                                 ; that is true of the failure paths too
     call hd_isrc_ck             ; ...and IS THERE A SYSTEM DISK TO COPY? Asked
     jc .nosys                   ; here, one line above the format, because
+    mov si, hd_s_lsrc
+    mov al, [hd_isrcdrv]
+    call hd_ilog_d
                                 ; every answer below this point is given with
                                 ; the destination already erased (52.10.8.1)
     call hd_ivbr_get            ; ...and THE BOOT SECTOR THAT CAME WITH IT,
@@ -1816,6 +1827,8 @@ hd_inst_sys:
     jc .failed                  ; the VBR the moment it lands
     jmp .tree
 .wipe:
+    mov si, hd_s_lfmt
+    call hd_ilog
     call hd_inst_fmt
     jc .failed
 %ifdef INSTBENCH
@@ -1825,6 +1838,9 @@ hd_inst_sys:
 %endif
     call hd_inst_mount
     jc .failed
+    mov si, hd_s_lmnt
+    mov al, [hd_idrv]
+    call hd_ilog_d
     call hd_ilvl_root           ; ...which stands at the ROOT of both volumes,
                                 ; and hd_icopy_one stands where the level stack
                                 ; says (SPEC.md 52.10.13)
@@ -1855,6 +1871,8 @@ hd_inst_sys:
                                 ; complete system install was thrown away by a
                                 ; failure in the extras (PERFORMANCE.md Part 9
                                 ; Set 22's install, SPEC.md 52.10.10)
+    mov si, hd_s_lboot
+    call hd_ilog
 %ifdef INSTBENCH
     mov al, 1                   ; ...and the phase ends AT the commit now
     call hd_bn_take
@@ -1943,6 +1961,9 @@ hd_inst_apps:
                                 ; all three while being precisely what the user
                                 ; meant to copy - so a miss may not become a
                                 ; refusal. The scan can only IMPROVE the guess
+    mov si, hd_s_lafnd
+    mov al, [hd_isrcdrv]
+    call hd_ilog_d
     call hd_icopy_tree
     jc .failed
     call hd_ivol_back           ; NO commit here: the system phase already
@@ -2547,7 +2568,7 @@ hd_icopy_tree:
                                 ; was never going to bring it
 .file:
     call hd_ikeepit             ; a KEPT volume keeps the user's settings
-    jnc .entry                  ; (SPEC.md 52.10.15)
+    jnc .kept                   ; (SPEC.md 52.10.15)
     mov si, hd_ient
     call hd_icopy_one
     jc .failm                   ; it named the FILE; do not talk over it
@@ -2569,6 +2590,8 @@ hd_icopy_tree:
     call OSAPI_FILE_MKDIR       ; ...and make it there (SPEC.md 18.5.1)
     jc .mkchk
 .mkok:
+    mov si, hd_iname2           ; the log's line for it, at the PARENT's level
+    call hd_ilog_dir
     call hd_idst_child          ; AX = where it landed. LOOKED UP rather than
     jc .fail                    ; remembered, because a re-install finds one
                                 ; that already exists - and looked up once per
@@ -2597,6 +2620,11 @@ hd_icopy_tree:
     mov [hd_isrcc+bx], ax
     xor ax, ax
     mov [hd_iordv+bx], ax
+    jmp .entry
+.kept:
+    mov si, hd_ient             ; ...and the log names what it kept
+    mov bx, hd_s_lkept
+    call hd_ilog_f
     jmp .entry
 .mkchk:
     cmp ax, FERR_EXIST          ; a re-install finds its own folders: that is
@@ -2740,8 +2768,9 @@ hd_icopy_one:
     cmp byte [hd_iphase], 0
     je .mine
     cmp byte [hd_isys], 0
-    jne .notmine
+    jne .left
 .mine:
+    call hd_ilog_file           ; its line in the log (SPEC.md 117.4.1)
 
     ; --- the copy (SPEC.md 18.4.4, 52.10.13) ---------------------------------
     ; No species test HERE any more, and its absence is the fix rather than a
@@ -2798,6 +2827,11 @@ hd_icopy_one:
 .notmine:                       ; SPEC.md 52.10.12: not the apps phase's
     clc
     jmp short .out
+.left:
+    mov si, hd_iname            ; ...and the log says so, by name
+    mov bx, hd_s_lleft
+    call hd_ilog_f
+    jmp short .notmine
 .fail:
 %ifdef INSTBENCH
     call hd_bn_fail                 ; ...and in a benchmark build, WHICH STEP
@@ -3478,6 +3512,9 @@ hd_inst_keep:
     jc .nomnt
     mov byte [hd_kgeo], 1       ; ...which HDD.DRV writes at the ROW's
 .mounted:
+    mov si, hd_s_lkeep
+    mov al, [hd_idrv]
+    call hd_ilog_d
     call hd_ilvl_root
     call hd_idst                ; the OLD kernel first: where it starts and
     jc .io                      ; how long it is, so that the plan can count
@@ -3993,6 +4030,8 @@ hd_kverify:
 ; -----------------------------------------------------------------------------
 hd_inst_vbr:
     call os88_ent
+    mov si, hd_s_lvbr
+    call hd_ilog
     push es
 
     push ds
@@ -4104,6 +4143,8 @@ hd_iksecs:
 ; -----------------------------------------------------------------------------
 hd_inst_mbr:
     call os88_ent
+    mov si, hd_s_lmbr
+    call hd_ilog
     mov al, [hd_idev]
     call hd_dev_row
     call hd_part_load           ; re-read: the format wrote the table and this

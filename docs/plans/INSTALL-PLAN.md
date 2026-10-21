@@ -123,3 +123,31 @@ apps disk) - pre-existing, not re-run. `make test-full`: 60 passed, 1 skipped
 3,072 spare, kern_small 2,560, kern_emu 3,072. Hercules looked at on
 MartyPC's 5150.
 
+## Wave 4 — the Installing page shows its work (2026-10-21)
+
+The owner, after testing an install on 86Box's MFM XT: *"I want the
+Installing step to be verbose so that we can see everything that is happening
+behind the scenes."*
+
+- [x] §117.4.1 pinned first: `HDI_GO`/`HDI_APPS` take an `HDIB_*` block - the
+      caption as before, a LOG PROC, a line - and the engine calls the proc
+      once a step, from inside the verb, as a package callback. The Control
+      Panel's runs pass none and pay one compare a site.
+- [x] The engine's lines (`drivers/hdd/ipkg.inc`, call sites in `inst.inc`):
+      copy buffer, source disk, format/mount or keep, every folder and file
+      with its size in one column, kept and left-alone files, boot sector,
+      partition table, the commit, the apps disk, `ASSOC.DAT`, the totals.
+- [x] The wizard's Installing page: a framed nine-line log that scrolls with
+      `OSAPI_GFX_SCROLL` (all nine repainted if refused), kept padded so a
+      repaint redraws it; on the answer, a last line of the wizard's own
+      (`Finished.`, `Next: the apps disk.`, or the caption), the heading
+      *click Next*, Next live - the page stays until it is read.
+- [x] `tests/install.py` follows the new ending and checks the log: the
+      erase-install ends `Writing ASSOC.DAT` / `Copied N files, M KB` /
+      `Finished.`; the upgrade ends at its commit and its apps-disk question.
+- [x] Looked at on MartyPC: the XT-IDE XT (VGA) and the GLaBIOS 5150 with
+      CGA, a whole erase-install, shots during the copy and at the end.
+- [x] Costs in §117.9: `HDDTOOL.DRV` +672 (an 18KB claim), INSTALL +385 image
+      and +428 bss, no kernel byte.
+- [ ] Final pass: the install rows' union, then `test-full`.
+

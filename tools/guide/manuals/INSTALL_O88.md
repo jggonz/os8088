@@ -60,6 +60,15 @@ When you click **Install**, the machine is busy for several minutes while it
 copies. The bar in the menu bar shows how far it has got. Do not switch the
 machine off.
 
+The **Installing** page lists every step as it happens, in a box that scrolls:
+the copy buffer it took, the disk it is copying from, the format (or that the
+files are kept), every folder it makes and every file it copies with its
+size, the files it keeps or leaves alone, the boot sector and the partition
+table, the apps disk it found, and at the end how many files and kilobytes it
+copied. When the copy ends, the heading says **click Next** and the list stays
+on the screen until you do, so you can read how it finished. If the copy
+stops, the last line of the list says why.
+
 If the apps disk is in another floppy drive, Install finds it and copies it
 straight after the system disk. Otherwise the page asks for it: take the
 system disk out of drive A:, put the apps disk in, and click **Continue**.

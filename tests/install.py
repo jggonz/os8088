@@ -70,10 +70,12 @@ def const(name):
 
 
 P = {n: const(n) for n in ("P_WELCOME", "P_DRIVE", "P_SLOT", "P_MODE",
-                            "P_CONFIRM", "P_APPS", "P_DONE", "P_STOP")}
+                            "P_CONFIRM", "P_APPS", "P_DONE", "P_STOP",
+                            "P_BUSY")}
 NAMES = {v: k for k, v in P.items()}
 BX0, BW, BGAP, BY, BH = (const(n) for n in
                          ("IN_BX0", "IN_BW", "IN_BGAP", "IN_BY", "IN_BH"))
+LOGN, LOGC = const("IN_LOGN"), const("IN_LOGC")
 
 
 def symmap():
@@ -143,6 +145,37 @@ class Wizard(object):
     def next(self, want, what, limit=60.0):
         self.button(1)
         self.wait(want, what, limit)
+
+    def log(self):
+        """The lines the Installing page keeps (SPEC.md 117.4.1), oldest
+        first - the last IN_LOGN of the run."""
+        n = self.byte("in_logn")
+        raw = bytes(self.m.readseg(self.seg, SYM["in_log"],
+                                   LOGN * (LOGC + 1)))
+        return [raw[i * (LOGC + 1):i * (LOGC + 1) + LOGC].decode("latin-1")
+                .rstrip() for i in range(n)]
+
+    def install(self, want, what, limit=900.0):
+        """Install, from Confirm: the Installing page writes its log while
+        the verb runs and STAYS when it answers, Next live (SPEC.md 117.1),
+        until Next goes on to the page the answer named."""
+        self.button(1)
+
+        def ended(_):
+            pg = self.page()
+            if pg not in (P["P_CONFIRM"], P["P_BUSY"]):
+                sys.exit("install: FAIL - Install left the Installing page "
+                         "by itself, for %s: its log must stay until Next"
+                         % NAMES.get(pg, pg))
+            return pg == P["P_BUSY"] and self.byte("in_logend")
+        M.until(self.m, ended, "the Installing page to end (%s)" % what,
+                limit=limit)
+        lines = self.log()
+        print("  BUSY       %s; the log ends:" % what)
+        for ln in lines:
+            print("             | %s" % ln)
+        self.next(want, "after Next on the log")
+        return lines
 
 
 def launch_wizard(ui, path):
@@ -222,7 +255,14 @@ def main():
                 "the Down key to pick Erase", limit=20.0)
         print("  MODE       Down picked Erase")
         wz.next(P["P_CONFIRM"], "after keep or erase")
-        wz.next(P["P_DONE"], "after Install: both disks copied", limit=900.0)
+        log = wz.install(P["P_DONE"], "after Install: both disks copied")
+        sums = [ln for ln in log if ln.startswith("Copied ")]
+        m_ = re.match(r"Copied (\d+) files, (\d+) KB", sums[0]) if sums \
+            else None
+        if not log or log[-1] != "Finished." or not m_ \
+                or int(m_.group(1)) < 20 or "Writing ASSOC.DAT" not in log:
+            sys.exit("install: FAIL - the log does not end as an install "
+                     "does (ASSOC.DAT, the totals, Finished.): %r" % log)
         v = ID.partition(vhd)
         tree = v.tree()
         bad = [p for p in ("KERNEL.SYS", "BOOTHD.SYS", "INSTALL.O88",
@@ -289,8 +329,12 @@ def main():
         # in the machine: the system part commits and the wizard ASKS for it
         # (SPEC.md 52.10.10). Skip is HDI_QUIT, and the disk boots without
         # the programs.
-        wz.next(P["P_APPS"], "after Install: the system part, upgraded",
-                limit=900.0)
+        log = wz.install(P["P_APPS"], "after Install: the system part, "
+                         "upgraded")
+        if log[-3:] != ["The disk starts os8088 now",
+                        "No apps disk in a drive", "Next: the apps disk."]:
+            sys.exit("install: FAIL - the upgrade's log does not end at its "
+                     "commit and its apps-disk question: %r" % log)
         wz.button(2)                             # Skip
         wz.wait(P["P_DONE"], "after Skip")
         if not wz.byte("in_skip"):

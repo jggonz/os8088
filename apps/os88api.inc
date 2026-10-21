@@ -2802,14 +2802,24 @@ HDI_SLOTS    equ 1              ; DL = a device, ES:DI = 4 * HDIS_SIZE. out
                                 ; select, 0FFh none would do, 0FEh no such
                                 ; device or its geometry is unknown
 HDI_GO       equ 2              ; DL = device, DH = slot, CH = 1 erase / 0 keep
-                                ; the files; ES:DI = HDI_CAPSZ bytes. out AL =
-                                ; an HDG_* and the engine's caption at ES:DI.
+                                ; the files; ES:DI = an HDIB_* block. out AL =
+                                ; an HDG_* and the engine's caption at HDIB_CAP.
                                 ; The Install window's two clicks in one
-HDI_APPS     equ 3              ; ES:DI = HDI_CAPSZ bytes: the apps phase, once
+HDI_APPS     equ 3              ; ES:DI = an HDIB_* block: the apps phase, once
                                 ; HDI_GO answered HDG_APPS. out as HDI_GO
 HDI_QUIT     equ 4              ; abandon a run waiting on its apps disk (its
                                 ; system part has committed and stays)
 HDI_CAPSZ    equ 48
+HDIB_CAP     equ 0              ; HDI_CAPSZ: the caption, out
+HDIB_LOG     equ 48             ; dw: a LOG PROC in the caller's segment, or 0
+                                ; (SPEC.md 117.4.1): called once per step,
+                                ; from inside the verb, as a package callback
+                                ; - DS = yours, ES = KERNEL_SEG, SI = the line
+                                ; at HDIB_LINE, gfx lock held. It may draw and
+                                ; clobber anything; it may NOT touch a file
+HDIB_LINE    equ 50             ; HDI_LINESZ: where each line is put
+HDI_LINESZ   equ 41             ; 40 characters and the NUL
+HDIB_SIZE    equ 91
 HDIV_KIND    equ 0              ; db: 1 = int 13h, 2 = the IDE task file
 HDIV_GEOM    equ 1              ; db: 1 = its geometry is known (installable)
 HDIV_UNIT    equ 2              ; db: the int 13h drive, or the IDE unit

@@ -145,7 +145,10 @@ hd_tinit:
 ; zero. It is a tuning, not a rule: any change above moves it, and the cure is
 ; to move a routine across the buffers in one direction or the other, never to
 ; pad. The claim is whole KB (HDTOOL_KB), so the tuning is worth a KB exactly
-; when it carries the image under a KB boundary - which today it does.
+; when it carries the image under a KB boundary. It did until INSTALL's log
+; (SPEC.md 117.4.1, its call sites in inst.inc) took the image to 17,810
+; bytes and an 18KB claim: the pad is 82 bytes today and is LEFT, because
+; closing it is 82 bytes off a load and no KB - 17,728 is still over 17,408.
 ; =============================================================================
 ; -----------------------------------------------------------------------------
 ; hd_tshut - HDT_SHUT: nothing of ours left on screen, nothing of ours held

@@ -73,8 +73,26 @@ IN_BGAP     equ 8                   ; 8px gap, the last ending at 335
 IN_NB       equ 3
 IN_RPITCH   equ 12                  ; a radio row: four of them end above the
                                     ; hint line on every page that has both
+IN_LOGN     equ 9                   ; THE LOG (SPEC.md 117.4.1): nine lines,
+IN_LOGC     equ 41                  ; 41 cells, each one padded opaque run
+IN_LOGW     equ IN_LOGC + 1
+IN_LOGY     equ 20                  ; the first line's top...
+IN_LOGP     equ 10                  ; ...and the pitch, the 2px gaps never drawn
+IN_FX0      equ 3                   ; the frame round it, 4px clear each side
+IN_FY0      equ IN_LOGY - 2
+IN_FX1      equ IN_CW - 4
+IN_FY1      equ IN_LOGY + IN_LOGN * IN_LOGP + 1
 %if IN_L0 + IN_NL * IN_LP > IN_BY
 %error "INSTALL's body lines run into its buttons"
+%endif
+%if IN_FY1 >= IN_BY - 1
+%error "INSTALL's log runs into its buttons"
+%endif
+%if IN_LX + IN_LOGC * 8 > IN_FX1
+%error "INSTALL's log is wider than its frame"
+%endif
+%if HDI_LINESZ - 1 > IN_LOGC
+%error "an engine line is wider than INSTALL's log"
 %endif
 %if IN_BX0 + IN_NB * IN_BW + (IN_NB - 1) * IN_BGAP > IN_CW - 8
 %error "INSTALL's buttons do not fit its content"
@@ -180,6 +198,10 @@ in_paint:
     add dx, IN_LP
     dec di
     jnz .line
+    cmp byte [in_page], P_BUSY          ; --- the log -------------------------
+    jne .rad
+    call in_logbox
+.rad:
     cmp word [in_rad+OS88UI_RD_N], 0    ; --- the choices ---------------------
     je .btns
     mov bx, in_rad
@@ -534,13 +556,17 @@ in_b_confirm:
 
 ; --- the copy, about to start (or the apps phase) -------------------------
 in_b_busy:
+    mov ax, [in_lhead]              ; the verb has answered: how it ended, and
+    cmp byte [in_logend], 0         ; Next goes on to the page it named - the
+    je .run                         ; end of the log stays until it is read
+    mov [in_head], ax
+    mov byte [in_bdis], (1 << IN_BBACK) | (1 << IN_BCANCEL)
+    ret
+.run:
     mov word [in_head], in_h_busy
-    mov si, in_t_busy
-    call in_text
-    mov word [in_lines+0], in_s_busy0
     cmp byte [in_inapps], 0
     je .sys
-    mov word [in_lines+0], in_s_busy1
+    mov word [in_head], in_h_busy1
 .sys:
     mov byte [in_bdis], 7           ; all three greyed: the machine is busy
     ret
@@ -931,7 +957,13 @@ in_next:
     je in_apps
     cmp al, P_DONE
     je in_restart
+    cmp al, P_BUSY
+    je .ended                       ; live only once the verb has answered
     ret
+.ended:
+    mov byte [in_logend], 0
+    mov al, [in_lnext]
+    jmp short in_go
 .confirm:
     call in_cfline
     mov al, P_CONFIRM
@@ -1176,7 +1208,11 @@ in_cfline:
 in_install:
     mov byte [in_inapps], 0
     mov byte [in_skip], 0
+    mov byte [in_logn], 0           ; a fresh run, a fresh log
     call in_busy
+    mov si, in_s_loff               ; ...whose first line is ours
+    call in_onlog
+    mov si, [in_win]
     mov dl, [in_dev]
     mov dh, [in_slot]
     mov ch, [in_wipe]
@@ -1185,7 +1221,7 @@ in_install:
 
 in_apps:
     mov byte [in_inapps], 1
-    call in_busy
+    call in_busy                    ; the log goes on where it stopped
     mov cl, HDI_APPS
                                     ; ...and on into in_stage
 
@@ -1194,6 +1230,7 @@ in_apps:
 in_stage:
     push si
     mov di, in_cap
+    mov word [di+HDIB_LOG], in_onlog
     call in_tool
     pop si
     jnc .ran
@@ -1205,24 +1242,201 @@ in_stage:
     pop si
     xor al, al
 .ran:
+    mov word [in_lhead], in_h_bdone
+    mov bl, P_DONE
+    mov di, in_s_ldone
     cmp al, HDG_DONE
-    je .done
+    je .end
+    mov bl, P_APPS
+    mov di, in_s_lapps
     cmp al, HDG_APPS
-    je .apps
+    je .end
     call in_capline                 ; HDG_FAIL: the engine's own words
-    mov al, P_STOP
-    jmp in_go
-.apps:
-    mov al, P_APPS
-    jmp in_go
-.done:
-    mov al, P_DONE
-    jmp in_go
+    mov word [in_lhead], in_h_bstop
+    mov bl, P_STOP
+    mov di, in_cap0                 ; '  ' + the caption, to the log as well
+.end:
+    mov [in_lnext], bl              ; the busy page again, with its ending:
+    mov byte [in_logend], 1         ; the last line, the heading, the buttons
+    push si
+    mov si, di
+    call in_onlog
+    pop si
+    jmp in_ended
 
 ; in_busy - draw the busy page NOW, before the call that freezes the machine
 in_busy:
-    mov al, P_BUSY
+    mov [in_win], si                ; the log draws from inside the verb, which
+    mov al, P_BUSY                  ; hands it no window (SPEC.md 117.4.1)
     jmp in_go
+
+; -----------------------------------------------------------------------------
+; THE LOG (SPEC.md 117.4.1). The engine calls in_onlog once a step, from inside
+; HDI_GO / HDI_APPS: DS = ours, ES = KERNEL_SEG, SI = the line, the gfx lock
+; held - and it is between two halves of a transfer, so this draws and touches
+; nothing else. The lines are kept, padded to the band, so a W_PAINT redraws
+; them and every line is its own erase.
+; -----------------------------------------------------------------------------
+
+; in_onlog - SI = a line (ours): keep it, then draw it - one run, or one
+; scroll and one run once the box is full. Clobbers everything but SI
+in_onlog:
+    mov al, [in_logn]
+    push ax
+    call in_logadd
+    mov bx, [in_win]
+    call OSAPI_WM_CLIP_SET          ; the engine's own drawing (the bar) may
+    pop ax                          ; have moved the clip: ours, every line
+    jc .out
+    call in_ink
+    cmp al, IN_LOGN
+    jb .one                         ; there was room: the line's own row
+    call in_logscroll
+    jnc .one
+    jmp in_loglines                 ; refused (the window is covered): all nine
+.one:
+    mov al, [in_logn]
+    dec ax
+    jmp in_logline
+.out:
+    ret
+
+; in_logadd - SI = a line: the next row of in_log, padded; the oldest goes
+; once there are nine. Keeps SI
+in_logadd:
+    push si
+    cmp byte [in_logn], IN_LOGN
+    jb .room
+    mov si, in_log + IN_LOGW        ; one row up: ES is the kernel's here, so
+    mov di, in_log                  ; no movsb
+    mov cx, (IN_LOGN - 1) * IN_LOGW
+.up:
+    lodsb
+    mov [di], al
+    inc di
+    loop .up
+    dec byte [in_logn]
+.room:
+    mov al, [in_logn]
+    mov ah, IN_LOGW
+    mul ah
+    add ax, in_log
+    mov di, ax
+    pop si
+    push si
+    mov cx, IN_LOGC
+.cp:
+    lodsb
+    or al, al
+    jz .pad
+    mov [di], al
+    inc di
+    loop .cp
+    jmp short .end
+.pad:
+    mov byte [di], ' '
+    inc di
+    loop .pad
+.end:
+    mov byte [di], 0
+    inc byte [in_logn]
+    pop si
+    ret
+
+; in_logbox - W_PAINT's half: the frame and every line kept
+in_logbox:
+    mov bx, [in_win]
+    call in_ink
+    call OSAPI_WM_CONTENT           ; AX = left, DX = top
+    push si
+    mov si, ax
+    mov bx, dx
+    add ax, IN_FX0
+    add bx, IN_FY0
+    mov cx, si
+    add cx, IN_FX1
+    add dx, IN_FY1
+    call OSAPI_GFX_FRAME
+    pop si
+    ; ...and on into in_loglines
+
+; in_loglines - every line kept, at its row. Clobbers AX, CX, DX, DI
+in_loglines:
+    xor ax, ax
+.line:
+    cmp al, [in_logn]
+    jae .out
+    call in_logline
+    inc ax
+    jmp short .line
+.out:
+    ret
+
+; in_logline - row AL of the log, one opaque run. Keeps AX and SI
+in_logline:
+    push ax
+    push si
+    push bx
+    mov bx, [in_win]
+    push ax
+    call OSAPI_WM_CONTENT
+    mov cx, ax
+    add cx, IN_LX
+    pop ax
+    push ax
+    mov ah, IN_LOGP
+    mul ah
+    add dx, ax
+    add dx, IN_LOGY
+    pop ax
+    mov ah, IN_LOGW
+    mul ah
+    add ax, in_log
+    mov si, ax
+    call in_run
+    pop bx
+    pop si
+    pop ax
+    ret
+
+; in_logscroll - the box's text up one row (OSAPI_GFX_SCROLL): CF = 1 refused
+in_logscroll:
+    push si
+    mov bx, [in_win]
+    call OSAPI_WM_CONTENT
+    add ax, IN_LX                   ; byte columns at both ends: the content
+    mov cx, ax                      ; origin is on the 8px grid (WF_SNAP)
+    add cx, IN_LOGC * 8 - 1
+    add dx, IN_LOGY
+    mov bx, dx
+    add dx, IN_LOGN * IN_LOGP - 1
+    mov si, IN_LOGP
+    call OSAPI_GFX_SCROLL
+    pop si
+    ret
+
+; in_ended - the verb has answered: the heading and the buttons, which are all
+; that changed on this page (PERFORMANCE.md rule 1). SI = the window
+in_ended:
+    push si
+    call in_build
+    pop si
+    mov bx, si
+    call OSAPI_WM_CLIP_SET
+    jc .out
+    call in_ink
+    call in_layout
+    call OSAPI_WM_CONTENT
+    mov cx, ax
+    add cx, IN_LX
+    add dx, IN_HY
+    push si
+    mov si, [in_head]               ; padded to one length: its own erase
+    call in_run
+    pop si
+    jmp in_btns
+.out:
+    ret
 
 ; in_capline - in_cap0 = '  ' + in_cap, the stop page's second line
 in_capline:
@@ -1540,7 +1754,10 @@ in_h_drive:   db 'Step 1 of 4:  the hard disk', 0
 in_h_slot:    db 'Step 2 of 4:  where to put it', 0
 in_h_mode:    db 'Step 3 of 4:  keep or erase', 0
 in_h_confirm: db 'Step 4 of 4:  ready to install', 0
-in_h_busy:    db 'Installing', 0
+in_h_busy:    db 'Installing os8088 on the hard disk', 0 ; ONE LENGTH, all four:
+in_h_busy1:   db 'Installing the apps disk          ', 0 ; in_ended redraws the
+in_h_bdone:   db 'Finished - click Next             ', 0 ; heading over the
+in_h_bstop:   db 'It stopped - click Next           ', 0 ; last with no erase
 in_h_apps:    db 'Nearly done:  the apps disk', 0
 in_h_done:    db 'os8088 is installed', 0
 in_h_stop:    db 'The install stopped', 0
@@ -1586,14 +1803,6 @@ in_t_confirm:
     db 7
     dw in_c7
     db 0xFF
-in_t_busy:
-    db 1
-    dw in_y1
-    db 2
-    dw in_y2
-    db 4
-    dw in_y4
-    db 0xFF
 in_t_apps:
     db 0
     dw in_a0
@@ -1634,9 +1843,6 @@ in_c0:  db 'INSTALL is ready. It will use', 0
 in_c3:  db '  and copy both floppies onto it.', 0
 in_c5:  db 'The machine is busy while it copies.', 0
 in_c7:  db 'Click Install to start.', 0
-in_y1:  db 'This takes several minutes. The bar shows', 0
-in_y2:  db 'how far it has got.', 0
-in_y4:  db 'Do not switch the machine off.', 0
 in_a0:  db 'The system is on the hard disk, and the', 0
 in_a1:  db 'machine will start from it.', 0
 in_a3:  db 'Now take the system disk out of drive A:', 0
@@ -1647,8 +1853,9 @@ in_d2:  db 'Take the floppy out of the drive, then', 0
 in_d3:  db 'click Restart: the machine will start', 0
 in_d4:  db 'from the hard disk.', 0
 
-in_s_busy0:   db 'Copying the system disk to the hard disk.', 0
-in_s_busy1:   db 'Copying the apps disk to the hard disk.', 0
+in_s_loff:    db 'Do not switch the machine off.', 0
+in_s_ldone:   db 'Finished.', 0
+in_s_lapps:   db 'Next: the apps disk.', 0
 in_s_cfkeep:  db '  keeping the files on it,', 0
 in_s_cferase: db '  ERASING everything on it,', 0
 in_s_skipped: db 'The apps disk was not copied.', 0
@@ -1785,12 +1992,18 @@ in_hbl      equ os88_image_end + 12
 in_hdx      equ os88_image_end + 14
 in_devs     equ os88_image_end + 16             ; 4 * HDIV_SIZE
 in_slots    equ in_devs + 4 * HDIV_SIZE         ; 4 * HDIS_SIZE
-in_cap      equ in_slots + 4 * HDIS_SIZE        ; HDI_CAPSZ
-in_cap0     equ in_cap + HDI_CAPSZ              ; 2 + HDI_CAPSZ
+in_cap      equ in_slots + 4 * HDIS_SIZE        ; HDIB_SIZE: the HDI_GO block
+in_cap0     equ in_cap + HDIB_SIZE              ; 2 + HDI_CAPSZ
 in_ib       equ in_cap0 + 2 + HDI_CAPSZ         ; 4 * IN_IBSZ
 in_lb0      equ in_ib + 4 * IN_IBSZ             ; 48
 in_lb1      equ in_lb0 + 48                     ; 48
 in_lb2      equ in_lb1 + 48                     ; 48
 in_rects    equ in_lb2 + 48                     ; 3 * 8
 in_bflags   equ in_rects + 8 * IN_NB            ; 3 * 2
-IN_BSS      equ in_bflags + 2 * IN_NB - os88_image_end
+in_win      equ in_bflags + 2 * IN_NB           ; the window, for the log
+in_lhead    equ in_win + 2                      ; the busy page's ending...
+in_lnext    equ in_lhead + 2                    ; ...and the page Next goes to
+in_logend   equ in_lnext + 1                    ; 1 = the verb has answered
+in_logn     equ in_logend + 1                   ; lines kept, 0..IN_LOGN
+in_log      equ in_logn + 1                     ; IN_LOGN * IN_LOGW
+IN_BSS      equ in_log + IN_LOGN * IN_LOGW - os88_image_end
