@@ -836,15 +836,22 @@ _lem_r_sforget:
 ; record of where this frame is drawn, which is what its erasure covers. The
 ; C keeps the box inside the world.
 ;
-;   erase 2, 3  THE FRAME'S BINS, on any card and drawing nothing (wave 6's
+;   erase 2, 3  THE FRAME'S BINS, VGA ONLY and drawing nothing (wave 6's
 ;             second review): each particle that would be drawn widens the
 ;             bin of its 16-row band - lb_pbins, ten of {byte lo, byte hi,
 ;             row lo, row hi}, an empty one lo = 0FFh - so the VGA frame's
 ;             rectangles for a spray are one a band it occupies (lemdraw.c
-;             ovl_spray_rects) and not one box over the whole cloud: 3.6x
+;             ovl_spray_bins) and not one box over the whole cloud: 3.6x
 ;             less area on the real table. 2 empties the bins first, 3 adds
 ;             to what is there, so the old frame's and the new frame's
-;             pixels fold into one bin a band.
+;             pixels fold into one bin a band. lb_pbins is bytes 320..359 of
+;             lb_sprec, which on CGA and Hercules are LIVE sprite records
+;             (54-60 of the 168), so a shadow card is refused at the door
+;             (wave 6's third review) rather than left to corrupt its own
+;             save-under. Each walk is 80 pairs whatever the box holds -
+;             ~45 instructions a binned pair, ~44K cycles, ~9 ms on a
+;             4.77 MHz 8088 - which is why lemdraw.c takes the bins only for
+;             a lone spray on an uncrowded list.
 ;
 ;   VGA       write mode 2 and the Bit Mask a pixel (lb_rpix's batch): into
 ;             the compose scratch inside a band, rows outside it skipped, or
@@ -859,7 +866,9 @@ _lem_r_sforget:
 ; ATTRIBUTION. The table's layout, the -128 rule and the sixteen colours are
 ; the original's as Lemmix's src/Game.pas carries them (TParticleTable,
 ; ParticleColorIndices, DrawParticles; Eric Langedijk, Lemmix's own licence)
-; and Lemmings.ts's particle-table.ts (MIT) reads them; nothing is copied.
+; and Lemmings.ts's particle-table.ts (MIT) reads them; the sixteen indices
+; below are carried VERBATIM from Lemmix's ParticleColorIndices (this file's
+; header says so too) and nothing else is copied.
 ; -----------------------------------------------------------------------------
 lb_pcol:    db 4, 15, 14, 13, 12, 11, 10, 9, 8, 11, 10, 9, 8, 7, 6, 2
 
@@ -875,7 +884,12 @@ _lem_r_spray:
     mov ax, [bp+20]
     cmp ax, 2
     jb .draw
-    ja .go                          ; 3: onto the bins as they are
+    cmp word [lb_kind], LEM_KIND_VGA
+    je .vbin
+    jmp .out                        ; the bins are VGA's alone (above)
+.vbin:
+    cmp ax, 3
+    je .go                          ; 3: onto the bins as they are
     push ds
     pop es
     mov di, lb_pbins

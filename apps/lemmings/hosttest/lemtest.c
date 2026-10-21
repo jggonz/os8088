@@ -749,6 +749,8 @@ char *os88_utoa(unsigned v, char *dst6)
 /* ============================================================================
  * THE PROGRAM ITSELF
  * ==========================================================================*/
+#define LEM_HOST 1                      /* the counters the package never
+                                         * carries (lemdraw.c lem_c_rcadd) */
 #include "lemmings.c"
 
 /* lem_game_frame - one whole frame at once. THE HARNESS'S, and only the
@@ -1048,6 +1050,104 @@ static long spray_area_one(int x, int y, int *nr, long *rows)
                                      * 228 on the fixture and 828 on the
                                      * real table, one box 1,475 and 2,961 */
 
+/* spray_area_nuke - THE NUKE'S SHAPE (wave 6's third review): nsp sprays lit
+ * a frame apart, as ovl_nuke_step lights one fuse a frame and each flies
+ * LEM_PTIME frames, on a list the margin's crowd has ALREADY FILLED - every
+ * lemming in the margin is a rectangle of its own in ovl_vframe, so the 40
+ * are there before the first spray is cut. The bins were priced for one spray
+ * on an empty list: a nuke would have paid their two 80-pair walks and up to
+ * ten full-list adds N times a frame, for an area saving the overlapping
+ * boxes fold away anyway. Prints the byte-rows, the ovl_rc_add calls and the
+ * bin walks a frame, and HOLDS the fallback: no walk, and no more adds than
+ * sprays in flight - what one box a spray costs. The NEGATIVE CONTROL runs
+ * the bins unconditionally (ovl_spray_bins, the second review's build) and
+ * must cost at least one walk and more adds, or the row cannot see the
+ * regression. nsp = 1 on the full list is the lone spray that may NOT bin:
+ * ten rectangles would run ovl_rc_add's best-fit loop. */
+static void spray_area_nuke(const char *label, int nsp)
+{
+    int f, k, leg, flying, held = 0, rel = lem_released;
+    long a[2], adds[2], walks[2], fr[2], flew[2];
+    unsigned char *q;
+    struct lem_l *p;
+
+    lem_released = LEM_MAXLEM;
+    for (leg = 0; leg < 2; leg++) {
+        a[leg] = adds[leg] = walks[leg] = fr[leg] = flew[leg] = 0;
+        for (k = 0; k < LEM_MAXLEM; k++) {
+            lem_lm[k].pf = 0;
+            lem_lm[k].dpf = 0;
+        }
+        for (f = 0; f < nsp + LEM_PTIME; f++) {
+            if (f < nsp) {
+                p = &lem_lm[f];
+                p->fl |= LF_GONE;
+                p->x = lem_view + 40 + (f * 5) % 240;
+                p->y = 50 + (f % 5) * 22;
+                p->pf = 1;
+            }
+            /* the crowd: 40 lemmings' rectangles, 2 bytes x 11 rows, spread
+             * so that none touches another - the list is full first */
+            lem_nrc = 0;
+            for (k = 0; k < LEM_NRC; k++)
+                ovl_rc_add((lem_view >> 3) + (k % 10) * 4,
+                           (lem_view >> 3) + (k % 10) * 4 + 1,
+                           (k / 10) * 40, (k / 10) * 40 + 10, 1);
+            if (lem_nrc != LEM_NRC)
+                fail("spray_area_nuke's crowd did not fill the list");
+            flying = 0;
+            for (k = 0; k < nsp; k++)
+                if (lem_lm[k].pf | lem_lm[k].dpf)
+                    flying++;
+            lem_c_rcadd = 0;
+            h_r_spraywalks = 0;
+            if (leg == 0) {
+                ovl_spray_rects();
+            } else {
+                for (k = 0; k < nsp; k++)
+                    if (lem_lm[k].pf | lem_lm[k].dpf)
+                        ovl_spray_bins(&lem_lm[k]);
+            }
+            adds[leg] += lem_c_rcadd;
+            walks[leg] += h_r_spraywalks;
+            for (k = 0; k < lem_nrc; k++) {
+                q = &lem_rc[k * 4];
+                a[leg] += (long)(q[1] - q[0] + 1) * (q[3] - q[2] + 1);
+            }
+            a[leg] -= LEM_NRC * 2L * 11;    /* the crowd's own byte-rows */
+            flew[leg] += flying;
+            fr[leg]++;
+            if (leg == 0 && flying &&
+                (h_r_spraywalks || lem_c_rcadd > flying))
+                held++;
+            for (k = 0; k < nsp; k++)
+                if (lem_lm[k].pf && ++lem_lm[k].pf > LEM_PTIME)
+                    lem_lm[k].pf = 0;
+        }
+    }
+    lem_nrc = 0;
+    lem_released = rel;
+    printf("  the nuke's shape on the %s table, %d spray%s lit a frame apart "
+           "on a full list: %ld byte-rows, %ld.%ld adds and %ld.%ld walks a "
+           "frame over %ld frames (%ld spray-frames; one box a spray is one "
+           "add and no walk), against the bins unconditionally (the negative "
+           "control): %ld byte-rows, %ld.%ld adds, %ld.%ld walks\n",
+           label, nsp, nsp == 1 ? "" : "s", a[0] / fr[0],
+           adds[0] * 10 / fr[0] / 10, adds[0] * 10 / fr[0] % 10,
+           walks[0] * 10 / fr[0] / 10, walks[0] * 10 / fr[0] % 10, fr[0],
+           flew[0], a[1] / fr[1],
+           adds[1] * 10 / fr[1] / 10, adds[1] * 10 / fr[1] % 10,
+           walks[1] * 10 / fr[1] / 10, walks[1] * 10 / fr[1] % 10);
+    if (held)
+        fail("the spray's bins were taken with the list full - every spray "
+             "in flight paid a walk or more than one add; ovl_spray_rects "
+             "must fall back to one box there (SPEC.md 114.4.6)");
+    if (walks[1] == 0 || adds[1] <= adds[0])
+        fail("spray_area_nuke's negative control (the bins unconditionally) "
+             "cost no walk or no more adds than the fallback - the row "
+             "cannot see the regression");
+}
+
 /* spray_area_tab - the measurement on the table lem_ptseg holds now */
 static void spray_area_tab(const char *label)
 {
@@ -1085,6 +1185,9 @@ static void spray_area_tab(const char *label)
     if (abox <= LEMTEST_SPRAY_CEIL)
         fail("spray_area's negative control (one box a spray) did not go "
              "over the ceiling - the row cannot see the regression");
+    spray_area_nuke(label, 1);
+    spray_area_nuke(label, 20);
+    spray_area_nuke(label, 52);
 }
 
 static void spray_area(void)

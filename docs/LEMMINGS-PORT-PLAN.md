@@ -113,7 +113,8 @@ reverse:
 - Anything reading "pending question 1" or "pending question 5" in **Scope →
   Absent**: decision 1 settles Oh No! (out), decision 5 settles the particle
   spray (conditional wave-6 polish at a stated size threshold, absent
-  otherwise).
+  otherwise) - **and that gate passed, so the spray SHIPS** (wave 6's
+  review; the Absent entry is struck through and "What ships" carries it).
 - **Wave 2's `done_when`** treats the measured frame rate as a GO/NO-GO gate on
   wave 3. Decision 7 removes the gate: the measurement is still taken at the end
   of wave 2, before wave 3 builds on the raster, and it still sizes
@@ -146,13 +147,18 @@ reverse:
   set/reset ink write in `lemfont.inc`, the hues and their palette load, a
   seven-line table); VGA only. **In 360KB clusters (corrected at wave 6's
   second review - "1,164 before the 42nd" was the file's growth, not its
-  headroom)**: `LEMMINGS.O88` is 41,965 bytes, 41 clusters, **19 bytes before
-  its 42nd**; the colour table is part 0, so alone this takes the 42nd - the
-  disk's ONE cluster of headroom - and no level. Both questions together are
+  headroom)**: `LEMMINGS.O88` was 41,965 bytes, 41 clusters, **19 bytes before
+  its 42nd**; the colour table is part 0, so alone this took the 42nd - the
+  disk's ONE cluster of headroom - and no level. Both questions together were
   that same one cluster at the estimates (53 levels kept), unless their
   packed image growth passes 545 bytes (the top of the estimates), which moves
   part 0 a second sector to 43,009 bytes, 43 clusters and **38 levels**
-  (SPEC.md §114.4.3.1 has the sector arithmetic).
+  (SPEC.md §114.4.3.1 has the sector arithmetic). **Wave 6's third review
+  spent that cluster** (the nuke fallback: 42,111 bytes, 42 clusters, the
+  disk 352 of 354), so either question now takes the 43rd and **drops the
+  disk to 38 levels** unless a cluster is found first - `LEVELS.TXT`'s
+  compact form is 122 bytes over its second cluster, the cheapest on the
+  disk - and the level ratchet refuses the build until the owner decides.
 - **Wave 5's preview picture is terrain only.** Lemmix's `RenderWorld(...,
   True)` draws every object at its `PreviewFrameIndex`. Priced, not built:
   ~400-600 bytes of resident assembly, one more 360KB package cluster and
@@ -164,6 +170,9 @@ reverse:
   sector: ~42,477 bytes, 42 clusters - **this item alone takes that last
   cluster, certainly, and no level** (wave 6's second review corrected "may
   fit inside the cluster it has": the file is 19 bytes from its 42nd).
+  **Wave 6's third review took the 42nd** (SPEC.md §114.6: 42,111 bytes,
+  352 of 354), so the headroom is ZERO and this item now costs 15 levels
+  unless a cluster is found elsewhere first (the colours bullet above).
 - **The explosion's particle spray (decision 5) - SHIPPED at wave 6's
   review.** Decision 5's gate is the resident line alone (9,899 spare against
   1,500) and it passed; wave 6's first build had read a "second test" into
@@ -291,7 +300,7 @@ taste, and all five are already folded into the paragraphs below:
 ### Absent
 
 - The original's MAIN MENU screen - the 632x94 logo, the six 120x61 F-key signs, the blinking eyes, the two working-lemming scrollers and the credits reel. 98,048 bytes of MAIN.DAT sections 3 and 4 for a screen os8088 already provides: the launcher window IS the menu (SPEC.md 11, 12). The brown background tile, the purple font and the four rating signs ARE carried, because the preview and postview screens are drawn in them.
-- The explosion's 80-particle spray. MOVED HERE FROM 'greyed' ON REVIEW: there is no control a player could click, so SPEC.md 47's present-and-greyed has nothing to attach to, and a fact with no surface belongs in README.TXT and SPEC. The 51 x 80 signed-byte trajectory table lives in the DOS executable, not in the 26 data files this port fetches; Lemmix ships it as its own extracted resource and lemmings_3ds's copy is named in that project's LICENCE.txt as third-party. The explosion ANIMATION and the terrain crater - what the player is actually reading - are both carried. Pending question 5.
+- ~~The explosion's 80-particle spray.~~ **SHIPPED at wave 6's review under decision 5** (the "What ships" bullet above; SPEC.md §114.8, §114.4.6): the 51 x 80 signed-byte trajectory table lives in the DOS executable, not in the 26 data files, so `tools/getlemmings.py` fetches Lemmix's own extract of it as a second pinned file and `LEMMAIN` carries it as item 10. The paragraph that stood here until wave 6's third review - MOVED HERE FROM 'greyed' ON REVIEW, because there is no control a player could click and a fact with no surface belongs in README.TXT and SPEC - was written while the spray was pending question 5; the explosion ANIMATION and the terrain crater were always carried, and the spray now flies over them.
 - Two-player over local wireless - 3,730 lines of lemmings_3ds and a 3DS radio; nothing in the original DOS release.
 - The 3DS port's settings screen and its per-glitch toggles. The glitches the original DOS release actually has (ABBA entrance order, the right-click priority glitch) are carried as behaviour, unswitchable, because they are the original's behaviour and levels are solved with them.
 - Lemmix's replay recorder, hyperspeed rewind and save states - a Lemmix addition, not the 1991 game. Lemmix's own 'F' (skip one minute) goes with them, which is what leaves the letter free for SPEC.md 11.2.1's fullscreen door.
@@ -299,8 +308,10 @@ taste, and all five are already folded into the paragraphs below:
 - Custom / Lemmini level loading, the level finder, and any level editor.
 
 > Decisions 1 and 5 settle the two "pending question" entries above: Oh No!
-> More Lemmings is out of this port, and the particle spray is conditional
-> wave-6 polish at a stated size threshold.
+> More Lemmings is out of this port, and the particle spray was conditional
+> wave-6 polish at a stated size threshold - **decision 5's gate passed
+> (9,899 resident bytes spare against 1,500) and the spray ships** (wave 6's
+> review; the struck entry above, and "What ships").
 
 ## Files
 
@@ -671,6 +682,7 @@ make lemmingsdisk builds and verifies four images; make 386-lemmings boots to th
 - **Owner's calls, priced and not built**: the preview's per-line colours, the preview picture's objects and the aiming flicker (the overrides list above). The particle spray is not one: decision 5 decided it.
 - **Wave 6's review (applied)**: (1) the VGA compose latches the BUTTONS - `lem_r_sprite`, `lem_r_obj`, `lem_r_bgrect` and `lem_r_clatch` call `lb_msample` on entry, so a click inside a ~1.35 s busy compose is kept; SPEC.md §114.7 point 3 and §114.7.4 point 1 now say what was measured - the pointer moves once a glass update, not once a tick - and the rows that said "a pass" say "between two glass updates". (2) **The explosion's spray SHIPS** under decision 5 (above; `tools/getlemmings.py` pins `PARTICLES.DAT`, `LMNB` 3, `lem_r_spray` on three cards, `lemtest`'s spray rows on VGA and CGA, parked and aimed, red at 140 / 637 with either erasure removed, and `t_lemdat` checking item 10 against the file). (3) `ovl_cmv_stepped` counts exactly the spans the compose clips (aiming share 31 and 60 of 90, still 34% / 66%). (4) The aiming flicker put to the owner, and the pointer-between-bands lever recorded. Minors: CLAUDE.md/AGENTS.md's `make lemmings` wording, `icon.inc` off `LEMINC` (the bench no longer rebuilds for it), §114.1's four departures, README.TXT's spray paragraph re-sourced to the executable, the 86Box shots cropped to the emulated screen. Size `image=31572 bss=20429`, **52,001 resident, 2,999 under the trigger**; the package 41,844 = 41 clusters on 360KB, `LEMMAIN.LEM` 59, README.TXT 15; disks 2,016/2,847, 2,016/2,371, 709/713, **351/354 with 53 levels and ONE cluster of headroom**. The final pass's MartyPC readings were taken BEFORE these changes and were not re-taken.
 - **Wave 6's second review (applied)**: (1) the owner questions' cluster arithmetic corrected - the file was 140 bytes from its 42nd cluster, not 1,164 (that was its growth); it is sector-structured (`512 x ceil((96 + packed image)/512) + packed part 0`), so the objects certainly take the 42nd cluster, the colours alone take it too, and both together are that one cluster (53 levels) at the estimates unless their packed image growth passes 545 bytes (43 clusters, 38 levels); SPEC.md §114.4.3.1, §114.6, the list above. (2) **The spray's VGA rectangles are one a 16-row band** (`lem_r_spray` modes 2/3 bin a frame's 80 pairs into `lb_pbins`, 40 bytes of the sprite records): 828 byte-rows in 76 rows a game frame on the real table against one box's 2,961 in 128, `lemtest`'s spray-area row held to 1,200 with the one-box build as its negative control, priced ~40-50 ms of a drawn XT frame against ~75-100. (3) **R9: the level's end waits for the last spray** (Lemmix `fParticleFinishTimer`, `CheckForGameFinished` :2236) in `lemgame.c` and `tools/lemsim.py`; the two nuke traces re-pinned, each 52 frames longer, agreeing on every frame; and the spray is drawn **52 frames**, the last row twice, as Lemmix's `ParticleTimer` does. (4) README.TXT's lemmings_3ds licence sentence made true (its `doc/` is third-party, unknown licence, credited and not copied) and the spray's colours and -128 rule cited to Lemmix in every header. Minors: the band-size comments (60,416, ~136 KB) and `t_lemdat` holding every built band to `lemload.c`'s `LEM_KB_*` claims (red with `LEM_KB_MAIN` 58); `ovl_cur_hit` tests the spray's two exact boxes, not a ±128 square; the compose's button latch on VGA only (`lb_msvga`); README.TXT's colour-class exception for the spray. Size `image=31674 bss=20431`, **52,105 resident, 2,895 under the trigger**; the package **41,965 = 41 clusters, 19 bytes before the 42nd** (a first cut was 42,002 and was trimmed back), README.TXT 15 (15,290); disks unchanged, **351/354 with 53 levels and ONE cluster of headroom** (re-measured). **For the Finish pass**: `tests/lemplaymarty.py` has never read a frame with a spray in flight - the priced figure above is the only one - so a reading on the shipped build is owed there (it is an instrument, not a suite row, by its own header).
+- **Wave 6's third review (applied)**: (1) **the spray's bins are taken only where they pay** - a lone spray on a list with room for its ten rectangles short of `ovl_rc_add`'s best-fit loop; anything else, a nuke's up-to-52 sprays above all, takes the first cut's one box from the stored bounds, no walk and one add (`ovl_spray_rects`, `ovl_spray_bins`, `ovl_spray_box`; SPEC.md §114.4.6, §114.7.4, PERFORMANCE.md Set 161 price the walks: ~9 ms each, two a spray a frame, and at 52 sprays the bins would have been 52 walks and 194 full-list adds a frame, ~2.2 s of an XT game frame, against 0 and 26.5). The band loop's walk is clamped to the band's rows (`ovl_spray_rows`). `lemtest`'s `spray_area` has the nuke leg - 1, 20 and 52 staggered sprays on a pre-filled list, the fallback held, the bins unconditionally as the negative control. (2) **The level ratchet**: `tools/os88lem.py`'s `LEVEL_PIN` (120 / 120 / 116 / 53 with sets 2+3) refuses a plan that drops a level, with the cluster arithmetic, before any band is written, and `t_lemdat` holds the built bands to its own copy in the fast tier; proved red with the package padded two clusters (38 levels, sets 2 and 4). The planner drops levels on 720KB too, so the pin holds it to 116. Minors: `lem_r_spray`'s bin modes refuse a shadow card (`lb_pbins` is its live sprite records) and say so; its attribution names the sixteen indices as Lemmix's verbatim; PERFORMANCE.md Set 161's final-pass heading says PRE-REVIEW build; "52 KB MAIN" is 60; the 321KB toast comments are 329; §114.1 has the spray's authority row; the About row cites §73.12 alone; this file's Absent list and override notes say the spray shipped. The five counters only `lemtest` reads went behind `LEM_HOST`. Size `image=31668 bss=20421`, **52,089 resident, 2,911 under the trigger**; the package **42,111 = 42 clusters on 360KB, 897 before the 43rd** - the fallback took the disk's last cluster of headroom, measured and not trimmed back (the module is +345 for the fallback, the rule and the clamp, and no safe trim of ~300 bytes was in reach): disks 2,017/2,847, 2,017/2,371, 710/713, **352/354 with 53 levels and NO headroom**; the two owner questions now cost levels unless a cluster is found first (above).
 
 ## Verification
 

@@ -291,6 +291,70 @@ PKG_RESERVE = 57000 + 4096
 # last cluster and every save after it failed on a full disk (wave 4 review).
 SAV_CLUSTERS = 2
 
+# THE LEVEL RATCHET (wave 6's third review). plan_geometry drops levels from
+# the end of the play order whenever a disk is short and choose_two_styles
+# picks the pair that leaves the most, and neither ever REFUSES - so a
+# package that grew two clusters would ship the 360KB disk with 38 levels in
+# place of 53 and only LEVELS.TXT would say so (SPEC.md 114.6: 42 clusters
+# keep 53, 43 drop to 38). Removing a level is the OWNER's call (docs/
+# LEMMINGS-PORT-PLAN.md, wave 6's cluster rule: a wave proposes, it does not
+# decide), so what each disk carries is PINNED here - its playable levels,
+# and on 360KB its two sets - and a plan that answers otherwise fails `make`
+# with the cluster arithmetic in front of whoever grew the package.
+# tests/unit/t_lemdat.py holds the BUILT bands to its own copy of these
+# numbers in the fast tier, so a stale band directory is caught too. Change a
+# row only by a written decision, the way tools/abi.lock.json is updated.
+# --unpinned plans without the hold: the headroom measurement (SPEC.md
+# 114.6, --pkg padded a cluster at a time) needs to see the drop.
+LEVEL_PIN = {
+    1440: (120, None),              # everything
+    1200: (120, None),
+    720: (116, None),               # all but the four special pictures
+    360: (53, (2, 3)),              # Squasher and Pillar, 53 of their 55
+}
+
+
+def check_pin(geom, disk, levels, styles, reserve):
+    """Refuse a plan that carries other than LEVEL_PIN says, with the
+    arithmetic: what every file costs in this geometry's clusters, what is
+    held back, and what is left."""
+    want, sets = LEVEL_PIN[geom]
+    n = sum(1 for e in levels if e["playable"])
+    if n == want and (sets is None or tuple(styles) == tuple(sets)):
+        return
+    cb = cluster_bytes(geom)
+    clus = data_clusters(geom)
+    lines = ["the %s disk plans %d playable levels with graphic sets %s and "
+             "LEVEL_PIN says %d%s. The arithmetic, in %d-byte clusters:"
+             % (geom_name(geom), n, list(styles), want,
+                "" if sets is None else " with sets %s" % list(sets), cb)]
+    if reserve.pkg is not None:
+        for name, size in zip(reserve.names or [""] * len(reserve.pkg),
+                              reserve.pkg):
+            lines.append("    %-28s %7d bytes = %4d clusters"
+                         % (name or "(a --pkg file)", size,
+                            (size + cb - 1) // cb))
+    else:
+        lines.append("    the package, ESTIMATED       %7d bytes = %4d "
+                     "clusters (no --pkg)" % (reserve.est,
+                                              (reserve.est + cb - 1) // cb))
+    bands = disk.nclusters()
+    other = disk.nclusters(reserve) - bands
+    lines.append("    the band files               %4d clusters" % bands)
+    lines.append("    folders and ASSOC.DAT         %4d clusters"
+                 % (other - sum((s + cb - 1) // cb for s in reserve.pkg)
+                    if reserve.pkg is not None else other))
+    lines.append("    LEMMINGS.SAV, held back       %4d clusters"
+                 % SAV_CLUSTERS)
+    used = disk.nclusters(reserve)
+    lines.append("    %d used + %d held of %d, %d to spare"
+                 % (used, SAV_CLUSTERS, clus, clus - used - SAV_CLUSTERS))
+    lines.append("  DROPPING A LEVEL IS THE OWNER'S CALL: trim what grew "
+                 "(SPEC.md 114.6's cluster line names the package's bytes "
+                 "before its next cluster), or change LEVEL_PIN by a written "
+                 "decision. --unpinned plans without this hold.")
+    raise Refused("\n".join(lines))
+
 
 class Reserve(object):
     """What a LEMMINGS disk carries besides the band files, in CLUSTERS of the
@@ -306,9 +370,10 @@ class Reserve(object):
     so a change on either side refuses rather than printing a wrong fact.
     Without `pkg`, the old byte estimate (the fixture, a standalone run)."""
 
-    def __init__(self, pkg=None, nbytes=PKG_RESERVE):
+    def __init__(self, pkg=None, nbytes=PKG_RESERVE, names=None):
         self.pkg = pkg
         self.est = nbytes
+        self.names = names              # the --pkg paths, for check_pin
 
     @property
     def nbytes(self):
@@ -1220,7 +1285,7 @@ STRINGS = [
      "to and os88_mem_largest_kb(). IT IS A TOAST AND A TOAST IS 24 "
      "CHARACTERS (kernel/toast.inc TOAST_MAX; OSAPI_TOAST truncates): the "
      "first wording was 60 and the glass read 'Not enough memory: this ' "
-     "(wave 4's third review). 'Need 321KB, 640KB free' is 22 at the "
+     "(wave 4's third review). 'Need 329KB, 640KB free' is 22 at the "
      "largest figures this program can print"),
     ("NO_BANK",
      "%s missing",
@@ -3131,6 +3196,10 @@ def main():
     ap.add_argument("--check-image", nargs=2, metavar=("IMG", "LEMMAN"),
                     help="refuse unless the built image's used clusters are "
                          "LEMMAN.LEM's offset 20 and LEMMINGS.SAV still fits")
+    ap.add_argument("--unpinned", action="store_true",
+                    help="plan without LEVEL_PIN's hold on each disk's "
+                         "playable levels (the headroom measurement only; a "
+                         "plan that drops a level is otherwise refused)")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="list every file with its size and cluster cost")
     args = ap.parse_args()
@@ -3166,7 +3235,8 @@ def main():
               % (len(STRINGS), args.header, len(header)))
 
         if args.pkg:
-            reserve = Reserve([os.path.getsize(f) for f in args.pkg])
+            reserve = Reserve([os.path.getsize(f) for f in args.pkg],
+                              names=[os.path.basename(f) for f in args.pkg])
         else:
             reserve = Reserve(nbytes=args.reserve)
             print("os88lem: no --pkg - the package's clusters are ESTIMATED "
@@ -3180,6 +3250,8 @@ def main():
         for geom in geoms:
             disk, levels, styles, specials = plan_geometry(
                 ds, geom, reserve)
+            if not args.unpinned:
+                check_pin(geom, disk, levels, styles, reserve)
             print_manifest(geom, disk, levels, styles, specials,
                            reserve, args.verbose)
             write_disk(disk, os.path.join(args.output, str(geom)))

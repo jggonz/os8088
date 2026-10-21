@@ -675,7 +675,9 @@ static void ovl_load_bar(int n)
  * ==========================================================================*/
 
 /* the per-frame cost counters the host harness prints (LESSONS.md 6) */
+#ifdef LEM_HOST
 static int lem_c_sprites;           /* sprites drawn this frame */
+#endif
 static int lem_c_objects;           /* objects drawn again this frame */
 static int lem_scrolled = -1;       /* the view the glass shows */
 
@@ -1045,7 +1047,7 @@ static void ovl_sprite_one(int i)
                  p->y - (int)lem_an[p->act].footy,
                  (int)lem_ar[row].w, (int)lem_ar[row].h,
                  (int)lem_ar[row].bpp);
-    lem_c_sprites++;
+    LEM_COUNT(lem_c_sprites);
     if (p->timer == 0)
         return;
     t = p->timer;
@@ -1054,7 +1056,7 @@ static void ovl_sprite_one(int i)
         return;
     lem_r_sprite(lem_far_seg, lem_far_off, p->x - 1,
                  p->y - (int)lem_an[p->act].footy - 12, 8, 8, 1 | (3 << 4));
-    lem_c_sprites++;
+    LEM_COUNT(lem_c_sprites);
 }
 
 /* --- THE FRAME'S RECTANGLES (SPEC.md 114.4.6) --------------------------------
@@ -1096,11 +1098,18 @@ static int lem_bb0, lem_bb1, lem_br0, lem_br1;     /* ovl_sbox's answer */
 
 static int lem_cur_on;              /* the pointer is on the glass */
 
+#ifdef LEM_HOST
+static int lem_c_rcadd;             /* ovl_rc_add calls - the host harness's
+                                     * count alone (lemtest's spray_area), so
+                                     * the package carries no byte of it */
+#endif
+
 static void ovl_rc_add(int b0, int b1, int r0, int r1, int near)
 {
     unsigned char *q;
     int k, g, best, bg;
 
+    LEM_COUNT(lem_c_rcadd);
     if (near) {
         if (lem_nrc > 0) {
             q = &lem_rc[(lem_nrc - 1) * 4];
@@ -1445,14 +1454,24 @@ static int ovl_pbox(struct lem_l *p, int n)
     return 1;
 }
 
-/* ovl_spray_one - spray p as its record says it is drawn: frame dpf, inside
- * pbox; `erase` 1 puts it back (the shadow cards), 2 and 3 bin it (the VGA's
- * rectangles, lemsprite.inc) */
-static void ovl_spray_one(struct lem_l *p, int erase)
+/* ovl_spray_rows - spray p as its record says it is drawn: frame dpf, inside
+ * pbox's byte columns and the rows r0 .. r1 of it; `erase` 1 puts it back
+ * (the shadow cards), 2 and 3 bin it (the VGA's rectangles, lemsprite.inc).
+ * The caller narrows the rows to a compose band's (ovl_vframe), so a pair
+ * outside the band fails lem_r_spray's first compare - its row - and never
+ * reaches the three shifts, the byte compares and the band test behind them
+ * (wave 6's third review: a box straddling the band's edge paid the whole
+ * walk twice) */
+static void ovl_spray_rows(struct lem_l *p, int erase, int r0, int r1)
 {
     lem_r_spray(lem_ptseg, lem_ptoff + (unsigned)ovl_prow(p->dpf) * LEM_PROW,
-                p->x, p->y, (int)p->pbox[0], (int)p->pbox[1],
-                (int)p->pbox[2], (int)p->pbox[3], erase);
+                p->x, p->y, (int)p->pbox[0], (int)p->pbox[1], r0, r1, erase);
+}
+
+/* ovl_spray_one - ...over the whole of pbox */
+static void ovl_spray_one(struct lem_l *p, int erase)
+{
+    ovl_spray_rows(p, erase, (int)p->pbox[2], (int)p->pbox[3]);
 }
 
 /* ovl_spray_keep - the box ovl_pbox answered, as the one frame pf is drawn
@@ -1505,38 +1524,98 @@ static void ovl_spray_erase(void)
     }
 }
 
-/* ovl_spray_rects - a VGA game frame's rectangles for each spray: ONE A
+/* ovl_spray_bins - a VGA game frame's rectangles for spray p as BINS: ONE A
  * 16-ROW BAND, each the span of the pixels the glass shows there joined with
  * the span of the pixels its new frame puts there (lem_r_spray's bins, the
  * old frame emptying them and the new adding to them), and the record moved
  * on to the new frame. Bands are 16 rows so two never share a row and
- * ovl_rc_add keeps them apart; on the real table a frame is ~7.6 of them. */
+ * ovl_rc_add keeps them apart; on the real table a frame is ~7.6 of them.
+ * WHAT IT COSTS: two 80-pair walks and up to LEM_PBINS adds, which is why
+ * ovl_spray_rects reaches it only where that buys something. */
 #define lem_pbins (lem_sprec + LEM_MAXLEM * 4)
+static void ovl_spray_bins(struct lem_l *p)
+{
+    int m = 2;                      /* the first binning empties the bins */
+    unsigned char *q;
+
+    if (p->dpf) {
+        ovl_spray_one(p, 2);        /* the pixels the glass shows */
+        m = 3;
+    }
+    ovl_spray_keep(p, ovl_pbox(p, (int)p->pf));
+    if (p->dpf) {
+        ovl_spray_one(p, m);        /* ...and the ones about to be drawn */
+        m = 3;
+    }
+    if (m == 3)
+        for (q = lem_pbins; q < lem_pbins + LEM_PBINS * 4; q += 4)
+            if (q[0] != 0xFF)
+                ovl_rc_add(q[0], q[1], q[2], q[3], 0);
+}
+
+/* ovl_spray_box - ...as ONE rectangle: the box the glass frame was drawn in
+ * joined with the new frame's, both read from the stored bounds (pbox and
+ * ovl_pbox's row bounds after the table), no walk and one add. */
+static void ovl_spray_box(struct lem_l *p)
+{
+    int b0 = 255, b1 = -1, r0 = 255, r1 = -1;   /* an empty box */
+
+    if (p->dpf) {
+        b0 = p->pbox[0];
+        b1 = p->pbox[1];
+        r0 = p->pbox[2];
+        r1 = p->pbox[3];
+    }
+    ovl_spray_keep(p, ovl_pbox(p, (int)p->pf));
+    if (p->dpf) {
+        if (lem_bb0 < b0)
+            b0 = lem_bb0;
+        if (lem_bb1 > b1)
+            b1 = lem_bb1;
+        if (lem_br0 < r0)
+            r0 = lem_br0;
+        if (lem_br1 > r1)
+            r1 = lem_br1;
+    }
+    if (b1 >= 0)
+        ovl_rc_add(b0, b1, r0, r1, 0);
+}
+
+/* ovl_spray_rects - a VGA game frame's rectangles for every spray in flight,
+ * BINS ONLY WHERE THEY PAY (wave 6's third review): a lone spray on a list
+ * with room for its LEM_PBINS rectangles short of ovl_rc_add's best-fit
+ * loop takes ovl_spray_bins, the case lemtest's spray_area measured (828
+ * byte-rows a frame against one box's 2,961 on the real table). Anything
+ * else takes ovl_spray_box. A nuke lights a fuse a frame and a spray flies
+ * 52, so a nuked crowd keeps up to 52 in flight with every lemming in the
+ * margin already a rectangle: there the boxes overlap and fold into the
+ * capped list whichever way they are cut, the area saving is gone, and the
+ * bins' two walks a spray (~2 x 44K cycles, ~19 ms of a 4.77 MHz 8088) and
+ * their up-to-ten full-list adds would have been paid N times over for
+ * nothing. The first spray's choice is made after the count, so the loop
+ * defers it. */
 static void ovl_spray_rects(void)
 {
-    int i, m;
-    unsigned char *q;
-    struct lem_l *p;
+    int i, more = 0;
+    struct lem_l *p, *first = 0;
 
     for (i = 0; i < lem_released; i++) {
         p = &lem_lm[i];
         if (!(p->pf | p->dpf))
             continue;
-        m = 2;                      /* the first binning empties the bins */
-        if (p->dpf) {
-            ovl_spray_one(p, 2);    /* the pixels the glass shows */
-            m = 3;
+        if (!first) {
+            first = p;
+            continue;
         }
-        ovl_spray_keep(p, ovl_pbox(p, (int)p->pf));
-        if (p->dpf) {
-            ovl_spray_one(p, m);    /* ...and the ones about to be drawn */
-            m = 3;
-        }
-        if (m == 3)
-            for (q = lem_pbins; q < lem_pbins + LEM_PBINS * 4; q += 4)
-                if (q[0] != 0xFF)
-                    ovl_rc_add(q[0], q[1], q[2], q[3], 0);
+        ovl_spray_box(p);
+        more = 1;
     }
+    if (!first)
+        return;
+    if (!more && lem_nrc + LEM_PBINS <= LEM_NRC)
+        ovl_spray_bins(first);
+    else
+        ovl_spray_box(first);
 }
 
 /* ovl_sprites_all - every lemming that could be on the glass, in the list's
@@ -1667,10 +1746,12 @@ static int lem_cmv;                 /* this frame moves the pointer too */
  * negative control, and the two counters are what lemtest prints. */
 #define LEM_CMV_CAP 0
 static int lem_cmv_cap = LEM_CMV_CAP;
+#ifdef LEM_HOST
 static int lem_c_infr;              /* lemmings ovl_infr_whole made rectangles
                                      * of, this compose */
 static int lem_c_cmvfb;             /* pointer moves the cap sent to the glass
                                      * pair (cumulative) */
+#endif
 
 /* ovl_rc_meets - does a byte box (b0, b1, r0, r1) meet any of the frame's
  * rectangles? A lemming that meets none is not latched anywhere, so composing
@@ -1750,7 +1831,7 @@ static void ovl_infr_whole(void)
             }
             if (!ovl_rc_holds(b0, b1, r0, r1)) {
                 ovl_rc_add(b0, b1, r0, r1, 0);
-                lem_c_infr++;
+                LEM_COUNT(lem_c_infr);
                 grew = 1;
             }
         }
@@ -1763,7 +1844,7 @@ static void ovl_vframe(int step)
     unsigned char *b, *q;
 
     lem_nrc = 0;
-    lem_c_infr = 0;
+    LEM_CLEAR(lem_c_infr);
     if (step)
         ovl_rc_world();
     /* NOT A GAME FRAME (a scroll, a minimap jump or a pointer move while
@@ -1872,7 +1953,11 @@ static void ovl_vframe(int step)
                 b = lem_lm[i].pbox;
                 if (b[3] < y0 || b[2] >= y0 + h || (!step && !ovl_rc_meets(b)))
                     continue;
-                ovl_spray_one(&lem_lm[i], 0);
+                /* only the band's rows of it: a box across the band's edge
+                 * is walked once a band either way, but the pairs outside
+                 * fail the row compare and cost nothing else */
+                ovl_spray_rows(&lem_lm[i], 0, b[2] > y0 ? b[2] : y0,
+                               b[3] < y0 + h - 1 ? b[3] : y0 + h - 1);
                 continue;
             }
             b = &lem_obox[i * 4];
@@ -2046,7 +2131,7 @@ static void ovl_frame_draw(void)
     int k;
     unsigned char *q;
 
-    lem_c_sprites = 0;
+    LEM_CLEAR(lem_c_sprites);
     lem_c_objects = 0;
     if (lem_kind_id() == LEM_RKIND_VGA) {
         ovl_vframe(1);
@@ -2381,7 +2466,7 @@ static void ovl_tick_draw(int drew, int right)
                   lem_cury + 7 <= LEM_VIEWH_PX && lem_my + 7 <= LEM_VIEWH_PX;
         if (lem_cmv && !drew && lem_infr && ovl_cmv_stepped() > lem_cmv_cap) {
             lem_cmv = 0;            /* the glass pair below (LEM_CMV_CAP) */
-            lem_c_cmvfb++;
+            LEM_COUNT(lem_c_cmvfb);
         }
         /* THE COMPOSE GOES FIRST, AT THE NEW VIEW, and the Start Address
          * after it: ovl_sbox already reads the new lem_view, and every byte
@@ -2398,7 +2483,7 @@ static void ovl_tick_draw(int drew, int right)
              * stepped on an XT - shows world the margin cull left without
              * lemmings: the ones that crossed into it are composed, and only
              * those (wave 3's third review) - or the pointer moved */
-            lem_c_sprites = 0;
+            LEM_CLEAR(lem_c_sprites);
             lem_c_objects = 0;
             ovl_vframe(0);
         }

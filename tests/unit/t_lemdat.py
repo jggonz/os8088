@@ -818,6 +818,20 @@ def check_bands(sections, lem, out_dir, geom):
         if blob is not None:
             lev_blobs[n] = blob
 
+    # THE LEVEL RATCHET (wave 6's third review): what each disk CARRIES,
+    # pinned - the converter drops levels from the end of the play order when
+    # a geometry is short and never refuses, so two more package clusters
+    # would ship the 360KB disk with 38 levels for 53 and only LEVELS.TXT
+    # would say so. Removing a level is the OWNER's call (docs/LEMMINGS-PORT-
+    # PLAN.md, wave 6's cluster rule). This is a SECOND copy of tools/
+    # os88lem.py's LEVEL_PIN on purpose, written out rather than imported:
+    # that one refuses the plan before any band is written, this one holds
+    # the bands actually in build/, and a change to either without the other
+    # is caught here. Change both only by a written decision.
+    LEVEL_PIN = {"1440": (120, 0b11111), "1200": (120, 0b11111),
+                 "720": (116, 0b11111), "360": (53, 0b01100)}
+    nplay = 0
+
     for i in range(nlevels):
         ent = ratings[i // 30]
         e = (i % 30) * 64
@@ -827,6 +841,7 @@ def check_bands(sections, lem, out_dir, geom):
         skills = list(ent[e + 12:e + 20])
         rawfile, rawsect = ent[e + 22], ent[e + 23]
         flags, missing = ent[e + 24], ent[e + 25]
+        nplay += flags & 1
         oddflag = struct.unpack_from("<H", ent, e + 26)[0]
         name = ent[e + 32:e + 64].split(b"\0")[0].decode("latin-1")
 
@@ -901,6 +916,21 @@ def check_bands(sections, lem, out_dir, geom):
                   "%s/LEMR entry %d (%s) is not playable and still points "
                   "at a record" % (geom, i, name))
 
+    want_play, want_sets = LEVEL_PIN[geom]
+    check(nplay == want_play,
+          "%s carries %d playable levels and the pin says %d - the converter "
+          "dropped or gained levels without a decision. DROPPING A LEVEL IS "
+          "THE OWNER'S CALL (docs/LEMMINGS-PORT-PLAN.md wave 6, SPEC.md "
+          "114.9): tools/os88lem.py's LEVEL_PIN refuses the plan with the "
+          "cluster arithmetic, and `make lemmings-data` prints it"
+          % (geom, nplay, want_play))
+    check(styles_bits == want_sets,
+          "%s carries graphic sets %s and the pin says %s (the 360KB disk is "
+          "Squasher and Pillar, sets 2 and 3) - a change here is a change of "
+          "which levels the disk plays, the OWNER's call"
+          % (geom, [s for s in range(5) if styles_bits & (1 << s)],
+             [s for s in range(5) if want_sets & (1 << s)]))
+
     # The string band must hold every id the entries name.
     band = blobs.get("LEMSTR.LEM")
     if check(band is not None, "%s has no LEMSTR.LEM" % geom):
@@ -957,9 +987,12 @@ def main():
     check_specials(sections)
     check_order(lem)
 
+    # an argument names another band directory - how the level ratchet is
+    # proved red against a plan written with --unpinned into a scratch dir
+    bands = sys.argv[1] if len(sys.argv) > 1 else BANDS
     looked = False
     for geom in ("1440", "1200", "720", "360"):
-        if check_bands(sections, lem, os.path.join(BANDS, geom), geom):
+        if check_bands(sections, lem, os.path.join(bands, geom), geom):
             looked = True
     if not looked:
         print("  bands: none in %s - run `python3 tools/os88lem.py` and this "

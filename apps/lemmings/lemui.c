@@ -829,8 +829,8 @@ static void lem_repaint(void *win, int full, int arm)
 
     lem_c_calls = 0;
     lem_c_cells = 0;
-    lem_c_rows = 0;
-    lem_c_cols = 0;
+    LEM_CLEAR(lem_c_rows);
+    LEM_CLEAR(lem_c_cols);
 
     /* A SHADOW THAT DOES NOT DESCRIBE THE GLASS IS A FULL REPAINT BY
      * DEFINITION, and saying so here makes lem_brk()'s invariant true rather
@@ -949,8 +949,8 @@ static void lem_repaint(void *win, int full, int arm)
         }
         lem_row_compose(r);
         lem_flush_row(r, fc0, fc1);
-        lem_c_rows++;
-        lem_c_cols += fc1 - fc0 + 1;
+        LEM_COUNT(lem_c_rows);
+        LEM_ADD(lem_c_cols, fc1 - fc0 + 1);
     }
 
     /* CONSUMED, whatever was drawn - including a row marked past the bottom of

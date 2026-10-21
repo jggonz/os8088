@@ -815,6 +815,9 @@ static const unsigned char h_pcol[16] = {
 };
 static int h_r_sprays;              /* lem_r_spray calls */
 static int h_r_spraypix;            /* ...and the particles they drew */
+static int h_r_spraywalks;          /* ...of which the BIN walks (erase 2, 3):
+                                     * 80 pairs each whatever the box holds,
+                                     * the cost lemtest's nuke leg holds down */
 static int h_r_sprayonebox;         /* NEGATIVE CONTROL: the bins answer the
                                      * whole box in every band they occupy -
                                      * the area the one-box-a-spray build
@@ -836,6 +839,13 @@ void lem_r_spray(unsigned seg, unsigned off, int x, int y, int b0, int b1,
         fail("lem_r_spray was given a box outside the world - the C keeps it "
              "inside (ovl_pbox)");
     if (erase >= 2) {
+        if (h_r_kind != 0) {
+            /* the asm returns at the door; the C must never knock */
+            fail("lem_r_spray's bin modes were called on a shadow card - "
+                 "lb_pbins is that card's live sprite records (lemsprite.inc)");
+            return;
+        }
+        h_r_spraywalks++;
         sx = 0;
         if (erase == 2)
             for (k = 0; k < 10; k++) {

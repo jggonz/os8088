@@ -741,8 +741,25 @@ static int lem_c_cells;             /* glyph cells this repaint */
  * COLUMN of a row is ~300-450 us of decided-not-to-draw on the target, so the
  * column count belongs beside the cell count or the next author reintroduces
  * the same defect against the same green number. */
+/* THE COUNTERS ARE THE HOST HARNESS'S ALONE (wave 6's third review):
+ * lemtest.c defines LEM_HOST and reads them; nothing in the package does, so
+ * the package carries neither their bss nor their increments. LEM_COUNT,
+ * LEM_CLEAR and LEM_ADD are the only way a counter is touched, and each is
+ * nothing on the 8086 (apps/paccman's PMC_HOST is the shape). */
+#ifdef LEM_HOST
+#define LEM_COUNT(v) ((v)++)
+#define LEM_CLEAR(v) ((v) = 0)
+#define LEM_ADD(v, n) ((v) += (n))
+#else
+#define LEM_COUNT(v) ((void)0)
+#define LEM_CLEAR(v) ((void)0)
+#define LEM_ADD(v, n) ((void)0)
+#endif
+
+#ifdef LEM_HOST
 static int lem_c_rows;              /* rows composed and scanned this repaint */
 static int lem_c_cols;              /* ...and columns scanned in them */
+#endif
 
 /* THE SIX LITERALS THIS PROGRAM OWNS. Everything else the user reads is in
  * LEMSTR.LEM (SPEC.md 114.3, 114.6). These six cannot be:
@@ -2408,7 +2425,7 @@ static void ovl_launch(void *win)
                                      * postview: the list is not drawn yet */
     /* ...asked FROM the list, the list is the glass: only the toast below
      * changes, and a blank-and-repaint here was ~674 ms and a white flash on
-     * every refused Play - "Need 321KB, 210KB free" being the ordinary
+     * every refused Play - "Need 329KB, 210KB free" being the ordinary
      * answer on a small machine */
     os88_gfx_unlock();
     if (ok == LEM_LR_FILE)
@@ -2416,7 +2433,7 @@ static void ovl_launch(void *win)
 }
 
 /* ovl_said_load - why a level did not load, as a toast (24 characters,
- * TOAST_MAX): "Need 321KB, 210KB free" for a claim, "LEMGR0_1.LEM missing"
+ * TOAST_MAX): "Need 329KB, 210KB free" for a claim, "LEMGR0_1.LEM missing"
  * for a band file, "LEMMAIN.LEM is too old" for a bank of another version,
  * by lem_load_err - the three refusals are different sentences (SPEC.md
  * 47). */

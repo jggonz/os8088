@@ -15052,8 +15052,10 @@ overflows if the growth is allowed a fourth doubling.
     is the final pass's to time, with the off-glass fraction `flicker()` and
     `pace()` give on `xt_vga` (SPEC.md §114.7.3's table).
 
-**The final pass's readings (wave 6, 2026-10-20), on the FINAL build**
-(`image=31116 bss=20425`, part 0 32,664) - `tests/lemplaymarty.py`, which
+**The final pass's readings (wave 6, 2026-10-20), on the PRE-REVIEW build**
+(`image=31116 bss=20425`, part 0 32,664 - NOT the shipped line, which is
+SPEC.md §114.6's `image=31668 bss=20421` after wave 6's three reviews; the
+heading said "FINAL build" until the third review) - `tests/lemplaymarty.py`, which
 PLAYS the shipped package off `build/lemmings360.img` on `os8088_xt_vga` and
 `os8088_xt_hdd` and reads the game's own state by symbol (SPEC.md §114.7.4 is
 the table and the argument). Taken once each; nobody re-takes them to confirm.
@@ -15069,8 +15071,17 @@ costs more, PRICED and not measured: on VGA its rectangles are one a 16-row
 band since the second review, 828 byte-rows in 76 rows a game frame per spray
 on the real table (`lemtest`; one box was 2,961 in 128), ~40-50 ms of a drawn
 frame on a 4.77 MHz 8088 by the loops' instruction counts (one box ~75-100
-ms). A reading of it is the Finish pass's. SPEC.md §114.6 has the shipped
-build's line, `image=31674 bss=20431`.
+ms). **The bins have a price of their own** (the third review, SPEC.md
+§114.4.6): two 80-pair walks a spray a frame at ~9 ms each (~45 instructions
+a binned pair, ~550 cycles, ~44K a walk) and up to ten `ovl_rc_add` calls for
+one box's one, ~9 ms each on a full list - so a lone spray on a short list
+nets ~20-25 ms from them and a NUKE, which keeps up to 52 in flight on a list
+the crowd has already filled, would have paid ~2.2 s of a game frame for
+14% of compose area (52 walks and 194 adds a frame against 0 and 26.5 as one
+box each, `lemtest`'s nuke leg). `ovl_spray_rects` takes the bins for one
+spray on a list with room and one box otherwise. A reading of it is the
+Finish pass's. SPEC.md §114.6 has the shipped build's line, `image=31668
+bss=20421`.
 
 | | VGA mode 0Dh | CGA mode 4 |
 |---|---:|---:|

@@ -195606,7 +195606,8 @@ disagreements the converter had to settle.
 | interactive-object metadata: trigger effect ids, trigger rectangle at ×4 resolution, frame counts, trap sound ids | `lemmings_3ds/doc/data/lemmings_vgagrx_dat_groundxo_dat_file_format.txt` (28-byte `OBJECT_INFO`; left×4, top×4−4, w/h×4 with a stored 0 meaning 256; effect 0 none, 1 exit, 4 trap, 5 drown, 6 disintegrate, 7 one-way left, 8 one-way right, 9 steel) |
 | world size, the terrain-list terminator and the steel bit layout | `docs/LEMMINGS-PORT-PLAN.md` and its measurement over all 120 levels — see §114.3.1 |
 | sound EVENTS (let's go, oh no, explosion, door open, yippee, splat, exit, trap) | Lemmix `src/Dos.Consts.pas` `TSoundEffect` and `src/Meta.Structures.pas`'s trap ids for the event list and where each fires. **The tones themselves are this port's own** — see §114.11 |
-| About box attribution and the original credits | Lemmix `src/Base.Strings.pas` `SCredits` — eight lines. Against the twelve-row ceiling (§114.5, §73.12) that block plus product, version and a port line is already twelve, so the FULL attribution list lives in `README.TXT` beside the package and the About card names **the two principals AND the rightsholder** — "Lemmings By DMA Design", "Programming By Russell Kay", "Copyright 1991 Psygnosis Ltd." — and points at it. **Twelve rows since wave 5**: "Lemmings for os8088", "The DOS release, 1991", the port line in two halves, the original's three ("Lemmings By DMA Design", "Programming By Russell Kay", "Copyright 1991 Psygnosis Ltd."), **the second principal** — "Screens, strings and level order:" / "Lemmix By Eric Langedijk", SCredits' own first line under its own program's name — the licence is NOT named on the card: until wave 6 it read "(zlib)", which Lemmix's `Licence.txt` never calls itself (zlib's text with a clause of its own inserted), so `README.TXT` names it as Lemmix's own licence instead — and "See README.TXT for the full credits.", with two blank spacers. Twelve is the ceiling and a 640x200 number, and the card is the kernel's standard one (`apps/os88ui.inc`) with `OS88UI_ABFIT`: its pitch steps down from 12 to 10 to put twelve lines inside a CGA's 137-pixel content box (134 with the frame). It has no button of its own — a click or a key dismisses it (`lem_abdismiss`). `apps/cword/cwovl.c` naming Microsoft on cword's card is the precedent and §114.2's posture is cword's |
+| **the explosion's spray** (wave 6, decision 5, §114.8): the 51x80 table and its -128 rule, the sixteen colours, its lifetime, and the level-end wait | Lemmix `src/Game.pas` — `TParticleTable` :47-51 and the `-128` rule in `DrawParticles` :2492-2515 (a pair with either byte -128 is not drawn), `ParticleColorIndices` :54-56 (the sixteen indices `lb_pcol` carries verbatim, the level palette's own), `ParticleTimer`/`ParticleFrame` :4452-4455 (drawn for **52** frames, row 50 twice), and `fParticleFinishTimer` :2236 / :3375-3377 / :3508 with `ShowParticles` in `TGameOptions.DEFAULT` (`src/Base.Types.pas:161`), which is R9's wait (§114.4.7). `Lemmings.ts` `particle-table.ts` reads the same table and agrees; `lemmings_3ds/src/data/particles.c` and its `doc/` are third-party by that project's own `LICENCE.txt` and are NOT the source. Two departures: CGA and Hercules draw every particle in the solid class (§114.4.6), and the data is Lemmix's own extract of the executable's table, fetched and never committed (§114.2, §114.8) |
+| About box attribution and the original credits | Lemmix `src/Base.Strings.pas` `SCredits` — eight lines. Against the twelve-row ceiling (§73.12) that block plus product, version and a port line is already twelve, so the FULL attribution list lives in `README.TXT` beside the package and the About card names **the two principals AND the rightsholder** — "Lemmings By DMA Design", "Programming By Russell Kay", "Copyright 1991 Psygnosis Ltd." — and points at it. **Twelve rows since wave 5**: "Lemmings for os8088", "The DOS release, 1991", the port line in two halves, the original's three ("Lemmings By DMA Design", "Programming By Russell Kay", "Copyright 1991 Psygnosis Ltd."), **the second principal** — "Screens, strings and level order:" / "Lemmix By Eric Langedijk", SCredits' own first line under its own program's name — the licence is NOT named on the card: until wave 6 it read "(zlib)", which Lemmix's `Licence.txt` never calls itself (zlib's text with a clause of its own inserted), so `README.TXT` names it as Lemmix's own licence instead — and "See README.TXT for the full credits.", with two blank spacers. Twelve is the ceiling and a 640x200 number, and the card is the kernel's standard one (`apps/os88ui.inc`) with `OS88UI_ABFIT`: its pitch steps down from 12 to 10 to put twelve lines inside a CGA's 137-pixel content box (134 with the frame). It has no button of its own — a click or a key dismisses it (`lem_abdismiss`). `apps/cword/cwovl.c` naming Microsoft on cword's card is the precedent and §114.2's posture is cword's |
 | the kernel-side surfaces this port must not guess at | read from this tree: `kernel/fsx.inc:20-28` (the nine `FSXM_*` ids), `:117` `fsx_capstab` (VGA 0x01EF, HERC 0x0011, CGA 0x000F, EGA 0x000F, and the EGA row's own comment that mode 0Dh there is "a safe later addition, not pass 1"); `kernel/kernel.asm:38-39` (`MBAR_H` 20, `TITLE_H` 18); `kernel/dock.inc:57` (`DOCK_H` 24); `kernel/memory.inc:34/45` (`MEM_MAX` 20 on `kern_small`, 32 on `kern_big`); `tools/os88disk.py:124` (spc = 2 on BOTH 360KB and 720KB, 354 and 713 data clusters); §53.1 (the file API is legal mid-bracket, and every sound grant inside the bracket is billed to the instance); §11.2.1 (`f`/`F` as the fullscreen door) |
 
 ### 114.2 The data — 26 files, fetched and never committed
@@ -195789,7 +195790,8 @@ review). **Every band read is held inside its claim** (`ovl_parts_read`'s
 that would start past the claim refuses the read and the last part is capped
 at what the claim has left — a hand-edited LEMMAN or a mismatched bank used to
 read up to 64,512 bytes a part wherever the arithmetic put it, past the 96 KB
-bank claim or the 52 KB MAIN one. **The palette is Lemmix's** (`Styles.Base.pas`
+bank claim or the 60 KB MAIN one (52 before wave 6's spray, `LEM_KB_MAIN`).
+**The palette is Lemmix's** (`Styles.Base.pas`
 `AssemblePalette` and the special arm above it): the picture's eight colours
 replace the ground set's custom eight, entry 8 is the hardcoded
 `Color32(124, 124, 0)` — 31, 31, 0 in the DAC's six bits, and the colour of
@@ -196241,7 +196243,13 @@ bytes of assembly are ~280-420 packed (the image packs to 70.7%), which moves
 the part one sector: **~42,477 bytes, 42 clusters**. **The disk's headroom is
 ONE cluster** (§114.6, measured by padding the package: 42 clusters keep all
 53 levels, 43 drop the disk to **38**). So this alone costs that cluster and
-no level; with the colours below, see there. (Wave 5 wrote "one more Mayhem
+no level; with the colours below, see there. **CORRECTED AT WAVE 6'S THIRD
+REVIEW**: that cluster is SPENT - the nuke fallback took the package to
+42,111 bytes, 42 clusters, 352 of 354 (§114.6) - so this item now takes the
+43rd and **drops the disk to 38 levels** unless a cluster is found elsewhere
+first; the cheapest is `LEVELS.TXT`'s compact form, 122 bytes over its second
+cluster. The level ratchet (§114.9) refuses the build either way until the
+owner decides. (Wave 5 wrote "one more Mayhem
 level off it" from its own build's planner; wave 6's first build measured ~10
 clusters of headroom, of which the spray took nine.) ~10-40 ms a
 picture on a 4.77 MHz 8088 for a level's 2-8 visible objects, against the
@@ -196280,8 +196288,10 @@ the glyph's ink in that colour beside the purple path (~60-100 bytes of
 seven-line colour table in `ovl_pv_draw` (~30) - **~130-200 resident bytes**,
 ~100 packed into the package file. **IN 360KB CLUSTERS** (the arithmetic is
 in the objects paragraph above): the colour table in `ovl_pv_draw` is part 0,
-and part 0 has 19 bytes before the file's 42nd cluster, so **alone it costs
-that cluster - the disk's last - and no level**. **BOTH QUESTIONS TOGETHER are
+and part 0 had 19 bytes before the file's 42nd cluster, so **alone it cost
+that cluster - the disk's last - and no level** (until wave 6's third review
+spent it, the objects paragraph above: it is the 43rd now, and 38 levels,
+unless a cluster is found first). **BOTH QUESTIONS TOGETHER are
 one cluster as well, 53 levels kept, at the estimates**: the objects' and the
 colours' assembly are ~350-540 packed bytes of image, which moves part 0 ONE
 sector as long as they stay at or under **545** (file ~42,497, 42 clusters);
@@ -196401,7 +196411,7 @@ ships now (`lemdraw.c` `ovl_vframe`, `ovl_tick_draw`, `ovl_pan_hit`;
 | everything, CGA and Hercules | — | drawn into the shadow, which the glass sees only at `lem_r_present()`; the pointer's save-under is in the shadow too, so taking it off there (`ovl_cur_hit`, the shadow cards' world test) is a question about the save, never something seen |
 | the beam, VGA | — | a frame waits for a vertical retrace ONLY TO SCROLL: the Start Address goes out before the wait (`lem_r_vstart`) and the pel pan after it (`lem_r_vpan`), so both land on one refresh — written together, the pan took effect at once and the address a refresh later, a shear of up to seven pixels on every 4-pixel step. A frame that does not scroll does not wait: the compose needs no retrace, and the wait was up to 14.3 ms (7 on average) of every 59 ms frame |
 | a shadow scroll | — | when a game frame is drawn the same tick, the recompose draws no sprites: the frame's own pass does (one sprite pass, not two and a restore). A scroll that does not move the card's SNAP — CGA's 4 pixels, Hercules's 8 — is no scroll at all (`ovl_scroll_due`): a Ctrl+arrow's 1-pixel step used to drop, redraw and present every sprite and take the pointer off for nothing on 3 passes of 4 (CGA) and 7 of 8 (Hercules) |
-| the explosion's spray (wave 6, decision 5, §114.8) | **never**, on VGA; in the shadow on the other two | one frame of 80 single pixels for the 52 frames after a bomber goes off (the table's 51 rows, the last twice, as Lemmix draws them, §114.8), at the foot it left (`lem_r_spray`, `lemdraw.c` `ovl_spray_*`). The record keeps the frame the glass shows (`dpf`) and the BOX it was drawn in (`pbox`), the box taken from the row's own bounds stored after the table (`LEMMAIN` item 10), never by walking the 80. VGA: **a game frame makes each spray ONE RECTANGLE A 16-ROW BAND IT OCCUPIES** (wave 6's second review) - `lem_r_spray`'s bin modes walk the old frame's 80 pairs and then the new frame's, and each band's rectangle is the span of both frames' pixels in it (`lb_pbins`, ten 4-byte bins in the sprite records the VGA keeps no records in, so no bss) - and the band loop draws it into the scratch in the pool's order, where its bomber was, so the latch puts the erasure and the new pixels down in one write and the pointer stays lit over it; a compose with no game frame draws a spray as the glass shows it (`dpf`), so a part-stepped frame never shows half a spray. The first cut made each spray ONE box, the old frame's joined with the new: **2,961 byte-rows in 128 rows a game frame on the real table, against 828 in 76 as bins** (7.8 rectangles; `lemtest`'s spray-area row, from three feet, held to a ceiling of 1,200 with the one-box build as its negative control) - for at most 160 changed pixels, and during a nuke the overlapping boxes folded into most of the margin view. PRICED, not measured, by the loops' instructions: a composed row is a fixed ~1,100 cycles (four planes, `lem_r_bgrect`'s per-row call and setup) and a byte-row ~75 (`rep movsb` four planes and the latch), so a spray in flight is **~40-50 ms of a drawn VGA frame on a 4.77 MHz 8088 as bins against ~75-100 ms as one box** - half, not a quarter, because the rows' fixed price is the same in both. CGA/Hercules: each frame puts the old pixels' bytes back out of W before the sprites come off, and the sprite pass draws the new ones in the solid class; `ovl_cur_hit` takes the pointer's save-under off only when the pointer meets the box the glass frame was drawn in or the box of the frame about to be drawn - the first cut tested a ±128 square round the foot, the whole 320 x 160 view, and took the save-under off on every drawn frame of every explosion. Culled to the view's margin like a lemming; the old box is erased wherever it was |
+| the explosion's spray (wave 6, decision 5, §114.8) | **never**, on VGA; in the shadow on the other two | one frame of 80 single pixels for the 52 frames after a bomber goes off (the table's 51 rows, the last twice, as Lemmix draws them, §114.8), at the foot it left (`lem_r_spray`, `lemdraw.c` `ovl_spray_*`). The record keeps the frame the glass shows (`dpf`) and the BOX it was drawn in (`pbox`), the box taken from the row's own bounds stored after the table (`LEMMAIN` item 10), never by walking the 80. VGA: **a game frame makes each spray ONE RECTANGLE A 16-ROW BAND IT OCCUPIES** (wave 6's second review) - `lem_r_spray`'s bin modes walk the old frame's 80 pairs and then the new frame's, and each band's rectangle is the span of both frames' pixels in it (`lb_pbins`, ten 4-byte bins in the sprite records the VGA keeps no records in, so no bss) - and the band loop draws it into the scratch in the pool's order, where its bomber was, so the latch puts the erasure and the new pixels down in one write and the pointer stays lit over it; a compose with no game frame draws a spray as the glass shows it (`dpf`), so a part-stepped frame never shows half a spray. The first cut made each spray ONE box, the old frame's joined with the new: **2,961 byte-rows in 128 rows a game frame on the real table, against 828 in 76 as bins** (7.8 rectangles; `lemtest`'s spray-area row, from three feet, held to a ceiling of 1,200 with the one-box build as its negative control) - for at most 160 changed pixels, and during a nuke the overlapping boxes folded into most of the margin view. PRICED, not measured, by the loops' instructions: a composed row is a fixed ~1,100 cycles (four planes, `lem_r_bgrect`'s per-row call and setup) and a byte-row ~75 (`rep movsb` four planes and the latch), so a spray in flight is **~40-50 ms of a drawn VGA frame on a 4.77 MHz 8088 as bins against ~75-100 ms as one box** - half, not a quarter, because the rows' fixed price is the same in both. **THE BINS ARE NOT FREE, AND THEY ARE TAKEN ONLY WHERE THEY PAY** (wave 6's third review): a bin walk is 80 pairs whatever the box holds - ~45 instructions a binned pair with ~15 `[bp+disp]` word operands, ~550 cycles, so **~44K cycles, ~9 ms a walk and ~19 ms a spray a frame for its two** - and then up to ten `ovl_rc_add` calls in place of one, each a scan of the list and, at `LEM_NRC` = 40, the 40-entry best-fit loop (~9 ms a call on a full list). A lone spray on a short list nets ~20-25 ms a frame from them; a nuke does not. A nuke lights one fuse a frame and a spray flies 52, so a nuked crowd keeps up to 52 sprays in flight with every lemming in the margin already a rectangle - the list is full before the first spray is cut, the boxes overlap and fold into it whichever way they are cut (`lemtest`'s nuke leg, 52 sprays on a full list, real table: **4,466 byte-rows a frame as boxes against 3,853 as bins**, 14% apart), and the bins would have cost **52 walks and 194 adds a frame against 0 and 26.5** - ~2.2 s of a game frame on the XT against ~0.24 s, by the same instruction counts. So `ovl_spray_rects` takes the bins (`ovl_spray_bins`) for ONE spray in flight on a list with room for its ten rectangles short of the best-fit loop (`lem_nrc` + `LEM_PBINS` <= `LEM_NRC`), which is the case `spray_area` measured, and otherwise the first cut's one box (`ovl_spray_box`: the glass frame's box joined with the new frame's, both from the stored bounds, no walk, one add). `lemtest` holds the fallback at 1, 20 and 52 staggered sprays on a pre-filled list - no walk, no more adds than sprays in flight - with the bins run unconditionally as the negative control that must cost more. Inside the band loop a spray is walked once a compose band its box meets, and **the walk is told the band's rows** (`ovl_spray_rows`, the rows clamped at the call): a pair outside them fails the first compare (~5 instructions) instead of running the shifts, the byte compares and the band test behind them (~17), which is ≤ ~2.3 ms a straddling spray a frame; the second walk's 80 iterations themselves stay (~1 ms). CGA/Hercules: each frame puts the old pixels' bytes back out of W before the sprites come off, and the sprite pass draws the new ones in the solid class; `ovl_cur_hit` takes the pointer's save-under off only when the pointer meets the box the glass frame was drawn in or the box of the frame about to be drawn - the first cut tested a ±128 square round the foot, the whole 320 x 160 view, and took the save-under off on every drawn frame of every explosion. Culled to the view's margin like a lemming; the old box is erased wherever it was |
 | a VGA scroll with no game frame | — | **wave 4**: paused, or on an XT mid-way through a part-stepped frame, a scroll or a minimap jump used to move the Start Address and draw nothing — and VRAM holds lemmings only within the view ±32 (`ovl_sbox`'s margin cull), so the world it showed had terrain and no lemmings while the status line named the one under the pointer. `ovl_vframe(0)` now composes the lemmings NEWLY IN the margin, and only those — one newly OUT keeps its box, which the next stepped frame's own step erases (composing its erasure would be a whole compose-and-latch of VRAM 32 pixels beyond the glass; wave 4's third review corrected this row, which said "newly in, newly out" against code that has never composed the second): membership is asked with `ovl_inmargin`'s two compares BEFORE `ovl_sbox` is paid for (189 instructions; over the crowd that was ~20 ms of an XT tick on every scroll step), and of the rest only a lemming whose box meets one of the crossers' rectangles is composed (`ovl_rc_meets` — one crossing used to recompose the whole crowd's sprites). A paused pan of the whole crowd costs the crowd once, an 8-pixel step nobody crosses makes no raster call (`lemtest` asserts both, and the crowd beside one crosser). **Every VGA compose runs at the NEW view BEFORE the Start Address shows it** (`ovl_tick_draw`): `ovl_sbox` already reads the new `lem_view` and every composed byte is off the visible window until the pan, so a lemming a step brings into view arrives with its terrain — composed after the pan, it was bare terrain for the length of the compose (wave 4 review) |
 
 **The host harness holds all of it** (§114.12): 300 played VGA frames with 0
@@ -196690,8 +196700,38 @@ store the compose needs is **320 bytes that cost nothing**: on VGA they live in
 any more. The module grew **+5,019**: the frame's rectangles, the compose, the
 pointer's panel test and the panel's hit boxes.
 
-**MEASURED AT WAVE 6'S SECOND REVIEW, THE SHIPPED BUILD** (the line every
+**MEASURED AT WAVE 6'S THIRD REVIEW, THE SHIPPED BUILD** (the line every
 number in §114 is read against): `os88pkg: 'LEMMINGS' entry=+0x0060
+image=31668 bss=20421 icon=yes` and part 0 **34,500 bytes (19,583 packed)**
+inside a **42,111-byte** `LEMMINGS.O88` — **52,089 resident of 61,440, 84.8%,
+9,351 spare and 2,911 under the 55,000 trigger**. `tools/cc8086.py`: **301
+functions**, a **34-byte** maximum frame, **187 functions in the module behind
+114 resident shims**. Against the second review's build below that is **-6
+image and -10 bss**: `lem_r_spray`'s door (the bin modes refuse a shadow
+card) is +26 of image, and the five counters only `lemtest` reads
+(`lem_c_sprites`, `lem_c_infr`, `lem_c_cmvfb`, `lem_c_rows`, `lem_c_cols`)
+are behind `LEM_HOST` now, so the package carries neither their bss nor their
+increments: -32 image, -10 bss, -48 of the module. The module grew **+345**
+net: the spray's one-box fallback and the rule that picks it
+(`ovl_spray_box`, `ovl_spray_rects`, §114.4.6), and the band loop's clamped
+walk (`ovl_spray_rows`). **IN 360KB CLUSTERS THAT IS THE 42nd**: the file is
+**+146**, from 19 bytes before its 42nd cluster to **42 clusters, 897 bytes
+before its 43rd** (the packed image is 47 bytes short of its 44th sector, so
+the part still starts at sector 44 and the growth is all part 0's; the first
+cut of the fallback was 42,128, a pointer-walking rewrite of `ovl_spray_box`
+measured LARGER, 42,140, and the counters bought the 17 back). The
+disks: **2,017 of 2,847, 2,017 of 2,371, 710 of 713 and 352 of 354 with 53
+levels** - and **THE 360KB HEADROOM IS NOW ZERO**: 43 clusters drop the disk
+to 38 levels (Squasher trades for Crystal), which the level ratchet now
+proves on every `make lemmingsdisk` by refusing it (§114.9, `LEVEL_PIN`; the
+padded run: "38 playable levels with graphic sets [2, 4]"). The one cluster
+the two owner questions of §114.4.3.1 shared is spent; the cheapest cluster
+left on that disk is `LEVELS.TXT`'s compact form, 2,170 bytes and 122 over
+its second cluster. The Wire's archive is 1,029,175 of `WIRE_ARCMAX`'s
+1,048,575 (19,400 spare).
+
+**MEASURED AT WAVE 6'S SECOND REVIEW** (superseded by the line above):
+`os88pkg: 'LEMMINGS' entry=+0x0060
 image=31674 bss=20431 icon=yes` and part 0 **34,155 bytes (19,437 packed)**
 inside a **41,965-byte** `LEMMINGS.O88` — **52,105 resident of 61,440, 84.8%,
 9,335 spare and 2,895 under the 55,000 trigger**. `tools/cc8086.py`: **298
@@ -197608,9 +197648,19 @@ second review made it a rectangle a 16-row band, §114.4.6): 828 byte-rows in
 76 rows of VGA compose a game frame for each spray in flight on the real
 table, ~40-50 ms of a drawn frame on a 4.77 MHz 8088 by the loops'
 instruction counts (one box was 2,961 in 128, ~75-100 ms); on the two shadow
-cards, 80 pixels drawn and 80 bytes put back out of W, a few ms. A MartyPC
-reading of a frame with a spray in flight is the Finish pass's to take, on the
-build that ships; this one was not re-taken. The 360KB disk carries two graphic sets
+cards, 80 pixels drawn and 80 bytes put back out of W, a few ms. **The bins'
+own price, by instruction counts** (wave 6's third review, §114.4.6): two
+80-pair walks a spray a frame, ~9 ms each (~45 instructions a pair, ~550
+cycles, ~44K a walk), and up to ten `ovl_rc_add` calls for one, ~9 ms each
+on a full list (a 40-entry scan and the best-fit loop) - so they are taken
+for a LONE spray on a list with room, and a nuke's sprays (up to 52 in
+flight, the list full) take one box each: at 52 sprays the bins would have
+been **52 walks and 194 adds a frame, ~2.2 s of the XT's game frame, against
+0 and 26.5, ~0.24 s**, for 14% of compose area (`lemtest`'s nuke leg). A
+box across a compose band's edge is walked once a band, the rows clamped to
+the band's, ≤ ~2.3 ms a straddling spray a frame. A MartyPC reading of a
+frame with a spray in flight is the Finish pass's to take, on the build that
+ships; this one was not re-taken. The 360KB disk carries two graphic sets
 (§114.9), so the quiet level is **Fun 2** (10 lemmings, rate 50) and the busy
 one **Fun 9** (80 at rate 99) - Fun 1 is a Dirt level that disk does not
 carry. PERFORMANCE.md Set 161 readings 12-17 carry the argument.
@@ -197727,7 +197777,8 @@ with each frame's bounds after it (`LMNB` version 3). Decision 5's gate was
 1,500 resident bytes spare after wave 5, and there were 9,899; it cost **+456
 image and +4 bss**, 8 KB more of the `LEMMAIN` claim, and **nine 360KB
 clusters - the disk keeps its 53 levels with ONE cluster of headroom left**
-(§114.6). Each particle is one pixel in the original's colour for its index
+(§114.6; the third review's nuke fallback then took that cluster, and the
+headroom is none - §114.6's shipped line, and §114.9's ratchet holds the 53). Each particle is one pixel in the original's colour for its index
 mod 16 (Lemmix `src/Game.pas` `ParticleColorIndices`, :54-56), a pair with
 either byte -128 not drawn (Lemmix `DrawParticles`, :2492-2515, `(X <> -128)
 and (Y <> -128)`; `Lemmings.ts` `ParticleTable.draw` tests the same; two
@@ -197824,8 +197875,8 @@ rather than merely describing it — §114.3.2.
 | geometry | data clusters | carries |
 |---|---:|---|
 | 1.44MB and 1.2MB | — | everything: all 120 levels, all five styles, all four special pictures |
-| 720KB | 713 | everything **except the four VGASPEC pictures** — 116 of the 120 levels and all five sets. The pictures are 309,248 bytes = 304 clusters as banks, and the rest takes the disk to **709 of 713** clusters as `make lemmingsdisk` builds it after wave 6's review and the spray (700 after wave 5's second review, 695 after wave 4) — the converter's manifest says the same 700, being handed the built package (`--pkg`), and `--check-image` holds the two equal |
-| 360KB | 354 | **two graphic sets — Squasher and Pillar — and 53 of the 55 levels that use them** after wave 5, unchanged at wave 6 and kept through the spray (**351 of 354** since wave 6's review: `LEMMAIN.LEM` +8 clusters, the package 41, `LEVELS.TXT` in its compact form - ONE cluster of headroom before the next step loses 15 levels, §114.6). Before the spray: the package with its module packed inside it is **40,680 bytes = 40 clusters** at wave 6 (40,633 after wave 5's second review, 37,627 = 37 after wave 4), and those three clusters cost the disk a group of level records, so Mayhem 28 and 29 are back to `MISS_ROOM` and say so in the chooser and in `LEVELS.TXT` (wave 4's second review had fitted them, at 352 of 354). The disk is **348 of 354 clusters** — two of the six left are LEMMINGS.SAV's, which every plan holds back (`SAV_CLUSTERS`) and which no image as built uses, and the other four are short of the next group of records. With those two levels gone the names fit again, so this disk's `LEVELS.TXT` NAMES its levels, as the others do; at wave 4 it listed them by number, because there the names cost it a level (below) |
+| 720KB | 713 | everything **except the four VGASPEC pictures** — 116 of the 120 levels and all five sets. The pictures are 309,248 bytes = 304 clusters as banks, and the rest takes the disk to **710 of 713** clusters as `make lemmingsdisk` builds it after wave 6's third review (709 after its review and the spray, 700 after wave 5's second review, 695 after wave 4; the planner drops levels here too when a disk is short, never refusing, so `LEVEL_PIN` holds this disk to 116 as well) — the converter's manifest says the same 700, being handed the built package (`--pkg`), and `--check-image` holds the two equal |
+| 360KB | 354 | **two graphic sets — Squasher and Pillar — and 53 of the 55 levels that use them** after wave 5, unchanged at wave 6 and kept through the spray (**352 of 354** since wave 6's third review: `LEMMAIN.LEM` +8 clusters at the review, the package **42** since the third review's nuke fallback, `LEVELS.TXT` in its compact form - **NO cluster of headroom** before the next step loses 15 levels, §114.6; it was 351 and one cluster from the review to the second). **The count is RATCHETED** (the third review): `tools/os88lem.py`'s `LEVEL_PIN` pins every disk's playable levels - 120, 120, 116, and 53 with sets 2 and 3 here - and refuses a plan that answers otherwise with the cluster arithmetic, so `make lemmingsdisk` fails rather than shipping 38 levels; `tests/unit/t_lemdat.py` holds the built bands to its own copy of the pin in the fast tier. Dropping a level is the owner's call, and the pin changes only by a written decision; `--unpinned` is for the headroom measurement. Before the spray: the package with its module packed inside it is **40,680 bytes = 40 clusters** at wave 6 (40,633 after wave 5's second review, 37,627 = 37 after wave 4), and those three clusters cost the disk a group of level records, so Mayhem 28 and 29 are back to `MISS_ROOM` and say so in the chooser and in `LEVELS.TXT` (wave 4's second review had fitted them, at 352 of 354). The disk is **348 of 354 clusters** — two of the six left are LEMMINGS.SAV's, which every plan holds back (`SAV_CLUSTERS`) and which no image as built uses, and the other four are short of the next group of records. With those two levels gone the names fit again, so this disk's `LEVELS.TXT` NAMES its levels, as the others do; at wave 4 it listed them by number, because there the names cost it a level (below) |
 
 **LEMMINGS.SAV KEEPS TWO CLUSTERS, NOT ONE** (`SAV_CLUSTERS` = 2): one for the
 file and one for the replace. §18.4's write order puts a file's new chain down
@@ -198054,7 +198105,19 @@ must go over), re-took the erasure controls on the bins (321 and 631), and
 gave `t_lemdat` the band-to-claim check: every built band must end inside the
 `LEM_KB_*` claim `apps/lemmings/lemload.c` reads it into, parsed out of that
 file, so a band that outgrows its claim fails `make` on the host and not
-"Load failed" on the machine (red with `LEM_KB_MAIN` set to 58). The mechanics
+"Load failed" on the machine (red with `LEM_KB_MAIN` set to 58). **Its third
+review added** the NUKE'S SHAPE to `spray_area` (1, 20 and 52 sprays lit a
+frame apart on a list pre-filled with the crowd's 40 rectangles: the
+byte-rows, the `ovl_rc_add` calls and the bin walks a frame printed, the
+fallback held to no walk and no more adds than sprays in flight, and the bins
+run unconditionally as the negative control that must cost more - 52 walks
+and 194 adds against 0 and 26.5 at 52), `lemraster.c`'s refusal of a bin
+mode on a shadow card, and the LEVEL RATCHET (§114.9): `os88lem.py` refuses a
+plan off `LEVEL_PIN` with the cluster arithmetic (proved red with the package
+padded two clusters: 38 levels, sets 2 and 4) and `t_lemdat` holds the built
+bands to its own copy of the pin (red on an `--unpinned` plan of that padded
+package, two failures), and takes a band directory as its argument so that
+proof is a scratch run. The mechanics
 replay carries R9, and its two nuke hashes moved with it. **The
 `lemmings` soak row** (`tests/lemmings.py`, QEMU) boots `build/lemmings.img`,
 opens the launcher by name, plays into the preview (12h) and the level (0Dh),
