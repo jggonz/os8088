@@ -37,7 +37,9 @@
 ; =============================================================================
 
 hd_xa_on:    db 0               ; 1: a buffer is armed
-hd_xa_lo:    dd 0               ; ...its linear address (segment x 16)
+hd_xa_seg:   dw 0               ; ...its SEGMENT (offset 0): hd_xa_read makes
+                                ; it linear, in the 386 half, where that is
+                                ; one instruction and not a shift pair
 hd_xa_lim:   dw 0               ; ...its bytes less one sector
 hd_xa_lin:   dd 0               ; ...the XMS address its first byte stands for
 hd_xa_map:   times 8 db 0       ; ...a bit a sector redirected, 64 of them
@@ -53,8 +55,13 @@ hd_pkg:
     je hd_xa_arm
     cmp bl, HDV_DISARM
     je hd_xa_dis
-    xor ax, ax                  ; (OSAPI_DRV_CALL's own refusal: AX = 0)
-    stc
+    cmp bl, HDV_TOOL            ; ...and the INSTALLER (SPEC.md 117.4): one
+    jne .no                     ; tool verb, CL = an HDI_*, ES = the caller,
+    mov al, HDT_PKG             ; forwarded by the page callbacks' own thunk,
+    jmp hd_cp_thunk             ; which loads the tool and banks the registers
+.no:                            ; across the load. Still no sector: the tool's
+    xor ax, ax                  ; verbs are the Install window's, never hd_raw
+    stc                         ; (OSAPI_DRV_CALL's own refusal: AX = 0)
     ret
 
 ; hd_xa_arm - HDV_ARM: DX = the buffer's segment (offset 0), CX = its bytes
@@ -78,25 +85,20 @@ hd_xa_arm:
     call hd_xa_a20
     jc .no
     push cx
-    push dx
     mov [hd_xa_lin], si
     mov [hd_xa_lin+2], di
     sub cx, 512
     mov [hd_xa_lim], cx
-    mov ax, dx                  ; the buffer's linear address: DX x 16
-    mov cl, 4
-    shl ax, cl
-    mov cl, 12
-    shr dx, cl
-    mov [hd_xa_lo], ax
-    mov [hd_xa_lo+2], dx
+    mov [hd_xa_seg], dx         ; the SEGMENT, kept as it came: the shift pair
+                                ; that made it linear here was 19 bytes, and
+                                ; the 386 half does it in one (SPEC.md 117.4 -
+                                ; the bytes HDV_TOOL's forwarder is paid with)
     xor ax, ax
     mov [hd_xa_map], ax
     mov [hd_xa_map+2], ax
     mov [hd_xa_map+4], ax
     mov [hd_xa_map+6], ax
     inc byte [hd_xa_on]
-    pop dx
     pop cx
     clc                         ; (AX = 0)
     ret
@@ -165,11 +167,14 @@ hd_xa_read:
     push eax
     push ebx
     movzx eax, word [hd_bseg]
+    movzx ebx, word [hd_xa_seg]
+    sub eax, ebx                ; the segments apart, SIGNED...
     shl eax, 4
     movzx ebx, di
-    add eax, ebx                ; where it was going, linear
-    sub eax, [hd_xa_lo]         ; ...from the armed buffer's start
-    jb .not
+    add eax, ebx                ; ...so this is where it was going less the
+                                ; armed buffer's start, linear: a sector below
+                                ; it is negative, which the unsigned compare
+                                ; below reads as huge and refuses
     cmp eax, 0xFFFF
     ja .not
     cmp ax, [hd_xa_lim]

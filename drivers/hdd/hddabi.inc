@@ -30,13 +30,15 @@
 ; to a private interface, for the same reason and not by analogy.
 ; =============================================================================
 
-HD_ABI_VER   equ 6              ; bumped whenever a verb changes meaning -
+HD_ABI_VER   equ 7              ; bumped whenever a verb changes meaning -
                                 ; or a row field does: 5 is HDD_BIOS set on
                                 ; EVERY row the ROM reads, which a 4 tool's
                                 ; hd_kvol would not know a BIOS row by; 6 is
                                 ; HDT_INIT's CX, the resident's dispatcher,
                                 ; which a 5 tool took to be PKG_DISP and
-                                ; is not from the HMA (SPEC.md 2.10.8)
+                                ; is not from the HMA (SPEC.md 2.10.8);
+                                ; 7 is HDT_PKG, the installer's package verb
+                                ; (SPEC.md 117.4), which a 6 tool refuses
 HD_TOOLFILE  equ 0              ; (the name itself is in the resident: a
                                 ; string is not an ABI number)
 
@@ -182,6 +184,10 @@ HDT_KEY      equ 9              ; DSV_CPKEY: BL = ASCII, BH = scan code (AL
                                 ; pane origin - the panel's W_ONKEY has a key
                                 ; and nothing else - so the page draws at the
                                 ; origin its last PAINT banked
+HDT_PKG      equ 10             ; HDD.DRV's HDV_TOOL, forwarded (SPEC.md
+                                ; 117.4): CL = an HDI_* (apps/os88api.inc),
+                                ; ES = THE CALLING PACKAGE'S segment and every
+                                ; buffer in it. out CF = 0 and AL = the answer
 HDT_BUSY     equ 4              ; out: CF = 1 = a window of mine is still
                                 ; VISIBLE, so do not unload me. Visible and not
                                 ; merely allocated: closing one of these is a

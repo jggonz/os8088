@@ -272,6 +272,11 @@ DRVE_NOVOL  equ 8               ; DRVV_READY's answer, never attach's: the
                                 ; is taken down again by drv_boot (51.3.2)
 DRVE_NERR   equ 9               ; how many strings drv_errstr has
 
+; OSAPI_DRV_USE's verbs in AH (SPEC.md 117.3), MIRRORED in apps/os88api.inc
+DRVU_UP     equ 0               ; bring a class's driver up: the tick's load
+DRVU_DONE   equ 1               ; the panel close's notifier, with no panel
+DRVU_CALL   equ 2               ; OSAPI_DRV_CALL_AT, asked as the machine
+
 ; --- .drv header: the .o88 header's shape with a different version -----------
 DRV_H_MAGIC equ 0               ; word: 0x384F ('O','8')
 DRV_H_VER   equ 2               ; byte: DRV_VER = driver (a package is PKG_FMT)
@@ -1852,6 +1857,81 @@ osapi_drv_classk_x:
     retf
 
 ; -----------------------------------------------------------------------------
+; osapi_drv_use_x - OSAPI_DRV_USE (SPEC.md 117.3): the Drivers page's tick, as
+; a door a package can open
+; in:  AL = a DRVC_* class, AH = DRVU_UP (0) / DRVU_DONE (1); the UI task, in
+;      a callback (gfx lock HELD)
+; out: UP - CF = 0 the class's driver is up (or was); CF = 1, AX = the DRVE_*
+;      its row banked. DONE - CF = 0. Every register but AX preserved
+;
+; UP IS THE TICK'S CODE AND NOT A COPY OF IT. The attach half of a load lives
+; in the images that load drivers (kernel size pass 13), so the cell brings
+; CTRL.DRV in and calls its CPE_DRVUP, which is cdl_load - the very routine
+; cp_drv_click runs - and then gives CTRL.DRV back unless a Control Panel is
+; open: cpf_shutdown's three lines. It loads and RECORDS NOTHING: no want, no
+; answer, no SYSTEM.CFG staged, because the user never answered the Drivers
+; page and a door that wrote an answer for them is the kernel guessing (51.3).
+;
+; DONE is the Control Panel's close, sent when there IS no Control Panel:
+; drv_cp_closed_x itself, so every loaded driver hears DSV_CPCLOSE exactly as
+; it would at a close - for HDD.DRV that is hd_tool_reap, HDDTOOL.DRV's ~19KB
+; back. With a panel open it is skipped: that panel's own close will send it,
+; and until then "the panel has closed" would be untrue.
+; -----------------------------------------------------------------------------
+osapi_drv_use_x:
+    call kentc_bp               ; KENT: push ax..bp - and the answer is
+    cmp ah, DRVU_DONE           ; written over the banked AX at .out
+    je .done
+    ja .call
+    call cpf_need               ; CTRL.DRV resident, or CF = 1 because it
+    jnc .up                     ; could not be read
+    mov ax, DRVE_DISK
+    jmp short .out
+.up:
+    call far [CPFP + CPE_DRVUP*4]   ; CF, AX = the row's DRVE_*
+    pushf
+    push ax
+    call drv_use_panel
+    jnc .kept                   ; an open panel still owns CTRL.DRV
+    mov al, MOD_CTRL
+    call mod_drop
+.kept:
+    pop ax
+    popf
+    jmp short .out
+.done:
+    call drv_use_panel
+    jnc .ok
+    call drv_cp_closed          ; the panel close's own notifier, near
+.ok:
+    xor ax, ax                  ; (CF = 0)
+    jmp short .out
+.call:                          ; CALL: OSAPI_DRV_CALL_AT ASKED AS THE MACHINE
+    mov ax, [snd_inst]          ; (SPEC.md 51.2.3) - drv_call's bracket, which
+    push ax                     ; the package door does not take: a door verb
+    cmp ah, [sch_cur]           ; of SOUND.DRV's or the sockets' may answer
+    jne .asis                   ; FOR the caller, so the door stays as it is
+    call drv_nostamp            ; and the caller who wants a driver to act as
+.asis:                          ; the machine - file names, the system volume -
+    call KERNEL_SEG:apic_drv_call_at    ; asks here. Only the task that SET the
+    pop word [snd_inst]         ; stamp clears it: a worker's inst_caller
+                                ; already answers its own instance, and
+                                ; clearing a callback's stamp under it is a
+                                ; race (snd_disp_set's own reason). BX, CX,
+                                ; DX, SI, DI and ES reach the driver as the
+                                ; caller left them; `pop` writes no flag
+.out:
+    mov bp, sp                  ; THE ANSWER OVER THE BANKED AX - KENT's frame
+    mov [bp+12], ax             ; is [bp][di][si][dx][cx][bx][ax] - and the
+    jmp kretfc_bp               ; ladder pops it back with CF untouched
+
+; drv_use_panel - CF = 0 a Control Panel is open. Spends AL and DI
+drv_use_panel:
+    mov al, KIND_CTRL
+    call KERNEL_SEG:cw_inst_find_kind
+    ret
+
+; -----------------------------------------------------------------------------
 ; drv_row - row index to row pointer (module internal)
 ; in:  AL = row index
 ; out: BX = drv_tab + index*DRVR_SIZE
@@ -2415,7 +2495,10 @@ drv_cp_call_x:
 ; cp_flush_close is reached: drv_shutdown detaches every driver a few
 ; instructions later, and a detach frees strictly more than this does.
 ; -----------------------------------------------------------------------------
-drv_cp_closed_x:
+drv_cp_closed_x:                ; the FAR entry, for instance.inc's teardown
+    call drv_cp_closed          ; ...and the near body, which OSAPI_DRV_USE's
+    retf                        ; DONE calls from .cold (SPEC.md 117.3)
+drv_cp_closed:
     call kentc_bp               ; KENT: push ax..bp
 
 
@@ -2454,7 +2537,7 @@ drv_cp_closed_x:
     call drv_call_ent
     call drv_release
 %endif
-    jmp kretfc_bp
+    jmp kretc_bp
 
 ; -----------------------------------------------------------------------------
 ; osapi_drv_cfg - a driver's own settings, in the kernel's file (SPEC.md 51.9)
@@ -5975,6 +6058,8 @@ osapi_mem_hma_x:                ; door, whose driver arm is gone with them and
 ; refusal states it rather than leaving the caller's register looking like a
 ; figure - and it is the only one now, the count having gone (51.12.3).
 osapi_drv_classk_x:
+osapi_drv_use_x:                ; ...and OSAPI_DRV_USE: no driver layer to
+                                ; bring anything up in (SPEC.md 117.3)
 %ifndef OS88_REDIR
 osapi_fs_ent_x:                 ; ...and OSAPI_FS_ENT, legal only inside an
 %endif                          ; FSV_LIST that cannot happen here: AX = 0, CF

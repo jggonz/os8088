@@ -3283,6 +3283,18 @@ EMUDIR := $(BUILD)/emuk
 SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88 $(BUILD)/rlapply.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
+# --- ...and INSTALL in the ROOT (SPEC.md 117.6) --------------------------------
+# The setup wizard: the first thing a person looking at a new system disk
+# should see, and on the disk the install copies FROM - so an installed
+# machine carries C:\INSTALL.O88 too, which is how the next release's upgrade
+# is found again. A plain path is the root to os88disk.py. kern_big's system
+# disks only: kern_small has no driver layer and so no HDD.DRV to switch on
+# (SPEC.md 51.0, 24.5) - its recipes never name this variable, and a
+# filter-out of something no list contains would be the no-op SPEC.md 24.5
+# warns about. DEFINED HERE for $(SYSAPPS)'s reason: a prerequisite list is
+# expanded where the rule is read.
+SYSINST := $(BUILD)/install.o88
+
 # --- ...and THE STICKY APPS in STIKAPPS/ (SPEC.md 110) --
 # A widget belongs to the BOOT volume - the desktop configuration that
 # relaunches it is that volume's SYSTEM.CFG, and its row names a path on it -
@@ -4224,7 +4236,7 @@ HDBLOBDEF = $$(python3 -c 'import sys; m = open(sys.argv[1], "rb").read(); asser
 $(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm apps/os88ui.inc drivers/hdd/hddabi.inc \
                   drivers/hdd/hdcom.inc drivers/hdd/hdsvc.inc drivers/hdd/hdsec.inc \
                   drivers/hdd/partw.inc drivers/hdd/fmt.inc drivers/hdd/tool.inc \
-                  drivers/hdd/inst.inc drivers/hdd/cppage.inc \
+                  drivers/hdd/inst.inc drivers/hdd/cppage.inc drivers/hdd/ipkg.inc \
                   drivers/os88drv.inc apps/os88api.inc apps/os88rseq.inc \
                   $(BUILD)/mbr.bin | $(BUILD)
 	$(NASM) -f bin -w+error $(DRVDEF) $(HDBLOBDEF) -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) \
@@ -4544,10 +4556,10 @@ $(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
 	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
-$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
@@ -4559,10 +4571,10 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOO
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
@@ -4586,10 +4598,10 @@ $(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(
 # Its OWN boot sector, unlike the pair above it: 15 spt is a different track
 # shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
 # build/boot120.bin's rule for why that is three sectors and not four.
-$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(BUILD)/boot120.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
@@ -5241,10 +5253,10 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 # is what fails if this flag is lost, and autostart360.img below takes it too
 # because it is this disk plus four files.
 SYS360SPC := --spc 1
-$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # AUTOSTARTTEST - the LINKS and AUTOSTART gate's disk (SPEC.md 26.10): the
@@ -5662,6 +5674,19 @@ $(BUILD)/timer.bin: apps/timer/timer.asm apps/os88api.inc apps/os88ui.inc \
 
 $(BUILD)/timer.o88: $(BUILD)/timer.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/timer.bin -o $@
+
+# INSTALL (SPEC.md 117): the setup wizard, in the root of every kern_big
+# system disk ($(SYSINST)). It installs nothing itself - OSAPI_DRV_USE and
+# HDD.DRV's HDV_TOOL reach the Control Panel's own engine - so its only
+# dependencies are the SDK and the two shared includes.
+$(BUILD)/install.bin: apps/install/install.asm apps/os88api.inc apps/os88ui.inc \
+                      apps/os88dec.inc | $(BUILD)
+	$(NASM) -f bin -w+error --before "[map all $(BUILD)/install.map]" \
+		-I apps/ -o $@ apps/install/install.asm
+	@echo "install: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/install.o88: $(BUILD)/install.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/install.bin -o $@
 
 $(BUILD)/bounce.bin: apps/bounce/bounce.asm apps/os88api.inc apps/os88ui.inc \
                      | $(BUILD)
@@ -12871,13 +12896,13 @@ $(BUILD)/emu.img: KMODDIR := $(EMUDIR)
 # one feature it was built for has not been given anything. build/vmmcfg is the
 # gate's own SYSTEM.CFG with bit 5 set, which is the absolute mouse's bit and
 # not its row number (drv_cfgbit), and it is reused verbatim rather than copied.
-$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
+$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
                   $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg \
                   tools/os88disk.py
 	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin $(EMUDIR)/boothd.sys $(EMUDIR)/coldhma.sys
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(EMUDIR)/boot.bin --kernel $(EMUDIR)/$(KERNNAME) \
-		$(EMUDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
+		$(EMUDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vmmcfg/system.cfg \
 		$(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
@@ -13631,8 +13656,14 @@ APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/wireflet.o88 $(BUILD)/arkanoid.o88 
 # 2026-10-13): that disk had 29 of its 354 clusters free when isoTron arrived,
 # and the curation is remade every time this geometry runs out - games360.img
 # carries every game, isoTron among them, and is where a 360KB machine finds it.
+#
+# WIREFLEET IS NOT ON apps360.img EITHER (SPEC.md 114.11, dated 2026-10-20):
+# that disk was 354 of 354 clusters when WireFleet's missiles and music took
+# it from 26 clusters to 47 - the effect stamps and Sound Blaster clips are
+# parts of the one file. games360.img carries it with the other games.
 APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
-                    $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88,$(APPS_GAMES))
+                    $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
+                    $(BUILD)/wireflet.o88,$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -14677,7 +14708,8 @@ $(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
 # in front of the same rest (SPEC.md 80.7): $(LIVEARGS) is still what it was,
 # byte for byte, and build/livepayload.txt still prints it.
 LIVEREST := $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
-            $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG)
+            $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG) \
+            $(SYSINST)
 LIVEARGS := $(DRIVERS) $(LIVEREST)
 
 # ...and the live volume's own FOLDER COUNT.
@@ -16654,12 +16686,24 @@ wirefleet-pair:
 wirefleettest: wirefleetdisk $(IMG)
 	python3 tests/wirefleetlink.py
 wirefleet: $(BUILD)/wireflet.o88
-$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc | $(BUILD)
+$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsong.inc apps/wirefleet/wfanim.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/wirefleet/art/fx.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc apps/os88parts.inc apps/os88partsbody.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
-$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $< -o $@
+# The two lazy parts (SPEC.md 114.11), in WF_P_* row order: the effect
+# stamps, assembled from the committed fx.inc, and the Sound Blaster clips,
+# packed from the committed CC0 WAVs by a standard-library tool.
+WFLETPARTS = $(BUILD)/WFLETFX.GFX $(BUILD)/WFLET.SFX
+$(BUILD)/WFLETFX.GFX: apps/wirefleet/wffxbank.asm apps/wirefleet/art/fx.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/WFLET.SFX: tools/wirefleet_sfx.py apps/wirefleet/sfx/samples.json $(wildcard apps/wirefleet/sfx/*.wav) | $(BUILD)
+	python3 tools/wirefleet_sfx.py -o $@
+$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin $(WFLETPARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@ $(foreach p,$(WFLETPARTS),--part $(p))
 apps/wirefleet/art/tiles.inc: apps/wirefleet/art/ships-source.png tools/wirefleet_assets.py
 	python3 tools/wirefleet_assets.py
+apps/wirefleet/art/fx.inc: apps/wirefleet/art/fx-source.png tools/wirefleet_fx.py
+	python3 tools/wirefleet_fx.py
+apps/wirefleet/wfsong.inc: tools/wirefleet_song.py
+	python3 tools/wirefleet_song.py
 wirefleetdisk: $(BUILD)/wireflet.img $(BUILD)/wireflet720.img $(BUILD)/wireflet120.img $(BUILD)/wireflet360.img
 $(BUILD)/wireflet.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py --size 1440 -o $@ $< apps/wirefleet/README.TXT

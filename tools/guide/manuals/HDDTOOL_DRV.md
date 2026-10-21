@@ -62,6 +62,9 @@ copied it says `Done - remove the floppy, Restart`, and the button reads
 On a machine with one floppy drive you swap disks when asked. Taking the
 system disk out after its copy is safe.
 
+[[INSTALL.O88]], in the root of the system disk, does the same install one
+page at a time, and switches the hard disk driver on for you first.
+
 ## Why it is a separate file
 
 `HDD.DRV` stays in memory as long as the disk is in use, but the page and its

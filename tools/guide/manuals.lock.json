@@ -478,17 +478,17 @@
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "d0d605c1",
-  "strings": "3b0c6f26290d2442",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "ddaef50f",
+  "strings": "caf4859056bcb91b",
+  "why": "The engine gained INSTALL's log hook (SPEC.md 117.4.1); the Control Panel's Install window and the pages' words are unchanged"
  },
  "HDD_DRV": {
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "d0d605c1",
-  "strings": "3b0c6f26290d2442",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "ddaef50f",
+  "strings": "caf4859056bcb91b",
+  "why": "The engine gained INSTALL's log hook (SPEC.md 117.4.1); the Control Panel's Install window and the pages' words are unchanged"
  },
  "HELV_F88": {
   "sources": [],
@@ -515,6 +515,14 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "INSTALL_O88": {
+  "sources": [
+   "apps/install"
+  ],
+  "stamped": "ddaef50f",
+  "strings": "1dc0fc6f30c645db",
+  "why": "Copying section describes the Installing page's log and its click-Next ending (SPEC.md 117.4.1)"
  },
  "INTRO_MID": {
   "sources": [],
@@ -1212,9 +1220,9 @@
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "e3e1efbf",
-  "strings": "24bef22c86f73ff1",
-  "why": "2400 baud and Link > Statistics described"
+  "stamped": "3f9bc879",
+  "strings": "4f7d7f10c65ff1a8",
+  "why": "missiles, impacts, music and the Music U item added to Connect and deploy and Display and sound (SPEC 114.11)"
  },
  "WORD": {
   "sources": [],

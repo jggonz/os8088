@@ -183,9 +183,17 @@ def _map(app, defines=()):
     try:
         raw = open(o88, "rb").read()
         built = os88pkg.image_unwrap(raw)
-        if os88parts.table_at(built) is not None:
-            built = os88parts.part_bytes(raw, 0)
         fresh = open(bn, "rb").read()
+        # ...UNLESS THE IMAGE IS THE PROGRAM and its parts are assets
+        # (WireFleet's stamps and samples, SPEC.md 114.11): then the image is
+        # compared, less the bytes the packer fills in - the table's format
+        # byte and each row's off, len and zkb - which nasm leaves zero.
+        if os88parts.table_at(built) is not None:
+            part0 = os88parts.part_bytes(raw, 0)
+            if part0 == fresh:
+                built = part0
+            else:
+                built, fresh = _unfilled(built), _unfilled(fresh)
     except OSError as e:
         sys.exit("dispapps: cannot compare %s against the tree (%s) - run "
                  "`make`%s" % (o88, e, " && make smallapps" if defines else ""))
@@ -203,6 +211,19 @@ def _map(app, defines=()):
                     " && make smallapps" if defines else ""))
     _MAPS[key] = out
     return out
+
+
+def _unfilled(image):
+    """`image` with what os88pkg.py writes into its part table zeroed."""
+    at = os88parts.table_at(image)
+    if at is None:
+        return image
+    out = bytearray(image)
+    out[at + 9] = 0
+    for row in range(out[at + 8]):
+        base = at + 10 + 8 * row
+        out[base + 2:base + 8] = bytes(6)
+    return bytes(out)
 
 
 def skies_port(m, seg, mp, want):

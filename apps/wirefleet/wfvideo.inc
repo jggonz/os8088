@@ -263,8 +263,20 @@ wf_buildrow:
     add al, [wf_drawcol]
     mov bx, ax
     cmp byte [wf_drawboard], 1
-    jne .cache
+    jne .stamp
     add bx, 100
+.stamp:
+    xor al, al                  ; 114.11: the cell's stamp, keyed beside the
+    cmp byte [wf_drawboard], 2  ; tile - a sprite moving on or off a cell is
+    je .fx                      ; a change, and only those cells redraw
+    call wf_fxat
+.fx:
+    mov [wf_fxnow], al
+    push bx
+    xor bx, bx
+    mov bl, [wf_drawcol]
+    mov [wf_rowfx+bx], al
+    pop bx
 .cache:
     mov al, [wf_tile]
     cmp byte [wf_drawboard], 2
@@ -272,11 +284,17 @@ wf_buildrow:
     cmp byte [wf_fullpaint], 0
     jne .changed
     cmp al, [wf_cache+bx]
+    jne .changed
+    mov al, [wf_fxnow]
+    cmp al, [wf_fxcache+bx]
     je .copy
 .changed:
     cmp byte [wf_drawboard], 2
     je .mark
+    mov al, [wf_tile]
     mov [wf_cache+bx], al
+    mov al, [wf_fxnow]
+    mov [wf_fxcache+bx], al
 .mark:
     mov al, [wf_drawcol]
     cmp byte [wf_first], 255
@@ -324,12 +342,14 @@ wf_copytile:
     mov si, wf_tiles_color
     mov word [wf_hitand], wf_hitand_color
     mov word [wf_hitor], wf_hitor_color
+    mov word [wf_fxand], WF_FX_COLOR
     cmp byte [wf_infs], 0
     je .native
     mov bx, WF_TILE_MONO
     mov si, wf_tiles_cga
     mov word [wf_hitand], wf_hitand_cga
     mov word [wf_hitor], wf_hitor_cga
+    mov word [wf_fxand], WF_FX_CGA
     jmp .source
 .native:
     cmp byte [wf_monochrome], 0
@@ -338,7 +358,9 @@ wf_copytile:
     mov si, wf_tiles_mono
     mov word [wf_hitand], wf_hitand_mono
     mov word [wf_hitor], wf_hitor_mono
+    mov word [wf_fxand], WF_FX_MONO
 .source:
+    call wf_fxtables
     mul bx
     add ax, si
     mov [wf_source], ax
@@ -360,7 +382,7 @@ wf_copytile:
     mov cx, [wf_tstride]
     rep movsb
     cmp byte [wf_hitx], 0
-    je .mark
+    je .fx
     mov si, [wf_hitand]
     add si, bp
     mov bx, [wf_hitor]
@@ -376,6 +398,27 @@ wf_copytile:
     inc bx
     inc di
     loop .stamp
+.fx:
+    cmp byte [wf_fxstamp], 0    ; 114.11: the same stamp, out of the bank
+    je .mark
+    push es
+    mov es, [wf_fxseg]
+    mov si, [wf_fxand]
+    add si, bp
+    mov bx, [wf_fxor]
+    add bx, bp
+    mov di, [wf_rowdest]
+    mov cx, [wf_tstride]
+.fxbyte:
+    mov al, [di]
+    and al, [es:si]
+    or al, [es:bx]
+    mov [di], al
+    inc si
+    inc bx
+    inc di
+    loop .fxbyte
+    pop es
 .mark:
     test byte [wf_tile], 0x80
     jz .next
@@ -499,6 +542,10 @@ wf_copytile_p:
     add di, WF_PSTEP-3
     loop .plane
 .cursor:
+    cmp byte [wf_fxstamp], 0
+    je .border
+    call wf_fxplanar
+.border:
     test byte [wf_tile], 0x80
     jz .next
     mov ax, dx
@@ -548,6 +595,34 @@ wf_copytile_p:
     shl ax, 1
     cmp dx, ax
     jb .scan
+    ret
+; The cell's stamp (wf_rowfx) and its tables in the bank for this form:
+; [wf_fxand] arrives as the form's base and BX as its tile size, and the
+; AND table of stamp N is at base + (N-1)*2*size, its OR table size after.
+wf_fxtables:
+    push ax
+    push bx
+    push dx
+    xor bx, bx
+    mov bl, [wf_drawcol]
+    mov al, [wf_rowfx+bx]
+    mov [wf_fxstamp], al
+    pop dx
+    pop bx
+    or al, al
+    jz .out
+    push dx
+    dec al
+    xor ah, ah
+    shl ax, 1
+    mul bx
+    add [wf_fxand], ax
+    mov ax, [wf_fxand]
+    add ax, bx
+    mov [wf_fxor], ax
+    pop dx
+.out:
+    pop ax
     ret
 wf_curh: db 0x3f,0xff,0xfc      ; pixels 2..21, as the packed path draws
 wf_curv: db 0x40,0x00,0x02      ; pixels 1 and 22
@@ -625,6 +700,7 @@ wf_planarprobe:
     jc .no
     mov byte [wf_planar], 1
     call wf_planarinit
+    call wf_fxplanarinit        ; 114.11's stamps, spread once
 .no:
     pop di
     pop bx

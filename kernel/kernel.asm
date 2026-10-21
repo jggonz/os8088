@@ -2694,6 +2694,7 @@ apic_wm_minsize:
                                   ;         whole tree under it (SPEC.md 18.6).
                                   ;         The AL survives the N stub because
                                   ;         api_copyname banks AX
+apic_drv_call_at:                 ; (OSAPI_DRV_USE's DRVU_CALL, SPEC.md 117.3)
     OSAPI_SLOT drv_pkg_call_x     ; 0x038B - OSAPI_DRV_CALL WITH ES LEFT ALONE
                                   ;          (SPEC.md 20.11.2). The same
                                   ;          routine behind the same fence: the
@@ -3292,7 +3293,19 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
 %endif
     OSAPI_IEND
     OSAPI_RXCELL osapi_serial     ; 0x049F - desktop serial lease (SPEC.md 115)
-osapi_table_end:                  ; 0x04A5 today (0x049F before serial;
+    OSAPI_RCSLOT osapi_drv_use_x  ; 0x04A5 - THE DRIVERS PAGE'S TICK, AS A
+                                  ;          DOOR (SPEC.md 117.3). AH = 0 UP
+                                  ;          (AL = a DRVC_*): load and attach
+                                  ;          that class's driver with
+                                  ;          CTRL.DRV's own cdl_load, record
+                                  ;          nothing; AH = 1 DONE: the panel
+                                  ;          close's notifier, unless a
+                                  ;          Control Panel is open; AH = 2
+                                  ;          CALL: OSAPI_DRV_CALL_AT asked as
+                                  ;          the MACHINE (51.2.3). kern_small
+                                  ;          refuses
+osapi_table_end:                  ; 0x04AB today (0x04A5 before the drivers'
+                                  ; door; 0x049F before serial;
                                   ; 0x0499 before the wheel;
                                   ; 0x0493 before the ASSOC.DAT
                                   ; flush; 0x0487 before the HMA and
@@ -3319,8 +3332,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 106*6 + 6*3 + 6 + 12*5 + 4*6 + 8
-%error "os8088 API jump table must be exactly 0x0495 bytes: 43 SLOT (8), 11 XCELL (7), 106 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 107*6 + 6*3 + 6 + 12*5 + 4*6 + 8
+%error "os8088 API jump table must be exactly 0x049B bytes: 43 SLOT (8), 11 XCELL (7), 107 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
 %endif
 
 ; =============================================================================

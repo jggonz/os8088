@@ -42,6 +42,41 @@ def art():
             hull = tiles[offset + start:offset + start + length]
             assert any(A.packed(t, True) != A.packed(tiles[0], True) for t in hull), 'ship vanished in mono'
     print('wirefleetart: color/mono marks distinct; all five silhouettes and both orientations bounded')
+    effects()
+
+
+def effects():
+    """SPEC.md 114.11: the stamps, the song and the clips the build packs."""
+    import wirefleet_fx as F
+    import wirefleet_song as S
+    import wirefleet_sfx as X
+    for tool in ('wirefleet_fx.py', 'wirefleet_song.py'):
+        subprocess.run([sys.executable, str(ROOT / 'tools' / tool), '--check'],
+                       cwd=ROOT, check=True)
+    stamps = F.stamps()
+    assert len(stamps) == F.COUNT == 16
+    for form, size in ((F.packed, 288), (F.mono, 72), (F.cga, 72)):
+        pairs = [form(s) for s in stamps]
+        assert all(len(a) == len(o) == size for a, o in pairs)
+        assert len(set(pairs)) == 16, '%s: two stamps collapsed' % form.__name__
+        for a, o in pairs:
+            assert any(b != 0xff for b in a), '%s: an empty stamp' % form.__name__
+            assert all(x & y == x for x, y in zip(o, (~b & 0xff for b in a))), \
+                '%s: an OR bit outside its AND mask' % form.__name__
+    # The 1bpp and 2bpp halos: a stamp drawn over a ship's stipple keeps a
+    # black ring, so its mask is wider than what it lights.
+    for s in stamps:
+        a, o = F.mono(s)
+        assert sum(bin(~b & 0xff).count('1') for b in a) > sum(bin(b).count('1') for b in o)
+    data = open(artifact('WFLETFX.GFX'), 'rb').read()
+    assert len(data) == 16 * (576 + 144 + 144)
+    bank = X.bank()
+    assert bank[:4] == b'WFLS' and len(bank) == 16 + 3 * 4096
+    assert open(artifact('WFLET.SFX'), 'rb').read() == bank
+    _, rows = S.build()
+    assert rows and all(r[0] > 0 for r in rows)
+    print('wirefleetart: 16 effect stamps distinct and bounded in three forms; '
+          'song and clips current')
 
 
 def deployment():

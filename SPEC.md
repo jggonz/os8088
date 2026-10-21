@@ -197439,7 +197439,9 @@ UI-task file operations (§20.6 rule 7). No write on every retry or heartbeat.
 ### 114.4 Sound and validation
 
 Placement, ready, fire, miss, hit, sunk, link restoration and victory get
-finite nonblocking cues through the OS sound router (§34). The system's
+finite nonblocking cues through the OS sound router (§34); in battle the
+launch, splash and explosion of §114.11 take the place of fire, miss and hit,
+and a music track plays under them. The system's
 selected PC Speaker, AdLib or Sound Blaster route is respected; the game
 does not probe cards or program sound ports. Mute and close release only
 the instance's own grants. Repeated protocol messages do not repeat cues.
@@ -197587,6 +197589,8 @@ needed for a turn-based game.
 Cues are finite tone sequences, priority 40h, through `OSAPI_SND_TONE`:
 place 660; ready 660/880; fire 165/110; miss 440/220; hit 110/82; sunk
 220/165/110; connection 440/880; victory 784/988/1175; defeat 330/220/165 Hz.
+(§114.11 replaces fire, miss and hit in battle, and adds the music.) The
+bracket draws §114.11's stamps in its own 2bpp form and binds U as well.
 The sequencer advances on OS ticks and never waits. The system routes these
 to its PC Speaker, AdLib or Sound Blaster FM sink. Mute and fullscreen exit
 stop further notes; the current finite note expires within three OS ticks.
@@ -197712,6 +197716,119 @@ one-row `OSAPI_GFX_BLIT1` of two cells lit pixels ~219 columns past its own
 48-pixel width; at x 328 (`WF_MGX1`) the same moves leave none. The
 2-pixel move is the fix shipped here; why an unaligned `BLIT1` writes past
 its width is a kernel question left open (§5.4.2.5 says it must not).
+
+### 114.11 Missiles, impacts and music
+
+The plan is docs/plans/WIREFLEET-MUSIC-PLAN.md.
+
+**What a shot looks like.** In battle a shot is a missile, on both PCs. On
+the shooter's, a launch flash and then smoke mark one of its own afloat
+ship squares (the target's row, column J, when none is afloat); the missile
+crosses to the enemy board along a straight line in whole-cell steps,
+pointing the way it travels (east, north-east, south-east and their
+mirrors), a puff of smoke one cell behind it, and lands on the target. On
+the defender's PC the same flight starts at a random enemy-water square and
+lands on its own board. Between the boards the missile is not drawn: the
+path runs through two virtual columns of gap. The landing square shows
+an explosion in four frames on a hit or sunk, or a splash in four frames on
+a miss, and only then its mark.
+
+**The result is not known until the missile lands - with no protocol
+change.** While its missile flies, the shooter does not take a RESULT: the
+first valid RESULT for the pending shot is copied aside (its 64 decoded
+bytes) and taken when the missile lands; a repeat is ignored. The defender
+does the same with the SHOT: the first valid SHOT for the turn starts the
+incoming flight and is judged when it lands, and a repeat for that turn is
+ignored meanwhile. Both still count as addressed traffic for the 55-tick
+silence rule. Nothing in §114.6 changes: a shooter already repeats SHOT
+until it hears a RESULT and a defender already replays a cached one, so a
+peer that answers a second late is a case the protocol had. The text lines,
+the sunk reveal and the cues therefore change at the landing, because that
+is when the state does. Timeline, on OS ticks: two of launch flash, then
+the missile advances three cells every two ticks (a path is at most 22
+cells, so at most 17 ticks, 0.93 s), hovers on the target until the result
+is taken (at most 36 ticks, then it is taken away and the square waits),
+and the impact is four frames of three ticks. Load, New fleet and leaving
+battle cancel a flight and take any stashed frame at once.
+
+**Drawn as cell stamps through the board's own cache.** Every sprite is a
+24x24 STAMP drawn over the tile a cell already shows, `(pixel AND a) OR o`
+per byte - the hit X's mechanism (§114.10.2) generalised - so one table
+pair a form serves every face: packed 4bpp (VGA and EGA; the planar path
+spreads a stamp's rows on the fly rather than caching them), 1bpp
+(Hercules and windowed CGA) and 2bpp (the CGA bracket, §114.8). The cell
+cache keys on the tile AND the stamp, so a frame redraws only the cells
+whose stamp changed - launch, head and trail, at most four a tick - and
+never erases: a cell a sprite leaves is recomposed opaque with no stamp.
+There is no idle repaint (§114.2): when no effect is live nothing draws.
+The sixteen stamps are E/NE/SE/W/NW/SW missiles, a launch flash, smoke,
+four explosion frames and four splash frames, converted by
+`tools/wirefleet_fx.py` from `apps/wirefleet/art/fx-source.png`, whose
+exact prompt is `FX-PROMPT.txt` beside it (codex image generation; the
+build never generates).
+
+**The stamps and the samples are lazy parts** (§20.12) of `WIREFLET.O88`,
+because its image and bss were 60,416 bytes of their 64KB segment:
+
+| row | part | unpacked | fetched |
+|---|---|---:|---|
+| 0 | `WFLETFX.GFX` | 13,824 | at window open, kept until close |
+| 1 | `WFLET.SFX` | 12,304 | at launch on a Sound Blaster route; copied, dropped |
+
+The stamp bank is fetched only when `op_lazykb` says the heap holds it;
+otherwise shots are not animated and play exactly as before, with no toast.
+It is fetched at window open, from the disk the package just came off: it
+was first fetched at the first tick in battle, and on a 4.77 MHz XT that
+read held the UI task - the Ready cue, the link and the window - for over a
+second at the moment a captain pressed Ready (`wirefleetsystem` caught it).
+
+**Effects.** Three new cues - launch, explosion, splash - replace fire, hit
+and miss in battle. With the Sound Blaster tier (`OSAPI_SND_CAPS` has
+`SND_CAP_PCM_BG` and BL = 1) they are sampled: three 4,096-sample 8 kHz
+clips, CC0 (apps/wirefleet/sfx/CREDITS.md), copied into one 13KB page-safe
+claim (`OSAPI_MEM_CLAIM_DMA_HI`) as three external rings and played with
+`SND_OPENF_RING + SND_OPENF_EXT` (§34.5.3), 1942's shape (§101.6). On every
+other route they are finite tone sequences at priority 40h: a rising launch,
+a falling low rumble and a high scatter. A sunk, victory or defeat cue waits
+for the explosion to end.
+
+**Music.** "Ironclad", an original 21-second sea march in D minor
+(`tools/wirefleet_song.py` -> `wfsong.inc`), loops while the window is open.
+With FM (`SND_CAP_FM`) it is three voices on channels claimed by patch-load
+from 0..7 - channel 8 is the tone tier's, which is where the cues go - with
+quiet patches; with the tone route on the PC speaker it is the melody alone,
+self-expiring notes at priority 20h, below every cue. **It is silenced while
+a launch, an explosion or a splash plays**: every voice is keyed off when the
+effect starts and the track resumes at the row where it stopped, nine ticks
+after the effect ends; on the speaker it also yields to every other cue. M
+(Sound) silences everything; Music [U], on the Game menu, the track alone.
+Off, mute and close release the FM channels (verb 3); teardown releases
+whatever a forced close left.
+
+**A frame redraws its rows, not the boards.** `wf_fx_tick` marks the board
+rows the old and new sprites sit on and `wf_fx_draw` rescans only those
+(through the same cache); a full `wf_update` happens only when something
+else is dirty too. A whole-board rescan is **71 ms** on MartyPC's 4.77 MHz
+VGA XT before it draws anything, and an update that changes nothing 82 ms,
+so a flight drawn by updates showed 7 frames of 150 ms. On a colour window
+the colour stamps are also spread to planes once, into a 9KB claim of their
+own (`wf_fxplanarinit`; without it they are spread on the fly, which cost
+1.3 ms a scanline). Measured, a 17-cell flight then an explosion
+(`os8088_xt_vga` / `os8088_5150_herc`, guest cycles from `wf_fx_draw` to
+its return): flight frames **26-61 ms, median 54**, and impact frames 26-31
+ms on VGA; 13-37 ms and 14-18 ms on Hercules - about one tick a frame.
+
+**What it cost.** The image went from 39,703 to 44,170 bytes and the bss
+from 20,713 to 20,854: **65,024 of the segment's 65,536**, so the next
+feature here is a part or a module, not more image. The file is 26,553 ->
+47,943 bytes (the stamps pack 13,824 -> 5,310, the clips 12,304 -> 11,591).
+At run time the stamp bank is a 14KB claim from window open
+(plus the 9KB planar copy on a colour window), and the clips a 13KB DMA
+claim on a Sound Blaster route only. On disk:
+`games360.img` 269 -> 290 of 354 clusters, `apps720.img` 688 -> 709 of
+713, and WireFleet is **off `apps360.img`** - that curated disk was 354 of
+354 (§24.6.1's rule, dated 2026-10-20 in the Makefile); `games360.img`
+carries it with every other game.
 
 ## 115. Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`)
 
@@ -200524,6 +200641,366 @@ saved progress file is verified from the host by walking the FAT12 directory
 entry to its cluster, not by grepping the image — the first grep finds the
 package's own string literals. Each `vm/*/86box.cfg` is a copy of one that has
 booted, with only the B: image and the uuid changed and nothing else.
+
+## 117. INSTALL — the setup wizard (`apps/install/`)
+
+`INSTALL.O88`, in the **root of every kern_big system disk** (all four
+geometries, the emu disk and the live media, §117.6), label prefix `in_`. It
+puts os8088 on a hard disk, or upgrades the copy already there, by walking the
+user through it a page at a time: switch the hard-disk driver on, find the
+drives, pick a partition, say whether its files are kept, confirm, copy the
+system disk, copy the apps disk, restart.
+
+**IT HAS NO INSTALL ENGINE OF ITS OWN, and that is the design rather than a
+saving.** Every step is the code the Control Panel already runs for the same
+step, reached through two doors that exist for this package:
+
+| the wizard's step | what runs | the Control Panel's own route to it |
+|---|---|---|
+| switch the driver on | `cdl_load` in `CTRL.DRV` (§51.3), through `OSAPI_DRV_USE` (§117.3) | Drivers page, tick *Hard drives* |
+| find the drives | `HDD.DRV`'s probe at attach and its device table (§52.1), read through `HDI_DEVS` | Hard Drive page's drive rows |
+| what each partition is | `hd_iw_scan`/`hd_iw_slot` in `HDDTOOL.DRV` (§52.10.4.2), read through `HDI_SLOTS` — the State column's own words | the Install window's four rows |
+| the install itself | `hd_inst_step` and everything under it (§52.10.4–52.10.17), through `HDI_GO` and `HDI_APPS` | Install, then Install again to confirm, then Copy Apps |
+| restart | `OSAPI_REBOOT` with AL = 1, the Install window's own (§52.10.6.1) | Restart |
+
+So a fix to the installer is a fix to both faces, an install made from either
+is the same bytes on the disk, and nothing in §52.10's long list of closed
+defects can come back through a second copy of the walk. WEAVE-SPEC §1.2's
+rule — *what two programs share they share as source, never as a copy* — is
+met here by not even sharing the source: there is one image, and the wizard is
+a second caller of it.
+
+This section is the contract for the waves in `docs/plans/INSTALL-PLAN.md`;
+unchecked stories there are not yet shipped behaviour. The build diary is
+`docs/HOW-INSTALL-WAS-BUILT.md`.
+
+### 117.1 The pages
+
+One window, one page at a time, `Back` / `Next` / `Cancel` along the bottom.
+The page says what is about to happen in a sentence before it happens, and
+every greyed choice says why (§47 rule 5).
+
+| page | it says | it does on `Next` |
+|---|---|---|
+| **Welcome** | what an install is, that it needs the system disk now and the apps disk later, that it takes minutes on an XT; on a machine booted from its hard disk (`OSAPI_VOL_SYS`), that this is an UPGRADE and the new system disk goes in a floppy drive | the driver and the drives (below) |
+| **Step 1: the hard disk** | the driver's state — *on*, *switched on now*, or why it would not start (the `DRVE_*` in words, §117.3) — then every device `HDI_DEVS` reports as a radio row: its number, its size and how the machine reaches it (`BIOS drive 80h`, `IDE, BIOS drive 81h`, `IDE, unit 0`); a drive whose geometry is unknown is greyed and the hint names the Control Panel | `HDI_SLOTS` for the pick, and the `KERNEL.SYS` probe (§117.5) |
+| **Step 2: where to put it** | the four slots as radio rows — size and `HDI_SLOTS`' State text, the Install window's words exactly — greyed unless an install may take them; a hint for the pick: *os8088 is on it already: Upgrade it*, *It has files: next, keep or erase them*, *Free space: INSTALL makes a partition*, *Not formatted*, *That partition cannot be used* | — |
+| **Step 3: keep or erase** | two radio choices, *Keep them, and upgrade os8088* and *Erase it and install fresh*, two lines on what each does, and the reason when one is greyed (§117.5) | — |
+| **Step 4: ready to install** | the drive, the slot, its size and letter, whether its files are kept or ERASED; `Next` reads **Install** | the copying page, then `HDI_GO` |
+| **Installing** | drawn before the call that freezes the machine, then written WHILE it runs: a framed log of nine lines that scrolls, one line per thing the engine does (§117.4.1) — the copy buffer it took, the source disk, the format or the keep, every folder made and every file copied with its size, kept and left-alone files by name, the boot sector, the partition table, the apps disk it found, `ASSOC.DAT`, the totals. All three buttons are greyed while it runs; when the verb returns the last line says how it ended, the heading says *click Next*, and `Next` is live — so the end of the log stays on screen until the user has read it | the page the verb's answer names: Apps disk, Done, or Stopped |
+| **Nearly done: the apps disk** | the system part is on and the disk boots (§52.10.10); take the system disk out of A:, put the APPS disk in, `Continue` — or `Skip` | `HDI_APPS`; *Skip* sends `HDI_QUIT` |
+| **os8088 is installed** | take the floppy out; `Next` reads **Restart** | `OSAPI_REBOOT` AL = 1 |
+| **The install stopped** | the engine's own caption — the words the Install window would have shown (`No system disk found - nothing done`, the name of the file a copy stopped on, …) — and whether the disk was made bootable (a system-phase stop) or the system part is on and only programs are missing (an apps-phase stop) | `Back` returns to Step 2, rescanned |
+
+`HDI_GO` skips the Apps disk page by itself when the apps disk is already in
+the machine (§52.10.5) or mounted as an image (§52.10.17): the answer is then
+`HDG_DONE` and the wizard goes straight to Done.
+
+**The copy freezes the machine, as it does from the Control Panel** (§52.10.4:
+a file operation holds the interface by design). The page that starts it is
+drawn first and says so — *Copying the system disk. This takes several minutes;
+the bar below shows the progress* — and the progress is §12.8's widget, which
+the engine steps from inside the transfer loop. **The log is the rest of what
+is happening**, and it is drawn from inside the same call: the engine hands
+each line to the wizard as it starts the step (§117.4.1), so a slow step is
+named while it is slow rather than after it.
+
+**Cancel** is honest about the stage: before Confirm it closes and nothing has
+been touched; on the Apps disk page it is *Skip* (the system part has
+committed and is not undone); on Done it closes without restarting.
+
+### 117.2 Drawing
+
+The window is **344 × 136 content** (346 × 155 with its frame), which fits
+CGA's 640 × 157 desktop band between the menu bar and the dock, and sits on the 8-pixel grid (`OSAPI_WM_SNAP`,
+§11.94) so every `OSAPI_FONT_RUN` takes §6.1's single-store path on the mono
+adapters. Black on white, which says the same thing on all three adapters
+(§39.4); greyed rows and choices are `[gfx_dis]` text, which on a 1bpp
+adapter is the checkerboard §47 expects to be looked at there.
+
+- **A page change repaints the content once**; a selection change repaints the
+  two rows that changed and the buttons whose greying flipped, and nothing
+  else (PERFORMANCE.md rule 1).
+- **Every text line is one opaque run padded to the band** (§6.6) — no fill
+  and then letter. The only fill is the one under a page change.
+- **The buttons are `os88ui.inc`'s standard control** (§20.5.1.3), one
+  `OS88UI_BTNREC` of three, the gesture the library's; the radio choices are
+  `os88ui_glyph` with their labels as runs.
+- **Keys**: Enter is the default button, Escape is Cancel, the arrows move the
+  selection on the Drive and Partition pages and the choice on Keep or erase.
+
+### 117.3 `OSAPI_DRV_USE` (cell `0x04A5`) — the Drivers page's tick, as a door
+
+`in AH = DRVU_UP (0), DRVU_DONE (1) or DRVU_CALL (2)`, the rest per verb. UI
+task, from a callback (the gfx lock HELD); a worker may not (§20.6 rule 7: UP
+reads two files, and CALL is for verbs that do).
+
+- **`DRVU_UP`** brings that class's driver up **exactly as the Drivers page's
+  tick does**: the first `drv_tab` row of the class, loaded and attached by
+  `cdl_load` — `CTRL.DRV`'s own expansion of `DRV_ATTACH` (§51.3), the code
+  the tick runs — after which the driver's `DRVV_READY` mounts what it finds
+  (§52.6.1). **out** CF = 0, the driver is up (or already was); CF = 1 and
+  AL = the `DRVE_*` the row banked (1 no system disk, 2 not on it, 3 not a
+  driver, 4 no memory, 5 no hardware, 6 busy, 7 attached twice, 8 nothing to
+  mount), or AL = 0 for no driver layer at all (kern_small).
+- **`DRVU_DONE`** says *I have finished with your page's tools*, and it IS
+  the Control Panel's close — `drv_cp_closed`, the notifier the panel's
+  teardown calls (§31.9.1), so every loaded driver hears `DSV_CPCLOSE` as it
+  would at a close. For `HDD.DRV` that is `hd_tool_reap`, which hands
+  `HDDTOOL.DRV`'s ~17KB back (§52.11.7). AL is not read. **Skipped while a
+  Control Panel is open**: its own close will send it, and until then *the
+  panel has closed* would be untrue. With none open it is true of every
+  driver, which is why there is no per-class form. out CF = 0.
+
+- **`DRVU_CALL`** is `OSAPI_DRV_CALL_AT` — BH = the class, BL = the driver's
+  verb, ES = the caller's segment, CX/DX/SI/DI the verb's — **asked as the
+  machine**: §51.2.3's bracket, the instance stamp banked, cleared for the
+  call and put back. out: whatever the driver answers, CF and AX. AX is not
+  passed in.
+
+  **Why a verb and not a fix to the door.** `drv_call` and `drv_cp_call`
+  have cleared the stamp since §51.2.3 — *a driver asks as the KERNEL* — and
+  the package door never needed to, because no door verb resolved a name.
+  `HDV_TOOL` runs the installer, whose whole job is a file walk: through the
+  plain door every `KERNEL.SYS` it wrote resolved in **INSTALL's own folder**
+  — A:'s root, on the floppy being copied — and the install stopped on the
+  first file, after the format, with C: freshly erased. That was the first
+  wizard install, in QEMU. Fixing the door itself would change what every
+  other door driver's verbs are answered as: SOUND.DRV's FM verbs, the
+  sockets, EMS and the RAM disk all run for a caller, and a sound grant or an
+  XMS claim attributed to "the kernel" instead of the package is a second
+  defect. So the caller who wants the machine's identity asks for it, and
+  the door is unchanged. **Only the task that set the stamp clears it**:
+  `snd_inst` records the stamping task beside the instance, and a worker's
+  `inst_caller` already answers its own instance — clearing a callback's
+  stamp from under a worker that pre-empted it would be `snd_disp_set`'s
+  race.
+
+**It loads; it does not record.** `DRVR_WANT` and `DRVR_ANS` are left as they
+were and `SYSTEM.CFG` is not staged: a session load, which the Drivers page's
+box shows as ticked because the box shows what is LOADED (§51.4), and which the
+next boot decides about as it always did (§51.3.2). The user did not answer the
+Drivers page; a door that wrote an answer for them would be the kernel
+guessing, which §51.3 refuses.
+
+**Why a cell and not a package trick.** The attach half of a driver load is
+not resident (kernel size pass 13): it is expanded into the images that load
+drivers — the blob, `CTRL.DRV`, `HIBER.DRV` — and nothing a package can reach
+held it. The cell is **6 bytes** of table (a rare cell, §20.3), its body
+`osapi_drv_use_x` is `.cold` and is the `cpf_*` idiom (§2.8): `CTRL.DRV` made
+resident, one far call into its new entry `CPE_DRVUP`, and `CTRL.DRV` dropped
+again when no Control Panel is open — the same three lines as `cpf_shutdown`.
+`drv_cp_closed_x` became a four-byte far entry over a near body for DONE to
+call, because `.cold` may name no segment, its own included (§2.6 rule 2).
+What it costs is measured in §117.9.
+
+### 117.4 `HDV_TOOL` — `HDD.DRV`'s package door, one verb wider
+
+`HDD.DRV`'s door reached two verbs and no sector (§52.1.4). It reaches a third
+now, and still no sector: **`HDV_TOOL`** (3) forwards to `HDDTOOL.DRV` (§52.11)
+— loaded off the system volume if it is not already in — as one new tool verb,
+`HDT_PKG` (10), with **CL = an `HDI_*`** and ES = the calling package's
+segment, which is where every buffer below is. `HD_ABI_VER` is **7** for it:
+an older tool beside this resident is refused, as every pairing across a
+version is (§52.11, `hddabi.inc`).
+
+**Reach it through `OSAPI_DRV_USE`'s `DRVU_CALL`** (§117.3), never the plain
+door: the install walks the machine's files and must resolve them where the
+engine stands. That is also why the sub-verb is in **CL** and not AH — AH is
+the cell's own.
+
+**The resident's whole addition is two instructions and a tail call into
+`hd_cp_thunk`**, the page callbacks' forwarder, which already loads the tool
+and banks the registers across the load. `HDD.DRV` was full to its 4KB rung
+with four bytes spare, and a fifth kilobyte would be a cost on every machine
+with a hard disk for a door used once in its life — so the bytes were found in
+the door itself (`hd_xa_arm` keeps the buffer's segment where it kept its
+linear address, and the 386 half derives it), and the driver is **still
+4,096 bytes and a 4KB claim** (§117.9).
+
+**CF = 1 means the tool could not be reached** — no system disk to read it
+from, no memory for it, a tool of another vintage — or the verb is not one it
+knows. **CF = 0 means the verb ran**, and its answer is in AL. Every verb
+preserves every register but AX.
+
+| `CL` | verb | in | out |
+|---|---|---|---|
+| 0 | `HDI_DEVS` | ES:DI = `HD_MAXDEV` (4) × `HDIV_SIZE` | AL = devices; one `HDIV_*` record each |
+| 1 | `HDI_SLOTS` | DL = a device; ES:DI = 4 × `HDIS_SIZE` | AL = the slot the Install window would select (0..3), `0FFh` none would do, `0FEh` no such device or its geometry is unknown, `0FDh` the Install window is open; one `HDIS_*` record a slot |
+| 2 | `HDI_GO` | DL = device, DH = slot, CH = 1 erase / 0 keep; ES:DI = an `HDIB_*` block (`HDIB_SIZE`, 91 bytes) | AL = an `HDG_*` stage, and the engine's caption at `HDIB_CAP` |
+| 3 | `HDI_APPS` | ES:DI = an `HDIB_*` block | as `HDI_GO` |
+| 4 | `HDI_QUIT` | — | abandons a run waiting on its apps disk; AL = 0 |
+
+`HDIV_*`, a device: `HDIV_KIND` (+0, 1 = int 13h, 2 = the IDE task file),
+`HDIV_GEOM` (+1, 1 = its geometry is known and an install can use it),
+`HDIV_UNIT` (+2, the int 13h drive or the IDE unit), `HDIV_BIOS` (+3, the
+int 13h drive the ROM knows it as — an IDE row the BIOS also knows included,
+§52.1.1 — or 0),
+`HDIV_SECS` (+4, dd, cylinders × heads × sectors). `HDIV_SIZE` = 8.
+
+`HDIS_*`, a slot: `HDIS_STATE` (+0, `HDS_OK` 0 / `HDS_SMALL` 1 / `HDS_ALIEN` 2
+/ `HDS_NONE` 3 / `HDS_LIVE` 4 — `HIS_*`, §52.10.4.1), `HDIS_VOL` (+1, 1 = it
+holds a FAT volume an install may keep, §52.10.15), `HDIS_LET` (+2, the drive
+letter it is mounted as, `'C'`…, or 0), `HDIS_TYPE` (+3, the partition table's
+type byte), `HDIS_SECS` (+4, dd, its length — or for a free slot the extent an
+install would make), `HDIS_TEXT` (+8, 26 bytes, the State column NUL-ended:
+`C: FAT16`, `Unpartitioned`, `FAT16, Too Small`, `Linux`…). `HDIS_SIZE` = 34.
+
+`HDG_*`, the stage an install verb leaves the engine in, which is `HII_*`'s
+numbering: `HDG_FAIL` (0, it stopped and the caption says where — whether the
+disk still boots is in the caption too: the system phase commits at its end,
+§52.10.10), `HDG_APPS` (2, the system part is on and bootable; insert the apps
+disk and send `HDI_APPS`), `HDG_DONE` (3).
+
+**`HDI_GO` is the Install window's two clicks in one.** It rescans the device
+exactly as opening that window does (§52.10.4.3 — the slot is the caller's and
+the table is fresh), refuses with `HDG_FAIL` and the window's own greyed-button
+caption whatever `hd_iact_ok` would grey (§47 rule 2: one predicate), forces
+*erase* over a slot with nothing to keep as the Erase box's greying does
+(§52.10.15), and then runs `hd_inst_step` from `HII_ARMED`: the confirm is the
+wizard's Confirm page, not a second click.
+
+**One engine, two faces, one run at a time.** While the Control Panel's
+Install window is on screen the `HDI_*` install verbs refuse (`HDG_FAIL`,
+*The Control Panel's installer is open*), and opening that window resets the
+stage as it always has. **A run waiting on its apps disk pins the tool**:
+`HDT_BUSY` answers busy at `HII_SYSDONE`, so neither a Control Panel close nor
+`DRVU_DONE` can free the image under a run that still holds `ASSOC.DAT`'s
+writer (§54.7.6.4); `HDI_QUIT`, or the Install window being closed, puts the
+stage back to idle.
+
+#### 117.4.1 The log — `HDIB_LOG`
+
+The two install verbs take a block rather than a bare caption buffer:
+`HDIB_CAP` (+0, `HDI_CAPSZ` = 48, the caption out, exactly as before),
+`HDIB_LOG` (+48, dw, the near offset in the caller's segment of a **log
+proc**, or 0 for none) and `HDIB_LINE` (+50, `HDI_LINESZ` = 41, where each
+line is put). `HDIB_SIZE` = 91.
+
+**With a proc, the engine calls it once per line, from inside the verb.**
+The call is a package callback in every respect (§20.2): far to the caller's
+segment at `PKG_DISP` with BP = the proc, **DS = the caller's segment, ES =
+`KERNEL_SEG`**, SI = the line (`HDIB_LINE`, NUL-ended, at most 40
+characters), the gfx lock held as the verb's caller held it. The proc may
+clobber every register but SS:SP and may DRAW — that is what it is for —
+and **may not touch a file, a volume or the tool**: the engine is between
+two halves of a transfer, with a batch open (§18.9.3), a volume banked
+(§51.5.2) and a write sequence mid-file. Its stack is the engine's, at the
+engine's deepest, so it does one line's work and returns.
+
+**The lines are the engine's own steps, in its order**, each written as the
+step starts: `Copy buffer: 64 KB`; `System disk: drive A:`; `Formatting the
+partition` and `Mounted as C:`, or `Keeping the files on C:`; a folder as
+`NAME\`, two spaces in per level of the walk; a file as its name and its
+size in KB (rounded up) in a column — `kept` there for a kept setting
+(§52.10.15) and `left alone` for a system file the apps phase does not copy
+(§52.10.12); `Writing the boot sector`; `Writing the partition table`;
+`The disk starts os8088 now`; `Apps disk: drive B:`, or `No apps disk in a
+drive`; `Writing ASSOC.DAT`; `Copied 40 files, 512 KB`. A stop is NOT a
+line of the engine's: the verb returns, and the caption is the wizard's to
+add, which it does (`Stopped: <caption>`).
+
+**Without a proc nothing changes**, which is the Control Panel's path: every
+log site is one compare of `hd_ilogp` and a branch, and `hd_pv_out` clears
+the proc at the end of each verb, so a run from the Install window can never
+reach a package's code. The hook is live only between a verb's entry and its
+answer.
+
+**What it costs the copy on an XT**: a line is one opaque 40-cell run (~36 ms)
+and, once the box is full, one `OSAPI_GFX_SCROLL` of the box's 90 rows — so
+about 50 ms a file against the file's own two or more `int 13h` calls
+(~400 ms each, PERFORMANCE.md Part 2). A scroll that is refused (the window
+partly covered) repaints the nine lines instead.
+
+### 117.5 What the wizard decides by itself
+
+The *smart* in the brief is a short list of decisions it makes so the user
+does not have to, each a fact it has read rather than a guess (§47 rule 3):
+
+- **Upgrade or install.** `OSAPI_VOL_SYS` says which volume the machine booted
+  from. A hard-disk boot makes the Welcome page an upgrade page, and the
+  Partition page opens on the booted-from slot (`HDS_LIVE`), whose only
+  install is a keep (§52.10.15).
+- **Where os8088 already is.** For every slot with a letter, the wizard looks
+  for `KERNEL.SYS` in that volume's root: `OSAPI_FILE_GOTO_QM` there — the
+  quiet goto that moves the INSTANCE too, because a plain `GOTO_Q` is undone
+  by the very next file cell (§19.2.1) and the probe would read INSTALL's own
+  floppy — then a size probe (`OSAPI_FILE_READ` with no room answers
+  `FERR_BIG` off the directory entry, no data I/O), and `GOTO_QM` back to the
+  folder banked first. Such a slot reads *os8088 is
+  installed here*, is the default selection over the engine's, and defaults to
+  **Upgrade: keep the files on it**.
+- **Keep or erase, by the slot.** `HDIS_VOL` = 0 (unpartitioned, not
+  formatted): *Erase* is the only install and *Upgrade* is greyed — *nothing on
+  it to keep*. `HDS_LIVE`: *Erase* is greyed — *you started the machine from
+  it; start from the floppy to erase it* (§52.10.4.1). Any other volume:
+  *Upgrade* if os8088 is there, else *Erase* is offered and *keep* is the
+  default, because §52.10.15 makes keeping the default over any volume and the
+  wizard does not overrule the engine about a user's files.
+- **The drive.** One usable drive is selected and the Drive page says so in a
+  sentence; it is shown rather than skipped, because *which disk is about to be
+  written* is the one fact a user must see before Confirm.
+- **The default slot.** The engine's own (`HDI_SLOTS`' AL, the first `HDS_OK`),
+  unless a slot carries os8088, which wins.
+
+What it does **not** decide is the geometry of a drive the probe could not
+size, or the layout of a disk that needs repartitioning by hand: those are the
+Hard Drive page's (§52.2, §52.4), and the Drive page names it.
+
+### 117.6 Ships on
+
+The **root** of `os8088.img`, `os8088-720.img`, `os8088-120.img` and
+`os8088-360.img` (kern_big), the emu disk (§9.11.7) and the live media (§80) —
+`$(SYSINST)` in the Makefile, beside `$(DRIVERS)`. The root because it is the
+first thing a person looking at a new system disk should see, and because the
+disk the install copies FROM is the disk it is on: an install copies the root
+too, so an installed machine carries `C:\INSTALL.O88`, which is how the next
+release's upgrade is found again.
+
+**Not on `kern_small`'s disks** (§24.5's requirement test): kern_small has no
+driver layer (§51.0), so there is no `HDD.DRV` to switch on and nothing for the
+wizard to refuse on but its first page. `OSAPI_DRV_USE` exists on both kernels
+(§20.8 rule 4) and refuses there.
+
+### 117.7 Memory
+
+The package's own region (§117.9), plus — while it is running — `CTRL.DRV`
+for the length of one `DRVU_UP` call, `HDD.DRV`'s 4KB if the wizard is what
+brought it up, and `HDDTOOL.DRV`'s 18KB from the first `HDI_*` verb until
+`DRVU_DONE` at Cancel or close. The install's copy buffer is the engine's
+ladder (§52.10.11), claimed and freed inside each install verb.
+
+### 117.8 Tests
+
+`tests/install.py` (soak, MartyPC `os8088_xt_hdd`): boot the 360KB system disk
+with the apps disk in B:, launch `A:\INSTALL.O88`, walk every page by its own
+buttons, erase-install the XT-IDE disk's DOS partition, read the volume back on
+the host with `tests/instdeep.py`'s reader (the system and apps trees arrived,
+the VBR and MBR committed), then boot C: and run the wizard again as an
+upgrade — Upgrade preselected, a planted user file kept. `tests/unit/
+t_install.py` (fast) holds the package to the contract on the host: on the four
+kern_big system disks' roots and on no kern_small disk; `HD_ABI_VER` agreeing
+across `hddabi.inc` and both images; the `HDI_*`/`HDIS_*`/`HDG_*` numbers
+agreeing with `HII_*`/`HIS_*`; `HDD.DRV` still inside 4,096 bytes.
+
+### 117.9 What it cost
+
+Measured against `main` at `d2d88cd3`, both trees built with `make`:
+
+| | before | after | |
+|---|---:|---:|---|
+| kern_big `.text` / `.bss` / `.cold` | | +6 / +4 / +94 | **104 bytes, no rung crossed** (image 437 left, cold 251); `KERN_SIZE` unchanged at 97,792 |
+| kern_small `.text` | | +6 | the cell; its body is the refusing stub |
+| `CTRL.DRV` | 13,970 | 14,026 | +56, `CPE_DRVUP`; in memory only for one `DRVU_UP` |
+| `HDD.DRV` image | 4,096 | 4,096 | the door's forwarder paid for in `hdxms.inc`; the file is 3,614 → 3,610 |
+| `HDDTOOL.DRV` image | 16,499 | 17,810 | +1,311: `ipkg.inc`'s verbs +639, then the log (§117.4.1) +672 - which takes `HDTOOL_KB` from 17 to **18**, a KB more heap while the tool is loaded and only then (the Control Panel's Hard Drive page, or INSTALL). The packed file is 13,180 → 13,772 |
+| `INSTALL.O88` | — | 8,027 + 1,060 bss | 6,164 bytes packed on the disk; the log is +385 of image and +428 of bss (nine 42-byte rows, the block's line) |
+| 360KB system disk | 633 / 706 | 648 / 706 | clusters in use; 58 spare |
+
+The resident bytes are the cell, `osapi_drv_use_x` and `drv_cp_closed`'s far
+entry: the load itself is `CTRL.DRV`'s (§2.8) and the install is
+`HDDTOOL.DRV`'s, both of which come off the disk when they are used and go
+back when they are done.
 
 ## 118. SYSCHECK — System Check, the installed system's health (`apps/syscheck/`)
 

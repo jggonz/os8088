@@ -114,9 +114,11 @@ wf_fs_main:
     cmp byte [wf_fsquit], 0
     jne .leave
     cmp byte [wf_dirty], 0
-    je .wait
+    je .effects
     mov byte [wf_dirty], 0
     call wf_fs_draw
+.effects:
+    call wf_fx_draw             ; 114.11: the rows a sprite moved on, if any
 .wait:
     mov al, FSXW_TICK
     call OSAPI_FSX_WAIT
@@ -557,6 +559,8 @@ wf_fs_key:
     je .load
     cmp al, 'm'
     je .mute
+    cmp al, 'u'
+    je .music
     cmp al, 't'
     je .beginchat
     cmp al, 'n'
@@ -584,6 +588,9 @@ wf_fs_key:
     cmp byte [wf_muted], 0
     je .dirty
     call wf_soundquiet
+    jmp .dirty
+.music:
+    call wf_musictoggle
     jmp .dirty
 .beginchat:
     mov byte [wf_chatmode], 1

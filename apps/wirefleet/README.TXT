@@ -14,7 +14,10 @@ R rotates. Right-click a placed ship to remove it. A auto-places all five;
 C clears the fleet. Y readies and locks it; N begins a new fleet.
 After both captains are Ready, the lower match identity takes the first
 turn. Select a square in enemy waters and click Fire, or use arrows and
-Enter. Misses are dots, hits are crosses, and sunken ships are marked.
+Enter. A missile launches from one of your ships and crosses to the
+square; it explodes on a hit and splashes on a miss, on both PCs, and
+the result shows when it lands. Misses are dots, hits are crosses, and
+sunken ships are marked.
 The defender judges each shot; unhit ship positions stay on that PC.
 
 T opens chat. Enter sends up to 32 characters; Escape cancels. If the
@@ -30,8 +33,11 @@ are preserved. Files contain your private fleet; do not give one to the
 opponent. N starts a fresh match. Before the first shot the other PC
 follows by itself; after a finished match both captains press N.
 
-H opens controls/About. M mutes or enables the finite sound effects.
-The system Sound setting selects PC Speaker, AdLib or Sound Blaster.
+H opens controls/About. M mutes or enables every sound. U turns the
+music off or on by itself; it goes quiet while a launch, an explosion
+or a splash plays. The system Sound setting selects PC Speaker, AdLib
+or Sound Blaster: AdLib plays the music in three voices, a Sound
+Blaster also plays sampled effects, and the PC Speaker plays the tune.
 F or Alt+Enter toggles fullscreen. CGA fullscreen uses cyan, magenta,
 white and black; the CGA desktop and Hercules use monochrome artwork.
 Escape returns from fullscreen. S/O return to the desktop file chooser.
@@ -39,3 +45,4 @@ Escape returns from fullscreen. S/O return to the desktop file chooser.
 The host builds four standalone application disks with make wirefleetdisk.
 The design contract is SPEC.md section 114; the story list and build diary
 are docs/plans/WIREFLEET-PLAN.md and docs/HOW-WIREFLEET-WAS-BUILT.md.
+Sampled effects: CC0, by Kenney (www.kenney.nl) and Thimras.

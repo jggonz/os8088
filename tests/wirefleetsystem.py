@@ -238,6 +238,12 @@ def sounds():
             def val(name,n=1):return int.from_bytes(m.readseg(seg,sy['wf_'+name],n),'little')
             m.key('KeyA')
             ui.settle()
+            # SPEC.md 114.11's music calls the tone router too; the cue checks
+            # below want the router to themselves, so U silences the track
+            # first and the music is checked on its own after them.
+            m.key('KeyU')
+            ui.settle()
+            assert val('musicoff')==1
             M.pace(m,.5)
             m.pause()
             returned=(seg<<4)+sy['wf_soundnote.out']
@@ -271,16 +277,29 @@ def sounds():
             assert m.read(m.sym('snd_town_act'),1)==b'\0','sound route retained tone'
             caps=int.from_bytes(m.read(m.sym('drv_svc'),2),'little')
             assert bool(caps)==(backend!='speaker'),(backend,caps)
+            # The track: three FM voices with a card, the melody on the
+            # speaker, and it rows on by itself; mute stops it outright.
+            m.key('KeyU')
+            ui.settle()
+            M.pace(m,1.5)
+            want=2 if backend=='speaker' else 1
+            assert val('musicoff')==0 and val('bgmmode')==want,(backend,val('bgmmode'))
+            first=val('bgmptr',2)
+            M.pace(m,1.0)
+            assert val('bgmptr',2)!=first,'the music did not advance'
             m.key('KeyM')
             ui.settle()
             assert val('muted')==1
+            M.pace(m,.3)
+            assert val('bgmmode')==0 and val('bgmsound')==0,'mute left the music on'
             m.key('KeyN')
             m.key('KeyA')
             ui.settle()
             assert val('soundactive')==0,'muted placement sounded'
             ui.close(w)
             assert m.read(m.sym('snd_town_act'),1)==b'\0'
-            print('wirefleetsystem:',backend,'Ready tones',notes,'finite, mute and close')
+            print('wirefleetsystem:',backend,'Ready tones',notes,'finite; music',
+                  ('melody','FM')[want-1],'rows on; mute and close')
 
 
 if __name__=='__main__':

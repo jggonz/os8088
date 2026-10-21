@@ -957,10 +957,12 @@ CPE_ONDRAG  equ CPE_B + 5       ; (SPEC.md 13.8.4) - and the drag and the KEY
 CPE_ONKEY   equ CPE_B + 6       ; (SPEC.md 31.9.2) are kern_big's alone, so
 %ifdef DOCK_OPT                 ; CP_NENT differs between the builds. Which is
 CPE_DOCK_GEOM equ CPE_B + 7     ; safe because MOD_H_NENT is IN the header and
-CP_NENT     equ CPE_B + 9       ; mod_check compares it against the file it
-%else                           ; just read, so a CTRL.DRV with the wrong count
-CP_NENT     equ CPE_B + 8       ; is refused rather than dispatched into - and
-%endif                          ; MOD_H_STAMP rejects one from another build
+CPE_DRVUP   equ CPE_B + 8       ; mod_check compares it against the file it
+CP_NENT     equ CPE_B + 10      ; just read, so a CTRL.DRV with the wrong count
+%else                           ; is refused rather than dispatched into - and
+CPE_DRVUP   equ CPE_B + 7       ; MOD_H_STAMP rejects one from another build.
+CP_NENT     equ CPE_B + 9       ; CPE_DRVUP is OSAPI_DRV_USE's (SPEC.md 117.3),
+%endif                          ; kern_big's alone: kern_small has no drivers
 %else
 %ifdef DOCK_OPT
 CPE_DOCK_GEOM equ CPE_B + 5
@@ -1004,6 +1006,9 @@ modc_hdr:
 %ifdef DOCK_OPT
     dw modc_e_dock_geom         ; CPE_DOCK_GEOM: Dock and Display settings
 %endif
+%ifdef KERN_BIG
+    dw modc_e_drvup             ; CPE_DRVUP: OSAPI_DRV_USE's load (117.3)
+%endif
     dw modc_e_shutdown          ; CPE_SHUTDOWN: confirmation and terminal splash
 section .modu                   ; ...and the PANEL from here on: the stubs below
                                 ; name the UI's bodies, so they are UI too.
@@ -1043,6 +1048,48 @@ kretf_bp:         pop bp
                   pop ax
                   retf
 %ifdef KERN_BIG
+
+; -----------------------------------------------------------------------------
+; modc_e_drvup - CPE_DRVUP: OSAPI_DRV_USE's UP (SPEC.md 117.3), entered FAR
+; in:  AL = a DRVC_* class
+; out: CF = 0 that class's first drv_tab row is loaded (or was); CF = 1 and
+;      AX = the DRVE_* its row banked (DRVE_NOENT: no row of that class)
+; clobbers: AX
+;
+; cp_drv_click's .try with the bookkeeping taken out: the same row walk the
+; page's bands index, the same cdl_load - and NOT the want, the answer or
+; cp_wdset, because nobody answered this page (osapi_drv_use_x's header).
+; -----------------------------------------------------------------------------
+modc_e_drvup:
+    push bx
+    push dx
+    mov dl, al                  ; DL = the class, DH = the row
+    xor dh, dh
+.row:
+    mov al, dh
+    call cp_drvrow              ; BX = the row
+    cmp word [bx+DRVR_FILE], 0
+    je .next                    ; an empty table row
+    cmp [bx+DRVR_CLASS], dl
+    je .found
+.next:
+    inc dh
+    cmp dh, DRV_MAX
+    jb .row
+    mov ax, DRVE_NOENT
+    stc
+    jmp short .out
+.found:
+    xor ax, ax                  ; CF = 0
+    cmp [bx+DRVR_SEG], ax
+    jne .out                    ; up already: the tick's own first test
+    call cdl_load               ; CF = 1 and [row+DRVR_ERR] on a refusal
+    mov al, [bx+DRVR_ERR]       ; (neither MOV touches CF)
+    mov ah, 0
+.out:
+    pop dx
+    pop bx
+    retf
 
 ; -----------------------------------------------------------------------------
 ; modc_e_onkey - CPE_ONKEY: the Control Panel's W_ONKEY (SPEC.md 31.9.2)
