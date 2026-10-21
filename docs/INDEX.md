@@ -531,6 +531,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 113 | WIRECHAT — chat rooms on the wire (`apps/wirechat/wirechat.asm`) |
 | 114 | WireFleet — naval battles over a null modem (`apps/wirefleet/`) |
 | 115 | Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`) |
+| 117 | INSTALL — the setup wizard (`apps/install/`) |
 
 ## docs/
 

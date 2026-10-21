@@ -197695,3 +197695,263 @@ teardown force-releases its lease before freeing package memory; reboot
 silences it before mouse vectors are unhooked. A lease survives §53 entry.
 Hibernate is refused while a serial lease is active: UART registers and
 an attached peer cannot be restored by a RAM snapshot on another machine.
+
+## 117. INSTALL — the setup wizard (`apps/install/`)
+
+`INSTALL.O88`, in the **root of every kern_big system disk** (all four
+geometries, the emu disk and the live media, §117.6), label prefix `in_`. It
+puts os8088 on a hard disk, or upgrades the copy already there, by walking the
+user through it a page at a time: switch the hard-disk driver on, find the
+drives, pick a partition, say whether its files are kept, confirm, copy the
+system disk, copy the apps disk, restart.
+
+**IT HAS NO INSTALL ENGINE OF ITS OWN, and that is the design rather than a
+saving.** Every step is the code the Control Panel already runs for the same
+step, reached through two doors that exist for this package:
+
+| the wizard's step | what runs | the Control Panel's own route to it |
+|---|---|---|
+| switch the driver on | `cdl_load` in `CTRL.DRV` (§51.3), through `OSAPI_DRV_USE` (§117.3) | Drivers page, tick *Hard drives* |
+| find the drives | `HDD.DRV`'s probe at attach and its device table (§52.1), read through `HDI_DEVS` | Hard Drive page's drive rows |
+| what each partition is | `hd_iw_scan`/`hd_iw_slot` in `HDDTOOL.DRV` (§52.10.4.2), read through `HDI_SLOTS` — the State column's own words | the Install window's four rows |
+| the install itself | `hd_inst_step` and everything under it (§52.10.4–52.10.17), through `HDI_GO` and `HDI_APPS` | Install, then Install again to confirm, then Copy Apps |
+| restart | `OSAPI_REBOOT` with AL = 1, the Install window's own (§52.10.6.1) | Restart |
+
+So a fix to the installer is a fix to both faces, an install made from either
+is the same bytes on the disk, and nothing in §52.10's long list of closed
+defects can come back through a second copy of the walk. WEAVE-SPEC §1.2's
+rule — *what two programs share they share as source, never as a copy* — is
+met here by not even sharing the source: there is one image, and the wizard is
+a second caller of it.
+
+This section is the contract for the waves in `docs/plans/INSTALL-PLAN.md`;
+unchecked stories there are not yet shipped behaviour. The build diary is
+`docs/HOW-INSTALL-WAS-BUILT.md`.
+
+### 117.1 The pages
+
+One window, one page at a time, `Back` / `Next` / `Cancel` along the bottom.
+The page says what is about to happen in a sentence before it happens, and
+every greyed choice says why (§47 rule 5).
+
+| page | it says | it does on `Next` |
+|---|---|---|
+| **Welcome** | what an install is, that it needs the system disk now and the apps disk later, that it takes minutes on an XT; on a machine booted from its hard disk, that this is an UPGRADE and the new system disk goes in a floppy drive | — |
+| **Hard disk driver** | `HDD.DRV` is on, or it is being switched on, or why it could not be (the `DRVE_*` reason in words, §117.3) | `OSAPI_DRV_USE` if `OSAPI_DRV_CLASSK` says the class holds nothing |
+| **Drive** | every device `HDI_DEVS` reports: its number, its size, how the machine reaches it (BIOS or IDE), and *Geometry unknown* greyed with the cure (the Hard Drive page) where the probe could not size it | — (a single usable drive is selected for the user) |
+| **Partition** | the four slots, each with its size and `HDI_SLOTS`' State text — the Install window's words exactly — and *os8088 is installed here* on a volume that carries `KERNEL.SYS` (§117.5) | — |
+| **Keep or erase** | two radio choices: *Upgrade: keep the files on it* and *Erase it and install fresh*. Each is greyed with the reason when the slot makes it a fact rather than a choice (§117.5) | — |
+| **Confirm** | one sentence naming the drive, the slot, its size, its letter and what will happen to its files; `Next` reads **Install** | `HDI_GO` |
+| **Apps disk** | the system part is on and the disk boots; *Insert the APPS disk, then Continue*, or *Skip* (the machine already starts without it, §52.10.10) | `HDI_APPS`; *Skip* sends `HDI_QUIT` |
+| **Done** | it is installed, take the floppy out; the button reads **Restart** | `OSAPI_REBOOT` AL = 1 |
+| **Stopped** | the engine's own caption — the same words the Install window would have shown (`Erases it…`, `No system disk found - nothing done`, the name of the file a copy stopped on) — and whether the disk still boots what it booted before | `Back` returns to Partition, rescanned |
+
+`HDI_GO` skips the Apps disk page by itself when the apps disk is already in
+the machine (§52.10.5) or mounted as an image (§52.10.17): the answer is then
+`HDG_DONE` and the wizard goes straight to Done.
+
+**The copy freezes the machine, as it does from the Control Panel** (§52.10.4:
+a file operation holds the interface by design). The page that starts it is
+drawn first and says so — *Copying the system disk. This takes several minutes;
+the bar below shows the progress* — and the progress is §12.8's widget, which
+the engine steps from inside the transfer loop.
+
+**Cancel** is honest about the stage: before Confirm it closes and nothing has
+been touched; on the Apps disk page it is *Skip* (the system part has
+committed and is not undone); on Done it closes without restarting.
+
+### 117.2 Drawing
+
+The window is **344 × 152 content**, which fits CGA's 640 × 200 with the menu
+bar, the title and the dock, and sits on the 8-pixel grid (`OSAPI_WM_SNAP`,
+§11.94) so every `OSAPI_FONT_RUN` takes §6.1's single-store path on the mono
+adapters. Black on white, which says the same thing on all three adapters
+(§39.4); greyed rows and choices are `[gfx_dis]` text, which on a 1bpp
+adapter is the checkerboard §47 expects to be looked at there.
+
+- **A page change repaints the content once**; a selection change repaints the
+  two rows that changed and the buttons whose greying flipped, and nothing
+  else (PERFORMANCE.md rule 1).
+- **Every text line is one opaque run padded to the band** (§6.6) — no fill
+  and then letter. The only fill is the one under a page change.
+- **The buttons are `os88ui.inc`'s standard control** (§20.5.1.3), one
+  `OS88UI_BTNREC` of three, the gesture the library's; the radio choices are
+  `os88ui_glyph` with their labels as runs.
+- **Keys**: Enter is the default button, Escape is Cancel, the arrows move the
+  selection on the Drive and Partition pages and the choice on Keep or erase.
+
+### 117.3 `OSAPI_DRV_USE` (cell `0x04A5`) — the Drivers page's tick, as a door
+
+`in AL = a DRVC_* class, AH = DRVU_UP (0) or DRVU_DONE (1)`. UI task, from a
+callback (the gfx lock HELD); a worker may not (§20.6 rule 7: UP reads two
+files).
+
+- **`DRVU_UP`** brings that class's driver up **exactly as the Drivers page's
+  tick does**: the first `drv_tab` row of the class, loaded and attached by
+  `cdl_load` — `CTRL.DRV`'s own expansion of `DRV_ATTACH` (§51.3), the code
+  the tick runs — after which the driver's `DRVV_READY` mounts what it finds
+  (§52.6.1). **out** CF = 0, the driver is up (or already was); CF = 1 and
+  AL = the `DRVE_*` the row banked (1 no system disk, 2 not on it, 3 not a
+  driver, 4 no memory, 5 no hardware, 6 busy, 7 attached twice, 8 nothing to
+  mount), or AL = 0 for no driver layer at all (kern_small).
+- **`DRVU_DONE`** says *I have finished with your page's tools*: the class's
+  `DSV_CPCLOSE` is sent exactly as the Control Panel's close sends it (§31.9.1)
+  — for `HDD.DRV` that is `hd_tool_reap`, which hands `HDDTOOL.DRV`'s ~19KB
+  back (§52.11.7). **Unless a Control Panel is open**, whose own close will
+  send it. out CF = 0.
+
+**It loads; it does not record.** `DRVR_WANT` and `DRVR_ANS` are left as they
+were and `SYSTEM.CFG` is not staged: a session load, which the Drivers page's
+box shows as ticked because the box shows what is LOADED (§51.4), and which the
+next boot decides about as it always did (§51.3.2). The user did not answer the
+Drivers page; a door that wrote an answer for them would be the kernel
+guessing, which §51.3 refuses.
+
+**Why a cell and not a package trick.** The attach half of a driver load is
+not resident (kernel size pass 13): it is expanded into the images that load
+drivers — the blob, `CTRL.DRV`, `HIBER.DRV` — and nothing a package can reach
+held it. The cell is **6 bytes** of table (a rare cell, §20.3), its body
+`osapi_drv_use_x` is `.cold` and is the `cpf_*` idiom (§2.8): `CTRL.DRV` made
+resident, one far call into its new entry `CPE_DRVUP`, and `CTRL.DRV` dropped
+again when no Control Panel is open — the same three lines as `cpf_shutdown`.
+What it costs is measured in §117.9.
+
+### 117.4 `HDV_TOOL` — `HDD.DRV`'s package door, one verb wider
+
+`HDD.DRV`'s door reached two verbs and no sector (§52.1.4). It reaches a third
+now, and still no sector: **`HDV_TOOL`** (3) forwards to `HDDTOOL.DRV` (§52.11)
+— loaded off the system volume if it is not already in — as one new tool verb,
+`HDT_PKG` (10), with **AH = an `HDI_*`** and ES = the calling package's
+segment, which is where every buffer below is. `HD_ABI_VER` is **7** for it:
+an older tool beside this resident is refused, as every pairing across a
+version is (§52.11, `hddabi.inc`).
+
+**The resident's whole addition is two instructions and a tail call into
+`hd_cp_thunk`**, the page callbacks' forwarder, which already loads the tool
+and banks the registers across the load. `HDD.DRV` was full to its 4KB rung
+with four bytes spare, and a fifth kilobyte would be a cost on every machine
+with a hard disk for a door used once in its life — so the bytes were found in
+the door itself (`hd_xa_arm` keeps the buffer's segment where it kept its
+linear address, and the 386 half derives it), and the driver is **still
+4,096 bytes and a 4KB claim** (§117.9).
+
+**CF = 1 means the tool could not be reached** — no system disk to read it
+from, no memory for it, a tool of another vintage — or the verb is not one it
+knows. **CF = 0 means the verb ran**, and its answer is in AL. Every verb
+preserves every register but AX.
+
+| `AH` | verb | in | out |
+|---|---|---|---|
+| 0 | `HDI_DEVS` | ES:DI = `HD_MAXDEV` (4) × `HDIV_SIZE` | AL = devices; one `HDIV_*` record each |
+| 1 | `HDI_SLOTS` | DL = a device; ES:DI = 4 × `HDIS_SIZE` | AL = the slot the Install window would select (0..3), `0FFh` none would do, `0FEh` no such device or its geometry is unknown; one `HDIS_*` record a slot |
+| 2 | `HDI_GO` | DL = device, DH = slot, AL = 1 erase / 0 keep; ES:DI = `HDI_CAPSZ` (48) bytes | AL = an `HDG_*` stage, and the engine's caption at ES:DI |
+| 3 | `HDI_APPS` | ES:DI = `HDI_CAPSZ` bytes | as `HDI_GO` |
+| 4 | `HDI_QUIT` | — | abandons a run waiting on its apps disk; AL = 0 |
+
+`HDIV_*`, a device: `HDIV_KIND` (+0, 1 = int 13h, 2 = the IDE task file),
+`HDIV_GEOM` (+1, 1 = its geometry is known and an install can use it),
+`HDIV_UNIT` (+2, the int 13h drive or the IDE unit), +3 reserved,
+`HDIV_SECS` (+4, dd, cylinders × heads × sectors). `HDIV_SIZE` = 8.
+
+`HDIS_*`, a slot: `HDIS_STATE` (+0, `HDS_OK` 0 / `HDS_SMALL` 1 / `HDS_ALIEN` 2
+/ `HDS_NONE` 3 / `HDS_LIVE` 4 — `HIS_*`, §52.10.4.1), `HDIS_VOL` (+1, 1 = it
+holds a FAT volume an install may keep, §52.10.15), `HDIS_LET` (+2, the drive
+letter it is mounted as, `'C'`…, or 0), `HDIS_TYPE` (+3, the partition table's
+type byte), `HDIS_SECS` (+4, dd, its length — or for a free slot the extent an
+install would make), `HDIS_TEXT` (+8, 26 bytes, the State column NUL-ended:
+`C: FAT16`, `Unpartitioned`, `FAT16, Too Small`, `Linux`…). `HDIS_SIZE` = 34.
+
+`HDG_*`, the stage an install verb leaves the engine in, which is `HII_*`'s
+numbering: `HDG_FAIL` (0, it stopped and the caption says where — whether the
+disk still boots is in the caption too: the system phase commits at its end,
+§52.10.10), `HDG_APPS` (2, the system part is on and bootable; insert the apps
+disk and send `HDI_APPS`), `HDG_DONE` (3).
+
+**`HDI_GO` is the Install window's two clicks in one.** It rescans the device
+exactly as opening that window does (§52.10.4.3 — the slot is the caller's and
+the table is fresh), refuses with `HDG_FAIL` and the window's own greyed-button
+caption whatever `hd_iact_ok` would grey (§47 rule 2: one predicate), forces
+*erase* over a slot with nothing to keep as the Erase box's greying does
+(§52.10.15), and then runs `hd_inst_step` from `HII_ARMED`: the confirm is the
+wizard's Confirm page, not a second click.
+
+**One engine, two faces, one run at a time.** While the Control Panel's
+Install window is on screen the `HDI_*` install verbs refuse (`HDG_FAIL`,
+*The Control Panel's installer is open*), and opening that window resets the
+stage as it always has. **A run waiting on its apps disk pins the tool**:
+`HDT_BUSY` answers busy at `HII_SYSDONE`, so neither a Control Panel close nor
+`DRVU_DONE` can free the image under a run that still holds `ASSOC.DAT`'s
+writer (§54.7.6.4); `HDI_QUIT`, or the Install window being closed, puts the
+stage back to idle.
+
+### 117.5 What the wizard decides by itself
+
+The *smart* in the brief is a short list of decisions it makes so the user
+does not have to, each a fact it has read rather than a guess (§47 rule 3):
+
+- **Upgrade or install.** `OSAPI_VOL_SYS` says which volume the machine booted
+  from. A hard-disk boot makes the Welcome page an upgrade page, and the
+  Partition page opens on the booted-from slot (`HDS_LIVE`), whose only
+  install is a keep (§52.10.15).
+- **Where os8088 already is.** For every slot with a letter, the wizard looks
+  for `KERNEL.SYS` in that volume's root (`OSAPI_FILE_GOTO_Q` and a stat, the
+  user's folder banked and put back, §19.2.2). Such a slot reads *os8088 is
+  installed here*, is the default selection over the engine's, and defaults to
+  **Upgrade: keep the files on it**.
+- **Keep or erase, by the slot.** `HDIS_VOL` = 0 (unpartitioned, not
+  formatted): *Erase* is the only install and *Upgrade* is greyed — *nothing on
+  it to keep*. `HDS_LIVE`: *Erase* is greyed — *you started the machine from
+  it; start from the floppy to erase it* (§52.10.4.1). Any other volume:
+  *Upgrade* if os8088 is there, else *Erase* is offered and *keep* is the
+  default, because §52.10.15 makes keeping the default over any volume and the
+  wizard does not overrule the engine about a user's files.
+- **The drive.** One usable drive is selected and the Drive page says so in a
+  sentence; it is shown rather than skipped, because *which disk is about to be
+  written* is the one fact a user must see before Confirm.
+- **The default slot.** The engine's own (`HDI_SLOTS`' AL, the first `HDS_OK`),
+  unless a slot carries os8088, which wins.
+
+What it does **not** decide is the geometry of a drive the probe could not
+size, or the layout of a disk that needs repartitioning by hand: those are the
+Hard Drive page's (§52.2, §52.4), and the Drive page names it.
+
+### 117.6 Ships on
+
+The **root** of `os8088.img`, `os8088-720.img`, `os8088-120.img` and
+`os8088-360.img` (kern_big), the emu disk (§9.11.7) and the live media (§80) —
+`$(SYSINST)` in the Makefile, beside `$(DRIVERS)`. The root because it is the
+first thing a person looking at a new system disk should see, and because the
+disk the install copies FROM is the disk it is on: an install copies the root
+too, so an installed machine carries `C:\INSTALL.O88`, which is how the next
+release's upgrade is found again.
+
+**Not on `kern_small`'s disks** (§24.5's requirement test): kern_small has no
+driver layer (§51.0), so there is no `HDD.DRV` to switch on and nothing for the
+wizard to refuse on but its first page. `OSAPI_DRV_USE` exists on both kernels
+(§20.8 rule 4) and refuses there.
+
+### 117.7 Memory
+
+The package's own region (§117.9), plus — while it is running — `CTRL.DRV`
+for the length of one `DRVU_UP` call, `HDD.DRV`'s 4KB if the wizard is what
+brought it up, and `HDDTOOL.DRV`'s ~19KB from the first `HDI_*` verb until
+`DRVU_DONE` at Cancel or close. The install's copy buffer is the engine's
+ladder (§52.10.11), claimed and freed inside each install verb.
+
+### 117.8 Tests
+
+`tests/install.py` (soak, MartyPC `os8088_xt_hdd`): boot the 360KB system disk
+with the apps disk in B:, launch `A:\INSTALL.O88`, walk every page by its own
+buttons, erase-install the XT-IDE disk's DOS partition, read the volume back on
+the host with `tests/instdeep.py`'s reader (the system and apps trees arrived,
+the VBR and MBR committed), then boot C: and run the wizard again as an
+upgrade — Upgrade preselected, a planted user file kept. `tests/unit/
+t_install.py` (fast) holds the package to the contract on the host: on the four
+kern_big system disks' roots and on no kern_small disk; `HD_ABI_VER` agreeing
+across `hddabi.inc` and both images; the `HDI_*`/`HDIS_*`/`HDG_*` numbers
+agreeing with `HII_*`/`HIS_*`; `HDD.DRV` still inside 4,096 bytes.
+
+### 117.9 What it cost
+
+Filled in from `tools/kernsize.py`, `tools/os88pkgsize.py` and the image sizes
+at the end of each wave (`docs/plans/INSTALL-PLAN.md`).
