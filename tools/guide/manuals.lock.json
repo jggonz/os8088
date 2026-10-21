@@ -1188,9 +1188,9 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "26005397",
-  "strings": "8be7299e321cb28f",
-  "why": "terminal layout and themes: window table, Themes section, F keys, scroll column, menus"
+  "stamped": "d9e253f7",
+  "strings": "37e2a465c977877a",
+  "why": "redraw-cost change only (ink-only runs, fixed-width fields): nothing a reader sees differently"
  },
  "WIREFLET_O88": {
   "sources": [
