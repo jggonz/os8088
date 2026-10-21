@@ -272,6 +272,11 @@ DRVE_NOVOL  equ 8               ; DRVV_READY's answer, never attach's: the
                                 ; is taken down again by drv_boot (51.3.2)
 DRVE_NERR   equ 9               ; how many strings drv_errstr has
 
+; OSAPI_DRV_USE's verbs in AH (SPEC.md 117.3), MIRRORED in apps/os88api.inc
+DRVU_UP     equ 0               ; bring a class's driver up: the tick's load
+DRVU_DONE   equ 1               ; the panel close's notifier, with no panel
+DRVU_CALL   equ 2               ; OSAPI_DRV_CALL_AT, asked as the machine
+
 ; --- .drv header: the .o88 header's shape with a different version -----------
 DRV_H_MAGIC equ 0               ; word: 0x384F ('O','8')
 DRV_H_VER   equ 2               ; byte: DRV_VER = driver (a package is PKG_FMT)
@@ -1875,8 +1880,9 @@ osapi_drv_classk_x:
 ; -----------------------------------------------------------------------------
 osapi_drv_use_x:
     call kentc_bp               ; KENT: push ax..bp - and the answer is
-    or ah, ah                   ; written over the banked AX at .out
-    jnz .done
+    cmp ah, DRVU_DONE           ; written over the banked AX at .out
+    je .done
+    ja .call
     call cpf_need               ; CTRL.DRV resident, or CF = 1 because it
     jnc .up                     ; could not be read
     mov ax, DRVE_DISK
@@ -1899,6 +1905,21 @@ osapi_drv_use_x:
     call drv_cp_closed          ; the panel close's own notifier, near
 .ok:
     xor ax, ax                  ; (CF = 0)
+    jmp short .out
+.call:                          ; CALL: OSAPI_DRV_CALL_AT ASKED AS THE MACHINE
+    mov ax, [snd_inst]          ; (SPEC.md 51.2.3) - drv_call's bracket, which
+    push ax                     ; the package door does not take: a door verb
+    cmp ah, [sch_cur]           ; of SOUND.DRV's or the sockets' may answer
+    jne .asis                   ; FOR the caller, so the door stays as it is
+    call drv_nostamp            ; and the caller who wants a driver to act as
+.asis:                          ; the machine - file names, the system volume -
+    call KERNEL_SEG:apic_drv_call_at    ; asks here. Only the task that SET the
+    pop word [snd_inst]         ; stamp clears it: a worker's inst_caller
+                                ; already answers its own instance, and
+                                ; clearing a callback's stamp under it is a
+                                ; race (snd_disp_set's own reason). BX, CX,
+                                ; DX, SI, DI and ES reach the driver as the
+                                ; caller left them; `pop` writes no flag
 .out:
     mov bp, sp                  ; THE ANSWER OVER THE BANKED AX - KENT's frame
     mov [bp+12], ax             ; is [bp][di][si][dx][cx][bx][ax] - and the

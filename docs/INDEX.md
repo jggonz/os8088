@@ -371,6 +371,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | GORILLAS | `apps/gorillas/gorillas.asm` | §99 | yes |
 | HELLO | `apps/hello/hello.asm` | §27 | no |
 | IMGTEST | `apps/imgtest/imgtest.asm` |  | no |
+| Install | `apps/install/install.asm` | §117 | no |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` | yes |
 | MIDIRack | `apps/midirack/midirack.asm` | §105 | yes |
 | MINES | `apps/mines/mines.asm` | §23 | yes |

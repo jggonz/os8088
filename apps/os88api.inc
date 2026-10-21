@@ -2780,8 +2780,13 @@ HDV_DISARM   equ 2              ; ES:DI = 8 bytes: bit n set = sector n of the
                                 ; buffer is in XMS and NOT in the buffer. Copy
                                 ; up the rest: a sector the kernel's cache
                                 ; served, or a disk on rung 0, is clear
-HDV_TOOL     equ 3              ; THE INSTALLER (SPEC.md 117.4): AH = an HDI_*
-                                ; below, ES = yours, the rest per verb. It is
+HDV_TOOL     equ 3              ; THE INSTALLER (SPEC.md 117.4): CL = an HDI_*
+                                ; below, ES = yours, the rest per verb. CALL
+                                ; IT THROUGH OSAPI_DRV_USE's DRVU_CALL, never
+                                ; OSAPI_DRV_CALL: the install runs the
+                                ; machine's file walk, and through the plain
+                                ; door every name it writes resolves in YOUR
+                                ; folder instead (SPEC.md 51.2.3). It is
                                 ; HDDTOOL.DRV's own engine - the Control
                                 ; Panel's Install window's - read off the
                                 ; system volume on first use. CF=1 = the tool
@@ -2796,7 +2801,7 @@ HDI_SLOTS    equ 1              ; DL = a device, ES:DI = 4 * HDIS_SIZE. out
                                 ; AL = the slot the Install window would
                                 ; select, 0FFh none would do, 0FEh no such
                                 ; device or its geometry is unknown
-HDI_GO       equ 2              ; DL = device, DH = slot, AL = 1 erase / 0 keep
+HDI_GO       equ 2              ; DL = device, DH = slot, CH = 1 erase / 0 keep
                                 ; the files; ES:DI = HDI_CAPSZ bytes. out AL =
                                 ; an HDG_* and the engine's caption at ES:DI.
                                 ; The Install window's two clicks in one
@@ -2808,6 +2813,8 @@ HDI_CAPSZ    equ 48
 HDIV_KIND    equ 0              ; db: 1 = int 13h, 2 = the IDE task file
 HDIV_GEOM    equ 1              ; db: 1 = its geometry is known (installable)
 HDIV_UNIT    equ 2              ; db: the int 13h drive, or the IDE unit
+HDIV_BIOS    equ 3              ; db: the int 13h drive the ROM knows it as,
+                                ; IDE rows included (SPEC.md 52.1.1), or 0
 HDIV_SECS    equ 4              ; dd: cylinders x heads x sectors
 HDIV_SIZE    equ 8
 HDIS_STATE   equ 0              ; db: an HDS_* - may an install take it
@@ -6083,10 +6090,19 @@ SER_BUFFER_SIZE equ 517
                                  ; driver's page tools - it is sent
                                  ; DSV_CPCLOSE (HDD.DRV gives HDDTOOL.DRV
                                  ; back) unless a Control Panel is open.
-                                 ; Every register but AX kept. UI task, from
-                                 ; a callback; a worker may not
+                                 ; AH = DRVU_CALL: OSAPI_DRV_CALL_AT (BH =
+                                 ; class, BL = its verb, ES = yours, CX DX SI
+                                 ; DI its arguments) ASKED AS THE MACHINE -
+                                 ; the driver's file names resolve where the
+                                 ; machine stands and not in your folder, as
+                                 ; when the kernel calls it (SPEC.md 51.2.3).
+                                 ; For a verb that runs the system's own
+                                 ; machinery on your behalf: HDD.DRV's
+                                 ; HDV_TOOL. Every register but AX kept. UI
+                                 ; task, from a callback; a worker may not
 DRVU_UP      equ 0
 DRVU_DONE    equ 1
+DRVU_CALL    equ 2
 
 %define OSAPI_THM_SET        KERNEL_SEG:0x046D   ; AL = THM_BRIGHT(0)/DARK(1)/
                                  ; COLOR(2)/WIN(3): adopts it as the system

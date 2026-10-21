@@ -1010,6 +1010,14 @@ FAST = [
         "by different people - the system-side size pass shrank RAMDISK.DRV "
         "and NET.DRV across a KB with no kernel edit, and every make stayed "
         "green with the page quoting 9K and 7K for drivers that claim 8 and 5"),
+    Row("install", "fast", py("tests/unit/t_install.py"), 0.2,
+        "SPEC.md 117: INSTALL.O88 in the ROOT of every kern_big system disk "
+        "and on no kern_small one; HD_ABI_VER the same in hddabi.inc and the "
+        "tool image the resident checks; the wizard's HDG_*/HDS_* the Install "
+        "window's HII_*/HIS_*; the kernel's DRVU_* the SDK's; and HDD.DRV "
+        "still on its 4KB rung, the door's forwarder having been paid for "
+        "inside it. Every one of these is a number in two files that fails "
+        "silently when they drift"),
     Row("pkgzrules", "fast", py("tests/unit/t_pkgzrules.py"), 1.0,
         "SPEC.md 20.13.5, 73.14.1: every .o88 and .OVL the release ships "
         "(LIVEARGS, the SHIPIMGS floppies and the capability gates) is made "

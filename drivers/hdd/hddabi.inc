@@ -185,7 +185,7 @@ HDT_KEY      equ 9              ; DSV_CPKEY: BL = ASCII, BH = scan code (AL
                                 ; and nothing else - so the page draws at the
                                 ; origin its last PAINT banked
 HDT_PKG      equ 10             ; HDD.DRV's HDV_TOOL, forwarded (SPEC.md
-                                ; 117.4): AH = an HDI_* (apps/os88api.inc),
+                                ; 117.4): CL = an HDI_* (apps/os88api.inc),
                                 ; ES = THE CALLING PACKAGE'S segment and every
                                 ; buffer in it. out CF = 0 and AL = the answer
 HDT_BUSY     equ 4              ; out: CF = 1 = a window of mine is still

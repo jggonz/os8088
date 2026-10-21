@@ -334,6 +334,12 @@ kind = "program"
 summary = "Plays full-motion .V88 videos, in a window or full screen, with sound on a Sound Blaster or the PC speaker."
 short = "Plays .V88 videos"
 
+["INSTALL.O88"]
+title = "Install"
+kind = "program"
+summary = "Puts os8088 on a hard disk, or upgrades the copy already there, one page at a time: switches the hard-disk driver on, finds the drives, lets you pick a partition and keep or erase its files, then copies the system and apps disks."
+short = "Install os8088 on a hard disk"
+
 ["TASKMGR.O88"]
 title = "Task Manager"
 kind = "program"

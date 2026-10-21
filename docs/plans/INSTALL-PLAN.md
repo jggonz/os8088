@@ -68,18 +68,27 @@ actually been run. The build diary is `docs/HOW-INSTALL-WAS-BUILT.md`.
 
 ## Wave 2 — the wizard
 
-- [ ] `apps/install/install.asm`: window 344 × 152 content, snapped; the nine
+- [x] `apps/install/install.asm`: window 344 × 152 content, snapped; the nine
       pages of §117.1 with Back / Next / Cancel as one `OS88UI_BTNREC`; radio
       choices; keys (Enter, Escape, arrows); About card with the credit.
       *Verify:* boot `make test` in QEMU with `HDD=32`, launch from A:, look at
       every page; the same on `VIDEO=cga` and `VIDEO=herc` for fit and greying.
-- [ ] The decisions of §117.5: boot volume → upgrade wording and preselect;
+- [x] The decisions of §117.5: boot volume → upgrade wording and preselect;
       `KERNEL.SYS` probe per lettered slot; keep/erase greying by slot; one
       drive auto-selected; engine default slot unless os8088 is found.
-- [ ] Driver page: `OSAPI_DRV_CLASSK` then `OSAPI_DRV_USE`; every `DRVE_*`
+- [x] Driver page: `OSAPI_DRV_CLASSK` then `OSAPI_DRV_USE`; every `DRVE_*`
       in words; `DRVU_DONE` at close and Cancel.
-- [ ] Install pages: Confirm → `HDI_GO`; Apps disk → `HDI_APPS` / Skip →
+- [x] Install pages: Confirm → `HDI_GO`; Apps disk → `HDI_APPS` / Skip →
       `HDI_QUIT`; Done → `OSAPI_REBOOT` AL = 1; Stopped shows the caption.
+
+  *Verified by looking, QEMU (VGA 640x480 and a private `VIDEO=cga` tree):*
+  every page; erase-install of a blank 32MB disk with the apps disk found in
+  B:; boot from C:; upgrade of the booted-from volume (keep forced, Erase
+  greyed) and Restart back to a desktop; the apps page with the apps disk
+  swapped into A: (112 paths on the disk afterwards); Escape; CGA fit and
+  greying. Hercules is looked at in the final pass. Two defects found and
+  fixed on the way (the diary): BX clobbered in the entry proc, and the
+  instance stamp - which added `DRVU_CALL` to the cell.
 
 ## Wave 3 — shipping and the gate
 

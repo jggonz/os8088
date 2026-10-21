@@ -56,7 +56,7 @@ hd_pkg:
     cmp bl, HDV_DISARM
     je hd_xa_dis
     cmp bl, HDV_TOOL            ; ...and the INSTALLER (SPEC.md 117.4): one
-    jne .no                     ; tool verb, AH = an HDI_*, ES = the caller,
+    jne .no                     ; tool verb, CL = an HDI_*, ES = the caller,
     mov al, HDT_PKG             ; forwarded by the page callbacks' own thunk,
     jmp hd_cp_thunk             ; which loads the tool and banks the registers
 .no:                            ; across the load. Still no sector: the tool's

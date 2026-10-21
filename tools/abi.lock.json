@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "e9150c9e38123295ea10ec2e00650786973e8754beb85ea1d784065d6b28f4d7",
+  "fingerprint": "effffe19fef5e5270bf174b2b4c06ccb2db18e81900995285e4d8a4a013db1db",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "a85d79f557b557b4aa32654395c53cb59f79b6bafbab12ac0df5a13068f78050",
+  "fingerprint": "5e34b492cfdba8334b3b0bbaf7d6bcfd3e7b3f32a3bde41f9b347266b8d6ca79",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -385,6 +385,34 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "OSAPI_DRV_USE appended at 0x04A5 and HDD.DRV's HDV_TOOL/HDI_* constants added (SPEC.md 117.3, 117.4): nothing moved, nothing built before changes meaning",
+   "to": 11
+  },
+  {
+   "fingerprint": "b05204dfcd8dd8604ca4253a78891e672d5a004ea3920e8b69ad0b6c914106bc",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_DRV_USE gains DRVU_CALL; HDV_TOOL's verb moves to CL (SPEC.md 117.3/117.4) - both unreleased, nothing built before uses them",
+   "to": 10
+  },
+  {
+   "fingerprint": "9a6130ab1e0e7f394792f42734c2b52156cc898fc19bde696be0d619872c9224",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_DRV_USE gains DRVU_CALL; HDV_TOOL's verb moves to CL (SPEC.md 117.3/117.4) - both unreleased, nothing built before uses them",
+   "to": 11
+  },
+  {
+   "fingerprint": "5e34b492cfdba8334b3b0bbaf7d6bcfd3e7b3f32a3bde41f9b347266b8d6ca79",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "HDIV_BIOS named in the unreleased HDI_DEVS record (SPEC.md 117.4)",
+   "to": 10
+  },
+  {
+   "fingerprint": "effffe19fef5e5270bf174b2b4c06ccb2db18e81900995285e4d8a4a013db1db",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "HDIV_BIOS named in the unreleased HDI_DEVS record (SPEC.md 117.4)",
    "to": 11
   }
  ]

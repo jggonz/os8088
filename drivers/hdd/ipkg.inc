@@ -3,7 +3,9 @@
 ;
 ; HDT_PKG: the installer, for a PACKAGE (SPEC.md 117.4). INSTALL.O88's wizard
 ; reaches this through HDD.DRV's door (HDV_TOOL), which forwards it here as
-; one verb with AH = an HDI_* and ES = the package's segment.
+; one verb with CL = an HDI_* and ES = the package's segment - by way of
+; OSAPI_DRV_USE's DRVU_CALL, so the instance stamp is the machine's and every
+; name the engine writes resolves where the engine stood (SPEC.md 51.2.3).
 ;
 ; **NOTHING HERE INSTALLS ANYTHING.** Every verb sets the Install window's own
 ; state - [hd_idev], [hd_isel], [hd_iwipe], [hd_iw_st] - and calls the Install
@@ -40,15 +42,15 @@ hd_ipkg:     db 0               ; 1 = the run at HII_SYSDONE is a PACKAGE's
 ; -----------------------------------------------------------------------------
 hd_pkgv:
     cld                         ; the copies below are lodsb/stosb
-    cmp ah, HDI_DEVS
-    je hd_pv_devs
-    cmp ah, HDI_SLOTS
+    cmp cl, HDI_DEVS            ; THE VERB IS IN CL: the package reaches us
+    je hd_pv_devs               ; through OSAPI_DRV_USE's DRVU_CALL, whose AH
+    cmp cl, HDI_SLOTS           ; is the cell's own (SPEC.md 117.3)
     je hd_pv_slots
-    cmp ah, HDI_GO
+    cmp cl, HDI_GO
     je hd_pv_go
-    cmp ah, HDI_APPS
+    cmp cl, HDI_APPS
     je hd_pv_apps
-    cmp ah, HDI_QUIT
+    cmp cl, HDI_QUIT
     je hd_pv_quit
     stc                         ; a verb from a newer package than this tool
     ret
@@ -88,13 +90,11 @@ hd_pv_devs:
     mov [es:di+HDIV_GEOM], al
     mov al, [si+HDD_KIND]
     mov [es:di+HDIV_KIND], al
-    mov al, [si+HDD_BIOS]       ; the int 13h drive where the ROM reads it
-    or al, al                   ; (a BIOS row, and an IDE row the BIOS also
-    jnz .unit                   ; knows, 52.1.1), else the IDE unit
-    mov al, [si+HDD_UNIT]
-.unit:
+    mov al, [si+HDD_UNIT]       ; the int 13h drive, or the IDE unit...
     mov [es:di+HDIV_UNIT], al
-    mov byte [es:di+3], 0
+    mov al, [si+HDD_BIOS]       ; ...and the int 13h drive of every row the
+    mov [es:di+HDIV_BIOS], al   ; ROM reads, an IDE row the BIOS also knows
+                                ; included (52.1.1), else 0
     mov ax, [si+HDD_HEADS]
     mul word [si+HDD_SPT]       ; <= 255 x 63: AX alone
     mul word [si+HDD_CYL]       ; DX:AX = the drive
@@ -201,7 +201,7 @@ hd_pv_dev:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_pv_go - HDI_GO: DL = device, DH = slot, AL = 1 erase / 0 keep;
+; hd_pv_go - HDI_GO: DL = device, DH = slot, CH = 1 erase / 0 keep;
 ;            ES:DI = HDI_CAPSZ bytes for the caption
 ; out AL = an HDG_* - the stage hd_inst_step left - and the caption at ES:DI
 ; -----------------------------------------------------------------------------
@@ -213,7 +213,7 @@ hd_pv_go:
     push di
     push bp
     push es
-    mov cl, al                  ; CL = the erase choice
+    mov cl, ch                  ; CL = the erase choice
     call hd_pv_win
     jnc hd_pv_busy              ; the Install window owns the state
     mov word [hd_imsg], hd_s_ibad

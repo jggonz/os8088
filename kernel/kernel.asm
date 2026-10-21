@@ -2694,6 +2694,7 @@ apic_wm_minsize:
                                   ;         whole tree under it (SPEC.md 18.6).
                                   ;         The AL survives the N stub because
                                   ;         api_copyname banks AX
+apic_drv_call_at:                 ; (OSAPI_DRV_USE's DRVU_CALL, SPEC.md 117.3)
     OSAPI_SLOT drv_pkg_call_x     ; 0x038B - OSAPI_DRV_CALL WITH ES LEFT ALONE
                                   ;          (SPEC.md 20.11.2). The same
                                   ;          routine behind the same fence: the
@@ -3293,14 +3294,16 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
     OSAPI_IEND
     OSAPI_RXCELL osapi_serial     ; 0x049F - desktop serial lease (SPEC.md 115)
     OSAPI_RCSLOT osapi_drv_use_x  ; 0x04A5 - THE DRIVERS PAGE'S TICK, AS A
-                                  ;          DOOR (SPEC.md 117.3). AL = a
-                                  ;          DRVC_*, AH = 0 UP: load and
-                                  ;          attach that class's driver with
+                                  ;          DOOR (SPEC.md 117.3). AH = 0 UP
+                                  ;          (AL = a DRVC_*): load and attach
+                                  ;          that class's driver with
                                   ;          CTRL.DRV's own cdl_load, record
-                                  ;          nothing; AH = 1 DONE: send it
-                                  ;          DSV_CPCLOSE unless a Control
-                                  ;          Panel is open. UP out CF=1, AX =
-                                  ;          the DRVE_*. kern_small refuses
+                                  ;          nothing; AH = 1 DONE: the panel
+                                  ;          close's notifier, unless a
+                                  ;          Control Panel is open; AH = 2
+                                  ;          CALL: OSAPI_DRV_CALL_AT asked as
+                                  ;          the MACHINE (51.2.3). kern_small
+                                  ;          refuses
 osapi_table_end:                  ; 0x04AB today (0x04A5 before the drivers'
                                   ; door; 0x049F before serial;
                                   ; 0x0499 before the wheel;
