@@ -182,6 +182,13 @@ summary = "Lets programs play music and sound on an AdLib, Sound Blaster, MPU-40
 short = "Music and sound on any card"
 needs = "An AdLib, Sound Blaster, MPU-401 or Covox"
 
+["MIXER.O88"]
+title = "Mixer"
+kind = "program"
+summary = "Adjusts a Sound Blaster's source levels, stereo balance and supported tone controls. Opens from the speaker beside the clock when installed in SYSTEM."
+short = "Sound-card levels and balance"
+needs = "SOUND.DRV and a compatible hardware mixer"
+
 ["HDD.DRV"]
 title = "Hard disk driver"
 kind = "driver"

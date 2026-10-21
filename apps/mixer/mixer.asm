@@ -389,6 +389,7 @@ mx_click:
 .grab:
     cmp word [mx_mask], 0
     je .out
+    mov byte [mx_force], 1      ; focus labels belong to both cached bands
     mov byte [mx_dragging], 1
     mov ax, [mx_pair]
     mov [mx_baseline], ax
@@ -472,6 +473,11 @@ mx_apply:
     ret
 
 mx_key:
+    push si                    ; W_ONKEY owes the window pointer back
+    call mx_key_do
+    pop si
+    ret
+mx_key_do:
     cmp byte [mx_abon], 0
     jne mx_abdismiss
     push ax
@@ -640,7 +646,7 @@ mx_bass: db 'Bass       ',0
 mx_treble: db 'Treble     ',0
 mx_ablines:
     db 'Mixer',0,'Hardware source levels',0,'and stereo balance',0
-    db 'Arrow keys: select / adjust',0,'Tab: level or balance',0,0
+    db 'Arrow keys: select / adjust',0,'Tab: level or balance',0,OS88UI_ABEND
 
 mx_win: dw 0
 mx_ox: dw 0

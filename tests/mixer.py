@@ -24,6 +24,7 @@ import os88sym
 import os88drvsym
 import os88geom as G
 import os88qemu
+import os88build
 import heapmap
 import shot
 from cycweb import Pkg, u16
@@ -58,7 +59,7 @@ class Session:
         else: M.guest_sleep(self.m,n)
 
     def key(self,k):
-        if self.qemu: self.m.hmp('sendkey '+k)
+        if self.qemu: self.m.hmp('sendkey '+{'space':'spc'}.get(k,k))
         else: self.m.key({'esc':'Escape','home':'Home','end':'End','space':'Space'}[k])
         self.pace(.3)
 
@@ -111,6 +112,14 @@ class Session:
         return b''.join(
             p[y*w+x0:y*w+x1+1] for y in range(y0,y1+1))
 
+    def icon(self):
+        # A hit range can pass while an old disk-progress bar erases the
+        # picture. Compare the actual band, with the pointer elsewhere.
+        data=self.m.read(self.d.addr('mix_speaker'),48)
+        expected=bytes((b>>bit)&1 for b in data for bit in range(7,-1,-1))
+        check(self.crop((self.hx,2,self.hx+23,17))==expected,
+              'speaker pixels match its bitmap after disk activity')
+
 
 def session(ui,adapter):
     s=Session(ui,adapter);d=s.d
@@ -119,6 +128,7 @@ def session(ui,adapter):
     check((ui._word('vid_pw')-8-ui._word('menu_clkx'))//8>=25,
           'speaker preserves the full clock and maximum toast field')
     check(not s.owned(),'idle mixer holds no scratch claim')
+    s.mo.to(80,150);s.pace(.3);s.icon()
     x=s.open()
     check(d.rb('volume_found')==1,'SYSTEM/MIXER.O88 discovered on opening')
     check(ui._byte('fpg_on')==0,'file activity ends while popup remains open')
@@ -134,6 +144,8 @@ def session(ui,adapter):
     s.wait(lambda:d.rb('volume_levelv')==0,'track press changes live volume')
     s.mo.to(min(ui._word('vid_pw')-1,x+202),58,l=True)
     s.wait(lambda:d.rb('volume_levelv')==100,'drag clamps to the top endpoint')
+    s.mo.to(x+28,150,l=True)
+    s.wait(lambda:d.rb('volume_levelv')==0,'captured drag continues outside the panel vertically')
     s.mo._edge(False)
     s.wait(lambda:d.rb('volume_live')==0,'drag release dismisses the popup')
     check(not s.owned(),'drag dismissal releases the save-under')
@@ -145,6 +157,7 @@ def session(ui,adapter):
     check(before==s.crop(rect),'Escape restores every covered desktop pixel')
     check(not s.owned(),'Escape releases the save-under')
     # Launch after the tracker has restored the screen and dropped its lock.
+    s.open();s.key('end');s.close()
     x=s.open();s.click(x+64,102)
     w=ui.wait_window('Mixer')
     p=Pkg(s.m,u16(s.m.read(G.winptr(s.m,w.i,ui.sym)+G.W_SEG,2)),
@@ -155,10 +168,15 @@ def session(ui,adapter):
     x0,y0,_,_=w.content
     s.click(x0+240,y0+44)
     s.wait(lambda:0<p.rb('mx_level')<100,'full Mixer level slider writes hardware')
+    s.key('home');s.wait(lambda:p.rb('mx_level')==0,'full Mixer keyboard reaches silence')
+    s.key('end');s.wait(lambda:p.rb('mx_level')==100,'full Mixer keyboard reaches full volume')
     if adapter=='sb16':
         check(p.rw('mx_mask')==0x1FF,'SB16 exposes all nine channels')
+        mark=(x0+136,y0+18,x0+143,y0+25)
+        check(0 in s.crop(mark),'keyboard focus is visible beside Level')
         s.click(x0+288,y0+104)
         s.wait(lambda:p.rb('mx_balance')>50,'stereo balance moves toward the right')
+        check(s.crop(mark)==bytes([1])*64,'changing mouse focus erases the old Level marker')
         a=p.rw('mx_pair');check((a&255)<(a>>8),'hardware readback preserves independent stereo')
         s.click(x0+32,y0+14+7*13+4)
         s.wait(lambda:p.rb('mx_sel')==7,'Bass source selected')
@@ -174,6 +192,7 @@ def session(ui,adapter):
     s.key('space');s.wait(lambda:p.rb('mx_abon')==0,'About card dismisses')
     ui.close(ui.window('Mixer'))
     check(not s.owned(),'closing Mixer leaves no driver scratch')
+    s.icon()
     # Click-away must consume the click rather than open the desktop below.
     s.open();s.click(70,150)
     s.wait(lambda:d.rb('volume_live')==0,'outside click dismisses')
@@ -194,26 +213,54 @@ def absent():
         check(ui._word('menu_clkx')==ui._word('vid_clk_hx'),'no mixer restores full clock width')
 
 
+def background(ui):
+    """A fully staged stream still drains while the modal popup owns the UI."""
+    s=Session(ui,'sb16');d=s.d
+    ui.path('B:/MIXPLAY.O88')
+    w=ui.wait_window('SB Test')
+    x,y,_,_=w.content
+    s.mo.to(x+40,y+30);s.mo._edge(True);s.mo._edge(False)
+    s.wait(lambda:d.rb('sbl_str_act')==1,'background stream opened')
+    s.mo.to(s.hx+12,9);s.mo._edge(True);s.mo._edge(False)
+    s.wait(lambda:d.rb('volume_live')==1,'volume popup opened during playback')
+    consumed=d.rw('sbl_consumed')
+    check(consumed<19200,'volume popup opened before the stream finished')
+    s.key('home')
+    s.wait(lambda:d.rb('volume_levelv')==0,'volume changes during background playback')
+    s.wait(lambda:d.rw('sbl_consumed')==19200,'card consumed the entire staged stream')
+    check(d.rb('volume_live')==1,'audio finished while the volume popup remained open')
+    s.key('end');s.close()
+    ui.close(ui.window('SB Test'))
+    s.wait(lambda:d.rb('sbl_str_act')==0,'closing the player releases its stream')
+    check(not s.owned(),'background playback leaves no driver scratch or stream buffer')
+
+
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--adapter',choices=(*MACHINES,'sb16'),default='cga')
     a=ap.parse_args();EVIDENCE.mkdir(exist_ok=True)
     if a.adapter=='sb16':
         # MartyPC has a raw register bank, not a CT1745. QEMU owns this leg.
         import hmacold,vidxms,xmcheck
+        class QMouse(hmacold.QMouse):
+            def click(self,x,y,**_kw):
+                # UI.close also uses click; pace it on QEMU's guest ticks.
+                self.to(x,y);self._edge(True);self._edge(False)
+                os88qemu.pace(self.q,.2)
         for memory in (1,128):
             with tempfile.TemporaryDirectory(prefix='mixer-qemu-',dir=ROOT/'build') as t:
                 sy=Path(t)/'system.img';apps=Path(t)/'apps.img'
-                shutil.copy(ROOT/'build/mixer360.img',sy)
-                shutil.copy(ROOT/'build/apps360.img',apps)
+                shutil.copy(os88build.at('build/mixer360.img'),sy)
+                shutil.copy(os88build.at('build/mixplay.img'),apps)
                 q=vidxms.Q(t,str(sy),str(apps),memory,
                     ('-audiodev','none,id=snd','-device','sb16,audiodev=snd'))
                 os88qemu.own(q.pid,q.sock)
                 try:
                     xmcheck.wait_desktop(q.sock,'mixer')
-                    ui=hmacold.QUI(q,mouse=hmacold.QMouse(q),sym=os88sym.linear,verbose=False)
+                    ui=hmacold.QUI(q,mouse=QMouse(q),sym=os88sym.linear,verbose=False)
                     os88qemu.pace(q,2)
                     print('SB16 memory:',memory,flush=True)
                     session(ui,'sb16')
+                    background(ui)
                 finally:q.close()
     else:
         with os88ui.boot('build/mixer360.img',machine=MACHINES[a.adapter],verbose=False) as ui:

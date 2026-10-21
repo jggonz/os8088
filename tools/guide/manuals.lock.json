@@ -638,6 +638,16 @@
   "strings": "518a0d82ecee0138",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "MIXER_O88": {
+  "sources": [
+   "apps/mixer",
+   "apps/os88mixui.inc",
+   "drivers/sound/sndpkg.inc"
+  ],
+  "stamped": "c46e0112",
+  "strings": "ed45625209cc733e",
+  "why": "Document source selection, level and balance, tone controls, keys and optional SYSTEM installation"
+ },
  "MOUNTAIN_BMP": {
   "sources": [],
   "stamped": "e4576a70",
@@ -946,9 +956,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "e4576a70",
-  "strings": "61d798f4ae5a6f01",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "c46e0112",
+  "strings": "7e76e8b53d450afa",
+  "why": "Document hardware-mixer volume, optional Mixer discovery and the measured driver footprint"
  },
  "SPACEJAM_MID": {
   "sources": [],

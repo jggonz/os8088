@@ -149,7 +149,7 @@ def main():
         r0 = hmadrv.rows(q)
         b0 = hmadrv.blocks(q)
         for name in ("SOUND",) + KEPT:
-            want(0xF200 <= r0[name]["seg"] < 0xF800 and r0[name]["kb"] == 0,
+            want((0xFFFF - (hmadrv.ORG - 0x10)//16) <= r0[name]["seg"] <= (0xFFFF - (hmadrv.ORG - hmadrv.EQ["HMA_COLD_AT"])//16) and r0[name]["kb"] == 0,
                  "before: %s.DRV runs from the pool at %04X"
                  % (name, r0[name]["seg"]))
         print("   the pool before: %s" % ["%04X+%d/%04X" % b for b in b0])
@@ -218,7 +218,7 @@ def main():
                          "A3. ...and the pool at %04X:%04X holds its "
                          "org-%04X code" % (seg, ORG, ORG))
                 snd = r1["SOUND"]
-                want(0xF200 <= snd["seg"] < 0xF800 and snd["kb"] == 0
+                want((0xFFFF - (hmadrv.ORG - 0x10)//16) <= snd["seg"] <= (0xFFFF - (hmadrv.ORG - hmadrv.EQ["HMA_COLD_AT"])//16) and snd["kb"] == 0
                      and any(b[2] == snd["seg"] for b in b1),
                      "A4. SOUND.DRV, swept and reloaded, is in the pool at "
                      "%04X" % snd["seg"])

@@ -18,7 +18,8 @@ The visual brief is an engraved scale and a ridged mechanical thumb, drawn
 from shared source for the popup and package. The face must be designed in
 black and white first so Hercules and CGA are first-class presentations.
 
-Implementation and measured acceptance results will be added with each wave.
+The checked [delivery plan](plans/MIXER-PLAN.md) separates implementation
+from verified acceptance.
 
 ## Hardware wave
 
@@ -31,7 +32,7 @@ of PCM-buffer ownership and the selected sound tier.
 
 Host verification: `make small` and `make` passed all 55 fast checks after
 building the small system disks required by the install-manifest check.
-Hardware and interaction evidence belongs to the final `mixer` row.
+Hardware and interaction evidence belongs to the final mixer rows.
 
 ## Quick-volume wave
 
@@ -73,6 +74,92 @@ right-hand boundary now moves left by three cells while the speaker is
 present, preserving the entire clock and toast field. Application menu
 layout keeps its existing prefix rule.
 
-Host builds have passed the 55 fast checks. The final acceptance pass is
-being prepared: three adapter sessions, SB16 in heap and HMA, independent
-mixer register models, driver movement, Sticky Apps and toast regression.
+## Acceptance and pictures
+
+The CGA, Hercules and VGA sessions passed the same gestures: click-open,
+Home/End, a held drag beyond the track, release, Escape, click-away, discovery,
+launch, native source selection, About and close. The save-under comparison
+checks every covered desktop pixel. Each dismissal frees its claim. CGA
+also boots without the package and without mixer hardware, checking that
+the command and speaker disappear at their respective boundaries.
+
+![CGA quick volume](mixer/cga-popup.png)
+
+![Hercules quick volume](mixer/herc-popup.png)
+
+![VGA quick volume](mixer/vga-popup.png)
+
+QEMU's CT1745 supplies nine actual mixer channels, independent stereo
+readback, and separate left/right bass controls. The session runs with 1MB
+and 128MB so the driver executes from the heap and HMA respectively.
+
+![SB16 Mixer with bass selected](mixer/sb16-mixer.png)
+
+The independent register-model row executes the shipping driver with
+SS different from DS. It checks every percentage against all three Creative
+register maps, native quantization, stereo independence, unchanged neighboring
+channels, invalid writes, floating/stuck buses, interrupt protection, probe
+restoration and exact detach restoration. A deliberately wrong SB Pro
+register is the negative control and must fail.
+
+The final union also passed `hmadrv`, `hmahiber`, `sndmove`, `fmrefuse`,
+`stikmenu` and `toastbar`. The UI retries exposed test-instrument defects:
+duplicate assembler map requests, QEMU's `spc` key name, and mouse pacing
+that needed QEMU's guest ticks. Those were corrected in the harness; the
+adapter rows were repeated only after the final code review found two
+interaction defects: the key handler owed SI back, and a captured drag
+needed to keep tracking x outside the panel's vertical extent. Both paths
+now have gesture coverage.
+
+The final pixel review found a separate boot interaction: a progress widget
+could be armed against the old clock boundary before SOUND.DRV published
+its mixer. Its finish cleared the speaker's outer rows but left trough
+hatching in its text rows, beyond the menus' new bound. The widget now
+invalidates the speaker when its old span overlaps that segment. Acceptance
+compares every speaker pixel with its source bitmap after boot and package
+activity; the progress regressions are `fpgcold` and `fpgnotch`.
+
+Resource measurements, compared with the foundation build: kernel text
+43,250 bytes (+316), with BSS, low BSS, cold and video scratch unchanged.
+Rounded kernel size stays 97,792 bytes. The budget gate leaves 3,072 bytes
+on kern_big and 2,560 each on kern_small and kern_emu, without raising a
+budget. SOUND.DRV is 11,602 bytes and rounds to 12KB; Mixer packs to 2,925
+bytes on disk and has a 1,056-byte private drawing buffer.
+The emulator kernel crosses one 512-byte image rung; its total is 98,304
+bytes. The small kernel stays at 61,440 bytes. The measured hot-code
+alignment is preserved by moving a padding byte across the UI task.
+
+The background-service leg uses the existing SB Test fixture with 19,200
+bytes staged at 4,000 Hz. Its default build is byte-identical to the base;
+the longer test arm leaves time for QEMU's pointer and disk interactions.
+On both heap and HMA, the popup opens before the stream ends, changes its
+volume, and remains open until the card consumes every byte. Closing the
+player frees its stream buffer and the driver holds no scratch claim.
+
+The guide's three program captures were inspected as pictures, including
+the About card. They caught its packed-text terminator reading beyond the
+line table; the table uses the shared library's end marker. A stereo
+gesture also checks that moving focus to Balance erases the previous Level
+marker, even when its numerical value has not changed.
+
+An independent FAT12 walk finds SYSTEM/MIXER.O88 on the 720KB, 1.2MB and
+1.44MB system floppies. The 360KB image omits it and has 13,824 bytes free.
+The larger floppies have 145,408, 646,144 and 889,856 bytes free respectively.
+The live-media payload uses the same optional SYSTEM file, which an installed
+system can also receive by an ordinary file copy.
+
+MartyPC's mixer is a raw register bank without analog attenuation. It proves
+the XT UI and adapter pixels; the independent masks and QEMU prove register
+behavior. Physical loudness, channel wiring and analog balance still need
+a listening check on real Creative cards. No emulator result here claims
+that measurement.
+
+Final gate: all 13 affected soak rows passed. `make test-full` passed 62 of
+63 rows initially; `kernresident` could not start because the reused emulator
+assets lacked its 128KB VGA machine definition. The definition from the
+repository was added to a private configuration, and only that failed row
+was rerun: it passed, proving the desktop boots on 128KB and stays inside
+the resident budget. All 63 full-tier rows therefore passed, including the
+C toolchain, both mono-adapter boots, small-kernel boot, hot alignment and
+the strict guide lock. The original checkout and emulator configuration
+were left alone.

@@ -178,6 +178,8 @@ volume_popup:
     jz .release
     cmp byte [volume_prev], 0
     je .press
+    cmp byte [volume_drag], 0
+    jne .slide                 ; captured drag keeps its x even outside y
     cmp dx, MVP_Y              ; initial held press can drag into the track
     jb .wait
     cmp dx, MVP_Y+64

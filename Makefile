@@ -3850,7 +3850,7 @@ mixer: $(BUILD)/mixer.o88
 $(BUILD)/mixer.bin: apps/mixer/mixer.asm apps/os88mixui.inc apps/os88gfx.inc \
                     apps/os88dec.inc apps/os88ui.inc apps/os88api.inc \
                     drivers/sound/sndpkg.inc | $(BUILD)
-	$(NASM) -f bin -w+error -l $(BUILD)/mixer.lst --before "[map symbols $(BUILD)/mixer.map]" \
+	$(NASM) -f bin -w+error \
 		-I apps/ -I drivers/sound/ -o $@ apps/mixer/mixer.asm
 $(BUILD)/mixer.o88: $(BUILD)/mixer.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/mixer.bin -o $@
@@ -5672,6 +5672,16 @@ $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin tools/os88pkg.py
 
 $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
+
+# The same fixture with 4.8 seconds staged: QMP and floppy discovery must
+# leave audio still playing when the volume popup opens. Default SBTEST
+# remains byte-identical; this arm is only the mixer's background-service leg.
+$(BUILD)/mixplay.bin: tests/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DSBTEST_RATE=4000 -DSBTEST_CHUNKS=24 -o $@ $<
+$(BUILD)/mixplay.o88: $(BUILD)/mixplay.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+$(BUILD)/mixplay.img: $(BUILD)/mixplay.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mixplay.o88
 
 # Minesweeper, the first loadable program: a flat binary with the .o88
 # package header. ONE assembly per package since SPEC.md 20.1 - a package

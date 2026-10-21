@@ -381,9 +381,9 @@ FAST = [
         "the tail's block table holds exactly their images, each is its "
         "org-DRV_HMA_ORG assembly where nothing writes, HDD.DRV mounts C: "
         "from up there and it lists HELLO.TXT, and RECORDER's demo plays on "
-        "the card out of an 8KB double buffer in the pool (page 10h) to "
-        "PLAY DONE, the block given back; the Control Panel's Hard Disk "
-        "page loads HDDTOOL.DRV, which calls back into HDD.DRV at E00Ch "
+        "the card out of an 8KB double buffer in the pool, or the heap "
+        "when the pool is full, to PLAY DONE; the Control Panel's Hard Disk "
+        "page loads HDDTOOL.DRV, which calls back through its HMA origin "
         "and syncs its device table, and Install copies the whole system "
         "onto C: from there. B, -m 1: the same drivers in the heap, C: "
         "still mounted and the page synced - the negative control. SOAK: one "
@@ -14612,8 +14612,10 @@ SOAK = [
         needs=("marty", "nasm"), timeout=600, wants=("build/mixer360.img",)),
     Row("mixersb16", "soak", py("tests/mixer.py", "--adapter", "sb16"), 40.0,
         "SPEC.md 34.15: QEMU SB16/CT1745 actual hardware readback, stereo balance, "
-        "tone controls and the complete popup/package session; MartyPC has only a raw mixer bank",
-        needs=("qemu", "nasm"), timeout=600, wants=("build/mixer360.img",)),
+        "tone controls, background playback while the popup remains open and "
+        "the complete popup/package session; MartyPC has only a raw mixer bank",
+        needs=("qemu", "nasm"), timeout=600,
+        wants=("build/mixer360.img", "build/mixplay.img")),
     Row("mixerhost", "soak", py("tests/mixermodel.py"), 2.0,
         "SPEC.md 34.15: the shipped mixer assembly against independent Creative "
         "register maps, all percentages and asymmetric stereo, refusals before "

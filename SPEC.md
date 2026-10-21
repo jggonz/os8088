@@ -68972,7 +68972,10 @@ boundary; their existing prefix/index rule is unchanged. SOUND.DRV rounds to 12K
 Its hit range is tested before
 the Date/Time cell, without changing application menu indices. The icon is
 cached independently, invalidated when the bar is overwritten or capabilities
-change, and is omitted entirely on kern_small.
+change, and is omitted entirely on kern_small. A progress widget armed before
+that boundary moves retains its origin for the operation. If its old span
+overlaps the new speaker segment, `fpg_finish` invalidates the icon before
+the final bar repaint, restoring both its text-band and outer rows.
 
 The popup is SOUND.DRV code, available with the loaded driver. Its private
 bridge is supplied by the kernel each call: AL=0 finish file activity, restore the pointer, spend lazy hide/show,

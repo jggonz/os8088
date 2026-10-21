@@ -1010,6 +1010,15 @@ fpg_finish:
                                 ; AFTER [fpg_on] went to 0, so the menus
                                 ; segment is back to full length and nothing
                                 ; is clamped away
+%ifdef OS88_SNDCARD
+    ; Sound can publish its mixer during this very boot transfer, moving
+    ; vid_clk_hx left. The armed widget's old span then covers the icon;
+    ; menu text cannot erase it beyond its new bound. Redraw the picture too.
+    cmp cx, [vid_clk_hx]
+    jb .soundok
+    mov word [menu_mixcap], 0FFFFh
+.soundok:
+%endif
     call menu_draw_bar          ; the text band, as the ONE run that differs -
     pop ax                      ; and the menus segment is FPG_CELLS longer
                                 ; again the moment [fpg_on] went to 0 above,

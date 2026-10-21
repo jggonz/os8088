@@ -71,9 +71,6 @@ UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
 ; out: never returns
 ; clobbers: everything (it is a task entry, not a callable routine)
 ; -----------------------------------------------------------------------------
-%ifdef OS88_SNDCARD
-    db 0 ; PARITY: keep ui_task on its measured even address
-%endif
 ui_task:
 .loop:
 %ifdef KFZTRACE
@@ -3288,6 +3285,6 @@ ui_volume_service:
     pop es
     pop ds
     retf
-    db 0 ; PARITY: the following hot routines retain their measured phase
+    times 2 db 0 ; PARITY: ui_task and the following hot routines keep their phase
 %endif
 section .text
