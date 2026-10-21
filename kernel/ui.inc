@@ -71,6 +71,9 @@ UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
 ; out: never returns
 ; clobbers: everything (it is a task entry, not a callable routine)
 ; -----------------------------------------------------------------------------
+%ifdef OS88_SNDCARD
+    db 0 ; PARITY: keep ui_task on its measured even address
+%endif
 ui_task:
 .loop:
 %ifdef KFZTRACE
@@ -426,7 +429,7 @@ ui_task:
     mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
 
     call COLD_SEG:fdlg_grab_x   ; a modal file dialog swallows every press
-    jc short .yj1               ; outside its own frame (SPEC.md 38.2).
+    jc .yj1               ; outside its own frame (SPEC.md 38.2).
                                 ; AHEAD of every branch below - modality is
                                 ; not a window property, and a press on the
                                 ; menu bar must die as firmly as one on
@@ -474,10 +477,26 @@ ui_task:
     call ui_dispatch
     jmp .yj1
 
-.clock_cell:                    ; open the Control Panel on its Date/Time
+.clock_cell:                    ; speaker first, then the Date/Time cell
+%ifdef OS88_SNDCARD
+    test word [drv_svc+DSV_CAPS], SND_CAP_MIXER
+    jz .date_cell
+    mov ax, cx
+    sub ax, [vid_clk_hx]
+    cmp ax, 24
+    jae .date_cell
+    mov cx, [vid_clk_hx]
+    push ds
+    pop es
+    mov di, ui_volume_bridge
+    mov bx, DRVC_SOUND*256 + 11 ; SNDV_MIXPOP, no graphics lock held
+    call drv_pkg_call_x
+    jmp .yj1
+.date_cell:
+%endif
     mov byte [cp_sel], CP_ITIME ; page (SPEC.md 31.5); no lock held here, so
     call COLD_SEG:cpf_cp_open   ; cp_open is app_launch with the module load
-    jmp short .yj1              ; in front of it (SPEC.md 2.8.4) - and it owns
+    jmp .yj1              ; in front of it (SPEC.md 2.8.4) - and it owns
                                 ; the refusal, beep or toast, so there is
                                 ; nothing left here to say
 
@@ -527,7 +546,7 @@ ui_task:
                                 ; reaches HERE reaches .yield one hop on
 .grow_box:                      ; (HERE, behind .yj1's jump and in short
     call ui_grow                ; reach of the region dispatch, so its `je`
-    jmp short .yj1              ; is two bytes and not five) in: BX = window,
+    jmp .yj1              ; is two bytes and not five) in: BX = window,
                                 ; CX/DX = mousedown x/y
 
 .content_front:
@@ -634,7 +653,7 @@ ui_task:
 %ifdef KERN_BIG
     call ui_lit_on              ; ...and the arm and the picture are set in the
 %endif                          ; same breath, so no pass can see one without
-    jmp short .yj1              ; the other
+    jmp .yj1              ; the other
 
 
 .title_bar:
@@ -3206,4 +3225,69 @@ ui_rzh:     resw 1
   %error "ui_grow copies W_X..W_H into ui_rzx..ui_rzh as four consecutive words"
 %endif
 
+section .text
+
+%ifdef OS88_SNDCARD
+; SOUND.DRV's private modal bridge (SPEC.md 34.15): cursor refcounts and
+; event draining stay with the kernel's owner. Driver never knows offsets.
+ui_volume_bridge: dw ui_volume_service, KERNEL_SEG
+ui_volume_service:
+    push ds
+    push es
+    push bx
+    push si
+    push di
+    push bp
+    push cs
+    pop ds
+    push cs
+    pop es
+    cmp al, 1
+    je .hide
+    cmp al, 2
+    je .poll
+    cmp al, 3
+    je .drain
+    call fpg_finish             ; discovery is over, even while the menu stays
+    cmp byte [cur_shape], CUR_BUSYSH
+    jne .arrow
+    mov al, [cur_shprev]
+    call cur_shape_set
+.arrow:
+    call cur_unlazy
+    call cursor_show
+    jmp short .out
+.hide:
+    call cursor_hide
+    jmp short .out
+.drain:
+    mov di, ui_ev
+    call evq_drain
+    jmp short .out
+.poll:
+    pushf
+    cli
+    mov cx, [mouse_x]
+    mov dx, [mouse_y]
+    mov al, [mouse_btn]
+    popf
+    cmp byte [cur_level], 0
+    jl .out                    ; dismissal has already hidden the arrow
+    cmp cx, [cur_drawn_x]
+    jne .move
+    cmp dx, [cur_drawn_y]
+    je .out
+.move:
+    call cursor_hide
+    call cursor_show
+.out:
+    pop bp
+    pop di
+    pop si
+    pop bx
+    pop es
+    pop ds
+    retf
+    db 0 ; PARITY: the following hot routines retain their measured phase
+%endif
 section .text

@@ -187,6 +187,7 @@ mix_get:
     jb .ok
     or dl, MIX_TONE
 .ok:
+    mov dh, [si+3]
     clc
 .out:
     pop di

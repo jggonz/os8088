@@ -1075,7 +1075,7 @@ opl_defpat:
 ; out: per verb; CF=1 AX=0 for a verb we do not know
 ; =============================================================================
 snd_pkg:
-    cmp bl, SNDV_MIXSET
+    cmp bl, SNDV_MIXPOP
     ja .bad
     mov bp, bx                  ; a table through BP, which the kernel's
     and bp, 0x00FF              ; OSAPI_DRV_CALL banks: BX comes back as it
@@ -1088,6 +1088,7 @@ snd_pkg:
 snd_ptab:                       ; by verb number (sndpkg.inc)
     dw snd_ident, snd_pkg_oplw, mpu_v_info, mpu_v_open, mpu_v_write
     dw mpu_v_close, cvx_v_info, mix_info, mix_get, mix_set
+    dw mix_icon_entry, volume_popup
 %if SNDV_IDENT != 0 || SNDV_OPLW != 1 || SNDV_MIDINFO != 2 || SNDV_MIDOPEN != 3 || SNDV_MIDW != 4 || SNDV_MIDCLOSE != 5 || SNDV_DACINFO != 6
   %error "snd_ptab is indexed by the SNDV_* numbers"
 %endif
@@ -1469,6 +1470,7 @@ opl_init:
     pop ax
     ret
 
+%include "volume.inc"           ; the loaded driver's quick-volume popup
 %include "mixer.inc"            ; hardware mixer verbs (SPEC.md 34.15)
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
 %include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
@@ -1510,5 +1512,6 @@ opl_xmode:  db 0                ; the mode it was granted: SND_OPL2 / SND_OPL3
 MPU_STATE
 SBL_STATE
 MIX_STATE
+VOLUME_STATE
 
 OS88_DRV_END

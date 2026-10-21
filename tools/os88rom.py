@@ -918,7 +918,7 @@ def hma_driver(build, name, org):
             "img": len(img), "total": total, "rel": rel}
 
 
-def build_hma(build, variant, drivers=(), org=0xE000):
+def build_hma(build, variant, drivers=(), org=0xC000):
     """`variant` is KERN_BIG, or the Makefile's whole $(VIDDEF) - a knob
     tree's kernel is only reproduced by the defines it was built with.
     `drivers` are the names whose relocation tables the tail carries."""
@@ -1089,7 +1089,7 @@ def main():
     ap.add_argument("--drivers", help="hma: the drivers whose relocation "
                     "tables it carries - <name>.bin, <name>.hma.bin and "
                     "<name>.drv in --build (docs/plans/HMA-PLAN.md 5)")
-    ap.add_argument("--drv-org", default="0xE000",
+    ap.add_argument("--drv-org", default="0xC000",
                     help="hma: the origin the .hma.bin copies were "
                     "assembled at (kernel.asm's DRV_HMA_ORG)")
     ap.add_argument("--selfcheck", action="store_true")

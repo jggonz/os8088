@@ -3766,16 +3766,18 @@ The design record is docs/plans/HMA-PLAN.md 5.
 
 - **`.cold` is at the TOP of the HMA, the pool under it.** Nothing above 1MB
   is reachable at offset 0 - FFFF:x is linear 0xFFFF0 + x - so a block at HMA
-  offset *b* is addressed C:`DRV_HMA_ORG` (0xE000) with C = FFFF -
-  (0xE000 - *b*)/16. Under `.cold` every such C is F200-F7FF; above it every
-  C would be FBxx-FFxx, which is the heap's owner TAGS (§50), and a claim an
-  HMA driver made would read as purgeable. So kern_big's `.cold` starts at
+  offset *b* is addressed C:`DRV_HMA_ORG` (0xC000) with C = FFFF -
+  (0xC000 - *b*)/16. Under `.cold` every such C is F400-F9FF, below
+  the heap's FBxx-FFxx owner TAGS (§50). The origin was E000 before the
+  volume popup (§34.15) grew SOUND.DRV beyond its 8KB address window. So kern_big's `.cold` starts at
   `HMA_COLD_AT` (kernel.asm) in RAM, in ROM and in the HMA alike, and
-  kern_small's stays at 0x10. A block is at most 8KB (0xE000-0xFFFF).
+  kern_small's stays at 0x10. A driver image is at most 16KB
+  (0xC000-0xFFFF); OSAPI_MEM_HMA buffers retain their 8KB limit. The pool
+  stays the same size; a claim that does not fit falls back to the heap.
 - **A driver is RELOCATED, not re-read.** The build assembles each driver in
   the Makefile's `HMADRV` twice, at org 0 and at org `DRV_HMA_ORG`, and
   `tools/os88rom.py hma` diffs the pair: every byte that moves is a high byte
-  gaining 0xE0, which it proves by relocating the loaded image and comparing
+  gaining `DRV_HMA_ORG >> 8`, which it proves by relocating the loaded image and comparing
   it with nasm's copy. The tables ride COLDHMA.SYS keyed by a hash of the
   org-0 image. The shipped `.DRV` is the org-0 file it always was.
 - **`drv_hma_try`** is the last step of `drv_load`, after `drv_check` and
@@ -68945,10 +68947,10 @@ The package ABI extends `drivers/sound/sndpkg.inc`, through the existing
 | verb | input | output |
 |---|---|---|
 | `SNDV_MIXINFO` (7) | none | CF=0, AL=1 CT1335 / 2 CT1345 / 3 CT1745; CX = channel bitmap; CF=1 AX=SNDE_NOMIX (7) |
-| `SNDV_MIXGET` (8) | AL = channel | CF=0, CL/CH = left/right percentage 0..100; DL bit 0 = stereo, bit 1 = tone control; mono repeats left; CF=1 AX=SNDE_MIXARG (8) for unsupported channel |
+| `SNDV_MIXGET` (8) | AL = channel | CF=0, CL/CH = left/right percentage 0..100; DL bit 0 = stereo, bit 1 = tone control; DH = native maximum (3/7/15/31); mono repeats left; CF=1 AX=SNDE_MIXARG (8) for unsupported channel |
 | `SNDV_MIXSET` (9) | AL = channel; CL/CH = left/right 0..100 | CF=0 written; invalid values or channel refuse before any write, CF=1 AX=SNDE_MIXARG; unavailable mixer answers SNDE_NOMIX |
 | `SNDV_MIXICON` (10) | CX = left x, gfx lock held | opaque 24x16 speaker image at (CX,2), CF=0; kernel callers only |
-| `SNDV_MIXPOP` (11) | CX = icon left x; UI task, no lock held | tracks volume popup, restores pixels and frees scratch on every exit; CF=0, no package launched while gfx lock held |
+| `SNDV_MIXPOP` (11) | CX = icon left x; ES:DI = kernel-private far bridge record; UI task, no lock held | tracks volume popup, restores pixels and frees scratch on every exit; CF=0, no package launched while gfx lock held |
 
 Channel numbers: 0 Master, 1 PCM, 2 FM/MIDI, 3 CD, 4 Line, 5 Mic,
 6 PC Speaker input, 7 Bass, 8 Treble. INFO's bitmap is authoritative.
@@ -68962,12 +68964,18 @@ the mixer attached. Unsupported/absent chips cause no mixer UI.
 The speaker occupies the first 24 pixels of the existing right-hand clock
 segment, beginning at `[vid_clk_hx]`, on the primary display only. The clock
 uses three fewer glyph cells while it is present and keeps its right edge;
-long dates lose their prefix before the time. Its hit range is tested before
+long dates lose their prefix before the time. SOUND.DRV rounds to 12KB of image plus state on the heap;
+`DRVM_IMG_SND` is 12. The popup claims only its adapter-sized save-under while open: up to
+10KB on VGA/EGA and 3KB on the mono adapters.
+Its hit range is tested before
 the Date/Time cell, without changing application menu indices. The icon is
 cached independently, invalidated when the bar is overwritten or capabilities
 change, and is omitted entirely on kern_small.
 
-The popup is SOUND.DRV code, available with the loaded driver. It anchors
+The popup is SOUND.DRV code, available with the loaded driver. Its private
+bridge is supplied by the kernel each call: AL=0 finish file activity, restore the pointer, spend lazy hide/show,
+1 hide, 2 poll (AL=buttons, CX/DX=x/y, move visible cursor), 3 drain queued
+modal edges. The driver stores no kernel offsets or build-dependent names. It anchors
 below the bar, clamps to live display geometry, and owns a temporary
 save-under claim. Allocation/save failure leaves the desktop untouched and
 reports a refusal. It supports click-open, press-drag-release, dragging beyond
@@ -68987,9 +68995,11 @@ persisted and there is no dependency from basic volume to this file.
 
 `MIXER.O88` is an optional native package with an About handler. It queries
 the live driver, offers only supported channels, and adjusts per-channel
-level and stereo balance (mono channels have no balance control). It handles
+level and stereo balance (mono channels have no balance control). Bass and
+Treble use independent Left/Right tone sliders and label 53% as flat (native
+step 8 of 15), rather than applying a volume-balance ratio to tone values. It handles
 an unavailable/unloaded driver visibly. Its sliders share source with the
-popup, including the monochrome face. It ships in SYSTEM on live hard-disk
+popup, including the monochrome face. It ships in SYSTEM on 720KB, 1.2MB and 1.44MB system floppies and live hard-disk
 media and is available through `make mixer`; it does not join the 360KB
 system disk. Existing hard-disk installation copies remain ordinary file
 copies: a user may add MIXER.O88 to an installed SYSTEM folder.

@@ -316,3 +316,14 @@ Drivers page (`drv_release`'s ROMF_HDROP, then a fresh placement); and tier
 into it run from the HMA, so a DOS program that closes A20 (section 3) stops
 the sound driver as well as `.cold` - and the BIOS's own AH=87h did exactly
 that until `xm_bios` held the PIC across it (5.4).
+
+## 6. Mixer extension: a 16KB driver address window
+
+SPEC.md §34.15 keeps the quick-volume UI in SOUND.DRV so the loaded driver
+can adjust volume without asking for the system floppy. That exceeds the
+original 8KB driver window. DRV_HMA_ORG moves from E000 to C000, making
+image offsets fit up to 16KB while pool aliases are F400-F9FF, still below
+FBxx's owner tags. The pool itself and the 8KB public buffer limit do not
+grow. Relocation still changes only high bytes and is checked byte for byte
+against a second assembly. A full pool uses the existing heap fallback.
+The figures and E000 examples in section 5 describe its original wave.

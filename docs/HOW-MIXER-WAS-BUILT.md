@@ -32,3 +32,23 @@ of PCM-buffer ownership and the selected sound tier.
 Host verification: `make small` and `make` passed all 55 fast checks after
 building the small system disks required by the install-manifest check.
 Hardware and interaction evidence belongs to the final `mixer` row.
+
+## Quick-volume wave
+
+The first CGA boot showed the intended compact mechanical slider. It also
+exposed two defects worth looking for in assembly UI work: loading a color
+into AL after calculating AX changed a rectangle's x coordinate, and file
+discovery left the busy/activity affordance up for the life of the popup.
+The drawing paths now set colors before loading geometry, and the kernel's
+small modal bridge finishes file activity and owns cursor/event bookkeeping.
+
+The slider is composed with os88gfx.inc and emitted as one opaque band.
+Only the control band changes during a drag; its baseline stereo ratio
+survives silence and return. Save-under is sized for the actual adapter and
+optional command: 2/3KB on mono, 8/10KB on color. It is freed at dismissal.
+
+The driver exceeded the original HMA address window. The C000 origin gives
+16KB of offsets, keeps owner aliases below FB00, and leaves the 24KB pool
+unchanged. The host build checks relocation against a second assembly.
+Affected final rows include mixerhost, mixer adapter/UI rows, hmadrv,
+sndmove, stikmenu and toastbar.

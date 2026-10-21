@@ -3851,6 +3851,7 @@ SNDSTAMP := $(BUILD)/.sound-$(if $(NOPICOMEM),nopm,pm)$(if $(PM_BASE),-b$(PM_BAS
 
 $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc drivers/sound/covox.inc \
                     drivers/sound/picomem.inc drivers/sound/sndpkg.inc drivers/sound/mixer.inc \
+                    drivers/sound/volume.inc apps/os88mixui.inc apps/os88gfx.inc apps/os88dec.inc \
                     drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(SNDDEF) -I drivers/sound/ -I drivers/ -I apps/ \
 		-o $@ drivers/sound/sound.asm
@@ -4171,8 +4172,9 @@ $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(KERNFILE) | $(BUILD)
 # just loaded by it and copies it into the HMA, so the shipped .DRV stays the
 # org-0 file it always was and a machine with no HMA reads nothing new. The
 # .hma.bin copies ship nowhere; they exist for the diff.
-DRV_HMA_ORG := 0xE000
+DRV_HMA_ORG := 0xC000
 HMADRV := sound hdd net
+$(addprefix $(BUILD)/,$(addsuffix .hma.bin,$(HMADRV))): Makefile
 $(BUILD)/coldhma.sys: $(KERNFILE) boot/osrom.asm tools/os88rom.py tools/os88romfix.py \
                       $(foreach d,$(HMADRV),$(BUILD)/$(d).bin $(BUILD)/$(d).hma.bin $(BUILD)/$(d).drv)
 	python3 tools/os88rom.py hma --build $(BUILD) --out $(BUILD) "--defines=$(VIDDEF)" \
@@ -4180,6 +4182,7 @@ $(BUILD)/coldhma.sys: $(KERNFILE) boot/osrom.asm tools/os88rom.py tools/os88romf
 
 $(BUILD)/sound.hma.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc drivers/sound/covox.inc \
                         drivers/sound/picomem.inc drivers/sound/sndpkg.inc drivers/sound/mixer.inc \
+                    drivers/sound/volume.inc apps/os88mixui.inc apps/os88gfx.inc apps/os88dec.inc \
                         drivers/os88drv.inc apps/os88api.inc $(BUILD)/sound.bin
 	$(NASM) -f bin -w+error $(SNDDEF) -DDRV_ORG=$(DRV_HMA_ORG) -I drivers/sound/ \
 		--before "[map symbols $(BUILD)/sound.hma.map]" \

@@ -927,6 +927,9 @@ menu_furniture:
     push dx
     push di
     mov byte [menu_bovr], 0
+%ifdef OS88_SNDCARD
+    mov word [menu_mixcap], 0FFFFh
+%endif
 
     call thm_bg                
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
@@ -1466,6 +1469,12 @@ menu_bput:
 menu_clkcells:
     mov ax, [vid_wm8]
     sub ax, [vid_clk_hx]
+%ifdef OS88_SNDCARD
+    test word [drv_svc+DSV_CAPS], SND_CAP_MIXER
+    jz .plain
+    sub ax, 24
+.plain:
+%endif
     mov cl, 3
     shr ax, cl
     cmp ax, MENU_CLKC - 1
@@ -1475,6 +1484,9 @@ menu_clkcells:
     ret
 
 menu_draw_clock:
+%ifdef OS88_SNDCARD
+    call menu_sound
+%endif
     call kent_di                ; = push ax/bx/cx/dx/si/di
     push es
 
@@ -1587,7 +1599,7 @@ menu_draw_clock:
                                 ; DH <= the field's 25 cells, so `cbw` is a zero
                                 ; extension; AX is reloaded on both paths below
     mov dx, MENU_TEXT_Y
-    mov cx, [vid_clk_hx]
+    mov cx, [menu_clkx]
     mov si, menu_clkbuf
     or di, di
     jnz .strip
@@ -1650,7 +1662,7 @@ menu_draw_clock:
     mov ax, di                  ; --- and the clock the strip did not reach
     mov cl, 3
     shl ax, cl
-    add ax, [vid_clk_hx]
+    add ax, [menu_clkx]
     mov cx, ax
     mov si, menu_clkbuf
     add si, di
@@ -2877,4 +2889,60 @@ menu_abstr: resb MENU_ABPFX_LEN + MENU_MAXCH + 1
                                 ; both strings the cell needs are KERNEL data
                                 ; and its MB_SEG is 0 even under a package
 
+section .text
+
+%ifdef OS88_SNDCARD
+; Independent fourth segment inside the clock's old field. The driver owns
+; the picture. No idle port reads or icon blits; capability/overwrite only.
+menu_sound:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [vid_clk_hx]
+    mov [menu_clkx], ax
+    mov ax, [drv_svc+DSV_CAPS]
+    and ax, SND_CAP_MIXER
+    jz .origin
+    add word [menu_clkx], 24
+.origin:
+    cmp ax, [menu_mixcap]
+    je .out
+    mov [menu_mixcap], ax
+    mov word [menu_ckck], 0
+    or ax, ax
+    jz .clear
+    mov cx, [vid_clk_hx]
+    mov bx, DRVC_SOUND*256 + 10 ; SNDV_MIXICON (SPEC.md 34.15)
+    push ds
+    pop es
+    call drv_pkg_call_x
+    jmp short .out
+.clear:
+    call thm_bg
+    mov ax, [vid_clk_hx]
+    mov cx, ax
+    add cx, 23
+    mov bx, 2
+    mov dx, 17
+    call gfx_fill
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+menu_mixcap: dw 0FFFFh
+menu_clkx:   dw 0
+%else
+menu_clkx equ vid_clk_hx
+%endif
 section .text
