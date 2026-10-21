@@ -42377,9 +42377,12 @@ number the tree no longer has.
 
 **What it does not cover**: a NEW package calling a cell an OLD kernel does
 not have, at the same format. The table only grows (§20.3), so that package
-far-calls past the old table's end. The Wire on that old machine would offer
-it, because the format byte matches. A per-package "highest cell used" figure
-in the catalog is the shape of the fix, and it is left for when it is needed.
+far-calls past the old table's end. The LOADER still starts it on that old
+machine, because the format byte matches. **The Wire fences it** (92.2's
+cell fence): a record whose package calls a cell newer than a Wire's
+generation is greyed `Needs a newer Wire - update the system disk` on every
+Wire from v1.0.20261012 on, and the release check refuses a call newer than
+any level. A package copied onto an old machine by hand is still unfenced.
 
 **The dispatcher at +12 is the header's one piece of executable code**, and
 it is what makes a package's callbacks ordinary near procs. Every
@@ -69969,8 +69972,10 @@ OSAPI_CLK_GET   KERNEL_SEG:0x0475
 - **kern_small has the cell and the body**, its `clk_rtc` is 0 (§37.0.1's PIT
   clock), so a package there can say "clock not set".
 - A package that calls it **ships beside its own kernel**: an older kernel at
-  the same `PKG_FMT` has no 0x0475 (§20.2.0.1's open gap), which is why the
-  Desk Calendar is not offered on The Wire (§110.8).
+  the same `PKG_FMT` has no 0x0475 (§20.2.0.1's gap), which is why the
+  Desk Calendar is not offered on The Wire (§110.8). 92.2's cell fence now
+  greys such a record on an older Wire, so offering one is a catalog
+  decision rather than a missing mechanism.
 
 ## 38. fdlg.inc — the Standard File dialog
 
@@ -150230,7 +150235,9 @@ RECORD i, 256 bytes at 32 + 256*i
           an archive with no program, and 0 is "no claim"
  +253 1   WC_NEEDW: the oldest Wire that can INSTALL the record - 1 for a
           plain record or a version 1 archive, 2 for a version 2 archive
-          (92.13.1); 0 is "no claim"
+          (92.13.1), 3 when a package the record installs far-calls an
+          API cell at or past 0x046D (the cell fence, below); the highest
+          that applies. 0 is "no claim"
  +254 2   zero
 
 SIDECAR TABLE entry j, 16 bytes at (header +10) + 16*j
@@ -150248,7 +150255,7 @@ WC_PKGFMT with ITS OWN `PKG_FMT`, which needs nothing from the kernel: a
 running package's format IS the kernel's, or the loader would not have
 started it (§20.2.0). Higher greys both buttons with `Needs a newer os8088 -
 update the system disk`, lower with `Made for an older os8088`; a WC_NEEDW
-above `WIRE_LEVEL` (2) greys them with `Needs a newer Wire - update the
+above `WIRE_LEVEL` (3) greys them with `Needs a newer Wire - update the
 system disk`. 0 in either is a catalog from before the bytes and is not
 judged. **Every Wire released before these bytes reads none of them** - the
 reader never looked past +252 - so the bytes protect machines from the
@@ -150263,6 +150270,47 @@ Disk writes, the `LD_EVER` wording and four strings - 11,703 -> **11,928** of
 also fails any published package whose format is not this tree's `PKG_FMT`
 (read off `apps/os88api.inc`), because every machine on the release would
 download it and be told it is the wrong version.
+
+**The cell fence: WC_NEEDW is also the API table's generation.** A package
+built for the same `PKG_FMT` can still call a cell an older kernel does not
+have (§20.2.0.1): the table only grows, so the call lands past the old
+table's end, in whatever kernel code follows it. WC_PKGFMT cannot see that,
+and every Wire from v1.0.20261012 on already reads WC_NEEDW, so the level
+byte is the fence those machines can be given. The Wire lives on the system
+disk beside its kernel, so `Needs a newer Wire - update the system disk` is
+the true sentence for it too. The rows are `WIRE_CELL_LEVELS` in
+`tools/os88wire.py`:
+
+| level | a package that far-calls a cell at or past | fenced from | first Wire at the level |
+|---|---|---|---|
+| 3 | 0x046D | every level-2 Wire at `PKG_FMT` 10: v1.0.20261014 (its table ends at 0x046D) and v1.0.20261019 (0x0499) | v1.0.20261020 |
+
+**A row's cell is the table end of the OLDEST kernel the level fences, not
+of the last release.** Two releases share `PKG_FMT` 10 and both Wires are
+level 2, so one byte has to hold both back, and the older table is the one
+that decides. That over-fences a v1.0.20261019 machine for the cells
+0x046D..0x0498 it does have - TeXpad and FTPD read `Needs a newer Wire`
+there and would have run - which is the safe side of a one-byte test.
+`WIRE_TABLE_END` (0x04A5) is the end of the table the TOP level's kernel
+has. **A call at or past `WIRE_TABLE_END` is refused** by `--verify
+--pkgdir`, because no Wire in the field can be told about it: the release
+that first publishes such a package adds a row (the next level, its first
+cell), moves `WIRE_TABLE_END` to that kernel's `osapi_table_end`, and raises
+`WIRE_LEVEL` in `apps/thewire/wcat.inc` and in `tools/os88wire.py` together
+(`t_wire` compares the two). A level is cut per RELEASE and never per cell:
+two cells that first ship together are one row.
+
+The level is declared in the manifest and **checked against the bytes**. The
+website's writer has no package decoder, so a record says `"needs_wire": 3`
+and both writers write the larger of that and what the archive needs.
+`os88wire.py` unpacks every published `.O88` - the image, each code part
+(§20.12), each `.O88` sidecar and each `.O88` entry of an archive - and
+collects the targets of every `call far 0060:xxxx` (`9A xx xx 60 00`). Its
+`pack` refuses a manifest that declares less than that scan finds, and
+`--verify --pkgdir` holds WC_NEEDW to the scan exactly, so a stale
+declaration in either direction is a refusal. The scan is of the encoding
+every package uses: `call OSAPI_*` is a direct far call by the SDK's
+`%define`. A cell reached any other way would not be seen.
 
 **A twelve-character name fills its slot**, the rule 92.13's archive slots
 already follow. The Add chain copies at most twelve bytes and stops at a NUL
@@ -194297,7 +194345,8 @@ no alert.
   the clock this session - the cell cannot say which (§110.3).
 - **Not on The Wire**: a Sticky App calls `OSAPI_CLK_GET` (0x0475), which an older
   kernel at the same `PKG_FMT` does not have — the gap §20.2.0.1 names — so it
-  ships only beside its own kernel until a "highest cell used" fence exists.
+  ships only beside its own kernel. 92.2's cell fence now exists, so
+  putting one on The Wire is a catalog decision rather than a missing one.
 
 ### 110.9 Where the code proved the design wrong
 

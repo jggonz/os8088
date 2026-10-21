@@ -112,8 +112,20 @@ WIRE_FILEMAX = 64512
 WIRE_NMAX = 255
 WIRE_SCMAX = 32
 # What the Wire built from this tree installs (SPEC.md 92.2): 1 = plain records
-# and version 1 archives, 2 = version 2 archives too (92.13.1).
-WIRE_LEVEL = 2
+# and version 1 archives, 2 = version 2 archives too (92.13.1), 3 = a package
+# that far-calls a cell at or past 0x046D too (92.2's cell fence).
+WIRE_LEVEL = 3
+# THE CELL FENCE (SPEC.md 92.2): (first cell, level) rows. A record whose
+# package far-calls a cell at or past a row's cell needs that row's level.
+# Each row's cell is the table end of the OLDEST kernel the level fences -
+# v1.0.20261014's 0x046D for level 3, the older of the two kernels at PKG_FMT
+# 10 - and not last release's.
+WIRE_CELL_LEVELS = ((0x046D, 3),)
+# The end of the API table the TOP level's kernel has (kernel.asm's
+# osapi_table_end). A call at or past it is newer than any Wire in the field
+# can be told about, so --verify refuses it: the release that first publishes
+# one adds a row, moves this, and raises WIRE_LEVEL here and in wcat.inc.
+WIRE_TABLE_END = 0x04A5
 # 0x100000, one megabyte: the reader's sanity bound on an ARCHIVE record's
 # WC_SIZE. WIRE_FILEMAX is the wrong bound there and refusing on it is what
 # the machine did to the site's real RUNCPM record at 231,463 bytes - an
@@ -221,6 +233,71 @@ def sdk_pkgfmt():
     except OSError:
         return None
     return int(m.group(1)) if m else None
+
+
+# The kernel's segment, which every `call OSAPI_*` names: the SDK %defines a
+# cell as KERNEL_SEG:offset, so a call is `9A lo hi 60 00`.
+KERNEL_SEG = 0x0060
+_FARCALL = re.compile(re.escape(b"\x9a") + b"(..)" + re.escape(
+    struct.pack("<H", KERNEL_SEG)), re.S)
+
+
+def api_calls(blob):
+    """Every API cell a published .O88 far-calls, or None outside an OS tree.
+
+    The image is unpacked (SPEC.md 20.13) and so is every code part (20.12),
+    because a cell called from an overlay crashes the same machine. Needs
+    tools/os88pkg.py and tools/os88lz.py beside this file; the website's
+    checkout has neither, which is why the manifest DECLARES the level and
+    this side checks it (SPEC.md 92.2's cell fence).
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import os88pkg
+        import os88lz
+    except ImportError:
+        return None
+    if pkg_fmt(blob) == 0:
+        return set()
+    img = os88pkg.image_unwrap(blob)
+    pieces = [img]
+    if blob[3] & O88_F_PARTS:
+        at = img.find(os88pkg.PARTS_MAGIC)
+        if at != -1:
+            n = img[at + os88pkg.PARTS_HDR - 2]
+            fid = os88lz.LZ4 if img[at + os88pkg.PART_FMT_AT] == 0 else os88lz.LZB
+            for i in range(n):
+                kind, pfl, off, ulen, zkb = struct.unpack_from(
+                    "<BBHHH", img, at + os88pkg.PARTS_HDR + os88pkg.PART_ROW * i)
+                if kind != os88pkg.PK_SEG or pfl & os88pkg.OPF_ZERO or not off:
+                    continue
+                start = off * os88pkg.PART_ALIGN
+                if pfl & os88pkg.OPF_COMP:
+                    pieces.append(os88lz.decompress(blob[start:start + zkb],
+                                                    fid, ulen))
+                else:
+                    pieces.append(blob[start:start + ulen])
+    return {struct.unpack("<H", m.group(1))[0]
+            for piece in pieces for m in _FARCALL.finditer(piece)}
+
+
+def cell_level(blobs):
+    """(the Wire level these packages' calls need, the highest cell called).
+
+    (None, None) outside an OS tree. Level 0 is "no claim": no call at or
+    past any row's cell.
+    """
+    cells = set()
+    for b in blobs:
+        got = api_calls(b)
+        if got is None:
+            return None, None
+        cells |= got
+    level = 0
+    for first, lvl in WIRE_CELL_LEVELS:
+        if any(c >= first for c in cells):
+            level = max(level, lvl)
+    return level, (max(cells) if cells else None)
 
 
 def o88_header(blob, name):
@@ -338,6 +415,13 @@ def pack(manifest, pkgdir, picdir, date=None):
 
         fl = e.get("flags") or {}
         flags = 0
+        # THE CELL FENCE IS DECLARED (SPEC.md 92.2): the website's writer
+        # cannot unpack a package, so the manifest says the level and this
+        # writer checks the declaration against the bytes below.
+        declared = e.get("needs_wire", 0)
+        if not isinstance(declared, int) or not 0 <= declared <= WIRE_LEVEL:
+            raise Refused("%s: needs_wire is %r; 0..%d"
+                          % (stem, declared, WIRE_LEVEL))
         if fl.get("new"):
             flags |= WF_NEW
         if fl.get("floppy_only"):
@@ -384,6 +468,7 @@ def pack(manifest, pkgdir, picdir, date=None):
             wc_pkgfmt = (pkg_fmt(aents[-1]["data"])
                          if ahdr["flags"] & WAH_PROGRAM else 0)
             wc_needw = 2 if ahdr["ver"] == WARC_VER2 else 1
+            scan = [x["data"] for x in aents if pkg_fmt(x["data"])]
             icon = arc_icon(ahdr, aents, afile)
             if arc.get("icon"):
                 ipath = os.path.join(pkgdir, arc["icon"])
@@ -438,7 +523,24 @@ def pack(manifest, pkgdir, picdir, date=None):
             wc_needkb = 0
             wc_pkgfmt = pkg_fmt(blobs[0])
             wc_needw = 1
+            scan = [b for b in blobs if pkg_fmt(b)]
             icon = icon_of(blobs[0], files[0])
+
+        lvl, top = cell_level(scan)
+        if top is not None and top >= WIRE_TABLE_END:
+            raise Refused("%s far-calls cell 0x%04X, at or past WIRE_TABLE_END "
+                          "0x%04X - newer than any Wire level, so no machine "
+                          "in the field can be told about it. Add a row to "
+                          "WIRE_CELL_LEVELS (SPEC.md 92.2's cell fence)"
+                          % (stem, top, WIRE_TABLE_END))
+        if lvl is not None and lvl > declared:
+            raise Refused("%s far-calls cell 0x%04X, which needs a level-%d "
+                          "Wire, and its manifest entry declares needs_wire "
+                          "%d. Declare it, or an older machine's Wire offers "
+                          "a program that calls past its kernel's API table "
+                          "(SPEC.md 92.2's cell fence)"
+                          % (stem, top, lvl, declared))
+        wc_needw = max(wc_needw, declared)
 
         if picdir and os.path.exists(os.path.join(picdir, stem + ".PIC")):
             pic = open(os.path.join(picdir, stem + ".PIC"), "rb").read()
@@ -562,9 +664,28 @@ def verify(blob, pkgdir=None):
                "have its loader refuse it as the wrong os8088 version. "
                "Republish it from this build (SPEC.md 92.2)"
                % (tag, whose, pfmt, sdkfmt))
+        if needw is None:
+            return
         if rneedw != needw:
             no("%s: WC_NEEDW is %d and the record needs a level-%d Wire - "
                "the writer derives it (SPEC.md 92.2)" % (tag, rneedw, needw))
+
+    def fence_need(tag, base, rneedw, pkgs):
+        """The level fmt_check holds WC_NEEDW to: the container's, raised by
+        what the published packages far-call (SPEC.md 92.2's cell fence).
+        None, and no level check, outside an OS tree."""
+        lvl, top = cell_level(pkgs)
+        if lvl is None:
+            if not base <= rneedw <= WIRE_LEVEL:
+                no("%s: WC_NEEDW is %d, outside %d..%d"
+                   % (tag, rneedw, base, WIRE_LEVEL))
+            return None
+        if top is not None and top >= WIRE_TABLE_END:
+            no("%s: a package far-calls cell 0x%04X, at or past "
+               "WIRE_TABLE_END 0x%04X - newer than any Wire level, so no "
+               "machine in the field can be told about it (SPEC.md 92.2's "
+               "cell fence)" % (tag, top, WIRE_TABLE_END))
+        return max(base, lvl)
 
     def icon_check(tag, got, pkg, whose):
         """The record's 64 bytes against the package that owns them.
@@ -726,6 +847,7 @@ def verify(blob, pkgdir=None):
                "- a RAM disk sized on it would fill before the tree landed"
                % (tag, needkb, total, (total + 1023) // 1024))
         tot = size
+        side_pkgs = []
         for j in range(nside):
             e = scoff + (side0 + j) * WIRE_SC
             if e + WIRE_SC > len(blob):
@@ -753,6 +875,8 @@ def verify(blob, pkgdir=None):
                 elif os.path.getsize(sp) != sz:
                     no("%s: sidecar %s is %d bytes in the table and %d on "
                        "disk" % (tag, sname, sz, os.path.getsize(sp)))
+                elif sname.upper().endswith(".O88"):
+                    side_pkgs.append(open(sp, "rb").read())
         if total != tot and not arc:
             no("%s: WC_TOTAL is %d and the .O88 plus its sidecars is %d - "
                "Add to Disk's free-space check is decided on that figure, so "
@@ -791,7 +915,10 @@ def verify(blob, pkgdir=None):
                     v2 = ahdr["ver"] == WARC_VER2
                     pfmt = (pkg_fmt(aents[-1]["data"])
                             if ahdr["flags"] & WAH_PROGRAM else 0)
-                    fmt_check(tag, rfmt, pfmt, rneedw, 2 if v2 else 1,
+                    fmt_check(tag, rfmt, pfmt, rneedw,
+                              fence_need(tag, 2 if v2 else 1, rneedw,
+                                         [x["data"] for x in aents
+                                          if pkg_fmt(x["data"])]),
                               "the archive's program entry")
                     if v2 != bool(flags & WF_DISK):
                         no("%s: the archive is version %d and WF_DISK is %s - "
@@ -816,7 +943,9 @@ def verify(blob, pkgdir=None):
                 if len(b) != size:
                     no("%s: WC_SIZE is %d and the file is %d"
                        % (tag, size, len(b)))
-                fmt_check(tag, rfmt, pkg_fmt(b), rneedw, 1, "the package")
+                fmt_check(tag, rfmt, pkg_fmt(b), rneedw,
+                          fence_need(tag, 1, rneedw, [b] + side_pkgs),
+                          "the package")
                 icon_check(tag, blob[o + WC_ICON:o + WC_ICON + 64], b,
                            "the package")
     return bad
