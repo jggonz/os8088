@@ -16,7 +16,8 @@
  * bucket walk and exact by construction (blockers write into it too). It lives
  * in the claim the level's raw record was read into (lemmask.inc's lem_o_*).
  *
- * ATTRIBUTION. Transliterated from Lemmix (Eric Langedijk, zlib) src/Game.pas
+ * ATTRIBUTION. Transliterated from Lemmix (Eric Langedijk, Lemmix's own
+ * licence - zlib-style, with an added clause) src/Game.pas
  * Start, InitializeObjectMap, UpdateInteractiveObjects and DrawAnimatedObjects,
  * and src/Level.Loader.pas TranslateLevel for the record's object and steel
  * fields; the GROUND object fields are ccexplore's document in

@@ -17,7 +17,7 @@ and **no file exceeds 64,512 bytes** (§114.3.2). Every name is uppercase 8.3 in
 | `LEMSTR.LEM` | the string resource band (§114.3, "the string resource band is written here too") | wave 1 |
 | `LEMLV0.LEM` … `LEMLV9.LEM` | the 80 raw 2048-byte level records, **eight to a file** (§114.3.2), ODDTABLE already folded in | wave 4 |
 | `LEMGR0.LEM` … `LEMGR4.LEM` | one style bank per graphic set: palette, terrain pieces, object metadata and frames. Header magic `LGRB`, **version 2** since wave 3, which added each object slot's GRND animation flags at byte 896 and its preview frame at 912 (the layout is `tools/os88lem.py`'s STYLE BANK block); the package refuses version 1 rather than reading zeros as "never animates" | wave 2, v2 in wave 3 |
-| `LEMMAIN.LEM` | the MAIN.DAT-derived bank: panel bitmap, both fonts, the 28 animations, the masks, the rating signs, the brown background. Header magic `LMNB`, **version 2** since wave 5, which added the MAIN-MENU palette at byte 288 (16 entries of three 6-bit components, the format document's own table - MAIN.DAT does not carry it); the preview and postview screens are drawn in it and the package refuses version 1 rather than lettering them in black | wave 2, v2 in wave 5 |
+| `LEMMAIN.LEM` | the MAIN.DAT-derived bank: panel bitmap, both fonts, the 28 animations, the masks, the rating signs, the brown background. Header magic `LMNB`, **version 2** since wave 5, which added the MAIN-MENU palette at byte 288 (16 entries of three 6-bit components, the format document's own table - MAIN.DAT does not carry it); the preview and postview screens are drawn in it and the package refuses version 1 rather than lettering them in black. **Version 3** since wave 6 adds item 10, the explosion's spray (decision 5, SPEC.md 114.8): `PARTICLES.DAT` byte for byte - 51 rows of 80 signed (dx, dy) pairs, a pair with either byte -128 not drawn - then 51 rows of four signed bytes, each frame's dx min, dx max, dy min, dy max over the particles drawn, or (127, -128, 127, -128) for none; 8,364 bytes, which takes the bank from 52,224 to 60,416 bytes and its claim from 52 KB to 60 | wave 2, v2 in wave 5, v3 in wave 6 |
 | `LEMSP0_0.LEM` … | the four VGASPEC pictures, in numbered parts (`LEMSP<n>_<part>.LEM`) because one is 76,800 bytes. Header magic `LSPB`, **version 2** since wave 4: the 512-byte header (8 total length, 12 width 960, 14 height 160, 16 bpp 4, 17 piece columns, 18 piece rows, 20 piece width 480, 22 piece height 40, 24 x 304; 32 the custom palette with entry 0 Lemmix's hardcoded 31, 31, 0, 56 the level's ground set's standard palette - the style bank's own two offsets) and then the picture as 2 x 4 PIECES, row-major, each laid out as a terrain piece is (planes 0-3, one plane stride apart), so `lem_r_wpiece` composes it. Version 1 was four whole planes | wave 4 |
 | `LEVELS.TXT` | plain text: what this disk carries and why the rest is not on it | the reader |
 
@@ -133,8 +133,9 @@ and one greyed row**, `LEMLV0.LEM` with their records, `LEMSTR.LEM` with the
 whole real string table (the strings are the port's own text and the
 reference's verbatim on-screen wording, not decoded data), one style bank stub
 with four invented terrain pieces and five object types (exit, hatch, water,
-a trap, fire), and a `LEMMAIN.LEM` stub with synthetic lemming animations and
-destruction stencils — carrying **no bytes derived from the original data
+a trap, fire), and a `LEMMAIN.LEM` stub with synthetic lemming animations,
+destruction stencils and an INVENTED spray table (item 10: arcs of the
+fixture's own, never the original's trajectories) — carrying **no bytes derived from the original data
 files**, so it can be committed and the host harness runs with no fetch. The
 three playable levels are what the mechanics replay drives (SPEC.md 114.12,
 `apps/lemmings/hosttest/mech/`): a change to them moves the replay's committed

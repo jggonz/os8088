@@ -1279,6 +1279,20 @@ lb_compose:
 ; lem_r_mlatch() hands the C the union: a click that went down and up inside
 ; one long draw is still a press. A far call (46.7 us) a sixteenth of the
 ; rows; nothing at all on a tick that moved no row. Every register kept.
+;
+; THE VGA COMPOSE ASKS TOO (wave 6's review): a busy VGA pass is ~1.35 s of
+; compose (SPEC.md 114.7.4) and nothing in it sampled, so a click inside one
+; was lost. lemsprite.inc's lem_r_sprite, lem_r_obj, lem_r_bgrect,
+; lem_r_clatch and lem_r_spray's drawing arm each call lb_msvga once on entry -
+; ON VGA ONLY, ~3 far calls a lemming, ~9 ms of a 1.35 s compose at sixty. The
+; two shadow cards already sample every sixteen rows above and in the present,
+; so there lb_msvga is one compare and no far call (wave 6's second review:
+; ~100 far calls a busy shadow frame bought nothing). The POINTER still moves
+; once a pass; only the buttons are latched.
+lb_msvga:
+    cmp word [lb_kind], LEM_KIND_VGA
+    je lb_msample
+    ret
 lb_msample:
     push ax
     push cx

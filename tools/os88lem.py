@@ -142,7 +142,8 @@ STYLE BANK - LEMGR<n>[_<part>].LEM, magic "LGRB"
 
 MAIN BANK - LEMMAIN.LEM, magic "LMNB"
     0   4  "LMNB"
-    4   2  version 2 (wave 5: the menu palette at 288; 1 had none)
+    4   2  version 3 (wave 6: item 10, the spray; 2: the menu palette at
+           288, wave 5; 1 had none)
     6   1  nitems
     7   1  parts
     8   4  totlen
@@ -172,6 +173,13 @@ MAIN BANK - LEMMAIN.LEM, magic "LMNB"
      7  brown background, 320x104 2bpp   MAIN section 3 offset 0    8,320
      8  animation registration table     30 rows of 8 (below)         240
      9  mask registration table          6 rows of 8                   48
+
+    10  the explosion's spray, 51 frames PARTICLES.DAT (Lemmix's     8,364
+        Particles.dat, extracted from the game's executable): 51
+        rows of 80 (dx, dy) signed-byte pairs, byte for byte, then 51
+        rows of 4 signed bytes - the frame's dx min, dx max, dy min,
+        dy max over the particles DRAWN (neither byte -128), or
+        (127, -128, 127, -128) for none (version 3, wave 6)
 
     A registration row is: 0 1 frames, 1 1 w, 2 1 h, 3 1 bpp,
     4 2 off (from the start of item 3 / item 4), 6 2 bytes per frame.
@@ -928,8 +936,41 @@ MENU_PALETTE = [
     (208, 208, 208), (176, 176, 0), (64, 80, 176), (224, 128, 144),
 ]
 MENUPAL_OFF = 288
-LMNB_VERSION = 2            # 2: the menu palette at MENUPAL_OFF (wave 5);
+LMNB_VERSION = 3            # 3: item 10, the explosion's spray (wave 6);
+                            # 2: the menu palette at MENUPAL_OFF (wave 5);
                             # apps/lemmings/lemload.c refuses any other
+
+# THE SPRAY (decision 5, SPEC.md 114.8): PARTICLES.DAT, 51 frames of 80
+# signed (dx, dy) pairs (Lemmix src/Game.pas TParticleTable, :47-51), and a
+# particle with EITHER byte -128 is not drawn - Lemmix DrawParticles
+# (:2492-2515) draws only when `(X <> -128) and (Y <> -128)`, and Lemmings.ts
+# ParticleTable.draw tests `dx == -128 || dy == -128` the same way. Two entries of the table have one byte
+# -128 and the other not (particle 10 at frame 18, 11 at 28), so the rule
+# matters to two pixels, and the bounds below are taken over the same rule.
+PART_FRAMES, PART_N = 51, 80
+PART_BYTES = PART_FRAMES * PART_N * 2
+SPRAY_ID = 10
+
+
+def spray_item(table):
+    """Item 10: the table byte for byte, then each frame's bounds."""
+    if len(table) != PART_BYTES:
+        raise Refused("PARTICLES.DAT is %d bytes; SPEC.md 114.8 says %d"
+                      % (len(table), PART_BYTES))
+    out = bytearray(table)
+    for f in range(PART_FRAMES):
+        xs, ys = [], []
+        for p in range(PART_N):
+            dx, dy = struct.unpack_from("<bb", table, f * 160 + p * 2)
+            if dx == -128 or dy == -128:
+                continue
+            xs.append(dx)
+            ys.append(dy)
+        if xs:
+            out += struct.pack("<bbbb", min(xs), max(xs), min(ys), max(ys))
+        else:
+            out += struct.pack("<bbbb", 127, -128, 127, -128)
+    return bytes(out)
 
 
 def frame_bytes(w, h, bpp):
@@ -996,9 +1037,13 @@ STRINGS = [
     ("CREDIT3", "Screens, strings and level order:",
      "this port's own text: what it carries of Lemmix (SPEC.md 114.1's "
      "authority table), on the About card above CREDIT4"),
-    ("CREDIT4", "Lemmix By Eric Langedijk (zlib)",
+    ("CREDIT4", "Lemmix By Eric Langedijk",
      "Lemmix src/Base.Strings.pas SCredits' first line, 'By Eric Langedijk', "
-     "after the program's own name, and its licence (Lemmix Licence.txt)"),
+     "after the program's own name. THE LICENCE IS NOT NAMED ON THE CARD: "
+     "Lemmix's Licence.txt is zlib's text with a clause of its own inserted "
+     "('use it for free, use it for fun') and never calls itself zlib, so the "
+     "card's '(zlib)' misstated it (wave 5's third review); README.TXT names "
+     "it as Lemmix's own licence"),
     ("README", "See README.TXT for the full credits.",
      "this port's own text; SPEC.md 114.1's About row and SPEC.md 114.2's "
      "attribution posture"),
@@ -1089,11 +1134,15 @@ STRINGS = [
      "The original's access-code algorithm lives in the game's executable, "
      "not in any of its data files. Lemmix's ten-letter code is Lemmix's "
      "own - an MD5 of the 2048-byte record - and is not the code a 1991 "
-     "player knows. Progress is kept in SYSTEM/APPDATA/LEMMINGS.SAV "
-     "instead.",
+     "player knows.",
      "SPEC.md 114.8, the greyed table, Level Code. The cell's last sentence "
      "is about the postview's own AddLineFeed and not about this row, so it "
-     "is not in the string"),
+     "is not in the string. Nor is the sentence that ended it until wave 6, "
+     "'Progress is kept in SYSTEM/APPDATA/LEMMINGS.SAV instead.': this fact "
+     "is shown on every machine with no predicate (lemtab.c), and where Save "
+     "Progress is greyed beside it - a read-only medium, a live CD, a write "
+     "that failed - it promised what the next row denies (wave 5's third "
+     "review)"),
     ("GREY_MODE",
      "kernel/fsx.inc gives an EGA 0x000F - the CGA-compatible modes only - "
      "so mode 0Dh has no FSXM_* id on that row and a sixteen-colour card "
@@ -1129,11 +1178,14 @@ STRINGS = [
     ("GREY_EGA",
      "The original's screens are 640x350 and FSXM_CGA640 is 640x200: the "
      "40-character lines keep their width but 12 of the 22 rows fit, so the "
-     "blank lines are compressed out and the level picture is 64 rows, not "
+     "blank lines are compressed and the level picture is 64 rows, not "
      "80.",
      "SPEC.md 114.8, the greyed table, the preview and postview LAYOUT on "
      "CGA and EGA - the whole cell but its cross-reference, and the 64-row "
-     "picture wave 5 drew there. Shown on the Mode row with the mode's own "
+     "picture wave 5 drew there. 'Compressed', not 'compressed OUT': the "
+     "preview drops its blank lines but the postview and the congratulation "
+     "shrink each run of them to ONE and keep it (lemovl.c ovl_scr_lines; "
+     "wave 5's third review). Shown on the Mode row with the mode's own "
      "fact and the keyboard's (lemovl.c ovl_greyfact), and SHORT because the "
      "three together have to fit a CGA's 137-pixel launcher: 13 rows of ~62 "
      "cells between the label and the footer"),
@@ -1632,6 +1684,13 @@ class DataSet(object):
         if len(self.main) != 7:
             raise Refused("MAIN.DAT has %d sections; MAIN says 7"
                           % len(self.main))
+        ppath = os.path.join(src, "PARTICLES.DAT")
+        if not os.path.isfile(ppath):
+            raise Refused("%s is missing: the explosion's spray is a second "
+                          "pinned file (tools/getlemmings.py, SPEC.md 114.8)"
+                          % ppath)
+        with open(ppath, "rb") as fh:
+            self.particles = fh.read()
 
         self.levels = self._build_levels()
         self._banks = {}
@@ -1820,6 +1879,7 @@ class DataSet(object):
             (7, BROWN_BPP, BROWN_W, BROWN_H, 1, brown),
             (8, 0, 8, 0, len(MAIN_ANIMS), anim_tab),
             (9, 0, 8, 0, len(MAIN_MASKS), mask_tab),
+            (SPRAY_ID, 0, 160, 0, PART_FRAMES, spray_item(self.particles)),
         ]
         for (item_id, _, _, _, _, blob) in items:
             if not blob:
@@ -2654,7 +2714,7 @@ def build_fixture(out_dir):
     mhead = bytearray(512)
     mhead[0:4] = b"LMNB"
     struct.pack_into("<H", mhead, 4, LMNB_VERSION)
-    mhead[6] = 9
+    mhead[6] = 10
     mhead[7] = 1
     # an INVENTED menu palette - sixteen greys - because nothing in this
     # directory may derive from the original (the real one is the format
@@ -2792,6 +2852,24 @@ def build_fixture(out_dir):
                     tile[p * (BROWN_W * BROWN_H // 8) + (y * BROWN_W + x) // 8] \
                         |= 0x80 >> (x & 7)
     mitem(8, 7, BROWN_BPP, BROWN_W, BROWN_H, 1, tile)
+
+    # item 10 (wave 6): an INVENTED spray - not the original's table, which is
+    # not this directory's to carry. Particle p leaves at an angle of its own
+    # and falls one row a frame faster each frame, and every eleventh is gone
+    # after p % 7 + 3 frames, so the harness sees a spray that spreads,
+    # thins and ends inside the 51 frames - and the reader is the real one.
+    ptab = bytearray()
+    for f in range(PART_FRAMES):
+        for p in range(PART_N):
+            if (p % 11 == 0 and f > p % 7 + 3) or f > 44 - (p % 5):
+                ptab += struct.pack("<bb", -128, -128)
+                continue
+            vx = (p % 9) - 4
+            vy = -3 - (p % 4)
+            dx = max(-127, min(127, vx * f))
+            dy = max(-127, min(127, vy * f + (f * f) // 8))
+            ptab += struct.pack("<bb", dx, dy)
+    mitem(9, SPRAY_ID, 0, 160, 0, PART_FRAMES, spray_item(bytes(ptab)))
 
     mlogical = bytes(mhead) + bytes(mdata)
     struct.pack_into("<I", mhead, 8, len(mlogical))

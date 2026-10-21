@@ -1322,7 +1322,7 @@ FAST = [
         "compilers agree - `soak -k 'lmpack'`, which is what a change to "
         "either one runs",
         needs=()),
-    Row("lemdat", "fast", py("tests/unit/t_lemdat.py"), 2.4,
+    Row("lemdat", "fast", py("tests/unit/t_lemdat.py"), 0.6,
         "SPEC.md 114.2's standing check, and it is a SECOND READER rather "
         "than a repeat of the first: the 26 DOS Lemmings data files decoded "
         "again from Lemmings.ts's semantics - its container walk, its bit "
@@ -1339,9 +1339,15 @@ FAST = [
         "level names are exactly 32 characters and were losing their last "
         "letter to a terminator the field has no room for, and a geometry "
         "that shrank was leaving a stale LEMLVn.LEM the manifest still "
-        "names. SKIPS with no build/lemdata.stamp, because the data is "
+        "names. Since wave 6's second review it also holds every built "
+        "band to the LEM_KB_* claim apps/lemmings/lemload.c reads it into, "
+        "parsed out of that file, so a band that outgrows its claim fails "
+        "here and not as 'Load failed' on the machine. SKIPS with no "
+        "build/lemdata.stamp, because the data is "
         "fetched and never committed (CONTRIBUTING.md 6) and a red row in a "
-        "fresh clone would be reporting on the box",
+        "fresh clone would be reporting on the box. 0.6s is wave 6's "
+        "second review's MEASURED figure (0.44s alone, 0.6s in the tier; it "
+        "was 2.4 when registered)",
         needs=()),
     Row("movable", "fast", py("tests/unit/t_movable.py"), 0.6,
         "SPEC.md 66.6.1's ratchet: a package's region is born PINNED, so a "
@@ -4706,6 +4712,28 @@ SOAK = [
         "and that an overlay call (F5) claims nothing more",
         needs=("marty", "cc"), serial=True,
         wants=("build/cword360.img", "build/CWORD.OVL")),
+    Row("lemmings", "soak", py("tests/lemmings.py"), 100.0,
+        "SPEC.md 114.12's boot-and-screendump row: LEMMINGS from the Disk "
+        "window by NAME, Play on Fun 1 into the bracket - the preview in "
+        "mode 12h (told from the desktop by its black top margin, not by its "
+        "size, which they share), the level in 0Dh - and then wave 6's "
+        "carried finding A on the glass: with the game PAUSED the world "
+        "cannot move, so its rows are dumped with the pointer at rest, the "
+        "pointer is swept from 26 places in the world (every x & 7 phase) "
+        "diagonally into the skill panel and the corner and brought back, "
+        "and the world's rows must be IDENTICAL - the defect was an 8x14 "
+        "block of another place's terrain restored into the air by a "
+        "save-under whose tail byte a compose had not brought up to date. "
+        "Then Esc to the postview in 12h and Esc to the launcher window, "
+        "which must be back. QEMU, because it is a behaviour row and asserts "
+        "no speed; a SCRATCH copy of the disk, because a played level writes "
+        "LEMMINGS.SAV. Needs `cc` and the fetched data (wants= builds the "
+        "disk, or the row SKIPS). 100s is its first passing run MEASURED "
+        "here (99s wall, wave 6). NOT run red: its negative control is "
+        "lemtest's leaving-the-world row, which goes red with 64 stale "
+        "pixels on the code before the fix",
+        needs=("qemu", "cc"), serial=True,
+        wants=("build/lemmings.img",)),
     Row("cmemmove", "soak", py("tests/cmemmove.py"), 110.0,
         "A C PACKAGE DECLARES A CLAIM MOVABLE and the compactor moves it "
         "(docs/plans/HEAP-UNPIN-PLAN.md 2.1.1 item 3). os88_mem_claim was the "

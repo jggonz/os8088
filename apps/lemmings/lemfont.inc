@@ -549,8 +549,9 @@ lp_vga0:
     jmp lb_seq
 
 ; -----------------------------------------------------------------------------
-; void lem_p_clear(int y0, int y1) - surface rows [y0, y1) black, and on a VGA
-; mode 12h's two 65-row margins around the surface as well.
+; void lem_p_clear(int y0, int y1, int margins) - surface rows [y0, y1) black,
+; and on a VGA, when `margins` is not 0, mode 12h's two 65-row margins around
+; the surface as well.
 ;
 ; ONLY WHAT NOTHING ELSE WRITES (wave 5 review): the brown tile is opaque over
 ; every row it covers, so clearing the whole page first wrote most of it twice
@@ -559,7 +560,12 @@ lp_vga0:
 ; nothing on the mono cards for the postview. The VGA margins are cleared on
 ; every screen because they are the one place a BIOS that leaves mode 12h
 ; dirty (SPEC.md 39.23 - the mode 3 character generator in plane 2) would
-; show. The Hercules letterbox is never written here: FSXM_HERC's vid_setmode
+; show - and ONLY AFTER A MODE SET THAT ACTUALLY HAPPENED (`margins`, wave 6,
+; wave 5's third review): a screen that follows a screen in the same 12h
+; skips the set (ovl_r_mode) and nothing ever writes outside the surface rows,
+; so the margins are the black the first set's clear left, and re-clearing
+; them was 5,200 words of rep stosw through four planes - ~10 KB of ISA VRAM,
+; ~20-30 ms on the XT - on every postview and every next preview. The Hercules letterbox is never written here: FSXM_HERC's vid_setmode
 ; wipes the whole 32 KB page itself (kernel/fsx.inc), and a screen that skips
 ; the mode set (ovl_r_mode) is following one that left the border black.
 ; -----------------------------------------------------------------------------
@@ -574,6 +580,8 @@ _lem_p_clear:
     cmp word [lp_kind], LEM_KIND_VGA
     jne .rows
     call lp_vga0
+    cmp word [bp+8], 0
+    je .rows                        ; the margins are still the set's black
     xor ax, ax
     xor di, di                      ; the top margin
     mov cx, (LEM_PVGAY * 80) / 2

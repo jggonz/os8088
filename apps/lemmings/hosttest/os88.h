@@ -233,7 +233,7 @@ void lem_f_cell(unsigned seg, unsigned off, int col, int row, int ch);
 void lem_f_run(unsigned seg, unsigned off, int col, int row, const char *s,
                int n);
 void lem_p_setup(int kind, unsigned fbseg);
-void lem_p_clear(int y0, int y1);
+void lem_p_clear(int y0, int y1, int margins);
 void lem_p_rect(int x, int y, int w, int h, int colour);
 void lem_p_tile(unsigned seg, unsigned off, int y0, int y1);
 void lem_p_text(unsigned seg, unsigned off, int x, int y, const char *s,

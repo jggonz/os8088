@@ -276,10 +276,14 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
  * animations and the destruction masks with their two registration tables,
  * the rating signs - and, drawn since wave 5 on the preview and postview
  * screens, the 94-glyph 16x16 3bpp purple font (section 4 offset 0x69B0) and
- * the 320x104 2bpp brown background (section 3 offset 0). */
+ * the 320x104 2bpp brown background (section 3 offset 0) - and since wave 6
+ * an eleventh, the explosion's spray, out of PARTICLES.DAT (Lemmix's
+ * src/Data/Particles/Particles.dat, which was extracted from the game's
+ * executable; SPEC.md 114.8). */
 #define LEM_MN_MAGIC      0        /* "LMNB" */
 #define LEM_MN_VERSION    4
-#define LEM_MN_VER        2        /* 2: the menu palette (wave 5) */
+#define LEM_MN_VER        3        /* 3: item 10, the spray (wave 6); 2:
+                                    * the menu palette (wave 5) */
 #define LEM_MN_NITEMS     6
 #define LEM_MN_PARTS      7
 #define LEM_MN_ITEMS     32        /* 16 rows of 16 */
@@ -309,6 +313,22 @@ static const unsigned char lem_rating_str[LEM_RATINGS] = {
 #define LEM_ITEM_BROWN     7
 #define LEM_ITEM_ANIMTAB   8
 #define LEM_ITEM_MASKTAB   9
+#define LEM_ITEM_SPRAY    10        /* the explosion's spray (wave 6, decision
+                                     * 5): PARTICLES.DAT's 51 rows of 80
+                                     * signed (dx, dy) pairs, then 51 rows of
+                                     * four signed bounds - dx min, dx max, dy
+                                     * min, dy max of the particles drawn
+                                     * (docs/lemband-format.md) */
+#define LEM_PFR           51        /* the spray's table rows */
+#define LEM_PROW         160        /* ...a row's bytes: 80 pairs */
+#define LEM_PTIME         52        /* ...and the frames it is DRAWN for, the
+                                     * last row twice: Lemmix's
+                                     * PARTICLE_FRAMECOUNT (src/Game.pas:785),
+                                     * ParticleTimer 52 down to 1 while
+                                     * ParticleFrame stops at 50 (:4452-4455) -
+                                     * and fParticleFinishTimer's 52, the
+                                     * frames the level's end waits (:3375) */
+#define LEM_PBINS         10        /* lemsprite.inc's bins: 16-row bands */
 
 /* --- the RAW LEVEL RECORD, LEMLV<n>.LEM ------------------------------------
  * Eight 2,048-byte records back to back, no header, ODDTABLE already folded
@@ -411,7 +431,9 @@ static int ovl_style_name(int style)
  *
  * ATTRIBUTION. Every number below is the original's, read out of one of the
  * three reimplementations that document it and cited at the table that carries
- * it: Lemmix (Eric Langedijk, zlib) src/Game.pas, src/Styles.Base.pas,
+ * it: Lemmix (Eric Langedijk, under Lemmix's own Licence.txt - zlib's text
+ * with an added clause, 'use it for free, use it for fun') src/Game.pas,
+ * src/Styles.Base.pas,
  * src/Dos.Consts.pas and src/Game.SkillPanel.pas; lemmings_3ds (public domain)
  * src/lemming.c; and ccexplore's mechanics notes as Lemmix's comments quote
  * them. Lemmings is (C) 1991 DMA Design / Psygnosis.

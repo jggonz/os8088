@@ -259,6 +259,16 @@ VM386CWORD := $(CURDIR)/vm/386-c-word
 # substitutes a default and rewrites the config on the way out.
 VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
 VM386PACCMAN := $(CURDIR)/vm/386-paccman
+# The LEMMINGS machines (SPEC.md 114.9, 114.7): vm/xt-lemmings is vm/xt-weave -
+# the 640KB VGA XT, 4.77MHz on the ibmxt86 board - with B: =
+# build/lemmings360.img, and vm/386-lemmings is vm/386dx with B: =
+# build/lemmings.img; each the uuid changed and NOTHING else, for the standing
+# reason that 86Box substitutes a default for an unrecognised key and rewrites
+# the config on the way out. The XT is created UNCONDITIONALLY: the port's
+# decision 7 ships it at whatever rate it measures, and that rate is MartyPC's
+# (PERFORMANCE.md Set 161), not this machine's - 86Box is where it is LOOKED at.
+VMXTLEMMINGS := $(CURDIR)/vm/xt-lemmings
+VM386LEMMINGS := $(CURDIR)/vm/386-lemmings
 # The PIXELSTEIN 3D machines (SPEC.md 97): vm/xt-cga and vm/xt-hercules with
 # B: = build/games360.img - the 360KB disk the game ships on (97.9, the plan's
 # fourth decision) - and the uuid changed, and 640KB on the ibmxt86 board;
@@ -2174,7 +2184,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
-        lemmings lemmingsdisk lemmings-data lembench \
+        lemmings lemmingsdisk lemmings-data lembench xt-lemmings 386-lemmings \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -10270,11 +10280,14 @@ $(BUILD)/lemstr.h: $(BUILD)/lemstr.stamp
 # the offline route for a machine that has the set already (tools/getlemmings.py
 # takes it as LEMDATAFROM= here). A stamp rather than a directory, as the story
 # cache is: make cannot depend on twenty-six files, and the script is idempotent
-# and re-verifies every hash for 0.2s and no network.
+# and re-verifies every hash for 0.2s and no network. The explosion's particle
+# table is a SECOND pinned file (decision 5, SPEC.md 114.8): it comes from the
+# --from directory when it is there, from LEMPARTFROM= (Lemmix's
+# src/Data/Particles/Particles.dat) when named, or from its own pinned URL.
 LEMDATADIR := $(BUILD)/lemdata
 LEMBANDDIR := $(BUILD)/lemband
 $(BUILD)/lemdata.stamp: tools/getlemmings.py | $(BUILD)
-	python3 tools/getlemmings.py -o $(LEMDATADIR) $(if $(LEMDATAFROM),--from $(LEMDATAFROM))
+	python3 tools/getlemmings.py -o $(LEMDATADIR) $(if $(LEMDATAFROM),--from $(LEMDATAFROM)) $(if $(LEMPARTFROM),--particles $(LEMPARTFROM))
 	@touch $@
 
 # ...and the conversion. One stamp for all four geometries, because the
@@ -10311,6 +10324,7 @@ LEMSRC  := apps/lemmings/lemtab.c apps/lemmings/lemtext.c \
 # and a stale build/.lemmings-hostchecks means the raster's MODEL still
 # describes the previous version while build.sh never re-runs (LESSONS.md 9).
 LEMHOST := apps/lemmings/build.sh apps/lemmings/hosttest/os88.h \
+           apps/lemmings/icon.inc \
            apps/lemmings/hosttest/lemtest.c \
            apps/lemmings/hosttest/lemraster.c tools/os88lem.py \
            tools/lemsim.py apps/lemmings/hosttest/mech/traces.sha256 \
@@ -10353,8 +10367,12 @@ $(BUILD)/lemmings.raw.asm: apps/lemmings/lemmings.c $(LEMSRC) $(CC_RUNTIME) \
 $(BUILD)/lemmings.gen.asm: $(BUILD)/lemmings.raw.asm tools/cc8086.py
 	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
 
+# icon.inc is the PACKAGE's alone (CC_ICON in lemmings.asm): the bench never
+# includes it, so it is named here and in LEMHOST and not in LEMINC (wave 6's
+# review - an icon edit rebuilt the bench for nothing).
 $(BUILD)/lemmings.bin: apps/lemmings/lemmings.asm $(BUILD)/lemmings.gen.asm \
-                       $(CC_RUNTIME) $(LEMINC) apps/os88ui.inc | $(BUILD)
+                       $(CC_RUNTIME) $(LEMINC) apps/lemmings/icon.inc \
+                       apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/lemmings/lemmings.asm
 	@echo "lemmings: $(call FILESIZE,$@) bytes (image + module)"
 
@@ -10484,6 +10502,20 @@ $(BUILD)/lemmings360.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
 
 lemmingsdisk: $(BUILD)/lemmings.img $(BUILD)/lemmings720.img \
               $(BUILD)/lemmings120.img $(BUILD)/lemmings360.img
+
+# THE TWO 86Box MACHINES (SPEC.md 114.9; VMXTLEMMINGS above says what each is a
+# copy of). Both boot the system floppy with the LEMMINGS disk in B: - the
+# 360KB one on the XT, two graphic sets and the levels that use them, and the
+# 1.44MB one on the 386, all 120. Reaching the game is a double-click on
+# B:LEMMINGS/LEMMINGS.O88, which this host cannot send into 86Box: these are
+# machines to LOOK at, and every number about them is MartyPC's.
+xt-lemmings: $(IMG360) $(BUILD)/lemmings360.img
+	@$(UNPROTECT) $(VMXTLEMMINGS)/86box.cfg
+	$(BOX) -P $(VMXTLEMMINGS) -N
+
+386-lemmings: $(IMG) $(BUILD)/lemmings.img
+	@$(UNPROTECT) $(VM386LEMMINGS)/86box.cfg
+	$(BOX) -P $(VM386LEMMINGS) -N
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`

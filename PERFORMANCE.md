@@ -15051,3 +15051,72 @@ overflows if the growth is allowed a fourth doubling.
     restore, and ~250 module-to-resident crossings a frame at 80 lemmings —
     is the final pass's to time, with the off-glass fraction `flicker()` and
     `pace()` give on `xt_vga` (SPEC.md §114.7.3's table).
+
+**The final pass's readings (wave 6, 2026-10-20), on the FINAL build**
+(`image=31116 bss=20425`, part 0 32,664) - `tests/lemplaymarty.py`, which
+PLAYS the shipped package off `build/lemmings360.img` on `os8088_xt_vga` and
+`os8088_xt_hdd` and reads the game's own state by symbol (SPEC.md §114.7.4 is
+the table and the argument). Taken once each; nobody re-takes them to confirm.
+The "glass update" rows time `lem_r_present` to `lem_r_present`: a pass of
+the loop that changes nothing returns before the present and is not counted,
+so a figure may span several passes (it said "a pass" until wave 6's review,
+which is why the busy VGA compose, 1,326-1,379 ms, could read longer than
+"a pass", 1,100.9 ms - the mean takes in short undrawn updates). The pointer
+moves once a glass update. **These readings predate wave 6's two reviews**,
+which added the explosion's spray (decision 5) and the VGA compose's button
+latch (~3 far calls a lemming, VGA only). A frame with a spray in flight
+costs more, PRICED and not measured: on VGA its rectangles are one a 16-row
+band since the second review, 828 byte-rows in 76 rows a game frame per spray
+on the real table (`lemtest`; one box was 2,961 in 128), ~40-50 ms of a drawn
+frame on a 4.77 MHz 8088 by the loops' instruction counts (one box ~75-100
+ms). A reading of it is the Finish pass's. SPEC.md §114.6 has the shipped
+build's line, `image=31674 bss=20431`.
+
+| | VGA mode 0Dh | CGA mode 4 |
+|---|---:|---:|
+| quiet, Fun 2 (6-7 out): game frames a second | **3.85** | **4.60** |
+| ...between two glass updates (`lem_r_present` to `lem_r_present`) | 330.6 ms | 256.4 ms |
+| ...module crossings a frame (`cc_ovthunk`) | 51 | 41-42 |
+| ...the compose a drawn pass | 263-270 ms | — |
+| busy, Fun 9 (60-61 out, rate 99): game frames a second | **0.60** | **0.90** |
+| ...between two glass updates | 1,100.9 ms | 701.4 ms |
+| ...module crossings a frame | 182 | 110-111 |
+| ...the compose a drawn pass | 1,326-1,379 ms | — |
+| between two glass updates while scrolling, busy (an arrow held) | — | **544.7 ms** |
+| the preview picture (`lem_p_mini`'s rows) | **1,652 ms** / 80 rows | **366 ms** / 64 rows |
+| int 13h calls: a launch / the in-bracket retry | 23 (20 busy) / **2** | 22 (19) / **2** |
+
+12. **THE XT IS ~4 FRAMES A SECOND QUIET AND UNDER ONE BUSY.** Reading 9 put
+    sixty lemmings' probes inside one tick and left the frame RATE to this
+    pass; the rate is 0.60 (VGA) and 0.90 (CGA) on a busy level, because the
+    probes were never the frame - the DRAWING is.
+13. **THE VGA COMPOSE IS THE BUSY FRAME, AND IT LOSES TO THE CGA.** ~1.35 s
+    a drawn pass at ~60 lemmings, ~22 ms a lemming, is ~80% of the VGA's
+    1.67 s frame: every lemming is a rectangle whose T is copied through four
+    planes into the scratch and latched back, and readings 10-11 bought that
+    for correctness (no lemming or pointer pixel ever absent between two
+    latches). The CGA's shadow backend, which draws a sprite in RAM and blits
+    dirty rows, is 1.5x faster on the same level. This is the next lever and
+    the final pass records it rather than pulling it.
+14. **THE CROSSINGS ARE NOT THE LEVER.** 182 a frame at 61 lemmings - about
+    three a lemming, under reading 11's ~250 at 80 - is a few milliseconds of
+    a 1.67 s frame; the sprite path stays in the module.
+15. **THE PICTURE IS 18-22% OVER ITS ESTIMATE**: 1,652 ms on VGA against
+    ~1.4 s and 366 ms mono against ~0.3 s. It is drawn a row at a time with
+    the input asked every eighth row (SPEC.md §114.4.3.1).
+16. **THE NEXT LEVEL INSIDE THE BRACKET IS TWO DISK CALLS**, ~0.8 s at the
+    ~400 ms a call MartyPC does not model (it is cycle-accurate, not
+    disk-accurate - the CALLS are exact); a launch from the window is 19-23.
+17. **`flicker()` CANNOT PRICE CONTINUOUS PLAY.** Over 240 displayed frames
+    of busy VGA play the glass changed on 6 (a drawn frame lands in ~3
+    refreshes, a band a refresh) and `transient` counted 118 frames and
+    123,676 pixels - but Part 3.1's metric assumes ONE operation between two
+    still states, and a lemming's walk cycle returning to its first pose is
+    "transient" by that arithmetic. The off-glass claim stays the harness's
+    structural count (reading 11); what the clock adds is ~50 ms for a frame
+    to land.
+
+**Harness**: `make lemmingsdisk && python3 tests/lemplaymarty.py --machine
+os8088_xt_vga` (and `--machine os8088_xt_hdd`), ~2 minutes a machine, writing
+`build/lemplay-<machine>.txt`. Hercules is not measured (reading 8's reason,
+SPEC.md §114.7.1).

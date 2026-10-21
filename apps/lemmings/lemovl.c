@@ -385,7 +385,10 @@ static void ovl_grey_more(int head, int on, int strid)
  *   7  Programming By Russell Kay     rightsholder - Lemmix SCredits' "Original
  *   8  Copyright 1991 Psygnosis Ltd.  credits..." block, verbatim
  *   9  Screens, strings and level order:
- *  10  Lemmix By Eric Langedijk (zlib)  the second principal (decision 4)
+ *  10  Lemmix By Eric Langedijk        the second principal (decision 4); its
+ *                                     licence is named in README.TXT, not
+ *                                     here: Lemmix's own, zlib-style with an
+ *                                     added clause, and never plain 'zlib'
  *  11  See README.TXT for the full credits.
  *
  * AND NOTHING ABOUT HOW THE BUILD RENDERS: the frame rate goes to
@@ -827,6 +830,12 @@ static void ovl_types(void)
             t->frames = 1;
     }
     lem_gfx_ok = 0;
+    lem_ptseg = 0;                  /* the spray: drawn only when the bank
+                                     * has it (an LMNB 3 always does) */
+    if (ovl_item(LEM_ITEM_SPRAY)) {
+        lem_ptseg = lem_far_seg;
+        lem_ptoff = lem_far_off;
+    }
     if (!ovl_item(LEM_ITEM_ANIMTAB))
         return;
     a = 0;
@@ -1016,6 +1025,7 @@ static void ovl_game_init(int level)
     lem_entdone = 0;
     lem_paused = 0;
     lem_glitchp = 0;
+    lem_pfin = 0;
     lem_super = (lem_ent_u8(level, LEM_E_FLAGS2) & LEM_EF2_SUPER) != 0;
     lem_nuked = 0;
     lem_nukeing = 0;
@@ -1268,8 +1278,10 @@ static void ovl_pv_draw(int level)
     int i, y, n, cga, k;
 
     cga = ovl_scr_cga();
-    lem_p_clear(0, cga ? LEM_PV_PICHC : LEM_PV_PICH);  /* the well: the tile
-                                     * covers the rest (lemfont.inc) */
+    lem_p_clear(0, cga ? LEM_PV_PICHC : LEM_PV_PICH, lem_scr_fresh);
+                                    /* the well: the tile covers the rest,
+                                     * and a VGA's margins only after a set
+                                     * (lemfont.inc) */
     ovl_scr_pal();
     ovl_scr_tile(cga ? LEM_PV_PICHC : LEM_PV_PICH);
     k = 0;
@@ -1354,7 +1366,8 @@ static int ovl_po_draw(int level)
     int success;
 
     success = ovl_postview(lem_rating, level, LEM_PO_SCR);
-    lem_p_clear(0, 0);              /* a VGA's margins: the tile is the rest */
+    lem_p_clear(0, 0, lem_scr_fresh);   /* no rows: a VGA's margins, and
+                                     * only after a set; the tile is the rest */
     ovl_scr_pal();
     ovl_scr_tile(0);
     ovl_scr_lines(16);

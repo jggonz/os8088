@@ -219,6 +219,16 @@ UNREGISTERED = {
                        "it at all - what it produces is the microsecond table "
                        "SPEC.md and PERFORMANCE.md quote. tools/os88boot.py "
                        "is the same kind of thing one directory along",
+    "lemplaymarty.py": "PLAYS the shipped LEMMINGS off build/lemmings360.img "
+                       "on MartyPC and reads the game's own state by symbol "
+                       "for the final pass's table (SPEC.md 114.7, "
+                       "PERFORMANCE.md Set 161): int 13h calls of a launch "
+                       "and of the in-bracket retry, the preview picture's "
+                       "time, game frames a second quiet and busy, the "
+                       "loop's pass, module crossings a frame. It needs the "
+                       "fetched data, `make lemmingsdisk` and build/martypc, "
+                       "takes minutes a machine, and asserts only that it "
+                       "reached each state - lembenchmarty.py's kind",
     "swcolsame.py": "A/B gate - needs `make NOCOLFAST=1` as a reference build",
     # pkgthumb.py IS registered (four rows). Its `frotz` mode is not one of
     # them: a Z-machine interpreter needs a STORY, and the two ways to get one

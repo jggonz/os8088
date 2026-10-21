@@ -50,6 +50,12 @@
                                     ; header. The overlay is a PART of this
                                     ; file (CC_OVL_PART below), so no module
                                     ; file name is built from it
+%define CC_ICON "lemmings/icon.inc" ; the 16x16 walking lemming, drawn for this
+                                    ; port (wave 6). 64 bytes of image, and the
+                                    ; Disk window's tile instead of the generic
+                                    ; ico_app16; crt0.asm checks its offset and
+                                    ; length. A written prerequisite of
+                                    ; build/lemmings.bin (LESSONS.md 9)
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *)
 %define CC_HAS_ONCLICK              ; void os88_onclick(int, int, void *)
@@ -178,4 +184,5 @@
                                     ; the three forward references the header
                                     ; made
 
-; ...and wave 6 adds "lemmings/icon.inc" beside the three above.
+; ...and the icon, "lemmings/icon.inc", is %included by crt0.asm at the
+; header's file offset 32 (CC_ICON above), not here.

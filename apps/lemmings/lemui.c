@@ -770,6 +770,22 @@ static void lem_row_text(int row)
     if (i < 0 || i >= lem_wrapn)
         return;
     lem_fit(lem_line, sizeof(lem_line), lem_wrap_line(i), lem_cols - 2);
+    /* MORE THAN FITS ENDS IN THE LAUNCHER'S OWN THREE FULL STOPS (wave 6, wave
+     * 5's third review; the pane's elision, ovl_pvline). The window sizes down
+     * to LEM_MIN_W x LEM_MIN_H - ~35 columns, ~11 rows - and the three-fact
+     * Mode paragraph wraps to ~17 lines there: the rows past the box were
+     * dropped with nothing on the glass to say so, the keyboard fact among
+     * them. The last row that shows says there is more; widening the window
+     * shows it. */
+    if (i == (lem_screen == LEM_SC_POST ? lem_rows - 2 : lem_rows - 3) &&
+        lem_wrapn > i + 1 && lem_cols > 6) {
+        lem_fit(lem_line, sizeof(lem_line), lem_wrap_line(i), lem_cols - 5);
+        n = (int)os88_strlen(lem_line);
+        lem_line[n] = '.';
+        lem_line[n + 1] = '.';
+        lem_line[n + 2] = '.';
+        lem_line[n + 3] = 0;
+    }
     n = 1;
     if (lem_screen == LEM_SC_POST) {
         /* THE POSTVIEW IS CENTRED, every line of it: Lemmix
@@ -843,10 +859,12 @@ static void lem_repaint(void *win, int full, int arm)
      * here and the callers stay two lem_mark()s long. */
     if (lem_rows != oldrows || lem_cols != oldcols) {
         full = 1;
-        /* ...AND A PARAGRAPH IS RE-WRAPPED to the width it is now drawn at:
-         * a fullscreen exit changes the box with no W_ONRESIZE (kernel/wm.inc
-         * wm_fs_drop), and ovl_launch() chooses and wraps the screen BEFORE
-         * os88_fullscreen(win, 0) so that one kernel paint draws it */
+        /* ...AND A PARAGRAPH IS RE-WRAPPED to the width it is now drawn at,
+         * for any change of the box this callback is not told of (a
+         * fullscreen exit delivers no W_ONRESIZE, kernel/wm.inc wm_fs_drop).
+         * The launch no longer goes through one (wave 6): ovl_leave()
+         * chooses and wraps the screen inside the bracket at the window's
+         * own width, so the fsx exit's one kernel paint draws it */
         if (lem_cols != oldcols && lem_screen != LEM_SC_LIST)
             lem_wrap();
     } else if (lem_top != oldtop)
@@ -866,6 +884,33 @@ static void lem_repaint(void *win, int full, int arm)
         lem_sh_ok = 0;
         return;
     }
+
+    /* ...AND AN INVALID SHADOW WITH THE REGION OURS IS ONE FILL AND A BLANK
+     * SEED, which is lem_blank_glass() inline (wave 6, wave 5's third review).
+     * The `full` above letters EVERY cell when the shadow says nothing - the
+     * blanks too, ~1,200 cells and ~1.1 s on the XT - where a fill puts down
+     * the white every blank cell is and the flush then letters only the cells
+     * that carry something. Every remaining path to an invalid shadow with
+     * arm set pays this instead: a refused region earlier (above), a
+     * dismissed card, a typed-ahead key. W_PAINT passes arm = 0 and seeds the
+     * shadow blank itself, after the kernel's own fill. */
+    if (arm && !lem_sh_ok) {
+        os88_set_color(OS88_WHITE);
+        os88_gfx_fill(lem_org.x, lem_org.y,
+                      lem_org.x + lem_sz.w - 1, lem_org.y + lem_sz.h - 1);
+        os88_set_color(OS88_BLACK);
+        lem_sh_blank();
+        lem_glass_blank = 1;
+    }
+
+    /* A FULL REPAINT OF THE LIST DRAWS THE PANE, so a settle shot still owed
+     * for it would compose and scan the pane's seven rows to draw nothing -
+     * ~57-85 ms on the XT after "arrow, then Enter" inside LEM_PV_SETTLE,
+     * whose launch ends in the fsx exit's full paint (wave 6, wave 5's
+     * third review); the same after any expose, lem_back or a dismissed
+     * card. lem_pv_hold is the one full-list caller that leaves the pane. */
+    if (full && lem_screen == LEM_SC_LIST && !lem_pv_hold)
+        lem_pv_due = 0;
 
     /* THE CHROME'S SIDE OF THE LOOP IS THE SIDE IT IS NOT DRAWN OVER. Leaving
      * the list, the two rules have to come down BEFORE the paragraph's text
@@ -1103,7 +1148,7 @@ static int lem_blank_glass(void *win)
 }
 
 /* lem_set_fact - CHOOSE the fact screen and draw nothing: 1 = it is chosen.
- * ovl_launch() calls it before os88_fullscreen(win, 0), whose kernel paint
+ * ovl_leave() calls it inside the bracket, and the fsx exit's kernel paint
  * then draws it once (SPEC.md 114.4.6's "leave the bracket" row). */
 static int lem_set_fact(int labelid, int strid, int level)
 {

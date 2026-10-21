@@ -47,7 +47,7 @@ void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
                  unsigned shadowseg);
 void lem_r_prep(void);
 void lem_r_unprep(void);
-void lem_r_clearworld(void);
+void lem_r_clearworld(int vram);  /* 1 = VRAM cleared too (wave 5) */
 void lem_r_wsetup(unsigned p0, unsigned p3);
 void lem_r_tsetup(unsigned t);
 void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
@@ -264,7 +264,8 @@ static void lb_fsx_main(void)
     lem_r_prep();
     lem_m_setup(lb_mask);
     lem_m_clear();
-    lem_r_clearworld();
+    lem_r_clearworld(1);            /* the old behaviour: VRAM cleared, T
+                                     * absent there (wave 5's ABI) */
 
     /* 0-1  THE PROBE, single and batched. This pair is the number the whole of
      *      lemmask.inc's design rests on: sixty lemmings at six probes is 360

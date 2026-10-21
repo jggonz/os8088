@@ -97,13 +97,42 @@ for f in apps/lemmings/hosttest/fixture/*.LEM; do
     fi
 done
 
+# (0c) THE ICON'S PICTURE IS ITS SOURCE (wave 6). Every data row of
+#      apps/lemmings/icon.inc carries its own sixteen pixels in its comment;
+#      this re-derives each dw from the picture and stops the build on the
+#      first that disagrees, and checks the mask rows are the full tile - so
+#      the bytes cannot drift from the drawing a reader sees.
+python3 - apps/lemmings/icon.inc <<'PYEOF'
+import re, sys
+rows = [l for l in open(sys.argv[1]) if re.match(r"\s+dw 0x", l)]
+if len(rows) != 32:
+    sys.exit("build.sh: icon.inc has %d dw rows, not 32" % len(rows))
+for i, l in enumerate(rows[:16]):
+    if int(l.split()[1], 16) != 0xFFFF:
+        sys.exit("build.sh: icon.inc mask row %d is not 0xFFFF" % i)
+for i, l in enumerate(rows[16:]):
+    m = re.search(r";.*?([#.]{16})\s*$", l)
+    if not m:
+        sys.exit("build.sh: icon.inc data row %d has no 16-pixel picture" % i)
+    want = int(m.group(1).replace("#", "1").replace(".", "0"), 2)
+    if int(l.split()[1], 16) != want:
+        sys.exit("build.sh: icon.inc data row %d is %s but its picture says "
+                 "0x%04X" % (i, l.split()[1], want))
+PYEOF
+
 # (1) The whole program against a model of the glass. apps/lemmings/hosttest is
 #     AHEAD of apps/cc on the include path so its stub os88.h is the one that
 #     resolves; -w because the stubs deliberately ignore arguments and the
 #     checks are the point.
 $HOSTCC -O1 -w -I apps/lemmings/hosttest -I apps/lemmings -I $BUILD \
     -o $BUILD/lemtest apps/lemmings/hosttest/lemtest.c
-$BUILD/lemtest
+# the spray's area row reads the REAL table too when tools/getlemmings.py has
+# fetched it (it is never committed; the fixture's invented one always runs)
+if [ -f $BUILD/lemdata/PARTICLES.DAT ]; then
+    LEMTEST_PARTICLES=$BUILD/lemdata/PARTICLES.DAT $BUILD/lemtest
+else
+    $BUILD/lemtest
+fi
 
 # (2) THE MECHANICS REPLAY (SPEC.md 114.12). Three fixture levels, each driven
 #     for up to 2,000 frames by a committed command script (hosttest/mech/

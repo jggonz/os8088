@@ -299,7 +299,8 @@ static int lem_data_load(void)
  *   BANK    the largest STYLE bank of the five - set 1 at 96,804 - which is
  *           what it has to hold whichever level is played, and which also
  *           holds a 76,800-byte VGASPEC picture in wave 4
- *   MAIN    LEMMAIN.LEM, 52,224 on every geometry
+ *   MAIN    LEMMAIN.LEM, 60,416 on every geometry (52,224 until wave 6
+ *           added the spray's 8,364, decision 5)
  *   WORLD   the 1bpp/2bpp world picture: CGA 400 bytes x 160 = 64,000,
  *           Hercules 200 x 160 = 32,000. VGA has none - its world lives in
  *           VRAM, which is the whole point of the mode 0Dh backend
@@ -313,7 +314,7 @@ static int lem_data_load(void)
  *   T       VGA only: the four world planes in RAM (wave 3) */
 #define LEM_KB_MASK    32
 #define LEM_KB_BANK    96
-#define LEM_KB_MAIN    52
+#define LEM_KB_MAIN    60
 #define LEM_KB_WORLD_C 63
 #define LEM_KB_WORLD_H 32
 #define LEM_KB_SHADOW  16
@@ -593,12 +594,12 @@ static int lem_load_err;
 
 /* ovl_main_read - LEMMAIN.LEM into its claim, once per session. It is the same
  * bytes for every level, so a retry or the next level does not re-read it -
- * which matters because it is 52 KB and ~130 int 13h calls on the target. */
+ * which matters because it is 60 KB and ~150 int 13h calls on the target. */
 static int ovl_main_read(void)
 {
     if (lem_main_have)
         return 1;
-    /* ONE PART, always: LEMMAIN.LEM is 52,224 bytes on every geometry and
+    /* ONE PART, always: LEMMAIN.LEM is 60,416 bytes on every geometry and
      * WIRE_FILEMAX is 64,512, so it keeps its plain name (the converter's own
      * rule - a bank that fits one part is not numbered). If it ever grows past
      * that, the converter refuses on the host before this could read half of

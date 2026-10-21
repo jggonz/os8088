@@ -1359,6 +1359,186 @@ static void ovl_obox_forget(void)
         lem_obox[i * 4] = 0xFF;
 }
 
+/* --- THE EXPLOSION'S SPRAY (decision 5, SPEC.md 114.8, wave 6) -------------
+ * Eighty single pixels a frame for the 52 frames after a bomber goes off -
+ * the table's 51 rows, the last one twice, as Lemmix draws them
+ * (LEM_PTIME) - at the foot it left: LEMMAIN item 10 is PARTICLES.DAT's
+ * table, one 160-byte row of signed (dx, dy) pairs a frame, and after it each
+ * row's BOUNDS, so the C never walks the 80 to know where a frame is. The
+ * record carries the frame the glass shows (dpf, 1 .. LEM_PTIME) and the box
+ * it was drawn in (pbox), because the box is what the next frame has to put
+ * back:
+ *
+ *   VGA      a game frame makes each spray ONE RECTANGLE A 16-ROW BAND IT
+ *            OCCUPIES - the old frame's pixels and the new frame's in that
+ *            band, which lem_r_spray's bins (erase 2, 3) find in one walk of
+ *            the 80 pairs each (wave 6's second review: one box over the
+ *            whole cloud recomposed 3.6x the area, 2,961 byte-rows a frame
+ *            against 828 on the real table, for at most 160 changed
+ *            pixels) - and the band loop draws it into the scratch
+ *            in the pool's order with the lemmings, so the latch puts the
+ *            erasure and the new pixels down together and the pointer stays
+ *            lit over it, the compose's whole contract (SPEC.md 114.4.6). A
+ *            compose with no game frame draws it as the glass shows it
+ *   CGA/Herc each frame puts the old pixels' bytes back out of W before the
+ *            sprites come off, and the sprite pass draws the new ones in the
+ *            solid class every sprite is drawn in
+ *
+ * A spray is culled to the VGA's margin (the shadow cards' view) like a
+ * lemming: pixels nobody can see are not drawn, and the old box is erased
+ * wherever it was. */
+
+/* ovl_psb - one signed byte of the spray item */
+static int ovl_psb(unsigned o)
+{
+    int v = os88_peek(lem_ptseg, o) & 0xFF;
+
+    return v > 127 ? v - 256 : v;
+}
+
+/* ovl_prow - the table row spray frame n (1 .. LEM_PTIME) draws: the last
+ * row twice (Lemmix's ParticleFrame stops at 50, its timer at 52) */
+static int ovl_prow(int n)
+{
+    return n > LEM_PFR ? LEM_PFR - 1 : n - 1;
+}
+
+/* ovl_pbox - spray p's box at frame n (1 .. LEM_PTIME), from its row's own
+ * bounds, offset by the foot and clipped to the world and the view's margin,
+ * into lem_bb0 .. lem_br1. 0 = none of it is there, or n 0: no spray. */
+static int ovl_pbox(struct lem_l *p, int n)
+{
+    unsigned o;
+    int x0, x1, y0, y1, lo, hi;
+
+    if (!n || !lem_ptseg)
+        return 0;
+    o = lem_ptoff + LEM_PFR * LEM_PROW + ((unsigned)ovl_prow(n) << 2);
+    x0 = ovl_psb(o);
+    x1 = ovl_psb(o + 1);
+    if (x1 < x0)
+        return 0;                   /* a frame with no particle drawn */
+    x0 += p->x;
+    x1 += p->x;
+    y0 = p->y + ovl_psb(o + 2);
+    y1 = p->y + ovl_psb(o + 3);
+    lo = lem_view - 32;
+    hi = lem_view + LEM_VIEW_W + 31;
+    if (lo < 0)
+        lo = 0;
+    if (hi > LEM_VRAM_W - 1)
+        hi = LEM_VRAM_W - 1;
+    if (x0 < lo)
+        x0 = lo;
+    if (x1 > hi)
+        x1 = hi;
+    if (y0 < 0)
+        y0 = 0;
+    if (y1 > LEM_WORLD_H - 1)
+        y1 = LEM_WORLD_H - 1;
+    if (x0 > x1 || y0 > y1)
+        return 0;
+    lem_bb0 = x0 >> 3;
+    lem_bb1 = x1 >> 3;
+    lem_br0 = y0;
+    lem_br1 = y1;
+    return 1;
+}
+
+/* ovl_spray_one - spray p as its record says it is drawn: frame dpf, inside
+ * pbox; `erase` 1 puts it back (the shadow cards), 2 and 3 bin it (the VGA's
+ * rectangles, lemsprite.inc) */
+static void ovl_spray_one(struct lem_l *p, int erase)
+{
+    lem_r_spray(lem_ptseg, lem_ptoff + (unsigned)ovl_prow(p->dpf) * LEM_PROW,
+                p->x, p->y, (int)p->pbox[0], (int)p->pbox[1],
+                (int)p->pbox[2], (int)p->pbox[3], erase);
+}
+
+/* ovl_spray_keep - the box ovl_pbox answered, as the one frame pf is drawn
+ * in; `k` 0: nothing of it is drawn */
+static void ovl_spray_keep(struct lem_l *p, int k)
+{
+    if (!k) {
+        p->dpf = 0;
+        return;
+    }
+    p->dpf = p->pf;
+    p->pbox[0] = (unsigned char)lem_bb0;
+    p->pbox[1] = (unsigned char)lem_bb1;
+    p->pbox[2] = (unsigned char)lem_br0;
+    p->pbox[3] = (unsigned char)lem_br1;
+}
+
+/* ovl_spray_new - spray p at its current frame, straight in: the first frame
+ * and 'f' onto the VGA world, the shadow cards' sprite pass into the shadow */
+static void ovl_spray_new(struct lem_l *p)
+{
+    ovl_spray_keep(p, ovl_pbox(p, (int)p->pf));
+    if (p->dpf)
+        ovl_spray_one(p, 0);
+}
+
+/* ovl_spray_forget - nothing of any spray is where its record says: the T
+ * load, a shadow card's scroll (lem_r_scroll recomposes the window from W) */
+static void ovl_spray_forget(void)
+{
+    int i;
+
+    for (i = 0; i < lem_released; i++)
+        lem_lm[i].dpf = 0;
+}
+
+/* ovl_spray_erase - a shadow card's game frame: every spray's pixels off,
+ * out of W, before the sprites come off and the new frame goes in */
+static void ovl_spray_erase(void)
+{
+    int i;
+    struct lem_l *p;
+
+    for (i = 0; i < lem_released; i++) {
+        p = &lem_lm[i];
+        if (!p->dpf)
+            continue;
+        ovl_spray_one(p, 1);
+        p->dpf = 0;
+    }
+}
+
+/* ovl_spray_rects - a VGA game frame's rectangles for each spray: ONE A
+ * 16-ROW BAND, each the span of the pixels the glass shows there joined with
+ * the span of the pixels its new frame puts there (lem_r_spray's bins, the
+ * old frame emptying them and the new adding to them), and the record moved
+ * on to the new frame. Bands are 16 rows so two never share a row and
+ * ovl_rc_add keeps them apart; on the real table a frame is ~7.6 of them. */
+#define lem_pbins (lem_sprec + LEM_MAXLEM * 4)
+static void ovl_spray_rects(void)
+{
+    int i, m;
+    unsigned char *q;
+    struct lem_l *p;
+
+    for (i = 0; i < lem_released; i++) {
+        p = &lem_lm[i];
+        if (!(p->pf | p->dpf))
+            continue;
+        m = 2;                      /* the first binning empties the bins */
+        if (p->dpf) {
+            ovl_spray_one(p, 2);    /* the pixels the glass shows */
+            m = 3;
+        }
+        ovl_spray_keep(p, ovl_pbox(p, (int)p->pf));
+        if (p->dpf) {
+            ovl_spray_one(p, m);    /* ...and the ones about to be drawn */
+            m = 3;
+        }
+        if (m == 3)
+            for (q = lem_pbins; q < lem_pbins + LEM_PBINS * 4; q += 4)
+                if (q[0] != 0xFF)
+                    ovl_rc_add(q[0], q[1], q[2], q[3], 0);
+    }
+}
+
 /* ovl_sprites_all - every lemming that could be on the glass, in the list's
  * order (Lemmix DrawLemmings), straight onto it: the first frame, 'f', and the
  * two shadow cards' frames, whose shadow is off the glass until the present.
@@ -1372,6 +1552,11 @@ static void ovl_sprites_all(void)
 
     vga = lem_kind_id() == LEM_RKIND_VGA;
     for (i = 0; i < lem_released; i++) {
+        if (lem_lm[i].fl & LF_GONE) {
+            ovl_spray_new(&lem_lm[i]);  /* in the pool's order, as the
+                                         * original draws its particles */
+            continue;
+        }
         if (vga) {
             if (!ovl_sbox(i))
                 continue;
@@ -1391,7 +1576,8 @@ static void ovl_sprites_all(void)
 /* --- the pointer -------------------------------------------------------------
  * Lemmix's own two 14x14 cursors, hotspot (7, 7) (src/GameScreen.Player.pas
  * InitializeCursor; the bitmaps are src/Data/Cursors/Cursors.zip's
- * CursorDefault / CursorHighlight and their masks, zlib licence): a dashed
+ * CursorDefault / CursorHighlight and their masks, under Lemmix's own
+ * Licence.txt, zlib-style with an added clause): a dashed
  * cross, and the boxed form shown while a lemming is under it. IN THREE
  * COLOURS, as both references draw them - palette 1 the blue centre, 2 green
  * and 3 white on the arms and the box corners (the left arm green over white,
@@ -1623,6 +1809,8 @@ static void ovl_vframe(int step)
             b[0] = 0xFF;
         }
     }
+    if (step)
+        ovl_spray_rects();
     if (lem_cmv) {
         /* THE POINTER MOVES INSIDE THE COMPOSE (wave 3's third review): its
          * old box and its new one are rectangles of this frame, and the asm
@@ -1631,9 +1819,20 @@ static void ovl_vframe(int step)
          * frame used to compose it at the old place and the tick then took it
          * off and drew it again (rule 2's erase-then-draw on every aiming
          * move). ovl_tick_draw only asks for this when both boxes are wholly
-         * in the world, so the panel piece never moves here. */
+         * in the world, so the panel piece never moves here.
+         *
+         * THE NEW BOX IS ITS SAVE-UNDER'S WHOLE-BYTE SPAN, NOT ITS 14 PIXELS
+         * (wave 6, carried finding A): lem_r_cursor saves and restores three
+         * planar bytes a row from x & ~7 - lb_clipx always adds the tail byte
+         * the shift spills into - and lem_r_csave brings up to date only what
+         * a rectangle covers. A 14-pixel box at x & 7 of 0, 1 or 2 left the
+         * tail column of the save holding the LAST place saved, and the glass
+         * pair that took the pointer into the panel put an 8x14 block of
+         * that place on the glass (wave 5's verifier, VGA). The old box needs
+         * only its 14: no pointer pixel is outside it, and the compose
+         * rebuilds it from T. */
         ovl_rc_px(lem_view + lem_curx - 7, lem_cury - 7, 14, 14, 0);
-        ovl_rc_px(lem_view + lem_mx - 7, lem_my - 7, 14, 14, 0);
+        ovl_rc_px((lem_view + lem_mx - 7) & ~7, lem_my - 7, 24, 14, 0);
         lem_r_cplace(ovl_cur_shape() ? lem_cur1 : lem_cur0, lem_mx - 7,
                      lem_my - 7);
     }
@@ -1667,6 +1866,15 @@ static void ovl_vframe(int step)
                                 lem_cr1 - lem_cr0 + 1);
         }
         for (i = 0; i < lem_released; i++) {
+            /* a spray in the pool's order, where its bomber was - only a
+             * removed lemming has one, and a removed lemming has no box */
+            if (lem_lm[i].dpf) {
+                b = lem_lm[i].pbox;
+                if (b[3] < y0 || b[2] >= y0 + h || (!step && !ovl_rc_meets(b)))
+                    continue;
+                ovl_spray_one(&lem_lm[i], 0);
+                continue;
+            }
             b = &lem_obox[i * 4];
             if (b[0] == 0xFF || b[3] < y0 || b[2] >= y0 + h)
                 continue;
@@ -1794,6 +2002,7 @@ static void ovl_frame_first(int resume)
     }
     lem_r_sforget();
     ovl_obox_forget();
+    ovl_spray_forget();
     lem_nvis = -1;
     ovl_obj_all();
     if (!resume)
@@ -1843,6 +2052,7 @@ static void ovl_frame_draw(void)
         ovl_vframe(1);
         return;
     }
+    ovl_spray_erase();
     lem_r_srest();
     lem_nrc = 0;
     ovl_rc_world();
@@ -1891,6 +2101,7 @@ static int ovl_view_follow(int drew)
      * and the sprites are drawn again on the new one - here only when no game
      * frame will draw them below */
     lem_r_sforget();
+    ovl_spray_forget();
     lem_r_scroll(lem_view);
     if (!drew)
         ovl_sprites_all();
@@ -1917,6 +2128,7 @@ static int ovl_cur_hit(int cx, int cy, int drew)
 {
     int sx0, sy0, sx1, sy1, i, w, h, wx;
     int *d;
+    unsigned char *b;
     struct lem_l *p;
     struct lem_o *o;
 
@@ -1931,8 +2143,22 @@ static int ovl_cur_hit(int cx, int cy, int drew)
     wx = lem_view;
     for (i = 0; i < lem_released; i++) {
         p = &lem_lm[i];
-        if (p->fl & LF_GONE)
+        if (p->fl & LF_GONE) {
+            /* a spray writes the box its glass frame was drawn in (the
+             * erase) and the box of the frame about to be drawn - exactly,
+             * and not a +-128 square round the foot, which covered the whole
+             * 320 x 160 view and took the save-under off on every drawn
+             * frame of every explosion (wave 6's second review) */
+            b = p->pbox;
+            if (p->dpf && ovl_rhit(sx0, sy0, sx1, sy1, (b[0] << 3) - wx,
+                                   b[2], (b[1] << 3) + 7 - wx, b[3]))
+                return 1;
+            if (ovl_pbox(p, (int)p->pf) &&
+                ovl_rhit(sx0, sy0, sx1, sy1, (lem_bb0 << 3) - wx, lem_br0,
+                         (lem_bb1 << 3) + 7 - wx, lem_br1))
+                return 1;
             continue;
+        }
         if (ovl_rhit(sx0, sy0, sx1, sy1, p->x - wx - 16, p->y - 40,
                      p->x - wx + 16, p->y + 8))
             return 1;
@@ -2069,24 +2295,39 @@ static int ovl_pan_hit(int cx, int cy, int vr, int ox)
  * the pointer's shape and leaves the right-click glitch's lemming alone. */
 /* ovl_cmv_stepped - how many STEPPED lemmings of a part-stepped frame (the
  * pool before lem_cursor) have a drawn box meeting either of the pointer's
- * two 14x14 boxes - the old one where its save-under is, and the new one. One
+ * two boxes - the old 14x14 one where its save-under is, and the new one as
+ * the compose takes it, its save-under's three-byte span. One
  * compare a lemming and no box computed (ovl_sbox is what costs); it is asked
  * only on a pointer-only tick while lem_infr holds. */
 static int ovl_cmv_stepped(void)
 {
     static unsigned char pb[8];
-    int i, k, n, x, y;
+    int i, k, n, x, x1, y;
     unsigned char *b;
 
     for (k = 0; k < 2; k++) {
-        x = lem_view + (k ? lem_mx : lem_curx) - 7;
+        /* EXACTLY THE SPANS ovl_vframe COMPOSES, clipped the way ovl_rc_px
+         * clips them (wave 6's review): the old box is its 14 pixels and the
+         * new one its save-under's 24 from x & ~7 - rounded BEFORE the clamp,
+         * so a box hanging off the left edge counts bytes 0..1 as the compose
+         * does and not a phantom third, and one at the right edge stops at
+         * byte 199 */
+        if (k) {
+            x = (lem_view + lem_mx - 7) & ~7;
+            x1 = x + 23;
+        } else {
+            x = lem_view + lem_curx - 7;
+            x1 = x + 13;
+        }
         y = (k ? lem_my : lem_cury) - 7;
         if (x < 0)
             x = 0;
+        if (x1 > LEM_VRAM_W - 1)
+            x1 = LEM_VRAM_W - 1;
         if (y < 0)
             y = 0;
         pb[k * 4] = (unsigned char)(x >> 3);
-        pb[k * 4 + 1] = (unsigned char)((x + 13) >> 3);
+        pb[k * 4 + 1] = (unsigned char)(x1 >> 3);
         pb[k * 4 + 2] = (unsigned char)y;
         pb[k * 4 + 3] = (unsigned char)(y + 13);
     }

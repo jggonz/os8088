@@ -12,7 +12,8 @@
  * SmallerC cdecl argument is a push, a [bp+4] and an add sp on every one of
  * the ~30 calls a handler makes, and there is only ever one lemming in hand.
  *
- * ATTRIBUTION. Transliterated from Lemmix (Eric Langedijk, zlib licence)
+ * ATTRIBUTION. Transliterated from Lemmix (Eric Langedijk, Lemmix's own
+ * licence - zlib-style, with the added clause 'use it for free, use it for fun')
  * src/Game.pas - Transition, TurnAround, HandleLemming and the eighteen
  * Handle*, CheckForInteractiveObjects, the Assign* and PrioritizedHitTest -
  * with ccexplore's mechanics notes as Lemmix quotes them, and cross-checked
@@ -605,6 +606,12 @@ static int lem_bomb(void)
         ovl_mm_clear(L->x, L->y, 1);
     }
     lem_remove();
+    lem_pfin = LEM_PTIME;           /* the end waits for it (Game.pas:3377) */
+    L->pf = 1;                      /* the spray's first frame is this one's
+                                     * (Lemmings.ts: frame 0 the fireball,
+                                     * then particles 0..50), wherever it went
+                                     * off - steel and water keep their
+                                     * terrain, not their sparks */
     return 0;
 }
 

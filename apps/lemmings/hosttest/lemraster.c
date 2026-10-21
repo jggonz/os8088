@@ -395,6 +395,8 @@ static void h_vga_window(void)
             h_screen[y][i] = h_world[y][h_r_scroll + i];
 }
 
+static void h_cur_forget(void);
+
 void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
                  unsigned shadowseg)
 {
@@ -404,6 +406,7 @@ void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
     h_r_kind = kind;
     h_r_scroll = -1;
     h_r_vstart = 0;
+    h_cur_forget();                 /* lb_curn0 = lb_curn1 = 0, as the asm */
 }
 
 /* WHAT THE MODEL CAN AND CANNOT SEE HERE, stated because this is where the
@@ -801,6 +804,108 @@ void lem_r_srest(void)
 
 void lem_r_sforget(void) { h_spn = 0; }
 
+/* lem_r_spray - one frame of the explosion's spray (lemsprite.inc): the 80
+ * signed pairs at seg:off, either byte -128 not drawn, inside the C's box.
+ * VGA writes the original's colour for p mod 16 into the scratch or the
+ * world (h_wpx clips to the band as the machine does) and erases nothing;
+ * the shadow cards draw the solid class and ERASE A WHOLE BYTE - four world
+ * pixels - out of W, which is what lb_wcopy moves. */
+static const unsigned char h_pcol[16] = {
+    4, 15, 14, 13, 12, 11, 10, 9, 8, 11, 10, 9, 8, 7, 6, 2
+};
+static int h_r_sprays;              /* lem_r_spray calls */
+static int h_r_spraypix;            /* ...and the particles they drew */
+static int h_r_sprayonebox;         /* NEGATIVE CONTROL: the bins answer the
+                                     * whole box in every band they occupy -
+                                     * the area the one-box-a-spray build
+                                     * composed (lemtest spray_area) */
+
+/* erase 2, 3: THE BINS (lemsprite.inc .bin) - ten 16-row bands of {byte lo,
+ * byte hi, row lo, row hi} after the 80 boxes in the same records, lo 0xFF
+ * empty; 2 empties them first. Nothing is drawn. */
+#define H_PBINS (lem_sprec + 80 * 4)
+
+void lem_r_spray(unsigned seg, unsigned off, int x, int y, int b0, int b1,
+                 int r0, int r1, int erase)
+{
+    int p, dx, dy, px, py, sx, k;
+    unsigned char *q;
+
+    h_r_sprays++;
+    if (b0 < 0 || b1 > 199 || r0 < 0 || r1 > H_VIEW_H - 1)
+        fail("lem_r_spray was given a box outside the world - the C keeps it "
+             "inside (ovl_pbox)");
+    if (erase >= 2) {
+        sx = 0;
+        if (erase == 2)
+            for (k = 0; k < 10; k++) {
+                H_PBINS[k * 4] = 0xFF;
+                H_PBINS[k * 4 + 1] = 0;
+                H_PBINS[k * 4 + 2] = 0xFF;
+                H_PBINS[k * 4 + 3] = 0;
+            }
+        for (p = 0; p < 80; p++) {
+            dx = (signed char)*h_ptr(seg, off + (unsigned)p * 2);
+            dy = (signed char)*h_ptr(seg, off + (unsigned)p * 2 + 1);
+            if (dx == -128 || dy == -128)
+                continue;
+            px = x + dx;
+            py = y + dy;
+            if (py < r0 || py > r1 || px < 0 || (px >> 3) < b0 ||
+                (px >> 3) > b1)
+                continue;
+            q = &H_PBINS[(py >> 4) * 4];
+            if ((px >> 3) < q[0]) q[0] = (unsigned char)(px >> 3);
+            if ((px >> 3) > q[1]) q[1] = (unsigned char)(px >> 3);
+            if (py < q[2]) q[2] = (unsigned char)py;
+            if (py > q[3]) q[3] = (unsigned char)py;
+            sx = 1;                 /* a particle was binned */
+        }
+        if (h_r_sprayonebox && sx == 1)
+            /* the one-box build: every band the box crosses, the box's
+             * whole width - which sums to the box itself */
+            for (k = r0 >> 4; k <= r1 >> 4; k++) {
+                q = &H_PBINS[k * 4];
+                if (b0 < q[0]) q[0] = (unsigned char)b0;
+                if (b1 > q[1]) q[1] = (unsigned char)b1;
+                dy = r0 > k * 16 ? r0 : k * 16;
+                if (dy < q[2]) q[2] = (unsigned char)dy;
+                dy = r1 < k * 16 + 15 ? r1 : k * 16 + 15;
+                if (dy > q[3]) q[3] = (unsigned char)dy;
+            }
+        return;
+    }
+    if (h_r_kind == 0 && erase)
+        return;
+    if (h_r_kind == 0 && !h_comp)
+        h_r_direct++;
+    for (p = 0; p < 80; p++) {
+        dx = (signed char)*h_ptr(seg, off + (unsigned)p * 2);
+        dy = (signed char)*h_ptr(seg, off + (unsigned)p * 2 + 1);
+        if (dx == -128 || dy == -128)
+            continue;
+        px = x + dx;
+        py = y + dy;
+        if (py < r0 || py > r1 || px < 0 || (px >> 3) < b0 || (px >> 3) > b1)
+            continue;
+        if (h_r_kind == 0) {
+            h_wpx(px, py, h_pcol[p & 15]);
+            h_r_spraypix++;
+            continue;
+        }
+        sx = px - h_r_scroll;
+        if (h_r_scroll < 0 || sx < 0 || sx >= H_SCR_W)
+            continue;
+        if (erase) {
+            for (k = sx & ~3; k < (sx & ~3) + 4; k++)
+                h_scr(k, py, h_world[py][h_r_scroll + k]);
+        } else {
+            h_scr(sx, py, 3);
+            h_r_spraypix++;
+        }
+    }
+}
+
 int lem_r_cband(int y0, int h)
 {
     if (h_r_kind != 0 || h <= 0 || h > 125)
@@ -989,8 +1094,26 @@ void lem_r_obj(unsigned seg, unsigned off, int x, int y, int w, int h,
 }
 
 /* the pointer: saved under on every card, the world part on VGA in the
- * world at the view's offset and the panel part on the screen */
-static unsigned char h_cur_save[14 * 14];
+ * world at the view's offset and the panel part on the screen.
+ *
+ * THE SAVE-UNDER IS WHOLE BYTES, AS THE MACHINE'S IS (wave 6, carried finding
+ * A). lemsprite.inc lem_r_cursor clips the 2-byte bitmap with lb_clipx, which
+ * always adds the TAIL byte the shift can spill into - so the world piece and
+ * the panel piece each save and restore THREE planar bytes a row (24 pixels
+ * from x & ~7) on VGA, and the shadow piece FIVE 2bpp bytes (20 pixels from
+ * x & ~3) on the two shadow cards, whichever pixels of the 14x14 shape are
+ * lit. The model used to save only the lit pixels, so a compose that brought
+ * the save-under up to date over the 14-pixel box and not over the tail byte
+ * (lemdraw.c ovl_vframe's lem_cmv rectangle) left the tail column of the save
+ * stale and the harness could not see it: restored on the glass it is an
+ * 8x14 block of the wrong picture, which wave 5's verifier found on VGA when
+ * the pointer left the world for the panel. */
+#define H_CSW 24                    /* the widest piece, in pixels */
+static unsigned char h_cur_save[14 * H_CSW];   /* the world / shadow piece */
+static unsigned char h_cur_psave[14 * H_CSW];  /* the VGA panel piece */
+static int h_cur_wy0, h_cur_wn, h_cur_wx0, h_cur_ww;  /* rows y0.., n of them;
+                                                       * columns x0.., w */
+static int h_cur_py0, h_cur_pn, h_cur_px0, h_cur_pw;
 static int h_cur_x = -1000, h_cur_y, h_cur_on;
 static int h_cur_sc;                /* the scroll it was drawn at: the asm takes
                                      * it off at the VRAM offset it saved
@@ -1018,21 +1141,61 @@ static int h_cur_ink(int gx, int gy)
     return h_r_kind == 0 ? h_cur_col(h_cur_last, gx, gy) : 3;
 }
 
-static void h_cur_px(int sx, int sy, int c, int save, int k)
+/* h_floor - a floor division by a power of two, for negative x too (the asm's
+ * `sar`) */
+static int h_floor(int x, int n)
 {
-    if (sx < 0 || sx >= H_SCR_W || sy < 0 || sy >= H_SCR_H)
-        return;
-    if (h_r_kind == 0 && sy < H_VIEW_H) {
-        if (h_r_scroll < 0)
-            return;
-        if (save)
-            h_cur_save[k] = h_world[sy][h_r_scroll + sx];
-        h_wpx(h_r_scroll + sx, sy, c);
-    } else {
-        if (save)
-            h_cur_save[k] = h_screen[sy][sx];
-        h_scr(sx, sy, c);
+    return x >= 0 ? x / n : -((-x + n - 1) / n);
+}
+
+/* h_cur_span - one piece's rectangle, the asm's arithmetic: rows y0..y0+13
+ * clipped to [r0, r1), whole bytes of ppb pixels from floor(x / ppb), `nb` of
+ * them, clipped to [0, cols). Answers 0 when nothing of it is on. */
+static int h_cur_span(int x, int y0, int r0, int r1, int ppb, int nb, int cols,
+                      int *py0, int *pn, int *px0, int *pw)
+{
+    int a = h_floor(x, ppb) * ppb, e = a + nb * ppb, b = y0, f = y0 + 14;
+
+    if (b < r0)
+        b = r0;
+    if (f > r1)
+        f = r1;
+    if (a < 0)
+        a = 0;
+    if (e > cols)
+        e = cols;
+    if (b >= f || a >= e)
+        return 0;
+    *py0 = b;
+    *pn = f - b;
+    *px0 = a;
+    *pw = e - a;
+    return 1;
+}
+
+/* h_cur_place - both pieces' rectangles for a pointer at screen (sx, sy) */
+static void h_cur_place(int sx, int sy)
+{
+    h_cur_wn = h_cur_pn = 0;
+    if (h_r_kind == 0) {
+        if (h_r_scroll >= 0 &&
+            !h_cur_span(h_r_scroll + sx, sy, 0, H_VIEW_H, 8, 3, H_WORLD_W,
+                        &h_cur_wy0, &h_cur_wn, &h_cur_wx0, &h_cur_ww))
+            h_cur_wn = 0;
+        if (!h_cur_span(sx, sy, H_VIEW_H, H_SCR_H, 8, 3, H_SCR_W, &h_cur_py0,
+                        &h_cur_pn, &h_cur_px0, &h_cur_pw))
+            h_cur_pn = 0;
+    } else if (!h_cur_span(sx, sy, 0, H_SCR_H, 4, 5, H_SCR_W, &h_cur_wy0,
+                           &h_cur_wn, &h_cur_wx0, &h_cur_ww)) {
+        h_cur_wn = 0;
     }
+}
+
+/* h_cur_forget - nothing of the pointer is on a glass a mode set has just
+ * cleared (lemblit.inc lem_r_setup) */
+static void h_cur_forget(void)
+{
+    h_cur_wn = h_cur_pn = 0;
 }
 
 void lem_r_cursor(const unsigned char *bits, int sx, int sy)
@@ -1040,26 +1203,51 @@ void lem_r_cursor(const unsigned char *bits, int sx, int sy)
     int gx, gy;
 
     if (h_cur_on) {
-        int sc = h_r_scroll;
-
-        h_r_scroll = h_cur_sc;
-        for (gy = 0; gy < 14; gy++)
-            for (gx = 0; gx < 14; gx++)
-                if (h_cur_bits_was(gx, gy))
-                    h_cur_px(h_cur_x + gx, h_cur_y + gy,
-                             h_cur_save[gy * 14 + gx], 0, 0);
-        h_r_scroll = sc;
+        /* ...the whole saved span goes back, lit pixels or not */
+        for (gy = 0; gy < h_cur_wn; gy++)
+            for (gx = 0; gx < h_cur_ww; gx++) {
+                if (h_r_kind == 0)
+                    h_wpx(h_cur_wx0 + gx, h_cur_wy0 + gy,
+                          h_cur_save[gy * H_CSW + gx]);
+                else
+                    h_scr(h_cur_wx0 + gx, h_cur_wy0 + gy,
+                          h_cur_save[gy * H_CSW + gx]);
+            }
+        for (gy = 0; gy < h_cur_pn; gy++)
+            for (gx = 0; gx < h_cur_pw; gx++)
+                h_scr(h_cur_px0 + gx, h_cur_py0 + gy,
+                      h_cur_psave[gy * H_CSW + gx]);
+        h_cur_wn = h_cur_pn = 0;
         h_cur_on = 0;
     }
     if (bits == 0)
         return;
     h_r_curdraws++;
     h_cur_last = bits;
+    h_cur_place(sx, sy);
+    for (gy = 0; gy < h_cur_wn; gy++)
+        for (gx = 0; gx < h_cur_ww; gx++)
+            h_cur_save[gy * H_CSW + gx] =
+                h_r_kind == 0 ? h_world[h_cur_wy0 + gy][h_cur_wx0 + gx]
+                              : h_screen[h_cur_wy0 + gy][h_cur_wx0 + gx];
+    for (gy = 0; gy < h_cur_pn; gy++)
+        for (gx = 0; gx < h_cur_pw; gx++)
+            h_cur_psave[gy * H_CSW + gx] =
+                h_screen[h_cur_py0 + gy][h_cur_px0 + gx];
     for (gy = 0; gy < 14; gy++)
-        for (gx = 0; gx < 14; gx++)
-            if (h_cur_col(bits, gx, gy))
-                h_cur_px(sx + gx, sy + gy, h_cur_ink(gx, gy), 1,
-                         gy * 14 + gx);
+        for (gx = 0; gx < 14; gx++) {
+            int x = sx + gx, y = sy + gy;
+
+            if (!h_cur_col(bits, gx, gy) || x < 0 || x >= H_SCR_W || y < 0 ||
+                y >= H_SCR_H)
+                continue;
+            if (h_r_kind == 0 && y < H_VIEW_H) {
+                if (h_r_scroll >= 0)
+                    h_wpx(h_r_scroll + x, y, h_cur_ink(gx, gy));
+            } else {
+                h_scr(x, y, h_cur_ink(gx, gy));
+            }
+        }
     h_cur_sc = h_r_scroll;
     h_cur_x = sx;
     h_cur_y = sy;
@@ -1068,34 +1256,37 @@ void lem_r_cursor(const unsigned char *bits, int sx, int sy)
 
 /* lem_r_cplace - the place and the shape, set and NOT drawn: nothing taken
  * off the glass and nothing saved (the VGA compose rebuilds the old box and
- * lem_r_csave / lem_r_cdraw do the rest, lemsprite.inc) */
+ * lem_r_csave / lem_r_cdraw do the rest, lemsprite.inc). The world piece's
+ * rectangle is placed and its save is NOT touched - so whatever the compose
+ * does not bring up to date stays what it was, as on the machine; there is no
+ * panel piece (the caller keeps both boxes in the world). */
 void lem_r_cplace(const unsigned char *bits, int sx, int sy)
 {
     h_cur_last = bits;
+    h_cur_place(sx, sy);
+    h_cur_pn = 0;
     h_cur_sc = h_r_scroll;
     h_cur_x = sx;
     h_cur_y = sy;
     h_cur_on = 1;
 }
 
-/* lem_r_csave - the CLIP's share of the lit pointer's world pixels, saved
- * again out of the scratch (the picture the glass is about to hold) */
+/* lem_r_csave - the CLIP's share of the lit pointer's world piece - every
+ * pixel of its whole-byte span, lit or not - saved again out of the scratch
+ * (the picture the glass is about to hold) */
 void lem_r_csave(void)
 {
     int gx, gy, x, y;
 
     if (!h_comp || !h_cur_on || h_r_kind != 0)
         return;
-    for (gy = 0; gy < 14; gy++)
-        for (gx = 0; gx < 14; gx++) {
-            if (!h_cur_bits_was(gx, gy))
+    for (gy = 0; gy < h_cur_wn; gy++)
+        for (gx = 0; gx < h_cur_ww; gx++) {
+            x = h_cur_wx0 + gx;
+            y = h_cur_wy0 + gy;
+            if (!h_inclip(x, y))
                 continue;
-            x = h_r_scroll + h_cur_x + gx;
-            y = h_cur_y + gy;
-            if (h_cur_x + gx < 0 || h_cur_x + gx >= H_SCR_W || y < 0 ||
-                y >= H_VIEW_H || !h_inclip(x, y))
-                continue;
-            h_cur_save[gy * 14 + gx] = h_cs[y][x];
+            h_cur_save[gy * H_CSW + gx] = h_cs[y][x];
         }
 }
 
@@ -1226,11 +1417,15 @@ void lem_p_setup(int kind, unsigned fbseg)
 }
 
 static int h_p_clrows;                  /* the surface rows cleared */
+static int h_p_margins;                 /* VGA margin clears (wave 6: only
+                                         * after a mode set that happened) */
 
-void lem_p_clear(int y0, int y1)
+void lem_p_clear(int y0, int y1, int margins)
 {
     int y;
 
+    if (margins && h_p_kind == 0)
+        h_p_margins++;
     for (y = y0; y < y1 && y < H_P_H; y++)
         if (y >= 0) {
             memset(h_p[y], 0, H_P_W);

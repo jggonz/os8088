@@ -138,12 +138,60 @@ reverse:
   (:230-283) never reads the argument. So all-purple matches Lemmix's
   unfinished build, not the original's look. Drawing them would be hue-shifted
   copies of the four purples in the palette and one recolour pass a glyph
-  (SPEC.md §114.1's authority row, §114.4.3.1).
+  (SPEC.md §114.1's authority row, §114.4.3.1). **PRICED IN WAVE 6, NOT
+  BUILT - THE OWNER'S CALL**: the price is the PALETTE - mode 12h's sixteen
+  are all spoken for (0-7 the menu's, 8-15 the level picture's), so one flat
+  colour a hued line takes 4 of the picture's 8 and two shades a line take
+  all 8; the code is ~130-200 resident bytes (a colour argument and a
+  set/reset ink write in `lemfont.inc`, the hues and their palette load, a
+  seven-line table); VGA only. **In 360KB clusters (corrected at wave 6's
+  second review - "1,164 before the 42nd" was the file's growth, not its
+  headroom)**: `LEMMINGS.O88` is 41,965 bytes, 41 clusters, **19 bytes before
+  its 42nd**; the colour table is part 0, so alone this takes the 42nd - the
+  disk's ONE cluster of headroom - and no level. Both questions together are
+  that same one cluster at the estimates (53 levels kept), unless their
+  packed image growth passes 545 bytes (the top of the estimates), which moves
+  part 0 a second sector to 43,009 bytes, 43 clusters and **38 levels**
+  (SPEC.md §114.4.3.1 has the sector arithmetic).
 - **Wave 5's preview picture is terrain only.** Lemmix's `RenderWorld(...,
   True)` draws every object at its `PreviewFrameIndex`. Priced, not built:
-  ~400-600 bytes of resident assembly, one more 360KB cluster - which is one
-  more Mayhem level off that disk - and ~10-40 ms a picture on the XT
-  (SPEC.md §114.4.3.1).
+  ~400-600 bytes of resident assembly, one more 360KB package cluster and
+  ~10-40 ms a picture on the XT (SPEC.md §114.4.3.1). **RE-PRICED IN WAVE 6
+  - THE OWNER'S CALL**: the 360KB planner, handed the package padded a
+  cluster at a time, kept all 53 levels through +10 clusters at wave 6's
+  first build; the spray took nine of them, so it is now ONE cluster of
+  headroom and then 38 levels. ~280-420 packed bytes of image move part 0 one
+  sector: ~42,477 bytes, 42 clusters - **this item alone takes that last
+  cluster, certainly, and no level** (wave 6's second review corrected "may
+  fit inside the cluster it has": the file is 19 bytes from its 42nd).
+- **The explosion's particle spray (decision 5) - SHIPPED at wave 6's
+  review.** Decision 5's gate is the resident line alone (9,899 spare against
+  1,500) and it passed; wave 6's first build had read a "second test" into
+  wave 6's cluster bullet and turned the decided item into an owner question,
+  which the review corrected - pricing a growth in clusters is the report's
+  duty, and removing a LEVEL is the owner's call, and the spray removes none.
+  `PARTICLES.DAT` (Lemmix's extract, a second pinned file) is `LEMMAIN` item
+  10; +456 image, +4 bss, nine 360KB clusters (53 levels kept, one cluster of
+  headroom left); SPEC.md §114.8, §114.4.6, §114.6. Wave 6's second review
+  made it **a rectangle a 16-row band** on VGA (828 byte-rows a frame on the
+  real table against one box's 2,961), drew it **52 frames** (the last row
+  twice, Lemmix's `PARTICLE_FRAMECOUNT`) and made the level's **end wait for
+  it** (`fParticleFinishTimer`, R9) - both Lemmix's own rules, which the first
+  cut had not carried.
+- **The aiming flicker (OWNER'S CALL, open, wave 6's review).** `LEM_CMV_CAP`
+  0 sends a pointer-only tick over stepped lemmings to the glass pair - rule
+  2's erase-then-draw of the pointer, where the player aims - on **34%** of
+  aiming ticks into a nose-to-tail crowd of sixty and **66%** into a spread
+  one (`lemtest`); the dry-pass bound cures 3 of 91 such ticks, so it is not
+  the cure. Options: accept the pair as shipped, or compose a pointer-only
+  tick from the stepped lemmings' LAST-DRAWN boxes and poses (`lem_obox`) so
+  no stepped lemming is shown mid-frame - the different design SPEC.md
+  §114.4.6 records, which removes the cascade the cap exists to bound.
+- **The next levers, recorded and not pulled**: the VGA compose's cost a
+  lemming (~22 ms, ~80% of a busy frame, §114.7.4 point 2), and **moving the
+  pointer between compose bands or sprites** - the pointer moves once a glass
+  update, ~1.35 s across a busy VGA frame's compose (§114.7 point 3); since
+  wave 6's review the compose latches the BUTTONS, but not the position.
 - **Wave 5's screens take Return and not Space**, as both of Lemmix's
   `Form_KeyDown`s do; the first build had added Space and the review took it
   out. (The launcher WINDOW's Space predates wave 5 and is the window's.)
@@ -232,10 +280,10 @@ taste, and all five are already folded into the paragraphs below:
 ### Present and greyed (SPEC.md §47 — the fact that greys it)
 
 - **Music (a Music row in the launcher and a line in README.TXT)** — ADLIB.DAT is a compiled x86 sound driver plus its data, not a score - the game installs an interrupt vector at its offset 0 and calls into it - so the music is that program's code and private data, not a score this OS's FM voices (SPEC.md 34.12) could play. It is also not in the 26-file data set this port fetches at all. (Wave 5's second review: the earlier wording, "there is no FM score path in this OS", was untrue - SPEC.md 34.12 publishes the whole OPL2/OPL3 chip and MIDIRack plays scores through it.) The event tones this build plays are this port's own.
-- **Level Code... (a Level Code row in the launcher)** — The original's access-code algorithm lives in the game's executable, not in any of its data files. Lemmix's ten-letter code is Lemmix's own (an MD5 of the 2048-byte record) and is not the code a 1991 player knows. Progress is kept in SYSTEM/APPDATA/LEMMINGS.SAV instead. The postview's two access-code lines are omitted with it, and both branches take the failure branch's AddLineFeed(5) so the force-positioned footer is unaffected.
+- **Level Code... (a Level Code row in the launcher)** — The original's access-code algorithm lives in the game's executable, not in any of its data files. Lemmix's ten-letter code is Lemmix's own (an MD5 of the 2048-byte record) and is not the code a 1991 player knows. (Progress is kept in SYSTEM/APPDATA/LEMMINGS.SAV where the medium can be written; since wave 6 the greyed fact does not say so, because it shows beside a Save Progress row that may be greyed.) The postview's two access-code lines are omitted with it, and both branches take the failure branch's AddLineFeed(5) so the force-positioned footer is unaffected.
 - **The 320x200x16 mode (a Mode row in the launcher naming the adapter and the mode in use)** — kernel/fsx.inc:117 fsx_capstab gives an EGA 0x000F - the CGA-compatible modes only - so mode 0Dh has no FSXM id on that row and a sixteen-colour card gets four colours. fsx_caps is asked with OUR window and the same bit that greys the row is the one fsx_mode would refuse on (SPEC.md 47 rule 4). Adding FSXM_VGA0D to the EGA row is a KERNEL change and is outside this port's scope.
 - **F11 (pause), F12 (nuke) and the Pause key (named on the Mode row's second line, beside the keyboard the machine reports)** — An 83-key XT keyboard - vm/xt-lemmings, the machine this port is about - has no F11 or F12 key, and its Pause is Ctrl-NumLock, which the BIOS spins on internally and never returns. This build reads keys with int 16h AH=11h/10h where an enhanced BIOS answers and falls back to AH=01/00 where it does not, so F11 and F12 work on an AT-class machine and are absent on an XT. Pause and Nuke are the panel's own buttons 11 and 12 on every machine.
-- **The original's preview and postview LAYOUT on CGA and EGA** — The original's preview and postview screens are 640x350 (Lemmix GameScreen.Preview.pas:114). VGA sets FSXM_VGA12 (640x480) and Hercules FSXM_HERC (720x348) and both hold that layout; a CGA and an EGA top out at FSXM_CGA640, 640x200, which holds the 40-character lines but 12 of the ~22 rows - so the blank-line spacing is compressed out and the content lines are drawn at the original's 16px pitch.
+- **The original's preview and postview LAYOUT on CGA and EGA** — The original's preview and postview screens are 640x350 (Lemmix GameScreen.Preview.pas:114). VGA sets FSXM_VGA12 (640x480) and Hercules FSXM_HERC (720x348) and both hold that layout; a CGA and an EGA top out at FSXM_CGA640, 640x200, which holds the 40-character lines but 12 of the ~22 rows - so the blank-line spacing is compressed (the preview drops its blank lines; the postview and the congratulation keep one of each run) and the content lines are drawn at the original's 16px pitch.
 - **A level row in the chooser whose graphic set or special picture is not on this disk** — Names the missing file and the arithmetic in CLUSTERS as well as bytes, e.g. 'LEMSPC2.LEM is not on a 720KB disk: the four special pictures are 307,200 bytes = 300 clusters of this disk's 713, with 517 already spent.'
 - **Saving progress on a read-only medium** — The live CD cannot be written (SPEC.md 80.3); the session is played and the result is shown, and nothing is recorded.
 - **Sound on a machine whose speaker path refuses** — os88_snd_caps() answered no tone capability; the same predicate greys the row and is what os88_snd_tone would refuse on.
@@ -493,7 +541,7 @@ Fun 1 is completable over QMP: a screendump after 100 ticks shows lemmings walki
 
 **What shipped (wave 3, 2026-10-20)** — SPEC.md §114.4.6, §114.4.7, §114.6, §114.7.2 and §114.12 are the record; this is the index to it.
 
-- The eighteen actions, the eight skills with their refusals, the prioritised pick with the right button, the word in Lemmix's test order: `lemact.c`, transliterated from Lemmix Game.pas under its ORIG mechanics set and checked against lemmings_3ds by `tools/lemsim.py` (eight rulings where the two disagree, SPEC §114.4.7's table).
+- The eighteen actions, the eight skills with their refusals, the prioritised pick with the right button, the word in Lemmix's test order: `lemact.c`, transliterated from Lemmix Game.pas under its ORIG mechanics set and checked against lemmings_3ds by `tools/lemsim.py` (eight rulings where the two disagree, SPEC §114.4.7's table; nine since wave 6's second review added R9, the end waiting for the last spray).
 - Objects and triggers through the original's **object map** (4-pixel cells, in the record's own claim) instead of the column bucket this plan proposed - one byte a probe and exact by construction; the blocker writes its field into it.
 - Destruction into the mask at once and into the picture and the minimap at the frame's end (`lem_damage`, `lem_r_bgrect`, `ovl_mm_cell`).
 - The per-tick step: the opening at 15/34/35, spawning, the release rate while held, the nuke, the 17 fps clock, the verdict, and `LEM_STEP_MAX` = 20 as a round robin that spreads a frame and gates nothing (decision 7).
@@ -552,7 +600,7 @@ make lemmingsdisk builds four images and each verifies. A screendump of the choo
 - ovl_postview(): the results screen, the nine result texts, the tier rule from GetResultText, the header and footer lines, and the Mayhem 30 congratulation. THE ACCESS-CODE LINES ARE OMITTED and both branches take the failure branch's AddLineFeed(5), so the two are identical; the footer does not move either way because :189's AddLineFeed(18 - CountChar(CR)) force-positions it
 - The CGA/EGA re-layout, and the greying fact that names it: the original's screens are 640x350 and a 640x200 mode holds 12 rows, so the blank-line spacing is compressed out and the content lines keep their 16px pitch and their true 640px width
 - The session state machine: preview -> play -> postview -> next level / retry / menu on the mouse buttons the original uses, with the mode set and restored around each screen and lem_r_mode's failure a normal path
-- ovl_about(): the About card, TWELVE ROWS - product, version, one line of what this port is, and the two principals (DMA Design / Psygnosis for Lemmings 1991 and its data; Eric Langedijk / Lemmix, zlib, for the screens, strings, level order and format work), pointing at README.TXT for the rest. NOTHING about how the build renders: the frame rate goes to PERFORMANCE.md and SPEC.md, the synthesised tones to the greyed Music row and the README (LESSONS.md 8)
+- ovl_about(): the About card, TWELVE ROWS - product, version, one line of what this port is, and the two principals (DMA Design / Psygnosis for Lemmings 1991 and its data; Eric Langedijk / Lemmix - under Lemmix's own licence, zlib-style with an added clause, never plain 'zlib' (wave 6) - for the screens, strings, level order and format work), pointing at README.TXT for the rest. NOTHING about how the build renders: the frame rate goes to PERFORMANCE.md and SPEC.md, the synthesised tones to the greyed Music row and the README (LESSONS.md 8)
 - ovl_greyfact(): the dialog behind a greyed row, naming the fact
 - The greyed rows wired to their predicates: Music, Level Code, Mode (0Dh on an EGA, and the F11/F12/Pause keyboard fact), Save Progress on a read-only medium, sound with no path
 
@@ -585,8 +633,8 @@ Screendumps of the preview screen for Fun 1 and of the postview after saving 10 
 
 **Features**
 
-- **EVERY GROWTH IS PRICED IN 360KB CLUSTERS AS WELL AS RESIDENT BYTES.** The binding currency on the XT's floppy is clusters, not bytes: one cluster is 1,024 bytes there, the disk is at 348 of 354 with `LEMMINGS.SAV`'s two kept, and every cluster the package file grows by is one fewer level record on it (wave 5's +2,899 file bytes cost Mayhem 28 and 29). So decision 5's particle gate is TWO tests, not one: >= 1,500 resident bytes spare (10,227 today, which a particle system passes easily) AND a stated count of 360KB levels it removes, quoted beside it - a 1,500-byte feature that passes the resident gate can silently take a Mayhem level off the XT's floppy. Removing a level from the 360KB disk is the OWNER's call, with that count in front of them; a wave proposes, it does not decide.
-- The 16x16 icon, README.TXT beside the package carrying the FULL attribution list (DMA Design and Psygnosis; Eric Langedijk / Lemmix, zlib; Matthias / esoteric-programmer, lemmings_3ds, public domain; Thomas Zeugner / Lemmings.ts, MIT; ccexplore, Mindless, rt, Simon and Volker Oth for the format documents), the fetch, the synthesised tones, the absent particle spray and the LEVELS.TXT per geometry
+- **EVERY GROWTH IS PRICED IN 360KB CLUSTERS AS WELL AS RESIDENT BYTES.** The binding currency on the XT's floppy is clusters, not bytes: one cluster is 1,024 bytes there, the disk is at 348 of 354 with `LEMMINGS.SAV`'s two kept, and every cluster the package file grows by is one fewer level record on it (wave 5's +2,899 file bytes cost Mayhem 28 and 29). *(Measured in wave 6: not one-for-one any more - the planner keeps all 53 levels through +10 package clusters and drops to 38 at +11; SPEC.md §114.6.)* So every size line quotes its clusters, and any growth that would REMOVE a 360KB level is the OWNER's call, with that count in front of them; a wave proposes, it does not decide. This is not a second test on decision 5: its gate is the resident line (>= 1,500 bytes spare), and the spray, which passed it and removes no level, shipped (wave 6's review).
+- The 16x16 icon, README.TXT beside the package carrying the FULL attribution list (DMA Design and Psygnosis; Eric Langedijk / Lemmix, under Lemmix's own licence - zlib's text with an added clause, never plain 'zlib'; Matthias / esoteric-programmer, lemmings_3ds, public domain; Thomas Zeugner / Lemmings.ts, MIT; ccexplore, Mindless, rt, Simon and Volker Oth for the format documents), the fetch, the synthesised tones, the particle spray's source (absent at wave 6's first build, shipped at its review) and the LEVELS.TXT per geometry
 - The four floppy geometries and their folder layout - package, overlay and every band file in ONE folder, because the .OVL is resolved in the launching instance's directory (SPEC.md 19.2.1)
 - vm/xt-lemmings (4.77 MHz XT, VGA, 640KB) and vm/386-lemmings, each a copy of a machine that has booted with only the B: image and the uuid changed - and the XT one ONLY IF wave 2's measurement cleared question 7's threshold, because an XT target the port does not run on is a claim rather than a machine
 - The MartyPC run repeated on the final build: frame time on the target, per level class, per backend, into PERFORMANCE.md as a field set and quoted in SPEC.md - and NOT in the About box
@@ -611,6 +659,18 @@ Screendumps of the preview screen for Fun 1 and of the postview after saving 10 
 **Done when**
 
 make lemmingsdisk builds and verifies four images; make 386-lemmings boots to the launcher and plays a level, and make xt-lemmings does too or the machine was never created and the fact is on the Mode row; the MartyPC number is in PERFORMANCE.md and quoted in SPEC and NOWHERE in the About box; make test-full is green including the two new rows; tools/checkdocs.py and tools/os88index.py --check pass; and os88pkg's size line in the commit message matches what SPEC says.
+
+**What shipped (wave 6, 2026-10-20) - the last wave and the final pass.** SPEC.md §114.6 has the size line, §114.7.4 the measurements, §114.4.6 the pointer, §114.12 the rows.
+
+- **Wave 5's carried findings, every one applied.** A: the VGA pointer's stale 8x14 block - `lem_r_cursor` saves three planar bytes a row (`lb_clipx` always adds the tail byte) and the compose's new-box rectangle covered only the 14 pixels, so the tail column of the save went stale whenever x & 7 was 0-2; the rectangle is now the save's span (`ovl_vframe`, `ovl_cmv_stepped`), `lemtest`'s model saves whole bytes and its leaving-the-world row is 0 stale pixels (64 before), and the verifier's repro on VGA, cropped and zoomed, leaves nothing (`build/port-shots/wave6-vga-rep-*.png`). B: `tests/lembench`'s `lem_r_clearworld(int vram)` prototype, `make lembench` assembling. C1-C2 §114.6's deltas and string-band paragraph re-derived; C3 GREY_EGA's "compressed" (and README.TXT's "shortened"); C4 GREY_CODE's last sentence out; C5 "(zlib)" off the card and every header naming Lemmix's licence as its own; C6 §114.1's row "a departure put to the owner, not yet decided"; C7 `lem_ask_launch` claims nothing and a pending launch takes no key or click; C8 a full list repaint clears the settle shot; **C9 the fullscreen latch DROPPED on the code** - one kernel paint a launch, the screen chosen inside the bracket (`ovl_leave`), looked at on VGA and CGA; C10 a fact longer than the box ends its last row in "..."; C11 the VGA margins cleared only after a mode set that happened. Each with a `lemtest` row red without it.
+- **The icon** (`apps/lemmings/icon.inc`, a walking lemming drawn for the port, its picture the source `build.sh` re-derives every word from), **README.TXT's full attribution list**, the particle spray (absent at the first build, shipped at the review) and the measured XT rate; the repo README, CLAUDE.md/AGENTS.md command tables and `docs/INDEX.md`.
+- **The two machines**, `vm/xt-lemmings` (xt-weave's 640KB VGA XT, B: = lemmings360.img) and `vm/386-lemmings` (386dx, B: = lemmings.img), `make xt-lemmings` / `make 386-lemmings`; each booted once to its desktop with B: (`build/port-shots/wave6-86box-*.png`).
+- **The final pass** (`tests/lemplaymarty.py`, new): VGA 3.85 / 0.60 game frames a second quiet / busy, CGA 4.60 / 0.90; the busy VGA frame is ~80% compose; picture 1,652 / 366 ms; the in-bracket next level 2 int 13h calls; crossings 51-182 a frame; the CGA's scrolling pass 545 ms; the aiming share 34% / 66% (`lemtest`) and the dry-pass bound shown NOT to be the cure (3 of 91 ticks); `tests/ovlhigh.py`'s inverted control red (MC_RLOC 25380).
+- **The `lemmings` soak row** (`tests/lemmings.py`, QEMU), run once: 26 sweeps from the world into the panel with the world unchanged.
+- **Size**: `image=31116 bss=20425`, **51,541 resident, 3,459 under the trigger**; the package 40,680 bytes = 40 clusters on 360KB, README.TXT 15; disks 1,998/2,847, 1,998/2,371, 700/713, 348/354 with 53 levels.
+- **Owner's calls, priced and not built**: the preview's per-line colours, the preview picture's objects and the aiming flicker (the overrides list above). The particle spray is not one: decision 5 decided it.
+- **Wave 6's review (applied)**: (1) the VGA compose latches the BUTTONS - `lem_r_sprite`, `lem_r_obj`, `lem_r_bgrect` and `lem_r_clatch` call `lb_msample` on entry, so a click inside a ~1.35 s busy compose is kept; SPEC.md §114.7 point 3 and §114.7.4 point 1 now say what was measured - the pointer moves once a glass update, not once a tick - and the rows that said "a pass" say "between two glass updates". (2) **The explosion's spray SHIPS** under decision 5 (above; `tools/getlemmings.py` pins `PARTICLES.DAT`, `LMNB` 3, `lem_r_spray` on three cards, `lemtest`'s spray rows on VGA and CGA, parked and aimed, red at 140 / 637 with either erasure removed, and `t_lemdat` checking item 10 against the file). (3) `ovl_cmv_stepped` counts exactly the spans the compose clips (aiming share 31 and 60 of 90, still 34% / 66%). (4) The aiming flicker put to the owner, and the pointer-between-bands lever recorded. Minors: CLAUDE.md/AGENTS.md's `make lemmings` wording, `icon.inc` off `LEMINC` (the bench no longer rebuilds for it), §114.1's four departures, README.TXT's spray paragraph re-sourced to the executable, the 86Box shots cropped to the emulated screen. Size `image=31572 bss=20429`, **52,001 resident, 2,999 under the trigger**; the package 41,844 = 41 clusters on 360KB, `LEMMAIN.LEM` 59, README.TXT 15; disks 2,016/2,847, 2,016/2,371, 709/713, **351/354 with 53 levels and ONE cluster of headroom**. The final pass's MartyPC readings were taken BEFORE these changes and were not re-taken.
+- **Wave 6's second review (applied)**: (1) the owner questions' cluster arithmetic corrected - the file was 140 bytes from its 42nd cluster, not 1,164 (that was its growth); it is sector-structured (`512 x ceil((96 + packed image)/512) + packed part 0`), so the objects certainly take the 42nd cluster, the colours alone take it too, and both together are that one cluster (53 levels) at the estimates unless their packed image growth passes 545 bytes (43 clusters, 38 levels); SPEC.md §114.4.3.1, §114.6, the list above. (2) **The spray's VGA rectangles are one a 16-row band** (`lem_r_spray` modes 2/3 bin a frame's 80 pairs into `lb_pbins`, 40 bytes of the sprite records): 828 byte-rows in 76 rows a game frame on the real table against one box's 2,961 in 128, `lemtest`'s spray-area row held to 1,200 with the one-box build as its negative control, priced ~40-50 ms of a drawn XT frame against ~75-100. (3) **R9: the level's end waits for the last spray** (Lemmix `fParticleFinishTimer`, `CheckForGameFinished` :2236) in `lemgame.c` and `tools/lemsim.py`; the two nuke traces re-pinned, each 52 frames longer, agreeing on every frame; and the spray is drawn **52 frames**, the last row twice, as Lemmix's `ParticleTimer` does. (4) README.TXT's lemmings_3ds licence sentence made true (its `doc/` is third-party, unknown licence, credited and not copied) and the spray's colours and -128 rule cited to Lemmix in every header. Minors: the band-size comments (60,416, ~136 KB) and `t_lemdat` holding every built band to `lemload.c`'s `LEM_KB_*` claims (red with `LEM_KB_MAIN` 58); `ovl_cur_hit` tests the spray's two exact boxes, not a ±128 square; the compose's button latch on VGA only (`lb_msvga`); README.TXT's colour-class exception for the spray. Size `image=31674 bss=20431`, **52,105 resident, 2,895 under the trigger**; the package **41,965 = 41 clusters, 19 bytes before the 42nd** (a first cut was 42,002 and was trimmed back), README.TXT 15 (15,290); disks unchanged, **351/354 with 53 levels and ONE cluster of headroom** (re-measured). **For the Finish pass**: `tests/lemplaymarty.py` has never read a frame with a spray in flight - the priced figure above is the only one - so a reading on the shipped build is owed there (it is an instrument, not a suite row, by its own header).
 
 ## Verification
 
@@ -674,7 +734,7 @@ commit, the data set by the pinned fetch `tools/getlemmings.py` performs.
 
 | what | where it was read | how to get it again |
 |---|---|---|
-| **Lemmix** (Eric Langedijk, zlib) — the authority on the original's SCREENS, strings, level order and the LVL bit unpacking | `<scratchpad>/Lemmix` | `https://github.com/ericlangedijk/Lemmix` at commit `40e9bc34451f0e9127fd53b290a3877e700d143d` |
+| **Lemmix** (Eric Langedijk, under Lemmix's own `Licence.txt`: zlib's text with an added clause 1, 'use it for free, use it for fun') — the authority on the original's SCREENS, strings, level order and the LVL bit unpacking | `<scratchpad>/Lemmix` | `https://github.com/ericlangedijk/Lemmix` at commit `40e9bc34451f0e9127fd53b290a3877e700d143d` |
 | **lemmings_3ds** (Matthias / esoteric-programmer, public domain with four named third-party exclusions) — the authority on the FORMAT DOCUMENTS under `doc/data/` and on the mechanics reading | `<scratchpad>/lemmings_3ds` | `https://github.com/esoteric-programmer/lemmings_3ds` at commit `7625315ef42d28d5d584eed9012a2cebe5695474` |
 | **Lemmings.ts** (Thomas Zeugner, MIT) — the authority on the animation registration list and the mask semantics, and the independent second reader `tests/unit/t_lemdat.py` is written from | `<scratchpad>/Lemmings.ts` | `https://github.com/tomsoftware/Lemmings.ts` at commit `10c7c8b9167258503d02589cf048e2d83a43dd0a` |
 | **the 26 DOS data files** — 358,154 bytes shipped, 956,492 decompressed | `<scratchpad>/lemdata/orig` | Lemmix `src/Data/Styles/Orig/orig.zip` at the pinned commit above, SHA-256 `bf1f2dbd11cd20df9f748047f8c4a32e7033d3ac7bb4b77058c3ecf27c0a9d6d`, 336,839 bytes — which is exactly what `tools/getlemmings.py` fetches |

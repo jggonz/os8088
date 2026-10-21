@@ -29,6 +29,15 @@ directory holding the 26 files, or at a local copy of the zip, and the same
 verification runs. It is the only way to build the LEMMINGS floppies on a
 machine that cannot reach github.
 
+A SECOND PINNED FILE, AND ONLY ONE (decision 5, SPEC.md 114.8): the
+explosion's 80-particle trajectory table is not in the 26 data files - it was
+extracted from the game's executable - and Lemmix carries an extracted copy
+as its own resource, `src/Data/Particles/Particles.dat`, 8,160 bytes, at the
+SAME commit. It lands beside the 26 as build/lemdata/PARTICLES.DAT. `--from`
+looks for it in the same directory (any of the three spellings), and
+`--particles PATH` names it anywhere else - a checkout of Lemmix is the
+offline route; without either it is fetched on its own from its pinned URL.
+
 On success it writes build/lemdata.stamp, which is what gates the disk target
 (never `make lemmings`: the package builds against the committed synthetic
 fixture written by `tools/os88lem.py --fixture`, SPEC.md 114.12).
@@ -119,6 +128,18 @@ FILES = [
 BY_NAME = {n: (sz, sha) for (n, sz, sha) in FILES}
 TOTAL = sum(sz for (_, sz, _) in FILES)
 
+# THE SPRAY'S TABLE (decision 5): 51 frames x 80 particles x (dx, dy), signed
+# bytes, a pair with either byte -128 not drawn - Lemmix src/Game.pas declares
+# the layout (TParticleTable, :47-51) and DrawParticles reads it (:2492-2515);
+# Lemmings.ts src/game/resources/particle-table.ts reads it the same way. Not
+# one of the 26, so not in FILES or TOTAL.
+PART_NAME = "PARTICLES.DAT"
+PART_URL = ("https://raw.githubusercontent.com/ericlangedijk/Lemmix/"
+            + COMMIT + "/src/Data/Particles/Particles.dat")
+PART_SIZE = 8160
+PART_SHA = "a466969e1fe00205ef0db0d0dfb0fa337f9d05156b9b4dc88c31aeb5468b838f"
+PART_SPELLINGS = ("PARTICLES.DAT", "Particles.dat", "particles.dat")
+
 
 def fail(msg):
     print("getlemmings: error: " + msg, file=sys.stderr)
@@ -143,9 +164,32 @@ def verify(name, data):
              % (name, want, got))
 
 
-def fetch():
+def verify_part(data, source):
+    if len(data) != PART_SIZE:
+        fail("%s: %d bytes, SPEC.md 114.8 pins %d"
+             % (source, len(data), PART_SIZE))
+    got = sha256(data)
+    if got != PART_SHA:
+        fail("%s: SHA-256 mismatch\n"
+             "  expected %s\n"
+             "  got      %s\n"
+             "  This is not the particle table SPEC.md 114.8 pins."
+             % (source, PART_SHA, got))
+
+
+def part_in_dir(path):
+    """The particle table in a directory, under any of its spellings."""
+    for spelling in PART_SPELLINGS:
+        full = os.path.join(path, spelling)
+        if os.path.isfile(full):
+            return full
+    return None
+
+
+def fetch(url=None):
+    url = url or URL
     req = urllib.request.Request(
-        URL, headers={"User-Agent": "os8088-getlemmings/1"})
+        url, headers={"User-Agent": "os8088-getlemmings/1"})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as fh:
             return fh.read()
@@ -153,8 +197,9 @@ def fetch():
         fail("cannot fetch %s: %s\n"
              "  LEMMINGS needs the data once; after that build/lemdata is a\n"
              "  cache. On a machine with no network, use\n"
-             "    python3 tools/getlemmings.py --from <dir-or-zip>\n"
-             "  and point it at a copy you already have." % (URL, exc))
+             "    python3 tools/getlemmings.py --from <dir-or-zip> "
+             "[--particles <Particles.dat>]\n"
+             "  and point it at a copy you already have." % (url, exc))
 
 
 def from_zip(raw, source, check_archive):
@@ -214,6 +259,10 @@ def main():
     ap.add_argument("--from", dest="source", metavar="PATH",
                     help="take the files from a local zip or directory "
                          "instead of the network")
+    ap.add_argument("--particles", metavar="FILE",
+                    help="take PARTICLES.DAT (Lemmix's src/Data/Particles/"
+                         "Particles.dat) from this file instead of --from's "
+                         "directory or the network")
     ap.add_argument("--list", action="store_true",
                     help="print the manifest and exit")
     ap.add_argument("--check", action="store_true",
@@ -230,6 +279,8 @@ def main():
               % (len(FILES), TOTAL))
         print("Source: %s" % URL)
         print("        SHA-256 %s (%d bytes)" % (ZIP_SHA, ZIP_SIZE))
+        print("\n%-13s %7d  %s" % (PART_NAME, PART_SIZE, PART_SHA))
+        print("Source: %s" % PART_URL)
         return
 
     out_dir = args.output
@@ -256,6 +307,7 @@ def main():
             complete = False
             break
     if complete:
+        part_ok(out_dir, args)
         print("getlemmings: %d files already in %s, all verified (%d bytes)"
               % (len(FILES), out_dir, TOTAL))
         write_stamp(stamp, out_dir)
@@ -293,9 +345,42 @@ def main():
         with open(os.path.join(out_dir, name), "wb") as fh:
             fh.write(data[name])
 
+    part_ok(out_dir, args)
     print("getlemmings: %d files in %s, %d bytes, every SHA-256 verified"
           % (len(FILES), out_dir, TOTAL))
     write_stamp(stamp, out_dir)
+
+
+def part_ok(out_dir, args):
+    """PARTICLES.DAT into out_dir, verified, by whichever route is open.
+
+    Already there and right: nothing to do. Otherwise --particles, then the
+    --from directory, then the network - the same order of preference the 26
+    take, and the same SHA-256 standard on every route."""
+    dest = os.path.join(out_dir, PART_NAME)
+    if os.path.isfile(dest):
+        with open(dest, "rb") as fh:
+            data = fh.read()
+        if len(data) == PART_SIZE and sha256(data) == PART_SHA:
+            return
+        if args.check:
+            verify_part(data, dest)
+    if args.check:
+        fail("%s is not in %s (--check does not fetch)" % (PART_NAME, out_dir))
+    src = args.particles
+    if src is None and args.source and os.path.isdir(args.source):
+        src = part_in_dir(args.source)
+    if src is not None:
+        print("getlemmings: %s from %s" % (PART_NAME, src))
+        with open(src, "rb") as fh:
+            data = fh.read()
+    else:
+        print("getlemmings: fetching %s" % PART_URL)
+        data = fetch(PART_URL)
+    verify_part(data, src or PART_URL)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(dest, "wb") as fh:
+        fh.write(data)
 
 
 def write_stamp(path, out_dir):
@@ -308,8 +393,9 @@ def write_stamp(path, out_dir):
     if parent:
         os.makedirs(parent, exist_ok=True)
     with open(path, "w") as fh:
-        fh.write("lemdata %s\n%s\n%d files %d bytes\n"
-                 % (COMMIT, os.path.abspath(out_dir), len(FILES), TOTAL))
+        fh.write("lemdata %s\n%s\n%d files %d bytes\n%s %s\n"
+                 % (COMMIT, os.path.abspath(out_dir), len(FILES), TOTAL,
+                    PART_NAME, PART_SHA))
     print("getlemmings: stamp -> %s" % path)
 
 

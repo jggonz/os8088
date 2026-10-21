@@ -57,34 +57,38 @@ src/Base.Strings.pas SCredits, the "Original credits..." block):
     PC Music By Tony Williams
     Copyright 1991 Psygnosis Ltd.
 
-The About card names the first two of those, the copyright and Lemmix's
-author, and points at this file, because the whole block plus a product line
-and a port line is past the twelve-row ceiling a dialog has on a 640x200
-screen.
+The About card names the first two, the copyright and Lemmix's author, and
+points here: the whole block does not fit a dialog on a 640x200 screen.
 
-THIS PORT
----------
+THIS PORT, AND WHOSE WORK IT CARRIES
+------------------------------------
 The port is os8088's own work. Where it needed to know what the original
-does, it read three published reimplementations and one format document, and
-every table, string and offset taken from one of them names its source at the
-line that carries it, in the source tree and in this port's design record:
+does, it read three published reimplementations and the format documents,
+and every table, string and offset taken from one of them names its source
+in the header of the file that carries it:
 
-    Lemmix (Eric Langedijk) - the level record's bit unpacking, the preview
-        and postview screens' wording and layout, the rating names, the
-        level order and its odd-table overrides, and the GAME: the eighteen
-        actions, the skills, the objects, the clock and the release rate,
-        as its ORIG mechanics set models the DOS original, bugs included
-    Lemmings.ts - a second reading of the same records
-    lemmings_3ds - a third, the graphic-set decoding, and a second reading
-        of the mechanics: the build replays three test levels through this
-        port and through a separate program written from lemmings_3ds, and
-        stops if a single lemming on a single frame disagrees
-    lemmings_lvl_file_format.txt - the LVL record, field by field
+    Lemmings (1991) and its data - DMA Design / Psygnosis Ltd.
+    Lemmix - Eric Langedijk, under Lemmix's own licence (its Licence.txt:
+        zlib's text with a clause of its own added, "use it for free, use
+        it for fun"). The level record's bit unpacking, the screens' wording
+        and layout, the rating names, the level order, the pointer's
+        bitmaps, and the GAME - its ORIG mechanics, bugs included
+    lemmings_3ds - Matthias (esoteric-programmer), public domain but for
+        what its LICENCE.txt lists as third-party: among it the doc/
+        folder, format documents it collected elsewhere and whose licence
+        it calls unknown - credited below to their authors, and nothing
+        of them copied. The graphic-set decoding, and a second reading of the
+        mechanics: the build replays three test levels through this port
+        and through a program written from lemmings_3ds, and stops if one
+        lemming on one frame disagrees
+    Lemmings.ts - Thomas Zeugner, MIT. The animation list, the mask rule,
+        and the independent reader the build checks the converter against
+    The format documents - ccexplore, Mindless, rt, Simon and Volker Oth
 
-None of those is copied into this program and nothing under a GPL or LGPL
-licence is in it. The original's own on-screen strings ARE carried verbatim -
-the level names, the preview wording, the result texts - because a paraphrase
-of them would be a knock-off rather than a port.
+None of those programs is copied into this one, and nothing under a GPL or
+LGPL licence is in it. The original's own on-screen strings ARE carried
+verbatim - the level names, the preview wording, the result texts -
+because a paraphrase of them would be a knock-off rather than a port.
 
 PLAYING
 -------
@@ -104,9 +108,9 @@ which after a success is already on the next level, as in the original
 (after Mayhem 30, on Fun 1). Esc on the preview goes back to the list too.
 
 On a CGA or an EGA those two screens are 640x200 rather than the original's
-640x350: every line keeps its width and its height and the blank lines
-between them are left out, and the preview's picture is 64 rows rather than
-80. The level list's greyed Mode row says so.
+640x350: every line keeps its width and its height and the runs of blank
+lines between them are shortened, and the preview's picture is 64 rows
+rather than 80. The level list's greyed Mode row says so.
 
     the mouse      the pointer. Click a skill button, then click a lemming
                    to give it that skill. Hold the RIGHT button while you
@@ -168,7 +172,13 @@ THE DATA FILES ARE NOT DISTRIBUTED WITH THE SOURCE
 The 26 DOS data files this port converts are fetched at build time by
 tools/getlemmings.py, pinned by SHA-256, and are never committed to the
 os8088 source tree. tools/os88lem.py turns them into the band files listed
-above, so that the 8086 does no bit-stream decoding at any point.
+above, so that the 8086 does no bit-stream decoding at any point. A 27th
+file rides with them: the explosion's spray of eighty particles is a table
+(8,160 bytes) that was extracted from the game's executable, not from its
+data files, and Lemmix carries that extract as Particles.dat. It is fetched
+the same way and lands in LEMMAIN.LEM, drawn for the 52 frames after a
+bomber goes off (its last row twice, as Lemmix draws it); as in Lemmix, a
+level does not end until the last spray has.
 
 HOW IT LOOKS ON EACH CARD, AND HOW FAST
 ---------------------------------------
@@ -180,7 +190,10 @@ mode 4, four colours; on a Hercules it is a 640x200 box in the middle of the
 everything on them is drawn by COLOUR CLASS - the level's colours 1 to 7 are
 the lemmings', the objects' and the panel's, 8 to 15 are the terrain's, and 0
 is black - which is what keeps a lemming visible on top of terrain when there
-is no colour to tell them apart.
+is no colour to tell them apart. The explosion's spray is the one exception:
+its particles are single pixels, so on these two cards all of them are drawn
+in the solid class, where a terrain-class pixel would be lost in the
+terrain's colour or dither.
 
 What each card makes of those two classes is different, because the two cards
 are different. A CGA in mode 4 has two bits a pixel and three colours, so the
@@ -194,19 +207,17 @@ than carried. On a VGA it is the original's own build-brick colour, with the
 white view rectangle over it. Those two are the same class on the other two
 cards - the rectangle would disappear into the map - so there the map is drawn
 in the terrain class and the rectangle in the other one, which keeps it
-readable. It is the only thing telling you where you are in a level 1,584
-pixels wide.
+readable.
 
 Neither of those two cards can scroll, either, so the picture is composed in
 memory and blitted. The game scrolls 8 pixels a step - Lemmix's own step -
-about 146 pixels a second here (Lemmix ~138), on every card, which is what
-makes the scroll SPEED the same on all three, and 8 is a whole step on each
-of them: two bytes on a CGA, one on a Hercules, and a VGA pans in hardware.
+about 146 pixels a second here (Lemmix ~138), on every card, so the scroll
+SPEED is the same on all three: 8 is two bytes on a CGA, one on a Hercules,
+and a VGA pans in hardware.
 What differs is the precise one-pixel scroll (Ctrl+Left / Right): a VGA
 honours every pixel, a CGA
 moves on every fourth and a Hercules on every eighth. A pixel-exact scroll on
-the two cards that cannot pan would cost about 40% of every frame to make a
-scroll that is already smooth smoother.
+those two would cost about 40% of every frame.
 
 MEASURED on a 4.77 MHz 8088 (an IBM 5160, under a cycle-accurate emulator):
 one terrain probe is 178 microseconds on either card. On the VGA a scrolled
@@ -219,31 +230,31 @@ terrain to the card, and about 4 seconds to sample the map at the bottom
 right - and up to about 13 seconds for the largest level in the set. The CGA
 and Hercules are a few seconds quicker, because they draw no colour. The
 skill panel and the word LOADING go down before that starts, and on a VGA a
-bar creeps across the map window for the whole wait, because once the game
-has the machine the system cannot put a message on the screen for it. The
-terrain is built in memory and appears all at once.
+bar creeps across the map window for the whole wait. The terrain is built
+in memory and appears all at once.
 
-While a level plays, each lemming costs the mechanics a fraction of a
-millisecond of terrain tests a frame. A frame is 17 a second in the original;
-here a crowded level plays slower on an 8088, and everything in the game -
+A frame is 17 a second in the original. MEASURED on the same emulated 8088
+playing this disk's levels: about 4 a second on a quiet level (3.9 on a VGA,
+4.6 on a CGA) and under one on a crowded one (0.6 and 0.9 with sixty out),
+where drawing the lemmings is most of the frame; a spray in flight, drawn
+since those figures were taken, costs more. Everything in the game -
 the release rate, the time limit - slows with it, so no level becomes harder
 because the machine is slow. The pointer is the original's own, in its
 three colours on a VGA - the blue centre and the green and white arms - and
-in one solid colour on the other two cards, which have no third. It follows
-the mouse 18 times a second whatever the level is doing, and stays lit while
-the game draws around it - it comes off only when something is drawn
-underneath it. A click is caught even in the middle of a long scroll on the
-two cards that compose one.
+in one solid colour on the other two cards, which have no third. It moves
+each time the game updates the screen - several times a second on a quiet
+level, about once a second on a crowded one on the XT - and stays lit while
+the game draws around it. A click is caught even in the middle of the
+longest redraw, on every card.
 
 This is a 1991 game on a 1981 processor and it plays at what that costs; the
-design record has the whole table.
+design record (SPEC.md 114.7.4) has the whole table.
 
 WHAT IS NOT HERE
 ----------------
-Music. ADLIB.DAT is a compiled x86 sound driver plus its data rather than a
-score - the music is that program's code, not a score this OS's FM voices
-could play - and it is not in the 26-file data set at all. The Music row on
-the launcher is greyed and says so.
+Music. ADLIB.DAT is a compiled x86 sound driver, not a score this OS's FM
+voices could play, and it is not in the 26-file data set at all. The Music
+row on the launcher is greyed and says so.
 
 The original's access codes. That algorithm lives in the game's executable
 and in none of its data files. Progress is kept in

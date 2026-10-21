@@ -782,6 +782,8 @@ static void lem_game_frame(void)
  * scratch first (lem_r_cdraw) leaves the pointer half rubbed out while the
  * harness still believes it lit - glass and world agree, so only this sees
  * it. */
+static int lem_aim_dense, lem_aim_sparse;   /* the aiming share, %%
+                                             * (printed in the cost table) */
 static int h_cur_missing(void)
 {
     int gx, gy, sx, sy, n = 0;
@@ -843,6 +845,296 @@ static void frame_shows_world(const char *where)
     }
 }
 
+
+/* spray_stray - view pixels that are neither the background (T on VGA, W on
+ * the shadow cards) nor under something drawn over it on purpose: an object,
+ * a live lemming hung generously off its foot (ovl_cur_hit's box), the lit
+ * pointer. A spray whose erasure missed a particle leaves exactly such a
+ * pixel, and nothing else does - which the count BEFORE the bomb proves. */
+static int spray_stray(void)
+{
+    int x, y, wx, k, n = 0, in, ref, ox, oy, ow, oh;
+    struct lem_l *p;
+
+    for (y = 0; y < H_VIEW_H; y++)
+        for (x = 0; x < H_SCR_W; x++) {
+            wx = h_r_scroll + x;
+            ref = h_r_kind == 0 ? h_t[y][wx] : h_world[y][wx];
+            if (h_screen[y][x] == ref)
+                continue;
+            if (h_cur_on && x >= h_cur_x - 8 && x < h_cur_x + 22 &&
+                y >= h_cur_y && y < h_cur_y + 14)
+                continue;
+            in = 0;
+            for (k = 0; k < lem_nob && !in; k++) {
+                ox = lem_ob[k].x;
+                oy = lem_ob[k].y;
+                ow = (int)lem_ty[lem_ob[k].id].w;
+                oh = (int)lem_ty[lem_ob[k].id].h;
+                if (wx >= ox && wx < ox + ow && y >= oy && y < oy + oh)
+                    in = 1;
+            }
+            for (k = 0; k < lem_released && !in; k++) {
+                p = &lem_lm[k];
+                if (!(p->fl & LF_GONE) && wx >= p->x - 16 && wx <= p->x + 16 &&
+                    y >= p->y - 40 && y <= p->y + 8)
+                    in = 1;
+            }
+            if (!in)
+                n++;
+        }
+    return n;
+}
+
+/* spray_run - THE EXPLOSION'S SPRAY, played through on one card (wave 6,
+ * decision 5): lemming 0 is given the bomb, and the level is played until its
+ * spray has run its 52 frames and three more. Every frame the glass is held
+ * to the picture as the card defines it; while the spray flies its pixels
+ * have to BE there; and once it is over, not one stray pixel may be left
+ * anywhere in the view. `name` labels the line. */
+static void spray_run(const char *name, int aim)
+{
+    int f, before, worst = 0, after, frames = 0, bombed = -1, tail = 0;
+    int px0, bad = 0, x, y, miss = 0;
+
+    /* a FRESH raster each run, as the machine's mode set is: the model's
+     * lem_r_scroll caches its view, so a second run at the same view would
+     * inherit the first one's shadow (frame_shows_world's trap) */
+    if (h_r_kind == 0)
+        lem_r_setup(LEM_RKIND_VGA, 0xA000, 0, 0);
+    else
+        lem_r_setup(LEM_RKIND_CGA, 0xB800, 0x1000, 0x1000);
+    h_r_reset();
+    lem_view = 0;
+    lem_view_move(lem_ent_u16(0, LEM_E_STARTX));
+    lem_view = (lem_view + 4) & ~7;
+    ovl_level_load(0);
+    lem_world_clear(1);
+    ovl_frame_panel();
+    lem_compose_level(0);
+    lem_mx = 316;
+    lem_my = 8;
+    ovl_frame_first(0);
+    ovl_tick_draw(0, 0);
+    before = -1;
+    px0 = h_r_spraypix;
+    for (f = 0; f < 600 && !lem_finished; f++) {
+        if (bombed < 0 && lem_released > 0 && lem_lm[0].act == LA_WALK) {
+            before = spray_stray();
+            ovl_select_skill(LB_EXPLODE);
+            lem_hit_n = 1;
+            lem_hit_l1 = 0;
+            lem_hit_l2 = -1;
+            ovl_assign();
+            bombed = f;
+        }
+        if (aim && bombed >= 0) {
+            /* THE PLAYER AIMS INTO IT: the pointer steps over the bomber's
+             * foot, a pointer-only tick between frames as well as the
+             * frame's own, so the spray meets every pointer path - the
+             * compose that carries it, the glass pair, the shadow's
+             * save-under (ovl_cur_hit) */
+            lem_mx = lem_lm[0].x - lem_view - 6 + (f % 5) * 3;
+            lem_my = lem_lm[0].y - 12 + (f % 3) * 4;
+            if (lem_mx < 0)
+                lem_mx = 0;
+            if (lem_mx > 319)
+                lem_mx = 319;
+            if (lem_my < 0)
+                lem_my = 0;
+            ovl_tick_draw(0, 0);
+            miss += h_cur_missing();
+            lem_mx += 2;
+        }
+        lem_game_frame();
+        ovl_tick_draw(1, 0);
+        miss += h_cur_missing();
+        if (h_r_kind == 0)
+            for (y = 0; y < H_VIEW_H; y++)
+                for (x = 0; x < H_SCR_W; x++)
+                    if (h_screen[y][x] != h_world[y][lem_view + x])
+                        bad++;
+        if (lem_lm[0].pf) {
+            frames++;
+            if ((x = spray_stray()) > worst)
+                worst = x;
+        } else if (frames && ++tail >= 3) {
+            break;
+        }
+    }
+    lem_mx = 316;                   /* the pointer back in its corner, so
+    lem_my = 8;                      * nothing of it is over the site */
+    ovl_tick_draw(0, 0);
+    after = spray_stray();
+    printf("  the spray on %s%s: bombed at frame %d, %d spray frames drawn, "
+           "%d particles, worst %d of the view off the background while it "
+           "flew; %d stray pixels before the bomb and %d after it, %d "
+           "glass/world mismatches, %d pointer pixels missing\n", name,
+           aim ? ", aimed into" : "", bombed, frames, h_r_spraypix - px0,
+           worst, before, after, bad, miss);
+    if (miss)
+        fail("the pointer lost pixels over a spray - a particle drawn or put "
+             "back under it without its save-under knowing (SPEC.md 114.4.6)");
+    if (bombed < 0)
+        fail("the spray row never gave lemming 0 the bomb - it tests nothing");
+    if (before != 0)
+        fail("the view was off its background before the bomb - spray_stray "
+             "counts something other than a lost particle");
+    if (frames < LEM_PTIME || h_r_spraypix == px0 || worst == 0)
+        fail("the explosion drew no spray, or fewer than its 52 frames - "
+             "decision 5's particles are not on the glass (SPEC.md 114.8)");
+    if (after != 0)
+        fail("a spray left pixels behind after its last frame - its erasure "
+             "missed the box it was drawn in (ovl_spray_rects / "
+             "ovl_spray_erase)");
+    if (bad)
+        fail("during the spray the VGA glass is not the world - a compose "
+             "latched a byte it never composed");
+}
+
+/* spray_area_one - the byte-rows ONE spray asks a VGA game frame to compose,
+ * frame by frame through its LEM_PTIME frames, from foot (x, y): exactly what
+ * ovl_spray_rects puts in the list (its rectangles are one a 16-row band, so
+ * they never merge with each other and the sum is the area). The mean a
+ * frame, in byte-rows; *nr the mean rectangles x 10. */
+static long spray_area_one(int x, int y, int *nr, long *rows)
+{
+    struct lem_l *p;
+    int f, k, n = 0, rects = 0;
+    long a = 0, rw = 0;
+    unsigned char *q;
+
+    for (k = 0; k < lem_released; k++) {
+        lem_lm[k].pf = 0;
+        lem_lm[k].dpf = 0;
+    }
+    p = &lem_lm[0];
+    p->fl |= LF_GONE;
+    p->x = x;
+    p->y = y;
+    p->pf = 1;
+    for (f = 0; f <= LEM_PTIME; f++) {
+        lem_nrc = 0;
+        ovl_spray_rects();
+        for (k = 0; k < lem_nrc; k++) {
+            q = &lem_rc[k * 4];
+            a += (long)(q[1] - q[0] + 1) * (q[3] - q[2] + 1);
+            rw += q[3] - q[2] + 1;
+        }
+        rects += lem_nrc;
+        n++;
+        if (p->pf && ++p->pf > LEM_PTIME)
+            p->pf = 0;
+    }
+    lem_nrc = 0;
+    *nr = n ? rects * 10 / n : 0;
+    *rows += n ? rw / n : 0;
+    return n ? a / n : 0;
+}
+
+/* spray_area - THE SPRAY'S COMPOSED AREA, HELD TO A CEILING (wave 6's second
+ * review): one box over the whole cloud, the old frame's joined with the new,
+ * recomposed ~3x what the pixels that change need - T copied into the scratch
+ * four planes a row and latched back, every object in the strip redrawn - on
+ * the adapter where the compose is already the busy frame. The bins make it a
+ * rectangle a 16-row band. Played from three feet in the view, against the
+ * NEGATIVE CONTROL h_r_sprayonebox (the bins answer the box: the one-box
+ * build's area), which must go over the ceiling or the row measures nothing.
+ * LEMTEST_PARTICLES names the real PARTICLES.DAT (apps/lemmings/build.sh
+ * passes build/lemdata/'s when it was fetched): its 8,160 bytes go over the
+ * fixture's invented table, the bounds after it are recomputed by the rule
+ * os88lem.py writes them by, and both are put back after. */
+#define LEMTEST_SPRAY_CEIL 1200L     /* byte-rows a frame: the bins measure
+                                     * 228 on the fixture and 828 on the
+                                     * real table, one box 1,475 and 2,961 */
+
+/* spray_area_tab - the measurement on the table lem_ptseg holds now */
+static void spray_area_tab(const char *label)
+{
+    int i, nr = 0, nrbox = 0, r, rb;
+    long a = 0, abox = 0, rows = 0, rowsbox = 0;
+
+    for (i = 0; i < 3; i++) {
+        /* a foot mid-view at three heights, on three bit phases */
+        a += spray_area_one(lem_view + 156 + i * 3, 70 + i * 30, &r, &rows);
+        h_r_sprayonebox = 1;
+        abox += spray_area_one(lem_view + 156 + i * 3, 70 + i * 30, &rb,
+                               &rowsbox);
+        h_r_sprayonebox = 0;
+        nr += r;
+        nrbox += rb;
+    }
+    a /= 3;
+    abox /= 3;
+    /* the rows are what the compose pays a fixed price for, four planes a
+     * row (lem_r_bgrect's per-row call and setup), and the byte-rows what it
+     * pays by the byte: both are printed, so SPEC.md 114.7.4 can price them */
+    printf("  the spray's VGA compose on the %s table: %ld byte-rows in %ld "
+           "rows a game frame, %d.%d rectangles (one a 16-row band), against "
+           "%ld in %ld rows, %d.%d, for one box a spray (the negative "
+           "control): %ld%% of the area\n",
+           label, a, rows / 3, nr / 30, (nr / 3) % 10, abox, rowsbox / 3,
+           nrbox / 30, (nrbox / 3) % 10, abox ? a * 100 / abox : 0);
+    if (a == 0)
+        fail("spray_area: the spray asked for no rectangle - it measures "
+             "nothing");
+    if (a > LEMTEST_SPRAY_CEIL)
+        fail("a spray's VGA rectangles cover more byte-rows a frame than "
+             "the ceiling - the bins are not reaching ovl_spray_rects "
+             "(SPEC.md 114.4.6)");
+    if (abox <= LEMTEST_SPRAY_CEIL)
+        fail("spray_area's negative control (one box a spray) did not go "
+             "over the ceiling - the row cannot see the regression");
+}
+
+static void spray_area(void)
+{
+    static unsigned char keep[LEM_PFR * LEM_PROW + LEM_PFR * 4];
+    static unsigned char real[LEM_PFR * LEM_PROW];
+    const char *path = getenv("LEMTEST_PARTICLES");
+    unsigned char *t;
+    int f, j, dx, dy, x0, x1, y0, y1;
+    FILE *fp;
+
+    if (!lem_ptseg) {
+        fail("spray_area: the level carries no spray table");
+        return;
+    }
+    spray_area_tab("fixture's invented");
+    if (!path)
+        return;
+    fp = fopen(path, "rb");
+    if (fp == NULL || fread(real, 1, sizeof real, fp) != sizeof real) {
+        fail("LEMTEST_PARTICLES names no 8,160-byte PARTICLES.DAT");
+        if (fp)
+            fclose(fp);
+        return;
+    }
+    fclose(fp);
+    t = h_ptr(lem_ptseg, lem_ptoff);
+    memcpy(keep, t, sizeof keep);
+    memcpy(t, real, sizeof real);
+    for (f = 0; f < LEM_PFR; f++) {
+        x0 = y0 = 127;
+        x1 = y1 = -128;
+        for (j = 0; j < 80; j++) {
+            dx = (signed char)t[f * LEM_PROW + j * 2];
+            dy = (signed char)t[f * LEM_PROW + j * 2 + 1];
+            if (dx == -128 || dy == -128)
+                continue;
+            if (dx < x0) x0 = dx;
+            if (dx > x1) x1 = dx;
+            if (dy < y0) y0 = dy;
+            if (dy > y1) y1 = dy;
+        }
+        t[LEM_PFR * LEM_PROW + f * 4] = (unsigned char)x0;
+        t[LEM_PFR * LEM_PROW + f * 4 + 1] = (unsigned char)x1;
+        t[LEM_PFR * LEM_PROW + f * 4 + 2] = (unsigned char)y0;
+        t[LEM_PFR * LEM_PROW + f * 4 + 3] = (unsigned char)y1;
+    }
+    spray_area_tab("REAL (LEMTEST_PARTICLES)");
+    memcpy(t, keep, sizeof keep);
+}
 
 /* ============================================================================
  * AN INDEPENDENT LAYOUT, written from the geometry and not from lemui.c
@@ -1118,6 +1410,27 @@ static void check_move(int h)
         fail("a repeated arrow did not re-arm the settle timer");
     os88_ontimer(lem_win);
     audit_shadow("three moves and one settle");
+
+    /* ...AND A FULL PAINT BETWEEN THE ARROW AND ITS SHOT LEAVES THE SHOT
+     * NOTHING TO DO (wave 6, wave 5's third review). "Select and play" is the
+     * commonest gesture: arrow, then Enter inside LEM_PV_SETTLE, and the
+     * launch ends in os88_fullscreen(win, 0)'s full paint - pane included -
+     * so a shot still owed composed and scanned the pane's seven rows (~189
+     * columns, ~57-85 ms on the XT) to draw nothing. An expose is the same. */
+    h_timer_arms = 0;
+    os88_onkey(0, LEM_SC_DOWN, lem_win);
+    if (h_timer_arms != 1)
+        fail("the arrow before the expose did not arm the settle timer");
+    repaint("an expose inside the settle");
+    counters_reset();
+    lem_c_rows = 0;
+    lem_c_cols = 0;
+    os88_ontimer(lem_win);
+    printf("  %3d px box  arrow, full paint, then the shot: %d rows composed, "
+           "%d cols scanned, %d calls\n", h, lem_c_rows, lem_c_cols, g_calls);
+    if (lem_c_rows != 0 || g_calls != 0)
+        fail("a settle shot outlived a full repaint that had already drawn "
+             "the pane - it composed and scanned rows to draw nothing");
 
     /* THE SCROLLING MOVE, WHICH IS THE WORST KEYSTROKE THERE IS, AND IT MUST
      * BE RARE. `lem_layout` moves lem_top as soon as the selection leaves the
@@ -1401,9 +1714,15 @@ static void check_sprec(void)
              "apps/lemmings/lemsprite.inc");
         return;
     }
-    if ((long)LEM_MAXLEM * 4 > spmax * sprec)
-        fail("LEM_MAXLEM x 4 (lemdraw.c lem_obox) no longer fits lemsprite.inc's "
-             "LEM_SPMAX x LEM_SPREC sprite records - raise LEM_SPMAX");
+    if ((long)LEM_MAXLEM * 4 + LEM_PBINS * 4 > spmax * sprec)
+        fail("LEM_MAXLEM x 4 (lemdraw.c lem_obox) and the spray's bins no "
+             "longer fit lemsprite.inc's LEM_SPMAX x LEM_SPREC sprite records "
+             "- raise LEM_SPMAX");
+    if (LEM_MAXLEM * 4 != 80 * 4 ||
+        h_inc_equ("apps/lemmings/lemsprite.inc", "LEM_PBINS") != LEM_PBINS)
+        fail("lemsprite.inc's lb_pbins (lb_sprec + 80 x 4, LEM_PBINS bands) "
+             "and lemdraw.c's lem_pbins (lem_sprec + LEM_MAXLEM x 4) no "
+             "longer name the same bytes");
 }
 
 int main(int argc, char **argv)
@@ -2155,6 +2474,21 @@ int main(int argc, char **argv)
     lem_vidkind = OS88_VID_VGA;
     lem_r_setup(LEM_RKIND_VGA, 0xA000, 0, 0);
 
+    /* --- THE EXPLOSION'S SPRAY, on both kinds of card (wave 6) ---------- */
+    spray_run("VGA", 0);
+    spray_run("VGA", 1);
+    spray_area();
+    h_caps = (1 << OS88_FSXM_CGA320);
+    lem_caps = h_caps;
+    lem_vidkind = OS88_VID_CGA;
+    lem_r_setup(LEM_RKIND_CGA, 0xB800, 0x1000, 0x1000);
+    spray_run("CGA", 0);
+    spray_run("CGA", 1);
+    h_caps = (1 << OS88_FSXM_VGA0D) | (1 << OS88_FSXM_CGA320);
+    lem_caps = h_caps;
+    lem_vidkind = OS88_VID_VGA;
+    lem_r_setup(LEM_RKIND_VGA, 0xA000, 0, 0);
+
     /* --- A PLAYED STRETCH ON VGA: three hundred game frames, drawn ---------
      * Wave 3's review found the live frame erasing and redrawing straight on
      * the displayed buffer: the pointer off for the whole of every frame
@@ -2526,6 +2860,95 @@ int main(int argc, char **argv)
                      "under the lit pointer");
         }
 
+        /* ...and a pointer that LEAVES THE WORLD leaves nothing behind
+         * (wave 5's verifier, carried finding A of wave 6). The save-under is
+         * WHOLE BYTES - three planar bytes a row on VGA, the tail the shift
+         * spills into included (lemsprite.inc lb_clipx) - so a move that rode
+         * a compose (lem_cmv) has to bring all three up to date, not the
+         * two the 14-pixel box covers: a box at x & 7 of 0, 1 or 2 has its
+         * tail byte outside the box, the compose left that column of the save
+         * as the LAST place saved, and the glass pair that takes the pointer
+         * into the panel put it back - an 8x14 block of another place's
+         * terrain in the air. Each path: lit by the glass pair over terrain at
+         * A, ridden by a compose to B (tail outside the box, over different
+         * pixels), then diagonally into the panel - and once more, straight
+         * into the bottom-right corner - and the world compared with a fresh
+         * one. */
+        {
+            static unsigned char before[H_VIEW_H][H_SCR_W];
+            int ax, ay, bx, by, pass, paths = 0, stale = 0, n, gx, gy, d;
+            int wa, wb, rides = 0;
+
+            for (pass = 0; pass < 2; pass++)
+                for (ay = 10; ay + 7 + 6 <= LEM_VIEWH_PX - 7 && paths < 2 + 2 * pass;
+                     ay += 9)
+                    for (ax = 8; ax + 40 < 300 && paths < 2 + 2 * pass; ax += 13) {
+                        by = ay + 6;
+                        bx = ax + 26;
+                        bx += (1 - ((lem_view + bx - 7) & 7) + 8) & 7;
+                        if (bx > 300)
+                            continue;
+                        /* the tail column of B's span differs from what the
+                         * same column of A's span holds - so a stale save
+                         * shows - and A's span has terrain in it */
+                        wa = ((lem_view + ax - 7) & ~7) + 16;
+                        wb = ((lem_view + bx - 7) & ~7) + 16;
+                        d = 0;
+                        n = 0;
+                        for (gy = 0; gy < 14; gy++)
+                            for (gx = 0; gx < 8; gx++) {
+                                if (h_world[ay - 7 + gy][wa + gx] !=
+                                    h_world[by - 7 + gy][wb + gx])
+                                    d++;
+                                if (h_world[ay - 7 + gy][wa + gx])
+                                    n++;
+                            }
+                        if (d < 8 || n < 8)
+                            continue;
+                        ovl_cursor_off();
+                        lem_mx = ax;
+                        lem_my = ay;
+                        ovl_tick_draw(0, 0);    /* the glass pair: lit at A */
+                        lem_mx = bx;
+                        lem_my = by;
+                        d = h_r_curdraws;
+                        ovl_tick_draw(0, 0);    /* rides a compose to B */
+                        if (h_r_curdraws == d)
+                            rides++;
+                        if (pass == 0) {
+                            lem_mx = bx + 14;   /* ...diagonally into the panel */
+                            lem_my = LEM_VIEWH_PX + 20;
+                        } else {
+                            lem_mx = LEM_VIEW_W - 1;   /* ...the corner */
+                            lem_my = 199;
+                        }
+                        ovl_tick_draw(0, 0);
+                        ovl_cursor_off();
+                        for (y = 0; y < H_VIEW_H; y++)
+                            for (x = 0; x < H_SCR_W; x++)
+                                before[y][x] = h_world[y][lem_view + x];
+                        ovl_bg_redraw(lem_view, 0, LEM_VIEW_W, H_VIEW_H, 0);
+                        ovl_sprites_all();
+                        for (y = 0; y < H_VIEW_H; y++)
+                            for (x = 0; x < H_SCR_W; x++)
+                                if (before[y][x] != h_world[y][lem_view + x])
+                                    stale++;
+                        paths++;
+                    }
+            printf("  a pointer leaving the world: %d paths (world -> panel, "
+                   "world -> corner), %d rode a compose, %d stale pixels left "
+                   "behind\n", paths, rides, stale);
+            if (paths < 4 || rides != paths)
+                fail("the leaving-the-world pointer row found no terrain to "
+                     "lead it over, or its move to B did not ride a compose - "
+                     "the row tests nothing");
+            if (stale)
+                fail("a pointer that left the world for the panel left a "
+                     "block of the wrong save-under behind - the compose "
+                     "brought the save up to date over the 14-pixel box and "
+                     "not over the whole-byte span the glass pair restores");
+        }
+
         /* ...and the minimap cell a digger clears is OWED, not plotted:
          * ovl_mm_clear() is called from the mechanics, mid-frame, before the
          * pointer's bracket - a plot there went under a lit pointer's
@@ -2703,11 +3126,116 @@ int main(int argc, char **argv)
             ovl_tick_draw(1, 0);
         }
 
+        /* --- THE SHARE OF AIMING TICKS THE CAP SENDS TO THE GLASS PAIR (wave
+         * 6, owed by SPEC.md 114.4.6: "lemtest's '1 glass pair' is one tick,
+         * not a share"). A crowd of 60 walkers - LEM_STEP_MAX 20, so a frame
+         * is three passes and two of them end with lem_infr up - is driven
+         * pass by pass the way ovl_play_loop drives it, with the pointer
+         * AIMING: on one lemming of the crowd, two pixels further each pass,
+         * as a hand does. Every pass whose pointer moved is an aiming tick;
+         * one the cap sent to ovl_cursor_off/on is an erase-then-draw of the
+         * pointer where the player is looking (rule 2). Twice: the crowd
+         * walking nose to tail (6 px apart, a queue at a blocker) and spread
+         * out (16 px, a line on the march). */
+        {
+            static struct lem_l keep[LEM_MAXLEM];
+            int sp, j, k, n, cy, t, fb0, moves, pairs, aim, rel = lem_released;
+
+            memcpy(keep, lem_lm, sizeof keep);
+            for (k = 0; k < lem_released; k++)
+                if (!(lem_lm[k].fl & LF_GONE))
+                    break;
+            if (k >= lem_released)
+                fail("the aiming-share row found no lemming to copy");
+            cy = lem_lm[k].y;
+            for (sp = 6; sp <= 16; sp += 10) {
+                lem_released = rel;
+                memcpy(lem_lm, keep, sizeof keep);
+                while (lem_released < 60 && lem_released < LEM_MAXLEM) {
+                    lem_lm[lem_released] = lem_lm[k];
+                    lem_obox[lem_released * 4] = 0xFF;
+                    lem_released++;
+                }
+                n = 0;
+                for (j = 0; j < lem_released; j++) {
+                    if (lem_lm[j].fl & LF_GONE)
+                        continue;
+                    lem_lm[j].y = cy;
+                    lem_lm[j].x = lem_view + 8 + (sp * n++) % 300;
+                }
+                ovl_tick_draw(1, 0);
+                aim = lem_released / 2;     /* one in the middle of the crowd */
+                fb0 = lem_c_cmvfb;
+                moves = 0;
+                for (t = 0; t < 90; t++) {
+                    int drew = 0;
+
+                    if (!lem_infr)
+                        ovl_frame_begin();
+                    if (lem_infr && lem_frame_chunk(LEM_STEP_MAX)) {
+                        ovl_frame_end();
+                        drew = 1;
+                    }
+                    if (lem_lm[aim].fl & LF_GONE)
+                        break;
+                    lem_mx = lem_lm[aim].x - lem_view + ((t & 1) ? 2 : -2);
+                    lem_my = lem_lm[aim].y - 6;
+                    if (lem_mx < 8)
+                        lem_mx = 8;
+                    if (lem_mx > 311)
+                        lem_mx = 311;
+                    if (lem_mx != lem_curx || lem_my != lem_cury)
+                        moves++;
+                    {
+                        int f0 = lem_c_cmvfb;
+
+                        /* WHAT A DRY-PASS BOUND WOULD SEE (SPEC.md 114.4.6):
+                         * a tick the cap sends to the pair is re-run in the
+                         * harness with the cap lifted and its cascade
+                         * counted - ovl_infr_whole's real growth on that
+                         * tick, the number a dry pass would bound */
+                        if (getenv("LEMTEST_DRYPASS") && !drew && lem_infr &&
+                            ovl_cmv_stepped() > 0) {
+                            lem_cmv_cap = 99;
+                            ovl_tick_draw(drew, 0);
+                            lem_cmv_cap = LEM_CMV_CAP;
+                            printf("    dry: tick %d cascade %d\n", t,
+                                   lem_c_infr);
+                            continue;
+                        }
+                        ovl_tick_draw(drew, 0);
+                        (void)f0;
+                    }
+                }
+                pairs = lem_c_cmvfb - fb0;
+                printf("  aiming into a crowd of %d, %d px apart: %d of %d "
+                       "aiming ticks took the glass pair (%d%%)\n",
+                       lem_released, sp, pairs, moves,
+                       moves ? pairs * 100 / moves : 0);
+                if (sp == 6)
+                    lem_aim_dense = moves ? pairs * 100 / moves : 0;
+                else
+                    lem_aim_sparse = moves ? pairs * 100 / moves : 0;
+                if (moves < 60)
+                    fail("the aiming-share row aimed at nobody for long "
+                         "enough - it measures nothing");
+                lem_frame_chunk(LEM_MAXLEM);
+                if (lem_infr)
+                    ovl_frame_end();
+                for (j = rel; j < lem_released; j++)
+                    lem_lm[j].fl |= LF_GONE;
+                ovl_tick_draw(1, 0);
+            }
+            lem_released = rel;
+            memcpy(lem_lm, keep, sizeof keep);
+            ovl_tick_draw(1, 0);
+        }
+
         /* --- A BAND READ IS HELD INSIDE ITS CLAIM (wave 4's second review):
          * the part count is a LEMMAN byte and the files are the disk's, so
          * ovl_parts_read caps every part at what the claim has left and
-         * refuses a count that cannot start inside it. LEMMAIN.LEM is 15,360
-         * bytes in the fixture: an 8 KB claim must refuse it, its own 52 KB
+         * refuses a count that cannot start inside it. LEMMAIN.LEM is 40,960
+         * bytes in the fixture: an 8 KB claim must refuse it, its own 60 KB
          * must take it, and no part count of 0 or past the claim may read */
         {
             int r8, r52, r0, rmany;
@@ -2720,7 +3248,7 @@ int main(int argc, char **argv)
             r0 = ovl_parts_read(0, lem_cl_main, LEM_KB_MAIN);
             ovl_stem_main();
             rmany = ovl_parts_read(200, lem_cl_main, 1);
-            printf("  a band read held to its claim: 8 KB %d, 52 KB %d, "
+            printf("  a band read held to its claim: 8 KB %d, 60 KB %d, "
                    "0 parts %d, 200 parts in 1 KB %d\n", r8, r52, r0, rmany);
             if (r8 || !r52 || r0 || rmany)
                 fail("ovl_parts_read read past its claim, or refused a band "
@@ -3075,8 +3603,8 @@ int main(int argc, char **argv)
      * kernel toast in a foreign mode paints desktop geometry into the game's
      * framebuffer. */
     /* IT IS DEFERRED TO THE WAKE, and that is the largest of the four errands
-     * os88_onwake() carries: LEMMAIN.LEM is 52,224 bytes and a style bank up
-     * to 78,848 more, ~131 KB and tens of seconds of floppy at
+     * os88_onwake() carries: LEMMAIN.LEM is 60,416 bytes and a style bank up
+     * to 78,848 more, ~136 KB and tens of seconds of floppy at
      * PERFORMANCE.md's ~400 ms an int 13h - and Enter, Space and a Play click
      * are all delivered with the gfx lock HELD, with every other window's
      * painter stopped behind it. The keystroke's whole share is a flag and a
@@ -3095,7 +3623,7 @@ int main(int argc, char **argv)
     os88_onkey(13, 0, lem_win);     /* Enter on the list: Play (wave 5 - the
                                      * preview is the bracket's first screen) */
     if (h_reads != 0)
-        fail("a launch keystroke read a file - ~131 KB of band with the gfx "
+        fail("a launch keystroke read a file - ~136 KB of band with the gfx "
              "lock HELD, which is SPEC.md 114.6's first table row put back one "
              "callback along");
     if (h_fsx_runs != 0)
@@ -3425,6 +3953,44 @@ int main(int argc, char **argv)
         (void)n;
     }
 
+    /* ...AND A LAUNCH ASKED FROM A WINDOW SCREEN CLAIMS NOTHING BEFORE THE
+     * WAKE (wave 6, wave 5's third review): the glass still shows the
+     * paragraph, so the screen and the shadow still say so, and a key typed
+     * ahead of the wake - ui_task dispatches one key and then one event a pass
+     * - neither repaints the list from an invalid shadow (every cell, blanks
+     * included, ~1.1 s on the XT) nor moves the selection the launch is about
+     * to read. */
+    {
+        int c0, n0, sel0;
+
+        lem_screen = LEM_SC_LIST;
+        lem_repaint(lem_win, 1, 1);
+        lem_sel = 3;
+        lem_screen = LEM_SC_PREVIEW;
+        lem_wrap();
+        lem_repaint(lem_win, 1, 1);
+        sel0 = lem_sel;
+        lem_ask_launch(lem_win);
+        c0 = g_calls;
+        n0 = g_cells;
+        os88_onkey(0, LEM_SC_DOWN, lem_win);
+        os88_onkey(0, LEM_SC_PGDN, lem_win);
+        os88_onclick(lem_org.x + 4, lem_org.y + 4, lem_win);
+        printf("  typed ahead of a launch from a window preview: screen %d, "
+               "sel %d -> %d, %d call(s), %d cell(s)\n", lem_screen, sel0,
+               lem_sel, g_calls - c0, g_cells - n0);
+        if (lem_screen != LEM_SC_PREVIEW || !lem_sh_ok)
+            fail("asking for a launch from a window preview claimed the list "
+                 "before the wake - the glass still shows the paragraph");
+        if (lem_sel != sel0 || g_calls != c0 || g_cells != n0)
+            fail("a key typed ahead of a pending launch moved the selection "
+                 "or drew - the launch would play a level not chosen");
+        lem_launchpend = 0;
+        lem_screen = LEM_SC_LIST;
+        lem_sh_ok = 0;
+        lem_repaint(lem_win, 1, 1);
+    }
+
     /* ======================================================================
      * WAVE 5: THE ORIGINAL'S TWO SCREENS, INSIDE THE BRACKET (SPEC.md 114.4.3)
      *
@@ -3508,6 +4074,7 @@ int main(int argc, char **argv)
         pv = h_p_clears;
         kp0 = h_kpaints;
         cr0 = h_p_clrows;
+        before = h_p_margins;
         lem_sel = 0;
         lem_progwrite = 0;
         lem_screen = LEM_SC_LIST;
@@ -3520,6 +4087,15 @@ int main(int argc, char **argv)
                h_p_clrows - cr0, h_p_clears - pv);
         if (h_p_clrows - cr0 > 2 * 80)
             fail("a screen cleared rows the brown tile writes anyway");
+        /* ...AND A VGA'S MARGINS ONLY AFTER A MODE SET THAT HAPPENED (wave 6,
+         * wave 5's third review): preview (set), play, postview (set), the
+         * retried preview (no set - the postview's 12h is up) is TWO margin
+         * clears, not three - each ~10 KB of ISA VRAM through four planes */
+        printf("  VGA margin clears over those screens: %d\n",
+               h_p_margins - before);
+        if (h_p_kind == 0 && h_p_margins - before >= h_p_clears - pv)
+            fail("a screen that followed a screen in the same mode cleared "
+                 "the VGA margins the first set's clear had left black");
         printf("  a session: %d bracket(s), %d screens drawn, preview asked "
                "%d, postview asked %d, %d reads, exit %d\n", runs,
                h_p_clears - pv, h_pv_asked, h_po_asked, h_reads, lem_exit);
@@ -3528,36 +4104,32 @@ int main(int argc, char **argv)
                  "as one bracket");
         if (lem_exit != LEM_X_MENU || lem_screen != LEM_SC_LIST)
             fail("Esc on the retried level's preview did not reach the list");
-        /* ...AND THE KERNEL'S PAINT IS THE LIST'S ONLY ONE: the screen is
-         * chosen before os88_fullscreen(win, 0), whose W_PAINT draws it, so
-         * the program issues nothing after it (SPEC.md 114.4.6's "leave the
-         * bracket" row - it was a third full repaint, a fill and 28 calls) */
+        /* ...AND THE KERNEL'S PAINT IS THE LIST'S ONLY ONE, AND THERE IS ONE
+         * KERNEL PAINT (wave 6: no fullscreen latch around the bracket). The
+         * screen is chosen INSIDE the bracket (ovl_leave), so the fsx exit's
+         * wm_paint_all draws it and the program issues nothing after it
+         * (SPEC.md 114.4.6's "leave the bracket" row - it was once a third
+         * full repaint, a fill and 28 calls). With the latch there were
+         * THREE kernel paints a launch: wm_raise's whole-screen fill on the
+         * way in, the fsx exit's with the window still fullscreen, and
+         * os88_fullscreen(win, 0)'s - two white flashes nobody needed. */
         printf("  leaving the bracket (Esc): %d kernel paint(s) this launch, "
                "then %d call(s) and %d fill(s) of the program's\n",
                h_kpaints - kp0, g_calls - h_kp_calls, g_fills - h_kp_fills);
         if (g_calls != h_kp_calls || g_fills != h_kp_fills)
             fail("leaving the bracket for the list repainted after the "
                  "kernel's own paint had drawn it");
-        if (h_kpaints - kp0 < 3)
-            fail("the harness did not model the three kernel paints of a "
-                 "launch - the row above measures nothing");
-        /* ...AND INSIDE THE KERNEL'S PAINTS: the two that land while the
-         * window is fullscreen around the bracket (wm_raise on the way in,
-         * the fsx exit's on the way out) are the kernel's fill and nothing
-         * of ours - each was a whole LIST at the fullscreen width, ~674 ms,
-         * the second visible. The third is the list the glass keeps. */
         for (k = kp0; k < h_kpaints; k++)
             printf("  kernel paint %d of the launch: the program's %d "
                    "call(s), %d cell(s)\n", k - kp0 + 1,
                    h_kp_pcalls[k & 15], h_kp_pcells[k & 15]);
-        if (h_kp_pcells[kp0 & 15] || h_kp_pcells[(kp0 + 1) & 15] ||
-            h_kp_pcalls[kp0 & 15] || h_kp_pcalls[(kp0 + 1) & 15])
-            fail("a kernel paint while the window was fullscreen around the "
-                 "bracket drew the program's screen - nobody sees it, and "
-                 "the exit's is the wrong screen flashing (lem_fsq)");
-        if (!h_kp_pcells[(kp0 + 2) & 15])
-            fail("os88_fullscreen(win, 0)'s paint drew nothing - the list "
-                 "is not on the glass");
+        if (h_kpaints - kp0 != 1)
+            fail("a launch cost more than the fsx exit's one kernel paint - "
+                 "the fullscreen latch is back, or the harness models "
+                 "nothing");
+        if (!h_kp_pcells[kp0 & 15])
+            fail("the fsx exit's paint drew nothing - the list is not on the "
+                 "glass");
         audit_shadow("leaving the bracket (Esc)");
         if (h_toasts != 0)
             fail("the session toasted - nothing may be said inside the "
@@ -3767,7 +4339,7 @@ int main(int argc, char **argv)
                  "row past 347");
         lem_rating = 0;
 
-        /* --- a CGA: 12 rows of 16 in 200, the blank lines compressed out --
+        /* --- a CGA: 12 rows of 16 in 200, the preview's blank lines out --
          * (SPEC.md 114.4.3, LEMS_GREY_EGA): nothing past row 199, every
          * content line at its true width and pitch */
         h_caps = (1 << OS88_FSXM_CGA320) | (1 << OS88_FSXM_CGA640);
@@ -3832,6 +4404,37 @@ int main(int argc, char **argv)
             fail("the Mode row's three facts do not fit a CGA's launcher - "
                  "the last of them is under the footer");
         lem_back(lem_win);
+        /* ...AND AT THE SMALLEST WINDOW THERE IS (LEM_MIN_W x LEM_MIN_H, a
+         * 286x101 content box): the three facts wrap past the box, and the last
+         * row that shows ends in "..." rather than dropping the rest silently
+         * (wave 6, wave 5's third review) */
+        {
+            int r, c, el = 0;
+            const char *row;
+
+            h_w = LEM_MIN_W - 2;
+            h_h = LEM_MIN_H - 19;
+            os88_onresize(h_w, h_h, lem_win);
+            lem_show_fact(lem_win, lem_state_label(LEM_ROW_MODE),
+                          lem_state_fact(LEM_ROW_MODE), -1);
+            r = lem_rows - 2;
+            row = &lem_sh[r * LEM_SH_COLS];
+            for (c = 0; c + 2 < lem_cols; c++)
+                if (row[c] == '.' && row[c + 1] == '.' && row[c + 2] == '.')
+                    el = 1;
+            printf("  the Mode row's fact at the smallest window (%dx%d): %d "
+                   "lines in a %d-row box, %s\n", h_w, h_h, lem_wrapn, lem_rows,
+                   lem_wrapn <= lem_rows - 2 ? "all shown"
+                   : el ? "the last row shown ends in ..." : "CUT SILENTLY");
+            audit_shadow("the smallest window's Mode fact");
+            if (lem_wrapn > lem_rows - 2 && !el)
+                fail("a greyed fact longer than the smallest window was cut "
+                     "with nothing on the glass to say so");
+            lem_back(lem_win);
+            h_w = 512;
+            h_h = 137;
+            os88_onresize(h_w, h_h, lem_win);
+        }
         /* ...and on a VGA with an AT keyboard the row is not greyed at all;
          * with an XT keyboard it is, for the keyboard alone */
         h_caps = keepcaps | (1 << OS88_FSXM_VGA12);

@@ -6,7 +6,8 @@
 
 THE INDEPENDENT READING the host harness diffs the package against. The C in
 apps/lemmings/lemact.c, lemgame.c and lemobj.c is transliterated from Lemmix
-(Eric Langedijk, zlib) src/Game.pas; this file is written from lemmings_3ds
+(Eric Langedijk, under Lemmix's own licence - zlib-style with an added clause)
+src/Game.pas; this file is written from lemmings_3ds
 (public domain) src/lemming.c - its structure, its handlers, its object map -
 and then held to the rulings SPEC.md 114.4.7 takes where the two references
 DISAGREE, each one named at the line that applies it. So a transcription slip
@@ -44,6 +45,15 @@ own ORIG mechanics set and 3ds says "really?" at three of these):
       2020: finally"): a pause begun before frame 34 holds the CLOCK for
       34 - frame frames once play resumes (BtnPause :3941-3958 sets the count,
       IncrementIteration :3502-3506 spends it instead of a clock frame)
+  R9  the level's end WAITS FOR THE LAST SPRAY: HandleExploding sets
+      fParticleFinishTimer to PARTICLE_FRAMECOUNT = 52 when ShowParticles is
+      on (src/Game.pas:3375-3377; on in TGameOptions DEFAULT, Base.Types.pas
+      :161), IncrementIteration spends one a frame (:3508) and
+      CheckForGameFinished returns at once while it is above 0 (:2236) - the
+      clock's end as well as the all-saved, all-removed and nuke tests. The
+      spray itself is pixels and not modelled here; the wait is mechanics,
+      because lemmings step and can be saved through it (3ds instead keeps
+      the exploder on the map for its 52 frames, R4)
 
 What this file does NOT model, because the harness drives the mechanics only:
 the sound, the panel and every
@@ -51,7 +61,8 @@ pixel of the picture. The terrain is the MASK, composed from the fixture's
 record the way SPEC.md 114.7.1's composer does it.
 
 ATTRIBUTION. Lemmings is (C) 1991 DMA Design / Psygnosis. lemmings_3ds is
-public domain (its LICENCE.txt), Lemmix is zlib; nothing here is copied from
+public domain (its LICENCE.txt), Lemmix is under its own Licence.txt (zlib's
+text with an added clause); nothing here is copied from
 either - it is a reading of what they do, with their files cited.
 """
 import argparse
@@ -60,6 +71,7 @@ import sys
 
 W, H = 1584, 160
 DOM_NONE = 128
+PARTICLE_FRAMECOUNT = 52     # R9, Lemmix src/Game.pas:785
 DOM_EXIT, DOM_FL, DOM_FR = 129, 130, 131
 DOM_WATER, DOM_FIRE, DOM_OWL, DOM_OWR, DOM_STEEL, DOM_BLOCKER = \
     133, 134, 135, 136, 137, 138
@@ -157,6 +169,7 @@ class Game:
         self.opened = self.entdone = False
         self.paused = self.nuked = self.nukeing = False
         self.glitchp = 0                       # R8, the pause glitch
+        self.pfin = 0                          # R9, fParticleFinishTimer
         self.nukeix = 0
         self.finished = self.timeup = False
         self.lems = []
@@ -656,6 +669,7 @@ class Game:
         if self.oget(L.x, L.y) not in (DOM_STEEL, DOM_WATER):
             self.apply(4, 0, L.x - 8, L.y - 14)
         self.remove(L)
+        self.pfin = PARTICLE_FRAMECOUNT               # R9
         return False
 
     def objects_check(self, L):
@@ -793,13 +807,14 @@ class Game:
     def frame(self):
         if self.finished:
             return
-        if self.mins <= 0 and self.secs <= 0:
-            self.timeup = self.finished = True
-            return
-        if self.savedn >= self.maxlem or self.removed >= self.maxlem or \
-                (self.nuked and self.out == 0):
-            self.finished = True
-            return
+        if self.pfin <= 0:                            # R9
+            if self.mins <= 0 and self.secs <= 0:
+                self.timeup = self.finished = True
+                return
+            if self.savedn >= self.maxlem or self.removed >= self.maxlem \
+                    or (self.nuked and self.out == 0):
+                self.finished = True
+                return
         if self.rrdir:
             self.rr = max(self.rrmin, min(99, self.rr + self.rrdir))
         if self.paused:
@@ -809,6 +824,8 @@ class Game:
             self.clockf += 1
         else:
             self.glitchp -= 1
+        if self.pfin > 0:                      # R9 (Game.pas:3508)
+            self.pfin -= 1
         if self.clockf >= 17:
             self.clockf = 0
             self.secs -= 1

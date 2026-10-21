@@ -12,14 +12,17 @@
  * steps at most LEM_STEP_MAX lemmings and answers whether the frame is done,
  * and ovl_frame_end() does what follows the lemmings. The bracket's loop polls
  * the input and moves the pointer between chunks, so the pointer is repainted
- * every tick even when a frame of sixty lemmings is four ticks long. Every
+ * between the chunks of a frame of sixty lemmings and not only once it is
+ * stepped - once a glass update, which on the XT is a pass and not a tick
+ * (the drawn pass is the long one: SPEC.md 114.7 point 3). Every
  * lemming is still stepped exactly once a frame, in the original's order, so
  * the MECHANICS are the original's whatever the machine - decision 7: the XT
  * plays at whatever rate it measures, and every clock in Lemmings counts game
  * frames, so nothing becomes unwinnable.
  *
  * ATTRIBUTION. Every rule here is the original's, transliterated from Lemmix
- * (Eric Langedijk, zlib licence) src/Game.pas - Start, IncrementIteration,
+ * (Eric Langedijk, Lemmix's own licence - zlib-style, with the added clause
+ * 'use it for free, use it for fun') src/Game.pas - Start, IncrementIteration,
  * CheckSpawnLemming, CheckUpdateNuking, UpdateInteractiveObjects,
  * CheckForGameFinished, CheckAdjustReleaseRate - and cross-checked against
  * lemmings_3ds (public domain) src/lemming.c and src/ingame.c. Lemmings is (C)
@@ -40,9 +43,21 @@ struct lem_l {
     unsigned char fidx;             /* the floater's table index */
     unsigned char below;            /* the object map under the foot */
     unsigned char front;            /* ...and 8 ahead, 8 up */
-    unsigned char pad0[3];
+    /* THE EXPLOSION'S SPRAY (decision 5, SPEC.md 114.8), in bytes the record
+     * already had: the 32-byte stride is unchanged and none of it is
+     * mechanics - lemsim.py's R4 is Lemmix's, the bomber removed on the
+     * explosion's first frame, and the spray is drawn after it at the foot
+     * it left (Lemmings.ts ActionExplodingSystem; lemmings_3ds draw.c) */
+    unsigned char pf;               /* the spray frame the frame shows, 0
+                                     * none: 1 .. LEM_PTIME, one a game frame */
+    unsigned char dpf;              /* ...and the one ON THE GLASS (VGA) or in
+                                     * the shadow (CGA, Hercules), 0 none */
+    unsigned char pad0;
     unsigned char saved[9];         /* the blocker's 3x3 of the object map */
-    unsigned char pad1[7];
+    unsigned char pbox[4];          /* dpf's box: world bytes b0, b1, rows r0,
+                                     * r1 - what the next frame's erasure
+                                     * covers */
+    unsigned char pad1[3];
 };
 
 #define LF_RTL     0x01             /* facing left: xDelta = -1 */
@@ -126,6 +141,8 @@ static struct lem_ar lem_ar[LEM_NANIM];
 static struct lem_ar lem_mk[LEM_NMASK];
 static unsigned lem_anseg, lem_anoff;   /* item 3's first byte */
 static unsigned lem_mkseg, lem_mkoff;   /* item 4's */
+static unsigned lem_ptseg, lem_ptoff;   /* item 10's, the spray (wave 6), and
+                                         * lem_ptseg 0 when the bank has none */
 static int lem_gfx_ok;              /* all three tables were read */
 
 
@@ -148,6 +165,8 @@ static int lem_opened;              /* EntrancesOpened */
 static int lem_entdone;             /* fEntranceAnimationCompleted */
 static int lem_paused;
 static int lem_glitchp;             /* the PAUSE GLITCH's frames still owed */
+static int lem_pfin;                /* fParticleFinishTimer: frames the end
+                                     * still waits for the last spray */
 static int lem_super;               /* the level is a SUPERLEMMING level */
 static int lem_nuked;               /* fIsNukedByUser */
 static int lem_nukeing;             /* fIsExploderAssignInProgress */
@@ -160,7 +179,7 @@ static int lem_infr;                /* a frame is part-stepped */
 /* the STEP budget (SPEC.md 114.7.1 conclusion 1): a batched probe is 141 us
  * on a 4.77 MHz 8088, so about twenty lemmings fill a tick at full rate. It
  * gates nothing - decision 7 - it only decides how many ticks one frame of a
- * crowded level is spread across, so the pointer keeps its tick. */
+ * crowded level is spread across, so the pointer moves between chunks. */
 #define LEM_STEP_MAX 20
 
 /* lem_snd_cue - one tone a frame, the most important one asked for (SPEC.md
@@ -221,6 +240,8 @@ static void ovl_increment(void)
         lem_clockf++;
     else
         lem_glitchp--;
+    if (lem_pfin > 0)
+        lem_pfin--;                 /* :3508 */
     if (lem_clockf >= LEM_FPS) {
         lem_clockf = 0;
         lem_sec--;
@@ -306,10 +327,16 @@ static void ovl_nuke_step(void)
 }
 
 /* ovl_finished_check - CheckForGameFinished (:2232): the clock, or every
- * lemming accounted for, or a nuke with nobody left out. */
+ * lemming accounted for, or a nuke with nobody left out - BUT NOT WHILE A
+ * SPRAY FLIES: `if fParticleFinishTimer > 0 then Exit` (:2236), the timer
+ * HandleExploding sets to 52 when ShowParticles is on (:3375-3377; on in
+ * Lemmix's TGameOptions DEFAULT, Base.Types.pas:161) and IncrementIteration
+ * spends (:3508). So the last bomber's spray is seen whole, and the clock's
+ * end waits too - lemmings keep stepping, and can be saved, for those frames
+ * (wave 6's second review; lemsim.py carries the same rule). */
 static void ovl_finished_check(void)
 {
-    if (lem_finished)
+    if (lem_finished || lem_pfin > 0)
         return;
     if (lem_min <= 0 && lem_sec <= 0) {
         lem_timeup = 1;
@@ -351,8 +378,14 @@ static int lem_frame_chunk(int n)
     while (lem_cursor < lem_released && n > 0) {
         L = &lem_lm[lem_cursor];
         lem_cursor++;
-        if (L->fl & LF_GONE)
+        if (L->fl & LF_GONE) {
+            /* a spray moves on a frame, in the pool's order with the rest
+             * (lem_bomb starts it at 1 on the exploder's last frame): 52
+             * frames, ParticleTimer's (Game.pas:4452-4455) */
+            if (L->pf && ++L->pf > LEM_PTIME)
+                L->pf = 0;
             continue;
+        }
         n--;
         if (L->timer != 0 && lem_fuse())
             continue;

@@ -47,10 +47,13 @@ FIVE ASSERTIONS, and each is a different half of the change:
 
 VERIFIED TO FAIL (before wave 4 of LEMMINGS, against the opposite sign):
 with the OSAPI_MEM_MOVABLE call taken out of cc_ovinit, assertion 4 went red.
-THE INVERTED CONTROL IS OWED TO THE FINAL PASS and is NOT verified: put the
-OSAPI_MEM_MOVABLE call back into crt0's eager arm and assertion 4 (MC_RLOC
-0) must go red - wave 4 reasoned it and nobody has run it, and runs are the
-final pass's (CLAUDE.md, Testing). With CC_OVL_PART taken out of apps/cword/cword.asm (and
+THE INVERTED CONTROL, VERIFIED IN LEMMINGS' FINAL PASS (wave 6): with wave
+3's declaration put back into crt0's eager arm - `mov dx, [op_base]`, a
+cc_ovcarve-shaped proc, `call OSAPI_MEM_MOVABLE`, in a scratch copy of
+apps/cc/crt0.asm - CWORD rebuilt and assertion 4 went red: MC_RLOC 25380,
+the carve listed MOVABLE HI. (Passing the module's own segment, [cc_ovseg],
+instead of the claim's base is refused by mem_own and stays green - the
+declaration has to name the CLAIM.) With CC_OVL_PART taken out of apps/cword/cword.asm (and
 `part` out of the CC_PACKAGE call), the disk carries no overlay part, nothing
 new holds the module after launch, and assertion 1 stops the row.
 

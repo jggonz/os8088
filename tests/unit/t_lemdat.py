@@ -443,6 +443,23 @@ NAME_ALPHABET = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 FILEMAX = 64512
 
 
+def lemload_claims():
+    """LEM_KB_MAIN, LEM_KB_BANK and LEM_KB_REC as apps/lemmings/lemload.c
+    #defines them - the claims ovl_parts_read and the record read hold every
+    band to."""
+    out = {}
+    with open(os.path.join(ROOT, "apps", "lemmings", "lemload.c")) as fh:
+        for line in fh:
+            w = line.split()
+            if len(w) >= 3 and w[0] == "#define" and w[1] in (
+                    "LEM_KB_MAIN", "LEM_KB_BANK", "LEM_KB_REC"):
+                out[w[1]] = int(w[2])
+    for k in ("LEM_KB_MAIN", "LEM_KB_BANK", "LEM_KB_REC"):
+        check(k in out, "apps/lemmings/lemload.c no longer #defines %s" % k)
+        out.setdefault(k, 0)
+    return out
+
+
 def check_bands(sections, lem, out_dir, geom):
     """Every band's header against its own bytes, and the manifest against
     the raw records THIS file decoded."""
@@ -466,6 +483,37 @@ def check_bands(sections, lem, out_dir, geom):
                   "%s/%s is %d bytes and every band is 512-padded"
                   % (geom, name, len(blobs[name])))
 
+    # EVERY BAND FITS THE CLAIM THE PACKAGE READS IT INTO (wave 6's second
+    # review): LEM_KB_MAIN went 52 -> 60 by hand when the spray grew LEMMAIN,
+    # and nothing on the host tied the claim to the built band - one more
+    # item would have failed only on the machine, os88_file_read_seg refusing
+    # with FERR_BIG and every disk saying "Load failed". The claims are read
+    # out of apps/lemmings/lemload.c itself; a bank's part p lands at p x
+    # 64,512 (ovl_parts_read), so its last part must end inside the claim.
+    kb = lemload_claims()
+    groups = {}
+    for name in names:
+        stem, _, ext = name.partition(".")
+        if ext != "LEM":
+            continue
+        base, us, part = stem.partition("_")
+        groups.setdefault(base, []).append((int(part) if us else 0, name))
+    for base, parts in sorted(groups.items()):
+        if base == "LEMMAIN":
+            claim = kb["LEM_KB_MAIN"]
+        elif base.startswith("LEMGR") or base.startswith("LEMSP"):
+            claim = kb["LEM_KB_BANK"]
+        elif base.startswith("LEMLV"):
+            claim = kb["LEM_KB_REC"]
+        else:
+            continue
+        last, lname = max(parts)
+        end = last * FILEMAX + len(blobs[lname])
+        check(end <= claim * 1024,
+              "%s/%s ends at byte %d of its claim and lemload.c claims %d KB "
+              "(%d) - raise the LEM_KB_ constant, or the machine refuses the "
+              "read" % (geom, base, end, claim, claim * 1024))
+
     def bank(base, magic):
         """Reassemble a bank from its parts and check what it claims."""
         parts = [n for n in names
@@ -481,8 +529,9 @@ def check_bands(sections, lem, out_dir, geom):
         # GROUNDxO itself), LSPB to 2 in wave 4 (the picture as pieces,
         # checked below against this file's own decode) and LMNB to 2 in
         # wave 5 (the menu palette at 288, checked below against the format
-        # document's table)
-        want = 2
+        # document's table) and to 3 in wave 6 (item 10, the explosion's
+        # spray, checked below against PARTICLES.DAT itself)
+        want = 3 if magic == b"LMNB" else 2
         check(version == want, "%s/%s is version %d, not %d"
               % (geom, parts[0], version, want))
         return parts, body
@@ -567,7 +616,7 @@ def check_bands(sections, lem, out_dir, geom):
     if got is not None:
         parts, body = got
         nitems = body[6]
-        check(nitems == 10, "%s/LEMMAIN carries %d items, not 10"
+        check(nitems == 11, "%s/LEMMAIN carries %d items, not 11"
               % (geom, nitems))
         # THE MAIN-MENU PALETTE (wave 5), read again from the format
         # document's own table - lemmings_main_dat_file_format.txt section 2,
@@ -596,6 +645,31 @@ def check_bands(sections, lem, out_dir, geom):
                 check(body[off:off + n] == want,
                       "%s/LEMMAIN item %d is not MAIN's own bytes"
                       % (geom, item))
+        # ITEM 10 (wave 6): PARTICLES.DAT byte for byte, then each frame's
+        # bounds - recomputed HERE from the file, a particle with either byte
+        # -128 not drawn (Lemmix DrawParticles, Lemmings.ts
+        # ParticleTable.draw), and not taken out of the converter
+        with open(os.path.join(DATA, "PARTICLES.DAT"), "rb") as fh:
+            ptab = fh.read()
+        rows = [r for r in range(nitems) if body[32 + r * 16] == 10]
+        check(len(rows) == 1, "%s/LEMMAIN has %d item-10 rows, not 1"
+              % (geom, len(rows)))
+        if rows:
+            off, n = struct.unpack_from("<II", body, 32 + rows[0] * 16 + 8)
+            check(n == 51 * 160 + 51 * 4 and body[off:off + 8160] == ptab,
+                  "%s/LEMMAIN item 10 is not PARTICLES.DAT and its bounds"
+                  % geom)
+            for f in range(51):
+                pts = [struct.unpack_from("<bb", ptab, f * 160 + 2 * k)
+                       for k in range(80)]
+                pts = [(x, y) for (x, y) in pts if x != -128 and y != -128]
+                want_b = ((min(x for x, _ in pts), max(x for x, _ in pts),
+                           min(y for _, y in pts), max(y for _, y in pts))
+                          if pts else (127, -128, 127, -128))
+                got_b = struct.unpack_from("<bbbb", body, off + 8160 + 4 * f)
+                check(got_b == want_b,
+                      "%s/LEMMAIN item 10 frame %d's bounds are %r, the table "
+                      "says %r" % (geom, f, got_b, want_b))
 
     # --- the special pictures ---------------------------------------------
     for i in range(4):

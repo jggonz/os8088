@@ -39,7 +39,14 @@
 ; never takes it off; the panel side takes it off only around a write under
 ; its own box (lemdraw.c ovl_pan_hit).
 ;
-; ATTRIBUTION. Nothing here is derived from the original. The VGA latch copy,
+; ATTRIBUTION. Nothing here is derived from the original but lem_r_spray's
+; sixteen particle colours and its -128 rule, which are Lemmix's (Eric
+; Langedijk, under Lemmix's own licence): src/Game.pas ParticleColorIndices
+; (:54-56) carries the same sixteen indices, and DrawParticles (:2492-2515)
+; skips a pair with `(X <> -128) and (Y <> -128)` false - either byte - which
+; is the rule this file ships; Lemmings.ts's particle-table.ts (Thomas
+; Zeugner, MIT) tests the same. The trajectory table itself is data (LEMMAIN
+; item 10). The VGA latch copy,
 ; the CRTC and the interleaves are facts about IBM and Hercules hardware;
 ; Lemmings is (C) 1991 DMA Design / Psygnosis and README.TXT carries the full
 ; attribution.
@@ -50,6 +57,9 @@ section .text
 LEM_SPMAX     equ 168               ; save records: 80 lemmings, their 80
                                     ; countdown digits, and room to spare
 LEM_SPREC     equ 6                 ; word a, byte cnt, byte n, word b
+LEM_PBINS     equ 10                ; lem_r_spray's bins: the world's 160
+                                    ; rows in 16-row bands (lemdraw.c's
+                                    ; LEM_PBINS is the same number)
 LEM_VCURSAVE  equ 65000             ; the cursor's own VGA save-under, above
                                     ; every sprite's: two parts of <= 3 x 14
 LEM_SMK       equ 800               ; one sprite or object's mask rows: the
@@ -537,6 +547,8 @@ _lem_r_sprite:
     push es
     push ds
     cld
+    call lb_msvga                   ; the buttons, latched through a long
+                                    ; compose (SPEC.md 114.7 point 3)
     cmp word [lb_spn], LEM_SPMAX
     jb .room
     jmp .out
@@ -808,6 +820,244 @@ _lem_r_srest:
 
 _lem_r_sforget:
     mov word [lb_spn], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; void lem_r_spray(unsigned seg, unsigned off, int x, int y, int b0, int b1,
+;                  int r0, int r1, int erase)
+;
+; ONE FRAME OF THE EXPLOSION'S SPRAY (SPEC.md 114.8, decision 5): seg:off is
+; the frame's 160 bytes of LEMMAIN item 10 - eighty signed (dx, dy) pairs out
+; of PARTICLES.DAT, a pair with EITHER byte -128 not drawn (Lemmix
+; DrawParticles) - placed at WORLD (x, y), the bomber's foot. Particle p is
+; ONE pixel in the original's colour for p mod 16 (Lemmix
+; ParticleColorIndices; the level palette's own indices). Only a particle
+; inside world bytes b0..b1 and rows r0..r1 is touched: that box is the C's
+; record of where this frame is drawn, which is what its erasure covers. The
+; C keeps the box inside the world.
+;
+;   erase 2, 3  THE FRAME'S BINS, on any card and drawing nothing (wave 6's
+;             second review): each particle that would be drawn widens the
+;             bin of its 16-row band - lb_pbins, ten of {byte lo, byte hi,
+;             row lo, row hi}, an empty one lo = 0FFh - so the VGA frame's
+;             rectangles for a spray are one a band it occupies (lemdraw.c
+;             ovl_spray_rects) and not one box over the whole cloud: 3.6x
+;             less area on the real table. 2 empties the bins first, 3 adds
+;             to what is there, so the old frame's and the new frame's
+;             pixels fold into one bin a band.
+;
+;   VGA       write mode 2 and the Bit Mask a pixel (lb_rpix's batch): into
+;             the compose scratch inside a band, rows outside it skipped, or
+;             straight onto the world in VRAM outside one (the first frame and
+;             'f', which the T load has just covered). `erase` is a no-op: a
+;             compose rebuilds the old box from T.
+;   CGA/Herc  the shadow, in the SOLID class every sprite is drawn in
+;             (lb_score), the byte's span dirtied; `erase` copies each
+;             particle's byte back out of W instead (lb_wcopy). Columns
+;             outside the 320-pixel window are skipped.
+;
+; ATTRIBUTION. The table's layout, the -128 rule and the sixteen colours are
+; the original's as Lemmix's src/Game.pas carries them (TParticleTable,
+; ParticleColorIndices, DrawParticles; Eric Langedijk, Lemmix's own licence)
+; and Lemmings.ts's particle-table.ts (MIT) reads them; nothing is copied.
+; -----------------------------------------------------------------------------
+lb_pcol:    db 4, 15, 14, 13, 12, 11, 10, 9, 8, 11, 10, 9, 8, 7, 6, 2
+
+_lem_r_spray:
+    push bp
+    mov bp, sp
+    sub sp, 2                       ; [bp-2] the particle, 0..79
+    push si
+    push di
+    push es
+    push ds
+    cld
+    mov ax, [bp+20]
+    cmp ax, 2
+    jb .draw
+    ja .go                          ; 3: onto the bins as they are
+    push ds
+    pop es
+    mov di, lb_pbins
+    mov cx, LEM_PBINS * 2
+    mov ax, 0x00FF                  ; lo 0FFh, hi 0: empty
+    rep stosw
+    jmp short .go
+.draw:
+    cmp word [lb_kind], LEM_KIND_VGA
+    jne .go
+    or ax, ax
+    jz .vin
+    jmp .out
+.vin:
+    call lb_msample                 ; the buttons, through a long compose
+    call lb_batch_in                ; write mode 2, every plane
+    mov ax, [lb_fb]
+    mov es, ax
+.go:
+    mov word [bp-2], 0
+.next:
+    mov si, [bp-2]
+    shl si, 1
+    add si, [bp+6]
+    push ds
+    mov ax, [bp+4]
+    mov ds, ax
+    mov ax, [si]                    ; AL = dx, AH = dy
+    pop ds
+    cmp al, 0x80
+    je .skip1
+    cmp ah, 0x80
+    je .skip1
+    mov dl, ah
+    cbw
+    add ax, [bp+8]
+    mov bx, ax                      ; BX = the world x
+    mov al, dl
+    cbw
+    add ax, [bp+10]
+    mov cx, ax                      ; CX = the world y
+    cmp cx, [bp+16]
+    jl .skip1
+    cmp cx, [bp+18]
+    jg .skip1
+    mov ax, bx
+    sar ax, 1
+    sar ax, 1
+    sar ax, 1                       ; AX = the world byte
+    cmp ax, [bp+12]
+    jl .skip1
+    cmp ax, [bp+14]
+    jle .inbox
+.skip1:
+    jmp .skip
+.inbox:
+    cmp word [bp+20], 2
+    jb .nobin
+    jmp .bin
+.nobin:
+    cmp word [lb_kind], LEM_KIND_VGA
+    je .vga
+    jmp .shadow
+
+.vga:
+    mov dx, ax                      ; the byte
+    mov ax, cx
+    cmp word [lb_vcomp], 0
+    je .vglass
+    sub ax, [lb_by0]
+    jl .skip1
+    cmp ax, [lb_bh]
+    jge .skip1
+    mov ax, cx
+    call lem_rowoff                 ; DI = y * 200
+    add di, [lb_vbase]
+    jmp short .vput
+.vglass:
+    call lem_rowoff
+    add di, LEM_VTERR
+.vput:
+    add di, dx
+    mov cl, bl
+    and cl, 7
+    mov ah, 0x80
+    shr ah, cl
+    mov al, 8                       ; the Bit Mask: this pixel alone
+    call lb_gc
+    mov bx, [bp-2]
+    and bx, 15
+    mov al, [cs:lb_pcol+bx]
+    mov ah, [es:di]                 ; the latches, so the other seven stay
+    mov [es:di], al                 ; write mode 2: AL's nibble is the colour
+    jmp .skip
+
+.shadow:
+    mov ax, bx
+    sub ax, [lb_scroll]
+    jl .skip2
+    cmp ax, 320                     ; the window's width in world pixels
+    jge .skip2
+    mov dx, ax
+    shr dx, 1
+    shr dx, 1                       ; DX = the shadow byte: four pixels a byte
+                                    ; on CGA, four doubled ones on Hercules
+    cmp word [bp+20], 0
+    jne .erase
+    push ax
+    mov ax, cx
+    call lb_rowoff8                 ; DI = y * 80
+    pop ax
+    add di, dx
+    push cx
+    mov cl, al
+    and cl, 3
+    shl cl, 1
+    mov al, 0xC0                    ; the pixel's two bits: the solid class
+    shr al, cl
+    pop cx
+    mov bx, [lb_shadow]
+    mov es, bx
+    or [es:di], al
+    mov bx, cx                      ; the row's dirty span, widened to DL
+    cmp byte [lb_dlo+bx], 0xFF
+    jne .wd
+    mov [lb_dlo+bx], dl
+    mov [lb_dhi+bx], dl
+    jmp short .skip
+.wd:
+    cmp dl, [lb_dlo+bx]
+    jae .wd1
+    mov [lb_dlo+bx], dl
+.wd1:
+    cmp dl, [lb_dhi+bx]
+    jbe .skip
+    mov [lb_dhi+bx], dl
+.skip2:
+    jmp short .skip
+.erase:
+    mov ax, cx
+    mov bx, dx
+    call lb_wcopy                   ; row AX, bytes BX..DX, out of W, dirtied
+    jmp short .skip
+.bin:
+    mov di, cx                      ; the row's band: (y >> 4) * 4
+    shr di, 1
+    shr di, 1
+    and di, 0xFFFC
+    add di, lb_pbins
+    cmp al, [di]
+    jae .bn1
+    mov [di], al
+.bn1:
+    cmp al, [di+1]
+    jbe .bn2
+    mov [di+1], al
+.bn2:
+    cmp cl, [di+2]
+    jae .bn3
+    mov [di+2], cl
+.bn3:
+    cmp cl, [di+3]
+    jbe .skip
+    mov [di+3], cl
+.skip:
+    inc word [bp-2]
+    cmp word [bp-2], 80
+    jae .done
+    jmp .next
+.done:
+    cmp word [bp+20], 0             ; only the VGA's drawing arm opened a batch
+    jne .out
+    cmp word [lb_kind], LEM_KIND_VGA
+    jne .out
+    call lb_batch_out
+.out:
+    pop ds
+    pop es
+    pop di
+    pop si
+    add sp, 2
+    pop bp
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1150,6 +1400,8 @@ _lem_r_bgrect:
     push es
     push ds
     cld
+    call lb_msvga                   ; the buttons, latched through a long
+                                    ; compose (SPEC.md 114.7 point 3)
     ; rows y .. y+h-1, clipped to the world
     mov ax, [bp+6]
     mov bx, [bp+10]
@@ -1494,6 +1746,8 @@ _lem_r_clatch:
     push di
     push es
     push ds
+    call lb_msvga                   ; the buttons, latched through a long
+                                    ; compose (SPEC.md 114.7 point 3)
     mov cx, [lb_ch]
     jcxz .none
     mov ax, [lb_cy0]
@@ -1820,6 +2074,8 @@ _lem_r_obj:
     push es
     push ds
     cld
+    call lb_msvga                   ; the buttons, latched through a long
+                                    ; compose (SPEC.md 114.7 point 3)
     mov ax, [bp+4]
     mov [lbp_seg], ax
     mov ax, [bp+6]
@@ -2375,6 +2631,12 @@ lb_sprec:   resb LEM_SPMAX * LEM_SPREC  ; the shadow cards' sprite records,
                                     ; out of THIS file and checks them against
                                     ; the C's own number (lemtest.c
                                     ; check_sprec), so neither moves alone
+lb_pbins    equ lb_sprec + 80 * 4   ; lem_r_spray's bins (erase 2, 3), VGA
+                                    ; only, after the 80 boxes in the same
+                                    ; records the VGA keeps none of: no bss
+%if LEM_SPMAX * LEM_SPREC < 80 * 4 + LEM_PBINS * 4
+  %fatal "lb_sprec no longer holds the 80 boxes and the spray's bins"
+%endif
 lb_smk:     resb LEM_SMK            ; one draw's mask rows (lb_vcore)
 lbw_lo:     resb 1                  ; lb_wobj's three bytes of one source
 lbw_hi:     resb 1                  ; byte, kept in memory because the
