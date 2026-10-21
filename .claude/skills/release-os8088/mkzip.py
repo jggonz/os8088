@@ -284,9 +284,9 @@ ITEMS = [
     ("progs", "1942", False,
      "An air-combat game after the 1942 arcade game, written in assembly "
      "with original artwork: 32 stages, one or two players, and music on an "
-     "AdLib or Sound Blaster. It needs a VGA or CGA card. The "
-     "1.44MB disk also carries sampled gunfire and explosions for a Sound "
-     "Blaster; the 360KB disk leaves them out for room.",
+     "AdLib or Sound Blaster, with sampled gunfire and explosions on a "
+     "Sound Blaster. It needs a VGA or CGA card. Both disks carry the same "
+     "game.",
      [("1942.img", "1.44MB", ""), ("1942-360.img", "360KB", "")]),
     ("progs", "REDLINE", False,
      "A CPU and graphics benchmark. It times 25 fixed workloads -- "

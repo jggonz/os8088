@@ -672,6 +672,17 @@ the tier and the description are a judgement somebody makes rather than a
 field to fill: check the entry against that program's own SPEC section or its
 Spotlight page, and flag every tier you touched as reviewable in the PR.
 
+**Then check the cell fence (SPEC.md 92.2).** A package that calls an API
+cell an older kernel at the same package format lacks needs
+`"needs_wire": 3` (or the current top level) on its `data/wire.json` entry,
+or an older machine's Wire offers a program that calls past its kernel's
+table. The website's writer cannot see the calls; step 3's `--verify
+--pkgdir` from the OS repo can, and it fails on a missing or stale
+declaration and on a call newer than any level. When it reports a call past
+`WIRE_TABLE_END`, the release adds a level row in `tools/os88wire.py` and
+raises `WIRE_LEVEL` there and in `apps/thewire/wcat.inc` -- an OS change
+that has to merge before the images are built.
+
 **2. The site build packs the catalog.** `tools/wire.py`, called by
 `build.py`, writes `public/wire/catalog.bin` and `public/wire/pic/<STEM>.PIC`
 from `data/wire.json` and `public/wire/pkg/`. It is a build product committed
