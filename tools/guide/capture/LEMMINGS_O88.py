@@ -26,11 +26,15 @@ def capture(ui, shot):
     # launcher Lemmings, and the window matcher cannot tell them apart.
     shot("lemmings-launcher", settle=False)
 
-    # Play: the preview in the game's own screen, then the level.
-    _tap(m, "Enter", 6.0)
-    _tap(m, "Enter", 20.0)
+    # Play: the preview in the game's own screen - the launch reads the
+    # level's bands off the floppy first, ~24 disk calls, then draws the
+    # picture - then, on a second Enter once it is up, the level, which is
+    # built behind the preview in about ten seconds. A key pressed before
+    # the preview is up is lost, so the first wait is the long one.
+    _tap(m, "Enter", 25.0)
+    _tap(m, "Enter", 25.0)
     # Let a few lemmings out before the picture is taken.
-    os88marty.guest_sleep(m, 15.0)
+    os88marty.guest_sleep(m, 12.0)
     shot("lemmings-play", settle=False)
 
     # Esc finishes the level; the results screen, then the list again.
