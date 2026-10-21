@@ -538,6 +538,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 116 | LEMMINGS — Lemmings (DMA Design, 1991), written in C (`apps/lemmings/`) |
 | 117 | INSTALL — the setup wizard (`apps/install/`) |
 | 118 | SYSCHECK — System Check, the installed system's health (`apps/syscheck/`) |
+| 119 | VESA — high-resolution, deep-colour desktops through a video driver (`drivers/vesa/`, `kernel/vidext.inc`) |
 
 ## docs/
 
