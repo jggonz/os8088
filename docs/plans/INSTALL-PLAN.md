@@ -99,8 +99,8 @@ actually been run. The build diary is `docs/HOW-INSTALL-WAS-BUILT.md`.
       small disks clean, `HD_ABI_VER` in source and image, the shared
       `HDG_*`/`HDS_*` numbers, `DRVU_*` in kernel and SDK, `HDD.DRV` within
       4,096 bytes. 19 checks.
-- [ ] `tests/install.py` (soak, row `install`, MartyPC `os8088_xt_hdd`):
-      written; runs in the final pass.
+- [x] `tests/install.py` (soak, row `install`, MartyPC `os8088_xt_hdd`):
+      passed in the final pass (45.5 s).
 - [x] §117.9 filled in from a base build of `main` at `d2d88cd3`.
 - [x] The user guide's page (`tools/guide/manuals/INSTALL_O88.md`, its
       capture script) and a pointer from `HDDTOOL_DRV.md`; `README.TXT`'s
@@ -111,3 +111,15 @@ actually been run. The build diary is `docs/HOW-INSTALL-WAS-BUILT.md`.
 `python3 tools/os88test.py soak -k install -k instdeep -k instkeep -k inststate
 -k instrest -k hdauto -k hddcp -k instimg -k instcross -k instassoc -k hdboot`
 and then `make test-full`. Plus one look on Hercules. A failing row re-runs alone after its fix.
+
+**Run, 2026-10-20.** Soak union, `--marty-jobs 2`: 16 of 17 passed -
+`install`, `instdeep`, `instkeep`, `inststate`, `instrest`, `instcross`,
+`instassoc`, `hdboot`, `hddcp`, `hdauto`, `vidxiphd`, `vidxiphdhold`,
+`hmadrv`, `drvup`, `drvcall`, `coldpic`. `instimg` failed staging its
+fixture (`Disk full` copying a marker into `apps360.img`, which is 354 of 354
+clusters on `main` at `d2d88cd3` as well; this branch changes nothing on the
+apps disk) - pre-existing, not re-run. `make test-full`: 60 passed, 1 skipped
+(`ctoolchain`, no C compiler on this host). `make budget-check`: kern_big
+3,072 spare, kern_small 2,560, kern_emu 3,072. Hercules looked at on
+MartyPC's 5150.
+

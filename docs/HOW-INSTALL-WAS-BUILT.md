@@ -100,3 +100,23 @@ become a refusal"), and copied the system disk again. Every image here carries
 the same pinned volume serial (`os88disk.py`), which is one candidate; it is
 the engine's behaviour from the Control Panel as well, and the real
 single-floppy flow swaps A:, which works — so the wizard says *drive A:*.
+
+## The gate (wave 3) and the final pass
+
+**Built.** `tests/install.py` drives the wizard on MartyPC's XT-IDE XT by its
+own buttons, reading the page after every click out of the package's memory
+(the build now writes `build/install.map`): Erase over the DOS fixture with
+the Down key, both disks copied, the partition read back on the host; Close,
+and HDDTOOL.DRV's claim given back; a user file planted with mtools; boot C:,
+the wizard again - UPGRADE, os8088 found and picked, Erase greyed - and with
+no apps disk in the machine, Skip; the file kept, the kernel the floppy's,
+the MBR rewritten; boot C: again.
+
+**Measured, the final pass (2026-10-20).** 16 of 17 soak rows passed,
+`install` among them; `instimg` failed before its emulator started, because
+its fixture cannot add a file to an `apps360.img` that is full on `main` too.
+`test-full` 60 passed, 1 skipped (no C compiler here). Budgets exact on all
+three kernels.
+
+**A small joke kept.** README.TXT must pack to exactly 8,088 bytes; the new
+hard-disk paragraph was tuned until it did.
