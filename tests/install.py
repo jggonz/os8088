@@ -26,7 +26,9 @@ fixture partition is DOS 3.3:
   3. FROM C:, with the system disk in B: (A: holds a blank so the BIOS offers
      C:): launch C:\\INSTALL.O88. It must say UPGRADE (booted from the hard
      disk), find os8088 on slot 1 and preselect it, and on Keep or Erase have
-     ERASE GREYED - the volume is running. Install; Done. On the HOST: the
+     ERASE GREYED - the volume is running. Install; with no apps disk in the
+     machine the wizard asks for one, and Skip (HDI_QUIT) is Done. On the
+     HOST: the
      user's file is byte for byte, KERNEL.SYS is the floppy's, and the MBR was
      rewritten (a marker byte in its unused tail, instkeep's trick).
   4. ...and C: still boots.
@@ -283,7 +285,17 @@ def main():
                      "Erase greyed (wipe %d, grey bits %X)"
                      % (wz.byte("in_wipe"), dis))
         wz.next(P["P_CONFIRM"], "after keep or erase")
-        wz.next(P["P_DONE"], "after Install: the upgrade", limit=900.0)
+        # A: holds a blank and B: the system disk, so there is no apps disk
+        # in the machine: the system part commits and the wizard ASKS for it
+        # (SPEC.md 52.10.10). Skip is HDI_QUIT, and the disk boots without
+        # the programs.
+        wz.next(P["P_APPS"], "after Install: the system part, upgraded",
+                limit=900.0)
+        wz.button(2)                             # Skip
+        wz.wait(P["P_DONE"], "after Skip")
+        if not wz.byte("in_skip"):
+            sys.exit("install: FAIL - Done after Skip does not say the apps "
+                     "disk was left off")
     blob = open(vhd, "rb").read(SECTOR)
     v = ID.partition(vhd)
     bad = []
