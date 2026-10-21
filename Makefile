@@ -3286,6 +3286,17 @@ SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 STIKAPPS := $(BUILD)/deskcal.o88 $(BUILD)/stiknote.o88 $(BUILD)/deskclok.o88
 STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))
 
+# SYSTEM TOOLS (SPEC.md 116.10): System Check reads the volume the machine
+# booted from and judges it against the release it was BUILT with, so it
+# rides the system disks - the install's system phase writes it into C:\SYSTEM
+# beside the kernel it describes, and every keep-install replaces it - and
+# the live USB image. Threaded explicitly, STIKAPPS' way and for its reason:
+# not into $(SYSAPPSARGS)'s gate disks, not onto an apps disk, and not onto
+# kern_small's or kern_emu's images, neither of which installs to a hard disk
+# (the browser's live image filters it back out, LIVENOTOOLS below).
+SYSTOOLS := $(BUILD)/syscheck.o88
+SYSTOOLSARGS := $(addprefix SYSTEM:,$(SYSTOOLS))
+
 # ...and STICKY NOTE'S NOTES (SPEC.md 110.13.1): a note is a plain .TXT in
 # SYSTEM\APPDATA\NOTES on the boot volume, and the folder SHIPS, pre-sized -
 # the kernel never grows a directory (SPEC.md 18.5), so a folder it made
@@ -3774,6 +3785,29 @@ $(BUILD)/rlapply.bin: apps/rlapply/rlapply.asm apps/os88api.inc \
 
 $(BUILD)/rlapply.o88: $(BUILD)/rlapply.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/rlapply.bin -o $@
+
+# SYSTEM CHECK (SPEC.md 116). Its MANIFEST is the release it judges a volume
+# against: every file the system disk carries in the root, SYSTEM\ and
+# STIKAPPS\ - the kernel, $(DRIVERS) (modules, BOOTHD.SYS and COLDHMA.SYS
+# among them), $(SYSAPPS), $(STIKAPPS) - sized and summed AS STORED, from the
+# disk's own inputs, since the image depends on SYSCHECK.O88 (SPEC.md 116.2.1).
+# t_sysman holds it to every built system disk.
+$(BUILD)/syscheck_man.inc: $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) \
+                           apps/syscheck/retired.txt tools/os88sysman.py \
+                           tools/os88drv.py tools/os88mod.py tools/os88lz.py | $(BUILD)
+	python3 tools/os88sysman.py --kernel $(KERNFILE) \
+	        --retired apps/syscheck/retired.txt -o $@ \
+	        $(DRIVERS) $(SYSAPPSARGS) $(STIKARGS)
+
+$(BUILD)/syscheck.bin: apps/syscheck/syscheck.asm apps/syscheck/scan.inc \
+                       apps/syscheck/ui.inc apps/syscheck/out.inc \
+                       apps/os88api.inc apps/os88ui.inc apps/os88dec.inc \
+                       apps/os88rseq.inc $(BUILDINC) $(BUILD)/syscheck_man.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/syscheck/syscheck.asm
+	@echo "syscheck: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/syscheck.o88: $(BUILD)/syscheck.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/syscheck.bin -o $@
 
 $(BUILD)/fontview.bin: apps/fontview/fontview.asm apps/os88api.inc \
                        apps/os88type.inc apps/os88ui.inc | $(BUILD)
@@ -4498,10 +4532,10 @@ $(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
 	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
-$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
@@ -4513,10 +4547,10 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNO
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
@@ -4540,10 +4574,10 @@ $(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(
 # Its OWN boot sector, unlike the pair above it: 15 spt is a different track
 # shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
 # build/boot120.bin's rule for why that is three sectors and not four.
-$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(BUILD)/boot120.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
@@ -5195,10 +5229,10 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 # is what fails if this flag is lost, and autostart360.img below takes it too
 # because it is this disk plus four files.
 SYS360SPC := --spc 1
-$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # AUTOSTARTTEST - the LINKS and AUTOSTART gate's disk (SPEC.md 26.10): the
@@ -14122,7 +14156,7 @@ LIVEISO := $(BUILD)/os8088.iso
 # the two lists, so a second SYSAPPS package lands here the day it lands
 # there and neither list is edited twice.
 LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
-               $(STIKARGS) $(STIKNOTESARG)
+               $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG)
 # THE FOUR PACKAGES THAT RIDE NO FLOPPY, AND THE DOCUMENTS MEDIA/ LACKED.
 # RECORDER (SPEC.md 35.1), HELLO (27.0), PACMAN (89) and SCRIBE (95) are built
 # by `all` and shipped nowhere, and every one of those decisions is an argument
@@ -14309,6 +14343,7 @@ $(USBIMG): LIVEDRVS = $(DRIVERS)
 $(USBIMG): LIVESUB :=
 $(EMUUSBIMG): KMODDIR := $(EMUDIR)
 $(EMUUSBIMG): LIVEKDIR := $(EMUDIR)
+$(EMUUSBIMG): LIVENOTOOLS = $(SYSTOOLSARGS)
 $(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/webcfg/system.cfg
 $(EMUUSBIMG): LIVESUB = $(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 \
                         $(EMUDIR)/mbr.bin $(EMUDIR)/boothd.sys $(EMUDIR)/boot.bin
@@ -14327,7 +14362,7 @@ $(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
 # which is RUNCPMIMG's order and is here for its reason.
 $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(LOGOVID) $(FACES) $(FACELIC) \
-           $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
+           $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
@@ -14339,14 +14374,14 @@ $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	[ -n "$$gsel" ] || { echo "usb: getcpmsw.py --select hdd chose nothing"; exit 1; }; \
 	zsel="$$(python3 tools/getstories.py -o $(STORYDIR) --disk-args STORIES/)"; \
 	[ -n "$$zsel" ] || { echo "usb: getstories.py --disk-args printed nothing"; exit 1; }; \
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) $(STIKAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select hdd chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
 		--mbr $(LIVEKDIR)/mbr.bin --boot $(LIVEKDIR)/boothd.bin \
 		--kernel $(LIVEKDIR)/$(KERNNAME) \
 		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) $$gslot \
 		--folder DOCS $(APPDATAFOLDER) $(AUTOFOLDER) $(LIVESTORYDIRS) $(STIKNOTESOPT) \
-		$(LIVEDRVS) $(LIVEREST) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
+		$(LIVEDRVS) $(filter-out $(LIVENOTOOLS),$(LIVEREST)) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
 	@python3 tools/os88disk.py --verify-hdd $@
 	@$(if $(LIVESUB),true,cp -f $(BUILD)/livepayload.txt $@.payload)
 	@$(if $(LIVESUB),$(LIVENOTE_EMU),$(LIVENOTE_USB))

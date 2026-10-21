@@ -1151,6 +1151,13 @@ FAST = [
         "odd amount with every row green: passes 12 and 13 each found the "
         "whole list odd part-way through. Reads the kernel.map the build "
         "writes, so it assembles nothing"),
+    Row("sysman", "fast", py("tests/unit/t_sysman.py"), 0.3,
+        "SPEC.md 116.2.1: System Check's manifest is written from the system "
+        "disk's INPUTS (the image depends on SYSCHECK.O88), so every manifest "
+        "file is read back off all four built system disks with a walker of "
+        "its own and held to its size and sum - and SYSTEM\\SYSCHECK.O88 is "
+        "on each while the manifest does not name it. Fails on one changed "
+        "sum, which is a fresh install System Check would call broken"),
     Row("canary", "fast", py("tests/unit/t_canary.py"), 0.1,
         "SPEC.md 18.93.1's canary offset re-derived from every shipped image's "
         "own BPB: it has to name a sector a transfer run reads AFTER the head "
@@ -13902,6 +13909,20 @@ SOAK = [
         "paint and its square moves inside the content. Everything is read "
         "out of each package's own bss through its map.",
         needs=("marty",), serial=True, timeout=600),
+    Row("syscheck", "soak", py("tests/syscheck.py"), 120.0,
+        "SPEC.md 116: SYSTEM CHECK on an upgraded install. A hard-disk image "
+        "of the system disk's own files is planted with one of every "
+        "breakage 116.1 names - a package of format 8, one that is not a "
+        "package, a retired program and a retired driver, a program in two "
+        "folders, KPAD.TMP, a driver of version 9, a deleted EMS.DRV that "
+        "SYSTEM.CFG still wants, an ASSOC.DAT row for a deleted package and "
+        "an orphaned HIBERNAT.IMG - and booted from C: with an AUTOSTRT link "
+        "to SYSTEM\\SYSCHECK.O88. The scan must find each, the saved "
+        "SYSCHECK.TXT (read back on the host) must name each, and Clean Up "
+        "must remove exactly 116.8's files and nothing else.",
+        needs=("qemu", "mtools"), serial=True, timeout=600,
+        wants=("build/os8088.img", "build/apps.img", "build/syscheck.o88",
+               "build/mbr.bin", "build/boothd.bin")),
     Row("atkey", "soak", py("tests/atkey.py"), 100.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "

@@ -394,6 +394,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | SKIES | `apps/skies/skies.asm` | §88 | yes |
 | SOLITAIRE | `apps/solitaire/solitaire.asm` | §43 | yes |
 | Sticky Note | `apps/stiknote/stiknote.asm` | §110.13 | yes |
+| System Check | `apps/syscheck/syscheck.asm` | §116 | yes |
 | TAMEGRAM | `apps/tamegram/tamegram.asm` | §49 | yes |
 | TANK | `apps/tank/tank.asm` | §85 | yes |
 | TELNET | `apps/telnet/telnet.asm` | §70 | yes |
@@ -531,6 +532,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 113 | WIRECHAT — chat rooms on the wire (`apps/wirechat/wirechat.asm`) |
 | 114 | WireFleet — naval battles over a null modem (`apps/wirefleet/`) |
 | 115 | Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`) |
+| 116 | SYSCHECK — System Check, the installed system's health (`apps/syscheck/`) |
 
 ## docs/
 

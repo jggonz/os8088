@@ -962,6 +962,14 @@
   "strings": "c5eb21b124ad2c07",
   "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
  },
+ "SYSCHECK_O88": {
+  "sources": [
+   "apps/syscheck"
+  ],
+  "stamped": "92d28e46",
+  "strings": "d89a1cccc7922da7",
+  "why": "System Check, a new program (SPEC.md 116)"
+ },
  "SYSTEM": {
   "sources": [],
   "stamped": "e4576a70",

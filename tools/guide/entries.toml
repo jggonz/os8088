@@ -334,6 +334,12 @@ kind = "program"
 summary = "Plays full-motion .V88 videos, in a window or full screen, with sound on a Sound Blaster or the PC speaker."
 short = "Plays .V88 videos"
 
+["SYSCHECK.O88"]
+title = "System Check"
+kind = "program"
+summary = "Checks the disk the machine starts from for parts left over or broken by an upgrade, and cleans up what is safe to remove."
+short = "Installed system checker"
+
 ["TASKMGR.O88"]
 title = "Task Manager"
 kind = "program"

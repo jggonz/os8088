@@ -197646,3 +197646,272 @@ teardown force-releases its lease before freeing package memory; reboot
 silences it before mouse vectors are unhooked. A lease survives §53 entry.
 Hibernate is refused while a serial lease is active: UART registers and
 an attached peer cannot be restored by a RAM snapshot on another machine.
+
+## 116. SYSCHECK — System Check, the installed system's health (`apps/syscheck/`)
+
+`SYSCHECK.O88`, in `SYSTEM/` on every kern_big system disk and on the live
+media (§116.10), label prefix `sc_`. It reads the volume the machine
+**booted from** and reports what an in-place upgrade (§52.10.15) can leave
+broken or behind: programs and drivers built for another kernel, files a
+release retired or moved, the debris of an interrupted install, a
+hibernation image from another build, file associations that point at
+nothing, and files this release ships that are not there. It reads; it
+removes only what §116.8 lists, and only when asked.
+
+This section is the contract for the delivery waves in
+`docs/plans/SYSCHECK-PLAN.md`; unchecked stories there are not yet shipped
+behaviour. The build diary is `docs/HOW-SYSCHECK-WAS-BUILT.md`, and the
+design mockups it was built from are `docs/syscheck/design/` (made with
+Codex's image tool against real os8088 screenshots, prompt kept).
+
+### 116.1 What it checks
+
+Nine checks, one row each, run in this order. Every finding carries a
+**severity**: **Broken** (something will refuse to work), **Warning**
+(something is stale, duplicated or wasted, and works), or **Note**
+(information, never counted). A row's lamp is the worst severity among its
+findings, or OK.
+
+| row | reads | Broken | Warning |
+|---|---|---|---|
+| Kernel and boot files | `KERNEL.SYS`, `BOOTHD.SYS`, `COLDHMA.SYS` against the manifest (§116.2) | missing; `KERNEL.SYS` empty (an install died between §52.10.15's steps 2 and 5); `BOOTHD.SYS` not one sector ending `55AA` | differs from this release |
+| Drivers | every manifest `.DRV` that is present | a driver whose header version is not `DRV_VER`, a module whose `MOD_VER` or build is not this release's - the kernel refuses both (§51.3, §2.8.2) | same version, different bytes |
+| Packages | every `*.O88` on the volume, every folder | a header that is not `O8`, or a `PKG_FMT` that is not this kernel's - the loader refuses it as `Wrong os8088 version` (§20.2.0) | - |
+| Install leftovers | the root, and the package walk | - | `KPAD.TMP` (§52.10.15 step 3); the same program in two folders (a release moved it; the old copy stayed) |
+| Retired programs | the walk, and the root by name | - | a file a release used to ship and this one does not (§116.2.2) |
+| Missing release files | the manifest | a manifest file absent | `SYSTEM\APPDATA` absent |
+| Settings | `SYSTEM.CFG` (§51.5) | its `DW` record wants a driver that is not on the volume | not an `O88CFG` file of generation 3 |
+| File associations | `ASSOC.DAT` (§54.7) | - | a program row whose package is not in its folder; an `ASSOC.DAT` of another version |
+| Hibernation image | `HIBERNAT.PTR`, `HIBERNAT.IMG` (§87) | - | a pointer from another build (it will be discarded at the next start); an image with no pointer, or a pointer with no image |
+
+The kernel itself deletes another build's pointer at boot (§87.3), and the
+image goes with it, so on a machine that has restarted the hibernation
+leftover that remains is an image with no pointer, or a pointer whose image
+was lost.
+
+A **Note** says what it saw where there is nothing wrong worth a lamp: a
+hibernation image of this build, a volume that is not a hard disk.
+
+#### 116.1.1 What "this release" means, and the one thing it cannot know
+
+**No slot reports the running kernel's build** (§57.3 forbids a shipped
+package the registry, and §57.6 is deliberately not a content hash). So
+"this release" is the release System Check was **built with**: its manifest
+(§116.2) is that release's file list, and its build number is
+`buildnum.inc`'s (§14.2). On an installed machine those agree with the
+running kernel by construction, because the install's system phase writes
+`SYSTEM\SYSCHECK.O88` beside the kernel it describes and every keep-install
+replaces it with the new release's copy. A copy carried from elsewhere is
+caught by the first row: when `KERNEL.SYS` is not the manifest's, the
+release-relative checks (Drivers' byte comparison, Missing release files)
+are reported as a **Warning** naming the mismatch rather than as a list of
+breakages, and the version checks - which compare against constants this
+package shares with the kernel it loaded on - still run.
+
+`PKG_FMT` needs no such care: a package that is running has the kernel's
+`PKG_FMT`, because the loader tests it for equality.
+
+### 116.2 The release manifest
+
+`tools/os88sysman.py` writes `$(BUILD)/syscheck_man.inc` from the files the
+system disk is built from - `$(KERNFILE)`, every file in `$(DRIVERS)` (the
+hardware drivers, the modules, `BOOTHD.SYS`, `COLDHMA.SYS`), `$(SYSAPPS)` and
+`$(STIKAPPS)` - and the package `%include`s it. Each file is classified by
+its own header (unwrapped through `os88drv.image_unwrap` where it is packed):
+a `DRV_VER` header is a driver, a `MOD_VER` header a module, anything else in
+the root a boot file. An entry is
+
+```
+db kind          ; SCK_KERNEL / SCK_BOOT / SCK_DRV / SCK_MOD / SCK_PKG
+db folder        ; 0 the root, 1 SYSTEM\, 2 STIKAPPS\
+dd size          ; the file's bytes AS STORED - packed, which is what is on disk
+dw s1, s2        ; the sum below, over those stored bytes
+db 'NAME.EXT', 0
+```
+
+and the list ends with a 0 kind. **The sum** is a Fletcher-style pair over
+16-bit accumulators: for each byte `b`, `s1 = (s1 + b) mod 65536`, then
+`s2 = (s2 + s1) mod 65536`, both starting at 0. It is position-sensitive,
+costs two adds a byte on an 8088, and is not a defence against anyone - its
+one job is to say a file is not the one this release wrote. Every file is
+compared as stored, so nothing is decompressed to check a sum.
+
+The files are the ones every kern_big system-disk geometry carries: the
+manifest describes all four (`KERNEL.SYS` is byte-identical across them).
+`SYSCHECK.O88` itself is not in it - the manifest is part of the file it
+would describe.
+
+#### 116.2.1 Why it is built from the inputs and not the image
+
+The image depends on `syscheck.o88`, so a manifest read off the image would
+be a cycle. The inputs are the same bytes: `tools/os88disk.py` copies a file
+as it is given and packs nothing (§20.13.5 packs in the build rules), which
+`tests/unit/t_sysman.py` holds by reading every manifest file back off each
+built system disk and comparing its sum.
+
+#### 116.2.2 The retired list
+
+`apps/syscheck/retired.txt` names files an earlier release shipped and this
+one does not: `apps/RETIRED.txt`'s `retired` packages, and drivers and
+modules that left `$(DRIVERS)` (`DEBUG.DRV`, §58; `CLONE.DRV`;
+`DESKTOP.DRV`; `VMMOUSE.DRV`, which only `kern_emu` carries since §9.11.7).
+The generator copies it into the manifest. A package in the list is found
+by the walk; a driver - hidden and system, so `OSAPI_FILE_FIND` will not
+show it to a package (§19.7.1) - is asked for by name. **A name stays in
+the list for ever**: a machine can be upgraded from any release, and a
+leftover is a leftover however old.
+
+### 116.3 The scan
+
+**It runs in slices on the UI task**, in `OSAPI_WM_ONWAKE` (§74.1), because
+it is file work and a worker may not touch a file (§20.6 rule 7). Each wake
+does one bounded step - one `OSAPI_FILE_FIND`, one 512-byte header read, one
+chunk of a sum - updates only what that step changed on the glass (§116.5),
+and posts `OSAPI_WM_WAKE` while work remains. The desktop stays live through
+a scan: windows move, menus open, and Stop is honoured at the next step. A
+refused post (CF = 1, a full queue) is re-posted from the next paint, click
+or key, so a scan cannot strand.
+
+**It stands where it reads and goes home after.** `OSAPI_FILE_HERE` banks
+the instance's folder before the first step; every folder is entered with
+`OSAPI_FILE_GOTO_QM`; the end of a scan, a Stop and a close all go back. A
+package's current folder is its own (§19.2.1), so nothing the user has open
+moves.
+
+**Reads are the small ones.** A package header is the first sector, read
+raw with `OSAPI_FILE_READ_AT` - the header stays clear in a packed file
+(§20.13.1), so nothing is decompressed. A sum is read in 4KB raw chunks into
+a 512-aligned buffer. Only a driver whose sum does not match is read whole,
+with `OSAPI_FILE_READ` into a transient claim, to learn its version from the
+expanded header; a claim the heap refuses leaves that finding at "differs
+from this release".
+
+**Hidden and system files are asked for by name** (`OSAPI_FILE_READ` with a
+zero capacity is the size probe: `FERR_BIG`, `FERR_NOENT`, or an empty file),
+because a package can read them and cannot list them. That is why a driver
+that is in neither the manifest nor the retired list cannot be found.
+
+**Findings are kept, not just counted**: up to `SC_MAXF` = 96 records of
+check, severity, path and reason, enough for the report (§116.7) to name
+every one; past that the counts stay exact and the last row says how many
+were not kept.
+
+### 116.4 Window and layout
+
+One window, `System Check`, sized per adapter by `OSAPI_WM_PREFER` and laid
+out from `OSAPI_WM_GEOM` at every paint, top to bottom: the **progress
+card** (heading, a framed bar, the path being read, a counter line) with the
+**This System card** beside it; the **Checks card**, a row per check with a
+lamp, the name, a dotted leader and the result right-aligned; the
+**Findings card**, the selected check's findings with the standard scroll
+bar (§13.10); and the button row. Text is on the 8-pixel grid and the window
+asks for `WF_SNAP`, so every run takes `OSAPI_FONT_RUN`'s single-store path.
+
+| content height | row pitch | what changes |
+|---|---|---|
+| ≥ 380 (VGA) | 12 | everything, the mockup's layout |
+| ≥ 250 (Hercules, EGA) | 10 | the same, at the smaller pitch |
+| less (CGA) | 9 | no card headings; the This System card is folded into one line under the bar |
+
+**Details** gives the Findings card the Checks card's room as well, for a
+screen too short to show many findings beside the checks.
+
+The This System card shows what this package can know: the release build
+(§116.1.1), `PKG_FMT`, `DRV_VER`, the volume and its file system, whether
+`KERNEL.SYS` is this release's, and the free space. It does not show "the
+kernel build", which the mockup did and nothing can answer.
+
+### 116.5 Drawing
+
+**Nothing repaints more than it changed** (PERFORMANCE.md rule 1). A step
+redraws at most: the bar's newly covered strip (the old fill is never
+redrawn, Audio Player's delta, §86), the path line, the counter line, the
+one Checks row whose result moved, and the Findings rows that arrived, when
+they are visible. A full paint happens on the kernel's W_PAINT and when the
+layout changes (Details), never per step.
+
+**Lamps are one `OSAPI_GFX_BLIT1` each**, an 8x8 band through
+`OSAPI_GFX_BLIT1_PEN`. On a 4bpp display a solid square in green (OK),
+brown (Warning) or red (Broken), a hollow dark-grey square for a check not
+yet run and a blue arrow for the check running. On a 1bpp display, where every
+colour but white rounds to black (§39.4), the **shape** carries it: a tick
+for OK, a checkerboard for Warning, a solid square for Broken, a hollow
+square for not run, an arrow for running. The bar fills blue on 4bpp and
+with the 50% pattern on 1bpp (`OSAPI_GFX_FILL_PAT`, screen-anchored, so a
+delta strip meets the strip before it).
+
+### 116.6 Controls
+
+Buttons, the standard control (§20.5.1.3): **Scan** (Stop while a scan
+runs), **Details**, **Save Report**, **Clean Up...** and **Quit**. Clean Up
+is greyed (§47) until a finished scan has found something §116.8 may remove;
+Save Report until a scan has finished. A click on a Checks row selects it,
+and the Findings card shows that check. Keys: Up/Down select a check,
+PgUp/PgDn scroll the findings, `S` scans or stops, `D` is Details, `R`
+saves, Esc stops a scan. A scan starts by itself when the window opens.
+
+### 116.7 The report
+
+**Save Report** writes `SYSCHECK.TXT` to the root of the volume it checked,
+CR LF lines: a header (release build, formats, the volume, the date from
+`OSAPI_CLK_GET`), one line per check with its result, then every kept
+finding as `severity  path  reason`. A toast names the file. It replaces the
+previous report.
+
+### 116.8 Clean Up
+
+Clean Up asks first (`os88ui_ask`'s Cancel/Proceed set, Cancel the
+default, with the count - *Remove 3 leftover files?*, or *... files, fix
+associations?* when `ASSOC.DAT` will be rebuilt too), then removes **only
+visible files whose finding says they are debris**: `KPAD.TMP`, a
+hibernation pointer from another build and the image that went with it, an
+orphaned image or pointer, and retired packages. A stale `ASSOC.DAT` is
+rebuilt with `OSAPI_ASSOC_FLUSH` (`ASSOC_FL_FULL`). Then it scans again.
+
+What it does **not** touch: a duplicated program (which copy is wanted is
+the user's call), a package of another format (it may be the user's own,
+waiting for a rebuild), and anything hidden and system - a package can
+neither delete nor replace those (§19.6), and the honest repair for a wrong
+driver or kernel is to install again (§52.10.15), which those findings say.
+
+### 116.9 Limits
+
+- **It cannot read the volume boot record**: a package has no sector read.
+  `BOOTHD.SYS` is checked because §52.10.16 writes the VBR from it.
+- **It cannot list hidden files** (§116.3), so an unknown driver is not found.
+- **It cannot name the running kernel's build** (§116.1.1).
+- It runs on `kern_small`'s machines badly or not at all - `READ_AT`'s
+  512-byte offsets are kern_big's (§18.4.4.2) - and ships on neither the
+  small disks nor `kern_emu`'s, neither of which installs to a hard disk.
+
+### 116.10 Where it ships
+
+`SYSTOOLS`, its own list threaded the way `STIKAPPS` is, and not
+`SYSAPPS`: the Makefile's comment above `STIKAPPS` keeps new system-disk
+packages out of the 35 recipes `SYSAPPSARGS` reaches. So `SYSTEM\` on the four kern_big system
+disks and on the live media, which is where an install takes it from
+(§52.10.4 step 3). Not the apps disks, `kern_small`'s or `kern_emu`'s
+(§116.9). It is opened like any program, from `C:\SYSTEM` in the Disk window.
+
+### 116.11 The tests
+
+| row | tier | what |
+|---|---|---|
+| `t_sysman` | fast | the manifest against every built system disk: each entry present with its size and sum; `SYSCHECK.O88` itself absent from it |
+| `syscheck` | soak | a hard-disk image built from the system disks with a planted package of another format, a retired package, `KPAD.TMP`, a duplicated program, a stale `ASSOC.DAT` row and a hibernation pointer from another build, booted from C:; a scan finds each, the report names each, and Clean Up removes exactly §116.8's |
+
+### 116.12 What it costs, measured
+
+**No kernel byte**: System Check is a package and adds no slot. `SYSCHECK.O88`
+is 13,650 bytes of image and 23,798 of bss - the findings table (96 x 96),
+the walk's folder and name tables and the 8KB, 512-aligned read buffer are
+most of it - so an open window holds a 37KB claim, given back at Quit. On
+disk it is 11,615 bytes packed: 23 of the 360KB system disk's 512-byte
+clusters, which leaves that disk 50 free (656 of 706 in use).
+
+**A scan of a fresh 360KB system disk takes 46-48 s** on MartyPC's 4.77MHz
+5150 (Hercules and CGA alike), nearly all of it reading the manifest's files
+off the floppy to sum them; the screen stays live throughout. Both scans
+found nothing - every row OK, *No problems found* - which is the
+negative control for a release judged against its own manifest.
+
