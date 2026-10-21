@@ -441,6 +441,7 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_bfirst, 2            ; ...the cells that differ, first and last
     WCV wc_blast, 2
     WCV wc_bn, 1                ; ...a span count down
+    WCV wc_binkd, 1             ; ...1 = only span inks moved (wc_inkrun)
     WCV wc_bgid, 1              ; ...a glyph
     WCV wc_bair, 2              ; ...the air's run: its first cell...
     WCV wc_bend, 2              ; ...one past its last...

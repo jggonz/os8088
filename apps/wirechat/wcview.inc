@@ -601,23 +601,24 @@ wc_bok:
 ; =============================================================================
 
 ; --- wc_hstat - CX = the header's status part's first cell: its glyph, a
-; space, the word, two spaces, the nick, a space - at the band's right end.
-; Preserves the rest.
+; space, the word in a field as wide as the widest (OFFLINE), two spaces,
+; the nick, a space - at the band's right end. The field is fixed so a
+; status change moves no span: its band is a run again, not a whole band
+; (SPEC.md 113.5.1). Preserves the rest.
+WC_HWORD    equ 7
+
 wc_hstat:
     push ax
     push bx
     push si
-    call wc_stword                      ; SI = the word
-    call wc_slen
-    mov ax, cx
     mov si, wc_nick
     cmp byte [si], 0
     jne .n
     mov si, wc_s_nonick
 .n:
     call wc_slen
-    add ax, cx
-    add ax, 5
+    mov ax, cx
+    add ax, WC_HWORD + 5
     call wc_cells
     sub cx, ax
     jge .out
@@ -724,9 +725,9 @@ wc_phdr:
     call wc_sbch
     call wc_stword
     call wc_sbstr
-    mov al, ' '
-    call wc_sbch
-    call wc_sbch
+    mov cx, [wc_hrs]
+    add cx, 2 + WC_HWORD + 2
+    call wc_sbto
     cmp byte [wc_hdown], 0
     jne .nick
     call wc_sbat

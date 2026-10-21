@@ -252,7 +252,8 @@ wc_bandc:
     je .full
     mov si, wc_meta                     ; the same meta - but for which
     mov di, bx                          ; glyphs, which are a cell each and
-    xor cx, cx                          ; drawn alone (wc_bglyphs)?
+    xor cx, cx                          ; drawn alone (wc_bglyphs), and a
+    mov [wc_binkd], cl                  ; span's INK, which is its run again?
 .mc:
     cmp cx, WCX_G0 + 1
     je .mn
@@ -260,7 +261,10 @@ wc_bandc:
     je .mn
     mov al, [si]
     cmp al, [di]
-    jne .full
+    je .mn
+    call wc_isink                       ; CF = 0: a span's ink byte
+    jc .full
+    mov byte [wc_binkd], 1
 .mn:
     inc si
     inc di
@@ -285,6 +289,10 @@ wc_bandc:
 .tn:
     inc si
     loop .tc
+    cmp byte [wc_binkd], 0              ; a span whose ink moved: all its
+    je .tw                              ; cells are in the run
+    call wc_inkrun
+.tw:
     mov [wc_bfirst], dx
     cmp dx, 0xFFFF
     je .glyphs                          ; no cell moved
@@ -326,6 +334,67 @@ wc_bandc:
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- wc_isink - CF = 0 when meta byte CX is a live span's INK: a change
+; there is that span's run drawn again, its ground and its air unchanged.
+; Preserves all but flags
+wc_isink:
+    push ax
+    push dx
+    mov ax, cx
+    sub ax, WCX_SP
+    jb .no
+    mov dl, 3
+    div dl                              ; AL = the span, AH = the byte in it
+    cmp ah, 1
+    jne .no
+    cmp al, [wc_meta+WCX_NSP]
+    jae .no
+    pop dx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop ax
+    stc
+    ret
+
+; --- wc_inkrun - widen the run [DX, [wc_blast]] (DX = 0xFFFF none) by every
+; span whose ink is not the slot's. clobbers AX, BX, CX, SI, DI
+wc_inkrun:
+    mov bx, wc_meta + WCX_SP
+    mov al, [wc_meta+WCX_NSP]
+    mov [wc_bn], al
+.s:
+    mov di, bx
+    sub di, wc_meta
+    add di, [wc_bslot]
+    mov al, [bx+1]
+    cmp al, [di+1]
+    je .n
+    call wc_spse                        ; [SI, DI)
+    cmp si, di
+    jae .n
+    dec di
+    cmp dx, 0xFFFF
+    je .new
+    cmp si, dx
+    jae .lo
+    mov dx, si
+.lo:
+    cmp di, [wc_blast]
+    jbe .n
+    mov [wc_blast], di
+    jmp short .n
+.new:
+    mov dx, si
+    mov [wc_blast], di
+.n:
+    add bx, 3
+    dec byte [wc_bn]
+    jnz .s
     ret
 
 ; --- wc_bglyphs - the glyphs whose picture moved and that the run did not put

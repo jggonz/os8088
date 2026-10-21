@@ -197014,9 +197014,27 @@ CGA, and the VGA XT, on the layout before this one:
 | a press on `Notifications:` | 24 | 1 | 24 | 1 | 24 | 7 |
 | **the eight gestures** | **455** | **110** | **244** | **63** | **615** | **188** |
 
-The terminal layout (§113.5) draws through the same slots;
-`tests/wcdraw.py`'s ceilings are what holds it, and §113.10 carries its
-counts.
+The terminal layout (§113.5) draws through the same slots, measured the same
+way (Hercules and CGA in Monochrome, the VGA in Blue):
+
+| gesture | Hercules | CGA | VGA |
+|---|---:|---:|---:|
+| a message arrives (the pane at its end) | 47 | 50 | 53 |
+| a member goes Away | 36 | 36 | 36 |
+| a key in the field | 7 | 7 | 7 |
+| PgUp: the pane a page | 80 | 14 | 38 |
+| Down: the pane a line | 8 | 8 | 8 |
+| Status > Busy | 20 | 19 | 19 |
+| a press on `Notifications:` | 1 | 1 | 1 |
+| **the eight gestures** | **199** | **135** | **162** |
+
+Both replies change a room's unread badge, and a badge that comes, goes or
+changes width moves the tabs' spans: that band is drawn whole, ~25 calls (an
+air pair per ground, a run per span) of each. Two fields are FIXED WIDTH so
+that a change moves no span: the header's status word is as wide as
+`OFFLINE`, and `On` is padded to `Off`'s width — the press on
+`Notifications:` was 15 calls before the pad and is 1 after it, and Status >
+Busy 31 and 19.
 
 **How.** Every band is drawn THROUGH A SLOT (`wcband.inc`, `wc_bandc`): the
 slot holds the band's meta — its style, its colour spans, its glyphs, its
@@ -197025,6 +197043,8 @@ whose meta and cells are the slot's draws nothing. One whose meta matches and
 whose cells do not draws ONE `font_run` of the run from the first cell that
 differs to the last, split where it crosses a span, with the overstrike and
 any glyph inside it put back — `4` when `retrying in 5s` becomes `4s`. One
+whose meta differs only in a span's INK draws that span's run the same way,
+its ground and its air untouched — `Notifications: Off` turning `On`. One
 whose only change is a glyph (a status, a lamp, a scroll-bar cell) draws that
 8x8 cell alone, which is opaque. Anything else draws the band whole. There
 are 94 slots: 50 WIDE ones (the two header bands, the tabs, the title, the

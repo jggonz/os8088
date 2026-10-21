@@ -92,7 +92,7 @@ wc_s_newn:      db ' new messages ', 0
 wc_s_bar:       db ' | ', 0
 wc_s_onl:       db ' online', 0
 wc_s_notify:    db 'Notifications: ', 0
-wc_s_on:        db 'On', 0
+wc_s_on:        db 'On ', 0              ; as wide as Off: the spans stay put
 wc_s_off:       db 'Off', 0
 wc_s_ment:      db ' mentioned you in #', 0
 ; the day divider's words (SPEC.md 113.5): three letters each, so the name of
