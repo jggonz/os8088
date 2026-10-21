@@ -149,5 +149,8 @@ behind the scenes."*
       CGA, a whole erase-install, shots during the copy and at the end.
 - [x] Costs in §117.9: `HDDTOOL.DRV` +672 (an 18KB claim), INSTALL +385 image
       and +428 bss, no kernel byte.
-- [ ] Final pass: the install rows' union, then `test-full`.
+- [x] Final pass (2026-10-21): soak `install`, `instdeep`, `instkeep`,
+      `inststate`, `instrest`, `instcross`, `instassoc`, `hdboot`, `hddcp`,
+      `hdauto`, `vidxiphd`, `vidxiphdhold`, `hmadrv` - 13 of 13 passed;
+      `make test-full` 60 passed, 1 skipped (`ctoolchain`, no C compiler).
 
