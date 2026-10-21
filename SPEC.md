@@ -199800,7 +199800,7 @@ Breakpoint stops cost host time and no guest cycles. Taken ONCE, on the final
 pass's build (image 31,116, bss 20,425) - BEFORE wave 6's review added the
 explosion's spray and the VGA compose's button latch (§116.6): a frame with a
 spray in flight costs more than this table says, and the latch adds ~3 far
-calls a lemming on VGA. **The spray's share is PRICED, not measured** (wave 6's
+calls a lemming on VGA. **Re-taken ONCE on the SHIPPED build (image 31,668, bss 20,421, after the third review) in the Finish, same instrument, same levels, no spray in flight: VGA quiet 3.80 game frames/s (a glass update 327.6 ms, compose 280-286 ms a pass, 51 crossings a frame), busy 0.60 (1,046.2 ms, compose 1,391-1,417 ms, 126 crossings) - the button latch's share is inside the ~40 ms the busy compose grew by; CGA quiet 4.60 (263.3 ms), busy 0.90 (710.4 ms), a pass while scrolling 564.8 ms; a launch 24 / 23 `int 13h` calls, the preview picture 1,653 / 366 ms, a retry inside the bracket 2 calls. The spray's cost stays priced: the instrument plays, it does not nuke.** **The spray's share is PRICED, not measured** (wave 6's
 second review made it a rectangle a 16-row band, §116.4.6): 828 byte-rows in
 76 rows of VGA compose a game frame for each spray in flight on the real
 table, ~40-50 ms of a drawn frame on a 4.77 MHz 8088 by the loops'

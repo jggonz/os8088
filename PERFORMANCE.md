@@ -15052,6 +15052,8 @@ overflows if the growth is allowed a fourth doubling.
     is the final pass's to time, with the off-glass fraction `flicker()` and
     `pace()` give on `xt_vga` (SPEC.md §116.7.3's table).
 
+**Re-taken ONCE on the SHIPPED build (image 31,668, bss 20,421, after the third review) in the Finish (reading 18), same instrument, same levels, no spray in flight: VGA quiet 3.80 game frames/s (a glass update 327.6 ms, compose 280-286 ms a pass, 51 crossings a frame), busy 0.60 (1,046.2 ms, compose 1,391-1,417 ms, 126 crossings) - the button latch's share is inside the ~40 ms the busy compose grew by; CGA quiet 4.60 (263.3 ms), busy 0.90 (710.4 ms), a pass while scrolling 564.8 ms; a launch 24 / 23 `int 13h` calls, the preview picture 1,653 / 366 ms, a retry inside the bracket 2 calls. The spray's cost stays priced: the instrument plays, it does not nuke.**
+
 **The final pass's readings (wave 6, 2026-10-20), on the PRE-REVIEW build**
 (`image=31116 bss=20425`, part 0 32,664 - NOT the shipped line, which is
 SPEC.md §116.6's `image=31668 bss=20421` after wave 6's three reviews; the
