@@ -2903,33 +2903,45 @@ menu_sound:
     push di
     push bp
     push es
-    mov ax, [vid_clk_hx]
+    mov ax, [vid_pw]
+    sub ax, 8 + MENU_CLK_W + 6
+    and ax, 0FFF8h             ; original clock field, from live geometry
     mov [menu_clkx], ax
-    mov ax, [drv_svc+DSV_CAPS]
-    and ax, SND_CAP_MIXER
+    mov dx, [drv_svc+DSV_CAPS]
+    and dx, SND_CAP_MIXER
     jz .origin
-    add word [menu_clkx], 24
+    sub ax, 24                 ; reserve the icon LEFT of the full clock field
 .origin:
-    cmp ax, [menu_mixcap]
+    cmp ax, [vid_clk_hx]
+    jne .changed
+    cmp dx, [menu_mixcap]
     je .out
-    mov [menu_mixcap], ax
-    mov word [menu_ckck], 0
-    or ax, ax
-    jz .clear
-    mov cx, [vid_clk_hx]
-    mov bx, DRVC_SOUND*256 + 10 ; SNDV_MIXICON (SPEC.md 34.15)
-    push ds
-    pop es
-    call drv_pkg_call_x
-    jmp short .out
-.clear:
-    call thm_bg
-    mov ax, [vid_clk_hx]
+.changed:
+    mov [vid_clk_hx], ax
+    cmp word [menu_mixcap], SND_CAP_MIXER
+    jne .store
+    call thm_bg                 ; erase the old picture before menus reuse it
+    mov ax, [menu_mixx]
     mov cx, ax
     add cx, 23
     mov bx, 2
+    push dx
     mov dx, 17
     call gfx_fill
+    pop dx
+.store:
+    mov [menu_mixcap], dx
+    mov word [menu_ckck], 0
+    call menu_relayout          ; bounded at the new right-hand hit band
+    call menu_bar_text          ; compose only the changed menu cells
+    test word [menu_mixcap], SND_CAP_MIXER
+    jz .out
+    mov cx, [vid_clk_hx]
+    mov [menu_mixx], cx
+    mov bx, DRVC_SOUND*256 + SNDV_MIXICON ; SNDV_MIXICON (SPEC.md 34.15)
+    push ds
+    pop es
+    call drv_pkg_call_x
 .out:
     pop es
     pop bp
@@ -2941,6 +2953,7 @@ menu_sound:
     pop ax
     ret
 menu_mixcap: dw 0FFFFh
+menu_mixx:   dw 0
 menu_clkx:   dw 0
 %else
 menu_clkx equ vid_clk_hx

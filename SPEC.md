@@ -68961,10 +68961,12 @@ Percentages round to the nearest supported hardware step; GET reads the
 actual quantized setting. Detach restores all exposed registers saved when
 the mixer attached. Unsupported/absent chips cause no mixer UI.
 
-The speaker occupies the first 24 pixels of the existing right-hand clock
-segment, beginning at `[vid_clk_hx]`, on the primary display only. The clock
-uses three fewer glyph cells while it is present and keeps its right edge;
-long dates lose their prefix before the time. SOUND.DRV rounds to 12KB of image plus state on the heap;
+The speaker expands the right-hand segment leftward by 24 pixels, on the
+primary display only. `[vid_clk_hx]` moves left by 24 while it is present;
+the speaker occupies its first three cells, and `menu_clkx` is the unchanged
+clock text origin. The clock and the maximum-width toast retain their entire
+field. Capability/geometry changes relayout the application menus at the new
+boundary; their existing prefix/index rule is unchanged. SOUND.DRV rounds to 12KB of image plus state on the heap;
 `DRVM_IMG_SND` is 12. The popup claims only its adapter-sized save-under while open: up to
 10KB on VGA/EGA and 3KB on the mono adapters.
 Its hit range is tested before
@@ -68988,7 +68990,7 @@ nothing and yield so background sound continues.
 
 On each opening, quietly discover a regular `MIXER.O88` in `SYSTEM\` on
 the boot volume, saving/restoring the current drive and folder on every path.
-Show `Open Mixer...` only when found. Revalidate at launch; perform it after
+Show `Open Mixer...` only when found, with an inverted full-width hover row. Revalidate at launch; perform it after
 restoring the save-under and releasing the graphics lock, through
 `OSAPI_PKG_START`. Failure reports a toast. No package-existence flag is
 persisted and there is no dependency from basic volume to this file.

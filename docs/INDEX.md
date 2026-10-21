@@ -379,6 +379,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | MINES | `apps/mines/mines.asm` | §23 | yes |
 | MISSILE | `apps/missile/missile.asm` | §48 | yes |
 | MODPLUG | `apps/modplug/modplug.asm` | §56 | **retired** |
+| Mixer | `apps/mixer/mixer.asm` | §34.15 | yes |
 | NOTEPAD | `apps/notepad/notepad.asm` | §27 | yes |
 | PACCMAN | `apps/paccman/paccman.asm` | §91 | yes |
 | PACMAN | `apps/pacman/pacman.asm` | §89 | **retired** |

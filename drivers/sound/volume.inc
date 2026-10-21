@@ -47,6 +47,8 @@ volume_popup:
     jne .out
     cmp byte [mix_kind], 0
     je .out
+    cmp byte [volume_live], 0
+    jne .out
     mov ax, [es:di]
     mov [volume_bridge], ax
     mov ax, [es:di+2]
@@ -55,6 +57,7 @@ volume_popup:
     mov byte [volume_launch], 0
     mov byte [volume_drag], 0
     mov byte [volume_armed], 0
+    mov byte [volume_hover], 0
     call volume_discover        ; restores the caller's folder on every exit
     call OSAPI_VIDEO
     mov [volume_planes], dh
@@ -120,6 +123,7 @@ volume_popup:
     je .shown
     call volume_link
 .shown:
+    mov byte [volume_live], 1
     xor al, al                  ; bridge 0: spend lazy hide and show arrow
     call far [volume_bridge]
     mov byte [volume_prev], 1  ; opening press may already have been released
@@ -169,6 +173,7 @@ volume_popup:
     call far [volume_bridge]    ; AL=buttons, CX/DX=live, indivisible coords
     and al, 1
     mov [volume_btn], al
+    call volume_hover_update
     or al, al
     jz .release
     cmp byte [volume_prev], 0
@@ -254,6 +259,8 @@ volume_popup:
     call OSAPI_GFX_UNLOCK
     mov dx, [volume_save]
     call OSAPI_MEM_FREE
+    mov word [volume_save], 0
+    mov byte [volume_live], 0
     cmp byte [volume_launch], 0
     je .out
     call volume_open           ; lock FREE; revalidate name/folder/media
@@ -303,10 +310,9 @@ volume_link:
     call OSAPI_SET_COLOR
     mov ax, [volume_x]
     inc ax
-    mov bx, MVP_Y+66
-    mov cx, ax
-    add cx, MVP_W-3
-    mov dx, bx
+    mov bx, ax
+    add bx, MVP_W-3
+    mov dx, MVP_Y+66
     call OSAPI_GFX_HLINE
     mov cx, [volume_x]
     add cx, 24
@@ -316,6 +322,48 @@ volume_link:
     mov ah, CWHITE
     call OSAPI_FONT_RUN
     ret
+volume_hover_update:
+    push ax
+    push bx
+    push cx
+    push dx
+    xor bl, bl
+    cmp byte [volume_found], 0
+    je .have
+    cmp dx, MVP_Y+67
+    jb .have
+    cmp dx, [volume_bottom]
+    jae .have
+    mov ax, [volume_x]
+    cmp cx, ax
+    jbe .have
+    add ax, MVP_W-1
+    cmp cx, ax
+    jae .have
+    inc bl
+.have:
+    cmp bl, [volume_hover]
+    je .out
+    mov [volume_hover], bl
+    mov al, 1
+    call far [volume_bridge]
+    mov ax, [volume_x]
+    inc ax
+    mov cx, ax
+    add cx, MVP_W-3
+    mov bx, MVP_Y+67
+    mov dx, [volume_bottom]
+    dec dx
+    call OSAPI_GFX_XOR_FILL
+    xor al, al
+    call far [volume_bridge]
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 volume_set:
     cmp al, [volume_levelv]
     je .out
@@ -428,7 +476,7 @@ volume_more:   db 'Open Mixer...',0
 volume_system: db 'SYSTEM',0
 volume_file:   db 'MIXER.O88',0
 volume_gone:   db 'Mixer unavailable',0
-volume_memerr: db 'Volume: not enough memory',0
+volume_memerr: db 'Volume needs memory',0
 
 %define MIXUI_BUFFER volume_band
 %include "os88mixui.inc"
@@ -439,6 +487,7 @@ volume_iconx: dw 0
 volume_x: dw 0
 volume_bottom: dw 0
 volume_save: dw 0
+volume_live: db 0
 volume_pair: dw 0
 volume_levelv: db 0
 volume_step: db 0
@@ -446,6 +495,7 @@ volume_launch: db 0
 volume_found: db 0
 volume_planes: db 0
 volume_armed: db 0
+volume_hover: db 0
 volume_drag: db 0
 volume_prev: db 0
 volume_btn: db 0

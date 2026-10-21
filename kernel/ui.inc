@@ -489,7 +489,7 @@ ui_task:
     push ds
     pop es
     mov di, ui_volume_bridge
-    mov bx, DRVC_SOUND*256 + 11 ; SNDV_MIXPOP, no graphics lock held
+    mov bx, DRVC_SOUND*256 + SNDV_MIXPOP ; SNDV_MIXPOP, no graphics lock held
     call drv_pkg_call_x
     jmp .yj1
 .date_cell:

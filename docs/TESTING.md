@@ -65,6 +65,14 @@ need" is something you check rather than argue yourself into:
    Check all four planes and XT cycle costs on MartyPC, and use QEMU only
    to verify the complete 320×240 display and desktop restoration.
 
+9. **Sound Blaster 16 mixer behavior** (SPEC.md §34.15). MartyPC's sound
+   card stores arbitrary mixer-register bytes but does not implement the
+   CT1745's defined-bit masks, compatibility mappings or analog attenuation.
+   Use it for the popup/Mixer's XT interaction and three adapter faces, and
+   use `mixerhost`'s independent Creative-register model for all three mixer
+   generations. `mixersb16` uses QEMU's actual SB16 mixer for stereo readback
+   and source/tone controls. Neither establishes a physical card's loudness.
+
 That is the list. **"It is quicker to type" is not on it, and neither is
 "I already know the QMP commands."** An eighth entry goes here, not into a
 row's docstring. Entries 4–7 share the shape that gets on the list easily:

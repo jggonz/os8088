@@ -52,3 +52,27 @@ The driver exceeded the original HMA address window. The C000 origin gives
 unchanged. The host build checks relocation against a second assembly.
 Affected final rows include mixerhost, mixer adapter/UI rows, hmadrv,
 sndmove, stikmenu and toastbar.
+
+## Optional package wave
+
+The native Mixer now builds and opens from the discovered command. The first
+VGA inspection showed the shared fader, a channel list, clear mono balance
+status and the system About convention. The source list comes from the
+driver; unsupported entries use the standard disabled pen. Bass and treble
+use left/right cut/boost controls instead of a volume balance ratio.
+
+MIXER.O88 joins SYSTEM on the larger system floppies and live media; it is
+omitted from the 360KB system disk and every small-kernel disk. A large-disk
+installation copies it as an ordinary file. Discovery is repeated at each
+opening and at launch. The popup's Open Mixer row now has a separator and
+an inverted hover treatment.
+
+The initial idea borrowed three cells from the clock. Review of the toast
+contract rejected that: its maximum message needs the existing field. The
+right-hand boundary now moves left by three cells while the speaker is
+present, preserving the entire clock and toast field. Application menu
+layout keeps its existing prefix rule.
+
+Host builds have passed the 55 fast checks. The final acceptance pass is
+being prepared: three adapter sessions, SB16 in heap and HMA, independent
+mixer register models, driver movement, Sticky Apps and toast regression.
