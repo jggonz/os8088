@@ -68924,6 +68924,80 @@ GUEST'S CYCLES - the BIOS tick is owed while it plays, and the row checks it
 does not move - then a pause that must pay the ticks to within a tick a
 second, a resume, and the pitch-class agreement on the DAC's capture).
 
+### 34.15 Hardware mixer and menu-bar volume
+
+Delivery record: `docs/plans/MIXER-PLAN.md`. The implementation is delivered
+in waves; that checklist records which behavior has been verified.
+
+`SND_CAP_MIXER` = 0200h means SOUND.DRV found a readable hardware mixer.
+It is independent of the selected tone/PCM tier: selecting the PC speaker
+or AdLib does not remove a physically present mixer's controls. No software
+attenuation is claimed for the PC speaker, Covox or an AdLib alone.
+SOUND.DRV owns all mixer index/data-port accesses. Each index/data transaction
+is protected by pushf/cli/popf; a stereo read/write is one such transaction.
+Detection saves, tests two distinct volume values, reads the defined bits and
+restores the original register. It never resets the mixer or writes IRQ,
+DMA, recording-route, stereo/filter or output-enable registers.
+
+The package ABI extends `drivers/sound/sndpkg.inc`, through the existing
+`OSAPI_DRV_CALL`, BH = DRVC_SOUND. No API cell or driver-table layout moves.
+
+| verb | input | output |
+|---|---|---|
+| `SNDV_MIXINFO` (7) | none | CF=0, AL=1 CT1335 / 2 CT1345 / 3 CT1745; CX = channel bitmap; CF=1 AX=SNDE_NOMIX (7) |
+| `SNDV_MIXGET` (8) | AL = channel | CF=0, CL/CH = left/right percentage 0..100; DL bit 0 = stereo, bit 1 = tone control; mono repeats left; CF=1 AX=SNDE_MIXARG (8) for unsupported channel |
+| `SNDV_MIXSET` (9) | AL = channel; CL/CH = left/right 0..100 | CF=0 written; invalid values or channel refuse before any write, CF=1 AX=SNDE_MIXARG; unavailable mixer answers SNDE_NOMIX |
+| `SNDV_MIXICON` (10) | CX = left x, gfx lock held | opaque 24x16 speaker image at (CX,2), CF=0; kernel callers only |
+| `SNDV_MIXPOP` (11) | CX = icon left x; UI task, no lock held | tracks volume popup, restores pixels and frees scratch on every exit; CF=0, no package launched while gfx lock held |
+
+Channel numbers: 0 Master, 1 PCM, 2 FM/MIDI, 3 CD, 4 Line, 5 Mic,
+6 PC Speaker input, 7 Bass, 8 Treble. INFO's bitmap is authoritative.
+CT1335 offers 0..3 (mono); CT1345 offers 0..5 (Mic mono); CT1745 offers
+all nine (Mic and PC Speaker input mono). Tone controls use 0..100 as the
+chip's full cut/boost range; their neutral point is the hardware's center.
+Percentages round to the nearest supported hardware step; GET reads the
+actual quantized setting. Detach restores all exposed registers saved when
+the mixer attached. Unsupported/absent chips cause no mixer UI.
+
+The speaker occupies the first 24 pixels of the existing right-hand clock
+segment, beginning at `[vid_clk_hx]`, on the primary display only. The clock
+uses three fewer glyph cells while it is present and keeps its right edge;
+long dates lose their prefix before the time. Its hit range is tested before
+the Date/Time cell, without changing application menu indices. The icon is
+cached independently, invalidated when the bar is overwritten or capabilities
+change, and is omitted entirely on kern_small.
+
+The popup is SOUND.DRV code, available with the loaded driver. It anchors
+below the bar, clamps to live display geometry, and owns a temporary
+save-under claim. Allocation/save failure leaves the desktop untouched and
+reports a refusal. It supports click-open, press-drag-release, dragging beyond
+the track with clamping, click-away dismissal, Escape, arrows, Home/End and
+Enter. The master control scales the stereo pair together, retaining their
+ratio (a silent pair restarts centered). An engraved scale, black recessed
+track, outlined ridged thumb and opaque text work on all three adapters.
+Only the changing control band is redrawn during a drag; idle polls draw
+nothing and yield so background sound continues.
+
+On each opening, quietly discover a regular `MIXER.O88` in `SYSTEM\` on
+the boot volume, saving/restoring the current drive and folder on every path.
+Show `Open Mixer...` only when found. Revalidate at launch; perform it after
+restoring the save-under and releasing the graphics lock, through
+`OSAPI_PKG_START`. Failure reports a toast. No package-existence flag is
+persisted and there is no dependency from basic volume to this file.
+
+`MIXER.O88` is an optional native package with an About handler. It queries
+the live driver, offers only supported channels, and adjusts per-channel
+level and stereo balance (mono channels have no balance control). It handles
+an unavailable/unloaded driver visibly. Its sliders share source with the
+popup, including the monochrome face. It ships in SYSTEM on live hard-disk
+media and is available through `make mixer`; it does not join the 360KB
+system disk. Existing hard-disk installation copies remain ordinary file
+copies: a user may add MIXER.O88 to an installed SYSTEM folder.
+
+Hardware reference: Creative, *Sound Blaster Series Hardware Programming
+Guide*, chapter 4 (CT1335/CT1345/CT1745), available at
+https://www.phatcode.net/res/243/files/sbhwpg.pdf .
+
 ## 35. Recorder — the sound layer's recording client
 
 `apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
