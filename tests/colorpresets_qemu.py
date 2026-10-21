@@ -77,6 +77,9 @@ class Guest:
         self.proc = subprocess.Popen([args.qemu, '-machine', 'pc,vmport=off',
             '-m', '640', '-vga', 'std', '-display', 'none', '-S',
             '-drive', f'file={Path(args.image).resolve()},format=raw,if=floppy',
+            # a B: floppy for a caller that wants one (tests/fmtpair.py)
+            *(['-drive', f'file={Path(args.image_b).resolve()},format=raw,if=floppy,index=1']
+              if getattr(args, 'image_b', None) else []),
             '-qmp', f'tcp:127.0.0.1:{qp},server=on,wait=off',
             '-gdb', f'tcp:127.0.0.1:{gp}', '-pidfile', self.pidfile, '-no-reboot'],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

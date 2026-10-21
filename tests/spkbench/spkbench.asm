@@ -734,6 +734,7 @@ sp_bbody:                           ; 4 KB read from [sp_bseg]:0
 
 %include "os88spk.inc"
 %include "os88spkfx.inc"
+%define BL_INTRO_HOW 'press S'      ; benchlib's banner - there is no Bench menu
 %include "benchlib.inc"
 
 ; =============================================================================

@@ -654,6 +654,7 @@ rf_ratio:
     pop ax
     ret
 
+%define BL_NOINTRO                  ; no "it saves" banner: this one never saves (benchlib)
 %include "benchlib.inc"
 
 ; =============================================================================

@@ -24,7 +24,7 @@ the table byte for byte:
                         serves every octave and the block is the octave
   mrt_fq     384 words  the same pitches as frequency x 2048 (octave 0's
                         Hz, so 16,744..33,487): the synth's half-period is
-                        (R << 18) / (F << octave) (SPEC.md 105.7.2)
+                        (R << 18) / (F << octave) (SPEC.md 105.7.1)
   mrt_tl     128 bytes  linear MIDI level -> OPL attenuation in 0.75 dB steps,
                         the 40 log10 curve General MIDI specifies
   mrt_amp    128 bytes  linear MIDI level -> the synth's amplitude, 0..255,

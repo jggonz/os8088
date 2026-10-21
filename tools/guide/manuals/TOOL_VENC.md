@@ -55,9 +55,14 @@ folder. Someone with the tree makes the bundle with `make vencbundle`.
    `.V88` video and a `.WAV` of the sound alone for Audio Player.
 4. Tick **...and make a disk of it** and pick a disk if you want the video
    on a disk image as well (see below).
-5. Click **Encode**. The progress bar and the log under the tabs show how
-   far it has got. **Cancel** stops it; nothing is written, and a file it
-   would have replaced is left as it was.
+5. Click **Encode**. Under the progress bar the encoder says what it is
+   doing: which pass it is on and why, the step with its own count (frames,
+   scenes or trials), how long the step has taken and about how long it
+   has left, and anything running beside it. A step that has nothing to
+   count, such as making the palette, shows a moving bar instead. Some
+   options make the encoder run more than one pass; each starts the bar
+   again. **Cancel** stops it; nothing is written, and a file it would
+   have replaced is left as it was.
 
 The **Made for** list:
 
@@ -84,13 +89,23 @@ The **Made for** list:
 
 The right of the window shows **What the screen will show**: the encoded
 frames as the target adapter draws them, in its own colours and at its own
-pixel shape. Drag the slider under it to move through the video.
+pixel shape. Drag the slider under it to move through the video. The **<**
+and **>** buttons beside the frame number go back or on one frame; so do
+`,` and `.` once you have clicked the picture.
 
 The **The file** box below says what the file holds. In it:
 
 - **Title** and **Set title** change the name Video Player shows. Up to 47
   characters; the player shows the first 35. The video is not encoded
   again.
+- **Redo posters** makes the file's desktop pictures again with the
+  Desktop posters, size, clip and poster picture set on the form now: for
+  a file made with the wrong ones, in seconds rather than a whole encode.
+  A poster picture must be a picture file here, not a moment of the
+  video.
+- **Palette**, for a file whose colours were chosen from its clip, shows
+  them. A file with a palette for each scene shows the one for the frame
+  under the slider, and says which scene it is.
 - **The poster** is the picture Video Player shows before a play.
 - **Here** is the keyframe a play from the slider's position starts at.
   **Set as poster** makes it the poster, again without encoding again.
@@ -134,14 +149,13 @@ the file you are making is greyed out, and its tooltip says why.
 
 | Tab | What is on it |
 |---|---|
-| Basic | **Made for**: the preset, the picture format, the machine profile and the aim. **The clip**: title, credits, start and end times, frames a second |
+| Basic | **Made for**: the preset, the picture format, the machine profile and the aim. **The clip**: title, credits, start and end times, frames a second. **Loop**: where a repeating play loops from, and Repeat. **Held in memory**: resident and Live files. **Keyframes and the poster**: keyframe spacing, the poster, and the pictures stored for the desktop's Preview. **This computer**: how many processor cores the encoder uses. Any setting no other tab has is here too |
 | Picture | The canvas (screen layout, size, how the picture fits), gamma, contrast and brightness, the grey stretch, the one-bit dither and invert, solid colours, and the text-mode settings |
-| Colour | The palette choices for each colour format, with a **Palette** panel showing the colours as swatches. Hover a swatch to see its number and colour |
+| Colour | The palette choices for each colour format, with a **Palette** panel showing the colours as swatches. Hover a swatch to see its number and colour. **Scene join** takes times (in seconds, as the slider shows them, split by commas) at which a 16-colour video's colours should NOT change: the scene either side gets one set of colours chosen over both. Use it where the report says a scene change left the last scene up in the new colours - a flash of wrong colours for a few frames |
 | Sound | The sound format, rate and volume, buffer sound ahead, ADPCM, and the PC speaker's shaping |
 | Budget | The machine's disk rate, processor share and memory, an XMS bank for a 286 or better, and a layer for a faster disk |
-| Size vs quality | **Choices**: holding still areas steady, fewer pixels, tearing and second pages, and what is cut when a frame does not fit. **Degrade ladder**: tick **Use the degrade ladder** and choose its rungs - a lag, a slower frame rate, fewer colours, coarse cells for a whole frame or for only the parts that do not fit, or a cut that is small enough - tried in order where a frame would be cut; under them, **Instead of cutting** holds the lag, frame-rate and coarse-cell settings the ladder replaces |
-| Loop and keys | Where a repeating play loops from, Repeat, resident and Live files, keyframe spacing and the poster |
-| Advanced | How many processor cores the encoder uses, and any setting no other tab has |
+| Trade-offs | What gives up some of the picture for a smaller file or less of the player's time: holding still areas steady, fewer pixels, tearing and second pages, and what is cut when a frame does not fit |
+| Degrade to Fit | Tick **Use the degrade ladder** and choose its rungs - a lag, a slower frame rate, fewer colours, coarse cells for a whole frame or for only the parts that do not fit, or a cut that is small enough - tried in order where a frame would be cut. It is the ladder OR the settings in **Or, without the ladder: for the whole clip** (the lag, the slowest frame rate, coarse cells at a scene change and fewer colours a scene): with the ladder on, a setting there with no rung for it is off. **Held frames, either way** sets how a slower rate's held frames are priced and drawn. **By time**, under the rungs, gives a stretch of the video rungs of its own, in the command line's words: `7.3-7.8=lag:50,coarseany:frame,slow:2/3` uses those rungs for a stretch that starts between 7.3 and 7.8 seconds, and the ladder above everywhere else. Several are split by `;` |
 
 ## Using the command line
 
@@ -175,6 +189,11 @@ use:
 | `--title T`, `--credits C` | The name Video Player shows, and a line for its information card |
 | `--keysecs S` | Seconds between keyframes, the places a seek can start from. The default is 2 |
 | `--poster K`, `--poster-at S` | Which keyframe is the poster, by number or by time |
+| `--poster-image FILE` or `@S` | A picture of your own to show when the file opens, or the video's own frame S seconds in. A play still starts at a keyframe |
+| `--desktop-posters` | A picture of each keyframe stored for the desktop's Preview, sharper than the one Video Player makes itself. `auto` (the default) stores them for 256 colours, CGA colours and 16-colour videos in colours of their own or too big for the window; `colour`, `mono` (black and white) or `both` for any video; `off` for none, which keeps the file smaller |
+| `--desktop-clip N` | Like `--clip`, for those keyframe pictures: a colour within N levels of one the desktop has is drawn solid, so a background that is nearly black stays black instead of dotted. The default is 16; 0 dithers everything |
+| `--desktop-size` | How big the Preview is on the desktop: `fit` (the default) as big as there is room for, or `half` or `quarter` of the video's size. A smaller Preview means Play goes full screen |
+| `--posters-only` | Make an existing file's desktop posters again, with the four options above, and change nothing else: `os88venc --posters-only OLD.V88 NEW.V88 --desktop-posters colour` (the same name twice rewrites the file) |
 | `--preview-png DIR` | Also save the screen once a second as PNG pictures in that folder |
 | `--quiet` | Print less |
 
@@ -240,4 +259,4 @@ a slower one.
   smaller picture and a lower frame rate.
 - `--aim quality` makes trial encodes and takes longer.
 - The encoder uses all your processor's cores unless you set fewer on the
-  **Advanced** tab or with `--jobs`.
+  **Basic** tab (**This computer**) or with `--jobs`.

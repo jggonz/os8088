@@ -1,0 +1,110 @@
+VGA DEMO VIDEOS
+===============
+
+Eleven videos made for the Video Player on a VGA card, each to show off something the player can do.
+
+Unlike the CGA and Hercules demo videos, these were not made for the IBM PC. They were encoded to push one real machine as far as it would go: a 16 MHz 286 with 3 MB of XMS memory. On a machine with a slower processor, more bus wait states or a slower hard disk they will not play smoothly. A 16 MHz 286 in 86Box with a 5400 RPM hard disk is faster than that machine and plays them.
+
+10 and 11 are the exception, on purpose, as the 486 in their names says: they were made for a 66 MHz 486DX2 with 7 MB of XMS memory, to show what the player does with a more powerful machine. A 286 cannot keep up with them.
+
+Double-click one to open it, then press Space or click Play. Space pauses, Esc stops, and F moves a play between the window and the full screen. Sound wants a Sound Blaster.
+
+01-BCRRT.V88
+  Bad Carrot
+  320 x 180, 64 greys
+  Full screen, Mode X
+  PCM 22 kHz sound
+  24 fps, 3:36, 29.5 MB
+
+01 is PAGE FLIPPED: every frame is drawn on a screen page you are not looking at, then shown in one step, so no frame is ever seen half drawn. Its 64 greys are the VGA's own palette, set to greys.
+
+02-T69.V88
+  T69 Collapse
+  640 x 300, black & white
+  Full screen
+  PCM 22 kHz sound
+  25 fps, 1:14, 30.9 MB
+
+02 is black and white at the VGA's full width, and it carries its SOUND AHEAD: the sound is stored a few frames before its picture, so the card is never left waiting while the disk catches up with a busy frame.
+
+03-BEBOP.V88
+  Cowboy Bebop
+  640 x 400, 16 colours
+  Full screen
+  PCM 22 kHz sound
+  20 fps, 1:30, 33.1 MB
+
+03 uses PAGE-AHEAD: before a cut to a new scene, the new picture is built up on the hidden page over the frames before it, then shown all at once. It also carries a LAYER: a second stream that only a faster machine with a faster disk reads, to sharpen the base the 286 draws. On the 286 the layer is skipped.
+
+04-MECH2.V88
+  Mechwarrior 2
+  320 x 200, 256 colours
+  Full screen
+  PCM 22 kHz sound
+  15 fps, 1:17, 20.7 MB
+
+04 is the VGA's 256-colour mode with the colours chosen from the clip. Its frames are allowed to be up to twice the usual size (BIG RECORDS), so a busy frame is sent whole rather than cut, and its sound is stored ahead as 02's is.
+
+05-LASTX.V88
+  Last Exile
+  160 x 180, 256 colours
+  Full screen, Mode X
+  PCM 22 kHz sound
+  22 fps, 1:32, 35.2 MB
+
+05 has its pixels DOUBLED SIDEWAYS: half the width is stored and each pixel is drawn twice, which halves what a frame has to write. Where a frame still will not fit, parts of it are drawn in COARSE CELLS - blocks of one colour - and sharpened over the next frames. It plays straight out of XMS memory, without copying through lower RAM.
+
+06-SNOW.V88
+  Snow Holo
+  320 x 149, 256 colours
+  Full screen, mode 13h
+  PCM 22 kHz sound
+  20 fps, 0:15, 8.0 MB
+
+06 has every pixel at the full 320 width, in the VGA's plain 256-colour mode 13h. That mode lays the screen out as one long line, a byte a pixel, so a frame's changes are written in long straight runs; that is what lets a 286 keep up with every pixel here, where 05 above stores half of them. Its sound is stored ahead as 02's is.
+
+07-GAS.V88
+  Gas Gas Gas
+  640 x 300, 16 colours
+  Full screen
+  PCM 22 kHz sound
+  24 fps, 1:11, 22.0 MB
+
+07 has a PALETTE A SCENE: each of its 34 scenes has sixteen colours of its own, switched as the scene changes. Where a stretch will not fit, it steps down a DEGRADE LADDER: the picture runs a little behind the sound, a scene takes fewer colours, coarse cells, a small cut, and last a slower frame rate. Scene changes use page-ahead as 03's do.
+
+08-WILLY.V88
+  Steamboat Willie
+  264 x 200, black & white
+  Live, on the desktop
+  PCM 11 kHz sound
+  30 fps, 0:27, 1.5 MB
+
+09-TRACK.V88
+  Trackmania: A01
+  200 x 112, 16 colours
+  Live, on the desktop
+  ADPCM 5.5 kHz sound
+  20 fps, 0:25, 2.8 MB
+
+08 and 09 play LIVE: on the desktop itself, so the machine stays usable while they play - open a window, drag it, type. Each is loaded into XMS memory whole before it starts, and loops until you stop it. 09 is live in colour, and its sound is ADPCM: it needs a Sound Blaster that plays ADPCM sound, and on one that does not it plays silent.
+
+10-LX486.V88
+  Last Exile, for a 486
+  320 x 180, 256 colours
+  Full screen, Mode X
+  PCM 22 kHz sound
+  22 fps, 1:32, 70.5 MB
+
+11-GS486.V88
+  Gas Gas Gas, for a 486
+  640 x 300, 16 colours
+  Full screen
+  PCM 22 kHz sound
+  24 fps, 1:11, 22.0 MB
+
+10 and 11 are 05 and 07 again, made for the 486. 10 has every pixel rather than half, bigger frames, and builds each new scene ahead on three screen pages rather than two. 11 has frames half as big again as 07's, so where 07 has to give way in a busy stretch, 11 keeps the whole picture and never slows down.
+
+ALSO IN THIS FOLDER
+===================
+
+OS8088.V88 is the os8088 logo, which plays live and loops. BEVERLY.MOD is a music module for Tracker.

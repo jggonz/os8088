@@ -231,14 +231,26 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
           ui._byte("mem_pg_floor") == 0xFF)
 
     # --- 7: drag one member of the set onto a folder: the whole set moves -----
+    # FOLDERS SORT FIRST (SPEC.md 19.4), so the two copies are the LAST
+    # entries of B:\ and the root is longer than the window: scroll first -
+    # scroll_to walks the selection, so it goes before the set is made - and
+    # click VISIBLE rows. Under name order the files sat at rows 1 and 2 and
+    # this read the listing index as the row, which on the folders-first sort
+    # clicked and dragged whatever was drawn there.
     root = ui.listing(w)
     j1 = [i for i, (nm, _t) in enumerate(root) if nm == n1][0]
     j2 = [i for i, (nm, _t) in enumerate(root) if nm == n2][0]
     g = [i for i, (nm, _t) in enumerate(root) if nm == "GAMES"][0]
-    click(ui, w, j1)
-    held(ui, "ControlLeft", lambda: click(ui, w, j2))
-    sx, sy = ui.row_xy(w, j2)
-    gx, gy = ui.row_xy(w, g)
+    ui.scroll_to(max(j1, j2, g), win=w)
+    ui.settle()
+    top = ui.scroll(w)
+    if not all(top <= i < top + fit for i in (j1, j2, g)):
+        raise SystemExit("msel: B:\\ entries %d, %d and GAMES (%d) do not fit "
+                         "one view of %d rows from %d" % (j1, j2, g, fit, top))
+    click(ui, w, j1 - top)
+    held(ui, "ControlLeft", lambda: click(ui, w, j2 - top))
+    sx, sy = ui.row_xy(w, j2 - top)
+    gx, gy = ui.row_xy(w, g - top)
     ui.mo.drag(sx, sy, gx, gy, settle=0)
     ui._wait(lambda: n1 not in names(ui, w) and n2 not in names(ui, w),
              "both gone from B:\\", 120.0)

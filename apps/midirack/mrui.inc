@@ -3658,7 +3658,7 @@ mru_card_up:
     ret
 
 ; =============================================================================
-; THE CARDS (SPEC.md 105.9.3): About, MIDI Info and Settings, drawn last over
+; THE CARDS (SPEC.md 105.9.1): About, MIDI Info and Settings, drawn last over
 ; the content. While one is up the button group has no live controls
 ; (mru_aim), so a press reaches mr_onclick and the card has it
 ; =============================================================================

@@ -690,6 +690,48 @@ modh_e_perform: call hbm_perform
 modh_e_open:    call hbm_open
                 retf
 
+; hbm_p2rd - one byte from the 8042's output buffer, BOUNDED (a device that
+; never answers costs a 65,536-poll wait, not a hang); AL = the byte, or the
+; status if none came. CX preserved
+hbm_p2rd:
+    push cx
+    xor cx, cx
+.w:
+    in  al, 0x64
+    test al, 0x01
+    jnz .got
+    loop .w
+    pop cx
+    ret
+.got:
+    in  al, 0x60
+    pop cx
+    ret
+
+%ifdef KERN_BIG
+; hbm_kbak - the KEYBOARD's answer to a command, BOUNDED like hbm_p2rd; a byte
+; the AUX device sent (status bit 5) is read and dropped rather than taken for
+; it. AL = the byte, or the status if none came. CX preserved
+hbm_kbak:
+    push cx
+    xor cx, cx
+.w:
+    in  al, 0x64
+    test al, 0x01
+    jz .n
+    test al, 0x20               ; `in` writes no flag, so ZF is still bit 5's
+    in  al, 0x60
+    jz .x
+.n:
+    loop .w
+.x:
+    pop cx
+    ret
+%endif
+
+hbm_knk     db 0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF2 ; mou_p2knk's (SPEC.md 9.9.8)
+hbm_knk_n   equ $ - hbm_knk
+
 ; --- near doors to the far calls this image makes most (SPEC.md 2.6): a far
 ; --- call is five bytes and a near one three, so each door pays for itself by
 ; --- its third site. Every one is `call far` / `ret` and preserves exactly
@@ -1460,6 +1502,11 @@ hbm_wrimg:
                                 ; spend - both callers reload what they use
     call hbm_lock               ; 2. held from here: the machine is one
     inc byte [sch_lock]         ;    instant from here on - and only NOW
+    cmp word [ser_row], 0xffff
+    je .serialclear
+    mov si, hbm_s_serial
+    jmp .nos                   ; unwind the same locks and suspended drivers
+.serialclear:
     call hbm_root               ; 3. the root of the disk the boot picked:
     jc .no                      ;    the detach yields, and a task that took
                                 ;    the turn could have moved the current
@@ -3229,6 +3276,61 @@ hbm_wake:
     ; mouse was the live pointer. A serial machine runs none of this, and
     ; neither does one whose PS/2 mouse had already LOST the contest, which
     ; `mou_lockon` retires through the same `mou_p2_off`.
+    ;
+    ; --- ...BUT FIRST THE KEYBOARD, WHICH IS THE 8042'S OTHER HALF AND HAD NO
+    ; GUARD AT ALL (SPEC.md 96.45.2.3). The 0xAE at the foot of the block
+    ; below only runs where a PS/2 MOUSE was the live pointer, and a DOS
+    ; program owns the whole 8042 while it runs: one that leaves the keyboard
+    ; interface disabled (0xAD, or bit 4 of the command byte), IRQ1 off in the
+    ; command byte (bit 0), or the KEYBOARD told to stop scanning (0xF5) brings
+    ; a machine with a PS/2 keyboard and a serial mouse home with a dead
+    ; keyboard and nothing to say why. The bank already exists, taken by
+    ; `mou_p2_init` at boot, so this puts back EXACTLY what the boot left the
+    ; controller holding: `[mou_p2cmdr]` (the BIOS's own byte) where the probe
+    ; gave up after reading it, and `[mou_p2cmd0]` where a PS/2 mouse went
+    ; live and later lost the contest (`mou_p2_off`'s byte), each behind the
+    ; 0xA7 that road sent too. Then the interface on and the keyboard
+    ; scanning, its 0xFA collected with IRQ1 masked so `int 09h` never sees
+    ; it. Where a PS/2 mouse IS live the block below writes its own command
+    ; byte and this skips to the enables. Idempotent on the reboot route,
+    ; which POST and `mou_p2_init` left in this state already
+    cmp byte [cpu_tier], CPU_8086   ; an XT's keyboard is an 8255 (9.9.2)
+    je .kbunm
+    pushf
+    cli
+    in  al, 0x21                ; IRQ1 masked: the 0xFA below is OURS
+    or  al, MOU_P2KIRQ
+    out 0x21, al
+    popf
+    cmp byte [mou_p2], 0
+    jne .kbon                   ; the block below writes the byte
+    cmp byte [mou_p2st], 2
+    jb .kbon                    ; the boot never read one: nothing to put back
+    mov al, 0xA7                ; the aux port as the boot left it - off
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, [mou_p2cmdr]
+    cmp byte [mou_p2st], 9
+    jb .kbcb
+    mov al, [mou_p2cmd0]
+.kbcb:
+    mov bp, mou_p2wcmd
+    call hbm_kd
+.kbon:
+    mov al, 0xAE                ; the keyboard interface on...
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, 0xF4                ; ...and the keyboard scanning (0xF5 undone)
+    mov bp, mou_p2dw
+    call hbm_kd
+    call hbm_kbak               ; its 0xFA, off the buffer before IRQ1 opens
+.kbunm:
+    pushf                       ; ...AND IRQ1 AT THE 8259 ON EVERY MACHINE: the
+    cli                         ; live route's mask is the one kd_resume
+    in  al, 0x21                ; sampled AS THE PROGRAM LEFT IT, and a
+    and al, 0xFF & ~MOU_P2KIRQ  ; desktop never runs with its keyboard masked
+    out 0x21, al
+    popf
     cmp byte [mou_p2], 0
     je .nop2
     mov al, 0xA8                ; the auxiliary interface back on - 0xA7 undone
@@ -3238,13 +3340,79 @@ hbm_wake:
     and al, 0xDF                ; off the same banked BIOS byte: the aux clock
     or  al, 0x02 | MOU_P2KOFF   ; on, and IRQ12 armed AT THE CONTROLLER
     mov bp, mou_p2wcmd
-    call hbm_kd                
+    call hbm_kd
+    ; ...AND THE WHEEL'S KNOCK AGAIN (SPEC.md 9.9.8). A power-off hibernate
+    ; brings the device back from POST in three-byte mode, and a DOS mouse
+    ; driver may have reset it - and a decoder still counting to four on a
+    ; three-byte stream is a pointer gone mad, not one that lost its wheel.
+    ; The replies ARE collected here, unlike 0xF4's: IRQ12 is still masked at
+    ; the slave and the keyboard is off, so 60h is ours, and the last one is
+    ; the ID. Not 3 any more: the decoder goes back to three bytes. The device
+    ; is NOT silent here, as it is after the boot's reset: 0xF4 is still in
+    ; force (or the DOS driver's), so 0xF5 stops it first, its 0xFA is found
+    ; behind any packet already in flight, and 60h is drained before the
+    ; replies are read by position - each of which must be 0xFA, as
+    ; mou_p2dev insists at boot
+    cmp byte [mou_p2wz], 0
+    je .nowz
+    push si
+    push cx
+    mov al, 0xD4
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, 0xF5                ; reporting off...
+    mov bp, mou_p2dw
+    call hbm_kd
+    mov cx, 8                   ; ...its ACK, BOUNDED: a packet's three or
+.f5:                            ; four bytes may come first
+    call hbm_p2rd
+    cmp al, 0xFA
+    loopne .f5                  ; `loop` writes no flag: ZF is the compare's
+    jne .wzno
+    mov cx, 16                  ; mou_p2flush's drain (that one is the
+.dr:                            ; overlay's): 60h empty before the knock
+    in  al, 0x64
+    test al, 0x01
+    jz .drx
+    in  al, 0x60
+    loop .dr
+.drx:
+    mov si, hbm_knk
+    mov cx, hbm_knk_n
+.knk:
+    mov al, 0xD4
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, [cs:si]             ; THIS IMAGE'S copy: the kernel's, mou_p2knk,
+    inc si                      ; went with the boot overlay
+    mov bp, mou_p2dw
+    call hbm_kd
+    call hbm_p2rd               ; its ACK, and nothing else will do
+    cmp al, 0xFA
+    jne .wzno
+    loop .knk
+    call hbm_p2rd               ; ...and 0xF2's ID
+    cmp al, 3
+    je .wzok
+.wzno:
+    mov byte [mou_p2wz], 0
+.wzok:
+    pop cx
+    pop si
+.nowz:
     mov al, 0xD4                ; ...and 0xF4 to the DEVICE, because 0xA7 left
     mov bp, mou_p2cw            ; it unclocked and a device that is not
     call hbm_kd                 ; reporting is a live line with nothing on it.
     mov al, 0xF4                ; The ACK is not collected - `mou_p2flush` is
     mov bp, mou_p2dw            ; the overlay's, both writers time out on their
     call hbm_kd                 ; own, and the ISR discards a stray 0xFA anyway
+    mov al, 0xAE                ; ...AND THE KEYBOARD BACK, which is
+    mov bp, mou_p2cw            ; mou_p2_init's own last step: the command
+    call hbm_kd                 ; byte above is its PROBE-WINDOW value, bit 4
+                                ; (MOU_P2KOFF) set, so without this the PS/2
+                                ; mouse came home working and the keyboard
+                                ; dead - found on a 286 after a DOS run and
+                                ; reproduced in Bochs, whose mouse is PS/2 too
     pushf
     cli
     in  al, 0xA1                ; IRQ12 at the SLAVE...
@@ -3766,6 +3934,7 @@ hbm_s_bdis: db 'Discard', 0         ; than choosing between four (NULs pad)
 hbm_s_nobios: db 'Needs a BIOS hard disk', 0
 hbm_s_noroom: db 'Not enough room on disk', 0
 hbm_s_failed: db 'Hibernate failed', 0
+hbm_s_serial: db 'Disconnect serial before hibernating',0
 %ifdef HMA_DRV
 hbm_s_nomem:  db 'Not enough memory', 0  ; the HMA pool's copy (87.4 step 3b)
 %endif

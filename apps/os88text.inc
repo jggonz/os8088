@@ -49,10 +49,11 @@
 ;
 ; --- WHAT IT DOES NOT DO -----------------------------------------------------
 ; NO WORD WRAP. A line longer than the box is CLIPPED at the right edge, not
-; broken - texpad's own note (SPEC.md 57669) is that wrapping turns a
-; horizontal move into a whole-pane repaint on every keystroke, and this
-; control is for short paragraphs where the caller can size the box. There is
-; no horizontal scroll for the same reason.
+; broken - wrapping is texpad's row engine, which has to measure an edit's
+; reach before it happens because one keystroke can move every row below it
+; (SPEC.md 69.10.1), and this control is for short paragraphs where the
+; caller can size the box. There is no horizontal scroll either: texpad's own
+; note (SPEC.md 69.10) is that one is a whole-pane repaint on every keystroke.
 ;
 ; NO SELECTION, NO UNDO. os88line.inc's boundary exactly.
 ;

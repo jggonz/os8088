@@ -182,6 +182,7 @@ def build_socket():
 # proved to be the binary's first.
 
 FIX_A, FIX_B = 0xF601, 0xF702       # tools/os88romfix.py's pair
+BN_SKIP_MAX = 16       # `.text` words the build number may own (kernel_tables)
 KFLAGS = ["-DKZIP", "-DKZ_SECS=0", "-DKZ_RPARA=0", "-DKZ_NBLK=1",
           "-DKZ_HEADSEC=9"]          # the Makefile's first-pass kernel-full
 
@@ -347,10 +348,27 @@ def kernel_tables(build, variant):
             src = f.read()
         with open(kp, "w") as f:
             f.write(decouple_vgab(os88romfix.decouple(src)))
+        # THE OTHER BUILD NUMBER IS THE SAME LENGTH, every digit different.
+        # BUILD_STR is spliced into `.text` (apps.inc's About line), so a
+        # number one digit shorter moves every byte after it - and the diff
+        # below then skips nearly all of `.text` as "the build number". That
+        # is what build 1000 did with a fixed '999': the hash covered almost
+        # nothing, its span list grew COLDHMA.SYS 2,919 -> 8,322 bytes, and
+        # XMEM.DRV's 4KB read of it refused - `.cold` and every HMA driver
+        # back in the heap, with nothing on the glass to say so
+        # Build 0 is the exception: apps.inc's `%if BUILD_NUM` drops the line
+        # altogether, so any other number ADDS it - the same move again. With
+        # no number in `.text` there is nothing to leave out, so it is 0 too
+        bnum = build_str(build)
+        if not bnum.isdigit() or int(bnum) == 0:
+            other = "0"
+        else:
+            other = "".join("2" if d == "1" else "1" for d in bnum)
         bn = os.path.join(tmp, "bn")
         os.makedirs(bn)
         with open(os.path.join(bn, "buildnum.inc"), "w") as f:
-            f.write("%define BUILD_NUM 999\n%define BUILD_STR '999'\n")
+            f.write(f"%define BUILD_NUM {other}\n"
+                    f"%define BUILD_STR '{other}'\n")
         # SIX ASSEMBLIES AND NONE NEEDS ANOTHER, so they run side by side:
         # each writes its own file, and the HMA image is built on every kern_big
         # tree's disks, where six in a row were fifteen seconds of every build
@@ -470,6 +488,13 @@ def kernel_tables(build, variant):
     for i in range(tst, ten):
         if a[i] != c[i]:
             skip.add((i - tst) // 2)
+    # ...which is a handful of words - the About string's digits and
+    # BUILD_NUM's word or two. Anything more is the build number having
+    # MOVED code, and a hash over what is left would guard nothing
+    if len(skip) > BN_SKIP_MAX:
+        fail(f"{len(skip)} `.text` words change with the build number "
+             f"(at most {BN_SKIP_MAX} expected) - the two assemblies are "
+             f"not laid out alike, so the hash would cover almost nothing")
     # ...and `.text`'s DATA, which is out of it too: the boot writes it before
     # the ROM is asked (the boot timer, [spl_fseg], every vid_* the splash's
     # adapter probe fills in - measured on the first kernel ROM: 41 bytes, the
@@ -1124,6 +1149,16 @@ def main():
         probs = verify_hma(os.path.abspath(a.build), img, at, t)
         if probs:
             fail("; ".join(probs))
+        # XMEM.DRV reads the file into a claim of XM_HMAF_KB and calls it
+        # there; a file past that is a read that refuses at attach, and the
+        # machine boots with `.cold` and every HMA driver in the heap
+        with open(os.path.join(ROOT, "drivers", "xmem", "xmem.asm")) as f:
+            hkb = int(re.search(r"^XM_HMAF_KB\s+equ\s+(\d+)", f.read(),
+                                re.M).group(1))
+        if len(img) > hkb * 1024:
+            fail(f"the HMA image is {len(img):,} bytes and XMEM.DRV reads "
+                 f"it into {hkb * 1024:,} (xmem.asm's XM_HMAF_KB) - it "
+                 f"would never be installed")
         os.makedirs(a.out, exist_ok=True)
         path = os.path.join(a.out, a.name or "coldhma.sys")
         with open(path, "wb") as f:

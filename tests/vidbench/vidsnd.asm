@@ -802,6 +802,7 @@ vs_pmup:
 
 %define BL_ARENA_BYTES 4000
 %define BL_NUMBERED                 ; a field run saves NAME1, NAME2... (benchlib)
+%define BL_INTRO_HOW 'automatically, when a test ends' ; benchlib's banner
 %include "benchlib.inc"
 
 vs_tpl:

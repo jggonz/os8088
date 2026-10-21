@@ -843,6 +843,15 @@ FLIP_HELD = 6                   # FLIPPED WITH HELD RECORDS (98.1.3.9): byte 37
                                 # with REC_HELD is drawn on the back page and
                                 # NOT shown - the next is drawn on it too
 REC_HELD = 0x8000               # ...a frame record's y0 bit 15 there
+FLIP_OWN = 7                    # FLIPPED, EACH RECORD AGAINST ITS OWN PAGE
+                                # (VIDEO-SEEN-PLAN 3b): byte 37 6's file, but
+                                # a frame record is a change against the
+                                # page it is drawn on - the frame two back,
+                                # or the held one - drawn on it as it
+                                # stands, so no page is ever brought up...
+REC_UP = 0x1000                 # ...except a record with y1 bit 12: its page
+                                # first takes the record's rows y0..y1 off
+                                # the glass (the record after a key)
 REC_BUILT = 0x1000              # ...a frame record's y1: its page was BUILT
                                 # ahead, drawn on as it stands, not brought up
 COPY_LEN = 6                    # ...a COPY: a hidden record with y0 bit 15,
@@ -1494,6 +1503,29 @@ class Geom:
             for x in range(wb):
                 self.rowof[b + x] = y
 
+    def _np(self):
+        """numpy, for VGA4's bit-planes, with each plane's byte of each
+        canvas byte's address (4, h, wb) - or None: the loops below are the
+        same answer, a pixel at a time (2026-10-18: a two-page file's
+        verify_v88 took a canvas each page each frame, 0.11 s apiece, and
+        sat 15 minutes on the owner's Bad Carrot)"""
+        if getattr(self, "_pidx", None) is None:
+            try:
+                import numpy as np
+            except ImportError:
+                self._pidx = False
+                return None
+            if self.w != self.wb * 8:
+                self._pidx = False
+                return None
+            self._pidx = (np.arange(4)[:, None, None] * PLANE +
+                          np.asarray(self.base)[None, :, None] +
+                          np.arange(self.wb)[None, None, :])
+        if self._pidx is False:
+            return None
+        import numpy as np
+        return np
+
     def surface(self):
         """A black surface image: 64 KB, or a plane of it each for MODEX"""
         return bytearray(PLANE * self.planes)
@@ -1504,6 +1536,12 @@ class Geom:
         if self.planes == 1:
             return b"".join(bytes(surf[b:b + self.wb]) for b in self.base)
         if self.bitplanes:          # VGA4: bit x of each plane, a pixel
+            np = self._np()
+            if np is not None:
+                bits = np.unpackbits(np.frombuffer(surf, np.uint8)[
+                    self._pidx], axis=2)
+                return (bits[0] | bits[1] << 1 | bits[2] << 2 |
+                        bits[3] << 3).tobytes()
             w, out = self.w, bytearray(self.w * self.h)
             for y, b in enumerate(self.base):
                 for xb in range(self.wb):
@@ -1525,6 +1563,11 @@ class Geom:
                 surf[b:b + self.wb] = cv[y * self.wb:(y + 1) * self.wb]
             return
         if self.bitplanes:
+            np = self._np()
+            if np is not None:
+                sv = np.frombuffer(surf, np.uint8)
+                sv[self._pidx] = vga4_packed(np, cv, self)
+                return
             for y, b in enumerate(self.base):
                 row = cv[y * self.w:(y + 1) * self.w]
                 for p in range(4):
@@ -2003,8 +2046,19 @@ def keyframe_ops(surf, g):
     return spans(changed, surf, g)
 
 
+def vga4_packed(np, cv, g):
+    """A VGA4 canvas's four planes as a (4, h, wb) array: bit 7 of a byte
+    the leftmost of its eight pixels"""
+    c = np.frombuffer(bytes(cv), np.uint8).reshape(g.h, g.wb, 8)
+    return np.stack([np.packbits(c >> p & 1, axis=2)[..., 0]
+                     for p in range(4)])
+
+
 def vga4_planes(cv, g):
     """A VGA4 canvas's four plane images, each g.wb x g.h bytes, dense"""
+    np = g._np()
+    if np is not None:
+        return [bytearray(x.tobytes()) for x in vga4_packed(np, cv, g)]
     out = [bytearray(g.wb * g.h) for _ in range(4)]
     w = g.w
     for y in range(g.h):
@@ -2064,20 +2118,338 @@ def vga4_xlat(palette):
 
 def vga4_pack(cv, w, h, step=1, xlat=None):
     """The canvas as OSAPI_GFX_BLIT4 takes it - two pixels a byte, the
-    left in the high nibble - every `step`-th pixel of every `step`-th row,
+    left in the high nibble - one pixel of each `step` x `step` cell,
     through `xlat` (vga4_xlat) for a file of its own colours: the player's
-    vp_v4pack, byte for byte"""
+    vp_v4pack, byte for byte. WHICH pixel of the cell turns with the
+    output's position (98.4.5, 2026-10-18): its row ox mod step down, its
+    column oy mod step across - so a checkerboard, a 16-colour picture's
+    50% grey, comes out a checkerboard where the cell's corner every time
+    took one colour of it and left a poster black with a white dot (the
+    owner's T69)"""
     ow, oh = w // step, (h + step - 1) // step
     obw = (ow + 1) // 2
     out = bytearray(obw * oh)
     for oy in range(oh):
-        row = cv[oy * step * w:(oy * step + 1) * w]
         for ox in range(ow):
-            v = row[ox * step] & 15
+            sy = min(h - 1, oy * step + ox % step)
+            v = cv[sy * w + ox * step + oy % step] & 15
             if xlat:
                 v = xlat[v]
             out[oy * obw + ox // 2] |= v << 4 if not ox & 1 else v
     return bytes(out), obw, ow, oh
+
+
+# DESKTOP POSTERS (98.1.3.11, 2026-10-18): the picture the Preview's box
+# shows for each key - and a CUSTOM one - made here and blitted as it
+# stands: the key's canvas in its own colours, each cell of `scale` x
+# `scale` of the Preview's pixels averaged, then error-diffused onto the
+# desktop's sixteen (a COLOUR set, packed for OSAPI_GFX_BLIT4) or onto
+# black and white (a MONO set, OSAPI_GFX_BLIT1's rows, 1 = white). The
+# slot's six bytes: a stream's at 40 (a resident file's block fields), a
+# resident file's at 56 (a stream's scene palettes)
+R_THUMB = 40                    # u32 the table's offset, u8 the scale (1, 2
+R_THUMBR = 56                   # or 4), u8 the flags
+THUMB_FMT = "<IBB"
+TH_CUSTOM = 1                   # flags: a CUSTOM picture after the keys'
+TH_KEYS = 2                     # ...a picture a key
+TH_COLOUR = 4                   # ...each picture in the desktop's sixteen
+TH_MONO = 8                     # ...and/or in black and white
+TH_SIZE = 16                    # ...the scale is the Preview's own choice:
+                                # its box is never larger
+TH_FLAGS = 31
+THUMB_MAX = 65535               # a picture's bytes, unpacked: one segment
+TH_ENT = "<IHBB"                # an entry: offset, packed bytes, packing
+                                # (PK_NONE, PK_LZ4), 0. Picture-major: each
+                                # picture's colour entry, then its mono one
+_DESK_LUT = {}
+
+
+def thumb_dims(pixfmt, g, rowscale=1):
+    """The Preview's picture at the video's own size, (width, rows) in
+    pixels - the player's vp_pwb x 8 by vp_ph (98.4): a CGA4 or C160 byte
+    is two of its bytes, a C512 or TEXT cell four pixels, VGA8's rows its
+    row scale's and its width its pixels, TEXT's four rows a cell"""
+    if pixfmt == PF_VGA8:
+        return g.w, g.h * rowscale
+    if pixfmt in (PF_CGA4, PF_C160):
+        return g.wb * 4, g.h
+    if pixfmt in (PF_C512, PF_TEXT):
+        return g.wb * 2, g.h * (4 if pixfmt == PF_TEXT else 1)
+    return g.wb * 8, g.h
+
+
+def canvas_rgb(pixfmt, cv, g, palette=None, cgapal=None, rowscale=1,
+               font=None):
+    """A canvas (as Geom.canvas gives it) as the Preview sees it at its own
+    size, an (rows, width, 3) array of six-bit RGB: one bit as black and
+    white, VGA8 and VGA4 through `palette` (VGA4's sixteen, the desktop's
+    when None), CGA4 through `cgapal`'s four, C160 and C512's attributes
+    as the sixteen two pixels wide, TEXT each cell's quarters between its
+    two colours by the glyph's share of them"""
+    import numpy as np
+    pw, ph = thumb_dims(pixfmt, g, rowscale)
+    s16 = np.frombuffer(STD16, np.uint8).astype(np.float64).reshape(16, 3)
+    c = np.frombuffer(bytes(cv), np.uint8)
+    wb, h = g.wb, g.h
+    if pixfmt in (PF_MONO1, PF_CGACOMP):
+        bits = np.unpackbits(c[:wb * h].reshape(h, wb), axis=1)
+        return np.repeat(bits[:, :, None] * 63.0, 3, axis=2)
+    if pixfmt in (PF_VGA8, PF_VGA4):
+        pal = np.frombuffer(bytes(palette or STD16), np.uint8).astype(
+            np.float64).reshape(-1, 3)
+        idx = c[:g.w * h].reshape(h, g.w)
+        if pixfmt == PF_VGA4:
+            idx = idx & 15
+        out = pal[idx]
+        return np.repeat(out, rowscale, axis=0) if pixfmt == PF_VGA8 \
+            else out
+    if pixfmt == PF_CGA4:
+        cols = np.array([s16[k] for k in cga4_colours(cgapal)])
+        b = c[:wb * h].reshape(h, wb)
+        v = np.stack([(b >> (6 - 2 * i)) & 3 for i in range(4)], axis=2)
+        return cols[v.reshape(h, wb * 4)]
+    if pixfmt in (PF_C160, PF_C512):
+        if pixfmt == PF_C512:           # (its attributes, C160's bytes)
+            c = c[:wb * h].reshape(h, wb)[:, 1::2].reshape(-1)
+            wb //= 2
+        b = c[:wb * h].reshape(h, wb)
+        v = np.stack([b >> 4, b >> 4, b & 15, b & 15], axis=2)
+        return s16[v.reshape(h, wb * 4)]
+    if pixfmt == PF_TEXT:
+        import os88txtfont
+        out = np.zeros((ph, pw, 3))
+        cells, q = wb // 2, {}
+        for y in range(h):
+            for x in range(cells):
+                ch, at = cv[y * wb + 2 * x], cv[y * wb + 2 * x + 1]
+                if ch not in q:
+                    q[ch] = os88txtfont.quads(ch, font)
+                fg, bg = s16[at & 15], s16[at >> 4]
+                for qi, n in enumerate(q[ch]):
+                    yy, xx = y * 4 + (qi >> 1) * 2, x * 4 + (qi & 1) * 2
+                    out[yy:yy + 2, xx:xx + 2] = (bg * (16 - n) + fg * n) / 16
+        return out
+    raise V88Error("no Preview picture for pixel format %d" % pixfmt)
+
+
+def _cells(rgb, w, h, scale):
+    """rgb averaged over `scale` x `scale` cells: (ow, oh, means) - the
+    last row of cells padded with the last row, as vga4_pack's rows round"""
+    import numpy as np
+    ow, oh = w // scale, (h + scale - 1) // scale
+    rgb = np.asarray(rgb, np.float64)
+    pad = oh * scale - h
+    if pad:
+        rgb = np.concatenate([rgb, np.repeat(rgb[-1:], pad, axis=0)])
+    m = rgb[:oh * scale, :ow * scale].reshape(oh, scale, ow, scale,
+                                             rgb.shape[2]).mean(axis=(1, 3))
+    return ow, oh, m
+
+
+def desktop_poster(cv, w, h, palette, scale, xlat=None, clip=0.0):
+    """A VGA4 canvas (a pixel a byte, values 0..15 in `palette`'s six-bit
+    sixteen) as its COLOUR desktop poster at `scale`"""
+    import numpy as np
+    fp = np.frombuffer(bytes(palette[:48]), np.uint8).astype(
+        np.float64).reshape(16, 3)
+    a = np.frombuffer(bytes(cv), np.uint8)[:w * h].reshape(h, w) & 15
+    return desktop_poster_rgb(fp[a], w, h, scale, clip)
+
+
+def _desk_lut():
+    """The nearest of the desktop's sixteen to each of the 64^3 colours"""
+    import numpy as np
+    lt = _DESK_LUT.get("q")
+    if lt is None:
+        std = np.frombuffer(STD16, np.uint8).astype(np.int32).reshape(16, 3)
+        g6 = np.arange(64, dtype=np.int32)
+        cube = np.stack(np.meshgrid(g6, g6, g6, indexing="ij"), -1)
+        d = ((cube[..., None, :] - std) ** 2).sum(-1)
+        lt = _DESK_LUT["q"] = d.argmin(-1).astype(np.uint8).tobytes()
+    return lt
+
+
+def desktop_poster_rgb(rgb, w, h, scale, clip=0.0):
+    """A picture in six-bit RGB, an (h, w, 3) array, as a COLOUR desktop
+    poster at `scale` (98.1.3.11): packed as vga4_pack packs, each output
+    pixel its cell's mean colour, error-diffused (Floyd-Steinberg) onto
+    STD16 - but a cell within `clip` levels (0..255, as --clip counts them)
+    on every channel of its nearest is that colour SOLID, and passes on no
+    error: a near-black ground is black, not a field of dots. -> the
+    packed bytes"""
+    import numpy as np
+    ow, oh, m = _cells(rgb, w, h, scale)
+    lt = _desk_lut()
+    std = np.frombuffer(STD16, np.uint8).astype(np.float64).reshape(16, 3)
+    mi = np.clip(np.rint(m), 0, 63).astype(np.int64)
+    nk = np.frombuffer(lt, np.uint8)[(mi[..., 0] << 12) | (mi[..., 1] << 6) |
+                                     mi[..., 2]]
+    if clip:
+        solid = (np.abs(m - std[nk]).max(-1) <= clip * 63.0 / 255.0).tolist()
+    else:
+        solid = None
+    nk = nk.tolist()
+    sr, sg, sb = STD16[0::3], STD16[1::3], STD16[2::3]
+    obw = (ow + 1) // 2
+    out = bytearray(obw * oh)
+    R, G, B = (m[..., c].tolist() for c in range(3))
+    for y in range(oh):
+        r0, g0, b0 = R[y], G[y], B[y]
+        last = y + 1 == oh
+        if not last:
+            r1, g1, b1 = R[y + 1], G[y + 1], B[y + 1]
+        o = y * obw
+        for x in range(ow):
+            if solid is not None and solid[y][x]:
+                k = nk[y][x]
+                if x & 1:
+                    out[o + (x >> 1)] |= k
+                else:
+                    out[o + (x >> 1)] = k << 4
+                continue
+            r, g_, b = r0[x], g0[x], b0[x]
+            ri = 0 if r < 0 else 63 if r > 63 else int(r + 0.5)
+            gi = 0 if g_ < 0 else 63 if g_ > 63 else int(g_ + 0.5)
+            bi = 0 if b < 0 else 63 if b > 63 else int(b + 0.5)
+            k = lt[(min(ri, 63) << 12) | (min(gi, 63) << 6) | min(bi, 63)]
+            er, eg, eb = r - sr[k], g_ - sg[k], b - sb[k]
+            if x + 1 < ow:
+                r0[x + 1] += er * 0.4375
+                g0[x + 1] += eg * 0.4375
+                b0[x + 1] += eb * 0.4375
+            if not last:
+                if x:
+                    r1[x - 1] += er * 0.1875
+                    g1[x - 1] += eg * 0.1875
+                    b1[x - 1] += eb * 0.1875
+                r1[x] += er * 0.3125
+                g1[x] += eg * 0.3125
+                b1[x] += eb * 0.3125
+                if x + 1 < ow:
+                    r1[x + 1] += er * 0.0625
+                    g1[x + 1] += eg * 0.0625
+                    b1[x + 1] += eb * 0.0625
+            if x & 1:
+                out[o + (x >> 1)] |= k
+            else:
+                out[o + (x >> 1)] = k << 4
+    return bytes(out)
+
+
+def desktop_mono_rgb(rgb, w, h, scale, clip=0.0):
+    """The same picture as a MONO desktop poster at `scale` (98.1.3.11):
+    each cell's mean luma - the player's, (77 r + 150 g + 29 b) >> 8 on the
+    six bits - error-diffused onto black and white, OSAPI_GFX_BLIT1's rows
+    of (width + 7) / 8 bytes, the leftmost pixel bit 7, 1 = white. A cell
+    within `clip` levels of black or white is it, SOLID, as the colour
+    poster's are"""
+    import numpy as np
+    rgb = np.asarray(rgb, np.float64)
+    lum = (77 * rgb[..., 0] + 150 * rgb[..., 1] + 29 * rgb[..., 2]) / 256.0
+    ow, oh, m = _cells(lum[..., None], w, h, scale)
+    c6 = clip * 63.0 / 255.0
+    solid = (np.where(m[..., 0] <= c6, 0, np.where(m[..., 0] >= 63 - c6, 1,
+                                                   -1)).tolist()
+             if clip else None)
+    L = m[..., 0].tolist()
+    obw = (ow + 7) // 8
+    out = bytearray(obw * oh)
+    for y in range(oh):
+        r0 = L[y]
+        last = y + 1 == oh
+        r1 = None if last else L[y + 1]
+        o = y * obw
+        for x in range(ow):
+            if solid is not None and solid[y][x] >= 0:
+                if solid[y][x]:
+                    out[o + (x >> 3)] |= 0x80 >> (x & 7)
+                continue
+            v = r0[x]
+            on = v >= 31.5
+            e = v - (63.0 if on else 0.0)
+            if x + 1 < ow:
+                r0[x + 1] += e * 0.4375
+            if r1 is not None:
+                if x:
+                    r1[x - 1] += e * 0.1875
+                r1[x] += e * 0.3125
+                if x + 1 < ow:
+                    r1[x + 1] += e * 0.0625
+            if on:
+                out[o + (x >> 3)] |= 0x80 >> (x & 7)
+    return bytes(out)
+
+
+def thumb_size(kind, ow, oh):
+    """A desktop poster's bytes: COLOUR ("c") packed two pixels a byte,
+    MONO ("m") eight"""
+    return ((ow + 1) // 2 if kind == "c" else (ow + 7) // 8) * oh
+
+
+def thumb_kinds(flags):
+    """The sets a table carries, in their entry order"""
+    return [k for k, b in (("c", TH_COLOUR), ("m", TH_MONO)) if flags & b]
+
+
+def thumb_block(th, keys, at, pw, ph):
+    """A Writer's DESKTOP POSTERS as stored (98.1.3.11): `th` is
+    Writer.thumbs - dict(scale, flags, make(canvas, kind) -> bytes,
+    custom {kind: bytes}) - and the table goes at `at`. -> (bytes, the
+    slot's six-byte tuple), or (b"", the tuple) for a size and nothing
+    else"""
+    import os88lz
+    ts, fl = th["scale"], th["flags"]
+    if ts not in (1, 2, 4) or fl & ~TH_FLAGS:
+        raise V88Error("desktop posters at a scale of %r, flags %r"
+                       % (ts, fl))
+    kinds = thumb_kinds(fl)
+    if bool(kinds) != bool(fl & (TH_KEYS | TH_CUSTOM)):
+        raise V88Error("desktop posters with sets %r and flags %d"
+                       % (kinds, fl))
+    pics = []
+    if fl & TH_KEYS:
+        for k, r, c in keys:
+            pics += [th["make"](c, kd) for kd in kinds]
+    if fl & TH_CUSTOM:
+        pics += [th["custom"][kd] for kd in kinds]
+    ow, oh = pw // ts, (ph + ts - 1) // ts
+    for i, p_ in enumerate(pics):
+        if len(p_) != thumb_size(kinds[i % len(kinds)], ow, oh):
+            raise V88Error("a desktop poster is not %d x %d" % (ow, oh))
+        if len(p_) > THUMB_MAX:
+            raise V88Error("a desktop poster of %d x %d is %d bytes: %d at "
+                           "most" % (ow, oh, len(p_), THUMB_MAX))
+    if not pics:                        # (no key kept: the flags may not
+        if fl & TH_SIZE:                # promise pictures, or every Reader
+            return b"", (0, ts, TH_SIZE)    # refuses the file)
+        return b"", (0, 0, 0)
+    ents, data = [], b""
+    o0 = at + struct.calcsize(TH_ENT) * len(pics)
+    for p_ in pics:
+        z = os88lz.compress(p_, os88lz.LZ4)
+        pk, body = (PK_LZ4, z) if len(z) < len(p_) else (PK_NONE, p_)
+        ents.append(struct.pack(TH_ENT, o0 + len(data), len(body), pk, 0))
+        data += body
+    return b"".join(ents) + data, (at, ts, fl)
+
+
+def packed_half(pk, ow, oh):
+    """A packed COLOUR desktop poster (vga4_pack's rows) halved as
+    vga4_pack halves a canvas - one pixel of each 2 x 2 cell, turning with
+    the output's position: the player's vp_dphalf, for a box the layout
+    shows at half a stored poster's scale -> (bytes, its width, rows)"""
+    obw = (ow + 1) // 2
+    nw, nh = ow // 2, (oh + 1) // 2
+    nbw = (nw + 1) // 2
+    out = bytearray(nbw * nh)
+    for y in range(nh):
+        for x in range(nw):
+            sy = min(oh - 1, 2 * y + (x & 1))
+            sx = 2 * x + (y & 1)
+            b = pk[sy * obw + sx // 2]
+            v = b >> 4 if not sx & 1 else b & 15
+            out[y * nbw + x // 2] |= v << 4 if not x & 1 else v
+    return bytes(out), nw, nh
 
 
 def modex_subs(cv, changed, g):
@@ -2241,7 +2613,7 @@ class Writer:
                  rowscale=1, flip=False, loop=None, repeat=False,
                  cgapal=None, spk=False, live=None, spkp=1, ahead=0,
                  kcap=65535, spcap=SP_MAX, screen=SCR_480, page=False,
-                 pages=2):
+                 pages=2, own=False):
         # `spcap`: a super-packet's sectors at most - SP_MAX, or past it
         # (BIGSP, 98.1.4.1) up to SP_BIG for a stream played in the bracket
         if not SP_MAX <= spcap <= SP_BIG or (spcap > SP_MAX and
@@ -2268,6 +2640,10 @@ class Writer:
         self.live = live
         self.pev = None                 # [(frame, 48 bytes)], 98.1.3.2.3
         self.opts = None                # the options block, 98.1.1.4
+        # DESKTOP POSTERS (98.1.3.11): None, or (scale, make, custom) - each
+        # key's canvas made into its poster by make(canvas), and a CUSTOM
+        # poster's packed bytes or None
+        self.thumbs = None
         self.xbank = self.xpre = 0      # the bank's ask (98.3.18.3), KB
         if ahead and (audio_fmt == AUD_NONE or live is not None or
                       not 1 <= ahead <= 255 or ahead * abytes > AHEAD_MAX):
@@ -2350,6 +2726,14 @@ class Writer:
                            "file's on a screen of its own: not flipped every "
                            "frame, not Live, no loop (98.1.3.7)")
         self.page = page
+        # EACH RECORD AGAINST ITS OWN PAGE (FLIP_OWN, VIDEO-SEEN-PLAN 3b): a
+        # file flipped every frame, a stream with no lap (the seam would
+        # join the two pages' pictures, which differ)
+        if own and (not self.flip or loop is not None or live is not None):
+            raise V88Error("a flipped file against its own page is flipped "
+                           "every frame, a stream with no loop and not Live "
+                           "(VIDEO-SEEN-PLAN 3b)")
+        self.own = bool(own)
         # N PAGES (98.1.3.7.1): page-ahead past the second page, on a screen
         # whose plane holds them - Mode X or a VGA4 screen of its own
         if pages != 2 and (not page or not 3 <= pages <= MPAGE_MAX or
@@ -2421,7 +2805,7 @@ class Writer:
 
     def frame(self, ops, surf, audio=b"", hidden=None, flip=False,
               hsurf=None, hsurfs=None, shown=0, built=False, copies=(),
-              held=False):
+              held=False, up=None):
         """`ops` are the frame's writes, already applied to `surf`. PAGE-
         AHEAD (98.1.3.7): `flip`, they were drawn on the page that is shown
         from this frame on; `hidden`, the hidden page's writes after them,
@@ -2458,9 +2842,23 @@ class Writer:
                         limit=self.spcap * SECTOR - 4) if self.page else
             record(ops, self.g, limit=self.spcap * SECTOR - 4), audio,
             limit=self.spcap * SECTOR - 4)
-        if self.flip and len(rec) > PREV_MAX and self.spcap == SP_MAX:
+        if self.flip and not self.own and len(rec) > PREV_MAX and \
+                self.spcap == SP_MAX:
             raise V88Error("frame %d is %d bytes, past a flipped play's %d"
                            % (k, len(rec), PREV_MAX))
+        if up is not None:              # (FLIP_OWN: its page brought up, by
+            if not self.own:            # the copy of its rows off the glass)
+                raise V88Error("a record that brings its page up, outside a "
+                               "file against its own page")
+            rec = bytearray(rec)
+            y0, y1 = struct.unpack_from("<HH", rec, 2)
+            u0, u1 = up
+            if y1 <= y0:
+                y0, y1 = u0, u1
+            else:
+                y0, y1 = min(y0, u0), max(y1, u1)
+            struct.pack_into("<HH", rec, 2, y0, y1 | REC_UP)
+            rec = bytes(rec)
         if held:                        # (98.1.3.9: drawn, not shown)
             rec = bytearray(rec)
             rec[3] |= REC_HELD >> 8
@@ -2865,7 +3263,16 @@ class Writer:
         # of the player's ever reaches it
         opts = self.opts or b""
         oat = kbase + -(-krec // SECTOR) * SECTOR
-        s0 = oat + -(-len(opts) // SECTOR) * SECTOR
+        # ...and THE DESKTOP POSTERS (98.1.3.11) in sectors of their own
+        # after it: a table of an entry a key, then the custom one, then
+        # their bytes - read only by a Preview that knows them
+        thb, thdr = b"", None
+        tat = oat + -(-len(opts) // SECTOR) * SECTOR
+        if self.thumbs is not None:         # (98.1.3.11)
+            thb, thdr = thumb_block(self.thumbs, keys, tat, *thumb_dims(
+                self.pixfmt, g, self.rowscale))
+            self.thumb_bytes = len(thb)
+        s0 = tat + -(-len(thb) // SECTOR) * SECTOR
         spoff, o = [], s0
         for n in secs:
             spoff.append(o)
@@ -2979,7 +3386,8 @@ class Writer:
                               for k, r, c in keys), default=0))
         struct.pack_into("<IBBBB", hdr, 224, pal,
                          self.rowscale if self.rowscale > 1 else 0,
-                         (FLIP_HELD if getattr(self, "held", False) else 2)
+                         (FLIP_OWN if self.own else
+                          FLIP_HELD if getattr(self, "held", False) else 2)
                          if self.flip else FLIP_FPAGE if self.fpage else
                          FLIP_MPAGE if self.mpage else
                          FLIP_PAGE if self.page else 0,
@@ -2993,13 +3401,16 @@ class Writer:
         hdr[LOOP_AT:LOOP_AT + len(loopblk)] = loopblk
         if opts:
             struct.pack_into("<IH", hdr, H_OPTS, oat, len(opts))
+        if thdr is not None:
+            struct.pack_into(THUMB_FMT, hdr, 192 + R_THUMB, *thdr)
         front = bytes(hdr)
         if self.palette:
             front += self.palette + bytes(2 * SECTOR - PAL_BYTES)
         front += pevb + bytes(ptab - len(pevb))
         out = front + kt + bytes(ktab - len(kt)) + kr + \
             bytes(oat - kbase - len(kr)) + opts + \
-            bytes(s0 - oat - len(opts)) + stream
+            bytes(tat - oat - len(opts)) + thb + \
+            bytes(s0 - tat - len(thb)) + stream
         lstat = None
         if self.lrecs is not None:
             out, lstat = self.write_layer(bytearray(out), keys)
@@ -3248,6 +3659,17 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
         apk, apack = packed(audio)
         aoff = base + len(body)
         body += pad(apk)
+    thdrs = []                          # DESKTOP POSTERS (98.1.3.11), each
+    for ri, w in enumerate(writers):    # rendition's after the sound
+        th = getattr(w, "thumbs", None)
+        if th is None:
+            thdrs.append(None)
+            continue
+        thb, thdr = thumb_block(th, w.keys, base + len(body), *thumb_dims(
+            w.pixfmt, w.g, w.rowscale))
+        w.thumb_bytes = len(thb)
+        body += pad(thb)
+        thdrs.append(thdr)
     hdr[0:4] = V88_SIG
     flags = F_RESIDENT | (F_LOOPREC if loop is not None else 0) | \
         (F_REPEAT if repeat else 0) | \
@@ -3282,6 +3704,8 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
             hdr[so + R_CGAPAL] = w.cgapal
         if live is not None or targets is not None:
             hdr[so + R_TARGET] = (live or targets)[ri]
+        if thdrs[ri] is not None:
+            struct.pack_into(THUMB_FMT, hdr, so + R_THUMBR, *thdrs[ri])
     if loop is not None:
         struct.pack_into("<I", hdr, LOOP_AT, loop)
     if opts:                    # the OPTIONS block (98.1.1.4), last: every
@@ -3529,9 +3953,12 @@ class Reader:
             raise V88Error("a screen byte of %d (98.1.3.2.1, 98.1.3.1.1)"
                            % scr)
         self.screen = scr
-        self.held = fl == FLIP_HELD     # (98.1.3.9: a flipped file, with
-        if self.held:                   # HELD records)
-            fl = 2
+        self.own = fl == FLIP_OWN       # (VIDEO-SEEN-PLAN 3b: and every record
+        self.held = fl in (FLIP_HELD, FLIP_OWN)     # against its own page)
+        if self.held:                   # (98.1.3.9: a flipped file, with
+            fl = 2                      # HELD records)
+        if self.own and flags & F_LOOPREC:
+            raise V88Error("a flipped file against its own page with a loop")
         pg = fl in (FLIP_PAGE, FLIP_MPAGE, FLIP_FPAGE)
         if fl not in (0, 1, 2, FLIP_PAGE, FLIP_MPAGE, FLIP_FPAGE) or (
                 fl >= 2 and not (layout == LAY_MODEX or scr or (
@@ -3617,7 +4044,9 @@ class Reader:
                 raise V88Error("the palette table's frame 0 is not the "
                                "header's palette")
             self.pev = pv
-        elif pev_at or pev_n:
+        elif (pev_at or pev_n) and not self.resident:
+            # (a resident file's bytes 56..61 are its DESKTOP POSTERS',
+            # 98.1.3.11: a scene's palette is a stream's alone)
             raise V88Error("a palette table with no PALEV flag")
         self.aspect = (an, ad)
         if self.resident:
@@ -3688,6 +4117,33 @@ class Reader:
         # THE BENCH (98.1.9.13): the rendition's word and the header's
         self.bench = (struct.unpack_from("<H", d, self.slot + R_BENCH)[0],
                       struct.unpack_from("<H", d, H_BENCHL)[0])
+        # DESKTOP POSTERS (98.1.3.11): the slot's six bytes - a stream's at
+        # 40, a resident file's at 56. A stream whose 46..51 are not zero
+        # has the first layout's twelve (the morning of 2026-10-18), which
+        # no player reads now: ignored, as a player ignores it
+        self.thumb, self.thumb_legacy = None, False
+        tso = self.slot + (R_THUMBR if self.resident else R_THUMB)
+        if not self.resident and any(d[self.slot + 46:self.slot + 52]):
+            self.thumb_legacy = True
+        else:
+            tat, ts, tf = struct.unpack_from(THUMB_FMT, d, tso)
+            if tat or ts or tf:
+                kinds = thumb_kinds(tf)
+                npic = (self.nkeys if tf & TH_KEYS else 0) + \
+                    (1 if tf & TH_CUSTOM else 0)
+                tn = npic * len(kinds)
+                tw, th_ = thumb_dims(self.pixfmt, self.g, self.rowscale)
+                tw, th_ = tw // max(ts, 1), (th_ + max(ts, 1) - 1) // \
+                    max(ts, 1)
+                if ts not in (1, 2, 4) or tf & ~TH_FLAGS or \
+                        bool(kinds) != bool(npic) or \
+                        any(thumb_size(k, tw, th_) > THUMB_MAX
+                            for k in kinds) or \
+                        (tn and not tat) or (tat and not tn) or \
+                        tat + struct.calcsize(TH_ENT) * tn > len(d):
+                    raise V88Error("desktop posters at %d: a scale of %d, "
+                                   "flags %d (98.1.3.11)" % (tat, ts, tf))
+                self.thumb = (tat, tn, tw, th_, ts, tf)
         dz = dz[:H_BENCHL] + bytes(2) + dz[H_BENCHL + 2:]
         self.lyord = d[H_LYORD]
         self.lyneed = struct.unpack_from("<H", d, H_LYNEED)[0]
@@ -3844,6 +4300,10 @@ class Reader:
         n, y0, y1 = struct.unpack_from("<HHH", rec, 0)
         if getattr(self, "held", False) and not key:
             y0 &= ~REC_HELD             # (a HELD record's bit, 98.1.3.9)
+        upb = False
+        if getattr(self, "own", False) and not key:
+            upb = bool(y1 & REC_UP)     # (VIDEO-SEEN-PLAN 3b's bring-up: its
+            y1 &= ~REC_UP               # band is the copy's rows too)
         if key and y0 & KEY_MORE:
             if not self.kparts:
                 raise V88Error("a key in parts in a file without KPARTS")
@@ -3941,9 +4401,83 @@ class Reader:
             else 0 if layer else self.abytes
         if tail != want:
             raise V88Error("%d bytes follow the lists, not %d" % (tail, want))
-        if check and not wrote[0] and y0 != y1:
+        if check and not wrote[0] and y0 != y1 and not upb:
             raise V88Error("an empty record with a band %d..%d" % (y0, y1))
         return rec[end:]
+
+    def thumb_at(self, pic, kind):
+        """The entry of DESKTOP POSTER `pic` (key pic's, or past the keys
+        the custom one) in set `kind` ("c" or "m"), or None for none"""
+        if self.thumb is None:
+            return None
+        tat, tn, tw, th_, ts, tf = self.thumb
+        kinds = thumb_kinds(tf)
+        if kind not in kinds:
+            return None
+        if not tf & TH_KEYS:
+            pic -= self.nkeys
+        i = pic * len(kinds) + kinds.index(kind)
+        return i if 0 <= i < tn else None
+
+    def thumb_pic(self, i):
+        """DESKTOP POSTER entry `i` (98.1.3.11), unpacked: vga4_pack's rows
+        of the desktop's sixteen, or OSAPI_GFX_BLIT1's of black and white,
+        at the table's scale"""
+        if self.thumb is None:
+            raise V88Error("no desktop posters")
+        tat, tn, tw, th_, ts, tf = self.thumb
+        if not 0 <= i < tn:
+            raise V88Error("desktop poster %d of %d" % (i, tn))
+        kinds = thumb_kinds(tf)
+        off, n, pk, z = struct.unpack_from(
+            TH_ENT, self.d, tat + struct.calcsize(TH_ENT) * i)
+        want = thumb_size(kinds[i % len(kinds)], tw, th_)
+        if z or pk not in (PK_NONE, PK_LZ4) or off + n > len(self.d) or \
+                not n or off < tat + struct.calcsize(TH_ENT) * tn or \
+                (pk == PK_NONE and n != want):
+            raise V88Error("desktop poster %d: %d bytes at %d, packing %d"
+                           % (i, n, off, pk))
+        body = bytes(self.d[off:off + n])
+        if pk == PK_NONE:
+            return body
+        import os88lz
+        try:
+            out = os88lz.decompress(body, os88lz.LZ4, want)
+        except Exception as e:
+            raise V88Error("desktop poster %d does not unpack: %s" % (i, e))
+        if len(out) != want:
+            raise V88Error("desktop poster %d unpacks to %d bytes, not %d"
+                           % (i, len(out), want))
+        return bytes(out)
+
+    def own_rows(self, rec):
+        """FLIP_OWN: a frame record's (held, the rows its page is brought
+        up by - None, or (y0, y1) off the glass)"""
+        y0, y1 = struct.unpack_from("<HH", rec, 2)
+        return bool(y0 & REC_HELD), ((y0 & ~REC_HELD, y1 & ~REC_UP)
+                                     if y1 & REC_UP else None)
+
+    def own_copy(self, dst, src, y0, y1):
+        """...those rows of the canvas, every plane, page `src` onto `dst`"""
+        g = self.g
+        for p in range(g.planes):
+            o = p * PLANE
+            for y in range(max(0, y0), min(g.h, y1)):
+                b = o + g.base[y]
+                dst[b:b + g.wb] = src[b:b + g.wb]
+
+    def apply_own(self, pages, vis, rec, check=True):
+        """FLIPPED AGAINST ITS OWN PAGE (FLIP_OWN, VIDEO-SEEN-PLAN 3b): one
+        frame record onto the page the glass is not showing, as it stands -
+        its rows first copied off the glass where it says so - which is then
+        shown unless the record is HELD, the next one then drawn on it too.
+        -> (the page shown after it, the page drawn on)"""
+        held, up = self.own_rows(rec)
+        d = vis ^ 1
+        if up is not None:
+            self.own_copy(pages[d], pages[vis], *up)
+        self.apply(pages[d], rec, check=check)
+        return (vis if held else d), pages[d]
 
     def apply_page(self, pages, vis, rec, check=True):
         """PAGE-AHEAD (98.1.3.7): one frame record onto two pages, `vis`
@@ -4312,8 +4846,9 @@ def key_at(r, f):
 
 def set_poster(path, frame):
     """THE POSTER, CHANGED IN PLACE (98.2.11): every rendition's poster word
-    (slot + 14) set to its key_at(`frame`), and nothing else in the file
-    touched. A poster is a keyframe INDEX, and renditions need not share
+    (slot + 14) set to its key_at(`frame`) - and a custom desktop poster
+    let go (98.1.3.11), the key being what the box is to show - and
+    nothing else in the file touched. A poster is a keyframe INDEX, and renditions need not share
     their keys, so each is placed by the frame rather than by the index.
     The file is re-read whole afterwards, every rendition; returns the
     posters written."""
@@ -4326,6 +4861,17 @@ def set_poster(path, frame):
         if i is None:
             raise V88Error("rendition %d has no keyframes to be a poster" % ri)
         struct.pack_into("<H", d, r.slot + 14, i)
+        if r.thumb is not None and r.thumb[5] & TH_CUSTOM:
+            # (a CUSTOM poster, 98.1.3.11, is what the box shows at open:
+            # a key set as the poster is what it shows instead, so the
+            # entries are let go - their bytes stay, named by nothing; and
+            # a table that held nothing else names nothing at all)
+            tat, tn, tw, th_, ts, tf = r.thumb
+            tf &= ~TH_CUSTOM
+            if not tf & TH_KEYS:
+                tat, tf = 0, tf & TH_SIZE
+            struct.pack_into(THUMB_FMT, d, r.slot + (
+                R_THUMBR if r.resident else R_THUMB), tat, ts, tf)
         posters.append(i)
     with open(path, "r+b") as f:
         f.write(d[:SECTOR])
@@ -4492,11 +5038,21 @@ def _reshape_options(d, r, changed):
     """A streamed file's stored options (98.1.1.4) with `changed` put in,
     written into the sectors the block has before the stream (bytes `d`,
     patched in place); the block and its pointer cleared when the new one
-    does not fit, or the old one does not read"""
+    does not fit, or the old one does not read. A resident file's go at
+    the end of `d`, still the last block"""
     if not r.optsat:
         return
     import os88venc                     # (the schema is the encoder's)
-    room = r.sp0 - r.optsat
+    # ...up to the stream, or to a DESKTOP POSTERS table between them
+    # (98.1.3.11): before 2026-10-19 the room ran to the stream whatever
+    # was there, and a reshaped file's posters were zeroed under a table
+    # that still named them
+    end = r.sp0
+    for ri in range(r.nrend):
+        t = Reader(r.path, ri).thumb if ri else r.thumb
+        if t is not None and r.optsat < t[0] < end:
+            end = t[0]
+    room = end - r.optsat
     try:
         o = os88venc.opts_migrate(r.options())[0]
         doc = r.options()
@@ -4505,6 +5061,14 @@ def _reshape_options(d, r, changed):
                              "src": doc.get("src", ""), "o": o})
     except V88Error:
         blob = b""
+    if r.resident:                      # (98.1.7: the file's LAST block,
+        d[r.optsat:r.optsat + r.optslen] = bytes(r.optslen)  # so no room
+        if r.optsat + r.optslen == len(d):  # of its own - the old one
+            del d[r.optsat:]            # zeroed, or dropped when still last,
+        at = len(d) if blob else 0      # and the new one after whatever the
+        d[len(d):] = blob               # caller put at the end: posters)
+        struct.pack_into("<IH", d, H_OPTS, at, len(blob))
+        return
     if not 0 < len(blob) <= room:
         blob = b""
     d[r.optsat:r.optsat + room] = blob + bytes(room - len(blob))
@@ -5287,22 +5851,46 @@ def encode_canvases(canvases, g, out, fps, pixfmt=PF_MONO1, palette=None,
                     title="", keysecs=KEY_SECS, poster=None, rowscale=1,
                     flip=False, loop=None, repeat=False, cgapal=None,
                     screen=SCR_480, pev=None, subs=None, kpart=KEY_PART,
-                    held=()):
+                    held=(), own=False, thumbs=None, resident=False):
     """encode_frames for canvases already in hand (bytes, g.wb a row) - the
     only way to make a VGA8 file without a video (SPEC.md 98.2): silent,
     every changed byte. `pev`: a palette a scene's table (98.1.3.2.3).
     `subs(cv, prev, g)`: a VGA4 frame's sub-records in place of vga4_subs'
     (a SUB2 file's colour ones, 98.1.3.2.4). `held`: the frames whose
-    records are HELD (98.1.3.9, a flipped file's) - drawn, not shown"""
+    records are HELD (98.1.3.9, a flipped file's) - drawn, not shown.
+    `own`: flipped with each record against its own page (FLIP_OWN), the
+    record after a key bringing its page up by the rows that differ.
+    `thumbs`: the writer's DESKTOP POSTERS (98.1.3.11), as Writer.thumbs
+    takes them. `resident`: written as a RESIDENT file (98.1.7)"""
     rate, spf = max(1, round(fps * 100)), 100
     wr = Writer(g, rate, spf, AUD_NONE, 0, pixfmt, title=title,
                 keysecs=keysecs, palette=palette, rowscale=rowscale,
                 flip=flip, loop=loop, repeat=repeat, cgapal=cgapal,
-                screen=screen)
+                screen=screen, own=own)
     wr.pev = pev
     wr.kpart = kpart
+    wr.thumbs = thumbs
     surf = g.surface()
     prev = g.canvas(surf)
+    if own:
+        pcv, vis = [prev, prev], 0
+        for k, cv in enumerate(canvases):
+            d, up = vis ^ 1, None
+            if wr.keys and wr.keys[-1][0] == k - 1:
+                rows = [y for y in range(g.h)
+                        if pcv[d][y * g.w:(y + 1) * g.w] !=
+                        pcv[vis][y * g.w:(y + 1) * g.w]]
+                if rows:
+                    up = (rows[0], rows[-1] + 1)
+                    pcv[d] = pcv[vis]
+            ops = (subs or vga4_subs)(cv, pcv[d], g) if g.bitplanes else \
+                modex_subs(cv, [a != b for a, b in zip(cv, pcv[d])], g)
+            pcv[d] = cv
+            g.put(surf, cv)
+            wr.frame(ops, surf, held=k in held, up=up)
+            if k not in held:
+                vis = d
+        return wr.write(out, poster)
     for k, cv in enumerate(canvases):
         if g.planes > 1:
             ops = (subs or vga4_subs)(cv, prev, g) if g.bitplanes else \
@@ -5321,6 +5909,9 @@ def encode_canvases(canvases, g, out, fps, pixfmt=PF_MONO1, palette=None,
                     changed.append(b + x)
             surf[b:b + g.wb] = row
         wr.frame(spans(changed, surf, g), surf)
+    if resident:
+        return write_resident(out, [wr], posters=None if poster is None
+                              else [poster])
     return wr.write(out, poster)
 
 
@@ -5383,6 +5974,7 @@ def v88_frames(r, check=True):
     f = 0
     pages, vis = [surf] + [r.g.surface() for _ in range(r.pages - 1)], 0
     k0 = r.keys[0][0] if r.page and r.keys else None
+    kset = {e[0] for e in r.keys}
     r.flast = None
     for rec, at, i in r.records():
         if r.mpage:                 # (98.1.3.7.1: every page by number)
@@ -5406,6 +5998,23 @@ def v88_frames(r, check=True):
                 pages[vis ^ 1][:] = kp[1]   # page is PRELOADED (98.1.3.7)
             r.hidden = pages[vis ^ 1]   # other for a key's check)
             yield f, pages[vis], rec, at, i
+        elif getattr(r, "own", False):  # (VIDEO-SEEN-PLAN 3b: two pages,
+            if check and f - 1 in kset:     # each record against its own)
+                # A SEEK lands on a key with the key on both pages, and a
+                # play through it has the frame before on the page drawn
+                # next: the record after a key brings that page up to the
+                # glass WHOLE, or the two plays draw different pictures
+                tmp = bytearray(pages[vis ^ 1])
+                up = r.own_rows(rec)[1]
+                if up is not None:
+                    r.own_copy(tmp, pages[vis], *up)
+                if r.g.canvas(tmp) != r.g.canvas(pages[vis]):
+                    raise V88Error("frame %d, after a key, does not bring its "
+                                   "page up to the glass (VIDEO-SEEN-PLAN 3b)"
+                                   % f)
+            vis, drawn = r.apply_own(pages, vis, rec, check=check)  # each
+            r.hidden = pages[vis ^ 1]   # record against its own)
+            yield f, drawn, rec, at, i
         else:
             r.apply(surf, rec, check=check)
             yield f, surf, rec, at, i
@@ -5508,11 +6117,15 @@ def cmd_info(a):
             print("   %s%s%s" % (
                 "screen %s, full screen; " % SCREENS[r.screen][0]
                 if r.screen else "full screen; " if r.palette and
-                r.pixfmt == PF_VGA4 else "", "two pages, flipped"
-                if r.flip else "%d pages, flipped and built ahead (%d built "
-                "flips)" % (r.pages, sum(
-                    1 for rec, _, _ in r.records()
-                    if struct.unpack_from("<H", rec, 4)[0] & REC_BUILT))
+                r.pixfmt == PF_VGA4 else "",
+                "two pages, flipped, each record against its own page"
+                if getattr(r, "own", False) else "two pages, flipped"
+                if r.flip else "%d pages, flipped and built ahead%s" % (
+                    r.pages, (lambda nb: ", every record against its own "
+                              "page" if nb == r.frames else
+                              " (%d built flips)" % nb)(sum(
+                        1 for rec, _, _ in r.records()
+                        if struct.unpack_from("<H", rec, 4)[0] & REC_BUILT)))
                 if getattr(r, "fpage", False) else
                 "%s pages, page-ahead (%d flips)" % (
                     r.pages if r.mpage else "two", sum(
@@ -5588,6 +6201,7 @@ def decode_at(r, n):
             surf = pages[0]
         else:
             r.apply(surf, rec, key=True)
+            pages[1][:] = surf          # (a key is onto both pages)
         if k == n:
             return r.g.canvas(surf)
         f = k + 1
@@ -5605,6 +6219,8 @@ def decode_at(r, n):
         if r.page:
             vis, _ = r.apply_page(pages, vis, rec)
             surf = pages[vis]
+        elif getattr(r, "own", False):  # (VIDEO-SEEN-PLAN 3b)
+            vis, surf = r.apply_own(pages, vis, rec)
         else:
             r.apply(surf, rec)
         if f == n:
@@ -5786,6 +6402,9 @@ def verify_v88(path, against=None, rend=None):
             f += 1
     if r.lsp0:
         verify_layer(r)
+    if r.thumb is not None:             # (98.1.3.11: every desktop poster
+        for i in range(r.thumb[1]):     # unpacks to its size)
+            r.thumb_pic(i)
     sp_secs = {}
     at, n = r.sp0, r.sp0n
     while n:
@@ -6996,6 +7615,49 @@ def selfcheck():
                 fails.append("a C160 file with SUB2 set read differently")
         except V88Error as e:
             fails.append("a C160 file with SUB2 set was refused: %s" % e)
+        # EACH RECORD AGAINST ITS OWN PAGE (byte 37 7, VIDEO-SEEN-PLAN 3b):
+        # a Mode X clip of small changes, a scene change, keys and held
+        # records reads back frame for frame - a held frame showing the one
+        # before it - and the same clip with the record after each key NOT
+        # bringing its page up is refused, which is what a seek would show
+        go = Geom(LAY_MODEX, 40, 20)
+        ocv, cur, oheld = [], bytearray(go.w * go.h), {5, 6, 17, 30}
+        for k in range(40):
+            for _ in range(rnd.randrange(0, 60)):
+                cur[rnd.randrange(len(cur))] = rnd.randrange(256)
+            if k % 13 == 7:
+                cur = bytearray(rnd.randrange(256) for _ in range(len(cur)))
+            ocv.append(bytes(cur))
+        po = os.path.join(tmp, "OWN.V88")
+        try:
+            encode_canvases(ocv, go, po, 15, pixfmt=PF_VGA8,
+                            palette=bytes(range(64)) * 12, keysecs=0.6,
+                            flip=True, held=oheld, own=True)
+            verify_v88(po)
+            ro = Reader(po)
+            want, last = [], bytes(len(ocv[0]))
+            for k in range(40):
+                last = last if k in oheld else ocv[k]
+                want.append(last)
+            ups = sum(1 for rec, _, _ in ro.records()
+                      if struct.unpack_from("<H", rec, 4)[0] & REC_UP)
+            if not ro.own or len(ro.keys) < 3 or ups < len(ro.keys) - 1 or \
+                    any(decode_at(ro, f) != want[f] for f in range(40)):
+                fails.append("a file against its own page did not read back "
+                             "as written")
+            fr = Writer.frame
+            try:
+                Writer.frame = lambda self, *x, **kw: fr(
+                    self, *x, **dict(kw, up=None))
+                encode_canvases(ocv, go, po + ".bad", 15, pixfmt=PF_VGA8,
+                                palette=bytes(range(64)) * 12, keysecs=0.6,
+                                flip=True, held=oheld, own=True)
+            finally:
+                Writer.frame = fr
+            expect_fail("a record after a key not bringing its page up",
+                        po + ".bad", lambda d: d, "bring its page up")
+        except V88Error as e:
+            fails.append("a file against its own page: %s" % e)
     for f in fails:
         print("os88vid --selfcheck: FAIL - %s" % f)
     if not fails:
@@ -7005,7 +7667,8 @@ def selfcheck():
               "a resident file's blocks "
               "round-trip, CGA4, C160, C512 and TEXT round-trip, a palette "
               "a scene and a page-ahead file round-trip, a live file's "
-              "blit runs cover its writes, and twenty-nine corruptions "
+              "blit runs cover its writes, a file against its own page "
+              "round-trips, and thirty corruptions "
               "were refused")
     return 1 if fails else 0
 

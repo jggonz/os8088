@@ -527,6 +527,8 @@ fm_kinit_x:
 .nostale:                       ; and the block it names is about to be a
     pop dx                      ; DIFFERENT window's. Shedding it then would
     pop bx                      ; zero the new tenant's FS_VSEG
+%else
+    mov word [bx+W_ONWH], fm_onwheel_x  ; the wheel scrolls it (SPEC.md 13.18.3)
 %endif
     xor ax, ax                  ; EVERY field a fresh window starts from,
     mov [di+FS_SCRL], ax        ; in word stores off one zero (kernel size
@@ -3921,6 +3923,34 @@ fm_hit:
 ; window is sent keys at all (SPEC.md 13), so there is no focus concept to
 ; get wrong.
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; fm_onwheel_x - W_ONWH for the Disk window (SPEC.md 13.18.3)
+; in:  AX = signed notches, positive toward the user; SI = window, lock held
+;
+; THE VIEW MOVES AND THE SELECTION DOES NOT - the arrow keys' .selmove is the
+; one thing skipped - so this is .scr_move entered with its own count. THREE
+; ROWS A NOTCH IN THE LIST and ONE in the icon grid, where a row is an icon
+; cell about three list rows tall. A window being NAMED swallows it, as it
+; swallows every key: the editor's box is drawn at its row.
+; -----------------------------------------------------------------------------
+fm_onwheel_x:
+    call kentc_di
+    call fm_svp_set             ; DI = this window's state, as fm_onkey_x has
+    test byte [di+FS_EDIT], ~FM_ESAVE & 0xFF ; 0 (none) and 8 (the Save
+    jnz .x                      ; box, on the status line) scroll; 1-7 do not
+    call fm_slayout             ; fm_scroll_by clamps against the live layout
+    call fm_isicon
+    jne .grid
+    mov dx, ax                  ; (DX is banked)
+    shl ax, 1
+    add ax, dx
+.grid:
+    jmp fm_onkey_x.scr_move
+.x:
+    jmp kretc_di
+%endif
+
 fm_onkey_x:
     call kentc_di
 
@@ -5164,12 +5194,15 @@ fm_fmt_ok:
 ;      volume, that format's geometry still live
 ; out: CF=0 with AL = 1 if it had to FALL BACK to 360K and 0 if the size the
 ;      user asked for stood; [fm_fmtrow] names the volume ACTUALLY on the
-;      platter either way. CF=1 with AX = FERR_* - the fallback format failed
+;      platter either way. CF=1 with AX = FERR_* - the fallback format failed,
+;      or a format with no fallback did not reach its last sector (FERR_IO)
 ; clobbers: AX, flags
 ;
-; Row 2 (720K) is the only row the confirmation's Space key can produce that a
-; 40-cylinder drive cannot hold, so it is the only one checked and every other
-; format pays one compare.
+; Every row is checked (SPEC.md 18.96.4): Space can pick a size the read argued
+; against, and a format that cannot write and read back its own last sector is
+; reported rather than mounted. Row 2 (720K) on a drive whose other format is
+; 360K is the one that FALLS BACK: it is the 40-cylinder case below. Anywhere
+; else a failure is FERR_IO.
 ;
 ; A failure RE-FORMATS as 360K rather than reporting and stopping, and that is
 ; not a courtesy: the 720K volume just written MOUNTS - its whole layout is
@@ -5187,11 +5220,16 @@ fm_fmt_ok:
 ; of the two to say - after the re-list, on 22.12.1's own ordering.
 ; -----------------------------------------------------------------------------
 fm_fmt_reach:
-    cmp byte [fm_fmtrow], 2
-    jne .ok
-    mov al, 2
-    call dskw_fmt_reach
-    jnc .ok
+    mov al, [fm_fmtrow]         ; EVERY format is checked now (18.96.4): the
+    call dskw_fmt_reach         ; size can be the user's against the read's,
+    jnc .ok                     ; and two int 13h calls is nothing to an
+                                ; ~80-second format
+    mov ax, FERR_IO
+    cmp byte [fm_fmtrow], 2     ; only 720K falls back, and only where 360K
+    jne .bad                    ; is the drive's other format - an HD
+    cmp byte [fm_fmtalt], 3     ; drive's or an internal 720K drive's 720K
+    jne .bad                    ; that cannot reach its end is a bad disk,
+                                ; not a 40-cylinder drive
     mov byte [fm_fmtrow], 3     ; 360K - and the caller re-lists and re-titles
     mov al, 3                   ; from this, so the window describes the disk
     call dskw_format            ; that exists rather than the one asked for
@@ -5202,38 +5240,8 @@ fm_fmt_reach:
     xor al, al                  ; CF=0 too
 .out:
     ret
-
-; -----------------------------------------------------------------------------
-; fm_fmt_sizeable - may this volume's size be overruled? (SPEC.md 18.96.2)
-; in:  AL = the volume index
-; out: CF = 0 = offer the toggle; CF = 1 = do not
-; clobbers: flags
-;
-; TWO tests, and the second is the one that arrived from the field.
-;
-; The row has to be one of the 9-sector pair (2 = 720K, 3 = 360K), because
-; that is the only ambiguity there is - rows 0 and 1 have no partner.
-;
-; And the UNIT has to be 2 or 3. The toggle exists because `AH=08h` is refused
-; and the drive cannot be asked how many cylinders it has (18.96.2), but that
-; ignorance is only ACTIONABLE on a drive the operator may have changed: units
-; 0 and 1 are the machine's own internal drives, and offering to make a 720KB
-; volume on the 5150's Tandon is offering something the reach test will only
-; take away again. Units 2 and 3 are the external pair on the 5.25" adapter's
-; 37-pin connector (18.98), which is exactly where an 80-cylinder 3.5" drive
-; turns up and exactly where the BIOS can say nothing about it.
-; -----------------------------------------------------------------------------
-fm_fmt_sizeable:
-    cmp byte [fm_fmtrow], 2     ; the 9-sector pair, and only it: CF=1
-    jb .no                      ; below it is already the refusal
-    push bx
-    mov bl, al
-    call dsk_vol_row_x
-    jc .nopop
-    cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there -
-.nopop:                         ; and CF=1 below unit 2 IS the answer
-    pop bx
-.no:
+.bad:
+    stc                         ; AX = FERR_IO, said by the caller
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5349,6 +5357,7 @@ fm_fmt_go:                      ; the image is here; the drive is the user's
     jc .bad                     ; CF=1 with AX = FERR_*. READS ONLY, so a
                                 ; refusal here has changed nothing at all
     mov [fm_fmtrow], al
+    mov [fm_fmtalt], ah         ; ...and the other size Space offers (18.96.4)
     mov al, 5                   ; ...and ask, with the size in the question
     jmp fm_edit_arm
 .bad:
@@ -6369,23 +6378,22 @@ fm_editkey:
                                 ; sits between here and the tail now
 
     ; Format's confirmation takes ONE key the other two do not: Space offers
-    ; the other row with the same media sectors-per-track (SPEC.md 18.96).
-    ; That pair exists for 9-sector media alone - rows 2 and 3, 720K and 360K
-    ; - so the toggle is `xor 1` and can never reach row 0 or 1, which is
-    ; 18.96.1's disaster case made unreachable rather than guarded against.
+    ; the other format this DRIVE makes (SPEC.md 18.96.4) - 1.44M/720K on a
+    ; 3.5" HD drive, 1.2M/360K on a 5.25" one, 720K/360K on an external
+    ; unit. The probe named both and the read only picked which came first,
+    ; so a swap can never reach a row the drive does not make.
     ;
-    ; Rows 0 and 1 have no partner, so Space FALLS THROUGH and still means no
-    ; there: the line does not name the key in that case (47), and a key that
-    ; is not advertised must not quietly change what it used to do.
+    ; A drive with one format has no other, so Space FALLS THROUGH and still
+    ; means no there: the line does not name the key in that case (47), and a
+    ; key that is not advertised must not quietly change what it used to do.
 .confirmf:
     cmp al, ' '
     jne .confirm
-    push ax
-    mov al, [di+FS_DRV]
-    call fm_fmt_sizeable        ; the SAME predicate the line is composed
-    pop ax                      ; from, so the two cannot disagree
-    jc .confirm                   ; nothing to offer: Space still means no
-    xor byte [fm_fmtrow], 1
+    cmp byte [fm_fmtalt], 0xFF  ; the SAME byte the line is composed from,
+    je .confirm                 ; so the two cannot disagree
+    mov al, [fm_fmtrow]
+    xchg al, [fm_fmtalt]
+    mov [fm_fmtrow], al
     jmp .lineonly               ; the size on the line IS [fm_fmtrow], so the
                                 ; redraw is the one a typed rename character
                                 ; already takes - nothing else on the window
@@ -9635,6 +9643,9 @@ fm_fmtstep: resb 1              ; the swap prompt's step (SPEC.md 2.8.5):
                                 ; to be formatted. Not per window for
                                 ; fm_fmtrow's reason - at most one status-line
                                 ; confirmation exists in the machine at a time
+fm_fmtalt:  resb 1              ; the OTHER row this drive makes, or 0FFh -
+                                ; what Space swaps fm_fmtrow with (SPEC.md
+                                ; 18.96.4), for fm_fmtrow's reason
 fm_fmtrow:  resb 1              ; the dskw_fmt_tab row the FORMAT confirmation
                                 ; (SPEC.md 22.12) was built from, banked when
                                 ; the mode was armed. Not per-window, because

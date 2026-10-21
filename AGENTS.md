@@ -376,7 +376,8 @@ make vencbundle #   every apps disk and plays `.V88` files, made on the host
                 #   by tools/os88venc.py or by the encoder's own window,
                 #   tools/os88vencgui.py. `viddemo` builds one hard disk per
                 #   directory of apps/video/demo/ - a whole install with the
-                #   COMMITTED demo videos in MEDIA/ - for 86Box's ST11R XTs;
+                #   COMMITTED demo videos in MEDIA/ - for 86Box's ST11R XTs,
+                #   and VGA's on a 504 MB IDE disk for a 286;
                 #   `vencbundle` zips the encoder, the tools it runs and
                 #   VIDEO.O88 for someone with no os8088 tree (§98.2.13).
                 #   Both on demand
@@ -824,9 +825,55 @@ claim, then (when asked) merge a stacked series in order — is
 `LESSONS.md` is what checking and merging the Weave waves (#124–#128)
 learned. Giving a package a **colour face on VGA/EGA** — the redraws measured
 and cut through caches first, then a layout on the card's grid, styled panes
-and picture-faced buttons, with the mono faces left as they were — is
-`.claude/skills/vga-face` (`/vga-face <package>`, **manual invocation only**),
-whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
+and buttons with their captions inside, in MIDIRack's bevelled look or the
+flat one `apps/os88flat.inc` gives (§20.5.3), with the mono faces left as
+they were — is `.claude/skills/vga-face` (`/vga-face <package>`, **manual
+invocation only**), whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4,
+§105.9.5) and WireFleet's (§114.10) learned.
+
+## Building an app or game in waves
+
+Use WireFleet's delivery workflow for new applications and games, unless the
+user gives a different workflow. The worked example is
+[docs/plans/WIREFLEET-PLAN.md](docs/plans/WIREFLEET-PLAN.md), with its companion
+[build diary](docs/HOW-WIREFLEET-WAS-BUILT.md).
+
+1. **Isolate the work.** Read `docs/UPSTREAM.md`, fetch the current base and
+   create a named feature branch in a separate git worktree. Leave the user's
+   existing checkout, local changes and running VMs alone.
+2. **Map the OS before designing.** Read `docs/INDEX.md`, the applicable
+   contracts and a shipped package that already solves the closest problem.
+   Reuse APIs, shared source and interaction conventions. Record a missing
+   facility or ownership boundary explicitly; do not copy a peer's mechanism
+   into a context where its guarantees no longer apply.
+3. **Write the contract and delivery stories first.** Pin interfaces, data
+   formats, rules, memory costs and adapter behavior in the appropriate SPEC
+   before implementation. Keep a checked story list in `docs/plans/`, with
+   concrete user-visible outcomes and verification for each wave. Distinguish
+   planned behavior from behavior that actually works.
+4. **Keep one review thread.** Open a draft PR for the foundation, then commit
+   and push each reviewable wave to that same branch and PR. Update its
+   description and checklist to reflect the current implementation and actual
+   evidence. Keep working through the authorized stories; a wave boundary is
+   not a reason to ask permission to continue. Do not merge without the user's
+   instruction.
+5. **Treat artwork as source.** When bitmap artwork benefits the product, use
+   image generation as requested or appropriate, retain the selected source
+   and exact prompt, and build runtime assets through a deterministic host
+   converter. Include explicit monochrome assets when the supported adapters
+   need them. No generation service belongs in `make` or on the guest.
+6. **Keep a "How It Was Built" diary as the work happens.** Store it with the
+   repository documentation, link it from the plan, and write for later reuse
+   on the website: user stories, decisions, constraints, discoveries, pictures
+   and measured results. Separate observations from intentions, and name what
+   was actually tested. Updating the diary does not authorize website
+   publication.
+7. **Verify each wave at the right level.** Use host builds/checks and a boot
+   to look during implementation; name the affected suite rows. Respect the
+   Testing section below: run the deduplicated soak union and `test-full`
+   after the final batch, not once per wave. Finish with the actual supported
+   adapters, sound/link configurations and resource cleanup checked, and report
+   hardware-only limitations honestly. Do not mark unfinished stories done.
 
 ## Hard rules (§1 — these break silently if violated)
 
@@ -853,7 +900,7 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 59 sites in 20 files, every one
+  finished** (§6.6.5): the registry stands at 57 sites in 21 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are

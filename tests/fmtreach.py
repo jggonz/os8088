@@ -8,8 +8,8 @@ CYLINDER 0, so on a 40-track drive it formats, mounts and then lies about its
 size. dskw_fmt_reach_x is the check: after a row-2 (720K) format it writes a
 marker to the volume's LAST sector (LBA 1439, cylinder 79), re-zeroes the
 buffer, reads the sector back and compares. A failure re-formats the disk as
-360K and says 'Made 360K, not 720K'. No other row reaches that code: fmtlow
-formats 360K, and only row 2 is checked.
+360K and says 'Made 360K, not 720K'. Since SPEC.md 18.96.4 every format runs the
+check (fmtlow's 360K reaches LBA 719), but row 2 is the one that FALLS BACK.
 
 TWO ARMS, one boot each, on os8088_5150_cga_720b_gla (an 80-track B:):
 
@@ -113,7 +113,13 @@ def arm(wrong, tmp):
         row = m.read(m.sym("fm_fmtrow"), 1)[0]
         check(row == 3, "arm %s: the probe offers 360K (no AH=08h)" % tag,
               "", got=row, want=3)
-        m.write(m.sym("fm_fmtrow"), bytes([2]))   # the user's Space: 720K
+        # the user's Space on an EXTERNAL 9-sector drive: 720K, with 360K
+        # the other size. This fixture's GLaBIOS answers no AH=08h, so the
+        # probe leaves fm_fmtalt at 0FFh and offers no Space - poke BOTH
+        # bytes Space swaps, because the reach test falls back to 360K only
+        # where 360K is the drive's other format (SPEC.md 18.96.4)
+        m.write(m.sym("fm_fmtrow"), bytes([2]))
+        m.write(m.sym("fm_fmtalt"), bytes([3]))
 
         seen = {"tracks": 0, "rd79": 0, "wr79": 0}
 

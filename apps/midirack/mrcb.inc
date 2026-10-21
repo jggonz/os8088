@@ -290,6 +290,44 @@ mr_scroll:
     pop ax
     ret
 
+; mr_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = the window,
+; gfx lock held - W_ONKEY's environment, so the cards answer as mr_onkey's
+; do: the Settings dialog is modal and the turn is nothing, any other card
+; is taken down by it. Otherwise WHEEL_STEPS ROWS a notch, a playlist row
+; being this list's line (an arrow is one), entered at mr_scroll's own
+; .clamp with its frame - the last top that still fills the box, and the
+; moved-or-not test that makes a turn against an end draw nothing
+mr_onwheel:
+    cmp byte [mr_card], 0
+    je .list
+    cmp byte [mr_card], MR_CARD_SET
+    je .ret
+    mov byte [mr_card], 0
+    jmp mru_repaint
+.list:
+    push ax                         ; mr_scroll's frame, which .clamp pops
+    push bx
+    push cx
+    push dx
+    mov cx, WHEEL_STEPS
+    imul cx
+    pop dx
+    mov bl, [mrl_top]
+    xor bh, bh
+    add ax, bx                      ; signed: only the TOP can wrap
+    jns .hi
+    xor ax, ax
+.hi:
+    or ah, ah                       ; a top is a byte: past it is the end,
+    jz .lo                          ; which .clamp makes the last full box
+    mov al, 0xFF
+.lo:
+    mov bl, al
+    mov cx, [mru_lrows]
+    jmp mr_scroll.clamp
+.ret:
+    ret
+
 ; mr_isspk - CF = 1 when a BRACKET output - the speaker or a Covox - is the
 ; one a Play would use (so Play in Background means something: neither can
 ; play on the desktop, and the tone is what plays there instead)

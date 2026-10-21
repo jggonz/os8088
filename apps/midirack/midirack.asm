@@ -301,6 +301,8 @@ mr_entry:
     call OSAPI_WM_ONWAKE
     mov ax, mr_onclose
     call OSAPI_WM_ONCLOSE
+    mov ax, mr_onwheel              ; the WHEEL scrolls the playlist
+    call OSAPI_WM_ONWHEEL           ; (SPEC.md 13.18)
     mov word [mr_msg], mr_s_ready
     mov byte [mr_state], MR_ST_STOP
     mov byte [mr_first_paint], 1    ; the settled repaint, and the playlist,

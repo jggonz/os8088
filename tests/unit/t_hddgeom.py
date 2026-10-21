@@ -223,6 +223,41 @@ class HddAttrTests(unittest.TestCase):
                                  'read-only file here is one a keep-install cannot '
                                  'replace, and it stops naming it')
 
+    def test_a_big_volume_is_totsec32_and_type_06h(self):
+        # SPEC.md 18.7.5, 52.3: a --hdd --geometry disk past the 32-64MB
+        # band is ONE BIG VOLUME - BPB_TotSec16 0, BPB_TotSec32 the
+        # partition's count, type 06h - which only `make viddemo` built
+        missing = [str(p) for p in HDDARTS if not p.exists()]
+        self.assertFalse(missing, 'run `make` first: %s' % missing)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'big.img'
+            b = ROOT / 'build'
+            r = subprocess.run(
+                [sys.executable, str(ROOT / 'tools' / 'os88disk.py'), '-o', str(out),
+                 '--hdd', '--geometry', '140/16/63', '--mbr', str(b / 'mbr.bin'),
+                 '--boot', str(b / 'boothd.bin'), '--kernel', str(b / 'kernel.sys'),
+                 str(b / 'hdd.drv')], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = subprocess.run([sys.executable, str(ROOT / 'tools' / 'os88disk.py'),
+                                '--verify-hdd', str(out)], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            with open(out, 'rb') as f:
+                mbr = f.read(SECTOR)
+                base, cnt = struct.unpack_from('<II', mbr, disk.HP_TBL + 8)
+                f.seek(base * SECTOR)
+                bs = f.read(SECTOR)
+        self.assertEqual(mbr[disk.HP_TBL + 4], 0x06)
+        self.assertEqual(cnt, 140 * 16 * 63 - 63)        # 141,057: past the band
+        tot16, = struct.unpack_from('<H', bs, 19)
+        tot32, = struct.unpack_from('<I', bs, 32)
+        self.assertEqual((tot16, tot32), (0, cnt))
+        rsvd, = struct.unpack_from('<H', bs, 14)
+        rootn, = struct.unpack_from('<H', bs, 17)
+        fatsz, = struct.unpack_from('<H', bs, 22)
+        data = rsvd + bs[16] * fatsz + (rootn * 32 + SECTOR - 1) // SECTOR
+        clusters = (tot32 - data) // bs[13]
+        self.assertTrue(4085 <= clusters <= 65524, clusters)
+
 
 if __name__ == '__main__':
     unittest.main()

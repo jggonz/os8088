@@ -2296,8 +2296,10 @@ tcp_timers:
     call tcp_out
     jmp short .arm
 .data:
-    cmp word [bx+SKO_TXS], 0
-    je  .fin
+    cmp word [bx+SKO_TXN], 0            ; QUEUED, not in flight: a go-back-n
+    je  .fin                            ; whose tcp_kick met an ARP miss left
+                                        ; TXS = 0 with the RTO armed, so .idle
+                                        ; never kicks it and only this retries
     ; **GO-BACK-N** (SPEC.md 72.4.3): everything out is forgotten and sent
     ; again from the front, by the one routine that sends data. It is still
     ; "send the front of the ring again" - only as many segments of it as the

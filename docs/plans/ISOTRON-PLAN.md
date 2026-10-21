@@ -36,7 +36,7 @@ won.
 
 | subject | decision | why (section) |
 |---|---|---|
-| SPEC section | **§108** (§107 is taken on `feature/dia`; §104 is reserved by the MIDIRack worktrees) | §2 |
+| SPEC section | **§108** (§107 is taken on `feature/dia`; section 104 is reserved by the MIDIRack worktrees) | §2 |
 | grid | **one cell = one CGA pixel**: u = 1..215 by d = 1..99 inside a ring of outline cells (217 x 101 grid) | §3.1 |
 | projection | oblique (cabinet) 45 degrees, not isometric: `x = u + d`, `y = 174 - d - 24(h-1)` in a 320x200 logical picture | §3.1 |
 | wall | a cell is one screen column: 1 white top pixel and 22 face rows | §3.1 |

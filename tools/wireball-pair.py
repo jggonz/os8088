@@ -10,7 +10,6 @@ import configparser
 import fcntl
 import os
 from pathlib import Path
-import plistlib
 import re
 import shutil
 import subprocess
@@ -21,6 +20,9 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
 PAIR = BUILD / '86box-wireball-pair'
+TITLE = 'WireBall'
+APP_IMAGE = 'wireball360.img'
+APP_DISK = 'wireball.img'
 
 
 def running_profiles():
@@ -59,8 +61,11 @@ def find_box(override):
         raise RuntimeError(f'86Box executable not found: {path}')
     info = path.parent.parent / 'Info.plist'
     if sys.platform == 'darwin' and info.exists():
-        with info.open('rb') as stream:
-            version = plistlib.load(stream).get('CFBundleShortVersionString', '')
+        # macOS owns this metadata and its reader. Avoid loading Python's
+        # optional expat extension just to check one installed-app version.
+        version = subprocess.check_output(['/usr/libexec/PlistBuddy', '-c',
+                                           'Print :CFBundleShortVersionString', str(info)],
+                                          text=True).strip()
         if version and int(version.split('.')[0]) < 6:
             raise RuntimeError(f'86Box {version} is too old; this serial link requires 6.0+.')
     return path
@@ -78,10 +83,10 @@ def prepare():
         cfg['General']['scale'] = '1'
         # Host metadata belongs to the host that will run this profile.
         cfg['General'].pop('host_cpu', None)
-        for source, target in (('os8088-360.img', 'system.img'), ('wireball360.img', 'wireball.img')):
+        for source, target in (('os8088-360.img', 'system.img'), (APP_IMAGE, APP_DISK)):
             shutil.copy2(BUILD / source, profile / target)
         cfg['Floppy and CD-ROM drives']['fdd_01_fn'] = str(profile / 'system.img')
-        cfg['Floppy and CD-ROM drives']['fdd_02_fn'] = str(profile / 'wireball.img')
+        cfg['Floppy and CD-ROM drives']['fdd_02_fn'] = str(profile / APP_DISK)
         cfg['Ports (COM & LPT)'] = {
             'serial1_enabled': '1', 'serial1_device': 'none',
             'serial2_enabled': '1', 'serial2_device': 'pipe',
@@ -92,16 +97,21 @@ def prepare():
         }
         with (profile / '86box.cfg').open('w') as stream:
             cfg.write(stream)
-        print(f'Prepared WireBall PC {number}: {profile}', flush=True)
+        print(f'Prepared {TITLE} PC {number}: {profile}', flush=True)
 
 
 def main():
+    global PAIR, TITLE, APP_IMAGE, APP_DISK
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--game', choices=('wireball', 'wirefleet'), default='wireball', help='game to put on the paired XTs')
     parser.add_argument('--86box', dest='box', metavar='PATH', help='86Box executable or macOS .app (also accepts BOX environment variable)')
     parser.add_argument('--roms', type=Path, metavar='DIR', help='override the installed 86Box ROM directory')
     parser.add_argument('--prepare-only', action='store_true', help='build disks and write configs without opening 86Box')
     parser.add_argument('--no-build', action='store_true', help='use existing build/os8088-360.img and wireball360.img')
     args = parser.parse_args()
+    if args.game == 'wirefleet':
+        TITLE, APP_IMAGE, APP_DISK = 'WireFleet', 'wireflet360.img', 'wireflet.img'
+        PAIR = BUILD / '86box-wirefleet-pair'
     if sys.platform not in ('darwin', 'linux'):
         raise RuntimeError('This FIFO launcher supports macOS and Linux.')
     if args.roms and not args.roms.expanduser().is_dir():
@@ -111,14 +121,14 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX)
         running = running_profiles()
         if running == [1, 2] and not args.prepare_only:
-            print('Both WireBall PCs are already running; their disks were left untouched.')
+            print(f'Both {TITLE} PCs are already running; their disks were left untouched.')
             return
         if running:
-            raise RuntimeError('Close both WireBall PCs before preparing or relaunching the pair; their disks are in use.')
+            raise RuntimeError(f'Close both {TITLE} PCs before preparing or relaunching the pair; their disks are in use.')
         box = None if args.prepare_only else find_box(args.box)
         if not args.no_build:
-            subprocess.run(['make', 'BUILD=build', 'build/os8088-360.img', 'build/wireball360.img'], cwd=ROOT, check=True)
-        for image in ('os8088-360.img', 'wireball360.img'):
+            subprocess.run(['make', 'BUILD=build', 'build/os8088-360.img', 'build/'+APP_IMAGE], cwd=ROOT, check=True)
+        for image in ('os8088-360.img', APP_IMAGE):
             if not (BUILD / image).is_file():
                 raise RuntimeError(f'Missing build/{image}; run again without --no-build.')
         prepare()
@@ -126,7 +136,7 @@ def main():
             return
         for number in (1, 2):
             profile = PAIR / f'pc{number}'
-            command = [str(box), '-P', str(profile), '-V', f'WireBall PC {number}', '-N']
+            command = [str(box), '-P', str(profile), '-V', f'{TITLE} PC {number}', '-N']
             if args.roms:
                 command += ['-R', str(args.roms.expanduser().resolve())]
             if sys.platform == 'darwin' and box.parent.parent.parent.suffix == '.app':
@@ -140,8 +150,13 @@ def main():
             if time.monotonic() >= deadline:
                 raise RuntimeError('Both 86Box processes did not start. Check the installed ROMs and pc1/pc2 host.log (Linux).')
             time.sleep(0.1)
-        print('Open B: → WIREBALL and choose Serial Match (S) on each PC.\n'
-              'COM2 is linked; click a VM to control its paddle with Up/Down or W/S.')
+        if args.game == 'wirefleet':
+            print('Open B: → WIREFLET on each PC; each finds the other on COM2 by itself (move the mouse once).\n'
+                  'Place or auto-place (A), then Ready (Y). The lower-identity captain fires first.\n'
+                  'T: chat, F: fullscreen, S/O: save/load. Link → Connect COM2 is the manual fallback.')
+        else:
+            print('Open B: → WIREBALL and choose Serial Match (S) on each PC.\n'
+                  'COM2 is linked; click a VM to control its paddle with Up/Down or W/S.')
 
 
 if __name__ == '__main__':

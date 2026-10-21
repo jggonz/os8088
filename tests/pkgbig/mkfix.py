@@ -60,10 +60,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
 from os88pkg import PKG_FMT       # noqa: E402 - the format byte (SPEC.md 20.2.0)
 
-APP_MAX_SIZE = 0xF000           # SPEC.md 3 - the primary segment's image+bss
+APP_MAX_SIZE = 0xF000           # NOT the live ceiling: SPEC.md 20.1.1 raised
+                                # that to 0xFE00. These fixtures were cut at
+                                # the old one and still test the same `jc` -
+                                # an image under the bound whose sum CARRIES
+                                # (0xE000 and 1, both below 0xFE00 too)
 PKG_FILE_HI = 16                # SPEC.md 3 - the mount's file bound, <1MB
 
-BIG = 70144                     # 137 sectors: over 60KB, well under 1MB
+BIG = 70144                     # 137 sectors: over 64KB, well under 1MB
 HUGE = PKG_FILE_HI << 16        # 1,048,576 - the first size the mount refuses
 FENCE = APP_MAX_SIZE            # 61,440 - image == file, so only bss decides
 

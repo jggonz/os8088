@@ -1074,16 +1074,18 @@ ld_alloc:
     mov ax, [ld_img]            ; need = roundup512(img + bss)
     add ax, [ld_bss]            ; <= APP_MAX_SIZE, and NOW that is enforced:
     add ax, 511                 ; ld_check_hdr's `jc` above is what makes both
-                                ; of these adds overflow-free, so `<= 0xF000 +
-                                ; 511: no 16-bit overflow` is a fact rather
-                                ; than the assumption it was
+                                ; of these adds overflow-free, so `<= 0xFE00 +
+                                ; 511 = 0xFFFF: no 16-bit overflow` is a fact
+                                ; rather than the assumption it was - and it
+                                ; is exactly WHY APP_MAX_SIZE is 0xFE00
+                                ; (SPEC.md 20.1.1)
     and ax, 0FE00h              ; ...and down to the 512 boundary. `>>9 <<9`
                                 ; through CL is the same operation in six
                                 ; bytes instead of three, and clobbers CL
                                 ;
                                 ; NO SECOND BOUND TEST, and no `.big2`: with
                                 ; the fence repaired this value is at most
-                                ; 0xF000 by construction, so `cmp ax,
+                                ; 0xFE00 by construction, so `cmp ax,
                                 ; APP_MAX_SIZE / ja .big2` was code that
                                 ; could not run. It was also the one exit
                                 ; here reached by a `ja` rather than a `jc`,
@@ -1165,6 +1167,16 @@ ld_alloc:
                                 ; path. Too large a value widens a security
                                 ; fence, silently. Loosen either contract and
                                 ; this line has to come back.
+    sbb ax, 0                   ; ...and SATURATED: a region over 63KB is a
+                                ; 64KB claim, and 64 << 10 is 0 in a word,
+                                ; which is what I_SIZE says for a BUILT-IN
+                                ; (inst_icon_ptr, inst_sweep_seg). The bit
+                                ; the shift pushed out is in CF, so a 64KB
+                                ; region reads 0xFFFF and every smaller one
+                                ; is untouched (SPEC.md 20.1.1). Both fences
+                                ; test `< I_SIZE`, so this refuses offset
+                                ; 0xFFFF alone, which image + bss <= 0xFE00
+                                ; already does
     mov [ld_need], ax
     clc                         ; `shl ax, cl` above WRITES CF, and this
     ret                         ; routine's answer is CF - it was the caller's

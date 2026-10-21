@@ -384,6 +384,10 @@ wr_entry:
                                         ; not drag, which is what both kernel
                                         ; bars did before SPEC.md 13.10.5
     mov bx, [wr_win]
+    mov ax, wr_onwheel                  ; the mouse WHEEL scrolls the list
+    call OSAPI_WM_ONWHEEL               ; (SPEC.md 13.18); a no-op on the
+                                        ; 128KB kernel, flags preserved
+    mov bx, [wr_win]
     call OSAPI_WM_WAKE
     clc
 .out:
@@ -2114,6 +2118,27 @@ wr_scroll:
     je .out
     mov [wr_top], bx
     call wr_dlist
+.out:
+    ret
+
+; --- wr_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = window ----
+; THE VIEW MOVES AND THE SELECTION DOES NOT: this is the bar's arrows (wr_scroll
+; straight), not the arrow KEYS, which move the selection (wr_selby) and drag
+; the view along. WHEEL_STEPS ROWS A NOTCH, because a row here is ONE line of
+; text on a 16px pitch - exactly the Disk window's list row, which the wheel
+; moves three a notch (SPEC.md 13.18.3) - so the two lists turn alike. All the
+; notches since the last UI pass arrive summed: one wr_scroll, which clamps
+; and repaints only if the view moved. The About card comes down first and
+; spends the turn, as it does a key.
+wr_onwheel:
+    call wr_sv                          ; AX..DI and ES, given back by the ret
+    call wr_abdismiss
+    jc .out
+    call wr_geom                        ; [wr_rows] for this window's height
+    jc .out
+    mov dx, WHEEL_STEPS
+    imul dx                             ; AX = rows, signed
+    jmp wr_scroll                       ; its ret lands in our wr_rs
 .out:
     ret
 

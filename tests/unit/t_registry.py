@@ -65,6 +65,8 @@ UNREGISTERED = {
                    "(docs/WRITING-TESTS.md 2.1)",
 
     # --- library and support code, not tests ---
+    "wcprobe.py": "WireChat's guest reader and reply injector (SPEC.md "
+                  "113.5.1) - tests/wcdraw.py's, mrprobe's shape",
     "mrprobe.py": "MIDIRack's guest reader (SPEC.md 105.11) - the running "
                   "package's variables by NAME, for tests/midirack.py; "
                   "library, not a test",

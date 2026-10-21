@@ -145,9 +145,29 @@ ui_task:
                                 ; the 0x1C00 an ENHANCED ROM would have given
                                 ; us, SPENT whatever happens below
     or ah, ah                   ; ...or 0, which is the ordinary pass with
+%ifdef KERN_BIG
+    jnz .kwake                  ; nothing latched and is most of them
+    ; --- ...and THE WHEEL (SPEC.md 10.4), the same way: a level the mouse
+    ; backends add to, read and cleared in ONE instruction (AX is 0, so the
+    ; xchg leaves 0 behind), and handed to the window a key would reach - with
+    ; the same lock, the same billing and the same target, through W_ONWH
+    ; instead of W_ONKEY. However many notches came since the last pass, the
+    ; window gets ONE call: a flick on an 8088 is one scroll, not a queue of
+    ; them. No blk_wake: the packet that carried the notch already counted,
+    ; and blk_pass below spends it. But a notch out of a DARK screen is the
+    ; input that wakes it, and SPEC.md 64.2 drops that: left in the level, it
+    ; is cleared by blk_pass's wake. AL is 0, so the compare is even (PARITY)
+    cmp [blk_on], al
+    jne .events
+    xchg ax, [mou_whl]
+    or ax, ax
+    jz .events
+    mov di, W_ONWH
+    jmp short .kdisp
+%else
     jz .events                  ; nothing latched and is most of them
     jmp short .kwake            ; the ONE thing this arm still needs is the
-                                ; wake, and .typed's is just below
+%endif                          ; wake, and .typed's is just below
 .typed:
     KFZ 1                       ; 1: a key is pending
     mov ah, 0x00                ; fetch it: AL = ascii, AH = scan. AHEAD OF
@@ -191,6 +211,10 @@ ui_task:
     call COLD_SEG:desk_key_x    ; Enter / Delete on the DESKTOP's selection,
     jc .events                  ; while Locator owns the bar (SPEC.md 26.8.5).
 %endif                          ; With the lock FREE: an open locks itself
+%ifdef KERN_BIG
+    mov di, W_ONKEY             ; WHICH record word: the wheel joins below
+.kdisp:                         ; with W_ONWH (SPEC.md 10.4), and nothing
+%endif                          ; from here to the read spends DI
     call gfx_lock               ; handler draws; it runs under the lock
     KFZ 5                       ; 5: WE HAVE THE GFX LOCK. A bar that stops at
                                 ;    4 is a mutex nobody released
@@ -201,7 +225,11 @@ ui_task:
     or bx, bx
     jz .key_done
     mov si, bx                  ; W_ONKEY contract: AL=ascii, AH=scan, SI=win
+%ifdef KERN_BIG
+    mov bp, [bx + di]           ; W_ONKEY, or W_ONWH for the wheel (BX = SI)
+%else
     mov bp, [si + W_ONKEY]      ; wm_pkgcall: record in SI (where the
+%endif
     or bp, bp                   ; contract already puts it), offset in BP -
     jz .key_done                ; and 0 = the window may not take keys, asked
                                 ; of the register rather than of the record

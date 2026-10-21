@@ -2073,7 +2073,7 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/diskops.drv $(BUILD)/hiber.drv \
                                       $(BUILD)/dock.drv $(BUILD)/extd.drv \
                                       $(BUILD)/win95.drv $(BUILD)/desk.drv \
-                                      $(BUILD)/stikmenu.drv \
+                                      $(BUILD)/stikmenu.drv $(BUILD)/serial.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -2448,7 +2448,7 @@ $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 # (SPEC.md 2.8.2), so shipping the wrong one is refused rather than executed;
 # this is what stops it happening in the first place.
 KMODDIR = $(BUILD)
-KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv
+KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv $(KMODDIR)/serial.drv
 # ...and kern_big's FOURTH, hibernate (SPEC.md 87, MOD_HIBER). It is NOT in
 # $(KMODS) because $(SMALLDRIVERS) is $(KMODS) and kern_small has no hibernate
 # at all now - no mod_tab row, no name and no module - so a small floppy that
@@ -2493,10 +2493,11 @@ KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
 ifneq ($(KERN_SMALL),)
 KMODARGS += -m 3=$(BUILD)/filecp.drv
 KMODARGS += -m 4=$(BUILD)/fdlg.drv
+KMODARGS += -m 5=$(BUILD)/serial.drv
 else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
             -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv \
-            -m 8=$(BUILD)/stikmenu.drv
+            -m 8=$(BUILD)/stikmenu.drv -m 9=$(BUILD)/serial.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint
@@ -5945,7 +5946,8 @@ $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBST
 $(BUILD)/wirechat.bin: apps/wirechat/wirechat.asm apps/wirechat/wcnet.inc \
                        apps/wirechat/wcproto.inc apps/wirechat/wcview.inc \
                        apps/wirechat/wcact.inc apps/wirechat/wccfg.inc \
-                       apps/wirechat/wctxt.inc apps/os88api.inc \
+                       apps/wirechat/wctxt.inc apps/wirechat/wcband.inc \
+                       apps/os88api.inc \
                        apps/os88ui.inc apps/os88line.inc apps/os88data.inc \
                        apps/os88sock.inc drivers/net/netpkg.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/wirechat/ -I drivers/net/ -o $@ apps/wirechat/wirechat.asm
@@ -7337,7 +7339,7 @@ $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBST
 .PHONY: gorillas
 gorillas: $(BUILD)/gorillas.o88
 
-$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/gorillas/grfront.inc apps/gorillas/grdraw.inc apps/gorillas/grmusic.inc apps/gorillas/grbgm.inc apps/gorillas/grbgmdata.inc apps/gorillas/grai.inc apps/gorillas/grplay.inc apps/gorillas/grphysics.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
+$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/gorillas/grfront.inc apps/gorillas/grdraw.inc apps/gorillas/grmusic.inc apps/gorillas/grbgm.inc apps/gorillas/grbgmdata.inc apps/gorillas/grai.inc apps/gorillas/grguide.inc apps/gorillas/grplay.inc apps/gorillas/grphysics.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/gorillas/ -o $@ apps/gorillas/gorillas.asm
 
 $(BUILD)/gorillas.o88: $(BUILD)/gorillas.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
@@ -7907,6 +7909,14 @@ $(BUILD)/regpair.bin: tests/regpair/regpair.asm apps/os88api.inc | $(BUILD)
 
 $(BUILD)/regpair.o88: $(BUILD)/regpair.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/regpair.bin -o $@
+
+# SPEC.md 5.4.1.5's fixture, for tests/b4walk.py: one window, one OSAPI_GFX_BLIT4
+# of a dithered block in its W_PAINT. The row writes its own scratch disk.
+$(BUILD)/b4walk.bin: tests/b4walk/b4walk.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/b4walk/b4walk.asm
+
+$(BUILD)/b4walk.o88: $(BUILD)/b4walk.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/b4walk.bin -o $@
 
 # ...and the C SDK's, for tests/cmemmove.py
 # (docs/plans/HEAP-UNPIN-PLAN.md 2.1.1 item 3). CHELLO is the C toolchain's
@@ -8497,13 +8507,23 @@ pkgrun: $(BUILD)/pkgrun.img $(BUILD)/pkgrun360.img
 # they test has any geometry in it. The disk carries BOTH gates' fixtures
 # (tests/pkgbig.py and tests/pkgfence.py) because it is one `--raw` build and
 # one megabyte of it is HUGE.O88.
-$(BUILD)/pkgbig.img: tests/pkgbig/mkfix.py tools/os88disk.py tools/os88pkg.py | $(BUILD)
+#
+# ...and PKGMAX.O88, the one fixture that IS a package (tests/pkgmax.py): a
+# real image + bss of exactly APP_MAX_SIZE, which must LOAD - SPEC.md 20.1.1's
+# 64KB claim, the size two of the loader's words used to wrap on.
+$(BUILD)/pkgbig.img: tests/pkgbig/mkfix.py tests/pkgbig/pkgmax.asm \
+                     apps/os88api.inc tools/os88disk.py tools/os88pkg.py \
+                     | $(BUILD)
 	python3 tests/pkgbig/mkfix.py $(BUILD)/pkgbig
+	$(NASM) -f bin -w+error -I apps/ -o $(BUILD)/pkgbig/pkgmax.bin \
+		tests/pkgbig/pkgmax.asm
+	$(OS88PKG) $(BUILD)/pkgbig/pkgmax.bin -o $(BUILD)/pkgbig/PKGMAX.O88
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--raw $(BUILD)/pkgbig/BIGPKG.O88 --raw $(BUILD)/pkgbig/HUGE.O88 \
 		--raw $(BUILD)/pkgbig/BSSWRAP.O88 --raw $(BUILD)/pkgbig/BSSWORST.O88 \
 		$(BUILD)/pkgbig/BIGPKG.O88 $(BUILD)/pkgbig/HUGE.O88 \
-		$(BUILD)/pkgbig/BSSWRAP.O88 $(BUILD)/pkgbig/BSSWORST.O88
+		$(BUILD)/pkgbig/BSSWRAP.O88 $(BUILD)/pkgbig/BSSWORST.O88 \
+		$(BUILD)/pkgbig/PKGMAX.O88
 	@python3 tools/os88disk.py --verify $@
 
 # --- PKGFMT, the format byte's disk (ON DEMAND: `make pkgfmt`) ---------------
@@ -8526,6 +8546,7 @@ pkgfmt: $(BUILD)/pkgfmt360.img
 #   make pkgbig                          builds the fixture disk
 #   python3 tests/pkgbig.py              runs the mount/size gate on MartyPC
 #   python3 tests/pkgfence.py            ...and the img+bss write-bound gate
+#   python3 tests/pkgmax.py              ...and a package AT the ceiling loads
 pkgbig: $(BUILD)/pkgbig.img
 
 # --- REHOME, the re-home's consumer (ON DEMAND: `make rehome`) --------------
@@ -11875,8 +11896,14 @@ vidpm: $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 \
 # the BIOS - the partition os8088's own installer makes, from LBA 26 for
 # 63,726 sectors - and os88hdd.py --wrap puts it under the card's hidden
 # cylinder and a VHD footer. On demand: 31 MB of video is no part of `all`.
+#
+# ...except VGA's, which is a 286's: a 504 MB IDE disk (1024/16/63, the
+# most a BIOS's CHS reaches without LBA), the volume from the MBR's own
+# track and a VHD footer of our own - its 290 MB of video is too much for an
+# XT's controller, and the videos were made for a 286 and a 486 anyway
 VIDDEMO_ADAPTERS := $(notdir $(patsubst %/,%,$(sort $(dir $(wildcard apps/video/demo/*/00-VIDS.TXT)))))
-VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-ST11R.VHD)
+VIDDEMO_IDE := vga
+VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-$(if $(filter $(a),$(VIDDEMO_IDE)),IDE,ST11R).VHD)
 # (= and $$(APPS) below, not :=: the apps disk's lists are defined further
 # down this file, and an immediate expansion here took them as EMPTY)
 VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
@@ -11911,6 +11938,22 @@ $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
 	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img --st11 \
 		--cyls 615 --heads 4 --spt 26 --out $@
+	rm -f $(BUILD)/viddemo/$*.img
+
+$(BUILD)/VIDDEMO-%-IDE.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $$(APPS) \
+	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/00-VIDS.TXT \
+	$$(wildcard apps/video/demo/$$(shell echo $$* | tr A-Z a-z)/*.V88) \
+	tools/os88disk.py tools/os88hdd.py
+	python3 tools/os88disk.py -o $(BUILD)/viddemo/$*.img --hdd \
+		--geometry 1024/16/63 --mbr $(BUILD)/mbr.bin \
+		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(VIDDEMO_INSTALL) \
+		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
+	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
+	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img \
+		--cyls 1024 --heads 16 --spt 63 --out $@
 	rm -f $(BUILD)/viddemo/$*.img
 
 # THE ENCODER FOR PEOPLE WITH NO os8088 TREE (SPEC.md 98.2.13): the window,
@@ -13510,7 +13553,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
 # unchanged.
 DM_NATIVE := apps/drmario/art/native
 DM_SHIP := $(BUILD)/drmarco.o88
-APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
+APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/wireflet.o88 $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
               $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
@@ -16568,6 +16611,29 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 	$(BOX) -P $(VM386PIXEL) -N
 
 # WireBall: serial null-modem Pong (SPEC.md 109).
+# WireFleet (SPEC.md 114). One embedded-art package; all four disk sizes.
+.PHONY: wirefleet wirefleetdisk wirefleet-pair wirefleettest
+wirefleet-pair:
+	python3 tools/wireball-pair.py --game wirefleet
+wirefleettest: wirefleetdisk $(IMG)
+	python3 tests/wirefleetlink.py
+wirefleet: $(BUILD)/wireflet.o88
+$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
+$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+apps/wirefleet/art/tiles.inc: apps/wirefleet/art/ships-source.png tools/wirefleet_assets.py
+	python3 tools/wirefleet_assets.py
+wirefleetdisk: $(BUILD)/wireflet.img $(BUILD)/wireflet720.img $(BUILD)/wireflet120.img $(BUILD)/wireflet360.img
+$(BUILD)/wireflet.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $< apps/wirefleet/README.TXT
+$(BUILD)/wireflet720.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $< apps/wirefleet/README.TXT
+$(BUILD)/wireflet120.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $< apps/wirefleet/README.TXT
+$(BUILD)/wireflet360.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $< apps/wirefleet/README.TXT
+
 .PHONY: wireball wireballdisk wireballtest wireball-pair
 wireball-pair:
 	python3 tools/wireball-pair.py

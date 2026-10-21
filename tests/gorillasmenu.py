@@ -194,7 +194,7 @@ def main():
                     blink(m, p, code, tag)
                     keys = ('Digit0', 'Enter', 'Backspace', 'Enter',
                             'KeyA', 'Backspace', 'Enter', 'Enter',
-                            'Enter', 'Enter', 'Enter')
+                            'Enter', 'Enter', 'Enter', 'Enter')
                     values = []
                     for i, key in enumerate(keys):
                         values.append(measure(m, p, code, key, tag))

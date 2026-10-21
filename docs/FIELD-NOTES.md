@@ -308,7 +308,10 @@ reach test is kept on its own merits, with a toast.
 
 17.3 (720K on the field machine came back 360K) is §18.96.2 working on a
 40-cylinder Tandon: 354K free on a 360KB volume is correct. 17.4 (the size
-toggle) is `fm_fmt_sizeable`: `Spc=size` appears for units 2 and 3 only.
+toggle) was `fm_fmt_sizeable`: `Spc=size` appears for units 2 and 3 only on
+a 9-sector drive. SPEC.md §18.96.4 replaced the routine with the probe's own
+answer (`[fm_fmtalt]`) and offers the HD drives' pairs too; the unit rule
+stands for the 9-sector drive.
 
 ---
 

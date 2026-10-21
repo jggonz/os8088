@@ -87,7 +87,7 @@
 ;
 ; There is no assembly-time APP_MAX_SIZE assertion here, and that is not an
 ; oversight: `%if` cannot compare a section-relative label to a constant
-; (`operands differ by a non-scalar`). The 60KB ceiling is enforced twice
+; (`operands differ by a non-scalar`). The 63.5KB ceiling is enforced twice
 ; downstream instead - tools/os88pkg.py on every build, and ld_check_hdr on
 ; every load (SPEC.md 21) - and the build rule prints the sizes.
 ;
@@ -719,6 +719,38 @@ cc_onwake:
     push si                         ; arg 1: void *win
     call _os88_onwake
     add sp, 2
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
+
+%ifdef CC_HAS_ONWHEEL
+; -----------------------------------------------------------------------------
+; cc_onwheel - the mouse WHEEL (SPEC.md 13.18), installed by os88_wm_onwheel().
+; The kernel's dispatch IS the key's (13.18.1), so this is cc_onkey's
+; environment exactly: the UI task, the gfx lock HELD, billed to the instance,
+; and only on the window a key would reach. The notches arrive SUMMED, so the
+; C scrolls by notches * OS88_WHEEL_STEPS lines in ONE move and repaints once.
+; in:  AX = the SIGNED notches, positive toward the user (scroll DOWN);
+;      SI = the window; CX and DX carry nothing; lock held
+; out: nothing; every register the kernel cares about is preserved
+; -----------------------------------------------------------------------------
+cc_onwheel:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cld
+    push si                         ; arg 2: void *win
+    push ax                         ; arg 1: int notches
+    call _os88_onwheel
+    add sp, 4
     pop es
     pop di
     pop si

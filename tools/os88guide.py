@@ -20,15 +20,20 @@ layout - folders, files, sizes, free space - is walked out of the image
 itself. The only hand-written text is `tools/guide/entries.toml` (one line
 per file name), `tools/guide/manuals/*.md` (one manual per program) and the
 TOOLS / FIRMWARE tables below. Screenshots are never committed: a manual
-names a shot by id and the capture step that makes it lives beside it.
+names a shot by id and the capture step that makes it lives beside it. The
+demo videos' browser copies ARE committed (tools/guide/videos/, made by
+tools/guide/vidpreview.py), because making them takes ffmpeg and minutes; a
+.V88 on a disk finds its copy by the SHA-256 of its bytes.
 """
 
 import argparse
+import hashlib
 import html
 import importlib.util
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -78,7 +83,7 @@ BLURB = {
     "Software disk": "The everyday programs, with sample documents. Goes in drive B.",
     "Music disk": "Songs and a tracker module for the music programs.",
     "Office disk": "Writing, spreadsheet, chart and drawing programs.",
-    "Network disk": "Browser, Telnet, FTP server and The Wire, for an Ethernet card.",
+    "Network disk": "Browser, Telnet, FTP server, The Wire and WireChat, for an Ethernet card.",
     "Games disk": "Every game on one floppy.",
     "Emulator system disk": "A system disk whose pointer needs no mouse capture in an emulator.",
     "Live USB image": "The whole system and every program, for a USB stick.",
@@ -97,12 +102,16 @@ BLURB = {
     "PiXEL": "An image viewer and editor, with sample pictures.",
     "Weave": "Weave apps, ready to run.",
     "Weave editor": "The Weave editor, with the demo apps' sources.",
-    "Video demo": "A ready-installed hard disk with demo videos, for an XT.",
+    "Video demo": "A ready-installed hard disk with demo videos: CGA and "
+                  "Hercules for an XT, VGA for a 286.",
 }
 
 # The video demo drives (`make viddemo`): one per adapter that has a
 # apps/video/demo/<adapter>/ directory, so a new adapter appears by itself.
 VIDDEMO_NAMES = {"cga": "CGA", "herc": "Hercules", "vga": "VGA", "ega": "EGA"}
+# ...and the drive each is, as the Makefile's VIDDEMO_IDE says: an XT's 31 MB
+# ST-238R on an ST11R, or VGA's 504 MB IDE disk for a 286
+VIDDEMO_DISK = {"vga": "IDE"}
 
 # A disk's own name, where the release item names a PAIR or a SET.
 ROLE = [
@@ -189,6 +198,7 @@ def role_of(name, item_title, item_files):
 # Plain-text files whose words the guide shows under their page, read off the
 # disk itself - so a README.TXT that differs per disk shows its own text.
 TEXT_EXT = ("TXT", "ME", "MD")
+HASH_EXT = ("V88",)       # files the guide finds a preview for, by content
 TEXT_NAMES = ("LICENSE", "COPYING")
 TEXT_MAX = 64 * 1024
 
@@ -234,18 +244,21 @@ def survey_fat12(path):
                 walk(sub, path + name + "/")
             else:
                 files[path + name] = [size, e[11]]
-                if first and (name.partition(".")[2] in TEXT_EXT or name in TEXT_NAMES):
+                ext = name.partition(".")[2]
+                if first and (ext in TEXT_EXT or ext in HASH_EXT or name in TEXT_NAMES):
                     csz = v.spc * v.bps
                     body = b"".join(bytes(v.img[v.cluster_off(c):v.cluster_off(c) + csz])
                                     for c in v.chain(first))[:size]
-                    t = as_text(name, body)
+                    if ext in HASH_EXT:
+                        hashes[path + name] = hashlib.sha256(body).hexdigest()
+                    t = as_text(name, body) if ext not in HASH_EXT else None
                     if t is not None:
                         texts[path + name] = t
 
-    texts = {}
+    texts, hashes = {}, {}
     walk([e for _, _, e in v.entries()], "")
     return {"free": len(v.free_clusters()), "clusters": v.nclus,
-            "csize": v.spc * v.bps, "files": files, "texts": texts}
+            "csize": v.spc * v.bps, "files": files, "texts": texts, "hashes": hashes}
 
 
 def survey_hdd(path):
@@ -292,19 +305,22 @@ def survey_hdd(path):
                     walk(data0 + (c - 2) * spc, spc, path + name + "/")
             else:
                 files[path + name] = [size, e[11]]
-                if c0 and (ext in TEXT_EXT or name in TEXT_NAMES):
+                if c0 and (ext in TEXT_EXT or ext in HASH_EXT or name in TEXT_NAMES):
                     body = b"".join(blob[base + (data0 + (c - 2) * spc) * byts:
                                          base + (data0 + (c - 2) * spc + spc) * byts]
                                     for c in chain(c0))[:size]
-                    t = as_text(name, body)
+                    if ext in HASH_EXT:
+                        hashes[path + name] = hashlib.sha256(body).hexdigest()
+                    t = as_text(name, body) if ext not in HASH_EXT else None
                     if t is not None:
                         texts[path + name] = t
 
-    texts = {}
+    texts, hashes = {}, {}
     walk(rootlba, rootsecs, "")
     free = sum(1 for c in range(2, nclus + 2)
                if struct.unpack_from("<H", blob, fat0 + c * 2)[0] == 0)
-    return {"free": free, "clusters": nclus, "csize": spc * byts, "files": files, "texts": texts}
+    return {"free": free, "clusters": nclus, "csize": spc * byts, "files": files, "texts": texts,
+            "hashes": hashes}
 
 
 # --- manuals ----------------------------------------------------------------
@@ -331,11 +347,16 @@ def md_inline(s):
 def md(text, shots):
     """A small Markdown: #/##/### headings, paragraphs, - lists, 1. lists,
     | tables |, > notes, and ![caption](shot:id) screenshots."""
-    out, para, lst, tbl = [], [], None, []
+    out, para, lst, tbl, vids = [], [], None, [], []
     nshot = 0                       # the first shot introduces the program: full width
 
     def flush():
-        nonlocal para, lst, tbl
+        nonlocal para, lst, tbl, vids
+        if vids:
+            # A run of videos or shots with no blank line between them is a
+            # gallery, side by side.
+            out.append(vids[0] if len(vids) == 1 else '<div class="vgrid">%s</div>' % "".join(vids))
+            vids = []
         if para:
             out.append("<p>%s</p>" % md_inline(" ".join(para)))
             para = []
@@ -353,9 +374,30 @@ def md(text, shots):
 
     for line in text.splitlines():
         s = line.rstrip()
+        m = re.match(r"^!\[([^\]]*)\]\(video:([a-z0-9/-]+)\)$", s)
+        if m:
+            if para or lst or tbl:
+                v, vids = vids, []
+                flush()
+                vids = v
+            cap, name = m.group(1), m.group(2)
+            pv = PREVIEW_BY_NAME.get(name)
+            if pv:
+                vids.append('<figure class="vid"><video controls preload="none" playsinline style="aspect-ratio:%d / %d" '
+                            'src="%s" poster="%s" aria-label="%s"></video><figcaption>%s</figcaption></figure>'
+                            % (pv["w"], pv["h"], pv["src"], pv["poster"], html.escape(plain(cap)), md_inline(cap)))
+            else:
+                vids.append('<figure class="shot pending full"><div class="frame"><span>Video to come</span>'
+                            '<code>%s</code></div><figcaption>%s</figcaption></figure>' % (html.escape(name), md_inline(cap)))
+            continue
+        if vids and s and not s.startswith("!["):
+            flush()
         m = re.match(r"^!\[([^\]]*)\]\(shot:([a-z0-9-]+)\)(?:\{(left|right|full)\})?$", s)
         if m:
-            flush()
+            if para or lst or tbl:
+                v, vids = vids, []
+                flush()
+                vids = v
             cap, sid, place = m.group(1), m.group(2), m.group(3)
             if sid in shots:
                 src, w, h = shots[sid]
@@ -363,11 +405,11 @@ def md(text, shots):
                 # unless the manual says otherwise; `{full}` keeps it whole.
                 place = place or ("right" if w <= 320 and nshot else "full")
                 nshot += 1
-                out.append('<figure class="shot %s"><button class="zoom" data-zoom="%s" aria-label="Enlarge: %s">'
+                vids.append('<figure class="shot %s"><button class="zoom" data-zoom="%s" aria-label="Enlarge: %s">'
                            '<img src="%s" width="%d" height="%d" alt="%s"></button><figcaption>%s</figcaption></figure>'
                            % (place, src, html.escape(plain(cap)), src, w * 2, h * 2, html.escape(plain(cap)), md_inline(cap)))
             else:
-                out.append('<figure class="shot pending %s"><div class="frame"><span>Screenshot to come</span>'
+                vids.append('<figure class="shot pending %s"><div class="frame"><span>Screenshot to come</span>'
                            '<code>%s</code></div><figcaption>%s</figcaption></figure>' % (place or "full", sid, md_inline(cap)))
             continue
         m = re.match(r"^(#{1,3})\s+(.*)$", s)
@@ -534,6 +576,24 @@ def _path_info(d, path, cpm, vids):
 
 TEXTS = None
 ENTRIES = {}
+PREVIEWS = []           # tools/guide/videos/previews.json, as a list
+PREVIEW_IDX = {}        # source SHA-256 -> index into PREVIEWS
+PREVIEW_BY_NAME = {}    # "cga/03-cga4" -> its PREVIEWS record, for a manual's video:
+
+
+def load_previews():
+    """The committed video previews (tools/guide/vidpreview.py)."""
+    global PREVIEWS, PREVIEW_IDX, PREVIEW_BY_NAME
+    PREVIEWS, PREVIEW_IDX, PREVIEW_BY_NAME = [], {}, {}
+    p = os.path.join(GUIDE, "videos", "previews.json")
+    if not os.path.exists(p):
+        return
+    for h, v in json.load(open(p)).items():
+        if os.path.exists(os.path.join(GUIDE, "videos", v["mp4"])):
+            PREVIEW_IDX[h] = len(PREVIEWS)
+            PREVIEWS.append({"src": "videos/" + v["mp4"], "w": v["w"], "h": v["h"], "secs": v["secs"],
+                             "poster": "videos/" + v["poster"] if v.get("poster") else ""})
+            PREVIEW_BY_NAME[v["mp4"][:-4]] = PREVIEWS[-1]
 
 
 def readme_info(d, path, text):
@@ -587,6 +647,9 @@ def disk_record(n, set_id, gkey, section, role, geo=None, vids=None, pinfo=None)
                             pinfo.append(ri)
                         row[3:] = [pinfo.index(ri)]
             d.update(built=True, free=s["free"], clusters=s["clusters"], csize=s["csize"], tree=tree)
+            pv = {k: PREVIEW_IDX[h] for k, h in s.get("hashes", {}).items() if h in PREVIEW_IDX}
+            if pv:
+                d["previews"] = pv
             if s.get("texts") and TEXTS is not None:
                 d["texts"] = {}
                 for k, t in s["texts"].items():
@@ -609,6 +672,7 @@ def collect():
             entries = tomllib.load(f)
     global CPM, TEXTS, ENTRIES
     CPM = cpm_areas()
+    load_previews()
     TEXTS = []
     ENTRIES = entries
     disks, sets, pinfo = [], [], []
@@ -642,7 +706,7 @@ def collect():
     if adapters:
         members = []
         for a in adapters:
-            n = "VIDDEMO-%s-ST11R.VHD" % a.upper()
+            n = "VIDDEMO-%s-%s.VHD" % (a.upper(), VIDDEMO_DISK.get(a, "ST11R"))
             d = disk_record(n, "set-viddemo", "viddemo", "viddemo",
                             "%s demo drive" % VIDDEMO_NAMES.get(a, a.upper()), geo="hdd",
                             vids=viddemo_titles(a), pinfo=pinfo)
@@ -672,6 +736,7 @@ def collect():
         commit, count = "?", "?"
     return {"geos": [{"key": k, "label": l, "hint": h} for k, l, h in GEOS],
             "sectionTitles": SECTION_TITLE, "blurbs": BLURB, "sets": sets, "disks": disks, "pinfo": pinfo, "texts": TEXTS,
+            "previews": PREVIEWS,
             "entries": entries, "manuals": load_manuals(), "diskpages": load_pages("disks"),
             "tools": tools, "firmware": firmware,
             "build": {"commit": commit, "count": count}}
@@ -719,6 +784,11 @@ def main(argv):
     fn = os.path.join(a.out, "guide-fragment.html" if a.fragment else "index.html")
     with open(fn, "w", encoding="utf-8") as f:
         f.write(render(data, a.fragment))
+    for v in data["previews"]:
+        for f in filter(None, (v["src"], v["poster"])):
+            dst = os.path.join(a.out, f)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(os.path.join(GUIDE, f), dst)
     built = sum(1 for d in data["disks"] if d["built"])
     print("os88guide: %s  (%d disks, %d built; %d descriptions; %d manuals; %d undescribed)"
           % (os.path.relpath(fn, ROOT), len(data["disks"]), built, len(data["entries"]),
@@ -732,6 +802,9 @@ def main(argv):
             if os.path.isdir(sd):
                 for s in sorted(os.listdir(sd)):
                     z.write(os.path.join(sd, s), "guide/shots/" + s)
+            for v in data["previews"]:
+                for f in filter(None, (v["src"], v["poster"])):
+                    z.write(os.path.join(a.out, f), "guide/" + f, zipfile.ZIP_STORED)
         print("os88guide: %s" % os.path.relpath(zp, ROOT))
     return 0
 

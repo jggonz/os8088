@@ -756,6 +756,11 @@ sh_entry:
     mov ax, sh_onmouseup
     call OSAPI_WM_ONMOUSEUP
 
+    ; The WHEEL (SPEC.md 13.18) scrolls the grid's rows. kern_small has no
+    ; wheel and the cell does nothing there; flags preserved, BX still ours.
+    mov ax, sh_onwheel
+    call OSAPI_WM_ONWHEEL
+
     ; stage 3.0b: the formula bar's content box. Only the buffer binding is
     ; set once - the rect is refreshed per draw by sh_flrect, since the window
     ; moves and resizes and a stale rect would draw and hit-test in the wrong
@@ -2975,6 +2980,49 @@ sh_sbclick:
     pop bx
     pop ax
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = window, gfx
+; lock held, W_ONKEY's environment. WHEEL_STEPS ROWS a notch - a sheet row is
+; the grid's line - through sh_setscrollrow, the vertical arrows' own path, so
+; the view blits and letters only the vacated rows exactly as an arrow click
+; does, and draws nothing when it did not move. The VIEW moves; the selection
+; does not, as a scroll-bar click leaves it.
+;
+; The block's pos is CLAMPED to total - fit (sh_sbsync's own note) while the
+; view itself may sit past it - keyboard navigation and Goto move the origin
+; without consulting the bar - so os88ui_sbwheel's CF ("pos unchanged") is not
+; read: going UP from past the end lands inside the extent, which is a move
+; the CF would have refused, and going DOWN from there would answer the clamp,
+; which is UP, so a down turn that would raise the view is dropped instead.
+; -----------------------------------------------------------------------------
+sh_onwheel:
+    call sh_abdismiss                  ; the credits are up: the turn is spent
+    jc .ret                            ; taking them down, as a key's is
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, ax                         ; the turn's direction, for the guard
+    mov bx, si
+    call sh_geom                       ; [sh_vrows], which sh_sbsync's fit is
+    call sh_sbsync
+    mov bx, sh_vsb
+    mov cx, 1                          ; ONE LINE is one row in this bar
+    call os88ui_sbwheel                ; -> AX = the row the view belongs at
+    or dx, dx
+    js .go
+    cmp ax, [sh_scrollrow]
+    jb .out                            ; down never moves the view up
+.go:
+    call sh_setscrollrow
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -9173,6 +9221,8 @@ sh_ldlg_open:
     pop di
     pop si
     pop bx
+    mov ax, sh_ldlg_onwheel           ; the wheel scrolls the list (13.18);
+    call OSAPI_WM_ONWHEEL             ; AX is the frame's, popped next
     pop ax
     call OSAPI_WM_SHOW                 ; optional
 .out:
@@ -9471,6 +9521,29 @@ sh_ldlg_onclick:
                                        ; painter for exactly this reason.
 .out:
     pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ldlg_onwheel - W_ONWH for the Paste list (SPEC.md 13.18): AX = signed
+; notches. WHEEL_STEPS items a notch - an item is the list's line - set the
+; way the bar's page arms set [sh_ldlg_top], and repainted by the same
+; sh_ldlg_paint they end in. A list already at that end draws nothing.
+; -----------------------------------------------------------------------------
+sh_ldlg_onwheel:
+    push ax
+    push bx
+    push cx
+    call sh_ldlg_sbset                ; total, fit and pos (the rect is not
+    mov bx, sh_ldsb                   ; read)
+    mov cx, 1
+    call os88ui_sbwheel
+    jc .out
+    mov [sh_ldlg_top], ax
+    call sh_ldlg_paint                ; SI: W_ONWH names this window
+.out:
     pop cx
     pop bx
     pop ax
@@ -20749,6 +20822,9 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 %define OS88UI_SCROLL               ; stage 3.0a+: SPEC.md 13.10's shared
                                      ; scroll bar - OPT IN, and without it
                                      ; os88ui_sbar is simply not assembled
+%define OS88UI_WHEEL                ; ...and its wheel arithmetic (13.10.8):
+                                     ; the grid and the Paste list both scroll
+                                     ; on it
 %define OS88UI_SBDRAG               ; ...and the thumb-drag half of it
                                      ; shared scroll bar (SPEC.md 13.10.5),
                                      ; which needs W_ONCLICK/W_ONDRAG/

@@ -6,11 +6,30 @@ move between the two while it plays. The window shows a still picture from
 the video, a bar to pick where to start, and a row of buttons, with an
 information card beside it when you want one.
 
-![The os8088 logo video playing in its window, on the desktop.](shot:video-window){full}
+![Star Wars playing in its window, on a 4.77 MHz IBM PC with a Hercules card.](shot:video-herc-window){full}
 
 Videos are made on a modern computer with the os8088 video encoder, a
 separate program that turns an ordinary video file into a `.V88`. Its
 page in this guide is **Video encoder**, under Tools.
+
+## What it plays
+
+A video is black and white, or in colour: CGA's own four colours, sixteen
+colours on an RGB monitor, hundreds on a composite monitor, a picture built
+out of coloured text characters, or 16 and 256 colours on a VGA. These are
+some of the demo videos, made for a 4.77 MHz IBM PC with a hard disk. Each
+is a copy your browser can play, with the video's own sound.
+
+![Take On Me: black and white, full screen on a Hercules card.](video:herc/07-pcm11)
+![Sonic 2: a picture made of 80 x 25 coloured text characters, on a CGA card.](video:cga/01-cotxt)
+![Trackmania: sixteen colours on a CGA card and an RGB monitor.](video:cga/07-cga16)
+![The same clip in about 450 colours, on a CGA card's composite output.](video:cga/09-cmp5o)
+![Star Wars: playing in its window, on a Hercules card.](video:herc/04-adpcm)
+![Steamboat Willie: a video made to play Live, on the desktop.](video:cga/11-live)
+
+All of these, and more, are on the video demo hard drives: one for a CGA
+card and one for a Hercules card, each with os8088 installed and its videos
+in `MEDIA`. Their page in this guide is **Video demo**, under Hard disk & CD.
 
 ## Starting Video Player
 
@@ -18,9 +37,11 @@ Double-click a `.V88` file and Video Player opens with it. You can also
 open the `APPS` folder and double-click **VIDEO.O88**, then pick a video
 with **File > Open...** or the eject button.
 
-One video comes with os8088: [[OS8088.V88]], a short looping animation of
-the os8088 logo, in the `MEDIA` folder of the 720KB, 1.2MB and 1.44MB disks
-and of the 360KB media disk.
+![The os8088 logo video playing in its window.](shot:video-window){right}
+
+The floppy disks carry one video, [[OS8088.V88]], a short looping animation
+of the os8088 logo, in the `MEDIA` folder of the 720KB, 1.2MB and 1.44MB
+disks and of the 360KB media disk. The demo hard drives carry the rest.
 
 The window's title names the video, for example **Video Player - os8088**.
 
@@ -81,6 +102,8 @@ rest of the desktop keeps working. You can move the mouse, use the menus,
 drag the window and work in other windows while the video plays. The logo
 video is one of these.
 
+![Steamboat Willie playing Live, with the Calculator in use beside it.](shot:video-live){full}
+
 A Live video is read into memory before it starts, which takes a few
 seconds from a floppy. It then plays with no disk use at all. Live play
 needs the picture at its own size in the window and a black-and-white
@@ -102,8 +125,15 @@ F, Alt+Enter or Esc bring it back to the window.
 | F or Alt+Enter | Go back to the window, still playing or paused |
 | Left, Right | Go back or forward 5 seconds a press |
 | Home | Go back to the start |
+| `.` | While paused, show the next frame |
+| `,` | While paused, show the frame before |
 | R | Turn Repeat on or off. The screen says **Repeat on** or **Repeat off** |
 | M or S | Turn the sound off or on. The screen says **Sound off** or **Sound on** |
+
+`.` and `,` work only while the video is paused, so press Space first.
+`,` jumps back to the nearest starting point and plays forward to the frame
+before, so you see a quick blur of frames before it stops. Press Space to
+play on from the frame you stepped to.
 
 The first press of Left or Right pauses the video and shows where it will
 land, such as `>> 1:05` or `<< 0:40`. Press again to go further. Half a
@@ -113,6 +143,11 @@ points says **Seek: no keyframes**.
 
 Some videos only play on the whole screen: 256-colour videos, colour CGA
 videos, and videos made of text characters.
+
+![Sin City on the whole screen of a Hercules card.](shot:video-herc-full){full}
+
+![Trackmania in sixteen colours on a CGA card.](shot:video-cga-colour)
+![Sonic 2, drawn in coloured text characters on a CGA card.](shot:video-cga-text)
 
 ## Keys in the window
 

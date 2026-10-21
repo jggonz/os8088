@@ -23,6 +23,7 @@ wc_q_r:         db '&r=', 0
 wc_q_st:        db '&st=', 0
 wc_q_h:         db '&h=1', 0
 wc_q_m:         db '&m=', 0
+wc_q_x:         db '&x=1', 0
 wc_s_http:      db ' HTTP/1.0', 13, 10, 'Host: ', 0
 wc_s_tail:      db 13, 10, 'User-Agent: os8088 WireChat 1.0', 13, 10
                 db 'Connection: close', 13, 10
@@ -77,6 +78,13 @@ wc_s_onl:       db ' online', 0
 wc_s_notify:    db 'Notifications: ', 0
 wc_s_on:        db 'On', 0
 wc_s_off:       db 'Off', 0
+wc_s_ment:      db ' mentioned you in #', 0
+; the day divider's words (SPEC.md 113.5): three letters each, so the name of
+; a day is an index times four
+wc_s_days:      db 'Sun', 0, 'Mon', 0, 'Tue', 0, 'Wed', 0, 'Thu', 0, 'Fri', 0
+                db 'Sat', 0
+wc_s_months:    db 'Jan', 0, 'Feb', 0, 'Mar', 0, 'Apr', 0, 'May', 0, 'Jun', 0
+                db 'Jul', 0, 'Aug', 0, 'Sep', 0, 'Oct', 0, 'Nov', 0, 'Dec', 0
 ; the status bar's word for each LK_*, in that order
 wc_lk_nonick:   db 'Choose a nick', 0
 wc_lk_nodrv:    db 'No network card', 0

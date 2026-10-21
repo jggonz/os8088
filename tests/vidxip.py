@@ -94,16 +94,21 @@ def level(f):
     return v + 1 if v >= 0x80 else v
 
 
-def clip(tmp, snd, ahead=0, lev=False):
+def clip(tmp, snd, ahead=0, lev=False, spcap=vid.SP_MAX):
     import random
     rnd = random.Random(1986)
     cv = bytearray(WB * H)
     paths = []
     for f in range(NF):
-        for _ in range(300):
-            a = rnd.randrange(WB * H - 8)
+        for _ in range(150 if BIG else 300):    # (BIG's: the floppy holds
+            a = rnd.randrange(WB * H - 8)           # its 38 KB records)
             cv[a:a + 8] = bytes(rnd.getrandbits(8) for _ in range(8))
-        if f % 40 == 20:                    # a big frame now and then:
+        if BIG and f % 10 == 5:             # BANKBIG: A RECORD PAST 32 KB,
+            cv[:] = bytes(rnd.getrandbits(8)    # the whole 480-row screen
+                          for _ in range(WB * H))   # new - the one shape
+                                            # that reads the mirror's second
+                                            # slot (mirror_reach below)
+        elif f % 40 == 20:                  # a big frame now and then:
             for a in range(0, WB * H, 3):   # a record past VP_XYB, so the
                 cv[a] ^= 0x5A               # yields have work
         p = os.path.join(tmp, "f%03d.pbm" % f)
@@ -125,11 +130,33 @@ def clip(tmp, snd, ahead=0, lev=False):
                                     & 0xFF for i in range(n)))
     out = os.path.join(tmp, "CLIP.V88")
     vid.encode_frames(paths, out, FPS, wav, "lin80", "vidxip clip",
-                      ahead=ahead)
+                      ahead=ahead, spcap=spcap)
     vid.verify_v88(out)
     return out
 
 
+def mirror_reach(v88, kr):
+    """the records of a stream that run from the ring's last slot (kr - 1)
+    on past its first mirror slot into its SECOND: what BIGSP's mirror of
+    two (98.3.18.13) exists for. A record is addressed by its own chunk and
+    read through one window (vp_dec's .ra), so only a record past 32 KB
+    starting late in slot kr - 1 reaches slot kr + 1 - a super-packet that
+    does is not enough. The reader's chunk 0 is the cluster under the first
+    super-packet (vp_open's .nl0), and a 1.44 MB disk's cluster is a
+    sector"""
+    r = vid.Reader(v88)
+    hits, o, last = [], 0, None
+    for rec, at, _ in r.records():
+        o = at + 4 - r.sp0 if at != last else o
+        last = at
+        c = o // 32768
+        if c % kr == kr - 1 and o + len(rec) > (c + 2) * 32768:
+            hits.append((o, len(rec)))
+        o += len(rec)
+    return hits
+
+
+BIG = False                             # --arm bankbig: records past 32 KB
 LASIM = False                           # --sim: the in-place play on LA_SIM
 HD = False                              # --hd: the clip on an IDE disk
 NOHARM = False                          # --noharm: never armed (VP_NOHARM)
@@ -360,7 +387,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", choices=("silent", "snd", "ahead", "bank",
                                       "bankwrap", "banksnd", "bankdry",
-                                      "bankdrysnd"),
+                                      "bankdrysnd", "bankbig"),
                     default="silent")
     ap.add_argument("--sim", action="store_true",
                     help="the in-place play on the LA_SIM test build")
@@ -373,9 +400,9 @@ def main():
                     help="the in-place play VP_XSPTEST: vp_xspeed measured")
     a = ap.parse_args()
     os.chdir(ROOT)
-    global NF, LASIM, HD, NOHARM, XSPEED
+    global NF, LASIM, HD, NOHARM, XSPEED, BIG, H
     LASIM, HD, NOHARM, XSPEED = a.sim, a.hd, a.noharm, a.xspeed
-    snd = a.arm not in ("silent", "bank", "bankwrap", "bankdry")
+    snd = a.arm not in ("silent", "bank", "bankwrap", "bankdry", "bankbig")
     bank = a.arm.startswith("bank")
     # BANKDRY: the bank in place RUN DRY (the owner's Victory at 14 wait
     # states, 2026-10-16: garbage, then a freeze, at a frame that moved with
@@ -383,16 +410,33 @@ def main():
     # the stream, and no holds to let it catch up
     dry = 12 if a.arm.startswith("bankdry") else 0
     ekr = 3 if a.arm in ("bankwrap", "banksnd", "bankdry",
-                         "bankdrysnd") else 0       # (THE MIRROR, read
-                                                        # every lap)
+                         "bankdrysnd", "bankbig") else 0    # (THE MIRROR,
+                                                        # read every lap)
+    # BANKBIG: the wrap arm's, BIGSP (98.1.4.1) - super-packets past 32 KB,
+    # the owner's Last Exile's shape at --frame-cap 48, whose bank had to
+    # copy down because the mirror in place was one slot: three ring slots
+    # (the least a super-packet that can touch three is read into) and a
+    # mirror of two
+    spcap = 96 if a.arm == "bankbig" else vid.SP_MAX
+    BIG = a.arm == "bankbig"
+    if BIG:
+        H = 480
     if bank:
-        NF = 340 if snd else 400        # ~1.3 MB: past a 2 MB machine's pool,
-                                        # and round its bank, and a 1.44 MB
-                                        # floppy still holds it with sound
+        NF = 340 if snd else 200 if BIG else 400    # ~1.3 MB: past a 2 MB
+                                        # machine's pool, and round its bank,
+                                        # and a 1.44 MB floppy still holds it
+                                        # with sound (or BIG's 38 KB records)
     ahead = 8 if a.arm == "ahead" else 0
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
-        v88 = clip(tmp, snd, ahead, a.arm == "ahead")
+        v88 = clip(tmp, snd, ahead, a.arm == "ahead", spcap)
+        if BIG:
+            reach = mirror_reach(v88, ekr)
+            print("   BIGSP: %d record(s) read through the mirror's second "
+                  "slot %s" % (len(reach), reach[:3]))
+            if not vid.Reader(v88).flags_ & vid.F_BIGSP or not reach:
+                bad.append("the bankbig clip never reads the mirror's second "
+                           "slot: the arm tests nothing")
         print("   clip: %d frames, %d bytes, %s"
               % (NF, os.path.getsize(v88), "with sound" if snd else "silent"))
         ship = one(tmp, False, snd, v88, bank, ekr, dry)

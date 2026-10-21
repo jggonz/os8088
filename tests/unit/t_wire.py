@@ -76,7 +76,7 @@ S_FILEMAX = 64512
 S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261002.1)
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
-S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 2   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
+S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 3   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
 S_PKGFMT = 10                           # SPEC.md 20.2's format byte
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
@@ -1682,6 +1682,90 @@ def archive_refusals(tmp, mod):
           got=(r.stdout + r.stderr).strip(), want="exit 0")
 
 
+# =============================================================================
+# 4. THE CELL FENCE (SPEC.md 92.2)
+# =============================================================================
+def fence(tmp, mod):
+    """A package calling a cell an older kernel lacks needs a level-3 Wire.
+
+    build/notepad.o88 far-calls OSAPI_WM_ONWHEEL (0x0499) and build/hello.o88
+    calls nothing past 0x046D, so they are the two sides of the line.
+    """
+    note = os.path.join(BUILD, "notepad.o88")
+    if not os.path.exists(note):
+        check(False, "no build/notepad.o88", "the fence needs a package that "
+              "calls a cell past 0x046D; run `make`")
+        return
+    lvl, top = mod.cell_level([open(note, "rb").read()])
+    eq(lvl, 3, "Notepad's wheel call needs a level-3 Wire",
+       "it far-calls 0x0499, which v1.0.20261014's kernel does not have")
+    lvl, _ = mod.cell_level([open(os.path.join(BUILD, "hello.o88"), "rb").read()])
+    eq(lvl, 0, "Hello calls nothing past 0x046D")
+
+    pub = os.path.join(tmp, "fpkg")
+    os.makedirs(pub, exist_ok=True)
+    for stem, src in (("NOTE", "notepad.o88"), ("HELLO", "hello.o88")):
+        open(os.path.join(pub, stem + ".O88"), "wb").write(
+            open(os.path.join(BUILD, src), "rb").read())
+
+    def man(note_wire, hello_wire=0):
+        m = {"date": "20261020", "entries": [
+            {"stem": "NOTE", "title": "Note Pad", "kind": 0, "tier": 0,
+             "files": ["NOTE.O88"], "description": "Calls the wheel."},
+            {"stem": "HELLO", "title": "Hello", "kind": 0, "tier": 0,
+             "files": ["HELLO.O88"], "description": "Calls nothing new."}]}
+        if note_wire is not None:
+            m["entries"][0]["needs_wire"] = note_wire
+        if hello_wire:
+            m["entries"][1]["needs_wire"] = hello_wire
+        path = os.path.join(tmp, "fence.json")
+        json.dump(m, open(path, "w"))
+        return path
+
+    cat = os.path.join(tmp, "fence.bin")
+    r = run("--pack", man(None), "--pkgdir", pub, "--out", cat)
+    check(r.returncode != 0 and "needs_wire" in r.stdout + r.stderr,
+          "--pack refuses a wheel caller that does not declare needs_wire",
+          "the website's writer cannot unpack a package, so the declaration "
+          "is all it has", got=(r.stdout + r.stderr).strip())
+    r = run("--pack", man(3), "--pkgdir", pub, "--out", cat)
+    check(r.returncode == 0, "--pack takes needs_wire 3",
+          got=(r.stdout + r.stderr).strip(), want="exit 0")
+    if r.returncode:
+        return
+    blob = bytearray(open(cat, "rb").read())
+    _, recs, _ = read_catalog(bytes(blob))
+    eq([x["needw"] for x in recs], [3, 1], "WC_NEEDW is 3 for the wheel "
+       "caller and 1 beside it", "an older Wire greys exactly the record "
+       "whose package would call past its kernel's table")
+    r = run("--verify", cat, "--pkgdir", pub)
+    check(r.returncode == 0, "--verify --pkgdir passes the fenced catalog",
+          got=(r.stdout + r.stderr).strip(), want="exit 0")
+    blob[S_HDR + S_NEEDW_OFF] = 2
+    open(cat, "wb").write(blob)
+    r = run("--verify", cat, "--pkgdir", pub)
+    check(r.returncode != 0 and "WC_NEEDW" in r.stdout + r.stderr,
+          "--verify --pkgdir fails a wheel caller whose WC_NEEDW is 2",
+          "every level-2 Wire would offer it", got=(r.stdout + r.stderr).strip())
+    r = run("--pack", man(3, 3), "--pkgdir", pub, "--out", cat)
+    r = run("--verify", cat, "--pkgdir", pub)
+    check(r.returncode != 0 and "WC_NEEDW" in r.stdout + r.stderr,
+          "--verify --pkgdir fails an over-declared needs_wire",
+          "a stale declaration greys a program every older machine can run",
+          got=(r.stdout + r.stderr).strip())
+    end = mod.WIRE_TABLE_END
+    mod.WIRE_TABLE_END = 0x0499
+    try:
+        mod.pack(json.load(open(man(3))), pub, None)
+        check(False, "--pack refuses a call past WIRE_TABLE_END",
+              "a cell newer than any level cannot be fenced at all")
+    except mod.Refused as e:
+        check("WIRE_TABLE_END" in str(e), "--pack refuses a call past "
+              "WIRE_TABLE_END", got=str(e))
+    finally:
+        mod.WIRE_TABLE_END = end
+
+
 def main():
     for f in ("hello.o88", "mines.o88"):
         if not os.path.exists(os.path.join(BUILD, f)):
@@ -1703,6 +1787,7 @@ def main():
             archive_corrupt(mod, wpk)
             archive_record(tmp, wpk, mod)
         archive_refusals(tmp, mod)
+        fence(tmp, mod)
     done("t_wire")
 
 

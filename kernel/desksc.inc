@@ -138,7 +138,7 @@ sc_row:
 ;           (SPEC.md 26.8.5); NO lock held
 ;
 ; Banks the user's volume, walks the path from the root one component at a
-; time - dskw_stat, then into it with fcp_goto - and does what the entry IS
+; time - dskw_stat, then into it with dsk_goto - and does what the entry IS
 ; NOW: a folder is fm_choose's, a package OSAPI_PKG_START's by-name arm, a
 ; document that slot's document arm. Anything missing on the way - no disk, a
 ; component gone, a FILE where a folder was - is ONE toast naming the drive:
@@ -171,7 +171,7 @@ sc_walk:
     xor bx, bx                  ; the volume's ROOT first
 .dir:
     mov ax, bp
-    call fcp_goto               ; CF = no disk, or no such folder
+    call dsk_goto               ; CF = no disk, or no such folder
     jc .nf
     mov es, [sc_seg]            ; re-read: a mount may compact the heap
     cmp di, sp
@@ -190,9 +190,12 @@ sc_walk:
     inc si
     or al, al
     loopnz .cc
-    xor di, di                  ; the END: this component is the entry itself
-.sep:
-    mov byte [si], 0
+    jnz .nf                     ; 13 characters and no end: no 8.3 name, and
+    xor di, di                  ; a .LNK's path is hostile. The END: this
+    jmp short .stat             ; component is the entry, its NUL stored -
+.sep:                           ; and a 12-character one has SI at +13, which
+    mov byte [si], 0            ; is assoc_dclus and not assoc_doc
+.stat:
     mov si, assoc_doc
     call dskw_stat_x            ; AL = attribute, BX = first cluster
     jc .nf
@@ -1048,9 +1051,9 @@ sc_m_lnk:
     jmp sc_m_say
 .other:
     mov [fcp_ddrv], al          ; fmv_reload_all's question: which volumes
-    call COLD_SEG:fcpf_fcp_goto ; changed
+    call COLD_SEG:dskf_dsk_goto ; changed
     jc .err
-    lea bx, [cs:cpc_buf]        ; ES = CS still: fcp_goto writes AX alone
+    lea bx, [cs:cpc_buf]        ; ES = CS still: dsk_goto writes AX alone
     mov cx, LNK_SIZE
     xor dx, dx
     mov si, assoc_doc
@@ -1096,7 +1099,7 @@ sc_m_go:
     call COLD_SEG:drvf_drv_vol_bank
     mov al, [fcp_cbdrv]
     mov bx, [fcp_cbcwd]
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
     ret
 
 ; sc_m_wpath - ...and the second: ES:DI = the 45-byte path field, standing in
@@ -1919,7 +1922,7 @@ as_boot:
     retf
 .go:                            ; stand in folder BX of the boot volume
     mov al, [dsk_bootvol]
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
     ret
 .cp:                            ; CX bytes from ES:SI into assoc_doc
     mov di, assoc_doc

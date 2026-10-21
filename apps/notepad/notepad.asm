@@ -559,6 +559,10 @@ np_entry:
 %endif                              ; OS88UI_SBDRAG
     popf
 %endif                              ; NPF_FIND
+%ifndef APP_SMALL                   ; (the small build is kern_small's, which
+    mov ax, np_onwheel              ; has no wheel.) SPEC.md 13.18: the mouse
+    call OSAPI_WM_ONWHEEL           ; wheel scrolls the note; flags preserved
+%endif
     mov ax, np_onwake               ; SPEC.md 54.10: the kernel calls this once
     call OSAPI_WM_ONWAKE            ; our window is on the glass, and the
                                     ; launch document loads in front of it
@@ -5994,6 +5998,40 @@ np_append:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; np_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = window, lock
+; held. WHEEL_STEPS rows a notch, through np_sbclick's own .set - which is the
+; arrows' path and the one that knows [np_drows] is only a LOWER BOUND while the
+; count runs (SPEC.md 27.7.4), so a wheel past the counted rows carries the
+; count on rather than stopping at it. Repaints only when the view moved.
+; -----------------------------------------------------------------------------
+%ifndef APP_SMALL
+np_onwheel:
+    call np_abdismiss               ; the card is up: this turn is spent taking
+    jc .ret                         ; it down, as a key's is
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging          ; CF = 0: a thumb drag is live
+    jnc .ret
+%endif
+    call np_settle                  ; np_onclick's preamble to np_sbclick: the
+    call np_bounds                  ; break comes down, the geometry is read,
+    call np_uclose                  ; and a scroll is not typing
+    call .go
+    cmp byte [np_sbmoved], 0
+    jne np_redraw
+.ret:
+    ret
+.go:
+    push ax                         ; np_sbclick's own frame, which .set pops
+    push bx
+    push dx
+    mov byte [np_sbmoved], 0
+    mov dx, WHEEL_STEPS
+    imul dx
+    add ax, [np_top]
+    jmp np_sbclick.set
+%endif
 
 np_redraw:
     push ax

@@ -729,6 +729,7 @@ vk_claim:
 VK_SIZE     equ 13212000            ; tests/vidkern.py's STREAM.DAT
 
 %define BL_ARENA_BYTES 3000
+%define BL_INTRO_HOW 'automatically, when a test ends' ; benchlib's banner
 %include "benchlib.inc"
 
 vk_tpl:

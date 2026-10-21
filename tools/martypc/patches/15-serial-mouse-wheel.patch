@@ -1,0 +1,57 @@
+diff --git a/crates/marty_core/src/devices/mouse.rs b/crates/marty_core/src/devices/mouse.rs
+index ea09f0a4..6a39de39 100644
+--- a/crates/marty_core/src/devices/mouse.rs
++++ b/crates/marty_core/src/devices/mouse.rs
+@@ -67,6 +67,11 @@ pub struct Mouse {
+ 
+ pub enum MouseUpdate {
+     Update(u8, u8, u8),
++    /// os8088 patch 15: a Microsoft IntelliMouse (`MZ`) packet, whose FOURTH
++    /// byte carries the wheel in its low nibble (signed, positive = toward
++    /// the user). Only ever queued by wheel(), so a machine that never turns
++    /// the wheel sends exactly the three-byte stream it always did.
++    Wheel(u8, u8, u8, u8),
+ }
+ 
+ impl Mouse {
+@@ -136,12 +141,36 @@ impl Mouse {
+     }
+ 
+     /// Run the mouse device for the specified number of microseconds
++    /// os8088 patch 15: one IntelliMouse packet with no motion and `notches`
++    /// of wheel (-8..=7, positive = toward the user). The buttons are the
++    /// CURRENT ones, so a wheel turn can never read as a press or release.
++    pub fn wheel(&mut self, l_button_pressed: bool, r_button_pressed: bool, notches: i8) {
++        let mut byte1 = MOUSE_UPDATE_STARTBIT;
++        if l_button_pressed {
++            byte1 |= MOUSE_UPDATE_LBUTTON;
++        }
++        if r_button_pressed {
++            byte1 |= MOUSE_UPDATE_RBUTTON;
++        }
++        let byte4 = (notches.clamp(-8, 7) as u8) & 0x0F;
++        self.updates.push_back(MouseUpdate::Wheel(byte1, 0, 0, byte4));
++    }
++
+     pub fn run(&mut self, serial: &mut SerialPortController, us: f64) {
+         // Send a queued update.
+-        if let Some(MouseUpdate::Update(byte1, byte2, byte3)) = self.updates.pop_front() {
+-            serial.queue_byte(self.port, byte1);
+-            serial.queue_byte(self.port, byte2);
+-            serial.queue_byte(self.port, byte3);
++        match self.updates.pop_front() {
++            Some(MouseUpdate::Update(byte1, byte2, byte3)) => {
++                serial.queue_byte(self.port, byte1);
++                serial.queue_byte(self.port, byte2);
++                serial.queue_byte(self.port, byte3);
++            }
++            Some(MouseUpdate::Wheel(byte1, byte2, byte3, byte4)) => {
++                serial.queue_byte(self.port, byte1);
++                serial.queue_byte(self.port, byte2);
++                serial.queue_byte(self.port, byte3);
++                serial.queue_byte(self.port, byte4);
++            }
++            None => {}
+         }
+ 
+         // Check RTS line for mouse reset

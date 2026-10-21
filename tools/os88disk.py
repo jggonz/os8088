@@ -681,13 +681,16 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     struct.pack_into("<H", bs, 14, lay.rsvd)    # BPB_RsvdSecCnt
     bs[16] = lay.nfats                          # BPB_NumFATs
     struct.pack_into("<H", bs, 17, root_ent)    # BPB_RootEntCnt
-    struct.pack_into("<H", bs, 19, tot)         # BPB_TotSec16
+    struct.pack_into("<H", bs, 19,              # BPB_TotSec16, or 0 and
+                     tot if tot < 65536 else 0) # TotSec32 below
     bs[21] = media                              # BPB_Media
     struct.pack_into("<H", bs, 22, fatsz)       # BPB_FATSz16
     struct.pack_into("<H", bs, 24, spt)         # BPB_SecPerTrk
     struct.pack_into("<H", bs, 26, heads)       # BPB_NumHeads
     # On a floppy BPB_HiddSec, BS_DrvNum and BPB_TotSec32 stay 0.
     struct.pack_into("<I", bs, 28, hidden)      # BPB_HiddSec
+    if tot >= 65536:                            # BPB_TotSec32: a big
+        struct.pack_into("<I", bs, 32, tot)     # volume's (SPEC.md 18.7.5)
     bs[36] = drvnum                             # BS_DrvNum
     bs[38] = 0x29                               # BS_BootSig
     struct.pack_into("<I", bs, 39,
@@ -1023,8 +1026,12 @@ def build(args) -> int:
         if args.geometry:
             # A GEOMETRY OF ITS OWN (the demo video disks, an ST-238R on an
             # ST11R): the partition from the MBR's own track to the end, as
-            # drivers/hdd/part.inc and tools/os88hdd.py lay one out, capped
-            # at the kernel's 65,535-sector volume on a track boundary
+            # drivers/hdd/part.inc and tools/os88hdd.py lay one out - capped
+            # at 65,535 sectors on a track boundary while that is the disk's
+            # whole size give or take a track, which keeps the 31 MB drives
+            # what they were; a disk well past it (VGA's 504 MB IDE drive)
+            # is ONE BIG VOLUME, TotSec32 and type 06h, which kern_big
+            # mounts and boots (SPEC.md 18.7.5, 52.3)
             try:
                 hcyls, heads, spt = parse_geometry(args.geometry)
             except ValueError as e:
@@ -1033,7 +1040,7 @@ def build(args) -> int:
                 fail("--hdd --geometry wants C/H/S")
             hbase, htot = spt, hcyls * heads * spt
             tot = htot - hbase
-            if tot > 65535:
+            if 65535 < tot < 2 * 65536:
                 tot = (65535 // spt) * spt
     else:
         spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
@@ -1407,14 +1414,17 @@ def build(args) -> int:
     if args.hdd:
         # The MBR sector in front of the volume: boot/mbr.asm's 446 bytes,
         # one active entry whose CHS and LBA columns agree (SPEC.md 80.1),
-        # type 04h - the partition is under 32MB by construction - and the
-        # rest of the MBR's track left zero, which is where the era left it.
+        # type 04h for a partition under 32MB and 06h past it (what DOS 4
+        # and every later FDISK write, as HDD.DRV's hd_ent_fill does) - and
+        # the rest of the MBR's track left zero, which is where the era left
+        # it.
         sec0 = bytearray(SECTOR)
         sec0[0:HP_TBL] = mbr
         ent = bytearray(16)
         ent[0] = 0x80                            # active
         ent[1:4] = hdd_chs(hbase, heads, spt)
-        ent[4] = 0x04                            # FAT16 under 32MB
+        ent[4] = 0x06 if tot >= 65536 or tot * SECTOR >= 32 << 20 \
+            else 0x04                            # FAT16 under 32MB, or past
         ent[5:8] = hdd_chs(hbase + tot - 1, heads, spt)
         struct.pack_into("<I", ent, 8, hbase)
         struct.pack_into("<I", ent, 12, tot)

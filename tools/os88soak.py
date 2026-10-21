@@ -199,6 +199,16 @@ def requirements():
                 "286/386 rows, the PS/2 mouse, the RTC write half.",
                 _apt("qemu-system-x86")))
 
+    req.append(("qemu9", bool(os88build.qemu9()),
+                "hmahiber, the one QEMU row that RESUMES a hibernate: the "
+                "resume stub's stack is in VGA memory by design (SPEC.md "
+                "87.5), and QEMU 8 aborts on the first interrupt taken there.",
+                "tools/setup-qemu9.sh\n"
+                "                  (clones and builds 9.2 into build/qemu9 - "
+                "download.qemu.org is\n"
+                "                   refused by the proxy, git is not - and "
+                "prints the PATH line)"))
+
     marty = B("martypc", "run", "martypc_headless")
     req.append(("martypc", os.path.exists(marty),
                 "the default instrument. Without it EVERY emulator row skips, "

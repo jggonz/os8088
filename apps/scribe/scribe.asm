@@ -846,6 +846,10 @@ sc_entry:
     ; THIS segment now, so nothing names it but CS and a compaction moves the
     ; two together - the bare `ret` proc is the whole of the fix-up.
     OS88_REGION_MOVABLE
+    push ax                         ; SPEC.md 13.18: the mouse wheel scrolls
+    mov ax, sc_onwheel              ; the document. BX is still the window, and
+    call OSAPI_WM_ONWHEEL           ; the slot preserves the flags the CF we
+    pop ax                          ; owe the loader rides in
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
@@ -1303,6 +1307,13 @@ sc_sbclick:
     mov ax, [sc_top]
     add ax, [sc_vfit]
 .set:
+    ; A REQUEST ABOVE ROW 0 IS NOT A REQUEST PAST THE END (SPEC.md 27.7.6.1,
+    ; Note Pad's fix, carried here): the arms above are RELATIVE, so the up
+    ; arrow at [sc_top] < SC_SB_STEP asks for a negative row, and the test
+    ; below is UNSIGNED - it read that as row 65,532 and bought the whole
+    ; remaining count to scroll nothing. sc_scrollto clamps it to 0.
+    or ax, ax
+    js .doset
     ; [sc_drows] is a LOWER BOUND while the count is unfinished (SPEC.md
     ; 27.7.4), so sc_scrollmax would clamp this short of a row that really
     ; exists. Only a request that reaches past the counted extent needs the
@@ -1334,6 +1345,55 @@ sc_sbclick:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; sc_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches (+ = the view goes
+; DOWN), SI = window, gfx lock held, W_ONKEY's environment
+; out: nothing; clobbers what a callback may
+;
+; WHEEL_STEPS ROWS a notch. [sc_top] counts ROWS - a row is one line of the
+; document, however tall formats make it (SPEC.md 68.6) - so a row IS the line
+; 13.18.2 asks for, and the bar's own arrow step (SC_SB_STEP, 4) is not used.
+; Through sc_sbclick's .set, the arrows' path: it is the one that knows
+; [sc_drows] is only a LOWER BOUND while the count runs (SPEC.md 27.7.4), so
+; os88ui_sbwheel's clamp against the block would stop the wheel at the
+; counted rows. Repaints only when the view moved, and once however many
+; notches the pass summed.
+;
+; A MODAL IN THE WINDOW OWNS THE WHEEL as it owns every key (sc_mkey): the
+; scroll BLITS the content band, and a dialog, the About box or a dropdown
+; drawn over it would be carried with the text. So does a live thumb drag,
+; whose hand is what says where the view belongs (13.10.5.6).
+; -----------------------------------------------------------------------------
+sc_onwheel:
+    cmp word [sc_dlg], 0
+    jne .out
+    cmp byte [sc_about], 0
+    jne .out
+    cmp byte [sc_mopen], SC_M_NONE
+    jne .out
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging          ; CF = 0: a thumb drag is live
+    jnc .out
+%endif
+    call sc_settle                  ; sc_onclick's preamble to sc_sbclick: the
+    call sc_bounds                  ; break comes down, the geometry is read,
+    call sc_uclose                  ; and a scroll is not typing
+    call .go
+    cmp byte [sc_sbmoved], 0
+    je .out
+    jmp sc_redraw                   ; sc_scrollto moved [sc_top] off [sc_ptop]
+.out:
+    ret
+.go:
+    push ax                         ; sc_sbclick's own frame, which .set's
+    push bx                         ; .out pops
+    push dx
+    mov byte [sc_sbmoved], 0
+    mov dx, WHEEL_STEPS
+    imul dx
+    add ax, [sc_top]
+    jmp sc_sbclick.set
 
 ; =============================================================================
 ; Scrolling the PIXELS (SPEC.md 27.7.2)

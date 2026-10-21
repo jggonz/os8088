@@ -63,6 +63,7 @@ make run-120  # the same, off the 1.2MB 5.25" HD pair. RUNAPPS120=<img>
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
 make wireball-pair # two 86Box XTs linked over COM2 for WireBall (86Box 6.0+)
+make wirefleet-pair # two 86Box XTs linked over COM2 for WireFleet
 make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
@@ -631,8 +632,9 @@ emits the header, `OSAPI_*` constants name the kernel's jump-table entries
 once: a package is assembled once at `org 0` and loaded into a
 paragraph-aligned claim off the heap, which becomes its own CS = DS. Nothing
 in the image depends on where it landed, so `os88pkg.py` is a validator
-rather than a generator. The ceiling on one package is 60KB — that is the
-*segment*, not a pool; the pool it used to be allocated from was retired, and
+rather than a generator. The ceiling on one package is 63.5KB — that is the
+*segment* less what a 512-rounded size can hold in a word, not a pool; the
+60KB pool it used to be allocated from was retired, and
 deleting it is what returned 60KB to every machine and made a 128KB machine
 viable at all.
 
@@ -691,6 +693,26 @@ and says `Catalog not understood`.
 SPEC.md §92 is the format and the contract; `docs/WIRE-PLAN.md` is why it
 reads that way.
 
+### WireFleet — Two PCs. Two fleets. One winner.
+
+`WIREFLET.O88` is a two-player naval game over a null modem cable. Place or
+auto-place five ships, ready both fleets, and take alternate shots. Dots,
+crosses and sunk markers keep both grids readable in color or monochrome.
+Chat shares the connection. A lost cable pauses the match; reconnecting the
+same peers preserves ships, shots and an unanswered shot. Save each PC's own
+`.WFL` file before closing, then load both files and connect to resume.
+
+VGA has a color desktop window; CGA and Hercules have monochrome desktop
+art, and CGA adds four-color fullscreen with `F` or `Alt+Enter`. Finite cues
+follow the system's PC Speaker, AdLib or Sound Blaster route. `M` mutes.
+Choose the free port in **Link** after the serial mouse is detected:
+9600 baud, 8N1, no flow control.
+
+`make wirefleetdisk` builds all four standalone disk sizes;
+`make wirefleet-pair` opens two linked 86Box XTs. The
+[build diary](docs/HOW-WIREFLEET-WAS-BUILT.md) records the design, generated
+art, recovery protocol and acceptance results.
+
 ### WireChat — chat rooms on the wire
 
 `WIRECHAT.O88` is a chat client: four public rooms (lobby, hardware,
@@ -715,8 +737,20 @@ against a daily budget, slowing every client down as it fills, so the chat
 stays inside the Workers Free plan. A few nicks are owned. Joining as one
 makes WireChat ask for that nick's code, which the server checks.
 
+Type `@` and a nick to mention someone — `Tab` finishes the nick off the
+member list — and they hear about it in whichever room they are in: the
+server tells that one client (an `A` record, §113.2.4), which marks the room
+with `@` and chirps. Every message carries its date as well as its time, so
+the pane says where each day begins (`---- Tue Oct 20 ----`), in local time.
+
 The window follows the screen: three panes on VGA and Hercules, the side panes
-going as the window narrows, and a compact one-line message form on a CGA. The
+going as the window narrows, and a compact one-line message form on a CGA. On
+a VGA or EGA it is drawn in **colour** (§113.5.2) — red unread badges, nicks
+in their own colours, the view in blue, a yellow header on a message that
+names you, and two lamps in the status bar for the link and for activity —
+and on CGA and Hercules it is the mono window it always was. Every row is
+drawn through a cache of what is already on the glass (§113.5.1), so a message
+arriving draws a few rows rather than the panes. The
 nick (and its code, if it has one), the friends and the notification switch live in `WIRECHAT.CFG` beside
 the program. It is on every apps disk but the 360KB one, where it rides the
 network disk. SPEC.md §113 is the protocol and the contract.
@@ -733,7 +767,7 @@ and its **Font box lists the typefaces on the system disk** and sets the
 document in the one you pick, proportional metrics and all.
 
 It does not fit in one segment, and that is the interesting part. A package's
-image and bss share 60KB and that ceiling IS the segment; C costs two to three
+image and bss share 63.5KB and that ceiling IS the segment; C costs two to three
 times the image of hand assembly for the same work. So a good deal of it lives
 in its overlay, a second segment carried INSIDE `CWORD.O88` as a part and
 read into a heap claim at launch, right behind the program (SPEC.md 73.14.2) —
@@ -862,9 +896,9 @@ unsupported:
 - **stack frames over 96 bytes.** The UI task's whole stack is 1,024 bytes and
   a background task's is 256.
 
-The 60KB per-package ceiling is unchanged and C reaches it two to four times
+The 63.5KB per-package ceiling is unchanged and C reaches it two to four times
 sooner, so a C package is a small package. Everything else — the header, the
-loader, the disk format, the 60KB check — cannot tell a C package from an
+loader, the disk format, the 63.5KB check — cannot tell a C package from an
 assembly one, which is the test of whether it was done right.
 **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** is the guide;
 [SPEC.md](SPEC.md) §73 is the contract.

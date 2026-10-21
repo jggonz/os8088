@@ -44,6 +44,7 @@ OUT = os.path.join(ROOT, "docs", "INDEX.md")
 # fails the run by name (see build()) rather than being filed under a heading
 # nobody reads. Add the prefix here when a slot is added there.
 GROUPS = [
+    ("Serial ports", ["115"], ["SERIAL"]),
     ("Windows", ["11", "20"],
      ["WM_", "ABOUT_SET"]),
     ("Packages and the desktop", ["21", "26", "110"],
@@ -226,6 +227,15 @@ INCLUDES = [
      "OS88SOCK_STATE` makes it ask NETV_STATE as well (ZF=1 = no NSTF_SOCK), "
      "for a package whose every `net_find` wants that. The verbs "
      "themselves are `drivers/net/netpkg.inc`'s."),
+    ("os88flat.inc", "20.5.3",
+     "The FLAT vocabulary for a colour face on a 4bpp display: a card with a "
+     "title (`flat_card`), a status lamp (`flat_lamp`), a check box in one "
+     "BLIT1 (`flat_check`), an `OS88UI_OWN` button painter with a per-button "
+     "face colour and pressed/greyed looks (`flat_btn`, `%define FLAT_BCAP` / "
+     "`FLAT_BSTY`) and a double-size bold caption with an icon in one BLIT1 "
+     "(`flat_big`, over os88gfx.inc's band). Each element writes a pixel once. "
+     "WireFleet's colour face (114.10) is the worked example; MIDIRack's "
+     "bevelled face (105.9.5) is the other look."),
     ("os88gfx.inc", "5.12",
      "The EMBEDDABLE graphics library: drawing code that lives in the PACKAGE "
      "rather than in the kernel, taken one capability at a time. `%define "

@@ -1829,7 +1829,7 @@ clo_imgrun:
     push cx
     mov al, [es:CL_FDRV]        ; STAND WHERE THE FILE IS, once, before
     mov bx, [es:CL_FCLUS]       ; anything reads or writes it. Free when the
-    call COLD_SEG:fcpf_fcp_goto ; volume has not moved - fcp_goto re-aims
+    call COLD_SEG:dskf_dsk_goto ; volume has not moved - dsk_goto re-aims
     jc .badgo                   ; [dsk_cwd] and returns - and a real remount
                                 ; when it has, which is what makes the global
                                 ; snapshot describe the file's volume again
@@ -3003,7 +3003,7 @@ clo_umount:
 ;      being fm_open_sel, whose frame does not restore it
 ;
 ; KERNEL SIZE PASS 12 took the working cells out. The folder is [dsk_cwd],
-; which fcp_goto (or the dialog, for CLV_MNTDLG) left current and nothing
+; which dsk_goto (or the dialog, for CLV_MNTDLG) left current and nothing
 ; between that and the claim moves; the sector count rides SI into clo_mruns
 ; and the row; and the attribute, byte 12 and the read-only flag go STRAIGHT
 ; into the claim, which is claimed before they are decided rather than after.
@@ -3023,7 +3023,7 @@ clo_mount:
     mov di, [fm_vp]             ; ...and the window's own folder current: the
     mov al, [di+FS_DRV]         ; listing it was clicked in may not be what is
     mov bx, [di+FS_CWD]         ; mounted now
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
     jc .ioerr
 .named:                         ; the host current: [dsk_cwd] is its folder
     mov si, clo_fnbuf
@@ -3152,7 +3152,7 @@ clo_mount:
     mov byte [di], 0
     ; --- prove it: mount it once --------------------------------------------
     xor bx, bx
-    call COLD_SEG:fcpf_fcp_goto ; AL = the volume, BX = its root
+    call COLD_SEG:dskf_dsk_goto ; AL = the volume, BX = its root
     jc .notfat
     ; --- mark the file, on its host, now the mount is known good -----------
     call clo_mhost              ; the host current again, the entry staged,
@@ -3281,7 +3281,7 @@ clo_mhost:
     mov es, [cs:clo_mseg]
     mov al, [es:0]
     mov bx, [es:IMG_M_DIR]
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
     jc .out
     mov si, clo_fnbuf
     call COLD_SEG:dwf_dskw_stat

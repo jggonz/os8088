@@ -54,6 +54,9 @@ disk, the desktop shows a window: `A hibernation file is on drive C:`.
 Sound cards and network cards are switched off before the memory is saved
 and switched back on after a resume.
 
+Disconnect programs using a serial cable before hibernating. An active
+serial connection is refused with `Disconnect serial before hibernating`.
+
 ## Why it is a separate file
 
 Hibernating is something you do when you are leaving the machine, and

@@ -1900,10 +1900,10 @@ cmz_uncomp:
 ; clobbers: CX, DX (an output), flags
 ;
 ; ONE KB OVER, for the round-up, and no more: a 'CZ' read expands in place
-; inside exactly U (SPEC.md 20.14.2). NOT through mem_bytes_kb_x, whose own
-; banner says a new caller must prove its input cannot wrap: `add ax, 1023`
-; carries for every U from 64,513 up and answers ZERO KB. A shift and an
-; increment cannot.
+; inside exactly U (SPEC.md 20.14.2). NOT through mem_bytes_kb_x, which takes
+; a 16-bit count and U is 24 bits (it USED to carry for every U from 64,513
+; up and answer ZERO KB, too, until SPEC.md 20.1.1). A shift and an increment
+; over DX:AX cannot.
 ; -----------------------------------------------------------------------------
 cmz_uclaim:
     push ax
@@ -2205,7 +2205,7 @@ cmz_jstart:
 %ifdef KERN_BIG
     mov bl, al
     mov al, [disk_drive]        ; source and target are this one folder, so
-    mov ah, al                  ; every hop is a word (fcp_goto's quiet arm)
+    mov ah, al                  ; every hop is a word (dsk_goto's quiet arm)
     mov dx, [dsk_cwd]
     call cmz_jwhere
     call COLD_SEG:dkf_dsk_batch_begin
@@ -2551,7 +2551,7 @@ cmz_jrmtmp:
     push bx                     ; and cmz_go's failure path IS cmz_jerr - so a
     mov al, [cs:cmz_jtgtd]      ; hop that failed here went back round with
     mov bx, [cs:cmz_jtgtc]      ; [cmz_jwrote] still set, for ever (SPEC.md
-    call COLD_SEG:fcpf_fcp_goto ; 22.23.6.1). A target it cannot reach keeps
+    call COLD_SEG:dskf_dsk_goto ; 22.23.6.1). A target it cannot reach keeps
     pop bx                      ; its CMPRESS~.TMP, as a failed rename does
     pop ax
     jc .no
@@ -2884,7 +2884,7 @@ cmz_jmsg:
 ; Uncompress To... (SPEC.md 22.23.6) - kern_big's alone
 ; =============================================================================
 ; cmz_gosrc / cmz_godst - stand in the source's folder or the target's, through
-; the far door DISKOPS.DRV already uses (fcp_goto, SPEC.md 18.99.8). Free inside
+; the far door DISKOPS.DRV already uses (dsk_goto, SPEC.md 18.99.8). Free inside
 ; the run's batch bracket (SPEC.md 18.9.3), and a word when the two are one
 ; folder. A failure never returns (cmz_jerr). clobbers: flags
 cmz_gosrc:
@@ -2899,7 +2899,7 @@ cmz_godst:
     mov al, [cs:cmz_jtgtd]
     mov bx, [cs:cmz_jtgtc]
 cmz_go:
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
     jc .err
     pop bx
     pop ax
@@ -3310,10 +3310,10 @@ cmz_claim:
     push bx
     push cx
     call cmz_ukb                ; the source's KB, ROUNDED UP - and NOT through
-                                ; mem_bytes_kb_x, whose own banner says a new
-                                ; caller must prove its input cannot wrap: this
-                                ; one cannot, `add ax, 1023` carries for every
-    mov [cs:cmz_k], ax          ; U from 64,513 up and answers ZERO KB. A shift
+                                ; mem_bytes_kb_x, which takes 16 bits where U
+                                ; is 24 (and which, until SPEC.md 20.1.1,
+                                ; carried for every U from 64,513 up and
+    mov [cs:cmz_k], ax          ; answered ZERO KB). A shift
                                 ; and an increment is a KB more than needed
                                 ; when U is an exact multiple of 1,024, which
                                 ; the output region is glad of anyway

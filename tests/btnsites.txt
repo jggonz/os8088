@@ -127,3 +127,5 @@
 1 apps/pixel/pxui.inc              # every PiXEL control, through px_btn; SDK arm/track/release
 1 kernel/shutdown.inc              # modal confirmation; release inside the armed control
 5 apps/wireball/wbfront.inc        # splash play/help/sound controls; SDK init installs press/drag/release, launch only on release
+1 apps/wirefleet/wfvideo.inc      # deployment controls; SDK init installs press/drag/release, shared model predicates refuse disabled actions
+1 apps/wirefleet/wfcolor.inc      # the colour face's controls (SPEC.md 114.10): the same record, OS88UI_OWN painted by os88flat.inc's flat_btn; SDK arm/track/release

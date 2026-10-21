@@ -108,6 +108,14 @@
 %define OP_NO_LAZYOK                ; ...and nothing asks "would it fit" first
                                     ; (SPEC.md 20.12.9.2): op_fetch's own
                                     ; refusal is the answer
+%define CC_HAS_ONWHEEL              ; void os88_onwheel(int, void *) - the
+                                    ; mouse wheel (SPEC.md 13.18) scrolls the
+                                    ; EDITOR through the bar's own path
+                                    ; (lm_view_to + lm_ed_paint): one move and
+                                    ; one repaint however many notches. Not
+                                    ; OS88UI_WHEEL: lm_view_to clamps already,
+                                    ; and three lines of C are smaller than the
+                                    ; element plus a shim to reach it
 
                                     ; NOT CC_HAS_ONMOUSEUP: nothing in this
                                     ; wave is a control that fires on the

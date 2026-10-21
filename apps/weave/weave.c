@@ -639,6 +639,21 @@ void os88_onkey(int ascii, int scan, void *win)
     }
 }
 
+/* W_ONWHEEL (SPEC.md 13.18) - os88_onkey()'s environment, and a wheel is
+ * spent like a key while the credits are up: it takes them down and does
+ * nothing else, rather than scrolling a list underneath the card. wact.c's
+ * w_wheel picks the list and scrolls it. */
+void os88_onwheel(int notches, void *win)
+{
+    if (w_abdismiss(win))
+        return;
+    if (w_state != W_ST_RUN)
+        return;
+    if (!w_layout(win))
+        return;
+    w_wheel(notches);
+}
+
 /* W_ONMOUSEUP - the release half of SPEC.md 13.7's gesture, and the ONLY
  * place a button fires. The kernel guarantees exactly one of these per
  * W_ONCLICK, which is what makes os88ui_fire's clear-on-read safe. */
@@ -842,6 +857,8 @@ void *os88_main(void)
                                          * slice may run (4.10) */
     os88_wm_ontimer(win);               /* 13.9's one-shot - 6.7's caret and
                                          * 8.2's timer(), multiplexed */
+    os88_wm_onwheel(win);               /* 13.18's wheel - a <list>'s view,
+                                         * the one under the pointer */
 
     /* THE LAUNCH DOCUMENT (SPEC.md 54.5). Read-and-clear, so it is banked here
      * and spent in the first paint. os88_arg_file() cannot hand back the name

@@ -412,6 +412,9 @@ br_entry:
     mov ax, br_onwake               ; SPEC.md 54.10: the kernel calls this once
     call OSAPI_WM_ONWAKE            ; our window is on the glass, and the launch
                                     ; document loads in front of it
+    mov ax, br_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls the
+    call OSAPI_WM_ONWHEEL           ; page. Flags preserved, so wm_create's CF
+                                    ; still rides out; a no-op on kern_small
     call br_arg                     ; launched ON a document? then BANK it -
                                     ; br_onwake above is what opens it
                                     ; WF_SNAP is the DEFAULT now (SPEC.md
@@ -1572,6 +1575,36 @@ br_scroll_by:
     call br_coalesce
     jc .out                         ; ...and the last of a burst draws it
     call br_flush
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; br_onwheel - W_ONWH (SPEC.md 13.18)
+; in:  AX = signed notches (positive = toward the user = the view moves DOWN),
+;      SI = window ptr; gfx lock held. Preserves every register
+;
+; WHEEL_STEPS LINES A NOTCH - a line here is br_top's own unit, one 8px text
+; line - and the move is br_scroll_by's two halves without its br_coalesce.
+; That skip exists for a BURST of queued events, and the kernel has already
+; summed every notch since the last UI pass into this ONE call (SPEC.md 10.4),
+; so the burst is gone before we see it; asking OSAPI_EVQ_PENDING here would
+; only skip the draw on some unrelated queued click, and with no further
+; scroll behind it to draw it, the page would stand stale (SPEC.md 13.4's
+; trap). br_flush draws nothing at an end stop, so a wheel past the top or
+; the bottom paints nothing. The About card comes down first and swallows the
+; turn, as it does a key: a blit under it would smear the card.
+; -----------------------------------------------------------------------------
+br_onwheel:
+    call br_abdismiss
+    jc .out
+    push ax
+    push dx
+    mov dx, WHEEL_STEPS
+    imul dx                         ; AX = lines, signed (DX = its sign)
+    call br_advance                 ; [br_top] moved and clamped...
+    call br_flush                   ; ...and the glass made to agree, once
+    pop dx
+    pop ax
 .out:
     ret
 
@@ -4161,6 +4194,8 @@ br_fold:
     cmp al, 0x7E                    ; would otherwise be emitted as a MARKER
     jbe .emit
 .latin:
+    cmp al, 0x80                    ; DEL, raw or decoded: br_l1tab is
+    jb .drop                        ; 0x80..0xFF and nothing below it
     mov bl, al
     sub bl, 0x80
     xor bh, bh
@@ -5415,12 +5450,15 @@ br_tentity:
     jb .space
     cmp al, 0x7E
     jbe .known
+    cmp al, 0x80                    ; &#127; is DEL, and br_l1tab starts
+    jb .qmark                       ; at 0x80
     mov bl, al
     sub bl, 0x80
     xor bh, bh
     mov al, [bx+br_l1tab]
     or al, al
     jnz .known
+.qmark:
     mov al, '?'
     jmp short .known
 .wide:

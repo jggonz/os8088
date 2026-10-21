@@ -82,3 +82,46 @@ Each entry: the trap, what it looked like, and what to do instead.
   had).
 - **86Box rewrites a config on exit** (its own uuid, its key order); commit
   its form once, or every launch leaves the tree dirty.
+
+## What WireFleet's flat face learned (SPEC.md 114.10)
+
+- **A slow paint looks exactly like a broken one.** The identity capture was
+  taken two seconds after a dismissal and showed half a repaint - ground, no
+  boards, no captions. Nothing was broken: the XT was still composing. Time
+  the paint in guest cycles before believing a picture taken after it.
+- **The blit is rarely the cost.** BLITP put a 240x24 board row up in 0.7 ms;
+  composing that row took 150. Profile with breakpoints INSIDE the row
+  (build entry, first cell, each scanline) until the time has a name.
+- **`mul` writes DX.** BLITP was refused on every call because the source
+  offset was computed with a `mul` after DX had been loaded with the row
+  count - zero rows. Its probe had accepted the same rect, which is what
+  made it look like the kernel's fault. Count the refusals (`CF`) before
+  reading the code a second time.
+- **Read every output register of a slot you call between two others.**
+  `OSAPI_WM_DISPLAY` answers the screen HEIGHT in BX; WireFleet handed that
+  to `OSAPI_FULLSCREEN` as the window pointer, and F hung a VGA desktop on a
+  divide fault in `wm_ptr2idx` - shipped, because no row drove it.
+- **`os88line_key` edits; drawing is yours.** Typed chat was invisible on
+  every face; the link row only ever checked the bytes on the wire.
+- **A predicate call between building flags and storing them** (`wf_canfire`
+  spends AX) made Fire look live on the opponent's turn.
+- **Zero spare clusters decides the format.** apps360.img had none; planar
+  tiles packed 1.8 KB worse than packed ones, so the planes are built in RAM
+  at the first planar paint instead of shipped. Check every disk the package
+  rides BEFORE choosing a storage form.
+- **Don't ship what you can stamp.** 34 of WireFleet's 72 tiles were a ship
+  segment with the same red X; an AND/OR stamp per format, which the
+  converter proves exact for all 34, took the art from 31 KB to 17 KB raw and
+  paid for the face.
+- **Look at the art zoomed before styling round it.** A stray grey line
+  above every ship was the previous ship's keel: the converter cut the atlas
+  in equal fifths and the carrier overhung the second one. Segment by the
+  pixels, not by arithmetic.
+- **A cache key is the caption's STATE.** "Fire at J10" is one buffer whose
+  pointer never changes; key the cache on the target, or the caption goes
+  stale.
+- **Harness traps**: QEMU's sendkey names are `esc`/`right`, MartyPC's are
+  `Escape`/`ArrowRight` - a wrong name is silently no key. A plain `make`
+  does not rebuild the app's own disk, and a harness reading a stale disk
+  against a fresh map reads zeros. A walked-clip BLITP re-enters its cell,
+  so `bp_trace` counts each call twice.

@@ -54,6 +54,16 @@
 %ifdef KD_BUILD
 %define DSK_STREAM
 %endif
+; DSK_DSCAN: dsk_find and the copy engine's fcp_scan share one directory walk,
+; dsk_dscan (docs/reports/FILECP-SIZE-2026-10-18.md 5.2) - kern_big's alone.
+; kern_small is on a diet (SPEC.md 39.27.4) and the shared walk is RESIDENT
+; there while the scan it replaces is in FILECP.DRV, so sharing would spend
+; resident bytes to save module ones; kern_dos has no fcp_scan to share with
+%ifdef KERN_BIG
+%ifndef KD_BUILD
+%define DSK_DSCAN
+%endif
+%endif
 
 DSK_FIND_SZ  equ 24              ; dsk_find's answer (SPEC.md 19.7.1): a
                                  ; 13-byte NUL name, the attribute, the type
@@ -3877,7 +3887,7 @@ disk_mount_x:
 .scan_done:
     mov es, [dsk_dseg]          ; the sort reads and writes the LISTING, so
     mov bx, [dsk_doff]          ; ES leaves the sector buffer for it
-    mov cx, bp                  ; alphabetical, and BEFORE the harvest below:
+    mov cx, bp                  ; folders first, then by name, and BEFORE the harvest:
     cmp word [dsk_cwd], 0       ; slot i is then filled for whatever entry
     je .sortall                 ; ended up at i, so the icons never have to be
     add bx, DSK_DE_STRIDE       ; permuted alongside the entries (19.4). The
@@ -4803,10 +4813,11 @@ dsk_up_open:
     ret
 
 ; -----------------------------------------------------------------------------
-; dsk_sortdir - sort synthesized directory entries by display name (19.4)
+; dsk_sortdir - sort synthesized directory entries, folders first, by name (19.4)
 ; in:       BX = the first entry's LOW_SEG offset, CX = how many from there,
 ;           ES = LOW_SEG
-; out:      those entries in ascending name order
+; out:      those entries with the folders first, each group in ascending
+;           name order
 ; clobbers: flags
 ;
 ; BX rather than disk_dir because the parent link (SPEC.md 19.5) is not part
@@ -4839,15 +4850,19 @@ dsk_sortdir:
 
     cmp cx, 2
     jb .out                     ; 0 or 1 entries are already in order
-    mov ax, cx
-    mov cx, DSK_DE_STRIDE       ; count * DSK_DE_STRIDE. A MULTIPLY, because
+    mov ax, DSK_DE_STRIDE       ; count * DSK_DE_STRIDE. A MULTIPLY, because
     mul cx                      ; the stride is no longer a power of two -
                                 ; count <= DSK_NENT so DX is 0, and DX is
                                 ; overwritten on the next line anyway. Every
-                                ; register here is banked at entry
+                                ; register here is banked at entry. The
+                                ; stride is the immediate and not the count,
+                                ; and the xchg is one byte where a mov is two:
+                                ; -3 between them, which pays for most of the
+                                ; folder key below and keeps what follows on
+                                ; an EVEN shift (tests/unit/t_hotpar.py)
     add ax, bx
-    mov dx, ax                  ; DX = one past the last entry
-    mov cx, dx
+    xchg ax, dx                 ; DX = one past the last entry (AX is free:
+    mov cx, dx                  ; nothing reads it before the compare loads it)
     sub cx, DSK_DE_STRIDE       ; CX = the last entry: no choice to make for
                                 ; it once everything below is placed
 .outer:                         ; BX = the slot being filled
@@ -4874,6 +4889,16 @@ dsk_sortdir:
     push cx
     push si
     push di
+    ; FOLDERS FIRST (SPEC.md 19.4): the type word's bit 1 is set for type 2
+    ; and clear for 0 and 1, and type 3 is never in the sort - so it is the
+    ; folder bit, and a package stays mixed in with the files. Compared
+    ; REVERSED, [DI]'s key against [SI]'s, so a folder candidate reads as
+    ; "below" a file and wins; equal keys fall through to the name compare
+    mov al, [es:di+16]
+    mov ah, [es:si+16]
+    and ax, 0x0202
+    cmp al, ah
+    jne .ndone
     mov cx, 16                  ; the display-name field (SPEC.md 19)
 .ncmp:
     mov al, [es:di]
@@ -6806,6 +6831,132 @@ dsk_dirw_get_x:
     jmp dsk_next_clus_x.out     ; the same four pops (size pass 10, -2)
 
 
+%ifdef DSK_DSCAN
+; -----------------------------------------------------------------------------
+; dsk_dscan - the directory walk dsk_find and the copy engine's fcp_scan share
+; in:  AX = the folder (its first cluster, or on a redirected volume its
+;      handle); CX = where to START, a RAW slot (sector * 16 + slot) on a FAT
+;      volume and a dense row on a redirected one; BP = live entries to step
+;      over before the one wanted; DL = 1 if hidden and system entries count
+; out: CF=0 with dsk_ent staged (SPEC.md 19.1), CX = where the NEXT call
+;      should start, and on a FAT volume SS:SI -> the raw 32-byte entry;
+;      CF=1 with AX = FERR_NOENT at the end of the directory or FERR_IO on
+;      a read (or driver) failure
+; clobbers: AX, BX, CX, DX, SI, BP, flags; DI and ES are kept - both callers
+;      bank the rest, and DI and ES are what each needs back (a frame, a buffer)
+;
+; ONE walk where there were two. fcp_scan resumed from a raw slot, skipping
+; whole sectors with dsk_dirw_next (an LBA computation, no read) and reading
+; one; dsk_find started at slot 0 and counted live entries. Both are this
+; routine with different arguments - (slot, 0) and (0, ordinal) - so each
+; keeps its own I/O shape exactly: fcp_scan still reads ONE sector a call,
+; dsk_find still walks from the front, and neither got the other's
+; quadratic term. Both re-seek on every call (dsk_find's header says why),
+; which is what SPEC.md 19.2.3's directory window is for.
+;
+; The species filter is disk_mount's (SPEC.md 19): the end mark, deleted
+; entries, the dot links, the volume label and long-name fragments (whose
+; 0x0F carries the label bit) are never answered; hidden and system only
+; with DL = 1. fcp_scan asks with DL = 0, which is the listing's rule - what
+; the window shows is what gets copied.
+;
+; A REDIRECTED volume has no sectors and no raw entries, so it is one
+; FSV_ENUM for row CX + BP (SPEC.md 62.9.7); its ordinal is dense, and both
+; callers treat CX as opaque. The driver owns every register the FSV ABI does
+; not reserve, which is why DI and ES are banked here and not by the callers.
+; -----------------------------------------------------------------------------
+dsk_dscan:
+    push di
+    push es
+    push ss                     ; ES = LOW_SEG for the raw sector (SPEC.md
+    pop es                      ; 2.1) and for dsk_synth
+    mov di, cx                  ; DI = the slot being looked at
+%ifdef OS88_REDIR
+    cmp byte [dsk_vkind], DVK_FILE
+    je .fsenum
+%endif
+    call dsk_dirw_start_x
+    mov bx, cx                  ; BX = whole sectors to skip - the dirw trio
+    mov cl, 4                   ; keeps BX and DX, and DL is the flag
+    shr bx, cl
+.skipsec:
+    dec bx                      ; (at most 4,095, so the sign is the end)
+    js .readsec
+    call dsk_dirw_next_x        ; skipping a whole sector reads nothing
+    jc .end
+    jmp short .skipsec
+.readsec:
+    call dsk_dirw_get_x         ; dsk_secbuf = the sector holding slot DI
+    jnc .secok
+    jz .end                     ; ZF = 1: the chain ended
+    jmp short .ioerr
+.secok:
+    mov si, di
+    and si, 15
+    mov cl, 5
+    shl si, cl                  ; slot * 32
+    add si, dsk_secbuf
+.entry:
+    mov al, [es:si]
+    test al, al
+    jz .end                     ; 0x00: the end of the directory, per spec
+    inc di                      ; consumed, whatever it turns out to be
+    cmp al, 0xE5
+    je .next                    ; deleted
+    cmp al, '.'
+    je .next                    ; the on-disk dot links (SPEC.md 19)
+    cmp al, 0x20
+    je .next
+    mov ah, [es:si+DSK_R_ATTR]
+    test ah, 0x08               ; the volume label, and a long-name fragment
+    jnz .next
+    test ah, 0x06
+    jz .live                    ; neither hidden nor system: always live
+    cmp dl, 1
+    jne .next                   ; ...and the rest only when DL says so
+.live:
+    or bp, bp
+    jz .take
+    dec bp                      ; still stepping over
+.next:
+    add si, DSK_DE_SIZE
+    test di, 15
+    jnz .entry
+    jmp short .readsec          ; the sector is spent; the cursor is already
+                                ; on the next one
+.take:
+    call dsk_synth_x            ; ES:SI = the raw entry -> dsk_ent
+    mov cx, di                  ; the slot after it
+    clc
+    jmp short .out
+
+%ifdef OS88_REDIR
+.fsenum:
+    add cx, bp                  ; the row: start + live entries to step over
+    push cx
+    mov bp, FSV_ENUM
+    mov dx, ds                  ; DX:BX and not ES:BX (SPEC.md 51.8), and DS
+    mov bx, dsk_ent             ; because dsk_ent is `.bss`
+    call drv_fs_call            ; AX = 0 with CF is "no FSV_ENUM" - the same
+    pop cx                      ; word an empty folder gives, so it is the end
+    inc cx                      ; and never an error (62.9.7)
+    jnc .out                    ; (`inc` keeps CF: CF = 0 is the answer)
+    or ax, ax
+    jnz .ioerr
+%endif
+.end:
+    mov ax, FERR_NOENT          ; dsk_find's own answer, so it passes it on
+    jmp short .stc
+.ioerr:
+    mov ax, FERR_IO
+.stc:
+    stc
+.out:
+    pop es
+    pop di
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; dsk_find - one entry of the CURRENT directory, by ordinal (SPEC.md 19.7.1)
 ; in:  CX = the ordinal to fetch, 0 to start; ES:DI = a DSK_FIND_SZ buffer;
@@ -6864,6 +7015,16 @@ dsk_find_x:
                                 ; was a .bss word stored here and reloaded at
                                 ; the success tail (and a failure now answers
                                 ; it too, where CX was whatever the walk left)
+%ifdef DSK_DSCAN
+    mov ax, [dsk_cwd]
+    xor cx, cx                  ; from the front, stepping over BP live
+    call dsk_dscan              ; entries (the walk is dsk_dscan's, shared
+    jc .fail                    ; with fcp_scan): FERR_NOENT or FERR_IO
+%ifdef OS88_REDIR
+    cmp byte [dsk_vkind], DVK_FILE
+    je .stage                   ; FSV_ENUM's answer: no raw entry behind it
+%endif
+%else
     mov ax, [dsk_cwd]
 %ifdef OS88_REDIR
     cmp byte [dsk_vkind], DVK_FILE
@@ -6951,6 +7112,7 @@ dsk_find_x:
                                 ; joins it (2 bytes where two relays were 8)
 %endif                          ; OS88_REDIR
 
+%endif
 .take:
     ; dsk_synth stages the display name, the type and the cluster into the
     ; kernel's own dsk_ent (SPEC.md 19) - the dsk_get_dir idiom, so the copy
@@ -6958,8 +7120,10 @@ dsk_find_x:
     push es
     push ss                     ; ES = LOW_SEG, which SS always is (SPEC.md
     pop es                      ; 2.1): two bytes where the immediate was five
+%ifndef DSK_DSCAN
     call dsk_synth_x              ; ES:SI = the raw entry -> dsk_ent, and it
                                 ; banks DI itself
+%endif                          ; (dsk_dscan staged it already)
     mov bx, si                  ; ...and the raw entry again
     mov al, [es:bx+DSK_R_CZM]   ; whether it is COMPRESSED, which is the +22
     sub al, DSK_CZ_MARK         ; word: the mark LESS its format (20.14.2.4),
@@ -7020,9 +7184,11 @@ dsk_find_x:
     mov [es:di+6], dx
     clc                         ; (CX, the ordinal to ask for next, is .out's)
     jmp short .out
+%ifndef DSK_DSCAN
 .ioerr:
     mov ax, FERR_IO
     jmp short .fail
+%endif
 .end:
     mov ax, FERR_NOENT
 .fail:
@@ -7142,7 +7308,7 @@ dsk_here_ok:
 ;
 ; SPEC.md 18.9.1's second half, named. It was the tail of dsk_here_ok and is
 ; split out because the IDENTITY half and the MEDIA half are two questions and
-; only one caller wants both: `fcp_goto` (SPEC.md 18.9.1.1) moves between
+; only one caller wants both: `dsk_goto` (SPEC.md 18.9.1.1) moves between
 ; folders INSIDE one mounted volume with no I/O, which is what makes
 ; OSAPI_FILE_PATH's walk cost one mount and then nothing - so it may not ask
 ; "are we at the same cluster", and it absolutely must ask "is it the same
@@ -7204,6 +7370,135 @@ dsk_media_ok:
     ret                         ; so .no's `stc` survives the shared tail
 %if DVK_BIOS != 0
   %error "dsk_media_ok: .yes takes CF=0 from `cmp [DV_KIND], DVK_BIOS` - 0 only"
+%endif
+
+
+%ifndef KD_BUILD                ; kern_dos changes no folder by cluster
+; -----------------------------------------------------------------------------
+; dsk_goto - make (AL = drive, BX = folder cluster) the current directory
+;
+; It was dsk_goto, in filecp.inc, because the copy engine was its first
+; caller; assoc, the ASSOC.DAT writer, the desk shortcuts, the Sticky Apps
+; menu, DISKOPS.DRV, the compressor and OSAPI_FILE_GOTO_Q all called it there
+; too, so it moved here beside the dsk_chdir_q it wraps and stopped being
+; billed to Cut/Copy/Paste (docs/reports/FILECP-SIZE-2026-10-18.md 5.1).
+; out: CF=1 = the move failed (AX = FERR_*)
+; clobbers: AX, flags
+;
+; TWO quiet paths, and between them they are why a copy is not a sequence of
+; mounts. Nothing its callers read is the LISTING - dskw_* resolve names by
+; walking [dsk_cwd]'s raw directory sectors and so does fcp_scan - while the
+; FAT window and every derived geometry belong to the VOLUME, not the folder.
+;
+; So a move inside one volume is a word. And crossing to the other drive is
+; a dsk_chdir_q (SPEC.md 18.9): the BPB, the FAT window and the cwd, and NOT
+; the directory scan, the sort or the per-file icon harvest. That last one is
+; what made a copy quadratic - every switch back to the destination
+; re-harvested an icon for each file already copied, and the harvest was 23%
+; of all sectors read.
+;
+; The debt is [dsk_lstale], and fcp_step settles it with dskw_sync on every
+; path that can return to the event loop.
+;
+; The cluster is range-checked here rather than trusted, because the quiet
+; path skips disk_mount's own .cwd_lost validation.
+;
+; Its three callees are reached with a PLAIN `call` on both builds, not FCPX:
+; this body is resident `.cold` on kern_small too, so they are near - FCPX
+; there was a far call through a resident `xf_` thunk into its own segment,
+; two bytes a site and a four-byte thunk apiece for nothing.
+; -----------------------------------------------------------------------------
+dsk_goto:
+    push dx
+    cmp byte [dsk_mntok], 0     ; IS ANYTHING MOUNTED? dsk_here_ok asks this
+    je .full                    ; first and for the same reason (SPEC.md
+                                ; 18.9.1): [disk_drive] is where the machine
+                                ; BELIEVES it stands, and dsk_vol_del sets it
+                                ; to 0 when the volume under it is unmounted -
+                                ; without mounting A:, which is what the
+                                ; cleared [dsk_mntok] beside it says. The
+                                ; compare below then reads "already on A:" off
+                                ; a machine whose BPB, FAT window and geometry
+                                ; still describe the dead volume, and this
+                                ; answers CF = 0 having done nothing at all.
+                                ; Every read after it fails, which on the
+                                ; hard-disk installer's path is a copy that
+                                ; stops on its first file (SPEC.md 52.10.8.1).
+                                ; It came from osapi_file_goto_q, which had it
+                                ; and was otherwise this body twice over
+    cmp al, [disk_drive]
+    jne .full
+    mov dl, al                  ; **...AND IS IT STILL THE SAME DISK?** (SPEC.md
+    call dsk_media_ok           ; 18.9.1.1) The compare above says only that the
+    jc .full                    ; VOLUME has not changed, and a floppy is the
+                                ; thing that can be swapped under it. Without
+                                ; this the quiet arm wrote [dsk_cwd] and
+                                ; returned, so no boot sector was read, so
+                                ; [dsk_sigcur] never moved - and 18.95's cache
+                                ; is keyed on exactly that, so it went on
+                                ; serving the OLD disk's directory until the
+                                ; package was closed. MEASURED: three DIRs four
+                                ; seconds apart cost reads=0 and listed a disk
+                                ; that was no longer in the drive.
+                                ;
+                                ; The MEDIA half alone - dsk_here_ok also asks
+                                ; whether the DIRECTORY has moved, and moving
+                                ; between folders of one mounted volume with no
+                                ; I/O is what this routine is FOR. DX is banked
+                                ; at the top and .full re-loads DL anyway
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3
+    cmp byte [dsk_vkind], DVK_FILE
+    je .fsgo                    ; a REDIRECTED volume: below
+%endif
+    or bx, bx
+    jz .quiet                   ; 0 is the root, always legal
+    cmp bx, 2
+    jb .bad
+    cmp bx, [dsk_maxclus]
+    ja .bad
+.quiet:
+    mov [dsk_cwd], bx
+.ok:
+    pop dx
+    clc
+    ret
+.bad:
+    mov ax, FERR_IO
+    jmp short .eout
+
+    ; --- a REDIRECTED volume: TELL THE DRIVER, do not just store the word ---
+    ; The quiet path above exists precisely to avoid a mount for a move inside
+    ; one volume - and a mount is the only thing that would have called
+    ; FSV_CHDIR. A DRVC_FILE driver keeps its own idea of where it is standing
+    ; (it has to: FSV_STAT resolves a name in the CURRENT folder), so writing
+    ; [dsk_cwd] behind its back leaves the two disagreeing and every name the
+    ; copy then asks about is looked up in the folder it came FROM. It
+    ; presented as FERR_NOENT for a file that is plainly listed.
+    ;
+    ; The range checks go with it: that word is an OPAQUE HANDLE (SPEC.md
+    ; 62.9.1), `>= 2` rejects the first folder such a driver ever hands out,
+    ; and [dsk_maxclus] belongs to the last FAT volume mounted.
+%ifdef OS88_REDIR
+.fsgo:
+    push bp
+    mov ax, bx                  ; the handle, or 0 for the root
+    mov bp, FSV_CHDIR
+    call drv_fs_call
+    pop bp
+    jc .bad
+    jmp short .quiet
+%endif
+.full:
+    mov dl, al
+    mov ax, bx
+    call dsk_chdir_q_x
+    jnc .ok
+.ferr:
+    mov ax, FERR_NODISK
+.eout:
+    pop dx
+    stc
+    ret
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -9938,6 +10233,19 @@ section .text
 
 section .cold                   ; ...the far entries themselves live HERE, or
                                 ; their `call <body>` would cross too
+%ifndef KD_BUILD
+; -----------------------------------------------------------------------------
+; dsk_goto's far entry (SPEC.md 2.6), and it is for the ON-DEMAND MODULES
+; rather than for the kernel: DISKOPS.DRV has a FILE at one end
+; of a sector copy (SPEC.md 18.99.8), so between two raw transfers it has to
+; put the machine back where the file lives - which is exactly what dsk_goto
+; is, including the free case where the volume has not moved and only
+; [dsk_cwd] has to be re-aimed.
+; -----------------------------------------------------------------------------
+dskf_dsk_goto:          call dsk_goto
+                    retf
+%endif
+
 ; -----------------------------------------------------------------------------
 ; Far entries for the ON-DEMAND MODULES (SPEC.md 2.8)
 ;

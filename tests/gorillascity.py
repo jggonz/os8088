@@ -152,24 +152,81 @@ def check_variety(m, p, code):
     assert counts == set(range(8, 13)), counts
     assert len(colors) > 20 and profiles == set(range(6))
     assert min(winds) < -10 and max(winds) > 10, winds
-    # A new aiming pass follows the actual human, including positions far
-    # from the old hard-coded x=48 target. Release errors vary both ways and
-    # remain legal even when the best candidate is at a velocity limit.
+    # The solo opponent never aims at the human (SPEC.md 99): a skyline's
+    # first throw is a wild guess, and each landing teaches it one bit -
+    # short of the rival or past it - which brackets the next release.
+    W = lambda name, value: m.write(p.base + p.offsets['gr_' + name],
+                                    struct.pack('<H', value))
+    def forget(angle=0, lo=0, hi=0, last=0):
+        for name, value in (('aiangle', angle), ('ailo', lo), ('aihi', hi),
+                            ('ailast', last)):
+            W(name, value)
+    def throws(seeds=range(32), **state):
+        out = []
+        for seed in seeds:
+            forget(**state)
+            W('seed', seed)
+            call(m, code, 'gr_aichoose')
+            out.append((p.w('angle'), p.w('power')))
+        return out
     m.write(p.base + p.offsets['gr_players'], b'\x01')
     m.write(p.base + p.offsets['gr_turn'], b'\x01')
-    call(m, code, 'gr_aitick')
-    assert p.w('aitarget') == (p.w('gx')+8)*64
-    for best in (1, 70, 359):
-        powers = set()
-        for seed in range(32):
-            m.write(p.base + p.offsets['gr_seed'], struct.pack('<H', seed))
-            m.write(p.base + p.offsets['gr_aibest'], struct.pack('<H', best))
-            call(m, code, 'gr_aitick.fire')
-            powers.add(p.w('power'))
-        assert all(1 <= power <= 360 and abs(power-best) <= 8 for power in powers)
-        assert len(powers) >= 8, ('computer release lacks variety', powers)
-        if best == 70:
-            assert min(powers) < best < max(powers)
+    first = throws()
+    assert all(45 <= a <= 70 and 40 <= v <= 100 for a, v in first), first
+    assert len({v for _, v in first}) >= 8, ('first guess lacks variety', first)
+    assert len({a for a, _ in first}) >= 6, ('first arc lacks variety', first)
+    # Where the human stands changes nothing about the release.
+    gx = p.w('gx')
+    W('gx', (gx + 37) % 200)
+    assert throws() == first, 'computer aim reads the human position'
+    W('gx', gx)
+    # Each bracket state releases inside its own band, both ways.
+    for state, low, high in ((dict(angle=55, lo=70), 92, 118),
+                             (dict(angle=55, hi=90), 52, 68),
+                             (dict(angle=55, lo=60, hi=100), 70, 90),
+                             (dict(angle=55, lo=79, hi=81), 78, 82),
+                             (dict(angle=55, lo=300), 360, 360)):
+        powers = {v for a, v in throws(**state)}
+        assert all(a == 55 for a, _ in throws(range(4), **state))
+        assert low <= min(powers) and max(powers) <= high, (state, powers)
+        if high - low > 4:
+            assert min(powers) < (low+high)//2 < max(powers), (state, powers)
+    # Learning: a short landing raises the floor, a long one lowers the
+    # ceiling, and a verdict that contradicts the bracket replaces it.
+    rival = p.w('gx') + 8
+    for state, x, lo, hi in ((dict(last=70), rival + 30, 70, 0),
+                             (dict(last=70), rival - 30, 0, 70),
+                             (dict(last=70), -3, 0, 70),          # off the left
+                             (dict(last=70), 260, 70, 0),         # blown back
+                             (dict(lo=60, hi=100, last=80), rival + 1, 80, 100),
+                             (dict(lo=60, hi=100, last=80), rival - 1, 60, 80),
+                             (dict(lo=60, hi=100, last=50), rival + 1, 60, 100),
+                             (dict(lo=60, hi=100, last=110), rival + 1, 110, 0),
+                             (dict(lo=60, hi=100, last=40), rival - 1, 0, 40)):
+        forget(angle=55, **state)
+        call(m, code, 'gr_ailearn', cx=x & 0xffff)
+        assert (p.w('ailo'), p.w('aihi')) == (lo, hi), (state, x)
+    # Cratering its own rooftop steepens the arc and starts over; at the
+    # steepest arc the same landing is only a short throw.
+    own = struct.unpack('<HH', p.data('gx', 4))[1]
+    forget(angle=55, lo=60, hi=100, last=80)
+    call(m, code, 'gr_aiterrain', cx=own)
+    assert (p.w('aiangle'), p.w('ailo'), p.w('aihi')) == (65, 0, 0)
+    forget(angle=80, lo=60, hi=100, last=80)
+    call(m, code, 'gr_aiterrain', cx=own)
+    assert (p.w('aiangle'), p.w('ailo'), p.w('aihi')) == (80, 80, 100)
+    forget(angle=55, last=80)
+    call(m, code, 'gr_aiterrain', cx=(rival + own) // 2)
+    assert (p.w('aiangle'), p.w('ailo')) == (55, 80), 'mid-city crater is short'
+    # Nothing is learned from the human's own throws.
+    m.write(p.base + p.offsets['gr_turn'], b'\x00')
+    forget(angle=55, last=80)
+    call(m, code, 'gr_ailearn', cx=rival + 30)
+    assert (p.w('ailo'), p.w('aihi')) == (0, 0), 'learned from the human'
+    # A new skyline forgets it all.
+    forget(angle=65, lo=60, hi=100, last=80)
+    call(m, code, 'gr_city')
+    assert all(p.w(n) == 0 for n in ('aiangle', 'ailo', 'aihi', 'ailast'))
     m.write(p.base + p.offsets['gr_players'], b'\x02')
     m.write(p.base + p.offsets['gr_turn'], b'\x00')
 
@@ -215,6 +272,78 @@ def check_surfaces(m, p, code):
     call(m, code, 'gr_inktables')
 
 
+def check_guide(m, p, code, tag):
+    """The aim guide (SPEC.md 99): a ray along the exit angle that thins out
+    and stops short, every ink restored, the glass matching the scene."""
+    W = lambda name, value: m.write(p.base + p.offsets['gr_' + name],
+                                    struct.pack('<H', value))
+    B = lambda name, value: m.write(p.base + p.offsets['gr_' + name], bytes([value]))
+    clean = p.data('scene', 16384)
+    def ink(scene, x, y):
+        return (scene[y*128+x//2] >> (0 if x & 1 else 4)) & 15
+    def dots():
+        n, raw = p.b('guidedots'), p.data('guidesave', 32)
+        return [struct.unpack_from('<HBB', raw, 4*i) for i in range(n)]
+    gx = struct.unpack('<HH', p.data('gx', 4))
+    gy = struct.unpack('<HH', p.data('gy', 4))
+    B('state', 0)
+    B('guide', 0); B('turn', 0); W('angle', 45)
+    call(m, code, 'gr_guideshow')
+    assert p.b('guidedots') == 0 and p.data('scene', 16384) == clean, 'guide drawn while off'
+    B('guide', 1)
+    for turn, angle in ((0, 0), (0, 45), (0, 70), (1, 30), (1, 60)):
+        B('turn', turn); W('angle', angle)
+        call(m, code, 'gr_guideshow')
+        assert p.w('guideat') == angle + 512*turn
+        scene, seen = p.data('scene', 16384), dots()
+        # The first three dots are the angle, and room for them is promised
+        # even on the tallest roof; the far ones may leave into the HUD rows.
+        assert len(seen) >= 3, (turn, angle, seen)
+        x0 = gx[turn] + (-2 if turn else 17)
+        y0 = gy[turn] + 4
+        side = -1 if turn else 1
+        reach = [((x-x0)**2 + (y-y0)**2) ** .5 for x, y, _ in seen]
+        assert all(a < b for a, b in zip(reach, reach[1:])), ('not outward', seen)
+        assert max(reach) <= 36, ('guide runs on toward the landing', seen)
+        gaps = [b - a for a, b in zip(reach, reach[1:])]
+        if len(seen) >= 6:
+            assert gaps[-1] > 2*gaps[0], ('guide does not thin out', gaps)
+        if angle == 0:
+            assert len(seen) == 8 and all(abs(y - y0) <= 3 for _, y, _ in seen)
+            assert {ink(scene, x, y) for x, y, _ in seen[4:]} == {7}
+            continue
+        for x, y, _ in seen[:3]:              # the first dots ARE the angle
+            assert side*(x - x0) > 0 and y < y0
+            # slope in the scene's aspect: dy/dx = tan(angle) * 15/16
+            import math
+            want = math.atan2(math.sin(math.radians(angle))*15/16,
+                              math.cos(math.radians(angle)))
+            got = math.atan2(y0 - y, side*(x - x0))
+            assert abs(got - want) < .3, (angle, x, y, got, want)
+        assert {ink(scene, x, y) for x, y, _ in seen[:3]} == {15}
+        assert {ink(scene, x, y) for x, y, _ in seen[4:]} <= {7}, 'far dots do not fade'
+        drawn = {(x, y) for x, y, _ in seen}
+        for y in range(128):
+            for x in range(256):
+                if (x, y) not in drawn:
+                    assert ink(scene, x, y) == ink(clean, x, y), ('stale dot', x, y)
+        for x, y, under in seen:
+            if sum(1 for d in seen if d[:2] == (x, y)) == 1:
+                assert under == ink(clean, x, y)
+        check_pixels(m, p, tag)
+    # Same angle again: nothing redrawn. Then a throw takes it all out.
+    call(m, code, 'gr_guideshow')
+    assert dots() == seen
+    call(m, code, 'gr_guidehide')
+    assert p.b('guidedots') == 0 and p.w('guideat') == 0xffff
+    assert p.data('scene', 16384) == clean, 'guide left ink behind'
+    check_pixels(m, p, tag)
+    B('state', 1)
+    call(m, code, 'gr_guideshow')
+    assert p.b('guidedots') == 0, 'guide drawn in flight'
+    B('state', 0); B('guide', 0); B('turn', 0)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--arm', choices=G.ARMS)
@@ -222,7 +351,9 @@ def main():
     ap.add_argument('--max-paint-ms', type=float, default=1800)
     args = ap.parse_args()
     off, code = G.offsets(), I.code_offsets(('gr_city', 'gr_blit', 'gr_aitick',
-                                          'gr_aitick.fire', 'gr_inktables',
+                                          'gr_aichoose', 'gr_ailearn',
+                                          'gr_guideshow', 'gr_guidehide',
+                                          'gr_aiterrain', 'gr_inktables',
                                           'gr_frontprepare', 'gr_widepose'))
     report = {}
     seeded_scene = None
@@ -259,6 +390,7 @@ def main():
                     assert scene == seeded_scene, 'seeded city differs across modes/adapters'
                     paint = call(m, code, 'gr_fullpaint')
                     check_pixels(m, p, tag)
+                    check_guide(m, p, code, tag)
                     report[tag+'-'+mode] = dict(city_ms=build, paint_ms=paint,
                                                scene_sha256=hashlib.sha256(scene).hexdigest())
                     print(tag, mode, report[tag+'-'+mode], flush=True)

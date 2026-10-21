@@ -353,6 +353,60 @@ static int w_radio_holder(int i)
 }
 
 /* ============================================================================
+ * THE WHEEL (SPEC.md 13.18)
+ * ==========================================================================*/
+
+/* w_wheel - the notches os88_onwheel() was handed, spent on ONE list.
+ *
+ * WHICH LIST: the one under the pointer. The kernel hands the wheel to the
+ * front window wherever the pointer is (13.18.1), and a card may lay out
+ * several lists, so the pointer is ASKED - one OSAPI_MOUSE - and hit-tested
+ * against the same rect table a click is. Over anything that is not an
+ * enabled list (a button, the ground, outside the window altogether) the
+ * turn goes to the FIRST enabled list in layout order, which on the common
+ * card - one list - is the list, and on a card with none is nothing at all.
+ * A hidden or disabled list is refused here for os88_onclick's reason: the
+ * one predicate that greyed it refuses its bar's arrows too (SPEC.md 47).
+ *
+ * WHAT IT DOES is w_lclick's bar arm with the count in hand: the list's
+ * facts, its clamped position, the block the thumb move reads, and then ONE
+ * w_lscroll - one GFX_SCROLL and the rows it exposed - however many notches
+ * were summed into the call. A turn against an end draws nothing, because
+ * w_lscroll's clamp answers the position it is already at. Native, like the
+ * bar: no `onselect`, nothing in the ring, no bytecode under the lock. */
+static void w_wheel(int notches)
+{
+    static struct os88_mouse m;         /* static: SS != DS (SPEC.md 73.5) */
+    struct w_lay *p;
+    int i, hit;
+    unsigned pos;
+
+    os88_mouse(&m);
+    hit = w_hit(m.x, m.y) - 1;          /* -1 = over nothing of ours */
+    i = hit < 0 ? 0 : hit;
+    for (;;) {                          /* the hit first, then the walk: ONE
+                                         * copy of the predicate, which is
+                                         * what SmallerC charges for */
+        if (i >= w_nlay)
+            return;
+        p = &w_lay[i];
+        if (p->ctype == WC_LIST && !(p->cflags & (CF_HIDDEN | CF_DISABLED)))
+            break;
+        if (hit >= 0) {
+            hit = -1;
+            i = 0;
+        } else
+            i++;
+    }
+    w_items(p->props);
+    w_lgeom(i);
+    pos = w_lclamp(w_lpos[w_lg_id]);
+    w_lpos[w_lg_id] = pos;
+    w_lblk(pos);
+    w_lscroll((int)pos + notches * OS88_WHEEL_STEPS);
+}
+
+/* ============================================================================
  * KEYS (WEAVE-SPEC 6.7, 1.7)
  * ==========================================================================*/
 

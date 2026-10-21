@@ -115,7 +115,7 @@ CYC_US_486 = dict(frame=2.51, seg=2.392, abs=0.109,
 # 0.14-0.17 ms on the Victory, docs/reports/LOADALL-VICTORY286-2026-10-14.md
 # - an ESTIMATE of the player's, until a play is profiled), and the bank's
 # copy UP on the disk at `xup` ms a KB. `xdown` is the copy down for a play
-# the in-place paths refuse (the speaker, Repeat, BIGSP...).
+# the in-place paths refuse (the speaker, Repeat, Live...).
 # The Victory's `xup`/`xdown`: a 32 KB copy at the gap the player places its
 # ring at (SPEC.md 98.3.18.12) is 5.96 ms, either transport - 0.186 ms a KB
 # (docs/reports/XMS-TRANSPORT-VICTORY286-2026-10-15.md). The other 286
@@ -553,6 +553,30 @@ CHOICE_HELP = {
         "size": "Leave out changes not worth their bytes: the smallest "
                 "file for the look",
     },
+    "desktop_posters": {
+        "auto": "A picture of each keyframe stored for the desktop's "
+                "Preview where the player's own would be poor: in colour "
+                "for 256 colours, for 16 in colours of their own or too "
+                "big for the window, and for CGA's colours; and in black "
+                "and white too for CGA's, for a CGA's desktop (the "
+                "default)",
+        "colour": "Each keyframe's Preview picture stored in the "
+                  "desktop's 16 colours",
+        "mono": "Each keyframe's Preview picture stored in black and "
+                "white, as a CGA or Hercules desktop shows it",
+        "both": "Each keyframe's Preview picture stored twice: in colour "
+                "for a VGA or EGA desktop, black and white for the others",
+        "off": "No keyframe pictures: the Preview decodes each keyframe "
+               "(a custom poster is still stored)",
+    },
+    "desktop_size": {
+        "fit": "The Preview as big as the window has room for (the "
+               "default)",
+        "half": "The Preview at half the video's size, however much room "
+                "there is. Play then goes full screen",
+        "quarter": "The Preview at a quarter of the video's size. Play then "
+                   "goes full screen",
+    },
     "flip_hold": {
         "ahead": "With Min fps on a flipped file, a held frame is drawn on "
                  "the hidden page toward the next one, which finishes it "
@@ -853,10 +877,10 @@ def implied(preset=None, pixfmt=None, profile="5150-st225", live=None,
 # its story the day that default moved. What a preset, a format or a
 # profile implied is stored as the value it came to, and so is the
 # speaker style's three numbers. It is ~160 bytes (os88vid.OPTS_ZDICT).
-OPTS_VERSION = 40
+OPTS_VERSION = 46
 # what is the encode's plumbing rather than how the file was made
 OPTS_SKIP = ("src", "out", "help", "progress", "quiet", "preview_png",
-             "profiles")
+             "profiles", "posters_only")
 # the SCHEMA each version's records are written in - every option's name,
 # kind and choices, not its default (opts_schema). tests/vencguitest.py
 # fails when the parser no longer matches OPTS_VERSION's: an option was
@@ -883,7 +907,10 @@ OPTS_FINGERPRINT = {1: "06108fff43ef1307", 2: "496cc97e70197133",
                     33: "1cb11afeb374b243", 34: "60df56fd426010fd",
                     35: "e1090fc6c20c5367", 36: "00e7310bd1a264d8",
                     37: "096abca8b264506a", 38: "eaf373ad8f1e1fdb",
-                    39: "7a7d4203d99fd27d", 40: "4fffe628a862c24e"}
+                    39: "7a7d4203d99fd27d", 40: "4fffe628a862c24e",
+                    41: "9c78d785df0d94a4", 42: "6f2cb773837bd222",
+                    43: "ec2917558c23907f", 44: "1baaf8c2dacb6f7b",
+                    45: "9f36a470662f10ba", 46: "bdf38e4e169941ba"}
 LAG_MS = "50-100"       # --lag's default (98.2.1.1.3), the owner's (2026-10-16):
                         # a RANGE, searched for each burst, where it was one
                         # number tuned by hand. Its top is the 100 ms that
@@ -1059,6 +1086,25 @@ MIGRATIONS = {
     38: [("added", "flip_hold", "empty")],
     # 40: --ladder (VIDEO-SEEN-PLAN 3a) - a file made before it had none
     39: [("added", "ladder", "")],
+    # 41: --lookahead-floor (98.2.1.2) - a file made before it let the
+    # frames after take a pixel's worth all the way down
+    40: [("added", "lookahead_floor", 0.0)],
+    # 42: --flip-own (VIDEO-SEEN-PLAN 3b) - a file made before it was a
+    # change against the frame before, its page brought up first
+    41: [("added", "flip_own", False)],
+    # 43: --desktop-posters and --poster-image (98.1.3.11) - a file made
+    # before them had none
+    42: [("added", "desktop_posters", "off"), ("added", "poster_image", None)],
+    # 44: --desktop-size, and --desktop-posters' sets (98.1.3.11) - `on`
+    # was the colour set, at the size the window shows
+    43: [("revalue", "desktop_posters", {"on": "colour"}),
+         ("added", "desktop_size", "fit")],
+    # 45: --desktop-clip (98.1.3.11) - a file made before it dithered every
+    # cell of its desktop posters
+    44: [("added", "desktop_clip", 0.0)],
+    # 46: --ladder-at and --scene-join (98.2.1.10, 98.1.3.2.3.3) - a file
+    # made before them had one ladder for the clip and every scene's cut
+    45: [("added", "ladder_at", ""), ("added", "scene_join", "")],
 }
 
 
@@ -1373,6 +1419,10 @@ def audio_block(afmt, rate):
     return half
 
 
+AHEAD_SLACK = 0.10      # ...and Auto's (98.2.1.3): the share under the
+                        # profile's disk an in-step stream must still fit
+                        # at, or the file carries its sound ahead. T69 read
+                        # 9% under 286-picomem1's where it ran its card dry
 AHEAD_FRAMES = 4        # BUFFER SOUND AHEAD's default (98.1.8): frames of
                         # sound carried ahead of their picture - one 25 ms
                         # block's, plus one, plus two of margin at 24 fps
@@ -2956,14 +3006,17 @@ def _hsv(f):
 
 
 def scene_pass(src, w, h, crop, fps_expr, start, end, eq, detect=True,
-               cap=SCENE_PIX, cover=0.0, least=SCENE_MIN):
+               cap=SCENE_PIX, cover=0.0, least=SCENE_MIN, count=None):
     """The clip's SCENES, read once and streamed: [(first frame, pixels)],
     the pixels an (N, 3) uint8 sample of the scene - every fourth row and
     column of every frame, halved while past SCENE_PIX x 8 - for its
-    palette. With detect False, one scene: the whole clip's sample"""
+    palette. With detect False, one scene: the whole clip's sample.
+    `count(n)`, if given, is told each frame read (the progress)"""
     scenes, cur, prev, last = [], [], None, 0
     for n, f in enumerate(ffmpeg_video(src, w, h, crop, fps_expr, start, end,
                                        eq, pix="rgb24")):
+        if count is not None:
+            count(n + 1)
         sm = f[::4, ::4]
         if detect:
             hv = _hsv(sm)
@@ -3039,12 +3092,13 @@ def colour_kmeans(px, colours=16):
     return bytes(v for c in cols[:256] for v in c)
 
 
-def colour_palette(src, w, h, crop, fps_expr, start, end, eq, colours=16):
+def colour_palette(src, w, h, crop, fps_expr, start, end, eq, colours=16,
+                   count=None):
     """The clip's `colours` chosen for colour: colour_kmeans over the whole
-    clip's sample (scene_pass, one scene), streamed"""
+    clip's sample (scene_pass, one scene), streamed; `count`, scene_pass's"""
     return colour_kmeans(scene_pass(src, w, h, crop, fps_expr, start, end,
-                                    eq, detect=False, cap=400000)[0][1],
-                         colours)
+                                    eq, detect=False, cap=400000,
+                                    count=count)[0][1], colours)
 
 
 class SceneDitherer:
@@ -3453,9 +3507,14 @@ def vga8_palette(src, w, h, crop, fps_expr, start, end, eq, poll=None,
         cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y"]
         if start:
             cmd += ["-ss", "%.3f" % start]
-        cmd += ["-i", src]
+        # (-t ON THE INPUT: palettegen writes its one frame at the end of
+        # its input, so an OUTPUT -t - ffmpeg_video's, where frames flow -
+        # never fired, and every clip's palette was its start to the END
+        # OF THE FILE: 28 s and the closing credits' colours for a 4 s
+        # clip of Last Exile - the encoder speed pass, 2026-10-17)
         if end:
             cmd += ["-t", "%.3f" % (end - (start or 0))]
+        cmd += ["-i", src]
         cmd += ["-an", "-vf", ",".join(vf), "-frames:v", "1", out]
         run_polled(cmd, poll)
         from PIL import Image
@@ -3726,6 +3785,84 @@ DEGRADE_DEFAULT = "lag:100,slow:5/6,colours:12,slow:2/3,coarsescene:frame," \
 DEGRADE_COARSE = ("frame", "mix", "4x1", "16x4", "32x8", "64x8")
 
 
+PEV_RESIDUE = 0.02      # a scene change named in the report: 2% of the
+                        # picture or more left from the last scene
+PEV_SHOW = 12           # ...at most this many, the earliest
+
+
+def scene_join(scn, spec, fps, say=print):
+    """--scene-join (98.1.3.2.3.3): the scene pass's [(first frame,
+    pixels)] with the changes at `spec`'s times taken out - each scene
+    joined to the one before it, its pixels sampled with that one's, so
+    the two take one sixteen. A time is the encoder window's and its
+    report's, which count the pre-roll's few frames the scene pass does
+    not: the NEAREST change is taken, within half a second, and anything
+    else is refused, naming the nearest, before a frame is encoded"""
+    ts = [t.strip() for t in str(spec or "").replace(";", ",").split(",")
+          if t.strip()]
+    if not ts:
+        return scn
+    out = list(scn)
+    for t in ts:
+        try:
+            k = float(t) * fps
+        except ValueError:
+            raise vid.V88Error("--scene-join %s: not a time in seconds" % t)
+        cand = [i for i in range(1, len(out))]
+        if not cand:
+            raise vid.V88Error("--scene-join %s: the clip has one scene" % t)
+        i = min(cand, key=lambda i: abs(out[i][0] - k))
+        if abs(out[i][0] - k) > fps / 2.0:
+            raise vid.V88Error(
+                "--scene-join %s: no scene change within half a second - "
+                "the nearest is at %.2f s" % (t, out[i][0] / fps))
+        s0, px = out[i]
+        p0, q = out[i - 1]
+        q = np.concatenate([q, px]) if len(q) and len(px) else (
+            q if len(q) else px)
+        if len(q) > SCENE_PIX:          # (a sample's own size: every second
+            q = q[::-(-len(q) // SCENE_PIX)]    # pixel of the two, or so)
+        out[i - 1] = (p0, q)
+        del out[i]
+        say("   --scene-join %s: the change at %.2f s joined to the scene "
+            "from %.2f s" % (t, s0 / fps, p0 / fps))
+    return out
+
+
+def ladder_ranges(spec):
+    """--ladder-at (98.2.1.10): [(start s, end s, rungs)], in order and not
+    overlapping - each range's rungs parsed as --ladder's are, colours
+    refused (a scene's count is chosen before the encode, not a stretch's)"""
+    out = []
+    for part in str(spec or "").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        rng, eq, rungs = part.partition("=")
+        a0, dash, a1 = rng.strip().partition("-")
+        try:
+            t0, t1 = float(a0), float(a1)
+        except ValueError:
+            t0 = t1 = None
+        if not eq or not dash or t0 is None or not 0 <= t0 < t1:
+            raise vid.V88Error("--ladder-at %s: START-END=RUNGS, seconds "
+                               "into the clip, START before END" % part)
+        rs = degrade_parse(rungs)
+        if not rs:
+            raise vid.V88Error("--ladder-at %s: no rungs" % part)
+        if any(kind == "colours" for kind, v in rs):
+            raise vid.V88Error("--ladder-at %s: colours is a scene's count, "
+                               "chosen before the encode - give it to "
+                               "--ladder" % part)
+        out.append((t0, t1, rs))
+    out.sort()
+    for (a0, a1, _), (b0, b1, _) in zip(out, out[1:]):
+        if b0 < a1:
+            raise vid.V88Error("--ladder-at: %g-%g and %g-%g overlap"
+                               % (a0, a1, b0, b1))
+    return out
+
+
 def degrade_parse(spec):
     """--ladder's rungs -> [(kind, value)]: lag ms, slow a fraction of the
     rate, coarse and coarseany a cell (or auto), colours 12 or 8, cut the
@@ -3916,9 +4053,216 @@ def vfr_try(enc, ts, pat, au, tp, first=None, cost=VFR_HOLD, empty=False,
     return (v / len(ts), cuts, worst) if count else v / len(ts)
 
 
+# THE TRIAL POOL (the encoder speed pass's second round, 2026-10-17: "I
+# have 16 threads and it is using 6% of them"). The ladder's prefixes at a
+# stretch are each a trial encode on a COPY of the encoder (degrade_choose),
+# and no trial reads another's: they run at once, one a process, and the
+# same rule picks among them - so the file is the one the trials made one
+# after another, byte for byte. A trial is the encoder pickled with its
+# read-only tables left out (each worker was given those once, when the pool
+# was made) and the caches that are only caches emptied
+TRIAL_SHARED = ("g", "ct", "csub", "rowof", "base", "idx", "wv")
+TRIAL_CACHES = (("tcache", dict), ("scache", None), ("meter", None))
+
+
+def _tr_init(blob):
+    global _TR
+    import pickle
+    _TR = pickle.loads(blob)
+
+
+def _tr_run(blob):
+    import io
+    import pickle
+
+    class Up(pickle.Unpickler):
+        def persistent_load(self, pid):
+            return _TR[pid]
+    fn, args = Up(io.BytesIO(blob)).load()
+    return fn(*args)
+
+
+METER_BATCH = 8         # frames a Meter's task measures
+METER_AHEAD = 4         # ...and how many tasks a worker may have waiting
+
+
+def _mt_run(cfg, prefix, calls):
+    """Meter's worker: `calls` measured as measure() would - each (screen,
+    target, palette) - after `prefix`, the two before them, measured only
+    for the frames before that a frame's flicker and view are against"""
+    m = Encoder.__new__(Encoder)
+    m.dmode, m.ppb, m.blur_r = cfg
+    m.look, m.meter = 0, None
+    m.q_prev = m.q_tprev = (None, None)
+    m.q_stp = None
+    out = []
+    for j, (scr, tgt, pal) in enumerate(prefix + calls):
+        m.screen, m.dpal, m.tcache, m.scache = scr, pal, {}, None
+        r = m.measure_of(tgt)
+        if j >= len(prefix):
+            out.append(r)
+    return out
+
+
+class Meter:
+    """THE PICTURE AS PLAYED, MEASURED ELSEWHERE (the encoder speed pass's
+    second round, 2026-10-17): measure() reads nothing back into the
+    encode - its sums are the report's, and the pass comparisons' after it
+    - so a frame's measure is a copy of its screen and target sent to a
+    worker, METER_BATCH frames a task, each with the two frames before it
+    that its flicker and its view are against. The results come back in
+    order and are summed in order, so the report is the one measure() made
+    here, to the bit. The target before (q_stp, the ladder's) is kept here.
+    A copy of the encoder shares its meter, and a pickle leaves it out
+    (TrialPool): neither measures"""
+
+    def __init__(self, e, jobs):
+        self.pool = worker_pool(jobs)
+        self.cfg = (e.dmode, e.ppb, e.blur_r)
+        self.jobs = jobs
+        self.batch, self.prev = [], []
+        from collections import deque
+        self.seq = deque()              # ("job", result) / ("bad", shot)
+        self.acc = Encoder.__new__(Encoder)     # (the sums)
+        a = self.acc
+        a.q_vis = a.q_wrong = a.q_flick = a.q_tflick = 0.0
+        a.q_frames, a.q_bad, a.q_seen = [], [], []
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def put(self, e, target):
+        e.q_stp = e.tpix(target)[1]
+        self.batch.append((e.screen.copy(), np.array(target), e.dpal))
+        if len(self.batch) >= METER_BATCH:
+            self.send()
+
+    def send(self):
+        if not self.batch:
+            return
+        while sum(1 for k, _ in self.seq if k == "job") >= \
+                METER_AHEAD * self.jobs:
+            self.take(1)
+        self.seq.append(("job", self.pool.apply_async(
+            _mt_run, (self.cfg, self.prev, self.batch))))
+        self.prev = (self.prev + self.batch)[-2:]
+        self.batch = []
+
+    def mark(self, shot):
+        if self.batch:                  # (its frame is in this batch: the
+            self.send()                 # check waits on it, in order)
+        self.seq.append(("bad", shot))
+
+    def take(self, jobs=None):
+        """The results in, in order - `jobs` tasks of them, or all"""
+        a = self.acc
+        while self.seq and (jobs is None or jobs > 0):
+            k, v = self.seq.popleft()
+            if k == "bad":
+                if a.q_bad and a.q_bad[-1] >= VIS_AREA:
+                    v[3] += 1
+                continue
+            for r in v.get():
+                if r is not None:
+                    a.measured(r)
+            if jobs is not None:
+                jobs -= 1
+
+    def finish(self, e):
+        """Every frame's measure in, and the sums `e`'s, as measure() would
+        have left them; the pool ended"""
+        self.send()
+        self.take()
+        self.close()
+        a = self.acc
+        e.q_vis, e.q_wrong, e.q_flick, e.q_tflick = \
+            a.q_vis, a.q_wrong, a.q_flick, a.q_tflick
+        e.q_frames, e.q_bad, e.q_seen = a.q_frames, a.q_bad, a.q_seen
+        e.meter = None
+
+    def close(self):
+        if self.pool is not None:
+            self.pool.terminate()
+            self.pool.join()
+            self.pool = None
+
+
+def meter_for(e, a):
+    """A Meter for `e`'s pass, or None where measure() is best made here:
+    one job, no pixels to measure, or this process a pool's worker"""
+    import multiprocessing
+    jobs = min(METER_JOBS, getattr(a, "jobs", None) or os.cpu_count() or 1)
+    if jobs <= 1 or not e.metric or e.dmode not in ("bits", "pal", "idx") \
+            or multiprocessing.current_process().daemon:
+        return None
+    return Meter(e, jobs)
+
+
+METER_JOBS = 3          # measure is about a fifth of a frame's time here
+
+
+class TrialPool:
+    """`jobs` processes to try ladder prefixes on (the note above), made
+    for one pass's encoder `enc`; .close() ends them. With one job, or
+    inside another pool's worker, None (trial_pool) - the trials then run
+    here, in order, as they did"""
+
+    def __init__(self, enc, jobs):
+        import pickle
+        self.objs = [enc.__dict__[k] for k in TRIAL_SHARED
+                     if enc.__dict__.get(k) is not None]
+        self.ids = {id(o): i for i, o in enumerate(self.objs)}
+        self.pool = worker_pool(jobs, _tr_init, (pickle.dumps(
+            self.objs, pickle.HIGHEST_PROTOCOL),))
+
+    def submit(self, fn, enc, *args):
+        """fn(a copy of `enc`, *args) in a worker -> .get()"""
+        import io
+        import pickle
+        ids = self.ids
+        saved = {k: enc.__dict__[k] for k, _ in TRIAL_CACHES
+                 if k in enc.__dict__}
+        for k, empty in TRIAL_CACHES:   # (the caches stay here: a worker
+            if k in saved:              # makes its own)
+                enc.__dict__[k] = empty() if empty else None
+
+        class Down(pickle.Pickler):
+            def persistent_id(self, obj):
+                return ids.get(id(obj))
+        f = io.BytesIO()
+        try:
+            Down(f, pickle.HIGHEST_PROTOCOL).dump((fn, (enc,) + args))
+        finally:
+            enc.__dict__.update(saved)
+        return self.pool.apply_async(_tr_run, (f.getvalue(),))
+
+    def close(self):
+        self.pool.terminate()
+        self.pool.join()
+
+
+def trial_pool(enc, a, most):
+    """A TrialPool of up to `most` processes for `enc`, or None where the
+    trials are best run here: one job (--jobs 1), or this process a pool's
+    worker already (--aim quality's trials), which may start none"""
+    import multiprocessing
+    jobs = min(most, getattr(a, "jobs", None) or os.cpu_count() or 1)
+    if jobs <= 1 or multiprocessing.current_process().daemon:
+        return None
+    return TrialPool(enc, jobs)
+
+
+def _ladder_trial(e, ts, pat, au, tp, first, cost, empty, shown, stay,
+                  lag, ac):
+    """A ladder prefix's trial (degrade_choose), in a worker"""
+    return vfr_try(e, ts, pat, au, tp, first, cost, empty, shown, stay,
+                   lag=lag, count=True,
+                   every=coarse_every(ac) if ac else None)
+
+
 def degrade_choose(enc, ts, au, steps, fps, tp, first=None, cost=VFR_HOLD,
-                  empty=False, shown=None, stay=False, coarse=None,
-                  scene=False):
+                   empty=False, shown=None, stay=False, coarse=None,
+                   scene=False, pool=None):
     """THE DEGRADE LADDER at a stretch (--ladder): today's draw, then each
     of the ladder's prefixes (`steps`, degrade_steps), each encoded on a
     copy - the first that shows every frame WHOLE, or past a cut rung no
@@ -3926,9 +4270,35 @@ def degrade_choose(enc, ts, au, steps, fps, tp, first=None, cost=VFR_HOLD,
     is the stretch's first frame in a prefix's scene cell where the stretch
     is a scene's first (`scene`); a prefix's ANY cell draws each of the
     stretch's frames the budgets would cut in cells (coarse_every) ->
-    (hold pattern, rate, lag frames, scene cell, rung index, any cell)"""
+    (hold pattern, rate, lag frames, scene cell, rung index, any cell).
+    With a `pool` (TrialPool) every prefix's trial runs at once, today's
+    draw here meanwhile, and the same rule reads them in order"""
     n = len(ts)
     full = [False] * n
+    # (each prefix's draw: a trial where it draws other than the one
+    # before it - a cut rung alone draws the same - and the scene cells
+    # made once a cell, here, before any trial: none changes the encoder)
+    tries, cfs, was = [], {}, (1.0, None, False, None)
+    for i, r, lag, sc, tol, ac in steps:
+        cell = sc if scene else None
+        if coarse is None:
+            ac = None
+        pat = vfr_pattern(n, r) if r < 1.0 else full
+        if cell is not None and coarse is not None and not pat[0]:
+            if cell not in cfs:
+                cfs[cell] = coarse(cell)
+            cf = cfs[cell]
+        else:
+            cf = first
+        key = (r, lag, cf is not first and cell, ac)
+        tries.append([i, r, lag, cell, tol, ac, pat, cf, key != was, None])
+        was = key
+    if pool is not None:
+        for t in tries:
+            if t[8]:
+                i, r, lag, cell, tol, ac, pat, cf = t[:8]
+                t[9] = pool.submit(_ladder_trial, enc, ts, pat, au, tp, cf,
+                                   cost, empty, shown, stay, lag, ac)
     got = vfr_try(enc, ts, full, au, tp, first, cost, empty, shown,
                   stay, count=True)
     v, cuts, worst = got
@@ -3939,19 +4309,12 @@ def degrade_choose(enc, ts, au, steps, fps, tp, first=None, cost=VFR_HOLD,
     best = (v, full, 1.0, None, None, 0, None)
     if cuts == 0:
         return best[1:]
-    was = (1.0, None, False, None)      # (what the try before drew with)
-    for i, r, lag, sc, tol, ac in steps:
-        cell = sc if scene else None
-        if coarse is None:
-            ac = None
-        pat = vfr_pattern(n, r) if r < 1.0 else full
-        cf = coarse(cell) if cell is not None and coarse is not None and \
-            not pat[0] else first
-        if (r, lag, cf is not first and cell, ac) != was:
-            got = vfr_try(enc, ts, pat, au, tp, cf, cost, empty, shown,
-                          stay, lag=lag, count=True,
-                          every=coarse_every(ac) if ac else None)
-            was = (r, lag, cf is not first and cell, ac)
+    for i, r, lag, cell, tol, ac, pat, cf, new, job in tries:
+        if new:
+            got = job.get() if job is not None else vfr_try(
+                enc, ts, pat, au, tp, cf, cost, empty, shown, stay,
+                lag=lag, count=True,
+                every=coarse_every(ac) if ac else None)
         v, cuts, worst = got            # (a cut rung alone: the same draw)
         if os.environ.get("OS88_VENC_LADLOG"):
             with open(os.environ["OS88_VENC_LADLOG"], "a") as fl:
@@ -4104,6 +4467,52 @@ def _binomial(r):
 # what an encoder's copy SHARES with it (Encoder.__deepcopy__): tables
 # made once and only ever read - the geometry, the palette's float copy, the
 # cost tables, the row maps, and the targets ahead, which a step reads
+def own_price(e, base, rec):
+    """`base(rec)` - or, where `base` is None, the encoder's CLASS price,
+    which set_xplay's wrappers stand in front of on the instance"""
+    return type(e).cost(e, rec) if base is None else base(rec)
+
+
+def price_base(e):
+    """What a wrapper of `e.cost` asks below it: None for the class's own
+    price (a bound method of `e` - held as None, so a copy or a pickle of
+    the wrapper asks ITS encoder), else the wrapper already there"""
+    c = e.cost
+    return None if getattr(c, "__self__", None) is e else c
+
+
+class PlayCost:
+    """set_xplay's THE PLAY AS PROFILED: the table's price scaled, and its
+    KB and fixed costs. An object and not a closure, so an encoder PICKLES
+    (the trial pool, TrialPool) and a deep copy's price is its own"""
+
+    def __init__(self, e, base, k, kb_us, fix_us, us):
+        self.e, self.base = e, base
+        self.k, self.kb_us, self.fix_us, self.us = k, kb_us, fix_us, us
+
+    def __call__(self, rec):
+        return own_price(self.e, self.base, rec) * self.k + \
+            (self.kb_us / 1024.0 * len(rec) + self.fix_us) * self.us
+
+
+class XmsCost:
+    """set_xplay's borrows and copies down, on top of the price below it -
+    asked of the encoder it prices for. A closure here made a deep copy
+    ask the ORIGINAL encoder's bank whether a frame was banked: the trial
+    copies of a copying FIFO priced every frame by the real encode's level
+    and not their own"""
+
+    def __init__(self, e, base):
+        self.e, self.base = e, base
+
+    def __call__(self, rec):
+        e = self.e
+        c = own_price(e, self.base, rec)
+        if e.xmode == "copy" and not e._xbanked():
+            return c                    # (the disk reads into the ring)
+        return c + e.xfix + e.xbyte * len(rec)
+
+
 ENC_SHARED = ("g", "pal", "ct", "wv", "rowof", "base", "idx", "future")
 
 
@@ -4117,6 +4526,11 @@ class Encoder:
     # stopping there made a different file, and a worse one (the speed
     # pass, VIDEO-SEEN-PLAN 3a)
     probe = False
+    # SOUND AHEAD's slower-reader check (lean): a class default as well, so
+    # an encoder pickled by a process that loaded an older os88venc - the
+    # GUI left open across an update, its trial workers importing the new
+    # file (Windows spawns) - plays as Auto did before it, not a traceback
+    amargin, sh = 0.0, None
 
     def __deepcopy__(self, memo):
         """A copy whose surfaces are still SEEN through its own views: an
@@ -4197,6 +4611,7 @@ class Encoder:
         self.alead, self.arefill = 0, []    # the sound's lead (disk_floor)
         self.slead, self.srefill = 0, []    # ...what it WOULD be in step
                                             # (Auto's question, 98.2.1.3)
+        self.amargin, self.sh = 0.0, None   # ...and on a slower reader
         # OWED TIME (98.2.1.1): the player's schedule, simulated. On when
         # a frame may run to more than the per-frame ceiling allows
         self.audio_cyc = audio_cyc
@@ -4243,6 +4658,7 @@ class Encoder:
         # indexes `dpal`, "idx" a byte packs `ppb` indexes of `dpal`, None
         # no pixel form (the composite formats: bits, and no visible error)
         self.look, self.vis, self.future = 0, False, []
+        self.lfloor = 0.0                   # (value()'s look-ahead floor)
         # WHERE AN EYE LOOKS (--attend, VIDEO-SEEN-PLAN 3): value() weighted
         # by the view as seen's attention map, `attend` its strength (0
         # off); `attc` the last target's (target, pixels, map)
@@ -4277,6 +4693,7 @@ class Encoder:
         self.q_seen, self.q_stp = [], None  # ...the VIEW as seen (seen_share)
                                             # and the target before
         self.tcache, self.scache = {}, None     # (tpix, spix)
+        self.meter = None                   # (measure's: Meter)
         # PAGE-AHEAD (98.2.1.8): the hidden page's record this frame, its
         # (cycles, bytes) - charged with the frame's own - and what the plan
         # pass reads off a frame: which budget cut it, and its disk refill
@@ -4308,7 +4725,7 @@ class Encoder:
         # a flipped file's back page is the last record decoded AGAIN, out
         # of the copy the player kept: the table's price alone (cost0),
         # which borrows nothing and was timed at 0.95 of it
-        self.cost0 = table = self.cost
+        self.cost0 = self.cost
         self.xmode = mode
         self.xfix = self.xbyte = 0.0
         key = "modex" if self.g.layout == vid.LAY_MODEX else \
@@ -4319,8 +4736,8 @@ class Encoder:
             # THE PLAY AS PROFILED (SPEC.md 98.3.22.1): the whole in-place
             # draw measured, borrows and all - in place of xbor_*
             k, kb_us, fix_us = play
-            self.cost = lambda rec: table(rec) * k + \
-                (kb_us / 1024.0 * len(rec) + fix_us) * us
+            self.cost = PlayCost(self, price_base(self), k, kb_us,
+                                 fix_us, us)
             return
         if mode == "inplace":
             self.xfix = prof["xbor_us"] * prof.get("xbor_n", 3) * us
@@ -4329,14 +4746,7 @@ class Encoder:
             self.xbyte = prof["xdown"] * 1000.0 / 1024 * us
         if not (self.xfix or self.xbyte):
             return
-        base = self.cost
-
-        def cost(rec):
-            c = base(rec)
-            if self.xmode == "copy" and not self._xbanked():
-                return c                # (the disk reads into the ring)
-            return c + self.xfix + self.xbyte * len(rec)
-        self.cost = cost
+        self.cost = XmsCost(self, price_base(self))
 
     def _xbanked(self):
         """...a banked frame on the copying FIFO: while the bank holds
@@ -4470,7 +4880,11 @@ class Encoder:
                                             # frame was already short of time
 
     def refilled(self, per):
-        """A frame's refill of the disk bucket, kept for the sound's lead"""
+        """A frame's refill of the disk bucket, kept for the sound's lead -
+        and Auto's shadow bucket's, `amargin` under it (lean)"""
+        if self.amargin and self.sh is not None and per is not None:
+            self.sh = min(self.disk.cap, self.sh + per - self.amargin *
+                          (per + self.abps / self.fps))
         if self.alead:
             self.arefill.append(per or 0.0)
             del self.arefill[:-self.alead]
@@ -4488,6 +4902,25 @@ class Encoder:
             strict = self.disk.room() - (self.dfloor + sum(self.srefill))
             if spend > max(0.0, strict) + 1.0:
                 self.stats["leaned"] = self.stats.get("leaned", 0) + 1
+        # ...OR WOULD HAVE, ON A READER A LITTLE SLOWER: the same in-step
+        # budget run beside it on a shadow bucket refilled AHEAD_SLACK under
+        # the profile's disk (`refilled`). A stream that fits in step only
+        # at the profile's own rate has no room for a reader that dips under
+        # it, and the lead is that room. The owner's T69 (2026-10-19) leaned
+        # on no frame, was written in step, and its card ran dry a tick at a
+        # time where the stream ran 9% under 286-picomem1's 519,000 bytes a
+        # second
+        if self.amargin and self.disk.per is not None:
+            if self.sh is None:
+                self.sh = self.disk.room()
+            sfloor = self.dfloor + sum(self.srefill) * (1.0 - self.amargin)
+            near = self.sh - sfloor - spend
+            if near < -1.0:
+                self.stats["near"] = self.stats.get("near", 0) + 1
+            lo = self.stats.get("nearmin")
+            if lo is None or near < lo:
+                self.stats["nearmin"] = near
+            self.sh -= spend
 
     def disk_floor(self):
         """What the disk bucket may not be spent below: a READ_SEQ in
@@ -4817,6 +5250,8 @@ class Encoder:
                 v = v + ew * (ed(gS) - ed(g0))
             if not self.vis:
                 v = v + plain
+                if k == 0:
+                    vnow = v
                 continue
             # the share of the pixel's local error an eye sees: the
             # blurred pictures' difference over the blurred plain one -
@@ -4826,6 +5261,15 @@ class Encoder:
             vis = self.dist(bS, self.tblur(T)) / \
                 np.maximum(self.blur(self.dist(S, Tk)), 1e-3)
             v = v + plain * np.clip(vis, 0.25, 1.0)
+            if k == 0:
+                vnow = v
+        # THE LOOK-AHEAD'S FLOOR (--lookahead-floor, 98.2.1.2: the owner's
+        # headlights): the frames after it may take a pixel's worth
+        # down to `lfloor` of what writing it is worth NOW and no further -
+        # a headlight that moves on next frame still lost 8x of its worth
+        # to them and went unwritten for dark road
+        if self.look and self.lfloor:
+            v = np.maximum(v, self.lfloor * vnow)
         if self.attend:
             v = v * self.attention(target, T0)
         return v
@@ -4882,35 +5326,70 @@ class Encoder:
         """THE PICTURE AS PLAYED, a frame (the report's `picture:` line):
         its error as seen, its pixels wrong, and its FLICKER - pixels that
         go back to what they were two frames ago, as a dither pattern
-        swapping back and forth does"""
+        swapping back and forth does. With a `meter` (Meter) it is measured
+        in another process, and only the target before is kept here"""
+        if getattr(self, "meter", None) is not None:
+            self.meter.put(self, target)
+            return
+        r = self.measure_of(target)
+        if r is not None:
+            self.measured(r)
+
+    def measure_of(self, target):
+        """measure()'s frame -> (its mean error as seen, its share VISIBLY
+        wrong, the view as seen, its pixels wrong, the flicker back and the
+        source's, each None where there is no frame two before) - the
+        frames before it the only state it keeps; None, no pixels"""
         S = self.spix()[1]
         if S is None:
-            return
+            return None
         T = self.tpix(target)[1]
         ev = self.dist(self.sblur(), self.tblur(target))
         m = float(ev.mean())
-        self.q_vis += m
         # VISIBLY WRONG (2026-10-09): the share of the frame whose picture,
         # as the eye averages it, is off by VIS_BAD or more - a band torn
         # off a scene and left behind is most of a frame wrong by a lot,
         # which the mean over a whole clip of pixels made 0.11%
-        self.q_frames.append(m)
-        self.q_bad.append(float((ev > VIS_BAD).mean()))
-        self.q_seen.append(seen_share(S, T, self.q_stp))
+        bad = float((ev > VIS_BAD).mean())
+        seen = seen_share(S, T, self.q_stp)
         self.q_stp = T
         ne = S != T
         if ne.ndim == 3:
             ne = ne.any(2)
-        self.q_wrong += float(ne.mean())
-        for now, hist, k in ((S, "q_prev", "q_flick"),
-                             (T, "q_tprev", "q_tflick")):
+        fl = []
+        for now, hist in ((S, "q_prev"), (T, "q_tprev")):
             p1, p2 = getattr(self, hist)
             if p2 is not None:
-                a, b = now == p2, now != p1
-                if a.ndim == 3:
-                    a, b = a.all(2), b.any(2)
-                setattr(self, k, getattr(self, k) + float((a & b).sum()))
+                x, y = now == p2, now != p1
+                if x.ndim == 3:
+                    x, y = x.all(2), y.any(2)
+                fl.append(float((x & y).sum()))
+            else:
+                fl.append(None)
             setattr(self, hist, (now, p1))
+        return m, bad, seen, float(ne.mean()), fl[0], fl[1]
+
+    def measured(self, r):
+        """measure_of()'s frame added to the report's sums"""
+        m, bad, seen, wrong, fl, tfl = r
+        self.q_vis += m
+        self.q_frames.append(m)
+        self.q_bad.append(bad)
+        self.q_seen.append(seen)
+        self.q_wrong += wrong
+        if fl is not None:
+            self.q_flick += fl
+        if tfl is not None:
+            self.q_tflick += tfl
+
+    def when_bad(self, shot):
+        """`shot` (shot_cut's) counted VISIBLY broken where the frame just
+        measured was - when its measure is in: at once, or with a meter as
+        it reads its frames back, in order"""
+        if getattr(self, "meter", None) is not None:
+            self.meter.mark(shot)
+        elif self.q_bad and self.q_bad[-1] >= VIS_AREA:
+            shot[3] += 1
 
     def order(self, p, a):
         """rank()'s order for spans of priority `p` at addresses `a`, by
@@ -5066,6 +5545,56 @@ class Flipped:
         if flip:                        # a frame a call (98.3.8): owed time
             self.owe = None             # is the flip schedule's (below)
 
+    def own_init(self):
+        """EACH RECORD AGAINST ITS OWN PAGE (--flip-own, VIDEO-SEEN-PLAN 3b):
+        the encoder keeps BOTH pages, and a frame is drawn on the one the
+        glass is not showing - the frame two back, or after a held record
+        the held one - as it stands, owing nothing. The record after a key
+        is the exception: a seek puts the key on both pages, so that record
+        first takes the rows where the pages differ off the glass"""
+        self.own, self.opage = True, None
+        self.own_hold = self.own_next = False
+        self.own_up = None
+
+    def _own_page(self):
+        return (self.screen, self.surf, getattr(self, "pl", None))
+
+    def _own_set(self, pg):
+        self.screen, self.surf = pg[0], pg[1]
+        if pg[2] is not None:
+            self.pl = pg[2]
+        self.scache = None
+
+    def begin(self):
+        if getattr(self, "own", False):
+            self.own_turn()
+        super().begin()
+
+    def own_turn(self):
+        """A frame starts: onto the page the glass is not showing (the same
+        one after a held record), brought up first after a key"""
+        shown = self._own_page()
+        if self.opage is None:          # (both pages black at the start)
+            self.opage = (shown[0].copy(), bytearray(shown[1]),
+                          None if shown[2] is None else shown[2].copy())
+        if self.own_hold:
+            self.own_hold = False       # (drawn on again, as it stands)
+            self.own_up, self.prev_c = None, 0.0
+            return
+        self._own_set(self.opage)
+        self.opage = shown
+        self.own_up, self.prev_c = None, 0.0
+        if self.own_next:
+            self.own_next = False
+            rows = np.flatnonzero((self.screen != shown[0]).any(axis=1))
+            if len(rows):
+                y0, y1 = int(rows[0]), int(rows[-1]) + 1
+                self.own_up = (y0, y1)
+                self._own_set((shown[0].copy(), bytearray(shown[1]),
+                               None if shown[2] is None else shown[2].copy()))
+                # (the player's copy off the glass, 98.3.8.1's price)
+                self.prev_c = (y1 - y0) * 80 * self.lcopy + CYC_LCOPY0
+
     def charge(self, rec, abytes):
         c = self.cost(rec)
         pc, pb = self.pa_spend          # (page-ahead's hidden page, 98.2.1.8)
@@ -5074,6 +5603,20 @@ class Flipped:
         self.cpu.spend(c + self.prev_c + pc)
         self.disk.spend(len(rec) - abytes + pb)
         spent = c + self.prev_c + pc
+        if getattr(self, "nobring", False):
+            # (FLIPPED AND BUILT AHEAD AGAINST ITS OWN PAGES: every record
+            # drawn as it stands - PageAheadF's own - so nothing is owed;
+            # a flip's copy is that frame's, set in its before())
+            self.prev_c, self.staying = 0.0, False
+            self.end(spent)
+            return spent
+        if getattr(self, "own", False):
+            # (against its own page: nothing owed the next frame, and a
+            # HELD record's page is the next one's - own_turn)
+            self.own_hold = bool(getattr(self, "staying", False))
+            self.staying = False
+            self.end(spent)
+            return spent
         if self.flip:
             # what the player brings the back page up with next frame: this
             # record again, or its rows copied off the glass through the
@@ -6180,9 +6723,14 @@ class PageAheadF(PageAheadN):
     built: docs/reports/VIDEO-PAGES-2026-10-15.md §5"""
 
     def __init__(self, enc, plan, pages, key0=0, kcap=KEY_PLAYER,
-                 kpart=vid.KEY_PART, ref=0):
+                 kpart=vid.KEY_PART, ref=0, own=False):
         super().__init__(enc, plan, pages - 1, key0, kcap, kpart, ref)
         enc.fown = True                 # (the player keeps the own lists)
+        # AGAINST ITS OWN PAGES (--flip-own, VIDEO-SEEN-PLAN 3b): every
+        # frame record BUILT - drawn on its page as it stands, that page
+        # the encoder's model for it - so none is brought up, and every key
+        # carries the back page too, which a seek then has exactly
+        self.own = own
         self.N = pages
         self.bp = pages - 1                 # the back page, drawn next
         self.bsurf = bytes(enc.surf)        # ...and what it holds
@@ -6227,9 +6775,12 @@ class PageAheadF(PageAheadN):
 
     def carried(self, j):
         """every page but the back page, which after a seek holds the key's
-        own picture - and is UNKNOWN from a key until it is drawn on"""
+        own picture - and is UNKNOWN from a key until it is drawn on; and
+        against its own pages, the back page too"""
         out = self.surfs()
-        if self.keyat(j):
+        if self.own:
+            out[self.bp] = self.bsurf
+        elif self.keyat(j):
             self.bunk = True
         return out
 
@@ -6327,6 +6878,9 @@ class PageAheadF(PageAheadN):
                 self.asg[self.cp.pop(i)] = None
         if not self.built:              # AN ORDINARY FRAME: on the back page,
             self.vp, self.bp = self.bp, self.vp     # which is then shown
+            if self.own:                # (as it stands: the model is what
+                self._setsurf(e, self.bsurf)    # that page holds)
+                self.built = True
             self.bsurf = old
             self.bunk = False
         self._assign(j)
@@ -7263,10 +7817,9 @@ class Cancelled(Exception):
     nothing, and a file it would have replaced is left as it was."""
 
 
-# the steps an encode reports to `progress`, and the share of the whole
-# each is shown as: reading and dithering, and encoding, are nearly all of it
-STEPS = (("prepare", 0.03), ("read", 0.45), ("sound", 0.04),
-         ("encode", 0.46), ("write", 0.02))
+# (ffmpeg's palettegen gives no count of what it has read: its step says
+# what it is and that there is no count, and not a share of nothing)
+PALGEN_NOTE = "ffmpeg's palettegen over every frame of the clip: no count"
 
 
 # THE PRESETS' LADDERS (98.2.1.4): a box one step up, on the same screen
@@ -7333,13 +7886,18 @@ def aim_quality(a, tick, say):
         itself). The numbers are one encode's each, whichever process made
         them, so what is taken is what the trials one by one took"""
         work = [window(x, i) for x in argss for i in range(len(wins))]
+        note = "%d choice%s, each in %d window%s of the clip" % (
+            len(argss), "" if len(argss) == 1 else "s", len(wins),
+            "" if len(wins) == 1 else "s")
         if jobs > 1 and len(work) > 1:
             pool = worker_pool(min(jobs, len(work)))
+            note += ", %d at once" % min(jobs, len(work))
             try:
                 rs = [pool.apply_async(_trial, (b,)) for b in work]
                 for r in rs:
-                    while not r.ready():
-                        tick("prepare", 0, 0)   # (a cancel is heard)
+                    while not r.ready():    # (a cancel is heard)
+                        tick("trials", sum(x.ready() for x in rs),
+                             len(rs), note)
                         r.wait(0.2)
                 res = [r.get() for r in rs]
             finally:
@@ -7348,7 +7906,7 @@ def aim_quality(a, tick, say):
         else:
             res = []
             for b in work:
-                tick("prepare", 0, 0)  # (a trial: the window waits)
+                tick("trials", len(res), len(work), note)
                 res.append(_trial(b))
         out, k = [], len(wins)
         for n in range(len(argss)):
@@ -7415,11 +7973,14 @@ def aim_quality(a, tick, say):
 
 def encode(a, keep=None, progress=None):
     """`keep`, a list, is given every frame's target: the gate's.
-    `progress(step, done, total)` is called as the encode goes - `step` one
-    of STEPS, `total` 0 when the step has no count - and may raise
-    Cancelled to stop it (98.2.11)"""
+    `progress(step, done, total, note)` is called as the encode goes -
+    `step` what it is doing (os88vencgui's STEP_TEXT names them; "pass"
+    begins a pass and its note says which), `done` of `total` the real
+    count of what the step works through, `total` 0 when it has none to
+    give, `note` what goes on beside it - and may raise Cancelled to stop
+    it (98.2.11)"""
     readers = []
-    tick = progress or (lambda step, done, total: None)
+    tick = progress or (lambda step, done, total, note="": None)
     if is_wav(a.out):                   # the SOUND alone (86.21.1)
         return encode_wav(a, tick)
     try:
@@ -7597,13 +8158,109 @@ def vfr_plan(plan, kept):
     return out
 
 
-def vfr_page_select(c, plan, res, held, keep, tick, readers):
+class _Sink(object):
+    """A stdout that keeps nothing (a background pass's progress lines)"""
+
+    def write(self, t):
+        return len(t)
+
+    def flush(self):
+        pass
+
+
+def _pass_bg(tx, d):
+    """PassBg's process: the pass, its report held, sent back"""
+    import contextlib
+    readers = []
+    h = _Held(_Sink())
+    # (its progress on a lane of its own, straight to the window's pipe -
+    # the report is held, the bar is not: 98.2.11)
+    tick = progress_lines("alongside", sys.__stdout__) if \
+        getattr(d, "progress", False) else \
+        (lambda step, done, total, note="": None)
+    try:
+        with contextlib.redirect_stdout(h):
+            r = page_real(d, None, pass_tick(
+                tick, "page-ahead's pass without the plan's holds"), readers)
+        tx.send((True, (r, h.lines + ([h.part] if h.part else []))))
+    except BaseException as x:          # (said where the pass was asked)
+        try:
+            tx.send((False, x))
+        except Exception:
+            tx.send((False, RuntimeError(repr(x))))
+    finally:
+        for rd in readers:
+            rd.close()
+        tx.close()
+
+
+class PassBg(object):
+    """A REAL PASS IN ANOTHER PROCESS (the encoder speed pass's second
+    round, 2026-10-17): page-ahead's pass without the plan's holds reads
+    nothing the pass with them makes, so it runs alongside it - its own
+    reader, its own pool, its file `d.out` - and .result() is what
+    page_real(d) would have returned here, with its report held. FORKED
+    on Linux while this process has no other thread (worker_pool's rule),
+    else spawned; .close() ends it however the encode ends"""
+
+    def __init__(self, d):
+        import multiprocessing
+        import threading
+        self.out, self.done = d.out, False
+        ctx = multiprocessing.get_context(
+            "fork" if sys.platform.startswith("linux") and
+            threading.active_count() == 1 else "spawn")
+        self.rx, tx = ctx.Pipe(False)
+        self.p = ctx.Process(target=_pass_bg, args=(tx, d))
+        self.p.start()
+        tx.close()
+
+    def result(self):
+        """-> (res, _Held with its report)"""
+        try:
+            ok, v = self.rx.recv()
+        except EOFError:
+            raise vid.V88Error("a page-ahead pass ended without its file "
+                               "(its process exited %s)" % self.p.exitcode)
+        finally:
+            self.p.join()
+            self.done = True
+        if not ok:
+            raise v
+        r, lines = v
+        h = _Held(sys.stdout)
+        h.lines = list(lines)
+        return r, h
+
+    def close(self):
+        if self.p.is_alive():
+            self.p.terminate()
+        self.p.join()
+        if not self.done:               # (its file, never read)
+            try:
+                os.remove(self.out)
+            except OSError:
+                pass
+
+
+def pass_alongside(a, keep):
+    """May a real pass run in another process here? Not inside a pool's
+    worker (which may start none), not at --jobs 1, and not for the gate,
+    whose `keep` the passes fill one after another"""
+    import multiprocessing
+    jobs = getattr(a, "jobs", None) or os.cpu_count() or 1
+    return keep is None and jobs > 1 and \
+        not multiprocessing.current_process().daemon
+
+
+def vfr_page_select(c, plan, res, held, keep, tick, readers, bg=None):
     """--min-fps WITH PAGE-AHEAD (VIDEO-SEEN-PLAN 3a, wave 2): the page-ahead
     pass with the plan's holds (`res`, its report `held`) against one
     without them, stretch by stretch - each slowed stretch kept where its
     frames' view as seen was less broken with its holds - and, when the
     verdict is mixed, a third pass with the kept ones. The best of them by
-    the view as seen is the file. -> (res, held report, plan)"""
+    the view as seen is the file. `bg`, the pass without them already
+    running alongside (vfr_page_start). -> (res, held report, plan)"""
     import contextlib
     import copy
     import shutil
@@ -7612,7 +8269,7 @@ def vfr_page_select(c, plan, res, held, keep, tick, readers):
     runs = [(res, held, plan, None)]
     tmp = []
 
-    def run(pl):
+    def run(pl, label):
         d = copy.copy(c)
         d._paplan = pl
         fd, d.out = tempfile.mkstemp(suffix=".v88")
@@ -7620,14 +8277,24 @@ def vfr_page_select(c, plan, res, held, keep, tick, readers):
         tmp.append(d.out)
         if keep is not None:
             del keep[:]
-        tick("again", 0, 0)
+        pass_tick(tick, label)
         h = _Held(sys.stdout)
         with contextlib.redirect_stdout(h):
             r = page_real(d, keep, tick, readers)
         runs.append((r, h, pl, d.out))
         return r
     try:
-        rb = run(vfr_plan(plan, []))
+        if bg is not None:
+            d, job = bg
+            tmp.append(d.out)
+            tick("wait", 0, 0, "page-ahead's pass without the holds, "
+                 "running alongside, to finish")
+            rb, h = job.result()
+            readers.remove(job)
+            runs.append((rb, h, d._paplan, d.out))
+        else:
+            rb = run(vfr_plan(plan, []), "page-ahead's pass without the "
+                     "plan's holds")
         qa, qb = res.get("q_seenf"), rb.get("q_seenf")
         if not qa or not qb or len(qa) != len(qb):
             kept = list(range(len(S)))
@@ -7635,7 +8302,9 @@ def vfr_page_select(c, plan, res, held, keep, tick, readers):
             kept = [i for i, (s0, s1, _) in enumerate(S)
                     if sum(qa[s0:s1 + 1]) < sum(qb[s0:s1 + 1])]
         if 0 < len(kept) < len(S):
-            run(vfr_plan(plan, kept))
+            run(vfr_plan(plan, kept), "page-ahead again, with only the %d "
+                "hold%s that drew better" % (len(kept), "" if len(kept) == 1
+                                              else "s"))
         best = min(runs, key=lambda x: x[0].get("q_seen", 0.0))
         if best[3] is not None:
             shutil.move(best[3], c.out)
@@ -7660,6 +8329,27 @@ def vfr_page_select(c, plan, res, held, keep, tick, readers):
                 pass
 
 
+def vfr_page_start(c, plan, keep, readers):
+    """vfr_page_select's pass WITHOUT the holds, started in another process
+    before the pass with them (PassBg) -> (its namespace, the job), or
+    None where it must wait its turn (pass_alongside)"""
+    import copy
+    import tempfile
+    if not pass_alongside(c, keep):
+        return None
+    d = copy.copy(c)
+    d._paplan = vfr_plan(plan, [])
+    fd, d.out = tempfile.mkstemp(suffix=".v88")
+    os.close(fd)
+    try:
+        job = PassBg(d)
+    except Exception:
+        os.remove(d.out)
+        raise
+    readers.append(job)                 # (ended however encode ends)
+    return d, job
+
+
 def page_passes(a, keep, tick, readers, mode="on"):
     """--page-ahead (98.2.1.8): the encode once as it would be made without
     the second page, for the PLAN - each frame's budgets and the frames a
@@ -7671,8 +8361,8 @@ def page_passes(a, keep, tick, readers, mode="on"):
     the frames cut. --page-prune (98.2.1.8.2) may add a THIRD pass without
     only the builds that made their own stretch worse (page_hurt): `rescue`
     where auto would ship the plain file, `always` wherever a build hurt.
-    Progress: the first pass is a step of its own, "first", as the layer's
-    first pass is, and a third pass begins with "again"."""
+    Progress: each pass says which it is as it begins (pass_tick), and its
+    steps are reported as they happen"""
     import contextlib
     import copy
     import shutil
@@ -7690,7 +8380,9 @@ def page_passes(a, keep, tick, readers, mode="on"):
     h1 = _Held(sys.stdout)
     try:
         with contextlib.redirect_stdout(h1):
-            res1 = _encode(b, None, pass_tick(tick, "first"), readers)
+            res1 = _encode(b, None, pass_tick(
+                tick, "the first pass: the plain encode, which page-ahead "
+                "plans from"), readers)
         # THE LADDER READS THIS PASS (98.2.1.9) - and when it steps a scene
         # down, the plan is made AGAIN, stepped: a stepped scene's frames
         # are other colours at other plane codes, so the plain pass's
@@ -7702,7 +8394,9 @@ def page_passes(a, keep, tick, readers, mode="on"):
             b._ladok, b._steps = True, steps
             h1 = _Held(sys.stdout)
             with contextlib.redirect_stdout(h1):
-                res1 = _encode(b, None, pass_tick(tick, "first"), readers)
+                res1 = _encode(b, None, pass_tick(
+                    tick, "the first pass again, %d scene%s in fewer colours"
+                    % (len(steps), "" if len(steps) == 1 else "s")), readers)
         plan = res1.get("paplan")
         layered = bool(getattr(a, "layer_disk", None) or
                        getattr(a, "layer_profile", None))
@@ -7721,7 +8415,7 @@ def page_passes(a, keep, tick, readers, mode="on"):
             c0._ladok, c0._steps = True, steps
             if keep is not None:
                 del keep[:]
-            tick("again", 0, 0)
+            pass_tick(tick, "the plain file again, with its layer")
             return page_real(c0, keep, tick, readers)
         if mode == "auto" and (not plan or not plan["T"]):
             r0 = plain()                # (nothing cut: nothing to build)
@@ -7732,6 +8426,14 @@ def page_passes(a, keep, tick, readers, mode="on"):
         c = copy.copy(a)
         c._paok, c._paplan = True, plan
         c._ladok, c._steps = True, steps
+        # (the pass without the holds reads nothing this one makes: it
+        # runs alongside - vfr_page_start)
+        bg = vfr_page_start(c, plan, keep, readers) \
+            if plan and plan.get("S") else None
+        pass_tick(tick, "page-ahead's pass%s" % (
+            ", with the plan's holds" if bg is not None else
+            ", with the plan's holds (the one without them after it)"
+            if plan and plan.get("S") else ""))
         h2 = _Held(sys.stdout)
         with contextlib.redirect_stdout(h2):
             res2 = page_real(c, keep, tick, readers)
@@ -7740,18 +8442,15 @@ def page_passes(a, keep, tick, readers, mode="on"):
             # plan pass chose them without the hidden page, so each slowed
             # stretch is kept only where it drew better WITH page-ahead
             res2, h2, plan = vfr_page_select(c, plan, res2, h2, keep, tick,
-                                             readers)
+                                             readers, bg)
             c._paplan = plan
         # (a file that may HOLD frames - --min-fps, --ladder - trades cut
         # frames for held ones by design, and the passes hold differently:
         # its picture's measures judge it, and not a count of either - the
         # count alone dropped a page-ahead file better on every one of them)
-        held = bool(getattr(a, "min_fps", 0) or degrade_rungs(a))
-        meas = PAGE_PICTURE if held else PAGE_MEASURES
-        worse, better = page_compare(res2, res1, meas)
+        ok, worse, better, whynot = page_verdict(res2, res1)
         pg = res2.get("page") or {}
-        drop = mode == "auto" and (worse or not better or
-                                   not pg.get("flips"))
+        drop = mode == "auto" and (not ok or not pg.get("flips"))
         prune = getattr(a, "page_prune", "rescue")
         note = None
         pruned = None
@@ -7778,22 +8477,22 @@ def page_passes(a, keep, tick, readers, mode="on"):
                 os.close(fd)
                 if keep is not None:
                     del keep[:]
-                tick("again", 0, 0)
+                pass_tick(tick, "page-ahead again, without the %d build%s "
+                          "that made their own stretch worse" % (
+                              len(hurt), "" if len(hurt) == 1 else "s"))
                 h3 = _Held(sys.stdout)
                 with contextlib.redirect_stdout(h3):
                     res3 = page_real(d, keep, tick, readers)
                 p3 = res3.get("page") or {}
                 # (a pruned build's scene change is cut again by design:
                 # the frames cut cannot judge a prune, the picture can)
-                w32, b32 = page_compare(res3, res2, PAGE_PICTURE)
-                w3, b3 = page_compare(res3, res1, meas)
-                if p3.get("flips") and (
-                        (not w32 and b32) or
-                        (drop and not w3 and b3)):
+                ok32, w32, b32, _ = page_verdict(res3, res2)
+                ok3, w3, b3, why3 = page_verdict(res3, res1)
+                if p3.get("flips") and (ok32 or (drop and ok3)):
                     shutil.move(d.out, a.out)
                     res2, h2, pg = res3, h3, p3
-                    worse, better = w3, b3
-                    drop = False
+                    worse, better, whynot = w3, b3, why3
+                    drop = mode == "auto" and not ok3
                     pruned = (len(hurt), nb)
                     note = ("   page-ahead: PRUNED - %d of %d builds that "
                             "made their own stretch worse left out; better "
@@ -7837,24 +8536,26 @@ def page_passes(a, keep, tick, readers, mode="on"):
                 print(page_line("KEPT (--page-ahead on)", res1, res2, pg,
                                 pruned))
             return res2
-        if drop or worse or not better or not pg.get("flips"):
+        if drop or not pg.get("flips"):
             r0 = plain()
             if not a.quiet:
                 if note:
                     print(note)
                 print("   page-ahead: DROPPED - %s; the file is the plain "
-                      "encode (98.2.1.8.1)" % (
-                          "it made %s worse" % ", ".join(worse) if worse
-                          else "no flip" if not pg.get("flips") else
-                          "it bettered nothing"))
+                      "encode (98.2.1.8.1)%s" % (
+                          "no flip" if not pg.get("flips") else whynot,
+                          "; it was better %s" % ", ".join(better)
+                          if better and pg.get("flips") else ""))
                 print(page_line("DROPPED", res1, res2, pg, pruned))
             return r0
         sys.stdout.write(h2.text())
         if not a.quiet:
             if note:
                 print(note)
-            print("   page-ahead: KEPT - better %s, worse nowhere "
-                  "(98.2.1.8.1)" % ", ".join(better))
+            print("   page-ahead: KEPT - the view as seen decides: better "
+                  "%s; worse %s (98.2.1.8.1)" % (", ".join(better),
+                                                 ", ".join(worse) or
+                                                 "nowhere"))
             print(page_line("KEPT", res1, res2, pg, pruned))
         return res2
     finally:
@@ -7890,6 +8591,265 @@ def key_bench(m, rec, wr):
         flip, own, hrec = vid.page_parts(rec, wr.g)
         return 2 * m.cost(own) + (m.cost(hrec) if hrec else 0)
     return (2 if wr.flip else 1) * m.cost(rec)
+
+
+# DESKTOP POSTERS (98.1.3.11): the window's room for a picture at its own
+# size on a 640 x 480 desktop - wider or taller and it is shown at half
+DESK_FIT = (630, 400)
+_DESK_CACHE = {}
+
+
+def desk_choice(pixfmt, cgapal, own, pw, ph, mode, size, custom):
+    """What a file's DESKTOP POSTERS are (98.1.3.11): (scale, flags), or
+    None for no table. `own`: a VGA4 file in colours of its own. The sets
+    by default are what the format is seen in - colour for VGA's, black
+    and white for one bit's, both for CGA's colours, which a VGA shows in
+    colour and a CGA's desktop cannot - and keys by default where the
+    player's own picture is poor: 256 colours (one-bit luma), CGA's (four
+    shades) and 16 of their own or shown smaller (the nearest colour of a
+    decimation)"""
+    fit = next((s for s in (1, 2) if pw // s <= DESK_FIT[0] and
+                ph // s <= DESK_FIT[1]), 4)
+    ts = {"fit": fit, "half": max(fit, 2), "quarter": 4}[size]
+    while ts < 4 and vid.thumb_size("c", pw // ts, -(-ph // ts)) > \
+            vid.THUMB_MAX:              # (a picture the player can hold)
+        ts *= 2
+    if pixfmt in (vid.PF_VGA4, vid.PF_VGA8):
+        kinds = TH_C
+    elif pixfmt in (vid.PF_CGA4, vid.PF_C160, vid.PF_C512) or \
+            (pixfmt == vid.PF_TEXT and cgapal == vid.TEXT_COLOUR):
+        kinds = TH_C | TH_M
+    else:
+        kinds = TH_M
+    keys = pixfmt in (vid.PF_VGA8, vid.PF_CGA4, vid.PF_C160,
+                      vid.PF_C512) or \
+        (pixfmt == vid.PF_VGA4 and (own or ts > 1))
+    if mode in ("colour", "mono", "both"):
+        kinds = {"colour": TH_C, "mono": TH_M, "both": TH_C | TH_M}[mode]
+        keys = True
+    elif mode == "off":
+        keys = False
+    fl = (vid.TH_KEYS if keys else 0) | (vid.TH_CUSTOM if custom else 0)
+    if fl:
+        fl |= kinds
+    if size != "fit":
+        fl |= vid.TH_SIZE
+    return (ts, fl) if fl else None
+
+
+TH_C, TH_M = vid.TH_COLOUR, vid.TH_MONO
+
+
+def desk_picture(rgb, pw, ph, ts, kind, clip=0.0):
+    """One desktop poster from a picture in six-bit RGB at the Preview's
+    own size"""
+    return (vid.desktop_poster_rgb if kind == "c" else
+            vid.desktop_mono_rgb)(rgb, pw, ph, ts, clip)
+
+
+def desk_posters(a, wr, g, palette, lw, lh, crop, rate, spf, eq, rep):
+    """wr.thumbs (98.1.3.11): each key's poster from its canvas in the
+    colours in effect at its frame, and a custom one from --poster-image,
+    in the sets and at the size desk_choice says"""
+    mode = getattr(a, "desktop_posters", "auto")
+    size = getattr(a, "desktop_size", "fit")
+    custom = getattr(a, "poster_image", None)
+    dclip = getattr(a, "desktop_clip", 0.0) or 0.0
+    pf = wr.pixfmt
+    pev = list(getattr(wr, "pev", None) or [])
+    base = bytes((palette or vid.STD16)[:48 if pf == vid.PF_VGA4 else 768])
+    if pf == vid.PF_VGA4:           # (None: the desktop's own)
+        pals = [bytes(p[:48]) for f, p in pev] or [base]
+        own = any(p != vid.STD16 for p in pals)
+    else:
+        own = False
+    rs = getattr(wr, "rowscale", 1) or 1
+    pw, ph = vid.thumb_dims(pf, g, rs)
+    ch = desk_choice(pf, wr.cgapal, own, pw, ph, mode, size, custom)
+    if ch is None:
+        return
+    ts, fl = ch
+
+    def make(cv, kind):
+        f = None
+        for k, r, c in wr.keys:
+            if c is cv:
+                f = k
+        pal = base
+        for fr, p in pev:
+            if f is not None and fr <= f:
+                pal = bytes(p[:48])
+        key = (hash(cv), len(cv), pal, ts, kind, dclip)
+        pk = _DESK_CACHE.get(key)
+        if pk is None:
+            rgb = vid.canvas_rgb(pf, cv, g, pal, wr.cgapal, rs)
+            pk = _DESK_CACHE[key] = desk_picture(rgb, pw, ph, ts, kind,
+                                                 dclip)
+        return pk
+    cpk = None
+    if custom:
+        if custom.startswith("@"):
+            t0 = (a.start or 0.0) + float(custom[1:])
+            src, t1 = a.src, t0 + 2.0 * spf / rate
+        else:
+            src, t0, t1 = custom, 0.0, None
+        fr = next(iter(ffmpeg_video(src, lw, lh, crop, "%d/%d" % (rate, spf),
+                                    t0, t1, ":".join(eq), pix="rgb24")),
+                  None)
+        if fr is None or fr.shape[:2] != (lh, lw):
+            raise vid.V88Error("--poster-image %s: no picture of %d x %d "
+                               "came out of it" % (custom, lw, lh))
+        if (lw, lh) != (pw, ph):        # (the Preview's own shape: CGA's
+            from PIL import Image       # colours two wide, a text cell four)
+            fr = np.asarray(Image.fromarray(fr).resize(
+                (pw, ph), Image.BOX if pw <= lw and ph <= lh else
+                Image.NEAREST))
+        rgb = fr.astype(np.float64) * 63.0 / 255.0
+        cpk = {k: desk_picture(rgb, pw, ph, ts, k, dclip)
+               for k in vid.thumb_kinds(fl)}
+    wr.thumbs = dict(scale=ts, flags=fl, make=make, custom=cpk)
+    sets = " and ".join(n for b, n in ((TH_C, "in the desktop's sixteen"),
+                                       (TH_M, "in black and white"))
+                        if fl & b)
+    what = ", ".join(x for x in (
+        "a key's each" if fl & vid.TH_KEYS and wr.keys else "",
+        "a custom one" if cpk is not None else "") if x)
+    rep("file", "desktop posters: %s at %s%s%s (98.1.3.11)" % (
+        what or "none", {1: "its own size", 2: "half", 4: "a quarter"}[ts],
+        ", " + sets if sets else "",
+        ", the Preview's size" if fl & vid.TH_SIZE else ""))
+
+
+def reposter(a, say=print):
+    """--posters-only (98.1.3.11.1): an EXISTING file's desktop posters
+    made again - every rendition's, from its own keys decoded and the
+    palette in effect at each, with --desktop-posters, --desktop-size,
+    --desktop-clip and --poster-image (a picture file) as an encode would
+    take them - and nothing else in the stream touched. The table goes
+    back where the old one was when it fits that block's sectors, and
+    after everything else in the file when it does not, the old bytes
+    then named by nothing (set_poster's rule); the stored options learn
+    the new settings, so a re-encode from the file keeps them. `a.src` is
+    the file and `a.out` where it goes (the same path rewrites it).
+    -> the pictures written"""
+    from PIL import Image
+    mode = getattr(a, "desktop_posters", "auto")
+    size = getattr(a, "desktop_size", "fit")
+    dclip = getattr(a, "desktop_clip", 0.0) or 0.0
+    image = getattr(a, "poster_image", None)
+    if image and image.startswith("@"):
+        raise vid.V88Error("--poster-image %s with --posters-only: a moment "
+                           "of the source is placed by the encode's fit and "
+                           "crop, which the file does not keep - give a "
+                           "picture file" % image)
+    d = bytearray(open(a.src, "rb").read())
+    r0 = vid.Reader(a.src)
+    tail = len(d) + (-len(d) % vid.SECTOR)
+    total = 0
+    for ri in range(r0.nrend):
+        r = vid.Reader(a.src, ri)
+        pf, g, rs = r.pixfmt, r.g, r.rowscale or 1
+        if r.live and size != "fit":
+            raise vid.V88Error("--desktop-size %s for a Live file: it plays "
+                               "in its window at its own size" % size)
+        pals = [bytes(p[:48]) for f, p in (r.pev or [])] or \
+            [bytes((r.palette or vid.STD16)[:48])]
+        own = pf == vid.PF_VGA4 and any(p != vid.STD16 for p in pals)
+        pw, ph = vid.thumb_dims(pf, g, rs)
+        old = r.thumb
+        cpk = None
+        if image:
+            cpk = True                  # (made once the sets are known)
+        elif old is not None and old[5] & vid.TH_CUSTOM:
+            cpk = "keep"
+        ch = desk_choice(pf, r.cgapal, own, pw, ph, mode, size, cpk)
+        kinds = vid.thumb_kinds(ch[1]) if ch else []
+        if ch and cpk == "keep":
+            have = vid.thumb_kinds(old[5])
+            if old[4] != ch[0] or any(k not in have for k in kinds):
+                raise vid.V88Error(
+                    "rendition %d's custom poster is %s at a scale of %d, and "
+                    "the new posters want %s at %d: give --poster-image to "
+                    "make it again" % (ri, "+".join(have), old[4],
+                                       "+".join(kinds), ch[0]))
+            cpk = {k: r.thumb_pic(r.thumb_at(r.nkeys, k)) for k in kinds}
+        elif ch and image:
+            im = Image.open(image).convert("RGB").resize((pw, ph),
+                                                          Image.BOX)
+            rgb = np.asarray(im).astype(np.float64) * 63.0 / 255.0
+            cpk = {k: desk_picture(rgb, pw, ph, ch[0], k, dclip)
+                   for k in kinds}
+        keys = []
+        if ch and ch[1] & vid.TH_KEYS:
+            for i, e in enumerate(r.keys):
+                keys.append((e[0], None, vid.decode_at(r, e[0])))
+
+        def make(cv, kind, keys=keys, r=r, pf=pf, g=g, rs=rs, ts=ch and ch[0]):
+            f = next(k for k, _, c in keys if c is cv)
+            pal = vid.palette_at(r, f)      # (None: the desktop's sixteen)
+            rgb = vid.canvas_rgb(pf, cv, g, (pal[:48] if pal else None)
+                                 if pf == vid.PF_VGA4 else pal, r.cgapal, rs)
+            return desk_picture(rgb, pw, ph, ts, kind, dclip)
+        slot = r.slot + (vid.R_THUMBR if r.resident else vid.R_THUMB)
+        if ch is None:
+            hdr = (0, 0, 0)
+            say("   rendition %d: no desktop posters" % ri)
+        else:
+            th = dict(scale=ch[0], flags=ch[1], make=make, custom=cpk)
+            at = None
+            if old is not None and old[0]:
+                tat, tn = old[0], old[1]
+                end = max([tat + struct.calcsize(vid.TH_ENT) * tn] +
+                          [o + n for o, n, _, _ in (
+                              struct.unpack_from(vid.TH_ENT, d, tat + struct.
+                                                 calcsize(vid.TH_ENT) * i)
+                              for i in range(tn))])
+                room = end + (-end % vid.SECTOR) - tat
+                blk, hdr = vid.thumb_block(th, keys, tat, pw, ph)
+                if len(blk) <= room:
+                    d[tat:tat + room] = blk + bytes(room - len(blk))
+                    at = tat
+            if at is None:
+                if r.lsp0 and not r.lktab:
+                    raise vid.V88Error(
+                        "rendition %d: the new posters do not fit the old "
+                        "ones' sectors, and a layer with no keys runs to the "
+                        "file's end, so nothing may go after it" % ri)
+                blk, hdr = vid.thumb_block(th, keys, tail, pw, ph)
+                d[len(d):] = bytes(tail - len(d)) + blk
+                tail = len(d) + (-len(d) % vid.SECTOR)
+                at = hdr[0]
+            n = (len(keys) + (1 if cpk else 0)) * len(kinds)
+            total += n
+            say("   rendition %d: %d desktop poster(s) %s at %s, %d bytes "
+                "%s" % (ri, n, " and ".join(
+                    {"c": "in colour", "m": "in black and white"}[k]
+                    for k in kinds), {1: "its own size", 2: "half",
+                                      4: "a quarter"}[ch[0]], len(blk),
+                    "in place of the old" if old is not None and
+                    at == old[0] else "after the file's end"))
+        struct.pack_into(vid.THUMB_FMT, d, slot, *hdr)
+        if not r.resident:              # (the first layout's twelve bytes:
+            d[r.slot + 46:r.slot + 52] = bytes(6)   # gone, 98.1.3.11)
+    vid._reshape_options(d, r0, dict(desktop_posters=mode, desktop_size=size,
+                                     desktop_clip=dclip,
+                                     poster_image=image or None))
+    tmp = a.out + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(d)
+    try:                                # (every poster read back, every
+        for ri in range(r0.nrend):      # rendition's stream still whole)
+            r = vid.Reader(tmp, ri)
+            if r.thumb is not None:
+                for i in range(r.thumb[1]):
+                    r.thumb_pic(i)
+            for _ in r.records():
+                pass
+    except vid.V88Error:
+        os.remove(tmp)
+        raise
+    os.replace(tmp, a.out)
+    return total
 
 
 def page_key0(path, res):
@@ -7944,20 +8904,52 @@ def page_compare(p, b, measures=PAGE_MEASURES):
     return worse, better
 
 
-def pass_tick(tick, name):
-    """A whole pass's read, sound and encode as ONE step, `name`, in
-    thousandths - the encoder's window shows it as a step of its own"""
-    R, S, E = (dict(STEPS)[k] for k in ("read", "sound", "encode"))
-    part = {"read": (0.0, R), "sound": (R, S), "encode": (R + S, E)}
+# WHICH FILE PAGE-AHEAD SHIPS (98.2.1.8.1, the owner, 2026-10-17: "with
+# the ladder, no matter how I configure it, it always drops page ahead"):
+# THE VIEW AS SEEN decides - the measure VIDEO-SEEN-PLAN 1 built to read as
+# the eye does, which the ladder and the frame rate already choose by - and
+# the seconds it is broken by a tenth or more, and the seconds visibly
+# broken, may be no worse by more than a frame: what the view gains by
+# breaking for longer is not kept. The whole screen's means (the error as
+# seen, its worst second) and the frames cut are said and do not decide:
+# better somewhere and worse NOWHERE, the rule before, dropped a page-ahead
+# file whose view was a third less broken because one of six came out a
+# hair worse - and on a picture busy enough to cut, one nearly always does
+PAGE_DECIDES = "q_seen"
+PAGE_GUARDS = ("q_seen_broken", "q_broken")
 
-    def t(step, done, total):
-        if step in part and total:
-            at, w = part[step]
-            tick(name, round((at + w * min(1.0, done / total)) /
-                             (R + S + E) * 1000), 1000)
-        else:
-            tick(name, 0, 0)            # (a cancel is heard)
-    return t
+
+def page_verdict(p, b):
+    """(ship `p` rather than `b`?, [worse], [better], why not): the view as
+    seen decides, the guards may be no worse by more than one frame's time,
+    and the rest of page_compare's measures are reported (PAGE_DECIDES)"""
+    worse, better = page_compare(p, b, PAGE_MEASURES)
+    if PAGE_DECIDES not in p or PAGE_DECIDES not in b:
+        return not worse and bool(better), worse, better, \
+            "it bettered nothing" if not worse else "it made %s worse" % \
+            ", ".join(worse)
+    frame = 1.0 / (p.get("fps") or b.get("fps") or 24.0)
+    names = dict(PAGE_MEASURES)
+    if p[PAGE_DECIDES] >= b[PAGE_DECIDES] - 1e-9:
+        return False, worse, better, "%s %s (%.3g against %.3g)" % (
+            names[PAGE_DECIDES], "no better" if abs(
+                p[PAGE_DECIDES] - b[PAGE_DECIDES]) <= 1e-9 else "worse",
+            p[PAGE_DECIDES], b[PAGE_DECIDES])
+    for k in PAGE_GUARDS:
+        if k in p and k in b and p[k] > b[k] + frame + 1e-9:
+            return False, worse, better, "%s worse by more than a frame " \
+                "(%.3g s against %.3g)" % (names[k], p[k], b[k])
+    return True, worse, better, None
+
+
+def pass_tick(tick, label):
+    """A PASS begins: `label` says which and why (98.2.11) - "pass", its
+    note the label - and its steps are then reported as they happen, read,
+    sound and encode each with its own count: until 2026-10-17 a first
+    pass was folded into thousandths of one step, "first", which said a
+    percent and not what the encoder was doing"""
+    tick("pass", 0, 0, label)
+    return tick
 
 
 def layer_first_pass(a, tick, readers):
@@ -7967,12 +8959,13 @@ def layer_first_pass(a, tick, readers):
     machine keeps for the base, KB in whole 32 KB slots, priced with the
     bank's copies charged throughout; and the base's whole future, each
     frame's bytes and decode, which the second pass holds the layer to
-    (LayerEnc._reqs). Its progress is one step of its own, "first"""
+    (LayerEnc._reqs). It says so as it begins (pass_tick)"""
     import copy
     import tempfile
     b = copy.copy(a)
     b._lypass1, b.quiet, b.preview_png, b.aim = True, True, None, "asked"
-    t1 = pass_tick(tick, "first")
+    t1 = pass_tick(tick, "the layer's first pass: what the base must keep "
+                   "for it")
     fd, b.out = tempfile.mkstemp(suffix=".v88")
     os.close(fd)
     try:
@@ -8002,6 +8995,7 @@ def layer_passes(a, keep, tick, readers):
         a._ladok, a._steps = True, steps    # it already: 98.2.1.8.3)
     b = copy.copy(a)
     b._lyneed, b._lytrace = need, trace
+    pass_tick(tick, "the layer's second pass, %d KB kept for it" % need)
     res = _encode(b, keep, tick, readers)
     for _ in range(LAYER_AGAIN):
         ly = res.get("layer") or {}
@@ -8017,7 +9011,7 @@ def layer_passes(a, keep, tick, readers):
         b._lyneed, b._lytrace, b._lyagain = need, trace, True
         if keep is not None:
             del keep[:]
-        tick("again", 0, 0)
+        pass_tick(tick, "the layer's pass again, %d KB kept for it" % need)
         res = _encode(b, keep, tick, readers)
     return res
 
@@ -8106,11 +9100,15 @@ def ladder_steps(a, res, tick=None):
     fps = g["rate"] / float(g["spf"])
     t00 = a.start or 0.0
     steps, lines = {}, []
+    todo = [i for i, sh in enumerate(shots)
+            if sh["broken"] >= LADDER_BROKEN and rungs]
     for i, sh in enumerate(shots):
         if sh["broken"] < LADDER_BROKEN or not rungs:
             continue
-        if tick:
-            tick("prepare", 0, 0)
+        if tick:                # (a broken scene: its sample in each count)
+            tick("stepdown", todo.index(i), len(todo),
+                 "%d broken scenes, each dithered in %s colours" % (
+                     len(todo), " and ".join(str(n) for n in [pn] + rungs)))
         s0 = g["src0"][i]
         t0 = t00 + s0 / fps
         t1 = t0 + LADDER_FRAMES / fps
@@ -8160,6 +9158,8 @@ def ladder_steps(a, res, tick=None):
                          "; " + "; ".join(why) if why else ""))
         if n_ch != pn:
             steps[i] = n_ch
+    if tick and todo:
+        tick("stepdown", len(todo), len(todo))
     if not lines:
         lines.append("   step-down: no scene broke - nothing to step")
     return steps, lines
@@ -8191,7 +9191,9 @@ def ladder_passes(a, keep, tick, readers):
     h1 = _Held(sys.stdout)
     try:
         with contextlib.redirect_stdout(h1):
-            res1 = _encode(b, keep, pass_tick(tick, "first"), readers)
+            res1 = _encode(b, keep, pass_tick(
+                tick, "the first pass: the plain encode, whose scenes the "
+                "ladder reads"), readers)
         steps = ladder_decide(a, res1, tick)
         if not steps:
             shutil.move(b.out, a.out)
@@ -8201,6 +9203,8 @@ def ladder_passes(a, keep, tick, readers):
         c._ladok, c._steps = True, steps
         if keep is not None:
             del keep[:]
+        pass_tick(tick, "the pass again, %d scene%s in fewer colours" % (
+            len(steps), "" if len(steps) == 1 else "s"))
         return _encode(c, keep, tick, readers)
     finally:
         try:
@@ -8216,6 +9220,10 @@ def _encode(a, keep, tick, readers):
             "--spk-shape machine is a speaker WAV's (86.21.1): a plain WAV "
             "for Audio to shape. A .V88 takes encoder or none - or --audio "
             "pcm8, which the Video Player shapes for the speaker itself")
+    if a.live and getattr(a, "desktop_size", "fit") != "fit":
+        raise vid.V88Error("--desktop-size %s with --live: a Live file "
+                           "plays in its window at its own size"
+                           % a.desktop_size)
     need_tools()
     prof = dict(PROFILES[a.profile])
     # what the profile implies (98.2.3.5), where the command line said
@@ -8511,6 +9519,13 @@ def _encode(a, keep, tick, readers):
             if not stream:          # (streamed: the encode says it)
                 tick("read", n, est)
             yield f
+
+    def tally(it, step):
+        """`it`'s frames, `step` told each one (a whole-clip pass before
+        the encode: the order's, the cells' scene changes)"""
+        for n, f in enumerate(it, 1):
+            tick(step, n, est)
+            yield f
     readers.append(frames)
     frames = counted(frames)
     say = (lambda *x: None) if a.quiet else print
@@ -8524,8 +9539,10 @@ def _encode(a, keep, tick, readers):
             % (100 * spk_share, rate, 100 * prof["avg"], 100 * prof["peak"]))
     if levels:
         lo, hi = _once(a, ("levels", w, h, crop, a.start, a.end,
-                           ":".join(eq)), lambda: auto_levels(
-            a.src, w, h, crop, a.start, a.end, ":".join(eq)))
+                           ":".join(eq)), lambda: (tick(
+                               "levels", 0, 0, "a frame a second of the "
+                               "clip: no count"), auto_levels(
+            a.src, w, h, crop, a.start, a.end, ":".join(eq)))[1])
         say("   levels: grey %d..%d stretched to 0..255" % (lo, hi))
         frames = (stretch(f, lo, hi) for f in frames)
     palette = None
@@ -8622,17 +9639,25 @@ def _encode(a, keep, tick, readers):
                 sc = getattr(a, "_scenes", None)
                 scene_pals = sc.get("pals") if sc is not None else None
                 if scene_pals is None:
-                    tick("prepare", 0, 0)
+                    tick("scenes", 0, est)
                     scn = scene_pass(a.src, lw, lh, crop, "%d/%d" % (
                         rate, spf), a.start, a.end, ":".join(eq),
-                        cover=a.scene_cover, least=a.scene_min)
+                        cover=a.scene_cover, least=a.scene_min,
+                        count=lambda n: tick("scenes", n, est))
+                    scn = scene_join(scn, getattr(a, "scene_join", ""),
+                                     rate / spf, say)
                     if len(scn) > vid.PEV_MAX:  # (the longest scenes' cuts
                         keep_s = sorted(sorted(     # kept)
                             range(1, len(scn)), key=lambda i:
                             scn[i][0] - scn[i - 1][0])[-(vid.PEV_MAX - 1):])
                         scn = [scn[0]] + [scn[i] for i in keep_s]
-                    scene_pals = [(s0, colour_kmeans(px, pn))
-                                  for s0, px in scn]
+                    scene_pals = []
+                    for k, (s0, px) in enumerate(scn):
+                        tick("colours", k, len(scn),
+                             "each scene's own %d" % pn)
+                        scene_pals.append((s0, colour_kmeans(px, pn)))
+                    tick("colours", len(scn), len(scn),
+                         "each scene's own %d" % pn)
                     if sc is not None:
                         sc["pals"] = scene_pals
                         sc["scn"] = scn
@@ -8646,11 +9671,11 @@ def _encode(a, keep, tick, readers):
                     # first, in darkest-first colours, to see what each
                     # scene's changes are; then the scenes' sixteen put in
                     # their orders, and the encode dithers in those
-                    tick("prepare", 0, 0)
+                    tick("order", 0, est)
                     sigs = plane_orders(enumerate(dither_all(Staged(
                         SceneDitherer([(s0, knoll(p)) for s0, p in
                                        scene_pals], carry=a.scene_hold)),
-                        enumerate(source()), jobs)),
+                        enumerate(tally(source(), "order")), jobs)),
                         [s0 for s0, _ in scene_pals],
                         [p for _, p in scene_pals])
                     scene_pals = [(s0, order_palette(p, g)) for (s0, p), g
@@ -8668,9 +9693,15 @@ def _encode(a, keep, tick, readers):
                 steps = getattr(a, "_steps", None) or {}
                 ns = [steps.get(i, pn) for i in range(len(scene_pals))]
                 if any(n != pn for n in ns):
+                    nst, kst = sum(1 for n in ns if n != pn), [0]
+
+                    def stepped(i):
+                        tick("colours", kst[0], nst, "the stepped scenes' "
+                             "fewer colours")
+                        kst[0] += 1
+                        return colour_kmeans(scn[i][1], ns[i])
                     scene_pals = [(s0, p if ns[i] == pn else _once(
-                        a, ("kmeans", i, ns[i]), lambda i=i: colour_kmeans(
-                            scn[i][1], ns[i])))
+                        a, ("kmeans", i, ns[i]), lambda i=i: stepped(i)))
                         for i, (s0, p) in enumerate(scene_pals)]
                     scodes = [np.array(vid.plane_code(n), np.uint8)
                               for n in ns]
@@ -8702,19 +9733,24 @@ def _encode(a, keep, tick, readers):
                 cp = _once(a, ("pal4", pk, pn, lw, lh, crop, rate, spf,
                                a.start, a.end, ":".join(eq)), lambda:
                            colour_palette(a.src, lw, lh, crop, "%d/%d" % (
-                               rate, spf), a.start, a.end, ":".join(eq), pn)
+                               rate, spf), a.start, a.end, ":".join(eq), pn,
+                               count=lambda n: tick(
+                                   "palette", n, est, "the clip's own %d, "
+                                   "chosen for colour" % pn))
                            if pk == "colour" else
                            vga8_palette(a.src, lw, lh, crop, "%d/%d" % (
                                rate, spf), a.start, a.end, ":".join(eq),
-                               lambda: tick("prepare", 0, 0), colours=pn))
+                               lambda: tick("palette", 0, 0, PALGEN_NOTE),
+                               colours=pn))
                 knoll = lambda p: KnollDitherer(
                     lw, lh, p, a.vga4_stable, kclip, a.vga4_hold,
                     a.vga4_hold_score, a.vga4_plan_cap, ksparse)
                 if a.vga4_order == "planes":
                     def order1(cp=cp):
-                        tick("prepare", 0, 0)   # (one scene: no cut)
+                        tick("order", 0, est)   # (one scene: no cut)
                         sig = plane_orders(enumerate(dither_all(Staged(
-                            knoll(cp)), source(), jobs)), [0], [cp])[0]
+                            knoll(cp)), tally(source(), "order"), jobs)),
+                            [0], [cp])[0]
                         return order_palette(cp, sig)
                     cp = _once(a, ("order1", bytes(cp), a.vga4_stable, kclip,
                                    a.vga4_hold, a.vga4_hold_score,
@@ -8729,11 +9765,16 @@ def _encode(a, keep, tick, readers):
             palette = bytes(pal16) + bytes(vid.PAL_BYTES - 48)
             dith = Staged(d4, post=None if scodes is not None else
                           lambda i: codes[i])
-            say("   palette: %s, pixel values %s" % (
+            # (the pixel value each colour is stored at: said only where it
+            # is not simply its index - fewer than 16 take spread plane
+            # codes, vid.plane_code - since all 16 always read 0 to F)
+            say("   palette: %s%s" % (
                 "%d greys" % pn if pk == "grey" else
                 "the clip's %d colours%s" % (
                     pn, ", chosen for colour" if pk == "colour" else ""),
-                " ".join("%X" % c for c in codes)))
+                "" if [int(c) for c in codes] == list(range(len(codes)))
+                else ", pixel values %s" % " ".join("%X" % c
+                                                     for c in codes)))
     elif vga8:
         pk, pn = palette_kind(a.palette)
         if pk == "grey":            # A RAMP (98.2.3.7): a level a pixel,
@@ -8747,10 +9788,13 @@ def _encode(a, keep, tick, readers):
                                 a.start, a.end, ":".join(eq)), lambda:
                             colour_palette(a.src, lw, lh, crop, "%d/%d" % (
                                 rate, spf), a.start, a.end, ":".join(eq),
-                                pn) if pk == "colour" else
+                                pn, count=lambda n: tick(
+                                    "palette", n, est, "the clip's own %d, "
+                                    "chosen for colour" % pn))
+                            if pk == "colour" else
                             vga8_palette(a.src, lw, lh, crop, "%d/%d" % (
                                 rate, spf), a.start, a.end, ":".join(eq),
-                                lambda: tick("prepare", 0, 0),
+                                lambda: tick("palette", 0, 0, PALGEN_NOTE),
                                 colours=pn or 256))
             d8 = Vga8Ditherer(lw, lh, palette, a.vga8_dither, a.vga8_stable,
                               kclip)
@@ -8775,6 +9819,12 @@ def _encode(a, keep, tick, readers):
         raise vid.V88Error("--flip is not a NARROW screen's: its pages are "
                            "for --pages, and a flip every frame would want "
                            "the whole canvas copied besides (98.1.3.2.5)")
+    fown = bool(getattr(a, "flip_own", False))
+    if fown and (not a.flip or a.loop_from is not None or a.live or
+                 a.resident or getattr(a, "layer_disk", None) or
+                 getattr(a, "layer_profile", None)):
+        raise vid.V88Error("--flip-own is --flip's, a stream with no loop and "
+                           "no layer (VIDEO-SEEN-PLAN 3b)")
     pmode = page_mode(a)
     pa_on = pmode == "on" or (pmode == "auto" and
                               getattr(a, "_paok", False))
@@ -8809,15 +9859,20 @@ def _encode(a, keep, tick, readers):
         EncoderP(g, prof, fps, audio_cyc, audio_bps, palette and
                  palette[:48], a.flip) if vga4 else \
         Encoder(g, prof, fps, audio_cyc, audio_bps, palette)
+    if fown and not pa_on:
+        enc.own_init()              # (two pages: byte 37 7, 98.1.3.10)
+    elif fown:
+        enc.nobring = True          # (on N pages: PageAheadF's, 98.2.1.8.5)
     enc.live = bool(a.live)
     # THE XMS COPIES THE PLAYER WILL MAKE (set_xplay): in place where the
     # player's in-place paths take the file, the copying FIFO where they
-    # refuse it - the speaker's clock, Repeat or a loop, Live, RESIDENT,
-    # BIGSP and the two formats decoded through the shadow (98.3.18.13)
+    # refuse it - the speaker's clock, Repeat or a loop, Live, RESIDENT and
+    # the two formats decoded through the shadow (98.3.18.13). Not BIGSP:
+    # the hold never refused it, and the bank's mirror is two slots for it
+    # since 2026-10-19
     xmode = prof.get("xplay")
     if xmode == "inplace" and (spk or a.repeat or a.loop_from is not None
                                or a.live or a.resident
-                               or FRAME_CAPS[a.frame_cap] > vid.SP_MAX
                                or a.pixfmt in ("c160", "text")):
         xmode = "copy"
     enc.set_xplay(xmode, prof)
@@ -8909,9 +9964,11 @@ def _encode(a, keep, tick, readers):
     if ahead:
         if ahead_auto:
             enc.slead = enc.alead       # Auto's question: in step, would
-        enc.alead = max(0, enc.alead - ahead)   # this frame have fitted?
+            enc.amargin = AHEAD_SLACK   # this frame have fitted - and on a
+        enc.alead = max(0, enc.alead - ahead)   # reader a little slower?
     # WHAT A CUT FRAME SPENDS ON (98.2.1.2)
     enc.look, enc.vis = a.lookahead, a.error == "visible"
+    enc.lfloor = float(getattr(a, "lookahead_floor", 0.0) or 0.0)
     enc.attend = float(getattr(a, "attend", 0.0) or 0.0)
     enc.edges = float(getattr(a, "edges", 1.0) or 0.0)
     enc.cut = a.cut
@@ -8954,6 +10011,7 @@ def _encode(a, keep, tick, readers):
                         os.path.basename(a.src))[0][:47],
                     credits=a.credits or "", keysecs=a.keysecs,
                     palette=palette, rowscale=dh, flip=a.flip,
+                    own=fown and not pa_on,
                     aspect=scaled_aspect(pasp or vid.ASPECT[L], dh),
                     loop=None if a.loop_from is None else
                     max(0, round(a.loop_from * fps)),
@@ -8984,6 +10042,10 @@ def _encode(a, keep, tick, readers):
                 "--reserve %d KB: the player's ring banks %d KB at most"
                 % (enc.reserve // 1024,
                    (vid.RING_MAX - 2) * vid.SLOT // 1024))
+    if afmt:
+        tick("sound", 0, 0, "the clip's sound, read whole%s: no count" % (
+            " and shaped for the speaker" if spk and
+            a.spk_shape == SPK_ENC else ""))
     if spk and afmt and a.spk_shape == SPK_ENC:
         pcm = speaker_pcm(a, rate, say)
     else:
@@ -9003,6 +10065,19 @@ def _encode(a, keep, tick, readers):
     first = next(src, None)
     if first is None:
         raise vid.V88Error("no frames came out of %s" % a.src)
+    # WHAT THE PROGRESS SAYS (98.2.11): the frames dithered as they come
+    # in, beside the frames encoded - streamed, both go on at once - and
+    # what a frame is doing that takes longer than a frame (`doing`)
+    ndith = [1]
+    doing = [""]
+
+    def dithered(it):
+        for x in it:
+            ndith[0] += 1
+            yield x
+    src = dithered(src)
+    tick("prepare", 0, 0, "the pre-roll: is the first picture whole in "
+         "one frame?")
     # THE PRE-ROLL (SPEC.md 98.2.9): a first picture the budgets cannot
     # paint in one frame is HELD - the source's frame 0 again, over silence -
     # until it is whole, and the keyframes start there. Key 0 was a snapshot
@@ -9030,29 +10105,26 @@ def _encode(a, keep, tick, readers):
             c = bytes(pcm[f * spf:(f + 1) * spf])
             return c + b"\x80" * (spf - len(c))
         total = est + pre if est else 0
-        R, S, E = (dict(STEPS)[k] for k in ("read", "sound", "encode"))
 
         def progress(f):
-            """ONE BAR for reading, the sound and encoding, which all go
-            on at once: the frames encoded, spread over those steps"""
-            if not total:
-                tick("encode", f, 0)
-                return
-            x = min(1.0, f / total) * (R + S + E)
-            if x < R:
-                tick("read", round(x / R * total), total)
-            elif x < R + S:
-                tick("sound", 0, 0)
-            else:
-                tick("encode", round((x - R - S) / E * total), total)
-        tick("read", 0, total)
-        if not total:
-            tick("sound", 0, 0)
+            """The frames ENCODED, and beside them the frames read and
+            dithered so far - streamed, they go on at once, so the count
+            is what the encoder has done and the note what runs ahead of
+            it; until 2026-10-17 one count was spread over three made-up
+            steps, a "Reading" frame number nothing had read"""
+            tick("encode", f, total, "; ".join(x for x in (
+                "read and dithered %d%s" % (ndith[0] + pre, (
+                    " of %d" % total) if total else ""), doing[0]) if x))
+        progress(0)
     else:
         rest = list(targets)
         nf = len(rest)
         targets = iter(rest)
-        tick("sound", 0, 0)
+        if afmt:
+            tick("sound", 0, 0, "the sound in %s%s: no count" % (
+                "ADPCM4" if afmt == vid.AUD_ADPCM4 else "PCM8",
+                ", searched on %d cores" % jobs if a.adpcm == "search" and
+                afmt == vid.AUD_ADPCM4 and jobs > 1 else ""))
         # a RESIDENT file's ADPCM4 ends where its lap joins (98.1.7.2): the
         # seam's frame L, or 80h at scale 0 before frame 0
         join = (wr.loop if wr.loop is not None else "start") \
@@ -9139,8 +10211,8 @@ def _encode(a, keep, tick, readers):
     # PAGE-AHEAD (98.2.1.8): the plan pass logs; the real pass builds
     plan = getattr(a, "_paplan", None)
     pa = (PageAheadF(enc, plan, npg, wr.key0, KEY_PLAYER, wr.kpart,
-                     int(wr.audio_fmt == vid.AUD_ADPCM4)) if npg > 2 and
-          a.flip else
+                     int(wr.audio_fmt == vid.AUD_ADPCM4), own=fown)
+          if npg > 2 and a.flip else
           PageAheadN(enc, plan, npg, wr.key0, KEY_PLAYER, wr.kpart,
                      int(wr.audio_fmt == vid.AUD_ADPCM4)) if npg > 2 else
           PageAhead(enc, plan, wr.key0, KEY_PLAYER, wr.kpart,
@@ -9162,6 +10234,8 @@ def _encode(a, keep, tick, readers):
         pev_at = {(s0 + pre if s0 else 0): p for s0, p in scene_pals}
         scene_pre = pre
         wr.pev, pev_cut = [], []        # the pre-roll holds source frame 0
+        pev_left = []                   # (each change's frame, its share
+                                        # of the last scene left standing)
         shot_cut = []                   # [first frame, frames, cut,
                                         # frames visibly broken] a scene
     bl0 = min(max(0.0, enc.disk.level - enc.reserve), enc.bank) \
@@ -9245,14 +10319,26 @@ def _encode(a, keep, tick, readers):
             if os.environ.get("OS88_VENC_VFRLOG") and e is enc:
                 with open(os.environ["OS88_VENC_VFRLOG"], "a") as fl:
                     fl.write("f %d: stretch %d, cut %s\n" % (k, n, vcut))
-            if vcut and lsteps is not None:
+            ri = next((i for i, rg in enumerate(e.vranges)
+                       if rg[0] <= k < rg[1]), None)
+            ksteps = lsteps if ri is None else e.vranges[ri][2]
+            if vcut and ksteps:
+                busy(k, "the ladder%s at frame %d: today's draw and %d "
+                     "rung%s tried on copies of the encoder%s" % (
+                         "" if ri is None else " for %s s"
+                         % e.vranges[ri][4], k, len(ksteps),
+                         "" if len(ksteps) == 1 else "s",
+                         ", at once" if trials() is not None else
+                         ", one by one"))
                 pat, r, lg, lc, li, ev = degrade_choose(
-                    e, [target] + list(vfut)[:n - 1], au, lsteps, fps,
+                    e, [target] + list(vfut)[:n - 1], au, ksteps, fps,
                     e.q_stp, draw, vcost, vempty, vshown, vstay,
                     (lambda c, t=target: coarse_of(
                         e, t, c if c != "auto" else
                         coarse_pick(e, t, au), au))
-                    if coarse_on and k else None, k in cells_at)
+                    if coarse_on and k else None, k in cells_at,
+                    pool=trials())
+                doing[0] = ""
                 if lg is not None:      # (the rung's lag, until level)
                     e.flag_lag, e.vlagn = lg, n
                 if lc is not None:
@@ -9260,7 +10346,10 @@ def _encode(a, keep, tick, readers):
                     if cell != "full":
                         draw = coarse_of(e, target, cell, au)
                         e.all3 = getattr(e, "wm3", False)
-                e.vladder[li] = e.vladder.get(li, 0) + 1
+                if ri is None:
+                    e.vladder[li] = e.vladder.get(li, 0) + 1
+                else:
+                    e.vladat[(ri, li)] = e.vladat.get((ri, li), 0) + 1
                 if li:
                     e.vstretch.append((k, k + n, round(r * fps, 1)))
                     if r < 1.0:
@@ -9276,10 +10365,13 @@ def _encode(a, keep, tick, readers):
                 # committed drawn in cells, from this one - below)
                 e.vcellrun = (k + (n if any(pat) else VFR_AGAIN), ev) \
                     if ev else None
-            elif vcut:
+            elif vcut and lsteps is None:
+                busy(k, "the frame rate at frame %d: slower rates tried on "
+                     "copies of the encoder" % k)
                 pat, r = vfr_choose(e, [target] + list(vfut)[:n - 1], au,
                                     vfr, fps, e.q_stp, draw, vcost, vempty,
                                     vshown, vstay)
+                doing[0] = ""
                 # (the full rate is committed for VFR_AGAIN frames only, so a
                 # stretch that would slow better a frame or two on is asked
                 # again there)
@@ -9426,12 +10518,20 @@ def _encode(a, keep, tick, readers):
     lrungs = degrade_rungs(a)
     lsteps = None
     coarse_on = coarse_screen(enc.g)    # (the cells pay: COARSE_LADDER_MX)
-    if lrungs:
+    lranges = ladder_ranges(getattr(a, "ladder_at", ""))
+    if lranges and not lrungs:
+        raise vid.V88Error("--ladder-at needs a --ladder for the rest of the "
+                           "clip (cut:100 is one that only cuts)")
+    enc.vranges = []                    # (--ladder-at's: k0, k1, steps,
+    if lrungs:                          # kept, the range as written)
         # THE DEGRADE LADDER (--ladder): its rungs in place of --min-fps,
         # --lag's search and --coarse-cut, each kept only where this file
         # can use it - the rest said, and left out
-        keep, why = [], []
-        for kind, v in lrungs:
+        kept, why = [], []
+        allr = list(lrungs) + [(kind, v) for t0, t1, rs in lranges
+                               for kind, v in rs]
+        okr = []
+        for kind, v in allr:
             no = "a sound card's sound (the lag catches up only on its " \
                 "clock)" if kind == "lag" and not lagon else \
                 "scene palettes (--scene-palettes)" if kind == "colours" \
@@ -9443,21 +10543,38 @@ def _encode(a, keep, tick, readers):
                     a.live or lay is not None) else \
                 "pixels to judge a rung by" if not enc.metric else None
             if no:
-                why.append("%s:%s needs %s" % (kind, v if kind != "slow"
-                                               else "%.3g" % v, no))
+                w = "%s:%s needs %s" % (kind, v if kind != "slow"
+                                         else "%.3g" % v, no)
+                if w not in why:
+                    why.append(w)
             else:
-                keep.append((kind, v))
+                okr.append((kind, v))
+        kept = [(kind, v) for kind, v in lrungs if (kind, v) in okr]
         for w in why:
             say("   --ladder: %s - left out" % w)
-        lsteps = degrade_steps(keep, fps, enc.fgrid / enc.q
+        lsteps = degrade_steps(kept, fps, enc.fgrid / enc.q
                                  if enc.fgrid else None)
-        enc.vkeep = keep
-        rs = [v for kind, v in keep if kind == "slow"]
+        enc.vkeep = kept
+        # THE LADDER BY TIME (--ladder-at, 98.2.1.10): a stretch that
+        # STARTS in a range climbs that range's ladder instead - frames as
+        # the file counts them, the pre-roll's included, as the report and
+        # the window give times
+        for t0, t1, rs in lranges:
+            kr = [(kind, v) for kind, v in rs if (kind, v) in okr]
+            enc.vranges.append((int(round(t0 * fps)), int(round(t1 * fps)),
+                                degrade_steps(kr, fps, enc.fgrid / enc.q
+                                              if enc.fgrid else None), kr,
+                                "%g-%g" % (t0, t1)))
+        rs = [v for kind, v in kept + [kv for r in enc.vranges
+                                       for kv in r[3]] if kind == "slow"]
         vfr = fps * min(rs) if rs else fps  # (the ladder decides, or nothing
-        if not lsteps:                      # left to decide with)
-            lsteps, vfr = None, 0.0
+        if not lsteps and not any(r[2] for r in enc.vranges):
+            lsteps, vfr = None, 0.0         # (left to decide with)
+        elif not lsteps:                    # (only the ranges climb)
+            lsteps = []
     lbase = enc.flag_lag
     enc.vlagn, enc.vladder, enc.vlagat, enc.vcellat = 0, {}, {}, {}
+    enc.vladat = {}                     # (--ladder-at's: (range, rung))
     enc.vcellrun = None                 # (coarseany's: until, cell)
     if not hasattr(enc, "vkeep"):
         enc.vkeep = []
@@ -9466,7 +10583,8 @@ def _encode(a, keep, tick, readers):
     # same scene pass's cuts, read for the cells alone (one more read of
     # the clip, at the canvas's size, its colours not used)
     if coarse_on and (a.coarse_cut != "off" and not lrungs or any(
-            kind == "coarsescene" for kind, v in enc.vkeep)):
+            kind == "coarsescene" for kind, v in enc.vkeep + [
+                kv for r in getattr(enc, "vranges", ()) for kv in r[3]])):
         if scene_pals:
             cells_at = set(pev_at)
         else:
@@ -9475,7 +10593,8 @@ def _encode(a, keep, tick, readers):
                          lambda: [s0 for s0, px in scene_pass(
                              a.src, lw, lh, crop, "%d/%d" % (rate, spf),
                              a.start, a.end, ":".join(eq), cap=1,
-                             cover=a.scene_cover, least=a.scene_min)])
+                             cover=a.scene_cover, least=a.scene_min,
+                             count=lambda n: tick("cuts", n, est))])
             cells_at = {s0 + pre for s0 in cuts if s0}
             say("   coarse cells: %d scene change(s), each drawn in cells "
                 "where it would be cut" % len(cells_at))
@@ -9513,16 +10632,50 @@ def _encode(a, keep, tick, readers):
         else None
     if vreplay is not None and lsteps is not None:
         enc.vladder = dict(plan.get("LD") or {})  # (the plan's decisions)
+        enc.vladat = dict(plan.get("LDA") or {})
     if vreplay is not None:
         enc.vrates = {}
+        # (the SLOWED ones: the plan's stretches are every one a rung was
+        # taken at, a lag's and a coarse cell's at the full rate too - so
+        # with no slow rung a page-ahead file reported its ladder's
+        # stretches "slowed to" its own rate, the owner's Gas Gas Gas's 22
+        # at 18 fps with 0 frames held, 2026-10-19)
         for _, _, r in plan.get("S") or ():
-            enc.vrates[r] = enc.vrates.get(r, 0) + 1
+            if r < round(fps, 1):
+                enc.vrates[r] = enc.vrates.get(r, 0) + 1
     vspan = max(2, int(round(fps * VFR_SPAN)))
     vcost = float(getattr(a, "slow_cost", VFR_HOLD))
     enc.vplan = deque()
     if vreplay is None:
         enc.vrates = {}
     vstate = None                       # (the glass's screen, a STAY's run)
+
+    def report(f):
+        """Frame f's progress: the frames encoded, and the note"""
+        if stream:
+            progress(f)
+        else:
+            tick("encode", f, nf, doing[0])
+
+    def busy(f, note):
+        """...while frame f does something longer than a frame - the
+        ladder's trials, the lag search - said, and cleared after"""
+        doing[0] = note
+        report(f)
+    tpool = []                          # (the ladder's trials: TrialPool,
+                                        # made at the first stretch decided)
+    enc.meter = meter_for(enc, a)       # (measure's, in other processes)
+    if enc.meter is not None:
+        readers.append(enc.meter)       # (closed however encode ends)
+
+    def trials():
+        if not tpool:
+            tpool.append(trial_pool(enc, a, 1 + max(
+                [len(lsteps)] + [len(r[2]) for r in enc.vranges])))
+            if tpool[0] is not None:
+                readers.append(tpool[0])    # (closed however encode ends)
+        return tpool[0]
+    ppal = None                         # (a scene's palette held back)
     vprev, vshown = False, None         # (the frame before held; and the
                                         # target the picture shown is of)
     while True:
@@ -9537,10 +10690,7 @@ def _encode(a, keep, tick, readers):
         target = ahead.popleft()
         if keep is not None:        # the targets frame for frame, the
             keep.append(target)     # pre-roll's included
-        if stream:
-            progress(f)
-        else:
-            tick("encode", f, nf)
+        report(f)
         au = au_of(f)
         if a.resident:              # the sound is ONE block (98.1.7)
             sound.append(au)
@@ -9574,7 +10724,10 @@ def _encode(a, keep, tick, readers):
                         if t is None:
                             break
                         ahead.append(t)
+                    busy(f, "the lag search at frame %d: each allowance "
+                         "tried on a copy of the encoder" % f)
                     L = lag_search(snap, f, [target] + list(ahead))
+                    busy(f, "")
                     lag_since = 0
                     # (the top's frame is drawn already: kept, as the
                     # search played it from the same state)
@@ -9589,8 +10742,22 @@ def _encode(a, keep, tick, readers):
                 lag_since += 1
         ops, rec, hops, draw, npal = (x[k] for k in ("ops", "rec", "hops",
                                                      "draw", "npal"))
+        # THE PALETTE GOES ON WITH THE PICTURE (98.1.3.2.3, the owner's
+        # GasGasQ, 2026-10-18: "flipping the palette one frame too early"):
+        # page-ahead's replayed HOLD writes nothing on the page shown - the
+        # hidden page builds the frame after it - so a scene's first frame
+        # held there showed the OLD picture in the NEW sixteen for a frame,
+        # 14 of 34 scene changes in that file. The player loads a palette
+        # before it decodes the record, so the scene's palette goes on the
+        # first frame after it that writes or flips the page shown. (The
+        # plain encode's hold draws toward the next frame ON the page
+        # shown, in the new colours, so there it stays where it was)
         if x["pal"] is not None:
-            wr.pev.append((f, x["pal"][:48]))
+            ppal = x["pal"]
+        if ppal is not None and not (x["held"] and vreplay is not None
+                                     and pa is not None):
+            wr.pev.append((f, ppal[:48]))
+            ppal = None
         if x["cell"] is not None:
             coarse_used[x["cell"]] = coarse_used.get(x["cell"], 0) + 1
         if scene_pals:              # (each scene's frames and cuts, below)
@@ -9600,6 +10767,7 @@ def _encode(a, keep, tick, readers):
             shot_cut[-1][2] += x["cut"]
         if x["left"] is not None:
             pev_cut.append(x["left"])
+            pev_left.append((f, x["left"] / float(target.size)))
         cyc.append(x["c"] + audio_cyc)
         if plog is not None:            # THE PLAN (98.2.1.8): a cut run's
             plog["log"].append(dict(    # first frame is a target
@@ -9632,6 +10800,7 @@ def _encode(a, keep, tick, readers):
                     plog["LG"], plog["CC"] = dict(enc.vlagat), \
                         dict(enc.vcellat)
                     plog["LD"] = dict(enc.vladder)
+                    plog["LDA"] = dict(enc.vladat)
             pcut = short
             ptgt = target.copy() if npg > 2 else None
         if enc.bank:                # HOW DEEP THE BANK IS DRAWN (98.2.1.3.3)
@@ -9659,8 +10828,8 @@ def _encode(a, keep, tick, readers):
                 vshown = target
                 if vstay:
                     vstate = enc.screen.copy()
-            if scene_pals and enc.q_bad and enc.q_bad[-1] >= VIS_AREA:
-                shot_cut[-1][3] += 1
+            if scene_pals:
+                enc.when_bad(shot_cut[-1] if shot_cut else None)
         vprev = bool(x["held"])
         if pa is not None and a.flip:  # (98.1.3.7.2: every frame flips)
             wr.frame(ops, enc.surf, au, hidden=hops, flip=pa.vp,
@@ -9674,7 +10843,11 @@ def _encode(a, keep, tick, readers):
             wr.frame(ops, enc.surf, au, hidden=hops, flip=pa.flipped,
                      hsurf=pa.h.surf)
         else:
-            wr.frame(ops, enc.surf, au, held=x["stay"])
+            wr.frame(ops, enc.surf, au, held=x["stay"],
+                     up=getattr(enc, "own_up", None))
+            if getattr(enc, "own", False) and wr.keys and \
+                    wr.keys[-1][0] == len(wr.recs) - 1:
+                enc.own_next = True     # (the next brings its page up)
         if lay is not None:
             for lops in lay.push(
                     target, ops, rec, npal, hops=hops,
@@ -9738,9 +10911,21 @@ def _encode(a, keep, tick, readers):
                     np.unpackbits(cv, axis=1))).save(out)
             else:
                 vid.write_png(out, g.wb, g.h, g.canvas(enc.surf))
-        if not a.quiet and f % 300 == 299:
+        # (on stderr, which no pass holds, so every pass says it - and with
+        # --progress the window's lanes say it for each pass by name, where
+        # two passes side by side put two unnamed lines in its log)
+        if not a.quiet and not getattr(a, "progress", False) and \
+                f % 300 == 299:
             print("   frame %d of %d" % (f + 1, nf if not stream else
                                          est + pre), file=sys.stderr)
+    if ppal is not None:                # (a palette held to the end: on
+        wr.pev.append((f, ppal[:48]))   # the last frame, as it was)
+    if tpool and tpool[0] is not None:
+        readers.remove(tpool[0])
+        tpool[0].close()
+    if enc.meter is not None:
+        readers.remove(enc.meter)
+        enc.meter.finish(enc)
     nf = f + 1
     if wr.keys and not a.resident and enc.cpu.per is not None:
         # THE BASE'S YARDSTICK (98.3.18.9): key 0's decode on the machine
@@ -9842,13 +11027,15 @@ def _encode(a, keep, tick, readers):
                 "so it has no poster (and no seek) - it plays from the start"
                 % a.poster_at)
             poster = None
-    if a.resident:
+    desk_posters(a, wr, g, palette, lw, lh, crop, rate, spf, eq, rep)
+    if a.resident:                      # (98.1.3.11: the Preview's posters)
         st = vid.write_resident(
             a.out, [wr], afmt, abytes if afmt else 0, b"".join(sound),
             wr.title, wr.credits, a.repeat, vid.PK_LZB,
             posters=[poster] if poster is not None else None,
             live=[vid.TARGETS[a.live]] if a.live else None,
             spk=spk and bool(afmt), opts=optsblk)
+        tick("check", 0, 0, "every frame of the file played back")
         vid.verify_v88(a.out)
         rr = vid.Reader(a.out)
         res = dict(bytes=st["bytes"], stream=st["blocks"][0][0] +
@@ -9869,7 +11056,8 @@ def _encode(a, keep, tick, readers):
                 % (100 * sum(bl) / len(bl) / enc.period,
                    100 * max(bl) / enc.period))
     else:
-        if ahead_auto and not enc.stats.get("leaned"):
+        if ahead_auto and not enc.stats.get("leaned") and \
+                not enc.stats.get("near"):
             wr.ahead = 0                # Auto, and no frame needed it
         if pa is not None:              # (98.2.1.8: keys that preload)
             pa.upkeys = pa.upgrade_keys(wr)
@@ -9904,6 +11092,8 @@ def _encode(a, keep, tick, readers):
                     " with their sound ahead" if wr.ahead and
                     not getattr(wr, "kleads", True) else ""))
         if wr.ahead:                    # every lead and the laps' tails
+            tick("check", 0, 0, "every frame of the file played back "
+                 "against its stream, its sound ahead with it")
             vid.verify_v88(a.out)       # held to their frames (98.1.8)
     # THE FILE'S BYTES, BY WHAT READS THEM: the base's stream (its pictures
     # and its sound, what every machine plays), the layer (only the better
@@ -9933,14 +11123,24 @@ def _encode(a, keep, tick, readers):
             "{:,}".format(res["keybytes"]), res["poster"],
             " and the sound-ahead leads" if res.get("leadbytes") else ""))
     if not a.resident:
+        nm = enc.stats.get("nearmin")
+        slow = "%d%% under it" % round(100 * AHEAD_SLACK)
+        close = "" if nm is None else \
+            "; the closest frame there had %.1f KB to spare" % (
+                nm / 1024.0) if nm >= 0 else \
+            "; the worst frame there %.1f KB short" % (-nm / 1024.0)
         rep("file", "sound ahead: %s" % (
             "%d frames, %d bytes (%s)" % (
                 wr.ahead, res.get("leadbytes", 0),
-                "%d frames needed it" % enc.stats.get("leaned", 0)
+                ("%d frames needed it" % enc.stats["leaned"]
+                 if enc.stats.get("leaned") else
+                 "no frame needed it at the profile's disk, but %d would "
+                 "at %s%s" % (enc.stats.get("near", 0), slow, close))
                 if ahead_auto else "no disk modelled" if
                 a.buffer_sound_ahead == "auto" else "asked for")
             if wr.ahead else "off" + (
-                " - no frame needed it" if ahead_auto else
+                " - no frame needed it, at the profile's disk or %s%s"
+                % (slow, close) if ahead_auto else
                 "" if a.buffer_sound_ahead == "off" else
                 " - the file streams no sound" if not ahead else "")))
     res.update(fps=fps, period=enc.period, audio_cyc=audio_cyc,
@@ -9993,6 +11193,19 @@ def _encode(a, keep, tick, readers):
                 " the lag schedule %d," % st["flip"] if st.get("flip")
                 else "", a.frame_cap, st["cap"])
             if st["cut"] else ""))
+    for ri, (k0, k1, _, kr, tx) in enumerate(enc.vranges):
+        got = {li: c for (r_, li), c in enc.vladat.items() if r_ == ri}
+        rep("base", "degrade ladder at %s s: %s (--ladder-at, 98.2.1.10)" % (
+            tx, ", ".join(
+                ("%d drawn as they were" % c) if i == 0 else
+                ("%d at rung %d (%s)" % (c, i, ", ".join(
+                    "%s:%s" % (kk, ("%.3g" % vv) if kk == "slow" else
+                               ("%g" % vv) if kk == "lag" else
+                               ("%g%%" % vv) if kk == "cut" else
+                               "frame" if vv == "auto" else vv)
+                    for kk, vv in kr[:i])))
+                for i, c in sorted(got.items())) or
+            "no stretch the budgets would cut starts there"))
     if lsteps is not None and enc.vladder:
         tot = sum(enc.vladder.values())
         rep("base", "degrade ladder: %d stretch(es) the budgets would cut - "
@@ -10069,6 +11282,19 @@ def _encode(a, keep, tick, readers):
                          "a change on average" % (
                              sum(pev_cut) / max(1, len(pev_cut) - whole))
                          if whole < len(pev_cut) else ""))
+        # ...and WHERE (98.1.3.2.3.3): each change that left a share of the
+        # picture, at the time and the frame the encoder window's slider
+        # shows - which --scene-join takes (its own count is the scene
+        # pass's, the pre-roll's few frames sooner: it takes the nearest)
+        bad = [(f, sh) for f, sh in pev_left if sh >= PEV_RESIDUE]
+        if bad:
+            rep("base", "scene changes leaving the last scene up in the new "
+                "colours: %s%s - --scene-join TIMES makes one a scene of "
+                "both (98.1.3.2.3.3)" % (", ".join(
+                    "%.2f s %.0f%% (frame %d)" % (f / fps, 100 * sh, f + 1)
+                    for f, sh in bad[:PEV_SHOW]),
+                    ", and %d more" % (len(bad) - PEV_SHOW)
+                    if len(bad) > PEV_SHOW else ""))
         if lay is not None and not lay.track:
             # ...and WITH THE LAYER (98.1.3.2.3.1): what it finishes of a
             # change the base cut, on the better machine
@@ -10349,6 +11575,8 @@ def _encode(a, keep, tick, readers):
                cutf=(st["cut"] + st.get("holds", 0)) / nf,
                cuts=st["cut"], holds=st.get("holds", 0),
                ladder=dict(enc.vladder) if lsteps is not None else None,
+               ladder_at=dict(enc.vladat), vstretch=list(enc.vstretch),
+               pev_left=list(pev_left) if scene_pals else [],
                cells=dict(coarse_used))
     if enc.metric and enc.q_frames:     # (98.2.1.8.1's comparison)
         pr = picture_report(enc.q_frames, enc.q_bad, fps)
@@ -10522,6 +11750,14 @@ def parser():
                          "over the next N frames too, and one the picture is "
                          "about to undo is not sent (98.2.1.2). Default 2; "
                          "0 ranks by this frame alone, as before")
+    ap.add_argument("--lookahead-floor", type=float, default=0.5,
+                    metavar="F",
+                    help="WHEN A FRAME IS CUT, how much of a change's worth "
+                         "NOW the look-ahead may take away: never below F of "
+                         "it, so a bright thing about to move is still "
+                         "drawn and not left as dark ground (0.5, the "
+                         "default; 0 lets the frames after take it all, as "
+                         "before; 98.2.1.2)")
     ap.add_argument("--cut", choices=("rank", "fill", "tear"),
                     default="fill",
                     help="WHEN A FRAME IS CUT (over its budget, or a "
@@ -10563,6 +11799,25 @@ def parser():
                          "frame draws toward the next one shown (0 off, the "
                          "default; not on a flipped, page-ahead, layered or "
                          "Live file; VIDEO-SEEN-PLAN 3a)")
+    ap.add_argument("--ladder-at", default="", metavar="RANGES",
+                    help="THE LADDER BY TIME: other rungs for the stretches "
+                         "that START in a stretch of the clip - "
+                         "START-END=RUNGS, seconds into the clip, several "
+                         "split by ';' - as in 7.3-7.8=lag:50,coarseany:"
+                         "frame,slow:2/3. Each is a whole ladder in "
+                         "--ladder's words, used there instead of it, and "
+                         "--ladder is still the clip's everywhere else. "
+                         "Not colours, which is a scene's and chosen before "
+                         "the encode (98.2.1.10)")
+    ap.add_argument("--scene-join", default="", metavar="SECONDS",
+                    help="with --scene-palettes: the scene changes at these "
+                         "times (seconds into the clip, split by ',') NOT a "
+                         "change - the scene before and the one after take "
+                         "one sixteen, chosen over both - for a change the "
+                         "budget cannot draw whole, which shows the last "
+                         "scene's picture in the new colours until it is "
+                         "drawn. The report names those, with the time to "
+                         "give here (98.1.3.2.3.3)")
     ap.add_argument("--ladder", default="", metavar="RUNGS",
                     help="THE DEGRADE LADDER: where the budgets would cut, "
                          "the RUNGS in order, each on top of those before - "
@@ -10647,9 +11902,11 @@ def parser():
                          "instead. It costs DISK SPACE - the first frames' "
                          "sound again at every keyframe, ~0.9 KB a second "
                          "at 11 kHz - and nothing while playing. auto: on "
-                         "when the encode needed it, or when no disk is "
-                         "modelled (lossless); on; off: the sound in step "
-                         "with the picture, as files were before it")
+                         "when the encode needed it, or came within the "
+                         "ahead frames' refill of needing it, or when no "
+                         "disk is modelled (lossless); on; off: the sound "
+                         "in step with the picture, as files were before "
+                         "it")
     ap.add_argument("--ahead-frames", type=int, default=AHEAD_FRAMES,
                     help="with Buffer sound ahead, how many frames ahead "
                          "(default %d): more keeps the sound going through "
@@ -10824,6 +12081,15 @@ def parser():
                     help="modex: two pages, the player drawing one while "
                          "the other shows - no tearing, at twice the decode "
                          "(98.3.8)")
+    ap.add_argument("--flip-own", action="store_true",
+                    help="with --flip: each frame a change against the page "
+                         "it is drawn on (the frame two back) and drawn on "
+                         "it as it stands, so the player never brings a page "
+                         "up first - less decode for more bytes. On two "
+                         "pages a file only a player that knows it plays; "
+                         "with --page-ahead on --pages 3 or more, built "
+                         "ahead as well, and any page-ahead player's "
+                         "(VIDEO-SEEN-PLAN 3b)")
     ap.add_argument("--lag", type=lag_arg, default=LAG_MS,
                     metavar="MS|LO-HI",
                     help="with a card's sound: how far the picture may fall "
@@ -11100,6 +12366,45 @@ def parser():
     ap.add_argument("--poster-at", type=float, metavar="SECS",
                     help="...or the keyframe nearest this many seconds into the "
                          "clip (after --start)")
+    ap.add_argument("--poster-image", metavar="FILE|@SECS",
+                    help="a CUSTOM poster, shown when the file opens and "
+                         "after a play - a picture FILE, or @SECS for the "
+                         "clip's own frame that many seconds in (after "
+                         "--start), on a key or not; the play still starts "
+                         "at a key (98.1.3.11)")
+    ap.add_argument("--desktop-posters",
+                    choices=("auto", "colour", "mono", "both", "off"),
+                    default="auto",
+                    help="each key's picture for the desktop's Preview made "
+                         "here - averaged and dithered to the desktop's "
+                         "sixteen (colour) or to black and white (mono) - "
+                         "where the player's own would be poor: auto (the "
+                         "default) for 256 colours, CGA's colours and 16 in "
+                         "colours of their own or too big for the window; "
+                         "colour, mono or both for every file; off for "
+                         "none (98.1.3.11)")
+    ap.add_argument("--desktop-clip", type=float, default=16.0,
+                    help="--clip for the desktop posters: how close a "
+                         "cell must be to one of the desktop's sixteen "
+                         "(or to black or white) to be drawn as that "
+                         "colour SOLID rather than dithered - in levels "
+                         "(0-255) on every channel - so a ground that is "
+                         "nearly black is black, not a field of dots. 0 "
+                         "dithers every cell. Default 16 (98.1.3.11)")
+    ap.add_argument("--desktop-size", choices=("fit", "half", "quarter"),
+                    default="fit",
+                    help="the Preview's size on the desktop: fit (the "
+                         "default) as big as the window has room for, or "
+                         "half or a quarter of the video's whatever the "
+                         "room - and Play then goes full screen "
+                         "(98.1.3.11)")
+    ap.add_argument("--posters-only", action="store_true",
+                    help="src is an EXISTING .V88: make its desktop posters "
+                         "again with --desktop-posters, --desktop-size, "
+                         "--desktop-clip and --poster-image (a picture "
+                         "file), from its own keys, and write it to out - "
+                         "the same path rewrites it. Nothing else is "
+                         "encoded: seconds, not the encode (98.1.3.11.1)")
     ap.add_argument("--preview-png", metavar="DIR",
                     help="the screen once a second, as PNGs")
     ap.add_argument("--quiet", action="store_true")
@@ -11111,19 +12416,37 @@ def parser():
 PROGRESS = "@@progress"
 
 
-def progress_lines():
-    """--progress (98.2.11.1): each step's progress as a line on stdout -
-    PROGRESS, the step, done, total - for the encoder window, which runs
-    this encoder as a process of its own so Cancel can kill it. A line a
-    step, and then one a percent, not one a frame"""
-    last = [None]
+def progress_lines(lane="main", out=None):
+    """--progress (98.2.11.1): each report a line on stdout - PROGRESS and
+    then a JSON object: the `lane` (the encode's own, or a pass run
+    alongside it in another process), the step, done and total (0 when
+    the step has no count to give) and a note of what else is going on -
+    for the encoder window, which runs this encoder as a process of its
+    own so Cancel can kill it. A new step, a new total or the step's end
+    at once; a step's count and note at most every PROGRESS_EVERY s, not
+    one a frame. `out` the stream, or stdout when each line is written"""
+    import json
+    import time
+    last = [None, 0.0, None]
 
-    def tick(step, done, total):
-        key = (step, 100 * done // total if total else 0)
-        if key != last[0]:
-            last[0] = key
-            print("%s %s %d %d" % (PROGRESS, step, done, total), flush=True)
+    def tick(step, done, total, note=""):
+        key = (step, total)
+        now = time.time()
+        if key == last[0] and done != total and \
+                now - last[1] < PROGRESS_EVERY:
+            return
+        line = (step, done, total, note)
+        if line == last[2]:
+            return
+        last[0], last[1], last[2] = key, now, line
+        o = out if out is not None else sys.stdout
+        o.write("%s %s\n" % (PROGRESS, json.dumps(dict(
+            lane=lane, step=step, done=done, total=total, note=note))))
+        o.flush()
     return tick
+
+
+PROGRESS_EVERY = 0.25   # s between two of a step's reports, at most
 
 
 def main():
@@ -11135,6 +12458,12 @@ def main():
             print("%-14s %s %d x %d" % (k, lay, w, h))
         return 0
     a = ap.parse_args()
+    if a.posters_only:
+        try:
+            reposter(a, say=(lambda *x: None) if a.quiet else print)
+        except (vid.V88Error, OSError) as e:
+            sys.exit("os88venc: %s" % e)
+        return 0
     if a.preview_png:
         os.makedirs(a.preview_png, exist_ok=True)
     try:

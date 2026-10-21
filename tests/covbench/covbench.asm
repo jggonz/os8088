@@ -1189,6 +1189,7 @@ cb_share:
     ret
 
 %include "os88spk.inc"
+%define BL_INTRO_HOW 'press S'      ; benchlib's banner - there is no Bench menu
 %include "benchlib.inc"
 
 ; =============================================================================

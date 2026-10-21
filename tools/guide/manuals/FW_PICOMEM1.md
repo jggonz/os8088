@@ -13,16 +13,15 @@ fixes.
 
 ## What it fixes
 
-- **The card starts.** Without these settings the Pico W's light never comes
-  on and the PC stops after the BIOS banner.
 - **Sound keeps playing while the disk works.** The Sound Blaster no longer
   goes quiet during disk access, and the crackles are gone.
 - **Short sounds play.** A sound shorter than the card's buffer plays as soon
   as it ends.
 - **Disk reads are faster**, about 10% on a 16 MHz 286.
 - **Disk reads are never wrong.** When the PC is busy for a long time, the
-  card now waits for it instead of carrying on. This was the cause of videos
-  freezing or stopping on a "damaged frame".
+  card waits for it instead of carrying on. Without this, a video played off
+  the card's disk can freeze, or stop on a "damaged frame", during busy
+  playback.
 
 ## Installing it
 
@@ -62,7 +61,7 @@ memory.
 
 ## Good to know
 
-- This is only for the **1.x** card with a **Pico W**. A PicoMEM 2 needs
-  its own firmware.
+- This is only for the **1.x** card with a **Pico W**. A PicoMEM 2 works
+  with os8088 on its own released firmware and needs nothing from here.
 - It has been flashed and used on a PicoMEM 1.14 in a 16 MHz 286, where the
   Sound Blaster, the USB mouse and video playback from disk all work.

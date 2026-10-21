@@ -805,7 +805,7 @@ dos_entry:
     ; **AND ES IS BANKED, WHICH IS THE ONE THAT BIT.** ES arrives holding
     ; KERNEL_SEG (SPEC.md 20.1) and OSAPI_ARG_FILE below answers with an SI
     ; into THAT segment and does not reload it - it is documented as read
-    ; through the ES a package proc was entered with (SPEC.md 74240). Every
+    ; through the ES a package proc was entered with (SPEC.md 54.5). Every
     ; OSAPI slot preserves ES, so the entry proc can rely on it across
     ; wm_create and about_set; op_load is OUR code and clobbers it. Without
     ; this pair the name copy below reads RDSUM.COM's 13 bytes out of the

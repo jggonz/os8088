@@ -49,6 +49,9 @@ glass.
    held open through vp_skwt while the text is read.)
 5. LEFT WHILE SPACE HAS IT PAUSED: "<< m:ss", then paused on the key it
    landed on with "Paused" back over it.
+8. FRAME STEPS (98.3.14.1), there: . three times, each the next frame
+   exactly and still "Paused"; then , once - a seek to the key at or
+   before and the frames on to it - and the frame before, exactly.
 6. SPACE: on from there, and the hold is exact.
 7. HOME: the start, at once - key 0 for a colour file, the stream's first
    record for a one-bit one - and on playing: the hold after it is exact.
@@ -496,18 +499,32 @@ def main():
                                "places" % (what, frame, " with %r" % text
                                            if text else "", d))
 
-            def press(key, cond, what):
+            def press(key, cond, what, arrived=None, guest=60.0):
                 """a key, and what it does: pressed again, a few guest seconds
                 on, if it plainly never arrived - a key made and broken while
                 the Mode X flipper had the machine was lost now and then
-                (counted and printed, so it cannot hide)"""
+                (counted and printed, so it cannot hide).
+
+                `arrived` is for a key whose EFFECT takes longer than that:
+                its first sign, so a key that did arrive is waited out for
+                `guest` seconds and never sent again. Pressing a seek's key a
+                second time while the first is still landing is a second
+                seek, after which `cond` cannot hold - which is how `,` on a
+                key in fifteen parts (~5 guest seconds to land) failed three
+                times against a 6-second re-send"""
                 for n in range(3):
                     m.key(key)
                     try:
-                        wait(cond, what, 6.0)
-                        return
+                        if arrived is None:
+                            wait(cond, what, 6.0)
+                            return
+                        wait(lambda mm: cond(mm) or arrived(mm),
+                             what + " to start", 6.0)
                     except Stop:
                         retries[0] += 1
+                        continue
+                    wait(cond, what, guest)
+                    return
                 raise Stop("%s never happened, pressed three times" % what)
 
             def hold(n, what):
@@ -669,6 +686,22 @@ def main():
                 if rb("vp_upause") != 1:
                     bad.append("5: a seek made paused did not stay paused")
                 check("5: paused on the key", keyf[k], "Paused")
+                # --- 8: FRAME STEPS (98.3.14.1), paused on that key: .
+                # three times, the next frame each, still paused; then ,
+                # once - a seek to the key and on - and the frame before
+                ww("vp_stopat", 0xFFFF)
+                for i in (1, 2, 3):
+                    press("Period", lambda mm, i=i: rw("vp_done") ==
+                          keyf[k] + 1 + i and rw("vp_stepq") == 0,
+                          "the . step %d" % i)
+                    check("8: . %d from the key" % i, keyf[k] + i, "Paused")
+                press("Comma", lambda mm: rb("vo_skp") == 0 and
+                      rw("vp_sttgt") == 0xFFFF and rw("vp_stepq") == 0 and
+                      rw("vp_done") == keyf[k] + 3, "the , step",
+                      arrived=lambda mm: rw("vp_sttgt") != 0xFFFF)
+                check("8: , back one", keyf[k] + 2, "Paused")
+                if rb("vp_upause") != 1:
+                    bad.append("8: a frame step did not stay paused")
                 # --- 6
                 ww("vp_stopat", keyf[k] + 1 + 5)
                 press("Space", lambda mm: rb("vp_upause") == 0, "Space on")

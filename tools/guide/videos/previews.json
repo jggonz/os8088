@@ -1,0 +1,312 @@
+{
+ "8a302ba2be6ef3bea47ecdeccf9498cac3b8b3a7ce58f8fbfcfaa7ee5282dbae": {
+  "src": "apps/video/demo/cga/01-COTXT.V88",
+  "mp4": "cga/01-cotxt.mp4",
+  "w": 267,
+  "h": 200,
+  "secs": 34.0,
+  "title": "Color Text Mode 80x25",
+  "kb": 1326,
+  "poster": "cga/01-cotxt.jpg"
+ },
+ "fe4683ef4a71f393f59a65ba8fdeddea15fa90462328bf08d340921ff35791a4": {
+  "src": "apps/video/demo/cga/02-BWPCS.V88",
+  "mp4": "cga/02-bwpcs.mp4",
+  "w": 150,
+  "h": 84,
+  "secs": 226.0,
+  "title": "PC Speaker (Set it in Ctrl Panel)",
+  "kb": 2422,
+  "poster": "cga/02-bwpcs.png"
+ },
+ "1a39843bb6a2f69ae4488b298b74994f9a855f51c6ff4c2de84134321aa41019": {
+  "src": "apps/video/demo/cga/03-CGA4.V88",
+  "mp4": "cga/03-cga4.mp4",
+  "w": 533,
+  "h": 300,
+  "secs": 25.0,
+  "title": "CGA 4 Color 320*200",
+  "kb": 1294,
+  "poster": "cga/03-cga4.jpg"
+ },
+ "62f29814f03609397fef4aea3c2018017daf5f56f6def97da6562845e4cae9df": {
+  "src": "apps/video/demo/cga/04-640FS.V88",
+  "mp4": "cga/04-640fs.mp4",
+  "w": 267,
+  "h": 114,
+  "secs": 38.2,
+  "title": "640*114 Black and White",
+  "kb": 1160,
+  "poster": "cga/04-640fs.png"
+ },
+ "417ecbd03f74cceb6f357e556f1e9078f78c615b87b166e86ae22bb66787c74e": {
+  "src": "apps/video/demo/cga/05-640FS.V88",
+  "mp4": "cga/05-640fs.mp4",
+  "w": 267,
+  "h": 200,
+  "secs": 40.4,
+  "title": "CGA 640*200 Full Screen",
+  "kb": 1743,
+  "poster": "cga/05-640fs.png"
+ },
+ "a44c9908effed89079cda30b927f25f2d3a9da64faf06b8cd198e07f0514da83": {
+  "src": "apps/video/demo/cga/06-640FS.V88",
+  "mp4": "cga/06-640fs.mp4",
+  "w": 267,
+  "h": 150,
+  "secs": 71.1,
+  "title": "CGA 640*140",
+  "kb": 2172,
+  "poster": "cga/06-640fs.png"
+ },
+ "811e2d6ac5c1439ae1501b8747a0b814c680b18502eab0e5176fb71dad4998d7": {
+  "src": "apps/video/demo/cga/07-CGA16.V88",
+  "mp4": "cga/07-cga16.mp4",
+  "w": 267,
+  "h": 150,
+  "secs": 25.0,
+  "title": "RBG Monitor Color Hack 160*100",
+  "kb": 1037,
+  "poster": "cga/07-cga16.jpg"
+ },
+ "c7d1987a83946005a4cc065d78ad7b43c3926b0c50d2bbad94d3d292bf03d1e3": {
+  "src": "apps/video/demo/cga/08-CGACP.V88",
+  "mp4": "cga/08-cgacp.mp4",
+  "w": 267,
+  "h": 150,
+  "secs": 25.0,
+  "title": "Composite 16 Color 320*200",
+  "kb": 1470,
+  "poster": "cga/08-cgacp.jpg"
+ },
+ "96f6dd11d197e9d40db5f0781ebc58907109894b77ff3bebdca19cf710fb30b6": {
+  "src": "apps/video/demo/cga/09-CMP5O.V88",
+  "mp4": "cga/09-cmp5o.mp4",
+  "w": 267,
+  "h": 150,
+  "secs": 25.0,
+  "title": "Composite 512 Color 160*100 OldStyle",
+  "kb": 261,
+  "poster": "cga/09-cmp5o.jpg"
+ },
+ "537ecbf4475c34c0372600a6dc49f209f32232366f40251511d3c0ecae802164": {
+  "src": "apps/video/demo/cga/10-CMP5N.V88",
+  "mp4": "cga/10-cmp5n.mp4",
+  "w": 267,
+  "h": 150,
+  "secs": 25.0,
+  "title": "Composite 512 Color 160*100 NewStyle",
+  "kb": 268,
+  "poster": "cga/10-cmp5n.jpg"
+ },
+ "5c07d45e564bc3be4575339f59dfd880148cf9eb1dedf913223a9108128bf6a2": {
+  "src": "apps/video/demo/cga/11-LIVE.V88",
+  "mp4": "cga/11-live.mp4",
+  "w": 133,
+  "h": 100,
+  "secs": 15.0,
+  "title": "CGA Live Desktop",
+  "kb": 230,
+  "poster": "cga/11-live.png"
+ },
+ "0cad59c0641d70c9b3e181bdf7d6ef0d1f30259a31ec1358a719fd5fb30e297d": {
+  "src": "apps/video/demo/herc/01-TEXT.V88",
+  "mp4": "herc/01-text.mp4",
+  "w": 533,
+  "h": 304,
+  "secs": 48.8,
+  "title": "Text Mode ASCII Blocks",
+  "kb": 1159,
+  "poster": "herc/01-text.jpg"
+ },
+ "540c8d009436f43b96b689adf46f63a853c03d67b023b492b3b0217933fe27a4": {
+  "src": "apps/video/demo/herc/02-PCSPK.V88",
+  "mp4": "herc/02-pcspk.mp4",
+  "w": 232,
+  "h": 132,
+  "secs": 55.7,
+  "title": "PC Speaker (Set it in Ctrl Panel)",
+  "kb": 654,
+  "poster": "herc/02-pcspk.png"
+ },
+ "eddbe0ec67d0d94c223bf21c66b844c3738c4064806b9237ce51bbf90873cad8": {
+  "src": "apps/video/demo/herc/03-PCM11.V88",
+  "mp4": "herc/03-pcm11.mp4",
+  "w": 464,
+  "h": 262,
+  "secs": 216.0,
+  "title": "PCM 11Khz Fullscreen",
+  "kb": 4815,
+  "poster": "herc/03-pcm11.png"
+ },
+ "50dfa91ad7016423003d12ac1a69c3b9b29439e8beb5bf9c0480ec425006f307": {
+  "src": "apps/video/demo/herc/04-ADPCM.V88",
+  "mp4": "herc/04-adpcm.mp4",
+  "w": 387,
+  "h": 166,
+  "secs": 38.2,
+  "title": "ADPCM 5Khz Audio",
+  "kb": 1389,
+  "poster": "herc/04-adpcm.png"
+ },
+ "e3d2d836d7eb3bfc357f1e1001a888438151b00f5b558c9dd3f5b24608a14aba": {
+  "src": "apps/video/demo/herc/05-ADPCM.V88",
+  "mp4": "herc/05-adpcm.mp4",
+  "w": 387,
+  "h": 218,
+  "secs": 26.0,
+  "title": "ADPCM 5Khz For Disk Rate",
+  "kb": 1181,
+  "poster": "herc/05-adpcm.png"
+ },
+ "551ad9c3a6ac99a5bc30522fc00c867a9db563799fe497628bb00762d2190107": {
+  "src": "apps/video/demo/herc/06-ADPCM.V88",
+  "mp4": "herc/06-adpcm.mp4",
+  "w": 464,
+  "h": 262,
+  "secs": 29.0,
+  "title": "ADPCM 5Khz Audio",
+  "kb": 1563,
+  "poster": "herc/06-adpcm.png"
+ },
+ "86ae1d85b675ff715b975773bbd20dcfebd741509c783f04f0fb0d46dae0e30a": {
+  "src": "apps/video/demo/herc/07-PCM11.V88",
+  "mp4": "herc/07-pcm11.mp4",
+  "w": 412,
+  "h": 310,
+  "secs": 40.4,
+  "title": "Fullscreen PCM 11Khz",
+  "kb": 2359,
+  "poster": "herc/07-pcm11.png"
+ },
+ "01b220562a0c9e0e43cb244780814408b160ae7d4347e5c0b78e8a9ae6f24053": {
+  "src": "apps/video/demo/herc/08-LIVE.V88",
+  "mp4": "herc/08-live.mp4",
+  "w": 160,
+  "h": 120,
+  "secs": 15.0,
+  "title": "Live Desktop",
+  "kb": 217,
+  "poster": "herc/08-live.png"
+ },
+ "b120fcd24b52efc8a8d792b6cccb78d70e595f1490549b4cff4156805fa9b4bc": {
+  "src": "apps/video/os8088.v88",
+  "mp4": "logo/os8088.mp4",
+  "w": 320,
+  "h": 200,
+  "secs": 7.0,
+  "title": "os8088",
+  "kb": 40,
+  "poster": "logo/os8088.png"
+ },
+ "df4e7bb54c6a54f87fd486d62aa6d8c2ab3b0f87d68454355d0e3653a9c2dc4a": {
+  "src": "apps/video/demo/vga/01-BCRRT.V88",
+  "mp4": "vga/01-bcrrt.mp4",
+  "poster": "vga/01-bcrrt.jpg",
+  "w": 640,
+  "h": 360,
+  "secs": 216.0,
+  "title": "Bad Carrot - 320*180*64",
+  "kb": 3550
+ },
+ "3e2591726c6831c07f1e133306468cc688ff8979304562b5dba7a74ac49f9ace": {
+  "src": "apps/video/demo/vga/02-T69.V88",
+  "mp4": "vga/02-t69.mp4",
+  "poster": "vga/02-t69.jpg",
+  "w": 533,
+  "h": 300,
+  "secs": 73.5,
+  "title": "T69 Collapse - 640*300*2",
+  "kb": 18427
+ },
+ "83d1613006fee2b69b879821e3b363b82f9538f614be8fcb4fdc924cac9f4992": {
+  "src": "apps/video/demo/vga/03-BEBOP.V88",
+  "mp4": "vga/03-bebop.mp4",
+  "poster": "vga/03-bebop.jpg",
+  "w": 533,
+  "h": 400,
+  "secs": 90.1,
+  "title": "Cowboy Bebop - 640*400*16",
+  "kb": 3375
+ },
+ "47bea02f08b5625e42bd1ce2aa59c469c3e71b846f26374278ff2215179a6dda": {
+  "src": "apps/video/demo/vga/04-MECH2.V88",
+  "mp4": "vga/04-mech2.mp4",
+  "poster": "vga/04-mech2.jpg",
+  "w": 533,
+  "h": 400,
+  "secs": 76.5,
+  "title": "Mechwarrior 2 - 320*200*256",
+  "kb": 1137
+ },
+ "a5713dfafa20264cfc2d558f49b2f339a32566a69a3abdc64d313a8b8e0c9a9d": {
+  "src": "apps/video/demo/vga/05-LASTX.V88",
+  "mp4": "vga/05-lastx.mp4",
+  "poster": "vga/05-lastx.jpg",
+  "w": 640,
+  "h": 360,
+  "secs": 92.5,
+  "title": "Last Exile - 160*180*256",
+  "kb": 2102
+ },
+ "ad199ba93eea0bd1516077e9be7e7c256cb7888efb16b088ffe1b43b71ebd6dd": {
+  "src": "apps/video/demo/vga/06-SNOW.V88",
+  "mp4": "vga/06-snow.mp4",
+  "poster": "vga/06-snow.jpg",
+  "w": 533,
+  "h": 298,
+  "secs": 15.1,
+  "title": "Snow Holo - 320*149*256",
+  "kb": 401
+ },
+ "0d741191a27e7317916238966b9b668367ea54ac156476ca1602789f3a18dde0": {
+  "src": "apps/video/demo/vga/07-GAS.V88",
+  "mp4": "vga/07-gas.mp4",
+  "poster": "vga/07-gas.jpg",
+  "w": 533,
+  "h": 300,
+  "secs": 70.7,
+  "title": "Gas Gas Gas - 640*300*16",
+  "kb": 801
+ },
+ "2d20e4776daa6902d2a19e89c2cb4fcf8cc49ab26a9a8edc054381704af337a9": {
+  "src": "apps/video/demo/vga/08-WILLY.V88",
+  "mp4": "vga/08-willy.mp4",
+  "poster": "vga/08-willy.png",
+  "w": 264,
+  "h": 200,
+  "secs": 27.0,
+  "title": "Steamboat Willie - Live",
+  "kb": 586
+ },
+ "ae8b035f4bed008d462fcd15a0c712261389f44ad5b958f04851e5238a4fd6f9": {
+  "src": "apps/video/demo/vga/09-TRACK.V88",
+  "mp4": "vga/09-track.mp4",
+  "poster": "vga/09-track.jpg",
+  "w": 400,
+  "h": 224,
+  "secs": 25.0,
+  "title": "Trackmania A01 - Live",
+  "kb": 1570
+ },
+ "5fdde11708fc4811dc89cdaab5da986b7edf4719e86e83b310bcc568687a79ca": {
+  "src": "apps/video/demo/vga/10-LX486.V88",
+  "mp4": "vga/10-lx486.mp4",
+  "poster": "vga/10-lx486.jpg",
+  "w": 640,
+  "h": 360,
+  "secs": 92.5,
+  "title": "Last Exile - 486 - 320*180*256",
+  "kb": 1919
+ },
+ "04f5fc2e247709f6145174269bad823593e081d1c70c022c1723335cda4d11a8": {
+  "src": "apps/video/demo/vga/11-GS486.V88",
+  "mp4": "vga/11-gs486.mp4",
+  "poster": "vga/11-gs486.jpg",
+  "w": 533,
+  "h": 300,
+  "secs": 70.7,
+  "title": "Gas Gas Gas - 486 - 640*300*16",
+  "kb": 791
+ }
+}

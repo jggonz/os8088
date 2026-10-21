@@ -1595,7 +1595,7 @@ gfx_ls_box:
     push ax
     push cx
     push di
-    CLIPQ                   
+    CLIPQ
     ; NO REGION: the box is the ACTIVE DISPLAY's own extent, in VIRTUAL space
     ; (SPEC.md 5.6.9.5) - which on display 0, and on every one-card machine,
     ; is the screen exactly as it always was.
@@ -1877,6 +1877,23 @@ gfx_blit4:
     jz vga_b4out                ; .out needs is 16 - on every non-empty blit
 
 %ifdef KERN_BIG
+    ; --- A REGION IS ARMED: WALK IT (SPEC.md 5.4.1.5) ------------------------
+    ; Every fragment the block meets is one piece, re-entering here with the
+    ; region disarmed, so each takes the fast path and the display decision
+    ; below as an uncovered blit would. ABOVE the hook, because wm_clip_tab is
+    ; virtual and so is AX here; nested inside somebody else's hook it is not,
+    ; and that case keeps 5.4.1.4's one-fragment test below
+    CLIPQ
+    je .nowalk
+    call COLD_SEG:gfx_b4walk    ; CF = 1: nested, not walked
+    jc .nowalk
+    jmp kret_bp                 ; NOT .out: the pieces leave gfx_blit_fst and
+.nowalk:                        ; gfx_blit_hk as THEY left them, and a hook
+                                ; nobody here put up must not come down. (The
+                                ; nested test is the walk's, in .cold, and that
+                                ; is PARITY: this run loop and all of .text
+                                ; after it move by an even 4. PERFORMANCE.md
+                                ; Part 7)
     ; --- THE WHOLE-SHAPE HOOK, TAKEN WHEN THE BLOCK FITS ONE DISPLAY -------
     ; SPEC.md 39.14.7.1. This is the gate 39.14.7 considered and declined,
     ; and the field priced what declining it cost: a two-display machine sent
@@ -1925,7 +1942,13 @@ gfx_blit4:
     mov [gfx_blit_sv], si       ; - and AX is the TRANSLATED x by here
 
     ; --- may a run go straight into the framebuffer? (SPEC.md 5.4.1) -------
-    CLIPQ                   
+    CLIPQ
+%ifdef KERN_BIG
+    jne .slow                   ; a region here is a NESTED call's - the walk
+                                ; above took every other (SPEC.md 5.4.1.5) -
+                                ; and no caller nests one: each run clips
+                                ; itself, which only gfx_fill does
+%else
     je .clipfree
     ; SPEC.md 5.4.1.4 - A REGION IS ARMED, BUT IS IT IN THE WAY? If the whole
     ; block lies inside ONE fragment there is nothing here to clip against and
@@ -1950,6 +1973,7 @@ gfx_blit4:
     jc .slow                    ; it crosses a fragment edge: each run has to
                                 ; clip itself against the region, which only
                                 ; gfx_fill does
+%endif
 .clipfree:
 %ifdef KERN_BIG
     cmp byte [vid_ndisp], 1
@@ -2003,11 +2027,11 @@ gfx_blit4:
     add dx, cx
     cmp dx, [vid_cw]
     ja .pdone
-    cmp cx, 64
-    jb .pdone                   ; a narrow block is all edge: four Map Masks
-                                ; and a two-byte `rep movsb` cannot beat a
-                                ; run, and 64 is where the threshold below
-                                ; still has two runs of room in it
+    cmp cx, 16
+    jb .pdone                   ; under 16 is unmeasured: the run writer.
+                                ; Under 64 the threshold is 0 or 1, so there
+                                ; is no probe, and the budget asks DENSITY
+                                ; (SPEC.md 5.4.1.6)
     push cx
     mov dx, cx
     mov cl, 5
@@ -2165,6 +2189,10 @@ gfx_blit4:
     jb .run
 %ifdef GFX_PLANE
     jmp short .nextrow
+    nop                         ; PARITY: never executed. The density test's
+                                ; third-run guard below is 5 bytes, and this
+                                ; keeps all of .text after it at an even shift
+                                ; (PERFORMANCE.md Part 7)
 
     ; --- ...and the handover, out of line because a flat row never takes it
     ; The point is rounded DOWN to an even pixel: the decoder takes source
@@ -2172,7 +2200,16 @@ gfx_blit4:
 .ebudget:
     cmp di, [gfx_blit_thr]
     jb .emitrun                 ; the row has spent its runs: the rest of it
-.eplanar:                       ; is the decoder's, from this one
+    cmp word [gfx_blit_w], 64   ; is the decoder's, from this one - WIDE. A
+    jae .eplanar                ; NARROW row asks how DENSE its runs were
+    cmp di, 3                   ; (SPEC.md 5.4.1.6), and only from its FOURTH
+    jb .emitrun                 ; run, so two short ones opening a flat row
+    shl di, 1                   ; (an outline and a highlight) stay runs. DX,
+    shl di, 1                   ; the pixels spent, under 4 x DI - 3, DI the
+    sub di, 3                   ; runs before this one, hands the rest over -
+    cmp dx, di                  ; so a dither goes at its fourth
+    jae .emitrun
+.eplanar:
     mov ax, dx
     and al, 0xFE
     mov di, ax
@@ -5057,7 +5094,7 @@ section .bss
 ; * every member is WRITTEN BY ITS OWN PRIMITIVE BEFORE IT IS READ, on every
 ;   path - which is what a union needs and .bss's zero never gave anything
 ;   here. The members that DO lean on a value surviving between calls are kept
-;   OUT: gfx_bpfn (gfx_blit1_x except inside a planar walk), gfx_b1hm (zero except
+;   OUT: gfx_bpfn (gfx_blit1_x except inside a walk), gfx_b1hm (zero except
 ;   inside .offg's head column) and gfx_bp_hk (set by gfx_blitp around a walk
 ;   that re-enters gfx_blitp).
 ;
@@ -5191,10 +5228,11 @@ gfx_u_pen:
 %endif
 
 section .text
-%ifdef GFX_PLANE
+%ifdef KERN_BIG
 gfx_bpfn:    dw gfx_blit1_x     ; the fragment walk's piece (5.4.3.6):
                                 ; gfx_blit1_x, and gfx_bppiece only while a
-                                ; planar walk runs. INITIALISED, and in
+                                ; planar walk runs, gfx_b4piece only while a
+                                ; packed one does (5.4.1.5). INITIALISED, and in
                                 ; .text for it: it was a .bss word whose zero
                                 ; meant gfx_blit1_x by an assertion that the
                                 ; routine was .cold's first byte - which
@@ -6046,28 +6084,26 @@ gfx_blit1_x:
 .fy2:
     sub dx, bx                  ; ...less y1: its rows
     jle .fnext
-    mov di, [si]                ; SI = the band's byte there: the columns left
-    and di, 0FFF8h              ; of it in bytes, from the byte column the
-    neg di                      ; band's x is in - SI is still gfx_cl_x1
-    add di, ax
-    shr di, 1
-    shr di, 1
-    shr di, 1
     push ax
     push dx
-    mov ax, bx                  ; ...the rows above it in strides...
-    sub ax, [si+2]
-    mul bp
-    add di, ax
-    pop dx
+    mov ax, bx                  ; DI = the rows above it in strides, from the
+    sub ax, [si+2]              ; band's first byte (gfx_cl_fn) - which a
+    mul bp                      ; packed piece (5.4.1.5) takes as it stands
+    add ax, [si+8]
+    mov di, ax                  ; (not `xchg`, a byte shorter: what follows -
+    pop dx                      ; the pen, every band's emit - stays EVEN)
     pop ax
-    add di, [si+8]              ; ...from the band's first byte (gfx_cl_fn)
-    mov si, di
-%ifdef GFX_PLANE
-    call word [gfx_bpfn]        ; gfx_blit1_x, or a planar
-%else                           ; piece's gfx_bppiece (5.4.3.6): no test
-    call gfx_blit1_x
-%endif
+    mov si, [si]                ; ...and SI = the band's byte there: the
+    and si, 0FFF8h              ; columns left of it in bytes, from the byte
+    neg si                      ; column the band's x is in (SI was gfx_cl_x1)
+    add si, ax
+    shr si, 1
+    shr si, 1
+    shr si, 1
+    add si, di
+    call word [gfx_bpfn]        ; gfx_blit1_x, a planar piece's gfx_bppiece
+                                ; (5.4.3.6) or a packed one's gfx_b4piece
+                                ; (5.4.1.5): no test
 .fnext:
     pop di
     pop cx
@@ -6232,6 +6268,7 @@ gfx_blit1_x:
 gbz_gfx_blit1:        call gfx_blit1_x
                   retf
 
+%ifdef KERN_BIG
 %ifdef GFX_PLANE
 ; -----------------------------------------------------------------------------
 ; gfx_bpwalk - gfx_blitp under a region, when the caller asks (SPEC.md
@@ -6247,11 +6284,27 @@ gbz_gfx_blit1:        call gfx_blit1_x
 ; -----------------------------------------------------------------------------
 gfx_bpwalk:
     and di, 0x3FFF              ; the plane step, which .frags banks where
-    mov word [gfx_bpfn], gfx_bppiece    ; each piece reads it back - and
+    mov word [gfx_bpfn], gfx_bppiece    ; each piece reads it back
+    jmp short gfx_walk
+%endif
+; gfx_b4walk - gfx_blit4 under a region (SPEC.md 5.4.1.5): the same walk, each
+; piece a gfx_blit4 of its own with the region disarmed. in: gfx_blit4's
+; arguments; DS = KERNEL_SEG. out: CF = 0 walked - and its one caller leaves
+; through kret_bp, so what it clobbers does not matter - or CF = 1 NESTED in an
+; outer hook, whose x is display-local where wm_clip_tab is virtual, and
+; nothing was touched
+gfx_b4walk:
+    cmp byte [gfx_dnest], 0
+    stc
+    jne gfx_walk.out
+    mov word [gfx_bpfn], gfx_b4piece
+gfx_walk:
     call gfx_blit1_x.frags
     mov word [gfx_bpfn], gfx_blit1_x    ; ...and back (CF = 0: drawn)
+.out:
     retf
 
+%ifdef GFX_PLANE
 ; gfx_bppiece - one piece of that walk: gfx_blitp, its plane step read back
 ; out of the frame .frags banked it in - the caller's DI, fourth of the six
 ; the walk pushes. Clobbers DI, which .fnext restores
@@ -6264,6 +6317,61 @@ gfx_bppiece:
     mov di, sp
     mov di, [ss:di + GFX_BPSTEP]
     call KERNEL_SEG:api_gfx_blitp
+    ret
+%endif
+
+; gfx_b4piece - one piece of gfx_blit4's walk (SPEC.md 5.4.1.5). AX/BX/CX/DX
+; = the piece, BP = the stride, ES = the source, DI = the source's row at the
+; piece's y (.frags' SI counts 1bpp bytes, so the column is found again here
+; at two pixels a byte). A piece an ODD pixel into the block starts on a LOW
+; nibble, which no source pointer can say (39.14.7.2 refuses the same cut at a
+; seam): that column goes alone, a vline per run of one colour down it, and the
+; rest from the next pixel, even again - a gfx_blit4 of no width if that was
+; all of it, which is the empty block's own exit. Clobbers all but BP, ES and
+; DS, which .frags allows
+gfx_b4piece:
+    mov si, ax
+    sub si, [gfx_cl_x1]
+    shr si, 1                   ; pixels into the block -> bytes, CF = odd
+    pushf
+    add si, di
+    popf
+    jnc .even
+    push bx
+    push cx
+    push dx
+    push si
+    mov di, dx                  ; DI = rows left in the column
+.crun:
+    mov cl, [es:si]
+    and cl, 0Fh                 ; the run's colour, the LOW nibble
+    mov [gfx_color], cl
+    mov dx, bx
+    dec dx
+.clen:
+    inc dx                      ; DX = its last row so far
+    add si, bp
+    dec di
+    jz .cemit
+    mov ch, [es:si]
+    and ch, 0Fh
+    cmp ch, cl
+    je .clen
+.cemit:
+    call KERNEL_SEG:apic_gfx_vline  ; AX = x, BX..DX inclusive
+    mov bx, dx
+    inc bx                      ; the next run's first row
+    or di, di
+    jnz .crun
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    inc ax                      ; ...and the piece from the next pixel
+    inc si
+    dec cx
+.even:
+    call KERNEL_SEG:api_gfx_blit4
     ret
 %endif
                                 ; (the body's %ifdef KERN_BIG is gone: SPEC.md 5.4.2.5)

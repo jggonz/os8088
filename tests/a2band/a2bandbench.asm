@@ -1407,6 +1407,7 @@ ab_run:
                                     ; whose rows are what decide whether two
                                     ; of the three ship at all
 %include "apple2/a2band.inc"        ; THE THING MEASURED - the package's own
+%define BL_NOINTRO                  ; no "it saves" banner: this one never saves (benchlib)
 %include "benchlib.inc"
 
 ; =============================================================================

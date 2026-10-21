@@ -305,7 +305,7 @@ stm_scanvol:
 stm_gohome:
     mov al, [cs:stm_vol]
     xor bx, bx
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
     jc .r
     mov si, stm_s_dir
     call stm_kname              ; 'STIKAPPS' into the kernel's name scratch
@@ -316,7 +316,7 @@ stm_gohome:
     or bx, bx
     jz .no
     mov al, [cs:stm_vol]
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
 .r:
     ret
 .no:
@@ -1800,7 +1800,7 @@ stm_loadpics:
     call stm_ent                ; CS:DI = the entry
     mov al, [cs:di+STE_VOL]
     xor bx, bx
-    call COLD_SEG:fcpf_fcp_goto ; its volume (a word when it is current)
+    call COLD_SEG:dskf_dsk_goto ; its volume (a word when it is current)
     jc .next
     mov ax, [cs:di+STE_CLUS]
     mov cx, 512

@@ -44,6 +44,6 @@ mouse keeps working.
 
 ## Good to know
 
-- There is no mouse wheel in os8088, so the wheel does nothing.
+- The wheel scrolls the front window, as it does with any wheel mouse.
 - With two monitors in one desktop, the pointer would not line up with the
   mouse, but no emulator that offers this pointer has two displays.
