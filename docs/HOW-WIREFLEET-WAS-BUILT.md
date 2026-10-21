@@ -337,3 +337,47 @@ ball does. The serial lease now takes the divisor (BH), WireFleet asks for
 2400, and its heartbeat slows from every three ticks to every nine so a
 66-byte frame (275 ms on the wire) leaves the line half idle. On the same
 two 86Box XTs the captains found each other within seconds.
+
+## 2026-10-20 — Missiles, a splash, and a march that knows when to stop
+
+The third request was atmosphere: a music track that goes quiet for the
+big sounds, and a visible missile for every shot - launched on one side,
+landing on the other, exploding or splashing. The plan is
+[WIREFLEET-MUSIC-PLAN.md](plans/WIREFLEET-MUSIC-PLAN.md).
+
+**The art.** Codex's image generator drew a 4 x 3 atlas on a magenta matte
+from one prompt (`apps/wirefleet/art/FX-PROMPT.txt`): two missiles, a
+launch flash, a smoke puff, four explosion frames and four splash frames.
+`tools/wirefleet_fx.py` keys the matte, area-samples each frame to 24 x 24
+taking each block's most common palette colour (an average turned the
+fireball brown), keeps a row's frames at one scale so the explosion is seen
+to grow, mirrors the two missiles into six directions, and writes AND/OR
+stamp tables for the three pixel formats. Looking at the Hercules face
+showed the first version washing out over a ship's grey stipple; a one-pixel
+black halo in the 1bpp and 2bpp forms fixed it.
+
+**The trick that kept the protocol.** The result must not show before the
+missile lands, and the obvious answers were a new message or a mask over
+state already changed. Instead each side takes its frame late: the shooter
+holds the opponent's RESULT until its missile lands, and the defender starts
+its incoming missile on the first SHOT and judges it on landing. The
+protocol already expected late answers - a shooter repeats SHOT, a defender
+replays its cached RESULT - so no byte on the wire changed, and the status
+line, the sunk reveal and the sound change at the landing because that is
+when the game's state does.
+
+**The sound.** Sampled effects come from CC0 packs - Kenney's thruster and
+low explosion (mixed with a crunch) and Thimras's cannon-miss splash -
+resampled to 8 kHz and played by the Sound Blaster from rings in one DMA
+claim, 1942's shape. Without a card they are short tone runs: a rising
+whoosh, a falling rumble, a scatter of spray. The music, "Ironclad", is an
+original 16-bar sea march in D minor written as text in
+`tools/wirefleet_song.py`: three FM voices on an AdLib or Sound Blaster, the
+melody alone on the speaker. Each effect keys every voice off; the tune
+picks up at the same row nine ticks after it ends. A capture of the QEMU
+card shows exactly that envelope - march, burst, silence, march.
+
+**What it cost.** WireFleet's image and bss reached 64,512 bytes of a 64KB
+segment, so the stamps and clips ride as lazy parts of the one file, and the
+file grew from 26 to 47 clusters - which took WireFleet off the full,
+curated `apps360.img`; `games360.img` carries it with every other game.

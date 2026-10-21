@@ -197351,7 +197351,9 @@ UI-task file operations (§20.6 rule 7). No write on every retry or heartbeat.
 ### 114.4 Sound and validation
 
 Placement, ready, fire, miss, hit, sunk, link restoration and victory get
-finite nonblocking cues through the OS sound router (§34). The system's
+finite nonblocking cues through the OS sound router (§34); in battle the
+launch, splash and explosion of §114.11 take the place of fire, miss and hit,
+and a music track plays under them. The system's
 selected PC Speaker, AdLib or Sound Blaster route is respected; the game
 does not probe cards or program sound ports. Mute and close release only
 the instance's own grants. Repeated protocol messages do not repeat cues.
@@ -197499,6 +197501,8 @@ needed for a turn-based game.
 Cues are finite tone sequences, priority 40h, through `OSAPI_SND_TONE`:
 place 660; ready 660/880; fire 165/110; miss 440/220; hit 110/82; sunk
 220/165/110; connection 440/880; victory 784/988/1175; defeat 330/220/165 Hz.
+(§114.11 replaces fire, miss and hit in battle, and adds the music.) The
+bracket draws §114.11's stamps in its own 2bpp form and binds U as well.
 The sequencer advances on OS ticks and never waits. The system routes these
 to its PC Speaker, AdLib or Sound Blaster FM sink. Mute and fullscreen exit
 stop further notes; the current finite note expires within three OS ticks.
@@ -197624,6 +197628,115 @@ one-row `OSAPI_GFX_BLIT1` of two cells lit pixels ~219 columns past its own
 48-pixel width; at x 328 (`WF_MGX1`) the same moves leave none. The
 2-pixel move is the fix shipped here; why an unaligned `BLIT1` writes past
 its width is a kernel question left open (§5.4.2.5 says it must not).
+
+### 114.11 Missiles, impacts and music
+
+The plan is docs/plans/WIREFLEET-MUSIC-PLAN.md.
+
+**What a shot looks like.** In battle a shot is a missile, on both PCs. On
+the shooter's, a launch flash and then smoke mark one of its own afloat
+ship squares (the target's row, column J, when none is afloat); the missile
+crosses to the enemy board along a straight line in whole-cell steps,
+pointing the way it travels (east, north-east, south-east and their
+mirrors), a puff of smoke one cell behind it, and lands on the target. On
+the defender's PC the same flight starts at a random enemy-water square and
+lands on its own board. Between the boards the missile is not drawn: the
+path runs through two virtual columns of gap. The landing square shows
+an explosion in four frames on a hit or sunk, or a splash in four frames on
+a miss, and only then its mark.
+
+**The result is not known until the missile lands - with no protocol
+change.** While its missile flies, the shooter does not take a RESULT: the
+first valid RESULT for the pending shot is copied aside (its 64 decoded
+bytes) and taken when the missile lands; a repeat is ignored. The defender
+does the same with the SHOT: the first valid SHOT for the turn starts the
+incoming flight and is judged when it lands, and a repeat for that turn is
+ignored meanwhile. Both still count as addressed traffic for the 55-tick
+silence rule. Nothing in §114.6 changes: a shooter already repeats SHOT
+until it hears a RESULT and a defender already replays a cached one, so a
+peer that answers a second late is a case the protocol had. The text lines,
+the sunk reveal and the cues therefore change at the landing, because that
+is when the state does. Timeline, on OS ticks: two of launch flash, then
+the missile advances three cells every two ticks (a path is at most 22
+cells, so at most 17 ticks, 0.93 s), hovers on the target until the result
+is taken (at most 36 ticks, then it is taken away and the square waits),
+and the impact is four frames of three ticks. Load, New fleet and leaving
+battle cancel a flight and take any stashed frame at once.
+
+**Drawn as cell stamps through the board's own cache.** Every sprite is a
+24x24 STAMP drawn over the tile a cell already shows, `(pixel AND a) OR o`
+per byte - the hit X's mechanism (§114.10.2) generalised - so one table
+pair a form serves every face: packed 4bpp (VGA and EGA; the planar path
+spreads a stamp's rows on the fly rather than caching them), 1bpp
+(Hercules and windowed CGA) and 2bpp (the CGA bracket, §114.8). The cell
+cache keys on the tile AND the stamp, so a frame redraws only the cells
+whose stamp changed - launch, head and trail, at most four a tick - and
+never erases: a cell a sprite leaves is recomposed opaque with no stamp.
+There is no idle repaint (§114.2): when no effect is live nothing draws.
+The sixteen stamps are E/NE/SE/W/NW/SW missiles, a launch flash, smoke,
+four explosion frames and four splash frames, converted by
+`tools/wirefleet_fx.py` from `apps/wirefleet/art/fx-source.png`, whose
+exact prompt is `FX-PROMPT.txt` beside it (codex image generation; the
+build never generates).
+
+**The stamps and the samples are lazy parts** (§20.12) of `WIREFLET.O88`,
+because its image and bss were 60,416 bytes of their 64KB segment:
+
+| row | part | unpacked | fetched |
+|---|---|---:|---|
+| 0 | `WFLETFX.GFX` | 13,824 | at the first tick in battle, kept until close |
+| 1 | `WFLET.SFX` | 12,304 | at launch on a Sound Blaster route; copied, dropped |
+
+The stamp bank is fetched only when `op_lazykb` says the heap holds it;
+otherwise shots are not animated and play exactly as before, with no toast.
+
+**Effects.** Three new cues - launch, explosion, splash - replace fire, hit
+and miss in battle. With the Sound Blaster tier (`OSAPI_SND_CAPS` has
+`SND_CAP_PCM_BG` and BL = 1) they are sampled: three 4,096-sample 8 kHz
+clips, CC0 (apps/wirefleet/sfx/CREDITS.md), copied into one 13KB page-safe
+claim (`OSAPI_MEM_CLAIM_DMA_HI`) as three external rings and played with
+`SND_OPENF_RING + SND_OPENF_EXT` (§34.5.3), 1942's shape (§101.6). On every
+other route they are finite tone sequences at priority 40h: a rising launch,
+a falling low rumble and a high scatter. A sunk, victory or defeat cue waits
+for the explosion to end.
+
+**Music.** "Ironclad", an original 21-second sea march in D minor
+(`tools/wirefleet_song.py` -> `wfsong.inc`), loops while the window is open.
+With FM (`SND_CAP_FM`) it is three voices on channels claimed by patch-load
+from 0..7 - channel 8 is the tone tier's, which is where the cues go - with
+quiet patches; with the tone route on the PC speaker it is the melody alone,
+self-expiring notes at priority 20h, below every cue. **It is silenced while
+a launch, an explosion or a splash plays**: every voice is keyed off when the
+effect starts and the track resumes at the row where it stopped, nine ticks
+after the effect ends; on the speaker it also yields to every other cue. M
+(Sound) silences everything; Music [U], on the Game menu, the track alone.
+Off, mute and close release the FM channels (verb 3); teardown releases
+whatever a forced close left.
+
+**A frame redraws its rows, not the boards.** `wf_fx_tick` marks the board
+rows the old and new sprites sit on and `wf_fx_draw` rescans only those
+(through the same cache); a full `wf_update` happens only when something
+else is dirty too. A whole-board rescan is **71 ms** on MartyPC's 4.77 MHz
+VGA XT before it draws anything, and an update that changes nothing 82 ms,
+so a flight drawn by updates showed 7 frames of 150 ms. On a colour window
+the colour stamps are also spread to planes once, into a 9KB claim of their
+own (`wf_fxplanarinit`; without it they are spread on the fly, which cost
+1.3 ms a scanline). Measured, a 17-cell flight then an explosion
+(`os8088_xt_vga` / `os8088_5150_herc`, guest cycles from `wf_fx_draw` to
+its return): flight frames **26-61 ms, median 54**, and impact frames 26-31
+ms on VGA; 13-37 ms and 14-18 ms on Hercules - about one tick a frame.
+
+**What it cost.** The image went from 39,703 to 44,170 bytes and the bss
+from 20,713 to 20,854: **65,024 of the segment's 65,536**, so the next
+feature here is a part or a module, not more image. The file is 26,553 ->
+47,943 bytes (the stamps pack 13,824 -> 5,310, the clips 12,304 -> 11,591).
+At run time the stamp bank is a 14KB claim from the first tick in battle
+(plus the 9KB planar copy on a colour window), and the clips a 13KB DMA
+claim on a Sound Blaster route only. On disk:
+`games360.img` 269 -> 290 of 354 clusters, `apps720.img` 688 -> 709 of
+713, and WireFleet is **off `apps360.img`** - that curated disk was 354 of
+354 (§24.6.1's rule, dated 2026-10-20 in the Makefile); `games360.img`
+carries it with every other game.
 
 ## 115. Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`)
 

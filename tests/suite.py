@@ -1920,8 +1920,9 @@ SOAK = [
     Row("wirefleetsystem", "soak", py("tests/wirefleetsystem.py"), 120.0,
         "WireFleet on 8088s: original 8250 lease and forced cleanup, CGA color fullscreen and return, saved-record validation, finite speaker/AdLib/SB cues (SPEC.md 114/115)",
         needs=("marty", "nasm", "pil"), wants=("build/wireflet360.img", "build/wireflet720.img", "build/os8088-360.img", "build/os8088-720.img"), timeout=300),
-    Row("wirefleetart", "soak", py("tests/wirefleet.py", "--art"), 1.0,
-        "WireFleet generated tiles: reproducibility, palette/bounds, distinct color/mono shot shapes (SPEC.md 114)",
+    Row("wirefleetart", "soak", py("tests/wirefleet.py", "--art"), 8.0,
+        "WireFleet generated tiles: reproducibility, palette/bounds, distinct color/mono shot shapes (SPEC.md 114); "
+        "the 16 effect stamps in three forms, the song and the Sound Blaster clips (114.11)",
         needs=("pil",)),
     Row("wfdraw", "soak", py("tests/wfdraw.py"), 120.0,
         "WireFleet's colour face priced in drawing calls (SPEC.md 114.10): five "

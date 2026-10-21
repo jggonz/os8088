@@ -1,0 +1,23 @@
+[
+  {
+    "file": "launch.wav",
+    "sha256": "4225c253a68d77a78326ef536cfcfc11fe5183ca4386a81105f19254f4c30dde",
+    "source": "thrusterFire_000",
+    "frames": 4096,
+    "rate": 8000
+  },
+  {
+    "file": "explode.wav",
+    "sha256": "6260333c7c1d3ddffc46bcc510c902d064a1663c5e03232f154895c4bfb590b8",
+    "source": "lowFrequency_explosion_001+explosionCrunch_000",
+    "frames": 4096,
+    "rate": 8000
+  },
+  {
+    "file": "splash.wav",
+    "sha256": "cdd233986a82cfca0f05100592fb272aa1c3d443c31d5c7f5b8af0ec1405bf9a",
+    "source": "cannon_miss",
+    "frames": 4096,
+    "rate": 8000
+  }
+]

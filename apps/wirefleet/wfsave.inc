@@ -62,6 +62,7 @@ wf_filedone:
     call wf_snapshot_check
     jc .bad
     call wf_disconnect
+    call wf_fx_cancel           ; 114.11: no flight outlives the old match
     call wf_soundquiet
     push ds
     pop es

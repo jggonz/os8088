@@ -13167,8 +13167,14 @@ APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/wireflet.o88 $(BUILD)/arkanoid.o88 
 # 2026-10-13): that disk had 29 of its 354 clusters free when isoTron arrived,
 # and the curation is remade every time this geometry runs out - games360.img
 # carries every game, isoTron among them, and is where a 360KB machine finds it.
+#
+# WIREFLEET IS NOT ON apps360.img EITHER (SPEC.md 114.11, dated 2026-10-20):
+# that disk was 354 of 354 clusters when WireFleet's missiles and music took
+# it from 26 clusters to 47 - the effect stamps and Sound Blaster clips are
+# parts of the one file. games360.img carries it with the other games.
 APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
-                    $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88,$(APPS_GAMES))
+                    $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
+                    $(BUILD)/wireflet.o88,$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -16189,12 +16195,24 @@ wirefleet-pair:
 wirefleettest: wirefleetdisk $(IMG)
 	python3 tests/wirefleetlink.py
 wirefleet: $(BUILD)/wireflet.o88
-$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc | $(BUILD)
+$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsong.inc apps/wirefleet/wfanim.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/wirefleet/art/fx.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc apps/os88parts.inc apps/os88partsbody.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
-$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $< -o $@
+# The two lazy parts (SPEC.md 114.11), in WF_P_* row order: the effect
+# stamps, assembled from the committed fx.inc, and the Sound Blaster clips,
+# packed from the committed CC0 WAVs by a standard-library tool.
+WFLETPARTS = $(BUILD)/WFLETFX.GFX $(BUILD)/WFLET.SFX
+$(BUILD)/WFLETFX.GFX: apps/wirefleet/wffxbank.asm apps/wirefleet/art/fx.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/WFLET.SFX: tools/wirefleet_sfx.py apps/wirefleet/sfx/samples.json $(wildcard apps/wirefleet/sfx/*.wav) | $(BUILD)
+	python3 tools/wirefleet_sfx.py -o $@
+$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin $(WFLETPARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@ $(foreach p,$(WFLETPARTS),--part $(p))
 apps/wirefleet/art/tiles.inc: apps/wirefleet/art/ships-source.png tools/wirefleet_assets.py
 	python3 tools/wirefleet_assets.py
+apps/wirefleet/art/fx.inc: apps/wirefleet/art/fx-source.png tools/wirefleet_fx.py
+	python3 tools/wirefleet_fx.py
+apps/wirefleet/wfsong.inc: tools/wirefleet_song.py
+	python3 tools/wirefleet_song.py
 wirefleetdisk: $(BUILD)/wireflet.img $(BUILD)/wireflet720.img $(BUILD)/wireflet120.img $(BUILD)/wireflet360.img
 $(BUILD)/wireflet.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py --size 1440 -o $@ $< apps/wirefleet/README.TXT
