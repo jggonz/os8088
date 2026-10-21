@@ -3850,7 +3850,7 @@ $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 SNDSTAMP := $(BUILD)/.sound-$(if $(NOPICOMEM),nopm,pm)$(if $(PM_BASE),-b$(PM_BASE))$(if $(PM_SB_PORT),-s$(PM_SB_PORT))
 
 $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc drivers/sound/covox.inc \
-                    drivers/sound/picomem.inc drivers/sound/sndpkg.inc \
+                    drivers/sound/picomem.inc drivers/sound/sndpkg.inc drivers/sound/mixer.inc \
                     drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(SNDDEF) -I drivers/sound/ -I drivers/ -I apps/ \
 		-o $@ drivers/sound/sound.asm
@@ -4179,7 +4179,7 @@ $(BUILD)/coldhma.sys: $(KERNFILE) boot/osrom.asm tools/os88rom.py tools/os88romf
 		"--drivers=$(HMADRV)" --drv-org=$(DRV_HMA_ORG)
 
 $(BUILD)/sound.hma.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc drivers/sound/covox.inc \
-                        drivers/sound/picomem.inc drivers/sound/sndpkg.inc \
+                        drivers/sound/picomem.inc drivers/sound/sndpkg.inc drivers/sound/mixer.inc \
                         drivers/os88drv.inc apps/os88api.inc $(BUILD)/sound.bin
 	$(NASM) -f bin -w+error $(SNDDEF) -DDRV_ORG=$(DRV_HMA_ORG) -I drivers/sound/ \
 		--before "[map symbols $(BUILD)/sound.hma.map]" \

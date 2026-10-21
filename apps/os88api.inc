@@ -601,6 +601,7 @@ SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
                                  ; 34.5.3.1)
 SND_CAP_EXTBLK   equ 80h         ; verb 0 honours SND_OPENF_BLKSH
                                  ; (SPEC.md 34.5.3)
+SND_CAP_MIXER    equ 0200h       ; readable hardware mixer (SPEC.md 34.15)
 SND_CAP_LPTDAC   equ 0100h       ; a COVOX on a parallel port (SPEC.md 34.14):
                                  ; the user picked the Covox tier on the Sound
                                  ; page and a port answered. Not a streaming

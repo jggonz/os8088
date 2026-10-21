@@ -48,6 +48,7 @@
 ; The FM / background-PCM / input bits went with the hardware that had them.
 SND_CAP_TONE     equ 01h        ; square voice: freq on/off
 SND_CAP_PCM_EXCL equ 08h        ; CPU-paced PCM out - exclusive clip contract
+SND_CAP_MIXER    equ 0200h      ; physical mixer, independent of sound tier
 SND_CAP_LPTDAC   equ 0100h      ; a Covox, announced by the user's tier -
                                 ; the driver's bit, read by the Sound page's
                                 ; dot (ctrl.inc) and nothing resident (34.14)

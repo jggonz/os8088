@@ -19,3 +19,16 @@ from shared source for the popup and package. The face must be designed in
 black and white first so Hercules and CGA are first-class presentations.
 
 Implementation and measured acceptance results will be added with each wave.
+
+## Hardware wave
+
+SOUND.DRV now owns descriptors for the three mixer families and offers
+INFO/GET/SET through its existing package door. Detection checks two values
+and restores the tested register. Source percentages round to the actual
+3/4/8/16/32-level hardware, stereo transactions are atomic, and the driver
+saves only exposed registers for detach. Mixer availability is independent
+of PCM-buffer ownership and the selected sound tier.
+
+Host verification: `make small` and `make` passed all 55 fast checks after
+building the small system disks required by the install-manifest check.
+Hardware and interaction evidence belongs to the final `mixer` row.
