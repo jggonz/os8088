@@ -974,9 +974,9 @@
   "sources": [
    "apps/syscheck"
   ],
-  "stamped": "b472c02d",
-  "strings": "4861a9b596fffd00",
-  "why": "System Check asks which drive (SPEC.md 118.13)"
+  "stamped": "b4d46a82",
+  "strings": "6c7bfd7a870376d8",
+  "why": "Section renumber 116 to 118 in source comments only; the page already describes the drive chooser and cites no section"
  },
  "SYSTEM": {
   "sources": [],
