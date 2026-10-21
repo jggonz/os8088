@@ -212,7 +212,9 @@ Here: tick os88net in Drivers, then Connect on its page. Linked means a Link dri
 9. HARD DISK, HIBERNATE
 ----------------------------
 
-Tick Hard Drive in Drivers; each FAT partition becomes a drive. Its page: Format (make and format a partition, click twice to confirm), Mount, and Install, which copies os8088 to a partition so the machine starts with no floppy. Install keeps existing files unless Erase is ticked; the partition you started from is never offered.
+INSTALL.O88, in the root of this disk, puts os8088 on a hard disk: it turns the driver on, asks which partition and whether to keep its files, then copies both disks. To upgrade, start from the hard disk and run it again with the new system disk in a floppy drive.
+
+Or tick Hard Drive in Drivers: its page has Format, Mount and Install.
 
 Hibernate (chip menu) writes everything to C:\HIBERNAT.IMG and stops. At the next start choose Resume to get every window back, or Discard.
 

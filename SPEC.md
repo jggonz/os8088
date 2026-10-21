@@ -197993,5 +197993,19 @@ agreeing with `HII_*`/`HIS_*`; `HDD.DRV` still inside 4,096 bytes.
 
 ### 117.9 What it cost
 
-Filled in from `tools/kernsize.py`, `tools/os88pkgsize.py` and the image sizes
-at the end of each wave (`docs/plans/INSTALL-PLAN.md`).
+Measured against `main` at `d2d88cd3`, both trees built with `make`:
+
+| | before | after | |
+|---|---:|---:|---|
+| kern_big `.text` / `.bss` / `.cold` | | +6 / +4 / +94 | **104 bytes, no rung crossed** (image 437 left, cold 251); `KERN_SIZE` unchanged at 97,792 |
+| kern_small `.text` | | +6 | the cell; its body is the refusing stub |
+| `CTRL.DRV` | 13,970 | 14,026 | +56, `CPE_DRVUP`; in memory only for one `DRVU_UP` |
+| `HDD.DRV` image | 4,096 | 4,096 | the door's forwarder paid for in `hdxms.inc`; the file is 3,614 → 3,610 |
+| `HDDTOOL.DRV` image | 16,499 | 17,138 | +639, `ipkg.inc`; `HDTOOL_KB` still 17; the packed file +520 |
+| `INSTALL.O88` | — | 7,642 + 632 bss | 5,846 bytes packed on the disk |
+| 360KB system disk | 633 / 706 | 647 / 706 | clusters in use; 59 spare |
+
+The resident bytes are the cell, `osapi_drv_use_x` and `drv_cp_closed`'s far
+entry: the load itself is `CTRL.DRV`'s (§2.8) and the install is
+`HDDTOOL.DRV`'s, both of which come off the disk when they are used and go
+back when they are done.

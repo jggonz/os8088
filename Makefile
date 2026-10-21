@@ -5635,7 +5635,8 @@ $(BUILD)/timer.o88: $(BUILD)/timer.bin tools/os88pkg.py $(PKGZSTAMP)
 # dependencies are the SDK and the two shared includes.
 $(BUILD)/install.bin: apps/install/install.asm apps/os88api.inc apps/os88ui.inc \
                       apps/os88dec.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/install/install.asm
+	$(NASM) -f bin -w+error --before "[map all $(BUILD)/install.map]" \
+		-I apps/ -o $@ apps/install/install.asm
 	@echo "install: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/install.o88: $(BUILD)/install.bin tools/os88pkg.py $(PKGZSTAMP)

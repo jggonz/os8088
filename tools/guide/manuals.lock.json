@@ -478,17 +478,17 @@
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "d0d605c1",
-  "strings": "3b0c6f26290d2442",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "86cfa38e",
+  "strings": "3cc5041b36daa9bf",
+  "why": "Gained a pointer to INSTALL.O88; the tool's own windows are unchanged (its new package verbs are not user-visible)"
  },
  "HDD_DRV": {
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "d0d605c1",
-  "strings": "3b0c6f26290d2442",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "86cfa38e",
+  "strings": "3cc5041b36daa9bf",
+  "why": "HDD.DRV's XMS arm keeps a segment and its door gained an installer verb; nothing a user sees changed"
  },
  "HELV_F88": {
   "sources": [],
@@ -515,6 +515,14 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "INSTALL_O88": {
+  "sources": [
+   "apps/install"
+  ],
+  "stamped": "86cfa38e",
+  "strings": "b47a3911d9ad48fe",
+  "why": "New page for the INSTALL wizard (SPEC.md 117)"
  },
  "INTRO_MID": {
   "sources": [],

@@ -92,17 +92,22 @@ actually been run. The build diary is `docs/HOW-INSTALL-WAS-BUILT.md`.
 
 ## Wave 3 — shipping and the gate
 
-- [ ] `$(SYSINST)` on the root of the four kern_big system disks, the emu
-      disk and the live media; not on kern_small's (`t_smallreq` agrees).
-- [ ] `tests/unit/t_install.py` (fast): §117.8's host assertions.
-- [ ] `tests/install.py` (soak, MartyPC `os8088_xt_hdd`): erase-install by the
-      wizard, the host reads the volume back, boot C:, upgrade by the wizard
-      keeping a planted file. Registered in `tests/suite.py`.
-- [ ] §117.9 filled in with measured costs; README's install paragraph points
-      at INSTALL; the diary's results section.
+- [x] `$(SYSINST)` on the root of the four kern_big system disks, the emu
+      disk and the live media; not on kern_small's. *Verified:* `t_install`
+      reads every root.
+- [x] `tests/unit/t_install.py` (fast, row `installabi`): the roots, both
+      small disks clean, `HD_ABI_VER` in source and image, the shared
+      `HDG_*`/`HDS_*` numbers, `DRVU_*` in kernel and SDK, `HDD.DRV` within
+      4,096 bytes. 19 checks.
+- [ ] `tests/install.py` (soak, row `install`, MartyPC `os8088_xt_hdd`):
+      written; runs in the final pass.
+- [x] §117.9 filled in from a base build of `main` at `d2d88cd3`.
+- [x] The user guide's page (`tools/guide/manuals/INSTALL_O88.md`, its
+      capture script) and a pointer from `HDDTOOL_DRV.md`; `README.TXT`'s
+      hard-disk paragraph leads with INSTALL (and still packs to 8,088).
 
 ## Final pass (once, after the last wave)
 
 `python3 tools/os88test.py soak -k install -k instdeep -k instkeep -k inststate
--k instrest -k hdauto -k hddcp -k instimg -k instcross` and then
-`make test-full`. A failing row re-runs alone after its fix.
+-k instrest -k hdauto -k hddcp -k instimg -k instcross -k instassoc -k hdboot`
+and then `make test-full`. Plus one look on Hercules. A failing row re-runs alone after its fix.
