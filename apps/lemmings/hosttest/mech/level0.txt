@@ -1,0 +1,45 @@
+# fixture level 0, "a flat ledge" (tools/os88lem.py FIXTURE_LEVELS):
+# FRAME VERB ARG - S n select button n (2 climber .. 9 digger), A i assign the
+# selected skill to lemming i, H x y r the hit test at world (x, y) with the
+# right button r and the assignment through it, R d release-rate direction,
+# P pause, N nuke - and h / n are H / N pressed MID-FRAME, which the package
+# queues and applies before the next frame.
+# A command applies before that frame runs (tools/lemsim.py, lemtest --mech).
+50 R 1          # the rate climbs one a frame...
+70 R 0          # ...and stops at 70
+100 S 2
+100 A 0         # a climber, who will meet the block at x 200
+130 S 3
+130 A 1         # a floater on a walker: the flag waits for a fall
+215 S 7
+215 A 1         # a basher with nothing in reach: four frames, then walks
+226 S 3
+226 A 9         # a floater straight out of the hatch, before 16 of fall
+227 S 7
+227 A 1         # the same basher again, at the block this time
+240 S 6
+240 A 2         # a builder: twelve bricks, then the shrug
+300 S 4
+300 A 3         # a bomber: 79 frames of fuse, OHNO, the crater
+330 S 5
+330 A 5         # a blocker
+360 S 9
+360 A 6         # a digger, through the slab and out of the world
+400 P 0
+420 P 0         # twenty paused frames: the clock and the rate stand still
+440 S 8
+440 A 7         # a miner
+600 S 4
+600 A 5         # the blocker, bombed: its field leaves the map
+# (no nuke here: everyone is accounted for by frame 845 - level2.txt nukes)
+344 S 9
+344 H 310 115 0  # a digger through the HIT TEST, on the walker at x 307:
+                 # it is the last non-prioritised lemming any hit test saw
+345 S 6
+345 H 225 115 1  # the RIGHT-CLICK GLITCH: the right button over the blocker
+                 # alone leaves Lemming1 nil, and the 1991 game gives the
+                 # builder to the lemming the last hit test saw (SPEC.md 116.8)
+500 S 2
+500 h 20 115 0   # a climber pressed MID-FRAME, on the walker at x 22: the
+                 # package queues it while the frame is part-stepped and
+                 # applies it before frame 501, where Lemmix assigns

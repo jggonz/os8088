@@ -156,7 +156,7 @@ wc_ondone:
     xchg al, [wc_rq]
     mov [wc_rqdone], al
     call wc_reply                       ; the stores, [wc_ercode], [wc_erwait]
-    test word [wc_dirty], WCD_PANE | WCD_TAIL | WCD_LEFT | WCD_RIGHT | WCD_NOTE
+    test word [wc_dirty], WCD_PANE | WCD_TAIL | WCD_TABS | WCD_RIGHT | WCD_NOTE
     jz .quiet
     mov byte [wc_act], 2                ; it brought something: the lamp, for a
 .quiet:                                 ; second or two (wc_ontimer)
@@ -332,6 +332,13 @@ wc_ontimer:
     or word [wc_dirty], WCD_HDR
     call wc_kick
 .draw:
+    cmp word [wc_hy2], 0                ; the header's clock, when the minute
+    je .fl                              ; turns
+    call OSAPI_CLK_GET
+    cmp bl, [wc_clkm]
+    je .fl
+    or word [wc_dirty], WCD_HDR
+.fl:
     jmp wc_cbflush
 
 ; --- wc_activity - a key or a press: not idle, and back from auto-away ------
@@ -361,26 +368,14 @@ wc_cbflush:
 .out:
     ret
 
-; --- wc_repaint - erase the content and paint it all, from a callback --------
+; --- wc_repaint - paint it all, from a callback ----------------------------
 ; The About card and a popup are drawn OVER the regions, so taking either
-; down is this: the content white and every region again.
+; down is this: the ground and every region again - wc_paint lays the
+; ground itself (the window is OWNBG). A theme change is one too.
 wc_repaint:
     mov bx, [wc_win]
     call OSAPI_WM_CLIP_SET
     jc .out
-    call wc_geom
-    jc .out
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [wc_ox]
-    mov bx, [wc_oy]
-    mov cx, ax
-    add cx, [wc_cw]
-    dec cx
-    mov dx, bx
-    add dx, [wc_ch]
-    dec dx
-    call OSAPI_GFX_FILL
     mov si, [wc_win]
     call wc_paint
     mov bx, [wc_win]
@@ -762,7 +757,7 @@ wc_efriend:
     call wc_ncopy
     inc byte [wc_fn]
     call wc_wantsave
-    or word [wc_dirty], WCD_LEFT
+    or word [wc_dirty], WCD_TABS | WCD_RIGHT
 .done:
     mov al, MD_MSG
     call wc_setmode
@@ -813,7 +808,7 @@ wc_frdel:
     dec byte [wc_fn]
     pop ax
     call wc_wantsave
-    or word [wc_dirty], WCD_LEFT
+    or word [wc_dirty], WCD_TABS | WCD_RIGHT
     ret
 
 ; --- wc_wantsave - WIRECHAT.CFG is owed a write: the wake handler does it ----
@@ -846,6 +841,16 @@ wc_onkey:
     cmp al, 9                           ; Tab: an @nick, or the next room
     je .tab
     mov byte [wc_cpl], 0                ; any other key ends a completion run
+    cmp ah, 0x3B                        ; F1, F2, F3: the status bar's legend
+    jb .nfk
+    cmp ah, 0x3D
+    ja .nfk
+    or al, al
+    jnz .nfk
+    mov al, ah
+    sub al, 0x3B
+    jmp wc_fkey
+.nfk:
     cmp ah, 0x49                        ; PgUp
     je .pgup
     cmp ah, 0x51                        ; PgDn
@@ -874,14 +879,23 @@ wc_onkey:
     pop ax
     pop bx
     jc .out
-    mov si, wc_ln
-    call os88line_edit
-    ; the Send button greys and ungreys with the field's emptiness
+    ; empty to not, or not to empty: the placeholder comes or goes and Send
+    ; greys or ungreys, so the field is drawn whole (SPEC.md 113.5)
     cmp bx, 0
-    je .grey
+    je .edge0
     cmp word [wc_ln+LN_LEN], 0
-    jne .out
-.grey:
+    je .edge
+    jmp short .cheap
+.edge0:
+    cmp word [wc_ln+LN_LEN], 0
+    jne .edge
+.cheap:
+    mov si, wc_ln
+    jmp os88line_edit
+.edge:
+    mov si, wc_ln
+    call os88line_draw
+    call wc_holder
     call wc_buttons_send
 .out:
     ret
@@ -937,6 +951,7 @@ wc_onkey:
 .tab:
     call wc_complete                    ; CF = 0: it was an @nick, completed
     jnc .out
+wc_nextroom:
     cmp byte [wc_view], WV_DM
     mov al, 0
     je .t
@@ -948,6 +963,31 @@ wc_onkey:
 .t:
     call wc_setview
     jmp wc_cbflush
+
+; --- wc_fkey - F1, F2 or F3, or a press on its legend: AL = 0, 1, 2 --------
+; F1 the help card, F2 the next room, F3 friend mode (SPEC.md 113.6.3).
+; The lock held, no clip.
+wc_fkey:
+    cmp al, 1
+    je wc_nextroom
+    ja .friend
+    mov byte [wc_abon], 2               ; the help card: the About card's
+    call wc_popdown                     ; frame, the keys for its lines
+    mov bx, [wc_win]
+    mov si, wc_hlplines
+    jmp os88ui_about
+.friend:
+    mov al, MD_FRIEND
+wc_modebtn:
+    cmp byte [wc_mode], MD_NICK         ; nick mode is not left this way,
+    je .out                             ; nor code mode
+    cmp byte [wc_mode], MD_KEY
+    je .out
+    call wc_setmode
+    call wc_geom                        ; the prompt moves the field's left
+    jmp wc_cbflush
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wc_complete - Tab right after '@' and part of a nick: the nick, off the
@@ -1122,34 +1162,15 @@ wc_onclick:
     call os88line_draw
     jmp short .spent
 .nf:
-    ; --- the scroll bar ------------------------------------------------------
-    mov bx, wc_sb
-    call os88ui_sbhit
-    cmp al, OS88UI_SBNONE
-    je .nsb
-    mov bx, -1
-    cmp al, OS88UI_SBUP
-    je .sbgo
-    mov bx, 1
-    cmp al, OS88UI_SBDOWN
-    je .sbgo
-    mov bx, [wc_rows]
-    dec bx
-    cmp al, OS88UI_SBPGDN
-    je .sbgo
-    neg bx
-    cmp al, OS88UI_SBPGUP
-    jne .spent
-.sbgo:
-    mov ax, bx
-    call wc_scrollby
-    jmp short .flush
-.nsb:
     call wc_where                       ; AL = WH_*, AH/BX = which
     cmp al, WH_PANE
     je .pane
-    cmp al, WH_LEFT
-    je .left
+    cmp al, WH_TAB
+    je .tab
+    cmp al, WH_SB
+    je .sb
+    cmp al, WH_FKEY
+    je .fkey
     cmp al, WH_RIGHT
     je .right
     cmp al, WH_NOTIFY
@@ -1167,11 +1188,19 @@ wc_onclick:
     mov [wc_sel], ah
     or word [wc_dirty], WCD_PANE
     jmp short .flush
-.left:
-    call wc_leftpick
+.tab:
+    mov al, ah
+    call wc_setview
+    jmp short .flush
+.fkey:
+    mov al, ah
+    call wc_fkey
+    jmp short .spent
+.sb:
+    call wc_sbpress                     ; BX = the band
     jmp short .flush
 .right:
-    call wc_rightnick                   ; SI = the member, CF none
+    call wc_rightnick                   ; SI = the nick, CF none
     jc .spent
     call wc_opendm
 .flush:
@@ -1190,80 +1219,108 @@ wc_opendm:
 .out:
     ret
 
-; --- wc_leftpick - a press on left band AH/BX's item (wc_where's answer) ----
-wc_leftpick:
-    mov cx, bx
-    call wc_lband                       ; AL = what, AH = which
-    cmp al, LB_ROOM
-    jne .dm
-    mov al, ah
-    jmp wc_setview
-.dm:
-    cmp al, LB_DM
-    jne .fr
-    mov al, ah
-    xor ah, ah
-    mov cl, 4                           ; WC_DREC = 16
-    shl ax, cl
-    add ax, wc_dms
-    mov si, ax
-    jmp short wc_opendm
-.fr:
-    cmp al, LB_FRIEND
-    jne .out
-    mov al, ah
-    call wc_frrec
-    jmp short wc_opendm
+; --- wc_sbpress - a press on band BX of the scroll column: an arrow is a
+; line, the track above or below the thumb a page (SPEC.md 113.6.2)
+wc_sbpress:
+    cmp byte [wc_sbon], 0
+    je .out
+    mov ax, -1
+    or bx, bx
+    jz .go
+    mov ax, [wc_rows]
+    dec ax
+    cmp bx, ax
+    mov ax, 1
+    je .go
+    mov ax, [wc_rows]
+    dec ax
+    cmp bx, [wc_sbt]
+    jb .up
+    mov dx, [wc_sbt]
+    add dx, [wc_sbn]
+    cmp bx, dx
+    jae .go
 .out:
     ret
+.up:
+    neg ax
+.go:
+    jmp wc_scrollby
 
 ; -----------------------------------------------------------------------------
 ; wc_where - which region is the point CX, DX (SCREEN) in?
-; out: AL = WH_*; for WH_PANE AH = the message (0xFF none); for WH_LEFT and
-;      WH_RIGHT BX = the band. clobbers DX, SI, DI
+; out: AL = WH_*; for WH_PANE AH = the message (0xFF none); for WH_TAB and
+;      WH_FKEY AH = which; for WH_RIGHT and WH_SB BX = the band.
+;      clobbers DX, SI, DI
 ; -----------------------------------------------------------------------------
 WH_NONE     equ 0
 WH_PANE     equ 1
-WH_LEFT     equ 2
+WH_TAB      equ 2
 WH_RIGHT    equ 3
 WH_NOTIFY   equ 4
+WH_SB       equ 5
+WH_FKEY     equ 6
 
 wc_where:
     sub cx, [wc_ox]                     ; content-relative from here
     sub dx, [wc_oy]
-    ; --- the status bar's right end: Notifications --------------------------
+    ; --- the status bar: Notifications at its right end, the legend ------
     cmp dx, [wc_sy]
     jb .nbar
     mov ax, [wc_cw]
     sub ax, WC_NOTIFYC * 8
     cmp cx, ax
-    jb .no
+    jb .fk
     mov al, WH_NOTIFY
     ret
-.nbar:
-    cmp dx, WC_HDRH + 3
-    jb .no
-    ; --- the left pane ---------------------------------------------------------
-    cmp word [wc_lx2], 0
-    je .nleft
-    cmp cx, [wc_lx2]
-    jae .nleft
-    mov ax, dx
-    sub ax, WC_HDRH + 3
-    xor dx, dx
-    mov bx, WC_LH
-    div bx
-    mov bx, ax
-    mov al, WH_LEFT
+.fk:
+    call .cell                          ; AL = the cell
+    mov bl, [wc_fkn]
+    xor bh, bh
+    cmp al, [wc_fkc+bx]
+    jae .no
+.fki:
+    or bx, bx
+    jz .no
+    dec bx
+    cmp al, [wc_fkc+bx]
+    jb .fki
+    mov ah, bl
+    mov al, WH_FKEY
     ret
-.nleft:
-    ; --- the right pane --------------------------------------------------------
+.nbar:
+    ; --- the tabs --------------------------------------------------------
+    mov ax, [wc_tby]
+    cmp dx, ax
+    jb .no
+    add ax, WC_LH
+    cmp dx, ax
+    jae .ntab
+    call .cell
+    mov bx, WC_NROOM
+    cmp al, [wc_tabc+bx]
+    jae .no
+.ti:
+    or bx, bx
+    jz .no
+    dec bx
+    cmp al, [wc_tabc+bx]
+    jb .ti
+    mov ah, bl
+    mov al, WH_TAB
+    ret
+.ntab:
+    ; --- the right pane --------------------------------------------------
     cmp word [wc_rx1], 0
     je .nright
     cmp cx, [wc_rx1]
     jbe .nright
+    cmp dx, [wc_iy]
+    jae .no
     mov ax, dx
-    sub ax, WC_HDRH + 3
+    sub ax, [wc_mid]
+    sub ax, 3
+    jb .no
     xor dx, dx
     mov bx, WC_LH
     div bx
@@ -1271,7 +1328,7 @@ wc_where:
     mov al, WH_RIGHT
     ret
 .nright:
-    ; --- the message pane ----------------------------------------------------
+    ; --- the message pane, and its scroll column -------------------------
     cmp cx, [wc_tx]
     jb .no
     mov ax, dx
@@ -1282,6 +1339,21 @@ wc_where:
     div bx
     cmp ax, [wc_rows]
     jae .no
+    mov bx, [wc_cols]                   ; the last cell: the scroll column
+    dec bx
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, [wc_tx]
+    cmp cx, bx
+    jb .msg
+    add bx, 8
+    cmp cx, bx
+    jae .no
+    mov bx, ax
+    mov al, WH_SB
+    ret
+.msg:
     add ax, [wc_top]
     call wc_lfind                       ; BX = the message
     mov ah, 0xFF
@@ -1293,29 +1365,47 @@ wc_where:
 .no:
     mov al, WH_NONE
     ret
+; AL = the cell CX is in (a band at x = 0)
+.cell:
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    ret
 
-; --- wc_rightnick - right band BX's member -> SI = the nick, CF = 1 none ----
+; --- wc_rightnick - right band BX's nick -> SI, and AL = RS_* it is; CF = 1
+; a band with no one on it
 wc_rightnick:
-    or bx, bx
-    jz .no                              ; the title band
-    dec bx
-    mov cx, bx                          ; the CX'th member
-    xor bx, bx
-.c:
-    cmp bl, [wc_rn]
-    jae .no
-    call wc_ismember
-    jc .n
-    jcxz .yes
-    dec cx
-.n:
-    inc bx
-    jmp short .c
-.yes:
-    mov ax, WC_RREC
-    mul bx
-    add ax, wc_ros
+    mov cx, bx
+    call wc_rsect                       ; AL = what, AH = which
+    cmp al, RS_MEMBER
+    jne .fr
+    push ax
+    mov cl, ah
+    xor ch, ch
+    call wc_nthmember
+    pop ax
+    ret
+.fr:
+    cmp al, RS_FRIEND
+    jne .dm
+    push ax
+    mov al, ah
+    call wc_frrec
+    pop ax
+    clc
+    ret
+.dm:
+    cmp al, RS_DM
+    jne .no
+    push ax
+    mov al, ah
+    xor ah, ah
+    mov cl, 4                           ; WC_DREC = 16
+    shl ax, cl
+    add ax, wc_dms
     mov si, ax
+    pop ax
     clc
     ret
 .no:
@@ -1337,13 +1427,15 @@ wc_onrclick:
     call wc_where
     cmp al, WH_PANE
     je .pane
-    cmp al, WH_LEFT
-    je .left
     cmp al, WH_RIGHT
     jne .out
-    call wc_rightnick                   ; a member: add as a friend?
+    call wc_rightnick                   ; SI = the nick, AL = RS_*
     jc .out
-    mov bx, si
+    cmp al, RS_FRIEND
+    je .left
+    cmp al, RS_MEMBER
+    jne .out
+    mov bx, si                          ; a member: add as a friend?
     call wc_isme
     je .out
     call wc_frfind
@@ -1356,13 +1448,7 @@ wc_onrclick:
     mov byte [wc_askwhat], 1
     jmp short .ask
 .left:
-    mov cx, bx
-    call wc_lband
-    cmp al, LB_FRIEND                   ; a friend: remove?
-    jne .out
-    mov al, ah
-    call wc_frrec
-    mov bx, si
+    mov bx, si                          ; a friend: remove?
     mov di, wc_askn
     mov cx, WC_NICKN
     call wc_ncopy
@@ -1463,7 +1549,7 @@ wc_answer:
     call wc_ncopy
     inc byte [wc_fn]
     call wc_wantsave
-    or word [wc_dirty], WCD_LEFT
+    or word [wc_dirty], WCD_TABS | WCD_RIGHT
     jmp wc_cbflush
 .rem:
     mov si, wc_askn
@@ -1492,20 +1578,21 @@ wc_onup:
     jne .out
     cmp al, WB_STATUS
     je .status
-    cmp al, WB_EMO
-    je .emo
     cmp al, WB_SEARCH
     je .search
-    cmp al, WB_FRIEND
-    je .friend
     call wc_enter                       ; Send: what Enter does in this mode
     jmp wc_cbflush
 .status:
     mov al, PP_STATUS
-    jmp short .pop
-.emo:
-    mov al, PP_EMO
-.pop:
+    jmp short wc_popup
+.search:
+    mov al, MD_FIND
+    jmp wc_modebtn
+.out:
+    ret
+
+; --- wc_popup - popup AL (PP_*) up - or down, when it is the one up --------
+wc_popup:
     cmp [wc_pop], al                    ; its own button again: shut it
     je .shut
     mov [wc_pop], al
@@ -1517,19 +1604,6 @@ wc_onup:
 .shut:
     call wc_popdown
     jmp wc_repaint
-.search:
-    mov al, MD_FIND
-    jmp short .mode
-.friend:
-    mov al, MD_FRIEND
-.mode:
-    cmp byte [wc_mode], MD_NICK         ; nick mode is not left by a button,
-    je .out                             ; nor code mode
-    cmp byte [wc_mode], MD_KEY
-    je .out
-    call wc_setmode
-    call wc_geom                        ; the prompt moves the field's left
-    jmp wc_cbflush
 .out:
     ret
 
@@ -1625,6 +1699,8 @@ wc_oncmd:
     je .stat
     cmp ah, WM_FRND
     je .frnd
+    cmp ah, WM_THEME
+    je .theme
     ; --- Chat --------------------------------------------------------------------
     cmp al, 0
     je .nick
@@ -1632,6 +1708,11 @@ wc_oncmd:
     je .flag
     cmp al, 2
     je .notify
+    cmp al, 3
+    jne .reconn
+    mov al, PP_EMO                      ; the emoticons, above Send
+    jmp wc_popup
+.reconn:
     ; Reconnect: a fresh session, now
     call wc_abandon
     mov byte [wc_rq], RQ_NONE
@@ -1696,8 +1777,21 @@ wc_oncmd:
     call wc_setnote
 .done:
     jmp wc_cbflush
+.theme:
+    ; --- Theme (SPEC.md 113.5.2): one a one-bit display cannot draw is greyed
+    ; and refused here too - a menu's grey is a picture, not a guard
+    or al, al
+    jz .th
+    cmp byte [wc_col], 0
+    je .done
+.th:
+    mov [wc_thm], al
+    call wc_wantsave
+    jmp wc_repaint                      ; wc_face: the pens, and the menu
 
-; --- wc_menulabels - the Chat menu's Notifications item says what it is ----
+; --- wc_menulabels - the Chat menu's Notifications item says what it is, and
+; the Theme menu which theme is drawn ('* ') and which this display cannot
+; draw (greyed, SPEC.md 113.5.2). clobbers AX, BX, SI, DI
 wc_menulabels:
     mov ax, wc_it_notoff
     cmp byte [wc_notify], 0
@@ -1705,6 +1799,40 @@ wc_menulabels:
     mov ax, wc_it_noton
 .on:
     mov [wc_i_chat + 4], ax
+    mov di, wc_thmi
+    xor bx, bx
+.t:
+    push di
+    or bx, bx
+    jz .live
+    cmp byte [wc_col], 0
+    jne .live
+    mov byte [di], MENU_DIS
+    inc di
+.live:
+    mov ax, '  '
+    cmp bl, [wc_eth]
+    jne .mk
+    mov al, '*'
+.mk:
+    mov [di], ax
+    inc di
+    inc di
+    push bx
+    shl bx, 1
+    mov si, [wc_thnames+bx]
+    pop bx
+.c:
+    lodsb
+    mov [di], al
+    inc di
+    or al, al
+    jnz .c
+    pop di
+    add di, 14
+    inc bx
+    cmp bx, TH_N
+    jb .t
     ret
 
 ; =============================================================================

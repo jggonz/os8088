@@ -21,42 +21,64 @@
 ; drawn whole. A W_PAINT owes every slot (wc_owe): the kernel white-filled
 ; the content before calling it, so nothing the slots say is true any more.
 ;
-; THE FACES. [wc_col] is 1 on a colour display (wcview.inc's wc_paint asks
-; OSAPI_WM_DISPLAY at each full paint) and selects the style table's second
-; pair and the glyphs' colours. The MONO face never adds a span, so every
-; band is the one span of its style - the call sequence wc_band made before
-; this file existed, to the call. Its pictures are the contract.
+; THE THEMES (SPEC.md 113.5.2). Every colour is a ROLE (R_*): a theme is one
+; row of wc_themes, copied into wc_pens by wc_face at each full paint, and a
+; style, a span, a glyph or a button asks wc_pens for its role. A theme change
+; is a full paint, which owes every slot, so no slot compares across two.
+; Monochrome is black and white alone: the same picture on a VGA as on a
+; Hercules or a CGA, where every other colour rounds (SPEC.md 39.4).
 ; =============================================================================
 
-; the styles: (ink, ground) on the mono face, then on the colour face. Every
-; style but INV is black on white in mono, which is what keeps that face's
-; pictures what they were
+wc_themes:      ; R_BG FG DIM ACC  HI HIFG  OK WARN BAD BADFG  MENTG MENTF  NICK x4
+    db CBLACK, CWHITE, CWHITE, CWHITE,  CWHITE, CBLACK                ; mono
+    db CWHITE, CWHITE, CWHITE, CBLACK,  CBLACK, CWHITE
+    db CWHITE, CWHITE, CWHITE, CWHITE
+    db CBLUE, CWHITE, CLGRAY, CLCYAN,  CLCYAN, CBLUE                  ; blue
+    db CLGREEN, CYELLOW, CLRED, CWHITE,  CMAGENTA, CWHITE
+    db CYELLOW, CLCYAN, CLGREEN, CLMAGENTA
+    db CBLACK, CLGREEN, CGREEN, CGREEN,  CLGREEN, CBLACK              ; green
+    db CLGREEN, CGREEN, CWHITE, CBLACK,  CGREEN, CWHITE
+    db CLGREEN, CWHITE, CLGREEN, CWHITE
+    db CBLACK, CYELLOW, CBROWN, CBROWN,  CYELLOW, CBLACK              ; amber
+    db CYELLOW, CBROWN, CLRED, CBLACK,  CBROWN, CWHITE
+    db CYELLOW, CYELLOW, CYELLOW, CYELLOW
+%if $ - wc_themes != TH_N * WC_NPEN
+  %error "wc_themes is TH_N rows of WC_NPEN roles"
+%endif
+
+; the styles: (ink, ground) as ROLES
 wc_stytab:
-    db CBLACK, CWHITE,  CBLACK, CWHITE      ; WS_NORM
-    db CWHITE, CBLACK,  CWHITE, CBLUE       ; WS_INV: a selection, the view
-    db CBLACK, CWHITE,  CBLACK, CLGRAY      ; WS_STRIP: header, titles, bar
-    db CBLACK, CWHITE,  CBLACK, CYELLOW     ; WS_MENT: a message naming us
-    db CBLACK, CWHITE,  CBLUE, CWHITE       ; WS_NOTE: the notice line
-    db CBLACK, CWHITE,  CDGRAY, CWHITE      ; WS_DIM: topic, a day divider
-    db CBLACK, CWHITE,  CRED, CWHITE        ; WS_ALERT: new messages
+    db R_FG, R_BG                           ; WS_NORM
+    db R_HIFG, R_HI                         ; WS_INV: a selection, the view
+    db R_ACC, R_BG                          ; WS_ACC: titles, the prompt
+    db R_MENTF, R_MENTG                     ; WS_MENT: a message naming us
+    db R_ACC, R_BG                          ; WS_NOTE: the notice line
+    db R_DIM, R_BG                          ; WS_DIM: a day divider
+    db R_BAD, R_BG                          ; WS_ALERT: new messages
 WS_NORM     equ 0
 WS_INV      equ 1
-WS_STRIP    equ 2
+WS_ACC      equ 2
 WS_MENT     equ 3
 WS_NOTE     equ 4
 WS_DIM      equ 5
 WS_ALERT    equ 6
 
-; the glyphs' colour-face ink: on a light ground, then on a dark one (blue or
-; black). The mono face takes the span's own ink, as wc_glyph always did
-wc_glink:
-    db CBLACK, CWHITE                       ; GL_PERSON
-    db CGREEN, CLGREEN                      ; GL_ONLINE
-    db CBROWN, CYELLOW                      ; GL_AWAY
-    db CRED, CLRED                          ; GL_BUSY
-    db CDGRAY, CLGRAY                       ; GL_GONE
-    db CBLACK, CWHITE                       ; GL_PLUG
-    db CBLACK, CWHITE                       ; GL_CUT
+; --- wc_pen - AL = the colour of role AL. Preserves the rest ----------------
+wc_pen:
+    push bx
+    mov bl, al
+    xor bh, bh
+    mov al, [wc_pens+bx]
+    pop bx
+    ret
+
+; --- wc_penc - [gfx_color] = role AL. Preserves every register --------------
+wc_penc:
+    push ax
+    call wc_pen
+    call OSAPI_SET_COLOR
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wc_mreset - an empty meta of style AL: one span, from cell 0, in the
@@ -76,6 +98,7 @@ wc_mreset:
     mov word [wc_meta+WCX_SP+1], 0xFFFF     ; span 0: the style's ink and ground
     mov byte [wc_meta+WCX_G0], 0xFF
     mov byte [wc_meta+WCX_G1], 0xFF
+    mov byte [wc_meta+WCX_UL], 0xFF
     pop di
     pop cx
     ret
@@ -125,19 +148,17 @@ wc_mbold:
     mov [wc_meta+WCX_BL], cl
     ret
 
-; --- wc_basepair - AL = ink, AH = ground of the meta's style, on this face --
+; --- wc_basepair - AL = ink, AH = ground of the meta's style, in this theme -
 wc_basepair:
     push bx
     mov bl, [wc_meta+WCX_STY]
     xor bh, bh
     shl bx, 1
-    shl bx, 1
-    cmp byte [wc_col], 0
-    je .m
-    inc bx
-    inc bx
-.m:
-    mov ax, [wc_stytab+bx]
+    mov ax, [wc_stytab+bx]              ; the two roles...
+    mov bl, ah
+    mov ah, [wc_pens+bx]                ; ...and their colours
+    mov bl, al
+    mov al, [wc_pens+bx]
     pop bx
     ret
 
@@ -231,7 +252,8 @@ wc_bandc:
     je .full
     mov si, wc_meta                     ; the same meta - but for which
     mov di, bx                          ; glyphs, which are a cell each and
-    xor cx, cx                          ; drawn alone (wc_bglyphs)?
+    xor cx, cx                          ; drawn alone (wc_bglyphs), and a
+    mov [wc_binkd], cl                  ; span's INK, which is its run again?
 .mc:
     cmp cx, WCX_G0 + 1
     je .mn
@@ -239,7 +261,10 @@ wc_bandc:
     je .mn
     mov al, [si]
     cmp al, [di]
-    jne .full
+    je .mn
+    call wc_isink                       ; CF = 0: a span's ink byte
+    jc .full
+    mov byte [wc_binkd], 1
 .mn:
     inc si
     inc di
@@ -264,6 +289,10 @@ wc_bandc:
 .tn:
     inc si
     loop .tc
+    cmp byte [wc_binkd], 0              ; a span whose ink moved: all its
+    je .tw                              ; cells are in the run
+    call wc_inkrun
+.tw:
     mov [wc_bfirst], dx
     cmp dx, 0xFFFF
     je .glyphs                          ; no cell moved
@@ -305,6 +334,67 @@ wc_bandc:
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- wc_isink - CF = 0 when meta byte CX is a live span's INK: a change
+; there is that span's run drawn again, its ground and its air unchanged.
+; Preserves all but flags
+wc_isink:
+    push ax
+    push dx
+    mov ax, cx
+    sub ax, WCX_SP
+    jb .no
+    mov dl, 3
+    div dl                              ; AL = the span, AH = the byte in it
+    cmp ah, 1
+    jne .no
+    cmp al, [wc_meta+WCX_NSP]
+    jae .no
+    pop dx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop ax
+    stc
+    ret
+
+; --- wc_inkrun - widen the run [DX, [wc_blast]] (DX = 0xFFFF none) by every
+; span whose ink is not the slot's. clobbers AX, BX, CX, SI, DI
+wc_inkrun:
+    mov bx, wc_meta + WCX_SP
+    mov al, [wc_meta+WCX_NSP]
+    mov [wc_bn], al
+.s:
+    mov di, bx
+    sub di, wc_meta
+    add di, [wc_bslot]
+    mov al, [bx+1]
+    cmp al, [di+1]
+    je .n
+    call wc_spse                        ; [SI, DI)
+    cmp si, di
+    jae .n
+    dec di
+    cmp dx, 0xFFFF
+    je .new
+    cmp si, dx
+    jae .lo
+    mov dx, si
+.lo:
+    cmp di, [wc_blast]
+    jbe .n
+    mov [wc_blast], di
+    jmp short .n
+.new:
+    mov dx, si
+    mov [wc_blast], di
+.n:
+    add bx, 3
+    dec byte [wc_bn]
+    jnz .s
     ret
 
 ; --- wc_bglyphs - the glyphs whose picture moved and that the run did not put
@@ -501,8 +591,9 @@ wc_spse:
     mov di, cx
     ret
 
-; --- wc_bairl - the two rows of air over cells [SI, DI) in colour AL --------
-; Preserves BX, SI, DI.
+; --- wc_bairl - the two rows of air over cells [SI, DI) in colour AL - the
+; lower one in the band's UNDERLINE when it has one (a section title's rule,
+; SPEC.md 113.5). Preserves BX, SI, DI.
 wc_bairl:
     push bx
     call OSAPI_SET_COLOR
@@ -516,6 +607,13 @@ wc_bairl:
     dec bx
     mov dx, [wc_by]
     call OSAPI_GFX_HLINE
+    push ax
+    mov al, [wc_meta+WCX_UL]
+    cmp al, 0xFF
+    je .ul
+    call OSAPI_SET_COLOR
+.ul:
+    pop ax
     add dx, WC_LH - 1
     call OSAPI_GFX_HLINE
     pop bx
@@ -597,7 +695,8 @@ wc_bbold:
     pop si
     ret
 
-; --- wc_bglyph - glyph BL at cell CL, over the span it sits in --------------
+; --- wc_bglyph - glyph BL at cell CL, over the span it sits in: the glyph's
+; own ROLE for its ink (wc_glrole), the span's ground for its ground.
 ; Preserves SI and DI.
 wc_bglyph:
     push si
@@ -605,7 +704,7 @@ wc_bglyph:
     mov [wc_bgid], bl
     push cx
     call wc_spanat
-    call wc_spcol                       ; AL = the span's ink, AH = its ground
+    call wc_spcol                       ; AH = the span's ground
     pop cx
     xor ch, ch
     shl cx, 1
@@ -615,145 +714,68 @@ wc_bglyph:
     mov dx, [wc_by]
     inc dx
     mov bl, [wc_bgid]
-    cmp bl, GL_LED
-    jae .led
-    cmp byte [wc_col], 0
-    je .pen
-    ; the colour face: the glyph's own ink, for a light ground or a dark one
     xor bh, bh
-    shl bx, 1
-    cmp ah, CBLUE
-    je .dark
-    cmp ah, CBLACK
-    jne .light
-.dark:
-    inc bx
-.light:
-    mov al, [wc_glink+bx]
-.pen:
-    xchg al, ah                         ; AL = the mask's ground, AH = the
-    call OSAPI_ICON_PEN                 ; data's ink
-    mov bl, [wc_bgid]
-    call wc_glrec
-    call OSAPI_ICON_DRAW
-    jmp short .out
-.led:
-    call wc_led
-.out:
+    mov al, [wc_glrole+bx]
+    call wc_pen                         ; AL = the glyph's ink
+    call wc_glyphat
     pop di
     pop si
     ret
 
-; --- wc_glrec - SI = glyph BL's record (wc_glyphs: 34 bytes each) ----------
-wc_glrec:
-    push bx
-    xor bh, bh
-    mov si, bx
-    shl bx, 1
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    add si, bx
-    add si, wc_glyphs
-    pop bx
-    ret
-
-; =============================================================================
-; THE LEDs (SPEC.md 113.5.2): the status bar's two lamps on the colour face,
-; 8x8 PLANAR pictures put down by ONE OSAPI_GFX_BLITP each (SPEC.md 5.4.3) - a
-; rim, a body, a shade and a glint is four colours, which no icon pen can lay
-; down in one call. Drawn on the strip's grey, which is their ground. A blit
-; refused (a window across two displays, SPEC.md 5.4.3) puts down the status
-; glyph in the lamp's colour instead: a lamp that is still a lamp.
-; =============================================================================
-; --- wc_led - lamp BL (GL_LED + LED_*) at CX, DX (screen) ---------------------
-wc_led:
-    push bp
-    push es
-    sub bl, GL_LED
-    xor bh, bh
-    mov [wc_bgid], bl
-    mov si, bx                          ; * 32: four planes of eight rows
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    add si, wc_leds
-    push ds
-    pop es
-    mov ax, cx
-    mov bx, dx
-    mov cx, 8
-    mov dx, 8
-    mov di, 8 | 0x4000                  ; the plane step; walk an armed clip
-    mov bp, 1                           ; the row stride
-    push ax
-    push bx
-    call OSAPI_GFX_BLITP
-    pop dx
-    pop cx
-    jnc .out
-    ; refused: the online glyph in the lamp's colour
-    mov bl, [wc_bgid]
-    xor bh, bh
-    mov ah, [wc_ledink+bx]
-    mov al, CLGRAY
-    call OSAPI_ICON_PEN
-    mov bl, GL_ONLINE
+; --- wc_glyphat - glyph BL at CX, DX (SCREEN): ink AL over ground AH --------
+; One opaque 8x8 icon: its mask is the whole cell. clobbers AX, SI
+wc_glyphat:
+    xchg al, ah                         ; AL = the mask's ground, AH = the
+    call OSAPI_ICON_PEN                 ; data's ink
     call wc_glrec
     call OSAPI_ICON_DRAW
-.out:
-    pop es
-    pop bp
     ret
 
-LED_OFF     equ 0
-LED_GREEN   equ 1
-LED_AMBER   equ 2
-LED_RED     equ 3
-wc_ledink:  db CDGRAY, CLGREEN, CYELLOW, CLRED
+; --- wc_glrec - SI = glyph BL's icon record, built in wc_glbuf from its eight
+; rows (wc_glyphs). The header and the mask are wc_face's, written once.
+; Preserves the rest.
+wc_glrec:
+    push ax
+    push bx
+    push di
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    lea si, [wc_glyphs+bx]
+    mov di, wc_glbuf + 2 + 16 + 1       ; the data's high bytes
+    mov bx, 8
+.r:
+    lodsb
+    mov [di], al
+    inc di
+    inc di
+    dec bx
+    jnz .r
+    mov si, wc_glbuf
+    pop di
+    pop bx
+    pop ax
+    ret
 
-; WC_LED8 - eight rows of eight colour digits (hex, one a pixel), emitted
-; PLANE-MAJOR as OSAPI_GFX_BLITP takes them: plane 0's eight rows, then
-; plane 1's... so the picture in the source IS the picture on the glass
-%macro WC_LED8 8
-  %assign %%p 0
-  %rep 4
-    %rep 8
-      %assign %%b 0
-      %assign %%x 0
-      %rep 8
-        %substr %%ch %1 %%x+1
-        %if %%ch >= 'a'
-          %assign %%c %%ch - 'a' + 10
-        %else
-          %assign %%c %%ch - '0'
-        %endif
-        %assign %%b %%b | (((%%c >> %%p) & 1) << (7 - %%x))
-        %assign %%x %%x + 1
-      %endrep
-      db %%b
-      %rotate 1
-    %endrep
-    %assign %%p %%p + 1
-  %endrep
-%endmacro
-
-; 7 the strip's grey, 8 the rim, 0 black, f white; the body and its shade
-wc_leds:
-    WC_LED8 '77888877', '78000087', '80777708', '80777008', '80770008', '80700008', '78000087', '77888877'
-    WC_LED8 '77888877', '78aaaa87', '8affaa28', '8afaaa28', '8aaaa228', '8aaa2228', '78222287', '77888877'
-    WC_LED8 '77888877', '78eeee87', '8effee68', '8efeee68', '8eeee668', '8eee6668', '78666687', '77888877'
-    WC_LED8 '77888877', '78cccc87', '8cffcc48', '8cfccc48', '8cccc448', '8ccc4448', '78444487', '77888877'
+; --- wc_glinit - wc_glbuf's header and mask: a 1x8 record, the whole cell ---
+wc_glinit:
+    mov word [wc_glbuf], 0x0801         ; db 1, 8
+    mov di, wc_glbuf + 2
+    mov cx, 8
+.m:
+    mov word [di], 0xFF00               ; the mask: every pixel
+    mov word [di+16], 0                 ; ...and the data's low bytes
+    inc di
+    inc di
+    loop .m
+    ret
 
 ; =============================================================================
 ; THE SLOTS
 ; =============================================================================
-; --- wc_owe - every slot owed, and the scroll bar's numbers, and the pane's
-; top as drawn (a W_PAINT: the content was white-filled). Preserves all.
+; --- wc_owe - every slot owed, and the pane's top as drawn (a full paint:
+; the content was filled in the ground). Preserves all.
 wc_owe:
     push bx
     push cx
@@ -764,12 +786,11 @@ wc_owe:
     add bx, WC_SLOTW
     loop .s
     mov bx, wc_sln
-    mov cx, 2 * WC_MAXB
+    mov cx, WC_MAXB
 .n:
     mov byte [bx+WCX_NSP], 0
     add bx, WC_SLOTNN
     loop .n
-    mov byte [wc_sbk], 0
     mov word [wc_dtop], 0xFFFF
     pop cx
     pop bx
@@ -900,224 +921,269 @@ wc_pshift:
     pop ax
     ret
 
+
 ; =============================================================================
-; THE COLOUR FACE'S BUTTONS (SPEC.md 13.8.10, 113.5.2) - MIDIRack's bevel
-; (apps/midirack/mrui.inc, mru_bevel): a black frame, a white top-left and a
-; grey bottom-right, the caption black on light grey; pressed, one grey line
-; in at the top and the left and the caption a pixel down and right; greyed,
-; the caption grey. The caption is opaque on the grey with the grey RINGED
-; round it in four fills, so no pixel is written twice. The record's labels
-; are wc_btown on the colour face (wcview.inc's wc_face), every entry this
-; proc; the captions stay wc_btlbl's.
-; in:  AX = the button, BX = its rect (screen), DI = its resolved flags; the
-;      lock held. out: every register preserved
+; THE BUTTONS (SPEC.md 13.8.10, 113.5.2): every one is the package's, on every
+; theme (OS88UI_OWN), so the library's press, drag-off and release reach the
+; theme's picture through os88ui_btn. Each painter: AX = the button, BX = its
+; rect (screen), DI = its resolved flags; the lock held, the clip armed.
+; Every register preserved.
 ; =============================================================================
-wc_bevel:
+wc_btown:       dw wc_stbtn, wc_srbtn, wc_sdbtn
+
+; --- wc_stbtn - STATUS: the header's right end, which IS the button. Pressed,
+; its glyph, word and nick are in the highlight; the header band draws it
+; through its slot, so a press costs what changed
+wc_stbtn:
     push ax
     push bx
     push cx
     push dx
     push si
-    shl ax, 1
-    mov si, ax
-    mov si, [wc_btlbl+si]               ; SI = the caption
-    mov ax, [bx]
-    mov [wc_bv], ax
-    mov ax, [bx+2]
-    mov [wc_bv+2], ax
-    mov ax, [bx+4]
-    mov [wc_bv+4], ax
-    mov ax, [bx+6]
-    mov [wc_bv+6], ax
-    xor al, al                          ; the frame
-    call OSAPI_SET_COLOR
+    push di
+    xor al, al
+    test di, OS88UI_DOWN
+    jz .up
+    inc ax
+.up:
+    mov [wc_hdown], al
+    call wc_geom
+    jc .out
+    call wc_phdr
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- wc_srbtn - SEARCH: a box in the accent (pressed, in the text colour), a
+; lens, a rule and 'Search...' dim. The box's inside is the ground the full
+; paint laid, and nothing here draws over a pixel twice
+wc_srbtn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call wc_rcopy
+    mov al, R_ACC
+    test di, OS88UI_DOWN
+    jz .f
+    mov al, R_FG
+.f:
+    call wc_penc
     mov ax, [wc_bv]
     mov bx, [wc_bv+2]
     mov cx, [wc_bv+4]
     mov dx, [wc_bv+6]
     call OSAPI_GFX_FRAME
-    inc ax                              ; the face, before the bevel takes its
-    inc bx                              ; lines out of it
-    dec cx
-    dec dx
-    mov [wc_bf], ax
-    mov [wc_bf+2], bx
-    mov [wc_bf+4], cx
-    mov [wc_bf+6], dx
-    xor cx, cx                          ; CX = the caption's shift
-    test di, OS88UI_DIS
-    jnz .up
-    test di, OS88UI_DOWN
-    jz .up
-    mov al, CDGRAY                      ; PRESSED: one grey line in at the top
-    mov ah, CDGRAY                      ; and the left
-    call wc_bvtl
-    inc cx
-    jmp short .face
-.up:
-    mov al, CWHITE                      ; UP: light top-left...
-    mov ah, CWHITE
-    call wc_bvtl
-    mov al, CDGRAY                      ; ...grey bottom-right
-    call wc_bvbr
-.face:
-    push cx
-    push si
-    call OSAPI_FONT_WIDTH               ; AX = the caption's width
-    pop si
-    pop cx
-    mov [wc_btw], ax
-    mov dx, [wc_bv+4]                   ; centred in the button, + the shift
-    sub dx, [wc_bv]
-    inc dx
-    sub dx, ax
-    sar dx, 1
-    add dx, [wc_bv]
-    add dx, cx
-    cmp dx, [wc_bf]
-    jge .x1
-    mov dx, [wc_bf]
-.x1:
-    mov [wc_btx], dx
-    mov dx, [wc_bv+6]
-    sub dx, [wc_bv+2]
-    inc dx
-    sub dx, 8
-    sar dx, 1
-    add dx, [wc_bv+2]
-    add dx, cx
-    mov [wc_bty], dx
-    mov byte [wc_ink], CLGRAY           ; the ring: above, below, left, right
-    mov ax, [wc_bf]
-    mov bx, [wc_bf+2]
-    mov cx, [wc_bf+4]
-    mov dx, [wc_bty]
-    dec dx
-    call wc_afill
-    mov bx, [wc_bty]
-    add bx, 8
-    mov dx, [wc_bf+6]
-    call wc_afill
-    mov bx, [wc_bty]
-    mov dx, bx
-    add dx, 7
-    mov cx, [wc_btx]
-    dec cx
-    call wc_afill
-    mov ax, [wc_btx]
-    add ax, [wc_btw]
-    mov cx, [wc_bf+4]
-    call wc_afill
-    mov cx, [wc_btx]                    ; the caption
-    mov dx, [wc_bty]
-    mov ax, CBLACK | (CLGRAY << 8)
-    test di, OS88UI_DIS
-    jz .ink
-    mov al, CDGRAY
-.ink:
-    call OSAPI_FONT_RUN
-    xor al, al
-    call OSAPI_SET_COLOR
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; wc_bvtl - the face's top row in AL and its left column in AH, taken out of
-; [wc_bf]
-wc_bvtl:
-    push ax
-    push bx
-    push cx
-    push dx
-    push ax
-    mov [wc_ink], al
-    mov ax, [wc_bf]
-    mov bx, [wc_bf+2]
-    mov cx, [wc_bf+4]
-    mov dx, bx
-    call wc_afill
-    pop ax
-    mov [wc_ink], ah
-    mov ax, [wc_bf]
-    mov bx, [wc_bf+2]
+    mov al, R_ACC                       ; the rule between the lens and the
+    call wc_penc                        ; words
+    mov ax, [wc_bv]
+    add ax, 15
     inc bx
-    mov cx, ax
-    mov dx, [wc_bf+6]
-    call wc_afill
-    inc word [wc_bf]
-    inc word [wc_bf+2]
+    dec dx
+    call OSAPI_GFX_VLINE
+    mov al, R_BG
+    call wc_pen
+    mov ah, al
+    mov al, R_ACC
+    call wc_pen                         ; AL = the lens, AH = the ground
+    mov cx, [wc_bv]
+    add cx, 4
+    mov dx, [wc_bv+2]
+    add dx, 3
+    mov bl, GL_LENS
+    push dx
+    call wc_glyphat
+    pop dx
+    mov al, R_BG
+    call wc_pen
+    mov ah, al
+    mov al, R_DIM
+    call wc_pen
+    mov cx, [wc_bv]
+    add cx, 20
+    mov si, wc_b_search
+    call OSAPI_FONT_RUN
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
 
-; wc_bvbr - the face's bottom row and right column in AL, taken out of it
-wc_bvbr:
+; --- wc_sdbtn - SEND: a solid block in the highlight, the caption a run as
+; wide as the block (so it is the block's middle rows), the rows above and
+; below it a fill each - every pixel once. Pressed: the text colour. Greyed:
+; the ground, a dim caption and a dim frame
+wc_sdbtn:
     push ax
     push bx
     push cx
     push dx
-    mov [wc_ink], al
-    mov ax, [wc_bf]
-    mov bx, [wc_bf+6]
-    mov cx, [wc_bf+4]
+    push si
+    push di
+    call wc_rcopy
+    mov ax, R_HIFG | (R_HI << 8)        ; AL = the caption's role, AH = the
+    test di, OS88UI_DIS                 ; block's
+    jz .live
+    mov ax, R_DIM | (R_BG << 8)
+    jmp short .go
+.live:
+    test di, OS88UI_DOWN
+    jz .go
+    mov ax, R_BG | (R_FG << 8)
+.go:
+    push di
+    call wc_pen
+    xchg al, ah
+    call wc_pen
+    xchg al, ah                         ; AL = the caption, AH = the block
+    push ax
+    mov al, ah
+    call OSAPI_SET_COLOR
+    mov ax, [wc_bv]                     ; above the caption
+    mov bx, [wc_bv+2]
+    mov cx, [wc_bv+4]
     mov dx, bx
-    call wc_afill
-    mov ax, cx
-    mov bx, [wc_bf+2]
-    mov dx, [wc_bf+6]
-    dec dx
-    call wc_afill
-    dec word [wc_bf+4]
-    dec word [wc_bf+6]
+    add dx, (WC_BOXH - 8) / 2 - 1
+    call OSAPI_GFX_FILL
+    add dx, 9                           ; below it
+    mov bx, dx
+    mov dx, [wc_bv+6]
+    call OSAPI_GFX_FILL
+    pop ax
+    mov cx, [wc_bv]
+    mov dx, [wc_bv+2]
+    add dx, (WC_BOXH - 8) / 2
+    mov si, wc_b_sendc
+    call OSAPI_FONT_RUN
+    pop di
+    test di, OS88UI_DIS
+    jz .out
+    mov al, R_DIM
+    call wc_penc
+    mov ax, [wc_bv]
+    mov bx, [wc_bv+2]
+    mov cx, [wc_bv+4]
+    mov dx, [wc_bv+6]
+    call OSAPI_GFX_FRAME
+.out:
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
 
-; wc_afill - AX..DX (SCREEN) in [wc_ink], or nothing when it is empty
-wc_afill:
-    cmp cx, ax
-    jl .r
-    cmp dx, bx
-    jl .r
+; --- wc_rcopy - the rect at BX into wc_bv. Preserves all ------------------
+wc_rcopy:
     push ax
-    mov al, [wc_ink]
-    call OSAPI_SET_COLOR
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov si, bx
+    mov di, wc_bv
+    movsw
+    movsw
+    movsw
+    movsw
+    pop es
+    pop di
+    pop si
     pop ax
-    call OSAPI_GFX_FILL
-.r:
     ret
-
-; the colour face's labels array: every button this painter (OS88UI_OWN)
-wc_btown:       dw wc_bevel, wc_bevel, wc_bevel, wc_bevel, wc_bevel
 
 ; -----------------------------------------------------------------------------
-; wc_face - which face this paint draws (SPEC.md 113.5.2), asked of the
-;           display the window is ON at each full paint: 4 bits a pixel is the
-;           colour face, anything less the mono one. Every slot owed - the
-;           kernel white-filled the content - and the buttons' labels the
-;           face's. clobbers AX, BX, CX, DX, SI
+; wc_face - what this paint draws (SPEC.md 113.5.2), asked of the display the
+;           window is ON at each full paint: its depth decides whether the
+;           theme chosen can be drawn, and its kind and size are the header's
+;           words. Every slot owed - the content is about to be filled - and
+;           the menu's greying the display's. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wc_face:
     mov bx, [wc_win]
-    call OSAPI_WM_DISPLAY               ; DH = bits per pixel
+    call OSAPI_WM_DISPLAY               ; AX x BX, DL the kind, DH the depth
+    push dx
+    push bx
+    push ax
     xor al, al
     cmp dh, 1
     jbe .m
     inc ax
 .m:
     mov [wc_col], al
+    ; --- the header's words: 'VGA 640x480 / 16 COLORS' ---------------------
+    mov di, wc_adapt
+    mov bx, wc_adapt + WC_ADAPTN - 2
+    mov si, wc_s_vga
+    cmp dl, VID_HERC
+    jne .k1
+    mov si, wc_s_herc
+.k1:
+    cmp dl, VID_CGA
+    jne .k2
+    mov si, wc_s_cga
+.k2:
+    cmp dl, VID_EGA
+    jne .k3
+    mov si, wc_s_ega
+.k3:
+    call wc_put
+    pop ax
+    xor dx, dx
+    call wc_putd32
+    mov al, 'x'
+    call wc_putc
+    pop ax
+    xor dx, dx
+    call wc_putd32
+    pop dx
+    mov si, wc_s_mono
+    cmp dh, 1
+    jbe .d
+    mov si, wc_s_16c
+.d:
+    call wc_put
+    mov byte [di], 0
+    ; --- the theme, and its pens ------------------------------------------
+    xor ax, ax
+    cmp [wc_col], al
+    je .t
+    mov al, [wc_thm]
+    cmp al, TH_N
+    jb .t
+    mov al, TH_DEFAULT
+    mov [wc_thm], al
+.t:
+    mov [wc_eth], al
+    mov cl, 4                           ; * WC_NPEN
+    shl ax, cl
+    add ax, wc_themes
+    mov si, ax
+    mov di, wc_pens
+    mov cx, WC_NPEN
+.c:
+    lodsb
+    mov [di], al
+    inc di
+    loop .c
+    mov al, [wc_pens+R_FG]              ; the field: the text on the ground,
+    mov ah, [wc_pens+R_BG]              ; its own frame put out of sight (the
+    mov [os88line_pens], ax             ; input row's box is the frame)
+    mov [os88line_pens+2], ah
+    call wc_glinit
     call wc_owe
-    mov ax, wc_btlbl
-    cmp byte [wc_col], 0
-    je .l
-    mov ax, wc_btown
-.l:
-    mov [wc_btrec + OS88UI_BT_LABELS], ax
-    ret
+    jmp wc_menulabels
+%if WC_NPEN != 16
+  %error "wc_face multiplies a theme by 16 with a shift"
+%endif

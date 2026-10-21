@@ -67,3 +67,13 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
                        # and committed, so it needs no user-supplied asset, but it is not
                        # on the standard images, the allapps floppy or the live media
                        # until the maintainer decides it should be (the game is complete).
+local      lemmings    # SPEC.md 116. DEVELOPERS ONLY, by the owner's decision
+                       # (2026-10-21, PR #168 merged): its data is the original DOS
+                       # Lemmings' 26 files, DMA Design's and still commercially
+                       # owned, FETCHED by tools/getlemmings.py into a developer's
+                       # own tree and never committed (CONTRIBUTING.md 6) - so no
+                       # standard image, allapps floppy, live payload or release
+                       # zip redistributes it, where the Apple II ROM and the Frotz
+                       # stories (fetched the same way) do ride the live media.
+                       # `make lemmings` / `make lemmingsdisk` build it standalone,
+                       # `make xt-lemmings` / `make 386-lemmings` boot it in 86Box.

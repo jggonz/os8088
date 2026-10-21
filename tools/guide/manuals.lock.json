@@ -562,6 +562,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "LEMMINGS_O88": {
+  "sources": [
+   "apps/lemmings"
+  ],
+  "stamped": "b63b5892",
+  "strings": "2fd010e1297a645f",
+  "why": "first page: written from README.TXT and the launcher, play and results screens of the shipped build"
+ },
  "LICENSE": {
   "sources": [],
   "stamped": "e4576a70",
@@ -970,6 +978,14 @@
   "strings": "c5eb21b124ad2c07",
   "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
  },
+ "SYSCHECK_O88": {
+  "sources": [
+   "apps/syscheck"
+  ],
+  "stamped": "b4d46a82",
+  "strings": "6c7bfd7a870376d8",
+  "why": "Section renumber 116 to 118 in source comments only; the page already describes the drive chooser and cites no section"
+ },
  "SYSTEM": {
   "sources": [],
   "stamped": "e4576a70",
@@ -1196,17 +1212,17 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "2edd2c29",
-  "strings": "9f00405fd48854f1",
-  "why": "dates and day dividers, @mentions and Tab completion, the colour face and its lamps (SPEC.md 113.2.4, 113.5.1, 113.5.2)"
+  "stamped": "d9e253f7",
+  "strings": "37e2a465c977877a",
+  "why": "redraw-cost change only (ink-only runs, fixed-width fields): nothing a reader sees differently"
  },
  "WIREFLET_O88": {
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "e3e1efbf",
-  "strings": "24bef22c86f73ff1",
-  "why": "2400 baud and Link > Statistics described"
+  "stamped": "3f9bc879",
+  "strings": "4f7d7f10c65ff1a8",
+  "why": "missiles, impacts, music and the Music U item added to Connect and deploy and Display and sound (SPEC 114.11)"
  },
  "WORD": {
   "sources": [],

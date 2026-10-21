@@ -1,6 +1,7 @@
 ; WireFleet — Two PCs. Two fleets. One winner. SPEC.md 114.
 %include "os88api.inc"
-    OS88_HEADER 'WireFleet', wf_entry, 1
+    OS88_HEADER 'WireFleet', wf_entry, OS88_F_ICON | OS88_F_PARTS
+%include "os88parts.inc"
     OS88_ICON16
     dw 0,0,0x0180,0x03c0,0x03c0,0x07e0,0x1ff8,0x7ffe
     dw 0xffff,0xffff,0x7ffe,0x3ffc,0x7ffe,0xffff,0x6666,0
@@ -9,6 +10,8 @@
     OS88_ICON16_END
 
 wf_entry:
+    call op_load                ; SI is the kernel's: the name, FIRST (20.12).
+                                ; Both parts are lazy, so this is the copy
     mov si, wf_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -44,8 +47,11 @@ wf_entry:
     jnc .clock
     mov byte [wf_fallback], 1
 .clock:
+    call wf_pcm_open            ; 114.11: the samples, on a Sound Blaster
     call wf_new
     call wf_autostart           ; 114.9: look for the opponent at once
+    call wf_geometry            ; (the stamps' planar copy asks the display)
+    call wf_fx_need             ; 114.11: the stamp bank
     mov bx, [wf_win]
     clc
 .out:
@@ -181,6 +187,8 @@ wf_onkey:
     je .new
     cmp al, 'm'
     je .mute
+    cmp al, 'u'
+    je .music
     cmp al, 'y'
     je .ready
     cmp al, 't'
@@ -234,6 +242,9 @@ wf_onkey:
     call wf_soundquiet
 .soundupdate:
     jmp wf_update
+.music:
+    call wf_musictoggle
+    jmp wf_update
 .ready:
     cmp byte [wf_ready], 0
     jne .out
@@ -267,6 +278,8 @@ wf_command:
     je wf_save
     cmp al, 3
     je wf_load
+    cmp al, 5
+    je wf_onkey.music
     jmp wf_onkey.mute
 .fleet:
     cmp al, 0
@@ -491,6 +504,14 @@ WF_CALLBACK wf_closeentry, wf_close
 wf_close:
     call wf_disconnect
     call wf_soundquiet
+    call wf_pcm_close
+    mov dx, [wf_fxpseg]
+    or dx, dx
+    jz .bank
+    call OSAPI_MEM_FREE
+.bank:
+    mov al, WF_P_FX
+    call op_drop
     clc
     ret
 
@@ -508,11 +529,11 @@ wf_tpl:
     dw wf_title,wf_paint,wf_keyentry,wf_clickentry
 wf_prefs: dw 600,414, 600,304, 600,154
     OS88_MENUSET wf_menus, wf_title, wf_commandentry
-        OS88_MENU wf_gamemenu, wf_gameitems, 5
+        OS88_MENU wf_gamemenu, wf_gameitems, 6
         OS88_MENU wf_fleetmenu, wf_fleetitems, 3
         OS88_MENU wf_linkmenu, wf_linkitems, 5
     OS88_MENUSET_END wf_menus
-wf_gameitems: dw wf_newlabel,wf_readylabel,wf_savelabel,wf_loadlabel,wf_soundlabel
+wf_gameitems: dw wf_newlabel,wf_readylabel,wf_savelabel,wf_loadlabel,wf_soundlabel,wf_musiclabel
 wf_fleetitems: dw wf_rotatelabel,wf_autolabel,wf_clearlabel
 wf_linkitems: dw wf_autolinklabel,wf_com1label,wf_com2label,wf_disconnectlabel,wf_statslabel
 wf_title: db 'WireFleet',0
@@ -532,6 +553,7 @@ wf_autolabel: db 'Auto A',0
 wf_clearlabel: db 'Clear C',0
 wf_soundlabel: db 'Sound M',0
 wf_soundoff: db 'Muted M',0
+wf_musiclabel: db 'Music U',0
 wf_firelabel: db 'Fire Enter',0
 wf_chatlabel: db 'Chat [T]',0
 wf_connectlabel: db 'Connect',0
@@ -544,7 +566,7 @@ wf_ablines: dw wf_a1,wf_a2,wf_a3,wf_a4,0
 wf_a1: db 'WireFleet for os8088',0
 wf_a2: db 'Two PCs. Two fleets. One winner.',0
 wf_a3: db 'Naval battles over a null modem',0
-wf_a4: db '1-5 ship, R rotate, A auto, Y ready',0
+wf_a4: db '1-5 ship, R rotate, A auto, Y ready, U music',0
 wf_placehelp: db 'Place: click/Enter  R rotate  1-5 ship  Right-click remove',0
 wf_allplaced: db 'All five placed. Ready [Y] locks your fleet. N: new fleet',0
 wf_cannotplace: db 'Cannot place here: keep every square on water, inside the grid.',0
@@ -574,6 +596,7 @@ wf_digit: db '  ',0
 %include "wirefleet/wflink.inc"
 %include "wirefleet/wfchat.inc"
 %include "wirefleet/wfsound.inc"
+%include "wirefleet/wfanim.inc"
 %include "wirefleet/wfsave.inc"
 %include "wirefleet/wffull.inc"
 %include "wirefleet/wfvideo.inc"
@@ -592,9 +615,19 @@ wf_digit: db '  ',0
 %define FLAT_BIG
 %include "os88flat.inc"
 %include "wirefleet/art/tiles.inc"
+%include "wirefleet/art/fx.inc"
+
+; The two lazy parts (SPEC.md 114.11): the effect stamps and the samples.
+; Row order is the Makefile's WFLETPARTS.
+WF_P_FX  equ 0                  ; WFLETFX.GFX  the stamp bank, three forms
+WF_P_SFX equ 1                  ; WFLET.SFX    Sound Blaster clips
+OS88_PARTS_BEGIN 2
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP
+OS88_PARTS_END
 
 ; The region can move: no segment pointers outlive a callback in this wave.
-%assign WF_BSS 0
+%assign WF_BSS OP_BSS             ; the parts standard's bss comes first
 %macro WF_VAR 2
 %1 equ os88_image_end+WF_BSS
 %assign WF_BSS WF_BSS+%2
@@ -798,6 +831,50 @@ WF_VAR wf_evshown,74
 WF_VAR wf_statbuf,75
 WF_VAR wf_statshown,74
 WF_VAR wf_band,38*16
+WF_VAR wf_musicoff,1
+WF_VAR wf_cueq,1
+WF_VAR wf_fxleft,1
+WF_VAR wf_bgmmode,1
+WF_VAR wf_bgmsound,1
+WF_VAR wf_bgmch,3
+WF_VAR wf_bgmptr,2
+WF_VAR wf_bgmdue,2
+WF_VAR wf_pcmseg,2
+WF_VAR wf_pcmflags,1
+WF_VAR wf_pcmhandle,1
+WF_VAR wf_pcmactive,1
+WF_VAR wf_fxseg,2
+WF_VAR wf_fxtried,1
+WF_VAR wf_fxmode,1
+WF_VAR wf_fxt0,2
+WF_VAR wf_fxdt,1
+WF_VAR wf_fxboard,1
+WF_VAR wf_fxcell,1
+WF_VAR wf_fxlx,1
+WF_VAR wf_fxly,1
+WF_VAR wf_fxtx,1
+WF_VAR wf_fxty,1
+WF_VAR wf_fxdx,1
+WF_VAR wf_fxdy,1
+WF_VAR wf_fxn,1
+WF_VAR wf_fxk,1
+WF_VAR wf_fxland,1
+WF_VAR wf_fxdir,1
+WF_VAR wf_fxspr,WF_FXSPR*2
+WF_VAR wf_fxnew,WF_FXSPR*2
+WF_VAR wf_fxstash,1
+WF_VAR wf_fxreplay,1
+WF_VAR wf_fxframe,64
+WF_VAR wf_fxcache,200
+WF_VAR wf_rowfx,10
+WF_VAR wf_fxnow,1
+WF_VAR wf_fxstamp,1
+WF_VAR wf_fxand,2
+WF_VAR wf_fxor,2
+WF_VAR wf_fxtmp,24
+WF_VAR wf_fxrows,4
+WF_VAR wf_fxpseg,2
+WF_VAR wf_fxptried,1
 wf_savepad equ (512-((os88_image_end-$$+WF_BSS)&511))&511
 wf_savebuf equ os88_image_end+WF_BSS+wf_savepad
     OS88_BSS WF_BSS+wf_savepad+512

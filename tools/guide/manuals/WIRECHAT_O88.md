@@ -42,45 +42,62 @@ the disk, so anyone with the disk has the code too.
 
 ## The window
 
+WireChat looks like a BBS terminal: a dark screen ruled in a bright colour,
+the rooms as tabs along the top and the people down the right.
+
 | Part | What it shows |
 |---|---|
-| Header | Your nick, your status (**Offline** until connected) and the **Set status...** button |
-| ROOMS | The four rooms, each with how many messages you have not read, and `@` when someone has mentioned you there |
-| MESSAGES | Your private conversations, each with its unread count |
-| FRIENDS ONLINE | Your friends who are connected now, and **+ Add friend** at the foot |
-| Centre | The room's name and topic, the **Search** button, the messages, a line for notices, and the field with **:)** and **Send** |
-| MEMBERS | Who is in this room, with each person's status. In a private conversation it is **ONLINE**, everyone connected |
-| Status bar | The connection, how many are in the room, and **Notifications: On** or **Off** |
+| Header | **WireChat**, the screen it is running on (for example `VGA 640x480 / 16 COLORS`), and at the right your status and nick. On a tall window a second line shows the date and time |
+| Tabs | The four rooms. The room you are in is highlighted; a room with messages you have not read shows how many, and `@` when someone has mentioned you there |
+| Centre | The room's name and topic, the **Search...** box, the messages with a scroll column at their right, a line for notices, and the field with **Send** |
+| ONLINE | Who is in this room, with each person's status. In a private conversation it is everyone connected |
+| FRIENDS | Your friends, with the status of those who are connected |
+| DIRECT | Your private conversations, each with its unread count, or **No direct messages** |
+| Status bar | `F1 Help`, `F2 Rooms` and `F3 Friends`, the connection lamp, how many are in the room, and **Notifications: On** or **Off** |
 
-Each message shows its time and the sender's nick in bold, with the text
-below. Times are local, worked out from the machine's clock, and a line such
-as `---- Tue Oct 20 ----` above a message starts each new day, so you can
-tell yesterday's messages from today's. The status glyphs are a filled
-circle for Online, a clock for Away and a barred circle for Busy.
+Each message is one line: its time, the sender's nick in bold and its own
+colour, and the text, which wraps onto further lines under the text. Times
+are local, worked out from the machine's clock, and a line such as
+`---- Tue Oct 20 ----` above a message starts each new day, so you can tell
+yesterday's messages from today's. A message that mentions you is
+highlighted. The status glyphs are a filled square for Online, a clock for
+Away and a barred square for Busy; a hollow square is a friend who is not
+connected.
 
-On a VGA or EGA screen WireChat is in colour. Unread counts are red badges,
-and a room where you were mentioned has a magenta one. The room you are in
-is blue. Each person's nick always has the same colour, and a message that
-mentions you has a yellow header. Online is green, Away brown and Busy red.
-Two lamps at the left of the status bar replace the link glyph. The first is
-the connection: green when connected, amber while connecting, red with no
-network card or when the server does not answer. The second lights amber
+The lamp in the status bar is the connection: lit when connected, in a
+warning colour while connecting, and in the alarm colour with no network
+card or when the server does not answer. A small diamond beside it lights
 while a message you sent is on its way and for a moment when something
-arrives. On a CGA or Hercules screen WireChat looks as it always did.
+arrives.
 
-The window can be resized. A narrow window drops the MEMBERS pane, and a
-narrower one drops the left pane too; the **Rooms** menu still changes room.
-On a short screen such as a CGA, the topic line goes and each message takes
-one line, `time nick: text`.
+The window can be resized. A narrow window drops the ONLINE, FRIENDS and
+DIRECT pane; the **Rooms** menu and the tabs still change room. On a short
+screen such as a CGA, the header is one line and the date and time are left
+to the menu bar's clock.
+
+## Themes
+
+The **Theme** menu has four looks: **Monochrome**, **Blue**, **Green** and
+**Amber**. Blue is the first one you see: white text on blue, ruled in light
+cyan. Green is a black screen in green, and Amber a black screen in yellow
+and brown, like the monitors of the time. Monochrome is black and white
+alone. The one in use has `*` beside it, and WireChat remembers your choice.
+
+A CGA or Hercules screen shows only black and white, so there WireChat is
+always Monochrome and the other three are greyed. The choice is kept: on a
+machine with two screens, drag the window onto the colour one and it is
+drawn in your theme again.
 
 ## Talking in a room
 
-Type in the field and press `Return` or click **Send**. **Send** is greyed
-while the field is empty. A message is up to 200 characters. The **:)**
-button opens eight emoticons; click one to type it where the caret is.
+Type in the field and press `Return` or click **Send**. While the field is
+empty it says where your message will go, such as `Message #lobby`, and
+**Send** is greyed. A message is up to 200 characters. **Chat >
+Emoticons...** opens eight emoticons above **Send**; click one to type it
+where the caret is.
 
-Click a room in ROOMS, choose it from the **Rooms** menu, or press `Tab` for
-the next room. The room's recent messages come with it.
+Click a room's tab, choose it from the **Rooms** menu, or press `Tab` or `F2`
+for the next room. The room's recent messages come with it.
 
 To mention someone, type `@` and their nick: `@RetroAmy are you there?`.
 Type `@` and the first letters of a nick and press `Tab` to finish it from
@@ -96,32 +113,33 @@ stays in the field to change and send again.
 
 ## Private conversations
 
-Click a nick in MEMBERS, MESSAGES or FRIENDS ONLINE to talk to that person
-alone. The title shows `@` and the nick, and what you send goes only to
-them. A conversation with unread messages shows a count in MESSAGES. Click a
-room to go back to it.
+Click a nick in ONLINE, FRIENDS or DIRECT to talk to that person alone. The
+title shows `@` and the nick, and what you send goes only to them. A
+conversation with unread messages shows a count in DIRECT. Click a room's tab
+to go back to it.
 
 ## Status
 
-![The Set status... popup.](shot:wirechat-status){right}
+![The status popup.](shot:wirechat-status){right}
 
-Click **Set status...** or use the **Status** menu to be **Online**, **Away**
-or **Busy**. Ten minutes with no key and no click turns Online into Away by
+Click your status and nick at the right of the header, or use the **Status**
+menu, to be **Online**, **Away** or **Busy**. Ten minutes with no key and no click turns Online into Away by
 itself, and the next key or click turns it back. A status you chose stays as
 you set it.
 
 ## Friends
 
-Click **+ Add friend** or choose **Friends > Add Friend...**, type the nick
-after `Friend:` and press `Return`. Right-click a nick in MEMBERS to be asked
-`Add <nick> as a friend?`. Friends who are connected appear under FRIENDS
-ONLINE. Right-click a friend there to remove them, or open a conversation
+Press `F3` or choose **Friends > Add Friend...**, type the nick after
+`Friend:` and press `Return`. Right-click a nick in ONLINE to be asked
+`Add <nick> as a friend?`. Your friends are listed under FRIENDS, with the
+status of those who are connected. Right-click a friend there to remove
+them, or open a conversation
 with them and choose **Friends > Remove Friend**. WireChat keeps up to eight
 friends.
 
 ## Searching
 
-Click **Search**: the field says `Find:`. Type a word and press `Return` to
+Click the **Search...** box: the field says `Find:`. Type a word and press `Return` to
 jump to the newest earlier message whose text or nick contains it, in
 capitals or not. Press `Return` again for the one before that. **Not found**
 means there are no more. `Esc` goes back to typing messages, with what you
@@ -144,7 +162,7 @@ Notifications Off** or **Notifications On**, to switch.
 When someone mentions you with `@` and your nick in a room you are not
 looking at, WireChat chirps even if its window is in front. The line above
 the field says who and where, for example `RetroAmy mentioned you in
-#hardware`, and the room shows `@` in ROOMS until you go to it.
+#hardware`, and the room's tab shows `@` until you go to it.
 
 ## The menus
 
@@ -153,11 +171,13 @@ the field says who and where, for example `RetroAmy mentioned you in
 | Chat | Change Nick... | Choose a different nick |
 | Chat | Flag Message... | Flag the selected message |
 | Chat | Notifications Off / On | Switch the chirp off or on |
+| Chat | Emoticons... | Eight emoticons to type at the caret |
 | Chat | Reconnect | Start a fresh connection to the server |
 | Rooms | lobby, hardware, development, games | Go to that room |
 | Status | Online, Away, Busy | Set your status |
 | Friends | Add Friend... | Type a nick to add |
 | Friends | Remove Friend | Remove the person in this conversation |
+| Theme | Monochrome, Blue, Green, Amber | Change how WireChat looks |
 
 ![The Chat menu.](shot:wirechat-menu-chat){left}
 
@@ -173,9 +193,14 @@ window back.
 | `Tab` | After `@` and part of a nick, finish the nick; otherwise the next room |
 | `Up`, `Down` | Scroll the messages a line |
 | `PgUp`, `PgDn` | Scroll the messages a page |
+| `F1` | Show the keys; any key or click puts the window back |
+| `F2` | The next room |
+| `F3` | Add a friend |
 
-The scroll bar beside the messages scrolls them too, and so does the wheel
-on a mouse that has one.
+The scroll column at the right of the messages scrolls them too: click its
+arrows for a line, or above or below its thumb for a page. So does the wheel
+on a mouse that has one. Clicking `F1 Help`, `F2 Rooms` or `F3 Friends` in
+the status bar does the same as the key.
 
 ## The status bar
 
@@ -191,8 +216,8 @@ on a mouse that has one.
 
 ## Files
 
-WireChat keeps its nick, the code, the friends list and the notification
-switch in `WIRECHAT.CFG`, in `SYSTEM\APPDATA` on the disk it was started
+WireChat keeps its nick, the code, the friends list, the notification
+switch and the theme in `WIRECHAT.CFG`, in `SYSTEM\APPDATA` on the disk it was started
 from.
 
 ## Good to know

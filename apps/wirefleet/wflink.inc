@@ -28,6 +28,7 @@ wf_entropy:
     ret
 
 wf_link_new:
+    call wf_fx_cancel           ; 114.11: no flight outlives the old match
     call OSAPI_RAND
     mov [wf_identity], ax
     call wf_entropy
@@ -313,12 +314,14 @@ wf_disconnect:
 wf_tick:
     push si
     call wf_poll
-    cmp byte [wf_dirty], 0
-    je .timer
-    mov byte [wf_dirty], 0
     cmp byte [wf_abon], 0
     jne .timer
+    cmp byte [wf_dirty], 0
+    je .effects
+    mov byte [wf_dirty], 0
     call wf_update
+.effects:
+    call wf_fx_draw             ; 114.11: the rows a sprite moved on, if any
 .timer:
     mov bx, [wf_win]
     mov ax, 1
@@ -328,6 +331,7 @@ wf_tick:
 
 wf_poll:
     call wf_soundtick
+    call wf_fx_tick
     call OSAPI_GET_TICKS
     mov [wf_now], ax
     call wf_autolink
@@ -827,8 +831,8 @@ wf_queue_shot:
     mov byte [wf_pending], 1
     mov byte [wf_urgent], 1
     mov word [wf_message], wf_shotpending
-    mov al, 3
-    call wf_sfx
+    mov al, [wf_target]
+    call wf_fx_launch           ; 114.11: the missile, and its sound
     mov byte [wf_dirty], 1
     clc
 .out:
@@ -868,6 +872,21 @@ wf_shot_take:
     mov ax, [wf_rxbuf+59]
     cmp ax, [wf_hash]
     jne wf_history_conflict
+    ; 114.11: the first SHOT for a turn starts the incoming missile and is
+    ; judged when it lands; a repeat meanwhile is only traffic.
+    cmp byte [wf_fxreplay], 0
+    jne .judge
+    cmp word [wf_fxseg], 0
+    je .judge
+    cmp byte [wf_fxmode], 1
+    je .defer
+    mov al, [wf_rxbuf+19]
+    call wf_fx_incoming
+.defer:
+    mov al, WF_SHOT
+    call wf_fx_defer
+    jmp wf_touch
+.judge:
     mov al, [wf_rxbuf+19]
     mov [wf_cachecell], al
     mov ax, [wf_turn]
@@ -927,9 +946,10 @@ wf_shot_take:
     mov byte [wf_cachevalid], 1
     mov byte [wf_dirty], 1
     mov byte [wf_urgent], 1
-    mov al, [wf_cachevalue]
-    add al, 3
-    call wf_sfx
+    mov al, [wf_cachevalue]     ; 114.11: the splash or the explosion
+    xor bl, bl
+    mov bh, [wf_cachecell]
+    call wf_fx_impact
     call wf_checkend
     jmp wf_touch
 
@@ -941,6 +961,9 @@ wf_result_take:
     mov ax, [wf_rxbuf+16]
     cmp ax, [wf_turn]
     jne .out
+    mov al, WF_RESULT           ; 114.11: not while our missile is flying
+    call wf_fx_defer
+    jc .deferred
     mov al, [wf_rxbuf+19]
     cmp al, [wf_pendingcell]
     jne wf_packet_take.bad
@@ -979,9 +1002,12 @@ wf_result_take:
     mov byte [wf_urgent], 1
     mov word [wf_message], wf_resultmessage
     mov al, [wf_rxbuf+20]
-    add al, 3
-    call wf_sfx
+    mov bl, 1
+    mov bh, [wf_lastout]
+    call wf_fx_impact
     call wf_checkend
+    jmp wf_touch
+.deferred:
     jmp wf_touch
 .out:
     ret

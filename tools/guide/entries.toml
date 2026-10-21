@@ -340,6 +340,12 @@ kind = "program"
 summary = "Puts os8088 on a hard disk, or upgrades the copy already there, one page at a time: switches the hard-disk driver on, finds the drives, lets you pick a partition and keep or erase its files, then copies the system and apps disks."
 short = "Install os8088 on a hard disk"
 
+["SYSCHECK.O88"]
+title = "System Check"
+kind = "program"
+summary = "Checks the disk the machine starts from for parts left over or broken by an upgrade, and cleans up what is safe to remove."
+short = "Installed system checker"
+
 ["TASKMGR.O88"]
 title = "Task Manager"
 kind = "program"
@@ -860,6 +866,24 @@ title = "PaccMan"
 kind = "folder"
 summary = "PaccMan and its README."
 short = "PaccMan and its notes"
+
+["LEMMINGS.O88"]
+title = "Lemmings"
+kind = "program"
+summary = "The 1991 puzzle game, built from the original's own data files: 120 levels, the original's screens and words. Slow on an XT."
+short = "Lemmings, the 1991 game"
+
+["LEMMINGS/"]
+title = "Lemmings"
+kind = "folder"
+summary = "Lemmings, its README, the list of levels this disk carries, and the game's data files."
+short = "Lemmings and its data"
+
+["LEVELS.TXT"]
+title = "Levels on this disk"
+kind = "document"
+summary = "Which of the 120 levels this size of disk carries, level by level, and what the missing ones would cost."
+short = "Which levels this disk carries"
 
 ["REDLINE.O88"]
 title = "REDLINE"

@@ -38,6 +38,7 @@ wc_k_nick:      db 'nick', 0
 wc_k_notify:    db 'notify', 0
 wc_k_friend:    db 'friend', 0
 wc_k_code:      db 'code', 0
+wc_k_theme:     db 'theme', 0
 wc_def_host:    db 'os8088.com', 0
 wc_def_pfx:     db '/chat/', 0
 
@@ -56,27 +57,42 @@ wc_s_remhow:    db 'Open a friend to remove them', 0
 
 ; --- the header, the panes and the bar --------------------------------------------
 wc_s_nonick:    db '(no nick yet)', 0
-wc_s_offline:   db 'Offline', 0
+wc_s_offline:   db 'OFFLINE', 0
 wc_s_online_w:  db 'Online', 0
 wc_s_away_w:    db 'Away', 0
 wc_s_busy_w:    db 'Busy', 0
 wc_stwords:     dw wc_s_online_w, wc_s_away_w, wc_s_busy_w
-wc_s_rooms:     db 'ROOMS', 0
-wc_s_msgs:      db 'MESSAGES', 0
-wc_s_frnds:     db 'FRIENDS ONLINE', 0
-wc_s_members:   db 'MEMBERS', 0
-wc_s_online:    db 'ONLINE', 0
-wc_s_hash:      db '# ', 0
-wc_s_at:        db '@ ', 0
+wc_s_hon:       db 'ONLINE', 0          ; the header's words, by ST_*
+wc_s_haway:     db 'AWAY', 0
+wc_s_hbusy:     db 'BUSY', 0
+wc_hwords:      dw wc_s_hon, wc_s_haway, wc_s_hbusy
+wc_s_brand:     db 'WireChat', 0
+wc_s_bbs:       db ' | 01 / BBS TERMINAL', 0
+wc_s_vga:       db 'VGA ', 0            ; the display the window is on
+wc_s_herc:      db 'HERCULES ', 0
+wc_s_cga:       db 'CGA ', 0
+wc_s_ega:       db 'EGA ', 0
+wc_s_mono:      db ' / MONO', 0
+wc_s_16c:       db ' / 16 COLORS', 0
+wc_s_online:    db 'ONLINE', 0          ; the right pane's sections
+wc_s_frnds:     db 'FRIENDS', 0
+wc_s_direct:    db 'DIRECT', 0
+wc_s_nodm:      db 'No direct messages', 0
+wc_s_msgto:     db 'Message ', 0        ; the empty field's placeholder
+wc_s_f1:        db 'F1 Help', 0         ; the status bar's legend
+wc_s_f2:        db 'F2 Rooms', 0
+wc_s_f3:        db 'F3 Friends', 0
+wc_fkeys:       dw wc_s_f1, wc_s_f2, wc_s_f3
+wc_s_colon:     db ': ', 0
+wc_s_inrm:      db ' in #', 0
 wc_s_dots:      db '...', 0
 wc_s_private:   db 'Private conversation', 0
 wc_s_new1:      db ' new message ', 0
 wc_s_newn:      db ' new messages ', 0
 wc_s_bar:       db ' | ', 0
-wc_s_inroom:    db ' in this room', 0
 wc_s_onl:       db ' online', 0
 wc_s_notify:    db 'Notifications: ', 0
-wc_s_on:        db 'On', 0
+wc_s_on:        db 'On ', 0              ; as wide as Off: the spans stay put
 wc_s_off:       db 'Off', 0
 wc_s_ment:      db ' mentioned you in #', 0
 ; the day divider's words (SPEC.md 113.5): three letters each, so the name of
@@ -100,12 +116,13 @@ wc_linkwords:   dw wc_lk_nonick, wc_lk_nodrv, wc_lk_join, wc_lk_live
 %endif
 
 ; --- the field's prompts, by MD_* ------------------------------------------------
-wc_p_nick:      db 'Nick: ', 0
-wc_p_find:      db 'Find: ', 0
-wc_p_friend:    db 'Friend: ', 0
-wc_p_key:       db 'Code: ', 0
-wc_prompts:     dw wc_empty, wc_p_nick, wc_p_find, wc_p_friend, wc_p_key
-%if MD_NICK != 1 || MD_FIND != 2 || MD_FRIEND != 3 || MD_KEY != 4
+wc_p_msg:       db '>', 0
+wc_p_nick:      db 'Nick:', 0
+wc_p_find:      db 'Find:', 0
+wc_p_friend:    db 'Friend:', 0
+wc_p_key:       db 'Code:', 0
+wc_prompts:     dw wc_p_msg, wc_p_nick, wc_p_find, wc_p_friend, wc_p_key
+%if MD_MSG != 0 || MD_NICK != 1 || MD_FIND != 2 || MD_FRIEND != 3 || MD_KEY != 4
   %error "wc_prompts is indexed by MD_*"
 %endif
 
@@ -120,13 +137,12 @@ wc_e6:          db '^_^', 0
 wc_e7:          db 'o_O', 0
 wc_emos:        dw wc_e0, wc_e1, wc_e2, wc_e3, wc_e4, wc_e5, wc_e6, wc_e7
 
-; --- the buttons, in WB_* order --------------------------------------------------
-wc_b_status:    db 'Set status...', 0
-wc_b_search:    db 'Search', 0
-wc_b_emo:       db ':)', 0
-wc_b_send:      db 'Send', 0
-wc_b_friend:    db '+ Add friend', 0
-wc_btlbl:       dw wc_b_status, wc_b_search, wc_b_emo, wc_b_send, wc_b_friend
+; --- the buttons' captions (wcband.inc paints them) ---------------------------
+wc_b_search:    db 'Search...', 0
+wc_b_sendc:     db '  Send   ', 0       ; WC_SENDC cells: the block's width
+%if $ - wc_b_sendc - 1 != WC_SENDC
+  %error "Send's caption is as wide as Send"
+%endif
 
 ; --- the alerts (at most OS88UI_AMAX = 34 characters each, composed) ------------
 wc_s_askflag:   db 'Flag this message as abusive?', 0
@@ -137,11 +153,12 @@ wc_s_askrem2:   db ' from friends?', 0
 
 ; --- the menus (SPEC.md 113.6.4) ------------------------------------------------
 wc_m_chat:      db 'Chat', 0
-wc_i_chat:      dw wc_it_nick, wc_it_flag, wc_it_notoff, wc_it_reconn
+wc_i_chat:      dw wc_it_nick, wc_it_flag, wc_it_notoff, wc_it_emo, wc_it_reconn
 wc_it_nick:     db 'Change Nick...', 0
 wc_it_flag:     db 'Flag Message...', 0
 wc_it_notoff:   db 'Notifications Off', 0   ; what the item DOES: shown while
 wc_it_noton:    db 'Notifications On', 0    ; they are on, and the other while not
+wc_it_emo:      db 'Emoticons...', 0
 wc_it_reconn:   db 'Reconnect', 0
 wc_m_rooms:     db 'Rooms', 0
 wc_i_rooms:     dw wc_r0, wc_r1, wc_r2, wc_r3
@@ -155,6 +172,13 @@ wc_m_frnd:      db 'Friends', 0
 wc_i_frnd:      dw wc_it_addf, wc_it_remf
 wc_it_addf:     db 'Add Friend...', 0
 wc_it_remf:     db 'Remove Friend', 0
+wc_m_thm:       db 'Theme', 0           ; composed in wc_thmi (wc_menulabels):
+wc_i_thm:       dw wc_thmi, wc_thmi + 14, wc_thmi + 28, wc_thmi + 42
+wc_thnames:     dw wc_tn0, wc_tn1, wc_tn2, wc_tn3
+wc_tn0:         db 'Monochrome', 0      ; a mark, a space and the name, at
+wc_tn1:         db 'Blue', 0            ; most 14 with the grey byte
+wc_tn2:         db 'Green', 0
+wc_tn3:         db 'Amber', 0
 
 ; --- the About card -------------------------------------------------------------------
 wc_ab1:         db 'WireChat for os8088', 0
@@ -163,22 +187,45 @@ wc_ab3:         db 0
 wc_ab4:         db 'Server: os8088.com/chat', 0
 wc_ab5:         db 'Two flags remove a message', 0
 
+; --- F1's card: the keys (SPEC.md 113.6.3) -----------------------------------
+wc_h1:          db 'WireChat keys', 0
+wc_h2:          db 'Enter send, Esc clear', 0
+wc_h3:          db 'Tab next room, or @nick', 0
+wc_h4:          db 'PgUp PgDn Up Down scroll', 0
+wc_h5:          db 'F2 next room, F3 friend', 0
+wc_h6:          db 'Right-click: flag, friend', 0
+wc_h7:          db 'Theme menu: four looks', 0
+
 ; =============================================================================
-; THE GLYPHS (wcview.inc's GL_* order): 8x8 in the top byte of each row, over
-; a mask of the whole cell - so a glyph is its own ground and leaves nothing
-; of the space it is drawn on (SPEC.md 25.6's record).
+; THE GLYPHS (wcview.inc's GL_* order): eight rows of eight pixels each, drawn
+; over a mask of the whole cell (wcband.inc's wc_glrec builds the record) -
+; so a glyph is its own ground and leaves nothing of the space it is drawn on
+; (SPEC.md 25.6's record). Each has a ROLE, which is its ink in every theme.
 ; =============================================================================
-%macro WCGLYPH 8
-    db 1, 8
-    times 8 dw 0xFF00
-    dw (%1) << 8, (%2) << 8, (%3) << 8, (%4) << 8
-    dw (%5) << 8, (%6) << 8, (%7) << 8, (%8) << 8
-%endmacro
 wc_glyphs:
-    WCGLYPH 0x38, 0x7C, 0x7C, 0x38, 0x00, 0x7C, 0xFE, 0xFE  ; GL_PERSON
-    WCGLYPH 0x3C, 0x7E, 0xFF, 0xFF, 0xFF, 0xFF, 0x7E, 0x3C  ; GL_ONLINE: filled
-    WCGLYPH 0x3C, 0x42, 0x91, 0x91, 0x9D, 0x81, 0x42, 0x3C  ; GL_AWAY: a clock
-    WCGLYPH 0x3C, 0x42, 0x81, 0xFF, 0xFF, 0x81, 0x42, 0x3C  ; GL_BUSY: barred
-    WCGLYPH 0x3C, 0x42, 0x81, 0x81, 0x81, 0x81, 0x42, 0x3C  ; GL_GONE: hollow
-    WCGLYPH 0x24, 0x24, 0x7E, 0x7E, 0x7E, 0x3C, 0x18, 0x18  ; GL_PLUG: in
-    WCGLYPH 0x24, 0x24, 0x00, 0x7E, 0x7E, 0x3C, 0x00, 0x18  ; GL_CUT: out
+    db 0x00, 0x7E, 0x7E, 0x7E, 0x7E, 0x7E, 0x7E, 0x00  ; GL_ONLINE: a square
+    db 0x3C, 0x42, 0x91, 0x91, 0x9D, 0x81, 0x42, 0x3C  ; GL_AWAY: a clock
+    db 0x00, 0x7E, 0x42, 0x7E, 0x7E, 0x42, 0x7E, 0x00  ; GL_BUSY: barred
+    db 0x00, 0x7E, 0x42, 0x42, 0x42, 0x42, 0x7E, 0x00  ; GL_GONE: hollow
+    db 0x00, 0x3C, 0x7E, 0x7E, 0x7E, 0x7E, 0x3C, 0x00  ; GL_LKOK: a lamp
+    db 0x00, 0x3C, 0x7E, 0x7E, 0x7E, 0x7E, 0x3C, 0x00  ; GL_LKWARN
+    db 0x00, 0x3C, 0x7E, 0x7E, 0x7E, 0x7E, 0x3C, 0x00  ; GL_LKBAD
+    db 0x00, 0x3C, 0x42, 0x42, 0x42, 0x42, 0x3C, 0x00  ; GL_LKOFF: a ring
+    db 0x00, 0x00, 0x18, 0x3C, 0x3C, 0x18, 0x00, 0x00  ; GL_ACT: a diamond
+    db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  ; GL_BLANK
+    db 0x00, 0x66, 0x66, 0x00, 0xFF, 0xFF, 0xFF, 0x00  ; GL_PEOPLE: two
+    db 0x00, 0xFF, 0xC3, 0xA5, 0x99, 0x81, 0xFF, 0x00  ; GL_MAIL: an envelope
+    db 0x78, 0x84, 0x84, 0x84, 0x78, 0x0C, 0x06, 0x03  ; GL_LENS
+    db 0x00, 0x18, 0x3C, 0x7E, 0xFF, 0x00, 0x00, 0x00  ; GL_SBUP
+    db 0x00, 0x00, 0x00, 0xFF, 0x7E, 0x3C, 0x18, 0x00  ; GL_SBDN
+    db 0x3C, 0x3C, 0x3C, 0x3C, 0x3C, 0x3C, 0x3C, 0x3C  ; GL_SBTHM
+    db 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18  ; GL_SBTRK
+wc_glrole:
+    db R_OK, R_WARN, R_BAD, R_DIM                       ; the statuses
+    db R_OK, R_WARN, R_BAD, R_DIM                       ; the link lamp
+    db R_WARN, R_BG                                     ; activity, blank
+    db R_ACC, R_ACC, R_ACC                              ; people, mail, lens
+    db R_ACC, R_ACC, R_ACC, R_DIM                       ; the scroll column
+%if wc_glrole - wc_glyphs != 8 * (GL_SBTRK + 1) || $ - wc_glrole != GL_SBTRK + 1
+  %error "wc_glyphs and wc_glrole are GL_* order"
+%endif

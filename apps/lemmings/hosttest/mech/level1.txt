@@ -1,0 +1,29 @@
+# fixture level 1, "water and steel": a 64-pixel gap of water at x 256, a
+# steel-backed block at x 480, a trap at 520 and the exit at 592 beyond it -
+# the trap takes the first climber over the steel, and the third walks through
+# while it is still running (TriggeredTrapLemmixBugSolved: it starts at 0).
+# FRAME VERB ARG as level0.txt.
+10 R -1         # slower than the level's own rate: clamped, nothing moves
+20 R 0
+190 S 5
+190 A 1         # a blocker short of the water, so the rest turn back
+193 S 6
+193 A 0         # a builder at the water's edge
+260 S 2
+260 A 0         # a climber, for the steel-backed block
+386 S 6
+386 A 0         # the shrugger builds on
+579 S 6
+579 A 0         # ...and a third time, clear of the water
+945 S 7
+945 A 0         # a basher at the steel: refused, the count stands
+946 S 8
+946 A 0         # ...and a miner, refused the same way
+1080 S 4
+1080 A 1        # the blocker, bombed: the rest walk over the bridge
+1450 S 2
+1450 A 2        # a second climber, over the steel
+1460 S 2
+1460 A 3        # ...and the third, thirteen frames behind it
+1700 R 1
+1712 R 0        # the rate up twelve, after the release: nothing changes

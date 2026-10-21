@@ -26,7 +26,10 @@ a ship to remove it. Ships may touch; they cannot overlap or cross an edge.
 The **Fleet** menu offers **Rotate R**, **Auto A** and **Clear C**.
 **Game > Ready [Y]** locks a complete fleet. When both PCs are ready, the
 battle starts and the title says whose turn it is. Select an enemy square
-and click **Fire**, or use arrows and `Enter`. A dot is a miss, a cross is a hit, and a sunken
+and click **Fire**, or use arrows and `Enter`. A missile launches from one
+of your ships and flies to that square; on the other PC it flies in to the
+same square. It explodes on a hit and splashes on a miss, and the result
+shows when it lands. A dot is a miss, a cross is a hit, and a sunken
 ship's squares are marked. Sinking all five ships wins.
 
 ## Chat and connection loss
@@ -57,6 +60,10 @@ color layout: a title bar, a ships list with check boxes, both boards,
 the last shot each way and a chat panel. CGA has monochrome on the desktop
 and four colors fullscreen, and Hercules uses monochrome. Save and Load return to the desktop chooser.
 
-**Game > Sound M** mutes or enables effects. The system Sound setting
-chooses PC Speaker, AdLib or Sound Blaster. `H` opens controls; **About
+A sea march plays while the window is open and goes quiet whenever a
+launch, an explosion or a splash sounds. **Game > Music U** turns the music
+off or on; **Game > Sound M** mutes every sound. The system Sound setting
+chooses PC Speaker, AdLib or Sound Blaster: AdLib plays the music in three
+voices, a Sound Blaster also plays sampled effects, and the PC Speaker plays
+the tune alone. `H` opens controls; **About
 WireFleet** is in the WireFleet menu.
