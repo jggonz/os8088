@@ -68958,6 +68958,7 @@ The package ABI extends `drivers/sound/sndpkg.inc`, through the existing
 | `SNDV_MIXSET` (9) | AL = channel; CL/CH = left/right 0..100 | CF=0 written; invalid values or channel refuse before any write, CF=1 AX=SNDE_MIXARG; unavailable mixer answers SNDE_NOMIX |
 | `SNDV_MIXICON` (10) | CX = left x, gfx lock held | opaque 24x16 speaker image at (CX,2), CF=0; kernel callers only |
 | `SNDV_MIXPOP` (11) | CX = icon left x; ES:DI = kernel-private far bridge record; UI task, no lock held | tracks volume popup, restores pixels and frees scratch on every exit; CF=0 |
+| `SNDV_MIXICON_THEME` (12) | CX = left x, AL = menu-bar background, AH = menu-bar ink, gfx lock held | opaque 24x16 speaker image at (CX,2), CF=0; kernel callers only; verb 10 retains its original white/black drawing |
 
 Channel numbers: 0 Master, 1 PCM, 2 FM/MIDI, 3 CD, 4 Line, 5 Mic,
 6 PC Speaker input, 7 Bass, 8 Treble. INFO's bitmap is authoritative.
@@ -68970,9 +68971,17 @@ the mixer attached. Unsupported/absent chips cause no mixer UI.
 
 The speaker expands the right-hand segment leftward by 24 pixels, on the
 primary display only. `[vid_clk_hx]` moves left by 24 while it is present;
-the speaker occupies its first three cells, and `menu_clkx` is the unchanged
-clock text origin. The clock and the maximum-width toast retain their entire
-field. Capability/geometry changes relayout the application menus at the new
+`menu_clkx` is the unchanged clock-field origin. The speaker floats directly
+before the visible, right-aligned clock text. The clock painter skips its
+three cells rather than painting padding over it. A notification that needs
+the clock field temporarily moves the icon to the reserved three cells at
+the field's left, preserving the complete notification. The clock and the
+maximum-width toast retain their entire field. The icon uses the menu bar's
+live background and ink, including Dark and Color themes; a theme repaint
+invalidates its cache. On a 1bpp display the driver stages the bitmap in
+screen polarity, inverting it for Dark with the popup's existing scratch.
+Older sound drivers fall back to verb 10.
+Capability/geometry changes relayout the application menus at the new
 boundary; their existing prefix/index rule is unchanged. SOUND.DRV rounds to 11KB of image plus state on the heap;
 `DRVM_IMG_SND` is 11. The popup claims only its adapter-sized save-under while open: up to
 8KB on VGA/EGA and 2KB on the mono adapters.
@@ -68992,7 +69001,11 @@ below the bar, clamps to live display geometry, and owns a temporary
 save-under claim. Allocation/save failure leaves the desktop untouched and
 reports a refusal. It supports click-open, press-drag-release, dragging beyond
 the track with clamping, click-away dismissal, Escape, arrows, Home/End and
-Enter. The master control scales the stereo pair together, retaining their
+Enter. The thumb and percentage follow the requested 0..100 position in
+one-percent increments instead of snapping to the card's native steps;
+arrow keys adjust by one percent. Hardware writes still quantize to the
+supported levels, and opening a control reads its actual hardware setting.
+The master control scales the stereo pair together, retaining their
 ratio (a silent pair restarts centered). An engraved scale, black recessed
 track, outlined ridged thumb and opaque text work on all three adapters.
 Only the changing control band is redrawn during a drag; idle polls draw
@@ -69012,6 +69025,12 @@ popup, including the monochrome face. It ships in `APPS\` on all four apps
 disk geometries and live hard-disk media, and is available through
 `make mixer`. It ships on no system floppy. The small-kernel apps disks
 omit it because kern_small does not load SOUND.DRV.
+
+Mixer's level, balance and tone sliders likewise retain their requested
+positions after an edit. Polling or repainting the same unchanged hardware
+pair does not snap them back; a source change or a changed hardware readback
+refreshes them from the card. This preserves updates from other Mixer
+instances while allowing smooth dragging on coarse mixers.
 
 Hardware reference: Creative, *Sound Blaster Series Hardware Programming
 Guide*, chapter 4 (CT1335/CT1345/CT1745), available at

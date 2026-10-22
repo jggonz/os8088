@@ -293,38 +293,38 @@ had added.
     "minramkb": 128,
     "ovl": 5118,
     "stk0": 512,
-    "text": 43250,
+    "text": 43356,
     "vgabuf": 336,
     "vgabufpara": 32,
     "vgas": 6176
   },
   "emu": {
-    "blobseg": 6304,
+    "blobseg": 6336,
     "boot2": 6029,
     "bootmax": 120320,
-    "bss": 5265,
+    "bss": 5269,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37543,
+    "cold": 37637,
     "coldpara": 2368,
-    "colds": 3808,
+    "colds": 3840,
     "fatpara": 288,
-    "fats": 3136,
+    "fats": 3168,
     "grace": 2048,
-    "imgpara": 3040,
-    "kend": 6208,
+    "imgpara": 3072,
+    "kend": 6240,
     "kseg": 96,
-    "ksize": 97792,
+    "ksize": 98304,
     "lowbss": 5358,
     "lowpara": 384,
-    "lows": 3424,
+    "lows": 3456,
     "minramkb": 128,
     "ovl": 5118,
     "stk0": 512,
-    "text": 43185,
+    "text": 43613,
     "vgabuf": 336,
     "vgabufpara": 32,
-    "vgas": 6176
+    "vgas": 6208
   },
   "small": {
     "blobseg": 4032,
@@ -349,7 +349,7 @@ had added.
     "minramkb": 128,
     "ovl": 1486,
     "stk0": 512,
-    "text": 31247,
+    "text": 31253,
     "vgabuf": 0,
     "vgabufpara": 0,
     "vgas": 3936
@@ -724,13 +724,13 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 29,522 | 36.5% |
-| the window system and its furniture | 22,729 | 28.1% |
+| the window system and its furniture | 22,835 | 28.2% |
 | drawing: adapters, primitives, glyphs, icons | 12,642 | 15.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,199 | 10.1% |
 | the kernel proper: API table, heap, scheduler, events | 7,142 | 8.8% |
 | the Control Panel | 353 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 300 | 0.4% |
-| **total** | **80,887** | |
+| **total** | **80,993** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -742,8 +742,8 @@ there and nowhere else.
 | `vga12.inc` — the VGA planar primitives (§5) | 5,140 | 1,394 | **6,534** | 38 | 526 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 4,985 | **5,009** | 180 | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,931 | — | **3,931** | 109 | 128 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,843 | 165 | **3,008** | 173 | 84 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,905 | 9 | **2,914** | 56 | — | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,737 | 165 | **2,902** | 173 | 84 | — |
 | `memory.inc` — the claim heap (§50) | 276 | 2,565 | **2,841** | 24 | 324 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,055 | **2,572** | 31 | — | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 457 | 1,759 | **2,216** | 311 | — | 1,942 |
@@ -794,7 +794,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,127 | 159 | **2,286** | — | — | 629 |
-| **total** | **43,250** | **37,637** | **80,887** | **5,269** | **5,358** | **5,929** |
+| **total** | **43,356** | **37,637** | **80,993** | **5,269** | **5,358** | **5,929** |
 <!-- END generated table -->
 
 ### Reading it

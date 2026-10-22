@@ -75,7 +75,9 @@ mouse; a click on the speaker leaves the panel open for a separate click.
 
 Left or Down lowers the volume; Right or Up raises it. Home selects silence
 and End selects full volume. Escape, Enter or a click outside closes the
-panel. The percentage shows the nearest level the card supports.
+panel. The thumb follows the requested percentage smoothly; arrow keys move
+it by one percent. The card applies its nearest supported hardware level.
+Opening the panel starts at the card's current setting.
 
 Open [[MIXER.O88]] from the apps disk's `APPS` folder for individual sources
 and balance. The speaker's quick volume panel controls master volume.

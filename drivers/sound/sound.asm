@@ -1075,7 +1075,7 @@ opl_defpat:
 ; out: per verb; CF=1 AX=0 for a verb we do not know
 ; =============================================================================
 snd_pkg:
-    cmp bl, SNDV_MIXPOP
+    cmp bl, SNDV_MIXICON_THEME
     ja .bad
     mov bp, bx                  ; a table through BP, which the kernel's
     and bp, 0x00FF              ; OSAPI_DRV_CALL banks: BX comes back as it
@@ -1088,7 +1088,7 @@ snd_pkg:
 snd_ptab:                       ; by verb number (sndpkg.inc)
     dw snd_ident, snd_pkg_oplw, mpu_v_info, mpu_v_open, mpu_v_write
     dw mpu_v_close, cvx_v_info, mix_info, mix_get, mix_set
-    dw mix_icon_entry, volume_popup
+    dw mix_icon_entry, volume_popup, mix_icon_theme_entry
 %if SNDV_IDENT != 0 || SNDV_OPLW != 1 || SNDV_MIDINFO != 2 || SNDV_MIDOPEN != 3 || SNDV_MIDW != 4 || SNDV_MIDCLOSE != 5 || SNDV_DACINFO != 6
   %error "snd_ptab is indexed by the SNDV_* numbers"
 %endif

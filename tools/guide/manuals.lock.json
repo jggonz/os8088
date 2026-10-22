@@ -644,9 +644,9 @@
    "apps/os88mixui.inc",
    "drivers/sound/sndpkg.inc"
   ],
-  "stamped": "cd38ec7d",
+  "stamped": "32e6dce5",
   "strings": "ed45625209cc733e",
-  "why": "Mixer ships in APPS on apps disks and live media, with no speaker-menu launcher"
+  "why": "Document smooth requested positions, one-percent keys and hardware readback updates"
  },
  "MOUNTAIN_BMP": {
   "sources": [],
@@ -956,9 +956,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "cd38ec7d",
+  "stamped": "32e6dce5",
   "strings": "d5ccec072faf56ae",
-  "why": "Document master-only quick volume, separate apps-disk Mixer launch and the 11K driver footprint"
+  "why": "Document smooth requested volume and one-percent keys; speaker uses menu-bar theme colors"
  },
  "SPACEJAM_MID": {
   "sources": [],

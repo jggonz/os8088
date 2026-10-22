@@ -8,22 +8,40 @@ mix_icon:
     push es
     push ds
     pop es
+    call OSAPI_VIDEO
+    mov si, mix_speaker
+    cmp dh, 1
+    jne .draw
+    cmp byte [volume_iconpaper], CBLACK
+    jne .draw
+    ; A 1bpp BLIT1 is already in screen polarity; its pen cannot invert it.
+    ; Reuse the modal slider's scratch for the small Dark-theme bitmap.
+    mov di, volume_band
+    mov cx, 24
+    cld
+.invert:
+    lodsw
+    not ax
+    stosw
+    loop .invert
+    mov si, volume_band
+.draw:
     mov ax, cx
     mov bx, 2
     mov cx, 24
     mov dx, 16
     mov bp, 3
-    mov si, mix_speaker
-    mov al, CWHITE
-    mov ah, CBLACK
-    call OSAPI_GFX_BLIT1_PEN
     mov ax, [volume_iconx]      ; set by the entry below, before AX was ink
     call OSAPI_GFX_BLIT1
     pop es
     clc
     ret
 mix_icon_entry:
+    mov ax, (CBLACK << 8) | CWHITE  ; legacy verb keeps its original palette
+mix_icon_theme_entry:
     mov [volume_iconx], cx
+    mov [volume_iconpaper], al
+    call OSAPI_GFX_BLIT1_PEN    ; AL=background bits, AH=speaker ink
     jmp mix_icon
 ; 24x16, black bits in a white field: horn and two expanding sound arcs.
 mix_speaker:
@@ -103,11 +121,6 @@ volume_popup:
     xor al, al
     call mix_get
     mov [volume_pair], cx       ; baseline is never overwritten by a drag
-    mov al, 100
-    xor ah, ah
-    div dh
-    inc al
-    mov [volume_step], al
     call volume_level
     mov [volume_levelv], al
     call volume_draw
@@ -144,13 +157,13 @@ volume_popup:
     jmp short .keyset
 .quieter:
     mov al, [volume_levelv]
-    sub al, [volume_step]
+    sub al, 1
     jnc .keyset
     xor al, al
     jmp short .keyset
 .louder:
     mov al, [volume_levelv]
-    add al, [volume_step]
+    add al, 1
     cmp al, 100
     jbe .keyset
     mov al, 100
@@ -277,15 +290,13 @@ volume_draw:
 volume_set:
     cmp al, [volume_levelv]
     je .out
+    push ax                    ; keep the requested position, not the DAC step
     mov cx, [volume_pair]
     call mixui_scale
     xor al, al
     call mix_set
-    xor al, al
-    call mix_get
-    call volume_level
-    cmp al, [volume_levelv]
-    je .out
+    pop ax
+    jc .out
     mov [volume_levelv], al
     mov al, 1
     call far [volume_bridge]
@@ -304,13 +315,13 @@ volume_memerr: db 'Volume needs memory',0
 %macro VOLUME_STATE 0
 volume_bridge: times 4 db 0
 volume_iconx: dw 0
+volume_iconpaper: db 0
 volume_x: dw 0
 volume_bottom: dw 0
 volume_save: dw 0
 volume_live: db 0
 volume_pair: dw 0
 volume_levelv: db 0
-volume_step: db 0
 volume_planes: db 0
 volume_drag: db 0
 volume_prev: db 0

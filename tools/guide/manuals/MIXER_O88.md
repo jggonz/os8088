@@ -29,8 +29,9 @@ adjust those inputs where the card offers them.
 ![PCM selected on a mono mixer.](shot:mixer-pcm){right}
 
 Click a scale or drag its thumb. Changes take effect immediately. The
-percentage reflects the nearest level the hardware can produce, so it can
-move in fairly large steps on older cards.
+thumb follows the requested percentage smoothly. Older cards still apply
+the nearest hardware level. Arrow keys adjust by one percent. The control
+keeps your chosen position until the source or its hardware setting changes.
 
 For stereo sources, **Level** changes both sides together and **Balance**
 moves the sound left or right. Equal sides put balance in the middle. A mono

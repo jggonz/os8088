@@ -118,6 +118,7 @@ SNDV_MIXGET  equ 8              ; AL=channel -> CL=L, CH=R %, DL=flags
 SNDV_MIXSET  equ 9              ; AL=channel, CL=L, CH=R %
 SNDV_MIXICON equ 10             ; CX=x, lock held: 24x16 opaque bar icon
 SNDV_MIXPOP  equ 11             ; CX=x, UI task, no lock: quick volume
+SNDV_MIXICON_THEME equ 12       ; CX=x, AL=bar background, AH=ink, lock held
 SNDE_NOMIX   equ 7
 SNDE_MIXARG  equ 8
 MIX_STEREO  equ 1

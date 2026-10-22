@@ -46,7 +46,7 @@ class Session:
         self.seg=ui._word('drv_fseg')
         origin=os88sym.equates()['DRV_HMA_ORG'] if self.seg>=0xF000 else 0
         self.d=Pkg(self.m,self.seg+origin//16,os88drvsym.symbols('sound.bin'))
-        self.hx=ui._word('vid_clk_hx')
+        self.ix=ui._word('menu_mixx')
 
     def wait(self,cond,why):
         if self.qemu:
@@ -60,7 +60,8 @@ class Session:
 
     def key(self,k):
         if self.qemu: self.m.hmp('sendkey '+{'space':'spc'}.get(k,k))
-        else: self.m.key({'esc':'Escape','home':'Home','end':'End','space':'Space'}[k])
+        else: self.m.key({'esc':'Escape','home':'Home','end':'End','space':'Space',
+                              'left':'ArrowLeft','right':'ArrowRight'}[k])
         self.pace(.3)
 
     def click(self,x,y):
@@ -70,7 +71,8 @@ class Session:
         else: self.mo.click(x,y)
 
     def open(self):
-        self.click(self.hx+12,9)
+        self.ix=self.ui._word('menu_mixx')
+        self.click(self.ix+12,9)
         self.wait(lambda:self.d.rb('volume_live')==1,'volume popup opened')
         self.pace(.3)
         return self.d.rw('volume_x')
@@ -113,18 +115,63 @@ class Session:
             p[y*w+x0:y*w+x1+1] for y in range(y0,y1+1))
 
     def icon(self):
-        # A hit range can pass while an old disk-progress bar erases the
-        # picture. Compare the actual band, with the pointer elsewhere.
+        # Compare all pixels with the actual bar paper and rule ink, including
+        # gray/color paper which a binary lit/unlit comparison cannot see.
+        self.ix=self.ui._word('menu_mixx')
         data=self.m.read(self.d.addr('mix_speaker'),48)
-        expected=bytes((b>>bit)&1 for b in data for bit in range(7,-1,-1))
-        check(self.crop((self.hx,2,self.hx+23,17))==expected,
-              'speaker pixels match its bitmap after disk activity')
+        if self.qemu:
+            path=EVIDENCE/'icon.ppm'
+            self.m.hmp('screendump '+str(path))
+            w,h,p=shot.read_ppm(path);stride=3
+        elif self.adapter in ('cga','herc'):
+            w,h,p=self.pixels();stride=1
+        else:
+            w,h,p=self.m.fbuf();stride=3
+        def pixel(x,y):
+            at=(y*w+x)*stride
+            return bytes(p[at:at+stride])
+        paper,ink=pixel(w-4,2),pixel(w-4,19)
+        expected=b''.join(paper if (b>>bit)&1 else ink
+                          for b in data for bit in range(7,-1,-1))
+        actual=b''.join(pixel(self.ix+x,2+y) for y in range(16) for x in range(24))
+        check(actual==expected,'speaker bitmap uses the menu-bar paper and ink')
+        padding=b''.join(pixel(x,y) for y in range(6,14)
+                         for x in range(self.ui._word('vid_clk_hx'),self.ix))
+        check(padding==paper*(len(padding)//stride),
+              'clock padding erases disk-progress marks at the old icon position')
+        text=self.m.read(self.ui._S('clk_str'),32).split(bytes([0]),1)[0]
+        check(self.ix+24==self.ui._word('vid_wm8')-8*len(text),
+              'speaker floats immediately before the visible clock text')
+
+    def themes(self):
+        import dispthm
+        dispthm.theme_page(self.m,self.mo,self.ui._S,M.settle)
+        names=('Dark','Color','Windows','Bright') if self.adapter=='vga' else ('Dark','Windows','Bright')
+        for name in names:
+            got=dispthm.pick(self.m,self.mo,self.ui._S,M.settle,name)
+            check(got=={'Bright':0,'Dark':1,'Color':2,'Windows':3}[name],name+' theme applied')
+            self.mo.to(80,150);self.pace(.3);self.icon()
+            self.open();self.screenshot(name.lower()+'-popup');self.close()
+            self.mo.to(80,150);self.pace(.3);self.icon()
+        self.ui.close(self.ui.window('Control Panel'))
+        # A longer clock form must move the icon and its hit target together.
+        flags=[self.ui._byte(n) for n in ('clk_h12','clk_secs')]
+        self.m.write(self.ui._S('clk_h12'),bytes([1]))
+        self.m.write(self.ui._S('clk_secs'),bytes([1]))
+        self.wait(lambda:len(self.m.read(self.ui._S('clk_str'),32).split(bytes([0]),1)[0])>=23,
+                  'long clock format reached the bar')
+        self.mo.to(80,150);self.pace(.3);self.icon()
+        self.open();self.close()
+        for n,v in zip(('clk_h12','clk_secs'),flags):self.m.write(self.ui._S(n),bytes([v]))
+        self.pace(1.5)
+        self.mo.to(80,150);self.icon()
 
 
 def session(ui,adapter):
     s=Session(ui,adapter);d=s.d
     check(s.seg and d.rb('mix_kind')>0,'readable mixer publishes the speaker')
-    check(ui._word('menu_clkx')==s.hx+24,'speaker reserves exactly three clock cells')
+    check(ui._word('menu_clkx')==ui._word('vid_clk_hx')+24,
+          'speaker reservation preserves the full clock field')
     check((ui._word('vid_pw')-8-ui._word('menu_clkx'))//8>=25,
           'speaker preserves the full clock and maximum toast field')
     check(not s.owned(),'idle mixer holds no scratch claim')
@@ -137,11 +184,16 @@ def session(ui,adapter):
     expected=8 if adapter in ('vga','sb16') else 2
     check(sum(p for _,p in claims)==expected*64,'save-under has the adapter-sized claim')
     s.key('home');s.wait(lambda:d.rb('volume_levelv')==0,'Home reaches silence')
+    s.key('right');s.wait(lambda:d.rb('volume_levelv')==1,'arrow moves by one percent on a coarse card')
+    s.key('left');s.wait(lambda:d.rb('volume_levelv')==0,'opposite arrow returns by one percent')
     s.key('end');s.wait(lambda:d.rb('volume_levelv')==100,'End reaches full volume')
     s.screenshot('popup')
     # Track's two endpoints, including a held drag beyond its bounds.
     s.mo.to(x+28,58);s.mo._edge(True)
     s.wait(lambda:d.rb('volume_levelv')==0,'track press changes live volume')
+    for px,want in ((88,40),(90,41),(91,42)):
+        s.mo.to(x+px,58,l=True)
+        s.wait(lambda:d.rb('volume_levelv')==want,'drag follows requested '+str(want)+' percent')
     s.mo.to(min(ui._word('vid_pw')-1,x+202),58,l=True)
     s.wait(lambda:d.rb('volume_levelv')==100,'drag clamps to the top endpoint')
     s.mo.to(x+28,150,l=True)
@@ -150,7 +202,7 @@ def session(ui,adapter):
     s.wait(lambda:d.rb('volume_live')==0,'drag release dismisses the popup')
     check(not s.owned(),'drag dismissal releases the save-under')
     # Exact restore over a quiet desktop, with the pointer on the bar both times.
-    s.mo.to(s.hx+12,9);s.pace(.5)
+    s.mo.to(s.ix+12,9);s.pace(.5)
     rect=(x,20,x+207,91)
     before=s.crop(rect)
     s.open();s.close()
@@ -168,6 +220,12 @@ def session(ui,adapter):
     s.click(x0+240,y0+44)
     s.wait(lambda:0<p.rb('mx_level')<100,'full Mixer level slider writes hardware')
     s.key('home');s.wait(lambda:p.rb('mx_level')==0,'full Mixer keyboard reaches silence')
+    s.key('right');s.wait(lambda:p.rb('mx_level')==1,'Mixer moves smoothly below the first hardware step')
+    check(p.rw('mx_pair')==0,'hardware readback remains quantized independently of the thumb')
+    s.pace(1.5)
+    check(p.rb('mx_level')==1,'idle polling retains the requested slider position')
+    s.open();s.key('end');s.close()
+    s.wait(lambda:p.rb('mx_level')==100,'Mixer notices another control changing the hardware')
     s.key('end');s.wait(lambda:p.rb('mx_level')==100,'full Mixer keyboard reaches full volume')
     if adapter=='sb16':
         check(p.rw('mx_mask')==0x1FF,'SB16 exposes all nine channels')
@@ -196,6 +254,7 @@ def session(ui,adapter):
     s.open();s.click(70,150)
     s.wait(lambda:d.rb('volume_live')==0,'outside click dismisses')
     check(not s.owned(),'outside dismissal releases the save-under')
+    if not s.qemu:s.themes()
     print('mixer '+adapter+': PASS',flush=True)
 
 
@@ -213,7 +272,7 @@ def background(ui):
     x,y,_,_=w.content
     s.mo.to(x+40,y+30);s.mo._edge(True);s.mo._edge(False)
     s.wait(lambda:d.rb('sbl_str_act')==1,'background stream opened')
-    s.mo.to(s.hx+12,9);s.mo._edge(True);s.mo._edge(False)
+    s.mo.to(s.ix+12,9);s.mo._edge(True);s.mo._edge(False)
     s.wait(lambda:d.rb('volume_live')==1,'volume popup opened during playback')
     consumed=d.rw('sbl_consumed')
     check(consumed<19200,'volume popup opened before the stream finished')

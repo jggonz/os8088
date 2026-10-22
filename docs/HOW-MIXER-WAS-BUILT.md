@@ -16,6 +16,29 @@ rows, `smallreq`, `lzbclust` and all 63 full-gate rows passed. The final UI
 pictures were inspected on CGA, Hercules and VGA; SB16 passed with the
 driver in both normal memory and the HMA.
 
+The follow-up makes quick volume and Mixer's controls retain each requested
+percentage instead of snapping the thumb to the hardware's coarse readback.
+Arrow keys move one percent. Mixer retains the requested position across
+idle polling and repainting, while changed hardware readback or a source
+change still refreshes it. The card continues to use its supported levels.
+
+The speaker now floats immediately before the visible clock text. Clock
+padding is painted around it, including the vacated progress-widget cells;
+a fallback notification temporarily moves it to the reserved left edge.
+The icon takes the menu bar's live ink and background. CGA and Hercules
+invert its bitmap for Dark using existing driver scratch, since their
+BLIT1 path consumes screen-polarity bits rather than a color pair.
+
+Against the removal commit, kernel text grows by 106 bytes to 43,356, with
+no additional persistent state or rounded footprint increase: kern_big is
+still 97,792 bytes and kern_emu 98,304. SOUND.DRV is 11,076 bytes and still
+claims 11KB. The memory baseline now also records the earlier Mixer work
+on kern_emu and kern_small. The seven final UI/regression rows pass,
+covering smooth same-step movement, idle readback, clock-format changes,
+theme pixels, notifications, progress cleanup and heap/HMA SB16 playback.
+The Dark CGA/Hercules and Color VGA pictures were inspected after the pass.
+All 63 full-gate rows also passed.
+
 ## Foundation
 
 The request combines a global desktop control with optional installed
