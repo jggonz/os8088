@@ -10378,3 +10378,67 @@ The merged page landed (`b6c4a1ed`, `2cd6ddc7`). Open:
   Retake it on this build.
 - [ ] Purgeable on kern_mega (14.70.1): until then the kernel's caches above
   1MB show under `Kernel`, not `Purgeable`.
+
+### 14.71 The upstream PR's review: four kern_mega defects, fixed (2026-10-22)
+
+The review of the upstream PR read the protected-mode hibernate and the
+fault handler again and a second agent confirmed four defects. None of them
+was seen in the field; each is a path nobody had driven. All four are
+`%ifdef KERN_MEGA` code, so kern_big and kern_small are BYTE-IDENTICAL
+(`build/kernel.bin`, `build/smallk/kernel.bin`).
+
+- [x] **The section's head overflowed past 62 runs.** `hbm_xwrite` writes the
+  run list at byte 12 of a 512-byte head, 8 bytes a run, and run 0's bytes
+  (the GDT) from byte 512 of the same bounce - so `12 + n x 8 <= 512` holds
+  for 62 runs and no more, and nothing counted them: `mx_tab` holds 96
+  blocks (`MX_NBLK`) and a full INST_MAX of twelve is ~60. At 63 runs the GDT
+  overwrote the list's tail, the hibernate said *safe to switch off*, and the
+  resume refused it as `Hibernation: unreadable`. `hbm_xplan` now refuses
+  above **`HBX_HMAX` = 62** (`Hibernate failed`, the same CF as no room for
+  the staging block), BEFORE the picture, and an `%error` ties the constant
+  to the one sector. The head was not grown: that is mega_hbf's 512,
+  `hbm_xres`'s `MPK_HDR + 512`, `HB_XMIN_KB` and `[mega_hbxl]`'s start moved
+  together, which can follow if 62 is ever met.
+- [x] **Chunk 0 on a volume of 512-byte clusters.** `hbm_xwconv` puts chunk 0
+  right from segment 0 for one cluster and from 40h:(cluster - 400h) for the
+  rest - right from 1KB clusters up. At 512 bytes that offset is FE00h:
+  linear **10200h** instead of 200h, and FE00h + 7E00h ran past the
+  selector's 64KB. Old os8088 formats of small partitions made such volumes
+  (drivers/hdd/fmt.inc), and so do NT-style FAT16 tools at 32MB and under. A
+  protected-mode hibernate onto `[dsk_spc]` = 1 now refuses first, **`Disk
+  clusters too small`** (`hbm_wrimg`, before `hbm_xplan`). The refusal over
+  the split at max(cluster, 400h): the case is rare, and a refusal is one
+  compare where the split is a second LOW0 limit and a third write-at.
+- [x] **A reported `#GP` left `mega_tcs` set**, and **a reported fault left
+  `mega_n0` set.** `.copied` was the CS: prefix index's only reset, so a
+  package's CS: read past its limit - reported, the package closed, the
+  machine going on - sent the NEXT `#GP(0)` without a prefix to the
+  trampoline instead of the DS/ES register fix. `mega_gpw` clears it on entry
+  now. `mega_n0` the same way: a stepped instruction that itself faulted was
+  reported with it set, and every later null-segment fixup then refused as
+  *already stepping one*. `mega_fkill` clears it after its own DS load -
+  `mega_report`'s first call and its only caller, which arrives with whatever
+  DS the reporter had.
+- [x] **NMI on across both of a reflection's transitions.** The way back
+  loaded the protected-mode IDTR in real mode and then ran
+  `smsw`/`or`/`lmsw` before PE; on a 386 the way down cleared PE and then
+  far-jumped before `lidt [mega_rmidtr]`. An NMI in either window reads the
+  IDT's vector-1 gate as a far pointer (FFD8:xxxx) and runs ROM bytes.
+  `mega_enter` and `mega_pmtail` already mask NMI over their switches; the
+  reflection now does too, and over the transitions ONLY - NMI held off for
+  a whole int 13h would be 400 ms of it. Port 70h's `0x8D` before the 386's
+  CR0 clear and `0x0D` after `.rm`'s `lidt` (the 286's way passes there too,
+  already on after `mega_r286`: one redundant write), `0x8D` before the
+  `lgdt`/`lidt` back and `0x0D` once DS, ES and SS are selectors again. And
+  `mega_gpfix`'s emulated far CALL moved the fault frame four bytes down with
+  SP still at the old frame, so an NMI there pushed over the moved ES and DS:
+  `sub sp, 4` first.
+
+**What it cost** (`make mega`, os88megaseg): kern_mega's `.text` + `.bss`
+**52,874 -> 52,890** (+16, the four port writes), `.mega` **14,609 ->
+14,623** (+14), overhead over kern_big **3,440 -> 3,456** of the 4,029
+`tests/megaseg.txt` allows. HIBER.DRV gains the compare, the refusal and
+its string. The rows are `megahiber` and `megap2hiber` (the hibernate),
+`megaflt` (the fault handler) and `megapiclose` (the reflection); none of the
+four defects has a row of its own, the first two needing 63 pool blocks or a
+512-byte-cluster disk and the last an NMI in a window of a few clocks.

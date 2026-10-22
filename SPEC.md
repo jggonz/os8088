@@ -138722,7 +138722,11 @@ as a short read (read off `dskw_read`'s contract; not booted). `hbm_ask` refuses
 is to wake with; the wake address (`hbm_wake` and HIBER.DRV's code selector,
 in the kernel's `mega_hbwk`); and whether a resume could place the whole
 file in one block above 1MB clear of every run — refused, `Hibernate failed`,
-when it could not.
+when it could not. The same refusal when the runs are more than the head can
+list: 12 bytes and then 8 a run in its one sector is **`HBX_HMAX` = 62**, run
+0 among them, where `mx_tab` holds 96 blocks — past it run 0's bytes, which
+start at the head's byte 512, would overwrite the list's tail and the image
+would be written and refuse its own resume.
 
 **The conventional picture is written a chunk a call, and only its first
 cluster through segment 0** (`hbm_xwconv`, KERN-MEGA-PLAN 14.46). Segment 0 is
@@ -138738,7 +138742,10 @@ are left, 1,024 at 2KB — and the rest of it from 40h. The same bytes in the
 same file; an append needs whole clusters in the file already, which is why
 chunk 0 is not simply split. LOW0 stops at 4FFh on purpose, so `hbm_xlow`
 stretches it over that one cluster's write-at and puts it back after, and
-the image's GDT holds 4FFh.
+the image's GDT holds 4FFh. The rest of chunk 0 is reached as 40h:(cluster −
+400h), so a cluster must be at least the IVT's 1KB: a volume of **512-byte
+clusters** (`[dsk_spc]` = 1) is refused before the picture, `Disk clusters
+too small`, rather than written from linear 10200h.
 
 **The resume** (`hbm_xres`) reads the WHOLE FILE, through the bounce and the
 kernel's own file layer, into a staging block in the pool placed first-fit

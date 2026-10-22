@@ -1881,6 +1881,8 @@ MEGA_FKVEC  equ 0x38F9              ; vectors 0 3 4 5 6 7 0B 0C 0D: the ones a
 mega_fkill:
     mov ax, MEGA_SEL_KDATA
     mov ds, ax
+    mov byte [mega_n0], 0           ; a reported fault never finishes a step of
+                                    ; mega_null0's: none is pending after it
     mov ax, LOW_SEG
     mov es, ax                      ; ES = .lowbss throughout
     mov bx, [ss:bp+20]              ; --- the vector: a program's own
@@ -2599,6 +2601,8 @@ mega_svc_lo:
                                     ; in Bochs (KERN-MEGA-DOS-PLAN 10.3) -
                                     ; made every BIOS store through ES fault,
                                     ; in real mode, for ever. DS is KDATA
+    mov al, 0x8D                    ; NMI off across the switch, as mega_enter:
+    out 0x70, al                    ; real mode with the PM IDTR (index 0Dh)
 cpu 386
     mov eax, cr0                    ; REAL MODE, the 386's way: clear PE
     and al, 0xFE
@@ -2630,6 +2634,8 @@ cpu 286
     jmp .rhang
 .rm:
     lidt [cs:mega_rmidtr]
+    mov al, 0x0D                    ; ...and on again under the real IVT (the
+    out 0x70, al                    ; 286's way has mega_r286's already: twice)
 .rmc:
     mov ax, ss                      ; LOW_SEG: the selector IS the segment
     mov ss, ax
@@ -2712,6 +2718,8 @@ cpu 286
     je .nocap
     call mega_capoff
 .nocap:
+    mov al, 0x8D                    ; NMI off until the selectors are back: the
+    out 0x70, al                    ; PM IDTR in real mode reads gates as IVT
     lgdt [mega_gdtr]                ; all three again: a 286's reset cleared
     lidt [mega_idtr]                ; them (and a 386's CR0 path kept them,
     smsw ax                         ; which costs it nothing to redo). lmsw
@@ -2735,6 +2743,8 @@ cpu 286
                                     ; the BIOS returned
     mov ax, ss
     mov ss, ax
+    mov al, 0x0D                    ; ...and NMI on: every register a gate
+    out 0x70, al                    ; needs is a selector again
     jmp MEGA_SEL_CODE:mega_svc_back ; ...and the rest is protected mode's
 section .mega
 mega_svc_back:
@@ -3253,6 +3263,8 @@ mega_gpfix:
     mov dx, [ss:bp+26]              ; the caller's CS
     mov bx, si                      ; BX = the return IP
     xor si, si
+    sub sp, 4                       ; SP over the moved frame: an NMI (IF = 0
+                                    ; does not stop one) pushes below it
 .dn:
     mov di, [ss:bp+si]
     mov [ss:bp+si-4], di
@@ -3376,6 +3388,8 @@ mega_gpw:
     mov al, [mega_scal]             ; mega_strcal's own fault: measure, skip
     test al, 0x7F
     jnz mega_strcal_gp
+    mov word [mega_tcs], 0          ; no prefix yet: a REPORTED fault left the
+                                    ; last one set, .copied being its only reset
     mov ax, [ss:bp+26]              ; AX = the image's data segment, from CS
     call mega_cs2ds                 ; (.cold's CS has none: DX = 0, and only
     jnc .dsok                       ; the CS: arm needs one)

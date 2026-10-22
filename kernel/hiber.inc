@@ -87,6 +87,13 @@ HBP_XLEN    equ 24              ; dd ...and its bytes on the disk
 HBP_SIZE    equ 28
 HBX_CHUNK   equ 32768           ; the bounce and the file's chunk: a multiple
 HBX_KB      equ HBX_CHUNK / 1024    ; of every cluster (<= 32KB, mount rule 8)
+HBX_HMAX    equ (512 - 12) / 8  ; the runs the section's head can list: 12
+                                ; bytes, then 8 a run, in ONE sector, the
+                                ; runs' data starting at 512 (hbm_xwrite) -
+                                ; 62, where the pool's table holds 96 blocks
+%if 12 + HBX_HMAX * 8 > 512
+  %error "hbm_xwrite: the section's head and its run list are one sector"
+%endif
 %endif
 
 %include "hbstage.inc"        ; SPEC.md 87.5's staging map, shared as SOURCE
@@ -1799,11 +1806,14 @@ hbm_wrimg:
                                 ;    step 6 (HBP_WAKE): the .bss copy that
                                 ;    used to be taken here was never read
 %ifdef KERN_MEGA
-    test byte [cpu_feat], CPU_F_PM  ; kern_mega in protected mode: the list
-    jz .rimg                    ; of what is above 1MB, and whether a resume
-    call hbm_xplan              ; could place it, BEFORE the picture - which
-    jc .no                      ; then includes the masks and the wake
-.rimg:                          ; address it stamps
+    test byte [cpu_feat], CPU_F_PM  ; kern_mega in protected mode: a volume
+    jz .rimg                    ; of 512-byte clusters is refused first -
+    mov si, hbm_s_clus          ; hbm_xwconv puts chunk 0 right from 40h
+    cmp byte [dsk_spc], 1       ; past its first CLUSTER, and 40h cannot
+    je .nos                     ; reach linear 200h. Then the list of what
+    call hbm_xplan              ; is above 1MB, and whether a resume could
+    jc .no                      ; place it, BEFORE the picture - which then
+.rimg:                          ; includes the masks and the wake address
 %endif
     call hbm_psum               ; 5. THE PROGRAMS' SUM, taken here, the last
     CSDO mov [CSEG hbm_psv], ax ;    instant before the write: nothing that
@@ -3762,7 +3772,8 @@ hbm_pses:
 ; out: CF = 0 with [mega_dncpy] runs in the park's scratch's list (MPS_REG:
 ;      {dd -, dd to, dd bytes}),
 ;      run 0 the tables, and [mega_hbxl] = the section's bytes; CF = 1 a
-;      resume would have no room. Clobbers AX BX CX DX SI DI
+;      resume would have no room, or the runs are more than HBX_HMAX.
+;      Clobbers AX BX CX DX SI DI
 ; -----------------------------------------------------------------------------
 hbm_xplan:
     in al, 0x21                 ; the masks the image wakes with: the
@@ -3816,8 +3827,13 @@ hbm_xplan:
     xor ah, ah
     mov [mega_dncpy], ax
     pop es
+    cmp ax, HBX_HMAX + 1        ; more runs than the head has room to list:
+    jae .full                   ; run 0's bytes would land on the list's tail
     call hbm_xneed              ; AX = KB
     jmp hbm_xfit                ; CF
+.full:
+    stc                         ; ...refused BEFORE the picture, not an
+    ret                         ; image that is written and cannot resume
 
 ; -----------------------------------------------------------------------------
 ; hbm_xfit - a place in the pool for AX KB clear of every run the list names
@@ -5538,6 +5554,7 @@ hbm_s_dimg:     db 'Unmount the image first', 0
 hbm_s_d7:       db 'No room above 1MB', 0
 hbm_s_d8:       db 'Could not save to disk', 0   ; 14.43's image
 hbm_s_mode:     db 'Hibernation: other mode', 0
+hbm_s_clus:     db 'Disk clusters too small', 0  ; 512 bytes, protected mode
 %endif
 
 hbm_ptrfix:     db 'HIB1'      ; THE POINTER FILE as hbm_wrimg writes it,
