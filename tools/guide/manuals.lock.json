@@ -524,9 +524,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "2e77a97e",
-  "strings": "05d77599a5d758f7",
-  "why": "main -> elendilon merge: main's serial-lease disconnect before hibernate (already in the page) plus elendilon's 14.46 CSDO/chunked image writes, which change nothing a user sees or does: unchanged"
+  "stamped": "f596e80c",
+  "strings": "b73fd87b7d70d417",
+  "why": "PR #299 review: kern_mega's 'Disk clusters too small' refusal and main's 'Hibernate (VESA)' greying added; the arm-3 'Unmount the image first' refusal is on DOS.O88's page, where the choice is; the 62-run cap reads 'Hibernate failed', already on the page"
  },
  "HOUSE_PNG": {
   "sources": [],
@@ -1066,9 +1066,9 @@
   "sources": [
    "apps/taskmgr"
   ],
-  "stamped": "be02614c",
-  "strings": "5b05e2f1cab91663",
-  "why": "the memory map's IVT+BIOS, Above 1MB and 640K-1MB rows (Video, ROM, BIOS, Unrep.) are already on the page; checked against taskmgr.asm"
+  "stamped": "f596e80c",
+  "strings": "3227cc1b27be84bd",
+  "why": "the memory page and the heap page are one page now (SPEC.md 28.4.10): two pages, collapsible owner groups, the PROGRAMS/SYSTEM and +ALL/-ALL switches, AVAIL/MAX RUN; the third page and its heap shot removed; checked against taskmgr.asm's strings and SPEC.md 28.4.10"
  },
  "TELNET_O88": {
   "sources": [

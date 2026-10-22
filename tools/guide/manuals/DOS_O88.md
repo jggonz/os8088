@@ -169,7 +169,9 @@ The two choices below it say where the program runs:
   and puts it back, windows and all, when the program ends. On a machine
   without one there is nothing to come back to, so DOS asks first: **Open
   windows are lost. Proceed?** Choose **Proceed** only after saving your
-  work; the machine restarts when the program ends. **Disable the mouse**
+  work; the machine restarts when the program ends. With a disk image
+  mounted, it refuses with `Unmount the image first`, because a DOS program
+  could change the image's file while os8088 is not watching. **Disable the mouse**
   turns the mouse off for the program, which saves a little time on a slow
   machine when the program does not use it. On the protected-mode build for
   the 286 and later, **Load DOS in the HMA** is ticked unless you clear it:

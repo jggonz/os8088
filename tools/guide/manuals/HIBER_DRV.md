@@ -48,7 +48,12 @@ disk, the desktop shows a window: `A hibernation file is on drive C:`.
   whole saved picture down above 1MB first, so a machine with less memory up
   there than it has below reads `Hibernate (No room)`, and a resume on a
   machine with less of it than the one that hibernated says
-  `No room above 1MB` and leaves the file alone.
+  `No room above 1MB` and leaves the file alone. That build also needs the
+  hard disk's clusters to be bigger than 512 bytes, and refuses a disk
+  formatted with smaller ones with `Disk clusters too small`.
+- On a high-resolution VESA desktop the item reads `Hibernate (VESA)` and is
+  greyed. Move the desktop back onto the VGA first, with **Set Primary** in
+  the Control Panel's display settings.
 - Resume only works with the same system that hibernated. After you install
   a newer os8088 the file is refused with `Hibernation: other build` and
   deleted. A file that cannot be read says `Hibernation: unreadable`.
