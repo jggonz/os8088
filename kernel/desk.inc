@@ -1057,8 +1057,17 @@ desk_zone_label:
 ;      caption. The pen is (AX + DESK_ZOVER, BX + 2).
 ; clobbers: AX, BX, CX, DX, SI, ES (the outputs), flags
 ;
-; Measured at paint for every kind, centred in the cell. One routine draws it
-; and one highlight inverts it, so the two cannot disagree about where it is.
+; Measured at paint for every kind, centred UNDER THE PICTURE. One routine
+; draws it and one highlight inverts it, so the two cannot disagree about
+; where it is.
+;
+; Under the picture and not in the cell, because the picture is not in the
+; cell's middle: DESKPIC puts the column on the byte grid (SPEC.md 26.9.9),
+; up to 4 px off centre, and a caption centred on the cell then sat that far
+; to one side of its icon - `CD-ROM` 3 px left of its disc. So the pen moves
+; by what the picture moved, and is then held inside the cell: the refill
+; that erases a cell erases the cell and no more, so a wide shortcut caption
+; cannot follow its picture past an edge.
 ; -----------------------------------------------------------------------------
 desk_caprect:
     push bp
@@ -1076,6 +1085,24 @@ desk_caprect:
     shr cx, 1                   ; CX = the pen's offset in the cell
     pop ax
     call desk_zone_xy           ; AX = cell left, DX = cell top
+%ifdef OS88_SHORTCUTS
+    push dx
+    mov dx, ax
+    DESKPIC dx, dl              ; DX = the picture column's left...
+    sub dx, ax
+    sub dx, DESK_PICX           ; ...less the cell's middle: -3..+4
+    add cx, dx                  ; the pen follows the picture
+    jns .lo
+    xor cx, cx                  ; ...but not past the cell's left
+.lo:
+    mov dx, DESK_CW
+    sub dx, bx                  ; DX = the last pen offset the cell holds
+    cmp cx, dx
+    jle .hi
+    mov cx, dx                  ; ...nor past its right
+.hi:
+    pop dx
+%endif
     add ax, cx                  ; AX = the pen
     lea cx, [bx+DESK_ZOVER-1]
     add cx, ax                  ; x2

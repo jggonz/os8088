@@ -56286,7 +56286,12 @@ bytes); it is the primitive's now, for every caller, at 88.
   and the ink is the ground's complement either way. It goes down at the
   rect's own x, whatever its byte phase, so the pen is centred exactly
   again: the first build had rounded it onto the byte grid, moving most
-  captions up to 4 px.
+  captions up to 4 px. **Centred under the PICTURE, not in the cell**
+  (`desk_caprect`): `DESKPIC` moved the column up to 4 px off the cell's
+  middle, and a caption centred on the cell sat that far beside its icon -
+  `CD-ROM` 3 px left of its disc (§119). The pen moves by what the column
+  moved and is then held inside the cell, which is all a refill erases, so
+  a full-width shortcut caption stays where it was. `.cold` +32.
 - **The ground** is four clipped `thm_desk` fills either side of the column
   and of the caption (`desk_g2`), each drawing pixels nothing else in the
   cell does.
