@@ -666,7 +666,9 @@ sbl_go_on:
 ; =============================================================================
 ; SBL_DSCS reg16, reg8low - DS = this image's DATA segment, derived from CS
 ; at the moment of the interrupt. On every real-mode kernel that is CS itself
-; (`push cs / pop ds`'s value, the test below never taken); on kern_mega CS is
+; (`push cs / pop ds`'s value: a heap claim is 512-aligned, so bit 2 is clear,
+; and an image COLDHMA placed in the HMA - F400h and up, PARAGRAPH-granular, so
+; bit 2 is anything - is caught first by the F000h test); on kern_mega CS is
 ; the image's read-only LDT code alias (S >> 2) | 4 and the data segment is
 ; (CS & ~7) << 2 (mega_cs2ds's rule for an image below A000h) - or, for an
 ; image placed ABOVE 1MB (OS88_DRV_HIGHOK, KERN-MEGA-PLAN item 82), CS is an
@@ -677,6 +679,8 @@ sbl_go_on:
 ; (KERN-MEGA-PLAN 10.3 item 57's correction). Clobbers reg16 and flags
 %macro SBL_DSCS 2
     mov %1, cs
+    cmp %1, 0xF000              ; the HMA (SPEC.md 2.10.8): a paragraph, never
+    jae %%rm                    ; a selector - kern_mega's stop below 4000h
     test %2, 4
     jz %%rm
     cmp %1, 0x2800              ; MEGA_LDT_FREE0 * 8: an image ABOVE 1MB

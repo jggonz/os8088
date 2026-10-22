@@ -894,14 +894,14 @@ mem_claim_1:
                                 ; was a word of .bss, [mem_dir], read three
                                 ; times at five bytes a test (size pass 9)
 
-    or ax, ax                   ; (the ceiling the scan may not pass is
+    cmp ax, 1024                ; (the ceiling the scan may not pass is
                                 ; [mem_top] for every claim there is now -
                                 ; SPEC.md 50.6.1 - so it is read where it is
                                 ; used instead of being staged here)
-    jz .fail0
-    mov cl, 6
-    shl ax, cl                  ; AX = paragraphs wanted
-    jc .fail0                   ; > 1MB asked for
+    jae .fail0                  ; 1MB and more asked for: refused BEFORE the
+    mov cl, 6                   ; shift, whose CF is the LAST bit out alone -
+    shl ax, cl                  ; bit 10 - so 2048KB was 0 paragraphs, CF=0.
+    jz .fail0                   ; AX = paragraphs wanted; 0KB is 0 of them
     cmp si, 0x1000              ; ...and a head bigger than a 64KB page can
     ja .fail0                   ; never sit inside one (SI is still the head
                                 ; [mem_dma] was stored from: a register
@@ -942,6 +942,11 @@ mem_claim_1:
                                 ; two again. Re-measure it after any change to
                                 ; this routine's length: a trampoline only pays
                                 ; while it is itself in short reach.
+    nop                         ; PARITY: never executed - the range test
+                                ; above is one byte longer than the shift's
+                                ; CF it replaced, and dsk_xfer and the hot
+                                ; disk routines after this in .cold must keep
+                                ; their measured parity (t_hotpar)
 .hi:
     mov dx, [mem_top]           ; the highest base that still fits
     sub dx, ax

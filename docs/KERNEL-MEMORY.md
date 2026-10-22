@@ -277,7 +277,7 @@ had added.
     "bss": 5312,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37937,
+    "cold": 37939,
     "coldpara": 2400,
     "colds": 3872,
     "fatpara": 288,
@@ -305,7 +305,7 @@ had added.
     "bss": 5312,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37937,
+    "cold": 37939,
     "coldpara": 2400,
     "colds": 3904,
     "fatpara": 288,
@@ -333,7 +333,7 @@ had added.
     "bss": 2993,
     "budget": 64000,
     "codemax": 65536,
-    "cold": 22050,
+    "cold": 22052,
     "coldpara": 1408,
     "colds": 2560,
     "fatpara": 64,
@@ -727,11 +727,11 @@ there and nowhere else.
 | the window system and its furniture | 23,038 | 28.1% |
 | drawing: adapters, primitives, glyphs, icons | 13,222 | 16.1% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,357 | 10.2% |
-| the kernel proper: API table, heap, scheduler, events | 7,208 | 8.8% |
+| the kernel proper: API table, heap, scheduler, events | 7,210 | 8.8% |
 | the Control Panel | 353 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 300 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **82,059** | |
+| **total** | **82,061** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -745,7 +745,7 @@ there and nowhere else.
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,979 | — | **3,979** | 111 | 256 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,861 | 165 | **3,026** | 173 | 84 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,905 | 9 | **2,914** | 56 | — | — |
-| `memory.inc` — the claim heap (§50) | 276 | 2,575 | **2,851** | 24 | 324 | — |
+| `memory.inc` — the claim heap (§50) | 276 | 2,577 | **2,853** | 24 | 324 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,055 | **2,572** | 31 | — | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 533 | 1,759 | **2,292** | 350 | — | 1,939 |
 | `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,118 | **2,153** | 86 | — | — |
@@ -797,7 +797,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,183 | 159 | **2,342** | — | — | 628 |
-| **total** | **44,122** | **37,937** | **82,059** | **5,312** | **5,486** | **5,925** |
+| **total** | **44,122** | **37,939** | **82,061** | **5,312** | **5,486** | **5,925** |
 <!-- END generated table -->
 
 ### Reading it

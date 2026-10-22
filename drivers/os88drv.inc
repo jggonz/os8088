@@ -368,6 +368,9 @@ DSV_GEOM     equ DSV_BLK        ; == DSV_BLK: SUB-FUNCTION 2 of it (AL = 2),
                                 ;       ROM's int 13h does not reach (52.1's
                                 ;       rung 1). 0 = never, which is CF = 1
 DSV_SIZE     equ 36
+%if DSV_SIZE > 0x3F
+  %error "os88drv: the +15 byte's DSV length is 6 bits - bits 7 and 6 are OS88_DRV_HIGHOK and OS88_DRV_HICLAIM"
+%endif
 
 ; --- DSV_FS: the file redirector's verbs (SPEC.md 62.9) ----------------------
 ; A DRVC_FILE volume has NO SECTORS - no BPB, no FAT, no directory to walk -

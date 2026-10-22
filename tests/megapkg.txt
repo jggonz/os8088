@@ -37,6 +37,11 @@ drivers/hdd/hdxms.inc 1         # HDD.DRV's fill straight into XMS refused
     # FFFFh, which is a #GP there (KERN-MEGA-PLAN 14.16). A correctness
     # refusal every build needs - HDD.DRV is one driver on every kernel's
     # disk - and ~10 bytes
+drivers/ramdisk/rdstore.inc 1   # RAMDISK.DRV's paragraph fold (rd_fold)
+    # skipped for a pool selector ONLY under CPU_F_PM: on a real-mode kernel
+    # a segment of that VALUE is an ordinary paragraph, and an unfolded one
+    # wraps a transfer over 64KB to the START of the caller's segment with
+    # CF=0. A correctness test every build needs, ~10 bytes with its bank
 
 # --- trivial: one far call through a code alias -----------------------------
 

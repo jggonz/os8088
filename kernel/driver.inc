@@ -511,6 +511,9 @@ DSV_GEOM    equ DSV_BLK         ; == DSV_BLK: the transport facts are that
                                 ; driver has been detached and speaks CHS
 DSV_SIZE    equ 36              ; ...and it must stay EVEN: drv_publish copies
                                 ; the table DSV_SIZE/2 WORDS at a time
+%if DSV_SIZE > 0x3F
+  %error "driver: DRV_H_DSV's length is 6 bits - bits 7 and 6 are OS88_DRV_HIGHOK and OS88_DRV_HICLAIM - and drv_publish masks it with 3Fh"
+%endif
 DSV_TAB0    equ 28              ; ...and the length every driver that carries 0
                                 ; at DRV_H_DSV has: the table stood at 28 until
                                 ; the four cells above landed, and HDD.DRV's

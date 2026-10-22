@@ -874,12 +874,17 @@ rd_free_ext:
     ret
 
 ; rd_fold - [rd_bufs]:[rd_bufo] normalised to an offset under 16 - unless the
-; segment is a kern_mega pool SELECTOR (2800h and up, bit 2 set: this image
-; placed above 1MB, KERN-MEGA-PLAN item 82), whose base is no paragraph, and
-; then the offset carries on inside it. The only such buffer is the seed's,
-; read out of this image and far under 64KB. Clobbers AX, CL
+; segment is a kern_mega pool SELECTOR (CPU_F_PM banked at attach, and 2800h
+; and up with bit 2 set: this image placed above 1MB, KERN-MEGA-PLAN item 82),
+; whose base is no paragraph, and then the offset carries on inside it. The
+; only such buffer is the seed's, read out of this image and far under 64KB.
+; On a real-mode kernel the same VALUE is an ordinary paragraph - a packed
+; file's destination is any one (SPEC.md 18.4.1) - so it folds, always, as
+; rd_io's wrap guard needs. Clobbers AX, CL
 rd_fold:
     mov ax, [rd_bufs]
+    test byte [rd_cpuf], CPU_F_PM
+    jz .fold
     test al, 4
     jz .fold
     cmp ax, 0x2800

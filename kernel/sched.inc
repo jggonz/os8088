@@ -2825,6 +2825,9 @@ sch_clsbytes:
     dw 256                      ;    Bounce, a driver's stream task
     dw SCH_STACK                ; 4: the largest, asked for on purpose
 SCH_NCLASS  equ ($ - sch_clsbytes) / 2
+%if SCH_NCLASS > 0x3F
+  %error "sched: LD_H_CLASS is 6 bits - bits 7 and 6 are OS88_HIGH and OS88_HIGHMEM - and inst_pkg_spawn masks it with 3Fh"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sch_switch - common switch path (module-internal)

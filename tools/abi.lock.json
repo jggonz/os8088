@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "8f89b0cd2da1eed0f465de2268018c174e1cc1a9350bbf459209f65f076ee0fa",
+  "fingerprint": "587480405747ba973294afb175f51f4ebd6497e91fff8eb1c652727800d8bd34",
   "version": 11
  },
  "PKG_FMT": {
@@ -861,6 +861,13 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "main -> elendilon merge (2026-10-22, PR #299 review): main's OSAPI_GFX_BLITD keeps 0x04AB; kern_mega's six cells, which have never shipped, move up past it to 0x04B3..0x04D1 (osapi_table_end 0x04D7), KERN-MEGA-PLAN 14.67's rule. main's VESA and Volume SDK additions join; nothing built against main moves, so neither number bumps",
+   "to": 11
+  },
+  {
+   "fingerprint": "587480405747ba973294afb175f51f4ebd6497e91fff8eb1c652727800d8bd34",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "assembly guard: DRV_H_DSV's DSV length is 6 bits beside OS88_DRV_HIGHOK/HICLAIM - no cell or layout moved",
    "to": 11
   }
  ]

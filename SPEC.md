@@ -40195,10 +40195,16 @@ again. A mount and an unmount now write nothing to the host at all - a
 write-protected host floppy included - and a Move of the file within its
 volume (`fcp_relink`, which never asked about read-only) keeps the cluster
 and so keeps the protection. What it gives up is that another operating
-system reading the disk while it is mounted - DOS in the DOS box goes
-through the same FAT layer, so it is not one - sees an ordinary file, and
+system reading the disk while it is mounted - DOS in the windowed DOS box
+goes through the same FAT layer, so it is not one - sees an ordinary file, and
 that a floppy swapped under a mount can answer `Protected` for an unrelated
-file that happens to start at the image's cluster on the new disk.
+file that happens to start at the image's cluster on the new disk. **The
+whole-machine DOS arm IS one** (§96.40, kern_mega's park included): `kern_dos`
+assembles the FAT layer without `dskw_imgro` and the session comes home with
+the row and its cluster runs as they were, so `hbm_dosrun` **refuses arm 3
+while any image is mounted** - `Unmount the image first`, §96.40.1's named
+refusals, before anything is torn down and in `HIBER.DRV`, so not a resident
+byte.
 
 **An earlier kernel's mark is cleared by the next mount.** That kernel wrote
 read-only PLUS byte 12 = `IMG_MARK` (`0xC1`) - the directory entry's reserved
@@ -93042,8 +93048,11 @@ the block - at `OSAPI_MEM_FREE` with the first selector, or at the
 instance's teardown - by the rule that a claim's block over 64KB has a
 selector per 64KB (an `OSAPI_XMEM_ALLOC` block of any size has the one
 `OSAPI_XMEM_SEL` gave it). Every other case is the conventional heap with
-CX = 1000h. Ceiling: the pool, which stops at 16MB with a 286's 24-bit
-descriptor base.
+CX = 1000h, under `OSAPI_MEM_CLAIM`'s own ceiling: **AX of 1024 KB or more is
+refused CF=1 there** - tested before the KB-to-paragraph shift, whose carry is
+the last bit shifted out alone, so 2048 KB used to come back as a claim of
+zero paragraphs with CF=0. Ceiling: the pool, which stops at 16MB with a 286's
+24-bit descriptor base.
 
 **The block MOVES, and the claim is refused only when the pool's FREE KB
 are short** (docs/plans/KERN-MEGA-PLAN.md 14.37): `mx_alloc` packs every
@@ -166200,9 +166209,11 @@ accident, by delivering a code that was never there.
 ### 96.40.1 What the kernel does with the post
 
 `hbm_dosrun` is the spender, in `HIBER.DRV` beside the hibernate it shares its
-teardown with, and it runs at `ui_task` step 0 with nothing held. Six things
-can go wrong before a byte of the machine is torn down and **each says which**
-— a stale record, a folder that has moved, a `DOS.O88` that is not there, a
+teardown with, and it runs at `ui_task` step 0 with nothing held. Seven
+things can go wrong before a byte of the machine is torn down and **each says
+which** — a stale record, a disk image still mounted (`Unmount the image
+first`, kern_big: §18.101.3's read-only bit is virtual and `kern_dos` has no
+`dskw_imgro`), a folder that has moved, a `DOS.O88` that is not there, a
 volume `int 13h` cannot reach, no heap for the extent list, and a part too
 fragmented to hand over.
 

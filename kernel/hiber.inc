@@ -2602,6 +2602,24 @@ hbm_dosrun:
     jne .b1
     cmp word [cs:hbm_dosrec + KDH_MAGIC + 2], KDH_SIG >> 16
     jne .b1
+%ifdef OS88_IMG
+    ; --- ...AND NO DISK IMAGE MOUNTED (SPEC.md 18.101.3) -------------------
+    ; A mounted image's file is read-only only VIRTUALLY - dskw_imgro, in a
+    ; FAT layer kern_dos does not assemble - so a DOS program given the whole
+    ; machine could delete or replace it, and the session coming home would
+    ; write the drive into clusters another file now owns. Refused here,
+    ; with nothing taken yet, by the row walk dsk_img_next makes
+    mov bx, dsk_vtab
+.imgrow:
+    cmp byte [bx+DV_KIND], DVK_DRV
+    jne .imgnx
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    je .bimg
+.imgnx:
+    add bx, DV_SIZE
+    cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
+    jb .imgrow
+%endif
 
     ; --- 3c. THE VOLUME TABLE, WHICH WAS HARD-CODED OVER THERE (96.46) ------
     ; `kern_dos` assumed A: and B: as BIOS units 0 and 1 and every other row
@@ -3178,17 +3196,22 @@ hbm_dosrun:
 %endif
     jmp hbm_handover            ; 87.5 step 5, factored. A JUMP for the reason
                                 ; hbm_res's is one: nothing returns from it
-; **A REFUSAL SAYS WHICH STEP, and that is not only for the bring-up.** Six
-; things can go wrong before the machine is torn down and they are six
-; different repairs: a stale record, a folder that has moved, a DOS.O88 that
-; is not there, a volume int 13h cannot reach, no heap for the extent list,
-; and a part too fragmented to hand over. `kern_dos could not be reached` is
-; true of all six and useful for none, and these strings are MODULE bytes -
-; the machine pays nothing for them until it asks.
+; **A REFUSAL SAYS WHICH STEP, and that is not only for the bring-up.** Seven
+; things can go wrong before the machine is torn down and they are seven
+; different repairs: a stale record, a disk image still mounted, a folder that
+; has moved, a DOS.O88 that is not there, a volume int 13h cannot reach, no
+; heap for the extent list, and a part too fragmented to hand over. `kern_dos
+; could not be reached` is true of all seven and useful for none, and these
+; strings are MODULE bytes - the machine pays nothing for them until it asks.
 %ifdef KERN_MEGA
  %define HBM_BADV .badv         ; kern_mega: a refusal after hbm_vbn gives
 %else                           ; back what was taken (KERN-MEGA-DOS-PLAN
  %define HBM_BADV .bad          ; 10.4 item 3)
+%endif
+%ifdef OS88_IMG
+.bimg:                          ; before hbm_vbn: nothing to give back
+    mov si, hbm_s_dimg
+    jmp short .bad
 %endif
 .b1:
 %ifdef MEGA_DIAG
@@ -5508,6 +5531,9 @@ hbm_s_d3:       db 'DOS.O88 is not there now', 0
 hbm_s_d4:       db 'The ROM cannot read it', 0
 hbm_s_d5:       db 'No room for the extents', 0
 hbm_s_d6:       db 'kern_dos too scattered', 0
+%ifdef OS88_IMG
+hbm_s_dimg:     db 'Unmount the image first', 0
+%endif
 %ifdef KERN_MEGA
 hbm_s_d7:       db 'No room above 1MB', 0
 hbm_s_d8:       db 'Could not save to disk', 0   ; 14.43's image
