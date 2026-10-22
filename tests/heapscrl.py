@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""The Task Manager's heap page scrolls, and its bar survives the refresh.
+"""The Task Manager's memory page scrolls, and its bar survives the refresh.
+
+The page was the HEAP page until SPEC.md 28.4.10 merged it into the memory
+page; its list is groups now, and the row opens all of them (`+ALL`) first,
+because a closed list is one row per owner and does not overflow.
 
     make marty && python3 tests/heapscrl.py [--machine os8088_5150_cga_gla]
 
@@ -113,6 +117,7 @@ PKG_FOLDER, PKG_TIMER, PKG_BOUNCE = "APPS", "TIMER.O88", "BOUNCE.O88"
 # scroll range away between two reads - and every assertion below then fails
 # at once with nothing wrong.
 SLACK = 3
+TM_PEN, TMM_HDR_Y = 8, 66               # apps/taskmgr/taskmgr.asm
 
 # One unattended paint of this page, in CGA frames. TM_INT is 9 ticks and
 # TM_SLOW is 4 of those (SPEC.md 28.6), so a refresh is 36 ticks = 1.98 s, and
@@ -223,6 +228,9 @@ class Tm:
 
     def byte(self, name):
         return self.m.read(self._at(name), 1)[0]
+
+    def dword(self, name):
+        return int.from_bytes(self.m.read(self._at(name), 4), "little")
 
     def win(self):
         return dispcp.win_rect(self.m, S, self.slot)
@@ -382,7 +390,7 @@ def main(argv):
             dispcp.open_drive(m, mo, S, wait, letter)
             tick(m, 60)
 
-        # --- the Task Manager, and its heap page ---------------------------
+        # --- the Task Manager, and its memory page -------------------------
         mo.menu(CHIP[0], CHIP[1], MI_TASKS[0], MI_TASKS[1])
         tick(m, 150)                # NOT settle: this window repaints twice a
                                     # second, so the screen never stops
@@ -395,14 +403,30 @@ def main(argv):
         say("heapscrl: %s - window %d at (%d,%d) %dx%d, segment %04x"
             % (a.machine, slot, wx, wy, ww, wh, seg))
 
-        cx, cy = wx + 40, wy + wh - 12      # inside the content, low and left:
-        for _ in range(2):                  # clear of the bar's own column
+        # The memory page - the heap page merged into it (SPEC.md 28.4.10).
+        # The click that cycles it goes ABOVE the list, on the captions and
+        # the map: a click on the list is a group's, and opens or closes it.
+        cx, cy = wx + 40, wy + 36
+        for _ in range(2):
+            if tm.byte("tm_view") == 1:
+                break
             mo.click(cx, cy)
             tick(m, 40)
-        if not check(tm.byte("tm_view") == 2,
-                     "two clicks reach the heap page",
-                     "the click cycles 0 -> 1 -> 2 and this is where the rest "
+        if not check(tm.byte("tm_view") == 1,
+                     "a click reaches the memory page",
+                     "the click cycles 0 -> 1 -> 0 and this is where the rest "
                      "of the file is looking"):
+            return report()
+        # ...and every group OPEN: closed, the list is one row per owner and
+        # no number of programs would run it off the frame. `+ALL` is the
+        # header's right end, off the page's own origin and rise.
+        if tm.dword("tm_exp") != 0xFFFFFFFF:
+            mo.click(tm.word("tm_cx") + TM_PEN + 22 * 8 + 4,
+                     tm.word("tm_cy") + TMM_HDR_Y - tm.word("tm_xoff") + 4)
+            tick(m, 40)
+        if not check(tm.dword("tm_exp") == 0xFFFFFFFF,
+                     "+ALL opens every group",
+                     got="%08X" % tm.dword("tm_exp")):
             return report()
 
         # --- make the list longer than the frame ---------------------------
@@ -534,11 +558,11 @@ def main(argv):
         # the incremental picture drifts away from the drawn-from-scratch one
         # and stays away.
         worn = band(m, x1, y1, x2, y2)
-        for _ in range(3):                  # 2 -> 0 -> 1 -> 2, and each one
+        for _ in range(2):                  # 1 -> 0 -> 1, and each one
             mo.click(cx, cy)                # white-fills the content first
             tick(m, 50)
-        check(tm.byte("tm_view") == 2,
-              "three more clicks come back to the heap page")
+        check(tm.byte("tm_view") == 1,
+              "two more clicks come back to the memory page")
         mo.to(*park)
         tick(m, 30)
         check(worn == band(m, x1, y1, x2, y2),
@@ -546,7 +570,7 @@ def main(argv):
               "tm_rowr, the half that survives its own repair: a row redrawn "
               "while the bar's key has not moved erases part of it and "
               "nothing puts it back, so what the incremental path leaves on "
-              "the glass drifts away from what tm_draw_heap would put there")
+              "the glass drifts away from what tm_draw_mem would put there")
 
     return report()
 

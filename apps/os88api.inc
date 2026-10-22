@@ -90,6 +90,12 @@ KERNEL_SEG   equ 0x0060     ; where the kernel is, and what ES holds on entry.
 ;      earlier pass. A rect in bss is valid until the next thing that can move
 ;      the window, which is any moment your code is not running.
 ;
+; **A STANDARD BUTTON'S RECTS ARE THE ONE EXCEPTION, and the library makes
+; it one**: os88ui_btninit's record banks where its rects were last right and
+; moves them with the window before every draw and hit test (§20.5.1.3.5).
+; Every other rect - a radio group, a list, a scroll bar, a text field - is
+; still yours to re-place.
+;
 ; **ASSUME IT ALWAYS HAPPENS.** §11.96.13 snaps a drop's x onto a multiple of
 ; 8 before the cache is taken - it exists because the byte-phase refusal below
 ; otherwise turned away seven drags in eight - so in ordinary use the replay
@@ -2505,7 +2511,17 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; protected mode, and kern_big with a store
                                  ; (XMEM.DRV's table: a slot or FFh, SPEC.md
                                  ; 28.4.8); CF=1, AX = 1 with no pool
-                                 ; (KERN-MEGA-PLAN 13.6)
+                                 ; (KERN-MEGA-PLAN 13.6). ON kern_mega, TWO
+                                 ; MORE THINGS (KERN-MEGA-PLAN 14.70.2): a
+                                 ; driver's block (FDh, or 0C0h | row) carries
+                                 ; its DRVC_* class at XMW_CLS, 0 when its row
+                                 ; is not drv_tab's; and BX = XMW_FIXED asks
+                                 ; for the fixed areas between 1MB and the
+                                 ; pool too, as records IN FRONT of the blocks
+                                 ; owned XMW_HMA..XMW_PAD, their XMW_OFF
+                                 ; NEGATIVE (below the base) - they tile the
+                                 ; span exactly. Every other kernel ignores BX
+                                 ; and writes 0 at XMW_CLS
 %define OSAPI_MEM_HUGE      KERNEL_SEG:0x04BD   ; A CLAIM OF ANY SIZE, walked
                                  ; by a STEP (KERN-MEGA-PLAN 14.1 answers 6,
                                  ; 7): AX = KB (1..65535); out CF=0, DX = its
@@ -2548,7 +2564,14 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
 XMW_OFF     equ 0
 XMW_KB      equ 2
 XMW_OWN     equ 4
+XMW_CLS     equ 5               ; db: a driver's block's DRVC_* class
 XMW_SIZE    equ 6
+XMW_FIXED   equ 0x4658          ; BX: name the fixed areas ('XF')
+XMW_HMA     equ 0xF0            ; ...the HMA, kept for the DOS trip
+XMW_GDT     equ 0xF1            ; ...the GDT
+XMW_LDT     equ 0xF2            ; ...the LDT and the IDT
+XMW_KCODE   equ 0xF3            ; ...`.cold` and `.mega`
+XMW_PAD     equ 0xF4            ; ...and the padding up to the pool's base
 %define OSAPI_XMEM_SEL      KERNEL_SEG:0x04AB   ; DX:AX = an address inside a
                                  ; block YOU own, CX = bytes (0 = 64KB); out
                                  ; CF=0 and AX = a DATA SELECTOR whose segment
@@ -4569,6 +4592,9 @@ OS88__AFIT  equ OS88__AF%[OS88__AN]
                                 ; 20.5.1.3.4)
     dw 0                        ; OS88UI_BT_ONCLK, your click proc - btninit
     dw 0                        ; OS88UI_BT_NEXT, THE LIBRARY'S list link
+    dw 0, 0, 0, 0               ; OS88UI_BT_OX/OY/FX/FY, THE LIBRARY'S: where
+                                ; the rects were last right (SPEC.md
+                                ; 20.5.1.3.5)
 %endmacro
 
 %macro OS88_BSS 1

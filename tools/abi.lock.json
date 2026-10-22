@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "c2ead659ae85e851a951ef31cbe8fe1f192959982b63c4f982f6a8778c795a9d",
+  "fingerprint": "10eab70ec54ce110db76095386ebb40dae38186e3e922c5346ccf606b7754f4e",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "ca3ea31741e1947d2f979a4cd99a93d94d4ce23982bb2c11933c55be9016ab37",
+  "fingerprint": "a2b8ec07d794943c8a95be5722f4e4ea163db1ab459bfbee6823fa9a4ab49810",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -784,6 +784,34 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "main -> elendilon merge (2026-10-22): main's SND_CAP_MIXER, DRVC_CD = 9, DQ_MAXREC 8 -> 9 and FSCAP_ICON/DRV_ICONV join elendilon's SDK. All are additions already recorded on main as non-breaking; no cell moved, so neither number bumps",
+   "to": 11
+  },
+  {
+   "fingerprint": "0c7a43a453ff994f12e5e369fd539879ad44c305a707515bb5200ac38e13bbc0",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OS88UI_BTNREC grows four library-owned words (OS88UI_BT_OX/OY/FX/FY, SPEC.md 20.5.1.3.5). The record lives in each package's own image and only that package's copy of os88ui.inc reads it - the kernel never does - so every package built before still runs: no PKG_FMT bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "6c2587b92d5f8024b94059c0122ef13eba3af431991a89ed31c8723d4493f2d0",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OS88UI_BTNREC grows four library-owned words (OS88UI_BT_OX/OY/FX/FY, SPEC.md 20.5.1.3.5). The record lives in each package's own image and only that package's copy of os88ui.inc reads it - the kernel never does - so every package built before still runs: no PKG_FMT bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "a2b8ec07d794943c8a95be5722f4e4ea163db1ab459bfbee6823fa9a4ab49810",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge: XMEM_WALK's fixed-area markers and XMW_CLS (Task Manager 14.70.2) with elendilon's os88ui button changes; additive, no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "10eab70ec54ce110db76095386ebb40dae38186e3e922c5346ccf606b7754f4e",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "merge: XMEM_WALK's fixed-area markers and XMW_CLS (Task Manager 14.70.2) with elendilon's os88ui button changes; additive, no bump",
    "to": 11
   }
  ]

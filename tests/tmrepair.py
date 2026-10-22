@@ -17,7 +17,7 @@ banked and nothing owed, which wm_draw_win already routes through W_PAINT
 where a plain restore skips it. wm_damage then answers the EMPTY rect and the
 app spends its own debt.
 
-  PROMISE  on the heap page it carries WF_SAVEU, and a whole-content band
+  PROMISE  on the memory page it carries WF_SAVEU, and a whole-content band
            with it.
   KEPT     wholly covered, wm_su_drop is not called for it across many worker
            polls - 28.8's loop is gone. Asserted through a breakpoint and not
@@ -318,15 +318,16 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         sys.exit("the newest package window is %r" % w.title)
     ours = S("wm_wins") - (KERNEL_SEG << 4) + slot * os88geom.WIN_SIZE
 
-    # the HEAP page: the densest, and the one that reports claims
+    # the MEMORY page: the densest, and the one that reports claims (the
+    # heap page merged into it, SPEC.md 28.4.10)
     for _ in range(4):
-        if view(m, seg) == 2:
+        if view(m, seg) == 1:
             break
         mo.click(w.x + 20, w.y + TITLE_H + 40)      # left of the scroll bar
         mo.to(*dispcorner.PARK)
         tick(m)
-    if view(m, seg) != 2:
-        sys.exit("could not reach the heap page (view %d)" % view(m, seg))
+    if view(m, seg) != 1:
+        sys.exit("could not reach the memory page (view %d)" % view(m, seg))
 
     # --- PROMISE -----------------------------------------------------------
     w = win(m, slot)
@@ -334,7 +335,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     print("PROMISE : %s (%d,%d) %dx%d view=%d saveu=%s band=%r"
           % (w.title, w.x, w.y, w.w, w.h, view(m, seg), w.promises, list(band)))
     if not w.promises:
-        fails.append("PROMISE: the heap page does not carry WF_SAVEU")
+        fails.append("PROMISE: the memory page does not carry WF_SAVEU")
     if band[0] != w.w - 2:
         fails.append("PROMISE: the left band is %d and the content is %d wide "
                      "- a band short of the whole content leaves the app owing "

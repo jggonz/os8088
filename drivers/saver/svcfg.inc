@@ -334,7 +334,7 @@ sc_btns:
 ; release-fired; what changed is that the DRAW goes through the control.
 sv_btlbl: dw 0
 sv_btflg: dw 0
-sv_btrec: dw 0, sv_btlbl, sv_btflg, 1, 0, 0, 0, 0
+sv_btrec: dw 0, sv_btlbl, sv_btflg, 1, 0, 0, 0, 0, 0, 0, 0, 0
 
 sc_btn1:
     push ax

@@ -22935,6 +22935,10 @@ author reads:
    pass. A cached rect is valid until the next thing that can move the window,
    which is any moment your code is not running.
 
+**For a standard button the library does rule 1 for you** (§20.5.1.3.5): it
+notices a record whose rects were laid out before the move and moves them.
+Every other hit test a package keeps is still its own.
+
 **Assume it always happens.** §11.96.13 snaps a drop's x onto a multiple of 8
 *before* the cache is taken — it exists because the byte-phase refusal below
 otherwise turned away seven drags in eight — so in ordinary use the replay is
@@ -26951,6 +26955,11 @@ dismissed by the menu command that then saved or loaded (Note Pad's Save,
 The Wire's Load and Add to Disk, RealDMG's settings and states). Some of
 those moves are under `FPG_WARM` and would show nothing anyway; every one of
 the rest now shows the bar with no change to the package.
+
+**What it cost**: kern_big `.text` +36; kern_small +38, of which one is a
+parity pad - the fix alone is +37 there, which left `ui_task` and every
+routine after `fprog.inc` at an odd shift (`t_hotpar`), so a never-executed
+byte after `fpg_finish`'s tail jump puts them back.
 
 ### 12.9 The bar is three segments, and each answers for itself
 
@@ -43733,14 +43742,18 @@ the library. `docs/plans/BUTTON-GESTURE-PLAN.md` is the design record.
 
 | | |
 |---|---|
-| `OS88UI_BT_RECTS` 0 | near ptr to an array of 4-word **inclusive screen** rects, filled by your painter from `OSAPI_WM_CONTENT` every pass, because a window moves |
+| `OS88UI_BT_RECTS` 0 | near ptr to an array of 4-word **inclusive screen** rects, filled by your painter from `OSAPI_WM_CONTENT`. A window that MOVES is not repainted, and the library moves the rects with it (§20.5.1.3.5) |
 | `OS88UI_BT_LABELS` 2 | near ptr to an array of near ptrs to NUL labels |
 | `OS88UI_BT_FLAGS` 4 | near ptr to an array of flag **words** (`OS88UI_DIS`, `OS88UI_DEF`, `OS88UI_INK`, `OS88UI_LATCH`), or 0 for none |
 | `OS88UI_BT_N` 6 | how many are **live this pass** — a paged window points one record at either page's buttons |
 | `OS88UI_BT_WIN` 8 | the window, written by `os88ui_btninit` |
 | `OS88UI_BT_DOWN` 10 | **the library's**: index plus one of the control a press is live on, 0 for none. Read it; never write it |
+| `OS88UI_BT_ONCLK` 12 | your own `W_ONCLICK` proc, chained when a press was not a button's (§20.5.1.3.3) |
+| `OS88UI_BT_NEXT` 14 | **the library's**: the next record on the package's list (§20.5.1.3.3) |
+| `OS88UI_BT_OX`..`FY` 16..22 | **the library's**: the content origin the rects were last right at, and the first rect's corner then (§20.5.1.3.5) |
 
-`OS88UI_BT_SIZE` is 12. The record is the caller's data and there may be one
+`OS88UI_BT_SIZE` is 24 (the kernel's own record, `os88ui_krec`, stops at
+`OS88UI_BT_OX`: it is never rebased). The record is the caller's data and there may be one
 per button GROUP rather than one per window, which is the shape the tree has:
 Sheet's ten buttons are five dialog pairs.
 
@@ -43861,6 +43874,63 @@ buttons drawn over A, or B's click proc run with B's window gone. The walk
 writes 0 to the stale record's window word (no window is at 0), so the record
 being adopted is the first match again. Records behind it are found after it
 and cannot shadow it.
+
+##### 20.5.1.3.5 The rects follow a DRAGGED window — the library notices
+
+**A window dragged by its title is replayed, not painted** (§11.96.12.0), so
+rects a package laid out in its `W_PAINT` go on naming where the window WAS.
+§11.96.12.0's rule for that is *"compute every coordinate from the content
+box every time you hit-test"* — and §20.5.1.3.3 made it impossible to follow
+for a button: `os88ui_btnclick` IS the window's `W_ONCLICK` and tests the
+rects before any package code runs. A package could only comply by putting a
+`W_ONCLICK` of its own in front of the library's, and five did (Redline,
+Tracker's two windows, the Video Player, PiXEL). Thirteen did not, and every
+one of them answered a press on a moved window at the button's OLD place:
+the Timer, Sheet's five dialogs, ArtfulType's splash, System Check, the DOS
+box, MIDIRack, Audio, The Wire, the Browser, Telnet, WireChat, WireFleet and
+WireBall's front screen - some until a repaint, some for one press, and about
+ten of them able to FIRE a button whose old place the press happened to land
+on. Reported off INSTALL (§117.2): *"Finished - click Next", and Next did
+nothing until the window was minimized and restored.*
+
+**So the library notices, and no package changes.** `os88ui_brebase` runs at
+every `os88ui_btn` and at `os88ui_bfrec` - the press, the drag and the release
+all hit-test there - and banks two things in the record: the window's content
+origin (`OSAPI_WM_CONTENT`) and the first rect's corner. The next call finds
+one of two things:
+
+- **The same corner.** Nobody has laid the rects out since the bank, so they
+  are exactly where they were when they were last right, and what they owe is
+  the window's move since then: every live rect (`OS88UI_BT_N` of them) is
+  shifted by it. A window that has not moved shifts by nothing.
+- **A different corner.** The package has laid them out again from the origin
+  it has now - in its paint, or in a `W_ONCLICK` of its own - so they are
+  current and are banked as they stand. That is why the five packages that
+  already re-placed at the press are untouched by this.
+
+A record with no window (before `os88ui_btninit`) is left alone. The bank is
+the record's last four words, the record grows from 16 to 24 bytes, and
+`OS88UI_BTNREC` declares them zeroed - a corner at (0, 0) is no button's, so a
+fresh record banks on its first draw. It is compiled wherever
+`os88ui_btninit` is (`OS88UI_REBASE`: a package, not `OS88UI_NOBTN`, not
+`OS88UI_NOBTNINIT`), so the kernel and the `OS88UI_NOGEST` packages carry none
+of it, and it moves a package's own rect array in place, which is also what
+corrects the package's own later draws from that array.
+
+**What it does not reach**: hit tests that are not the record's - a radio
+group's `OS88UI_RD_RECT`, a scroll bar, a list's rows, a text field - which
+are each package's own and still owe §11.96.12.0's rule. INSTALL keeps its
+`in_press` for its radio rows for that reason.
+
+**What it cost**: no kernel byte. Each package image that installs the
+gesture carries the routine and its two calls - **+98 bytes**, which with its
+record's 8 is the +106 seen across Artful, Audio, the Browser, CDRack,
+INSTALL, MIDIRack, PiXEL, System Check, Telnet, The Wire, the Timer, the
+Video Player, WireBall, WireChat and WireFleet (Tracker, two records, +114;
+Sheet and the DOS box, whose records are bss, +98). A package that only draws
+a button grows by its record's 8. `tests/btnmove.py` is the gate: the Timer
+dragged twice, Stop and then Start pressed at the place each is drawn - red
+with the rebase out.
 
 ##### 20.5.1.3.4 `OS88UI_NOGEST` — the install side, opted out of
 
@@ -61215,21 +61285,27 @@ double-click on `TASKMGR.O88` in a Disk window is unaffected and opens as
 many as you like; that is the package rule, and the singleton is the menu
 item's rule.
 
-**Three pages.** `[tm_view]` (0 = performance, 1 = memory, 2 = heap — §28.4)
-selects what the content shows; all three share the sampler, the instance
-snapshot and the process-row geometry. The window's W_ONCLICK is `tm_click`:
-ANY content click **cycles** the page 0 → 1 → 2 → 0 — the content has no
-other click targets, ui.inc §13 only feeds clicks to the front window (a
-click that raises the window does not cycle), and the handler runs under the
-gfx lock its caller already holds, so it white-fills the whole content rect
-(198×245 from the wm_content origin) and runs the new page's full paint body
-in place. It **cycles rather than toggles**, and that is the whole of the
-navigation: a third page needs no chrome, no tabs and no second hit-test,
-because the one click target this window has ever had is all of it. `tm_kinit`
-zeroes `[tm_view]` with the rest of the module state: every launch opens in
-the performance view. The sampler never looks at the view — history keeps
-accumulating while the other two pages are up, so cycling back shows a
-gapless graph.
+**Two pages.** `[tm_view]` (0 = performance, 1 = memory — §28.4.10)
+selects what the content shows; both share the sampler, the instance
+snapshot and the process-row geometry. It was **three** until
+docs/plans/KERN-MEGA-PLAN.md 14.70.2 merged the memory page and the heap page
+into one (§28.4.10): two lists of the same claims, one by owner and one by
+claim, read as one list whose owners OPEN into their claims. `TM_NVIEW` is 2
+and the small build, which has neither, is unchanged (§28.12). The window's
+W_ONCLICK is `tm_click`: a content click **cycles** the page 0 → 1 → 0, except
+that on the memory page the scroll bar (§28.4.4) and then the list -
+its two header switches and a group's row (§28.4.10) - take the point first,
+so what still turns the page is a click on the captions and the map above the
+list, the one click target this window always had. ui.inc §13 only feeds
+clicks to the front window (a click that raises the window does not cycle),
+and the handler runs under the gfx lock its caller already holds, so it
+white-fills the whole content rect (198×245 from the wm_content origin) and
+runs the new page's full paint body in place. It **cycles rather than
+toggles**, so a third page would need no chrome, no tabs and no second
+hit-test. `tm_kinit` zeroes `[tm_view]` with the rest of the module state:
+every launch opens in the performance view. The sampler never looks at the
+view — history keeps accumulating while the memory page is up, so cycling
+back shows a gapless graph.
 
 **Load gauge — idle-spin calibration.** `tm_worker` never sleeps. Each
 interval it spins { 32-bit counter += 1; `task_yield` } until 9 ticks have
@@ -61338,9 +61414,9 @@ plumbing), the new sweep column plus an all-white
 gap column at the advanced tm_pos, the RAM line and bar, and the process
 rows — the full graph render happens only in tm_paint, so the periodic lock
 hold stays small (Bounce-scale). Memory view: the RAM line and its HEAP
-figures, the XMS line and bar, the map interior and the rows; the two map
-frames and the column header are painted only by the full bodies (tm_paint /
-tm_click). All drawing is self-backgrounding (each element white-fills its
+figures (or kern_mega's one `Ram` pair, §28.4.8), the XMS line and bar, the
+map interior, the `AVAIL` line, the header and the rows; the two map frames
+are painted only by the full bodies (tm_paint / tm_click). All drawing is self-backgrounding (each element white-fills its
 own rect or paints both segments), so tm_paint needs no preceding content
 clear beyond the one wm_paint_all already does.
 
@@ -61360,6 +61436,9 @@ either.
 | `TMC_BAR` — the performance RAM bar | `[tm_barw]` |
 | `TMC_XMS` — the XMS line (§41) | the composed string |
 | `TMC_XBAR` — the XMS bar | `[tm_xbarw]` |
+| `TMC_AVL` — the memory page's `AVAIL nnnK  MAX RUN nnnK` line (§28.4.10) | the composed string |
+| `TMC_HDR` — its column header with the two switches | `[tm_mview]` and whether every group is open |
+| `TMC_HSB` — its scroll bar | the bar's `total`, `fit` and `top` |
 
 The map is the one that pays: its interior is ~3,000 pixels of pattern fill,
 and it changes only when a claim is made or a package loads or closes, which
@@ -62082,6 +62161,17 @@ the Wire's file name at all.
 
 ### 28.4 The heap page — every claim, grouped under the app that holds it
 
+**SUPERSEDED IN SHAPE by §28.4.10**: since docs/plans/KERN-MEGA-PLAN.md
+14.70.2 the heap page is no longer a page of its own. Its list became the
+memory page's, where each owner is ONE row that opens into its claims, and
+its two caption lines became one `AVAIL` line. What follows to §28.4.9 is the
+design record of the two pages that were merged and stays true of the
+decoding - the TYPE table, the TIER column, the purge accounting of §28.4.1,
+the scroll bar of §28.4.4, the driver attribution of §28.4.6 and the
+read-only map of §28.4.9. Where it describes a layout (the captions at
+(6,4)/(6,15), `TMH_ROW_Y`, `TMH_ROWS`, `[tm_hcolrows]`, `tm_rows_heap`) or
+files a purgeable claim under an owner (§28.4.5), §28.4.10 is the contract.
+
 The third page (`[tm_view]` = 2, `tm_rows_heap`). The memory view above it
 answers *how much* heap each instance holds — one `HEAP` column per row, out
 of `SSI_KB` — and that single figure is the wrong shape for the two questions
@@ -62759,22 +62849,28 @@ page:
 |---|---|
 | RAM | conventional + `[tm_hitot]` (the BIOS's extended KB) in MB |
 | System | `tm_sysk` + `[tm_hisys]` (+ `IVT+BIOS` when folded) + `SK_KCLAIM` |
-| memory view System SIZE | `tm_sysk` + `[tm_hisys]`, with a `  Above 1MB` row under it carrying `[tm_hisys]` so the buffer rows still sum |
+| memory view System SIZE | `tm_sysk` + `[tm_hisys]`, its items naming the fixed areas above 1MB and every owner there (§28.4.10) - or one `Above 1MB` row carrying the span where the walk has no markers - so the rows still sum |
 | a program, both pages | its region and conventional claims, plus `tm_slotxkb`'s blocks above 1MB (its `OSAPI_XMEM_ALLOC` blocks, and on kern_mega its `OS88_HIGHMEM` claims) |
-| HEAP, kern_mega in protected mode only | claimed `SK_CLAIM` + `[tm_hiused]` − `[tm_hisys]` over `SK_HEAP` + `[tm_hitot]` − `[tm_hisys]`, in MB |
+| the summary line, kern_mega in protected mode only | ONE pair, `Ram u.uu/t.ttM` - used (RAM's, as above) over total (conventional + `[tm_hitot]`) in MB to two decimals, truncated - and ONE bar (KERN-MEGA-PLAN 14.70.2) |
 
-RAM used is then IVT+BIOS + System + every program row. On kern_mega the
-HEAP pair is what a package could be handed: base memory less the system's,
-plus all RAM above 1MB except the system's. On kern_big HEAP stays the
-conventional heap, because memory above 1MB is a store a copy reaches and
-not memory a package runs in, and the memory view's `XMS` line is the pool.
+RAM used is then IVT+BIOS + System + every program row. **On kern_mega
+there is no HEAP pair any more** (KERN-MEGA-PLAN 14.70.2, the owner's call):
+it was RAM's own pair less the system's share on both sides, so beside RAM it
+said the same thing twice in two units, and the page's `AVAIL` line (§28.4.10)
+is where the heap a package could be handed is read. The line is `Ram` and
+one pair, and the XMS bar is not drawn - one bar, `[tm_xoff]` set at
+`tm_init` as on a machine with no store. **Everywhere else the split stays
+exactly as it was**: a conventional-only machine reads `RAM uuu/tttK` and
+`HEAP uuu/tttK` in whole KB, and kern_big with its store keeps RAM in MB to
+one decimal beside the conventional HEAP, because memory above 1MB there is a
+store a copy reaches and not memory a package runs in, and the memory view's
+`XMS` line is the pool.
 Measured on 86Box: the mr286 (4MB, kern_mega) reads `RAM 0.3/3.6M`, System
 343K of which 267K is above 1MB; an AMI 286 with 2MB on kern_big reads
 `RAM 0.1/1.6M`, System 122K of which 64K is the HMA, `XMS 0/960K`. The same
 board at 1MB reports no extended memory at all, and the page shows none.
-The `Above 1MB` row is drawn only with `[tm_hion]`; on a full slot table it
-costs the memory view's last instance row, which `tm_mrow_open` already
-clips.
+The `Above 1MB` row (or the fixed areas that replace it, §28.4.10) is drawn
+only with `[tm_hion]`; the list scrolls, so it costs no other row.
 
 ### 28.4.9 `640K-1MB`: the memory view's read-only map of what is not RAM
 
@@ -62799,6 +62895,131 @@ steps over the whole ROM, rounded up to 2K. Up to `TM_UMAX` (8) are listed.
 A ROM without the signature, RAM a memory manager mapped there, and an AT
 BIOS that also fills E000 fall in `Unrep.`, because nothing on the machine
 states them, and the rows add to 384K. No kernel byte.
+
+**A ROM's extent is clamped to F000** (KERN-MEGA-PLAN 14.70.2). The length
+byte is the ROM's own claim and nothing bounds it, so a ROM near the top of
+the window could reach past the BIOS - and the scan's 16-bit segment, stepped
+past FFFF, WRAPPED into conventional memory and started over, listing ROMs
+twice. Its KB are cut at F000 now and the scan stops there, so no ROM row can
+overlap `BIOS` and `Unrep.` (384K less the ROM rows, by construction) cannot go
+negative. A Victory 286 photograph reading `400K` of 384 (`Unrep. 144`) did
+not reproduce on `vm/286-victory` under 86Box (Video 128, ROM C000 24K, ROM
+C680 6K, Unrep. 162, BIOS 64) nor under Bochs (128 + 38 + 154 + 64). The
+rows close by construction - `Unrep.` is 192 less the very ROM figures printed
+beside it - so 400 is not a sum this code prints from one scan. The clamp
+fixes the one defect the scan had, and the photograph stays UNEXPLAINED until
+it is retaken on this build: the open question is what the Victory's ROM
+headers say, which `tm_uma` holds and a field run can read.
+
+### 28.4.10 One memory page: groups that open, two views, and a header that switches them
+
+docs/plans/KERN-MEGA-PLAN.md 14.70.2. The memory page and the heap page
+listed the SAME claims twice - once summed per owner, once per claim - so a
+reader cycled between them to answer one question, *who holds this and what
+is it made of*. They are one page now (`[tm_view]` = 1), and the list on it
+is **collapsible groups**: one row per owner carrying its total, and a click
+on that row opens it into its claims, each with the heap page's TYPE, ADDR,
+SIZE and TIER (§28.4). What sits above the list is the memory page's as it
+was - the summary line, the map, and on kern_big with a store the `XMS` line
+and bar - and one line replaces the heap page's two captions:
+
+- `AVAIL nnnK  MAX RUN nnnK` (`TMC_AVL`, `TMM_AVL_Y`): free heap and the
+  largest single run, one `OSAPI_MEM_AVAIL`, which was the heap page's
+  fragmentation reading (its `FREE`/`MAX`) and keeps its argument.
+- the header (`TMC_HDR`, `TMM_HDR_Y`): `PROGRAMS` or `SYSTEM`, then `ADDR`
+  and `SIZE`, then `+ALL` or `-ALL` - the two ends lettered INVERTED, which on
+  a page with no other chrome is what says they are switches.
+
+**The groups**, classified once per paint (`tm_classify`): every claim
+record and every pool block above 1MB gets a group id, a bit of the dword
+`[tm_exp]` that says whether that group is open. Ids 0..11 are the instance
+slots, then System, Programs (the SYSTEM view's one row for every package),
+Purgeable, Kernel, and one per driver class (`TMG_DRV` + `DRVC_*`). A
+purgeable record (§50.6, tags FBh..FEh) is in **Purgeable**, whoever caused
+it: it is in no owner's total by §28.4.1's rule, so filing it under one -
+§28.4.5's raise cache under the window's package - made a group's rows add to
+more than its heading. A driver's image and its claims are the driver's
+group, named by its class (`SOUND.DRV`, `HDD.DRV`, `ETHER.DRV`), off the
+image header's class byte in conventional memory and off `XMW_CLS` above 1MB
+(§28.4.11); a driver kern_mega moved above 1MB names its claims by its data
+SELECTOR, which `verr` admits before the header is read. A group with
+nothing in it is not drawn, so `Kernel` appears only where the kernel claims
+something.
+
+**Two views, switched at the header's left end** (`[tm_mview]`):
+
+| | PROGRAMS (`[tm_mview]` = 0) | SYSTEM (1) |
+|---|---|---|
+| System | ONE row, its total and the gray square, opening into the itemised rows below | itemised at the top level |
+| a package | one group each, its square, opening into its claims and its blocks above 1MB | one `Programs` row, opening into a row per package |
+| Purgeable | a group, `tm_pat_clm`'s square, opening into the caches with their tiers | the same |
+| 640K-1MB | §28.4.9's rows, after the list | the same |
+
+System's items (`tm_sysitems`): `IVT+BIOS` at 0000 (§28.4.8), `Code+data`
+(the kernel's span, no address), `Stacks` and `FAT snap`; above 1MB on
+kern_mega the fixed areas by name - `HMA (DOS)`, `GDT`, `LDT+IDT`, `Kernel
+code`, `Padding` - off `OSAPI_XMEM_WALK`'s markers (§28.4.11), or one
+`Above 1MB` row where the walk has none to give (kern_big's HMA); then the
+`Kernel` group (its pool blocks and tagged claims), one group per driver, and
+one per built-in (a Disk window, named by its folder - `APPS`), each opening into its claims. The
+rows still sum: System's figure is the sum of exactly these.
+
+**`+ALL` opens every group and `-ALL` closes them** - the switch says what a
+click will do, and reads `-ALL` once everything is open by any route. A
+view change starts the other view's list from its top. Both switches,
+every group row and the scroll bar are hit in `tm_lclick` and `tm_hscroll`
+before `tm_click` cycles the page, and a click that lands on neither turns
+the page as it always did (§28).
+
+**What a group row is, the click learns from the last walk**: `tm_mrow_close`
+records the group of every SCREEN row in `[tm_rgid]` (`TM_SHOWN` of them), so
+the hit-test needs no second walk and cannot disagree with what is drawn. The
+same record keeps each screen row's legend square (`[tm_rsq]`): a square is
+not in the text a chunk is hashed from, so when a row's square changes - a
+group opened above it pushes every row down - its chunk's check word is
+cleared and the square is drawn again. Without it the old squares stayed on
+the rows that had moved.
+
+**The list scrolls** exactly as §28.4.4's did, over `[tm_hrows]` rows from
+the last walk with `[tm_htop]` the first one shown; `TM_SHOWN` - `TMM_ROWS`
+or, with a second column, 11 + 16 - bounds the screen rows the records cover,
+and `[tm_maxrow]` is the columns' depth from `[tm_colrows]` and
+`[tm_col2rows]`, the memory page being the one deep list now.
+
+**Partial repaints stay partial.** Every element is keyed (`tm_elck`, §28)
+and every row is chunked (§28.2); `tm_quiet`'s hash takes the pool walk
+(`tm_xwn` and its records) too, so a block above 1MB changing hands is
+noticed without the lock. Opening one group re-letters only the rows that
+moved.
+
+**What it cost** (the package only; the small build is byte-identical,
+§28.12): `taskmgr.o88`'s image 8,554 → 9,418 bytes and its bss 1,935 → 2,385,
+measured at this change. Nothing resident on kern_big or kern_small;
+kern_mega's half is §28.4.11.
+
+### 28.4.11 `OSAPI_XMEM_WALK` names the fixed areas and the drivers, on kern_mega
+
+The rows of §28.4.10's SYSTEM view above 1MB need two facts the walk did not
+give: what the span between 1MB and the pool's base IS, and which driver a
+`FDh`/`0C0h | row` block belongs to. Both are added to the same cell,
+additively (§20.2.0.1: no `PKG_FMT` bump, `tools/abi.lock.json` refreshed):
+
+- **`XMW_CLS`**, the record's sixth byte, was always written 0. On kern_mega
+  it is now the block's driver class: `0C0h | row` reads `drv_tab[row]`'s
+  `DRVR_CLASS`, and `FDh` (`MX_KDRV`, an image) finds the `drv_tab` row whose
+  `DRVR_SEG` selector's LDT base is the block's (`mega_xmcls`). 0 when none.
+- **BX = `XMW_FIXED`** makes kern_mega write five records ahead of the
+  blocks, from a table in `.mega` (`mega_xmfix`): the HMA kept for the DOS
+  trip, the GDT, the LDT and IDT, `.cold` + `.mega` (`MEGA_KEND_KB`), and the
+  padding to `MEGA_XPOOL` - offsets negative KB from the pool's base, so the
+  five tile that span exactly. Two assembly checks hold it there:
+  `MEGA_COLD_LIN` and `MEGA_XPOOL` on a KB, and `DRVR_SIZE` = 16 for the
+  row shift.
+
+The Task Manager asks with BX = `XMW_FIXED` and keeps `[tm_hifix]`, so a
+kernel that answers no markers still reads as one `Above 1MB` row. Cost:
+kern_mega `.mega` 14,460 → 14,609 (+149 bytes), `.text` +0; kern_big and
+kern_small byte-identical (the build number aside).
 
 ### 28.5 The summary lines sit at `TM_PEN`, so the pane has one inset
 
@@ -62964,6 +63185,11 @@ across the two builds.
 
 ### 28.6 The two quiet pages paint every fourth interval, and the reason is the LOCK
 
+*The two quiet pages are ONE since §28.4.10 merged them: everything below
+that is said of the memory page and the heap page holds of the memory page
+that replaced both, which keeps the throttle, the unlocked `tm_quiet`
+question and the uncached window.*
+
 **Measured on a 5150 with a CGA (`tools/os88lockw.py`), one unattended refresh
 with nothing changed on screen:**
 
@@ -63099,6 +63325,11 @@ has not got, and every field after it moving is an ABI break for something the
 Task Manager alone reads.
 
 ### 28.8 The two quiet pages cannot hold an ORDINARY raise cache, and the cache is why
+
+*The two quiet pages are ONE since §28.4.10 merged them: everything below
+that is said of the memory page and the heap page holds of the memory page
+that replaced both, which keeps the throttle, the unlocked `tm_quiet`
+question and the uncached window.*
 
 docs/plans/completed/SAVEUNDER-LIVE-PLAN.md §18.4 put this window on the "not worth it" list
 in one line — *its worker redraws twice a second because it **is** the load
@@ -63589,7 +63820,7 @@ the pages themselves:
 
 | flag | off in `APP_SMALL` | what goes with it |
 |---|---|---|
-| `TMF_HEAP` | the heap page (§28.4) | the per-claim table and its `TYPE`/`TIER` decode, the three captions, `tm_hsnap`'s `OSAPI_MEM_AVAIL` pair, the scroll bar (§13.10) and `TMH_ROWS`' share of `tm_rowck` |
+| `TMF_HEAP` | the heap page (§28.4), the memory page's groups since §28.4.10 | the per-claim rows and their `TYPE`/`TIER` decode, the groups and the two header switches, the `AVAIL` line (`tm_hsnap`'s `OSAPI_MEM_AVAIL` pair), the scroll bar (§13.10) and `TM_SHOWN`'s share of `tm_rowck` |
 | `TMF_MEM` | the memory view (§28) | the conventional-memory map, the XMS bar, the `NAME/ADDR/SIZE/HEAP` re-columning, the legend squares and their textures (the claim swatch beside the RAM line's HEAP pair among them; the pair itself stays) — and the whole of §28.6/§28.8/§28.11's quiet-page machinery, which exists for these two pages and for nothing else |
 
 **The ladder is ORDERED and the guard says so.** The heap page borrows the
@@ -77835,7 +78066,7 @@ table's end and present on every kernel (docs/plans/KERN-MEGA-PLAN.md 12.2):
 |---|---|
 | `OSAPI_XMEM_SEL` **0x04AB** | DX:AX = an address inside an `OSAPI_XMEM_ALLOC` block the CALLER owns, CX = bytes (0 = 65,536). Out CF=0, AX = a **data selector** whose descriptor covers exactly that window: load it into DS or ES and address the block in place, with 16-bit code unchanged. **One selector per block**: a second call for the same block re-aims it, and a segment register already holding it keeps the old window until it is reloaded. It is freed with the block - `OSAPI_XMEM_FREE`, or the instance's teardown. CF=1 with AX = 1 where it is not available (every kernel but kern_mega in protected mode, and no free LDT entry) or 2 when the window is not inside a block the caller owns. UI-task context, like the four XMEM cells. `kern_small`'s cell is its `xm_copy`, which answers exactly that refusal |
 | `OSAPI_MEM_CODESEL` **0x04B1** | DX = the segment (or selector) naming a claim of the caller's. Out CF=0, AX = the selector to **far call code** in it: DX itself on a real-mode kernel; under `CPU_F_PM` the claim's LDT code alias `(S >> 2) | 4` for a segment on the 512-byte grid below A000, a code selector as it is, and the code half of an allocator pair for its data half. CF=1 when there is none: DX = 0, or under `CPU_F_PM` a segment off the grid or a data-only selector (an `OSAPI_XMEM_SEL` window). Any context. `apps/os88api.inc`'s `OS88_CODESEL` is its inline fast path for a claim below 1MB |
-| `OSAPI_XMEM_WALK` **0x04B7** | ES:DI = room for CX records of `XMW_SIZE` (6) bytes. Out CF=0, AX = the extended pool's live blocks written, each `XMW_OFF` (KB from the pool's base, which `OSAPI_XMEM_CAPS` answers in DX:CX), `XMW_KB` and `XMW_OWN`: an instance slot for an `OSAPI_XMEM_ALLOC` block, 80h \| slot for a package's REGION placed above 1MB (`OS88_HIGH`, docs/plans/KERN-MEGA-PLAN.md 13.3 step 4), 0A0h \| slot for a CLAIM it took there (`OS88_HIGHMEM`, KERN-MEGA-PLAN item 81), FEh the kernel's own (the read-ahead store, module pairs), FFh a cell called outside any instance. On kern_big with a store the pool is `XMEM.DRV`'s and the cell walks its table (overlay ABI 2's `XMV_WALK`, §28.4.8): owner a slot or FFh. CF=1, AX = 1 with no pool - kern_small, kern_mega in real mode, a kern_big machine without the overlay. The Task Manager's "RAM is RAM" reads it (KERN-MEGA-PLAN 13.6). Any context |
+| `OSAPI_XMEM_WALK` **0x04B7** | ES:DI = room for CX records of `XMW_SIZE` (6) bytes. Out CF=0, AX = the extended pool's live blocks written, each `XMW_OFF` (KB from the pool's base, which `OSAPI_XMEM_CAPS` answers in DX:CX), `XMW_KB` and `XMW_OWN`: an instance slot for an `OSAPI_XMEM_ALLOC` block, 80h \| slot for a package's REGION placed above 1MB (`OS88_HIGH`, docs/plans/KERN-MEGA-PLAN.md 13.3 step 4), 0A0h \| slot for a CLAIM it took there (`OS88_HIGHMEM`, KERN-MEGA-PLAN item 81), 0C0h \| row a driver's claim, FDh a driver's image, FEh the kernel's own (the read-ahead store, module pairs), FFh a cell called outside any instance. The record's sixth byte, `XMW_CLS`, is 0 except for a driver's block on kern_mega, where it is that driver's `DRVC_*` class off `drv_tab` (0 when no row matches) - so a reader names `SOUND.DRV` and not *a driver*. **BX = `XMW_FIXED` (4658h, 'XF')** asks kern_mega for the fixed areas between 1MB and the pool's base as well: one record each IN FRONT of the blocks, owner `XMW_HMA` (F0h, the HMA kept for the DOS trip), `XMW_GDT`, `XMW_LDT` (the LDT and the IDT), `XMW_KCODE` (`.cold` and `.mega`) and `XMW_PAD` (the rest up to `MEGA_XPOOL`), each with a NEGATIVE `XMW_OFF` - KB below the base - so the five tile the span exactly (§28.4.10, KERN-MEGA-PLAN 14.70.2). Additive: every other kernel ignores BX and writes 0 at `XMW_CLS`. On kern_big with a store the pool is `XMEM.DRV`'s and the cell walks its table (overlay ABI 2's `XMV_WALK`, §28.4.8): owner a slot or FFh. CF=1, AX = 1 with no pool - kern_small, kern_mega in real mode, a kern_big machine without the overlay. The Task Manager's "RAM is RAM" reads it (KERN-MEGA-PLAN 13.6). Any context |
 | `OSAPI_XMEM_RUN` **0x04C3** | DX:AX = the TOKEN of an `OSAPI_XMEM_ALLOC` block the caller owns (its base). Out CF=0, DX = the first of a **run of data selectors**, CX = the step between them (8): selector *k* is the 64KB window from 32KB x *k* into the block, the last ones cut at its end, so **any 32KB of the block lies wholly inside one window** - the one at (offset >> 15), at (offset & 7FFFh). What a reader of records of 32KB or less needs to read them in place from ANY context once made, where `OSAPI_XMEM_SEL`'s one window has to be re-aimed by the UI task per read and `OSAPI_MEM_HUGE`'s 64KB windows cut a record that straddles one in two. One view a block: a block with a run takes no `OSAPI_XMEM_SEL` and the reverse (AX = 2 either way). Freed with the block. CF=1, AX = 1 not available (every kernel but kern_mega in protected mode) or no run of free LDT entries, 2 not the base of a block the caller owns or it has a selector already. UI-task context. The Video Player's hold and bank (98.3.18.16) are its consumer; docs/plans/KERN-MEGA-PLAN.md 14.16 |
 | `OSAPI_MEM_HUGE` **0x04BD** | AX = KB (1..65535). Out CF=0: DX = the claim's first segment or selector and CX = the STEP to its next 64KB - a program walks by CX and never by a constant. CX = 1000h for a conventional claim on every kernel; CX = 8 on kern_mega in protected mode for an `OS88_HIGHMEM` package, whose claim is ONE pool block above 1MB under a run of consecutive LDT data selectors, a 64KB window each and the last ending at the claim's end (§50.3.5). CF=1 refused - above 1MB only when the pool's free KB are short, the compactor moving huge claims too (§50.3.5). Freed by `OSAPI_MEM_FREE` with that DX, and at the instance's teardown; `OSAPI_MEM_REGROW` takes the pool's to any size and answers its first selector NOW (KERN-MEGA-PLAN 14.37). Docs/plans/KERN-MEGA-PLAN.md 14.1 answers 6 and 7: an ADDITION, so `OSAPI_MEM_CLAIM` and `OS88_HUGE_INCR` mean what they always did. **BX = 8000h** asks for a window every 32KB instead, each 64KB long (`OSAPI_XMEM_RUN`'s shape on a claim that moves), answered BX = 0 when given and BX kept otherwise; such a claim does not regrow, and moves a 64KB piece at a time with the package's rate hook held off (§50.3.5, KERN-MEGA-PLAN 14.41, 14.49). Any context |
 
@@ -203088,12 +203319,11 @@ adapter is the checkerboard §47 expects to be looked at there.
   (§11.96.12.0) — so with the rects laid out only when the page was drawn,
   a move after *Finished - click Next* left Next answering at the window's
   OLD place, and nothing put it back until a minimize and restore repainted
-  it. `in_press` is the wizard's own `W_ONCLICK`, set over the library's: it
-  runs `in_layout` from the live content box and then hands the press on.
-  The release and a drag read the same rects, and a window cannot move
-  between a press in its content and that press's release, so the one call
-  covers all three. +20 bytes of image; `tests/install.py` drags the window
-  before that Next.
+  it. The BUTTONS are the library's to move now (§20.5.1.3.5); `in_press`,
+  the wizard's own `W_ONCLICK` in front of the library's, stays for the
+  RADIO rows, whose rect is the wizard's: it runs `in_layout` from the live
+  content box and then hands the press on. `tests/install.py` drags the
+  window before that Next.
 
 ### 117.3 `OSAPI_DRV_USE` (cell `0x04A5`) — the Drivers page's tick, as a door
 

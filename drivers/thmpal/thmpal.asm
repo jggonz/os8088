@@ -756,7 +756,7 @@ tv_btns:
 ; in: AX = its left edge (screen), SI = the label, CL = its control id
 tv_btlbl: dw 0
 tv_btflg: dw 0
-tv_btrec: dw 0, tv_btlbl, tv_btflg, 1, 0, 0, 0, 0
+tv_btrec: dw 0, tv_btlbl, tv_btflg, 1, 0, 0, 0, 0, 0, 0, 0, 0
 
 tv_btn1:
     push ax

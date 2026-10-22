@@ -20232,7 +20232,7 @@ section .text
 ; is not defined yet. DOS_BTREC_SZ in apps/dos/dos.asm is the same
 ; mirror for the same reason; the %if below the include is what stops
 ; either copy drifting.
-SC_BTREC_SZ equ 16
+SC_BTREC_SZ equ 24
 
 %macro SCVAR 2                      ; name, size in bytes
     %1 equ os88_image_end + SCB

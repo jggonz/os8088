@@ -7150,13 +7150,41 @@ mega_modvfixf:
     ret
 
 ; mega_xmwalk - osapi_xmem_walk's body (kernel.asm): ES:DI = CX records of 6
-; bytes -> AX = the pool's live blocks written, {KB offset, KB, owner, 0},
-; CF = 0. Read with IF = 0, so no record is torn. Every other register kept
+; bytes -> AX = records written, CF = 0: the pool's live blocks, {KB offset,
+; KB, owner, class}, read with IF = 0 so no record is torn. Every other
+; register kept.
+;
+; TWO ADDITIONS FOR THE TASK MANAGER (KERN-MEGA-PLAN 14.70.2), both inert for
+; a caller that asks neither. A DRIVER's block - its image (MX_KDRV) or a
+; claim of its (0C0h | row) - carries the driver's DRVC_* class in the byte
+; that was always 0 (mega_xmcls), so a list can say WHICH driver holds what.
+; And BX = XMW_FIXED puts the five fixed areas between 1MB and MEGA_XPOOL in
+; front of the blocks as records of their own (mega_xmfix): the HMA the DOS
+; trip keeps, the GDT, the LDT and IDT, `.cold` and `.mega`, and the padding
+; up to the pool's 64KB-aligned base - which 14.70.1 is about making RAM. The
+; old answer to that span was one 'Above 1MB' figure; they tile it exactly
 mega_xmwalk:
     push cx
+    push dx
     push si
     push di
-    xor ax, ax
+    xor dx, dx                      ; DX = records written
+    cmp bx, XMW_FIXED
+    jne .pool
+    mov si, mega_xmfix              ; constants: `.mega` is readable code
+.fx:
+    jcxz .out
+    cs lodsw
+    stosw
+    cs lodsw
+    stosw
+    cs lodsw
+    stosw
+    inc dx
+    dec cx
+    cmp si, mega_xmfix_end
+    jb .fx
+.pool:
     mov si, mx_tab
     pushf
     cli
@@ -7164,16 +7192,14 @@ mega_xmwalk:
     jcxz .done
     cmp word [ss:si+MX_KB], 0
     je .n
-    push ax
     mov ax, [ss:si+MX_OFF]
     stosw
     mov ax, [ss:si+MX_KB]
     stosw
     mov al, [ss:si+MX_OWN]
-    xor ah, ah
+    call mega_xmcls                 ; AH = a driver's class, else 0
     stosw
-    pop ax
-    inc ax
+    inc dx
     dec cx
 .n:
     add si, MX_BLKSZ
@@ -7181,11 +7207,97 @@ mega_xmwalk:
     jb .l
 .done:
     popf
+.out:
+    xchg ax, dx
     pop di
     pop si
+    pop dx
     pop cx
     clc
     ret
+
+; mega_xmcls - AL = the owner of the mx_tab entry at SS:SI -> AH = the
+; DRVC_* class of the driver that holds it, or 0: 0C0h | row names its
+; drv_tab row outright; MX_KDRV is the image whose pair (drv_hi_move) is
+; based where the block is, found by asking each row above 1MB for its
+; DATA selector's base (mega_selbase, mx_rel). A driver loaded outside drv_tab
+; (the screen saver, the Customize window's palette) answers 0. Keeps AL and
+; everything else
+mega_xmcls:
+    push bx
+    mov ah, 0
+    mov bl, al
+    and bl, 0xE0
+    cmp bl, 0xC0
+    jne .img
+    mov bl, al
+    and bx, 0x1F
+    cmp bx, DRV_MAX
+    jae .o
+    shl bx, 1                       ; DRVR_SIZE = 16
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    mov ah, [bx+drv_tab+DRVR_CLASS]
+    jmp short .o
+.img:
+    cmp al, MX_KDRV
+    jne .o
+    push cx
+    push dx
+    push ax
+    mov bx, drv_tab
+.r:
+    mov ax, [bx+DRVR_SEG]
+    test al, 4                      ; an LDT selector: a row above 1MB
+    jz .rn
+    call mega_selbase               ; DX:AX = its base (CL spent)
+    jc .rn
+    call mx_rel                     ; AX = KB from the pool's base
+    jc .rn
+    cmp ax, [ss:si+MX_OFF]
+    je .rf
+.rn:
+    add bx, DRVR_SIZE
+    cmp bx, drv_tab + DRV_MAX * DRVR_SIZE
+    jb .r
+    pop ax
+    jmp short .rx
+.rf:
+    pop ax
+    mov ah, [bx+DRVR_CLASS]
+.rx:
+    pop dx
+    pop cx
+.o:
+    pop bx
+    ret
+
+; mega_xmfix - the fixed areas between 1MB and the pool, as walk records:
+; {KB from the pool's base - negative, they are under it - KB, owner, 0}.
+; Constants, the whole of what XMW_FIXED costs past the six lines that copy
+; them. `.cold` and `.mega` are taken to the end of `.mega`'s scratch, which is
+; where the padding starts. (kernel.asm checks DRVR_SIZE for mega_xmcls, once
+; driver.inc has defined it)
+XMW_FIXED   equ 0x4658              ; MIRRORED in apps/os88api.inc
+XMW_HMA     equ 0xF0
+XMW_GDT     equ 0xF1
+XMW_LDT     equ 0xF2
+XMW_KCODE   equ 0xF3
+XMW_PAD     equ 0xF4
+MEGA_KEND_KB equ (MEGA_HI_LIN + MEGA_SCR_OFF + MPS_SIZE + 1023) / 1024
+mega_xmfix:
+    dw (0x100000 - MEGA_XPOOL) // 1024, (MEGA_GDT_LIN - 0x100000) / 1024
+    db XMW_HMA, 0
+    dw (MEGA_GDT_LIN - MEGA_XPOOL) // 1024, (MEGA_LDT_LIN - MEGA_GDT_LIN) / 1024
+    db XMW_GDT, 0
+    dw (MEGA_LDT_LIN - MEGA_XPOOL) // 1024, (MEGA_COLD_LIN - MEGA_LDT_LIN) / 1024
+    db XMW_LDT, 0
+    dw (MEGA_COLD_LIN - MEGA_XPOOL) // 1024, MEGA_KEND_KB - MEGA_COLD_LIN / 1024
+    db XMW_KCODE, 0
+    dw MEGA_KEND_KB - MEGA_XPOOL / 1024, MEGA_XPOOL / 1024 - MEGA_KEND_KB
+    db XMW_PAD, 0
+mega_xmfix_end:
 
 ; mega_slotof - ES = a package's segment (its DS, as the X stub stamped it):
 ; BL = its instance slot, CF = 0; CF = 1 it is no package's. The region being

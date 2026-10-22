@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""A raise cache is listed under the PACKAGE that owns it (SPEC.md 28.4.5)
+"""A raise cache is listed under PURGEABLE, whoever caused it (SPEC.md 28.4.10)
 
     make && python3 tests/tmowner.py [--machine os8088_xt_vga]
 
-MEM_P_WSAVE + slot is a KERNEL tag, so tm_hmatch's System arm swallowed every
-raise cache: tens of KB of a 640KB machine appeared on the one page that
-reports memory as an anonymous `WinSave` row belonging to nobody. The slot in
-that tag names a WINDOW, and OSAPI_WM_OWNSEG (11.96.3.1) turns it into the
-segment that owns it - which is what tm_ispt already holds per instance.
+MEM_P_WSAVE + slot is a KERNEL tag, so the heap page's System arm once
+swallowed every raise cache: tens of KB of a 640KB machine appeared on the one
+page that reports memory as a `WinSave` row belonging to the kernel. SPEC.md
+28.4.5 then filed it under the package that owns the window. Since the memory
+and heap pages merged (KERN-MEGA-PLAN 14.70.2) a purgeable claim is its OWN
+group, `Purgeable`: it is in nobody's total (SPEC.md 28.4.1), so filing it
+under an owner made that owner's rows add to more than its heading.
 
   KERNEL   cover the Disk window - a window the KERNEL made, with no instance
-           behind it - and its cache must be listed under System, which is
-           where it was all along and where it belongs
-  PACKAGE  cover the Calculator and its cache must be listed under the
-           CALCULATOR, in the same group as its own region claim
+           behind it - and its cache must be listed under Purgeable, not
+           System
+  PACKAGE  cover the Calculator and its cache must be listed under Purgeable
+           too, not under the CALCULATOR
+
+The groups open on a click and start closed, so the page is opened with
+`+ALL` once - the expansion is the package's state and survives the page
+cycling that the capture below retries with.
 
 READ OFF THE COMPOSED ROWS, not the pixels. The page letters each row in
 TM_CHUNK-character pieces left to right, one row per y, top down, and every
@@ -39,6 +45,7 @@ for i, a in enumerate(sys.argv):
 S = os88sym.linear
 KSEG = os88geom.KERNEL_SEG
 TITLE_H = 18
+TM_PEN, TMM_HDR_Y = 8, 66               # apps/taskmgr/taskmgr.asm
 fails = []
 
 
@@ -50,7 +57,7 @@ def tick(mm, card=None):
 class Rows(dispcells.Pump):
     """Every line the package composes, as it draws it.
 
-    The heap page letters each row in TM_CHUNK-character pieces left to
+    The memory page letters each row in TM_CHUNK-character pieces left to
     right, one row per y, top down - so grouping on y and sorting on x
     reassembles the row, and a y that goes BACKWARDS starts a new repaint.
     Reading the page this way rather than off the glass is what makes an
@@ -113,14 +120,14 @@ class Rows(dispcells.Pump):
 
 
 def group_in(allframes, addr):
-    """The heading a claim row sits under: rows are indented, headings are
-    not (TMH_IND). Searched across every repaint captured, because which one
+    """The group a claim row sits under: rows are indented, a group's row is
+    not - it starts with its '+' or '-' (TMH_IND). Searched across every repaint captured, because which one
     is the full list depends on where the pump happened to start - and a
     PARTIAL repaint is refused outright, since its first row can be a
     fragment with no indent, which reads as a heading and files everything
     under it."""
     for rows in sorted(allframes, key=len, reverse=True):
-        if not any(t.startswith("System") for _, t in rows):
+        if not any("Purgeable" in t for _, t in rows):
             continue
         head = None
         for _, t in rows:
@@ -194,12 +201,25 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
           % ((w.x, w.y, w.w, w.h), (d.x, d.y, d.w, d.h), (c.x, c.y, c.w, c.h)))
     stub = m.sym("api_x") - (KSEG << 4)      # SPEC.md 20.3's shared X body
 
+    def tmw(name, n=2):
+        b = m.read((seg << 4) + dispapps.img_size("taskmgr")
+                   + dispapps.bss_off("taskmgr", name), n)
+        return int.from_bytes(b, "little")
+
+    def all_open():
+        return tmw("tm_exp", 4) == 0xFFFFFFFF
+
+    def plus_all():
+        """The header's `+ALL`, off the page's own origin and rise."""
+        return (tmw("tm_cx") + TM_PEN + 22 * 8 + 4,
+                tmw("tm_cy") + TMM_HDR_Y - tmw("tm_xoff") + 4)
+
     def to_heap(cap, want):
-        """...onto the heap page, capturing until the answer is READABLE.
+        """...onto the memory page, capturing until the answer is READABLE.
 
         Not until a fixed number of clicks: the pump drops stops, so arriving
         at the page is not the same as having captured it whole. Each click
-        cycles the view, so every third one is a fresh full repaint of this
+        cycles the view, so every second one is a fresh full repaint of this
         page to try again with - which is the RETRY dispcells.Pump.serve asks
         for, spelled as a condition rather than a hope.
         """
@@ -207,7 +227,11 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
             ww = W(slot)
             cap.click(ww.x + 20, ww.y + TITLE_H + 40)
             cap.pump(1200, 4)
-            if view() != 2:
+            if view() != 1:
+                continue
+            if not all_open():          # once: +ALL, at the header's right
+                cap.click(*plus_all())  # end, and the next cycle round is
+                cap.pump(1200, 4)       # a full repaint with every group open
                 continue
             if not want:                # nothing was banked, so there is no
                 return len(cap.rows) > 40   # row to wait for and the leg
@@ -227,8 +251,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         tick(m)
     dh, drow, _ = group_in([f for f in kp.frames() if len(f) > 3], ds)
     print("KERNEL  : view %d, Disk cache %04X -> %r" % (view(), ds, dh))
-    if view() != 2:
-        fails.append("KERNEL: never reached the heap page, so this read the "
+    if view() != 1:
+        fails.append("KERNEL: never reached the memory page, so this read the "
                      "wrong list")
     elif not ds:
         fails.append("KERNEL: the Disk window banked nothing when the "
@@ -242,10 +266,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     elif drow is None:
         fails.append("KERNEL: no row names its cache %04X - the list was "
                      "never composed in full under capture" % ds)
-    elif not dh.startswith("System"):
-        fails.append("KERNEL: the Disk window is the kernel's own, with no "
-                     "instance behind it, so its cache belongs under System - "
-                     "it is under %r" % dh)
+    elif "Purgeable" not in dh:
+        fails.append("KERNEL: a raise cache is purgeable, so it is listed "
+                     "under Purgeable whoever caused it (SPEC.md 28.4.10) - "
+                     "the Disk window's is under %r" % dh)
 
     # --- PACKAGE -----------------------------------------------------------
     d, c = W(disk), W(calc)
@@ -257,8 +281,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     mo.to(*dispcorner.PARK)                     # drag's own repaint draws only
     for _ in range(4):                          # the chunks that changed, so
         tick(m)                                 # there is no whole list in it
-    if view() != 2:
-        fails.append("PACKAGE: never got back to the heap page")
+    if view() != 1:
+        fails.append("PACKAGE: never got back to the memory page")
     elif not cs:
         fails.append("PACKAGE: the Calculator banked nothing when the Disk "
                      "window landed on it, so there is no row to file")
@@ -275,19 +299,16 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     elif crow is None:
         fails.append("PACKAGE: no row names its cache %04X - the list was "
                      "never composed in full under capture" % cs)
-    elif ch.startswith("System"):
-        fails.append("PACKAGE: its cache is still under System - SPEC.md "
-                     "28.4.5 files it under the package that owns the window")
-    elif cseg and not any(("%04X" % cseg) in t for _, t in cf
-                          if t and t[0] == " "):
-        fails.append("PACKAGE: it landed under %r, but nothing in that list "
-                     "names the Calculator's own segment %04X - so the group "
-                     "is not demonstrably the right one" % (ch, cseg))
+    elif "Purgeable" not in ch:
+        fails.append("PACKAGE: a raise cache is purgeable and in nobody's "
+                     "total, so it is listed under Purgeable and not under "
+                     "its window's package (SPEC.md 28.4.10) - the "
+                     "Calculator's is under %r" % ch)
 
     print()
     for f in fails:
         print("FAIL  " + f)
     if not fails:
-        print("PASS  the kernel's cache is System's and a package's is the "
-              "package's")
+        print("PASS  both raise caches are Purgeable's, the kernel window's "
+              "and the package's")
     sys.exit(1 if fails else 0)

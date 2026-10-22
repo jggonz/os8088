@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A DRIVER's own claims are on the heap page (SPEC.md 28.4.6).
+"""A DRIVER's own claims are on the memory page (SPEC.md 28.4.6, 28.4.10).
 
     make && make build/sndmove360.img && python3 tests/heapdrv.py
 
@@ -37,11 +37,13 @@ FOUR CHECKS:
      names for the sound driver, separate from the image's own record. Without
      this the three below are vacuous on a machine whose driver never
      attached, which is exactly how this page looked correct for so long;
-  2. EVERY live record is on a row. The page's own `[tm_hrows]` is what the
-     scroll bar measures against, and the headings and the pad rows come out
-     of it exactly, so the claim rows it leaves are countable - and before
-     SPEC.md 28.4.6 that count was short by the driver's claims and by
-     nothing else;
+  2. EVERY live record is in a group, and the driver's claims are in ITS
+     group. Since the heap page merged into the memory page (SPEC.md
+     28.4.10) the page classifies its snapshot once per paint, one group id
+     per record in `[tm_cgid]`, and a record with none is on no row - which
+     is what the ring was before SPEC.md 28.4.6. Read with the SYSTEM view
+     up and every group open (`+ALL`), where a driver is a group of its own
+     named by its class;
   3. the ring's row reads `DrvBuf` and not `Data` - matched as PIXELS against
      the kernel's own 8x8 glyphs, because the TYPE column is half the fix and
      SPEC.md 28.4.3's rule is that a debug page must not label a claim as the
@@ -84,6 +86,8 @@ TICKS_HZ, CARD_HZ, TM_INT, TM_SLOW = 18.2, 60.0, 9, 4
 SLOW_FRAMES = int(TM_INT * TM_SLOW / TICKS_HZ * CARD_HZ)
 MEM_MAX, MC_SIZE = 32, geom.MC_SIZE
 INST_MAX = 12
+TMG_N, TMG_DRV, DRVC_SOUND = 32, 16, 1  # taskmgr.asm's groups, os88api.inc
+TM_PEN, TMM_HDR_Y = 8, 66               # apps/taskmgr/taskmgr.asm
 FAILED = []
 
 
@@ -118,6 +122,10 @@ def report():
 
 def u16(b, i=0):
     return int.from_bytes(b[i:i + 2], "little")
+
+
+def u32(b, i=0):
+    return int.from_bytes(b[i:i + 4], "little")
 
 
 def tick(m, frames):
@@ -309,7 +317,7 @@ def main():
                           "buffer of SBTEST's open stream, SPEC.md 34.5.2)"):
             return report()
 
-        # --- the Task Manager, and its heap page ----------------------------
+        # --- the Task Manager, and its memory page --------------------------
         mo.menu(CHIP[0], CHIP[1], MI_TASKS[0], MI_TASKS[1])
         tick(m, 150)
         got = pkg_slot(m, NAME)
@@ -321,50 +329,68 @@ def main():
         say("heapdrv: Task Manager window %d at (%d,%d) %dx%d, segment %04X"
             % (slot, wx, wy, ww, wh, seg))
 
-        cx, cy = wx + 40, wy + wh - 12       # inside the content, low and left
+        # The memory page (the heap page merged into it, SPEC.md 28.4.10):
+        # one click cycles 0 -> 1. Then its SYSTEM view, where each driver is
+        # a group of its own, and +ALL, so the driver's group is open and its
+        # claims are rows - both switches are on the header, off the page's
+        # own origin and rise.
+        cx, cy = wx + 40, wy + 36            # the captions, above the list
         for _ in range(2):
+            if tm.byte("tm_view") == 1:
+                break
             mo.click(cx, cy)
             tick(m, 40)
-        tick(m, SLOW_FRAMES)        # one unattended walk, so [tm_hrows] is
-                                    # this page's and not the memory view's
-        if not check(tm.byte("tm_view") == 2,
-                     "two clicks reach the heap page",
-                     "the click cycles 0 -> 1 -> 2"):
+        if not check(tm.byte("tm_view") == 1,
+                     "a click reaches the memory page",
+                     "the click cycles 0 -> 1 -> 0"):
             return report()
-        if not check(tm.word("tm_htop") == 0,
-                     "the page is at the top of its list",
-                     "the row arithmetic below is written for an unscrolled "
-                     "walk, where [tm_hskip] is spent on nothing"):
+        hy = tm.word("tm_cy") + TMM_HDR_Y - tm.word("tm_xoff") + 4
+        if tm.byte("tm_mview") != 1:
+            mo.click(tm.word("tm_cx") + TM_PEN + 12, hy)        # SYSTEM
+            tick(m, 40)
+        if u32(tm.blob("tm_exp", 4)) != 0xFFFFFFFF:
+            mo.click(tm.word("tm_cx") + TM_PEN + 22 * 8 + 4, hy)  # +ALL
+            tick(m, 40)
+        tick(m, SLOW_FRAMES)        # one unattended walk of the open list
+        if not check(tm.byte("tm_mview") == 1
+                     and u32(tm.blob("tm_exp", 4)) == 0xFFFFFFFF,
+                     "the header's switches give the SYSTEM view, every group "
+                     "open",
+                     got="view %d, groups %08X" % (tm.byte("tm_mview"),
+                                                   u32(tm.blob("tm_exp", 4)))):
             return report()
 
-        # --- 2: every live record is on a row -------------------------------
-        # The page's own count, less what is not a claim. tm_rows_heap builds
-        # [tm_hrows] as (rows composed) - (pad rows) + [tm_cols] - 1, and the
-        # rows it composed are one heading per group plus one row per MATCHED
-        # claim - so the pads cancel and what is left is countable exactly.
-        # ...WITH THE GUEST STOPPED. [tm_hrows], [tm_cols], the snapshot and
-        # the instance table are four reads of one instant, and the machine
-        # runs between them: a claim made or freed in that gap makes the pair
-        # describe two different heaps and the check fail for no defect.
+        # --- 2: every live record is in a group, the driver's in ITS group --
+        # The page classifies its snapshot once per paint (tm_classify): one
+        # group id per record in [tm_cgid], FFh for a free one. A live record
+        # with no group is in no row and in no total, which is the defect
+        # SPEC.md 28.4.6 fixed; and the ring must be the SOUND driver's group
+        # (TMG_DRV + DRVC_SOUND), which is what names it on the page.
+        # ...WITH THE GUEST STOPPED, so the snapshot and the ids are one
+        # paint's: the machine runs between reads.
         m.pause()
         try:
             snap = tm.blob("tm_claims", MEM_MAX * 6)
-            ist = tm.blob("tm_ist", INST_MAX)
-            hrows, hcols = tm.word("tm_hrows"), tm.word("tm_cols")
+            gid = tm.blob("tm_cgid", MEM_MAX)
         finally:
             m.run()
-        shown = [(u16(snap, i * 6), u16(snap, i * 6 + 2), u16(snap, i * 6 + 4))
-                 for i in range(MEM_MAX) if u16(snap, i * 6)]
-        groups = 1 + sum(1 for b in ist if b)       # System, then each instance
-        rows = hrows - hcols + 1 - groups
-        check(rows == len(shown),
-              "every live claim is on a row of the list",
-              "a claim in no group is still in tm_hsplit's HELD total, so the "
-              "caption and the rows under it cannot be closed (SPEC.md 28.4.6)",
-              got="%d claim rows for %d live records (%d group headings, "
-                  "[tm_hrows] %d, [tm_cols] %d)"
-                  % (rows, len(shown), groups, hrows, hcols),
-              want="one row per record")
+        recs = [(i, u16(snap, i * 6), u16(snap, i * 6 + 4))
+                for i in range(MEM_MAX) if u16(snap, i * 6)]
+        lost = [r for r in recs if gid[r[0]] >= TMG_N]
+        check(not lost,
+              "every live claim is in a group of the list",
+              "a claim in no group is in no row and no total (SPEC.md 28.4.6)",
+              got="%d of %d records with no group: %s"
+                  % (len(lost), len(recs),
+                     " ".join("%04X/%04X" % (r[1], r[2]) for r in lost)),
+              want="none")
+        mine = [r for r in recs if r[2] == sndseg]
+        check(mine and all(gid[r[0]] == TMG_DRV + DRVC_SOUND for r in mine),
+              "the driver's claims are in the SOUND.DRV group",
+              "a driver is a group of its own, named by its class "
+              "(SPEC.md 28.4.10)",
+              got=" ".join("%04X->%d" % (r[1], gid[r[0]]) for r in mine),
+              want="every one %d" % (TMG_DRV + DRVC_SOUND))
 
         # --- 3: and the ring's row says DrvBuf ------------------------------
         w, h, px = m.vram()

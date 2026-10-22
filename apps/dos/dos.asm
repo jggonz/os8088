@@ -12814,7 +12814,7 @@ DOS_CBASE   equ os88_image_end
     HBSS DOS_B_TVOL,  1          ; dos_path_take's scratch: the parsed volume
     HBSS DOS_B_TNAME, 13         ; and name, held apart until the walk has
                                  ; agreed, so a typo cannot half-commit
-DOS_BTREC_SZ equ 16              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
+DOS_BTREC_SZ equ 24              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
                                  ; and it has to be one: this block is laid
                                  ; out thousands of lines before os88ui.inc is
                                  ; included, so the real constant is not

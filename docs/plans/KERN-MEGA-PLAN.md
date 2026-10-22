@@ -10264,38 +10264,111 @@ pool blocks owned C0h and up.
 
 The owner's design, on kern_big and kern_mega alike (the small build has no
 memory page and is unchanged; check afterwards that the BIG Task Manager
-copied onto a small disk still runs, which it does today):
+copied onto a small disk still runs, which it does today). **BUILT on branch
+`taskmgr-merge`** (SPEC.md 28.4.10, 28.4.11, and the corrections in 28,
+28.4, 28.4.8, 28.4.9); the boxes say what each line came to.
 
-- **One bar on kern_mega.** RAM is RAM, so the second bar and the `HIGH`
+- [x] **One bar on kern_mega.** RAM is RAM, so the second bar and the `HIGH`
   line belong to kern_big's separate XMS store only. `HEAP 0.0 of 3.5M`
   beside a 400-odd K bar of almost the same thing was the confusing part.
-- **The summary line is `R` and not `RAM`**, which frees the two characters
-  that let every figure on it carry a SECOND decimal in MB - `0.47/4.00M`.
-  No mixing K and M on the line: *"mixing and matching k and m is too
-  confusing."*
-- **One page for RAM and heap, with collapsible groups.** Each owner -
+  BUILT: `tm_init` sets `[tm_xoff]` under protected mode exactly as on a
+  machine with no store, so the XMS line and bar are not drawn and the
+  header, the rows and the frame rise into their room.
+- [x] ~~**The summary line is `R` and not `RAM`**, which frees the two
+  characters that let every figure on it carry a SECOND decimal in MB -
+  `0.47/4.00M`.~~ **SUPERSEDED by the owner mid-round**: on kern_mega the RAM
+  and HEAP pairs are ONE pair labelled `Ram`, used/total in MB to two
+  decimals (`Ram 0.37/15.62M`, Bochs), no `R`, no `H`. The HEAP pair was
+  RAM's own less the system's share on both sides; the memory page's `AVAIL`
+  line is where the heap is read now. Conventional-only machines keep the
+  split `RAM`/`HEAP` pairs in whole KB, and kern_big with its XMS store keeps
+  its split view (RAM in MB to one decimal, HEAP the conventional heap) -
+  *"the store is not RAM a program runs in."* Still no mixing of K and M on
+  the line: *"mixing and matching k and m is too confusing."*
+- [x] **One page for RAM and heap, with collapsible groups.** Each owner -
   System, each program, each driver, the purgeable caches - is one row with
   its total; a click expands it into its claims. An **Expand all** button
   shows every claim at once. The heap page's scrolling (SPEC.md 28.4.4)
   carries the length. Purgeable claims are their own group, shown as
   reclaimable and not as System. The owner: *"I love the expandable claims
-  idea."*
-- **Two inner views with a toggle: Programs and System.** Programs bills
+  idea."* BUILT: `[tm_view]` 0/1 (the heap page is gone, `TM_NVIEW` 2); one
+  row per owner with its total and legend square, opening into
+  TYPE/ADDR/SIZE/TIER rows; `+ALL`/`-ALL` at the header's right end; the
+  list scrolls; `Purgeable` is a group of every FBh-FEh claim with its tier,
+  a raise cache included (SPEC.md 28.4.5's filing under the window's package
+  is retired for it). The heap page's two caption lines are one `AVAIL nnnK
+  MAX RUN nnnK` line.
+- [x] **Two inner views with a toggle: Programs and System.** Programs bills
   each package with System as one row; System itemises the kernel below 640K
   and above 1MB - the HMA (`HMA (DOS)`), the tables, the kernel's code, the
   padding, the kernel's caches and **each driver by name** (*"which driver
   holds what is very useful"*). The HMA and padding rows go away when
   14.70.1 makes them RAM. The kernel names its fixed areas through
   `OSAPI_XMEM_WALK`, as marker records the Task Manager already knows how to
-  read.
-- **640K-1MB rows that add up.** The screenshot's read 128 + 32 + 32 + 144 +
+  read. BUILT: the toggle is the header's left end, lettered inverted
+  (`PROGRAMS`/`SYSTEM`); SYSTEM lists `IVT+BIOS`, `Code+data`, `Stacks`,
+  `FAT snap`, then above 1MB `HMA (DOS)`, `GDT`, `LDT+IDT`, `Kernel code`,
+  `Padding`, then `Kernel`, one group per driver by file name and one per
+  built-in, then `Programs` and `Purgeable`. Bochs, kern_mega with SOUND and
+  HDD: HMA 64K, GDT 64K, LDT+IDT 20K, Kernel code 58K, Padding 50K, Kernel
+  32K, SOUND.DRV 12K, HDD.DRV 4K. The kernel half is `OSAPI_XMEM_WALK` with
+  BX = `XMW_FIXED` (five negative-offset marker records, `mega_xmfix`) and
+  the class byte `XMW_CLS` on a driver's block (`mega_xmcls`): **+149 bytes
+  of `.mega`** (14,460 -> 14,609), `.text` +0, kern_big and kern_small
+  byte-identical but for the build number; additive, so `abi.lock.json` was
+  refreshed with no `PKG_FMT` bump (SPEC.md 28.4.11).
+- [x] **640K-1MB rows that add up.** The screenshot's read 128 + 32 + 32 + 144 +
   64 = 400K of a 384K window: `Unrep.` read 144K where the code computes 128.
   Not found by reading `tm_romscan` and the row loop; to reproduce on
-  `vm/286-victory` (the Paradise PVGA1A's ROM at C000).
-- **Maybe: dump to file**, only if it is cheap in bytes. ESTIMATED, not
+  `vm/286-victory` (the Paradise PVGA1A's ROM at C000). **NOT REPRODUCED,
+  and one real defect fixed.** `vm/286-victory` under 86Box reads Video 128,
+  ROM C000 24K, ROM C680 6K, Unrep. 162, BIOS 64 = 384, and Bochs 128 + 38 +
+  154 + 64 = 384. `Unrep.` is 192 less the very ROM figures printed beside
+  it, so the code cannot print 128 + 32 + 32 + 144 from one scan - the
+  photograph's ROMs are not 86Box's (a 32K PVGA1A image and a second 32K
+  ROM) and stays UNEXPLAINED until it is retaken on this build. The defect:
+  `tm_romscan` trusted a ROM's length byte, so a ROM reaching past F000 was
+  billed into the BIOS's 64K and the scan's segment could WRAP past FFFF
+  into conventional memory and list ROMs again. Its KB are clamped at F000
+  and the scan stops there (SPEC.md 28.4.9).
+- [ ] **Maybe: dump to file**, only if it is cheap in bytes. ESTIMATED, not
   built: the rows are composed into `tm_str` and painted by `tm_mrow_close`,
   so a dump is a switch there that appends the row to a buffer instead of
   painting, a pass over every group expanded and unclipped, one
   `OSAPI_FILE_WRITE` of a fixed name into `SYSTEM/APPDATA/`, and a menu
   item: about 150-200 bytes of image, plus the buffer (claimed for the
   dump, not bss).
+
+**What it cost the package** (measured, `make` at this branch):
+`taskmgr.o88` image **8,554 -> 9,418** bytes (+864) and bss **1,935 ->
+2,385** (+450) - heap while the window is open, nothing resident. The
+`APP_SMALL` build is **byte-identical** (`build/smallapp/taskmgr.bin`, image
+3,808, bss 1,325).
+
+#### 14.70.3 Left for the second round (2026-10-22)
+
+The merged page landed (`b6c4a1ed`, `2cd6ddc7`). Open:
+
+- [ ] **AVAIL / MAX RUN on kern_mega count the conventional heap only**
+  (`AVAIL 573K` under `Ram 0.37/15.62M`). Designed, not built, in
+  `taskmgr.asm` alone: keep `OSAPI_XMEM_CAPS`'s free KB as `[tm_hifree]`;
+  compute `[tm_himax]`, the largest run one claim gets after `mx_alloc`'s
+  compaction, by `mx_compactf`'s own walk over `tm_xw` (movable owners
+  80h-DFh and FDh per `mx_canmove`, pinned FEh/FFh/slots, the F0h-F4h
+  markers skipped); under `[tm_pm]` AVAIL = `[tm_avl] + [tm_hifree]` and MAX
+  RUN the larger run, in KB to 9,999 and otherwise BOTH in MB to two places
+  (`AVAIL 15.04M MAX RUN 14.98M`, 27 cells). MAX RUN quotes what an
+  `OS88_HIGHMEM` package can get - every package declares it or is in
+  `tests/megahigh.txt`. ~80-120 bytes, estimated.
+- [ ] **Dump to file is built and NOT merged**: branch `taskmgr-merge-dump`
+  (`c276423c`), List > Save to file writing both views with every group open
+  to `APPDATA\MEMDUMP.TXT`, verified on MartyPC. **+380 bytes of image**
+  against the 150-200 estimate - the owner's call. It conflicts with the
+  AVAIL fix at the bss tail.
+- [ ] **The Victory photograph's 640K-1MB rows** (400K of 384K) did not
+  reproduce: 86Box `286-victory` and Bochs both sum to 384, and the code
+  computes `Unrep.` from the same ROM figures it prints. One real defect was
+  fixed on the way (`tm_romscan` trusted a length byte reaching past F000).
+  Retake it on this build.
+- [ ] Purgeable on kern_mega (14.70.1): until then the kernel's caches above
+  1MB show under `Kernel`, not `Purgeable`.

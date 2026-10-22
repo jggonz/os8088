@@ -1097,6 +1097,13 @@ fpg_finish:
                                 ; again the moment [fpg_on] went to 0 above,
                                 ; so this is also the composition that gives
                                 ; those cells back (SPEC.md 12.8.3)
+%ifdef KERN_SMALL
+    db 0                        ; PARITY PAD, never executed (after a `jmp`):
+                                ; fpg_bare (SPEC.md 12.8.6) is +37 on
+                                ; kern_small, which left ui_task and the 407
+                                ; routines after this file at an ODD shift
+                                ; (t_hotpar). kern_big's +36 is even already
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fpg_span - the whole widget's horizontal extent, from the armed origin

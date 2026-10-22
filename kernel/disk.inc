@@ -3190,6 +3190,11 @@ dsk_vol_add:
     mov [bx+DV_CLASS], al       ; matched the caller's segment against a
                                 ; publication slot and left the class here
     mov ah, DVK_DRV             ; ...AND THE KIND FOLLOWS THE CLASS. A
+    cmp al, DRVC_CD             ; (the range is CLOSED: DRVC_IMG is 0x41, a
+    ja .kindpub                 ; mounted image has SECTORS, and an open
+                                ; `jae` made every one a sectorless DVK_FILE
+                                ; row whose proof-mount said 'Not a disk
+                                ; image' - SPEC.md 18.101)
     cmp al, DRVC_FILE2          ; (every file class - SPEC.md 62.9.19, and
     jae .kindfile               ; DRVC_CD past it, 119.1)
     cmp al, DRVC_FILE           ; DRVC_FILE driver answers questions about

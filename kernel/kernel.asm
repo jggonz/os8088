@@ -5460,17 +5460,23 @@ osapi_mem_subseg equ mod_gone   ; `stc / retf`: CF = 1, every register kept
 %endif
 
 ; ---- osapi_xmem_walk - API slot 0x04B7 (KERN-MEGA-PLAN 13.6) ---------------
-; in:  ES:DI = room for CX records of XMW_SIZE (6) bytes
+; in:  ES:DI = room for CX records of XMW_SIZE (6) bytes; BX = XMW_FIXED asks
+;      kern_mega for the fixed areas under the pool too (below)
 ; out: CF = 0, AX = records written: every block the extended pool holds,
 ;      each {dw its offset from the pool's base in KB, dw its KB, db its
-;      owner, db 0}. The owner byte is the pool's: an instance slot for an
-;      OSAPI_XMEM_ALLOC block, 80h | slot for a package's REGION placed above
-;      1MB, 0A0h | slot for a CLAIM an OS88_HIGHMEM package took there, FEh
-;      for the kernel's own (the read-ahead store, module pairs),
-;      FFh for a cell called outside any instance. On kern_big the pool is
-;      XMEM.DRV's and the walk is its table's (xmem.inc, SPEC.md 28.4.8):
-;      owner a slot or FFh. CF = 1, AX = 1 no pool: kern_small, kern_mega
-;      in real mode, and a kern_big machine with no store
+;      owner, db its class}. The owner byte is the pool's: an instance slot
+;      for an OSAPI_XMEM_ALLOC block, 80h | slot for a package's REGION
+;      placed above 1MB, 0A0h | slot for a CLAIM an OS88_HIGHMEM package took
+;      there, 0C0h | row for a driver's claim, FDh a driver's image, FEh for
+;      the kernel's own (the read-ahead store, module pairs), FFh for a cell
+;      called outside any instance. The class byte is 0 but for a driver's
+;      block on kern_mega, where it is the driver's DRVC_* (KERN-MEGA-PLAN
+;      14.70.2). With BX = XMW_FIXED kern_mega first writes a record per
+;      fixed area between 1MB and the pool - owner XMW_HMA..XMW_PAD, offset
+;      negative - which tile that span. On kern_big the pool is XMEM.DRV's
+;      and the walk is its table's (xmem.inc, SPEC.md 28.4.8): owner a slot
+;      or FFh, BX ignored. CF = 1, AX = 1 no pool: kern_small, kern_mega in
+;      real mode, and a kern_big machine with no store
 ; THE TASK MANAGER'S "RAM IS RAM" (KERN-MEGA-PLAN 13.6): what is above 1MB, and
 ; whose, so a package's memory is one figure wherever it was placed.
 %ifdef KERN_MEGA
@@ -7596,6 +7602,12 @@ mega_end:
 MEGA_SIZE equ mega_end - $$
  %if MEGA_SIZE > 0xFFF0
   %error "kern_mega: `.mega` has outgrown its 64KB segment - it is time for a second one (KERN-MEGA-SEGMENTS-PLAN 2 C)"
+ %endif
+ %if DRVR_SIZE != 16
+  %error "kern_mega: mega_xmcls shifts a drv_tab row index by 4"
+ %endif
+ %if (MEGA_COLD_LIN | MEGA_XPOOL) & 1023
+  %error "kern_mega: mega_xmfix's records are whole KB - `.cold` and the pool start on a KB"
  %endif
  %if MEGA_HI_LIN + MEGA_SCR_OFF + MPS_SIZE > MEGA_XPOOL
   %error "kern_mega: `.cold` and `.mega` no longer fit between the IDT and the XMEM pool (mega.inc) - raise MEGA_XPOOL by 64KB"
