@@ -4771,12 +4771,15 @@ vmmousetest: $(BUILD)/vmmouse.img
 
 # VESATEST - THE PACKED-PIXEL DISPLAY'S GATE DISK (SPEC.md 120.9): ether360.img's
 # shape with a SYSTEM.CFG whose driver word has BIT 9 set, VESA.DRV's
+# (drv_cfgbit in kernel/driver.inc, which is why that file is the
+# prerequisite: the bit moved from 8 when CDROM.DRV took 8, and a cfg
+# with no prerequisite kept asking for the CD-ROM)
 # (drv_cfgbit), so the desktop comes up on the VBE before the first paint and
 # tests/vesa.py reads state and pixels instead of clicking. The SHIPPED kernel
 # and the SHIPPED driver, on a 1.44MB disk because the row drives a 1024x768
 # screen and nothing here depends on the geometry. QEMU by name: its standard
 # VGA carries the VBE BIOS, and MartyPC and the 86Box XTs have none.
-$(BUILD)/vxcfg/system.cfg: | $(BUILD)
+$(BUILD)/vxcfg/system.cfg: kernel/driver.inc | $(BUILD)
 	@mkdir -p $(BUILD)/vxcfg
 	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
@@ -4927,7 +4930,7 @@ vesabench: $(BUILD)/vesabench.img $(BUILD)/vesabnc8.img $(BUILD)/vxbench.img
 # tests/vesa8.py exercises the 8bpp path and the DAC the driver loads, and the
 # class's round trip from the file to the driver's attach. QEMU's standard VGA
 # offers that mode as 0103h
-$(BUILD)/vx8cfg/system.cfg: | $(BUILD)
+$(BUILD)/vx8cfg/system.cfg: kernel/driver.inc | $(BUILD)
 	@mkdir -p $(BUILD)/vx8cfg
 	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
@@ -5030,7 +5033,7 @@ $(BUILD)/cdcfg/system.cfg: | $(BUILD)
 	@mkdir -p $(BUILD)/cdcfg
 	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
-	  (1 << 9).to_bytes(2,'little') + b'\0\0')" > $@
+	  (1 << 8).to_bytes(2,'little') + b'\0\0')" > $@
 
 $(BUILD)/cdfix.iso: tools/os88cdiso.py $(CDFIXFILES) $(BUILD)/mines.o88
 	python3 tools/os88cdiso.py iso -o $@ --volid CDFIX \
