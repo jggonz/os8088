@@ -30,7 +30,7 @@ Video Player, and several games play their music through it.
 
 Most machines of the period had no sound card, so the driver is a file on
 the system disk and not part of the system itself. It costs memory only on a
-machine that loads it: about 12K for the driver, with additional memory while
+machine that loads it: about 11K for the driver, with additional memory while
 a program plays or records digital sound.
 
 It is not loaded unless it is wanted. The first time os8088 starts on a
@@ -77,10 +77,10 @@ Left or Down lowers the volume; Right or Up raises it. Home selects silence
 and End selects full volume. Escape, Enter or a click outside closes the
 panel. The percentage shows the nearest level the card supports.
 
-**Open Mixer...** opens [[MIXER.O88]] for individual sources and balance.
-That command appears only when MIXER.O88 is in the boot disk's `SYSTEM`
-folder. The quick volume panel works without that program. These controls
-adjust the sound card; they do not change the built-in PC speaker or a Covox.
+Open [[MIXER.O88]] from the apps disk's `APPS` folder for individual sources
+and balance. The speaker's quick volume panel controls master volume.
+These controls adjust the sound card; they do not change the built-in PC
+speaker or a Covox.
 
 ## Where the MIDI interface is
 

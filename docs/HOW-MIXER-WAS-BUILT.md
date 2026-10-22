@@ -1,5 +1,21 @@
 # How Mixer was built
 
+The original delivery below included an optional launcher in quick volume.
+That launcher and its package discovery have since been removed: the popup
+contains only master volume, and Mixer ships in `APPS/` on the apps disks
+and live media. No system floppy carries Mixer. The popup now saves 2KB on
+mono adapters or 8KB on color adapters. SPEC.md §34.15 is the current contract.
+
+The removal leaves SOUND.DRV at 11,064 bytes, an 11KB loaded claim. An
+independent FAT12 walk checks Mixer in `APPS/` on all four apps geometries
+and absent from all four system floppies; the live payload also uses `APPS/`.
+WireChat's existing LZB packaging path saves three 1KB clusters to keep the
+720KB apps disk's programs and samples intact, with an identical expanded
+image and a slower decode at launch. All 55 fast checks, the four mixer UI
+rows, `smallreq`, `lzbclust` and all 63 full-gate rows passed. The final UI
+pictures were inspected on CGA, Hercules and VGA; SB16 passed with the
+driver in both normal memory and the HMA.
+
 ## Foundation
 
 The request combines a global desktop control with optional installed

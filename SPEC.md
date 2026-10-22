@@ -46243,7 +46243,7 @@ and is what an A/B uses. The kernel needs no arranging to match, because
 §20.13.3's default format is LZ4 as well — which is the reason LZ4 is the one
 that got to be the default here rather than the better ratio.
 
-**LZB is built, and is not the default** - the nineteen package builds below are the exception. It is ~10 points better on ratio and ~4×
+**LZB is built, and is not the default** - the twenty package builds below are the exception. It is ~10 points better on ratio and ~4×
 slower to expand (§20.13.3), and on a 4.77 MHz 8088 that trade is a disk
 saving *once* against a launch cost *for ever* — two numbers on different
 clocks that do not reduce to one rate. Until somebody has measured the second
@@ -46251,10 +46251,10 @@ of them on a 5150 the machine takes the fast decoder. Both knobs stay on both
 sides (`make PKGZ=lzb COMPRESS=lzb`), and `tests/lzship.py --fmt lzb` builds
 and boots the whole set through it, so adding LZB later moves no layout.
 
-**NINETEEN PACKAGE BUILDS SHIP LZB, by the owner's decision** (apps size pass
-2, set B): ArtfulType, Audio, Browser, Calculator (both arms), Chart,
+**TWENTY PACKAGE BUILDS SHIP LZB**: ArtfulType, Audio, Browser,
+Calculator (both arms), Chart,
 Cyclone, Dot Delirium, Gorillas, Missile, Sheet, Solitaire, TameGram, Tank
-(both arms), Telnet, TeXPad, The Wire and WireBall - The Wire being the
+(both arms), Telnet, TeXPad, The Wire, WireBall and WireChat - The Wire being the
 first on the system disk (`SYSTEM/`, 10 -> 9 clusters). Each
 rule packs through `$(OS88PKGB)` - `--compress-if=lzb` whenever `PKGZ` is set,
 so `make PKGZ=` still builds them plain - and `LZBPKGS` names them for a stamp,
@@ -46269,6 +46269,13 @@ bytes, 5 clusters either way - `lzbclust` caught it at the merge, and it went
 back to LZ4), and **Paint, Note Pad and
 the Task Manager stay LZ4 whatever it would save them**: they open the common
 documents and have to stay quick. Every other package is LZ4.
+
+The original nineteen were the owner's apps size pass 2, set B selection.
+WireChat joins them to keep Mixer on the 720KB apps disk (§34.15): its
+19,390-byte LZ4 file takes 20 clusters, while its 16,954-byte LZB file takes
+17. That saves the three clusters Mixer needs without removing a program or
+sample file. The expanded WireChat image is unchanged; its launch pays the
+slower decode.
 
 **The cluster test is a gate, not a note**: `soak -k lzbclust`
 (`tests/unit/t_lzbclust.py`) re-packs every listed package with LZ4 and fails
@@ -68950,7 +68957,7 @@ The package ABI extends `drivers/sound/sndpkg.inc`, through the existing
 | `SNDV_MIXGET` (8) | AL = channel | CF=0, CL/CH = left/right percentage 0..100; DL bit 0 = stereo, bit 1 = tone control; DH = native maximum (3/7/15/31); mono repeats left; CF=1 AX=SNDE_MIXARG (8) for unsupported channel |
 | `SNDV_MIXSET` (9) | AL = channel; CL/CH = left/right 0..100 | CF=0 written; invalid values or channel refuse before any write, CF=1 AX=SNDE_MIXARG; unavailable mixer answers SNDE_NOMIX |
 | `SNDV_MIXICON` (10) | CX = left x, gfx lock held | opaque 24x16 speaker image at (CX,2), CF=0; kernel callers only |
-| `SNDV_MIXPOP` (11) | CX = icon left x; ES:DI = kernel-private far bridge record; UI task, no lock held | tracks volume popup, restores pixels and frees scratch on every exit; CF=0, no package launched while gfx lock held |
+| `SNDV_MIXPOP` (11) | CX = icon left x; ES:DI = kernel-private far bridge record; UI task, no lock held | tracks volume popup, restores pixels and frees scratch on every exit; CF=0 |
 
 Channel numbers: 0 Master, 1 PCM, 2 FM/MIDI, 3 CD, 4 Line, 5 Mic,
 6 PC Speaker input, 7 Bass, 8 Treble. INFO's bitmap is authoritative.
@@ -68966,9 +68973,9 @@ primary display only. `[vid_clk_hx]` moves left by 24 while it is present;
 the speaker occupies its first three cells, and `menu_clkx` is the unchanged
 clock text origin. The clock and the maximum-width toast retain their entire
 field. Capability/geometry changes relayout the application menus at the new
-boundary; their existing prefix/index rule is unchanged. SOUND.DRV rounds to 12KB of image plus state on the heap;
-`DRVM_IMG_SND` is 12. The popup claims only its adapter-sized save-under while open: up to
-10KB on VGA/EGA and 3KB on the mono adapters.
+boundary; their existing prefix/index rule is unchanged. SOUND.DRV rounds to 11KB of image plus state on the heap;
+`DRVM_IMG_SND` is 11. The popup claims only its adapter-sized save-under while open: up to
+8KB on VGA/EGA and 2KB on the mono adapters.
 Its hit range is tested before
 the Date/Time cell, without changing application menu indices. The icon is
 cached independently, invalidated when the bar is overwritten or capabilities
@@ -68991,12 +68998,9 @@ track, outlined ridged thumb and opaque text work on all three adapters.
 Only the changing control band is redrawn during a drag; idle polls draw
 nothing and yield so background sound continues.
 
-On each opening, quietly discover a regular `MIXER.O88` in `SYSTEM\` on
-the boot volume, saving/restoring the current drive and folder on every path.
-Show `Open Mixer...` only when found, with an inverted full-width hover row. Revalidate at launch; perform it after
-restoring the save-under and releasing the graphics lock, through
-`OSAPI_PKG_START`. Failure reports a toast. No package-existence flag is
-persisted and there is no dependency from basic volume to this file.
+The popup contains only the master-volume control, with a fixed height of
+72 pixels. Opening it performs no package discovery or file I/O. Mixer is
+launched separately from the apps disk's `APPS\` folder.
 
 `MIXER.O88` is an optional native package with an About handler. It queries
 the live driver, offers only supported channels, and adjusts per-channel
@@ -69004,10 +69008,10 @@ level and stereo balance (mono channels have no balance control). Bass and
 Treble use independent Left/Right tone sliders and label 53% as flat (native
 step 8 of 15), rather than applying a volume-balance ratio to tone values. It handles
 an unavailable/unloaded driver visibly. Its sliders share source with the
-popup, including the monochrome face. It ships in SYSTEM on 720KB, 1.2MB and 1.44MB system floppies and live hard-disk
-media and is available through `make mixer`; it does not join the 360KB
-system disk. Existing hard-disk installation copies remain ordinary file
-copies: a user may add MIXER.O88 to an installed SYSTEM folder.
+popup, including the monochrome face. It ships in `APPS\` on all four apps
+disk geometries and live hard-disk media, and is available through
+`make mixer`. It ships on no system floppy. The small-kernel apps disks
+omit it because kern_small does not load SOUND.DRV.
 
 Hardware reference: Creative, *Sound Blaster Series Hardware Programming
 Guide*, chapter 4 (CT1335/CT1345/CT1745), available at

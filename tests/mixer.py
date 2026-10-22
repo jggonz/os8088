@@ -130,11 +130,11 @@ def session(ui,adapter):
     check(not s.owned(),'idle mixer holds no scratch claim')
     s.mo.to(80,150);s.pace(.3);s.icon()
     x=s.open()
-    check(d.rb('volume_found')==1,'SYSTEM/MIXER.O88 discovered on opening')
+    check(d.rw('volume_bottom')==91,'popup contains only the master-volume control')
     check(ui._byte('fpg_on')==0,'file activity ends while popup remains open')
     check(ui._byte('cur_shape')!=os88sym.equates()["CUR_BUSYSH"],'popup restores the arrow')
     claims=s.owned()
-    expected=10 if adapter in ('vga','sb16') else 3
+    expected=8 if adapter in ('vga','sb16') else 2
     check(sum(p for _,p in claims)==expected*64,'save-under has the adapter-sized claim')
     s.key('home');s.wait(lambda:d.rb('volume_levelv')==0,'Home reaches silence')
     s.key('end');s.wait(lambda:d.rb('volume_levelv')==100,'End reaches full volume')
@@ -151,19 +151,18 @@ def session(ui,adapter):
     check(not s.owned(),'drag dismissal releases the save-under')
     # Exact restore over a quiet desktop, with the pointer on the bar both times.
     s.mo.to(s.hx+12,9);s.pace(.5)
-    rect=(x,20,x+207,115)
+    rect=(x,20,x+207,91)
     before=s.crop(rect)
     s.open();s.close()
     check(before==s.crop(rect),'Escape restores every covered desktop pixel')
     check(not s.owned(),'Escape releases the save-under')
-    # Launch after the tracker has restored the screen and dropped its lock.
+    # Mixer is an ordinary app launched from the separate apps disk.
     s.open();s.key('end');s.close()
-    x=s.open();s.click(x+64,102)
-    w=ui.wait_window('Mixer')
+    w=ui.path('B:/MIXER.O88')
     p=Pkg(s.m,u16(s.m.read(G.winptr(s.m,w.i,ui.sym)+G.W_SEG,2)),
           os88drvsym.symbols('mixer.bin'))
     s.wait(lambda:p.rw('mx_mask')>0,'Mixer queried the live channel mask')
-    check(d.rb('volume_live')==0 and not s.owned(),'package launch leaves no modal scratch')
+    check(d.rb('volume_live')==0 and not s.owned(),'separate app launch leaves no modal scratch')
     check(p.rb('mx_level')==100,'full Mixer reads volume written by the popup')
     x0,y0,_,_=w.content
     s.click(x0+240,y0+44)
@@ -201,13 +200,6 @@ def session(ui,adapter):
 
 
 def absent():
-    # The quick UI works when the optional package is not present.
-    with os88ui.boot('build/mixernone360.img',machine=MACHINES['cga'],verbose=False) as ui:
-        s=Session(ui,'cga');s.open()
-        check(s.d.rb('volume_found')==0,'missing package removes Open Mixer')
-        check(s.d.rw('volume_bottom')==91,'missing package removes its command row')
-        s.key('end');s.wait(lambda:s.d.rb('volume_levelv')==100,'quick volume works without Mixer')
-        s.close();check(not s.owned(),'optional-package absence leaves no claim')
     with os88ui.boot('build/os8088-360.img',machine='os8088_5150_cga_gla',verbose=False) as ui:
         check(ui._word('menu_mixcap')==0,'no mixer leaves the speaker absent')
         check(ui._word('menu_clkx')==ui._word('vid_clk_hx'),'no mixer restores full clock width')
@@ -246,6 +238,13 @@ def main():
                 # UI.close also uses click; pace it on QEMU's guest ticks.
                 self.to(x,y);self._edge(True);self._edge(False)
                 os88qemu.pace(self.q,.2)
+        class QUI(hmacold.QUI):
+            def scroll_to(self,entry,win=None):
+                # Both files fit in the fixture's root listing. Avoid the
+                # base UI's keyboard scroller, which requires MartyPC cycles.
+                check(self.scroll(win)==0 and len(self.listing(win))==2,
+                      'both apps-fixture rows fit without scrolling')
+                return entry
         for memory in (1,128):
             with tempfile.TemporaryDirectory(prefix='mixer-qemu-',dir=ROOT/'build') as t:
                 sy=Path(t)/'system.img';apps=Path(t)/'apps.img'
@@ -256,14 +255,15 @@ def main():
                 os88qemu.own(q.pid,q.sock)
                 try:
                     xmcheck.wait_desktop(q.sock,'mixer')
-                    ui=hmacold.QUI(q,mouse=QMouse(q),sym=os88sym.linear,verbose=False)
+                    ui=QUI(q,mouse=QMouse(q),sym=os88sym.linear,verbose=False)
                     os88qemu.pace(q,2)
                     print('SB16 memory:',memory,flush=True)
                     session(ui,'sb16')
                     background(ui)
                 finally:q.close()
     else:
-        with os88ui.boot('build/mixer360.img',machine=MACHINES[a.adapter],verbose=False) as ui:
+        with os88ui.boot('build/mixer360.img',apps='build/mixplay.img',
+                         machine=MACHINES[a.adapter],verbose=False) as ui:
             session(ui,a.adapter)
         if a.adapter=='cga':absent()
 

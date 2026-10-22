@@ -14601,15 +14601,15 @@ SOAK = [
         needs=("qemu",), serial=True, builds=True),
     Row("mixercga", "soak", py("tests/mixer.py", "--adapter", "cga"), 100.0,
         "SPEC.md 34.15: CGA volume gestures, exact save-under restore and cleanup, "
-        "optional package discovery/absence and absent hardware, native Mixer and About",
+        "master-only popup and absent hardware, separate apps-disk Mixer and About",
         needs=("marty", "nasm"), timeout=900,
-        wants=("build/mixer360.img", "build/mixernone360.img")),
+        wants=("build/mixer360.img", "build/mixplay.img")),
     Row("mixerherc", "soak", py("tests/mixer.py", "--adapter", "herc"), 65.0,
         "SPEC.md 34.15: the same volume/Mixer UI and resource checks on Hercules",
-        needs=("marty", "nasm"), timeout=600, wants=("build/mixer360.img",)),
+        needs=("marty", "nasm"), timeout=600, wants=("build/mixer360.img", "build/mixplay.img")),
     Row("mixervga", "soak", py("tests/mixer.py", "--adapter", "vga"), 65.0,
         "SPEC.md 34.15: the same volume/Mixer UI on VGA, including its four-plane save-under",
-        needs=("marty", "nasm"), timeout=600, wants=("build/mixer360.img",)),
+        needs=("marty", "nasm"), timeout=600, wants=("build/mixer360.img", "build/mixplay.img")),
     Row("mixersb16", "soak", py("tests/mixer.py", "--adapter", "sb16"), 40.0,
         "SPEC.md 34.15: QEMU SB16/CT1745 actual hardware readback, stereo balance, "
         "tone controls, background playback while the popup remains open and "

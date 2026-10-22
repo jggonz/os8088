@@ -9,15 +9,15 @@ tone adjustments. The card determines which controls are available.
 
 ## Starting Mixer
 
-Click the speaker beside the clock and choose **Open Mixer...**. This command
-appears when **MIXER.O88** is in the boot disk's `SYSTEM` folder. You can also
-open that folder and double-click the program. Several Mixer windows can be
-open; they all control the same card and show its current settings.
+Open the apps disk's `APPS` folder and double-click **MIXER.O88**.
+Several Mixer windows can be open; they all control the same card and show
+its current settings.
 
 Mixer needs [[SOUND.DRV]] loaded and a compatible Sound Blaster mixer.
-The larger system floppies and live media carry it. The 360KB system floppy
-leaves it out; its speaker still offers quick master volume. You can copy
-MIXER.O88 into an installed system's SYSTEM folder.
+All four apps disk sizes and live media carry it. The system floppies leave
+it out; the speaker beside the clock offers quick master volume separately.
+The small system's apps disks omit Mixer because they do not load the sound
+driver.
 
 ## Choosing a source
 
