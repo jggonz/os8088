@@ -26874,6 +26874,84 @@ region the app armed at the door would change what a same-mode bracket's
 first frame is clipped to, for every bracket in the tree, to cover one
 package's omission.
 
+**Superseded by §12.8.6 as to the teardown**: the payoff now banks the
+region, draws through none and puts it back, so it reaches the bar whatever
+the caller armed and the app's first frame is clipped exactly as before.
+The package rule above still stands for the app's OWN reason - a bracket
+should not start under a region it no longer means - but forgetting it no
+longer leaves a bar behind.
+
+#### 12.8.6 The widget draws through NO window's region
+
+**A region outlives the draw that armed it, and the widget's whole life is
+inside one.** `OSAPI_WM_CLIP_SET` (§11.3) lasts until the next `gfx_unlock`,
+and the freeze this widget reports *is* one lock hold (§12.8.3). So a handler
+that repaints its window through a region and then touches the disk in the
+same hold - the natural order for *say what is about to happen, then do it* -
+left the region armed under every widget primitive, and the bar is inside no
+window: the widget was armed, stepped and torn down with **not one pixel on
+the glass**. Nothing failed and nothing was wrong with the arithmetic; the
+`gfx_fill`s were simply cut to the caller's content rect.
+
+Reported off the INSTALL wizard (§117): its busy page is drawn by
+`in_redraw`, which arms the window's region, and `HDI_GO` runs inside the
+same callback, so a copy that takes minutes on an XT showed no bar at all -
+and every log line re-armed the region (`in_onlog`) in case the engine had
+moved it. The Control Panel's Install window never arms one, which is why the
+same engine had always shown a bar there. §12.8.5.2 is the same defect at the
+other end of the widget's life, met twice and patched per package.
+
+**The fix is the widget's, not the callers'.** `fpg_bare` runs each of the
+module's painters - the arm's composition and paint, the trough's clear, its
+hatch, each step's strip, and the teardown - with `[wm_clip_n]` **banked,
+zeroed and put back**: the toast's own three steps round `menu_draw_bar`
+(§59), for the toast's own reason. Three things it deliberately does not do:
+
+- **Clear the region.** It is the caller's, and its next primitive after the
+  disk work must be cut exactly as it would have been - which is why
+  §12.8.5.2 refused to clear it at `fsx_run`'s door, and the bank answers that
+  objection rather than overruling it.
+- **Cover the entry points.** `cur_busy` and `cur_busy_on` read `[wm_clip_n]`
+  to know that a clipped painter has already been told the arrow is out of
+  its reach (§7.1.4), and a busy pointer put up behind that painter's back is
+  a smear for the rest of the session. They run outside the bank and keep
+  seeing the caller's region; so does the mouse ISR's own test during an
+  `int 13h` (§7.4). The ISR cannot see the zeroed window at all: `[fpg_on]`
+  is set before any painter runs and gates it off (§12.8.4).
+- **Spend anything per sector.** The unarmed paths are untouched; the bank is
+  paid once per arm, once per phase, at most `FPG_BAR_PX` times per phase
+  for the strip, and once per teardown - each beside a `gfx_fill` that costs
+  ~756 us of arriving.
+
+The widget's own `cur_unlazy` (§7.4.3) is what makes drawing outside the
+caller's region safe for the arrow: a region painter's lazy hide was decided
+against ITS rect, and the widget re-asks against the bar's rows before its
+first pixel.
+
+**Who it reached** - swept across the tree when this was fixed. The kernel's
+own file paths arm no region (the Disk window's copy, the Standard File
+dialog, the Control Panel and its Install window, and no callback dispatch:
+every region a handler holds is its package's own), which is why the defect
+read as INSTALL's alone. The kernel has exactly two ways to put one under
+disk work, and both are general:
+
+- **A damage repaint runs every `W_PAINT` under the window's region**
+  (`wm_dw_cull`, §11.3.3), so a package that touches the disk from its paint
+  - a part fetched on a display change - was clipped there.
+- **`gfx_unlock` commits a held write stream (§18.4.9) BEFORE it disarms the
+  region**, so a held `WRITE_SEQ`'s tail ran under whatever the hold armed.
+
+And the packages that draw through a region and then read or write in the
+same handler: INSTALL's copy (both phases); Tracker's main-window Prev/Next
+with a playlist loaded, which loads the next module; DrMarco's and
+Excitebike's first window tick, which fetches the art part; the Video Player's
+scrub release and keyframe steps; RealDMG's Controls window, which saves its
+settings after every reassignment; and any package whose About card was
+dismissed by the menu command that then saved or loaded (Note Pad's Save,
+The Wire's Load and Add to Disk, RealDMG's settings and states). Some of
+those moves are under `FPG_WARM` and would show nothing anyway; every one of
+the rest now shows the bar with no change to the package.
+
 ### 12.9 The bar is three segments, and each answers for itself
 
 **Only the segment that changed may put pixels on the bar.** The menu bar
@@ -203004,6 +203082,18 @@ adapter is the checkerboard §47 expects to be looked at there.
   `os88ui_glyph` with their labels as runs.
 - **Keys**: Enter is the default button, Escape is Cancel, the arrows move the
   selection on the Drive and Partition pages and the choice on Keep or erase.
+- **The rects are re-placed at every PRESS, not only at a paint.** The
+  library's press (`os88ui_btnclick`) hit-tests screen rects, and a window
+  dragged by its title is replayed from the drag cache with no `W_PAINT`
+  (§11.96.12.0) — so with the rects laid out only when the page was drawn,
+  a move after *Finished - click Next* left Next answering at the window's
+  OLD place, and nothing put it back until a minimize and restore repainted
+  it. `in_press` is the wizard's own `W_ONCLICK`, set over the library's: it
+  runs `in_layout` from the live content box and then hands the press on.
+  The release and a drag read the same rects, and a window cannot move
+  between a press in its content and that press's release, so the one call
+  covers all three. +20 bytes of image; `tests/install.py` drags the window
+  before that Next.
 
 ### 117.3 `OSAPI_DRV_USE` (cell `0x04A5`) — the Drivers page's tick, as a door
 
@@ -203250,7 +203340,9 @@ ladder (§52.10.11), claimed and freed inside each install verb.
 
 `tests/install.py` (soak, MartyPC `os8088_xt_hdd`): boot the 360KB system disk
 with the apps disk in B:, launch `A:\INSTALL.O88`, walk every page by its own
-buttons, erase-install the XT-IDE disk's DOS partition, read the volume back on
+buttons, erase-install the XT-IDE disk's DOS partition - requiring §12.8's
+progress widget on the framebuffer, not just armed, while the copy runs
+(§12.8.6) - read the volume back on
 the host with `tests/instdeep.py`'s reader (the system and apps trees arrived,
 the VBR and MBR committed), then boot C: and run the wizard again as an
 upgrade — Upgrade preselected, a planted user file kept. `tests/unit/

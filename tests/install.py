@@ -77,6 +77,15 @@ BX0, BW, BGAP, BY, BH = (const(n) for n in
                          ("IN_BX0", "IN_BW", "IN_BGAP", "IN_BY", "IN_BH"))
 LOGN, LOGC = const("IN_LOGN"), const("IN_LOGC")
 
+# --- ...and the progress widget's, read from the kernel's (SPEC.md 12.8) -----
+FPGSRC = open("kernel/fprog.inc").read()
+FPG = {}
+for _n in ("FPG_ICO_W", "FPG_ISP", "FPG_BOX_W", "FPG_BOX_Y"):
+    _m = re.search(r"^%s\s+equ\s+(\d+)" % _n, FPGSRC, re.M)
+    if not _m:
+        sys.exit("install: %s is not an `equ` in kernel/fprog.inc" % _n)
+    FPG[_n] = int(_m.group(1))
+
 
 def symmap():
     """The package's symbols, off the map its build rule writes."""
@@ -155,11 +164,18 @@ class Wizard(object):
         return [raw[i * (LOGC + 1):i * (LOGC + 1) + LOGC].decode("latin-1")
                 .rstrip() for i in range(n)]
 
-    def install(self, want, what, limit=900.0):
+    def install(self, want, what, limit=900.0, move=False):
         """Install, from Confirm: the Installing page writes its log while
         the verb runs and STAYS when it answers, Next live (SPEC.md 117.1),
-        until Next goes on to the page the answer named."""
+        until Next goes on to the page the answer named.
+
+        `move` DRAGS THE WINDOW before that Next. A drag is replayed from the
+        drag cache with no W_PAINT (SPEC.md 11.96.12.0), so a wizard that
+        laid its buttons out only when it painted hit-tested the press
+        against where the window USED to be: "Finished - click Next", and
+        Next did nothing until a minimize and restore repainted it."""
         self.button(1)
+        bar = BarWatch(self.m)
 
         def ended(_):
             pg = self.page()
@@ -167,15 +183,75 @@ class Wizard(object):
                 sys.exit("install: FAIL - Install left the Installing page "
                          "by itself, for %s: its log must stay until Next"
                          % NAMES.get(pg, pg))
-            return pg == P["P_BUSY"] and self.byte("in_logend")
+            done = pg == P["P_BUSY"] and self.byte("in_logend")
+            if pg == P["P_BUSY"] and not done:
+                bar.sample()
+            return done
         M.until(self.m, ended, "the Installing page to end (%s)" % what,
                 limit=limit)
+        bar.verdict(what)
         lines = self.log()
         print("  BUSY       %s; the log ends:" % what)
         for ln in lines:
             print("             | %s" % ln)
-        self.next(want, "after Next on the log")
+        if move:
+            x0, y0 = self.w.x, self.w.y
+            self.w = self.ui._refresh(self.ui.drag_window(self.w, 48, 24))
+            print("  MOVED      the window %d,%d -> %d,%d, no repaint"
+                  % (x0, y0, self.w.x, self.w.y))
+        self.next(want, "after Next on the log" + (" - at the window's NEW "
+                  "place" if move else ""))
         return lines
+
+
+class BarWatch(object):
+    """IS THE PROGRESS BAR ON THE GLASS while the copy runs (SPEC.md 12.8.6)?
+
+    The wizard draws its Installing page through its window's clip region and
+    runs HDI_GO in the same lock hold, so the region used to be armed under
+    every one of the widget's primitives: [fpg_on] said the widget was up for
+    the whole copy and not one pixel of it reached the menu bar. Guest state
+    cannot see that - only the framebuffer can. So each poll that finds the
+    widget ARMED reads the CGA framebuffer and asks for the box's top frame
+    row: FPG_BOX_W pixels of one colour at FPG_BOX_Y with the bed beside it
+    in the other, a picture nothing else on the bar draws (menu text keeps
+    off the widget's cells while it is up).
+    """
+
+    def __init__(self, m):
+        self.m = m
+        self.on = m.sym("fpg_on")
+        self.x0 = m.sym("fpg_x0")
+        self.armed = self.seen = 0
+
+    def sample(self):
+        if not self.m.read(self.on, 1)[0] & 1:
+            return
+        x0 = struct.unpack("<H", bytes(self.m.read(self.x0, 2)))[0]
+        _, _, rows = self.m.vram("cga")
+        left = x0 + FPG["FPG_ICO_W"] + FPG["FPG_ISP"]
+        row = rows[FPG["FPG_BOX_Y"]]
+        run = row[left:left + FPG["FPG_BOX_W"]]
+        self.armed += 1
+        # the frame in one colour, and the BED beside it (the icon -> box
+        # gap) in the other: a bare bar is one colour across both, so this
+        # cannot pass on a widget that was never drawn, whichever polarity
+        # the card stores ink in
+        if len(run) == FPG["FPG_BOX_W"] and len(set(run)) == 1 \
+                and row[left - 2] != run[0]:
+            self.seen += 1
+
+    def verdict(self, what):
+        print("  BAR        %s: armed at %d sample(s), on the glass at %d"
+              % (what, self.armed, self.seen))
+        if not self.armed:
+            sys.exit("install: FAIL - the progress widget never ARMED during "
+                     "the copy (%s): nothing to look at" % what)
+        if not self.seen:
+            sys.exit("install: FAIL - the progress widget was armed for the "
+                     "whole copy and NEVER on the glass (%s): its primitives "
+                     "were clipped to the wizard's window (SPEC.md 12.8.6)"
+                     % what)
 
 
 def launch_wizard(ui, path):
@@ -255,7 +331,8 @@ def main():
                 "the Down key to pick Erase", limit=20.0)
         print("  MODE       Down picked Erase")
         wz.next(P["P_CONFIRM"], "after keep or erase")
-        log = wz.install(P["P_DONE"], "after Install: both disks copied")
+        log = wz.install(P["P_DONE"], "after Install: both disks copied",
+                         move=True)
         sums = [ln for ln in log if ln.startswith("Copied ")]
         m_ = re.match(r"Copied (\d+) files, (\d+) KB", sums[0]) if sums \
             else None

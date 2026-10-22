@@ -118,6 +118,46 @@ fpg_baron:
 %endif
 
 ; -----------------------------------------------------------------------------
+; fpg_bare - run one of this module's painters through NO window's clip region
+;            (SPEC.md 12.8.6)
+; in:  `call fpg_bare` / `dw painter` - the painter's address inline, after
+;      the call (rect_get's idiom); the painter's own inputs in their own
+;      registers (AL for fpg_arm.show, SI for fpg_lit)
+; out: the painter's; BX and the flags clobbered, which every painter here
+;      already does
+;
+; **A REGION OUTLIVES THE DRAW THAT ARMED IT.** OSAPI_WM_CLIP_SET lasts until
+; the next gfx_unlock (SPEC.md 11.3), and the freeze this widget reports IS
+; one lock hold (12.8.3) - so a handler that repaints its window through a
+; region and then reads or writes a file in the same hold left every pixel
+; below cut to ITS window. The bar is inside no window, so the widget was
+; armed, stepped and torn down without one pixel reaching the glass: the
+; INSTALL wizard's copy (SPEC.md 117.1) ran for minutes with no bar at all,
+; and Audio and the Video Player each left a frozen bar behind a bracket
+; (12.8.5.2) before they learned to clear their own region.
+;
+; BANKED AND PUT BACK, never cleared: the region is the caller's, and its
+; next primitive must be cut exactly as it would have been - which is why
+; 12.8.5.2 refused to clear it at fsx_run's door and why this does not. ONLY
+; THE PAINTERS, and not the entries round them: cur_busy and cur_busy_on
+; read [wm_clip_n] to know that a clipped painter has already been told the
+; arrow is out of reach (SPEC.md 7.1.4), and they must keep seeing it. The
+; mouse ISR cannot see the gap at all - [fpg_on] is set before any painter
+; runs and gates it off (12.8.4). toast_now (SPEC.md 59) and the menu drop
+; take the same three steps round menu_draw_bar for the same reason.
+; -----------------------------------------------------------------------------
+fpg_bare:
+    pop bx                      ; the inline word...
+    inc bx
+    inc bx
+    push bx                     ; ...and the return lands past it
+    push word [wm_clip_n]
+    and word [wm_clip_n], 0     ; 5 bytes where `mov word` is 6: imm8, signed
+    call [bx-2]
+    pop word [wm_clip_n]
+    ret
+
+; -----------------------------------------------------------------------------
 ; fpg_begin - arm the widget and draw everything expensive about it
 ; in:  DX:CX = BYTES this operation expects (0 refuses: nothing to report);
 ;      DS = KERNEL_SEG, gfx lock held by the caller
@@ -225,7 +265,8 @@ fpg_begin:
                                 ; transfer and no arithmetic anywhere was
                                 ; wrong (SPEC.md 12.8.1). fpg_step never reads
                                 ; it, so the sector path is untouched
-    call fpg_clear              ; the trough is this phase's now: empty it,
+    call fpg_bare               ; the trough is this phase's now: empty it,
+    dw fpg_clear                ; (through no region, SPEC.md 12.8.6)
                                 ; whether it held the previous phase's bar or
                                 ; the busy hatch (SPEC.md 12.8.3)
 .out:
@@ -322,7 +363,8 @@ fpg_busy:
     jne .out                    ; a phase with a scale owns the trough
     cmp byte [fpg_pat], 0
     jne .out                    ; ...and the hatch is already on it
-    call fpg_hatch
+    call fpg_bare               ; (through no region, SPEC.md 12.8.6)
+    dw fpg_hatch
 .out:                           ; ...and fpg_begin's exit, too - see there
     pop si
     pop dx
@@ -565,6 +607,18 @@ fpg_arm:
     ; under a paragraph that said the case was prevented by a test that does
     ; not prevent it. It is a bound, not an exclusion - a third painter, or a
     ; UI-task path that reaches a lock-free arm, would break it.
+    call fpg_bare               ; ...and THROUGH NO WINDOW'S REGION (SPEC.md
+    dw .show                    ; 12.8.6): the bar is inside none, and a caller
+                                ; that drew its window through one in this hold
+                                ; would otherwise clip all of what follows away
+.yes:
+    clc
+    ret
+.no:
+    stc
+    ret
+
+.show:                          ; AL = [menu_bovr], sampled above
     call menu_draw_bar          ; choice - the gap the menus leave - is the
                                 ; same stretch of bar this widget is about to
                                 ; be drawn on; measured on a 5150/CGA, Paint's
@@ -597,14 +651,8 @@ fpg_arm:
     call fpg_paint              ; case doing it again is PERFORMANCE.md Part 1's
 .span:                          ; double-draw flash with the widget as the flash
     call fpg_span               ; ...and the bar has lost those cells: tell it
-    call menu_inval             ; which, so fpg_finish gives back exactly them
+    jmp menu_inval              ; which, so fpg_finish gives back exactly them
                                 ; and not the whole bar (SPEC.md 12.9)
-.yes:
-    clc
-    ret
-.no:
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; fpg_paint - the widget's own pixels, from its own state (internal)
@@ -778,7 +826,8 @@ fpg_step:
     jbe .done                   ; nothing new to light
 
     mov si, ax                  ; SI = the new extent, and the strip from the
-    call fpg_lit                ; old one to it is fpg_paint's own restore -
+    call fpg_bare               ; old one to it is fpg_paint's own restore -
+    dw fpg_lit                  ; (through no region, SPEC.md 12.8.6)
                                 ; ONE routine, above. It is BELOW the `jbe
                                 ; .done` gate, so it runs only when the bar
                                 ; advances a pixel column: at most FPG_BAR_PX
@@ -965,6 +1014,29 @@ fpg_finish:
                                 ; gfx_unlock runs on every drawing burst in the
                                 ; machine - does exactly the work it did before
 
+    call fpg_bare               ; the cleanup through NO window's region
+    dw .unpaint                 ; (SPEC.md 12.8.6). gfx_unlock has already
+                                ; disarmed one, but a payoff taken early -
+                                ; fsx_run's at the bracket door, stm_thaw's -
+                                ; runs under whatever the caller armed, and a
+                                ; clipped teardown leaves the box on the bar
+                                ; for good with [fpg_on] already 0
+    pop ax                      ; fpg_arm's banked cursor debt
+
+    test al, 2                  ; ...and fpg_arm's arrow comes back (SPEC.md
+    jz .out                     ; 12.8.4), LAST: the save-under has to be taken
+    CURLOG 'F'
+    call cursor_show            ; from finished pixels and the bar is not
+                                ; finished until the line above. We are inside
+                                ; gfx_unlock, which still owns the glass, and
+                                ; its own cursor tail is BELOW this - so the
+                                ; refcount lands where it started either way
+.out:
+    jmp fpg_step.done           ; pop si..ax, CURBAR_OFF, popf, ret - written
+                                ; `jmp`, so it grows a byte rather than failing
+                                ; to assemble if it ever leaves short reach
+
+.unpaint:
     call thm_bg                
     call fpg_span               ; --- above the text band: the icon's head
     xor bx, bx
@@ -1005,8 +1077,9 @@ fpg_finish:
                                 ; at the foot of that routine, so the range is
                                 ; legal by an existing site rather than by
                                 ; argument. It preserves every register
-                                ; (jmp kret_dx), so the `pop ax` below still
-                                ; gets fpg_arm's banked cursor debt. It runs
+                                ; (jmp kret_dx) - and fpg_arm's banked cursor
+                                ; debt is on the stack across all of this
+                                ; anyway, under fpg_bare's frame. It runs
                                 ; AFTER [fpg_on] went to 0, so the menus
                                 ; segment is back to full length and nothing
                                 ; is clamped away
@@ -1019,24 +1092,11 @@ fpg_finish:
     mov word [menu_mixcap], 0FFFFh
 .soundok:
 %endif
-    call menu_draw_bar          ; the text band, as the ONE run that differs -
-    pop ax                      ; and the menus segment is FPG_CELLS longer
+    jmp menu_draw_bar           ; the text band, as the ONE run that differs -
+                                ; and the menus segment is FPG_CELLS longer
                                 ; again the moment [fpg_on] went to 0 above,
                                 ; so this is also the composition that gives
                                 ; those cells back (SPEC.md 12.8.3)
-
-    test al, 2                  ; ...and fpg_arm's arrow comes back (SPEC.md
-    jz .out                     ; 12.8.4), LAST: the save-under has to be taken
-    CURLOG 'F'
-    call cursor_show            ; from finished pixels and the bar is not
-                                ; finished until the line above. We are inside
-                                ; gfx_unlock, which still owns the glass, and
-                                ; its own cursor tail is BELOW this - so the
-                                ; refcount lands where it started either way
-.out:
-    jmp fpg_step.done           ; pop si..ax, CURBAR_OFF, popf, ret - written
-                                ; `jmp`, so it grows a byte rather than failing
-                                ; to assemble if it ever leaves short reach
 
 ; -----------------------------------------------------------------------------
 ; fpg_span - the whole widget's horizontal extent, from the armed origin
