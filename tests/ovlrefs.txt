@@ -87,6 +87,7 @@ ovl_spl_redraw      spl_reset only (splash.inc:488) - repaint after a mode set
 # ovl_cfg_load was here for the same reason and has left for the same one: its
 # only caller moved into the section with it.
 ovl_sc_load         ovc_load only (CFG_BOOT's expansion, which IS `.boot2` - the macro is merely DEFINED under `.modc`, where the reader cannot tell a definition from an emission). ovc_load's one caller is ovl_cfg_load, drv_boot_x's, inside kmain_o: the desktop shortcuts' boot read, SPEC.md 26.8.6
+bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot2`, as the row above says - the macro is DEFINED under `.modc`). The blob's own dock_apply (DOCK_APPLY bdk, driver.inc), applied to the settings just read, inside drv_boot_x, inside kmain_o. Visible to this gate only since the template walk learned a multi-argument expansion pastes its first (SPEC.md 120.4's bvs_switch row)
 
 # --- not a call at all ------------------------------------------------------
 # kernel.asm's `kbld_blob: dw boot2_entry` is the length of the blob up to the
@@ -96,3 +97,4 @@ ovl_sc_load         ovc_load only (CFG_BOOT's expansion, which IS `.boot2` - the
 # SPEC.md 2.9.14 made the blob one section.)
 
 ovl_dock_geom       dock_geom dispatches here only while spl_fseg > COLD_SEG; after spl_finish it dispatches to the loaded Control Panel. Fullscreen return uses dock_band.
+bvs_switch          vx_boot_x (`.cold`, kernel/vidext.inc), whose one caller is kmain's far call BETWEEN `SPLGATE1 kmain_o` returning and `call COLD_SEG:mem_unblob_x` (kernel.asm) - the blob is still aboard by construction, and the switch onto VESA.DRV's display has to use the blob's vid_switch because nothing resident has one (SPEC.md 120.4, 39.11.2). Every other caller of bvs_switch is inside the blob

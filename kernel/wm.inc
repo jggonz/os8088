@@ -1669,7 +1669,7 @@ wm_pref_take:
     push es
 %ifdef GFX_VGA                  ; no EGA on a build with no VGA renderer
     cmp al, VID_EGA             ; the per-window PREF table has THREE entries,
-    jne .kindok                 ; VID_VGA / VID_HERC / VID_CGA, and the kind
+    jb .kindok                  ; VID_VGA / VID_HERC / VID_CGA, and the kind
     mov al, VID_VGA             ; indexes it (kind*4) below - so an unclamped
 .kindok:                        ; EGA reads si+12, off the end of a table in
 %endif
@@ -1677,6 +1677,10 @@ wm_pref_take:
                                 ; takes VGA's row - it is VGA's planar path,
                                 ; and a package cannot supply a fourth pair
                                 ; without an ABI break (SPEC.md 39.8, 39.24).
+                                ; **AND SO DOES A VESA ONE** (kind 4, SPEC.md
+                                ; 120.5): `jb`, not `jne`, because the `jne`
+                                ; let kind 4 read si+16 and nine packages
+                                ; opened at the sizes it found there
     test byte [bx+W_FLAGS+1], WF_USRSZ >> 8
     jnz .no                     ; A USER OUTRANKS AN APPLICATION (SPEC.md
                                 ; 11.100.5): once somebody has sized this window
@@ -1823,6 +1827,13 @@ wm_display:
     mov si, MBAR_H
     mov dl, [vid_kind]
 .bpp:
+%ifdef VID_EXT
+    cmp dl, VID_VESA
+    jne .nvx
+    mov dh, [vx_bpp]            ; a packed display: 8 or 16 (SPEC.md 120.4)
+    ret
+.nvx:
+%endif
     mov dh, 4
     or dl, dl
     jz .r                       ; VID_VGA -> 4 planes

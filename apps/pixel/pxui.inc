@@ -239,6 +239,10 @@ px_display:
     mov bx, [px_win]
     call OSAPI_WM_DISPLAY           ; DL = kind, DH = bits per pixel
     mov [px_bpp], dh
+    cmp dl, VID_VESA                ; a VESA display is the VGA's row in every
+    jne .nv                         ; table here: square pixels, colour chrome
+    mov dl, VID_VGA                 ; (SPEC.md 106.27); only the depth differs
+.nv:
     mov [px_rkind], dl              ; (the pixel's aspect wants EGA's own)
     mov byte [px_half], 0
     cmp dl, VID_CGA

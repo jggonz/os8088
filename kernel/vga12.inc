@@ -1823,6 +1823,27 @@ vga_b4out:
 ; none of it costs anything at all, because the gate short-circuits on
 ; [vid_ndisp] two instructions in.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; gfx_blitd - OSAPI_GFX_BLITD (SPEC.md 120.7): a package's block AT THE
+;             DISPLAY'S DEPTH, or its DAC entries - the driver's whole, and
+;             nothing of the kernel's but the cursor hide. ES:SI = pixels, BP
+;             = the stride, AX/BX = x/y, CX/DX = w/h; CX = 0 is the palette
+;             form. out CF = 1 refused: a display that is not packed, a
+;             kernel without the hook, or the driver's own refusal
+; -----------------------------------------------------------------------------
+gfx_blitd:
+%ifdef VID_EXT
+    cmp byte [vid_ext], 1
+    jne .no
+    call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
+    call vx_call
+    db VX_BLITD
+    ret
+.no:
+%endif
+    stc
+    ret
+
 gfx_blit4:
     KFZ 25                      ; a packed-4bpp block (SPEC.md 5.4)
     call cur_unlazy              ; off the clip list (SPEC.md 11.3): 7.1.4
@@ -1986,6 +2007,11 @@ gfx_blit4:
                                 ; GFXDISP (SPEC.md 39.14.7)
 .dsp1:
 %endif
+    VIDEXTC VX_BLIT4, .out      ; a packed display (SPEC.md 120.3): the block
+                                ; is the driver's whole - the gfx_blit_* cells
+                                ; are set, ES:SI and BP are the source - and
+                                ; .out tears down nothing ([gfx_blit_fst] is
+                                ; still 0) but the hook, if one was taken
 %ifdef GFX_VGA
     cmp byte [vid_mono], 0
     je .vga                     ; (no test at all without a VGA in the build:
@@ -2778,6 +2804,12 @@ gfx_blitp:
     stc                         ; the same reason: the guard is INSIDE the
 .exit:                          ; geometry's own push and one is outstanding
     jmp .out
+%ifdef VID_EXT
+    db 0                        ; PARITY, never executed (between a jmp and a
+                                ; jump target): VIDEXTR's seven bytes above
+                                ; are even with it, and font_run keeps its
+                                ; entry parity (tests/unit/t_hotpar.py)
+%endif
 .clipok:
     test al, 7
     jz .xal                     ; x off the byte grid - refused, but for a
@@ -2834,6 +2866,10 @@ gfx_blitp:
     ; stops being true.
     cmp byte [vid_mono], 0
     jne .no
+    VIDEXTR .no                 ; ...and a packed display refuses too (SPEC.md
+                                ; 120.3.1): the source is a plane layout this
+                                ; display does not have, and Paint keeps its
+                                ; gfx_blit4 fallback for exactly this answer
     ; --- the geometry, once for the whole block. (The first version of this
     ; shifted with `mov cl, 3` and then popped x into CX - a count destroyed by
     ; the value it was going to shift, which made the block one byte too wide
@@ -3221,6 +3257,9 @@ gfx_fill_raw:
 ; The 1bpp arm pays nothing.
 ; -----------------------------------------------------------------------------
 vga_solid_rect:
+    VIDEXT VX_FILL              ; a packed display (SPEC.md 120.3): the driver
+                                ; fills - or XORs, [vga_xorm] being set by
+                                ; both callers above - and returns to OURS
     push ax
     push bx
     push cx
@@ -3402,6 +3441,15 @@ gfx_spans:
     mov [gfx_sp_n], bx
 .rows:
     mov [gfx_sp_y], ax
+%ifdef VID_EXT
+    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 120.3.1): AX is the
+    jz .vxplanar                ; first row, clipped, and the gfx_sp_* cells
+    CURUNLAZY                   ; the list - the hide is owed as below
+    call vx_call
+    db VX_SPANS
+    jmp .done
+.vxplanar:
+%endif
     call gfx_rowbase            ; the ONE row base this call computes
     mov [gfx_sp_row], ax
     CURUNLAZY                   ; unclipped, so this may write any pixel on
@@ -3563,6 +3611,7 @@ gfx_fill_gray_d:
 gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_gray
+    VIDEXT VX_GRAY              ; ...and a packed display's (SPEC.md 120.3)
     push ax
     push bx
     push cx
@@ -3717,6 +3766,8 @@ gfx_fill_pat_d:
 gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_pat
+    VIDEXT VX_PAT               ; ...and a packed display's (SPEC.md 120.3):
+                                ; the eight bytes at [gfx_pat], unstaged
     push ax
     push bx
     push cx
@@ -4058,6 +4109,8 @@ vga_save_vram:                              ; only renderer gfx_save has
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
     jne sw_save                 ; on mono the framebuffer IS the renderer's
                                 ; target, so one "plane" of sw_xfer is it
+    VIDEXT VX_SAVE              ; ...and a packed display's save is the
+                                ; driver's, in [vga_pn]'s terms (SPEC.md 120.4)
     push ax
     push bx
     push cx
@@ -4314,6 +4367,7 @@ gfx_restore:
 vga_restore_vram:                              ; only renderer gfx_restore has
     cmp byte [vid_mono], 0      ; see vga_save_vram
     jne sw_restore
+    VIDEXT VX_RESTORE           ; ...and the driver's, [gfx_sub_*] honoured
     push ax
     push bx
     push cx
@@ -4903,6 +4957,8 @@ gfx_scroll:
     mov [vgas_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
     mov word [vgas_step], -1     ; bottom-up (source above destination)
 .disp:
+    VIDEXTC VX_SCROLL, .ok      ; a packed display (SPEC.md 120.3.1): the six
+                                ; vgas_* cells say what moves where
 %ifdef GFX_VGA
     cmp byte [vid_planes], 1
     je .mono
@@ -5569,6 +5625,17 @@ gfx_blit1_x:
     mov dx, [vid_ch]
     sub dx, bx
 .ybot:
+%ifdef VID_EXT
+    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 120.3.1): the band
+    jz .vxplanar                ; is clipped and local, the pen and the head
+    call KERNEL_SEG:vx_callf1   ; mask are in the cells, and the driver puts
+    jmp .done                   ; it down. BEFORE .pen, whose port program
+                                ; would be wrong for a packed mode; .done tears
+                                ; down nothing ([gfx_b1act] is 0). The hook is
+                                ; 5 + 2 + 5 + 3 = 15 bytes...
+    nop                         ; ...and this PARITY pad, never executed, is
+.vxplanar:                      ; the sixteenth, so .cold's dsk_* keep their
+%endif                          ; entry parity (tests/unit/t_hotpar.py)
 
 %ifdef GFX_VGA                  ; SPEC.md 5.4.2.5: no VGA in this build, so no PEN
     call .pen                   ; SPEC.md 5.4.2.4: THE PEN, now that there IS a

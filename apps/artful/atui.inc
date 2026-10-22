@@ -456,14 +456,17 @@ at_subank:
     mov bl, [at_vbpp]               ; ...OF THE CARD THIS WINDOW IS ON, which
     xor bh, bh                      ; at_geom_init took from OSAPI_WM_DISPLAY:
     cmp bl, 4                       ; OSAPI_VIDEO cannot answer that on a
-    je .planes                      ; two-card machine (SPEC.md 39.16.4)
-    mov bx, 1
-.planes:
-    mul bx
+    jae .planes                     ; two-card machine (SPEC.md 39.16.4) - and
+    mov bx, 1                       ; 8 or 16 on a packed display is BYTES a
+.planes:                            ; column, taken as it comes (120.5)
+    mul bx                          ; DX:AX: 16 x a panel passes 64KB
     add ax, 1023
+    adc dx, 0
     mov cl, 10
-    shr ax, cl                      ; AX = KB, rounded up
-    or ax, ax
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    add ax, dx                      ; AX = KB, rounded up (ZF = none)
     jz .no
     call OSAPI_MEM_CLAIM            ; out CF=0, DX = base segment
     jc .no

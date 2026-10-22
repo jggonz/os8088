@@ -54,14 +54,16 @@ DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F
 CFG_SIG = b"O88CFG\0\0"
 CFG_GEN_V = 3
 CFG_REC0 = 10
-CFG_FBUF = 163                  # SPEC.md 2.8.7: a file this size or less
+CFG_FBUF = 164                  # SPEC.md 2.8.7: a file this size or less
                                 # carries no trailer the boot will read.
                                 # kern_big's - the only kernel that reads a
                                 # trailer - and DERIVED there (driver.inc), so
                                 # tests/unit/t_stik.py evaluates the kernel's
                                 # own expression with nasm and holds this to
                                 # it: it was 131 until #248's two pin keys,
-                                # and 152 until #249's 'TP' theme preset
+                                # and 152 until #249's 'TP' theme preset,
+                                # and 163 until SPEC.md 120.2.3's class byte
+                                # grew the 'VM' record by one
 CFG_MAXFILE = 4096              # ...and one this size or more is refused
 
 # --- SPEC.md 110.5 ------------------------------------------------------------

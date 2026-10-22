@@ -71,6 +71,13 @@ It lists the adapters it found. Click one and press **Set Primary** to move
 the desktop onto it; the button is greyed while the dot is on the adapter
 already in use.
 
+With the **VESA Display** driver loaded (see **VESA display driver**) a
+**Vesa** row lists the high-resolution screen the card offers, named by its
+size and colour depth - `Vesa 1024x768x16`, or `Vesa auto` for the largest
+the card has. Click that row again while its dot is on it to step through
+the screens the card offers, then press **Set Primary**. The choice is
+kept, and used at every start while the driver is loaded.
+
 **Force Color** is for a VGA card that started the machine in shades of
 grey. Tick it and the screen turns to colour at once, and every start after
 that does the same. Clearing the tick takes effect at the next start. It is

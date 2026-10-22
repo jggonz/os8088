@@ -1130,6 +1130,13 @@ wm_disp_now:
 ;      (the caller banks it). Far: its slot is its only caller.
 ; -----------------------------------------------------------------------------
 ext_extend_b:
+%ifdef VID_EXT
+    cmp ah, VID_VESA            ; a packed primary (SPEC.md 120.5): Single. A
+    jne .ok                     ; second card's 1bpp geometry beside an 8bpp
+    stc                         ; one is a straddle arithmetic this cycle does
+    retf                        ; not take
+.ok:
+%endif
     call ext_kapply             ; the live block is the SECONDARY's now...
     EXK vid_setmode             ; ...which is what points this at the right
                                 ; card, and what makes its 32KB/16KB clear

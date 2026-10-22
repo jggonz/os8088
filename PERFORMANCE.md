@@ -1216,6 +1216,10 @@ list to check yourself against.
 | operation | was | is | contract |
 |---|---|---|---|
 | Show / raise a window | whole-screen repaint: dither, drive icons, dock, bar, every window's frame and `W_PAINT` | the bar, the dock, the outgoing title bar, this window | §11.90 |
+| **VESA: a window-sized fill** (624x200 at 1024x768x16, 86Box 486DX2/66 + CL-GD5428) | - | **23.3 ms**, one `rep stosw` to each 64 KB window edge: 10.7 MB/s, the VL bus's write rate, 0.187 us a pixel. The seven `int 10h 4F05h` switches it makes are 7 us each, **0.2%** - the BIOS call is not the cost and the direct `dispi` register was not taken (docs/reports/VESA-BENCH-486-2026-10-22.md) | §120.8 |
+| **VESA: a block at depth** (`OSAPI_GFX_BLITD`, 32 rows of 624 at 16bpp) | 7.9 ms: a word and a window-edge test a pixel | **3.4 ms**: one `rep movsw` to the edge, the next window, the rest (`vx_rowcopy`) - the fill's rate. The restore (every menu close) takes the same copy | §120.7, §120.8 |
+| **VESA: the same block as nibbles** (`OSAPI_GFX_BLIT4` on a packed display) | - | **18.0 ms**, a pixel decoded a nibble at a time: 5.3x the depth blit, which is what a package buys by drawing at depth (PiXEL, §106.27) | §120.7 |
+| **VESA: a 78-cell text row** (`OSAPI_FONT_RUN` at 16bpp) | - | **5.5 ms**, 71 us a cell, against ~900 on the XT's VGA (Part 2) | §120.3.1 |
 | Raise an already-frontmost window | a screen | **no window at all** | §11.90 |
 | Click a background window's title bar | two full screen redraws (raise + drag release) | two title bars | §11.90, `ui_drag` |
 | Hide / destroy / drag a window | a screen | the damage rect, and only the windows in it | §11.91 |

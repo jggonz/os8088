@@ -364,7 +364,16 @@ mou_isrs    dw mou_isr, mou_isr3    ; ...and the stub that vector points at
 ; every task stack in the machine is the trade, and it is not close.
 ; -----------------------------------------------------------------------------
 %ifndef NO_MOUPRIV
+%ifdef VID_EXT
+MOU_PSTK    equ 256             ; ...AND TWICE THAT WITH THE EXTERNAL RENDERER
+                                ; (SPEC.md 120.3.3): the driver draws the arrow
+                                ; from this stack and a VBE window switch is an
+                                ; `int 10h`, whose BIOS frame the 54-byte chain
+                                ; never had to hold. 128 bytes of .lowbss,
+                                ; kern_big alone
+%else
 MOU_PSTK    equ 128             ; 2.4x the 54 the chain measures on the deepest
+%endif
                                 ; adapter. Nothing can interrupt this stack -
                                 ; the ISR holds IF=0 throughout - so 54 is the
                                 ; whole answer and not a sample, and the margin
@@ -4134,6 +4143,8 @@ cur_put_1:
 %ifdef GFX_VGA                  ; ...AND ONLY A KERNEL WITH A VGA HAS A SIDE TO
     cmp byte [vid_mono], 0      ; DISPATCH TO: kern_small's [vid_kind] is a
     jne cur_put_mono            ; CGA or a Hercules for the life of the machine
+    VIDEXT VX_CURPUT            ; a packed display: the driver's whole cycle
+                                ; (SPEC.md 120.3.3) - save under and draw
     call cur_geom               ; (SPEC.md 39.27.1), so [vid_mono] is 1 before
     call cur_saveu              ; the first arrow is drawn and the planar half
     jmp cur_draw                ; was never reached there. The label FALLS
@@ -4212,6 +4223,8 @@ cur_get_1:
 %ifdef GFX_VGA                  ; cur_put_1's reason: the planar half and its
     cmp byte [vid_mono], 0      ; dispatch are a VGA kernel's alone, and on
     jne cur_get_mono            ; kern_small this falls into cur_get_mono
+    VIDEXT VX_CURGET            ; a packed display: the driver puts back what
+                                ; its own put banked (SPEC.md 120.3.3)
     ; fall through to cur_restoreu
 
 ; -----------------------------------------------------------------------------
@@ -5121,6 +5134,8 @@ cur_move_1:
 %ifdef GFX_VGA                  ; cur_put_1's reason: kern_small falls straight
     cmp byte [vid_mono], 0      ; into cur_move_mono, every move a compare
     jne cur_move_mono           ; and a taken jump cheaper
+    VIDEXT VX_CURMOVE           ; a packed display: AX/BX = the new position,
+                                ; the driver restores, stores, saves and draws
     mov [cur_drawn_x], ax       ; planar: the save is four planes through Read
     mov [cur_drawn_y], bx       ; Map Select and cannot take a background from
     call cur_restoreu           ; a buffer, so it stays erase-then-draw. The

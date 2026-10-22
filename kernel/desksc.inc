@@ -538,10 +538,17 @@ sc_rclick_x:
 ; grey, exactly as it would with the box clear.
 ; -----------------------------------------------------------------------------
 vgcf_boot:
+    test byte [drv_cfg+CFG_VGC], 1  ; THE BOX'S TEST IS HERE AGAIN (SPEC.md
+    jz .out                     ; 120.4): seven bytes the blob could not hold
+                                ; once the packed display's class joined the
+                                ; 'VM' record - kernel size pass 12 put them
+                                ; at the call site when the blob had room, and
+                                ; the blob is the scarcer of the two now
     mov ax, (SC_OP_VGC << 8) | MOD_SETS ; AL the module, AH the operation:
     call mod_need               ; every register kept. Its CF is NOT TESTED:
     call far [SETFP]            ; a core that could not be read leaves this
     call mod_drop               ; slot on mod_gone (`stc / retf`, nothing
+.out:
     retf                        ; done) and its row empty, which mod_drop
                                 ; passes over - so a refusal costs nothing
                                 ; here and needs no branch (kernel size pass

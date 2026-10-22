@@ -247,9 +247,9 @@
   "sources": [
    "kernel/ctrl.inc"
   ],
-  "stamped": "d511fdd4",
-  "strings": "3ba5d1a1f6727cae",
-  "why": "Drivers page: ticking a row no longer wipes the scroll-down arrow; page text unchanged"
+  "stamped": "603832f2",
+  "strings": "2d063e04ea0308f5",
+  "why": "the Display page's Vesa row: named for the screen, clicked again to step through the card's screens, Set Primary applies (SPEC.md 120.6); the rest of the page reads as before"
  },
  "CWORD": {
   "sources": [],
@@ -1161,6 +1161,16 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "VESA_DRV": {
+  "sources": [
+   "drivers/vesa/vesa.asm",
+   "kernel/vidext.inc",
+   "kernel/ctrl.inc"
+  ],
+  "stamped": "603832f2",
+  "strings": "85e31060566354fb",
+  "why": "new page for VESA.DRV (SPEC.md 120): what it does, how it is loaded, choosing a screen, what it does not offer"
  },
  "VIDEO_O88": {
   "sources": [

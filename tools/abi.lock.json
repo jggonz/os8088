@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "69144283bf52e51e734efe31d4c7cc661480ab10578e8e31048de8865be0c84b",
+  "fingerprint": "e71c91581e6a45be1aea7cc74a763e6d8eabab574098fc1560f2ed14b8f029bf",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "544762deae9443093e0064389f6392c51a5d13472b80ca3af1e925d358ee79ae",
+  "fingerprint": "e3ac3da81bc0961e958b8dc8749cdca03864c704282de014ec7d5e1d8ba4721c",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -476,6 +476,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "FSCAP_ICON (DSV_CAPS bit 2) and DRV_ICONV (41h): a file-class driver's volume may draw its own desktop picture through its door (SPEC.md 26.4.2). An addition - a driver without the bit gets the kernel's icon as before, and a kernel without the hook never asks - so no number moves.",
+   "to": 11
+  },
+  {
+   "fingerprint": "e3ac3da81bc0961e958b8dc8749cdca03864c704282de014ec7d5e1d8ba4721c",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge main: CDROM.DRV's cells (DRVC_CD) beside VESA's (SPEC.md 120); no cell moved",
+   "to": 10
+  },
+  {
+   "fingerprint": "e71c91581e6a45be1aea7cc74a763e6d8eabab574098fc1560f2ed14b8f029bf",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "merge main: CDROM.DRV's cells (DRVC_CD) beside VESA's (SPEC.md 120); no cell moved",
    "to": 11
   }
  ]

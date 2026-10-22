@@ -23,6 +23,10 @@
 
 PX_BANDH    equ 16                  ; rows a band
 PX_VOC2P    equ 0x4000              ; the 4bpp layout's unspread table
+PX_VORGB    equ 0x7800              ; ...and at 16 BITS A PIXEL (SPEC.md
+                                    ; 106.27) a 512-byte table past the
+                                    ; thumbnail: each palette entry as the
+                                    ; RGB565 word OSAPI_GFX_BLITD takes
 PX_THMW     equ 160                 ; the thumbnail's largest width...
 PX_THMH     equ 96                  ; ...and height (no title strip over the
                                     ; Navigator: SPEC.md 106.15)
@@ -152,6 +156,10 @@ px_tables:
     mov word [px_planp], px_plan
 .expand:
     call px_texpand
+    cmp byte [px_tdepth], 16        ; a 16bpp display: the palette as RGB565
+    jne .ok                         ; words too, for the canvas at depth
+    call px_t565                    ; (SPEC.md 106.27)
+.ok:
     clc
     jmp short .out
 .ab:
@@ -399,6 +407,9 @@ px_viewclaim:
     mov word [px_vo_thm], 0x5A00    ; registers now); the thumbnail is LAST in
     mov ax, (0x5A00 + PX_THMW / 2 * PX_THMH + 1023) / 1024    ; the claim: its
                                     ; area is PX_THMW / 2 x PX_THMH at 4bpp
+    cmp byte [px_vdepth], 16        ; ...and a 16bpp display's RGB565 table
+    jne .claim                      ; past it (SPEC.md 106.27): 31 KB
+    mov ax, (PX_VORGB + 512 + 1023) / 1024
     jmp short .claim
 .one:
     mov word [px_vo_band], 0x4000   ; 1bpp: tables, a band, the thumbnail
@@ -933,6 +944,8 @@ px_crow:
     cmp word [px_chint], 0
     jne .dda
     mov cx, [px_cgrp]               ; ...and CX is free to count the groups
+    cmp byte [px_cdep], 16
+    je .d1
     cmp byte [px_cdep], 1
     mov ds, [px_crseg]
     je .one1
@@ -971,7 +984,23 @@ px_crow:
     loop .one1
     pop ds
     ret
+.d1:                                ; 16bpp at 100%: a word a pixel through the
+    mov ds, [px_crseg]              ; RGB565 table (SPEC.md 106.27), eight a
+.d1g:                               ; group
+%rep 8
+    lodsb
+    mov bl, al
+    xor bh, bh                      ; (the shift's carry-out stays in BH)
+    shl bx, 1
+    mov ax, [es:PX_VORGB + bx]
+    stosw
+%endrep
+    loop .d1g
+    pop ds
+    ret
 .dda:
+    cmp byte [px_cdep], 16
+    je .d
     cmp byte [px_cdep], 1
     mov ds, [px_crseg]
     je .one
@@ -1012,6 +1041,68 @@ px_crow:
     dec word [cs:px_ccnt]
     jnz .one
     pop ds
+    ret
+.d:                                 ; 16bpp through the DDA: the step in
+    mov ds, [px_crseg]              ; DX:SI by BP:CX, as .g4
+.d8:
+%rep 8
+    lodsb
+    add dx, bp
+    adc si, cx
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov ax, [es:PX_VORGB + bx]
+    stosw
+%endrep
+    dec word [cs:px_ccnt]
+    jnz .d8
+    pop ds
+    ret
+
+; px_t565 - the RGB565 word of each of [px_pal]'s 256 entries at
+; [px_vseg]:PX_VORGB (SPEC.md 106.27): (r >> 3) << 11 | (g >> 2) << 5 |
+; b >> 3. Preserves all
+px_t565:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [px_vseg]
+    mov si, px_pal
+    mov di, PX_VORGB
+    mov dx, 256
+    cld
+.e:
+    lodsb                           ; R: its top five bits are the word's 15..11
+    and al, 0xF8
+    mov bh, al
+    lodsb                           ; G: six bits at 10..5
+    shr al, 1
+    shr al, 1
+    xor ah, ah
+    mov cl, 5
+    shl ax, cl                      ; AH = bits 10..8, AL = bits 7..5
+    mov bl, al
+    or bh, ah
+    lodsb                           ; B: five bits at 4..0
+    mov cl, 3
+    shr al, cl
+    or bl, al
+    mov ax, bx
+    stosw
+    dec dx
+    jnz .e
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; px_c2p - the LANE row at [px_vo_row] into four planes at DI (plane k at
@@ -1088,9 +1179,9 @@ px_rimg:
     mov [px_rw], cx
     mov bx, px_vcan
     call px_cset
-    mov al, [px_bpp]
-    mov [px_cdep], al
-    mov byte [px_useP], 0
+    mov al, [px_tdepth]             ; the TABLES' depth, which is the window's
+    mov [px_cdep], al               ; except between a display change and
+    mov byte [px_useP], 0           ; px_tabsync: the lanes still draw there
     cmp al, 1
     je .bands
     mov ax, [px_rx0]                ; may the planes go straight on? (the
@@ -1137,6 +1228,8 @@ px_rimg:
 
 ; px_rband - one band of [px_rbn] rows from [px_rby], composed and put up
 px_rband:
+    cmp byte [px_cdep], 16
+    je .deep
     cmp byte [px_cdep], 1
     je .one
     cmp byte [px_useP], 0
@@ -1238,6 +1331,31 @@ px_rband:
     mov dx, [px_rbn]
     call OSAPI_GFX_BLIT1
 .out:
+    ret
+.deep:                              ; --- 16bpp: RGB565 rows and BLITD (SPEC.md
+    mov cx, [px_rbn]                ; 106.27) - a row at a time, which is what
+    mov ax, [px_rby]                ; the band buffer holds at two bytes a pixel
+.drow:
+    push ax
+    push cx
+    mov di, [px_vo_band]
+    call px_crow                    ; (its 16bpp arm: words through PX_VORGB)
+    pop cx
+    pop ax
+    push ax
+    push cx
+    mov si, [px_vo_band]
+    mov bp, [px_rw]
+    shl bp, 1                       ; the stride: the row's pixels, two bytes each
+    mov bx, ax
+    mov ax, [px_rx0]
+    mov cx, [px_rw]
+    mov dx, 1
+    call OSAPI_GFX_BLITD
+    pop cx
+    pop ax
+    inc ax
+    loop .drow
     ret
 
 ; =============================================================================
@@ -1834,7 +1952,9 @@ px_hshift:
     push si
     push di
     push es
-    mov es, [px_vseg]
+    cmp byte [px_bpp], 8            ; at depth a band of sixteen rows is up to
+    jae .no                         ; four times the buffer: the canvas is
+    mov es, [px_vseg]               ; rendered whole instead (SPEC.md 106.27)
     mov bx, [px_midy1]
 .b:
     cmp bx, [px_midy2]
@@ -2177,7 +2297,11 @@ px_thrender:
     mov bx, px_vthm
     mov cx, [px_vthm + VW_DW]
     call px_cset
-    mov al, [px_bpp]
+    mov al, [px_tdepth]             ; (px_rimg's reason)
+    cmp al, 16                      ; the thumbnail is never at depth: its
+    jne .td                         ; area is lanes, put up through BLIT4
+    mov al, 4
+.td:
     mov [px_cdep], al
     mov di, [px_vo_thm]
     xor ax, ax

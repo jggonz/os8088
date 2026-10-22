@@ -236,7 +236,7 @@ static void ovl_canvasload(void)
         w_cink = OS88_BLACK;
         w_cparm[WSMP_COLOR] = OS88_WHITE;
         os88_video(&w_cvid);
-        w_cpal = (w_cvid.bpp == 4);     /* the FACT, asked as the fact: the pen
+        w_cpal = (w_cvid.bpp >= 4);     /* the FACT, asked as the fact: the pen
                                          * is not read where there is one plane
                                          * (SPEC.md 5.4.2.2), and `bpp` is what
                                          * OSAPI_VIDEO answers about that */

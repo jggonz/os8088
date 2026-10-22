@@ -977,7 +977,7 @@ sol_drawface:
     mov al, CBLACK                  ; (PF: an even pair of suit bits is a
     jpe .ink                        ; black suit - see sol_suit)
     cmp byte [sol_bpp], 4
-    jne .ink                        ; on 1bpp index 12 reduces to WHITE, which
+    jb .ink                         ; on 1bpp index 12 reduces to WHITE, which
     mov al, CLRED                   ; on a white face is nothing at all
 .ink:
     mov [sol_pipink], al            ; ...and ARM the sprite pass with it: the
@@ -1092,8 +1092,8 @@ sol_facepip:
 ; either. A ghost says which suit belongs here, not what colour it is.
 ; -----------------------------------------------------------------------------
 sol_pipsel:
-    cmp byte [sol_bpp], 4
-    je sol_pipsold
+    cmp byte [sol_bpp], 4           ; (4, and 8 or 16 on a packed display)
+    jae sol_pipsold
     test al, 3                      ; a black suit (PF even, sol_suit)
     jpe sol_pipsold
     mov byte [sol_mrh], 1           ; ...and THAT is the whole of hollow now:
@@ -1351,7 +1351,7 @@ sol_mkback:
     push di
     mov dl, CBLUE * 0x11            ; DL = the field, in BOTH nibbles, so a
     cmp byte [sol_bpp], 4           ; pixel is a byte masked to its half
-    je .have
+    jae .have                       ; (colour: 4, or 8 / 16 packed)
     mov dl, CLBLUE * 0x11           ; 1bpp: a colour in the dither class
 .have:
     mov di, sol_backbuf

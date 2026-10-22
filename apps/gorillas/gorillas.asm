@@ -412,6 +412,10 @@ gr_layout:
     mov [gr_height], dx
     mov bx, [gr_win]
     call OSAPI_WM_DISPLAY
+    cmp dl, VID_VESA            ; a packed display (SPEC.md 120.5) is the VGA
+    jne .told                   ; family at 8 or 16 bits a pixel, and every
+    mov dx, (4 << 8) | VID_VGA  ; table here is 1 / 2 / 4: the desktop is its
+.told:                          ; sixteen colours and gfx_blit4 takes them
     mov [gr_kind], dl
     mov [gr_depth], dh
     jmp short .scale
