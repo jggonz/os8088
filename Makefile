@@ -4740,12 +4740,14 @@ $(BUILD)/vesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT
 		$(BUILD)/vxcfg/system.cfg
 
 .PHONY: vesatest
-vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img $(BUILD)/vesablitd.img $(BUILD)/vxpics.img
+vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img $(BUILD)/vesablitd.img $(BUILD)/vxpics.img $(BUILD)/vesablit4.img $(BUILD)/vesafsx.img $(BUILD)/vesapref.img
 	@echo "vesatest: build/vesa.img - VESA.DRV already wanted (SPEC.md 119.9);"
 	@echo "          build/vesa8.img the same with a 'VM' class byte asking 800x600x8;"
 	@echo "          build/vesablitd.img the same plus \\AUTOSTRT opening B:CITY.PCX,"
 	@echo "          and build/vxpics.img that B: - PiXEL and the picture (119.7)."
-	@echo "          Run them with: python3 tests/vesa.py; vesa8.py; vesacp.py; vesablitd.py"
+	@echo "          build/vesablit4.img the same plus \\AUTOSTRT opening WireBall (119.3)."
+	@echo "          build/vesafsx.img opens Gorillas and build/vesapref.img Solitaire (119.5)."
+	@echo "          Run them with: python3 tests/vesa.py; vesa8.py; vesacp.py; vesablitd.py; vesablit4.py; vesafsx.py; vesapref.py"
 
 # ...and the depth blit's pair (SPEC.md 119.7, 106.27): the vesa.img system
 # disk with one more file, \AUTOSTRT\CITY.LNK - a link to the DOCUMENT
@@ -4763,6 +4765,44 @@ $(BUILD)/vesablitd.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SY
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/CITY.LNK
+
+# ...and the 4-bit blit's (SPEC.md 119.3, tests/vesablit4.py): the same disk
+# with \AUTOSTRT\WBALL.LNK, a link to WIREBALL.O88 on the apps disk, whose
+# front page is one 416x104 OSAPI_GFX_BLIT4 of checked-in art
+$(BUILD)/vxbd/WBALL.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'GAMES\WIREBALL.O88' --vol B
+
+$(BUILD)/vesablit4.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/WBALL.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/WBALL.LNK
+
+# ...the fullscreen bracket's (SPEC.md 119.5, tests/vesafsx.py): Gorillas,
+# whose Alt+Enter enters a bracket from any state and which reads
+# OSAPI_FSX_CAPS's DL for the mode it takes; and the window preference's
+# (tests/vesapref.py): Solitaire, whose table is as wide as its OS88_PREFER's
+# VGA row says
+$(BUILD)/vxbd/GORIL.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'GAMES\GORILLAS.O88' --vol B
+
+$(BUILD)/vxbd/SOLIT.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'GAMES\SOLITAIR.O88' --vol B
+
+$(BUILD)/vesafsx.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/GORIL.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/GORIL.LNK
+
+$(BUILD)/vesapref.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/SOLIT.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/SOLIT.LNK
 
 $(BUILD)/vxpics.img: $(BUILD)/pixel.o88 apps/pixel/samples/CITY.PCX tools/os88disk.py | $(BUILD)
 	python3 tools/os88disk.py -o $@ --size 1440 apps/pixel/samples/CITY.PCX $(BUILD)/pixel.o88

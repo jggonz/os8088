@@ -158,7 +158,18 @@ code does not.
   stripe band. One `push cx`/`pop cx`; `tests/vesa.py` now opens B:\\APPS
   and reads the desktop's left margin as a CHECKERBOARD (its first cut
   asked only for black and white in a block, which the stripes satisfy),
-  red on the driver as it was and green on the fix. **Measured** (`docs/reports/VESA-BENCH-486-2026-10-22.md`): the
+  red on the driver as it was and green on the fix. **And from a sweep of
+  every package on the apps disk** (one boot each, VESA beside VGA): the
+  4-bit blit loaded the stride over x (WireBall's art a window of palette
+  noise; `tests/vesablit4.py`, pixel for pixel); `wm_pref_take` folded only
+  EGA, so kind 4 read past `OS88_PREFER`'s table and nine packages opened at
+  the sizes it found there (`tests/vesapref.py`, Solitaire's width from its
+  own source); `OSAPI_FSX_CAPS` answered kind 4, which no package reads as a
+  mode it knows - Gorillas drew planar onto the packed desktop - so it
+  answers `VID_VGA` and `OSAPI_FSX_SURF` refuses a same-mode bracket on the
+  packed surface (`tests/vesafsx.py`, Gorillas into mode 12h and back); and
+  the disk widget sat past the bar composer's 62 cells on a 1024-wide bar,
+  so `fpg_finish` erases its band rows itself (`tests/vesa.py`). **Measured** (`docs/reports/VESA-BENCH-486-2026-10-22.md`): the
   BIOS call is 7.0 us and a 624x200 fill 23.3 ms across seven windows -
   **0.2%** - so **the direct window register is not taken**; the fill is
   one `rep stosw` to the edge at 10.7 MB/s, the bus. **What it changed:**

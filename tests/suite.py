@@ -4414,6 +4414,43 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=400,
         wants=("build/os8088.img", "build/apps.img", "build/vesablitd.img",
                "build/vxpics.img", "build/pixel.o88")),
+    Row("vesablit4", "soak", py("tests/vesablit4.py"), 90.0,
+        "A package's 4-bit blit on the packed display, pixel for pixel "
+        "(SPEC.md 119.3): build/vesablit4.img is vesa.img plus an AUTOSTRT "
+        "link to WIREBALL.O88 on the apps disk, so the machine boots into "
+        "WireBall's front page, whose title art is one 416x104 "
+        "OSAPI_GFX_BLIT4 of checked-in art. Finds the block on the glass by "
+        "its own rows and asserts every pixel is the EGA colour its nibble "
+        "names, as the card renders 565. The driver as first shipped loaded "
+        "the stride over the block's x and drew it as a window of palette "
+        "noise. QEMU by name, vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/apps.img", "build/vesablit4.img",
+               "build/wireball.o88")),
+    Row("vesafsx", "soak", py("tests/vesafsx.py"), 90.0,
+        "A fullscreen bracket from the packed desktop and back (SPEC.md "
+        "119.5, 53): build/vesafsx.img is vesa.img plus an AUTOSTRT link to "
+        "GORILLAS.O88, so the machine boots into Gorillas at 1024x768x16; "
+        "Alt+Enter enters its bracket, which reads OSAPI_FSX_CAPS's DL - the "
+        "screendump must be 640x480 (mode 12h, the VGA arm) - and Escape "
+        "brings the VESA mode and the checkerboard back. The kernel as first "
+        "shipped answered kind 4, Gorillas took the native surface and drew "
+        "planar onto the packed desktop (the owner's report). QEMU by name, "
+        "vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/apps.img", "build/vesafsx.img",
+               "build/gorillas.o88")),
+    Row("vesapref", "soak", py("tests/vesapref.py"), 90.0,
+        "A package's OS88_PREFER on the packed display (SPEC.md 119.5, "
+        "11.100.1): build/vesapref.img is vesa.img plus an AUTOSTRT link to "
+        "SOLITAIR.O88; Solitaire's table must be as wide as its own SOL_PW_B, "
+        "the VGA row of its three-entry table, which the kernel takes for "
+        "every kind past CGA. As first shipped only EGA folded, kind 4 read "
+        "past the table and nine packages opened at the sizes found there. "
+        "QEMU by name, vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/apps.img", "build/vesapref.img",
+               "build/solitair.o88")),
     Row("vesabench", "soak", py("tests/vesabench.py"), 150.0,
         "VESABENCH's correctness run (SPEC.md 119.8): build/vesabench.img "
         "and build/vesabnc8.img each open VESABNCH.O88 off build/vxbench.img "

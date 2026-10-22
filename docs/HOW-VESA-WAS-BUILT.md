@@ -302,3 +302,24 @@ left margin as a checkerboard; its first cut asked a 2x2 block for black
 AND white and the stripes answered yes, so the A/B leg (the fix taken out)
 is what made the row honest. Same band on QEMU's Bochs VBE once the right
 folder was opened, so the card was never the suspect it looked like.
+
+**Then the owner tried Gorillas.** It opened as a strip the width of the
+screen, and the disk widget never left the bar. Instead of chasing each
+report, a scratch script booted all thirty-six packages on the apps disk
+once each, through an autostart link, on the VESA disk and again on the
+plain one, and put the screenshots in two contact sheets. Nine windows were
+the wrong size: `wm_pref_take` folded EGA onto VGA's row of a package's
+`OS88_PREFER` table with a `jne`, and kind 4 walked sixteen bytes past the
+table into whatever the package kept there. WireBall's title art was
+palette-coloured noise: the driver's 4-bit blit loaded the caller's stride
+into AX on top of the block's x, so the row began at x = 208, the stride,
+the clip took its width to 320 and the source phase it implied was 16 KB
+past the block - the ring that had found the pattern fill found this one
+too, once it logged the row loop and not the entry. Gorillas asked
+`OSAPI_FSX_CAPS` and read kind 4 as "neither VGA nor CGA", took the native
+surface and drew planar into packed pixels; it answers `VID_VGA` now, the
+kind that names the modes a bracket may set, and the same-mode surface is
+refused on the packed desktop. The bar's composer caches sixty-two cells
+and a 1024-wide bar puts the widget past them, so nothing repainted its
+band rows at finish. Four rows, each red on the code as it was, and the
+sweep script itself is scratch - a row asserts what its author thought of.

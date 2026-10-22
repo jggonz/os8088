@@ -123,6 +123,14 @@ fsx_caps:
                                 ; EXTD.DRV's ext_fsx_caps. UNGATED: an app
                                 ; asks this once to grey a menu, and one
                                 ; display keeps DL = [vid_kind] (39.19.6)
+%ifdef VID_EXT
+    cmp dl, VID_VESA            ; a VESA display answers VID_VGA (SPEC.md
+    jne .kind                   ; 119.5): the kind that names the BIOS modes
+    mov dl, VID_VGA             ; a bracket may set, which is what every
+.kind:                          ; package asks this for - Gorillas took kind 4
+%endif                          ; for "neither VGA nor CGA" and drew planar
+                                ; onto the packed desktop. The depth is
+                                ; OSAPI_VIDEO's and OSAPI_WM_DISPLAY's DH
     mov bl, dl
     xor bh, bh
     shl bx, 1
@@ -701,6 +709,14 @@ fsx_surf:
     call fsx_mine               ; a bracket, and ours - and it preserves AX,
     stc                         ; so the bank the refusal path needed is gone
     jne .out                    ; (stc writes CF alone: ZF is still fsx_mine's)
+%ifdef VID_EXT
+    cmp byte [vid_kind], VID_VESA   ; the DESKTOP's own surface on a VESA
+    jne .surf                   ; display is packed pixels (SPEC.md 119.5), and
+    cmp byte [fsx_cur], 0xFF    ; a same-mode bracket's caller writes planar
+    stc                         ; VGA: refused, CF = 1, unless a foreign mode
+    je .out                     ; is up - then the surface is that mode's
+.surf:
+%endif
     xor ax, ax
     xor bx, bx
     mov cx, [vid_cw]

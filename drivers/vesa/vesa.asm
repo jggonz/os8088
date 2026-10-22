@@ -1864,9 +1864,12 @@ vxp_blit4:
     pop ds
     mov [vx_bx0], ax
     mov [vx_bsrc], di
-    mov ax, [bp]                ; the CALLER's BP, the source stride (BP is
-    mov [vx_bstride], ax        ; our frame pointer here)
-    mov [vx_rows], dx
+    mov di, [bp]                ; the CALLER's BP, the source stride (BP is
+    mov [vx_bstride], di        ; our frame pointer here). NOT through AX,
+    mov [vx_rows], dx           ; which is still x: loaded there once, the
+                                ; stride became the row's left edge, 96 pixels
+                                ; off, and the source phase it implied read
+                                ; 16KB past the block - a window of noise
     ; --- the visible x range: [xs, xe) --------------------------------------
     mov di, ax
     add di, cx                  ; DI = x + w = xe

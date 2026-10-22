@@ -599,6 +599,23 @@ python3 tests/vesablitd.py                 # OSAPI_GFX_BLITD through PiXEL
 make vesabench && python3 tests/vesabench.py   # VESABENCH, behaviour only
 ```
 
+**The first look found what the rows had not asked** (SPEC.md 119.5's
+second table). Two Disk windows on the 86Box 486 turned the desktop under
+them into a stripe band; Gorillas opened as a strip the width of the
+screen; the disk widget stayed on the bar. A sweep that boots every
+package on the apps disk once, through an `\AUTOSTRT` link, on the VESA
+disk and then on the VGA one, and puts the screenshots side by side, found
+the rest in an hour: the pattern body spent CX on its tile copy, the 4-bit
+blit loaded the stride over x, `OS88_PREFER`'s table was read past its end
+for kind 4, `OSAPI_FSX_CAPS` answered a kind no package knew, and the bar's
+composer cannot reach a 1024-wide bar's widget. Each has a row now that is
+red on the code as it was: `vesa` (the chevron band and the bar),
+`vesablit4` (WireBall's art, pixel for pixel), `vesapref` (Solitaire's
+width from its own source), `vesafsx` (Gorillas into a BIOS mode and back).
+The lesson is the sweep, which is `tools/os88sweep.py` now (`vesa` or
+`vga`, an output directory, a contact sheet at the end): a row asserts what
+its author thought of, and thirty-six packages at once show what nobody did.
+
 **Nothing in `SYSTEM.CFG` wants the driver by default** (SPEC.md 51.3), so
 a stock `os8088.img` never reads it; every row above boots a disk whose
 settings file already asks for it (`ethertest`'s shape). The driver is

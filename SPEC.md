@@ -201789,8 +201789,11 @@ the display cannot be suspended out from under the desktop.
 | site | VESA behaviour |
 |---|---|
 | `OSAPI_VIDEO` (§39.8) | DL = 4, DH = 8 or 16. A package's `cmp dh, 1 / ja` colour test is right; its `cmp dl, VID_VGA` test was already wrong on EGA (§39.8) |
-| `OSAPI_WM_PREFER`'s three-entry table | takes VGA's row, as EGA does |
+| `OSAPI_WM_PREFER`'s three-entry table | takes VGA's row, as EGA does. **`wm_pref_take` folds every kind past CGA** (`jb`): its EGA-only `jne` let kind 4 read 16 bytes past the package's table, and nine packages opened at the sizes it found there - Gorillas, isoTron and Dot Delirium as a strip the width of the screen, Solitaire and Arkanoid a hundred pixels wide |
 | `fsx_capstab` (§53) | VESA's row is VGA's (`0x01EF`): it is the same card, and a bracket's `int 10h` mode set is legal from any VBE mode. `fsx_leave` restores through `vid_setmode`'s arm. **Without the row the table was indexed past its end by kind 4** |
+| `OSAPI_FSX_CAPS`'s DL (§53.4) | **`VID_VGA`**, not 4: the kind that names the BIOS modes a bracket may set, which is what every package asks it for - Gorillas read 4 as "neither VGA nor CGA", took the native surface and drew planar onto the packed desktop. The depth is `OSAPI_VIDEO`'s and `OSAPI_WM_DISPLAY`'s DH |
+| `OSAPI_FSX_SURF` (§53.7.1) | **refused, CF = 1, on a VESA display with no foreign mode up** (`[fsx_cur]` = FFh): the desktop's own surface is packed pixels and a same-mode caller writes planar VGA. With a foreign mode set the surface is that mode's, as before |
+| the disk widget (§12.8) | `fpg_finish` whitens the text band over the part of its span past `MENU_BCMAX` composed cells: a 1024-wide bar puts the widget beyond the composer's reach, so `menu_draw_bar` repainted none of it and the icon and trough stayed up after every transfer |
 | `vid_text` (§39.20), shutdown, reboot | `int 10h AX=0003h`, unchanged: a VBE card returns to text from any mode |
 | `vid_blank`/`vid_unblank` | the colour arms; a VESA primary is a VGA to them |
 | the extended desktop (§39.19) | **refused while VESA is primary**: `ext_extend_b` (EXTD.DRV) answers CF = 1, Single, on a VESA primary. The second card's 1bpp geometry beside an 8bpp one is a straddle arithmetic (§39.14.7) this cycle does not take |

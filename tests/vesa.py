@@ -318,6 +318,17 @@ def main():
                 shot.png(out_png.replace(".png", "-apps.png"), sw, sh, pix)
             bad = [y for y in range(24, sh - 40, 2)
                    if not checker_at(pix, sw, 2, y)]
+            # ...and the menu bar's disk widget is DOWN: the bar between the
+            # menus and the clock, every row of it, is white again after
+            # the transfers that opened two windows (SPEC.md 12.8, 119.5:
+            # on a 1024-wide bar the widget sits past the composer's cells
+            # and fpg_finish has to erase its band rows itself)
+            left = [(x, y) for y in range(1, 18) for x in range(600, 860, 2)
+                    if px(pix, sw, x, y) != (255, 255, 255)]
+            if left:
+                fails.append("the disk widget's chrome is still on the bar after "
+                             "the transfers: %d non-white pixels between x=600 "
+                             "and 860, first at %r" % (len(left), left[0]))
             if bad:
                 fails.append("B:\\APPS open: the desktop's left margin is not "
                              "the dither on %d row pairs (first at y=%d) - a "
