@@ -2810,7 +2810,7 @@ SOAK = [
         "with POP BC's branch to it taken out as the control. WHY QEMU: a correctness gate, and QEMU counts work "
         "exactly - the cycle counts instr_timing checks are the core's own. "
         "SOAK: one package's core",
-        needs=("qemu", "nasm")),
+        needs=("qemu", "nasm", "rgbds")),
     Row("rdgstatic", "soak", py("tests/rdgstatic.py"), 24.0,
         "REALDMG's Static recompiler (docs/REALDMG-SPEC.md section 16.8): "
         "cpu_instrs, instr_timing, mem_timing and tools/gbprof/gbrmw.asm each "
@@ -2826,7 +2826,7 @@ SOAK = [
         "moving into the second twice; NEGATIVE CONTROL: rt_exit chaining "
         "across the segments must fail. WHY QEMU: a correctness gate, "
         "counted, not timed. SOAK: one package's core",
-        needs=("qemu", "nasm")),
+        needs=("qemu", "nasm", "rgbds")),
     Row("gbacid", "soak", py("tests/rdgcore/rdgacid.py"), 3.0,
         "REALDMG's renderer (apps/realdmg/rdgppu.inc, docs/REALDMG-SPEC.md "
         "section 13) against dmg-acid2's reference picture, all 23,040 pixels: "

@@ -13,9 +13,12 @@ the same footing (docs/plans/REALDMG-PLAN.md section 7).
 
 rgbds (MIT) is the assembler. It is FETCHED and built at a pinned commit
 into build/rgbds/, never committed - tools/setup-cc.sh's shape for SmallerC.
-It needs bison, libpng-dev and pkg-config; as root with apt they are
-installed the way tools/martypc/build.sh installs its own, anywhere else the
-missing ones are named and the build stops.
+It needs bison 3.0 or later, libpng-dev and pkg-config; as root with apt they
+are installed the way tools/martypc/build.sh installs its own, anywhere else
+the missing ones are named and the build stops. A NAME IS NOT A VERSION
+(tools/setup-nasm3.sh's rule): macOS answers `bison` with Apple's 2.3, which
+rgbds refuses deep inside its make, so the bison is asked its version, and
+Homebrew's - keg-only, never on PATH - is looked for when PATH's is too old.
 
 `python3 tools/gbprof.py build/gbclock/CLOCK25.GB --mode puzzle` is the
 check that a variant is the load it says: 25.7% busy (the extra 0.7% is the
@@ -36,9 +39,42 @@ OUT = os.path.join(ROOT, "build", "gbclock")
 VARIANTS = (0, 5, 10, 25, 50, 90)
 
 
+BISON_MIN = 3
+
+
+def bison_ok(path):
+    """Is PATH a bison of BISON_MIN or later?"""
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True,
+                             text=True).stdout
+    except OSError:
+        return False
+    words = out.split("\n", 1)[0].split()
+    try:
+        return int(words[-1].split(".")[0]) >= BISON_MIN
+    except (IndexError, ValueError):
+        return False
+
+
+def find_bison():
+    """The directory of a usable bison: PATH's, else Homebrew's keg-only one
+    (`brew install bison`, which is not linked onto PATH). None if neither."""
+    cands = [shutil.which("bison")]
+    if shutil.which("brew"):
+        pre = subprocess.run(["brew", "--prefix", "bison"],
+                             capture_output=True, text=True).stdout.strip()
+        if pre:
+            cands.append(os.path.join(pre, "bin", "bison"))
+    cands += ["/opt/homebrew/opt/bison/bin/bison", "/usr/local/opt/bison/bin/bison"]
+    for c in cands:
+        if c and os.access(c, os.X_OK) and bison_ok(c):
+            return os.path.dirname(c)
+    return None
+
+
 def preflight():
     need = []
-    if not shutil.which("bison"):
+    if not find_bison():
         need.append("bison")
     if subprocess.call(["pkg-config", "--exists", "libpng"],
                        stderr=subprocess.DEVNULL) != 0:
@@ -51,8 +87,14 @@ def preflight():
             subprocess.call(["apt-get", "update", "-q"])
             subprocess.check_call(["apt-get", "install", "-y", "-q"] + need)
         return
-    sys.exit("gbclock: rgbds needs " + " ".join(need) +
-             "\n  apt-get install -y " + " ".join(need))
+    if sys.platform == "darwin":
+        brew = ["bison" if n == "bison" else "libpng" if n == "libpng-dev"
+                else "pkgconf" for n in need]
+        sys.exit("gbclock: rgbds needs " + " ".join(need) + " (bison %d or "
+                 "later; macOS's own is 2.3)\n  brew install " % BISON_MIN +
+                 " ".join(brew))
+    sys.exit("gbclock: rgbds needs " + " ".join(need) + " (bison %d or "
+             "later)\n  apt-get install -y " % BISON_MIN + " ".join(need))
 
 
 def rgbds():
@@ -68,7 +110,9 @@ def rgbds():
         subprocess.check_call(["git", "clone", "-q", RGBDS_URL, RGBDS_DIR])
     subprocess.check_call(["git", "-C", RGBDS_DIR, "fetch", "-q", "origin"])
     subprocess.check_call(["git", "-C", RGBDS_DIR, "checkout", "-q", RGBDS_REV])
-    subprocess.check_call(["make", "-C", RGBDS_DIR, "-j4", "-s"])
+    env = dict(os.environ)          # PATH's bison first if it will do, else
+    env["PATH"] = find_bison() + os.pathsep + env.get("PATH", "")   # brew's
+    subprocess.check_call(["make", "-C", RGBDS_DIR, "-j4", "-s"], env=env)
     return tools
 
 
