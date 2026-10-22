@@ -981,6 +981,12 @@ rw_jpkb:
 ; sector, R up, expanded down onto BX:0 - and the four far pointers aimed
 ; at it. CF = 1: it could not be, and nothing points at it. Every register
 ; but the flags kept
+;
+; IN REALDMG.O88'S OWN FOLDER (rw_pkgdir, banked at entry): op_name is a bare
+; name, and by the time a game is open the instance stands where the GAME is.
+; Read here, a game in any other folder than the package's ran on the
+; interpreter with the recompiler chosen - the apps disks keep REALDMG.O88 in
+; GAMES and a cartridge is the user's, wherever they keep it
 rw_jpart:
     push ax
     push bx
@@ -991,6 +997,10 @@ rw_jpart:
     push bp
     push es
     mov bp, bx
+    mov dx, [rw_pkgdir]             ; where op_name is (rw_fback below)
+    mov bl, [rw_pkgvol]
+    call rw_fgo
+    jc .no
     mov si, op_table + OP_T_ROWS + RWJ_PART * OP_ROW
     mov cx, [si + OP_R_ZKB]         ; CX = the packed bytes
     mov bx, [si + OP_R_LEN]         ; BX = what they expand to
@@ -1037,6 +1047,7 @@ rw_jpart:
 .no:
     stc
 .r:
+    call rw_fback                   ; (CF kept)
     pop es
     pop bp
     pop di

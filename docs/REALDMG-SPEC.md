@@ -2441,6 +2441,15 @@ claims them. So:
   which is at a game's load or at the menu's switch. It takes no claim of
   its own: a package holds eight at most (SPEC.md 50) and RealDMG's can come
   near that with the log and a replay on.
+- **The read is made in `REALDMG.O88`'s own folder**, which the entry proc
+  banks with `OSAPI_FILE_HERE` (`rw_pkgdir`, the log's folder too):
+  `op_name` is a bare name, and by the time a game is open the instance
+  stands in the GAME's folder. Read there, a game anywhere but beside the
+  package found no part and ran on the interpreter with the recompiler
+  chosen - Super Mario Land at ~75-110% on the Victory, with the apps disks
+  keeping `REALDMG.O88` in `GAMES` and the cartridge wherever the user keeps
+  it. `rw_fgo`/`rw_fback` go there and back around the read, MIDIRack's
+  `mr_homedir` shape (SPEC.md 105.10).
 - **Four far doors**: `rdgjitp.asm` starts with `rt_init`, `rt_resume`,
   `rt_preload` and `rt_dispatch` at offsets 0, 10, 20 and 30, each a near
   call and a `retf`; the package reaches them through four far pointers in
