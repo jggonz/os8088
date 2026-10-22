@@ -3,7 +3,7 @@
 ;
 ; The ABI between CDROM.DRV and a package that plays a disc's audio, included
 ; by BOTH ends so the two cannot drift (SPEC.md 20.11): the driver and
-; apps/cdplayer. Reached by OSAPI_DRV_CALL with BH = DRVC_CD and BL = a CDV_*.
+; apps/cdrack. Reached by OSAPI_DRV_CALL with BH = DRVC_CD and BL = a CDV_*.
 ;
 ; UI TASK ONLY, EVERY VERB. Each one talks to the drive and waits on it - a
 ; seek is up to a second and a spin-up several - so none is worker-safe

@@ -7,7 +7,7 @@
 ; kernel asks it FSV_* questions and never reads a sector of the volume, and a
 ; package plays the audio through the door in cdpkg.inc.
 ;
-;   cdpkg.inc   the package door's ABI, shared with apps/cdplayer
+;   cdpkg.inc   the package door's ABI, shared with apps/cdrack
 ;   atapi.inc   the drive: the probe, the packet command, its waits and sense
 ;   cddisc.inc  the disc: the TOC, the volume descriptor, the path table
 ;   cdiso.inc   the volume: records, names, handles and the FSV_* verbs
@@ -141,7 +141,7 @@ cd_attach:
 ; DRVV_READY - the volume, registered now that the fence answers (51.2.2)
 ;
 ; A refusal to register is quiet: the driver stays loaded with its door open,
-; so the CD Player still plays a disc on a machine whose volume table is full.
+; so CDRack still plays a disc on a machine whose volume table is full.
 ; -----------------------------------------------------------------------------
 cd_ready:
     push ax

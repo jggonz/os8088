@@ -487,7 +487,7 @@ cd_tend:
 ; cd_simtoc - TEST BUILD ONLY (`make cdromtest`'s build/cdromsim.drv, never
 ; shipped): a one-track data disc - which is all QEMU's drive can hold - is
 ; given three AUDIO tracks after it, 40, 30 and 20 seconds, so the gate can
-; drive TRACKnn.CDA, its association and the CD Player's display on QEMU
+; drive TRACKnn.CDA, its association and CDRack's display on QEMU
 ; (SPEC.md 119.7). PLAY AUDIO is still the drive's, and QEMU refuses it.
 ; clobbers: AX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
