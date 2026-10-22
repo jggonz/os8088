@@ -201499,7 +201499,7 @@ driver.
 | geometry | at most 1024x768, width a multiple of 8, `BytesPerScanLine` ≤ 4,096 |
 | colour model | **the desktop stays 16 colours.** `[gfx_color]` is a 4-bit index everywhere in the kernel and every package; the driver maps index → DAC entry (8bpp) or → an RGB word (16bpp) at the write. One new slot, `OSAPI_GFX_BLITD`, is how a package reaches the real depth (§119.7) |
 | CPU | `cpu 8086` throughout the driver. A 286 with a VBE 1.2 card qualifies; `mul` gives the 32-bit offset as DX:AX and that is all the arithmetic needs |
-| resident cost | the hook of §119.3, **measured at S6 on `kern_big`: `.text` +562, `.cold` +247, `.lowbss` +128, `.bss` +5, `.boot2` +0 - the image rung crossed once at S2, `KERN_SIZE` 98,304 against 97,792 (2,560 spare); the cold rung has 98 bytes left** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel before it. `kern_small` does not assemble the hook and is unchanged |
+| resident cost | the hook of §119.3, **measured at S6 on `kern_big`: `.text` +562, `.cold` +247, `.lowbss` +128, `.bss` +5, `.boot2` +0 - the image rung crossed once at S2, `KERN_SIZE` 98,304 against 97,792 (2,560 spare); the cold rung has 98 bytes left** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel without the hook: measured against main it is `.text` +16, `.cold` +101, `.bss` +4 (the class byte, Force Color's test in `vgcf_boot`, the fsx caps row), so the hook itself is `.text` 546 and `.cold` 146. `kern_small` does not assemble the hook and is byte for byte unchanged |
 
 ### 119.2 Detection and the choice of mode — the driver's attach
 

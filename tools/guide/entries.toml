@@ -524,6 +524,13 @@ summary = "Place five ships, take alternate shots and chat with a friend over a 
 short = "Naval battles between two PCs"
 needs = "Two machines, a null modem cable, and a free COM1 or COM2; Connect may ask for the system disk"
 
+["VESA.DRV"]
+title = "VESA display driver"
+kind = "driver"
+summary = "Puts the desktop on a VGA card's high-resolution screen, up to 1024 by 768 in 256 or 65,536 colours, when the card has a VESA BIOS."
+short = "High-resolution desktop on a VESA card"
+needs = "A VGA card with a VESA BIOS (VBE 1.2 or later) and a 386 or better"
+
 ["SERIAL.DRV"]
 title = "Desktop serial service"
 kind = "system"

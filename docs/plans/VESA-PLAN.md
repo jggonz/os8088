@@ -159,11 +159,33 @@ code does not.
   carries the four rows. **Not done:** a window repaint as such is the
   report page's row (275 ms for 22 text rows, method T) and not a desktop
   window's; a real card is a field run.
-- [ ] **S8 Acceptance.** `NOVIDEXT=1` in the build matrix and the measured
-  resident cost in SPEC.md §119.1 and docs/KERNEL-MEMORY.md; docs/TESTING.md's
-  recipe; docs/INDEX.md regenerated; the deduplicated soak union of every row
-  named above run once, then `make test-full` once; hardware-only
-  limitations stated (no real VBE card has been booted).
+- [x] **S8 Acceptance.** `NOVIDEXT=1` is in the build matrix
+  (`t_buildmatrix`'s `novidext`) and measured against main: `.text` +16,
+  `.cold` +101, so the hook itself is `.text` 546 / `.cold` 146 (SPEC.md
+  §119.1, docs/KERNEL-MEMORY.md's history row); docs/TESTING.md carries
+  the recipe; docs/INDEX.md regenerated (checked by every `make`). **The
+  deduplicated soak union ran once** (2026-10-22, `build/soak-union.log`):
+  vesa, vesa8, vesacp, vesablitd, vesabench, dispcalcx, dispcorner,
+  dispfsx, dispsaver, disptext, dispsave, dispprefer, hibernate,
+  hibernatedrv, fsxclip, fsxdisp, wireball, wireballvideo, autostart,
+  pxopen, pxopenpng, pxopencga, pxpaint, pxdraw, pxdrawvga, pxfolder, pxfsx,
+  pxparts, cpnames - **29 passed, 0 failed** in 1,078 s; then `make
+  test-full` once: 61 passed, 1 skipped (`ctoolchain`, no C compiler
+  here), and the two host-side rows it failed - a stale docs/INDEX.md after
+  §106.27 and the project guide's lock on the Control Panel page - paid
+  with the regenerated index, the Display page's words for the Vesa row,
+  and a page for `VESA.DRV` (`tools/guide/manuals/VESA_DRV.md`); both
+  rows re-run green. **Hardware-only limitations,
+  stated:** no real VBE card has been booted - QEMU's Bochs VBE and 86Box's
+  Cirrus 5428 are the two fixtures, and a real card's `4F05h` latency, a
+  window granularity that is not a power of two, a mode list inside the
+  info buffer and a 15bpp packing are each untested by design or by
+  absence; no 8088 can reach any of this (§119.1). **Not driven on the
+  glass:** a fullscreen bracket entered and left from the VESA desktop
+  (`fsx_capstab`'s row is VGA's and `fsx_leave` restores through the
+  driver's `vid_setmode`, and the `fsx*` and wireball rows pass on the
+  VGA), and a window drag and resize at depth beyond what `vesa.py`'s menu
+  and Disk window exercise. Both are a field run's first look.
 
 ## Decisions already taken, and the alternatives judged
 

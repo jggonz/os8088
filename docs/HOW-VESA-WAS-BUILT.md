@@ -247,3 +247,28 @@ times CX, so two in a row kept only the second and the share row read 0 -
 the switch count times a thousand is one word, so it is one multiply now.
 
 ![VESABENCH's report on 86Box's 486 with a Cirrus CL-GD5428, at 1024x768x16, S7.](vesa/s7-vesabench-486-cirrus.png)
+
+## 2026-10-22 — S8, acceptance
+
+**One soak pass, after the last batch.** Twenty-nine rows in one call - the
+five VESA rows, every Display-page row that reads the adapter list
+(`dispcalcx`, `dispcorner`, `dispfsx`, `dispsaver`, `disptext`, `dispsave`,
+`dispprefer`), the hibernate pair, the fullscreen rows, `autostart`, and
+every PiXEL row whose composer this branch touched (`pxopen` on three
+machines, `pxpaint`, `pxdraw` twice, `pxfolder`, `pxfsx`, `pxparts`) - and
+all twenty-nine passed, 1,078 s. Then `make test-full` once. CLAUDE.md's
+rule was kept to the letter this time: no row ran between S3 and S8 except
+the new rows while they were being written, which is what a row is for.
+
+**What `NOVIDEXT=1` says.** A kernel without the hook, measured against
+main, is `.text` +16 and `.cold` +101 - the class byte on the `VM` record,
+Force Color's test in `vgcf_boot`, the fsx caps row - so the hook itself is
+`.text` 546 and `.cold` 146, and the mouse ISR's stack 128. The image rung
+crossed once, at S2, and stayed crossed; the cold rung has 98 bytes left,
+which the next cold byte of any size will spend. kern_small assembles none
+of it and is byte for byte the kernel it was.
+
+**What has not been seen.** A real VBE card. The two fixtures are QEMU's
+Bochs VBE (2.0+, 1024x768x16) and 86Box's Cirrus 5428 (1.2, the same mode),
+and they agree about everything this branch asserts; a real card's bus is
+what they cannot show. The plan's S8 names the rest.
