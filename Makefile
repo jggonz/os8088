@@ -4738,9 +4738,28 @@ $(BUILD)/vesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT
 		$(BUILD)/vxcfg/system.cfg
 
 .PHONY: vesatest
-vesatest: $(BUILD)/vesa.img
-	@echo "vesatest: build/vesa.img - VESA.DRV already wanted (SPEC.md 119.9)."
-	@echo "          Run it with: python3 tests/vesa.py"
+vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img
+	@echo "vesatest: build/vesa.img - VESA.DRV already wanted (SPEC.md 119.9);"
+	@echo "          build/vesa8.img the same with a 'VE' key asking 800x600x8."
+	@echo "          Run them with: python3 tests/vesa.py; python3 tests/vesa8.py"
+
+# ...and the same disk with a ver-3 'VM' record whose class byte names
+# 800x600x8 (SPEC.md 119.2.3, kernel/vxabi.inc's VXC_*: 0x80 | width 2 |
+# height 2 << 2, depth bit clear = 0x8A), after the VGA and Single, so
+# tests/vesa8.py exercises the 8bpp path and the DAC the driver loads, and the
+# class's round trip from the file to the driver's attach. QEMU's standard VGA
+# offers that mode as 0103h
+$(BUILD)/vx8cfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/vx8cfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 8).to_bytes(2,'little') + b'VM' + bytes([3,4,0,0,0,0x8A]) + b'\0\0')" > $@
+
+$(BUILD)/vesa8.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vx8cfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vx8cfg/system.cfg
 
 # USBMOUSETEST - SPEC.md 9.12.6's gate disks. No emulator here carries a CH375,
 # so USBMOUSE.DRV is assembled a second time with -DCH375SIM: the same driver

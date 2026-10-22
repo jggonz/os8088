@@ -50,11 +50,11 @@ import os88build as _B                                      # noqa: E402
 import os88sym                                              # noqa: E402
 import os88qemu                                             # noqa: E402
 import shot                                                 # noqa: E402
+from os88geom import VID_VESA                               # noqa: E402
 
 SOCK = os.path.join(ROOT, "build", "vesa.sock")
 PIDFILE = os.path.join(ROOT, "build", "vesa.pid")
 
-VID_VESA = 4
 WANT_W, WANT_H, WANT_BPP = 1024, 768, 16
 
 

@@ -126,3 +126,53 @@ far call and a jump. One such entry per cold body, and there is one.
 bounded the hook at, spent.
 
 ![The Disk window on the VBE: 1024x768, 16 bits a pixel, S2.](vesa/s2-disk-window-1024x768x16.png)
+
+## 2026-10-21 — S3, S4, S5: colour, choosing, the rest of the system
+
+**S3 turned out to be already done, and the half that was not was moot.**
+The RGB565 table and the 8bpp DAC load shipped with S1; the plan's "track
+the DAC through theme changes" assumed a writer that does not exist - the
+kernel never programs a palette after boot (SPEC.md §39.4), themes and
+presets being pen choices inside the sixteen. One DAC load in the whole
+kernel, Force Color's, and it runs before any driver is attached. Ticked on
+the evidence the two existing rows already carried: white reads back white
+at 16bpp and at 8bpp.
+
+**S4 was shaped by two buffers that were full.** The `VE` key as written
+was four bytes in a settings record; the boot blob had two bytes of 6,144
+left, and the buffer the boot reads `SYSTEM.CFG` into is blob bytes with
+one. So the class became ONE BYTE - bit 7 set, two bits of width, two of
+height, one of depth, from the four of each the driver offers - carried as
+the fourth byte of the `VM` record (ver 3), and the seven bytes of Force
+Color's test at its call site moved into `vgcf_boot` to make even that
+fit. The Mode button went the same way: with the VESA row the Display page
+lists up to four adapters, so the rows went to a 12-pixel pitch and the
+pane had no 40 pixels for a button beside Force Color. The row itself is
+the control now - click it while it is already the choice and it walks the
+driver's table, `Vesa 640x400x8`, `Vesa 640x480x8`, ... `Vesa auto`, the
+label composed at paint from the class byte.
+
+**Two bugs the new row caught, both in the second click.** The composed
+label is written over the old one and `font_run` draws nothing past its
+NUL, so `Vesa 640x400x8` left the `16` of `Vesa 1024x768x16` on the glass:
+the label is padded with spaces to the longest now, and a space draws its
+ground. And the second cycle wrote the right byte and drew its label off
+the pane - the driver's table walk spent DI, which was the painter's pane
+left, and the first cycle took the Auto path that does not. The verbs keep
+every register but their outputs now, SPEC.md §1's rule; the page did not
+have to learn to defend itself.
+
+**S5 was a list of places that index by kind.** `fsx_capstab` had four rows
+and `[vid_kind]` could be 4, which is the kind of defect that reads as a
+random refusal on a game's start; VESA's row is VGA's, the same card. The
+hibernate item greys itself as `Hibernate (VESA)`, the suspend sweep keeps
+`vesa_row`, EXTD.DRV's Extend answers Single on a VESA primary. Each is a
+compare and a branch; none is a design.
+
+**Measured** (kern_big against main): `.text` +532, `.cold` +247,
+`.lowbss` +128, `.bss` +5, `.boot2` −5. The cold rung has 98 bytes left -
+the next cold byte of any size is a rung. kern_small assembles none of it.
+
+![The Display page after two cycles of the VESA row: the class 640x480x8 pending, Set Primary live, S4.](vesa/s4-display-page-cycled-640x480x8.png)
+
+![...and the desktop after Set Primary: 640x480 at 8 bits a pixel, S4.](vesa/s4-desktop-640x480x8.png)

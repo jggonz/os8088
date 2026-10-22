@@ -73,25 +73,51 @@ code does not.
   `.bss` +4 against main; the image rung crossed once, `KERN_SIZE` 98,304
   (2,560 spare). **Not yet:** a window drag and resize on the glass
   (the drag outline is the XOR fill, which S1 drew) - S8's driving pass.
-- [ ] **S3 16-bit colour.** 15/16bpp modes rendered through an RGB-word
-  path; the 16-entry table re-derived whenever the kernel writes the DAC
-  (Bright/Dark theme, the Color presets of §76.14); Auto takes the deepest
-  mode. Outcome: the Dark theme and a Color preset look the same at
-  1024x768x16 as at 640x480x4. Verified by: `tests/vesa.py` reading pixels
-  back after a theme change; `tests/vesa8.py` for the 8bpp palette.
-- [ ] **S4 Choosing a mode.** The Display page's `Vesa WxHxD` row named from
-  the driver's record; the Mode cycling button; the `VE` key written,
-  applied at boot and at Set Primary, and decaying to Auto when the card
-  lacks the mode. Outcome: a user picks 800x600x8, reboots, and gets it; the
-  same disk in a QEMU `-vga cirrus` machine gets that card's best. Verified
-  by: `tests/vesacp.py`.
-- [ ] **S5 The rest of the system.** Fullscreen enter/leave (WireBall, the
-  screen saver, PIXELSTEIN) comes back to the VESA desktop; shutdown and
-  reboot reach text mode; hibernate greys itself with the reason while VESA
-  is primary and `OSAPI_DRV_SUSPEND` skips the class; Extend is refused
-  while VESA is primary; `OSAPI_VIDEO` answers DL 4 / DH 8 or 16 and
-  `OSAPI_WM_PREFER` takes VGA's row. Verified by: `tests/vesafsx.py`, and
-  the `hibernate` and `fsx*` rows unchanged on VGA.
+- [x] **S3 16-bit colour.** **Shipped at S1, and smaller than written:**
+  the 15/16bpp path is the RGB565 table (`vx_pal16`, a 15bpp mode gets its
+  own packing) and the 8bpp one loads DAC 0..15 after the mode set; Auto
+  ranks by area then depth, so it takes 16 over 8 at the same size. **The
+  "re-derived whenever the kernel writes the DAC" half is moot**: the kernel
+  never programs a palette or a DAC entry after boot (SPEC.md §39.4,
+  `vidsel.inc`'s own words) - the Bright/Dark theme and the Color presets
+  are pen choices inside the sixteen, and Force Color's one DAC load runs
+  before any driver exists. So the table is the EGA-compatible sixteen,
+  fixed. **Seen:** white reads back white and black black at both depths
+  (`tests/vesa.py`, `tests/vesa8.py`); the XOR fill at 16bpp through the
+  reverse lookup (the drag outline, the menu bar's highlight). Nothing
+  for a theme change to track, so no row reads pixels after one.
+- [x] **S4 Choosing a mode.** **Shipped, and not as written:** the class is
+  ONE BYTE on the `VM` record (ver 3), not a `VE` key - the blob had two
+  bytes and the settings buffer one (SPEC.md §119.2.3 has the arithmetic);
+  and there is NO Mode button - a VGA+mono machine lists three adapters,
+  and the pane at four rows of 12 has no room beside Force Color - so the
+  VESA row CYCLES its class when clicked while already chosen
+  (`VXV_NEXT`), its label composed at paint as `Vesa WxHxB` / `Vesa auto`,
+  padded to the longest so a shorter one erases the one before. Set
+  Primary sends `VXV_PICK` and, if the VESA display is already up, leaves
+  for the VGA and comes back. Applied at boot (`vesa8.img`'s record names
+  800x600x8 and gets `0103h` over Auto's `0117h`), decaying to Auto when
+  the card lacks the class (the driver's `vx_select`). **Seen:**
+  `docs/vesa/s4-display-page-cycled-640x480x8.png`, then the desktop at
+  640x480x8 (`s4-desktop-640x480x8.png`). **Verified by** `tests/vesacp.py`
+  (soak), which found two bugs in the first cut: the label's tail left on
+  the glass, and the driver's walk clobbering the painter's DI so the
+  second cycle drew its label off the pane. `tests/dispcp.py` reads the
+  row pitch out of the build. **Not done:** the `-vga cirrus` leg (that
+  card's best is a different list; a row for it is S8's call).
+- [x] **S5 The rest of the system.** **Shipped:** `fsx_capstab`'s VESA row
+  (VGA's `0x01EF` - without it kind 4 indexed past the table);
+  `fsx_leave` restores through `vid_setmode`'s arm; hibernate greys itself
+  as `Hibernate (VESA)` while `[vid_kind]` is `VID_VESA`
+  (`menu_s_hibervx`, the one resident string) and `OSAPI_DRV_SUSPEND`'s
+  sweep keeps `vesa_row`; `EXTD.DRV`'s `ext_extend_b` answers CF = 1 on a
+  VESA primary; `OSAPI_VIDEO` answers DL 4 / DH the depth through
+  `vid_disp_planes`'s arm. Shutdown and reboot reach text mode through the
+  BIOS mode set they always used. **Not driven on the glass yet:** a
+  fullscreen bracket entered and left from the VESA desktop (WireBall, the
+  saver) - S8's driving pass, by the plan's rule that a measurement and a
+  look are taken in the final pass. The `hibernate` and `fsx*` rows on VGA
+  are in S8's soak union.
 - [ ] **S6 A package at depth.** `OSAPI_GFX_BLITD` (and its palette form at
   8bpp), the ABI lock updated without a `PKG_FMT` bump, and one consumer:
   PiXEL shows a GIF or BMP in true colour on a 16bpp desktop and falls back
@@ -120,7 +146,10 @@ code does not.
 | `DRVC_OVL` with a row, no class | a `DRVC_VIDEO` class with a `DSV_*` table | the kernel is the only caller and holds the far pointer; a class costs a publication slot, a copied table and three per-class arrays for nothing to find |
 | `[vid_planes]` = the bpp | a separate depth byte | the three save-under sizers already multiply by `[vid_planes_w]`; at 8 and 16 the formula gives the packed byte count unchanged |
 | `gfx_blitp` refused on VESA | translating plane-major bytes to packed | the source is a VGA plane layout; Paint already carries the `gfx_blit4` fallback the refusal routes to |
-| hibernate greyed while VESA is primary | switching to VGA inside HIBER.DRV's sweep | `vid_switch` is CTRL.DRV's and the blob's; a third expansion is a decision with bytes attached, taken in S5 or deferred with the arithmetic |
+| hibernate greyed while VESA is primary | switching to VGA inside HIBER.DRV's sweep | `vid_switch` is CTRL.DRV's and the blob's; a third expansion is a decision with bytes attached. S5 took the greying: one string, one compare |
+| the class is one byte on the `VM` record | a `VE` key of its own (4 bytes) | the boot blob had 2 bytes left and the settings buffer (`ovc_buf`, blob bytes) had 1; `VM` goes to ver 3, the §39.11.3 story once more |
+| the VESA row cycles its class when clicked while chosen | a Mode button beside Force Color | four rows at a 12-pixel pitch already spend the pane; a button is 40 pixels the pane does not have on a VGA+mono machine |
+| the `VXV_*` verbs keep every register but their outputs | the page saving its own DI/BP around the call | SPEC.md §1's register discipline, and the symptom (a label drawn off the pane on the second cycle only) is the kind that stays hidden |
 | Extend refused while VESA is primary | a two-depth straddle | §39.14.7's cut assumes both displays share a renderer; it does not, and no machine here has the pair |
 
 ## Existing facilities reused

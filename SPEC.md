@@ -201474,7 +201474,7 @@ driver.
 | geometry | at most 1024x768, width a multiple of 8, `BytesPerScanLine` ≤ 4,096 |
 | colour model | **the desktop stays 16 colours.** `[gfx_color]` is a 4-bit index everywhere in the kernel and every package; the driver maps index → DAC entry (8bpp) or → an RGB word (16bpp) at the write. One new slot, `OSAPI_GFX_BLITD`, is how a package reaches the real depth (§119.7) |
 | CPU | `cpu 8086` throughout the driver. A 286 with a VBE 1.2 card qualifies; `mul` gives the 32-bit offset as DX:AX and that is all the arithmetic needs |
-| resident cost | the hook of §119.3, **measured at S2 on `kern_big`: `.text` +508, `.cold` +226, `.lowbss` +128, `.bss` +4 - the image rung crossed once, `KERN_SIZE` 98,304 against 97,792 (2,560 spare)** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel before it |
+| resident cost | the hook of §119.3, **measured at S5 on `kern_big`: `.text` +532, `.cold` +247, `.lowbss` +128, `.bss` +5, `.boot2` −5 - the image rung crossed once at S2, `KERN_SIZE` 98,304 against 97,792 (2,560 spare); the cold rung has 98 bytes left** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel before it. `kern_small` does not assemble the hook and is unchanged |
 
 ### 119.2 Detection and the choice of mode — the driver's attach
 
@@ -201529,11 +201529,27 @@ BytesPerScanLine, granularity shift and the two colour-field layouts.
 
 **Auto** ranks every offered mode by (X × Y, then bpp) and takes the largest;
 on QEMU's standard VGA that is 1024x768x16 (`0117h`). The user may instead
-name a class through the Display page (§119.6), stored in `SYSTEM.CFG` as
-key **`VE`** (ver 1, 4 bytes: X/8, Y/8, bpp, 0): the attach takes the
-offered mode matching all three, and falls back to Auto when none does — a
-settings disk carried to a card without that mode gets the best that card
-has, never a refusal (the §39.11.3 safety story, one key along).
+name a **class** through the Display page (§119.6) — the user's name for a
+mode, a card's number being the card's — stored in `SYSTEM.CFG` as **the
+fourth byte of the `VM` record** (ver 3, 4 bytes: kind, `[vid_dmode]`,
+`[vid_dlay]`, the class; `CFG_VE`). The class is **one byte**
+(`kernel/vxabi.inc`'s `VXC_*`): 0 is Auto; else bit 7 set, bits 0-1 the
+width (640, 720, 800, 1024), bits 2-3 the height (400, 480, 600, 768), bit 4
+the depth (clear 8, set 16; a 15bpp mode answers for 16). The attach takes
+it in CL and picks the offered mode matching all three, falling back to Auto
+when none does — a settings disk carried to a card without that mode gets the
+best that card has, never a refusal (the §39.11.3 safety story, one byte
+along). `VXV_PICK` (CL = a class) chooses again at run time, and `VXV_NEXT`
+walks the offered table for the Display page.
+
+**Why one byte, and why on `VM`.** A key of its own was written first and
+refused by the boot blob, which had two bytes of its 6,144 left; four bytes
+on `VM` were refused by the same blob, because the buffer the boot reads the
+file into (`ovc_buf`, `CFG_FBUF`) is blob bytes and it had ONE. `VM` going
+to ver 3 is the ver-2 story (§39.11.3) used once more: an old record stops
+matching and the adapter and arrangement defaults stand, once. And the seven
+blob bytes of Force Color's test at its call site went into `vgcf_boot`
+(`.cold`) to make even that byte fit.
 
 **The linear framebuffer is not used, and that is a decision rather than a
 gap.** VBE 2.0's LFB is a physical address above 1 MB that only protected
@@ -201726,7 +201742,12 @@ reference into the blob is registered in `tests/ovlrefs.txt`.
 
 **Out**: the driver's detach is preceded by `vid_switch AL=VID_VGA`, by the
 one caller that can detach it — the Drivers page (`CTRL.DRV`, which holds
-`vid_switch`; the untick path switches first, then unloads). While `[vid_kind]` is `VID_VESA`, **hibernate greys itself**
+`vid_switch`; the untick path switches first, then unloads).
+`OSAPI_DRV_SUSPEND`'s sweep (§51.11) **keeps `vesa_row`** whatever class it
+is asked about: a suspend that took the renderer would leave every drawing
+body calling nothing. A hibernate never reaches the sweep with it — `hb_ok`
+greys the item as `Hibernate (VESA)` while `[vid_kind]` is `VID_VESA`, one
+resident string (`menu_s_hibervx`). While `[vid_kind]` is `VID_VESA`, **hibernate greys itself**
 (§47, a fact: "the VESA display cannot be carried in an image") — HIBER.DRV's
 sweep cannot reach `vid_switch`, and an image carrying `[vid_kind]` = 4 into
 a machine whose driver has not attached would arm nothing and draw nothing.
@@ -201740,26 +201761,37 @@ the display cannot be suspended out from under the desktop.
 |---|---|
 | `OSAPI_VIDEO` (§39.8) | DL = 4, DH = 8 or 16. A package's `cmp dh, 1 / ja` colour test is right; its `cmp dl, VID_VGA` test was already wrong on EGA (§39.8) |
 | `OSAPI_WM_PREFER`'s three-entry table | takes VGA's row, as EGA does |
-| `fsx_capstab` (§53) | VESA's row is VGA's: it is the same card, and a bracket's `int 10h` mode set is legal from any VBE mode. `fsx_leave` restores through `vid_setmode`, selector 17 |
+| `fsx_capstab` (§53) | VESA's row is VGA's (`0x01EF`): it is the same card, and a bracket's `int 10h` mode set is legal from any VBE mode. `fsx_leave` restores through `vid_setmode`'s arm. **Without the row the table was indexed past its end by kind 4** |
 | `vid_text` (§39.20), shutdown, reboot | `int 10h AX=0003h`, unchanged: a VBE card returns to text from any mode |
 | `vid_blank`/`vid_unblank` | the colour arms; a VESA primary is a VGA to them |
-| the extended desktop (§39.19) | **refused while VESA is primary**: `vid_disp_init`'s Extend arm answers Single. The second card's 1bpp geometry beside an 8bpp one is a straddle arithmetic (§39.14.7) this cycle does not take |
+| the extended desktop (§39.19) | **refused while VESA is primary**: `ext_extend_b` (EXTD.DRV) answers CF = 1, Single, on a VESA primary. The second card's 1bpp geometry beside an 8bpp one is a straddle arithmetic (§39.14.7) this cycle does not take |
 | the screen saver (§79) and blanker (§64) | draw through the hooked primitives; `SAVER.DRV`'s own VRAM writes, if any, are a plan story |
 | the splash (§15) | runs before `drv_boot`, on VGA, always |
 | `desk_rowcalc` zones, dock, menu bar, clock cell | read `[vid_w]`/`[vid_h]`/`[vid_pw]`; a 1024-wide bar has more room and the same cells |
 
 ### 119.6 The Display page
 
-The adapter radio list gains a row, `Vesa 1024x768x16`, named from the
-driver's `DSV_VX_GEOM` at paint rather than from a string: the mode the
-driver chose is the row's name. It appears only when `VID_A_VESA` is lit —
-the driver must be loaded (the Drivers page's `VESA` tick) before the Display
-page can offer it, which is §51.3's "nothing probes unless asked" applied to
-a card that is always there. Below the radios, when the VESA row is
-selected, a **Mode** cycling button walks the driver's offered table
-(`Auto`, then each record); the choice is written to `VE` and applied by Set
-Primary, which re-runs the attach's choice through `DSV_VX_INIT` and
-switches. A refused choice (the key names a mode the card lacks) reads Auto.
+The adapter radio list gains a row whose label is **composed** at paint:
+`Vesa ` then the class the settings file asks for, else the mode running when
+the display is the VESA one, else `auto` — `Vesa 1024x768x16`,
+`Vesa 800x600x8`, `Vesa auto`. It appears only when `VID_A_VESA` is lit — the
+driver must be loaded (the Drivers page's `VESA Display` tick) before the
+Display page can offer it, which is §51.3's "nothing probes unless asked"
+applied to a card that is always there. With it the page has **four rows at
+a 12-pixel pitch** (`CPV_NROWS`, `CPV_ROWH`; three at 16 without the
+renderer), because a VGA machine with a mono card beside it lists VGA, VESA
+and the mono card, and the pane's 132 rows have no room for a Mode button
+beside Force Color — so **the mode choice is the row itself**: a click on
+the VESA row when it is already the pending choice **cycles the class**
+(`VXV_NEXT`: Auto, then each offered record in the card's order, then Auto)
+and rewrites the label; `cp_wdset` owes the file the byte. Set Primary with
+the VESA row chosen sends `VXV_PICK` with that class, and if the VESA
+display is already running leaves it for the VGA and comes back, because
+`vid_switch` onto the kind it is on is a no-op. The button is live when the
+row is not the running kind, or when the class asked for is neither Auto nor
+the class running (`vx_class`, the driver's live record, published beside
+`vx_bpp`). A refused class (the card lacks it) reads Auto to the driver.
+`tests/dispcp.py` reads the row pitch out of the build.
 
 ### 119.7 A package at depth — `OSAPI_GFX_BLITD`
 
@@ -201806,9 +201838,15 @@ which is the negative control for free. `make vesatest` writes
 menu bar's band and the dock's band painted and the desktop's 50% dither
 present (S1). S2 adds a window opened through a double-click and a menu
 dropped and closed without a ghost, located by `tools/shot.py --crop`;
-`tools/mouse.py --screen 1024x768`. `tests/vesa8.py` boots the same disk with a `VE` key
-naming 800x600x8 and reads the DAC. A third row, `vesafsx`, enters and leaves
-a fullscreen bracket and asserts the mode comes back. All three are soak rows
-(QEMU by name, CLAUDE.md's closed list). The resident hook is measured by
+`tools/mouse.py --screen 1024x768`. `tests/vesa8.py` boots `build/vesa8.img`,
+whose `VM` record's class byte names 800x600x8, and reads the DAC's first
+sixteen back off the glass (white is white, black is black). `tests/vesacp.py`
+(S4) drives the Display page: the VESA row at the four-row pitch, two clicks
+on it cycling the class 0 → 128 → 132 with the label changing and a longer
+label's tail erased, then Set Primary landing on 640x480x8 with `vx_class`
+0x84 and a 640x480 screendump. All three are soak rows (QEMU by name,
+CLAUDE.md's closed list). The resident hook is measured by
 `tests/unit/t_buildmatrix.py`'s `novidext` row, and `t_vidext.py` keeps the
-selector inventory of §119.3.1 honest.
+selector inventory of §119.3.1 honest. The fullscreen round trip is S8's
+driving pass, not a row of its own: `fsx_capstab`'s VESA row is VGA's and
+`fsx_leave` restores through `vid_setmode`'s arm.

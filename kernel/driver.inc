@@ -676,21 +676,38 @@ CFG_VID     equ 6               ; db: the display adapter (SPEC.md 39.11.3) -
                                 ; booting this one to a dead monitor
 CFG_VDM     equ 7               ; db: [vid_dmode], Single or Extend (39.19)
 CFG_VDL     equ 8               ; db: [vid_dlay], where display 1 sits. Both
+CFG_VEL     equ 1 * DRV_VX      ; ...AND THE PACKED DISPLAY'S MODE CLASS RIDES
+                                ; THE 'VM' RECORD (SPEC.md 119.2.3): ONE byte
+                                ; after the arrangement (vxabi.inc's VXC_*, 0
+                                ; = Auto) on a build with the external
+                                ; renderer, none without. 'VM' is ver 3 for
+                                ; it, as it went to 2 when the arrangement
+                                ; joined (39.11.3): an old record stops
+                                ; matching and the defaults stand ONCE. A key
+                                ; of its own was written first and refused by
+                                ; the blob, which had two bytes left; then four
+                                ; bytes here, refused by the same blob - the
+                                ; file buffer ovc_buf is blob bytes, and ONE
+                                ; was what it had (docs/plans/VESA-PLAN.md)
+CFG_VE      equ 9               ; db (none without VID_EXT): CFG_VGC's shape -
+                                ; no kernel byte holds it, the Display page
+                                ; edits it here, vx_boot_x hands it to the
+                                ; driver at attach
                                 ; range-checked before they are stored, on
                                 ; CFG_SCH's terms: a byte from a future
                                 ; version leaves the default alone rather
                                 ; than selecting nonsense
-CFG_THM     equ 9               ; db: [thm_kind], the theme (SPEC.md 76). A
+CFG_THM     equ 9 + CFG_VEL               ; db: [thm_kind], the theme (SPEC.md 76). A
                                 ; plain store like CFG_RT, but the unpack
                                 ; re-resolves the two chrome pens from it
-CFG_ANIM    equ 10              ; db: [wm_animon], SPEC.md 11.99's zoom
+CFG_ANIM    equ 10 + CFG_VEL              ; db: [wm_animon], SPEC.md 11.99's zoom
                                 ; (SPEC.md 76.11). Carried in EVERY build,
                                 ; including one with no animation in it, so a
                                 ; kernel swap does not silently turn it back on
-CFG_SSM     equ 11              ; db: [ss_modes], which screen-saver modes the
+CFG_SSM     equ 11 + CFG_VEL              ; db: [ss_modes], which screen-saver modes the
                                 ; picker may choose from (SPEC.md 79.4)
-CFG_SSS     equ 12              ; db: [ss_secs], seconds one of them runs
-CFG_SSN     equ 13              ; db: [ss_mins], minutes of idle before any of
+CFG_SSS     equ 12 + CFG_VEL              ; db: [ss_secs], seconds one of them runs
+CFG_SSN     equ 13 + CFG_VEL              ; db: [ss_mins], minutes of idle before any of
                                 ; it starts, 0 = never. ALL THREE ARE CARRIED
                                 ; IN EVERY BUILD, CFG_ANIM's rule one setting
                                 ; over: kern_small has no SAVER.DRV and still
@@ -698,13 +715,13 @@ CFG_SSN     equ 13              ; db: [ss_mins], minutes of idle before any of
                                 ; between the two kernels must not come back
                                 ; with the modes silently re-ticked
 %ifdef DOCK_OPT
-CFG_DOCK    equ 14              ; db: [dock_cfg], where the dock stands and
+CFG_DOCK    equ 14 + CFG_VEL              ; db: [dock_cfg], where the dock stands and
                                 ; whether it hides (SPEC.md 30.5). A plain
                                 ; store, and the unpack re-derives the
                                 ; geometry from it, because that is not one
-CFG_DBLOB   equ 15              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_DBLOB   equ 15 + CFG_VEL              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
 %else
-CFG_DBLOB   equ 14              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_DBLOB   equ 14 + CFG_VEL              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
 %endif
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
@@ -857,7 +874,14 @@ DRV_CFG_MAPN equ 8
     dw 'SM'                     ; Scheduler Mode
     db 1, 1, CFG_SCH
     dw 'VM'                     ; Video Mode - which adapter, then SPEC.md
+%ifdef VID_EXT
+    db 3, 4, CFG_VID            ; 39.19's two arrangement bytes, then the
+                                ; packed display's mode class (SPEC.md
+                                ; 119.2.3, CFG_VE) - ver 3 for the widening,
+                                ; the ver-2 story below used once more
+%else
     db 2, 3, CFG_VID            ; 39.19's two arrangement bytes. ver 2 because
+%endif
                                 ; it WAS one byte: an old record's VM stops
                                 ; matching and the defaults stand, which is
                                 ; this table's whole compatibility story used
@@ -5138,13 +5162,15 @@ drv_boot_x:
                                 ; banks the flags, which swallows this answer
                                 ; whole (SPEC.md 2.9.5.4)
 %ifdef KERN_BIG
-    test byte [drv_cfg+CFG_VGC], 1  ; Force Color (SPEC.md 39.28), BEFORE the
-    jz .novgc                   ; adapter switch below, so a switch onto the
-    call COLD_SEG:vgcf_boot     ; VGA finds the BIOS's record colour already.
-.novgc:                         ; The TEST is here, in the blob that is given
-%endif                          ; back, and vgcf_boot keeps every register but
-                                ; AX - CH is the loop's, and AL is reloaded on
-                                ; the next line (kernel size pass 12)
+    call COLD_SEG:vgcf_boot     ; Force Color (SPEC.md 39.28), BEFORE the
+                                ; adapter switch below, so a switch onto the
+                                ; VGA finds the BIOS's record colour already.
+                                ; THE TEST IS INSIDE IT NOW (SPEC.md 119.4:
+                                ; the blob gave up its seven bytes to the
+                                ; 'VM' record's class byte); it keeps every
+                                ; register but AX - CH is the loop's, and AL
+                                ; is reloaded on the next line
+%endif
 
     ; --- the display adapter, FIRST (SPEC.md 39.11.3) ------------------------
     ; Before the driver loads, at the bottom of

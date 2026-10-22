@@ -143,6 +143,13 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
                                ; is a safe later addition, not pass 1
                                ; (SPEC.md 39.24, docs/plans/completed/EGA-PLAN.md 7)
 %endif
+%ifdef VID_EXT
+    dw 0x01EF                   ; VESA: VGA's row (SPEC.md 119.5) - it is the
+                               ; same card, every BIOS mode in it is legal
+                               ; from a VBE mode, and fsx_leave's vid_setmode
+                               ; takes the VESA arm back. WITHOUT THIS ROW the
+                               ; table was indexed past its end by kind 4
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fsx_run - the bracket (SPEC.md 53.1, slot 0x0235 via X stub)

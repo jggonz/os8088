@@ -4375,6 +4375,27 @@ SOAK = [
         "feature no 8088 can reach, on a disk of its own",
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
+    Row("vesa8", "soak", py("tests/vesa8.py"), 45.0,
+        "The packed display at 8 BITS A PIXEL, and the 'VE' key's round trip "
+        "(SPEC.md 119.2.3): build/vesa8.img's SYSTEM.CFG names the 800x600x8 "
+        "class, so the driver takes QEMU's mode 0103h over Auto's "
+        "1024x768x16. Asserts vid_kind 4, 800x600, vid_planes 8, then the "
+        "screendump: the menu bar and the dither through the DAC's first "
+        "sixteen - white reads back white and black black - and a Disk "
+        "window double-clicked open. QEMU by name, vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/vesa8.img")),
+    Row("vesacp", "soak", py("tests/vesacp.py"), 60.0,
+        "Choosing a VESA mode on the Display page (SPEC.md 119.6): on the "
+        "1024x768x16 desktop, the Control Panel's Display page lists the "
+        "VESA row at the four-row pitch; a click on it while it is the "
+        "pending choice CYCLES the class (CFG_VE 0 -> the first record -> "
+        "the second, the label on the glass changing each time and a "
+        "longer label's tail erased); Set Primary sends VXV_PICK and "
+        "switches - 640x480x8, vx_class 0x84, a 640x480 screendump. QEMU "
+        "by name, vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
     Row("vmmouse", "soak", py("tests/vmmouse.py"), 45.0,
         "The VMware absolute pointer (SPEC.md 9.11), the browser's grabless "
         "mouse - and the one CI gate a browser-only feature gets. QEMU's pc "

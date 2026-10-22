@@ -113,6 +113,10 @@ vx_entry:
     je vx_detach
     cmp al, VXV_INIT
     je vx_init
+    cmp al, VXV_PICK
+    je vx_pick
+    cmp al, VXV_NEXT
+    je vx_next_x
     cmp ax, (VX_ABI_VER << 8) | DRVV_ATTACH
     je vx_attach                ; ATTACH from a kernel of this vintage (AH),
     stc                         ; everything else - a newer kernel's verb, or
@@ -154,6 +158,8 @@ vx_attach:
     push bx                     ; PRESERVE BX: the kernel reads the row through
                                 ; it on return (SPEC.md 51.2), and the probe
                                 ; below spends it
+    mov [vx_want], cl           ; the class SYSTEM.CFG asks for (119.2.3),
+                                ; one byte, 0 = Auto
     push ds
     pop es                      ; ES = ours for the BIOS's buffers
     mov word [vx_vbe], 'VB'     ; the pre-signature a VBE 2.0 BIOS answers
@@ -208,35 +214,12 @@ vx_attach:
     cmp byte [vx_nmodes], VX_NMODES
     jb .mode
 
-    ; --- Auto: the largest (X*Y), then the deepest (SPEC.md 119.2.3) ----------
+    ; --- the class asked for, else Auto (SPEC.md 119.2.3) ------------------------
 .chosen:
     cmp byte [vx_nmodes], 0
     je .nohw
-    call vx_choose              ; [vx_cur] = the record
-
-    ; --- the attach answer -------------------------------------------------------
-    mov si, [vx_cur]
-    mov ax, [si+VM_X]
-    mov [vx_tab+VXS_X], ax
-    mov [vx_x], ax
-    mov ax, [si+VM_Y]
-    mov [vx_tab+VXS_Y], ax
-    mov [vx_y], ax
-    mov ax, [si+VM_MODE]
-    mov [vx_tab+VXS_MODE], ax
-    mov ax, [si+VM_BPSL]
-    mov [vx_bpsl], ax
-    mov al, [si+VM_BPP]
-    mov [vx_depth], al          ; 8, 15 or 16: the mode's own
-    cmp al, 8
-    je .d8
-    mov al, 16                  ; ...and what the kernel is told: 15 draws as 16
-.d8:
-    mov [vx_tab+VXS_BPP], al
-    mov [vx_bpp], al
-    mov al, [si+VM_WSH]
-    mov [vx_wsh], al
-    call vx_mkpal               ; the 16-entry RGB table for a direct mode
+    call vx_select              ; [vx_cur] = the record
+    call vx_publish             ; ...and vx_tab, the geometry, the palette
     mov si, vx_tab
     pop bx
     pop es
@@ -358,6 +341,167 @@ vx_offer:
     ret
 
 ; -----------------------------------------------------------------------------
+; vx_select - the record for the class in [vx_want], else Auto's
+; out: [vx_cur] = the record
+; clobbers: ax, bx, cx, dx, si, di
+; -----------------------------------------------------------------------------
+vx_select:
+    mov cl, [vx_want]
+    call vx_find                ; SI = the record for the class, CF = 1 none
+    jc vx_choose
+    mov [vx_cur], si
+    ret
+
+; vx_decode - CL = a class byte -> DL = X/8, DH = Y/8, CL = bpp (8 or 16);
+;             CF = 1 for Auto (0), with the three 0
+; clobbers: bx, flags
+vx_decode:
+    test cl, VXC_SET
+    jz .auto
+    mov bl, cl
+    and bl, VXC_XMASK
+    xor bh, bh
+    mov dl, [bx+vxc_x8tab]
+    mov bl, cl
+    and bl, VXC_YMASK
+    shr bl, 1
+    shr bl, 1
+    mov dh, [bx+vxc_y8tab]
+    test cl, VXC_D16
+    mov cl, 8
+    jz .d
+    mov cl, 16
+.d:
+    clc
+    ret
+.auto:
+    xor dx, dx
+    xor cl, cl
+    stc
+    ret
+
+; vx_encode - SI = a record -> CL = its class byte; CF = 1 for a geometry the
+;             byte cannot name (not offered: vx_offer refuses it first)
+; clobbers: ax, bx, flags
+vx_encode:
+    mov ax, [si+VM_X]
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    mov bx, vxc_x8tab
+    call .idx
+    jc .no
+    mov cl, al
+    mov ax, [si+VM_Y]
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    mov bx, vxc_y8tab
+    call .idx
+    jc .no
+    shl al, 1
+    shl al, 1
+    or cl, al
+    or cl, VXC_SET
+    cmp byte [si+VM_BPP], 8
+    je .ok
+    or cl, VXC_D16
+.ok:
+    clc
+    ret
+.no:
+    stc
+    ret
+.idx:                           ; AL = X/8 or Y/8 against the four at BX ->
+    push cx                     ; AL = its index, CF = 1 none
+    xor cx, cx
+.i:
+    cmp al, [bx]
+    je .hit
+    inc bx
+    inc cx
+    cmp cl, 4
+    jb .i
+    pop cx
+    stc
+    ret
+.hit:
+    mov al, cl
+    pop cx
+    clc
+    ret
+
+    VXC_TABLES                  ; vxc_x8tab / vxc_y8tab, vxabi.inc's
+
+; vx_find - the offered record whose class byte is CL: out SI, or CF = 1
+;           (Auto included: it names no record). A 15bpp record answers for
+;           the 16 bit
+; clobbers: ax, bx, cx, dx, si, di, flags
+vx_find:
+    call vx_decode              ; DL = X/8, DH = Y/8, CL = bpp
+    jc .none
+    mov si, vx_modes
+    mov di, [vx_nmodes_w]       ; (the count as a word: the byte and a 0)
+.n:
+    or di, di
+    jz .none
+    mov ax, [si+VM_X]           ; X/8 is the word shifted: 1024 -> 128
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    cmp al, dl
+    jne .next
+    mov ax, [si+VM_Y]
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    cmp al, dh
+    jne .next
+    mov al, [si+VM_BPP]
+    cmp al, cl
+    je .hit
+    cmp al, 15                  ; a 15bpp record is "16" to the class
+    jne .next
+    cmp cl, 16
+    jne .next
+.hit:
+    clc
+    ret
+.next:
+    add si, VM_SIZE
+    dec di
+    jmp short .n
+.none:
+    stc
+    ret
+
+; vx_publish - [vx_cur] into vx_tab and the geometry this image draws by
+; clobbers: ax, bx, cx, dx, si, di
+vx_publish:
+    mov si, [vx_cur]
+    mov ax, [si+VM_X]
+    mov [vx_tab+VXS_X], ax
+    mov [vx_x], ax
+    mov ax, [si+VM_Y]
+    mov [vx_tab+VXS_Y], ax
+    mov [vx_y], ax
+    mov ax, [si+VM_MODE]
+    mov [vx_tab+VXS_MODE], ax
+    mov ax, [si+VM_BPSL]
+    mov [vx_bpsl], ax
+    mov al, [si+VM_BPP]
+    mov [vx_depth], al          ; 8, 15 or 16: the mode's own
+    cmp al, 8
+    je .d8
+    mov al, 16                  ; ...and what the kernel is told: 15 draws as 16
+.d8:
+    mov [vx_tab+VXS_BPP], al
+    mov [vx_bpp], al
+    mov al, [si+VM_WSH]
+    mov [vx_wsh], al
+    jmp vx_mkpal                ; the 16-entry RGB table for a direct mode
+
+; -----------------------------------------------------------------------------
 ; vx_choose - Auto: the record with the largest X*Y, and at that size the
 ;             deepest; ties keep the earlier record (SPEC.md 119.2.3)
 ; out: [vx_cur] = the record
@@ -469,7 +613,20 @@ vx_init:
     inc di
     loop .p
     pop si
-    ; --- vid_tab row VID_VESA (SPEC.md 39.2's nine words) -------------------------
+    call vx_geom
+    mov word [vx_win], 0xFFFF   ; no window is current until a mode set
+    mov byte [vx_cursaved], 0
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; vx_geom - vid_tab row VID_VESA (SPEC.md 39.2's nine words) and the kernel's
+;           vx_bpp, from the chosen record (after INIT banked the kernel)
+; clobbers: ax, di, es
+vx_geom:
+    mov es, [vx_kseg]
     mov di, [vx_p_tabrow]
     mov word [es:di], VX_WSEG   ; seg
     mov ax, [vx_bpsl]
@@ -486,12 +643,104 @@ vx_init:
     mov [es:di+14], ax          ; cw
     mov ax, [vx_y]
     mov [es:di+16], ax          ; ch
-    mov word [vx_win], 0xFFFF   ; no window is current until a mode set
-    mov byte [vx_cursaved], 0
+    mov di, [vx_p_ep]
+    mov al, [vx_bpp]
+    xor ah, ah
+    mov [es:di+4], ax           ; ...and the kernel's vx_bpp, after vx_ep
+    mov si, [vx_cur]
+    call vx_encode              ; ...and vx_class, the LIVE record's class
+    mov [es:di+6], cl           ; byte, for the Display page's greying
+    ret
+
+; -----------------------------------------------------------------------------
+; vx_pick - VXV_PICK: DL/DH/CL = a class; choose again and re-publish the
+;           geometry. After INIT only. Never refuses (119.2.3): a class the
+;           card lacks is Auto
+; -----------------------------------------------------------------------------
+vx_pick:
+    cmp word [vx_kseg], 0
+    je .bad
+    push ax                     ; the caller is CTRL.DRV's page handler, whose
+    push bx                     ; DI and BP are the pane it goes on to paint
+    push cx                     ; (SPEC.md 1's register discipline: nothing
+    push dx                     ; but the documented outputs - here none)
+    push si
+    push di
+    mov [vx_want], cl
+    call vx_select
+    call vx_publish
+    call vx_geom
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     clc
     ret
 .bad:
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; vx_next - VXV_NEXT: CL = a class; out CL/CH/DL/DH = the next offered class
+;           in the table's order, its depth and its X/8, Y/8 - Auto (0) ->
+;           the first record, the last -> Auto. CF = 1 when the class given
+;           matched no record (the first is answered then, as for Auto).
+;           AX, BX, SI and DI are KEPT: the walk spends SI and DI on the
+;           table, and the caller's DI is the pane it paints the answer on
+;           (the second cycle of a row drew its label off the pane)
+; -----------------------------------------------------------------------------
+vx_next_x:
+    push ax
+    push bx
+    push si
+    push di
+    call vx_next
+    pop di                      ; (pop writes no flags: CF is the answer's)
+    pop si
+    pop bx
+    pop ax
+    ret
+vx_next:
+    cmp byte [vx_nmodes], 0
+    je .none
+    or cl, cl
+    jz .first                   ; Auto: the first record
+    call vx_find
+    jc .firstc                  ; not offered: the first, and say so
+    add si, VM_SIZE             ; the one after it...
+    mov ax, si
+    sub ax, vx_modes
+    mov di, ax
+    mov al, [vx_nmodes]
+    mov ah, VM_SIZE
+    mul ah                      ; AX = the table's end
+    cmp di, ax
+    jb .answer                  ; ...or Auto after the last
+.none:
+    xor dx, dx
+    xor cx, cx
+    clc
+    ret
+.firstc:
+    mov si, vx_modes
+    call .class
+    stc
+    ret
+.first:
+    mov si, vx_modes
+.answer:
+    call .class
+    clc
+    ret
+; .class - SI = a record -> CL = its class byte, DL/DH = X/8, Y/8, CH = bpp
+.class:
+    call vx_encode              ; CL (CF = 1 cannot happen: vx_offer refused it)
+    mov [vx_tmpc], cl
+    call vx_decode              ; DL/DH = X/8, Y/8, CL = bpp
+    mov ch, cl
+    mov cl, [vx_tmpc]           ; CL = the class byte, CH = the depth
     ret
 
 ; =============================================================================
@@ -2063,6 +2312,7 @@ vx_p_b1hm   dw 0
 vx_p_scroll dw 0
 vx_p_spans  dw 0
 vx_p_fontfg dw 0
+vx_p_cfgve  dw 0
 %if $ - vx_p_tabrow != VXB_SIZE - 2
   %error "the pointer bank has drifted from vxabi.inc's VXB_* layout"
 %endif
@@ -2070,7 +2320,11 @@ vx_x        dw 0                ; the chosen mode's geometry
 vx_y        dw 0
 vx_bpsl     dw 0
 vx_cur      dw 0                ; -> the chosen record
+vx_want     db 0                ; the class byte asked for (0 = Auto)
+vx_tmpc     db 0
+vx_nmodes_w:                    ; ...the count, as a word (the byte then a 0)
 vx_nmodes   db 0
+            db 0
 vx_cursaved db 0
 vx_one      db 0
 vx_pcol     db 0

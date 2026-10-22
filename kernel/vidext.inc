@@ -75,6 +75,11 @@ vx_ep       dd 0                ; the driver's primitive entry, seg:off. Armed
                                 ; by vx_boot_x, cleared by the driver's detach
 vx_bpp      dw 8                ; the chosen depth: what vid_depth_set
                                 ; publishes as [vid_planes] on VID_VESA
+vx_class    db 0                ; the LIVE record's class byte (vxabi.inc's
+                                ; VXC_*), written by the driver's geometry
+                                ; call: the Display page greys Set Primary
+                                ; against it
+            db 0                ; PARITY: the pair keeps this file even
 vx_tmp      dw 0                ; the trampolines' scratch (pop/push targets)
 vx_tmp2     dw 0
 
@@ -185,6 +190,7 @@ vx_blk:
     dw vgas_col                     ; VXB_SCROLL
     dw gfx_sp_seg                   ; VXB_SPANS
     dw font_rn_fg                   ; VXB_FONTFG
+    dw drv_cfg + CFG_VE             ; VXB_CFGVE (a byte)
 %if $ - vx_blk != VXB_SIZE
   %error "vx_blk has drifted from vxabi.inc's VXB_* layout"
 %endif
@@ -250,6 +256,9 @@ vx_boot_x:
     je .out                     ; not wanted, or the load failed and the row
                                 ; already carries the DRVE_*
     mov bp, [bx+DRVR_ENT]
+    mov cl, [drv_cfg+CFG_VE]    ; the class SYSTEM.CFG asks for (SPEC.md
+                                ; 119.2.3), 0 = Auto, which a fresh file
+                                ; carries
     mov ax, (VX_ABI_VER << 8) | DRVV_ATTACH ; AH: the ABI the image checks
     COLDCALL drvf_drv_call      ; (its own segment, unnamed - ROM-PLAN 3.2)
                                 ; SI = the VXS_* table in the driver's segment

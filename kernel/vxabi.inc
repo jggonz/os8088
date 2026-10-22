@@ -11,8 +11,9 @@
 ; Drivers-page line and not a wrong pixel.
 ; =============================================================================
 
-VX_ABI_VER  equ 2               ; bump on ANY change to the contract below
-                                ; (2: the S2 block pointers and selectors)
+VX_ABI_VER  equ 3               ; bump on ANY change to the contract below
+                                ; (2: the S2 block pointers and selectors;
+                                ;  3: the VE class at attach, PICK and NEXT)
 
 ; --- the verbs, past DRVV_* -------------------------------------------------
 ; DRVV_ATTACH (0) probes and chooses a mode and answers SI = the VXS_* table
@@ -23,6 +24,37 @@ VXV_INIT    equ 0x40            ; in SI = the kernel's vx_blk (ES = KERNEL_SEG):
                                 ; bank the kernel's segment and its pointers,
                                 ; fill vid_tab row 4 from the chosen mode.
                                 ; Well clear of the DRVV_* range
+VXV_PICK    equ 0x41            ; in CL = a mode CLASS (below), after INIT:
+                                ; choose again, re-fill vid_tab row 4 and the
+                                ; kernel's vx_bpp. Never refuses: a class the
+                                ; card lacks is Auto (119.2.3). The caller
+                                ; switches the display afterwards
+VXV_NEXT    equ 0x42            ; in CL = a class: out CL = the next offered
+                                ; class after it (Auto -> the first record,
+                                ; the last -> Auto), with DL/DH/CH = its X/8,
+                                ; Y/8 and bpp for a label (0 for Auto); CF = 1
+                                ; = the class given matched no record (the
+                                ; first is answered). The Display page's walk
+
+; --- a mode CLASS: the user's name for a mode, a card's number being the
+; card's (SPEC.md 119.2.3). ONE BYTE, because SYSTEM.CFG's buffer is boot
+; blob bytes and the blob had one: 0 is Auto; else bit 7 set, bits 0-1 the
+; width, bits 2-3 the height, bit 4 the depth, from the four of each this
+; image offers (119.2.2). The 'VM' record's fourth byte carries it, and
+; DRVV_ATTACH takes it in CL
+VXC_AUTO    equ 0
+VXC_SET     equ 0x80
+VXC_XMASK   equ 0x03            ; 0 = 640, 1 = 720, 2 = 800, 3 = 1024
+VXC_YSHIFT  equ 2               ; 0 = 400, 1 = 480, 2 = 600, 3 = 768
+VXC_YMASK   equ 0x0C
+VXC_D16     equ 0x10            ; set = 16 (or 15) bits a pixel, clear = 8
+
+; ...and the four of each, as X/8 and Y/8, emitted by whoever decodes a class
+; (the driver, and CTRL.DRV's Display page for its label) - one source
+%macro VXC_TABLES 0
+vxc_x8tab   db 80, 90, 100, 128 ; 640, 720, 800, 1024
+vxc_y8tab   db 50, 60, 75, 96   ; 400, 480, 600, 768
+%endmacro
 
 ; --- the attach answer: SI -> this, in the driver's segment -----------------
 VXS_ENT     equ 0               ; dw: the near proc vx_go far-calls per primitive
@@ -40,7 +72,8 @@ VXB_VER     equ 0               ; dw VX_ABI_VER - the driver's second check
 VXB_TABROW  equ 2               ; -> vid_tab row VID_VESA, 18 bytes: seg,
                                 ;    stride, bmask, bshift, rowadd, wrapbit,
                                 ;    wrapfix, cw, ch (SPEC.md 39.2)
-VXB_EP      equ 4               ; -> vx_ep (dd far entry), then vx_bpp (dw)
+VXB_EP      equ 4               ; -> vx_ep (dd far entry), then vx_bpp (dw),
+                                ;    then vx_class (db): the live class byte
 VXB_AVAIL   equ 6               ; -> vid_avail (db), bit VXA_BIT is ours
 VXB_COLOR   equ 8               ; -> gfx_color (db)
 VXB_XORM    equ 10              ; -> vga_xorm (db): 0 = replace, else XOR mask
@@ -69,7 +102,9 @@ VXB_SCROLL  equ 46              ; -> vgas_col, vgas_nb, vgas_sdy, vgas_ydst,
                                 ;    vgas_step, vgas_rows (6 dw)
 VXB_SPANS   equ 48              ; -> gfx_sp_seg, gfx_sp_si, gfx_sp_n (3 dw)
 VXB_FONTFG  equ 50              ; -> font_rn_fg (db fg), font_rn_bg (db)
-VXB_SIZE    equ 52
+VXB_CFGVE   equ 52              ; -> drv_cfg + CFG_VE: the class byte the
+                                ;    settings file carries, for PICK's callers
+VXB_SIZE    equ 54
 
 ; font_char's glyph range, which the run body paints a blank cell for: the
 ; kernel's FONT_FIRST/FONT_LAST, asserted equal in vidext.inc

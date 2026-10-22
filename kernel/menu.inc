@@ -2675,6 +2675,12 @@ menu_s_shutdown db 'Shut Down...', 0
 menu_s_hiber    db 'Hibernate...', 0        ; SPEC.md 87.2: ui_loc_gate points
 menu_s_hibernh  db MENU_DIS, 'Hibernate (No HD)', 0  ; item 4 at one of the
 menu_s_hiberxm  db MENU_DIS, 'Hibernate (XMS)', 0    ; three, and the two
+%ifdef VID_EXT
+menu_s_hibervx  db MENU_DIS, 'Hibernate (VESA)', 0   ; ...and a fourth: the
+                                ; VESA display cannot be carried in an image
+                                ; (SPEC.md 119.4). Resident, as a menu string
+                                ; must be; HIBER.DRV's hb_ok chooses it
+%endif
                                 ; greyed ones say WHY NOT (SPEC.md 47 rule 3)
 menu_s_msep     db MENU_DIS, '-----------------', 0
                                 ; the rule above Hibernate: seventeen dashes,
