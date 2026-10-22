@@ -285,3 +285,20 @@ drives that mode interlaced (86Box's status bar reads 87i Hz), which the
 bench never showed because nobody was looking. The Display page writes
 `SYSTEM.CFG` back onto A:, a build product the next `make` puts back, so
 the machine's own state is the `nvr/` 86Box keeps, and that is ignored.
+
+**What the first look found.** Two Disk windows open and the desktop under
+them turned into a band of vertical stripes, sixty-odd rows, edge to edge
+(the owner's screenshots, on the 486). Every row of the suite had passed.
+The stripes had an 8-pixel period, which is a pattern tile's and not the
+dither's, and the band was 64 rows at 1,024 pixels: one 65,536-pixel loop.
+A ring of entry rects in the driver, read back out of QEMU with
+`pmemsave`, named it in one boot: `vxp_pat` entered with x 104..407 and
+three rows, and a width of **65,433** - the tile copy's `rep movsw` had
+left CX at 0 before the width was cut from it, and the width came out as
+1 - 104. The Disk window's chevron band is the one pattern fill an idle
+desktop draws, and it draws it only under a list that overflows, which
+nothing in `tests/vesa.py` had opened. It opens B:\APPS now and reads the
+left margin as a checkerboard; its first cut asked a 2x2 block for black
+AND white and the stripes answered yes, so the A/B leg (the fix taken out)
+is what made the row honest. Same band on QEMU's Bochs VBE once the right
+folder was opened, so the card was never the suspect it looked like.

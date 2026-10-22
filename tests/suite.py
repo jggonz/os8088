@@ -4369,7 +4369,12 @@ SOAK = [
         "wants bit 8), asserts vid_kind 4, vid_ext 1, 1024x768, vid_planes 16 "
         "and a clean driver row, then a 1024x768 screendump: the menu bar and "
         "the dock painted, the desktop's 50% dither present - every pixel "
-        "through the driver's fill, gray, text, icon and cursor bodies. QEMU "
+        "through the driver's fill, gray, text, icon and cursor bodies; then "
+        "the File menu down and up, A: opened, and B:\\APPS opened - twenty "
+        "files, so the list draws its chevron band through the PATTERN body, "
+        "and the desktop's left margin must still be the checkerboard after "
+        "it (the body spent CX on its tile copy and drew 65,433 pixels a row; "
+        "found on the 86Box 486 by eye). QEMU "
         "by name on CLAUDE.md's closed list: MartyPC and the 86Box XTs have "
         "no VBE, and are the negative control for free. SOAK and not full: a "
         "feature no 8088 can reach, on a disk of its own",

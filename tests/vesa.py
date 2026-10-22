@@ -33,6 +33,15 @@ save, its items through the one-pass run) - and closed again with every
 pixel of the dither back (the restore); then the A: drive icon (a blit1 band,
 at the desktop's right edge) double-clicked, and a Disk window up - a white
 title bar where the dither was.
+
+Then B: double-clicked, and its APPS folder: twenty files, more than a Disk
+window shows, so the window draws its row of CHEVRONS under the list - one
+gfx_fill_pat, the only pattern fill on an idle desktop - and the desktop's
+left margin, every 2x2 block of it between the bar and the dock, must still
+be the dither afterwards. The driver's pattern body spent CX on the tile
+copy before it cut the width from it, and the three chevron rows went
+65,433 pixels each across the desktop (found on the 86Box 486 by eye, then
+here).
 """
 import os
 import signal
@@ -134,6 +143,16 @@ def dither_at(pix, w, x0, y0):
     """Is the 2x2 block at (x0, y0) the desktop's 50% dither?"""
     blk = {px(pix, w, x0 + dx, y0 + dy) for dx in (0, 1) for dy in (0, 1)}
     return (0, 0, 0) in blk and (255, 255, 255) in blk
+
+
+def checker_at(pix, w, x0, y0):
+    """...and is it the CHECKERBOARD: neighbours differ along x and along y,
+    the diagonal agrees. dither_at is satisfied by a pattern's vertical
+    stripes too (a tile row holds black and white), which is how the gate
+    missed the runaway the first time."""
+    a, b = px(pix, w, x0, y0), px(pix, w, x0 + 1, y0)
+    c, d = px(pix, w, x0, y0 + 1), px(pix, w, x0 + 1, y0 + 1)
+    return a != b and a != c and a == d and {a, b} == {(0, 0, 0), (255, 255, 255)}
 
 
 def white_share(pix, w, x0, y0, x1, y1):
@@ -280,6 +299,29 @@ def main():
             if not found:
                 fails.append("no Disk window after a double-click on A: - no "
                              "white run of 200 px on any row")
+            # the B: icon under it: the apps disk's root overflows a Disk
+            # window, so this one draws the chevron band (a pattern fill);
+            # the desktop's left margin must be the dither still, every
+            # block of it - the runaway covered 64 whole rows
+            m.dblclick(975, 100)
+            os88qemu.pace(q, 5.0)
+            sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            if out_png:
+                shot.png(out_png.replace(".png", "-disk2.png"), sw, sh, pix)
+            # B:'s root is four folders; APPS (the first row of the second
+            # window, which cascades to a fixed place) holds twenty files,
+            # more than the list shows
+            m.dblclick(165, 143)
+            os88qemu.pace(q, 5.0)
+            sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            if out_png:
+                shot.png(out_png.replace(".png", "-apps.png"), sw, sh, pix)
+            bad = [y for y in range(24, sh - 40, 2)
+                   if not checker_at(pix, sw, 2, y)]
+            if bad:
+                fails.append("B:\\APPS open: the desktop's left margin is not "
+                             "the dither on %d row pairs (first at y=%d) - a "
+                             "fill ran past its rect" % (len(bad), bad[0]))
     finally:
         pass
     if fails:

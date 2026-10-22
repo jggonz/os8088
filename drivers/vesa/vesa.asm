@@ -1206,8 +1206,9 @@ vxp_gray:
 vxp_pat:
     call vx_clip
     jc .out
-    push ds
-    mov ds, [vx_kseg]
+    push cx                     ; x2: the copy's count spends CX, and a width
+    push ds                     ; cut from the leftover 0 was -103 pixels, which
+    mov ds, [vx_kseg]           ; the row loop drew as 65,433 across the desktop
     mov si, [cs:vx_p_pat]
     mov si, [si]                ; SI = the kernel's eight bytes
     mov di, vx_patbuf
@@ -1219,6 +1220,7 @@ vxp_pat:
     rep movsw                   ; copied, so the row loop reads them through CS
     pop es
     pop ds
+    pop cx
     sub dx, bx
     inc dx
     mov [vx_rows], dx

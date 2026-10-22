@@ -150,7 +150,15 @@ code does not.
   at 1024x768x16, and `vm/486-vesa-desk` (`make 486-vesa-desk`), the same
   machine booting `vesa.img` and the apps disk for a human to look at the
   desktop; `tests/vesabench.py`, its QEMU run (soak: behaviour, not
-  time). **Measured** (`docs/reports/VESA-BENCH-486-2026-10-22.md`): the
+  time). **Found on that desktop machine, after S8:** the pattern body
+  (`vxp_pat`) copied the tile with `rep movsw` between the clip and the
+  width, so CX - the rect's right edge - was 0 when the width was cut
+  from it, and a Disk window's three chevron rows (the only pattern fill on
+  an idle desktop) ran 65,433 pixels each across the screen as an 8-pixel
+  stripe band. One `push cx`/`pop cx`; `tests/vesa.py` now opens B:\\APPS
+  and reads the desktop's left margin as a CHECKERBOARD (its first cut
+  asked only for black and white in a block, which the stripes satisfy),
+  red on the driver as it was and green on the fix. **Measured** (`docs/reports/VESA-BENCH-486-2026-10-22.md`): the
   BIOS call is 7.0 us and a 624x200 fill 23.3 ms across seven windows -
   **0.2%** - so **the direct window register is not taken**; the fill is
   one `rep stosw` to the edge at 10.7 MB/s, the bus. **What it changed:**
