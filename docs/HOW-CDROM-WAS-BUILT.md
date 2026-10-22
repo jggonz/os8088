@@ -195,3 +195,74 @@ commit; the three CD rows passed again and 86Box played the disc through.
 
 The soak union's one failure, `install`, fails the same way on `origin/main`
 built from scratch - it is not this branch's. `test-full` passed.
+
+## Wave 4 — CDRack
+
+The ask was a redesign: the owner sent three mockups (kept in
+`docs/cdrack/design/`) of an 80s rack CD player called CDRack - a charcoal
+deck with a cyan seven-segment LCD, picture buttons with their captions
+inside, a track grid, toggles and a track list; the same player in black
+and white; and a compact mini player for small monochrome screens. In-package
+graphics and a custom font, a colour theme and a black and white one picked
+from a menu, colour by default on EGA and VGA.
+
+**The pictures are made, not drawn.** `tools/os88cdart.py` defines every
+picture as code or ASCII art and writes `build/cdart.inc`: five
+seven-segment digit sets, a 5x7 small-caps face for the panel lettering, the
+logo, the transport icons at 13 rows and at the CGA's 7, the disc mark - 92
+pictures, 5,261 bytes. No image is read; the same run writes the same bytes;
+`make` runs its `--selfcheck` first.
+
+**One band, one blit.** Every field - an LCD number, a caption, a whole
+button's face - is composed into a band the size of the FIELD and put down
+with one `OSAPI_GFX_BLIT1` under a pen. The band's clear bits are its paper,
+so a shorter value erases a longer one in the same call. A button is two
+calls whatever state it is in. On a one-bit display the pen is not read and
+lit means white, so black ink is the band turned over first.
+
+**A theme is a table.** Every primitive takes a role - "the LCD's segments",
+"a latched button's face" - and the theme maps the role to a colour, or to a
+dither in black and white.
+
+**What changes is an element with a key.** Thirty-two fields on the full
+player each compute a sixteen-bit key for what they would show and draw only
+when it moved. The paint forgets every key and runs the same code, so the
+full paint and the incremental one are one path - and the check proved it:
+after picking a track, two toggles and a programmed track, an About card up
+and down repainted everything, and the window was **identical to the pixel**
+(`diff bbox: None`). Expand after Compact gave the same answer.
+
+What the first look found:
+
+- **Every label at an odd x lost its first letter** - `DRack`, `RACK`,
+  `IGITAL AUDIO`. SPEC.md 5.4.2.8 says why: off the byte grid, a band starts
+  at the byte column HOLDING x and its first `x & 7` pixels are skipped. The
+  band carries a slack byte a row, and `cr_bout` now shifts it right by `x & 7`
+  first.
+- **The compact LCD's digits were dots and dashes.** At 16 rows with a
+  3-pixel stroke, a mitred vertical segment has no straight part left. The
+  small sets became "block" segments - full-height verticals with the
+  horizontals between, a cheap calculator's LCD - and the selfcheck gained
+  the check that would have caught it: a `1` must be inked on every row but
+  its three strokes'.
+- **The menu draws no check mark**, and SPEC.md already says so: "an app menu
+  has no check mark". Each Options item names its state instead -
+  `Repeat: On`, `Time: Remaining`, `Theme: Black and White`.
+- **The mockups drew a Help menu.** docs/INDEX.md exists because SHEET and
+  CHART did that instead of using `OSAPI_ABOUT_SET`; About is the application
+  menu's own.
+- **QEMU's drive cannot play audio**, so to look at a disc the face shows a
+  disc whose drive refuses audio as a disc - its tracks in the grid and the
+  list - with every transport button grey.
+
+![Colour](cdrack/vga-color.png) ![Black and white](cdrack/vga-bw.png)
+
+![The compact player, colour](cdrack/vga-compact.png)
+![...and black and white](cdrack/vga-bwcompact.png)
+
+![EGA: no track list](cdrack/ega-mid.png)
+![CGA: the compact player on one bit](cdrack/cga-compact.png)
+
+Hercules shares the MID layout with EGA and the one-bit path with the CGA;
+QEMU cannot show a Hercules mode at all (docs/HERCULES-TESTING.md), so it was
+not looked at.

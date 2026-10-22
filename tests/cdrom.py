@@ -284,32 +284,35 @@ def bring(q, ui, w, i, rows=6):
 
 
 def player_bss(q, ui, S):
-    """The CD Player's loader-zeroed bss, by its own map: (window, linear
-    address of os88_image_end), or None while it has no window."""
+    """CDRack's loader-zeroed bss, by its own map: (window, linear address of
+    os88_image_end, offset of cr_cdabuf in it), or None while it has no
+    window."""
     import re
     d = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
-    mp, tmpbin = os.path.join(d, "cdplayer.map"), os.path.join(d, "cp.bin")
+    mp, tmpbin = os.path.join(d, "cdrack.map"), os.path.join(d, "cr.bin")
     subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                    "-I", "drivers/cdrom/", "--before",
-                    "[map symbols %s]" % mp, "-o", tmpbin,
-                    "apps/cdplayer/cdplayer.asm"], check=True)
+                    "-I", "apps/cdrack/", "-I", "drivers/cdrom/",
+                    "-I", os.path.dirname(os88build.at("build/cdart.inc")) + "/",
+                    "--before", "[map symbols %s]" % mp, "-o", tmpbin,
+                    "apps/cdrack/cdrack.asm"], check=True)
     same = open(tmpbin, "rb").read() == open(
-        os88build.at("build/cdplayer.bin"), "rb").read()
+        os88build.at("build/cdrack.bin"), "rb").read()
     os.unlink(tmpbin)
     lines = open(mp).read().splitlines()
     shutil.rmtree(d, ignore_errors=True)
     if not same:
-        raise RuntimeError("build/cdplayer.bin is not this source's")
-    end = None
+        raise RuntimeError("build/cdrack.bin is not this source's")
+    sym = {}
     for line in lines:
-        m = re.match(r"\s*([0-9A-F]+)\s+([0-9A-F]+)\s+os88_image_end$", line)
+        m = re.match(r"\s*([0-9A-F]+)\s+([0-9A-F]+)\s+(\w+)$", line)
         if m:
-            end = int(m.group(2), 16)
+            sym[m.group(3)] = int(m.group(2), 16)
+    end = sym["os88_image_end"]
     for o in ui.windows():
-        if o.title == "CD Player" and o.visible:
+        if o.title == "CDRack" and o.visible:
             seg = struct.unpack("<H", q.read(S("wm_wins") + o.i * geom.WIN_SIZE
                                        + geom.W_SEG, 2))[0]
-            return o, (seg << 4) + end
+            return o, (seg << 4) + end, sym["cr_cdabuf"] - end
     return None
 
 
@@ -330,7 +333,7 @@ def sim_leg(bad):
     """--sim: the gate's CDROM.DRV (-DCDSIM_AUDIO) gives QEMU's one-track
     disc three audio tracks after it, 40, 30 and 20 seconds (cddisc.inc's
     cd_simtoc). The root then lists TRACK02..04.CDA; double-clicking
-    TRACK02.CDA opens the CD Player through its .CDA association, which
+    TRACK02.CDA opens CDRack through its .CDA association, which
     reads the file - 44 bytes cd_mkcda composed - picks track 2 and asks the
     drive to play it. QEMU's drive refuses every audio command, so the player
     ends saying so (CPS_NOAUD), which is the honest end of this leg: the play
@@ -375,18 +378,18 @@ def sim_leg(bad):
         def up():
             r = player_bss(q, ui, S)
             if r:
-                box["b"] = r[1]
-                return q.read(r[1] + 222, 4) == b"RIFF"
+                box["b"], box["cda"] = r[1], r[2]
+                return q.read(r[1] + r[2], 4) == b"RIFF"
             return False
-        q.need(up, "the CD Player to read TRACK02.CDA", 40)
+        q.need(up, "CDRack to read TRACK02.CDA", 40)
         os88qemu.pace(q, 2)
         b = box["b"]
         st = q.read(b, 6)
         lens = [40 * 75, 30 * 75, 20 * 75]
         starts = [data_end, data_end + lens[0], data_end + lens[0] + lens[1]]
-        cda = q.read(b + 222, 44)
+        cda = q.read(b + box["cda"], 44)
         expect = cda_bytes(2, starts[2] + lens[2], starts, lens)
-        print("   S2. TRACK02.CDA opened the CD Player: state %d, track %d of "
+        print("   S2. TRACK02.CDA opened CDRack: state %d, track %d of "
               "%d..%d; its 44 bytes %s" % (st[0], st[5], st[2], st[3],
                                           "are cd_mkcda's" if cda == expect
                                           else "DIFFER"))

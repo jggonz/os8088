@@ -2,8 +2,8 @@
 
 `CDROM.DRV` makes an IDE CD-ROM drive part of the desktop. A data disc in
 it opens like any other drive - its folders, its documents and the programs
-on it - and an audio CD plays through the drive itself, under the
-**CD Player**.
+on it - and an audio CD plays through the drive itself, under
+[[CDRACK.O88]].
 
 ## What is inside it
 
@@ -21,7 +21,7 @@ long name is shortened the same way every time - the first six letters, a
 so `Long File Name.text` is listed as `LONGFI~K.TEX`.
 
 An audio CD's tracks are listed in the drive as `TRACK01.CDA`,
-`TRACK02.CDA` and so on. Opening one starts the **CD Player** on that track.
+`TRACK02.CDA` and so on. Opening one starts [[CDRACK.O88]] on that track.
 The sound comes out of the drive: its front headphone socket, and the
 sound card's CD input when the drive's audio cable is connected to one. The
 computer does no work while a track plays.
@@ -50,6 +50,6 @@ slave; the connectors many sound cards carry are tried too.
 - Only the first CD-ROM drive found is used.
 - After changing the disc, open the drive again from the desktop: a window
   left open on the old disc stops at its next step.
-- Taking the driver out does not stop a CD that is playing; the CD Player's
+- Taking the driver out does not stop a CD that is playing; CDRack's
   stop button does.
 - The small system for 128KB machines loads no drivers and leaves it off.

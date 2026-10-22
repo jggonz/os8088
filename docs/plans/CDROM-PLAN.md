@@ -31,6 +31,23 @@ drive's own audio output under a CD Player. SPEC.md §119 is the contract.
   `\AUTOSTRT`, to look at a track playing.
 - [x] **Acceptance:** the affected soak union once and `test-full` once,
   after the last batch; budgets; the guide paid; INDEX regenerated.
+- [x] **CDRack (wave 4):** as a user, the player looks like the owner's 80s
+  rack CD player mockups (`docs/cdrack/design/`): a seven-segment LCD with a
+  track grid, picture buttons with captions, a volume slider, repeat /
+  shuffle / program / remaining-time toggles and the track list. Pictures and
+  both fonts are made on the host (`tools/os88cdart.py`), not drawn. Looked
+  at on QEMU VGA (full, both themes, the compact player both themes), EGA
+  (MID, colour) and CGA (compact, one bit); identity after a full repaint
+  checked pixel for pixel.
+- [x] **Themes (wave 4):** a colour theme and a black-and-white one, picked
+  in Options; colour by default on EGA and VGA, black and white elsewhere and
+  always on a one-bit display.
+- [x] **Compact player (wave 4):** a mini player for the CGA's 200 lines, and
+  on request on any screen; Expand and Options go back.
+- [ ] **Play, seen (wave 4):** the 386 under 86Box playing through CDRack's
+  face - the latched Play, the counting LCD, the bar - before the PR leaves
+  draft. Its BIOS stopped in setup after the machine's config was reset, and
+  this host cannot send it a key.
 
 ## Boundaries and verification
 

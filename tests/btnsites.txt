@@ -64,8 +64,9 @@
 1 apps/install/install.asm         # Back/Next/Cancel through the record (SPEC.md
                                    # 117.2): ONE loop in in_btns, which the painter
                                    # and a selection's hint redraw both reach
-1 apps/cdplayer/cdplayer.asm       # the six transport buttons through one record (SPEC.md
-                                    # 119.6): cp_regrey draws them, os88ui_btnup fires them
+1 apps/cdrack/cdrack.asm           # thirteen buttons through one record with its OWN
+                                   # painter (SPEC.md 119.6.4): cr_regrey draws them,
+                                   # os88ui_btnup fires them
 1 apps/timer/timer.asm             # Start/Stop/Reset through the record (SPEC.md
                                    # 111.2): ONE loop in tm_flags, which the painter
                                    # (all three) and a Start or Stop that traded pens

@@ -181,21 +181,21 @@
   "strings": null,
   "why": "Paint's refusal of a GIF over 64KB is named: the toast GIF larger than 64KB"
  },
- "CDPLAYER_O88": {
+ "CDRACK_O88": {
   "sources": [
-   "apps/cdplayer"
+   "apps/cdrack"
   ],
-  "stamped": "4f6185e6",
-  "strings": "d401f0f96f378170",
-  "why": "review fixes: the drive-error state is 'Drive error', named on the page; the keys and buttons are as described"
+  "stamped": "ca9acbde",
+  "strings": "4d867d0ae6645bc7",
+  "why": "CDRack replaces the CD Player: rewritten for the three layouts, the two themes, the toggles, the volume and the keys"
  },
  "CDROM_DRV": {
   "sources": [
    "drivers/cdrom"
   ],
-  "stamped": "02ef2ce5",
+  "stamped": "ca9acbde",
   "strings": "c3a141853e1e7543",
-  "why": "the CD-ROM drive's desktop zone is drawn as a disc (FSCAP_ICON, SPEC.md 26.4.2): one phrase added"
+  "why": "the player it names is CDRack now"
  },
  "CHARTER_F88": {
   "sources": [],

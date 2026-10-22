@@ -2337,12 +2337,12 @@ SOAK = [
         "SPEC.md 119.3.5/119.6 on QEMU, whose drive holds no audio: the "
         "gate's CDROM.DRV (-DCDSIM_AUDIO) gives the one-track disc three "
         "audio tracks; the root lists TRACK02..04.CDA, and double-clicking "
-        "TRACK02.CDA opens the CD Player through its .CDA association, which "
+        "TRACK02.CDA opens CDRack through its .CDA association, which "
         "reads the file's 44 bytes (byte-compared with SPEC.md 119.3.5's "
         "layout), stands on track 2 and - QEMU refusing every audio command - "
         "says the drive plays no audio",
         needs=("qemu", "nasm"), serial=True, timeout=300,
-        wants=("build/cdromsim.img", "build/cdfix.iso", "build/cdplayer.bin")),
+        wants=("build/cdromsim.img", "build/cdfix.iso", "build/cdrack.bin")),
     Row("cdromempty", "soak", py("tests/cdrom.py", "--empty"), 20.0,
         "SPEC.md 119.3: the same machine with the CD-ROM drive EMPTY - the "
         "row still loads and the zone is on the desktop, a double-click "

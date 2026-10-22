@@ -354,7 +354,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | Bounce | `apps/bounce/bounce.asm` | §112 | yes |
 | C64 | `apps/c64/c64.asm` | `docs/C64-SPEC.md` | yes |
 | CALCULATOR | `apps/calc/calc.asm` | §65 | yes |
-| CD Player | `apps/cdplayer/cdplayer.asm` | §119.6 | yes |
+| CDRack | `apps/cdrack/cdrack.asm` | §119 | yes |
 | CHART | `apps/chart/chart.asm` | §82 | yes |
 | CWORD | `apps/cword/cword.asm` | §73.12 | yes |
 | CYCLONE 88 | `apps/cyclone/cyclone.asm` | §67 | yes |
@@ -541,7 +541,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 116 | LEMMINGS — Lemmings (DMA Design, 1991), written in C (`apps/lemmings/`) |
 | 117 | INSTALL — the setup wizard (`apps/install/`) |
 | 118 | SYSCHECK — System Check, the installed system's health (`apps/syscheck/`) |
-| 119 | CDROM.DRV — CD-ROM data and audio (`drivers/cdrom/`, `apps/cdplayer/`) |
+| 119 | CDROM.DRV — CD-ROM data and audio (`drivers/cdrom/`, `apps/cdrack/`) |
 
 ## docs/
 
