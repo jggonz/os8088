@@ -829,7 +829,13 @@ and buttons with their captions inside, in MIDIRack's bevelled look or the
 flat one `apps/os88flat.inc` gives (§20.5.3), with the mono faces left as
 they were — is `.claude/skills/vga-face` (`/vga-face <package>`, **manual
 invocation only**), whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4,
-§105.9.5) and WireFleet's (§114.10) learned.
+§105.9.5) and WireFleet's (§114.10) learned. Building an app whose UI is a
+styled piece of **hardware from the user's mockups** — host-generated art and
+fonts, a colour and a black-and-white theme as role tables, every field one
+band and one blit, cached element keys, and full / mid / compact layouts so
+every adapter gets a face — is `.claude/skills/retro-face`
+(`/retro-face <app> [mockups]`), whose `LESSONS.md` is what CDRack (SPEC.md
+§119.6) learned.
 
 ## Building an app or game in waves
 
