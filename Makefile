@@ -217,6 +217,7 @@ VM386SND := $(CURDIR)/vm/386-sound
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
 VM486V := $(CURDIR)/vm/486-vesa
+VM486VD := $(CURDIR)/vm/486-vesa-desk
 # ...and that 486 with the Video Player's measurement disk on IDE (make vid486)
 VM486VID := $(CURDIR)/vm/486-video
 VMPENT := $(CURDIR)/vm/pentium
@@ -2172,7 +2173,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
-        286-sound 286-video 386-sound 486 486-video pentium \
+        286-sound 286-video 386-sound 486 486-video 486-vesa 486-vesa-desk pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
@@ -4802,7 +4803,7 @@ $(BUILD)/vesabnc8.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYS
 $(BUILD)/vxbench.img: $(BUILD)/vesabnch.o88 tools/os88disk.py | $(BUILD)
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/vesabnch.o88
 
-.PHONY: vesabench 486-vesa
+.PHONY: vesabench 486-vesa 486-vesa-desk
 vesabench: $(BUILD)/vesabench.img $(BUILD)/vesabnc8.img $(BUILD)/vxbench.img
 	@echo "vesabench: build/vesabench.img (1024x768x16) and build/vesabnc8.img (800x600x8),"
 	@echo "           each opening VESABNCH.O88 off build/vxbench.img at boot (SPEC.md 119.8)."
@@ -4819,6 +4820,17 @@ vesabench: $(BUILD)/vesabench.img $(BUILD)/vesabnc8.img $(BUILD)/vxbench.img
 	cp $(BUILD)/vxbench.img $(BUILD)/vxbench-86box.img
 	@$(UNPROTECT) $(VM486V)/86box.cfg
 	$(BOX) -P $(VM486V) -N
+
+# ...and the same 486 with the DESKTOP on it, to LOOK at (SPEC.md 119.9): A: is
+# build/vesa.img - the shipped system disk with VESA.DRV already wanted, no
+# autostart - and B: the shipped apps disk, so the desktop comes up at
+# 1024x768x16 and Control Panel -> Display's Vesa row cycles the card's
+# modes. The Display page WRITES SYSTEM.CFG onto A:, which is a build product
+# the next `make` puts back. Nothing here is a gate: 86Box cannot be driven,
+# so this is where a human clicks and tests/vesa*.py is where the rows run
+486-vesa-desk: $(BUILD)/vesa.img $(APPSIMG)
+	@$(UNPROTECT) $(VM486VD)/86box.cfg
+	$(BOX) -P $(VM486VD) -N
 
 # ...and the same disk with a ver-3 'VM' record whose class byte names
 # 800x600x8 (SPEC.md 119.2.3, kernel/vxabi.inc's VXC_*: 0x80 | width 2 |

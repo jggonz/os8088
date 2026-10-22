@@ -147,7 +147,9 @@ code does not.
   saves itself on its first paint, opened at boot by an autostart link, so
   86Box needs nobody to click; `vm/486-vesa`, the 486DX2/66 with a Cirrus
   CL-GD5428 (VBE 1.2) in place of the OTI-067, which the driver brings up
-  at 1024x768x16; `tests/vesabench.py`, its QEMU run (soak: behaviour, not
+  at 1024x768x16, and `vm/486-vesa-desk` (`make 486-vesa-desk`), the same
+  machine booting `vesa.img` and the apps disk for a human to look at the
+  desktop; `tests/vesabench.py`, its QEMU run (soak: behaviour, not
   time). **Measured** (`docs/reports/VESA-BENCH-486-2026-10-22.md`): the
   BIOS call is 7.0 us and a 624x200 fill 23.3 ms across seven windows -
   **0.2%** - so **the direct window register is not taken**; the fill is

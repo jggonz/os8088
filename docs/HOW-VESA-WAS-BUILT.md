@@ -272,3 +272,16 @@ of it and is byte for byte the kernel it was.
 Bochs VBE (2.0+, 1024x768x16) and 86Box's Cirrus 5428 (1.2, the same mode),
 and they agree about everything this branch asserts; a real card's bus is
 what they cannot show. The plan's S8 names the rest.
+
+## 2026-10-22 — a machine to look at
+
+**`make 486-vesa-desk`.** The bench machine boots a disk that opens VESABENCH
+and nothing else, which is right for a measurement and useless for a look.
+This is `vm/486-vesa` again with `vesa.img` in A: - the shipped system disk
+with VESA.DRV wanted and no autostart - and the shipped apps disk in B:, so
+the 486 comes up on the 1024x768x16 desktop with both drives on the desk,
+and Control Panel, PiXEL and the rest are a double-click away. The Cirrus
+drives that mode interlaced (86Box's status bar reads 87i Hz), which the
+bench never showed because nobody was looking. The Display page writes
+`SYSTEM.CFG` back onto A:, a build product the next `make` puts back, so
+the machine's own state is the `nvr/` 86Box keeps, and that is ignored.

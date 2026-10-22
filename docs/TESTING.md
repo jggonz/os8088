@@ -614,7 +614,12 @@ no automation socket, so that is the whole recipe: launch, wait a minute,
 read the file, `kill -9`. What no emulator here can show: a real card's
 `4F05h` latency on a real bus, a BIOS whose window granularity is not a
 power of two, and a card whose mode list lives inside the info buffer — the
-last two are refusals the driver makes by design.
+last two are refusals the driver makes by design. **`make 486-vesa-desk` is
+the same 486 with the desktop on it**: A: is `build/vesa.img` (the shipped
+system disk with VESA.DRV already wanted and no autostart) and B: the shipped
+apps disk, so it is where a human looks at the 1024x768x16 desktop, cycles the
+Display page's Vesa row and opens PiXEL at depth. The Display page writes
+`SYSTEM.CFG` onto A:, a build product the next `make` puts back.
 
 **Every knob is tracked by a stamp file**, so a knob-built kernel is a
 different kernel and changing the knob rebuilds it, its carved modules
