@@ -14775,6 +14775,11 @@ SOAK = [
         "the complete popup/package session; MartyPC has only a raw mixer bank",
         needs=("qemu", "nasm"), timeout=600,
         wants=("build/mixer360.img", "build/mixplay.img")),
+    Row("mixervesa", "soak", py("tests/mixer.py", "--adapter", "vesa"), 65.0,
+        "SPEC.md 34.15/120.4: SB16 mixer controls on the 1024x768x16 packed desktop, "
+        "speaker colors/clock position, 30KB save-under, exact restore and cleanup",
+        needs=("qemu", "nasm"), timeout=600,
+        wants=("build/mixervesa.img", "build/mixplay.img")),
     Row("mixerhost", "soak", py("tests/mixermodel.py"), 2.0,
         "SPEC.md 34.15: the shipped mixer assembly against independent Creative "
         "register maps, all percentages and asymmetric stereo, refusals before "

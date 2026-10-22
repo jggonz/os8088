@@ -5377,6 +5377,15 @@ mrwttest: $(BUILD)/mrwt720.img
 # SOUND wanted at boot; Mixer launches separately from the apps fixture.
 .PHONY: mixertest
 mixertest: $(BUILD)/mixer360.img $(BUILD)/mixplay.img
+$(BUILD)/mixervcfg/SYSTEM.CFG: kernel/driver.inc Makefile | $(BUILD)
+	@mkdir -p $(dir $@)
+	python3 -c "import struct; open('$@','wb').write(b'O88CFG\0\0'+struct.pack('<H',3)+b'DW'+bytes([1,2])+struct.pack('<H',(1 << 9) | 1)+b'\0\0')"
+$(BUILD)/mixervesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
+        $(COREAPPS360) $(SYSDOC) $(BUILD)/mixervcfg/SYSTEM.CFG tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixervcfg/SYSTEM.CFG --folder SYSTEM/APPDATA
 $(BUILD)/mixercfg/SYSTEM.CFG: | $(BUILD)
 	@mkdir -p $(dir $@)
 	python3 -c "import struct; open('$@','wb').write(b'O88CFG\0\0'+struct.pack('<H',3)+b'DW'+bytes([1,2])+struct.pack('<H',1)+b'\0\0')"

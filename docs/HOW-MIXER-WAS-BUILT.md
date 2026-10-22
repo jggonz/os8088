@@ -47,6 +47,18 @@ kern_big is 98,304 bytes, one 512-byte rung above the pre-integration
 follow-up. kern_emu stays 98,304 and kern_small 61,440. All three retain
 2,560 bytes under their existing budgets.
 
+VESA landed while the PR was being gated and is integrated too. The popup
+already used the display's actual depth; its new `mixervesa` row checks
+the 30KB claim at 1024x768x16, exact restoration, smooth controls, speaker
+pixels and cleanup. The combined CD-ROM/VESA rows also require
+`DQ_MAXREC` = 10 on kern_emu; the kernel and both SDKs now agree. VESA is
+kept by suspend, so older record buffers receive no extra record. The
+memory report counts `vidext.inc` with the other drawing modules.
+The final footprints are 98,816 bytes for big/emu and 61,440 for small,
+leaving 2,048, 2,048 and 2,560 bytes under their existing budgets.
+The final display checks and all 64 full-gate rows pass; all three release
+budget checks pass too. The VESA popup picture was inspected after the run.
+
 ## Foundation
 
 The request combines a global desktop control with optional installed

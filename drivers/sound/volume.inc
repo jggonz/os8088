@@ -91,7 +91,7 @@ volume_popup:
     mov ax, MVP_Y+71
     mov [volume_bottom], ax
     ; X and width are byte-aligned: 26 columns * actual rows * planes.
-    ; 2KB mono, 8KB color. No worst-case VGA charge on a mono XT.
+    ; 2KB mono, 8KB VGA/EGA, 15/30KB VESA at 8/16bpp.
     sub ax, MVP_Y-1
     mov bx, MVP_W/8
     mul bx

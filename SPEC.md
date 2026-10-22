@@ -69020,7 +69020,8 @@ Older sound drivers fall back to verb 10.
 Capability/geometry changes relayout the application menus at the new
 boundary; their existing prefix/index rule is unchanged. SOUND.DRV rounds to 11KB of image plus state on the heap;
 `DRVM_IMG_SND` is 11. The popup claims only its adapter-sized save-under while open: up to
-8KB on VGA/EGA and 2KB on the mono adapters.
+8KB on VGA/EGA and 2KB on the mono adapters. VESA uses the same depth-based
+formula: 15KB at 8bpp or 30KB at 16bpp (§120.4).
 Its hit range is tested before
 the Date/Time cell, without changing application menu indices. The icon is
 cached independently, invalidated when the bar is overwritten or capabilities
@@ -162651,9 +162652,12 @@ does not implement the verb simply gets no record, so `CX` may be smaller than
 the number of drivers that went — the bitmap of classes the first body also
 answered in `AX` is withdrawn, its one reader having stored it in a word
 nothing read back. `DQ_MAXREC` is published in `os88api.inc` so a
-caller can size that buffer without mirroring the kernel's own `DRV_MAX`,
-which is 6, 5 or 4 depending on the build — and the kernel asserts one against
-the other at assembly time, because a row added here without widening the SDK
+caller can size that buffer without mirroring the kernel's own `DRV_MAX`.
+It is 10: kern_emu has ten rows with both CD-ROM and VESA enabled, kern_big
+nine and kern_small four. VESA is kept by the suspend sweep (§120.4), so
+this conservative bound adds no record to an older caller's buffer.
+The kernel asserts `DRV_MAX <= DQ_MAXREC` at assembly time, because a row
+added here without widening the SDK
 would write past the end of somebody's buffer.
 
 #### 51.11.2.1 A refused probe left a plausible answer behind, and an AdLib machine advertised a Sound Blaster

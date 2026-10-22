@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "e71c91581e6a45be1aea7cc74a763e6d8eabab574098fc1560f2ed14b8f029bf",
+  "fingerprint": "92fb51b63cef1dd489b939d7e629b50af11d3a1e6b60d63343f579a82f0bce55",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "e3ac3da81bc0961e958b8dc8749cdca03864c704282de014ec7d5e1d8ba4721c",
+  "fingerprint": "abc191f4a1ee2831627eecd02e8ab84cb71cee0503a0790fa1965195e04d4b52",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -490,6 +490,27 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "merge main: CDROM.DRV's cells (DRVC_CD) beside VESA's (SPEC.md 120); no cell moved",
+   "to": 11
+  },
+  {
+   "fingerprint": "abc191f4a1ee2831627eecd02e8ab84cb71cee0503a0790fa1965195e04d4b52",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "DQ_MAXREC 9 -> 10 covers kern_emu with both CD-ROM and VESA rows; the suspend sweep keeps VESA, so no extra record reaches older buffers and no ABI version changes.",
+   "to": 10
+  },
+  {
+   "fingerprint": "3882c82994156982a7823453e59b7658e520df832a2a1119f56509797df6cc06",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "DQ_MAXREC 9 -> 10 covers kern_emu with both CD-ROM and VESA rows; the suspend sweep keeps VESA, so no extra record reaches older buffers and no ABI version changes.",
+   "to": 11
+  },
+  {
+   "fingerprint": "92fb51b63cef1dd489b939d7e629b50af11d3a1e6b60d63343f579a82f0bce55",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "DQ_MAXREC 9 -> 10 in the kernel and both SDKs covers kern_emu with CD-ROM and VESA. VESA is kept by suspend, so older record buffers remain safe and no ABI version changes.",
    "to": 11
   }
  ]

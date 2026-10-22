@@ -266,7 +266,7 @@ THEMES = (
     # which is a property of the adapter the rest of this group programs.
     ("drawing: adapters, primitives, glyphs, icons",
      ("vga12.inc", "softgfx.inc", "font.inc", "band.inc", "icons.inc",
-      "viddet.inc", "vidsel.inc", "splash.inc", "blank.inc")),
+      "viddet.inc", "vidsel.inc", "vidext.inc", "splash.inc", "blank.inc")),
     # bootprof.inc (SPEC.md 15.5) is here because what it measures is kmain's
     # own phase sequence, which lives in kernel.asm - and because it is not in
     # a shipped build at all (`make BOOTPROF=1`), so no other theme's figure

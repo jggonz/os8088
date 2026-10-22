@@ -12,6 +12,7 @@ The independent CPU/card model row validates the three real register maps.
 import argparse
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -42,7 +43,7 @@ def check(cond,what):
 class Session:
     def __init__(self,ui,adapter):
         self.ui,self.m,self.mo,self.adapter=ui,ui.m,ui.mo,adapter
-        self.qemu=adapter=='sb16'
+        self.qemu=adapter in ('sb16','vesa')
         self.seg=ui._word('drv_fseg')
         origin=os88sym.equates()['DRV_HMA_ORG'] if self.seg>=0xF000 else 0
         self.d=Pkg(self.m,self.seg+origin//16,os88drvsym.symbols('sound.bin'))
@@ -185,7 +186,7 @@ def session(ui,adapter):
     check(ui._byte('fpg_on')==0,'file activity ends while popup remains open')
     check(ui._byte('cur_shape')!=os88sym.equates()["CUR_BUSYSH"],'popup restores the arrow')
     claims=s.owned()
-    expected=8 if adapter in ('vga','sb16') else 2
+    expected=30 if adapter=='vesa' else (8 if adapter in ('vga','sb16') else 2)
     check(sum(p for _,p in claims)==expected*64,'save-under has the adapter-sized claim')
     s.key('home');s.wait(lambda:d.rb('volume_levelv')==0,'Home reaches silence')
     s.key('right');s.wait(lambda:d.rb('volume_levelv')==1,'arrow moves by one percent on a coarse card')
@@ -231,7 +232,7 @@ def session(ui,adapter):
     s.open();s.key('end');s.close()
     s.wait(lambda:p.rb('mx_level')==100,'Mixer notices another control changing the hardware')
     s.key('end');s.wait(lambda:p.rb('mx_level')==100,'full Mixer keyboard reaches full volume')
-    if adapter=='sb16':
+    if s.qemu:
         check(p.rw('mx_mask')==0x1FF,'SB16 exposes all nine channels')
         mark=(x0+136,y0+18,x0+143,y0+25)
         check(0 in s.crop(mark),'keyboard focus is visible beside Level')
@@ -291,12 +292,21 @@ def background(ui):
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--adapter',choices=(*MACHINES,'sb16'),default='cga')
+    ap=argparse.ArgumentParser();ap.add_argument('--adapter',choices=(*MACHINES,'sb16','vesa'),default='cga')
     a=ap.parse_args();EVIDENCE.mkdir(exist_ok=True)
-    if a.adapter=='sb16':
+    if a.adapter in ('sb16','vesa'):
         # MartyPC has a raw register bank, not a CT1745. QEMU owns this leg.
         import hmacold,vidxms,xmcheck
         class QMouse(hmacold.QMouse):
+            def to(self,x,y,l=False,**kw):
+                if a.adapter!='vesa':return super().to(x,y,l=l,**kw)
+                for _ in range(4):
+                    subprocess.run([sys.executable,str(ROOT/'tools/mouse.py'),
+                                    '--screen','1024x768',self.q.sock,'to',str(x),str(y)],
+                                   cwd=ROOT,check=True,capture_output=True)
+                    if os88qemu.acted(self.q,lambda:self.where()[:2]==(x,y),secs=3,
+                                     what='VESA pointer reached its target'):return
+                raise os88ui.UIError('VESA pointer did not reach its target')
             def click(self,x,y,**_kw):
                 # UI.close also uses click; pace it on QEMU's guest ticks.
                 self.to(x,y);self._edge(True);self._edge(False)
@@ -308,10 +318,11 @@ def main():
                 check(self.scroll(win)==0 and len(self.listing(win))==2,
                       'both apps-fixture rows fit without scrolling')
                 return entry
-        for memory in (1,128):
+        for memory in ((128,) if a.adapter=='vesa' else (1,128)):
             with tempfile.TemporaryDirectory(prefix='mixer-qemu-',dir=ROOT/'build') as t:
                 sy=Path(t)/'system.img';apps=Path(t)/'apps.img'
-                shutil.copy(os88build.at('build/mixer360.img'),sy)
+                system='build/mixervesa.img' if a.adapter=='vesa' else 'build/mixer360.img'
+                shutil.copy(os88build.at(system),sy)
                 shutil.copy(os88build.at('build/mixplay.img'),apps)
                 q=vidxms.Q(t,str(sy),str(apps),memory,
                     ('-audiodev','none,id=snd','-device','sb16,audiodev=snd'))
@@ -320,9 +331,12 @@ def main():
                     xmcheck.wait_desktop(q.sock,'mixer')
                     ui=QUI(q,mouse=QMouse(q),sym=os88sym.linear,verbose=False)
                     os88qemu.pace(q,2)
-                    print('SB16 memory:',memory,flush=True)
-                    session(ui,'sb16')
-                    background(ui)
+                    if a.adapter=='vesa':
+                        check(ui._byte('vid_kind')==G.VID_VESA and ui._byte('vid_planes')==16,
+                              'packed desktop reached 1024x768x16')
+                    print(a.adapter+' memory:',memory,flush=True)
+                    session(ui,a.adapter)
+                    if a.adapter=='sb16':background(ui)
                 finally:q.close()
     else:
         with os88ui.boot('build/mixer360.img',apps='build/mixplay.img',

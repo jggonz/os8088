@@ -2648,10 +2648,10 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 9                 ; the most records one call can write, so
+DQ_MAXREC  equ 10                ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
-                                 ; which is 6, 5 or 4 depending on the
+                                 ; which is 10, 9 or 4 depending on the
                                  ; build and is asserted against this at
                                  ; assembly time (SPEC.md 51.11.2)
 %define OSAPI_DRV_SUSPEND   KERNEL_SEG:0x0419   ; AL = 1 suspend / 0 resume /
