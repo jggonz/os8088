@@ -201532,3 +201532,292 @@ manifest describes the release, not the drive (§118.1.1), so a hard disk
 installed from this release compares clean whether or not the machine booted
 from it; the progress heading says which it is (`Checking C: - hard disk,
 the boot volume`).
+
+## 119. CDROM.DRV — CD-ROM data and audio (`drivers/cdrom/`, `apps/cdplayer/`)
+
+**An ATAPI CD-ROM drive as a loadable driver: the disc's ISO 9660 file
+system as a read-only drive on the desktop, and its audio tracks played
+through the drive's own audio output, under a CD Player.** This section is
+the contract for the delivery waves in `docs/plans/CDROM-PLAN.md`; an
+unchecked story there is not yet shipped behaviour. The build diary is
+`docs/HOW-CDROM-WAS-BUILT.md`.
+
+**It is a file redirector, not a block device.** A CD's sectors are 2,048
+bytes and its file system is ISO 9660, so a `DRVC_DISK` volume (§51.8) would
+need the kernel to learn a second file system - resident bytes on every
+machine, CD or none. §62.9's redirector already moved "what is a file" into
+the driver: the kernel asks `FSV_*` questions and never reads a sector of
+the volume. So `CDROM.DRV` answers `FSV_*` from ISO 9660, and the Disk
+window, the desktop zone, the sort, `..`, the loader, the Standard File
+dialog, associations and the copy engine work on a CD unchanged.
+
+**Audio needs no CPU at all.** A CD-ROM drive plays a Red Book track itself
+and sends it as analog audio out of its front headphone jack and its rear
+cable to the sound card's CD input. The driver sends the drive `PLAY AUDIO
+MSF` and asks `READ SUB-CHANNEL` where it is; nothing is streamed, decoded or
+mixed on this machine, so the only cost of a playing CD is a status poll.
+
+### 119.1 What the kernel carries
+
+- **A class, `DRVC_CD` = 9** (`apps/os88api.inc`), appended after
+  `DRVC_FILE2` because a class number is ABI. It is a **file class** - its
+  volumes are `DVK_FILE` - with a publication slot and a copy of its service
+  table (`drv_svcix`), like `DRVC_FILE` and `DRVC_FILE2`, so the CD, the RAM
+  disk and the parallel link can all be attached at once (§51.2.1).
+  `dsk_vol_add` derives `DVK_FILE` for `DRVC_FILE` and for every class from
+  `DRVC_FILE2` up, so the kind test costs no byte.
+- **A row, `CDROM.DRV`, "CD-ROM"**, on `kern_big` and `kern_emu` (row 7 and
+  row 8), SYSTEM.CFG **bit 8**, **not wanted by default** (§51.3): attach
+  writes the IDE task file of every channel it probes.
+- **The DOS box keeps it** (`hbm_sweep`'s skip list, §51.11): it is a volume
+  a DOS program may be reading, and it holds no IRQ or DMA channel a
+  program could want back.
+- `kern_small` has no driver layer (§51.0) and so no CD-ROM.
+
+### 119.2 The drive
+
+**ATAPI on the IDE task file, polled PIO, on a 286 or better.** Attach
+refuses `DRVE_HW` below `CPU_286` for §52.1's reason: a 16-bit data port on
+an 8-bit bus loses every high byte. An XT-IDE adapter's latched high byte is
+not supported in this version (§119.8).
+
+**The probe, in this order**: the primary (1F0h, control 3F6h) and secondary
+(170h, 376h) channels, master then slave; then, only if neither held a
+CD-ROM, the tertiary (1E8h, 3EEh) and quaternary (168h, 36Eh). A channel
+whose status reads 0FFh is a floating bus and is passed with no write. A
+device is selected and sent `IDENTIFY PACKET DEVICE` (A1h): an ATA disk
+aborts it, an absent device never raises DRQ inside `CD_PROBE_T` ticks, and
+an ATAPI device answers 256 words, of which word 0 must say ATAPI (bits
+15-14 = 10b) and a CD-ROM (bits 12-8 = 5). Bits 1-0 give the packet length:
+12 bytes, or 16. Words 27-46 are the model string, kept for `CDV_DRIVE`.
+**The first CD-ROM found is the drive**; a second is not used (§119.8).
+
+**The transport** (`cd_packet`): wait for BSY and DRQ clear, select the
+device, write the byte-count limit (F800h) and `PACKET` (A0h), wait for DRQ,
+write the packet, then move each DRQ block the drive offers - its length is
+the byte-count register - until DRQ falls, with `rep insw` into a
+normalised `ES:DI` (§52.1.2's instruction, legal here for §52.1's reason).
+Every wait is bounded by the BIOS tick count, not a loop count: a CD's seek
+is up to a second and its spin-up several, and a count tuned on one CPU is a
+different time on the next. `CD_CMD_T` = 20 s for a command, after which the
+answer is `CDE_IO`. **The driver never writes the device control register**,
+so `nIEN` stays as the BIOS left it and a hard disk sharing the channel keeps
+its IRQ 14; the drive's own interrupt is acknowledged by the status read
+every poll ends with.
+
+A command answered with ERR is followed by `REQUEST SENSE` (03h): sense key
+6 (UNIT ATTENTION) means the medium changed or the drive was reset, bumps
+the **media generation** (§119.3.4) and retries the command once; key 2
+with ASC 04h (becoming ready) waits and retries inside `CD_CMD_T`; key 2
+with ASC 3Ah is `CDE_NODISC`.
+
+### 119.3 The data volume
+
+**Registered at `DRVV_READY`, disc or none**, as one volume labelled
+`CD-ROM`: the drive is a drive whether or not a disc is in it, exactly as
+an empty floppy drive is. Detach drops it (§51.8). Every `FSV_*` verb runs
+on the UI task and starts with a **media check** - `TEST UNIT READY` - and
+re-reads the disc's tables only when the generation has moved.
+
+#### 119.3.1 What a disc is read as
+
+1. **`READ TOC`** (43h, format 0, LBA addresses): the tracks, their start
+   LBAs and their control nibbles (bit 2 set = data), and the lead-out.
+2. **The LAST data track** holds the volume, and its primary volume
+   descriptor is at that track's start + 16. Single-session discs start at
+   0, so this is LBA 16; a CD-Extra disc's data session is its last track.
+   Descriptors are read from there until type 1 (`\1CD001\1`) or the
+   terminator (255), at most 16. The logical block must be 2,048.
+3. **The type-L path table** is walked once for the lowest directory extent
+   on the disc, `cd_dbase` (§119.3.3). A table past `CD_PTMAX` sectors (32,
+   64 KB) is not walked and the root's extent is the base instead.
+4. **A disc with no data track** - an audio CD - has no volume descriptor and
+   is not read for one.
+
+A data track that fails any of these leaves the disc **readable as audio
+only**: the root lists its audio tracks (§119.3.5) and nothing else.
+
+#### 119.3.2 Names
+
+ISO 9660 names are made 8.3 by the driver, the same way every time, so a
+listing and a later `FSV_STAT` agree: the `;version` is dropped, a trailing
+`.` is dropped, letters are upper-cased, and a name that is then a legal
+8.3 name is used as it is. Any other name - longer than 8.3, or carrying a
+character FAT does not allow - becomes **the first six legal characters, a
+`~`, and one character of a hash of the whole ISO name** (`0`-`9`, `A`-`Z`:
+the byte sum modulo 36), plus the first three legal characters of the last
+extension. `tools/os88cdiso.py`'s `mangle` is the reference, to the byte.
+Two names that mangle alike list twice and resolve to the first; Level 1
+discs - most of the period - never mangle. Rock Ridge and Joliet are not
+read (§119.8).
+
+Hidden (flag bit 0) and associated (bit 2) records are not listed. A
+directory is type 2, a name ending `.O88` is type 1 (a package), anything
+else type 0. A multi-extent file (flag bit 7) lists as its first extent.
+
+#### 119.3.3 Handles
+
+A §62.9 handle is a word, and a CD's sectors number to ~330,000. **A
+handle names a directory RECORD by where it is**: `(LBA - cd_dbase) x 64 +
+(offset >> 5)`. A record is at least 34 bytes and starts on an even offset,
+so no two records in one sector share `offset >> 5`; a record never crosses
+a sector; and the lowest directory sector's offset 0 is a `.` record, never
+listed - so 0 stays the root. The handle is therefore **stable for as long
+as the disc is in the drive**, which is what §62.9.7 asks of `FSV_ENUM`'s
+ordinals and what the loader asks of a listing's handle. Handles stop at
+`CD_HMAX` = FF7Fh, so directories spanning more than 1,022 sectors (2 MB of
+directory records, ~50,000 names) above `cd_dbase` are listed only as far
+as they encode (§119.8). FF80h + *n* is audio track *n*'s file (§119.3.5).
+
+A handle is resolved by reading its sector and walking to the record whose
+`offset >> 5` it names; a sector that has no record there refuses. The last
+four resolutions are cached (`cd_hcache`), so a copy's chain of
+`FSV_READAT`s resolves once.
+
+`FSV_CHDIR` answers the parent's handle from the folder's own `..` record
+and the grandparent's directory: the record in the grandparent whose extent
+is the parent's. The root's parent is 0.
+
+#### 119.3.4 The verbs
+
+| verb | answer |
+|---|---|
+| `FSV_LIST` | the current folder's records, then (root only) the audio tracks |
+| `FSV_CHDIR` | as above; a handle from before a media change refuses |
+| `FSV_STAT` | the handle, the size, `BL` = 10h for a folder and 0 for a file - not FAT's read-only bit, which a copy would carry to the destination |
+| `FSV_READ` | the whole file, refused `FERR_BIG` past the capacity |
+| `FSV_READAT` | any byte range; 0 bytes at or past the end |
+| `FSV_ENUM` | the *n*th of `FSV_LIST`'s entries of a named folder |
+| `FSV_DFREE` | 0 bytes free, granule 2,048 |
+| `FSV_WRITE` `APPEND` `DELETE` `RENAME` `MKDIR` `RMDIR` | `FERR_WPROT` |
+| `FSV_COPY` `FSV_RMTREE` | not published (0): the kernel's fallbacks |
+
+**Reads move whole sectors straight into the caller's buffer** - up to
+`CD_RUN` = 16 sectors (32 KB) a `READ (10)` - and only a partial first or
+last sector goes through the driver's one 2 KB sector buffer, which is
+tagged with its LBA so the next chunk's head is not read twice. Progress is
+reported with `OSAPI_FS_PROG` after every command.
+
+**The media generation** is a byte bumped on every UNIT ATTENTION and every
+TOC that differs from the last one read. A change discards the tables, the
+handle cache and the sector buffer; the next verb re-reads the disc. **Every
+verb that names a handle or the current folder then refuses** (`FERR_NOENT`)
+until a `FSV_CHDIR` to the root - the one folder no disc change can falsify -
+so a window left open on the old disc fails its next step rather than
+reading the wrong record of the new one; re-opening the drive mounts the
+new disc's root and clears it. An empty drive does the same without moving
+the generation, so a drive that keeps answering "no disc" does not look like
+a disc changing on every poll.
+
+`DSV_CAPS` is 0: a CD's reads are a seek and a turn, not a memcpy, so the
+mount takes §62.9.2.1's cache-only icon pass.
+
+#### 119.3.5 Audio tracks are files
+
+The root of a disc with audio tracks lists **`TRACKnn.CDA`** for each, 44
+bytes long - Windows' layout, so a file copied off is recognisable
+anywhere:
+
+```
++0  'RIFF'  dd 36  'CDDA'  'fmt '  dd 24
++20 dw 1            ; version
++22 dw track        ; 1..99
++24 dd disc id      ; the lead-out LBA, xor the track count << 24
++28 dd start LBA    ; +32 dd length in sectors
++36 db F, S, M, 0   ; the start, MSF (+150)   +40 db F, S, M, 0 ; the length
+```
+
+Double-clicking one opens the CD Player (`.CDA` is its association, §54.6)
+on that track.
+
+### 119.4 The package door (`OSAPI_DRV_CALL`, BH = `DRVC_CD`)
+
+`drivers/cdrom/cdpkg.inc` is the ABI, included by the driver and the CD
+Player both (§20.11). **UI task only, every verb**: each one talks to the
+drive and waits on it. Answers are in AX, CX, DX and SI; CF = 1 with AX =
+`CDE_NODISC` 1, `CDE_NOTREADY` 2, `CDE_IO` 3, `CDE_ARG` 4, `CDE_NOAUDIO` 5
+(the drive refused an audio command).
+
+| BL | verb | in | out |
+|---|---|---|---|
+| 0 | `CDV_IDENT` | | AX = `'CD'` (`CD_SIG`), CX = `CD_ABI` |
+| 1 | `CDV_DRIVE` | ES:DI = 41 bytes, or DI = 0 | the model string (NUL-ended); AX = base port, CL = unit (0 master, 1 slave), DL = the volume index |
+| 2 | `CDV_DISC` | | media check and TOC: AL = first track, AH = last, CX = the disc's length in seconds, DL = `CDK_AUDIO` 1 \| `CDK_DATA` 2, DH = the media generation |
+| 3 | `CDV_TRACK` | AL = a track | DX:AX = its start LBA, CX = its length in seconds, SI = its control nibble (bit 2 = data) |
+| 4 | `CDV_PLAY` | AL = first track, AH = last (0 = the disc's last audio track), CX = seconds into the first | `PLAY AUDIO MSF` from there to the end of the last; a data track in the range ends it early |
+| 5 | `CDV_PAUSE` | | `PAUSE/RESUME`, pause |
+| 6 | `CDV_RESUME` | | ...resume |
+| 7 | `CDV_STOP` | | `STOP PLAY/SCAN` (4Eh), or a pause on a drive that refuses it |
+| 8 | `CDV_STATUS` | | `READ SUB-CHANNEL` (42h, current position): AL = `CDS_IDLE` 0 / `PLAYING` 1 / `PAUSED` 2 / `DONE` 3 / `ERROR` 4, AH = the track, CX = seconds into it, DX = seconds into the disc, SI = the media generation |
+| 9 | `CDV_EJECT` | AL = 0 open, 1 close | `START STOP UNIT` with LoEj, after `PREVENT ALLOW MEDIUM REMOVAL` allows it |
+| 10 | `CDV_VOLUME` | AL = 0 get / 1 set, CL/CH = left/right 0..255 | mode page 0Eh's port 0 and 1 volumes, through `MODE SENSE (10)`/`MODE SELECT (10)`; CL/CH = what the drive holds |
+
+**Detach does not stop a disc that is playing.** The drive plays on its own,
+and unticking the driver - or the DOS box suspending drivers - is not a
+request for silence. The CD Player stops it when the user does.
+
+### 119.5 What it costs
+
+Measured by `tools/kernsize.py`, the kernel built at the commit before
+against this one:
+
+| | `kern_big` | `kern_small` |
+|---|---|---|
+| `.text` | **+38**: the row (16), its two strings (17), `drv_fptr9`'s pair (4), `drv_svcix`'s byte (1) | 0 |
+| `.bss` | **+38**: `DRVC_CD`'s owner word and its service-table copy | 0 |
+| `.ovl` | **+1**: `drv_cfgbit`'s byte (not resident) | 0 |
+| the footprint | **no rung crossed** - the image rung's slack 121 -> 45, `KERN_SIZE` 97,792 unmoved | no rung |
+| the system disk | `CDROM.DRV`, 8,335 bytes of image (3 KB of it zero state), **4,774 on the floppy** packed, and a **9 KB** claim when loaded | none |
+
+`dsk_vol_add`'s kind test became `jae` where it was `je`, the same two bytes,
+and `drv_memk` is CTRL.DRV's. 76 resident bytes on every `kern_big` machine,
+CD-ROM or none.
+
+### 119.6 The CD Player (`apps/cdplayer/`, `CDPLAYER.O88`)
+
+A window with the disc's state and six buttons - previous, play, pause,
+stop, next, eject - over a display: the track and the time into it, the
+track count and the disc's length, and one line of state (`Playing`,
+`Paused`, `Stopped`, `No disc`, `Data disc - no audio tracks`, `CD-ROM
+driver not loaded`). It polls `CDV_STATUS` every `CDP_POLL` ticks while it
+is open and repaints only the fields that changed (PERFORMANCE.md rule 1).
+A media generation that moved re-reads the TOC. Opened from a `TRACKnn.CDA`
+it plays that track. It has an About card (§12.2) and the `.CDA`
+association. It ships on every apps floppy but the 360 KB one - a CD-ROM
+wants a 286 - and on the live media.
+
+### 119.7 The gate
+
+`make cdromtest` builds a 1.44 MB system disk whose SYSTEM.CFG wants
+`CDROM.DRV` (bit 8) and a fixture ISO, `build/cdfix.iso`, written by
+`tools/os88cdiso.py`: nested folders, a long name that mangles, a file over
+64 KB, a package, and a file whose name is a legal 8.3 already.
+`tests/cdrom.py` boots it on QEMU with the ISO as the secondary master
+(`if=ide,index=2,media=cdrom`) - QEMU because it is the emulator here with
+a 286-class CPU and an ATAPI drive - and checks that the drive is found, its
+volume lists what `os88cdiso.py --list` lists, a folder two levels down
+lists, `..` comes back, a package launches off the CD, and a copy of the
+big file to the RAM disk is byte-identical to the host's. With the drive
+empty the volume refuses to mount and the machine carries on.
+
+**Audio cannot be checked under QEMU**, whose ATAPI drive has no audio
+commands; it answers `CDE_NOAUDIO`, which the player shows. `vm/386-cdrom`
+is a 386 under 86Box with an audio CD image (`make cdaudioimg`, a CUE/BIN of
+generated tones) and an `\AUTOSTRT` link to the CD Player, so a launch shows
+the player running a track; 86Box cannot be driven from this host, so that
+machine is for looking.
+
+### 119.8 Not done
+
+- **An XT.** An XT-IDE's latched high byte (rev 1: data high at base + 8)
+  and the CF-lite variants' swapped address lines are another transport,
+  and CD-ROMs on 8-bit buses were SCSI or proprietary in the period.
+- **A second drive.** `FSV_*` verbs carry no volume, so one driver serves one
+  volume; the first CD-ROM the probe finds is it.
+- **Proprietary interfaces**: Mitsumi, Sony CDU-31A/33A, Panasonic/MKE on a
+  Sound Blaster - each its own command set.
+- **Rock Ridge and Joliet** long names; **multi-extent** files past the
+  first extent; **directories beyond `CD_HMAX`** (§119.3.3).
+- **Digital audio extraction** (`READ CD`, BEh) - playing a track through a
+  Sound Blaster rather than the drive's own output.
+- **Booting from a CD** stays §80.2's El Torito hard-disk emulation.

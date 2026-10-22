@@ -117,7 +117,7 @@ DQ_A         equ 2              ; dw: your class's own three words
 DQ_B         equ 4              ; dw
 DQ_C         equ 6              ; dw
 DQ_SIZE      equ 8
-DQ_MAXREC    equ 8              ; ...and the most one call can write
+DQ_MAXREC    equ 9              ; ...and the most one call can write
 
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked

@@ -224,6 +224,13 @@ summary = "Lets programs use the extra memory on a LIM EMS expanded memory board
 short = "Use expanded memory boards"
 needs = "A LIM EMS memory board"
 
+["CDROM.DRV"]
+title = "CD-ROM drive"
+kind = "driver"
+summary = "Reads CD-ROM discs in an IDE CD-ROM drive as a drive on the desktop, and plays audio CDs through the drive's own audio output."
+short = "CD-ROM discs and audio CDs"
+needs = "A 286 or better with an IDE (ATAPI) CD-ROM drive"
+
 ["RAMDISK.DRV"]
 title = "RAM disk"
 kind = "driver"

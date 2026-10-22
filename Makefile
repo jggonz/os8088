@@ -3188,6 +3188,10 @@ DRIVERS += $(BUILD)/usbmouse.drv
 # so a disk that carries it costs a machine with no board one directory slot
 # and nothing read. kern_big's alone, like every row past the parallel link
 DRIVERS += $(BUILD)/ems.drv
+# ...and SPEC.md 119's CDROM.DRV, an ATAPI CD-ROM: a drv_tab row with
+# SYSTEM.CFG bit 8, not wanted by default (attach selects a device on every IDE
+# channel it probes). kern_big's alone, and refused below a 286 at attach
+DRIVERS += $(BUILD)/cdrom.drv
 # ...and SPEC.md 9.11's absolute pointer is NOT HERE, which is the one entry
 # in this list that is an absence. Its code is 386 instructions and the target
 # machine is an 8088, so it is the one file in the tree that MUST NOT BE
@@ -4366,6 +4370,18 @@ $(BUILD)/ems.bin: drivers/ems/ems.asm drivers/os88drv.inc apps/os88api.inc | $(B
 $(BUILD)/ems.drv: $(BUILD)/ems.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/ems.bin -o $@
 
+# CDROM.DRV - an ATAPI CD-ROM: ISO 9660 as a read-only volume, and its audio
+# (SPEC.md 119). cdpkg.inc is the package door, shared with apps/cdplayer
+CDROM_SRC := drivers/cdrom/cdrom.asm drivers/cdrom/cdpkg.inc \
+             drivers/cdrom/atapi.inc drivers/cdrom/cddisc.inc \
+             drivers/cdrom/cdiso.inc drivers/cdrom/cdaudio.inc
+$(BUILD)/cdrom.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/cdrom/ -I drivers/ -I apps/ -o $@ $<
+	@echo "cdrom: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/cdrom.drv: $(BUILD)/cdrom.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/cdrom.bin -o $@
+
 # RAMDISK.DRV - a DRVC_FILE volume with no hardware behind it (SPEC.md 62.9),
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
 # the kernel runs on a cycle-accurate 8088 in a container, which is the one
@@ -4790,6 +4806,45 @@ $(BUILD)/emstest.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(C
 emstest: $(BUILD)/emstest.img
 	@echo "emstest: build/emstest.img - EMS.DRV wanted, EMSTEST.O88 at the root"
 	@echo "              Run: python3 tests/ems.py, python3 tests/videms.py"
+
+# CDROMTEST - SPEC.md 119.7's gate: the 1.44MB system disk with a SYSTEM.CFG
+# that wants CDROM.DRV (bit 8), and build/cdfix.iso, the disc tests/cdrom.py
+# puts in QEMU's secondary master. The ISO is tools/os88cdiso.py's, whose
+# `list` is the reference the guest's listing is compared against: folders
+# two deep, a folder of sixty names (a directory longer than a sector, under DSK_NENT), a
+# name that mangles, a lower-case one, a package, and BIG.BIN - generated
+# bytes, over 64 KB and not a whole number of sectors
+CDFIXFILES := $(wildcard tests/cdfix/*.TXT)
+$(BUILD)/cdcfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/cdcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 8).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/cdfix.iso: tools/os88cdiso.py $(CDFIXFILES) $(BUILD)/mines.o88
+	python3 tools/os88cdiso.py iso -o $@ --volid CDFIX \
+		--file README.TXT=tests/cdfix/README.TXT \
+		--file lower.txt=tests/cdfix/README.TXT \
+		--file "Long File Name.text=tests/cdfix/LONG.TXT" \
+		--file A.B.C=tests/cdfix/LONG.TXT \
+		--file MINES.O88=$(BUILD)/mines.o88 \
+		--file DOCS/NOTES.TXT=tests/cdfix/NOTES.TXT \
+		--file DOCS/DEEP/BOTTOM.TXT=tests/cdfix/BOTTOM.TXT \
+		$(foreach n,$(shell seq -w 0 59),--file MANY/F0$(n).TXT=tests/cdfix/NOTES.TXT) \
+		--gen BIG.BIN:100001
+
+$(BUILD)/cdromtest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS) \
+            $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/cdcfg/system.cfg \
+            tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/cdcfg/system.cfg $(APPDATAFOLDER)
+
+.PHONY: cdromtest
+cdromtest: $(BUILD)/cdromtest.img $(BUILD)/cdfix.iso
+	@echo "cdromtest: build/cdromtest.img - CDROM.DRV wanted; build/cdfix.iso the disc"
+	@echo "              Run: python3 tests/cdrom.py"
 
 # THEWIRETEST: the Wire's gate disks (SPEC.md 92.12), ethertest's shape and
 # for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON

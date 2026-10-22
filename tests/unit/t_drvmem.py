@@ -80,6 +80,8 @@ ROWS = [
     ("USB Mouse", "DRVM_USBM", "DRVM_IMG_USBM", "usbmouse.drv"),
     # SPEC.md 107's EMS.DRV: DRVC_EMS, after the USB mouse on both big builds
     ("EMS", "DRVM_EMS", "DRVM_IMG_EMS", "ems.drv"),
+    # SPEC.md 119's CDROM.DRV: DRVC_CD, after EMS on both big builds
+    ("CD-ROM", "DRVM_CD", "DRVM_IMG_CD", "cdrom.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)
@@ -257,6 +259,9 @@ def main():
         # ...nor does EMS.DRV (SPEC.md 107): its tables are its bss, and the
         # memory it hands out is the BOARD's, not the heap's
         "DRVM_EMS": s["DRVM_IMG_EMS"],
+        # ...nor does CDROM.DRV (SPEC.md 119): its sector buffer, TOC and
+        # handle cache are its bss, inside the image's claim
+        "DRVM_CD": s["DRVM_IMG_CD"],
     }
     for title, total, _img, _drv in ROWS:
         eq(s.get(total), want[total],
