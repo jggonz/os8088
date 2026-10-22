@@ -590,9 +590,16 @@ it**, and the file is written from there and read back there
 the interrupt and HALT state, the MBC's banks and modes, the frame count,
 the clocks and timers, the MBC3 clock and the two square channels. The rest
 is the host's - segments, far vectors, the recompiler's place, the profile,
-scratch - and stays as it is, and so do the buttons held now (`S_JOY`). A
+scratch - and stays as it is, and so do the buttons held now (`S_JOY`) and
+what the CARTRIDGE says rather than the game (`S_MBC`, `S_NBANKS`,
+`S_BMASK`, which `rdg_init` set from the ROM this window is running). A
 field added to the block is the host's until it is listed, which is the
-safe way round. After the fields, what the host derives from them: the bank
+safe way round. Nothing the file says is trusted to INDEX: `S_RLOGN` is
+held to `RDG_RLOG_MAX`, and `S_RAMCUR` to a bank the cartridge has (the
+mask `rdg_rammap` uses) or, on an MBC3 with the clock, 88h-8Ch - else bank
+0 - so a damaged or edited `NAME.SSn` whose header still matches cannot
+send a RAM bank's copy past the claim or the bank table's write past the
+view. After the fields, what the host derives from them: the bank
 in 4000-7FFF (`rdg_setbank`, which may fetch it, 10.3), and the spin-wait's
 "known not to spin", which was another machine's. The renderer draws the
 next frame whole (`RDG_DFULL`).

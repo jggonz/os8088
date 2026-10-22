@@ -54438,7 +54438,9 @@ a happy result — the disk this replaces was at 354 of 354.
 RealDMG (docs/REALDMG-SPEC.md) is at the root and its own demo cartridge,
 `GBDEMO.GB`, is in `MEDIA/` where its File dialog opens - LZ4-packed, 32,768
 bytes to 1,110, which RealDMG's single `OSAPI_FILE_READ` of a cartridge
-expands (§20.14.3).
+expands (§20.14.3). **It is built and not released**: the release skill's
+`mkzip.py` carries `media360`, `office360`, `network360` and `games360` and
+not this disk, so no release zip has it until that list is changed.
 
 **The other three join it ON REQUEST**: `make emufull` (or `EMUFULL=1` on
 any make) builds the same image with C64, APPLE2 and RunCPM at the root,
@@ -184167,7 +184169,7 @@ and `VBV_SET`, which the player calls at the bracket's door with the
 canvas's row step, its BANKS (row r of a block is r mod banks of 2000h on
 and r / banks steps down: r steps on the colour layouts, 0, 2000h, a step
 and both on a CGA, r banks on a Hercules), the mode (bit 0 *no write mode
-3*, bit 1 *VGA4*) and the far address of `vp_bcb`; it keeps every register
+3*, bit 1 *VGA4*, bit 2 *a session's first bracket*, 98.3.23.1) and the far address of `vp_bcb`; it keeps every register
 but AX - the door holds the rate hook's address in DI, and the first
 one-bit build spent it and sent the hook into the middle of an
 instruction. Three vectors, each a far call with DS:SI the lists, ES the
@@ -184265,11 +184267,17 @@ refused on a CGA XT.
 (`vb_cbk`), so a tile is its index's four words read through CS and
 written at the four rows' offsets with no segment swapped - and the claim
 the part already is holds it, where a codebook of its own would have been
-one more claim to move and pin. `VBV_SET` forgets it at every bracket's
-door (`vb_cbok`): a play starts at frame 0 or at a key, and the record
-after either carries the whole codebook (98.1.10), so nothing it held
-before is ever read - and a TILE before any codebook this bracket gives the
-record up, as the reader refuses it.
+one more claim to move and pin. `VBV_SET` forgets it at a SESSION's first
+bracket (`vb_cbok`, the mode's bit 2 `VBM_NEWS`, set while `vp_sfirst`
+is): that bracket starts at frame 0 or at a key, and the record after
+either carries the whole codebook (98.1.10), so nothing it held before is
+ever read. A later bracket - a swap between the window and the full
+screen, a resume after a pause to the desktop - goes on mid-stream, where
+the records until the one after the next key carry no codebook and lean
+on the one already held, so it KEEPS it: forgetting it there gave up
+every record's tiles until that key. Keeping it is safe whatever it holds,
+a tile being a byte into the part's own 2KB table - and a TILE before any
+codebook this session gives the record up, as the reader refuses it.
 
 **A tile has its own walk** (`vb_tiles`): the list's grammar with the tile
 inlined, the count in CX and the origin in BP. Through the generic walk -

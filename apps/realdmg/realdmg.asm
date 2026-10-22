@@ -268,8 +268,9 @@ rw_stq          equ rw_slot + 1     ; byte: a state being saved or loaded -
                                     ;   (2): the UI task's machine (rwstate.inc)
 rw_stlen        equ rw_stq + 1      ; word: the state's RAM part, bytes
 rw_stbyte       equ rw_stlen + 2    ; byte: OSAPI_FILE_READ's 1-byte buffer
-rw_stmsg        equ rw_stbyte + 1   ; 24: what rw_stsay says
-rw_ssname       equ rw_stmsg + 24   ; 13: NAME.SS1 to NAME.SS9
+rw_stmsg        equ rw_stbyte + 1   ; 25: what rw_stsay says (rw_hdrchk's
+                                    ;   'REALDMG: MBC xxh unknown' and its NUL)
+rw_ssname       equ rw_stmsg + 25   ; 13: NAME.SS1 to NAME.SS9
 rw_pseg         equ rw_ssname + 13  ; word: the frame as the screen takes it,
                                     ;   RW_PBUF bytes in a claim of its own
                                     ;   (the region had no room for them)
@@ -1856,6 +1857,14 @@ rw_onclose:
 .s:
     cmp byte [rw_state], 0
     je .r
+    mov byte [rw_fsq], 1            ; the worker out of the machine first, as
+.w:                                 ;   rw_unload has it: a RAM bank it was
+    cmp byte [rw_incore], 0         ;   switching (rdg_rammap) would be saved
+    je .go                          ;   half copied. It stays out - the
+    call rw_bserve                  ;   window is going
+    call OSAPI_TASK_YIELD
+    jmp short .w
+.go:
     call rw_fmclose
     call rw_prfsave
     cmp byte [rw_batt], 0

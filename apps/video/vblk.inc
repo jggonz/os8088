@@ -50,8 +50,9 @@ VBV_SET     equ 0                   ; AX = the canvas's ROW STEP, BH = its
                                     ; writes through it, 98.3.23.2). Out AX =
                                     ; VB_PROBE. At the
                                     ; bracket's door, every time: the player
-                                    ; may have moved since the last, and the
-                                    ; codebook is forgotten. Keeps SI, DI,
+                                    ; may have moved since the last - and the
+                                    ; codebook is forgotten with VBM_NEWS
+                                    ; (98.3.23.1). Keeps SI, DI,
                                     ; BP, DS and ES (the door holds the hook in DI)
 VBV_LIN     equ 1                   ; LIN320's three block lists, after RUNL
 VBV_PLN     equ 2                   ; AL = a planar lead, 20h or more: its list
@@ -61,6 +62,7 @@ VBV_N       equ 4
 
 VBM_NOWM3   equ 1                   ; VGA4 on a card with no write mode 3
 VBM_VGA4    equ 2                   ; the planar leads are VGA4's, not MODEX's
+VBM_NEWS    equ 4                   ; a session's first bracket: no codebook yet
 
 VB_PROBE    equ 0x5642 ^ 0x2E19     ; VBV_SET's answer
 

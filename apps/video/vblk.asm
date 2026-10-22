@@ -111,7 +111,10 @@ vb_set:
     mov [VBS:vb_mode], bl
     mov [VBS:vb_cb], dx
     mov [VBS:vb_cb + 2], cx
-    mov byte [VBS:vb_cbok], 0       ; (no codebook yet in this bracket)
+    test bl, VBM_NEWS               ; (a session's first bracket: no
+    jz .kc                          ; codebook yet - a later one goes on
+    mov byte [VBS:vb_cbok], 0       ; mid-stream with the one it has)
+.kc:
     push si
     push di
     xor si, si                      ; THE FOUR ROWS' OFFSETS: row r is r mod
@@ -998,7 +1001,7 @@ vb_mk:      db 0, 0, 0, 0           ; VGA4's four masks, round the box
 vb_pr:      times 8 db 0            ; EIGHT's four pairs, round the box
 vb_px:      times 16 db 0           ; VGA8's sixteen pixels, round the box
 vb_box:     db 0                    ; VBV_ONE's AH: round the box
-vb_cbok:    db 0                    ; a codebook has come this bracket
+vb_cbok:    db 0                    ; a codebook has come this session
 vb_ksi:     dw 0                    ; the record's SI, round the box
 vb_cbk:     times 2048 db 0         ; ONE BIT's codebook: 256 tiles of eight
                                     ; bytes. Zeros, so the packed part pays

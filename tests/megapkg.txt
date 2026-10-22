@@ -74,6 +74,9 @@ apps/skies/skies.asm 1          # cs_xpand's OSAPI_MEM_SUBSEG, ~25 bytes,
     # shipped header with it, for 25 bytes
 apps/taskmgr/taskmgr.asm 1      # the Task Manager telling the truth about
     # kern_mega's memory: under CPU_F_PM extended memory is RAM and a region
-    # above 1MB reads HIGH (KERN-MEGA-PLAN 13.6) - seven tests of the byte
-    # this one sets, ~80 bytes of the 8.5KB package, and without them the
+    # above 1MB reads HIGH (KERN-MEGA-PLAN 13.6) - four tests of the byte
+    # this one sets, and behind them ~180 bytes of display code only
+    # kern_mega in protected mode reaches (tm_mpair2/tm_mfig2, tm_xnames,
+    # tm_s_rampm, the [tm_pm] arms of the RAM line and tm_sqox; measured off
+    # the 9.4KB package's listing at PR #299's review). Without the tests the
     # shipped copy on the system disk would print a selector as a segment

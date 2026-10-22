@@ -84,6 +84,17 @@ rw_clk:
     in al, 40h
     xchg al, ah                     ; AX = the count left in this period
     mov bx, [rw_fsper]
+    push ax
+    mov al, 0Ah                     ; OCW3: the next read of 20h is the IRR
+    out 20h, al
+    in al, 20h                      ; bit 0: IRQ0 raised and not yet TAKEN
+    test al, 1
+    pop ax
+    jz .k
+    cmp ax, RW_FSDIV / 2            ; pending, and under half a period in:
+    jbe .k                          ;   the reload came BEFORE the latch and
+    inc bx                          ;   the hook has not counted it - the
+.k:                                 ;   rule of os88pit.inc's .cohere
     popf
     cmp ax, RW_FSDIV
     jbe .c

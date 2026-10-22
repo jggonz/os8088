@@ -2312,6 +2312,33 @@ rdg_stapply:
 .fixed:
     mov byte [S_EXIT],0
     mov word [S_IDLENO],0FFFFh
+    cmp byte [S_RLOGN],RDG_RLOG_MAX     ; WHAT INDEXES IS NOT TRUSTED: the
+    jbe .rl                             ;   log's count, inside the log...
+    mov byte [S_RLOGN],RDG_RLOG_MAX
+.rl:
+    mov al,[S_RAMCUR]                   ; ...and what A000-BFFF holds, a bank
+    test al,80h                         ;   the cartridge has (rdg_rammap's
+    jz .rb                              ;   mask) or, an MBC3 with the clock,
+    cmp byte [S_MBC],RDGM_MBC3          ;   88h-8Ch - else bank 0
+    jne .r0
+    cmp byte [S_RTC+RTC_ON],0
+    je .r0
+    cmp al,88h
+    jb .r0
+    cmp al,8Ch
+    jbe .rc
+.r0:
+    xor al,al
+    jmp short .rc
+.rb:
+    mov ah,[S_RAMBANKS]
+    dec ah
+    jns .rm
+    xor ah,ah
+.rm:
+    and al,ah
+.rc:
+    mov [S_RAMCUR],al
     call rdg_setbank
     pop es
     pop di
@@ -2326,13 +2353,14 @@ rdg_stapply:
 ; replay says so
 rdg_sttab:
     db 00h, 0Eh                         ; AF BC DE HL SP PC BP
-    db 30h, 0Dh                         ; WVAL IME HALT EXIT IDLE BANK BANKHI
-                                        ;   MBC NBANKS RAMEN RAMBANK MBCMODE
+    db 30h, 07h                         ; WVAL IME HALT EXIT IDLE BANK BANKHI
+                                        ;   (not MBC NBANKS: the cartridge's)
+    db 3Ah, 03h                         ; RAMEN RAMBANK MBCMODE
                                         ;   (not S_JOY: the buttons held now)
     db 3Eh, 28h                         ; FRAMES, the clocks, TIMA0 LCDON
                                         ;   SNAPOK RLOGN SERN BADOP
     db 6Eh, 12h                         ; RAMCUR, the MBC3 clock
     db 0ACh, 02h                        ; SNAPTAG TAKEINT
-    db 0B4h, 03h                        ; TNF BMASK
+    db 0B4h, 02h                        ; TNF (not BMASK: the cartridge's)
     db 0D4h, 10h                        ; the two square channels
     db 0, 0

@@ -1785,14 +1785,15 @@ tm_quiet:
     mov si, tm_ist
     mov cx, TM_IHASH
     call tm_sumb
-    mov si, tm_xwn              ; ...AND THE POOL ABOVE 1MB, which the list
-    mov cx, 2 + TM_XWN * XMW_SIZE   ; draws a block a row of since KERN-MEGA-
-    call tm_sumb                ; PLAN 14.70.2: a driver or a program taking
-                                ; a block there moved nothing hashed above, so
-                                ; the page sat unchanged over it. tm_hikb
-                                ; refreshes it every sample, outside the lock
-                                ; like the rest; on a machine with no pool it
-                                ; is zeroes and costs the hash its length
+    cmp byte [tm_hion], 0       ; ...AND THE POOL ABOVE 1MB, which the list
+    je .nox                     ; draws a block a row of since KERN-MEGA-
+    mov si, tm_xwn              ; PLAN 14.70.2: a driver or a program taking
+    mov cx, 2 + TM_XWN * XMW_SIZE   ; a block there moved nothing hashed
+    call tm_sumb                ; above, so the page sat unchanged over it.
+.nox:                           ; tm_hikb refreshes it every sample, outside
+                                ; the lock like the rest; a machine with no
+                                ; pool (tm_hion 0) has only zeroes there, and
+                                ; does not pay 386 bytes of hash for them
     mov bx, tm_elck + 2*TMC_QUIET
     call tm_qpeek               ; CF = 1 unchanged, which IS the skip - and the
     mov [tm_qkey], ax           ; AX is the key AFTER tm_qpeek's never-zero
@@ -2904,6 +2905,9 @@ tm_click:
 %ifdef TMF_HEAP
     cmp byte [tm_view], 0       ; the memory page's SCROLL BAR gets the point
     je .cycle                   ; first (SPEC.md 28.4.4), and answers CF = 1
+    mov bx, si                  ; (against where the window is NOW: a title
+    call tm_view_begin          ; drag replays the content and calls no
+    call tm_hsbset              ; W_PAINT, SPEC.md 11.96.12.0)
     call tm_hscroll             ; for anything that is not in it...
     jnc .out
     call tm_lclick              ; ...then its LIST: the two header switches
@@ -6884,9 +6888,21 @@ tm_hikb:
     sub bx, ax
     add bx, dx
     mov [tm_hiused], bx
-    mov bx, [tm_kb+SK_XMS]
-    add bx, dx
+    mov ax, 0xFFFF              ; THE TOTAL IS HELD to what still sums in 16
+    sub ax, [tm_totkb]          ; bits with the conventional KB, as every
+    mov bx, [tm_kb+SK_XMS]      ; reader of it does: an AH=88h answer near
+    add bx, dx                  ; 64MB would wrap 'RAM' and the bar
+    jc .cap
+    cmp bx, ax
+    jbe .tot
+.cap:
+    mov bx, ax
+.tot:
     mov [tm_hitot], bx
+    cmp [tm_hiused], bx         ; ...and what is in use, inside it
+    jbe .usd
+    mov [tm_hiused], bx
+.usd:
     mov [tm_hifix], dx          ; the span under the pool, which the list's
                                 ; System itemises (tm_sysitems)
     push ds

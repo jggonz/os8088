@@ -15524,6 +15524,7 @@ $(BUILD)/emu/COPYING: apps/apple2/COPYING apps/c64/COPYING tools/os88lz.py $(PKG
 $(EMUIMG360): $(EMU360) $(EMUSTAMP) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(EMUOPTS360) $(EMUARGS360) \
 		$(MEDIAFOLDER) $(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@
 	$(if $(EMUFULL),,@echo "emu360: RealDMG only - C64, APPLE2 and RunCPM join it on request: make emufull")
 
 # =============================================================================
@@ -17391,9 +17392,15 @@ pentium: $(IMG) $(APPSIMG)
 # APPLE2 target need the network to come back. The ROM this tree DERIVES from
 # them - build/apple2-rom/APPLE2.ROM - is an output and goes, so a rebuild
 # still re-checks every SHA-256 and re-assembles the part.
+#
+# ...and build/gbtest and build/rgbds, the Game Boy's, by the same test: the
+# test ROMs tools/getgbtest.py fetches at pinned SHA-256s and the assembler
+# tools/gbclock.py builds from a pinned clone. Thrown away, the rgbds rows
+# would SKIP and the ROM rows fetch again. `clean-gb` is the escape hatch.
 clean:
 	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc ! -name cc \
-		! -name apple2-rom ! -name nasm3 -exec rm -rf {} + 2>/dev/null || true
+		! -name apple2-rom ! -name nasm3 ! -name gbtest ! -name rgbds \
+		-exec rm -rf {} + 2>/dev/null || true
 	@rm -f $(BUILD)/apple2-rom/APPLE2.ROM
 
 clean-marty:
@@ -17407,7 +17414,10 @@ clean-cc:
 clean-nasm3:
 	rm -rf $(BUILD)/nasm3
 
-distclean: clean clean-marty clean-cc clean-nasm3
+clean-gb:
+	rm -rf $(BUILD)/gbtest $(BUILD)/rgbds
+
+distclean: clean clean-marty clean-cc clean-nasm3 clean-gb
 
 # Standalone 1942: committed artwork, compiled into adapter-native banks.
 N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json

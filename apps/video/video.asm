@@ -7043,6 +7043,7 @@ vp_xbipq:
 %ifdef PKG_MEGA
 %else
     or al, [vp_shadow]              ; (its decoders have no yield sites)
+    or al, [vp_v2]                  ; (nor has version 2's part, 98.3.23)
 %endif
     jnz .no
     cmp byte [vp_xbank], 0
@@ -7050,8 +7051,11 @@ vp_xbipq:
 %ifdef PKG_MEGA
     cmp byte [vp_pm], 0             ; PROTECTED MODE (98.3.18.16): no borrow,
     jne .pmq                        ; and a copy up is a rep movsw with
-    cmp byte [vp_shadow], 0         ; interrupts on - so neither of these:
+    cmp byte [vp_shadow], 0         ; interrupts on - so none of these:
     jne .no                         ; (its decoders have no yield sites)
+    cmp byte [vp_v2], 0             ; (nor has version 2's part, 98.3.23)
+    jne .no
+    nop                             ; (the play's routines' parity)
 %else
 %endif
     cmp byte [vp_snd], VP_SPK       ; (the speaker's clock: 98.3.18.5)
@@ -22947,6 +22951,10 @@ vp_bset:
     jne .m
     or bl, VBM_NOWM3
 .m:
+    cmp byte [vp_sfirst], 0         ; (a session's first bracket: the part
+    je .c                           ; forgets its codebook, 98.3.23.1)
+    or bl, VBM_NEWS
+.c:
     mov cx, cs
     mov dx, vp_bcb
     call far [vp_bfs]
