@@ -169,7 +169,15 @@ code does not.
   answers `VID_VGA` and `OSAPI_FSX_SURF` refuses a same-mode bracket on the
   packed surface (`tests/vesafsx.py`, Gorillas into mode 12h and back); and
   the disk widget sat past the bar composer's 62 cells on a 1024-wide bar,
-  so `fpg_finish` erases its band rows itself (`tests/vesa.py`). **Measured** (`docs/reports/VESA-BENCH-486-2026-10-22.md`): the
+  so `fpg_finish` erases its band rows itself (`tests/vesa.py`). **And
+  from playing Gorillas past its setup**, which the sweep cannot: seven
+  sites read "colour" as DH = 4 where the packed display answers 8 or 16
+  (SPEC.md 119.5's package rule for DH) - Gorillas' tables, `os88ui.inc`'s
+  `UI_ISMONO` and its two save-under sizers, ArtfulType's sizer, Frotz,
+  Solitaire, Weave's canvas and `os88.h`'s advice; the sizers claimed a
+  sixteenth of the save. Colour is DH >= 4 and a save is DH x rows x
+  columns, DX:AX kept (`tests/vesagor.py`, `tests/vesasu.py`,
+  `tests/vesapref.py`'s card back). **Measured** (`docs/reports/VESA-BENCH-486-2026-10-22.md`): the
   BIOS call is 7.0 us and a 624x200 fill 23.3 ms across seven windows -
   **0.2%** - so **the direct window register is not taken**; the fill is
   one `rep stosw` to the edge at 10.7 MB/s, the bus. **What it changed:**

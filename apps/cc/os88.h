@@ -227,7 +227,10 @@ struct os88_video {                              /* OSAPI_VIDEO, SPEC.md 39.2 */
     int kind;                                    /* OS88_VID_VGA / HERC / CGA
                                                   * / EGA - but ask BPP, not
                                                   * this (SPEC.md 39.24) */
-    int bpp;                                     /* 4 or 1 - see os88_gfx_pen */
+    int bpp;                                     /* 4 or 1 - and 8 or 16 on a
+                                                  * packed VESA display (SPEC.md
+                                                  * 119.5): colour is >= 4,
+                                                  * never == 4. os88_gfx_pen */
 };
 
 struct os88_find {                               /* OSAPI_FILE_FIND, 19.7.1 */
@@ -319,7 +322,7 @@ typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
 #define OS88_VID_HERC  1
 #define OS88_VID_CGA   2
 #define OS88_VID_EGA   3                         /* 640x350x16 - VGA's planar
-                                                  * path, so test .bpp == 4
+                                                  * path, so test .bpp >= 4
                                                   * for "colour", never this */
 
 #define OS88_CPU_8086  0                         /* os88_cpu() - the target */

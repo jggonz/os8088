@@ -34,6 +34,12 @@ from os88geom import VID_VESA                               # noqa: E402
 
 SRC = os.path.join(ROOT, "apps", "solitaire", "solitaire.asm")
 GREEN = (0, 170, 0)                 # CGREEN as QEMU lands the 565 word
+CBLUE = (0, 0, 170)                 # ...and CBLUE, the card back's
+
+
+def ega(c):
+    """A QEMU 565 -> 888 channel, back to the EGA's four levels."""
+    return min((0, 85, 170, 255), key=lambda v: abs(v - c))
 
 
 def equ(name, src):
@@ -113,6 +119,20 @@ def main():
         else:
             print("vesapref: Solitaire's table %d wide, the window's preferred %d"
                   % (best, want_w))
+        # ...and the stock's card back is CBLUE: sol_backbuf is filled with
+        # CBLUE where [sol_bpp] >= 4 and the dither-class CLBLUE on a 1bpp
+        # card. Solitaire read DH = 16 as "not 4" and drew the 1bpp back
+        # (SPEC.md 119.5, the package rule for DH) - and its red pips black
+        # (quantised: the 565 word's blue lands as 173, its green as 170)
+        blue = sum(1 for y in range(24, sh - 40) for x in range(sw)
+                   if tuple(ega(c) for c in vesa.px(pix, sw, x, y)) == CBLUE)
+        if blue < 200:
+            fails.append("%d CBLUE pixels on the desktop, want a card back's "
+                         "worth (hundreds): Solitaire took its 1bpp arm on a "
+                         "depth of 16" % blue)
+        else:
+            print("vesapref: %d CBLUE pixels - the card back drawn on the colour arm"
+                  % blue)
     finally:
         vesa.kill_stale()
     if fails:

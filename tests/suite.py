@@ -4451,6 +4451,27 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=400,
         wants=("build/os8088.img", "build/apps.img", "build/vesapref.img",
                "build/solitair.o88")),
+    Row("vesagor", "soak", py("tests/vesagor.py"), 90.0,
+        "Gorillas' field on the packed desktop (SPEC.md 119.5, the package "
+        "rule for DH): build/vesafsx.img's autostart opens Gorillas on the "
+        "1024x768x16 desktop, eight Enters play the setup through, and the "
+        "screendump must show a CBLUE sky edge to edge and buildings in solid "
+        "runs. Gorillas read OSAPI_WM_DISPLAY's DH = 16 as none of its 1 / 2 / 4 "
+        "tables and blitted 2-bit rows as 4-bit: a white sky and comb "
+        "buildings. QEMU by name, vesa's reason",
+        wants=("build/os8088.img", "build/apps.img", "build/vesafsx.img",
+               "build/gorillas.o88")),
+    Row("vesasu", "soak", py("tests/vesasu.py"), 120.0,
+        "a drop-down's save-under claim on the packed desktop is sized for "
+        "the depth (SPEC.md 119.5, 13.14.2): PiXEL on CITY.PCX off "
+        "build/vesablitd.img, Ctrl+S, the Save As card's format drop-down "
+        "clicked open; the record's claim must hold DH x rows x byte columns "
+        "of the list with DH = 16, mem_tab must agree and overlap nothing, "
+        "and Escape must give it back. apps/os88ui.inc's sizer folded 16 to "
+        "ONE plane and OSAPI_GFX_SAVE wrote fifteen sixteenths of the list "
+        "past the claim. QEMU by name, vesa's reason",
+        wants=("build/os8088.img", "build/apps.img", "build/vesablitd.img",
+               "build/vxpics.img", "build/pixel.o88")),
     Row("vesabench", "soak", py("tests/vesabench.py"), 150.0,
         "VESABENCH's correctness run (SPEC.md 119.8): build/vesabench.img "
         "and build/vesabnc8.img each open VESABNCH.O88 off build/vxbench.img "

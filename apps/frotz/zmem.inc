@@ -682,7 +682,7 @@ zm_setup:
                                     ; one 8x8 font can honestly offer
                                     ; (docs/plans/completed/FROTZ-PLAN.md 5.1)
     cmp byte [zm_bpp], 4
-    jne .f1nc
+    jb .f1nc                        ; (8 or 16 on a packed display: colour too)
     or al, 00000001b                ; bit 0: colours, on VGA only. On a 1bpp
 .f1nc:                              ; adapter every colour rounds to black,
                                     ; white or a dither (SPEC.md 39.4) and a

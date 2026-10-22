@@ -616,6 +616,28 @@ The lesson is the sweep, which is `tools/os88sweep.py` now (`vesa` or
 `vga`, an output directory, a contact sheet at the end): a row asserts what
 its author thought of, and thirty-six packages at once show what nobody did.
 
+**...and the sweep's own blind spot is the first screen.** The owner then
+played Gorillas past its setup and the field was a white sky over
+buildings drawn as one-pixel combs - a screen the sweep never reaches,
+because it photographs what an autostart opens and presses nothing. The
+cause was one rule misread across the tree: `OSAPI_WM_DISPLAY` and
+`OSAPI_VIDEO` answer **DH = 8 or 16** on a packed display, and seven sites
+had spelt "colour" as `cmp dh, 4 / je` - Gorillas' 1 / 2 / 4 tables, the
+shared `os88ui.inc`'s `UI_ISMONO` and its two save-under sizers (which
+folded 16 to ONE plane and claimed a sixteenth of what `OSAPI_GFX_SAVE`
+then wrote past them), ArtfulType's panel sizer, Frotz's colour bit,
+Solitaire's pips and card back, Weave's palette, and `os88.h`'s own
+advice. The survey was a script over every `mov [x], dh` after those two
+calls and every `cmp` on what it stored (SPEC.md 119.5's package rule for
+DH is the result); the rows are `vesagor` (Gorillas played into its field:
+sky rows and solid building runs, which read 97 and 68 on the fix - the
+VGA desktop's own figures, the skyline being seeded the same - against 10
+and 14), `vesasu` (PiXEL's Save As drop-down clicked open on the packed
+desktop: the record's claim against DH x rows x columns, `mem_tab`
+agreeing and overlapping nothing) and `vesapref`'s card-back check. When a
+package is "wrong on the new display", grep what it does with DH before
+reading its drawing code.
+
 **Nothing in `SYSTEM.CFG` wants the driver by default** (SPEC.md 51.3), so
 a stock `os8088.img` never reads it; every row above boots a disk whose
 settings file already asks for it (`ethertest`'s shape). The driver is

@@ -52,7 +52,11 @@ def disk_cmd(sysimg, out, link):
     lines = r.stdout.replace("\\\n", " ").splitlines()
     cmd = next(l for l in lines if "os88disk.py -o " + target in l)
     cmd = cmd.replace("-o " + target, "-o " + out)
-    return cmd + " AUTOSTRT:" + link
+    # WITH THE OTHER POSITIONALS, which start after --kernel: argparse takes
+    # positionals in one run, so a link appended after os8088.img's trailing
+    # --dir-slots is swallowed by it and one slipped in after -o, ahead of
+    # the run, is "unrecognized"
+    return re.sub(r"(--kernel \S+)", r"\1 AUTOSTRT:" + link, cmd, count=1)
 
 
 def one(args):

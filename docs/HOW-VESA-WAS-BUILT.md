@@ -323,3 +323,30 @@ refused on the packed desktop. The bar's composer caches sixty-two cells
 and a 1024-wide bar puts the widget past them, so nothing repainted its
 band rows at finish. Four rows, each red on the code as it was, and the
 sweep script itself is scratch - a row asserts what its author thought of.
+
+**Then the owner played Gorillas.** Past the setup the sky was white and
+every building a comb of one-pixel columns, with the HUD band right above
+them - a screen the sweep never reaches, since it presses nothing. The
+comb said what it was before any code was read: 2-bit rows blitted as
+4-bit. Gorillas keys every table on the depth it reads from
+`OSAPI_WM_DISPLAY`, 1 / 2 / 4, and on this display DH is **16** - no table
+matched, so the band composer took the CGA packing and handed the rows to
+`OSAPI_GFX_BLIT4`. That is one package; the question was how many had the
+same `cmp dh, 4 / je`. A script walked every `mov [x], dh` after
+`OSAPI_WM_DISPLAY` and `OSAPI_VIDEO` in the tree and every `cmp` on what
+it stored: seven. The worst were not the visible ones - `os88ui.inc`'s
+drop-down and pop-up menu sizers, shared by five packages, and
+ArtfulType's panel sizer, each folded DH to "4 planes or 1" and claimed a
+sixteenth of what `OSAPI_GFX_SAVE` then wrote into the heap. `UI_ISMONO`
+called the packed desktop mono. Frotz withheld its colours, Solitaire drew
+its red pips black and its card back light blue, Weave's canvas dropped
+its palette, and `os88.h` told C packages to test `== 4`. The kernel's
+answer stays 8 or 16 - a save-under on this display IS DH bytes a column,
+which is exactly §5.8's formula read as written - and every site now reads
+colour as DH >= 4 and sizes with DH as it comes, DX:AX honoured because
+sixteen times a 1024-wide list passes 64 KB. `vesagor` plays the setup
+through and reads the field: 97 sky rows and a 68-pixel solid run on the
+fix, the VGA desktop's own numbers (the skyline is seeded the same), 10
+and 14 before. `vesasu` clicks PiXEL's format drop-down open and holds the
+record's claim against DH x rows x byte columns, with `mem_tab` agreeing;
+`vesapref` wants a card back's worth of CBLUE.

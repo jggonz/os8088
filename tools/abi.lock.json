@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "2a86873a4cc1d13c44e82829dfbee32439dc55df29cbf11eba482d0050c0aaaa",
+  "fingerprint": "354d9881a90be5f6b2bcf132f63611b228220bed81725cb65307d84f9029e753",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "d07f12f9d2f9e8a29b4b7667a17ca98d775cb5d198bc8562ab1851234e156f8e",
+  "fingerprint": "5ba4014d39440744eb6f30344d2dc6d59efd3ec996ad010d1d10392a44332581",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -441,6 +441,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "SPEC.md 119.7: OSAPI_GFX_BLITD appended at 0x04AB, the one cell past the drivers' door, and VID_VESA (4) named beside the VID_* kinds; OSAPI_VIDEO and OSAPI_WM_DISPLAY may now answer DL 4 with DH 8 or 16. Nothing built before this change moves: every earlier cell keeps its address and its contract, so no PKG_FMT bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "5ba4014d39440744eb6f30344d2dc6d59efd3ec996ad010d1d10392a44332581",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 119.5: DH is 8 or 16 on a packed display - colour is DH >= 4 and a save-under takes DH as it comes (words only, no cell moved)",
+   "to": 10
+  },
+  {
+   "fingerprint": "354d9881a90be5f6b2bcf132f63611b228220bed81725cb65307d84f9029e753",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 119.5: DH is 8 or 16 on a packed display - colour is DH >= 4 and a save-under takes DH as it comes (words only, no cell moved)",
    "to": 11
   }
  ]

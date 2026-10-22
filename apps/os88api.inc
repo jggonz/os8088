@@ -1101,6 +1101,9 @@ FDLG_SAVE  equ 1                 ; coming back
                                  ; and 8 or 16 on a VESA display (SPEC.md 119),
                                  ; whose desktop is still the sixteen colours
                                  ; - OSAPI_GFX_BLITD is the one way past them.
+                                 ; COLOUR IS DH >= 4 AND NEVER DH == 4 (119.5):
+                                 ; seven packages had it the other way and drew
+                                 ; mono, or sized a save-under at a sixteenth.
                                  ; Callable from any context, lock held or not.
                                  ;
                                  ; DON'T switch on DL as a fourth case: EGA is
@@ -1790,6 +1793,13 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
 ; onto a VGA arrives as coloured noise):
 ;
 ;   bytes = planes * (y2-y1+1) * ((x2>>3) - (x1>>3) + 1)
+;
+; ...with planes = DH AS IT COMES: 4 on VGA and EGA, 1 on a 1bpp card, and 8
+; or 16 on a packed VESA display (SPEC.md 119.5), where the save is the pixels
+; themselves and DH is the BYTES a column. Never fold it to 4-or-1: a package
+; that did sized a 16bpp save at a sixteenth, and the kernel wrote the rest
+; over whatever followed the claim. The product passes 64KB on a 1024-wide
+; display, so keep DX.
 ;
 ; x1 is rounded DOWN to a byte column and x2 UP, which the formula already
 ; carries. The layout is plane-major: all of plane 0's rows, then plane 1,
