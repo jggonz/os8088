@@ -527,13 +527,13 @@ ROMF_HRESET equ 8               ; every block (a resume with no pool to restore)
 ROMF_HTAB   equ 9               ; -> DX:AX = the block table, CX = its bytes
                                 ; (a hibernate's copy, SPEC.md 87.4 step 3b)
 HMA_SEG     equ 0xFFFF          ; [api_coldseg] when `.cold` is in the HMA
-DRV_HMA_ORG equ 0xE000          ; a block in the HMA is SEG:DRV_HMA_ORG, never
+DRV_HMA_ORG equ 0xC000          ; a block in the HMA is SEG:DRV_HMA_ORG, never
                                 ; SEG:0 - nothing above 1MB has an offset 0 -
                                 ; so a driver placed there runs from a copy
                                 ; assembled at this origin (the Makefile's
                                 ; DRV_HMA_ORG, which tools/os88rom.py checks)
                                 ; and its dispatcher is here + PKG_DISP. Every
-                                ; such segment is F200-F7FF, and nothing else
+                                ; such segment is F400-F9FF, and nothing else
                                 ; that names a driver or a window is ever at or
                                 ; above DRV_HMA_SEG
 DRV_HMA_SEG equ 0xF000

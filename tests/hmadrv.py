@@ -19,22 +19,22 @@ that wants SOUND.DRV, HDD.DRV and NET.DRV - the three the build relocates -
 with an SB16 and an IDE disk holding a FAT16 partition and HELLO.TXT:
 
   A. -m 128.
-     1. all three rows name a segment in the HMA (F200-F7FF), hold no heap
+     1. all three rows name a segment in the HMA pool (derived from the origin), hold no heap
         (DRVR_KB 0), and dispatch at DRV_HMA_ORG + PKG_DISP;
      2. the tail's block table holds exactly those three images, each owned
         by its own segment, and each image IS its org-DRV_HMA_ORG assembly
         (build/<name>.hma.bin), header fields os88drv.py rewrites aside;
      3. HDD.DRV mounted the disk FROM THE HMA - its partition table read
         through hd_raw's bounce, every sector after it through the kernel's
-        block dispatch at E00C - and a Disk window on C: lists HELLO.TXT;
+        block dispatch at DRV_HMA_ORG + PKG_DISP - and a Disk window on C: lists HELLO.TXT;
      4. the Control Panel's Hard Disk page: HDDTOOL.DRV loads and its
         first paint calls BACK into HDD.DRV through DRV_HMA_ORG + PKG_DISP
         (HDT_INIT's CX) - its device table comes back equal to the
         resident's. A tool that assumed PKG_DISP froze a 286 here;
      5. SOUND.DRV plays from the HMA: RECORDER.O88's demo, played on the
-        card, takes the double buffer (SPEC.md 34.5.2) - an 8KB block in the
-        pool owned by SOUND.DRV while it plays, [sbl_sbase] DRV_HMA_ORG and
-        the 8237's page 0x10 - and the stream runs out (PLAY DONE (SB)),
+        card, takes the double buffer (SPEC.md 34.5.2) - in the pool when its
+        current free runs hold 8KB, otherwise in the heap. Both paths keep
+        the 8237 in the right physical page and the stream runs out,
         which is the card's DMA and IRQs from above 1MB. The block is given
         back with the stream.
   B. -m 1, the NEGATIVE CONTROL (docs/WRITING-TESTS.md 1): the same disk and
@@ -180,6 +180,15 @@ def record_play(q, ui, snd_seg, want, hma):
     syms, _ = pkg_syms("apps/recorder/recorder.asm")
     sb = drv_syms("sound")
     org = ORG if hma else 0
+    # A larger driver does not enlarge the pool. Predict buffer placement
+    # from actual free runs before opening, rather than assuming 8KB is free.
+    at, largest = 0x10, 0
+    if hma:
+        for start, size, _owner in sorted(blocks(q)):
+            largest = max(largest, start-at)
+            at = max(at, start+size)
+        largest = max(largest, EQ["HMA_COLD_AT"]-at)
+    buffer_hma = hma and largest >= 8192
 
     def drv(name, n=1):
         return q.read((snd_seg << 4) + org + sb[name] - ORG, n)
@@ -210,14 +219,15 @@ def record_play(q, ui, snd_seg, want, hma):
     page = drv("sbl_page")[0]
     blk = [b for b in blocks(q) if b[2] == snd_seg and b[1] == 8192] \
         if hma else []
-    if hma:
+    if buffer_hma:
         want(len(blk) == 1 and sbase == ORG and page == 0x10,
              "the double buffer is an 8KB block of the pool owned by "
              "SOUND.DRV: %s, [sbl_sbase] %04X, 8237 page %02X"
              % (["%04X+%d" % (b[0], b[1]) for b in blk], sbase, page))
     else:
-        want(sbase == 0 and page < 0x0A, "the double buffer is a heap "
-             "claim: [sbl_sbase] %04X, 8237 page %02X" % (sbase, page))
+        want(not blk and sbase == 0 and page < 0x0A,
+             "the double buffer uses the heap (HMA largest free run %d): "
+             "[sbl_sbase] %04X, 8237 page %02X" % (largest, sbase, page))
     # THE BYTES, not just the card: both halves hold the demo's samples,
     # each at a whole half's place in the stream and the two a half apart
     # (the refill worker has usually turned half 0 over by now), written
@@ -445,7 +455,7 @@ def main():
         r = rows(q)
         for name, _r, _f in DRVS:
             x = r[name]
-            want(0xF200 <= x["seg"] < 0xF800 and x["kb"] == 0
+            want((0xFFFF - (ORG - 0x10)//16) <= x["seg"] <= (0xFFFF - (ORG - EQ["HMA_COLD_AT"])//16) and x["kb"] == 0
                  and x["disp"] == ORG + 12 and x["err"] == 0,
                  "%s.DRV runs at %04X:%04X, %d KB of heap, error %d"
                  % (name, x["seg"], x["disp"], x["kb"], x["err"]))

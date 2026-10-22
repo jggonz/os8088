@@ -1057,8 +1057,17 @@ desk_zone_label:
 ;      caption. The pen is (AX + DESK_ZOVER, BX + 2).
 ; clobbers: AX, BX, CX, DX, SI, ES (the outputs), flags
 ;
-; Measured at paint for every kind, centred in the cell. One routine draws it
-; and one highlight inverts it, so the two cannot disagree about where it is.
+; Measured at paint for every kind, centred UNDER THE PICTURE. One routine
+; draws it and one highlight inverts it, so the two cannot disagree about
+; where it is.
+;
+; Under the picture and not in the cell, because the picture is not in the
+; cell's middle: DESKPIC puts the column on the byte grid (SPEC.md 26.9.9),
+; up to 4 px off centre, and a caption centred on the cell then sat that far
+; to one side of its icon - `CD-ROM` 3 px left of its disc. So the pen moves
+; by what the picture moved, and is then held inside the cell: the refill
+; that erases a cell erases the cell and no more, so a wide shortcut caption
+; cannot follow its picture past an edge.
 ; -----------------------------------------------------------------------------
 desk_caprect:
     push bp
@@ -1076,6 +1085,24 @@ desk_caprect:
     shr cx, 1                   ; CX = the pen's offset in the cell
     pop ax
     call desk_zone_xy           ; AX = cell left, DX = cell top
+%ifdef OS88_SHORTCUTS
+    push dx
+    mov dx, ax
+    DESKPIC dx, dl              ; DX = the picture column's left...
+    sub dx, ax
+    sub dx, DESK_PICX           ; ...less the cell's middle: -3..+4
+    add cx, dx                  ; the pen follows the picture
+    jns .lo
+    xor cx, cx                  ; ...but not past the cell's left
+.lo:
+    mov dx, DESK_CW
+    sub dx, bx                  ; DX = the last pen offset the cell holds
+    cmp cx, dx
+    jle .hi
+    mov cx, dx                  ; ...nor past its right
+.hi:
+    pop dx
+%endif
     add ax, cx                  ; AX = the pen
     lea cx, [bx+DESK_ZOVER-1]
     add cx, ax                  ; x2
@@ -1654,6 +1681,41 @@ desk_col:
     call desk_colr              ; ...and its selection the way it always was
     jmp ct_cw_gfx_xor_fill
 
+; desk_drvico - a REDIRECTED volume whose driver says FSCAP_ICON draws its own
+;               picture (SPEC.md 26.4.2): the CD-ROM's disc, not a hard disk
+; in:  BL = the volume, CX/DX = the picture's origin; the gfx lock held
+; out: CF = 0 the driver drew it; CF = 1 it is the kernel's to draw - every
+;      floppy, every hard disk, and a file driver without the bit
+; clobbers: nothing else
+;
+; .svcico's call, keyed on the VOLUME: the class off its row (the driver the
+; FSV verbs reach), that class's copied DSV_CAPS, and its door's DRV_ICONV.
+; drv_pkg_call refuses (CF = 1) for a class no driver publishes, so a driver
+; that went away leaves the kernel's own icon rather than nothing.
+desk_drvico:
+    push ax
+    push bx
+    push di
+    call dsk_vol_slot_x         ; BX = the row
+    jc .out
+    cmp byte [bx+DV_KIND], DVK_FILE
+    stc
+    jne .out                    ; only a file class's DSV_CAPS means FSCAP_*
+    mov al, [bx+DV_CLASS]
+    call drv_cls_svc_x          ; CLSCF: DI = its copied table
+    jc .out
+    test byte [di+DSV_CAPS], FSCAP_ICON
+    stc
+    jz .out
+    mov bh, al
+    mov bl, DRV_ICONV
+    call KERNEL_SEG:cw_drv_pkg_call ; the driver's answer is the CF
+.out:
+    pop di
+    pop bx
+    pop ax
+    ret
+
 ; desk_issel - ZF = 1 when the zone being drawn ([desk_zdrv]) is the selected
 ; one; clobbers AL. The three sites were one compare written three times
 ; (kernel size pass 9), and its `ret` is desk_col's as well
@@ -1681,6 +1743,8 @@ desk_pic:
     mov si, [desk_pico]         ; [diskette, 5.25", hard disk] at this height
     cmp bl, DESK_SVZ
     je .svcico
+    call desk_drvico            ; a file volume whose driver draws its own
+    jnc desk_ret                ; picture (SPEC.md 26.4.2): drawn
     call dsk_vol_fixed_x        ; the MEDIUM, not the transport (SPEC.md 18.7.2)
     jc .icon
     or al, al

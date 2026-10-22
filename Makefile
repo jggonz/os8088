@@ -214,6 +214,7 @@ VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
 VM286VID := $(CURDIR)/vm/286-video
 VM386SND := $(CURDIR)/vm/386-sound
+VM386CD  := $(CURDIR)/vm/386-cdrom
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
 VM486V := $(CURDIR)/vm/486-vesa
@@ -3198,6 +3199,10 @@ DRIVERS += $(BUILD)/usbmouse.drv
 # so a disk that carries it costs a machine with no board one directory slot
 # and nothing read. kern_big's alone, like every row past the parallel link
 DRIVERS += $(BUILD)/ems.drv
+# ...and SPEC.md 119's CDROM.DRV, an ATAPI CD-ROM: a drv_tab row with
+# SYSTEM.CFG bit 8, not wanted by default (attach selects a device on every IDE
+# channel it probes). kern_big's alone, and refused below a 286 at attach
+DRIVERS += $(BUILD)/cdrom.drv
 # VESA.DRV - the packed-pixel display's renderer (SPEC.md 120). On every
 # kern_big disk for USBMOUSE.DRV's reason: a tick on the Drivers page is how
 # it is wanted, and the tick needs the file to be there. kern_small filters
@@ -3856,6 +3861,24 @@ $(BUILD)/fontview.bin: apps/fontview/fontview.asm apps/os88api.inc \
 $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/fontview.bin -o $@
 
+# Mixer is optional on the roomy system disks and installed/live media.
+# The quick slider is in SOUND.DRV; the 360KB image needs no MIXER.O88.
+# CDRACK.O88 (SPEC.md 119.6) rides here for the same reasons and one more:
+# it is CDROM.DRV's face, so it lives in SYSTEM\ beside the driver it needs,
+# and the 360KB disk is the XT's, whose 8-bit bus CDROM.DRV refuses (119.2).
+# The 720KB APPS disk had two clusters to spare and no room for it besides.
+SYSOPTIONAL := $(if $(KERN_SMALL),,$(BUILD)/mixer.o88 $(BUILD)/cdrack.o88)
+SYSOPTIONALARGS := $(addprefix SYSTEM:,$(SYSOPTIONAL))
+.PHONY: mixer
+mixer: $(BUILD)/mixer.o88
+$(BUILD)/mixer.bin: apps/mixer/mixer.asm apps/os88mixui.inc apps/os88gfx.inc \
+                    apps/os88dec.inc apps/os88ui.inc apps/os88api.inc \
+                    drivers/sound/sndpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error \
+		-I apps/ -I drivers/sound/ -o $@ apps/mixer/mixer.asm
+$(BUILD)/mixer.o88: $(BUILD)/mixer.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/mixer.bin -o $@
+
 # ...AND A STAMP FILE, for exactly VIDSTAMP's and DSSTAMP's reason. NOPICOMEM,
 # PM_BASE and PM_SB_PORT change the command line and no source, so without
 # this `make NOPICOMEM=1` after a plain build saw an up-to-date sound.bin and
@@ -3865,7 +3888,8 @@ $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 SNDSTAMP := $(BUILD)/.sound-$(if $(NOPICOMEM),nopm,pm)$(if $(PM_BASE),-b$(PM_BASE))$(if $(PM_SB_PORT),-s$(PM_SB_PORT))
 
 $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc drivers/sound/covox.inc \
-                    drivers/sound/picomem.inc drivers/sound/sndpkg.inc \
+                    drivers/sound/picomem.inc drivers/sound/sndpkg.inc drivers/sound/mixer.inc \
+                    drivers/sound/volume.inc apps/os88mixui.inc apps/os88gfx.inc apps/os88dec.inc \
                     drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(SNDDEF) -I drivers/sound/ -I drivers/ -I apps/ \
 		-o $@ drivers/sound/sound.asm
@@ -4196,15 +4220,17 @@ $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(KERNFILE) | $(BUILD)
 # just loaded by it and copies it into the HMA, so the shipped .DRV stays the
 # org-0 file it always was and a machine with no HMA reads nothing new. The
 # .hma.bin copies ship nowhere; they exist for the diff.
-DRV_HMA_ORG := 0xE000
+DRV_HMA_ORG := 0xC000
 HMADRV := sound hdd net
+$(addprefix $(BUILD)/,$(addsuffix .hma.bin,$(HMADRV))): Makefile
 $(BUILD)/coldhma.sys: $(KERNFILE) boot/osrom.asm tools/os88rom.py tools/os88romfix.py \
                       $(foreach d,$(HMADRV),$(BUILD)/$(d).bin $(BUILD)/$(d).hma.bin $(BUILD)/$(d).drv)
 	python3 tools/os88rom.py hma --build $(BUILD) --out $(BUILD) "--defines=$(VIDDEF)" \
 		"--drivers=$(HMADRV)" --drv-org=$(DRV_HMA_ORG)
 
 $(BUILD)/sound.hma.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc drivers/sound/covox.inc \
-                        drivers/sound/picomem.inc drivers/sound/sndpkg.inc \
+                        drivers/sound/picomem.inc drivers/sound/sndpkg.inc drivers/sound/mixer.inc \
+                    drivers/sound/volume.inc apps/os88mixui.inc apps/os88gfx.inc apps/os88dec.inc \
                         drivers/os88drv.inc apps/os88api.inc $(BUILD)/sound.bin
 	$(NASM) -f bin -w+error $(SNDDEF) -DDRV_ORG=$(DRV_HMA_ORG) -I drivers/sound/ \
 		--before "[map symbols $(BUILD)/sound.hma.map]" \
@@ -4373,6 +4399,29 @@ $(BUILD)/ems.bin: drivers/ems/ems.asm drivers/os88drv.inc apps/os88api.inc | $(B
 
 $(BUILD)/ems.drv: $(BUILD)/ems.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/ems.bin -o $@
+
+# CDROM.DRV - an ATAPI CD-ROM: ISO 9660 as a read-only volume, and its audio
+# (SPEC.md 119). cdpkg.inc is the package door, shared with apps/cdrack
+CDROM_SRC := drivers/cdrom/cdrom.asm drivers/cdrom/cdpkg.inc \
+             drivers/cdrom/atapi.inc drivers/cdrom/cddisc.inc \
+             drivers/cdrom/cdiso.inc drivers/cdrom/cdaudio.inc \
+             drivers/cdrom/cdico.inc
+$(BUILD)/cdrom.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/cdrom/ -I drivers/ -I apps/ -o $@ $<
+	@echo "cdrom: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/cdrom.drv: $(BUILD)/cdrom.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/cdrom.bin -o $@
+
+# ...and the GATE'S build of it, never shipped (usbmouse's CH375SIM shape):
+# -DCDSIM_AUDIO gives QEMU's one-track data disc three audio tracks, so
+# tests/cdrom.py can drive TRACKnn.CDA and CDRack there (SPEC.md 119.7)
+$(BUILD)/cdromsim.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DCDSIM_AUDIO -I drivers/cdrom/ -I drivers/ -I apps/ -o $@ $<
+
+$(BUILD)/cdromsim/CDROM.DRV: $(BUILD)/cdromsim.bin tools/os88drv.py $(PKGZSTAMP)
+	@mkdir -p $(BUILD)/cdromsim
+	$(OS88DRV) $(BUILD)/cdromsim.bin -o $@
 
 # RAMDISK.DRV - a DRVC_FILE volume with no hardware behind it (SPEC.md 62.9),
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
@@ -4581,10 +4630,10 @@ $(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
 	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
-$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
@@ -4596,10 +4645,10 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOO
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
@@ -4623,10 +4672,10 @@ $(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(
 # Its OWN boot sector, unlike the pair above it: 15 spt is a different track
 # shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
 # build/boot120.bin's rule for why that is three sectors and not four.
-$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(BUILD)/boot120.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
@@ -4721,7 +4770,7 @@ vmmousetest: $(BUILD)/vmmouse.img
 	@echo "             Run it with: python3 tests/vmmouse.py"
 
 # VESATEST - THE PACKED-PIXEL DISPLAY'S GATE DISK (SPEC.md 120.9): ether360.img's
-# shape with a SYSTEM.CFG whose driver word has BIT 8 set, VESA.DRV's
+# shape with a SYSTEM.CFG whose driver word has BIT 9 set, VESA.DRV's
 # (drv_cfgbit), so the desktop comes up on the VBE before the first paint and
 # tests/vesa.py reads state and pixels instead of clicking. The SHIPPED kernel
 # and the SHIPPED driver, on a 1.44MB disk because the row drives a 1024x768
@@ -4731,7 +4780,7 @@ $(BUILD)/vxcfg/system.cfg: | $(BUILD)
 	@mkdir -p $(BUILD)/vxcfg
 	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
-	  (1 << 8).to_bytes(2,'little') + b'\0\0')" > $@
+	  (1 << 9).to_bytes(2,'little') + b'\0\0')" > $@
 
 $(BUILD)/vesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
@@ -4882,7 +4931,7 @@ $(BUILD)/vx8cfg/system.cfg: | $(BUILD)
 	@mkdir -p $(BUILD)/vx8cfg
 	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
-	  (1 << 8).to_bytes(2,'little') + b'VM' + bytes([3,4,0,0,0,0x8A]) + b'\0\0')" > $@
+	  (1 << 9).to_bytes(2,'little') + b'VM' + bytes([3,4,0,0,0,0x8A]) + b'\0\0')" > $@
 
 $(BUILD)/vesa8.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vx8cfg/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
@@ -4968,6 +5017,95 @@ $(BUILD)/emstest.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(C
 emstest: $(BUILD)/emstest.img
 	@echo "emstest: build/emstest.img - EMS.DRV wanted, EMSTEST.O88 at the root"
 	@echo "              Run: python3 tests/ems.py, python3 tests/videms.py"
+
+# CDROMTEST - SPEC.md 119.7's gate: the 1.44MB system disk with a SYSTEM.CFG
+# that wants CDROM.DRV (bit 8), and build/cdfix.iso, the disc tests/cdrom.py
+# puts in QEMU's secondary master. The ISO is tools/os88cdiso.py's, whose
+# `list` is the reference the guest's listing is compared against: folders
+# two deep, a folder of sixty names (a directory longer than a sector, under DSK_NENT), a
+# name that mangles, a lower-case one, a package, and BIG.BIN - generated
+# bytes, over 64 KB and not a whole number of sectors
+CDFIXFILES := $(wildcard tests/cdfix/*.TXT)
+$(BUILD)/cdcfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/cdcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 9).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/cdfix.iso: tools/os88cdiso.py $(CDFIXFILES) $(BUILD)/mines.o88
+	python3 tools/os88cdiso.py iso -o $@ --volid CDFIX \
+		--file README.TXT=tests/cdfix/README.TXT \
+		--file lower.txt=tests/cdfix/README.TXT \
+		--file "Long File Name.text=tests/cdfix/LONG.TXT" \
+		--file A.B.C=tests/cdfix/LONG.TXT \
+		--file MINES.O88=$(BUILD)/mines.o88 \
+		--file DOCS/NOTES.TXT=tests/cdfix/NOTES.TXT \
+		--file DOCS/DEEP/BOTTOM.TXT=tests/cdfix/BOTTOM.TXT \
+		$(foreach n,$(shell seq -w 0 59),--file MANY/F0$(n).TXT=tests/cdfix/NOTES.TXT) \
+		--gen BIG.BIN:100001
+
+$(BUILD)/cdromtest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS) \
+            $(SYSOPTIONAL) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+            $(BUILD)/cdcfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(COREAPPSARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/cdcfg/system.cfg $(APPDATAFOLDER)
+
+# ...the same disk with the gate's CDROM.DRV (-DCDSIM_AUDIO) in place of the
+# shipped one: its own SYSTEM.CFG and its own driver, nothing else different
+$(BUILD)/cdromsim.img: $(BUILD)/cdromtest.img $(BUILD)/cdromsim/CDROM.DRV tools/os88fat.py
+	cp $(BUILD)/cdromtest.img $@
+	python3 tools/os88fat.py del $@ CDROM.DRV
+	python3 tools/os88fat.py add $@ $(BUILD)/cdromsim/CDROM.DRV CDROM.DRV
+
+.PHONY: cdromtest
+cdromtest: $(BUILD)/cdromtest.img $(BUILD)/cdromsim.img $(BUILD)/cdfix.iso
+	@echo "cdromtest: build/cdromtest.img - CDROM.DRV wanted; build/cdfix.iso the disc"
+	@echo "              Run: python3 tests/cdrom.py"
+
+# CDAUDIOIMG - SPEC.md 119.7's machine to LOOK at, because 86Box cannot be
+# driven from this host: build/cdaudio.cue is an audio CD of three generated
+# tones (tools/os88cdiso.py audio), and build/cdaudiotest.img is the gate disk
+# with \AUTOSTRT\CDRACK.LNK - a link to the DOCUMENT D:\TRACK02.CDA, so the
+# 386 boots into CDRack playing track 2 through the .CDA association
+# (SPEC.md 119.3.5): the driver's root listing, the player's file read and
+# PLAY AUDIO MSF, with nobody at the machine. A_SYS.LNK opens A:\SYSTEM FIRST
+# because a link's document open does not sweep ASSOC.DAT the way a
+# double-click does (docs/plans/ASSOC-FIND-PLAN.md section 1): listing SYSTEM
+# is what teaches the machine that .CDA is CDRACK.O88's.
+# `make 386-cdrom` boots it; QEMU's drive has no audio commands at all
+$(BUILD)/cdaudio.cue: tools/os88cdiso.py
+	python3 tools/os88cdiso.py audio -o $@ --tone 40:440 --tone 30:660 \
+		--tone 20:880
+
+$(BUILD)/cdlnk/CDRACK.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/cdlnk
+	python3 tools/os88lnk.py $(BUILD)/cdlnk/A_SYS.LNK 'SYSTEM' --kind folder
+	python3 tools/os88lnk.py $@ 'TRACK02.CDA' --vol D --kind document
+
+$(BUILD)/cdaudiotest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS) \
+            $(SYSOPTIONAL) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+            $(BUILD)/cdcfg/system.cfg $(BUILD)/cdlnk/CDRACK.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(COREAPPSARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/cdcfg/system.cfg \
+		AUTOSTRT:$(BUILD)/cdlnk/A_SYS.LNK \
+		AUTOSTRT:$(BUILD)/cdlnk/CDRACK.LNK $(APPDATAFOLDER)
+
+.PHONY: cdaudioimg 386-cdrom
+cdaudioimg: $(BUILD)/cdaudiotest.img $(BUILD)/cdaudio.cue
+	@echo "cdaudioimg: build/cdaudiotest.img boots into CDRack;"
+	@echo "            build/cdaudio.cue is three audio tracks. make 386-cdrom"
+
+# The 386 with an ATAPI CD-ROM on the secondary channel holding the audio CD,
+# a Sound Blaster 16 for its CD input, and the gate disk that autostarts
+# CDRack (SPEC.md 119.7). What a working machine looks like: Play, and the
+# display counts up through track 1 with the tone in the speakers.
+386-cdrom: $(BUILD)/cdaudiotest.img $(BUILD)/cdaudio.cue $(APPSIMG)
+	@$(UNPROTECT) $(VM386CD)/86box.cfg
+	$(BOX) -P $(VM386CD) -N
 
 # THEWIRETEST: the Wire's gate disks (SPEC.md 92.12), ethertest's shape and
 # for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON
@@ -5229,6 +5367,23 @@ $(BUILD)/mrwt720.img: $(BUILD)/midirack.o88 $(BUILD)/mrsynth/MIDIRACK.BNK $(MIDI
 mrwttest: $(BUILD)/mrwt720.img
 	@echo "mrwttest: build/mrwt720.img - MIDIRack and the synthetic bank."
 	@echo "          Run it with: python3 tests/midirack.py --arm wt"
+
+# Hardware volume's integration fixtures: same shipped driver and kernel,
+# SOUND wanted at boot, with/without the optional SYSTEM/MIXER.O88.
+.PHONY: mixertest
+mixertest: $(BUILD)/mixer360.img $(BUILD)/mixernone360.img
+$(BUILD)/mixercfg/SYSTEM.CFG: | $(BUILD)
+	@mkdir -p $(dir $@)
+	python3 -c "import struct; open('$@','wb').write(b'O88CFG\0\0'+struct.pack('<H',3)+b'DW'+bytes([1,2])+struct.pack('<H',1)+b'\0\0')"
+$(BUILD)/mixer360.img $(BUILD)/mixernone360.img: $(BUILD)/boot360.bin $(KERNFILE) \
+        $(DRIVERS) $(SYSAPPS) $(COREAPPS360) $(SYSOPTIONAL) $(SYSDOC) \
+        $(BUILD)/mixercfg/SYSTEM.CFG tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixercfg/SYSTEM.CFG \
+		$(if $(filter $(BUILD)/mixer360.img,$@),$(SYSOPTIONALARGS)) \
+		--folder SYSTEM/APPDATA
 
 .PHONY: miditest
 miditest: $(BUILD)/midisys720.img $(APPSIMG720)
@@ -5834,6 +5989,16 @@ $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin tools/os88pkg.py
 $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
 
+# The same fixture with 4.8 seconds staged: QMP and floppy discovery must
+# leave audio still playing when the volume popup opens. Default SBTEST
+# remains byte-identical; this arm is only the mixer's background-service leg.
+$(BUILD)/mixplay.bin: tests/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DSBTEST_RATE=4000 -DSBTEST_CHUNKS=24 -o $@ $<
+$(BUILD)/mixplay.o88: $(BUILD)/mixplay.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+$(BUILD)/mixplay.img: $(BUILD)/mixplay.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mixplay.o88
+
 # Minesweeper, the first loadable program: a flat binary with the .o88
 # package header. ONE assembly per package since SPEC.md 20.1 - a package
 # links at org 0 and owns a segment, so it is position-independent and there
@@ -5869,6 +6034,28 @@ $(BUILD)/timer.bin: apps/timer/timer.asm apps/os88api.inc apps/os88ui.inc \
 
 $(BUILD)/timer.o88: $(BUILD)/timer.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/timer.bin -o $@
+
+# CDRACK (SPEC.md 119.6): an audio CD through CDROM.DRV's door, which it
+# shares as source with the driver (drivers/cdrom/cdpkg.inc, SPEC.md 20.11).
+# Its pictures and both fonts are build/cdart.inc, made by
+# tools/os88cdart.py from definitions in that file - after its --selfcheck,
+# so a picture that broke the converter's own invariants never reaches a disk
+.PHONY: cdrack
+cdrack: $(BUILD)/cdrack.o88
+$(BUILD)/cdart.inc: tools/os88cdart.py | $(BUILD)
+	python3 tools/os88cdart.py --selfcheck
+	python3 tools/os88cdart.py --out $@
+
+$(BUILD)/cdrack.bin: apps/cdrack/cdrack.asm apps/cdrack/crdraw.inc \
+                     apps/cdrack/crface.inc $(BUILD)/cdart.inc \
+                     apps/os88api.inc apps/os88ui.inc \
+                     drivers/cdrom/cdpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/cdrack/ -I drivers/cdrom/ \
+		-I $(BUILD)/ -o $@ apps/cdrack/cdrack.asm
+	@echo "cdrack: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/cdrack.bin -o $@
 
 # INSTALL (SPEC.md 117): the setup wizard, in the root of every kern_big
 # system disk ($(SYSINST)). It installs nothing itself - OSAPI_DRV_USE and
@@ -14867,7 +15054,7 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # (SPEC.md 19.10.1). Here, for that reason and the four packages', and
 # tests/unit/t_livefull.py now holds the live volume to every file the 1.44MB
 # apps disk ships, folder and all, so the next one cannot drop out this way.
-LIVEPKGDEPS := $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
+LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
                $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS)
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
@@ -14912,7 +15099,7 @@ $(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
 # in front of the same rest (SPEC.md 80.7): $(LIVEARGS) is still what it was,
 # byte for byte, and build/livepayload.txt still prints it.
 LIVEREST := $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
-            $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG) \
+            $(LIVESYSARGS) $(SYSOPTIONALARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG) \
             $(SYSINST)
 LIVEARGS := $(DRIVERS) $(LIVEREST)
 

@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "354d9881a90be5f6b2bcf132f63611b228220bed81725cb65307d84f9029e753",
+  "fingerprint": "e71c91581e6a45be1aea7cc74a763e6d8eabab574098fc1560f2ed14b8f029bf",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "5ba4014d39440744eb6f30344d2dc6d59efd3ec996ad010d1d10392a44332581",
+  "fingerprint": "e3ac3da81bc0961e958b8dc8749cdca03864c704282de014ec7d5e1d8ba4721c",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -430,31 +430,66 @@
    "to": 11
   },
   {
-   "fingerprint": "d07f12f9d2f9e8a29b4b7667a17ca98d775cb5d198bc8562ab1851234e156f8e",
+   "fingerprint": "b3dacdeef2f6cc10afdff902151a6bd2064f7f562b2c71df3f3a8f84a0a89e2e",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "SPEC.md 120.7: OSAPI_GFX_BLITD appended at 0x04AB, the one cell past the drivers' door, and VID_VESA (4) named beside the VID_* kinds; OSAPI_VIDEO and OSAPI_WM_DISPLAY may now answer DL 4 with DH 8 or 16. Nothing built before this change moves: every earlier cell keeps its address and its contract, so no PKG_FMT bump",
+   "reason": "Add SND_CAP_MIXER without moving or changing existing API cells",
    "to": 10
   },
   {
-   "fingerprint": "2a86873a4cc1d13c44e82829dfbee32439dc55df29cbf11eba482d0050c0aaaa",
+   "fingerprint": "c6031cce0d51f3efc7720ddefe2f45fe34bd514189e34109b8898d1f5159bf6b",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "SPEC.md 120.7: OSAPI_GFX_BLITD appended at 0x04AB, the one cell past the drivers' door, and VID_VESA (4) named beside the VID_* kinds; OSAPI_VIDEO and OSAPI_WM_DISPLAY may now answer DL 4 with DH 8 or 16. Nothing built before this change moves: every earlier cell keeps its address and its contract, so no PKG_FMT bump",
+   "reason": "Add SND_CAP_MIXER without moving or changing existing API cells",
    "to": 11
   },
   {
-   "fingerprint": "5ba4014d39440744eb6f30344d2dc6d59efd3ec996ad010d1d10392a44332581",
+   "fingerprint": "5a099670b2becda278326540f5343a8287617766ead3ad4265987468536cbac8",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "SPEC.md 120.5: DH is 8 or 16 on a packed display - colour is DH >= 4 and a save-under takes DH as it comes (words only, no cell moved)",
+   "reason": "DRVC_CD = 9, a third file-redirector class for CDROM.DRV (SPEC.md 119.1), appended after DRVC_FILE2. An addition: no cell moved and no contract changed, so everything built before still runs; no number moves.",
    "to": 10
   },
   {
-   "fingerprint": "354d9881a90be5f6b2bcf132f63611b228220bed81725cb65307d84f9029e753",
+   "fingerprint": "4d974291a40ef2d7505147b4d79807a9146bb4738719896245805ba1dc10dd82",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "SPEC.md 120.5: DH is 8 or 16 on a packed display - colour is DH >= 4 and a save-under takes DH as it comes (words only, no cell moved)",
+   "reason": "DRVC_CD = 9, a third file-redirector class for CDROM.DRV (SPEC.md 119.1), appended after DRVC_FILE2. An addition: no cell moved and no contract changed, so everything built before still runs; no number moves.",
+   "to": 11
+  },
+  {
+   "fingerprint": "544762deae9443093e0064389f6392c51a5d13472b80ca3af1e925d358ee79ae",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "DQ_MAXREC 8 -> 9: kern_emu's ninth drv_tab row (CDROM.DRV, SPEC.md 119.1) trips the guard that a suspend's record buffer holds one record a row. CDROM.DRV answers DRVV_HWINFO with CF = 1, so no machine writes a ninth record and a buffer of eight built before is never overrun: no number moves.",
+   "to": 10
+  },
+  {
+   "fingerprint": "b538721f9ddec8e7e27838ad41e2196ca75d146ee6242cf819cffe6a332d7c15",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "DQ_MAXREC 8 -> 9: kern_emu's ninth drv_tab row (CDROM.DRV, SPEC.md 119.1) trips the guard that a suspend's record buffer holds one record a row. CDROM.DRV answers DRVV_HWINFO with CF = 1, so no machine writes a ninth record and a buffer of eight built before is never overrun: no number moves.",
+   "to": 11
+  },
+  {
+   "fingerprint": "69144283bf52e51e734efe31d4c7cc661480ab10578e8e31048de8865be0c84b",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "FSCAP_ICON (DSV_CAPS bit 2) and DRV_ICONV (41h): a file-class driver's volume may draw its own desktop picture through its door (SPEC.md 26.4.2). An addition - a driver without the bit gets the kernel's icon as before, and a kernel without the hook never asks - so no number moves.",
+   "to": 11
+  },
+  {
+   "fingerprint": "e3ac3da81bc0961e958b8dc8749cdca03864c704282de014ec7d5e1d8ba4721c",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge main: CDROM.DRV's cells (DRVC_CD) beside VESA's (SPEC.md 120); no cell moved",
+   "to": 10
+  },
+  {
+   "fingerprint": "e71c91581e6a45be1aea7cc74a763e6d8eabab574098fc1560f2ed14b8f029bf",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "merge main: CDROM.DRV's cells (DRVC_CD) beside VESA's (SPEC.md 120); no cell moved",
    "to": 11
   }
  ]

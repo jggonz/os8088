@@ -65,6 +65,14 @@ need" is something you check rather than argue yourself into:
    Check all four planes and XT cycle costs on MartyPC, and use QEMU only
    to verify the complete 320×240 display and desktop restoration.
 
+9. **Sound Blaster 16 mixer behavior** (SPEC.md §34.15). MartyPC's sound
+   card stores arbitrary mixer-register bytes but does not implement the
+   CT1745's defined-bit masks, compatibility mappings or analog attenuation.
+   Use it for the popup/Mixer's XT interaction and three adapter faces, and
+   use `mixerhost`'s independent Creative-register model for all three mixer
+   generations. `mixersb16` uses QEMU's actual SB16 mixer for stereo readback
+   and source/tone controls. Neither establishes a physical card's loudness.
+
 That is the list. **"It is quicker to type" is not on it, and neither is
 "I already know the QMP commands."** An eighth entry goes here, not into a
 row's docstring. Entries 4–7 share the shape that gets on the list easily:
@@ -641,7 +649,7 @@ reading its drawing code.
 **Nothing in `SYSTEM.CFG` wants the driver by default** (SPEC.md 51.3), so
 a stock `os8088.img` never reads it; every row above boots a disk whose
 settings file already asks for it (`ethertest`'s shape). The driver is
-wanted by bit 8 of the `DW` record, and the class is the fourth byte of the
+wanted by bit 9 of the `DW` record (8 is the CD-ROM's), and the class is the fourth byte of the
 `VM` record (ver 3): `0x8A` is 800x600x8.
 
 **Time is taken on 86Box, not QEMU.** `make 486-vesa` boots the bench's

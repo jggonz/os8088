@@ -444,7 +444,7 @@ _MIRROR = {
     # HMA (SPEC.md 2.10.8): a drv_tab row naming a segment at or above
     # DRV_HMA_SEG has its header at SEG:DRV_HMA_ORG, never SEG:0. A harness
     # that reads a driver's variables wants drv_base() below, not seg << 4
-    "DRV_HMA_ORG": ("kernel/kernel.asm", 0xE000),
+    "DRV_HMA_ORG": ("kernel/kernel.asm", 0xC000),
     "DRV_HMA_SEG": ("kernel/kernel.asm", 0xF000),
 }
 

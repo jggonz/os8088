@@ -96,6 +96,11 @@ GROUP_NOTES = {
 # added and this list was not, so the index that exists to answer "does this
 # already exist?" answered no about a file that did.
 INCLUDES = [
+    ("os88mixui.inc", "34.15",
+     "The hardware mixer family\'s mechanical slider: an opaque band with a "
+     "recessed track, scale, ridged thumb, caption and percentage, shared by "
+     "SOUND.DRV and MIXER.O88. mixui_hit maps the pointer and mixui_scale "
+     "retains stereo balance."),
     ("os88ui.inc", "13, 75",
      "Buttons, check boxes, radio dots, scroll bars, group boxes, the "
      "standard alert, the standard About card and the drop-down. Opt into "
@@ -483,7 +488,7 @@ def packages():
     # only", which is the one thing neither is
     shipped = set(re.findall(r"\$\(BUILD\)/([a-z0-9]+)\.o88",
                              make_expand("$(ALLAPPSFILES) $(SYSAPPS) "
-                                         "$(STIKAPPS) $(SYSTOOLS)", mvars)))
+                                         "$(STIKAPPS) $(SYSTOOLS) $(SYSOPTIONAL)", mvars)))
     retired = set()
     rp = os.path.join(ROOT, "apps", "RETIRED.txt")
     if os.path.exists(rp):

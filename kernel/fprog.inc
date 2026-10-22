@@ -1000,8 +1000,9 @@ fpg_finish:
 .band:
     cmp ax, cx
     ja .nband
-    mov bx, MENU_TEXT_Y         ; (two word moves: 28 bytes keeps ui_task's
-    mov dx, MENU_TEXT_Y + 7     ; parity, tests/unit/t_hotpar.py)
+    xor bh, bh                  ; (a byte move and a word move: 29 bytes keeps
+    mov bl, MENU_TEXT_Y         ; ui_task's parity beside SPEC.md 119's rows,
+    mov dx, MENU_TEXT_Y + 7     ; tests/unit/t_hotpar.py)
     call gfx_fill               ; (the ground is still thm_bg's)
 .nband:
     call fpg_span               ; AX/CX = the whole span, for menu_inval
@@ -1033,6 +1034,15 @@ fpg_finish:
                                 ; AFTER [fpg_on] went to 0, so the menus
                                 ; segment is back to full length and nothing
                                 ; is clamped away
+%ifdef OS88_SNDCARD
+    ; Sound can publish its mixer during this very boot transfer, moving
+    ; vid_clk_hx left. The armed widget's old span then covers the icon;
+    ; menu text cannot erase it beyond its new bound. Redraw the picture too.
+    cmp cx, [vid_clk_hx]
+    jb .soundok
+    mov word [menu_mixcap], 0FFFFh
+.soundok:
+%endif
     call menu_draw_bar          ; the text band, as the ONE run that differs -
     pop ax                      ; and the menus segment is FPG_CELLS longer
                                 ; again the moment [fpg_on] went to 0 above,

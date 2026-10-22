@@ -181,6 +181,22 @@
   "strings": null,
   "why": "Paint's refusal of a GIF over 64KB is named: the toast GIF larger than 64KB"
  },
+ "CDRACK_O88": {
+  "sources": [
+   "apps/cdrack"
+  ],
+  "stamped": "ca9acbde",
+  "strings": "4d867d0ae6645bc7",
+  "why": "CDRack replaces the CD Player: rewritten for the three layouts, the two themes, the toggles, the volume and the keys"
+ },
+ "CDROM_DRV": {
+  "sources": [
+   "drivers/cdrom"
+  ],
+  "stamped": "ca9acbde",
+  "strings": "c3a141853e1e7543",
+  "why": "the player it names is CDRack now"
+ },
  "CHARTER_F88": {
   "sources": [],
   "stamped": "e4576a70",
@@ -638,6 +654,16 @@
   "strings": "518a0d82ecee0138",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "MIXER_O88": {
+  "sources": [
+   "apps/mixer",
+   "apps/os88mixui.inc",
+   "drivers/sound/sndpkg.inc"
+  ],
+  "stamped": "c46e0112",
+  "strings": "ed45625209cc733e",
+  "why": "Document source selection, level and balance, tone controls, keys and optional SYSTEM installation"
+ },
  "MOUNTAIN_BMP": {
   "sources": [],
   "stamped": "e4576a70",
@@ -946,9 +972,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "e4576a70",
-  "strings": "61d798f4ae5a6f01",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "c46e0112",
+  "strings": "7e76e8b53d450afa",
+  "why": "Document hardware-mixer volume, optional Mixer discovery and the measured driver footprint"
  },
  "SPACEJAM_MID": {
   "sources": [],
