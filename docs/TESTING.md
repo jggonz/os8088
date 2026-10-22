@@ -574,6 +574,48 @@ python3 tools/mouse.py --screen 720x348 build/qmp.sock click X Y
 `HERCSEG` is a segment and `hercshot` takes the linear address. The full
 recipe and its four traps: docs/HERCULES-TESTING.md.
 
+### VESA — the packed display (SPEC.md 119), and why QEMU is the whole fixture
+
+QEMU's standard VGA (`-vga std`, the default) carries a VBE 2.0/3.0 BIOS, so
+`VESA.DRV`'s probe finds 1024x768 at 16 bits a pixel on it exactly as on a
+real card; MartyPC and every 86Box XT have **no VBE at all**, so the same
+disk on them is the negative control for free (the driver refuses, the
+desktop stays on the VGA). A VESA desktop is never screendumped through
+`-vga std` at any size other than its own: `screendump` is the mode's size,
+so `tools/mouse.py --screen 1024x768` (or `800x600`) must match the mode the
+disk asked for.
+
+```sh
+make vesatest                       # four disks: vesa.img (Auto: 1024x768x16),
+                                    # vesa8.img (the 'VM' class byte: 800x600x8),
+                                    # vesablitd.img + vxpics.img (PiXEL opened by
+                                    # an AUTOSTRT link, for the depth blit)
+python3 tests/vesa.py --png /tmp/v.png     # boot state and the first paint, a
+                                           # menu, a Disk window
+python3 tests/vesa8.py                     # the 8bpp path and the DAC
+python3 tests/vesacp.py                    # the Display page: the row cycles,
+                                           # Set Primary switches
+python3 tests/vesablitd.py                 # OSAPI_GFX_BLITD through PiXEL
+make vesabench && python3 tests/vesabench.py   # VESABENCH, behaviour only
+```
+
+**Nothing in `SYSTEM.CFG` wants the driver by default** (SPEC.md 51.3), so
+a stock `os8088.img` never reads it; every row above boots a disk whose
+settings file already asks for it (`ethertest`'s shape). The driver is
+wanted by bit 8 of the `DW` record, and the class is the fourth byte of the
+`VM` record (ver 3): `0x8A` is 800x600x8.
+
+**Time is taken on 86Box, not QEMU.** `make 486-vesa` boots the bench's
+disks on a 486DX2/66 with a Cirrus Logic CL-GD5428 (`vm/486-vesa`: VBE 1.2,
+1 MB), the package runs and saves itself on its first paint, and the report
+is read back with `mcopy -i build/vxbench-86box.img ::VESABNCH.TXT -` (the
+target boots a scratch copy of the B: image, because the package writes to it). 86Box has
+no automation socket, so that is the whole recipe: launch, wait a minute,
+read the file, `kill -9`. What no emulator here can show: a real card's
+`4F05h` latency on a real bus, a BIOS whose window granularity is not a
+power of two, and a card whose mode list lives inside the info buffer — the
+last two are refusals the driver makes by design.
+
 **Every knob is tracked by a stamp file**, so a knob-built kernel is a
 different kernel and changing the knob rebuilds it, its carved modules
 (`ctrl.drv`, `format.drv`) and the boot sectors. A forced kernel stays on your

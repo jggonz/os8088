@@ -215,3 +215,35 @@ tests/pxopen.py's question.
 cell without a `PKG_FMT` bump.
 
 ![CITY.PCX in its own 256 colours: PiXEL on the 1024x768x16 desktop, S6.](vesa/s6-pixel-city-1024x768x16.png)
+
+## 2026-10-22 — S7, where the time goes
+
+**The question was the BIOS call, and the answer was no.** The plan held a
+direct window register for the Bochs VBE in reserve, to be taken only if a
+measurement said `int 10h 4F05h` was where a packed desktop spent its time.
+The bench that answered is a benchlib package that runs itself on its first
+paint and saves itself, opened at boot by an autostart link - because the
+machine the numbers come off, 86Box's 486 with a Cirrus 5428, has no
+automation socket and nobody to click. (Its first boot stopped in the AMI
+BIOS at a fresh-CMOS prompt; an F1 through AppleScript got past it once and
+the `nvr` file remembers.) On that 486 the BIOS call is seven microseconds
+and a window-sized fill twenty-three milliseconds across seven windows:
+0.2%. The register was not taken, and the decisions table says why.
+
+**What the fill's number said instead.** 249,600 bytes in 23.3 ms is 10.7
+MB/s, twelve cycles a word at 66 MHz: the VL bus, and the fill was already
+one `rep stosw` to each window edge. The depth blit and the restore were
+not - a word and an edge test a pixel, at half the fill's rate - and two
+rounds of `vx_rowcopy` (first `rep movsb` to the edge, then the words under
+`rep movsw`) took the depth blit from 7.9 to 3.4 ms, the fill's rate to
+within ten percent. The restore is every menu's close, so that is the row a
+user feels. And the sixteen-colour blit of the same rows is 5.3x the depth
+blit, which is the number §119.7 was pinned on before anyone had it.
+
+**Two bench bugs on the way.** Two rows lapped the PIT and came back
+tick-timed in whole 55 ms (`w`), so the blocks shrank until no row did;
+and `bl_mul48` is DX:AX times CX into the accumulator, not the accumulator
+times CX, so two in a row kept only the second and the share row read 0 -
+the switch count times a thousand is one word, so it is one multiply now.
+
+![VESABENCH's report on 86Box's 486 with a Cirrus CL-GD5428, at 1024x768x16, S7.](vesa/s7-vesabench-486-cirrus.png)

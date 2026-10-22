@@ -4409,6 +4409,19 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=400,
         wants=("build/os8088.img", "build/apps.img", "build/vesablitd.img",
                "build/vxpics.img", "build/pixel.o88")),
+    Row("vesabench", "soak", py("tests/vesabench.py"), 150.0,
+        "VESABENCH's correctness run (SPEC.md 119.8): build/vesabench.img "
+        "and build/vesabnc8.img each open VESABNCH.O88 off build/vxbench.img "
+        "through an AUTOSTRT link; the package runs its rows on its first "
+        "paint - one BIOS window read, three fills, the depth blit against "
+        "the nibble one, a text row, the report page - and saves "
+        "VESABNCH.TXT, which the row reads back with mtools. Asserts the "
+        "mode named, a number on every row and BLITD DRAWN; the times are "
+        "QEMU's and are printed, not judged - 86Box's 486 is where they are "
+        "taken (docs/reports/VESA-BENCH-486-2026-10-22.md). QEMU by name",
+        needs=("qemu", "nasm", "mtools"), serial=True, timeout=600,
+        wants=("build/os8088.img", "build/apps.img", "build/vesabench.img",
+               "build/vesabnc8.img", "build/vxbench.img")),
     Row("vmmouse", "soak", py("tests/vmmouse.py"), 45.0,
         "The VMware absolute pointer (SPEC.md 9.11), the browser's grabless "
         "mouse - and the one CI gate a browser-only feature gets. QEMU's pc "

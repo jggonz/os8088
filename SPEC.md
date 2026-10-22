@@ -201870,6 +201870,32 @@ bank register is known, probed at attach and used in place of the `int 10h`
 where the time went. The mouse ISR's 256-byte stack (§119.3.3) is what makes
 the `int 10h` safe from the arrow either way.
 
+**The measurement is `VESABENCH`** (`tests/vesabench/`, `make vesabench`):
+a benchlib package that runs itself on its first paint and saves
+`VESABNCH.TXT` beside itself, so a machine with no automation socket needs
+nobody to click. Its rows are one `4F05h BH=1` read (the BIOS round trip a
+switch costs, without the switch), `OSAPI_GFX_FILL` of 624x400, 624x1 and
+8x8, `OSAPI_GFX_BLITD` and `OSAPI_GFX_BLIT4` of the same 400 rows in 25
+blocks of 16, a 78-cell `OSAPI_FONT_RUN`, and the report's own page; then
+the window switches a 624x400 fill makes, from `OSAPI_VIDEO`'s width and
+depth, and that many BIOS calls as a share of the fill in tenths of a
+percent. `tests/vesabench.py` is its QEMU run (behaviour: the mode named,
+every row a number, `BLITD says DRAWN`), and `vm/486-vesa` — the 486DX2/66
+with a Cirrus Logic CL-GD5428 in place of the OTI-067 — is where the
+numbers are taken (`docs/reports/VESA-BENCH-486-2026-10-22.md`).
+
+**The verdict, 2026-10-22, on that 486.** `4F05h` is 7.0 us a call; a
+624x200 fill at 16bpp is 23.3 ms and crosses seven windows, so the switches
+are **0.2%** of it. The direct window register is **not taken**: the fill
+already runs one `rep stosw` to each window edge and its 10.7 MB/s is the
+VL bus's write rate, which no driver code shortens. What the measurement
+did change is the row COPY - the depth blit and the restore moved a word
+and tested the edge a pixel, at half the fill's rate - which is one `rep
+movsw` to the edge, the next window and the rest now (`vx_rowcopy`): the
+depth blit went 7.9 → 3.4 ms, the fill's rate to within 10%, and the
+sixteen-colour `OSAPI_GFX_BLIT4` of the same rows is 5.3x it, which is
+what §119.7 buys a package. PERFORMANCE.md Part 5 carries the rows.
+
 ### 119.9 Testing
 
 QEMU's standard VGA carries a VBE 2.0/3.0 BIOS, so `-vga std` — the default

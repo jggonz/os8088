@@ -142,11 +142,23 @@ code does not.
   the 8bpp palette form has no consumer - PiXEL's 256-entry master against
   240 free entries is a squeeze it does not carry - and no 15bpp card has
   been seen (the contract says what a 565 block does on one).
-- [ ] **S7 Where the time goes.** A measurement of a window repaint and a
-  full-screen fill on 86Box's 486 at 1024x768x16, with the `int 10h` bank
-  switch counted; the direct `dispi` window register for the Bochs VBE if
-  and only if the count says the BIOS call is the cost. Outcome: a report
-  under `docs/reports/`, and PERFORMANCE.md Part 5 gains the VESA rows.
+- [x] **S7 Where the time goes.** **Shipped:** `VESABENCH`
+  (`tests/vesabench/`, `make vesabench`), a benchlib package that runs and
+  saves itself on its first paint, opened at boot by an autostart link, so
+  86Box needs nobody to click; `vm/486-vesa`, the 486DX2/66 with a Cirrus
+  CL-GD5428 (VBE 1.2) in place of the OTI-067, which the driver brings up
+  at 1024x768x16; `tests/vesabench.py`, its QEMU run (soak: behaviour, not
+  time). **Measured** (`docs/reports/VESA-BENCH-486-2026-10-22.md`): the
+  BIOS call is 7.0 us and a 624x200 fill 23.3 ms across seven windows -
+  **0.2%** - so **the direct window register is not taken**; the fill is
+  one `rep stosw` to the edge at 10.7 MB/s, the bus. **What it changed:**
+  the depth blit and the restore copied a word and tested the edge a pixel
+  at half that rate; `vx_rowcopy` is one `rep movsw` to the edge, and the
+  depth blit went 7.9 → 3.4 ms. `OSAPI_GFX_BLIT4` of the same rows is
+  5.3x the depth blit; a 78-cell text row is 5.5 ms. PERFORMANCE.md Part 5
+  carries the four rows. **Not done:** a window repaint as such is the
+  report page's row (275 ms for 22 text rows, method T) and not a desktop
+  window's; a real card is a field run.
 - [ ] **S8 Acceptance.** `NOVIDEXT=1` in the build matrix and the measured
   resident cost in SPEC.md §119.1 and docs/KERNEL-MEMORY.md; docs/TESTING.md's
   recipe; docs/INDEX.md regenerated; the deduplicated soak union of every row
@@ -172,6 +184,7 @@ code does not.
 | PiXEL at depth only at 16bpp; the 8bpp desktop keeps the sixteen | loading the master's palette into DAC 16..255 | a 256-entry master against 240 free entries is a nearest-colour squeeze PiXEL does not have; the palette form ships for a package that has fewer colours than that |
 | `OSAPI_GFX_BLITD` clips to the display and not to §11.3's region | routing it through `gfx_blit4`'s clip walk | the walk is the kernel's and is entered by the kernel's own body; a package draws inside a content rect it knows to be in front, which is what PiXEL's canvas is |
 | one row a call at depth | a band of sixteen rows | the band buffer is 5,888 bytes and a 16bpp row of a 1024-wide canvas is 2,048; the far call is ~50 us on the 386 this is for |
+| no direct window register | the Bochs `dispi` index 5 in place of `4F05h` on QEMU | measured on 86Box's 486: the BIOS call is 0.2% of a window-sized fill, and the bus is the rest (docs/reports/VESA-BENCH-486-2026-10-22.md) |
 | Extend refused while VESA is primary | a two-depth straddle | §39.14.7's cut assumes both displays share a renderer; it does not, and no machine here has the pair |
 
 ## Existing facilities reused

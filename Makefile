@@ -216,6 +216,7 @@ VM286VID := $(CURDIR)/vm/286-video
 VM386SND := $(CURDIR)/vm/386-sound
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
+VM486V := $(CURDIR)/vm/486-vesa
 # ...and that 486 with the Video Player's measurement disk on IDE (make vid486)
 VM486VID := $(CURDIR)/vm/486-video
 VMPENT := $(CURDIR)/vm/pentium
@@ -4764,6 +4765,60 @@ $(BUILD)/vesablitd.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SY
 
 $(BUILD)/vxpics.img: $(BUILD)/pixel.o88 apps/pixel/samples/CITY.PCX tools/os88disk.py | $(BUILD)
 	python3 tools/os88disk.py -o $@ --size 1440 apps/pixel/samples/CITY.PCX $(BUILD)/pixel.o88
+
+# VESABENCH (SPEC.md 119.8, the plan's S7): where a packed display's time
+# goes - one BIOS window read, fills, the depth blit against the nibble one,
+# a text row - run and SAVED by the package itself on its first paint, so an
+# 86Box machine with no automation needs nobody to click. The same two-disk
+# shape as the depth gate: vesabench.img is vesa.img plus an \\AUTOSTRT link
+# to VESABNCH.O88 on B: (vesabnc8.img the same with the 800x600x8 class), and
+# vxbench.img is that B:. tests/vesabench.py runs it on QEMU and reads
+# VESABNCH.TXT back off the B: image with mtools; vm/486-vesa is the 86Box
+# 486 with a Cirrus 5428 the numbers are TAKEN on (docs/reports/VESA-BENCH-*)
+$(BUILD)/vesabnch.bin: tests/vesabench/vesabench.asm tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/vesabench/vesabench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/vesabench/vesabench.asm
+	@echo "vesabnch: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/vesabnch.o88: $(BUILD)/vesabnch.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/vesabnch.bin -o $@
+
+$(BUILD)/vxbd/VESABNCH.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'VESABNCH.O88' --vol B
+
+$(BUILD)/vesabench.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/VESABNCH.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/VESABNCH.LNK
+
+$(BUILD)/vesabnc8.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vx8cfg/system.cfg $(BUILD)/vxbd/VESABNCH.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vx8cfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/VESABNCH.LNK
+
+$(BUILD)/vxbench.img: $(BUILD)/vesabnch.o88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/vesabnch.o88
+
+.PHONY: vesabench 486-vesa
+vesabench: $(BUILD)/vesabench.img $(BUILD)/vesabnc8.img $(BUILD)/vxbench.img
+	@echo "vesabench: build/vesabench.img (1024x768x16) and build/vesabnc8.img (800x600x8),"
+	@echo "           each opening VESABNCH.O88 off build/vxbench.img at boot (SPEC.md 119.8)."
+	@echo "           python3 tests/vesabench.py runs both on QEMU; make 486-vesa is the 86Box 486"
+
+# ...and the 86Box 486 with a VBE card: vm/486 with a Cirrus Logic CL-GD5428
+# (VLB, 1 MB: 1024x768x8 and 800x600x16 among its modes - its BIOS is VBE
+# 1.2, which is what the driver's probe asks for) in place of the OTI-067,
+# booting the bench's own disks - the B: a SCRATCH COPY, vxbench-86box.img,
+# because the package WRITES its report to it (xt-wire's reason). Look-only:
+# 86Box has no automation socket, and the package saves its own report, so
+# launch, wait a minute, and read that copy's VESABNCH.TXT back with mtools
+486-vesa: $(BUILD)/vesabench.img $(BUILD)/vxbench.img
+	cp $(BUILD)/vxbench.img $(BUILD)/vxbench-86box.img
+	@$(UNPROTECT) $(VM486V)/86box.cfg
+	$(BOX) -P $(VM486V) -N
 
 # ...and the same disk with a ver-3 'VM' record whose class byte names
 # 800x600x8 (SPEC.md 119.2.3, kernel/vxabi.inc's VXC_*: 0x80 | width 2 |

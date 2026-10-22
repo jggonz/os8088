@@ -969,6 +969,37 @@ vx_rowfill:
     ret
 
 ; -----------------------------------------------------------------------------
+; vx_rowcopy - CX BYTES from DS:SI to ES:DI, with the window edge handled:
+;              one `rep movsb` to the edge, the next window, the rest. The
+;              per-byte `VXW` test it replaces halved the depth blit and the
+;              restore against the fill on a 486 (SPEC.md 119.8: 246 us a
+;              1,248-byte row against the fill's 117)
+; in:  ES:DI set by vx_addr, DS:SI the source, CX = bytes (> 0)
+; clobbers: cx, si, di, flags
+; -----------------------------------------------------------------------------
+vx_rowcopy:
+    push bx
+    mov bx, di
+    add bx, cx
+    jnc .one                    ; DI + CX does not carry: one run
+    push bx                     ; BX = bytes past the edge
+    sub cx, bx
+    call .run
+    call vx_nextwin
+    xor di, di
+    pop cx
+.one:
+    call .run
+    pop bx
+    ret
+.run:                           ; CX bytes: words, then the odd byte (a 486
+    shr cx, 1                   ; moves a word a cycle under `rep movsw` and a
+    rep movsw                   ; byte a cycle under `rep movsb`)
+    adc cx, cx
+    rep movsb
+    ret
+
+; -----------------------------------------------------------------------------
 ; vx_px - put colour AL at ES:DI, advancing DI (and the window) one pixel
 ; in:  AL = the colour index; ES:DI the pixel
 ; clobbers: flags (AX kept)
@@ -1351,16 +1382,10 @@ vxp_restore:
     cmp byte [cs:vx_one], 0
     jne .one
     cmp byte [cs:vx_bpp], 8
-    jne .w16
-.b8:
-    movsb
-    VXW
-    loop .b8
-    jmp short .rdone
-.w16:
-    movsw
-    VXW
-    loop .w16
+    je .cb
+    add cx, cx                  ; bytes a row
+.cb:
+    call vx_rowcopy             ; one rep to the edge, the next window, the rest
     jmp short .rdone
 .one:
     mov dh, 0                   ; bits left in DL
@@ -1978,20 +2003,13 @@ vxp_blitd:
 .s8:
     add si, [vx_bsrc]
     mov cx, [vx_w]
+    cmp byte [vx_bpp], 8
+    je .cb
+    add cx, cx                  ; bytes a row
+.cb:
     push ds
     mov ds, [bp+F_ES]           ; DS:SI = the source row
-    cmp byte [cs:vx_bpp], 8
-    jne .w16
-.b8:
-    movsb
-    VXW
-    loop .b8
-    jmp short .rdone
-.w16:
-    movsw
-    VXW
-    loop .w16
-.rdone:
+    call vx_rowcopy             ; one rep to the edge, the next window, the rest
     pop ds
     mov ax, [vx_bstride]
     add [vx_bsrc], ax
