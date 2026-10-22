@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Choosing a VESA mode on the Display page (SPEC.md 119.6).
+"""Choosing a VESA mode on the Display page (SPEC.md 120.6).
 
     make vesatest && python3 tests/vesacp.py [--png out.png]
 

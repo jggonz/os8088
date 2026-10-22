@@ -13,7 +13,7 @@ at +4 s. The PNGs land in the output directory as <sys>-<pkg>-1.png and
 and how much of it is not white.
 
 It is a DIAGNOSTIC and not a gate: nothing here asserts. It exists because
-SPEC.md 119's rows passed while nine packages opened at the wrong size on
+SPEC.md 120's rows passed while nine packages opened at the wrong size on
 the packed display, and a sheet of thirty-six screens beside the same
 thirty-six on VGA showed every one of them in an hour (docs/TESTING.md,
 "The first look found what the rows had not asked"). QEMU, not an 8088.

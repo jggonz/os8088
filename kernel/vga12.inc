@@ -1824,7 +1824,7 @@ vga_b4out:
 ; [vid_ndisp] two instructions in.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; gfx_blitd - OSAPI_GFX_BLITD (SPEC.md 119.7): a package's block AT THE
+; gfx_blitd - OSAPI_GFX_BLITD (SPEC.md 120.7): a package's block AT THE
 ;             DISPLAY'S DEPTH, or its DAC entries - the driver's whole, and
 ;             nothing of the kernel's but the cursor hide. ES:SI = pixels, BP
 ;             = the stride, AX/BX = x/y, CX/DX = w/h; CX = 0 is the palette
@@ -2007,7 +2007,7 @@ gfx_blit4:
                                 ; GFXDISP (SPEC.md 39.14.7)
 .dsp1:
 %endif
-    VIDEXTC VX_BLIT4, .out      ; a packed display (SPEC.md 119.3): the block
+    VIDEXTC VX_BLIT4, .out      ; a packed display (SPEC.md 120.3): the block
                                 ; is the driver's whole - the gfx_blit_* cells
                                 ; are set, ES:SI and BP are the source - and
                                 ; .out tears down nothing ([gfx_blit_fst] is
@@ -2867,7 +2867,7 @@ gfx_blitp:
     cmp byte [vid_mono], 0
     jne .no
     VIDEXTR .no                 ; ...and a packed display refuses too (SPEC.md
-                                ; 119.3.1): the source is a plane layout this
+                                ; 120.3.1): the source is a plane layout this
                                 ; display does not have, and Paint keeps its
                                 ; gfx_blit4 fallback for exactly this answer
     ; --- the geometry, once for the whole block. (The first version of this
@@ -3257,7 +3257,7 @@ gfx_fill_raw:
 ; The 1bpp arm pays nothing.
 ; -----------------------------------------------------------------------------
 vga_solid_rect:
-    VIDEXT VX_FILL              ; a packed display (SPEC.md 119.3): the driver
+    VIDEXT VX_FILL              ; a packed display (SPEC.md 120.3): the driver
                                 ; fills - or XORs, [vga_xorm] being set by
                                 ; both callers above - and returns to OURS
     push ax
@@ -3442,7 +3442,7 @@ gfx_spans:
 .rows:
     mov [gfx_sp_y], ax
 %ifdef VID_EXT
-    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 119.3.1): AX is the
+    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 120.3.1): AX is the
     jz .vxplanar                ; first row, clipped, and the gfx_sp_* cells
     CURUNLAZY                   ; the list - the hide is owed as below
     call vx_call
@@ -3611,7 +3611,7 @@ gfx_fill_gray_d:
 gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_gray
-    VIDEXT VX_GRAY              ; ...and a packed display's (SPEC.md 119.3)
+    VIDEXT VX_GRAY              ; ...and a packed display's (SPEC.md 120.3)
     push ax
     push bx
     push cx
@@ -3766,7 +3766,7 @@ gfx_fill_pat_d:
 gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_pat
-    VIDEXT VX_PAT               ; ...and a packed display's (SPEC.md 119.3):
+    VIDEXT VX_PAT               ; ...and a packed display's (SPEC.md 120.3):
                                 ; the eight bytes at [gfx_pat], unstaged
     push ax
     push bx
@@ -4110,7 +4110,7 @@ vga_save_vram:                              ; only renderer gfx_save has
     jne sw_save                 ; on mono the framebuffer IS the renderer's
                                 ; target, so one "plane" of sw_xfer is it
     VIDEXT VX_SAVE              ; ...and a packed display's save is the
-                                ; driver's, in [vga_pn]'s terms (SPEC.md 119.4)
+                                ; driver's, in [vga_pn]'s terms (SPEC.md 120.4)
     push ax
     push bx
     push cx
@@ -4957,7 +4957,7 @@ gfx_scroll:
     mov [vgas_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
     mov word [vgas_step], -1     ; bottom-up (source above destination)
 .disp:
-    VIDEXTC VX_SCROLL, .ok      ; a packed display (SPEC.md 119.3.1): the six
+    VIDEXTC VX_SCROLL, .ok      ; a packed display (SPEC.md 120.3.1): the six
                                 ; vgas_* cells say what moves where
 %ifdef GFX_VGA
     cmp byte [vid_planes], 1
@@ -5626,7 +5626,7 @@ gfx_blit1_x:
     sub dx, bx
 .ybot:
 %ifdef VID_EXT
-    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 119.3.1): the band
+    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 120.3.1): the band
     jz .vxplanar                ; is clipped and local, the pen and the head
     call KERNEL_SEG:vx_callf1   ; mask are in the cells, and the driver puts
     jmp .done                   ; it down. BEFORE .pen, whose port program

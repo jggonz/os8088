@@ -1678,7 +1678,7 @@ wm_pref_take:
                                 ; and a package cannot supply a fourth pair
                                 ; without an ABI break (SPEC.md 39.8, 39.24).
                                 ; **AND SO DOES A VESA ONE** (kind 4, SPEC.md
-                                ; 119.5): `jb`, not `jne`, because the `jne`
+                                ; 120.5): `jb`, not `jne`, because the `jne`
                                 ; let kind 4 read si+16 and nine packages
                                 ; opened at the sizes it found there
     test byte [bx+W_FLAGS+1], WF_USRSZ >> 8
@@ -1830,7 +1830,7 @@ wm_display:
 %ifdef VID_EXT
     cmp dl, VID_VESA
     jne .nvx
-    mov dh, [vx_bpp]            ; a packed display: 8 or 16 (SPEC.md 119.4)
+    mov dh, [vx_bpp]            ; a packed display: 8 or 16 (SPEC.md 120.4)
     ret
 .nvx:
 %endif

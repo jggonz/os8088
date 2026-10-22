@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """VESABENCH on QEMU: the correctness run of the packed display's bench
-(SPEC.md 119.8, the plan's S7).
+(SPEC.md 120.8, the plan's S7).
 
     make vesabench && python3 tests/vesabench.py [--only 16|8]
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The external renderer hook's inventory (SPEC.md 119.3.1).
+"""The external renderer hook's inventory (SPEC.md 120.3.1).
 
 Every planar drawing body in the kernel dispatches on [vid_mono] (or on
 [vid_planes]), and on a packed display every one of those bodies must either

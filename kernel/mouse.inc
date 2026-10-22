@@ -366,7 +366,7 @@ mou_isrs    dw mou_isr, mou_isr3    ; ...and the stub that vector points at
 %ifndef NO_MOUPRIV
 %ifdef VID_EXT
 MOU_PSTK    equ 256             ; ...AND TWICE THAT WITH THE EXTERNAL RENDERER
-                                ; (SPEC.md 119.3.3): the driver draws the arrow
+                                ; (SPEC.md 120.3.3): the driver draws the arrow
                                 ; from this stack and a VBE window switch is an
                                 ; `int 10h`, whose BIOS frame the 54-byte chain
                                 ; never had to hold. 128 bytes of .lowbss,
@@ -4144,7 +4144,7 @@ cur_put_1:
     cmp byte [vid_mono], 0      ; DISPATCH TO: kern_small's [vid_kind] is a
     jne cur_put_mono            ; CGA or a Hercules for the life of the machine
     VIDEXT VX_CURPUT            ; a packed display: the driver's whole cycle
-                                ; (SPEC.md 119.3.3) - save under and draw
+                                ; (SPEC.md 120.3.3) - save under and draw
     call cur_geom               ; (SPEC.md 39.27.1), so [vid_mono] is 1 before
     call cur_saveu              ; the first arrow is drawn and the planar half
     jmp cur_draw                ; was never reached there. The label FALLS
@@ -4224,7 +4224,7 @@ cur_get_1:
     cmp byte [vid_mono], 0      ; dispatch are a VGA kernel's alone, and on
     jne cur_get_mono            ; kern_small this falls into cur_get_mono
     VIDEXT VX_CURGET            ; a packed display: the driver puts back what
-                                ; its own put banked (SPEC.md 119.3.3)
+                                ; its own put banked (SPEC.md 120.3.3)
     ; fall through to cur_restoreu
 
 ; -----------------------------------------------------------------------------

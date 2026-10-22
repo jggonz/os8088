@@ -370,7 +370,7 @@ KNOBS = [
     # gate; this row is, and it costs seconds.
     ("moudiag",     ["MOUDIAG=1"]),
     ("nounal",      ["NOUNAL=1"]),
-    # NOVIDEXT= is SPEC.md 119.3's A/B: kern_big with no external renderer
+    # NOVIDEXT= is SPEC.md 120.3's A/B: kern_big with no external renderer
     # hook, no VID_VESA kind and no VESA.DRV row - the kernel the hook's
     # resident cost is measured against, and the only build of its arms
     ("novidext",    ["NOVIDEXT=1"]),

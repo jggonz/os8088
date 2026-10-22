@@ -125,7 +125,7 @@ fsx_caps:
                                 ; display keeps DL = [vid_kind] (39.19.6)
 %ifdef VID_EXT
     cmp dl, VID_VESA            ; a VESA display answers VID_VGA (SPEC.md
-    jne .kind                   ; 119.5): the kind that names the BIOS modes
+    jne .kind                   ; 120.5): the kind that names the BIOS modes
     mov dl, VID_VGA             ; a bracket may set, which is what every
 .kind:                          ; package asks this for - Gorillas took kind 4
 %endif                          ; for "neither VGA nor CGA" and drew planar
@@ -152,7 +152,7 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
                                ; (SPEC.md 39.24, docs/plans/completed/EGA-PLAN.md 7)
 %endif
 %ifdef VID_EXT
-    dw 0x01EF                   ; VESA: VGA's row (SPEC.md 119.5) - it is the
+    dw 0x01EF                   ; VESA: VGA's row (SPEC.md 120.5) - it is the
                                ; same card, every BIOS mode in it is legal
                                ; from a VBE mode, and fsx_leave's vid_setmode
                                ; takes the VESA arm back. WITHOUT THIS ROW the
@@ -711,7 +711,7 @@ fsx_surf:
     jne .out                    ; (stc writes CF alone: ZF is still fsx_mine's)
 %ifdef VID_EXT
     cmp byte [vid_kind], VID_VESA   ; the DESKTOP's own surface on a VESA
-    jne .surf                   ; display is packed pixels (SPEC.md 119.5), and
+    jne .surf                   ; display is packed pixels (SPEC.md 120.5), and
     cmp byte [fsx_cur], 0xFF    ; a same-mode bracket's caller writes planar
     stc                         ; VGA: refused, CF = 1, unless a foreign mode
     je .out                     ; is up - then the surface is that mode's

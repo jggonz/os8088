@@ -379,7 +379,7 @@ _MIRROR = {
     "VID_CTX_CW": ("kernel/vidsel.inc", {"big": 14}),
     "VID_CTX_CH": ("kernel/vidsel.inc", {"big": 16}),
     "VID_NDISP_MAX": ("kernel/vidsel.inc", {"big": 2}),
-    # kernel/viddet.inc - the packed display's kind (SPEC.md 119), kern_big
+    # kernel/viddet.inc - the packed display's kind (SPEC.md 120), kern_big
     # only: VESA.DRV's renderer is assembled out of kern_small, so the enum
     # stops at EGA there. The three VESA rows (tests/vesa.py, vesa8.py,
     # vesacp.py) wait on [vid_kind] reaching it

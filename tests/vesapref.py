@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A package's preferred window size on the packed display (SPEC.md 119.5, 11.100.1).
+"""A package's preferred window size on the packed display (SPEC.md 120.5, 11.100.1).
 
     make vesatest && python3 tests/vesapref.py [--png out.png] [--img disk]
 
@@ -122,7 +122,7 @@ def main():
         # ...and the stock's card back is CBLUE: sol_backbuf is filled with
         # CBLUE where [sol_bpp] >= 4 and the dither-class CLBLUE on a 1bpp
         # card. Solitaire read DH = 16 as "not 4" and drew the 1bpp back
-        # (SPEC.md 119.5, the package rule for DH) - and its red pips black
+        # (SPEC.md 120.5, the package rule for DH) - and its red pips black
         # (quantised: the 565 word's blue lands as 173, its green as 170)
         blue = sum(1 for y in range(24, sh - 40) for x in range(sw)
                    if tuple(ega(c) for c in vesa.px(pix, sw, x, y)) == CBLUE)

@@ -3,7 +3,7 @@
 A diary, kept as the work happened, for the website later. Observations are
 separated from intentions; a measurement names the machine it was taken on.
 The plan is [plans/VESA-PLAN.md](plans/VESA-PLAN.md) and the contract is
-SPEC.md §119.
+SPEC.md §120.
 
 ## 2026-10-21 — S0, the shape
 
@@ -238,7 +238,7 @@ rounds of `vx_rowcopy` (first `rep movsb` to the edge, then the words under
 `rep movsw`) took the depth blit from 7.9 to 3.4 ms, the fill's rate to
 within ten percent. The restore is every menu's close, so that is the row a
 user feels. And the sixteen-colour blit of the same rows is 5.3x the depth
-blit, which is the number §119.7 was pinned on before anyone had it.
+blit, which is the number §120.7 was pinned on before anyone had it.
 
 **Two bench bugs on the way.** Two rows lapped the PIT and came back
 tick-timed in whole 55 ms (`w`), so the blocks shrank until no row did;

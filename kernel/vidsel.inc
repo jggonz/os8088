@@ -30,7 +30,7 @@ VID_A_EGA   equ 1 << VID_EGA     ; bit 3. An EGA machine is EGA + CGA (mode 6),
                                  ; never part of an extended desktop (39.24)
 VID_A_VESA  equ 1 << VID_VESA    ; bit 4. Lit by vx_boot_x when VESA.DRV
                                  ; attaches, and by nothing a probe can find:
-                                 ; the probe IS the driver (SPEC.md 119.2)
+                                 ; the probe IS the driver (SPEC.md 120.2)
 
 ; SPEC.md 39.19.2's placements. TWO and not four, because the primary is
 ; always at the virtual origin, so "which monitor is on the left" is answered
@@ -1016,7 +1016,7 @@ section .text
  %define VID_KIND_OK (VID_KIND_MAX == VID_EGA)
 %endif
 ; ...AND VID_VESA (4) IS ADMITTED ON THE STRENGTH OF EXACTLY THAT TEST
-; (SPEC.md 119.5): `dec` maps it to 3, so it is PLANAR to vid_bk - which
+; (SPEC.md 120.5): `dec` maps it to 3, so it is PLANAR to vid_bk - which
 ; blanks through the Attribute Controller, the right thing for what is the
 ; same VGA card in another mode - and COLOUR to thm_set, which it is. Neither
 ; routine needed an arm; vid_disp_planes did (below), because a plane count is
@@ -1858,7 +1858,7 @@ vid_disp_planes:
                                 ; and a reveal broadcast it to all four
 %ifdef VID_EXT
     cmp al, 3                   ; ...and VID_VESA -> 3: the DEPTH, 8 or 16
-    jne .out                    ; (SPEC.md 119.4), so a save-under over it is
+    jne .out                    ; (SPEC.md 120.4), so a save-under over it is
     mov cx, [vx_bpp]            ; sized in packed bytes
 %endif
 .out:

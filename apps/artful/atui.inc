@@ -458,7 +458,7 @@ at_subank:
     cmp bl, 4                       ; OSAPI_VIDEO cannot answer that on a
     jae .planes                     ; two-card machine (SPEC.md 39.16.4) - and
     mov bx, 1                       ; 8 or 16 on a packed display is BYTES a
-.planes:                            ; column, taken as it comes (119.5)
+.planes:                            ; column, taken as it comes (120.5)
     mul bx                          ; DX:AX: 16 x a panel passes 64KB
     add ax, 1023
     adc dx, 0

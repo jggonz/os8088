@@ -218,7 +218,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %endif
 %endif
 
-; --- VID_EXT: the external renderer hook (SPEC.md 119.3) ----------------------
+; --- VID_EXT: the external renderer hook (SPEC.md 120.3) ----------------------
 ; kern_big's by default: one compare per planar drawing body, a far pointer
 ; and a block of pointers (kernel/vidext.inc), so VESA.DRV can draw a fifth
 ; adapter kind. `make NOVIDEXT=1` is the A/B that assembles the kernel before
@@ -3317,7 +3317,7 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          the MACHINE (51.2.3). kern_small
                                   ;          refuses
     OSAPI_SLOT gfx_blitd          ; 0x04AB - A PACKAGE'S BLOCK AT THE DISPLAY'S
-                                  ;          DEPTH (SPEC.md 119.7): ES:SI the
+                                  ;          DEPTH (SPEC.md 120.7): ES:SI the
                                   ;          pixels as the mode packs them, BP
                                   ;          the stride, AX/BX x/y, CX/DX w/h;
                                   ;          CX = 0 loads DAC entries AX..
@@ -4797,7 +4797,7 @@ kmain_o:
                                 ; returns
 %ifdef VID_EXT
     call COLD_SEG:vx_boot_x     ; ...and VESA.DRV, if SYSTEM.CFG asked for it
-                                ; (SPEC.md 119.4): a DRVC_OVL row drv_boot_x
+                                ; (SPEC.md 120.4): a DRVC_OVL row drv_boot_x
                                 ; read and stopped at, attached here and the
                                 ; desktop switched onto it through the blob's
                                 ; own vid_switch - which is why this sits in
@@ -5493,7 +5493,7 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
                                 ; than merely the same size (docs/
                                 ; KERN-SPLIT-PLAN.md 1.1: a divergence that
                                 ; hides in the rung's padding is still real)
-%include "vidext.inc"           ; the external renderer hook (SPEC.md 119.3):
+%include "vidext.inc"           ; the external renderer hook (SPEC.md 120.3):
                                 ; its macros are used in vga12.inc, font.inc,
                                 ; icons.inc and mouse.inc, so it goes first
 %include "vga12.inc"
@@ -7030,7 +7030,7 @@ COLD_START equ BOOT2_PAD + (COLD_RAM - KERNEL_SEG) * 16 ; after the gap
 COLD_START equ BOOT2_PAD + ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 512
 %endif
 
-VX_LAYOUT_ASSERT                ; vidext.inc's adjacency claims (SPEC.md 119.3.2),
+VX_LAYOUT_ASSERT                ; vidext.inc's adjacency claims (SPEC.md 120.3.2),
                                 ; here because every cell they name is declared
                                 ; by now
 

@@ -539,7 +539,7 @@ sc_rclick_x:
 ; -----------------------------------------------------------------------------
 vgcf_boot:
     test byte [drv_cfg+CFG_VGC], 1  ; THE BOX'S TEST IS HERE AGAIN (SPEC.md
-    jz .out                     ; 119.4): seven bytes the blob could not hold
+    jz .out                     ; 120.4): seven bytes the blob could not hold
                                 ; once the packed display's class joined the
                                 ; 'VM' record - kernel size pass 12 put them
                                 ; at the call site when the blob had room, and

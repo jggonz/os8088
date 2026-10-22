@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Gorillas' field on the packed desktop: a blue sky and solid buildings
-(SPEC.md 119.5, the package rule for DH).
+(SPEC.md 120.5, the package rule for DH).
     make vesatest && python3 tests/vesagor.py [--png out.png]
 
 Boots build/vesafsx.img - tests/vesafsx.py's disk, whose \\AUTOSTRT link

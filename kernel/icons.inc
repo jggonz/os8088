@@ -493,7 +493,7 @@ ico_core:
     cmp byte [vid_mono], 0      ; 1bpp? (SPEC.md 39.5) - the software
     jne ico_core_bb             ; twin returns straight to the wrapper
     VIDEXT VX_ICON              ; ...and a packed display's is the driver's
-                                ; (SPEC.md 119.3): the ico_* cells are set,
+                                ; (SPEC.md 120.3): the ico_* cells are set,
                                 ; the clip is done, and it returns to the
                                 ; wrapper exactly as the twin does
 

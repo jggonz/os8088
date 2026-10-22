@@ -1,14 +1,14 @@
 # VESA — delivery plan
 
 High-resolution, deep-colour desktops on a VBE card, through a loadable
-video driver. The binding contract is SPEC.md §119; this is the story list
+video driver. The binding contract is SPEC.md §120; this is the story list
 and the record of what each wave actually did. The diary is
 [HOW-VESA-WAS-BUILT.md](../HOW-VESA-WAS-BUILT.md).
 
 **Shape of the work, in one paragraph.** A fifth adapter kind, `VID_VESA`,
 whose renderer is `VESA.DRV` (class `DRVC_VIDEO`). The kernel's planar
 drawing bodies each gain one compare and an untaken branch (`VIDEXT n`,
-SPEC.md §119.3) and far-call the driver when it is attached; the driver
+SPEC.md §120.3) and far-call the driver when it is attached; the driver
 probes VBE at attach, offers every 8/15/16bpp packed mode up to 1024x768,
 picks the largest (or the user's `VE` choice), fills `vid_tab` row 4 and
 draws into the 64KB window A through `4F05h` banking. The desktop stays 16
@@ -24,7 +24,7 @@ asserted by the row it names. "Pinned" means the contract exists and the
 code does not.
 
 - [x] **S0 Foundation.** Isolated worktree (`~/Repos/os8088-vesa`,
-  branch `feature/vesa`), SPEC.md §119, this plan, the diary, the CLAUDE.md
+  branch `feature/vesa`), SPEC.md §120, this plan, the diary, the CLAUDE.md
   and AGENTS.md rows, a draft PR. Outcome: the contract is reviewable before
   a byte of code.
 - [x] **S1 A desktop at 1024x768.** As a user with a VBE card I tick `VESA`
@@ -51,7 +51,7 @@ code does not.
   bytes), `.lowbss` +128 (the mouse ISR's stack), `.bss` +4; no rung
   crossed, `KERN_SIZE` 97,792 unchanged. Not the private driver stack the
   contract first described: the mouse ISR's stack doubled instead (SPEC.md
-  §119.3.3 says why).
+  §120.3.3 says why).
 - [x] **S2 Every primitive.** **Shipped:** `gfx_blit4` (nibbles, both axes
   clipped by the driver), `gfx_blit1` through its own far entry
   `vx_callf1` at `.ybot` (the pen, the head mask, the tail), `gfx_scroll`
@@ -88,7 +88,7 @@ code does not.
   for a theme change to track, so no row reads pixels after one.
 - [x] **S4 Choosing a mode.** **Shipped, and not as written:** the class is
   ONE BYTE on the `VM` record (ver 3), not a `VE` key - the blob had two
-  bytes and the settings buffer one (SPEC.md §119.2.3 has the arithmetic);
+  bytes and the settings buffer one (SPEC.md §120.2.3 has the arithmetic);
   and there is NO Mode button - a VGA+mono machine lists three adapters,
   and the pane at four rows of 12 has no room beside Force Color - so the
   VESA row CYCLES its class when clicked while already chosen
@@ -172,7 +172,7 @@ code does not.
   so `fpg_finish` erases its band rows itself (`tests/vesa.py`). **And
   from playing Gorillas past its setup**, which the sweep cannot: seven
   sites read "colour" as DH = 4 where the packed display answers 8 or 16
-  (SPEC.md 119.5's package rule for DH) - Gorillas' tables, `os88ui.inc`'s
+  (SPEC.md 120.5's package rule for DH) - Gorillas' tables, `os88ui.inc`'s
   `UI_ISMONO` and its two save-under sizers, ArtfulType's sizer, Frotz,
   Solitaire, Weave's canvas and `os88.h`'s advice; the sizers claimed a
   sixteenth of the save. Colour is DH >= 4 and a save is DH x rows x
@@ -191,7 +191,7 @@ code does not.
 - [x] **S8 Acceptance.** `NOVIDEXT=1` is in the build matrix
   (`t_buildmatrix`'s `novidext`) and measured against main: `.text` +16,
   `.cold` +101, so the hook itself is `.text` 546 / `.cold` 146 (SPEC.md
-  §119.1, docs/KERNEL-MEMORY.md's history row); docs/TESTING.md carries
+  §120.1, docs/KERNEL-MEMORY.md's history row); docs/TESTING.md carries
   the recipe; docs/INDEX.md regenerated (checked by every `make`). **The
   deduplicated soak union ran once** (2026-10-22, `build/soak-union.log`):
   vesa, vesa8, vesacp, vesablitd, vesabench, dispcalcx, dispcorner,
@@ -209,7 +209,7 @@ code does not.
   Cirrus 5428 are the two fixtures, and a real card's `4F05h` latency, a
   window granularity that is not a power of two, a mode list inside the
   info buffer and a 15bpp packing are each untested by design or by
-  absence; no 8088 can reach any of this (§119.1). **Not driven on the
+  absence; no 8088 can reach any of this (§120.1). **Not driven on the
   glass:** a fullscreen bracket entered and left from the VESA desktop
   (`fsx_capstab`'s row is VGA's and `fsx_leave` restores through the
   driver's `vid_setmode`, and the `fsx*` and wireball rows pass on the
@@ -222,7 +222,7 @@ code does not.
 |---|---|---|
 | hooks in `kern_big`, ~one image rung, with `NOVIDEXT=1` as the A/B | a fourth kernel, `kern_vesa` (kern_emu's shape), costing the XT nothing | a VESA user boots the standard disk and the card is found; a fourth kernel is a fourth system disk, a fourth live image and a fourth row in every gate that walks "every shipped image". The owner may still prefer it — the hook is written so that `VID_EXT` can be moved under a build define in one line |
 | the desktop stays 16 colours | a 256-colour or RGB desktop | `[gfx_color]` is a nibble in every kernel body and every package; widening it is a rewrite of §5, §6, §25 and the SDK. Depth reaches a package through one slot instead |
-| banked window A, 8086 code | the linear framebuffer through unreal mode | unreal mode is 386 code that any segment load undoes, and this kernel reloads segments on every switch (SPEC.md §119.2.3) |
+| banked window A, 8086 code | the linear framebuffer through unreal mode | unreal mode is 386 code that any segment load undoes, and this kernel reloads segments on every switch (SPEC.md §120.2.3) |
 | the driver owns the cursor whole | hooking `vga_save_vram`/`vga_restore_vram` under `cur_*` | a 16bpp cell is 512 bytes against `cur_save`'s 192: the driver's own buffer is where it fits. Its window switch is an `int 10h`, so the mouse ISR's private stack is 256 bytes under `VID_EXT`; a private stack in the driver was refused - two tasks preempted inside one `int 10h` would share it |
 | `vx_boot_x` in `.cold` | the blob, beside `vmm_boot_x` | the blob measured 6,142 of 6,144 bytes; 116 resident bytes inside the cold rung's slack until the blob sheds a sector's worth (S8 names it) |
 | `DRVC_OVL` with a row, no class | a `DRVC_VIDEO` class with a `DSV_*` table | the kernel is the only caller and holds the far pointer; a class costs a publication slot, a copied table and three per-class arrays for nothing to find |

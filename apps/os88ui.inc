@@ -202,7 +202,7 @@
     call OSAPI_VIDEO
     cmp dh, 4                       ; 1 is mono, ZF = 0 as it always was; 4
     jb %%mono                       ; planes, and 8 or 16 bits on a packed
-    cmp dh, dh                      ; display (SPEC.md 119.5), are COLOUR:
+    cmp dh, dh                      ; display (SPEC.md 120.5), are COLOUR:
 %%mono:                             ; ZF = 1. Never `== 4`
     pop di
     pop si
@@ -4849,7 +4849,7 @@ os88ui_drbank:
     cmp bl, 4                   ; the wrong one arrives as noise, 39.14.8)
     jae .planes                 ; 4 planes - or 8 or 16 BYTES a column on
     mov bx, 1                   ; a packed display, whose save is its
-.planes:                        ; pixels (SPEC.md 119.5): DH AS IT COMES
+.planes:                        ; pixels (SPEC.md 120.5): DH AS IT COMES
     mul bx                      ; DX:AX - 16 x a list on a 1024-wide
     add ax, 1023                ; display passes 64KB, and a claim sized
     adc dx, 0                   ; off AX alone is what the kernel then
@@ -6080,7 +6080,7 @@ os88ui_mnbank:
     cmp bl, 4
     jae .planes                 ; 4 planes - or 8 or 16 BYTES a column on
     mov bx, 1                   ; a packed display, whose save is its
-.planes:                        ; pixels (SPEC.md 119.5): DH AS IT COMES
+.planes:                        ; pixels (SPEC.md 120.5): DH AS IT COMES
     mul bx                      ; DX:AX - 16 x a list on a 1024-wide
     add ax, 1023                ; display passes 64KB, and a claim sized
     adc dx, 0                   ; off AX alone is what the kernel then

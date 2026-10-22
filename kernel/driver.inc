@@ -43,7 +43,7 @@
 
 %ifdef VID_EXT
 DRV_VX      equ 1               ; ...plus VESA.DRV's row, LAST on both big
-%else                           ; builds (SPEC.md 119.1): a DRVC_OVL row like
+%else                           ; builds (SPEC.md 120.1): a DRVC_OVL row like
 DRV_VX      equ 0               ; the absolute mouse's, with a SYSTEM.CFG bit
 %endif                          ; (drv_cfgbit's 8) and a Drivers-page tick.
                                 ; An `equ` and not a %define, so that
@@ -677,7 +677,7 @@ CFG_VID     equ 6               ; db: the display adapter (SPEC.md 39.11.3) -
 CFG_VDM     equ 7               ; db: [vid_dmode], Single or Extend (39.19)
 CFG_VDL     equ 8               ; db: [vid_dlay], where display 1 sits. Both
 CFG_VEL     equ 1 * DRV_VX      ; ...AND THE PACKED DISPLAY'S MODE CLASS RIDES
-                                ; THE 'VM' RECORD (SPEC.md 119.2.3): ONE byte
+                                ; THE 'VM' RECORD (SPEC.md 120.2.3): ONE byte
                                 ; after the arrangement (vxabi.inc's VXC_*, 0
                                 ; = Auto) on a build with the external
                                 ; renderer, none without. 'VM' is ver 3 for
@@ -877,7 +877,7 @@ DRV_CFG_MAPN equ 8
 %ifdef VID_EXT
     db 3, 4, CFG_VID            ; 39.19's two arrangement bytes, then the
                                 ; packed display's mode class (SPEC.md
-                                ; 119.2.3, CFG_VE) - ver 3 for the widening,
+                                ; 120.2.3, CFG_VE) - ver 3 for the widening,
                                 ; the ver-2 story below used once more
 %else
     db 2, 3, CFG_VID            ; 39.19's two arrangement bytes. ver 2 because
@@ -993,7 +993,7 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
                                 ; even on a build that has no such row (SPEC.md
                                 ; 9.12). And EMS is bit 7 on both (SPEC.md 107)
 %ifdef VID_EXT
-    db 8                        ; ...and VESA.DRV, bit 8 (SPEC.md 119.1)
+    db 8                        ; ...and VESA.DRV, bit 8 (SPEC.md 120.1)
 %endif
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
@@ -1101,7 +1101,7 @@ drv_t_vmm:   db 'Absolute mouse', 0  ; ALONE (SPEC.md 9.11.7) - 27 bytes that
 %endif
 %ifdef KERN_BIG
 %ifdef VID_EXT
-drv_f_vesa:  db 'VESA.DRV', 0    ; SPEC.md 119's packed-pixel display: kern_big's
+drv_f_vesa:  db 'VESA.DRV', 0    ; SPEC.md 120's packed-pixel display: kern_big's
 drv_t_vesa:  db 'VESA Display', 0 ; and kern_emu's, never kern_small's
 %endif
 drv_f_ems:   db 'EMS.DRV', 0     ; SPEC.md 107's expanded memory: kern_big's
@@ -1377,7 +1377,7 @@ usbm_row:                       ; ...a label for tests/usbmouse.py, which finds
 vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
     dw PKG_DISP, 0              ; tests/vesa.py. Row 7 (8 on kern_emu):
     dw drv_f_vesa, drv_t_vesa   ; VESA.DRV, the packed-pixel display's renderer
-    dw 0, 0                     ; (SPEC.md 119). DRVC_OVL WITH A ROW, the
+    dw 0, 0                     ; (SPEC.md 120). DRVC_OVL WITH A ROW, the
     db DRVC_OVL                 ; absolute mouse's shape and for its reason:
                                 ; the kernel is its only caller (vx_ep) so no
                                 ; class is needed, and the tick is the user's
@@ -1522,7 +1522,7 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_USBM                ; the CH375 USB mouse, and
     dw DRVM_EMS                 ; EMS.DRV, last on both big builds...
 %ifdef VID_EXT
-    dw DRVM_VESA                ; ...until VESA.DRV (SPEC.md 119)
+    dw DRVM_VESA                ; ...until VESA.DRV (SPEC.md 120)
 %endif
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
@@ -5165,7 +5165,7 @@ drv_boot_x:
     call COLD_SEG:vgcf_boot     ; Force Color (SPEC.md 39.28), BEFORE the
                                 ; adapter switch below, so a switch onto the
                                 ; VGA finds the BIOS's record colour already.
-                                ; THE TEST IS INSIDE IT NOW (SPEC.md 119.4:
+                                ; THE TEST IS INSIDE IT NOW (SPEC.md 120.4:
                                 ; the blob gave up its seven bytes to the
                                 ; 'VM' record's class byte); it keeps every
                                 ; register but AX - CH is the loop's, and AL

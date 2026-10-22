@@ -190491,7 +190491,7 @@ changed an instruction; what changed is how much is HELD:
 
 ### 106.27 At depth: the canvas on a VESA display
 
-On a VESA display (§119) `OSAPI_VIDEO` answers DH = 8 or 16, and the sixteen
+On a VESA display (§120) `OSAPI_VIDEO` answers DH = 8 or 16, and the sixteen
 colours through the dither tables are still what the window draws at 8:
 the master has 256 entries, the desktop's sixteen leave 240 DAC entries,
 and the squeeze from one to the other is a plan search this package does
@@ -190500,7 +190500,7 @@ builds, beside the dither tables, a 512-byte table of the palette as
 RGB565 words (`px_t565`, at `PX_VORGB` past the thumbnail; the view claim
 is 31 KB at that depth), `px_crow` has a 16bpp arm - a word a pixel through
 that table, at 100% and through the DDA - and `px_rband` puts each row up
-with `OSAPI_GFX_BLITD` (§119.7), one row a call, because the band buffer
+with `OSAPI_GFX_BLITD` (§120.7), one row a call, because the band buffer
 holds one row at two bytes a pixel. The thumbnail and everything else stay
 on the sixteen-colour path: `OSAPI_GFX_BLITP` refuses on a packed display
 and `OSAPI_GFX_BLIT4` draws it. `px_display` folds the VESA kind into the
@@ -201469,7 +201469,7 @@ installed from this release compares clean whether or not the machine booted
 from it; the progress heading says which it is (`Checking C: - hard disk,
 the boot volume`).
 
-## 119. VESA — high-resolution, deep-colour desktops through a video driver (`drivers/vesa/`, `kernel/vidext.inc`)
+## 120. VESA — high-resolution, deep-colour desktops through a video driver (`drivers/vesa/`, `kernel/vidext.inc`)
 
 **Status: the plan is `docs/plans/VESA-PLAN.md`; each story below says
 whether it is pinned only or shipped.** This section is the contract. Until
@@ -201488,26 +201488,26 @@ read it.** What the kernel carries resident is a fifth adapter kind and one
 compare per drawing body; everything that knows what a VBE is lives in the
 driver.
 
-### 119.1 What it is, in one table
+### 120.1 What it is, in one table
 
 | | |
 |---|---|
 | kind | `VID_VESA` = 4, `VID_KIND_MAX` moves to 4, `VID_A_VESA` = 1 << 4 in `[vid_avail]` |
 | who draws | `VESA.DRV`, a `DRVC_OVL` overlay WITH a `drv_tab` row (`vesa_row`, `VMMOUSE.DRV`'s shape, §9.11.1): no class, because the kernel is its only caller and holds the far pointer; a row, because the Drivers-page tick is the user's decision. On `kern_big` and `kern_emu` — never `kern_small`, which has no driver layer (§51.0) and no VGA renderer (§39.27) |
-| the framebuffer | the card's 64KB window A at A000h, **banked** through VBE function `4F05h`; never the linear framebuffer, which real mode cannot address (§119.2.3) |
+| the framebuffer | the card's 64KB window A at A000h, **banked** through VBE function `4F05h`; never the linear framebuffer, which real mode cannot address (§120.2.3) |
 | depth | 8bpp packed (VBE memory model 4) or 15/16bpp direct colour (model 6); never 24/32 |
 | geometry | at most 1024x768, width a multiple of 8, `BytesPerScanLine` ≤ 4,096 |
-| colour model | **the desktop stays 16 colours.** `[gfx_color]` is a 4-bit index everywhere in the kernel and every package; the driver maps index → DAC entry (8bpp) or → an RGB word (16bpp) at the write. One new slot, `OSAPI_GFX_BLITD`, is how a package reaches the real depth (§119.7) |
+| colour model | **the desktop stays 16 colours.** `[gfx_color]` is a 4-bit index everywhere in the kernel and every package; the driver maps index → DAC entry (8bpp) or → an RGB word (16bpp) at the write. One new slot, `OSAPI_GFX_BLITD`, is how a package reaches the real depth (§120.7) |
 | CPU | `cpu 8086` throughout the driver. A 286 with a VBE 1.2 card qualifies; `mul` gives the 32-bit offset as DX:AX and that is all the arithmetic needs |
-| resident cost | the hook of §119.3, **measured at S6 on `kern_big`: `.text` +562, `.cold` +247, `.lowbss` +128, `.bss` +5, `.boot2` +0 - the image rung crossed once at S2, `KERN_SIZE` 98,304 against 97,792 (2,560 spare); the cold rung has 98 bytes left** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel without the hook: measured against main it is `.text` +16, `.cold` +101, `.bss` +4 (the class byte, Force Color's test in `vgcf_boot`, the fsx caps row), so the hook itself is `.text` 546 and `.cold` 146. `kern_small` does not assemble the hook and is byte for byte unchanged |
+| resident cost | the hook of §120.3, **measured at S6 on `kern_big`: `.text` +562, `.cold` +247, `.lowbss` +128, `.bss` +5, `.boot2` +0 - the image rung crossed once at S2, `KERN_SIZE` 98,304 against 97,792 (2,560 spare); the cold rung has 98 bytes left** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel without the hook: measured against main it is `.text` +16, `.cold` +101, `.bss` +4 (the class byte, Force Color's test in `vgcf_boot`, the fsx caps row), so the hook itself is `.text` 546 and `.cold` 146. `kern_small` does not assemble the hook and is byte for byte unchanged |
 
-### 119.2 Detection and the choice of mode — the driver's attach
+### 120.2 Detection and the choice of mode — the driver's attach
 
 `DRVV_ATTACH` probes and chooses; it does **not** switch modes. The switch is
-the kernel's (`vid_switch`, §119.4), for the reason §39.11.2 gives: the
+the kernel's (`vid_switch`, §120.4), for the reason §39.11.2 gives: the
 caller owes the repaint and knows what to put back.
 
-#### 119.2.1 The probe
+#### 120.2.1 The probe
 
 `int 10h AX=4F00h`, ES:DI = a 512-byte buffer in the driver's own bss with
 `'VBE2'` written at its head first (a VBE 2.0 BIOS then fills the 512-byte
@@ -201525,7 +201525,7 @@ not a stack frame; the walk copies each mode number out before the next
 entries, whichever is first — an unbounded walk over a BIOS table is a hang
 on a BIOS that answers wrongly (`VMM_FLUSHMX`'s reason).
 
-#### 119.2.2 Which modes are offered
+#### 120.2.2 Which modes are offered
 
 For each mode number, `int 10h AX=4F01h CX=mode` into a 256-byte bss block.
 A mode is **offered** when every one of these holds:
@@ -201536,7 +201536,7 @@ A mode is **offered** when every one of these holds:
 | WinAAttributes | bit 0 (exists) and bit 2 (writable) set; WinASegment = `A000h` | the driver writes through window A only |
 | WinSize | 64 (KB) | the row arithmetic below assumes a 64KB window |
 | WinGranularity | a power of two, 1..64 (KB) | the bank number is a shift of the 32-bit offset |
-| BitsPerPixel / MemoryModel | 8 with model 4; or 15 or 16 with model 6 | §119.1's depth row |
+| BitsPerPixel / MemoryModel | 8 with model 4; or 15 or 16 with model 6 | §120.1's depth row |
 | XResolution | multiple of 8, 640 ≤ X ≤ 1024 | §11.94 snaps a window's content origin to 8; the chrome is laid out in 8px cells |
 | YResolution | 400 ≤ Y ≤ 768 | the user's ceiling; `vid_tab`'s tallest row was 480 |
 | BytesPerScanLine | ≤ 4,096 and ≥ X × bytes-per-pixel | the per-row bank test below is one compare when a row cannot cross more than one window edge |
@@ -201550,11 +201550,11 @@ The accepted modes are kept in a table in the driver's bss, at most **16**
 (`VX_NMODES`), each a 12-byte record: mode number, X, Y, bpp,
 BytesPerScanLine, granularity shift and the two colour-field layouts.
 
-#### 119.2.3 Which one is used — Auto, and the `VE` key
+#### 120.2.3 Which one is used — Auto, and the `VE` key
 
 **Auto** ranks every offered mode by (X × Y, then bpp) and takes the largest;
 on QEMU's standard VGA that is 1024x768x16 (`0117h`). The user may instead
-name a **class** through the Display page (§119.6) — the user's name for a
+name a **class** through the Display page (§120.6) — the user's name for a
 mode, a card's number being the card's — stored in `SYSTEM.CFG` as **the
 fourth byte of the `VM` record** (ver 3, 4 bytes: kind, `[vid_dmode]`,
 `[vid_dlay]`, the class; `CFG_VE`). The class is **one byte**
@@ -201582,18 +201582,18 @@ mode or an "unreal" 4 GB segment limit can reach. Unreal mode is 386 code,
 breaks the moment any real-mode segment load resets the limit — which this
 kernel does on every task switch — and would be the `VMMOUSE.DRV` 32-bit
 argument all over again. Banking costs one `int 10h` per window crossing;
-§119.8 prices it and names the one optimisation that is on the table.
+§120.8 prices it and names the one optimisation that is on the table.
 
-#### 119.2.4 What attach leaves behind
+#### 120.2.4 What attach leaves behind
 
 Nothing hooked (§51.2): no vector, no port state, no mode set. The driver's
-service table (`DSV_*`, §119.3.2) names its entry points, and the kernel
+service table (`DSV_*`, §120.3.2) names its entry points, and the kernel
 arms them. A refusal frees the image, which is why the probe buffers are bss
 and not claims.
 
-### 119.3 The hook — `kernel/vidext.inc`, `VID_EXT`
+### 120.3 The hook — `kernel/vidext.inc`, `VID_EXT`
 
-#### 119.3.1 One compare per body, below the clip and display hooks
+#### 120.3.1 One compare per body, below the clip and display hooks
 
 Every planar drawing body in the kernel — the code that runs when
 `[vid_mono]` is 0 — opens with:
@@ -201679,7 +201679,7 @@ is registered in `tests/vidext.txt` as hooked or exempt with a reason, every
 selector is emitted exactly once, and the driver's jump table answers each
 with a body and never the refusal stub.
 
-#### 119.3.2 The attach answer and the kernel's block
+#### 120.3.2 The attach answer and the kernel's block
 
 The driver is `DRVC_OVL` and publishes no `DSV_*` table. Its `DRVV_ATTACH`
 (AH = `VX_ABI_VER`, refused on a mismatch as `VMMOUSE.DRV` refuses one;
@@ -201712,7 +201712,7 @@ can be 1 only while `[vid_kind]` is `VID_VESA`, which only `vid_switch`
 sets, and `vid_switch` admits kind 4 only once `VID_A_VESA` is lit — which
 `vx_boot_x` does after the attach and the init have both answered.
 
-#### 119.3.3 The cursor is the driver's whole
+#### 120.3.3 The cursor is the driver's whole
 
 The arrow is the one thing drawn from an interrupt (IRQ3/IRQ4, on §9.10's
 128-byte private stack). The planar path is restore-then-save-then-draw
@@ -201728,7 +201728,7 @@ own frame is what the 54-byte chain never had to hold. A private stack in the
 driver was the first design and was refused — two tasks preempted inside one
 `int 10h` would share it.
 
-### 119.4 Switching in, and out
+### 120.4 Switching in, and out
 
 `vid_switch AL=VID_VESA` (§39.11.2's ladder, in `CTRL.DRV` and the boot
 blob) is refused with CF = 1 unless `VID_A_VESA` is lit, and that bit is lit
@@ -201784,7 +201784,7 @@ Lifting that is a plan story with the arithmetic attached, not a wave-1
 promise. `OSAPI_DRV_SUSPEND` (§51.11) skips `DRVC_VIDEO` on the same ground:
 the display cannot be suspended out from under the desktop.
 
-### 119.5 What else in the kernel asks the kind
+### 120.5 What else in the kernel asks the kind
 
 | site | VESA behaviour |
 |---|---|
@@ -201802,7 +201802,7 @@ the display cannot be suspended out from under the desktop.
 | the splash (§15) | runs before `drv_boot`, on VGA, always |
 | `desk_rowcalc` zones, dock, menu bar, clock cell | read `[vid_w]`/`[vid_h]`/`[vid_pw]`; a 1024-wide bar has more room and the same cells |
 
-### 119.6 The Display page
+### 120.6 The Display page
 
 The adapter radio list gains a row whose label is **composed** at paint:
 `Vesa ` then the class the settings file asks for, else the mode running when
@@ -201826,12 +201826,12 @@ the class running (`vx_class`, the driver's live record, published beside
 `vx_bpp`). A refused class (the card lacks it) reads Auto to the driver.
 `tests/dispcp.py` reads the row pitch out of the build.
 
-### 119.7 A package at depth — `OSAPI_GFX_BLITD`
+### 120.7 A package at depth — `OSAPI_GFX_BLITD`
 
 One appended cell, `0x04AB`, a plain `OSAPI_SLOT` (ES is the caller's, as
 `OSAPI_GFX_BLIT4`'s is). **The blit form**: ES:SI = pixels **at the
 display's depth** — bytes at 8bpp, words at 15/16bpp in the mode's own
-packing, which is what `OSAPI_VIDEO`'s DH says and §119.2.2's rule makes
+packing, which is what `OSAPI_VIDEO`'s DH says and §120.2.2's rule makes
 RGB565 on every mode this driver offers (a 15bpp mode is drawn through its
 own packing by the driver; a package writes 565 and the driver does not
 translate, so a 15bpp card shows a 565 block with its green's low bit as
@@ -201853,7 +201853,7 @@ everywhere else — PiXEL's shape, §106.27. The ABI lock takes the new cell
 without a `PKG_FMT` bump (§20.2.0.1: appended at the end). The driver's
 selector is `VX_BLITD`, and the contract's `VX_ABI_VER` is 4 for it.
 
-### 119.8 Cost, and where the time goes
+### 120.8 Cost, and where the time goes
 
 Banking is `int 10h AX=4F02h`... `4F05h BH=0 BL=0 DX=window`, once per window
 crossing. The driver computes a 32-bit byte offset `y × stride + x × bpp/8`
@@ -201871,7 +201871,7 @@ The one optimisation on the table is a **direct window register** for the
 Bochs/QEMU VBE (`dispi` index port `01CEh`, index 5) and for cards whose
 bank register is known, probed at attach and used in place of the `int 10h`
 — a plan story, taken only with a measurement that says the BIOS call is
-where the time went. The mouse ISR's 256-byte stack (§119.3.3) is what makes
+where the time went. The mouse ISR's 256-byte stack (§120.3.3) is what makes
 the `int 10h` safe from the arrow either way.
 
 **The measurement is `VESABENCH`** (`tests/vesabench/`, `make vesabench`):
@@ -201898,9 +201898,9 @@ and tested the edge a pixel, at half the fill's rate - which is one `rep
 movsw` to the edge, the next window and the rest now (`vx_rowcopy`): the
 depth blit went 7.9 → 3.4 ms, the fill's rate to within 10%, and the
 sixteen-colour `OSAPI_GFX_BLIT4` of the same rows is 5.3x it, which is
-what §119.7 buys a package. PERFORMANCE.md Part 5 carries the rows.
+what §120.7 buys a package. PERFORMANCE.md Part 5 carries the rows.
 
-### 119.9 Testing
+### 120.9 Testing
 
 QEMU's standard VGA carries a VBE 2.0/3.0 BIOS, so `-vga std` — the default
 — is the whole fixture, and MartyPC and the 86Box XTs have no VBE at all,
@@ -201921,6 +201921,6 @@ label's tail erased, then Set Primary landing on 640x480x8 with `vx_class`
 0x84 and a 640x480 screendump. All three are soak rows (QEMU by name,
 CLAUDE.md's closed list). The resident hook is measured by
 `tests/unit/t_buildmatrix.py`'s `novidext` row, and `t_vidext.py` keeps the
-selector inventory of §119.3.1 honest. The fullscreen round trip is S8's
+selector inventory of §120.3.1 honest. The fullscreen round trip is S8's
 driving pass, not a row of its own: `fsx_capstab`'s VESA row is VGA's and
 `fsx_leave` restores through `vid_setmode`'s arm.

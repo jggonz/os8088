@@ -187,7 +187,7 @@ TLADJ = re.compile(r'^\s*jmp\s+(kretf?c?_[a-z]{2})\s*$', re.I)
 TEXP = re.compile(r'^\s*(\w+)\s+([A-Za-z_]\w*)\s*(?:,.*)?$')
 # ...AND AN EXPANSION WITH MORE THAN ONE ARGUMENT PASTES ITS FIRST (`VSW_SWITCH
 # bvs, BSWK, bvw` is `bvs_switch` and `bvs_blank`, in the blob). The pattern
-# took one argument only until SPEC.md 119.4 put the first reference into
+# took one argument only until SPEC.md 120.4 put the first reference into
 # bvs_switch from OUTSIDE the blob, and the registry could not name a label
 # this walk had never seen.
 

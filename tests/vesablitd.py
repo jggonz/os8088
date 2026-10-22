@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A package at the display's depth (SPEC.md 119.7, 106.27).
+"""A package at the display's depth (SPEC.md 120.7, 106.27).
 
     make vesatest && python3 tests/vesablitd.py [--png out.png]
 

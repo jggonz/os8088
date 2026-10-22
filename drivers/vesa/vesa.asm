@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - VESA.DRV
 ;
-; The packed-pixel display's renderer (SPEC.md 119): a VBE card's 800x600 or
+; The packed-pixel display's renderer (SPEC.md 120): a VBE card's 800x600 or
 ; 1024x768 at 8 or 16 bits a pixel, drawn into the card's 64KB window A at
 ; A000 and banked through VBE function 4F05h. The kernel's planar drawing
 ; bodies each far-call this image through one compare (kernel/vidext.inc's
@@ -15,17 +15,17 @@
 ;
 ; --- WHAT IT HOOKS: NOTHING -------------------------------------------------
 ; No vector, no IRQ, no port it keeps. Attach PROBES and CHOOSES and sets no
-; mode (that is vid_switch's, SPEC.md 119.4); detach disarms the kernel's far
+; mode (that is vid_switch's, SPEC.md 120.4); detach disarms the kernel's far
 ; pointer and the VID_A_VESA bit through the block it was handed, and nothing
 ; else, so a refusal has nothing to undo.
 ;
 ; --- 8086 CODE THROUGHOUT -----------------------------------------------------
 ; A 286 with a VBE 1.2 card qualifies. The 32-bit byte offset of a pixel is
 ; one `mul` (DX:AX), the window number is DX shifted by the granularity, and a
-; row never straddles more than one window edge (SPEC.md 119.8). No 386
+; row never straddles more than one window edge (SPEC.md 120.8). No 386
 ; instruction, no unreal mode, no linear framebuffer.
 ;
-; --- THE DESKTOP STAYS 16 COLOURS (SPEC.md 119.1) -------------------------------
+; --- THE DESKTOP STAYS 16 COLOURS (SPEC.md 120.1) -------------------------------
 ; Every colour that reaches this image is a 4-bit index. At 8bpp the pixel
 ; byte IS the index and the DAC's first sixteen entries are the VGA's own
 ; colours (vx_dac16); at 16bpp the index goes through vx_pal16, an RGB word a
@@ -73,7 +73,7 @@ MI_GPOS     equ 34
 MI_BSIZE    equ 35
 MI_BPOS     equ 36
 
-; --- the mode table (SPEC.md 119.2.2): one 16-byte record an offered mode -------
+; --- the mode table (SPEC.md 120.2.2): one 16-byte record an offered mode -------
 VM_MODE     equ 0               ; dw: the VBE mode number
 VM_X        equ 2               ; dw
 VM_Y        equ 4               ; dw
@@ -91,7 +91,7 @@ VM_SIZE     equ 16
 VX_NMODES   equ 16              ; the most this image offers
 VX_LISTMAX  equ 64              ; the most mode numbers it walks
 
-VX_XMAX     equ 1024            ; the geometry it accepts (SPEC.md 119.2.2)
+VX_XMAX     equ 1024            ; the geometry it accepts (SPEC.md 120.2.2)
 VX_YMAX     equ 768
 VX_XMIN     equ 640
 VX_YMIN     equ 400
@@ -125,7 +125,7 @@ vx_entry:
 ; -----------------------------------------------------------------------------
 ; vx_detach - DRVV_DETACH: disarm the kernel's pointer and the availability bit.
 ;             Cannot fail (SPEC.md 51.2). The caller has already put the
-;             desktop back on the VGA (SPEC.md 119.4); if it has not, vx_go's
+;             desktop back on the VGA (SPEC.md 120.4); if it has not, vx_go's
 ;             guard draws nothing rather than calling a freed image.
 ; -----------------------------------------------------------------------------
 vx_detach:
@@ -158,7 +158,7 @@ vx_attach:
     push bx                     ; PRESERVE BX: the kernel reads the row through
                                 ; it on return (SPEC.md 51.2), and the probe
                                 ; below spends it
-    mov [vx_want], cl           ; the class SYSTEM.CFG asks for (119.2.3),
+    mov [vx_want], cl           ; the class SYSTEM.CFG asks for (120.2.3),
                                 ; one byte, 0 = Auto
     push ds
     pop es                      ; ES = ours for the BIOS's buffers
@@ -175,7 +175,7 @@ vx_attach:
     jne .nohw
     cmp word [vx_vbe+VI_VER], 0x0102
     jb .nohw                    ; 1.0 and 1.1: no direct-colour fields, no
-                                ; reliable window attributes (SPEC.md 119.2.1)
+                                ; reliable window attributes (SPEC.md 120.2.1)
 
     ; --- copy the mode list OUT before any 4F01h can overwrite it ------------
     ; (a 1.x BIOS may point it inside the very buffer just filled)
@@ -214,7 +214,7 @@ vx_attach:
     cmp byte [vx_nmodes], VX_NMODES
     jb .mode
 
-    ; --- the class asked for, else Auto (SPEC.md 119.2.3) ------------------------
+    ; --- the class asked for, else Auto (SPEC.md 120.2.3) ------------------------
 .chosen:
     cmp byte [vx_nmodes], 0
     je .nohw
@@ -503,7 +503,7 @@ vx_publish:
 
 ; -----------------------------------------------------------------------------
 ; vx_choose - Auto: the record with the largest X*Y, and at that size the
-;             deepest; ties keep the earlier record (SPEC.md 119.2.3)
+;             deepest; ties keep the earlier record (SPEC.md 120.2.3)
 ; out: [vx_cur] = the record
 ; clobbers: ax, bx, cx, dx, si, di
 ; -----------------------------------------------------------------------------
@@ -654,7 +654,7 @@ vx_geom:
 
 ; -----------------------------------------------------------------------------
 ; vx_pick - VXV_PICK: DL/DH/CL = a class; choose again and re-publish the
-;           geometry. After INIT only. Never refuses (119.2.3): a class the
+;           geometry. After INIT only. Never refuses (120.2.3): a class the
 ;           card lacks is Auto
 ; -----------------------------------------------------------------------------
 vx_pick:
@@ -744,7 +744,7 @@ vx_next:
     ret
 
 ; =============================================================================
-; THE PRIMITIVE ENTRY (SPEC.md 119.3.1)
+; THE PRIMITIVE ENTRY (SPEC.md 120.3.1)
 ;
 ; Far-called by the kernel's vx_go / vx_call / vx_goc with, on the stack above
 ; the far return, a FAR POINTER to the selector byte. Every register is saved
@@ -837,7 +837,7 @@ vxp_refuse:
     ret
 
 ; =============================================================================
-; THE WINDOW (SPEC.md 119.8)
+; THE WINDOW (SPEC.md 120.8)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -972,7 +972,7 @@ vx_rowfill:
 ; vx_rowcopy - CX BYTES from DS:SI to ES:DI, with the window edge handled:
 ;              one `rep movsb` to the edge, the next window, the rest. The
 ;              per-byte `VXW` test it replaces halved the depth blit and the
-;              restore against the fill on a 486 (SPEC.md 119.8: 246 us a
+;              restore against the fill on a 486 (SPEC.md 120.8: 246 us a
 ;              1,248-byte row against the fill's 117)
 ; in:  ES:DI set by vx_addr, DS:SI the source, CX = bytes (> 0)
 ; clobbers: cx, si, di, flags
@@ -1121,7 +1121,7 @@ vxp_fill:
     loop .xpx8
     jmp short .next
 .xor16:                         ; a word's index is found in the table, XORed
-    mov dx, [es:di]             ; and looked up again (SPEC.md 119.1)
+    mov dx, [es:di]             ; and looked up again (SPEC.md 120.1)
     call vx_rgb2ix              ; DL = the index of the word in DX
     xor dl, [vx_ink+1]
     push ax
@@ -1604,7 +1604,7 @@ vxp_icon:
     ret
 
 ; -----------------------------------------------------------------------------
-; THE ARROW (SPEC.md 119.3.3): the driver's whole cycle
+; THE ARROW (SPEC.md 120.3.3): the driver's whole cycle
 ;
 ; The cell is CUR_GW x CUR_GH at (cur_drawn - hot spot), clamped to the origin
 ; and cut at the right and bottom edges; what was under it is banked in
@@ -1946,7 +1946,7 @@ vxp_blit4:
     ret
 
 ; -----------------------------------------------------------------------------
-; VX_BLITD - OSAPI_GFX_BLITD (SPEC.md 119.7): the package's block AT THE
+; VX_BLITD - OSAPI_GFX_BLITD (SPEC.md 120.7): the package's block AT THE
 ;            DEPTH - ES:SI = pixels as this mode packs them, BP (the
 ;            caller's) = the stride in bytes, AX/BX = x/y (signed), CX/DX =
 ;            w/h - clipped to the display in both axes, vxp_blit4's way, and

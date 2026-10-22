@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - tests/vesabench/vesabench.asm
 ;
-; VESABENCH: where the time goes on a packed display (SPEC.md 119.8). Nothing
+; VESABENCH: where the time goes on a packed display (SPEC.md 120.8). Nothing
 ; here ships: `make vesabench` builds it onto a disk of its own, `all` does
 ; not.
 ;

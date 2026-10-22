@@ -985,7 +985,7 @@ fpg_finish:
     call gfx_fill
 %ifdef VID_EXT
                                 ; --- and the TEXT BAND too, where no cell can
-                                ; reach it (SPEC.md 119.5): menu_bar_text
+                                ; reach it (SPEC.md 120.5): menu_bar_text
                                 ; composes at most MENU_BCMAX cells, and a
                                 ; 1024-wide bar puts the widget past them, so
                                 ; the run below would repaint none of it and

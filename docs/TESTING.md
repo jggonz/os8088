@@ -574,7 +574,7 @@ python3 tools/mouse.py --screen 720x348 build/qmp.sock click X Y
 `HERCSEG` is a segment and `hercshot` takes the linear address. The full
 recipe and its four traps: docs/HERCULES-TESTING.md.
 
-### VESA — the packed display (SPEC.md 119), and why QEMU is the whole fixture
+### VESA — the packed display (SPEC.md 120), and why QEMU is the whole fixture
 
 QEMU's standard VGA (`-vga std`, the default) carries a VBE 2.0/3.0 BIOS, so
 `VESA.DRV`'s probe finds 1024x768 at 16 bits a pixel on it exactly as on a
@@ -599,7 +599,7 @@ python3 tests/vesablitd.py                 # OSAPI_GFX_BLITD through PiXEL
 make vesabench && python3 tests/vesabench.py   # VESABENCH, behaviour only
 ```
 
-**The first look found what the rows had not asked** (SPEC.md 119.5's
+**The first look found what the rows had not asked** (SPEC.md 120.5's
 second table). Two Disk windows on the 86Box 486 turned the desktop under
 them into a stripe band; Gorillas opened as a strip the width of the
 screen; the disk widget stayed on the bar. A sweep that boots every
@@ -628,7 +628,7 @@ folded 16 to ONE plane and claimed a sixteenth of what `OSAPI_GFX_SAVE`
 then wrote past them), ArtfulType's panel sizer, Frotz's colour bit,
 Solitaire's pips and card back, Weave's palette, and `os88.h`'s own
 advice. The survey was a script over every `mov [x], dh` after those two
-calls and every `cmp` on what it stored (SPEC.md 119.5's package rule for
+calls and every `cmp` on what it stored (SPEC.md 120.5's package rule for
 DH is the result); the rows are `vesagor` (Gorillas played into its field:
 sky rows and solid building runs, which read 97 and 68 on the fix - the
 VGA desktop's own figures, the skyline being seeded the same - against 10

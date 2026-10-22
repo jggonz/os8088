@@ -665,7 +665,7 @@ CPK_AY2   equ CPK_AY + CP_GW + 3        ; 89  gap above it is dead (76.4's rule)
 CPV_R0Y   equ 20                ; row 0 glyph top
 %ifdef VID_EXT
 CPV_NROWS equ 4                 ; a VGA, a VESA and a mono card: FOUR rows
-CPV_ROWH  equ 12                ; (SPEC.md 119.6), at 20, 32, 44, 56 - an 8px
+CPV_ROWH  equ 12                ; (SPEC.md 120.6), at 20, 32, 44, 56 - an 8px
                                 ; glyph and four of gap, in the same band
 %else
 CPV_NROWS equ 3                 ; THREE is the most any machine has: VGA and
@@ -3901,7 +3901,7 @@ cpf_vidok:
     call cp_vid_pick
 %ifdef VID_EXT
     cmp al, VID_VESA            ; the VESA row, with the VESA display running
-    jne .plain                  ; (SPEC.md 119.6): there IS something to do
+    jne .plain                  ; (SPEC.md 120.6): there IS something to do
     cmp byte [vid_kind], VID_VESA   ; when the class asked for is not the one
     jne .plain                  ; running - and Auto (0) is never "not": the
     mov al, [drv_cfg+CFG_VE]    ; driver's pick for Auto IS what runs
@@ -3937,7 +3937,7 @@ cp_vid_rows:
     call kentm_si                ; KENT: push ax..si
 %ifdef VID_EXT
     call cp_vid_vxlabel         ; 'Vesa WxHxB' for the row, from the class
-%endif                          ; chosen or the mode running (SPEC.md 119.6)
+%endif                          ; chosen or the mode running (SPEC.md 120.6)
     call cp_vid_pick            ; [cp_vsel] now names a row that exists
     xor bl, bl                  ; BL = slot
 .r:
@@ -3982,7 +3982,7 @@ cp_vid_rows:
 ; -----------------------------------------------------------------------------
 ; cp_vid_vxlabel - the VESA row's label, composed: 'Vesa ' then the class the
 ;                  settings file asks for, else the mode running when the
-;                  display is the VESA one, else 'auto' (SPEC.md 119.6)
+;                  display is the VESA one, else 'auto' (SPEC.md 120.6)
 ; clobbers: ax, bx, cx, dx (flags); DI, the painter's pane left, is kept
 ; -----------------------------------------------------------------------------
 cp_vid_vxlabel:
@@ -4334,7 +4334,7 @@ cp_vid_click:
     mov al, [cp_vsel]
 %ifdef VID_EXT
     cmp al, VID_VESA
-    jne .sw                     ; the VESA row (SPEC.md 119.6): the driver
+    jne .sw                     ; the VESA row (SPEC.md 120.6): the driver
     push ax                     ; chooses the class asked for first...
     mov cl, [drv_cfg+CFG_VE]
     mov al, VXV_PICK
@@ -4379,7 +4379,7 @@ cp_vid_click:
     cmp al, [cp_vsel]
 %ifdef VID_EXT
     je .same                    ; already the pending choice: the VESA row
-%else                           ; CYCLES its class (SPEC.md 119.6), any other
+%else                           ; CYCLES its class (SPEC.md 120.6), any other
     je .done                    ; draws nothing
 %endif
     mov [cp_vsel], al
@@ -7011,7 +7011,7 @@ cp_drv_click:
     cmp word [bx+DRVR_SEG], 0
     je .load
 %ifdef VID_EXT
-    cmp bx, vesa_row            ; VESA.DRV IS THE RENDERER (SPEC.md 119.4): the
+    cmp bx, vesa_row            ; VESA.DRV IS THE RENDERER (SPEC.md 120.4): the
     jne .novx                   ; desktop goes back onto the VGA BEFORE the
     push ax                     ; image that was drawing it is freed, and this
     mov al, VID_VGA             ; page is the one caller that can detach it
@@ -7341,7 +7341,7 @@ cp_s_vega   equ cp_s_vcga
 ; into every machine's resident .text.
 %ifdef VID_EXT
 cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga, cp_s_vega, cp_vvesa_buf
-cp_vvesa_buf: db 'Vesa '         ; ...and the FIFTH is COMPOSED (SPEC.md 119.6):
+cp_vvesa_buf: db 'Vesa '         ; ...and the FIFTH is COMPOSED (SPEC.md 120.6):
             times 12 db 0        ; 'Vesa 1024x768x16' at the longest, space-
                                 ; padded to that length, written by
                                 ; cp_vid_vxlabel through CS before the rows

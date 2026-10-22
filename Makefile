@@ -1223,7 +1223,7 @@ VIDDEF += -DNOUNAL
 endif
 
 # NOVIDEXT=1 assembles kern_big WITHOUT the external renderer hook (SPEC.md
-# 119.3): no VID_VESA kind, no VESA.DRV row, no compare at the planar bodies.
+# 120.3): no VID_VESA kind, no VESA.DRV row, no compare at the planar bodies.
 # The A/B the hook's resident cost is measured against, and the only thing
 # keeping the unhooked arms assembling.
 ifneq ($(NOVIDEXT),)
@@ -3198,7 +3198,7 @@ DRIVERS += $(BUILD)/usbmouse.drv
 # so a disk that carries it costs a machine with no board one directory slot
 # and nothing read. kern_big's alone, like every row past the parallel link
 DRIVERS += $(BUILD)/ems.drv
-# VESA.DRV - the packed-pixel display's renderer (SPEC.md 119). On every
+# VESA.DRV - the packed-pixel display's renderer (SPEC.md 120). On every
 # kern_big disk for USBMOUSE.DRV's reason: a tick on the Drivers page is how
 # it is wanted, and the tick needs the file to be there. kern_small filters
 # it back out with the rest ($(SMALLDRIVERS)).
@@ -3890,7 +3890,7 @@ $(BUILD)/xmem.bin: drivers/xmem/xmem.asm drivers/os88drv.inc apps/os88api.inc ap
 $(BUILD)/xmem.drv: $(BUILD)/xmem.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/xmem.bin -o $@
 
-# VESA.DRV - the external renderer for a VBE card (SPEC.md 119). kernel/vxabi.inc
+# VESA.DRV - the external renderer for a VBE card (SPEC.md 120). kernel/vxabi.inc
 # is SHARED AS SOURCE with kernel/vidext.inc, vmmabi.inc's shape, hence the
 # -I kernel/. An OVERLAY with a drv_tab row, like VMMOUSE.DRV.
 $(BUILD)/vesa.bin: drivers/vesa/vesa.asm drivers/os88drv.inc apps/os88api.inc kernel/vxabi.inc | $(BUILD)
@@ -4720,7 +4720,7 @@ vmmousetest: $(BUILD)/vmmouse.img
 	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."
 	@echo "             Run it with: python3 tests/vmmouse.py"
 
-# VESATEST - THE PACKED-PIXEL DISPLAY'S GATE DISK (SPEC.md 119.9): ether360.img's
+# VESATEST - THE PACKED-PIXEL DISPLAY'S GATE DISK (SPEC.md 120.9): ether360.img's
 # shape with a SYSTEM.CFG whose driver word has BIT 8 set, VESA.DRV's
 # (drv_cfgbit), so the desktop comes up on the VBE before the first paint and
 # tests/vesa.py reads state and pixels instead of clicking. The SHIPPED kernel
@@ -4741,15 +4741,15 @@ $(BUILD)/vesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT
 
 .PHONY: vesatest
 vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img $(BUILD)/vesablitd.img $(BUILD)/vxpics.img $(BUILD)/vesablit4.img $(BUILD)/vesafsx.img $(BUILD)/vesapref.img
-	@echo "vesatest: build/vesa.img - VESA.DRV already wanted (SPEC.md 119.9);"
+	@echo "vesatest: build/vesa.img - VESA.DRV already wanted (SPEC.md 120.9);"
 	@echo "          build/vesa8.img the same with a 'VM' class byte asking 800x600x8;"
 	@echo "          build/vesablitd.img the same plus \\AUTOSTRT opening B:CITY.PCX,"
-	@echo "          and build/vxpics.img that B: - PiXEL and the picture (119.7)."
-	@echo "          build/vesablit4.img the same plus \\AUTOSTRT opening WireBall (119.3)."
-	@echo "          build/vesafsx.img opens Gorillas and build/vesapref.img Solitaire (119.5)."
+	@echo "          and build/vxpics.img that B: - PiXEL and the picture (120.7)."
+	@echo "          build/vesablit4.img the same plus \\AUTOSTRT opening WireBall (120.3)."
+	@echo "          build/vesafsx.img opens Gorillas and build/vesapref.img Solitaire (120.5)."
 	@echo "          Run them with: python3 tests/vesa.py; vesa8.py; vesacp.py; vesablitd.py; vesablit4.py; vesafsx.py; vesapref.py"
 
-# ...and the depth blit's pair (SPEC.md 119.7, 106.27): the vesa.img system
+# ...and the depth blit's pair (SPEC.md 120.7, 106.27): the vesa.img system
 # disk with one more file, \AUTOSTRT\CITY.LNK - a link to the DOCUMENT
 # CITY.PCX on B: (SPEC.md 26.10: a link to a document starts that document's
 # program) - and a B: of its own with PiXEL and the picture at its root, so
@@ -4766,7 +4766,7 @@ $(BUILD)/vesablitd.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SY
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/CITY.LNK
 
-# ...and the 4-bit blit's (SPEC.md 119.3, tests/vesablit4.py): the same disk
+# ...and the 4-bit blit's (SPEC.md 120.3, tests/vesablit4.py): the same disk
 # with \AUTOSTRT\WBALL.LNK, a link to WIREBALL.O88 on the apps disk, whose
 # front page is one 416x104 OSAPI_GFX_BLIT4 of checked-in art
 $(BUILD)/vxbd/WBALL.LNK: tools/os88lnk.py | $(BUILD)
@@ -4779,7 +4779,7 @@ $(BUILD)/vesablit4.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SY
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/WBALL.LNK
 
-# ...the fullscreen bracket's (SPEC.md 119.5, tests/vesafsx.py): Gorillas,
+# ...the fullscreen bracket's (SPEC.md 120.5, tests/vesafsx.py): Gorillas,
 # whose Alt+Enter enters a bracket from any state and which reads
 # OSAPI_FSX_CAPS's DL for the mode it takes; and the window preference's
 # (tests/vesapref.py): Solitaire, whose table is as wide as its OS88_PREFER's
@@ -4807,7 +4807,7 @@ $(BUILD)/vesapref.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYS
 $(BUILD)/vxpics.img: $(BUILD)/pixel.o88 apps/pixel/samples/CITY.PCX tools/os88disk.py | $(BUILD)
 	python3 tools/os88disk.py -o $@ --size 1440 apps/pixel/samples/CITY.PCX $(BUILD)/pixel.o88
 
-# VESABENCH (SPEC.md 119.8, the plan's S7): where a packed display's time
+# VESABENCH (SPEC.md 120.8, the plan's S7): where a packed display's time
 # goes - one BIOS window read, fills, the depth blit against the nibble one,
 # a text row - run and SAVED by the package itself on its first paint, so an
 # 86Box machine with no automation needs nobody to click. The same two-disk
@@ -4846,7 +4846,7 @@ $(BUILD)/vxbench.img: $(BUILD)/vesabnch.o88 tools/os88disk.py | $(BUILD)
 .PHONY: vesabench 486-vesa 486-vesa-desk
 vesabench: $(BUILD)/vesabench.img $(BUILD)/vesabnc8.img $(BUILD)/vxbench.img
 	@echo "vesabench: build/vesabench.img (1024x768x16) and build/vesabnc8.img (800x600x8),"
-	@echo "           each opening VESABNCH.O88 off build/vxbench.img at boot (SPEC.md 119.8)."
+	@echo "           each opening VESABNCH.O88 off build/vxbench.img at boot (SPEC.md 120.8)."
 	@echo "           python3 tests/vesabench.py runs both on QEMU; make 486-vesa is the 86Box 486"
 
 # ...and the 86Box 486 with a VBE card: vm/486 with a Cirrus Logic CL-GD5428
@@ -4861,7 +4861,7 @@ vesabench: $(BUILD)/vesabench.img $(BUILD)/vesabnc8.img $(BUILD)/vxbench.img
 	@$(UNPROTECT) $(VM486V)/86box.cfg
 	$(BOX) -P $(VM486V) -N
 
-# ...and the same 486 with the DESKTOP on it, to LOOK at (SPEC.md 119.9): A: is
+# ...and the same 486 with the DESKTOP on it, to LOOK at (SPEC.md 120.9): A: is
 # build/vesa.img - the shipped system disk with VESA.DRV already wanted, no
 # autostart - and B: the shipped apps disk, so the desktop comes up at
 # 1024x768x16 and Control Panel -> Display's Vesa row cycles the card's
@@ -4873,7 +4873,7 @@ vesabench: $(BUILD)/vesabench.img $(BUILD)/vesabnc8.img $(BUILD)/vxbench.img
 	$(BOX) -P $(VM486VD) -N
 
 # ...and the same disk with a ver-3 'VM' record whose class byte names
-# 800x600x8 (SPEC.md 119.2.3, kernel/vxabi.inc's VXC_*: 0x80 | width 2 |
+# 800x600x8 (SPEC.md 120.2.3, kernel/vxabi.inc's VXC_*: 0x80 | width 2 |
 # height 2 << 2, depth bit clear = 0x8A), after the VGA and Single, so
 # tests/vesa8.py exercises the 8bpp path and the DAC the driver loads, and the
 # class's round trip from the file to the driver's attach. QEMU's standard VGA

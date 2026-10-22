@@ -229,7 +229,7 @@ struct os88_video {                              /* OSAPI_VIDEO, SPEC.md 39.2 */
                                                   * this (SPEC.md 39.24) */
     int bpp;                                     /* 4 or 1 - and 8 or 16 on a
                                                   * packed VESA display (SPEC.md
-                                                  * 119.5): colour is >= 4,
+                                                  * 120.5): colour is >= 4,
                                                   * never == 4. os88_gfx_pen */
 };
 

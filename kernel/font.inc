@@ -590,7 +590,7 @@ font_char:
 %ifdef GFX_VGA                  ; on the framebuffer. With no VGA in the build
     jmp .done                   ; `.done` is the NEXT instruction, and nasm
 .vram:                          ; spends two bytes on `jmp short $+2`
-    VIDEXTC VX_FONTCHAR, .done  ; SPEC.md 119.3: the cell is the driver's,
+    VIDEXTC VX_FONTCHAR, .done  ; SPEC.md 120.3: the cell is the driver's,
                                 ; and the frame above is still ours to pop
     mov di, cx                  ; x/8 goes STRAIGHT into DI and x&7 stays in
     shr di, 1                   ; CL: the old spelling hopped x through BX and
@@ -1686,7 +1686,7 @@ font_run_x:
 .planar:
 %ifdef VID_EXT
 .vxp0:
-    cmp byte [vid_ext], 0       ; SPEC.md 119.3: a packed display's run is the
+    cmp byte [vid_ext], 0       ; SPEC.md 120.3: a packed display's run is the
     jz .plok                    ; driver's ONE PASS - unless a region is armed
     CLIPQ                       ; (the per-cell test is the kernel's) or the
     jne .vxslow                 ; text is disabled (the stipple is font_ink's):

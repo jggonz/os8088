@@ -1,5 +1,5 @@
 ; =============================================================================
-; vxabi.inc - the private kernel <-> VESA.DRV ABI (SPEC.md 119.3)
+; vxabi.inc - the private kernel <-> VESA.DRV ABI (SPEC.md 120.3)
 ;
 ; INCLUDED BY BOTH SIDES, as source and never as a copy: kernel/vidext.inc and
 ; drivers/vesa/vesa.asm. vmmabi.inc's shape and in kernel/ for its reason -
@@ -20,7 +20,7 @@ VX_ABI_VER  equ 4               ; bump on ANY change to the contract below
 ; DRVV_ATTACH (0) probes and chooses a mode and answers SI = the VXS_* table
 ; below, in the driver's segment; DRVV_DETACH (1) disarms the kernel's far
 ; pointer and the VID_A_VESA bit through the block it was handed. Neither
-; sets a video mode: that is vid_switch's (SPEC.md 119.4).
+; sets a video mode: that is vid_switch's (SPEC.md 120.4).
 VXV_INIT    equ 0x40            ; in SI = the kernel's vx_blk (ES = KERNEL_SEG):
                                 ; bank the kernel's segment and its pointers,
                                 ; fill vid_tab row 4 from the chosen mode.
@@ -28,7 +28,7 @@ VXV_INIT    equ 0x40            ; in SI = the kernel's vx_blk (ES = KERNEL_SEG):
 VXV_PICK    equ 0x41            ; in CL = a mode CLASS (below), after INIT:
                                 ; choose again, re-fill vid_tab row 4 and the
                                 ; kernel's vx_bpp. Never refuses: a class the
-                                ; card lacks is Auto (119.2.3). The caller
+                                ; card lacks is Auto (120.2.3). The caller
                                 ; switches the display afterwards
 VXV_NEXT    equ 0x42            ; in CL = a class: out CL = the next offered
                                 ; class after it (Auto -> the first record,
@@ -38,10 +38,10 @@ VXV_NEXT    equ 0x42            ; in CL = a class: out CL = the next offered
                                 ; first is answered). The Display page's walk
 
 ; --- a mode CLASS: the user's name for a mode, a card's number being the
-; card's (SPEC.md 119.2.3). ONE BYTE, because SYSTEM.CFG's buffer is boot
+; card's (SPEC.md 120.2.3). ONE BYTE, because SYSTEM.CFG's buffer is boot
 ; blob bytes and the blob had one: 0 is Auto; else bit 7 set, bits 0-1 the
 ; width, bits 2-3 the height, bit 4 the depth, from the four of each this
-; image offers (119.2.2). The 'VM' record's fourth byte carries it, and
+; image offers (120.2.2). The 'VM' record's fourth byte carries it, and
 ; DRVV_ATTACH takes it in CL
 VXC_AUTO    equ 0
 VXC_SET     equ 0x80
@@ -115,7 +115,7 @@ VX_FONT_LAST  equ 126
 VXA_BIT     equ 0x10            ; VID_A_VESA: 1 << VID_VESA, VID_VESA being 4
 
 ; --- the selectors: the byte after `call vx_go` / `call vx_call` ------------
-; Each names a kernel body and takes that body's registers (SPEC.md 119.3.1).
+; Each names a kernel body and takes that body's registers (SPEC.md 120.3.1).
 VX_FILL     equ 0               ; vga_solid_rect: AX/BX/CX/DX, [gfx_color],
                                 ; [vga_xorm]
 VX_GRAY     equ 1               ; gfx_fill_gray_raw: the rect
@@ -143,7 +143,7 @@ VX_FONTRUN  equ 15              ; font_run's planar arm, no region armed and
                                 ; not disabled: CX = x, DX = y, ES:SI the
                                 ; string, font_rn_fg/bg; leaves [gfx_color]
                                 ; = fg
-VX_BLITD    equ 16              ; OSAPI_GFX_BLITD (SPEC.md 119.7): ES:SI =
+VX_BLITD    equ 16              ; OSAPI_GFX_BLITD (SPEC.md 120.7): ES:SI =
                                 ; pixels at the depth, BP = stride, AX/BX =
                                 ; x/y, CX/DX = w/h, clipped by the driver;
                                 ; CX = 0 is the palette form (AX = the first

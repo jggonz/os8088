@@ -509,7 +509,7 @@ hb_ok_x:
     mov bx, menu_s_hibernh      ; ...none: '(no disk)'. A `mov` writes no
     jc .set                     ; flag, so the string can be chosen first
 %ifdef VID_EXT
-    mov bx, menu_s_hibervx      ; a VESA primary (SPEC.md 119.4): an image
+    mov bx, menu_s_hibervx      ; a VESA primary (SPEC.md 120.4): an image
     cmp byte [vid_kind], VID_VESA   ; carrying [vid_kind] = 4 into a machine
     je .set                     ; whose driver has not attached would arm
 %endif                          ; nothing and draw nothing - greyed, with why
@@ -1820,7 +1820,7 @@ hbm_sweep:
     cmp word [bx+DRVR_SEG], 0
     je .next
 %ifdef VID_EXT
-    cmp bx, vesa_row            ; THE DISPLAY'S RENDERER STAYS (SPEC.md 119.4):
+    cmp bx, vesa_row            ; THE DISPLAY'S RENDERER STAYS (SPEC.md 120.4):
     je .next                    ; a suspend that took it would leave every
                                 ; drawing body calling nothing. A hibernate
                                 ; never reaches here with it - hb_ok refuses

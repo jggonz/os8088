@@ -80,7 +80,7 @@ ROWS = [
     ("USB Mouse", "DRVM_USBM", "DRVM_IMG_USBM", "usbmouse.drv"),
     # SPEC.md 107's EMS.DRV: DRVC_EMS, after the USB mouse on both big builds
     ("EMS", "DRVM_EMS", "DRVM_IMG_EMS", "ems.drv"),
-    # SPEC.md 119's VESA.DRV: the second DRVC_OVL row, LAST on both big
+    # SPEC.md 120's VESA.DRV: the second DRVC_OVL row, LAST on both big
     # builds, with a SYSTEM.CFG bit (8) and a Drivers-page price like the rest
     ("VESA Display", "DRVM_VESA", "DRVM_IMG_VESA", "vesa.drv"),
 ]
@@ -260,7 +260,7 @@ def main():
         # ...nor does EMS.DRV (SPEC.md 107): its tables are its bss, and the
         # memory it hands out is the BOARD's, not the heap's
         "DRVM_EMS": s["DRVM_IMG_EMS"],
-        # ...nor does VESA.DRV (SPEC.md 119): its probe buffers, mode table
+        # ...nor does VESA.DRV (SPEC.md 120): its probe buffers, mode table
         # and the arrow's save-under are bss, inside the image
         "DRVM_VESA": s["DRVM_IMG_VESA"],
     }

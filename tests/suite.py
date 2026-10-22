@@ -1002,7 +1002,7 @@ FAST = [
         "a statement that ended up inside a block comment: it compiles clean, "
         "runs never, and cost apps/c64 a Paste that outlived a machine reset"),
     Row("vidext", "fast", py("tests/unit/t_vidext.py"), 0.1,
-        "the external renderer hook's inventory (SPEC.md 119.3.1): every "
+        "the external renderer hook's inventory (SPEC.md 120.3.1): every "
         "[vid_mono]/[vid_planes] dispatch in the kernel is registered in "
         "tests/vidext.txt as hooked or exempt with a reason, every selector "
         "kernel/vxabi.inc names is emitted exactly once, and VESA.DRV's jump "
@@ -4362,7 +4362,7 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img")),
     Row("vesa", "soak", py("tests/vesa.py"), 60.0,
-        "The packed-pixel display (SPEC.md 119): QEMU's standard VGA carries "
+        "The packed-pixel display (SPEC.md 120): QEMU's standard VGA carries "
         "a VBE BIOS, so VESA.DRV's probe finds 1024x768x16 and the desktop "
         "switches onto it before the first paint. Boots build/vesa.img (`make "
         "vesatest`: the shipped kernel and driver on a disk whose SYSTEM.CFG "
@@ -4382,7 +4382,7 @@ SOAK = [
         wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
     Row("vesa8", "soak", py("tests/vesa8.py"), 45.0,
         "The packed display at 8 BITS A PIXEL, and the 'VE' key's round trip "
-        "(SPEC.md 119.2.3): build/vesa8.img's SYSTEM.CFG names the 800x600x8 "
+        "(SPEC.md 120.2.3): build/vesa8.img's SYSTEM.CFG names the 800x600x8 "
         "class, so the driver takes QEMU's mode 0103h over Auto's "
         "1024x768x16. Asserts vid_kind 4, 800x600, vid_planes 8, then the "
         "screendump: the menu bar and the dither through the DAC's first "
@@ -4391,7 +4391,7 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/vesa8.img")),
     Row("vesacp", "soak", py("tests/vesacp.py"), 60.0,
-        "Choosing a VESA mode on the Display page (SPEC.md 119.6): on the "
+        "Choosing a VESA mode on the Display page (SPEC.md 120.6): on the "
         "1024x768x16 desktop, the Control Panel's Display page lists the "
         "VESA row at the four-row pitch; a click on it while it is the "
         "pending choice CYCLES the class (CFG_VE 0 -> the first record -> "
@@ -4402,7 +4402,7 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
     Row("vesablitd", "soak", py("tests/vesablitd.py"), 90.0,
-        "A package at the display's depth (SPEC.md 119.7, 106.27): "
+        "A package at the display's depth (SPEC.md 120.7, 106.27): "
         "build/vesablitd.img is vesa.img plus an AUTOSTRT link to CITY.PCX "
         "on B: (build/vxpics.img: PiXEL and the picture), so the machine "
         "boots straight into PiXEL on the 1024x768x16 desktop. Asserts "
@@ -4416,7 +4416,7 @@ SOAK = [
                "build/vxpics.img", "build/pixel.o88")),
     Row("vesablit4", "soak", py("tests/vesablit4.py"), 90.0,
         "A package's 4-bit blit on the packed display, pixel for pixel "
-        "(SPEC.md 119.3): build/vesablit4.img is vesa.img plus an AUTOSTRT "
+        "(SPEC.md 120.3): build/vesablit4.img is vesa.img plus an AUTOSTRT "
         "link to WIREBALL.O88 on the apps disk, so the machine boots into "
         "WireBall's front page, whose title art is one 416x104 "
         "OSAPI_GFX_BLIT4 of checked-in art. Finds the block on the glass by "
@@ -4429,7 +4429,7 @@ SOAK = [
                "build/wireball.o88")),
     Row("vesafsx", "soak", py("tests/vesafsx.py"), 90.0,
         "A fullscreen bracket from the packed desktop and back (SPEC.md "
-        "119.5, 53): build/vesafsx.img is vesa.img plus an AUTOSTRT link to "
+        "120.5, 53): build/vesafsx.img is vesa.img plus an AUTOSTRT link to "
         "GORILLAS.O88, so the machine boots into Gorillas at 1024x768x16; "
         "Alt+Enter enters its bracket, which reads OSAPI_FSX_CAPS's DL - the "
         "screendump must be 640x480 (mode 12h, the VGA arm) - and Escape "
@@ -4441,7 +4441,7 @@ SOAK = [
         wants=("build/os8088.img", "build/apps.img", "build/vesafsx.img",
                "build/gorillas.o88")),
     Row("vesapref", "soak", py("tests/vesapref.py"), 90.0,
-        "A package's OS88_PREFER on the packed display (SPEC.md 119.5, "
+        "A package's OS88_PREFER on the packed display (SPEC.md 120.5, "
         "11.100.1): build/vesapref.img is vesa.img plus an AUTOSTRT link to "
         "SOLITAIR.O88; Solitaire's table must be as wide as its own SOL_PW_B, "
         "the VGA row of its three-entry table, which the kernel takes for "
@@ -4452,7 +4452,7 @@ SOAK = [
         wants=("build/os8088.img", "build/apps.img", "build/vesapref.img",
                "build/solitair.o88")),
     Row("vesagor", "soak", py("tests/vesagor.py"), 90.0,
-        "Gorillas' field on the packed desktop (SPEC.md 119.5, the package "
+        "Gorillas' field on the packed desktop (SPEC.md 120.5, the package "
         "rule for DH): build/vesafsx.img's autostart opens Gorillas on the "
         "1024x768x16 desktop, eight Enters play the setup through, and the "
         "screendump must show a CBLUE sky edge to edge and buildings in solid "
@@ -4463,7 +4463,7 @@ SOAK = [
                "build/gorillas.o88")),
     Row("vesasu", "soak", py("tests/vesasu.py"), 120.0,
         "a drop-down's save-under claim on the packed desktop is sized for "
-        "the depth (SPEC.md 119.5, 13.14.2): PiXEL on CITY.PCX off "
+        "the depth (SPEC.md 120.5, 13.14.2): PiXEL on CITY.PCX off "
         "build/vesablitd.img, Ctrl+S, the Save As card's format drop-down "
         "clicked open; the record's claim must hold DH x rows x byte columns "
         "of the list with DH = 16, mem_tab must agree and overlap nothing, "
@@ -4473,7 +4473,7 @@ SOAK = [
         wants=("build/os8088.img", "build/apps.img", "build/vesablitd.img",
                "build/vxpics.img", "build/pixel.o88")),
     Row("vesabench", "soak", py("tests/vesabench.py"), 150.0,
-        "VESABENCH's correctness run (SPEC.md 119.8): build/vesabench.img "
+        "VESABENCH's correctness run (SPEC.md 120.8): build/vesabench.img "
         "and build/vesabnc8.img each open VESABNCH.O88 off build/vxbench.img "
         "through an AUTOSTRT link; the package runs its rows on its first "
         "paint - one BIOS window read, three fills, the depth blit against "

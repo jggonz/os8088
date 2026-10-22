@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - vidext.inc
 ;
-; THE EXTERNAL RENDERER HOOK (SPEC.md 119.3): the one compare each planar
+; THE EXTERNAL RENDERER HOOK (SPEC.md 120.3): the one compare each planar
 ; drawing body spends so that a fifth adapter kind, VID_VESA, can be drawn
 ; by a loadable driver. Everything that knows what a VBE is lives in
 ; drivers/vesa/vesa.asm; what this file carries resident is a far pointer,
@@ -95,7 +95,7 @@ vx_go:
     ; STKBALANCE-OK: a TAIL TRAMPOLINE. It consumes its own return address
     ; (the stub's, which is the selector's address), far-calls the driver
     ; with that address rebuilt as a far pointer, and its `ret` returns to the
-    ; PRIMITIVE's caller - one frame up by design (SPEC.md 119.3.1)
+    ; PRIMITIVE's caller - one frame up by design (SPEC.md 120.3.1)
     pop word [vx_tmp]
     push cs
     push word [vx_tmp]
@@ -151,7 +151,7 @@ vx_sel_b1   db VX_BLIT1
 vx_goc:
     ; STKBALANCE-OK: vx_go's shape for a cold body - the far return address
     ; on entry IS the selector pointer, and the `retf` after discarding it
-    ; returns to the cold body's own far caller (SPEC.md 119.3.1)
+    ; returns to the cold body's own far caller (SPEC.md 120.3.1)
     cmp word [vx_ep+2], 0
     je .none
     call far [vx_ep]
@@ -161,7 +161,7 @@ vx_goc:
     retf
 
 ; -----------------------------------------------------------------------------
-; vx_blk - the kernel's state, by POINTER (SPEC.md 119.3.2, vxabi.inc's VXB_*)
+; vx_blk - the kernel's state, by POINTER (SPEC.md 120.3.2, vxabi.inc's VXB_*)
 ; -----------------------------------------------------------------------------
 vx_blk:
     dw VX_ABI_VER                   ; VXB_VER
@@ -220,7 +220,7 @@ vx_blk:
 %endmacro
 
 ; -----------------------------------------------------------------------------
-; vx_boot_x - attach VESA.DRV and switch the desktop onto it (SPEC.md 119.4)
+; vx_boot_x - attach VESA.DRV and switch the desktop onto it (SPEC.md 120.4)
 ;
 ; in:  nothing.  out: nothing (all registers preserved)
 ;
@@ -257,7 +257,7 @@ vx_boot_x:
                                 ; already carries the DRVE_*
     mov bp, [bx+DRVR_ENT]
     mov cl, [drv_cfg+CFG_VE]    ; the class SYSTEM.CFG asks for (SPEC.md
-                                ; 119.2.3), 0 = Auto, which a fresh file
+                                ; 120.2.3), 0 = Auto, which a fresh file
                                 ; carries
     mov ax, (VX_ABI_VER << 8) | DRVV_ATTACH ; AH: the ABI the image checks
     COLDCALL drvf_drv_call      ; (its own segment, unnamed - ROM-PLAN 3.2)

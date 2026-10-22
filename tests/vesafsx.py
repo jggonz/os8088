@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A fullscreen bracket from the packed desktop, and back (SPEC.md 119.5, 53).
+"""A fullscreen bracket from the packed desktop, and back (SPEC.md 120.5, 53).
 
     make vesatest && python3 tests/vesafsx.py [--png out.png] [--img disk]
 

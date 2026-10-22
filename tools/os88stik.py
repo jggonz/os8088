@@ -62,7 +62,7 @@ CFG_FBUF = 164                  # SPEC.md 2.8.7: a file this size or less
                                 # own expression with nasm and holds this to
                                 # it: it was 131 until #248's two pin keys,
                                 # and 152 until #249's 'TP' theme preset,
-                                # and 163 until SPEC.md 119.2.3's class byte
+                                # and 163 until SPEC.md 120.2.3's class byte
                                 # grew the 'VM' record by one
 CFG_MAXFILE = 4096              # ...and one this size or more is refused
 

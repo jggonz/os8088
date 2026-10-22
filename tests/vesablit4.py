@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A package's 4-bit blit on the packed display, pixel for pixel (SPEC.md 119.3).
+"""A package's 4-bit blit on the packed display, pixel for pixel (SPEC.md 120.3).
 
     make vesatest && python3 tests/vesablit4.py [--png out.png] [--img disk]
 

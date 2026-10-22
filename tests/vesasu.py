@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A drop-down's save-under claim on the packed desktop holds what the kernel
-writes into it (SPEC.md 119.5, the package rule for DH; 13.14.2; 5.8).
+writes into it (SPEC.md 120.5, the package rule for DH; 13.14.2; 5.8).
     make vesatest && python3 tests/vesasu.py [--png out.png]
 
 Boots build/vesablitd.img with build/vxpics.img in B: - PiXEL opened on

@@ -233,7 +233,7 @@
   ],
   "stamped": "603832f2",
   "strings": "2d063e04ea0308f5",
-  "why": "the Display page's Vesa row: named for the screen, clicked again to step through the card's screens, Set Primary applies (SPEC.md 119.6); the rest of the page reads as before"
+  "why": "the Display page's Vesa row: named for the screen, clicked again to step through the card's screens, Set Primary applies (SPEC.md 120.6); the rest of the page reads as before"
  },
  "CWORD": {
   "sources": [],
@@ -1144,7 +1144,7 @@
   ],
   "stamped": "603832f2",
   "strings": "85e31060566354fb",
-  "why": "new page for VESA.DRV (SPEC.md 119): what it does, how it is loaded, choosing a screen, what it does not offer"
+  "why": "new page for VESA.DRV (SPEC.md 120): what it does, how it is loaded, choosing a screen, what it does not offer"
  },
  "VIDEO_O88": {
   "sources": [

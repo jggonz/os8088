@@ -77,7 +77,7 @@ CPV_MY, CPV_MSTEP = 106, 74         # SPEC.md 31.10.3 moved this row DOWN, from
 CPV_R0Y, CPV_ROWH = 20, 16          # the ADAPTER rows, which pick the primary
                                     # - and the PITCH is the build's: 12 on a
                                     # kern_big with the external renderer
-                                    # (SPEC.md 119.6: four rows), 16 without.
+                                    # (SPEC.md 120.6: four rows), 16 without.
                                     # _rowh() reads the equ out of the map
 CPV_BTNX, CPV_BTNY = 2, 72          # ...and the Set Primary button under them
 

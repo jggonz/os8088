@@ -1,6 +1,6 @@
 # tests/vidext.txt - every place the kernel dispatches a drawing body on
 # [vid_mono] (or [vid_planes]), by file and count, and what a PACKED display
-# does there (SPEC.md 119.3.1). Enforced by tests/unit/t_vidext.py: a new site
+# does there (SPEC.md 120.3.1). Enforced by tests/unit/t_vidext.py: a new site
 # fails the build until it is written down here.
 #
 #   <file> <count> hooked | exempt: <reason>

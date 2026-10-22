@@ -1131,7 +1131,7 @@ wm_disp_now:
 ; -----------------------------------------------------------------------------
 ext_extend_b:
 %ifdef VID_EXT
-    cmp ah, VID_VESA            ; a packed primary (SPEC.md 119.5): Single. A
+    cmp ah, VID_VESA            ; a packed primary (SPEC.md 120.5): Single. A
     jne .ok                     ; second card's 1bpp geometry beside an 8bpp
     stc                         ; one is a straddle arithmetic this cycle does
     retf                        ; not take

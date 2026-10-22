@@ -108,7 +108,7 @@ VID_H_MIN   equ 200            ; ...and the SHORTEST row of vid_tab, which is
                                ; written from it.
 
 VID_VESA    equ 4              ; A PACKED-PIXEL FRAMEBUFFER DRAWN BY A DRIVER
-                               ; (SPEC.md 119): 8 or 16 bits a pixel in a
+                               ; (SPEC.md 120): 8 or 16 bits a pixel in a
                                ; 64KB window at A000, banked by VESA.DRV. Not
                                ; a renderer in this kernel at all - every
                                ; planar body's VIDEXT hands it to the driver.
@@ -177,7 +177,7 @@ vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
     ;   assertion the two mono rows do.
 %ifdef VID_EXT
     dw VGA_SEG,       0,    0,     0,      0,       0,      0,   0, 0
-    ; ^ VID_VESA: WRITTEN BY THE DRIVER at attach (SPEC.md 119.4) - stride
+    ; ^ VID_VESA: WRITTEN BY THE DRIVER at attach (SPEC.md 120.4) - stride
     ;   and rowadd = the mode's BytesPerScanLine, cw/ch = its geometry - and
     ;   read by nothing but vid_apply's copy: no body computes a row offset on
     ;   this kind, every one of them being hooked, and a 16-bit offset means
@@ -333,7 +333,7 @@ vid_kind    db VID_VGA          ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
 vid_mono    db 0                ; 1bpp adapter? This is what routes every
                                 ; draw through the software renderer (32/39.5)
 vid_planes  db 4                ; 4 or 1 - or the DEPTH, 8 or 16, on VID_VESA
-                                ; (SPEC.md 119.4): the three save-under sizers
+                                ; (SPEC.md 120.4): the three save-under sizers
                                 ; multiply by it, and that formula gives the
                                 ; packed byte count unchanged
 %ifdef GFX_VGA
@@ -342,7 +342,7 @@ vid_planes_w dw 4               ; the same, where a word is wanted. A planar
                                 ; vid_depth_set)
 %ifdef VID_EXT
 vid_ext     db 0                ; 1 = [vid_kind] is VID_VESA and every planar
-                                ; body far-calls the driver (SPEC.md 119.3).
+                                ; body far-calls the driver (SPEC.md 120.3).
                                 ; Derived from the kind in vid_depth_set, as
                                 ; [vid_mono] is, so a per-display swap carries
                                 ; it. .text, initialised, splash-resident with
@@ -633,7 +633,7 @@ vid_depth_set:
                                 ; dropping this pair; they are a contract
                                 ; change and are not taken.
 %ifdef VID_EXT
-    cmp al, VID_VESA            ; SPEC.md 119.4: colour ([vid_mono] = 0), the
+    cmp al, VID_VESA            ; SPEC.md 120.4: colour ([vid_mono] = 0), the
     jne .notext                 ; DEPTH for a plane count, and the hook armed
     mov ah, [vx_bpp]
     xor al, al
@@ -1091,7 +1091,7 @@ vid_setmode:
                                 ; reaches here through spl_chrome
     mov al, [vid_kind]          ; ONE load answers all three questions below:
 %ifdef VID_EXT
-    cmp al, VID_VESA            ; SPEC.md 119.4: the driver sets its VBE mode
+    cmp al, VID_VESA            ; SPEC.md 120.4: the driver sets its VBE mode
     jne .notvx                  ; and loads the DAC's first sixteen; the
     call vx_call                ; caller owes the repaint as on every kind.
     db VX_SETMODE               ; vx_call COMES BACK HERE - the eight pushes

@@ -1098,10 +1098,10 @@ FDLG_SAVE  equ 1                 ; coming back
                                  ; owns (so the usable desktop is rows MBAR_H
                                  ; .. CX-1), DL = 0 VGA / 1 Hercules / 2 CGA /
                                  ; 3 EGA / 4 VESA, DH = bits per pixel: 4 or 1,
-                                 ; and 8 or 16 on a VESA display (SPEC.md 119),
+                                 ; and 8 or 16 on a VESA display (SPEC.md 120),
                                  ; whose desktop is still the sixteen colours
                                  ; - OSAPI_GFX_BLITD is the one way past them.
-                                 ; COLOUR IS DH >= 4 AND NEVER DH == 4 (119.5):
+                                 ; COLOUR IS DH >= 4 AND NEVER DH == 4 (120.5):
                                  ; seven packages had it the other way and drew
                                  ; mono, or sized a save-under at a sixteenth.
                                  ; Callable from any context, lock held or not.
@@ -1115,7 +1115,7 @@ VID_VGA    equ 0                 ; the DL values
 VID_HERC   equ 1
 VID_CGA    equ 2
 VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.24)
-VID_VESA  equ 4             ; a packed VESA display (SPEC.md 119): square
+VID_VESA  equ 4             ; a packed VESA display (SPEC.md 120): square
                             ; pixels, 8 or 16 bits each; the desktop is
                             ; still sixteen colours and OSAPI_GFX_BLITD is
                             ; the way to the rest
@@ -1795,7 +1795,7 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
 ;   bytes = planes * (y2-y1+1) * ((x2>>3) - (x1>>3) + 1)
 ;
 ; ...with planes = DH AS IT COMES: 4 on VGA and EGA, 1 on a 1bpp card, and 8
-; or 16 on a packed VESA display (SPEC.md 119.5), where the save is the pixels
+; or 16 on a packed VESA display (SPEC.md 120.5), where the save is the pixels
 ; themselves and DH is the BYTES a column. Never fold it to 4-or-1: a package
 ; that did sized a 16bpp save at a sixteenth, and the kernel wrote the rest
 ; over whatever followed the claim. The product passes 64KB on a 1024-wide
@@ -1851,7 +1851,7 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
                                  ; hundreds of OSAPI_GFX_HLINE calls a
                                  ; hand-rolled run-length blitter would make.
                                  ; Honours the clip region.
-; --- a block at the DISPLAY'S DEPTH (SPEC.md 119.7) ------------------------
+; --- a block at the DISPLAY'S DEPTH (SPEC.md 120.7) ------------------------
 ; The desktop is sixteen colours on every adapter, and OSAPI_GFX_BLIT4 is how
 ; a block of them is drawn. On a VESA display (OSAPI_VIDEO's DL = 4, DH = 8
 ; or 16) the card has more, and this cell is the one way a package reaches
@@ -5880,7 +5880,7 @@ WHEEL_STEPS equ 3                ; LINES of text one wheel notch scrolls
                                  ; row the desktop band has, DL = 0 VGA / 1
                                  ; Hercules / 2 CGA / 3 EGA / 4 VESA (the VID_*
                                  ; kinds), DH = bits per pixel - 4, 1, or 8
-                                 ; or 16 on a VESA display (SPEC.md 119). DI
+                                 ; or 16 on a VESA display (SPEC.md 120). DI
                                  ; preserved; no lock needed, any context.
                                  ;
                                  ; **OSAPI_VIDEO ANSWERS ABOUT THE PRIMARY**

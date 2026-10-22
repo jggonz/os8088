@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The packed-pixel display at 8 bits a pixel, and the VE key (SPEC.md 119.2.3).
+"""The packed-pixel display at 8 bits a pixel, and the VE key (SPEC.md 120.2.3).
 
     make vesatest && python3 tests/vesa8.py [--png out.png]
 
@@ -16,10 +16,10 @@ under it is not a 4.77 MHz 8088, and the pixels are what is asserted.
 WHAT IT ASSERTS, after [vid_kind] settles on VID_VESA (4):
 
   vid_kind    4            vx_boot_x attached the image and bvs_switch took it
-  vid_ext     1            every planar body far-calls the driver (119.3)
-  vid_cw/ch   1024 x 768   the mode Auto chose on this card (119.2.3)
+  vid_ext     1            every planar body far-calls the driver (120.3)
+  vid_cw/ch   1024 x 768   the mode Auto chose on this card (120.2.3)
   vid_planes  16           the DEPTH, which is what the save-under sizers
-                           multiply by (119.4)
+                           multiply by (120.4)
   vesa_row    DRVR_SEG != 0, DRVR_ERR == 0
 
 then a 1024 x 768 screendump: the menu bar's band at the top is not black
@@ -196,11 +196,11 @@ def main():
         w, h = word(q, "vid_cw"), word(q, "vid_ch")
         if (w, h) != (WANT_W, WANT_H):
             fails.append("vid_cw x vid_ch %d x %d, want %d x %d (Auto on QEMU's "
-                         "standard VGA, SPEC.md 119.2.3)" % (w, h, WANT_W, WANT_H))
+                         "standard VGA, SPEC.md 120.2.3)" % (w, h, WANT_W, WANT_H))
         bpp = byte(q, "vid_planes")
         if bpp != WANT_BPP:
             fails.append("vid_planes %d, want %d: the depth is the plane count "
-                         "on this kind (SPEC.md 119.4)" % (bpp, WANT_BPP))
+                         "on this kind (SPEC.md 120.4)" % (bpp, WANT_BPP))
         if word(q, "vesa_row", 2) == 0:
             fails.append("vesa_row DRVR_SEG is 0: the image is not loaded")
         err = byte(q, "vesa_row", 14)
