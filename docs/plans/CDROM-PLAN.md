@@ -44,10 +44,10 @@ drive's own audio output under a CD Player. SPEC.md §119 is the contract.
   always on a one-bit display.
 - [x] **Compact player (wave 4):** a mini player for the CGA's 200 lines, and
   on request on any screen; Expand and Options go back.
-- [ ] **Play, seen (wave 4):** the 386 under 86Box playing through CDRack's
-  face - the latched Play, the counting LCD, the bar - before the PR leaves
-  draft. Its BIOS stopped in setup after the machine's config was reset, and
-  this host cannot send it a key.
+- [x] **Play, seen (wave 4):** the 386 under 86Box playing through CDRack's
+  face - the latched Play, the counting LCD, the bar. The owner booted
+  `vm/386-cdrom` and watched it play cleanly, after the merge: this host
+  cannot send 86Box a key, and its BIOS had stopped in setup.
 
 ## Boundaries and verification
 

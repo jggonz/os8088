@@ -266,3 +266,9 @@ What the first look found:
 Hercules shares the MID layout with EGA and the one-bit path with the CGA;
 QEMU cannot show a Hercules mode at all (docs/HERCULES-TESTING.md), so it was
 not looked at.
+
+**The play itself was the owner's to see.** QEMU's drive plays no audio, and
+86Box cannot be keyed from this host, so when `vm/386-cdrom`'s BIOS stopped in
+setup after its config was reset, the agent could only capture the prompt.
+The owner cleared it, booted the machine into `D:\TRACK02.CDA`, and watched
+CDRack play the disc cleanly - the last story of the wave.
