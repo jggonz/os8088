@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "b538721f9ddec8e7e27838ad41e2196ca75d146ee6242cf819cffe6a332d7c15",
+  "fingerprint": "69144283bf52e51e734efe31d4c7cc661480ab10578e8e31048de8865be0c84b",
   "version": 11
  },
  "PKG_FMT": {
@@ -469,6 +469,13 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "DQ_MAXREC 8 -> 9: kern_emu's ninth drv_tab row (CDROM.DRV, SPEC.md 119.1) trips the guard that a suspend's record buffer holds one record a row. CDROM.DRV answers DRVV_HWINFO with CF = 1, so no machine writes a ninth record and a buffer of eight built before is never overrun: no number moves.",
+   "to": 11
+  },
+  {
+   "fingerprint": "69144283bf52e51e734efe31d4c7cc661480ab10578e8e31048de8865be0c84b",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "FSCAP_ICON (DSV_CAPS bit 2) and DRV_ICONV (41h): a file-class driver's volume may draw its own desktop picture through its door (SPEC.md 26.4.2). An addition - a driver without the bit gets the kernel's icon as before, and a kernel without the hook never asks - so no number moves.",
    "to": 11
   }
  ]

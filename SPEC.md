@@ -55080,6 +55080,37 @@ were left in it) and the cold rung (**two** were left), so `KERN_SIZE` went
 neither rung moved at any point. Per §1's banner, the rungs are whoever was
 standing there — the bytes are the cost.
 
+#### 26.4.2 A driver's volume may wear its own picture (`FSCAP_ICON`)
+
+**A volume is drawn as its medium** - a diskette, a 5.25" diskette or a hard
+disk - and every driver-backed volume took the hard disk, which was right for
+`HDD.DRV`'s partitions and wrong for a CD-ROM (§119): a drive whose disc comes
+out and goes in again read as one that never ejects. The kernel does not
+grow a fourth picture for it. A CD-ROM is on few machines, and §26.7 already
+established that **a driver's desktop picture is the driver's**: a glyph in
+the kernel is RAM on every machine that can never draw it.
+
+So a FILE-class driver (§62.9) may set **`FSCAP_ICON` = 2** in `DSV_CAPS`,
+beside `FSCAP_LOCAL`. `desk_pic`, before it consults the medium, asks
+`desk_drvico`: a `DVK_FILE` row, its class's copied `DSV_CAPS` with the bit
+set - and then the driver's door, `DSV_PKGCALL` with **BL = `DRV_ICONV`
+(41h)** and CX/DX the picture's top-left, exactly as `.svcico` asks The
+Wire's driver for its zone (§26.7). The driver draws with `OSAPI_ICON_DRAW`
+(16 x 16 records, so a 32-wide picture is quadrants - §26.7.1's shape), 32
+rows on VGA/EGA/Hercules and 14 on the CGA (`OSAPI_VIDEO` says which), keeps
+every register and answers CF = 0. **CF = 1, a class no driver publishes, or
+the bit clear, and the kernel draws its own icon**, so a driver that goes
+away leaves a hard disk rather than nothing. The draw lands in the cell's
+band while the cell composes (§26.9.9), so the selection inverts the
+driver's picture like any other and nothing is written twice.
+
+The verb is 41h, clear of every door's own verbs and of `WZV_PAINT` (40h),
+because `NET.DRV` is a file class with a door and a zone of its own.
+
+**What it costs**: `desk_drvico` and its call, `.cold` only (no picture, no
+`.text`); `kern_small` has no driver and no change. `CDROM.DRV` is the first
+driver to set it (`drivers/cdrom/cdico.inc`, §119.3).
+
 ### 26.5 The caption sits a gap below the icon
 
 `DESK_ZGAP` rows of desktop between the bottom of the icon's cell and the top
@@ -201618,7 +201649,10 @@ with ASC 3Ah is `CDE_NODISC`.
 
 **Registered at `DRVV_READY`, disc or none**, as one volume labelled
 `CD-ROM`: the drive is a drive whether or not a disc is in it, exactly as
-an empty floppy drive is. Detach drops it (§51.8). Every `FSV_*` verb runs
+an empty floppy drive is. **Its desktop zone is a disc**, not the hard disk
+every other driver volume wears: the driver sets `FSCAP_ICON` and draws the
+picture itself (`drivers/cdrom/cdico.inc`, §26.4.2), 32 rows and the CGA's
+14. Detach drops it (§51.8). Every `FSV_*` verb runs
 on the UI task and starts with a **media check** - `TEST UNIT READY` - and
 re-reads the disc's tables only when the generation has moved.
 

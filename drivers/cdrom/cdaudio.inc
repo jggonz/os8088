@@ -23,6 +23,9 @@ cd_pktab:
 ; A NEAR proc with a near `ret`, like every callback here (SPEC.md 51.2).
 ; -----------------------------------------------------------------------------
 cd_pkg:
+    cmp bl, DRV_ICONV
+    je cd_v_icon                ; the kernel's, not a package's: the volume's
+                                ; desktop picture (cdico.inc, SPEC.md 26.4.2)
     cmp bl, CDV_MAX
     ja .none                    ; an unchecked verb into a jump table is a
     push bx                     ; wild near call

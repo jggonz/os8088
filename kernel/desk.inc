@@ -1654,6 +1654,41 @@ desk_col:
     call desk_colr              ; ...and its selection the way it always was
     jmp ct_cw_gfx_xor_fill
 
+; desk_drvico - a REDIRECTED volume whose driver says FSCAP_ICON draws its own
+;               picture (SPEC.md 26.4.2): the CD-ROM's disc, not a hard disk
+; in:  BL = the volume, CX/DX = the picture's origin; the gfx lock held
+; out: CF = 0 the driver drew it; CF = 1 it is the kernel's to draw - every
+;      floppy, every hard disk, and a file driver without the bit
+; clobbers: nothing else
+;
+; .svcico's call, keyed on the VOLUME: the class off its row (the driver the
+; FSV verbs reach), that class's copied DSV_CAPS, and its door's DRV_ICONV.
+; drv_pkg_call refuses (CF = 1) for a class no driver publishes, so a driver
+; that went away leaves the kernel's own icon rather than nothing.
+desk_drvico:
+    push ax
+    push bx
+    push di
+    call dsk_vol_slot_x         ; BX = the row
+    jc .out
+    cmp byte [bx+DV_KIND], DVK_FILE
+    stc
+    jne .out                    ; only a file class's DSV_CAPS means FSCAP_*
+    mov al, [bx+DV_CLASS]
+    call drv_cls_svc_x          ; CLSCF: DI = its copied table
+    jc .out
+    test byte [di+DSV_CAPS], FSCAP_ICON
+    stc
+    jz .out
+    mov bh, al
+    mov bl, DRV_ICONV
+    call KERNEL_SEG:cw_drv_pkg_call ; the driver's answer is the CF
+.out:
+    pop di
+    pop bx
+    pop ax
+    ret
+
 ; desk_issel - ZF = 1 when the zone being drawn ([desk_zdrv]) is the selected
 ; one; clobbers AL. The three sites were one compare written three times
 ; (kernel size pass 9), and its `ret` is desk_col's as well
@@ -1681,6 +1716,8 @@ desk_pic:
     mov si, [desk_pico]         ; [diskette, 5.25", hard disk] at this height
     cmp bl, DESK_SVZ
     je .svcico
+    call desk_drvico            ; a file volume whose driver draws its own
+    jnc desk_ret                ; picture (SPEC.md 26.4.2): drawn
     call dsk_vol_fixed_x        ; the MEDIUM, not the transport (SPEC.md 18.7.2)
     jc .icon
     or al, al

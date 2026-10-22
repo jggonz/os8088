@@ -4379,7 +4379,8 @@ $(BUILD)/ems.drv: $(BUILD)/ems.bin tools/os88drv.py $(PKGZSTAMP)
 # (SPEC.md 119). cdpkg.inc is the package door, shared with apps/cdplayer
 CDROM_SRC := drivers/cdrom/cdrom.asm drivers/cdrom/cdpkg.inc \
              drivers/cdrom/atapi.inc drivers/cdrom/cddisc.inc \
-             drivers/cdrom/cdiso.inc drivers/cdrom/cdaudio.inc
+             drivers/cdrom/cdiso.inc drivers/cdrom/cdaudio.inc \
+             drivers/cdrom/cdico.inc
 $(BUILD)/cdrom.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I drivers/cdrom/ -I drivers/ -I apps/ -o $@ $<
 	@echo "cdrom: $(call FILESIZE,$@) bytes"

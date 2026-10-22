@@ -193,9 +193,9 @@
   "sources": [
    "drivers/cdrom"
   ],
-  "stamped": "4f6185e6",
-  "strings": "7c5f10780f09d872",
-  "why": "review fixes inside the driver (bounds, error codes, CD-Extra track ends); nothing a user reads changed"
+  "stamped": "02ef2ce5",
+  "strings": "c3a141853e1e7543",
+  "why": "the CD-ROM drive's desktop zone is drawn as a disc (FSCAP_ICON, SPEC.md 26.4.2): one phrase added"
  },
  "CHARTER_F88": {
   "sources": [],

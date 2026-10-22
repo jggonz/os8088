@@ -159,6 +159,26 @@ layout - stands on track 2, and says the drive plays no audio:
 the association, the file's bytes and the player's state; `vm/386-cdrom`
 (86Box, looked at) for the play itself.
 
+## Wave 3 — a disc on the desktop
+
+The CD-ROM's zone wore the hard-disk icon: the kernel draws a volume as its
+MEDIUM, and every driver volume was "fixed", so a drive whose disc comes out
+read as one that never does. A fourth kernel picture would have been ~150
+resident bytes on every machine and would have crossed kern_big's image rung
+(45 bytes were left). §26.7 had already settled where a driver's desktop
+picture belongs - in the driver, The Wire's reel being the precedent - so
+the kernel gained a `DSV_CAPS` bit, `FSCAP_ICON`, and asks a file driver
+that sets it to paint its own volume through its door (§26.4.2): **46 bytes
+of `.cold`, no rung crossed, `.text` unchanged**. The disc is generated as
+quadrant records (`drivers/cdrom/cdico.inc`, the art kept in its comments),
+14 rows tall on the CGA so it is round there.
+
+It composes into the cell's band like The Wire's reel, so selection inverts
+it with no extra code:
+
+![The disc](cdrom/w3-icon-vga.png) ![Selected](cdrom/w3-icon-selected.png)
+![On the CGA](cdrom/w3-icon-cga.png)
+
 ## Acceptance, and a second pair of eyes
 
 An independent reviewer read the new assembly with no access to my

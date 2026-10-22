@@ -37,8 +37,8 @@ means writing to them, so it is never loaded unless you ask. It uses about
 Open the **Control Panel**, choose **Drivers**, scroll the list down to
 **CD-ROM** and tick it. It loads at once and is kept for the next start
 when you close the Control Panel. The row says **Loaded** and a **CD-ROM**
-drive appears on the desktop, or **No hardware found** when no CD-ROM drive
-answered.
+drive appears on the desktop, drawn as a disc, or **No hardware found** when
+no CD-ROM drive answered.
 
 The drive may be on the first or second IDE connector, as the master or the
 slave; the connectors many sound cards carry are tried too.

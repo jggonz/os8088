@@ -28,11 +28,15 @@
 
 ; -----------------------------------------------------------------------------
 ; The service table (SPEC.md 51.2). DSV_BLK is 0: a file class has no sectors
-; for the kernel to ask for. DSV_CAPS is 0 and not FSCAP_LOCAL - a CD's read is
-; a seek and a turn, so the mount takes the cache-only icon pass (62.9.2.1).
+; for the kernel to ask for. DSV_CAPS is FSCAP_ICON and not FSCAP_LOCAL - a
+; CD's read is a seek and a turn, so the mount takes the cache-only icon pass
+; (62.9.2.1), and our zone wears our own picture (26.4.2).
 ; -----------------------------------------------------------------------------
 cd_svc:
-    dw 0                        ; DSV_CAPS
+    dw FSCAP_ICON               ; DSV_CAPS: our volume draws its own picture,
+                                ; a disc and not a hard disk (cdico.inc,
+                                ; SPEC.md 26.4.2) - and NOT FSCAP_LOCAL: a
+                                ; CD's read is a seek and a turn
     dw 0                        ; DSV_FM
     dw 0                        ; DSV_STREAM
     dw 0                        ; DSV_TICK
@@ -182,6 +186,7 @@ cd_detach:
 %include "cddisc.inc"
 %include "cdiso.inc"
 %include "cdaudio.inc"
+%include "cdico.inc"
 
 ; =============================================================================
 ; STATE - the volume index is the one cell whose load-time value is not 0

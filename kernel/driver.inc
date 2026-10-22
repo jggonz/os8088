@@ -553,6 +553,13 @@ FSV_APPEND  equ 10              ; the chunked pair (SPEC.md 18.4.4)
 ; motor. Nothing else in the kernel branches on it, and a driver that leaves
 ; it clear gets exactly the behaviour every DRVC_FILE driver had before it.
 FSCAP_LOCAL equ 1               ; ...my reads cost what a memcpy costs
+FSCAP_ICON  equ 2               ; ...and my VOLUME DRAWS ITS OWN desktop
+                                ; picture (SPEC.md 26.4.2): desk_pic asks my
+                                ; door's DRV_ICONV at the picture's origin
+                                ; instead of drawing the hard-disk icon
+DRV_ICONV   equ 0x41            ; that verb - clear of every door's own
+                                ; verbs, and of WZV_PAINT (0x40). Mirrored in
+                                ; drivers/os88drv.inc
 
 FSV_READAT  equ 12              ; AX = a handle, DX:BX = buffer, CX = capacity,
                                 ; DI:SI = the 32-bit offset. out DX:AX =
