@@ -264,8 +264,13 @@ cp_poll:
     cmp byte [cp_state], CPS_AUDIO
     je .ask
     cmp byte [cp_state], CPS_NOAUD
-    je .out                         ; nothing to ask a drive with no audio
-    jmp cp_disc                     ; empty, data or gone: ask again
+    jne .again                      ; empty, data or gone: ask again
+    CP_CALL CDV_DISC                ; a drive with no audio commands: only a
+    jc .again                       ; DIFFERENT disc (or none) is news, so the
+    cmp dh, [cp_gen]                ; state stays put until the generation
+    je .out                         ; moves - re-asking every poll would flip
+.again:                             ; the display between two states
+    jmp cp_disc
 .ask:
     CP_CALL CDV_STATUS
     jc .refused
@@ -726,10 +731,10 @@ cp_paint:
 ; in:  SI = the window; the UI task, gfx lock held, no clip armed
 ; -----------------------------------------------------------------------------
 cp_tick:
+    push si                         ; the window, given back (SPEC.md 111.6)
     mov bx, si
     mov ax, CP_POLL                 ; one-shot: the repeat is ours to ask for
     call OSAPI_WM_TIMER
-    push bx
     cmp byte [cp_argwant], 0
     je .poll
     call cp_arg                     ; a TRACKnn.CDA to play, once
@@ -738,7 +743,10 @@ cp_tick:
     call cp_poll
 .drawn:
     pop bx
-    jmp cp_redraw
+    push bx
+    call cp_redraw
+    pop si
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cp_arg - the document we were opened on: its track, played (SPEC.md
@@ -798,7 +806,9 @@ cp_onup:
     push si
     call cp_act
     pop bx
-    jmp cp_redraw
+    push bx
+    call cp_redraw
+    pop si                          ; the window, given back (SPEC.md 111.6)
 .out:
     ret
 
@@ -819,15 +829,18 @@ cp_key:
     mov bl, CB_NEXT
     cmp ah, 0x4D                    ; Right
     je .do
-    and al, 0xDF                    ; letters upper-cased (Space becomes 0)
+    cmp al, ' '
+    je .space
+    and al, 0xDF                    ; letters upper-cased
     mov bl, CB_STOP
     cmp al, 'S'
     je .do
     mov bl, CB_EJECT
     cmp al, 'E'
     je .do
-    or al, al
-    jnz .out
+    jmp short .out                  ; every other key - the arrows up and down,
+                                    ; the F keys, Alt+Enter - is not ours
+.space:
     mov bl, CB_PAUSE                ; Space: pause what plays, else play
     call cp_going
     je .do
@@ -918,7 +931,8 @@ cp_pmsg:    dw cp_s_stopped, cp_s_playing, cp_s_paused, cp_s_stopped
 cp_s_stopped: db 'Stopped', 0
 cp_s_playing: db 'Playing', 0
 cp_s_paused: db 'Paused', 0
-cp_s_perr:  db 'Stopped: a drive error', 0
+cp_s_perr:  db 'Drive error', 0      ; under 21: line 2's Disc field
+                                    ; starts at CP_LEN - 11
 %if CPS_NODRV != 0 || CPS_NODISC != 1 || CPS_DATA != 2 || CPS_AUDIO != 3 || CPS_NOAUD != 4 || CPS_ERR != 5
 %error "cp_smsg is indexed by CPS_*"
 %endif

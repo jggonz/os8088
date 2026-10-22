@@ -201593,7 +201593,7 @@ an ATAPI device answers 256 words, of which word 0 must say ATAPI (bits
 **The first CD-ROM found is the drive**; a second is not used (§119.8).
 
 **The transport** (`cd_packet`): wait for BSY and DRQ clear, select the
-device, write the byte-count limit (F800h) and `PACKET` (A0h), wait for DRQ,
+device, write the byte-count limit (8000h) and `PACKET` (A0h), wait for DRQ,
 write the packet, then move each DRQ block the drive offers - its length is
 the byte-count register - until DRQ falls, with `rep insw` into a
 normalised `ES:DI` (§52.1.2's instruction, legal here for §52.1's reason).

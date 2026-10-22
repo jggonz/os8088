@@ -54,9 +54,15 @@ cd_read10:
     mov [cd_xmax], ax
     call cd_cmd
     jc .err
+    mov ax, [cd_xgot]
+    cmp ax, [cd_xmax]
+    mov ax, CDE_IO              ; a SHORT read is a failed one: the buffer
+    jne .short                  ; holds old bytes past it, and cd_rdsec would
+                                ; tag them as the sector asked for
     pop ax                      ; the LBA back, for cd_rdsec's tag
     pop dx
     jmp short .out              ; (CF = 0: `pop` writes no flag)
+.short:
 .err:
     pop di                      ; the banked AX, dropped: AX is the CDE_*
     pop dx
@@ -397,10 +403,83 @@ cd_ptbyte:
 ; clobbers: DX
 ; -----------------------------------------------------------------------------
 cd_secs:
-    push cx
-    mov cx, 75
+    or dx, dx
+    js .zero                    ; before the disc's start (a pregap, or a drive
+                                ; that reports FFFFFF6Ah idle): 0
+    cmp dx, 75
+    jae .max                    ; the quotient would not fit a word: a `div`
+    push cx                     ; that overflows is INT 0, and nothing here
+    mov cx, 75                  ; handles one - it would re-run for ever
     div cx
     pop cx
+    ret
+.zero:
+    xor ax, ax
+    xor dx, dx
+    ret
+.max:
+    mov ax, 0xFFFF
+    xor dx, dx
+    ret
+
+; -----------------------------------------------------------------------------
+; cd_tend - AL = a track -> DX:AX = the LBA one past its last frame
+; clobbers: nothing else
+;
+; The next track's start, or the lead-out - LESS THE SESSION GAP when this is
+; an audio track and the next is data: a CD-Extra disc's data track is its
+; second session, and between the two lie the first session's lead-out, the
+; second's lead-in and a pregap, 11,400 frames that are not this track's
+; (Blue Book). Never before the track's own start, whatever the TOC says.
+; -----------------------------------------------------------------------------
+CD_SGAP      equ 6750 + 4500 + 150
+cd_tend:
+    push bx
+    push cx
+    push si
+    mov bl, al                  ; this track
+    call cd_tstart
+    mov cx, ax                  ; CX:SI... its start, kept to clamp against
+    mov si, dx
+    push si
+    push cx
+    mov al, bl
+    inc al
+    call cd_tstart              ; DX:AX = the next start, or the lead-out
+    cmp bl, [cd_last]
+    jae .clamp                  ; the last track: the lead-out is its end
+    push ax
+    push si
+    mov al, bl
+    call cd_tdesc
+    mov bh, [si+1]              ; this track's control...
+    mov al, bl
+    inc al
+    call cd_tdesc
+    mov cl, [si+1]              ; ...and the next's
+    pop si
+    pop ax
+    test bh, CDT_DATA
+    jnz .clamp
+    test cl, CDT_DATA
+    jz .clamp
+    sub ax, CD_SGAP             ; audio, then data: the session gap is not ours
+    sbb dx, 0
+.clamp:
+    pop cx                      ; CX = the start's low word...
+    pop si                      ; ...SI its high
+    cmp dx, si
+    jg .out
+    jl .start
+    cmp ax, cx
+    ja .out
+.start:
+    mov ax, cx                  ; a TOC that runs backwards: the track is empty
+    mov dx, si
+.out:
+    pop si
+    pop cx
+    pop bx
     ret
 
 %ifdef CDSIM_AUDIO

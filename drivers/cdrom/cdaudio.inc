@@ -101,12 +101,11 @@ cd_v_track:
     xor bh, bh
     mov si, bx                  ; SI = the control nibble
     push ax
-    inc ax
-    call cd_tstart              ; the next track's start (or the lead-out)...
-    mov cx, ax
+    call cd_tend                ; the track's end (SPEC.md 119.3.1: a CD-Extra
+    mov cx, ax                  ; disc's session gap is not the track's)...
     mov bx, dx
     pop ax
-    call cd_tstart              ; ...less this one's: the length
+    call cd_tstart              ; ...less its start: the length
     push ax
     push dx
     sub cx, ax
@@ -164,7 +163,8 @@ cd_v_play:
     call cd_isaudio
     jnc .scan
 .endat:
-    call cd_tstart
+    dec al                      ; the last track played...
+    call cd_tend                ; ...and where it ends
     mov [cd_tmp2], ax           ; the end LBA
     mov [cd_tmp2+2], dx
     mov al, bl
@@ -213,6 +213,15 @@ cd_v_play:
 ;          lead-in). clobbers: AX, DX
 cd_msf:
     push cx
+    or dx, dx                   ; a negative address is the disc's start, and
+    jns .pos                    ; one past 74 hours does not exist: either
+    xor ax, ax                  ; would overflow the divide below (INT 0)
+    xor dx, dx
+.pos:
+    cmp dx, 4500
+    jb .ok
+    mov dx, 4499
+.ok:
     add ax, 150
     adc dx, 0
     mov cx, 4500
@@ -282,6 +291,12 @@ cd_v_status:
     mov byte [cd_abuf+1], 0
     call cd_cmd
     jc .out
+    cmp word [cd_xgot], 16
+    jae .full
+    mov ax, CDE_IO              ; a short answer: the bytes past it are an
+    stc                         ; earlier command's, and not a position
+    jmp short .out
+.full:
     mov si, cd_abuf + 12        ; the track-relative address: negative in a
     call cd_be32                ; pregap, which shows as 0
     or dx, dx

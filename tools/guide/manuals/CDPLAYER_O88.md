@@ -20,7 +20,8 @@ because a CD-ROM drive needs a 286 or better.
 
 The top line shows the track and how many there are, the time into the
 track and the track's length. The second line says what the drive is doing
-- **Playing**, **Paused** or **Stopped** - and the length of the whole disc.
+- **Playing**, **Paused**, **Stopped**, or **Drive error** when the drive
+stopped a play itself - and the length of the whole disc.
 Without an audio disc it says why: **No disc**, **Data disc - no audio
 tracks**, **This drive plays no audio**, or **CD-ROM driver not loaded**.
 

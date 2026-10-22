@@ -185,17 +185,17 @@
   "sources": [
    "apps/cdplayer"
   ],
-  "stamped": "61f70705",
-  "strings": "72f8f7576dd852f5",
-  "why": "new page: the CD Player as built in wave 2"
+  "stamped": "4f6185e6",
+  "strings": "d401f0f96f378170",
+  "why": "review fixes: the drive-error state is 'Drive error', named on the page; the keys and buttons are as described"
  },
  "CDROM_DRV": {
   "sources": [
    "drivers/cdrom"
   ],
-  "stamped": "61f70705",
+  "stamped": "4f6185e6",
   "strings": "7c5f10780f09d872",
-  "why": "wave 2: the audio door and TRACKnn.CDA were described in the first stamp; re-stamped after the driver's strings moved"
+  "why": "review fixes inside the driver (bounds, error codes, CD-Extra track ends); nothing a user reads changed"
  },
  "CHARTER_F88": {
   "sources": [],

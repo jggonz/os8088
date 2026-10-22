@@ -372,7 +372,7 @@ cd_packet:
     mov ch, al
     inc cx
     shr cx, 1                   ; words, the odd byte rounded up
-    jcxz .phase
+    jcxz .empty
     lea dx, [bx+ATA_IREASON]
     in al, dx
     mov dx, bx                  ; ATA_DATA from here
@@ -423,6 +423,10 @@ cd_packet:
     sub ax, [cd_xoff]
     mov [cd_xgot], ax
     jmp short .phase
+.empty:                         ; DRQ with a count of 0 (or FFFFh): nothing to
+    call cd_tmo_up              ; move, and BSY is clear, so cd_wait would not
+    jc .tmo                     ; count it - the bound is counted here instead
+    jmp .phase
 .done:
     clc
     jmp short .out

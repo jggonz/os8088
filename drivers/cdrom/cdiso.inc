@@ -119,6 +119,17 @@ cd_vnext:
     cmp byte [si+CDR_NAME], 1
     jbe cd_vnext
 .named:
+    push ax                     ; a name that runs past its record is no
+    push dx                     ; record: listed it would be read from the
+    mov al, [si+CDR_NLEN]       ; bytes after it (the next record, or past
+    xor ah, ah                  ; cd_sbuf's end)
+    add ax, CDR_NAME
+    mov dl, [si+CDR_LEN]
+    xor dh, dh
+    cmp ax, dx
+    pop dx
+    pop ax
+    ja cd_vnext
     call cd_hof
     jc cd_vnext
 .out:
@@ -443,11 +454,14 @@ cd_stage:
     push di
     call cd_ezero
     mov [cd_ent+18], ax         ; @18: the handle
-    mov ax, [si+CDR_SIZE]       ; @20: the size
-    mov [cd_ent+20], ax
+    mov bl, [si+CDR_FLAGS]
+    test bl, 2
+    jnz .nosize                 ; @20: the size - and a folder's is 0, as a
+    mov ax, [si+CDR_SIZE]       ; FAT folder's is (SPEC.md 19.1), whatever
+    mov [cd_ent+20], ax         ; its extent's length
     mov ax, [si+CDR_SIZE+2]
     mov [cd_ent+22], ax
-    mov bl, [si+CDR_FLAGS]
+.nosize:
     call cd_mangle
     mov si, cd_nm               ; @0: the name
     mov di, cd_ent
@@ -588,9 +602,8 @@ cd_mkcda:
     push ax
     push dx
     mov al, [cd_r_cda]
-    inc ax
-    call cd_tstart              ; ...and the length, the next track's start
-    pop cx                      ; less this one's
+    call cd_tend                ; ...and the length, the track's end less its
+    pop cx                      ; start (cd_tend: CD-Extra's gap is not ours)
     pop bx
     sub ax, bx
     sbb dx, cx
@@ -619,6 +632,15 @@ cd_mkcda:
 ; cd_msfle - DX:AX frames -> [DI] = F, S, M, 0. clobbers: AX, DX
 cd_msfle:
     push cx
+    or dx, dx                   ; cd_msf's two clamps, for the divide's sake
+    jns .pos
+    xor ax, ax
+    xor dx, dx
+.pos:
+    cmp dx, 4500
+    jb .ok
+    mov dx, 4499
+.ok:
     mov cx, 4500                ; frames a minute
     div cx                      ; AX = minutes, DX = the rest
     mov [di+2], al
@@ -708,7 +730,11 @@ cd_resolve:
     mov dl, [si+CDR_NLEN]       ; a name that runs past the record is no record
     xor dh, dh
     add dx, CDR_NAME
-    cmp dl, [si+CDR_LEN]
+    push ax
+    mov al, [si+CDR_LEN]        ; ...compared in 16 bits: a 223-byte name
+    xor ah, ah                  ; plus 33 wraps a byte
+    cmp dx, ax
+    pop ax
     ja .noent
     mov dl, [si+CDR_FLAGS]
     push ax                     ; the handle, into the next cache row
@@ -1072,7 +1098,13 @@ cd_enum:
     call cd_dopen
 .rec:
     call cd_vnext
-    jc .tracks
+    jnc .counted
+    or ax, ax
+    jz .tracks                  ; the folder's end: then the root's tracks
+    pop cx                      ; a READ that failed: an I/O error, and NOT
+    call cd_ferr                ; "past the end" - a copy would stop early and
+    jmp short .out              ; call that success (SPEC.md 62.9.7)
+.counted:
     cmp word [cd_ord], 0
     je .stage
     dec word [cd_ord]
@@ -1157,7 +1189,12 @@ cd_stat:
     call cd_cwdopen
 .w:
     call cd_vnext
-    jc .cda
+    jnc .rec
+    or ax, ax
+    jz .cda                     ; the folder's end: the tracks, at the root
+    call cd_ferr                ; a READ that failed is not "no such name"
+    jmp short .out
+.rec:
     call cd_mangle
     push si
     mov si, cd_nm
@@ -1169,7 +1206,9 @@ cd_stat:
     xor bl, bl
     test byte [si+CDR_FLAGS], 2
     jz .found
-    mov bl, 0x10
+    mov bl, 0x10                ; a folder: size 0, as its listing says
+    xor cx, cx
+    xor dx, dx
 .found:
     clc
     jmp short .out
