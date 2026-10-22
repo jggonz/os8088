@@ -4396,6 +4396,19 @@ SOAK = [
         "by name, vesa's reason",
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
+    Row("vesablitd", "soak", py("tests/vesablitd.py"), 90.0,
+        "A package at the display's depth (SPEC.md 119.7, 106.27): "
+        "build/vesablitd.img is vesa.img plus an AUTOSTRT link to CITY.PCX "
+        "on B: (build/vxpics.img: PiXEL and the picture), so the machine "
+        "boots straight into PiXEL on the 1024x768x16 desktop. Asserts "
+        "PiXEL's RGB565 table is its palette's quantisation, the view claim "
+        "is the 31 KB layout, and the glass holds 64 or more colours "
+        "outside the sixteen, every one a palette entry as the card renders "
+        "565 - the rows through OSAPI_GFX_BLITD. QEMU by name, vesa's "
+        "reason",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/apps.img", "build/vesablitd.img",
+               "build/vxpics.img", "build/pixel.o88")),
     Row("vmmouse", "soak", py("tests/vmmouse.py"), 45.0,
         "The VMware absolute pointer (SPEC.md 9.11), the browser's grabless "
         "mouse - and the one CI gate a browser-only feature gets. QEMU's pc "

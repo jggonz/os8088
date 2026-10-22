@@ -827,6 +827,7 @@ vx_jt:
     dw vxp_scroll               ; VX_SCROLL
     dw vxp_spans                ; VX_SPANS
     dw vxp_fontrun              ; VX_FONTRUN
+    dw vxp_blitd                ; VX_BLITD
 %if ($ - vx_jt) / 2 != VX_NSEL
   %error "vx_jt has drifted from vxabi.inc's selectors"
 %endif
@@ -1912,6 +1913,130 @@ vxp_blit4:
     jnz .row
 .out:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; VX_BLITD - OSAPI_GFX_BLITD (SPEC.md 119.7): the package's block AT THE
+;            DEPTH - ES:SI = pixels as this mode packs them, BP (the
+;            caller's) = the stride in bytes, AX/BX = x/y (signed), CX/DX =
+;            w/h - clipped to the display in both axes, vxp_blit4's way, and
+;            moved a row at a time with the window edge handled. CX = 0 is
+;            the PALETTE FORM: DX triples at ES:SI into DAC entries AX..,
+;            AX >= 16, AX + DX <= 256, 8bpp only. CF = 1 refused
+; -----------------------------------------------------------------------------
+vxp_blitd:
+    or cx, cx
+    jnz .blit
+    jmp .pal                    ; (an 8086 has no near conditional jump)
+.blit:
+    mov [vx_bx0], ax
+    mov [vx_bsrc], si
+    mov [vx_rows], dx
+    mov si, [bp]                ; the CALLER's BP: the source stride
+    mov [vx_bstride], si
+    or dx, dx
+    jz .out                     ; no rows
+    ; --- the visible x range: [xs, xe) --------------------------------------
+    mov di, ax
+    add di, cx                  ; DI = x + w = xe
+    cmp di, [vx_x]
+    jle .xe
+    mov di, [vx_x]
+.xe:
+    or ax, ax
+    jns .xs
+    xor ax, ax
+.xs:
+    cmp ax, di
+    jge .out                    ; nothing of it on the display
+    mov [vx_bxs], ax
+    sub di, ax
+    mov [vx_w], di              ; pixels a row
+    ; --- the visible rows: skip those above the top --------------------------
+    or bx, bx
+    jns .row
+    neg bx
+    cmp bx, [vx_rows]
+    jae .out
+    sub [vx_rows], bx
+    mov ax, bx
+    mul word [vx_bstride]
+    add [vx_bsrc], ax
+    xor bx, bx
+.row:
+    cmp bx, [vx_y]
+    jae .out                    ; off the bottom: the rest is too
+    mov ax, [vx_bxs]
+    push bx
+    call vx_addr                ; ES:DI = (xs, y)
+    pop bx
+    mov si, [vx_bxs]
+    sub si, [vx_bx0]            ; SI = pixels into the block...
+    cmp byte [vx_bpp], 8
+    je .s8
+    add si, si                  ; ...as bytes
+.s8:
+    add si, [vx_bsrc]
+    mov cx, [vx_w]
+    push ds
+    mov ds, [bp+F_ES]           ; DS:SI = the source row
+    cmp byte [cs:vx_bpp], 8
+    jne .w16
+.b8:
+    movsb
+    VXW
+    loop .b8
+    jmp short .rdone
+.w16:
+    movsw
+    VXW
+    loop .w16
+.rdone:
+    pop ds
+    mov ax, [vx_bstride]
+    add [vx_bsrc], ax
+    inc bx
+    dec word [vx_rows]
+    jnz .row
+.out:
+    clc
+    ret
+.pal:                           ; --- the palette form ----------------------
+    cmp byte [vx_bpp], 8
+    jne .refuse                 ; no DAC behind a 16bpp pixel
+    cmp ax, 16
+    jb .refuse                  ; the desktop's sixteen are not for loading
+    mov di, ax
+    add di, dx
+    cmp di, 256
+    ja .refuse
+    or dx, dx
+    jz .out                     ; nothing to load
+    mov cx, dx
+    push ds
+    mov ds, [bp+F_ES]           ; DS:SI = the triples
+    mov dx, 0x3C8
+    out dx, al                  ; the first entry (AX < 256: AL is it)
+    inc dx                      ; 3C9h, auto-incrementing R, G, B
+.t:
+    lodsb
+    shr al, 1
+    shr al, 1                   ; 8 bits a gun to the DAC's 6
+    out dx, al
+    lodsb
+    shr al, 1
+    shr al, 1
+    out dx, al
+    lodsb
+    shr al, 1
+    shr al, 1
+    out dx, al
+    loop .t
+    pop ds
+    clc
+    ret
+.refuse:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------

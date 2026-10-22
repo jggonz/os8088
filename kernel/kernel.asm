@@ -3316,7 +3316,19 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          CALL: OSAPI_DRV_CALL_AT asked as
                                   ;          the MACHINE (51.2.3). kern_small
                                   ;          refuses
-osapi_table_end:                  ; 0x04AB today (0x04A5 before the drivers'
+    OSAPI_SLOT gfx_blitd          ; 0x04AB - A PACKAGE'S BLOCK AT THE DISPLAY'S
+                                  ;          DEPTH (SPEC.md 119.7): ES:SI the
+                                  ;          pixels as the mode packs them, BP
+                                  ;          the stride, AX/BX x/y, CX/DX w/h;
+                                  ;          CX = 0 loads DAC entries AX..
+                                  ;          AX+DX-1 from DX triples. ES is the
+                                  ;          caller's, as OSAPI_GFX_BLIT4's.
+                                  ;          CF = 1 on anything but a packed
+                                  ;          display (VID_VESA): the sixteen
+                                  ;          colours through BLIT4 are the
+                                  ;          fallback
+osapi_table_end:                  ; 0x04B3 today (0x04AB before the depth
+                                  ; blit; 0x04A5 before the drivers'
                                   ; door; 0x049F before serial;
                                   ; 0x0499 before the wheel;
                                   ; 0x0493 before the ASSOC.DAT
@@ -3344,8 +3356,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 107*6 + 6*3 + 6 + 12*5 + 4*6 + 8
-%error "os8088 API jump table must be exactly 0x049B bytes: 43 SLOT (8), 11 XCELL (7), 107 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 44*8 + 11*7 + 107*6 + 6*3 + 6 + 12*5 + 4*6 + 8
+%error "os8088 API jump table must be exactly 0x04A3 bytes: 44 SLOT (8), 11 XCELL (7), 107 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
 %endif
 
 ; =============================================================================
@@ -4783,6 +4795,21 @@ kmain_o:
                                 ; erase. The LAST call of the body but one:
                                 ; kmain releases the blob as soon as this
                                 ; returns
+%ifdef VID_EXT
+    call COLD_SEG:vx_boot_x     ; ...and VESA.DRV, if SYSTEM.CFG asked for it
+                                ; (SPEC.md 119.4): a DRVC_OVL row drv_boot_x
+                                ; read and stopped at, attached here and the
+                                ; desktop switched onto it through the blob's
+                                ; own vid_switch - which is why this sits in
+                                ; kmain_o, after the loading screen is down
+                                ; (the mode change wipes nothing the first
+                                ; paint is not about to cover) and BEFORE the
+                                ; autostart below: a package it launches must
+                                ; find the display it will live on, not the
+                                ; VGA a switch is about to take away (PiXEL
+                                ; built its tables for the wrong depth when
+                                ; this ran after kmain_o)
+%endif
 %ifdef OS88_SHORTCUTS
     BLOBCALL as_boot            ; ...AUTOSTART, the one thing after it (SPEC.md
                                 ; 26.10.5): it LAUNCHES, and a launch must not
@@ -4840,17 +4867,6 @@ kmain:
     SPLGATE1 kmain_o            ; ...the whole boot, from the blob, up to and
                                 ; including spl_finish (SPEC.md 2.5.3.3). MARK
                                 ; 1-31 are in there, as MARKW
-%ifdef VID_EXT
-    call COLD_SEG:vx_boot_x     ; ...and VESA.DRV, if SYSTEM.CFG asked for it
-                                ; (SPEC.md 119.4): a DRVC_OVL row drv_boot_x
-                                ; read and stopped at, attached here and the
-                                ; desktop switched onto it through the blob's
-                                ; own vid_switch - which is why this sits
-                                ; BETWEEN kmain_o's return and mem_unblob_x
-                                ; below, and after the loading screen is down
-                                ; so the mode change wipes nothing the first
-                                ; paint is not about to cover
-%endif
 
     ; --- ...AND STAGE 2 GOES BACK TO THE HEAP (SPEC.md 2.9.5, 50.6.3) -------
     ; The line above is the last thing that ever wants the loading screen, so

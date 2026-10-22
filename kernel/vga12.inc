@@ -1823,6 +1823,27 @@ vga_b4out:
 ; none of it costs anything at all, because the gate short-circuits on
 ; [vid_ndisp] two instructions in.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; gfx_blitd - OSAPI_GFX_BLITD (SPEC.md 119.7): a package's block AT THE
+;             DISPLAY'S DEPTH, or its DAC entries - the driver's whole, and
+;             nothing of the kernel's but the cursor hide. ES:SI = pixels, BP
+;             = the stride, AX/BX = x/y, CX/DX = w/h; CX = 0 is the palette
+;             form. out CF = 1 refused: a display that is not packed, a
+;             kernel without the hook, or the driver's own refusal
+; -----------------------------------------------------------------------------
+gfx_blitd:
+%ifdef VID_EXT
+    cmp byte [vid_ext], 1
+    jne .no
+    call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
+    call vx_call
+    db VX_BLITD
+    ret
+.no:
+%endif
+    stc
+    ret
+
 gfx_blit4:
     KFZ 25                      ; a packed-4bpp block (SPEC.md 5.4)
     call cur_unlazy              ; off the clip list (SPEC.md 11.3): 7.1.4

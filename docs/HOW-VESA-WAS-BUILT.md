@@ -176,3 +176,42 @@ the next cold byte of any size is a rung. kern_small assembles none of it.
 ![The Display page after two cycles of the VESA row: the class 640x480x8 pending, Set Primary live, S4.](vesa/s4-display-page-cycled-640x480x8.png)
 
 ![...and the desktop after Set Primary: 640x480 at 8 bits a pixel, S4.](vesa/s4-desktop-640x480x8.png)
+
+## 2026-10-22 — S6, a package at depth
+
+**The slot is small; the consumer was where the day went.** `OSAPI_GFX_BLITD`
+is one appended cell, a kernel routine of fourteen bytes and a driver body
+that is `vga_restore_vram`'s row copy with `gfx_blit4`'s clipping. PiXEL's
+side is a 512-byte RGB565 table built beside the dither tables, a 16bpp arm
+in the row composer, and one call a row - and the gate that boots the
+machine straight into PiXEL through an autostart link found four things,
+none of them in the new code.
+
+**Four bugs, in the order the glass showed them.** The window-display query
+answered a depth of 1 for kind 4 - its classifier knew VGA and EGA as the
+four-plane kinds and called everything else mono - so PiXEL built 1bpp
+tables and drew a dithered nothing. With that fixed the picture came out one
+row tall: PiXEL's pixel-aspect and layout tables have a row per kind and a
+kind of 4 read past them. Then the picture stayed grey: the autostart link
+launched PiXEL *before* the boot switch - `as_boot` is the last thing in
+`kmain_o` and `vx_boot_x` ran after `kmain_o` returned - so PiXEL built its
+tables for the VGA and the switch took that display away under it. The call
+moved into `kmain_o`, between the loading screen's last frame and the
+autostart, which is where the contract now says it is (and where "before
+the first paint" is finally true). And last, blues the palette did not hold:
+the table lookup's index register kept the previous pixel's shift carry in
+its high byte and read past the table every 128th pixel.
+
+**What the gate asserts** is narrower than it first did. The first cut
+compared the glass against the host simulator's palette for the file; the
+guest's own palette is what the table is built from, so the row reads
+`px_pal` out of PiXEL, holds the table to its quantisation, and holds every
+non-desktop colour on the glass to that set - what the master *is* stays
+tests/pxopen.py's question.
+
+**Measured** (kern_big against main): `.text` +562, `.cold` +247, `.lowbss`
++128, `.bss` +5, `.boot2` +0 - the five bytes of the far call went from
+`.text` into the blob, which had exactly that many. The ABI lock took the
+cell without a `PKG_FMT` bump.
+
+![CITY.PCX in its own 256 colours: PiXEL on the 1024x768x16 desktop, S6.](vesa/s6-pixel-city-1024x768x16.png)

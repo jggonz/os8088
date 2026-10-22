@@ -113,6 +113,7 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x03E4` | `OSAPI_GFX_REST` | the same rect in AX/BX/CX/DX and ES:SI = the buffer OSAPI_GFX_SAVE filled; writes it back. out CF = 1 REFUSED, CF = 0 and SI advanced... |
 | `0x03B8` | `OSAPI_GFX_SPANS` | AX = the y of the FIRST span, ES:SI = CX records of two words each, x1 then x2, both INCLUSIVE; CX = rows, row n being y+n... |
 | `0x0182` | `OSAPI_GFX_BLIT4` | ES:SI = packed 4bpp pixels (two per byte, high nibble leftmost), BP = source stride in BYTES, AX/BX = destination x/y, CX/DX = width/height in... |
+| `0x04AB` | `OSAPI_GFX_BLITD` | ES:SI = pixels at the depth, BP = source stride in BYTES, AX/BX = x/y (signed), CX/DX = width/height in pixels; CX = 0: the palette form above... |
 | `0x0320` | `OSAPI_GFX_BLIT1` | ES:SI = a 1bpp BAND in the framebuffer's own bit order (row-major, bit 7 leftmost, 1 = a LIT pixel), BP = its stride in BYTES per row, AX =... |
 | `0x0222` | `OSAPI_GFX_FILL_PAT` | AX/BX/CX/DX = the rect, SI = 8 pattern bytes in YOUR segment: row y takes byte [SI + (y & 7)], a set bit is WHITE and bit 7 is the leftmost pixel of... |
 | `0x0404` | `OSAPI_GFX_POINTS` | ES:SI = CX records of two words each, x then y (screen px); CX = how many, 0 legal and does nothing. [gfx_color] is the ink; hold the lock... |

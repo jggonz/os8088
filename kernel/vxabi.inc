@@ -11,9 +11,10 @@
 ; Drivers-page line and not a wrong pixel.
 ; =============================================================================
 
-VX_ABI_VER  equ 3               ; bump on ANY change to the contract below
+VX_ABI_VER  equ 4               ; bump on ANY change to the contract below
                                 ; (2: the S2 block pointers and selectors;
-                                ;  3: the VE class at attach, PICK and NEXT)
+                                ;  3: the VE class at attach, PICK and NEXT;
+                                ;  4: VX_BLITD, the package's depth blit)
 
 ; --- the verbs, past DRVV_* -------------------------------------------------
 ; DRVV_ATTACH (0) probes and chooses a mode and answers SI = the VXS_* table
@@ -142,4 +143,9 @@ VX_FONTRUN  equ 15              ; font_run's planar arm, no region armed and
                                 ; not disabled: CX = x, DX = y, ES:SI the
                                 ; string, font_rn_fg/bg; leaves [gfx_color]
                                 ; = fg
-VX_NSEL     equ 16
+VX_BLITD    equ 16              ; OSAPI_GFX_BLITD (SPEC.md 119.7): ES:SI =
+                                ; pixels at the depth, BP = stride, AX/BX =
+                                ; x/y, CX/DX = w/h, clipped by the driver;
+                                ; CX = 0 is the palette form (AX = the first
+                                ; DAC entry, DX triples). CF = 1 refused
+VX_NSEL     equ 17

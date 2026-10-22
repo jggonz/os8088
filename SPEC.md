@@ -190489,6 +190489,31 @@ changed an instruction; what changed is how much is HELD:
   bytes, two sectors less: the image is stored plain (106.5), so an image
   byte is a disk byte.
 
+### 106.27 At depth: the canvas on a VESA display
+
+On a VESA display (§119) `OSAPI_VIDEO` answers DH = 8 or 16, and the sixteen
+colours through the dither tables are still what the window draws at 8:
+the master has 256 entries, the desktop's sixteen leave 240 DAC entries,
+and the squeeze from one to the other is a plan search this package does
+not carry. **At 16 bits a pixel the canvas is drawn at depth**: `px_tables`
+builds, beside the dither tables, a 512-byte table of the palette as
+RGB565 words (`px_t565`, at `PX_VORGB` past the thumbnail; the view claim
+is 31 KB at that depth), `px_crow` has a 16bpp arm - a word a pixel through
+that table, at 100% and through the DDA - and `px_rband` puts each row up
+with `OSAPI_GFX_BLITD` (§119.7), one row a call, because the band buffer
+holds one row at two bytes a pixel. The thumbnail and everything else stay
+on the sixteen-colour path: `OSAPI_GFX_BLITP` refuses on a packed display
+and `OSAPI_GFX_BLIT4` draws it. `px_display` folds the VESA kind into the
+VGA's row of every per-kind table (aspect, layout, chrome): square pixels
+and colour, only the depth differs. A horizontal pan at depth renders the
+canvas whole (`px_hshift` answers CF = 1): a band of sixteen rows banked
+through `OSAPI_GFX_SAVE` is four times the buffer there. The master is
+unchanged - the blue-noise dither to the cube is still what a truecolour
+file becomes (106.8), so a 24-bit BMP shows its 256-colour master, not its
+file. `tests/vesablitd.py` is the gate (soak): PiXEL opened on a
+1024x768x16 desktop by an autostart link to CITY.PCX, and the glass read
+back against the palette.
+
 ## 107. EMS.DRV — expanded memory on a LIM EMS board (`drivers/ems/`)
 
 **A driver for a LIM EMS board's page registers, so a package can hold
@@ -201474,7 +201499,7 @@ driver.
 | geometry | at most 1024x768, width a multiple of 8, `BytesPerScanLine` ≤ 4,096 |
 | colour model | **the desktop stays 16 colours.** `[gfx_color]` is a 4-bit index everywhere in the kernel and every package; the driver maps index → DAC entry (8bpp) or → an RGB word (16bpp) at the write. One new slot, `OSAPI_GFX_BLITD`, is how a package reaches the real depth (§119.7) |
 | CPU | `cpu 8086` throughout the driver. A 286 with a VBE 1.2 card qualifies; `mul` gives the 32-bit offset as DX:AX and that is all the arithmetic needs |
-| resident cost | the hook of §119.3, **measured at S5 on `kern_big`: `.text` +532, `.cold` +247, `.lowbss` +128, `.bss` +5, `.boot2` −5 - the image rung crossed once at S2, `KERN_SIZE` 98,304 against 97,792 (2,560 spare); the cold rung has 98 bytes left** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel before it. `kern_small` does not assemble the hook and is unchanged |
+| resident cost | the hook of §119.3, **measured at S6 on `kern_big`: `.text` +562, `.cold` +247, `.lowbss` +128, `.bss` +5, `.boot2` +0 - the image rung crossed once at S2, `KERN_SIZE` 98,304 against 97,792 (2,560 spare); the cold rung has 98 bytes left** (`tools/kernsize.py`; the plan records each wave's). `NOVIDEXT=1` is the A/B that assembles the kernel before it. `kern_small` does not assemble the hook and is unchanged |
 
 ### 119.2 Detection and the choice of mode — the driver's attach
 
@@ -201732,10 +201757,14 @@ and nothing in the kernel computes one for this display.
 **In, at boot**: `vx_boot_x` (`kernel/vidext.inc`) is `vmm_boot_x`'s shape —
 `drv_boot_x` read the row and stopped at `drv_check`, and this is the owner
 that attaches it: ATTACH, arm `vx_ep`/`vx_bpp`, `VXV_INIT`, light
-`VID_A_VESA`, then the blob's own `bvs_switch`. kmain calls it **between
-`kmain_o`'s return and `mem_unblob_x`**, so the loading screen is down, the
-blob's `vid_switch` is still aboard, and the desktop's first paint is the
-first thing drawn in the new mode. **It is `.cold`, not `.boot2`**: the blob
+`VID_A_VESA`, then the blob's own `bvs_switch`. `kmain_o` calls it **after
+`spl_finish` and before `as_boot`** (the blob's tail, SPEC.md 26.10.5), so
+the loading screen is down, the blob's `vid_switch` is still aboard, the
+desktop's first paint is the first thing drawn in the new mode - and a
+package the autostart launches finds the display it will live on: it was
+called from kmain after `kmain_o` returned at first, and PiXEL, launched by
+a link, built its tables for the VGA a switch then took away. **It is
+`.cold`, not `.boot2`**: the blob
 measured 6,142 of 6,144 bytes when it was written, so these ~110 bytes are
 resident until the blob sheds a sector's worth (the plan's S8 names it). The
 reference into the blob is registered in `tests/ovlrefs.txt`.
@@ -201795,15 +201824,30 @@ the class running (`vx_class`, the driver's live record, published beside
 
 ### 119.7 A package at depth — `OSAPI_GFX_BLITD`
 
-One appended cell. ES:SI = pixels **at the display's depth** (bytes at 8bpp,
-RGB words at 15/16bpp in the mode's own packing), BP = source stride in
-bytes, AX/BX = destination x/y, CX/DX = width/height, clipped by §11.3's
-region like `gfx_blit4`. CF = 1 on any display that is not `VID_VESA` — a
-package tests `OSAPI_VIDEO`'s DH first and falls back to `gfx_blit4`'s 16
-colours, which is PiXEL's shape today. At 8bpp the bytes are DAC indices and
-entries 16..255 are the package's to set through the same call's `AL = 1`
-form (SI = 240 RGB triples); the first 16 stay the desktop's. The ABI lock
-takes the new cell without a `PKG_FMT` bump (§20.2.0.1: appended at the end).
+One appended cell, `0x04AB`, a plain `OSAPI_SLOT` (ES is the caller's, as
+`OSAPI_GFX_BLIT4`'s is). **The blit form**: ES:SI = pixels **at the
+display's depth** — bytes at 8bpp, words at 15/16bpp in the mode's own
+packing, which is what `OSAPI_VIDEO`'s DH says and §119.2.2's rule makes
+RGB565 on every mode this driver offers (a 15bpp mode is drawn through its
+own packing by the driver; a package writes 565 and the driver does not
+translate, so a 15bpp card shows a 565 block with its green's low bit as
+blue's high — a limitation stated, not a path taken: QEMU offers no 15bpp
+mode and no 15bpp card has been seen) — BP = the source stride in bytes,
+AX/BX = the destination x/y (signed), CX/DX = width/height in pixels. The
+driver clips it to the display in both axes, as `gfx_blit4`'s body does;
+§11.3's region is NOT consulted (`gfx_blit4`'s clip walk is the kernel's
+and this call never enters it), so a package draws inside its own content
+rect on a window it knows to be in front, which is where PiXEL's canvas
+lives. **The palette form** is `CX = 0`: ES:SI = DX RGB triples (a byte a
+gun, 0..255), loaded into DAC entries AX .. AX+DX−1, AX ≥ 16 and
+AX+DX ≤ 256 — entries 0..15 stay the desktop's sixteen — and it is refused
+at 16bpp, where there is no DAC to load. **CF = 1** on any display that is
+not `VID_VESA`, on a kernel without the hook, on a palette form out of
+range or at 16bpp; nothing is drawn. A package tests `OSAPI_VIDEO`'s DL
+(4) and DH (8 or 16) first and keeps `gfx_blit4`'s 16 colours as its path
+everywhere else — PiXEL's shape, §106.27. The ABI lock takes the new cell
+without a `PKG_FMT` bump (§20.2.0.1: appended at the end). The driver's
+selector is `VX_BLITD`, and the contract's `VX_ABI_VER` is 4 for it.
 
 ### 119.8 Cost, and where the time goes
 

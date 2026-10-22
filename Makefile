@@ -4738,10 +4738,32 @@ $(BUILD)/vesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT
 		$(BUILD)/vxcfg/system.cfg
 
 .PHONY: vesatest
-vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img
+vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img $(BUILD)/vesablitd.img $(BUILD)/vxpics.img
 	@echo "vesatest: build/vesa.img - VESA.DRV already wanted (SPEC.md 119.9);"
-	@echo "          build/vesa8.img the same with a 'VE' key asking 800x600x8."
-	@echo "          Run them with: python3 tests/vesa.py; python3 tests/vesa8.py"
+	@echo "          build/vesa8.img the same with a 'VM' class byte asking 800x600x8;"
+	@echo "          build/vesablitd.img the same plus \\AUTOSTRT opening B:CITY.PCX,"
+	@echo "          and build/vxpics.img that B: - PiXEL and the picture (119.7)."
+	@echo "          Run them with: python3 tests/vesa.py; vesa8.py; vesacp.py; vesablitd.py"
+
+# ...and the depth blit's pair (SPEC.md 119.7, 106.27): the vesa.img system
+# disk with one more file, \AUTOSTRT\CITY.LNK - a link to the DOCUMENT
+# CITY.PCX on B: (SPEC.md 26.10: a link to a document starts that document's
+# program) - and a B: of its own with PiXEL and the picture at its root, so
+# the machine boots straight into PiXEL showing a 256-colour PCX on the
+# 1024x768x16 desktop and tests/vesablitd.py reads the canvas back with no
+# UI driven at all
+$(BUILD)/vxbd/CITY.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'CITY.PCX' --vol B
+
+$(BUILD)/vesablitd.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/CITY.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/CITY.LNK
+
+$(BUILD)/vxpics.img: $(BUILD)/pixel.o88 apps/pixel/samples/CITY.PCX tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 apps/pixel/samples/CITY.PCX $(BUILD)/pixel.o88
 
 # ...and the same disk with a ver-3 'VM' record whose class byte names
 # 800x600x8 (SPEC.md 119.2.3, kernel/vxabi.inc's VXC_*: 0x80 | width 2 |

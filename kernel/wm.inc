@@ -1823,6 +1823,13 @@ wm_display:
     mov si, MBAR_H
     mov dl, [vid_kind]
 .bpp:
+%ifdef VID_EXT
+    cmp dl, VID_VESA
+    jne .nvx
+    mov dh, [vx_bpp]            ; a packed display: 8 or 16 (SPEC.md 119.4)
+    ret
+.nvx:
+%endif
     mov dh, 4
     or dl, dl
     jz .r                       ; VID_VGA -> 4 planes

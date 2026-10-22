@@ -118,11 +118,30 @@ code does not.
   saver) - S8's driving pass, by the plan's rule that a measurement and a
   look are taken in the final pass. The `hibernate` and `fsx*` rows on VGA
   are in S8's soak union.
-- [ ] **S6 A package at depth.** `OSAPI_GFX_BLITD` (and its palette form at
-  8bpp), the ABI lock updated without a `PKG_FMT` bump, and one consumer:
-  PiXEL shows a GIF or BMP in true colour on a 16bpp desktop and falls back
-  to its 16-colour path everywhere else. Verified by: `tests/vesablitd.py`
-  and PiXEL's own rows unchanged.
+- [x] **S6 A package at depth.** **Shipped:** `OSAPI_GFX_BLITD` at
+  `0x04AB` - the blit form (pixels as the mode packs them, clipped to the
+  display by the driver) and the palette form (`CX = 0`, DAC entries 16..255
+  at 8bpp); `gfx_blitd` in the kernel, `VX_BLITD` in the driver, the ABI
+  lock updated with no `PKG_FMT` bump; `VID_VESA` in the SDK, and
+  `OSAPI_VIDEO`/`OSAPI_WM_DISPLAY` answering DL 4 with DH 8 or 16 (the
+  window query answered 1 for kind 4 before - the first thing the gate
+  found). **The consumer:** PiXEL at 16bpp builds an RGB565 table beside
+  its dither tables (SPEC.md 106.27), composes a row of words through it
+  and puts each up with one call; at 8bpp and everywhere else it keeps the
+  sixteen. **Seen:** CITY.PCX in its own 256 colours on the 1024x768x16
+  desktop (`docs/vesa/s6-pixel-city-1024x768x16.png`). **Verified by**
+  `tests/vesablitd.py` (soak): the machine boots into PiXEL through an
+  autostart link, and the row holds the table to the palette, the claim to
+  the 31 KB layout and the glass to the palette's 565 - 216 palette colours
+  on the glass. **Four bugs the row found:** the window-display query's
+  depth; PiXEL's aspect and layout tables indexed by a kind of 4 (the
+  picture came out one row tall); the autostart launching BEFORE the boot
+  switch, so a package built its tables for the VGA (`vx_boot_x` moved
+  ahead of `as_boot` in `kmain_o`); and a table lookup whose index kept the
+  previous shift's carry (blues the palette did not hold). **Not done:**
+  the 8bpp palette form has no consumer - PiXEL's 256-entry master against
+  240 free entries is a squeeze it does not carry - and no 15bpp card has
+  been seen (the contract says what a 565 block does on one).
 - [ ] **S7 Where the time goes.** A measurement of a window repaint and a
   full-screen fill on 86Box's 486 at 1024x768x16, with the `int 10h` bank
   switch counted; the direct `dispi` window register for the Bochs VBE if
@@ -150,6 +169,9 @@ code does not.
 | the class is one byte on the `VM` record | a `VE` key of its own (4 bytes) | the boot blob had 2 bytes left and the settings buffer (`ovc_buf`, blob bytes) had 1; `VM` goes to ver 3, the §39.11.3 story once more |
 | the VESA row cycles its class when clicked while chosen | a Mode button beside Force Color | four rows at a 12-pixel pitch already spend the pane; a button is 40 pixels the pane does not have on a VGA+mono machine |
 | the `VXV_*` verbs keep every register but their outputs | the page saving its own DI/BP around the call | SPEC.md §1's register discipline, and the symptom (a label drawn off the pane on the second cycle only) is the kind that stays hidden |
+| PiXEL at depth only at 16bpp; the 8bpp desktop keeps the sixteen | loading the master's palette into DAC 16..255 | a 256-entry master against 240 free entries is a nearest-colour squeeze PiXEL does not have; the palette form ships for a package that has fewer colours than that |
+| `OSAPI_GFX_BLITD` clips to the display and not to §11.3's region | routing it through `gfx_blit4`'s clip walk | the walk is the kernel's and is entered by the kernel's own body; a package draws inside a content rect it knows to be in front, which is what PiXEL's canvas is |
+| one row a call at depth | a band of sixteen rows | the band buffer is 5,888 bytes and a 16bpp row of a 1024-wide canvas is 2,048; the far call is ~50 us on the 386 this is for |
 | Extend refused while VESA is primary | a two-depth straddle | §39.14.7's cut assumes both displays share a renderer; it does not, and no machine here has the pair |
 
 ## Existing facilities reused
