@@ -443,7 +443,9 @@ make cdromtest  # THE CD-ROM GATE (§119.7): a 1.44MB system disk whose
                 #   REFERENCE for the driver's 8.3 names and handles (its
                 #   `list`). `make cdromtest && python3 tests/cdrom.py`.
                 #   QEMU by name: the one emulator here with a 286-class CPU
-                #   AND an ATAPI drive; CD audio it cannot play (§119.7)
+                #   AND an ATAPI drive; CD audio it cannot play (§119.7), so
+                #   `--sim` uses build/cdromsim.img (-DCDSIM_AUDIO, fake audio
+                #   tracks) and `make 386-cdrom` is 86Box's audio CD to LOOK at
 make small    # kern_small and its system disks, into build/smallk/ (the
 make smallapps#   128KB floor machine, docs/history/KERN-SPLIT-PLAN.md). `smallapps` is
               #   the APPS half of it: the same floppies with the SMALL BUILD

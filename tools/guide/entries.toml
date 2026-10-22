@@ -182,6 +182,13 @@ summary = "Lets programs play music and sound on an AdLib, Sound Blaster, MPU-40
 short = "Music and sound on any card"
 needs = "An AdLib, Sound Blaster, MPU-401 or Covox"
 
+["CDPLAYER.O88"]
+title = "CD Player"
+kind = "program"
+summary = "Plays audio CDs in the CD-ROM drive: previous, play, pause, stop, next and eject, with the track and the time. Opens a TRACKnn.CDA file on that track."
+short = "Plays audio CDs"
+needs = "CDROM.DRV and an IDE CD-ROM drive"
+
 ["MIXER.O88"]
 title = "Mixer"
 kind = "program"

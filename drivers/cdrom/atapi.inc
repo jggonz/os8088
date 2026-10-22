@@ -38,6 +38,11 @@ CD_PROBE_T   equ 10             ; ticks a probe waits on one device (~0.55 s)
 CD_CMD_T     equ 364            ; ticks a command may take (20 s): spin-up
 CD_READY_T   equ 9              ; ticks between "becoming ready" retries
 CD_READY_N   equ 30             ; ...and how many (~15 s)
+CD_UA_N      equ 4              ; UNIT ATTENTIONs one command rides out: a
+                                ; drive just powered on reports the reset AND
+                                ; the medium in it, one per command, before it
+                                ; answers anything (86Box's did: the CD
+                                ; Player's first poll failed, the next did not)
 
 CD_TMO       equ 0x80           ; cd_packet's AL for a timeout - no sense key
                                 ; is above 0Fh
@@ -473,7 +478,7 @@ cd_xin:
 ;
 ; UNIT ATTENTION (key 6) is a medium changed or a drive reset: the media
 ; generation moves (everything read off the old disc is forgotten) and the
-; command is sent once more. NOT READY (key 2) asks REQUEST SENSE why: 3Ah is
+; command is sent again, up to CD_UA_N times. NOT READY (key 2) asks REQUEST SENSE why: 3Ah is
 ; no disc, 04h is a disc still spinning up and is waited out (CD_READY_N x
 ; CD_READY_T ticks). The packet is banked across the REQUEST SENSE, which
 ; reuses [cd_pkt].
@@ -485,7 +490,7 @@ cd_cmd:
     push di
     push es
     mov byte [cd_tries], CD_READY_N
-    mov byte [cd_uatry], 2
+    mov byte [cd_uatry], CD_UA_N
 .again:
     call cd_packet
     jnc .out

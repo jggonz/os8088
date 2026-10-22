@@ -271,6 +271,142 @@ def disc_leg(bad):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def bring(q, ui, w, i, rows=6):
+    """Walk the selection down with the arrow key until entry i is on screen
+    (SPEC.md 22.11) - os88ui.scroll_to's way, keys and not the scroll bar,
+    with [FS_SCRL] read back rather than a row count assumed."""
+    for _ in range(40):
+        if 0 <= i - ui.scroll(w) <= rows:
+            return
+        q.hmp("sendkey down")
+        os88qemu.pace(q, 0.3)
+    raise RuntimeError("entry %d never came on screen" % i)
+
+
+def player_bss(q, ui, S):
+    """The CD Player's loader-zeroed bss, by its own map: (window, linear
+    address of os88_image_end), or None while it has no window."""
+    import re
+    d = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    mp, tmpbin = os.path.join(d, "cdplayer.map"), os.path.join(d, "cp.bin")
+    subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+                    "-I", "drivers/cdrom/", "--before",
+                    "[map symbols %s]" % mp, "-o", tmpbin,
+                    "apps/cdplayer/cdplayer.asm"], check=True)
+    same = open(tmpbin, "rb").read() == open(
+        os88build.at("build/cdplayer.bin"), "rb").read()
+    os.unlink(tmpbin)
+    lines = open(mp).read().splitlines()
+    shutil.rmtree(d, ignore_errors=True)
+    if not same:
+        raise RuntimeError("build/cdplayer.bin is not this source's")
+    end = None
+    for line in lines:
+        m = re.match(r"\s*([0-9A-F]+)\s+([0-9A-F]+)\s+os88_image_end$", line)
+        if m:
+            end = int(m.group(2), 16)
+    for o in ui.windows():
+        if o.title == "CD Player" and o.visible:
+            seg = struct.unpack("<H", q.read(S("wm_wins") + o.i * geom.WIN_SIZE
+                                       + geom.W_SEG, 2))[0]
+            return o, (seg << 4) + end
+    return None
+
+
+def cda_bytes(track, leadout, starts, lens):
+    """SPEC.md 119.3.5's 44 bytes, from the TOC cd_simtoc makes."""
+    def msf(f):
+        m, r = divmod(f, 4500)
+        return bytes([r % 75, r // 75, m, 0])
+    out = b"RIFF" + struct.pack("<I", 36) + b"CDDA" + b"fmt "
+    out += struct.pack("<IHH", 24, 1, track)
+    out += struct.pack("<I", leadout ^ (len(starts) + 1) << 24)
+    st, ln = starts[track - 2], lens[track - 2]
+    out += struct.pack("<II", st, ln) + msf(st + 150) + msf(ln)
+    return out
+
+
+def sim_leg(bad):
+    """--sim: the gate's CDROM.DRV (-DCDSIM_AUDIO) gives QEMU's one-track
+    disc three audio tracks after it, 40, 30 and 20 seconds (cddisc.inc's
+    cd_simtoc). The root then lists TRACK02..04.CDA; double-clicking
+    TRACK02.CDA opens the CD Player through its .CDA association, which
+    reads the file - 44 bytes cd_mkcda composed - picks track 2 and asks the
+    drive to play it. QEMU's drive refuses every audio command, so the player
+    ends saying so (CPS_NOAUD), which is the honest end of this leg: the play
+    itself is vm/386-cdrom's to show (SPEC.md 119.7)."""
+    iso_path = os88build.at("build/cdfix.iso")
+    iso = os88cdiso.Iso(open(iso_path, "rb").read())
+    data_end = len(open(iso_path, "rb").read()) // 2048
+    tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    q = None
+    try:
+        syms = os88drvsym.symbols("cdromsim.bin")   # the sim build's own map
+        sysimg = os.path.join(tmp, "sys.img")
+        shutil.copy(os88build.at("build/cdromsim.img"), sysimg)
+        bimg = os.path.join(tmp, "b.img")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", bimg,
+                        "--size", "1440"], check=True, capture_output=True)
+        q = QH(tmp, sysimg, bimg, iso_path)
+        os88qemu.acted(q, lambda: os.path.exists(q.sock), secs=30,
+                       what="the QMP socket")
+        xmcheck.wait_desktop(q.sock, "cdrom")
+        S = xmcheck.sym
+        row = q.read(S("drv_tab") + CD_ROW * DRVR_SIZE, DRVR_SIZE)
+        seg = struct.unpack_from("<H", row, geom.DRVR_SEG)[0]
+        vol = q.read(geom.drv_base(seg) + syms["cd_vol"], 1)[0]
+        ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
+        xmcheck.dblclick(q.sock, *geom.drive_pt(q, chr(ord("A") + vol), S))
+        q.need(lambda: front_on(ui, vol) is not None, "the CD's window", 60)
+        q.done()
+        w = front_on(ui, vol)
+        want = sorted(want_names(iso, "") + [("TRACK0%d.CDA" % t, 0)
+                                              for t in (2, 3, 4)])
+        got = got_names(ui, w)
+        print("   S1. the root lists %d entries, the three tracks among them%s"
+              % (len(got), "" if got == want else " - NOT the reference's"))
+        if got != want:
+            bad.append("S1. root: guest %r, want %r" % (got, want))
+        i, _ = ui.entry("TRACK02.CDA", w)
+        bring(q, ui, w, i)
+        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        box = {}
+
+        def up():
+            r = player_bss(q, ui, S)
+            if r:
+                box["b"] = r[1]
+                return q.read(r[1] + 222, 4) == b"RIFF"
+            return False
+        q.need(up, "the CD Player to read TRACK02.CDA", 40)
+        os88qemu.pace(q, 2)
+        b = box["b"]
+        st = q.read(b, 6)
+        lens = [40 * 75, 30 * 75, 20 * 75]
+        starts = [data_end, data_end + lens[0], data_end + lens[0] + lens[1]]
+        cda = q.read(b + 222, 44)
+        expect = cda_bytes(2, starts[2] + lens[2], starts, lens)
+        print("   S2. TRACK02.CDA opened the CD Player: state %d, track %d of "
+              "%d..%d; its 44 bytes %s" % (st[0], st[5], st[2], st[3],
+                                          "are cd_mkcda's" if cda == expect
+                                          else "DIFFER"))
+        if cda != expect:
+            bad.append("S2. TRACK02.CDA read %s, want %s" % (cda.hex(),
+                                                          expect.hex()))
+        if (st[2], st[3], st[5]) != (1, 4, 2):
+            bad.append("S2. the player stands on track %d of %d..%d, not 2 "
+                       "of 1..4" % (st[5], st[2], st[3]))
+        if st[0] != 4:                          # CPS_NOAUD
+            bad.append("S2. the player's state is %d, not CPS_NOAUD - QEMU's "
+                       "drive refuses audio and it must say so" % st[0])
+    except Exception as e:                      # noqa: BLE001
+        bad.append("the sim leg died: %s" % e)
+    finally:
+        if q is not None:
+            q.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def ui_raise_cd(q, ui, vol):
     """Bring the CD's Disk window to the front by its title bar."""
     for o in ui.windows():
@@ -329,6 +465,8 @@ def main():
     bad = []
     if "--empty" in sys.argv[1:]:
         empty_leg(bad)
+    elif "--sim" in sys.argv[1:]:
+        sim_leg(bad)
     else:
         disc_leg(bad)
         if "--disc" not in sys.argv[1:]:

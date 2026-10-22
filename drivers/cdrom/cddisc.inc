@@ -147,6 +147,11 @@ cd_readdisc:
     ja .bad
     cmp al, ah
     ja .bad
+%ifdef CDSIM_AUDIO
+    call cd_simtoc              ; the gate's fake audio tracks (below)
+    mov al, [cd_toc+2]
+    mov ah, [cd_toc+3]
+%endif
     mov [cd_first], al
     mov [cd_last], ah
     sub ah, al                  ; descriptors: the tracks and the lead-out
@@ -397,3 +402,43 @@ cd_secs:
     div cx
     pop cx
     ret
+
+%ifdef CDSIM_AUDIO
+; -----------------------------------------------------------------------------
+; cd_simtoc - TEST BUILD ONLY (`make cdromtest`'s build/cdromsim.drv, never
+; shipped): a one-track data disc - which is all QEMU's drive can hold - is
+; given three AUDIO tracks after it, 40, 30 and 20 seconds, so the gate can
+; drive TRACKnn.CDA, its association and the CD Player's display on QEMU
+; (SPEC.md 119.7). PLAY AUDIO is still the drive's, and QEMU refuses it.
+; clobbers: AX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+cd_simtoc:
+    cmp word [cd_toc+2], 0x0101 ; one track, and it is track 1
+    jne .out
+    mov si, cd_toc + 4 + 8 + 4  ; the lead-out's LBA: the audio's start
+    call cd_be32
+    mov di, cd_toc + 4 + 8      ; descriptors 2, 3, 4 and the new lead-out
+    mov cx, 4
+    mov bx, cd_simlen
+.t:
+    mov byte [di], 0
+    mov byte [di+1], 0x10       ; ADR 1, control 0: audio
+    mov byte [di+2], 6          ; track 2, 3, 4, then AAh (below)
+    sub [di+2], cl
+    mov byte [di+3], 0
+    push di
+    add di, 4
+    call cd_pbe32
+    pop di
+    add ax, [bx]
+    adc dx, 0
+    add bx, 2
+    add di, 8
+    loop .t
+    mov byte [di-8+2], 0xAA     ; the last is the lead-out
+    mov byte [cd_toc+3], 4
+    mov word [cd_xgot], 4 + 8 * 5
+.out:
+    ret
+cd_simlen:  dw 40 * 75, 30 * 75, 20 * 75, 0
+%endif

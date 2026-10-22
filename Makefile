@@ -214,6 +214,7 @@ VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
 VM286VID := $(CURDIR)/vm/286-video
 VM386SND := $(CURDIR)/vm/386-sound
+VM386CD  := $(CURDIR)/vm/386-cdrom
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
 # ...and that 486 with the Video Player's measurement disk on IDE (make vid486)
@@ -3847,7 +3848,11 @@ $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 
 # Mixer is optional on the roomy system disks and installed/live media.
 # The quick slider is in SOUND.DRV; the 360KB image needs no MIXER.O88.
-SYSOPTIONAL := $(if $(KERN_SMALL),,$(BUILD)/mixer.o88)
+# CDPLAYER.O88 (SPEC.md 119.6) rides here for the same reasons and one more:
+# it is CDROM.DRV's face, so it lives in SYSTEM\ beside the driver it needs,
+# and the 360KB disk is the XT's, whose 8-bit bus CDROM.DRV refuses (119.2).
+# The 720KB APPS disk had two clusters to spare and no room for it besides.
+SYSOPTIONAL := $(if $(KERN_SMALL),,$(BUILD)/mixer.o88 $(BUILD)/cdplayer.o88)
 SYSOPTIONALARGS := $(addprefix SYSTEM:,$(SYSOPTIONAL))
 .PHONY: mixer
 mixer: $(BUILD)/mixer.o88
@@ -4382,6 +4387,16 @@ $(BUILD)/cdrom.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 $(BUILD)/cdrom.drv: $(BUILD)/cdrom.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/cdrom.bin -o $@
 
+# ...and the GATE'S build of it, never shipped (usbmouse's CH375SIM shape):
+# -DCDSIM_AUDIO gives QEMU's one-track data disc three audio tracks, so
+# tests/cdrom.py can drive TRACKnn.CDA and the CD Player there (SPEC.md 119.7)
+$(BUILD)/cdromsim.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DCDSIM_AUDIO -I drivers/cdrom/ -I drivers/ -I apps/ -o $@ $<
+
+$(BUILD)/cdromsim/CDROM.DRV: $(BUILD)/cdromsim.bin tools/os88drv.py $(PKGZSTAMP)
+	@mkdir -p $(BUILD)/cdromsim
+	$(OS88DRV) $(BUILD)/cdromsim.bin -o $@
+
 # RAMDISK.DRV - a DRVC_FILE volume with no hardware behind it (SPEC.md 62.9),
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
 # the kernel runs on a cycle-accurate 8088 in a container, which is the one
@@ -4834,17 +4849,67 @@ $(BUILD)/cdfix.iso: tools/os88cdiso.py $(CDFIXFILES) $(BUILD)/mines.o88
 		--gen BIG.BIN:100001
 
 $(BUILD)/cdromtest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS) \
-            $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/cdcfg/system.cfg \
-            tools/os88disk.py
+            $(SYSOPTIONAL) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+            $(BUILD)/cdcfg/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/cdcfg/system.cfg $(APPDATAFOLDER)
 
+# ...the same disk with the gate's CDROM.DRV (-DCDSIM_AUDIO) in place of the
+# shipped one: its own SYSTEM.CFG and its own driver, nothing else different
+$(BUILD)/cdromsim.img: $(BUILD)/cdromtest.img $(BUILD)/cdromsim/CDROM.DRV tools/os88fat.py
+	cp $(BUILD)/cdromtest.img $@
+	python3 tools/os88fat.py del $@ CDROM.DRV
+	python3 tools/os88fat.py add $@ $(BUILD)/cdromsim/CDROM.DRV CDROM.DRV
+
 .PHONY: cdromtest
-cdromtest: $(BUILD)/cdromtest.img $(BUILD)/cdfix.iso
+cdromtest: $(BUILD)/cdromtest.img $(BUILD)/cdromsim.img $(BUILD)/cdfix.iso
 	@echo "cdromtest: build/cdromtest.img - CDROM.DRV wanted; build/cdfix.iso the disc"
 	@echo "              Run: python3 tests/cdrom.py"
+
+# CDAUDIOIMG - SPEC.md 119.7's machine to LOOK at, because 86Box cannot be
+# driven from this host: build/cdaudio.cue is an audio CD of three generated
+# tones (tools/os88cdiso.py audio), and build/cdaudiotest.img is the gate disk
+# with \AUTOSTRT\CDPLAYER.LNK - a link to the DOCUMENT D:\TRACK02.CDA, so the
+# 386 boots into the CD Player playing track 2 through the .CDA association
+# (SPEC.md 119.3.5): the driver's root listing, the player's file read and
+# PLAY AUDIO MSF, with nobody at the machine. A_SYS.LNK opens A:\SYSTEM FIRST
+# because a link's document open does not sweep ASSOC.DAT the way a
+# double-click does (docs/plans/ASSOC-FIND-PLAN.md section 1): listing SYSTEM
+# is what teaches the machine that .CDA is CDPLAYER.O88's.
+# `make 386-cdrom` boots it; QEMU's drive has no audio commands at all
+$(BUILD)/cdaudio.cue: tools/os88cdiso.py
+	python3 tools/os88cdiso.py audio -o $@ --tone 40:440 --tone 30:660 \
+		--tone 20:880
+
+$(BUILD)/cdlnk/CDPLAYER.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/cdlnk
+	python3 tools/os88lnk.py $(BUILD)/cdlnk/A_SYS.LNK 'SYSTEM' --kind folder
+	python3 tools/os88lnk.py $@ 'TRACK02.CDA' --vol D --kind document
+
+$(BUILD)/cdaudiotest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS) \
+            $(SYSOPTIONAL) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+            $(BUILD)/cdcfg/system.cfg $(BUILD)/cdlnk/CDPLAYER.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(COREAPPSARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/cdcfg/system.cfg \
+		AUTOSTRT:$(BUILD)/cdlnk/A_SYS.LNK \
+		AUTOSTRT:$(BUILD)/cdlnk/CDPLAYER.LNK $(APPDATAFOLDER)
+
+.PHONY: cdaudioimg 386-cdrom
+cdaudioimg: $(BUILD)/cdaudiotest.img $(BUILD)/cdaudio.cue
+	@echo "cdaudioimg: build/cdaudiotest.img boots into the CD Player;"
+	@echo "            build/cdaudio.cue is three audio tracks. make 386-cdrom"
+
+# The 386 with an ATAPI CD-ROM on the secondary channel holding the audio CD,
+# a Sound Blaster 16 for its CD input, and the gate disk that autostarts the
+# CD Player (SPEC.md 119.7). What a working machine looks like: Play, and the
+# display counts up through track 1 with the tone in the speakers.
+386-cdrom: $(BUILD)/cdaudiotest.img $(BUILD)/cdaudio.cue $(APPSIMG)
+	@$(UNPROTECT) $(VM386CD)/86box.cfg
+	$(BOX) -P $(VM386CD) -N
 
 # THEWIRETEST: the Wire's gate disks (SPEC.md 92.12), ethertest's shape and
 # for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON
@@ -5773,6 +5838,16 @@ $(BUILD)/timer.bin: apps/timer/timer.asm apps/os88api.inc apps/os88ui.inc \
 
 $(BUILD)/timer.o88: $(BUILD)/timer.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/timer.bin -o $@
+
+# CD PLAYER (SPEC.md 119.6): an audio CD through CDROM.DRV's door, which it
+# shares as source with the driver (drivers/cdrom/cdpkg.inc, SPEC.md 20.11)
+$(BUILD)/cdplayer.bin: apps/cdplayer/cdplayer.asm apps/os88api.inc apps/os88ui.inc \
+                       drivers/cdrom/cdpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I drivers/cdrom/ -o $@ apps/cdplayer/cdplayer.asm
+	@echo "cdplayer: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/cdplayer.o88: $(BUILD)/cdplayer.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/cdplayer.bin -o $@
 
 # INSTALL (SPEC.md 117): the setup wizard, in the root of every kern_big
 # system disk ($(SYSINST)). It installs nothing itself - OSAPI_DRV_USE and

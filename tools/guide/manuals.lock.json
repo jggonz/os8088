@@ -181,13 +181,21 @@
   "strings": null,
   "why": "Paint's refusal of a GIF over 64KB is named: the toast GIF larger than 64KB"
  },
+ "CDPLAYER_O88": {
+  "sources": [
+   "apps/cdplayer"
+  ],
+  "stamped": "61f70705",
+  "strings": "72f8f7576dd852f5",
+  "why": "new page: the CD Player as built in wave 2"
+ },
  "CDROM_DRV": {
   "sources": [
    "drivers/cdrom"
   ],
-  "stamped": "cd38ec7d",
+  "stamped": "61f70705",
   "strings": "7c5f10780f09d872",
-  "why": "new page: the driver as built in wave 1"
+  "why": "wave 2: the audio door and TRACKnn.CDA were described in the first stamp; re-stamped after the driver's strings moved"
  },
  "CHARTER_F88": {
   "sources": [],

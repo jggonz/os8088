@@ -87,3 +87,74 @@ lists; `MINES.O88` launches off the CD; `BIG.BIN` (100,001 bytes, over 64 KB
 and not a whole number of sectors) copied to B: with Edit > Copy and Paste
 is byte-identical on the host; an empty drive mounts nothing and A: still
 opens after it.
+
+## Wave 2 — audio, and the CD Player
+
+**The door** (`drivers/cdrom/cdpkg.inc`) is eleven verbs through
+`OSAPI_DRV_CALL`: identify, the drive's model, the disc's TOC, one track,
+play, pause, resume, stop, where the drive is (`READ SUB-CHANNEL`), eject,
+and the drive's own output volume (mode page 0Eh). Every one is the UI
+task's: each waits on the drive.
+
+**The player** (`apps/cdplayer/`, 2.6 KB) is the Timer's shape (§111): a
+fixed window, the standard buttons, a one-shot timer re-armed every 9
+ticks, and only the display line that changed is lettered. On QEMU's data
+disc it says so and greys everything but Eject; Eject opens QEMU's tray
+(`info block` says `tray open`) and the player says **No disc**, and a
+second press closes it and the data disc is found again - the media change
+noticed through UNIT ATTENTION.
+
+![The player on a data disc](cdrom/w2-qemu-data.png)
+
+**It went in `SYSTEM\`, not on the apps floppies.** The first build put it
+in `APPS_TOOLS` and the 720 KB apps disk answered `packages need 715
+clusters; disk holds 713`. The Mixer (§34.15) had already solved the same
+problem the same way: an optional program that belongs to a driver rides
+`SYSOPTIONAL`, in `SYSTEM\` on the 720 KB, 1.2 MB and 1.44 MB system disks.
+That is also where the driver is.
+
+**86Box is the only emulator here that plays CD audio**, and nothing on this
+host can click into it. Two things made it usable anyway. A small Swift tool
+lists 86Box's windows (`CGWindowListCopyWindowInfo`), so `screencapture -l`
+captures our machine's window even when another session's 86Box is in
+front - the first whole-screen capture showed somebody else's VESA bench.
+And `\AUTOSTRT` can open a document, so the gate floppy opens
+`D:\TRACK02.CDA` with nobody at the machine.
+
+On the first boot the player came up from a package link and read the
+generated disc exactly - three tracks, 40, 30 and 20 seconds, 1:30 in all:
+
+![The TOC on 86Box](cdrom/w2-86box-toc.png)
+
+The `.CDA` link opened nothing, silently. Three things were wrong, found one
+at a time, and only the last was where it looked:
+
+1. **A drive just powered on reports UNIT ATTENTION twice** - the reset, then
+   the medium - and `cd_cmd` retried once. The player had hidden it: its
+   first poll failed and its second did not. Now `CD_UA_N` = 4.
+2. **A link's document open does not sweep `ASSOC.DAT`.** Reproduced on
+   QEMU with a test build of the driver that gives QEMU's one-track disc
+   three fake audio tracks (`-DCDSIM_AUDIO`, never shipped): the kernel's
+   association table held only the five built-ins at boot, and
+   docs/plans/ASSOC-FIND-PLAN.md §1 already describes the gap - a
+   double-click sweeps, a link and `OSAPI_PKG_START` do not. That is the
+   kernel's open item, not the driver's, so the gate floppy opens `A:\SYSTEM`
+   first, which teaches the machine whose `.CDA` is.
+3. **The player's own read of the file** used `OSAPI_FILE_GOTO_Q`, which
+   does not move the package's folder - so the name resolved in `A:\SYSTEM`
+   and the read was refused. `GOTO_QM` is the quiet move that does, the one
+   the Audio Player uses.
+
+Then, captured every six seconds through the boot:
+
+![Track 2 playing into track 3 on 86Box](cdrom/w2-86box-playing.png)
+
+On QEMU (with the test build) the same double-click opens the player, which
+reads the 44 bytes of `TRACK02.CDA` - byte-identical to SPEC.md §119.3.5's
+layout - stands on track 2, and says the drive plays no audio:
+
+![TRACK02.CDA on QEMU](cdrom/w2-qemu-cda.png)
+
+**Tested**: `tests/cdrom.py --sim` (row `cdromsim`, QEMU) for the listing,
+the association, the file's bytes and the player's state; `vm/386-cdrom`
+(86Box, looked at) for the play itself.

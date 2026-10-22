@@ -201607,7 +201607,10 @@ every poll ends with.
 
 A command answered with ERR is followed by `REQUEST SENSE` (03h): sense key
 6 (UNIT ATTENTION) means the medium changed or the drive was reset, bumps
-the **media generation** (§119.3.4) and retries the command once; key 2
+the **media generation** (§119.3.4) and sends the command again, up to
+`CD_UA_N` = 4 times - a drive just powered on reports the reset and then the
+medium, one per command, before it answers anything (86Box's did, and a
+single retry left the first command of the session refused); key 2
 with ASC 04h (becoming ready) waits and retries inside `CD_CMD_T`; key 2
 with ASC 3Ah is `CDE_NODISC`.
 
@@ -201783,8 +201786,20 @@ driver not loaded`). It polls `CDV_STATUS` every `CDP_POLL` ticks while it
 is open and repaints only the fields that changed (PERFORMANCE.md rule 1).
 A media generation that moved re-reads the TOC. Opened from a `TRACKnn.CDA`
 it plays that track. It has an About card (§12.2) and the `.CDA`
-association. It ships on every apps floppy but the 360 KB one - a CD-ROM
-wants a 286 - and on the live media.
+association, and keys: Space plays or pauses, the arrows change track, S
+stops, E ejects. Previous restarts the track once it is more than
+`CP_BACK` = 3 seconds in. Closing the player does not stop the disc.
+
+**It lives in `SYSTEM\` beside the driver, as `SYSOPTIONAL` with the Mixer
+(§34.15)**: on the 720 KB, 1.2 MB and 1.44 MB system floppies and the live
+media, not on the 360 KB one - the XT's, whose 8-bit bus CDROM.DRV refuses
+(§119.2) - and not on an apps floppy, the 720 KB one having two clusters
+spare. `kern_small` builds carry no `SYSOPTIONAL` at all.
+
+**A `.CDA` reached by a LINK or by `OSAPI_PKG_START`** finds the player only
+once something has listed `SYSTEM\`: that door does not sweep `ASSOC.DAT`
+the way a double-click does (docs/plans/ASSOC-FIND-PLAN.md §1, open on main).
+A double-click on `TRACKnn.CDA` in a Disk window always finds it.
 
 ### 119.7 The gate
 
@@ -201800,12 +201815,26 @@ lists, `..` comes back, a package launches off the CD, and a copy of the
 big file to the RAM disk is byte-identical to the host's. With the drive
 empty the volume refuses to mount and the machine carries on.
 
-**Audio cannot be checked under QEMU**, whose ATAPI drive has no audio
-commands; it answers `CDE_NOAUDIO`, which the player shows. `vm/386-cdrom`
-is a 386 under 86Box with an audio CD image (`make cdaudioimg`, a CUE/BIN of
-generated tones) and an `\AUTOSTRT` link to the CD Player, so a launch shows
-the player running a track; 86Box cannot be driven from this host, so that
-machine is for looking.
+**Audio cannot be played under QEMU**, whose ATAPI drive has no audio
+commands and holds one data track. So the gate builds the driver a second
+time, `-DCDSIM_AUDIO` (`build/cdromsim.img`, never shipped - the CH375
+model's shape, §9.12.6): `cd_simtoc` gives the one-track disc three audio
+tracks after it, 40, 30 and 20 seconds. `tests/cdrom.py --sim` (row
+`cdromsim`) checks the root lists `TRACK02.CDA`..`TRACK04.CDA`, and that a
+double-click on `TRACK02.CDA` opens the CD Player through the association,
+which reads the file's 44 bytes - compared byte for byte with §119.3.5's
+layout - stands on track 2, and on QEMU's refusal says the drive plays no
+audio.
+
+**The play is `vm/386-cdrom`'s** (`make 386-cdrom`): a 386 under 86Box with
+the CD-ROM on the secondary master holding `build/cdaudio.cue` (`make
+cdaudioimg`, three generated tones of 40, 30 and 20 seconds) and
+`build/cdaudiotest.img`, whose `\AUTOSTRT` opens `A:\SYSTEM` and then
+`D:\TRACK02.CDA` (the folder first, for the link door's reason in §119.6).
+86Box cannot be driven from this host, so the machine is for LOOKING:
+captured through the boot, the player counted track 2 from 00:10 to 00:29,
+rolled into track 3 and stopped at the end of the disc
+(docs/HOW-CDROM-WAS-BUILT.md has the frames).
 
 ### 119.8 Not done
 
