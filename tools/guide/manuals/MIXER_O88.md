@@ -9,15 +9,15 @@ tone adjustments. The card determines which controls are available.
 
 ## Starting Mixer
 
-Click the speaker beside the clock and choose **Open Mixer...**. This command
-appears when **MIXER.O88** is in the boot disk's `SYSTEM` folder. You can also
-open that folder and double-click the program. Several Mixer windows can be
-open; they all control the same card and show its current settings.
+Open the apps disk's `APPS` folder and double-click **MIXER.O88**.
+Several Mixer windows can be open; they all control the same card and show
+its current settings.
 
 Mixer needs [[SOUND.DRV]] loaded and a compatible Sound Blaster mixer.
-The larger system floppies and live media carry it. The 360KB system floppy
-leaves it out; its speaker still offers quick master volume. You can copy
-MIXER.O88 into an installed system's SYSTEM folder.
+All four apps disk sizes and live media carry it. The system floppies leave
+it out; the speaker beside the clock offers quick master volume separately.
+The small system's apps disks omit Mixer because they do not load the sound
+driver.
 
 ## Choosing a source
 
@@ -29,8 +29,9 @@ adjust those inputs where the card offers them.
 ![PCM selected on a mono mixer.](shot:mixer-pcm){right}
 
 Click a scale or drag its thumb. Changes take effect immediately. The
-percentage reflects the nearest level the hardware can produce, so it can
-move in fairly large steps on older cards.
+thumb follows the requested percentage smoothly. Older cards still apply
+the nearest hardware level. Arrow keys adjust by one percent. The control
+keeps your chosen position until the source or its hardware setting changes.
 
 For stereo sources, **Level** changes both sides together and **Balance**
 moves the sound left or right. Equal sides put balance in the middle. A mono

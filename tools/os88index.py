@@ -495,7 +495,7 @@ def packages():
     # only", which is the one thing neither is
     shipped = set(re.findall(r"\$\(BUILD\)/([a-z0-9]+)\.o88",
                              make_expand("$(ALLAPPSFILES) $(SYSAPPS) "
-                                         "$(STIKAPPS) $(SYSTOOLS) $(SYSOPTIONAL)", mvars)))
+                                         "$(STIKAPPS) $(SYSTOOLS)", mvars)))
     retired = set()
     rp = os.path.join(ROOT, "apps", "RETIRED.txt")
     if os.path.exists(rp):

@@ -1055,6 +1055,30 @@ fpg_finish:
                                 ; flags" - the same contract the two `fpg_span`
                                 ; calls that used to be here were collapsed on
     call gfx_fill
+%ifdef VID_EXT
+                                ; --- and the TEXT BAND too, where no cell can
+                                ; reach it (SPEC.md 120.5): menu_bar_text
+                                ; composes at most MENU_BCMAX cells, and a
+                                ; 1024-wide bar puts the widget past them, so
+                                ; the run below would repaint none of it and
+                                ; the icon's middle and the trough stayed up
+                                ; after every transfer. A 640- or 720-wide
+                                ; bar sits inside the cap, and this is a
+                                ; compare and a jump there
+    call fpg_span               ; AX = x1, CX = x2 again
+    cmp ax, MENU_TXT_X0 + MENU_BCMAX * 8    ; the first x past the composed
+    jae .band                   ; cells
+    mov ax, MENU_TXT_X0 + MENU_BCMAX * 8
+.band:
+    cmp ax, cx
+    ja .nband
+    xor bh, bh                  ; (a byte move and a word move: 29 bytes keeps
+    mov bl, MENU_TEXT_Y         ; ui_task's parity beside SPEC.md 119's rows,
+    mov dx, MENU_TEXT_Y + 7     ; tests/unit/t_hotpar.py)
+    call gfx_fill               ; (the ground is still thm_bg's)
+.nband:
+    call fpg_span               ; AX/CX = the whole span, for menu_inval
+%endif
 
     call menu_inval             ; **THE TEXT BAND IS OURS TO ASK FOR.** The
                                 ; box's rows MENU_TEXT_Y..+7 are erased by

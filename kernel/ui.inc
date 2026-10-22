@@ -485,10 +485,10 @@ ui_task:
     test word [drv_svc+DSV_CAPS], SND_CAP_MIXER
     jz .date_cell
     mov ax, cx
-    sub ax, [vid_clk_hx]
+    sub ax, [menu_mixx]
     cmp ax, 24
     jae .date_cell
-    mov cx, [vid_clk_hx]
+    mov cx, [menu_mixx]
     push ds
     pop es
     mov di, ui_volume_bridge

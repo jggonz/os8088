@@ -1,5 +1,64 @@
 # How Mixer was built
 
+The original delivery below included an optional launcher in quick volume.
+That launcher and its package discovery have since been removed: the popup
+contains only master volume, and Mixer ships in `APPS/` on the apps disks
+and live media. No system floppy carries Mixer. The popup now saves 2KB on
+mono adapters or 8KB on color adapters. SPEC.md §34.15 is the current contract.
+
+The removal leaves SOUND.DRV at 11,064 bytes, an 11KB loaded claim. An
+independent FAT12 walk checks Mixer in `APPS/` on all four apps geometries
+and absent from all four system floppies; the live payload also uses `APPS/`.
+WireChat's existing LZB packaging path saves three 1KB clusters to keep the
+720KB apps disk's programs and samples intact, with an identical expanded
+image and a slower decode at launch. All 55 fast checks, the four mixer UI
+rows, `smallreq`, `lzbclust` and all 63 full-gate rows passed. The final UI
+pictures were inspected on CGA, Hercules and VGA; SB16 passed with the
+driver in both normal memory and the HMA.
+
+The follow-up makes quick volume and Mixer's controls retain each requested
+percentage instead of snapping the thumb to the hardware's coarse readback.
+Arrow keys move one percent. Mixer retains the requested position across
+idle polling and repainting, while changed hardware readback or a source
+change still refreshes it. The card continues to use its supported levels.
+
+The speaker now floats immediately before the visible clock text. Clock
+padding is painted around it, including the vacated progress-widget cells;
+a fallback notification temporarily moves it to the reserved left edge.
+The icon takes the menu bar's live ink and background. CGA and Hercules
+invert its bitmap for Dark using existing driver scratch, since their
+BLIT1 path consumes screen-polarity bits rather than a color pair.
+
+Against the removal commit, kernel text grows by 106 bytes to 43,356, with
+no additional persistent state or rounded footprint increase: kern_big is
+still 97,792 bytes and kern_emu 98,304. SOUND.DRV is 11,076 bytes and still
+claims 11KB. The memory baseline now also records the earlier Mixer work
+on kern_emu and kern_small. The seven final UI/regression rows pass,
+covering smooth same-step movement, idle readback, clock-format changes,
+theme pixels, notifications, progress cleanup and heap/HMA SB16 playback.
+The Dark CGA/Hercules and Color VGA pictures were inspected after the pass.
+All 63 full-gate rows also passed.
+
+The PR integrates main's CD-ROM work without moving its player: CDRack is
+the sole `SYSOPTIONAL` package on the roomy system disks and live media;
+Mixer remains in `APPS/`. An independent FAT12 walk checks both placements
+on all eight shipping floppies. With main's extra driver-class metadata,
+kern_big is 98,304 bytes, one 512-byte rung above the pre-integration
+follow-up. kern_emu stays 98,304 and kern_small 61,440. All three retain
+2,560 bytes under their existing budgets.
+
+VESA landed while the PR was being gated and is integrated too. The popup
+already used the display's actual depth; its new `mixervesa` row checks
+the 30KB claim at 1024x768x16, exact restoration, smooth controls, speaker
+pixels and cleanup. The combined CD-ROM/VESA rows also require
+`DQ_MAXREC` = 10 on kern_emu; the kernel and both SDKs now agree. VESA is
+kept by suspend, so older record buffers receive no extra record. The
+memory report counts `vidext.inc` with the other drawing modules.
+The final footprints are 98,816 bytes for big/emu and 61,440 for small,
+leaving 2,048, 2,048 and 2,560 bytes under their existing budgets.
+The final display checks and all 64 full-gate rows pass; all three release
+budget checks pass too. The VESA popup picture was inspected after the run.
+
 ## Foundation
 
 The request combines a global desktop control with optional installed

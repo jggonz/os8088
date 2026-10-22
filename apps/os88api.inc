@@ -1119,8 +1119,14 @@ FDLG_SAVE  equ 1                 ; coming back
                                  ; BX = height, CX = the first row the dock
                                  ; owns (so the usable desktop is rows MBAR_H
                                  ; .. CX-1), DL = 0 VGA / 1 Hercules / 2 CGA /
-                                 ; 3 EGA, DH = bits per pixel, 4 or 1. Callable
-                                 ; from any context, lock held or not.
+                                 ; 3 EGA / 4 VESA, DH = bits per pixel: 4 or 1,
+                                 ; and 8 or 16 on a VESA display (SPEC.md 120),
+                                 ; whose desktop is still the sixteen colours
+                                 ; - OSAPI_GFX_BLITD is the one way past them.
+                                 ; COLOUR IS DH >= 4 AND NEVER DH == 4 (120.5):
+                                 ; seven packages had it the other way and drew
+                                 ; mono, or sized a save-under at a sixteenth.
+                                 ; Callable from any context, lock held or not.
                                  ;
                                  ; DON'T switch on DL as a fourth case: EGA is
                                  ; VGA's planar path at 640x350 (DH = 4). The
@@ -1131,6 +1137,10 @@ VID_VGA    equ 0                 ; the DL values
 VID_HERC   equ 1
 VID_CGA    equ 2
 VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.24)
+VID_VESA  equ 4             ; a packed VESA display (SPEC.md 120): square
+                            ; pixels, 8 or 16 bits each; the desktop is
+                            ; still sixteen colours and OSAPI_GFX_BLITD is
+                            ; the way to the rest
 ;
 ; On a 1bpp adapter every colour you pass is reduced to black, white or a
 ; 50% dither (SPEC.md 39.4): 0..6 go black, 12/14/15 go white, and 7..11
@@ -1811,6 +1821,13 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
 ;
 ;   bytes = planes * (y2-y1+1) * ((x2>>3) - (x1>>3) + 1)
 ;
+; ...with planes = DH AS IT COMES: 4 on VGA and EGA, 1 on a 1bpp card, and 8
+; or 16 on a packed VESA display (SPEC.md 120.5), where the save is the pixels
+; themselves and DH is the BYTES a column. Never fold it to 4-or-1: a package
+; that did sized a 16bpp save at a sixteenth, and the kernel wrote the rest
+; over whatever followed the claim. The product passes 64KB on a 1024-wide
+; display, so keep DX.
+;
 ; x1 is rounded DOWN to a byte column and x2 UP, which the formula already
 ; carries. The layout is plane-major: all of plane 0's rows, then plane 1,
 ; then 2, then 3 - one plane only on a 1bpp adapter.
@@ -1861,6 +1878,29 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
                                  ; hundreds of OSAPI_GFX_HLINE calls a
                                  ; hand-rolled run-length blitter would make.
                                  ; Honours the clip region.
+; --- a block at the DISPLAY'S DEPTH (SPEC.md 120.7) ------------------------
+; The desktop is sixteen colours on every adapter, and OSAPI_GFX_BLIT4 is how
+; a block of them is drawn. On a VESA display (OSAPI_VIDEO's DL = 4, DH = 8
+; or 16) the card has more, and this cell is the one way a package reaches
+; them: the pixels are handed over AS THE MODE PACKS THEM - a byte an index
+; at 8bpp, an RGB565 word at 16 - and the driver puts them where they go,
+; clipped to the display in both axes and to nothing else: no clip region,
+; no window, so draw inside your own content rect on a window you know to be
+; in front. At 8bpp the bytes are DAC indices, and entries 16..255 are yours
+; to load through the PALETTE FORM: CX = 0, ES:SI = DX triples (a byte a
+; gun, 0..255), AX = the first entry (16 or more; AX + DX at most 256).
+; Entries 0..15 stay the desktop's.
+;
+; **CF = 1 IS A REFUSAL AND YOU MUST READ IT**: a display that is not VESA, a
+; kernel without the hook, a palette form at 16bpp or out of range - and
+; nothing was drawn. Test OSAPI_VIDEO's DH FIRST and keep the sixteen-colour
+; path you already have (PiXEL: SPEC.md 106.27). ES is yours here, as in
+; OSAPI_GFX_BLIT4 - a plain cell, no stub.
+%define OSAPI_GFX_BLITD     KERNEL_SEG:0x04AB   ; ES:SI = pixels at the depth,
+                                 ; BP = source stride in BYTES, AX/BX = x/y
+                                 ; (signed), CX/DX = width/height in pixels;
+                                 ; CX = 0: the palette form above. out CF = 1
+                                 ; refused, nothing drawn
 %define OSAPI_GFX_BLIT1     KERNEL_SEG:0x0320   ; ES:SI = a 1bpp BAND in the
                                  ; framebuffer's own bit order (row-major, bit
                                  ; 7 leftmost, 1 = a LIT pixel), BP = its
@@ -2012,7 +2052,7 @@ CPU_F_PM            equ 0x10     ; SEGMENTS ARE SELECTORS: kern_mega is in
 ; by an LDT selector the shift cannot convert, so code that cannot know where
 ; its claim is - or that takes a selector from somewhere else - asks
 ; OSAPI_MEM_CODESEL instead, which is right for both.
-%define OSAPI_MEM_CODESEL   KERNEL_SEG:0x04B1   ; DX = the segment (or
+%define OSAPI_MEM_CODESEL   KERNEL_SEG:0x04B9   ; DX = the segment (or
                                  ; selector) a claim of yours is named by; out
                                  ; CF=0 and AX = the selector to FAR CALL code
                                  ; in it: DX itself on a real-mode kernel, its
@@ -2047,7 +2087,7 @@ OS88_HUGE_INCR      equ 0x1000
 ; descriptor. Ask this cell instead, and on CF = 1 do the sum yourself -
 ; which is every kernel but kern_mega, and kern_mega whenever your region is
 ; in conventional memory, so the fallback is the code you had.
-%define OSAPI_MEM_SUBSEG    KERNEL_SEG:0x04C9   ; AX = a PARAGRAPH offset into
+%define OSAPI_MEM_SUBSEG    KERNEL_SEG:0x04D1   ; AX = a PARAGRAPH offset into
                                  ; your OWN region (from your DS, which must
                                  ; be your region's), BL bit 0 = you will FAR
                                  ; CALL code there, BL bit 1 = CX is the
@@ -2498,7 +2538,7 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; from extended. out CF=0 done; CF=1 and AX =
                                  ; 1 no store / 2 the range is not inside a
                                  ; block you own / 3 bad length. ES is restored.
-%define OSAPI_XMEM_WALK     KERNEL_SEG:0x04B7   ; ES:DI = room for CX records
+%define OSAPI_XMEM_WALK     KERNEL_SEG:0x04BF   ; ES:DI = room for CX records
                                  ; of XMW_SIZE bytes; out CF=0 and AX = the
                                  ; extended pool's blocks written, each
                                  ; XMW_OFF (KB from the pool's base, which
@@ -2522,7 +2562,7 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; NEGATIVE (below the base) - they tile the
                                  ; span exactly. Every other kernel ignores BX
                                  ; and writes 0 at XMW_CLS
-%define OSAPI_MEM_HUGE      KERNEL_SEG:0x04BD   ; A CLAIM OF ANY SIZE, walked
+%define OSAPI_MEM_HUGE      KERNEL_SEG:0x04C5   ; A CLAIM OF ANY SIZE, walked
                                  ; by a STEP (KERN-MEGA-PLAN 14.1 answers 6,
                                  ; 7): AX = KB (1..65535); out CF=0, DX = its
                                  ; first segment or selector and CX = the step
@@ -2572,7 +2612,7 @@ XMW_GDT     equ 0xF1            ; ...the GDT
 XMW_LDT     equ 0xF2            ; ...the LDT and the IDT
 XMW_KCODE   equ 0xF3            ; ...`.cold` and `.mega`
 XMW_PAD     equ 0xF4            ; ...and the padding up to the pool's base
-%define OSAPI_XMEM_SEL      KERNEL_SEG:0x04AB   ; DX:AX = an address inside a
+%define OSAPI_XMEM_SEL      KERNEL_SEG:0x04B3   ; DX:AX = an address inside a
                                  ; block YOU own, CX = bytes (0 = 64KB); out
                                  ; CF=0 and AX = a DATA SELECTOR whose segment
                                  ; covers exactly that window - load it into
@@ -2587,7 +2627,7 @@ XMW_PAD     equ 0xF4            ; ...and the padding up to the pool's base
                                  ; os88ub.inc) or none free / 2 not inside a
                                  ; block you own. UI-task context, like the
                                  ; four above (KERN-MEGA-PLAN 12.2).
-%define OSAPI_XMEM_RUN      KERNEL_SEG:0x04C3   ; DX:AX = the TOKEN of a block
+%define OSAPI_XMEM_RUN      KERNEL_SEG:0x04CB   ; DX:AX = the TOKEN of a block
                                  ; YOU own (OSAPI_XMEM_ALLOC's answer, its
                                  ; base); out CF=0, DX = the first of a RUN of
                                  ; DATA SELECTORS and CX = the step between
@@ -2851,10 +2891,10 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 9                 ; the most records one call can write, so
+DQ_MAXREC  equ 10                ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
-                                 ; which is 6, 5 or 4 depending on the
+                                 ; which is 10, 9 or 4 depending on the
                                  ; build and is asserted against this at
                                  ; assembly time (SPEC.md 51.11.2)
 %define OSAPI_DRV_SUSPEND   KERNEL_SEG:0x0419   ; AL = 1 suspend / 0 resume /
@@ -6140,9 +6180,10 @@ WHEEL_STEPS equ 3                ; LINES of text one wheel notch scrolls
                                  ; window. Out: AX = width, BX = height, CX =
                                  ; the first row the dock owns, SI = the first
                                  ; row the desktop band has, DL = 0 VGA / 1
-                                 ; Hercules / 2 CGA / 3 EGA (the VID_* kinds),
-                                 ; DH = bits per pixel. DI preserved; no lock
-                                 ; needed, any context.
+                                 ; Hercules / 2 CGA / 3 EGA / 4 VESA (the VID_*
+                                 ; kinds), DH = bits per pixel - 4, 1, or 8
+                                 ; or 16 on a VESA display (SPEC.md 120). DI
+                                 ; preserved; no lock needed, any context.
                                  ;
                                  ; **OSAPI_VIDEO ANSWERS ABOUT THE PRIMARY**
                                  ; (SPEC.md 39.2.1) and is right to - but on a

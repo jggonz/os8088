@@ -37,7 +37,7 @@ u16 = dispsize.u16
 
 TITLE_H = 18
 CP_RX, CP_PGX = 96, 4
-CPH_ROWS = {"Bright": 22, "Dark": 38, "Color": 55}      # pane-relative y
+CPH_ROWS = {"Bright": 22, "Dark": 38, "Color": 55, "Windows": 71}
 CP_ITHM = 5                                             # kernel/ctrl.inc
 
 # SPEC.md 39.14's kind byte, from the ONE place that mirrors the record. It

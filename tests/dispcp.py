@@ -75,6 +75,10 @@ CPV_MY, CPV_MSTEP = 106, 74         # SPEC.md 31.10.3 moved this row DOWN, from
                                     # dual-display test in this directory fails
                                     # pointing at the kernel
 CPV_R0Y, CPV_ROWH = 20, 16          # the ADAPTER rows, which pick the primary
+                                    # - and the PITCH is the build's: 12 on a
+                                    # kern_big with the external renderer
+                                    # (SPEC.md 120.6: four rows), 16 without.
+                                    # _rowh() reads the equ out of the map
 CPV_BTNX, CPV_BTNY = 2, 72          # ...and the Set Primary button under them
 
 MODES = {"single": 0, "right": 1, "below": 2}
@@ -245,6 +249,15 @@ def close_panel(m, mo, S, settle, card=None):
                 "SYSTEM.CFG to be written ([cp_wdirty] still set)", 30.0)
 
 
+def _rowh():
+    """ctrl.inc's CPV_ROWH for THIS build (16, or 12 under VID_EXT)."""
+    try:
+        import os88sym
+        return int(os88sym.equates().get("CPV_ROWH", CPV_ROWH))
+    except Exception:
+        return CPV_ROWH
+
+
 def adapter_row(avail, kind):
     """Which row of the Display page's adapter list is VID_* `kind`?
 
@@ -272,7 +285,7 @@ def adapter_kind(avail, slot):
     row, like the user's eye does; the guest word is in the other space.
     """
     n = 0
-    for kind in range(4):               # VGA / HERC / CGA / EGA
+    for kind in range(5):               # VGA / HERC / CGA / EGA / VESA
         if avail & (1 << kind):
             if n == slot:
                 return kind
@@ -293,7 +306,7 @@ def set_primary(m, mo, S, settle, slot, card=None):
     """
     wx, wy = _cp_win(m, S)
     mo.click(wx + 1 + CP_RX + CP_PGX + 6,
-             wy + TITLE_H + 1 + CPV_R0Y + slot * CPV_ROWH + 6, settle=0)
+             wy + TITLE_H + 1 + CPV_R0Y + slot * _rowh() + 6, settle=0)
     # THE ROW ONLY SELECTS; the button commits. [cp_vsel] is that pending
     # choice, so a row click that missed is caught here - where it used to
     # surface as "Set Primary did nothing", which is the wrong half.

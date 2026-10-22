@@ -71,6 +71,7 @@
 0 1 drivers/net/lplink.inc  # ES = the driver's own buffer
 0 1 drivers/usbmouse/usbmouse.asm  # the CH375 poll points DS at its own image
 0 1 drivers/thmpal/thmpal.asm  # the palette driver's own table, through DS
+16 4 drivers/vesa/vesa.asm  # VESA.DRV's state and verb buffers, through CS. kern_mega builds without VID_EXT (kernel.asm, SPEC.md 120.3), so it has no VESA row and never loads this image
 
 # --- apps/pixel: PiXEL, the package and its parts (KERN-MEGA-PLAN 14.40) ----
 # Zero writes through CS since 14.40: a part's own words go through

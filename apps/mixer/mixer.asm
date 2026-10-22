@@ -78,17 +78,21 @@ mx_fetch:
     mov bl, SNDV_MIXGET
     call OSAPI_DRV_CALL
     jc .none
+    mov al, [mx_sel]
+    cmp al, [mx_source]
+    jne .changed
+    cmp dl, [mx_flags]
+    jne .changed
+    cmp cx, [mx_pair]
+    je .same                   ; retain the smooth position for our last write
+.changed:
+    mov [mx_source], al
     mov [mx_pair], cx
     mov [mx_flags], dl
     test dl, MIX_STEREO
     jnz .stereo
     mov byte [mx_focus], 0
 .stereo:
-    mov al, 100
-    xor ah, ah
-    div dh
-    inc al
-    mov [mx_step], al
     mov al, cl
     cmp al, ch
     jae .level
@@ -125,10 +129,12 @@ mx_fetch:
     mov al, ah
 .balance:
     mov [mx_balance], al
+.same:
     clc
     ret
 .none:
     mov word [mx_mask], 0
+    mov byte [mx_source], 0FFh
     stc
     ret
 
@@ -425,8 +431,8 @@ mx_up:
     mov byte [mx_dragging], 0
     ret
 
-; AL=desired level/balance. Only the control band is repainted. Querying
-; afterwards presents the hardware's quantized percentage, never a guess.
+; AL=desired level/balance. Keep its smooth position, and bank the actual
+; readback separately so polling still sees writes from another instance.
 mx_apply:
     mov [mx_wanted], al
     cmp word [mx_mask], 0
@@ -469,7 +475,20 @@ mx_apply:
     mov al, [mx_sel]
     mov bx, DRVC_SOUND*256 + SNDV_MIXSET
     call OSAPI_DRV_CALL
+    jc .refresh
     call mx_fetch
+    jc .paint
+    mov al, [mx_wanted]
+    cmp byte [mx_focus], 0
+    jne .wantedright
+    mov [mx_level], al
+    jmp short .paint
+.wantedright:
+    mov [mx_balance], al
+    jmp short .paint
+.refresh:
+    call mx_fetch
+.paint:
     call mx_clip
     jc .out
     call mx_controls
@@ -502,7 +521,7 @@ mx_key_do:
     cmp ah, 4Dh
     jne mx_ret
     call mx_keybase
-    add al, [mx_step]
+    add al, 1
     cmp al, 100
     jbe .apply
 .end:
@@ -513,7 +532,7 @@ mx_key_do:
     jmp short .apply
 .less:
     call mx_keybase
-    sub al, [mx_step]
+    sub al, 1
     jnc .apply
     xor al, al
 .apply:
@@ -665,7 +684,7 @@ mx_chip: db 0
 mx_sel: db 0
 mx_oldsel: db 0
 mx_flags: db 0
-mx_step: db 0
+mx_source: db 0FFh
 mx_level: db 0
 mx_balance: db 0
 mx_focus: db 0

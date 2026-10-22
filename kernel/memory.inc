@@ -4510,7 +4510,7 @@ osapi_mem_claim_dma_x:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_huge - OSAPI_MEM_HUGE (0x04BD, KERN-MEGA-PLAN 14.1 answers 6, 7):
+; osapi_mem_huge - OSAPI_MEM_HUGE (0x04C5, KERN-MEGA-PLAN 14.1 answers 6, 7):
 ; in:  AX = KB (1..65535), ES = the caller's segment
 ; out: CF = 0, DX = the claim's first segment or selector and CX = the STEP to
 ;      the next 64KB of it: 1000h for a conventional claim on every kernel,

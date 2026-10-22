@@ -25,7 +25,6 @@
 # --- sentinels: ES = 0 as "none", never read through ----------------------------
 1 kernel/stikmenu.inc  # stm_a_launch: ES = 0, no document, for ldf_ld_pkg_start
 1 drivers/net/pktdrv.inc  # pk_recv's refusal: ES:DI = 0:0 is the packet-driver ABI's "no buffer"
-1 drivers/sound/volume.inc  # the menu-bar volume's Mixer launch: ES = 0, no document, for OSAPI_PKG_START
 
 # --- knob-only ---------------------------------------------------------------------
 1 kernel/bootprof.inc  # BOOTPROF=1's table

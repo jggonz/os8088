@@ -9938,7 +9938,13 @@ them in their own order: `OSAPI_XMEM_SEL` **0x04AB**, `OSAPI_MEM_CODESEL`
 **0x04B1**, `OSAPI_XMEM_WALK` **0x04B7**, `OSAPI_MEM_HUGE` **0x04BD**,
 `OSAPI_XMEM_RUN` **0x04C3**, `OSAPI_MEM_SUBSEG` **0x04C9**; `osapi_table_end`
 0x04CF, 113 rare cells, 1,215 bytes (SPEC.md 2.6's paragraph and kernel.asm's
-guard). Every offset this document quotes for those six above this section is
+guard). **Moved again at the second main merge (2026-10-22, the
+PR #299 review):** main's `OSAPI_GFX_BLITD` (SPEC.md 120.7) had taken 0x04AB,
+so the six follow it by the same rule - 0x04B3, 0x04B9, 0x04BF, 0x04C5,
+0x04CB, 0x04D1, `osapi_table_end` 0x04D7, 1,223 bytes - and `PKG_FMT` stays
+for the same reason. That merge also leaves `VID_EXT` off kern_mega
+(kernel.asm, SPEC.md 120.3): VESA.DRV is a real-mode driver writing through
+CS, and `[vx_ep]` a seg:off protected mode cannot far call. Every offset this document quotes for those six above this section is
 the number before the merge. **`PKG_FMT` is not bumped**: nothing main or a
 release ever built calls a moved cell, so all of it still runs; what breaks is
 a package built from `elendilon` BEFORE this merge that calls one of the six -

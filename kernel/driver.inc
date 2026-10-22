@@ -41,8 +41,16 @@
 ; happens.
 ; =============================================================================
 
+%ifdef VID_EXT
+DRV_VX      equ 1               ; ...plus VESA.DRV's row, LAST on both big
+%else                           ; builds (SPEC.md 120.1): a DRVC_OVL row like
+DRV_VX      equ 0               ; the absolute mouse's, with a SYSTEM.CFG bit
+%endif                          ; (drv_cfgbit's 9) and a Drivers-page tick.
+                                ; An `equ` and not a %define, so that
+                                ; tests/unit/t_drvmem.py's expression reader
+                                ; can evaluate DRV_MAX
 %ifdef KERN_EMU
-DRV_MAX     equ 9               ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 9 + DRV_VX      ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -58,7 +66,7 @@ DRV_MAX     equ 9               ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; and the NINTH its eighth, CDROM.DRV (SPEC.md
                                 ; 119)
 %elifdef KERN_BIG
-DRV_MAX     equ 8               ; ...and kern_big stops at CDROM.DRV (SPEC.md
+DRV_MAX     equ 8 + DRV_VX      ; ...and kern_big stops at CDROM.DRV (SPEC.md
                                 ; 119), after EMS.DRV (SPEC.md 107), after the
                                 ; CH375 USB mouse (SPEC.md
                                 ; 9.12), appended after the parallel link so
@@ -383,7 +391,7 @@ DQ_A        equ 2               ; dw: the CLASS's own three words - for
 DQ_B        equ 4               ; dw: DRVC_SOUND, the DSP base port, then
 DQ_C        equ 6               ; dw: (IRQ | DMA<<8), then the DSP version
 DQ_SIZE     equ 8
-DQ_MAXREC   equ 9               ; the most records one call can write. It is
+DQ_MAXREC   equ 10              ; the most records one call can write. It is
 %if DRV_MAX > DQ_MAXREC         ; MIRRORED in apps/os88api.inc, so a caller can
 %error "DRV_MAX exceeds DQ_MAXREC - widen it here AND in apps/os88api.inc"
 %endif                          ; size a buffer without mirroring DRV_MAX - and
@@ -684,21 +692,38 @@ CFG_VID     equ 6               ; db: the display adapter (SPEC.md 39.11.3) -
                                 ; booting this one to a dead monitor
 CFG_VDM     equ 7               ; db: [vid_dmode], Single or Extend (39.19)
 CFG_VDL     equ 8               ; db: [vid_dlay], where display 1 sits. Both
+CFG_VEL     equ 1 * DRV_VX      ; ...AND THE PACKED DISPLAY'S MODE CLASS RIDES
+                                ; THE 'VM' RECORD (SPEC.md 120.2.3): ONE byte
+                                ; after the arrangement (vxabi.inc's VXC_*, 0
+                                ; = Auto) on a build with the external
+                                ; renderer, none without. 'VM' is ver 3 for
+                                ; it, as it went to 2 when the arrangement
+                                ; joined (39.11.3): an old record stops
+                                ; matching and the defaults stand ONCE. A key
+                                ; of its own was written first and refused by
+                                ; the blob, which had two bytes left; then four
+                                ; bytes here, refused by the same blob - the
+                                ; file buffer ovc_buf is blob bytes, and ONE
+                                ; was what it had (docs/plans/VESA-PLAN.md)
+CFG_VE      equ 9               ; db (none without VID_EXT): CFG_VGC's shape -
+                                ; no kernel byte holds it, the Display page
+                                ; edits it here, vx_boot_x hands it to the
+                                ; driver at attach
                                 ; range-checked before they are stored, on
                                 ; CFG_SCH's terms: a byte from a future
                                 ; version leaves the default alone rather
                                 ; than selecting nonsense
-CFG_THM     equ 9               ; db: [thm_kind], the theme (SPEC.md 76). A
+CFG_THM     equ 9 + CFG_VEL               ; db: [thm_kind], the theme (SPEC.md 76). A
                                 ; plain store like CFG_RT, but the unpack
                                 ; re-resolves the two chrome pens from it
-CFG_ANIM    equ 10              ; db: [wm_animon], SPEC.md 11.99's zoom
+CFG_ANIM    equ 10 + CFG_VEL              ; db: [wm_animon], SPEC.md 11.99's zoom
                                 ; (SPEC.md 76.11). Carried in EVERY build,
                                 ; including one with no animation in it, so a
                                 ; kernel swap does not silently turn it back on
-CFG_SSM     equ 11              ; db: [ss_modes], which screen-saver modes the
+CFG_SSM     equ 11 + CFG_VEL              ; db: [ss_modes], which screen-saver modes the
                                 ; picker may choose from (SPEC.md 79.4)
-CFG_SSS     equ 12              ; db: [ss_secs], seconds one of them runs
-CFG_SSN     equ 13              ; db: [ss_mins], minutes of idle before any of
+CFG_SSS     equ 12 + CFG_VEL              ; db: [ss_secs], seconds one of them runs
+CFG_SSN     equ 13 + CFG_VEL              ; db: [ss_mins], minutes of idle before any of
                                 ; it starts, 0 = never. ALL THREE ARE CARRIED
                                 ; IN EVERY BUILD, CFG_ANIM's rule one setting
                                 ; over: kern_small has no SAVER.DRV and still
@@ -706,13 +731,13 @@ CFG_SSN     equ 13              ; db: [ss_mins], minutes of idle before any of
                                 ; between the two kernels must not come back
                                 ; with the modes silently re-ticked
 %ifdef DOCK_OPT
-CFG_DOCK    equ 14              ; db: [dock_cfg], where the dock stands and
+CFG_DOCK    equ 14 + CFG_VEL              ; db: [dock_cfg], where the dock stands and
                                 ; whether it hides (SPEC.md 30.5). A plain
                                 ; store, and the unpack re-derives the
                                 ; geometry from it, because that is not one
-CFG_DBLOB   equ 15              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_DBLOB   equ 15 + CFG_VEL              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
 %else
-CFG_DBLOB   equ 14              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_DBLOB   equ 14 + CFG_VEL              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
 %endif
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
@@ -865,7 +890,14 @@ DRV_CFG_MAPN equ 8
     dw 'SM'                     ; Scheduler Mode
     db 1, 1, CFG_SCH
     dw 'VM'                     ; Video Mode - which adapter, then SPEC.md
+%ifdef VID_EXT
+    db 3, 4, CFG_VID            ; 39.19's two arrangement bytes, then the
+                                ; packed display's mode class (SPEC.md
+                                ; 120.2.3, CFG_VE) - ver 3 for the widening,
+                                ; the ver-2 story below used once more
+%else
     db 2, 3, CFG_VID            ; 39.19's two arrangement bytes. ver 2 because
+%endif
                                 ; it WAS one byte: an old record's VM stops
                                 ; matching and the defaults stand, which is
                                 ; this table's whole compatibility story used
@@ -967,6 +999,10 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
 %ifdef KERN_EMU
     db 0, 1, 4, 2, 3, 5, 6, 7, 8 ; sound, hdd, ether, ramdisk, net, vmmouse,
                                 ; usbmouse, ems, cd-rom
+%ifdef VID_EXT
+    db 9                        ; ...and VESA.DRV: BIT 9 ON BOTH BUILDS (8 is
+%endif
+                                ; the CD-ROM's, SPEC.md 119.1)
 %elifdef KERN_BIG
     db 0, 1, 4, 2, 3, 6, 7, 8   ; sound, hdd, ether, ramdisk, net, usbmouse,
                                 ; ems, cd-rom (bit 8 on both: SPEC.md 119.1)
@@ -974,6 +1010,10 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
                                 ; row 6 there: bit 5 is the absolute mouse's
                                 ; even on a build that has no such row (SPEC.md
                                 ; 9.12). And EMS is bit 7 on both (SPEC.md 107)
+%ifdef VID_EXT
+    db 9                        ; ...and VESA.DRV, bit 9 (SPEC.md 120.1): 8
+                                ; is the CD-ROM's
+%endif
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
 %endif
@@ -1079,6 +1119,10 @@ drv_t_vmm:   db 'Absolute mouse', 0  ; ALONE (SPEC.md 9.11.7) - 27 bytes that
                                 ; mechanism and has no use for this driver
 %endif
 %ifdef KERN_BIG
+%ifdef VID_EXT
+drv_f_vesa:  db 'VESA.DRV', 0    ; SPEC.md 120's packed-pixel display: kern_big's
+drv_t_vesa:  db 'VESA Display', 0 ; and kern_emu's, never kern_small's
+%endif
 drv_f_ems:   db 'EMS.DRV', 0     ; SPEC.md 107's expanded memory: kern_big's
 drv_t_ems:   db 'EMS', 0         ; for the reason the USB mouse's line gives
 drv_f_cd:    db 'CDROM.DRV', 0   ; SPEC.md 119's CD-ROM, kern_big's for the
@@ -1362,6 +1406,20 @@ usbm_row:                       ; ...a label for tests/usbmouse.py, which finds
                                 ; probes
     db DRVE_OK
     db 0
+%ifdef VID_EXT
+vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
+    dw PKG_DISP, 0              ; tests/vesa.py. Row 8 (9 on kern_emu):
+    dw drv_f_vesa, drv_t_vesa   ; VESA.DRV, the packed-pixel display's renderer
+    dw 0, 0                     ; (SPEC.md 120). DRVC_OVL WITH A ROW, the
+    db DRVC_OVL                 ; absolute mouse's shape and for its reason:
+                                ; the kernel is its only caller (vx_ep) so no
+                                ; class is needed, and the tick is the user's
+                                ; decision to put the desktop on the VBE
+    db 0                        ; NOT wanted by default (SPEC.md 51.3): the
+                                ; probe is an int 10h on every boot otherwise
+    db DRVE_OK
+    db 0
+%endif
 %if $ - drv_tab != DRV_MAX * DRVR_SIZE
   %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
 %endif
@@ -1419,7 +1477,7 @@ DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
                                 ; RD_MAXKB is 16,384 - a column showing that
                                 ; would be arithmetic rather than advice
 
-DRVM_IMG_SND equ 12              ; ceil(build/sound.drv   / 1024) - t_drvmem
+DRVM_IMG_SND equ 11             ; ceil(build/sound.drv   / 1024) - t_drvmem
 DRVM_IMG_HDD equ 4              ; ceil(build/hdd.drv     / 1024)   checks
 DRVM_IMG_ETH equ 17             ; ceil(build/ether.drv   / 1024)   every one
 DRVM_IMG_RAM equ 6              ; ceil(build/ramdisk.drv / 1024)   of these
@@ -1431,6 +1489,7 @@ DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
 DRVM_IMG_USBM equ 2             ; ceil(build/usbmouse.drv / 1024)
 DRVM_IMG_EMS equ 1              ; ceil(build/ems.drv / 1024)
 DRVM_IMG_CD  equ 9              ; ceil(build/cdrom.drv / 1024)
+DRVM_IMG_VESA equ 8             ; ceil(build/vesa.drv / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 16        ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no
@@ -1466,6 +1525,9 @@ DRVM_RAM     equ (DRVM_IMG_RAM + 7 + 8) | DRVM_PLUS
 DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
                                 ; hooks no vector, owns no port and keeps no
                                 ; buffer. The image IS the whole footprint
+DRVM_VESA    equ DRVM_IMG_VESA  ; VESA.DRV claims nothing: its probe buffers,
+                                ; its mode table and the arrow's save-under
+                                ; are bss, inside the image
 DRVM_EMS     equ DRVM_IMG_EMS   ; EMS.DRV claims nothing: its tables are its
                                 ; bss, and the board's memory is not the heap's
 DRVM_CD      equ DRVM_IMG_CD    ; CDROM.DRV claims nothing: its sector
@@ -1496,7 +1558,10 @@ drv_memk:                       ; one word per drv_tab row, in the same order
 %ifdef KERN_BIG
     dw DRVM_USBM                ; the CH375 USB mouse,
     dw DRVM_EMS                 ; EMS.DRV, and
-    dw DRVM_CD                  ; CDROM.DRV, last on both big builds
+    dw DRVM_CD                  ; CDROM.DRV, last on both big builds...
+%ifdef VID_EXT
+    dw DRVM_VESA                ; ...until VESA.DRV (SPEC.md 120)
+%endif
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
@@ -5476,13 +5541,15 @@ drv_boot_x:
                                 ; banks the flags, which swallows this answer
                                 ; whole (SPEC.md 2.9.5.4)
 %ifdef KERN_BIG
-    test byte [drv_cfg+CFG_VGC], 1  ; Force Color (SPEC.md 39.28), BEFORE the
-    jz .novgc                   ; adapter switch below, so a switch onto the
-    call COLD_SEG:vgcf_boot     ; VGA finds the BIOS's record colour already.
-.novgc:                         ; The TEST is here, in the blob that is given
-%endif                          ; back, and vgcf_boot keeps every register but
-                                ; AX - CH is the loop's, and AL is reloaded on
-                                ; the next line (kernel size pass 12)
+    call COLD_SEG:vgcf_boot     ; Force Color (SPEC.md 39.28), BEFORE the
+                                ; adapter switch below, so a switch onto the
+                                ; VGA finds the BIOS's record colour already.
+                                ; THE TEST IS INSIDE IT NOW (SPEC.md 120.4:
+                                ; the blob gave up its seven bytes to the
+                                ; 'VM' record's class byte); it keeps every
+                                ; register but AX - CH is the loop's, and AL
+                                ; is reloaded on the next line
+%endif
 
     ; --- the display adapter, FIRST (SPEC.md 39.11.3) ------------------------
     ; Before the driver loads, at the bottom of

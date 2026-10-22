@@ -1,12 +1,12 @@
 """Mixer's guide pictures.
 
-Use --image build/mixer360.img --machine os8088_xt_vga_sb: the standard
-360KB system intentionally omits this optional package.
+Use --image build/mixer360.img --apps build/mixplay.img
+--machine os8088_xt_vga_sb: SOUND is wanted and Mixer is on the apps disk.
 """
 
 
 def capture(ui, shot):
-    w = ui.path("A:/SYSTEM/MIXER.O88")
+    w = ui.path("B:/MIXER.O88")
     x, y, _, _ = w.content
     ui.mo.click(x + 240, y + 44)
     ui.settle()

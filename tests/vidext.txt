@@ -1,0 +1,20 @@
+# tests/vidext.txt - every place the kernel dispatches a drawing body on
+# [vid_mono] (or [vid_planes]), by file and count, and what a PACKED display
+# does there (SPEC.md 120.3.1). Enforced by tests/unit/t_vidext.py: a new site
+# fails the build until it is written down here.
+#
+#   <file> <count> hooked | exempt: <reason>
+#
+# "hooked" means every one of the file's sites is followed by the planar
+# body's VIDEXT / VIDEXTC / VIDEXTR, or jumps into a body that is. A file
+# with a mix says which sites are the exceptions and why.
+
+vga12.inc 15 hooked, but for four: gfx_points' two (1385, 1419) - its planar arm is .slow, every point a hooked gfx_fill, and the second is the display hook's bookkeeping; gfx_xor_fill's second test (4025, the .arm entry menu.inc enters directly) jumps to vga_solid_rect, whose VIDEXT is the hook; gfx_blit1_x's two (5714 the fragment walk's display question, 6200 the pen) sit BELOW the hook at .ybot and a packed display never reaches them
+font.inc 3 hooked, but for one: 910 is font_char's dither decision (SPEC.md 6.1.12), a colour question a packed display answers as the VGA does; font_run's test (1209) jumps to .planar, where the hook is
+icons.inc 1 hooked
+mouse.inc 3 hooked
+viddet.inc 1 exempt: vid_apply's [vid_rseg] derivation - geometry, not drawing (SPEC.md 39.2)
+vidsel.inc 1 exempt: the adapter probe's mode-6 test, before any driver exists (SPEC.md 39.11.1)
+splash.inc 4 exempt: the loading screen draws before drv_boot and always on the VGA (SPEC.md 15); VESA.DRV cannot be attached yet
+band.inc 1 exempt: BAND=1's composer, a knob no shipped kernel assembles (SPEC.md 5.9.6); its band reaches the glass through gfx_blit1, which is hooked
+stikmenu.inc 3 exempt: three "is this a 1bpp adapter" colour decisions (the pen's polarity, a greyed item's ink, STY_GREY) in STIKMENU.DRV - [vid_planes] is the DEPTH on a packed display and never 1, so each takes its colour arm, which is right; the pixels go through gfx_blit1 and font_run, which are hooked

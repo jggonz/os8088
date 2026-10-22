@@ -200,7 +200,10 @@
     push si                         ; which is what lets the answer survive
     push di
     call OSAPI_VIDEO
-    cmp dh, 4
+    cmp dh, 4                       ; 1 is mono, ZF = 0 as it always was; 4
+    jb %%mono                       ; planes, and 8 or 16 bits on a packed
+    cmp dh, dh                      ; display (SPEC.md 120.5), are COLOUR:
+%%mono:                             ; ZF = 1. Never `== 4`
     pop di
     pop si
     pop dx
@@ -4951,14 +4954,17 @@ os88ui_drbank:
     xor bh, bh                  ; machine (SPEC.md 39.16.4) - and CX comes back
     pop ax                      ; as the dock's first row (a buffer sized for
     cmp bl, 4                   ; the wrong one arrives as noise, 39.14.8)
-    je .planes
-    mov bx, 1
-.planes:
-    mul bx
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                  ; AX = KB, rounded up
-    or ax, ax
+    jae .planes                 ; 4 planes - or 8 or 16 BYTES a column on
+    mov bx, 1                   ; a packed display, whose save is its
+.planes:                        ; pixels (SPEC.md 120.5): DH AS IT COMES
+    mul bx                      ; DX:AX - 16 x a list on a 1024-wide
+    add ax, 1023                ; display passes 64KB, and a claim sized
+    adc dx, 0                   ; off AX alone is what the kernel then
+    mov cl, 10                  ; writes past
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    add ax, dx                  ; AX = KB, rounded up (ZF = none)
     jz .none
     mov [ds:bp+OS88UI_DR_KB], ax
     call OSAPI_MEM_CLAIM
@@ -6185,14 +6191,17 @@ os88ui_mnbank:
     xor bh, bh                      ; machine (SPEC.md 39.16.4)
     pop ax
     cmp bl, 4
-    je .planes
-    mov bx, 1                       ; 1bpp adapter: one plane
-.planes:
-    mul bx
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; AX = KB, rounded up
-    or ax, ax
+    jae .planes                 ; 4 planes - or 8 or 16 BYTES a column on
+    mov bx, 1                   ; a packed display, whose save is its
+.planes:                        ; pixels (SPEC.md 120.5): DH AS IT COMES
+    mul bx                      ; DX:AX - 16 x a list on a 1024-wide
+    add ax, 1023                ; display passes 64KB, and a claim sized
+    adc dx, 0                   ; off AX alone is what the kernel then
+    mov cl, 10                  ; writes past
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    add ax, dx                  ; AX = KB, rounded up (ZF = none)
     jz .no
     mov [ds:bp+OS88UI_MN_KB], ax
     call OSAPI_MEM_CLAIM            ; out CF=0, DX = base segment

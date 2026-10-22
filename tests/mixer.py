@@ -12,6 +12,7 @@ The independent CPU/card model row validates the three real register maps.
 import argparse
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -42,11 +43,11 @@ def check(cond,what):
 class Session:
     def __init__(self,ui,adapter):
         self.ui,self.m,self.mo,self.adapter=ui,ui.m,ui.mo,adapter
-        self.qemu=adapter=='sb16'
+        self.qemu=adapter in ('sb16','vesa')
         self.seg=ui._word('drv_fseg')
         origin=os88sym.equates()['DRV_HMA_ORG'] if self.seg>=0xF000 else 0
         self.d=Pkg(self.m,self.seg+origin//16,os88drvsym.symbols('sound.bin'))
-        self.hx=ui._word('vid_clk_hx')
+        self.ix=ui._word('menu_mixx')
 
     def wait(self,cond,why):
         if self.qemu:
@@ -60,7 +61,8 @@ class Session:
 
     def key(self,k):
         if self.qemu: self.m.hmp('sendkey '+{'space':'spc'}.get(k,k))
-        else: self.m.key({'esc':'Escape','home':'Home','end':'End','space':'Space'}[k])
+        else: self.m.key({'esc':'Escape','home':'Home','end':'End','space':'Space',
+                              'left':'ArrowLeft','right':'ArrowRight'}[k])
         self.pace(.3)
 
     def click(self,x,y):
@@ -70,7 +72,8 @@ class Session:
         else: self.mo.click(x,y)
 
     def open(self):
-        self.click(self.hx+12,9)
+        self.ix=self.ui._word('menu_mixx')
+        self.click(self.ix+12,9)
         self.wait(lambda:self.d.rb('volume_live')==1,'volume popup opened')
         self.pace(.3)
         return self.d.rw('volume_x')
@@ -113,35 +116,89 @@ class Session:
             p[y*w+x0:y*w+x1+1] for y in range(y0,y1+1))
 
     def icon(self):
-        # A hit range can pass while an old disk-progress bar erases the
-        # picture. Compare the actual band, with the pointer elsewhere.
+        # Compare all pixels with the actual bar paper and rule ink, including
+        # gray/color paper which a binary lit/unlit comparison cannot see.
+        self.ix=self.ui._word('menu_mixx')
         data=self.m.read(self.d.addr('mix_speaker'),48)
-        expected=bytes((b>>bit)&1 for b in data for bit in range(7,-1,-1))
-        check(self.crop((self.hx,2,self.hx+23,17))==expected,
-              'speaker pixels match its bitmap after disk activity')
+        if self.qemu:
+            path=EVIDENCE/'icon.ppm'
+            self.m.hmp('screendump '+str(path))
+            w,h,p=shot.read_ppm(path);stride=3
+        elif self.adapter in ('cga','herc'):
+            w,h,p=self.pixels();stride=1
+        else:
+            w,h,p=self.m.fbuf();stride=3
+        def pixel(x,y):
+            at=(y*w+x)*stride
+            return bytes(p[at:at+stride])
+        paper,ink=pixel(w-4,2),pixel(w-4,19)
+        expected=b''.join(paper if (b>>bit)&1 else ink
+                          for b in data for bit in range(7,-1,-1))
+        actual=b''.join(pixel(self.ix+x,2+y) for y in range(16) for x in range(24))
+        check(actual==expected,'speaker bitmap uses the menu-bar paper and ink')
+        padding=b''.join(pixel(x,y) for y in range(6,14)
+                         for x in range(self.ui._word('vid_clk_hx'),self.ix))
+        check(padding==paper*(len(padding)//stride),
+              'clock padding erases disk-progress marks at the old icon position')
+        text=self.m.read(self.ui._S('clk_str'),32).split(bytes([0]),1)[0]
+        check(self.ix+24==self.ui._word('vid_wm8')-8*len(text),
+              'speaker floats immediately before the visible clock text')
+
+    def themes(self):
+        import dispthm
+        dispthm.theme_page(self.m,self.mo,self.ui._S,M.settle)
+        names=('Dark','Color','Windows','Bright') if self.adapter=='vga' else ('Dark','Windows','Bright')
+        for name in names:
+            got=dispthm.pick(self.m,self.mo,self.ui._S,M.settle,name)
+            check(got=={'Bright':0,'Dark':1,'Color':2,'Windows':3}[name],name+' theme applied')
+            self.mo.to(80,150);self.pace(.3);self.icon()
+            self.open();self.screenshot(name.lower()+'-popup');self.close()
+            self.mo.to(80,150);self.pace(.3);self.icon()
+        self.ui.close(self.ui.window('Control Panel'))
+        # A longer clock form must move the icon and its hit target together.
+        flags=[self.ui._byte(n) for n in ('clk_h12','clk_secs')]
+        self.m.write(self.ui._S('clk_h12'),bytes([1]))
+        self.m.write(self.ui._S('clk_secs'),bytes([1]))
+        def long_clock_ready():
+            text=self.m.read(self.ui._S('clk_str'),32).split(bytes([0]),1)[0]
+            # clk_fmt stages its string before menu_sound publishes the new
+            # icon position. Wait for both, not an intermediate guest state.
+            return len(text)>=23 and self.ui._word('menu_mixx')+24==self.ui._word('vid_wm8')-8*len(text)
+        self.wait(long_clock_ready,'long clock format and speaker reached the bar')
+        self.mo.to(80,150);self.pace(.3);self.icon()
+        self.open();self.close()
+        for n,v in zip(('clk_h12','clk_secs'),flags):self.m.write(self.ui._S(n),bytes([v]))
+        self.pace(1.5)
+        self.mo.to(80,150);self.icon()
 
 
 def session(ui,adapter):
     s=Session(ui,adapter);d=s.d
     check(s.seg and d.rb('mix_kind')>0,'readable mixer publishes the speaker')
-    check(ui._word('menu_clkx')==s.hx+24,'speaker reserves exactly three clock cells')
+    check(ui._word('menu_clkx')==ui._word('vid_clk_hx')+24,
+          'speaker reservation preserves the full clock field')
     check((ui._word('vid_pw')-8-ui._word('menu_clkx'))//8>=25,
           'speaker preserves the full clock and maximum toast field')
     check(not s.owned(),'idle mixer holds no scratch claim')
     s.mo.to(80,150);s.pace(.3);s.icon()
     x=s.open()
-    check(d.rb('volume_found')==1,'SYSTEM/MIXER.O88 discovered on opening')
+    check(d.rw('volume_bottom')==91,'popup contains only the master-volume control')
     check(ui._byte('fpg_on')==0,'file activity ends while popup remains open')
     check(ui._byte('cur_shape')!=os88sym.equates()["CUR_BUSYSH"],'popup restores the arrow')
     claims=s.owned()
-    expected=10 if adapter in ('vga','sb16') else 3
+    expected=30 if adapter=='vesa' else (8 if adapter in ('vga','sb16') else 2)
     check(sum(p for _,p in claims)==expected*64,'save-under has the adapter-sized claim')
     s.key('home');s.wait(lambda:d.rb('volume_levelv')==0,'Home reaches silence')
+    s.key('right');s.wait(lambda:d.rb('volume_levelv')==1,'arrow moves by one percent on a coarse card')
+    s.key('left');s.wait(lambda:d.rb('volume_levelv')==0,'opposite arrow returns by one percent')
     s.key('end');s.wait(lambda:d.rb('volume_levelv')==100,'End reaches full volume')
     s.screenshot('popup')
     # Track's two endpoints, including a held drag beyond its bounds.
     s.mo.to(x+28,58);s.mo._edge(True)
     s.wait(lambda:d.rb('volume_levelv')==0,'track press changes live volume')
+    for px,want in ((88,40),(90,41),(91,42)):
+        s.mo.to(x+px,58,l=True)
+        s.wait(lambda:d.rb('volume_levelv')==want,'drag follows requested '+str(want)+' percent')
     s.mo.to(min(ui._word('vid_pw')-1,x+202),58,l=True)
     s.wait(lambda:d.rb('volume_levelv')==100,'drag clamps to the top endpoint')
     s.mo.to(x+28,150,l=True)
@@ -150,27 +207,32 @@ def session(ui,adapter):
     s.wait(lambda:d.rb('volume_live')==0,'drag release dismisses the popup')
     check(not s.owned(),'drag dismissal releases the save-under')
     # Exact restore over a quiet desktop, with the pointer on the bar both times.
-    s.mo.to(s.hx+12,9);s.pace(.5)
-    rect=(x,20,x+207,115)
+    s.mo.to(s.ix+12,9);s.pace(.5)
+    rect=(x,20,x+207,91)
     before=s.crop(rect)
     s.open();s.close()
     check(before==s.crop(rect),'Escape restores every covered desktop pixel')
     check(not s.owned(),'Escape releases the save-under')
-    # Launch after the tracker has restored the screen and dropped its lock.
+    # Mixer is an ordinary app launched from the separate apps disk.
     s.open();s.key('end');s.close()
-    x=s.open();s.click(x+64,102)
-    w=ui.wait_window('Mixer')
+    w=ui.path('B:/MIXER.O88')
     p=Pkg(s.m,u16(s.m.read(G.winptr(s.m,w.i,ui.sym)+G.W_SEG,2)),
           os88drvsym.symbols('mixer.bin'))
     s.wait(lambda:p.rw('mx_mask')>0,'Mixer queried the live channel mask')
-    check(d.rb('volume_live')==0 and not s.owned(),'package launch leaves no modal scratch')
+    check(d.rb('volume_live')==0 and not s.owned(),'separate app launch leaves no modal scratch')
     check(p.rb('mx_level')==100,'full Mixer reads volume written by the popup')
     x0,y0,_,_=w.content
     s.click(x0+240,y0+44)
     s.wait(lambda:0<p.rb('mx_level')<100,'full Mixer level slider writes hardware')
     s.key('home');s.wait(lambda:p.rb('mx_level')==0,'full Mixer keyboard reaches silence')
+    s.key('right');s.wait(lambda:p.rb('mx_level')==1,'Mixer moves smoothly below the first hardware step')
+    check(p.rw('mx_pair')==0,'hardware readback remains quantized independently of the thumb')
+    s.pace(1.5)
+    check(p.rb('mx_level')==1,'idle polling retains the requested slider position')
+    s.open();s.key('end');s.close()
+    s.wait(lambda:p.rb('mx_level')==100,'Mixer notices another control changing the hardware')
     s.key('end');s.wait(lambda:p.rb('mx_level')==100,'full Mixer keyboard reaches full volume')
-    if adapter=='sb16':
+    if s.qemu:
         check(p.rw('mx_mask')==0x1FF,'SB16 exposes all nine channels')
         mark=(x0+136,y0+18,x0+143,y0+25)
         check(0 in s.crop(mark),'keyboard focus is visible beside Level')
@@ -197,17 +259,11 @@ def session(ui,adapter):
     s.open();s.click(70,150)
     s.wait(lambda:d.rb('volume_live')==0,'outside click dismisses')
     check(not s.owned(),'outside dismissal releases the save-under')
+    if not s.qemu:s.themes()
     print('mixer '+adapter+': PASS',flush=True)
 
 
 def absent():
-    # The quick UI works when the optional package is not present.
-    with os88ui.boot('build/mixernone360.img',machine=MACHINES['cga'],verbose=False) as ui:
-        s=Session(ui,'cga');s.open()
-        check(s.d.rb('volume_found')==0,'missing package removes Open Mixer')
-        check(s.d.rw('volume_bottom')==91,'missing package removes its command row')
-        s.key('end');s.wait(lambda:s.d.rb('volume_levelv')==100,'quick volume works without Mixer')
-        s.close();check(not s.owned(),'optional-package absence leaves no claim')
     with os88ui.boot('build/os8088-360.img',machine='os8088_5150_cga_gla',verbose=False) as ui:
         check(ui._word('menu_mixcap')==0,'no mixer leaves the speaker absent')
         check(ui._word('menu_clkx')==ui._word('vid_clk_hx'),'no mixer restores full clock width')
@@ -221,7 +277,7 @@ def background(ui):
     x,y,_,_=w.content
     s.mo.to(x+40,y+30);s.mo._edge(True);s.mo._edge(False)
     s.wait(lambda:d.rb('sbl_str_act')==1,'background stream opened')
-    s.mo.to(s.hx+12,9);s.mo._edge(True);s.mo._edge(False)
+    s.mo.to(s.ix+12,9);s.mo._edge(True);s.mo._edge(False)
     s.wait(lambda:d.rb('volume_live')==1,'volume popup opened during playback')
     consumed=d.rw('sbl_consumed')
     check(consumed<19200,'volume popup opened before the stream finished')
@@ -236,34 +292,55 @@ def background(ui):
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--adapter',choices=(*MACHINES,'sb16'),default='cga')
+    ap=argparse.ArgumentParser();ap.add_argument('--adapter',choices=(*MACHINES,'sb16','vesa'),default='cga')
     a=ap.parse_args();EVIDENCE.mkdir(exist_ok=True)
-    if a.adapter=='sb16':
+    if a.adapter in ('sb16','vesa'):
         # MartyPC has a raw register bank, not a CT1745. QEMU owns this leg.
         import hmacold,vidxms,xmcheck
         class QMouse(hmacold.QMouse):
+            def to(self,x,y,l=False,**kw):
+                if a.adapter!='vesa':return super().to(x,y,l=l,**kw)
+                for _ in range(4):
+                    subprocess.run([sys.executable,str(ROOT/'tools/mouse.py'),
+                                    '--screen','1024x768',self.q.sock,'to',str(x),str(y)],
+                                   cwd=ROOT,check=True,capture_output=True)
+                    if os88qemu.acted(self.q,lambda:self.where()[:2]==(x,y),secs=3,
+                                     what='VESA pointer reached its target'):return
+                raise os88ui.UIError('VESA pointer did not reach its target')
             def click(self,x,y,**_kw):
                 # UI.close also uses click; pace it on QEMU's guest ticks.
                 self.to(x,y);self._edge(True);self._edge(False)
                 os88qemu.pace(self.q,.2)
-        for memory in (1,128):
+        class QUI(hmacold.QUI):
+            def scroll_to(self,entry,win=None):
+                # Both files fit in the fixture's root listing. Avoid the
+                # base UI's keyboard scroller, which requires MartyPC cycles.
+                check(self.scroll(win)==0 and len(self.listing(win))==2,
+                      'both apps-fixture rows fit without scrolling')
+                return entry
+        for memory in ((128,) if a.adapter=='vesa' else (1,128)):
             with tempfile.TemporaryDirectory(prefix='mixer-qemu-',dir=ROOT/'build') as t:
                 sy=Path(t)/'system.img';apps=Path(t)/'apps.img'
-                shutil.copy(os88build.at('build/mixer360.img'),sy)
+                system='build/mixervesa.img' if a.adapter=='vesa' else 'build/mixer360.img'
+                shutil.copy(os88build.at(system),sy)
                 shutil.copy(os88build.at('build/mixplay.img'),apps)
                 q=vidxms.Q(t,str(sy),str(apps),memory,
                     ('-audiodev','none,id=snd','-device','sb16,audiodev=snd'))
                 os88qemu.own(q.pid,q.sock)
                 try:
                     xmcheck.wait_desktop(q.sock,'mixer')
-                    ui=hmacold.QUI(q,mouse=QMouse(q),sym=os88sym.linear,verbose=False)
+                    ui=QUI(q,mouse=QMouse(q),sym=os88sym.linear,verbose=False)
                     os88qemu.pace(q,2)
-                    print('SB16 memory:',memory,flush=True)
-                    session(ui,'sb16')
-                    background(ui)
+                    if a.adapter=='vesa':
+                        check(ui._byte('vid_kind')==G.VID_VESA and ui._byte('vid_planes')==16,
+                              'packed desktop reached 1024x768x16')
+                    print(a.adapter+' memory:',memory,flush=True)
+                    session(ui,a.adapter)
+                    if a.adapter=='sb16':background(ui)
                 finally:q.close()
     else:
-        with os88ui.boot('build/mixer360.img',machine=MACHINES[a.adapter],verbose=False) as ui:
+        with os88ui.boot('build/mixer360.img',apps='build/mixplay.img',
+                         machine=MACHINES[a.adapter],verbose=False) as ui:
             session(ui,a.adapter)
         if a.adapter=='cga':absent()
 

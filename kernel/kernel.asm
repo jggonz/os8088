@@ -472,6 +472,23 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %endif
 %endmacro
 
+; --- VID_EXT: the external renderer hook (SPEC.md 120.3) ----------------------
+; kern_big's by default: one compare per planar drawing body, a far pointer
+; and a block of pointers (kernel/vidext.inc), so VESA.DRV can draw a fifth
+; adapter kind. `make NOVIDEXT=1` is the A/B that assembles the kernel before
+; it existed; kern_small never has it - no driver layer (SPEC.md 51.0), no
+; planar renderer (39.27), nothing for a hook to hook. Nor does kern_mega
+; (SPEC.md 120.3): [vx_ep] is a real-mode seg:off that protected mode cannot
+; far call, and VESA.DRV keeps its state through CS (tests/cswrites.txt), so
+; kern_mega has no VESA row rather than one that faults on the first draw.
+%ifdef KERN_BIG
+ %ifndef NOVIDEXT
+  %ifndef KERN_MEGA
+   %define VID_EXT 1
+  %endif
+ %endif
+%endif
+
 ; BANDCOMP - the 1bpp band composer (SPEC.md 5.9), and since SPEC.md 5.9.6 it
 ; is a KNOB again rather than kern_big's default. `make BAND=1` compiles it in
 ; and puts wm_draw_title's interior on ONE composed blit; the default build
@@ -3643,38 +3660,49 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          CALL: OSAPI_DRV_CALL_AT asked as
                                   ;          the MACHINE (51.2.3). kern_small
                                   ;          refuses
-    OSAPI_RSLOT osapi_xmem_sel    ; 0x04AB - DX:AX = an address inside an
+    OSAPI_SLOT gfx_blitd          ; 0x04AB - A PACKAGE'S BLOCK AT THE DISPLAY'S
+                                  ;          DEPTH (SPEC.md 120.7): ES:SI the
+                                  ;          pixels as the mode packs them, BP
+                                  ;          the stride, AX/BX x/y, CX/DX w/h;
+                                  ;          CX = 0 loads DAC entries AX..
+                                  ;          AX+DX-1 from DX triples. ES is the
+                                  ;          caller's, as OSAPI_GFX_BLIT4's.
+                                  ;          CF = 1 on anything but a packed
+                                  ;          display (VID_VESA): the sixteen
+                                  ;          colours through BLIT4 are the
+                                  ;          fallback
+    OSAPI_RSLOT osapi_xmem_sel    ; 0x04B3 - DX:AX = an address inside an
                                   ;          OSAPI_XMEM_ALLOC block you own, CX
                                   ;          = bytes (0 = 64KB) -> AX = a DATA
                                   ;          selector over exactly that window
                                   ;          (KERN-MEGA-PLAN 12.2). kern_mega in
                                   ;          protected mode only; CF=1, AX = 1
                                   ;          on every other kernel
-    OSAPI_RSLOT osapi_mem_codesel ; 0x04B1 - DX = a claim's segment (or
+    OSAPI_RSLOT osapi_mem_codesel ; 0x04B9 - DX = a claim's segment (or
                                   ;          selector) -> AX = the selector to
                                   ;          far call code in it: the segment
                                   ;          itself in real mode, its LDT code
                                   ;          alias on kern_mega. CF=1 = none
-    OSAPI_RSLOT osapi_xmem_walk   ; 0x04B7 - ES:DI = CX records of 6 bytes ->
+    OSAPI_RSLOT osapi_xmem_walk   ; 0x04BF - ES:DI = CX records of 6 bytes ->
                                   ;          AX = the extended pool's blocks
                                   ;          written, each {KB offset, KB,
                                   ;          owner, 0} (KERN-MEGA-PLAN 13.6).
                                   ;          kern_mega in protected mode and
                                   ;          kern_big with a store; CF=1, AX = 1
                                   ;          with no pool
-    OSAPI_RCXCELL mmf_osapi_mem_huge ; 0x04BD - AX = KB -> DX = the claim's
+    OSAPI_RCXCELL mmf_osapi_mem_huge ; 0x04C5 - AX = KB -> DX = the claim's
                                   ;          first segment or selector, CX =
                                   ;          the step to its next 64KB (1000h
                                   ;          conventional, 8 a run above 1MB on
                                   ;          kern_mega, KERN-MEGA-PLAN 14.1)
-    OSAPI_RSLOT osapi_xmem_run    ; 0x04C3 - DX:AX = an OSAPI_XMEM_ALLOC block
+    OSAPI_RSLOT osapi_xmem_run    ; 0x04CB - DX:AX = an OSAPI_XMEM_ALLOC block
                                   ;          of yours -> DX = a run of DATA
                                   ;          selectors, one every 32KB and each
                                   ;          a 64KB window, CX = their step (8)
                                   ;          (KERN-MEGA-PLAN 14.16). kern_mega
                                   ;          in protected mode only; CF=1, AX =
                                   ;          1 on every other kernel
-    OSAPI_RCXCELL osapi_mem_subseg ; 0x04C9 - AX = a PARAGRAPH offset into
+    OSAPI_RCXCELL osapi_mem_subseg ; 0x04D1 - AX = a PARAGRAPH offset into
                                   ;          your own region, BL bit 0 = you
                                   ;          will far-call it -> CF=0, DX = a
                                   ;          DATA selector based there (its
@@ -3684,14 +3712,17 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          your segment + AX: every kernel
                                   ;          but kern_mega, and kern_mega for
                                   ;          a region below 1MB
-osapi_table_end:                  ; 0x04CF today (0x04C9 before OSAPI_MEM_SUBSEG,
-                                  ; 0x04C3 before OSAPI_XMEM_RUN,
-                                  ; 0x04BD before OSAPI_MEM_HUGE,
-                                  ; 0x04B7 before OSAPI_XMEM_WALK,
-                                  ; 0x04AB before OSAPI_XMEM_SEL
+osapi_table_end:                  ; 0x04D7 today (0x04D1 before OSAPI_MEM_SUBSEG,
+                                  ; 0x04CB before OSAPI_XMEM_RUN,
+                                  ; 0x04C5 before OSAPI_MEM_HUGE,
+                                  ; 0x04BF before OSAPI_XMEM_WALK,
+                                  ; 0x04B3 before OSAPI_XMEM_SEL
                                   ; and OSAPI_MEM_CODESEL, which moved up
-                                  ; past main's two at the main ->
-                                  ; elendilon merge, KERN-MEGA-PLAN 14.67;
+                                  ; past main's OSAPI_GFX_BLITD at the
+                                  ; second main -> elendilon merge, as
+                                  ; past main's two at the first,
+                                  ; KERN-MEGA-PLAN 14.67;
+                                  ; 0x04AB before the depth blit;
                                   ; 0x04A5 before the drivers' door;
                                   ; 0x049F before serial;
                                   ; 0x0499 before the wheel;
@@ -3720,8 +3751,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 113*6 + 6*3 + 6 + 12*5 + 4*6 + 8
-%error "os8088 API jump table must be exactly 0x04BF bytes: 43 SLOT (8), 11 XCELL (7), 113 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 44*8 + 11*7 + 113*6 + 6*3 + 6 + 12*5 + 4*6 + 8
+%error "os8088 API jump table must be exactly 0x04C7 bytes: 44 SLOT (8), 11 XCELL (7), 113 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
 %endif
 
 %ifdef KERN_MEGA
@@ -5203,6 +5234,21 @@ kmain_o:
                                 ; erase. The LAST call of the body but one:
                                 ; kmain releases the blob as soon as this
                                 ; returns
+%ifdef VID_EXT
+    call COLD_SEG:vx_boot_x     ; ...and VESA.DRV, if SYSTEM.CFG asked for it
+                                ; (SPEC.md 120.4): a DRVC_OVL row drv_boot_x
+                                ; read and stopped at, attached here and the
+                                ; desktop switched onto it through the blob's
+                                ; own vid_switch - which is why this sits in
+                                ; kmain_o, after the loading screen is down
+                                ; (the mode change wipes nothing the first
+                                ; paint is not about to cover) and BEFORE the
+                                ; autostart below: a package it launches must
+                                ; find the display it will live on, not the
+                                ; VGA a switch is about to take away (PiXEL
+                                ; built its tables for the wrong depth when
+                                ; this ran after kmain_o)
+%endif
 %ifdef OS88_SHORTCUTS
     BLOBCALL as_boot            ; ...AUTOSTART, the one thing after it (SPEC.md
                                 ; 26.10.5): it LAUNCHES, and a launch must not
@@ -5373,7 +5419,7 @@ kmain:
 
 ; osapi_mouse lives in kernel/mouse.inc beside the IRQ it re-arms (SPEC.md 9.13).
 
-; ---- osapi_xmem_sel - API slot 0x04AB (KERN-MEGA-PLAN 12.2) ----------------
+; ---- osapi_xmem_sel - API slot 0x04B3 (KERN-MEGA-PLAN 12.2) ----------------
 ; in:  DX:AX = a linear address inside an OSAPI_XMEM_ALLOC block YOU own,
 ;      CX = the window's bytes (0 = 65,536)
 ; out: CF = 0, AX = a DATA selector whose descriptor covers exactly that
@@ -5407,7 +5453,7 @@ osapi_xmem_sel:
                                 ; the byte parity t_hotpar measured it at
 %endif
 
-; ---- osapi_xmem_run - API slot 0x04C3 (KERN-MEGA-PLAN 14.16) ----------------
+; ---- osapi_xmem_run - API slot 0x04CB (KERN-MEGA-PLAN 14.16) ----------------
 ; in:  DX:AX = the token of an OSAPI_XMEM_ALLOC block YOU own (its base)
 ; out: CF = 0, DX = the first of a RUN of DATA selectors and CX = the step
 ;      between them (8): selector k is the 64KB window from 32KB x k into the
@@ -5430,7 +5476,7 @@ osapi_xmem_run:                 ; (eleven bytes of .text: the segment binds
 osapi_xmem_run equ osapi_xmem_sel ; its refusal, AX = 1 and CF = 1 (above)
 %endif
 
-; ---- osapi_mem_subseg - API slot 0x04C9 (KERN-MEGA-PLAN 14.44) -------------
+; ---- osapi_mem_subseg - API slot 0x04D1 (KERN-MEGA-PLAN 14.44) -------------
 ; in:  AX = a paragraph offset into the CALLER's own region (the X cell's ES =
 ;      its DS), BL bit 0 = it will be far-called
 ; out: CF = 0, DX = a DATA selector whose base is that paragraph and whose
@@ -5459,7 +5505,7 @@ section .text
 osapi_mem_subseg equ mod_gone   ; `stc / retf`: CF = 1, every register kept
 %endif
 
-; ---- osapi_xmem_walk - API slot 0x04B7 (KERN-MEGA-PLAN 13.6) ---------------
+; ---- osapi_xmem_walk - API slot 0x04BF (KERN-MEGA-PLAN 13.6) ---------------
 ; in:  ES:DI = room for CX records of XMW_SIZE (6) bytes; BX = XMW_FIXED asks
 ;      kern_mega for the fixed areas under the pool too (below)
 ; out: CF = 0, AX = records written: every block the extended pool holds,
@@ -5489,7 +5535,7 @@ osapi_xmem_walk:
 osapi_xmem_walk equ osapi_xmem_sel ; its refusal, AX = 1 and CF = 1 (above)
 %endif                          ; (kern_big's is XMEM.DRV's table, xmem.inc)
 
-; ---- osapi_mem_codesel - API slot 0x04B1 (KERN-MEGA-PLAN 12.2, 10.3 item 51)
+; ---- osapi_mem_codesel - API slot 0x04B9 (KERN-MEGA-PLAN 12.2, 10.3 item 51)
 ; in:  DX = the segment (or selector) a claim of yours is named by
 ; out: CF = 0, AX = the selector to FAR CALL code in it: DX itself on a
 ;      real-mode kernel, its LDT code alias on kern_mega (and a pair's code
@@ -6037,6 +6083,9 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
                                 ; than merely the same size (docs/
                                 ; KERN-SPLIT-PLAN.md 1.1: a divergence that
                                 ; hides in the rung's padding is still real)
+%include "vidext.inc"           ; the external renderer hook (SPEC.md 120.3):
+                                ; its macros are used in vga12.inc, font.inc,
+                                ; icons.inc and mouse.inc, so it goes first
 %include "vga12.inc"
 %include "softgfx.inc"
 
@@ -7571,6 +7620,10 @@ COLD_START equ BOOT2_PAD + (COLD_RAM - KERNEL_SEG) * 16 ; after the gap
 %else
 COLD_START equ BOOT2_PAD + ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 512
 %endif
+
+VX_LAYOUT_ASSERT                ; vidext.inc's adjacency claims (SPEC.md 120.3.2),
+                                ; here because every cell they name is declared
+                                ; by now
 
 section .boot2
 %include "../boot/boot2.asm"    ; STAGE 2 (SPEC.md 2.9), here at the FOOT of

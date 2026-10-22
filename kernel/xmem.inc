@@ -496,7 +496,7 @@ xm_caps:
 
 %ifndef KERN_MEGA
 ; -----------------------------------------------------------------------------
-; osapi_xmem_walk - slot 0x04B7's body on kern_big (SPEC.md 28.4.8): the
+; osapi_xmem_walk - slot 0x04BF's body on kern_big (SPEC.md 28.4.8): the
 ;                   overlay's block table, so the Task Manager can bill the
 ;                   pool to whoever holds it. ES:DI = room for CX records;
 ;                   out CF = 0, AX = written. CF = 1, AX = 1 no store - the

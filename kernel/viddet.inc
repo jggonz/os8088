@@ -107,7 +107,20 @@ VID_H_MIN   equ 200            ; ...and the SHORTEST row of vid_tab, which is
                                ; menu.inc, and vid_tab's CGA row below is
                                ; written from it.
 
+VID_VESA    equ 4              ; A PACKED-PIXEL FRAMEBUFFER DRAWN BY A DRIVER
+                               ; (SPEC.md 120): 8 or 16 bits a pixel in a
+                               ; 64KB window at A000, banked by VESA.DRV. Not
+                               ; a renderer in this kernel at all - every
+                               ; planar body's VIDEXT hands it to the driver.
+                               ; Colour to every kind test ([vid_mono] = 0,
+                               ; `kind-1 >= 2` planar), which is right: it is
+                               ; the same VGA card in another mode
+
+%ifdef VID_EXT
+VID_KIND_MAX equ VID_VESA       ; the highest kind there is - vid_avail_test's
+%else
 VID_KIND_MAX equ VID_EGA        ; the highest kind there is - vid_avail_test's
+%endif
                                 ; whole range check is one compare against it,
                                 ; and a fourth adapter is what raises it.
                                 ; **EGA IS THAT FOURTH ADAPTER**, so this line
@@ -162,6 +175,16 @@ vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
     ;   adapter test, exactly as on VGA (SPEC.md 39.3/39.24). 349*80 = 27,920,
     ;   well inside one 0x8000 plane, so nothing here needs the intra-bank
     ;   assertion the two mono rows do.
+%ifdef VID_EXT
+    dw VGA_SEG,       0,    0,     0,      0,       0,      0,   0, 0
+    ; ^ VID_VESA: WRITTEN BY THE DRIVER at attach (SPEC.md 120.4) - stride
+    ;   and rowadd = the mode's BytesPerScanLine, cw/ch = its geometry - and
+    ;   read by nothing but vid_apply's copy: no body computes a row offset on
+    ;   this kind, every one of them being hooked, and a 16-bit offset means
+    ;   nothing above the window anyway. Zero until the driver speaks, so a
+    ;   switch that somehow preceded it would publish a 0x0 display and draw
+    ;   nothing rather than something
+%endif
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -309,11 +332,28 @@ vid_desk_zx dw SCREEN_W-DESK_ZXOFF ; the desktop grid's cell 0: its left
 vid_kind    db VID_VGA          ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
 vid_mono    db 0                ; 1bpp adapter? This is what routes every
                                 ; draw through the software renderer (32/39.5)
-vid_planes  db 4                ; 4 or 1
+vid_planes  db 4                ; 4 or 1 - or the DEPTH, 8 or 16, on VID_VESA
+                                ; (SPEC.md 120.4): the three save-under sizers
+                                ; multiply by it, and that formula gives the
+                                ; packed byte count unchanged
 %ifdef GFX_VGA
 vid_planes_w dw 4               ; the same, where a word is wanted. A planar
 %endif                          ; kernel's alone (kernel size pass 13: see
                                 ; vid_depth_set)
+%ifdef VID_EXT
+vid_ext     db 0                ; 1 = [vid_kind] is VID_VESA and every planar
+                                ; body far-calls the driver (SPEC.md 120.3).
+                                ; Derived from the kind in vid_depth_set, as
+                                ; [vid_mono] is, so a per-display swap carries
+                                ; it. .text, initialised, splash-resident with
+                                ; the rest of this block - and AFTER the _w
+                                ; twin, which must follow its byte
+            db 0                ; PARITY: kmain's five-byte call to vx_boot_x
+                                ; plus this file's hooks are odd, and this
+                                ; puts gfx_blit4 and everything after it back
+                                ; on the entry parity tests/unit/t_hotpar.py
+                                ; pins
+%endif
 
 ; Hercules has no BIOS mode, so vid_setmode programs the 6845 itself.
 ; R0..R11 for 720x348: 45 char clocks of 16 px across, 87 rows of 4 scan
@@ -592,6 +632,21 @@ vid_depth_set:
                                 ; the tight one). Two bytes could be had by
                                 ; dropping this pair; they are a contract
                                 ; change and are not taken.
+%ifdef VID_EXT
+    cmp al, VID_VESA            ; SPEC.md 120.4: colour ([vid_mono] = 0), the
+    jne .notext                 ; DEPTH for a plane count, and the hook armed
+    mov ah, [vx_bpp]
+    xor al, al
+    mov [vid_mono], ax          ; one word store, as below
+    mov byte [vid_ext], 1
+    mov al, ah
+    cbw
+    mov [vid_planes_w], ax
+    pop ax
+    ret
+.notext:
+    mov byte [vid_ext], 0       ; every other kind: the planar bodies run
+%endif
 %ifdef GFX_VGA                  ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
     cmp al, VID_VGA             ; `jne` BELOW**. WITHOUT A VGA RENDERER THERE
     je .colour                  ; IS NO QUESTION AT ALL: kern_small's kind is a
@@ -1035,6 +1090,15 @@ vid_setmode:
                                 ; It is a COUNTER because this nests - spl_tick
                                 ; reaches here through spl_chrome
     mov al, [vid_kind]          ; ONE load answers all three questions below:
+%ifdef VID_EXT
+    cmp al, VID_VESA            ; SPEC.md 120.4: the driver sets its VBE mode
+    jne .notvx                  ; and loads the DAC's first sixteen; the
+    call vx_call                ; caller owes the repaint as on every kind.
+    db VX_SETMODE               ; vx_call COMES BACK HERE - the eight pushes
+    jmp .done                   ; and the spl_busy count above are still ours
+    db 0                        ; to undo, at .done. PARITY, never executed:
+.notvx:                         ; the arm is twelve bytes with it
+%endif                          ; (tests/unit/t_hotpar.py)
     cmp al, VID_HERC            ; AL is idle until `mov ax, 0x0010`, and
     je .herc                    ; `cmp reg,imm8` is 2 bytes where
 %ifdef GFX_VGA                  ; `cmp byte [mem],imm8` is 5

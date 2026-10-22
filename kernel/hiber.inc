@@ -565,6 +565,11 @@ hb_ok_x:
     COLDCALL hb_pick_x          ; the volume a hibernate would go to
     mov bx, menu_s_hibernh      ; ...none: '(no disk)'. A `mov` writes no
     jc .set                     ; flag, so the string can be chosen first
+%ifdef VID_EXT
+    mov bx, menu_s_hibervx      ; a VESA primary (SPEC.md 120.4): an image
+    cmp byte [vid_kind], VID_VESA   ; carrying [vid_kind] = 4 into a machine
+    je .set                     ; whose driver has not attached would arm
+%endif                          ; nothing and draw nothing - greyed, with why
 %ifdef KERN_MEGA
     test byte [cpu_feat], CPU_F_PM  ; protected mode: the image carries the
     jz .rm                      ; pool (hbm_xwrite), so a block the store has
@@ -2115,6 +2120,13 @@ hbm_sweep:
     call COLD_SEG:drvf_drv_row  ; BX = the row
     cmp word [bx+DRVR_SEG], 0
     je .next
+%ifdef VID_EXT
+    cmp bx, vesa_row            ; THE DISPLAY'S RENDERER STAYS (SPEC.md 120.4):
+    je .next                    ; a suspend that took it would leave every
+                                ; drawing body calling nothing. A hibernate
+                                ; never reaches here with it - hb_ok refuses
+                                ; while VID_VESA is the kind
+%endif
     mov al, [bx+DRVR_CLASS]
     cmp al, DRVC_DISK
     je .asked                   ; memory and the ROM's int 13h: it stays...

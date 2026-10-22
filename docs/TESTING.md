@@ -584,6 +584,92 @@ python3 tools/mouse.py --screen 720x348 build/qmp.sock click X Y
 `HERCSEG` is a segment and `hercshot` takes the linear address. The full
 recipe and its four traps: docs/HERCULES-TESTING.md.
 
+### VESA — the packed display (SPEC.md 120), and why QEMU is the whole fixture
+
+QEMU's standard VGA (`-vga std`, the default) carries a VBE 2.0/3.0 BIOS, so
+`VESA.DRV`'s probe finds 1024x768 at 16 bits a pixel on it exactly as on a
+real card; MartyPC and every 86Box XT have **no VBE at all**, so the same
+disk on them is the negative control for free (the driver refuses, the
+desktop stays on the VGA). A VESA desktop is never screendumped through
+`-vga std` at any size other than its own: `screendump` is the mode's size,
+so `tools/mouse.py --screen 1024x768` (or `800x600`) must match the mode the
+disk asked for.
+
+```sh
+make vesatest                       # four disks: vesa.img (Auto: 1024x768x16),
+                                    # vesa8.img (the 'VM' class byte: 800x600x8),
+                                    # vesablitd.img + vxpics.img (PiXEL opened by
+                                    # an AUTOSTRT link, for the depth blit)
+python3 tests/vesa.py --png /tmp/v.png     # boot state and the first paint, a
+                                           # menu, a Disk window
+python3 tests/vesa8.py                     # the 8bpp path and the DAC
+python3 tests/vesacp.py                    # the Display page: the row cycles,
+                                           # Set Primary switches
+python3 tests/vesablitd.py                 # OSAPI_GFX_BLITD through PiXEL
+make vesabench && python3 tests/vesabench.py   # VESABENCH, behaviour only
+```
+
+**The first look found what the rows had not asked** (SPEC.md 120.5's
+second table). Two Disk windows on the 86Box 486 turned the desktop under
+them into a stripe band; Gorillas opened as a strip the width of the
+screen; the disk widget stayed on the bar. A sweep that boots every
+package on the apps disk once, through an `\AUTOSTRT` link, on the VESA
+disk and then on the VGA one, and puts the screenshots side by side, found
+the rest in an hour: the pattern body spent CX on its tile copy, the 4-bit
+blit loaded the stride over x, `OS88_PREFER`'s table was read past its end
+for kind 4, `OSAPI_FSX_CAPS` answered a kind no package knew, and the bar's
+composer cannot reach a 1024-wide bar's widget. Each has a row now that is
+red on the code as it was: `vesa` (the chevron band and the bar),
+`vesablit4` (WireBall's art, pixel for pixel), `vesapref` (Solitaire's
+width from its own source), `vesafsx` (Gorillas into a BIOS mode and back).
+The lesson is the sweep, which is `tools/os88sweep.py` now (`vesa` or
+`vga`, an output directory, a contact sheet at the end): a row asserts what
+its author thought of, and thirty-six packages at once show what nobody did.
+
+**...and the sweep's own blind spot is the first screen.** The owner then
+played Gorillas past its setup and the field was a white sky over
+buildings drawn as one-pixel combs - a screen the sweep never reaches,
+because it photographs what an autostart opens and presses nothing. The
+cause was one rule misread across the tree: `OSAPI_WM_DISPLAY` and
+`OSAPI_VIDEO` answer **DH = 8 or 16** on a packed display, and seven sites
+had spelt "colour" as `cmp dh, 4 / je` - Gorillas' 1 / 2 / 4 tables, the
+shared `os88ui.inc`'s `UI_ISMONO` and its two save-under sizers (which
+folded 16 to ONE plane and claimed a sixteenth of what `OSAPI_GFX_SAVE`
+then wrote past them), ArtfulType's panel sizer, Frotz's colour bit,
+Solitaire's pips and card back, Weave's palette, and `os88.h`'s own
+advice. The survey was a script over every `mov [x], dh` after those two
+calls and every `cmp` on what it stored (SPEC.md 120.5's package rule for
+DH is the result); the rows are `vesagor` (Gorillas played into its field:
+sky rows and solid building runs, which read 97 and 68 on the fix - the
+VGA desktop's own figures, the skyline being seeded the same - against 10
+and 14), `vesasu` (PiXEL's Save As drop-down clicked open on the packed
+desktop: the record's claim against DH x rows x columns, `mem_tab`
+agreeing and overlapping nothing) and `vesapref`'s card-back check. When a
+package is "wrong on the new display", grep what it does with DH before
+reading its drawing code.
+
+**Nothing in `SYSTEM.CFG` wants the driver by default** (SPEC.md 51.3), so
+a stock `os8088.img` never reads it; every row above boots a disk whose
+settings file already asks for it (`ethertest`'s shape). The driver is
+wanted by bit 9 of the `DW` record (8 is the CD-ROM's), and the class is the fourth byte of the
+`VM` record (ver 3): `0x8A` is 800x600x8.
+
+**Time is taken on 86Box, not QEMU.** `make 486-vesa` boots the bench's
+disks on a 486DX2/66 with a Cirrus Logic CL-GD5428 (`vm/486-vesa`: VBE 1.2,
+1 MB), the package runs and saves itself on its first paint, and the report
+is read back with `mcopy -i build/vxbench-86box.img ::VESABNCH.TXT -` (the
+target boots a scratch copy of the B: image, because the package writes to it). 86Box has
+no automation socket, so that is the whole recipe: launch, wait a minute,
+read the file, `kill -9`. What no emulator here can show: a real card's
+`4F05h` latency on a real bus, a BIOS whose window granularity is not a
+power of two, and a card whose mode list lives inside the info buffer — the
+last two are refusals the driver makes by design. **`make 486-vesa-desk` is
+the same 486 with the desktop on it**: A: is `build/vesa.img` (the shipped
+system disk with VESA.DRV already wanted and no autostart) and B: the shipped
+apps disk, so it is where a human looks at the 1024x768x16 desktop, cycles the
+Display page's Vesa row and opens PiXEL at depth. The Display page writes
+`SYSTEM.CFG` onto A:, a build product the next `make` puts back.
+
 **Every knob is tracked by a stamp file**, so a knob-built kernel is a
 different kernel and changing the knob rebuilds it, its carved modules
 (`ctrl.drv`, `format.drv`) and the boot sectors. A forced kernel stays on your
