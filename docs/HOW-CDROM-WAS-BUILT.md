@@ -158,3 +158,20 @@ layout - stands on track 2, and says the drive plays no audio:
 **Tested**: `tests/cdrom.py --sim` (row `cdromsim`, QEMU) for the listing,
 the association, the file's bytes and the player's state; `vm/386-cdrom`
 (86Box, looked at) for the play itself.
+
+## Acceptance, and a second pair of eyes
+
+An independent reviewer read the new assembly with no access to my
+reasoning and found twelve defects, all real. The worst would have hung a
+real machine: `READ SUB-CHANNEL`'s absolute address was divided by 75
+unguarded, and a drive idle at FFFFFF6Ah - legal - makes that `div`
+overflow; nothing here handles INT 0, and a 286 re-runs the faulting
+instruction for ever. Others: a failed read inside a folder walk reported
+as "end of folder" (a copy would have stopped early and called it done),
+CD-Extra discs' last audio track running 11,400 frames into the session
+gap, every key whose ASCII is 0 acting as Space in the player, and a
+DRQ block of length 0 spinning with no timeout. All twelve are fixed in one
+commit; the three CD rows passed again and 86Box played the disc through.
+
+The soak union's one failure, `install`, fails the same way on `origin/main`
+built from scratch - it is not this branch's. `test-full` passed.

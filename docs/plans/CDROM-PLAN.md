@@ -29,7 +29,7 @@ drive's own audio output under a CD Player. SPEC.md §119 is the contract.
 - [x] **Period machine (wave 2):** a 386 under 86Box with an audio CUE/BIN
   (`vm/386-cdrom`, `make cdaudioimg`) boots with the CD Player started from
   `\AUTOSTRT`, to look at a track playing.
-- [ ] **Acceptance:** the affected soak union once and `test-full` once,
+- [x] **Acceptance:** the affected soak union once and `test-full` once,
   after the last batch; budgets; the guide paid; INDEX regenerated.
 
 ## Boundaries and verification
@@ -50,3 +50,16 @@ and an 8088.
 Per-wave checks are host builds (`make`, the fast tier), `kernsize` on both
 kernels, and a boot to look. The soak union and `test-full` run once at the
 end (CLAUDE.md, Testing).
+
+## Result
+
+Soak union (once, after the last batch): `cdrom`, `cdromsim`,
+`cdromempty`, `hdtake`, `hdtakeboot`, `hdtakeblank`, `drvcall`, `drvup`,
+`drvscroll`, `dosdrv`, `cpnames`, `hibernatedrv`, `rdmount`, `rdup`,
+`rdmove`, `rdxms`, `syscheck`, `stikmenu`, `instkeep`, `scsize`,
+`mixervga`, `mixercga`, `mixersb16` passed; `mixerhost` skipped (no
+unicorn here). `install` failed - and fails identically on a pristine
+`origin/main` build ("HDDTOOL.DRV is still held after Close"), so it is
+main's. After an independent review's twelve fixes the three CD rows were
+run again and passed, and 86Box played the disc through again. `test-full`:
+62 passed, 1 skipped (`ctoolchain`, no C compiler installed).
