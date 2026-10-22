@@ -158,8 +158,12 @@ class Session:
         flags=[self.ui._byte(n) for n in ('clk_h12','clk_secs')]
         self.m.write(self.ui._S('clk_h12'),bytes([1]))
         self.m.write(self.ui._S('clk_secs'),bytes([1]))
-        self.wait(lambda:len(self.m.read(self.ui._S('clk_str'),32).split(bytes([0]),1)[0])>=23,
-                  'long clock format reached the bar')
+        def long_clock_ready():
+            text=self.m.read(self.ui._S('clk_str'),32).split(bytes([0]),1)[0]
+            # clk_fmt stages its string before menu_sound publishes the new
+            # icon position. Wait for both, not an intermediate guest state.
+            return len(text)>=23 and self.ui._word('menu_mixx')+24==self.ui._word('vid_wm8')-8*len(text)
+        self.wait(long_clock_ready,'long clock format and speaker reached the bar')
         self.mo.to(80,150);self.pace(.3);self.icon()
         self.open();self.close()
         for n,v in zip(('clk_h12','clk_secs'),flags):self.m.write(self.ui._S(n),bytes([v]))
