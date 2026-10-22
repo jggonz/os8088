@@ -2608,7 +2608,7 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 8                 ; the most records one call can write, so
+DQ_MAXREC  equ 9                 ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
                                  ; which is 6, 5 or 4 depending on the
@@ -2867,6 +2867,10 @@ DRVC_POINT   equ 6              ; a pointing device the kernel does not
 DRVC_FILE2   equ 8              ; the SECOND file-redirector class (SPEC.md
                                 ; 62.9.19): RAMDISK.DRV's, so it and the
                                 ; cable (DRVC_FILE) can be attached at once
+DRVC_CD      equ 9              ; the THIRD file class: CDROM.DRV, an ATAPI
+                                ; CD-ROM (SPEC.md 119). Its volume is ISO 9660
+                                ; answered as FSV_* verbs; its package door is
+                                ; drivers/cdrom/cdpkg.inc - CD audio
 DRVC_EMS     equ 7              ; EXPANDED MEMORY - a LIM EMS board's page
                                 ; registers, EMS.DRV (SPEC.md 107). Pages are
                                 ; MAPPED into a 64 KB frame below 1 MB, never

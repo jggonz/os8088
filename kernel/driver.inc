@@ -42,7 +42,7 @@
 ; =============================================================================
 
 %ifdef KERN_EMU
-DRV_MAX     equ 8               ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 9               ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -55,9 +55,12 @@ DRV_MAX     equ 8               ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; (SPEC.md 9.12) - after the absolute mouse
                                 ; here so that row keeps index 5. The EIGHTH
                                 ; is kern_big's seventh, EMS.DRV (SPEC.md 107)
+                                ; and the NINTH its eighth, CDROM.DRV (SPEC.md
+                                ; 119)
 %elifdef KERN_BIG
-DRV_MAX     equ 7               ; ...and kern_big stops at EMS.DRV (SPEC.md
-                                ; 107), after the CH375 USB mouse (SPEC.md
+DRV_MAX     equ 8               ; ...and kern_big stops at CDROM.DRV (SPEC.md
+                                ; 119), after EMS.DRV (SPEC.md 107), after the
+                                ; CH375 USB mouse (SPEC.md
                                 ; 9.12), appended after the parallel link so
                                 ; rows 0-4 keep their indices.
                                 ; The absolute mouse's row was HERE until
@@ -177,11 +180,17 @@ DRVC_FILE2  equ 8               ; a SECOND file-redirector class (SPEC.md
                                 ; table, unlike the two classes before it, so
                                 ; drv_cls_svc_x and drv_pkg_call_x each step
                                 ; over POINT and EMS to reach its slot
+DRVC_CD     equ 9               ; the THIRD file-redirector class (SPEC.md
+                                ; 119.1): CDROM.DRV's, an ATAPI CD-ROM's
+                                ; ISO 9660 volume answered as FSV_* verbs and
+                                ; its audio as a package door. Appended after
+                                ; DRVC_FILE2 because a class number is ABI; it
+                                ; KEEPS A COPY of its table, like class 8
 EMSV_GONE   equ 8               ; ...and the one EMS verb the kernel sends:
                                 ; an instance is torn down (SPEC.md 107.1,
                                 ; xm_release_rec). Mirrored from os88api.inc
 %ifdef OS88_DRIVERS
-DRVC_MAX    equ 8               ; classes, and so publication slots
+DRVC_MAX    equ 9               ; classes, and so publication slots
 %else
 DRVC_MAX    equ 5               ; ...and FIVE where there is no driver layer at
                                 ; all (SPEC.md 51.0), because the only thing
@@ -374,7 +383,7 @@ DQ_A        equ 2               ; dw: the CLASS's own three words - for
 DQ_B        equ 4               ; dw: DRVC_SOUND, the DSP base port, then
 DQ_C        equ 6               ; dw: (IRQ | DMA<<8), then the DSP version
 DQ_SIZE     equ 8
-DQ_MAXREC   equ 8               ; the most records one call can write. It is
+DQ_MAXREC   equ 9               ; the most records one call can write. It is
 %if DRV_MAX > DQ_MAXREC         ; MIRRORED in apps/os88api.inc, so a caller can
 %error "DRV_MAX exceeds DQ_MAXREC - widen it here AND in apps/os88api.inc"
 %endif                          ; size a buffer without mirroring DRV_MAX - and
@@ -544,6 +553,13 @@ FSV_APPEND  equ 10              ; the chunked pair (SPEC.md 18.4.4)
 ; motor. Nothing else in the kernel branches on it, and a driver that leaves
 ; it clear gets exactly the behaviour every DRVC_FILE driver had before it.
 FSCAP_LOCAL equ 1               ; ...my reads cost what a memcpy costs
+FSCAP_ICON  equ 2               ; ...and my VOLUME DRAWS ITS OWN desktop
+                                ; picture (SPEC.md 26.4.2): desk_pic asks my
+                                ; door's DRV_ICONV at the picture's origin
+                                ; instead of drawing the hard-disk icon
+DRV_ICONV   equ 0x41            ; that verb - clear of every door's own
+                                ; verbs, and of WZV_PAINT (0x40). Mirrored in
+                                ; drivers/os88drv.inc
 
 FSV_READAT  equ 12              ; AX = a handle, DX:BX = buffer, CX = capacity,
                                 ; DI:SI = the 32-bit offset. out DX:AX =
@@ -949,11 +965,12 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
 ; the kernel at the image's offset.
 %1 %+ _bit:
 %ifdef KERN_EMU
-    db 0, 1, 4, 2, 3, 5, 6, 7   ; sound, hdd, ether, ramdisk, net, vmmouse,
-                                ; usbmouse, ems
+    db 0, 1, 4, 2, 3, 5, 6, 7, 8 ; sound, hdd, ether, ramdisk, net, vmmouse,
+                                ; usbmouse, ems, cd-rom
 %elifdef KERN_BIG
-    db 0, 1, 4, 2, 3, 6, 7      ; sound, hdd, ether, ramdisk, net, usbmouse,
-                                ; ems - BIT 6 ON BOTH BUILDS, row 5 here and
+    db 0, 1, 4, 2, 3, 6, 7, 8   ; sound, hdd, ether, ramdisk, net, usbmouse,
+                                ; ems, cd-rom (bit 8 on both: SPEC.md 119.1)
+                                ; - BIT 6 ON BOTH BUILDS, row 5 here and
                                 ; row 6 there: bit 5 is the absolute mouse's
                                 ; even on a build that has no such row (SPEC.md
                                 ; 9.12). And EMS is bit 7 on both (SPEC.md 107)
@@ -1064,6 +1081,8 @@ drv_t_vmm:   db 'Absolute mouse', 0  ; ALONE (SPEC.md 9.11.7) - 27 bytes that
 %ifdef KERN_BIG
 drv_f_ems:   db 'EMS.DRV', 0     ; SPEC.md 107's expanded memory: kern_big's
 drv_t_ems:   db 'EMS', 0         ; for the reason the USB mouse's line gives
+drv_f_cd:    db 'CDROM.DRV', 0   ; SPEC.md 119's CD-ROM, kern_big's for the
+drv_t_cd:    db 'CD-ROM', 0      ; same reason
 drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
 drv_t_usbm:  db 'USB Mouse', 0  ; not kern_small's: the whole driver mechanism
                                 ; is OS88_DRIVERS already, and a 128KB machine
@@ -1125,16 +1144,19 @@ drv_fseg7:   dw 0               ; 107) has no copied table, so drv_publish
 %ifdef OS88_DRIVERS
 drv_fptr8:   dw PKG_DISP        ; class 8 (DRVC_FILE2, SPEC.md 62.9.19) -
 drv_fseg8:   dw 0               ; kern_big's, the build with a ninth row
+drv_fptr9:   dw PKG_DISP        ; class 9 (DRVC_CD, SPEC.md 119.1)
+drv_fseg9:   dw 0
 
 ; drv_svcix - per class, from class 1: which drv_svc copy is its, as
 ; slot * DSV_SIZE/2 + 1, and 0 = it keeps none (drv_cls_svc_x). Class 3 is
 ; RETIRED and reads class 4's slot, which is what the compaction it replaced
 ; answered; nothing publishes class 3 (SPEC.md 58). Classes 6 and 7 keep no
-; copy, and class 8 is the one copied class past them (SPEC.md 62.9.19)
+; copy, and classes 8 and 9 are the copied classes past them (SPEC.md
+; 62.9.19, 119.1)
 DRV_SVCH    equ DSV_SIZE / 2
 drv_svcix:   db 0*DRV_SVCH+1, 1*DRV_SVCH+1, 2*DRV_SVCH+1, 2*DRV_SVCH+1
-             db 3*DRV_SVCH+1, 0, 0, 4*DRV_SVCH+1
-%if $ - drv_svcix != DRVC_MAX || 4*DRV_SVCH+1 > 0x7F || DSV_SIZE & 1
+             db 3*DRV_SVCH+1, 0, 0, 4*DRV_SVCH+1, 5*DRV_SVCH+1
+%if $ - drv_svcix != DRVC_MAX || 5*DRV_SVCH+1 > 0x7F || DSV_SIZE & 1
   %error "driver: drv_svcix is one byte per class, cbw-able, and DSV_SIZE is even"
 %endif
 %endif
@@ -1331,6 +1353,15 @@ usbm_row:                       ; ...a label for tests/usbmouse.py, which finds
                                 ; ports, and 260h is the CH375's on a Book8088
     db DRVE_OK
     db 0
+    dw PKG_DISP, 0              ; row 7 (row 8 on kern_emu): CDROM.DRV, an
+    dw drv_f_cd, drv_t_cd       ; ATAPI CD-ROM (SPEC.md 119)
+    dw 0, 0
+    db DRVC_CD
+    db 0                        ; NOT wanted by default (SPEC.md 51.3): attach
+                                ; selects a device on every IDE channel it
+                                ; probes
+    db DRVE_OK
+    db 0
 %if $ - drv_tab != DRV_MAX * DRVR_SIZE
   %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
 %endif
@@ -1399,6 +1430,7 @@ DRVM_IMG_NET equ 5              ; ceil(build/net.drv     / 1024) - FIVE
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
 DRVM_IMG_USBM equ 2             ; ceil(build/usbmouse.drv / 1024)
 DRVM_IMG_EMS equ 1              ; ceil(build/ems.drv / 1024)
+DRVM_IMG_CD  equ 9              ; ceil(build/cdrom.drv / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 16        ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no
@@ -1436,6 +1468,9 @@ DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
                                 ; buffer. The image IS the whole footprint
 DRVM_EMS     equ DRVM_IMG_EMS   ; EMS.DRV claims nothing: its tables are its
                                 ; bss, and the board's memory is not the heap's
+DRVM_CD      equ DRVM_IMG_CD    ; CDROM.DRV claims nothing: its sector
+                                ; buffer, TOC and handle cache are its bss
+                                ; (SPEC.md 119.3.4)
 DRVM_USBM    equ DRVM_IMG_USBM  ; the USB mouse claims nothing: its one
                                 ; buffer is the 64-byte descriptor, in the
                                 ; image. Its worker's stack is SCH_DRV_STK of
@@ -1459,8 +1494,9 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_VMM                 ; row 5: the absolute mouse (kern_emu alone)
 %endif
 %ifdef KERN_BIG
-    dw DRVM_USBM                ; the CH375 USB mouse, and
-    dw DRVM_EMS                 ; EMS.DRV, last on both big builds
+    dw DRVM_USBM                ; the CH375 USB mouse,
+    dw DRVM_EMS                 ; EMS.DRV, and
+    dw DRVM_CD                  ; CDROM.DRV, last on both big builds
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
@@ -5416,8 +5452,8 @@ drv_dlg_name: resb 14           ; the caller's default name, staged out of its
 %endif
 drv_owner:  resw DRVC_MAX       ; per class: the row whose services are
                                 ; published, or 0. Class 1 is index 0
-%if DRVC_FILE2 != DRVC_MAX || DRVC_EMS + 1 != DRVC_FILE2 || DRVC_POINT + 1 != DRVC_EMS
-%error "driver: the two classes with no copy are 6 and 7, and DRVC_FILE2 (8) is the one copied class past them - drv_svcix says so, one byte a class"
+%if DRVC_CD != DRVC_MAX || DRVC_FILE2 + 1 != DRVC_CD || DRVC_EMS + 1 != DRVC_FILE2 || DRVC_POINT + 1 != DRVC_EMS
+%error "driver: the two classes with no copy are 6 and 7, and DRVC_FILE2 (8) and DRVC_CD (9) are the copied classes past them - drv_svcix says so, one byte a class"
 %endif
 drv_svc:    resb DSV_SIZE*(DRVC_MAX-3) ; ...and a copy of each one's table -
                                 ; one per class but 3 (retired), 6 and 7 - so

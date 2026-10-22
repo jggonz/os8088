@@ -271,41 +271,13 @@ had added.
 ```json
 {
   "big": {
-    "blobseg": 6304,
-    "boot2": 5929,
-    "bootmax": 120832,
-    "bss": 5269,
-    "budget": 100864,
-    "codemax": 65536,
-    "cold": 37637,
-    "coldpara": 2368,
-    "colds": 3808,
-    "fatpara": 288,
-    "fats": 3136,
-    "grace": 2048,
-    "imgpara": 3040,
-    "kend": 6208,
-    "kseg": 96,
-    "ksize": 97792,
-    "lowbss": 5358,
-    "lowpara": 384,
-    "lows": 3424,
-    "minramkb": 128,
-    "ovl": 5118,
-    "stk0": 512,
-    "text": 43356,
-    "vgabuf": 336,
-    "vgabufpara": 32,
-    "vgas": 6176
-  },
-  "emu": {
     "blobseg": 6336,
-    "boot2": 6029,
-    "bootmax": 120320,
-    "bss": 5269,
+    "boot2": 5930,
+    "bootmax": 120832,
+    "bss": 5307,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37637,
+    "cold": 37715,
     "coldpara": 2368,
     "colds": 3840,
     "fatpara": 288,
@@ -321,7 +293,35 @@ had added.
     "minramkb": 128,
     "ovl": 5118,
     "stk0": 512,
-    "text": 43613,
+    "text": 43394,
+    "vgabuf": 336,
+    "vgabufpara": 32,
+    "vgas": 6208
+  },
+  "emu": {
+    "blobseg": 6336,
+    "boot2": 6030,
+    "bootmax": 120320,
+    "bss": 5307,
+    "budget": 100864,
+    "codemax": 65536,
+    "cold": 37715,
+    "coldpara": 2368,
+    "colds": 3840,
+    "fatpara": 288,
+    "fats": 3168,
+    "grace": 2048,
+    "imgpara": 3072,
+    "kend": 6240,
+    "kseg": 96,
+    "ksize": 98304,
+    "lowbss": 5358,
+    "lowpara": 384,
+    "lows": 3456,
+    "minramkb": 128,
+    "ovl": 5118,
+    "stk0": 512,
+    "text": 43651,
     "vgabuf": 336,
     "vgabufpara": 32,
     "vgas": 6208
@@ -723,14 +723,14 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,522 | 36.5% |
-| the window system and its furniture | 22,835 | 28.2% |
+| the file system, end to end | 29,522 | 36.4% |
+| the window system and its furniture | 22,913 | 28.2% |
 | drawing: adapters, primitives, glyphs, icons | 12,642 | 15.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,199 | 10.1% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,237 | 10.2% |
 | the kernel proper: API table, heap, scheduler, events | 7,142 | 8.8% |
 | the Control Panel | 353 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 300 | 0.4% |
-| **total** | **80,993** | |
+| **total** | **81,109** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -746,10 +746,10 @@ there and nowhere else.
 | `ui.inc` — the UI task and the event ladder (§13) | 2,905 | 9 | **2,914** | 56 | — | — |
 | `memory.inc` — the claim heap (§50) | 276 | 2,565 | **2,841** | 24 | 324 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,055 | **2,572** | 31 | — | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 457 | 1,759 | **2,216** | 311 | — | 1,942 |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 495 | 1,759 | **2,254** | 349 | — | 1,943 |
 | `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,118 | **2,153** | 86 | — | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 2,025 | **2,048** | 91 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 1,984 | — | **1,984** | 22 | 16 | 236 |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,947 | **1,970** | 91 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,633 | 126 | **1,759** | 721 | — | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 1,680 | **1,680** | 152 | — | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,357 | — | **1,357** | 212 | 2,944 | — |
@@ -794,7 +794,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,127 | 159 | **2,286** | — | — | 629 |
-| **total** | **43,356** | **37,637** | **80,993** | **5,269** | **5,358** | **5,929** |
+| **total** | **43,394** | **37,715** | **81,109** | **5,307** | **5,358** | **5,930** |
 <!-- END generated table -->
 
 ### Reading it

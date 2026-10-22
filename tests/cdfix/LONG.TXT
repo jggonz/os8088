@@ -1,0 +1,1 @@
+A name ISO 9660 level 2 allows and 8.3 does not.

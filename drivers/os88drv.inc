@@ -117,7 +117,7 @@ DQ_A         equ 2              ; dw: your class's own three words
 DQ_B         equ 4              ; dw
 DQ_C         equ 6              ; dw
 DQ_SIZE      equ 8
-DQ_MAXREC    equ 8              ; ...and the most one call can write
+DQ_MAXREC    equ 9              ; ...and the most one call can write
 
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked
@@ -417,6 +417,17 @@ FSV_APPEND   equ 10             ; the chunked pair (18.4.4), so a copy streams
 ; 62.9.2.1's cache-only pass. Leave it clear and you get exactly the
 ; behaviour every DRVC_FILE driver had before the bit existed.
 FSCAP_LOCAL  equ 1              ; my reads cost what a memcpy costs
+; ...and the SECOND bit (SPEC.md 26.4.2): set it and your volume's desktop
+; zone is YOUR picture, not the kernel's hard-disk icon. desk_pic calls your
+; DSV_PKGCALL with BL = DRV_ICONV and CX/DX = the picture's top-left on the
+; screen, the gfx lock held - draw with OSAPI_ICON_DRAW (16x16 records, so a
+; 32-wide picture is quadrants: drivers/wirezone.inc's shape), 32 rows on
+; VGA/EGA/Hercules and 14 on the CGA (OSAPI_VIDEO says which), keep every
+; register, and answer CF = 0. CF = 1 and the kernel draws its own icon. The
+; draw lands in the cell's band while the cell composes, so the selection
+; inverts your picture like any other (SPEC.md 26.9.9)
+FSCAP_ICON   equ 2              ; my volume draws its own desktop picture
+DRV_ICONV    equ 0x41           ; ...through my door, verb DRV_ICONV
 
 FSV_READAT   equ 12             ; ...and its read half
 FSV_DELETE   equ 14             ; SI = name

@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "c6031cce0d51f3efc7720ddefe2f45fe34bd514189e34109b8898d1f5159bf6b",
+  "fingerprint": "69144283bf52e51e734efe31d4c7cc661480ab10578e8e31048de8865be0c84b",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "b3dacdeef2f6cc10afdff902151a6bd2064f7f562b2c71df3f3a8f84a0a89e2e",
+  "fingerprint": "544762deae9443093e0064389f6392c51a5d13472b80ca3af1e925d358ee79ae",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -441,6 +441,41 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "Add SND_CAP_MIXER without moving or changing existing API cells",
+   "to": 11
+  },
+  {
+   "fingerprint": "5a099670b2becda278326540f5343a8287617766ead3ad4265987468536cbac8",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "DRVC_CD = 9, a third file-redirector class for CDROM.DRV (SPEC.md 119.1), appended after DRVC_FILE2. An addition: no cell moved and no contract changed, so everything built before still runs; no number moves.",
+   "to": 10
+  },
+  {
+   "fingerprint": "4d974291a40ef2d7505147b4d79807a9146bb4738719896245805ba1dc10dd82",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "DRVC_CD = 9, a third file-redirector class for CDROM.DRV (SPEC.md 119.1), appended after DRVC_FILE2. An addition: no cell moved and no contract changed, so everything built before still runs; no number moves.",
+   "to": 11
+  },
+  {
+   "fingerprint": "544762deae9443093e0064389f6392c51a5d13472b80ca3af1e925d358ee79ae",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "DQ_MAXREC 8 -> 9: kern_emu's ninth drv_tab row (CDROM.DRV, SPEC.md 119.1) trips the guard that a suspend's record buffer holds one record a row. CDROM.DRV answers DRVV_HWINFO with CF = 1, so no machine writes a ninth record and a buffer of eight built before is never overrun: no number moves.",
+   "to": 10
+  },
+  {
+   "fingerprint": "b538721f9ddec8e7e27838ad41e2196ca75d146ee6242cf819cffe6a332d7c15",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "DQ_MAXREC 8 -> 9: kern_emu's ninth drv_tab row (CDROM.DRV, SPEC.md 119.1) trips the guard that a suspend's record buffer holds one record a row. CDROM.DRV answers DRVV_HWINFO with CF = 1, so no machine writes a ninth record and a buffer of eight built before is never overrun: no number moves.",
+   "to": 11
+  },
+  {
+   "fingerprint": "69144283bf52e51e734efe31d4c7cc661480ab10578e8e31048de8865be0c84b",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "FSCAP_ICON (DSV_CAPS bit 2) and DRV_ICONV (41h): a file-class driver's volume may draw its own desktop picture through its door (SPEC.md 26.4.2). An addition - a driver without the bit gets the kernel's icon as before, and a kernel without the hook never asks - so no number moves.",
    "to": 11
   }
  ]

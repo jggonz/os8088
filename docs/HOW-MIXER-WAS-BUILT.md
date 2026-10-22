@@ -39,6 +39,14 @@ theme pixels, notifications, progress cleanup and heap/HMA SB16 playback.
 The Dark CGA/Hercules and Color VGA pictures were inspected after the pass.
 All 63 full-gate rows also passed.
 
+The PR integrates main's CD-ROM work without moving its player: CDRack is
+the sole `SYSOPTIONAL` package on the roomy system disks and live media;
+Mixer remains in `APPS/`. An independent FAT12 walk checks both placements
+on all eight shipping floppies. With main's extra driver-class metadata,
+kern_big is 98,304 bytes, one 512-byte rung above the pre-integration
+follow-up. kern_emu stays 98,304 and kern_small 61,440. All three retain
+2,560 bytes under their existing budgets.
+
 ## Foundation
 
 The request combines a global desktop control with optional installed

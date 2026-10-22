@@ -3012,8 +3012,8 @@ dsk_vol_add:
     mov [bx+DV_CLASS], al       ; matched the caller's segment against a
                                 ; publication slot and left the class here
     mov ah, DVK_DRV             ; ...AND THE KIND FOLLOWS THE CLASS. A
-    cmp al, DRVC_FILE2          ; (either file class - SPEC.md 62.9.19)
-    je .kindfile
+    cmp al, DRVC_FILE2          ; (every file class - SPEC.md 62.9.19, and
+    jae .kindfile               ; DRVC_CD past it, 119.1)
     cmp al, DRVC_FILE           ; DRVC_FILE driver answers questions about
     jne .kindpub                ; FILES (SPEC.md 62.9), so its volume has no
 .kindfile:

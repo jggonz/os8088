@@ -181,6 +181,22 @@
   "strings": null,
   "why": "Paint's refusal of a GIF over 64KB is named: the toast GIF larger than 64KB"
  },
+ "CDRACK_O88": {
+  "sources": [
+   "apps/cdrack"
+  ],
+  "stamped": "ca9acbde",
+  "strings": "4d867d0ae6645bc7",
+  "why": "CDRack replaces the CD Player: rewritten for the three layouts, the two themes, the toggles, the volume and the keys"
+ },
+ "CDROM_DRV": {
+  "sources": [
+   "drivers/cdrom"
+  ],
+  "stamped": "ca9acbde",
+  "strings": "c3a141853e1e7543",
+  "why": "the player it names is CDRack now"
+ },
  "CHARTER_F88": {
   "sources": [],
   "stamped": "e4576a70",
