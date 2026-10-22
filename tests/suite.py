@@ -2789,6 +2789,11 @@ SOAK = [
         "the table goes 4 claims to 2 and this row names it. Needs `make "
         "mseg`.",
         needs=("marty", "nasm"), serial=True, wants=("build/mseg.img",)),
+    # THE REALDMG CORE ROWS UNDER A QEMU THAT LOSES SAHF'S FLAGS run one guest
+    # instruction a block (tests/rdgcore/rdgqemu.py tcg_args, QEMU 11.0.2 on an
+    # M1), five to twelve times slower than their declared seconds, which stay
+    # a correct QEMU's. Their timeouts are the backstop for that arm: gbcpu
+    # took 266s and rdgstatic 304s there against 230 and 126.
     Row("gbcpu", "soak", py("tests/gbcpu.py"), 50.0,
         "REALDMG's SM83 core (docs/REALDMG-SPEC.md) against Blargg's eleven "
         "cpu_instrs ROMs, the combined MBC1 one, instr_timing, mem_timing and "
@@ -2810,7 +2815,7 @@ SOAK = [
         "with POP BC's branch to it taken out as the control. WHY QEMU: a correctness gate, and QEMU counts work "
         "exactly - the cycle counts instr_timing checks are the core's own. "
         "SOAK: one package's core",
-        needs=("qemu", "nasm")),
+        needs=("qemu", "nasm"), timeout=660),
     Row("rdgstatic", "soak", py("tests/rdgstatic.py"), 24.0,
         "REALDMG's Static recompiler (docs/REALDMG-SPEC.md section 16.8): "
         "cpu_instrs, instr_timing, mem_timing and tools/gbprof/gbrmw.asm each "
@@ -2826,7 +2831,7 @@ SOAK = [
         "moving into the second twice; NEGATIVE CONTROL: rt_exit chaining "
         "across the segments must fail. WHY QEMU: a correctness gate, "
         "counted, not timed. SOAK: one package's core",
-        needs=("qemu", "nasm")),
+        needs=("qemu", "nasm"), timeout=360),
     Row("gbacid", "soak", py("tests/rdgcore/rdgacid.py"), 3.0,
         "REALDMG's renderer (apps/realdmg/rdgppu.inc, docs/REALDMG-SPEC.md "
         "section 13) against dmg-acid2's reference picture, all 23,040 pixels: "
@@ -2878,7 +2883,7 @@ SOAK = [
         "frame as the package does and twice on a checked one: without the "
         "lines a call left being composed by the next it fails on 151-499. "
         "SOAK: one package",
-        needs=("qemu", "nasm", "rgbds")),
+        needs=("qemu", "nasm", "rgbds"), timeout=450),
     Row("gbdemo", "soak", py("tests/gbdemo.py"), 30.0,
         "RealDMG's 5150 demo (docs/plans/REALDMG-PLAN.md section 6, wave 8's "
         "gate): GBDEMO.GB (tools/gbours.py, ours) taken full screen by Alt+Enter "
@@ -2970,7 +2975,7 @@ SOAK = [
         "off the floppy), F8 takes the frame counter back to the save (without "
         "rdg_stapply it does not), an empty slot changes nothing - in the window "
         "and in full screen. SOAK: one package",
-        needs=("qemu", "marty", "nasm", "rgbds"),
+        needs=("qemu", "marty", "nasm", "rgbds"), timeout=540,
         wants=("build/realdmg.o88", "build/os8088-720.img")),
     Row("gbsave", "soak", py("tests/gbsave.py"), 40.0,
         "REALDMG.O88's battery RAM and MBC3 clock (docs/REALDMG-SPEC.md "
