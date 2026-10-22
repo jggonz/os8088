@@ -15822,7 +15822,11 @@ SOAK = [
         "signature of a race whose odds move with the box. Each attempt is a "
         "COMPLETE test of the assertion, so six only lowers the chance that "
         "every sample lands badly - and CELLS below is deliberately NOT "
-        "retried, being the half that would hide a real regression",
+        "retried, being the half that would hide a real regression. OTHERS "
+        "READS tm_quiet's key and the page's pixels rather than counting "
+        "cells: since 28.4.10 another window's cache redraws one chunk and "
+        "the map, two breakpoint hits the drag-time pump lost together, and "
+        "the row read 0 + 0 over a page that had redrawn",
         needs=("marty",), serial=True),
     Row("tmowner", "soak", py("tests/tmowner.py"), 300.0,
         "SPEC.md 28.4.10: a raise cache is listed under PURGEABLE, the "
