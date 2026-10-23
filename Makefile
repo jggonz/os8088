@@ -15298,7 +15298,7 @@ $(ZDATA)/MIDI/%.MID: apps/midirack/songs/%.MID tools/os88lz.py $(PKGZSTAMP) | $(
 # WHICH DISK CARRIES WHICH (SPEC.md 121.12 has the arithmetic, 24.6.1's rule,
 # dated 2026-10-22): all three on the 1.44MB apps disk and the live media;
 # NIGHT SIGNALS and AFTER HOURS on the 1.2MB one, which had 393 clusters of
-# 512 bytes free and the package is 189 of them; AFTER HOURS alone on
+# 512 bytes free and the package is 192 of them; AFTER HOURS alone on
 # media360.img, beside the package. `make xtmp3disk` carries all three in
 # every geometry.
 XTMP3MP3SRC  := tests/xtmp3
@@ -15517,7 +15517,7 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     2026-10-19): a chat client is the NETWORK disk's subject, and it rides
 #     network360.img beside Telnet and the Browser.
 #     XTMP3 IS NOT CURATED ONTO IT (SPEC.md 121.12, 24.6.1's rule, dated
-#     2026-10-22): that disk had 14 clusters spare and the player is 95. It
+#     2026-10-22): that disk had 14 clusters spare and the player is 96. It
 #     rides the MEDIA DISK on MIDIRack's ground - the floppy whose subject is
 #     music already - at its root, with AFTER HOURS in MEDIA/.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
@@ -15582,7 +15582,7 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # meant for a third primary 720KB disk, content not yet decided, which is to
 # carry what the 720KB system and apps disks leave off.
 # ...AND XTMP3 IS NOT ON IT (SPEC.md 121.12, 24.6.1's rule, dated 2026-10-22):
-# the disk had 36 of 713 clusters free and the player is 95 of them before a
+# the disk had 36 of 713 clusters free and the player is 96 of them before a
 # single song. `make xtmp3disk`'s 720KB floppy carries it with all three demo
 # songs, and it is the obvious candidate for the third 720KB disk above - the
 # owner's call, like that disk's contents.
@@ -15696,8 +15696,8 @@ $(APPSIMG360): $(APPS360) tools/os88disk.py
 # apps disk had to drop the module, and 1.2MB is not such a geometry.
 #
 # XTMP3 JOINED IT (SPEC.md 121.12, dated 2026-10-22) on MIDIRack's ground: the
-# disk had 147 of 354 clusters free, the player is 95 and AFTER HOURS 30, which
-# leaves 22. The other two songs (69 and 50) did not fit beside it, and AFTER
+# disk had 147 of 354 clusters free, the player is 96 and AFTER HOURS 30, which
+# leaves 21. The other two songs (69 and 50) did not fit beside it, and AFTER
 # HOURS is the one a 360KB machine - an XT, which converts first - is for.
 $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
                 $(BUILD)/xtmp3.o88 $(XTMP3MP3_360) \
@@ -16628,7 +16628,7 @@ imager:
 # WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
 # chat client is the network disk's subject, and network360.img carries it.
 #
-# XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 95
+# XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 96
 # clusters, a player and not a calibration instrument, and media360.img
 # carries it at this geometry. The 720KB and 1.44MB combos carry it.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
@@ -18356,7 +18356,7 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 # floppy. It is the 720KB home the apps disk has no room for (APPSARGS720's
 # note) and the 360KB disk with every song, where media360.img has room for
 # one. The songs are PLAIN, never under $(ZDATA) (XTMP3MP3's note). 360KB:
-# 95 + 69 + 50 + 30 = 244 clusters of files, 248 of 354 with the folders and
+# 96 + 69 + 50 + 30 = 245 clusters of files, 249 of 354 with the folders and
 # ASSOC.DAT.
 .PHONY: xtmp3disk
 xtmp3disk: $(BUILD)/xtmp3.img $(BUILD)/xtmp3720.img $(BUILD)/xtmp3120.img \

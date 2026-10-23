@@ -1308,8 +1308,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "148bb424",
-  "strings": "d1ff6526b72f2e86",
-  "why": "Decode First's XT timing corrected to FIELD's end-to-end measurement (0.0552x on XT Standard)"
+  "stamped": "96e89697",
+  "strings": "b6b18bcda45c67f2",
+  "why": "Integration track (96e89697): the stated minimum, no time in the drive dialog and About mm:ss left in the progress window, dials resting while converting, packed and large-cluster refusals, XT timing from xtmp3xt's 0.0946x; shots retaken"
  }
 }

@@ -35,9 +35,11 @@ What XTMP3 needs depends on the computer:
   Control Panel's Sound page.
 - **A hard disk** is needed for decoding first. XTMP3 never decodes to a
   floppy.
-- **Memory.** On an XT, decoding with XT Standard needs about 400KB free,
-  which a 640KB PC has. XT Fast needs about 330KB. With too little memory
-  the state line says **Error: Out of memory**.
+- **Memory.** XT Standard needs 390KB, which a 640KB PC has. XT Fast needs
+  360KB, XT Speech 340KB and XT Turbo 330KB. Original, Half and Quarter need
+  220KB. When the computer has too little, the state line says what the
+  quality needs and what the computer has, such as **Error: Needs 390 KB,
+  has 300 KB**.
 
 ## Playing a song
 
@@ -103,15 +105,17 @@ Decode First...**, XTMP3 asks for a hard disk:
 
 1. The window lists every hard disk with its free space. A disk that cannot
    be used is grey with its reason, such as **read-only** or **too little
-   room**. Below the list are the quality, the sound the file will hold, the
-   disk space it needs, and roughly how long decoding will take.
+   room**. Below the list are the quality, the sound the file will hold and
+   the disk space it needs.
 2. Choose a disk and click **Decode and Play**. The Save dialog opens on
    that disk. Pick a folder and a name and click **Save**. The name ends in
    `.WAV`.
 3. A window shows the decoding: the time decoded so far against the song's
    length, the percentage, the time spent, and the speed, where **0.31x**
-   means a second of music takes a little over three seconds. The LCD's
-   progress bar and the state line follow it too.
+   means a second of music takes a little over three seconds. After ten
+   seconds it adds how long is left, such as **About 12:40 left**, worked
+   out from its own speed. The LCD and the state line follow it, once a
+   second.
 4. When it finishes, XTMP3 checks the file and plays it. The state line
    says **Playing decoded file**.
 
@@ -121,10 +125,9 @@ away, or the MP3 changes while it is being decoded, decoding stops with the
 reason and nothing plays.
 
 On an IBM PC or XT at 4.77 MHz, decoding takes many times the song's own
-length: close to an hour for a three-minute song at 11 kHz with XT Standard,
-and longer for a CD-rate stereo song. The Decode First window gives an
-estimate before you start, and on an XT the job can take twice as long as
-it says.
+length: about half an hour for a three-minute song at 11 kHz with XT
+Standard, and hours for a CD-rate stereo song. Before the first song, an XT
+also spends a few seconds checking it.
 
 With more songs waiting in the queue, the switch **Queue too: No** /
 **Queue too: Yes** decides whether the next songs are decoded into the same
@@ -161,7 +164,9 @@ there:
   **BUFFER**: how far ahead of the music XTMP3 has decoded, or, while
   decoding first, how much of the song is done. Its green end is good.
 
-**Options > Meters: Off** stops the needles.
+While a song is decoded first, the MONO needle rests and BUFFER moves every
+few seconds, so the decoding goes faster. **Options > Meters: Off** stops
+the needles.
 
 ## The volume knob
 
@@ -253,5 +258,12 @@ About, in the XTMP3 menu, shows the program's card.
 - An MP3 decoded live is never played through the PC speaker. Without a
   card, every song is decoded first.
 - XTMP3 refuses MPEG Layer I and Layer II files, and "free format" MP3s, and
-  says so by name.
+  says so by name. It also refuses an MP3 stored packed (**The MP3 is stored
+  packed**).
+- A hard disk partition of 1 to 2GB stores files in very large pieces.
+  XTMP3 cannot play an MP3 from one (**Its disk's clusters are too large**);
+  copy it to another disk first. It can play a decoded WAV from one, and on
+  the Decode First list such a disk may say **clusters too large**. XT
+  Standard cannot decode onto it (**Too little memory for that disk**); the
+  other qualities can.
 - Playback and seeking wait while a song is being decoded.
