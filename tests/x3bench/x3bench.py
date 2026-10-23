@@ -17,9 +17,17 @@ harness writes to the debug console.
          counters against Stream.counts.
 --pcm    every one of tests/xtmp3/X3SIM.txt's 141 cases (each fixture at
          divisors 1, 2 and 4, and the mono downmixes) through the STANDARD
-         part's GRANULE: the PCM's SHA-256, its length and its clip count
-         against the golden line. A case that differs is reported with its
-         first differing sample (decoded by x3sim for the comparison).
+         part's GRANULE: the PCM's SHA-256, its length, its clip count and
+         its saturation count against the golden line. A case that differs
+         is reported with its first differing sample (decoded by x3sim for
+         the comparison).
+         AND the HOSTILE cases, which no golden line covers because no
+         fixture saturates: six fixtures with every granule's global_gain
+         raised by 24 (x 64 in amplitude), decoded here by x3sim for the
+         expected hash and counts. They saturate in requantisation, stereo,
+         antialias, the IMDCT and the DCT, and take the IMDCT's k < 0 and
+         large-overlap paths - every out-of-line clamp the hot code has.
+         Both passes take them
 
 Both by default. Exit 0 only when every case matched. QEMU is exact about the
 work, which is what bit-exactness needs; MartyPC is for the cycles.
@@ -57,14 +65,27 @@ def sh(cmd, **kw):
     return r
 
 
-def build(need_std):
-    """The parts are make's; the harness and its boot sector are built here."""
-    targets = [os.path.join(BUILD, 'x3front.bin')]
-    if need_std:
-        targets.append(os.path.join(BUILD, 'x3stdp.bin'))
-    sh(['make', '-s'] + [os.path.relpath(t, ROOT) for t in targets])
-    sh(NASM + ['-o', os.path.join(BUILD, 'x3bboot.bin'), 'tests/x3bench/x3bboot.asm'])
-    sh(NASM + ['-o', os.path.join(BUILD, 'x3bench.bin'), 'tests/x3bench/x3bench.asm'])
+HARNESS = {}                         # the harness's two binaries, built per run
+
+
+def build(need_std, make=True, into=None):
+    """The parts are make's (`make` builds them for XTMP3.O88; --nobuild trusts
+    that and touches nothing in build/); the harness and its boot sector are
+    assembled here, into `into` (a private directory) unless it is None."""
+    if make:
+        targets = [os.path.join(BUILD, 'x3front.bin')]
+        if need_std:
+            targets.append(os.path.join(BUILD, 'x3stdp.bin'))
+        sh(['make', '-s'] + [os.path.relpath(t, ROOT) for t in targets])
+    for part in ('x3front.bin',) + (('x3stdp.bin',) if need_std else ()):
+        if not os.path.exists(os.path.join(BUILD, part)):
+            raise SystemExit('x3bench: no %s - run make' % os.path.join(BUILD, part))
+    d = into or BUILD
+    for name, src in (('x3bboot.bin', 'tests/x3bench/x3bboot.asm'),
+                      ('x3bench.bin', 'tests/x3bench/x3bench.asm')):
+        out = os.path.join(d, name)
+        sh(NASM + ['-o', out, src])
+        HARNESS[name] = out
 
 
 def sectors(b):
@@ -75,10 +96,11 @@ def pad(b):
     return b + b'\0' * (sectors(b) * 512 - len(b))
 
 
-def make_image(cases, need_std, path):
-    """cases: [(name, div, mono, mode, ringk, chunk)]"""
-    boot = open(os.path.join(BUILD, 'x3bboot.bin'), 'rb').read()
-    harness = open(os.path.join(BUILD, 'x3bench.bin'), 'rb').read()
+def make_image(cases, need_std, path, floppy=None):
+    """cases: [(name, div, mono, mode, ringk, chunk[, maxg])]; floppy = None
+    (a hard disk: QEMU) or (sectors a track, heads, total sectors)"""
+    boot = open(HARNESS.get('x3bboot.bin', os.path.join(BUILD, 'x3bboot.bin')), 'rb').read()
+    harness = open(HARNESS.get('x3bench.bin', os.path.join(BUILD, 'x3bench.bin')), 'rb').read()
     front = open(os.path.join(BUILD, 'x3front.bin'), 'rb').read()
     std = open(os.path.join(BUILD, 'x3stdp.bin'), 'rb').read() if need_std else b''
     lba = 1 + DIR_SECTORS
@@ -93,20 +115,29 @@ def make_image(cases, need_std, path):
     files = {}
     for c in cases:
         if c[0] not in files:
-            data = open(os.path.join(FIXDIR, c[0]), 'rb').read()
+            data = fixture_bytes(c[0])
             files[c[0]] = (lba, len(data))
             body += pad(data)
             lba += sectors(data)
-    d = b'X3BD' + struct.pack('<HHHHHH', front_lba, sectors(front), std_lba,
-                              sectors(std), len(cases), sectors(harness))
-    for name, div, mono, mode, ringk, chunk in cases:
+    spt, heads = (floppy[0], floppy[1]) if floppy else (0, 0)
+    d = b'X3BD' + struct.pack('<HHHHHHHH12x', front_lba, sectors(front), std_lba,
+                              sectors(std), len(cases), sectors(harness), spt, heads)
+    for c in cases:
+        name, div, mono, mode, ringk, chunk = c[:6]
+        maxg = c[6] if len(c) > 6 else 0
         flba, fsz = files[name]
-        d += struct.pack('<IIBBBBH12s6x', flba, fsz, div, mono, mode, ringk, chunk,
-                         name.encode())
+        d += struct.pack('<IIBBBBH12sH4x', flba, fsz, div, mono, mode, ringk, chunk,
+                         name.encode(), maxg)
     assert len(d) <= DIR_SECTORS * 512, 'too many cases for the directory'
     d += b'\0' * (DIR_SECTORS * 512 - len(d))
+    if floppy:
+        boot = boot[:504] + struct.pack('<HH', floppy[0], floppy[1]) + boot[508:]
     img = boot + d + body
-    img += b'\0' * ((-len(img)) % (1024 * 1024))     # a whole number of MB
+    if floppy:
+        assert len(img) <= floppy[2] * 512, 'the bench does not fit the floppy'
+        img += b'\0' * (floppy[2] * 512 - len(img))
+    else:
+        img += b'\0' * ((-len(img)) % (1024 * 1024))     # a whole number of MB
     with open(path, 'wb') as f:
         f.write(img)
 
@@ -154,6 +185,64 @@ def split_cases(raw):
         else:
             cur.append((t, b))
     return cases, done
+
+
+# --- the hostile fixtures: every granule's global_gain raised ----------------
+
+HOSTILE = {'HC128.MP3': 'C128.MP3', 'HMSF.MP3': 'MSF.MP3', 'HIS44.MP3': 'IS44.MP3',
+           'HIS22.MP3': 'IS22.MP3', 'HAFTERHR.MP3': 'AFTERHRS.MP3',
+           'HMONO44.MP3': 'MONO44.MP3'}
+HOSTILE_GAIN = 24
+_HCACHE = {}
+
+
+def hostile(data, delta):
+    """`data` with every granule's global_gain raised by delta (clamped at
+    255): x 2^(delta/4) in amplitude, written into the side information at
+    the field's fixed bit offset (x3sim.parse_side's layout)."""
+    b = bytearray(data)
+    st = X.Stream(bytes(b))
+    o = st.first + (st.h0.size if st.tagframe else 0)
+    while o + 4 <= st.end:
+        h = X.parse_header(b, o)
+        if h is None or o + h.size > st.end:
+            break
+        p = o + 4 + (2 if h.crc else 0)
+        if h.mpeg1:
+            base, blk = 9 + (5 if h.nch == 1 else 3) + 4 * h.nch, 59
+        else:
+            base, blk = 8 + (1 if h.nch == 1 else 2), 63
+        for k in range(h.granules * h.nch):
+            bit = p * 8 + base + k * blk + 21          # part2_3 12, big_values 9
+            gg = 0
+            for i in range(8):
+                gg = (gg << 1) | ((b[(bit + i) >> 3] >> (7 - ((bit + i) & 7))) & 1)
+            gg = min(255, gg + delta)
+            for i in range(8):
+                pos = bit + i
+                m = 1 << (7 - (pos & 7))
+                b[pos >> 3] = (b[pos >> 3] & ~m & 0xFF) | (m if (gg >> (7 - i)) & 1 else 0)
+        o += h.size
+    return bytes(b)
+
+
+def fixture_bytes(name):
+    if name in HOSTILE:
+        if name not in _HCACHE:
+            _HCACHE[name] = hostile(open(os.path.join(FIXDIR, HOSTILE[name]), 'rb').read(),
+                                    HOSTILE_GAIN)
+        return _HCACHE[name]
+    return open(os.path.join(FIXDIR, name), 'rb').read()
+
+
+def hostile_golden(name, div, mono):
+    """x3sim's golden line for a hostile case, made here."""
+    X.OPS = X.Ops()
+    pcm = X.decode_file(fixture_bytes(name), 'int', div, mono)[0]
+    h = hashlib.sha256(np.ascontiguousarray(pcm, dtype='<i2').tobytes()).hexdigest()
+    return '%-13s d%d %-6s %7d x%d %s clip %d sat %d' % (
+        name, div, 'mono' if mono else 'native', len(pcm), pcm.shape[1], h, X.OPS.clip,
+        sum(X.OPS.sat.values()))
 
 
 # --- what x3sim says ---------------------------------------------------------
@@ -345,7 +434,7 @@ def front_pass(names, timeout, keep):
     bad = 0
     wm = 0
     for (name, *_), recs in zip(cases, got):
-        data = open(os.path.join(FIXDIR, name), 'rb').read()
+        data = fixture_bytes(name)
         msg = None
         info = None
         grans = []
@@ -388,6 +477,12 @@ def front_pass(names, timeout, keep):
 
 def pcm_pass(only, timeout, keep):
     gold = X.read_golden()
+    for h, base in HOSTILE.items():               # the hostile cases' lines
+        if only and h not in only:
+            continue
+        stereo = X.Stream(fixture_bytes(h)).h0.nch == 2
+        for div, mono in ((1, False), (4, False)) + (((1, True),) if stereo else ()):
+            gold[(h, div, mono)] = hostile_golden(h, div, mono)
     cases = []
     for (name, div, mono), line in gold.items():
         if only and name not in only:
@@ -415,7 +510,7 @@ def pcm_pass(only, timeout, keep):
         elif h != want_hash:
             n = len(pcm) // (2 * want_ch)
             msg = 'PCM differs (%d samples, x3sim %d)' % (n, want_n)
-            ref = X.decode_file(os.path.join(FIXDIR, name), 'int', div, bool(mono))[0]
+            ref = X.decode_file(fixture_bytes(name), 'int', div, bool(mono))[0]
             a = np.frombuffer(pcm[:len(pcm) - len(pcm) % (2 * want_ch)], '<i2').reshape(-1, want_ch)
             m = min(len(a), len(ref))
             d = np.nonzero((a[:m] != ref[:m]).any(axis=1))[0]
@@ -448,14 +543,17 @@ def main():
     ap.add_argument('--nobuild', action='store_true')
     a = ap.parse_args()
     both = not (a.front or a.pcm)
-    if not a.nobuild:
-        build(a.pcm or both)
+    priv = tempfile.mkdtemp(prefix='x3bench-bin-', dir=BUILD)
+    build(a.pcm or both, make=not a.nobuild, into=priv)
     bad = 0
     if a.front or both:
-        names = [n for n in decodable() if not a.only or n in a.only]
+        names = [n for n in decodable() + list(HOSTILE) if not a.only or n in a.only]
         bad += front_pass(names, a.timeout, a.keep)
     if a.pcm or both:
         bad += pcm_pass(a.only, a.timeout, a.keep)
+    for f in os.listdir(priv):
+        os.unlink(os.path.join(priv, f))
+    os.rmdir(priv)
     return 1 if bad else 0
 
 

@@ -613,6 +613,10 @@ xf_scf2:
 ; HUFFMAN (x3sim.huffman): the 576 values of the channel into its record
 ; out: CF = 1 when the big values ran past part2_3_length (the record's ix
 ; is then the caller's to zero). clobbers: everything but DS, ES
+;
+; The reader's position lives in BP for the whole of it (X3P_S_BITP before
+; and after), and every read is one xf_pk: 16 bits at a position, zero at or
+; past the data's end - x3sim BitReader.peek's answer.
 ; =============================================================================
 xf_huff:
     mov si, [xf_si]
@@ -672,12 +676,13 @@ xf_huff:
     shl cx, 1
     add cx, [xf_ix0]
     mov [xf_r2], cx
-    ; region 0: up to min(r1, nbig)
-    cmp ax, [xf_nbig]
+    mov bp, [X3P_S_BITP]            ; THE READER, from here in BP
+    cmp ax, [xf_nbig]               ; region 0: up to min(r1, nbig)
     jbe .l0
     mov ax, [xf_nbig]
 .l0:
     mov [xf_lim], ax
+    mov si, [xf_si]
     mov al, [si+X3P_SI_TAB]
     call xf_region
     jc .over
@@ -709,78 +714,78 @@ xf_huff:
 .q:
     cmp di, [xf_lim]
     ja .qdone
-    mov ax, [X3P_S_BITP]
-    cmp ax, [xf_end]
+    cmp bp, [xf_end]
     jae .qdone
-    push di
-    call xf_sym                     ; AL = vwxy
-    pop di
-    mov bx, [X3P_S_BITP]
-    cmp bx, [xf_end]
+    call xf_sym                     ; AL = vwxy, BP past the code
+    cmp bp, [xf_end]
     ja .qdone                       ; it would pass the granule's end
-    mov [xf_v], al
-    mov byte [xf_m], 8              ; v w x y: bit 3 first
-    mov word [xf_q4i], 0
+    mov ah, al                      ; the four, bit 3 first, each with its
+    mov cx, 4                       ; sign: v w x y into xf_q4s
+    mov bx, xf_q4s
 .qv:
     xor dx, dx
-    mov al, [xf_v]
-    test al, [xf_m]
+    test ah, 8
     jz .qz
-    inc dx                          ; a one: its sign follows
-    push di
-    push dx
+    inc dx
+    push ax
+    push cx
+    push bx
     mov cl, 1
-    call xf_get
-    pop dx
-    pop di
+    call xf_gbp
+    pop bx
+    pop cx
     or al, al
+    pop ax
     jz .qz
     mov dx, -1
 .qz:
-    mov bx, [xf_q4i]                ; staged: the store waits for the
-    mov [xf_q4s+bx], dx             ; end check
-    add word [xf_q4i], 2
-    shr byte [xf_m], 1
-    jnz .qv
-    mov bx, [X3P_S_BITP]
-    cmp bx, [xf_end]
+    mov [bx], dx
+    inc bx
+    inc bx
+    shl ah, 1
+    loop .qv
+    cmp bp, [xf_end]
     ja .qdone                       ; a quadruple past the end: discarded
     mov si, xf_q4s                  ; ...else it is stored
     movsw
     movsw
     movsw
     movsw
-    jmp .q
+    jmp short .q
 .qdone:
-    ; --- the rest is zero; the last non-zero line ---
+    ; --- the last non-zero line: back from the last one written; the rest
+    ; is zero ---
+    mov si, di                      ; SI = one past the last written
     mov cx, [xf_ix0]
     add cx, 576 * 2
     sub cx, di
     shr cx, 1
     xor ax, ax
     rep stosw
-    mov si, [xf_ix0]
-    mov di, 576
+    mov di, [xf_ix0]
 .nz:
-    or di, di
-    jz .nzd
-    mov bx, di
-    shl bx, 1
-    cmp word [si+bx-2], 0
+    cmp si, di
+    je .nzd
+    cmp word [si-2], 0
     jne .nzd
-    dec di
+    dec si
+    dec si
     jmp short .nz
 .nzd:
+    sub si, di
+    shr si, 1
     mov bx, [xf_cr]
-    mov [bx+X3G_C_NZ], di
+    mov [bx+X3G_C_NZ], si
+    mov [X3P_S_BITP], bp
     clc
     ret
 .over:
+    mov [X3P_S_BITP], bp
     stc
     ret
 
-; xf_region - the pairs from DI up to [xf_lim] with table AL
-; out: DI advanced; CF = 1 once the reader has passed [xf_end]
+; xf_region - the pairs from DI up to [xf_lim] with table AL, the reader in
+; BP. out: DI advanced; CF = 1 once the reader has passed [xf_end]
 ; clobbers: AX, BX, CX, DX, SI
 xf_region:
     cmp di, [xf_lim]
@@ -803,20 +808,75 @@ xf_region:
     mov bl, [x3ft_tree+bx]
     call xf_tree
 .pair:
-    push di
-    call xf_sym                     ; AL = x << 4 | y
-    pop di
-    mov [xf_v], al
+    ; THE COMMON CASE: a code that is a first-level leaf (at most 8 bits)
+    ; and no 15 with linbits - both signs are then in the same 16-bit window
+    mov bx, bp
+    call xf_pk                      ; AX = 16 bits at BP
+    mov dx, ax                      ; DX = the window
+    mov cl, [xf_hsh]
+    shr ax, cl
+    mov si, ax
+    shl si, 1
+    add si, [xf_hbase]
+    mov ax, [si]                    ; the entry
+    test ah, 0x80
+    jnz .slow                       ; a pointer: the general walk
+    mov cl, ah
+    and cl, 15                      ; CL = its length, AL = x << 4 | y
+    cmp byte [xf_lin], 0
+    je .fast
+    mov ah, al
+    and ah, 0xF0
+    cmp ah, 0xF0
+    je .lin                         ; a 15 with linbits: the general values
+    mov ah, al
+    and ah, 0x0F
+    cmp ah, 0x0F
+    je .lin
+.fast:
+    xor ch, ch
+    add bp, cx                      ; past the code
+    shl dx, cl                      ; the window past it: >= 8 bits left
+    mov bl, al
     mov cl, 4
     shr al, cl
-    call xf_val                     ; x
+    xor ah, ah                      ; x
+    or al, al
+    jz .x0
+    inc bp                          ; its sign
+    shl dx, 1
+    jnc .x0
+    neg ax
+.x0:
     stosw
-    mov al, [xf_v]
+    mov al, bl
+    and ax, 15                      ; y
+    jz .y0
+    inc bp
+    shl dx, 1
+    jnc .y0
+    neg ax
+.y0:
+    stosw
+    jmp short .next
+.lin:
+    xor ch, ch                      ; a leaf, but linbits: the values the
+    add bp, cx                      ; general way
+    jmp short .vals
+.slow:
+    call xf_sym                     ; AL = x << 4 | y, BP past the code
+.vals:
+    mov dl, al
+    mov cl, 4
+    shr al, cl
+    call xf_val                     ; x (keeps DL)
+    stosw
+    mov al, dl
     and al, 15
     call xf_val                     ; y
     stosw
-    mov ax, [X3P_S_BITP]
-    cmp ax, [xf_end]
+.next:
+    cmp bp, [xf_end]
     ja .past
     cmp di, [xf_lim]
     jb .pair
@@ -827,7 +887,7 @@ xf_region:
     ret
 
 ; xf_val - a pair value AL (0..15) into its signed word: linbits on 15, then
-; the sign. out: AX. clobbers: BX, CX, DX, SI
+; the sign. out: AX. keeps DX, DI. clobbers: BX, CX, SI
 xf_val:
     xor ah, ah
     or al, al
@@ -837,19 +897,16 @@ xf_val:
     mov cl, [xf_lin]
     or cl, cl
     jz .sign
-    push di
-    call xf_get
-    pop di
+    call xf_gbp
     add ax, 15
 .sign:
+    mov bx, bp                      ; the sign: the next bit
     push ax
-    push di
-    mov cl, 1
-    call xf_get
-    pop di
-    mov cx, ax
+    call xf_pk
+    inc bp
+    shl ax, 1
     pop ax
-    jcxz .out
+    jnc .out
     neg ax
 .out:
     ret
@@ -868,22 +925,30 @@ xf_tree:
     mov [xf_hbase], ax
     ret
 
-; xf_sym - one symbol of the current tree (x3tables.huff_decode)
-; out: AL = the value; the reader advanced. clobbers: AH, BX, CX, DX, SI
+; xf_sym - one symbol of the current tree from BP (x3tables.huff_decode)
+; out: AL = the value, BP past its code. clobbers: AH, BX, CX, SI
 xf_sym:
-    mov bx, [X3P_S_BITP]
-    mov [xf_p0], bx
-    call xf_peek16
+    mov bx, bp
+    call xf_pk
     mov cl, [xf_hsh]
     shr ax, cl
     mov si, ax
     shl si, 1
     add si, [xf_hbase]
     mov ax, [si]                    ; the entry
+    test ah, 0x80
+    jnz .walk
+    mov cl, ah                      ; a leaf at the first level: the common
+    and cl, 15                      ; case (1.04 lookups a symbol)
+    xor ch, ch
+    add bp, cx
+    ret
+.walk:
+    mov [xf_p0], bp
     mov byte [xf_used], 0
     mov cl, 16                      ; the width this lookup consumed
     sub cl, [xf_hsh]
-.walk:
+.w:
     test ah, 0x80
     jz .leaf
     add [xf_used], cl               ; a pointer: its level is consumed
@@ -898,7 +963,7 @@ xf_sym:
     mov bx, [xf_p0]
     add bl, [xf_used]
     adc bh, 0
-    call xf_peek16
+    call xf_pk
     mov cl, 16
     sub cl, [xf_w]
     shr ax, cl
@@ -908,14 +973,51 @@ xf_sym:
     add si, [xf_hbase]
     mov ax, [si]
     mov cl, [xf_w]
-    jmp short .walk
+    jmp short .w
 .leaf:
     mov bl, ah                      ; a leaf: bits 8..11 are this level's
     and bl, 15
     add bl, [xf_used]
     xor bh, bh
     add bx, [xf_p0]
-    mov [X3P_S_BITP], bx
+    mov bp, bx
+    ret
+
+; xf_pk - 16 bits at bit position BX, MSB first; 0 at or past the end
+; out: AX   clobbers: CX, SI
+xf_pk:
+    xor ax, ax
+    cmp bx, [X3P_S_BITN]
+    jae .out
+    mov si, bx
+    mov cl, 3
+    shr si, cl
+    add si, [X3P_S_MD0]
+    mov ax, [si]
+    xchg ah, al
+    mov cl, bl
+    and cl, 7
+    jz .out
+    mov ch, [si+2]
+    shl ax, cl
+    neg cl
+    add cl, 8
+    shr ch, cl
+    or al, ch
+.out:
+    ret
+
+; xf_gbp - CL = n bits (1..16) from BP -> AX; BP += n. clobbers: BX, CX, SI
+xf_gbp:
+    push cx
+    mov bx, bp
+    call xf_pk
+    pop cx
+    xor ch, ch
+    add bp, cx
+    neg cl
+    add cl, 16
+    shr ax, cl
     ret
 
 ; =============================================================================

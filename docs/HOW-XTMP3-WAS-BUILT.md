@@ -116,6 +116,63 @@ the face is a demo that plays nothing; S8 replaces it behind the same
 names. Looked at on QEMU only - Hercules through its software renderer -
 and never on 86Box or a real card.
 
+## 2026-10-22 — the front end and the STANDARD decoder on the target
+
+*The STANDARD track (S5 and the bit-exact half of S6), on `xtmp3/std`. The
+contract notes and every number are [docs/xtmp3/STD.md](xtmp3/STD.md).*
+
+**The contract went first.** Within the first hour `apps/xtmp3/x3gran.inc`
+was pushed - the granule record, a backend's six far verbs and their
+register contracts, the front end's API - because two other tracks were
+writing against it at the same time: the XT backend reads the record and
+the engine calls the verbs. One correction followed it, in a comment
+(x3pars.inc reaches the FRONT part through ES, not DS); the ABI did not
+move.
+
+**Observed, in this order.** The front end matched x3sim on its first full
+run: every granule record of 32 fixtures - each `ix`, each requantisation
+exponent, each stereo plan byte - and only the five titles were wrong (the
+title copy wrote its NUL at the start of the field). The bench that showed
+it is a bare-metal harness on QEMU that %includes the shipping parser and
+loads the package's own parts, far-called on a 384-byte stack; QEMU is
+exact about the work, which is all bit-exactness needs.
+
+Then the STANDARD part, 1,700 lines of assembly, came out **bit-exact on
+all 141 golden cases on its first run**. That was not luck so much as a
+decision: the two stages whose order of operations is the hardest to
+transcribe - the recursive DCT-II and the 16-tap window - were never
+transcribed. `tools/x3stdgen.py` runs x3sim's own `dct2_i` on symbolic
+values and writes down the operations it is asked for, in order.
+
+![The queue reading real titles and durations (QEMU, VGA)](xtmp3/s5-queue.png)
+
+S5's outcome was looked at on QEMU: the queue shows NEON DRIVE from its
+ID3v2 tag, AFTER HOURS from an ID3v1 tag, and a tagless VBR file under its
+name with its exact length from the Xing count; an estimated length carries
+its `~`.
+
+**The 8088 said what the model could not.** On MartyPC's 5150 the first
+measurement was 6.81 M cycles a granule for an 11 kHz mono stream - twice
+NUMERICS.md's model, and 27 times too slow for real time. The breakpoint
+timer showed where: the window was exactly where the model put it, but a
+32 x 16 multiply with its 48-bit accumulation costs ~460 cycles, not 330,
+and the band scale, Huffman and requantisation ran 4 to 10 times their
+model figures. Six rounds of exact optimisation, each re-measured, took
+it to 5.57 M (and 44.1 kHz stereo from 12.86 M to 9.31 M); the window and
+the DCT are now within about a fifth of the multiply floor. The 8088's PCM
+was checked against x3sim's by CRC-32 on every case timed.
+
+**What the clean fixtures could not show.** No golden fixture saturates, so
+every clamp in the decoder was correct only by reading - including the
+ones that had just been moved out of line. Six fixtures with their global
+gain raised by 24 were added to the gate; they saturate in five stages, and
+on their first run they found a real defect: the requantiser tested SF
+after `RCL`, which sets no SF. A normal stream never reaches that line.
+
+**Intentions, not yet observations.** No 286, 386 or 486 has run it (S8's
+ladder measures those on 86Box), the engine behind the face is still the
+demo, and seeking is written but unexercised.
+
 ## 2026-10-22 — the XT backend on the target
 
 *The XT track (S7), on `xtmp3/xt`. The contract notes and every table are
