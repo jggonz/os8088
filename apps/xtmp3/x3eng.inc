@@ -368,6 +368,14 @@ x3_e_tick:
 %ifdef X3REPORT
     call x3r_tick                   ; FIELD (x3rep.inc): an error's report
 %endif
+    cmp byte [x3l_arm], 0           ; A PROBE ARMED: it runs once a whole
+    je .na                          ; pass's face update has followed the arm
+    dec byte [x3l_arm]              ; (x3l_launch) - an armed document's
+    jnz .na                         ; play arms it in this pass, before here
+    cmp byte [x3_md], MD_CHECK
+    jne .na
+    mov byte [x3_job], WJ_CAL
+.na:
     call x3_needles                  ; the worker's peaks into the needles
     mov al, [x3_md]
     cmp al, MD_LIVE
@@ -563,6 +571,7 @@ x3_stopall:
     mov byte [x3_st+X3S_QUAL], X3Q_AUTO
     mov byte [x3_md], MD_IDLE
     mov byte [x3_paused], 0
+    mov byte [x3l_arm], 0
     mov byte [x3_rampout], 0
     mov byte [x3_rampin], 0
     pop bx
@@ -1713,11 +1722,11 @@ x3_grant:
 .big:
     mov cx, X3_RINGBIG * 1024
 .xt:
-    cmp byte [x3_bkind], X3K_XT     ; UNDER THE XT BACKEND the grant is 8 KB
-    jne .want                       ; at any rate: its machine has 400,000
-    mov cx, X3_RINGSM * 1024        ; bytes for everything (SPEC.md 121.10,
-                                    ; x3_plan budgets it), and a rung that
-                                    ; keeps up has its output in 8 KB
+    cmp byte [x3_bkind], X3K_XT     ; UNDER THE XT BACKEND the grant is what
+    jne .want                       ; x3_plan budgeted at any rate (16 KB, or
+    mov cx, [x3_xtgr]               ; 8): its machine has 400,000 bytes for
+                                    ; everything (SPEC.md 121.10), never the
+                                    ; external ring
 .want:
     cmp byte [x3_ghave], 0
     je .try
@@ -3589,6 +3598,8 @@ x3_plan:
     jae .r
     mov dx, si
 .r:
+    mov word [x3_xtgr], X3_RINGKB * 1024    ; the card's grant: 16 KB first
+.again:
     mov di, 0xFFFF                  ; DI = the budget in KB: none on STANDARD
     cmp byte [x3_bkind], X3K_XT
     jne .bud
@@ -3602,7 +3613,12 @@ x3_plan:
     je .bud                         ; converting: the stream is closed)
     cmp word [x3c_planc], 0
     jne .bud
-    sub di, X3_RINGSM
+    mov ax, [x3_xtgr]
+    push cx
+    mov cl, 10
+    shr ax, cl
+    pop cx
+    sub di, ax
     jae .bud
     xor di, di
 .bud:
@@ -3645,6 +3661,21 @@ x3_plan:
     shr dx, 1                       ; ...then the ring halves, while it still
     cmp dx, si                      ; holds two clusters
     jae .try
+    cmp word [x3_xtgr], X3_RINGSM * 1024    ; LIVE (or a probe) under XT: the
+    jbe .none                       ; card's 16 KB grant with a smaller look-
+    cmp byte [x3_bkind], X3K_XT     ; ahead came first - a floppy's gulp is
+    jne .none                       ; shorter, and 16 KB is 1.5 s of 11 kHz
+    cmp byte [x3_card], 0           ; where 8 is 0.74 (86Box's 386 underran
+    je .none                        ; 11 times on 8: FIELD.md); then the
+    cmp word [x3c_planc], 0         ; 8 KB grant, the ring from the top
+    jne .none
+    mov word [x3_xtgr], X3_RINGSM * 1024
+    mov dx, [x3_lasz]
+    cmp dx, si
+    jae .again
+    mov dx, si
+    jmp .again
+.none:
     mov ax, x3_s_ceil
 .no:
     stc
@@ -4305,9 +4336,10 @@ x3l_launch:
     mov byte [x3l_warm], 1          ; the first granule untimed (below)
     call x3_wspawn
     jc .no
-    mov byte [x3_job], WJ_CAL
-    clc
-    ret
+    mov byte [x3l_arm], 2           ; ARMED, started two timer passes on
+    clc                             ; (x3_e_tick): this pass's face update -
+    ret                             ; a new track's whole repaint, seconds on
+                                    ; an XT - is not the probe's to pay
 .no:
     mov byte [x3_st+X3S_STATE], X3ST_CHECK
     stc
@@ -5295,6 +5327,8 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3l_pos0, 2                 ; ...the file offset it began at
     X3B x3l_goff, 2                 ; ...the grant's rolling offset
     X3B x3l_warm, 1                 ; ...1: the next granule is the warm-up
+    X3B x3l_arm, 1                  ; ...1: started by the next tick
+    X3B x3_xtgr, 2                  ; the card's grant under XT (x3_plan)
 %ifdef X3STUB
     X3B x3_dlog, 3 * 16             ; the debug log (X3LOG)
     X3B x3_dlogn, 1
