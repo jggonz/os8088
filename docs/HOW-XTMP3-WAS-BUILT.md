@@ -712,13 +712,24 @@ asserts).
   C:\XTMP3.O88. The fetch now stands in the launch folder, and a fetch that
   fails on a machine with room says `Cannot read its decoder`. Its
   `offvol` leg plays that case live.
-- The compact layouts print `STEREO44.1 kHz`: STEREO runs into the rate.
+- The compact layouts printed `STEREO44.1 kHz`: STEREO ran into the rate.
+  **Fixed in c22de988** (the channel word starts at x 256). Re-checked on
+  QEMU's VGA compact player and on the CGA, where it reads `STEREO 44.1
+  kHz`. `vga-compact.png` and `cga-compact.png` are that build's.
 - On QEMU's Hercules build, a song queued while XT FAST played kept its
-  file stem (`NIGHTSIG`) as its title.
+  file stem (`NIGHTSIG`) as its title. In c22de988 a failed probe flags its
+  entry, and the entry is asked again when the player is idle. **The
+  re-check could not reproduce the original condition.** On that build Auto
+  played NEON DRIVE on ORIGINAL, not XT FAST, and the probe succeeded during
+  play: NIGHT SIGNALS showed its tag while AFTER HOURS played, and again
+  after Stop. So the retry path itself was not exercised here.
+  `herc-mid.png` is the re-check's picture.
 
-**They hold for the later head.** `feature/xtmp3` moved on to 3e3a9306
-after the pictures were taken. Between the two, nothing in the face's code
-or its art changed (`x3face.inc`, `x3draw.inc`, `tools/os88x3art.py`).
+**They hold for the later heads.** `feature/xtmp3` moved on to 3e3a9306
+after the pictures were taken, and `xtmp3/int` to c22de988. Up to
+3e3a9306, nothing in the face's code or its art changed. c22de988's only
+face change moves the compact layouts' channel word, and those pictures
+were retaken on it. Nothing else in the face changed (`x3face.inc`, `x3draw.inc`, `tools/os88x3art.py`).
 What did change was the engine: a probe starts after the face is drawn,
 and a live XT stream takes the 16 KB card ring. The drive dialog's
 greying string also changed, to `32 KB clusters`. None of those appear
