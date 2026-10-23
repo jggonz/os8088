@@ -428,7 +428,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | WORD | `apps/word/word.asm` | §68 | yes |
 | WireChat | `apps/wirechat/wirechat.asm` | §113 | yes |
 | WireFleet | `apps/wirefleet/wirefleet.asm` | §114 | yes |
-| XTMP3 | `apps/xtmp3/xtmp3.asm` | §121 | no |
+| XTMP3 | `apps/xtmp3/xtmp3.asm` | §121 | yes |
 | isoTron | `apps/isotron/isotron.asm` | §108 | yes |
 
 ## SPEC.md sections

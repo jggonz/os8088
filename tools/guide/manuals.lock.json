@@ -77,9 +77,9 @@
   "sources": [
    "apps/audio"
   ],
-  "stamped": "d511fdd4",
-  "strings": "c66ee02557046ce8",
-  "why": "Open while paused keeps the paused song (added, not selected); the bar empties with the clock at End of playlist and Stop"
+  "stamped": "55a051b4",
+  "strings": "e12e9e2c75e19803",
+  "why": "Unchanged: XTMP3's track split the look-ahead out of apengine.inc into aplook.inc (35efae82). AUDIO.O88 assembles byte-identical and no user-visible string changed. Only the file a string lives in moved."
  },
  "AUTOSTRT": {
   "sources": [],
@@ -1303,5 +1303,13 @@
   "stamped": "e4576a70",
   "strings": "9b380de63648dbc5",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "XTMP3_O88": {
+  "sources": [
+   "apps/xtmp3"
+  ],
+  "stamped": "55a051b4",
+  "strings": "ef3e8e0af3b935ed",
+  "why": "New manual, written against apps/xtmp3 at 55a051b4 (menus, keys, states, the drive and progress dialogs) and SPEC.md 121; shots from MartyPC's VGA XT with media360.img"
  }
 }

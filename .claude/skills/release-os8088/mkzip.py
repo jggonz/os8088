@@ -198,8 +198,10 @@ ITEMS = [
      [("os8088-360.img", "360KB", ""), ("apps360.img", "360KB", "")]),
 
     ("xt", "Music disk", True,
-     "The music module the music players open. It does not fit beside the "
-     "programs at this size, so it rides a disk of its own.",
+     "The music programs and what they play: MIDIRack with its ten songs, "
+     "XTMP3 with the MP3 an XT is meant for, and the music module the "
+     "tracker opens. They do not fit beside the other programs at this size, "
+     "so they ride a disk of their own.",
      [("media360.img", "360KB", "")]),
     ("xt", "Office disk", True,
      "The spreadsheet and the chart viewer -- which at this size are on this "
@@ -323,6 +325,14 @@ ITEMS = [
      "disk and five on the 360KB one.",
      [("pixel.img", "1.44MB", ""), ("pixel120.img", "1.2MB", ""),
       ("pixel720.img", "720KB", ""), ("pixel360.img", "360KB", "")]),
+    ("progs", "XTMP3", False,
+     "An MP3 player that plays every song at the best quality the computer "
+     "and its sound card can keep up with, and says which quality that is. "
+     "A slow PC decodes the song to a WAV file on its hard disk first, then "
+     "plays that. With three demo songs in MEDIA. The 720KB software disk "
+     "has no room for it; this disk is where it is at that size.",
+     [("xtmp3.img", "1.44MB", ""), ("xtmp3120.img", "1.2MB", ""),
+      ("xtmp3720.img", "720KB", ""), ("xtmp3360.img", "360KB", "")]),
     ("progs", "Weave", False,
      "Web-style programs -- markup, script and formulas -- compiled into one "
      "bundle file and run natively. Carries the runtime, three demo "
