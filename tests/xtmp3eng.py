@@ -1445,6 +1445,64 @@ def leg_rovol():
             os.unlink(iso)
 
 
+def straddle_mp3(path):
+    """AFTERHRS.MP3's frames behind an ID3v2 tag that ends 200 bytes short of
+    32 KB - so on a 32 KB-cluster volume the probe's sync, which needs the
+    first header and the one after it, asks across the cluster's end. TIT2
+    'STRADDLE' lies in the tag's first bytes, where the title is read"""
+    audio = open(fixture("AFTERHRS.MP3"), "rb").read()
+    st = x3sim_mod().Stream(audio)
+    audio = audio[st.start:]
+    size = 32768 - 200 - 10
+    tit = b"\x03STRADDLE"
+    frame = b"TIT2" + struct.pack(">I", len(tit)) + b"\0\0" + tit
+    body = frame + bytes(size - len(frame))
+    ss = bytes([(size >> 21) & 127, (size >> 14) & 127, (size >> 7) & 127,
+                size & 127])
+    data = b"ID3\x03\x00\x00" + ss + body + audio
+    open(path, "wb").write(data)
+    return x3sim_mod().Stream(data)
+
+
+def x3sim_mod():
+    import x3sim
+    return x3sim
+
+
+def leg_probe32():
+    """the queue's probe on a 32 KB-cluster volume (STD.md, the integration
+    track): a request that runs past one cluster is answered (the tail moved
+    down in front of the next): the title and the duration are read. Play
+    then refuses the MP3 by name - its look-ahead would need two clusters"""
+    leg = "probe32"
+    t = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    mp = os.path.join(t, "STRADDLE.MP3")
+    st = straddle_mp3(mp)
+    want = int(st.info["duration"] + 0.5)
+    r = Rig(leg, stub=False, floppy=[os.path.join(FIX, "SILENT.MP3")],
+            hd=[({"mb": 140, "spc": 64}, [mp], [], 0)])
+    try:
+        if not check(leg, "XTMP3 opens on C:'s STRADDLE.MP3 (32 KB clusters)",
+                     r.open_file("C", "STRADDLE.MP3", ["STRADDLE.MP3"])):
+            return
+        r.until(lambda: r.st()["state"] in (ST_ERROR, ST_READY, ST_CHECK),
+                "the probe and the play", 30)
+        q = r.rd("x3_q", 60)
+        title = q[19:60].split(b"\0")[0].decode("latin-1")
+        dur = struct.unpack_from("<H", q, 16)[0]
+        check(leg, "the probe read its title across the cluster's end",
+              title == "STRADDLE", repr(title))
+        check(leg, "...and its (estimated) duration, x3sim's", dur == want,
+              "%d s, x3sim %d" % (dur, want))
+        r.until(lambda: r.st()["state"] == ST_ERROR, "the refusal", 20)
+        check(leg, "Play refuses it by name: 'Its disk's clusters are too "
+              "large'", r.errtext() == "Its disk's clusters are too large",
+              repr(r.errtext()))
+    finally:
+        r.done()
+        shutil.rmtree(t, ignore_errors=True)
+
+
 def leg_packed():
     """an MP3 STORED PACKED (an lz4 'CZ' wrapper: READ_SEQ hands over the
     wrapper, SPEC.md 20.14.3) is refused by name, never decoded as noise"""
@@ -1590,7 +1648,8 @@ LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "novol": leg_novol, "twovol": leg_twovol, "playwav": leg_playwav,
         "pause": leg_pause, "xtpeak": leg_xtpeak, "xtclu": leg_xtclu,
         "chgsrc": leg_chgsrc, "dfdel": leg_dfdel, "batch": leg_batch,
-        "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox}
+        "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox,
+        "probe32": leg_probe32}
 
 
 def main():

@@ -2293,17 +2293,18 @@ x3_rampup:
 .w:
     cmp cx, 2
     jb .out
-    mov ax, [es:si]                 ; 16-bit: s k / 32
-    push bx
+    mov ax, [es:si]                 ; 16-bit: s k / 32 - the low word of
+    push bx                         ; DX:AX >> 5, which is (AX >> 5) with
+    push cx                         ; DX's low bits above it (|s k| < 2^20)
     xor bh, bh
     imul bx
+    mov cl, 5
+    shr ax, cl
+    mov cl, 11
+    shl dx, cl
+    or ax, dx
+    pop cx
     pop bx
-    mov dl, 5
-.sh:
-    sar dx, 1
-    rcr ax, 1
-    dec dl
-    jnz .sh
     mov [es:si], ax
     add si, 2
     sub cx, 2

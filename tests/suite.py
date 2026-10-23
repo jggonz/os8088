@@ -490,8 +490,9 @@ FAST = [
         "source changed DURING a conversion, Decoded Files deleting only "
         "XTMP3's own WAV, an approved batch over two tracks, a read-only "
         "fixed volume (a CD through CDROM.DRV), an lz4-packed MP3 refused "
-        "by name, and the speaker's capture (pcspk audiodev, "
-        "tools/sndcheck.py)",
+        "by name, the queue's probe across a 32 KB cluster's end, and the "
+        "finished file's actual bytes reaching a Covox (QEMU's trace of "
+        "the LPT data port; its pcspk renders no PWM)",
         needs=("qemu", "nasm", "mtools", "numpy"), serial=True,
         timeout=2700,
         wants=("build/xtmp3s.o88", "build/xtmp3s.bin", "build/xtmp3.o88",
