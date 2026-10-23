@@ -1,31 +1,38 @@
 #!/usr/bin/env python3
-"""kern_mega: a C package's OVERLAY moved by a compaction, and then used
-(docs/plans/KERN-MEGA-PLAN.md 14.46; SPEC.md 73.14, 66.2).
+"""kern_mega: a C package's EAGER overlay carve stays PINNED through a
+compaction, and the overlay still works after it (docs/plans/KERN-MEGA-PLAN.md
+14.46; SPEC.md 73.14.2, 116.6, 66.2).
 
     python3 tests/megaovl.py            the row
     python3 tests/megaovl.py --keep     ...and leave the boot's directory
 
 CWORD's overlay is PART 0 of CWORD.O88, read EAGERLY into a carve the parts
-standard claims top-down in conventional memory (OSAPI_MEM_CLAIM_DMA_HI), and
-declared movable with apps/cc/crt0.asm's cc_ovcarve - which re-derives
-[cc_ovseg] and, through OS88_CODESEL, [cc_ovcs], the CODE selector every
-vector and the thunk's retf take under kern_mega. Nothing had ever moved one
-there. This boots kern_mega under Bochs with three packages on C: in this
-order: MEGALOWH (tests/megaown, -DMO_LOWHOLE) holds a top-down 60KB claim at
-the heap's ceiling, so CWORD's carve lands under it; MEGALOWH gives it back
+standard claims top-down in conventional memory (OSAPI_MEM_CLAIM_DMA_HI). That
+carve is PINNED on every package (apps/cc/crt0.asm's cc_ovinit): a module
+function calling another is a `call far [cc_ovm_*]` whose pushed CS is the
+MODULE's, popped by a plain `retf`, so a compaction under that stack would send
+the return into whatever block took the carve's place - LEMMINGS claims ~321 KB
+three such frames deep (SPEC.md 116.6). This row was written when the carve was
+movable and asserted that it moved; main pinned it for LEMMINGS (#168) and the
+row now holds kern_mega to THAT contract.
+
+It boots kern_mega under Bochs with three packages on C: in this order:
+MEGALOWH (tests/megaown, -DMO_LOWHOLE) holds a top-down 60KB claim at the
+heap's ceiling, so CWORD's carve lands under it; MEGALOWH gives it back
 twenty-five seconds later; and MEGALOWB (OS88_HIGH, so its own region is not
 in the way) claims everything OSAPI_MEM_AVAIL says a compaction would leave,
-which the ascending run alone cannot hold - the compactor has to slide the
-carve UP into the hole. MEGALOWB prints every claim before and after.
+and prints every claim before and after.
 
-The carve (CWORD's 20KB, owned by CWORD's region) must be at a HIGHER
-segment after the claim; then the host types into CWORD and uses File > Save
-As (the overlay's dialog and its save path) onto C:, and C:\\DOC.RTF must
-hold the typed line. No kern_mega FAULT or CLOSED.
+Three things must hold: a compaction really ran (some other claim moved, or
+the carve standing still would prove nothing); CWORD's 20KB carve is at the
+SAME segment after it; and then the host types into CWORD and uses File >
+Save As (the overlay's dialog and its save path) onto C:, and C:\\DOC.RTF
+must hold the typed line. No kern_mega FAULT or CLOSED.
 
-THE FAILING CASE (docs/WRITING-TESTS.md 1): take cc_ovcarve's OSAPI_MEM_MOVABLE
-out of apps/cc/crt0.asm (cc_ovinit) and the carve is pinned - red on "did not
-move".
+THE FAILING CASE (docs/WRITING-TESTS.md 1): declare the eager carve movable
+again in cc_ovinit (an OSAPI_MEM_MOVABLE on [op_base] with a relocation proc
+that re-binds the vectors, as before #168) and the compactor slides it up into
+MEGALOWH's hole - red on "MOVED".
 """
 import os
 import re
@@ -115,9 +122,22 @@ def main():
     if len(b) != 1 or len(a) != 1:
         fails.append("could not find CWORD's 20KB carve in both snapshots "
                      "(%d, %d)" % (len(b), len(a)))
-    elif a[0][0] <= b[0][0]:
-        fails.append("CWORD's carve did not move up: %04X before, %04X "
-                     "after" % (b[0][0], a[0][0]))
+    elif a[0][0] != b[0][0]:
+        fails.append("CWORD's eager carve MOVED: %04X before, %04X after - "
+                     "it must stay pinned (apps/cc/crt0.asm cc_ovinit, "
+                     "SPEC.md 116.6): a module function's pushed CS would "
+                     "return into another block" % (b[0][0], a[0][0]))
+    # A COMPACTION RAN, or a carve standing still proves nothing: some other
+    # claim, the same owner and size on both sides, is at a new segment
+    carve = b[0][2] if len(b) == 1 else None
+    moved = [(o, p, s0, s1) for (s0, p, o) in before for (s1, p1, o1) in after
+             if o == o1 and p == p1 and s0 != s1 and o != carve]
+    for o, p, s0, s1 in moved:
+        print("megaovl: owner %04X's %04X paragraphs moved %04X -> %04X"
+              % (o, p, s0, s1))
+    if before and after and not moved:
+        fails.append("no claim moved between MEGALOWB's snapshots: nothing "
+                     "compacted, so the carve staying put says nothing")
     c = os.path.join(out, "c.img")
     d = open(c, "rb").read()
     lba = struct.unpack_from("<I", d, 0x1BE + 8)[0]

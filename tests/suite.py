@@ -15055,15 +15055,17 @@ SOAK = [
                "build/megahole.o88", "build/megaown.o88")),
     Row("megaovl", "soak", py("tests/megaovl.py"), 260.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.46: on kern_mega a C package's "
-        "OVERLAY is moved by a compaction and then used. Under Bochs, "
-        "MEGALOWH holds a top-down claim at the heap's ceiling so CWORD's "
-        "eager overlay carve (part 0, apps/cc/crt0.asm's cc_ovcarve) lands "
-        "under it, gives it back, and MEGALOWB (OS88_HIGH) claims everything "
-        "OSAPI_MEM_AVAIL says a compaction would leave, which only sliding "
-        "the carve up into the hole can place. The carve must be at a higher "
-        "segment after; then CWORD takes typing and File > Save As, and "
-        "C:\\DOC.RTF must hold the line. The failing case is cc_ovinit "
-        "without its OSAPI_MEM_MOVABLE: the carve is pinned. 260s is 225 "
+        "EAGER overlay carve stays PINNED through a compaction and the "
+        "overlay still works (apps/cc/crt0.asm's cc_ovinit, SPEC.md 116.6: "
+        "a module function's pushed CS is popped by a plain retf, so a moved "
+        "carve would return into another block). Under Bochs, MEGALOWH holds "
+        "a top-down claim at the heap's ceiling so CWORD's carve (part 0) "
+        "lands under it, gives it back, and MEGALOWB (OS88_HIGH) claims "
+        "everything OSAPI_MEM_AVAIL says a compaction would leave. Another "
+        "claim must have moved (a compaction ran), the carve must be at the "
+        "SAME segment, and then CWORD takes typing and File > Save As and "
+        "C:\\DOC.RTF must hold the line. The failing case is the eager carve "
+        "declared movable again: it slides up into the hole. 260s is 225 "
         "measured",
         needs=("bochs", "nasm", "cc"),
         wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",

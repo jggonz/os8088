@@ -7354,6 +7354,18 @@ holds the line. Row `megaovl` (225 s); red with `cc_ovinit`'s
 today - the parts standard claims code through the DMA door - so the
 selector arm of `cc_ovcarve` is not reachable.
 
+**2026-10-22: the row's premise was withdrawn by `main`, and the row follows
+it.** LEMMINGS (#168, SPEC.md 116.6) PINNED the eager carve on every package
+and removed `cc_ovcarve`: a module function calling another is a `call far
+[cc_ovm_*]` whose pushed CS is popped by a plain `retf`, so a compaction under
+that stack returns into whatever block took the carve's place. This branch met
+that at its `main -> elendilon` merge, and `megaovl` went on asserting a move
+that no longer happens (8B00 -> 8B00, red at #299's own head). It now asserts
+the pinned contract under the same squeeze: another claim moved (a compaction
+ran: 11E0 -> 10A0 in the measured run), the carve did not, and CWORD's Save As
+still writes `C:\DOC.RTF`. A LAZY overlay (WEAVE, LOOM, LEMMINGS, the Apple
+II, `tests/covl`) is still movable, and no row moves one on kern_mega yet.
+
 #### 14.46.6 Cost, rows, and for the owner
 
 **Bytes**, both arms built at one commit:
