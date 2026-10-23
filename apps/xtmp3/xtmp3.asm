@@ -1711,7 +1711,7 @@ x3_ab3:     db 'this machine can sustain', 0
     X3B x3d_pdim, 1
     X3B x3f_full, 1                 ; x3face.inc: 1 = this pass is a paint
     X3B x3f_fok, 1                  ; the colour dial faces built (bit 0 VU,
-                                    ; bit 1 BUFFER) since the last paint
+                                    ; bit 1 BUFFER) for the dials x3f_fdg names
     X3B x3f_dpos, 1                 ; a dial's needle, its mode, its zone
     X3B x3f_dmd, 1
     X3B x3f_dzone, 1
@@ -1730,6 +1730,7 @@ x3_ab3:     db 'this machine can sustain', 0
     X3B x3f_kp, 2
     X3B x3f_rp, 2
     X3B x3f_kst, 2                  ; the knob's planes' stride
+    X3B x3f_fdg, 2                  ; the dials the colour faces were built for
     X3B x3f_qy, 2                   ; a queue row's top
     X3B x3f_bx, 2                   ; a key: its place, picture, caption
     X3B x3f_by, 2

@@ -231,9 +231,9 @@ inside its canvas and every scale mark on its face.
 
 | | bytes |
 |---|---|
-| `XTMP3.O88` image | 26,481 |
-| ...packed (lz4) | 16,656 |
-| bss | 9,745 |
+| `XTMP3.O88` image | 26,496 |
+| ...packed (lz4) | 16,671 |
+| bss | 9,747 |
 | art (`build/x3art.inc`, data) | 12,970 |
 | ...the largest parts | digit sets 4,584; dials 3,192; knobs 2,082; fonts 1,616 |
 

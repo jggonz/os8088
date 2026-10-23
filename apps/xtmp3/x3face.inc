@@ -1090,11 +1090,17 @@ x3f_dial4:
     jmp x3d_c4out
 
 ; x3f_dface - DI = the colour face for mode [x3f_dmd], composed into its own
-; buffer the first time after a full paint: the cream checker, the zone (red
-; on a VU, green on the BUFFER gauge), the black mask, the printed scale - a
-; fraction of a second of an XT's time per mode, once, so that a needle is a
-; copy and a line. in SI = the dials. keeps SI
+; buffer the first time it is wanted for these dials (FULL's and MID's are
+; different pictures): the cream checker, the zone (red on a VU, green on the
+; BUFFER gauge), the black mask, the printed scale - a fraction of a second
+; of an XT's time per mode, once, so that a needle is a copy and a line.
+; in SI = the dials. keeps SI
 x3f_dface:
+    cmp [x3f_fdg], si               ; another layout's dials: both faces owed
+    je .same
+    mov [x3f_fdg], si
+    mov byte [x3f_fok], 0
+.same:
     mov di, x3f_fvu
     mov al, 1
     cmp byte [x3f_dmd], 0
