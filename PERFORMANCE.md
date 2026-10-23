@@ -15138,3 +15138,75 @@ bss=20421`.
 os8088_xt_vga` (and `--machine os8088_xt_hdd`), ~2 minutes a machine, writing
 `build/lemplay-<machine>.txt`. Hercules is not measured (reading 8's reason,
 SPEC.md §116.7.1).
+
+### Set 162 — XTMP3 end to end on the XT, and its ladder from the XT to the Pentium (SPEC.md §121.11; docs/xtmp3/FIELD.md)
+
+**What it is.** The SHIPPED XTMP3 (`feature/xtmp3` 55a051b4), with its real
+FRONT and XT parts, doing a user's whole job. `tests/xtmp3xt.py` (soak row
+`xtmp3xt`) runs it on MartyPC's `os8088_xt_vga_hdd_sb`: a 5160, 8088 at
+4.77 MHz, 640 KB, VGA, XT-IDE and a DSP 2.01. The row drives the machine
+with `advance` in pseudo-random 20,000-40,000-cycle steps. Each stop's IP is
+a sample uniform in GUEST cycles, and exec breakpoints on the engine's procs
+are the stamps.
+
+A HOST-timed sampler was tried first and gave the same shares to within a
+point. That is the evidence that MartyPC's host cost per guest cycle is flat
+enough not to bias a sampler, and the row keeps the guest-uniform one anyway.
+
+The ladder on 86Box's XT, 286, 386, 486 and Pentium comes from the
+`-DX3REPORT` build's report file (`tools/x3field.py`).
+
+| AFTERHRS.MP3, 11,025 Hz mono, 10.09 s | XT Standard | XT Fast | XT Speech |
+|---|---:|---:|---:|
+| the job: Decode and Play to the WAV playing | 182.81 s | 169.30 s | 118.34 s |
+| ...the part's fetch and OPEN | 1.05 + 3.32 s | 1.05 + 2.61 s | 1.05 + 2.36 s |
+| ...finalisation | 5.84 s | 5.83 s | 5.83 s |
+| **end to end, audio s a wall s** | **0.0552x** | **0.0596x** | **0.0853x** |
+| the part alone (XT.md) | 0.166x | 0.183x | 0.297x |
+| cycles a granule in the loop | 4,240,973 | 3,926,027 | 2,678,730 |
+| the part's share / FRONT's / **the face's** | 38.1 / 8.0 / **44.5%** | 37.3 / 8.6 / **44.6%** | 33.9 / 12.6 / **44.9%** |
+| X3S_PEAK | 395,264 B | 346,112 B | 317,440 B |
+| WAV against tools/x3simxt.py, bit for bit | exact | exact | exact |
+
+C128.MP3 (44.1 kHz stereo) converts on Quarter, because a DSP 2.01 cannot
+play an XT rung's 44.1 kHz. It runs at 0.0117x end to end, against the
+STANDARD part's 0.027x alone. The WAV is exact to x3sim.py's model.
+
+Calibration to the decision is 16.10 s on the 11 kHz track (three probes,
+each 4.7-5.8 s with the part's fetch and OPEN) and 4.32 s on the 44.1 kHz
+one. On 86Box's floppy-only XT it is 27.0 s.
+
+READINGS.
+
+1. **THE FACE COSTS AN XT CONVERSION MORE THAN THE DECODER DOES.** Per
+   granule:
+   - the face takes 1.89 M cycles;
+   - the XT part takes 1.62 M;
+   - FRONT takes 0.34 M.
+
+   One needle redraw on the VGA XT is 136-187 ms at the median, and the
+   needles move every 5 ticks while the VU follows the decoded audio. One
+   knob redraw is 400 ms. With the face's share removed, the same loop
+   would run at about 0.105x on XT Standard. That is an estimate from the
+   shares, not a measurement.
+2. **WHILE A FINISHED WAV PLAYS, THE FACE TAKES 54-74% OF THE XT.** That
+   costs nothing audible: no underrun in four plays, no GRANULE reached.
+3. **THE TWO INSTRUMENTS AGREE ON THE XT'S PROBES.** MartyPC reads ORIGINAL
+   0.03, XT STD 0.11 and XT FAST 0.11; 86Box reads 0.03, 0.11 and 0.12.
+   That 0.11-0.12 straddles `x3l_offpick`'s 1/8 threshold, so the two pick
+   different conversion rungs.
+4. **THE LADDER, 86Box**:
+
+   | machine | 11 kHz mono | 44.1 kHz stereo 128k |
+   |---|---|---|
+   | 286/12.5 | Decode first (XT FAST 0.80x) | Decode first |
+   | 386DX/25 | live XT STANDARD (2.21x), stepped to XT FAST on one underrun | Decode first |
+   | 486DX2/66 | live Original (2.99x) | XT STANDARD at 1.48x, then **Out of memory** |
+   | Pentium/133 | live Original (4.65x) | live Quarter (Half 1.18x) |
+
+5. **THE PROBES PASS 400,000 BYTES**: X3S_PEAK through calibration is
+   411,648 bytes on MartyPC. A conversion stays inside the budget.
+
+**Harness**: `make && python3 tests/xtmp3xt.py`, about ten minutes, writing
+nothing into build/ but its scratch VHDs. For the matrix:
+`make xtmp3field && python3 tools/x3field.py`, about fifteen minutes.

@@ -329,6 +329,13 @@ def capabilities():
     # encoder's picture code but never runs ffmpeg (tests/vidposter.py).
     if os88build.have_numpy():
         caps.add("numpy")
+    # LAME, the host encoder and decoder XTMP3's fixtures were made with
+    # (tools/x3fixtures.py) and the reference its integer model is compared
+    # against (`x3sim.py --compare`, mpglib behind `lame --decode`). A tool,
+    # never vendored and never a build dependency: the fixtures are committed,
+    # so only the comparison needs it, and a box without it SKIPS that row.
+    if os.environ.get("LAME") or shutil.which("lame"):
+        caps.add("lame")
     # mtools, which tests/instkeep.py plants a user's files with on a copy of
     # the fixture partition (SPEC.md 52.10.15) - a HOST-side FAT writer that
     # is not os88disk.py, so the fixture is not built by the tree under test.

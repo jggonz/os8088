@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "587480405747ba973294afb175f51f4ebd6497e91fff8eb1c652727800d8bd34",
+  "fingerprint": "34ce76939e8b6651befe73d2e02d4f34a9ad94b61e35b9f70a52265825cd9478",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "a2e1086b69e5996a7dac79231cbce596d9cb2b9607e876e97c084d04a3b9b645",
+  "fingerprint": "7baa5b851b7711acc0ee1618c4c85df93824615ad25408d92580c281623c7bfc",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -868,6 +868,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "assembly guard: DRV_H_DSV's DSV length is 6 bits beside OS88_DRV_HIGHOK/HICLAIM - no cell or layout moved",
+   "to": 11
+  },
+  {
+   "fingerprint": "7baa5b851b7711acc0ee1618c4c85df93824615ad25408d92580c281623c7bfc",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 34.5.5: OSAPI_SND_STREAM verb 11 (SND_V_FMT), SND_FMT_STEREO/SND_FMT_16 and SND_CAP_STEREO/SND_CAP_PCM16 added. Additive: verbs 0-10, every open flag and every existing cap keep their meaning, a driver older than the verb answers 7 to it, so PKG_FMT stays",
+   "to": 10
+  },
+  {
+   "fingerprint": "34ce76939e8b6651befe73d2e02d4f34a9ad94b61e35b9f70a52265825cd9478",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 34.5.5: OSAPI_SND_STREAM verb 11 (SND_V_FMT), SND_FMT_STEREO/SND_FMT_16 and SND_CAP_STEREO/SND_CAP_PCM16 added. Additive: verbs 0-10, every open flag and every existing cap keep their meaning, a driver older than the verb answers 7 to it, so PKG_FMT stays",
    "to": 11
   }
  ]

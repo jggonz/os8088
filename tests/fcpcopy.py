@@ -34,6 +34,16 @@ before anything is created, fcp_undo removes the partial destination, and
 disk, and FERR_FULL is reported as the harness's choice of disk rather than
 as a defect.
 
+...AND SINCE XTMP3's SONGS (SPEC.md 121.12) THE 1.44MB DISK IS NOT ENOUGH
+EITHER: its MEDIA/ is 644 clusters of 512 bytes and the disk ships 379 free,
+so the folder copy cannot fit beside the original. The kern_big arm
+therefore builds its OWN B: (`room_disk`): the shipped disk's whole MEDIA
+tree, every file byte for byte, read off build/apps.img by the same reader
+the host-side check uses, plus SYSTEM/APPDATA as the paste's target, on a
+1.44MB volume with room for MEDIA twice over. The copy still covers every
+file the folder ships. The kern_small arm keeps build/smallapps.img, whose
+MEDIA/ carries no songs.
+
 It never writes the shipped apps image - and it writes NO FIXED PATH either
 (docs/WRITING-TESTS.md 5.5). `os88marty.launch` already boots every floppy
 from a copy in the instance's own run directory, so the paste lands there; the
@@ -216,6 +226,31 @@ def goto_root(m, mo, wx, wy):
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "..")
 
 
+def room_disk():
+    """A 1.44MB B: holding the shipped disk's MEDIA tree and SYSTEM/APPDATA,
+    per PID (docs/WRITING-TESTS.md 5.5), so the folder paste has the room the
+    shipped disk no longer has. Every file is the image's own bytes."""
+    tree = host_tree(SRC_APPS, ["MEDIA"])
+    if not tree:
+        sys.exit("fcpcopy: %s has no MEDIA folder" % SRC_APPS)
+    src = os.path.join(OUT, "media-%d" % os.getpid())
+    args = []
+    for rel, body in sorted(tree.items()):
+        if body is None:
+            continue
+        parts = rel.split("\\")
+        d = os.path.join(src, *parts[:-1])
+        os.makedirs(d, exist_ok=True)
+        f = os.path.join(d, parts[-1])
+        open(f, "wb").write(body)
+        args.append("/".join(["MEDIA"] + parts[:-1]) + ":" + f)
+    img = os.path.join(OUT, "room-%d.img" % os.getpid())
+    subprocess.run([sys.executable, "tools/os88disk.py", "-o", img, "--size",
+                    "1440"] + args + ["--folder", "SYSTEM/APPDATA"],
+                   check=True, capture_output=True)
+    return img, src
+
+
 def main():
     # POINTED AT kern_small, BUILD ITS IMAGE FIRST - smallboot.py's shape and
     # for its reason: `all` never builds that kernel, and there is no
@@ -234,7 +269,11 @@ def main():
     # NO SCRATCH COPY: launch() clones SRC_APPS into this instance's private
     # run directory, and the paste writes that clone - never the shipped
     # image, and never a file another copy of this row is cloning at the time
-    with os88marty.launch(SYS_IMG, apps=SRC_APPS, machine=MACHINE) as m:
+    apps, room_src = SRC_APPS, None
+    if "smallk" not in os.environ.get("OS88_BUILD", ""):
+        apps, room_src = room_disk()
+        say("B: = %s, MEDIA/ from %s with room to copy it" % (apps, SRC_APPS))
+    with os88marty.launch(SYS_IMG, apps=apps, machine=MACHINE) as m:
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
@@ -329,6 +368,10 @@ def main():
             print("  FAIL: " + x)
         return 1
     os.remove(out)              # per-PID, so nothing else will reclaim it
+    if room_src:
+        import shutil
+        shutil.rmtree(room_src, ignore_errors=True)
+        os.remove(apps)
     print("\nfcpcopy: the copy engine moved a file and a folder tree, and left "
           "a sound volume - PASS on %s" % MACHINE)
     return 0

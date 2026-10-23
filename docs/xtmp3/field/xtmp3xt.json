@@ -1,0 +1,538 @@
+{
+ "c128": {
+  "calibration": {
+   "probes": [
+    {
+     "fetch_s": 1.068,
+     "measured_x100": 1,
+     "open_s": 0.832,
+     "prime_probe_s": 2.419,
+     "rung": "QUARTER",
+     "total_s": 4.32
+    }
+   ],
+   "to_dialog_s": 4.751,
+   "wall_s": 4.322
+  },
+  "conversion": {
+   "audio_s": 1.5,
+   "cyc_per_granule": 4915609,
+   "fetch_s": 0.001,
+   "final_s": 5.863,
+   "frames": 16538,
+   "granules": 118,
+   "job_s": 127.727,
+   "loop_s": 121.533,
+   "open_s": 0.028,
+   "rate": 11025,
+   "rung": "QUARTER",
+   "setup_s": 0.332,
+   "x_job": 0.0117,
+   "x_loop": 0.0123
+  },
+  "decision": "Decode first",
+  "device": "card 1, caps 029F",
+  "fixture": "C128.MP3",
+  "fmt": [
+   11025,
+   1,
+   8
+  ],
+  "meas_x100": [
+   65535,
+   65535,
+   65535,
+   1,
+   65535,
+   65535,
+   65535,
+   65535
+  ],
+  "offline_rung": "QUARTER",
+  "peak_kb": 200,
+  "playback": {
+   "face": {
+    "dial_unchanged": {
+     "max_ms": 0.24,
+     "median_ms": 0.16,
+     "min_ms": 0.16,
+     "n": 7
+    },
+    "needle_redraw": {
+     "max_ms": 278.24,
+     "median_ms": 187.41,
+     "min_ms": 147.08,
+     "n": 3
+    },
+    "share_pct": 53.7,
+    "span_s": 1.429,
+    "updates": {
+     "max_ms": 289.17,
+     "median_ms": 213.2,
+     "min_ms": 10.95,
+     "n": 5
+    }
+   },
+   "granule_calls": 0,
+   "underruns": 0
+  },
+  "split": {
+   "coarse": {
+    "FRONT part: side info, scalefactors, Huffman": 9.5,
+    "STANDARD part: reconstruction": 39.4,
+    "driver: SOUND.DRV": 0.1,
+    "kernel: drawing": 31.3,
+    "kernel: file system, heap": 0.0,
+    "kernel: other": 0.5,
+    "kernel: scheduler, ISRs, idle, UI task": 2.3,
+    "option ROMs (XT-IDE int 13h, VGA BIOS)": 0.2,
+    "primary: conversion (the stage, the progress window)": 0.3,
+    "primary: engine (look-ahead, trim, meters)": 2.8,
+    "primary: the face": 13.4,
+    "primary: the front end's frame level (x3pars)": 0.0,
+    "system BIOS": 0.2
+   },
+   "fine": {
+    "front:xf_huff": 1.3,
+    "front:xf_pk": 2.6,
+    "front:xf_qexp": 0.5,
+    "front:xf_region": 2.0,
+    "front:xf_sym": 0.9,
+    "front:xf_val": 0.4,
+    "k:cur_draw": 0.4,
+    "k:font_run_x": 3.3,
+    "k:gfx_blit1_x": 1.2,
+    "k:gfx_blit4": 2.7,
+    "k:sch_account": 0.5,
+    "k:sch_isr": 0.8,
+    "k:sch_switch": 0.7,
+    "k:vga_blit_prow": 0.9,
+    "k:vga_pr_bufw": 15.7,
+    "k:vga_prow_emit": 4.1,
+    "k:vga_restore_vram": 0.5,
+    "k:vga_save_vram": 0.4,
+    "pkg:x3_hash": 0.4,
+    "pkg:x3_peak": 0.5,
+    "pkg:x3_putn": 0.4,
+    "pkg:x3d_bor": 1.4,
+    "pkg:x3d_bshift": 1.0,
+    "pkg:x3d_c4new": 1.7,
+    "pkg:x3d_line": 1.1,
+    "pkg:x3d_plot": 3.4,
+    "pkg:x3f_dial4": 3.4,
+    "std:xs_alias": 3.6,
+    "std:xs_dct8": 5.0,
+    "std:xs_dct9": 2.8,
+    "std:xs_hybrid": 1.0,
+    "std:xs_imdct": 8.9,
+    "std:xs_put": 0.7,
+    "std:xs_requant": 2.4,
+    "std:xs_rq1": 1.8,
+    "std:xs_scale": 2.2,
+    "std:xs_shr32": 0.7,
+    "std:xs_srk14": 0.7,
+    "std:xs_synth": 1.0,
+    "std:xs_win4": 7.6
+   },
+   "samples": 18994
+  },
+  "x3s_speed_x100": 1
+ },
+ "fast": {
+  "conversion": {
+   "audio_s": 10.0875,
+   "cyc_per_granule": 3926027,
+   "fetch_s": 1.049,
+   "final_s": 5.834,
+   "frames": 111215,
+   "granules": 194,
+   "job_s": 169.295,
+   "loop_s": 159.584,
+   "open_s": 2.608,
+   "rate": 11025,
+   "rung": "XT FAST",
+   "setup_s": 3.878,
+   "x_job": 0.0596,
+   "x_loop": 0.0632
+  },
+  "fixture": "AFTERHRS.MP3",
+  "fmt": [
+   11025,
+   1,
+   8
+  ],
+  "knob": {
+   "redraw": {
+    "max_ms": 402.63,
+    "median_ms": 400.36,
+    "min_ms": 399.29,
+    "n": 6
+   },
+   "unchanged": {
+    "max_ms": 0.07,
+    "median_ms": 0.07,
+    "min_ms": 0.07,
+    "n": 5
+   }
+  },
+  "peak_kb": 338,
+  "playback": {
+   "face": {
+    "dial_unchanged": {
+     "max_ms": 0.24,
+     "median_ms": 0.17,
+     "min_ms": 0.16,
+     "n": 37
+    },
+    "needle_redraw": {
+     "max_ms": 187.85,
+     "median_ms": 136.47,
+     "min_ms": 110.86,
+     "n": 31
+    },
+    "share_pct": 54.6,
+    "span_s": 9.867,
+    "updates": {
+     "max_ms": 398.15,
+     "median_ms": 158.67,
+     "min_ms": 11.17,
+     "n": 34
+    }
+   },
+   "granule_calls": 0,
+   "underruns": 0
+  },
+  "split": {
+   "coarse": {
+    "FRONT part: side info, scalefactors, Huffman": 8.6,
+    "XT part: reconstruction": 37.3,
+    "driver: SOUND.DRV": 0.1,
+    "kernel: drawing": 28.5,
+    "kernel: file system, heap": 0.3,
+    "kernel: other": 0.8,
+    "kernel: scheduler, ISRs, idle, UI task": 2.3,
+    "option ROMs (XT-IDE int 13h, VGA BIOS)": 1.0,
+    "primary: conversion (the stage, the progress window)": 0.5,
+    "primary: engine (look-ahead, trim, meters)": 4.3,
+    "primary: the face": 16.1,
+    "primary: the front end's frame level (x3pars)": 0.0,
+    "system BIOS": 0.2
+   },
+   "fine": {
+    "front:x3p_stage": 0.3,
+    "front:xf_huff": 0.4,
+    "front:xf_pk": 2.4,
+    "front:xf_qexp": 0.4,
+    "front:xf_region": 2.8,
+    "front:xf_sym": 0.7,
+    "k:cur_draw": 0.3,
+    "k:font_run_x": 3.1,
+    "k:gfx_blit1_x": 2.5,
+    "k:gfx_blit4": 2.1,
+    "k:sch_account": 0.4,
+    "k:sch_isr": 0.8,
+    "k:sch_switch": 0.6,
+    "k:vga_blit_prow": 0.7,
+    "k:vga_pr_bufw": 13.2,
+    "k:vga_prow_emit": 3.0,
+    "k:vga_restore_vram": 0.4,
+    "k:vga_save_vram": 0.4,
+    "pkg:x3_hash": 0.4,
+    "pkg:x3_peak": 2.3,
+    "pkg:x3_putn": 0.4,
+    "pkg:x3d_bor": 3.7,
+    "pkg:x3d_bshift": 2.7,
+    "pkg:x3d_c4new": 1.4,
+    "pkg:x3d_line": 1.0,
+    "pkg:x3d_plot": 2.7,
+    "pkg:x3f_dial4": 2.8,
+    "rom:C9D00": 0.6,
+    "xt:x3x_aa_tab": 1.0,
+    "xt:x3x_d9": 1.1,
+    "xt:x3x_encr": 0.9,
+    "xt:x3x_imfast": 1.2,
+    "xt:x3x_imsparse": 0.9,
+    "xt:x3x_kslot": 18.8,
+    "xt:x3x_pcmout": 0.3,
+    "xt:x3x_produce": 1.5,
+    "xt:x3x_rq2": 1.9,
+    "xt:x3x_rqbig": 0.3,
+    "xt:x3x_wfuse0": 3.0,
+    "xt:x3x_wshort": 0.4
+   },
+   "samples": 24956
+  },
+  "x3s_speed_x100": 6
+ },
+ "guest_hz": 4772727.0,
+ "machine": "os8088_xt_vga_hdd_sb",
+ "speech": {
+  "conversion": {
+   "audio_s": 10.0885,
+   "cyc_per_granule": 2678730,
+   "fetch_s": 1.045,
+   "final_s": 5.833,
+   "frames": 55608,
+   "granules": 194,
+   "job_s": 118.336,
+   "loop_s": 108.884,
+   "open_s": 2.358,
+   "rate": 5512,
+   "rung": "XT SPEECH",
+   "setup_s": 3.619,
+   "x_job": 0.0853,
+   "x_loop": 0.0927
+  },
+  "fixture": "AFTERHRS.MP3",
+  "fmt": [
+   5512,
+   1,
+   8
+  ],
+  "peak_kb": 310,
+  "playback": {
+   "face": {
+    "dial_unchanged": {
+     "max_ms": 0.24,
+     "median_ms": 0.16,
+     "min_ms": 0.16,
+     "n": 16
+    },
+    "needle_redraw": {
+     "max_ms": 213.08,
+     "median_ms": 146.51,
+     "min_ms": 111.54,
+     "n": 46
+    },
+    "share_pct": 73.5,
+    "span_s": 9.975,
+    "updates": {
+     "max_ms": 346.76,
+     "median_ms": 279.27,
+     "min_ms": 11.21,
+     "n": 31
+    }
+   },
+   "granule_calls": 0,
+   "underruns": 0
+  },
+  "split": {
+   "coarse": {
+    "FRONT part: side info, scalefactors, Huffman": 12.6,
+    "XT part: reconstruction": 33.9,
+    "driver: SOUND.DRV": 0.1,
+    "kernel: drawing": 28.8,
+    "kernel: file system, heap": 0.2,
+    "kernel: other": 0.8,
+    "kernel: scheduler, ISRs, idle, UI task": 2.3,
+    "option ROMs (XT-IDE int 13h, VGA BIOS)": 0.7,
+    "primary: conversion (the stage, the progress window)": 0.5,
+    "primary: engine (look-ahead, trim, meters)": 3.6,
+    "primary: the face": 16.1,
+    "primary: the front end's frame level (x3pars)": 0.1,
+    "system BIOS": 0.2
+   },
+   "fine": {
+    "front:x3p_stage": 0.4,
+    "front:xf_huff": 0.6,
+    "front:xf_pk": 3.6,
+    "front:xf_qexp": 0.6,
+    "front:xf_region": 4.0,
+    "front:xf_scf2": 0.5,
+    "front:xf_sym": 1.0,
+    "front:xf_val": 0.4,
+    "k:font_run_x": 3.3,
+    "k:gfx_blit1_x": 2.5,
+    "k:gfx_blit4": 2.4,
+    "k:sch_account": 0.4,
+    "k:sch_isr": 0.8,
+    "k:sch_switch": 0.6,
+    "k:vga_blit_prow": 0.8,
+    "k:vga_gc_reset": 0.3,
+    "k:vga_pr_bufw": 12.9,
+    "k:vga_prow_emit": 3.3,
+    "k:vga_restore_vram": 0.4,
+    "pkg:x3_hash": 0.4,
+    "pkg:x3_peak": 1.7,
+    "pkg:x3_putn": 0.4,
+    "pkg:x3d_bnew": 0.4,
+    "pkg:x3d_bor": 3.8,
+    "pkg:x3d_bshift": 2.7,
+    "pkg:x3d_c4new": 1.3,
+    "pkg:x3d_line": 0.9,
+    "pkg:x3d_plot": 2.8,
+    "pkg:x3f_dial4": 2.8,
+    "rom:C9D00": 0.4,
+    "xt:x3x_aa_split": 1.8,
+    "xt:x3x_d9": 1.3,
+    "xt:x3x_encr": 0.4,
+    "xt:x3x_imfast": 1.6,
+    "xt:x3x_imsparse": 0.8,
+    "xt:x3x_kslot": 15.0,
+    "xt:x3x_produce": 1.4,
+    "xt:x3x_rq2": 2.0,
+    "xt:x3x_rq6": 0.4,
+    "xt:x3x_wfuse0": 3.2
+   },
+   "samples": 17033
+  },
+  "x3s_speed_x100": 9
+ },
+ "std": {
+  "cal_peak_kb": 402,
+  "calibration": {
+   "probes": [
+    {
+     "fetch_s": 1.067,
+     "measured_x100": 3,
+     "open_s": 0.833,
+     "prime_probe_s": 3.94,
+     "rung": "ORIGINAL",
+     "total_s": 5.842
+    },
+    {
+     "fetch_s": 1.042,
+     "measured_x100": 11,
+     "open_s": 3.32,
+     "prime_probe_s": 1.161,
+     "rung": "XT STANDARD",
+     "total_s": 5.525
+    },
+    {
+     "fetch_s": 1.047,
+     "measured_x100": 11,
+     "open_s": 2.611,
+     "prime_probe_s": 1.068,
+     "rung": "XT FAST",
+     "total_s": 4.729
+    }
+   ],
+   "to_dialog_s": 16.526,
+   "wall_s": 16.1
+  },
+  "conversion": {
+   "audio_s": 10.0875,
+   "cyc_per_granule": 4240973,
+   "fetch_s": 1.047,
+   "final_s": 5.836,
+   "frames": 111215,
+   "granules": 194,
+   "job_s": 182.809,
+   "loop_s": 172.386,
+   "open_s": 3.316,
+   "rate": 11025,
+   "rung": "XT STANDARD",
+   "setup_s": 4.588,
+   "x_job": 0.0552,
+   "x_loop": 0.0585
+  },
+  "decision": "Decode first",
+  "device": "card 1, caps 029F",
+  "fixture": "AFTERHRS.MP3",
+  "fmt": [
+   11025,
+   1,
+   8
+  ],
+  "free0_kb": 434,
+  "meas_x100": [
+   65535,
+   3,
+   65535,
+   65535,
+   11,
+   11,
+   65535,
+   65535
+  ],
+  "offline_rung": "XT STANDARD",
+  "peak_kb": 386,
+  "playback": {
+   "face": {
+    "dial_unchanged": {
+     "max_ms": 0.24,
+     "median_ms": 0.17,
+     "min_ms": 0.16,
+     "n": 36
+    },
+    "needle_redraw": {
+     "max_ms": 298.86,
+     "median_ms": 147.68,
+     "min_ms": 110.91,
+     "n": 30
+    },
+    "share_pct": 54.7,
+    "span_s": 9.867,
+    "updates": {
+     "max_ms": 486.21,
+     "median_ms": 161.5,
+     "min_ms": 11.12,
+     "n": 33
+    }
+   },
+   "granule_calls": 0,
+   "underruns": 0
+  },
+  "split": {
+   "coarse": {
+    "FRONT part: side info, scalefactors, Huffman": 8.0,
+    "XT part: reconstruction": 38.1,
+    "driver: SOUND.DRV": 0.1,
+    "kernel: drawing": 28.4,
+    "kernel: file system, heap": 0.3,
+    "kernel: other": 0.9,
+    "kernel: scheduler, ISRs, idle, UI task": 2.4,
+    "option ROMs (XT-IDE int 13h, VGA BIOS)": 0.9,
+    "primary: conversion (the stage, the progress window)": 0.4,
+    "primary: engine (look-ahead, trim, meters)": 4.2,
+    "primary: the face": 16.1,
+    "primary: the front end's frame level (x3pars)": 0.0,
+    "system BIOS": 0.2
+   },
+   "fine": {
+    "front:xf_huff": 0.4,
+    "front:xf_pk": 2.2,
+    "front:xf_qexp": 0.4,
+    "front:xf_region": 2.6,
+    "front:xf_sym": 0.6,
+    "k:cur_draw": 0.3,
+    "k:font_run_x": 2.9,
+    "k:gfx_blit1_x": 2.5,
+    "k:gfx_blit4": 2.1,
+    "k:sch_account": 0.5,
+    "k:sch_isr": 0.8,
+    "k:sch_switch": 0.7,
+    "k:vga_blit_prow": 0.8,
+    "k:vga_pr_bufw": 13.0,
+    "k:vga_prow_emit": 3.3,
+    "k:vga_restore_vram": 0.5,
+    "k:vga_save_vram": 0.3,
+    "pkg:x3_hash": 0.4,
+    "pkg:x3_peak": 2.1,
+    "pkg:x3_putn": 0.4,
+    "pkg:x3d_bnew": 0.3,
+    "pkg:x3d_bor": 3.8,
+    "pkg:x3d_bshift": 2.8,
+    "pkg:x3d_c4new": 1.3,
+    "pkg:x3d_line": 1.0,
+    "pkg:x3d_plot": 2.7,
+    "pkg:x3f_dial4": 2.8,
+    "rom:C9D00": 0.5,
+    "xt:x3x_aa_split": 1.6,
+    "xt:x3x_d9": 1.1,
+    "xt:x3x_encr": 0.4,
+    "xt:x3x_imfast": 1.3,
+    "xt:x3x_imsparse": 0.8,
+    "xt:x3x_kslot": 20.5,
+    "xt:x3x_pcmout": 0.3,
+    "xt:x3x_produce": 1.4,
+    "xt:x3x_rq2": 1.7,
+    "xt:x3x_rqbig": 0.3,
+    "xt:x3x_wfuse0": 2.9,
+    "xt:x3x_wshort": 0.4
+   },
+   "samples": 26955
+  },
+  "x3s_speed_x100": 5
+ }
+}

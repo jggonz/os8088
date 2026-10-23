@@ -67,6 +67,14 @@
 1 apps/cdrack/cdrack.asm           # thirteen buttons through one record with its OWN
                                    # painter (SPEC.md 119.6.4): cr_regrey draws them,
                                    # os88ui_btnup fires them
+1 apps/xtmp3/xtmp3.asm             # the five transport keys and OPEN through one
+                                   # record with its OWN painter (SPEC.md 121.8):
+                                   # x3_regrey draws them, os88ui_btnup fires them
+1 apps/xtmp3/x3conv.inc            # the decode-first dialog's Cancel / Decode and
+                                   # Play / batch switch, the progress window's
+                                   # Cancel, Decoded Files' Delete / Close: one
+                                   # record (x3c_btrec), x3c_bset draws them,
+                                   # os88ui_btnup fires them (SPEC.md 121.7)
 1 apps/timer/timer.asm             # Start/Stop/Reset through the record (SPEC.md
                                    # 111.2): ONE loop in tm_flags, which the painter
                                    # (all three) and a Start or Stop that traded pens

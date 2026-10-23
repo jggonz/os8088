@@ -181,6 +181,8 @@ make pixeldisk # PiXEL, the image viewer, with its sample gallery in PICTURES/,
 make xt-pixel # 86Box: the 4.77MHz 640KB VGA XT with the 360KB pixeldisk in
               # B: (double-click PIXEL.O88, or a picture in PICTURES/)
 make 386-pixel # 86Box: the 386DX/25 with the 1.44MB pixeldisk in B:
+make xtmp3disk # XTMP3, the MP3 player, with its three demo songs in MEDIA/,
+              # four disk sizes
 make allapps  # every program on a set of floppies - both word processors,
               # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
               # family included - apps-all-1.img, -2.img, ... at 1.44MB and
@@ -606,6 +608,21 @@ heavy decoder is a compressed part loaded only when a picture needs it, and
 the whole thing is priced against a 4.77 MHz XT (SPEC.md 106.26 has the
 numbers). `make pixeldisk` builds its floppy with a gallery of original
 sample pictures; `make xt-pixel` / `make 386-pixel` boot it on 86Box.
+
+**XTMP3** is an MP3 player that plays every song at the best quality the
+machine and its sound card can keep up with, and says which quality that is
+(SPEC.md 121, [the design record](docs/plans/XTMP3-PLAN.md), [how it was
+built](docs/HOW-XTMP3-WAS-BUILT.md)). It wears the face of an 80s stereo
+component: an LCD, two VU meters that never show stereo the output does not
+have, a volume knob and a queue. A fast machine plays MPEG-1, 2 and 2.5
+Layer III at the source's rate - 16-bit stereo on an SB16 - through an
+integer decoder bit-exact to its Python model; a slower one steps down to
+half or a quarter of the rate through the same decoder, then to table-driven
+XT approximations. When nothing keeps up, it decodes the whole song to a WAV
+on a hard disk first, finalises and checks it, and plays that, which is how
+a 4.77 MHz 8088 plays MP3. `make xtmp3disk` builds its floppy with three
+original demo songs; the 1.44MB and 1.2MB software disks, the 360KB music
+disk and the live media carry it too.
 
 Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is
 installed on one, on a hard-disk partition. Either way it is an ordinary

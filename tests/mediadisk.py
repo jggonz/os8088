@@ -100,7 +100,12 @@ def run(apps, want_root):
 # `root: [..., 'MIDIRACK.O88', ...]` for the same reason as above, a disk
 # that was right and an expectation that was old. Its pictures were
 # MIDIRACK.GFX beside it and are a part of it now (SPEC.md 105.9.5).
-run("build/media360.img", ["MEDIA", "MIDIRACK.O88", "SYSTEM"])
+#
+# ...AND XTMP3 BESIDE IT (SPEC.md 121.12, dated 2026-10-22): the 360KB
+# machine is an XT and an XT converts first, so the MP3 player rides the
+# music disk's root on MIDIRack's ground, with AFTERHRS.MP3 in MEDIA/ (which
+# `want_media` reads off the image). The listing puts folders first.
+run("build/media360.img", ["MEDIA", "SYSTEM", "MIDIRACK.O88", "XTMP3.O88"])
 run("build/apps360.img", ["APPS", "GAMES", "MEDIA", "SYSTEM"])
 
 if fails:

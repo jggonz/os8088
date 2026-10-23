@@ -208,11 +208,18 @@ def main():
             fail("drv: caps %04X - the Covox tier did not publish "
                  "SND_CAP_LPTDAC" % caps)
         # THE PORT, as a package asks it: the driver's own state, since
-        # SNDV_DACINFO answers [cvx_port] while the cap is up
+        # SNDV_DACINFO answers [cvx_port] while the cap is up - read at its
+        # SYMBOL, off the driver's own map (tools/os88drvsym.py). It was a
+        # 9KB window searched for cvx_ports' pattern, and SPEC.md 34.5.5
+        # grew the image past it: a constant window is a constant that goes
+        # stale every time the driver grows. An image placed in the HMA is
+        # SEG:DRV_HMA_ORG (SPEC.md 2.10.8), as tests/mixer.py reads it
+        import os88drvsym
+        import os88sym
         seg = u16(m.readseg(M.KERNEL_SEG, owner + DRVR_SEG, 2))
-        img = bytes(m.readseg(seg, 0, 0x2400))   # the image: cvx_ports,
-        at = img.find(bytes([0xBC, 3, 0x78, 3, 0, 0]))   # then cvx_port
-        port = u16(img[at + 6:at + 8]) if at >= 0 else None
+        org = os88sym.equates()["DRV_HMA_ORG"] if seg >= 0xF000 else 0
+        D = os88drvsym.symbols("sound.bin")
+        port = u16(m.readseg(seg, org + D["cvx_port"], 2))
         if port != 0x378:
             fail("drv: the driver's port is %r, want 378h" % port)
         print("PASS drv: SOUND.DRV attached on the port alone, tier Covox, "

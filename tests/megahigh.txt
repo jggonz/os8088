@@ -69,6 +69,21 @@ highmem apps/realdmg/realdmg.asm  # PARAGRAPH ARITHMETIC ON ITS CLAIMS, AND CODE
     # mode code segment refuses. Retired by addressing each claim at its own
     # selector and the cache through a writable alias of it.
 
+highmem apps/xtmp3/xtmp3.asm   # PARAGRAPH ARITHMETIC ON ITS LOOK-AHEAD CLAIM:
+    # a Decode First's stage is a segment of its own, cut from the ring's claim
+    # as ap_la_seg + (x3_lasz + X3_PCMRES) / 16 (x3conv.inc's conversion start,
+    # [x3c_sseg]), because the 8-claims-a-owner limit (SPEC.md 50) puts ring,
+    # PCM and stage in ONE claim, which with 32 KB clusters passes 64KB and a
+    # single offset. Right on the identity map, a different descriptor on an
+    # LDT selector over exactly the KB asked. A conventional HOLD (x3hold.inc,
+    # SPEC.md 121.6.1) is read and copied out at hold + (offset >> 7 << 3),
+    # the 8-paragraph grid, which is the same arithmetic. Every other claim is opaque: the
+    # work segments are loaded whole by the parts, the external ring is
+    # OSAPI_MEM_CLAIM_DMA_HI (conventional by contract), and the parts are
+    # fetched through the DMA door with no OP_WANT_HIFETCH. Retired by
+    # addressing the stage as an offset into the claim when it fits 64KB (the
+    # XT path's ceiling always does) and a separate segment only when it does
+    # not, or by 14.12's flat arm at x3c_sseg's five users. OS88_HIGH it says.
 highmem apps/pixel/pixel.asm     # PARAGRAPH ARITHMETIC ON EVERY CLAIM IT HOLDS
     # (KERN-MEGA-PLAN 14.40 item 4): the master is addressed as MSEG +
     # (offset >> 7 << 3) at nine sites, the work claim is cut into

@@ -1,0 +1,180 @@
+# XTMP3 fixtures (SPEC.md 121.1): made by tools/x3fixtures.py --regen.
+# Signals are synthesized in that file; each was encoded by the LAME named
+# below (a host tool, never vendored).  `x3fixtures.py --check` verifies the
+# hashes; `x3sim.py --compare` decodes each and holds it to `expect`.
+# generator 1; encoder: LAME 64bits version 4.0 (https://lame.sourceforge.io)
+
+NEONDRV.MP3   5bb20972ebe8f9d53a6a4d7e100990e2ba925a814dbd7e140fafaffdfe3a6101   70333
+  what:   NEON DRIVE: MPEG-1 44.1 kHz joint stereo CBR 56, an ID3v2.3 title
+  signal: neon, 44100 Hz, 10.0 s; wav sha256 6175508e8806594ab9f1f8ba57dc796786cb2807e08a5991c8bb40f797a2c410
+  cmd:    lame -S -m j -b 56 --resample 44.1 IN.WAV OUT.MP3; an ID3v2.3 tag (TIT2 'NEON DRIVE', TPE1 'XTMP3 DEMO', 64 bytes of padding) ahead
+  expect: decode title=NEON DRIVE artist=XTMP3 DEMO
+NIGHTSIG.MP3  858765affedc0d1d57fb0683d2769fb2f57145a20f69b6d9812b0c9df4df66dc   50405
+  what:   NIGHT SIGNALS: MPEG-2 22.05 kHz joint stereo CBR 40, an ID3v2.3 title
+  signal: night, 22050 Hz, 10.0 s; wav sha256 25196a40fb5adf9ceee25d3c2ed4aea3f313a6f85d43b5cd8bd88d2e7590d217
+  cmd:    lame -S -m j -b 40 --resample 22.05 IN.WAV OUT.MP3; an ID3v2.3 tag (TIT2 'NIGHT SIGNALS', TPE1 'XTMP3 DEMO', 64 bytes of padding) ahead
+  expect: decode title=NIGHT SIGNALS artist=XTMP3 DEMO
+AFTERHRS.MP3  e9e38214d616010da0ad27d42b3c23146fd352641d13ea7226e2ef5fbb7ea0b5   30523
+  what:   AFTER HOURS: MPEG-2.5 11.025 kHz mono CBR 24 (an XT target), an ID3v2.3 title
+  signal: after, 11025 Hz, 10.0 s; wav sha256 34ce480338fc2d67ceb3ca9aef1752edca1c6bb418dc0c76143dcf40dcd88a12
+  cmd:    lame -S -m m -b 24 --resample 11.025 IN.WAV OUT.MP3; an ID3v2.3 tag (TIT2 'AFTER HOURS', TPE1 'XTMP3 DEMO', 64 bytes of padding) ahead
+  expect: decode title=AFTER HOURS artist=XTMP3 DEMO
+C128.MP3      1b4d26f28e92e4eeff4b02d829ea975c28a1de5c2439515c02cf2f2c08f886e4   25076
+  what:   MPEG-1 44.1 kHz L/R stereo CBR 128, a different chord each side
+  signal: chord, 44100 Hz, 1.5 s; wav sha256 f488345e4f17c986c3671d3f2e65772a92007d04a8fa11c6229a6f2fac5af43c
+  cmd:    lame -S -m s -b 128 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+C320.MP3      948f442123a08e326de3697f4ff07dec25cddef3da4275044acc7b1c9c7ca5c8   42840
+  what:   MPEG-1 44.1 kHz joint stereo CBR 320 (the top bitrate)
+  signal: mix, 44100 Hz, 1.0 s; wav sha256 634f9c762d4087129532e1cc5b3fd0c78809fa291b887c8dc1cf99105c1fc38d
+  cmd:    lame -S -m j -b 320 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+VBR2.MP3      34bf06dcef62b4d5c60bce2dfd4a0c291203c0f65854c38e19a2a5e1eea154ad   41175
+  what:   MPEG-1 44.1 kHz joint stereo VBR -V2 (a Xing tag)
+  signal: mix, 44100 Hz, 1.5 s; wav sha256 c762c2242b2df8b01614962253da37847ddf11644b6526d077b3ed155c4974b1
+  cmd:    lame -S -m j -V 2 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+MSF.MP3       1d693f3b36f0daaf88576c548556e8b7f8fe3ad039fdbb6b8ec49aa0448984fd   25076
+  what:   MPEG-1 forced M/S on every frame
+  signal: chord, 44100 Hz, 1.5 s; wav sha256 f488345e4f17c986c3671d3f2e65772a92007d04a8fa11c6229a6f2fac5af43c
+  cmd:    lame -S -m f -b 128 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+MONO44.MP3    e10613947880fe7d42880df64202c90d6c2347c480db89a93a9fb9ab9716de20   16508
+  what:   MPEG-1 mono 64 kbps, clicks and drums (short blocks)
+  signal: click, 44100 Hz, 2.0 s; wav sha256 5b79a321c08a20218e76cf51ba04c1ec8f623464461b483cc42a9bc716042275
+  cmd:    lame -S -m m -b 64 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+DUAL44.MP3    d6e092f60e3ea5cd53eb55c42fdaf46df4c7ca0b772de41f5fdde3bd47d851a1   25076
+  what:   MPEG-1 dual channel
+  signal: chord, 44100 Hz, 1.5 s; wav sha256 f488345e4f17c986c3671d3f2e65772a92007d04a8fa11c6229a6f2fac5af43c
+  cmd:    lame -S -m d -b 128 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+RSV32.MP3     acadc49d1ac6d18f418730cd0d3b6d6cd2fa91acc436920ce24efcf5d6f2de6d   12121
+  what:   reservoir-heavy: 44.1 kHz mono at 32 kbps, transients on a tone
+  signal: click, 44100 Hz, 3.0 s; wav sha256 38f44239b84b0e1b137f6d52804550f1a4d14e53212b5df2330cb40303774625
+  cmd:    lame -S -m m -b 32 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+SWEEP.MP3     62ae9fd441f44e2e8e50fcaae01a90fbbfbf88e6690a36b46b4a66800148b360   24764
+  what:   a log sweep 30 Hz to 19.8 kHz, mono 96
+  signal: sweep, 44100 Hz, 2.0 s; wav sha256 742b8177e1a07a84a2b000a945452bd425368902c29e42e7b1758035d264b1bd
+  cmd:    lame -S -m m -b 96 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+BASS.MP3      d7954b46c871db9e228c053cbc025fcd25fcc3960012b6036db8d5827b1df906   16508
+  what:   a sustained bass line, joint stereo 64
+  signal: bass, 44100 Hz, 2.0 s; wav sha256 eebf35c897b2c75ea56bdb4a42723cf6d9d587e3450be5ee730f8ef85a9cee95
+  cmd:    lame -S -m j -b 64 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+NOISE.MP3     e17a8972f4cdd14f33a2ac0ef2d737fc32cbf72edef6297b3d3004c47763b59a   18808
+  what:   noise bursts on a noise floor, joint stereo 96
+  signal: noise, 44100 Hz, 1.5 s; wav sha256 5283d4176a3d7e8c3cf711c48943094af9cd24a80b958c4d25ea237d78cbd50a
+  cmd:    lame -S -m j -b 96 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+SILENT.MP3    d2af4e633774c5ed448bb5daddf739f58bda97e7c8f3402001e15cfb88e75d4c   17135
+  what:   digital silence
+  signal: silence, 44100 Hz, 1.0 s; wav sha256 4057d79667b576cff0a0c2a32dc8c1eb80c2cdedf9b52d1de53d37c02b2e647c
+  cmd:    lame -S -m j -b 128 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+QUIET.MP3     6a4430bc11fe83b9c0bbe76ee7e7314b79fbc885e0e0642897f31a513ec24af5   18808
+  what:   the chord at -50 dBFS
+  signal: quiet, 44100 Hz, 1.5 s; wav sha256 3fa9559aa921c4fe1d5324a642fec8b8530e6debf3fd65ac170cb9634b32d01a
+  cmd:    lame -S -m j -b 96 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+CLIP.MP3      554c9eea130f64d3411ff155a5c4caf4a0a05f5b4ab0108f7be53e1464abe2e5   25703
+  what:   clipping stress: overdriven square and saw at full scale, L/R 192
+  signal: clip, 44100 Hz, 1.0 s; wav sha256 744d63a123c335a3746b6382fe2886b1a1bd8a1a798c7b93136f8042f8a93735
+  cmd:    lame -S -m s -b 192 --resample 44.1 IN.WAV OUT.MP3
+  expect: decode
+C48.MP3       2b95d8ef38127b62ed86930a82acd65b8c23f433b750d7e8d598004b01ca8b50   14784
+  what:   MPEG-1 48 kHz joint stereo 112
+  signal: chord, 48000 Hz, 1.0 s; wav sha256 d1fc5b8bd184752ca27b4284ba387b1dca5198ba701b184e338c44afe0c2d2eb
+  cmd:    lame -S -m j -b 112 --resample 48 IN.WAV OUT.MP3
+  expect: decode
+M32K.MP3      c8d1c4d502d27e293bc5da7df078dbcee2dc57eb370823dca2246df3fb92c26d    9504
+  what:   MPEG-1 32 kHz mono 48, the formant voice
+  signal: speech, 32000 Hz, 1.5 s; wav sha256 e43f55053ec01ce7b7e8f23001200a0dbd3afde47eb377e1feffff35fb81e529
+  cmd:    lame -S -m m -b 48 --resample 32 IN.WAV OUT.MP3
+  expect: decode
+M22.MP3       ef51d60b094c630eeba619e0ffb28cd268b7547b13c37fa31a3772b51ad8f0e6   12746
+  what:   MPEG-2 22.05 kHz joint stereo 64
+  signal: mix, 22050 Hz, 1.5 s; wav sha256 17ee53d35a03bd7e0c93ccb0dacde8d6b8bbe7a6f81869a7c797d7370b63909c
+  cmd:    lame -S -m j -b 64 --resample 22.05 IN.WAV OUT.MP3
+  expect: decode
+M24.MP3       ae42b8ce16898b9f3a708f9c9c0c11f2c4fc9c853095bb2681d19c5306fc8add    9360
+  what:   MPEG-2 24 kHz L/R stereo 48
+  signal: chord, 24000 Hz, 1.5 s; wav sha256 d41c7cd7d49b07bd123bb1cc93f2b64fffd41e18f05b886a86bb7c806115e3c8
+  cmd:    lame -S -m s -b 48 --resample 24 IN.WAV OUT.MP3
+  expect: decode
+M16.MP3       aa808576559e9f56c52d587534c6c6dfa2a565132f944328cb8834203c3e2439    8352
+  what:   MPEG-2 16 kHz mono 32, the formant voice
+  signal: speech, 16000 Hz, 2.0 s; wav sha256 b1bf0970c2d338b746172a58148d8eb40e724ee5597d47b4260408994b1a7083
+  cmd:    lame -S -m m -b 32 --resample 16 IN.WAV OUT.MP3
+  expect: decode
+X8K16.MP3     0dfbfb29e34246f43bf5e21dcb3ff5e147a8f081d106cce853fa95c38e8eae69    6336
+  what:   MPEG-2.5 8 kHz mono 16 kbps, the formant voice
+  signal: speech, 8000 Hz, 3.0 s; wav sha256 1b7505894b4f0eaf91e8011c363ea7b7c07d13527eb2a1384e9fc4e150964359
+  cmd:    lame -S -m m -b 16 --resample 8 IN.WAV OUT.MP3
+  expect: decode
+X11K24.MP3    24e5241a215954b23c1a14c803f0cf9366366c5d4fe749dccf8fa176f179abe8    9404
+  what:   MPEG-2.5 11.025 kHz mono 24 kbps, clicks on a tone
+  signal: click, 11025 Hz, 3.0 s; wav sha256 07c978cfdb876ed47d8c62ab8370956de41e5959e031164ba5abf2e7c07900da
+  cmd:    lame -S -m m -b 24 --resample 11.025 IN.WAV OUT.MP3
+  expect: decode
+X12K32.MP3    f4ace8869b7c4ba37aa282bd234d8af3102b9a055b84155be6f1cfb7cbce02a2    8640
+  what:   MPEG-2.5 12 kHz mono 32 kbps
+  signal: mix, 12000 Hz, 2.0 s; wav sha256 abaec912a44a0a3c3c2c2a2051a8ba92a254e8c1c4317994373b7f813733d290
+  cmd:    lame -S -m m -b 32 --resample 12 IN.WAV OUT.MP3
+  expect: decode
+IS44.MP3      d325b0802869756ea94c67629abc06c1a23ff619101bf84b88fc4a7dcbfa76e9   12852
+  what:   MPEG-1: an L/R stream relabelled joint stereo with intensity on: the right channel is zero above ~2.5 kHz, so the bands above are intensity coded
+  cmd:    surgery is1 on ISBASE.TMP (ISBASE.TMP: signal is, 44100 Hz, 1.0 s, lame -S -m s -b 96 --resample 44.1)
+  expect: decode
+ISMS44.MP3    6f70a86d2aa173291dbce2d884187d310137998a45667063b7fde78571fd9a2b   12852
+  what:   MPEG-1: the same with intensity AND M/S (an intensity band gets sqrt 2 back)
+  cmd:    surgery is3 on ISBASE.TMP (ISBASE.TMP: signal is, 44100 Hz, 1.0 s, lame -S -m s -b 96 --resample 44.1)
+  expect: decode
+IS22.MP3      d6d1f4df58027d911119c400b7308e1718446c1e66916eb93335b55cc96933aa    6426
+  what:   MPEG-2: an L/R stream with a silent right channel relabelled intensity stereo: every band intensity coded at is_pos 0 (the right channel becomes the left).  mpglib does not follow ISO in MPEG-2 intensity stereo (it scores 16.7 dB on the ISO vector l3-test45), so the reference is the float model, which scores 97 dB there; see NUMERICS.md 6
+  cmd:    surgery is1 on IS22BASE.TMP (IS22BASE.TMP: signal is2, 22050 Hz, 1.0 s, lame -S -m s -b 48 --resample 22.05)
+  expect: decode iso
+BTRUNC.MP3    5453e092b544459b640b349e4a062220cb79264b104d6e4bada923d6a42c5a75    3672
+  what:   cut inside a frame 60% in
+  cmd:    surgery trunc on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: recover truncated>=1
+BBADSIDE.MP3  73dd047c6b8e6be6f37fe39de120773668080f267ed21bcf4cd0d6c7161567ef    6192
+  what:   frames 5, 9, 13: part2_3_length past the main-data budget
+  cmd:    surgery badside on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: recover badside>=3
+BHUGE23.MP3   56c07fe9008655429049e5d762f715aef218d514c16c1396b916cbeedb934b75    6192
+  what:   frame 6: every part2_3_length 4095
+  cmd:    surgery huge23 on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: recover
+BBIGVAL.MP3   a2c55d5afbe34af9ad4dea69616d60735d61d9601d393af8a067af45f0c9e7bd    6192
+  what:   frame 4: big_values 511 (> 288)
+  cmd:    surgery bigval on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: recover badside>=1
+BFREE.MP3     7c66e6bd3b892abe932bb771f60a005cc59970f9adf0cfd6a13abc05cf6ec9bf    6192
+  what:   every header rewritten to free format
+  cmd:    surgery free on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: refuse FREE FORMAT
+BLAYER2.MP3   26d3217de9a6d6436db6d0c813512acd65e9844f17960675b5ed6021538c0cc0    6192
+  what:   every header rewritten to Layer II (same frame size at MPEG-1)
+  cmd:    surgery layer2 on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: refuse LAYER II
+BID3V1.MP3    9ed2a5f63a5a039811e5f348864521dba19fa04bffab37f9eba5e473606e49c9    6320
+  what:   an ID3v1 tag behind: title "AFTER HOURS"
+  cmd:    surgery id3v1 on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: decode title=AFTER HOURS artist=XTMP3 FIXTURES
+BGARBAGE.MP3  ecceee88f560d21952f80db5c5c1ee0829f76170910a775caee5875d068faba6    6569
+  what:   300 and 77 bytes of garbage between frames (decodes exactly as BASE)
+  cmd:    surgery garbage on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: recover resync>=2 same=BID3V1.MP3
+BID3BIG.MP3   4ec89a1bea0743b89e29beb116998c19643b0276b54795c4a1e815ac972bcab3   26770
+  what:   a 20.6 KB ID3v2.3 tag with TIT2 "NEON DRIVE" and TPE1 "XTMP3 FIXTURES" ahead
+  cmd:    surgery id3big on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: decode title=NEON DRIVE artist=XTMP3 FIXTURES same=BID3V1.MP3
+BVBRI.MP3     4cde7015fb7f182b44881180969e294f45c5654328d39381699d30d304f36b5c    6336
+  what:   a Fraunhofer VBRI frame in front of the first audio frame
+  cmd:    surgery vbri on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
+  expect: recover frames=43 same=BID3V1.MP3
+
+# total 652742 bytes in 37 files

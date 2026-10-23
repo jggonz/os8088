@@ -38,6 +38,12 @@ entry_disc:
     call sbl_f_irqdisc
     mov [res_al], al
     hlt
+entry_disc16:                   ; tests/sbirq5.py: an SB16-class DSP, whose
+    mov byte [sbl_verhi], 4     ; mixer register 80h names the line, so the
+    mov byte [sbl_irq], 0xFF    ; winner is decided without the F2h probe
+    call sbl_f_irqdisc          ; (SPEC.md 34.5.6)
+    mov [res_al], al
+    hlt
 %include "picomem.inc"
 %include "sbslice.inc"
 
@@ -50,6 +56,14 @@ OSAPI_GET_TICKS:
     inc byte [res_ticks]
     xor ax, ax
     ret
+OSAPI_TOAST:                    ; the IRQ 5 refusal's line (34.5.6),
+    inc byte [res_toast]        ; counted
+    ret
+OSAPI_CPU_INFO:                 ; the machine's tier, planted by the row
+    mov al, [res_cpu]
+    mov ah, 0
+    ret
+CPU_8086    equ 0
 sbl_isr:    iret
 sbl_stub7:  iret
 sbl_stub5:  iret
@@ -71,6 +85,9 @@ sbl_verhi:   db 0
 sbl_base:    dw 0x220
 sbl_irq:     db 0xFF
 sbl_hooked:  db 0
+sbl_irq5x:   db 0
+res_toast:   db 0
+res_cpu:     db 0
 sbl_drqmask: db 0
 sbl_dsc_fired: db 0
 sbl_oldvec:  dw 0, 0

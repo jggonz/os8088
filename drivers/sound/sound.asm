@@ -111,7 +111,7 @@ snd_tier:
     je .table                   ; already off
     call sbl_detach             ; cannot fail (SPEC.md 51.2)
     mov word [si+DSV_STREAM], 0
-    and word [si+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI | SND_CAP_ADPCM4Q | SND_CAP_EXTBLK)
+    and word [si+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI | SND_CAP_ADPCM4Q | SND_CAP_EXTBLK | SND_CAP_STEREO | SND_CAP_PCM16)
     cmp word [si+DSV_TONE], 0
     je .table                   ; no OPL2 either: the name stays as it was
     mov word [si+DSV_NAME], snd_s_opl   ; the card is an AdLib now
@@ -406,10 +406,25 @@ snd_sb_pub:
     jb .out
     or word [si+DSV_CAPS], SND_CAP_PCM_HI
     cmp byte [sbl_verhi], 4     ; ...and a DSP 4.xx, whose ADPCM4 is a
-    jb .out                     ; question (SPEC.md 34.5.3.1): a package
-    or word [si+DSV_CAPS], SND_CAP_ADPCM4Q   ; asks the user
+    jb .pro                     ; question (SPEC.md 34.5.3.1): a package
+                                ; asks the user - and which plays stereo
+                                ; through its own mode byte, and 16 bits
+                                ; where a high DMA channel can be programmed
+                                ; (SPEC.md 34.5.5)
+    or word [si+DSV_CAPS], SND_CAP_ADPCM4Q | SND_CAP_STEREO
+    call sbl_hdma_find
+    jc .out
+    or byte [si+DSV_CAPS+1], SND_CAP_PCM16 >> 8
+    ret
+.pro:                           ; an SB Pro's stereo switch is a CT1345 bit,
+    cmp byte [mix_kind], 2      ; so only a mixer that answered (SPEC.md
+    jne .out                    ; 34.15) gives it
+    or byte [si+DSV_CAPS+1], SND_CAP_STEREO >> 8
 .out:
     ret
+%if (SND_CAP_STEREO | SND_CAP_PCM16) & 0x00FF
+  %error "snd_sb_pub sets SND_CAP_STEREO / SND_CAP_PCM16 in DSV_CAPS's high byte"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; snd_detach - silence everything and give the hardware back

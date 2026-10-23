@@ -67776,7 +67776,9 @@ it with the other PCM bits.
 
 It exists because the absence was a defect with a field report: Tracker
 offered 44 kHz on every machine, an SB 2.0 (DSP 2.01) refused it, and the
-reason never reached the user (§45.10.1).
+reason never reached the user (§45.10.1). Two more bits of the same kind,
+`SND_CAP_STEREO` (0400h) and `SND_CAP_PCM16` (0800h), say which stream
+formats verb 11 will take (§34.5.5).
 
 #### 34.2.2 A patch-load names ITS channel — the recorded bug
 
@@ -68277,6 +68279,210 @@ a pause that waited for it to run dry would sound for up to a ring's worth -
 
 **Cost: 65 bytes** of the driver (6,565 → 6,630), inside its 7KB claim.
 
+#### 34.5.5 Stereo and 16-bit streams (verb 11)
+
+A ring stream may be **8-bit stereo, 16-bit mono or 16-bit stereo** where the
+card plays them. Every stream before this section was 8-bit unsigned mono and
+still is: nothing below changes a byte that reaches the card for a caller that
+does not ask. XTMP3's Original rung (§121.6) is the first consumer.
+
+**The format is a verb of its own, not a verb-0 flag, because verb 0 has no
+bit left.** `AH` bits 0-3 are `RING`, `EXT`, `ADPCM4` and `FORCE` and bits 4-7
+are an external ring's size and block codes (§34.5.3); and no register is free
+on every path into verb 0 either - the kernel banks the rate into `BX` and
+stamps `DH`, `BP` names the proc, `DI` is an external ring's segment. Reading
+bits 4-7 as a format for a GRANT ring would have meant one bit meaning two
+things by mode. So:
+
+**Verb 11, `SND_V_FMT`**: `AH` = the format of the NEXT verb 0 this instance
+makes.
+
+| bit | name | set | clear |
+|---|---|---|---|
+| 0 | `SND_FMT_STEREO` (1) | frames are left, right interleaved, left first | mono |
+| 1 | `SND_FMT_16` (2) | samples are 16-bit signed little-endian, silence `0000h` | 8-bit unsigned, silence `80h` |
+
+It answers `AX = 0`, `CF = 0` and holds the format; `AX = 2` when this card
+cannot play it (the caps bits below are the test, read the same way); `AX = 7`
+for any other bit; `AX = 4` with no card (the slot's own). **A driver from
+before this section answers 7, bad verb** - which is the refusal a package
+reads it by. A refusal holds nothing and drops a format already held, and
+`AH = 0` drops one deliberately.
+
+**The held format is spent by the calling instance's next verb 0, whatever
+verb 0 answers** (a busy or a rate refusal spends it too). It is stamped with
+the instance: another instance's verb 0 drops it and opens 8-bit mono, and an
+instance's release (`DSV_RELINST`) drops one it left. Verb 11 is
+UI-callback-only, like the opens, and is called in the SAME callback right
+before verb 0: §20.3's serialization of the opens on the UI task is what makes
+a two-call open safe.
+
+**Two caps bits** (`OSAPI_SND_CAPS`), published by `snd_sb_pub` at attach and
+at `DRVV_TIER`'s "on", withdrawn with the other PCM bits by the tier's "off":
+
+| DSP | card | `SND_CAP_STEREO` (0400h) | `SND_CAP_PCM16` (0800h) |
+|---|---|---|---|
+| < 3.00 | SB, SB 2.0 | no | no |
+| 3.xx | SB Pro | when its CT1345 mixer answered (§34.15): the stereo switch is a mixer bit | no |
+| ≥ 4.00 | SB16 | yes | when mixer register `81h` names a 16-bit DMA channel (5, 6 or 7) **and** a second 8237 answers at `C0h`-`DFh` |
+
+The second test is a write and a read-back of that channel's address
+register, masked: an SB16 in an XT's 8-bit slot reports DMA 5 from its mixer
+and there is no controller to program, and a stream that can never transfer
+would end on the watchdog instead of being refused. A Vibra-class card with
+no high channel plays 16-bit through the 8-bit one in Creative's own drivers;
+that path is not taken here, so such a card gets `STEREO` and not `PCM16`.
+
+**What verb 0 does with a held format:**
+
+- **A ring only.** A linear open answers 7, because its tail pad is 8-bit
+  silence; `ADPCM4` with a format answers 7. Grant rings and external rings
+  (§34.5.3) both take a format, and each plays DIRECT or double-buffered by
+  §34.5.2's three tests exactly as an 8-bit ring does.
+- **SB Pro (DSP 3.xx), 8-bit stereo: the doubled-rate rule.** The DSP
+  alternates channels byte by byte, so its time constant is for TWICE the
+  rate and the regime is chosen by that doubled byte rate: up to 22,222
+  bytes a second the legacy `1Ch` with 2,048-byte halves, above it
+  high-speed `90h` with 4,096 and the rounded TC (§34.5) - so the per-channel
+  range is **4,000 to 22,050 Hz**, and 22,050 plays at 21,739. Mixer `0Eh`
+  bit 1 (stereo) is set for the stream and bit 5 (output filter OFF) with it:
+  the SB Pro's output filter is one fixed low-pass ahead of both channels,
+  and a stereo stream up to 22 kHz a channel is what it would cut. `0Eh` goes
+  back to the byte it held at close. **And the first byte goes left:**
+  before the auto-init transfer verb 0 plays ONE byte single-cycle (`14h`,
+  length 0), the ring's own first byte, so the DSP's channel toggle starts
+  on the left - the procedure Linux's `sb8` driver follows, citing Creative's
+  programming guide (3-23). Its IRQ is taken by the ISR's spurious leg
+  (`[sbl_prime]`) and waited for at most three ticks; a card that never
+  raises it is acknowledged by hand and the open goes on.
+- **SB16 (DSP 4.xx): the 4.xx commands at every rate.** `41h` with the FRAME
+  rate (the card interleaves, so no doubling), **5,000 to 44,100 Hz**, and
+  `C6h` (8-bit, ch 1) or `B6h` (16-bit, the high channel) with mode `20h` for
+  stereo and `10h` for signed. The half is 4,096 BYTES at every rate - so
+  `RL` ≥ 8,192 and verb 0's `CX` ≥ 4,096 - and `SND_OPENF_BLKSH` shifts it as
+  ever. Pause is `D5h`, continue `D6h` and the auto-init exit `D9h` on the
+  16-bit side; the block IRQ is acknowledged at **`2xFh`**, which the ISR reads
+  in place of `2xEh` while a 16-bit stream is open.
+- **16-bit DMA.** The 8237 at `C0h`-`DFh` counts WORDS and addresses them:
+  the address register holds the physical address shifted right one (bit 15
+  is A16), the page register (`8Bh`/`89h`/`8Ah` for 5/6/7) A17 up, the count
+  is words - 1, and a transfer cannot cross a 128KB boundary. A ring inside
+  one 64KB page (§34.5.2's test, unchanged) is inside one 128KB block too, so
+  the boundary needs nothing new; the ring's PHYSICAL BASE must be EVEN, and
+  verb 0 answers 7 when it is not - grant the ring first, or behind
+  even-sized grants. `RL` is a power of two, so no sample straddles the wrap.
+- **A rate outside the card's range answers 2; a format the card cannot play
+  answers 2 at verb 11.** Nothing is ever clamped, narrowed to mono or played
+  as 8 bits.
+
+**Every count is BYTES**, exactly as before: `RL`, verb 0's `CX`, verb 1's
+total, verbs 3 and 9's `DX`, `SND_EXT_TOTAL` / `SND_EXT_CONS`, the half and
+the shift `BLKSH` applies to it. A frame is 1, 2 or 4 bytes (mono 8-bit;
+stereo 8-bit or mono 16-bit; stereo 16-bit), so **frames = bytes >> 0, 1 or
+2**, and a producer feeds whole frames. Verb 9 reads the high channel's word
+count for a 16-bit stream and doubles it, so it stays exact.
+
+**Cost** and the evidence are §34.5.5.1's.
+
+#### 34.5.5.1 What it cost, and what proved it
+
+**+689 bytes of `SOUND.DRV`'s image, 11,134 → 11,823, and that CROSSES A
+CLAIM RUNG: the driver's heap claim goes from 11KB to 12KB** on every machine
+that loads it, card or no card. The rung was 130 bytes away, so no version of
+this feature fitted under it; the image sits 465 bytes inside the new one. No
+kernel byte, and kern_small ships no `SOUND.DRV` (§34.0).
+
+| where | bytes |
+|---|---|
+| the 16-bit channel's programming (`sbl_hdma_auto`) and the SB Pro stereo preliminaries (`sbl_pro_st`) | 184 |
+| verb 0: the held format, its gates, the watchdog's frame count, the even base, the commit | 135 |
+| finding a programmable high channel (`sbl_hdma_find`) | 96 |
+| `sbl_hw_start`: `B6h`, the mode byte, which channel | 52 |
+| close (`D9h`, the high channel masked, `2xFh`, `0Eh` restored) | 51 |
+| verb 11 and its row | 46 |
+| verb 9's word count | 37 |
+| the ISR (`2xFh` through `[sbl_ackp]`, the primer's leg), halt and continue | 32 |
+| caps, the page-register table, release, attach, state | 56 |
+
+The Drivers page's column (`DRVM_IMG_SND`, `kernel/driver.inc`) says 12 with
+it, and `t_drvmem` is what said so. What every 8-bit mono stream costs: the
+ISR reads its ACK port out of a word (`mov dx, [sbl_ackp]`) where it added
+`0Eh` to the base, which is shorter and no slower; `sbl_halt` and
+`sbl_go_on` test one byte before `D0h`/`D4h`; the card is sent the same bytes
+in the same order.
+
+**What proved it** - `tests/sndfmt/sndfmt.asm`, a package that runs itself
+off its window timer, and `tests/sndfmt.py`, rows `sndfmt` and
+`sndfmtmarty`:
+
+- **QEMU's SB16** (DSP 4.05, DMA 1 and 5), booted from a disk whose
+  `\AUTOSTRT` starts the package, the card's own output captured by QEMU's
+  `wav` audiodev at the stream's 22,050 Hz in two 16-bit channels so nothing
+  resamples it. Both caps bits published; the four refusals (an unknown bit
+  7, a linear open 7, 4,500 Hz 2, a ring at an odd offset 7); then five
+  streams, each opened, PLAYING at its end and at its byte rate by verb 9,
+  and each heard on the right side: 16-bit stereo (left 344.5 Hz at 8,000,
+  right 1,378 Hz at 600 - the right channel's residual **0.3**, 63 dB under
+  a tone at -35 dBFS, where the 8-bit stereo phase's residual is 70-83, the
+  quantising noise of eight bits), 8-bit stereo, 16-bit mono, 16-bit stereo
+  on an **external** ring fed by memory writes alone, and 16-bit stereo left
+  unfed until the ISR halted it (`D5h`; verb 9 read state 1) and then fed,
+  when it resumed (`D6h`) and played its remaining ticks' worth with the
+  tones whole across the seam. Each channel carries the OTHER side's
+  frequency 57 dB or more under its own tone - and what there is is a
+  harmonic of the sine table's rounding, not crosstalk. 46 checks.
+- **MartyPC's Sound Blaster, a DSP 2.01**: neither bit, verb 11 answers 2 for
+  every format and 7 for an unknown bit, and the refused verb 11 held
+  nothing - the same linear, 4,500 Hz and odd-offset opens then succeed as
+  8-bit mono. 13 checks.
+
+**Not proved here**: the SB Pro path. No emulator in this tree asserts on an
+SB Pro (86Box carries one to listen to, and cannot be driven headless -
+docs/TESTING.md), so the stereo switch, the filter bypass, the doubled rate
+and the primer are written to Creative's documented behaviour and wait for
+a listen. Nor real SB16 hardware, a Vibra, or an SB16 in an 8-bit slot,
+whose refusal is the read-back test above.
+
+
+#### 34.5.6 IRQ 5 taken on an XT: refused
+
+**On an XT-class machine, a Sound Blaster that answers on IRQ 5 is refused
+when IRQ 5 already belongs to someone else** (the owner's decision, from the
+XTMP3 work: docs/HOW-XTMP3-WAS-BUILT.md, "a finished WAV that played for one
+second"). An IBM XT's fixed-disk controller - the IBM/Xebec ST-506 card,
+86Box's `st506_xt` - takes IRQ 5, and a card jumpered there is accepted by
+the discovery (7, 5, 3, 2), plays ONE block, and falls silent: the disk's
+handler takes the interrupt, the watchdog ends the stream, and a player
+reads the end of the stream as the end of the song.
+
+**"Taken" is evidence, not a guess** (`sbl_irq5_taken`):
+- **the machine is XT-class**: `OSAPI_CPU_INFO` answers the `CPU_8086`
+  tier - an 8088, 8086 or V20, with no slave PIC, so the disk is on IRQ 5.
+  A 286 or better (an AT) puts its disk on IRQ 14 and is never refused, and
+  kern_mega, which needs one, never reaches the vector read. (The BIOS
+  model byte at F000:FFFE would say the same, but loading F000h into ES is
+  a selector load on kern_mega, and the tier is a fact the kernel already
+  holds);
+- **IRQ 5's vector (int 0Dh) points below the system ROM** (segment below
+  E000h): into a disk controller's option ROM (the ST-506 card's at C800h)
+  or into a driver in RAM. An unused line's vector is the BIOS's own dummy
+  handler in its ROM, and nothing in os8088 hooks IRQ 5, so a hooked vector
+  is a claim. It is read at discovery, when the candidates' vectors have
+  been put back.
+
+**Refused** means `sbl_f_irqdisc` answers "no usable card" for that winner
+on every path - the firing probe, the SB16 mixer's read-back and a PicoMEM's
+configured line - so the stream open fails with error 4. A package then
+takes its no-card path (the Audio Player and XTMP3 the speaker or the
+Covox, §86.21), the FM chip stays usable (it needs no IRQ), and the first
+refusal of a session raises the toast `IRQ 5 is the hard disk's` (24
+characters, §59.10). The cure is the card's jumper: IRQ 7 is the first
+candidate. A card on any other line is untouched, and so is every AT.
+
+It cost `SOUND.DRV` 84 bytes of image (11,823 to 11,907), inside its 12 KB claim. `tests/sbirq5.py` (the
+`sbirq5` row) holds it: refused on an 8088 with a hooked IRQ 5, accepted on
+an unhooked one, on a 286 and a 386, and on IRQ 7; with the refusal broken,
+2 checks fail.
 ### 34.6 Recording and staging — back, as a driver
 
 Went with §34.5 and came back with it. Verb 7 grants out of the driver's
@@ -216472,7 +216678,10 @@ one job is to say a file is not the one this release wrote. Every file is
 compared as stored, so nothing is decompressed to check a sum.
 
 The files are the ones every kern_big system-disk geometry carries: the
-manifest describes all four (`KERNEL.SYS` is byte-identical across them).
+manifest describes all four (`KERNEL.SYS` is byte-identical across them). So
+it is built from `$(DRIVERS360)`, the 360 KB disk's set, which leaves
+`CDROM.DRV` out (§119.6.7): System Check does not judge that driver on any
+disk, the way it does not judge `CDRACK.O88`.
 `SYSCHECK.O88` itself is not in it - the manifest is part of the file it
 would describe.
 
@@ -216722,6 +216931,8 @@ mixed on this machine, so the only cost of a playing CD is a status poll.
   a DOS program may be reading, and it holds no IRQ or DMA channel a
   program could want back.
 - `kern_small` has no driver layer (§51.0) and so no CD-ROM.
+- **The file is not on the 360 KB system disks** (`$(DRIVERS360)`, §119.6.7):
+  every other kern_big system disk carries it.
 
 ### 119.2 The drive
 
@@ -217143,6 +217354,20 @@ class byte says `OS88_HIGH | OS88_HIGHMEM` (it makes no claim and does no
 arithmetic on its own segment), so kern_mega runs it above 1MB - except
 when `\AUTOSTRT` opens it, the walk running before `mega_enter`. Mixer
 (§34.15) ships separately on the apps disks.
+
+**...and CDROM.DRV left the 360 KB system disk with it** (2026-10-23, the
+owner's decision taken in the XTMP3 PR, §121.12). The driver refuses an XT's
+8-bit bus (§119.2), and the 360 KB system disk is the XT's, which is CDRack's
+reason one file along. What made it a removal rather than a tidy-up is the
+disk's arithmetic: SOUND.DRV's stereo and 16-bit streams (§34.5.5) grew it
+from 17 to 18 clusters of 512 bytes and took the disk from 705 of 706 to 706
+of 706, and a system disk with no free cluster cannot take a new SYSTEM.CFG
+or any `SYSTEM\APPDATA` write (§19.9). CDROM.DRV is 11 clusters, which
+leaves **11 free**. It is `$(DRIVERS360)`, derived from `$(DRIVERS)` and
+guarded so that a filter matching nothing stops the build, and every 360 KB
+variant of the system disk (the test and field disks built from the same
+lists) takes it. The Drivers page still lists the row; ticking it reports
+what it reports for any driver that is not on the system disk.
 
 | | |
 |---|---|
@@ -217677,3 +217902,1123 @@ CLAUDE.md's closed list). The resident hook is measured by
 selector inventory of §120.3.1 honest. The fullscreen round trip is S8's
 driving pass, not a row of its own: `fsx_capstab`'s VESA row is VGA's and
 `fsx_leave` restores through `vid_setmode`'s arm.
+
+## 121. XTMP3 — an adaptive MP3 player (`apps/xtmp3/`, `XTMP3.O88`)
+
+**XTMP3 plays MP3 files at the best quality the machine and its audio device
+can actually sustain, and says which quality that is.** On a fast machine it
+is a standards-oriented integer MPEG-1/2/2.5 Layer III decoder at the source's
+rate. Slower machines step down through the SAME decoder at half and quarter
+output rate. Only after those come a separately identified, table-driven XT
+backend's approximations. When nothing sustains real time, the player asks
+for a hard-drive folder, decodes the whole track to a WAV there, finalises
+it, and only then plays it. That is the normal path on a 4.77 MHz 8088.
+There is no progressive XT decode-and-play.
+
+The design record is [docs/plans/XTMP3-PLAN.md](docs/plans/XTMP3-PLAN.md),
+the brief is `docs/xtmp3/design/PROMPT.txt`, and the owner's two mockups are
+`docs/xtmp3/design/xtmp3-color.png` and `xtmp3-mono.png`. Each track's
+contract notes are beside them in `docs/xtmp3/` (`NUMERICS.md`,
+`XT-STUDY.md`, `STD.md`, `XT.md`, `FACE.md`, `ENGINE.md`; period-machine
+figures in `FIELD.md`), with the faces and the states pictured beside them
+(`docs/xtmp3/*.png`), and the diary is
+[docs/HOW-XTMP3-WAS-BUILT.md](docs/HOW-XTMP3-WAS-BUILT.md). This section is
+the contract as it SHIPPED. Every subsection says whether it is **shipped**
+(the code does it and a row or a measurement says so) or **pinned** (the
+contract the code is written to, not yet shown on the machine it is about),
+and where it is partly each, which part is which.
+
+Prefixes: `x3_` (shell and engine), `x3d_` (drawing layer), `x3f_` (face),
+`x3p_` (the front end), `x3s_` (the STANDARD backend), `x3x_` (the XT
+backend), `x3c_` (conversion and the cache), `x3l_` (the ladder). The art
+generator's labels are `x3art_`.
+
+### 121.1 Files (shipped)
+
+| file | holds |
+|---|---|
+| `apps/xtmp3/xtmp3.asm` | header (icon, the `.MP3` association), the parts table, entry, window, menus, keys, the queue, the commands and their one predicate (`x3_bok`), callbacks, bss |
+| `apps/xtmp3/x3draw.inc` | the drawing layer: roles and themes, the composing band, a 4bpp canvas (retro-face, CDRack's `crdraw.inc` renamed) |
+| `apps/xtmp3/x3face.inc` | the state record (`X3S_*`), the four layouts as data, every cached element, the key painter, `x3f_update` |
+| `apps/xtmp3/x3eng.inc` | the live path: the look-ahead, the worker, the feed, calibration and the ladder, finished-WAV playback |
+| `apps/xtmp3/x3conv.inc` | Decode first: the drive dialog, the Save dialog's hand-off, conversion, finalisation, the cache and Decoded Files |
+| `apps/xtmp3/x3gran.inc` | **the contract**, equates only: the granule record, a part's header and verbs, the front end's API, the FRONT part's data layout |
+| `apps/xtmp3/x3pars.inc` | the front end's primary half: the open as a state machine, the queue's probe, seeking, the near entries the engine calls |
+| `apps/xtmp3/x3phdr.inc` | the frame header, shared as source by the primary and the FRONT part |
+| `apps/xtmp3/x3pnext.inc` | the frame loop (sync, resync, side information, the reservoir), assembled into FRONT as its NEXT verb |
+| `apps/xtmp3/x3front.asm` | the FRONT part: NEXT, then per granule the scalefactors, Huffman, the exponents and the stereo plan |
+| `apps/xtmp3/x3std.asm` | the STANDARD part: `x3sim.Decoder.granule()` from `requant_i` on |
+| `apps/xtmp3/x3xt.asm` | the XT part: the product-table chain, and the table expansion at OPEN |
+| `apps/xtmp3/x3crc.inc` | CRC-32 (a nibble table), the fingerprint's and the parts' table checks |
+| `apps/xtmp3/x3stub.asm`, `x3stub.inc`, `x3hook.inc` | the STUB backend and the test hook, in `X3STUB` builds only (`make xtmp3stub`), never shipped |
+| `apps/xtmp3/art/` | the three codex-made masters (knob, VU dial, logo) and their prompts |
+| `apps/audio/aplook.inc`, `apspk.inc` | the Audio Player's look-ahead and speaker bracket, assembled from its own source (§121.6) |
+| `tools/x3sim.py` | THE REFERENCE: the parser, the STANDARD integer model, a float decoder and the comparison harness. Its docstring is the binding format table |
+| `tools/x3simxt.py` | the XT chain bit for bit over x3sim's front end; its docstring is binding |
+| `tools/x3tables.py`, `x3tab_iso.py` | the STANDARD table blob `x3std.bin` and the ISO tables with their provenance |
+| `tools/x3fronttab.py`, `x3stdgen.py` | the front end's tables for the 8086, and the DCT-II and window as straight-line code traced from x3sim |
+| `tools/x3xttab.py`, `x3xtgen.py` | the XT table packs' generator, and what the XT part assembles (`XTGEN.BIN`, the kernels, `--seal`) |
+| `tools/os88x3art.py` | every picture and font: the ART part and the primary's include of its offsets |
+| `tools/x3fixtures.py` | the fixture generator: synthesized signals and the LAME commands that encoded them |
+| `tests/xtmp3/` | committed fixtures with their recipes and SHA-256 (`FIXTURES.txt`) and the golden hashes (`X3SIM.txt`, 141 cases; `X3XT.txt`, 51) |
+| `tests/x3bench/`, `tests/x3xtbench/`, `tests/x3xtunit.py`, `tests/xtmp3eng.py`, `tests/xtmp3live.py`, `tests/xtmp3xt.py` | the gates (§121.11.6) |
+| `apps/xtmp3/x3rep.inc`, `tools/x3field.py`, `vm/*-xtmp3/` | the `-DX3REPORT` build that writes `X3REPORT.TXT` for a machine nobody can watch, and the 86Box matrix that reads it back (`make xtmp3field`, never shipped) |
+
+### 121.2 Streams (shipped)
+
+MPEG-1, MPEG-2 and MPEG-2.5 Layer III: mono, dual channel, stereo, joint
+stereo (M/S and intensity), CBR and VBR, 8 to 320 kbps, every rate the three
+versions define. A free-format stream and a Layer I or II stream are REFUSED
+by name (`FREE FORMAT`, `LAYER II`). CRC (`protection_bit` = 0) is parsed
+and skipped, never checked, which is a documented omission.
+
+- **ID3v2** at the head is skipped by its synchsafe length without being read
+  whole. TIT2 and TPE1 are copied into a bounded 40-byte field each when they
+  lie inside the first read. ID3v1 (`TAG` in the last 128 bytes) supplies a
+  title when v2 did not.
+- **Xing/Info/VBRI** in the first frame gives the frame count, so the
+  duration is exact. Without one the duration is `file bytes / first frame's
+  bitrate` and is shown with a `~`. A LAME tag's encoder delay and padding
+  are honoured in a conversion's trim (§121.7).
+- **Sync** needs two consecutive headers that agree on version, layer and
+  rate before a frame is believed; a resync scan in progress consumes what it
+  rejected and resumes across a refill. A frame whose side information
+  exceeds its own budget, or whose `part2_3_length` runs past the reservoir,
+  is DROPPED and decoded as silence with the history kept, and is counted.
+  It is never read past.
+- **The reservoir** is a 4 KB-bounded byte ring of main data. A frame whose
+  `main_data_begin` reaches back further than the bytes held (the first
+  frames after an open or a seek) is decoded as silence, the standard's own
+  answer.
+- **A packed MP3 is refused by name.** `OSAPI_FILE_READ_AT` and `READ_SEQ`
+  deliver an lz4-wrapped file raw (§20.14.3), so an `.MP3` stored wrapped
+  cannot be streamed: the queue's probe answers `PACKED FILE`
+  (`X3REF_PACKED`) and Play `The MP3 is stored packed`
+  (`OSAPI_FIND_CZ`, read at the open), never decoding it as noise. Every
+  disk ships the demo songs plain (§121.12).
+- **An MP3 on a 32 KB-cluster volume** (a 1-2 GB FAT16 partition) is listed
+  with its title and duration, the probe reading across a cluster's end, and
+  Play refuses it by name (`Its disk's clusters are too large`): its
+  look-ahead would need two of its clusters, 64 KB. A finished WAV plays
+  from such a volume.
+
+The front end is byte-identical in decision to `x3sim.py`'s parser on all 37
+fixtures and 6 hostile ones (43 of 43, §121.11.6).
+
+### 121.3 The parts and the ABI (shipped)
+
+**The front end is shared, so bitstream correctness is one piece of code on
+both backends.** It covers frame scanning, ID3, Xing/VBRI, side information,
+the reservoir, scalefactors, Huffman, the requantisation exponents and the
+stereo plan: everything `tools/x3sim.py` does before `requant_i`, decision
+for decision. Approximation lives only in reconstruction, which starts at
+requantisation.
+
+**XTMP3.O88 is one file of five rows** (§20.12, all `OP_SEG` or `OP_ASSET`,
+lz4-packed on the disk):
+
+| row | part | load | image | on the disk | holds |
+|---|---|---|---|---|---|
+| (primary) | `xtmp3.bin` | the package | 42,935 + 14,279 bss | | the face, the engine, conversion, the front end's primary half |
+| 0 | FRONT (`x3front.bin`) | eager, in the carve | 24,509 | 8,982 | NEXT, GRAN, CHECK; the granule record; the Huffman tables |
+| 1 | ART (`x3art.bin`) | eager, in the carve | 12,985 | 4,789 | every picture and font (§121.8) |
+| 2 | STANDARD (`x3stdp.bin`) | lazy | 57,732 | 22,533 | the STANDARD backend |
+| 3 | XT (`x3xt.bin`) | lazy | 58,634 | 24,531 | the XT backend |
+| 4 | STUB (`x3stub.bin`) | `X3STUB` builds only | 688 | | a backend that only pretends, for the engine's row |
+
+The file is 98,771 bytes. **Only one backend is resident at a time**:
+switching drops one part before fetching the other (`op_drop`/`op_fetch`).
+The STANDARD backend contains no XT kernel and no product table.
+
+**The front end's split.** Its frame-level code is near procs in the
+primary (`x3pars.inc`): `x3p_open` is a state machine that never reads a
+file (it answers `X3P_NEED` with `[X3I_WANT, +X3I_WANTN)` until the record
+is complete, so the queue's probe and the engine share it), `x3p_probe`
+wraps it for the queue, `x3p_start`/`x3p_next`/`x3p_gran` decode from the
+engine's `X3R_*` ring (free-running read and write counters, a producer EOF
+byte; `X3P_MORE` asks for bytes and loses nothing), `x3p_reset` and
+`x3p_seekpos` seek, and `x3p_counts` gives x3sim's verdict counters.
+**`x3p_next` is a thin entry that far-calls FRONT's NEXT verb**, where the
+frame loop lives so the primary's segment does not carry it (1,493 bytes
+moved out). FRONT's verbs are GRAN (the granule-level decode into the
+record), CHECK (its Huffman tables against their CRC-32) and NEXT; they run
+with DS = FRONT's data segment, and `x3pars.inc` reaches that segment's
+fixed layout through ES with DS the package's own.
+
+**The granule record** (`X3G_*`, `X3G_ABI` 1, 5,228 bytes at FRONT's
+`X3P_REC`) is what the front end hands a backend, by far pointer:
+
+| field | holds |
+|---|---|
+| header (32 bytes) | version (1, 2, 25), rate index, `nch`, mode and mode extension, granules a frame, and the version's 13 short-band widths, so a backend reorders a short block with no band table of its own |
+| per channel (two) | `ok` (0 = this channel's granule is silence: a dropped frame, a short reservoir, a bad granule), block type, mixed, window switching, the last non-zero line + 1 (exact; every `ix` past it is zero), `ix[576]` int16 in bitstream order, `q[576]` int16 quarter-power exponents exactly as `quarter_exponents()` makes them (with the M/S `-2`) |
+| stereo plan | `X3G_PLAN` = L/R, all-M/S or per line (`0` L/R, `1` M/S, `80h + p` intensity), exactly `stereo_plan()`; L/R whenever a channel is not ok |
+
+**A backend part** starts with an 18-byte header: `'X3'`, the ABI, its kind
+(`X3K_STD`, `X3K_XT`), and six near verb offsets, far-called through
+`op_cseg` with DS = the part's own data segment:
+
+| verb | does |
+|---|---|
+| `CAPS` | AL profile, AH divisor: the profiles offered (`X3C_OFFER`), up to six work segments in paragraphs (`X3C_NSEG`, `X3C_PARA`), the tables' KB (`X3C_TKB`) and the resident part after OPEN (`X3C_PARTKB`) |
+| `OPEN` | an `X3O_*` record: profile, divisor, output channels (1 on a stereo source IS the mono downmix), PCM as S16 Q15 or U8 (the high byte XOR 80h), a Q8 gain where 0 and 256 are the exact model, the work segments. Expands this profile's tables and checks them. Implies RESET |
+| `RESET` | clears every history: overlap, synthesis V, reservoir |
+| `GRANULE` | the record at ES:SI into DX:DI: CX = 576/div frames written, AX = this granule's clips |
+| `STATS` | fills `X3Z_*`: saturations, per-stage counters, silent channel-granules |
+| `CLOSE` | nothing to free: the primary owns every claim |
+
+Refusals are `X3E_*`: `CHAN`, `DIV`, `MEM`, `RECORD`, `TABLE`, `NOTOPEN`.
+Every verb keeps every register but AX and its outputs, leaves DF clear,
+never calls the kernel, never touches IF, and uses at most 64 bytes of the
+caller's stack (measured deepest: STANDARD about 32, XT 50).
+
+### 121.4 Numerics (shipped; `tools/x3sim.py` and `tools/x3simxt.py` are the authority)
+
+All arithmetic is 8086 integer: 16-bit words, `imul` 16x16 to 32, and 32-bit
+accumulators in register pairs. No x87 instruction appears anywhere and none
+is probed. Both backends reproduce their model BIT-EXACTLY (§121.11.6).
+
+- **STANDARD is design D5** (docs/xtmp3/NUMERICS.md §3, chosen by
+  measurement). The spectral domain (requantised lines, stereo, antialias) is
+  int32 Q28. The IMDCT (36 and 3x12 points, minimp3's factorisation with the
+  twiddle merged into the window) works in int16 under a block scale k that
+  lives in one subband of one granule and never crosses it, with 4 bits of
+  headroom. The subband samples, the overlap and the DCT-II are int32 Q28.
+  The synthesis history is a ring of the last 16 DCT vectors in int16 Q14
+  against a window stored in consumption order, 16 products an output into
+  an int32 Q28 accumulator, output int16 Q15. Every stored result is rounded
+  half up once and every overflow saturates and is counted. Against
+  `lame --decode` it measures 63.8 to 78.2 dB SNR, at most 3.11 LSB RMS and
+  19 LSB peak on every fixture, against a tolerance of RMS 4 LSB, peak 32 LSB
+  and 60 dB above -40 dBFS. All-int16 reached only 53-62 dB, because a
+  rounding step in the spectral domain reaches the output about 7x larger.
+  The tables are `x3std.bin`, 13,888 bytes, CRC-32 `84E29B65`, shipped raw,
+  with an 8-bit Huffman first level (1.04 lookups a symbol, measured).
+  **The target's own choices**, each argued exact and held by the gate: the
+  DCT-II and the window are straight-line code generated by tracing x3sim
+  (`tools/x3stdgen.py`); an IMDCT output pair runs in 32-bit registers when
+  its overlap word is under 2^30; all-zero subbands and antialias
+  boundaries are skipped (x3sim's arithmetic on them is exactly zero); the
+  window multiplies unsigned against a ring holding V + 32768, the bias
+  cancelled in the rounding constant; and every saturation is a call out of
+  line, which took the part from 63,952 to 54,520 bytes before the fast
+  paths.
+- **Reduced rate (STANDARD, divisor 2 or 4)** does not reconstruct subbands
+  at or above `32 / divisor` (no requantisation, IMDCT or butterflies for
+  them; Huffman still parses them, as the layout requires) and computes only
+  the output phases kept, as an N-point DCT-II (N = 32/divisor) against every
+  divisor-th window row. In float that equals the decimated full-rate output
+  bit for bit. Aliasing appears only for tones in the 10% just above the new
+  Nyquist: -29 dBc at half rate, -20 dBc at quarter.
+- **XT** replaces the multiplications of synthesis, matrixing and the IMDCT
+  window with product tables `T[row][code] = round(S * c_row * decode(code))`
+  over a global 8-bit companded code, never block-normalised. Profiles are
+  XT Standard (16 window terms an output), XT Fast (8), XT Turbo (4,
+  experimental, not in Auto) and XT Speech (16 terms at the divisor whose
+  output lands near 5.5 kHz: 2 on an MPEG-2.5 source, 4 on an MPEG-2 one,
+  refused on MPEG-1). **XT Standard's divisor is its source's**: 1 at 8-12
+  kHz, 2 at 16-24 kHz, 4 at 32-48 kHz, so its output lands near 11 kHz and
+  never under the floor. Divided, it IS the XT Speech tables at that divisor
+  (the same 16 terms on the kept phases and the same Lee 16/8; std at a
+  divisor and speech at it are one output, bit for bit). The part runs those
+  tables at 2 or 4 on any MPEG version, and `tools/x3simxt.py` names the
+  case `stdd` (10 golden lines in tests/xtmp3/X3XT.txt, all bit-exact in
+  `x3xtexact`). Against the float decode at the same divisor it measures
+  32.0-34.1 dB, peak 1.4-6.0 LSB, DC within 0.03 LSB, over the ten 16-48 kHz
+  fixtures. That is at or above XT Standard undivided on the same files
+  (31.2-33.7). **XT Fast is not divided**: its window at 2 and 4 needs
+  kernels and Lee 16/8 constants its pack does not have, so in Auto it
+  stays an 8-12 kHz rung. The exact definitions are docs/xtmp3/XT-STUDY.md §5
+  and `tools/x3simxt.py`. **What the target settled that the study left
+  open** (docs/xtmp3/XT.md §1): requantisation is one linear path for every
+  profile, an exact table for `|ix| <= 15` and pow43 scaled to Q13 above it;
+  the IMDCT switches per subband between the sparse table form and minimp3's
+  factored form in `imul` at `FAST_MIN` = 13 non-zero lines, the crossover
+  MartyPC measured; Fast and Turbo window the IMDCT with Standard's
+  byte-split rows; **the output is mono**, the spectra mixed before one
+  hybrid pass when both channels' blocks agree (M/S takes M, L/R
+  `(L + R + 1) >> 1`, intensity `(L kl + L kr + 2^14) >> 15`) and the
+  windowed outputs averaged when they do not; and the arithmetic wraps
+  everywhere except the requantiser's and stereo's saturations, both counted.
+  Against the float decode at the same divisor: XT Standard 30.7-33.7 dB,
+  XT Fast 28.6-30.8, XT Turbo 18.2-20.0, XT Speech 31.3-33.7; the float
+  decode rounded to 8 bits, which is what any 8-bit player gives, is
+  34.4-39.2. **XT Turbo is not in Auto**: its tones carry -19 dB alias
+  spurs, and it is only about 6% faster than XT Fast because matrixing,
+  which does not shrink with the window, is the largest stage of both.
+
+### 121.5 The quality ladder (shipped; measured on emulated machines in §121.11.5)
+
+Auto takes the first rung that calibrates real time on THIS machine with this
+device: **Original** (STANDARD, divisor 1), **Half** (STANDARD, 2),
+**Quarter** (STANDARD, 4), **XT Standard** (divided by its source: 1, 2 or
+4, §121.4), **XT Fast** (8-12 kHz sources only), and then **Decode first**
+(§121.7). XT Turbo and XT Speech are the user's explicit choices only.
+**Decode first is chosen ONLY when no live rung at or above the floor
+passes**, never on a machine where one does. An explicit D (or the menu)
+still converts at the user's quality, and a machine with no card still
+converts. Before the divisor, every XT rung decoded a 44.1 kHz song at
+full rate, so a machine able to play it at 11 kHz went to Decode first.
+86Box's 486DX2/66 on C128 probed Quarter 0.98, XT Standard 1.15 and XT Fast
+1.17 (§121.11.5). `xtmp3eng`'s `ladder/xt44` is the rule over the stub: a
+middling machine with a 44.1 kHz song plays live XT Standard at 4 (11,025
+Hz), and XT Fast is never asked.
+A rung whose output rate the device cannot play is skipped rather than tried,
+and so is a rung whose output would fall below `X3_FLOOR` = 8,000 Hz while
+the source is above it, so an 11,025 Hz track never auto-halves to 5,512 Hz.
+Device format limits (8-bit, mono, a top rate) are applied at the feed and
+shown as the DEVICE's (the LCD's format line adds `DEVICE`), separately from
+any CPU step-down. `x3_rungs` maps each rung to (backend, profile, divisor):
+Original (STD, 0, 1), Half (STD, 0, 2), Quarter (STD, 0, 4), XT Standard
+(XT, 0, `X3_DIVSRC`: the source's - and at 2 or 4 OPEN takes profile 3,
+`x3_rungprof`), XT Fast (XT, 1, 1), XT Turbo (XT, 2, 1), XT Speech (XT, 3,
+set by the source; refused on a 32-48 kHz source).
+
+**Calibration** decodes the actual track from its start, timed by
+`pit_now`: the front end, GRANULE, and the feed's copy into the card's ring,
+plus the disk's share priced from the priming reads' measured cost per byte
+- which, for a track the hold has (§121.6.1), is the cost of a copy, as it
+will be while the track plays.
+A warm-up granule runs untimed first. **A probe is ARMED and starts two
+timer passes later** (`x3l_arm`): a document's play arms it in the very
+pass whose face update then repaints the whole new track, and a probe
+running beside that repaint was charged for it - XT Standard's first probe
+on MartyPC's XT read 0.06x against its 0.11x (and every 86Box probe read
+lower on the build that first made XT Standard an 8086's first probe).
+Measured with the arm: 0.11x again, the calibration 6.6 s.
+
+| constant | value | what |
+|---|---|---|
+| `X3_SAFETY` | 125 | a rung passes at 1.25 audio seconds a wall second |
+| `X3_SLOW` | 110 | a live window under 1.10x is slow |
+| `X3_FLOOR` | 8,000 Hz | no automatic rung below it while the source is above it |
+| `X3_CAL_GRAN` | 24 | granules a probe times, at most |
+| `X3_CAL_TICKS` | 18 | ticks a probe runs, at most (about 1 s) |
+| `X3_CAL_HOPE` | 4 | a first granule 4x short of passing ends the probe |
+| `X3_CAL_SKIP` | 2 | frames decoded untimed after a probe's seek |
+| `X3_WINGR` | 32 | granules a live slow window spans |
+| `X3_NCAL` | 8 | probe results the session keeps |
+| `X3_OFFMAX` | 8 | offline Auto: the best rung converting in at most 8x the track's length |
+
+**The probe order is not the ladder's order**, and that is what bounds the
+wall time. Reduced-rate STANDARD does strictly less work than full rate, so
+the cheapest valid STANDARD rung is probed first: if it fails every dearer
+STANDARD rung is skipped unprobed, and if it passes Original is tried, then
+Half. XT Standard and XT Fast follow the same way. A rung the device cannot
+play is SKIPPED, which is not failed: Original skipped still tries Half
+before settling for a cheaper rung. **An 8086 probes XT
+Standard FIRST** (`PH_HINT`: `OSAPI_CPU_INFO`'s `CPU_8086` is a hint that
+picks the order, never the verdict): if it is short of passing by
+`X3_CAL_HOPE`, nothing else is probed - STANDARD at a quarter of the rate is
+no cheaper on an 8088 (1.76 M cycles a granule against 1.62 M) and XT Fast is
+under 1.3 times as fast - and the machine asks for a drive; a V20 or a fast
+8086 whose XT Standard is not hopeless runs the whole ladder with that
+measure cached. The probe's OPEN is then the conversion's (a RESET, no
+re-fetch: `x3_reuse`). The part's fetch, the XT part's OPEN and the priming
+around a probe are not bounded by `X3_CAL_*`; measured on MartyPC's 5160,
+AFTERHRS calibrates in 6.4 s (one probe: the fetch 1.0, OPEN 3.3, the prime
+and the probe 2.1), where three probes took 16.1 s (§121.11.5). **A rung that
+cannot START is a rung that failed**: its OPEN, its claims (out of memory)
+or the card refused, it is stored at 0 for the session and the ladder runs
+on to the next rung or to Decode first - never an error (`xtmp3eng`'s
+`rungfail` leg). Results are cached per (fingerprint, rung, device: the
+format bits and the rate cap), so a second play of a track asks no probe.
+
+**While playing live**, a 32-granule window under 1.10x counts as slow; two
+in a row step DOWN one rung (`X3R_STEP`), and a window at or above 1.10x
+clears the count. **An underrun is a reason to re-evaluate, not a step**
+(`x3_under`): it steps only when the decode is what is short - this window's
+speed so far (from 4 granules), else the last whole window's, else the
+rung's probe, under 1.10x - or when it is the second underrun inside one
+32-granule window. Otherwise it is the disk's (a read holds `sch_lock`, and
+the card plays its ring alone through it): counted, the rung kept, and the
+look-ahead's refill asked for earlier, at 3/4 of its ring rather than half.
+`xtmp3eng`'s `slowdown` leg injects them through the stub's hook: one at 4x
+is kept, two in a window step. A step is a RE-OPEN (every rung below
+Original changes the card's rate or format): the old stream ends on a
+32-frame ramp to silence published as its last half, the card plays it out,
+the rung below opens at the last REAL sample and pre-rolls `X3_PREROLL` = 6
+frames, and its first 32 frames ramp up - a short silence, no click. A rung
+below that cannot open is skipped for the next; below the last, Decode
+first. **`X3_PREROLL` = 6 is measured**: the least pre-roll after which the
+output is an uninterrupted decode's, over 749 seeks into 33 fixtures, is 1
+frame for 3.2% of them, 2 for 15.8%, 4 for 92.5% and 6 for all
+(`main_data_begin` reaches back up to 511 bytes, several frames at low
+bitrates, and short blocks chain their overlap). **Nothing ever steps back
+up**, and an override
+(Options > Quality) shows `(set)` and is never stepped. The disk's time is
+not in a live window: a disk that cannot keep up shows as underruns, and
+two in a window step. An underrun while playing a FINISHED file is a disk or
+device fault, counted, and never a reason to decode with more loss.
+**Without a card** there is nothing live to choose (§121.6), and the probes
+become the conversion's estimate: the offline pick (`x3l_offpick`) is the
+best rung measured at `1 / X3_OFFMAX` or better.
+
+`xtmp3eng`'s `ladder`, `slowdown` and `rungfail` legs prove every
+transition over the STUB backend, whose cost per rung is set by
+`X3STUB.CFG`: a capable machine stays on Original, a middling one takes Half
+or Quarter, an XT-class one reaches Decode first with Original and Half
+never probed, and a rung whose start fails gives way to the next with no
+ERROR. QEMU picks Original on every machine it emulates; what the ladder
+picks on an XT, a 286, a 386, a 486 and a Pentium is §121.11.5's.
+
+### 121.6 Output (shipped on QEMU's SB16; the SB Pro is pinned)
+
+Through `OSAPI_SND_STREAM` (§34.5). The format (`x3_ofmt`) is §34.5.5's
+offer: **16-bit stereo where the card answers both `SND_CAP_STEREO` and
+`SND_CAP_PCM16`, 8-bit stereo with `STEREO` alone, 8-bit mono otherwise**,
+verb 11 called in the same UI callback immediately before verb 0. The rate is
+the rung's (the source's rate over its divisor), held to the card's range:
+`X3_DEVMIN` = 4,000 Hz; 22,050 Hz without `SND_CAP_PCM_HI`; 22,050 Hz a
+channel for stereo on an SB Pro; 44,100 Hz on a DSP 4.xx with or without its
+16-bit channel. A clamp the device causes is shown as the device's limit,
+never as a quality step. Silence is 128 (0 on a 16-bit stream). **The
+device's conversion is the backend's own, and exact**: a 16-bit stream is
+x3sim's int16 PCM, an 8-bit one its high byte XOR 80h, and a mono stream
+from a stereo source x3sim's mono downmix; `xtmp3live` captures each on
+QEMU's SB16 and finds it sample for sample.
+
+| output bytes a second | the card's ring |
+|---|---|
+| under `X3_RINGHI` = 32,000 | SOUND.DRV's grant (verb 7): 16 KB, else 8 |
+| 32,000 or more | an EXTERNAL ring (`SND_OPENF_EXT`, §34.5.3): 32 KB of the package's own plus the control words, claimed DMA-safe, written directly. The pool tops out at 16 KB, which is 93 ms of 44.1 kHz 16-bit stereo |
+| any, under the XT backend | the 16 KB grant with the look-ahead made smaller to fit, else the 8 KB grant (`x3_plan`); never the external ring: the 400,000 bytes hold the card's ring too (§121.10). The 16 KB is 1.5 s of 11 kHz where 8 is 0.74. Live or probing, a gulp is 4 KB (`X3_RDXT`, or one cluster where that is more), at most two `int 13h` calls, and one is asked for as soon as it fits (the low water is the ring less a gulp): a read holds `sch_lock`, and a floppy's motor stops 2 s after its last read, so a refill a half ring apart paid the spin-up. 86Box's 386 underran once that way, on the first refill 2.7 s after the prime, and not at all with it |
+
+**The feed** (`x3_feed`, the worker, lock-free) is §86.5's pattern: verb 3's
+consumed count is the clock, and up to `X3_MAXFEED` = 8 halves of `X3_HALF`
+= 4,096 bytes are made and published while the ring has room (on an external
+ring by writing its control word; verb 1 is still called, being the only
+verb that resumes an underrun). The worker sleeps a tick only on a lead of
+three blocks plus 110 ms of the stream, and otherwise yields; at 176 KB/s it
+never sleeps. An underrun is counted once, and a feed with nothing to
+publish closes the stream on a 32-frame ramp to silence (`X3_RAMP`), never a
+DC step.
+
+**A machine with no card** plays a FINISHED file through the PC speaker or
+a Covox with the Audio Player's own bracket (§86.21, `apps/audio/apspk.inc`
+assembled unchanged), and never decodes MP3 into the speaker. Seek restarts
+the bracket at the new sample.
+
+**What has been shown where.** On QEMU's SB16 (`xtmp3live`): Original in
+16-bit stereo at 44.1 and 22.05 kHz, Half by override, 8-bit stereo on an
+SB16 with no 16-bit channel, 8-bit mono on a DSP 2.01, and a seek, each
+sample for sample against x3sim; a finished file's bytes reaching a Covox
+one for one (`xtmp3eng`'s `covox`, QEMU's parallel-port trace; its pcspk
+renders only a square and cannot carry the speaker bracket). Not shown: the
+SB Pro's stereo on its own card, a real SB16, and anything listened to.
+
+#### 121.6.1 The hold: a live play reads no disk (shipped)
+
+The Video Player's rule for its desktop Live (§98.3.18.1), for the same
+reason: a read holds `sch_lock`, so the card plays its ring alone through
+it, and a floppy whose motor has stopped charges its spin-up to the next
+refill. Before a track's ladder or job (`x3_go`), `x3h_begin` reads **the
+whole MP3** into a hold:
+
+| hold | when | how |
+|---|---|---|
+| one XMS block (`X3HK_XMS`) | `OSAPI_XMEM_CAPS` has the file's KB | 32 KB `READ_SEQ` chunks into the look-ahead's claim, each `OSAPI_XMEM_COPY`'d up |
+| a conventional claim (`X3HK_CONV`) | no pool, the file at most `X3H_CAPKB` = 192 KB, the heap's largest run holds it and `X3H_MARGKB` = 96 KB stay free beside it, and the CPU is not an 8086 | the chunks read straight into it |
+| none | otherwise, and on every 8088 | the track streams as before (§121.6's 4 KB gulps) |
+
+The load is `MD_LOAD`, state **Loading NN%** (`X3ST_LOAD`): a pass of the
+window's timer reads chunks until about 110 ms have gone, so Stop is
+answered between passes. Then the ladder or the job starts as it would
+have. From then on aplook.inc's gulps are copies: its read is `AP_RSEQ`, which the
+Audio Player leaves `os88_rseq` (AUDIO.O88 is byte-identical) and XTMP3
+makes `x3_rseq`, a copy out of the hold for the held file and the disk for
+anything else (a finished WAV, `x3_readat`'s header and fingerprint reads).
+`[x3_nrseq]` counts the disk's gulps and `[x3h_ncopy]` the hold's.
+
+**The key** is the file's folder, volume and name. A track that opens with
+the same key keeps its hold (a replay, a seek, a step, a Decode first after
+Stop). Any other track, Stop, a load cut short and a failed read each free
+it, and the kernel frees both kinds with the instance. **The ceiling
+stands:** a conventional hold is the first thing given up. `x3_plan`,
+asked for a plan the 400,000 bytes cannot hold beside it, frees the hold
+and plans again, and the track streams.
+
+### 121.7 Decode first: choose a drive, convert the whole track, then play (shipped)
+
+**The drive dialog** (`x3c_dopen`, its own window, titled *Decode First*)
+carries the brief's sentence exactly: *This computer needs to decode this
+track before playing.* / *Choose a hard drive for the decoded audio.* It
+lists every `VK_FIXED` volume with its letter and free space, greying one
+with its reason (`read-only`, `too little room`, `cannot be read`, and
+`32 KB clusters` under XT Standard, whose stage cannot hold one such cluster
+inside §121.10's ceiling - the other rungs convert there). It never assumes C:, never lists a floppy, and says *This
+machine has no hard drive to decode to.* when there is none. It shows the
+quality, the PCM the job makes (rate, channels, bits), the disk needed as
+`frames x channels x bytes` plus the header cluster in 32-bit arithmetic
+(`~` when the duration is an estimate) - and NO time: a probe times the
+decoder and not the job, and on an XT its *About 01:31* was a 3:03 job. A
+volume the conversion's rung cannot use is greyed with its reason (`read-only`,
+`too little room`, `cannot be read`, and `32 KB clusters` for XT Standard,
+§121.10). The last destination is preselected. With more of the queue
+behind it a switch (`Queue too: No` / `Yes`) approves the batch, and an
+approved batch reuses the folder. **Volume labels are not shown**: no slot
+gives a package a FAT volume label (§121.13).
+
+**Decode and Play** opens the Standard File Save dialog (§38) standing in
+that volume, in the last destination's folder when it is there. `x3c_onsave`
+refuses a folder not on a writable fixed volume, a name that exists and too
+little room, forces `.WAV`, and brings the dialog back after a refusal. The
+Save dialog is unbound, so its file actions are posted to the main window's
+wake (`X3R_UIOP`) rather than run where they would move the machine's
+current folder.
+
+**The conversion.** The decoder is opened first (§121.10's order), then the
+stage is set and `X3nnnnnn.TMP` created in the chosen folder, its header
+padded with a `JUNK` chunk to exactly one cluster so every later write is
+whole clusters. The worker decodes into the half it owns and never touches a
+file (§20.6 rule 7); the UI task writes the other with
+`OSAPI_FILE_WRITE_SEQ` (`WSEQF_HELD | WSEQF_KEEP`, §18.4.9), a byte handshake
+each way. The stage is two halves of `max(8 KB, the cluster)`, or
+`max(4 KB, the cluster)` under the XT backend, inside the ring's claim, or
+ONE half where the XT path's ceiling has no room for two (`x3_plan`,
+§121.10); nothing fitting fails the job before a byte is written, `Too
+little memory for that disk`. The progress window (*Decoding to Disk*)
+shows the output, the quality, decoded audio against the track time, the
+percentage, the elapsed wall time and the measured speed (`0.31x`), and once
+the job has measured itself for `XC_ESTT` = 182 ticks (10 s), `About mm:ss
+left`. It redraws at most once a second (`XC_DRAWT` = 18 ticks) and only
+the characters that changed; the LCD's clock, the bar and the status move
+with it. **Cancel** (Esc or the button) is answered within one granule batch,
+measured 0.22 s from the key to Ready, and deletes this job's temporary file
+and nothing else. A full disk, a write error, a volume that left or a source
+that changed stops the job with its reason (`The disk is full`, `Cannot
+write the file`, `The drive went away`, `The MP3 changed meanwhile`...), the
+temporary file goes, and nothing plays.
+
+**Finalisation** (`x3c_final`): the decoder's tail is drained and the LAME
+delay and padding trimmed (529 + the tag's encoder delay at the head,
+padding - 529 at the tail, x3sim's arithmetic); the stream is committed; the
+RIFF and `data` lengths are written with `OSAPI_FILE_WRITE_AT`; the source's
+fingerprint is taken AGAIN and a changed source fails the job; the file is
+re-read and its header checked; and only then is it renamed to the `.WAV`,
+entered in the index and played. **Only a finalised file is ever played.**
+
+| WAV offset | what |
+|---|---|
+| 0 | `RIFF` size `WAVE` |
+| 12 | `fmt ` 16: PCM, channels, rate, bytes a second, frame bytes, bits |
+| 36 | `xtm3` 44 (other readers skip it): version 1; the source's bytes and the CRC-32s of its first and last 16 KB (the 12-byte fingerprint); `X3_DECVER`, `X3_TABVER`; backend, profile, divisor, rung; output rate, channels, bits; output frames in `data`; the source's stem |
+| 88 | `JUNK`, to 8 bytes before the end of the first cluster |
+| cluster - 8 | `data` size, then the samples from the second cluster's first byte |
+
+**The cache** is `SYSTEM\APPDATA\XTMP3.DAT` (§19.9, through `os88data.inc`
+in the launch folder): an 8-byte header (`'X3DT'`, version 1, a count) and 16
+records of 48 bytes, each the fingerprint, the versions, the rung, the
+format, and where the WAV is (volume, folder cluster, 8.3 name). A full index
+drops its oldest record and leaves that file alone. Reuse needs no prompt: a
+matching record's own `xtm3` chunk is checked again, the `data` length must
+equal frames x frame bytes and the file must hold them, and a record whose
+file is gone, changed or short is dropped without touching the file. With a
+card the match is strict (the card must play the cached format as it is);
+without one any finished file of the track will do. **Decoded Files...**
+(the File menu) lists the index's files and deletes only one whose own `xtm3`
+chunk says XTMP3 made it, after an `ADANGER` question.
+
+**Shown by `xtmp3eng`** (§121.11.6): the dialogs, the WAV's every field and
+its frame count read on the host, the finished file playing, a second Play
+reusing the cache with no granule, probe or part; cancel, a full disk, a
+stale and an incomplete cache, no fixed disk, two writable volumes, a source
+changed during the job, Decoded Files deleting XTMP3's WAV and leaving
+another's, an approved batch, a read-only fixed volume (a CD), a packed MP3,
+destinations of 8, 16 and 32 KB clusters; and XT Standard's conversion on
+the shipped package, its WAV byte-exact to x3simxt (`xtmp3live`'s
+`xtfile`, and on MartyPC `xtmp3xt`).
+
+### 121.8 The face (shipped)
+
+The owner's mockups: an 80s stereo component inside the native window, with
+a logo strip and screws, a recessed LCD (the track and title line, large
+seven-segment elapsed time, a thin `/ total`, a progress bar, the output
+format), two VU meters over an OUTPUT rule, a stepped VOLUME knob between
+grilles, five transport keys and OPEN, a queue with a scroll bar, and a
+status bar (`Quality: ...` | the state). It is built the retro-face way
+(`.claude/skills/retro-face`): roles and two theme tables, every field one
+band and one blit, cached element keys, art generated on the host.
+
+| layout | content | where | what is on it |
+|---|---|---|---|
+| FULL | 512 x 352 | VGA (and VESA) | everything in the mockup; the queue three rows |
+| MID | 512 x 248 | EGA 640x350, Hercules 720x348, VGA where the band is EGA's | the same with MID's art (27-row time digits, 84x40 dials, a 56x42 knob); the queue two rows |
+| C1 | 440 x 88 | the CGA's 200 lines | the LCD (system-font title, 18-row time, a 4-row bar, the format), the five keys and OPEN, the status line |
+| C2 | 440 x 172 | Options > Compact Player on VGA, EGA and Hercules | C1's arrangement with FULL's art |
+
+The frame adds 2 to the width and 19 to the height. The layout is chosen at
+every full paint from `OSAPI_WM_GEOM` (the largest that fits, unless the user
+asked for the compact one) and sized by an `OSAPI_WM_PREFER` table
+(§11.100.1) that `x3_prefset` rewrites on every change of mind; Options >
+Compact Player / Full Player (`C`) switches with `OSAPI_WM_RESIZE`, grey where
+the full player does not fit.
+
+**The theme is a role table.** Colour is the default where the display has
+more than one bit (a light grey panel, a black LCD with light green segments
+and a light cyan title line, a cream VU face with a red zone, the master's
+four-grey knob); black and white everywhere else. Options > Theme (`T`)
+switches on a colour display and is grey on a 1bpp one.
+
+**The meters never claim stereo the output does not have.** With two output
+channels the dials are **L** and **R**, both VU. With one, the left dial is
+**MONO** and the right one is **BUFFER**: the PCM ring's fill while live and
+the conversion's progress while decoding, with its own `0 50 100` scale and
+its zone GREEN at the full end, because a full buffer is health and not an
+overload. A needle is redrawn at most every 5 ticks (3.6 a second), from the
+fed block's peak; Options > Meters: Off rests both and stops redrawing them.
+**While converting the VU rests** and the BUFFER gauge moves at most every
+`X3F_DIALC` = 55 ticks (3 s), because a needle costs a VGA XT 136-187 ms and
+the animated face had taken 44.5% of a conversion (§121.11.5); **while
+live** a needle frame is skipped when the card holds under half its ring, so
+the decoder feeding it comes first.
+**The knob** is the mixer's master (`SND_CAP_MIXER`) where there is one, a
+digital gain applied at the decoder's final conversion otherwise, and grey
+with a dotted indicator on a finished file with no mixer.
+
+**The engine boundary is one record.** The face reads `x3_st` (`X3S_*`, 68
+bytes: the state, the running rung and the user's override, flags for an
+estimated total, no total, a device limit and a working knob, elapsed and
+total seconds, the output format, the BUFFER level, both meters, the
+percentage, the speed x 100, underruns, the peak in KB, the error text, the
+volume, the current entry and its 40-character title) and writes only the
+override and the volume. States shown: Open an MP3 file, Checking
+performance, Choosing output drive, Decoding to disk NN%, Ready to play,
+Playing live, Playing decoded file, Paused, Buffering, Finished, Error:
+<reason>. `Quality:` names the rung actually running (`ORIGINAL`, `HALF`,
+`QUARTER`, `XT STANDARD`, `XT FAST`, `XT TURBO`, `XT SPEECH`) and an override
+adds `(set)`; the quality field is 26 characters, so `Quality: XT STANDARD
+(set)` is whole, and the state field 31 (27 on the compact layouts). A
+queue row's estimated duration reads `~00:10`, as the LCD's total does.
+Status: Advanced (`I`) puts the figures in the state field:
+the peak memory, the underruns and the speed.
+
+**Every element is keyed and a full paint forgets every key**: the title
+line, the time, the total, the progress bar (only the strip between the old
+length and the new), the format, each dial (the box the old and new needles
+share, one `OSAPI_GFX_BLIT4`, or one `BLIT1` in black and white), each dial
+label, the knob (one canvas, one blit), each queue row, the scroll bar and
+the two status fields. A key is an `os88ui` record (Play and Pause latch), ONE
+band and ONE blit in any state, and `x3_bok` is the one predicate for a
+key's greying, its menu item and its keystroke. **The art is a part** (row 1,
+§121.3) whose segment is banked once at entry; every composer loads ES from
+it once a call, never once a byte. The identity check (an incremental paint
+equals a full repaint, pixel for pixel) passed on FULL and C2 in colour and
+black and white on QEMU's VGA, MID on `VIDEO=ega` and on Hercules, and C1 on
+the CGA, and again at 70323ad3 on FULL colour, MID black and white and C1.
+The faces in `docs/xtmp3/` are that build's, the compact and Hercules ones
+c22de988's, after the compact layouts' channel word moved.
+
+**Mouse**: a queue row selects and a second click on the selection plays it;
+the scroll bar's arrows step a row and its trough a page; the wheel scrolls
+the queue (the volume on the compact player); the knob's left half turns it
+down a detent and its right half up; a click on the progress bar seeks.
+
+### 121.9 Menus and keys (shipped)
+
+| menu | items (a grey item is `x3_bok`'s refusal) |
+|---|---|
+| File | Open... (O), Add to Queue..., Remove from Queue, Clear Queue, Decoded Files... |
+| Playback | Play/Pause (Space), Stop (S), Previous Track, Next Track, Rewind (,), Fast Forward (.), Decode First... (D) |
+| Options | `Quality: <rung>` (Q), `Theme: Color` / `Black and White` (T), `Meters: On` / `Off`, `Compact Player` / `Full Player` (C), `Status: Basic` / `Advanced` (I) |
+
+**There is no check mark, so each Options item NAMES its state**, and
+Quality is ONE item that cycles Auto, Original, Half, Quarter, XT Standard,
+XT Fast, XT Turbo, XT Speech and back to Auto. About is `OSAPI_ABOUT_SET`'s
+card, and there is no Help menu.
+
+| key | does | key | does |
+|---|---|---|---|
+| Space | play / pause | S | stop |
+| Left / Right | previous / next track | `,` `.` | back / forward 10 s |
+| Up / Down | queue selection | Enter | play the selection |
+| `+` `=` `-` | volume | O | open |
+| Q | cycle quality | D | decode first |
+| T | theme | C | compact / full |
+| I | status: basic / advanced | Esc | cancel a conversion |
+
+Seeking a LIVE stream re-aims the look-ahead `X3_PREROLL` = 6 frames before
+the target, empties the reservoir, RESETs the backend and decodes those
+frames to nothing; the position shown stays the target. **Six is measured**:
+over 749 seeks into 33 fixtures, 1 frame reproduced an uninterrupted decode
+3.2% of the time, 2 frames 15.8%, 4 92.5%, 6 all of them, because main data
+reaches back up to 511 bytes and short blocks chain their overlap. Without a
+Xing count the target's byte is a CBR estimate, a frame off on a VBR file
+(26 ms on NEONDRV); a Xing TOC seeks by its TOC. A finished WAV seeks
+directly. While a conversion runs, playback and seeking are disabled:
+progress is not playback.
+
+**`.MP3` is DECLARED** in the header's association block (§54.6), not
+claimed at run time with `OSAPI_ASSOC_SET`, whose claim is sticky (§54.5) and
+would override a later choice of the user's every time the player ran. A
+double-click on an `.MP3` opens XTMP3 with it (`OSAPI_ARG_FILE`), queued and
+played. The queue holds 32 entries.
+
+### 121.10 Memory (shipped; the 400,000-byte ceiling measured through calibration, live and converting)
+
+**The XT path's whole working set is at most 400,000 bytes**, calibration
+included, counting the package region, every part, every claim the player
+makes and SOUND.DRV's claims made on its behalf. The engine plans to
+`X3_CEILKB` = 390 KB (399,360 bytes). It is reported live in Status:
+Advanced (`Peak 385K`). **`X3S_PEAK` is measured, not summed**
+(`x3_memck`): the region (`X3_REGIONKB`, the image and bss rounded up,
+56), the eager carve (`op_kb` = 37) and the fall in the heap's free total since launch, sampled after every
+claim and kept at its highest. Being the heap's own total, it counts what
+SOUND.DRV claims per stream and anything another task claims meanwhile. A
+conversion zeroes it at its start, so it is that job's peak.
+
+**The claim order is what makes the ceiling** (`x3_rungset`):
+
+1. give the look-ahead claim back, and the card's grant (a probe's grant
+   held into the next probe's OPEN measured 411,648 bytes on MartyPC);
+2. fetch the backend's part, claim its work segments and run OPEN;
+3. shrink the XT part to `X3C_PARTKB` = 29 KB with `OSAPI_MEM_REGROW`, which
+   always succeeds in place (OPEN's half of the part, 29,002 bytes, is not
+   needed again);
+4. **plan the buffers from what is left, measured** (`x3_plan`): under the
+   XT backend the look-ahead, the PCM's 3 KB, a conversion's stage and, live
+   or probing, the card's grant (16 KB first, with the look-ahead halved as
+   far as it may; else 8 KB) must fit the ceiling less what is held now. The look-ahead keeps two of the source's clusters and 4 KB at least
+   (one cluster can wait forever for a gulp it has no room for); a stage
+   that does not fit as two halves is one, then the look-ahead halves, and
+   nothing fitting fails the job by name. STANDARD has no ceiling;
+5. only then claim the ring.
+
+**RESET instead of a re-fetch** (`x3_reuse`): when the backend's part is
+resident, OPEN in effect and the new OPEN record byte for byte the one it
+was opened with (a job on the rung its probe measured), nothing is fetched,
+claimed or opened again, and the caller's resync RESETs the histories. A
+shrunk part asked for a DIFFERENT record is dropped and fetched whole (a
+24 KB packed read on an XT). **The stage rides inside the ring's claim**,
+because the heap allows 8 claims an owner (§50) and the XT backend's five
+work segments, the carve, the part and the ring are already eight. A
+finished WAV plays only after the decoder's parts are dropped.
+
+| claim | size | while |
+|---|---|---|
+| the region (image + bss) | 57,214 bytes (56 KB) | the package runs |
+| the eager carve: FRONT + ART | 37 KB | the package runs |
+| look-ahead ring + PCM (+ the stage) | 32 KB + 3 KB, or 16 KB + 3 KB under the XT backend (the plan may halve the look-ahead) | a track is open |
+| the card's ring | the 16 KB grant (8 when the pool is short) or 33 KB external; under the XT backend x3_plan's grant, 16 KB or 8 | live, a probe, or a finished file on a card |
+| the backend's part | STANDARD 57 KB; XT 58 KB, then 29 after OPEN | live, a probe, a conversion |
+| the backend's work | STANDARD none; XT Standard 5 claims, 236 KB; Fast 5, 182 KB; Turbo 4, 149 KB; Speech 4, 160 KB | live, a probe, a conversion |
+| the stage | 2 x max(8 KB, cluster), or 2 x max(4 KB, cluster) under XT, or ONE where two do not fit; inside the ring's claim | converting |
+
+**Measured** (`X3S_PEAK`, KB of 1,024):
+
+| case | where | peak | the plan |
+|---|---|---|---|
+| XT Standard conversion, 2 KB clusters, no card | QEMU `xtpeak`; MartyPC `xtmp3xt` | 385 KB = 394,240 B | two 4 KB halves, 16 KB look-ahead |
+| XT Standard calibration on an XT | MartyPC `xtmp3xt` | 387 KB = 396,288 B | the probe's ring and the 8 KB grant |
+| XT Standard LIVE on an SB16 (44.1 kHz) | QEMU `xtpeak` | 387 KB = 396,288 B | 8 KB look-ahead, the 16 KB grant |
+| XT Standard conversion, 8 and 16 KB clusters | QEMU `xtclu` | 385 KB | ONE stage half |
+| XT Standard conversion, 32 KB clusters | QEMU `xtclu` | the volume greyed in the drive dialog (387 KB there) | `32 KB clusters` |
+| XT Fast conversion, 32 KB clusters | QEMU `xtclu` | 387 KB | two 32 KB halves |
+
+The peak of a conversion is at OPEN (the part unshrunk, with its work), not
+during the decode. **XT Standard cannot convert to a 32 KB cluster inside
+the ceiling**: after the shrink it holds 356 KB, which leaves 34, and
+`OSAPI_FILE_WRITE_SEQ` takes whole clusters, so the stage cannot be under
+one: 32 + 3 + a 4 KB look-ahead is 39. Every other rung converts there. The
+first engine attempt, with the ring held through OPEN, a 32 KB ring and a
+separate stage, ran out of memory at 421 KB. **The STANDARD path's peak** is
+about 125 KB before the rings (the region, the carve and the 57 KB part) and
+is never loaded first on an XT.
+
+**The stated minimum.** A machine without the memory a rung needs is told so
+in the package's own words (§24.5), in the status line: **`Needs 390 KB,
+has 300 KB`** (24 characters, whole in the state field). NEEDS is the
+rung's measured working set with the region and the eager carve
+(`x3_needkb`); HAS is the heap free at launch plus the region and the eager
+parts (`x3_haskb`; about 520 KB on a 640 KB VGA XT).
+
+| rung | needs |
+|---|---|
+| XT Standard | 390 KB (the ceiling; 385-387 measured) |
+| XT Fast | 360 KB |
+| XT Speech | 340 KB |
+| XT Turbo | 330 KB |
+| Original, Half, Quarter | 220 KB (with a card's external ring) |
+
+It is shown before any drive is asked for, when calibration ends with no
+live rung and the conversion's rung does not fit (`x3_fits` in `x3l_done`),
+and whenever a rung's part or claims are refused for memory. A LIVE start
+that runs out of memory does not show it: that rung fails and the ladder
+moves on (§121.5). The `shortmem` leg holds the sentence.
+
+**The tables ship as GENERATOR INPUT and are expanded at OPEN.** The XT
+packs (XT Standard 228,672 bytes, Fast 153,536, Turbo 120,256, Speech
+151,360) are expanded from `XTGEN.BIN` (5,578 bytes, CRC-32 `67C85179`,
+carried in the XT part) by an exact integer recurrence; `tools/x3xttab.py`
+writes the identical bytes on the host, where CRC-32 is the identity record.
+OPEN checks a Fletcher-32 READ-BACK of the expansion, which catches a bad RAM
+cell or a misplaced store where a sum folded into the stores would not; a
+plain word sum would prove nothing, because odd-symmetric rows sum to zero,
+and a CRC-32 there would cost an XT about 4.7 s. OPEN's resident stub checks
+the tail's Fletcher-32 (stamped by `tools/x3xtgen.py --seal`) before it
+enters it. Reading 128 KB of tables off a floppy would cost an XT over ten
+seconds; OPEN costs it 2.0 to 3.3 (§121.11.3, §121.11.5).
+
+**The primary segment** is `APP_MAX_SIZE` 65,024 bytes of image + bss: the
+shipped build uses 57,214 (7,810 left), the `PKG_MEGA` arm 58,111, the
+`X3STUB` test build 57,579 and the field's `X3REPORT` build 58,236.
+
+**Too little memory is stated, with the figure** (§24.5's rule). Each rung's
+working set, measured, is `x3_needkb`: XT Standard 390 KB, XT Fast 360, XT
+Turbo 330, XT Speech 340, a STANDARD rung 220; what the machine HAS is the
+region, the eager carve and the heap free at launch. The conversion's rung
+is checked before a drive is asked for, and a rung whose part or claims are
+refused for memory says it the same way: `Needs 390 KB, has 300 KB` (24
+characters, whole on the status line). A LIVE rung that cannot start is not
+an error at all: the ladder steps on (§121.5). The calibration's own peak
+is inside the ceiling too - 396,288 bytes on MartyPC, asserted by `xtmp3xt`.
+
+### 121.11 Measured (shipped, on emulators; real hardware and listening are TBD)
+
+Speeds are audio seconds a wall second ("x real"). Nothing is claimed real
+time unless it sustained correct-speed playback with the device's overhead
+and the safety margin. XT figures are MartyPC's cycle counter on an IBM 5150
+at 4.77 MHz, never QEMU's wall time.
+
+#### 121.11.1 STANDARD on the 8088 (MartyPC, the part and FRONT, per granule)
+
+`tests/x3bench/x3marty.py`: every stage boundary a breakpoint, twelve
+granules a case with the first three (reservoir silence) excluded. AFTERHRS
+is MPEG-2.5 11,025 Hz mono 24 kbps; C128 is MPEG-1 44.1 kHz L/R stereo 128
+kbps.
+
+| case | cycles a granule | x real |
+|---|---:|---:|
+| AFTERHRS, divisor 1 | 5.57 M | 0.045 |
+| AFTERHRS, divisor 2 | 3.11 M | 0.080 |
+| AFTERHRS, divisor 4 | 1.76 M | 0.141 |
+| C128, divisor 1 (stereo) | 9.31 M | 0.007 |
+| C128, divisor 2 | 5.24 M | 0.012 |
+| C128, divisor 4 | 2.94 M | 0.021 |
+| C128, divisor 1, mono downmix | 6.22 M | 0.010 |
+| C128, divisor 4, mono downmix | 2.32 M | 0.027 |
+
+The window and the DCT-II are within about 20% of their multiply floor (a
+window output is 16 products, a DCT-32 rotation four multiplies); the rest
+of the decoder is a third of the time. **STANDARD is nowhere near real time
+on an 8088**, measured rather than modelled: an 11 kHz mono granule must
+cost 249 k cycles and costs 22 times that. Converting a 3-minute 11 kHz mono
+track with Quarter would take about 21 minutes and with Original about 67,
+by these figures (decode only).
+
+#### 121.11.2 The XT backend on the 8088 (MartyPC, GRANULE only)
+
+`tools/x3xtmarty.py`, bit-exact on every granule measured. FRONT's work is
+not in these figures; the study modelled it at about 88,000 cycles a granule
+on the song, about 6%.
+
+| profile | AFTERHRS (song, 11,025 Hz) | X8K16 (voice, 8 kHz) | X11K24 (11,025 Hz) |
+|---|---|---|---|
+| XT Standard | 1,505,847 cycles, 0.166x | 1,450,529, 0.237x | 1,440,692, 0.173x |
+| XT Fast | 1,363,354, 0.183x | 1,317,441, 0.261x | 1,308,932, 0.190x |
+| XT Turbo | 1,276,955, 0.195x | 1,231,043, 0.279x | 1,222,534, 0.204x |
+| XT Speech (divisor 2) | 839,890, 0.297x | 797,360, 0.431x | 799,647, 0.312x |
+
+On the song XT Standard's time goes to the product rows (28.7%), matrixing
+(25.9%), the long IMDCT (19.7%), its window fused with the overlap (10.1%),
+requantisation and stereo (6.4%) and antialias (4.5%). **Nothing on an XT is
+real time**, as §121.5 expects. By these figures alone a 3-minute 11 kHz
+song would convert in about 18 minutes with XT Standard and 10 with Speech;
+the whole player, measured end to end, takes about three times that
+(§121.11.5).
+
+#### 121.11.3 OPEN on the 8088 (MartyPC)
+
+| profile | OPEN | of which the Fletcher read-back |
+|---|---|---|
+| XT Standard | 2.959 s | 0.867 s |
+| XT Fast | 2.322 s | 0.651 s |
+| XT Turbo | 1.990 s | 0.539 s |
+| XT Speech | 2.100 s | 0.608 s |
+
+The window rows are the largest part of OPEN, 1.23 s on XT Standard for 241
+rows. Calibration on an XT pays an OPEN for each XT rung it probes, and the
+re-fetch after a probe's shrink (§121.10).
+
+#### 121.11.4 Quality
+
+| | against | SNR | peak | notes |
+|---|---|---|---|---|
+| STANDARD, divisor 1 | `lame --decode` | 63.8-78.2 dB | 19 LSB (16-bit) | IS22 against the float model: mpglib's MPEG-2 intensity is the known outlier |
+| STANDARD, divisors 2 and 4 | the float model at that divisor | 62.8-78.5 dB | 15 LSB | |
+| XT Standard | the float decode | 30.7-33.7 dB | 2.0-5.7 LSB (8-bit) | DC -0.01 to -0.05, clips 0-2 |
+| XT Fast | | 28.6-30.8 dB | 2.4-6.9 | |
+| XT Turbo | | 18.2-20.0 dB | 9.0-25.4 | -19 dB alias spurs on tones |
+| XT Speech | | 31.3-33.7 dB | 1.9-5.4 | about 2.7 kHz of bandwidth, muffled by design |
+| the float decode, rounded to 8 bits | | 34.4-39.2 dB | | what any 8-bit player gives |
+
+Listening notes for each rung through a real card and speaker: **TBD
+(FIELD)**. The study's listening WAVs (`docs/xtmp3/listen/`) stand in for the
+XT profiles, the target's output being the model's to the byte.
+
+#### 121.11.5 End to end, on period machines (measured; docs/xtmp3/FIELD.md, PERFORMANCE.md Set 162)
+
+The shipped package doing what a user does: open a track, let Auto
+calibrate, decode first or play live, finalise, play the finished WAV. Two
+fixtures: AFTERHRS (MPEG-2.5, 11,025 Hz mono, 24 kbps) and C128 (MPEG-1,
+44.1 kHz L/R stereo, 128 kbps). **The XT is MartyPC's**
+`os8088_xt_vga_hdd_sb`: an IBM 5160, an 8088 at 4.77 MHz, 640 KB, VGA, an
+XT-IDE fixed disk with no mechanics, and a DSP 2.01; every figure is guest
+cycles, and every converted WAV is bit-exact to the models (`xtmp3xt`).
+**The rest are 86Box's** interpreter (cycle-approximate), each booting from
+a floppy, figures from the guest's own `pit_now`; 86Box cannot be keyed, so
+no conversion is timed there and a decode-first verdict stops at the dialog.
+
+**Two builds are measured here.** FIELD measured the package at 55a051b4.
+The integration track then acted on what it found (the face resting while
+converting, one probe on an 8086, the probe's OPEN reused, the grant given
+back before OPEN, a failed start falling through, the XT backend's 8 KB
+ring) and re-measured XT Standard on MartyPC's XT with `xtmp3xt`. Those rows
+are marked **shipped**; the rest are FIELD's figures at 55a051b4. **The
+86Box rows are the shipped build's** (d5e53fea, re-run by FIELD with the
+`-DX3REPORT` build; 70323ad3 measured the same but for one probe); FIELD.md section 3 keeps the 55a051b4 matrix they
+replace.
+
+| machine | track | probes (x real) | Auto's decision | what ran | peak |
+|---|---|---|---|---|---|
+| 4.77 MHz XT, DSP 2.01 (MartyPC) | AFTERHRS | Original 0.03, XT Standard 0.11, XT Fast 0.11 | Decode first, on XT STANDARD | the conversion at **0.0552x end to end** (182.8 s for 10.09 s) | 395,264 B converting; **411,648 B calibrating** |
+| | C128 | Quarter 0.01 (no XT rung: its output would be 44.1 kHz, above a DSP 2.01) | Decode first, on QUARTER | the conversion at **0.0117x** | 204,800 B |
+| 4.77 MHz XT, SB 2.0 (86Box, floppy only) | AFTERHRS | XT Standard 0.05 (an 8086 probes it alone) | Decode first, on XT STANDARD | the dialog: no hard drive; calibration 10.08 s | 381 KB |
+| | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog; 7.89 s | 179 KB |
+| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.39, XT Standard 0.71, XT Fast 0.78 (round 6; before 0.30, 0.73, 0.78) | Decode first, on ORIGINAL | the dialog; 11.43 s | 383 KB (calibrating) |
+| | C128 | Quarter 0.16, XT Standard at 4 0.28 (round 6; before: Quarter 0.15, XT Standard 0.10, XT Fast 0.21) | Decode first, on QUARTER | the dialog; 6.67 s | 307 KB |
+| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 1.06, XT Standard 2.71 (round 7: the probes no longer pay the floppy; before 0.96, 2.14) | **live XT STANDARD**, 11,025 Hz mono 8-bit | **no underrun, from the HOLD** (§121.6.1, round 7: XMS, 0 disk gulps all session; calibration 4.39 s after the load). Before the hold: no underrun with a 4 KB gulp asked for as soon as it fits (§121.6; xtmp3/int round 4: calibration 6.20 s, probe 2.02x). It was one underrun, stepped to XT FAST, on round 3's 16 KB grant with a refill every half ring (calibration 5.76 s), and 11 on round 2's 8 KB grant | 350 KB |
+| | C128 | Quarter 0.37, XT Standard at 4 0.63 (round 6; before: Quarter 0.37, XT Standard 0.47, XT Fast 0.51) | Decode first, on QUARTER | the dialog; 5.44 s | 269 KB |
+| 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 3.08 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 157 KB |
+| | C128 | Quarter 0.97, **XT Standard at 4 1.27** (round 6, xtmp3/int; before: Quarter 0.97, XT Standard 1.15, XT Fast 1.16, Decode first) | **live XT STANDARD at 4**, 11,025 Hz mono 8-bit | **no underrun**, the song played out; calibration 4.00 s | 275 KB |
+| Pentium 133 MHz, SB16 (86Box) | AFTERHRS | Original 4.88 | **live ORIGINAL** | no underrun | 157 KB |
+| | C128 | Original 0.75, Half 0.98, Quarter 1.30 | **live QUARTER**, 11,025 Hz stereo 16-bit | no underrun | 174 KB |
+
+Every 86Box peak in the shipped build is at or under 381 KB = 390,144 bytes,
+calibrating included. **A finished WAV through the PC speaker** (MartyPC's
+card-less 640 KB 5150 with a Hercules and an XT-IDE disk, `xtmp3xt`'s `spk`
+leg, shipped build): AFTERHRS converts on XT Standard (bit-exact), then plays
+in the Audio Player's bracket; the first 800 writes to port 42h are
+`tools/os88spkfx.py`'s counts for the WAV's own bytes (11,025 Hz stepped to
+8,000) after one silent pulse, 2.0% of pulses lost, `x3_gran1` never reached
+and the kernel left clean. The bracket came down one rung (to 5,512 Hz)
+mid-play, the ring ran dry 24 times and 10.08 s played in 11.06 s - the
+XT-IDE's CPU-copied reads beside the pulses, apspk's known lag.
+
+**The XT's conversions** (MartyPC, AFTERHRS unless named):
+
+| rung | the job | of which setup / loop / finalisation | end to end | the loop alone | the part alone (§121.11.2) | peak |
+|---|---|---|---|---|---|---|
+| **XT Standard (shipped)** | **106.58 s** | 0.26 (the probe's OPEN reused) / 100.49 / 5.84 | **0.0946x** | 0.1004x | 0.166x | 394,240 B |
+| XT Standard (55a051b4) | 182.81 s | 4.59 (fetch 1.05, OPEN 3.32) / 172.39 / 5.84 | 0.0552x | 0.0585x | 0.166x | 395,264 B |
+| XT Fast (55a051b4) | 169.30 s | 3.88 / 159.58 / 5.83 | **0.0596x** | 0.0632x | 0.183x | 346,112 B |
+| XT Speech, 5,512 Hz (55a051b4) | 118.34 s | 3.62 / 108.88 / 5.83 | **0.0853x** | 0.0927x | 0.297x | 317,440 B |
+| Quarter, C128 (55a051b4) | 127.73 s | 0.33 / 121.53 / 5.86 | **0.0117x** | 0.0123x | 0.027x | 204,800 B |
+
+**At 55a051b4 the whole player was about three times slower than its
+decoder** on an XT: a 3-minute 11 kHz song converted in about 54 minutes on
+XT Standard, where the part alone said 18. **The face was why**: in that
+loop the backend part was 38.1% of the cycles, FRONT 8.0%, and the face
+44.5% (16.1% the package's own drawing code, 28.4% the kernel's drawing),
+because the needles and the BUFFER gauge kept animating behind the progress
+window. **With the face resting while converting (shipped)** the XT part is
+65.8% of the loop, FRONT 13.6%, the face 9.8% (2.1% its own code, 7.7% the
+kernel's drawing), and XT Standard converts at 0.0946x end to end: about 32
+minutes for a 3-minute 11 kHz song. XT Fast, XT Speech and Quarter were not
+re-measured on the shipped build. A 44.1 kHz stereo song on an XT
+with a DSP 2.x converts on Quarter: about 4.3 hours for three minutes. The
+disk share (about 1%) and finalisation's 5.8 s are floors: MartyPC's XT-IDE
+has no seek or rotation.
+
+**Calibration on the XT** takes **6.44 s** to the decision on AFTERHRS in
+the shipped build: one probe, XT Standard (the fetch 1.01 s, OPEN 3.29 s,
+the prime and the probe 2.13 s), peak 387 KB. At 55a051b4 it was three
+probes and 16.10 s (each rung 4.7 to 5.8 s), peak 411,648 bytes; 4.32 s on
+C128; 27.0 s on 86Box's floppy-only XT (10.08 s there in the shipped
+build).
+
+**The face on the 4.77 MHz VGA XT** (MartyPC; its VGA wait states are a
+model, the CPU side credible):
+
+| what | cost |
+|---|---|
+| one needle's redraw (the canvas box, one BLIT4) | median 136-187 ms by leg; 111-299 ms in all |
+| a dial or the knob with nothing to draw | 0.07-0.17 ms |
+| one knob redraw at READY | 400 ms |
+| one `x3f_update` while a finished WAV plays | median 159-279 ms, up to 486 ms |
+| the face's share of the machine while a finished WAV plays | 53.7-54.7% at 11 kHz, 73.5% at 5.5 kHz (55a051b4); 59.7% at 11 kHz (shipped) |
+| the face's share of a conversion's cycles | 44.5% (55a051b4); **9.8%** (shipped: the dials rest) |
+| a colour dial face's first build | not timed separately |
+
+A finished WAV played through the card on every leg with no GRANULE, no
+backend part resident and no underrun. **Listening notes: TBD**; nothing
+was listened to on any machine. No real 5150, XT, 286, 386, 486 or Pentium
+has run XTMP3.
+
+#### 121.11.6 The gates
+
+| row | tier | proves |
+|---|---|---|
+| `x3xttab` | fast, host | the XT table packs' generator and its identity record |
+| `x3model`, `x3golden`, `x3compare` | soak, host | x3sim's model, its 141 golden hashes, and the tolerance against `lame --decode` |
+| `x3xtdesign`, `x3xtgolden` | soak, host | the study's chosen design against the generator's literals; x3simxt's 51 golden hashes |
+| `x3stdexact` | soak, QEMU | the shipping front end (43 of 43 against x3sim) and the STANDARD part on 141 golden and 16 hostile cases: **157 of 157 exact** |
+| `x3xtexact` | soak, QEMU | the XT part behind the shipping front end: **51 of 51 exact**; a damaged constant is reported at its first differing sample |
+| `x3xtunit` | soak, Unicorn | the XT part's contract, expansion, refusals and split paths, with OPEN's half overwritten after OPEN |
+| `xtmp3eng` | soak, QEMU | the engine's 21 legs over the stub and the real XT part: the ladder, the slowdown, a failed start falling through, the conversion and every failure, the cache, Decoded Files, a batch, a read-only volume, packed and 32 KB-cluster MP3s, the stated minimum, the Covox's bytes, and the ceiling (`xtpeak`, `xtclu`) (§121.5, §121.7, §121.10) |
+| `xtmp3live` | soak, QEMU | the REAL decoders end to end on the SB16, the card's capture held to x3sim sample for sample: Original at 44.1 and 22.05 kHz, Half, 8-bit stereo and mono as the DEVICE's, a seek, and XT Standard's WAV byte-exact to x3simxt (§121.6, §121.9) |
+| `xtmp3xt` | soak, MartyPC | the shipped package end to end on a 4.77 MHz XT: every conversion's WAV bit-exact to the models off the VHD, the 400,000-byte conversion peak, a finished WAV's play with no GRANULE and no underrun, and (the `spk` leg, a card-less 5150) the finished WAV through the PC speaker: port 42h's first 800 writes are `tools/os88spkfx.py`'s counts for its bytes (§121.11.5) |
+| `sndfmt`, `sndfmtmarty` | soak | SOUND.DRV's 16-bit and stereo streams (§34.5.5) |
+
+MartyPC confirmed both parts bit-exact on an 8088 core as well (eight
+STANDARD cases, twelve XT ones).
+
+### 121.12 Where it ships (shipped, dated 2026-10-22)
+
+**`XTMP3.O88` is in `$(APPS_TOOLS)`**, so it is in `APPS/` on the 1.44MB and
+1.2MB apps disks, on kern_mega's two apps disks (its `PKG_MEGA` arm), on the
+everything set (§19.10) and on the live media (§80.6). Four sites take it off,
+each with its own ground, and §24.6.1's rule binds the two that are about
+room: being curated onto a disk is a decision with a date on it.
+
+| disk | carries | clusters |
+|---|---|---|
+| `apps.img`, 1.44MB | XTMP3.O88; NEONDRV, NIGHTSIG, AFTERHRS in `MEDIA/` | 512-byte clusters: the package 193, the songs 60 + 99 + 138 = 297; 379 of 2,847 left |
+| `apps120.img`, 1.2MB | XTMP3.O88; NIGHTSIG, AFTERHRS | 393 free before it and the package is 193, which leaves 200: all three songs are 297, and NEON DRIVE with AFTER HOURS (198) would leave 2, a disk the next byte fills. The two smaller songs (159) leave 41 |
+| `apps720.img` | **not on it** | 36 of 713 free; the package alone is 97. `make xtmp3disk`'s 720KB floppy carries it, and it is a candidate for the third 720KB disk the owner has planned (§121.13) |
+| `apps360.img` | **not on it** | 14 of 354 free |
+| `media360.img`, 360KB | XTMP3.O88 at the root, AFTERHRS in `MEDIA/` | 147 of 354 free before it; 97 + 30 leaves 20 |
+| `megaapps.img`, `megaapps120.img` | as the 1.44MB and 1.2MB apps disks | |
+| the everything set | XTMP3.O88 in `APPS/`, no songs | MIDIRack's songs' reason (§105.10): the RunCPM fill would pay for them |
+| the live media | XTMP3.O88 in `APPS/`, all three songs in `MEDIA/` | `t_livefull` holds it to the 1.44MB apps disk |
+| `smallapps*.img`, `small*.img` | **not on them** (`$(SMALLOMIT)`) | |
+| the 360KB combo | **not on it** (`$(COMBO_DROP)`) | a player, not a calibration instrument; the 720KB and 1.44MB combos carry it |
+| `make xtmp3disk` | XTMP3.O88 at the root, all three songs in `MEDIA/`, in all four geometries | 360KB: 250 of 354 with the folders and `ASSOC.DAT`; 720KB 250 of 713 |
+
+**The 360KB machine gets the media disk because it is an XT**, and an XT is
+what this player converts for. The media disk's subject is music already
+(§24.4, §105.10), and AFTER HOURS is the song an XT is for: 11,025 Hz mono at
+24 kbps, the fixture every XT figure in §121.11 was measured on.
+
+**The 360 KB system disk paid for the PR's driver work, not for XTMP3.**
+XTMP3 rides no system disk, but SOUND.DRV's stereo and 16-bit streams
+(§34.5.5, story S2) grew it by one cluster: 8,585 to 9,158 bytes, 17 to 18
+of 512. That took `os8088-360.img` from 705 of 706 clusters (main) to 706 of
+706, and a full system disk cannot save a new SYSTEM.CFG or write
+`SYSTEM\APPDATA`. So CDROM.DRV (11 clusters) left that disk on §119.6.7's
+ground, and it has **11 free**. Two soak rows had already failed on main
+because the disk had no slack, and they pass now. `lzship`'s lz4-only knob
+tree needed 708 of 706 clusters on main and 709 here; it needs 698 now.
+`assocsweep`'s 3-cluster stub found 1 free cluster on main.
+
+**kern_small: a requirement, not a size** (§24.5). XTMP3 streams: `READ_SEQ`
+plays a track and `WRITE_SEQ` writes a decoded one, and kern_small has
+neither (§18.4.8, §18.4.9). Its sound is SOUND.DRV's, which kern_small does
+not load, and the speaker's bracket is `FSXF_RATE`'s, kern_big's alone.
+And the XT path's working set is up to 400,000 bytes against the floor
+machine's 128 KB, §24.5.2's ground: there is no state of that machine in
+which it runs. The songs are not in `$(APPS_DATA)`, so they leave the small
+disks with it.
+
+**The songs ship PLAIN on every disk**, never through `$(ZDATA)`: MP3 is
+compressed already, and the player streams it, so a wrapped `.MP3` is a file
+it refuses by name (§121.2). The Makefile refuses to build an XTMP3 song list
+that routes one through `$(ZDATA)`, and `t_image` refuses an `.MP3` with the
+wrapper's `CZ` magic on any shipped image. They are the fixture generator's
+own output, committed once in `tests/xtmp3/` with their recipes and SHA-256,
+so the disks name that copy. They are ours: synthesized by
+`tools/x3fixtures.py` and encoded with the host's LAME as a tool, with no
+third-party audio in them.
+
+### 121.13 Where the code and the plan part ways, and what is open
+
+**Deviations, each taken on purpose:**
+
+- **The pre-roll is 6 frames**, a seek's and a step's, where the plan said
+  one: measured (§121.5).
+- **A step is a re-open with ramps** (§121.5): a short silence, not a
+  seamless change at the next granule boundary. Every rung below Original
+  changes the card's rate or format.
+- **An 8086 probes XT Standard first, and alone when it is hopeless**
+  (§121.5): the CPU picks the order, the measure decides.
+- **The drive dialog shows no time**; the progress window shows `About mm:ss
+  left` once the job has measured itself (§121.7).
+- **XT Standard does not convert to a 32 KB-cluster volume** inside the
+  400,000 bytes; the drive dialog greys it and the other rungs convert there
+  (§121.10).
+- **Offline Auto can pick Quarter over XT Standard**, when Quarter converts
+  within `X3_OFFMAX`: it is the better rung.
+- **Decoded Files is in the File menu**, beside the files it is about.
+- **Quality is one cycling item**, because an app menu has no check mark.
+- **The XT part carries `XTGEN.BIN`** (5,578 bytes) rather than reading it as
+  an asset: the OPEN record has no segment field for one.
+
+**Open:**
+
+- **A queued song's title waits for the player to be idle** when its probe
+  is not had beside a live stream (`QEF_AGAIN`): the row shows the file's
+  stem until then, or until the song opens and its own tag is taken. Seen on
+  QEMU's Hercules build under XT FAST, whose framebuffer at 7000h leaves a
+  448 KB machine; that the probe's 8 KB buffer was the claim refused there
+  is inferred, not re-run on that build (`xtmp3eng`'s `qagain` leg refuses
+  it through the stub's hook).
+- **The offline pick sits on a knife edge on an XT**: XT Fast measured 11
+  (x100) on MartyPC and 12 on 86Box against `X3_OFFMAX`'s 12, so the same
+  machine class converts on XT Standard under one instrument and XT Fast
+  under the other. (With the 8086 hint an XT probes XT Standard alone and
+  converts on it.)
+- **The 286 plays neither fixture live**: its best 11 kHz probe is XT Fast
+  at 0.80x against the 1.25x margin.
+- **The finished file's play spends about half an XT's machine on the face**
+  (needles at 3.6 Hz, 137 ms each, §121.8's meters); the card's DMA carries
+  it with no underrun. A live stream skips a needle frame when the card's
+  lead is low.
+- **Volume labels** need a slot that gives a package a FAT volume label: no
+  package-level means exists (FILE_FIND skips the label entry, `FS_ENT` is a
+  driver's, no slot reads sector 0 for a package).
+- **The drive dialog greys only what it can predict**: XT Standard on 32 KB
+  clusters. A machine whose memory the plan cannot fit for another reason
+  is refused when the job starts, before a byte is written, with the stated
+  minimum.
+- **QEMU's `playwav` leg underran once** in three full passes of
+  `xtmp3eng`, at 176 KB/s on the external ring with the host's load average
+  at 4-7, and never on a quiet host: QEMU's SB16 plays in host real time
+  while a starved guest runs slow, and that stream's lead between a refill
+  request and an empty card is about 240 ms. Not reproduced, not changed.
+- **On kern_mega the region runs above 1MB and the claims do not.** The
+  header declares `OS88_HIGH` and not `OS88_HIGHMEM`. tests/megahigh.txt
+  names the reason: the conversion's stage is cut from the look-ahead claim
+  by paragraph arithmetic (`x3c_sseg`). The XT part found its embedded
+  `XTGEN.BIN` as its own CS plus a paragraph offset. Under kern_mega that
+  CS is the claim's LDT code alias, so it now takes the segment the alias
+  names (`(CS & ~7) << 2`), and `XTGEN.BIN` sits on a 128-byte boundary.
+  Measured once on Bochs (kern_mega, SB16, a 20 MB C:): Auto played
+  AFTERHRS live on Original with the region's DS an LDT selector (2844h),
+  then a forced XT Standard converted onto C: and played. The WAV is
+  bit-exact to `tools/x3simxt.py`, with no fault in E9.
+- **A card that stops by itself is an error, and on an XT it can be the
+  configuration.** The owner's 86Box XT (SB 2.0 at 220h, IRQ 5, DMA 1,
+  beside an ST-225 on the `st506_xt` controller, whose IRQ is also 5)
+  played one 16 KB ring of a finished WAV, 16,384 of 55,308 bytes, and
+  then SOUND.DRV's watchdog ENDED the stream. XTMP3 called that Finished
+  and went on. It now says `The sound card stopped` (`x3_cstop`) and keeps
+  the queue where it is. With the card on IRQ 7 the same disk plays every
+  byte (one 86Box run each). SOUND.DRV's IRQ probe accepts IRQ 5 on an XT
+  whose fixed disk owns it: open, the driver's call (§34).
+- **86Box's 386 plays XT Standard live with no underrun** from a floppy
+  (11 on round 2's 8 KB grant, 1 on round 3's 16 KB one, which stepped it to
+  XT Fast). The report placed the one at granule 58 of 194, the card run
+  dry, at the first refill 2.7 s after the prime - past the BIOS's 2 s motor
+  timeout; with a refill asked for as soon as a 4 KB gulp fits (§121.6), 0.
+  The motor is the inference; the A/B is one run each.
+- **The 720KB disks** carry XTMP3 only on `make xtmp3disk`; whether it rides
+  the third primary 720KB disk is the owner's call.
+- **Not re-run on the shipped build**: of the 86Box matrix, round 3 re-ran
+  the 386 on AFTERHRS and the 486 on C128; the other eight rows are round
+  2's (d5e53fea), measured before the probe started after the face's
+  redraw. XT Fast, XT Speech and Quarter's conversions on MartyPC last ran
+  on round 2's first build. On 86Box the rung fall-through was not reached.
+- **Untested**: the SB Pro's stereo path.
+- **Not measured**: any real machine, a real hard disk's share of a
+  conversion, the face on CGA and Hercules on an XT, a conversion on
+  86Box, the SB Pro's stereo on its own card, and a listening pass of each rung.

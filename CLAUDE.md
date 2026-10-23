@@ -706,7 +706,11 @@ song, a module and a WAV for each; an XT cannot read a 1.44MB disk), `xt-midirac
 §105.11: `xt-sound`'s XT plus a standalone MPU-401, and `386-sound`'s 386
 whose SB16 carries one, each sending MIDI to 86Box's FluidSynth with the
 GeneralUser GS soundfont `make midibank` fetches, and each with `make
-midirackdisk`'s floppy - player, wavetable bank, songs - in B:), `xt-wire`,
+midirackdisk`'s floppy - player, wavetable bank, songs - in B:),
+`xt-xtmp3`, `286-xtmp3`, `386-xtmp3`, `486-xtmp3` and `pentium-xtmp3`
+(XTMP3's ladder, SPEC.md §121.11.5: the tree's sound machines booting `make
+xtmp3field`'s disks, whose `\AUTOSTRT` opens the `-DX3REPORT` build on one
+track and writes `X3REPORT.TXT`, which `tools/x3field.py` reads back), `xt-wire`,
 `286`, `286-525`,
 `286-sound`,
 `286-video` (the mr286 with the Video Player's VGA disk on IDE, `make

@@ -215,6 +215,7 @@ SBL_POLLS    equ 4096           ; DSP handshake poll budget (bounded even
 sbl_bases:                      ; the pinned scan order (SPEC.md 34.2)
     dw 0x220, 0x240, 0x210, 0x230, 0x250, 0x260, 0
 
+sbl_hpage:    db 0x8B, 0x89, 0x8A   ; DMA 5/6/7's page registers (34.5.5)
 sbl_dsc_irqn: db 7, 5, 3, 2     ; IRQ candidates, pinned order (SPEC.md 34.5)
 sbl_dsc_mbit: db 0x80, 0x20, 0x08, 0x04     ; 8259 mask bits
 sbl_dsc_t:                      ; per candidate, in the same order: the IVT
@@ -423,11 +424,23 @@ sbl_hw_start:
     call sbl_dsp_wr
     cmp byte [sbl_auto], 0
     je .single
+    cmp byte [sbl_wide], 0      ; an SB Pro STEREO stream (SPEC.md 34.5.5):
+    jne .dma                    ; the mixer's stereo switch, then the one-byte
+    test byte [sbl_fmt], SND_FMT_STEREO ; primer that puts the first byte on
+    jz .dma                     ; the left. An SB16 stereo stream is wide and
+    call sbl_pro_st             ; says it in its mode byte instead
+.dma:
     mov ax, [sbl_xoff]          ; the cycle: the double buffer's 2*half, or
     mov bx, [sbl_xcnt]          ; a DIRECT ring's RL (SPEC.md 34.5.2); verb 0
     mov cl, 0x59                ; set all three. Auto-init, read, channel 1
     mov ch, [sbl_xpage]
+    test byte [sbl_fmt], SND_FMT_16
+    jz .dma8
+    call sbl_hdma_auto          ; ...or the 16-bit channel (SPEC.md 34.5.5)
+    jmp short .dmad
+.dma8:
     call sbl_dma_auto
+.dmad:
     mov bx, [sbl_half]          ; BX = DSP block length - 1
     dec bx
     mov ah, 0x1C                ; the 48h regime: block size (one half - 1)
@@ -438,10 +451,22 @@ sbl_hw_start:
 .blkchk:                        ; - so sbl_halt masks the 8237 and
     cmp byte [sbl_wide], 0      ; sbl_stop_stream resets, never D0h/DAh
     je .block
-    mov al, 0xC6                ; wide start: C6h, mode 00h (8-bit mono
-    call sbl_dsp_wr             ; unsigned), block length - 1 lo/hi -
-    xor al, al                  ; halt/continue/DAh-exit are unchanged,
-    call sbl_dsp_wr3            ; so close and resume need no second path
+    mov ah, [sbl_fmt]           ; wide start: C6h, mode 00h (8-bit mono
+    mov al, 0xC6                ; unsigned), block length - 1 lo/hi. A
+    test ah, SND_FMT_16         ; format (SPEC.md 34.5.5) is B6h for 16 bits,
+    jz .w8                      ; whose length counts WORDS, and a mode of
+    mov al, 0xB6                ; 20h stereo | 10h signed: fmt x 8 puts 16-bit
+    shr bx, 1                   ; on 10h and stereo on 08h, which + 18h moves
+.w8:                            ; to 20h. Mono 8-bit sends the same four
+    call sbl_dsp_wr             ; bytes it always did
+    mov al, ah
+    mov cl, 3
+    shl al, cl
+    test al, 0x08
+    jz .wm
+    add al, 0x18
+.wm:
+    call sbl_dsp_wr3
     jmp short .out
 .block:
     mov al, 0x48                ; DSP block size = one half
@@ -547,6 +572,129 @@ sbl_dma_auto:
     popf
     ret
 
+; -----------------------------------------------------------------------------
+; sbl_hdma_auto - sbl_dma_auto for the 16-BIT channel [sbl_hdma] (SPEC.md
+;                 34.5.5): the second 8237, at C0h-DFh, which counts words
+; in:       AX = the cycle's BYTE address inside its 64KB page, even; BX =
+;           its byte count - 1 (odd); CH = the page. CL is not read: the
+;           mode is 58h + the channel, auto-init, read, like 59h on channel 1
+; out:      nothing; clobbers nothing (flags)
+;
+; The controller addresses WORDS: the address register is the physical
+; address shifted right one, so its bit 15 is A16 - the page's bit 0, which
+; the page register then ignores - and the count is words - 1, which is the
+; odd byte count - 1 shifted right one. A cycle inside one 64KB page is inside
+; one 128KB block, so the 16-bit channel's boundary needs nothing more.
+; -----------------------------------------------------------------------------
+sbl_hdma_auto:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    shr bx, 1
+    mov si, bx                  ; SI = words - 1
+    mov bl, ch                  ; BL = the page, for the page register
+    shr ch, 1                   ; CF = A16...
+    rcr ax, 1                   ; ...into bit 15 of the word address
+    mov cl, [sbl_hdma]
+    and cx, 3                   ; CX = the channel's index on its 8237 (1..3)
+    pushf
+    cli
+    push ax
+    mov al, cl
+    or al, 4
+    out 0xD4, al                ; mask it
+    out 0xD8, al                ; flip-flop clear (any value)
+    mov dx, cx
+    shl dx, 1
+    shl dx, 1
+    add dx, 0xC0                ; C4h/C8h/CCh: its address register
+    pop ax
+    out dx, al                  ; address lo
+    mov al, ah
+    out dx, al                  ; address hi
+    inc dx
+    inc dx                      ; C6h/CAh/CEh: its count register
+    mov ax, si
+    out dx, al                  ; count lo
+    mov al, ah
+    out dx, al                  ; count hi
+    mov al, cl
+    or al, 0x58                 ; single, auto-init, read (memory -> card)
+    out 0xD6, al
+    mov al, bl                  ; the page
+    mov bx, cx
+    mov dl, [sbl_hpage+bx-1]    ; 8Bh/89h/8Ah
+    mov dh, 0
+    out dx, al
+    mov al, cl
+    out 0xD4, al                ; unmask
+    popf
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_pro_st - an SB Pro STEREO stream's two preliminaries (SPEC.md 34.5.5)
+; in:  the TC already sent; [sbl_xoff]/[sbl_xpage] = the cycle; IF = 1, and
+;      [sbl_expect] = 1 (verb 0 armed it)
+; out: nothing; [sbl_m0e] = mixer 0Eh as it was, [sbl_pst] = 1. Clobbers
+;      nothing (flags)
+;
+; Mixer 0Eh's stereo switch (bit 1) and output-filter bypass (bit 5), then
+; ONE byte single-cycle - the ring's own first, 14h with length 0 - so the
+; DSP's left/right toggle starts on the left. Nobody EXPECTS its IRQ: the
+; ISR's spurious leg acknowledges it when [sbl_prime] says so, and this waits
+; for that at most three ticks. A card that never raises it is acknowledged
+; here instead, so the first block's IRQ still finds the line free.
+; -----------------------------------------------------------------------------
+sbl_pro_st:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ah, 0x0E
+    pushf
+    cli
+    call mix_rd
+    mov [sbl_m0e], al
+    or al, 0x22                 ; stereo, filter OFF
+    call mix_wr
+    popf
+    mov byte [sbl_pst], 1       ; ...and close puts the byte back
+    mov byte [sbl_expect], 0    ; the primer's IRQ is not a block's
+    mov byte [sbl_prime], 1
+    mov ax, [sbl_xoff]
+    xor bx, bx                  ; one byte: count 0
+    mov cl, 0x49                ; single-cycle, read, channel 1
+    mov ch, [sbl_xpage]
+    call sbl_dma_auto
+    mov al, 0x14                ; 8-bit single-cycle out, length 0 (1 byte)
+    call sbl_dsp_wr3            ; (BX = 0: both length bytes)
+    call OSAPI_GET_TICKS
+    mov bx, ax
+.wait:
+    cmp byte [sbl_prime], 0
+    je .done
+    call OSAPI_GET_TICKS
+    sub ax, bx
+    cmp ax, 3
+    jb .wait
+    mov dx, [sbl_ackp]          ; never came: acknowledge it ourselves
+    in al, dx
+    mov byte [sbl_prime], 0
+.done:
+    mov byte [sbl_expect], 1
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; sbl_dsp_wr3 - AL, then BL, then BH, to the DSP: a command and its 16-bit
 ; operand low byte first. Every register preserved (flags not)
 sbl_dsp_wr3:
@@ -577,6 +725,10 @@ sbl_halt:
     ret
 .cmd:
     mov al, 0xD0
+    test byte [sbl_fmt], SND_FMT_16
+    jz .c8
+    mov al, 0xD5                ; ...the 16-bit side's own (SPEC.md 34.5.5)
+.c8:
     call sbl_dsp_wr
     pop ax
     ret
@@ -622,7 +774,11 @@ sbl_go_on:
 .noths:
     cmp byte [sbl_auto], 0
     je .single
-    mov al, 0xD4                ; continue 8-bit DMA, either direction
+    mov al, 0xD4                ; continue 8-bit DMA, either direction...
+    test byte [sbl_fmt], SND_FMT_16
+    jz .c8
+    mov al, 0xD6                ; ...or 16-bit (SPEC.md 34.5.5)
+.c8:
     call sbl_dsp_wr
     jmp .out
 .single:
@@ -707,9 +863,9 @@ sbl_isr:
 
     cmp byte [sbl_expect], 0 ; the spurious guard (SPEC.md 34.5, binding)
     je .spur
-    mov dx, [sbl_base]
-    add dx, 0x0E
-    in al, dx                   ; the mandatory 8-bit ACK - and ONLY that:
+    mov dx, [sbl_ackp]          ; 2xEh, or 2xFh while a 16-bit stream is open
+    in al, dx                   ; (SPEC.md 34.5.5) - the mandatory ACK, and
+                                ; ONLY that:
                                 ; bit 7 is "response byte waiting", which a
                                 ; block IRQ never sets on real DSPs/86Box
                                 ; (SPEC.md 34.5; gating on it wedged every
@@ -823,13 +979,19 @@ sbl_isr:
 
 .spur:
     cmp byte [sbl_irq], 7       ; line 7: real or spurious? only the 8259
-    jne .eoi                    ; knows - a REAL IRQ 7 (the SB's factory
+    jne .prime                  ; knows - a REAL IRQ 7 (the SB's factory
     mov al, 0x0B                ; default line) sets ISR bit 7. OCW3: the
     out 0x20, al                ; next read of 0x20 returns the ISR
     in al, 0x20
     test al, 0x80               ; bit 7 clear = truly spurious: no EOI
     jz .done                    ; (SPEC.md 34.5, binding)
-    jmp short .eoi              ; a real stray, any line: EOI or it wedges
+.prime:                         ; a real stray, any line: EOI or it wedges -
+    cmp byte [sbl_prime], 0     ; and if it is the SB Pro stereo primer's
+    je .eoi                     ; one byte (SPEC.md 34.5.5), expected by
+    mov dx, [sbl_ackp]          ; nobody, ACK it SB-side (an 8-bit transfer,
+    in al, dx                   ; so 2xEh) and tell verb 0, which is waiting
+    mov byte [sbl_prime], 0     ; on this byte
+    jmp short .eoi
 
 ; =============================================================================
 ; The IRQ-discovery candidate stubs (.text - interrupt handlers, so SPEC.md
@@ -1100,8 +1262,48 @@ sbl_stream_op:
 sbl_vtab:
     dw sbl_v_open, sbl_v_feed, sbl_v_close, sbl_v_status, sbl_v_open_in
     dw sbl_v_read, sbl_v_stage, sbl_v_grant, sbl_v_busy, sbl_v_ppos
-    dw sbl_v_pause
+    dw sbl_v_pause, sbl_v_fmt
 SBL_NVERB    equ ($ - sbl_vtab) / 2
+%if SBL_NVERB - 1 != SND_V_FMT
+  %error "verb 11 is the last row of sbl_vtab"
+%endif
+
+; -----------------------------------------------------------------------------
+; sbl_v_fmt - verb 11: the FORMAT of this instance's next verb 0 (SPEC.md
+;             34.5.5)
+; in:       AH = SND_FMT_* bits, DH = the instance (the kernel's stamp)
+; out:      AX = 0 held / 2 the card cannot play it / 7 a bit we do not
+;           know; CF mirrors. A refusal holds nothing
+; clobbers: nothing else (flags)
+;
+; The test IS the caps word the package was told, read the same way: each
+; format bit, shifted to its cap's bit in DSV_CAPS's high byte, must be
+; published, so verb 11 and OSAPI_SND_CAPS can never disagree about a card.
+; -----------------------------------------------------------------------------
+%if SND_CAP_STEREO != (SND_FMT_STEREO << 10) || SND_CAP_PCM16 != (SND_FMT_16 << 10)
+  %error "sbl_v_fmt reads a format bit's cap at the bit 10 places above it"
+%endif
+sbl_v_fmt:
+    mov byte [sbl_nfmt], 0      ; whatever the answer, the old one is gone
+    mov al, ah
+    test al, ~(SND_FMT_STEREO | SND_FMT_16) & 0xFF
+    jnz sbl_stream_op.e7
+    shl al, 1
+    shl al, 1                   ; AL = the caps it needs, as DSV_CAPS+1 bits
+    mov ah, al
+    and al, [snd_services+DSV_CAPS+1]
+    cmp al, ah
+    jne .e2
+    shr al, 1
+    shr al, 1
+    mov [sbl_nfmt], al
+    mov [sbl_nfinst], dh
+    xor ax, ax
+    ret                         ; (CF = 0 from the XOR)
+.e2:
+    mov ax, 2
+    stc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sbl_v_busy - verb 8: the KERNEL asking whether a stream is open
@@ -1170,7 +1372,10 @@ sbl_hcheck:
 ;           AH = open flags (verb 0 carries no handle, so the byte is
 ;           free): bit 0 = SND_OPENF_RING - ring mode (SPEC.md 34.5): the
 ;           ring length RL = grant end - SI must be a power of two in
-;           4096..32768 and CX must be SBL_HALF..RL, else err 7
+;           4096..32768 and CX must be SBL_HALF..RL, else err 7. A FORMAT
+;           held by verb 11 for this instance (SPEC.md 34.5.5) is spent
+;           here: a ring only, the SB16's 4KB half or the SB Pro's doubled
+;           byte rate, a 16-bit ring's base even
 ; out:      AL = 0 ok with AH = handle, else AX = 1 busy / 2 rate / 4 no
 ;           sink or no IRQ found / 6 no task slot / 7 bad grant or ring;
 ;           CF mirrors the error
@@ -1202,11 +1407,39 @@ sbl_v_open:
                                 ; below must not disturb an OPEN stream's
                                 ; [sbl_ring_on]. RING, EXT, ADPCM4 and the
                                 ; ring size code (SPEC.md 34.5.3)
+    xor al, al                  ; ...and the FORMAT verb 11 held for this
+    xchg al, [sbl_nfmt]         ; instance (SPEC.md 34.5.5) - SPENT here,
+    cmp dh, [sbl_nfinst]        ; whatever this answers, and not ours to
+    je .fmine                   ; use if another instance held it
+    xor al, al
+.fmine:
+    mov [sbl_ofmt], al          ; a TEMP, like the flags
     cmp byte [sbl_str_act], 0   ; (no [sbl_up] test: sbl_stream_op, the
                                 ; only way in, has just made it)
     jne .e1n                     ; one stream per card (SPEC.md 34.3)
     cmp byte [sbl_clip], 0
     jne .e1n                     ; an exclusive clip holds the machine
+    or al, al
+    jz .mono
+    mov ah, [sbl_oflags]        ; A FORMAT (SPEC.md 34.5.5): a ring only -
+    and ah, SND_OPENF_RING | SND_OPENF_ADPCM4   ; a linear stream's tail
+    cmp ah, SND_OPENF_RING      ; pads with 8-bit silence - and never
+    jne .e7x                    ; ADPCM4, which is a format of its own
+    cmp bx, 4000
+    jb .e2n
+    cmp byte [sbl_verhi], 4
+    jb .fpro
+    cmp bx, 5000                ; SB16: 41h's range, the FRAME rate (the card
+    jb .e2n                     ; interleaves), and the 4KB half at every rate
+    cmp bx, 44100
+    ja .e2n
+    mov bp, 2*SBL_HALF
+    jmp short .ratok
+.fpro:                          ; SB Pro: 8-bit stereo - verb 11 published
+    cmp bx, 22050               ; nothing else here - whose DSP takes the two
+    ja .e2n                     ; channels byte by byte. The TC and the regime
+    shl bx, 1                   ; are for that BYTE rate, doubled, and the
+.mono:                          ; mono gate below then picks them as ever
     cmp bx, 4000                ; TC = 256 - 1e6/rate must fit a byte. THE
     jb .e2n                     ; RATE ARRIVES IN BX, not DX: DH carries the
     mov bp, SBL_HALF            ; requesting instance (SPEC.md 34.3) and
@@ -1316,6 +1549,20 @@ sbl_v_open:
     je .wddiv
     shl ax, 1
     rcl dx, 1
+    cmp byte [sbl_wide], 0      ; an SB16 FORMAT (SPEC.md 34.5.5): BX is the
+    je .wddiv                   ; FRAME rate and a 4KB half is fewer frames -
+    push cx                     ; half as many per stereo or 16-bit, a quarter
+    mov cl, [sbl_ofmt]          ; for both: the shift is the format's two
+    shr cl, 1                   ; bits counted (an SB Pro's BX is the byte
+    adc cl, 0                   ; rate already, and it is never wide)
+    jz .wdsh0
+.wdsh:
+    shr dx, 1
+    rcr ax, 1
+    dec cl
+    jnz .wdsh
+.wdsh0:
+    pop cx
 .wddiv:
     div bx
     add ax, 3
@@ -1373,6 +1620,11 @@ sbl_v_open:
     ja .dbuf
     call sbl_ring_phys          ; SI = the ring: AX/DL = where the chip sees it
     jc .dbuf                    ; straddles a page: the copy path
+    test byte [sbl_ofmt], SND_FMT_16
+    jz .even                    ; a 16-bit ring is played as WORDS, so its
+    test al, 1                  ; physical base must be even (SPEC.md 34.5.5)
+    jnz .e7x2
+.even:
     mov [sbl_xoff], ax
     mov [sbl_xpage], dl
     mov ax, [sbl_rmask]         ; the DMA cycle IS the ring
@@ -1455,6 +1707,13 @@ sbl_v_open:
                                 ; driver has no instance
     jc .nospawn
 .start:
+    mov al, [sbl_ofmt]          ; THE FORMAT, committed only now that nothing
+    mov [sbl_fmt], al           ; can refuse (SPEC.md 34.5.5) - verb 4 never
+    and byte [sbl_ackp], 0xFE   ; comes here and stream close clears it, so a
+    test al, SND_FMT_16         ; record stream is always 8-bit mono - with
+    jz .ack8                    ; the ACK the block IRQ will take: 2xEh, or
+    inc byte [sbl_ackp]         ; 2xFh for the 16-bit side
+.ack8:
     mov byte [sbl_expect], 1    ; arm BEFORE the hardware starts (the
     call sbl_hw_start           ; sbl_refill resume order): if the opener
                                 ; is preempted right after 1Ch and stays
@@ -1758,6 +2017,10 @@ sbl_stop_stream:
     cmp byte [sbl_auto], 0
     je .noda
     mov al, 0xDA                ; exit auto-init at the block edge
+    test byte [sbl_fmt], SND_FMT_16
+    jz .da8
+    mov al, 0xD9                ; ...the 16-bit side's (SPEC.md 34.5.5)
+.da8:
     call sbl_dsp_wr
 .noda:
     mov al, 0xD3                ; speaker (DAC) off
@@ -1765,13 +2028,31 @@ sbl_stop_stream:
 .hs_ports:
     mov al, 0x05                ; and MASK the channel: the memory it was
     out 0x0A, al                ; pointed at is about to be freed or let move
-    mov dx, [sbl_base]          ; (below), and every start unmasks it again
-    add dx, 0x0E
-    in al, dx                   ; retire a latched block IRQ SB-side
+    test byte [sbl_fmt], SND_FMT_16 ; (below), and every start unmasks it
+    jz .m8                      ; again - the 16-bit channel too, when that
+    mov al, [sbl_hdma]          ; is the one it was
+    and al, 3
+    or al, 4
+    out 0xD4, al
+.m8:
+    mov dx, [sbl_ackp]
+    in al, dx                   ; retire a latched block IRQ SB-side (2xFh
+    and byte [sbl_ackp], 0xFE   ; for 16 bits) - and the ACK is 2xEh again
     xor al, al
-    mov [sbl_expect], al
+    mov [sbl_fmt], al           ; ...as every stream after this one is 8-bit
+    mov [sbl_expect], al        ; mono until its own verb 11 says otherwise
     mov [sbl_str_act], al       ; handles are stale from here
     popf
+    cmp byte [sbl_pst], 0       ; an SB Pro stereo stream: mixer 0Eh back to
+    je .nopst                   ; the byte it held (SPEC.md 34.5.5)
+    mov [sbl_pst], al
+    mov ah, 0x0E
+    mov al, [sbl_m0e]
+    pushf                       ; (an index/data pair: the volume popup's
+    cli                         ; writes must not land between the two)
+    call mix_wr
+    popf
+.nopst:
     call sbl_unpin              ; the pool movable again, or the buffer freed
     cmp byte [sbl_hisp], 0
     je .out
@@ -1890,12 +2171,15 @@ sbl_v_ppos:
     cmp byte [sbl_expect], 0
     je .out
     push ax
+    test byte [sbl_fmt], SND_FMT_16
+    jnz .w16
     out 0x0C, al                ; flip-flop clear (any value)
     in al, 0x03                 ; channel 1's count: lo...
     mov cl, al
     in al, 0x03                 ; ...hi. It is LEFT - 1, and FFFFh at
     mov ch, al                  ; terminal count
     inc cx                      ; CX = bytes left in this DMA cycle
+.left:
     cmp byte [sbl_direct], 0
     je .dbuf
     mov bx, [sbl_rmask]         ; DIRECT (SPEC.md 34.5.2): the cycle is the
@@ -1937,6 +2221,22 @@ sbl_v_ppos:
     popf
     clc
     ret
+.w16:                           ; THE 16-BIT CHANNEL (SPEC.md 34.5.5) counts
+    push dx                     ; WORDS: its count register, at C2h + 4 x its
+    out 0xD8, al                ; index, is words left - 1, so the bytes
+    mov dl, [sbl_hdma]          ; left are twice that plus one
+    and dx, 3
+    shl dx, 1
+    shl dx, 1
+    add dx, 0xC2
+    in al, dx
+    mov cl, al
+    in al, dx
+    mov ch, al
+    inc cx
+    shl cx, 1
+    pop dx
+    jmp short .left
 
 ; -----------------------------------------------------------------------------
 ; sbl_v_read - verb 5: copy recorded (or staged) bytes out of a grant
@@ -2609,6 +2909,10 @@ sbl_tick:
 ; -----------------------------------------------------------------------------
 sbl_release_inst:
     push bx
+    cmp al, [sbl_nfinst]        ; a format it held and never spent (SPEC.md
+    jne .nofmt                  ; 34.5.5): its slot's next owner must not
+    mov byte [sbl_nfmt], 0      ; open with it
+.nofmt:
     cmp byte [sbl_str_act], 1
     jne .grants
     cmp al, [sbl_str_inst]
@@ -2665,6 +2969,9 @@ sbl_attach:
     call sbl_f_probe            ; the reset scan + E1h version gate
     or al, al
     jz .nohw
+    mov ax, [sbl_base]          ; the block IRQ's ACK port: 2xEh, and 2xFh
+    add ax, 0x0E                ; only while a 16-bit stream plays (SPEC.md
+    mov [sbl_ackp], ax          ; 34.5.5). EVEN, so that is bit 0
     mov byte [sbl_up], 1        ; publish LAST (SPEC.md 29.2): the stream
     clc                         ; verbs test this and nothing else
     jmp short .out
@@ -2677,6 +2984,81 @@ sbl_attach:
     stc
 .out:                           ; (no saves: sbl_state_init and sbl_f_probe
     ret                         ; keep every register but AX)
+
+; -----------------------------------------------------------------------------
+; sbl_hdma_find - an SB16's 16-bit DMA channel, IF ONE CAN BE PROGRAMMED
+;                 (SPEC.md 34.5.5)
+; in:  a DSP 4.xx attached ([sbl_base])
+; out: CF = 0 and [sbl_hdma] = 5, 6 or 7; CF = 1 and [sbl_hdma] = 0
+; clobbers: nothing (flags)
+;
+; Two facts, both asked of the hardware. CT1745 mixer register 81h names the
+; card's DMA channels (bits 5-7 = 5-7), and an SB16 jumpered with none of
+; them high has no 16-bit path here. Then the second 8237 itself: the
+; channel is masked and its address register written and read back, because
+; an SB16 in an XT's 8-bit slot reports DMA 5 and there is no controller at
+; C0h-DFh to answer - the bus floats FFh. The register is the channel's own,
+; masked and reprogrammed at every start, so the pattern left in it is
+; harmless.
+; -----------------------------------------------------------------------------
+sbl_hdma_find:
+    push ax
+    push cx
+    push dx
+    mov byte [sbl_hdma], 0
+    mov dx, [sbl_base]
+    add dx, 4
+    mov al, 0x81
+    pushf
+    cli
+    out dx, al
+    inc dx
+    in al, dx                   ; bits 5-7: DMA 5, 6, 7
+    popf
+    mov cl, 5
+    shr al, cl
+    jz .no                      ; no high channel at all
+    mov ah, 4
+.bit:                           ; the lowest one named
+    inc ah
+    shr al, 1
+    jnc .bit
+    mov al, ah
+    and al, 3
+    mov cl, al                  ; CL = its index on the second 8237
+    or al, 4
+    mov dl, cl
+    mov dh, 0
+    shl dx, 1
+    shl dx, 1
+    add dx, 0xC0                ; C4h/C8h/CCh: its address register
+    pushf
+    cli
+    out 0xD4, al                ; masked
+    out 0xD8, al                ; flip-flop clear
+    mov al, 0x5A
+    out dx, al
+    mov al, 0xA5
+    out dx, al
+    out 0xD8, al
+    in al, dx
+    mov ch, al                  ; CH = the low byte read back...
+    in al, dx                   ; ...AL = the high
+    popf
+    cmp ch, 0x5A
+    jne .no
+    cmp al, 0xA5
+    jne .no
+    mov [sbl_hdma], ah
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sbl_dma_get - claim the double buffer, if it is not already held
@@ -3306,6 +3688,11 @@ sbl_f_irqdisc:
 .win:
     xor bh, bh                  ; the winner: BX = candidate index
     mov al, [sbl_dsc_irqn+bx]
+    cmp al, 5                   ; IRQ 5 on an XT whose fixed disk (or any
+    jne .free                   ; other ROM or driver) already owns it is
+    call sbl_irq5_taken         ; REFUSED (SPEC.md 34.5.6): the card would
+    jc .taken                   ; play one block and fall silent
+.free:
     mov [sbl_irq], al
     add al, 8                   ; SI = (IRQ + 8) * 4: its IVT cell
     cbw
@@ -3333,6 +3720,15 @@ sbl_f_irqdisc:
     out 0x21, al
     mov al, 1
     jmp .out
+.taken:
+    cmp byte [sbl_irq5x], 0     ; said once a session, not at every open
+    jne .none
+    mov byte [sbl_irq5x], 1
+    push ds
+    pop es
+    mov si, sbl_irq5msg
+    xor cx, cx
+    call OSAPI_TOAST
 .none:
     xor al, al
 .out:
@@ -3360,6 +3756,39 @@ sbl_f_irqdisc:
     jb .sw
     ret
 
+
+; -----------------------------------------------------------------------------
+; sbl_irq5_taken - is IRQ 5 already someone else's? (SPEC.md 34.5.6)
+;
+; in:       ES = 0, sbl_f_irqdisc's view of the IVT on every path to .win
+; out:      CF = 1 taken: an XT-class machine - OSAPI_CPU_INFO's CPU_8086
+;           tier, an 8088/8086/V20 with no slave PIC, whose fixed disk is on
+;           IRQ 5 - whose IRQ 5 vector (int 0Dh) points below the system ROM
+;           at E000h: into a disk controller's option ROM (the IBM/Xebec
+;           ST-506 card hooks it at C800h) or a driver in RAM. Nothing in
+;           os8088 hooks IRQ 5, and an unused line's vector is the BIOS's own
+;           dummy in its ROM, so a hooked vector is a claim. A 286 or better
+;           (an AT, its disk on IRQ 14) is never refused - and kern_mega,
+;           which needs one, never reaches the vector read.
+;           CF = 0 free
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+sbl_irq5_taken:
+    push ax
+    call OSAPI_CPU_INFO         ; AL = the tier; every register but AX kept
+    cmp al, CPU_8086
+    jne .free                   ; a 286 or better: an AT, the disk on 14
+    cmp word [es:0x0D * 4 + 2], 0xE000
+    jae .free                   ; still the system ROM's: nobody claimed it
+    stc
+    jmp short .out
+.free:
+    clc
+.out:
+    pop ax
+    ret
+
+sbl_irq5msg: db 'IRQ 5 is the hard disk', 0x27, 's', 0   ; 24 characters
 
 ; =============================================================================
 ; state (SPEC.md 34.7) - stored by sbl_state_init at attach, before the
@@ -3392,6 +3821,7 @@ sbl_drqmask:  db 0              ; 4 = keep DMA channel 1 MASKED at every
                                 ; copies without it - picomem.inc's
                                 ; pm_runaway sets it). OR'd into the unmask
 sbl_hooked:   db 0              ; sbl_isr installed on [sbl_irq]'s vector
+sbl_irq5x:    db 0              ; the IRQ 5 refusal has been said (34.5.6)
 sbl_dsc_fired: db 0             ; discovery: confirmed candidate index
 sbl_expect:   db 0              ; a block IRQ is legitimate (SPEC.md 34.5)
 sbl_under:    dw 0              ; underrun-pause count (debug, cumulative)
@@ -3443,6 +3873,17 @@ sbl_oflags:   db 0              ;   verb 0's AH - a TEMP of the same kind:
                                 ;   bit 0 (SND_OPENF_RING) is committed into
                                 ;   sbl_ring_on only with the rest of the
                                 ;   record
+sbl_ofmt:     db 0              ;   verb 0's format, a TEMP (SPEC.md 34.5.5)
+sbl_fmt:      db 0              ;   the open stream's SND_FMT_* bits: 0 for
+                                ;   every stream verb 11 did not shape
+sbl_nfmt:     db 0              ; verb 11's held format, for...
+sbl_nfinst:   db 0              ; ...this instance's next verb 0
+sbl_hdma:     db 0              ; the SB16's 16-bit DMA channel (5..7), 0 =
+                                ; none or no second 8237 (sbl_hdma_find)
+sbl_prime:    db 0              ; 1 = the SB Pro stereo primer's IRQ is owed
+sbl_pst:      db 0              ; 1 = mixer 0Eh holds our stereo bits...
+sbl_m0e:      db 0              ; ...and this is the byte to put back
+sbl_ackp:     dw 0              ; the block IRQ's ACK port (sbl_attach)
 sbl_gr_act:   times SBL_GMAX dw 0   ; grants in use (occupancy IS these)
 sbl_ze:                         ; --- end of the attach-time clear -----------
 %if sbl_ext - sbl_direct != 1 || sbl_hisp - sbl_wide != 1
