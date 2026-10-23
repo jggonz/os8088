@@ -46,6 +46,11 @@ high apps/realdmg/realdmg.asm     # FAR POINTERS STAMPED WITH ITS OWN CS: rdg_in
     # rw_reloc (realdmg.asm) re-stamps them when the region moves. Retired
     # when the core reaches the package through a selector kern_mega can
     # patch, rather than a paragraph number. Not yet run on kern_mega.
+high apps/browser/browser.asm     # THE APP RETAINS CLAIM SEGMENTS: br_srcclaim
+    # saves OSAPI_MEM_CLAIM's DX in br_srcseg, and br_claimpage retains the
+    # document and line claims in br_docseg/br_lseg for later direct ES access.
+    # Keep it conventional until kern_mega verifies these handles across
+    # worker dispatch, regrowth and cleanup.
 
 # --- highmem -----------------------------------------------------------------
 
@@ -90,6 +95,11 @@ highmem apps/pixel/pixel.asm     # PARAGRAPH ARITHMETIC ON EVERY CLAIM IT HOLDS
     # Retired by 14.12's "flat arm" at every site (seg = claim, offset = the
     # absolute address when `test dl, 4`) - a rewrite of PiXEL's addressing.
     # OS88_HIGH it already says.
+highmem apps/browser/browser.asm  # THE SOURCE CLAIM GROWS TO 1 MIB:
+    # br_srcgrow grows one segment with OSAPI_MEM_REGROW and br_docensure
+    # grows the formatted arena using 16-bit offsets. Keep these potentially
+    # larger-than-64-KiB arenas conventional/EMS until kern_mega validates the
+    # selector limits and regrowth path end to end.
 
 # --- both --------------------------------------------------------------------
 

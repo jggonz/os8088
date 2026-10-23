@@ -57,6 +57,7 @@ NASM  := nasm
 VMPORT ?= off
 QEMUMACH := -machine pc,vmport=$(VMPORT)
 QEMU  := qemu-system-i386
+QMP_SOCK ?= build/qmp.sock
 BUILD := build
 IMG   := $(BUILD)/os8088.img
 # ...and the 1.2MB 5.25" HD pair (SPEC.md 19), which is the AT-class machine
@@ -6820,7 +6821,22 @@ $(BUILD)/deskclok.o88: $(BUILD)/deskclok.bin tools/os88pkg.py $(PKGZSTAMP)
 # that document is the RENDERER, with no network in the machine - it opens a
 # .HTM through the Standard File dialog. tools/htmsim.py is its reference
 # implementation and tests/htm/ is what both are checked against.
+apps/browser/assets/brdownload_icons.inc: tools/os88bmp1.py \
+                                           apps/browser/assets/server_48x48_1bpp.bmp \
+                                           apps/browser/assets/document_24x28_1bpp.bmp \
+                                           apps/browser/assets/pc_48x48_1bpp.bmp
+	python3 tools/os88bmp1.py --output $@
+
 $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
+                      apps/browser/br15.inc apps/browser/brdownload.inc \
+                      apps/browser/brdownload_bss.inc \
+                      apps/browser/brdownload_const.inc \
+                      apps/browser/brdocmarks.inc \
+                      apps/browser/brdownload_paint.inc \
+                      apps/browser/brcopyselection.inc \
+                      apps/os88parts.inc apps/os88partsbody.inc \
+                      apps/browser/assets/brdownload_icons.inc \
+                      apps/os88data.inc \
                       apps/os88api.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                       drivers/net/netpkg.inc $(SBSTAMP) | $(BUILD)
@@ -7803,8 +7819,24 @@ $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/ftpd.bin -o $@
 
-$(BUILD)/browser.o88: $(BUILD)/browser.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
-	$(OS88PKGB) $(BUILD)/browser.bin -o $@
+$(BUILD)/browser.part.bin: $(BUILD)/browser.bin \
+                           apps/browser/brdownload_part.asm \
+                           apps/browser/brdownload_paint.inc \
+                           apps/browser/brdownload_const.inc \
+                           apps/browser/brdocmarks.inc \
+                           apps/browser/brcopyselection.inc \
+                           tools/brdlsyms.py apps/os88api.inc | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
+	        -o $(BUILD)/brdownload_part_symbols.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ \
+	        -o $@ apps/browser/brdownload_part.asm
+	@echo "browser Download Manager part: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
+                      tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	$(OS88PKG) $(BUILD)/browser.bin -o $@ \
+	        --part $(BUILD)/browser.part.bin --part-compress lz4
 
 # ...and the REFERENCE build, which letters every history row where the
 # shipped one scrolls the band (SPEC.md 65.4.1). It is the A/B for that
@@ -13188,7 +13220,8 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) $(FACES) $(FACELIC) tools/os
 #                                         # in a relative link
 #   python3 tests/br14.py                 # ...and Browser 1.4's cell spans,
 #                                         # per-cell alignment and refused
-#                                         # password/file/textarea controls
+#                                         # password/file/textarea controls,
+#                                         # plus literal indentation in <pre>
 #   python3 tests/brnav.py                # Back/Forward/Reload and Save As
 #                                         # (BROWSER-PLAN 5/5.2/5.3). It needs
 #                                         # `make ethertest` too and boots
@@ -13214,13 +13247,39 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) $(FACES) $(FACELIC) tools/os
 # not part of `all`, so the copy goes stale the moment the page is edited and
 # every shipped apps image then fails a freshness check about a disk that is
 # perfectly fresh. Renaming is a reason for a copy; having one is not.
-BRFILES := $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+BRFILES := $(BUILD)/browser.o88 $(BUILD)/ANOTE.O88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
            $(BUILD)/FORMAT.HTM \
            $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
-           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM
+           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM \
+           $(BUILD)/LINARENA.HTM $(BUILD)/DOCWIDE.HTM
 
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
+
+# 1.6c user field disk: current Browser package plus interactive HTML fixtures
+# and a 768 KiB visible-content page for conventional-RAM/EMS spill testing.
+.PHONY: browsertestems
+browsertestems: $(BUILD)/br16c-check.img $(BUILD)/br16c-check360.img
+
+.PHONY: brmemorypages
+brmemorypages:
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+
+.PHONY: brsourcecut
+brsourcecut: browsertest $(BUILD)/brmemory/sourcepressure.htm
+	python3 tests/ethernet.py --page $(BUILD)/brmemory/sourcepressure.htm \
+		--allow-source-cutoff --response-chunk-size 512 --response-delay-ms 5
+
+$(BUILD)/LINARENA.HTM: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+	cp $(BUILD)/brmemory/linearena.htm $@
+
+$(BUILD)/DOCWIDE.HTM: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+	cp $(BUILD)/brmemory/docwide.htm $@
+
+$(BUILD)/brmemory/sourcepressure.htm: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
 
 $(BUILD)/DEMO.HTM: tests/htm/demo.htm | $(BUILD)
 	cp $< $@
@@ -13240,12 +13299,42 @@ $(BUILD)/PUBZONE.HTM: tests/htm/pubzone.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/FRAMESET.HTM: tests/htm/frameset.htm | $(BUILD)
 	cp $< $@
+$(BUILD)/BR16C.HTM: tests/htm/br16ccheck.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/brmemory/emsgrowth.htm: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+$(BUILD)/EMSGROW.HTM: $(BUILD)/brmemory/emsgrowth.htm | $(BUILD)
+	cp $< $@
+
+$(BUILD)/br16c-check.img: $(BUILD)/browser.o88 apps/browser/browser.htm \
+                          $(BUILD)/DEMO.HTM $(BUILD)/FORMAT.HTM \
+                          $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+                          $(BUILD)/BR16C.HTM $(BUILD)/EMSGROW.HTM \
+                          tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA \
+	        $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+	        $(BUILD)/FORMAT.HTM $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+        $(BUILD)/BR16C.HTM $(BUILD)/EMSGROW.HTM
+
+$(BUILD)/br16c-check360.img: $(BUILD)/browser.o88 apps/browser/browser.htm \
+                             $(BUILD)/DEMO.HTM $(BUILD)/FORMAT.HTM \
+                             $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+                             $(BUILD)/BR16C.HTM tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA \
+	        $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+	        $(BUILD)/FORMAT.HTM $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+	        $(BUILD)/BR16C.HTM
 
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BRFILES)
+	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA $(BRFILES)
 
 $(BUILD)/brtest360.img: $(BRFILES) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BRFILES)
+	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA $(BRFILES)
+
+# Browser memory gate: put Note Pad at the top of its test-only disk listing so
+# QEMU can launch the second app without depending on a blind scrollbar walk.
+$(BUILD)/ANOTE.O88: $(BUILD)/notepad.o88
+	cp $< $@
 
 # --- the FIELD disks: one BOOTABLE 360KB floppy per adapter ------------------
 #
@@ -15049,7 +15138,8 @@ APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/wireflet.o88 $(BUILD)/arkanoid.o88 
 # parts of the one file. games360.img carries it with the other games.
 APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
                     $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
-                    $(BUILD)/wireflet.o88,$(APPS_GAMES))
+                    $(BUILD)/wireflet.o88 $(BUILD)/mines.o88 \
+                    $(BUILD)/missile.o88,$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -15315,8 +15405,8 @@ $(ZDATA)/MIDI/%.MID: apps/midirack/songs/%.MID tools/os88lz.py $(PKGZSTAMP) | $(
 #
 # WHICH DISK CARRIES WHICH (SPEC.md 121.12 has the arithmetic, 24.6.1's rule,
 # dated 2026-10-22): all three on the 1.44MB apps disk and the live media;
-# NIGHT SIGNALS and AFTER HOURS on the 1.2MB one, which had 393 clusters of
-# 512 bytes free and the package is 193 of them; AFTER HOURS alone on
+# NO XTMP3 on the 1.2MB one since 2026-10-23 (APPS120's note; $(XTMP3MP3_120)
+# is kept for the lower-case-name check below); AFTER HOURS alone on
 # media360.img, beside the package. `make xtmp3disk` carries all three in
 # every geometry.
 XTMP3MP3SRC  := tests/xtmp3
@@ -15531,6 +15621,11 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     dated 2026-10-02): that disk had 12 clusters spare and the player with
 #     its songs is ~50. It rides the MEDIA DISK instead (MEDIAARGS360) - the
 #     floppy whose subject is music already - at its root, songs in MEDIA/MIDI.
+# --- 360KB curation remade 2026-10-18: Browser 1.6b's Download Manager adds
+#     five clusters to the full set. Keep the Browser on this disk and move
+#     the small standalone Fractal and Piano packages to the larger app disks;
+#     neither has a data dependency that would strand another package here.
+#     The 720KB, 1.2MB and 1.44MB app disks continue to carry both.
 #     WIRECHAT IS NOT CURATED ONTO IT (SPEC.md 113.11, 24.6.1's rule, dated
 #     2026-10-19): a chat client is the NETWORK disk's subject, and it rides
 #     network360.img beside Telnet and the Browser.
@@ -15538,10 +15633,16 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     2026-10-22): that disk had 14 clusters spare and the player is 97. It
 #     rides the MEDIA DISK on MIDIRack's ground - the floppy whose subject is
 #     music already - at its root, with AFTER HOURS in MEDIA/.
+#     Browser 1.6c and the newer app set exceed this geometry by 14 clusters.
+#     Keep the Browser on the 360KB disk; Calc, Mixer, Timer and Bounce move
+#     to roomier apps disks, while Mines and Missile move to games360.img.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                     $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
                     $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
-                    $(BUILD)/wirechat.o88 $(BUILD)/xtmp3.o88,$(APPS_TOOLS))
+                    $(BUILD)/fractal.o88 $(BUILD)/piano.o88 \
+                    $(BUILD)/wirechat.o88 $(BUILD)/mixer.o88 \
+                    $(BUILD)/timer.o88 $(BUILD)/bounce.o88 \
+                    $(BUILD)/calc.o88 $(BUILD)/xtmp3.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -15659,12 +15760,19 @@ MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
 # positionals at an option that takes a value, so the folder stays last.
 APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
                $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
-APPSARGS120 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
-               $(addprefix MEDIA:,$(XTMP3MP3_120)) $(APPDATAFOLDER)
+# ...AND THE 1.2MB DISK LEAVES XTMP3 AND ITS SONGS OFF (SPEC.md 24.6.1's rule,
+# dated 2026-10-23, the 720KB disk's decision of 2026-10-22 one geometry along):
+# Browser 1.6c grew 67 clusters and apps120.img needed 2399 of 2371. The player
+# is 193 of them and the songs ride `make xtmp3disk`'s 1.2MB floppy. The
+# prerequisites ($(APPS120)) and the recipe ($(APPSARGS120)) are filtered
+# together, as the 720KB disk's are.
+APPS120 := $(filter-out $(BUILD)/xtmp3.o88,$(APPS))
+APPSARGS120 := $(filter-out $(APPDATAFOLDER) APPS:$(BUILD)/xtmp3.o88,$(APPSARGS)) \
+               $(APPDATAFOLDER)
 $(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS144)
 
-$(APPSIMG120): $(APPS) $(XTMP3MP3_120) $(LOGOVID) tools/os88disk.py
+$(APPSIMG120): $(APPS120) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS120)
 
 # kern_mega's APPS DISKS (KERN-MEGA-PLAN 14.66): $(APPSARGS) with the
@@ -15683,13 +15791,16 @@ MEGAAPPS = $(call MEGASUB,$(APPS))
 # spliced ahead of $(APPDATAFOLDER) for the same argparse reason
 MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
                   $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
-MEGAAPPSARGS120 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
-                  $(addprefix MEDIA:,$(XTMP3MP3_120)) $(APPDATAFOLDER)
+# ...minus XTMP3 on the 1.2MB disk, the shipped 1.2MB disk's own decision
+# (APPS120's note, 2026-10-23): this one asked for 2408 of 2371 clusters
+MEGAAPPS120 = $(filter-out $(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPS))
+MEGAAPPSARGS120 = $(filter-out $(APPDATAFOLDER) APPS:$(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPSARGS)) \
+                  $(APPDATAFOLDER)
 $(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAAPPSARGS144)
 	@echo "megaapps: $@ - pair it with build/mega.img (\`make mega\`)"
 
-$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3_120) $(LOGOVID) tools/os88disk.py
+$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS120) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAAPPSARGS120)
 	@echo "megaapps: $@ - pair it with build/mega120.img (\`make mega\`)"
 
@@ -17020,7 +17131,7 @@ endif
 test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 	$(QEMU) $(QEMUMACH) -drive file=$(TESTIMG),format=raw,if=floppy -boot $(TESTBOOT) $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 $(HDDDEV) \
-		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		-display none -qmp unix:$(QMP_SOCK),server,nowait -daemonize -pidfile build/qemu.pid \
 		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD) $(ETHERDEV)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
@@ -17030,7 +17141,7 @@ test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 test-snd: $(IMG) $(TESTAPPS)
 	$(QEMU) $(QEMUMACH) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
-		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		-display none -qmp unix:$(QMP_SOCK),server,nowait -daemonize -pidfile build/qemu.pid \
 		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd \
 		$(ADLIBDEV) $(SBDEV)
 

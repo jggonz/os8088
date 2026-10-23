@@ -532,6 +532,10 @@ def disks(megapkgs):
                       "list that forgot MEGASUB ships the plain build there",
                   got="%d bytes" % size, want="%d (the arm)" % asz)
         for nm in want:
+            # XTMP3 is off the 1.2MB disks by SPEC.md 24.6.1's dated
+            # decision (2026-10-23), the shipped apps120.img's own
+            if nm == "XTMP3.O88" and img == "megaapps120.img":
+                continue
             check(nm in found, "megapkg: %s carries no %s" % (img, nm),
                   why="the arm is on kern_mega's apps disk where the shipped "
                       "build is on the shipped one", got="absent",

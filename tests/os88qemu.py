@@ -39,7 +39,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PIDFILE = os.path.join(ROOT, "build", "qemu.pid")
-SOCK = os.path.join(ROOT, "build", "qmp.sock")
+SOCK = os.environ.get("QMP_SOCK", os.path.join(ROOT, "build", "qmp.sock"))
 
 
 def kill(pidfile=PIDFILE, sock=SOCK, wait=1.0):

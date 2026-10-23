@@ -55,22 +55,40 @@ def main():
             if value not in table_meta:
                 fails.append("missing packed cell metadata for " + label)
 
-        tab = bytes(m.readseg(rw("br_lseg"), 0, rw("br_nlines") * 6))
+        # Browser 1.6 widens document offsets to dwords and adds a byte to
+        # each line record. Keep this renderer regression independent of the
+        # current document's position in a conventional/EMS arena.
+        tab = bytes(m.readseg(rw("br_lseg"), 0, rw("br_nlines") * 10))
         rendered = []
         for i in range(rw("br_nlines")):
-            o = tab[i * 6] | (tab[i * 6 + 1] << 8)
-            e = tab[i * 6 + 2] | (tab[i * 6 + 3] << 8)
+            o = int.from_bytes(tab[i * 10:i * 10 + 4], "little")
+            e = int.from_bytes(tab[i * 10 + 4:i * 10 + 8], "little")
             line = []
             j = o
             while j < e:
                 b = doc[j]
                 if b == 14:
-                    j += 3
+                    j += 4
                     continue
                 j += 1
                 if b >= 0x20:
                     line.append(" " if b == 0x7f else chr(b))
             rendered.append("".join(line))
+        malformed_next = next((i for i, line in enumerate(rendered)
+                              if "9. Preformatted" in line), None)
+        if malformed_next is None:
+            fails.append("unclosed inline emphasis leaked into the next heading")
+        else:
+            # Headings intentionally use the same bold bit as inline <b>.
+            # Check that the heading is bold, then that its following PRE
+            # content is not: the latter catches malformed inline state leaking
+            # past the block while allowing the heading's own style.
+            if not tab[malformed_next * 10 + 9] & 0x20:
+                fails.append("the next heading did not use bold styling")
+            pre_start = next((i for i, line in enumerate(rendered)
+                              if "column1" in line), None)
+            if pre_start is None or tab[pre_start * 10 + 9] & 0x20:
+                fails.append("unclosed inline emphasis leaked into following PRE text")
         aligned = next((line for line in rendered
                         if "aligned" in line and "center" in line and "right" in line), "")
         if not aligned:
@@ -106,6 +124,27 @@ def main():
             fails.append("password/file/textarea controls were not visible")
         if any("secret" in line or "private text" in line for line in rendered):
             fails.append("unsupported control content leaked onto the page")
+        entityline = next((line for line in rendered
+                           if "Latin-1 set:" in line), "")
+        if "Latin-1 set: a c e A Y 1" not in entityline:
+            fails.append("classic Latin-1 entities were not folded as expected: "
+                         "%r" % entityline)
+        pre_start = next((i for i, line in enumerate(rendered)
+                          if "column1" in line), None)
+        pre_rows = [pre_start]
+        for token in ("-------", "a         b"):
+            pre_rows.append(next((i for i, line in enumerate(rendered)
+                                  if pre_start is not None and i > pre_start
+                                  and token in line), None))
+        if (None in pre_rows or pre_rows[1] != pre_rows[0] + 1
+                or pre_rows[2] != pre_rows[1] + 1):
+            fails.append("CRLF inside PRE did not produce one break per line: "
+                         "%r" % pre_rows)
+        preline = next((line for line in rendered
+                        if "leading   spaces   preserved" in line), "")
+        indent = len(preline) - len(preline.lstrip())
+        if not preline or indent < 7:
+            fails.append("<pre> leading spaces were collapsed: %r" % preline)
 
     for fail in fails:
         print("FAIL:", fail)

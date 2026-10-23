@@ -137,9 +137,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "9deeee7d",
-  "strings": "955cbc3c9a274645",
-  "why": "a typed https address says Https is not supported, as a clicked one does; with no link driver the page being read stays live under the refusal"
+  "stamped": "3ef633c9",
+  "strings": "4d794c0f80cf14d9",
+  "why": "Checked against Browser 1.5-1.6c source: added the Ctrl keys and Keyboard Shortcuts, bookmarks (BROWSE.DAT, eight), the right-button menu and View Source, the Downloads window, password fields, and the new page/link/form limits."
  },
  "C64": {
   "sources": [],

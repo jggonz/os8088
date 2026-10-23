@@ -695,6 +695,14 @@ def self_check():
     print("selfcheck %s  1.4 colspan/alignment and unsupported controls"
           % ("ok " if checks else "OFF"))
     ok = ok and checks
+    pre_ops, _ = parse(b"<pre>  first\n   second</pre>")
+    pre_ops, _, _, _ = simplify(pre_ops)
+    pre_lines = [line.cells for line in layout(pre_ops, 40)
+                 if line.kind == "pre"]
+    pre_ok = pre_lines == ["  first", "   second"]
+    print("selfcheck %s  literal leading spaces in PRE lines"
+          % ("ok " if pre_ok else "OFF"))
+    ok = ok and pre_ok
     return ok
 
 

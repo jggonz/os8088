@@ -54538,6 +54538,21 @@ row to read is the Makefile's `APPS_TOOLS_360`, not a list here — a package
 list in prose goes stale the next time anything ships, and the enforcement is
 `os88disk.py` refusing an image that does not fit.
 
+It ran out again on 2026-10-18 when Browser 1.6b added its native Download
+Manager: the full set exceeded the volume by five clusters. Fractal and Piano
+move off `apps360.img` for this geometry so Browser and the remaining apps fit;
+both remain on the 720KB, 1.2MB and 1.44MB app disks. Neither package has a
+data dependency on the 360KB apps disk.
+On 2026-10-23, Browser 1.6c and the newer app set exceeded this geometry by
+14 clusters. To keep the Browser on the 360KB disk, Calc, Mixer, Timer and
+Bounce move off `apps360.img`, along with Mines and Missile from the game
+list. The four apps remain on roomier apps disks; `games360.img` carries both
+games.
+On 2026-10-23 the 1.2MB apps disk ran out the same way: Browser 1.6c's 67
+clusters took the set to 2,399 of 2,371. XTMP3 and its demo songs come off
+`apps120.img` and `megaapps120.img` (§121.12), as they were already off the
+720KB disk; `make xtmp3disk` still carries them in every geometry.
+
 **`office360.img` is curated the same way, and it ran out on 2026-10-22.**
 SHEET's two modules (§82.16, §81.94) took it to 354 of 354 clusters, so a save
 to it failed. The owner took **`LAKE.JPG` off that disk alone** — PiXEL's one
@@ -121932,6 +121947,64 @@ and by the PageUp/PageDown pair, which repaints the band whole in both
 directions, agreeing to **0 differing pixels** on CGA (15-row band) and
 Hercules (27-row band).
 
+### 71.19 Browser focus, text selection and clipboard
+
+Tab traverses the location bar, supported form controls and links as one
+window-wide cycle, skipping groups that are absent. Enter keeps its control
+meaning: navigate in the location bar, activate a focused link, or submit a
+focused form. On an empty Browser, printable input focuses the location bar so
+the first typed character cannot disappear after launch. Up and Down scroll
+when the page or a link has focus. Keyboard
+focus on a link is shown by inverting only its first visible cell on each
+wrapped display line with `OSAPI_GFX_XOR_FILL`. This keeps keyboard focus
+visually distinct from a mouse text selection, which inverts the selected span;
+neither changes layout or allocates a per-link geometry table. The per-cell
+link mark is translated from the line flag so it cannot alias the focus bit.
+When the location bar takes focus, link focus is cleared before repainting the
+page so its XOR marker cannot remain behind while the user edits a URL.
+
+Dragging selects text in either the location bar or the rendered page. A page
+press starts a provisional one-cell range so a drag can extend it; releasing
+without moving clears that provisional range, so a plain click neither leaves
+an inverted glyph nor turns the next page-context click into Copy. A completed
+drag is shown by inverting its selected cells. A right click on a retained
+selection opens a one-item **Copy** menu; choosing it copies through
+`OSAPI_CLIP_PUT`, so the text can be pasted into another application.
+Dismissing the menu keeps the selection. Popups are sized to their labels,
+offset from the cursor so its glyph does not overlap the frame, and flip left
+or up as needed to stay inside the visible page band. The popup and its erase
+path arm the owning window's clip, so a stale edge cannot paint outside the
+Browser frame. Its white field uses bounded horizontal spans: clipped
+`OSAPI_GFX_FILL` extended to the content clip's left edge in this callback,
+erasing text before the popup. Reopening a popup fills the previous popup's
+recorded rectangle before repainting the page;
+`OSAPI_GFX_FRAME` is XOR, so a page repaint alone can leave its outline behind.
+The page menu says **Close Source** while the retained source view is active,
+and **View Source** otherwise. The Browser owns the selection range;
+the existing shared clipboard owns the copied text. Selection rendering is
+limited to the rows whose contents changed, and the normal page paint path pays
+no selection cost.
+
+The Browser menu includes a Keyboard Shortcuts reference listing only actions
+the current build implements: Tab focus traversal, Enter, page scrolling and
+Home/End, Escape to leave the address bar, and the implemented Ctrl shortcuts.
+Ctrl+A selects the address when it has focus and page text otherwise; Ctrl+C
+copies the current selection. `OSAPI_KEY_DOWN` is used to read modifier state;
+the key-state map is armed once at package entry.
+
+Bookmark persistence uses `W_ONWAKE` for every `SYSTEM\\APPDATA` read and write.
+The initial bookmark read is deferred until the Browser's first wake, after its
+window has been created and shown; package entry performs no bookmark-file I/O.
+Mouse and key callbacks show the requested star state immediately and queue the
+disk operation; they do not perform disk I/O while holding the graphics lock.
+If `OSAPI_WM_WAKE` refuses because the event ring is full, the Browser retries
+from its one-shot window timer until the wake is accepted; it must not leave a
+bookmark request waiting for an unrelated future click. The wake reconciles the
+per-instance cache and records any status/star redraw for the next locked paint
+or input callback. Navigation also requests a wake refresh so the current page's
+star reflects changes made by another Browser instance. The bookmark menu is
+rebuilt from that per-instance cache after each refresh.
+
 ## 72. `ETHER.DRV` — an Ethernet card and a TCP/IP stack (`drivers/ether/`)
 
 docs/plans/completed/NET-STACK-PLAN.md stage E, and the test of whether §1 of that plan drew
@@ -122114,20 +122187,26 @@ rule 7). So the fetch is now two hand-overs instead of one:
    document, the line table and the link arena from the size it now knows,
    through `br_claimrest`, the same routine a file load uses. It sets
    `[br_fin]` = 2.
-4. The worker parses and paints, as before (`br_finish`) - with `[br_fin]`
-   = 3 for the length of the parse, which is the one thing the UI task has
-   to know before it frees anything.
+4. The worker parses with `[br_fin]` = 3, then computes the completed page's
+   layout with `[br_fin]` still 3 and **without the gfx lock**. The parser's
+   terminal state temporarily uses its high bit to mark this layout pass.
+   It yields every 4 KiB of document input. Paint and page-input callbacks
+   skip document state during that marker; the native window can still be
+   minimized or closed, and a close/navigation waits for `[br_fin]` to leave
+   3 before freeing claims. The worker takes the gfx lock only to publish the
+   completed state and paint the already-laid-out page.
 
-**A navigation during step 4 waits for the parse to stop, and stops it.**
+**A navigation during step 4 waits for the parse/layout worker to stop.**
 The state is still `BN_BODY` while the worker parses, so `br_go` and
 `br_load` drop the fetch through `br_abort` and then `br_free_all` - and the
 parse used to go on writing the document, the link arena and the staging
 flush into claims that had just been freed, then store `BN_DONE` over the
 NEW fetch's `BN_OPEN`. The worker may not take a claim's lifetime into its
 own hands (§20.6 rule 7), so the handshake is the UI task's: `br_abort`
-bumps `[br_gen]`, zeroes `[br_srclen]` - the bound `br_parse`'s loop tests
-on every byte, so a parse in progress ends at its next character - and
-yields until `[br_fin]` is no longer 3, then puts `[br_srclen]` back
+bumps `[br_gen]`, zeroes `[br_srclen]` - a parse in progress ends at its next
+character, while a final layout pass yields periodically and completes without
+the graphics lock - and yields until `[br_fin]` is no longer 3, then restores
+`[br_srclen]`
 (`br_load` reads it as the file's size). The worker stores `[br_fin]` = 3
 BEFORE it checks the generation, and the UI task bumps the generation BEFORE
 it reads `[br_fin]`, so on one CPU at least one side sees the other: either
@@ -122158,9 +122237,30 @@ What a page holds while it is on screen, `eth.htm` (442 bytes) off the wire:
 links 1) - and the peak DURING a fetch is the 32KB source alone. A file load
 saves only the link arena's difference, its other three sizes being unchanged.
 
+**The line table is sized to the page, up to its existing 8KB ceiling.** A
+line-table record is six bytes, and no supported layout can emit more display
+lines than there are source bytes: text lines consume a source character,
+structural breaks consume their source markup, and a table's generated border
+rows are bounded by the row/cell markup they replace. `br_claimpage` therefore
+claims `min(BR_LINEKB, max(1, ceil(linebound * LN_SIZE / 1024)))` KB, where
+`linebound` is the exact source length already known on File > Open and
+completed network paths, or the source claim's full byte capacity when a
+launch association did not supply a length. The 8KB ceiling still admits
+1,365 lines; larger bounds keep that full ceiling. A frameset's re-claim uses
+the 32KB source ceiling because the combined child documents are not bounded
+by the frameset document's own source length. `br_lslot` checks the actual
+claim size, not the maximum.
+
+For `eth.htm`, 442 source bytes need at most 442 records, so the line claim is
+3KB instead of 8KB. Its retained page drops from 16KB to **11KB** (source 1,
+document 6, lines 3, links 1), with identical rendered lines and redraw
+behavior; the network-fetch peak remains the 32KB source claim. This is the
+8088/conventional-memory baseline. EMS and XMS remain optional stores for later
+image work, not dependencies of the page or line-table path.
+
 ### 71.15 Bounded compatibility for retro pages
 
-The Browser identifies itself as **os8088 Browser 1.4**. Its compatibility
+The Browser identifies itself as **os8088 Browser 1.5**. Its compatibility
 work stays within the existing page and link claims. HTTP redirects are limited
 to three hops, and a redirect is decided by the worker at the end of the drain,
 BEFORE the page buffers are claimed (71.14's hand-over): the source claim is
@@ -122190,7 +122290,7 @@ byte's values are therefore 0 draining, 1 the page is in and the UI task owes
 its claims, 2 claimed, 3 parsing, 4 the UI task owes a frameset's re-claim, 5
 re-claimed. A frameset costs what the largest page costs - 32 KB of source,
 the document claim sized from `BR_MAXKB` through `BR_DOCMUL`/`BR_DOCSLK` and
-capped at `BR_DOCMAX` (63 KB), `BR_LINEKB` (8 KB) of lines - plus the frameset
+capped at `BR_DOCMAX` (63 KB), `BR_LINEKB`'s full 8 KB ceiling of lines - plus the frameset
 page's own link arena, min(frameset KB, `BR_LINKKB` = 6) KB, which bounds the
 children's links together: `Links limited` is the visible refusal. Each child
 resolves into the location bar and `br_host`/`br_path`; when the last child is
@@ -122220,8 +122320,9 @@ normal cell font. Formatting markers are zero-width document controls, so
 wrapping, scrolling, links, and hit-testing continue to use the same bounded
 path.
 
-Headings remain block elements, gain a level-dependent left indent, and are
-underlined through the Browser's existing per-row ink pass. Unordered and
+Headings remain block elements, gain a level-dependent left indent, and use
+the existing bold glyph pass so they remain visually distinct from clickable
+underlined links. Unordered and
 ordered list items use the same compact `*` bullet and hanging indent. A
 blockquote receives a two-cell indent, including wrapped lines. `<pre>` keeps
 its existing literal spaces and line breaks and does not wrap. Paragraphs
@@ -122229,6 +122330,264 @@ retain one blank line between nonempty blocks; duplicate empty breaks are
 coalesced. Unsupported styling such as CSS, colors, and font sizes remains
 ignored, and application content is never rewritten outside the Browser's
 own document buffer.
+
+### 71.18 Browser 1.6 — adaptive page storage
+
+The page store grows with the page, subject to the machine's current claim
+heap and the Browser's 16-bit offsets. It does not reserve the old maximum for
+every response. The baseline 1.6 limits are 63 KB each for source and
+formatted document, 8 KB for line records, and the existing bounded link
+arena; no individual word-offset store may cross 64 KB. The source claim
+reserves one byte for its terminator, so it retains at most 64,511 response
+bytes. If a network source or formatted document reaches its bound, the
+retained prefix is displayed and the status field says `Truncated`. This is an
+address-representation limit, not a claim that HTTP replies are at most 63 KB.
+
+At the start of a navigation, after the previous page's claims are released,
+the UI task reads OSAPI_MEM_AVAIL and records a reserve equal to 20% of its
+reported total-free KB, rounded up. Growth of Browser page claims must leave at
+least that many conventional claim-heap KB free, based on a fresh query at
+each growth decision. The API's largest-run and total-free answers remain
+distinct: a request may still be refused because a suitable contiguous run
+cannot be formed. Every refusal is handled as a bounded, visible truncation
+or an ordinary allocation error; it must not spin, corrupt a claim, or block
+the UI. This is a Browser policy over the existing OS API; it does not change
+the system allocator or promise that later applications will fit.
+
+The network source begins with a 4 KB conventional claim. When the worker's
+current source capacity is exhausted, it stops receiving and posts a UI wake
+with the required next capacity. The UI task alone checks the reserve and
+regrows the claim, in increments no larger than 4 KB, up to 63 KB; it updates
+the base segment before answering the worker. A refused growth ends the drain
+at the last byte received and marks the page truncated. The worker never
+claims, regrows, frees or remaps page memory, and never receives into a claim
+while the UI task changes that claim. A navigation or close superseding the
+request invalidates the growth request before freeing the source.
+
+For an ordinary page, the formatted document starts at a bounded estimate: at
+least 4 KB, roughly a quarter of the source capacity plus 2 KB, and no more
+than 16 KB initially. It grows by doubling, capped at 63 KB. When a parse
+reaches its output capacity, the worker asks the UI task to grow the claim
+while its parse stack is parked at a pass boundary. On success, the worker
+repeats the bounded parse from retained source; parser side tables are reset
+by that pass. If growth is refused, the retained output prefix remains
+displayable and the page is marked truncated. A frameset keeps the existing
+63 KB aggregate document claim because child documents append into one stream
+and cannot replay independently. The line table retains §71.14's source-sized
+estimate and existing 8 KB ceiling in this step; when that table cannot fit
+above the reserve, the load fails visibly instead of silently shortening the
+page. Source and
+document growth use the reserve rule and the existing UI/worker lifetime
+handshake. Growth is capped by the representable offset, and every retry must
+make progress or terminate visibly.
+
+A file whose size is known may claim its rounded source size directly, subject
+to the same reserve and representable ceiling. A larger file is refused before
+read I/O or opened only through the bounded source prefix path; the choice is
+visible and must never wrap a word-sized byte count.
+
+EMS and XMS are optional stores, not prerequisites. EMS may back a page only
+through DRVC_EMS's owned 16 KB pages and mapped frame quarters; a frame is
+usable only while those quarters remain owned by the Browser instance. XMS
+addresses are opaque and every transfer uses OSAPI_XMEM_COPY. A backend
+must fall back to conventional storage if unavailable or refused, and must
+show a measured reduction in conventional pressure before it is enabled by
+default. EMS/XMS capacity does not relax the 16-bit per-store limits above.
+No kernel or driver change is implied by this package contract.
+
+The acceptance fixture is a deterministic 40 KB response over QEMU's NE2000
+path, plus a second launchable app. It checks the exact retained source length,
+truncation/capacity verdict, formatted bytes and lines, the grown document
+claim, the recorded 20% reserve, and a navigation superseding a pending
+growth. A 60 KB fixture verifies the last fully retained source range; a
+larger fixture verifies the 64,511-byte prefix and visible `Truncated` status.
+The same rendered output must match the conventional baseline for pages that
+fit without growth. QEMU supplies network-card behavior only; timing claims
+belong to an 8088-capable emulator or field machine.
+
+#### 71.18.1 The 1.6 capacity target — three times the 32 KiB baseline
+
+The original source ceiling was 32 KiB (32,767 retained response bytes). The
+1.6 completion target is 96 KiB (98,304 bytes) of logical source and 96 KiB of
+logical formatted document, independently bounded and subject to the existing
+20% conventional free-heap reserve. Network responses, known-size local files,
+and a frameset's aggregate child output use the same logical ceilings. A page
+may stop below either ceiling only when its reserve or allocation check
+requires it; then the complete retained prefix is rendered and `Truncated` is
+reported.
+
+No individual conventional claim may cross the 16-bit segment boundary. The
+Browser must represent a larger logical source/document as multiple bounded
+claims and carry a claim selector with every logical offset. Source, document,
+selection, form-field, link, and line-table offsets must not silently wrap at
+64 KiB. EMS/XMS remains optional and cannot be required to reach the 96 KiB
+target. The Browser performs no kernel or driver changes.
+
+The line table grows from 8 KiB to at most 16 KiB (2,730 six-byte line
+records), still governed by the reserve. A page requiring more rows keeps a
+valid prefix and reports truncation; the layout pass must not monopolize the
+graphics lock for a whole large document. It works in bounded background
+slices, checks navigation generation and window width between slices, and
+holds the page-buffer ownership handshake until its completed line table is
+published.
+
+The 6 KiB link arena doubles to 12 KiB and the page link count to 400. Link
+indices therefore use three nibble payload bytes after `D_LNK1`, each in the
+16..31 range already reserved for marker payload, so every document walker
+can distinguish payload from control markers. The arena and link count remain
+independently bounded: a page that exhausts either keeps its text and reports
+the existing link-limit status.
+
+Form capacities double where they count entries: eight forms, 22 visible
+controls, eight submit controls, and 96 hidden name/value pairs per form.
+The visible-control table is bounded at 22 so large-page layout can yield
+without holding the global graphics lock while keeping image plus BSS within
+the 60 KiB package budget. Existing per-string limits (action, name, value,
+and composed URL lengths) do not change. Exceeding a count remains a bounded
+omission, not a memory write past the corresponding table.
+
+The capacity gate serves separate deterministic pages for a 96 KiB raw source,
+a 96 KiB formatted document, more than 1,365 but no more than 2,730 layout
+rows, 400 links with working links on both sides of index 255, and the doubled
+form counts including 96 hidden pairs. It also exercises a local 96 KiB file
+and a frameset whose children approach the aggregate document ceiling. The
+test checks exact retained lengths, the final visible marker, no wrapped
+offsets, and another application's ability to launch above the reserve. Run
+the network cases through QEMU/NE2000 for correctness and the local fixtures
+through MartyPC or 86Box for 8088 responsiveness; QEMU provides no timing
+claim.
+
+### 71.20 Browser 1.6b — streamed downloads and the Download Manager
+
+Downloads are a separate sink from the retained page source. Saving a link
+must not first fetch the response into the Browser's HTML claim, because a
+binary response may be larger than the page store and is not parsed or
+rendered. The Browser opens its Download Manager window and asks the existing
+Save dialog for an 8.3 destination. The Browser remains usable while the
+transfer runs. This first version permits one active transfer per Browser
+instance; another Save Link As request while it is active reports that the
+manager is busy rather than replacing or corrupting the current destination.
+
+The manager owns one transfer record: resolved HTTP URL, destination name,
+socket handle, stream token, transfer state, and a 32-bit received-byte count.
+The record distinguishes connecting, receiving, complete, failed, and
+cancelled. The window shows the name, current state, and byte count; when a
+valid Content-Length is present it also shows the total. Cancel closes the
+socket and closes the file stream, committing the complete clusters already
+received. The partial file remains on disk with its current byte count shown;
+the Browser never launches it automatically. A second transfer starts only
+after the current one is terminal.
+
+The network worker owns socket calls and receives body data into a temporary
+buffer sized to one destination cluster. It parses and discards HTTP headers,
+follows the same bounded redirect set as page navigation, and treats the
+response body as opaque bytes. HTTP/1.0 close-delimited bodies and a valid
+Content-Length are supported. Chunked transfer encoding, TLS, and malformed
+or conflicting lengths are refused visibly. The worker never calls a file or
+memory API. For each full cluster, it parks at a wake boundary and lets the UI
+task write that cluster through `OSAPI_FILE_WRITE_SEQ`; the worker cannot
+overwrite the buffer until the UI acknowledges the write. The UI task alone
+creates the empty destination, owns the write token, closes the stream, and
+frees the temporary buffer. A wake handler checks the current state and acts
+only on the currently published pending cluster; a stale wake with no pending
+cluster is ignored.
+
+The staging claim is acquired only after the destination dialog returns. Its
+size is the destination volume's cluster size, derived from
+`OSAPI_FILE_DFREE`; it is bounded by the current Browser memory reserve and
+freed at every terminal path. This avoids imposing a fixed multi-kilobyte
+buffer on every Browser instance and ensures writes meet the file API's
+cluster rule. A volume whose cluster cannot be claimed is refused before the
+socket opens. Disk-full, write, receive, redirect, cancel, and close failures
+must close the stream and socket exactly once, preserve the already committed
+prefix, release the staging claim, and leave the Browser page intact.
+
+#### 71.20.1 Download Manager window and progress
+
+The manager is a native monochrome Browser-owned window titled `Download
+Manager`. Its compact drawing uses the existing window, font, icon and graphics
+APIs, so the same path serves Hercules, CGA, EGA and VGA. Three static server,
+file and PC symbols frame a short transfer path. A small set of file positions
+is advanced by the manager's one-shot window timer; it never busy-waits and
+does no network or disk work. Timer refusal on a reduced kernel leaves a static
+path and does not affect transfer correctness. The moving file is stopped in
+terminal states and while the manager is hidden.
+
+The window shows the selected 8.3 file name, resolved source URL, selected
+destination path, state, bytes received and total when known. A percentage is
+shown only with a validated `Content-Length`; without one the bar is
+indeterminate. Speed is the average over elapsed system ticks, so small timer
+samples are not discarded on slow links. If a transfer finishes before the
+first tick, the completion path takes one final sample at the clock's
+one-tick resolution. Remaining time is shown only when a validated total and
+a representable speed are available; otherwise the value is `Calculating...`
+or `--`. The timer refreshes the visible progress at a bounded cadence rather
+than repainting for every byte. Completed transfers show
+`Download complete.` and 100% only when the HTTP body was completely received
+and the stream was closed successfully.
+
+There is no Pause button in 1.6b: neither the socket driver nor the Browser's
+transfer state provides a safe pause contract. The active control is Cancel;
+after completion, cancellation or failure it becomes Close. Cancel is a
+request/acknowledge handshake with the network worker, so the UI never frees a
+buffer the worker may still be using. It commits a final partial cluster when
+possible and leaves a valid partial file on failure. Closing the manager hides
+its secondary window; `File > Downloads` reopens it and the active transfer
+continues. Closing the Browser itself first completes any active page-fetch
+cancellation through the Browser's generation handshake, so the navigation
+socket is closed before the worker is torn down. It then closes the download
+socket and stream, destroys the secondary window and releases the transfer
+claim before the instance is torn down. A live download still refuses the
+first close and completes its existing worker/UI cancellation handshake before
+the close is retried.
+
+#### 71.20.2 UI ownership and redraw
+
+The worker remains the sole owner of `NETV_*` calls. It stages at most one
+destination cluster and posts the manager window a wake when that cluster is
+ready. The UI task writes it, then acknowledges the worker. The manager's
+paint and timer handlers only read the published transfer record. Graphics
+updates are clipped to the manager window and use only the shared monochrome
+drawing path; no framebuffer, palette change or kernel slot is added.
+
+Save Link As is offered only for a resolved `http://` link. It uses the
+existing instance-scoped file dialog for destination selection; local
+directory browsing remains the dialog's responsibility, and the Browser does
+not change another app's directory. Save Image As is deferred until 1.7 adds
+image source handling. The Download Manager is a second Browser-owned window,
+not a second package or a kernel service, so it shares the instance's worker,
+network configuration, and bounded transfer state without introducing IPC or
+an OS/driver change.
+
+For an ordinary GET navigation, the Browser sends a URL whose final path
+component has an extension it does not render to the same Save dialog and
+Download Manager automatically. This applies to typed addresses and followed
+links. The final suffix is case-insensitive; a query or fragment is not part
+of it. `.htm`, `.html`, `.cgi`, and common server-rendered page suffixes
+(`.php`, `.phtml`, `.shtml`, `.asp`, `.aspx`, `.jsp`) remain Browser
+navigations. An extensionless URL also remains a Browser navigation because
+many sites serve their home page that way. Form submissions remain page
+navigations. The Browser does not infer file type from `Content-Type`; the
+existing response parser does not retain that header, and adding a second
+classification path would make link behavior depend on response timing.
+
+A non-rendered resource is a download action, not a page navigation. Opening
+the Save dialog and completing or cancelling the transfer must leave the
+currently displayed document, its location-bar URL, bookmark target, and
+history position unchanged. Reload and bookmark actions after the download
+therefore continue to refer to the displayed page rather than the file URL.
+
+The `brdownload` and `brdownload-length` soak rows use a deterministic NE2000
+HTTP server to serve a binary body larger than the Browser page cap, once
+without `Content-Length` and once with it. They verify the reported total and
+compare the saved FAT file byte-for-byte. The current automated pair does not
+yet exercise redirect, cancellation, disk-full, busy refusal or repeated
+downloads; these remain acceptance checks for follow-up coverage. The
+`brdownload --automatic` row also checks that the location buffer and history
+remain on the displayed page through completion, then closes the manager and
+uses Reload to verify that the page is fetched again instead of reopening the
+download dialog. A later launch should open the downloaded file through the
+existing file association to verify exact bytes independently.
 
 ### 71.17 Browser 1.4 — table spans, cell alignment and form POST
 
@@ -122262,16 +122621,177 @@ form with two buttons (Search / I'm Feeling Lucky, Login / Register) tells the
 server which was pressed. Return in a focused text field submits the field's
 own form with no button pair.
 
-Password and file controls remain visibly unsupported. With no TLS, the
-browser must not show a password control that could be submitted in plaintext.
-`<textarea>` remains outside the single-line control model and is shown as
-unsupported, while its source contents are skipped as control content rather
-than rendered as page text. The reference renderer and guest share fixtures
-for spans, alignment and unsupported controls; a local HTTP test checks the
-POST request line, headers, exact length and body. Existing GET, formatting
-and frame-navigation behavior remains covered.
+History records URLs rather than POST bodies. Reloading or navigating through
+history from a POST response therefore performs a GET; after such a history
+fetch, the state line says `History GET: POST body not replayed` rather than
+silently implying that the original form submission was repeated.
 
-### 71.18 Apps size pass 2 — the shipped file, not the machine
+File controls remain visibly unsupported. Password controls use the existing
+bounded text-field record and are masked in the rendered page. Their form label
+includes an explicit `HTTP NOT SECURE` warning because the Browser has no TLS;
+the field provides visual masking only, not transport protection. Password
+values are submitted only by POST, never placed in a GET URL, toast or history
+entry. The request body remains ordinary unencrypted HTTP. Password values are
+not written to diagnostic messages. `INPUT TYPE=FILE` and `TEXTAREA` remain
+outside the single-line control model; textarea source contents are skipped as
+control content rather than rendered as page text.
+The reference renderer and guest share fixtures for spans, alignment and
+unsupported controls; a local HTTP test checks the POST request line, headers,
+exact length and body. Existing GET, formatting and frame-navigation behavior
+remains covered.
+
+### 71.21 Browser 1.6c — incremental HTML and classic navigation
+
+This section is the 1.6c acceptance contract, not a claim that every item has
+shipped. The staged implementation and its verified/remaining work are tracked
+in `docs/plans/BROWSER-1.6C-PLAN.md`; release status must follow that evidence.
+
+Browser 1.6c keeps the 1.6b source, formatted-document, line and link stores;
+it does not add a parallel page allocator. The HTTP worker continues to append
+received body bytes to the page's existing source store, growing it through
+the existing UI ownership handshake. The source starts in conventional memory
+and grows there only while the Browser's 20-percent reserve policy permits.
+When that reserve refuses further conventional growth, an available EMS store
+may back the source through the same owned four-quarter frame used by the
+Browser's other page arenas. Source growth and each worker write remain
+bounded by the allocated capacity; the worker is parked while the UI grows or
+migrates the source. Without EMS, the existing conventional-memory ceiling
+still produces a visible source cutoff. EMS source capacity grows in 256 KiB
+groups and is capped at 1 MiB by the Browser's logical source representation.
+The parser consumes only the newly
+available source range and retains a logical source cursor plus its compact
+semantic state between worker passes. An incomplete tag, quoted attribute or
+entity remains at its opening byte until more source arrives. Long comments
+and `SCRIPT`/`STYLE` raw text commit the already-scanned prefix and retain only
+their small terminator-match state, so a later block resumes at its first
+unseen byte instead of replaying earlier content. Input block boundaries
+therefore do not change the resulting formatted stream, links or controls.
+
+The source remains the one retained copy used by View Source, Save As, link
+metadata and form actions. Parsing does not make a second conventional-memory
+copy. For parsing an EMS-backed source, the Browser copies at most one existing
+512-byte receive-buffer slice into the package's existing receive scratch area.
+This isolates the parser cursor from document-arena EMS mappings without
+allocating a second page buffer or copying the full source to conventional RAM.
+Save As and event-time source lookups continue to use bounded direct EMS windows.
+Formatted output continues through the existing document arena and its
+conventional-memory/EMS fallback; line records continue through their existing
+arena and EMS fallback. All EMS handles and frame quarters remain subject to
+the existing DRVC_EMS ownership rules, and the page remains usable without
+EMS. Save As streams an EMS-backed source from those windows in cluster-aligned
+chunks of at most 32 KiB; a destination volume with larger clusters reports a
+write failure rather than copying through a second whole-page RAM buffer.
+
+Parsing may finish before the response closes, but layout and drawing remain
+deferred until the final body or a terminal transfer condition. The UI does not
+repaint once per receive block. A navigation invalidates the worker generation
+and waits for an active parser slice before releasing any arena. If formatted
+storage cannot grow, the parser stops at a safe emitted prefix, the worker
+continues draining the response without storing more formatted output, and
+the final page reports `Page truncated`; the parser does not restart from byte
+zero. A source-claim refusal remains separately reported as a source cutoff.
+
+The parser preserves the 1.6b document controls and marker format. It does not
+implement CSS, script execution, image rendering, image maps, plugins or TLS.
+`SCRIPT` contents are treated as raw skipped text, including tag-like text,
+until a matching close tag or final EOF. This streaming boundary is also the
+only preparation for a future suspend/resume parser; no script runtime or DOM
+is introduced.
+
+URL and frame metadata remain per document/frame and use the existing bounded
+tables and link arena. `BASE HREF` supplies the resolution base and `BASE
+TARGET` the default target; an explicit link or form target takes precedence.
+
+The layout's running link state starts at the same `FFFFh` no-link sentinel as
+the parser. A line receives `LNF_LNK` only when its first visible cell is
+inside an open `<a href>`; plain text before the first link must not inherit
+link underlining. `D_LNK1` and `D_LNK0` change that state at their exact inline
+positions, so text before and after an anchor remains ordinary text.
+The keyboard focus cycle skips frame-source link records that have no visible
+text in the flattened document, then visits visible links in document order.
+The current frame compositor stores the visible composition as one document.
+Root `_self`, `_top` and direct-child `_parent` navigate the top-level page. A
+child `_self`, the default target of a child link/form, or a matching named
+target navigates the selected child by re-fetching the frameset and its child
+documents, with the selected child's URL overridden by the requested URL.
+This preserves the frame layout and target semantics, but currently fetches
+sibling documents again; it is not an independent child-document cache or
+history. A child-targeted POST is refused because the current worker can only
+submit a POST as the top-level request. `_blank` is also refused because the
+package has no existing API for a second Browser window with a pending URL.
+Named anchors and `ID` values use the existing
+bounded document-offset index; fragment navigation scrolls to the recorded
+location without changing the fetched resource.
+
+A form `ACTION` is resolved against the `BASE HREF` belonging to the document
+that owns that form, including a child frame's own base. Resolving an action
+must not mutate the current page URL or the base used by later link clicks.
+For a child frame, its fetched source URL is the default base; the first
+`BASE HREF` in that child document replaces that default without being mistaken
+for an already-seen `BASE` element.
+
+The native form controls remain bounded by the existing field and submit
+tables. `BUTTON` with omitted type or `type=submit` acts as a submit control;
+its declared `name` and `value` are included only when that button is clicked.
+`INPUT TYPE=RESET` and `BUTTON TYPE=RESET` restore the initial values of the
+bounded text, select, checkbox and radio controls in their owning form without
+submitting it. A reset uses references into the retained source for the
+original values and does not keep a second copy of the form. `BUTTON TYPE=BUTTON`
+remains unsupported and is rendered as inert content. A bounded `LABEL` with a
+`for` attribute can activate a matching form control `id`, whether the label or
+control appears first; text fields receive focus, and selects/checkboxes/radios
+use their existing click behavior. Matching is limited to the retained ID
+length and label spans share the existing submit-span bound. Implicit labels
+that wrap a control and labels beyond that bound remain inert.
+
+Table layout also recovers a common omitted-row form: if a table contains
+`TD`/`TH` cells before any `TR` marker, those cells are composed as one
+implicit row. Explicit row boundaries retain precedence, and nested-table
+content continues to flatten within the existing bounded compositor. This is
+a narrow recovery rule, not a general HTML error-correction algorithm.
+
+When malformed inline emphasis (`B`, `I`, or `U`) remains open at a paragraph or heading boundary, layout clears that inline state at the block start. This keeps the malformed element from changing the formatting of later blocks; it does not introduce a general formatting-element stack.
+
+Text normalizes CR, LF and CRLF as HTML whitespace outside `PRE`, including
+inside `P`: a source newline there collapses with adjacent whitespace to one
+space and does not create a display line. Inside `PRE`, CRLF and lone CR/LF
+each produce exactly one display line break, including when the CR and LF
+arrive in separate receive blocks. Latin-1/Windows-1252 text and numeric
+references in that range use the Browser's one-character ASCII approximation
+table because the system cell font has no accented glyphs. Named references
+include the common HTML 3.2 Latin-1 set; replacements remain single-byte
+approximations, not Unicode rendering.
+
+HTTP body decoding precedes HTML parsing. The bounded response scanner retains
+the status code, redirect Location, one session cookie and a bounded
+Content-Type media-type token. Absent Content-Type retains the legacy HTML
+assumption, while a declared non-HTML response is drained without
+being retained or parsed as page source and is reported as non-HTML. Routing
+such responses into the Download Manager remains a separate integration task.
+Explicit 204 and 304 responses are reported as empty/not cached because the
+Browser has no response cache; common 400, 403, 404 and 500 HTML responses keep
+their body and expose the HTTP status in the status line. `Content-Length` is
+not used to size or limit page storage. A `charset=utf-8` parameter on the
+first `Content-Type` header selects the existing UTF-8 decoder, accepting a
+quoted or unquoted value, and takes precedence over a conflicting META
+declaration; other HTTP charset values continue to use the existing
+META/default decoding behavior.
+HTTP/1.0 close delimiting remains supported. Chunked transfer decoding and a
+complete HTTP/1.1 client are not implied. Session cookies are bounded,
+host-isolated memory state; the single retained cookie also honors its
+quoted or unquoted `Path` attribute or the response directory's default path.
+Cookie Domain,
+Expires, multiple-cookie storage and persistence remain unsupported, and
+cookies do not provide transport security.
+
+The 1.6c acceptance suite compares parsing of the same fixture delivered as a
+single body, 512-byte blocks, 64-byte blocks, one-byte blocks and deterministic
+irregular blocks. It checks output, links, controls, parser completion and
+bounded memory use, with and without EMS. Network and EMS correctness may be
+tested in the configured emulator; 8088 timing claims require an 8088-capable
+machine and are reported separately.
+
+### 71.22 Apps size pass 2 — the shipped file, not the machine
 
 docs/plans/HANDOFF-APPS-SIZE-P2.md's subject is DISK room, so the measure is
 the LZ4-packed `BROWSER.O88` (17,832 bytes, 18 clusters on `apps360.img` and
@@ -218360,20 +218880,20 @@ STANDARD cases, twelve XT ones).
 
 ### 121.12 Where it ships (shipped, dated 2026-10-22)
 
-**`XTMP3.O88` is in `$(APPS_TOOLS)`**, so it is in `APPS/` on the 1.44MB and
-1.2MB apps disks, on kern_mega's two apps disks (its `PKG_MEGA` arm), on the
-everything set (§19.10) and on the live media (§80.6). Four sites take it off,
+**`XTMP3.O88` is in `$(APPS_TOOLS)`**, so it is in `APPS/` on the 1.44MB apps
+disk, on kern_mega's 1.44MB apps disk (its `PKG_MEGA` arm), on the
+everything set (§19.10) and on the live media (§80.6). Five sites take it off,
 each with its own ground, and §24.6.1's rule binds the two that are about
 room: being curated onto a disk is a decision with a date on it.
 
 | disk | carries | clusters |
 |---|---|---|
 | `apps.img`, 1.44MB | XTMP3.O88; NEONDRV, NIGHTSIG, AFTERHRS in `MEDIA/` | 512-byte clusters: the package 193, the songs 60 + 99 + 138 = 297; 379 of 2,847 left |
-| `apps120.img`, 1.2MB | XTMP3.O88; NIGHTSIG, AFTERHRS | 393 free before it and the package is 193, which leaves 200: all three songs are 297, and NEON DRIVE with AFTER HOURS (198) would leave 2, a disk the next byte fills. The two smaller songs (159) leave 41 |
+| `apps120.img`, 1.2MB | **not on it** (dated 2026-10-23) | it was carried with NIGHTSIG and AFTERHRS until Browser 1.6c grew 67 clusters and the set needed 2,399 of 2,371; the package is 193 of them, the songs 159 more. `make xtmp3disk`'s 1.2MB floppy carries it with all three songs |
 | `apps720.img` | **not on it** | 36 of 713 free; the package alone is 97. `make xtmp3disk`'s 720KB floppy carries it, and it is a candidate for the third 720KB disk the owner has planned (§121.13) |
 | `apps360.img` | **not on it** | 14 of 354 free |
 | `media360.img`, 360KB | XTMP3.O88 at the root, AFTERHRS in `MEDIA/` | 147 of 354 free before it; 97 + 30 leaves 20 |
-| `megaapps.img`, `megaapps120.img` | as the 1.44MB and 1.2MB apps disks | |
+| `megaapps.img`, `megaapps120.img` | `megaapps.img` as the 1.44MB apps disk; `megaapps120.img` **not on it**, as `apps120.img` (it needed 2,408 of 2,371) | |
 | the everything set | XTMP3.O88 in `APPS/`, no songs | MIDIRack's songs' reason (§105.10): the RunCPM fill would pay for them |
 | the live media | XTMP3.O88 in `APPS/`, all three songs in `MEDIA/` | `t_livefull` holds it to the 1.44MB apps disk |
 | `smallapps*.img`, `small*.img` | **not on them** (`$(SMALLOMIT)`) | |

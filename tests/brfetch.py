@@ -32,6 +32,7 @@ the page crossed one. The WIRE's verdict is still the 5150's (SPEC.md
 """
 import argparse
 import os
+import shutil
 import socket
 import sys
 import threading
@@ -52,8 +53,10 @@ import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import partner as P                                    # noqa: E402
 import os88build                                       # noqa: E402
+from brclick import browser_syms                       # noqa: E402
 
 S = os88sym.linear
+u16 = lambda b: b[0] | (b[1] << 8)                     # noqa: E731
 
 MACHINE = "os8088_5150_cga_lpt"
 NET_ROW = 4                        # ...last since the reorder (SPEC.md 31.1)
@@ -92,25 +95,30 @@ class Server(threading.Thread):
         self.port = self.s.getsockname()[1]
         self.s.listen(2)
         self.request = None
+        self.requests = []
 
     def run(self):
-        try:
-            c, _ = self.s.accept()
-        except OSError:
-            return
-        c.settimeout(60)
-        try:
-            req = b""
-            while b"\r\n\r\n" not in req and len(req) < 4096:
-                b = c.recv(1024)
-                if not b:
-                    break
-                req += b
-            self.request = req
-            c.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
-                      b"Content-Length: %d\r\n\r\n" % len(PAGE) + PAGE)
-        finally:
-            c.close()
+        while True:
+            try:
+                c, _ = self.s.accept()
+            except OSError:
+                return
+            c.settimeout(60)
+            try:
+                req = b""
+                while b"\r\n\r\n" not in req and len(req) < 4096:
+                    b = c.recv(1024)
+                    if not b:
+                        break
+                    req += b
+                self.request = req
+                self.requests.append(req)
+                c.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
+                          b"Content-Length: %d\r\n\r\n" % len(PAGE) + PAGE)
+            except OSError:
+                pass
+            finally:
+                c.close()
 
 
 def main():
@@ -119,6 +127,7 @@ def main():
     a = ap.parse_args()
 
     fails = []
+    sy = browser_syms()
     img = os.path.getsize(os88build.at("build/browser.bin"))
     # THE DISK IS BUILT FROM THE PACKAGE AND CAN BE OLDER THAN IT. That is not
     # hypothetical: this test's first real run drove a browser two commits
@@ -139,7 +148,11 @@ def main():
     ft = P.FileTree()
     ft.add(0, "READ.ME", content=b"a link volume\r\n")
 
-    with os88marty.launch("build/os8088-360.img", apps="build/brtest360.img",
+    # Bookmark writes are part of this gate, but must not dirty the shared
+    # fixture image and make the next run begin with the previous run's list.
+    apps_img = "build/brfetch360.img"
+    shutil.copyfile("build/brtest360.img", apps_img)
+    with os88marty.launch("build/os8088-360.img", apps=apps_img,
                           machine=MACHINE) as m:
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
@@ -171,6 +184,13 @@ def main():
 
         def bss_w(off):
             d = m.readseg(pseg, img + off, 2)
+            return d[0] | (d[1] << 8)
+
+        def sym_b(name):
+            return m.readseg(pseg, sy[name], 1)[0]
+
+        def sym_w(name):
+            d = m.readseg(pseg, sy[name], 2)
             return d[0] | (d[1] << 8)
 
         def field(tag):
@@ -282,6 +302,9 @@ def main():
 
         nstate, nlines = bss_b(BR_NSTATE), bss_w(BR_NLINES)
         say("br_nstate = %d, br_nlines = %d" % (nstate, nlines))
+        linekb = sym_w("br_linekb")
+        expected_linekb = min(62, max(1, (nlines * 10 + 1023) // 1024))
+        say("line table = %d KB for %d source bytes" % (linekb, len(PAGE)))
         if nstate == BN_ERR:
             fails.append("the browser's own state is BN_ERR: the fetch failed "
                          "and it knows")
@@ -291,6 +314,50 @@ def main():
         if nlines < 5:
             fails.append("br_nlines is %d: the page never reached the layout"
                          % nlines)
+        if linekb != expected_linekb:
+            fails.append("the line table is %d KB, expected %d KB for the "
+                         "%d-byte response" % (linekb, expected_linekb,
+                                               len(PAGE)))
+        if nlines > len(PAGE) or nlines * 10 > linekb * 1024:
+            fails.append("%d lines do not fit the %d KB line table"
+                         % (nlines, linekb))
+        page_title = bytes(m.readseg(pseg, sy["br_ptitle"], 32)).split(b"\0", 1)[0]
+        if page_title != b"Over the wire":
+            fails.append("the parsed page title is %r, not 'Over the wire'"
+                         % page_title)
+        window_title = bytes(m.readseg(pseg, sy["br_wtitle"], 64)).split(b"\0", 1)[0]
+        if window_title != b"Over the wire - os8088 Web Browser":
+            fails.append("window title is %r, not the page title plus browser name"
+                         % window_title)
+
+        # Ctrl+D adds idempotently; unlike the toolbar star it never toggles
+        # a record out. The page has its parsed title now, so this first save
+        # also checks the human-facing menu label.
+        bm = sy["br_bmdata"]
+        bm_count = lambda: m.readseg(pseg, bm + 4, 1)[0]  # noqa: E731
+        m.ctrl("KeyD")
+        os88marty.settle(m)
+        m.ctrl("KeyD")
+        os88marty.settle(m)
+        os88marty.until(
+            m,
+            lambda _m: sym_b("br_bmreq") == 0
+            and sym_b("br_bmsaved") == 1
+            and sym_w("br_nmsg") == sy["br_s_bmsaved"],
+            "Ctrl+D bookmark disk write",
+            limit=120,
+        )
+        if bm_count() != 1:
+            fails.append("saving the same page twice stored %d bookmarks, not 1"
+                         % bm_count())
+        stored = bytes(m.readseg(pseg, bm + 5 + 24, 160)).split(b"\0", 1)[0]
+        if stored.decode("ascii", "replace") != url:
+            fails.append("bookmark stored %r instead of the address bar URL %r"
+                         % (stored, url))
+        stored_title = bytes(m.readseg(pseg, bm + 5, 24)).split(b"\0", 1)[0]
+        if stored_title != b"Over the wire":
+            fails.append("bookmark label stored %r instead of the page title"
+                         % stored_title)
 
         if a.shot:
             os88marty.write_png(a.shot, w0, h0, rows)

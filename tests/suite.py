@@ -7898,6 +7898,15 @@ SOAK = [
         "page parses and RENDERS, and the location bar holds the file's URL",
         needs=("marty",), serial=True,
         wants=("build/brtest360.img",)),
+    Row("brarena", "soak", py("tests/brarena.py"), 180.0,
+        "BROWSER-MEMORY-ROADMAP: a local 3,000-line page grows the Browser's "
+        "line-index arena past 16 KiB in QEMU, without NE2000 traffic",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/brtest360.img",)),
+    Row("brcapacity", "soak", py("tests/brcapacity.py"), 45.0,
+        "BROWSER-MEMORY-ROADMAP: a 200 KiB local source crosses the formatted "
+        "floor, then honors the conventional-memory reserve",
+        needs=("qemu",), serial=True, builds=True),
     Row("brclick", "soak", py("tests/brclick.py"), 300.0,
         "SPEC.md 71: the PAGE takes the mouse - links parse in order and "
         "underline, a click on a form field focuses it, the submit button "
@@ -7933,7 +7942,8 @@ SOAK = [
         "align=center/middle/right move the cell's text, and password, file "
         "and textarea controls read `[unsupported]` with their contents kept "
         "off the page - read out of the document and the line table on "
-        "TORTURE.HTM, the way brtable reads its rows",
+        "TORTURE.HTM, the way brtable reads its rows; `<pre>` keeps leading "
+        "spaces verbatim",
         needs=("marty",), serial=True,
         wants=("build/brtest360.img",)),
     Row("brtoolbar", "soak", py("tests/brtoolbar.py"), 145.0,
@@ -16511,6 +16521,39 @@ SOAK = [
         "find is a row nobody runs.",
         needs=("qemu",), serial=True, builds=True,
         wants=("build/brtest360.img",)),
+    Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,
+        "SPEC.md 71.20: Save Link As streams a 32 KiB unknown-length binary "
+        "response through the NE2000 into cluster-aligned disk writes; the "
+        "test confirms no total is invented and compares the saved FAT file "
+        "byte-for-byte. QEMU is required for ETHER.DRV.",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/browser.o88",)),
+    Row("brdownload-length", "soak",
+        py("tests/brdownload.py", "--content-length"), 180.0,
+        "SPEC.md 71.20: the same 32 KiB Save Link As transfer with a declared "
+        "Content-Length, checking the displayed total and exact saved bytes.",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/browser.o88",)),
+    Row("brdownload-auto", "soak",
+        py("tests/brdownload.py", "--automatic"), 180.0,
+        "SPEC.md 71.20: an ordinary click on a non-rendered file URL opens the "
+        "existing Save dialog automatically before the byte-exact download.",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/browser.o88",)),
+    Row("brmem", "soak", py("tests/brmem.py"), 40.0,
+        "SPEC.md 71.18: a deterministic 40 KB page over the NE2000 grows the "
+        "source and document claims within the recorded 20% free-heap reserve, "
+        "then Note Pad must still open. QEMU is required for the NIC, not for "
+        "timing. This is separate from ethernet because a regular fetch never "
+        "crosses the old 32 KB source limit.",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/brtest360.img",)),
+    Row("brcapacity-fixtures", "fast", py("tests/brcapacity.py", "--fixtures"), 0.2,
+        "SPEC.md 71.18.1: the manual 96 KiB source/document, 2,200-row, "
+        "400-link, doubled-form and aggregate-frameset pages have the exact "
+        "sizes and counts the Browser capacity gate expects. builds=True only "
+        "because the registry reads tests/brcapacity.py for `make`; the "
+        "--fixtures mode runs no make and no QEMU.", builds=True),
     Row("netcoexist", "soak", py("tests/netcoexist.py"), 90.0,
         "SPEC.md 72.9.1 and 34.13.1: a network card and an MPU-401 in one "
         "machine. The field lost its network the moment an MPU was added: "
