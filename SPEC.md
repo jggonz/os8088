@@ -217281,7 +217281,11 @@ fixture.
   an 8-bit signal code under a fixed companding map that is global and never
   block-normalised. Profiles are XT Standard (16 terms an output), XT Fast
   (8) and XT Turbo (4), with terms chosen per output phase by error
-  analysis, plus XT Speech (the 4:1 pruned rate). Their measured error,
+  analysis, plus XT Speech: the pruned divisor whose output lands
+  near 5.5 kHz (2 on an 8 to 12 kHz source, 4 on a 16 to 24 kHz one), which
+  gives about 2.7 kHz of bandwidth and is muffled by design. A 4:1 cut of an
+  11,025 Hz source would be 2,756 Hz, which is below a Sound Blaster DSP's
+  3,906 Hz floor and about 1.4 kHz of bandwidth, so it is never offered. Their measured error,
   speed and listening notes are §121.11's table, and a profile without a
   quality record is not offered by Auto.
 
