@@ -1451,10 +1451,14 @@ def leg_batch():
                 "the first conversion", 240, 0.3)
         check(leg, "the first plays", r.st()["state"] == ST_FILE)
         asked = []
+
+        def second():                   # (twice, 0.6 s apart: one QMP read
+            s = r.st()                  # can catch x3_cue1 between its CUR
+            return s["state"] == ST_DONE or (   # and its STATE - the first
+                s["state"] == ST_FILE and s["cur"] == 1)   # track's FILE
         r.until(lambda: (asked.append(r.st()["md"]) or
-                         r.st()["state"] == ST_DONE or
-                         (r.st()["state"] == ST_FILE and
-                          r.st()["cur"] == 1)), "the second", 400, 0.3)
+                         (second() and (time.sleep(0.6) or second()))),
+                "the second", 400, 0.3)
         s = r.st()
         check(leg, "the second converted and plays with NO dialog",
               MD_CHOOSE not in asked and s["cur"] == 1 and

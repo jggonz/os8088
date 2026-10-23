@@ -778,8 +778,6 @@ x3c_begin:
     shl bx, 1
     mov ax, [x3l_meas+bx]
     mov [x3c_est], ax               ; its measured speed (FFFFh: none)
-    mov byte [x3_md], MD_CHOOSE
-    mov byte [x3_st+X3S_STATE], X3ST_CHOOSE
     mov al, [x3c_rung]
     mov [x3_st+X3S_QUAL], al
     mov al, [x3_och]
@@ -789,10 +787,12 @@ x3c_begin:
     mov ax, [x3_orate]
     mov [x3_st+X3S_RATE], ax
     cmp byte [x3_c_batch], 0        ; AN APPROVED BATCH: its folder, no dialog
-    je .ask
-    call x3c_batchgo
-    jnc .out
-.ask:
+    je .ask                         ; - and no CHOOSE either: batchgo's stand,
+    call x3c_batchgo                ; name and room take long enough on a big
+    jnc .out                        ; disk to be seen as a dialog's mode that
+.ask:                               ; never had a dialog (xtmp3eng's batch)
+    mov byte [x3_md], MD_CHOOSE
+    mov byte [x3_st+X3S_STATE], X3ST_CHOOSE
     call x3c_dlgdrive
 .out:
     ret

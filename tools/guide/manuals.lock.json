@@ -1308,8 +1308,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "3d5fae9b",
+  "stamped": "e680ff37",
   "strings": "222c4f61704cd4f5",
-  "why": "checked: kern_mega's class bit and the XT part's CS on protected mode are below the page's level of detail"
+  "why": "checked: an approved batch's mode, below the page's detail"
  }
 }
