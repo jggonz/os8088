@@ -839,3 +839,95 @@ Bochs then ran it once. Auto played AFTERHRS live on Original with the
 region above 1MB (its DS was LDT selector 2844h). A forced XT Standard
 converted the song onto the 20 MB C: and played it. The WAV came off the
 image bit-exact against the model, and E9 recorded no fault.
+
+## 2026-10-23 — the owner at the machine: three 86Box machines built by hand
+
+*The integrating session, at the owner's request. The automated rows drive
+86Box only through `\AUTOSTRT` links, because this host cannot send it a
+key. These machines were for a person: the owner sat at each one and
+clicked through XTMP3. Each lives in a throwaway profile under the
+integration worktree's `build/`, never in `vm/`, so no committed profile
+was touched.*
+
+**How each was built.** All three start from the same system-disk recipe:
+the files of `make xtmp3field`'s `x3field.img`, without its `\AUTOSTRT`
+links, plus `build/mixercfg/SYSTEM.CFG`. A stock `build/os8088.img` wants
+no driver at all (SPEC.md 51.3), so without that file SOUND.DRV never loads
+and the Sound Blaster goes unused. `XTMP3.O88` goes in `XTMP3\` and the
+test songs from `tests/xtmp3/` in `MEDIA\`, stored plain (the probe refuses
+a packed MP3). The hard-disk images come from `tools/os88disk.py --hdd
+--geometry C/H/S --mbr build/mbr.bin --boot build/boothd.bin`. Each image
+is exactly `C x H x S x 512` bytes and is checked with `--verify-hdd`.
+
+| machine | board and CPU | RAM | sound | disk | boots from |
+|---|---|---|---|---|---|
+| Pentium | `p54tp4xe`, P54C at 133 MHz | 16 MB | SB16 (IRQ 5, DMA 1/5) | none | a 1.44 MB A: carrying XTMP3 and the songs |
+| IBM XT | `ibmxt86`, 8088 at 4.77 MHz | 640 KB | SB 2.0, at **IRQ 7** | ST-225, 20 MB, `st506_xt`, geometry 615/4/17 | C: |
+| 386SX | `shuttle386sx`, 386SX at **25 MHz** | 4 MB | SB16 (IRQ 5, DMA 1/5) | 33 MB IDE on `xtide_at`, geometry 65/16/63 | C: |
+
+The Pentium and the 386SX need a saved BIOS settings file for their board,
+or the BIOS stops in its setup screen, which only a person can clear. The
+Pentium's was copied from another checkout's `vm/pentium/nvr/`, and that
+copy had drive B: switched off. So that machine shows only A:, and the
+player and songs were put on the A: system disk instead of on B:. The 386SX
+took `vm/386sx/nvr/` from the main checkout. Its disk is on the XTIDE
+Universal BIOS, which finds the drive itself, so no BIOS drive-type entry is
+needed. The XT needs no settings file at all.
+
+**What the owner found, in order.**
+
+1. **"Needs 330K has 520K" on the XT.** The package was in C:\XTMP3 and the
+   song in C:\MEDIA. Opening the song moved the instance's current folder,
+   so the XT decoder's lazy fetch looked for `XTMP3.O88` in C:\MEDIA,
+   failed, and was reported as a memory refusal (HAS above NEEDS). The fix
+   was already committed in the integration track (`d43336e2`): a part is
+   fetched standing in the package's launch folder, and a fetch that fails
+   with room to spare says `Cannot read its decoder`. The `offvol` and
+   `offdir` legs cover a different drive and a different folder. The
+   owner's case was the second one, which the docs track's final look had
+   seen as the first.
+2. **A finished WAV played for about one second on the XT.** The files on
+   the disk were whole and right, with audio throughout: AFTERHRS.WAV 10.09
+   s at 11,025 Hz, NIGHTSIG.WAV 10.03 s at 5,512 Hz, X12K32.WAV its 2.00 s.
+   The cause was the machine, and the machine was this session's making. On
+   an IBM XT the fixed-disk controller owns IRQ 5, and the Sound Blaster had
+   been given IRQ 5 too, copied from `vm/xt-sound`, which has no hard disk.
+   The section above tells how 86Box reproduced it. The card moved to IRQ 7
+   and the profile was relaunched. XTMP3 now says `The sound card stopped`
+   instead of moving on as though the song had finished. **Lesson:** an XT
+   profile with an MFM disk must not put a card on IRQ 5. Whether
+   SOUND.DRV's probe should refuse IRQ 5 there is left open for the owner.
+3. **"On machines that are powerful enough, I don't want the player to
+   decompress to disk and instead play from disk and decompress in
+   realtime."** The ladder already preferred live rungs, but the field's
+   86Box numbers showed where it gave up too early. A 486DX2/66 on a 44.1
+   kHz stereo track probed Quarter at 0.98x, XT Standard at 1.15x and XT
+   Fast at 1.17x, all under the 1.25x margin, so it chose Decode First. The
+   reason is that the XT rungs were decoding a 44.1 kHz source at its full
+   rate, when they are built for about 11 kHz. Round 6 (the integration
+   track) does two things:
+   - the XT rungs choose their divisor from the source rate (÷4 at 32 to 48
+     kHz, ÷2 at 16 to 24, ÷1 at 8 to 12), so the output lands near 11 kHz
+     and never below the 8 kHz floor;
+   - Decode First is chosen automatically only when no live rung at or
+     above the floor keeps up.
+
+   Each new profile and divisor pair gets golden hashes and a quality
+   record before Auto may use it, and 86Box's 286, 386 and 486 are measured
+   again.
+4. **The 386SX-25 was opened for the owner to try** while round 6 was still
+   being measured, so it runs the build before round 6 (`bd877f25`). Its
+   MEDIA folder holds the 11 kHz songs, which should be able to play live,
+   the 22 kHz M22, and the 44.1 kHz stereo songs, which on that build can
+   still go to Decode First. The same songs on the round-6 build are the
+   comparison the request is about. What the owner saw on it is to be
+   written here when they report it.
+
+**What this added to the process.**
+- **The rows alone never had the owner's folder layout.** Package, song
+  and WAV each sat in a different folder, and that layout found a real bug
+  that no row had. `wavdirs`, `offvol` and `offdir` now hold it.
+- **A machine profile is part of the test.** The one-second WAV was a
+  wrong IRQ, not a defect, and it was found only because the files could
+  be read off the disk image and shown to be whole before anything in the
+  player was blamed.
