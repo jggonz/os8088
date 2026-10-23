@@ -152,7 +152,8 @@ br_dl_link:
 .base:
     mov al, [es:si]
     inc si
-    stosb
+    mov [di], al                    ; ES is the link arena: no stosb here
+    inc di
     test al, al
     jnz .base
     mov si, br_ubuf
@@ -227,6 +228,8 @@ br_dl_link:
     call br_errst
     jmp .restore
 .badrestore:
+    push ds
+    pop es
     mov si, br_dl_s_url
     call br_errst
     jmp .restore
@@ -1499,6 +1502,13 @@ br_dl_onwake:
     mov word [br_dl_msg], br_dl_s_complete
     jmp .redraw
 .failedend:
+    mov ax, [br_dl_written]         ; nothing written: no file of ours exists,
+    or ax, [br_dl_written+2]        ; so a file the user chose to replace is
+    jz .failedstate                 ; still the old one - leave it alone
+    cmp byte [br_dl_cancel_req], 0  ; a raced Cancel deletes it in
+    jne .failedstate                ; .cancel_terminal_fail instead
+    call br_dl_partial_delete       ; a failed transfer keeps no truncated file
+.failedstate:
     mov byte [br_dl_state], DL_FAIL
     jmp .redraw
 .redraw:
@@ -1510,9 +1520,12 @@ br_dl_onwake:
     ; been deleted; terminal I/O errors remain visible for the user.
     cmp byte [br_dl_state], DL_CANCEL
     je .destroy_manager
+    cmp byte [br_dl_state], DL_DONE
+    je .destroy_done                ; Close during the final write: finished
     cmp byte [br_dl_state], DL_FAIL
     jne .mainclose
     jmp .cancel_terminal_fail
+.destroy_done:
     mov byte [br_dl_mgr_close_after], 0
     mov bx, [br_dl_win]
     or bx, bx
@@ -1818,6 +1831,8 @@ br_dl_step:
 .lineend:
     call br_dl_headerline
     jc .badhead
+    cmp byte [br_dl_state], DL_OPEN ; redirect: the rest of this receive
+    je .out                         ; belongs to the old reply, drop it
     cmp byte [br_dl_headers_done], 0
     jne .afterheaders
 .hnext:
@@ -1872,6 +1887,10 @@ br_dl_step:
     call br_dl_qstat
     jc .retry
     cmp ah, NSK_CLOSING
+    je .shortreply
+    cmp ah, NSK_CLOSED
+    je .shortreply
+    cmp ah, NSK_FAILED              ; reset or broken socket: no more bytes
     je .shortreply
     cmp ah, NSK_UP
     je .out
@@ -1970,6 +1989,10 @@ br_dl_step:
     jc .retry
     cmp ah, NSK_CLOSING
     je .finishbody
+    cmp ah, NSK_CLOSED
+    je .finishbody
+    cmp ah, NSK_FAILED
+    je .shortbody
     cmp ah, NSK_UP
     je .out
     cmp ah, NSK_CONNECT

@@ -63,6 +63,8 @@ br_dl_icons:
     call br_dl_groupx
     mov ax, 8
     add ax, [br_dl_gx]
+    add ax, 4                       ; snap to the 8-pixel grid: kern_small's
+    and ax, 0FFF8h                  ; BLIT1 refuses an off-grid origin
     mov dx, [br_dl_yicon]
     cmp word [br_dl_scale], 1
     jne .servery
@@ -86,6 +88,8 @@ br_dl_icons:
     mov ax, 230
 .pcx:
     add ax, [br_dl_gx]
+    add ax, 4                       ; same 8-pixel snap as the server icon
+    and ax, 0FFF8h
     mov [br_dl_pc], ax
     mov ax, [br_dl_yicon]
     cmp word [br_dl_scale], 1
@@ -576,6 +580,7 @@ br_dl_progress_live:
     push cx
     push dx
     push si
+    push di
     cmp byte [br_dl_have_len], 0
     jne .known
     cmp byte [br_dl_barstate], 0
@@ -633,6 +638,7 @@ br_dl_progress_live:
     mov ax, [br_dl_pct]
     call br_dl_percent_label
 .out:
+    pop di
     pop si
     pop dx
     pop cx
@@ -809,6 +815,7 @@ br_dl_stats:
 .calc:
     cmp byte [br_dl_state], DL_DONE
     jae .nospeed
+    mov si, br_dl_s_calc
     mov byte [br_dl_livewidth], 8
     call br_dl_drawrun
     jmp .eta
@@ -908,6 +915,7 @@ br_dl_eta:
 .calc:
     mov cx, [br_dl_etax]
     mov dx, [br_dl_etay]
+    mov si, br_dl_s_calc
     cmp byte [br_dl_liveflag], 0
     jne .calc_live
     call br_dl_drawrun
@@ -1011,6 +1019,7 @@ br_dl_percent_label:
     push cx
     push dx
     push si
+    push di
     push es
     mov al, CWHITE
     call OSAPI_SET_COLOR
@@ -1057,6 +1066,7 @@ br_dl_percent_label:
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
     pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -1120,6 +1130,7 @@ br_dl_fmt_word:
     push bx
     push cx
     push dx
+    push si
     push di
     push es
     push ds
@@ -1142,12 +1153,13 @@ br_dl_fmt_word:
     stosb
     or al, al
     jnz .copy
+    pop es
     pop di
+    pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    pop es
     ret
 
 ; Format DX:AX as decimal, using 32-bit divide by ten in two 16-bit steps.
@@ -1187,9 +1199,9 @@ br_dl_fmt_u32:
     stosb
     loop .emit
     mov byte [di], 0
+    pop es
     pop di
     pop si
-    pop es
     pop dx
     pop cx
     pop bx
@@ -1248,6 +1260,7 @@ br_dl_paint_live:
     push cx
     push dx
     push si
+    push di
     ; The frame and static labels do not change. Keep the fill monotonic and
     ; replace only the live numeric fields with opaque, padded text runs.
     call br_dl_progress_live
@@ -1255,6 +1268,7 @@ br_dl_paint_live:
     mov byte [br_dl_liveflag], 1
     call br_dl_stats
     mov byte [br_dl_liveflag], 0
+    pop di
     pop si
     pop dx
     pop cx
