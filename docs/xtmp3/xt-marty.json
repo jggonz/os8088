@@ -1,60 +1,60 @@
 {
- "part_bytes": 50058,
+ "part_bytes": 58634,
  "open": {
   "std": {
-   "cycles": 19457113,
-   "seconds": 4.076728671051162,
+   "cycles": 20296808,
+   "seconds": 4.252664776342749,
    "regions": {
-    "XTGEN check and setup": 136780,
+    "XTGEN check and setup": 834955,
     "window rows": 7781154,
     "ENCV and Lee planes": 4539833,
     "RQL, IMDCT rows, ENCR, antialias": 5052433,
-    "IMWIN, reset": 1947132,
-    "done": 65
+    "IMWIN, reset": 2088674,
+    "done": 43
    },
-   "fletcher": 5462874,
+   "fletcher": 6160548,
    "ok": true
   },
   "fast": {
-   "cycles": 15159017,
-   "seconds": 3.1761751719719147,
+   "cycles": 15981953,
+   "seconds": 3.3485998675390403,
    "regions": {
-    "XTGEN check and setup": 136780,
+    "XTGEN check and setup": 834955,
     "window rows": 4269501,
     "ENCV and Lee planes": 4539833,
     "RQL, IMDCT rows, ENCR, antialias": 4266012,
-    "IMWIN, reset": 1947132,
-    "done": 43
+    "IMWIN, reset": 2071827,
+    "done": 109
    },
-   "fletcher": 3926874,
+   "fletcher": 4624548,
    "ok": true
   },
   "turbo": {
-   "cycles": 13063728,
-   "seconds": 2.7371622135521263,
+   "cycles": 13874047,
+   "seconds": 2.906943347063429,
    "regions": {
-    "XTGEN check and setup": 136624,
+    "XTGEN check and setup": 834799,
     "window rows": 2174667,
     "ENCV and Lee planes": 4539833,
     "RQL, IMDCT rows, ENCR, antialias": 4266012,
-    "IMWIN, reset": 1946789,
-    "done": 87
+    "IMWIN, reset": 2058955,
+    "done": 65
    },
-   "fletcher": 3128064,
+   "fletcher": 3825738,
    "ok": true
   },
   "speech": {
-   "cycles": 14021439,
-   "seconds": 2.9378254821614562,
+   "cycles": 14784469,
+   "seconds": 3.097698443678006,
    "regions": {
-    "XTGEN check and setup": 136728,
+    "XTGEN check and setup": 834903,
     "window rows": 3971651,
     "ENCV and Lee planes": 2921225,
     "RQL, IMDCT rows, ENCR, antialias": 5052433,
-    "IMWIN, reset": 1939621,
+    "IMWIN, reset": 2004476,
     "done": 65
    },
-   "fletcher": 3619584,
+   "fletcher": 4317258,
    "ok": true
   }
  },
@@ -335,5 +335,6 @@
    },
    "staged_granules": 16
   }
- }
+ },
+ "note": "MartyPC IBM 5150 (GLaBIOS, 4.77 MHz), tools/x3xtmarty.py, 2026-10-22. granule: the XT part GRANULE only (the FRONT part not included); open: the final two-half part (OPEN includes the tail check and the kernel copy); granule figures were taken on the part before its two-half layout and re-taken after it: 1,505,843 cycles against 1,505,847 for XT Standard on AFTERHRS.MP3"
 }
