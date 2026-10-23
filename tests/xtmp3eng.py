@@ -1057,7 +1057,8 @@ def leg_xtpeak():
     finally:
         r.done()
     # LIVE XT STANDARD WITH A CARD (SPEC.md 121.10 counts SOUND.DRV's grant):
-    # the grant is the 8 KB one under the XT backend at any rate, never the
+    # x3_plan prefers the 16 KB grant with a smaller look-ahead (a floppy's
+    # gulp shorter), the 8 KB grant only where that cannot fit; never the
     # external ring - NEONDRV is 44.1 kHz, 44,100 bytes a second of 8-bit mono
     r = Rig(leg, sb=True, stub=False,
             hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
@@ -1078,9 +1079,11 @@ def leg_xtpeak():
         check(leg, "live on XT STANDARD with the card",
               s["md"] == MD_LIVE and s["qual"] == Q_XTSTD,
               "md %d qual %s %s" % (s["md"], QNAME[s["qual"]], r.errtext()))
-        check(leg, "the card's ring is the 8 KB grant, not the external ring",
-              r.w("x3_rsz") == 8192 and r.b("x3_ext") == 0,
-              "%d bytes, ext %d" % (r.w("x3_rsz"), r.b("x3_ext")))
+        check(leg, "the card's ring is the 16 KB grant (never the external "
+              "ring), the look-ahead made 8 KB to fit it under the ceiling",
+              r.w("x3_rsz") == 16384 and r.b("x3_ext") == 0 and
+              r.w("x3_lasz") == 8192, "%d bytes, ext %d, look-ahead %d" % (
+                  r.w("x3_rsz"), r.b("x3_ext"), r.w("x3_lasz")))
         time.sleep(3)
         s = r.st()
         print("     live peak %d KB = %d bytes" % (s["peak"], s["peak"] * 1024))
@@ -1151,7 +1154,27 @@ def leg_xtclu():
                 r.key("q")
                 time.sleep(0.4)
             r.key("d")
-            clu_convert(r, leg)
+            if clu == 32768:                # GREYED IN THE DIALOG for XT
+                r.until(lambda: r.st()["md"] == MD_CHOOSE, "the drive "
+                        "dialog", 90, 0.2)  # Standard, which cannot hold a
+                vf = list(r.rd("x3c_vf", 2))    # 32 KB cluster's stage
+                check(leg, "XT STANDARD: D: greyed '32 KB clusters' in the "
+                      "drive dialog, C: not", bool(vf[1] & 4) and
+                      not vf[0] & 4, str(vf))
+                r.key("down")
+                time.sleep(1)
+                r.key("ret")
+                time.sleep(2)
+                check(leg, "...Decode and Play refuses it (Enter does "
+                      "nothing)", r.st()["md"] == MD_CHOOSE and
+                      not r.b("x3c_savepend"))
+                check(leg, "...the peak so far under 400,000 bytes",
+                      r.st()["peak"] * 1024 <= 400000,
+                      "%d KB" % r.st()["peak"])
+                r.key("esc")
+                r.until(lambda: r.st()["md"] == MD_IDLE, "the cancel", 20)
+            else:
+                clu_convert(r, leg)
             s = r.st()
             if clu < 32768:
                 check(leg, "XT STANDARD converted to D: and plays",
@@ -1171,12 +1194,6 @@ def leg_xtclu():
                 r.close()
                 xt_wav_check(leg, r, r.hds[1], wav, src, "std", clu)
             else:
-                check(leg, "XT STANDARD refused on 32 KB clusters, by name",
-                      s["state"] == ST_ERROR and
-                      r.errtext() == "Too little memory for that disk",
-                      "state %d '%s'" % (s["state"], r.errtext()))
-                check(leg, "...its peak still under 400,000 bytes",
-                      s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
                 r.key("q")                  # XT FAST
                 time.sleep(0.4)
                 check(leg, "the override is XT FAST",

@@ -864,7 +864,11 @@ x3c_vscan:
     shr bx, 1
     mov byte [x3c_vf+bx], 0
     cmp cx, 64                      ; 32 KB clusters at most: the stage is
-    jbe .big                        ; one, or two, of them (x3_plan)
+    ja .clu                         ; one, or two, of them (x3_plan) - and
+    jb .big                         ; XT STANDARD cannot hold one 32 KB
+    cmp byte [x3c_rung], X3Q_XTSTD  ; cluster inside SPEC.md 121.10's
+    jne .big                        ; 400,000 bytes (ENGINE.md section 6):
+.clu:                               ; greyed here, not refused after
     mov byte [x3c_vf+bx], XV_CLU
 .big:
     cmp dx, [x3c_need+2]            ; room for it?
@@ -3242,7 +3246,7 @@ x3c_s_hd:    db '  Hard disk   ', 0
 x3c_s_kbfree: db ' KB free', 0
 x3c_s_ro:    db '  read-only', 0
 x3c_s_gone:  db '  cannot be read', 0
-x3c_s_clu:   db '  clusters too large', 0
+x3c_s_clu:   db '  32 KB clusters', 0
 x3c_s_small: db '  too little room', 0
 x3c_s_pcm:   db '   PCM: ', 0
 x3c_s_hz:    db ' Hz ', 0

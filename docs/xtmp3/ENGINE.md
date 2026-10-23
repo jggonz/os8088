@@ -63,7 +63,7 @@ and `X3R_EOF` are `ap_la_seg`, `ap_la_rd`, `ap_la_wr` and `ap_src_done`).
 |---|---|---|
 | under `X3_RINGHI` = 32,000 | the SND grant (verb 7): 16 KB, else 8 | the Audio Player's shape, out of the driver's pool |
 | 32,000 or more | an EXTERNAL ring (`SND_OPENF_EXT`, §34.5.3): 32 KB of our own plus the control words, `OSAPI_MEM_CLAIM_DMA_HI`, written directly | the pool tops out at 16 KB, which is 93 ms of 44.1 kHz 16-bit stereo |
-| any, under the XT backend | the 8 KB grant (`X3_RINGSM`), never the external ring | the XT path's 400,000 bytes hold the card's ring too (section 6): measured live on an SB16, 387 KB = 396,288 bytes |
+| any, under the XT backend | x3_plan's grant: 16 KB with the look-ahead made smaller to fit, else 8 KB (`X3_RINGSM`); never the external ring | the XT path's 400,000 bytes hold the card's ring too (section 6). 16 KB is 1.5 s of 11 kHz where 8 is 0.74, and a smaller look-ahead is a shorter floppy gulp: 86Box's 386 underran 11 times live on the 8 KB grant from a floppy (FIELD.md round 2). Measured live on QEMU's SB16: 16 KB grant, 8 KB look-ahead, 387 KB = 396,288 |
 
 The external ring only exists above 22,222 Hz or in stereo or 16-bit. All of
 those need DSP 3.00 or later, which always has the auto-init that an external
@@ -183,7 +183,15 @@ and the reservoir genuinely empty. It times, with `pit_now`, the front end,
 GRANULE, and the feed's copy into the card's ring (verb 6). The disk's share
 is the priming reads' measured cost per byte times the bytes the probe
 consumed. A warm-up granule runs untimed first. Before it existed, the first
-probe of a session ran slow by the cost of every cold cache. `pit_now` can
+probe of a session ran slow by the cost of every cold cache. **A probe is
+ARMED and starts two timer passes later** (`x3l_arm`, counted down in
+`x3_e_tick`): a double-clicked document's play arms it inside the timer
+pass whose `x3f_update` then repaints the whole new track, and a probe
+running beside that repaint pays for it. Measured on MartyPC's XT: XT
+Standard's first probe read 0.06x; armed, 0.11x - the figure FIELD.md had
+when it was the session's second probe (every 86Box probe read lower on the
+build that made it the first). It costs each probe up to two passes
+(0.55 s), and the `ladder` legs' bounds hold (a hopeless machine 2.7 s). `pit_now` can
 step back one tick under QEMU, because the BIOS tick and the 8253 disagree
 across a pending IRQ0. `x3_pitd` treats a negative span as zero, and the
 stub's own clock adds the pending tick.
@@ -212,7 +220,8 @@ track's start (`x3_steptick`). The `rungfail` leg makes Original's live
 start fail (the stub's test hook) and plays Half with no ERROR on the way.
 On 86Box's 486 (FIELD.md section 3) XT Standard died "Out of memory" at
 44.1 kHz on the external ring; under the XT backend the card's ring is now
-the 8 KB grant, which the probe already held, so that start fits.
+the grant the plan budgeted, which the probe already held, so that start
+fits.
 
 **The session cache** (`x3l_cached`, `x3l_store`): up to 8 results, keyed
 by fingerprint, rung (backend, profile and divisor together) and device
@@ -304,7 +313,8 @@ decoder's parts are dropped.
 **The buffers are planned last, MEASURED** (`x3_plan`, after OPEN and the
 shrink, before the ring's claim). Under the XT backend everything left -
 the look-ahead, the PCM's 3 KB, a conversion's stage, and on a live play or
-a probe the card's 8 KB grant to come - must fit `X3_CEILKB` = 390 KB
+a probe the card's grant to come (16 KB first, the look-ahead halved as far
+as two source clusters allow; else 8 KB) - must fit `X3_CEILKB` = 390 KB
 (399,360 bytes) less what is held now (`x3_curkb`: the region, the eager
 carve and the heap's fall since launch, `x3_memck`'s own sample).
 STANDARD has no ceiling. The rules:
@@ -532,7 +542,7 @@ STANDARD 57,732 and XT 58,634 (lazy, one resident at a time); and the stub
 | claim | size | when |
 |---|---|---|
 | ring + PCM (+ stage) | 34.5 KB, or 18.5 KB under XT (`x3_plan` may halve the ring), plus the stage when converting | a track is open |
-| the card's ring | 16 KB grant (8 when the pool is short) or 33 KB external; the 8 KB grant under the XT backend | live, or a finished file on a card |
+| the card's ring | 16 KB grant (8 when the pool is short) or 33 KB external; x3_plan's 16 or 8 KB grant under the XT backend | live, or a finished file on a card |
 | backend work | the backend's `X3C_NSEG` x `X3C_PARA`: STANDARD 0, XT Standard 5 claims and 236 KB | live, a probe, a conversion |
 | the backend's part | STANDARD 57 KB; XT 58 KB, then 29 after OPEN | live, a probe, a conversion |
 | conversion stage | 2 x max(8 KB, cluster), or 2 x max(4 KB, cluster) under XT - or ONE of them where the XT ceiling has no room for two (`x3_plan`) - inside the ring's claim | converting |
@@ -551,7 +561,7 @@ meanwhile.
 | case | leg | peak | the plan |
 |---|---|---|---|
 | XT Standard conversion, 2 KB-cluster disk, no card | `xtpeak` | 385 KB = 394,240 | two 4 KB halves, 16 KB look-ahead |
-| XT Standard LIVE on an SB16 (NEONDRV, 44.1 kHz) | `xtpeak` | 387 KB = 396,288 | 16 KB look-ahead, the card's 8 KB grant |
+| XT Standard LIVE on an SB16 (NEONDRV, 44.1 kHz) | `xtpeak` | 387 KB = 396,288 | 8 KB look-ahead, the card's 16 KB grant |
 | XT Standard conversion, 8 KB-cluster destination | `xtclu/8k` | 385 KB | ONE 8 KB half, 16 KB look-ahead |
 | XT Standard conversion, 16 KB-cluster destination | `xtclu/16k` | 385 KB | ONE 16 KB half, 16 KB look-ahead |
 | XT Standard conversion, 32 KB-cluster destination | `xtclu/32k` | refused, 377 KB at the refusal | nothing fits: `Too little memory for that disk` |
@@ -700,8 +710,8 @@ is asserted): each leg boots its own private QEMU with its own disks under
 | `twovol` | two writable volumes, the second chosen, the WAV lands there |
 | `playwav` | a finished WAV on the SB16: no decoder resident, no granule, no underrun, the square's frequency in the capture |
 | `pause` | pause, resume, rewind |
-| `xtpeak` | the SHIPPED package with the real XT part, no card: XT Standard set by Q, Decode First, the conversion finishes, `X3S_PEAK` x 1024 <= 400,000 (385 KB), and the XT part is fetched ONCE (the probe's OPEN reused); then LIVE on an SB16: the 8 KB grant, never the external ring, 387 KB |
-| `xtclu` | three boots, the destination D: a FAT16 volume of 8, 16 and 32 KB clusters (sparse images, the least FAT16 that has them): XT Standard converts to 8 and 16 KB with ONE stage half, 385 KB, its WAV byte-exact to x3simxt; on 32 KB it is refused by name (`Too little memory for that disk`), and XT Fast converts there (two 32 KB halves, 387 KB), byte-exact |
+| `xtpeak` | the SHIPPED package with the real XT part, no card: XT Standard set by Q, Decode First, the conversion finishes, `X3S_PEAK` x 1024 <= 400,000 (385 KB), and the XT part is fetched ONCE (the probe's OPEN reused); then LIVE on an SB16: the 16 KB grant with an 8 KB look-ahead, never the external ring, 387 KB |
+| `xtclu` | three boots, the destination D: a FAT16 volume of 8, 16 and 32 KB clusters (sparse images, the least FAT16 that has them): XT Standard converts to 8 and 16 KB with ONE stage half, 385 KB, its WAV byte-exact to x3simxt; on 32 KB the drive dialog greys D: (`32 KB clusters`) for XT Standard and Decode and Play refuses it, and XT Fast converts there (two 32 KB halves, 387 KB), byte-exact |
 | `chgsrc` | a byte of the source's first 16 KB changed on the host DURING a (stub-slowed) conversion: `The MP3 changed meanwhile`, nothing plays, no .TMP or .WAV left |
 | `dfdel` | two boots: a conversion, then on the host a second index record naming OTHER.WAV (a WAV whose chunk is not `xtm3`) and an unrelated KEEP.TXT; File > Decoded Files, Delete, Proceed, twice: XTMP3's WAV is deleted, OTHER.WAV STAYS, KEEP.TXT untouched, both records gone |
 | `batch` | two tracks queued (File > Add to Queue), the first's drive dialog with `Queue too: Yes`: the second converts into the same folder with no dialog; both WAVs on C:, no .TMP |
@@ -734,10 +744,10 @@ is asserted): each leg boots its own private QEMU with its own disks under
 - **XT Standard on a 32 KB-cluster destination** is refused by the ceiling
   (section 6). A slot that wrote less than a cluster at a time would lift
   it; nothing in the SDK does.
-- **The drive dialog does not grey a volume the plan will refuse**: the
-  plan is measured after OPEN, so a 32 KB-cluster volume under XT Standard
-  is offered and the job then fails at once, before a byte is written,
-  with its reason.
+- **The drive dialog greys only what it can predict**: a 32 KB-cluster
+  volume under XT Standard (`x3c_vscan`, `32 KB clusters`; the `xtclu/32k`
+  leg). Any other memory shortfall the plan measures after OPEN fails the
+  job at once, before a byte is written, with the stated minimum.
 - **Every timing** is the FIELD track's (section 11), and the integration
   track's second round measured its own changes there (`xtmp3xt`, MartyPC's
   5160 with a VGA): XT Standard's conversion of AFTERHRS 0.055x -> 0.0946x

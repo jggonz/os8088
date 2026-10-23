@@ -26,7 +26,9 @@
 ;   CPU aa hh                   OSAPI_CPU_INFO's AL (CPU_*) and AH (CPU_F_*)
 ;   CARD cc CAPS hhhh           [x3_card], [x3_caps] (SND_CAP_*)
 ;   SRC rrrr CH cc              the source's rate and channels
-;   CALPIT hhhhhhhh             x3l_start to x3l_done, in 838 ns PIT counts
+;   CALPIT hhhhhhhh PASS pp     x3l_start to x3l_done, in 838 ns PIT counts,
+;                               and the ladder's re-runs after a rung that
+;                               could not start (0 = none)
 ;   MEAS m1 m2 .. m7            x3l_meas: audio s a wall s x 100, by X3Q_*
 ;                               from ORIGINAL; FFFF = not measured
 ;   CHOICE cc WANT ww           x3l_choice (FF none) and the user's override
@@ -58,6 +60,7 @@ x3r_s_src:  db 13, 10, 'SRC ', 0
 x3r_s_ch:   db ' CH ', 0
 x3r_s_cal:  db 13, 10, 'CALPIT ', 0
 x3r_s_meas: db 13, 10, 'MEAS', 0
+x3r_s_pass: db ' PASS ', 0
 x3r_s_cho:  db 13, 10, 'CHOICE ', 0
 x3r_s_want: db ' WANT ', 0
 x3r_s_md:   db 13, 10, 'MD ', 0
@@ -76,8 +79,17 @@ x3r_s_err:  db 13, 10, 'ERR ', 0
 x3r_s_off:  db 13, 10, 'OFFLINE ', 0
 x3r_s_end:  db 13, 10, 0
 
-; x3r_cal0 - the calibration starts. keeps everything
+; x3r_cal0 - the calibration starts. x3l_done runs the ladder AGAIN when the
+; rung it chose cannot start (its claims refused: x3l_done's .cant), and that
+; re-entry finds the mode still MD_CHECK - so it is a PASS of the same
+; calibration, counted, and the clock keeps running. keeps everything
 x3r_cal0:
+    cmp byte [x3_md], MD_CHECK
+    jne .fresh
+    inc byte [x3r_pass]
+    ret
+.fresh:
+    mov byte [x3r_pass], 0
     push ax
     push dx
     call pit_now
@@ -183,6 +195,10 @@ x3r_write:
     call x3c_hex4
     mov ax, [x3r_cal]
     call x3c_hex4
+    mov si, x3r_s_pass
+    call x3_put
+    mov al, [x3r_pass]
+    call x3c_hex2
     mov si, x3r_s_meas
     call x3_put
     mov bx, 2                       ; from X3Q_ORIG
@@ -311,6 +327,7 @@ x3r_write:
     X3B x3r_t0, 4                   ; the calibration's start (pit_now)
     X3B x3r_cal, 4                  ; ...and its length
     X3B x3r_once, 1                 ; the end's report is written once
+    X3B x3r_pass, 1                 ; the ladder's re-runs (x3r_cal0)
     X3B x3r_xdone, 1                ; ...and an error's
     X3B x3r_ev, 1                   ; the event being written
     X3B x3r_off, 1                  ; EVENT D: x3l_offpick's rung

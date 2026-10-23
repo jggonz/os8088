@@ -38,6 +38,11 @@ Legs:
           (= = = - - -) and stamped at READY; Q to XT FAST, D: the
           conversion, bit-exact
   speech  ...Q to XT SPEECH (divisor 2: 5,512 Hz), bit-exact
+  spk     THE SPEAKER: tests/apspk.py's card-less 5150 (Hercules, XT-IDE)
+          converts the 11 kHz track and plays the FINISHED WAV through the
+          Audio Player's bracket; port 42h's first 800 writes must be
+          tools/os88spkfx.py's counts for the WAV's own bytes, no GRANULE
+          is reached while the door is open, and the kernel is left clean
   c128    C128.MP3 (44.1 kHz L/R stereo, 128 kbps, 1.5 s): the ladder's
           verdict and probes on this machine - the selection matrix's XT
           row - and the conversion it chooses: the DSP 2.01 plays nothing
@@ -223,7 +228,7 @@ def kernel_labels():
 # THE MACHINE
 # -----------------------------------------------------------------------------
 class Rig(object):
-    def __init__(self, leg, fixture):
+    def __init__(self, leg, fixture, machine=MACHINE, sound=True):
         self.leg = leg
         self.fix = fixture
         self.tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"),
@@ -234,11 +239,12 @@ class Rig(object):
              "--out", self.vhd, "--kernel", os88build.at("build/kernel.sys"),
              "--vbr", os88build.at("build/boothd.bin"),
              "--mbr", os88build.at("build/mbr.bin"),
-             "--file", "SOUND.DRV=" + os88build.at("build/sound.drv"),
              "--file", "XTMP3.O88=" + os88build.at("build/xtmp3.o88"),
-             "--file", "%s=%s" % (fixture, os.path.join(FIX, fixture))],
+             "--file", "%s=%s" % (fixture, os.path.join(FIX, fixture))]
+            + (["--file", "SOUND.DRV=" + os88build.at("build/sound.drv")]
+               if sound else []),
             check=True, capture_output=True)
-        self.m = os88marty.launch(None, machine=MACHINE,
+        self.m = os88marty.launch(None, machine=machine,
                                   label="xtmp3xt-" + leg,
                                   extra=["--mount", "hd:0:" + self.vhd])
         self.ui = os88ui.UI(self.m, verbose=False)
@@ -847,6 +853,142 @@ def leg_override(leg, rung, out, knob_too=False):
         r.done()
 
 
+SPK_MACHINE = "os8088_5150_herc_hdd_gla"
+SPK_PULSES = 800        # tests/apspk.py's: the first 800 writes to port 42h
+SPK_LOSS = 0.04
+
+
+def leg_spk(out):
+    """THE SPEAKER (SPEC.md 121.6, 86.21): a card-less 640 KB 5150 with a
+    Hercules and an XT-IDE disk - tests/apspk.py's machine - converts the
+    11 kHz track (Auto, decode first, Enter, Enter) and the FINISHED file
+    plays through the Audio Player's bracket. Port 42h is traced from the
+    door's open: its first 800 writes must be tools/os88spkfx.py's plan,
+    resampler and shaper over the WAV's own bytes (apspk.expect, the rung
+    the bracket ran), after at most a few silent pulses; the lost share
+    under 4%; x3_gran1 never reached while it plays; the play to the end
+    and the kernel left clean (channel 2 free, no sample ISR)"""
+    import apspk
+    import os88spkfx as fx
+    leg = "spk"
+    res = out.setdefault(leg, {"fixture": "AFTERHRS.MP3",
+                               "machine": SPK_MACHINE})
+    r = Rig(leg, "AFTERHRS.MP3", machine=SPK_MACHINE, sound=False)
+    try:
+        if not opened(r, leg):
+            return
+        m = r.m
+        m.run()
+        r.until(lambda: r.st()["md"] == MD_CHOOSE, "the decode-first dialog",
+                180)
+        rung = r.b("x3c_rung")
+        res["offline_rung"] = QNAME[rung]
+        res["card"] = r.b("x3_card")
+        m.key("Enter")
+        r.ui.chooser()
+        k_open, k_off = m.sym("osapi_fsx_spk"), m.sym("spk_off")
+        ex_o = {"type": "exec", "addr": k_open}
+        ex_c = {"type": "exec", "addr": k_off}
+        ex_d = {"type": "exec", "addr": r.a("os88spk_grant.dry")}
+        ex_g = {"type": "exec", "addr": r.a("x3_gran1")}
+        io42 = {"type": "io", "addr": 0x42}
+        ev = {"open": [], "close": [], "w": [], "dry": [], "gran": 0,
+              "rungs": []}
+        a_rung = r.a("aps_rung")
+
+        def hit(mm, rec):
+            a = rec.get("addr")
+            if a == k_open:
+                if mm.regs()["ax"] & 0xFF == 0:
+                    ev["open"].append(rec["cycles"])
+                    ev["rungs"].append(mm.read(a_rung, 1)[0])
+                    if len(ev["open"]) == 1:
+                        mm.breakpoints([ex_o, ex_c, ex_d, ex_g, io42])
+            elif a == k_off:
+                if ev["open"]:
+                    ev["close"].append(rec["cycles"])
+            elif a == ex_d["addr"]:
+                ev["dry"].append(rec["cycles"])
+            elif a == ex_g["addr"]:
+                ev["gran"] += 1
+            elif ev["open"] and len(ev["w"]) < SPK_PULSES:
+                ev["w"].append((rec["cycles"], mm.regs()["ax"] & 0xFF))
+                if len(ev["w"]) >= SPK_PULSES:
+                    mm.breakpoints([ex_o, ex_c, ex_d, ex_g])
+        with os88marty.bp_trace(m, ex_o, ex_c, on_hit=hit, cap=100000) as tr:
+            m.key("Enter")
+            tr.until(lambda: bool(ev["close"]) and
+                     r.st()["state"] == ST_DONE and r.b("aps_on") == 0,
+                     "the conversion, then the speaker's play to its end",
+                     limit=2400.0)
+        s = r.st()
+        aps_rung = r.b("aps_rung")
+        ch2 = m.read(m.sym("snd_ch2mode"), 1)[0]
+        sseg = bytes(m.read(m.sym("spk_seg"), 2))
+        check(leg, "no card: the finished file played through the speaker "
+              "(MD_SPK) to the end", res["card"] == 0 and len(ev["open"]) >= 1
+              and s["state"] == ST_DONE, "card %d, %d opens, state %d"
+              % (res["card"], len(ev["open"]), s["state"]))
+        check(leg, "...with NO GRANULE: x3_gran1 never reached while the door "
+              "was open", ev["gran"] == 0, "%d stops" % ev["gran"])
+        check(leg, "the kernel left clean: channel 2 free, no sample ISR",
+              ch2 == 0 and sseg == b"\0\0", "mode %d, seg %s" % (ch2,
+                                                                 sseg.hex()))
+        r.close()
+        raw = vhd_file(r.vhd, "AFTERHRS.WAV")
+        if not check(leg, "AFTERHRS.WAV is on C:", raw is not None):
+            return
+        fmt, data, idn = wav_chunks(raw)
+        want, mrate = model_pcm(r.fix, rung, fmt[1])
+        check(leg, "the WAV is %s's model, BIT FOR BIT" % QNAME[rung],
+              data == want, "%d bytes against %d" % (len(data), len(want)))
+        # THE TRACE IS THE FIRST DOOR'S: its 800 writes are made at the rung
+        # the bracket opened on, before any fall (a later door reopens
+        # mid-stream at the sample it reached, on a slower rung)
+        rung0 = ev["rungs"][0] if ev["rungs"] else aps_rung
+        counts, rr = apspk.expect(data, fmt[2], rung=rung0)
+        n = fx.spk_n(rr)
+        got = bytes(c for _, c in ev["w"])
+        at, lead = -1, 0
+        for lead in range(12):
+            at = counts.find(got[lead:])
+            if at >= 0:
+                break
+        cy = ev["w"][-1][0] - ev["w"][0][0] if ev["w"] else 0
+        edges = cy / (4.0 * n)
+        lost = edges - (len(ev["w"]) - 1)
+        played = (ev["close"][-1] - ev["open"][0]) / HZ
+        want_s = len(counts) / (1193182.0 / n)
+        res["speaker"] = {"source_hz": fmt[2], "pulse_hz": rr,
+                          "bracket_rungs": ev["rungs"],
+                          "bracket_rung_at_end": aps_rung, "pulses_traced": len(got),
+                          "silent_lead": lead, "model_offset": at,
+                          "lost_pct": round(100.0 * lost / max(1, edges), 2),
+                          "played_s": round(played, 3),
+                          "model_s": round(want_s, 3),
+                          "door_opens": len(ev["open"]),
+                          "dry_grants": len(ev["dry"]),
+                          "granule_calls": ev["gran"]}
+        print("     the speaker: %d Hz -> %d Hz (the first door's rung %d; "
+              "rungs %s): %d pulses, "
+              "after %d silent %s; lost %.1f%%; played %.2f s of %.2f; the "
+              "ring dry %d times; %d opens" % (
+                  fmt[2], rr, rung0, ev["rungs"], len(got), lead,
+                  "THE MODEL'S from %d" % at if at >= 0 else "NOT the model's",
+                  100.0 * lost / max(1, edges), played, want_s,
+                  len(ev["dry"]), len(ev["open"])))
+        check(leg, "port 42h's first %d writes are tools/os88spkfx.py's "
+              "counts for the WAV's own bytes" % SPK_PULSES,
+              at >= 0 and len(got) == SPK_PULSES,
+              "first %s; the model starts %s" % (list(got[:10]),
+                                                  list(counts[:10])))
+        check(leg, "under %d%% of the pulses lost" % int(SPK_LOSS * 100),
+              edges and lost <= SPK_LOSS * edges,
+              "%.1f%%" % (100.0 * lost / max(1, edges)))
+    finally:
+        r.done()
+
+
 EXPECT = {}
 SAMPLES = {}
 # Auto's conversion rung on this machine: XT Standard for the 11 kHz track;
@@ -859,7 +1001,7 @@ OFFLINE = {"std": Q_XTSTD, "c128": 3}
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--leg", action="append",
-                    choices=("std", "fast", "speech", "c128"))
+                    choices=("std", "fast", "speech", "c128", "spk"))
     ap.add_argument("--json", help="write every figure here")
     ap.add_argument("--shots", help="save the VGA's screen at the dialog, "
                     "mid-conversion and mid-play into this folder")
@@ -876,7 +1018,7 @@ def main():
     CALONLY[0] = a.calonly
     maps()
     out = {"machine": MACHINE, "guest_hz": HZ}
-    for leg in a.leg or ["std", "fast", "speech", "c128"]:
+    for leg in a.leg or ["std", "fast", "speech", "c128", "spk"]:
         print("xtmp3xt: %s" % leg)
         t = time.time()
         if leg == "std":
@@ -887,6 +1029,8 @@ def main():
             leg_override("fast", Q_XTFAST, out, knob_too=True)
         elif leg == "speech":
             leg_override("speech", Q_XTSPEECH, out)
+        elif leg == "spk":
+            leg_spk(out)
         print("     (%.0f s of host time)" % (time.time() - t))
     if a.json:
         with open(a.json, "w") as f:

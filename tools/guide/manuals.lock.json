@@ -1308,8 +1308,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "96e89697",
-  "strings": "b6b18bcda45c67f2",
-  "why": "Integration track (96e89697): the stated minimum, no time in the drive dialog and About mm:ss left in the progress window, dials resting while converting, packed and large-cluster refusals, XT timing from xtmp3xt's 0.0946x; shots retaken"
+  "stamped": "9d3238b0",
+  "strings": "7089350595429c29",
+  "why": "the Decode First list greys a 32 KB-cluster disk under XT Standard (said so); the probe-start and card-ring changes and the test-only x3rep.inc are below the page's level of detail"
  }
 }
