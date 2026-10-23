@@ -5,13 +5,16 @@ docs/xtmp3/ENGINE.md).
     make && make xtmp3stub && python3 tests/xtmp3eng.py [--leg NAME ...]
 
 QEMU BY NAME: behaviour, not speed. The package is the X3STUB=1 build
-(build/xtmp3s.o88, named XTMP3.O88 on its disk): the stand-in front end over
-real MP3 frames and the STUB backend, which makes a 441 Hz square a granule
+(build/xtmp3s.o88, named XTMP3.O88 on its disk): the real front end
+(x3pars.inc and the FRONT part) over real MP3 frames, and the STUB backend
+(the parts table's row 4), which makes a 440.8 Hz square a granule
 and costs, per rung, the speed X3STUB.CFG gives it - spun on the 8253, so a
 rung configured at 0.80x calibrates under 1.25 on any host. Each leg boots
 its own private QEMU (pidfile, its own socket) with its own disks, reads
 XTMP3's state out of its bss by its own map (checked to be the bytes of
 build/xtmp3s.bin), and checks the disks on the host afterwards (mtools).
+
+xtpeak runs the SHIPPED package (build/xtmp3.o88, the real parts) instead.
 
 Legs:
   ladder    THE LADDER'S TRANSITIONS, on QEMU's SB16 (the deterministic
@@ -21,9 +24,10 @@ Legs:
             probed where Quarter fails; an XT goes to Decode first, its
             calibration bounded in guest time; a hopeless machine is told in
             under a second a rung
-  slowdown  live Original whose rung turns slow (0.9x) mid-track: two slow
-            windows step it down ONCE, to Half, at a granule boundary, the
-            position kept, no underrun, no step back up
+  slowdown  live Original whose rung turns slow mid-track: at 1.05x two slow
+            windows step it down ONCE, to Half, with no underrun; at 0.60x
+            one step with at most one underrun; the position kept, no step
+            back up
   conv      no card: the double-clicked MP3 is probed, the drive dialog lists
             C: and D:, the Save dialog stands on C:, the conversion writes a
             WAV whose every field is checked on the host (RIFF, fmt, the xtm3
@@ -48,6 +52,9 @@ Legs:
             granule count still, the backend part not resident)
   pause     live on the SB16: Pause closes the stream where it is and keeps
             the position, Resume goes on from it, Rewind seeks, no underrun
+  xtpeak    SPEC.md 121.10 on the shipped package and the REAL XT part, no
+            card: XT Standard by Q, Decode First, the conversion finishes and
+            X3S_PEAK, the measured working set, is at most 400,000 bytes
 """
 import argparse
 import atexit
@@ -106,41 +113,48 @@ def cfg(speeds, slr=0, slaft=0, slspd=0):
 # -----------------------------------------------------------------------------
 # the package's own symbols, by its map - and only for the bytes that run
 # -----------------------------------------------------------------------------
-_SYM = {}
+_SYM = {True: {}, False: {}}
 
 
-def pkgsym(name):
-    if not _SYM:
+def pkgsym(name, stub=True):
+    """STUB: the X3STUB build's map (build/xtmp3s.bin), else the shipped
+    build's (build/xtmp3.bin) - the one with the real decoder parts"""
+    syms = _SYM[stub]
+    if not syms:
         d = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
         mp, b = os.path.join(d, "x3.map"), os.path.join(d, "x3.bin")
-        subprocess.run(["nasm", "-f", "bin", "-w+error", "-DX3STUB",
-                        "-I", "apps/", "-I", "apps/xtmp3/", "-I", "apps/audio/",
+        subprocess.run(["nasm", "-f", "bin", "-w+error"]
+                       + (["-DX3STUB"] if stub else []) +
+                       ["-I", "apps/", "-I", "apps/xtmp3/", "-I", "apps/audio/",
                         "-I", "drivers/sound/", "-I", "build/",
                         "--before", "[map symbols %s]" % mp, "-o", b,
                         "apps/xtmp3/xtmp3.asm"], check=True)
-        same = open(b, "rb").read() == open(os88build.at("build/xtmp3s.bin"), "rb").read()
+        built = "build/xtmp3s.bin" if stub else "build/xtmp3.bin"
+        same = open(b, "rb").read() == open(os88build.at(built), "rb").read()
         for line in open(mp):
             m = re.match(r"\s*([0-9A-F]+)\s+([0-9A-F]+)\s+(\w+)$", line)
             if m:
-                _SYM[m.group(3)] = int(m.group(2), 16)
+                syms[m.group(3)] = int(m.group(2), 16)
         shutil.rmtree(d, ignore_errors=True)
         if not same:
-            sys.exit("xtmp3eng: build/xtmp3s.bin is not this source's - "
-                     "make xtmp3stub")
-    return _SYM[name]
+            sys.exit("xtmp3eng: %s is not this source's - make && make "
+                     "xtmp3stub" % built)
+    return syms[name]
 
 
 # -----------------------------------------------------------------------------
 # THE RIG: a private QEMU, its disks in a scratch folder under build/
 # -----------------------------------------------------------------------------
 class Rig(object):
-    def __init__(self, leg, sb=False, hd=(), floppy=(), xcfg=None, keep=None):
+    def __init__(self, leg, sb=False, hd=(), floppy=(), xcfg=None, keep=None,
+                 stub=True):
         """hd: up to two (geometry, files, folders, junk_bytes) - the first is
         C:, the second D:; floppy: B:'s files (with SYSTEM/APPDATA); xcfg:
         X3STUB.CFG's bytes, written beside XTMP3.O88 (B: when the package is
         on the floppy, else C:); keep: a previous Rig's folder to boot again
         with its disks as they are"""
         self.leg = leg
+        self.stub = stub                # False: the SHIPPED package
         self.tmp = keep or tempfile.mkdtemp(dir=os.path.join(ROOT, "build"),
                                             prefix="x3e")
         self.sock = os.path.join(self.tmp, "q.sock")
@@ -165,7 +179,8 @@ class Rig(object):
                             os88build.at("build/mixercfg/SYSTEM.CFG")], check=True,
                            capture_output=True)
         pkg = os.path.join(t, "XTMP3.O88")
-        shutil.copy(os88build.at("build/xtmp3s.o88"), pkg)
+        shutil.copy(os88build.at("build/xtmp3s.o88" if self.stub
+                                 else "build/xtmp3.o88"), pkg)
         cfgf = os.path.join(t, "X3STUB.CFG")
         open(cfgf, "wb").write(xcfg or cfg([]))
         bfiles = list(floppy)
@@ -268,7 +283,7 @@ class Rig(object):
 
     def rd(self, name, n=1):
         seg = self.seg or self.x3seg()
-        return self.read((seg << 4) + pkgsym(name), n)
+        return self.read((seg << 4) + pkgsym(name, self.stub), n)
 
     def w(self, name):
         return struct.unpack("<H", self.rd(name, 2))[0]
@@ -284,6 +299,7 @@ class Rig(object):
                     rate=struct.unpack_from("<H", b, 8)[0], ch=b[10],
                     bits=b[11], pct=b[15],
                     under=struct.unpack_from("<H", b, 18)[0],
+                    peak=struct.unpack_from("<H", b, 20)[0],
                     err=struct.unpack_from("<H", b, 22)[0],
                     md=self.b("x3_md"))
 
@@ -870,6 +886,43 @@ def leg_playwav():
         r.done()
 
 
+def leg_xtpeak():
+    """SPEC.md 121.10 on the SHIPPED package: an XT Standard conversion with
+    the REAL XT part (no stub), the user's override and Decode First, on a
+    machine with no card. The engine's claim order (the part fetched, its
+    work claimed and OPEN run, the part shrunk to its resident half, and only
+    then the ring and the stage) must keep the working set X3S_PEAK measures
+    - the region, the eager parts and every claim since launch - at or under
+    400,000 bytes"""
+    leg = "xtpeak"
+    r = Rig(leg, stub=False,
+            hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
+    try:
+        if not check(leg, "XTMP3 opens", r.open_file("C", NEON,
+                                                      hd_listing([NEON]))):
+            return
+        r.until(lambda: r.st()["md"] == MD_CHOOSE, "the decode-first dialog",
+                90, 0.2)
+        r.key("esc")
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the dialog's cancel", 20)
+        for _ in range(Q_XTSTD):        # Q: AUTO, ORIGINAL ... XT STANDARD
+            r.key("q")
+            time.sleep(0.4)
+        check(leg, "the override is XT STANDARD",
+              r.rd("x3_st", 3)[2] == Q_XTSTD, QNAME[r.rd("x3_st", 3)[2]])
+        r.key("d")
+        conv_flow(r, leg)
+        s = r.st()
+        check(leg, "the conversion finished and plays",
+              s["state"] == ST_FILE, "state %d md %d, %s" % (
+                  s["state"], s["md"], r.errtext()))
+        print("     peak %d KB = %d bytes" % (s["peak"], s["peak"] * 1024))
+        check(leg, "the working set stayed at or under 400,000 bytes",
+              0 < s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
+    finally:
+        r.done()
+
+
 def captured_tone(path):
     """QEMU's wav audiodev, which may not have finished its header: 44,100 Hz
     16-bit stereo after the 44 bytes. The dominant frequency of a second"""
@@ -921,14 +974,15 @@ def leg_pause():
 LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "cancel": leg_cancel, "full": leg_full, "stale": leg_stale,
         "novol": leg_novol, "twovol": leg_twovol, "playwav": leg_playwav,
-        "pause": leg_pause}
+        "pause": leg_pause, "xtpeak": leg_xtpeak}
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--leg", action="append", choices=sorted(LEGS))
     a = ap.parse_args()
-    for f in ("build/xtmp3s.o88", "build/xtmp3s.bin", "build/os8088.img",
+    for f in ("build/xtmp3s.o88", "build/xtmp3s.bin", "build/xtmp3.o88",
+              "build/xtmp3.bin", "build/os8088.img",
               "build/mixercfg/SYSTEM.CFG", "build/mbr.bin", "build/boothd.bin",
               "build/kernel.sys"):
         if not os.path.exists(os88build.at(f)):

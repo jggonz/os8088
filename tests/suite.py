@@ -479,9 +479,13 @@ FAST = [
         "with no granule decoded), Esc cancelling and deleting only its "
         "temp, a disk filled mid-write, stale and incomplete caches "
         "refused, no fixed disk, two writable volumes, a finished WAV "
-        "through the SB16 with no decoder resident, and pause/resume",
+        "through the SB16 with no decoder resident, pause/resume - and, on "
+        "the SHIPPED package with the real XT part, an XT Standard "
+        "conversion whose measured working set (X3S_PEAK) stays at or under "
+        "SPEC.md 121.10's 400,000 bytes",
         needs=("qemu", "nasm", "mtools"), serial=True, timeout=1500,
-        wants=("build/xtmp3s.o88", "build/xtmp3s.bin", "build/os8088.img",
+        wants=("build/xtmp3s.o88", "build/xtmp3s.bin", "build/xtmp3.o88",
+               "build/xtmp3.bin", "build/os8088.img",
                "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys")),
     Row("romtool", "fast", py("tools/os88rom.py", "--selfcheck"), 0.3,

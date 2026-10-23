@@ -327,3 +327,28 @@ stub's costs are set by hand, and MartyPC's turn is S10. The speaker path
 was checked by its state only, because QEMU runs an 11 kHz IRQ0 too slowly
 to listen to. A volume label cannot be shown, because no slot gives one to
 a package.
+
+### Later the same day: onto the real front end, and under 400,000 bytes
+
+The face's art moved into a part of its own, which freed the primary. The
+engine then merged `feature/xtmp3`, dropped its stand-in front end, and ran
+on STANDARD's `x3pars.inc`. Every leg of the row passed on the first run
+over the real front end. The stub backend became the parts table's row 4.
+
+**Observed.** The XT ceiling was where the work went. The first XT Standard
+conversion, run on the shipped package with the real XT part, measured
+**421 KB** and then stopped with "Out of memory". There were two causes:
+
+- The ring was claimed before OPEN, and the probe's unshrunk part stayed
+  resident into the job.
+- The stage was a separate claim. With the XT backend's five work segments
+  it was the ninth claim of an owner the heap allows eight.
+
+The order is now OPEN, shrink, then the ring. The ring is 16 KB under the XT
+backend, and the stage rides inside the ring's claim with 4 KB halves. The
+fingerprint, which had read its 16 KB in one go, now reads in pieces. On the
+first run after that, the conversion finished at **386 KB = 395,264 bytes**.
+`X3S_PEAK` is now the heap's own measurement, not a sum of estimates.
+
+**Tested where.** QEMU, every leg; the ceiling on the real XT part, on QEMU.
+No XT has run it.

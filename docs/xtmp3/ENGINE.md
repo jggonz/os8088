@@ -8,9 +8,11 @@ is `apps/xtmp3/x3eng.inc` (the live path, the ladder, finished-file playback)
 and `apps/xtmp3/x3conv.inc` (Decode first and the cache). It sits behind the
 face's `x3_e_*` names and writes `x3_st`, as docs/xtmp3/FACE.md describes.
 
-Everything below that runs was tested over the **stub backend**
-(`make xtmp3stub`, never shipped), described in its own section. Nothing here
-has decoded a real MP3 granule yet. See "What waits for the real backends".
+The engine runs over the STANDARD track's real front end (`x3pars.inc` in
+the primary, the FRONT part). Its behaviour was tested over the **stub
+backend** (`make xtmp3stub`, never shipped, section 7). The one exception is
+the memory ceiling, which was tested on the real XT part. See "What waits
+for the real backends".
 
 ## 1. The live path (§121.5, §121.6)
 
@@ -37,11 +39,20 @@ The UI task's `W_ONWAKE` (`x3_onwake`) answers each bit and clears it:
 | `X3R_UIOP` | (set by a dialog) | the dialog's file action (section 5) |
 
 **The look-ahead ring** is the Audio Player's `aplook.inc`, assembled from
-the Audio Player's own source (section 8). It is one 35 KB claim: 32 KB of
-ring (`AP_LA_SZ`, a power of two) and one granule's PCM (`X3_PCMSZ` = 2,304
-bytes: 576 frames x 2 channels x 16 bits) after it. The PCM sits there
-because the primary segment has no room for it. The claim is taken when a
-track opens and given back at stop. The front end's `X3R` ring record is
+the Audio Player's own source (section 8). Its size is the backend's
+(`x3_lasize`). It is 32 KB, except 16 KB under the XT backend: that
+machine's whole working set is 400,000 bytes (section 6), and 16 KB of
+128 kbps is a second ahead of a decoder that slow. `AP_LA_SZ`, `AP_LA_MASK`
+and `AP_LA_LOW` are words, which aplook.inc reads unchanged.
+
+The ring shares **one claim** with two other buffers: one granule's PCM
+(`X3_PCMSZ` = 2,304 bytes, room `X3_PCMRES` = 2,560 so what follows is
+512-aligned) and, while converting, the conversion's stage (`x3_laxkb`).
+One claim rather than three matters because the heap allows 8 claims per
+owner (SPEC.md 50). The XT backend's work alone is 5 claims, and with the
+eager carve and the part that leaves exactly one. The claim is taken when a
+track opens, given back and taken again around every backend OPEN (section
+3), and given back at stop. The front end's `X3R` ring record is
 aliased onto the Audio Player's variables (`X3R_SEG`, `X3R_RD`, `X3R_WR`
 and `X3R_EOF` are `ap_la_seg`, `ap_la_rd`, `ap_la_wr` and `ap_src_done`).
 
@@ -164,7 +175,30 @@ decoded into the speaker), and the same probes become the conversion's
 estimate. The offline choice (`x3l_offpick`) is the highest-quality rung
 measured at `1 / X3_OFFMAX` or better.
 
-## 3. The ladder's rows
+## 3. The claim order, and the ladder's rows
+
+**SPEC.md 121.10's ceiling decides the order** (the lead's decision, on the
+XT track's numbers in docs/xtmp3/XT.md section 6). `x3_rungset`:
+
+1. gives the look-ahead claim back (`x3_la_free`);
+2. fetches the backend's part, claims its work segments, and runs OPEN;
+3. shrinks the XT part to CAPS' `X3C_PARTKB` (29 KB) with
+   `OSAPI_MEM_REGROW` (`x3_shrink`), which always succeeds in place;
+4. only then claims the ring, at the backend's size.
+
+Every caller re-aims and refills the ring afterwards (`x3_resync`,
+`x3_live_at`, a probe's prime). A conversion claims its stage inside that
+claim. A shrunk part refuses a second OPEN, so `x3_be_get` drops it and
+fetches it whole again before any OPEN of the same part.
+
+Calibration probes shrink too. A probe holding the part unshrunk, its work
+and the ring at once measured 404 KB, which is over the ceiling. Each
+further OPEN of the XT part therefore costs a re-fetch: a disk read of its
+24 KB packed on an XT, which is the price of staying inside the ceiling.
+No sound grant is ever held with the XT part during a conversion, and a
+finished WAV plays only after the decoder's parts are dropped.
+
+**The ladder's rows.**
 
 `x3_rungs` maps each `X3Q_*` to (backend, profile, divisor): Original
 (STD, 0, 1), Half (STD, 0, 2), Quarter (STD, 0, 4), XT Standard (XT, 0, 1),
@@ -206,8 +240,10 @@ The dialog's own window slot is watched (`OSAPI_WM_OWNSEG`) to see a cancel.
 
 **The conversion** (`x3c_start`):
 
-1. The stage: two halves, each `max(8 KB, the volume's cluster)`, in one
-   claim, 512-aligned by construction.
+1. The stage: two halves, each `max(8 KB, the volume's cluster)`, or
+   `max(4 KB, cluster)` under the XT backend. They ride in the ring's
+   claim, after the ring and the PCM, 512-aligned. The decoder is opened
+   first (section 3), then the stage is set and the file created.
 2. `X3nnnnnn.TMP`, the first free name in the folder, created by writing its
    header cluster with `OSAPI_FILE_WRITE`. A `JUNK` chunk pads the header to
    exactly one cluster, so every later write is whole clusters.
@@ -324,44 +360,57 @@ at the new sample.
 
 ## 6. Memory
 
-The primary segment (`APP_MAX_SIZE` 65,024, image + bss), measured from the
-assembler's map at this branch's head:
+**The primary segment** (`APP_MAX_SIZE` 65,024, image + bss), measured from
+the assembler's map at this branch's head, merged with `feature/xtmp3`:
 
 | build | image | image + bss | left |
 |---|---|---|---|
-| shipped | 49,837 | 63,756 | 1,268 |
-| `PKG_MEGA` | 50,734 | 64,653 | 371 |
-| `X3STUB` (test only) | 50,878 | 64,970 | 54 |
+| shipped | 41,275 | 55,353 | 9,671 |
+| `PKG_MEGA` | 42,172 | 56,250 | 8,774 |
+| `X3STUB` (test only) | 41,535 | 55,684 | 9,340 |
 
-The STANDARD track's real front end (`x3pars.inc`, about 5.5 KB of code plus
-its tables in the primary) replaces the stand-in (`x3stubp.inc`, about
-1.9 KB). **The merge does not fit as things stand**, by about 2.3 KB before
-`x3pars.inc`'s bss is counted. The candidates for making room are listed
-under "Open items".
+**The engine's share.** Against `feature/xtmp3`'s primary with the demo
+engine (image 19,670, image + bss 29,883), the engine adds **21,605 bytes
+of image and 3,865 of bss**. The `X3STUB` build adds 260 bytes of image and
+71 of bss more: the test hook and the debug ring.
 
-Heap claims while playing (each one given back at stop):
+**Parts** (as built): FRONT 24,509 and ART 12,985 (eager, one carve);
+STANDARD 57,732 and XT 58,634 (lazy, one resident at a time); and the stub
+688 (row 4, `X3STUB` builds only).
+
+**Heap claims while playing**, each one given back at stop:
 
 | claim | size | when |
 |---|---|---|
-| look-ahead + PCM | 35 KB | a track is open |
-| the card's ring | 16 KB grant (8 when the pool is short) or 33 KB external | live or a finished file on a card |
-| backend work | the backend's `X3C_NSEG` x `X3C_PARA` | live, a probe, a conversion |
-| the backend's part | its own size | live, a probe, a conversion |
-| conversion stage | 2 x max(8 KB, cluster) | converting |
-| probe buffer | 8 KB, transient | the queue's title and duration probe (the stand-in's; the real front end brings its own) |
+| ring + PCM (+ stage) | 34.5 KB, or 18.5 KB under XT, plus the stage when converting | a track is open |
+| the card's ring | 16 KB grant (8 when the pool is short) or 33 KB external | live, or a finished file on a card |
+| backend work | the backend's `X3C_NSEG` x `X3C_PARA`: STANDARD 0, XT Standard 5 claims and 236 KB | live, a probe, a conversion |
+| the backend's part | STANDARD 57 KB; XT 58 KB, then 29 after OPEN | live, a probe, a conversion |
+| conversion stage | 2 x max(8 KB, cluster), or 2 x max(4 KB, cluster) under XT, inside the ring's claim | converting |
 
-`X3S_PEAK` (Status's `Peak NNN KB`) adds the look-ahead, the backend's
-`TKB` and `PARTKB`, and 16 KB for the card's ring. It does not yet count the
-external ring's extra 17 KB or the conversion stage. See "Open items".
+**`X3S_PEAK` is measured** (`x3_memck`). It adds the region (image + bss,
+`X3_REGIONKB` = 54), the eager carve (`op_kb` = 37), and the fall in the
+heap's free total (`OSAPI_MEM_AVAIL`) since launch, sampled after every
+claim and kept at its highest. A conversion zeroes it at its start, so it is
+that job's peak. Because it is the heap's own total, it also counts what
+SOUND.DRV claims per stream on our behalf, and anything another task claims
+meanwhile.
+
+**XT Standard's conversion, measured** on QEMU with the real XT part (the
+`xtpeak` leg): **386 KB = 395,264 bytes**, against 400,000. That is the
+region 54 + the carve 37 + the part 29 + its work 236 + ring and PCM 18.5 +
+the stage 8 (on a 2 KB-cluster disk). The first attempt, with the ring held
+through OPEN, a 32 KB ring and a separate stage, ran out of memory at
+421 KB. Its stage was the ninth claim of eight.
 
 ## 7. The stub backend and the test hook
 
 `apps/xtmp3/x3stub.asm` is an `OP_SEG` part that speaks x3gran.inc's ABI.
-`apps/xtmp3/x3stubp.inc` is a front-end stand-in with real frame sync, ID3v2
-skip, Xing/Info with the LAME delay and padding at x3sim's offsets, ID3v1,
-duration, seekpos, and probe. Both are assembled only under `X3STUB=1`
-(`make xtmp3stub` builds `build/xtmp3s.o88`). The stand-in front end is in
-the shipped build too until the real one fits (section 6).
+In an `X3STUB=1` build (`make xtmp3stub` builds `build/xtmp3s.o88`) it is
+the parts table's row 4, after XT, and it answers for both backends
+(`X3_PART_STD` = `X3_PART_XT` = `X3PART_STUB`). The front end is the real
+one. The test hook is `apps/xtmp3/x3hook.inc`. The front-end stand-in that
+carried the engine before the merge (`x3stubp.inc`) is gone.
 
 GRANULE makes 576/divisor frames of a 440.8 Hz square (the step is
 655/65536 of the output rate), +-12,288 or 80h +- 30h, in the requested
@@ -424,27 +473,31 @@ asserted): each leg boots its own private QEMU with its own disks under
 | `twovol` | two writable volumes, the second chosen, the WAV lands there |
 | `playwav` | a finished WAV on the SB16: no decoder resident, no granule, no underrun, the square's frequency in the capture |
 | `pause` | pause, resume, rewind |
+| `xtpeak` | the SHIPPED package with the real XT part, no card: XT Standard set by Q, Decode First, the conversion finishes, and `X3S_PEAK` x 1024 <= 400,000 (386 KB) |
 
 ## 11. What waits for the real backends
 
-- Integrating `x3pars.inc` and the FRONT/STD parts table (section 6), and
-  the XT row. `x3_be_get` banks the part's **data** segment as the code
-  selector, which is right on every real-mode kernel. On kern_mega it must
-  be `op_cseg`, as std's `x3p_init` already does.
 - Every timing figure. The stub's costs are set by hand. The real ones come
   from MartyPC (S10).
 - Ring sizes against a real decoder's jitter. A real granule's cost varies
-  by frame, and the stub's does not.
+  by frame, and the stub's does not. The XT backend's 16 KB look-ahead in
+  particular needs a disk-read-latency check on a real XT.
+- The real STANDARD backend has been fetched and probed under the ladder on
+  QEMU, which picks it on any machine QEMU emulates. Its live sound has not
+  been listened to through this engine.
 
 ## 12. Open items
 
-- **The primary's room** for the real front end: about 2.3 KB short.
-  Candidates: x3conv.inc's dialogs, index and Decoded Files (about 7 KB, all
-  UI-task and menu-frequency) as an `OP_SEG` overlay part, or the front
-  end's open/probe path moved into FRONT.
 - **A volume-label slot.**
-- **`X3S_PEAK`** does not count the external ring's extra 17 KB or the
-  conversion stage.
+- **Live XT with a sound card.** XT Standard live, with SOUND.DRV's stream
+  claims beside the 16 KB ring and the shrunk part, has not been measured
+  against 400,000 bytes. The XT track's sum puts it over with a 16 KB grant.
+- **The ceiling depends on the cluster.** On a disk with clusters larger
+  than 4 KB, the XT stage grows by twice the difference (an 8 KB cluster
+  makes it 16 KB, which is 394 KB = 403,456 bytes: over).
+- **Re-fetching after a probe.** It costs an XT a disk read for each OPEN of
+  the XT part after the first. When the conversion's rung is the probe's,
+  a RESET could replace the second OPEN.
 - **Untested**: a source changed during a conversion, the Decoded Files
   window's delete, batch approval over two tracks, a read-only fixed
   volume, and the speaker path's sound (QEMU checked only its state, since

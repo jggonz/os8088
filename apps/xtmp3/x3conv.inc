@@ -99,6 +99,7 @@ XD_MAXV     equ 26
 
 XC_DRAWT    equ 9                   ; ticks between progress redraws (~2 a s)
 XC_STAGEKB  equ 8                   ; a stage half, at least: 8 KB
+XC_STAGEXT  equ 4                   ; ...and under the XT backend, 4 KB
 
 ; =============================================================================
 ; THE FINGERPRINT: size, CRC-32 of the first and of the last 16 KB
@@ -162,17 +163,18 @@ x3c_fpcalc:
     stc
     ret
 
-; x3c_crcat - DX:AX = an offset: CRC-32 of min(16 KB, what is left) from it.
-; out: DX:AX = the CRC; CF = 1 unreadable
+; x3c_crcat - DX:AX = an offset: CRC-32 of min(16 KB, what is left) from it,
+; read in as many pieces as the ring holds (16 KB under the XT backend, less
+; the offset's place in its cluster). out: DX:AX = the CRC; CF = 1 unreadable
 x3c_crcat:
     push bx
     push cx
     push si
     push di
     push es
-    push ax
-    push dx
-    mov si, [x3_flen]               ; CX = min(16384, size - offset)
+    mov [x3c_cro], ax
+    mov [x3c_cro+2], dx
+    mov si, [x3_flen]               ; the bytes: min(16384, size - offset)
     mov di, [x3_flen+2]
     sub si, ax
     sbb di, dx
@@ -183,19 +185,34 @@ x3c_crcat:
     jae .c
     mov cx, si
 .c:
-    pop dx
-    pop ax
-    push cx
-    call x3_readat                  ; ES:BX, CX = bytes from the offset
-    pop si
-    jc .no
-    cmp cx, si
-    jb .short
-    mov cx, si
-.short:
+    mov [x3c_crn], cx
     mov ax, 0xFFFF
-    mov dx, ax
+    mov [x3c_crs], ax
+    mov [x3c_crs+2], ax
+.piece:
+    cmp word [x3c_crn], 0
+    je .done
+    mov ax, [x3c_cro]
+    mov dx, [x3c_cro+2]
+    call x3_readat                  ; ES:BX, CX = bytes from the offset
+    jc .out
+    jcxz .no                        ; (nothing there: the file is short)
+    cmp cx, [x3c_crn]
+    jbe .n
+    mov cx, [x3c_crn]
+.n:
+    sub [x3c_crn], cx
+    add [x3c_cro], cx
+    adc word [x3c_cro+2], 0
+    mov ax, [x3c_crs]
+    mov dx, [x3c_crs+2]
     call x3c_crc
+    mov [x3c_crs], ax
+    mov [x3c_crs+2], dx
+    jmp short .piece
+.done:
+    mov ax, [x3c_crs]
+    mov dx, [x3c_crs+2]
     not ax
     not dx
     clc
@@ -1764,16 +1781,25 @@ x3c_unique:
 ; progress window up. On any refusal x3_st says why and nothing is left
 ; -----------------------------------------------------------------------------
 x3c_start:
+    mov word [x3_st+X3S_PEAK], 0    ; the peak is this job's (x3_memck)
+    call x3_memck
     call x3_cluget                  ; the DESTINATION's cluster
     jc .clu
     mov ax, [ap_clu]
     mov [x3c_clu], ax
-    mov bx, XC_STAGEKB * 1024       ; a half: 8 KB, or a cluster if larger
+    mov bx, XC_STAGEKB * 1024       ; a half: 8 KB, or a cluster if larger -
+    cmp byte [x3c_rung], X3Q_XTSTD  ; 4 KB under the XT backend, whose output
+    jb .hb                          ; is a few KB a second and whose machine
+    mov bx, XC_STAGEXT * 1024       ; has 400,000 bytes (SPEC.md 121.10)
+.hb:
     cmp ax, bx
     jbe .h
     mov bx, ax
 .h:
     mov [x3c_half], bx
+    mov cl, 9                       ; THE STAGE rides in the ring's claim
+    shr bx, cl                      ; (x3_la_claim): KB for both halves,
+    mov [x3_laxkb], bx              ; 2H / 1024 = H >> 9
     mov si, [x3_trkent]             ; THE DECODER FIRST (SPEC.md 121.10's
     mov dx, [si+QE_DIR]             ; claim order: the part, its work and
     mov bl, [si+QE_VOL]             ; OPEN, then the ring, then the stage),
@@ -1795,13 +1821,12 @@ x3c_start:
     mov dx, [x3c_ddir]
     call OSAPI_FILE_GOTO_QM
     jc .wrerr
-    mov ax, [x3c_half]              ; THE STAGE: two halves, claimed
-    mov cl, 9
-    shr ax, cl                      ; KB for both: 2H / 1024 = H >> 9
-    call OSAPI_MEM_CLAIM
-    jc .nomem
-    mov [x3c_sseg], dx
-    call x3_memck
+    mov ax, [x3_lasz]               ; the stage: past the ring and the PCM
+    add ax, X3_PCMRES
+    mov cl, 4
+    shr ax, cl
+    add ax, [ap_la_seg]
+    mov [x3c_sseg], ax
     call x3c_tmpname                ; X3nnnnnn.TMP, free here
     jc .wrerr
     call x3c_hdr                    ; the header cluster at the stage's 0
@@ -2297,11 +2322,8 @@ x3c_teardown:
     mov byte [x3c_tmade], 0
     mov word [x3c_tok], 0
 .stage:
-    mov dx, [x3c_sseg]
-    or dx, dx
-    jz .win
-    call OSAPI_MEM_FREE
-    mov word [x3c_sseg], 0
+    mov word [x3c_sseg], 0          ; (the ring's claim: x3_la_free's)
+    mov word [x3_laxkb], 0
 .win:
     cmp byte [x3c_dmode], XD_PROG
     jne .out
@@ -3170,6 +3192,9 @@ x3c_s_ren:   db 'Cannot name the file', 0
     X3B x3c_t0, 2                   ; ticks at the start, at the last draw
     X3B x3c_drawt, 2
     X3B x3c_fp2, X3_FPSZ            ; the source's print, taken again
+    X3B x3c_cro, 4                  ; x3c_crcat: the offset, the CRC so far,
+    X3B x3c_crs, 4                  ; the bytes still to read
+    X3B x3c_crn, 2
     X3B x3c_savepend, 1             ; the Save dialog is up: its slot...
     X3B x3c_dslot, 2
     X3B x3c_wmap0, 2

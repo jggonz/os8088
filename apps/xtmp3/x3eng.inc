@@ -85,7 +85,7 @@ X3_MAXFEED  equ 8                   ; halves a worker pass publishes, at most:
                                     ; the whole ring, when it can
 X3_PCMSZ    equ 576 * 2 * 2         ; a granule's PCM, at most: 576 frames,
                                     ; two channels, sixteen bits - kept just
-X3_PCMOFF   equ AP_LA_SZ            ; past the RING, in the same claim (the
+%define X3_PCMOFF word [x3_lasz]   ; past the RING, in the same claim (the
                                     ; primary's segment has no room for it)
 X3_RAMP     equ 32                  ; frames an underrun's ramp to silence takes
 X3_DEVMIN   equ 4000                ; the card's lowest rate (a DSP's floor)
@@ -143,9 +143,18 @@ RG_SIZE     equ 4
 ; and ap_src_done - the same words, so the Audio Player's refill is the MP3
 ; parser's producer with nothing in between, and the finished WAV's after it.
 ; =============================================================================
-AP_LA_SZ    equ 0x8000              ; 32 KB, a power of two and a whole number
-AP_LA_MASK  equ 0x7FFF              ; of clusters to 16 KB (SPEC.md 86.5)
-AP_LA_LOW   equ 0x4000              ; a refill when fewer than 16 KB remain
+; THE RING'S SIZE IS THE BACKEND'S (x3_lasize): 32 KB, a power of two and a
+; whole number of clusters to 16 KB (SPEC.md 86.5) - and 16 KB under the XT
+; backend, whose machine has 400,000 bytes for all of it (SPEC.md 121.10) and
+; whose decode is slow enough that 16 KB of 128 kbps is a second ahead. A
+; refill is asked for under half of it. aplook.inc reads all three as words
+X3_LABIG    equ 0x8000
+X3_LAXT     equ 0x4000
+%define AP_LA_SZ   word [x3_lasz]
+%define AP_LA_MASK word [x3_lamask]
+%define AP_LA_LOW  word [x3_lalw]
+X3_PCMRES   equ 2560                ; the PCM's room, X3_PCMSZ to 512 bytes, so
+                                    ; a conversion's stage after it is aligned
 AP_RD_CHUNK equ 16384               ; the most a gulp reads
 AP_DRAW_TICKS equ 8                 ; the speaker's redraw throttle
 AP_FMT_PCM8 equ 0                   ; apspk's file formats: a finished WAV is
@@ -297,6 +306,8 @@ x3_e_init:
     mov byte [x3_md], MD_IDLE
     mov byte [x3_lastq], 0xFF
     mov byte [x3_bpart], 0xFF       ; no backend part fetched
+    mov ax, X3_LABIG
+    call x3_lasize
     push bx
     push dx
     call OSAPI_FILE_HERE            ; where we were launched from: the index's
@@ -949,6 +960,8 @@ x3_trk_open:
     mov word [apw_name], x3_fname
     call OSAPI_FILE_GOTO_QM         ; stand in its folder
     jc .noread
+    mov ax, X3_LABIG
+    call x3_lasize
     call x3_la_claim                ; the ring: the open's reads land in it
     jc .nomem
     call x3_cluget                  ; [ap_clu] for this volume
@@ -1205,11 +1218,18 @@ x3_la_claim:
     jne .ok
     push ax
     push dx
-    mov ax, (AP_LA_SZ + X3_PCMSZ + 1023) / 1024
+    mov ax, [x3_lasz]               ; the ring, the PCM (X3_PCMRES) and a
+    mov dl, 10                      ; conversion's stage (x3_laxkb, x3conv
+    xchg cx, dx                     ; .inc), ONE claim: 8 per owner is the
+    shr ax, cl                      ; heap's limit (SPEC.md 50), and the XT
+    xchg cx, dx                     ; backend's work alone is 5
+    add ax, (X3_PCMRES + 1023) / 1024
+    add ax, [x3_laxkb]
     call OSAPI_MEM_CLAIM            ; 512-aligned by construction (guard 6b)
     jc .no
     mov [ap_la_seg], dx
-    mov word [x3_ring+X3R_MASK], AP_LA_MASK
+    mov dx, [x3_lamask]
+    mov [x3_ring+X3R_MASK], dx
     call x3_memck
     pop dx
     pop ax
@@ -1220,6 +1240,23 @@ x3_la_claim:
     pop dx
     pop ax
     stc
+    ret
+
+; x3_lasize - AX = the ring's size (a power of two): the claim given back
+; first when it was another size. keeps everything
+x3_lasize:
+    cmp ax, [x3_lasz]
+    je .o
+    call x3_la_free
+    mov [x3_lasz], ax
+    push ax
+    dec ax
+    mov [x3_lamask], ax
+    inc ax
+    shr ax, 1
+    mov [x3_lalw], ax
+    pop ax
+.o:
     ret
 
 x3_la_free:
@@ -1295,7 +1332,7 @@ x3_la_mp3:
 ; queued or the file is in. Each one timed (x3_refill)
 x3_prime:
     push cx
-    mov cx, AP_LA_SZ / AP_RD_CHUNK + 1
+    mov cx, X3_LABIG / AP_RD_CHUNK + 1
 .l:
     cmp byte [ap_src_done], 0
     jne .out
@@ -2868,7 +2905,8 @@ x3_resync:
 .aim:
     push cx
     call x3_la_mp3                  ; the producer at DX:AX
-    mov ax, AP_LA_SZ / 2            ; half the ring before the front scans
+    mov ax, [x3_lasz]               ; half the ring before the front scans
+    shr ax, 1
     call x3_prime
     mov si, x3_ring
     cmp word [x3_tframe], 0
@@ -3109,6 +3147,12 @@ x3_rungset:
                                     ; part, its work and OPEN before the ring
                                     ; - every caller re-aims and refills it
     call x3_rungrow                 ; BX -> the rung's row
+    mov ax, X3_LABIG                ; ...and the ring the backend's size
+    cmp byte [bx+RG_BE], X3K_XT
+    jne .lsz
+    mov ax, X3_LAXT
+.lsz:
+    call x3_lasize
     mov al, [bx+RG_BE]
     call x3_be_get                  ; the part HERE, its vectors banked
     jc .nobe
@@ -3403,15 +3447,16 @@ x3_wsfree:
 ; resident half CAPS names (X3C_PARTKB): OPEN's body, the expansion and
 ; XTGEN.BIN are behind it and nothing reaches them again until the part is
 ; fetched whole (docs/xtmp3/XT.md section 6; x3_be_get re-fetches). A shrink
-; always succeeds in place. Not on a calibration probe ([x3_noshr]): the
-; ladder may OPEN the same part again at another profile. keeps everything
+; always succeeds in place. A calibration probe shrinks too: its part, work
+; and ring held at once unshrunk are 404 KB, over 121.10's 400,000 bytes, so
+; the ladder's next OPEN of the same part fetches it again - a disk read of
+; its packed 24 KB on an XT, the price of staying inside the ceiling.
+; keeps everything
 x3_shrink:
 %ifdef X3_PARTS
     push ax
     push bx
     push dx
-    cmp byte [x3_noshr], 0
-    jne .out
     call x3_rungrow
     cmp byte [bx+RG_BE], X3K_XT
     jne .out
@@ -3757,9 +3802,7 @@ x3l_okc:
 ; worker measuring. out: CF = 1 it could not be opened (it fails)
 ; -----------------------------------------------------------------------------
 x3l_launch:
-    mov byte [x3_noshr], 1          ; a probe: the part may be OPENed again
     call x3_rungset
-    mov byte [x3_noshr], 0
     jc .no
     mov byte [x3_st+X3S_STATE], X3ST_CHECK  ; (a refusal said ERROR)
     xor ax, ax
@@ -4358,7 +4401,8 @@ x3_file_at:
     add ax, [ap_data_off]
     adc dx, [ap_data_off+2]
     call x3_la_at
-    mov ax, AP_LA_SZ / 2
+    mov ax, [x3_lasz]
+    shr ax, 1
     call x3_prime
     mov byte [x3_sjob], WJ_FILE
     call x3_snd_open
@@ -4564,8 +4608,11 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_nws, 1
     X3B x3_bpart, 1                 ; ...the part resident (FFh none)...
     X3B x3_bshr, 1                  ; ...shrunk to its resident half...
-    X3B x3_noshr, 1                 ; ...not to be (a calibration probe)
     X3B x3_free0, 2                 ; the heap's free KB at launch (x3_memck)
+    X3B x3_lasz, 2                  ; the look-ahead ring: its bytes, mask,
+    X3B x3_lamask, 2                ; refill mark (x3_lasize)...
+    X3B x3_lalw, 2
+    X3B x3_laxkb, 2                 ; ...and a conversion's stage after it
     X3B x3_bseg, 2                  ; ...its segment...
     X3B x3_bvec, 4                  ; ...a verb's far vector (UI task's)...
     X3B x3_bgran, 4                 ; ...and GRANULE's (the worker's)
