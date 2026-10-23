@@ -417,6 +417,11 @@ x3c_cachefind:
 .q:
     call x3c_devok                  ; this device plays its format?
     jc .n
+    cmp byte [x3c_strict], 0        ; ...and, strictly, is it the format this
+    je .ok                          ; device is given for that rung?
+    call x3c_fmtis
+    jc .n
+.ok:
     push ax
     call x3c_cacheok                ; the FILE: there, complete, the same
     pop ax
@@ -466,6 +471,51 @@ x3c_devok:
     ret
 .no:
     stc
+    ret
+
+; x3c_fmtis - the record SI's rate, channels and bits the very ones x3_ofmt
+; gives its rung on this device and source? CF = 1 not. keeps all but flags
+x3c_fmtis:
+    push ax
+    push bx
+    push cx
+    mov al, [x3_rung]               ; (the engine's output, kept)
+    mov ah, [x3_och]
+    mov bl, [x3_obits]
+    mov bh, [x3_odiv]
+    mov cx, [x3_orate]
+    push ax
+    push bx
+    push cx
+    mov al, [si+XR_RUNG]
+    mov [x3_rung], al
+    call x3_ofmt
+    jc .no
+    mov ax, [x3_orate]
+    cmp ax, [si+XR_RATE]
+    jne .no
+    mov al, [x3_och]
+    cmp al, [si+XR_CH]
+    jne .no
+    mov al, [x3_obits]
+    cmp al, [si+XR_BITS]
+    jne .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    mov [x3_orate], cx              ; (CF is kept: movs do not touch it)
+    mov [x3_rung], al
+    mov [x3_och], ah
+    mov [x3_obits], bl
+    mov [x3_odiv], bh
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1999,6 +2049,7 @@ x3c_hdr:
 ; -----------------------------------------------------------------------------
 x3c_wpass:
     mov byte [x3c_wn], 4            ; granules a pass, at most
+    call x3_lalow                   ; the next gulp asked for in good time
 .loop:
     cmp byte [x3_job], WJ_CONV
     jne .out
@@ -3090,6 +3141,7 @@ x3c_s_ren:   db 'Cannot name the file', 0
     X3B x3c_bvol, 1
     X3B x3c_bdir, 2
     X3B x3c_bqueue, 1               ; ...the dialog's switch for it
+    X3B x3c_strict, 1               ; x3c_cachefind: the device's own format
     X3B x3c_lset, 1                 ; the last destination, preselected
     X3B x3c_lvol, 1
     X3B x3c_ldir, 2

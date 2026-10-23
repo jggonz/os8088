@@ -74,12 +74,15 @@ X3_WINGR    equ 32                  ; granules a live slow window spans
 X3_NCAL     equ 8                   ; the session's cached probe results
 
 ; --- the output ---------------------------------------------------------------------
-X3_RINGKB   equ 16                  ; the SND grant: 16 KB, else 8
-X3_RINGSM   equ 8
+X3_RINGKB   equ 16                  ; the SND grant: 16 KB, else 8 - and 32
+X3_RINGSM   equ 8                   ; KB where the output's bytes a second
+X3_RINGBIG  equ 32                  ; pass X3_RINGHI (a 16 KB ring is 93 ms
+X3_RINGHI   equ 32000               ; of 44.1 kHz 16-bit stereo)
 X3_HALF     equ 4096                ; a published half: 4,096 bytes, which is
                                     ; every regime's (SPEC.md 34.5.5) - the
                                     ; smaller 2,048 of the legacy one fits it
-X3_MAXFEED  equ 3                   ; halves a worker pass publishes, at most
+X3_MAXFEED  equ 8                   ; halves a worker pass publishes, at most:
+                                    ; the whole ring, when it can
 X3_PCMSZ    equ 576 * 2 * 2         ; a granule's PCM, at most: 576 frames,
                                     ; two channels, sixteen bits - kept just
 X3_PCMOFF   equ AP_LA_SZ            ; past the RING, in the same claim (the
@@ -247,20 +250,26 @@ apw_e_io:     db 'Cannot read the file', 0
 ; only - tests/xtmp3eng.py reads it to say which way a probe or a job went)
 %macro X3LOG 2
 %ifdef X3STUB
+    cmp word [x3_st+X3S_UNDER], 0   ; (frozen at the first underrun)
+    jne %%done
     push ax
     push bx
+    push word %2                    ; (the value first: %2 may be AX or BX)
     mov bl, [x3_dlogn]
     xor bh, bh
-    cmp bl, 3 * 63
-    jae %%full                      ; (full: the first 63 are kept)
+    pop ax
+    cmp bl, 3 * 16
+    jb %%in                         ; (a ring: the last 16 are kept)
+    xor bl, bl
+%%in:
+    mov [x3_dlog+bx+1], ax
     mov al, %1
     mov [x3_dlog+bx], al
-    mov ax, %2
-    mov [x3_dlog+bx+1], ax
-    add byte [x3_dlogn], 3
-%%full:
+    add bl, 3
+    mov [x3_dlogn], bl
     pop bx
     pop ax
+%%done:
 %endif
 %endmacro
 
@@ -369,16 +378,18 @@ x3_go:
     call x3_trk_open                ; the stream's info, its fingerprint
     jc .err
     call x3_snddev                  ; what the device is NOW (the tier moves)
-    cmp byte [x3_wantdf], 0
-    jne .df
-    call x3c_cachefind              ; (x3conv.inc) a finished file for this
-    jc .nocache                     ; source and this device?
+    mov al, [x3_card]               ; A CACHE FIRST - with a card, only one in
+    cmp byte [x3_wantdf], 0         ; exactly the format this device would be
+    je .s                           ; given for its rung (else live may do
+    xor al, al                      ; better: the ladder decides, and x3l_done
+.s:                                 ; takes any cache before it asks); with no
+    mov [x3c_strict], al            ; card, or for D, any it can play
+    call x3c_cachefind              ; (x3conv.inc)
+    jc .ladder
     jmp x3_file_play                ; ...played, nothing decoded
-.nocache:
-    jmp x3l_start                   ; CHECK: the ladder
-.df:
-    jmp x3l_start                   ; (decode first still wants a profile and
-                                    ; its speed: the ladder's offline arm)
+.ladder:
+    jmp x3l_start                   ; CHECK: the ladder (decode first, too,
+                                    ; wants its profile and its speed)
 .err:
     stc
     ret
@@ -1443,10 +1454,10 @@ x3_fbytes:
 ; -----------------------------------------------------------------------------
 x3_snd_open:
     mov byte [x3_job], WJ_NONE      ; (the worker sits it out until the open)
-    call x3_grant
-    jc .nomem
     call x3_fbytes
     mov [x3_fby], ax
+    call x3_ringget                 ; (sized by the bytes a second)
+    jc .nomem
     xor ax, ax
     mov [x3_total], ax
     mov [x3_staged], ax
@@ -1489,6 +1500,16 @@ x3_snd_open:
     mov si, [x3_grnt]
     mov cx, [x3_total]
     mov dx, [x3_orate]
+    cmp byte [x3_ext], 0
+    je .op
+    mov ah, SND_OPENF_RING + SND_OPENF_EXT + (3 << SND_OPENF_RLSH)
+    mov di, [x3_xseg]               ; THE EXTERNAL RING: ours, at DI:0, its
+    push es                         ; total in its control word
+    mov es, di
+    mov [es:X3_XRL+SND_EXT_TOTAL], cx
+    mov word [es:X3_XRL+SND_EXT_CONS], 0
+    pop es
+.op:
     call OSAPI_SND_STREAM           ; AL = 0, AH = the handle
     or al, al
     jnz .snderr
@@ -1518,12 +1539,72 @@ x3_snd_open:
     stc
     ret
 
+; -----------------------------------------------------------------------------
+; x3_ringget - THE CARD'S RING. A stream of X3_RINGHI bytes a second or more
+; plays from an EXTERNAL ring (SPEC.md 34.5.3): 32 KB of our own, page-safe
+; and never moved (OSAPI_MEM_CLAIM_DMA_HI), written directly - the driver's
+; grant pool tops out at 16 KB, which is 93 ms of 44.1 kHz 16-bit stereo and,
+; less the granule a feed must have room for, 62 ms queued at most. Only a
+; DSP 3.00 or later plays such a stream (PCM_HI, STEREO, PCM16), so the
+; external ring's auto-init is there whenever it is asked for. Everything
+; slower takes the grant, as the Audio Player does. out: CF = 1 no room
+; -----------------------------------------------------------------------------
+X3_XRL      equ 32768
+
+x3_ringget:
+    mov byte [x3_ext], 0
+    mov ax, [x3_orate]
+    mul word [x3_fby]
+    or dx, dx
+    jnz .ext
+    cmp ax, X3_RINGHI
+    jb x3_grant
+.ext:
+    call x3_gfree                   ; (no grant beside it)
+    push cx
+    push dx
+    mov ax, X3_XRL / 1024 + 1       ; the ring and its control words, all in
+    mov cx, ax                      ; the page-safe head
+    call OSAPI_MEM_CLAIM_DMA_HI
+    jc .no
+    mov [x3_xseg], dx
+    pop dx
+    pop cx
+    mov byte [x3_ext], 1
+    mov word [x3_grnt], 0
+    mov word [x3_rsz], X3_XRL
+    mov word [x3_rmask], X3_XRL - 1
+    mov word [x3_ring_n], X3_XRL / X3_HALF - 1
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    stc
+    ret
+
 ; x3_grant - the SND ring: verb 7, 16 KB else 8. [x3_grnt], [x3_ring],
 ; [x3_rmask], [x3_ring_n] (halves to pre-roll: the ring's less one)
 x3_grant:
-    cmp byte [x3_ghave], 0
-    jne .have
     mov cx, X3_RINGKB * 1024
+    mov ax, [x3_orate]              ; a fast stream: 32 KB
+    mul word [x3_fby]
+    or dx, dx
+    jnz .big
+    cmp ax, X3_RINGHI
+    jb .want
+.big:
+    mov cx, X3_RINGBIG * 1024
+.want:
+    cmp byte [x3_ghave], 0
+    je .try
+    cmp cx, [x3_rsz]                ; one held already: the size this stream
+    je .have                        ; wants, or given back and taken again
+    push cx
+    call x3_gfree
+    pop cx
+    cmp byte [x3_ghave], 0
+    jne .have                       ; (refused: the one held it is)
 .try:
     mov ax, 7                       ; verb 7, sub-op 0: alloc
     call OSAPI_SND_STREAM           ; SI = the grant
@@ -1531,7 +1612,7 @@ x3_grant:
     jz .got
     cmp cx, X3_RINGSM * 1024
     jbe .no
-    mov cx, X3_RINGSM * 1024
+    shr cx, 1                       ; (32 -> 16 -> 8)
     jmp short .try
 .got:
     mov [x3_grnt], si
@@ -1567,17 +1648,35 @@ x3_snd_close:
     call OSAPI_SND_STREAM
     mov byte [x3_sopen], 0
 .grant:
-    cmp byte [x3_ghave], 0
-    je .out
-    mov si, [x3_grnt]
-    mov ax, 0x0107                  ; verb 7, sub-op 1: free
-    call OSAPI_SND_STREAM
-    or ax, ax
-    jnz .out                        ; refused: kept, reused next time
-    mov byte [x3_ghave], 0
+    push dx                         ; the external ring: the stream closed
+    mov dx, [x3_xseg]               ; first, then the memory (the card is
+    or dx, dx                       ; not reading it now)
+    jz .nx
+    call OSAPI_MEM_FREE
+    mov word [x3_xseg], 0
+.nx:
+    pop dx
+    mov byte [x3_ext], 0
+    call x3_gfree
 .out:
     pop si
     pop ax
+    ret
+
+; x3_gfree - the grant handed back (verb 7, sub-op 1). A refusal keeps it,
+; and it is used again. keeps all but AX
+x3_gfree:
+    cmp byte [x3_ghave], 0
+    je .out
+    push si
+    mov si, [x3_grnt]
+    mov ax, 0x0107
+    call OSAPI_SND_STREAM
+    pop si
+    or ax, ax
+    jnz .out
+    mov byte [x3_ghave], 0
+.out:
     ret
 
 ; x3_park - the worker's job taken away and its pass waited out. keeps all
@@ -1621,12 +1720,19 @@ x3_worker:
 .loop:
     mov bx, [x3_win]
     call OSAPI_TASK_ALIVE           ; (dies here when the window closes)
-    mov ax, 6                       ; nothing to do: six ticks
-    cmp byte [x3_job], WJ_NONE
+    mov ax, 2                       ; nothing to do: two ticks - no longer,
+    cmp byte [x3_job], WJ_NONE      ; since a stream that opens meanwhile
+                                    ; has only its pre-roll until this wakes
     je .sleep
     cmp byte [x3_job], WJ_CONV      ; a conversion and a probe run flat out:
     jae .yield                      ; the machine's whole speed is the point
-    mov ax, 1                       ; the card: a tick
+    mov ax, [x3_total]              ; the card: a tick - or none while it
+    sub ax, [x3_cons]               ; holds under half its ring (a 32 KB ring
+    mov dx, [x3_rsz]                ; is 186 ms of 44.1 kHz 16-bit stereo and
+    shr dx, 1                       ; a tick is 55)
+    cmp ax, dx
+    jb .yield
+    mov ax, 1
 .sleep:
     call OSAPI_TASK_SLEEP
     jmp short .pass
@@ -1653,6 +1759,23 @@ x3_worker:
 .done:
     mov byte [x3_wbusy], 0          ; LAST
     jmp short .loop
+
+; x3_lalow - the look-ahead under AP_LA_LOW and the file not all in: a gulp
+; asked for now, while there is a gulp's worth of audio still queued - the
+; Audio Player's rule (SPEC.md 86.5). Asking only when the parser starves
+; leaves the read's own time uncovered. Worker-safe; keeps all but AX
+x3_lalow:
+    cmp byte [ap_src_done], 0
+    jne .out
+    test byte [x3_req], X3R_READ
+    jnz .out
+    call ap_la_avail
+    cmp ax, AP_LA_LOW
+    jae .out
+    mov al, X3R_READ
+    jmp x3_kick
+.out:
+    ret
 
 ; x3_kick - a request bit (AL) set and the UI task woken. Worker-safe
 x3_kick:
@@ -1687,9 +1810,12 @@ x3_feed:
     je .dead
     cmp ax, SND_ST_UNDER            ; the card ran dry: counted once a time
     jne .nund
+    cmp byte [x3_lasthalf], 0       ; (after the last half it is the end of
+    jne .feed                       ; the stream, not an underrun)
     cmp byte [x3_drvund], 0
     jne .feed
     mov byte [x3_drvund], 1
+    X3LOG 'U', [x3_total]
     call x3_under
     jmp short .feed
 .nund:
@@ -1705,10 +1831,12 @@ x3_feed:
     mov al, X3R_END
     jmp x3_kick
 .fill:
-    mov byte [x3_halves], 0
+    call x3_lalow                   ; the look-ahead asked for BEFORE it runs
+    mov byte [x3_halves], 0         ; dry (SPEC.md 86.5's low-water mark)
 .more:
     mov ax, [x3_total]              ; comfortably full: nothing this pass
     sub ax, [x3_cons]
+    X3LOG 'w', ax
     mov bx, [x3_rsz]
     sub bx, X3_HALF
     cmp ax, bx
@@ -1716,8 +1844,16 @@ x3_feed:
     cmp byte [x3_job], WJ_NONE      ; parked meanwhile
     je .out
     call x3_feedhalf                ; CF = 1 nothing published
+    X3LOG 'h', [x3_staged]
     jc .out
     mov cx, [x3_total]
+    cmp byte [x3_ext], 0            ; an external ring: its control word is
+    je .v1                          ; what the card reads, and verb 1 only
+    push es                         ; resumes it after an underrun
+    mov es, [x3_xseg]
+    mov [es:X3_XRL+SND_EXT_TOTAL], cx
+    pop es
+.v1:
     mov al, 1                       ; verb 1: the new total
     mov ah, [x3_hand]
     call OSAPI_SND_STREAM
@@ -1939,12 +2075,27 @@ x3_stage:
     mov cx, bx
 .c:
     add di, [x3_grnt]
-    mov al, 6                       ; verb 6: the ring claim's SI -> the grant
     push cx
+    cmp byte [x3_ext], 0
+    jne .x
+    mov al, 6                       ; verb 6: the ring claim's SI -> the grant
     push ds
     mov ds, [ap_la_seg]
     call OSAPI_SND_STREAM
     pop ds
+    jmp short .y
+.x:
+    push si                         ; the external ring: written directly
+    push es
+    push ds
+    mov es, [x3_xseg]
+    mov ds, [ap_la_seg]
+    cld
+    rep movsb
+    pop ds
+    pop es
+    pop si
+.y:
     pop cx
     add si, cx
     add [x3_staged], cx
@@ -1975,7 +2126,7 @@ x3_gran1:
 .again:
     mov al, [x3_grn]                ; granules left of the staged frame
     cmp al, [x3_grk]
-    jb .have
+    ja .have
     mov si, x3_ring
     call x3p_next                   ; CF = 0: AL = its granules
     jnc .staged
@@ -2296,9 +2447,22 @@ x3_filebytes:
     add di, [x3_grnt]
     push ds
     push cx
+    cmp byte [x3_ext], 0
+    jne .xc
     mov al, 6
     mov ds, [ap_la_seg]             ; verb 6's source is DS's (SPEC.md 34.5)
     call OSAPI_SND_STREAM
+    jmp short .yc
+.xc:
+    push si
+    push es
+    mov es, [x3_xseg]               ; the external ring: written directly
+    mov ds, [ap_la_seg]
+    cld
+    rep movsb
+    pop es
+    pop si
+.yc:
     pop cx
     pop ds
     add [ap_la_rd], cx
@@ -3385,29 +3549,20 @@ x3l_result:
 ; out: CF = 1 skipped. keeps every register
 ; -----------------------------------------------------------------------------
 x3l_ok:
-    call x3l_ok1
-    jc .out
-    push ax
-    mov ax, [x3_srate]
-    cmp ax, X3_FLOOR
-    jbe .y
-    cmp word [x3_orate], X3_FLOOR
-    jb .n
-.y:
-    pop ax
-    clc
-    ret
-.n:
-    pop ax
-    stc
-.out:
-    ret
+    mov byte [x3l_flr], 1
+    jmp short x3l_okc
 
 x3l_ok1:
+    mov byte [x3l_flr], 0
+x3l_okc:
     push ax
     push bx
     push cx
     push dx
+    push word [x3_orate]            ; (asking may not move the output of a
+    push word [x3_och]              ; stream that is playing: x3_ofmt writes
+    push word [x3_odiv]             ; these, and a step's position is turned
+    mov dh, [x3_st+X3S_FLAGS]       ; into ms at the rate it played at)
     mov dl, [x3_rung]
     mov [x3_rung], al
     call x3_ofmt                    ; [x3_orate] for it; CF: the device cannot
@@ -3420,12 +3575,23 @@ x3l_ok1:
 .p:
     cmp cl, 0xFF
     je .n
+    cmp byte [x3l_flr], 0           ; Auto's floor: not under X3_FLOOR while
+    je .y                           ; the source is above it
+    cmp word [x3_srate], X3_FLOOR
+    jbe .y
+    cmp word [x3_orate], X3_FLOOR
+    jb .n
+.y:
     clc
     jmp short .out
 .n:
     stc
 .out:
     mov [x3_rung], dl
+    mov [x3_st+X3S_FLAGS], dh       ; (movs and pops keep CF)
+    pop word [x3_odiv]
+    pop word [x3_och]
+    pop word [x3_orate]
     pop dx
     pop cx
     pop bx
@@ -3447,13 +3613,13 @@ x3l_launch:
     jc .no
     mov ax, AP_LA_SZ                ; full: no read inside the timing
     call x3_prime
-    cmp byte [x3_card], 0
-    je .ng
-    call x3_grant
-    jc .no
-.ng:
     call x3_fbytes
     mov [x3_fby], ax
+    cmp byte [x3_card], 0
+    je .ng
+    call x3_grant                   ; (sized by the bytes a second)
+    jc .no
+.ng:
     mov word [x3l_goff], 0
     xor ax, ax
     mov [x3l_g], ax
@@ -3461,9 +3627,6 @@ x3l_launch:
     mov [x3l_acc+2], ax
     mov ax, [x3_ring+X3R_POS]
     mov [x3l_pos0], ax
-    X3LOG 'L', [ap_la_wr]
-    X3LOG 'l', [ap_la_rd]
-    X3LOG 'e', [x3_req]
     call x3_wspawn
     jc .no
     mov byte [x3_job], WJ_CAL
@@ -3490,7 +3653,6 @@ x3l_wprobe:
     mov si, x3_ring
     call x3p_next
     jnc .staged
-    X3LOG 'N', ax
     cmp ax, X3P_END
     je .finish
     cmp word [x3l_g], 0             ; dry: what was measured is the measure
@@ -3563,10 +3725,8 @@ x3l_wprobe:
     jae .finish
     jmp .loop
 .refused:
-    X3LOG 'R', ax
     mov word [x3l_g], 0
 .finish:
-    X3LOG 'F', [x3l_g]
     xor ax, ax
     cmp word [x3l_g], 0
     je .res
@@ -3874,6 +4034,11 @@ x3l_done:
 .out:
     ret
 .off:
+    mov byte [x3c_strict], 0        ; nothing live: any cache this device
+    call x3c_cachefind              ; plays, before a question is asked
+    jc .ask
+    jmp x3_file_play
+.ask:
     call x3l_offpick                ; AL = the conversion's rung
     jmp x3c_begin                   ; (x3conv.inc) the drive dialog
 
@@ -4284,6 +4449,8 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_ghave, 1                 ; ...the grant...
     X3B x3_grnt, 2
     X3B x3_rsz, 2                   ; ...its size
+    X3B x3_ext, 1                   ; ...1: an external ring, at x3_xseg:0
+    X3B x3_xseg, 2
     X3B x3_rmask, 2
     X3B x3_ring_n, 2
     X3B x3_total, 2                 ; ...published, staged, consumed
@@ -4317,6 +4484,7 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3l_cur, 1                  ; ...the rung measured...
     X3B x3l_low, 1                  ; ...the cheaper STANDARD rung that passed
     X3B x3l_one, 1                  ; ...the override measured
+    X3B x3l_flr, 1                  ; (x3l_ok: the floor applies)
     X3B x3l_choice, 1               ; ...the decision
     X3B x3l_meas, X3Q_N * 2         ; ...this run's measures (FFFFh none)
     X3B x3l_res, 2                  ; the probe's: its answer...
@@ -4326,7 +4494,7 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3l_pos0, 2                 ; ...the file offset it began at
     X3B x3l_goff, 2                 ; ...the grant's rolling offset
 %ifdef X3STUB
-    X3B x3_dlog, 3 * 64             ; the debug log (X3LOG)
+    X3B x3_dlog, 3 * 16             ; the debug log (X3LOG)
     X3B x3_dlogn, 1
 %endif
     X3B x3l_cnext, 2                ; the session's cache: the next row...
