@@ -272,6 +272,8 @@ X3REF_FREE  equ 1       ;       'FREE FORMAT'
 X3REF_L1    equ 2       ;       'LAYER I'
 X3REF_L2    equ 3       ;       'LAYER II'
 X3REF_NOSYN equ 4       ;       'NO MPEG AUDIO'  (x3p_reftext: AL -> SI)
+X3REF_PACKED equ 5      ;       'PACKED FILE' (the probe's: stored lz4-
+                        ;       wrapped, SPEC.md 20.14.3 - not a byte stream)
 X3I_START   equ 12      ; dd  the first byte after the ID3v2 tags
 X3I_AEND    equ 16      ; dd  the end of the audio: the file's end, or the
                         ;     ID3v1 tag's start

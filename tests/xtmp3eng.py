@@ -147,7 +147,7 @@ def pkgsym(name, stub=True):
 # -----------------------------------------------------------------------------
 class Rig(object):
     def __init__(self, leg, sb=False, hd=(), floppy=(), xcfg=None, keep=None,
-                 stub=True):
+                 stub=True, extra=(), mach="pc,vmport=off", syscfg=None):
         """hd: up to two (geometry, files, folders, junk_bytes) - the first is
         C:, the second D:; floppy: B:'s files (with SYSTEM/APPDATA); xcfg:
         X3STUB.CFG's bytes, written beside XTMP3.O88 (B: when the package is
@@ -155,6 +155,9 @@ class Rig(object):
         with its disks as they are"""
         self.leg = leg
         self.stub = stub                # False: the SHIPPED package
+        self.extra = list(extra)        # QEMU arguments of the leg's own
+        self.mach = mach
+        self.syscfg = syscfg            # SYSTEM.CFG's bytes (else the SB's)
         self.tmp = keep or tempfile.mkdtemp(dir=os.path.join(ROOT, "build"),
                                             prefix="x3e")
         self.sock = os.path.join(self.tmp, "q.sock")
@@ -173,7 +176,15 @@ class Rig(object):
     def build(self, sb, hd, floppy, xcfg):
         t = self.tmp
         shutil.copy(os88build.at("build/os8088.img"), os.path.join(t, "sys.img"))
-        if sb:                          # SYSTEM.CFG wanting SOUND.DRV
+        if self.syscfg is not None:     # SYSTEM.CFG of the leg's own
+            d = os.path.join(t, "cfg")
+            os.makedirs(d)
+            open(os.path.join(d, "SYSTEM.CFG"), "wb").write(self.syscfg)
+            subprocess.run([sys.executable, "tools/os88fat.py", "add",
+                            os.path.join(t, "sys.img"),
+                            os.path.join(d, "SYSTEM.CFG")], check=True,
+                           capture_output=True)
+        elif sb:                        # SYSTEM.CFG wanting SOUND.DRV
             subprocess.run([sys.executable, "tools/os88fat.py", "add",
                             os.path.join(t, "sys.img"),
                             os88build.at("build/mixercfg/SYSTEM.CFG")], check=True,
@@ -192,6 +203,13 @@ class Rig(object):
                        capture_output=True)
         for i, (geo, files, folders, junk) in enumerate(hd):
             img = os.path.join(t, "hd%d.img" % i)
+            if isinstance(geo, dict):       # a FAT16 volume of a forced
+                bigfat(img, **geo)          # cluster (a data disk: D:, ...)
+                for f in files:
+                    subprocess.run(["mcopy", "-i", part(img), f, "::"],
+                                   check=True)
+                self.hds.append(img)
+                continue
             files = list(files)
             if i == 0 and not floppy:
                 files = [pkg, cfgf] + files
@@ -219,7 +237,7 @@ class Rig(object):
     def launch(self, sb):
         t = self.tmp
         os88qemu.own(self.pidf, self.sock)
-        a = ["qemu-system-i386", "-machine", "pc,vmport=off", "-m", "4",
+        a = ["qemu-system-i386", "-machine", self.mach, "-m", "4",
              "-drive", "file=%s,format=raw,if=floppy" % os.path.join(t, "sys.img"),
              "-drive", "file=%s,format=raw,if=floppy,index=1" % os.path.join(t, "b.img")]
         for i, img in enumerate(self.hds):
@@ -227,6 +245,7 @@ class Rig(object):
         if sb:
             a += ["-device", "sb16,audiodev=a0", "-audiodev",
                   "wav,id=a0,path=%s" % self.wav]
+        a += self.extra
         a += ["-boot", "a", "-chardev", "msmouse,id=m0", "-serial",
               "chardev:m0", "-display", "none", "-qmp",
               "unix:%s,server,nowait" % self.sock, "-daemonize",
@@ -301,7 +320,7 @@ class Rig(object):
                     under=struct.unpack_from("<H", b, 18)[0],
                     peak=struct.unpack_from("<H", b, 20)[0],
                     err=struct.unpack_from("<H", b, 22)[0],
-                    md=self.b("x3_md"))
+                    cur=b[25], md=self.b("x3_md"))
 
     def errtext(self):
         p = self.st()["err"]
@@ -343,6 +362,66 @@ class Rig(object):
 
     seg = None
 
+    def menu_pick(self, title, item):
+        """XTMP3's menu TITLE, item ITEM (an index), by the kernel's own bar:
+        press on the title, wait for the pull-down, move to the item, wait
+        until it is the one highlighted, release (tools/os88ui.py's gesture,
+        over QMP)"""
+        def w(name):
+            return struct.unpack("<H", self.read(S(name), 2))[0]
+        n = w("menu_nbar")
+        raw = self.read(S("menu_bar"), n * geom.MB_ENTSZ)
+        cell = None
+        for i in range(n):
+            b = i * geom.MB_ENTSZ
+            tp = struct.unpack_from("<H", raw, b + geom.MB_TITLE)[0]
+            sg = struct.unpack_from("<H", raw, b + geom.MB_SEG)[0]
+            if tp and sg:
+                t = self.read((sg << 4) + tp, 12).split(b"\0")[0]
+                if t.decode("latin-1") == title:
+                    cell = (struct.unpack_from("<H", raw, b + geom.MB_XL)[0],
+                            struct.unpack_from("<H", raw, b + geom.MB_XR)[0])
+        if cell is None:
+            return False
+        x = (cell[0] + cell[1]) // 2
+        xmcheck.goto(self.sock, x, 6)
+        self.hmp("mouse_button 1")
+        if not self.until(lambda: w("menu_y1") and
+                          self.read(S("menu_dropd"), 1)[0], "the pull-down",
+                          10, 0.1):
+            self.hmp("mouse_button 0")
+            return False
+        iy = w("menu_y1") + 1 + item * geom.MENU_ITEM_H + geom.MENU_ITEM_H // 2
+        subprocess.run([sys.executable, os.path.join(ROOT, "tools",
+                                                     "mouse.py"), self.sock,
+                        "move", "0", str(iy - 6)], capture_output=True,
+                       cwd=ROOT)
+        ok = self.until(lambda: w("menu_sel") == item, "item %d" % item, 10,
+                        0.1)
+        self.hmp("mouse_button 0")
+        return ok
+
+    def alert_button(self, k):
+        """os88ui's alert (OS88UI_AW x OS88UI_AH, apps/os88ui.inc): button K
+        of its two clicked, at os88ui_arect's own formula"""
+        aw, ah, bw, bg, by, bh = 288, 92, 72, 12, 46, 13
+        n = S("wm_wins")
+        for i in range(geom.MAX_WIN):
+            rec = self.read(n + i * geom.WIN_SIZE, geom.WIN_SIZE)
+            fl, x, y, ww, hh = struct.unpack_from("<HHHHH", rec, 0)
+            if fl & 2 and aw <= ww <= aw + 2 and hh == ah:
+                left = x + (ww - (2 * (bw + bg) - bg)) // 2
+                bx = left + k * (bw + bg) + bw // 2
+                byy = y + geom.TITLE_H + by + bh // 2
+                xmcheck.click(self.sock, bx, byy)
+                return True
+        wins = []
+        for i in range(geom.MAX_WIN):
+            rec = self.read(n + i * geom.WIN_SIZE, geom.WIN_SIZE)
+            wins.append(struct.unpack_from("<HHHHH", rec, 0))
+        print("     (no alert: windows %s)" % [w for w in wins if w[0]])
+        return False
+
     def mdir(self, img, path="::"):
         r = subprocess.run(["mdir", "-a", "-b", "-i", part(img), path],
                            capture_output=True, text=True)
@@ -358,6 +437,56 @@ def part(img):
     """IMG@@offset for mtools: the partition's first LBA, out of the MBR"""
     lba = struct.unpack_from("<I", open(img, "rb").read(512), 446 + 8)[0]
     return "%s@@%d" % (img, lba * 512)
+
+
+def bigfat(path, mb, spc):
+    """a SPARSE hard-disk image with one FAT16 partition whose clusters are
+    SPC sectors - 16, 32 and 64 are the 8, 16 and 32 KB a DOS FORMAT gives a
+    256 MB-2 GB volume, here on the least FAT16 that has them (4,085
+    clusters at least, so the type is FAT16 by the count, as it must be).
+    The MBR's end CHS is 1023/254/63, so QEMU guesses 255 heads and 63
+    sectors, the geometry SeaBIOS's translation answers int 13h AH=08 with"""
+    tot = mb * 2048
+    start = 63
+    ptot = tot - start
+    root = 32                               # 512 entries
+    fatsz = 1
+    for _ in range(64):
+        nclus = (ptot - 1 - 2 * fatsz - root) // spc
+        need = ((nclus + 2) * 2 + 511) // 512
+        if need == fatsz:
+            break
+        fatsz = need
+    assert 4085 <= nclus < 65525, (mb, spc, nclus)
+    mbr = bytearray(512)
+    e = bytearray(16)
+    e[1:4] = b"\x01\x01\x00"
+    e[4] = 0x06
+    e[5:8] = b"\xFE\xFF\xFF"
+    struct.pack_into("<II", e, 8, start, ptot)
+    mbr[446:462] = e
+    mbr[510:512] = b"\x55\xAA"
+    bs = bytearray(512)
+    bs[0:3] = b"\xEB\x3C\x90"
+    bs[3:11] = b"MSDOS5.0"
+    struct.pack_into("<HBHBHHBHHHII", bs, 11, 512, spc, 1, 2, 512,
+                     ptot if ptot < 65536 else 0, 0xF8, fatsz, 63, 255,
+                     start, ptot if ptot >= 65536 else 0)
+    bs[36] = 0x80
+    bs[38] = 0x29
+    struct.pack_into("<I", bs, 39, 0x38083808)
+    bs[43:54] = b"BIGCLU%-5d" % (spc // 2)
+    bs[54:62] = b"FAT16   "
+    bs[510:512] = b"\x55\xAA"
+    with open(path, "wb") as f:
+        f.truncate(tot * 512)
+        f.seek(0)
+        f.write(mbr)
+        f.seek(start * 512)
+        f.write(bs)
+        for k in range(2):
+            f.seek((start + 1 + k * fatsz) * 512)
+            f.write(b"\xF8\xFF\xFF\xFF")
 
 
 def floppy_listing(names):
@@ -919,7 +1048,492 @@ def leg_xtpeak():
         print("     peak %d KB = %d bytes" % (s["peak"], s["peak"] * 1024))
         check(leg, "the working set stayed at or under 400,000 bytes",
               0 < s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
+        nf = list(r.rd("x3_nfetch", 5))
+        check(leg, "the XT part was fetched ONCE: the conversion is the "
+              "probe's rung, so its OPEN stands and a RESET does (x3_reuse)",
+              nf[3] == 1, "fetches %s" % nf)
     finally:
+        r.done()
+    # LIVE XT STANDARD WITH A CARD (SPEC.md 121.10 counts SOUND.DRV's grant):
+    # the grant is the 8 KB one under the XT backend at any rate, never the
+    # external ring - NEONDRV is 44.1 kHz, 44,100 bytes a second of 8-bit mono
+    r = Rig(leg, sb=True, stub=False,
+            hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
+    try:
+        if not check(leg, "XTMP3 opens (an SB16)", r.open_file(
+                "C", NEON, hd_listing([NEON]))):
+            return
+        r.until(lambda: r.st()["md"] not in (MD_IDLE, MD_CHECK),
+                "Auto's decision", 90, 0.2)
+        r.key("s")
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 20)
+        for _ in range(Q_XTSTD):
+            r.key("q")
+            time.sleep(0.4)
+        r.key("spc")
+        r.until(lambda: r.st()["md"] == MD_LIVE, "XT STANDARD live", 60, 0.2)
+        s = r.st()
+        check(leg, "live on XT STANDARD with the card",
+              s["md"] == MD_LIVE and s["qual"] == Q_XTSTD,
+              "md %d qual %s %s" % (s["md"], QNAME[s["qual"]], r.errtext()))
+        check(leg, "the card's ring is the 8 KB grant, not the external ring",
+              r.w("x3_rsz") == 8192 and r.b("x3_ext") == 0,
+              "%d bytes, ext %d" % (r.w("x3_rsz"), r.b("x3_ext")))
+        time.sleep(3)
+        s = r.st()
+        print("     live peak %d KB = %d bytes" % (s["peak"], s["peak"] * 1024))
+        check(leg, "live XT with a card: the working set at or under 400,000 "
+              "bytes", 0 < s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
+    finally:
+        r.done()
+
+
+# -----------------------------------------------------------------------------
+# THE CEILING ON LARGE CLUSTERS (SPEC.md 121.10, x3_plan): the destination's
+# cluster sizes the stage, and the plan keeps the XT path inside 400,000 bytes
+# whatever the cluster is - or refuses by name where nothing fits
+# -----------------------------------------------------------------------------
+def xt_wav_check(leg, r, img, wav, src, profile, clu):
+    data = r.mcat(img, "::" + wav)
+    if not check(leg, "%s is on D:" % wav, data is not None):
+        return
+    import numpy as np
+    import x3simxt
+    import x3sim
+    ref, rate, dec = x3simxt.decode(fixture(src), profile)
+    st = x3sim.Stream(open(fixture(src), "rb").read())
+    ref = x3sim.trim_pcm(ref.reshape(-1, 1), st.info, 1).reshape(-1)
+    check(leg, "its header is one %d KB cluster ('data' at %d)" % (
+        clu // 1024, clu - 8), data[clu - 8:clu - 4] == b"data")
+    dlen = struct.unpack_from("<I", data, clu - 4)[0]
+    pcm = np.frombuffer(data[clu:clu + dlen], dtype=np.uint8)
+    n = min(len(pcm), len(ref))
+    bad = np.count_nonzero(pcm[:n] != ref[:n]) if n else -1
+    check(leg, "its PCM is x3simxt's %s, trimmed: every byte" % profile,
+          len(pcm) == len(ref) and bad == 0,
+          "%d vs %d bytes, %d differ" % (len(pcm), len(ref), bad))
+
+
+def clu_convert(r, leg):
+    """the drive dialog: D: chosen, Decode and Play, the Save dialog's name"""
+    r.until(lambda: r.st()["md"] == MD_CHOOSE, "the drive dialog", 90, 0.2)
+    check(leg, "the drive dialog lists C: and D:", r.b("x3c_nv") == 2,
+          "%d" % r.b("x3c_nv"))
+    r.key("down")
+    time.sleep(1)
+    r.key("ret")
+    time.sleep(2.5)
+    r.key("ret")
+    r.until(lambda: r.st()["md"] not in (MD_CHOOSE, MD_CONV), "the end of "
+            "the conversion", 240, 0.3)
+
+
+def leg_xtclu():
+    for spc, mb, src in ((16, 40, "X11K24.MP3"), (32, 72, "X12K32.MP3"),
+                         (64, 140, "X8K16.MP3")):
+        clu = spc * 512
+        leg = "xtclu/%dk" % (clu // 1024)
+        print(" %s: %s to a %d KB-cluster D:" % (leg, src, clu // 1024))
+        r = Rig(leg, stub=False,
+                hd=[(HD0_GEO, [fixture(src)], ["SYSTEM/APPDATA"], 0),
+                    ({"mb": mb, "spc": spc}, [], [], 0)])
+        try:
+            if not check(leg, "XTMP3 opens", r.open_file(
+                    "C", src, hd_listing([src]))):
+                continue
+            r.until(lambda: r.st()["md"] == MD_CHOOSE, "Auto's dialog", 90,
+                    0.2)
+            r.key("esc")
+            r.until(lambda: r.st()["md"] == MD_IDLE, "the cancel", 20)
+            for _ in range(Q_XTSTD):
+                r.key("q")
+                time.sleep(0.4)
+            r.key("d")
+            clu_convert(r, leg)
+            s = r.st()
+            if clu < 32768:
+                check(leg, "XT STANDARD converted to D: and plays",
+                      s["state"] == ST_FILE, "state %d '%s'" % (
+                          s["state"], r.errtext()))
+                one, lasz = r.b("x3c_one"), r.w("x3_lasz")
+                print("     peak %d KB; stage %s of %d KB, look-ahead %d KB"
+                      % (s["peak"], "one half" if one else "two halves",
+                         r.w("x3c_half") // 1024, lasz // 1024))
+                check(leg, "the working set at or under 400,000 bytes",
+                      0 < s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
+                check(leg, "the stage is ONE cluster (the plan: two do not "
+                      "fit)", one == 1, "x3c_one %d" % one)
+                wav = src.replace(".MP3", ".WAV")
+                r.key("esc")
+                r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 30)
+                r.close()
+                xt_wav_check(leg, r, r.hds[1], wav, src, "std", clu)
+            else:
+                check(leg, "XT STANDARD refused on 32 KB clusters, by name",
+                      s["state"] == ST_ERROR and
+                      r.errtext() == "Too little memory for that disk",
+                      "state %d '%s'" % (s["state"], r.errtext()))
+                check(leg, "...its peak still under 400,000 bytes",
+                      s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
+                r.key("q")                  # XT FAST
+                time.sleep(0.4)
+                check(leg, "the override is XT FAST",
+                      r.rd("x3_st", 3)[2] == Q_XTFAST)
+                r.key("d")
+                clu_convert(r, leg)
+                s = r.st()
+                check(leg, "XT FAST converted to the 32 KB-cluster D:",
+                      s["state"] == ST_FILE, "state %d '%s'" % (
+                          s["state"], r.errtext()))
+                print("     peak %d KB; stage %s of %d KB" % (
+                    s["peak"], "one half" if r.b("x3c_one") else "two halves",
+                    r.w("x3c_half") // 1024))
+                check(leg, "the working set at or under 400,000 bytes",
+                      0 < s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
+                r.key("esc")
+                r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 30)
+                r.close()
+                names = r.mdir(r.hds[1])
+                check(leg, "no .TMP left on D:",
+                      not any(".TMP" in nm for nm in names), str(names))
+                xt_wav_check(leg, r, r.hds[1], src.replace(".MP3", ".WAV"),
+                             src, "fast", clu)
+        finally:
+            r.done()
+
+
+# -----------------------------------------------------------------------------
+# THE PATHS NO LEG HAD TAKEN (docs/xtmp3/ENGINE.md section 12)
+# -----------------------------------------------------------------------------
+def patch_file_in_image(img, src, at, xor=0xFF):
+    """flip one byte AT bytes into the file whose first 512 bytes are SRC's,
+    in the image on the host - under a running guest, which reads it next
+    time through int 13h (QEMU caches nothing of a raw image)"""
+    with open(img, "r+b") as f:
+        data = f.read()
+        o = data.find(src[:512])
+        if o < 0:
+            return False
+        f.seek(o + at)
+        b = data[o + at]
+        f.write(bytes([b ^ xor]))
+    return True
+
+
+def leg_chgsrc():
+    """the source CHANGED DURING a conversion: finalisation takes its
+    fingerprint again (SPEC.md 121.7) and the job fails with the reason, the
+    temporary file goes and nothing plays"""
+    leg = "chgsrc"
+    name = "AFTERHRS.MP3"
+    src = open(fixture(name), "rb").read()
+    r = Rig(leg, floppy=[fixture(name)], xcfg=cfg([0, 20, 30, 40, 50, 60]),
+            hd=[(HD0_GEO, [], [], 0)])
+    try:
+        if not check(leg, "XTMP3 opens", r.open_file("B", name,
+                                                      floppy_listing([name]))):
+            return
+        r.until(lambda: r.st()["md"] == MD_CHOOSE, "the drive dialog", 90)
+        r.key("ret")
+        time.sleep(2.5)
+        r.key("ret")
+        r.until(lambda: r.st()["md"] == MD_CONV and r.st()["pct"] > 10,
+                "the conversion under way", 90)
+        check(leg, "it converts", r.st()["state"] == ST_DECODE)
+        check(leg, "the source changed under it (a byte of its first 16 KB, "
+              "on the host)", patch_file_in_image(
+                  os.path.join(r.tmp, "b.img"), src, 600))
+        r.until(lambda: r.st()["md"] != MD_CONV, "the end of the job", 300,
+                0.5)
+        s = r.st()
+        check(leg, "the job fails: 'The MP3 changed meanwhile'",
+              s["state"] == ST_ERROR and
+              r.errtext() == "The MP3 changed meanwhile",
+              "state %d '%s'" % (s["state"], r.errtext()))
+        check(leg, "nothing plays", s["md"] == MD_IDLE)
+        r.close()
+        names = r.mdir(r.hds[0])
+        check(leg, "no .TMP and no .WAV on C:",
+              not any(".TMP" in n or ".WAV" in n for n in names), str(names))
+    finally:
+        r.done()
+
+
+def ix_records(dat):
+    return [dat[8 + i * 48:8 + i * 48 + 48] for i in range(16)]
+
+
+def leg_dfdel():
+    """Decoded Files deletes only what XTMP3 made (SPEC.md 121.7): a record
+    whose file is XTMP3's goes with its file; a record that names someone
+    else's WAV (its chunk is not xtm3) goes, and the file STAYS; a file no
+    record names is never touched"""
+    leg = "dfdel"
+    name = "AFTERHRS.MP3"
+    r = Rig(leg, floppy=[fixture(name)], hd=[(HD0_GEO, [], [], 0)])
+    keep = r.tmp
+    try:
+        if not check(leg, "XTMP3 opens (boot 1)", r.open_file(
+                "B", name, floppy_listing([name]))):
+            return
+        conv_flow(r, leg)
+        r.key("esc")
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 60)
+        r.close()
+        hd0, bimg = r.hds[0], os.path.join(keep, "b.img")
+        wav = bytearray(r.mcat(hd0, "::AFTERHRS.WAV"))
+        other = bytearray(wav)
+        other[36:40] = b"xtmX"              # someone else's WAV: not XTMP3's
+        po, pk = os.path.join(keep, "OTHER.WAV"), os.path.join(keep, "KEEP.TXT")
+        open(po, "wb").write(other)
+        open(pk, "wb").write(b"not XTMP3's\r\n")
+        for f in (po, pk):
+            subprocess.run(["mcopy", "-n", "-i", part(hd0), f, "::"],
+                           check=True)
+        dat = bytearray(subprocess.run(["mcopy", "-n", "-i", bimg,
+                                        "::SYSTEM/APPDATA/XTMP3.DAT", "-"],
+                                       capture_output=True).stdout)
+        rec = bytearray(ix_records(dat)[0])
+        rec[24:37] = b"OTHER.WAV".ljust(13, b"\0")
+        dat[8 + 48:8 + 96] = rec            # a second record, naming it
+        pd = os.path.join(keep, "XTMP3.DAT")
+        open(pd, "wb").write(dat)
+        subprocess.run(["mcopy", "-o", "-n", "-i", bimg, pd,
+                        "::SYSTEM/APPDATA/XTMP3.DAT"], check=True)
+        r2 = Rig(leg, keep=keep)
+        try:
+            if not check(leg, "XTMP3 opens (boot 2)", r2.open_file(
+                    "B", name, floppy_listing([name]))):
+                return
+            r2.until(lambda: r2.st()["md"] in (MD_SPK, MD_IDLE) and
+                     r2.st()["state"] != ST_CHECK, "the cache's play", 60)
+            r2.key("esc")
+            r2.until(lambda: r2.st()["md"] == MD_IDLE, "the stop", 30)
+            for k, what in ((0, "AFTERHRS.WAV, XTMP3's"),
+                            (1, "OTHER.WAV, not XTMP3's")):
+                if not check(leg, "File > Decoded Files", r2.menu_pick(
+                        "File", 4)):
+                    return
+                r2.until(lambda: r2.b("x3c_dmode") == 3, "the window", 10)
+                sel = r2.b("x3c_fsel")
+                check(leg, "the list's first record is selected (%s)" % what,
+                      sel == k, "x3c_fsel %d" % sel)
+                r2.key("ret")               # Enter: Delete (button 1)...
+                time.sleep(1.5)
+                if not check(leg, "...asks first; Proceed", r2.alert_button(1)):
+                    return
+                time.sleep(2.5)
+                r2.key("esc")               # (the window: Close)
+                time.sleep(1)
+        finally:
+            r2.close()
+        names = r.mdir(hd0)
+        check(leg, "XTMP3's own WAV is deleted",
+              not any("AFTERHRS.WAV" in n for n in names), str(names))
+        check(leg, "someone else's WAV, though a record named it, STAYS",
+              any("OTHER.WAV" in n for n in names), str(names))
+        check(leg, "a file no record names is untouched",
+              any("KEEP.TXT" in n for n in names), str(names))
+        dat = subprocess.run(["mcopy", "-n", "-i", bimg,
+                              "::SYSTEM/APPDATA/XTMP3.DAT", "-"],
+                             capture_output=True).stdout
+        used = [x[46] for x in ix_records(dat)] if dat else []
+        check(leg, "both records are gone from XTMP3.DAT", not any(used),
+              str(used))
+    finally:
+        shutil.rmtree(keep, ignore_errors=True)
+
+
+def leg_batch():
+    """an APPROVED BATCH (SPEC.md 121.7): the first track's drive dialog with
+    'Queue too: Yes', and the second converts into the same folder with no
+    dialog at all"""
+    leg = "batch"
+    a, b = "AFTERHRS.MP3", "X11K24.MP3"
+    lst = floppy_listing([a, b])
+    r = Rig(leg, floppy=[fixture(a), fixture(b)], hd=[(HD0_GEO, [], [], 0)])
+    try:
+        if not check(leg, "XTMP3 opens on the first", r.open_file("B", a, lst)):
+            return
+        r.until(lambda: r.st()["md"] == MD_CHOOSE, "its dialog", 90)
+        r.key("esc")
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the cancel", 20)
+        if not check(leg, "File > Add to Queue", r.menu_pick("File", 1)):
+            return
+        r.until(lambda: struct.unpack("<H", r.read(S("fdlg_win"), 2))[0],
+                "the Open dialog", 20)
+        wp = struct.unpack("<H", r.read(S("fdlg_win"), 2))[0]
+        wx, wy = struct.unpack("<HH", r.read(geom.KERNEL_SEG * 16 + wp + 2, 4))
+        time.sleep(1.5)                     # its listing: B:, as the Disk
+        xmcheck.dblclick(r.sock, wx + 70,   # window lists it, the second MP3
+                         wy + 47 + 16 * lst.index(b))
+        r.until(lambda: r.b("x3_qn") == 2, "the queue of two", 20)
+        check(leg, "two tracks queued", r.b("x3_qn") == 2, str(r.b("x3_qn")))
+        r.key("spc")                        # the first, played: its dialog
+        r.until(lambda: r.st()["md"] == MD_CHOOSE, "the drive dialog", 90)
+        r.key("q")                          # 'Queue too: Yes'
+        time.sleep(0.8)
+        check(leg, "'Queue too: Yes'", r.b("x3c_bqueue") == 1)
+        r.key("ret")
+        time.sleep(2.5)
+        r.key("ret")
+        r.until(lambda: r.st()["md"] not in (MD_CHOOSE, MD_CONV),
+                "the first conversion", 240, 0.3)
+        check(leg, "the first plays", r.st()["state"] == ST_FILE)
+        asked = []
+        r.until(lambda: (asked.append(r.st()["md"]) or
+                         r.st()["state"] == ST_DONE or
+                         (r.st()["state"] == ST_FILE and
+                          r.st()["cur"] == 1)), "the second", 400, 0.3)
+        s = r.st()
+        check(leg, "the second converted and plays with NO dialog",
+              MD_CHOOSE not in asked and s["cur"] == 1 and
+              s["state"] in (ST_FILE, ST_DONE),
+              "state %d cur %d, modes %s" % (s["state"], s["cur"],
+                                             sorted(set(asked))))
+        r.key("esc")
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 30)
+        r.close()
+        names = r.mdir(r.hds[0])
+        check(leg, "both WAVs are on C:, no .TMP",
+              any("AFTERHRS.WAV" in n for n in names) and
+              any("X11K24.WAV" in n for n in names) and
+              not any(".TMP" in n for n in names), str(names))
+    finally:
+        r.done()
+
+
+def leg_rovol():
+    """a READ-ONLY fixed volume: QEMU's IDE has no write-protect for a hard
+    disk, so the one this machine HAS - a CD-ROM through CDROM.DRV (SPEC.md
+    119), VK_FIXED with no write-at - is in the drive dialog, greyed
+    'read-only', and Decode and Play refuses it"""
+    leg = "rovol"
+    name = "AFTERHRS.MP3"
+    iso = os.path.join(ROOT, "build", "x3ro%d.iso" % os.getpid())
+    subprocess.run([sys.executable, "tools/os88cdiso.py", "iso", "-o", iso,
+                    "--volid", "X3RO", "--file",
+                    "README.TXT=tests/cdfix/README.TXT"], check=True,
+                   capture_output=True)
+    cfgb = (b"O88CFG\0\0" + (3).to_bytes(2, "little") + b"DW" +
+            bytes([1, 2]) + (1 << 8).to_bytes(2, "little") + b"\0\0")
+    r = Rig(leg, floppy=[fixture(name)], hd=[(HD0_GEO, [], [], 0)],
+            syscfg=cfgb, extra=["-drive", "file=%s,format=raw,if=ide,"
+                                "index=2,media=cdrom" % iso])
+    try:
+        if not check(leg, "XTMP3 opens", r.open_file("B", name,
+                                                      floppy_listing([name]))):
+            return
+        r.until(lambda: r.st()["md"] == MD_CHOOSE, "the drive dialog", 90)
+        nv = r.b("x3c_nv")
+        vv, vf = list(r.rd("x3c_vv", nv)), list(r.rd("x3c_vf", nv))
+        print("     volumes %s flags %s" % (["%c:" % (65 + v) for v in vv], vf))
+        ro = [i for i in range(nv) if vf[i] & 1]
+        check(leg, "a read-only fixed volume (the CD) is listed, flagged so",
+              nv == 2 and len(ro) == 1 and not vf[1 - ro[0]] & 1, str(vf))
+        if ro:
+            while r.b("x3c_vsel") != ro[0]:
+                r.key("down" if r.b("x3c_vsel") < ro[0] else "up")
+                time.sleep(0.5)
+            r.key("ret")
+            time.sleep(2)
+            check(leg, "Decode and Play is greyed on it (Enter does nothing)",
+                  r.st()["md"] == MD_CHOOSE and not r.b("x3c_savepend"))
+    finally:
+        r.done()
+        if os.path.exists(iso):
+            os.unlink(iso)
+
+
+def leg_packed():
+    """an MP3 STORED PACKED (an lz4 'CZ' wrapper: READ_SEQ hands over the
+    wrapper, SPEC.md 20.14.3) is refused by name, never decoded as noise"""
+    leg = "packed"
+    t = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    pk = os.path.join(t, "PACKED.MP3")
+    subprocess.run([sys.executable, "tools/os88lz.py", "--wrap", pk,
+                    fixture("AFTERHRS.MP3")], check=True, capture_output=True)
+    r = Rig(leg, stub=False, floppy=[pk], hd=[(HD0_GEO, [], [], 0)])
+    try:
+        if not check(leg, "XTMP3 opens on it", r.open_file(
+                "B", "PACKED.MP3", floppy_listing(["PACKED.MP3"]))):
+            return
+        r.until(lambda: r.st()["state"] == ST_ERROR, "the refusal", 30)
+        check(leg, "ERROR: 'The MP3 is stored packed'",
+              r.st()["state"] == ST_ERROR and
+              r.errtext() == "The MP3 is stored packed",
+              "state %d '%s'" % (r.st()["state"], r.errtext()))
+        check(leg, "...and no decoder was fetched for it",
+              list(r.rd("x3_nfetch", 5))[2:4] == [0, 0])
+    finally:
+        r.done()
+        shutil.rmtree(t, ignore_errors=True)
+
+
+def leg_covox():
+    """the finished file's ACTUAL SOUND with no card. QEMU's pcspk renders
+    only a PIT mode-3 square (its capture of the speaker's PWM bracket is
+    EMPTY, measured), so the speaker cannot be heard there; the Covox can,
+    exactly: the same bracket (apspk.inc, SPEC.md 86.21.3) copies the WAV's
+    samples to the LPT data port one for one, and QEMU traces every byte
+    written there (parallel_ioport_write). The shipped package, the real
+    STANDARD decoder: the WAV it finished must be, sample for sample, what
+    the Covox was given"""
+    leg = "covox"
+    name = "AFTERHRS.MP3"
+    tr = os.path.join(ROOT, "build", "x3cvx%d.log" % os.getpid())
+    cfgb = (b"O88CFG\0\0" + (3).to_bytes(2, "little") + b"DW" +
+            bytes([1, 2]) + (1).to_bytes(2, "little") + b"SR" +
+            bytes([1, 1, 4]) + b"\0\0")      # SOUND.DRV, the Covox on LPT1
+    r = Rig(leg, stub=False, floppy=[fixture(name)],
+            hd=[(HD0_GEO, [], [], 0)], syscfg=cfgb,
+            extra=["-parallel", "null", "-trace",
+                   "enable=parallel_ioport_write,file=%s" % tr])
+    try:
+        if not check(leg, "XTMP3 opens (no card: a Covox)", r.open_file(
+                "B", name, floppy_listing([name]))):
+            return
+        conv_flow(r, leg)
+        check(leg, "the finished file plays through the bracket",
+              r.st()["md"] == MD_SPK and r.st()["state"] == ST_FILE,
+              "md %d state %d %s" % (r.st()["md"], r.st()["state"],
+                                     r.errtext()))
+        g0 = r.w("x3_grans")                # QEMU runs the bracket's 11 kHz
+        time.sleep(45)                      # IRQ0 slowly (~700 samples a
+        check(leg, "no granule decoded while it plays",   # wall second):
+              r.w("x3_grans") == g0)        # what it played in 45 s is held
+        r.key("esc")
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 60)
+    finally:
+        r.close()
+    try:
+        data = r.mcat(r.hds[0], "::AFTERHRS.WAV")
+        if not check(leg, "the WAV is on C:", data is not None):
+            return
+        dlen = struct.unpack_from("<I", data, 2048 - 4)[0]
+        pcm = data[2048:2048 + dlen]
+        out = bytearray()
+        for ln in open(tr, errors="replace"):
+            m = re.search(r"parallel_ioport_write.*addr 0x0+ val 0x([0-9a-f]+)",
+                          ln)
+            if m:
+                out.append(int(m.group(1), 16))
+        k = bytes(out).find(pcm[:256])
+        same = 0
+        if k >= 0:                          # the longest run from the head
+            got = bytes(out[k:k + len(pcm)])
+            same = next((i for i in range(len(got)) if got[i] != pcm[i]),
+                        len(got))
+        check(leg, "the Covox was given the WAV's samples, in order, one for "
+              "one, from its first (at least two seconds of them)",
+              k >= 0 and same >= 2 * 11025,
+              "%d bytes written to 378h; the WAV's head %s, %d of its %d "
+              "bytes identical from there" % (
+                  len(out), "at %d" % k if k >= 0 else "nowhere", same,
+                  len(pcm)))
+    finally:
+        if os.path.exists(tr):
+            os.unlink(tr)
         r.done()
 
 
@@ -974,7 +1588,9 @@ def leg_pause():
 LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "cancel": leg_cancel, "full": leg_full, "stale": leg_stale,
         "novol": leg_novol, "twovol": leg_twovol, "playwav": leg_playwav,
-        "pause": leg_pause, "xtpeak": leg_xtpeak}
+        "pause": leg_pause, "xtpeak": leg_xtpeak, "xtclu": leg_xtclu,
+        "chgsrc": leg_chgsrc, "dfdel": leg_dfdel, "batch": leg_batch,
+        "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox}
 
 
 def main():

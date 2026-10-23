@@ -66,8 +66,16 @@ X3_CAL_HOPE equ 4                   ; a first granule 4x short of passing ends
 X3_CAL_SKIP equ 2                   ; frames decoded untimed after the probe's
                                     ; seek, so a short reservoir's silence is
                                     ; not what is timed
-X3_PREROLL  equ 2                   ; frames decoded to nothing after a seek or
-                                    ; a rung change (SPEC.md 121.9)
+X3_PREROLL  equ 6                   ; frames decoded to nothing after a seek or
+                                    ; a rung change (SPEC.md 121.9): MEASURED -
+                                    ; the least pre-roll after which the output
+                                    ; is an uninterrupted decode's, over 749
+                                    ; seeks into 33 fixtures: 1 frame 3.2%, 2
+                                    ; 15.8%, 3 60.7%, 4 92.5%, 5 99.9%, 6 100%.
+                                    ; A frame's main data reaches back up to
+                                    ; 511 bytes (several frames at 32 kbps),
+                                    ; and short blocks chain their overlap
+                                    ; (docs/xtmp3/ENGINE.md section 1)
 X3_OFFMAX   equ 8                   ; offline Auto: the best rung converting in
                                     ; at most 8x the track's own length
 X3_WINGR    equ 32                  ; granules a live slow window spans
@@ -90,6 +98,10 @@ X3_PCMSZ    equ 576 * 2 * 2         ; a granule's PCM, at most: 576 frames,
 X3_RAMP     equ 32                  ; frames an underrun's ramp to silence takes
 X3_DEVMIN   equ 4000                ; the card's lowest rate (a DSP's floor)
 X3_DEVMAX   equ 22050               ; ...its highest without SND_CAP_PCM_HI
+X3_CEILKB   equ 390                 ; the XT path's working set, at most: 390 KB
+                                    ; = 399,360 bytes, inside SPEC.md 121.10's
+                                    ; 400,000 (x3_plan budgets against it)
+X3_PCMKB    equ (X3_PCMRES + 1023) / 1024   ; the PCM's room, in the claim
 
 ; --- worker jobs, and what the worker asks of the UI task --------------------------
 WJ_NONE     equ 0
@@ -155,7 +167,10 @@ X3_LAXT     equ 0x4000
 %define AP_LA_LOW  word [x3_lalw]
 X3_PCMRES   equ 2560                ; the PCM's room, X3_PCMSZ to 512 bytes, so
                                     ; a conversion's stage after it is aligned
-AP_RD_CHUNK equ 16384               ; the most a gulp reads
+AP_RD_CHUNK equ 32768               ; the most a gulp reads: a cluster of 32 KB
+                                    ; (FAT16's largest) is one gulp, so a
+                                    ; finished WAV plays from any volume; an
+                                    ; MP3 wants two in its ring (x3_plan)
 AP_DRAW_TICKS equ 8                 ; the speaker's redraw throttle
 AP_FMT_PCM8 equ 0                   ; apspk's file formats: a finished WAV is
 AP_FMT_ADPCM equ 1                  ; always PCM, so its ADPCM arm never runs
@@ -306,6 +321,7 @@ x3_e_init:
     mov byte [x3_md], MD_IDLE
     mov byte [x3_lastq], 0xFF
     mov byte [x3_bpart], 0xFF       ; no backend part fetched
+    mov byte [x3_bkind], 0xFF
     mov ax, X3_LABIG
     call x3_lasize
     push bx
@@ -544,6 +560,8 @@ x3_stopall:
     mov byte [x3_st+X3S_QUAL], X3Q_AUTO
     mov byte [x3_md], MD_IDLE
     mov byte [x3_paused], 0
+    mov byte [x3_rampout], 0
+    mov byte [x3_rampin], 0
     pop bx
     ret
 
@@ -966,9 +984,15 @@ x3_trk_open:
     jc .nomem
     call x3_cluget                  ; [ap_clu] for this volume
     jc .noread
+    cmp word [ap_clu], X3_LABIG / 2 ; an MP3 wants two clusters in its ring
+    ja .clus                        ; (x3_plan): 32 KB clusters, by name
     mov si, x3_fname
-    call x3_fsize                   ; DX:AX = its bytes
+    call x3_findsz                  ; DX:AX = its bytes (FIND: the flags too)
     jc .noread
+    test byte [x3_find+22], OSAPI_FIND_CZ
+    jnz .packed                     ; STORED PACKED: READ_SEQ hands over the
+                                    ; wrapper, not the stream (SPEC.md
+                                    ; 20.14.3) - said, never decoded as noise
     mov [x3_flen], ax
     mov [x3_flen+2], dx
     mov di, x3_info
@@ -999,6 +1023,12 @@ x3_trk_open:
     jc .noread
     clc
     ret
+.clus:
+    mov word [x3_st+X3S_ERR], x3_s_clus
+    jmp short .fail
+.packed:
+    mov word [x3_st+X3S_ERR], x3_s_packed
+    jmp short .fail
 .nomem:
     mov word [x3_st+X3S_ERR], ap_s_nomem
     jmp short .fail
@@ -1173,7 +1203,7 @@ x3_nameeq:
 ; x3_cluget - [ap_clu] = the bytes a cluster of the volume we stand in, from
 ; a per-volume byte of sectors a cluster (OSAPI_FILE_DFREE counts the whole
 ; FAT, ~105 ms on an XT's 20 MB disk, so it is asked once a volume). CF = 1:
-; a cluster no 16 KB gulp holds (FAT16's 32 KB), refused by name
+; a cluster no gulp holds (past FAT16's 32 KB)
 x3_cluget:
     push ax
     push bx
@@ -1458,10 +1488,11 @@ x3_ofmt:
     jz .top
     mov cx, 44100
     cmp byte [x3_och], 2            ; an SB Pro's stereo: 22,050 a channel
-    jne .top
-    test word [x3_caps], SND_CAP_PCM16
-    jnz .top                        ; (an SB16 takes 44,100 a channel)
-    mov cx, X3_DEVMAX
+    jne .top                        ; (SPEC.md 34.5.5). A DSP 4.xx takes
+    test word [x3_caps], SND_CAP_PCM16 | SND_CAP_ADPCM4Q    ; 44,100 a
+    jnz .top                        ; channel with or without its 16-bit DMA
+    mov cx, X3_DEVMAX               ; channel - ADPCM4Q is the SDK's "the DSP
+                                    ; answers 4.xx", which an SB Pro never is
 .top:
     cmp ax, cx
     ja .no
@@ -1521,6 +1552,7 @@ x3_snd_open:
     mov [x3_lasthalf], al
     mov [x3_sended], al
     mov [x3_drvund], al
+    mov [x3_rampst], al             ; (a step's ramp out is the old stream's)
     mov [x3_wslow], al              ; a new rung: a new window
     mov [x3_wg], ax
     mov [x3_wacc], ax
@@ -1612,6 +1644,8 @@ X3_XRL      equ 32768
 
 x3_ringget:
     mov byte [x3_ext], 0
+    cmp byte [x3_bkind], X3K_XT     ; the XT backend: the small grant, always
+    je x3_grant                     ; (x3_grant says why)
     mov ax, [x3_orate]
     mul word [x3_fby]
     or dx, dx
@@ -1651,9 +1685,15 @@ x3_grant:
     or dx, dx
     jnz .big
     cmp ax, X3_RINGHI
-    jb .want
+    jb .xt
 .big:
     mov cx, X3_RINGBIG * 1024
+.xt:
+    cmp byte [x3_bkind], X3K_XT     ; UNDER THE XT BACKEND the grant is 8 KB
+    jne .want                       ; at any rate: its machine has 400,000
+    mov cx, X3_RINGSM * 1024        ; bytes for everything (SPEC.md 121.10,
+                                    ; x3_plan budgets it), and a rung that
+                                    ; keeps up has its output in 8 KB
 .want:
     cmp byte [x3_ghave], 0
     je .try
@@ -1888,6 +1928,30 @@ x3_feed:
     mov al, X3R_END
     jmp x3_kick
 .fill:
+    cmp byte [x3_rampout], 0        ; A STEP'S RAMP OUT (x3_stepbegin): what is
+    je .nramp                       ; staged and a ramp to silence, published
+    mov ax, [x3_total]              ; as the LAST half - and the bytes of real
+    sub ax, [x3_cons]               ; audio it ends on banked for the position.
+    mov bx, [x3_rsz]                ; (A ring with no room for a half: the
+    sub bx, X3_HALF                 ; next pass)
+    cmp ax, bx
+    jae .out
+    mov ax, [x3_staged]
+    sub ax, [x3_cons]               ; audio it ends on banked for the position
+    xor dx, dx
+    add ax, [x3_played]
+    adc dx, [x3_played+2]
+    mov [x3_stepby], ax
+    mov [x3_stepby+2], dx
+    call x3_ramp
+    add word [x3_total], X3_HALF
+    mov byte [x3_lasthalf], 1
+    mov byte [x3_rampst], 1
+    call x3_pub
+    mov byte [x3_job], WJ_NONE      ; nothing more of this rung...
+    mov byte [x3_rampout], 0        ; ...and the step goes on (LAST)
+    ret
+.nramp:
     call x3_lalow                   ; the look-ahead asked for BEFORE it runs
     mov byte [x3_halves], 0         ; dry (SPEC.md 86.5's low-water mark)
 .more:
@@ -1901,23 +1965,29 @@ x3_feed:
     je .out
     call x3_feedhalf                ; CF = 1 nothing published
     jc .out
-    mov cx, [x3_total]
-    cmp byte [x3_ext], 0            ; an external ring: its control word is
-    je .v1                          ; what the card reads, and verb 1 only
-    push es                         ; resumes it after an underrun
-    mov es, [x3_xseg]
-    mov [es:X3_XRL+SND_EXT_TOTAL], cx
-    pop es
-.v1:
-    mov al, 1                       ; verb 1: the new total
-    mov ah, [x3_hand]
-    call OSAPI_SND_STREAM
+    call x3_pub
     cmp byte [x3_lasthalf], 0
     jne .out
     inc byte [x3_halves]
     cmp byte [x3_halves], X3_MAXFEED
     jb .more
 .out:
+    ret
+
+; x3_pub - [x3_total] to the card: an external ring's control word (what the
+; card reads) and verb 1 (which alone resumes an underrun). The worker's
+x3_pub:
+    mov cx, [x3_total]
+    cmp byte [x3_ext], 0
+    je .v1
+    push es
+    mov es, [x3_xseg]
+    mov [es:X3_XRL+SND_EXT_TOTAL], cx
+    pop es
+.v1:
+    mov al, 1                       ; verb 1: the new total
+    mov ah, [x3_hand]
+    call OSAPI_SND_STREAM           ; (a far slot: never a tail jump)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1947,6 +2017,10 @@ x3_feedhalf:
     mov [x3_wt0+2], dx
     call x3_gran1                   ; CF = 0: CX bytes of PCM
     jc .dry
+    cmp byte [x3_rampin], 0         ; a step's new rung: its first frames
+    je .st                          ; rise from silence
+    call x3_rampup
+.st:
     call x3_stage                   ; ...into the grant at [x3_staged]
     call x3_window                  ; is the machine keeping up?
     jmp short .top
@@ -2176,6 +2250,75 @@ x3_rampfill:
     jmp short .w16
 .out:
     pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; x3_rampup - CX bytes of fresh PCM (X3_PCMOFF): while [x3_rampin] frames
+; are owed, each frame scaled by (X3_RAMP - owed) / X3_RAMP - a step's new
+; rung starts from silence as the old one ended on it. keeps all
+x3_rampup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov es, [ap_la_seg]
+    mov si, X3_PCMOFF
+.f:
+    cmp byte [x3_rampin], 0
+    je .out
+    jcxz .out
+    mov bl, X3_RAMP
+    sub bl, [x3_rampin]             ; BL = k, 0 .. X3_RAMP - 1
+    mov bh, [x3_och]                ; BH = the frame's samples
+.s:
+    cmp byte [x3_obits], 16
+    je .w
+    mov al, [es:si]                 ; 8-bit: (s - 80h) k / 32 + 80h
+    sub al, 0x80
+    imul bl
+    sar ax, 1
+    sar ax, 1
+    sar ax, 1
+    sar ax, 1
+    sar ax, 1
+    add al, 0x80
+    mov [es:si], al
+    inc si
+    dec cx
+    jmp short .n
+.w:
+    cmp cx, 2
+    jb .out
+    mov ax, [es:si]                 ; 16-bit: s k / 32
+    push bx
+    xor bh, bh
+    imul bx
+    pop bx
+    mov dl, 5
+.sh:
+    sar dx, 1
+    rcr ax, 1
+    dec dl
+    jnz .sh
+    mov [es:si], ax
+    add si, 2
+    sub cx, 2
+.n:
+    dec bh
+    jz .fr
+    jcxz .out
+    jmp short .s
+.fr:
+    dec byte [x3_rampin]
+    jmp short .f
+.out:
+    pop es
+    pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -2661,10 +2804,13 @@ x3_filepeak:
 ; x3_pos - DX:AX = the output sample the card has PLAYED: the open's base
 ; plus the bytes consumed, in frames
 x3_pos:
-    push bx
-    push cx
     mov ax, [x3_played]
     mov dx, [x3_played+2]
+; x3_by2pos - DX:AX = bytes of the stream since its open -> DX:AX = the
+; output sample they reach
+x3_by2pos:
+    push bx
+    push cx
     mov cx, [x3_fby]
     cmp cx, 1
     je .one
@@ -2890,12 +3036,19 @@ x3_resync:
     pop ax
     or cx, cx
     jz .aim                         ; (already at the first)
+    or bx, bx                       ; a pre-roll from the very first frame: the
+    jz .from0                       ; audio's own start, never an estimate (and
+                                    ; never a Xing frame a TOC points at)
     push cx
     mov cx, bx
     call x3_fr2ms                   ; DX:AX = the pre-roll's frame's ms
     mov di, x3_info
     call x3p_seekpos                ; ...its offset
     pop cx
+    jmp short .aim
+.from0:
+    mov ax, [x3_info+X3I_AUDIO]
+    mov dx, [x3_info+X3I_AUDIO+2]
     jmp short .aim
 .start:
     mov word [x3_tframe], 0
@@ -2904,6 +3057,8 @@ x3_resync:
     mov dx, [x3_info+X3I_AUDIO+2]
 .aim:
     push cx
+    mov [x3_rsoff], ax              ; (where the pre-roll's scan begins: what
+    mov [x3_rsoff+2], dx            ; tests/xtmp3live.py's seek decodes from)
     call x3_la_mp3                  ; the producer at DX:AX
     mov ax, [x3_lasz]               ; half the ring before the front scans
     shr ax, 1
@@ -3086,14 +3241,25 @@ x3_stepbegin:
     call x3l_below                  ; AL = the next live rung down, CF none
     jc .out
     mov [x3_steprung], al
-    mov byte [x3_job], WJ_NONE      ; no new halves: the ring plays out
     mov byte [x3_md], MD_STEP
     mov byte [x3_st+X3S_STATE], X3ST_BUFFER
+    cmp byte [x3_lasthalf], 0       ; the stream's last half is in already:
+    jne .cut                        ; nothing to ramp, it plays out
+    mov byte [x3_rampout], 1        ; THE RAMP OUT: the worker's next pass ends
+    ret                             ; the stream on a ramp to silence (x3_feed)
+.cut:
+    mov byte [x3_job], WJ_NONE      ; no new halves: the ring plays out
 .out:
     ret
 
 ; x3_steptick - MD_STEP: the card played everything it had? the new rung
 x3_steptick:
+    cmp byte [x3_rampout], 0        ; the worker has not ramped out yet
+    je .rd
+    cmp byte [x3_sended], 0         ; (unless the stream ended under it)
+    je .out
+    mov byte [x3_rampout], 0
+.rd:
     cmp byte [x3_sopen], 0
     je .go
     mov al, 3
@@ -3107,7 +3273,13 @@ x3_steptick:
     cmp dx, [x3_total]
     jne .out
 .go:
-    call x3_pos                     ; the sample reached, at the OLD rate
+    call x3_pos                     ; the sample reached, at the OLD rate -
+    cmp byte [x3_rampst], 0         ; the last REAL one where the stream was
+    je .p                           ; ramped out (its ramp and silence are not
+    mov ax, [x3_stepby]             ; the track's)
+    mov dx, [x3_stepby+2]
+    call x3_by2pos
+.p:
     call x3_samp2ms
     push ax
     push dx
@@ -3120,7 +3292,8 @@ x3_steptick:
     call x3_resync
     jc .out
     mov byte [x3_sjob], WJ_LIVE
-    call x3_snd_open
+    mov byte [x3_rampin], X3_RAMP   ; THE RAMP IN: the new rung's first frames
+    call x3_snd_open                ; rise from silence (x3_feedhalf)
     jc .out
     mov byte [x3_md], MD_LIVE
     mov byte [x3_st+X3S_STATE], X3ST_LIVE
@@ -3153,6 +3326,11 @@ x3_rungset:
     mov ax, X3_LAXT
 .lsz:
     call x3_lasize
+    call x3_onew                    ; THIS rung's OPEN record, in x3_onrec
+    call x3_reuse                   ; the part already OPEN with exactly it (a
+    jnc .ring                       ; probe's, then its job): RESET will do -
+                                    ; x3_resync's - and nothing is fetched
+    call x3_rungrow
     mov al, [bx+RG_BE]
     call x3_be_get                  ; the part HERE, its vectors banked
     jc .nobe
@@ -3170,26 +3348,19 @@ x3_rungset:
     call x3_wsfree                  ; the last OPEN's work segments...
     call x3_wsclaim                 ; ...and this one's
     jc .mem
-    call x3_rungrow
-    mov al, [bx+RG_PROF]
-    mov [x3_open+X3O_PROF], al
-    mov al, [x3_odiv]
-    mov [x3_open+X3O_DIV], al
-    mov al, [x3_och]
-    mov [x3_open+X3O_OCH], al
-    mov byte [x3_open+X3O_FMT], X3_FMT_S16
-    cmp byte [x3_obits], 16
-    je .f
-    mov byte [x3_open+X3O_FMT], X3_FMT_U8
-.f:
-    mov al, [x3_snch]
-    mov [x3_open+X3O_SCH], al
-    mov al, [x3_info+X3I_VER]
-    mov [x3_open+X3O_VER], al
-    mov al, [x3_info+X3I_SRI]
-    mov [x3_open+X3O_SRI], al
-    mov ax, [x3_gain]
-    mov [x3_open+X3O_GAIN], ax
+    push si                         ; the record into OPEN's (its segments
+    push di                         ; are x3_wsclaim's)
+    push es
+    push ds
+    pop es
+    mov si, x3_onrec
+    mov di, x3_open
+    mov cx, X3O_NSEG
+    cld
+    rep movsb
+    pop es
+    pop di
+    pop si
     call x3_memck                   ; (the peak DURING OPEN: part and work)
     mov di, x3_open
     push ds
@@ -3197,8 +3368,15 @@ x3_rungset:
     mov bl, X3V_OPEN
     call x3_bvcall
     jc .openerr
+    mov byte [x3_bopen], 1          ; OPEN, and in effect
     call x3_shrink                  ; the XT part's OPEN half given back
-    call x3_la_claim                ; ...and only then the ring
+.ring:
+    call x3_rungrow
+    mov al, [bx+RG_BE]
+    mov [x3_bkind], al
+    call x3_plan                    ; the ring (and a conversion's stage) for
+    jc .plan                        ; the clusters, under the ceiling...
+    call x3_la_claim                ; ...and only then claimed
     jc .mem
     mov al, [x3_och]
     mov [x3_st+X3S_CHANS], al
@@ -3208,6 +3386,9 @@ x3_rungset:
     mov [x3_st+X3S_RATE], ax
     clc
     ret
+.plan:
+    mov [x3_st+X3S_ERR], ax         ; (x3_plan's sentence)
+    jmp short .fail
 .rate:
     mov word [x3_st+X3S_ERR], x3_s_rate
     jmp short .fail
@@ -3230,6 +3411,187 @@ x3_rungset:
 .fail:
     mov byte [x3_st+X3S_STATE], X3ST_ERROR
     stc
+    ret
+
+; x3_onew - x3_onrec = rung [x3_rung]'s OPEN record up to its segments:
+; profile, divisor, channels, format, the source, the gain. keeps everything
+x3_onew:
+    push ax
+    push bx
+    push cx
+    call x3_rungrow
+    mov al, [bx+RG_PROF]
+    mov [x3_onrec+X3O_PROF], al
+    mov al, [x3_odiv]
+    mov [x3_onrec+X3O_DIV], al
+    mov al, [x3_och]
+    mov [x3_onrec+X3O_OCH], al
+    mov al, X3_FMT_S16
+    cmp byte [x3_obits], 16
+    je .f
+    mov al, X3_FMT_U8
+.f:
+    mov [x3_onrec+X3O_FMT], al
+    mov al, [x3_snch]
+    mov [x3_onrec+X3O_SCH], al
+    mov al, [x3_info+X3I_VER]
+    mov [x3_onrec+X3O_VER], al
+    mov al, [x3_info+X3I_SRI]
+    mov [x3_onrec+X3O_SRI], al
+    mov byte [x3_onrec+X3O_SRI+1], 0
+    mov ax, [x3_gain]
+    mov [x3_onrec+X3O_GAIN], ax
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; x3_reuse - is the backend this rung wants resident and OPEN with exactly
+; x3_onrec (its work still claimed)? CF = 0 yes: the open stands and a RESET
+; is all it needs - which is what saves an XT the second fetch of a part a
+; probe shrank (24 KB packed off the disk) when the job's rung is the probe's
+x3_reuse:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    cmp byte [x3_bopen], 0
+    je .no
+    call x3_rungrow
+    mov al, X3_PART_STD
+    cmp byte [bx+RG_BE], X3K_XT
+    jne .p
+    mov al, X3_PART_XT
+.p:
+    cmp al, [x3_bpart]
+    jne .no
+    mov si, x3_onrec
+    mov di, x3_open
+    mov cx, X3O_NSEG
+    call x3_memeq
+    jne .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; x3_plan - THE BUFFERS FOR THE CLUSTERS, under the ceiling (SPEC.md 121.10).
+; The look-ahead's size and, for a conversion, its stage's, chosen once the
+; backend's part, work and OPEN are in, so what is left is MEASURED:
+;   - the look-ahead holds two of the SOURCE's clusters ([ap_clu]) at least:
+;     a gulp is whole clusters and the parser consumes whole frames, so a ring
+;     of one cluster would wait for a gulp it has no room for
+;   - a conversion's stage ([x3c_planc] = the DESTINATION's cluster) is two
+;     halves of max(XC_STAGEKB, or XC_STAGEXT under XT, the cluster); where
+;     that does not fit it is ONE (the worker waits out each write - on an XT
+;     the decode is far the slower), and then the look-ahead is halved as far
+;     as its two clusters allow
+;   - under the XT backend all of it - and the card's grant, which a probe or
+;     a live play takes after - inside X3_CEILKB less what is held now.
+;     STANDARD has no ceiling (its path is measured on its own)
+; out: x3_lasz (x3_lasize), x3_laxkb, x3c_half, x3c_one; CF = 1 nothing
+;      fits, AX = the sentence
+; -----------------------------------------------------------------------------
+x3_plan:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, x3_s_clus
+    mov si, [ap_clu]                ; SI = the least ring: two source clusters,
+    cmp si, X3_LABIG / 2            ; 4 KB at the least (a cluster past 16 KB
+    ja .no                          ; no ring of 32 KB holds twice: refused)
+    shl si, 1
+    cmp si, 4096
+    jae .m
+    mov si, 4096
+.m:
+    mov dx, [x3_lasz]               ; DX = the ring: the backend's, or the least
+    cmp dx, si
+    jae .r
+    mov dx, si
+.r:
+    mov di, 0xFFFF                  ; DI = the budget in KB: none on STANDARD
+    cmp byte [x3_bkind], X3K_XT
+    jne .bud
+    call x3_curkb                   ; AX = KB held now
+    mov di, X3_CEILKB
+    sub di, ax
+    jae .card
+    xor di, di
+.card:
+    cmp byte [x3_card], 0           ; the card's grant to come (none while
+    je .bud                         ; converting: the stream is closed)
+    cmp word [x3c_planc], 0
+    jne .bud
+    sub di, X3_RINGSM
+    jae .bud
+    xor di, di
+.bud:
+    xor cx, cx                      ; CX = the stage's KB (none)
+    mov byte [x3c_one], 0
+    mov bx, [x3c_planc]
+    or bx, bx
+    jz .try
+    mov ax, XC_STAGEKB * 1024       ; a half: max(8 KB, or 4 under XT, the
+    cmp byte [x3_bkind], X3K_XT     ; destination's cluster)
+    jne .h
+    mov ax, XC_STAGEXT * 1024
+.h:
+    cmp ax, bx
+    jae .h2
+    mov ax, bx
+.h2:
+    mov [x3c_half], ax
+    mov cl, 9                       ; both halves' KB: 2H / 1024 = H >> 9
+    shr ax, cl
+    mov cx, ax
+.try:
+    mov ax, dx                      ; the ring, the PCM and the stage, in KB
+    push cx
+    mov cl, 10
+    shr ax, cl
+    pop cx
+    add ax, X3_PCMKB
+    add ax, cx
+    cmp ax, di
+    jbe .fits
+    or bx, bx                       ; too much: a double stage goes single...
+    jz .less
+    cmp byte [x3c_one], 0
+    jne .less
+    mov byte [x3c_one], 1
+    shr cx, 1
+    jmp short .try
+.less:
+    shr dx, 1                       ; ...then the ring halves, while it still
+    cmp dx, si                      ; holds two clusters
+    jae .try
+    mov ax, x3_s_ceil
+.no:
+    stc
+    jmp short .out
+.fits:
+    mov ax, dx
+    call x3_lasize
+    mov [x3_laxkb], cx
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; x3_rungrow - BX -> rung [x3_rung]'s row. keeps the rest
@@ -3304,6 +3666,9 @@ x3_be_get:
     pop bx
     jc .no
     mov [x3_bpart], bl
+    xor bh, bh                      ; THE FETCH COUNT, a part (x3_nfetch):
+    inc byte [x3_nfetch+bx]         ; what proves Original never fetched the
+                                    ; XT part, and a probe's RESET no refetch
     call x3_memck                   ; (the fetch's claim)
 .here:
     mov al, [x3_bpart]
@@ -3360,7 +3725,8 @@ x3_be_drop:
     mov byte [x3_bshr], 0
 %endif
 .out:
-    pop ax
+    mov byte [x3_bkind], 0xFF       ; no backend: a finished file's ring is
+    pop ax                          ; its own size again (x3_grant)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3438,6 +3804,7 @@ x3_wsfree:
     jmp short .f
 .out:
     mov byte [x3_nws], 0
+    mov byte [x3_bopen], 0          ; (an OPEN without its work is not one)
     pop si
     pop dx
     pop cx
@@ -3487,6 +3854,17 @@ x3_shrink:
 ; after each claim. keeps everything
 x3_memck:
     push ax
+    call x3_curkb
+    cmp ax, [x3_st+X3S_PEAK]
+    jbe .o
+    mov [x3_st+X3S_PEAK], ax
+.o:
+    pop ax
+    ret
+
+; x3_curkb - AX = the working set NOW, in KB: the region, the eager carve and
+; the heap's fall since launch (x3_memck's sample). keeps the rest
+x3_curkb:
     push bx
     call OSAPI_MEM_AVAIL            ; BX = total free KB
     mov ax, [x3_free0]
@@ -3498,12 +3876,7 @@ x3_memck:
 %ifdef X3_PARTS
     add ax, [op_kb]                 ; the eager carve: FRONT and ART
 %endif
-    cmp ax, [x3_st+X3S_PEAK]
-    jbe .o
-    mov [x3_st+X3S_PEAK], ax
-.o:
     pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -3642,7 +4015,9 @@ x3l_pick:
     mov al, X3Q_ORIG
     call x3l_ok
     jnc .got
-    jmp short .low1
+    mov byte [x3l_ph], PH_HALF      ; Original SKIPPED (the device's rate, the
+                                    ; floor) is not Original FAILED: Half is
+                                    ; still between it and the cheaper rung
 .half:
     cmp byte [x3l_low], X3Q_QUART   ; Half is between only when Quarter passed
     jne .low1
@@ -4592,6 +4967,9 @@ x3_s_nobe:    db 'No decoder in this build', 0
 x3_s_offer:   db 'The decoder cannot do it', 0
 x3_s_table:   db 'Damaged decoder tables', 0
 x3_s_decode:  db 'The decoder refused', 0
+x3_s_clus:    db "Its disk's clusters are too large", 0
+x3_s_ceil:    db 'Too little memory for that disk', 0
+x3_s_packed:  db 'The MP3 is stored packed', 0
 
 ; =============================================================================
 ; THE ENGINE'S BSS, laid out by xtmp3.asm's X3B list
@@ -4608,6 +4986,9 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_nws, 1
     X3B x3_bpart, 1                 ; ...the part resident (FFh none)...
     X3B x3_bshr, 1                  ; ...shrunk to its resident half...
+    X3B x3_bopen, 1                 ; ...OPEN and in effect (x3_reuse)...
+    X3B x3_bkind, 1                 ; ...its kind, X3K_* (FFh none)...
+    X3B x3_onrec, X3O_NSEG          ; ...the record the next OPEN would take
     X3B x3_free0, 2                 ; the heap's free KB at launch (x3_memck)
     X3B x3_lasz, 2                  ; the look-ahead ring: its bytes, mask,
     X3B x3_lamask, 2                ; refill mark (x3_lasize)...
@@ -4645,7 +5026,11 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_snch, 1
     X3B x3_rung, 1                  ; X3Q_*: the rung open
     X3B x3_lastq, 1
-    X3B x3_steprung, 1              ; the rung a step goes to
+    X3B x3_steprung, 1              ; the rung a step goes to...
+    X3B x3_rampout, 1               ; ...1: the worker owes it a ramp out...
+    X3B x3_rampst, 1                ; ...1: it ramped out, on real audio...
+    X3B x3_stepby, 4                ; ...of these bytes since the open...
+    X3B x3_rampin, 1                ; ...and the new rung's frames to ramp in
     X3B x3_orate, 2                 ; the OUTPUT: rate, channels, bits, divisor
     X3B x3_och, 1
     X3B x3_obits, 1
@@ -4677,6 +5062,8 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_grans, 2                 ; granules decoded
     X3B x3_clips, 2
     X3B x3_tframe, 2                ; the target frame of the last resync
+    X3B x3_rsoff, 4                 ; ...the offset its scan began at
+    X3B x3_nfetch, 5                ; fetches of each part (op_fetch), a byte
     X3B x3_disc, 4                  ; output frames still to drop
     X3B x3_limit, 4                 ; output frames still to keep (FFFFFFFFh)
     X3B x3_pkl, 1                   ; the meters' peaks since the last pass

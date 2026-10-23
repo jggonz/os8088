@@ -595,7 +595,7 @@ x3c_wavchk:
     mov [x3c_wsize+2], dx
     call x3_cluget                  ; the cluster: where the data starts
     jc .no
-    call x3_la_claim                ; the header lands in the ring's claim
+    call x3c_room                   ; the header lands in the ring's claim
     jc .no
     push si
     mov es, [ap_la_seg]
@@ -693,6 +693,30 @@ x3c_wavchk:
     pop es
     stc
     ret
+
+; x3c_room - the ring's claim, holding one cluster of [ap_clu] (the header's
+; read). A conversion's holds its stage, a cluster at least (x3_plan); any
+; other that is too small is made the cluster's size - with the XT backend
+; dropped first when it is resident, the ceiling having no room for both
+; (SPEC.md 121.10): a cache that matches plays with no decoder anyway, and
+; one that does not costs the job one fetch. CF = 1 no memory
+x3c_room:
+    push ax
+    cmp word [x3_laxkb], 0
+    jne .ok
+    mov ax, [x3_lasz]
+    add ax, X3_PCMRES
+    cmp ax, [ap_clu]
+    jae .ok
+    cmp byte [x3_bkind], X3K_XT
+    jne .sz
+    call x3_be_drop
+.sz:
+    mov ax, [ap_clu]
+    call x3_lasize                  ; (the claim given back: a new size)
+.ok:
+    pop ax
+    jmp x3_la_claim
 
 ; -----------------------------------------------------------------------------
 ; x3c_wavopen - the hit (x3c_cacheok's) made the producer's source: standing
@@ -837,8 +861,8 @@ x3c_vscan:
     shr bx, 1
     shr bx, 1
     mov byte [x3c_vf+bx], 0
-    cmp cx, 32                      ; 16 KB clusters at most (a stage half)
-    jbe .big
+    cmp cx, 64                      ; 32 KB clusters at most: the stage is
+    jbe .big                        ; one, or two, of them (x3_plan)
     mov byte [x3c_vf+bx], XV_CLU
 .big:
     cmp dx, [x3c_need+2]            ; room for it?
@@ -1787,19 +1811,11 @@ x3c_start:
     jc .clu
     mov ax, [ap_clu]
     mov [x3c_clu], ax
-    mov bx, XC_STAGEKB * 1024       ; a half: 8 KB, or a cluster if larger -
-    cmp byte [x3c_rung], X3Q_XTSTD  ; 4 KB under the XT backend, whose output
-    jb .hb                          ; is a few KB a second and whose machine
-    mov bx, XC_STAGEXT * 1024       ; has 400,000 bytes (SPEC.md 121.10)
-.hb:
-    cmp ax, bx
-    jbe .h
-    mov bx, ax
-.h:
-    mov [x3c_half], bx
-    mov cl, 9                       ; THE STAGE rides in the ring's claim
-    shr bx, cl                      ; (x3_la_claim): KB for both halves,
-    mov [x3_laxkb], bx              ; 2H / 1024 = H >> 9
+    mov [x3c_planc], ax             ; THE STAGE is planned by x3_rungset once
+                                    ; the decoder is in (x3_plan): two halves
+                                    ; of max(8 KB, 4 under XT, the cluster), or
+                                    ; one, under the XT path's ceiling; it
+                                    ; rides in the ring's claim (x3_la_claim)
     mov si, [x3_trkent]             ; THE DECODER FIRST (SPEC.md 121.10's
     mov dx, [si+QE_DIR]             ; claim order: the part, its work and
     mov bl, [si+QE_VOL]             ; OPEN, then the ring, then the stage),
@@ -1812,6 +1828,7 @@ x3c_start:
     jc .rderr
     mov al, [x3c_rung]
     call x3_rungset
+    mov word [x3c_planc], 0         ; (the plan is this job's alone)
     jc .be
     xor ax, ax
     xor dx, dx
@@ -1846,6 +1863,7 @@ x3c_start:
     mov [x3c_frms], ax
     mov [x3c_frms+2], ax
     mov [x3c_fpos], ax
+    mov [x3c_pend], ax
     mov [x3c_tok], ax
     mov [x3c_fh], al
     mov [x3c_wh], al
@@ -2081,6 +2099,15 @@ x3c_wpass:
     call x3c_hbit
     test [x3c_rdy], al
     jnz .out                        ; ...the writer is behind: wait
+    mov cx, [x3c_pend]              ; A GRANULE'S REST, held in the PCM while
+    jcxz .room                      ; the one half was written (single-
+    mov si, [x3c_psrc]              ; buffered): into the half first
+    mov word [x3c_pend], 0
+    call x3c_put1
+    jmp short .loop
+.room:
+    cmp byte [x3c_one], 0           ; (one half: a granule's rest waits in
+    jne .dec                        ; the PCM, x3c_put1)
     mov ax, [x3c_half]              ; room for a granule in this half, or the
     sub ax, [x3c_fpos]              ; other half free to run on into
     cmp ax, X3_PCMSZ
@@ -2120,20 +2147,41 @@ x3c_hbit:
 ; into the other; a filled half is handed to the writer. The worker's
 x3c_put:
     push ax
+    push dx
+    mov ax, cx                      ; the frames, counted for the identity
+    xor dx, dx
+    div word [x3_fby]
+    add [x3c_frms], ax
+    adc word [x3c_frms+2], 0
+    pop dx
+    pop ax
+    push si
+    mov si, X3_PCMOFF               ; (in the ring's claim, x3eng.inc)
+    call x3c_put1
+    pop si
+    ret
+
+; x3c_put1 - CX bytes of PCM at SI (the ring's claim) into the stage: what
+; a busy half has no room for is left in [x3c_pend] / [x3c_psrc], which the
+; next pass puts first. The worker's. keeps everything
+x3c_put1:
+    push ax
     push bx
     push cx
     push si
     push di
     push es
     mov es, [x3c_sseg]
-    mov si, X3_PCMOFF               ; (in the ring's claim, x3eng.inc)
-    mov ax, cx                      ; the frames, counted for the identity
-    xor dx, dx
-    div word [x3_fby]
-    add [x3c_frms], ax
-    adc word [x3c_frms+2], 0
 .p:
     jcxz .out
+    mov al, [x3c_fh]                ; the half to fill still being written
+    call x3c_hbit                   ; (ONE half, just handed over): the rest
+    test [x3c_rdy], al              ; waits where it is
+    jz .free
+    mov [x3c_pend], cx
+    mov [x3c_psrc], si
+    jmp short .out
+.free:
     mov bx, [x3c_half]
     sub bx, [x3c_fpos]              ; BX = room in the half
     mov ax, cx
@@ -2162,7 +2210,10 @@ x3c_put:
     mov al, [x3c_fh]                ; A HALF: to the writer
     call x3c_hbit
     or [x3c_rdy], al
+    cmp byte [x3c_one], 0           ; (one half: the same one, once written)
+    jne .one
     xor byte [x3c_fh], 1
+.one:
     mov word [x3c_fpos], 0
     push cx
     mov al, X3R_WRITE
@@ -2228,6 +2279,8 @@ x3c_write:
     call x3c_hbit
     not al
     and [x3c_rdy], al               ; the half free again (the worker's)
+    cmp byte [x3c_one], 0
+    jne .h
     xor byte [x3c_wh], 1
     jmp short .h
 .gone:
@@ -3102,7 +3155,7 @@ x3c_s_hd:    db '  Hard disk   ', 0
 x3c_s_kbfree: db ' KB free', 0
 x3c_s_ro:    db '  read-only', 0
 x3c_s_gone:  db '  cannot be read', 0
-x3c_s_clu:   db '  32 KB clusters: not here', 0
+x3c_s_clu:   db '  clusters too large', 0
 x3c_s_small: db '  too little room', 0
 x3c_s_pcm:   db '   PCM: ', 0
 x3c_s_hz:    db ' Hz ', 0
@@ -3181,6 +3234,11 @@ x3c_s_ren:   db 'Cannot name the file', 0
     X3B x3c_wh, 1                   ; ...the half the writer writes next...
     X3B x3c_rdy, 1                  ; ...the halves staged, a bit each
     X3B x3c_lastn, 2                ; the last half's bytes
+    X3B x3c_one, 1                  ; 1 = ONE half (x3_plan: a large cluster)
+    X3B x3c_pend, 2                 ; ...a granule's rest waiting in the PCM,
+    X3B x3c_psrc, 2                 ; and where
+    X3B x3c_planc, 2                ; the destination's cluster while x3_plan
+                                    ; sizes a stage (0: none, not converting)
     X3B x3c_eof, 1                  ; the stream ended
     X3B x3c_wn, 1                   ; granules left this pass
     X3B x3c_canc, 1
