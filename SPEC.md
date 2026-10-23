@@ -54548,6 +54548,11 @@ On 2026-10-23, Browser 1.6c and the newer app set exceeded this geometry by
 Bounce move off `apps360.img`, along with Mines and Missile from the game
 list. The four apps remain on roomier apps disks; `games360.img` carries both
 games.
+On 2026-10-23 the 1.2MB apps disk ran out the same way: Browser 1.6c's 67
+clusters took the set to 2,399 of 2,371. XTMP3 and its demo songs come off
+`apps120.img` and `megaapps120.img` (§121.12), as they were already off the
+720KB disk; `make xtmp3disk` still carries them in every geometry.
+
 **`office360.img` is curated the same way, and it ran out on 2026-10-22.**
 SHEET's two modules (§82.16, §81.94) took it to 354 of 354 clusters, so a save
 to it failed. The owner took **`LAKE.JPG` off that disk alone** — PiXEL's one
@@ -218875,20 +218880,20 @@ STANDARD cases, twelve XT ones).
 
 ### 121.12 Where it ships (shipped, dated 2026-10-22)
 
-**`XTMP3.O88` is in `$(APPS_TOOLS)`**, so it is in `APPS/` on the 1.44MB and
-1.2MB apps disks, on kern_mega's two apps disks (its `PKG_MEGA` arm), on the
-everything set (§19.10) and on the live media (§80.6). Four sites take it off,
+**`XTMP3.O88` is in `$(APPS_TOOLS)`**, so it is in `APPS/` on the 1.44MB apps
+disk, on kern_mega's 1.44MB apps disk (its `PKG_MEGA` arm), on the
+everything set (§19.10) and on the live media (§80.6). Five sites take it off,
 each with its own ground, and §24.6.1's rule binds the two that are about
 room: being curated onto a disk is a decision with a date on it.
 
 | disk | carries | clusters |
 |---|---|---|
 | `apps.img`, 1.44MB | XTMP3.O88; NEONDRV, NIGHTSIG, AFTERHRS in `MEDIA/` | 512-byte clusters: the package 193, the songs 60 + 99 + 138 = 297; 379 of 2,847 left |
-| `apps120.img`, 1.2MB | XTMP3.O88; NIGHTSIG, AFTERHRS | 393 free before it and the package is 193, which leaves 200: all three songs are 297, and NEON DRIVE with AFTER HOURS (198) would leave 2, a disk the next byte fills. The two smaller songs (159) leave 41 |
+| `apps120.img`, 1.2MB | **not on it** (dated 2026-10-23) | it was carried with NIGHTSIG and AFTERHRS until Browser 1.6c grew 67 clusters and the set needed 2,399 of 2,371; the package is 193 of them, the songs 159 more. `make xtmp3disk`'s 1.2MB floppy carries it with all three songs |
 | `apps720.img` | **not on it** | 36 of 713 free; the package alone is 97. `make xtmp3disk`'s 720KB floppy carries it, and it is a candidate for the third 720KB disk the owner has planned (§121.13) |
 | `apps360.img` | **not on it** | 14 of 354 free |
 | `media360.img`, 360KB | XTMP3.O88 at the root, AFTERHRS in `MEDIA/` | 147 of 354 free before it; 97 + 30 leaves 20 |
-| `megaapps.img`, `megaapps120.img` | as the 1.44MB and 1.2MB apps disks | |
+| `megaapps.img`, `megaapps120.img` | `megaapps.img` as the 1.44MB apps disk; `megaapps120.img` **not on it**, as `apps120.img` (it needed 2,408 of 2,371) | |
 | the everything set | XTMP3.O88 in `APPS/`, no songs | MIDIRack's songs' reason (§105.10): the RunCPM fill would pay for them |
 | the live media | XTMP3.O88 in `APPS/`, all three songs in `MEDIA/` | `t_livefull` holds it to the 1.44MB apps disk |
 | `smallapps*.img`, `small*.img` | **not on them** (`$(SMALLOMIT)`) | |

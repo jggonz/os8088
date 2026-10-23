@@ -7835,7 +7835,7 @@ $(BUILD)/browser.part.bin: $(BUILD)/browser.bin \
 
 $(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
                       tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
-	python3 tools/os88pkg.py $(BUILD)/browser.bin -o $@ \
+	$(OS88PKG) $(BUILD)/browser.bin -o $@ \
 	        --part $(BUILD)/browser.part.bin --part-compress lz4
 
 # ...and the REFERENCE build, which letters every history row where the
@@ -15405,8 +15405,8 @@ $(ZDATA)/MIDI/%.MID: apps/midirack/songs/%.MID tools/os88lz.py $(PKGZSTAMP) | $(
 #
 # WHICH DISK CARRIES WHICH (SPEC.md 121.12 has the arithmetic, 24.6.1's rule,
 # dated 2026-10-22): all three on the 1.44MB apps disk and the live media;
-# NIGHT SIGNALS and AFTER HOURS on the 1.2MB one, which had 393 clusters of
-# 512 bytes free and the package is 193 of them; AFTER HOURS alone on
+# NO XTMP3 on the 1.2MB one since 2026-10-23 (APPS120's note; $(XTMP3MP3_120)
+# is kept for the lower-case-name check below); AFTER HOURS alone on
 # media360.img, beside the package. `make xtmp3disk` carries all three in
 # every geometry.
 XTMP3MP3SRC  := tests/xtmp3
@@ -15760,12 +15760,19 @@ MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
 # positionals at an option that takes a value, so the folder stays last.
 APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
                $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
-APPSARGS120 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
-               $(addprefix MEDIA:,$(XTMP3MP3_120)) $(APPDATAFOLDER)
+# ...AND THE 1.2MB DISK LEAVES XTMP3 AND ITS SONGS OFF (SPEC.md 24.6.1's rule,
+# dated 2026-10-23, the 720KB disk's decision of 2026-10-22 one geometry along):
+# Browser 1.6c grew 67 clusters and apps120.img needed 2399 of 2371. The player
+# is 193 of them and the songs ride `make xtmp3disk`'s 1.2MB floppy. The
+# prerequisites ($(APPS120)) and the recipe ($(APPSARGS120)) are filtered
+# together, as the 720KB disk's are.
+APPS120 := $(filter-out $(BUILD)/xtmp3.o88,$(APPS))
+APPSARGS120 := $(filter-out $(APPDATAFOLDER) APPS:$(BUILD)/xtmp3.o88,$(APPSARGS)) \
+               $(APPDATAFOLDER)
 $(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS144)
 
-$(APPSIMG120): $(APPS) $(XTMP3MP3_120) $(LOGOVID) tools/os88disk.py
+$(APPSIMG120): $(APPS120) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS120)
 
 # kern_mega's APPS DISKS (KERN-MEGA-PLAN 14.66): $(APPSARGS) with the
@@ -15784,13 +15791,16 @@ MEGAAPPS = $(call MEGASUB,$(APPS))
 # spliced ahead of $(APPDATAFOLDER) for the same argparse reason
 MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
                   $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
-MEGAAPPSARGS120 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
-                  $(addprefix MEDIA:,$(XTMP3MP3_120)) $(APPDATAFOLDER)
+# ...minus XTMP3 on the 1.2MB disk, the shipped 1.2MB disk's own decision
+# (APPS120's note, 2026-10-23): this one asked for 2408 of 2371 clusters
+MEGAAPPS120 = $(filter-out $(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPS))
+MEGAAPPSARGS120 = $(filter-out $(APPDATAFOLDER) APPS:$(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPSARGS)) \
+                  $(APPDATAFOLDER)
 $(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAAPPSARGS144)
 	@echo "megaapps: $@ - pair it with build/mega.img (\`make mega\`)"
 
-$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3_120) $(LOGOVID) tools/os88disk.py
+$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS120) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAAPPSARGS120)
 	@echo "megaapps: $@ - pair it with build/mega120.img (\`make mega\`)"
 

@@ -16548,10 +16548,12 @@ SOAK = [
         "crosses the old 32 KB source limit.",
         needs=("qemu",), serial=True, builds=True,
         wants=("build/brtest360.img",)),
-    Row("brcapacity-fixtures", "fast", py("tests/brcapacity.py"), 0.2,
+    Row("brcapacity-fixtures", "fast", py("tests/brcapacity.py", "--fixtures"), 0.2,
         "SPEC.md 71.18.1: the manual 96 KiB source/document, 2,200-row, "
         "400-link, doubled-form and aggregate-frameset pages have the exact "
-        "sizes and counts the Browser capacity gate expects."),
+        "sizes and counts the Browser capacity gate expects. builds=True only "
+        "because the registry reads tests/brcapacity.py for `make`; the "
+        "--fixtures mode runs no make and no QEMU.", builds=True),
     Row("netcoexist", "soak", py("tests/netcoexist.py"), 90.0,
         "SPEC.md 72.9.1 and 34.13.1: a network card and an MPU-401 in one "
         "machine. The field lost its network the moment an MPU was added: "

@@ -28,7 +28,40 @@ SOURCE_SIZE = 200 * 1024
 SENTINEL = b"END196KFLOOR"
 
 
+def fixtures():
+    """Host-only: run tools/brmemory.py into a scratch dir and check sizes."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as out:
+        subprocess.run([sys.executable, os.path.join(_ROOT, "tools",
+                        "brmemory.py"), "--out", out], check=True,
+                       stdout=subprocess.DEVNULL)
+        want = {"mem96k.htm": 96 * 1024, "mem196k.htm": SOURCE_SIZE,
+                "boundary100k.htm": 100 * 1024,
+                "boundary160k.htm": 160 * 1024,
+                "boundaryui100k.htm": 100 * 1024,
+                "emsgrowth.htm": 768 * 1024}
+        for name, size in want.items():
+            got = os.path.getsize(os.path.join(out, name))
+            if got != size:
+                raise SystemExit("brcapacity: %s is %d bytes, want %d"
+                                 % (name, got, size))
+        with open(os.path.join(out, "mem196k.htm"), "rb") as f:
+            if SENTINEL not in f.read():
+                raise SystemExit("brcapacity: mem196k.htm lacks %r" % SENTINEL)
+        with open(os.path.join(out, "links400.htm"), "rb") as f:
+            links = f.read()
+        if links.count(b"<a href=") != 400 or links.count(b"<form ") != 8:
+            raise SystemExit("brcapacity: links400.htm is not 400 links "
+                             "and 8 forms")
+        for name in ("linearena.htm", "docwide.htm", "sourcepressure.htm"):
+            if os.path.getsize(os.path.join(out, name)) == 0:
+                raise SystemExit("brcapacity: %s is empty" % name)
+    print("brcapacity --fixtures: sizes and counts ok")
+
+
 def main():
+    if "--fixtures" in sys.argv[1:]:
+        return fixtures()
     os88qemu.own()
     os88qemu.kill()
     subprocess.run(["make", "browsertest"], check=True)
