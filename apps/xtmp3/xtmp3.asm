@@ -29,10 +29,13 @@
 ; =============================================================================
 
 %include "os88api.inc"
+%include "x3gran.inc"               ; the decoder's record and ABI (121.3)
+%include "x3ftab.inc"               ; the front end's tables (x3fronttab.py)
 
-    OS88_HEADER 'XTMP3', x3_entry, 3
+    OS88_HEADER 'XTMP3', x3_entry, 3 | OS88_F_PARTS
                                     ; flags: bit 0 the icon, bit 1 the
-                                    ; association block (SPEC.md 54.6)
+                                    ; association block (SPEC.md 54.6), bit 2
+                                    ; the decoder's parts (SPEC.md 20.12)
     OS88_ICON16                     ; a little stereo deck: an LCD, a knob
     ; --- mask ---
     dw 0x7FFE, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF
@@ -46,6 +49,14 @@
     db 1
     OS88_ASSOC_EXT 'MP3'
     OS88_ASSOC16_END
+
+; --- THE DECODER'S PARTS (SPEC.md 121.3, 20.12): the STANDARD track's ------------
+%define OP_WANT_CSEG                ; a part is far-called through its CODE
+%include "os88parts.inc"            ; selector (op_cseg), read through op_seg
+X3PART_FRONT equ 0                  ; the shared front end, eager
+X3PART_STD   equ 1                  ; the STANDARD reconstruction, lazy
+                                    ; (the XT track's rows follow: see the
+                                    ; table at the foot of this file)
 
 X3_TICK     equ 5                   ; ticks between passes: the demo's clock,
                                     ; and the needles' 3.6 a second
@@ -140,6 +151,24 @@ X3F_FACESZ  equ (X3ART_DIALF_W / 2) * X3ART_DIALF_H  ; a colour dial face
 ; opened on joins the queue at the first tick.
 ; -----------------------------------------------------------------------------
 x3_entry:
+    ; --- the decoder's parts (the STANDARD track): op_load FIRST, ES banked
+    ; for OSAPI_ARG_FILE (os88parts.inc rules 1); then the front end adopts
+    ; the FRONT part (x3pars.inc x3p_init: its header, its tables' CRC)
+    push es
+    call op_load                    ; refuses with its own toast
+    jc .pfail
+    mov al, X3PART_FRONT
+    call op_cseg
+    mov dx, ax
+    mov al, X3PART_FRONT
+    call op_seg
+    call x3p_init
+.pfail:
+    pop es
+    jnc .parts
+    jmp x3_ret
+.parts:
+    ; ---
     call OSAPI_ARG_FILE             ; an .MP3? CF = 1: launched empty
     jc .plain
     mov di, x3_argname              ; SI -> its name in KERNEL_SEG: copied out
@@ -1438,6 +1467,8 @@ x3_hash:
 %include "x3draw.inc"
 %include "x3face.inc"
 %include "x3demo.inc"
+%define X3P_WANT_PROBE              ; the STANDARD track: the front end, frame
+%include "x3pars.inc"               ; level (and the queue's probe)
 
 ; =============================================================================
 ; DATA
@@ -1654,6 +1685,16 @@ x3_ab3:     db 'this machine can sustain', 0
 
 %include "x3art.inc"
 
+; --- THE PARTS TABLE (SPEC.md 20.12.3; the STANDARD track's rows) ------------------
+; os88pkg.py lays the parts out after the image in this order, from the Makefile's
+; --part arguments: build/x3front.bin and build/x3stdp.bin, both lz4.
+    OS88_PARTS_BEGIN 2
+      OS88_PART OP_SEG, OP_COMP             ; X3PART_FRONT: x3front.asm
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; X3PART_STD: x3std.asm
+      ; >>> the XT track's rows go here (x3xt.asm and its pack), lazy, with
+      ; their X3PART_* numbers beside X3PART_STD's and the count above <<<
+    OS88_PARTS_END
+
 %define OS88UI_ABOUT
 %define OS88UI_NOGLYPH
 %define OS88UI_BOWN
@@ -1661,8 +1702,8 @@ x3_ab3:     db 'this machine can sustain', 0
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5), allocated in order --------------------
 %assign X3B_AT 0
-%macro X3B 2                        ; name, bytes
-%1 equ os88_image_end + X3B_AT
+%macro X3B 2                        ; name, bytes (after the parts' own words)
+%1 equ os88_image_end + OP_BSS + X3B_AT
 %assign X3B_AT X3B_AT + (%2)
 %endmacro
     X3B x3_st, X3S_SIZE             ; THE STATE RECORD (x3face.inc)
@@ -1745,8 +1786,9 @@ x3_ab3:     db 'this machine can sustain', 0
     X3B x3_bflags, X3_NB * 2        ; ...as drawn
     X3B x3f_keys, X3F_NKEYS * 2     ; the elements' keys, as drawn
     X3_DEMOBSS                      ; x3demo.inc's own
+    X3P_BSS                         ; x3pars.inc's own (the STANDARD track)
     X3B x3f_fvu, X3F_FACESZ         ; the colour dial faces, VU and BUFFER
     X3B x3f_fbuf, X3F_FACESZ
     X3B x3_work, X3_WORKSZ          ; the band / the canvas
-    OS88_BSS X3B_AT
+    OS88_BSS OP_BSS + X3B_AT
     OS88_IMAGE_END

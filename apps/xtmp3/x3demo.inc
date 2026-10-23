@@ -274,26 +274,50 @@ x3_e_cancel:                        ; no conversion to cancel until S9
     clc
     ret
 
-x3_e_qadd:                          ; DEMO: a duration out of a table - the
-    push bx                         ; parser (S5) reads the real one
-    call x3_qent
-    mov bl, al
-    xor bh, bh
-.m:
-    cmp bl, X3DM_NDUR
-    jb .d
-    sub bl, X3DM_NDUR
-    jmp short .m
-.d:
-    shl bx, 1
-    mov ax, [x3_dm_durs+bx]
+; x3_e_qadd - THE PARSER'S PROBE (S5, the STANDARD track): the title and the
+; duration come out of the file itself through x3pars.inc's x3p_probe - ID3v2
+; TIT2 (ID3v1 when there is none), and the Xing / VBRI frame count or, without
+; one, bytes / bitrate, which is an estimate and shown with a `~`. A file the
+; probe cannot read or the parser refuses keeps the name's stem and `--:--`.
+; x3eng.inc makes this same call: SI -> the entry's NUL 8.3 name (QE_NAME is
+; at 0), BL = QE_VOL, DX = QE_DIR, DI -> an X3I record; CF = 0 and X3I_REF = 0
+; is a stream, X3I_DUR its seconds, X3I_FLAGS & X3IF_EXACT whether they are
+; exact, X3I_TITLE its title or ''
+x3_e_qadd:
+    push bx
+    push es
+    call x3_qent                    ; SI = the entry = its name
+    push si
+    mov bl, [si+QE_VOL]
+    mov dx, [si+QE_DIR]
+    mov di, x3p_qinfo
+    call x3p_probe
+    pop si
+    jc .out                         ; nothing read: the stem, --:--
+    cmp byte [x3p_qinfo+X3I_REF], 0
+    jne .out                        ; not an MP3 we decode: the same
+    mov ax, [x3p_qinfo+X3I_DUR]
     mov [si+QE_DUR], ax
+    mov byte [si+QE_FLAGS], 0
+    test byte [x3p_qinfo+X3I_FLAGS], X3IF_EXACT
+    jnz .t
+    mov byte [si+QE_FLAGS], X3SF_EST
+.t:
+    cmp byte [x3p_qinfo+X3I_TITLE], 0
+    je .out
+    mov di, si                      ; the tag's title over the stem
+    add di, QE_TITLE
+    mov si, x3p_qinfo+X3I_TITLE
+    mov cx, X3_TITLE + 1
+    push ds
+    pop es
+    cld
+    rep movsb
+.out:
+    pop es
     pop bx
     clc
     ret
-
-x3_dm_durs: dw 278, 232, 306, 251, 199, 344     ; 4:38 3:52 5:06 ... (DEMO)
-X3DM_NDUR   equ ($ - x3_dm_durs) / 2
 
 ; x3_e_qdrop - AL is leaving: the one shown stops and goes; a later one moves
 ; up a place with the list
