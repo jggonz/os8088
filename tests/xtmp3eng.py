@@ -602,7 +602,8 @@ def frames_of(src):
 NEON = "NEONDRV.MP3"
 
 
-def ladder_case(name, speeds, want, live=True, bound=None, unprobed=()):
+def ladder_case(name, speeds, want, live=True, bound=None, unprobed=(),
+                div=None):
     leg = "ladder/" + name
     print(" %s: speeds %s" % (leg, speeds))
     r = Rig(leg, sb=True, xcfg=cfg(speeds),
@@ -624,6 +625,12 @@ def ladder_case(name, speeds, want, live=True, bound=None, unprobed=()):
             check(leg, "plays LIVE on %s" % QNAME[want],
                   s["md"] == MD_LIVE and s["qual"] == want,
                   "md %d qual %s" % (s["md"], QNAME[s["qual"]]))
+            if div:
+                check(leg, "...divided by %d, %d Hz from the source's 44,100 "
+                      "(SPEC.md 121.4: XT Standard's divisor is its source's)"
+                      % (div, 44100 // div), r.b("x3_odiv") == div and
+                      s["rate"] == 44100 // div, "div %d, %d Hz" % (
+                          r.b("x3_odiv"), s["rate"]))
         else:
             check(leg, "asks to decode first (no live rung)",
                   s["md"] == MD_CHOOSE and s["state"] == ST_CHOOSE,
@@ -643,6 +650,12 @@ def leg_ladder():
     ladder_case("middling", [0, 100, 200, 400, 500, 500], Q_HALF)
     ladder_case("slower", [0, 60, 100, 200, 500, 500], Q_QUART,
                 unprobed=())
+    # A MIDDLING MACHINE WITH A 44.1 kHz SONG (SPEC.md 121.5's rule: Decode
+    # first only when no live rung passes): every STANDARD rung short, XT
+    # Standard - divided by 4 for a 44.1 kHz source - passes, and it plays
+    # live; XT Fast (no divided kernels) is never asked
+    ladder_case("xt44", [0, 30, 50, 80, 200, 400], Q_XTSTD, div=4,
+                unprobed=(Q_XTFAST,))
     ladder_case("xt", [0, 30, 40, 50, 80, 100], None, live=False,
                 unprobed=(Q_ORIG, Q_HALF), bound=6.0)
     ladder_case("hopeless", [0, 5, 5, 5, 5, 5], None, live=False,

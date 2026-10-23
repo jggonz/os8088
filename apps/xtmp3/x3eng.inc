@@ -135,7 +135,9 @@ MD_STEP     equ 7                   ; live, draining the ring for a rung change
 ; --- a rung's row (x3_rungs): backend, profile, divisor ---------------------------
 RG_BE       equ 0                   ; X3K_STD / X3K_XT
 RG_PROF     equ 1                   ; the backend's profile
-RG_DIV      equ 2                   ; 1, 2, 4 - or 0: the XT Speech rule
+RG_DIV      equ 2                   ; 1, 2, 4 - or 0: the XT Speech rule, or
+                                    ; X3_DIVSRC: XT Standard's (x3_rungdiv)
+X3_DIVSRC   equ 0xFF
 RG_SIZE     equ 4
 
 ; =============================================================================
@@ -3621,7 +3623,7 @@ x3_rungset:
     call x3_rungrow
     call x3_rungdiv                 ; CL = the divisor
     mov ah, cl
-    mov al, [bx+RG_PROF]
+    call x3_rungprof                ; AL = the profile OPEN takes
     mov cl, [x3_och]
     mov di, x3_caps1
     push ds
@@ -3718,7 +3720,7 @@ x3_onew:
     push bx
     push cx
     call x3_rungrow
-    mov al, [bx+RG_PROF]
+    call x3_rungprof
     mov [x3_onrec+X3O_PROF], al
     mov al, [x3_odiv]
     mov [x3_onrec+X3O_DIV], al
@@ -3948,16 +3950,47 @@ x3_rungrow:
     ret
 
 ; x3_rungdiv - CL = the row BX's divisor: XT Speech's rule (2 on an 8 to 12
-; kHz source, 4 on a 16 to 24 kHz one, SPEC.md 121.4) where the row says 0.
+; kHz source, 4 on a 16 to 24 kHz one, SPEC.md 121.4) where the row says 0;
+; XT Standard's where it says X3_DIVSRC - its output near 11 kHz and never
+; under X3_FLOOR: 1 on an 8 to 12 kHz source, 2 on 16 to 24, 4 on 32 to 48
+; (SPEC.md 121.4, 121.5: a capable machine plays a 44.1 kHz song live, where
+; at 1 every XT rung was a full-rate decode and Auto went to Decode first).
 ; keeps the rest
 x3_rungdiv:
     mov cl, [bx+RG_DIV]
+    cmp cl, X3_DIVSRC
+    je .src
     or cl, cl
     jnz .o
     mov cl, 2
     cmp word [x3_srate], 12000
     jbe .o
     mov cl, 4
+.o:
+    ret
+.src:
+    mov cl, 1
+    cmp word [x3_srate], 12000
+    jbe .o
+    mov cl, 2
+    cmp word [x3_srate], 24000
+    jbe .o
+    mov cl, 4
+    ret
+
+; x3_rungprof - AL = the row BX's profile AS OPEN TAKES IT: XT Standard at a
+; divisor is the XT SPEECH TABLES (the same 16 terms on the kept phases, bit
+; for bit std at that divisor - tools/x3simxt.py's 'stdd'). keeps the rest
+x3_rungprof:
+    mov al, [bx+RG_PROF]
+    cmp byte [bx+RG_DIV], X3_DIVSRC
+    jne .o
+    push cx
+    call x3_rungdiv
+    cmp cl, 1
+    pop cx
+    je .o
+    mov al, 3                       ; (X3X_P_SPEECH)
 .o:
     ret
 
@@ -3967,7 +4000,7 @@ x3_rungs:
     db X3K_STD, 0, 1, 0             ; ORIGINAL
     db X3K_STD, 0, 2, 0             ; HALF
     db X3K_STD, 0, 4, 0             ; QUARTER
-    db X3K_XT, 0, 1, 0              ; XT STANDARD
+    db X3K_XT, 0, X3_DIVSRC, 0      ; XT STANDARD (the divisor by the source)
     db X3K_XT, 1, 1, 0              ; XT FAST
     db X3K_XT, 2, 1, 0              ; XT TURBO
     db X3K_XT, 3, 0, 0              ; XT SPEECH (the divisor by the source)
@@ -4577,6 +4610,20 @@ x3l_okc:
 .p:
     cmp cl, 0xFF
     je .n
+    cmp byte [bx+RG_BE], X3K_XT     ; XT SPEECH has no divisor for a 32-48 kHz
+    jne .np                         ; source (its output would be 8-12 kHz:
+    cmp byte [bx+RG_PROF], 3        ; XT Standard's, SPEC.md 121.4)
+    jne .nsp
+    cmp word [x3_srate], 24000
+    ja .n
+.nsp:
+    cmp byte [bx+RG_PROF], 1        ; XT FAST, in Auto, only where it is not
+    jne .np                         ; divided (8-12 kHz): its divided window
+    cmp byte [x3l_flr], 0           ; kernels do not exist, and at 1 on a
+    je .np                          ; faster source it costs more than XT
+    cmp word [x3_srate], 12000      ; Standard divided, which was asked first
+    ja .n
+.np:
     cmp byte [x3l_flr], 0           ; Auto's floor: not under X3_FLOOR while
     je .y                           ; the source is above it
     cmp word [x3_srate], X3_FLOOR

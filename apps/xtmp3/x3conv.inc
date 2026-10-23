@@ -2024,7 +2024,7 @@ x3c_hdr:
     call x3_rungrow                 ; BX -> the rung's row
     mov al, [bx+RG_BE]
     mov [es:di+XI_BE], al
-    mov al, [bx+RG_PROF]
+    call x3_rungprof
     mov [es:di+XI_PROF], al
     mov al, [x3_odiv]
     mov [es:di+XI_DIV], al
