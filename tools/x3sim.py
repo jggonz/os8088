@@ -2005,7 +2005,11 @@ def granules(path_or_bytes):
                              antialias, int32 Q28 (1.0 = 2^28), exactly what
                              x3s_alias receives
       xr_q                   28
-    Nothing here changes the model; it runs the same functions."""
+    Nothing here changes the model; it runs the same functions.
+    STABLE: the XT study (tools on xtmp3/xtstudy, docs/xtmp3/XT-STUDY.md)
+    reads rate, ch, verdict, ok, block_type, win_switch, mixed, big_values,
+    nlines, ix, codes (table, length; 32/33 = count1), xr and xr_q - change
+    one of those only together with it."""
     data = path_or_bytes if isinstance(path_or_bytes, (bytes, bytearray)) else \
         open(path_or_bytes, 'rb').read()
     st = Stream(data)
