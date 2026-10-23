@@ -7747,7 +7747,7 @@ $(BUILD)/trkvol360.img: $(BUILD)/tracker.o88 $(BUILD)/trkvol/TRK33.O88 \
 # decoder keeps a disk read's sch_lock hold from starving the DMA. Seven
 # sources, one binary.
 AUDIO_SRC := apps/audio/audio.asm apps/audio/apengine.inc \
-             apps/audio/apwork.inc apps/audio/apcb.inc \
+             apps/audio/aplook.inc apps/audio/apwork.inc apps/audio/apcb.inc \
              apps/audio/apwav.inc apps/audio/apdec.inc \
              apps/audio/apui.inc apps/audio/aplist.inc \
              apps/audio/apspk.inc apps/os88spk.inc apps/os88spkfx.inc \
