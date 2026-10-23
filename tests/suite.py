@@ -499,6 +499,26 @@ FAST = [
                "build/xtmp3.bin", "build/os8088.img",
                "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys")),
+    Row("xtmp3live", "soak", py("tests/xtmp3live.py"), 300.0,
+        "XTMP3 with its REAL decoders end to end on QEMU's SB16 (SPEC.md "
+        "121.3-121.7, docs/xtmp3/ENGINE.md), the card captured by the wav "
+        "audiodev at the STREAM's own rate and held SAMPLE FOR SAMPLE to "
+        "tools/x3sim.py: Original on 44.1 kHz and 22.05 kHz stereo as "
+        "16-bit stereo (the channels distinct), Half by override, 8-bit "
+        "stereo on an SB16 with no 16-bit DMA and 8-bit mono on a DSP 2.01 "
+        "(labelled DEVICE, through the documented conversion and the mono "
+        "downmix) - the XT part never fetched under Original (x3_nfetch, "
+        "and the STANDARD part's map holds no XT label or table bytes); a "
+        "live seek, whose output after X3_PREROLL frames is x3sim's from the "
+        "offset the engine aimed at, and identical to an uninterrupted "
+        "decode; and XT Standard decoded first to a hard disk, the WAV "
+        "byte-exact to tools/x3simxt.py, played on the card with no decoder "
+        "resident and seeked directly",
+        needs=("qemu", "nasm", "mtools", "numpy"), serial=True, timeout=900,
+        wants=("build/xtmp3.o88", "build/xtmp3.bin", "build/os8088.img",
+               "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
+               "build/boothd.bin", "build/kernel.sys", "build/x3stdp.bin",
+               "build/XTGEN.BIN")),
     Row("xtmp3xt", "soak", py("tests/xtmp3xt.py"), 660.0,
         "XTMP3 END TO END on MartyPC's 4.77 MHz XT (SPEC.md 121.5-121.11, "
         "docs/xtmp3/FIELD.md): the SHIPPED package and its real FRONT and XT "
@@ -523,26 +543,6 @@ FAST = [
         wants=("build/xtmp3.o88", "build/xtmp3.bin", "build/x3xt.bin",
                "build/x3front.bin", "build/sound.drv", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys")),
-    Row("xtmp3live", "soak", py("tests/xtmp3live.py"), 300.0,
-        "XTMP3 with its REAL decoders end to end on QEMU's SB16 (SPEC.md "
-        "121.3-121.7, docs/xtmp3/ENGINE.md), the card captured by the wav "
-        "audiodev at the STREAM's own rate and held SAMPLE FOR SAMPLE to "
-        "tools/x3sim.py: Original on 44.1 kHz and 22.05 kHz stereo as "
-        "16-bit stereo (the channels distinct), Half by override, 8-bit "
-        "stereo on an SB16 with no 16-bit DMA and 8-bit mono on a DSP 2.01 "
-        "(labelled DEVICE, through the documented conversion and the mono "
-        "downmix) - the XT part never fetched under Original (x3_nfetch, "
-        "and the STANDARD part's map holds no XT label or table bytes); a "
-        "live seek, whose output after X3_PREROLL frames is x3sim's from the "
-        "offset the engine aimed at, and identical to an uninterrupted "
-        "decode; and XT Standard decoded first to a hard disk, the WAV "
-        "byte-exact to tools/x3simxt.py, played on the card with no decoder "
-        "resident and seeked directly",
-        needs=("qemu", "nasm", "mtools", "numpy"), serial=True, timeout=900,
-        wants=("build/xtmp3.o88", "build/xtmp3.bin", "build/os8088.img",
-               "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
-               "build/boothd.bin", "build/kernel.sys", "build/x3stdp.bin",
-               "build/XTGEN.BIN")),
     Row("romtool", "fast", py("tools/os88rom.py", "--selfcheck"), 0.3,
         "docs/plans/ROM-PLAN.md 1.3: the ROM image builder re-derives its own "
         "invariants - 55 AA and a 32KB declaration (40KB would send the "
