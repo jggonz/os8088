@@ -15,7 +15,7 @@ story's own verification has been run and its evidence is in the PR.
 
 - [x] **S0 Foundation.** Worktree, the mockups in `docs/xtmp3/design/`, SPEC
   §121 pinned, this plan, the diary, the draft PR.
-- [ ] **S1 Reference decoder (host).** `tools/x3sim.py` decodes every
+- [x] **S1 Reference decoder (host).** `tools/x3sim.py` decodes every
   fixture: MPEG-1/2/2.5, mono/stereo/joint (M/S, intensity), CBR/VBR, short
   and mixed blocks, reservoir reach-back, at 8 to 320 kbps. Its STANDARD
   integer model matches `lame --decode` within the documented SNR and peak
@@ -28,7 +28,9 @@ story's own verification has been run and its evidence is in the PR.
   DMA 5), as new open flags and a new caps bit, with the 8-bit mono ABI
   untouched. Driven on QEMU's SB16 and on 86Box; a new §34.5 subsection written. *(OS
   integration the brief allows: "add a small reusable integration".)*
-- [ ] **S3 XT approximation study (host).** The product-table designs of
+  *Status: verified on QEMU's SB16 (`sndfmt`, 46 checks) and MartyPC's DSP
+  2.01 (`sndfmtmarty`); the SB Pro path has not been heard on 86Box.*
+- [x] **S3 XT approximation study (host).** The product-table designs of
   the brief's §5 to §9 are built and MEASURED on the host. That covers
   coefficient-major rows, 8-bit and 10-bit codes, a companded code map, and
   16/8/4-term synthesis with the terms chosen per phase by error. Also the
@@ -37,7 +39,7 @@ story's own verification has been run and its evidence is in the PR.
   transient check, and a WAV for listening (`docs/xtmp3/listen/`). An
   8088 cycle model of each kernel includes its addressing. The output is the
   XT profiles' definition and `tools/x3tables.py`'s XT packs.
-- [ ] **S4 The face.** `XTMP3.O88` opens with the mockups' face on VGA (FULL),
+- [x] **S4 The face.** `XTMP3.O88` opens with the mockups' face on VGA (FULL),
   EGA and Hercules (MID) and CGA (COMPACT), in colour and black and white,
   every element cached. The art comes from `tools/os88x3art.py`: codex-made
   masters for the knob, the VU dial and the wordmark, derived
@@ -45,7 +47,7 @@ story's own verification has been run and its evidence is in the PR.
   seven-segment sets, the dial digits). Menus, keys, About, the queue, Open
   and the `.MP3` association all work on a demo state. The identity check
   (incremental equals full paint) passes on each layout.
-- [ ] **S5 Parser on target.** The shared `x3pars.inc` covers frame sync, ID3
+- [x] **S5 Parser on target.** The shared `x3pars.inc` covers frame sync, ID3
   skip and title, Xing/Info/VBRI duration, side info and the reservoir, and
   it is byte-identical in decision to `x3sim.py`'s parser on every fixture.
   The queue shows real titles and durations.
@@ -54,7 +56,10 @@ story's own verification has been run and its evidence is in the PR.
   build that decodes each fixture to a WAV on QEMU and is compared on the
   host. Real-time playback through the SB stream with the worker and the
   look-ahead ring, and Original on 16-bit stereo where S2 offers it.
-- [ ] **S7 XT backend on target.** `x3xt.asm` with table packs expanded at
+  *Status: the bit-exact half is verified (`x3stdexact`, 157 of 157); live
+  Original in 16-bit stereo runs on QEMU's SB16 with the real part
+  (`docs/xtmp3/s10-live-stereo.png`), and has not yet been listened to.*
+- [x] **S7 XT backend on target.** `x3xt.asm` with table packs expanded at
   OPEN and CRC-checked, bit-exact to `x3sim.py`'s XT model. Speed is measured
   per profile and per stage on MartyPC's 5150 (cycles, not wall time), and
   the peak working set is within 400,000 bytes.
@@ -65,6 +70,13 @@ story's own verification has been run and its evidence is in the PR.
   machine stays on Original, a middling one halves before any XT rung, and
   an XT goes to Decode first. The ladder is measured on 86Box 286/386/486
   and MartyPC.
+  *Status: every transition is verified over the stub backend (`xtmp3eng`'s
+  `ladder` and `slowdown`), and MartyPC's VGA XT takes the shipped package
+  to Decode first with XT Standard (the guide's capture). Measured by FIELD
+  on MartyPC's XT and 86Box's XT, 286, 386, 486 and Pentium (SPEC §121.11.5,
+  `xtmp3xt`); left open by what that found - calibration over 400,000
+  bytes, out-of-memory ending in ERROR, an XT estimate twice too short
+  (§121.13).*
 - [ ] **S9 Decode first.** The drive dialog covers multiple fixed volumes,
   read-only volumes, no hard drive and too little space. Then the Save
   dialog, the disk estimate, conversion with progress, measured speed and
@@ -72,10 +84,19 @@ story's own verification has been run and its evidence is in the PR.
   identity and reuse, stale and incomplete rejection, and Decoded Files.
   The finished WAV plays through the SB, the speaker or the Covox with no
   MP3 work.
+  *Status: verified by `xtmp3eng`'s legs except a read-only volume, the
+  Decoded Files delete, batch approval over two tracks, and the speaker's
+  and the Covox's sound (QEMU checked their state only).*
 - [ ] **S10 Acceptance.** Docs: the guide manual, §121.11 measured, a
   PERFORMANCE set, the INDEX, and the diary with pictures. Suite rows,
   disks, a 86Box machine profile, and the screenshots on every adapter.
   Then the deduplicated soak union once and `test-full` once.
+  *Status: SPEC §121 rewritten as shipped with §121.12's disk placement;
+  the guide manual and song pages; the disks (`make xtmp3disk`, the music
+  disk, the 1.44MB and 1.2MB apps disks, the live media); INDEX, README and
+  the screenshots in `docs/xtmp3/s10-*.png` (the docs track); §121.11.5's
+  period-machine figures and PERFORMANCE.md Set 162 (FIELD). Open: listening,
+  real hardware, a suite row for the face, the soak union and `test-full`.*
 
 ## How the work is fanned out
 

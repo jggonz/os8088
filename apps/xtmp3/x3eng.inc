@@ -365,6 +365,9 @@ x3_e_attach:
 ; conversion's progress, and the engine's own transitions
 ; -----------------------------------------------------------------------------
 x3_e_tick:
+%ifdef X3REPORT
+    call x3r_tick                   ; FIELD (x3rep.inc): an error's report
+%endif
     call x3_needles                  ; the worker's peaks into the needles
     mov al, [x3_md]
     cmp al, MD_LIVE
@@ -2952,6 +2955,9 @@ x3_ended:
     cmp byte [x3_sended], 0
     je .out
     call x3_snd_close
+%ifdef X3REPORT
+    call x3r_we                     ; FIELD (x3rep.inc): the report, EVENT E
+%endif
     mov byte [x3_md], MD_IDLE
     jmp x3_advance
 .out:
@@ -3929,6 +3935,9 @@ X3L_NONE    equ 0xFF                ; no rung chosen
 ; x3l_start - CHECK: the ladder for the current track from [x3_startms]
 ; -----------------------------------------------------------------------------
 x3l_start:
+%ifdef X3REPORT
+    call x3r_cal0                   ; FIELD (x3rep.inc): the calibration's start
+%endif
     mov byte [x3_md], MD_CHECK
     mov byte [x3_st+X3S_STATE], X3ST_CHECK
     mov byte [x3l_choice], X3L_NONE
@@ -4594,6 +4603,9 @@ x3_memeq:
 ; Decode First asked), else the decode-first dialog with the offline rung
 ; -----------------------------------------------------------------------------
 x3l_done:
+%ifdef X3REPORT
+    call x3r_decided                ; FIELD (x3rep.inc): its end
+%endif
     call x3_park
     mov byte [x3_job], WJ_NONE
     call x3_snd_close               ; (the probe's grant)
@@ -4617,6 +4629,9 @@ x3l_done:
     jmp x3_file_play
 .ask:
     call x3l_offpick                ; AL = the conversion's rung
+%ifdef X3REPORT
+    call x3r_wd                     ; FIELD (x3rep.inc): the report, EVENT D
+%endif
     jmp x3c_begin                   ; (x3conv.inc) the drive dialog
 
 ; -----------------------------------------------------------------------------
@@ -5100,5 +5115,12 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
 %endif
     X3B x3l_cnext, 2                ; the session's cache: the next row...
     X3B x3l_cache, X3_NCAL * X3L_CREC
+%ifdef X3REPORT
+    X3_REPBSS                       ; FIELD (x3rep.inc): the report's
+%endif
     X3_CONVBSS
 %endmacro
+
+%ifdef X3REPORT
+%include "x3rep.inc"                ; FIELD: the 86Box report (never shipped)
+%endif

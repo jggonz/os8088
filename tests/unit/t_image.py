@@ -52,6 +52,13 @@ WHAT IT CHECKS THAT --verify CANNOT.
      carrying another build's (or none) installs a machine that freezes at
      `Booting HDD0` (or is refused). `t_vbrseg` is the other half: that
      boothd.bin's constants are the kernel's own.
+
+  6. EVERY .MP3 IS PLAIN (SPEC.md 121.12). XTMP3 streams its file through
+     OSAPI_FILE_READ_AT and READ_SEQ, which deliver an lz4-wrapped file RAW
+     (SPEC.md 20.14.3), so a wrapped .MP3 is a song the player's probe
+     refuses as a file with no frames - and every data file a recipe routes
+     through $(ZDATA) comes out wrapped. Each one must start with an ID3v2
+     tag or a frame sync, and never with the wrapper's 'CZ' magic.
 """
 import os
 import struct
@@ -168,6 +175,26 @@ class Vol:
 def read(p):
     with open(p, "rb") as f:
         return f.read()
+
+
+def check_mp3(v):
+    """Item 6: every .MP3 on the volume is the file itself, not a wrapper."""
+    n = 0
+    for path, name11, attr, clus, size in v.walk():
+        if attr & A_DIR or name11[8:11] != b"MP3":
+            continue
+        n += 1
+        first = v.cluster_lba(clus) * v.byts if clus >= 2 else 0
+        head = v.blob[first:first + 4] if size >= 4 else b""
+        name = path + name11[:8].decode("ascii", "replace").strip() + ".MP3"
+        check(head[:2] != b"CZ", "%s: %s is not lz4-wrapped" % (v.name, name),
+              "it starts with the wrapper's CZ magic - an .MP3 ships PLAIN "
+              "(SPEC.md 121.12)")
+        check(head[:3] == b"ID3" or (len(head) >= 2 and head[0] == 0xFF
+                                     and head[1] & 0xE0 == 0xE0),
+              "%s: %s starts with an ID3v2 tag or a frame sync"
+              % (v.name, name), got=head.hex())
+    return n
 
 
 def check_geometry(v):
@@ -312,7 +339,7 @@ def main():
     # Makefile ships $(KERNFILE) for exactly the same reason.
     kernel = read(os.path.join(build, "kernel.sys"))
     vbr = read(os.path.join(build, "boothd.bin"))
-    seen = 0
+    seen = mp3s = 0
     for img, is_system in ([(i, True) for i in SYSTEM_IMAGES] +
                            [(i, False) for i in DATA_IMAGES]):
         p = os.path.join(build, img)
@@ -324,13 +351,14 @@ def main():
         check_geometry(v)
         check_chains(v)
         check_attrs(v, is_system)
+        mp3s += check_mp3(v)
         if is_system:
             check_kernel(v, kernel)
             check_hdboot(v, vbr)
     check(seen == len(SYSTEM_IMAGES) + len(DATA_IMAGES),
           "every shipped image was read", got=seen)
-    print("t_image: %d images, kernel %d bytes (%d sectors)"
-          % (seen, len(kernel), (len(kernel) + 511) // 512))
+    print("t_image: %d images, kernel %d bytes (%d sectors), %d .MP3 plain"
+          % (seen, len(kernel), (len(kernel) + 511) // 512, mp3s))
     done("t_image")
 
 

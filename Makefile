@@ -6271,8 +6271,7 @@ $(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
 # of XTMP3.O88 (SPEC.md 20.12), and build/x3art.inc its labels' offsets and
 # sizes - both made by tools/os88x3art.py, from definitions in that file and
 # from the committed masters in apps/xtmp3/art/, after its --selfcheck.
-# S4 builds the face over a DEMO engine (apps/xtmp3/x3demo.inc); it rides the
-# 1.44MB apps disk and the live media for now, and S10 places it for good
+# Where it ships is SPEC.md 121.12: $(APPS_TOOLS) and the notes there
 .PHONY: xtmp3
 xtmp3: $(BUILD)/xtmp3.o88
 XTMP3ART := apps/xtmp3/art/knob.png apps/xtmp3/art/vu.png apps/xtmp3/art/logo.png
@@ -6325,6 +6324,69 @@ $(BUILD)/xtmp3s.o88: $(BUILD)/xtmp3s.bin $(X3PARTS) $(BUILD)/x3stub.bin \
                      tools/os88pkg.py
 	$(OS88PKG) $(BUILD)/xtmp3s.bin -o $@ $(X3PARTARGS) \
 		--part $(BUILD)/x3stub.bin --part-compress lz4
+
+# XTMP3'S FIELD DISKS (docs/xtmp3/FIELD.md; tools/x3field.py): the selection
+# matrix on 86Box, which has no debug socket and takes no key from this host.
+# build/xtmp3r.o88 is the package with -DX3REPORT (apps/xtmp3/x3rep.inc): it
+# writes SYSTEM\APPDATA\X3REPORT.TXT on its own volume when the ladder has
+# decided and when a stream has played out, and the host reads it back off the
+# image. x3field.img / x3field360.img are system disks that want SOUND.DRV
+# and whose \AUTOSTRT opens B:\XTMP3 (the folder teaches the machine .MP3's
+# association) and then B:\XTMP3\TRACK.MP3; x3fb-c128.img / x3fb-aftr.img and
+# their 360KB twins are that B: - the report build, and TRACK.MP3 being
+# tests/xtmp3/C128.MP3 (44.1 kHz L/R stereo, 128 kbps) or AFTERHRS.MP3
+# (11,025 Hz mono, 24 kbps), stored plain because the probe refuses a packed
+# MP3. ON DEMAND; nothing ships any of it. `make 486-xtmp3` (and xt-, 286-,
+# 386-, pentium-) boots one machine on the C128 disk to LOOK at;
+# `python3 tools/x3field.py` runs the whole matrix and prints the reports.
+.PHONY: xtmp3field
+xtmp3field: $(BUILD)/x3field.img $(BUILD)/x3field360.img \
+            $(BUILD)/x3fb-c128.img $(BUILD)/x3fb-aftr.img \
+            $(BUILD)/x3fb360-c128.img $(BUILD)/x3fb360-aftr.img
+$(BUILD)/xtmp3r.bin: $(XTMP3_SRC) apps/xtmp3/x3rep.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DX3REPORT -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3 (X3REPORT):  $(call FILESIZE,$@) bytes"
+$(BUILD)/x3f/XTMP3.O88: $(BUILD)/xtmp3r.bin $(X3PARTS) tools/os88pkg.py
+	@mkdir -p $(dir $@)
+	$(OS88PKG) $(BUILD)/xtmp3r.bin -o $@ $(X3PARTARGS) --part-compress lz4
+$(BUILD)/x3f/c128/TRACK.MP3: tests/xtmp3/C128.MP3
+	@mkdir -p $(dir $@)
+	cp $< $@
+$(BUILD)/x3f/aftr/TRACK.MP3: tests/xtmp3/AFTERHRS.MP3
+	@mkdir -p $(dir $@)
+	cp $< $@
+$(BUILD)/x3f/A_X3.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(dir $@)
+	python3 tools/os88lnk.py $@ 'XTMP3' --vol B --kind folder
+	python3 tools/os88lnk.py $(BUILD)/x3f/X3.LNK 'XTMP3\TRACK.MP3' --vol B \
+		--kind document
+$(BUILD)/x3field.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
+        $(COREAPPS360) $(SYSDOC) $(BUILD)/mixercfg/SYSTEM.CFG \
+        $(BUILD)/x3f/A_X3.LNK tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/x3f/A_X3.LNK \
+		AUTOSTRT:$(BUILD)/x3f/X3.LNK --folder SYSTEM/APPDATA
+$(BUILD)/x3field360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
+        $(SYSAPPS) $(COREAPPS360) $(SYSDOC) $(BUILD)/mixercfg/SYSTEM.CFG \
+        $(BUILD)/x3f/A_X3.LNK tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/x3f/A_X3.LNK \
+		AUTOSTRT:$(BUILD)/x3f/X3.LNK --folder SYSTEM/APPDATA
+$(BUILD)/x3fb-%.img: $(BUILD)/x3f/XTMP3.O88 $(BUILD)/x3f/%/TRACK.MP3 \
+        tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		XTMP3:$(BUILD)/x3f/XTMP3.O88 XTMP3:$(BUILD)/x3f/$*/TRACK.MP3 \
+		--folder SYSTEM/APPDATA
+$(BUILD)/x3fb360-%.img: $(BUILD)/x3f/XTMP3.O88 $(BUILD)/x3f/%/TRACK.MP3 \
+        tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
+		XTMP3:$(BUILD)/x3f/XTMP3.O88 XTMP3:$(BUILD)/x3f/$*/TRACK.MP3 \
+		--folder SYSTEM/APPDATA
 
 # --- XTMP3's DECODER (SPEC.md 121.3, 121.4; the STANDARD track) ----------------
 # The STANDARD tables (tools/x3tables.py: x3std.bin and x3std.inc) and the
@@ -13388,7 +13450,17 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/tracker.o88 \
              $(BUILD)/audio.o88 $(BUILD)/mixer.o88 $(BUILD)/sheet.o88 $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
              $(BUILD)/video.o88 \
-             $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88
+             $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88 \
+             $(BUILD)/xtmp3.o88
+# XTMP3 (SPEC.md 121.12) is VIDEO's row and SHEET's at once. It streams:
+# OSAPI_FILE_READ_SEQ plays a track and OSAPI_FILE_WRITE_SEQ writes a decoded
+# one, and kern_small has neither (SPEC.md 18.4.8, 18.4.9), so the queue would
+# list a file it could never play. Its sound is SOUND.DRV's, which kern_small
+# does not load, and the speaker's bracket is FSXF_RATE's, kern_big's alone.
+# And its working set is the 24.5.2 ground: the XT path is up to 400,000 bytes
+# (121.10), three times the floor machine's whole RAM, so there is no state of
+# that machine in which it runs. Its demo songs are not in $(APPS_DATA), so
+# they leave the small disks with it.
 # Mixer requires SOUND.DRV, which kern_small does not load (SPEC.md 34.15).
 # RLAPPLY (SPEC.md 103.6.5) is an omission by SCOPE rather than size: chipset
 # tuning is for AT-class boards (103.6), and the machine kern_small exists for
@@ -14873,7 +14945,13 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/wirechat.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
               $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
-              $(BUILD)/timer.o88 $(BUILD)/bounce.o88
+              $(BUILD)/timer.o88 $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88
+# XTMP3.O88 (SPEC.md 121.12) is in this list, so it reaches the 1.44MB and
+# 1.2MB apps disks, the kern_mega apps disks (its PKG_MEGA arm), the
+# everything set and the live media. Four sites take it OFF again, each with
+# its own ground: APPS_TOOLS_360 and APPSARGS720 (no room; media360.img and
+# `make xtmp3disk` carry it there), $(SMALLOMIT) (a requirement kern_small
+# cannot meet) and $(COMBO_DROP) (not a calibration instrument).
 # TIMER.O88 and BOUNCE.O88 are SPEC.md 14's two kinds as packages (14.8,
 # 111, 112): on every apps disk, every geometry, because the Builtins menu
 # that used to launch them was on every machine's bar.
@@ -15200,6 +15278,39 @@ $(ZDATA)/MIDI/%.MID: apps/midirack/songs/%.MID tools/os88lz.py $(PKGZSTAMP) | $(
 	@mkdir -p $(ZDATA)/MIDI
 	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
 
+# XTMP3'S THREE DEMO SONGS (SPEC.md 121.12), in MEDIA/ where the player's
+# Open dialog starts (SPEC.md 38.10). They are the fixture generator's own
+# output (tools/x3fixtures.py), committed ONCE in tests/xtmp3/ with their
+# recipes and SHA-256 in FIXTURES.txt, so a disk names that copy rather than
+# a second one under apps/. NEON DRIVE is 44.1 kHz joint stereo (what a fast
+# machine plays at Original), NIGHT SIGNALS 22.05 kHz joint stereo, AFTER
+# HOURS 11,025 Hz mono at 24 kbps - the track an XT is for.
+#
+# **PLAIN IN BOTH ARMS, AND NEVER UNDER $(ZDATA)**, which is PiXEL's LAKE.JPG
+# reason twice over: MP3 is compressed already, so cz_wrap would shrink it by
+# nothing, and the player STREAMS it - OSAPI_FILE_READ_AT for the queue's
+# probe and READ_SEQ for playback both deliver a packed file raw (SPEC.md
+# 20.14.3), so a wrapped .MP3 is refused by the probe as a file with no
+# frames in it. The guard below makes that a build error rather than a
+# player that cannot open its own demo songs; tests/unit/t_image.py checks
+# every .MP3 on every shipped image for the wrapper's 'CZ' magic as well.
+#
+# WHICH DISK CARRIES WHICH (SPEC.md 121.12 has the arithmetic, 24.6.1's rule,
+# dated 2026-10-22): all three on the 1.44MB apps disk and the live media;
+# NIGHT SIGNALS and AFTER HOURS on the 1.2MB one, which had 393 clusters of
+# 512 bytes free and the package is 189 of them; AFTER HOURS alone on
+# media360.img, beside the package. `make xtmp3disk` carries all three in
+# every geometry.
+XTMP3MP3SRC  := tests/xtmp3
+XTMP3MP3     := $(XTMP3MP3SRC)/NEONDRV.MP3 $(XTMP3MP3SRC)/NIGHTSIG.MP3 \
+                $(XTMP3MP3SRC)/AFTERHRS.MP3
+XTMP3MP3_120 := $(XTMP3MP3SRC)/NIGHTSIG.MP3 $(XTMP3MP3SRC)/AFTERHRS.MP3
+XTMP3MP3_360 := $(XTMP3MP3SRC)/AFTERHRS.MP3
+$(if $(filter $(ZDATA)/% %.mp3,$(XTMP3MP3) $(XTMP3MP3_120) $(XTMP3MP3_360)), \
+     $(error an XTMP3 demo song is routed through $$(ZDATA) or has a \
+             lower-case name - an .MP3 ships PLAIN, the player streams it \
+             (SPEC.md 20.14.3, 121.12)))
+
 $(ZDATA)/PAPER.TEX: apps/texpad/PAPER.TEX tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 	@mkdir -p $(ZDATA)
 	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
@@ -15405,10 +15516,14 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     WIRECHAT IS NOT CURATED ONTO IT (SPEC.md 113.11, 24.6.1's rule, dated
 #     2026-10-19): a chat client is the NETWORK disk's subject, and it rides
 #     network360.img beside Telnet and the Browser.
+#     XTMP3 IS NOT CURATED ONTO IT (SPEC.md 121.12, 24.6.1's rule, dated
+#     2026-10-22): that disk had 14 clusters spare and the player is 95. It
+#     rides the MEDIA DISK on MIDIRack's ground - the floppy whose subject is
+#     music already - at its root, with AFTER HOURS in MEDIA/.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                     $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
                     $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
-                    $(BUILD)/wirechat.o88,$(APPS_TOOLS))
+                    $(BUILD)/wirechat.o88 $(BUILD)/xtmp3.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -15466,9 +15581,15 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # than software, and the Video Player plays any .V88 the user brings. It is
 # meant for a third primary 720KB disk, content not yet decided, which is to
 # carry what the 720KB system and apps disks leave off.
-APPS720 := $(filter-out $(BUILD)/pixel.o88 $(RDG_SHIP) $(RDG_DEMO),$(APPS))
+# ...AND XTMP3 IS NOT ON IT (SPEC.md 121.12, 24.6.1's rule, dated 2026-10-22):
+# the disk had 36 of 713 clusters free and the player is 95 of them before a
+# single song. `make xtmp3disk`'s 720KB floppy carries it with all three demo
+# songs, and it is the obvious candidate for the third 720KB disk above - the
+# owner's call, like that disk's contents.
+APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 \
+             $(RDG_SHIP) $(RDG_DEMO),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
-                 APPS:$(BUILD)/pixel.o88 \
+                 APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/xtmp3.o88 \
                  GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 # ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
@@ -15510,21 +15631,23 @@ APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
 # is in the folder the Open dialog already opens on whichever disk is in the
 # drive (SPEC.md 38.10) - a user who swaps disks should not have to know that
 # this one keeps its module somewhere else.
-MEDIAARGS360 := $(BUILD)/midirack.o88 \
-                $(addprefix MEDIA:,$(MEDIA_DISK_DATA)) $(LOGOVIDARG) \
-                $(MIDISONGARGS)
+MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
+                $(addprefix MEDIA:,$(MEDIA_DISK_DATA) $(XTMP3MP3_360)) \
+                $(LOGOVIDARG) $(MIDISONGARGS)
 
-# XTMP3 (SPEC.md 121) rides THIS disk alone while it is built (S4 of
-# docs/plans/XTMP3-PLAN.md): it is not in $(APPS_TOOLS), so no other geometry
-# and no other list carries it, and S10 decides where it ships. Its argument
-# goes FIRST - $(APPSARGS) ends in an option, and a positional after one is
-# not collected
-XTMP3TMP := $(BUILD)/xtmp3.o88
-$(APPSIMG): $(APPS) $(XTMP3TMP) $(LOGOVID) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 APPS:$(XTMP3TMP) $(APPSARGS)
+# The 1.44MB and 1.2MB apps disks are $(APPSARGS) plus XTMP3's demo songs,
+# which differ between the two (XTMP3MP3's note has the clusters). Spliced in
+# ahead of $(APPDATAFOLDER), $(APPSARGS720)'s way: argparse stops collecting
+# positionals at an option that takes a value, so the folder stays last.
+APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
+               $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
+APPSARGS120 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
+               $(addprefix MEDIA:,$(XTMP3MP3_120)) $(APPDATAFOLDER)
+$(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS144)
 
-$(APPSIMG120): $(APPS) $(LOGOVID) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS)
+$(APPSIMG120): $(APPS) $(XTMP3MP3_120) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS120)
 
 # kern_mega's APPS DISKS (KERN-MEGA-PLAN 14.66): $(APPSARGS) with the
 # kern_mega arm of every package that has one ($(MEGAPKGS), MEGASUB) - in the
@@ -15538,12 +15661,18 @@ MEGAAPPSARGS = $(addprefix APPS:,$(call MEGASUB,$(APPS_TOOLS))) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
                $(APPDATAFOLDER)
 MEGAAPPS = $(call MEGASUB,$(APPS))
-$(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(LOGOVID) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAAPPSARGS)
+# ...and XTMP3's songs as the shipped pair carries them (XTMP3MP3's note),
+# spliced ahead of $(APPDATAFOLDER) for the same argparse reason
+MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
+                  $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
+MEGAAPPSARGS120 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
+                  $(addprefix MEDIA:,$(XTMP3MP3_120)) $(APPDATAFOLDER)
+$(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAAPPSARGS144)
 	@echo "megaapps: $@ - pair it with build/mega.img (\`make mega\`)"
 
-$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS) $(LOGOVID) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAAPPSARGS)
+$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3_120) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAAPPSARGS120)
 	@echo "megaapps: $@ - pair it with build/mega120.img (\`make mega\`)"
 
 $(APPSIMG720): $(APPS720) tools/os88disk.py
@@ -15565,7 +15694,13 @@ $(APPSIMG360): $(APPS360) tools/os88disk.py
 # disk to swap in would be a disk with a file the user already has. The rule
 # is the geometry's, not the disk's: a media disk exists exactly where the
 # apps disk had to drop the module, and 1.2MB is not such a geometry.
+#
+# XTMP3 JOINED IT (SPEC.md 121.12, dated 2026-10-22) on MIDIRack's ground: the
+# disk had 147 of 354 clusters free, the player is 95 and AFTER HOURS 30, which
+# leaves 22. The other two songs (69 and 50) did not fit beside it, and AFTER
+# HOURS is the one a 360KB machine - an XT, which converts first - is for.
 $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
+                $(BUILD)/xtmp3.o88 $(XTMP3MP3_360) \
                 $(MIDISONGS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(MEDIAARGS360) \
 		--folder SYSTEM/APPDATA
@@ -16108,12 +16243,17 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # (SPEC.md 19.10.1). Here, for that reason and the four packages', and
 # tests/unit/t_livefull.py now holds the live volume to every file the 1.44MB
 # apps disk ships, folder and all, so the next one cannot drop out this way.
+#
+# $(XTMP3MP3) IS XTMP3'S THREE DEMO SONGS on that same ground (SPEC.md
+# 121.12): the 1.44MB apps disk carries them in MEDIA/, so t_livefull holds the
+# live volume to them. XTMP3.O88 itself arrives through $(APPS_TOOLS) in
+# $(ALLAPPSARGS); the songs are not there, MIDIRack's songs' reason - the
+# everything-floppy's RunCPM fill would pay for them.
 LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
-               $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3TMP)
-LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
-                 $(XTMP3TMP)) \
+               $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3MP3)
+LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
-               $(addprefix MEDIA:,$(MEDIA_EXTRA)) \
+               $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3)) \
                $(MIDISONGARGS)
 $(if $(filter-out $(APPSYS),$(SYSAPPS)),,$(error the SYSAPPS live set is \
      empty - $(SYSAPPS) and $(APPSYS) no longer differ, so THEWIRE.O88 is \
@@ -16487,12 +16627,16 @@ imager:
 #
 # WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
 # chat client is the network disk's subject, and network360.img carries it.
+#
+# XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 95
+# clusters, a player and not a calibration instrument, and media360.img
+# carries it at this geometry. The 720KB and 1.44MB combos carry it.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
               $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
               $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
-              $(BUILD)/wirechat.o88
+              $(BUILD)/wirechat.o88 $(BUILD)/xtmp3.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -17325,6 +17469,23 @@ xt-wire: $(BUILD)/ether360.img $(BUILD)/wiredata360.img
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
+
+# XTMP3'S FIELD MACHINES (docs/xtmp3/FIELD.md): each one of the sound machines
+# above - vm/xt-sound's 4.77 MHz XT with an SB 2.0, vm/286-sound's 12.5 MHz
+# 286, vm/386-sound's 25 MHz 386DX, vm/486's DX2/66 and vm/pentium's P54C/133,
+# the last four with an SB16 - booting `make xtmp3field`'s system disk with
+# the 44.1 kHz stereo fixture in B:, so XTMP3 opens on it by itself and its
+# ladder picks a rung with nobody at the machine. Only the floppies and the
+# uuid differ from the machines they copy. tools/x3field.py runs all five on
+# both fixtures and reads each X3REPORT.TXT back
+.PHONY: xt-xtmp3 286-xtmp3 386-xtmp3 486-xtmp3 pentium-xtmp3
+xt-xtmp3: $(BUILD)/x3field360.img $(BUILD)/x3fb360-c128.img
+	@$(UNPROTECT) $(CURDIR)/vm/xt-xtmp3/86box.cfg
+	$(BOX) -P $(CURDIR)/vm/xt-xtmp3 -N
+286-xtmp3 386-xtmp3 486-xtmp3 pentium-xtmp3: %-xtmp3: $(BUILD)/x3field.img \
+            $(BUILD)/x3fb-c128.img
+	@$(UNPROTECT) $(CURDIR)/vm/$*-xtmp3/86box.cfg
+	$(BOX) -P $(CURDIR)/vm/$*-xtmp3 -N
 
 # The two FROTZ machines (SPEC.md 61.9), both with the Z-machine story floppy
 # in B: instead of the apps disk.
@@ -18187,6 +18348,29 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 386-pixel: $(IMG) $(BUILD)/pixel.img
 	@$(UNPROTECT) $(VM386PIXEL)/86box.cfg
 	$(BOX) -P $(VM386PIXEL) -N
+
+# `make xtmp3disk`: XTMP3 (SPEC.md 121.12) and all three demo songs, in all
+# four geometries, pixeldisk's shape - the package at the root, the songs in
+# MEDIA/ where its Open dialog starts (SPEC.md 38.10), and SYSTEM/APPDATA/
+# made for XTMP3.DAT (SPEC.md 19.9). On demand, like every application
+# floppy. It is the 720KB home the apps disk has no room for (APPSARGS720's
+# note) and the 360KB disk with every song, where media360.img has room for
+# one. The songs are PLAIN, never under $(ZDATA) (XTMP3MP3's note). 360KB:
+# 95 + 69 + 50 + 30 = 244 clusters of files, 248 of 354 with the folders and
+# ASSOC.DAT.
+.PHONY: xtmp3disk
+xtmp3disk: $(BUILD)/xtmp3.img $(BUILD)/xtmp3720.img $(BUILD)/xtmp3120.img \
+           $(BUILD)/xtmp3360.img
+XTMP3DISKARGS = $(BUILD)/xtmp3.o88 $(addprefix MEDIA:,$(XTMP3MP3)) \
+                --folder SYSTEM/APPDATA
+$(BUILD)/xtmp3.img: $(BUILD)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(XTMP3DISKARGS)
+$(BUILD)/xtmp3120.img: $(BUILD)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $(XTMP3DISKARGS)
+$(BUILD)/xtmp3720.img: $(BUILD)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $(XTMP3DISKARGS)
+$(BUILD)/xtmp3360.img: $(BUILD)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $(XTMP3DISKARGS)
 
 # WireBall: serial null-modem Pong (SPEC.md 109).
 # WireFleet (SPEC.md 114). One embedded-art package; all four disk sizes.

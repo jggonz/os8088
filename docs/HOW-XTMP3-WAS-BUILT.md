@@ -353,6 +353,154 @@ first run after that, the conversion finished at **386 KB = 395,264 bytes**.
 **Tested where.** QEMU, every leg; the ceiling on the real XT part, on QEMU.
 No XT has run it.
 
+## 2026-10-22 — the documents, the guide and the disks
+
+The last track before acceptance turned the six tracks' contract notes into
+one contract and decided which floppies carry the player.
+
+**The contract as shipped.** SPEC.md §121 was pinned on the first day and
+had drifted from the code in a dozen places. It now describes the five-row
+package (FRONT, ART, STANDARD and XT parts beside the primary), the front
+end split between the primary and FRONT's NEXT verb, the ABI in
+`x3gran.inc`, the claim order that keeps an XT conversion under 400,000
+bytes, the meters' rule, the layouts as built, and every place the engine
+departs from the plan. Each subsection says whether it is shipped or still
+pinned. The measured section (§121.11) keeps every number the tracks took on
+MartyPC, and leaves marked rows for the period-machine runs that come next.
+
+**Where it ships, decided by counting clusters.** The player file is 96,723
+bytes and the three demo songs 151,261. The 1.44MB software disk had room
+for all of it, and has 383 of 2,847 clusters left. The 1.2MB disk had 393
+clusters free; the player takes 189, and the songs that fit beside it are
+NIGHT SIGNALS and AFTER HOURS, leaving 45. The 720KB disk had 36 free
+against the player's 95, and the 360KB software disk 14. The 360KB music
+disk had 147. XTMP3 went there, at its root, the way MIDIRack did, with
+AFTER HOURS, the 11 kHz mono song an XT is for. That leaves the music disk
+22 clusters. A new `make xtmp3disk` puts the player and all three songs on
+a floppy of its own in every size, which is the 720KB machine's only copy.
+The small kernel's disks leave it off on a requirement, not on size: it
+streams with two calls that kern_small lacks, its sound is SOUND.DRV's, and
+its XT working set is three times that machine's RAM.
+
+**MP3s ship plain.** The player streams its file, and a compressed file
+reaches it raw, so a packed `.MP3` would be refused by the player's own
+probe. The Makefile refuses to route a demo song through the packer, and
+the image gate now reads every `.MP3` on every shipped floppy to prove it
+starts with a tag or a frame. It found six, all plain.
+
+**The pictures the earlier tracks had not taken.** QEMU, with an SB16 and a
+scratch hard disk, drove the shipped package through the states nobody had
+photographed: live 16-bit stereo, the queue with the songs' own titles, the
+Decode First dialog, the Save dialog, a conversion in progress and the
+decoded file playing. A ten-second song converts too fast on QEMU to
+photograph, so the last four pictures use a five-minute stream,
+`AFTERX30.MP3`, made by repeating AFTER HOURS' frames thirty times. It has
+no tag, so its title is its name. The machine was paused at 33% for the
+progress picture.
+
+| | |
+|---|---|
+| ![Playing live: NEON DRIVE in 16-bit stereo on an SB16, both dials VU](xtmp3/s10-live-stereo.png) | ![The queue with the songs' own titles; AFTER HOURS live in mono, so the right dial is BUFFER](xtmp3/s10-queue-live.png) |
+| ![Decode First, with C: and the room and time the file needs](xtmp3/s10-decode-drive.png) | ![The Save dialog standing on C:, the name already the song's with .WAV](xtmp3/s10-decode-save.png) |
+| ![Decoding to disk at 33%, with the speed QEMU manages](xtmp3/s10-decode-progress.png) | ![The decoded file playing](xtmp3/s10-decoded-play.png) |
+
+![The progress window, enlarged](xtmp3/s10-decode-progress-zoom.png)
+
+**Observed.** The status bar's quality field is too narrow for its longest
+name with the override marker: it reads `Quality: XT STANDARD (se`. That
+has gone to the integration track rather than being fixed here, along with
+the finding that a machine short of memory says only `Error: Out of memory`
+and states no minimum.
+
+**On an XT.** The guide's screenshots were taken on MartyPC's 640KB VGA XT
+with the music disk in B: and no sound card or hard disk. A double-click on
+AFTERHRS.MP3 opened the player, the check found no live quality, and Decode
+First came up by itself with XT STANDARD chosen and *This machine has no
+hard drive to decode to.* That is the shipped package choosing for a
+4.77 MHz 8088 on its own.
+
+**Tested where.** `make` and `make KERN_SMALL=1` on the host, the image
+gates (`t_image` with its new MP3 check, `t_livefull`), `guidelock` and the
+guide render, the kern_mega apps disks built and measured, and the derived
+disk lists printed through make. The pictures are QEMU's (VGA, SB16) and
+MartyPC's (VGA XT). No soak row and no `test-full` was run; those wait for
+the final pass.
+
+## 2026-10-22 — the field: the whole player on the XT, and the ladder up to a Pentium
+
+Every number before this day timed a PART. This was the first time anyone
+measured XTMP3 itself, doing what a user does: open a track, let Auto
+decide, decode first, and play.
+
+**The instrument came first, and it changed once.** MartyPC's XT
+(`os8088_xt_vga_hdd_sb`: VGA, XT-IDE, a DSP 2.01) boots off a VHD holding
+the system, the package and one MP3. The first version sampled the 8088's
+IP at host-timed intervals, and it said the front end took 28% of a
+conversion. That figure was wrong. A sample past the end of the FRONT
+part's 24 KB image had been charged to its last label, a data table called
+`xf_blk`, and the code really running there was the face's. Bounding each
+region by its image fixed it.
+
+The second version drives the machine with `advance` in pseudo-random steps
+of guest cycles. That makes every sample uniform in GUEST time, and the
+breakpoints on the engine's procs land in the same steps as exact stamps.
+With the same buckets, the two samplers agreed to within a point, so the
+host's speed was not biasing the first one. The guest-uniform one is what `tests/xtmp3xt.py`
+keeps.
+
+**Observed (MartyPC, cycle counter):**
+- XT Standard converted the 10 s, 11 kHz test track in **182.8 s
+  (0.055x)**. The part alone is 0.166x. XT Fast took 169.3 s (0.060x), XT
+  Speech 118.3 s (0.085x).
+- Every WAV, read off the disk image afterwards, was **bit for bit** what
+  `tools/x3simxt.py` makes after the trim. So was the Quarter conversion of
+  the 44.1 kHz track, against `tools/x3sim.py`.
+- Broken on purpose (XT Standard's WAV held to XT Fast's model), the row
+  failed at byte 6.
+
+**Where the time went is the day's finding.** The face took 44.5% of the
+conversion's cycles, more than the decoder's 38%. While XTMP3 decodes, the
+VU meter follows the decoded audio. On a 4.77 MHz XT with a VGA each needle
+redraw costs about 140 ms, at most every five ticks. A knob turn costs
+400 ms. Playing the finished WAV, the face takes 55-74% of the machine. The
+Sound Blaster's DMA carries the sound, so nothing was heard: no underrun,
+and no granule decoded. The decode-first dialog's estimate ("about 1:31")
+is therefore half the real three minutes, because the probe never paid for
+the face.
+
+**Calibration** took 16.1 s on the XT before the dialog: three probes, each
+mostly the part's fetch and OPEN rather than its timed granule. X3S_PEAK
+during calibration read 402 KB, which is over SPEC.md §121.10's
+400,000 bytes. The conversion's own peak, 386 KB, is inside.
+
+**The ladder on 86Box** was run with no hands. A system floppy's
+`\AUTOSTRT` opens the track, a report build of the package writes what
+it decided to the floppy, and the host reads the floppy image. The 486's
+first boot stopped at "CMOS system options not set - press F1", which
+nobody here can press. The fix was to borrow a checksum-valid CMOS image of
+the same board, set the drive types and re-sum it.
+
+**Observed (86Box, the emulated clock):**
+- The XT and the 286 decode first on both tracks. The 286's best rung on
+  11 kHz mono was XT Fast at 0.80x.
+- The 386 plays the 11 kHz track live on XT Standard. It underran once and
+  stepped down to XT Fast, as the contract says it should.
+- The 486 plays 11 kHz on Original. The 44.1 kHz stereo track sent it to
+  XT Standard live, and that ran out of memory. The engine does not step
+  past a rung whose claims fail, so a 486 cannot play that file.
+- The Pentium-133 plays it on Quarter.
+- On the XT the two instruments agree: 0.03 / 0.11 / 0.11 against
+  0.03 / 0.11 / 0.12. That disagreement sits exactly on the offline pick's
+  1/8 threshold.
+
+**Sent to the integration track:** rest the needles during a conversion;
+step on, or decode first, when a rung's claims fail; the calibration peak;
+the estimate.
+
+**Tested where:** MartyPC (cycles) and 86Box (its emulated clock); QEMU
+only to watch the report file get written. No real machine has run any of
+it.
+
 ## 2026-10-22 — the real decoders, end to end
 
 Phase 3 put the STANDARD and XT parts behind the engine and asked one thing
