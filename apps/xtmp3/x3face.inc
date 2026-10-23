@@ -189,14 +189,13 @@ X3_C2H      equ 172
 ; planes) loads ES from [x3_artseg] ONCE A CALL - a glyph, a picture, a field
 ; - and never once a byte. Eager, because every adapter draws from it at the
 ; first paint, and LZ4 on the disk (OP_COMP).
-X3_PART_ART equ 0                   ; its row in xtmp3.asm's part table
 %define X3_ARTFLAGS OP_COMP
 
 ; x3f_artseg - [x3_artseg] = the art part's segment: once, from the entry
 ; proc after op_load. The part's claim is the carve's, and a claim is born
 ; pinned (SPEC.md 66), so the segment never moves. clobbers AX
 x3f_artseg:
-    mov al, X3_PART_ART
+    mov al, X3PART_ART              ; its row in xtmp3.asm's part table
     call op_seg
     mov [x3_artseg], ax
     ret
