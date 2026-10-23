@@ -36,6 +36,8 @@
 ;   FREE0 kkkk AVAIL kkkk LARGEST kkkk
 ;                               the heap's free KB at launch (x3_free0), and
 ;                               OSAPI_MEM_AVAIL's total and largest run now
+;   OFFLINE oo                  EVENT D: the rung the conversion will use
+;                               (x3l_offpick's answer, X3Q_*)
 ;   ERR text                    X3S_ERR's text (EVENT X), else nothing
 ;
 ; 86BOX FLUSHES A DISK IMAGE ON ITS NEXT SEEK, and a machine that is killed
@@ -71,6 +73,7 @@ x3r_s_free: db 13, 10, 'FREE0 ', 0
 x3r_s_avl:  db ' AVAIL ', 0
 x3r_s_lrg:  db ' LARGEST ', 0
 x3r_s_err:  db 13, 10, 'ERR ', 0
+x3r_s_off:  db 13, 10, 'OFFLINE ', 0
 x3r_s_end:  db 13, 10, 0
 
 ; x3r_cal0 - the calibration starts. keeps everything
@@ -102,6 +105,7 @@ x3r_decided:
 ; stream played out). keep everything
 x3r_wd:
     push ax
+    mov [x3r_off], al               ; AL = x3l_offpick's rung
     mov al, 'D'
     call x3r_write
     pop ax
@@ -143,6 +147,7 @@ x3r_write:
     jne .out
     mov byte [x3r_once], 1
 .go:
+    mov [x3r_ev], al
     mov di, x3r_buf
     mov si, x3r_s_head
     call x3_put
@@ -248,6 +253,13 @@ x3r_write:
     mov ax, bx
     call x3c_hex4
     pop bx
+    cmp byte [x3r_ev], 'D'
+    jne .nooff
+    mov si, x3r_s_off
+    call x3_put
+    mov al, [x3r_off]
+    call x3c_hex2
+.nooff:
     mov si, [x3_st+X3S_ERR]
     or si, si
     jz .noerr
@@ -300,6 +312,8 @@ x3r_write:
     X3B x3r_cal, 4                  ; ...and its length
     X3B x3r_once, 1                 ; the end's report is written once
     X3B x3r_xdone, 1                ; ...and an error's
+    X3B x3r_ev, 1                   ; the event being written
+    X3B x3r_off, 1                  ; EVENT D: x3l_offpick's rung
     X3B x3r_st, 1                   ; od_write's state byte
     X3B x3r_buf, X3R_BUFSZ          ; the text
 %endmacro

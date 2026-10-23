@@ -318,12 +318,13 @@ class Rig(object):
 
     # --- THE DRIVER -----------------------------------------------------------
     def drive(self, names, stop, guest=600.0, sample=False, regs=(),
-              keys=()):
+              keys=(), mid=None):
         """Run the PAUSED machine in `advance` steps, exec breakpoints armed
         on `names` (the primary's labels), until stop(stamps) is true; leave
         it paused. Returns (stamps, samples): stamps [(name, cycles, regs)],
         regs read only at the names in `regs`; samples [(cycles, flat_ip)],
-        one a step, when `sample`. `keys` are queued after arming."""
+        one a step, when `sample`. `keys` are queued after arming. `mid` is
+        (n, fn): fn() once, after n steps (a screenshot mid-way)."""
         m = self.m
         bps, by = [], {}
         for n in names:
@@ -334,8 +335,12 @@ class Rig(object):
             m.key(k)
         stamps, samples = [], []
         c0 = int(m.status()["cycles"])
+        steps = 0
         try:
             while True:
+                steps += 1
+                if mid and steps == mid[0]:
+                    mid[1]()
                 n = self.rnd.randint(*STEP) if sample else 1000000
                 st = m.advance(cycles=n)
                 c, ip = int(st["cycles"]), st["flat_ip"]
@@ -353,6 +358,20 @@ class Rig(object):
                         % (self.leg, guest, [s[:2] for s in stamps[-4:]]))
         finally:
             m.breakpoints([])
+
+
+SHOTS = [None]
+CALONLY = [False]
+
+
+def shot(r, name):
+    """the VGA's rendered screen as build/../<SHOTS>/<leg>-<name>.png"""
+    if not SHOTS[0]:
+        return
+    os.makedirs(SHOTS[0], exist_ok=True)
+    w, h, data = r.m.fbuf()
+    os88marty.write_png_rgb(os.path.join(SHOTS[0], "marty-%s-%s.png"
+                                         % (r.leg, name)), w, h, data)
 
 
 def first(stamps, name, after=0):
@@ -528,6 +547,11 @@ def calibrate(r, leg, res):
                         regs=("x3l_launch",))
     r.m.run()
     r.until(lambda: r.b("x3_md") == MD_CHOOSE, "the decode-first dialog", 30)
+    os88marty.guest_sleep(r.m, 1.5)
+    r.m.pause()
+    shot(r, "dialog")
+    res["cal_peak_kb"] = r.st()["peak"]
+    res["free0_kb"] = r.w("x3_free0")
     m = r.meas()
     t0, t1 = first(stamps, "x3l_start"), first(stamps, "x3l_done")
     probes, cur = [], None
@@ -556,7 +580,13 @@ def calibrate(r, leg, res):
         out["probes"].append(row)
     res["calibration"] = out
     print("     calibration: %.3f s of guest time to the decision, %.3f s to "
-          "the dialog" % (out["wall_s"], out["to_dialog_s"]))
+          "the dialog; X3S_PEAK %d KB through it, the heap %d KB free at "
+          "launch" % (out["wall_s"], out["to_dialog_s"], res["cal_peak_kb"],
+                      res["free0_kb"]))
+    if res["cal_peak_kb"] * 1024 > PEAK_MAX:
+        print("     NOTE: X3S_PEAK through the probes is OVER SPEC.md 121.10's "
+              "400,000 bytes - reported, not asserted (docs/xtmp3/FIELD.md "
+              "2.3: whether the budget binds a probe is the engine's call)")
     for p in out["probes"]:
         print("       %-12s %5s x100  %.3f s  (fetch %s, OPEN %s, prime and "
               "probe %s)" % (p["rung"], p["measured_x100"], p["total_s"],
@@ -582,7 +612,8 @@ def convert(r, leg, rung, res, expect):
     m.pause()
     g0 = r.w("x3_grans")
     stamps, rows = r.drive(CONV, lambda s: s[-1][0] == "x3_file_play",
-                           guest=1500, sample=True, keys=("Enter",))
+                           guest=1500, sample=True, keys=("Enter",),
+                           mid=(1500, lambda: shot(r, "converting")))
     g1 = r.w("x3_grans")
     m.run()
     r.until(lambda: r.st()["state"] in (ST_FILE, ST_DONE, ST_ERROR),
@@ -690,7 +721,8 @@ def playback(r, leg, res):
     stamps, _ = r.drive(("x3_gran1", "x3f_update", "x3f_update.out",
                          "x3f_walk.next", "x3f_walk.btns", "x3f_e_dial",
                          "x3f_e_dial.draw", "x3_advance"),
-                        lambda s: s[-1][0] == "x3_advance", guest=60)
+                        lambda s: s[-1][0] == "x3_advance", guest=60,
+                        mid=(4, lambda: shot(r, "playing")))
     m.run()
     r.until(lambda: r.st()["state"] == ST_DONE, "Finished", 20)
     s = r.st()
@@ -781,7 +813,7 @@ def leg_auto(leg, fixture, out, convert_too=True):
         probed = [p["rung"] for p in cal["probes"]]
         check(leg, "Half was never probed (a cheaper rung failed first)",
               "HALF" not in probed, str(probed))
-        if not convert_too:
+        if not convert_too or CALONLY[0]:
             return
         rung = r.b("x3c_rung")
         check(leg, "Auto's offline rung is %s" % QNAME[OFFLINE[leg]],
@@ -829,6 +861,10 @@ def main():
     ap.add_argument("--leg", action="append",
                     choices=("std", "fast", "speech", "c128"))
     ap.add_argument("--json", help="write every figure here")
+    ap.add_argument("--shots", help="save the VGA's screen at the dialog, "
+                    "mid-conversion and mid-play into this folder")
+    ap.add_argument("--calonly", action="store_true",
+                    help="std and c128: stop at the decode-first dialog")
     ap.add_argument("--expect", choices=("std", "fast", "speech"),
                     help="BROKEN ON PURPOSE: hold the std leg's WAV to this "
                     "profile's model")
@@ -836,6 +872,8 @@ def main():
     if a.expect:
         EXPECT["std"] = {"std": Q_XTSTD, "fast": Q_XTFAST,
                          "speech": Q_XTSPEECH}[a.expect]
+    SHOTS[0] = a.shots
+    CALONLY[0] = a.calonly
     maps()
     out = {"machine": MACHINE, "guest_hz": HZ}
     for leg in a.leg or ["std", "fast", "speech", "c128"]:

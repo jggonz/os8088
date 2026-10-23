@@ -155,6 +155,26 @@ def report(img):
     return rep
 
 
+def offpick(meas, srate, caps):
+    """the CONVERSION's rung, x3l_offpick's rule replayed from the report's
+    probes (a report written before OFFLINE existed has none of its own):
+    the highest-quality rung from Original to XT Fast measured at 1/8 real
+    time (12 x100) or better; else XT Standard where the device plays the
+    source's rate (x3l_ok1: a DSP without SND_CAP_PCM_HI tops out at
+    22,222 Hz); else the cheapest STANDARD rung over the 8,000 Hz floor"""
+    for q in range(1, 6):
+        v = meas[q - 1] if q - 1 < len(meas) else 0xFFFF
+        if v != 0xFFFF and v >= 12:
+            return QNAME[q]
+    top = 44100 if caps & 0x20 else 22222
+    if srate <= top:
+        return "XT STANDARD"
+    for q, d in ((3, 4), (2, 2), (1, 1)):
+        if srate // d >= 8000 or srate <= 8000:
+            return QNAME[q]
+    return "ORIGINAL"
+
+
 def decode(rep):
     """the report in words"""
     meas = {}
@@ -167,7 +187,14 @@ def decode(rep):
     rate, chans, bits = (int(rep["RATE"], 16), int(rep["CHANS"], 16),
                          int(rep["BITS"], 16))
     caps = int(rep["CAPS"], 16)
+    srate = int(rep["SRC"], 16)
+    off = None
+    if "OFFLINE" in rep:
+        off = QNAME[int(rep["OFFLINE"], 16)]
+    elif choice == 0xFF:
+        off = offpick(rep.get("MEAS", []), srate, caps) + " (derived)"
     return {
+        "offline_rung": off,
         "event": rep["EVENT"],
         "cpu": CPU.get(int(rep["CPU"], 16), rep["CPU"]),
         "card": int(rep["CARD"], 16), "caps": "%04X" % caps,
@@ -176,8 +203,8 @@ def decode(rep):
         "measured": meas,
         "choice": "Decode first" if choice == 0xFF else QNAME[choice],
         "override": QNAME[want] if want else None,
-        "mode": {2: "live", 3: "finished file", 5: "decode first dialog"}
-        .get(md, "md %d" % md),
+        "mode": "decode first dialog" if rep["EVENT"] == "D" else
+        {1: "checking", 2: "live", 3: "finished file"}.get(md, "md %d" % md),
         "quality": QNAME[int(rep["QUAL"], 16)],
         "device_format": "%d Hz %s %d-bit" % (rate, "stereo" if chans == 2
                                               else "mono", bits)
