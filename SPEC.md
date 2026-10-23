@@ -217411,9 +217411,32 @@ Both backends are far-called `OP_SEG` parts with ONE entry table at offset 0:
 | `STATS` | clip and overflow counts, the stage counters |
 | `CLOSE` | nothing to free: the primary owns every claim |
 
-The parser and the bit reader (`x3pars.inc`) are SHARED and live in the
-primary, so bitstream correctness is the same code on both backends.
-Approximation lives only in reconstruction. **The STANDARD backend contains
+**The FRONT END is shared, so bitstream correctness is one piece of code
+on both backends.** The front end covers frame scanning, ID3, Xing/VBRI,
+side information, the reservoir, scalefactors, Huffman, the requantisation
+exponents and the stereo plan. That is everything `tools/x3sim.py` does
+before `requant_i`, decision for decision. Its frame-level code is
+`x3pars.inc` in the primary. Its granule-level code (scalefactors,
+Huffman, exponents, plan) and the Huffman tables are a third `OP_SEG` part,
+`FRONT`, loaded eagerly. Approximation lives only in reconstruction, which
+starts at requantisation.
+
+**The granule record** (`X3G_*`, pinned in `apps/xtmp3/x3gran.inc`) is
+what the front end hands a backend. It lives in `FRONT`'s data segment and
+is passed by far pointer:
+
+| field | holds |
+|---|---|
+| header | version (1, 2, 25), rate index, `nch`, mode and mode extension (M/S, intensity), granules a frame |
+| per channel (two) | an `ok` flag (0 = this channel's granule is silence: a dropped frame, a short reservoir, a bad granule), block type, mixed flag, the last non-zero line + 1, `ix[576]` int16 in bitstream order, `q[576]` int16 requantisation exponents in quarter powers of two exactly as `quarter_exponents()` makes them (with the M/S `-2`) |
+| stereo plan | 576 bytes over the lines of a joint-stereo granule: `ms`, `lr`, or intensity with its position code, exactly `stereo_plan()`; absent (a flag) when there is no joint stereo |
+
+A backend's `GRANULE` verb turns one record into PCM. `x3sim.py`'s
+`Decoder.granule()` from `requant_i` onward is the STANDARD backend's
+specification, and the XT model `docs/xtmp3/XT-STUDY.md` section 9
+describes is the XT backend's. The register contract of every verb is
+written in `x3gran.inc` beside the record. The STANDARD track pins it in its
+first commit, and that contract binds the XT and engine tracks. **The STANDARD backend contains
 no XT kernel and no product table**, and a row proves it by symbol and by
 output (§121.10). Only the selected backend's part and its table pack are
 resident: switching backend drops one part before fetching the other

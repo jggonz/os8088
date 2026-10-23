@@ -89,9 +89,10 @@ own branch off `feature/xtmp3`:
 | 1 | **device**: SOUND.DRV 16-bit/stereo | `os8088-x3snd` / `xtmp3/sound` | S2 | - |
 | 1 | **xt-study**: product tables and approximations | `os8088-x3xts` / `xtmp3/xtstudy` | S3 | - (analysis filterbank fixtures of its own; joins S1's model in phase 2) |
 | 1 | **face**: art, drawing layer, package skeleton | `os8088-x3face` / `xtmp3/face` | S4 | - |
-| 2 | **parser + STANDARD** on target | `os8088-x3std` | S5, S6 | S1, S4 |
-| 2 | **XT backend** on target | `os8088-x3xt` | S7 | S1, S3, S4 |
-| 3 | **engine**: ladder and decode-first | `os8088-x3eng` | S8, S9 | S5-S7 |
+| 2 | **front end + STANDARD** on target, the bench | `os8088-x3std` / `xtmp3/std` | S5, S6 (bit-exact) | S1, S4 |
+| 2 | **XT backend** on target | `os8088-x3xt` / `xtmp3/xt` | S7 | S1, S3, S4; the record contract from `xtmp3/std` |
+| 2 | **engine plumbing**: worker, rings, feed, the drive dialog, conversion, finalisation, cache, finished-WAV playback, over a stub backend | `os8088-x3eng` / `xtmp3/eng` | S9, the plumbing of S6 and S8 | S2, S4; the record contract from `xtmp3/std` |
+| 3 | **integration**: the real backends behind the engine, calibration and the ladder, live playback | `feature/xtmp3` (or one agent) | S6 live, S8 | phase 2 |
 | 4 | **acceptance** | `feature/xtmp3` | S10 | all |
 
 The integrator (the session that owns the PR) merges each track branch
