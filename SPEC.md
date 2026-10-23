@@ -217451,16 +217451,27 @@ fixture.
   near 5.5 kHz (2 on an 8 to 12 kHz source, 4 on a 16 to 24 kHz one), which
   gives about 2.7 kHz of bandwidth and is muffled by design. A 4:1 cut of an
   11,025 Hz source would be 2,756 Hz, which is below a Sound Blaster DSP's
-  3,906 Hz floor and about 1.4 kHz of bandwidth, so it is never offered. Their measured error,
-  speed and listening notes are §121.11's table, and a profile without a
-  quality record is not offered by Auto.
+  3,906 Hz floor and about 1.4 kHz of bandwidth, so it is never offered.
+  The exact definitions are docs/xtmp3/XT-STUDY.md section 5. All four share
+  one global 8-bit V code with power-of-two segments, Lee's DCT-32 on
+  byte-split tables (`x*c = H[x>>8] + L[x&255]`), paired output phases
+  sharing one code fetch, and 8-bit saturating output. Taps are chosen by
+  "optband", the least octave-band error per phase. Measured against the
+  float decode on LAME fixtures at 11,025 Hz, 24 kbps: XT Standard 31-32 dB,
+  XT Fast 28-30 dB, XT Turbo 19 dB, XT Speech 32 dB. For scale, the float
+  decode rounded to 8 bits gives 35-39 dB. **XT Turbo is experimental and
+  is not in Auto**: its tones carry -19 dB alias spurs, and it is only 8%
+  faster than XT Fast because matrixing, which does not shrink with the
+  window, is a quarter to a third of the decode. Their measured speed and
+  listening notes are §121.11's table, and a profile without a quality
+  record is not offered by Auto.
 
 ### 121.5 The quality ladder (pinned)
 
 Auto takes the first rung that calibrates real time on THIS machine with this
 device: **Original** (STANDARD, divisor 1), **Half** (STANDARD, 2), **Quarter**
-(STANDARD, 4), **XT Standard**, **XT Fast**, **XT Turbo**, and then **Decode
-first** (§121.7). A rung whose output rate the device cannot play is skipped
+(STANDARD, 4), **XT Standard**, **XT Fast**, and then **Decode first**
+(§121.7). XT Turbo and XT Speech are the user's explicit choices only. A rung whose output rate the device cannot play is skipped
 rather than tried, and so is a rung whose output would fall below
 `X3_FLOOR` = 8,000 Hz while the source is above it. An 11,025 Hz track
 therefore never auto-halves to 5,512 Hz. Below-floor output is XT Speech's
@@ -217594,15 +217605,21 @@ seeking are disabled. Progress is not playback.
 The XT path's whole working set is at most **400,000 bytes**, counting the
 package region, every part, every claim the player makes and SOUND.DRV's
 grant made on its behalf. It is reported live in Status (`Peak 371 KB`).
-Planning figures, which the measured table replaces: primary + bss 56 KB,
-XT part 12 KB, XT table pack up to 224 KB (synthesis 128, matrix and IMDCT
-64, requantisation and Huffman 32), decoder state 16 KB, compressed
-look-ahead 16 KB, PCM staging 32 KB. Smaller machines get a smaller validated
+The S3 study's partition for XT Standard during a conversion is
+380,682 of the 400,000 bytes (docs/xtmp3/XT-STUDY.md section 7). That is
+the 228,672-byte XT Standard pack in four segments with every hot row
+inside one, an XT part of about 20 KB of unrolled code, the primary and its
+bss, the decoder state, the compressed look-ahead and the PCM staging. XT Fast's
+pack is 153,536 bytes, XT Turbo's 120,256 and XT Speech's 151,360. Smaller machines get a smaller validated
 pack or the minimum is stated. The STANDARD path's claim is measured on its
 own and never loaded first on an XT. Every table pack ships as GENERATOR
 INPUT (coefficients and the code map, a few KB) and is EXPANDED at `OPEN` by
-an exact integer recurrence. The host generator produces identical bytes and
-their CRC-32, which `OPEN` checks. This is because reading 128 KB from a
+an exact integer recurrence (`tools/x3xttab.py` for the XT packs, whose
+input `XTGEN.BIN` is 5,578 bytes). The host generator produces identical
+bytes. `OPEN` checks a Fletcher-32 of the expansion, about 0.77 s on the
+5150 by the model, against the generator's. A CRC-32 there would cost an XT
+about 4.7 s. A plain word sum would prove nothing, because odd-symmetric rows
+sum to zero. The host and the test builds keep CRC-32 as the identity. This is because reading 128 KB from a
 floppy costs an XT over ten seconds, while expansion costs it under one
 (to be measured).
 
