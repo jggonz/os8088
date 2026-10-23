@@ -217431,6 +217431,31 @@ is passed by far pointer:
 | per channel (two) | an `ok` flag (0 = this channel's granule is silence: a dropped frame, a short reservoir, a bad granule), block type, mixed flag, the last non-zero line + 1, `ix[576]` int16 in bitstream order, `q[576]` int16 requantisation exponents in quarter powers of two exactly as `quarter_exponents()` makes them (with the M/S `-2`) |
 | stereo plan | 576 bytes over the lines of a joint-stereo granule: `ms`, `lr`, or intensity with its position code, exactly `stereo_plan()`; absent (a flag) when there is no joint stereo |
 
+**Pinned in `apps/xtmp3/x3gran.inc` (`X3G_ABI` 1), equates only, included by
+every side.** Its five sections: (1) the record, 5,228 bytes - a 32-byte
+header that also carries the version's 13 short-band widths, so a backend
+reorders a short block with no band table of its own; per channel `ok`,
+block type, mixed, window switching, the last non-zero line + 1, `ix` and
+`q`; and the plan as `X3G_PLAN` = L/R, all-M/S or per-line (`0` L/R, `1` M/S,
+`80h + p` intensity). (2) A backend's 18-byte header: `'X3'`, the ABI, its
+kind, and six near verb offsets, far-called through `op_cseg` with DS = the
+part's own data segment. (3) The verbs: `CAPS` answers up to six work
+segments in paragraphs; `OPEN` takes an `X3O_*` record (profile, divisor,
+output channels where 1 on a stereo source IS the mono downmix, PCM as S16
+Q15 or U8 = high byte XOR 80h, a Q8 gain where 0 is the exact model, the
+segments); `GRANULE` takes the record at ES:SI and writes 576/div frames to
+DX:DI, answering CX frames and AX clips; `STATS` fills `X3Z_*`. Every verb
+keeps every register but AX and its outputs, never calls the kernel, never
+masks interrupts and uses at most 64 bytes of the caller's (worker's) stack.
+(4) The front end's near API in the primary: `x3p_open` is a state machine
+that never reads a file (the caller reads, it asks for `[X3I_WANT, +WANTN)`),
+`x3p_probe` wraps it for the queue, `x3p_start`/`x3p_next`/`x3p_gran` decode
+from the engine's `X3R_*` ring (free-running read and write counters, a
+producer EOF byte; `X3P_MORE` asks for bytes and loses nothing), `x3p_reset`
+and `x3p_seekpos` seek, and `x3p_counts` gives x3sim's verdict counters.
+(5) The FRONT part's fixed data layout, which `x3pars.inc` addresses with DS
+switched to it.
+
 A backend's `GRANULE` verb turns one record into PCM. `x3sim.py`'s
 `Decoder.granule()` from `requant_i` onward is the STANDARD backend's
 specification, and the XT model `docs/xtmp3/XT-STUDY.md` section 9
