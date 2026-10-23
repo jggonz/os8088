@@ -217876,8 +217876,8 @@ it once a call, never once a byte. The identity check (an incremental paint
 equals a full repaint, pixel for pixel) passed on FULL and C2 in colour and
 black and white on QEMU's VGA, MID on `VIDEO=ega` and on Hercules, and C1 on
 the CGA, and again at 70323ad3 on FULL colour, MID black and white and C1.
-The faces in `docs/xtmp3/` are that build's, and its face code is the
-shipped one.
+The faces in `docs/xtmp3/` are that build's, the compact and Hercules ones
+c22de988's, after the compact layouts' channel word moved.
 
 **Mouse**: a queue row selects and a second click on the selection plays it;
 the scroll bar's arrows step a row and its trough a page; the wheel scrolls

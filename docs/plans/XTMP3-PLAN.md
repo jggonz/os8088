@@ -101,8 +101,8 @@ story's own verification has been run and its evidence is in the PR.
   disk, the 1.44MB and 1.2MB apps disks, the live media); INDEX, README;
   §121.11.5's period-machine figures, PERFORMANCE.md Set 162 and the five
   `*-xtmp3` 86Box machines (FIELD); every face and state picture in
-  `docs/xtmp3/` retaken at 70323ad3 (the face code is unchanged at
-  3e3a9306) on VGA, EGA, CGA
+  `docs/xtmp3/` retaken at 70323ad3 (and the compact and Hercules faces
+  again at c22de988, after the compact layouts' fix) on VGA, EGA, CGA
   and Hercules, with the identity check passing on FULL colour, MID black
   and white and C1. Open: listening, real hardware, a suite row for the
   face's identity check, the soak union and `test-full`.*
