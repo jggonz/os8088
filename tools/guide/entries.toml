@@ -361,6 +361,13 @@ kind = "program"
 summary = "Plays standard MIDI song files with a channel rack, on an FM chip, a Sound Blaster, MIDI out or the PC speaker."
 short = "MIDI song player with rack"
 
+["XTMP3.O88"]
+title = "XTMP3"
+kind = "program"
+summary = "Plays MP3 files behind the face of an 80s stereo component, at the best quality this computer and its sound card can keep up with, and says which quality that is. On a slow PC it decodes the song to a WAV file on the hard disk first, then plays that."
+short = "MP3 player for every PC"
+needs = "A sound card to play while decoding; otherwise a hard disk and the PC speaker or a Covox"
+
 ["VIDEO.O88"]
 title = "Video Player"
 kind = "program"
@@ -795,6 +802,24 @@ title = "Turkish March"
 kind = "music"
 summary = "Mozart's Rondo alla Turca as a MIDI song. Plays in MIDIRack."
 short = "Mozart's Rondo alla Turca"
+
+["NEONDRV.MP3"]
+title = "Neon Drive"
+kind = "music"
+summary = "A ten-second original demo song as an MP3, 44.1 kHz stereo at 56 kbps. Plays in XTMP3."
+short = "XTMP3 demo, CD-rate stereo"
+
+["NIGHTSIG.MP3"]
+title = "Night Signals"
+kind = "music"
+summary = "A ten-second original demo song as an MP3, 22.05 kHz stereo at 40 kbps. Plays in XTMP3."
+short = "XTMP3 demo, half-rate stereo"
+
+["AFTERHRS.MP3"]
+title = "After Hours"
+kind = "music"
+summary = "A ten-second original demo song as an MP3, 11,025 Hz mono at 24 kbps: the song a 4.77 MHz XT is meant for. Plays in XTMP3."
+short = "XTMP3 demo for the XT"
 
 # --- the one-program disks, the everything set and the demo drives ------------
 
