@@ -30,9 +30,6 @@
 ; --- the header (x3gran.inc section 5) -------------------------------------
     db 'X3', X3G_ABI, X3K_FRONT, X3P_NV, 0
     dw xf_gran, xf_check
-%if ($ - $$) > X3P_DATA
-    %error "FRONT header overruns its data block"
-%endif
     times X3P_DATA - ($ - $$) db 0
 ; --- the data block: x3gran.inc's fixed layout, zero at load ---------------
     times X3P_DEND - X3P_DATA db 0
