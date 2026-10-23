@@ -6,9 +6,10 @@ code on `xtmp3/face` does and was looked at; the measured-on-hardware column
 is empty because nothing in this wave was run on an XT.
 
 The design is the owner's two mockups, `docs/xtmp3/design/xtmp3-color.png`
-and `xtmp3-mono.png`. The faces as built are beside this file, and
-`vs-mockup-color.png` / `vs-mockup-mono.png` put each mockup next to the VGA
-face scaled by the mockup's own 1.6.
+and `xtmp3-mono.png`. The faces as built are beside this file (retaken at
+the final build, 70323ad3, by the docs track), and `vs-mockup-color.png` /
+`vs-mockup-mono.png` put each mockup next to the VGA face scaled by the
+mockup's own 1.6.
 
 ## Files
 
