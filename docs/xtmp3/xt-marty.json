@@ -2,59 +2,59 @@
  "part_bytes": 58634,
  "open": {
   "std": {
-   "cycles": 20296808,
-   "seconds": 4.252664776342749,
+   "cycles": 14124151,
+   "seconds": 2.959346092915015,
    "regions": {
-    "XTGEN check and setup": 834955,
-    "window rows": 7781154,
-    "ENCV and Lee planes": 4539833,
-    "RQL, IMDCT rows, ENCR, antialias": 5052433,
-    "IMWIN, reset": 2088674,
-    "done": 43
+    "XTGEN check and setup": 605185,
+    "window rows": 5850458,
+    "ENCV and Lee planes": 2846969,
+    "RQL, IMDCT rows, ENCR, antialias": 3286374,
+    "IMWIN, reset": 1535340,
+    "done": 109
    },
-   "fletcher": 6160548,
+   "fletcher": 4139384,
    "ok": true
   },
   "fast": {
-   "cycles": 15981953,
-   "seconds": 3.3485998675390403,
+   "cycles": 11084008,
+   "seconds": 2.322363713658879,
    "regions": {
-    "XTGEN check and setup": 834955,
-    "window rows": 4269501,
-    "ENCV and Lee planes": 4539833,
-    "RQL, IMDCT rows, ENCR, antialias": 4266012,
-    "IMWIN, reset": 2071827,
-    "done": 109
+    "XTGEN check and setup": 605185,
+    "window rows": 3212113,
+    "ENCV and Lee planes": 2846969,
+    "RQL, IMDCT rows, ENCR, antialias": 2901489,
+    "IMWIN, reset": 1518493,
+    "done": 43
    },
-   "fletcher": 4624548,
+   "fletcher": 3107384,
    "ok": true
   },
   "turbo": {
-   "cycles": 13874047,
-   "seconds": 2.906943347063429,
+   "cycles": 9496894,
+   "seconds": 1.9898255232281252,
    "regions": {
-    "XTGEN check and setup": 834799,
-    "window rows": 2174667,
-    "ENCV and Lee planes": 4539833,
-    "RQL, IMDCT rows, ENCR, antialias": 4266012,
-    "IMWIN, reset": 2058955,
-    "done": 65
+    "XTGEN check and setup": 605029,
+    "window rows": 1637961,
+    "ENCV and Lee planes": 2846969,
+    "RQL, IMDCT rows, ENCR, antialias": 2901489,
+    "IMWIN, reset": 1505621,
+    "done": 109
    },
-   "fletcher": 3825738,
+   "fletcher": 2570560,
    "ok": true
   },
   "speech": {
-   "cycles": 14784469,
-   "seconds": 3.097698443678006,
+   "cycles": 10023134,
+   "seconds": 2.1000853390524954,
    "regions": {
-    "XTGEN check and setup": 834903,
-    "window rows": 3971651,
-    "ENCV and Lee planes": 2921225,
-    "RQL, IMDCT rows, ENCR, antialias": 5052433,
-    "IMWIN, reset": 2004476,
-    "done": 65
+    "XTGEN check and setup": 605133,
+    "window rows": 2986273,
+    "ENCV and Lee planes": 1694409,
+    "RQL, IMDCT rows, ENCR, antialias": 3286374,
+    "IMWIN, reset": 1451142,
+    "done": 87
    },
-   "fletcher": 4317258,
+   "fletcher": 2900800,
    "ok": true
   }
  },
@@ -336,5 +336,5 @@
    "staged_granules": 16
   }
  },
- "note": "MartyPC IBM 5150 (GLaBIOS, 4.77 MHz), tools/x3xtmarty.py, 2026-10-22. granule: the XT part GRANULE only (the FRONT part not included); open: the final two-half part (OPEN includes the tail check and the kernel copy); granule figures were taken on the part before its two-half layout and re-taken after it: 1,505,843 cycles against 1,505,847 for XT Standard on AFTERHRS.MP3"
+ "note": "MartyPC IBM 5150 (GLaBIOS, 4.77 MHz), tools/x3xtmarty.py, 2026-10-22. granule: the XT part GRANULE only (the FRONT part not included); open: the final two-half part (OPEN includes the tail check and the kernel copy); granule figures were taken on the part before its two-half layout and re-taken after it: 1,505,843 cycles against 1,505,847 for XT Standard on AFTERHRS.MP3; open re-taken after the Fletcher loop was unrolled and the expansion loops tightened (bytes identical): 2.959 s for XT Standard"
 }

@@ -32,8 +32,8 @@ what was tried, what was measured, what was decided and why.
 > Standard on the song (0.166x, the part alone). The model had 1.37 M
 > without its front end: the kernels were priced right, but the code
 > between them was not. The IMDCT crossover is 12.5 lines, not 9.6, and the
-> factored form costs 17,900 cycles, not 11,300. OPEN takes 4.25 s, not
-> 2.11. The working set needs the part's claim shrunk after OPEN to fit
+> factored form costs 17,900 cycles, not 11,300. OPEN takes 2.96 s, not
+> 2.11 (4.25 s before its loops were tightened). The working set needs the part's claim shrunk after OPEN to fit
 > 400,000 bytes (XT.md 6). The quality figures below stand within 0.5 dB on
 > the target's exact chain.
 
@@ -453,7 +453,7 @@ with one ring a pair.
 | matrixing | Lee DCT-32 | DCT-32 | DCT-32 | DCT-16 (div 2) / DCT-8 (div 4) |
 | pack (x3xttab) | `std`: 228,672 B, 4 segments | `fast`: 153,536 B, 4 segments | `turbo`: 120,256 B, 3 segments | `speech`: 151,360 B, 3 segments |
 | OPEN expansion, model | 2.11 s | 1.62 s | 1.37 s | 1.49 s |
-| OPEN, MEASURED (S7: expansion, table Fletcher, tail check) | 4.25 s | 3.35 s | 2.91 s | 3.10 s |
+| OPEN, MEASURED (S7: expansion, table Fletcher, tail check) | 2.96 s | 2.32 s | 1.99 s | 2.10 s |
 | SNR vs float, real (synthetic) | 31.1-32.4 (32.3) | 28.4-29.8 (29.1) | 18.7-19.4 (19.2) | 31.8-32.8 (32.6) |
 | worst octave, real | -15.4 to -22.9 dB | -13.0 to -21.2 | -2.4 to -10.3 | -15.0 to -23.8 |
 | alias, the term choice alone | -93.9 dB | -39.4 | -19.4 | -93.9 |
