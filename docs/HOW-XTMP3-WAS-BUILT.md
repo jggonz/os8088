@@ -583,3 +583,61 @@ every one the finished WAV's own, in order.
 
 **Tested where.** QEMU, every figure; the `xtmp3live` and `xtmp3eng` rows.
 No timing here is an 8088's: the FIELD track measures the real machines.
+
+## 2026-10-23 — what the field found, fixed and measured again
+
+The field track ran the whole player on MartyPC's 4.77 MHz XT and on
+86Box's 286 to Pentium. Its findings came back to the integration track as
+a list ranked by the lead. Each one was fixed, and the XT ones were measured
+again on the same machine with the field's own row (`xtmp3xt`, guest-cycle
+sampling).
+
+**The face was eating the conversion.** Sampled uniformly in guest cycles,
+an XT Standard conversion spent 44.6% of the machine drawing the face and
+38% decoding. Part of that was the needles and the throttles: while
+converting, the dials now rest, the BUFFER gauge moves at most every 3 s,
+the figures behind the LCD move once a second, the progress window redraws
+only the characters that changed, and the meters' peak scan is skipped.
+That took the face to 22.9%. The rest was a quieter defect. An element that
+the progress window partly covered was "cut by the clip", and a cut element
+forgot its key so the next pass would draw it again. So the hidden LCD title
+and dials were composed afresh on every pass, four times a second, for the
+whole conversion. Now an element cut by one of XTMP3's own dialogs keeps its
+key, and only those elements are owed when the dialog closes. **XT Standard's
+job went from 0.055x to 0.0946x, and its decode loop from 0.0586x to
+0.1004x.** The field had estimated 0.105x for the decoder alone. The face's
+share went from 44.6% to 9.8%. The first try owed every element when the
+dialog closed, and the knob's 400 ms redraw landed just as the finished
+file started to play. The field row caught it as an underrun, so only the
+cut elements are owed now.
+
+**Calibration crossed the 400,000 bytes.** It measured 402 KB, because a
+probe's card grant was held until the next probe took one, so the XT part's
+OPEN ran beside it. The grant is now given back before any OPEN, and
+calibration measures 387 KB. The field row now FAILS above the ceiling.
+
+**Calibration took 16 s on the XT.** Three probes each fetched a part and
+ran an OPEN of up to 3.3 s. An 8086 (the CPU is a hint, not the verdict) now
+probes XT Standard first. If it is hopelessly short, nothing else is
+probed, and the conversion reuses that probe's OPEN. Measured: 6.4 s.
+
+**A 486 stopped on "Out of memory".** It chose XT Standard live at
+44.1 kHz, and the 33 KB external ring did not fit beside the decoder. Under
+the XT backend the card's ring is now the 8 KB grant, which the probe has
+already held. In general, a rung that cannot start is now a rung that
+failed: it is stored at 0 for the session and the ladder goes on. A
+machine that cannot hold even the conversion's rung is told so in figures,
+`Needs 390 KB, has 300 KB`, before any drive is asked for.
+
+**The estimate was half the truth.** The drive dialog said "About 01:31"
+for a job that took 3:03, because a probe times the decoder and not the
+face or the writes. The dialog no longer guesses. The progress window says
+`About mm:ss left` once the job has measured itself for 10 seconds.
+
+**And three small truths on the face.** The queue said `00:10` where the
+LCD said `/~00:10` for a stream with no Xing count, and the LCD was right.
+The status line's `Quality: XT STANDARD (set)` was cut to `(se`. The drive
+dialog's `Decode and Play` filled its button edge to edge.
+
+**Tested where.** MartyPC's 5160 (`xtmp3xt`, four legs, every WAV bit-exact)
+and QEMU (`xtmp3eng`, `xtmp3live`). No real XT has run it.

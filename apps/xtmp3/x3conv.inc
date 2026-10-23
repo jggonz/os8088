@@ -93,11 +93,13 @@ XD_W        equ 464                 ; content width: 58 cells
 XD_RH       equ 11                  ; a list row
 XD_DROWS    equ 6                   ; the drive list, rows at most
 XD_FROWS    equ 8                   ; Decoded Files
-XD_BW       equ 120                 ; a button
+XD_BW       equ 136                 ; a button ('Decode and Play' and room)
 XD_BH       equ 16
 XD_MAXV     equ 26
 
-XC_DRAWT    equ 9                   ; ticks between progress redraws (~2 a s)
+XC_DRAWT    equ 18                  ; ticks between progress redraws (1 a s)
+XC_ESTT     equ 182                 ; ticks the conversion measures its own
+                                    ; speed before it says how long is left
 XC_STAGEKB  equ 8                   ; a stage half, at least: 8 KB
 XC_STAGEXT  equ 4                   ; ...and under the XT backend, 4 KB
 
@@ -1040,7 +1042,8 @@ x3c_dlgclose:
     mov word [x3c_dwin], 0
     mov byte [x3c_dmode], 0
     call OSAPI_WM_DESTROY
-.out:
+    call x3f_repay                  ; what it cut is owed: the next pass
+.out:                               ; draws it
     pop bx
     ret
 
@@ -1292,30 +1295,12 @@ x3c_nline:
     call dec_u32
     mov si, x3c_s_kb
     call x3_put
-    mov ax, [x3c_est]
-    cmp ax, 0xFFFF
-    je .z
-    or ax, ax
-    jz .z
-    mov bx, ax                      ; minutes = duration x 100 / speed / 60
-    mov ax, [x3_info+X3I_DUR]
-    mov cx, 100
-    mul cx
-    cmp dx, bx
-    jae .z
-    div bx                          ; AX = seconds of converting
-    inc ax                          ; (a second at least)
-    push ax
-    mov si, x3c_s_about
-    call x3_put
-    pop ax
-    call x3_mmss                    ; mm:ss
-    dec di
-    mov si, x3c_s_mindec
-    call x3_put
-.z:
-    mov byte [di], 0
-    ret
+    mov byte [di], 0                ; NO TIME ESTIMATE HERE (SPEC.md 121.7:
+    ret                             ; "only when the estimate is justified"):
+                                    ; a probe times the decoder and not the
+                                    ; job - the face, the writes - and on the
+                                    ; XT it said 1:31 for 3:03. The progress
+                                    ; window says it, from the job's own speed
 
 ; -----------------------------------------------------------------------------
 ; THE BUTTONS: a record per window (os88ui.inc's, the standard look). DRIVE:
@@ -2412,13 +2397,13 @@ x3c_tick:
 .conv:
     cmp byte [x3_md], MD_CONV
     jne .out
-    call x3c_prog                   ; x3_st's fields
-    call OSAPI_GET_TICKS
-    mov bx, ax
-    sub ax, [x3c_drawt]
-    cmp ax, XC_DRAWT
-    jb .out
-    mov [x3c_drawt], bx
+    call OSAPI_GET_TICKS            ; ONCE A SECOND (XC_DRAWT): x3_st's
+    mov bx, ax                      ; figures - so the LCD's clock, the bar,
+    sub ax, [x3c_drawt]             ; the status and the gauge move no more
+    cmp ax, XC_DRAWT                ; often - and the progress window's
+    jb .out                         ; changed characters. On a VGA XT the
+    mov [x3c_drawt], bx             ; face cost the conversion as much as
+    call x3c_prog                   ; the decoder did (FIELD.md 2.1)
     mov bx, [x3c_dwin]
     or bx, bx
     jz .out
@@ -2506,6 +2491,8 @@ x3c_speed:
 
 ; x3c_pprog - the progress window's four lines
 x3c_pprog:
+    mov byte [x3c_lln1], 0xFF       ; (the moving lines: owed whole)
+    mov byte [x3c_lln2], 0xFF
     mov di, x3c_lbuf2               ; 'To:      C:  NAME.WAV'
     mov si, x3c_s_to
     call x3_put
@@ -2557,13 +2544,14 @@ x3c_pprog2:
     mov byte [di+1], 0
     mov si, x3c_lbuf2
     mov dx, 26
-    xor al, al
-    call x3c_line
-    mov di, x3c_lbuf2               ; 'Elapsed: 04:12   Speed: 0.31x'
-    mov si, x3c_s_elap
+    mov bx, x3c_lln1
+    call x3c_linec
+    mov di, x3c_lbuf2               ; 'Elapsed: 04:12  Speed: 0.31x  About
+    mov si, x3c_s_elap              ; 09:30 left'
     call x3_put
     call OSAPI_GET_TICKS
     sub ax, [x3c_t0]
+    push ax
     mov cx, 10                      ; ticks -> seconds: x 10 / 182
     mul cx
     mov cx, 182
@@ -2583,11 +2571,110 @@ x3c_pprog2:
     pop ax
     call x3_2dig
     mov byte [di], 'x'
-    mov byte [di+1], 0
+    inc di
+    pop ax                          ; THE ESTIMATE, only once it is the
+    cmp ax, XC_ESTT                 ; conversion's OWN: ten seconds of it
+    jb .noest                       ; measured, the face and the disk in it
+    mov bx, [x3_st+X3S_SPEED]       ; (a probe's figure has neither, and was
+    or bx, bx                       ; half the XT's real time - FIELD.md)
+    jz .noest
+    mov ax, [x3_st+X3S_TOTAL]
+    cmp ax, 0xFFFF
+    je .noest
+    sub ax, [x3_st+X3S_ELAP]
+    jbe .noest
+    mov cx, 100                     ; left = audio left x 100 / speed
+    mul cx
+    cmp dx, bx
+    jae .noest
+    div bx
+    push ax
+    mov si, x3c_s_about2
+    call x3_put
+    pop ax
+    call x3_mmss
+    dec di
+    mov si, x3c_s_left
+    call x3_put
+.noest:
+    mov byte [di], 0
     mov si, x3c_lbuf2
     mov dx, 36
-    xor al, al
-    jmp x3c_line
+    mov bx, x3c_lln2
+    jmp x3c_linec
+
+; x3c_linec - x3c_line for a line that is redrawn: only the CHANGED cells,
+; one run from the first to the last that differs from what [BX] holds (the
+; line as last drawn, XD_W/8 - 1 bytes), which is then brought up to date.
+; A run of text on an 8088 is ~0.9 ms a cell: two whole lines twice a second
+; were a tenth of a conversion. in: SI = the text, DX = y, BX = its cache.
+; keeps everything
+x3c_linec:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, x3c_lbuf                ; the line, padded as x3c_line pads it
+    mov cx, XD_W / 8 - 2
+    call x3_putn
+    mov al, ' '
+    jcxz .p
+    call x3_fillb
+    add di, cx
+.p:
+    mov byte [di], 0
+    xor si, si                      ; SI = the first that differs...
+.f:
+    mov al, [x3c_lbuf+si]
+    or al, al
+    jz .none
+    cmp al, [bx+si]
+    jne .fd
+    inc si
+    jmp short .f
+.fd:
+    mov di, XD_W / 8 - 3            ; ...DI = the last
+.l:
+    mov al, [x3c_lbuf+di]
+    cmp al, [bx+di]
+    jne .run
+    dec di
+    jmp short .l
+.run:
+    push si                         ; the cache brought up to date
+    push di
+    push es
+    push ds
+    pop es
+    lea di, [bx]
+    mov si, x3c_lbuf
+    mov cx, XD_W / 8 - 1
+    cld
+    rep movsb
+    pop es
+    pop di
+    pop si
+    mov byte [x3c_lbuf+di+1], 0     ; the run [SI, DI], at its own cell
+    mov cx, si
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, [x3c_dox]
+    add cx, 8
+    add dx, [x3c_doy]
+    mov ax, (CWHITE << 8) | CBLACK
+    add si, x3c_lbuf
+    call OSAPI_FONT_RUN
+.none:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; =============================================================================
 ; FINALISATION (SPEC.md 121.7)
@@ -3165,8 +3252,8 @@ x3c_s_8:     db '8-bit', 0
 x3c_s_16:    db '16-bit', 0
 x3c_s_needs: db 'Needs ', 0
 x3c_s_kb:    db ' KB', 0
-x3c_s_about: db '   About ', 0
-x3c_s_mindec: db ' to decode', 0
+x3c_s_about2: db '  About ', 0
+x3c_s_left:  db ' left', 0
 x3c_s_cancel: db 'Cancel', 0
 x3c_s_decode: db 'Decode and Play', 0
 x3c_s_close: db 'Close', 0
@@ -3221,6 +3308,8 @@ x3c_s_ren:   db 'Cannot name the file', 0
     X3B x3c_need, 4                 ; ...KB it needs, '~'
     X3B x3c_nest, 1
     X3B x3c_est, 2                  ; ...its measured speed
+    X3B x3c_lln1, XD_W / 8 - 1      ; the progress window's two moving lines,
+    X3B x3c_lln2, XD_W / 8 - 1      ; as last drawn (x3c_linec)
     X3B x3c_dvol, 1                 ; ...where: the volume, the folder...
     X3B x3c_ddir, 2
     X3B x3c_wname, 14               ; ...the final name, the temporary one

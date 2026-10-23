@@ -188,6 +188,32 @@ step back one tick under QEMU, because the BIOS tick and the 8253 disagree
 across a pending IRQ0. `x3_pitd` treats a negative span as zero, and the
 stub's own clock adds the pending tick.
 
+**An 8086 probes ONE rung first** (`PH_HINT`, the integration track's
+second round, on FIELD.md's 16.1 s of XT calibration). When
+`OSAPI_CPU_INFO` answers `CPU_8086` and Quality is Auto, XT Standard - the
+rung an XT's conversion uses - is probed first. If it is short of passing
+by `X3_CAL_HOPE` (4x), nothing else is probed and the machine asks for a
+drive: STANDARD at a quarter of the rate is no cheaper than XT Standard on
+an 8088 (1.76 M cycles a granule against 1.62 M), and XT Fast is under 1.3
+times as fast, so no Auto rung is within reach. The CPU is a HINT that
+picks the order; the verdict is still the measure (a fast 8086 or a V20
+whose XT Standard is not hopeless runs the whole ladder, that measure
+cached). And the job's rung is the probe's, so its OPEN is reused. Measured
+on MartyPC's 5160 (`xtmp3xt`, AFTERHRS): **6.4 s to the decision, against
+16.1 s** (one probe: the fetch 1.0 s, OPEN 3.3 s, the prime and the probe
+2.1 s), and the conversion's setup no longer fetches or OPENs at all.
+
+**A rung that cannot start is a rung that failed** (`x3l_done`). Its claims
+refused (out of memory), or the card, the rung is stored at 0 for the
+session and the ladder runs again from its cache, to the next rung or to
+Decode first; never an error. A step down whose rung cannot open tries the
+one below it, and below the last live rung asks for a drive from the
+track's start (`x3_steptick`). The `rungfail` leg makes Original's live
+start fail (the stub's test hook) and plays Half with no ERROR on the way.
+On 86Box's 486 (FIELD.md section 3) XT Standard died "Out of memory" at
+44.1 kHz on the external ring; under the XT backend the card's ring is now
+the 8 KB grant, which the probe already held, so that start fits.
+
 **The session cache** (`x3l_cached`, `x3l_store`): up to 8 results, keyed
 by fingerprint, rung (backend, profile and divisor together) and device
 (the format bits and the rate cap). A second play of the same track asks no
@@ -248,6 +274,13 @@ Every caller re-aims and refills the ring afterwards (`x3_resync`,
 `x3_live_at`, a probe's prime). A conversion claims its stage inside that
 claim. A shrunk part refuses a second OPEN, so `x3_be_get` drops it and
 fetches it whole again before any OPEN of a DIFFERENT record.
+
+**The card's grant is given back before any OPEN** (`x3_rungset`, with no
+stream open). A probe's grant was held until the NEXT probe took one, so an
+XT probe's OPEN ran beside the previous probe's 16 KB grant: 402 KB =
+411,648 bytes on MartyPC (FIELD.md 2.3). SPEC.md 121.10's ceiling is the
+XT path's WHOLE working set, calibration included; `xtmp3xt` now asserts it
+through the probes: **387 KB = 396,288 bytes**.
 
 **RESET instead of a re-fetch** (`x3_reuse`). `x3_rungset` builds the
 rung's OPEN record first (`x3_onew`: profile, divisor, channels, format,
@@ -354,9 +387,16 @@ The dialog's own window slot is watched (`OSAPI_WM_OWNSEG`) to see a cancel.
    `OSAPI_FILE_WRITE_SEQ` (`WSEQF_HELD | WSEQF_KEEP`, §18.4.9). Each half is
    a byte handshake, written last by the producer and cleared last by the
    consumer.
-4. The progress window, at most twice a second (`XC_DRAWT` = 9 ticks):
-   output, quality, decoded audio against track time, percent, wall time and
-   speed (`0.31x`).
+4. The progress window, at most ONCE a second (`XC_DRAWT` = 18 ticks), and
+   only the characters that changed (`x3c_linec`): output, quality, decoded
+   audio against track time, percent, wall time and speed (`0.31x`) - and,
+   once the job has measured itself for `XC_ESTT` = 182 ticks (10 s), `About
+   mm:ss left` from that speed. The figures behind the face (the LCD's
+   clock, the bar, the status, the BUFFER gauge) move at the same rate
+   (`x3c_prog`), and the dials rest (FACE.md). **The drive dialog shows no
+   time**: a probe times the decoder, not the job, and on the XT its "About
+   01:31" was a 3:03 conversion (FIELD.md) - SPEC.md 121.7 shows an estimate
+   "only when the estimate is justified".
 5. **Cancel** (Esc or the button) is answered within one granule batch. The
    worker parks, the token is abandoned, and **only this job's** temporary
    file is deleted. The measured time was 0.22 s from the key to READY.
@@ -467,18 +507,19 @@ the assembler's map at this branch's head, merged with `feature/xtmp3`:
 
 | build | image | bss | image + bss | left |
 |---|---|---|---|---|
-| shipped | 42,297 | 14,115 | 56,412 | 8,612 |
-| `PKG_MEGA` | 43,194 | 14,115 | 57,309 | 7,715 |
-| `X3STUB` (test only) | 42,557 | 14,186 | 56,743 | 8,281 |
+| shipped | 42,935 | 14,279 | 57,214 | 7,810 |
+| `PKG_MEGA` | 43,832 | 14,279 | 58,111 | 6,913 |
+| `X3STUB` (test only) | 43,225 | 14,354 | 57,579 | 7,445 |
 
 (At the integration track's head, from each build's own package header.
 The engine track's figures were 41,275 + 14,078: the integration added
-1,022 bytes of image - the plan, the OPEN reuse, the ramps, the packed and
-cluster refusals, the probe's 32 KB path - and 37 of bss.)
+1,660 bytes of image - the plan, the OPEN reuse, the ramps, the packed and
+cluster refusals, the probe's 32 KB path, the rung fall-through, the 8086
+hint, the stated minimum, the face's throttles - and 201 of bss.)
 
 **The engine's share.** Against `feature/xtmp3`'s primary with the demo
 engine (image 19,670, image + bss 29,883), the engine added **21,605 bytes
-of image and 3,865 of bss**, and the integration the 1,059 above. The
+of image and 3,865 of bss**, and the integration the 1,861 above. The
 `X3STUB` build adds 260 bytes of image and 71 of bss more: the test hook and
 the debug ring.
 
@@ -515,6 +556,7 @@ meanwhile.
 | XT Standard conversion, 16 KB-cluster destination | `xtclu/16k` | 385 KB | ONE 16 KB half, 16 KB look-ahead |
 | XT Standard conversion, 32 KB-cluster destination | `xtclu/32k` | refused, 377 KB at the refusal | nothing fits: `Too little memory for that disk` |
 | XT Fast conversion, 32 KB-cluster destination | `xtclu/32k` | 387 KB | two 32 KB halves (its work is 182 KB) |
+| XT Standard CALIBRATION on MartyPC's 5160 (an SB 2.01) | `xtmp3xt` std | 387 KB = 396,288 (was 402 KB = 411,648: the previous probe's grant was held through the OPEN) | the grant given back before any OPEN |
 
 The peak of a conversion is at OPEN (the part unshrunk, 58 KB, with its
 work), not during the decode; the plan sizes what follows the shrink. The
@@ -573,6 +615,19 @@ Audio row needs re-running for these bytes. If someone wants a behavioural
 check anyway, the rows that drive AUDIO.O88 are `apspk`, `apspkcard`,
 `apspkcardc`, `apspkpause`, `apspkcovox` and `audhand`.
 
+**The stated minimum** (SPEC.md 121.10; 24.5's rule that a package that
+cannot run refuses in its own words). Each rung's working set, measured
+(section 6), is `x3_needkb`: XT Standard 390 KB (the ceiling; 385-387
+measured), XT Fast 360, XT Turbo 330, XT Speech 340, a STANDARD rung 220
+(with a card's external ring). What the machine HAS is the same measure's:
+the region, the eager carve and the heap free at launch (`x3_haskb`). The
+conversion's rung is checked before the drive is asked for (`x3_fits`, in
+`x3l_done`), and any rung whose part or claims are refused for memory says
+it the same way (`x3_needmsg`): **`Needs 390 KB, has 300 KB`** - 24
+characters, so the status line holds it whole. The `shortmem` leg holds
+the sentence (the machine's figure from the stub's test hook), and that no
+drive was asked for.
+
 ## 9. Where the code and §121 part ways
 
 - **The pre-roll** is `X3_PREROLL` = 6 frames, the seek's and the step's.
@@ -590,6 +645,10 @@ check anyway, the rows that drive AUDIO.O88 are `apspk`, `apspkcard`,
   clusters are too large`): its look-ahead would need two clusters, 64 KB.
   A finished WAV plays from one, and the queue's probe reads its title and
   duration there (STD.md).
+- **An 8086 probes XT Standard first, and alone when it is hopeless**
+  (section 2): the CPU picks the order, the measure decides.
+- **The drive dialog shows no time estimate**; the progress window shows
+  one after 10 s of the job's own speed (section 4).
 - **An lz4-packed MP3 is refused by name** (`The MP3 is stored packed`,
   and the probe's `PACKED FILE`), never decoded as noise.
 - **Volume labels** are not shown, and no package-level slot can give one
@@ -648,6 +707,8 @@ is asserted): each leg boots its own private QEMU with its own disks under
 | `batch` | two tracks queued (File > Add to Queue), the first's drive dialog with `Queue too: Yes`: the second converts into the same folder with no dialog; both WAVs on C:, no .TMP |
 | `rovol` | a read-only fixed volume: QEMU's IDE has no write-protect for a hard disk, so the one this machine has - a CD through CDROM.DRV (VK_FIXED, `VT_FILE`) - is listed flagged read-only, and Decode and Play refuses it |
 | `packed` | an MP3 wrapped by `tools/os88lz.py --wrap`: ERROR `The MP3 is stored packed`, no decoder fetched |
+| `shortmem` | an XT-class ladder (the stub) on a machine the test hook says HAS 300 KB: ERROR `Needs 390 KB, has 300 KB`, and the drive dialog never opened |
+| `rungfail` | Original calibrates (4x) but its live start is refused as out of memory (the stub's hook): the ladder stores it at 0 and plays HALF, with no ERROR on the way |
 | `probe32` | an MP3 whose first frame sits 200 bytes short of 32 KB, on a 32 KB-cluster C:: the queue's probe reads its title and x3sim's duration across the cluster's end, and Play refuses it by name (`Its disk's clusters are too large`) |
 | `covox` | the finished file's ACTUAL SOUND with no card: QEMU's pcspk renders only a PIT mode-3 square (its capture of the speaker bracket was EMPTY), so the Covox tier (SYSTEM.CFG, LPT1): every byte written to the LPT data port traced (`-trace parallel_ioport_write`) and the WAV's samples found there, in order, one for one - 32,724 identical in 45 s, QEMU running the bracket's 11 kHz IRQ0 slowly |
 
@@ -677,7 +738,11 @@ is asserted): each leg boots its own private QEMU with its own disks under
   plan is measured after OPEN, so a 32 KB-cluster volume under XT Standard
   is offered and the job then fails at once, before a byte is written,
   with its reason.
-- **Every timing** is the FIELD track's (section 11).
+- **Every timing** is the FIELD track's (section 11), and the integration
+  track's second round measured its own changes there (`xtmp3xt`, MartyPC's
+  5160 with a VGA): XT Standard's conversion of AFTERHRS 0.055x -> 0.0946x
+  (the decode loop 0.0586x -> 0.1004x; the face's share 44.6% -> 9.8%),
+  calibration 16.1 s -> 6.4 s, its peak 402 KB -> 387 KB.
 - Closed by the integration track: live XT with a card (387 KB, the 8 KB
   grant), the ceiling on any cluster (the plan), the re-fetch after a probe
   (`x3_reuse`), the untested paths (the `chgsrc`, `dfdel`, `batch`, `rovol`

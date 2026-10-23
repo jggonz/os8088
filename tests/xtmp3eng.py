@@ -104,10 +104,12 @@ def check(leg, what, ok, more=""):
     return ok
 
 
-def cfg(speeds, slr=0, slaft=0, slspd=0):
-    """X3STUB.CFG (apps/xtmp3/x3stub.inc): a speed x 100 by rung"""
+def cfg(speeds, slr=0, slaft=0, slspd=0, has=0, failr=0):
+    """X3STUB.CFG (apps/xtmp3/x3stub.inc): a speed x 100 by rung, the
+    mid-track slowdown, and the KB the machine HAS (0: its own)"""
     sp = list(speeds) + [0] * (8 - len(speeds))
-    return struct.pack("<8HBBHH", *sp, slr, 0, slaft, slspd)
+    return struct.pack("<8HBBHHHBB", *sp, slr, 0, slaft, slspd, has,
+                       failr, 0)
 
 
 # -----------------------------------------------------------------------------
@@ -1503,6 +1505,58 @@ def leg_probe32():
         shutil.rmtree(t, ignore_errors=True)
 
 
+def leg_shortmem():
+    """the STATED MINIMUM (SPEC.md 121.10, 24.5): an XT-class machine whose
+    memory cannot hold the conversion's rung is told so in figures before a
+    drive is asked for - not a bare 'Out of memory' after it. The machine's
+    memory is the test hook's (X3STUB.CFG: 300 KB)"""
+    leg = "shortmem"
+    r = Rig(leg, sb=True, xcfg=cfg([0, 5, 5, 10, 80, 100], has=300),
+            hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
+    try:
+        if not check(leg, "XTMP3 opens", r.open_file("C", NEON,
+                                                      hd_listing([NEON]))):
+            return
+        seen = []
+        r.until(lambda: seen.append(r.st()["md"]) or
+                r.st()["state"] == ST_ERROR, "the refusal", 60, 0.1)
+        check(leg, "ERROR with the figures: 'Needs 390 KB, has 300 KB'",
+              r.st()["state"] == ST_ERROR and
+              r.errtext() == "Needs 390 KB, has 300 KB",
+              "state %d '%s'" % (r.st()["state"], r.errtext()))
+        check(leg, "...and no drive was asked for", MD_CHOOSE not in seen,
+              str(sorted(set(seen))))
+    finally:
+        r.done()
+
+
+def leg_rungfail():
+    """A RUNG THAT CANNOT START IS A RUNG THAT FAILED: Original calibrates
+    (the stub at 4x) but its live start is refused as out of memory (the
+    test hook) - the ladder goes on, to Half, and plays; never an error"""
+    leg = "rungfail"
+    r = Rig(leg, sb=True, xcfg=cfg([0, 400, 400, 400, 400, 400],
+                                   failr=Q_ORIG),
+            hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
+    try:
+        if not check(leg, "XTMP3 opens", r.open_file("C", NEON,
+                                                      hd_listing([NEON]))):
+            return
+        states = []
+        r.until(lambda: states.append(r.st()["state"]) or
+                r.st()["md"] == MD_LIVE, "live", 60, 0.1)
+        s = r.st()
+        check(leg, "plays LIVE on HALF", s["md"] == MD_LIVE and
+              s["qual"] == Q_HALF, "md %d qual %s '%s'" % (
+                  s["md"], QNAME[s["qual"]], r.errtext()))
+        check(leg, "...Original stored as failed (0) for the session",
+              r.meas()[Q_ORIG] == 0, str(r.meas()))
+        check(leg, "...and no ERROR on the way", ST_ERROR not in states,
+              str(sorted(set(states))))
+    finally:
+        r.done()
+
+
 def leg_packed():
     """an MP3 STORED PACKED (an lz4 'CZ' wrapper: READ_SEQ hands over the
     wrapper, SPEC.md 20.14.3) is refused by name, never decoded as noise"""
@@ -1649,7 +1703,8 @@ LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "pause": leg_pause, "xtpeak": leg_xtpeak, "xtclu": leg_xtclu,
         "chgsrc": leg_chgsrc, "dfdel": leg_dfdel, "batch": leg_batch,
         "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox,
-        "probe32": leg_probe32}
+        "probe32": leg_probe32, "shortmem": leg_shortmem,
+        "rungfail": leg_rungfail}
 
 
 def main():

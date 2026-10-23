@@ -429,8 +429,9 @@ def leg_seek():
               E.QNAME[s["qual"]])
         r.key("dot")                    # forward ten seconds: to the ninth
         r.until(lambda: r.st()["elap"] >= 9, "the seek", 10, 0.05)
-        e = r.st()["elap"]
-        tf, off = r.w("x3_tframe"), r.dword("x3_rsoff")
+        time.sleep(0.5)                 # (the clock re-opens at the target
+        e = r.st()["elap"]              # frame's first sample, 8.986 s: 0:08
+        tf, off = r.w("x3_tframe"), r.dword("x3_rsoff")     # for 14 ms)
         check(leg, "the seek went to 0:09 (ten seconds on, the clamp)",
               e == 9, "elapsed %d" % e)
         r.until(lambda: r.st()["state"] == E.ST_DONE, "the end", 60, 0.25)

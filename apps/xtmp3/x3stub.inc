@@ -16,5 +16,10 @@ X3SB_SPEED  equ 0                   ;   8 dw  speed x 100 by X3Q_* (0 = no
 X3SB_SLR    equ 16                  ;   db    the rung that slows mid-track
 X3SB_SLAFT  equ 18                  ;   dw    ...after this many granules...
 X3SB_SLSPD  equ 20                  ;   dw    ...to this speed
-X3SB_CFGSZ  equ 22
+X3SB_HAS    equ 22                  ;   dw    KB this machine HAS for XTMP3
+                                    ;         (x3_haskb), 0 = the real figure
+X3SB_FAILR  equ 24                  ;   db    a rung (X3Q_*) whose LIVE start is
+                                    ;         refused as out of memory (the
+                                    ;         card's ring), 0 = none
+X3SB_CFGSZ  equ 26
 %endif
