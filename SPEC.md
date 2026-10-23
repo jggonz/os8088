@@ -68433,6 +68433,46 @@ and the primer are written to Creative's documented behaviour and wait for
 a listen. Nor real SB16 hardware, a Vibra, or an SB16 in an 8-bit slot,
 whose refusal is the read-back test above.
 
+
+#### 34.5.6 IRQ 5 taken on an XT: refused
+
+**On an XT-class machine, a Sound Blaster that answers on IRQ 5 is refused
+when IRQ 5 already belongs to someone else** (the owner's decision, from the
+XTMP3 work: docs/HOW-XTMP3-WAS-BUILT.md, "a finished WAV that played for one
+second"). An IBM XT's fixed-disk controller - the IBM/Xebec ST-506 card,
+86Box's `st506_xt` - takes IRQ 5, and a card jumpered there is accepted by
+the discovery (7, 5, 3, 2), plays ONE block, and falls silent: the disk's
+handler takes the interrupt, the watchdog ends the stream, and a player
+reads the end of the stream as the end of the song.
+
+**"Taken" is evidence, not a guess** (`sbl_irq5_taken`):
+- **the machine is XT-class**: `OSAPI_CPU_INFO` answers the `CPU_8086`
+  tier - an 8088, 8086 or V20, with no slave PIC, so the disk is on IRQ 5.
+  A 286 or better (an AT) puts its disk on IRQ 14 and is never refused, and
+  kern_mega, which needs one, never reaches the vector read. (The BIOS
+  model byte at F000:FFFE would say the same, but loading F000h into ES is
+  a selector load on kern_mega, and the tier is a fact the kernel already
+  holds);
+- **IRQ 5's vector (int 0Dh) points below the system ROM** (segment below
+  E000h): into a disk controller's option ROM (the ST-506 card's at C800h)
+  or into a driver in RAM. An unused line's vector is the BIOS's own dummy
+  handler in its ROM, and nothing in os8088 hooks IRQ 5, so a hooked vector
+  is a claim. It is read at discovery, when the candidates' vectors have
+  been put back.
+
+**Refused** means `sbl_f_irqdisc` answers "no usable card" for that winner
+on every path - the firing probe, the SB16 mixer's read-back and a PicoMEM's
+configured line - so the stream open fails with error 4. A package then
+takes its no-card path (the Audio Player and XTMP3 the speaker or the
+Covox, §86.21), the FM chip stays usable (it needs no IRQ), and the first
+refusal of a session raises the toast `IRQ 5 is the hard disk's` (24
+characters, §59.10). The cure is the card's jumper: IRQ 7 is the first
+candidate. A card on any other line is untouched, and so is every AT.
+
+It cost `SOUND.DRV` 84 bytes of image (11,823 to 11,907), inside its 12 KB claim. `tests/sbirq5.py` (the
+`sbirq5` row) holds it: refused on an 8088 with a hooked IRQ 5, accepted on
+an unhooked one, on a 286 and a 386, and on IRQ 7; with the refusal broken,
+2 checks fail.
 ### 34.6 Recording and staging — back, as a driver
 
 Went with §34.5 and came back with it. Verb 7 grants out of the driver's

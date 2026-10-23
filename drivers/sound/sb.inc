@@ -3688,6 +3688,11 @@ sbl_f_irqdisc:
 .win:
     xor bh, bh                  ; the winner: BX = candidate index
     mov al, [sbl_dsc_irqn+bx]
+    cmp al, 5                   ; IRQ 5 on an XT whose fixed disk (or any
+    jne .free                   ; other ROM or driver) already owns it is
+    call sbl_irq5_taken         ; REFUSED (SPEC.md 34.5.6): the card would
+    jc .taken                   ; play one block and fall silent
+.free:
     mov [sbl_irq], al
     add al, 8                   ; SI = (IRQ + 8) * 4: its IVT cell
     cbw
@@ -3715,6 +3720,15 @@ sbl_f_irqdisc:
     out 0x21, al
     mov al, 1
     jmp .out
+.taken:
+    cmp byte [sbl_irq5x], 0     ; said once a session, not at every open
+    jne .none
+    mov byte [sbl_irq5x], 1
+    push ds
+    pop es
+    mov si, sbl_irq5msg
+    xor cx, cx
+    call OSAPI_TOAST
 .none:
     xor al, al
 .out:
@@ -3742,6 +3756,39 @@ sbl_f_irqdisc:
     jb .sw
     ret
 
+
+; -----------------------------------------------------------------------------
+; sbl_irq5_taken - is IRQ 5 already someone else's? (SPEC.md 34.5.6)
+;
+; in:       ES = 0, sbl_f_irqdisc's view of the IVT on every path to .win
+; out:      CF = 1 taken: an XT-class machine - OSAPI_CPU_INFO's CPU_8086
+;           tier, an 8088/8086/V20 with no slave PIC, whose fixed disk is on
+;           IRQ 5 - whose IRQ 5 vector (int 0Dh) points below the system ROM
+;           at E000h: into a disk controller's option ROM (the IBM/Xebec
+;           ST-506 card hooks it at C800h) or a driver in RAM. Nothing in
+;           os8088 hooks IRQ 5, and an unused line's vector is the BIOS's own
+;           dummy in its ROM, so a hooked vector is a claim. A 286 or better
+;           (an AT, its disk on IRQ 14) is never refused - and kern_mega,
+;           which needs one, never reaches the vector read.
+;           CF = 0 free
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+sbl_irq5_taken:
+    push ax
+    call OSAPI_CPU_INFO         ; AL = the tier; every register but AX kept
+    cmp al, CPU_8086
+    jne .free                   ; a 286 or better: an AT, the disk on 14
+    cmp word [es:0x0D * 4 + 2], 0xE000
+    jae .free                   ; still the system ROM's: nobody claimed it
+    stc
+    jmp short .out
+.free:
+    clc
+.out:
+    pop ax
+    ret
+
+sbl_irq5msg: db 'IRQ 5 is the hard disk', 0x27, 's', 0   ; 24 characters
 
 ; =============================================================================
 ; state (SPEC.md 34.7) - stored by sbl_state_init at attach, before the
@@ -3774,6 +3821,7 @@ sbl_drqmask:  db 0              ; 4 = keep DMA channel 1 MASKED at every
                                 ; copies without it - picomem.inc's
                                 ; pm_runaway sets it). OR'd into the unmask
 sbl_hooked:   db 0              ; sbl_isr installed on [sbl_irq]'s vector
+sbl_irq5x:    db 0              ; the IRQ 5 refusal has been said (34.5.6)
 sbl_dsc_fired: db 0             ; discovery: confirmed candidate index
 sbl_expect:   db 0              ; a block IRQ is legitimate (SPEC.md 34.5)
 sbl_under:    dw 0              ; underrun-pause count (debug, cumulative)

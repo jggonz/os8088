@@ -16449,6 +16449,18 @@ SOAK = [
         "writes, absent/stuck bus, IF and SS != DS, detach restoration and a "
         "deliberately wrong register that must fail",
         needs=("nasm", "unicorn")),
+    Row("sbirq5", "soak", py("tests/sbirq5.py"), 3.0,
+        "SPEC.md 34.5.6: SOUND.DRV REFUSES a Sound Blaster on IRQ 5 when IRQ 5 "
+        "is TAKEN on an XT - OSAPI_CPU_INFO's CPU_8086 tier and int 0Dh hooked "
+        "below the system ROM, as an ST-506 disk card's C800h ROM does - so a "
+        "card there never plays one block and falls silent. sbl_f_irqdisc "
+        "and sbl_irq5_taken, cut out of sb.inc as they ship (picomem.py's "
+        "sbslice), run under unicorn on an SB16 whose mixer names the line: "
+        "refused with one toast on an 8088, once a session; accepted on IRQ 5 "
+        "when the vector is the BIOS's own dummy and on a 286 or 386 (the negative "
+        "controls), and on IRQ 7 beside a taken 5. With the refusal broken "
+        "(sbl_irq5_taken always CF=0) 2 checks FAIL",
+        needs=("unicorn", "nasm")),
     Row("picomem", "soak", py("tests/picomem.py"), 35.0,
         "SPEC.md 34.10.1, 72.2: the driver code a PicoMEM talks to, AS IT "
         "SHIPS, under unicorn against a model of the card written from its "
