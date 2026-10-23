@@ -132,9 +132,9 @@ ISMS44.MP3    6f70a86d2aa173291dbce2d884187d310137998a45667063b7fde78571fd9a2b  
   what:   MPEG-1: the same with intensity AND M/S (an intensity band gets sqrt 2 back)
   cmd:    surgery is3 on ISBASE.TMP (ISBASE.TMP: signal is, 44100 Hz, 1.0 s, lame -S -m s -b 96 --resample 44.1)
   expect: decode
-IS22.MP3      e333a6a962c0eaee8c31911d341baf1f5cb278683d67eb52b4307e4c9f507f65    6426
-  what:   MPEG-2: relabelled intensity stereo: the right channel scalefactors are read by the intensity tables (sfc >> 1), so the stream is re-interpreted; both decoders must agree on the result
-  cmd:    surgery is1 on IS22BASE.TMP (IS22BASE.TMP: signal is, 22050 Hz, 1.0 s, lame -S -m s -b 48 --resample 22.05)
+IS22.MP3      d6d1f4df58027d911119c400b7308e1718446c1e66916eb93335b55cc96933aa    6426
+  what:   MPEG-2: an L/R stream with a silent right channel relabelled intensity stereo: every band intensity coded at is_pos 0 (the right channel becomes the left).  mpglib does not follow ISO in MPEG-2 intensity stereo (it scores 16.7 dB on the ISO vector l3-test45), so the reference is the float model, which scores 97 dB there; see NUMERICS.md 6
+  cmd:    surgery is1 on IS22BASE.TMP (IS22BASE.TMP: signal is2, 22050 Hz, 1.0 s, lame -S -m s -b 48 --resample 22.05)
   expect: decode iso
 BTRUNC.MP3    5453e092b544459b640b349e4a062220cb79264b104d6e4bada923d6a42c5a75    3672
   what:   cut inside a frame 60% in
@@ -172,9 +172,9 @@ BID3BIG.MP3   4ec89a1bea0743b89e29beb116998c19643b0276b54795c4a1e815ac972bcab3  
   what:   a 20.6 KB ID3v2.3 tag with TIT2 "NEON DRIVE" and TPE1 "XTMP3 FIXTURES" ahead
   cmd:    surgery id3big on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
   expect: decode title=NEON DRIVE artist=XTMP3 FIXTURES same=BID3V1.MP3
-BVBRI.MP3     4b76b5abee3d31f7d8339893b91b9006690c765c555eea83b8b725a8d9bd435c    6192
-  what:   the Info frame replaced by a Fraunhofer VBRI header
+BVBRI.MP3     4cde7015fb7f182b44881180969e294f45c5654328d39381699d30d304f36b5c    6336
+  what:   a Fraunhofer VBRI frame in front of the first audio frame
   cmd:    surgery vbri on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
-  expect: recover frames=46 same=BID3V1.MP3
+  expect: recover frames=43 same=BID3V1.MP3
 
-# total 652246 bytes in 37 files
+# total 652390 bytes in 37 files

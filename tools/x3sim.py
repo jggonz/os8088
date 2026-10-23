@@ -1,7 +1,171 @@
 #!/usr/bin/env python3
-"""x3sim: XTMP3's reference Layer III decoder (SPEC.md 121.4) - PLACEHOLDER DOCSTRING
+"""x3sim: XTMP3's reference Layer III decoder, bit-exact for the 8086 port (SPEC.md 121.4).
 
-(replaced below once the numerics are fixed)
+    python3 tools/x3sim.py --decode F.MP3 [--model int|float] [--div 1|2|4]
+                           [--mono] [--trim] [--out F.WAV]
+    python3 tools/x3sim.py --compare [--only NAME..] [--divs 1,2,4] [--wav DIR]
+    python3 tools/x3sim.py --check | --check-all   # hashes, tables, golden PCM
+    python3 tools/x3sim.py --golden                # rewrite tests/xtmp3/X3SIM.txt
+    python3 tools/x3sim.py --opcount | --leak | --huffstudy
+
+Three things live here.  THE PARSER (`x3p_`) is the specification of
+apps/xtmp3/x3pars.inc, decision for decision.  THE STANDARD INTEGER MODEL
+(`x3s_`, model 'int') is the specification of apps/xtmp3/x3std.asm: every
+operation below is one an 8086 performs exactly, and the port is correct
+when its PCM hashes to tests/xtmp3/X3SIM.txt.  A FLOAT REFERENCE (model
+'float') runs the same parser and the same structure in float64, for
+diagnosis.  `--compare` holds the integer model to `lame --decode` (mpglib)
+within the tolerance in NUMERICS.md; this docstring's FORMAT TABLE is the
+part SPEC.md 121.4 calls binding.  The constants are tools/x3tables.py's
+(the one definition), the ISO tables tools/x3tab_iso.py's.
+
+ALGORITHM REFERENCES, read and never copied into the tree: minimp3
+(github.com/lieff/minimp3 at ea99364f, CC0) for the 9- and 3-point IMDCT
+factorisation, the overlap layout and the intensity-stereo top-band rule;
+PDMP3 (github.com/technosaurus/PDMP3 at 2a206a3a, public domain) and minimp3
+for the tables (x3tab_iso.py says how they were cross-checked).  Every
+other structure here - the merged twiddle-window, the per-band block scale,
+the 32-bit spectral domain, the rotation-based recursive DCT-II and the
+X-ring form of the synthesis with its exact reduced rate - is this file's.
+
+THE PARSER (x3pars.inc does exactly this)
+-----------------------------------------
+* ID3v2 at the head: 'ID3', version 2..4, a synchsafe size; skipped by that
+  size, never read whole; up to X3_ID3_MAX_TAGS in a row.  TIT2/TPE1
+  (TT2/TP1 in v2.2) are copied, X3_TITLE bytes of printable ASCII ('?' for
+  anything else), only when they lie wholly inside the first X3_FIRST_READ
+  bytes and the tag is not unsynchronised.  ID3v1 ('TAG' in the last 128
+  bytes) ends the audio there and supplies whichever of the two is missing.
+* Sync: a header is believed when the header at its frame size agrees with
+  it on version, layer and sample rate; a frame that ends exactly at the end
+  of the audio is believed too (a one-frame file, or the last frame).  The
+  first header after the tags being free format refuses 'FREE FORMAT'; the
+  first agreeing pair being Layer I or II refuses 'LAYER I'/'LAYER II';
+  nothing refuses 'NO MPEG AUDIO'.  Once locked, a header that is not a
+  Layer III header agreeing with the first is a lost sync: scan forward
+  from the next byte for an agreeing pair (garbage is skipped, counted, and
+  produces no samples).
+* Xing/Info (after the side information) or VBRI (36 bytes in): the frame
+  count, and a LAME tag's 12-bit delay and padding.  That frame is metadata,
+  not audio, and is not decoded.  Duration = frames * 576 * granules / rate,
+  exact; without one, file bytes / the first bitrate, marked estimated.
+* A frame: header, 2 CRC bytes skipped unchecked when protection_bit is 0,
+  side information (17/32 bytes MPEG-1 mono/stereo, 9/17 MPEG-2/2.5), main
+  data to the frame's end.  The reservoir holds the last X3_RESERVOIR (4,096)
+  bytes of main data.  Verdicts, each counted:
+    badside    a reserved field (window switching with block_type 0,
+               big_values > 288, Huffman table 4 or 14), or the
+               part2_3_lengths' sum past (main_data_begin + this frame's
+               main data) * 8.  DROPPED: decoded as silence.
+    reservoir  main_data_begin past the bytes held (the first frames after
+               an open or a seek).  Silence - the standard's answer.
+    truncated  the file ends inside the frame: dropped, and the stream ends.
+    badgranule a channel's big-values Huffman data ran past its own
+               part2_3_length: that channel's granule is silence.
+    changed    a frame's channel count differs from the first frame's; it is
+               decoded and adapted (a mono frame feeds both outputs, a
+               stereo one is downmixed for mono output), not dropped.
+  This frame's main data joins the reservoir whatever the verdict.  Nothing
+  is ever read past the bytes held: the bit reader returns zeros there and
+  the granule is then bad.  "Silence" is a zero spectrum run through the
+  filterbank with the history kept (the tails of the previous granule play
+  out; a stop window follows a start or short block).
+* Huffman: region boundaries from region0/1_count over the long bands, or
+  for window switching 36 lines (short or mixed: 3 x the short bands 0..2,
+  72 at 8 kHz) or the 8th long band; big values pair by pair (x then its
+  linbits then its sign, then y's), then count1 quadruples (v w x y, each
+  with a sign) while bits remain, a quadruple that would pass the granule's
+  end discarded; then the reader jumps to the end.  Mixed blocks at
+  MPEG-2.5 8 kHz, which ISO does not define, are a bad granule.
+* Scalefactors: MPEG-1 with scfsi reuse in granule 1; MPEG-2/2.5 by
+  13818-3's slen partitions, the intensity right channel by sfc >> 1 and
+  tables 3..5, with no preflag there.  Intensity: the bound is the band
+  above the right channel's last non-zero QUANTISED value (per window for
+  short blocks); an is_pos of 7 (MPEG-1) or 2^slen - 1 (MPEG-2) is not
+  intensity; the top band uses the one below it, unless the right channel
+  is non-zero in that one, when it takes the default (3 MPEG-1, 0 MPEG-2).
+  These are minimp3's rules and they score 97.2 and 99.7 dB on the ISO
+  vectors l3-test45/46, where mpglib scores 16.7 and 14.2 (NUMERICS.md 6).
+* Window switching with the mixed flag puts subbands 0 and 1 on the long
+  normal window for EVERY block type, start and stop included (ISO dist10's
+  rule; l3-si_block is the vector that shows it).
+* The gapless trim (a conversion's, SPEC.md 121.7): the decoder's 529
+  samples off the head always; a LAME tag adds its delay to the head and
+  takes padding - 529 off the tail.  That is mpglib's rule to the sample.
+
+THE NUMERIC FORMATS (BINDING)
+-----------------------------
+A value is an integer; Qn means value / 2^n.  "Round" is half up:
+(x + 2^(s-1)) >> s with an arithmetic (floor) shift, ONCE per stored
+result.  "Sat" clamps to the storage type and counts in the stage's
+saturation counter; output clipping is counted separately.  16-bit adds
+saturate (a `jo` to the clamp); products of int16 by int16 constants are
+exact in 32 bits, and a sum of two cannot overflow; an int32 by an int16
+constant is the exact 48-bit product.  Order of operations is as written.
+
+ stage        holds              type    format          made by                                 round / sat
+ ------------ ------------------ ------- --------------- --------------------------------------- -------------
+ requantise   xr                 int32   Q28 (+-8)       |ix|^(4/3) = M 2^(E-14) (pow43 table,   round, sat32
+                                                         M 15-bit; |ix| >= 1024 interpolated at
+                                                         ix >> 3); 2^(q/4) = F[q&3] 2^(q>>2),
+                                                         F Q14; xr = M*F >> s, s = -E - (q>>2);
+                                                         q = gg - 210 - 8 sbg - (2|4)(sf+pre)
+                                                         - (2 if M/S); s <= 0 shifts left
+ stereo M/S   L, R               int32   Q28             M + S, M - S (1/sqrt2 is the q - 2)     exact, sat32
+ stereo I/S   L, R               int32   Q28             xL * k, k Q14 (x sqrt2 if also M/S)     round >>14, sat32
+ antialias    lines of 0..nb     int32   Q28             u cs - d ca, d cs + u ca (Q15)          round >>15, sat32
+ band scale   x16 (18 a subband) int16   Q(14+k)         k = max(min(25 - bl, 14), min(0,        round, sat16
+                                                         29 - bl)) >= -6, bl = bitlength(max|x|)
+ IMDCT inside co, si, 9-pt DCT   int16   Q(14+k)         adds; x Q15 constant; x/2 = (x+1)>>1    round >>15, sat16
+ IMDCT out    subband samples    int16   Q14 (+-2)       o*w + ((co*a + si*b) >> k), one sum:    round >>15, sat16
+                                                         o the Q14 overlap, a b c d the twiddle
+                                                         merged into the window (Q15)
+ overlap      9 words a subband  int16   Q14             co*tw0 - si*tw1                         round >>(15+k), sat16
+ freq. invert odd subbands' odd  int16   Q14             negate                                  sat16
+ mono mix     subband samples    int16   Q14             (a + b + 1) >> 1                        cannot saturate
+ DCT-II       u, v, z, FFT, X    int16   Q14             adds; rotations a c +- b s (Q15)        round >>15, sat16
+ V history    16 X vectors of N  int16   Q14             N = 32 / divisor words a slot
+ window       acc                int32   Q28             16 products X (Q14) * D (Q14)           exact: x3tables
+                                                                                                 proves < 2^31
+ PCM          output             int16   Q15             (acc + 2^12) >> 13                      clip, counted
+
+WHY THESE, ON AN 8088.  Measured first (`floor` experiments in NUMERICS.md
+3): with every stage int16 Q14 the decoder sat at 53 to 62 dB against mpglib,
+because a quantisation step in the spectral domain reaches the output about
+seven times larger and one in the subband domain about 5.6 times (the
+synthesis's sqrt(32)): those domains need ~3 bits more than the PCM.  So:
+  * The spectral domain is int32 where it is cheap.  Requantisation already
+    has the 32-bit product in DX:AX (keeping it costs nothing), M/S is
+    add/adc, intensity is rare; only the antialias butterflies pay double
+    multiplies (~9% of a granule).
+  * The IMDCT, the most multiplies before the window, stays 16-bit by taking
+    a BLOCK SCALE per subband: a quiet band is shifted up so its largest
+    input uses 11 bits, a loud one stays at Q14.  No scale crosses a block:
+    the overlap and the output are at the fixed Q14, so the next granule
+    adds nothing it would have to align (the brief's section 4 rule).
+  * Every product of a Q15 constant is rounded by >> 15, which is
+    `add ax,4000h / adc dx,0 / shl ax,1 / rcl dx,1` and DX is the answer;
+    >> 16 is DX itself.  A shift by CL costs 8 + 4n cycles and every
+    instruction byte 4 cycles of fetch, so no variable shift is in an inner
+    loop except the block scale's (once per subband per granule).
+  * D needs Q14 (it reaches 1.145); X * D is Q28 and the PCM is >> 13.
+  * Saturation is a `jo`: 4 cycles not taken, and it makes every input -
+    including a hostile one - produce a defined output.
+The result is 57 to 72 dB on the fixtures at the source rate, with no
+saturation anywhere on real material.
+
+REDUCED RATE (divisor 2 or 4).  Subbands at and above N = 32/div are not
+requantised past Huffman (still parsed), get no IMDCT and no butterflies
+across the cut.  The synthesis is EXACT for the decimated output, not an
+approximation: with those subbands zero, the full rate's sample div*m is a
+sum over X[div*l] only, and X[div*l] is the N-point DCT-II of the N kept
+subbands - so divisor 2 runs a 16-point DCT and keeps 16 words a slot, 4 an
+8-point DCT and 8, and the window reads row div*m of the same table (the
+float model's reduced output equals its decimated full output to the bit).
+Its only departure from an ideal decimator is the polyphase filter's own
+transition band: a tone in the 10% above the new Nyquist leaks at most
+-28.8 dBc (div 2) / -19.7 dBc (div 4) in its first 5%, under -86 dBc past
+10% (`--leak`), and kept tones are flat to 0.1 dB.
 """
 import argparse
 import math
@@ -1617,8 +1781,9 @@ class Decoder:
             if r.pos > end:
                 ix, ok = [0] * 576, False
             else:
-                ix, ok, lk = huffman(r, gi, end, h, huff_tables())
-                self.lookups += lk
+                ix, ok, lk = huffman(r, gi, end, h, huff_tables(), count=True)
+                self.lookups += lk[0]
+                self.symbols += lk[1]
             r.pos = end
             r.over = False
             out.append((gi, scf, ix, ok))
@@ -1875,6 +2040,12 @@ CYCLES = {
     'shift': 40,     # add 2^14 / adc 0 / shl ax,1 / rcl dx,1 (a rescale)
     'read': 18,      # mov r16, [bx+si+disp]: 8 + EA 7..9 + 4 (word on an 8-bit bus)
 }
+# A Huffman symbol (a pair or a quadruple), x3pars.inc's inner loop: the
+# 32-bit bit window's high byte IS the 8-bit first-level index (a byte move,
+# no shift), 1.04 lookups a symbol on the fixtures (18 cycles each plus the
+# index arithmetic), the leaf's length consumed by a shift of the window
+# (~70), two sign bits (~50), the stores and the region and end tests (~60).
+CYCLES_HUFF_SYMBOL = 220
 
 
 def op_counts(path, div=1, mono=False):
@@ -1890,7 +2061,7 @@ def op_counts(path, div=1, mono=False):
     finally:
         OPS = save
     gr = len(pcm) * div // 576
-    return n, gr, st.h0.nch, dec.out_nch
+    return n, gr, st.h0.nch, dec.out_nch, dec.symbols
 
 
 # =============================================================================
@@ -2086,7 +2257,7 @@ def compare(only=(), divs=(1, 2, 4), wavdir=None, cache=None, verbose=True):
                     s['dc'], clip, refclip, sat)
                 if lame_ref is not None:
                     s2 = err_stats(trim_pcm(pcm_d, st.info, 1), lame_ref)
-                    line += '  (mpglib %.1f dB: it treats MPEG-2 is_pos 7 as illegal)' % s2['snr']
+                    line += '  (mpglib %.1f dB: mpglib departs from ISO in MPEG-2 intensity stereo)' % s2['snr']
                 rows.append(line)
                 if s['rms'] > TOL_RMS or s['peak'] > TOL_PEAK:
                     fails.append('%s d1: rms %.2f peak %d past %.1f/%d' % (
@@ -2120,6 +2291,62 @@ def compare(only=(), divs=(1, 2, 4), wavdir=None, cache=None, verbose=True):
             print('FAIL ' + f)
         print('x3sim --compare: %d failure(s)' % len(fails))
     return len(fails)
+
+
+def leak_study(model='int'):
+    """The reduced rate's alias leakage, measured on SWEEP.MP3 (a log sweep
+    from 30 Hz to 0.45 fs over 2 s; trimmed, so t = 0 is its start).  At
+    divisor d the kept subbands end exactly at the new Nyquist N' = fs/2d.
+    A tone just ABOVE N' is not reconstructed, but the encoder's analysis
+    left part of it in the top kept subband, which the zeroed subband above
+    would have cancelled: it appears at fs/d - f.  A tone just BELOW N' is
+    kept, and its own image folds back onto itself (a gain error, not a new
+    frequency).  Every level is relative to the FULL-rate float decode's
+    level of the sweep in the same time window (the sweep moves within a
+    window, so a fixed reference would measure the window, not the decoder).
+    Returns, per divisor: the worst image in dBc while f is in (1.02 N',
+    1.25 N'], and the kept tone's gain range in dB while f is in [0.5 N',
+    0.98 N']."""
+    path = os.path.join(FIXDIR, 'SWEEP.MP3')
+    out = {}
+    f0, f1, dur = 30.0, 44100 * 0.45, 2.0
+    k = math.log(f1 / f0) / dur
+    full = decode_file(path, 'float', 1, trim=True)[0][:, 0].astype(np.float64)
+
+    def level(x, fs, c, win, freq):
+        w = np.hanning(win)
+        seg = x[c - win // 2:c + win // 2] * w
+        spec = np.abs(np.fft.rfft(seg)) * 2 / w.sum()
+        df = fs / win
+        i = int(round(freq / df))
+        lo, hi = max(0, i - 3), min(len(spec), i + 4)
+        return float(spec[lo:hi].max()) if hi > lo else 0.0
+
+    for div in (2, 4):
+        pcm, rate, st, dec = decode_file(path, model, div, trim=True)
+        x = pcm[:, 0].astype(np.float64)
+        fs = rate
+        nyq = fs / 2.0
+        win = 256
+        image, gains = [], []
+        for c in range(win // 2, len(x) - win // 2, win // 4):
+            f = f0 * math.exp(k * c / fs)
+            cf = c * div
+            if cf + win * div // 2 > len(full):
+                break
+            ref = level(full, fs * div, cf, win * div, f)
+            if ref < 100:
+                continue
+            if 0.5 * nyq <= f <= 0.98 * nyq:
+                gains.append(20 * math.log10(max(level(x, fs, c, win, f), 1e-9) / ref))
+            if nyq * 1.02 < f <= 1.5 * nyq:
+                image.append((f / nyq, 20 * math.log10(max(level(x, fs, c, win, fs - f), 1e-9) / ref)))
+        prof = []
+        for lo, hi in ((1.02, 1.05), (1.05, 1.1), (1.1, 1.2), (1.2, 1.3), (1.3, 1.5)):
+            v = [db for r, db in image if lo < r <= hi]
+            prof.append((lo, hi, max(v) if v else None))
+        out[div] = (prof, min(gains) if gains else None, max(gains) if gains else None)
+    return out
 
 
 def trim_pcm(pcm, info, div):
@@ -2239,6 +2466,7 @@ def main():
     ap.add_argument('--golden', action='store_true', help='rewrite tests/xtmp3/X3SIM.txt')
     ap.add_argument('--huffstudy', action='store_true')
     ap.add_argument('--opcount', action='store_true')
+    ap.add_argument('--leak', action='store_true', help='the reduced rate\'s alias leakage')
     a = ap.parse_args()
     if a.decode:
         try:
@@ -2272,26 +2500,36 @@ def main():
     if a.opcount:
         print_opcounts()
         return 0
+    if a.leak:
+        for model in ('float', 'int'):
+            for div, (prof, glo, ghi) in leak_study(model).items():
+                print('%-5s divisor %d: kept tones 0.5..0.98 N\' at %+.2f..%+.2f dB; image of a tone '
+                      'above N\' (worst, dBc): %s' % (model, div, glo, ghi, ', '.join(
+                          '%.2f-%.2f N\' %.1f' % (lo, hi, db) for lo, hi, db in prof if db is not None)))
+        return 0
     ap.print_help()
     return 0
 
 
 def print_opcounts():
-    cases = (('MONO44.MP3', 1, False), ('MONO44.MP3', 2, False), ('MONO44.MP3', 4, False),
+    cases = (('X11K24.MP3', 1, False), ('X11K24.MP3', 2, False),
+             ('MONO44.MP3', 1, False), ('MONO44.MP3', 2, False), ('MONO44.MP3', 4, False),
              ('C128.MP3', 1, False), ('C128.MP3', 2, False), ('C128.MP3', 4, False),
              ('C128.MP3', 1, True), ('C128.MP3', 4, True))
     for name, div, mono in cases:
-        n, gr, nch, onch = op_counts(os.path.join(FIXDIR, name), div, mono)
-        tot = 0
+        n, gr, nch, onch, nsym = op_counts(os.path.join(FIXDIR, name), div, mono)
+        tot = nsym / gr * CYCLES_HUFF_SYMBOL
         print('%s div %d %s: per granule (%d source channel(s) -> %d output), %d granules' % (
             name, div, 'mono' if mono else 'native', nch, onch, gr))
+        print('  %-8s %.0f symbols a granule x %d                                                ~%9.0f cycles' % (
+            'huffman', nsym / gr, CYCLES_HUFF_SYMBOL, tot))
         for stg in STAGES:
             c = {k: v / gr for k, v in n[stg].items()}
             cyc = sum(c[k] * CYCLES[k] for k in KINDS)
             tot += cyc
             print('  %-8s mul %7.0f mul32 %6.0f add %7.0f add32 %6.0f shift %6.0f read %6.0f  ~%9.0f cycles' % (
                 stg, c['mul'], c['mul32'], c['add'], c['add32'], c['shift'], c['read'], cyc))
-        print('  total ~%.0f 8088 cycles a granule (Huffman and the parser not included)' % tot)
+        print('  total ~%.0f 8088 cycles a granule (the frame parser, ~2,000 a frame, not included)' % tot)
 
 
 if __name__ == '__main__':

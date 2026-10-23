@@ -352,6 +352,17 @@ def sig_mix(rate, dur):
     return x
 
 
+def sig_is2(rate, dur):
+    """For the MPEG-2 intensity surgery: the mix on the left and digital
+    silence on the right.  LAME writes a silent channel with
+    scalefac_compress 0 and no bits, which reads the same under the
+    intensity tables (sfc >> 1 = 0, every slen 0), so relabelling keeps the
+    bitstream aligned: every band is intensity coded at is_pos 0 (k = 1)."""
+    x = sig_mix(rate, dur)
+    x[:, 1] = 0.0
+    return x
+
+
 def sig_is(rate, dur):
     """For the intensity-stereo surgery: a full-band left channel and a right
     channel lowpassed to ~2.5 kHz, so the right channel's spectrum is zero
@@ -558,17 +569,18 @@ def s_id3v1(mp3):
 
 
 def s_vbri(mp3):
-    """Replace the Info tag of the first frame with a Fraunhofer VBRI header
-    (32 bytes after the frame header) naming the frame count."""
-    b = bytearray(mp3)
+    """A Fraunhofer VBRI frame put in front of the first audio frame: frame
+    0's header, side information all zero (so a decoder that plays it plays
+    silence), and the VBRI header 32 bytes after the frame header naming the
+    audio frames that follow.  (The base is too small a frame for LAME to
+    have written an Info tag, so nothing is replaced.)"""
     fr = frames_of(mp3)
     o, h = fr[0]
     body = bytearray(h.size - 4)
-    vb = b'VBRI' + struct.pack('>HHHII', 1, 1105, 75, len(mp3), len(fr) - 1) + \
+    vb = b'VBRI' + struct.pack('>HHHII', 1, 0, 75, len(mp3) + h.size, len(fr)) + \
         struct.pack('>HHHH', 0, 1, 2, 1)
     body[32:32 + len(vb)] = vb
-    b[o + 4:o + h.size] = body
-    return bytes(b)
+    return mp3[:o] + mp3[o:o + 4] + bytes(body) + mp3[o:]
 
 
 def s_is(mp3, ext):
@@ -669,12 +681,15 @@ def matrix():
     add('ISMS44.MP3', None, 44100, 0, None,
         'MPEG-1: the same with intensity AND M/S (an intensity band gets sqrt 2 back)',
         derive=('ISBASE.TMP', 'is3'))
-    add('IS22BASE.TMP', 'is', 22050, 1.0, ['-m', 's', '-b', '48', '--resample', '22.05'],
+    add('IS22BASE.TMP', 'is2', 22050, 1.0, ['-m', 's', '-b', '48', '--resample', '22.05'],
         'base for the MPEG-2 intensity surgery (not committed)')
     add('IS22.MP3', None, 22050, 0, None,
-        'MPEG-2: relabelled intensity stereo: the right channel scalefactors are read '
-        'by the intensity tables (sfc >> 1), so the stream is re-interpreted; '
-        'both decoders must agree on the result', derive=('IS22BASE.TMP', 'is1'), expect='decode iso')
+        'MPEG-2: an L/R stream with a silent right channel relabelled intensity '
+        'stereo: every band intensity coded at is_pos 0 (the right channel '
+        'becomes the left).  mpglib does not follow ISO in MPEG-2 intensity '
+        'stereo (it scores 16.7 dB on the ISO vector l3-test45), so the '
+        'reference is the float model, which scores 97 dB there; see '
+        'NUMERICS.md 6', derive=('IS22BASE.TMP', 'is1'), expect='decode iso')
     # malformed, from a small MPEG-1 base
     add('BASE.TMP', 'speech', 32000, 1.5, ['-m', 'm', '-b', '32', '--resample', '32'],
         'base for the malformed fixtures (not committed)')
@@ -703,8 +718,8 @@ def matrix():
         derive=('BASE.TMP', 'id3big'),
         expect='decode title=NEON DRIVE artist=XTMP3 FIXTURES same=BID3V1.MP3')
     add('BVBRI.MP3', None, 32000, 0, None,
-        'the Info frame replaced by a Fraunhofer VBRI header',
-        derive=('BASE.TMP', 'vbri'), expect='recover frames=46 same=BID3V1.MP3')
+        'a Fraunhofer VBRI frame in front of the first audio frame',
+        derive=('BASE.TMP', 'vbri'), expect='recover frames=43 same=BID3V1.MP3')
     return S
 
 
@@ -713,7 +728,7 @@ SIGNALS = {
     'after': lambda r, d: sig_after(r), 'chord': sig_chord, 'mix': sig_mix,
     'click': sig_click, 'sweep': sig_sweep, 'bass': sig_bass, 'noise': sig_noise,
     'silence': lambda r, d: _np().zeros((int(r * d), 2)), 'quiet': sig_quiet,
-    'clip': sig_clip, 'speech': sig_speech, 'is': sig_is,
+    'clip': sig_clip, 'speech': sig_speech, 'is': sig_is, 'is2': sig_is2,
 }
 
 SURGERY = {
