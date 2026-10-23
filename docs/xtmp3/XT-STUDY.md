@@ -71,8 +71,11 @@ what was tried, what was measured, what was decided and why.
     under-states density (2.1).
 - **Real streams.** The numerics track's committed fixtures (tests/xtmp3/,
   made with LAME from synthesised signals) are parsed and Huffman-decoded by
-  `tools/x3sim.py`, imported read-only (`--x3sim DIR`). Its requantised lines,
-  block types and exponents feed this study's chains. Used: `AFTERHRS.MP3`
+  `tools/x3sim.py`, imported read-only (`--x3sim DIR`) through its
+  `granules()` hook (xtmp3/numerics a6b748b2): requantised lines (int32
+  Q28, subband order), block types, Huffman values, each codeword's real
+  length, `big_values` and the count1 region. Those feed this study's
+  chains and its density and Huffman statistics. Used: `AFTERHRS.MP3`
   (an 11,025 Hz, 24 kbps song: the XT target), `X8K16`, `X11K24`, `X12K32` and
   `M16` (T12).
 - **The real streams corrected the model.** LAME at 24 kbps and 11,025 Hz
@@ -81,7 +84,7 @@ what was tried, what was measured, what was decided and why.
   profiles comes from the REAL fixtures' own statistics (T12). The synthetic
   rates (T2) are kept as a second view.
 - **The float reference is cross-checked.** This study's float decode of each
-  fixture matches x3sim.py's own float decode at 82.6-87.1 dB (T12). Those are
+  fixture matches x3sim.py's own float decode at 82.3-86.3 dB (T12). Those are
   two independent ISO decoders; x3sim rounds to 16 bits, which is the floor
   there. The window table is the ISO's Table 3-B.3 as integers
   (`x3xttab.ISO_WINBASE`, D = value / 65536, exact), read out of the host's
@@ -609,8 +612,23 @@ the XT backend states its minimum and refuses.
   x3sim.py's parser and Huffman decoder already produce: the 576 `ix` (in
   bitstream order), the side info `gi` (block type, mixed flag) and the
   per-line exponent `q` of `quarter_exponents()`, with
-  xr = sign·|ix|^(4/3)·2^(q/4) FS. These were used read-only for this study
-  (`FixtureItem`).
+  xr = sign·|ix|^(4/3)·2^(q/4) FS. This study reads them through
+  `x3sim.granules()` (`FixtureItem`).
+- **Where the formats meet the STANDARD model's** (x3sim.py's docstring and
+  docs/xtmp3/NUMERICS.md bind those):
+  - STANDARD's requantised lines (`xr`) and subband samples are int32 Q28.
+    The XT's lines are int16 Q13, so Q28 >> 15 with rounding. The XT's
+    subband samples are int16 Q11, so Q28 >> 17. That cut is the natural
+    16-bit seam if the XT ever sits behind STANDARD's hybrid stage.
+  - STANDARD's synthesis keeps the last 16 DCT-II vectors as int16 Q14 and
+    windows them with D in Q14. The XT keeps the same vectors as 8-bit V
+    CODES at Q11 (and only the 32 unique values a slot), and reads products
+    instead of multiplying.
+  - The noise gains x3sim's author measured line up with the budget here: a
+    rounding step in the X/V history reaches the PCM about 1.4x larger,
+    which is why the V code dominates the XT's error. A step in the subband
+    domain reaches it about 5.6x larger, which is why the subband samples
+    stay 16-bit and the matrixing stays at byte-split precision.
 - **Requantise.** |ix| <= 15 reads RQL[q][|ix|] (linear Q13) or RQ[q][|ix|]
   (a code), with q clamped as in 4.7. |ix| > 15 uses x3sim's integer pow43,
   scaled to Q13 (its requant_i). Short blocks are reordered as x3sim does,
@@ -690,10 +708,11 @@ is what any 8-bit player would give.
 5. **These are models.** Every speed here is a model within about 5% on its
    largest kernels. The disk throughput during a conversion is an
    assumption.
-6. **x3sim.py moves.** It was uncommitted work in the numerics track while
-   this ran. Its `huff_tables()` changed shape mid-study and the fixture hook
-   was adapted (and fails soft). The fixture figures were taken against the
-   working tree of `os8088-x3num` on 2026-10-22.
+6. **x3sim.py's hook.** The fixture figures come through
+   `x3sim.granules()` (xtmp3/numerics a6b748b2, 2026-10-22). Without that
+   hook the study falls back to calling x3sim's parser directly, and it
+   fails soft (fixtures skipped) if neither works. `x3xtstudy.py --all`
+   re-takes the figures once x3sim.py is merged into `tools/`.
 
 ## 12. Reproduce
 
