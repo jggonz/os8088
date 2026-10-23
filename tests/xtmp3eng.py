@@ -1714,6 +1714,41 @@ def leg_pause():
         r.done()
 
 
+def leg_offvol():
+    """THE PACKAGE ON B:, THE SONG ON C: (the docs track's report): a lazy
+    part is read from XTMP3.O88 by NAME, and a name resolves where the
+    instance stands - the track's folder once a track is open - so the fetch
+    must stand in the folder XTMP3 was launched from (x3_fetchhome). Before
+    it, Auto's probe could not fetch STANDARD, went to Decode First and said
+    'Needs 360 KB, has 571 KB', a memory figure for a disk refusal. The
+    SHIPPED package with a card: it plays live and the part was fetched"""
+    leg = "offvol"
+    t = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    note = os.path.join(t, "NOTE.TXT")
+    open(note, "wb").write(b"the package's disk\r\n")
+    r = Rig(leg, sb=True, stub=False, floppy=[note],
+            hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
+    try:
+        if not check(leg, "XTMP3 (on B:) opens C:'s song", r.open_file(
+                "C", NEON, hd_listing([NEON]))):
+            return
+        states = []
+        r.until(lambda: states.append(r.st()["state"]) or
+                r.st()["md"] in (MD_LIVE, MD_CHOOSE) or
+                r.st()["state"] == ST_ERROR, "Auto's decision", 90, 0.2)
+        s = r.st()
+        check(leg, "plays LIVE (no Decode First, no ERROR)",
+              s["md"] == MD_LIVE and ST_ERROR not in states,
+              "md %d qual %s '%s'" % (s["md"], QNAME[s["qual"]],
+                                       r.errtext()))
+        nf = list(r.rd("x3_nfetch", 5))
+        check(leg, "...STANDARD's part was fetched from B:", nf[2] >= 1,
+              "fetches %s" % nf)
+    finally:
+        r.done()
+        shutil.rmtree(t, ignore_errors=True)
+
+
 LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "cancel": leg_cancel, "full": leg_full, "stale": leg_stale,
         "novol": leg_novol, "twovol": leg_twovol, "playwav": leg_playwav,
@@ -1721,7 +1756,7 @@ LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "chgsrc": leg_chgsrc, "dfdel": leg_dfdel, "batch": leg_batch,
         "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox,
         "probe32": leg_probe32, "shortmem": leg_shortmem,
-        "rungfail": leg_rungfail}
+        "rungfail": leg_rungfail, "offvol": leg_offvol}
 
 
 def main():

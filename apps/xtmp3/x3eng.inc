@@ -3468,7 +3468,12 @@ x3_rungset:
     mov al, X3_PART_XT
 .np:
     cmp al, 0xFF
-    jne .mem
+    je .nobe
+    mov al, [x3_rung]               ; ...but ONLY when the machine is short:
+    call x3_fits                    ; a part that would fit and still was not
+    jc .mem                         ; had is the disk's (its package's folder
+    mov word [x3_st+X3S_ERR], x3_s_nopart ; gone, a bad read), and saying
+    jmp short .fail                 ; 'Needs 360 KB, has 571 KB' was a lie
 .nobe:
     mov word [x3_st+X3S_ERR], x3_s_nobe
     jmp short .fail
@@ -3730,6 +3735,60 @@ x3_rungs:
     db X3K_XT, 2, 1, 0              ; XT TURBO
     db X3K_XT, 3, 0, 0              ; XT SPEECH (the divisor by the source)
 
+%ifdef X3_PARTS
+; x3_fetchhome - op_fetch of part AL, STANDING IN THE FOLDER XTMP3 WAS
+; LAUNCHED FROM. op_fetch reads the package's file by NAME, and a name
+; resolves where the instance stands (SPEC.md 19.2.1) - which after a track
+; opens is the TRACK's folder, so a song on C: with the package on B: looked
+; for C:\XTMP3.O88 and was told it was out of memory. apps/weave/wfetch.inc's
+; bracket, on x3_homed/x3_homev (x3_e_init's). QM both ways: nothing is
+; listed. out: CF = op_fetch's (or 1 when home is gone). clobbers AX
+x3_fetchhome:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ax
+    call OSAPI_FILE_HERE            ; DX, BL = where we stand: banked
+    mov [x3_fhd], dx
+    mov [x3_fhv], bl
+    mov byte [x3_fhmv], 0
+    cmp dx, [x3_homed]
+    jne .go
+    cmp bl, [x3_homev]
+    je .home
+.go:
+    mov dx, [x3_homed]
+    mov bl, [x3_homev]
+    call OSAPI_FILE_GOTO_QM         ; clobbers AX (and CX/SI/DI redirected)
+    jc .gone
+    mov byte [x3_fhmv], 1
+.home:
+    pop ax
+    push ax
+    call op_fetch                   ; CF = 1: a toast has said why
+    pushf
+    cmp byte [x3_fhmv], 0
+    je .stay
+    mov dx, [x3_fhd]
+    mov bl, [x3_fhv]
+    call OSAPI_FILE_GOTO_QM         ; back where the track stands
+.stay:
+    popf
+    jmp short .out
+.gone:
+    stc
+.out:
+    pop ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; x3_be_get - AL = a backend kind (X3K_*): its part fetched (the other one
 ; dropped first), its header checked, the far vectors banked
@@ -3761,7 +3820,7 @@ x3_be_get:
     call x3_be_drop                 ; ONE backend resident (SPEC.md 121.3)
     mov al, bl
     push bx
-    call op_fetch                   ; CF = 1: a toast has said why
+    call x3_fetchhome               ; CF = 1: a toast has said why
     pop bx
     jc .no
     mov [x3_bpart], bl
@@ -5194,6 +5253,7 @@ x3_s_card:    db 'The sound card refused', 0
 x3_s_notask:  db 'No free task - close an app', 0
 x3_s_rate:    db 'The device cannot play it', 0
 x3_s_nobe:    db 'No decoder in this build', 0
+x3_s_nopart:  db 'Cannot read its decoder', 0
 x3_s_offer:   db 'The decoder cannot do it', 0
 x3_s_table:   db 'Damaged decoder tables', 0
 x3_s_decode:  db 'The decoder refused', 0
@@ -5310,6 +5370,9 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_wslow, 1                 ; ...slow windows in a row
     X3B x3_homed, 2                 ; the folder we were launched from
     X3B x3_homev, 1
+    X3B x3_fhd, 2                   ; x3_fetchhome: where the track stood
+    X3B x3_fhv, 1
+    X3B x3_fhmv, 1                  ; ...and whether we moved from it
     X3B x3_dkpit, 4                 ; the disk's measured cost: time...
     X3B x3_dkby, 4                  ; ...for bytes
     X3B x3_rft0, 4                  ; (a gulp's start)
