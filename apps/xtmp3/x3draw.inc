@@ -23,6 +23,12 @@
 ;                        the knob's tick ring are tables of end points
 ;                        (tools/os88x3art.py), never pictures.
 ;
+; THE PICTURES ARE A PART (SPEC.md 20.12; x3face.inc's "THE ART PART"):
+; every source a composer reads - a picture, a glyph, a digit table, a line
+; table - is an offset in the art part, read through ES = [x3_artseg], which
+; each composer loads ONCE A CALL. The band, the canvas, the font descriptors
+; and the digit-set records are the primary's (DS).
+
 ; Everything else is CDRack's and keeps its contract:
 ;
 ; A THEME IS ONE TABLE: a primitive is handed a ROLE (R_*), never a colour,
@@ -448,7 +454,8 @@ x3d_bnew:
 
 ; -----------------------------------------------------------------------------
 ; x3d_bor - OR 1bpp rows into the band at any x
-; in:  SI = the source's first row, CX = its stride in bytes, DX = rows,
+; in:  SI = the source's first row IN THE ART PART ([x3_artseg]: every
+;      picture and glyph is there), CX = its stride in bytes, DX = rows,
 ;      AX = x, BX = y (band coordinates). The rows must fit the band
 ; -----------------------------------------------------------------------------
 x3d_bor:
@@ -459,7 +466,9 @@ x3d_bor:
     push si
     push di
     push bp
-    mov bp, cx                      ; BP = the source stride
+    push es
+    mov es, [x3_artseg]             ; the source is the ART PART's (one load
+    mov bp, cx                      ; a call, never one a byte)
     push dx
     mov di, ax
     mov ax, bx
@@ -477,7 +486,7 @@ x3d_bor:
     push di
     mov bx, bp
 .byte:
-    mov ah, [si]
+    mov ah, [es:si]
     xor al, al
     shr ax, cl
     or [di], ah
@@ -492,6 +501,7 @@ x3d_bor:
     add di, [x3d_bst]
     dec dx
     jnz .row
+    pop es
     pop bp
     pop di
     pop si
@@ -511,26 +521,33 @@ x3d_bpic:
     push cx
     push dx
     push si
-    mov cl, [si+3]
+    push es
+    mov es, [x3_artseg]
+    mov cl, [es:si+3]
     xor ch, ch
-    mov dl, [si+2]
+    mov dl, [es:si+2]
     xor dh, dh
-    push word [si]
+    push word [es:si]
     add si, 4
     call x3d_bor
     pop cx
     add ax, cx
+    pop es
     pop si
     pop dx
     pop cx
 .none:
     ret
 
-; x3d_picw - SI = a picture record -> CX = its width, DX = its height
+; x3d_picw - SI = a picture record (the art part's) -> CX = its width, DX =
+; its height
 x3d_picw:
-    mov cx, [si]
-    mov dl, [si+2]
+    push es
+    mov es, [x3_artseg]
+    mov cx, [es:si]
+    mov dl, [es:si+2]
     xor dh, dh
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------
@@ -544,6 +561,8 @@ x3d_bstr:
     push cx
     push dx
     push si
+    push es
+    mov es, [x3_artseg]             ; the index and the glyphs: the art part
 .next:
     mov dl, [si]
     inc si
@@ -559,7 +578,7 @@ x3d_bstr:
     mov bl, dl
     xor bh, bh
     mov si, [di+X3FD_IX]
-    mov dh, [si+bx-X3ART_FONT_FIRST]
+    mov dh, [es:si+bx-X3ART_FONT_FIRST]
     or dh, dh
     jnz .have
     cmp dl, 'a'                     ; not in the face: its upper case?
@@ -601,6 +620,7 @@ x3d_bstr:
     add ax, dx
     jmp short .next
 .out:
+    pop es
     pop si
     pop dx
     pop cx
@@ -645,6 +665,8 @@ x3d_strw:
 x3d_bdigs:
     push dx
     push si
+    push es
+    mov es, [x3_artseg]             ; the digit tables: the art part
 .next:
     mov dl, [si]
     inc si
@@ -673,7 +695,7 @@ x3d_bdigs:
     xor bh, bh
     shl bx, 1
 .pick:
-    mov si, [si+bx]
+    mov si, [es:si+bx]
     pop bx
 .put:
     call x3d_bpic
@@ -682,6 +704,7 @@ x3d_bdigs:
     jmp short .next
 .out:
     sub ax, [di+X3DS_GAP]
+    pop es
     pop si
     pop dx
     ret
@@ -1146,23 +1169,27 @@ x3d_lines:
     pop ax
     ret
 
-; x3d_line4 - the line of the four bytes at SI, offset AX, BX. clobbers CX, DX
+; x3d_line4 - the line of the four bytes at SI (in the art part), offset AX,
+; BX. clobbers CX, DX
 x3d_line4:
     push ax
     push bx
-    mov cl, [si+2]
+    push es
+    mov es, [x3_artseg]             ; the tables are the art part's
+    mov cl, [es:si+2]
     xor ch, ch
     add cx, ax
-    mov dl, [si+3]
+    mov dl, [es:si+3]
     xor dh, dh
     add dx, bx
     push cx
-    mov cl, [si]
+    mov cl, [es:si]
     xor ch, ch
     add ax, cx
-    mov cl, [si+1]
+    mov cl, [es:si+1]
     add bx, cx
     pop cx
+    pop es
     call x3d_line
     pop bx
     pop ax
