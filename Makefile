@@ -6326,6 +6326,69 @@ $(BUILD)/xtmp3s.o88: $(BUILD)/xtmp3s.bin $(X3PARTS) $(BUILD)/x3stub.bin \
 	$(OS88PKG) $(BUILD)/xtmp3s.bin -o $@ $(X3PARTARGS) \
 		--part $(BUILD)/x3stub.bin --part-compress lz4
 
+# XTMP3'S FIELD DISKS (docs/xtmp3/FIELD.md; tools/x3field.py): the selection
+# matrix on 86Box, which has no debug socket and takes no key from this host.
+# build/xtmp3r.o88 is the package with -DX3REPORT (apps/xtmp3/x3rep.inc): it
+# writes SYSTEM\APPDATA\X3REPORT.TXT on its own volume when the ladder has
+# decided and when a stream has played out, and the host reads it back off the
+# image. x3field.img / x3field360.img are system disks that want SOUND.DRV
+# and whose \AUTOSTRT opens B:\XTMP3 (the folder teaches the machine .MP3's
+# association) and then B:\XTMP3\TRACK.MP3; x3fb-c128.img / x3fb-aftr.img and
+# their 360KB twins are that B: - the report build, and TRACK.MP3 being
+# tests/xtmp3/C128.MP3 (44.1 kHz L/R stereo, 128 kbps) or AFTERHRS.MP3
+# (11,025 Hz mono, 24 kbps), stored plain because the probe refuses a packed
+# MP3. ON DEMAND; nothing ships any of it. `make 486-xtmp3` (and xt-, 286-,
+# 386-, pentium-) boots one machine on the C128 disk to LOOK at;
+# `python3 tools/x3field.py` runs the whole matrix and prints the reports.
+.PHONY: xtmp3field
+xtmp3field: $(BUILD)/x3field.img $(BUILD)/x3field360.img \
+            $(BUILD)/x3fb-c128.img $(BUILD)/x3fb-aftr.img \
+            $(BUILD)/x3fb360-c128.img $(BUILD)/x3fb360-aftr.img
+$(BUILD)/xtmp3r.bin: $(XTMP3_SRC) apps/xtmp3/x3rep.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DX3REPORT -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3 (X3REPORT):  $(call FILESIZE,$@) bytes"
+$(BUILD)/x3f/XTMP3.O88: $(BUILD)/xtmp3r.bin $(X3PARTS) tools/os88pkg.py
+	@mkdir -p $(dir $@)
+	$(OS88PKG) $(BUILD)/xtmp3r.bin -o $@ $(X3PARTARGS) --part-compress lz4
+$(BUILD)/x3f/c128/TRACK.MP3: tests/xtmp3/C128.MP3
+	@mkdir -p $(dir $@)
+	cp $< $@
+$(BUILD)/x3f/aftr/TRACK.MP3: tests/xtmp3/AFTERHRS.MP3
+	@mkdir -p $(dir $@)
+	cp $< $@
+$(BUILD)/x3f/A_X3.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(dir $@)
+	python3 tools/os88lnk.py $@ 'XTMP3' --vol B --kind folder
+	python3 tools/os88lnk.py $(BUILD)/x3f/X3.LNK 'XTMP3\TRACK.MP3' --vol B \
+		--kind document
+$(BUILD)/x3field.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
+        $(COREAPPS360) $(SYSDOC) $(BUILD)/mixercfg/SYSTEM.CFG \
+        $(BUILD)/x3f/A_X3.LNK tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/x3f/A_X3.LNK \
+		AUTOSTRT:$(BUILD)/x3f/X3.LNK --folder SYSTEM/APPDATA
+$(BUILD)/x3field360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
+        $(SYSAPPS) $(COREAPPS360) $(SYSDOC) $(BUILD)/mixercfg/SYSTEM.CFG \
+        $(BUILD)/x3f/A_X3.LNK tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/x3f/A_X3.LNK \
+		AUTOSTRT:$(BUILD)/x3f/X3.LNK --folder SYSTEM/APPDATA
+$(BUILD)/x3fb-%.img: $(BUILD)/x3f/XTMP3.O88 $(BUILD)/x3f/%/TRACK.MP3 \
+        tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		XTMP3:$(BUILD)/x3f/XTMP3.O88 XTMP3:$(BUILD)/x3f/$*/TRACK.MP3 \
+		--folder SYSTEM/APPDATA
+$(BUILD)/x3fb360-%.img: $(BUILD)/x3f/XTMP3.O88 $(BUILD)/x3f/%/TRACK.MP3 \
+        tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
+		XTMP3:$(BUILD)/x3f/XTMP3.O88 XTMP3:$(BUILD)/x3f/$*/TRACK.MP3 \
+		--folder SYSTEM/APPDATA
+
 # --- XTMP3's DECODER (SPEC.md 121.3, 121.4; the STANDARD track) ----------------
 # The STANDARD tables (tools/x3tables.py: x3std.bin and x3std.inc) and the
 # front end's (tools/x3fronttab.py: x3ftab.inc), each after its --selfcheck,
@@ -17325,6 +17388,23 @@ xt-wire: $(BUILD)/ether360.img $(BUILD)/wiredata360.img
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
+
+# XTMP3'S FIELD MACHINES (docs/xtmp3/FIELD.md): each one of the sound machines
+# above - vm/xt-sound's 4.77 MHz XT with an SB 2.0, vm/286-sound's 12.5 MHz
+# 286, vm/386-sound's 25 MHz 386DX, vm/486's DX2/66 and vm/pentium's P54C/133,
+# the last four with an SB16 - booting `make xtmp3field`'s system disk with
+# the 44.1 kHz stereo fixture in B:, so XTMP3 opens on it by itself and its
+# ladder picks a rung with nobody at the machine. Only the floppies and the
+# uuid differ from the machines they copy. tools/x3field.py runs all five on
+# both fixtures and reads each X3REPORT.TXT back
+.PHONY: xt-xtmp3 286-xtmp3 386-xtmp3 486-xtmp3 pentium-xtmp3
+xt-xtmp3: $(BUILD)/x3field360.img $(BUILD)/x3fb360-c128.img
+	@$(UNPROTECT) $(CURDIR)/vm/xt-xtmp3/86box.cfg
+	$(BOX) -P $(CURDIR)/vm/xt-xtmp3 -N
+286-xtmp3 386-xtmp3 486-xtmp3 pentium-xtmp3: %-xtmp3: $(BUILD)/x3field.img \
+            $(BUILD)/x3fb-c128.img
+	@$(UNPROTECT) $(CURDIR)/vm/$*-xtmp3/86box.cfg
+	$(BOX) -P $(CURDIR)/vm/$*-xtmp3 -N
 
 # The two FROTZ machines (SPEC.md 61.9), both with the Z-machine story floppy
 # in B: instead of the apps disk.
