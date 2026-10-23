@@ -29,7 +29,7 @@
 
 ; --- the header (x3gran.inc section 5) -------------------------------------
     db 'X3', X3G_ABI, X3K_FRONT, X3P_NV, 0
-    dw xf_gran, xf_check
+    dw xf_gran, xf_check, xf_next
     times X3P_DATA - ($ - $$) db 0
 ; --- the data block: x3gran.inc's fixed layout, zero at load ---------------
     times X3P_DEND - X3P_DATA db 0
@@ -1479,11 +1479,14 @@ xf_check:
     retf
 
 %include "x3crc.inc"
+%include "x3phdr.inc"               ; the header, shared with x3pars.inc
+%include "x3pnext.inc"              ; the frame loop (NEXT)
 
 ; =============================================================================
 ; TABLES
 ; =============================================================================
     X3FTAB_FRONT
+    X3FTAB_PARSE                    ; (bitrates and rates, for x3phdr.inc)
     align 2
 xf_hdir:    incbin "x3std.bin", X3T_HUFDIR_OFF, X3T_HUFDIR_LEN
     align 2
@@ -1544,5 +1547,18 @@ xf_blk_k:   db 0
 xf_top:     db 0, 0, 0
     align 2
 xf_last:    dw 0
+x3p_rdesc:  dw 0                    ; NEXT: the ring descriptor's offset...
+x3p_rseg:   dw 0                    ; ...the ring's segment, mask, read
+x3p_rmask:  dw 0                    ; position...
+x3p_rrd:    dw 0
+x3p_ravail: dw 0                    ; ...the bytes it holds...
+x3p_sbase:  dw 0                    ; ...the side information's offset...
+x3p_sbp:    dw 0                    ; ...the side reader's bit...
+x3p_mlen:   dw 0                    ; ...the main data's length, offset...
+x3p_mofs:   dw 0
+x3p_hreg:   dw 0, 0, 0, 0           ; ...a scan's header...
+x3p_reof:   db 0                    ; ...the ring's EOF...
+x3p_verd:   db 0                    ; ...the verdict...
+x3p_sres:   db 0                    ; ...a reserved field seen
 xf_nblk:    db 0, 0
 xf_blk:     times 2 * 160 db 0      ; the line maps, a channel
