@@ -70,7 +70,9 @@ highmem apps/xtmp3/xtmp3.asm   # PARAGRAPH ARITHMETIC ON ITS LOOK-AHEAD CLAIM:
     # [x3c_sseg]), because the 8-claims-a-owner limit (SPEC.md 50) puts ring,
     # PCM and stage in ONE claim, which with 32 KB clusters passes 64KB and a
     # single offset. Right on the identity map, a different descriptor on an
-    # LDT selector over exactly the KB asked. Every other claim is opaque: the
+    # LDT selector over exactly the KB asked. A conventional HOLD (x3hold.inc,
+    # SPEC.md 121.6.1) is read and copied out at hold + (offset >> 7 << 3),
+    # the 8-paragraph grid, which is the same arithmetic. Every other claim is opaque: the
     # work segments are loaded whole by the parts, the external ring is
     # OSAPI_MEM_CLAIM_DMA_HI (conventional by contract), and the parts are
     # fetched through the DMA door with no OP_WANT_HIFETCH. Retired by

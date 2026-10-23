@@ -84,8 +84,8 @@ S = xmcheck.sym
 ST_IDLE, ST_CHECK, ST_CHOOSE, ST_DECODE, ST_READY, ST_LIVE, ST_FILE, \
     ST_PAUSED, ST_BUFFER, ST_DONE, ST_ERROR = range(11)
 Q_AUTO, Q_ORIG, Q_HALF, Q_QUART, Q_XTSTD, Q_XTFAST = range(6)
-MD_IDLE, MD_CHECK, MD_LIVE, MD_FILE, MD_SPK, MD_CHOOSE, MD_CONV, MD_STEP = \
-    range(8)
+MD_IDLE, MD_CHECK, MD_LIVE, MD_FILE, MD_SPK, MD_CHOOSE, MD_CONV, MD_STEP, \
+    MD_LOAD = range(9)                  # (MD_LOAD: the hold, x3hold.inc)
 QNAME = ["AUTO", "ORIGINAL", "HALF", "QUARTER", "XT STANDARD", "XT FAST",
          "XT TURBO", "XT SPEECH"]
 DRIVE_Y = {"A": 44, "B": 104, "C": 164, "D": 224}   # the desktop zones (640x480)
@@ -613,7 +613,7 @@ def ladder_case(name, speeds, want, live=True, bound=None, unprobed=(),
                      r.open_file("C", NEON, hd_listing([NEON]))):
             return
         t0 = r.ticks()
-        r.until(lambda: r.st()["md"] not in (MD_IDLE, MD_CHECK),
+        r.until(lambda: r.st()["md"] not in (MD_IDLE, MD_CHECK, MD_LOAD),
                 "the ladder's decision", 60, 0.1)
         dt = (r.ticks() - t0) & 0xFFFF
         s = r.st()
@@ -918,7 +918,7 @@ def leg_stale():
                 if not check(leg, "XTMP3 opens (%s)" % case,
                              r2.open_file("B", name, floppy_listing([name]))):
                     return
-                r2.until(lambda: r2.st()["md"] not in (MD_IDLE, MD_CHECK),
+                r2.until(lambda: r2.st()["md"] not in (MD_IDLE, MD_CHECK, MD_LOAD),
                          "the decision", 60, 0.1)
                 s = r2.st()
                 check(leg, "an %s file is not reused: the dialog is asked"
@@ -1126,7 +1126,7 @@ def leg_xtpeak():
         if not check(leg, "XTMP3 opens (an SB16)", r.open_file(
                 "C", NEON, hd_listing([NEON]))):
             return
-        r.until(lambda: r.st()["md"] not in (MD_IDLE, MD_CHECK),
+        r.until(lambda: r.st()["md"] not in (MD_IDLE, MD_CHECK, MD_LOAD),
                 "Auto's decision", 90, 0.2)
         r.key("s")
         r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 20)

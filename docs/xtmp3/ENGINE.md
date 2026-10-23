@@ -174,6 +174,43 @@ stream is closed (verb 2), the external ring's claim freed, the grant freed
 `OS88_WORKER_RESTARTABLE_NOKEEP` and dies at `OSAPI_TASK_ALIVE` when the
 window goes.
 
+### 1.1 The hold: a live play reads no disk (§121.6.1)
+
+`apps/xtmp3/x3hold.inc` puts the Video Player's desktop rule (§98.3.18.1)
+into XTMP3. The reason is the 86Box 386's: a read holds `sch_lock`, and a
+floppy charges its spin-up to the first refill after a quiet spell.
+- **When.** `x3_go` asks `x3h_begin` after a track opens and before its
+  ladder or job.
+- **One XMS block** where the pool has the file's KB.
+- **Else a conventional claim:** the file at most 192 KB, the heap's
+  largest run holding it, 96 KB left free, and not an 8086.
+- **The load.** It reads 32 KB `READ_SEQ` chunks: into the look-ahead's
+  claim and up with `OSAPI_XMEM_COPY`, or straight into the claim. A timer
+  pass reads chunks until about 110 ms have gone (`MD_LOAD`, state
+  `X3ST_LOAD`, "Loading NN%"). Then `x3l_start` runs as it would have.
+- **The copies.** aplook.inc's read is the `AP_RSEQ` macro: `os88_rseq` for
+  the Audio Player (byte-identical) and `x3_rseq` here. That copies the held
+  file's gulps out of the hold, with an odd last byte through a word for
+  `XMEM_COPY`, and passes everything else to the disk. `[x3_nrseq]` counts
+  the disk's gulps and `[x3h_ncopy]` the hold's. `x3_readat` (the header,
+  the fingerprint) stays on the disk on purpose: a finalisation's
+  "has the source changed" check must see the file, not the hold.
+- **The key** is folder, volume and name (`x3h_same`).
+  - A replay, a seek, a step or a Decode first of the same file keep the
+    hold.
+  - A new track, Stop, a load cut short (`x3_stopall` in `MD_LOAD`) and a
+    failed read free it.
+  - A conventional hold is the first thing `x3_plan` gives up when an XT
+    plan cannot fit the 400,000-byte ceiling beside it.
+- **Measured.**
+  - `xtmp3live`'s `orig44` (QEMU `-m 4`, an XMS pool) and `holdconv`
+    (`-m 1`, a conventional claim) play C128 sample-exact with no disk
+    gulp from LIVE to the end.
+  - 86Box's 386DX on AFTERHRS from its floppy played live XT Standard with
+    0 underruns and 0 disk gulps all session. Its probes rose from 0.96 and
+    2.14 to 1.06 and 2.71, because they no longer pay the floppy.
+  - The primary is 44,591 + 14,348 = 58,939 of 65,024 bytes.
+
 ## 2. Calibration (§121.5)
 
 | constant | value | what |

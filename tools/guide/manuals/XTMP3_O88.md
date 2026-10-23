@@ -58,6 +58,12 @@ kHz 16-BIT**. A length with a `~` in front is an estimate, because the file
 does not say exactly how long it is. Click the progress bar to jump to that
 point in the song.
 
+Before a song plays, XTMP3 reads the whole file into memory when the
+computer has room for it, and the state line says **Loading** with a
+percentage. Playback then reads nothing from the disk, so a slow floppy
+cannot interrupt the sound. Without the room, it plays from the disk as it
+goes.
+
 The first time a song plays, the state line says **Checking performance**
 for a moment while XTMP3 measures how fast this computer decodes it. It
 remembers the answer for that song until you close XTMP3.

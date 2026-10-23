@@ -1067,3 +1067,31 @@ front end does not shrink with the output. Huffman decoding of two
 channels' 576 lines a granule, at 76.6 granules a second, is the bulk of
 the cost, and the divisor only cuts what follows it. That is enough for the
 486, which crossed the 1.25x line, and not enough for the 386.
+
+## 2026-10-23 — round 7: the hold, the Video Player's answer to the disk
+
+The owner pointed at the Video Player: "look at how the Video Player works
+around the disk access issue ... to play smoothly from disk". Its desktop
+Live never reads the disk while it plays. It plays only what it holds
+whole: resident, or in an XMS block. XTMP3 now does the same.
+
+Before a track calibrates, the whole MP3 is read into a hold: one XMS block
+where the pool has room, else a conventional claim when the file is small
+and the heap has room to spare. The state line says "Loading" while it
+happens. From then on every refill is a copy. The Audio Player's look-ahead
+code, which XTMP3 shares as source, gained one macro for its read. The
+Audio Player still assembles to the same bytes, and XTMP3 points the macro
+at a routine that copies.
+
+Two register contracts bit while it was being built, both caught by the
+`-m 1` leg on its first run:
+- OSAPI_XMEM_CAPS answers in BL, CX and DX as well as AX, which overwrote
+  the file's size in KB.
+- OSAPI_MEM_CLAIM spends CX.
+
+**The 386 from a floppy is the case the hold was for**, the machine whose
+one underrun was a refill paying the floppy's spin-up. With the hold it
+played AFTERHRS live on XT Standard with no underrun and no disk read at
+all once loaded. Its probes went up too, Original from 0.96x to 1.06x and
+XT Standard from 2.14x to 2.71x, because they no longer pay for the floppy
+either.

@@ -261,7 +261,7 @@ def play_live(r, leg, name, qual=None):
                  r.open_file("C", name, E.hd_listing([name]))):
         return None
     if qual is not None:
-        r.until(lambda: r.st()["md"] not in (E.MD_IDLE, E.MD_CHECK),
+        r.until(lambda: r.st()["md"] not in (E.MD_IDLE, E.MD_CHECK, E.MD_LOAD),
                 "Auto's decision", 60, 0.1)
         r.key("s")
         r.until(lambda: r.st()["md"] == E.MD_IDLE, "the stop", 20, 0.1)
@@ -500,7 +500,7 @@ def leg_xtfile():
         if not check(leg, "XTMP3 opens", r.open_file(
                 "C", name, E.hd_listing([name]))):
             return
-        r.until(lambda: r.st()["md"] not in (E.MD_IDLE, E.MD_CHECK),
+        r.until(lambda: r.st()["md"] not in (E.MD_IDLE, E.MD_CHECK, E.MD_LOAD),
                 "Auto's decision", 60, 0.1)
         r.key("s")
         r.until(lambda: r.st()["md"] == E.MD_IDLE, "the stop", 20, 0.1)
