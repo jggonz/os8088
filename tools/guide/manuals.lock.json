@@ -1308,8 +1308,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "0013ea61",
-  "strings": "ab9ffd36c184f5d9",
-  "why": "checked: parts fetched from the launch folder, a misreport now 'Cannot read its decoder', a live XT 4 KB gulp and early refill, an underrun at headroom keeping the rung, a queued title retried when idle, STEREO's space, and the test-only X3REPORT and stub hooks - all below the page's level of detail; 'falls behind' still describes the step"
+  "stamped": "05755a06",
+  "strings": "222c4f61704cd4f5",
+  "why": "checked round 5: 'The sound card stopped' is a rare error below the page's detail; the X3REPORT fields are test-only"
  }
 }
