@@ -218135,8 +218135,8 @@ converting, one probe on an 8086, the probe's OPEN reused, the grant given
 back before OPEN, a failed start falling through, the XT backend's 8 KB
 ring) and re-measured XT Standard on MartyPC's XT with `xtmp3xt`. Those rows
 are marked **shipped**; the rest are FIELD's figures at 55a051b4. **The
-86Box rows are the shipped build's** (70323ad3, re-run once by FIELD with
-the `-DX3REPORT` build); FIELD.md section 3 keeps the 55a051b4 matrix they
+86Box rows are the shipped build's** (d5e53fea, re-run by FIELD with the
+`-DX3REPORT` build; 70323ad3 measured the same but for one probe); FIELD.md section 3 keeps the 55a051b4 matrix they
 replace.
 
 | machine | track | probes (x real) | Auto's decision | what ran | peak |
@@ -218145,12 +218145,12 @@ replace.
 | | C128 | Quarter 0.01 (no XT rung: its output would be 44.1 kHz, above a DSP 2.01) | Decode first, on QUARTER | the conversion at **0.0117x** | 204,800 B |
 | 4.77 MHz XT, SB 2.0 (86Box, floppy only) | AFTERHRS | XT Standard 0.05 (an 8086 probes it alone) | Decode first, on XT STANDARD | the dialog: no hard drive; calibration 10.08 s | 381 KB |
 | | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog; 7.89 s | 179 KB |
-| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.29, XT Standard 0.73, XT Fast 0.78 | Decode first, on ORIGINAL | the dialog; 9.28 s | 381 KB (calibrating) |
+| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.30, XT Standard 0.73, XT Fast 0.78 | Decode first, on ORIGINAL | the dialog; 9.28 s | 381 KB (calibrating) |
 | | C128 | Quarter 0.15, XT Standard 0.10, XT Fast 0.21 | Decode first, on QUARTER | the dialog; 7.62 s | 381 KB |
-| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **11 underruns** (one at 55a051b4), stepped to XT FAST - on the 8 KB grant from a floppy; the next build plays it on the 16 KB grant with an 8 KB look-ahead (not yet re-run on 86Box) | 343 KB |
+| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **one underrun**, stepped to XT FAST (round 3: the 16 KB grant, an 8 KB look-ahead; it was 11 on round 2's 8 KB grant, one at 55a051b4); calibration 5.76 s | 350 KB |
 | | C128 | Quarter 0.37, XT Standard 0.47, XT Fast 0.51 | Decode first, on QUARTER | the dialog; 7.15 s | 343 KB |
 | 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 3.08 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 157 KB |
-| | C128 | Quarter 0.98, XT Standard 1.15, XT Fast 1.17 | **Decode first, on QUARTER** - no rung passes 1.25x now | the dialog; **no "Out of memory"** (it was, at 55a051b4, after XT Standard probed 1.48x); the fall-through was not reached | 343 KB |
+| | C128 | Quarter 0.97, XT Standard 1.15, XT Fast 1.16 (round 3; round 2 0.98, 1.15, 1.17) | **Decode first, on QUARTER** - no rung passes 1.25x | the dialog; **no "Out of memory"** (it was, at 55a051b4, after XT Standard probed 1.48x); the fall-through was not reached; round 3's probe that no longer pays a face redraw did not move it | 344 KB |
 | Pentium 133 MHz, SB16 (86Box) | AFTERHRS | Original 4.88 | **live ORIGINAL** | no underrun | 157 KB |
 | | C128 | Original 0.75, Half 0.98, Quarter 1.30 | **live QUARTER**, 11,025 Hz stereo 16-bit | no underrun | 174 KB |
 
@@ -218327,15 +218327,17 @@ third-party audio in them.
   at 4-7, and never on a quiet host: QEMU's SB16 plays in host real time
   while a starved guest runs slow, and that stream's lead between a refill
   request and an empty card is about 240 ms. Not reproduced, not changed.
-- **86Box's 386 underran 11 times** live on XT Standard with the 8 KB grant
-  from a floppy (§121.11.5); the 16 KB grant with an 8 KB look-ahead that
-  replaced it has run on QEMU (`xtpeak`, 387 KB) and not yet on 86Box.
+- **86Box's 386 still underruns once** live on XT Standard from a floppy,
+  on round 3's 16 KB grant with an 8 KB look-ahead (§121.11.5; 11 times on
+  round 2's 8 KB grant), and the underrun steps it to XT Fast. When, and
+  why with 2.14x of headroom, is not measured: the report counts it.
 - **The 720KB disks** carry XTMP3 only on `make xtmp3disk`; whether it rides
   the third primary 720KB disk is the owner's call.
-- **Not re-run on the shipped build**: the 86Box matrix was re-run on round
-  2 (§121.11.5), not since round 3's probe-start and card-ring changes; XT
-  Fast, XT Speech and Quarter's conversions on MartyPC last ran on round 2's
-  first build.
+- **Not re-run on the shipped build**: of the 86Box matrix, round 3 re-ran
+  the 386 on AFTERHRS and the 486 on C128; the other eight rows are round
+  2's (d5e53fea), measured before the probe started after the face's
+  redraw. XT Fast, XT Speech and Quarter's conversions on MartyPC last ran
+  on round 2's first build. On 86Box the rung fall-through was not reached.
 - **Untested**: the SB Pro's stereo path.
 - **Not measured**: any real machine, a real hard disk's share of a
   conversion, the face on CGA and Hercules on an XT, a conversion on

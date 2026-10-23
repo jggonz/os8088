@@ -1,6 +1,6 @@
 [
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 7.892,
   "caps": "009F",
   "card": 1,
@@ -11,7 +11,7 @@
   "fixture": "C128.MP3 (MPEG-1 44.1 kHz L/R stereo, 128 kbps, 1.5 s)",
   "flags": "0C",
   "granules": 0,
-  "host_s": 101.2,
+  "host_s": 93.7,
   "ladder_reruns": 0,
   "machine": "xt",
   "measured": {
@@ -64,7 +64,7 @@
   "underruns": 0
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 10.084,
   "caps": "009F",
   "card": 1,
@@ -75,7 +75,7 @@
   "fixture": "AFTERHRS.MP3 (MPEG-2.5 11,025 Hz mono, 24 kbps, 10.0 s)",
   "flags": "09",
   "granules": 0,
-  "host_s": 98.5,
+  "host_s": 97.9,
   "ladder_reruns": 0,
   "machine": "xt",
   "measured": {
@@ -128,7 +128,7 @@
   "underruns": 0
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 7.619,
   "caps": "0EFF",
   "card": 1,
@@ -139,7 +139,7 @@
   "fixture": "C128.MP3 (MPEG-1 44.1 kHz L/R stereo, 128 kbps, 1.5 s)",
   "flags": "08",
   "granules": 0,
-  "host_s": 44.7,
+  "host_s": 47.9,
   "ladder_reruns": 0,
   "machine": "286",
   "measured": {
@@ -156,7 +156,7 @@
   "raw_report": {
    "AVAIL": "00CA",
    "BITS": "08",
-   "CALPIT": "008AB757",
+   "CALPIT": "008AB75A",
    "CAPS": "0EFF",
    "CARD": "01",
    "CH": "02",
@@ -194,7 +194,7 @@
   "underruns": 0
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 9.284,
   "caps": "0EFF",
   "card": 1,
@@ -205,11 +205,11 @@
   "fixture": "AFTERHRS.MP3 (MPEG-2.5 11,025 Hz mono, 24 kbps, 10.0 s)",
   "flags": "09",
   "granules": 0,
-  "host_s": 51.9,
+  "host_s": 48.3,
   "ladder_reruns": 0,
   "machine": "286",
   "measured": {
-   "ORIGINAL": 0.29,
+   "ORIGINAL": 0.3,
    "XT FAST": 0.78,
    "XT STANDARD": 0.73
   },
@@ -222,7 +222,7 @@
   "raw_report": {
    "AVAIL": "00CA",
    "BITS": "08",
-   "CALPIT": "00A90852",
+   "CALPIT": "00A9082D",
    "CAPS": "0EFF",
    "CARD": "01",
    "CH": "01",
@@ -237,7 +237,7 @@
    "LARGEST": "0071",
    "MD": "01",
    "MEAS": [
-    29,
+    30,
     65535,
     65535,
     73,
@@ -260,7 +260,7 @@
   "underruns": 0
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 7.149,
   "caps": "0EFF",
   "card": 1,
@@ -271,7 +271,7 @@
   "fixture": "C128.MP3 (MPEG-1 44.1 kHz L/R stereo, 128 kbps, 1.5 s)",
   "flags": "08",
   "granules": 0,
-  "host_s": 35.3,
+  "host_s": 35.5,
   "ladder_reruns": 0,
   "machine": "386",
   "measured": {
@@ -288,7 +288,7 @@
   "raw_report": {
    "AVAIL": "00F9",
    "BITS": "08",
-   "CALPIT": "0082262E",
+   "CALPIT": "0082262D",
    "CAPS": "0EFF",
    "CARD": "01",
    "CH": "02",
@@ -326,7 +326,7 @@
   "underruns": 0
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 5.454,
   "caps": "0EFF",
   "card": 1,
@@ -337,7 +337,7 @@
   "fixture": "AFTERHRS.MP3 (MPEG-2.5 11,025 Hz mono, 24 kbps, 10.0 s)",
   "flags": "09",
   "granules": 202,
-  "host_s": 52.1,
+  "host_s": 52.8,
   "ladder_reruns": 0,
   "machine": "386",
   "measured": {
@@ -353,7 +353,7 @@
   "raw_report": {
    "AVAIL": "00F9",
    "BITS": "08",
-   "CALPIT": "00634B34",
+   "CALPIT": "00634AED",
    "CAPS": "0EFF",
    "CARD": "01",
    "CH": "01",
@@ -390,7 +390,7 @@
   "underruns": 11
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 5.394,
   "caps": "0EFF",
   "card": 1,
@@ -456,7 +456,7 @@
   "underruns": 0
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 2.335,
   "caps": "0EFF",
   "card": 1,
@@ -467,7 +467,7 @@
   "fixture": "AFTERHRS.MP3 (MPEG-2.5 11,025 Hz mono, 24 kbps, 10.0 s)",
   "flags": "09",
   "granules": 194,
-  "host_s": 43.6,
+  "host_s": 43.8,
   "ladder_reruns": 0,
   "machine": "486",
   "measured": {
@@ -482,7 +482,7 @@
   "raw_report": {
    "AVAIL": "0183",
    "BITS": "10",
-   "CALPIT": "002A83FC",
+   "CALPIT": "002A83FA",
    "CAPS": "0EFF",
    "CARD": "01",
    "CH": "01",
@@ -519,7 +519,7 @@
   "underruns": 0
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 4.25,
   "caps": "0EFF",
   "card": 1,
@@ -530,7 +530,7 @@
   "fixture": "C128.MP3 (MPEG-1 44.1 kHz L/R stereo, 128 kbps, 1.5 s)",
   "flags": "08",
   "granules": 118,
-  "host_s": 35.5,
+  "host_s": 39.7,
   "ladder_reruns": 0,
   "machine": "pentium",
   "measured": {
@@ -547,7 +547,7 @@
   "raw_report": {
    "AVAIL": "0183",
    "BITS": "10",
-   "CALPIT": "004D60CB",
+   "CALPIT": "004D60CD",
    "CAPS": "0EFF",
    "CARD": "01",
    "CH": "02",
@@ -584,7 +584,7 @@
   "underruns": 0
  },
  {
-  "build": "feature/xtmp3 70323ad3",
+  "build": "feature/xtmp3 d5e53fea",
   "calibration_s": 2.17,
   "caps": "0EFF",
   "card": 1,
@@ -595,7 +595,7 @@
   "fixture": "AFTERHRS.MP3 (MPEG-2.5 11,025 Hz mono, 24 kbps, 10.0 s)",
   "flags": "09",
   "granules": 194,
-  "host_s": 43.7,
+  "host_s": 44.8,
   "ladder_reruns": 0,
   "machine": "pentium",
   "measured": {
@@ -610,7 +610,7 @@
   "raw_report": {
    "AVAIL": "0183",
    "BITS": "10",
-   "CALPIT": "002781CE",
+   "CALPIT": "00278059",
    "CAPS": "0EFF",
    "CARD": "01",
    "CH": "01",

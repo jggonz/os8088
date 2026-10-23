@@ -334,7 +334,7 @@ time). 86Box cannot assert, so the matrix is this procedure and its JSON.
   (section 7.1). The report carries the count, not the moment.
 - **Listening.** No output was heard, on any machine.
 
-## 7. Round 2: the shipped build, re-run (feature/xtmp3 70323ad3)
+## 7. Round 2: the shipped build, re-run (feature/xtmp3 d5e53fea)
 
 The integration track acted on sections 2 to 4:
 - the face rests while converting;
@@ -349,8 +349,12 @@ It re-measured XT Standard on MartyPC itself (ENGINE.md section 12):
 - calibration 16.1 s -> **6.4 s**;
 - calibration peak 402 KB -> 387 KB.
 
-FIELD re-ran two things on that build: the 86Box matrix once (the same
-`-DX3REPORT` disks and procedure), and the speaker.
+FIELD re-ran two things on that build: the 86Box matrix (the same
+`-DX3REPORT` disks and procedure), and the speaker. Both ran first on
+70323ad3, then once more on d5e53fea, which added the drive dialog's
+greying of 32 KB-cluster drives. The tables below are d5e53fea's. The only
+figure that moved is the 286's Original probe on AFTERHRS, 0.29 -> 0.30;
+every decision, peak, calibration time and underrun count was identical.
 
 ### 7.1 The matrix (86Box, `docs/xtmp3/field/86box-matrix-r2.json`)
 
@@ -361,7 +365,7 @@ ladder's re-runs after a rung that could not start: 0 on every machine).
 |---|---|---|---|---|---|---|
 | XT 4.77, SB 2.0 | AFTERHRS | XT STD 0.05 (an 8086 probes it alone) | Decode first, on XT STANDARD | the dialog: no hard drive | 381 KB | **10.08 s** (27.00) |
 | | C128 | QUARTER 0.01 | Decode first, on QUARTER | the dialog | 179 KB | 7.89 s |
-| 286/12.5, SB16 | AFTERHRS | ORIG 0.29, XT STD 0.73, XT FAST 0.78 | Decode first, on ORIGINAL | the dialog | 381 KB | 9.28 s |
+| 286/12.5, SB16 | AFTERHRS | ORIG 0.30, XT STD 0.73, XT FAST 0.78 | Decode first, on ORIGINAL | the dialog | 381 KB | 9.28 s |
 | | C128 | QUARTER 0.15, XT STD 0.10, XT FAST 0.21 | Decode first, on QUARTER | the dialog | 381 KB | 7.62 s |
 | 386DX/25, SB16 | AFTERHRS | ORIG 0.96, XT STD 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **11 underruns** (1 at 55a051b4), stepped to XT FAST | 343 KB | 5.45 s |
 | | C128 | QUARTER 0.37, XT STD 0.47, XT FAST 0.51 | Decode first, on QUARTER | the dialog | 343 KB | 7.15 s |
@@ -426,3 +430,24 @@ The first run of the leg modelled the pulses at the END's rung (5,512 Hz)
 and failed at the first differing count. The leg now models the first
 door's rung, which is the rung the traced writes were made at. That failed
 run is the negative control: the comparison distinguishes the two rates.
+
+### 7.3 Round 3: the 386 and the 486 once more
+
+On round 3 (`feature/xtmp3` 3e3a9306) the integration track made two
+changes: the probe starts after the face is drawn, and a live XT stream
+prefers the 16 KB card grant with an 8 KB look-ahead. FIELD re-ran two
+cases once each, with the same disks and procedure.
+
+| machine | track | probes | decision | what ran | X3S_PEAK | calibration |
+|---|---|---|---|---|---|---|
+| 386DX/25, SB16 | AFTERHRS | ORIG 0.96, XT STD 2.14 | **live XT STANDARD** | **one underrun** (11 on round 2, one at 55a051b4), stepped to XT FAST | 350 KB = 358,400 B | 5.76 s |
+| 486DX2/66, SB16 | C128 | QUARTER 0.97, XT STD 1.15, XT FAST 1.16 | **Decode first, on QUARTER** | the dialog; no "Out of memory" | 344 KB | 6.09 s |
+
+- **The 386's underruns went from 11 to one.** That fits round 2's 8 KB
+  grant (0.74 s of audio) being the cause. One underrun still steps it
+  down to XT Fast. Its moment is not measured, because the report counts
+  it and does not time it.
+- **The 486's pick did not move.** The probe that no longer pays a face
+  redraw gives the same figures to the hundredth: 0.97, 1.15 and 1.16
+  against 0.98, 1.15 and 1.17. So the drop from 55a051b4's 1.48x on XT
+  Standard is not the face. It is still untraced.
