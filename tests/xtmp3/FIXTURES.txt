@@ -4,21 +4,21 @@
 # hashes; `x3sim.py --compare` decodes each and holds it to `expect`.
 # generator 1; encoder: LAME 64bits version 4.0 (https://lame.sourceforge.io)
 
-NEONDRV.MP3   e1b00025b9a929fa2acb24663e2a171829e159697669bd4ebbb025d15de87706   70217
-  what:   NEON DRIVE: MPEG-1 44.1 kHz joint stereo CBR 56
+NEONDRV.MP3   5bb20972ebe8f9d53a6a4d7e100990e2ba925a814dbd7e140fafaffdfe3a6101   70333
+  what:   NEON DRIVE: MPEG-1 44.1 kHz joint stereo CBR 56, an ID3v2.3 title
   signal: neon, 44100 Hz, 10.0 s; wav sha256 6175508e8806594ab9f1f8ba57dc796786cb2807e08a5991c8bb40f797a2c410
-  cmd:    lame -S -m j -b 56 --resample 44.1 IN.WAV OUT.MP3
-  expect: decode
-NIGHTSIG.MP3  dae8a9d57b1a63e15bad8861311cb6dd44ff4739524303da9429fc02bbc96285   50286
-  what:   NIGHT SIGNALS: MPEG-2 22.05 kHz joint stereo CBR 40
+  cmd:    lame -S -m j -b 56 --resample 44.1 IN.WAV OUT.MP3; an ID3v2.3 tag (TIT2 'NEON DRIVE', TPE1 'XTMP3 DEMO', 64 bytes of padding) ahead
+  expect: decode title=NEON DRIVE artist=XTMP3 DEMO
+NIGHTSIG.MP3  858765affedc0d1d57fb0683d2769fb2f57145a20f69b6d9812b0c9df4df66dc   50405
+  what:   NIGHT SIGNALS: MPEG-2 22.05 kHz joint stereo CBR 40, an ID3v2.3 title
   signal: night, 22050 Hz, 10.0 s; wav sha256 25196a40fb5adf9ceee25d3c2ed4aea3f313a6f85d43b5cd8bd88d2e7590d217
-  cmd:    lame -S -m j -b 40 --resample 22.05 IN.WAV OUT.MP3
-  expect: decode
-AFTERHRS.MP3  330dd3b6f575818b3481391d279054ba3bafc18f2bc4657cd68a74a86bbc1521   30406
-  what:   AFTER HOURS: MPEG-2.5 11.025 kHz mono CBR 24 (an XT target)
+  cmd:    lame -S -m j -b 40 --resample 22.05 IN.WAV OUT.MP3; an ID3v2.3 tag (TIT2 'NIGHT SIGNALS', TPE1 'XTMP3 DEMO', 64 bytes of padding) ahead
+  expect: decode title=NIGHT SIGNALS artist=XTMP3 DEMO
+AFTERHRS.MP3  e9e38214d616010da0ad27d42b3c23146fd352641d13ea7226e2ef5fbb7ea0b5   30523
+  what:   AFTER HOURS: MPEG-2.5 11.025 kHz mono CBR 24 (an XT target), an ID3v2.3 title
   signal: after, 11025 Hz, 10.0 s; wav sha256 34ce480338fc2d67ceb3ca9aef1752edca1c6bb418dc0c76143dcf40dcd88a12
-  cmd:    lame -S -m m -b 24 --resample 11.025 IN.WAV OUT.MP3
-  expect: decode
+  cmd:    lame -S -m m -b 24 --resample 11.025 IN.WAV OUT.MP3; an ID3v2.3 tag (TIT2 'AFTER HOURS', TPE1 'XTMP3 DEMO', 64 bytes of padding) ahead
+  expect: decode title=AFTER HOURS artist=XTMP3 DEMO
 C128.MP3      1b4d26f28e92e4eeff4b02d829ea975c28a1de5c2439515c02cf2f2c08f886e4   25076
   what:   MPEG-1 44.1 kHz L/R stereo CBR 128, a different chord each side
   signal: chord, 44100 Hz, 1.5 s; wav sha256 f488345e4f17c986c3671d3f2e65772a92007d04a8fa11c6229a6f2fac5af43c
@@ -177,4 +177,4 @@ BVBRI.MP3     4cde7015fb7f182b44881180969e294f45c5654328d39381699d30d304f36b5c  
   cmd:    surgery vbri on BASE.TMP (BASE.TMP: signal speech, 32000 Hz, 1.5 s, lame -S -m m -b 32 --resample 32)
   expect: recover frames=43 same=BID3V1.MP3
 
-# total 652390 bytes in 37 files
+# total 652742 bytes in 37 files

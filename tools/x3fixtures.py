@@ -546,15 +546,18 @@ def s_garbage(mp3):
     return mp3[:a] + g1 + mp3[a:b_] + g2 + mp3[b_:]
 
 
-def id3v2_tag(title, artist, pad):
+def id3v2_tag(title, artist, pad, padding=512):
+    """An ID3v2.3 tag: TIT2, TPE1, a PRIV frame of `pad` bytes (none at 0)
+    and `padding` zero bytes."""
     def frame(fid, text):
         body = b'\x00' + text.encode('latin-1')
         return fid + struct.pack('>I', len(body)) + b'\0\0' + body
-    priv = b'PRIV' + struct.pack('>I', pad) + b'\0\0' + bytes((i * 7) & 0xFF for i in range(pad))
+    priv = b'PRIV' + struct.pack('>I', pad) + b'\0\0' + \
+        bytes((i * 7) & 0xFF for i in range(pad)) if pad else b''
     frames = frame(b'TIT2', title) + frame(b'TPE1', artist) + priv
-    size = len(frames) + 512
+    size = len(frames) + padding
     ss = bytes(((size >> 21) & 0x7F, (size >> 14) & 0x7F, (size >> 7) & 0x7F, size & 0x7F))
-    return b'ID3\x03\x00\x00' + ss + frames + b'\0' * 512
+    return b'ID3\x03\x00\x00' + ss + frames + b'\0' * padding
 
 
 def s_id3big(mp3):
@@ -615,17 +618,22 @@ M44 = '44.1'
 def matrix():
     S = []
 
-    def add(name, sig, rate, dur, args, note, derive=None, expect='decode'):
+    def add(name, sig, rate, dur, args, note, derive=None, expect='decode', tag=None):
+        if tag:
+            expect = 'decode title=%s artist=%s' % tag
         S.append(dict(name=name, sig=sig, rate=rate, dur=dur, args=args,
-                      note=note, derive=derive, expect=expect))
+                      note=note, derive=derive, expect=expect, tag=tag))
 
     # the three demo songs (the mockup's queue)
     add('NEONDRV.MP3', 'neon', 44100, 10, ['-m', 'j', '-b', '56', '--resample', M44],
-        'NEON DRIVE: MPEG-1 44.1 kHz joint stereo CBR 56')
+        'NEON DRIVE: MPEG-1 44.1 kHz joint stereo CBR 56, an ID3v2.3 title',
+        tag=('NEON DRIVE', 'XTMP3 DEMO'))
     add('NIGHTSIG.MP3', 'night', 22050, 10, ['-m', 'j', '-b', '40', '--resample', '22.05'],
-        'NIGHT SIGNALS: MPEG-2 22.05 kHz joint stereo CBR 40')
+        'NIGHT SIGNALS: MPEG-2 22.05 kHz joint stereo CBR 40, an ID3v2.3 title',
+        tag=('NIGHT SIGNALS', 'XTMP3 DEMO'))
     add('AFTERHRS.MP3', 'after', 11025, 10, ['-m', 'm', '-b', '24', '--resample', '11.025'],
-        'AFTER HOURS: MPEG-2.5 11.025 kHz mono CBR 24 (an XT target)')
+        'AFTER HOURS: MPEG-2.5 11.025 kHz mono CBR 24 (an XT target), an ID3v2.3 title',
+        tag=('AFTER HOURS', 'XTMP3 DEMO'))
     # MPEG-1 matrix
     add('C128.MP3', 'chord', 44100, 1.5, ['-m', 's', '-b', '128', '--resample', M44],
         'MPEG-1 44.1 kHz L/R stereo CBR 128, a different chord each side')
@@ -760,6 +768,9 @@ def regen(wavdir=None):
                 mp3 = lame(['-S'] + f['args'], wav, tmp)
                 f['wavsha'] = sha(wav)
                 f['cmd'] = 'lame -S ' + ' '.join(f['args']) + ' IN.WAV OUT.MP3'
+                if f.get('tag'):
+                    mp3 = id3v2_tag(f['tag'][0], f['tag'][1], 0, 64) + mp3
+                    f['cmd'] += '; an ID3v2.3 tag (TIT2 %r, TPE1 %r, 64 bytes of padding) ahead' % f['tag']
             else:
                 base, op = f['derive']
                 mp3 = SURGERY[op](made[base])
