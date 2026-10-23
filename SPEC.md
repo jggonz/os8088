@@ -114665,20 +114665,26 @@ rule 7). So the fetch is now two hand-overs instead of one:
    document, the line table and the link arena from the size it now knows,
    through `br_claimrest`, the same routine a file load uses. It sets
    `[br_fin]` = 2.
-4. The worker parses and paints, as before (`br_finish`) - with `[br_fin]`
-   = 3 for the length of the parse, which is the one thing the UI task has
-   to know before it frees anything.
+4. The worker parses with `[br_fin]` = 3, then computes the completed page's
+   layout with `[br_fin]` still 3 and **without the gfx lock**. The parser's
+   terminal state temporarily uses its high bit to mark this layout pass.
+   It yields every 4 KiB of document input. Paint and page-input callbacks
+   skip document state during that marker; the native window can still be
+   minimized or closed, and a close/navigation waits for `[br_fin]` to leave
+   3 before freeing claims. The worker takes the gfx lock only to publish the
+   completed state and paint the already-laid-out page.
 
-**A navigation during step 4 waits for the parse to stop, and stops it.**
+**A navigation during step 4 waits for the parse/layout worker to stop.**
 The state is still `BN_BODY` while the worker parses, so `br_go` and
 `br_load` drop the fetch through `br_abort` and then `br_free_all` - and the
 parse used to go on writing the document, the link arena and the staging
 flush into claims that had just been freed, then store `BN_DONE` over the
 NEW fetch's `BN_OPEN`. The worker may not take a claim's lifetime into its
 own hands (§20.6 rule 7), so the handshake is the UI task's: `br_abort`
-bumps `[br_gen]`, zeroes `[br_srclen]` - the bound `br_parse`'s loop tests
-on every byte, so a parse in progress ends at its next character - and
-yields until `[br_fin]` is no longer 3, then puts `[br_srclen]` back
+bumps `[br_gen]`, zeroes `[br_srclen]` - a parse in progress ends at its next
+character, while a final layout pass yields periodically and completes without
+the graphics lock - and yields until `[br_fin]` is no longer 3, then restores
+`[br_srclen]`
 (`br_load` reads it as the file's size). The worker stores `[br_fin]` = 3
 BEFORE it checks the generation, and the UI task bumps the generation BEFORE
 it reads `[br_fin]`, so on one CPU at least one side sees the other: either
@@ -114792,8 +114798,9 @@ normal cell font. Formatting markers are zero-width document controls, so
 wrapping, scrolling, links, and hit-testing continue to use the same bounded
 path.
 
-Headings remain block elements, gain a level-dependent left indent, and are
-underlined through the Browser's existing per-row ink pass. Unordered and
+Headings remain block elements, gain a level-dependent left indent, and use
+the existing bold glyph pass so they remain visually distinct from clickable
+underlined links. Unordered and
 ordered list items use the same compact `*` bullet and hanging indent. A
 blockquote receives a two-cell indent, including wrapped lines. `<pre>` keeps
 its existing literal spaces and line breaks and does not wrap. Paragraphs
@@ -114909,11 +114916,13 @@ can distinguish payload from control markers. The arena and link count remain
 independently bounded: a page that exhausts either keeps its text and reports
 the existing link-limit status.
 
-Form capacities double where they count entries: eight forms, 24 visible
+Form capacities double where they count entries: eight forms, 22 visible
 controls, eight submit controls, and 96 hidden name/value pairs per form.
-Existing per-string limits (action, name, value, and composed URL lengths) do
-not change. Exceeding a count remains a bounded omission, not a memory write
-past the corresponding table.
+The visible-control table is bounded at 22 so large-page layout can yield
+without holding the global graphics lock while keeping image plus BSS within
+the 60 KiB package budget. Existing per-string limits (action, name, value,
+and composed URL lengths) do not change. Exceeding a count remains a bounded
+omission, not a memory write past the corresponding table.
 
 The capacity gate serves separate deterministic pages for a 96 KiB raw source,
 a 96 KiB formatted document, more than 1,365 but no more than 2,730 layout
@@ -115002,9 +115011,13 @@ request/acknowledge handshake with the network worker, so the UI never frees a
 buffer the worker may still be using. It commits a final partial cluster when
 possible and leaves a valid partial file on failure. Closing the manager hides
 its secondary window; `File > Downloads` reopens it and the active transfer
-continues. Closing the Browser itself stops the worker, closes the socket and
-stream, destroys the secondary window and releases the transfer claim before
-the instance is torn down.
+continues. Closing the Browser itself first completes any active page-fetch
+cancellation through the Browser's generation handshake, so the navigation
+socket is closed before the worker is torn down. It then closes the download
+socket and stream, destroys the secondary window and releases the transfer
+claim before the instance is torn down. A live download still refuses the
+first close and completes its existing worker/UI cancellation handshake before
+the close is retried.
 
 #### 71.20.2 UI ownership and redraw
 
@@ -115036,14 +115049,23 @@ navigations. The Browser does not infer file type from `Content-Type`; the
 existing response parser does not retain that header, and adding a second
 classification path would make link behavior depend on response timing.
 
+A non-rendered resource is a download action, not a page navigation. Opening
+the Save dialog and completing or cancelling the transfer must leave the
+currently displayed document, its location-bar URL, bookmark target, and
+history position unchanged. Reload and bookmark actions after the download
+therefore continue to refer to the displayed page rather than the file URL.
+
 The `brdownload` and `brdownload-length` soak rows use a deterministic NE2000
 HTTP server to serve a binary body larger than the Browser page cap, once
 without `Content-Length` and once with it. They verify the reported total and
 compare the saved FAT file byte-for-byte. The current automated pair does not
 yet exercise redirect, cancellation, disk-full, busy refusal or repeated
-downloads; these remain acceptance checks for follow-up coverage. A later
-launch should open the downloaded file through the existing file association
-to verify exact bytes independently.
+downloads; these remain acceptance checks for follow-up coverage. The
+`brdownload --automatic` row also checks that the location buffer and history
+remain on the displayed page through completion, then closes the manager and
+uses Reload to verify that the page is fetched again instead of reopening the
+download dialog. A later launch should open the downloaded file through the
+existing file association to verify exact bytes independently.
 
 ### 71.17 Browser 1.4 — table spans, cell alignment and form POST
 
@@ -115082,14 +115104,170 @@ history from a POST response therefore performs a GET; after such a history
 fetch, the state line says `History GET: POST body not replayed` rather than
 silently implying that the original form submission was repeated.
 
-Password and file controls remain visibly unsupported. With no TLS, the
-browser must not show a password control that could be submitted in plaintext.
-`<textarea>` remains outside the single-line control model and is shown as
-unsupported, while its source contents are skipped as control content rather
-than rendered as page text. The reference renderer and guest share fixtures
-for spans, alignment and unsupported controls; a local HTTP test checks the
-POST request line, headers, exact length and body. Existing GET, formatting
-and frame-navigation behavior remains covered.
+File controls remain visibly unsupported. Password controls use the existing
+bounded text-field record and are masked in the rendered page. Their form label
+includes an explicit `HTTP NOT SECURE` warning because the Browser has no TLS;
+the field provides visual masking only, not transport protection. Password
+values are submitted only by POST, never placed in a GET URL, toast or history
+entry. The request body remains ordinary unencrypted HTTP. Password values are
+not written to diagnostic messages. `INPUT TYPE=FILE` and `TEXTAREA` remain
+outside the single-line control model; textarea source contents are skipped as
+control content rather than rendered as page text.
+The reference renderer and guest share fixtures for spans, alignment and
+unsupported controls; a local HTTP test checks the POST request line, headers,
+exact length and body. Existing GET, formatting and frame-navigation behavior
+remains covered.
+
+### 71.21 Browser 1.6c — incremental HTML and classic navigation
+
+This section is the 1.6c acceptance contract, not a claim that every item has
+shipped. The staged implementation and its verified/remaining work are tracked
+in `docs/plans/BROWSER-1.6C-PLAN.md`; release status must follow that evidence.
+
+Browser 1.6c keeps the 1.6b source, formatted-document, line and link stores;
+it does not add a parallel page allocator. The HTTP worker continues to append
+received body bytes to the page's existing source store, growing it through
+the existing UI ownership handshake. The source starts in conventional memory
+and grows there only while the Browser's 20-percent reserve policy permits.
+When that reserve refuses further conventional growth, an available EMS store
+may back the source through the same owned four-quarter frame used by the
+Browser's other page arenas. Source growth and each worker write remain
+bounded by the allocated capacity; the worker is parked while the UI grows or
+migrates the source. Without EMS, the existing conventional-memory ceiling
+still produces a visible source cutoff. EMS source capacity grows in 256 KiB
+groups and is capped at 1 MiB by the Browser's logical source representation.
+The parser consumes only the newly
+available source range and retains a logical source cursor plus its compact
+semantic state between worker passes. An incomplete tag, quoted attribute or
+entity remains at its opening byte until more source arrives. Long comments
+and `SCRIPT`/`STYLE` raw text commit the already-scanned prefix and retain only
+their small terminator-match state, so a later block resumes at its first
+unseen byte instead of replaying earlier content. Input block boundaries
+therefore do not change the resulting formatted stream, links or controls.
+
+The source remains the one retained copy used by View Source, Save As, link
+metadata and form actions. Parsing does not make a second conventional-memory
+copy. For parsing an EMS-backed source, the Browser copies at most one existing
+512-byte receive-buffer slice into the package's existing receive scratch area.
+This isolates the parser cursor from document-arena EMS mappings without
+allocating a second page buffer or copying the full source to conventional RAM.
+Save As and event-time source lookups continue to use bounded direct EMS windows.
+Formatted output continues through the existing document arena and its
+conventional-memory/EMS fallback; line records continue through their existing
+arena and EMS fallback. All EMS handles and frame quarters remain subject to
+the existing DRVC_EMS ownership rules, and the page remains usable without
+EMS. Save As streams an EMS-backed source from those windows in cluster-aligned
+chunks of at most 32 KiB; a destination volume with larger clusters reports a
+write failure rather than copying through a second whole-page RAM buffer.
+
+Parsing may finish before the response closes, but layout and drawing remain
+deferred until the final body or a terminal transfer condition. The UI does not
+repaint once per receive block. A navigation invalidates the worker generation
+and waits for an active parser slice before releasing any arena. If formatted
+storage cannot grow, the parser stops at a safe emitted prefix, the worker
+continues draining the response without storing more formatted output, and
+the final page reports `Page truncated`; the parser does not restart from byte
+zero. A source-claim refusal remains separately reported as a source cutoff.
+
+The parser preserves the 1.6b document controls and marker format. It does not
+implement CSS, script execution, image rendering, image maps, plugins or TLS.
+`SCRIPT` contents are treated as raw skipped text, including tag-like text,
+until a matching close tag or final EOF. This streaming boundary is also the
+only preparation for a future suspend/resume parser; no script runtime or DOM
+is introduced.
+
+URL and frame metadata remain per document/frame and use the existing bounded
+tables and link arena. `BASE HREF` supplies the resolution base and `BASE
+TARGET` the default target; an explicit link or form target takes precedence.
+
+The layout's running link state starts at the same `FFFFh` no-link sentinel as
+the parser. A line receives `LNF_LNK` only when its first visible cell is
+inside an open `<a href>`; plain text before the first link must not inherit
+link underlining. `D_LNK1` and `D_LNK0` change that state at their exact inline
+positions, so text before and after an anchor remains ordinary text.
+The keyboard focus cycle skips frame-source link records that have no visible
+text in the flattened document, then visits visible links in document order.
+The current frame compositor stores the visible composition as one document.
+Root `_self`, `_top` and direct-child `_parent` navigate the top-level page. A
+child `_self`, the default target of a child link/form, or a matching named
+target navigates the selected child by re-fetching the frameset and its child
+documents, with the selected child's URL overridden by the requested URL.
+This preserves the frame layout and target semantics, but currently fetches
+sibling documents again; it is not an independent child-document cache or
+history. A child-targeted POST is refused because the current worker can only
+submit a POST as the top-level request. `_blank` is also refused because the
+package has no existing API for a second Browser window with a pending URL.
+Named anchors and `ID` values use the existing
+bounded document-offset index; fragment navigation scrolls to the recorded
+location without changing the fetched resource.
+
+A form `ACTION` is resolved against the `BASE HREF` belonging to the document
+that owns that form, including a child frame's own base. Resolving an action
+must not mutate the current page URL or the base used by later link clicks.
+For a child frame, its fetched source URL is the default base; the first
+`BASE HREF` in that child document replaces that default without being mistaken
+for an already-seen `BASE` element.
+
+The native form controls remain bounded by the existing field and submit
+tables. `BUTTON` with omitted type or `type=submit` acts as a submit control;
+its declared `name` and `value` are included only when that button is clicked.
+`INPUT TYPE=RESET` and `BUTTON TYPE=RESET` restore the initial values of the
+bounded text, select, checkbox and radio controls in their owning form without
+submitting it. A reset uses references into the retained source for the
+original values and does not keep a second copy of the form. `BUTTON TYPE=BUTTON`
+remains unsupported and is rendered as inert content. A bounded `LABEL` with a
+`for` attribute can activate a matching form control `id`, whether the label or
+control appears first; text fields receive focus, and selects/checkboxes/radios
+use their existing click behavior. Matching is limited to the retained ID
+length and label spans share the existing submit-span bound. Implicit labels
+that wrap a control and labels beyond that bound remain inert.
+
+Table layout also recovers a common omitted-row form: if a table contains
+`TD`/`TH` cells before any `TR` marker, those cells are composed as one
+implicit row. Explicit row boundaries retain precedence, and nested-table
+content continues to flatten within the existing bounded compositor. This is
+a narrow recovery rule, not a general HTML error-correction algorithm.
+
+When malformed inline emphasis (`B`, `I`, or `U`) remains open at a paragraph or heading boundary, layout clears that inline state at the block start. This keeps the malformed element from changing the formatting of later blocks; it does not introduce a general formatting-element stack.
+
+Text normalizes CR, LF and CRLF as HTML whitespace outside `PRE`, including
+inside `P`: a source newline there collapses with adjacent whitespace to one
+space and does not create a display line. Inside `PRE`, CRLF and lone CR/LF
+each produce exactly one display line break, including when the CR and LF
+arrive in separate receive blocks. Latin-1/Windows-1252 text and numeric
+references in that range use the Browser's one-character ASCII approximation
+table because the system cell font has no accented glyphs. Named references
+include the common HTML 3.2 Latin-1 set; replacements remain single-byte
+approximations, not Unicode rendering.
+
+HTTP body decoding precedes HTML parsing. The bounded response scanner retains
+the status code, redirect Location, one session cookie and a bounded
+Content-Type media-type token. Absent Content-Type retains the legacy HTML
+assumption, while a declared non-HTML response is drained without
+being retained or parsed as page source and is reported as non-HTML. Routing
+such responses into the Download Manager remains a separate integration task.
+Explicit 204 and 304 responses are reported as empty/not cached because the
+Browser has no response cache; common 400, 403, 404 and 500 HTML responses keep
+their body and expose the HTTP status in the status line. `Content-Length` is
+not used to size or limit page storage. A `charset=utf-8` parameter on the
+first `Content-Type` header selects the existing UTF-8 decoder, accepting a
+quoted or unquoted value, and takes precedence over a conflicting META
+declaration; other HTTP charset values continue to use the existing
+META/default decoding behavior.
+HTTP/1.0 close delimiting remains supported. Chunked transfer decoding and a
+complete HTTP/1.1 client are not implied. Session cookies are bounded,
+host-isolated memory state; the single retained cookie also honors its
+quoted or unquoted `Path` attribute or the response directory's default path.
+Cookie Domain,
+Expires, multiple-cookie storage and persistence remain unsupported, and
+cookies do not provide transport security.
+
+The 1.6c acceptance suite compares parsing of the same fixture delivered as a
+single body, 512-byte blocks, 64-byte blocks, one-byte blocks and deterministic
+irregular blocks. It checks output, links, controls, parser completion and
+bounded memory use, with and without EMS. Network and EMS correctness may be
+tested in the configured emulator; 8088 timing claims require an 8088-capable
+machine and are reported separately.
 
 ### 72.1 What the packages did have to change, which is one question
 

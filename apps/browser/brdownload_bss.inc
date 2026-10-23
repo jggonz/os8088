@@ -105,10 +105,12 @@ br_dl_hostbak     equ br_dl_barbak + BR_UBUF
 br_dl_pathbak     equ br_dl_hostbak + BR_HOSTMAX
 br_dl_loc         equ br_dl_pathbak + BR_PATHMAX
 br_dl_reqb        equ br_dl_loc + BR_DL_URLMAX
-br_dl_line        equ br_dl_reqb + BR_DL_REQMAX
-br_dl_numtxt      equ br_dl_line + BR_DL_LINE
-br_dl_disptxt     equ br_dl_numtxt + 12
-br_dl_dirbak      equ br_dl_disptxt + 128
+; The request is fully sent before header parsing starts. The header scanner
+; can therefore reuse its bytes instead of reserving another 128-byte line.
+br_dl_line        equ br_dl_reqb
+br_dl_numtxt      equ br_dl_reqb + BR_DL_REQMAX
+br_dl_disptxt     equ br_dl_numtxt + 13
+br_dl_dirbak      equ br_dl_disptxt + BR_DL_DISPTXT
 br_dl_drivebak    equ br_dl_dirbak + 2
 br_dl_lastmsg     equ br_dl_drivebak + 1
 br_dl_liveflag    equ br_dl_lastmsg + 2
@@ -116,5 +118,16 @@ br_dl_livewidth   equ br_dl_liveflag + 1
 br_dl_barfill     equ br_dl_livewidth + 1
 br_dl_barnew      equ br_dl_barfill + 2
 br_dl_barstate    equ br_dl_barnew + 2
-br_dl_runbuf      equ br_dl_barstate + 1
-br_dl_bss_end     equ br_dl_runbuf + 16
+; Numeric formatting and fixed-width FONT_RUN assembly are sequential. The
+; percent painter appends '%' in place, so one 13-byte field covers the
+; longest 12-cell run plus NUL.
+br_dl_runbuf      equ br_dl_numtxt
+br_dl_partpaint   equ br_dl_barstate + 1 ; far pointers: offset, segment
+br_dl_partdoc     equ br_dl_partpaint + 4
+br_dl_partlive    equ br_dl_partdoc + 4
+br_dl_partcopy    equ br_dl_partlive + 4
+; Seqlock byte around the worker's 32-bit received-byte counter. The paint
+; callback can be preempted while the low word rolls over; without this byte
+; it could combine the new low word with the old high word for one frame.
+br_dl_recvseq     equ br_dl_partcopy + 4
+br_dl_bss_end     equ br_dl_recvseq + 1

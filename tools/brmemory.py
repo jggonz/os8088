@@ -141,6 +141,34 @@ def write_source_pressure_page(path: str, target: int = 768 * 1024) -> None:
         f.write(suffix)
 
 
+def write_ems_growth_page(path: str, target: int = 768 * 1024) -> None:
+    """Make formatted text grow past the conventional-memory headroom.
+
+    Unlike sourcepressure.htm, this is intentionally visible content: every
+    row becomes formatted document data and a line break, so it exercises the
+    Browser's document/line arenas and their EMS spill path when served over
+    the network. A tail sentinel makes the retained end easy to verify.
+    """
+    prefix = (b"<!doctype html><title>EMS formatted growth</title>"
+              b"<h1>EMS formatted growth</h1><pre>\n")
+    suffix = b"\nEND-EMS-FORMATTED-GROWTH\n</pre>"
+    with open(path, "wb") as f:
+        f.write(prefix)
+        row = 0
+        used = len(prefix)
+        while True:
+            line = ("EMS-ROW-%06d: incremental formatted data across RAM and EMS\n"
+                    % row).encode("ascii")
+            if used + len(line) + len(suffix) > target:
+                break
+            f.write(line)
+            used += len(line)
+            row += 1
+        f.write(suffix)
+        used += len(suffix)
+        f.write(b" " * (target - used))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="build/brmemory")
@@ -175,6 +203,7 @@ def main() -> int:
     write_line_arena_page(os.path.join(args.out, "linearena.htm"))
     write_wide_document_page(os.path.join(args.out, "docwide.htm"))
     write_source_pressure_page(os.path.join(args.out, "sourcepressure.htm"))
+    write_ems_growth_page(os.path.join(args.out, "emsgrowth.htm"))
 
     links = ["<!doctype html><title>400 links and 8 forms</title><h1>"
              "400 links and 8 forms</h1>"]
@@ -190,7 +219,7 @@ def main() -> int:
     for name in ("mem96k.htm", "mem196k.htm", "boundary100k.htm",
                  "boundary160k.htm",
                  "boundaryui100k.htm", "linearena.htm", "docwide.htm",
-                 "sourcepressure.htm", "links400.htm"):
+                 "sourcepressure.htm", "emsgrowth.htm", "links400.htm"):
         print("%s: %d bytes" % (name, os.path.getsize(os.path.join(args.out, name))))
     if args.serve:
         os.chdir(args.out)

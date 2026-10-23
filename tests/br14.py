@@ -74,6 +74,21 @@ def main():
                 if b >= 0x20:
                     line.append(" " if b == 0x7f else chr(b))
             rendered.append("".join(line))
+        malformed_next = next((i for i, line in enumerate(rendered)
+                              if "9. Preformatted" in line), None)
+        if malformed_next is None:
+            fails.append("unclosed inline emphasis leaked into the next heading")
+        else:
+            # Headings intentionally use the same bold bit as inline <b>.
+            # Check that the heading is bold, then that its following PRE
+            # content is not: the latter catches malformed inline state leaking
+            # past the block while allowing the heading's own style.
+            if not tab[malformed_next * 10 + 9] & 0x20:
+                fails.append("the next heading did not use bold styling")
+            pre_start = next((i for i, line in enumerate(rendered)
+                              if "column1" in line), None)
+            if pre_start is None or tab[pre_start * 10 + 9] & 0x20:
+                fails.append("unclosed inline emphasis leaked into following PRE text")
         aligned = next((line for line in rendered
                         if "aligned" in line and "center" in line and "right" in line), "")
         if not aligned:
@@ -109,6 +124,22 @@ def main():
             fails.append("password/file/textarea controls were not visible")
         if any("secret" in line or "private text" in line for line in rendered):
             fails.append("unsupported control content leaked onto the page")
+        entityline = next((line for line in rendered
+                           if "Latin-1 set:" in line), "")
+        if "Latin-1 set: a c e A Y 1" not in entityline:
+            fails.append("classic Latin-1 entities were not folded as expected: "
+                         "%r" % entityline)
+        pre_start = next((i for i, line in enumerate(rendered)
+                          if "column1" in line), None)
+        pre_rows = [pre_start]
+        for token in ("-------", "a         b"):
+            pre_rows.append(next((i for i, line in enumerate(rendered)
+                                  if pre_start is not None and i > pre_start
+                                  and token in line), None))
+        if (None in pre_rows or pre_rows[1] != pre_rows[0] + 1
+                or pre_rows[2] != pre_rows[1] + 1):
+            fails.append("CRLF inside PRE did not produce one break per line: "
+                         "%r" % pre_rows)
         preline = next((line for line in rendered
                         if "leading   spaces   preserved" in line), "")
         indent = len(preline) - len(preline.lstrip())

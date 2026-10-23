@@ -672,8 +672,17 @@ br_bmurlptr:
     pop ax
     ret
 
-; Search the current canonical URL. CF=0 and AX=index when found.
+; Search DS:SI's canonical URL. CF=0 and AX=index when found.
 br_bmfind:
+    push si
+    mov si, br_ubuf
+    call br_bmfindurl
+    pop si
+    ret
+
+; The bookmark worker searches its queued URL directly, without temporarily
+; replacing the live location field in br_ubuf.
+br_bmfindurl:
     push bx
     push cx
     push dx
@@ -693,7 +702,6 @@ br_bmfind:
     mov di, ax
     push ds
     pop es
-    mov si, br_ubuf
 .cmp:
     mov al, [si]
     mov ah, [es:di]
@@ -948,6 +956,18 @@ br_bmservice:
     push si
     push di
     push es
+    ; Disk APIs are foreign to Browser URL state. Keep the active origin around
+    ; the asynchronous bookmark transaction so the page's relative links remain
+    ; resolvable after its bookmark has been written.
+    push ds
+    pop es
+    mov si, br_host
+    mov di, br_bmworkhost
+    mov cx, BR_HOSTMAX
+    cld
+    rep movsb
+    mov ax, [br_port]
+    mov [br_bmworkport], ax
     mov al, [br_bmreq]
     mov [br_bmopwork], al
     or al, al
@@ -964,15 +984,12 @@ br_bmservice:
     mov byte [br_bmreq], 0
     push ds
     pop es
-    mov si, br_ubuf
-    mov di, br_bmworkurl
-    mov cx, BR_UBUF
-    call br_copyz
     mov si, br_bmrequrl
-    mov di, br_ubuf
-    mov cx, BR_UBUF
-    call br_copyz
-    call br_bmcheck
+    call br_bmfindurl
+    mov byte [br_bmsaved], 0
+    jc .not_saved
+    mov byte [br_bmsaved], 1
+.not_saved:
     cmp byte [br_bmopwork], 4
     jne .decide
     cmp byte [br_bmsaved], 0
@@ -1007,17 +1024,20 @@ br_bmservice:
     mov word [br_nmsg], br_s_bmfail
     mov byte [br_nstate], BN_DONE
 .restore:
-    push ds
-    pop es
-    mov si, br_bmworkurl
-    mov di, br_ubuf
-    mov cx, BR_UBUF
-    call br_copyz
 .refresh_only:
     call br_bmcheck
     call br_bmmenuset
     mov byte [br_bmredraw], 1      ; repaint after the disk operation returns
 .out:
+    push ds
+    pop es
+    mov si, br_bmworkhost
+    mov di, br_host
+    mov cx, BR_HOSTMAX
+    cld
+    rep movsb
+    mov ax, [br_bmworkport]
+    mov [br_port], ax
     pop es
     pop di
     pop si
@@ -1044,7 +1064,7 @@ br_bmaddmem:
     mov si, br_bmreqtitle
     cmp byte [si], 0
     jne .title
-    mov si, br_ubuf
+    mov si, br_bmrequrl
 .title:
     mov cx, BR_BMTITLE - 1
     call br_copyz
@@ -1053,7 +1073,7 @@ br_bmaddmem:
     mul di
     add ax, BR_BMURLBASE
     mov di, ax
-    mov si, br_ubuf
+    mov si, br_bmrequrl
 .url:
     mov cx, BR_BMURL - 1
     call br_copyz
@@ -1065,7 +1085,8 @@ br_bmaddmem:
     ret
 
 br_bmremove:
-    call br_bmfind
+    mov si, br_bmrequrl
+    call br_bmfindurl
     jc .out
     mov bx, ax
     inc bx

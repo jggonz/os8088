@@ -122,10 +122,10 @@ def main():
         rb = lambda n: m.readseg(pseg, sy[n], 1)[0]        # noqa: E731
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))      # noqa: E731
         about = [
-            ("br_ab1", "os8088 Browser 1.6b"),
+            ("br_ab1", "os8088 Browser 1.6c"),
             ("br_ab2", "Bringing the web to XT PCs"),
             ("br_ab3", "Version 1.0 contributed by Elendilon"),
-            ("br_ab4", "Version 1.2-1.6b contributed by Pentagram666"),
+            ("br_ab4", "Version 1.2-1.6c contributed by Pentagram666"),
         ]
         for symbol, expected in about:
             actual = bytes(m.readseg(pseg, sy[symbol], len(expected) + 1))
@@ -188,6 +188,37 @@ def main():
         docseg = rw("br_docseg")
         nl = rw("br_nlines")
         tab = bytes(m.readseg(rw("br_lseg"), 0, nl * 10))
+        # Link state at layout entry must be the no-link sentinel. Otherwise
+        # the plain heading/intro before DEMO.HTM's first <a href> inherits
+        # LNF_LNK and is visibly underlined as if it were clickable.
+        doc = bytes(m.readseg(docseg, 0, rw("br_doclen")))
+        first_link = doc.find(bytes([14]))  # D_LNK1
+        heading = doc.find(b"os8088")
+        if heading >= 0:
+            heading_line = next((i for i in range(nl)
+                                 if u32(tab[i * 10:i * 10 + 4]) <= heading
+                                 < u32(tab[i * 10 + 4:i * 10 + 8])), None)
+            if heading_line is None:
+                fails.append("H1 title text is absent from the line table")
+            elif not (tab[heading_line * 10 + 9] & 32):
+                fails.append("H1 title is not marked for bold rendering")
+            elif tab[heading_line * 10 + 9] & 4:
+                fails.append("H1 title is incorrectly marked as a link")
+        if first_link < 0:
+            fails.append("DEMO.HTM produced no inline link marker")
+        else:
+            plain_lines = [i for i in range(nl)
+                           if u32(tab[i * 10:i * 10 + 4]) < first_link]
+            marked = [i for i in plain_lines if tab[i * 10 + 9] & 4]
+            if marked:
+                fails.append("plain lines before the first href are marked as "
+                             "links: %r" % marked)
+            say("plain lines before first href: %d, link-marked: %d"
+                % (len(plain_lines), len(marked)))
+        if a.shot:
+            wpx, hpx, data = m.fbuf()
+            os88marty.write_png_rgb(a.shot, wpx, hpx, data)
+            say("wrote initial page screenshot %s" % a.shot)
 
         def line_of(off):
             for i in range(nl):
@@ -887,6 +918,26 @@ def main():
                             "bookmark restore wake", limit=60)
             if bm_count() != 1 or rb("br_bmsaved") != 1:
                 fails.append("clicking the empty bookmark star did not restore it")
+
+            # Saving a bookmark must not disturb the current page's URL base.
+            # Exercise a relative link immediately after the asynchronous disk
+            # service has added it; the bookmark.invalid fetch is expected to
+            # fail later, but resolution itself must retain its host.
+            host = bytes(m.readseg(pseg, sy["br_host"], 64)).split(b"\0", 1)[0]
+            if host != b"bookmark.invalid":
+                fails.append("bookmark save changed the active URL host to %r"
+                             % host)
+            err = click_offset(at + 4)
+            if err:
+                fails.append("relative link after bookmark save: " + err)
+            else:
+                resolved = bytes(m.readseg(pseg, sy["br_ubuf"], 160)).split(
+                    b"\0", 1)[0]
+                if resolved != b"http://bookmark.invalid/torture.htm":
+                    fails.append("relative link after bookmark save resolved to %r"
+                                 % resolved)
+                if rw("br_nmsg") == sy["br_s_nohost"]:
+                    fails.append("bookmark save left relative links without a host")
         except os88mouse.MartyError as e:
             say("bookmark failure state: count=%d saved=%d req=%d op=%d status=%04X"
                 % (bm_count(), rb("br_bmsaved"), rb("br_bmreq"),
@@ -919,11 +970,6 @@ def main():
                     fails.append("selecting the saved URL left its star empty")
             except os88mouse.MartyError as e:
                 fails.append("Bookmarks menu pointer test: %s" % e)
-        if a.shot:
-            wpx, hpx, data = m.fbuf()
-            os88marty.write_png_rgb(a.shot, wpx, hpx, data)
-            say("wrote %s" % a.shot)
-
     for f in fails:
         say("FAIL: " + f)
     say("brclick: " + ("ok" if not fails else "FAILED"))

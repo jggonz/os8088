@@ -149,6 +149,18 @@ def main():
         for i, (t, _) in enumerate(lines):
             say("  %2d |%s|" % (i, t.rstrip()))
 
+        # A bounded classic-HTML recovery case: cells without any TR wrapper
+        # form one implicit row. This exercises the runtime compositor rather
+        # than the host-side HTML reference renderer.
+        implicit = [(i, t) for i, (t, _) in enumerate(lines)
+                    if "implicit-left" in t or "implicit-right" in t]
+        if (len(implicit) != 1 or "implicit-left" not in implicit[0][1]
+                or "implicit-right" not in implicit[0][1]):
+            fails.append("cells without TR were not composed as one implicit "
+                         "row: %r" % implicit)
+        else:
+            say("omitted-TR cells share display line %d" % implicit[0][0])
+
         # --- 1: the hrefs, in order -------------------------------------
         n = rw("br_lnkn")
         arena = bytes(m.readseg(rw("br_lnkseg"), 0, max(rw("br_lnkw"), 1)))

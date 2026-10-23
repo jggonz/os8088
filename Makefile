@@ -5623,6 +5623,10 @@ apps/browser/assets/brdownload_icons.inc: tools/os88bmp1.py \
 $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/browser/br15.inc apps/browser/brdownload.inc \
                       apps/browser/brdownload_bss.inc \
+                      apps/browser/brdownload_const.inc \
+                      apps/browser/brdownload_paint.inc \
+                      apps/browser/brcopyselection.inc \
+                      apps/os88parts.inc apps/os88partsbody.inc \
                       apps/browser/assets/brdownload_icons.inc \
                       apps/os88data.inc \
                       apps/os88api.inc \
@@ -6468,8 +6472,23 @@ $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/ftpd.bin -o $@
 
-$(BUILD)/browser.o88: $(BUILD)/browser.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/browser.bin -o $@
+$(BUILD)/browser.part.bin: $(BUILD)/browser.bin \
+                           apps/browser/brdownload_part.asm \
+                           apps/browser/brdownload_paint.inc \
+                           apps/browser/brdownload_const.inc \
+                           apps/browser/brcopyselection.inc \
+                           tools/brdlsyms.py apps/os88api.inc | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
+	        -o $(BUILD)/brdownload_part_symbols.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ \
+	        -o $@ apps/browser/brdownload_part.asm
+	@echo "browser Download Manager part: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
+                      tools/os88pkg.py $(PKGZSTAMP)
+	python3 tools/os88pkg.py $(BUILD)/browser.bin -o $@ \
+	        --part $(BUILD)/browser.part.bin --part-compress lz4
 
 # ...and the REFERENCE build, which letters every history row where the
 # shipped one scrolls the band (SPEC.md 65.4.1). It is the A/B for that
@@ -11336,6 +11355,11 @@ BRFILES := $(BUILD)/browser.o88 $(BUILD)/ANOTE.O88 apps/browser/browser.htm $(BU
 
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
 
+# 1.6c user field disk: current Browser package plus interactive HTML fixtures
+# and a 768 KiB visible-content page for conventional-RAM/EMS spill testing.
+.PHONY: browsertestems
+browsertestems: $(BUILD)/br16c-check.img $(BUILD)/br16c-check360.img
+
 .PHONY: brmemorypages
 brmemorypages:
 	python3 tools/brmemory.py --out $(BUILD)/brmemory
@@ -11374,6 +11398,31 @@ $(BUILD)/PUBZONE.HTM: tests/htm/pubzone.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/FRAMESET.HTM: tests/htm/frameset.htm | $(BUILD)
 	cp $< $@
+$(BUILD)/BR16C.HTM: tests/htm/br16ccheck.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/brmemory/emsgrowth.htm: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+$(BUILD)/EMSGROW.HTM: $(BUILD)/brmemory/emsgrowth.htm | $(BUILD)
+	cp $< $@
+
+$(BUILD)/br16c-check.img: $(BUILD)/browser.o88 apps/browser/browser.htm \
+                          $(BUILD)/DEMO.HTM $(BUILD)/FORMAT.HTM \
+                          $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+                          $(BUILD)/BR16C.HTM $(BUILD)/EMSGROW.HTM \
+                          tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA \
+	        $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+	        $(BUILD)/FORMAT.HTM $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+        $(BUILD)/BR16C.HTM $(BUILD)/EMSGROW.HTM
+
+$(BUILD)/br16c-check360.img: $(BUILD)/browser.o88 apps/browser/browser.htm \
+                             $(BUILD)/DEMO.HTM $(BUILD)/FORMAT.HTM \
+                             $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+                             $(BUILD)/BR16C.HTM tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA \
+	        $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+	        $(BUILD)/FORMAT.HTM $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+	        $(BUILD)/BR16C.HTM
 
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA $(BRFILES)

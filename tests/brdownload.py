@@ -3,7 +3,8 @@
 
     make && make ethertest && make browsertest && python3 tests/brdownload.py
 
-The small index page links to a 32 KiB binary body. By default the host omits
+The small index page links to a binary body (32 KiB normally, 70 KiB with
+--long-percent to cross the 64 KiB counter rollover). By default the host omits
 Content-Length; pass --content-length to exercise a known total. The body is
 intentionally larger than the Browser's retained HTML page limit: the test
 follows the link, accepts the native Save dialog, checks the reported total,
@@ -34,15 +35,21 @@ S = os88sym.linear
 PORT = 8090
 URL = "http://10.0.2.2:%d/index.htm" % PORT
 WITH_LENGTH = "--content-length" in sys.argv
+LONG_PERCENT = "--long-percent" in sys.argv
 AUTO = "--automatic" in sys.argv
 CANCEL_MODE = next((arg for arg in ("--cancel-active", "--close-active",
                                     "--close-complete")
                     if arg in sys.argv), None)
 SHOTDIR = next((arg.split("=", 1)[1] for arg in sys.argv
                 if arg.startswith("--shots=")), None)
-PAYLOAD = bytes(((i * 37 + (i >> 5) + 11) & 255) for i in range(32771))
+PAYLOAD = bytes(((i * 37 + (i >> 5) + 11) & 255)
+                for i in range(70003 if LONG_PERCENT else 8482))
 PAGE = (b"<html><head><title>Download test</title></head><body>"
-        b"<a href=\"http://10.0.2.2:8090/payload.bin\">payload.bin</a>"
+        b"<p><a href=\"/ems-pressure.htm\">EMS pressure</a></p>"
+        b"<p><a href=\"/emsgrowth.htm\">EMS growth</a></p>"
+        b"<p><a href=\"/mem96k.htm\">Memory 96K</a></p>"
+        b"<p><a href=\"/mem196k.htm\">Memory 196K</a></p>"
+        b"<p><a href=\"/download-test.zip\">download-test.zip</a></p>"
         b"</body></html>")
 
 
@@ -73,16 +80,16 @@ class Server(threading.Thread):
                 path = req.split(b" ", 2)[1] if b" " in req else b"/"
                 if path == b"/index.htm":
                     body, kind = PAGE, b"text/html"
-                elif path == b"/payload.bin":
+                elif path == b"/download-test.zip":
                     body, kind = PAYLOAD, b"application/octet-stream"
                 else:
                     body, kind = b"missing", b"text/plain"
                 response = b"HTTP/1.0 200 OK\r\nContent-Type: " + kind
-                if path == b"/payload.bin" and WITH_LENGTH:
+                if path == b"/download-test.zip" and WITH_LENGTH:
                     response += b"\r\nContent-Length: %d" % len(body)
                 response += b"\r\n\r\n"
                 conn.sendall(response)
-                if SHOTDIR and path == b"/payload.bin":
+                if SHOTDIR and path == b"/download-test.zip":
                     cancel_test = CANCEL_MODE in ("--cancel-active", "--close-active")
                     chunk = 512 if cancel_test else 2048
                     delay = 2.0 if cancel_test else 0.15
@@ -172,6 +179,10 @@ def main():
             what="the download fixture page", poll=0.3)
         if m.readseg(pseg, nstate, 1)[0] != 6:
             failures.append("the fixture page did not render successfully")
+        page_location = bytes(m.readseg(
+            pseg, sy["br_ubuf"], 256)).split(b"\0", 1)[0]
+        page_history_count = int.from_bytes(m.readseg(
+            pseg, sy["br_histn"], 2), "little")
 
         # Locate the anchor from the Browser's formatted marker and line table.
         doclen = word(m, pseg, sy["br_doclen"])
@@ -185,16 +196,27 @@ def main():
                 index = ((marker[1] & 15) | ((marker[2] & 15) << 4)
                          | ((marker[3] & 15) << 8))
                 links.append((cursor, index))
-        if len(links) != 1:
-            failures.append("the fixture should render exactly one link")
+        if len(links) != 5:
+            failures.append("the fixture should render five links; found %d"
+                            % len(links))
         else:
             lines_n = word(m, pseg, sy["br_nlines"])
             table = m.readseg(word(m, pseg, sy["br_lseg"]), 0, lines_n * 10)
             u32 = lambda b: b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24
-            link, encoded_index = links[0]
-            if encoded_index != 0:
-                failures.append("fixture link marker has index %d, expected 0"
+            # The download is deliberately the fifth link, after four normal
+            # links. This reproduces the server index where a bad hit offset
+            # can accidentally navigate to EMS-PRESSURE.HTM instead.
+            link, encoded_index = links[-1]
+            if encoded_index != 4:
+                failures.append("download link marker has index %d, expected 4"
                                 % encoded_index)
+            offsets = [word(m, pseg, sy["br_lnkoff"] + i * 2)
+                       for i in range(5)]
+            hrefs = [bytes(m.readseg(word(m, pseg, sy["br_lnkseg"]), off, 64))
+                     .split(b"\0", 1)[0] for off in offsets]
+            if hrefs[-1] != b"/download-test.zip":
+                failures.append("fifth href record is %r, expected /download-test.zip"
+                                % hrefs[-1])
             line = next((i for i in range(lines_n)
                          if u32(table[i * 10:i * 10 + 4]) <= link + 4
                          < u32(table[i * 10 + 4:i * 10 + 8])), None)
@@ -215,11 +237,30 @@ def main():
                     subprocess.run(["python3", "tools/mouse.py", ethernet.SOCK,
                                     "click", str(px), str(py)], check=True,
                                    stdout=subprocess.DEVNULL)
-                    ethernet.os88qemu.acted(
+                    got_dialog = ethernet.os88qemu.acted(
                         m, lambda: m.readseg(
                             pseg, sy["br_dl_state"], 1)[0] == 1,
-                        secs=15, what="automatic Save dialog for payload.bin",
+                        secs=15, what="automatic Save dialog for DOWNLOAD.ZIP",
                         poll=0.2)
+                    if not got_dialog:
+                        print("automatic click diagnostic: target index=%d line=%d xy=%d,%d nstate=%d requests=%r"
+                              % (encoded_index, line, px, py,
+                                 m.readseg(pseg, sy["br_nstate"], 1)[0],
+                                 server.requests))
+                    else:
+                        location = bytes(m.readseg(
+                            pseg, sy["br_ubuf"], 256)).split(b"\0", 1)[0]
+                        if location != page_location:
+                            failures.append(
+                                "download action changed the page URL to %r; expected %r"
+                                % (location.decode("ascii", "replace"),
+                                   page_location.decode("ascii", "replace")))
+                        history_count = int.from_bytes(m.readseg(
+                            pseg, sy["br_histn"], 2), "little")
+                        if history_count != page_history_count:
+                            failures.append(
+                                "download action changed history size from %d to %d"
+                                % (page_history_count, history_count))
                 else:
                     subprocess.run(["python3", "tools/mouse.py", ethernet.SOCK,
                                     "rclick", str(px), str(py)], check=True,
@@ -304,21 +345,22 @@ def main():
                         volume = os88flush.Volume(open(
                             os88build.at("build/brdownload360.img"), "rb").read())
                         try:
-                            volume.read("PAYLOAD.BIN")
+                            volume.read("DOWNLOAD.BIN")
                         except os88flush.FlushError:
                             print("cancelled partial file removed from disk")
                         else:
                             entries = ["%s (%d bytes)" % (e.name, e.size)
                                        for e in volume.listdir("")
                                        if not e.is_dir]
-                            failures.append("cancel left PAYLOAD.BIN on disk; root has %s"
+                            failures.append("cancel left DOWNLOAD.BIN on disk; root has %s"
                                             % ", ".join(entries))
                         m.quit()
                         if failures:
                             raise RuntimeError("; ".join(failures))
                         print("brdownload %s: ok" % CANCEL_MODE[2:])
                         return
-                    active_ui = {"rate": False, "eta": False, "frames": set()}
+                    active_ui = {"rate": False, "eta": False, "frames": set(),
+                                 "percent": []}
 
                     def finished():
                         state = m.readseg(pseg, sy["br_dl_state"], 1)[0]
@@ -328,6 +370,11 @@ def main():
                         message = word(m, pseg, sy["br_nmsg"])
                         received = int.from_bytes(m.readseg(
                             pseg, sy["br_dl_recvbytes"], 4), "little")
+                        if (WITH_LENGTH and state in range(2, 8)
+                                and m.readseg(
+                                    pseg, sy["br_dl_have_len"], 1)[0] == 1):
+                            active_ui["percent"].append(word(
+                                m, pseg, sy["br_dl_pct"]))
                         speed = int.from_bytes(m.readseg(
                             pseg, sy["br_dl_speed"], 2), "little")
                         active = (state in range(2, 8) and received > 0
@@ -341,6 +388,8 @@ def main():
                                     active_ui["eta"] = True
                         if (SHOTDIR and active
                                 and (not WITH_LENGTH or active_ui["eta"])
+                                and (not LONG_PERCENT or word(
+                                    m, pseg, sy["br_dl_pct"]) >= 70)
                                 and (not WITH_LENGTH or m.readseg(
                                     pseg, sy["br_dl_have_len"], 1)[0] == 1)
                                 and not os.path.exists(os.path.join(
@@ -357,6 +406,20 @@ def main():
                         m, finished, secs=180,
                         what="the streamed download to finish", poll=0.1)
                     state = m.readseg(pseg, sy["br_dl_state"], 1)[0]
+                    if AUTO and state == 11:
+                        location = bytes(m.readseg(
+                            pseg, sy["br_ubuf"], 256)).split(b"\0", 1)[0]
+                        if location != page_location:
+                            failures.append(
+                                "completed download left the page URL at %r; expected %r"
+                                % (location.decode("ascii", "replace"),
+                                   page_location.decode("ascii", "replace")))
+                        history_count = int.from_bytes(m.readseg(
+                            pseg, sy["br_histn"], 2), "little")
+                        if history_count != page_history_count:
+                            failures.append(
+                                "completed download changed history size from %d to %d"
+                                % (page_history_count, history_count))
                     if CANCEL_MODE == "--close-complete" and state == 11:
                         mx, my, mw, _ = manager_rect(m, pseg, sy, S)
                         mo.click(mx + 13, my + 9)  # os8088 close box is at the left
@@ -366,7 +429,7 @@ def main():
                         m.quit()
                         volume = os88flush.Volume(open(
                             os88build.at("build/brdownload360.img"), "rb").read())
-                        if volume.read("PAYLOAD.BIN") != PAYLOAD:
+                        if volume.read("DOWNLOAD.BIN") != PAYLOAD:
                             failures.append("closing completed manager changed the downloaded file")
                         if failures:
                             raise RuntimeError("; ".join(failures))
@@ -384,6 +447,17 @@ def main():
                     if state != 11:
                         failures.append("download ended in state %d, not complete"
                                         % state)
+                        msgptr = word(m, pseg, sy["br_dl_msg"])
+                        seg = word(m, pseg, sy["br_dl_partpaint"] + 2)
+                        print("download diagnostic: fail=%d win=%04X msg=%04X text=%r part=%r vec=%r name=%r"
+                              % (m.readseg(pseg, sy["br_dl_fail_reason"], 1)[0],
+                                 word(m, pseg, sy["br_dl_win"]),
+                                 msgptr,
+                                 bytes(m.readseg(pseg, msgptr, 48)).split(b"\0", 1)[0]
+                                 if msgptr else b"",
+                                 m.readseg(pseg, sy["op_table"], 18),
+                                 (seg, m.readseg(seg, 0, 6) if seg else b""),
+                                 bytes(m.readseg(pseg, sy["op_name"], 13))))
                     got_length = m.readseg(pseg, sy["br_dl_have_len"], 1)[0]
                     got_total = int.from_bytes(m.readseg(
                         pseg, sy["br_dl_total"], 4), "little")
@@ -432,6 +506,56 @@ def main():
                                         % winw)
                     if WITH_LENGTH and word(m, pseg, sy["br_dl_pct"]) != 100:
                         failures.append("completed progress bar is not at 100%%")
+                    if WITH_LENGTH:
+                        samples = active_ui["percent"]
+                        if any(p > 100 for p in samples):
+                            failures.append("live percentage exceeded 100%%: %r"
+                                            % samples)
+                        if any(a > b for a, b in zip(samples, samples[1:])):
+                            failures.append("live percentage moved backwards: %r"
+                                            % samples)
+                        print("live percent samples: %s"
+                              % (samples if samples else "none"))
+                    if AUTO and state == 11 and not failures:
+                        # A completed file must not become the page's Reload
+                        # target. Close the manager, reload the visible page,
+                        # and require a fresh index request rather than another
+                        # Save dialog for DOWNLOAD.ZIP.
+                        mx, my, _, _ = manager_rect(m, pseg, sy, S)
+                        mo.click(mx + 13, my + 9)
+                        ethernet.os88qemu.acted(
+                            m, lambda: word(m, pseg, sy["br_dl_win"]) == 0,
+                            secs=10, what="completed manager to close",
+                            poll=0.1)
+                        before = sum(1 for req in server.requests
+                                     if req.startswith(b"GET /index.htm "))
+                        reload_rect = [word(m, pseg, sy["br_r3"] + i * 2)
+                                       for i in range(4)]
+                        mo.click((reload_rect[0] + reload_rect[2]) // 2,
+                                 (reload_rect[1] + reload_rect[3]) // 2)
+                        reloaded = ethernet.os88qemu.acted(
+                            m,
+                            lambda: (sum(1 for req in server.requests
+                                         if req.startswith(b"GET /index.htm "))
+                                     > before
+                                     and m.readseg(pseg, nstate, 1)[0] == 6),
+                            secs=30, what="Reload to refetch the visible page",
+                            poll=0.2)
+                        if not reloaded:
+                            failures.append(
+                                "Reload after a completed download did not refetch the visible page")
+                        if (word(m, pseg, sy["br_dl_win"]) != 0
+                                or m.readseg(pseg, sy["br_dl_state"], 1)[0] != 11):
+                            failures.append(
+                                "Reload after a completed download reopened the Download Manager")
+                        location = bytes(m.readseg(
+                            pseg, sy["br_ubuf"], 256)).split(b"\0", 1)[0]
+                        if location != page_location:
+                            failures.append(
+                                "Reload after download changed page URL to %r"
+                                % location.decode("ascii", "replace"))
+                        else:
+                            print("page URL and history preserved; Reload refetched index")
                     print("download rate: %d KiB/s" % got_speed)
     finally:
         m.quit()
@@ -443,21 +567,22 @@ def main():
     try:
         volume = os88flush.Volume(open(
             os88build.at("build/brdownload360.img"), "rb").read())
-        got = volume.read("PAYLOAD.BIN")
+        got = volume.read("DOWNLOAD.BIN")
         if got != PAYLOAD:
             first = next((i for i, (a, b) in enumerate(zip(got, PAYLOAD))
                           if a != b), min(len(got), len(PAYLOAD)))
-            failures.append("PAYLOAD.BIN differs at byte %d: got %d bytes, expected %d"
+            failures.append("DOWNLOAD.BIN differs at byte %d: got %d bytes, expected %d"
                             % (first, len(got), len(PAYLOAD)))
         else:
             print("exact %s file verified: %d bytes" % (
                 "known-length" if WITH_LENGTH else "unknown-length", len(got)))
     except Exception as exc:
-        failures.append("could not read back PAYLOAD.BIN: %s" % exc)
+        failures.append("could not read back DOWNLOAD.BIN: %s" % exc)
     if b"GET /index.htm " not in b"\n".join(server.requests):
         failures.append("the NE2000 server did not receive the index request")
-    if b"GET /payload.bin " not in b"\n".join(server.requests):
-        failures.append("the NE2000 server did not receive the payload request")
+    if b"GET /download-test.zip " not in b"\n".join(server.requests):
+        failures.append("the NE2000 server did not receive the payload request; requests=%r"
+                        % server.requests)
     for failure in failures:
         print("FAIL: " + failure)
     print("brdownload: %s" % ("FAILED" if failures else "ok"))

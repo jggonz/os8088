@@ -569,7 +569,7 @@ def main():
             if ln.startswith("User-Agent:"):
                 line = ln
     print("the server saw %r" % line)
-    if line != "User-Agent: os8088 Browser 1.6b":
+    if line != "User-Agent: os8088 Browser 1.6c":
         fails.append("the User-Agent is %r" % line)
 
     # --- 5: BACK DURING A FETCH DROPS IT (SPEC.md 71.8) --------------------
