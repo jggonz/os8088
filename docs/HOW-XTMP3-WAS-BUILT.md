@@ -116,6 +116,154 @@ the face is a demo that plays nothing; S8 replaces it behind the same
 names. Looked at on QEMU only - Hercules through its software renderer -
 and never on 86Box or a real card.
 
+## 2026-10-22 — the front end and the STANDARD decoder on the target
+
+*The STANDARD track (S5 and the bit-exact half of S6), on `xtmp3/std`. The
+contract notes and every number are [docs/xtmp3/STD.md](xtmp3/STD.md).*
+
+**The contract went first.** Within the first hour `apps/xtmp3/x3gran.inc`
+was pushed - the granule record, a backend's six far verbs and their
+register contracts, the front end's API - because two other tracks were
+writing against it at the same time: the XT backend reads the record and
+the engine calls the verbs. One correction followed it, in a comment
+(x3pars.inc reaches the FRONT part through ES, not DS); the ABI did not
+move.
+
+**Observed, in this order.** The front end matched x3sim on its first full
+run: every granule record of 32 fixtures - each `ix`, each requantisation
+exponent, each stereo plan byte - and only the five titles were wrong (the
+title copy wrote its NUL at the start of the field). The bench that showed
+it is a bare-metal harness on QEMU that %includes the shipping parser and
+loads the package's own parts, far-called on a 384-byte stack; QEMU is
+exact about the work, which is all bit-exactness needs.
+
+Then the STANDARD part, 1,700 lines of assembly, came out **bit-exact on
+all 141 golden cases on its first run**. That was not luck so much as a
+decision: the two stages whose order of operations is the hardest to
+transcribe - the recursive DCT-II and the 16-tap window - were never
+transcribed. `tools/x3stdgen.py` runs x3sim's own `dct2_i` on symbolic
+values and writes down the operations it is asked for, in order.
+
+![The queue reading real titles and durations (QEMU, VGA)](xtmp3/s5-queue.png)
+
+S5's outcome was looked at on QEMU: the queue shows NEON DRIVE from its
+ID3v2 tag, AFTER HOURS from an ID3v1 tag, and a tagless VBR file under its
+name with its exact length from the Xing count; an estimated length carries
+its `~`.
+
+**The 8088 said what the model could not.** On MartyPC's 5150 the first
+measurement was 6.81 M cycles a granule for an 11 kHz mono stream - twice
+NUMERICS.md's model, and 27 times too slow for real time. The breakpoint
+timer showed where: the window was exactly where the model put it, but a
+32 x 16 multiply with its 48-bit accumulation costs ~460 cycles, not 330,
+and the band scale, Huffman and requantisation ran 4 to 10 times their
+model figures. Six rounds of exact optimisation, each re-measured, took
+it to 5.57 M (and 44.1 kHz stereo from 12.86 M to 9.31 M); the window and
+the DCT are now within about a fifth of the multiply floor. The 8088's PCM
+was checked against x3sim's by CRC-32 on every case timed.
+
+**What the clean fixtures could not show.** No golden fixture saturates, so
+every clamp in the decoder was correct only by reading - including the
+ones that had just been moved out of line. Six fixtures with their global
+gain raised by 24 were added to the gate; they saturate in five stages, and
+on their first run they found a real defect: the requantiser tested SF
+after `RCL`, which sets no SF. A normal stream never reaches that line.
+
+**Intentions, not yet observations.** No 286, 386 or 486 has run it (S8's
+ladder measures those on 86Box), the engine behind the face is still the
+demo, and seeking is written but unexercised.
+
+## 2026-10-22 — the XT backend on the target
+
+*The XT track (S7), on `xtmp3/xt`. The contract notes and every table are
+[docs/xtmp3/XT.md](xtmp3/XT.md). The emulators were Unicorn on the host,
+QEMU for the exactness row, and MartyPC's IBM 5150 for every cycle. Nothing
+here ran on 86Box or on iron.*
+
+**Observed, in this order.**
+
+- **The model came first.** `tools/x3simxt.py` runs x3sim's front end into
+  the study's integer chain. It settles what the study had left open:
+  - requantisation through RQL;
+  - the per-subband IMDCT switch;
+  - a mono downmix that mixes spectra when both channels' blocks agree and
+    windowed outputs when they do not;
+  - V codes taken from the DCT's outputs, the sign going into the add or
+    sub.
+
+  Its first quality run reproduced the study's figures within a few tenths
+  of a dB on every XT fixture, before a line of the part existed.
+- **Then the part, and a generator beside it.** `tools/x3xtgen.py` writes
+  every address the 8088 does not need to compute: the layout of the
+  claim, Lee's DCT as straight-line code, each profile's window pass as
+  unrolled rows.
+- **OPEN's expansion matched on the first run.** In Unicorn, every table
+  OPEN built was byte-identical to the generator's on all four profiles.
+- **The first granules were bit-exact too**, on the two XT fixtures for
+  every profile. Because that seemed too easy, a deliberately damaged
+  constant went in; the first damage was too small to reach 8-bit output,
+  and a larger one was caught at granule 1.
+- **The STANDARD track then pinned the record and the ABI**, and the part
+  was moved onto them. That meant the header vector table, CAPS and OPEN
+  records, separate claims per segment, and STATS' layout. One decision
+  came out of it: the OPEN record has no slot for an asset, so the part
+  carries XTGEN.BIN inside itself.
+- **The exactness row reuses the STANDARD track's bench mechanism.** It
+  runs QEMU booting the shipping front end into the XT part. All 51 cases
+  were exact.
+- **MartyPC agreed bit for bit as well.** Its 8088 core gave the same PCM
+  on every granule it timed.
+
+**What the measurements changed.**
+
+- **The model priced the kernels well and the code between them less
+  well.** The first build took 1,662,211 cycles a granule for XT Standard
+  on the song, where the model expected 1.37 M.
+- **The IMDCT crossover is 12.5 lines.** The study had modelled 9.6, and
+  the factored form costs 17,900 cycles, not 11,300.
+- **Nine changes followed, each re-checked bit-exact and re-measured
+  only where it moved.** The largest:
+  - the bottom of Lee's recursion kept in registers;
+  - the IMDCT window fused with the overlap;
+  - butterflies with two zero lines skipped.
+
+  Together they brought XT Standard to 1,505,847 (−9.4%). The window
+  pass, the largest stage, was already within 11% of the 1,277 cycles a
+  pair measured alone in the study.
+- **Memory was the surprise.** Summed honestly with the engine's
+  primary, the XT Standard path came to about 413 KB against SPEC.md
+  121.10's 400,000 bytes.
+- **The answer was the OS's own shrink-to-fit.** Everything only OPEN
+  reads now sits behind a resident 29 KB, checked by a Fletcher sum
+  before it runs. OPEN copies the chosen profile's kernels into a slot,
+  and the claim can then shrink, with no change to the ABI.
+- **The harness proves the shrink is safe.** It overwrites the tail with
+  `int3` after every OPEN and decodes anyway.
+
+**Intentions, not yet observations.**
+
+- **Fitting 400,000 bytes for XT Standard also needs the engine** to
+  claim its ring after OPEN and the shrink. The numbers went to the engine
+  track; the decision is theirs and the integrator's.
+- **No figure here includes the front end's Huffman decode or the disk.**
+- **The 286, 386 and 486 numbers are 86Box's to take.**
+- **Nobody has listened to the target's own output yet.** Its PCM is the
+  model's to the byte, so the study's listening WAVs stand in for it.
+
+**Later the same day: the merge, and OPEN.**
+
+- **The integration branch now has one parts table.** FRONT and ART are
+  eager and STD is lazy; the XT part became row 3.
+- **OPEN dropped from 4.25 s to 2.96 s on XT Standard**, still on
+  MartyPC, with every expanded byte unchanged:
+  - the Fletcher loop is unrolled;
+  - the encoder walks hold the midpoint they are waiting for in a
+    register;
+  - the expansion loops keep their constants in registers.
+- **The Fletcher stays a read-back**, not a sum folded into the stores. A
+  read-back is what catches a bad RAM cell on a 1981 machine, and a
+  store-order sum cannot.
+
 ## 2026-10-22 — the engine, over a backend that only pretends
 
 *The engine track (S9 Decode first, with the plumbing of S6's live path and

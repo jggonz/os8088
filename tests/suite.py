@@ -16756,6 +16756,30 @@ SOAK = [
         "(SPEC.md 121.4): the whole of the port's bit-exact target, "
         "recomputed",
         needs=("numpy",)),
+    Row("x3xtexact", "soak", py("tests/x3xtbench/x3xtbench.py", "--nobuild"), 25.0,
+        "XTMP3's XT backend is BIT-EXACT (SPEC.md 121.4, docs/xtmp3/XT.md): "
+        "tests/x3bench's mechanism with the XT part in the STANDARD part's "
+        "place - a raw disk booted in QEMU runs the SHIPPING front end "
+        "(x3pars.inc and build/x3front.bin) into build/x3xt.bin through its "
+        "header's vectors, a 384-byte worker stack, and every one of "
+        "tests/xtmp3/X3XT.txt's 51 cases (14 fixtures, the four profiles) "
+        "must hash, measure and clip as tools/x3simxt.py does",
+        needs=("qemu", "nasm", "numpy"),
+        wants=("build/x3front.bin", "build/x3xt.bin")),
+    Row("x3xtunit", "soak", py("tests/x3xtunit.py"), 60.0,
+        "the XT part on the host in Unicorn, against x3gran.inc and "
+        "tools/x3simxt.py: CAPS and OPEN on every profile with each expanded "
+        "table byte-identical to tools/x3xtgen.py's, every X3E_ refusal, a "
+        "damaged XTGEN.BIN and an unbiased recurrence caught by the Fletcher "
+        "check, the S16 format and the gain; four fixtures and synthetic "
+        "split-path records bit-exact granule by granule, every call keeping "
+        "its registers, DF and IF within 64 bytes of stack",
+        needs=("unicorn", "nasm", "numpy")),
+    Row("x3xtgolden", "soak", py("tools/x3simxt.py", "--check", "--all"), 50.0,
+        "the XT model (tools/x3simxt.py) against all 51 of tests/xtmp3/"
+        "X3XT.txt's golden lines and tools/x3xtgen.py's numpy cross-check: "
+        "a change that moves them is a change to the XT part's contract",
+        needs=("numpy",)),
     Row("x3compare", "soak", py("tools/x3sim.py", "--compare"), 75.0,
         "XTMP3's STANDARD integer model against `lame --decode` (mpglib) on "
         "every fixture at the source rate - RMS <= 4 LSB, peak <= 32 LSB, "
@@ -16766,6 +16790,20 @@ SOAK = [
         "garbage, tag and VBRI variants decode to the clean stream's PCM "
         "exactly. SKIPS without LAME",
         needs=("numpy", "lame")),
+    Row("x3stdexact", "soak", py("tests/x3bench/x3bench.py", "--nobuild"), 90.0,
+        "XTMP3's decoder ON A REAL x86 (SPEC.md 121.3, 121.4): "
+        "tests/x3bench/x3bench.asm boots bare on QEMU with the SHIPPING "
+        "x3pars.inc %included and the package's two parts, build/x3front.bin "
+        "and build/x3stdp.bin, far-called through their verbs on a 384-byte "
+        "stack, and feeds them through an X3R ring a small chunk at a time. "
+        "The front end's open and every granule record of all 37 fixtures "
+        "against x3sim's own granule_spectra, quarter_exponents and "
+        "stereo_plan; then all 141 golden cases of tests/xtmp3/X3SIM.txt - "
+        "PCM SHA-256, clip and saturation counts - and 16 HOSTILE cases (six "
+        "fixtures with every global_gain raised by 24, decoded by x3sim "
+        "here) that saturate in every stage that can, so each out-of-line "
+        "clamp is held to the model too. Needs `make` to have built the parts",
+        needs=("qemu", "nasm", "numpy")),
 ]
 
 

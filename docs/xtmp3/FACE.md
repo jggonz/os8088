@@ -18,7 +18,7 @@ face scaled by the mockup's own 1.6.
 | `apps/xtmp3/x3draw.inc` | the drawing layer: CDRack's `crdraw.inc` renamed `x3d_`, plus font descriptors, a two-colour dither, a 4bpp canvas and a Bresenham plotter |
 | `apps/xtmp3/x3face.inc` | **the state record** (`X3S_*`), the four layouts as data, the deco interpreter, every element, the key painter, `x3f_update` |
 | `apps/xtmp3/x3demo.inc` | the demo engine: S8's `x3eng.inc` replaces it and keeps every `x3_e_*` name |
-| `tools/os88x3art.py` | every picture and font; `--selfcheck`, `--png DIR` previews; reads the masters with its own PNG decoder |
+| `tools/os88x3art.py` | every picture and font: `--bin` the ART PART (`build/x3art.bin`), `--out` the primary's include of its labels' offsets and the sizes (`build/x3art.inc`); `--selfcheck`, `--png DIR` previews; reads the masters with its own PNG decoder |
 | `apps/xtmp3/art/{knob,vu,logo}.png` | the codex-made masters (unchanged; `PROMPT.md` has their prompts) |
 
 ## Layouts
@@ -203,6 +203,23 @@ with it (`OSAPI_ARG_FILE`), queued and played.
 
 ## The art (`tools/os88x3art.py`)
 
+**The pictures are a PART of XTMP3.O88, not the primary's data** (SPEC.md
+20.12): row `X3PART_ART` (1) of xtmp3.asm's part table - the STANDARD
+track's, FRONT before it and the lazy STANDARD row after - `OP_ASSET`, eager
+(every adapter draws from it at the first paint), `OP_COMP` (LZ4 on the
+disk: 12,985 bytes from 4,789). The entry proc calls `op_load` first and
+banks the part's segment in `[x3_artseg]` once (`x3f_artseg`: the carve's
+claim is born pinned, so it never moves). The primary keeps `x3art.inc`,
+whose `x3art_` labels are OFFSETS in the part, every size the layout
+arithmetic uses, the font descriptors and the digit-set records. Every
+composer that reads a picture - `x3d_bor`, `x3d_bpic`, `x3d_picw`,
+`x3d_bstr`, `x3d_bdigs`, `x3d_line4`, and in x3face.inc the dial faces, the
+needle, the printed scale and the knob's planes - loads ES from
+`[x3_artseg]` once a call (a glyph, a picture, a field), never once a byte,
+so a field is still one band and one blit. Offset 0 of the part is a
+two-byte mark (`X3`), because a picture pointer of 0 means "none" to
+`x3d_bpic`; the generator refuses a label there.
+
 From the MASTERS (block centres to the logical grid, the sixteen colours):
 
 - **Knob** (`knob.png`, 64x64 at 8x): the 56x56 square from (4,4). The
@@ -231,14 +248,19 @@ inside its canvas and every scale mark on its face.
 
 | | bytes |
 |---|---|
-| `XTMP3.O88` image | 26,496 |
-| ...packed (lz4) | 16,671 |
-| bss | 9,747 |
-| art (`build/x3art.inc`, data) | 12,970 |
-| ...the largest parts | digit sets 4,584; dials 3,192; knobs 2,082; fonts 1,616 |
+| `XTMP3.O88` image (the primary), the face alone | 14,882 (26,496 with the art in it) |
+| ...with the STANDARD track's front end merged | 21,128 (33,995 with the art in it) |
+| bss, the face alone | 9,851 (the parts standard's 102 and `x3_artseg` added) |
+| the ART part | 12,985 unpacked, 4,789 on the disk (LZ4) |
+| ...the largest parts of it | digit sets 4,584; dials 3,192; knobs 2,082; fonts 1,616 |
+| the file | 18,101 (16,671 when the art was image) |
 
-bss: the state record 68, the queue 1,920, two colour dial faces 4,704, the
-band/canvas 2,720, keys and the rest. No kernel byte.
+`OP_COMP` saves 8,196 bytes on the disk; the unpacker it needs is the
+parts standard's, already there for the decoder's compressed rows (alone,
+the face paid 383 bytes for it). `%define X3_ARTFLAGS` in x3face.inc is the
+switch. bss: the state record 68, the queue 1,920, two
+colour dial faces 4,704, the band/canvas 2,720, keys and the rest. No kernel
+byte.
 
 ## Where it ships (temporary)
 

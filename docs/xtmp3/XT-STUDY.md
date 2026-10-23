@@ -27,6 +27,16 @@ what was tried, what was measured, what was decided and why.
 
 ## 1. The answer in brief
 
+> **Measured since (S7, 2026-10-22; [XT.md](XT.md) has the tables).** The
+> real `x3xt.asm` on MartyPC's 5150 takes 1,505,847 cycles a granule for XT
+> Standard on the song (0.166x, the part alone). The model had 1.37 M
+> without its front end: the kernels were priced right, but the code
+> between them was not. The IMDCT crossover is 12.5 lines, not 9.6, and the
+> factored form costs 17,900 cycles, not 11,300. OPEN takes 2.96 s, not
+> 2.11 (4.25 s before its loops were tightened). The working set needs the part's claim shrunk after OPEN to fit
+> 400,000 bytes (XT.md 6). The quality figures below stand within 0.5 dB on
+> the target's exact chain.
+
 - **Pin the window's product tables. They are the XT backend's one large
   win.** A tap through an 8-bit companded code and a product row costs 41-50
   clocks against 194 for `imul` with a 32-bit sum (T3). Pairing output phases
@@ -71,8 +81,11 @@ what was tried, what was measured, what was decided and why.
     under-states density (2.1).
 - **Real streams.** The numerics track's committed fixtures (tests/xtmp3/,
   made with LAME from synthesised signals) are parsed and Huffman-decoded by
-  `tools/x3sim.py`, imported read-only (`--x3sim DIR`). Its requantised lines,
-  block types and exponents feed this study's chains. Used: `AFTERHRS.MP3`
+  `tools/x3sim.py`, imported read-only (`--x3sim DIR`) through its
+  `granules()` hook (xtmp3/numerics a6b748b2): requantised lines (int32
+  Q28, subband order), block types, Huffman values, each codeword's real
+  length, `big_values` and the count1 region. Those feed this study's
+  chains and its density and Huffman statistics. Used: `AFTERHRS.MP3`
   (an 11,025 Hz, 24 kbps song: the XT target), `X8K16`, `X11K24`, `X12K32` and
   `M16` (T12).
 - **The real streams corrected the model.** LAME at 24 kbps and 11,025 Hz
@@ -81,7 +94,7 @@ what was tried, what was measured, what was decided and why.
   profiles comes from the REAL fixtures' own statistics (T12). The synthetic
   rates (T2) are kept as a second view.
 - **The float reference is cross-checked.** This study's float decode of each
-  fixture matches x3sim.py's own float decode at 82.6-87.1 dB (T12). Those are
+  fixture matches x3sim.py's own float decode at 82.3-86.3 dB (T12). Those are
   two independent ISO decoders; x3sim rounds to 16 bits, which is the floor
   there. The window table is the ISO's Table 3-B.3 as integers
   (`x3xttab.ISO_WINBASE`, D = value / 65536, exact), read out of the host's
@@ -297,6 +310,10 @@ pinned by measured ranges (T1's stress items, and the Lee node peaks below).
     subbands, about 9.7 a subband: right on the crossover.
   - So the target should **choose per subband by its line count**. That
     costs 238k on the song, against 314k for either form alone.
+  - **Measured (S7):** sparse costs 2,700 + 1,280 n cycles for n nonzero
+    lines, and the factored form (`imul`, minimp3's factorisation) costs
+    17,900. The crossover is 12.5 lines, so `FAST_MIN` = 13. The IMDCT
+    then takes 297k a granule on the song.
   - The table form's quality is 36.1 dB (Lloyd-Max codes) against 45.9 for
     `imul`. Its codes come straight from the requantiser for lines the
     antialias left alone, and from ENCR (16 KB, s = 2, rounding) for the
@@ -436,10 +453,13 @@ with one ring a pair.
 | matrixing | Lee DCT-32 | DCT-32 | DCT-32 | DCT-16 (div 2) / DCT-8 (div 4) |
 | pack (x3xttab) | `std`: 228,672 B, 4 segments | `fast`: 153,536 B, 4 segments | `turbo`: 120,256 B, 3 segments | `speech`: 151,360 B, 3 segments |
 | OPEN expansion, model | 2.11 s | 1.62 s | 1.37 s | 1.49 s |
+| OPEN, MEASURED (S7: expansion, table Fletcher, tail check) | 2.96 s | 2.32 s | 1.99 s | 2.10 s |
 | SNR vs float, real (synthetic) | 31.1-32.4 (32.3) | 28.4-29.8 (29.1) | 18.7-19.4 (19.2) | 31.8-32.8 (32.6) |
 | worst octave, real | -15.4 to -22.9 dB | -13.0 to -21.2 | -2.4 to -10.3 | -15.0 to -23.8 |
 | alias, the term choice alone | -93.9 dB | -39.4 | -19.4 | -93.9 |
 | speed, 11,025 Hz 24 kbps song (model) | 0.171x (5.84 s/s) | 0.207x (4.83) | 0.223x (4.49) | 0.311x (3.21) |
+| speed, the same song, MEASURED (S7, MartyPC; the part alone, no front end) | 0.166x (6.04) | 0.183x (5.47) | 0.195x (5.12) | 0.297x (3.37) |
+| speed, 8,000 Hz 16 kbps voice, MEASURED | 0.237x | 0.261x | 0.279x | 0.431x |
 | speed, 8,000 Hz 16 kbps voice (model) | 0.242x | 0.290x | 0.313x | 0.447x |
 | speed, 12,000 Hz 32 kbps (model) | 0.147x | 0.177x | 0.189x | 0.277x |
 | in Auto | yes, rank 4 (SPEC 121.5) | yes, rank 5 | **no** | **no**: explicit, below X3_FLOOR |
@@ -494,6 +514,17 @@ measurement on 86Box.
 
 ## 6. What phase 2 can still win (estimates, not modelled)
 
+> **S7 took these against MartyPC's measurements** (XT.md 7):
+> - Register scheduling: the bottom DCT-4 groups in registers and the
+>   odd-add runs through a register cache took about 41,000 cycles a
+>   granule, 11% of matrixing; this section's guess was about 25%.
+> - The IMDCT's switch was measured (above).
+> - Other savings: the IMDCT window fused with the overlap, zero
+>   butterflies and windows skipped.
+> - XT Standard is 9.4% faster than the first build.
+> - The single-lookup multiplies were not taken: they are not bit-exact to
+>   the split (their rounding differs), so they would be a model change.
+
 - **Matrixing register scheduling.** Hold a radix-4 group's four values in
   AX, CX, SI and BP across two Lee levels instead of storing every node. That
   cuts the memory traffic that is 9-10k of the 20.9k a slot; perhaps -25% of
@@ -526,6 +557,19 @@ throttled progress redraw (two a second, SPEC 121.7) is not included.
 
 **The XT Standard working set during a conversion** (SOUND.DRV is not needed
 until the finished file plays):
+
+> **Measured (S7; XT.md 6):**
+> - The XT part is 58,634 bytes. That is 29 KB resident (the slot for the
+>   chosen kernels included) and 29 KB that only OPEN reads, XTGEN.BIN
+>   among them.
+> - XT Standard's tables and state claim 236 KB in five segments.
+> - The FRONT part is 22 KB, and the engine's primary is 62 KB.
+> - XT Standard fits 400,000 bytes only with the part shrunk after OPEN and
+>   the engine's 35 KB ring claimed after it: 387,072 bytes during OPEN and
+>   393,216 after.
+> - Fast, Turbo and Speech fit in any order.
+>
+> The table below is the plan this replaced.
 
 | item | bytes | source |
 |---|---|---|
@@ -605,12 +649,34 @@ the XT backend states its minimum and refuses.
 
 ## 9. How the XT model plugs into tools/x3sim.py
 
+> **Done (S7):** `tools/x3simxt.py` is the XT model over x3sim's front end
+> (its records are the granule record's fields), with `--profile`,
+> `--golden` (tests/xtmp3/X3XT.txt) and `--quality`. The two points below
+> were resolved toward the target: RQL, and the per-subband switch at the
+> measured 13 lines. Its docstring is the binding chain, and XT.md 1 lists
+> where it departs from this section.
+
 - **The interface.** The XT backend's input per granule and channel is what
   x3sim.py's parser and Huffman decoder already produce: the 576 `ix` (in
   bitstream order), the side info `gi` (block type, mixed flag) and the
   per-line exponent `q` of `quarter_exponents()`, with
-  xr = sign·|ix|^(4/3)·2^(q/4) FS. These were used read-only for this study
-  (`FixtureItem`).
+  xr = sign·|ix|^(4/3)·2^(q/4) FS. This study reads them through
+  `x3sim.granules()` (`FixtureItem`).
+- **Where the formats meet the STANDARD model's** (x3sim.py's docstring and
+  docs/xtmp3/NUMERICS.md bind those):
+  - STANDARD's requantised lines (`xr`) and subband samples are int32 Q28.
+    The XT's lines are int16 Q13, so Q28 >> 15 with rounding. The XT's
+    subband samples are int16 Q11, so Q28 >> 17. That cut is the natural
+    16-bit seam if the XT ever sits behind STANDARD's hybrid stage.
+  - STANDARD's synthesis keeps the last 16 DCT-II vectors as int16 Q14 and
+    windows them with D in Q14. The XT keeps the same vectors as 8-bit V
+    CODES at Q11 (and only the 32 unique values a slot), and reads products
+    instead of multiplying.
+  - The noise gains x3sim's author measured line up with the budget here: a
+    rounding step in the X/V history reaches the PCM about 1.4x larger,
+    which is why the V code dominates the XT's error. A step in the subband
+    domain reaches it about 5.6x larger, which is why the subband samples
+    stay 16-bit and the matrixing stays at byte-split precision.
 - **Requantise.** |ix| <= 15 reads RQL[q][|ix|] (linear Q13) or RQ[q][|ix|]
   (a code), with q clamped as in 4.7. |ix| > 15 uses x3sim's integer pow43,
   scaled to Q13 (its requant_i). Short blocks are reordered as x3sim does,
@@ -690,10 +756,11 @@ is what any 8-bit player would give.
 5. **These are models.** Every speed here is a model within about 5% on its
    largest kernels. The disk throughput during a conversion is an
    assumption.
-6. **x3sim.py moves.** It was uncommitted work in the numerics track while
-   this ran. Its `huff_tables()` changed shape mid-study and the fixture hook
-   was adapted (and fails soft). The fixture figures were taken against the
-   working tree of `os8088-x3num` on 2026-10-22.
+6. **x3sim.py's hook.** The fixture figures come through
+   `x3sim.granules()` (xtmp3/numerics a6b748b2, 2026-10-22). Without that
+   hook the study falls back to calling x3sim's parser directly, and it
+   fails soft (fixtures skipped) if neither works. `x3xtstudy.py --all`
+   re-takes the figures once x3sim.py is merged into `tools/`.
 
 ## 12. Reproduce
 

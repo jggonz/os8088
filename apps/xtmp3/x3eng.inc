@@ -306,8 +306,15 @@ x3_e_init:
     pop bx
     call x3_volsense                ; the knob: a mixer's master, or the gain
 %ifdef X3STUB
-    call x3_stubcfg                 ; the test hook (x3stubp.inc)
+    call x3_stubcfg                 ; the test hook (x3hook.inc)
 %endif
+    push ax                         ; THE PEAK'S ZERO (SPEC.md 121.10): the
+    push bx                         ; heap's free total now, with the region
+    call OSAPI_MEM_AVAIL            ; and the eager parts already out of it
+    mov [x3_free0], bx
+    pop bx
+    pop ax
+    call x3_memck
     clc
     ret
 
@@ -718,27 +725,27 @@ x3_e_qadd:
     mov byte [x3_qfpok+bx], 0       ; its fingerprint, when first asked for
     call x3_qent                    ; SI = the record
     push si
-    mov di, x3_pinfo
+    mov di, x3p_qinfo
     mov bl, [si+QE_VOL]
     mov dx, [si+QE_DIR]
     add si, QE_NAME
     call x3p_probe                  ; CF = 0: the record complete
     pop si
     jc .out
-    cmp byte [x3_pinfo+X3I_REF], 0
+    cmp byte [x3p_qinfo+X3I_REF], 0
     jne .out                        ; refused: Play says why, by name
-    mov ax, [x3_pinfo+X3I_DUR]
+    mov ax, [x3p_qinfo+X3I_DUR]
     mov [si+QE_DUR], ax
     mov byte [si+QE_FLAGS], 0
-    test byte [x3_pinfo+X3I_FLAGS], X3IF_EXACT
+    test byte [x3p_qinfo+X3I_FLAGS], X3IF_EXACT
     jnz .exact
     mov byte [si+QE_FLAGS], X3SF_EST
 .exact:
-    cmp byte [x3_pinfo+X3I_TITLE], 0
+    cmp byte [x3p_qinfo+X3I_TITLE], 0
     je .out                         ; no tag: the name's stem stays
     push si
     lea di, [si+QE_TITLE]
-    mov si, x3_pinfo+X3I_TITLE
+    mov si, x3p_qinfo+X3I_TITLE
     mov cx, 40
     call x3_putn
     mov byte [di], 0
@@ -1203,6 +1210,7 @@ x3_la_claim:
     jc .no
     mov [ap_la_seg], dx
     mov word [x3_ring+X3R_MASK], AP_LA_MASK
+    call x3_memck
     pop dx
     pop ax
 .ok:
@@ -1528,6 +1536,7 @@ x3_snd_open:
     jnz .snderr
     mov [x3_hand], ah
     mov byte [x3_sopen], 1
+    call x3_memck                   ; (the ring, and the driver's for it)
     call x3_wspawn
     jc .notask
     mov al, [x3_sjob]
@@ -3096,6 +3105,9 @@ x3_rungset:
     mov [x3_st+X3S_QUAL], al
     call x3_ofmt
     jc .rate
+    call x3_la_free                 ; THE CLAIM ORDER (SPEC.md 121.10): the
+                                    ; part, its work and OPEN before the ring
+                                    ; - every caller re-aims and refills it
     call x3_rungrow                 ; BX -> the rung's row
     mov al, [bx+RG_BE]
     call x3_be_get                  ; the part HERE, its vectors banked
@@ -3134,19 +3146,22 @@ x3_rungset:
     mov [x3_open+X3O_SRI], al
     mov ax, [x3_gain]
     mov [x3_open+X3O_GAIN], ax
+    call x3_memck                   ; (the peak DURING OPEN: part and work)
     mov di, x3_open
     push ds
     pop es
     mov bl, X3V_OPEN
     call x3_bvcall
     jc .openerr
+    call x3_shrink                  ; the XT part's OPEN half given back
+    call x3_la_claim                ; ...and only then the ring
+    jc .mem
     mov al, [x3_och]
     mov [x3_st+X3S_CHANS], al
     mov al, [x3_obits]
     mov [x3_st+X3S_BITS], al
     mov ax, [x3_orate]
     mov [x3_st+X3S_RATE], ax
-    call x3_peak_kb                 ; Status: the peak memory
     clc
     ret
 .rate:
@@ -3233,8 +3248,11 @@ x3_be_get:
     jmp .no                         ; (a build with no backend part)
 .part:
 %ifdef X3_PARTS
+    cmp byte [x3_bshr], 0           ; shrunk to its resident half: it takes no
+    jne .drop                       ; second OPEN (docs/xtmp3/XT.md 6)
     cmp bl, [x3_bpart]
     je .here
+.drop:
     call x3_be_drop                 ; ONE backend resident (SPEC.md 121.3)
     mov al, bl
     push bx
@@ -3242,6 +3260,7 @@ x3_be_get:
     pop bx
     jc .no
     mov [x3_bpart], bl
+    call x3_memck                   ; (the fetch's claim)
 .here:
     mov al, [x3_bpart]
     call op_seg                     ; AX = its segment
@@ -3258,8 +3277,10 @@ x3_be_get:
     cmp byte [es:X3K_NV], X3V_COUNT
     jb .bad
     mov [x3_bseg], ax
-    mov [x3_bvec+2], ax             ; (the code selector: the same word on
-    mov [x3_bgran+2], ax            ; every real-mode kernel - op_cseg's)
+    mov al, [x3_bpart]              ; the CODE selector (op_cseg): the data
+    call op_cseg                    ; segment's own word in real mode, its
+    mov [x3_bvec+2], ax             ; alias on kern_mega
+    mov [x3_bgran+2], ax
     mov ax, [es:X3K_VEC + 2 * X3V_GRANULE]
     mov [x3_bgran], ax
 %ifdef X3STUB
@@ -3292,6 +3313,7 @@ x3_be_drop:
     je .out
     call op_drop                    ; (a part not here: a no-op)
     mov byte [x3_bpart], 0xFF
+    mov byte [x3_bshr], 0
 %endif
 .out:
     pop ax
@@ -3377,18 +3399,65 @@ x3_wsfree:
     pop cx
     ret
 
-; x3_peak_kb - X3S_PEAK: the KB this play holds - the ring, the grant, the
-; backend's work and its part - the figure Status shows (SPEC.md 121.10)
-x3_peak_kb:
+; x3_shrink - after a successful OPEN of the XT part, its claim cut to the
+; resident half CAPS names (X3C_PARTKB): OPEN's body, the expansion and
+; XTGEN.BIN are behind it and nothing reaches them again until the part is
+; fetched whole (docs/xtmp3/XT.md section 6; x3_be_get re-fetches). A shrink
+; always succeeds in place. Not on a calibration probe ([x3_noshr]): the
+; ladder may OPEN the same part again at another profile. keeps everything
+x3_shrink:
+%ifdef X3_PARTS
     push ax
-    mov ax, AP_LA_SZ / 1024
-    add ax, [x3_caps1+X3C_TKB]
-    add ax, [x3_caps1+X3C_PARTKB]
-    add ax, X3_RINGKB
+    push bx
+    push dx
+    cmp byte [x3_noshr], 0
+    jne .out
+    call x3_rungrow
+    cmp byte [bx+RG_BE], X3K_XT
+    jne .out
+    mov ax, [x3_caps1+X3C_PARTKB]
+    or ax, ax
+    jz .out
+    push ax
+    mov al, [x3_bpart]
+    call op_seg                     ; a fetched part sits at its claim's base
+    mov dx, ax
+    pop ax
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_REGROW
+    jc .out
+    mov byte [x3_bshr], 1
+.out:
+    pop dx
+    pop bx
+    pop ax
+%endif
+    ret
+
+; x3_memck - X3S_PEAK, MEASURED (SPEC.md 121.10): the region and the eager
+; parts (the package's, before the zero was taken) plus how far the heap's
+; free total has fallen since launch - every claim this instance has made,
+; SOUND.DRV's per stream on its behalf with them - kept at its highest. Run
+; after each claim. keeps everything
+x3_memck:
+    push ax
+    push bx
+    call OSAPI_MEM_AVAIL            ; BX = total free KB
+    mov ax, [x3_free0]
+    sub ax, bx
+    jnc .p
+    xor ax, ax                      ; (something else gave memory back)
+.p:
+    add ax, X3_REGIONKB
+%ifdef X3_PARTS
+    add ax, [op_kb]                 ; the eager carve: FRONT and ART
+%endif
     cmp ax, [x3_st+X3S_PEAK]
     jbe .o
     mov [x3_st+X3S_PEAK], ax
 .o:
+    pop bx
     pop ax
     ret
 
@@ -3688,7 +3757,9 @@ x3l_okc:
 ; worker measuring. out: CF = 1 it could not be opened (it fails)
 ; -----------------------------------------------------------------------------
 x3l_launch:
+    mov byte [x3_noshr], 1          ; a probe: the part may be OPENed again
     call x3_rungset
+    mov byte [x3_noshr], 0
     jc .no
     mov byte [x3_st+X3S_STATE], X3ST_CHECK  ; (a refusal said ERROR)
     xor ax, ax
@@ -4486,13 +4557,15 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
 %macro X3_ENGBSS 0
     X3B x3_apbss, X3A_AT            ; the shared sources' (aplook, apspk)
     X3B x3_info, X3I_SIZE           ; THE STREAM: x3p_open's record...
-    X3B x3_pinfo, X3I_SIZE          ; ...and a probe's (x3_e_qadd)
     X3B x3_ring, X3R_SIZE           ; ...the compressed-input ring
     X3B x3_open, X3O_SIZE           ; the backend: OPEN's record...
     X3B x3_caps1, X3C_SIZE          ; ...CAPS'...
     X3B x3_ws, 2 * X3_MAXSEG        ; ...its work segments...
     X3B x3_nws, 1
     X3B x3_bpart, 1                 ; ...the part resident (FFh none)...
+    X3B x3_bshr, 1                  ; ...shrunk to its resident half...
+    X3B x3_noshr, 1                 ; ...not to be (a calibration probe)
+    X3B x3_free0, 2                 ; the heap's free KB at launch (x3_memck)
     X3B x3_bseg, 2                  ; ...its segment...
     X3B x3_bvec, 4                  ; ...a verb's far vector (UI task's)...
     X3B x3_bgran, 4                 ; ...and GRANULE's (the worker's)

@@ -6267,9 +6267,10 @@ $(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/cdrack.bin -o $@
 
 # XTMP3 (SPEC.md 121): the adaptive MP3 player. Its face is the retro-face
-# skill's (CDRack's shape): every picture and font is build/x3art.inc, made by
-# tools/os88x3art.py - from definitions in that file and from the committed
-# masters in apps/xtmp3/art/, which it reads itself - after its --selfcheck.
+# skill's (CDRack's shape): every picture and font is build/x3art.bin, a PART
+# of XTMP3.O88 (SPEC.md 20.12), and build/x3art.inc its labels' offsets and
+# sizes - both made by tools/os88x3art.py, from definitions in that file and
+# from the committed masters in apps/xtmp3/art/, after its --selfcheck.
 # S4 builds the face over a DEMO engine (apps/xtmp3/x3demo.inc); it rides the
 # 1.44MB apps disk and the live media for now, and S10 places it for good
 .PHONY: xtmp3
@@ -6277,28 +6278,39 @@ xtmp3: $(BUILD)/xtmp3.o88
 XTMP3ART := apps/xtmp3/art/knob.png apps/xtmp3/art/vu.png apps/xtmp3/art/logo.png
 $(BUILD)/x3art.inc: tools/os88x3art.py $(XTMP3ART) | $(BUILD)
 	python3 tools/os88x3art.py --selfcheck
-	python3 tools/os88x3art.py --out $@
+	python3 tools/os88x3art.py --out $@ --bin $(BUILD)/x3art.bin
+$(BUILD)/x3art.bin: $(BUILD)/x3art.inc
+	@test -f $@ || python3 tools/os88x3art.py --out $(BUILD)/x3art.inc --bin $@
 
 XTMP3_SRC := apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
              apps/xtmp3/x3face.inc apps/xtmp3/x3eng.inc \
-             apps/xtmp3/x3conv.inc apps/xtmp3/x3stubp.inc \
+             apps/xtmp3/x3conv.inc apps/xtmp3/x3hook.inc \
+             apps/xtmp3/x3pars.inc apps/xtmp3/x3phdr.inc \
              apps/xtmp3/x3stub.inc apps/xtmp3/x3gran.inc \
              apps/audio/aplook.inc apps/audio/apspk.inc \
              apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc \
              apps/os88rseq.inc apps/os88pit.inc apps/os88dec.inc \
              apps/os88data.inc apps/os88parts.inc apps/os88partsbody.inc \
-             drivers/sound/sndpkg.inc \
+             drivers/sound/sndpkg.inc $(BUILD)/x3ftab.inc \
              $(BUILD)/x3art.inc apps/os88api.inc apps/os88ui.inc
+X3PARTS := $(BUILD)/x3front.bin $(BUILD)/x3art.bin $(BUILD)/x3stdp.bin \
+           $(BUILD)/x3xt.bin
+X3PARTARGS := --part $(BUILD)/x3front.bin --part $(BUILD)/x3art.bin \
+              --part $(BUILD)/x3stdp.bin --part $(BUILD)/x3xt.bin
 $(BUILD)/xtmp3.bin: $(XTMP3_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/xtmp3/ -I apps/audio/ \
 		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
 	@echo "xtmp3:  $(call FILESIZE,$@) bytes"
 
+$(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin $(X3PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@ $(X3PARTARGS) --part-compress lz4
+
 # THE ENGINE'S TEST BUILD (docs/xtmp3/ENGINE.md, tests/xtmp3eng.py): the same
 # source with -DX3STUB, carrying the STUB backend (apps/xtmp3/x3stub.asm) as
-# its one part - a tone a granule at a cost X3STUB.CFG sets per rung, so the
-# ladder's transitions, the conversion and the cache are deterministic on
-# QEMU. ON DEMAND (`make xtmp3stub`); nothing ships it. On a disk it must be
+# the parts table's row 4, after XT - a tone a granule at a cost X3STUB.CFG
+# sets per rung, answering for both backends, so the ladder's transitions,
+# the conversion and the cache are deterministic on QEMU over the REAL front
+# end. ON DEMAND (`make xtmp3stub`); nothing ships it. On a disk it must be
 # named XTMP3.O88: op_load reads the parts out of the file it came from.
 .PHONY: xtmp3stub
 xtmp3stub: $(BUILD)/xtmp3s.o88
@@ -6309,11 +6321,70 @@ $(BUILD)/xtmp3s.bin: $(XTMP3_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -DX3STUB -I apps/ -I apps/xtmp3/ -I apps/audio/ \
 		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
 	@echo "xtmp3 (X3STUB):  $(call FILESIZE,$@) bytes"
-$(BUILD)/xtmp3s.o88: $(BUILD)/xtmp3s.bin $(BUILD)/x3stub.bin tools/os88pkg.py
-	$(OS88PKG) $(BUILD)/xtmp3s.bin -o $@ --part $(BUILD)/x3stub.bin
+$(BUILD)/xtmp3s.o88: $(BUILD)/xtmp3s.bin $(X3PARTS) $(BUILD)/x3stub.bin \
+                     tools/os88pkg.py
+	$(OS88PKG) $(BUILD)/xtmp3s.bin -o $@ $(X3PARTARGS) \
+		--part $(BUILD)/x3stub.bin --part-compress lz4
 
-$(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@
+# --- XTMP3's DECODER (SPEC.md 121.3, 121.4; the STANDARD track) ----------------
+# The STANDARD tables (tools/x3tables.py: x3std.bin and x3std.inc) and the
+# front end's (tools/x3fronttab.py: x3ftab.inc), each after its --selfcheck,
+# and the two parts this track ships: x3front.bin (FRONT, eager: the shared
+# front end) and x3stdp.bin (STANDARD, lazy: the reconstruction). Their gate
+# is tests/x3bench/x3bench.py (the x3stdexact soak row), on QEMU, against
+# tools/x3sim.py's tests/xtmp3/X3SIM.txt.
+$(BUILD)/x3std.inc: tools/x3tables.py tools/x3tab_iso.py | $(BUILD)
+	python3 tools/x3tables.py --selfcheck
+	python3 tools/x3tables.py --out $(BUILD)
+$(BUILD)/x3std.bin: $(BUILD)/x3std.inc
+	@test -f $@ || python3 tools/x3tables.py --out $(BUILD)
+$(BUILD)/x3ftab.inc: tools/x3fronttab.py tools/x3tab_iso.py tools/x3tables.py | $(BUILD)
+	python3 tools/x3fronttab.py --selfcheck
+	python3 tools/x3fronttab.py --out $@
+$(BUILD)/x3sgen.inc: tools/x3stdgen.py tools/x3sim.py tools/x3tables.py \
+                     tools/x3tab_iso.py | $(BUILD)
+	python3 tools/x3stdgen.py --selfcheck
+	python3 tools/x3stdgen.py --out $@
+X3PARTDEP := apps/xtmp3/x3gran.inc apps/xtmp3/x3crc.inc $(BUILD)/x3std.inc \
+             $(BUILD)/x3std.bin $(BUILD)/x3ftab.inc
+$(BUILD)/x3front.bin: apps/xtmp3/x3front.asm apps/xtmp3/x3phdr.inc apps/xtmp3/x3pnext.inc \
+                      $(X3PARTDEP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
+		-o $@ apps/xtmp3/x3front.asm
+	@echo "x3front: $(call FILESIZE,$@) bytes"
+$(BUILD)/x3stdp.bin: apps/xtmp3/x3std.asm $(X3PARTDEP) $(BUILD)/x3sgen.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
+		-o $@ apps/xtmp3/x3std.asm
+	@echo "x3stdp: $(call FILESIZE,$@) bytes"
+
+# --- XTMP3's XT BACKEND (S7; SPEC.md 121.3, 121.4, 121.10; docs/xtmp3/XT.md):
+# x3xt.asm is a far-called OP_SEG part carrying XTGEN.BIN, its generator
+# input, inside itself (x3gran.inc's OPEN record has no slot for an asset);
+# its OPEN expands the profile's table pack into the segments it is handed
+# (tools/x3xttab.py's recurrences, a Fletcher-32 checked against the
+# generator's).
+# build/x3xtk.inc is what tools/x3xtgen.py assembles for it - the claim's
+# layout, Lee's DCTs, each profile's window pass, the IMDCT row blocks -
+# after x3xttab's and its own --selfcheck; both are standard library only,
+# so numpy stays off the make path. tests/x3xtunit.py and the x3xtexact row
+# hold the part to tools/x3simxt.py byte for byte.
+X3XTGENDEPS := tools/x3xtgen.py tools/x3xttab.py tools/x3tables.py tools/x3tab_iso.py
+$(BUILD)/x3xtk.inc: $(X3XTGENDEPS) | $(BUILD)
+	python3 tools/x3xttab.py --selfcheck
+	python3 tools/x3xtgen.py --selfcheck -o $@
+
+$(BUILD)/XTGEN.BIN: $(X3XTGENDEPS) | $(BUILD)
+	python3 tools/x3xtgen.py --xtgen $@
+
+$(BUILD)/x3xt.bin: apps/xtmp3/x3xt.asm apps/xtmp3/x3gran.inc $(BUILD)/x3xtk.inc \
+                   $(BUILD)/XTGEN.BIN | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/xtmp3/ -I $(BUILD)/ -o $@ apps/xtmp3/x3xt.asm
+	python3 tools/x3xtgen.py --seal $@
+	@echo "x3xt:   $(call FILESIZE,$@) bytes"
+
+.PHONY: x3xt
+x3xt: $(BUILD)/x3xt.bin $(BUILD)/XTGEN.BIN
+xtmp3: x3xt
 
 # INSTALL (SPEC.md 117): the setup wizard, in the root of every kern_big
 # system disk ($(SYSINST)). It installs nothing itself - OSAPI_DRV_USE and
@@ -14028,8 +14099,8 @@ $(MEGAAPPDIR)/xtmp3.bin: $(XTMP3_SRC) apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/xtmp3/ -I apps/audio/ \
 	    -I drivers/sound/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/xtmp3/xtmp3.asm
 	@echo "xtmp3 (PKG_MEGA): $(call FILESIZE,$@) bytes"
-$(MEGAAPPDIR)/xtmp3.o88: $(MEGAAPPDIR)/xtmp3.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(MEGAAPPDIR)/xtmp3.bin -o $@
+$(MEGAAPPDIR)/xtmp3.o88: $(MEGAAPPDIR)/xtmp3.bin $(X3PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/xtmp3.bin -o $@ $(X3PARTARGS) --part-compress lz4
 
 megapkgs: $(MEGAPKGS) $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 	@python3 tests/unit/t_megapkg.py --sizes

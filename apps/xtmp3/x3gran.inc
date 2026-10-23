@@ -419,13 +419,16 @@ X3PC_SIZE   equ 34
 ; =============================================================================
 ;
 ; An OP_SEG part, loaded eagerly, assembled at org 0. x3pars.inc (the
-; primary) runs its frame-level code with DS = THIS part's data segment and
-; reads and writes the fields below at these offsets, so they are fixed here
-; and x3front.asm asserts them. The record (section 1) is at X3P_REC.
+; primary) runs its frame-level code with DS = the package's segment and ES =
+; THIS part's data segment, and reads and writes the fields below at these
+; offsets, so they are fixed here (x3front.asm reserves them with `times`
+; before its code). The record (section 1) is at X3P_REC. The FRONT part's
+; own verbs (GRAN, CHECK) run with DS = this part's data segment.
 X3P_SIG     equ 0       ; db 'X3', X3G_ABI, X3K_FRONT, verbs, 0 - as X3K_*
 X3P_VGRAN   equ X3K_VEC ; dw  GRAN: the granule-level decode (below)
 X3P_VCHECK  equ X3K_VEC + 2 ; dw  CHECK: the part's tables against their CRC
-X3P_NV      equ 2
+X3P_VNEXT   equ X3K_VEC + 4 ; dw  NEXT: x3p_next's frame work (x3pnext.inc)
+X3P_NV      equ 3
 X3P_DATA    equ 0x0010  ; the data block starts here
 X3P_REC     equ X3P_DATA                    ; the granule record
 X3P_CNT     equ X3P_REC + X3G_SIZE          ; the verdict counters
@@ -490,5 +493,8 @@ X3P_DEND    equ X3P_FRM + X3P_FRM_SZ       ; the FRONT part's code follows
 ;
 ; CHECK  the part's Huffman tables against their CRC-32 (x3std.inc's).
 ;   in   DS = the FRONT part's data segment   out CF = 0 / CF = 1 X3E_TABLE
+;
+; NEXT   x3p_next's work: in DS = the FRONT part's data segment, ES:SI = the
+;        X3R descriptor; out as x3p_next (section 4)
 
 %endif ; X3GRAN_INC

@@ -1774,19 +1774,34 @@ x3c_start:
     mov bx, ax
 .h:
     mov [x3c_half], bx
-    mov ax, bx                      ; two halves, claimed
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1                       ; KB for both: 2H / 1024 = H >> 9
+    mov si, [x3_trkent]             ; THE DECODER FIRST (SPEC.md 121.10's
+    mov dx, [si+QE_DIR]             ; claim order: the part, its work and
+    mov bl, [si+QE_VOL]             ; OPEN, then the ring, then the stage),
+    mov [ap_trk_dir], dx            ; on the rung, from the start. The ring
+    mov [ap_trk_vol], bl            ; reads by name, and aplook.inc stands
+    mov word [apw_name], x3_fname   ; in the source's folder itself
+    call OSAPI_FILE_GOTO_QM
+    jc .rderr
+    call x3_cluget                  ; (the SOURCE's cluster, for the ring)
+    jc .rderr
+    mov al, [x3c_rung]
+    call x3_rungset
+    jc .be
+    xor ax, ax
+    xor dx, dx
+    call x3_resync
+    jc .be
+    mov bl, [x3c_dvol]              ; back to the destination
+    mov dx, [x3c_ddir]
+    call OSAPI_FILE_GOTO_QM
+    jc .wrerr
+    mov ax, [x3c_half]              ; THE STAGE: two halves, claimed
+    mov cl, 9
+    shr ax, cl                      ; KB for both: 2H / 1024 = H >> 9
     call OSAPI_MEM_CLAIM
     jc .nomem
     mov [x3c_sseg], dx
+    call x3_memck
     call x3c_tmpname                ; X3nnnnnn.TMP, free here
     jc .wrerr
     call x3c_hdr                    ; the header cluster at the stage's 0
@@ -1800,24 +1815,6 @@ x3c_start:
     pop es
     jc .wrerr
     mov byte [x3c_tmade], 1
-    mov al, [x3c_rung]              ; THE DECODER, on the rung, from the start
-    mov si, [x3_trkent]             ; (the source's folder: the ring reads by
-    mov dx, [si+QE_DIR]             ; name, and aplook.inc stands there itself)
-    mov bl, [si+QE_VOL]
-    mov [ap_trk_dir], dx
-    mov [ap_trk_vol], bl
-    mov word [apw_name], x3_fname
-    call OSAPI_FILE_GOTO_QM
-    jc .rderr
-    call x3_cluget                  ; (the SOURCE's cluster, for the ring)
-    jc .rderr
-    mov al, [x3c_rung]
-    call x3_rungset
-    jc .be
-    xor ax, ax
-    xor dx, dx
-    call x3_resync
-    jc .be
     xor ax, ax
     mov [x3c_dlen], ax              ; nothing written yet but the header
     mov [x3c_dlen+2], ax

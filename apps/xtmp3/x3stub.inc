@@ -2,7 +2,7 @@
 ; os8088 - apps/xtmp3/x3stub.inc - the STUB backend's data layout (equates)
 ;
 ; Shared by the stub part (x3stub.asm) and the primary's test hook
-; (x3stubp.inc's x3_stubpoke). The stub is a TEST-ONLY backend, assembled
+; (x3hook.inc's x3_stubpoke). The stub is a TEST-ONLY backend, assembled
 ; only into an X3STUB=1 build (tests/xtmp3eng.py), never shipped: it speaks
 ; x3gran.inc's ABI, makes a tone per granule, and costs what X3STUB.CFG says.
 ; =============================================================================
