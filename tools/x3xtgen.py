@@ -470,7 +470,7 @@ def lee_asm(N, lee, label):
                 L.append('    mov [di+%d],ax' % d)
         L.append('    jmp short .g%d' % g0)
         for k, _ in grp:
-            L += ['.s%d:' % k, '    call x3x_vslow', '    jmp short .b%d' % k]
+            L += ['.s%d:' % k, '    call [cs:x3x_vslowp]', '    jmp short .b%d' % k]
         L.append('.g%d:' % g0)
     L += ['    xor bh,bh', '    ret']
     return L, ops, where, need
@@ -742,16 +742,24 @@ def const_tables():
     return L
 
 
-def profile_data(profile):
-    """The descriptor OPEN reads, and the per-profile constants."""
+def profile_data(profile, tail=False):
+    """The descriptor OPEN reads, and the per-profile constants. RESIDENT:
+    CAPS' block and the window segments' table (RESET zeroes the rings from
+    it). TAIL (only OPEN reads it): the row lists and the Lee constants'
+    indices."""
     L = layout(profile)
     P = profile.upper()
     out = []
+    if tail:
+        for g, s_ in enumerate(L['win']):
+            out.append('x3x_%s_rows%d:' % (profile, g))
+            for i in range(0, len(s_['rows']), 8):
+                out.append('    dd %s' % ', '.join(str(v) for v in s_['rows'][i:i + 8]))
+        out.append('x3x_%s_lee:   ; indices into XTGEN LEE_C16, in plane order' % profile)
+        out.append('    db %s' % ', '.join(str(XT.LEE_C16.index(c)) for c in L['lee']))
+        return out
     out.append('X3X_%s_PARAS equ %d' % (P, L['paras']))
     out.append('X3X_%s_NWSEG equ %d' % (P, len(L['win'])))
-    out.append('X3X_%s_SY equ %d' % (P, L['base']['SY']))
-    out.append('X3X_%s_H1 equ %d' % (P, L['base']['H1']))
-    out.append('X3X_%s_H2 equ %d' % (P, L['base']['H2']))
     out.append('X3X_%s_NLEE equ %d' % (P, len(L['lee'])))
     fl = fl32_chain(expanded(profile))
     out.append('X3X_%s_FL32_LO equ 0%04Xh' % (P, fl & 0xFFFF))
@@ -765,17 +773,50 @@ def profile_data(profile):
     out.append('    dw %s' % ', '.join(str(v) for v in paras_ + [0] * (6 - len(paras_))))
     out.append('    dw %d' % tkb)
     out.append('x3x_%s_wsegs:  ; per window segment: paragraph offset, rows, ring offset, ring bytes, row list' % profile)
-    for g, s in enumerate(L['win']):
+    for g, s_ in enumerate(L['win']):
         out.append('    dw %d, %d, %d, %d, x3x_%s_rows%d' % (
-            L['base']['W%d' % g], len(s['rows']), 512 * len(s['rows']),
-            RING * len(s['pairs']), profile, g))
-    for g, s in enumerate(L['win']):
-        out.append('x3x_%s_rows%d:' % (profile, g))
-        for i in range(0, len(s['rows']), 8):
-            out.append('    dd %s' % ', '.join(str(v) for v in s['rows'][i:i + 8]))
-    out.append('x3x_%s_lee:   ; indices into XTGEN LEE_C16, in plane order' % profile)
-    out.append('    db %s' % ', '.join(str(XT.LEE_C16.index(c)) for c in L['lee']))
+            L['base']['W%d' % g], len(s_['rows']), 512 * len(s_['rows']),
+            RING * len(s_['pairs']), profile, g))
     return out
+
+
+KERNELS = (('lee32', 32, 'std'), ('lee16', 16, 'speech'), ('lee8', 8, 'speech'))
+WINKERNELS = (('win_std', 'std', 1), ('win_fast', 'fast', 1), ('win_turbo', 'turbo', 1),
+              ('win_sp2', 'speech', 2), ('win_sp4', 'speech', 4))
+PAIRING = (('std', 'win_std', 'lee32'), ('fast', 'win_fast', 'lee32'),
+           ('turbo', 'win_turbo', 'lee32'), ('sp2', 'win_sp2', 'lee16'),
+           ('sp4', 'win_sp4', 'lee8'))
+
+
+def kernel_lines():
+    """{name: NASM lines} for every profile's Lee and window kernels."""
+    out = {}
+    for name, N, pack in KERNELS:
+        out[name] = lee_asm(N, lee_list(pack), 'x3x_' + name)[0]
+    for name, prof, div in WINKERNELS:
+        out[name] = win_asm(prof, div, 'x3x_' + name)
+    return out
+
+
+def kernel_sizes(kern):
+    """Each kernel's assembled bytes, measured by assembling it alone (its
+    only outside references are absolute [cs:disp16] words, whose encoding
+    is the same wherever they land)."""
+    import subprocess
+    import tempfile
+    nasm = os.environ.get('NASM', 'nasm').split()[0]
+    sizes = {}
+    with tempfile.TemporaryDirectory() as d:
+        for name, lines in kern.items():
+            src = os.path.join(d, 'k.asm')
+            out = os.path.join(d, 'k.bin')
+            with open(src, 'w') as f:
+                f.write('cpu 8086\nbits 16\norg 0\n'
+                        'x3x_wseg equ 1000h\nx3x_clips equ 1000h\nx3x_vslowp equ 1000h\n')
+                f.write('\n'.join(lines) + '\n')
+            subprocess.run([nasm, '-f', 'bin', '-w+error', '-o', out, src], check=True)
+            sizes[name] = os.path.getsize(out)
+    return sizes
 
 
 def emit(path):
@@ -805,25 +846,29 @@ def emit(path):
     L += ['X3X_SLOT_S equ %d' % SLOT_S, 'X3X_SLOT_CODE equ %d' % SLOT_CODE,
           'X3X_SLOT_PCM equ %d' % SLOT_PCM, 'X3X_SLOTSZ equ %d' % SLOTSZ,
           'X3X_RING equ %d' % RING, '']
-    L.append('%else')
-    L.append('; ---- profile descriptors')
+    kern = kernel_lines()
+    ks = kernel_sizes(kern)
+    for name, size in ks.items():
+        L.append('X3X_K_%s equ %d' % (name.upper(), size))
+    L.append('X3X_KSLOT equ %d     ; the largest window + Lee pair a profile copies in'
+             % max(ks[w] + ks[l] for _, w, l in PAIRING))
+    L.append('%elifndef X3XTK_TAIL')
+    L.append('; ---- RESIDENT: profile descriptors')
     for p in PNAMES:
         L += profile_data(p)
     L.append('; ---- constant tables')
     L += const_tables()
     L += shape_code()
-    L.append('; ---- Lee DCT-II, in place on a slot, with the V codes')
-    L += lee_asm(32, lee_list('std'), 'x3x_lee32')[0]
-    L += lee_asm(16, lee_list('speech'), 'x3x_lee16')[0]
-    L += lee_asm(8, lee_list('speech'), 'x3x_lee8')[0]
-    L.append('; ---- the window pass, one slot, per profile')
-    L += win_asm('std', 1, 'x3x_win_std')
-    L += win_asm('fast', 1, 'x3x_win_fast')
-    L += win_asm('turbo', 1, 'x3x_win_turbo')
-    L += win_asm('speech', 2, 'x3x_win_sp2')
-    L += win_asm('speech', 4, 'x3x_win_sp4')
     L.append('; ---- the sparse IMDCT row blocks')
     L += imdct_blocks()
+    L.append('%else')
+    L.append('; ---- TAIL (OPEN reads it, and copies the chosen kernels out):')
+    L.append('; the row lists, the Lee constants, every Lee and window kernel')
+    for p in PNAMES:
+        L += profile_data(p, tail=True)
+    for name in [k[0] for k in KERNELS] + [k[0] for k in WINKERNELS]:
+        L += kern[name]
+        L.append('x3x_%s_end:' % name)
     L.append('%endif')
     with open(path, 'w') as f:
         f.write('\n'.join(L) + '\n')
@@ -975,6 +1020,20 @@ def fullcheck(verbose=False):
     return 0
 
 
+def seal(path):
+    """Stamp the part's tail Fletcher-32 (x3xt.asm's x3x_open checks the
+    tail - OPEN's half - against it before entering it). The header is 18
+    bytes; at 18 and 20 the image holds the tail's and the end's offsets,
+    and the sum goes at 22. Returns (tail offset, end offset)."""
+    b = bytearray(open(path, 'rb').read())
+    tail, end = struct.unpack_from('<HH', b, 18)
+    assert b[0:2] == b'X3' and 0 < tail < end <= len(b) and (end - tail) % 2 == 0, (tail, end)
+    fl = XT.fl32(bytes(b[tail:end]))
+    struct.pack_into('<HH', b, 22, fl & 0xFFFF, fl >> 16)
+    open(path, 'wb').write(bytes(b))
+    return tail, end
+
+
 def xtgen(path):
     with open(path, 'wb') as f:
         f.write(XT.gen_input())
@@ -997,7 +1056,13 @@ def main():
     ap.add_argument('--manifest', action='store_true')
     ap.add_argument('--fullcheck', action='store_true')
     ap.add_argument('--xtgen', metavar='BIN', help='write XTGEN.BIN (x3xttab.gen_input)')
+    ap.add_argument('--seal', metavar='PART', help="stamp x3xt.bin's tail Fletcher-32")
     a = ap.parse_args()
+    if a.seal:
+        tail, end = seal(a.seal)
+        print('x3xtgen: sealed %s: resident %d bytes (%d KB), tail %d bytes' % (
+            a.seal, tail, (tail + 1023) // 1024, end - tail))
+        return 0
     if a.fullcheck:
         return fullcheck(True)
     if a.xtgen:

@@ -30,6 +30,7 @@ import random
 import struct
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -78,6 +79,7 @@ def build(out):
     subprocess.run(['nasm', '-f', 'bin', '-w+error', '-I', os.path.join(ROOT, 'apps', 'xtmp3') + '/',
                     '-I', os.path.dirname(out) + '/', '-I', os.path.join(ROOT, 'apps') + '/', '-o', out,
                     os.path.join(ROOT, 'apps', 'xtmp3', 'x3xt.asm')], check=True)
+    G.seal(out)
     return open(out, 'rb').read()
 
 
@@ -92,6 +94,7 @@ class Part:
         self.image = image
         self.segs = []
         self.low = 0x10000
+        self.clobber = True
 
     def call(self, verb, **regs):
         uc = self.uc
@@ -163,7 +166,13 @@ class Part:
                           cp['nseg'] if nseg is None else nseg, 0)
         rec += struct.pack('<6H', *(list(segs) + [0] * (6 - len(segs))))
         self.write(ARG_SEG, 0, rec)
-        return self.call(1, es=ARG_SEG, di=0)
+        r = self.call(1, es=ARG_SEG, di=0)
+        if not r['cf'] and self.clobber:
+            # OPEN's half is only OPEN's: GRANULE must run with it gone (the
+            # engine may shrink the claim to X3C_PARTKB), so overwrite it
+            tail, end = struct.unpack_from('<HH', self.image, 18)
+            self.write(PART_SEG, tail, bytes([0xCC]) * (end - tail))
+        return r
 
     def granule(self, rec):
         self.write(REC_SEG, 0, rec)
@@ -249,7 +258,27 @@ def check_expand(image, verbose):
     k = g.find(pat)
     assert k > 0, 'the recurrence bias is not where the control expects it'
     g[k + 2] = 0x00                                  # mov ax,0
-    fails += refused(Part(bytes(g)).open('std', 1), 'TABLE', 'an unbiased recurrence')
+    fails += refused(Part(bytes(g)).open('std', 1), 'TABLE', 'an unbiased recurrence, unsealed')
+    with tempfile.NamedTemporaryFile(suffix='.bin', delete=False) as f:
+        f.write(bytes(g))
+    G.seal(f.name)                                   # the tail check passes now:
+    g = open(f.name, 'rb').read()                    # the EXPANSION's must see it
+    os.unlink(f.name)
+    fails += refused(Part(g).open('std', 1), 'TABLE', 'an unbiased recurrence, sealed')
+    # an intact part takes OPEN after OPEN (calibration probes rungs on one
+    # fetch): its tail is read-only, so its check passes every time
+    part = Part(image)
+    part.clobber = False
+    for prof, div, ver in (('std', 1, 1), ('fast', 1, 1), ('speech', 2, 25), ('std', 1, 25)):
+        r = part.open(prof, div, ver=ver, sri=1)
+        if r['cf']:
+            print('x3xtunit: OPEN %s after OPEN on an intact part refused (%s)' % (prof, X3E.get(r['ax'])))
+            fails += 1
+    # a part whose OPEN half is gone (shrunk to X3C_PARTKB) refuses a second
+    # OPEN instead of running what is there
+    part = Part(image)
+    part.open('std', 1)
+    fails += refused(part.open('fast', 1), 'TABLE', 'OPEN after the tail is gone')
     # GRANULE refuses a record of another version or rate than OPEN's
     part = Part(image)
     part.open('std', 1, ver=25, sri=1)

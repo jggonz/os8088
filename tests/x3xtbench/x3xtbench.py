@@ -59,6 +59,9 @@ def make_image(cases, path, tmp):
     harness = open(os.path.join(tmp, 'x3xtbench.bin'), 'rb').read()
     front = open(os.path.join(BUILD, 'x3front.bin'), 'rb').read()
     xt = open(os.path.join(BUILD, 'x3xt.bin'), 'rb').read()
+    # the harness's memory map (x3xtbench.asm): FRONT at 1800:0 below the XT
+    # part at 1E00:0, which has 64 KB before the stack
+    assert len(front) <= 0x6000 and len(xt) <= 0x10000, (len(front), len(xt))
     lba = 1 + DIR_SECTORS
     body = B.pad(harness)
     lba += B.sectors(harness)

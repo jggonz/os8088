@@ -70,6 +70,12 @@ x3x_head:
     dw x3x_statsv                   ; X3V_STATS
     dw x3x_close                    ; X3V_CLOSE
 
+; THE SEAL (tools/x3xtgen.py --seal reads the two offsets and writes the
+; Fletcher-32 of [tail, end) after them): at 18, 20, 22 - fixed
+x3x_tailoff dw x3x_tail - $$
+x3x_endoff  dw x3x_imgend - $$
+x3x_tailfl  dw 0, 0
+
 ; =============================================================================
 ; STATE (this part's own bytes, through CS)
 ; =============================================================================
@@ -87,6 +93,8 @@ x3x_leefn   dw 0
 x3x_winfn   dw 0
 x3x_aafn    dw 0
 x3x_desc    dw 0                    ; the profile's window segment table
+x3x_kdesc   dw 0                    ; its kernels: Lee [start, end), window [start, end)
+x3x_vslowp  dw x3x_vslow            ; the Lee kernels' slow V code, called indirect
 x3x_slot    dw 0                    ; slots decoded since RESET (mod 2^16)
 x3x_prevbt  db 0, 0
 x3x_clips   dw 0                    ; this granule's output clips
@@ -139,6 +147,8 @@ x3x_fs1     dw 0                    ; the Fletcher sums carried
 x3x_fs2     dw 0
 x3x_cnt     dw 0
 x3x_ptr     dw 0
+x3x_c16     dw 0, 0                 ; OPEN's split constant (the tail stays
+                                    ; read-only: a second OPEN re-checks it)
 
 ; a dword counter in this part, += 1
 %macro X3X_INC32 1
@@ -176,7 +186,7 @@ x3x_caps:
     stosb
     inc si
     loop .cp
-    mov word [es:di], strict word (x3x_imgend - x3x_head + 1023) / 1024   ; X3C_PARTKB
+    mov word [es:di], strict word (x3x_tail - x3x_head + 1023) / 1024   ; X3C_PARTKB: the resident half
     clc
 .out:
     pop di
@@ -251,211 +261,52 @@ x3x_statsv:
 ; (carried inside this part) and checks them. out: CF = 0, history clear;
 ; CF = 1, AX = X3E_PROFILE / X3E_DIV / X3E_CHAN / X3E_FMT / X3E_MEM /
 ; X3E_RECORD / X3E_TABLE. Keeps every register but AX.
+;
+; THE PART IS TWO HALVES. Everything up to x3x_tail is RESIDENT: the verbs,
+; GRANULE's whole chain and a slot that OPEN copies the profile's window and
+; Lee kernels into. Everything after it - this verb's body, the expansion,
+; the row lists, every profile's kernels, XTGEN.BIN - only OPEN reads. So
+; once OPEN has succeeded the part needs only its first X3C_PARTKB KB, and
+; its claim may be shrunk to that (OSAPI_MEM_REGROW's shrink-to-fit,
+; SPEC.md 121.10); a part shrunk so must be fetched whole again before
+; another OPEN. This stub checks the tail's Fletcher-32 (stamped into the
+; image by tools/x3xtgen.py --seal) before entering it, so a missing or
+; damaged tail is X3E_TABLE and never executed.
 ; =============================================================================
 x3x_open:
     push bx
     push cx
     push dx
     push si
-    push di
-    push bp
     push ds
-    push es
-    cld
-    mov byte [cs:x3x_isopen], 0
-    mov al, [es:di + X3O_PROF]
-    mov ah, [es:di + X3O_DIV]
-    call x3x_chkpd
-    jc .out
-    mov [cs:x3x_prof], al
-    mov [cs:x3x_div], ah
-    mov si, bx                      ; the CAPS block
-    mov ax, X3E_CHAN
-    cmp byte [es:di + X3O_OCH], 1
-    jne .bad
-    mov ax, X3E_FMT
-    mov cl, [es:di + X3O_FMT]
-    cmp cl, X3_FMT_U8
-    ja .bad
-    mov [cs:x3x_fmt], cl
-    mov ax, [es:di + X3O_GAIN]
-    mov [cs:x3x_gain], ax
-    ; the stream: version 1, 2 or 25, rate index 0..2; XT Speech's divisor
-    ; is its source's (SPEC.md 121.4): 2 on MPEG-2.5, 4 on MPEG-2
-    mov ax, X3E_RECORD
-    mov cl, [es:di + X3O_VER]
-    mov ch, [es:di + X3O_SRI]
-    cmp ch, 2
-    ja .bad
-    cmp cl, 1
-    je .verok
-    cmp cl, 2
-    je .verok
-    cmp cl, 25
-    jne .bad
-.verok:
-    mov [cs:x3x_over], cl
-    mov [cs:x3x_osri], ch
-    cmp byte [cs:x3x_prof], X3X_P_SPEECH
-    jne .divok
-    mov ax, X3E_DIV
-    mov ch, 2
-    cmp cl, 25
-    je .spd
-    mov ch, 4
-    cmp cl, 2
-    jne .bad                        ; MPEG-1: no 4-6 kHz output there
-.spd:
-    cmp ch, [cs:x3x_div]
-    jne .bad
-.divok:
-    ; the segments: NSEG of them, none zero
-    mov ax, X3E_MEM
-    mov cl, [cs:si]
-    cmp cl, [es:di + X3O_NSEG]
-    jne .bad
-    xor ch, ch
-    lea bx, [di + X3O_SEG]
-.sg: cmp word [es:bx], 0
-    je .bad
-    inc bx
-    inc bx
-    loop .sg
-    mov ax, 32
-    mov cl, [cs:x3x_div]
-    div cl                          ; AL = 32 / divisor
-    xor ah, ah
-    mov [cs:x3x_nsb], ax
-    mov [cs:x3x_nout], ax
-    ; the profile's routines
-    mov bl, [cs:x3x_prof]
-    xor bh, bh
-    shl bx, 1
-    mov bx, [cs:x3x_ptab + bx]      ; the profile's descriptor
-    mov ax, [cs:bx]                 ; window segments
-    mov [cs:x3x_nwseg], ax
-    mov ax, [cs:bx + 2]
-    mov [cs:x3x_desc], ax
-    mov ax, [cs:bx + 4]
-    mov [cs:x3x_leefn], ax
-    mov ax, [cs:bx + 6]
-    mov [cs:x3x_winfn], ax
-    mov ax, [cs:bx + 8]
-    mov [cs:x3x_aafn], ax
-    cmp byte [cs:x3x_div], 4
-    jne .w4
-    mov word [cs:x3x_leefn], x3x_lee8
-    mov word [cs:x3x_winfn], x3x_win_sp4
-.w4:
-    ; X3O_SEG: the window segments, then SY, H1, H2
-    mov cx, [cs:x3x_nwseg]
-    lea si, [di + X3O_SEG]
-    xor bx, bx
-.ws: mov ax, [es:si]
-    mov [cs:x3x_wseg + bx], ax
-    inc si
-    inc si
-    inc bx
-    inc bx
-    loop .ws
-    mov ax, [es:si]
-    mov [cs:x3x_segsy], ax
-    mov ax, [es:si + 2]
-    mov [cs:x3x_segh1], ax
-    mov ax, [es:si + 4]
-    mov [cs:x3x_segh2], ax
-    ; XTGEN.BIN, paragraph-aligned in this image
-    mov ax, cs
-    add ax, strict word (x3x_gen - $$) / 16
-    mov [cs:x3x_gseg], ax
-    mov es, ax
-    call x3x_gencheck
-    mov ax, X3E_TABLE
-    jc .bad
-    ; expand
+    push cs
+    pop ds
     mov word [cs:x3x_fs1], 0
     mov word [cs:x3x_fs2], 0
-    call x3x_xwin                   ; the window rows (and their fl32)
-    call x3x_xsy                    ; ENCV and Lee planes
-    call x3x_xh1                    ; RQL, IMDCT rows, ENCR, antialias
-    call x3x_xh2                    ; IMWIN
-    ; the check
-    mov bl, [cs:x3x_prof]
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
-    mov ax, X3E_TABLE
-    mov cx, [cs:x3x_fltab + bx]
-    cmp cx, [cs:x3x_fs1]
-    jne .bad
-    mov cx, [cs:x3x_fltab + bx + 2]
-    cmp cx, [cs:x3x_fs2]
-    jne .bad
-    ; the counters since OPEN
-    push cs
-    pop es
-    mov di, x3x_stats
-    mov cx, (x3x_s_end - x3x_stats) / 2
-    xor ax, ax
-    rep stosw
-    mov byte [cs:x3x_isopen], 1
-    call x3x_doreset
-    clc
-    jmp short .out
-.bad:
-    stc
-.out:
-    pop es
+    mov si, x3x_tail
+    mov cx, (x3x_imgend - x3x_tail) / 2
+    call x3x_fl32
     pop ds
-    pop bp
-    pop di
+    mov ax, [cs:x3x_fs1]
+    cmp ax, [cs:x3x_tailfl]
+    jne .gone
+    mov ax, [cs:x3x_fs2]
+    cmp ax, [cs:x3x_tailfl + 2]
+    jne .gone
     pop si
     pop dx
     pop cx
     pop bx
-    retf
-
-; per profile: window segments, their table, the Lee, window and antialias
-; routines
-x3x_ptab dw x3x_pd_std, x3x_pd_fast, x3x_pd_turbo, x3x_pd_speech
-x3x_pd_std    dw X3X_STD_NWSEG, x3x_std_wsegs, x3x_lee32, x3x_win_std, x3x_aa_split
-x3x_pd_fast   dw X3X_FAST_NWSEG, x3x_fast_wsegs, x3x_lee32, x3x_win_fast, x3x_aa_tab
-x3x_pd_turbo  dw X3X_TURBO_NWSEG, x3x_turbo_wsegs, x3x_lee32, x3x_win_turbo, x3x_aa_tab
-x3x_pd_speech dw X3X_SPEECH_NWSEG, x3x_speech_wsegs, x3x_lee16, x3x_win_sp2, x3x_aa_split
-x3x_fltab dw X3X_STD_FL32_LO, X3X_STD_FL32_HI, X3X_FAST_FL32_LO, X3X_FAST_FL32_HI
-          dw X3X_TURBO_FL32_LO, X3X_TURBO_FL32_HI, X3X_SPEECH_FL32_LO, X3X_SPEECH_FL32_HI
-x3x_leetab dw x3x_std_lee, x3x_std_lee, x3x_std_lee, x3x_speech_lee
-x3x_nleetab dw X3X_STD_NLEE, X3X_FAST_NLEE, X3X_TURBO_NLEE, X3X_SPEECH_NLEE
-
-; x3x_gencheck - ES = XTGEN.BIN. CF = 1 when it is not the one built against.
-x3x_gencheck:
-    cmp word [es:0], 'X3'
-    jne .bad
-    cmp word [es:2], 'XT'
-    jne .bad
-    cmp word [es:4], X3X_GEN_VERSION
-    jne .bad
-    push ds
-    push es
-    pop ds
-    xor si, si
-    mov cx, X3X_GEN_BYTES / 2
-    xor bx, bx
-    xor dx, dx
-.f: lodsw
-    add bx, ax
-    add dx, bx
-    loop .f
-    pop ds
-    cmp bx, X3X_GEN_FL32_LO
-    jne .bad
-    cmp dx, X3X_GEN_FL32_HI
-    jne .bad
-    clc
-    ret
-.bad:
+    jmp x3x_opentail
+.gone:
+    mov byte [cs:x3x_isopen], 0
+    mov ax, X3E_TABLE
+    pop si
+    pop dx
+    pop cx
+    pop bx
     stc
-    ret
+    retf
 
 ; x3x_fl32 - DS:SI, CX words: the Fletcher sums carried in x3x_fs1/fs2
 x3x_fl32:
@@ -473,487 +324,6 @@ x3x_fl32:
     pop dx
     pop bx
     pop ax
-    ret
-
-; x3x_vlevels - the V map's 128 levels into x3x_lv (s0 and the segment
-; lengths from XTGEN.BIN, every step a power of two: XT-STUDY.md 8)
-x3x_vlevels:
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov di, x3x_lv
-    xor ax, ax
-    mov [cs:di], ax
-    inc di
-    inc di
-    mov cl, [XG_VMAP + 1]           ; s0
-    mov dx, 1
-    shl dx, cl                      ; the step
-    xor ch, ch
-    mov cl, [XG_VMAP + 2]           ; segments
-    mov si, XG_VMAP + 3
-.s: push cx
-    mov cl, [si]
-    inc si
-.l: add ax, dx
-    mov [cs:di], ax
-    inc di
-    inc di
-    loop .l
-    shl dx, 1
-    pop cx
-    loop .s
-    pop ds
-    ret
-
-; x3x_rlevels - the R map's levels into x3x_lv
-x3x_rlevels:
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov si, XG_RMAP + 2
-    mov di, x3x_lv
-    mov cx, 128
-.l: lodsw
-    mov [cs:di], ax
-    inc di
-    inc di
-    loop .l
-    pop ds
-    ret
-
-; ---------------------------------------------------------------- the rows
-; x3x_xwin - every window segment: rows by x3xttab's recurrence (the
-; running sum's high word, then the negation pass), rings zeroed; fl32 over
-; the rows
-x3x_xwin:
-    mov word [cs:x3x_t], 0
-.seg:
-    mov bx, [cs:x3x_t]
-    cmp bx, [cs:x3x_nwseg]
-    jae .done
-    shl bx, 1
-    mov es, [cs:x3x_wseg + bx]
-    shl bx, 1
-    add bx, [cs:x3x_t]
-    shl bx, 1                       ; 10 bytes a descriptor
-    add bx, [cs:x3x_desc]
-    mov cx, [cs:bx + 2]             ; rows
-    mov si, [cs:bx + 8]             ; their |D| list (dd)
-    push bx
-    xor di, di
-.row:
-    push cx
-    push si
-    mov ax, [cs:si]                 ; ib, low word
-    mov dx, [cs:si + 2]             ; ...and high
-    call x3x_xrow
-    pop si
-    pop cx
-    add si, 4
-    add di, 512
-    loop .row
-    pop bx
-    ; the rings
-    push di
-    mov cx, [cs:bx + 6]
-    shr cx, 1
-    xor ax, ax
-    rep stosw
-    pop di
-    ; fl32 over the rows
-    push ds
-    push es
-    pop ds
-    xor si, si
-    mov cx, [cs:bx + 2]
-    mov ch, cl
-    xor cl, cl                      ; 256 words a row
-    call x3x_fl32
-    pop ds
-    inc word [cs:x3x_t]
-    jmp short .seg
-.done:
-    ret
-
-; x3x_xrow - one row at ES:DI for |D| = DX:AX (units of 2^-16)
-x3x_xrow:
-    push di
-    mov word [es:di], 0             ; code -128: unused, 0
-    mov word [es:di + 256], 0       ; code 0
-    ; B = 4 ib << s0
-    mov bx, ax
-    mov bp, dx
-    shl bx, 1
-    rcl bp, 1
-    shl bx, 1
-    rcl bp, 1
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov cl, [XG_VMAP + 1]
-    xor ch, ch
-    jcxz .s0
-.sh: shl bx, 1
-    rcl bp, 1
-    loop .sh
-.s0:
-    mov ax, 8000h                   ; A = 2^15
-    xor dx, dx
-    add di, 258
-    mov cl, [XG_VMAP + 2]
-    mov si, XG_VMAP + 3
-.seg:
-    push cx
-    mov cl, [si]
-    inc si
-.ent:
-    add ax, bx
-    adc dx, bp
-    mov [es:di], dx
-    inc di
-    inc di
-    loop .ent
-    shl bx, 1                       ; the next segment's step doubles
-    rcl bp, 1
-    pop cx
-    loop .seg
-    pop ds
-    pop di
-    ; the negative half: T[-k] = -T[k]
-    push di
-    lea si, [di + 258]
-    lea bx, [di + 254]
-    mov cx, 127
-.neg:
-    mov ax, [es:si]
-    neg ax
-    mov [es:bx], ax
-    inc si
-    inc si
-    dec bx
-    dec bx
-    loop .neg
-    pop di
-    ret
-
-; ---------------------------------------------------------------- SY
-x3x_xsy:
-    mov es, [cs:x3x_segsy]
-    ; ENCV: the walk over the V levels, nearest level, ties toward zero
-    call x3x_vlevels
-    mov di, X3X_SY_ENCV + 4096
-    xor bx, bx                      ; k
-    xor dx, dx                      ; v
-.v: ; advance k while 2v > lv[k] + lv[k+1]
-.adv:
-    cmp bx, 127
-    jae .got
-    mov si, bx
-    shl si, 1
-    mov ax, [cs:x3x_lv + si]
-    add ax, [cs:x3x_lv + si + 2]
-    mov cx, dx
-    shl cx, 1
-    cmp cx, ax
-    jbe .got
-    inc bx
-    jmp short .adv
-.got:
-    cmp dx, 4096
-    jae .neg
-    mov [es:di], bl                 ; ENCV[4096 + v] = k
-.neg:
-    or dx, dx
-    jz .nx
-    mov al, bl
-    neg al
-    mov si, X3X_SY_ENCV + 4096
-    sub si, dx
-    mov [es:si], al                 ; ENCV[4096 - v] = -k
-.nx:
-    inc di
-    inc dx
-    cmp dx, 4096
-    jbe .v
-    ; fl32 over ENCV
-    push ds
-    push es
-    pop ds
-    mov si, X3X_SY_ENCV
-    mov cx, 4096
-    call x3x_fl32
-    pop ds
-    ; Lee's planes
-    mov bl, [cs:x3x_prof]
-    xor bh, bh
-    shl bx, 1
-    mov si, [cs:x3x_leetab + bx]
-    mov cx, [cs:x3x_nleetab + bx]
-    mov di, X3X_SY_LEE
-    push di
-    push cx
-.lee:
-    push cx
-    push si
-    mov bl, [cs:si]                 ; the constant's index in LEE_C16
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov ax, [XG_LEE + bx]
-    mov dx, [XG_LEE + bx + 2]
-    pop ds
-    call x3x_xsplit
-    pop si
-    pop cx
-    inc si
-    add di, 1024
-    loop .lee
-    pop cx
-    pop si
-    push ds
-    push es
-    pop ds
-    mov ch, cl
-    xor cl, cl
-    shl cx, 1                       ; 512 words a constant
-    call x3x_fl32
-    pop ds
-    ret
-
-; x3x_xsplit - the four 256-byte planes of a byte-split constant c16 = DX:AX
-; at ES:DI: L low, L high, H low, H high (x3xttab.split_recurrence).
-; Preserves DI; clobbers AX, BX, CX, DX.
-x3x_xsplit:
-    mov [cs:x3x_c16], ax
-    mov [cs:x3x_c16 + 2], dx
-    ; L[l] = A >> 16, A = 2^15 + l c16
-    mov ax, 8000h
-    xor dx, dx
-    xor bx, bx
-.l: mov [es:bx + di], dl
-    mov [es:bx + di + 256], dh
-    add ax, [cs:x3x_c16]
-    adc dx, [cs:x3x_c16 + 2]
-    inc bx
-    cmp bx, 256
-    jb .l
-    ; H[h] = (A >> 8) mod 2^16, A = 2^7 + h c16; H[-h] = -H[h]
-    mov ax, 80h
-    xor dx, dx
-    xor bx, bx                      ; h
-.h: mov cl, ah
-    mov ch, dl                      ; CX = (A >> 8) & 0FFFFh
-    cmp bx, 128
-    jae .hn
-    mov [es:bx + di + 512], cl
-    mov [es:bx + di + 768], ch
-.hn:
-    or bx, bx
-    jz .h1
-    push bx
-    neg bx
-    and bx, 0FFh
-    neg cx
-    mov [es:bx + di + 512], cl
-    mov [es:bx + di + 768], ch
-    pop bx
-.h1:
-    add ax, [cs:x3x_c16]
-    adc dx, [cs:x3x_c16 + 2]
-    inc bx
-    cmp bx, 128
-    jbe .h
-    ret
-
-x3x_c16 dw 0, 0
-
-; ---------------------------------------------------------------- H1
-x3x_xh1:
-    mov es, [cs:x3x_segh1]
-    ; RQL: copied (88 rows of 16 words)
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov si, XG_RQL
-    mov di, X3X_H1_RQL
-    mov cx, XG_NRQ * 16
-    rep movsw
-    pop ds
-    push ds
-    push es
-    pop ds
-    mov si, X3X_H1_RQL
-    mov cx, XG_NRQ * 16
-    call x3x_fl32
-    pop ds
-    ; the IMDCT rows: one mul an entry over the R map
-    call x3x_rlevels
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov si, XG_COS15
-    mov di, X3X_H1_IMR
-    mov cx, 18
-.im:
-    lodsw
-    call x3x_xmulrow
-    add di, 512
-    loop .im
-    pop ds
-    push ds
-    push es
-    pop ds
-    mov si, X3X_H1_IMR
-    mov cx, 18 * 256
-    call x3x_fl32
-    pop ds
-    ; ENCR: the walk with at(b) = 4b; then the sentinel
-    mov di, X3X_H1_ENCR + 8192
-    xor bx, bx                      ; k
-    xor dx, dx                      ; b
-.v:
-.adv:
-    cmp bx, 127
-    jae .got
-    mov si, bx
-    shl si, 1
-    mov ax, [cs:x3x_lv + si]
-    add ax, [cs:x3x_lv + si + 2]
-    mov cx, dx
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1                       ; 2 at(b) = 8b (b < 8192 here)
-    cmp cx, ax
-    jbe .got
-    inc bx
-    jmp short .adv
-.got:
-    cmp dx, 8192
-    jae .neg
-    mov [es:di], bl
-.neg:
-    or dx, dx
-    jz .nx
-    mov al, bl
-    neg al
-    mov si, X3X_H1_ENCR + 8192
-    sub si, dx
-    mov [es:si], al
-.nx:
-    inc di
-    inc dx
-    cmp dx, 8192
-    jb .v
-    ; b = 8192: k is 127 by then (8 x 8191 is past every midpoint)
-    mov byte [es:X3X_H1_ENCR], -127
-    mov word [es:X3X_H1_ENCR + 16384], 127
-    push ds
-    push es
-    pop ds
-    mov si, X3X_H1_ENCR
-    mov cx, 8193
-    call x3x_fl32
-    pop ds
-    ; the antialias: byte-split (std, speech) or code rows (fast, turbo)
-    cmp word [cs:x3x_aafn], x3x_aa_tab
-    je .aatab
-    mov di, X3X_H1_AA
-    xor si, si
-    mov cx, 16
-.aas:
-    push cx
-    push si
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov ax, [XG_AA16 + si]
-    mov dx, [XG_AA16 + si + 2]
-    pop ds
-    call x3x_xsplit
-    pop si
-    pop cx
-    add si, 4
-    add di, 1024
-    loop .aas
-    mov cx, 16 * 512
-    jmp short .aafl
-.aatab:
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov si, XG_AA15
-    mov di, X3X_H1_AA
-    mov cx, 16
-.aat:
-    lodsw
-    call x3x_xmulrow
-    add di, 512
-    loop .aat
-    pop ds
-    mov cx, 16 * 256
-.aafl:
-    push ds
-    push es
-    pop ds
-    mov si, X3X_H1_AA
-    call x3x_fl32
-    pop ds
-    ret
-
-; x3x_xmulrow - ES:DI a 512-byte row of T[k] = sign(k) round(c lv[|k|] /
-; 2^15), c = AX, over x3x_lv (x3xttab.mul_row). Preserves SI, DI, CX, DS.
-x3x_xmulrow:
-    push cx
-    push si
-    push di
-    mov bp, ax
-    mov word [es:di], 0
-    xor si, si                      ; 2k
-    add di, 256
-.e: mov ax, [cs:x3x_lv + si]
-    mul bp
-    add ax, 4000h
-    adc dx, 0
-    shl ax, 1
-    rcl dx, 1                       ; DX = (c lv + 2^14) >> 15
-    mov bx, di
-    add bx, si
-    mov [es:bx], dx
-    mov bx, di
-    sub bx, si
-    neg dx
-    mov [es:bx], dx
-    inc si
-    inc si
-    cmp si, 256
-    jb .e
-    pop di
-    pop si
-    pop cx
-    ret
-
-; ---------------------------------------------------------------- H2
-x3x_xh2:
-    mov es, [cs:x3x_segh2]
-    mov di, X3X_H2_IMWIN
-    xor si, si
-    mov cx, 19
-.w: push cx
-    push si
-    push ds
-    mov ds, [cs:x3x_gseg]
-    mov ax, [XG_WIN16 + si]
-    mov dx, [XG_WIN16 + si + 2]
-    pop ds
-    call x3x_xsplit
-    pop si
-    pop cx
-    add si, 4
-    add di, 1024
-    loop .w
-    push ds
-    push es
-    pop ds
-    mov si, X3X_H2_IMWIN
-    mov cx, 19 * 512
-    call x3x_fl32
-    pop ds
     ret
 
 ; =============================================================================
@@ -2832,8 +2202,740 @@ x3x_vslow:
     pop bx
     ret
 
-; ========================================================= generated code
+; ======================================================= generated (resident)
 %define X3XTK_BODY
+%include "x3xtk.inc"
+
+; the profile's window pass and Lee kernel, copied in by OPEN
+x3x_kslot:
+    times X3X_KSLOT db 0
+
+; =============================================================================
+; THE TAIL: only OPEN reads what follows (see x3x_open)
+; =============================================================================
+    align 16
+x3x_tail:
+; =============================================================================
+; OPEN's body (the resident x3x_open has checked this tail first) - in:
+; ES:DI -> an X3O_SIZE open record: profile, divisor, one output
+; channel, U8 or S16, the version and rate index, the gain, and the segments
+; CAPS asked for. Expands the profile's tables into them from XTGEN.BIN
+; (carried inside this part) and checks them. out: CF = 0, history clear;
+; CF = 1, AX = X3E_PROFILE / X3E_DIV / X3E_CHAN / X3E_FMT / X3E_MEM /
+; X3E_RECORD / X3E_TABLE. Keeps every register but AX.
+; =============================================================================
+x3x_opentail:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ds
+    push es
+    cld
+    mov byte [cs:x3x_isopen], 0
+    mov al, [es:di + X3O_PROF]
+    mov ah, [es:di + X3O_DIV]
+    call x3x_chkpd
+    jc .out
+    mov [cs:x3x_prof], al
+    mov [cs:x3x_div], ah
+    mov si, bx                      ; the CAPS block
+    mov ax, X3E_CHAN
+    cmp byte [es:di + X3O_OCH], 1
+    jne .bad
+    mov ax, X3E_FMT
+    mov cl, [es:di + X3O_FMT]
+    cmp cl, X3_FMT_U8
+    ja .bad
+    mov [cs:x3x_fmt], cl
+    mov ax, [es:di + X3O_GAIN]
+    mov [cs:x3x_gain], ax
+    ; the stream: version 1, 2 or 25, rate index 0..2; XT Speech's divisor
+    ; is its source's (SPEC.md 121.4): 2 on MPEG-2.5, 4 on MPEG-2
+    mov ax, X3E_RECORD
+    mov cl, [es:di + X3O_VER]
+    mov ch, [es:di + X3O_SRI]
+    cmp ch, 2
+    ja .bad
+    cmp cl, 1
+    je .verok
+    cmp cl, 2
+    je .verok
+    cmp cl, 25
+    jne .bad
+.verok:
+    mov [cs:x3x_over], cl
+    mov [cs:x3x_osri], ch
+    cmp byte [cs:x3x_prof], X3X_P_SPEECH
+    jne .divok
+    mov ax, X3E_DIV
+    mov ch, 2
+    cmp cl, 25
+    je .spd
+    mov ch, 4
+    cmp cl, 2
+    jne .bad                        ; MPEG-1: no 4-6 kHz output there
+.spd:
+    cmp ch, [cs:x3x_div]
+    jne .bad
+.divok:
+    ; the segments: NSEG of them, none zero
+    mov ax, X3E_MEM
+    mov cl, [cs:si]
+    cmp cl, [es:di + X3O_NSEG]
+    jne .bad
+    xor ch, ch
+    lea bx, [di + X3O_SEG]
+.sg: cmp word [es:bx], 0
+    je .bad
+    inc bx
+    inc bx
+    loop .sg
+    mov ax, 32
+    mov cl, [cs:x3x_div]
+    div cl                          ; AL = 32 / divisor
+    xor ah, ah
+    mov [cs:x3x_nsb], ax
+    mov [cs:x3x_nout], ax
+    ; the profile's routines
+    mov bl, [cs:x3x_prof]
+    xor bh, bh
+    shl bx, 1
+    mov bx, [cs:x3x_ptab + bx]      ; the profile's descriptor
+    mov ax, [cs:bx]                 ; window segments
+    mov [cs:x3x_nwseg], ax
+    mov ax, [cs:bx + 2]
+    mov [cs:x3x_desc], ax
+    mov ax, [cs:bx + 4]
+    mov [cs:x3x_aafn], ax
+    lea ax, [bx + 6]                ; the kernels: Lee, Lee end, window, end
+    cmp byte [cs:x3x_div], 4
+    jne .w4
+    mov ax, x3x_kd_sp4
+.w4:
+    mov [cs:x3x_kdesc], ax
+    ; X3O_SEG: the window segments, then SY, H1, H2
+    mov cx, [cs:x3x_nwseg]
+    lea si, [di + X3O_SEG]
+    xor bx, bx
+.ws: mov ax, [es:si]
+    mov [cs:x3x_wseg + bx], ax
+    inc si
+    inc si
+    inc bx
+    inc bx
+    loop .ws
+    mov ax, [es:si]
+    mov [cs:x3x_segsy], ax
+    mov ax, [es:si + 2]
+    mov [cs:x3x_segh1], ax
+    mov ax, [es:si + 4]
+    mov [cs:x3x_segh2], ax
+    ; XTGEN.BIN, paragraph-aligned in this image
+    mov ax, cs
+    add ax, strict word (x3x_gen - $$) / 16
+    mov [cs:x3x_gseg], ax
+    mov es, ax
+    call x3x_gencheck
+    mov ax, X3E_TABLE
+    jc .bad
+    ; expand
+    mov word [cs:x3x_fs1], 0
+    mov word [cs:x3x_fs2], 0
+    call x3x_xwin                   ; the window rows (and their fl32)
+    call x3x_xsy                    ; ENCV and Lee planes
+    call x3x_xh1                    ; RQL, IMDCT rows, ENCR, antialias
+    call x3x_xh2                    ; IMWIN
+    ; the check
+    mov bl, [cs:x3x_prof]
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov ax, X3E_TABLE
+    mov cx, [cs:x3x_fltab + bx]
+    cmp cx, [cs:x3x_fs1]
+    jne .bad
+    mov cx, [cs:x3x_fltab + bx + 2]
+    cmp cx, [cs:x3x_fs2]
+    jne .bad
+    ; the counters since OPEN
+    push cs
+    pop es
+    mov di, x3x_stats
+    mov cx, (x3x_s_end - x3x_stats) / 2
+    xor ax, ax
+    rep stosw
+    ; the profile's two kernels into the resident slot: the window pass,
+    ; then Lee's (both position-independent: absolute [cs:] data, relative
+    ; jumps inside, the slow V code an indirect call)
+    push cs
+    pop es
+    push ds
+    push cs
+    pop ds
+    mov bx, [cs:x3x_kdesc]
+    mov di, x3x_kslot
+    mov [cs:x3x_winfn], di
+    mov si, [cs:bx + 4]
+    mov cx, [cs:bx + 6]
+    sub cx, si
+    rep movsb
+    mov [cs:x3x_leefn], di
+    mov si, [cs:bx]
+    mov cx, [cs:bx + 2]
+    sub cx, si
+    rep movsb
+    pop ds
+    mov byte [cs:x3x_isopen], 1
+    call x3x_doreset
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    retf
+
+; per profile: window segments, their table, the Lee, window and antialias
+; routines
+; (the kernels as [start, end) pairs: Lee's, then the window pass's)
+x3x_ptab dw x3x_pd_std, x3x_pd_fast, x3x_pd_turbo, x3x_pd_speech
+x3x_pd_std    dw X3X_STD_NWSEG, x3x_std_wsegs, x3x_aa_split
+              dw x3x_lee32, x3x_lee32_end, x3x_win_std, x3x_win_std_end
+x3x_pd_fast   dw X3X_FAST_NWSEG, x3x_fast_wsegs, x3x_aa_tab
+              dw x3x_lee32, x3x_lee32_end, x3x_win_fast, x3x_win_fast_end
+x3x_pd_turbo  dw X3X_TURBO_NWSEG, x3x_turbo_wsegs, x3x_aa_tab
+              dw x3x_lee32, x3x_lee32_end, x3x_win_turbo, x3x_win_turbo_end
+x3x_pd_speech dw X3X_SPEECH_NWSEG, x3x_speech_wsegs, x3x_aa_split
+              dw x3x_lee16, x3x_lee16_end, x3x_win_sp2, x3x_win_sp2_end
+x3x_kd_sp4    dw x3x_lee8, x3x_lee8_end, x3x_win_sp4, x3x_win_sp4_end
+x3x_fltab dw X3X_STD_FL32_LO, X3X_STD_FL32_HI, X3X_FAST_FL32_LO, X3X_FAST_FL32_HI
+          dw X3X_TURBO_FL32_LO, X3X_TURBO_FL32_HI, X3X_SPEECH_FL32_LO, X3X_SPEECH_FL32_HI
+x3x_leetab dw x3x_std_lee, x3x_std_lee, x3x_std_lee, x3x_speech_lee
+x3x_nleetab dw X3X_STD_NLEE, X3X_FAST_NLEE, X3X_TURBO_NLEE, X3X_SPEECH_NLEE
+
+; x3x_gencheck - ES = XTGEN.BIN. CF = 1 when it is not the one built against.
+x3x_gencheck:
+    cmp word [es:0], 'X3'
+    jne .bad
+    cmp word [es:2], 'XT'
+    jne .bad
+    cmp word [es:4], X3X_GEN_VERSION
+    jne .bad
+    push ds
+    push es
+    pop ds
+    xor si, si
+    mov cx, X3X_GEN_BYTES / 2
+    xor bx, bx
+    xor dx, dx
+.f: lodsw
+    add bx, ax
+    add dx, bx
+    loop .f
+    pop ds
+    cmp bx, X3X_GEN_FL32_LO
+    jne .bad
+    cmp dx, X3X_GEN_FL32_HI
+    jne .bad
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; x3x_vlevels - the V map's 128 levels into x3x_lv (s0 and the segment
+; lengths from XTGEN.BIN, every step a power of two: XT-STUDY.md 8)
+x3x_vlevels:
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov di, x3x_lv
+    xor ax, ax
+    mov [cs:di], ax
+    inc di
+    inc di
+    mov cl, [XG_VMAP + 1]           ; s0
+    mov dx, 1
+    shl dx, cl                      ; the step
+    xor ch, ch
+    mov cl, [XG_VMAP + 2]           ; segments
+    mov si, XG_VMAP + 3
+.s: push cx
+    mov cl, [si]
+    inc si
+.l: add ax, dx
+    mov [cs:di], ax
+    inc di
+    inc di
+    loop .l
+    shl dx, 1
+    pop cx
+    loop .s
+    pop ds
+    ret
+
+; x3x_rlevels - the R map's levels into x3x_lv
+x3x_rlevels:
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov si, XG_RMAP + 2
+    mov di, x3x_lv
+    mov cx, 128
+.l: lodsw
+    mov [cs:di], ax
+    inc di
+    inc di
+    loop .l
+    pop ds
+    ret
+
+; ---------------------------------------------------------------- the rows
+; x3x_xwin - every window segment: rows by x3xttab's recurrence (the
+; running sum's high word, then the negation pass), rings zeroed; fl32 over
+; the rows
+x3x_xwin:
+    mov word [cs:x3x_t], 0
+.seg:
+    mov bx, [cs:x3x_t]
+    cmp bx, [cs:x3x_nwseg]
+    jae .done
+    shl bx, 1
+    mov es, [cs:x3x_wseg + bx]
+    shl bx, 1
+    add bx, [cs:x3x_t]
+    shl bx, 1                       ; 10 bytes a descriptor
+    add bx, [cs:x3x_desc]
+    mov cx, [cs:bx + 2]             ; rows
+    mov si, [cs:bx + 8]             ; their |D| list (dd)
+    push bx
+    xor di, di
+.row:
+    push cx
+    push si
+    mov ax, [cs:si]                 ; ib, low word
+    mov dx, [cs:si + 2]             ; ...and high
+    call x3x_xrow
+    pop si
+    pop cx
+    add si, 4
+    add di, 512
+    loop .row
+    pop bx
+    ; the rings
+    push di
+    mov cx, [cs:bx + 6]
+    shr cx, 1
+    xor ax, ax
+    rep stosw
+    pop di
+    ; fl32 over the rows
+    push ds
+    push es
+    pop ds
+    xor si, si
+    mov cx, [cs:bx + 2]
+    mov ch, cl
+    xor cl, cl                      ; 256 words a row
+    call x3x_fl32
+    pop ds
+    inc word [cs:x3x_t]
+    jmp short .seg
+.done:
+    ret
+
+; x3x_xrow - one row at ES:DI for |D| = DX:AX (units of 2^-16)
+x3x_xrow:
+    push di
+    mov word [es:di], 0             ; code -128: unused, 0
+    mov word [es:di + 256], 0       ; code 0
+    ; B = 4 ib << s0
+    mov bx, ax
+    mov bp, dx
+    shl bx, 1
+    rcl bp, 1
+    shl bx, 1
+    rcl bp, 1
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov cl, [XG_VMAP + 1]
+    xor ch, ch
+    jcxz .s0
+.sh: shl bx, 1
+    rcl bp, 1
+    loop .sh
+.s0:
+    mov ax, 8000h                   ; A = 2^15
+    xor dx, dx
+    add di, 258
+    mov cl, [XG_VMAP + 2]
+    mov si, XG_VMAP + 3
+.seg:
+    push cx
+    mov cl, [si]
+    inc si
+.ent:
+    add ax, bx
+    adc dx, bp
+    mov [es:di], dx
+    inc di
+    inc di
+    loop .ent
+    shl bx, 1                       ; the next segment's step doubles
+    rcl bp, 1
+    pop cx
+    loop .seg
+    pop ds
+    pop di
+    ; the negative half: T[-k] = -T[k]
+    push di
+    lea si, [di + 258]
+    lea bx, [di + 254]
+    mov cx, 127
+.neg:
+    mov ax, [es:si]
+    neg ax
+    mov [es:bx], ax
+    inc si
+    inc si
+    dec bx
+    dec bx
+    loop .neg
+    pop di
+    ret
+
+; ---------------------------------------------------------------- SY
+x3x_xsy:
+    mov es, [cs:x3x_segsy]
+    ; ENCV: the walk over the V levels, nearest level, ties toward zero
+    call x3x_vlevels
+    mov di, X3X_SY_ENCV + 4096
+    xor bx, bx                      ; k
+    xor dx, dx                      ; v
+.v: ; advance k while 2v > lv[k] + lv[k+1]
+.adv:
+    cmp bx, 127
+    jae .got
+    mov si, bx
+    shl si, 1
+    mov ax, [cs:x3x_lv + si]
+    add ax, [cs:x3x_lv + si + 2]
+    mov cx, dx
+    shl cx, 1
+    cmp cx, ax
+    jbe .got
+    inc bx
+    jmp short .adv
+.got:
+    cmp dx, 4096
+    jae .neg
+    mov [es:di], bl                 ; ENCV[4096 + v] = k
+.neg:
+    or dx, dx
+    jz .nx
+    mov al, bl
+    neg al
+    mov si, X3X_SY_ENCV + 4096
+    sub si, dx
+    mov [es:si], al                 ; ENCV[4096 - v] = -k
+.nx:
+    inc di
+    inc dx
+    cmp dx, 4096
+    jbe .v
+    ; fl32 over ENCV
+    push ds
+    push es
+    pop ds
+    mov si, X3X_SY_ENCV
+    mov cx, 4096
+    call x3x_fl32
+    pop ds
+    ; Lee's planes
+    mov bl, [cs:x3x_prof]
+    xor bh, bh
+    shl bx, 1
+    mov si, [cs:x3x_leetab + bx]
+    mov cx, [cs:x3x_nleetab + bx]
+    mov di, X3X_SY_LEE
+    push di
+    push cx
+.lee:
+    push cx
+    push si
+    mov bl, [cs:si]                 ; the constant's index in LEE_C16
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov ax, [XG_LEE + bx]
+    mov dx, [XG_LEE + bx + 2]
+    pop ds
+    call x3x_xsplit
+    pop si
+    pop cx
+    inc si
+    add di, 1024
+    loop .lee
+    pop cx
+    pop si
+    push ds
+    push es
+    pop ds
+    mov ch, cl
+    xor cl, cl
+    shl cx, 1                       ; 512 words a constant
+    call x3x_fl32
+    pop ds
+    ret
+
+; x3x_xsplit - the four 256-byte planes of a byte-split constant c16 = DX:AX
+; at ES:DI: L low, L high, H low, H high (x3xttab.split_recurrence).
+; Preserves DI; clobbers AX, BX, CX, DX.
+x3x_xsplit:
+    mov [cs:x3x_c16], ax
+    mov [cs:x3x_c16 + 2], dx
+    ; L[l] = A >> 16, A = 2^15 + l c16
+    mov ax, 8000h
+    xor dx, dx
+    xor bx, bx
+.l: mov [es:bx + di], dl
+    mov [es:bx + di + 256], dh
+    add ax, [cs:x3x_c16]
+    adc dx, [cs:x3x_c16 + 2]
+    inc bx
+    cmp bx, 256
+    jb .l
+    ; H[h] = (A >> 8) mod 2^16, A = 2^7 + h c16; H[-h] = -H[h]
+    mov ax, 80h
+    xor dx, dx
+    xor bx, bx                      ; h
+.h: mov cl, ah
+    mov ch, dl                      ; CX = (A >> 8) & 0FFFFh
+    cmp bx, 128
+    jae .hn
+    mov [es:bx + di + 512], cl
+    mov [es:bx + di + 768], ch
+.hn:
+    or bx, bx
+    jz .h1
+    push bx
+    neg bx
+    and bx, 0FFh
+    neg cx
+    mov [es:bx + di + 512], cl
+    mov [es:bx + di + 768], ch
+    pop bx
+.h1:
+    add ax, [cs:x3x_c16]
+    adc dx, [cs:x3x_c16 + 2]
+    inc bx
+    cmp bx, 128
+    jbe .h
+    ret
+
+
+; ---------------------------------------------------------------- H1
+x3x_xh1:
+    mov es, [cs:x3x_segh1]
+    ; RQL: copied (88 rows of 16 words)
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov si, XG_RQL
+    mov di, X3X_H1_RQL
+    mov cx, XG_NRQ * 16
+    rep movsw
+    pop ds
+    push ds
+    push es
+    pop ds
+    mov si, X3X_H1_RQL
+    mov cx, XG_NRQ * 16
+    call x3x_fl32
+    pop ds
+    ; the IMDCT rows: one mul an entry over the R map
+    call x3x_rlevels
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov si, XG_COS15
+    mov di, X3X_H1_IMR
+    mov cx, 18
+.im:
+    lodsw
+    call x3x_xmulrow
+    add di, 512
+    loop .im
+    pop ds
+    push ds
+    push es
+    pop ds
+    mov si, X3X_H1_IMR
+    mov cx, 18 * 256
+    call x3x_fl32
+    pop ds
+    ; ENCR: the walk with at(b) = 4b; then the sentinel
+    mov di, X3X_H1_ENCR + 8192
+    xor bx, bx                      ; k
+    xor dx, dx                      ; b
+.v:
+.adv:
+    cmp bx, 127
+    jae .got
+    mov si, bx
+    shl si, 1
+    mov ax, [cs:x3x_lv + si]
+    add ax, [cs:x3x_lv + si + 2]
+    mov cx, dx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1                       ; 2 at(b) = 8b (b < 8192 here)
+    cmp cx, ax
+    jbe .got
+    inc bx
+    jmp short .adv
+.got:
+    cmp dx, 8192
+    jae .neg
+    mov [es:di], bl
+.neg:
+    or dx, dx
+    jz .nx
+    mov al, bl
+    neg al
+    mov si, X3X_H1_ENCR + 8192
+    sub si, dx
+    mov [es:si], al
+.nx:
+    inc di
+    inc dx
+    cmp dx, 8192
+    jb .v
+    ; b = 8192: k is 127 by then (8 x 8191 is past every midpoint)
+    mov byte [es:X3X_H1_ENCR], -127
+    mov word [es:X3X_H1_ENCR + 16384], 127
+    push ds
+    push es
+    pop ds
+    mov si, X3X_H1_ENCR
+    mov cx, 8193
+    call x3x_fl32
+    pop ds
+    ; the antialias: byte-split (std, speech) or code rows (fast, turbo)
+    cmp word [cs:x3x_aafn], x3x_aa_tab
+    je .aatab
+    mov di, X3X_H1_AA
+    xor si, si
+    mov cx, 16
+.aas:
+    push cx
+    push si
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov ax, [XG_AA16 + si]
+    mov dx, [XG_AA16 + si + 2]
+    pop ds
+    call x3x_xsplit
+    pop si
+    pop cx
+    add si, 4
+    add di, 1024
+    loop .aas
+    mov cx, 16 * 512
+    jmp short .aafl
+.aatab:
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov si, XG_AA15
+    mov di, X3X_H1_AA
+    mov cx, 16
+.aat:
+    lodsw
+    call x3x_xmulrow
+    add di, 512
+    loop .aat
+    pop ds
+    mov cx, 16 * 256
+.aafl:
+    push ds
+    push es
+    pop ds
+    mov si, X3X_H1_AA
+    call x3x_fl32
+    pop ds
+    ret
+
+; x3x_xmulrow - ES:DI a 512-byte row of T[k] = sign(k) round(c lv[|k|] /
+; 2^15), c = AX, over x3x_lv (x3xttab.mul_row). Preserves SI, DI, CX, DS.
+x3x_xmulrow:
+    push cx
+    push si
+    push di
+    mov bp, ax
+    mov word [es:di], 0
+    xor si, si                      ; 2k
+    add di, 256
+.e: mov ax, [cs:x3x_lv + si]
+    mul bp
+    add ax, 4000h
+    adc dx, 0
+    shl ax, 1
+    rcl dx, 1                       ; DX = (c lv + 2^14) >> 15
+    mov bx, di
+    add bx, si
+    mov [es:bx], dx
+    mov bx, di
+    sub bx, si
+    neg dx
+    mov [es:bx], dx
+    inc si
+    inc si
+    cmp si, 256
+    jb .e
+    pop di
+    pop si
+    pop cx
+    ret
+
+; ---------------------------------------------------------------- H2
+x3x_xh2:
+    mov es, [cs:x3x_segh2]
+    mov di, X3X_H2_IMWIN
+    xor si, si
+    mov cx, 19
+.w: push cx
+    push si
+    push ds
+    mov ds, [cs:x3x_gseg]
+    mov ax, [XG_WIN16 + si]
+    mov dx, [XG_WIN16 + si + 2]
+    pop ds
+    call x3x_xsplit
+    pop si
+    pop cx
+    add si, 4
+    add di, 1024
+    loop .w
+    push ds
+    push es
+    pop ds
+    mov si, X3X_H2_IMWIN
+    mov cx, 19 * 512
+    call x3x_fl32
+    pop ds
+    ret
+
+
+; ===================================================== generated (the tail)
+%define X3XTK_TAIL
 %include "x3xtk.inc"
 
 ; ======================================================== the generator input
@@ -2842,7 +2944,9 @@ x3x_vslow:
     align 16
 x3x_gen:
     incbin "XTGEN.BIN"
-x3x_imgend:
+x3x_genend:
     ; (build/XTGEN.BIN is the input x3xtk.inc was made with: a different one
     ; fails here, as a negative count)
-    times (x3x_imgend - x3x_gen) - X3X_GEN_BYTES db 0
+    times (x3x_genend - x3x_gen) - X3X_GEN_BYTES db 0
+    align 2
+x3x_imgend:

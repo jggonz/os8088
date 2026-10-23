@@ -18,9 +18,9 @@
 ;   E  the end of a case      F  a failure, its text       Q  all done
 ;
 ; Memory: 0060:0 the directory, 1000:0 this, 1800:0 FRONT, 1E00:0 the XT
-; part, 2C00:0 the stack (SP = 180h), 2C20:0 the ring (8 KB), 2E20:0 PCM,
-; 3000:0 the file (128 KB), 5000:0 the part's segments (CAPS' paragraphs,
-; end to end).
+; part (64 KB at most), 2E00:0 the stack (SP = 180h), 2E20:0 the ring (8 KB),
+; 3020:0 PCM, 3080:0 the file (128 KB), 5080:0 the part's segments (CAPS'
+; paragraphs, end to end).
 ; =============================================================================
 
     cpu 8086
@@ -32,14 +32,14 @@
 
 SEG_DIR     equ 0x0060
 SEG_FRONT   equ 0x1800
-SEG_XT      equ 0x1E00
-SEG_STACK   equ 0x2C00
+SEG_XT      equ 0x1E00              ; up to 64 KB
+SEG_STACK   equ 0x2E00
 STACK_TOP   equ 0x0180
-SEG_RING    equ 0x2C20
+SEG_RING    equ 0x2E20
 RING_K      equ 13
-SEG_PCM     equ 0x2E20
-SEG_FILE    equ 0x3000
-SEG_WORK    equ 0x5000
+SEG_PCM     equ 0x3020
+SEG_FILE    equ 0x3080              ; 128 KB
+SEG_WORK    equ 0x5080              ; XT Standard's 14,993 paragraphs end at 8B11h
 PORT_OUT    equ 0xE9
 PORT_EXIT   equ 0xF4
 

@@ -64,6 +64,7 @@ def build(d, fast_min=None):
     out = os.path.join(d, 'x3xt.bin')
     subprocess.run(['nasm', '-f', 'bin', '-w+error', '-I', os.path.join(ROOT, 'apps', 'xtmp3') + '/',
                     '-I', d + '/', '-o', out, wrap], check=True)
+    G.seal(out)
     global IMAGE
     IMAGE = open(out, 'rb').read()
     sym = {}
