@@ -3,7 +3,7 @@
 ; One worker advances play under the graphics lock shared with UI callbacks.
 ; No private hardware access.
 %include "os88api.inc"
-    OS88_HEADER 'PACMAN', pm_entry, 1, OS88_STACK_256
+    OS88_HEADER 'PACMAN', pm_entry, 1, OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM
     OS88_ICON16
 %rep 2
     dw 0x07E0,0x1FF8,0x3FFC,0x7FFE,0x7FFC,0xFFF0,0xFFC0,0xFF00

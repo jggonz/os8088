@@ -96,6 +96,19 @@ FSIF_BANKED equ 4
 ; -----------------------------------------------------------------------------
 fsx_caps:
     push bx
+%ifdef KERN_BIG
+    cmp bx, 16                  ; BX = 1..15 ASKS ABOUT DISPLAY BX-1 (SPEC.md
+    jae .ask                    ; 53.1.2) - no window pointer is that small -
+    cmp [vid_ndisp], bl         ; and CF = 1 is "BX-1 is past the last one":
+    jb .out                     ; the refusal's own carry, out through the one
+                                ; `pop bx`. BX = 0 (the frontmost) compares
+                                ; below nothing and asks
+%else
+    lea ax, [bx-2]              ; ONE display: BX = 1 is the primary, which
+    cmp ax, 14                  ; this answers whatever BX is, and 2..15 are
+    jb .out                     ; displays there are not (SPEC.md 53.1.2) -
+%endif                          ; CF = 1, the refusal, out through the `pop`
+.ask:
     mov dl, [vid_kind]
 %ifdef KERN_BIG                 ; ...of the display the ASKED-ABOUT window is
                                 ; on (SPEC.md 39.18.1)
@@ -110,12 +123,21 @@ fsx_caps:
                                 ; EXTD.DRV's ext_fsx_caps. UNGATED: an app
                                 ; asks this once to grey a menu, and one
                                 ; display keeps DL = [vid_kind] (39.19.6)
+%ifdef VID_EXT
+    cmp dl, VID_VESA            ; a VESA display answers VID_VGA (SPEC.md
+    jne .kind                   ; 120.5): the kind that names the BIOS modes
+    mov dl, VID_VGA             ; a bracket may set, which is what every
+.kind:                          ; package asks this for - Gorillas took kind 4
+%endif                          ; for "neither VGA nor CGA" and drew planar
+                                ; onto the packed desktop. The depth is
+                                ; OSAPI_VIDEO's and OSAPI_WM_DISPLAY's DH
     mov bl, dl
     xor bh, bh
     shl bx, 1
     mov ax, [bx+fsx_capstab]
-    pop bx
     clc
+.out:
+    pop bx                      ; `pop` writes no flag: either answer's CF
     ret
 
 fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
@@ -128,6 +150,13 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
                                ; has no FSXM id, and mode 0Dh (native, planar)
                                ; is a safe later addition, not pass 1
                                ; (SPEC.md 39.24, docs/plans/completed/EGA-PLAN.md 7)
+%endif
+%ifdef VID_EXT
+    dw 0x01EF                   ; VESA: VGA's row (SPEC.md 120.5) - it is the
+                               ; same card, every BIOS mode in it is legal
+                               ; from a VBE mode, and fsx_leave's vid_setmode
+                               ; takes the VESA arm back. WITHOUT THIS ROW the
+                               ; table was indexed past its end by kind 4
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -160,12 +189,16 @@ fsx_run:
                                 ; above would silently retarget another
                                 ; routine's `.fail`
 %ifdef KERN_BIG
-    cmp cx, FSXF_FASTTICK + FSXF_RATE ; 6: CX >= 8 is an undefined bit, and 6
-%else                           ; and 7 are FASTTICK WITH RATE, which refuses
-    cmp cx, FSXF_KEEPWORKER + FSXF_FASTTICK + 1 ; too - one channel 0 (53.2.2)
+    cmp cl, FSXF_FASTTICK + FSXF_RATE ; 6: CL >= 8 is an undefined bit, and 6
+    jae .fail                   ; and 7 are FASTTICK WITH RATE, which refuses
+    cmp [vid_ndisp], ch         ; too - one channel 0 (53.2.2). CH = 0 the
+    jb .fail                    ; window's display, n display n-1 (53.1.2)
+%else
+    cmp cx, FSXF_KEEPWORKER + FSXF_FASTTICK + 1 ; (CH: any display past the
+    jae .fail                   ; window's refuses, CX being past the flags)
 %endif
                                 ; undefined flag bits refuse, so the word
-    jae .fail                   ; stays extensible (SPEC.md 53.1). "any bit
+                                ; stays extensible (SPEC.md 53.1). "any bit
                                 ; above the defined ones is set" and "CX >=
                                 ; 2^n" are the same statement ONLY BECAUSE THE
                                 ; DEFINED BITS ARE THE LOW n: define bit 4
@@ -176,6 +209,10 @@ fsx_run:
                                 ; and one bracket at a time: [sch_cur] = 0 and
                                 ; [fsx_task] = 0xFF, ONE word (adjacent, the
                                 ; %if at fsx_mine)
+%ifdef KERN_BIG
+    mov [fsx_wdisp], ch         ; THE DISPLAY ASKED FOR, banked - no bracket is
+%endif                          ; up, so nothing reads it. CH may stay: only CL
+                                ; is read until the release loop loads all of CX
 %ifdef KERN_BIG
     test cl, FSXF_RATE          ; SPEC.md 53.2.2: DX a divisor, DI a hook
     jz .norate                  ; (never with FASTTICK: refused above)
@@ -291,10 +328,13 @@ fsx_run:
     ; thaw safe. The caller's own grants stay - it keeps running, which is
     ; what carries a FSXF_KEEPWORKER stream in.
     mov si, inst_tab
-    mov cl, INST_MAX            ; CL alone: CH is 0, because the flags test at
-                                ; the door refused every CX >= 8 and nothing
-                                ; since has written CX (the fence's clobbers
-                                ; are DX and DI)
+%ifdef KERN_BIG
+    mov cx, INST_MAX            ; ALL OF CX: CH is still the door's display,
+%else                           ; banked above (kern_big). CL alone on
+    mov cl, INST_MAX            ; kern_small: CH is 0, because the door refused
+%endif                          ; every CX past the flags, and nothing since
+                                ; has written CX (the fence's clobbers are DX
+                                ; and DI)
     xor al, al
 .rel:
     cmp byte [si+I_STATE], 0
@@ -308,9 +348,12 @@ fsx_run:
     loop .rel
 
 %ifdef KERN_BIG
+    dec byte [fsx_wdisp]        ; the door's CH: n is display n-1 (SPEC.md
+    jns .disp                   ; 53.1.2), and 0 - every caller before it -
+                                ; wraps to FFh: the WINDOW's display
     call wm_disp_of             ; WHICH DISPLAY this bracket is on - banked,
     mov [fsx_wdisp], al         ; not acted on (SPEC.md 39.18.3). BX is still
-                                ; the window
+.disp:                          ; the window
                                 ;
                                 ; THE SINGLE-DISPLAY COLLAPSE MOVED TO
                                 ; fsx_mode, because it is a consequence of
@@ -666,6 +709,14 @@ fsx_surf:
     call fsx_mine               ; a bracket, and ours - and it preserves AX,
     stc                         ; so the bank the refusal path needed is gone
     jne .out                    ; (stc writes CF alone: ZF is still fsx_mine's)
+%ifdef VID_EXT
+    cmp byte [vid_kind], VID_VESA   ; the DESKTOP's own surface on a VESA
+    jne .surf                   ; display is packed pixels (SPEC.md 120.5), and
+    cmp byte [fsx_cur], 0xFF    ; a same-mode bracket's caller writes planar
+    stc                         ; VGA: refused, CF = 1, unless a foreign mode
+    je .out                     ; is up - then the surface is that mode's
+.surf:
+%endif
     xor ax, ax
     xor bx, bx
     mov cx, [vid_cw]
@@ -892,15 +943,12 @@ fsx_page:
     jae fsx_wait.fail
     mov bx, 0x030A                  ; graphics + video, both lone-Hercules pages
 %ifdef KERN_BIG
-    push ax
     call vid_dual_ok                ; **AND THE SECOND PAGE IS REFUSED ON A
-    pop ax
-    jc .single
+    jc .single                      ; (AX survives it, vid_dual_ok's contract)
     or al, al
     jnz fsx_wait.fail               ; MACHINE THAT HAS A COLOUR CARD TOO**
-    mov bh, 1                      ; dual-card page 0 must not decode B8000h
-    jmp .h0
-.single:
+    mov bh, 1                       ; dual-card page 0 must not decode B8000h,
+.single:                            ; and AL = 0 takes the `jz .h0` below
 %endif                              ; (SPEC.md 53.10). vid_setmode leaves 3BFh
                                     ; bit 1 clear for a reason it states at the
                                     ; write: that page is at B8000, where a CGA
@@ -915,9 +963,8 @@ fsx_page:
                                     ; call can reach here
     or al, al
     jz .h0
-    or bl, 0x80                     ; ...and page 1
-    mov bh, 3                       ; ...whose decode has to be allowed with it
-.h0:
+    or bl, 0x80                     ; ...and page 1, whose decode BH = 3
+.h0:                                ; already allows (kernel size pass 13, -6)
     mov dx, 0x3BF                   ; ALLOW the second page: bit 0 graphics,
     mov al, bh                      ; retain both pages on a lone Hercules
     out dx, al                      ; dual-card page 0 retains only its own RAM

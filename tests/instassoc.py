@@ -48,14 +48,16 @@ sys.path.insert(0, "tests")
 import os88marty as M                                      # noqa: E402
 import instdeep as ID                                      # noqa: E402
 
-# The format, a fourth reader of it (SPEC.md 54.7). kernel/assoc.inc parses it,
-# drivers/hdd/iassoc.inc writes it, tools/os88disk.py writes it, and this reads
-# it - deliberately spelled out rather than imported, because a test that
-# borrows the writer's own constants cannot catch the writer using the wrong
-# ones. tests/unit/t_mirror.py is what keeps the three PRODUCERS agreeing.
+# The format, a third reader of it (SPEC.md 54.7). kernel/assoc.inc parses it,
+# kernel/ascw.inc writes it (FORMAT.DRV's flush, which the installer reaches
+# through OSAPI_ASSOC_FLUSH since SPEC.md 54.7.6), tools/os88disk.py writes it,
+# and this reads it - deliberately spelled out rather than imported, because a
+# test that borrows the writer's own constants cannot catch the writer using
+# the wrong ones. The kernel's reader and writer share one assembly, so they
+# cannot drift apart; os88geom's Python sweep covers the host writer.
 ASC_MAGIC = b"OS88AC"
 ASC_HDR, ASC_ROW, ASC_ROWCLUS, ASC_ROWICO = 16, 88, 10, 16   # a VERSION 2 row
-ASC_NAPP, ASC_NEXT = 32, 24
+ASC_NAPP, ASC_NEXT = 55, 64
 
 # The extensions the shipped disks' packages declare (SPEC.md 54.6), and the
 # program each must reach. Named rather than counted: "5 associations" passes

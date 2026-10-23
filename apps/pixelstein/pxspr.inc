@@ -1877,8 +1877,7 @@ px_map_row:
 ;               through ES. clobbers everything but DS
 ; -----------------------------------------------------------------------------
 px_map_draw:
-    mov byte [px_r0], 0
-    mov byte [px_r1], PX_ROWS - 1
+    mov word [px_r0], (PX_ROWS - 1) << 8   ; px_r0 = 0, px_r1 = the last row
     mov es, [px_dseg]
     mov bp, [px_dbase]              ; BP = the cell row's first byte (a
     mov al, [px_x0]                 ; value, never an address: SS is not DS)

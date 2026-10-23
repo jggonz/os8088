@@ -1116,9 +1116,9 @@ it_praw4p:
     ; strip row by a stride made once (64 or 128, less the bytes it moved)
     mov ax, 64
     sub ax, [cs:it_pnb]
-    mov [cs:it_pst1], ax            ; past one strip row
+    mov [IT_PST1], ax               ; past one strip row
     add ax, 64
-    mov [cs:it_pst2], ax            ; ...and past two
+    mov [IT_PST2], ax               ; ...and past two
     mov di, IT_STRIP + 32           ; plane 2 of the strip's first row
 .r16:
     mov al, [cs:it_rmap + bp]       ; y, this device row's
@@ -1138,7 +1138,7 @@ it_praw4p:
     IT_C4B 16, 1
     dec bp
     jnz .c16d
-    add di, [cs:it_pst2]
+    add di, [IT_PST2]
     pop bp
     cmp bp, [cs:it_pend]
     jb .r16
@@ -1151,7 +1151,7 @@ it_praw4p:
     IT_C4B 16, 0
     dec bp
     jnz .c16
-    add di, [cs:it_pst1]
+    add di, [IT_PST1]
     pop bp
     cmp bp, [cs:it_pend]
     jb .r16
@@ -1159,13 +1159,13 @@ it_praw4p:
     ; --- A WIDE ONE (a whole present): rows of 64 bytes, a repeated logical
     ; row a copy of the row above it
 .wide:
-    mov word [cs:it_pdst], IT_STRIP ; the strip row's plane 0
-    mov byte [cs:it_plast], 0xFF    ; no row converted in this strip yet
+    mov word [IT_PDST], IT_STRIP    ; the strip row's plane 0
+    mov byte [IT_PLAST], 0xFF       ; no row converted in this strip yet
 .row:
     mov al, [cs:it_rmap + bp]
-    cmp al, [cs:it_plast]
+    cmp al, [IT_PLAST]
     jne .conv
-    mov di, [cs:it_pdst]            ; the same logical row as the last: the
+    mov di, [IT_PDST]               ; the same logical row as the last: the
     mov si, di                      ; four planes of the row above, at once
     sub si, 256
     mov cx, (3 * 64 + 64) / 2
@@ -1176,11 +1176,11 @@ it_praw4p:
     pop es
     jmp short .rnext
 .conv:
-    mov [cs:it_plast], al
+    mov [IT_PLAST], al
     xor ah, ah
     mov si, ax
     add si, [cs:it_psrc]            ; SI = row y of column 4 * j0
-    mov di, [cs:it_pdst]
+    mov di, [IT_PDST]
     push bp
     mov bp, [cs:it_pnb]             ; BP = bytes, the loop's count
     xor bx, bx
@@ -1188,7 +1188,7 @@ it_praw4p:
     call it_c4_64
     pop bp
 .rnext:
-    add word [cs:it_pdst], 256      ; the next strip row
+    add word [IT_PDST], 256         ; the next strip row
     inc bp
     cmp bp, [cs:it_pend]
     jb .row

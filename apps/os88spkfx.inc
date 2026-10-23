@@ -24,8 +24,9 @@
 ; sample in SPKFX_SPARSE; the level it asks for (one step up a span at most,
 ; any number down); the carrier's target.
 ;
-;   os88spkfx_init   after os88spk_init. ES:DI = SPKFX_FAMSZ bytes for the
-;                    family, in the segment the shaper will WRITE TO - a
+;   os88spkfx_init   after os88spk_init, DS = the package's own. ES:DI =
+;                    SPKFX_FAMSZ bytes for the family, in the segment the
+;                    shaper will WRITE TO - a
 ;                    player's RING, at RL + SPKFX_RINGX (claim the ring
 ;                    RL + SPKFX_RINGEND), AL = SPKFX_PRE_*,
 ;                    AH = 1 to put the carrier away in the quiet (0 not).
@@ -42,7 +43,10 @@
 ;                    advance, CX = 0
 ;
 ; All preserve every register but their outputs. Labels os88spkfx_; the state
-; is in the including package's image, through CS. THE FAMILY IS NOT: it is
+; is in the including package's image, through CS - and under kern_mega, whose
+; CS is a read-only code alias, the parts that WRITE it run a second copy that
+; writes through our data selector instead (os88spkfx_levp/_emitp, aimed at
+; once by os88spkfx_init: SPEC.md 34.11.1.1). THE FAMILY IS NOT: it is
 ; read `es xlatb` - DS is the source and ES the ring - so it lives in the
 ; ring's claim and a machine that never shapes never holds its 2,816 bytes
 ; (SPEC.md 34.11.9). `es` costs exactly what `cs` did: one prefix byte, the
@@ -68,6 +72,15 @@ os88spkfx_init:
     push di
     push ds
     push es                         ; (ES: the family's segment, kept)
+%ifdef PKG_MEGA
+    mov bx, ax                      ; PROTECTED MODE (kern_mega, SPEC.md
+    call OSAPI_CPU_INFO             ; 34.11.1.1): the writing parts' second
+    test ah, CPU_F_PM               ; copy, through our data selector, and
+    xchg ax, bx                     ; a span then traps not once - the
+    jz .rm                          ; kern_mega arm's alone (KERN-MEGA-PLAN
+    call os88spkfx_pmset            ; 14.66). Without it os88spk_go refuses
+.rm:                                ; under CPU_F_PM, so nothing emits there
+%endif
     cmp word [cs:os88spk_lptp], 0   ; ON A COVOX IT IS A LEVELLER AND NOTHING
     je .spk                         ; ELSE (SPEC.md 34.14): no pre-emphasis -
     xor ax, ax                      ; the tilt is for a cone that cannot move
@@ -222,17 +235,26 @@ os88spkfx_level:
     add si, SPKFX_SPARSE
     sub cx, SPKFX_SPARSE
     ja .none
+    ; THE REST IS ASSEMBLED TWICE (SPEC.md 34.11.1.1): the scan above writes
+    ; nothing and everything from .done does. %1 is the prefix the state is
+    ; reached through - cs:, or nothing (DS) - and %2 = 1 the protected-mode
+    ; copy, os88spkfx_levp, which a jmp over this copy's .done reaches
+%macro OS88SPKFX_LTAIL 2
 .done:
-    cmp byte [cs:os88spkfx_rat], 0  ; THE RATCHET (os88spkfx_ratchet): one
+%if %2
+    push ds                         ; THE PROTECTED-MODE COPY: the state
+    mov ds, [cs:os88spkfx_dsel]     ; through our DATA selector (CS is
+%endif                              ; read-only there), read through it too
+    cmp byte [%1 os88spkfx_rat], 0  ; THE RATCHET (os88spkfx_ratchet): one
     je .adapt                       ; level for the piece. It only ever steps
-    mov al, [cs:os88spkfx_lev]      ; DOWN, one a span, and only for a span
-    cmp byte [cs:os88spkfx_rat], 2  ; 2: FROZEN - the user's hand is on the
+    mov al, [%1 os88spkfx_lev]      ; DOWN, one a span, and only for a span
+    cmp byte [%1 os88spkfx_rat], 2  ; 2: FROZEN - the user's hand is on the
     je .set                         ; level (Tracker's volume bar, 45.25.3)
     cmp dh, SPKFX_PGATE             ; that overdrives it by more than
     jb .set                         ; SPKFX_RTOL levels - so it settles on
     mov bl, dh                      ; the piece's loud parts in its first
     xor bh, bh                      ; seconds and then does not move at all
-    mov ah, [cs:os88spkfx_lt+bx]    ; (34.11.9.1)
+    mov ah, [%1 os88spkfx_lt+bx]    ; (34.11.9.1)
     add ah, SPKFX_RTOL
     cmp ah, al
     jae .set
@@ -241,53 +263,53 @@ os88spkfx_level:
 .adapt:
     mov al, dh                      ; the level the peak asks for - HELD: the
     mov bl, al                      ; largest of this span's and the last two
-    cmp bl, [cs:os88spkfx_pk1]      ; spans' peaks, so a loud hit keeps the
+    cmp bl, [%1 os88spkfx_pk1]      ; spans' peaks, so a loud hit keeps the
     jae .k1                         ; level down for ~64 ms and the leveller
-    mov bl, [cs:os88spkfx_pk1]      ; does not pump between beats (34.11.9)
+    mov bl, [%1 os88spkfx_pk1]      ; does not pump between beats (34.11.9)
 .k1:
-    cmp bl, [cs:os88spkfx_pk2]
+    cmp bl, [%1 os88spkfx_pk2]
     jae .k2
-    mov bl, [cs:os88spkfx_pk2]
+    mov bl, [%1 os88spkfx_pk2]
 .k2:
-    mov ah, [cs:os88spkfx_pk1]
-    mov [cs:os88spkfx_pk2], ah
-    mov [cs:os88spkfx_pk1], al
+    mov ah, [%1 os88spkfx_pk1]
+    mov [%1 os88spkfx_pk2], ah
+    mov [%1 os88spkfx_pk1], al
     cmp dh, SPKFX_PGATE             ; ...but silence asks by its own peak
     jae .k3
     mov bl, dh
 .k3:
     xor bh, bh
-    mov al, [cs:os88spkfx_lt+bx]
-    mov ah, [cs:os88spkfx_lev]
+    mov al, [%1 os88spkfx_lt+bx]
+    mov ah, [%1 os88spkfx_lev]
     cmp al, ah                      ; up one step a span at most, down at once
     jbe .set
-    cmp byte [cs:os88spkfx_gate], 0 ; ...but after SILENCE its own level at
+    cmp byte [%1 os88spkfx_gate], 0 ; ...but after SILENCE its own level at
     jne .set                        ; once: there is no gain to step from,
     mov al, ah                      ; and a re-entry held 20 dB down for
     inc ax                          ; ~7 spans is the dip the field heard
 .set:
-    mov [cs:os88spkfx_lev], al
+    mov [%1 os88spkfx_lev], al
     cmp dh, SPKFX_PGATE             ; this span silent: 0FFh, else 0
     sbb ah, ah
-    mov [cs:os88spkfx_gate], ah
-    mov byte [cs:os88spkfx_sub], 0
+    mov [%1 os88spkfx_gate], ah
+    mov byte [%1 os88spkfx_sub], 0
     xor cl, cl                      ; the carrier's target, h
-    cmp byte [cs:os88spkfx_idle], 0
+    cmp byte [%1 os88spkfx_idle], 0
     je .h
-    mov cl, [cs:os88spkfx_c0]
+    mov cl, [%1 os88spkfx_c0]
     dec cl                          ; silence: all the way, every count 1
     cmp dh, SPKFX_PGATE
     jb .h
     mov ah, al                      ; the row
     xor al, al
-    add ax, [cs:os88spkfx_fam]
+    add ax, [%1 os88spkfx_fam]
     mov si, ax
     mov bl, dh                      ; q = row[min(255, 128 + p)] - row[128],
     add bl, 0x80                    ; each index as the row stores it
     jnc .in
     mov bl, 0xFF
 .in:
-    mov ch, [cs:os88spkfx_xm]
+    mov ch, [%1 os88spkfx_xm]
     xor bl, ch
     xor bh, bh
     mov al, [es:si+bx]              ; (the family: ES, as emit's)
@@ -303,20 +325,32 @@ os88spkfx_level:
     jae .h
     xor cl, cl
 .h:
-    mov [cs:os88spkfx_h], cl
+    mov [%1 os88spkfx_h], cl
     mov al, dh
+%if %2
+    pop ds
+%endif
     pop si
     pop dx
     pop cx
     pop bx
     ret
+%endmacro
+    OS88SPKFX_LTAIL cs:, 0
 
 ; -----------------------------------------------------------------------------
 ; os88spkfx_emit. In the loop: BX the span's row, AH the previous sample, DH
 ; the carrier's shift d and DL its target h, CX the samples left; SUB samples
 ; at a time through the unrolled copies, d moved between them
 ; -----------------------------------------------------------------------------
+; THE CONTROL PART IS ASSEMBLED TWICE (SPEC.md 34.11.1.1): %1 the prefix its
+; state is WRITTEN through (cs:, or nothing), %2 = 1 the protected-mode copy,
+; os88spkfx_emitp. The unrolled sub-blocks below are ONE copy and jump back to
+; os88spkfx_emit.full - in protected mode os88spkfx_pmset re-aims those four
+; jumps at os88spkfx_emitp.full, and os88spkfx_emit's first three bytes
+; at os88spkfx_emitp
 os88spkfx_emit:
+%macro OS88SPKFX_EMIT 2
 %ifdef SPKFX_PAD                    ; A MEASURING KNOB, never shipped: a
     push cx                         ; known extra cost a sample (a `loop` of
     jcxz .padn                      ; SPKFX_PAD `nop`s), for how much a
@@ -337,7 +371,11 @@ os88spkfx_emit:
     mov dh, [cs:os88spkfx_d]
     mov dl, [cs:os88spkfx_h]
     cld
+%if %2
+    jcxz .endj                      ; (the copy's brackets put .end out
+%else                               ; of a jcxz's reach)
     jcxz .end
+%endif
     cmp byte [cs:os88spkfx_sub], 0  ; A SUB-BLOCK PART DONE (a piece ended
     je .full                        ; inside it): finished with the same d
     push ax
@@ -349,13 +387,28 @@ os88spkfx_emit:
     mov ax, cx
 .k:
     mov bp, ax
-    add [cs:os88spkfx_sub], al
-    and byte [cs:os88spkfx_sub], SPKFX_SUB - 1
+%if %2
+    push ds
+    mov ds, [cs:os88spkfx_dsel]
+%endif
+    add [%1 os88spkfx_sub], al
+    and byte [%1 os88spkfx_sub], SPKFX_SUB - 1
+%if %2
+    pop ds
+%endif
     pop ax
     sub cx, bp
     jmp short .go_k
+%if %2
+.endj:
+    jmp .end
+%endif
 .full:
+%if %2
+    jcxz .endj
+%else
     jcxz .end
+%endif
     cmp dh, dl                      ; A SUB-BLOCK: d toward h, up by
     je .go                          ; SPKFX_DUP, down by SPKFX_DDOWN
     jb .up
@@ -378,10 +431,17 @@ os88spkfx_emit:
     jmp short .pick
 .tail:
     mov bp, cx                      ; the last piece of the span: it ends
+%if %2
+    push ds                         ; (protected mode: through our data
+    mov ds, [cs:os88spkfx_dsel]     ; selector, DS the span's again
+    mov [os88spkfx_sub], cl         ; after it)
+    pop ds
+%else
     push ax                         ; with the sub-block part done
     mov al, cl
     mov [cs:os88spkfx_sub], al
     pop ax
+%endif
     xor cx, cx
 .go_k:
     dec bp                          ; the entry for k left: copy SUB - k
@@ -395,13 +455,22 @@ os88spkfx_emit:
     add bp, [cs:os88spkfx_etz]
     jmp [cs:bp+0]
 .end:
-    mov [cs:os88spkfx_prev], ah
-    mov [cs:os88spkfx_d], dh
+%if %2
+    push ds
+    mov ds, [cs:os88spkfx_dsel]
+%endif
+    mov [%1 os88spkfx_prev], ah
+    mov [%1 os88spkfx_d], dh
+%if %2
+    pop ds
+%endif
     pop bp
     pop dx
     pop bx
     pop ax
     ret
+%endmacro
+    OS88SPKFX_EMIT cs:, 0
 
 ; THE UNROLLED SUB-BLOCKS. A copy is one sample; the saturation's fix is out
 ; of line, so the common path is one untaken `jbe`, and copies go in groups
@@ -453,7 +522,8 @@ os88spkfx_%1f %+ c:
 os88spkfx_%1g %+ g:
 %assign g g+4
 %endrep
-    jmp os88spkfx_emit.full
+os88spkfx_%1x:                      ; (re-aimed in protected mode: pmset)
+    jmp near os88spkfx_emit.full
 %endmacro
 
     SPKFX_BODY d
@@ -464,7 +534,8 @@ os88spkfx_%1g %+ g:
     SPKFX_ZERO %1
 %assign c c+1
 %endrep
-    jmp os88spkfx_emit.full
+os88spkfx_%1zx:                     ; (re-aimed in protected mode: pmset)
+    jmp near os88spkfx_emit.full
 %endmacro
     SPKFX_BODYZ d
     SPKFX_BODYZ n
@@ -510,3 +581,47 @@ os88spkfx_prev: db 0x80             ; the last sample emitted
 os88spkfx_xm:   db 0                ; 80h: rows stored at i ^ 80h (PRE_DIFF)
 os88spkfx_et:   dw 0                ; the mode's entry table...
 os88spkfx_etz:  dw 0                ; ...and its table for d = 0
+%ifdef PKG_MEGA                     ; (KERN-MEGA-PLAN 14.66: kern_mega's arm)
+os88spkfx_dsel: dw 0                ; protected mode: our DATA selector
+
+; -----------------------------------------------------------------------------
+; THE PROTECTED-MODE COPIES (SPEC.md 34.11.1.1). Under kern_mega a package's
+; CS is a read-only code alias, so every `mov [cs:x], ...` above traps into
+; the kernel - about eight a span, 350-700 a second at 11-22 kHz. These are
+; the same instructions writing through DS = [cs:os88spkfx_dsel] instead
+; (DS is the span's, so each write is bracketed; ES stays the family's), and
+; os88spkfx_pmset aims the real-mode copy at them ONCE, in os88spkfx_init:
+; a near jmp over os88spkfx_emit's first three bytes and over the level's
+; .done, and the unrolled sub-blocks' four jumps back re-aimed at this
+; copy's .full. So kern_big runs exactly the instructions it always ran - not
+; a test or a cycle added to a span - and the price is the bytes below.
+; -----------------------------------------------------------------------------
+os88spkfx_levp:
+    ; STKBALANCE-OK: never called - os88spkfx_level's .done jumps here at depth +4, and this pops its four
+    OS88SPKFX_LTAIL , 1
+os88spkfx_emitp:
+    OS88SPKFX_EMIT , 1
+
+; os88spkfx_pmset - os88spkfx_init's, under CPU_F_PM: DS = the package's own
+; (as at every call of init), its writable DATA selector - so it writes the
+; code through DS and not one of its writes traps. Banks the selector each
+; time (a region can move between plays) and patches the first time only.
+; Preserves all
+os88spkfx_pmset:
+    mov [os88spkfx_dsel], ds        ; (DS: writable, so not one of these
+    cmp byte [os88spkfx_emit], 0xE9 ; traps either)
+    je .done
+    mov byte [os88spkfx_level.done], 0xE9
+    mov word [os88spkfx_level.done+1], os88spkfx_levp - (os88spkfx_level.done + 3)
+    mov word [os88spkfx_dx+1], os88spkfx_emitp.full - (os88spkfx_dx + 3)
+    mov word [os88spkfx_nx+1], os88spkfx_emitp.full - (os88spkfx_nx + 3)
+    mov word [os88spkfx_dzx+1], os88spkfx_emitp.full - (os88spkfx_dzx + 3)
+    mov word [os88spkfx_nzx+1], os88spkfx_emitp.full - (os88spkfx_nzx + 3)
+    mov word [os88spkfx_emit+1], os88spkfx_emitp - (os88spkfx_emit + 3)
+    mov byte [os88spkfx_emit], 0xE9    ; (last: the test above reads it)
+.done:
+    ret
+    db 0                            ; (what follows the include moves by an
+                                    ; EVEN count: its words keep their
+                                    ; alignment on a 286's 16-bit bus)
+%endif                              ; PKG_MEGA

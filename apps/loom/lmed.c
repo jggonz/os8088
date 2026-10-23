@@ -754,6 +754,36 @@ static void lm_ed_key(int ascii, int scan)
  * THE CLICK
  * ==========================================================================*/
 
+/* lm_ed_wheel - the mouse WHEEL (SPEC.md 13.18): the bar's arrow path with
+ * the count in hand, so ONE lm_view_to - one os88_gfx_scroll and the rows it
+ * exposed - and one lm_ed_paint, however many notches were summed into it.
+ *
+ * Downward it stops with the last line on the last row, which is where a
+ * wheel belongs; the bar's own PgDn may already have gone further (it takes
+ * the view to lm_nline - 1), and a turn from there must not jump BACK UP, so
+ * the floor is wherever the view already is. A turn against either end
+ * clamps to the line in hand and draws NOTHING - not even the caret's two
+ * calls - because lm_ed_paint is never reached. */
+static void lm_ed_wheel(int notches)
+{
+    int t, lim;
+
+    t = lm_top + notches * OS88_WHEEL_STEPS;
+    if (notches > 0) {
+        lim = lm_nline - lm_erows;
+        if (lim < lm_top)
+            lim = lm_top;
+        if (t > lim)
+            t = lim;
+    }
+    if (t < 0)
+        t = 0;
+    if (t == lm_top)
+        return;
+    lm_view_to(t);
+    lm_ed_paint(0);
+}
+
 static int lm_ed_click(int x, int y)
 {
     int r, c, part, line;

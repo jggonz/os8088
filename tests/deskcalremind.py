@@ -159,7 +159,7 @@ class Rem(object):
 
 
 def main():
-    from deskcalperf import measure, Gesture
+    from deskcalperf import measure, Gesture, segs_of
     tmp = tempfile.mkdtemp(prefix="deskcalremind-")
     try:
         img = disk_with(tmp, "remind.img", fixture())
@@ -209,7 +209,7 @@ def main():
             check(r.fired("Dentist") and r.ringing() == "Dentist",
                   "Dentist is FIRED, DUE, and card 3 rings it (%r)"
                   % (c.c3(),))
-            gst = Gesture(hits, c.wseg)
+            gst = Gesture(hits, segs_of(c.m, c.wseg))
             in3 = [h for h in gst.mine if h.get("regs")
                    and c3y <= h["regs"]["bx"] < c3y + 57]
             check(gst.n == 2 and len(in3) == 2 and gst.by == {"GFX_BLIT1": 2},

@@ -139,13 +139,31 @@ def bar_check(m):
             "at least the System menu and Locator's own two"
             % (len(cells), [c[0] for c in cells]))
     wrong = []
+    # TWO KINDS OF DROP. A bar menu is menu.inc's pull-down and sets
+    # [menu_dropd]; the Sticky Apps cell (SPEC.md 110.12) is STIKMENU.DRV's
+    # own panel of cards, which never touches that byte - [menu_dropd] is what
+    # makes the keypad step by MENU_ITEM_H (SPEC.md 9.6.3), and the panel's
+    # rows are not that tall - and says it is up with its own stm_live, read
+    # through the module's mod_tab row while it is held. Waiting for
+    # menu_dropd alone timed out on that cell every run, with menu_cell
+    # resolved exactly as pressed.
+    eq = os88sym.equates()
+    stm_row = ui._S("mod_tab") + eq["MOD_STIKM"] * eq["MODR_SIZE"]
+    stm_live = os88sym.syms()["stm_live"]
+
+    def dropped():
+        if ui._byte("menu_dropd"):
+            return True
+        seg = int.from_bytes(bytes(m.read(stm_row, 2)), "little")
+        return bool(seg) and m.read((seg << 4) + stm_live, 1)[0] == 1
+
     for i, (title, x0, x1, _items) in enumerate(cells):
         # `menu_dropd` and NOT `menu_y1`: y1 is stamped MBAR_H before every
         # drop and never cleared, so from the second press on it is true
         # before the press lands and the `menu_cell` read is the PREVIOUS
         # cell's. Waiting for the previous menu to go away first is the other
         # half of the same point.
-        M.until(m, lambda mm: not ui._byte("menu_dropd"),
+        M.until(m, lambda mm: not dropped(),
                 "the bar to have nothing down before pressing %r" % title,
                 poll=0.05, guest=10.0)
         px = (x0 + x1) // 2
@@ -159,7 +177,7 @@ def bar_check(m):
                 # be dropped from a full ring (SPEC.md 10.1), which is this
                 # row's own failure at a lane of four. A second EDGE is the
                 # only recovery; ten more seconds is not.
-                ui._edge_until(lambda: ui._byte("menu_dropd"),
+                ui._edge_until(dropped,
                                "the %s menu to drop" % title, guest=10.0)
             except Exception:
                 # **SAY WHAT THE MACHINE LOOKED LIKE**, because `_edge(True)`
@@ -222,7 +240,7 @@ def bar_check(m):
         # cell's press would then be aimed at a bar that no longer exists.
         # Catching it here names the gesture that did it instead of leaving a
         # timeout eleven presses later to be re-diagnosed.
-        M.until(m, lambda mm: not ui._byte("menu_dropd"),
+        M.until(m, lambda mm: not dropped(),
                 "the %r menu to come back up after the release" % title,
                 poll=0.05, guest=10.0)
         sel = ui._word("menu_sel")

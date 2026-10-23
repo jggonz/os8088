@@ -294,29 +294,6 @@ static int c64_reset_req;                   /* ...and File > Reset machine CPU
                                              * (1) / Power cycle machine (2),
                                              * whose RAM fill is 64KB under the
                                              * same lock (ovl_reset_service) */
-static int c64_ovl_asked;                   /* 13.3's first-wake probe ran */
-/* ...AND WHETHER IT ANSWERED YES, WHICH IS A DIFFERENT FACT AND THE ONE THAT
- * KEEPS FLOPPY I/O OUT OF THE GFX LOCK. Reaching an `ovl_*` makes the runtime
- * resolve the module, and if it is not resident that is an OSAPI_MEM_CLAIM and
- * an OSAPI_FILE_READ - a floppy seek, ~400 ms a call (PERFORMANCE.md) - inside
- * whatever context asked. os88_oncmd, os88_about and os88_onfile are all
- * dispatched UNDER the desktop's gfx lock, so a first-wake probe that failed
- * for a transient reason (no heap at that moment) left every later menu pick
- * able to go to the disk with the whole machine stopped behind it.
- *
- * So a LOCKED caller never crosses the bridge unless this says the module is
- * already there. It refuses, says so, and clears c64_ovl_asked - and the next
- * wake, which holds no lock and may call the file slots by contract
- * (SPEC.md 74.1), is what retries the load. */
-static int c64_ovl_res;
-static int c64_conv_ok;                     /* ...and it BUILT the two
-                                             * conversion tables (7.7): the
-                                             * probe is now ovl_conv_init,
-                                             * so the flag that says the
-                                             * module answered and the flag
-                                             * that says the tables are
-                                             * there are two different
-                                             * facts */
 
 /* The state the parts share. It is declared HERE, above every #include, so
  * that each part has one definition to read and none of them can quietly
@@ -437,7 +414,6 @@ static char c64_title[] = "VICE (C64)";     /* ui.c:1842 "VICE (%s)" +
 /* forward declarations - the host harness compiles this same C with clang,
  * which is stricter about them than SmallerC (LESSONS.md 3) */
 static void c64_say(const char *s);
-static void c64_say_noovl(void);
 static void ovl_advance_frame(void);        /* ovl_cmd calls it, and ovl_cmd
                                              * is #included above it */
 static void c64_hex4(char *d, unsigned v);
@@ -471,9 +447,9 @@ static void c64_speed_fold(void);
 static void c64_sound_stop(void);
 static int  c64_sid_voice1(void);
 static int  ovl_about_show(void *win);
-static int  ovl_cmd(int menu, int item, void *win);
-static int  ovl_conv_init(void);
-static int  ovl_load_prg(const char *name, unsigned size_lo);
+static void ovl_cmd(int menu, int item, void *win);
+static void ovl_conv_init(void);
+static void ovl_load_prg(const char *name, unsigned size_lo);
 
 /* The parts of the one translation unit (SPEC.md 73.1: `nasm -f bin` has no
  * external symbols, so a C package cannot be several .c files linked - it is
@@ -553,16 +529,6 @@ static void c64_say(const char *s)
      * tick away, so raising the flag is enough and stays off the lock. */
     c64_dirty_any = 1;
     os88_toast(s, 0);
-}
-
-/* c64_say_noovl - 13.3's one refusal, said from five places. One literal and
- * one call: SmallerC merges no string, so five c64_say calls carrying it were
- * five copies of these 24 bytes and a pushed argument each (apps size pass
- * 1). The literal stays inside a c64_say call, where build.sh's
- * message-length gate finds it. */
-static void c64_say_noovl(void)
-{
-    c64_say("Unable to load C64.OVL.");
 }
 
 /* ==========================================================================
@@ -684,27 +650,6 @@ static void c64_fullscreen_toggle(void *win)
  * THE CALLBACKS
  * ========================================================================*/
 
-/* c64_ovl_ready - "may this LOCKED callback cross into C64.OVL?" (13.3)
- *
- * Answering no is not a refusal of the feature; it is a refusal to do FLOPPY
- * I/O with the desktop's gfx lock held. Every route into the module is a
- * callback the kernel dispatches under it, and the runtime resolves a module
- * on first use - a claim and a file read, ~400 ms a disk call on the target.
- * The first wake asks, unlocked, and every locked caller reads that answer;
- * a no clears the probe so the NEXT wake asks again, which is where the retry
- * belongs. The user is told either way, on the row and not only in a toast,
- * because a toast under a fullscreen window is under a bar they cannot see. */
-static int c64_ovl_ready(void *win)
-{
-    if (c64_ovl_res)
-        return 1;
-    c64_say_noovl();
-    c64_ovl_asked = 0;                      /* the wake retries it, unlocked */
-    c64_kick = 1;
-    os88_wm_wake(win);
-    return 0;
-}
-
 /* os88_paint - W_PAINT, the gfx lock is ALREADY held. WF_OWNBG is set, so the
  * kernel did not whiten the content and os88_wm_damage() says which part
  * needs drawing: a whole repaint invalidates the shadow and the flush draws
@@ -764,11 +709,11 @@ void os88_paint(void *win)
      * 9 font_str over 160 glyph cells - ~153 ms - on every expose, which is
      * MORE than the 266 ms full expose the hold rows exist to beat once the
      * 122 ms they cost is added: a menu closing over one corner of the window
-     * repainted the whole panel. And ovl_about_show ANSWERS A STATUS
-     * (c64cmd.c's own rule): 0 is a refused overlay load - no C64.OVL on the
-     * disk, a stale module, no heap - and the latch has to become that
-     * answer, or os88_onwake parks on `if (c64_abt)` with no panel on the
-     * glass, the machine looks frozen and the toast that said why is gone. */
+     * repainted the whole panel. And ovl_about_show ANSWERS A STATUS: 0 is
+     * a window with no geometry to put the panel in (c64_geom), and the
+     * latch has to become that answer, or os88_onwake parks on
+     * `if (c64_abt)` with no panel on the glass and the machine looks
+     * frozen. */
     if (c64_abt) {
         hit = whole;                        /* ...or the damage meets it */
         if (d.x1 < c64_abt_x + c64_abt_w)
@@ -970,11 +915,9 @@ void os88_oncmd(int item, int menu, void *win)
             os88_about(win);
             return;
         }
-    /* FILE > EXIT EMULATOR IS ANSWERED HERE AND NOT IN THE MODULE, because it
-     * is the one command that must work on a disk whose C64.OVL is missing:
-     * it is a latch and nothing else (75.2, os88_onwake), and routing it
-     * through the fence below would leave a machine the user cannot close by
-     * its menu on exactly the disk where every other command already refuses. */
+    /* FILE > EXIT EMULATOR IS ANSWERED HERE AND NOT IN THE MODULE: it is a
+     * latch and nothing else (75.2, os88_onwake), and a latch is cheaper
+     * resident than a far call into the overlay to set it. */
     if (menu == C64_M_FILE)
         if (item == C64_I_EXIT) {
             c64_exit_req = 1;
@@ -982,20 +925,11 @@ void os88_oncmd(int item, int menu, void *win)
             os88_wm_wake(win);
             return;
         }
-    if (!c64_ovl_ready(win))
-        return;                             /* the module is not resident and
-                                             * this is the LOCK: the retry is
-                                             * the wake's (c64_ovl_res) */
-    if (!ovl_cmd(menu, item, win)) {
-        /* A WRAPPER'S 0 IS THE RUNTIME REFUSING THE LOAD, and it must be
-         * SAID. Every body in c64cmd.c returns 1, so a 0 here never came from
-         * one of them: it is no C64.OVL on the disk, a stale module or no
-         * heap. The runtime toasts it; §9.8's both-routes rule wants it on
-         * the status row as well, because a toast under a fullscreen window
-         * is under the bar the user cannot see (§13.3). */
-        c64_say_noovl();
-        return;
-    }
+    /* NO FENCE AND NO STATUS TO READ. The overlay is an eager part, in
+     * memory since launch (C64-SPEC 13.3), so this far call goes to no disk
+     * under the gfx lock and cannot be refused; every refusal a command has
+     * of its own is said on the row by the command. */
+    ovl_cmd(menu, item, win);
     c64_kick = 1;
     os88_wm_wake(win);
 }
@@ -1004,12 +938,12 @@ void os88_oncmd(int item, int menu, void *win)
  * same panel (12). */
 void os88_about(void *win)
 {
-    /* THE LATCH IS THE STATUS. ovl_about_show answers 0 for a refused overlay
-     * load, which c64cmd.c's header calls a normal path - and latching
-     * c64_abt = 1 over it left os88_onwake returning early with nothing on
-     * the glass, os88_paint holding rows for a panel that does not exist, and
-     * the click that clears it running c64_blank_rect over a rect that was
-     * never assigned. The machine looked frozen. */
+    /* THE LATCH IS THE STATUS. ovl_about_show answers 0 when the window has
+     * no geometry to put the panel in (c64_geom) - and latching c64_abt = 1
+     * over that left os88_onwake returning early with nothing on the glass,
+     * os88_paint holding rows for a panel that does not exist, and the click
+     * that clears it running c64_blank_rect over a rect that was never
+     * assigned. The machine looked frozen. */
     /* AND THE CLIP IS ARMED FIRST. This is W_ONCMD or the name menu's About
      * item, not W_PAINT: the kernel arms a clip region for a paint and for
      * nothing else (SPEC.md 11.3), so the panel's fill, two frames and ten
@@ -1020,24 +954,18 @@ void os88_about(void *win)
      * to undo. */
     if (os88_wm_clip_set(win) != 0)
         return;
-    if (!c64_ovl_ready(win))
-        return;                             /* ...the same fence: this is the
-                                             * name menu's About item or
-                                             * W_ONCMD, both under the lock */
     c64_abt = ovl_about_show(win);
     if (c64_abt)
         c64_sound_stop();                   /* the panel PAUSES the machine
                                              * (os88_onwake returns on c64_abt),
                                              * so the last note must not go on
                                              * sounding behind it */
-    if (!c64_abt)
-        c64_say_noovl();  /* 13.3, both routes */
 }
 
 /* os88_onfile - the Standard File dialog's answer for File > Smart attach...
  * RESIDENT, because the runtime reaches a callback by a near offset (13.3):
- * it refuses by SIZE before the disk is touched, then calls an already-loaded
- * ovl_ helper to do the work (11.3). */
+ * it refuses by SIZE before the disk is touched, then calls the ovl_ helper
+ * that does the work (11.3) - in memory since launch (C64-SPEC 13.3). */
 void os88_onfile(int mode, const char *name,
                  unsigned size_lo, unsigned size_hi, void *win)
 {
@@ -1054,16 +982,8 @@ void os88_onfile(int mode, const char *name,
         c64_say("PRG over 65533 bytes.");
         return;
     }
-    /* THE ANSWER IS READ, like every other ovl_ call site. Every refusal
-     * ovl_load_prg has of its own returns 1 and has already said itself on
-     * the row, so a 0 here is the RUNTIME refusing the load - no C64.OVL, a
-     * stale module, no heap - and §9.8's both-routes rule wants that on the
-     * status row and not only in a toast under a fullscreen window. */
-    if (!c64_ovl_ready(win))
-        return;                             /* the file dialog's answer is a
-                                             * callback under the lock too */
-    if (!ovl_load_prg(name, size_lo))
-        c64_say_noovl();
+    ovl_load_prg(name, size_lo);            /* every refusal it has is its
+                                             * own, and said on the row */
     c64_kick = 1;
     os88_wm_wake(win);
 }
@@ -1335,11 +1255,11 @@ static void ovl_advance_frame(void)
  * Nothing about the result changes: the 6510 advances only inside a wake and
  * this runs at the top of one, so the machine being reset is the machine the
  * user was looking at. */
-/* ...AND IT IS IN C64.OVL, as Advance frame above is (apps size pass 1): both
- * run only after a pick ovl_cmd answered, so the module is in memory and the
- * wake's call loads nothing. What they call - the register files, the RAM
- * pattern, the CPU reset - stays resident, because os88_main calls it too and
- * there is no instance to load a module for until os88_main returns. */
+/* ...AND IT IS IN THE OVERLAY, as Advance frame above is (apps size pass 1):
+ * both run only after a pick, once per pick. What they call - the register
+ * files, the RAM pattern, the CPU reset - stays resident, because os88_main
+ * and the core call it too, and a resident caller of a module function pays
+ * the far call every time. */
 static void ovl_reset_service(void)
 {
     int kind = c64_reset_req;
@@ -1499,18 +1419,6 @@ void os88_onwake(void *win)
         c64_state = C64_ST_DEAD;            /* nothing flushes into it again */
         os88_wm_close(win);
         return;                             /* ...and NOTHING after the call */
-    }
-
-    /* C64-SPEC §13.3'S FIRST `ovl_*` CALL, ON THE FIRST WAKE. The .OVL cannot
-     * be resolved from os88_main - there is no instance yet - so this asks
-     * once, for nothing, at the first moment there is one. Its refusal is the
-     * fact that every menu command in this program is about to run into, and
-     * it is printed where the user is looking rather than only toasted. */
-    if (!c64_ovl_asked) {
-        c64_ovl_asked = 1;
-        c64_ovl_res = ovl_conv_init();
-        if (!c64_ovl_res)
-            c64_say_noovl();
     }
 
     /* EDIT > COPY AND EDIT > PASTE, ABOVE THE ABT GATE AND ABOVE THE SLICE.
@@ -1755,12 +1663,13 @@ void *os88_main(void)
      * without establishing the capability first is guessing. */
     c64_snd_tone = os88_snd_caps() & C64_SND_CAP_TONE;  /* bit 0: 0 or 1 */
     c64_x2init();                           /* the pixel-doubling table, once */
-    /* ...AND COPY'S AND PASTE'S TWO CONVERSION TABLES ARE *NOT* BUILT HERE.
-     * They are ovl_conv_init's, on the first wake, because the code that
-     * fills them runs exactly once and once-per-launch is SPEC.md 73.14's
-     * `goes out` side. The .OVL cannot be resolved from os88_main anyway
-     * (LESSONS.md 13): there is no instance yet to resolve a module for. The
+    /* ...AND COPY'S AND PASTE'S TWO CONVERSION TABLES. The code that fills
+     * them runs exactly once, so it is in the overlay (SPEC.md 73.14's
+     * `goes out` side) - and the overlay is an EAGER part of C64.O88
+     * (C64-SPEC 13.3), read with the ROM and bound by crt0 before this
+     * function ran, so it is called from here and cannot be refused. The
      * TABLES stay resident and DS-relative, which is what makes it legal. */
+    ovl_conv_init();
     c64_tier_init();                        /* the flush rate, off os88_cpu()
                                              * and tests/c64band's numbers */
     c64_reset_regs();                       /* the VIC/CIA/SID register files */

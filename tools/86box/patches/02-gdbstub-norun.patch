@@ -1,0 +1,27 @@
+diff --git a/src/gdbstub.c b/src/gdbstub.c
+index b2b7370..03e8d93 100644
+--- a/src/gdbstub.c
++++ b/src/gdbstub.c
+@@ -1944,7 +1944,7 @@ gdbstub_init(void)
+     int                port      = gdbstub_port;
+     struct sockaddr_in bind_addr = {
+         .sin_family = AF_INET,
+-        .sin_addr   = { .s_addr = INADDR_ANY },
++        .sin_addr   = { .s_addr = htonl(INADDR_LOOPBACK) }, /* os8088: loopback only */
+         .sin_port   = htons(port)
+     };
+     if (bind(gdbstub_socket, (struct sockaddr *) &bind_addr, sizeof(bind_addr)) == -1) {
+@@ -1969,8 +1969,11 @@ gdbstub_init(void)
+     pclog("GDB Stub: Listening on port %d\n", port);
+     thread_create(gdbstub_server_thread, NULL);
+ 
+-    /* Start the CPU paused. */
+-    gdbstub_step = GDBSTUB_BREAK;
++    /* Start the CPU paused - but only when asked (os8088,
++       tools/86box/patches/02-gdbstub-norun.patch): a harness that never
++       attaches GDB would otherwise find every step a no-op. */
++    if (getenv("OS88_GDBWAIT") && (getenv("OS88_GDBWAIT")[0] == '1'))
++        gdbstub_step = GDBSTUB_BREAK;
+ }
+ 
+ void

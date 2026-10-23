@@ -47,7 +47,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--machine", default="os8088_xt_vga_720b")
 a = ap.parse_args()
 syms, image = pkg_syms()
-o88 = open(os88build.at("build/pixel.o88"), "rb").read()
+import os88pkg                                          # noqa: E402
+# the IMAGE, not the file: a parted package's image ships packed when that
+# saves a sector (SPEC.md 20.13.8)
+o88 = os88pkg.image_unwrap(open(os88build.at("build/pixel.o88"), "rb").read())
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:
     sys.exit("build/pixel.o88 is not this tree's pixel.asm - run make")
 
@@ -80,7 +83,7 @@ for n, d in sorted(PICS.items()):
     open(os.path.join(tmp, n), "wb").write(d)
     files.append("PICS:" + os.path.join(tmp, n))
 DISK = M.scratch_disk(pxtmp.private("pxfolder.img"), "build/pixel.o88",
-                      "build/PIXEL.GFX", *files, "--folder", "SYSTEM/APPDATA",
+                      *files, "--folder", "SYSTEM/APPDATA",
                       size=720)
 NAMES = sorted(PICS)
 

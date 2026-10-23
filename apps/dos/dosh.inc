@@ -492,13 +492,16 @@ dsh_home:
 ; in:  SI = an ASCIZ spec in our segment
 ; out: CF=0 and we are standing there; CF=1 = there is no such folder, and
 ;      where we stand is then whatever the attempt left (the caller banks)
-; clobbers: AX, BX, CX, DX, DI, flags
+; clobbers: AX, BX, CX, DX, SI, DI, flags (SI is the walk's, and none of the
+;           three callers reads it after)
 ;
-; ONE COMPONENT PAST THE ROOT, which is dos_fh_core's own limit (a separator
-; anywhere past a leading one is "path not found", code 3) and not a new one
-; invented here. `C:\PRINCE` resolves and `C:\A\B` does not - and that is
-; exactly the reach INSTALL.EXE asks for. dos_walk_pbuf is the upgrade when
-; something wants deeper, and it is isolated to this routine.
+; ANY DEPTH, DOWNWARD (SPEC.md 96.30.9). dos_fh_core splits the spec at its
+; LAST separator into a folder part (dos_fpbuf, [dos_fhpath]) and a leaf, and
+; this used to hand dos_cd_go the leaf alone - so `CD \SYSTEM\DOS` looked for
+; DOS at the root and said `Path not found`. The folder part is walked with
+; dos_walk_at, the routine AH=3Dh's own names already resolve through
+; (96.12.3), and the leaf is then dos_cd_go's, so a last `..` still works.
+; A `..` INSIDE the folder part does not: the walk only goes down.
 dsh_cdto:
     mov dx, si
     mov ax, ds
@@ -508,10 +511,20 @@ dsh_cdto:
     jc .no
     mov al, [dos_fdrv]
     cmp al, 0xFF
-    je .nodrv                       ; no letter: wherever we already are
-    call dos_vol_to
+    jne .drv
+    mov al, [dos_vol]               ; no letter: this drive - and the MACHINE
+.drv:                               ; stood on it too, which the walk below
+    call dos_vol_to                 ; resolves against
     jc .no
-.nodrv:
+    cmp byte [dos_fhpath], 0
+    je .leaf
+    mov si, dos_fpbuf
+    mov al, [dos_fabs]              ; from the root, or from here
+    call dos_walk_at                ; DX = the folder it ended in
+    jc .no
+    mov [dos_curdir], dx
+    mov byte [dos_fabs], 0          ; ...and the leaf is relative to THAT
+.leaf:
     call dos_cd_go
     jc .no
     clc
@@ -1305,11 +1318,15 @@ dsh_dir_go:
     xor al, al
     ret
 .chdir:
-    mov si, dsh_a1                  ; ...and CD just stands there. In a /C
-    call dsh_cdto                   ; shell dsh_tail puts us back afterwards,
-    jc .nopath                      ; which is what a child shell's exit does
-    xor al, al                      ; under DOS
-    ret
+    call dsh_bank                   ; a walk that fails half way down has
+    mov si, dsh_a1                  ; moved us, and DOS's CD moves nowhere
+    call dsh_cdto                   ; when it fails - so we go back. In a /C
+    jc .cdno                        ; shell dsh_tail puts us back afterwards,
+    xor al, al                      ; which is what a child shell's exit does
+    ret                             ; under DOS
+.cdno:
+    call dsh_home
+    jmp short .nopath
 .ioerr:
     call dsh_home
     mov si, dsh_s_ioerr
@@ -2141,8 +2158,7 @@ dsh_dirline:
     call dsh_num32                  ; a 65KB file on a 1.44MB floppy is ordinary
 .eol:
     mov si, dsh_s_crlf
-    call dsh_say
-    ret
+    jmp  dsh_say
 
 ; --- dsh_field - CX bytes at SI, verbatim.  clobbers: AL, CX, SI (flags) ----
 ; It was dsh_dirline's own local until /W wanted the same two fields.
@@ -2217,12 +2233,11 @@ dsh_dirtot:
     pop ax
     call dsh_num32
     mov si, dsh_s_bfree
-    call dsh_say
-    ret
+    jmp  dsh_say
 .crlf:
     mov si, dsh_s_crlf              ; no free count: the line still ends, and
-    call dsh_say                    ; `N File(s)` alone is what DOS prints for
-    ret                             ; a listing it could not size
+    jmp  dsh_say                    ; `N File(s)` alone is what DOS prints for
+                                    ; a listing it could not size
 
 ; --- dsh_dfree - DX:AX = bytes free on the volume we are standing on --------
 ; out: CF=0 with DX:AX the byte count; CF=1 = the volume would not answer
@@ -2275,8 +2290,7 @@ dsh_num32:
     loop .sp
 .say:
     mov si, di
-    call dsh_say
-    ret
+    jmp  dsh_say
 
 ; -----------------------------------------------------------------------------
 ; dsh_c_ver / dsh_c_echo / dsh_c_rem
@@ -2316,8 +2330,7 @@ dsh_count:
     mov si, di
     call dsh_say
     mov si, dsh_s_copied
-    call dsh_say
-    ret
+    jmp  dsh_say
 
 ; =============================================================================
 ; THE TABLE
@@ -2466,10 +2479,15 @@ dsh_isshell:
     jmp short .back
 .cmp:
     dec si                          ; .back stopped AT the separator when it
-    inc si                          ; found one and one short of the start when
-.fwd:                               ; it did not; .fwd is the shared step past
-    inc si                          ; it, and this pair makes the no-separator
-    dec si                          ; case land on the same instruction
+.fwd:                               ; found one and AT the start when it did
+    inc si                          ; not; .fwd is the shared step past the
+                                    ; separator, and the `dec` makes the
+                                    ; no-separator case land on the start.
+                                    ; (A `inc si`/`dec si` pair either side
+                                    ; of `.fwd` used to cancel the step, so a
+                                    ; full COMSPEC path compared its `\`
+                                    ; against `c` and was never recognised -
+                                    ; SPEC.md 96.44.16)
     mov di, dsh_s_cmd
 .c:
     mov al, [es:si]

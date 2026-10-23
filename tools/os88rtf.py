@@ -21,8 +21,9 @@ and with the same defaults (cw_rrb in apps/cword/cwrtftbl.c: paper 12240 x
 15840, margins 1800/1800/1440/1440, \\deftab720, \\fs24), so a file this
 produces is the shape of one cword saved. It is ordinary RTF 1 - any reader
 takes it - and the paragraph properties the markup carries are emitted in
-full even though cword's reader is documented to drop them (SPEC.md 73.12.3):
-the file is not the place to encode one reader's narrowing.
+full, with the same numbers cword's writer uses (a cell is 144 twips, Open
+Space is \\sb240), so cword's reader puts every one of them back (SPEC.md
+73.12.4).
 """
 
 import argparse
@@ -42,11 +43,8 @@ parse_line = _DOC.parse_line
 TWIPCELL = _DOC.TWIPCELL                # one cell = 1/10 inch = 144 twips
 
 # The character spans .wtx can set, in the order they are emitted, each with
-# the control word that turns it on and the one that turns it off. Word
-# underline and double underline are their own keywords in the RTF cword
-# reads; small caps is not one cword has, and \scaps is emitted anyway because
-# this is a file format and not a screen (an unknown control word is ignored
-# by that reader without losing its text - apps/cword/cwrtfio.c).
+# the control word that turns it on and the one that turns it off - the same
+# keywords cword's writer emits for its seven attributes (SPEC.md 73.12.4).
 SPANS = [
     ('b', '\\b ',      '\\b0 '),
     ('i', '\\i ',      '\\i0 '),
@@ -98,7 +96,7 @@ def paragraph(pap, chars, out):
     if spacing:
         out.append('\\sl%d' % SL[spacing])
     if before:
-        out.append('\\sb%d' % TWIPCELL)
+        out.append("\\sb240")
     out.append(' ')
 
     attr = 0

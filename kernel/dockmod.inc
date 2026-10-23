@@ -282,7 +282,7 @@ dkx_geom:
     push di
     push es
     call dkx_drop ; discard the old geometry's clip hole
-    push cs                     ; ES:DI walks OUR geometry block in its own
+    PUSH_CSDATA                     ; ES:DI walks OUR geometry block in its own
     pop es                      ; order, so every word below is one stosw
     mov di, dock_sx1
     cld
@@ -295,7 +295,7 @@ dkx_geom:
 .have:
     mov [dock_side], al
     and ah, DOCK_F_AUTO
-    mov [cs:dock_auto], ah
+    CSDO mov [CSEG dock_auto], ah
     mov cx, [vid_pwm1]
     mov dx, [vid_phm1]          ; every strip ends on the primary's last row
     mov si, dkx_gbot            ; ...and the orientation's constants (below)
@@ -470,7 +470,7 @@ dkx_live_set:
     jne .hid
     inc ax
 .hid:
-    mov [cs:dock_hidden], al  ; exactly 0 or 1
+    CSDO mov [CSEG dock_hidden], al ; exactly 0 or 1
     or al, al
     jz .cross
     mov ax, [cs:dock_ffar]         ; the line: the outer edge
@@ -884,13 +884,13 @@ dkx_px_hit:
 ; rather than by the bump this used to need.
 ; -----------------------------------------------------------------------------
 dkx_key:
-    xor ax, ax
     or di, di                   ; a position that shows no record (dkx_map)
-    jz .out
-    cmp byte [di+I_STATE], 1    ; live only - dying and free records have no
-    jne .out                    ; tile (SPEC.md 29.2 rule 3)
-    test byte [di+I_FLAGS], IF_DESK
-    jnz .out                    ; ...and nor does a DESK instance (SPEC.md 30)
+    jz .none
+    mov ax, [di]                ; AL = I_STATE, AH = I_FLAGS (db_key's
+    and ah, IF_DESK             ; assertion): live only - dying and free
+    dec ax                      ; records have no tile (SPEC.md 29.2 rule
+    jnz .none                   ; 3) - and nor does a DESK instance (SPEC.md
+                                ; 30). One DEC for both (kernel size pass 13)
     mov ax, [di+I_ICON]
     rol ax, 1                   ; x3 - the pointer's high bits reach the low
     rol ax, 1                   ; end. THREE 1-BIT ROTATES: 6 bytes against
@@ -918,6 +918,9 @@ dkx_key:
     jne .out
     or al, DOCK_K_ACT           ; active: the border doubles
 .out:
+    ret
+.none:
+    xor ax, ax                  ; AX = 0 is "no tile"
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1140,11 +1143,11 @@ dkx_hit:
     cmp al, 0FFh
     je .in                      ; none
     call KERNEL_SEG:cw_inst_ptr               ; DI = record (in: AL = index; AX survives)
-    cmp byte [di+I_STATE], 1
-    jne .none
-    test byte [di+I_FLAGS], IF_DESK
-    jz .in                      ; live and not a DESK instance (SPEC.md 30):
-.none:                          ; DI is the answer
+    push ax                     ; AL, the slot, is an output
+    call dkx_key                ; AX = 0: no tile - empty, dying or a DESK
+    or ax, ax                   ; instance (SPEC.md 30), dkx_key's one
+    pop ax                      ; answer to it (kernel size pass 13). `pop`
+    jnz .in                     ; writes no flag: DI is the answer
     xor di, di                  ; empty, dying or a widget: no tile here
 .in:
     clc
@@ -1314,7 +1317,7 @@ dkx_map:
     push di
     xor bx, bx
 .fill:                          ; identity, which is the whole answer when
-    mov [cs:dock_pos+bx], bl       ; every slot has a tile
+    CSDO mov [CSEG dock_pos+bx], bl ; every slot has a tile
     inc bx
     cmp bx, INST_MAX
     jb .fill
@@ -1325,7 +1328,7 @@ dkx_map:
     mov al, 0FFh                ; --- packed: nothing yet
     xor bx, bx
 .none:
-    mov [cs:dock_pos+bx], al
+    CSDO mov [CSEG dock_pos+bx], al
     inc bx
     cmp bx, INST_MAX
     jb .none
@@ -1334,10 +1337,10 @@ dkx_map:
     mov si, inst_tab
     xor bx, bx
 .count:
-    cmp byte [si+I_STATE], 1
-    jne .cnext
-    test byte [si+I_FLAGS], IF_DESK
-    jnz .cnext                  ; a DESK instance spends no tile (SPEC.md 30)
+    mov ax, [si]                ; live, and not a DESK instance, which spends
+    and ah, IF_DESK             ; no tile (SPEC.md 30): AX = 1 exactly then,
+    dec ax                      ; db_key's one word (AX is free until .take
+    jnz .cnext                  ; loads AH)
     inc cl
     test byte [si+I_FLAGS], 1
     jz .cnext
@@ -1364,10 +1367,10 @@ dkx_map:
     xor bx, bx                  ; BL = the slot
     mov di, dock_pos            ; DI = the next position, in OUR image
 .walk:
-    cmp byte [si+I_STATE], 1
-    jne .wnext
-    test byte [si+I_FLAGS], IF_DESK
-    jnz .wnext                  ; ...and takes no position either
+    mov cx, [si]                ; ...and takes no position either - the same
+    and ch, IF_DESK             ; word, in CX, which the counts above are
+    dec cx                      ; done with (AH and DH are the quotas)
+    jnz .wnext
     test byte [si+I_FLAGS], 1
     jz .open
     or dh, dh
@@ -1379,7 +1382,7 @@ dkx_map:
     jz .wnext
     dec ah
 .put:
-    mov [cs:di], bl
+    CSDO mov [CSEG di], bl
     inc di
 .wnext:
     add si, I_RECSZ
@@ -1462,11 +1465,11 @@ dkx_pass:
     cmp byte [blk_sv], 0
     je .nosv
     call dkx_drop             ; the saver owes the repaint
-    jmp short .out
+    jmp .out
 .nosv:
 %endif
     push ds                     ; is the pointer on the strip's WHOLE rect?
-    push cs                     ; That block is OURS, so dkx_point reads it
+    PUSH_CSDATA                     ; That block is OURS, so dkx_point reads it
     pop ds                      ; through a DS it is handed
     mov bx, dock_sx1
     call dkx_point              ; CF = 1 off it
@@ -1477,8 +1480,8 @@ dkx_pass:
     mov ax, [ticks]
     cmp byte [cs:dock_timer_on], 0
     jne .elapsed
-    mov [cs:dock_timer_tick], ax
-    inc byte [cs:dock_timer_on]
+    CSDO mov [CSEG dock_timer_tick], ax
+    CSDO inc byte [CSEG dock_timer_on]
     jmp short .out
 .elapsed:
     sub ax, [cs:dock_timer_tick]
@@ -1507,7 +1510,7 @@ dkx_pass:
 .unlock:
     call KERNEL_SEG:cw_gfx_unlock
 .off:
-    mov byte [cs:dock_timer_on], 0
+    CSDO mov byte [CSEG dock_timer_on], 0
 .out:
     jmp dkx_ret_di
 
@@ -1516,7 +1519,7 @@ dkx_pass:
 dkx_drop:
     push ax
     xor ax, ax
-    mov [cs:dock_timer_on], al
+    CSDO mov [CSEG dock_timer_on], al
     cmp [dock_up], al
     je .ret
     mov [gfx_hole], ax
@@ -1535,7 +1538,10 @@ dkx_gfx_hole_arm:
     push cx
     push dx
     push si
-    call KERNEL_SEG:cw_cur_unlazy
+    push bp                     ; (spw_near takes the routine in BP: the one
+    mov bp, cur_unlazy          ; site, so no resident shim of its own -
+    call KERNEL_SEG:spw_near    ; kernel size pass 13)
+    pop bp
     xor ax, ax
     xor dx, dx
     mov cx, [vid_wm1]

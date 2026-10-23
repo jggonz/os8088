@@ -14,6 +14,12 @@ What exists is the instrument that produced every number below
 cannot compute (VIDDISK's `X`, `tests/vidbench/viddisk.asm`). Section 9 is
 the build, in waves, for whoever takes it.
 
+**Open, for the next Video Player round (2026-10-21):** a BIGSP file read IN
+PLACE on kern_mega - every superpacket size the format allows, not only
+MECH2's - which kern_big does through LOADALL and kern_mega refuses since
+KERN-MEGA-PLAN 14.58 (MECH2 now stalls on the ring copy instead of
+freezing). The item and the pattern to start from are KERN-MEGA-PLAN 14.60.
+
 **The answer in four lines:**
 
 1. **The player cannot use XMS for these clips today.** SPEC.md 98.3.18's
@@ -410,6 +416,12 @@ bytes. That is the measurement to take before section 5 is built.
   the owner asked for it to be costed, and it came out the better store.
 - **LOADALL for the 286 copy** (HIMEM.SYS's trick: no reset). Undocumented,
   286-only, and the kernel's transport, not the player's (SPEC.md 41.9).
+  **Investigated since in docs/plans/LOADALL-PLAN.md** (2026-10-14): as a
+  copy it buys ~3% (the BIOS's copy already runs at the board's memory
+  speed); its value is decoding the DRAIN in place, which removes the copy
+  down, and - on a disk HDD.DRV's rung 1 has taken (SPEC.md 52.1.1) -
+  reading the FILL straight into the bank, which removes the copy up: both
+  of section 4.2's copies.
 - **Keeping what has been played**, as the hold does: a bank that kept its
   past would serve seeks back, but it is the same bytes spent on the
   direction the play does not go.

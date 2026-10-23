@@ -172,6 +172,14 @@ def run_of(path):
     return run_sectors(rows_), rows_
 
 
+def image_rows(raw):
+    """The part table's rows of a `.o88` FILE, decoded out of its IMAGE -
+    which since SPEC.md 20.13.8 may be packed, so `raw[:image]` is not it."""
+    import os88pkg
+    blob = os88pkg.image_unwrap(raw)
+    return rows(blob[:_u16(blob, 8)])
+
+
 def part_bytes(raw, i):
     """Part `i` of a packed `.o88`, UNPACKED - what the machine will see.
 
@@ -183,10 +191,12 @@ def part_bytes(raw, i):
     the file's `image` then compares the LOADER with the program and reports
     "build/ is BEHIND THE TREE" about a perfectly current tree.
 
-    A parted `.o88` is never itself compressed - os88pkg.py declines the pair
-    and says why - so `raw` is the file as it lies on the floppy.
+    `raw` is the file as it lies on the floppy; the TABLE is read out of the
+    IMAGE (os88pkg.image_unwrap), because since SPEC.md 20.13.8 a parted
+    package's image may itself be packed - and the offsets it holds are
+    sectors of `raw`, so the part's bytes come out of `raw`.
     """
-    row = rows(raw[:_u16(raw, 8)])[i]
+    row = image_rows(raw)[i]
     if not row["off"]:
         raise ValueError("part %d has no file bytes (a scratch row)" % i)
     at = row["off"] * 512

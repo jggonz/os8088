@@ -1,17 +1,14 @@
 ; Local simulation and the small-kernel text court. Pixel drawing is in wbvideo.inc.
 wb_newgame:
     push ax
-    mov byte [wb_left], 32
-    mov byte [wb_right], 32
-    mov byte [wb_scorel], 0
-    mov byte [wb_scorer], 0
-    mov byte [wb_flags], 0
-    mov byte [wb_vx], 8
-    mov byte [wb_vy], 2
-    mov byte [wb_lspin], 0
-    mov byte [wb_rspin], 0
+    mov word [wb_left], 32*257  ; left, right
+    mov word [wb_vx], 2*256+8   ; vx 8, vy 2
+    xor ax, ax
+    mov [wb_scorel], ax         ; scorel, scorer
+    mov [wb_flags], al
+    mov [wb_lspin], ax          ; lspin, rspin
     mov byte [wb_spinage], 4
-    mov word [wb_crossings], 0
+    mov [wb_crossings], ax
     call wb_serve
     mov al, WB_FX_LINK
     call wb_sound_play
@@ -24,9 +21,9 @@ wb_serve:
     mov [wb_ballx], ax
     mov word [wb_bally], 10*4
     mov byte [wb_count], 36
-    mov byte [wb_returns], 0
-    mov byte [wb_fracx], 0
-    mov byte [wb_fracy], 0
+    xor ax, ax
+    mov [wb_returns], al
+    mov [wb_fracx], ax          ; fracx, fracy
     mov al, WB_SPEED_MIN
     cmp byte [wb_vx], 0
     jge .direction

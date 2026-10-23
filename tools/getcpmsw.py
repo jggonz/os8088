@@ -105,7 +105,7 @@ SPARE_SLOTS = 16
 # What each geometry carries (SPEC.md §74.6). A DECISION per geometry, in the
 # shape SPEC.md §74.5's CURATED already has: 1.44MB has room for all three
 # areas beside the whole master disk; the 1.2MB disk carries FOUR of the five
-# and drops the largest, H/3 (WordStar, 519 clusters), which is a DECISION and
+# and drops the largest, H/3 (Turbo Pascal, 519 clusters), which is a DECISION and
 # not the fill's leftovers - its clusters are 512 bytes like the 1.44MB one's
 # rather than 1,024 like the two DD disks', but it has 2,371 of them against
 # 2,847, and all five areas cost 1,997. Taking all five leaves A/0 136
@@ -115,8 +115,8 @@ SPARE_SLOTS = 16
 # at from the other end, and it is why an area comes off rather than the
 # programs: at four areas the games are 1,473 clusters, A/0 gets 660 and the
 # fill reaches past every .COM into the documentation and the first sources -
-# 63 of the 77, which is MORE master disk than the 1.44MB disk holds. Turbo
-# Pascal (D/0) stays and WordStar goes because the choice is by SIZE, and
+# 63 of the 77, which is MORE master disk than the 1.44MB disk holds.
+# WordStar (D/0) stays and Turbo Pascal goes because the choice is by SIZE, and
 # GAMES.TXT names it under the heading that says it is on the 1.44MB disk;
 # the 720KB disk carries the arcade area
 # and pays for it out of the master disk's SOURCES, which is the trade the

@@ -6,9 +6,9 @@
 ; the SAME picture on a machine the kernel is no longer running on
 ; (SPEC.md 96.49). Two stagers, one layout, and neither can call the other.
 ;
-; It is constants only: the stub's BODY is `kernel/hbstub.inc`, so that each
-; host can put it in the section it belongs in - `.modh` over there, `.text`
-; over here.
+; It is constants and ONE macro, HS_HMASUM, which emits nothing until a host
+; invokes it: the stub's BODY is `kernel/hbstub.inc`, so that each host can put
+; it in the section it belongs in - `.modh` over there, `.text` over here.
 ; =============================================================================
 %ifndef HBSTAGE_INC
 %define HBSTAGE_INC 1
@@ -81,5 +81,29 @@ HS_DOSAKB   equ 0x0444          ; dw the ARENA the DOS program was given, in
 ; and SPEC.md 8.1's PIT change is a MODE change, leaving the IRQ0 rate at
 ; 18.2065 Hz on both sides of the handover.
 HS_TICK0    equ 0x0446          ; dd, above HS_DOSAKB and below HS_IVT
+
+; HS_HMASUM - THE HMA'S CHECK on the live route (SPEC.md 96.49.9), ONCE for
+; both of its takers: `hbm_dosrun` takes it over `.cold` and the HMA image's
+; code at the handoff, and `kd_resume` takes it again before it jumps back.
+; in:  DS:SI = the first word, CX = words (1..32767), DF = 0
+; out: BX = s1, DX = s2; clobbers AX, CX, SI
+;
+; EVERY WORD AND NOT kern_mega's ONE IN SIXTY-FOUR (kernel/megados.inc's
+; MPK_SUMLINES): that sum is sparse because a park is up to 640KB, and this
+; span is under 40KB - ~20,000 words, some 50 ms on a 6MHz AT, against a
+; return that reads an image of hundreds of KB. A sparse sum would miss a
+; program that wrote one word into `.cold`; this one does not. Fletcher's,
+; mod 65535, so a span that a program zeroed still moves s2.
+%macro HS_HMASUM 0
+    xor bx, bx
+    xor dx, dx
+%%w:
+    lodsw
+    add bx, ax
+    adc bx, 0
+    add dx, bx
+    adc dx, 0
+    loop %%w
+%endmacro
 
 %endif                          ; HBSTAGE_INC

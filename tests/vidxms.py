@@ -31,6 +31,17 @@ ARM xms (the default; QEMU's own 128MB):
 ARM idle is arm xms with no play at step 2: the window's timer alone loads
 the file to its end, and a short last chunk is what says it has.
 
+STEP 4's PLAY IS IN PLACE (98.3.18.14): QEMU is a 386, and since a 386
+loads DS's hidden base where a 286 runs LOADALL, a session that starts with
+the hold WHOLE reads its records where they lie and copies nothing. So in
+arms xms and idle the play from the key is the shipped in-place play, out
+of the same hold - which the blank B: proves as it proved the copy - and
+the first play, started with the hold still loading, copies as it always
+did. `--gap` and arm bios are ABOUT the copy, so they write the gate's A/B
+`[vp_noinp]` = 1 before the first play and every play copies; the row
+fails if one went in place anyway. The copying play out of a whole hold is
+also tests/vidxip.py's first leg.
+
 ARM live is 98.3.18.1, LIVE FROM THE HOLD: a 1.2 MB STREAMED Live file for
 the VGA desktop, held whole, B: made blank, and Play must be a live session
 - the worker decoding, the UI task filling its ring out of the hold on its
@@ -43,6 +54,19 @@ and a half. ARM livenox is `-m 1`: Play must NOT be Live. Broken on purpose
 ARM livevga4 is the same in COLOUR: a 1.1 MB VGA4 stream, the keeper sized to
 plane 3's base + 64 KB (a stream's writes are checked by nothing ahead), and
 the four planes compared with the decode's sixteen colours.
+
+ARM bios is arm xms through the 286's transport: XMEM.DRV assembled with
+XM_FORCE_BIOS (a test build, never shipped) takes int 15h AH=87h on QEMU's
+386 instead of unreal mode, so every copy into and out of the hold goes
+through xm_bios - the one path a real 286 takes and no other row runs. It
+cannot reproduce the 286 lockup it was written for (SPEC.md 2.10.8: an AT
+BIOS sti's inside AH=87h and shuts A20 on its way out, and an IRQ0 in that
+window reached SOUND.DRV in the HMA), because SeaBIOS puts A20 back as it
+found it; what it proves is that the masked PIC around the call costs the
+copy and the clock nothing - the hold whole, both plays to the last frame.
+Both plays COPY ([vp_noinp], above): the player's own in place on a 386
+needs no transport at all, and would leave the second play nothing to send
+through xm_bios.
 
 ARM nox (`-m 1`, no memory above 1MB): the NEGATIVE CONTROL, and the
 fallback. No hold is taken, the play runs off the disk to the last frame -
@@ -75,6 +99,7 @@ import os88ui                                               # noqa: E402
 import os88vid as vid                                       # noqa: E402
 import xmcheck                                              # noqa: E402
 from cycweb import pkg_syms                                 # noqa: E402
+from pxswin import qpoke                                     # noqa: E402
 
 NF = 300
 FPS = 30.0
@@ -218,11 +243,29 @@ class Q(object):
         return self.read((seg << 4) + off, n)
 
 
+def force_bios(tmp, sysimg):
+    """XMEM.DRV on the system disk, swapped for an XM_FORCE_BIOS build."""
+    b = os.path.join(tmp, "xmem.bin")
+    d = os.path.join(tmp, "XMEM.DRV")
+    subprocess.run(["nasm", "-f", "bin", "-w+error", "-DXM_FORCE_BIOS",
+                    "-I", "drivers/", "-I", "apps/", "-o", b,
+                    "drivers/xmem/xmem.asm"], check=True)
+    subprocess.run([sys.executable, "tools/os88drv.py", b, "-o", d],
+                   check=True, capture_output=True)
+    for verb in (["del", sysimg, "XMEM.DRV"], ["add", sysimg, d, "XMEM.DRV"]):
+        subprocess.run([sys.executable, "tools/os88fat.py"] + verb,
+                       check=True, capture_output=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", choices=("xms", "idle", "nox", "live",
+    ap.add_argument("--arm", choices=("xms", "bios", "idle", "nox", "live",
                                       "livenox", "liverep", "livevga4"),
                     default="xms")
+    ap.add_argument("--gap", type=int, default=0, metavar="G",
+                    help="[vp_xgap] written G before each play: the ring "
+                    "placed at that gap whatever QEMU measured, which is its "
+                    "host's noise (SPEC.md 98.3.18.12)")
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
@@ -247,6 +290,8 @@ def main():
         blank = os.path.join(tmp, "blank.img")
         sysimg = os.path.join(tmp, "sys.img")
         shutil.copy(sysimg0, sysimg)
+        if a.arm == "bios":
+            force_bios(tmp, sysimg)
         for out, files in ((disk, [v88, pkg]), (blank, [])):
             subprocess.run([sys.executable, "tools/os88disk.py", "-o", out,
                             "--size", "1440"] + files, check=True,
@@ -259,6 +304,17 @@ def main():
         xmcheck.wait_desktop(q.sock, "vidxms")
         S = xmcheck.sym
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
+        if a.arm == "bios":
+            # THE ARM'S PREMISE, read and not assumed: XMEM.DRV attached at
+            # tier 1, so no unreal mode was armed (CPU_F_UNREAL, 0x04) and
+            # every copy is xm_bios's
+            feat = q.read(S("cpu_feat"), 1)[0]
+            print("   cpu_feat %02X: %s" % (feat, "unreal mode NOT armed - "
+                  "every copy is int 15h AH=87h" if not feat & 0x04 else
+                  "UNREAL MODE ARMED"))
+            if feat & 0x04:
+                bad.append("arm bios: XMEM.DRV armed unreal mode, so no copy "
+                           "went through the BIOS")
 
         def wait(cond, what, secs):
             if not os88qemu.acted(q, cond, secs=secs, what=what, poll=0.05):
@@ -318,10 +374,48 @@ def main():
                      % (msg.decode("ascii", "replace"), rb("vp_ok")))
         if rb("vp_ok") != 1:
             sys.exit("vidxms: the player will not play the clip here")
+        # THE COPYING HOLD, where the arm is about the copy (98.3.18.14):
+        # QEMU is a 386, and a 386 decodes a hold that is WHOLE in place, so
+        # every play after the loader's end would copy nothing. --gap is
+        # where the COPYING ring is placed (98.3.18.12) and arm bios is every
+        # copy through int 15h, so both keep every play copying with the
+        # gate's A/B - [vp_noinp], read at each session's start and written
+        # by nothing in the player. The other arms play the shipped choice:
+        # the second play in place, out of the same hold, which is what B:
+        # blank is there to prove (tests/vidxip.py gates the in place itself)
+        noinp = bool(a.gap) or a.arm == "bios"
+        if noinp:
+            qpoke(q, [(base + syms["vp_noinp"], b"\1")])
+
+        gaps = []
+        xips = []
 
         def play(what):
+            if a.gap:
+                qpoke(q, [(base + syms["vp_xgap"], struct.pack("<H", a.gap))])
             q.hmp("sendkey p")
             wait(lambda: rb("vp_ready") == 1, what + " to start", 30)
+            xips.append(rb("vp_xip"))   # (the session's: its end clears it)
+            print("   %s: %s" % (what, "IN PLACE (98.3.18.14)" if xips[-1]
+                                 else "copying out of the hold"
+                                 if rb("vp_xon") else "off the disk"))
+            if noinp and xips[-1]:
+                bad.append("%s went in place: [vp_noinp] ignored, so the "
+                           "copy this arm is about never ran" % what)
+            # THE GAP (SPEC.md 98.3.18.12): with a G measured (QEMU's is its
+            # host's noise; an XG_FORCE build fixes it), the ring starts G
+            # mod 2G from the hold, inside its claim
+            g = rw("vp_xgap")
+            if g and rb("vp_xon") and not rb("vp_xip"):
+                ring, clm = rw("vp_ring"), rw("vp_rclm")
+                off = ((ring << 4) - rd("vp_xbase")) % (2 * g)
+                gaps.append((g, ring, clm, off))
+                print("   the gap: G %d, ring %04X in its claim at %04X, %d "
+                      "mod %d from the hold" % (g, ring, clm, off, 2 * g))
+                if off != g or not clm <= ring < clm + (2 * g >> 4):
+                    bad.append("%s: the ring at %04X in a claim at %04X is "
+                               "%d mod %d from the hold, not %d"
+                               % (what, ring, clm, off, 2 * g, g))
             wait(lambda: rb("vp_ready") == 0 and rb("vp_played") == 1,
                  what + " to end", 60)
 
@@ -503,6 +597,12 @@ def main():
                                                rb("vp_err")))
             if not rb("vp_xon"):
                 bad.append("the hold was dropped")
+            # THE GAP ON EVERY PLAY (98.3.18.12): its check sits behind
+            # `not vp_xip`, so a play that went in place would skip it and
+            # the row would pass on one placement instead of two
+            if a.gap and len(gaps) != (1 if a.arm == "idle" else 2):
+                bad.append("the gap was checked on %d plays, not %d"
+                           % (len(gaps), 1 if a.arm == "idle" else 2))
         q.close()
     return report(bad, a.arm)
 

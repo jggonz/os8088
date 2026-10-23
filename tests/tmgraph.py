@@ -90,7 +90,8 @@ TM_BAR_Y1, TM_RW = equ("TM_BAR_Y1"), equ("TM_RW")
 TM_GW = TM_RW - 7                       # taskmgr.asm: TM_GW equ TM_RW - 7
 
 
-TM_NVIEW = 3                            # taskmgr.asm: perf, memory, heap
+TM_NVIEW = 2                            # taskmgr.asm: perf, memory (the heap
+                                        # page merged into it, SPEC.md 28.4.10)
 
 
 def tick(mm, card=None):
@@ -258,7 +259,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
                          "clamping the walk (SPEC.md 28.10.3)" % (n_run, cols))
 
     # --- SWAP: a view switch owes the graph everything ----------------------
-    # tm_click cycles 0 -> 1 -> 2 -> 0 and tm_clear_content white-fills before
+    # tm_click cycles 0 -> 1 -> 0 and tm_clear_content white-fills before
     # tm_draw_full, so arriving back here must redraw the whole graph.  This
     # is the leg that fails if tm_draw_full stops calling tm_dmg_all.
     m.write(bss + dispapps.bss_off("taskmgr", "tm_hist"),

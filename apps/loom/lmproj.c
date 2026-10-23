@@ -51,7 +51,6 @@ static unsigned lm_srcseg;              /* 0 = no project is open */
 static unsigned lm_workseg;             /* 0 = Pack is not running */
 static unsigned lm_outseg;
 
-#define LM_SLOTPARA  (LM_TEXTMAX / 16)  /* 384 - a slot's base, in paragraphs */
 
 /* --- the four slots ------------------------------------------------------ */
 static unsigned      lm_slen[LM_NSLOT];   /* bytes of text in each */
@@ -169,14 +168,15 @@ unsigned lm_sb(int slot, unsigned off)
     return w_b(lm_srcseg, (unsigned) slot * LM_TEXTMAX + off);
 }
 
-/* lm_sbase - a slot's base, in paragraphs. os88_file_read_seg() and
- * os88_file_write_seg() take a SEGMENT and read or write from its offset 0,
- * so a slot with a segment address of its own needs no staging buffer - and a
- * 6KB staging buffer is 10% of this package's whole allowance. LM_TEXTMAX is
- * a multiple of 16 precisely so that this arithmetic is exact. */
-static unsigned lm_sbase(int slot)
+/* lm_soff - a slot's OFFSET in the source claim. The _segoff file calls
+ * read and write there directly, so a slot needs no staging buffer - and a
+ * 6KB staging buffer is 10% of this package's whole allowance. It was a
+ * SEGMENT, lm_srcseg + slot * LM_SLOTPARA, which on kern_mega is arithmetic
+ * on a selector (KERN-MEGA-PLAN 14.12); LM_TEXTMAX is a multiple of 512, so
+ * the offset keeps the _seg calls' alignment rule. */
+static unsigned lm_soff(int slot)
 {
-    return lm_srcseg + (unsigned) slot * LM_SLOTPARA;
+    return (unsigned) slot * LM_TEXTMAX;
 }
 
 /* ============================================================================
@@ -258,7 +258,7 @@ static int lm_readslot(int slot, const char *name)
     lm_slen[slot] = 0;
     lm_shave[slot] = 0;
     lm_smod[slot] = 0;
-    n = os88_file_read_seg(name, lm_sbase(slot), LM_TEXTMAX);
+    n = os88_file_read_segoff(name, lm_srcseg, lm_soff(slot), LM_TEXTMAX);
     if (n == 0 && os88_ferr() != OS88_FERR_OK) {
         if (os88_ferr() == OS88_FERR_BIG) {
             lm_l0();
@@ -294,8 +294,8 @@ static int lm_save(int slot)
         lm_say("The project's folder is unreachable - was the disk swapped?");
         return -1;
     }
-    if (os88_file_write_seg(lm_fname(slot), lm_sbase(slot),
-                            lm_slen[slot]) != 0) {
+    if (os88_file_write_segoff(lm_fname(slot), lm_srcseg, lm_soff(slot),
+                               lm_slen[slot]) != 0) {
         e = os88_ferr();
         lm_l0();
         lm_ls(lm_fname(slot));
@@ -501,6 +501,10 @@ static void lm_prefs_write(void)
  * window, drew the empty screen and said nothing at all).
  * ==========================================================================*/
 
+static unsigned lm_packlen;             /* the last bundle's size, 0 = none */
+static int      lm_packok;              /* 1 = the last Pack succeeded */
+static int      lm_packran;             /* 1 = a Pack has been attempted */
+
 static void lm_freeproject(void)
 {
     int i;
@@ -516,6 +520,14 @@ static void lm_freeproject(void)
     }
     lm_state = LM_ST_EMPTY;
     lm_slot = LM_SLOT_WML;
+    /* The last Pack's verdict is about the project being freed, not the
+     * next one: without this a New Project came up with the old project's
+     * "Pack failed / MAIN.WML / line 9" in the sidebar, naming a line its
+     * own three-line skeleton does not have. */
+    lm_packran = 0;
+    lm_packok = 0;
+    lm_packlen = 0;
+    lm_clearerr();
     lm_ed_reset();
 }
 
@@ -690,7 +702,7 @@ static void lm_open_pend(void *win)
     lm_mkname(lm_stem, "WML");
     os88_strcpy(lm_argname, lm_line, sizeof(lm_argname));
     if (!ovl_openproj(win, lm_argname))
-        lm_say("LOOM.OVL is missing; a project cannot be opened.");
+        lm_say("LOOM could not load its overlay; a project cannot be opened.");
 }
 
 /* ============================================================================
@@ -715,9 +727,8 @@ static void lm_open_pend(void *win)
  * refuses for ever after.
  * ==========================================================================*/
 
-static unsigned lm_packlen;             /* the last bundle's size, 0 = none */
-static int      lm_packok;              /* 1 = the last Pack succeeded */
-static int      lm_packran;             /* 1 = a Pack has been attempted */
+/* lm_packlen, lm_packok and lm_packran are declared above lm_freeproject,
+ * which forgets them with the project they describe. */
 
 static void lm_pack_free(void)
 {
@@ -840,7 +851,7 @@ static void lm_pack(void)
     ok = ovl_pack();
     if (!ok && !lm_failed()) {
         lm_pack_free();
-        lm_say("LOOM.OVL is missing or stale; no bundle can be packed.");
+        lm_say("LOOM could not load its overlay; no bundle can be packed.");
         lm_side_paint();
         lm_status_paint(0);
         return;

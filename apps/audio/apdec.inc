@@ -32,13 +32,45 @@
 ; =============================================================================
 
 ; --- IMA step-size table: 89 entries, from the IMA/DVI ADPCM specification ----
-apd_step:
-    dw 7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66
-    dw 73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371
-    dw 408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707
-    dw 1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484
-    dw 7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350
-    dw 22385,24623,27086,29794,32767
+; BUILT AT LAUNCH (apd_mkstep), not shipped: the spec's table is, to the unit,
+; s[n+1] = s[n] + s[n] / 10 + r[n] with every residual r[n] 0 or 1 - bar the
+; last entry, the 32767 the predictor's own clamp is - so eleven bytes of bits
+; stand in for 178 bytes that pack to nearly 178 (SPEC.md 86.4). In bss, at an
+; EVEN address (a byte spare for it), which the shipped table never was: a
+; 286 reads it in one bus cycle; the decode is otherwise exactly as before.
+apd_step equ os88_image_end + AP_BSS + ((os88_image_end - $$ + AP_BSS) & 1)
+%assign AP_BSS AP_BSS + 89 * 2 + 1
+apd_stepk: db 0x87, 0x66, 0x8A, 0x3C, 0x69, 0xDD, 0x4A, 0xE6, 0x69, 0xD2, 0x23
+
+; apd_mkstep - fill apd_step (the entry proc, once). s / 10 is the high word
+; of s x 6554, exact for every s below 32768. ~4 ms on a 4.77 MHz 8088.
+; clobbers AX, BX, CX, DX, SI, DI
+apd_mkstep:
+    push es
+    push ds
+    pop es
+    cld
+    mov si, apd_stepk
+    mov di, apd_step
+    mov ax, 7                       ; s[0]
+    mov cx, 88
+.l:
+    stosw
+    test cl, 7                      ; eight entries a byte of residuals
+    jnz .b
+    mov bl, [si]
+    inc si
+.b:
+    push ax
+    mov dx, 6554
+    mul dx                          ; DX = s / 10
+    pop ax
+    shr bl, 1                       ; CF = r[n]
+    adc ax, dx
+    loop .l
+    mov word [di], 32767            ; s[88], the clamp
+    pop es
+    ret
 
 ; --- IMA index-adjustment table: 16 entries, indexed by the whole nibble -----
 apd_idxtab:
@@ -53,15 +85,19 @@ apd_idxtab:
 apd_start:
     push ax
     push cx
+    push di
+    push es
     mov [apd_codec], al
     mov [apd_balign], cx
-    mov word [apd_bleft], 0         ; no ADPCM block in progress
-    mov byte [apd_hasbyte], 0       ; no data byte in hand
-    mov byte [apd_hinib], 0
-    mov word [apd_pred], 0
-    mov word [apd_index], 0
-    mov word [apd_inlen], 0         ; input bounce empty
-    mov word [apd_inpos], 0
+    push ds
+    pop es
+    mov di, apd_bleft               ; no ADPCM block in progress, predictor
+    mov cx, APD_ZLEN                ; and index 0, no data byte in hand, the
+    xor al, al                      ; input bounce empty: one run of bss
+    cld                             ; (audio.asm keeps them together)
+    rep stosb
+    pop es
+    pop di
     pop cx
     pop ax
     ret

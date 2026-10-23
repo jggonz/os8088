@@ -277,15 +277,18 @@ rl_tsc_mhz:
 
 rl_e820:
     push es
-    push ds
-    pop es
-    xor ebx, ebx
+    push bp
+    sub sp, 24                      ; THE ENTRY IS ON THE STACK: SS is
+    mov bp, sp                      ; conventional on every kernel, where DS
+    push ss                         ; may be above 1MB under kern_mega and the
+    pop es                          ; BIOS would write to FFFF:DI and read back
+    xor ebx, ebx                    ; as no memory at all (KERN-MEGA-PLAN 14.14)
     mov si, 128                     ; bound broken firmware continuation
 .next:
     mov eax, 0xE820
     mov edx, 0x534D4150
     mov ecx, 20
-    mov di, rl_mapentry
+    mov di, bp
     push ds
     push es
     push si
@@ -298,10 +301,10 @@ rl_e820:
     jne .done
     cmp ecx, 20
     jb .done
-    cmp dword [rl_mapentry+16], 1
+    cmp dword [bp+16], 1            ; (BP addresses SS)
     jne .continue
-    mov eax, [rl_mapentry+8]
-    mov edx, [rl_mapentry+12]
+    mov eax, [bp+8]
+    mov edx, [bp+12]
     add [rl_ramtotal], eax
     adc [rl_ramtotal+4], edx
 .continue:
@@ -322,6 +325,8 @@ rl_e820:
     mov [rl_ramkb], eax
     mov byte [rl_mapok], 1
 .out:
+    add sp, 24
+    pop bp
     pop es
     ret
 cpu 8086

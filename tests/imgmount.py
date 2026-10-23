@@ -14,23 +14,25 @@ there.
      size (SPEC.md 18.101.6), pixel for pixel, and PAD.BIN does not.
   1. TEST.IMG mounts: a DRVC_IMG row appears, its toast says which drive,
      and D: lists the file inside the image, read through all four runs.
-  2. ...and while it is a drive its host file is READ-ONLY with byte 12
-     marked, so Delete on it is refused and it is still there.
+  2. ...and while it is a drive its host file is READ-ONLY to the FAT layer,
+     so Delete on it is refused and it is still there - and its
+     ENTRY ON THE DISK IS UNCHANGED (SPEC.md 18.101.3): the read-only bit is
+     virtual, so a machine switched off here leaves the file as it was.
   3. New Folder on D: writes the image. Read back on the host: the image's
      root holds GATE, the image passes os88disk --verify, and NO host sector
-     outside TEST.IMG's clusters changed but the one holding its entry.
+     outside TEST.IMG's clusters changed - not even its entry's.
   4. The second double-click unmounts: the row is free, the toast says so,
-     and the entry's attribute and byte 12 are back to what they were.
+     and the entry is as it was.
   5. RO.IMG mounts READ-ONLY (IMG_FLG), New Folder on it changes nothing,
      and its unmount leaves the user's read-only bit where it was.
-  6. STALE.IMG's marker is taken as a mount the machine never finished: it
-     mounts WRITABLE and its unmount clears the read-only bit the stop left.
+  6. STALE.IMG wears the mark an EARLIER kernel left on a file it was
+     stopped under: it mounts WRITABLE, and the MOUNT clears the mark.
   7. BAD.IMG says 'Not a disk image' and leaves no row and no claim.
   8. The Disk menu's half (SPEC.md 18.101.5, 22.28): Unmount Image is GREY on
      a host window; the empty-space context menu's last item opens Mount
      Image's Open box; Disk > Mount Image... mounts TEST.IMG picked in it;
      Unmount Image is LIVE in the image's own window, and picking it
-     unmounts, puts the attribute back and sends the window to the host.
+     unmounts and sends the window to the host, the entry never touched.
   9. ...and on the DESKTOP: a right-press on the image's own drive icon pops
      Unmount Image, and picking it takes the row, the zone and the claim.
 
@@ -223,8 +225,10 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
     # --- 2. the host file is protected while mounted ---------------------
     data = host_now(ui, "mounted")
     _f, _e, attr, res = entry(data, b"TEST    IMG")
-    check(attr & 1 and res == imgfix.IMG_MARK, "the host file is read-only "
-          "and marked while it is a drive", (attr, res))
+    _f, _e, oattr, ores = entry(orig, b"TEST    IMG")
+    check((attr, res) == (oattr, ores), "the host file's entry is UNCHANGED "
+          "on the disk while it is a drive - a power-off here leaves nothing",
+          ((attr, res), (oattr, ores)))
     w = ui.open_drive("B")
     idx, _ty = ui.entry("TEST.IMG", w)
     row = ui.scroll_to(idx, win=w)
@@ -248,16 +252,14 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
           "read back on the host", root_names(img))
     ok, line = fsck(img, "inner")
     check(ok, "...and the image passes os88disk --verify", line)
-    fat = imgfix.Fat12(orig)
-    e = fat.entry(b"TEST    IMG")
     allowed = set()
     for first, lba, n in runs[b"TEST    IMG"]:
         allowed.update(range(lba, lba + n))
-    allowed.add(e // 512)
     moved = sorted({i // 512 for i in range(len(data))
                     if data[i] != orig[i]})
     check(moved and set(moved) <= allowed, "no host sector outside the file "
-          "changed but its entry's", [s for s in moved if s not in allowed])
+          "changed - its entry's included (SPEC.md 18.101.3)",
+          [s for s in moved if s not in allowed])
     check(img != orig_test, "...and the image's bytes did change", None)
 
     # --- 4. unmount -------------------------------------------------------
@@ -268,9 +270,8 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
           txt)
     data = host_now(ui, "unmounted")
     _f, _e, attr, res = entry(data, b"TEST    IMG")
-    _f, _e, oattr, ores = entry(orig, b"TEST    IMG")
-    check((attr, res) == (oattr, ores), "the entry's attribute and byte 12 "
-          "are back", ((attr, res), (oattr, ores)))
+    check((attr, res) == (oattr, ores), "the entry is as it was",
+          ((attr, res), (oattr, ores)))
     ok, line = fsck(data, "host")
     check(ok, "the host passes os88disk --verify", line)
 
@@ -300,12 +301,16 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
     seg = images(ui)[0][5]
     flg = ui.m.read(seg * 16 + IMG_FLG, 1)[0]
     check(flg == 0, "a stale marker mounts WRITABLE", flg)
-    dblclick(ui, "STALE.IMG")
-    wait_images(ui, 0, "STALE.IMG's row to go")
     data = host_now(ui, "stale")
     _f, _e, attr, res = entry(data, b"STALE   IMG")
-    check(not attr & 1 and res == 0, "...and its unmount clears what the "
-          "stop left", (attr, res))
+    check(not attr & 1 and res == 0, "...and the MOUNT clears what the "
+          "earlier kernel's stop left", (attr, res))
+    dblclick(ui, "STALE.IMG")
+    wait_images(ui, 0, "STALE.IMG's row to go")
+    data = host_now(ui, "staleun")
+    _f, _e, attr, res = entry(data, b"STALE   IMG")
+    check(not attr & 1 and res == 0, "...and its unmount leaves it cleared",
+          (attr, res))
 
     # --- 7. not an image ----------------------------------------------------
     dblclick(ui, "BAD.IMG")
@@ -371,8 +376,8 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
           "mounts what the Open box answered", txt)
     data = host_now(ui, "dlg")
     _f, _e, attr, res = entry(data, b"TEST    IMG")
-    check(attr & 1 and res == imgfix.IMG_MARK, "...marked on the host, found "
-          "by the DIALOG's folder", (attr, res))
+    check((attr, res) == (oattr, ores), "...and the host entry untouched "
+          "while it is a drive", (attr, res))
 
     iw = ui.open_drive(letter)
     items = disk_items(ui)
@@ -397,8 +402,8 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
     check(drv == 1, "...and the window goes to the HOST", drv)
     data = host_now(ui, "dlgun")
     _f, _e, attr, res = entry(data, b"TEST    IMG")
-    check((attr, res) == (oattr, ores), "...and puts the attribute back, "
-          "the file found by the name the claim kept", (attr, res))
+    check((attr, res) == (oattr, ores), "...and the entry is as it was",
+          (attr, res))
     check(img_claims(ui) == 0, "...and frees its claim", img_claims(ui))
 
     # --- 9. the desktop's right-click ---------------------------------------
@@ -422,7 +427,7 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
     check(img_claims(ui) == 0, "...and frees its claim", img_claims(ui))
     data = host_now(ui, "desk")
     _f, _e, attr, res = entry(data, b"TEST    IMG")
-    check((attr, res) == (oattr, ores), "...and puts the attribute back",
+    check((attr, res) == (oattr, ores), "...and the entry is as it was",
           (attr, res))
 
 for f in fails:

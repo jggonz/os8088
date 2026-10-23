@@ -35,7 +35,8 @@ MWT_MAXV    equ 16
 MWT_PAGES   equ 32
 MWT_ACC     equ MWT_PAGES * 256     ; the sum, in the mix claim...
 MWT_OTAB    equ MWT_ACC + MWT_SPAN * 2  ; ...and the output table after it
-MWT_MIXKB   equ (MWT_OTAB + 2048 + 1023) / 1024
+MWT_VSTEP   equ MWT_OTAB + 2048     ; ...and the loop's step, protected mode
+MWT_MIXKB   equ (MWT_VSTEP + 2 + 1023) / 1024
 MWT_FULL    equ 127 << 8            ; an envelope at its top
 %if MWT_MAXV > MR_MAXV
   %error "the wavetable's voices are the allocator's"
@@ -63,7 +64,10 @@ MRS_RATE    equ 8
 MRS_GAIN    equ 10
 
     MRW mwt_bseg                    ; the bank's claim (0: not loaded)
-    MRW mwt_dseg                    ; ...and its sample data, as a segment
+    MRW mwt_doff                    ; ...where its sample data starts in
+    MRW mwt_doffh                   ;    it, a 32-bit byte offset
+    MRW mwt_lim                     ; the highest end a voice may have
+    MRW mwt_nbase                   ; mwt_place: a voice's start, as an offset
     MRW mwt_xseg                    ; the mix claim
     MRW mwt_rate                    ; the output rate
     MRW mwt_pos                     ; rendered so far this span
@@ -187,17 +191,17 @@ mwt_load:
     call os88_rseq_new              ; the cursor names no file: start it cold
     xor ax, ax                      ; DX:AX = its offset in the file
     xor dx, dx
+    xor bx, bx                      ; ES:BX = where the chunk lands
     mov bp, [mr_bankkb]             ; BP = the claim's KB still unread
 .chunk:
     push ax
     push dx
-    xor bx, bx
     mov cx, 32768
     cmp bp, 32
     jae .cap
-    mov cx, bp                      ; CX = BP x 1024 (BP < 32, BX = 0): the
-    mov ch, cl                      ; room left, whole KB and so whole sectors
-    mov cl, bl                      ; - kern_big's READ_AT rule (SPEC.md
+    mov cx, bp                      ; CX = BP x 1024 (BP < 32): the room
+    mov ch, cl                      ; left, whole KB and so whole sectors
+    mov cl, 0                       ; - kern_big's READ_AT rule (SPEC.md
     shl ch, 1                       ; 18.4.4.2); kern_small carries no card
     shl ch, 1                       ; player (105.8.6)
 .cap:
@@ -209,9 +213,13 @@ mwt_load:
     jcxz .done
     add ax, 32768
     adc dx, 0
-    mov bx, es
-    add bx, 32768 / 16
-    mov es, bx
+    xor bx, 32768                   ; the second half of this 64KB, or the
+    jnz .same                       ; first of the next - an OFFSET step,
+    mov bx, es                      ; so a bank of 64KB or less that is a
+    add bx, 65536 / 16              ; selector on kern_mega never moves ES
+    mov es, bx                      ; (KERN-MEGA-PLAN 14.13); one over 64KB
+    xor bx, bx                      ; is conventional by the contract
+.same:
     cmp cx, 32768
     jne .done
     sub bp, 32
@@ -228,16 +236,24 @@ mwt_load:
     jne .free
     cmp word [es:4], 1
     jne .free
-    mov ax, [es:MRK_DOFF]           ; the data's segment
-    mov dx, [es:MRK_DOFF+2]
-    mov cl, 4
-.d:
-    shr dx, 1
-    rcr ax, 1
-    dec cl
-    jnz .d
-    add ax, [mwt_bseg]
-    mov [mwt_dseg], ax
+    mov ax, [es:MRK_DOFF]           ; where the data is, KEPT as an offset:
+    mov [mwt_doff], ax              ; a segment of bseg + (doff >> 4) is a
+    mov ax, [es:MRK_DOFF+2]         ; paragraph step off kern_mega's grid of
+    mov [mwt_doffh], ax             ; conventional descriptors, and nothing
+    mov cx, 0xFFFF                  ; at all on a selector (mwt_place)
+%ifdef PKG_MEGA                     ; (a SELECTOR is an OS88_HIGHMEM claim:
+    test byte [mwt_bseg], 4         ; the kern_mega arm's, 14.66)
+    jz .lim
+    mov ax, [mr_bankkb]             ; a selector (KERN-MEGA-PLAN 14.13): no
+    cmp ax, 64                      ; voice may read past the claim - real
+    jae .lim                        ; mode reads garbage there, a selector
+    mov ch, al                      ; faults. A 64KB claim's last offset is
+    mov cl, 0                       ; 0xFFFF already
+    shl ch, 1
+    shl ch, 1
+%endif
+.lim:
+    mov [mwt_lim], cx
     clc
     jmp short .out
 .rdfail:
@@ -404,6 +420,54 @@ mwt_hush:
 ; -----------------------------------------------------------------------------
 ; mwt_on - MRO_ON: AL = channel, AH = key, CL = velocity
 ; -----------------------------------------------------------------------------
+; mwt_place - where a voice's sample is (KERN-MEGA-PLAN 14.13): the bank's
+; data offset plus the sample's paragraph, as a byte offset A, and from it a
+; SEGMENT and a START. On a bank that is conventional - every machine but
+; kern_mega, and kern_mega's banks over 64KB - the segment is bseg + 8 x (A >>
+; 7) and the start A & 127: whole 128-byte granules, on the grid kern_mega's
+; conventional descriptors sit on, and the same bytes real mode always read.
+; On a bank that came back a SELECTOR (bit 2, the LDT; a conventional base is
+; a multiple of 32 paragraphs, so the bit is clear there) it is 64KB or less
+; and the segment is the claim itself, the start A.
+; in:  ES:SI -> the sample's row, BX = the voice x 2
+; out: [mwt_sseg+bx], [mwt_nbase]; preserves every register
+mwt_place:
+    push ax
+    push cx
+    push dx
+    mov ax, [es:si+MRS_PARA]
+    mov dx, ax
+    mov cl, 4
+    shl ax, cl
+    mov cl, 12
+    shr dx, cl                      ; DX:AX = the paragraph, in bytes
+    add ax, [mwt_doff]
+    adc dx, [mwt_doffh]             ; DX:AX = A
+    mov cx, [mwt_bseg]
+%ifdef PKG_MEGA
+    test cl, 4                      ; (a selector: the kern_mega arm's)
+    jnz .flat
+%endif
+    push ax
+    mov cx, 7
+.g:
+    shr dx, 1
+    rcr ax, 1
+    loop .g
+    mov cl, 3
+    shl ax, cl
+    add ax, [mwt_bseg]
+    mov cx, ax                      ; CX = the granule's segment
+    pop ax
+    and ax, 127                     ; AX = the start in it
+.flat:
+    mov [mwt_sseg+bx], cx
+    mov [mwt_nbase], ax
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 mwt_on:
     push ax
     push bx
@@ -456,23 +520,29 @@ mwt_on:
     shl si, 1
     shl si, 1
     add si, [es:MRK_SAMP]
-    mov cx, [es:si+MRS_PARA]
-    add cx, [mwt_dseg]
     shl bx, 1
-    mov [mwt_sseg+bx], cx
+    call mwt_place                  ; the voice's segment, and its start
     mov cx, [es:si+MRS_LPE]
     or cx, cx
     jnz .lp
-    mov cx, [es:si+MRS_LEN]         ; a one-shot ends at its length...
-    mov [mwt_end+bx], cx
     mov word [mwt_llen+bx], 0
+    mov cx, [es:si+MRS_LEN]         ; a one-shot ends at its length...
     jmp short .rt
 .lp:
-    mov [mwt_end+bx], cx            ; ...a loop at its end, back by its length
-    sub cx, [es:si+MRS_LPS]
+    sub cx, [es:si+MRS_LPS]         ; ...a loop at its end, back by its length
     mov [mwt_llen+bx], cx
+    mov cx, [es:si+MRS_LPE]
 .rt:
-    mov word [mwt_ip+bx], 0
+    add cx, [mwt_nbase]             ; both counted from the voice's start
+    jc .clip
+    cmp cx, [mwt_lim]
+    jbe .endok
+.clip:
+    mov cx, [mwt_lim]               ; only a bank whose sample runs off it
+.endok:
+    mov [mwt_end+bx], cx
+    mov cx, [mwt_nbase]
+    mov [mwt_ip+bx], cx
     mov word [mwt_fp+bx], 0
     mov cx, [es:si+MRS_RATE]        ; the base step: rate / output, 16.16
     push ax
@@ -1033,7 +1103,15 @@ mwt_voice:
     mov ax, [mwt_llen+bx]
     mov [mwt_vll], ax
     mov ax, [mwt_is+bx]
-    mov [cs:..@mwt_vstep+2], ax     ; the whole step, into the adc
+.st:                                ; (PROTECTED MODE: mwt_pmset has made
+    mov [cs:..@mwt_vstep+2], ax     ; this a jmp to mwt_voicep) the whole
+                                    ; step, into the adc
+    ; THE REST TO .done IS ASSEMBLED TWICE (105.8.6): the voice's registers
+    ; (MWT_VSET, AX = the whole step), and the loop (MWT_VRUN 1 = the
+    ; protected-mode copy, mwt_voicep), whose step is the patched immediate
+    ; here and [MWT_VSTEP] - through DS, the mix claim - there. This copy is
+    ; byte for byte the loop it always was
+%macro MWT_VSET 0
     inc ax
     mov [mwt_vinc], ax              ; ...and the most a step moves
     mov si, [mwt_ip+bx]
@@ -1044,7 +1122,10 @@ mwt_voice:
     mov bh, [mwt_pg+bx]
     push ds
     mov ds, [mwt_xseg]
+%endmacro
+    MWT_VSET
     jmp short .run
+%macro MWT_VRUN 1
 .run:
     ; how many samples are certainly short of the end?
     mov ax, [cs:mwt_vend]
@@ -1071,11 +1152,19 @@ mwt_voice:
     inc di
     inc di
     add dx, bp
+%if %1
+    adc si, [MWT_VSTEP]             ; (the step, in the mix claim)
+%else
 ..@mwt_vstep:
     adc si, strict word 0x1234      ; (patched: the whole step)
+%endif
     loop .l
     pop cx
+%if %1
+    jcxz .donej
+%else
     jcxz .done
+%endif
     jmp short .run
 .care:                              ; ONE sample, its crossing tested
     mov bl, [es:si]
@@ -1085,12 +1174,20 @@ mwt_voice:
     inc di
     inc di
     add dx, bp
+%if %1
+    adc si, [MWT_VSTEP]
+%else
     adc si, [cs:..@mwt_vstep+2]
+%endif
     cmp si, [cs:mwt_vend]
     jb .cnext
     mov ax, [cs:mwt_vll]
     or ax, ax
+%if %1
+    jz .endsj
+%else
     jz .ends
+%endif
 .wl:
     sub si, ax                      ; a loop: back by its length (a step can
     cmp si, [cs:mwt_vend]           ; carry past it more than once)
@@ -1098,6 +1195,8 @@ mwt_voice:
 .cnext:
     dec cx
     jnz .run
+%endmacro
+    MWT_VRUN 0
 .done:
     pop ds
     mov bx, [mwt_vbx]
@@ -1119,6 +1218,34 @@ mwt_voice:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; mwt_voicep - mwt_voice's loop for kern_mega (SPEC.md 105.8.6). CS is a
+; read-only code alias there, so the patch at .st would trap into the kernel
+; once a voice a span: this copy keeps the step in the mix claim at MWT_VSTEP
+; and adds it from there - DS IS the mix claim in the loop - and mwt_pmset
+; points .st here once, at entry, so kern_big runs mwt_voice unchanged
+; -----------------------------------------------------------------------------
+%ifdef PKG_MEGA                     ; (the kern_mega arm's alone, 14.66)
+mwt_voicep:
+    ; STKBALANCE-OK: never called - mwt_voice.st jumps here with its seven registers pushed, and .done/.ends pop them
+    mov es, [mwt_xseg]              ; (ES is the sample's again in MWT_VSET)
+    mov [es:MWT_VSTEP], ax
+    MWT_VSET
+    MWT_VRUN 1
+.donej:                             ; (falling out of it, as the real-mode
+    jmp mwt_voice.done              ; copy falls into .done)
+.endsj:
+    jmp mwt_voice.ends
+
+; mwt_pmset - from mr_entry under CPU_F_PM (DS = ours, our writable DATA
+; selector, so the code is written through it and nothing traps): .st becomes
+; a jmp to the protected-mode copy. Preserves all
+mwt_pmset:
+    mov word [mwt_voice.st+1], mwt_voicep - (mwt_voice.st + 3)
+    mov byte [mwt_voice.st], 0xE9
+    ret
+%endif                              ; PKG_MEGA
 
     MRW mwt_vend                    ; the voice the loop is on: its end...
     MRW mwt_vinc                    ; ...the most a step moves...

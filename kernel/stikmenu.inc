@@ -195,17 +195,17 @@ smn_track:
     push di
     push bp
     push es
-    mov [cs:stm_cellx], bx
-    mov byte [cs:stm_ak], AK_NONE
+    CSDO mov [CSEG stm_cellx], bx
+    CSDO mov byte [CSEG stm_ak], AK_NONE
     call stm_scan               ; STIKAPPS\ on the boot volume and the fixed
     call stm_census             ; disks; then who is running
     call stm_layout
     call stm_loadpics           ; the first page's pictures
     call stm_open               ; the save-under, the dock's hole, the pens
     call stm_drawall
-    mov byte [cs:stm_live], 1   ; the panel is on the glass (a row's witness:
+    CSDO mov byte [CSEG stm_live], 1 ; the panel is on the glass (a row's witness:
     call stm_loop               ; AX = the slab picked, 0FFFFh none
-    mov byte [cs:stm_live], 0   ; tests/stikmenu.py)
+    CSDO mov byte [CSEG stm_live], 0 ; tests/stikmenu.py)
     push ax
     call stm_shut               ; the screen back, whatever was picked
     pop ax
@@ -230,7 +230,7 @@ smn_track:
 ; clobbers: AX, BX, CX, DX, SI, DI, BP, ES
 ; -----------------------------------------------------------------------------
 stm_scan:
-    mov byte [cs:stm_n], 0
+    CSDO mov byte [CSEG stm_n], 0
     call COLD_SEG:drvf_drv_vol_bank
     mov al, [dsk_bootvol]
     call stm_scanvol
@@ -278,14 +278,14 @@ stm_isfixed:
 ; stm_scanvol - AL = a volume: its STIKAPPS\, entry by entry.
 ; clobbers AX, BX, CX, DX, SI, DI, BP, ES
 stm_scanvol:
-    mov [cs:stm_vol], al
+    CSDO mov [CSEG stm_vol], al
     call stm_gohome             ; CF = 0 standing in its STIKAPPS folder
     jc .ret
     xor cx, cx                  ; the ordinal: dsk_find_x is stateless, so the
 .f:                             ; peeks between the calls cannot disturb it
     cmp byte [cs:stm_n], STM_MAX
     jae .ret
-    push cs
+    PUSH_CSDATA
     pop es
     mov di, stm_find
     xor al, al
@@ -305,7 +305,7 @@ stm_scanvol:
 stm_gohome:
     mov al, [cs:stm_vol]
     xor bx, bx
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
     jc .r
     mov si, stm_s_dir
     call stm_kname              ; 'STIKAPPS' into the kernel's name scratch
@@ -316,7 +316,7 @@ stm_gohome:
     or bx, bx
     jz .no
     mov al, [cs:stm_vol]
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
 .r:
     ret
 .no:
@@ -375,14 +375,14 @@ stm_take:
     mov al, [cs:stm_n]
     call stm_ent                ; CS:DI = the next entry
     mov al, [cs:stm_vol]
-    mov [cs:di+STE_VOL], al
-    mov byte [cs:di+STE_RUN], 0
+    CSDO mov [CSEG di+STE_VOL], al
+    CSDO mov byte [CSEG di+STE_RUN], 0
     mov ax, [cs:stm_find+16]
-    mov [cs:di+STE_CLUS], ax
+    CSDO mov [CSEG di+STE_CLUS], ax
     push si
     push di
     push es                     ; the 8.3 name: image to image
-    push cs
+    PUSH_CSDATA
     pop es
     mov si, stm_find
     add di, STE_FILE
@@ -395,7 +395,7 @@ stm_take:
     add di, STE_HNAME           ; to I_NAME: at most 15, and a NUL
     mov cx, 15
     call stm_cpy
-    mov byte [cs:di], 0
+    CSDO mov byte [CSEG di], 0
     pop di
     pop si
     push si
@@ -406,14 +406,14 @@ stm_take:
     call stm_cpy
     pop di
     pop si
-    inc byte [cs:stm_n]
+    CSDO inc byte [CSEG stm_n]
 .no:
     ret
 
 ; stm_cpy - CX bytes from ES:SI to CS:DI; SI, DI past them. clobbers AL, CX
 stm_cpy:
     mov al, [es:si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     loop stm_cpy
@@ -540,7 +540,7 @@ stm_kname:
 ; clobbers: AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 stm_census:
-    mov byte [cs:stm_nrun], 0
+    CSDO mov byte [CSEG stm_nrun], 0
     xor dx, dx                  ; DL = the entry
 .e:
     cmp dl, [cs:stm_n]
@@ -549,8 +549,8 @@ stm_census:
     call stm_ent
     call stm_find_inst          ; CF = 0: BX = its instance record
     jc .n
-    mov byte [cs:di+STE_RUN], 1
-    inc byte [cs:stm_nrun]
+    CSDO mov byte [CSEG di+STE_RUN], 1
+    CSDO inc byte [CSEG stm_nrun]
 .n:
     inc dx
     jmp short .e
@@ -569,7 +569,7 @@ stm_census:
     add bx, WIN_SIZE
     dec dx
     jnz .w
-    mov [cs:stm_ndesk], cx      ; stm_ndesk, then stm_nvis
+    CSDO mov [CSEG stm_ndesk], cx ; stm_ndesk, then stm_nvis
     ret
 
 ; stm_isdesk - BX = a window slot: CF = 0 when it is a live desk window
@@ -639,7 +639,7 @@ stm_layout:
     jae .t
     mov si, stm_lay_comp
 .t:
-    mov [cs:stm_ly], si
+    CSDO mov [CSEG stm_ly], si
     ; --- the width: 14 bytes of furniture round the widest text ---------------
     xor dx, dx                  ; DL = the widest name/description, in cells
     xor al, al
@@ -665,12 +665,12 @@ stm_layout:
     jae .wok
     mov dl, al
 .wok:
-    mov [cs:stm_stride], dl
+    CSDO mov [CSEG stm_stride], dl
     mov dh, 0
-    mov [cs:stm_stridew], dx
+    CSDO mov [CSEG stm_stridew], dx
     mov cl, 3
     shl dx, cl
-    mov [cs:stm_w], dx
+    CSDO mov [CSEG stm_w], dx
     ; --- x: under the title, on the byte grid, inside the primary --------------
     mov ax, [cs:stm_cellx]
     and al, 0xF8
@@ -687,10 +687,10 @@ stm_layout:
 .xpos:
     and al, 0xF8
 .xok:
-    mov [cs:stm_x1], ax
+    CSDO mov [CSEG stm_x1], ax
     add ax, dx
     dec ax
-    mov [cs:stm_x2], ax
+    CSDO mov [CSEG stm_x2], ax
     ; --- how many apps fit: the screen, and one segment of save-under -------
     mov si, [cs:stm_ly]
     xor bx, bx                  ; BX = every row but the apps'
@@ -726,8 +726,8 @@ stm_layout:
     ja .page                    ; more than fit: a pager, and a page
     cmp ah, STM_PGMAX
     ja .page
-    mov [cs:stm_shown], ah      ; all of them, and no pager
-    mov byte [cs:stm_paged], 0
+    CSDO mov [CSEG stm_shown], ah ; all of them, and no pager
+    CSDO mov byte [CSEG stm_paged], 0
     jmp short .nok
 .page:
     xchg ax, bx                 ; the rows again, less the pager's
@@ -746,14 +746,14 @@ stm_layout:
     jnz .pone
     inc ax                      ; never a page of none
 .pone:
-    mov [cs:stm_shown], al
-    mov byte [cs:stm_paged], 1
+    CSDO mov [CSEG stm_shown], al
+    CSDO mov byte [CSEG stm_paged], 1
 .nok:
-    mov byte [cs:stm_top], 0
+    CSDO mov byte [CSEG stm_top], 0
     ; --- the slabs, top down --------------------------------------------------
     mov di, stm_sl
     mov dx, MBAR_H              ; DX = the next slab's y
-    mov [cs:stm_y1], dx
+    CSDO mov [CSEG stm_y1], dx
     mov ax, SK_HEAD
     call stm_addsl
     mov ax, SK_RULE
@@ -764,20 +764,20 @@ stm_layout:
     jae .apd
     mov al, SK_APP
     mov ah, cl
-    mov byte [cs:stm_sflag], SF_SEL
+    CSDO mov byte [CSEG stm_sflag], SF_SEL
     call stm_addsl
     inc cx
     jmp short .ap
 .apd:
     cmp byte [cs:stm_paged], 0
     je .nopg
-    mov byte [cs:stm_sflag], SF_SEL
+    CSDO mov byte [CSEG stm_sflag], SF_SEL
     mov ax, SK_PAGE
     call stm_addsl
 .nopg:
     cmp byte [cs:stm_n], 0
     jne .some
-    mov byte [cs:stm_sflag], SF_DIS
+    CSDO mov byte [CSEG stm_sflag], SF_DIS
     mov ax, SK_NONE
     call stm_addsl
 .some:
@@ -788,15 +788,15 @@ stm_layout:
     jne .arr
     mov al, SF_DIS              ; nothing to arrange or hide
 .arr:
-    mov [cs:stm_iflag], al
-    mov [cs:stm_sflag], al
+    CSDO mov [CSEG stm_iflag], al
+    CSDO mov [CSEG stm_sflag], al
     mov ax, SK_ITEM | (IT_ARR << 8)
     call stm_addsl
     mov al, [cs:stm_iflag]
-    mov [cs:stm_sflag], al
+    CSDO mov [CSEG stm_sflag], al
     mov ax, SK_ITEM | (IT_HIDE << 8)
     call stm_addsl
-    mov byte [cs:stm_sflag], SF_SEL
+    CSDO mov byte [CSEG stm_sflag], SF_SEL
     mov ax, SK_ITEM | (IT_MORE << 8)
     call stm_addsl
     mov ax, SK_RULE
@@ -804,12 +804,12 @@ stm_layout:
     mov ax, SK_HINT
     call stm_addsl
     dec dx
-    mov [cs:stm_y2], dx
+    CSDO mov [CSEG stm_y2], dx
     xchg ax, di
     sub ax, stm_sl
     mov cl, SL_SIZE
     div cl
-    mov [cs:stm_nsl], al
+    CSDO mov [CSEG stm_nsl], al
     ret
 
 ; stm_len - SI = an image string: DL = max(DL, its length). clobbers AH, SI
@@ -831,10 +831,10 @@ stm_len:
 ; stm_addsl - AL = SK_*, AH = its param, [stm_sflag] its flags (cleared
 ; here), DI = the slab, DX = its y: write it, DI and DX past it. clobbers AX, BX
 stm_addsl:
-    mov [cs:di+SL_KIND], ax     ; SL_KIND, then SL_PARAM
+    CSDO mov [CSEG di+SL_KIND], ax ; SL_KIND, then SL_PARAM
     mov bl, 0
-    xchg bl, [cs:stm_sflag]
-    mov [cs:di+SL_FLAGS], bl
+    CSDO xchg bl, [CSEG stm_sflag]
+    CSDO mov [CSEG di+SL_FLAGS], bl
     mov bx, [cs:stm_ly]
     mov ah, 0
     cmp al, SK_PAGE
@@ -843,8 +843,8 @@ stm_addsl:
 .ht:
     add bx, ax
     mov al, [cs:bx+LY_HT]
-    mov [cs:di+SL_H], al
-    mov [cs:di+SL_Y], dx
+    CSDO mov [CSEG di+SL_H], al
+    CSDO mov [CSEG di+SL_Y], dx
     add dx, ax
     add di, SL_SIZE
     ret
@@ -860,7 +860,7 @@ stm_addsl:
 ; -----------------------------------------------------------------------------
 stm_open:
     mov word [menu_sseg], 0
-    mov word [cs:stm_sseg2], 0
+    CSDO mov word [CSEG stm_sseg2], 0
     call stm_rect               ; AX..DX
     xchg ax, cx                 ; AX = x2+1, CX = x1
     push cx
@@ -871,7 +871,7 @@ stm_open:
     sub ax, bx
     add ax, 2                   ; span -> count, and the misalignment byte
     mul word [vid_planes_w]     ; AX = the bytes ONE ROW saves, every plane
-    mov [cs:stm_rowb], ax
+    CSDO mov [CSEG stm_rowb], ax
     xchg bx, ax
     mov ax, STM_SAVEMAX
     xor dx, dx
@@ -879,12 +879,12 @@ stm_open:
     mov cx, [cs:stm_y2]
     sub cx, [cs:stm_y1]
     add cx, 2                   ; CX = the rows, the shadow's included
-    mov [cs:stm_rows], cx
+    CSDO mov [CSEG stm_rows], cx
     cmp cx, ax
     ja .two
     xchg ax, cx                 ; one segment holds the lot
 .two:
-    mov [cs:stm_cut], ax        ; the rows the FIRST part saves
+    CSDO mov [CSEG stm_cut], ax  ; the rows the FIRST part saves
     ; --- TWO PARTS when one segment cannot hold the panel - a paged VGA
     ; panel can be 440 rows, ~80 KB - so the close RESTORES rather than
     ; repainting what it covered. The first part is menu_drop's own claim
@@ -909,7 +909,7 @@ stm_open:
     mov bx, MEM_K_MOD
     call COLD_SEG:mmf_mem_claim
     jc .drop1
-    mov [cs:stm_sseg2], dx
+    CSDO mov [CSEG stm_sseg2], dx
 .save:
     mov es, [menu_sseg]
     xor di, di
@@ -930,18 +930,18 @@ stm_open:
 .nosave:
     xor ax, ax                  ; a menu over an open dock draws whole
     xchg ax, [gfx_hole]         ; (SPEC.md 30.6.1)
-    mov [cs:stm_hole], ax
+    CSDO mov [CSEG stm_hole], ax
     xor ax, ax
     xchg ax, [wm_clip_n]
-    mov [cs:stm_clipn], ax
+    CSDO mov [CSEG stm_clipn], ax
     ; --- the pens: the band is composed 1 = INK, and the blit's SET bit is
     ; whatever the pen says (SPEC.md 5.4.2.4). Bright and Windows keep the
     ; default pen - set = white, the fast path - and invert the band; every
     ; other theme gets the pair on VGA; and on a 1bpp adapter, where no pen
     ; is asked, the band is inverted when the theme's ink is a dark colour.
     mov ax, [gfx_b1ink]         ; gfx_b1ink, then gfx_b1pap
-    mov [cs:stm_pens], ax
-    mov byte [cs:stm_pol], 0
+    CSDO mov [CSEG stm_pens], ax
+    CSDO mov byte [CSEG stm_pol], 0
     mov al, [thm_inkc]
     cmp byte [vid_planes], 1
     je .mono
@@ -949,7 +949,7 @@ stm_open:
     jne .pens
     cmp byte [thm_bgc], CWHITE
     jne .pens
-    mov byte [cs:stm_pol], 0xFF
+    CSDO mov byte [CSEG stm_pol], 0xFF
     ret
 .pens:
     mov ah, [thm_bgc]
@@ -958,7 +958,7 @@ stm_open:
 .mono:
     cmp al, CLGRAY
     jae .r                      ; a light ink lights the pixel: set = ink
-    mov byte [cs:stm_pol], 0xFF
+    CSDO mov byte [CSEG stm_pol], 0xFF
 .r:
     ret
 
@@ -1047,7 +1047,7 @@ stm_shut:
     call COLD_SEG:mmf_mem_free
 .free2:
     xor dx, dx
-    xchg dx, [cs:stm_sseg2]
+    CSDO xchg dx, [CSEG stm_sseg2]
     or dx, dx
     jz .nofree
     mov bx, MEM_K_MOD
@@ -1101,17 +1101,17 @@ stm_slab:
     push di
     push bp
     push es
-    mov [cs:stm_hi], ah
+    CSDO mov [CSEG stm_hi], ah
     mov ah, SL_SIZE
     mul ah
     add ax, stm_sl
     xchg bx, ax                 ; CS:BX = the slab
-    push cs
+    PUSH_CSDATA
     pop es                      ; ES = the image, for every stosb below
     mov al, [cs:bx+SL_H]
     mul byte [cs:stm_stride]
     xchg cx, ax                 ; CX = the band's bytes
-    mov [cs:stm_bn], cx
+    CSDO mov [CSEG stm_bn], cx
     mov di, stm_band
     xor al, al
     cld
@@ -1156,7 +1156,7 @@ stm_slab:
     mov cx, [cs:stm_bn]         ; highlighted: invert INSIDE the frame
     mov di, stm_band
 .inv:
-    not byte [cs:di]
+    CSDO not byte [CSEG di]
     inc di
     loop .inv
     call stm_frame
@@ -1177,7 +1177,7 @@ stm_slab:
     mov cx, [cs:stm_bn]
     mov di, stm_band
 .pl:
-    xor [cs:di], al
+    CSDO xor [CSEG di], al
     inc di
     loop .pl
 .blit:
@@ -1208,9 +1208,9 @@ stm_frame:
     mov di, stm_band
     mov si, [cs:stm_stridew]
 .r:
-    or byte [cs:di], 0x80
+    CSDO or byte [CSEG di], 0x80
     add di, si
-    or byte [cs:di-1], 0x01
+    CSDO or byte [CSEG di-1], 0x01
     loop .r
     ret
 
@@ -1292,8 +1292,8 @@ stm_c_page:
     mov ah, 0
     div byte [cs:stm_shown]
     call stm_num
-    mov byte [cs:di], ')'
-    mov byte [cs:di+1], 0
+    CSDO mov byte [CSEG di], ')'
+    CSDO mov byte [CSEG di+1], 0
     pop di
     mov si, stm_cnt
     xor dl, dl
@@ -1310,11 +1310,11 @@ stm_num:
     or al, al
     jz .u
     add al, '0'
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc di
 .u:
     add ah, '0'
-    mov [cs:di], ah
+    CSDO mov [CSEG di], ah
     inc di
     ret
 
@@ -1358,7 +1358,7 @@ stm_greytext:
 ; Add at the right ---------------------------------------------------------------
 stm_c_app:
     mov al, [cs:bx+SL_PARAM]    ; the slot...
-    mov [cs:stm_slot], al
+    CSDO mov [CSEG stm_slot], al
     add al, [cs:stm_top]        ; ...and the entry the page puts in it
     cmp al, [cs:stm_n]
     jb .ent
@@ -1389,7 +1389,7 @@ stm_c_app:
     jz .p1
     or al, [cs:si+4]
 .p1:
-    or [cs:di], al
+    CSDO or [CSEG di], al
     inc si
     inc di
     loop .pb
@@ -1433,7 +1433,7 @@ stm_c_app:
     mov cx, 8                   ; adapter keeps (SPEC.md 13.16.2.1)
 .tk:
     mov al, [cs:si]
-    or [cs:di], al
+    CSDO or [CSEG di], al
     inc si
     add di, [cs:stm_stridew]
     loop .tk
@@ -1467,21 +1467,21 @@ stm_c_app:
 ; top and bottom rows from x+1 to x+38 (corners open, so it reads rounded at
 ; this size), the two sides between. clobbers AX, DX, DI
 stm_box:
-    mov byte [cs:di], 0x7F
-    mov word [cs:di+1], 0xFFFF
-    mov word [cs:di+3], 0xFEFF
+    CSDO mov byte [CSEG di], 0x7F
+    CSDO mov word [CSEG di+1], 0xFFFF
+    CSDO mov word [CSEG di+3], 0xFEFF
     dec dx
     dec dx
 .s:
     add di, [cs:stm_stridew]
-    or byte [cs:di], 0x80
-    or byte [cs:di+4], 0x01
+    CSDO or byte [CSEG di], 0x80
+    CSDO or byte [CSEG di+4], 0x01
     dec dx
     jnz .s
     add di, [cs:stm_stridew]
-    mov byte [cs:di], 0x7F
-    mov word [cs:di+1], 0xFFFF
-    mov word [cs:di+3], 0xFEFF
+    CSDO mov byte [CSEG di], 0x7F
+    CSDO mov word [CSEG di+1], 0xFFFF
+    CSDO mov word [CSEG di+3], 0xFEFF
     ret
 
 ; stm_at - DI = the band offset of row AL, byte AH. clobbers AX
@@ -1521,7 +1521,7 @@ stm_text:
     push bx
     push es
     mov es, [font_seg]
-    mov [cs:stm_sty], dl
+    CSDO mov [CSEG stm_sty], dl
     mov ax, di                  ; how many cells to the frame's byte: the
     sub ax, stm_band            ; column, off the offset
     xor dx, dx
@@ -1563,7 +1563,7 @@ stm_text:
     or al, ah
 .nb:
     and al, dh
-    or [cs:di], al
+    CSDO or [CSEG di], al
     test byte [cs:stm_sty], STY_GREY
     jz .ng
     not dh                      ; 0xAA <-> 0x55
@@ -1594,12 +1594,12 @@ stm_count:
     call stm_cat
     cmp byte [cs:stm_nrun], 1
     je .one
-    mov byte [cs:di], 's'
+    CSDO mov byte [CSEG di], 's'
     inc di
 .one:
     mov si, stm_s_act
     call stm_cat
-    mov byte [cs:di], 0
+    CSDO mov byte [CSEG di], 0
     pop di
     mov si, stm_cnt
 .r:
@@ -1610,7 +1610,7 @@ stm_cat:
     mov al, [cs:si]
     or al, al
     jz .r
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     jmp short stm_cat
@@ -1638,15 +1638,15 @@ stm_cat:
 ; clobbers: AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 stm_loop:
-    mov word [cs:stm_sel], 0xFFFF
-    mov word [cs:stm_lastx], 0xFFFF ; nowhere: the first pass tracks
+    CSDO mov word [CSEG stm_sel], 0xFFFF
+    CSDO mov word [CSEG stm_lastx], 0xFFFF ; nowhere: the first pass tracks
     xor ax, ax
-    mov [cs:stm_stk], al
-    mov [cs:stm_stky], al
+    CSDO mov [CSEG stm_stk], al
+    CSDO mov [CSEG stm_stky], al
     test byte [mouse_btn], 1
     jnz .arrow
-    inc byte [cs:stm_stk]       ; released already: wait for the click
-    inc byte [cs:stm_stky]      ; ...and drain it when the menu closes
+    CSDO inc byte [CSEG stm_stk] ; released already: wait for the click
+    CSDO inc byte [CSEG stm_stky] ; ...and drain it when the menu closes
 .arrow:
     SMK cur_unlazy              ; any deferred hide spent, then the arrow
     SMK cursor_show             ; drawn where the pointer is
@@ -1655,9 +1655,9 @@ stm_loop:
     jnz .down
     cmp byte [cs:stm_stk], 1
     je .track                   ; still waiting: the hover is shown
-    jmp short .up
+    jmp .up
 .down:
-    mov byte [cs:stm_stk], 0    ; a press: its release ends the menu
+    CSDO mov byte [CSEG stm_stk], 0 ; a press: its release ends the menu
 .track:
     mov cx, [mouse_x]           ; only a MOVE redraws anything (the hit
     mov dx, [mouse_y]           ; test below reads its own torn-free pair)
@@ -1666,13 +1666,13 @@ stm_loop:
     cmp dx, [cs:stm_lasty]
     je .same
 .moved:
-    mov [cs:stm_lastx], cx
-    mov [cs:stm_lasty], dx
+    CSDO mov [CSEG stm_lastx], cx
+    CSDO mov [CSEG stm_lasty], dx
     SMK cursor_hide             ; the arrow off before any slab is blitted
     call stm_hit
     cmp ax, [cs:stm_sel]
     je .shown
-    xchg ax, [cs:stm_sel]
+    CSDO xchg ax, [CSEG stm_sel]
     cmp ax, 0xFFFF
     je .noold
     mov ah, 0
@@ -1688,15 +1688,15 @@ stm_loop:
 .same:
     SMK kbm_pollm               ; the keyboard mouse's button (SPEC.md 9.6)
     call KERNEL_SEG:cw_task_yield
-    jmp short .poll
+    jmp .poll
 .up:
     call stm_ispage             ; a release on the PAGER turns the page and
     jc .close                   ; keeps the panel up for the next click
     SMK cursor_hide
     call stm_turn
     SMK cursor_show
-    mov byte [cs:stm_stk], 1    ; ...a click away, and drained like the
-    mov byte [cs:stm_stky], 1   ; stay-up click when the menu closes
+    CSDO mov byte [CSEG stm_stk], 1 ; ...a click away, and drained like the
+    CSDO mov byte [CSEG stm_stky], 1 ; stay-up click when the menu closes
     jmp .poll
 .close:
     SMK cursor_hide             ; down again: the restore and gfx_unlock do
@@ -1740,7 +1740,7 @@ stm_turn:
     jb .set
     xor al, al
 .set:
-    mov [cs:stm_top], al
+    CSDO mov [CSEG stm_top], al
     call stm_loadpics
     xor ax, ax
 .s:
@@ -1773,10 +1773,11 @@ stm_turn:
 ; A sector that no longer holds a card leaves the slot's picture blank.
 ; On a floppy the scan's own reads are still in the track cache (SPEC.md
 ; 18.95), so the first page costs nothing more; a turn reads its page.
+; Ends in stm_thaw: the freeze is over once the pictures are in.
 ; clobbers AX, BX, CX, DX, SI, DI, BP, ES
 ; -----------------------------------------------------------------------------
 stm_loadpics:
-    push cs
+    PUSH_CSDATA
     pop es
     mov di, stm_pics            ; the page's slots blank first
     mov cx, STM_PGMAX * 128 / 2
@@ -1799,7 +1800,7 @@ stm_loadpics:
     call stm_ent                ; CS:DI = the entry
     mov al, [cs:di+STE_VOL]
     xor bx, bx
-    call COLD_SEG:fcpf_fcp_goto ; its volume (a word when it is current)
+    call COLD_SEG:dskf_dsk_goto ; its volume (a word when it is current)
     jc .next
     mov ax, [cs:di+STE_CLUS]
     mov cx, 512
@@ -1843,6 +1844,30 @@ stm_loadpics:
     jmp .s
 .done:
     call COLD_SEG:drvf_drv_vol_back
+                                ; ...and FALLS INTO stm_thaw: the disk work is
+                                ; over and the panel is about to be the user's
+
+; -----------------------------------------------------------------------------
+; stm_thaw - THE FREEZE IS OVER, though the hold is not (SPEC.md 12.8.3.3):
+; the progress widget off the bar and the busy clock off the pointer, which
+; is gfx_unlock's two steps taken early. menu_track's hold does not end when
+; the disk work does - the panel is tracked inside it, for as long as the
+; user takes - so without this the widget sat on the bar and the clock
+; stayed the pointer's picture until the panel closed. Reached at the end of
+; every stm_loadpics, so after the drop's load and scan AND after a page
+; turn's reads, both of them with the pointer OFF the glass or owed a hide
+; (cur_shape_set's precondition): the drop's is gfx_lock's promise and the
+; turn's stm_loop's own cursor_hide. ZERO resident bytes: both kernel steps
+; are reached through SMK, and gfx_unlock's copy is untouched.
+; clobbers AX
+; -----------------------------------------------------------------------------
+stm_thaw:
+    SMK fpg_finish              ; the widget down and its cells given back
+    cmp byte [cur_shape], CUR_BUSYSH
+    jne .r                      ; no clock worn: nothing to take off
+    mov al, [cur_shprev]        ; the picture the clock replaced (SPEC.md
+    SMK cur_shape_set           ; 7.5.2), as gfx_unlock puts it back
+.r:
     ret
 
 ; stm_hit - AX = the selectable slab under the pointer, 0FFFFh none; the
@@ -1903,7 +1928,7 @@ stm_pick:
     cmp byte [cs:bx+SL_KIND], SK_APP
     jne .item
     add al, [cs:stm_top]        ; the slot's entry on this page
-    mov [cs:stm_ai], al
+    CSDO mov [CSEG stm_ai], al
     call stm_ent
     mov ah, AK_LAUNCH           ; a row that runs is a toggle: picking it
     cmp byte [cs:di+STE_RUN], 0 ; turns it OFF (SPEC.md 110.12)
@@ -1922,7 +1947,7 @@ stm_pick:
     jne .set
     mov ah, AK_SHOW
 .set:
-    mov [cs:stm_ak], ah
+    CSDO mov [CSEG stm_ak], ah
     mov ax, CMD_STIK
     call KERNEL_SEG:ui_post_cmd ; ui_task spends it with nothing held
     clc
@@ -1947,7 +1972,7 @@ smn_act:
     mov al, [cs:stm_ai]
     call stm_ent                ; CS:DI = the entry, for the two that want one
     mov al, [cs:stm_ak]
-    mov byte [cs:stm_ak], AK_NONE
+    CSDO mov byte [CSEG stm_ak], AK_NONE
     cmp al, AK_LAUNCH
     jne .a1
     call stm_a_launch
@@ -1991,7 +2016,7 @@ smn_act:
 stm_a_launch:
     call COLD_SEG:drvf_drv_vol_bank
     mov al, [cs:di+STE_VOL]
-    mov [cs:stm_vol], al
+    CSDO mov [CSEG stm_vol], al
     call stm_gohome
     jc .miss
     lea si, [di+STE_FILE]
@@ -2033,7 +2058,7 @@ stm_a_more:
     jne .go
     push ds
     pop es                      ; ES = KERNEL_SEG, the destination
-    push cs
+    PUSH_CSDATA
     pop ds                      ; DS = the image, the source
     mov si, stm_s_wiref
     mov di, desk_svc_file
@@ -2088,9 +2113,9 @@ stm_a_arr:
     call KERNEL_SEG:cw_gfx_lock
     mov ax, [vid_band_xe]
     sub ax, STM_ARR_R
-    mov [cs:stm_ax], ax         ; this column's right edge
-    mov [cs:stm_axl], ax        ; ...and its leftmost frame so far
-    mov word [cs:stm_ay], STM_ARR_T
+    CSDO mov [CSEG stm_ax], ax   ; this column's right edge
+    CSDO mov [CSEG stm_axl], ax  ; ...and its leftmost frame so far
+    CSDO mov word [CSEG stm_ay], STM_ARR_T
     mov bx, wm_wins
     mov cx, MAX_WIN
 .w:
@@ -2104,9 +2129,9 @@ stm_a_arr:
     je .fits                    ; taller than the band: first in a column
     mov ax, [cs:stm_axl]        ; a new column, left of this one
     sub ax, STM_ARR_G
-    mov [cs:stm_ax], ax
-    mov [cs:stm_axl], ax
-    mov word [cs:stm_ay], STM_ARR_T
+    CSDO mov [CSEG stm_ax], ax
+    CSDO mov [CSEG stm_axl], ax
+    CSDO mov word [CSEG stm_ay], STM_ARR_T
 .fits:
     mov ax, [cs:stm_ax]
     sub ax, [bx+W_W]
@@ -2119,7 +2144,7 @@ stm_a_arr:
 .xok:
     cmp ax, [cs:stm_axl]
     jge .lft
-    mov [cs:stm_axl], ax
+    CSDO mov [CSEG stm_axl], ax
 .lft:
     mov dx, [cs:stm_ay]
     mov si, [bx+W_FLAGS]
@@ -2137,7 +2162,7 @@ stm_a_arr:
 .next:
     add dx, [bx+W_H]
     add dx, STM_ARR_G
-    mov [cs:stm_ay], dx
+    CSDO mov [CSEG stm_ay], dx
 .n:
     add bx, WIN_SIZE
     dec cx
@@ -2156,7 +2181,7 @@ stm_a_arr:
 smk_go:                         ; ovlchk: builds its own far frame
     push ax                     ; STKBALANCE-OK: a far frame built by hand, its
     push ax                     ; four slots spent by the RETF below and by the
-    push ds                     ; target's own return through cw_kretf. The
+    PUSH_KCODE                  ; target's own return through cw_kretf. The
     push ax                     ; segment slot is PUSHED: DS is KERNEL_SEG
     push bp                     ; throughout the image
     mov bp, sp

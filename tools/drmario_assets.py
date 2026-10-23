@@ -209,7 +209,6 @@ def front_art(out, native):
         help_image.paste(im,(x,y))
     # Reserve runtime menu lettering, including the compact settings line.
     ImageDraw.Draw(splash).rectangle((104,166,328,261),fill=0)
-    sizes=[]
     for tag,height,mono in [('VGA',264,False),('HRC',264,True),('CGA',132,True)]:
         rows=[]
         for name,original in [('splash',splash),('help',help_image)]:
@@ -242,8 +241,6 @@ def front_art(out, native):
         blob=header+directory+payload
         if len(blob)>65535:raise ValueError('frontend graphics exceed one segment')
         (native/f'DRMARCO.{tag}').write_bytes(blob)
-        sizes.append(f'DM_FRONT_{tag}_SIZE equ {len(blob)}')
-    (native/'dm-front.inc').write_text('\n'.join(sizes)+'\n')
 
 
 def screen_surround(screen, tag):

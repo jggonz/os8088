@@ -99,6 +99,7 @@ BSS0 = 0xC12E       # .text ends here; everything above is live state and a
 # write instead lands BOOT2_PAD bytes early, in the cold thunk table. That is
 # what cold_span is for, and it carries the assertions.
 COLD_SEG, _COLD_OFF, COLD_MAX = os88layout.cold_span(ROOT)
+COLD_LIN = (COLD_SEG << 4) + os88sym.equates().get("COLD_VSTART", 0)   # .cold's first byte
 
 
 def coldbase():
@@ -117,7 +118,7 @@ def coldbase():
 def colddiff(m, pad=""):
     base, k = coldbase()
     img = k[base:base + COLD_MAX]
-    ram = m.read(COLD_SEG << 4, COLD_MAX)
+    ram = m.read(COLD_LIN, COLD_MAX)
     rs = runs_of(img, ram)
     print("%s.cold vs kernel.bin: %d byte(s) in %d run(s)%s"
           % (pad, sum(l for _, l in rs), len(rs),

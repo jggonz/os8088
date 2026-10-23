@@ -11,8 +11,10 @@ produce a black or plausible-looking image rather than an error.
   `HERCSEG=` relocates its framebuffer into spare RAM, where
   `tools/hercshot.py` reads it back. That verifies the software renderer and
   nothing about the card, and it is where the QMP scripted mouse lives.
-- **86Box** (`make xt-hercules`) is a period ROM on real card models, with no
-  automation socket: a session can start it and cannot read the result.
+- **86Box** (`make xt-hercules`) is a period ROM on real card models. The
+  macOS app that target launches is for looking; `tools/os88box.py launch
+  xt-hercules` runs the same profile headless and reads its frames back
+  (docs/86BOX.md).
 
 A bare desktop reads **55.7% lit** (139,4xx of 250,560 pixels) on both
 emulators — the ground is a 50% dither plus chrome. `0.0%` or `100.0%` means

@@ -21,8 +21,37 @@
 ; it and measures byte-identical.
 %define KD_BUILD
 
+; **ON kern_mega kern_dos RUNS IN THE HMA** (docs/plans/KERN-MEGA-DOS-PLAN.md
+; 7, wave W4): KD_HMA, implied by KD_MEGA, assembles the image at FFFF:0010 -
+; linear 100000h, the first byte above 1MB - and leaves only what int 13h and
+; SS must reach down here: the FAT snapshot, the mount buffers and the stack,
+; and the low trampolines (kerndos/kdhma.inc). kern_mega leaves A20 open across
+; the bracket and every vector into the image re-proves it.
+; **AND -DKD_LOWDOS IS kern_mega's OTHER kern_dos** (SPEC.md 96.40.9.2): the
+; same build at kern_big's address, 0060:0000, which kern_mega's DOS.O88
+; carries as a part beside the HMA one, run with A20 SHUT for every program
+; that wants the 1MB wrap - the Memory page's `Load DOS in the HMA` unticked.
+%ifdef KD_MEGA
+ %ifndef KD_LOWDOS
+  %define KD_HMA
+ %endif
+%endif
+%ifndef KD_HMA
 KD_SEG      equ 0x0060          ; linear 0x00600, above the IVT and the BDA
+KD_ORG      equ 0               ; ...and the image starts at its offset 0
+%else
+KD_SEG      equ 0xFFFF          ; the HMA: FFFF:0010 is linear 100000h
+KD_ORG      equ 0x10            ; FFFF:0000-000F is ROM, below 1MB
+%endif
+KD_LOWBASE  equ 0x0060          ; where the LOW rungs start on the HMA arm
+KD_LSEG     equ 0x0060          ; ...and where the LOW kern_dos image runs, the
+                                ; HMA arm's switch target (SPEC.md 96.40.9.1);
+                                ; MIRRORED in kernel/hiber.inc
+%ifndef KD_HMA
 KERNEL_SEG  equ KD_SEG          ; ...and the kernel's own files call it this
+%else
+ %define KERNEL_SEG KD_SEG      ; ...as a MACRO on the HMA arm, because the SDK
+%endif                          ; dos.asm includes says 0x0060 (kdos.asm)
 
 ; **ONE RUNG FOR BOTH ARMS SINCE SPEC.md 96.45**, and the conditional that
 ; used to be here is gone rather than updated. It read 35 with the core as a
@@ -66,12 +95,39 @@ KERNEL_SEG  equ KD_SEG          ; ...and the kernel's own files call it this
 ; MEASURED at the foot of kdos.asm: 33,659 of 33,792, 133 bytes left; the DOS
 ; program gets the two kilobytes. DOSR_MARK's 542 bytes still need one more,
 ; so the knob pays a kilobyte over the shipped rung exactly as it did.
+%ifndef KD_MEGA                 ; (kern_mega's arm is below this one)
 %ifdef DOSR_MARK                ; SPEC.md 96.49's resume trace is 542 bytes
 KD_IMG_KB   equ 34              ; and the shipped image has 133 of its rung
 %else                           ; left: the KNOB pays the kilobyte, as a DOS
                                 ; program on a trace build, and no shipped one
 KD_IMG_KB   equ 33              ; 34 until SPEC.md 96.11.7's character devices
 %endif                          ; raised CORE_MAX by a kilobyte to 35, and 33
+; **kern_mega's kern_dos IS A KILOBYTE BIGGER, and only kern_mega's**
+; (SPEC.md 96.15.4, docs/plans/KERN-MEGA-DOS-PLAN.md 6, 12.1 item 4): the XMS
+; door over the arena is 842 bytes of code and 98 of bss (kerndos/kdxms.inc),
+; and CORE_MAX's mega arm reserves 80 more for the core's extended-to-extended
+; move. MEASURED at the foot of kdos.asm: 33,585 -> 34,611 of 34,816, 205
+; left, so kern_mega's DOS program pays the kilobyte and kern_big's does not.
+; The trace knob pays its kilobyte on top, as on kern_big: 35,153.
+; **AND ONE MORE FOR THE WAY BACK** (KERN-MEGA-DOS-PLAN 2.5 item 3): kd_unpark
+; (kerndos/kdpark.inc), the A20 opener and the switch into the park stub, took
+; the image past the 205 left. MEASURED off the map: 35,002 of 35,840, and
+; 35,554 with DOSR_MARK - which FITS, so on kern_mega the trace costs the DOS
+; program nothing and both arms are 35.
+; **AND THE XMS DOOR's REVIEW** (KERN-MEGA-DOS-PLAN 10.4): the largest-run
+; walk here and the core's 0Ch-0Fh, the kept block size and 0Bh's bounds.
+; kern_mega's kern_dos lives in the HMA (W4), so this rung no longer comes
+; off the DOS program at all - it is the HMA's, which holds 63
+; **36 -> 37 FOR THE LOADER'S OWN EXEPACK UNPACKER** (kerndos/kdxpack.inc,
+; KERN-MEGA-PLAN 14.24), and it is the HMA's kilobyte, not the program's
+%elifdef KD_HMA
+KD_IMG_KB   equ 37
+%else
+; **kern_mega's LOW kern_dos** (KD_LOWDOS, SPEC.md 96.40.9.2) has neither the
+; HMA's low half nor the loader's EXEPACK unpacker - with A20 shut the
+; program's own runs - and this rung IS off the program again, as on kern_big
+KD_IMG_KB   equ 36
+%endif
                                 ; since apps size pass 1 (above): this rung
                                 ; reserves the core's block, so a kilobyte
                                 ; there is a kilobyte here, which is a kilobyte
@@ -138,7 +194,11 @@ KDB_AKB     equ 6               ; dw ...and the ARENA it was given, in KB
 COLD_SEG    equ KD_SEG          ; NO COLD RUNG: nothing here is boot-only, so
 COLD_PARA   equ 0               ; .cold is ordinary code in the one image
 
+%ifndef KD_HMA
 FAT_SEG     equ KD_SEG + KIMG_PARA        ; the mount-time FAT snapshot
+%else
+FAT_SEG     equ KD_LOWBASE                ; ...straight above the BDA (W4)
+%endif
 FAT_PARA    equ DSK_FAT_SECS * 32         ; 512 bytes = 32 paragraphs
 LOW_SEG     equ FAT_SEG + FAT_PARA        ; ...and the mount buffers above it
 

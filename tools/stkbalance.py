@@ -106,7 +106,9 @@ POP = re.compile(r"^(pop|popa|popf)\b", re.I)
 RET = re.compile(r"^(ret|retn|retf|iret)\b", re.I)
 RETF = re.compile(r"^retf\b", re.I)
 PUSHF = re.compile(r"^pushf\b", re.I)
-JMP = re.compile(r"^jmp\s+(?:strict\s+)?(?:short\s+|near\s+|word\s+)?(\S+)", re.I)
+# `far` is skipped like `word`: `jmp far [thv + i]` (winmod.inc's doors) is a
+# computed jump through a table of far pointers, so its operand starts `[`
+JMP = re.compile(r"^jmp\s+(?:strict\s+)?(?:short\s+|near\s+|word\s+|far\s+)?(\S+)", re.I)
 JCC = re.compile(r"^(j[a-z]{1,3}|loop|loope|loopne|loopz|loopnz)\s+"
                  r"(?:short\s+)?(\S+)$", re.I)
 SPADD = re.compile(r"^(add|sub)\s+sp\s*,\s*(\S+)$", re.I)
@@ -311,8 +313,20 @@ class Unit(object):
         return cur
 
 
+# kernel/kernel.asm's segment macros for kern_mega: PUSH_CSDATA and
+# PUSH_KCODE each leave ONE word (`push cs` / `push ds` on every other build,
+# and on kern_mega the same word, converted), and `CSDO insn` is `insn` with
+# DS swapped around it and put back - so it moves SP as `insn` does
+SEGPUSH = re.compile(r"^(?:PUSH_CSDATA|PUSH_KCODE)\s*$", re.I)
+CSDO = re.compile(r"^CSDO\s+", re.I)
+
+
 def delta(text):
     """How this instruction moves SP, in words. None = not a stack move."""
+    if SEGPUSH.match(text):
+        return 1
+    if CSDO.match(text):
+        return delta(CSDO.sub("", text))
     if PUSH.match(text):
         return 8 if text.lower().startswith("pusha") else 1
     if POP.match(text):
@@ -534,6 +548,11 @@ class Corpus(object):
 
     def resolve(self, u, idx, tgt):
         """Where a jump goes: (unit, idx) or None if we cannot see it."""
+        # `jmp KERNEL_SEG:kret_es` - a far jump to a LABEL is still a tail
+        # call into that label (the module docstring's promise), so the
+        # segment is dropped and the label resolved like any other
+        if ":" in tgt and not tgt.startswith("["):
+            tgt = tgt.rpartition(":")[2]
         if tgt.startswith("."):
             owner = u.owner[idx]
             if owner is not None and (owner, tgt) in u.llab:

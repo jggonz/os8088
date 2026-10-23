@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Five source rules NASM cannot refuse and a reader does not see.
+"""Six source rules NASM cannot refuse and a reader does not see.
 
     python3 tests/unit/t_asmrules.py
 
@@ -160,6 +160,19 @@ Both spellings are refused - the prefix keywords (`rep es movsb`,
 (`rep movs byte [es:di], [es:si]`) - in kernel/, boot/, apps/, drivers/ and
 kerndos/. A `cli` bracket would also make it safe; nothing in the tree needs
 one, so there is no exception for it either.
+
+6. A JUMP TO AN API CELL.
+
+`jmp OSAPI_WM_SHOW` reads like a tail call and assembles - every `OSAPI_*`
+is a `KERNEL_SEG:offset` far address, so NASM emits a far jump to it - and it
+is WRONG: the cell is a far CALL's target (SPEC.md 20) and ends in `retf`, so
+it returns through the near return address on top of the stack and the word
+under it, into somewhere that is not the caller. It shipped once, in REALDMG's
+Machine > Controls... (apps/realdmg/rwkeys.inc): the window opened and painted
+- the cell had done its work - and then the UI TASK went with the `retf`, so
+nothing clicked or typed reached any window again, and the picture looked
+perfect. The tail call is `call OSAPI_X` / `ret`. Refused in apps/ and
+drivers/, every spelling (`jmp`, `jmp far`); no exception.
 """
 import os
 import re
@@ -205,6 +218,19 @@ REPSEG = re.compile(
     r"|(?:es|cs|ss|ds)\s+(?:rep|repe|repz|repne|repnz)\b"
     r"|(?:rep|repe|repz|repne|repnz)\s+(?:movs|cmps|lods|scas|stos)[bw]?\s+"
     r"[^;]*\[\s*(?:es|cs|ss|ds)\s*:)", re.I)
+
+
+APIJMP = re.compile(r"^\s*(?:[A-Za-z_.][\w.]*:\s*)?jmp\s+(?:far\s+)?OSAPI_\w+\b")
+
+
+def api_jumps(path):
+    """[(line, text)] - far jumps to an API cell (rule 6)."""
+    out = []
+    with open(path, errors="replace") as f:
+        for n, text in enumerate(f, 1):
+            if APIJMP.match(text.split(";")[0]):
+                out.append((n, text.strip()))
+    return out
 
 
 def rep_overrides(path):
@@ -565,6 +591,21 @@ def main():
                   "is the worked fix)",
                   got=text, want="push ds / push es / pop ds / rep movsb / "
                   "pop ds - no override at all")
+    jumps = 0
+    for path in files:
+        rel = os.path.relpath(path, ROOT)
+        if not rel.startswith(("apps", "drivers")):
+            continue                    # (the kernel's osapi_* are near)
+        for line, text in api_jumps(path):
+            jumps += 1
+            check(False, "%s:%d - a jump to an API cell" % (rel, line),
+                  "the cell ends in retf: it returns through the near return "
+                  "address on the stack and the word under it, so the caller's "
+                  "caller never sees it again (rule 6; REALDMG's Controls "
+                  "window took the UI task with it)",
+                  got=text, want="call OSAPI_... / ret")
+    check(jumps == 0, "no package or driver jumps to an API cell",
+          "rule 6 reported above", got=jumps, want=0)
     check(reps == 0, "no repeated string instruction carries a segment "
           "override (%d sources, kerndos/ included)" % scanned,
           "rule 5 reported above", got=reps, want=0)

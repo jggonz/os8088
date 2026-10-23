@@ -124,6 +124,9 @@
 %ifdef CC_U__os88_itoa
   %define CC_U__os88_utoa           ; os88_itoa is a sign and a call to it
 %endif
+%ifdef CC_U__os88_mem_huge_step
+  %define CC_U__os88_mem_huge       ; one body for the pair
+%endif
 %ifdef CC_U__os88_file_copy
   %define CC_U__os88_fcp            ; both names are one body (SPEC.md 22.24)
 %endif
@@ -1049,6 +1052,21 @@ _os88_wm_wake:
 %endif
 %endif
 
+%ifdef CC_HAS_ONWHEEL
+; void os88_wm_onwheel(void *win) - BX = win, AX = the near proc (SPEC.md
+; 13.18). Call it AFTER os88_wm_create, once. An inline cell that preserves
+; FLAGS and does nothing on kern_small, which has no wheel - so no answer.
+CC_GATE _os88_wm_onwheel
+%ifdef CC_U__os88_wm_onwheel
+_os88_wm_onwheel:
+    mov bx, sp                      ; no frame: one argument
+    mov bx, [ss:bx+2]
+    mov ax, cc_onwheel
+    call OSAPI_WM_ONWHEEL
+    ret
+%endif
+%endif
+
 ; int os88_fullscreen(void *win, int enter) - BX = win, AL = 1 enter / 0 exit
 ; (SPEC.md 11.2 - the WF_FULL latch, NOT the 53 exclusive bracket). The caller
 ; holds the gfx lock, which a window callback does. 0 = done, -1 = enter
@@ -1202,6 +1220,130 @@ _os88_fsx_wait:
     sbb ax, ax                      ; CF -> 0 / -1
     ret
 %endif
+
+; The three the four above do not cover, added for LEMMINGS (SPEC.md 116):
+; the page flip, the owned rect and the bracket's keyboard read.
+
+; int os88_fsx_page(int page) - show one of the pages FSI_PAGES advertises
+; (SPEC.md 53.10). The write is latched at the next retrace and this waits for
+; it, so you may start drawing on another page the moment it returns. 0 = it
+; is on the glass, -1 = refused (no bracket, no mode set, or this mode has one
+; page).
+CC_GATE _os88_fsx_page
+%ifdef CC_U__os88_fsx_page
+_os88_fsx_page:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call OSAPI_FSX_PAGE
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+%endif
+
+; int os88_fsx_surf(struct os88_rect *r) - THE RECT YOUR BRACKET OWNS
+; (SPEC.md 53.7.1). 0 = filled, -1 = no bracket. The slot answers x, y, w, h;
+; the rect is INCLUSIVE like every other one in this header, so the width and
+; the height are turned into x2/y2 here and there is one convention in C.
+;
+; ASK RATHER THAN ASSUMING (0,0,w,h): a SAME-MODE bracket does not collapse
+; the desktop, so on a two-display machine the coordinate system is still the
+; whole virtual desktop and an app that hard-codes the origin draws on the
+; monitor it is not on. Every one-display machine, and every bracket that has
+; called os88_fsx_mode, answers (0,0,w-1,h-1) anyway.
+CC_GATE _os88_fsx_surf
+%ifdef CC_U__os88_fsx_surf
+_os88_fsx_surf:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    push si
+    call OSAPI_FSX_SURF
+    jc .no
+    mov si, [bp+4]
+    mov [si], ax                    ; x1
+    mov [si+2], bx                  ; y1
+    add cx, ax
+    dec cx
+    mov [si+4], cx                  ; x2, inclusive
+    add dx, bx
+    dec dx
+    mov [si+6], dx                  ; y2, inclusive
+    xor ax, ax
+    jmp short .out
+.no:
+    mov ax, -1
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+%endif
+
+; int os88_fsx_key(int wait) - READ THE KEYBOARD INSIDE THE BRACKET.
+; wait == 0 peeks and answers 0 when nothing is there; wait != 0 blocks. The
+; answer is (scan << 8) | ascii, which is int 16h's own AX.
+;
+; THERE IS NO SLOT AND THERE SHOULD NOT BE ONE. No event is dispatched inside
+; a bracket and the bracket's own contract is that "the app polls the keyboard
+; directly" (SPEC.md 53.1); apps/missile does exactly this in assembly.
+; os88_key_down cannot stand in for it either - it is a LEVEL poll, "advice,
+; not an oracle", and a program that assigns a skill on a TAP of F3 needs the
+; press.
+;
+; THE FALLBACK IS THE POINT. AH=11h/10h are the enhanced-keyboard peek and
+; read; AH=01/00 are the original pair, and they FILTER the 0x85/0x86 scan
+; codes - so F11 and F12, which are the original game's pause and nuke, are
+; unreachable through them. Which pair is used is decided by the BIOS's own
+; flag at 0040:0096 bit 4 rather than by trying AH=11h and hoping, because an
+; XT ROM that has never heard of function 11h returns whatever was in AX. So
+; F11/F12 work where the keyboard has them and are ABSENT on the 83-key XT,
+; which is a fact for SPEC.md 47's greying rather than a bug.
+CC_GATE _os88_fsx_key
+%ifdef CC_U__os88_fsx_key
+_os88_fsx_key:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    push es
+    mov bx, 0x0100                  ; BH = the peek call, BL = the read call:
+    mov ax, 0x40                    ; the ORIGINAL pair by default
+    mov es, ax
+    test byte [es:0x96], 0x10       ; ...the enhanced pair only where the BIOS
+    jz .std                         ; says it has them (bit 4 of the second
+    mov bx, 0x1110                  ; keyboard status byte)
+.std:
+    cmp word [bp+4], 0
+    jne .block
+    mov ah, bh                      ; peek: ZF=1 means the buffer is empty
+    int 0x16
+    jnz .take
+    xor ax, ax
+    jmp short .out
+.take:
+    mov ah, bl                      ; ...and only then take it out
+    int 0x16
+    jmp short .out
+.block:
+    mov ah, bl
+    int 0x16
+.out:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+%endif
 %endif
 
 ; =============================================================================
@@ -1339,7 +1481,7 @@ _os88_snd_tone:
 ; section writes [cc_ferr], which os88_ferr() reads back.
 ;
 ; The count is DX:CX, 32 bits. These pass DX = 0 and cap the count at 16, and
-; that costs a package nothing it can reach: image plus bss cap at 60KB, and
+; that costs a package nothing it can reach: image plus bss cap at 63.5KB, and
 ; anything larger lives in a claim, which the _seg forms read straight into.
 ; =============================================================================
 
@@ -1379,7 +1521,7 @@ _os88_file_read:
 ; unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
 ; The same call with ES = a heap claim's base segment and BX = 0 (SPEC.md
 ; 18.4.1: the transfer walks the SEGMENT, so this is how a package reads
-; something its own 60KB region could never hold).
+; something its own 63.5KB region could never hold).
 CC_GATE _os88_file_read_seg
 %ifdef CC_U__os88_file_read_seg
 _os88_file_read_seg:
@@ -1390,6 +1532,32 @@ _os88_file_read_seg:
     mov es, ax                      ; ES = THEIR segment, not ours
     mov bx, 0
     mov cx, [bp+8]
+    mov dx, 0
+    call OSAPI_FILE_READ
+    sbb cx, cx                      ; -1 refused, 0 delivered
+    and cx, ax                      ; CX = the FERR_*, or 0
+    mov [cc_ferr], cx
+    sub ax, cx                      ; AX = the count, or 0 - os88_ferr() says why
+    pop bp
+    ret
+%endif
+
+; unsigned os88_file_read_segoff(const char *name, unsigned seg, unsigned off,
+;                               unsigned cap)
+; os88_file_read_seg with BX = off: a part of a claim, named by its OFFSET
+; rather than by a segment computed from it - which on kern_mega is the only
+; way, a claim there being a selector that arithmetic breaks
+; (KERN-MEGA-PLAN 14.12). The same alignment rule: off a multiple of 512
+CC_GATE _os88_file_read_segoff
+%ifdef CC_U__os88_file_read_segoff
+_os88_file_read_segoff:
+    push bp
+    mov bp, sp
+    mov si, [bp+4]
+    mov ax, [bp+6]
+    mov es, ax
+    mov bx, [bp+8]
+    mov cx, [bp+10]
     mov dx, 0
     call OSAPI_FILE_READ
     sbb cx, cx                      ; -1 refused, 0 delivered
@@ -1487,6 +1655,28 @@ _os88_file_write_seg:
     mov es, ax                      ; ES = the claim's segment
     mov bx, 0
     mov cx, [bp+8]
+    mov dx, 0
+    call OSAPI_FILE_WRITE
+    sbb cx, cx                      ; -1 refused, 0 done
+    and ax, cx                      ; AX = the FERR_*, or 0
+    mov [cc_ferr], ax
+    xchg ax, cx                     ; the answer: 0, or -1 (see os88_ferr())
+    pop bp
+    ret
+%endif
+
+; int os88_file_write_segoff(const char *name, unsigned seg, unsigned off,
+;                            unsigned count) - os88_file_write_seg from BX = off
+CC_GATE _os88_file_write_segoff
+%ifdef CC_U__os88_file_write_segoff
+_os88_file_write_segoff:
+    push bp
+    mov bp, sp
+    mov si, [bp+4]
+    mov ax, [bp+6]
+    mov es, ax
+    mov bx, [bp+8]
+    mov cx, [bp+10]
     mov dx, 0
     call OSAPI_FILE_WRITE
     sbb cx, cx                      ; -1 refused, 0 done
@@ -1751,6 +1941,7 @@ _os88_file_dlg:
 %endif
 %endif
 
+
 ; int os88_arg_file(char *name13, struct os88_place *p) - SPEC.md 54.5. The
 ; document this instance was launched to open, READ-AND-CLEAR: the first
 ; caller gets it, so a second instance can never inherit a document.
@@ -1823,6 +2014,22 @@ _os88_assoc_set:
     ret
 %endif
 
+; os88_assoc_flush(vol, flags) - OSAPI_ASSOC_FLUSH (SPEC.md 54.7.6): DL = the
+; volume, AL = the ASSOC_FL_* bits, passed as they are. Every register but AX
+; comes back.
+CC_GATE _os88_assoc_flush
+%ifdef CC_U__os88_assoc_flush
+_os88_assoc_flush:
+    push bp
+    mov bp, sp
+    mov dl, [bp+4]
+    mov al, [bp+6]
+    call OSAPI_ASSOC_FLUSH
+    sbb ax, ax                      ; CF -> 0 / -1
+    pop bp
+    ret
+%endif
+
 %ifdef CC_U__os88_assoc_set
 ; cc_padcopy - copy CX bytes of the NUL string at SI to DI, padding with
 ; spaces (module-internal; DS for both ends).
@@ -1865,6 +2072,27 @@ _os88_mem_claim:
     not ax
     and ax, dx                      ; ...-> 0 = refused, and nothing was
                                     ; claimed; or the segment
+    ret
+%endif
+
+; unsigned os88_mem_huge(int kb) - OSAPI_MEM_HUGE (SPEC.md 50.3.5): a claim of
+; any size, 0 = refused, else its first segment or selector; and
+; unsigned os88_mem_huge_step(void) - what to ADD to it per 64KB: 0x1000 for a
+; conventional claim, 8 for a run of selectors above 1MB on kern_mega. The one
+; piece of segment arithmetic a claim allows is base + k * step
+CC_GATE _os88_mem_huge
+%ifdef CC_U__os88_mem_huge
+_os88_mem_huge:
+    mov bx, sp                      ; no frame: one argument
+    mov ax, [ss:bx+2]
+    call OSAPI_MEM_HUGE
+    mov [cc_hstep], cx              ; (mov leaves CF)
+    sbb ax, ax
+    not ax
+    and ax, dx
+    ret
+_os88_mem_huge_step:
+    mov ax, [cc_hstep]
     ret
 %endif
 
@@ -2388,6 +2616,12 @@ cc_nul: db 0
 %ifdef CC_U__os88_file_write_seg
   %assign cc__ferr 1
 %endif
+%ifdef CC_U__os88_file_read_segoff
+  %assign cc__ferr 1
+%endif
+%ifdef CC_U__os88_file_write_segoff
+  %assign cc__ferr 1
+%endif
 %ifdef CC_U__os88_file_append
   %assign cc__ferr 1
 %endif
@@ -2416,6 +2650,9 @@ cc_ferr:    resw 1                  ; the FERR_* of the last file call, read
 %ifdef CC_U__os88_assoc_set
 cc_assoc:   resb 11                 ; os88_assoc_set()'s space-padded block:
 %endif                              ; 3 extension bytes then 8 stem bytes
+%ifdef CC_U__os88_mem_huge
+cc_hstep:   resw 1                  ; os88_mem_huge()'s step, for _step()
+%endif
 section .text
 %endif
 

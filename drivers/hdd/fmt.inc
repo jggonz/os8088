@@ -398,9 +398,6 @@ hd_fmt_boot:
     mov di, hd_sec0
     mov cx, 3 + 8
     rep movsb
-    call OSAPI_GET_TICKS        ; a volume serial with no clock behind it:
-    mov [hd_sec0+HF_B_VOLID], ax    ; the tick counter is what there is
-    mov [hd_sec0+HF_B_VOLID+2], ax
     mov si, hd_s_nolabel
     mov di, hd_sec0 + HF_B_VOLLAB
     mov cl, 11                  ; (CX is 0 after the rep)
@@ -427,9 +424,39 @@ hd_fmt_boot:
 ; ONE COPY for the two sectors that carry it: the formatter's own boot sector
 ; above and the installer's fresh VBR (hd_inst_vbr), which wrote the same
 ; thirteen fields in the same words longhand.
+;
+; ...AND THE SERIAL, which is why both now get one (SPEC.md 18.8.2.1). It was
+; the formatter's alone - [ticks] in BOTH words - and the installer's fresh
+; VBR, built over a zeroed sector, went down with 0. It is the floppy
+; formatter's mix (kernel/diskw.inc's DSK_VOLID): the date and time as words,
+; the way DOS makes a serial, plus [ticks] and the PIT's live count, so two
+; volumes made in one second still differ. A KEPT volume never reaches here
+; and keeps its own (52.10.15).
 ; -----------------------------------------------------------------------------
 hd_bpb_fill:
     push ax
+    push bx
+    push cx
+    push dx
+    call OSAPI_CLK_GET          ; CX = year, DX = month:day, BX = hour:minute,
+    add cx, dx                  ; AH = second
+    add bx, ax
+    call OSAPI_GET_TICKS
+    add cx, ax                  ; the HIGH word: the date, and the tick
+    pushf
+    cli                         ; the latch and both reads in one window
+    mov al, 0x00                ; (SPEC.md 34.1)
+    out 0x43, al
+    in al, 0x40
+    mov ah, al
+    in al, 0x40
+    popf
+    add bx, ax                  ; the LOW word: the time, and the PIT
+    mov [hd_sec0+HF_B_VOLID], bx
+    mov [hd_sec0+HF_B_VOLID+2], cx
+    pop dx
+    pop cx
+    pop bx
     mov word [hd_sec0+HF_B_BPS], 512
     mov ax, [hd_fspc]
     mov [hd_sec0+HF_B_SPC], al

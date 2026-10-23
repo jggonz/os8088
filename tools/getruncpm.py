@@ -31,7 +31,8 @@ failure and never a warning.
 WHAT LANDS in the output directory:
 
     CCP-DR.60K       Digital Research's CCP for a 60K CP/M 2.2, the command
-                     processor RUNCPM loads from its own folder (SPEC.md 74.3)
+                     processor - a BUILD input, incbin'd into RUNCPM.O88's
+                     module part (SPEC.md 74.3); no disk carries the file
     LICENSE          RunCPM's MIT licence
     1STREAD.ME       the master disk's read-me
     A/0/*            the master disk, DISK/A0.zip unpacked: drive A user 0.
@@ -65,8 +66,8 @@ or has no room for, each under its own heading - and prints it in place of
 A/0's, so a CP/M user can TYPE what is missing and why. 1STREAD.ME
 (upstream's, on A/0 and in the root) credits the programs beyond Digital
 Research's distribution. THE BUDGET IS DERIVED, NOT GUESSED: --reserve
-names the root files that ride beside A/0 (the package, its .OVL if one
-comes, the CCP, LICENSE, the read-me) and
+names the root files that ride beside A/0 (the package - one file, its
+CCP and module being parts of it - LICENSE and the read-me) and
 their sizes are priced in the geometry's own clusters, so the selection
 re-shapes itself as the package grows and the disk build's --verify (still
 the check) is never the first to hear of it; what stays a constant is the

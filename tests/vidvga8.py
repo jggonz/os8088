@@ -81,6 +81,13 @@ from cycweb import pkg_syms                                   # noqa: E402
 
 W, H, NF, FPS = 160, 96, 60, 15.0
 STOPS = (1, 9, 23, 38, 52, NF)
+# --held (98.1.3.9): HELD records - one, and a run of two - each the next
+# frame's TOP over the last one's BOTTOM, so the record after it finishes
+# rows the held one never touched, and the page brought up after THAT is
+# right only by the copy of both records' rows. Held before every frame
+# round them: a held record's hold shows the frame before it
+HELD = (14, 33, 34)
+STOPS_HELD = (1, 9, 14, 15, 16, 17, 18, 23, 33, 34, 35, 36, 37, 38, 52, NF)
 LOOP = 20
 FSXM_VGA13 = 6
 
@@ -98,7 +105,8 @@ def palette():
     return bytes(p)
 
 
-def clip(tmp, layout, rs=1, flip=False, loop=None, black0=False):
+def clip(tmp, layout, rs=1, flip=False, loop=None, black0=False, held=(),
+         own=False):
     rnd = random.Random(1311)
     g = vid.Geom(layout, W // vid.PIX_PER_BYTE[layout], H)
     cvs, cv = [], bytearray(W * H)
@@ -125,10 +133,13 @@ def clip(tmp, layout, rs=1, flip=False, loop=None, black0=False):
                 cv[(y + r) * W + x:(y + r) * W + x + 24] = \
                     bytes([(f * 13 + r) & 0xFF]) * 24
         cvs.append(bytes(cv))
+    for f in held:                      # (drawn toward the next: its top)
+        cvs[f] = cvs[f + 1][:W * (H // 2)] + cvs[f - 1][W * (H // 2):]
     out = os.path.join(tmp, "COLOR.V88")
     vid.encode_canvases(cvs, g, out, FPS, vid.PF_VGA8, palette(),
                         "vidvga8 clip", keysecs=2.0, poster=1, rowscale=rs,
-                        flip=flip, loop=loop, repeat=loop is not None)
+                        flip=flip, loop=loop, repeat=loop is not None,
+                        held=held, own=own)
     vid.verify_v88(out)
     return out
 
@@ -141,14 +152,24 @@ def main():
     ap.add_argument("--rows2", action="store_true")
     ap.add_argument("--flip", action="store_true")
     ap.add_argument("--repeat", choices=("seam", "key"))
+    ap.add_argument("--held", action="store_true",
+                    help="with --flip: HELD records (98.1.3.9) - drawn on the "
+                    "back page, not shown, and finished by the next")
+    ap.add_argument("--own", action="store_true",
+                    help="with --flip: each record AGAINST ITS OWN PAGE "
+                    "(byte 37 7, VIDEO-SEEN-PLAN 3b) - drawn on the back "
+                    "page as it stands, none brought up but the record "
+                    "after a key, which takes its rows off the glass")
     ap.add_argument("--lcopy", action="store_true",
                     help="with --flip: every frame's back page brought up "
                     "to date by the LATCH COPY of the last record's rows "
                     "off the glass (98.3.8.1), vp_flcw set 0, instead of "
                     "decoding the last record again")
     a = ap.parse_args()
-    if a.lcopy and not a.flip:
-        sys.exit("vidvga8: --lcopy is a flipped play's")
+    if (a.lcopy or a.held or a.own) and not a.flip:
+        sys.exit("vidvga8: --lcopy, --held and --own are a flipped play's")
+    if a.own and (a.lcopy or a.repeat == "seam"):
+        sys.exit("vidvga8: --own brings no page up, and has no seam")
     rs = 2 if a.rows2 else 1
     global H
     H //= rs
@@ -165,7 +186,10 @@ def main():
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         v88 = clip(tmp, lay, rs, a.flip,
                    LOOP if a.repeat == "seam" else None,
-                   bool(a.repeat) or a.flip)
+                   bool(a.repeat) or a.flip, HELD if a.held else (),
+                   own=a.own)
+        if a.own and not getattr(vid.Reader(v88), "own", False):
+            bad.append("the clip is not against its own page")
         r = vid.Reader(v88)
         g = r.g
         if modex:                       # both halves of the decoder
@@ -211,6 +235,8 @@ def main():
                     rb("vp_shadow"), rb("vp_ok"))
             if rb("vp_flip") != int(a.flip):
                 bad.append("the player's flip is %d" % rb("vp_flip"))
+            if rb("vp_own") != int(a.own):
+                bad.append("the player's own-page flag is %d" % rb("vp_own"))
             print("   format %d, layout %d, mode %d, shadow %d, ok %d"
                   % got1)
             if got1 != (vid.PF_VGA8, lay, mode_want, 0, 1):
@@ -275,7 +301,7 @@ def main():
             m.write(base + syms["vp_nowin"], b"\1")
             if a.lcopy:
                 ww("vp_flcw", 0)
-            stops = STOPS
+            stops = STOPS_HELD if a.held else STOPS
             if a.repeat:                # two laps, held across each join
                 j = LOOP + 1 if a.repeat == "seam" else 1
                 stops = (1, 9, NF, j, 23, NF, j, 30)

@@ -44,9 +44,12 @@
 ;                        the plan has registers, and pushing inside a handler
 ;                        would put them where a fetch cannot reach them
 ;
-; The package's statics are reached with `cs:` because DS is the C64's RAM for
-; the whole run; CS == DS in a package (SPEC.md 20.2) and in the harness, so
-; `mov ax,cs / mov ds,ax` is how the package's segment comes back.
+; The package's statics are READ with `cs:` because DS is the C64's RAM for
+; the whole run; CS == DS in a package (SPEC.md 20.2) and in the harness. They
+; are never WRITTEN that way, and the package's segment comes back from
+; c64_pkgds rather than from CS: under kern_mega CS is a read-only code alias
+; of the same bytes (KERN-MEGA-PLAN 2.4), so a CS: read is free and a CS: write
+; or a DS loaded from CS is a #GP per store.
 ;
 ; -----------------------------------------------------------------------------
 ; TIME IS 6510 CYCLES (C64-SPEC §4.2)
@@ -125,6 +128,18 @@ CM_S      equ 12
 CM_P      equ 14
 CM_CNT    equ 16
 CM_REASON equ 18
+
+; THE PACKAGE'S DATA SEGMENT, banked by every door in from C (_c64_run,
+; _c64_bread) while DS still holds it, for the I/O handlers to put back.
+; It is NOT `mov ax,cs / mov ds,ax`, which is what this file did and what its
+; header still describes for real mode: under kern_mega (CPU_F_PM) CS is the
+; region's read-only CODE alias, so every C store a handler made was a #GP
+; the kernel completed one at a time - 6,353 of them in a few seconds of the
+; BASIC prompt under Bochs (KERN-MEGA-PLAN 10.3). Banked per call rather than
+; once, so a region move between two calls (SPEC.md 66.6.1) is never stale.
+; Outside the struct, so the C's view of c64_m is unchanged.
+c64_pkgds:
+    resw 1
 
 section .text
 
@@ -277,6 +292,7 @@ _c64_run:
     push ds                         ; [bp-6] the PACKAGE segment
     push es                         ; [bp-8] KERNEL_SEG (SPEC.md 20.4)
     sub sp, 12                      ; the CT_* scratch
+    mov [c64_pkgds], ds             ; DS-relative: the package's, still
 
     mov ax, [bp+4]
     mov si, [cs:_c64_m+CM_RAMSEG]
@@ -411,31 +427,40 @@ c64_expire:
     mov word [C64_SCR_BASE + C64_SCR_CARRY], 0
     add [C64_SCR_BASE + C64_SCR_DEAD], bx
     pop bx
-    mov word [cs:_c64_m+CM_REASON], C64_RUN_SLICE
+    mov es, [bp-6]                  ; ES = the package (see c64_out)
+    mov word [es:_c64_m+CM_REASON], C64_RUN_SLICE
     jmp short c64_out
 
 o_jam:
     dec si                          ; PC points AT the opcode that jammed
-    mov word [cs:_c64_m+CM_REASON], C64_RUN_JAM
+    mov es, [bp-6]
+    mov word [es:_c64_m+CM_REASON], C64_RUN_JAM
 
 ; DS is still the RAM claim here, so the countdown is read before it goes.
+; THE STATE GOES BACK THROUGH ES, NOT CS. Both paths in load ES with the
+; package segment run() banked at [bp-6] - ES is free here, the pop at the end
+; puts the kernel's back - because a write through CS is a write through a
+; read-only code selector under kern_mega (CPU_F_PM): eight #GPs a slice, each
+; completed by the kernel's mega_gpw, measured at 6,426 slices in a few
+; seconds of BASIC's prompt under Bochs (KERN-MEGA-PLAN 10.3). Same bytes,
+; same clocks, on every real-mode kernel: ES: is one prefix as CS: is.
 c64_out:
-    mov [cs:_c64_m+CM_PC], si
+    mov [es:_c64_m+CM_PC], si
     mov bx, [C64_SCR_BASE + C64_SCR_DEAD]
-    mov [cs:_c64_m+CM_CNT], bx
+    mov [es:_c64_m+CM_CNT], bx
     mov bx, di
     and bx, 0x00FF
-    mov [cs:_c64_m+CM_S], bx
+    mov [es:_c64_m+CM_S], bx
     mov bl, al
     xor bh, bh
-    mov [cs:_c64_m+CM_A], bx
+    mov [es:_c64_m+CM_A], bx
     mov bl, cl
-    mov [cs:_c64_m+CM_X], bx
+    mov [es:_c64_m+CM_X], bx
     mov bl, dl
-    mov [cs:_c64_m+CM_Y], bx
+    mov [es:_c64_m+CM_Y], bx
     call c64_getp                   ; -> BL, and BH is the scratch it uses
     xor bh, bh
-    mov [cs:_c64_m+CM_P], bx
+    mov [es:_c64_m+CM_P], bx
     mov ax, [cs:_c64_m+CM_REASON]
     add sp, 12
     pop es
@@ -616,8 +641,7 @@ c64_io_rd_bx:                       ; BX = address -> DH; BX preserved
     push dx
     push bx
     push bx                         ; the cdecl argument
-    mov ax, cs
-    mov ds, ax
+    mov ds, [cs:c64_pkgds]          ; the package's DATA segment (see the bss)
     call _c64_io_rd
     add sp, 2
     mov cl, al                      ; CX is on the stack: CL is free
@@ -649,8 +673,7 @@ c64_io_wr_bx:                       ; BX = address, DH = value; both preserved
     xor ah, ah
     push ax                         ; the value
     push bx                         ; the address
-    mov ax, cs
-    mov ds, ax
+    mov ds, [cs:c64_pkgds]
     call _c64_io_wr
     add sp, 4
     pop bx
@@ -2165,6 +2188,7 @@ _c64_bread:
     push cx
     push dx
     mov bx, [bp+4]
+    mov [c64_pkgds], ds             ; c64_rd_bx may reach the I/O handlers
     mov ds, [cs:_c64_m+CM_RAMSEG]
     call c64_rd_bx
     mov al, dh

@@ -35,7 +35,8 @@ a package manager is one that stops working on the machine it was installed on.
   python3 tools/os88proxy.py --render URL        # what os8088 would receive
   python3 tools/os88proxy.py --cost URL          # ...and what it costs to draw
 
-On os8088: Browser > Open Location, type `<host>:8088` and press Return.
+On os8088: in the Browser, File > Open Location..., type `<host>:8088` and
+press Return.
 """
 import argparse
 import base64
@@ -4174,7 +4175,7 @@ def serve(opts):
     httpd.proxy = proxy
     where = opts.advertise or guess_address()
     say("os88proxy %s serving on %s:%d" % (VERSION, opts.bind, opts.port))
-    say("on os8088:  Browser > Open Location  ->  %s:%d" % (where, opts.port))
+    say("on os8088:  Browser, File > Open Location...  ->  %s:%d" % (where, opts.port))
     say("page budget %d bytes, %d columns, first-class: %s"
         % (opts.budget, opts.cols, ", ".join(s.name for s in SITES)))
     if os.name == "nt":

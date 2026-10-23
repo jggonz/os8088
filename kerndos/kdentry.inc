@@ -139,9 +139,26 @@ kd_entry:
     mov es, ax
     pushf
     cli                         ; the vector is two words and an interrupt
+%ifndef KD_HMA
     mov word [es:0x0078], dsk_dpt   ; between them would hand the BIOS half an
     mov word [es:0x007A], KD_SEG    ; address (dsk_dpt_init_x's reason)
+%else
+    mov word [es:0x0078], kdh_dpt   ; the HMA arm: a LOW copy, because the ROM
+    mov word [es:0x007A], LOW_SEG   ; reads it on every floppy call, A20 or not
+%endif
     popf
+%ifdef KD_HMA
+    push si
+    push es
+    push ss
+    pop es
+    mov si, dsk_dpt
+    mov di, kdh_dpt
+    mov cx, DPT_LEN
+    rep movsb
+    pop es
+    pop si
+%endif
     push ds
     pop es
     pop di
@@ -166,6 +183,14 @@ kd_entry:
     ; everything to the top of memory. So does this: no heap, no claim, no
     ; region - [kd_floor] IS the first paragraph the program owns.
     mov ax, LOW_SEG + (KD_LOW_KB * 64)
+%ifdef KD_MEGA
+    test word [si+KDL_FLAGS], KDLF_LOADFIX
+    jz .nolfix                  ; LOADFIX (W4): nothing below 64KB, which is
+    cmp ax, 0x1000              ; what a program EXEPACK packed needs with
+    jae .nolfix                 ; A20 open - DOS 5's own answer, as a flag
+    mov ax, 0x1000
+.nolfix:
+%endif
     mov [kd_floor], ax
     mov [dos_arena], ax
     mov bx, [si+KDL_CAP]        ; KB, the BDA's own figure banked by the box
@@ -250,6 +275,13 @@ kd_entry:
     jnc .isCOM                  ; name (SPEC.md 96.8)
     call dos_exe_setup
     jc .noload
+%ifdef KD_HMA
+    call kd_xpack               ; **AN EXEPACK PROGRAM IS UNPACKED BY THE
+    jc .loadtry                 ; LOADER** (SPEC.md 96.40.9.1) - or, refused,
+                                ; loaded again above 64KB: the floor has
+                                ; moved, so the image is read again at the
+                                ; PSP the program will now be given
+%endif
     mov byte [dos_isexe], 1
     jmp short .ready
 .isCOM:
@@ -303,16 +335,52 @@ kd_entry:
                                 ; leaves this cell at zero and the core
                                 ; refuses at its second instruction, because
                                 ; there B800 is the kernel's
+%ifdef KD_HMA
+    mov word [dos_hkv + DHK_XUNP], kd_xunp   ; **AND A CHILD'S OWN EXEPACK**
+                                ; (SPEC.md 96.40.9.1): the HMA host runs with
+                                ; A20 open, so AH=4Bh's child gets the same
+                                ; in-place unpack the top-level program did.
+                                ; Only this host fills it; the low image (A20
+                                ; shut) and the box leave it zero
+%endif
 %ifndef KD_NO_KBGUARD
     call kd_kbd_start           ; ...and the key buffer's guard, BEFORE the
                                 ; bank for the same reason (SPEC.md 96.50)
+%endif
+%ifdef KD_MEGA
+    call kdx_init               ; ...and kern_mega's XMS arena with its int
+                                ; 15h filter, BEFORE the bank for the same
+                                ; reason again (SPEC.md 96.15.4)
+%ifndef KD_HMA
+    call kd_a20shut             ; ...and the LOW image's A20, SHUT for the
+                                ; program (SPEC.md 96.40.9.2): kern_mega left
+                                ; it open, and the wrap is what this image
+                                ; exists for. kd_unpark opens it again
+%endif
 %endif
 
     call dos_save_machine       ; **BEFORE dos_hook_vectors**: the whole IVT is
                                 ; what dos_restore_machine puts back, so a hook
                                 ; taken before the bank is never taken off
+%ifdef KD_HMA
+    mov word [cs:kdh_sused], 0  ; an empty pool, and the core's way into it,
+    mov word [cs:dos_hslot], kdh_vslot  ; before the PSP takes three slots
+%endif
     call dos_build_psp
     call dos_hook_vectors
+    cmp word [kdm_base], 0      ; NO MOUSE TO SERVE - no serial port, a PS/2
+    jne .mou33                  ; one, or Disable the mouse ticked: 33h is an
+    xor ax, ax                  ; `iret`, a vector with no driver behind it,
+    mov es, ax                  ; so a reset answers AX = 0 and the program
+    mov ax, [es:0x23*4]         ; is told there is no mouse rather than shown
+    mov [es:0x33*4], ax         ; one that never moves (SPEC.md 96.36.8). The
+    mov ax, [es:0x23*4+2]       ; iret is the core's, which 23h has just been
+    mov [es:0x33*4+2], ax       ; handed and nothing here can name
+.mou33:
+%ifdef KD_HMA
+    call kdh_tramp              ; every vector into the HMA, through a low
+                                ; trampoline that re-proves A20 (kdhma.inc)
+%endif
 
     mov ax, [dos_arena]         ; the DTA starts at PSP:0080 (SPEC.md 96.3)
     add ax, DOS_PSPP
@@ -526,6 +594,67 @@ kd_arena:
     stc
     ret
 
+%ifdef KD_HMA
+; -----------------------------------------------------------------------------
+; kd_xpack - an EXEPACK program on the arm that runs it with A20 open
+; in:  `dos_exe_setup` has run on the image at [dos_ldpsp]+16
+; out: CF=1 = it is EXEPACK's, the loader would not unpack it and it sat below
+;      64KB: the floor is 1000h now and [dos_ldpsp] with it, so the caller
+;      reads the image again; CF=0 = run what is there - unpacked, or not
+;      EXEPACK's at all. Every register preserved
+;
+; kern_dos is in the HMA on this arm, so A20 is open for the whole run and the
+; arena starts ~9KB up. EXEPACK's unpacker normalises both of its pointers
+; DOWNWARD, so its last few KB of output are written through a segment below
+; 0, which only reaches the PSP's own paragraphs through the 1MB wrap - with
+; A20 open it reaches the HMA, and the program says *"Packed file is corrupt"*
+; and exits 255 (Test Drive III, KERN-MEGA-PLAN 14.23).
+;
+; **THE FIRST ANSWER IS NOT TO RUN THAT UNPACKER AT ALL** (`kd_xunp`,
+; kerndos/kdxpack.inc, KERN-MEGA-PLAN 14.24): the loader unpacks the image
+; itself, and the program keeps the whole low arena. The second is 14.23's,
+; kept for whatever the first refuses - a variant it does not know, a header
+; that does not add up, no room for the table: LOADFIX taken unasked, which
+; costs the arena below 64KB and nothing else. A floor that will not take the
+; arena (`kd_arena` refuses) is put back and the program runs as before.
+; -----------------------------------------------------------------------------
+kd_xpack:
+    call kd_xunp
+    jnc .r                      ; unpacked, or nothing to do
+    ; **EXEPACK, REFUSED: SWITCH TO THE LOW kern_dos FIRST** (SPEC.md
+    ; 96.40.9.1). It reads part 3 of DOS.O88, relocates it to 0060h with A20
+    ; shut and runs it - where the program's OWN unpacker wraps correctly and
+    ; keeps the whole 585 KB arena, better than the floor raise's 566. It does
+    ; NOT return on success; if it cannot (no part 3 row, a read that failed),
+    ; it returns and the floor raise below is the fallback (14.23).
+    call kd_tolow
+    push ax
+    push bx
+    mov ax, [dos_arena]
+    cmp ax, 0x1000
+    jae .no                     ; LOADFIX already, or this is the second pass
+    mov bx, ax
+    mov ax, 0x1000
+    mov [dos_arena], ax
+    call kd_arena
+    jc .back
+    mov [kd_floor], ax          ; ...and only now the allocator's floor
+    add ax, DOS_PSPP
+    mov [dos_ldpsp], ax
+    pop bx
+    pop ax
+    stc
+    ret
+.back:
+    mov [dos_arena], bx         ; kd_arena left every figure as it was
+.no:
+    pop bx
+    pop ax
+    clc
+.r:
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; kd_vtab - the KERNEL's volume table, into ours (SPEC.md 96.50)
 ; in:  SI -> the launch block; DS = ES = KD_SEG
@@ -657,7 +786,19 @@ kd_leave:
 %ifndef KD_NO_KBGUARD
     call kd_kbd_stop            ; ...and ours is at a KD_SEG offset too
 %endif
+%ifdef KD_MEGA
+    call kdx_stop               ; ...and so is the int 15h filter, which would
+                                ; refuse the way back's own moves of the park
+                                ; (SPEC.md 96.15.4)
+%endif
     mov si, [kd_lbp]
+%ifdef KD_MEGA
+    mov ax, [si+KDL_PBASE]      ; **A PARKED kern_mega COMES BACK FIRST**
+    or ax, [si+KDL_PBASE+2]     ; (KERN-MEGA-DOS-PLAN 2.3): no image, no
+    jz .nopark                  ; disk, no reboot - kerndos/kdpark.inc
+    jmp kd_unpark
+.nopark:
+%endif
 
     ; --- THE SESSION, PUT BACK HERE (SPEC.md 96.49) -------------------------
     ; Before the exit code is printed and before anything is parked: this does
@@ -842,8 +983,8 @@ kd_lbtab:
     KDL_FIELDS
 %unmacro KDL_F 2
 KDL_MINE equ KDL_ACC
-%if KDL_ACC + KDL_BODY > KDL_SIZE
-  %error "kern_dos: the launch block's payload outgrew KDL_SIZE"
+%if KDL_ACC + KDL_BODY > KDL_MTAIL
+  %error "kern_dos: the launch block's payload outgrew KDL_MTAIL (kern_mega's tail)"
 %endif
 
 ; --- the ROM's teletype, which is the only screen this machine has ----------

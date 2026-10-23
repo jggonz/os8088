@@ -299,7 +299,8 @@ MENU_CLKC   equ 26              ; menu_clkbuf: the field is 25 cells on both
 ; -----------------------------------------------------------------------------
 ; menu_init - boot state: Locator owns the bar (SPEC.md 12)
 ; in:  nothing (called from kmain after wm_init, before the first paint)
-; out: nothing (all registers preserved)
+; out: nothing (all registers preserved but BP: spw_near's target is left in
+;      it, and the one caller holds nothing there)
 ; -----------------------------------------------------------------------------
 ; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 17). One
 ; caller, kmain:4299. menu_force is INLINED - it is the two stores below and a
@@ -318,7 +319,9 @@ menu_init:
     xor bx, bx
     mov [menu_win], bx
     mov word [menu_sseg], 0     ; the save-under is claimed by menu_drop for
-    call KERNEL_SEG:cw_menu_relayout ; as long as a menu is actually down, not
+    mov bp, menu_relayout       ; (spw_near's `call bp`: kmain_o, the one
+    call KERNEL_SEG:spw_near    ; caller, holds nothing in BP) as long as a
+                                ; menu is actually down, not
                                 ; here for the session (SPEC.md 12.4/50.2)
     pop dx
     pop bx
@@ -548,8 +551,8 @@ menu_relayout:
                                 ; and the entry value is the frame's to put
                                 ; back at kret_di (kernel size pass 10: 2)
     mov ax, es
-    mov cx, cs
-    cmp ax, cx
+    KSEGR cx                    ; the kernel's DATA segment: wm_strseg's ES
+    cmp ax, cx                  ; for a kernel window (kern_mega's alias)
     jne .pkgset
     xor ax, ax
 .pkgset:
@@ -576,8 +579,7 @@ menu_relayout:
     mov si, menu_loc_name
 .kseg:                          ; ...the ONE place the three kernel-data
     mov word [menu_seg], 0      ; names set the segment (kernel size pass 9:
-    push cs                     ; it was written out three times)
-    pop es
+    KES                         ; it was written out three times)
 .have_name:
     mov [menu_namep], si
 
@@ -717,8 +719,8 @@ menu_ab_cell:
 
     push di                     ; --- 'About ' + the name, into menu_abstr ---
     mov di, menu_abstr
-    push cs
-    pop es                      ; the prefix is ours...
+    KES
+                                ; the prefix is ours...
     mov si, menu_s_abpfx
     call menu_ab_cat
     call menu_es                ; ...the name is the owner's (SPEC.md 12.2)
@@ -745,8 +747,8 @@ menu_ab_cell:
     add bx, bx                  ; ...to a word offset
     mov word [menu_abitems + bx], menu_s_appclose
 
-    push cs                     ; --- the cell, over the label's own rect ---
-    pop es                      ; the copy is kernel data now, so measure it
+    KES                         ; --- the cell, over the label's own rect ---
+                                ; the copy is kernel data now, so measure it
     mov si, menu_abstr + MENU_ABPFX_LEN
     call font_width_x           ; AX = the label's pixel width
     mov [ss:di + MB_TITLE], si
@@ -812,7 +814,7 @@ menu_es:
 .seg:                           ; ...menu_des joins here with its own word
     or ax, ax
     jnz .set
-    mov ax, cs                  ; 0 = the kernel's own (.text: CS is it)
+    KSEGR ax                    ; 0 = the kernel's own (.text: CS is it)
 .set:
     mov es, ax
     pop ax
@@ -924,6 +926,9 @@ menu_furniture:
     push dx
     push di
     mov byte [menu_bovr], 0
+%ifdef OS88_SNDCARD
+    mov word [menu_mixcap], 0FFFFh
+%endif
 
     call thm_bg                
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
@@ -1247,8 +1252,8 @@ menu_bent:
     add ax, MENU_TITLE_PAD / 2  ; the cell's pen x (SPEC.md 12.2: no MB_TX)
     call menu_bpad              ; spaces up to this cell's pen
     pop ax
-    push cs
-    pop es                      ; this cell's own segment (SPEC.md 12.2)
+    KES
+                                ; this cell's own segment (SPEC.md 12.2)
     or cx, cx
     jz .seg
     mov es, cx
@@ -1463,6 +1468,12 @@ menu_bput:
 menu_clkcells:
     mov ax, [vid_wm8]
     sub ax, [vid_clk_hx]
+%ifdef OS88_SNDCARD
+    test word [drv_svc+DSV_CAPS], SND_CAP_MIXER
+    jz .plain
+    sub ax, 24
+.plain:
+%endif
     mov cl, 3
     shr ax, cl
     cmp ax, MENU_CLKC - 1
@@ -1471,33 +1482,10 @@ menu_clkcells:
 .fw:
     ret
 
-; -----------------------------------------------------------------------------
-; menu_tbar_k - the toast strip's 4px black lead (SPEC.md 59.8.1)
-; in:  AX = x1, CX = x2 (inclusive); MENU_TEXT_Y is the row
-; out: nothing - all registers AND the flags preserved
-;
-; A gfx_fill and not a glyph because there is no glyph: the table is ASCII
-; 32..126 and holds no half-cell block. It costs 4,142 cycles on a 4.77MHz
-; 8088 - PERFORMANCE.md Part 2's per-call floor almost exactly, the 32 pixels
-; being ~110us of it - so a wider lead would cost the same.
-menu_tbar_k:
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    call thm_ink                
-    mov bx, MENU_TEXT_Y
-    mov dx, MENU_TEXT_Y + 7
-    call gfx_fill
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
-
 menu_draw_clock:
+%ifdef OS88_SNDCARD
+    call menu_sound
+%endif
     call kent_di                ; = push ax/bx/cx/dx/si/di
     push es
 
@@ -1562,6 +1550,14 @@ menu_draw_clock:
     dec cx                      ; ordinary clock run paints it white for free
     rep movsb                   ; ...and the message from cell 1, on the grid
                                 ; (CX >= 1 here anyway: the `jb` above)
+.cut:                           ; ...and NO PIECE OF A CLOCK WORD after it: a
+    scasb                       ; strip that ends inside the line ate the
+    jae .hash                   ; front of a word, and what it left was a stray
+    mov [di-1], al              ; digit beside the message (SPEC.md 59.8.2).
+    jmp short .cut              ; Blanked to the next space - or the NUL, the
+                                ; `jae` (AL = ' ' >= the cell) taking both.
+                                ; scasb and not cmp/stosb: EIGHT bytes, even,
+                                ; so ui_task's parity holds (t_hotpar)
 
 .hash:
     xor ax, ax                  ; --- one check word over the composed FIELD,
@@ -1602,13 +1598,16 @@ menu_draw_clock:
                                 ; DH <= the field's 25 cells, so `cbw` is a zero
                                 ; extension; AX is reloaded on both paths below
     mov dx, MENU_TEXT_Y
-    mov cx, [vid_clk_hx]
+    mov cx, [menu_clkx]
     mov si, menu_clkbuf
     or di, di
     jnz .strip
-    call thm_pair               ; --- no toast: one opaque pass over the lot
-                                
+%ifdef OS88_SNDCARD
+    call menu_clock_text        ; padding and text leave the speaker's cells
+%else
+    call thm_pair
     call font_run
+%endif
 .jout:
     jmp short .out
 .strip:
@@ -1623,9 +1622,20 @@ menu_draw_clock:
 
     mov ax, cx                  ; --- the 4px black lead. No glyph can do this:
     add ax, 4                   ; the table is 95 glyphs, ASCII 32..126 (6.2),
-    push cx                     ; so CP437's half-block is not available
-    add cx, 4 + 3               ; (x2 off CX itself, not through AX: 2 bytes)
-    call menu_tbar_k
+    push cx                     ; so CP437's half-block is not available,
+    add cx, 4 + 3               ; and a gfx_fill costs PERFORMANCE.md Part 2's
+    pushf                       ; per-call floor almost exactly (4,142 cycles,
+    push ax                     ; the 32 pixels ~110us of it), so a wider lead
+    push bx                     ; would cost the same. (x2 off CX itself, not
+    push dx                     ; through AX: 2 bytes.) It was menu_tbar_k,
+    call thm_ink                ; its one caller's now: kernel size pass 12,
+    mov bx, MENU_TEXT_Y         ; -6, its own CX bank being the one above
+    mov dx, MENU_TEXT_Y + 7
+    call gfx_fill
+    pop dx
+    pop bx
+    pop ax
+    popf
     pop cx
 
     mov al, [menu_clkbuf+di]    ; --- and the message. font_run wants ASCIIZ
@@ -1654,7 +1664,7 @@ menu_draw_clock:
     mov ax, di                  ; --- and the clock the strip did not reach
     mov cl, 3
     shl ax, cl
-    add ax, [vid_clk_hx]
+    add ax, [menu_clkx]
     mov cx, ax
     mov si, menu_clkbuf
     add si, di
@@ -1753,6 +1763,11 @@ menu_track:
     pop cx
     pop bx
     ret
+%ifdef KERN_BIG
+    db 0                        ; PARITY PAD, never executed (kernel size pass
+%endif                          ; 13): the Sticky Apps menu's cell left
+                                ; menu_popup .. ui_cmd - ui_task in it - at an
+                                ; odd shift on kern_big (tests/unit/t_hotpar.py)
 
 ; -----------------------------------------------------------------------------
 ; menu_popup - drop a menu anywhere on screen and track it while a button
@@ -1997,13 +2012,17 @@ menu_drop:
     sub bx, [menu_y1]
     inc bx                      ; BX = rows
     mul bx                      ; AX = bytes for one plane
+%ifdef GFX_VGA
     mul word [vid_planes_w]     ; ...times the planes this adapter HAS: 4 on
                                 ; VGA, 1 on Hercules and CGA (SPEC.md 39.2).
                                 ; The _w twin, because vid_planes itself is a
                                 ; BYTE and a word read of it takes the low
                                 ; half of this very variable with it - 0x0404,
                                 ; a thousand planes, and a claim bigger than
-                                ; the fixed one it replaced
+                                ; the fixed one it replaced. A VGA kernel's
+%endif                          ; alone: kern_small's planes are always 1
+                                ; (SPEC.md 39.27.1), and x1 is no multiply
+                                ; (kernel size pass 13)
     call mem_bytes_kb           ; ...as KB, rounded UP, and never 0: a rect
                                 ; this small still needs somewhere to go
     mov bx, MEM_P_MSAVE         ; TRIVIAL-purgeable (SPEC.md 12.4.2)
@@ -2147,11 +2166,12 @@ menu_drop:
     ; --- released: put the screen back, report the selection -------------------
 .up:
 %ifdef KERN_BIG
-    call menu_sticky            ; WINDOWS (SPEC.md 76.14.7): a release that
+    call far [thv + THV_STICK]  ; WINDOWS (SPEC.md 76.14.7): a release that
                                 ; ran nothing may leave the menu up for a
                                 ; second click, and the answer comes back in
-                                ; [menu_sel]. winmod.inc's door - a bare `ret`
-                                ; at rest, so every other theme releases here
+                                ; [menu_sel]. winmod.inc's door - cw_kretf's
+                                ; bare `retf` at rest, so every other theme
+                                ; releases here
 %endif
 %ifdef DOCK_OPT
     pop word [wm_clip_n]        ; the open dock's hole, back (see above)
@@ -2228,11 +2248,13 @@ menu_drop:
     pop bx
     ret
 
+%ifndef KERN_BIG                ; (kern_big's is in wm.inc, above wm_hit_ttl_b)
 menu_dropd  db 0                ; a pull-down is on the screen (SPEC.md 9.6.3).
                                 ; In .text with a real initialiser rather than
                                 ; in .bss, for fdlg_win's reason: -f bin zeroes
                                 ; nothing and this is read on the machine's
                                 ; very first arrow key
+%endif
 
 ; -----------------------------------------------------------------------------
 ; menu_kbnav - the keyboard mouse steps a dropped menu by ITEM (SPEC.md 9.6.3)
@@ -2512,8 +2534,8 @@ menu_trunc:
     push ds                     ; no: copy the prefix into our own buffer.
     push es                     ; The source is ES:SI (the owner's) and the
     pop ds                      ; destination kernel .bss, so the copy runs
-    push cs                     ; with the segments SWAPPED for one `rep
-    pop es                      ; movsb` - no override on it, for the same
+    KES                         ; with the segments SWAPPED for one `rep
+                                ; movsb` - no override on it, for the same
     mov di, menu_tbuf           ; reason - and ES is left KERNEL_SEG, which
     mov cl, MENU_MAXCH          ; is the answer anyway. CX ran out to 0 above
     rep movsb
@@ -2667,7 +2689,16 @@ menu_s_shutdown db 'Shut Down...', 0
 menu_s_hiber    db 'Hibernate...', 0        ; SPEC.md 87.2: ui_loc_gate points
 menu_s_hibernh  db MENU_DIS, 'Hibernate (No HD)', 0  ; item 4 at one of the
 menu_s_hiberxm  db MENU_DIS, 'Hibernate (XMS)', 0    ; three, and the two
+%ifdef VID_EXT
+menu_s_hibervx  db MENU_DIS, 'Hibernate (VESA)', 0   ; ...and a fourth: the
+                                ; VESA display cannot be carried in an image
+                                ; (SPEC.md 120.4). Resident, as a menu string
+                                ; must be; HIBER.DRV's hb_ok chooses it
+%endif
                                 ; greyed ones say WHY NOT (SPEC.md 47 rule 3)
+%ifdef KERN_MEGA
+menu_s_hibernr  db MENU_DIS, 'Hibernate (No room)', 0 ; protected mode: the pool
+%endif                          ; cannot hold the picture (hb_ok_x)
 menu_s_msep     db MENU_DIS, '-----------------', 0
                                 ; the rule above Hibernate: seventeen dashes,
                                 ; the width of 'Hibernate (No HD)', so it
@@ -2738,9 +2769,9 @@ menu_loc_set:
     dw 0                        ; AM_ONCMD: kernel-dispatched
 %ifdef KERN_BIG
     dw 2                        ; AM_COUNT: File and Sticky Apps (SPEC.md
-%else                           ; 110.12); File alone on kern_small (SPEC.md
-    dw 1                        ; 14.6, 14.8)
-%endif
+%else                           ; 110.12) - THIS set's alone: a Disk window's
+    dw 1                        ; bar does not carry it (22.28.1); File alone
+%endif                          ; on kern_small (SPEC.md 14.6, 14.8)
     dw menu_s_file,    menu_items_file,    MENU_FILE_N
 %ifdef KERN_BIG
     dw menu_s_stik,    0,                  0
@@ -2869,4 +2900,116 @@ menu_abstr: resb MENU_ABPFX_LEN + MENU_MAXCH + 1
                                 ; both strings the cell needs are KERNEL data
                                 ; and its MB_SEG is 0 even under a package
 
+section .text
+
+%ifdef OS88_SNDCARD
+; The clock's padding and text surround an independent speaker segment.
+; The driver owns its picture; redraw only on a move, capability or overwrite.
+menu_clock_text:
+    test word [menu_mixcap], SND_CAP_MIXER
+    jz .plain
+    mov di, [menu_mixx]
+    add di, 24                 ; visible clock starts just after the speaker
+    sub di, cx
+    shr di, 1
+    shr di, 1
+    shr di, 1
+    add di, si                 ; first clock character in the staged field
+    push word [di]
+    mov byte [di], 0
+    mov cx, [vid_clk_hx]       ; include the three reserved cells in the pad
+    call thm_pair
+    call font_run              ; padding ends exactly where the icon starts
+    pop word [di]
+    mov si, di
+    mov cx, [menu_mixx]
+    add cx, 24
+.plain:
+    call thm_pair
+    jmp font_run
+
+menu_sound:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [vid_pw]
+    sub ax, 8 + MENU_CLK_W + 6
+    and ax, 0FFF8h             ; original clock field, from live geometry
+    mov [menu_clkx], ax
+    xor bp, bp
+    mov dx, [drv_svc+DSV_CAPS]
+    and dx, SND_CAP_MIXER
+    jz .origin
+    sub ax, 24                 ; reserve the icon LEFT of the full clock field
+    mov bp, ax                 ; fallback notification keeps the entire field
+    cmp byte [toast_on], 0
+    je .clock
+    cmp word [toast_scn], 0
+    je .origin
+.clock:
+    call clk_fmt               ; right-align against the visible clock text
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    mov bp, [vid_wm8]
+    sub bp, cx
+    sub bp, 24
+.origin:
+    cmp ax, [vid_clk_hx]
+    jne .changed
+    cmp dx, [menu_mixcap]
+    jne .changed
+    cmp bp, [menu_mixx]
+    je .out
+.changed:
+    mov [vid_clk_hx], ax
+    cmp word [menu_mixcap], SND_CAP_MIXER
+    jne .store
+    call thm_bg                 ; erase the old picture before menus reuse it
+    mov ax, [menu_mixx]
+    mov cx, ax
+    add cx, 23
+    mov bx, 2
+    push dx
+    mov dx, 17
+    call gfx_fill
+    pop dx
+.store:
+    mov [menu_mixcap], dx
+    mov [menu_mixx], bp
+    mov word [menu_ckck], 0
+    call menu_relayout          ; bounded at the new right-hand hit band
+    call menu_bar_text          ; compose only the changed menu cells
+    test word [menu_mixcap], SND_CAP_MIXER
+    jz .out
+    mov cx, [menu_mixx]
+    call thm_rpair             ; bitmap ones are paper, zeroes are the speaker
+    mov bx, DRVC_SOUND*256 + SNDV_MIXICON_THEME
+    push ds
+    pop es
+    call drv_pkg_call_x
+    jnc .out
+    mov bl, SNDV_MIXICON        ; a sound driver built before the themed verb
+    call drv_pkg_call_x
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+menu_mixcap: dw 0FFFFh
+menu_mixx:   dw 0
+menu_clkx:   dw 0
+%else
+menu_clkx equ vid_clk_hx
+%endif
 section .text

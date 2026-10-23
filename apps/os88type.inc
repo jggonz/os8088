@@ -55,6 +55,12 @@
 ; `%define OS88TY_NO<ROUTINE>` for each of HIT, WIDTH, WIDTHN, FIT, PUT,
 ; ADVOF, FAMN, GETASC and GETLEAD it never calls. Nothing in here calls them,
 ; so a wrong one fails the assembly rather than the machine.
+; `%define OS88TY_NOGRAY` (apps size pass 2b) takes out ty_gray and
+; ty_flush's greying arm, for an includer that never greys a band (Font
+; Viewer). Because the arm is INSIDE ty_flush, the switch also RENAMES it:
+; the entry is ty_flushlive, which takes no carry argument, and ty_flush is
+; not defined - so a call site still written to pass `stc` (or `clc`) fails
+; the assembly instead of drawing a greyed band live.
 ; =============================================================================
 
 TY_MAXFACE  equ 4               ; faces open at once, INCLUDING face 0
@@ -537,22 +543,29 @@ ty_gofonts:
     call OSAPI_VOL_SYS              ; where the system disk is
     mov [ty_sysvol], bl
     mov byte [ty_fresh], 0
-    cmp bl, [ty_fdrv]               ; banked, and on THIS system volume?
-    jne .walk                       ; (0xFF = nothing banked: never a volume)
+    mov al, [ty_fdrv]               ; banked, and on THIS system volume - or
+    cmp al, bl                      ; on the caller's own, the second rung's
+    je .bank                        ; (0xFF = nothing banked: never a volume)
+    cmp al, [ty_bkdrv]
+    jne .walk
+    mov bl, al
+.bank:
     mov dx, [ty_fclus]
     call ty_qm                      ; one quiet stand, and done
     jnc .out
+    mov bl, [ty_sysvol]
 .walk:
     mov byte [ty_fdrv], 0xFF        ; nothing is trusted until the walk lands
-    xor dx, dx                      ; the system disk's ROOT (BL is still
-    call ty_qm                      ; [ty_sysvol]: the kernel keeps BX)
+    call ty_walk                    ; the system disk's SYSTEM/FONTS...
+    jnc .found
+    mov bl, [ty_bkdrv]              ; ...or, with none there, the CALLER'S own
+    cmp bl, [ty_sysvol]             ; volume's (SPEC.md 24.3.1.5: the 360KB
+    stc                             ; system disk carries no faces, and the
+    je .out                         ; office disk its programs ride does)
+    mov [ty_sysvol], bl
+    call ty_walk
     jc .out
-    mov si, ty_s_system
-    call ty_dive
-    jc .out
-    mov si, ty_s_fonts
-    call ty_dive                    ; DX = FONTS' first cluster on CF=0
-    jc .out
+.found:
     mov [ty_fclus], dx              ; ...banked, with the volume it is on
     mov al, [ty_sysvol]
     mov [ty_fdrv], al
@@ -565,6 +578,20 @@ ty_gofonts:
     pop cx
     pop bx
     pop ax
+    ret
+
+; ty_walk - BL = [ty_sysvol] = a volume: stand in its SYSTEM/FONTS. out CF=0
+; and DX = FONTS' first cluster, CF=1 not there. Clobbers AX, BX, CX, DX, SI, DI
+ty_walk:
+    xor dx, dx                      ; the volume's ROOT (the kernel keeps BX)
+    call ty_qm
+    jc .r
+    mov si, ty_s_system
+    call ty_dive
+    jc .r
+    mov si, ty_s_fonts
+    call ty_dive                    ; DX = FONTS' first cluster on CF=0
+.r:
     ret
 
 ; ty_dive - SI names a folder in the one we are standing in; stand in IT.
@@ -1792,7 +1819,11 @@ ty_put_fast:
 ; per build rather than a per-glyph one, and face 0 (SPEC.md 6.5) is what
 ; makes the measuring side of that fallback need no second code path at all.
 ; =============================================================================
+%ifndef OS88TY_NOGRAY
 ty_flush:
+%else
+ty_flushlive:                       ; OS88TY_NOGRAY: no carry in, never grey
+%endif
     push ax
     push bx
     push cx
@@ -1802,9 +1833,11 @@ ty_flush:
     push bp
     push es
 
+%ifndef OS88TY_NOGRAY
     jnc .live                       ; CF is the CALLER's greying flag, not a
     call ty_gray                    ; question to the kernel (SPEC.md 6.5.4)
 .live:
+%endif
     mov si, ty_bandbuf
     mov bp, TY_STRIDE
     push ds
@@ -1824,6 +1857,7 @@ ty_flush:
     pop ax
     ret
 
+%ifndef OS88TY_NOGRAY
 ; -----------------------------------------------------------------------------
 ; ty_gray - dither the band for a DISABLED control (SPEC.md 47 rule 3)
 ; in:  BX = the band's screen y, CX = its width in pixels, DX = its rows
@@ -1877,6 +1911,7 @@ ty_gray:
     pop bx
     pop ax
     ret
+%endif                              ; OS88TY_NOGRAY
 
 ; =============================================================================
 ; TY_BSS - the library's bss, placed by the including package

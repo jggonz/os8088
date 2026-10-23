@@ -1649,8 +1649,7 @@ dn_tcp_open:
     mov byte [bx+DN_F_USED], 0
     pop di
     pop si
-    call dn_tcp_rst
-    ret
+    jmp  dn_tcp_rst
 
 ; -----------------------------------------------------------------------------
 ; dn_tcp_data - the client sent bytes: hand them to the socket and ACK

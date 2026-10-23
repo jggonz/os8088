@@ -383,6 +383,33 @@ static int cw_rib_hit(int mx, int my)
 static unsigned char cw_scale[CW_SCALE_ROWS * (CW_RULE_MAX + 1)];
 #define CW_RU_STEP    14
 
+/* THE THREE INDENT MARKERS, in ruler cells from the text column's left edge:
+ * where the left indent, the first line and the right indent stand. Worked
+ * out in one place because the painter and the hit test both need them, and a
+ * hit test with its own arithmetic is a second layout that drifts (SPEC.md 22's
+ * fm_hit rule). While a marker is being dragged (cw_rul_drag: 1 left, 2 first
+ * line, 3 right) it stands at cw_rul_val instead of where the paragraph has
+ * it, and dragging the LEFT marker leaves the first line where it was on the
+ * page - which is how a hanging indent is made with the mouse. */
+static int cw_rul_drag;
+static int cw_rul_val;
+static int cw_rm_l;
+static int cw_rm_f;
+static int cw_rm_r;
+
+static void cw_rul_cell(int p, int nc)
+{
+    cw_rm_l = cw_pap_li[p];
+    cw_rm_f = cw_pap_li[p] + cw_pap_fi[p];
+    cw_rm_r = nc - cw_pap_ri[p];
+    if (cw_rul_drag == 1)
+        cw_rm_l = cw_rul_val;
+    else if (cw_rul_drag == 2)
+        cw_rm_f = cw_rul_val;
+    else if (cw_rul_drag == 3)
+        cw_rm_r = cw_rul_val;
+}
+
 static void cw_ruler(void)
 {
     int x;
@@ -478,14 +505,16 @@ static void cw_ruler(void)
     }
     os88_set_color(OS88_BLACK);
     /* the indent markers: the left indent as a full mark, the first line's as
-     * a mark above it, the right indent at the other end */
-    i = cw_pap_li[p];
-    os88_gfx_fill(cw_tx + i * 8 - 2, sx - 3, cw_tx + i * 8 + 2, sx - 2);
-    i = cw_pap_li[p] + cw_pap_fi[p];
-    if (i >= 0)
-        os88_gfx_fill(cw_tx + i * 8 - 2, sx - 6, cw_tx + i * 8 + 2, sx - 5);
-    i = nc - cw_pap_ri[p];
-    os88_gfx_fill(cw_tx + i * 8 - 2, sx - 3, cw_tx + i * 8 + 2, sx - 2);
+     * a mark above it, the right indent at the other end - and, while one is
+     * being DRAGGED (ovl_rul_drag), that one where the pointer has it */
+    cw_rul_cell(p, nc);
+    os88_gfx_fill(cw_tx + cw_rm_l * 8 - 2, sx - 3, cw_tx + cw_rm_l * 8 + 2,
+                  sx - 2);
+    if (cw_rm_f >= 0)
+        os88_gfx_fill(cw_tx + cw_rm_f * 8 - 2, sx - 6,
+                      cw_tx + cw_rm_f * 8 + 2, sx - 5);
+    os88_gfx_fill(cw_tx + cw_rm_r * 8 - 2, sx - 3, cw_tx + cw_rm_r * 8 + 2,
+                  sx - 2);
 
     os88_gfx_hline(cw_org.x, cw_org.x + cw_sz.w - 1, cw_uy + CW_H_RUL - 1);
 }
@@ -511,6 +540,37 @@ static int cw_rul_hit(int mx, int my)
         if (mx >= bx && mx <= bx + 11)
             return i + 1;
     }
+    return 0;
+}
+
+/* Which indent marker is under the pointer: 1 left, 2 first line, 3 right,
+ * or 0. The scale row is a few pixels tall, so the test is generous - four
+ * pixels either side and the whole band from the first-line mark down to the
+ * ticks - and where the left and first-line marks stand at the same cell the
+ * upper half of the band is the first line's. */
+static int cw_rul_mark(int mx, int my)
+{
+    int sx;
+    int nc;
+    int c;
+
+    if (!cw_vrul || cw_uy < 0)
+        return 0;
+    sx = cw_uy + CW_H_RUL - 3;
+    if (my < sx - 8 || my > sx + 1)
+        return 0;
+    nc = cw_wpx / 8;
+    if (nc > CW_RULE_MAX)
+        nc = CW_RULE_MAX;
+    cw_rul_cell(cw_pap_of(cw_cur), nc);
+    c = mx - cw_tx;
+    if (c >= cw_rm_r * 8 - 4 && c <= cw_rm_r * 8 + 4)
+        return 3;
+    if (c >= cw_rm_f * 8 - 4 && c <= cw_rm_f * 8 + 4 &&
+        (my <= sx - 5 || c < cw_rm_l * 8 - 4 || c > cw_rm_l * 8 + 4))
+        return 2;
+    if (c >= cw_rm_l * 8 - 4 && c <= cw_rm_l * 8 + 4)
+        return 1;
     return 0;
 }
 

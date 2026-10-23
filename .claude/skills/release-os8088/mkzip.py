@@ -232,7 +232,8 @@ ITEMS = [
 
     ("all", "Everything set, 1.44MB", False,
      "Both word processors, the story reader, the CP/M emulator, the "
-     "Commodore 64, the Apple II Plus, the Weave programs and their editor, "
+     "Commodore 64, the Apple II Plus, the RealDMG Game Boy, the Weave "
+     "programs and their editor, "
      "the 1942 air-combat game, the REDLINE benchmark, and everything on the "
      "software disk.",
      [("@apps-all.list", "1.44MB", "")]),
@@ -276,6 +277,13 @@ ITEMS = [
      "licence, COPYING.",
      [("apple2.img", "1.44MB", ""), ("apple2120.img", "1.2MB", ""),
       ("apple2720.img", "720KB", ""), ("apple2360.img", "360KB", "")]),
+    ("progs", "RealDMG", False,
+     "A Game Boy emulator: your own .GB cartridges in a window or on the "
+     "whole screen, with battery saves, save states and replays. It plays "
+     "on an IBM PC and is fastest on a 286 or later. No game ships with it; "
+     "the disk carries the project's own demo cartridge and a README.",
+     [("realdmg.img", "1.44MB", ""), ("realdmg120.img", "1.2MB", ""),
+      ("realdmg720.img", "720KB", ""), ("realdmg360.img", "360KB", "")]),
     ("progs", "PaccMan", False,
      "The arcade-accurate Pac-Man, built by the C compiler. It wants a 386 "
      "to play at full speed.",
@@ -284,9 +292,9 @@ ITEMS = [
     ("progs", "1942", False,
      "An air-combat game after the 1942 arcade game, written in assembly "
      "with original artwork: 32 stages, one or two players, and music on an "
-     "AdLib or Sound Blaster. It needs a VGA or CGA card. The "
-     "1.44MB disk also carries sampled gunfire and explosions for a Sound "
-     "Blaster; the 360KB disk leaves them out for room.",
+     "AdLib or Sound Blaster, with sampled gunfire and explosions on a "
+     "Sound Blaster. It needs a VGA or CGA card. Both disks carry the same "
+     "game.",
      [("1942.img", "1.44MB", ""), ("1942-360.img", "360KB", "")]),
     ("progs", "REDLINE", False,
      "A CPU and graphics benchmark. It times 25 fixed workloads -- "

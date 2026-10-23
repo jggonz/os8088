@@ -1241,8 +1241,7 @@ px_card_draw:
     call px_card_line
     ret
 .whole:
-    mov byte [px_r0], 0
-    mov byte [px_r1], PX_ROWS - 1
+    mov word [px_r0], (PX_ROWS - 1) << 8   ; px_r0 = 0, px_r1 = the last row
     mov es, [px_dseg]               ; the band, black: Size bytes of 80 rows
     mov di, [px_dbase]
     mov al, [px_x0]

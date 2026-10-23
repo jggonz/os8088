@@ -1,0 +1,20 @@
+# apps/syscheck/retired.txt - files an earlier release SHIPPED on the system
+# or apps disks and this one does not (SPEC.md 118.2.2). System Check finds
+# them on an installed volume and reports them as leftovers of an upgrade.
+#
+# ONE 8.3 NAME A LINE. A NAME STAYS FOR EVER: a machine can be upgraded from
+# any release, and a leftover is a leftover however old. tools/os88sysman.py
+# refuses a name that also ships, so a program that comes back is noticed.
+#
+# Packages are found by the walk; a .DRV is hidden + system, which a package
+# cannot list (SPEC.md 19.7.1), so drivers are asked for by these names.
+
+# apps/RETIRED.txt's `retired` packages
+PACMAN.O88      # SPEC.md 89.12, superseded by DOT DELIRIUM
+MODPLUG.O88     # SPEC.md 56.15, superseded by Tracker's windowed face
+
+# drivers and modules that left $(DRIVERS) (the Makefile's git history)
+DEBUG.DRV       # SPEC.md 58, the serial monitor, retired
+CLONE.DRV       # the Disk Clone module (#112), gone by #252
+DESKTOP.DRV     # the desktop-shortcuts module (#211), gone by #214
+VMMOUSE.DRV     # kern_emu's alone since SPEC.md 9.11.7; leftover on kern_big

@@ -211,8 +211,8 @@ DK_NENT       equ 2             ; DOCK.DRV's mod_fp entries: hook, unhook
                                 ; so calling one with nothing mounted refuses
 
 dkb_geom:
-    cmp word [spl_fseg], COLD_SEG
-    jbe .panel
+    cmp word [spl_fseg], 0
+    je .panel
     SPLGATE1 ovl_dock_geom
     ret
 .panel:
@@ -288,14 +288,18 @@ dkb_band:
 ; raise caches go because a window that did not move can have had the strip
 ; stand up or lie down behind it.
 ; -----------------------------------------------------------------------------
-section .cold
-dock_apply:                     ; (the name its callers knew: they far-call
-dkf_apply:                      ; dkf_apply, and the .text thunk is gone)
+; DOCK_APPLY %1, %2, %3, %4 - %1_apply and %1_reflow, written once (KSW_SECT,
+; kernel.asm): CTRL.DRV's `dock` (the Dock page) and the boot blob's `bdk`
+; (drv_boot's SYSTEM.CFG reader), %2/%3 the hops a resident `.text`/`.cold`
+; callee is reached through, %4 the prefix of the wm_refit it calls. %1_apply
+; is FAR (both callers `push cs / call`); %1_reflow is its near half
+%macro DOCK_APPLY 4
+%1 %+ _apply:
     push ax
     mov al, MOD_DOCK
     test byte [dock_cfg], DOCK_P_MASK | DOCK_F_AUTO
     jz .basic
-    call mod_need
+    %3 mod_need
     jc .fell
     call far [DKFP]            ; dkx_hook: the image takes dkv over, and CF=0
     jmp short .apply
@@ -309,22 +313,25 @@ dkf_apply:                      ; dkf_apply, and the .text thunk is gone)
                                ; mod_gone's refusal, which is exactly right
                                ; and is why it needs no test - and is what
                                ; deleted the cw_dock_drop shim with it
-    call mod_drop              ; no callback executing: settings owns gfx lock
+    %3 mod_drop                ; no callback executing: settings owns gfx lock
     clc
 .apply:
     pushf                     ; retain failure for CP; boot gets basic fallback
-    call KERNEL_SEG:dock_reflow
+    call %1 %+ _reflow
     popf
     pop ax
     retf
+%1 %+ _reflow:                  ; the far half it had in `.text` until kernel
+    %2 dock_geom                ; size pass 13 (docs/plans/completed/ksp13/
+    call COLD_SEG:desk_rowcalc_x ; dispsw.md): one entry, not five shims
+    call %4 %+ _refit
+    %2 wm_su_drop_all
+    %2 dock_force
+    ret
+%endmacro
+section .modu                   ; the Dock page's (KSW_SECT, kernel.asm)
+DOCK_APPLY dock, KSWK, KSWC, wm
 section .text
-dock_reflow:                    ; dkf_apply's far half: one entry, not five shims
-    call dock_geom
-    call desk_rowcalc
-    call wm_refit
-    call wm_su_drop_all
-    call dock_force
-    retf
 
 
 dock_geom:      DKCALL DKI_GEOM
@@ -832,13 +839,22 @@ db_px_hit:
 ; rather than by the bump this used to need.
 ; -----------------------------------------------------------------------------
 db_key:
+%ifdef KERN_BIG
+%if I_STATE != 0 || I_FLAGS != 1
+  %error "db_key reads I_STATE and I_FLAGS as ONE word at the record's start"
+%endif
+    mov ax, [di]                ; AL = I_STATE, AH = I_FLAGS: live only -
+    and ah, IF_DESK             ; dying and free records have no tile
+    dec ax                      ; (SPEC.md 29.2 rule 3) - and nor does a DESK
+    jnz .none                   ; instance (SPEC.md 30, 11.103). 1 exactly
+                                ; when it is live and no widget, so the DEC
+                                ; answers both: two bytes under two tests
+                                ; (kernel size pass 13)
+%else
     xor ax, ax
     cmp byte [di+I_STATE], 1    ; live only - dying and free records have no
     jne .out                    ; tile (SPEC.md 29.2 rule 3)
-%ifdef KERN_BIG
-    test byte [di+I_FLAGS], IF_DESK
-    jnz .out                    ; ...and nor does a DESK instance (SPEC.md 30,
-%endif                          ; 11.103): AX = 0 is "no tile"
+%endif
     mov ax, [di+I_ICON]
     rol ax, 1                   ; x3 - the pointer's high bits reach the low
     rol ax, 1                   ; end. THREE 1-BIT ROTATES: 6 bytes against
@@ -867,6 +883,11 @@ db_key:
     or al, DOCK_K_ACT           ; active: the border doubles
 .out:
     ret
+%ifdef KERN_BIG
+.none:
+    xor ax, ax                  ; AX = 0 is "no tile"
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; db_tile_x - tile i's left edge
@@ -1080,13 +1101,16 @@ db_hit:
     cmp al, INST_MAX            ; past the last slot?
     jae .in
     call inst_ptr               ; DI = record (in: AL = index; AX survives)
-    cmp byte [di+I_STATE], 1
 %ifdef KERN_BIG
-    jne .none
-    test byte [di+I_FLAGS], IF_DESK
-    jz .in                      ; live, and not a DESK instance (SPEC.md 30):
-.none:                          ; DI is the answer
+    push ax                     ; AL, the slot, is an output
+    call db_key                 ; AX = 0: no tile - empty, dying or a DESK
+    or ax, ax                   ; instance (SPEC.md 30). "Which records have
+    pop ax                      ; a tile" is ONE question (SPEC.md 29.2 rule
+    jnz .in                     ; 3), and db_key already asks all of it -
+                                ; three bytes under asking it again here
+                                ; (kernel size pass 13). `pop` writes no flag
 %else
+    cmp byte [di+I_STATE], 1
     je .in                      ; live: DI is the answer
 %endif
     xor di, di                  ; empty or dying: no tile here

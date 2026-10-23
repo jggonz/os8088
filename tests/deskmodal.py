@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""SPEC.md 110.3 / 11.103.4: a widget's MODAL QUESTION lands above every
-application and takes the bar - and the widget stays on the desk.
+"""SPEC.md 110.3 / 11.103.4: a widget's DELETE with an application in front
+- it asks no window any more, so it changes NOTHING about the stacking or
+the bar, and the widget stays on the desk.
 
     make && python3 tests/deskmodal.py
 
@@ -12,17 +13,20 @@ kernel's wm_top answered by tools/os88geom.py's mirror of it.
   A  the widget is at wm_zord[0] - under the Disk window - and the Disk
      window is wm_top.
   B  a press on the widget's appointment selects it and hands the widget
-     the bar; Del puts `Delete this appointment?` up (os88ui_ask, an
-     ordinary window): it is the TOP of wm_zord and OWNS THE BAR, the
-     widget is still wm_zord[0], and the Disk window is still above the
-     widget.
-  C  Enter (Yes, the default) answers it: the question is gone, the
-     appointment is deleted, and the bar goes to wm_top - the Disk window,
-     never the widget.
+     the bar; Del arms Delete (`Delete again to confirm`, a toast) and
+     opens NO window: wm_zord is what it was, the widget still owns the
+     bar and is still wm_zord[0] under the Disk window.
+  C  Del again deletes it: still no window, the widget still owns the bar
+     (Esc gives it back, deskcaledit H), and nothing moved in wm_zord.
 
-**BREAK IT ON PURPOSE**: create the question with the widget as its window
-manager parent so it lands at the desk (z 0..) and B fails on the top of
-wm_zord; give the bar back to the widget at the answer and C fails.
+It was this row's subject that Del put up an `os88ui_ask` question which
+landed ABOVE every application and took the bar; the size pass
+(docs/plans/completed/DESKCAL-SIZE-PLAN.md) replaced that question with pressing
+twice, and nothing in the shipped tree creates a window from a widget now.
+
+**BREAK IT ON PURPOSE**: put an os88ui_ask back in dc_askdel and B fails on
+the window count and wm_zord; make the second Del give the bar away and C
+fails.
 """
 import os
 import shutil
@@ -55,8 +59,10 @@ def zord(ui):
 def main():
     tmp = tempfile.mkdtemp(prefix="deskmodal-")
     try:
-        img = disk_with(tmp, "modal.img", os88stik.dat(os88stik.deskcal(
-            [(TODAY, 600, "Dentist")])))
+        # PACKED, as the package writes it (SPEC.md 110.5.3): the load's
+        # dc_spread is what puts Dentist on line 0
+        img = disk_with(tmp, "modal.img", os88stik.dat(os88stik.deskcal_pack(
+            os88stik.deskcal([(TODAY, 600, "Dentist")]))))
         with os88ui.boot(img, machine="os8088_xt_vga") as ui:
             c = Cal(ui, tmp, check=check)
             disk = ui.open_drive("A")
@@ -68,38 +74,35 @@ def main():
             check(z[:1] == [c.slot], "the widget is wm_zord[0] (%r)" % (z,))
             check(ui.front().i == disk.i, "the Disk window is wm_top")
 
-            print("B: Del on the widget's appointment: the question")
+            print("B: Del on the widget's appointment: armed, no window")
             c.front()
             c.press(c.line(0))
             check(c.bss(os88stik.DESKCAL_BSS_SELK)[0] == 1,
                   "the appointment is selected")
-            c.key("Delete")
-            ui._wait(lambda: len([w for w in ui.windows()
-                                  if w.title == TITLE]) == 2,
-                     "the Delete question", 30)
-            q = [w for w in ui.windows() if w.title == TITLE
-                 and w.i != c.slot][0]
-            z = zord(ui)
-            check(z[-1:] == [q.i], "the question is the TOP of wm_zord (%r, "
-                  "it is slot %d)" % (z, q.i))
-            check(ui._word("menu_win") == ui._wrec(q),
-                  "...and owns the bar (menu_win %#06x)" % ui._word("menu_win"))
-            check(z[:1] == [c.slot] and z.index(disk.i) > 0,
-                  "the widget is still wm_zord[0], under the Disk window "
-                  "(%r)" % (z,))
+            z0 = zord(ui)
+            rec = ui._wrec(c.win())
+            check(ui._word("menu_win") == rec, "the widget owns the bar "
+                  "(menu_win %#06x)" % ui._word("menu_win"))
+            ui.m.key("Delete")
+            txt = ui.wait_toast(says="again")
+            check(txt == "Delete again to confirm", "Del says %r" % txt)
+            check(len([w for w in ui.windows() if w.title == TITLE]) == 1,
+                  "...and opens no window")
+            check(zord(ui) == z0 and z0[:1] == [c.slot]
+                  and z0.index(disk.i) > 0, "wm_zord is as it was, the "
+                  "widget at [0] under the Disk window (%r)" % (zord(ui),))
+            check(ui._word("menu_win") == rec, "the widget still owns the "
+                  "bar (menu_win %#06x)" % ui._word("menu_win"))
 
-            print("C: answered: the bar to wm_top, never to the widget")
-            ui.m.key("Enter")
-            ui._wait(lambda: len([w for w in ui.windows()
-                                  if w.title == TITLE]) == 1,
-                     "the question to be answered", 30)
-            os88marty.pace(ui.m, 1.0)
-            check(ui._word("menu_win") == ui._wrec(disk),
-                  "the bar went to the Disk window, wm_top (menu_win %#06x)"
-                  % ui._word("menu_win"))
-            check(zord(ui)[:1] == [c.slot], "the widget is still at the desk")
+            print("C: Del again: deleted, and still nothing moved")
+            ui.m.key("Delete")
             got = appts_of(c.saved("the delete's save"))
-            check(got == [], "Yes deleted the appointment (%r)" % (got,))
+            check(got == [], "the second Del deleted the appointment (%r)"
+                  % (got,))
+            check(zord(ui) == z0, "wm_zord is as it was (%r)" % (zord(ui),))
+            check(ui._word("menu_win") == rec, "the widget still owns the "
+                  "bar (menu_win %#06x)" % ui._word("menu_win"))
+            check(ui.front().i == disk.i, "the Disk window is still wm_top")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("deskmodal: %s" % ("PASS" if not fails else

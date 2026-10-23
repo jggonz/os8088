@@ -1728,7 +1728,7 @@ check83:
 %include "lz.inc"
 
 section .text
-s_usage:    db 'OS88CZ - split sets and CZ files for os8088 (SPEC.md 20.17)', 13, 10
+s_usage:    db 'OS88CZ - split sets and CZ files for os8088', 13, 10
             db '  OS88CZ J PART [DEST]                  join a set from any part', 13, 10
             db '  OS88CZ S FILE [SIZE] [DEST] [/S] [/P] split: SIZE 360 720 1200 1440 or bytes', 13, 10
             db '                                        /S store only, /P pause for each disk', 13, 10

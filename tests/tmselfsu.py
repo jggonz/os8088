@@ -22,9 +22,12 @@ about 505 ms on the target - to come back from a reveal.
   OTHERS   ...but somebody ELSE's cache is NOT masked: drag a THIRD window
            over a second one - neither of them this one - so it banks a cache
            while the memory page sits untouched and fully visible, and the
-           page must still see that as a change. A range mask passes QUIET
-           and CELLS and fails here, which is the whole of why the cut is the
-           self-reference and not the range
+           page must still see that as a change - tm_quiet's key moves and
+           the page's content pixels change. A range mask passes QUIET and
+           CELLS and fails here, which is the whole of why the cut is the
+           self-reference and not the range. READ, not counted: since 28.4.10
+           the answer is one chunk and the map, two breakpoint hits the pump
+           can lose together (the comment at the leg says how)
 
 Cells, not calls: a culled cell is still a call and a cut chunk retries.
 """
@@ -256,21 +259,56 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         tick(m)
     os88marty.settle(m, limit=120)
     d, c = W(disk), W(calc)
+
+    # THE EVIDENCE IS READ, NOT CAUGHT. Since SPEC.md 28.4.10 the page's whole
+    # answer to another window's cache is one 5-cell chunk (the Purgeable
+    # group's figure) and the map - ONE counted fill. That is two breakpoint
+    # hits, both inside one paint, and the paint lands DURING the drag below,
+    # where dispcells' pump lets the guest run between its stopped() poll and
+    # its advance(): a stop that lands in that gap is run straight past by
+    # advance's latched-breakpoint clear (tools/martypc/debug_server.rs). With
+    # only two hits to lose, the leg read "0 cells + 0 fills" over a page that
+    # had redrawn on the glass - tm_quiet's key moved, the Purgeable figure
+    # read 56K -> 86K, measured. So the leg asks the two things a debug read answers
+    # whatever the pump did: did tm_quiet's key MOVE (the question the page
+    # asks before the lock saw the claim), and did the page's CONTENT pixels
+    # change (it put the answer where a reader looks). A range mask fails
+    # both: the key cannot move and nothing is painted. Cells and fills are
+    # still printed, as what the pump happened to catch.
+    def qkey():
+        return int.from_bytes(m.read((seg << 4) + dispapps.img_size("taskmgr")
+                                     + dispapps.bss_off("taskmgr", "tm_qkey"),
+                                     2), "little")
+
+    def content():
+        w = W(slot)
+        return os88marty.crop_rgb(m, w.x + 1, w.y + TITLE_H + 2,
+                                  w.w - 2, w.h - TITLE_H - 3)
+
+    k0, px0, dsu0 = qkey(), content(), su(disk)
     o = Own(m, mo)
     o.drag(c.x + 30, c.y + 9, d.x + 40 + 30, d.y + 20 + 9)
     o.pump(900, 6)
     o.close()
     os88marty.settle(m, limit=120)
+    k1, px1 = qkey(), content()
     print("OTHERS  : Calculator dragged over the Disk window - Disk holds "
-          "%04X, TM holds %04X, %d cells + %d fills"
-          % (su(disk), su(slot), o.cells, o.fills))
-    if not su(disk):
-        fails.append("OTHERS: the Disk window banked nothing, so this leg "
-                     "cannot say whether the page reacts to it")
-    elif not (o.cells or o.fills):
-        fails.append("OTHERS: the page drew nothing for ANOTHER window's "
-                     "cache - that is a mask on the range, and 28.8.1 says "
-                     "why it is the wrong cut")
+          "%04X (was %04X), TM holds %04X; key %04X -> %04X, content %s; "
+          "%d cells + %d fills caught"
+          % (su(disk), dsu0, su(slot), k0, k1,
+             "changed" if px1 != px0 else "UNCHANGED", o.cells, o.fills))
+    if not su(disk) or dsu0:
+        fails.append("OTHERS: the Disk window did not bank a NEW cache over "
+                     "the drag, so this leg cannot say whether the page "
+                     "reacts to it")
+    elif k1 == k0:
+        fails.append("OTHERS: tm_quiet did not see ANOTHER window's cache - "
+                     "that is a mask on the range, and 28.8.1 says why it is "
+                     "the wrong cut")
+    elif px1 == px0:
+        fails.append("OTHERS: tm_quiet saw ANOTHER window's cache and the "
+                     "page put nothing on the glass for it - a reader is "
+                     "looking at a stale page")
 
     print()
     for f in fails:

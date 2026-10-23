@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Does Clone Disk... produce a disk that is byte for byte the source?
 
+(...bar BS_VolID, which SPEC.md 18.8.2.1 stamps fresh on every copy, so the
+row asserts it DIFFERS - from the source, and from the other clone.)
+
     python3 tests/diskclone.py
 
 SPEC.md 18.99 / 22.21.  The assertion that matters is not a screenshot: a
@@ -176,18 +179,47 @@ def toast(m):
     return b.split(b"\x00")[0].decode("ascii", "replace").rstrip()
 
 
+# BS_VolID, the one field a clone does NOT copy (SPEC.md 18.8.2.1): the
+# target is stamped with a serial of its own on the way down, so that the two
+# disks do not sign the same (dsk_bpb_sig) and a quiet mount cannot take one
+# for the other. Every other byte of both disks must still agree.
+VOLID = slice(39, 43)
+
+
+def unserial(d):
+    """The disk with its serial blanked - what 'an exact copy' now means."""
+    return d[:VOLID.start] + bytes(4) + d[VOLID.stop:]
+
+
+def serial(d):
+    return int.from_bytes(d[VOLID], "little")
+
+
 def disks_agree(m, tag):
+    """B: against A:, byte for byte bar the serial. Answers B:'s serial."""
     os.makedirs(OUT, exist_ok=True)
     a = os.path.join(OUT, "a.img")
     b = os.path.join(OUT, "b.img")
     m.flush(0, a)
     m.flush(1, b)
     da, db = open(a, "rb").read(), open(b, "rb").read()
-    check(da == db, "%s: B: is byte for byte A:" % tag,
+    check(da[38] == 0x29, "%s: the source carries the extended BPB" % tag,
+          "the fixture's own precondition: only a 0x29 boot sector has a "
+          "serial to stamp, so without it the next check proves nothing",
+          got=da[38], want=0x29)
+    check(unserial(da) == unserial(db),
+          "%s: B: is byte for byte A:, bar the serial" % tag,
           "a clone is an EXACT copy or it is nothing - a file copy would "
           "agree about the files and differ about the boot sector, the free "
           "clusters and the layout (SPEC.md 18.99)",
           got=db, want=da)
+    check(serial(da) != serial(db),
+          "%s: ...and B: carries a SERIAL OF ITS OWN" % tag,
+          "SPEC.md 18.8.2.1: clo_fin stamps the copy. An equal serial is a "
+          "twin of its source, which signs the same, and a quiet mount on one "
+          "keeps the other's FAT window and cached sectors",
+          got="%08X" % serial(db), want="not %08X" % serial(da))
+    return serial(db)
 
 
 with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
@@ -221,7 +253,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     check(p.claim() == 0, "...the claim went back (SPEC.md 22.21.2)", "",
           got=p.claim(), want=0)
     check(p.image() == 0, "...and so did DISKOPS.DRV", "", got=p.image(), want=0)
-    disks_agree(m, "cross drive")
+    first = disks_agree(m, "cross drive")
 
     # --- 2. same drive, and the disk was never swapped -----------------------
     open_clone(m, mo)
@@ -287,10 +319,21 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     after = os.path.join(OUT, "after.img")
     m.flush(0, after)
     da, db = open(before, "rb").read(), open(after, "rb").read()
-    check(da == db, "a disk cloned onto itself is unchanged",
+    check(unserial(da) == unserial(db),
+          "a disk cloned onto itself is unchanged, bar the serial",
           "every sector was read and written back, sector 0 last - a wrong "
           "buffer offset, a wrong LBA or a lost sector 0 all show here",
           got=db, want=da)
+    check(serial(db) != serial(da),
+          "...and the copy is STAMPED: its serial moved",
+          "SPEC.md 18.8.2.1 - the copy's base is the source's serial and the "
+          "moment is added to it, so it cannot come back the same",
+          got="%08X" % serial(db), want="not %08X" % serial(da))
+    check(serial(db) != first,
+          "...and differs from the FIRST clone of the same source",
+          "two disks cloned from one source, minutes apart, must not be twins "
+          "of each other either - the stamp is the moment, not a constant",
+          got="%08X" % serial(db), want="not %08X" % first)
 
     # --- 4. Esc, at a prompt -------------------------------------------------
     open_clone(m, mo)

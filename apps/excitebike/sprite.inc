@@ -27,17 +27,24 @@ xb_spr_load:
     je .claim
     mov ax, XS_CLAIM_CC             ; the compiled poses ride in the claim after the blobs; a machine
     mov [xb_sprkb], ax              ; without the room for them plays on the interpreted draw
-    call OSAPI_MEM_CLAIM
+    xor cx, cx                      ; THE DMA DOOR WITH NO HEAD, both claims: the plain claim
+    call OSAPI_MEM_CLAIM_DMA        ; on every kernel, and CONVENTIONAL on kern_mega for this
 xs_claim1 equ $                     ; (tests/excitebike_video.py --smallclaim refuses the big claim here)
     jnc .got
     mov ax, XS_CLAIM_C
 .claim:
-    mov [xb_sprkb], ax
-    call OSAPI_MEM_CLAIM
+    mov [xb_sprkb], ax              ; OS88_HIGHMEM package - the compiled poses are far-called
+    xor cx, cx                      ; IN this claim, and a claim above 1MB is a data-only
+    call OSAPI_MEM_CLAIM_DMA        ; selector with no code view (os88api.inc, OS88_HIGHMEM)
     jc .nomem
 .got:
     mov [xb_sprseg], dx
-    mov es, dx
+    call OSAPI_MEM_CODESEL          ; ...and the selector they are far-called through, ONCE:
+    jnc .cs                         ; DX itself on a real-mode kernel, the claim's LDT code
+    mov ax, dx                      ; alias on kern_mega, where a far call through the data
+.cs:                                ; segment traps on every transfer (KERN-MEGA-PLAN 2.4).
+    mov [xs_cfar + 2], ax           ; (CF=1 cannot happen for a 512-aligned claim: the data
+    mov es, dx                      ; segment then still works, at a trap a call.)
     cmp byte [xb_cga], 0
     jne .cga
     call xs_load_vga
@@ -143,6 +150,7 @@ xs_load_vga:
 ; 30 pixels).  Layer 0 is then turned into the OUTLINE: opaque and not any ink.
 xs_shift:
     push ds
+    push es
     push di
     mov ax, [xs_p]
     mov cx, 4 * 72
@@ -151,7 +159,9 @@ xs_shift:
     mov bp, [xb_recs + EXBR_POSES * 2]
     inc bp                          ; past the pose count
     add si, bp
-    mov ds, [cs:xb_gfxseg]
+    push ds
+    pop es                          ; ES = ours, for xs_tmp: CS is read-only on kern_mega
+    mov ds, [cs:xb_gfxseg]          ; (KERN-MEGA-PLAN 14.21)
     mov bx, xs_tmp
     mov bp, 4
 .mask:
@@ -173,16 +183,17 @@ xs_shift:
     dec cl
     jnz .sh
 .store:
-    mov [cs:bx], dh
-    mov [cs:bx + 1], dl
-    mov [cs:bx + 2], ah
-    mov [cs:bx + 3], al
+    mov [es:bx], dh
+    mov [es:bx + 1], dl
+    mov [es:bx + 2], ah
+    mov [es:bx + 3], al
     add bx, 4
     dec ch
     jnz .row
     dec bp
     jnz .mask
     pop di
+    pop es
     pop ds
     mov bx, xs_tmp
     mov cx, 96
@@ -352,6 +363,9 @@ xs_cgarow:
     shl ax, 1
     add ax, bx
     add si, ax                      ; the row's first opaque-mask byte
+    push es
+    push ds
+    pop es                          ; ES = ours, for the stores below (xs_shift's reason)
     mov ds, [cs:xb_gfxseg]
     xor bp, bp                      ; 2 * the source byte 0..2
 .q:
@@ -362,7 +376,7 @@ xs_cgarow:
     mov dh, [cs:xs_ink55 + 1]
     mov dl, dh
     and ax, dx
-    mov [cs:xs_w], ax               ; the OR word so far
+    mov [es:xs_w], ax               ; the OR word so far
     mov bl, [si + 144]              ; ink 2
     xor bh, bh
     shl bx, 1
@@ -370,7 +384,7 @@ xs_cgarow:
     mov dh, [cs:xs_ink55 + 2]
     mov dl, dh
     and ax, dx
-    or [cs:xs_w], ax
+    or [es:xs_w], ax
     mov bl, [si + 216]              ; ink 3
     xor bh, bh
     shl bx, 1
@@ -378,7 +392,7 @@ xs_cgarow:
     mov dh, [cs:xs_ink55 + 3]
     mov dl, dh
     and ax, dx
-    or [cs:xs_w], ax
+    or [es:xs_w], ax
     mov al, [si + 72]               ; the outline: opaque and no ink layer
     or al, [si + 144]
     or al, [si + 216]
@@ -391,20 +405,21 @@ xs_cgarow:
     mov dh, [cs:xs_ink55]
     mov dl, dh
     and ax, dx
-    or [cs:xs_w], ax
+    or [es:xs_w], ax
     mov bl, [si]                    ; the opaque bits
     xor bh, bh
     shl bx, 1
     mov ax, [cs:xs_exp + bx]        ; the AND is the complement, below
-    mov [cs:xs_opb + bp], ah
-    mov [cs:xs_opb + bp + 1], al
+    mov [es:xs_opb + bp], ah
+    mov [es:xs_opb + bp + 1], al
     mov ax, [cs:xs_w]
-    mov [cs:xs_orb + bp], ah
-    mov [cs:xs_orb + bp + 1], al
+    mov [es:xs_orb + bp], ah
+    mov [es:xs_orb + bp + 1], al
     inc si
     add bp, 2
     cmp bp, 6
     jb .q
+    pop es
     pop ds
     mov cx, 6
     cmp word [xs_k], 0
@@ -506,36 +521,36 @@ xs_hot: db 0, 1, 12, 15, 16, 9, 2, 11, 10, 0ffh
 xs_compile:
     SAVE
     push ds
-    push es
-    pop ds                          ; DS = ES = the claim: the blobs are read from it
-    mov word [cs:xs_hp], xs_hot
+                                    ; DS = ours, ES = the claim: the blobs are read through ES, so the
+                                    ; stores below are DS's and not CS's (KERN-MEGA-PLAN 14.21)
+    mov word [xs_hp], xs_hot
 .pose:
-    mov bx, [cs:xs_hp]
-    mov al, [cs:bx]
+    mov bx, [xs_hp]
+    mov al, [bx]
     cmp al, 0ffh
     je .done
-    inc word [cs:xs_hp]
+    inc word [xs_hp]
     xor ah, ah
     shl ax, 1                       ; pose * 2
-    mov [cs:xs_cp], ax
-    mov word [cs:xs_ck], 0
+    mov [xs_cp], ax
+    mov word [xs_ck], 0
 .phase:
     cmp di, XS_CLAIM_CC * 1024 - 1024
     ja .done
-    mov bp, [cs:xs_cp]
-    add bp, [cs:xs_ck]
+    mov bp, [xs_cp]
+    add bp, [xs_ck]
     shl bp, 1                       ; the byte offset in the blob table and in xs_ctab
     mov si, bp
-    mov si, [si]                    ; the blob
-    mov [cs:xs_ctab + bp], di       ; ...and where its code starts
-    mov byte [cs:xs_crow], XB_POSE_H
+    mov si, [es:si]                 ; the blob
+    mov [ds:xs_ctab + bp], di       ; ...and where its code starts
+    mov byte [xs_crow], XB_POSE_H
 .row:
-    cmp byte [cs:xs_crow], XB_POSE_H
+    cmp byte [xs_crow], XB_POSE_H
     je .first
     mov ax, 0d701h                  ; add di, dx
     stosw
 .first:
-    lodsw                           ; AL = first byte, AH = count
+    es lodsw                        ; AL = first byte, AH = count
     mov dl, al                      ; DL = the displacement of the next byte
     mov cl, ah
     xor ch, ch
@@ -545,7 +560,7 @@ xs_compile:
 .re:
     jmp .rowdone
 .have:
-    mov ax, [si]                    ; AL = AND, AH = OR of this byte
+    mov ax, [es:si]                 ; AL = AND, AH = OR of this byte
     cmp ax, 00ffh
     jne .doit
     add si, 2                       ; it changes nothing: not a byte of code
@@ -555,12 +570,12 @@ xs_compile:
 .doit:
     cmp cx, 2
     jb .byteop
-    mov bx, [si + 2]
+    mov bx, [es:si + 2]
     cmp bx, 00ffh
     je .byteop                      ; the next one changes nothing: this one alone
     ; ---- two neighbours: one word op
-    mov [cs:xs_w0], ax
-    mov [cs:xs_w1], bx
+    mov [xs_w0], ax
+    mov [xs_w1], bx
     cmp al, 0
     jne .wmix
     cmp bl, 0
@@ -568,9 +583,9 @@ xs_compile:
     XE 26h                          ; both opaque: mov word [es:di+d], OR0 | OR1 << 8
     XE 0c7h
     call xs_mod
-    mov al, [cs:xs_w0 + 1]
+    mov al, [xs_w0 + 1]
     stosb
-    mov al, [cs:xs_w1 + 1]
+    mov al, [xs_w1 + 1]
     stosb
     jmp .wdone
 .wmix:
@@ -578,17 +593,17 @@ xs_compile:
     XE 8bh
     call xs_mod
     XE 25h                          ; and ax, AND0 | AND1 << 8
-    mov al, [cs:xs_w0]
+    mov al, [xs_w0]
     stosb
-    mov al, [cs:xs_w1]
+    mov al, [xs_w1]
     stosb
-    mov al, [cs:xs_w0 + 1]
-    or al, [cs:xs_w1 + 1]
+    mov al, [xs_w0 + 1]
+    or al, [xs_w1 + 1]
     jz .wstore
     XE 0dh                          ; or ax, OR0 | OR1 << 8
-    mov al, [cs:xs_w0 + 1]
+    mov al, [xs_w0 + 1]
     stosb
-    mov al, [cs:xs_w1 + 1]
+    mov al, [xs_w1 + 1]
     stosb
 .wstore:
     XE 26h                          ; mov [es:di+d], ax
@@ -600,29 +615,29 @@ xs_compile:
     sub cx, 2
     jmp .byte
 .byteop:
-    mov [cs:xs_w0], ax
+    mov [xs_w0], ax
     cmp al, 0
     jne .bmix
     XE 26h                          ; mov byte [es:di+d], OR
     XE 0c6h
     call xs_mod
-    mov al, [cs:xs_w0 + 1]
+    mov al, [xs_w0 + 1]
     stosb
     jmp .bdone
 .bmix:
     XE 26h                          ; mov al, [es:di+d]
     XE 8ah
     call xs_mod
-    cmp byte [cs:xs_w0], 0ffh
+    cmp byte [xs_w0], 0ffh
     je .bor
     XE 24h                          ; and al, AND
-    mov al, [cs:xs_w0]
+    mov al, [xs_w0]
     stosb
 .bor:
-    cmp byte [cs:xs_w0 + 1], 0
+    cmp byte [xs_w0 + 1], 0
     je .bstore
     XE 0ch                          ; or al, OR
-    mov al, [cs:xs_w0 + 1]
+    mov al, [xs_w0 + 1]
     stosb
 .bstore:
     XE 26h                          ; mov [es:di+d], al
@@ -634,15 +649,15 @@ xs_compile:
     dec cx
     jmp .byte
 .rowdone:
-    dec byte [cs:xs_crow]
+    dec byte [xs_crow]
     jnz .row
     XE 0cbh                         ; retf
-    inc word [cs:xs_ck]
-    cmp word [cs:xs_ck], XB_PHASES_C
+    inc word [xs_ck]
+    cmp word [xs_ck], XB_PHASES_C
     jb .phase
     jmp .pose
 .done:
-    mov [cs:xb_sprused], di
+    mov [xb_sprused], di
     pop ds
     RESTORE
     ret
@@ -683,58 +698,57 @@ xs_compile_v:
     SAVE
     push ds
     ; the layers' colours from the palette record's pose ink slots (after the five themes)
-    mov bx, [xb_pal]                    ; (the copy in our segment: xb_font_copy)
+    mov bx, [xb_pal]                ; (the copy in our segment: xb_font_copy)
     add bx, 240
     mov al, [bx]
-    mov [cs:xs_vink], al
+    mov [xs_vink], al
     mov al, [bx + 2]
-    mov [cs:xs_vink + 2], al
+    mov [xs_vink + 2], al
     mov al, [bx + 3]
-    mov [cs:xs_vink + 3], al
-    push es
-    pop ds                          ; DS = ES = the claim
-    mov word [cs:xs_hp], xs_hot_v
+    mov [xs_vink + 3], al
+                                    ; DS = ours, ES = the claim (xs_compile's reason)
+    mov word [xs_hp], xs_hot_v
 .pose:
-    mov bx, [cs:xs_hp]
-    mov al, [cs:bx]
+    mov bx, [xs_hp]
+    mov al, [bx]
     cmp al, 0ffh
     je .done
-    inc word [cs:xs_hp]
+    inc word [xs_hp]
     xor ah, ah
     shl ax, 1
     shl ax, 1                       ; pose * 4
-    mov [cs:xs_cp], ax
-    mov word [cs:xs_ck], 0
+    mov [xs_cp], ax
+    mov word [xs_ck], 0
 .phase:
     cmp di, XS_CLAIM_V * 1024 - 2048
     ja .done
-    mov bp, [cs:xs_cp]
-    add bp, [cs:xs_ck]
+    mov bp, [xs_cp]
+    add bp, [xs_ck]
     shl bp, 1
     mov si, bp
-    mov si, [si]                    ; the blob
-    mov [cs:xs_ctab + bp], di
-    mov byte [cs:xs_crow], 0        ; the layer
-    mov word [cs:xs_w0], 0ffffh     ; the last mask written: none
+    mov si, [es:si]                 ; the blob
+    mov [ds:xs_ctab + bp], di
+    mov byte [xs_crow], 0           ; the layer
+    mov word [xs_w0], 0ffffh        ; the last mask written: none
 .layer:
-    lodsw
+    es lodsw
     mov cx, ax                      ; the layer's record count
 .rec:
     jcxz .layerend
-    lodsw
+    es lodsw
     mov bx, ax                      ; the offset from the box's first byte
-    lodsb                           ; the mask
+    es lodsb                        ; the mask
     xor ah, ah
-    cmp ax, [cs:xs_w0]
+    cmp ax, [xs_w0]
     je .samemask
-    mov [cs:xs_w0], ax
+    mov [xs_w0], ax
     mov ah, al
     XE 0b0h                         ; mov al, MASK
     mov al, ah
     stosb
     XE 0eeh                         ; out dx, al
 .samemask:
-    cmp byte [cs:xs_crow], 1
+    cmp byte [xs_crow], 1
     jne .imm
     XE 88h                          ; mov al, bl
     XE 0d8h
@@ -742,9 +756,9 @@ xs_compile_v:
 .imm:
     XE 0b0h                         ; mov al, COLOUR of the layer
     push bx
-    mov bl, [cs:xs_crow]
+    mov bl, [xs_crow]
     xor bh, bh
-    mov al, [cs:xs_vink + bx]
+    mov al, [xs_vink + bx]
     pop bx
     stosb
 .xchg:
@@ -764,16 +778,16 @@ xs_compile_v:
     dec cx
     jmp .rec
 .layerend:
-    inc byte [cs:xs_crow]
-    cmp byte [cs:xs_crow], 4
+    inc byte [xs_crow]
+    cmp byte [xs_crow], 4
     jb .layer
     XE 0cbh                         ; retf
-    inc word [cs:xs_ck]
-    cmp word [cs:xs_ck], XB_PHASES_V
+    inc word [xs_ck]
+    cmp word [xs_ck], XB_PHASES_V
     jb .phase
     jmp .pose
 .done:
-    mov [cs:xb_sprused], di
+    mov [xb_sprused], di
     pop ds
     RESTORE
     ret

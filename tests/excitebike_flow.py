@@ -679,8 +679,8 @@ def custom_disk(name, data):
     path = V.at("build/%s.img" % name)
     tmp = V.at("build/%s.dat" % name)
     open(tmp, "wb").write(data)
-    files = ["build/excbike.o88", "apps/excitebike/README.md"] + [
-        "build/excitebike-art/" + f for f in ("EXBV.GFX", "EXBC.GFX", "EXBH.GFX", "EXBSPL.VGA", "EXBSPL.CGA", "EXBSPL.HRC")]
+    # the art is parts of the package (SPEC.md 102.10): the game is one file and a README
+    files = ["build/excbike.o88", "apps/excitebike/README.md"]
     named = [V.at(f) for f in files]
     # the file must be called EXBTRACK.DAT on the volume: os88disk names a file by its base name
     real = V.at("build/%s/EXBTRACK.DAT" % name)

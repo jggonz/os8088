@@ -32,6 +32,16 @@ BANKED AND LAYERED - a base for the 286 with a 512 KB bank prefilled, its
 layer for the 486 - where the yardstick (key 0's decode modelled on each,
 SPEC.md 98.1.9) must say the 486 is the faster.
 
+Every run also takes BIGSP486 first: a layer with an XMS bank for a 486
+on top of a --frame-cap 48 base (the owner's Cowboy Bebop options, on 0.6 s
+of heavy noise). The layer's machine is a copy of the base's encoder, and it
+took the base's 47 KB record room with it, where a layer record holds
+32,760 bytes (vid.L_RECMAX) - so the first frame the bank could pay for was
+planned at 45,881 bytes and the Writer refused it, ending the encode. It
+must finish, its base must have used big super-packets, its longest layer
+record must fit, and verify_v88 must pass it; with LayerEnc._clone's
+rec_max line taken out it FAILS on "cannot fit a super-packet".
+
 --scenes is A PALETTE A SCENE WITH A LAYER (SPEC.md 98.1.3.2.3.1) alone: a
 clip of three shots (a Mandelbrot, testsrc2, Life) encoded --pixfmt vga4
 --palette colour16 --scene-palettes for the 286 at 60 KB/s, plain and with
@@ -159,6 +169,45 @@ def scenes(bad):
             bad.append("scenes: the layered play is no better")
 
 
+def bigsp486(bad, tmp):
+    """A layer under big super-packets: see the docstring's BIGSP486"""
+    src = os.path.join(tmp, "noise.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "gradients=s=640x480:c0=0x303030:c1=0x909090:speed=0.08:seed=5:"
+         "duration=0.6:rate=15", "-vf", "noise=alls=60:allf=t,format=rgb24",
+         "-c:v", "ffv1", src], check=True)
+    out = os.path.join(tmp, "bigsp486.V88")
+    try:
+        venc.encode(venc.parser().parse_args(
+            [src, out, "--quiet", "--audio", "none", "--preset", "vga4",
+             "--box", "640x400", "--screen", "640x400", "--fps", "20",
+             "--profile", "286-fast", "--disk", "468000", "--peak", "4",
+             "--bank", "2944", "--prefill", "all", "--layer-disk",
+             "1050000", "--layer-profile", "486-dx2-66", "--layer-bank",
+             "auto", "--layer-pool", "7040", "--layer-prefill", "all",
+             "--lookahead", "0", "--cut", "rank", "--frame-cap", "48",
+             "--page-ahead", "on", "--vga4-hold-score", "0", "--vga4-wm3",
+             "off", "--clip", "16"]), None)
+    except vid.V88Error as e:
+        bad.append("bigsp486: the encode ended: %s" % e)
+        return
+    r = vid.Reader(out)
+    print("   bigsp486: %d frames, base super-packets to %d sectors (cap "
+          "%d), longest layer record %d of %d bytes"
+          % (r.frames, r.spmax, r.spcap, r.lmax, vid.L_RECMAX))
+    if r.spcap <= vid.SP_MAX or r.spmax <= vid.SP_MAX:
+        bad.append("bigsp486: the base took no big super-packet (%d of %d "
+                   "sectors) - the leg tests nothing" % (r.spmax, r.spcap))
+    if not 2 <= r.lmax <= vid.L_RECMAX:
+        bad.append("bigsp486: the longest layer record is %d bytes"
+                   % r.lmax)
+    try:
+        vid.verify_v88(out)
+    except vid.V88Error as e:
+        bad.append("bigsp486: verify_v88 refuses it: %s" % e)
+
+
 def main():
     if venc.np is None or not shutil.which("ffmpeg"):
         print("   SKIP: needs ffmpeg and numpy")
@@ -171,6 +220,7 @@ def main():
             print("  - " + x)
         return 1 if bad else 0
     with tempfile.TemporaryDirectory() as tmp:
+        bigsp486(bad, tmp)
         src = os.path.join(tmp, "src.mkv")
         subprocess.run(
             ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
@@ -225,10 +275,12 @@ def main():
                 # PAGE-AHEAD AND A LAYER (98.2.1.8.3): the base built ahead
                 # on two pages, the layer for the 486 drawn on the page
                 # shown - whose model must keep both pages, or the decode
-                # ends elsewhere
+                # ends elsewhere. (--pages 2 named: the default is MAX, which
+                # a layer holds to two and a plain Mode X file takes as
+                # three, so the plain encode it is held against says 2)
                 ("page486", ["--preset", "modex", "--profile", "286-fast",
                              "--disk", str(BASE_DISK), "--page-ahead",
-                             "on"],
+                             "on", "--pages", "2"],
                  ["--layer-profile", "486-dx2-66", "--layer-disk",
                   str(LAYER_DISK)]))
         for arm, bopt, lopt in arms:

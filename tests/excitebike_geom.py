@@ -6,9 +6,10 @@
 
 --host      No emulator.  Every one of build/excitebike{,720,120,360}.img is read by
             tests/unit/t_image.py's Vol - a FAT12 walker that is deliberately not
-            os88disk's - and must carry EXACTLY the eight files of the package in one
+            os88disk's - and must carry EXACTLY the two files of the package in one
             root, every chain whole and the right length for its size, the same bytes
-            in all four geometries, and be the geometry its name says.  Negative
+            in all four geometries, and be the geometry its name says.  The six art
+            files are parts of EXCBIKE.O88 (SPEC.md 102.10), so the files are two.  Negative
             control: a copy with one FAT entry damaged must fail the same walk.
 --boot G    Boot-and-launch with that geometry's own system floppy and game floppy: 360 on
             the VGA XT, 720 on the Hercules XT with 720KB drives (the only machine here
@@ -21,7 +22,7 @@
             plays there; a SECOND window opens (the code is shared, ~10KB of splash
             and bss) and leaves too little for the game's own claims, so Enter on it
             must be REFUSED with `NOT ENOUGH MEMORY` on the glass - not the
-            `EXB?.GFX MISSING` an unrelated refusal used to print - with `xb_error` =
+            `CANNOT LOAD THE RACE` an unrelated refusal prints - with `xb_error` =
             XB_ERR_MEM and the heap exactly what it was before Enter (every claim the
             attempt made is freed).  This row also stands guard over a bug it found:
             the small (17KB) sprite claim, taken when the big one is refused, was
@@ -44,8 +45,7 @@ IMAGES = (("1440", "build/excitebike.img", 1440 * 1024, 18),
           ("720", "build/excitebike720.img", 720 * 1024, 9),
           ("1200", "build/excitebike120.img", 1200 * 1024, 15),
           ("360", "build/excitebike360.img", 360 * 1024, 9))
-FILES = ("EXCBIKE.O88", "README.MD", "EXBV.GFX", "EXBC.GFX", "EXBH.GFX",
-         "EXBSPL.VGA", "EXBSPL.CGA", "EXBSPL.HRC")
+FILES = ("EXCBIKE.O88", "README.MD")     # the art is parts of the package (SPEC.md 102.10)
 
 
 def at(p):

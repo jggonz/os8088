@@ -29,7 +29,7 @@
 %include "pxsvc.inc"                ; ...and the parts' UI services
 %include "pxanim.inc"               ; a GIF that plays (106.25)
 
-    OS88_HEADER 'PiXEL', px_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_GLYPH | OS88_F_PARTS
+    OS88_HEADER 'PiXEL', px_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_GLYPH | OS88_F_PARTS, OS88_HIGH
 
     OS88_ICON16
 %include "pxappico.inc"
@@ -52,6 +52,10 @@
     PXI_DOCGLYPH
     OS88_DOCGLYPH8_END
 
+%define OP_WANT_CSEG                ; op_cseg: a part is far-called through
+                                    ; its CODE selector (os88partsbody.inc),
+                                    ; never its data segment (KERN-MEGA-PLAN
+                                    ; 14.40)
 %include "os88parts.inc"
 
 ; --- the parts (SPEC.md 106.5) --------------------------------------------------
@@ -69,7 +73,9 @@ PXPART_WRITE equ 7                  ; SAVE AS's five writers, LINKED:
                                     ; pxwrite.asm (SPEC.md 106.24)
 PXPART_EXTRA equ 8                  ; TIFF, ICO, IFF and MacPaint, LINKED:
                                     ; pxextra.asm (SPEC.md 106.25)
-PX_NPARTS   equ 9                   ; (a decoder part is never 0: [px_kheld]
+PXPART_GFX  equ 9                   ; THE COLOUR FACE'S PICTURES, data and not
+                                    ; code: tools/pixart.py (SPEC.md 106.16)
+PX_NPARTS   equ 10                  ; (a decoder part is never 0: [px_kheld]
                                     ; 0 is "none held", SPEC.md 106.18)
 PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
                                     ; toast): px_refusal says nothing more
@@ -1908,14 +1914,16 @@ px_pcall:
     mov bl, [px_pvec]
     cmp bl, [es:PXP_NVEC]
     jae .badp
-    mov dx, cs                      ; rule 2: the package's segment, stamped
-    mov [es:PXP_PKG], dx            ; before EVERY call
+    call px_pstamp                  ; rule 2: PXP_PKG, PXP_PKGD and
+                                    ; PXP_SELF, stamped before EVERY call
     xor bh, bh
     shl bx, 1
     mov dx, [es:PXP_VEC + bx]
     mov [px_pfar], dx
-    mov [px_pfar + 2], es
-    pop es
+    mov al, [px_ppart]
+    call op_cseg                    ; the part's CODE selector: a far call
+    mov [px_pfar + 2], ax           ; through its data segment is a #GP a
+    pop es                          ; call on kern_mega
     inc word [px_pcalls]
     mov byte [px_pfail], 0          ; from here an answer is the PART's
     call far [px_pfar]              ; DS = ours, CS = the part
@@ -2009,18 +2017,20 @@ px_wcall:
     push si
     push es
     mov dl, bl
+    mov dh, al
     call op_seg
     or ax, ax
     jz .no
     mov es, ax
-    mov ax, cs
-    mov [es:PXP_PKG], ax            ; stamped before EVERY call (106.5)
+    call px_pstamp                  ; stamped before EVERY call (106.5)
     mov bl, dl
     xor bh, bh
     shl bx, 1
     mov ax, [es:PXP_VEC + bx]
     mov [px_wfar], ax
-    mov [px_wfar + 2], es
+    mov al, dh
+    call op_cseg                    ; (px_pcall's reason)
+    mov [px_wfar + 2], ax
     pop es
     call far [px_wfar]
     jmp short .out
@@ -2032,6 +2042,26 @@ px_wcall:
     pop si
     pop dx
     pop bx
+    ret
+
+; px_pstamp - ES = a part's data segment: its header's three segment words,
+; stamped before every call into it (pxpart.inc rules 2 and 6) - PXP_PKG
+; the package's CODE (a part far-calls the services through it), PXP_PKGD
+; its DATA, PXP_SELF the part's own data - and [px_dsel], the package's data
+; segment for the services a part calls back into (px_ks_*), which enter
+; with only CS. Every one is CS's own value on a real-mode kernel; on
+; kern_mega a code selector takes no store (KERN-MEGA-PLAN 14.40). Preserves
+; all
+px_pstamp:
+    push ax
+    mov ax, cs
+    mov [es:PXP_PKG], ax
+    mov ax, ds
+    mov [es:PXP_PKGD], ax
+    mov [px_dsel], ax
+    mov ax, es
+    mov [es:PXP_SELF], ax
+    pop ax
     ret
 
 ; px_fpart - AL = a PXF_*: AL = the decoder part that reads it, 0 none. A
@@ -3507,7 +3537,7 @@ px_lab_full:
 ; finds the picture and the caption by the button's index ----------------------
 px_lab_col: times PX_NB dw px_bpaint
 
-; --- the colour face's pictures, PIXEL.GFX (SPEC.md 106.16) -------------------
+; --- the colour face's pictures, part 9 (SPEC.md 106.16) ----------------------
 ; tools/pixart.py draws them, and compares these numbers with its own
 ; (--check-asm): the toolbar's faces are PXA_TBH rows of their own widths
 ; (PXA_TABLES, PX_B_* order then Stop), PXA_TBS states each - up, pressed,
@@ -3547,9 +3577,10 @@ PXA_TLOFF   equ PXA_O
     PXA_TABLES 40, 40, 40, 40, 56, 64, 40, 40, 48, 64, 40
 PXA_SIZE    equ PXA_TLOFF + PXA_TLN * PXA_TLS * PXA_TLFACE
 %if PXA_SIZE != 27648
-  %error "PIXEL.GFX is 27,648 bytes (tools/pixart.py)"
+  %error "the colour face's pictures are 27,648 bytes (tools/pixart.py)"
 %endif
-pxa_name:   db 'PIXEL.GFX', 0
+PXA_KB      equ (PXA_SIZE + 1023) / 1024    ; what part 9 holds once fetched
+PXA_ROW     equ op_table + OP_T_ROWS + PXPART_GFX * OP_ROW  ; ...and its row
 
 ; --- each button's kind: OS88UI_IMG for a picture, PX_BK_PIC when it needs a
 ; picture and is greyed without one (px_flags) ---------------------------------
@@ -3916,6 +3947,7 @@ px_s_r11:   db 'too big to unpack', 0
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 6 editing (106.24)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 7 Save As's writers (106.24)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 8 TIFF, ICO, IFF, MAC (106.25)
+      OS88_PART OP_ASSET, OP_COMP | OP_LAZY ; 9 the colour face (106.16)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -4218,7 +4250,7 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_chfrac, 2
     PXVAR px_chint, 2
     PXVAR px_crseg, 2
-    PXVAR px_ccnt, 2
+    PXVAR px_cend, 2
     PXVAR px_cdep, 1
     PXVAR px_useP, 1
     PXVAR px_rx0, 2
@@ -4306,12 +4338,16 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_bvpic, 2               ; ...its picture and caption...
     PXVAR px_bvcap, 2
     PXVAR px_bvy, 2                 ; ...and the next row
-    PXVAR pxa_seg, 2                ; PIXEL.GFX's claim, or 0
+    PXVAR pxa_seg, 2                ; part 9's segment (the pictures), or 0
+    PXVAR pxa_drop, 1               ; ...1: dropped by an open's pressure, so
+                                    ; the open's end asks for them again
     ; the decoder parts (SPEC.md 106.18)
     PXVAR px_k, PXK_SZ              ; THE CONTEXT, both vectors' DI
     PXVAR px_kheld, 1               ; the decoder part held, 0 none
     PXVAR px_pfail, 1               ; px_pcall's answer was its own
     PXVAR px_wfar, 4                ; px_wcall's far vector
+    PXVAR px_dsel, 2                ; our DATA segment, for the services a
+                                    ; part calls (px_pstamp)
     PXVAR px_dsc, 8                 ; the decoder scratch, paragraphs, at
                                     ; each scale; FFFFh not usable (106.19)
     PXVAR px_hcap, 2                ; the head claim's bytes, a cluster

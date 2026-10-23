@@ -1,0 +1,7 @@
+# fixture level 2 again, nuked EARLY: seven of its twelve are out at frame 80,
+# so the 1991 game's NUKE GLITCH has something to move - MaxNumLemmings
+# becomes the seven released (Lemmix src/Game.pas:3993), the hatch stops, and
+# the finish test counts against seven (SPEC.md 116.8). The trace's ninth
+# field is MaxNumLemmings. FRAME VERB ARG as level0.txt; `n` is the nuke
+# pressed MID-FRAME, which the package queues to the next frame's start.
+80 n 0

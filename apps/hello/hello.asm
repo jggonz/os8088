@@ -24,7 +24,7 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'HELLO', hl_entry
+    OS88_HEADER 'HELLO', hl_entry, 0, OS88_HIGH | OS88_HIGHMEM
 
 HL_CONT_W equ 238                   ; content width: 240 outer - 2px borders
 HL_CONT_H equ 71                    ; content height: 90 outer - TITLE_H - 1

@@ -39,7 +39,8 @@
 ; =============================================================================
 
 %ifdef FCP_MOD
-MOD_NIMG    equ 5               ; SMALL: file operations, no hibernate, and
+MOD_SER     equ 5
+MOD_NIMG    equ 6               ; SMALL: file operations, no hibernate, and
                                 ; no Dock module (SPEC.md 30.5)
 %else
 MOD_DOCK    equ 4
@@ -47,7 +48,8 @@ MOD_EXT     equ 5               ; ...and the extended desktop (SPEC.md 39.19.6)
 MOD_WIN     equ 6               ; ...and the Windows theme's chrome (76.14)
 MOD_DESK    equ 7               ; ...and the desk layer's verbs (11.103.10)
 MOD_STIKM   equ 8               ; ...and the Sticky Apps menu (SPEC.md 110.12)
-MOD_NIMG    equ 9               ; BIG: hibernate, resident file operations,
+MOD_SER     equ 9
+MOD_NIMG    equ 10              ; BIG: hibernate, resident file operations,
                                 ; the optional Dock, EXTD.DRV, WIN95.DRV,
                                 ; DESK.DRV and STIKMENU.DRV
 %endif
@@ -121,7 +123,11 @@ MOD_MAX_KB  equ 16              ; the biggest module image we will claim
 ; are known. Summed rather than hashed: the point is that two builds of one
 ; commit differ, and a section size differing by ONE byte moves every address
 ; above it.
+%ifdef KERN_MEGA                ; ...and `.mega`'s, or code moving from `.text`
+MOD_STAMP   equ (KTEXT_SIZE + KBSS_SIZE + COLD_SIZE + MEGA_SIZE + KLOW_SIZE) & 0xFFFF
+%else                           ; to `.mega` would keep the sum and move every
 MOD_STAMP   equ (KTEXT_SIZE + KBSS_SIZE + COLD_SIZE + KLOW_SIZE) & 0xFFFF
+%endif                          ; offset (KERN-MEGA-SEGMENTS-PLAN 3.5)
 
 ; --- the table row, stride MODR_SIZE -----------------------------------------
 MODR_SEG    equ 0               ; dw: the segment it is loaded at, 0 = not
@@ -198,6 +204,7 @@ mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
             dw BUILD_NUM        ; MOD_H_BUILD
             dw MOD_STAMP        ; MOD_H_STAMP
 
+mod_f_serial: db 'SERIAL.DRV',0 ; SPEC.md 115: explicit Connect loads it
 mod_tab:
     dw 0, mod_f_ctrl            ; MOD_CTRL
     dw 0, mod_f_fmt             ; MOD_FMT
@@ -231,9 +238,13 @@ mod_r_dock:
     dw 0, mod_f_desk            ; MOD_DESK, kern_big's alone (SPEC.md 11.103.10)
     dw 0, mod_f_stikm           ; MOD_STIKM, kern_big's alone (SPEC.md 110.12)
 %endif
+    dw 0, mod_f_serial          ; MOD_SER, both builds (SPEC.md 115)
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
 %endif
+mod_tab_end:                    ; (a label and no byte: tools/os88rom.py
+                                ; counts the ROWS by it, MOD_SETS included,
+                                ; because the ROM answers per row)
 
 ; mod_fpt - each module's slot block by id, and one word more: where the LAST
 ; block ends. Emitted by kernel.asm's MODFP macro beside the blocks themselves
@@ -380,12 +391,26 @@ mod_need:
 
     call drv_vol_bank                      ; this goes to the system volume to find the
                                 ; file, and the user may have been anywhere
+%ifdef ROM_ADOPT
+    ; THE ROM FIRST (docs/plans/ROM-PLAN.md 4.3, SPEC.md 2.10.5): a ROM that
+    ; adopted this kernel may carry the image too, cut from the same build, so
+    ; the load is a copy out of F4000-FDFFF and needs no system disk at all -
+    ; which on a one-drive machine is the difference between a Save As onto a
+    ; data floppy and a refusal. NO TEST OF [api_coldseg] FIRST: a kernel
+    ; whose `.cold` is in RAM has rom_mfp at rom_none, which refuses SIZE, so
+    ; the disk arm is reached the same way a ROM that holds no copy sends it
+    ; there (kernel size pass 12, -10 with the COPY below)
+    mov al, ROMF_SIZE
+    call far [rom_mfp]          ; CF = 0: AX = the image's bytes in the ROM
+    jnc .sized
+%endif
     call drv_mounted           
     jc .fail
 
     mov si, [bx+MODR_FILE]
     call drv_find                             ; AX = the file's size, refused over 64KB
     jc .fail
+.sized:
     cmp ax, MOD_H_ENT + 2       ; a header with at least one entry
     jb .fail
     mov bp, ax                  ; THE FILE'S BYTE SIZE, in the register this
@@ -416,10 +441,20 @@ mod_need:
     push bx
     mov es, dx                  ; ...and NO second `mov si, [bx+MODR_FILE]`:
     mov cx, bp                  ; SI is still the one loaded for drv_find, and
-    xor bx, bx                  ; mem_claim_x banks SI/DI around everything
-                                ; including the compaction (memory.inc:520)
+%ifdef ROM_ADOPT                 ; mem_claim_x banks SI/DI around everything
+    mov al, ROMF_COPY           ; including the compaction (memory.inc:520).
+    call far [rom_mfp]          ; ...or the ROM has the bytes: the first CX
+    jnc .rdone                  ; of the image to ES:0, and the read's own
+                                ; answer, AX = CX and DX = 0. A ROM that holds
+                                ; none - and rom_none - refuse with every
+                                ; register kept, so the disk read below gets
+                                ; the SI, CX and ES it always had. SIZE said
+                                ; yes iff COPY will, so no mark is carried
+%endif
+    xor bx, bx
     xor dx, dx                  ; DX:CX = the capacity, DX:AX the answer
     call dskw_read_x                         ; the whole file, by name, on the system disk
+.rdone:
 %ifdef OS88_SHORTCUTS
     mov byte [dskw_trunc], 0    ; ...ONE read's worth, and spent whatever it
 %endif                          ; answered
@@ -430,6 +465,27 @@ mod_need:
 
     call mod_check
     jc .freefail
+%ifdef KERN_MEGA
+    call mod_hi                 ; ...and above 1MB, if it may go (13.5)
+%endif
+%ifdef ROM_ADOPT
+    ; A MODULE ON A ROM MACHINE (docs/plans/ROM-PLAN.md 3.4.4) far-calls
+    ; `.cold` at COLD_RAM, the segment it was assembled against, and `.cold`
+    ; runs at the ROM's. The ROM carries each module's list of those words and
+    ; re-points them; it checks every one names COLD_RAM first, so a module
+    ; it was not cut against is refused here rather than run. BX is the ROW -
+    ; NOT DI's id, which mod_check has just clobbered (it is documented to,
+    ; and the first kernel ROM was handed 8C58 as a module number) - and the
+    ; ROM knows mod_tab, so it derives the id itself. BP is the bytes the read
+    ; brought in (the settings core reads a PART) - and the door takes BX and
+    ; BP as they stand, loading the claim out of the row itself (kernel size
+    ; pass 12). On a kernel whose `.cold` is in RAM rom_none answers FIX with
+    ; CF = 0 and nothing touched: there is nothing to re-point. ES and AX are
+    ; dead here (mod_check clobbers both, kretc_es restores ES)
+    mov al, ROMF_FIX            ; ...whichever source the bytes came from: the
+    call far [rom_mfp]          ; ROM keeps its copies as the build cut them
+    jc .freefail
+%endif
 
 %ifdef MOD_BSS
     ; --- the claim's TAIL is the module's own bss, and it starts zeroed -----
@@ -559,7 +615,20 @@ mod_check:
     cmp ax, bp
     jae .badarm
     mov [di], ax                ; offset...
+%ifdef KERN_MEGA
+    push ax                     ; kern_mega: the slot is a FAR CALL's, so it
+    mov ax, es                  ; holds the image's CODE alias (mega.inc) -
+    cmp byte [ss:mega_pm], 0    ; safe to store rather than derive at every
+    je .rmseg                   ; call, because a module image never moves
+    shr ax, 1                   ; (memory.inc pins MEM_K_MOD). In REAL MODE
+    shr ax, 1                   ; the segment, and mega_enter converts what
+    or al, 4                    ; the boot armed (mega_mods_fix)
+.rmseg:
+    mov [di+2], ax
+    pop ax
+%else
     mov [di+2], es              ; ...and segment, which ES IS: it was loaded
+%endif
                                 ; from [bx+MODR_SEG] at the top of this
                                 ; routine and no segment register is written
                                 ; in between
@@ -575,6 +644,158 @@ mod_check:
     stc
     ret
 
+%ifdef KERN_MEGA
+; -----------------------------------------------------------------------------
+; mod_hi - kern_mega in protected mode: a module the census CLEARED goes above
+; 1MB the moment it is loaded and checked (KERN-MEGA-PLAN 13.5). BX = its row,
+; BP = the bytes read; the image is armed with its conventional alias. The
+; whole claim - image and the bss past it - is copied into a code/data pair
+; (mega_modhif), every slot naming the old alias is re-armed with the pair's
+; code selector, the conventional claim is freed and MODR_SEG holds the code
+; selector, whose TI bit says "above 1MB" to mod_free_row. Any refusal leaves
+; it where it is, loaded and working. Clobbers AX, CX, DX, DI
+;
+; MOD_HIOK is the census, and since KERN-MEGA-PLAN 14.47 it is EVERY module.
+; What kept four of them low was a buffer of the image's own handed to the
+; file layer, which normalised ES and converted it with mega_s2segf - FFFF
+; above 1MB. Item 77 taught the file layer exactly that case (dskw_hiseg: the
+; selector is kept and the OFFSET moves, a sector at a time through the
+; scratch), and the disk layer bounces any LDT selector through dsk_secbuf
+; (dsk_runcap), so a module's buffer above 1MB reaches the drive the way a
+; package's does. The rest of the census holds: no module hands a reflected
+; BIOS call a buffer of its own (FORMAT.DRV's address fields and every raw
+; sector DISKOPS.DRV moves are LOW_SEG's dsk_secbuf, the cloner's windows
+; conventional claims), HIBER.DRV's real-mode code is COPIED out of the image
+; to the text page before it runs (kds_stub, the park stub via mega_dstubup),
+; and every place a module stores its own CS it does so after this move -
+; the wake address (mega_hbwk, KDL_WAKE, HBP_WAKE), DOCK.DRV's dkv and
+; WIN95.DRV's thv. DESK.DRV's one segment sum is its LIB verb, which asks
+; mega_dklibf above 1MB. A module loaded in REAL mode, at the boot, is moved
+; at the switch by mod_hiboot below.
+%ifdef OS88_SHORTCUTS
+MOD_HIOK_SETS equ 1 << MOD_SETS ; CTRL.DRV's settings core, the same file
+%else
+MOD_HIOK_SETS equ 0
+%endif
+%ifdef KERN_BIG
+MOD_HIOK equ (1 << MOD_CTRL) | (1 << MOD_FMT) | (1 << MOD_DISKOPS) | (1 << MOD_HIBER) | (1 << MOD_DOCK) | (1 << MOD_EXT) | (1 << MOD_WIN) | (1 << MOD_DESK) | (1 << MOD_STIKM) | MOD_HIOK_SETS
+%else
+MOD_HIOK equ 0
+%endif
+%if MOD_MAX_KB > 63
+  %error "mod_hi copies a whole claim through one 64KB descriptor"
+%endif
+mod_hi:
+    cmp byte [ss:mega_pm], 0
+    je .out
+    mov cx, bx
+    sub cx, mod_tab
+    shr cx, 1
+    shr cx, 1                   ; CL = the id
+    mov ax, 1
+    shl ax, cl
+    test ax, MOD_HIOK
+    jz .out
+    mov ax, bp
+%ifdef OS88_SHORTCUTS
+    cmp bx, mod_tab + MOD_SETS * MODR_SIZE
+    jne .whole                  ; the settings core READ its first MODS_SIZE
+    mov ax, MODC_SIZE           ; bytes into a claim of the WHOLE image's
+.whole:                         ; (mod_need's .whole): its bss tail, cpc_buf,
+%endif                          ; is past what was read and inside the pair
+    call mem_bytes_kb_x         ; the claim, as mod_need sized it
+    mov cl, 10
+    shl ax, cl
+    xchg ax, cx                 ; CX = its bytes
+    mov ax, [bx+MODR_SEG]
+    push ax
+    call MEGA_SEL_CODE:mega_modhif ; AX = the pair's code selector
+    pop dx                      ; DX = the conventional segment
+    jc .out
+    push dx
+    push ax
+    shr dx, 1
+    shr dx, 1
+    or dl, 4                    ; DX = the alias mod_check armed with
+    call mod_fpr                ; DI = the slot block, CX = its count
+    pop ax
+    jcxz .free
+.slot:
+    cmp [di+2], dx
+    jne .next
+    mov [di+2], ax              ; ...re-armed with the pair's code selector
+.next:
+    add di, 4
+    loop .slot
+.free:
+    pop dx                      ; the conventional segment
+    mov [bx+MODR_SEG], ax       ; MODR_SEG = the selector
+    push si
+    mov si, [bx+MODR_FILE]      ; ...and where it went, to the debug port
+    call MEGA_SEL_CODE:mega_modsayf
+    pop si
+    push bx
+    mov bx, MEM_K_MOD
+    call mem_free_x
+    pop bx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mod_hiboot - once, right after mega_enter, from the foot of drv_hiboot_f:
+; every module the BOOT loaded in real mode goes above 1MB as mod_need would
+; have sent it there in protected mode (KERN-MEGA-PLAN 14.47).
+; mega_mods_fix has armed its slots with its conventional CODE ALIAS, which is
+; exactly what mod_hi re-arms; what mod_hi cannot know is the far pointers a
+; module stored of ITSELF while it was hooked in real mode, and those are the
+; two tables mega_mods_fix already converts (dkv, thv) - so the alias they
+; hold now becomes the pair (mega_modvfixf). Nothing else can hold the alias:
+; nothing below ui_task has run a task, so no module frame is on any stack.
+; BP is the image's own size off its header, which is what mod_need's read
+; would have been (the settings core's MODS_SIZE is mod_hi's own case). A
+; module mod_hi refuses stays where it is, as it always did. Clobbers nothing
+; -----------------------------------------------------------------------------
+mod_hiboot:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push bp
+    push es
+    mov bx, mod_tab
+.l:
+    mov ax, [bx+MODR_SEG]
+    or ax, ax
+    jz .n
+    test al, 4
+    jnz .n                      ; a selector: already above 1MB
+    mov es, ax                  ; (512-aligned, so a GDT identity selector)
+    mov bp, [es:MOD_H_IMG]      ; ...the image's bytes, as the read had them
+    push ax
+    call mod_hi
+    pop ax
+    mov dx, [bx+MODR_SEG]
+    cmp dx, ax
+    je .n                       ; refused: it stays low, hooks and all
+    shr ax, 1
+    shr ax, 1
+    or al, 4                    ; AX = the alias the tables hold
+    call MEGA_SEL_CODE:mega_modvfixf
+.n:
+    add bx, MODR_SIZE
+    cmp bx, mod_tab_end
+    jb .l
+    pop es
+    pop bp
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; mod_disarm - point one module's slots back at mod_gone (module internal)
 ; in:  BX = the row
@@ -584,9 +805,16 @@ mod_check:
 ; -----------------------------------------------------------------------------
 mod_disarm:
     call mod_fpr                ; DI = the block, CX = its count
-.slot:
-    mov word [di], mod_gone
-    mov word [di+2], COLD_SEG
+    pushf                       ; NO TORN SLOT: a drop can run on a WORKER
+    cli                         ; (inst_task_die -> desk_drop_x) while the UI
+    call .slot                  ; task far-calls a slot with no lock held
+    popf                        ; (cur_shape_pass's DKD_HOVER), and mod_gone's
+    ret                         ; offset in the IMAGE's segment is garbage
+    nop                         ; PARITY PAD, never executed: dsk_xfer,
+                                ; dsk_runcap, dsk_next_clus_x are hot below
+.slot:                          ; a CALLED loop, not a fall-through:
+    mov word [di], mod_gone     ; mod_init_x enters here with its own DI/CX
+    COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
     add di, 4
     loop .slot
     ret
@@ -610,6 +838,19 @@ mod_free_row:
     call mod_disarm             ; mod_disarm preserves BX since it stopped
     xor dx, dx                  ; forming the id, and READ-AND-CLEAR is one
     xchg dx, [bx+MODR_SEG]      ; instruction on the 8086 - DX comes out the
+%ifdef KERN_MEGA
+    test dl, 4                  ; ABOVE 1MB (mod_hi): a selector, whose
+    jz .conv                    ; block and pair go back to the pool - and
+    xchg ax, dx                 ; DESK.DRV's library selector with them
+    call MEGA_SEL_CODE:mega_hifreef
+%ifdef KERN_BIG
+    cmp bx, mod_tab + MOD_DESK * MODR_SIZE
+    jne .out
+    call KERNEL_SEG:mega_dklibfree
+%endif
+    ret
+.conv:
+%endif
     mov bx, MEM_K_MOD           ; old segment and the word is left 0. NO bank
     call mem_free_x             ; round BX either: neither caller reads it
 .out:                           ; after the call - mod_need's .freefail falls
@@ -660,6 +901,7 @@ mod_drop:
 ; 0. mod_need cannot be trusted to be the only door, because a thunk with the
 ; test written the wrong way round still assembles.
 ; -----------------------------------------------------------------------------
+%ifndef KERN_SMALL              ; (kern_small writes it out in the blob, kmain_o)
 mod_init_x:
     mov di, mod_fp              ; ONE PASS over the whole array. The row walk
     mov cx, MOD_NSLOT           ; existed only to reach mod_fp - mod_disarm
@@ -674,6 +916,7 @@ mod_init_x:
                                 ; every boot, and this routine's ONE caller is
                                 ; kmain - Chip > Restart being `int 19h`, the
                                 ; BIOS bootstrap, which re-loads the image.
+%endif
 
 section .cold                   ; the far entry, for kmain
 

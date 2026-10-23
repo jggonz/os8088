@@ -123,8 +123,8 @@ vmm_drn     db 0                ; ...and its drain counter. A byte and not a
 vmm_dsp:
     push ds
     push es
-    push cs
-    pop  es                     ; ES = KERNEL_SEG: what the image reads the
+    KES
+                                ; ES = KERNEL_SEG: what the image reads the
                                 ; things it was handed through
     mov  bp, [es:vmm_row+DRVR_ENT]
     mov  ds, [es:vmm_row+DRVR_SEG]

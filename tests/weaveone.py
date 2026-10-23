@@ -42,8 +42,8 @@ MartyPC, on `os8088_5150_cga_gla_256k` - a GLaBIOS machine, because a machine
 asking for IBM's ROM cannot boot in this tree (tools/martypc/build.sh) and a
 gate that only runs where a licensed ROM happens to be is a gate that quietly
 does not run. `make xt-weave-256` is the same question on 86Box and is MANUAL
-evidence: 86Box has no automation socket (docs/TESTING.md), so nothing here
-can rest on it.
+evidence: no row launches 86Box (tools/os88box.py could - docs/86BOX.md),
+so nothing here rests on it.
 
 THE SECOND OPEN NEEDS THE FIRST APP MOVED OUT OF THE WAY, and that is a fact
 about the desktop rather than a trick: WEAVE opens a window that fills the

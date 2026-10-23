@@ -53,9 +53,10 @@
  * would draw the whole screen again (a full TE screen is 26 calls / 1,903
  * cells - 1.9 s on the target).
  *
- * The show is module code (ovl_*, SPEC.md 73.14): once per command, and
- * 'the module refused' (a disk without RUNCPM.OVL, toasted by cc_ovneed)
- * means the panel does not open - the machine is not paused, nothing to
+ * The show is module code (ovl_*, SPEC.md 73.14): once per command. The
+ * module is an eager part read at launch (73.14.2), so it is refused only
+ * to a worker, which never shows the panel; the 0 is kept as the contract
+ * says - the panel does not open, the machine is not paused, nothing to
  * take down. The close and the hit test are resident: a dozen compares.
  * ==========================================================================*/
 

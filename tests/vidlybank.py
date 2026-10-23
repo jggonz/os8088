@@ -19,6 +19,15 @@ the slots and the bank with the whole layer; the play reaches the end and
 DRAWS EVERY LAYER RECORD, none missed - the slots fed from the bank as the
 hook let them go (vp_lydrain), copied down out of XMS.
 
+THE BASE IS HELD IN PLACE (98.3.18.14) on QEMU's 386 - the shipped choice,
+a layer beside it - and the row asserts it ([vp_xip] 1 at the prefill).
+That took two fixes: vp_lyown, the layer's own claim beside an in-place
+ring, stored the claim's SEGMENT as its slot count ([vp_lyns] read 15072),
+and an in-place hold's fill read nothing off the disk, so the layer was
+never timed and so never read ("Layer off: not timed") - vp_xfillt reads
+and times it while the verdict is owed. `--copy` is the copying base, the
+gate's A/B ([vp_noinp] = 1 before Play), so both paths stay gated.
+
 ARM nobank: the NEGATIVE CONTROL - the bank's slots zeroed before Play
 (vp_lyxn 0), so the prefill fills the two slots and nothing more. After the
 swap the layer's reader finds no disk and stops, and the play must draw
@@ -71,6 +80,9 @@ def clip(tmp):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", choices=("bank", "nobank"), default="bank")
+    ap.add_argument("--copy", action="store_true",
+                    help="the base copying ([vp_noinp] = 1): the A/B of the "
+                         "base held in place (98.3.18.14)")
     a = ap.parse_args()
     if not shutil.which("ffmpeg"):
         print("   SKIP: needs ffmpeg")
@@ -150,12 +162,13 @@ def main():
 
         def state():
             return ("done=%d err=%d on=%d got=%d mis=%d skp=%d rd=%d use=%d "
-                    "ns=%d xn=%d xc=%d xq=%d eof=%d xon=%d xfull=%d"
+                    "ns=%d xn=%d xc=%d xq=%d eof=%d xon=%d xfull=%d xip=%d"
                     % (rw("vp_done"), rb("vp_err"), rb("vp_lyon"),
                        rw("vp_lygot"), rw("vp_lymis"), rw("vp_lyskp"),
                        rw("vp_lyrd"), rw("vp_lyuse"), rw("vp_lyns"),
                        rw("vp_lyxn"), rw("vp_lyxc"), rb("vp_lyxq"),
-                       rb("vp_lyeof"), rb("vp_xon"), rb("vp_xfull")))
+                       rb("vp_lyeof"), rb("vp_xon"), rb("vp_xfull"),
+                       rb("vp_xip")))
         wait(lambda: rb("vp_loaded") == 1, "the clip's header", 30)
         print("   opened: %s; lysp %08x bank %d KB prefill %04x"
               % (state(), struct.unpack("<I", q.read(base + syms["vp_lysp"],
@@ -169,6 +182,8 @@ def main():
         if a.arm == "nobank":
             wb("vp_lyxn", b"\0\0")
         wb("vp_pfwait", b"\1")
+        if a.copy:
+            wb("vp_noinp", b"\1")
         q.hmp("sendkey p")
         wait(lambda: rb("vp_pfly") == 1 and
              rw("vp_lyrd") - rw("vp_lyuse") + rw("vp_lyxc") >=
@@ -176,6 +191,10 @@ def main():
              "the layer's prefill to fill", 120)
         os88qemu.pace(q, 0.5)
         print("   prefilled: %s" % state())
+        if rb("vp_xip") != (0 if a.copy else 1):
+            sys.exit("vidlybank: the base %s in place, not %s (%s)"
+                     % ("went" if rb("vp_xip") else "did not go",
+                        "copying" if a.copy else "in place", state()))
         q.hmp("change floppy1 %s raw" % blank)
         os88qemu.pace(q, 0.5)
         wb("vp_pfwait", b"\0")

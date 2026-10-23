@@ -137,13 +137,16 @@ tk_r_setup:
     mov ax, TK_SHKB
     call OSAPI_MEM_CLAIM            ; 32KB, and the kernel frees it with the
     jc .noshadow                    ; instance (SPEC.md 50.3) - no teardown
-%endif
-    mov [tk_shseg], dx              ; hook of our own, which is what makes the
-.haveshadow:                        ; reuse above the whole of the lifetime
-    mov [tk_tseg], dx
-    add dx, TK_SHSEG / 16           ; the template - the claim's second half on
-    mov [tk_tmseg], dx              ; the shipped build, its SPAN POOL on the
-                                    ; small one (SPEC.md 85.3.5/85.3.5.1)
+%endif                              ; hook of our own
+    test dl, 4                      ; A SELECTOR - kern_mega put the claim
+    jnz .tmown                      ; above 1MB (OS88_HIGHMEM) - is named by
+    mov ax, dx                      ; nothing a segment add can reach, so the
+    add ax, TK_SHSEG / 16           ; template is a claim of its own there.
+.tmat:                              ; Otherwise it is the claim's second half
+    mov [tk_tmseg], ax              ; on the shipped build and its SPAN POOL
+    mov [tk_shseg], dx              ; on the small one (SPEC.md 85.3.5/
+.haveshadow:                        ; 85.3.5.1), set ONCE with the claim -
+    mov [tk_tseg], dx               ; the reuse above is the whole lifetime
 %ifdef APP_SMALL
     mov al, [tk_shkb]               ; ...and how much pool there is, which is
     mov ah, 0                       ; the rung the claim came off
@@ -170,6 +173,32 @@ tk_r_setup:
 .noshadow:
     stc
     ret
+; THE CLAIM IS A SELECTOR (kern_mega, docs/plans/KERN-MEGA-PLAN.md 13.6): a
+; data segment over EXACTLY the KB asked, so `dx + 1000` is not its second
+; half but some other descriptor, and the template takes a claim of its own.
+; The shadow's claim keeps its size, because the shipped build's device-row
+; table is at TK_DEVOFS in its tail and the blit reads it at that constant.
+; A conventional claim never comes here (512-aligned: bit 2 clear), so
+; kern_big's layout, and every frame on it, is what it was.
+.tmown:
+    push dx
+%ifdef APP_SMALL
+    sub ax, 15                      ; AX = the rung's KB: its pool, the claim
+%else                               ; less TK_SHSEG, rounded up to a KB
+    mov ax, TK_TMKB
+%endif
+    call OSAPI_MEM_CLAIM
+    mov ax, dx                      ; AX = the template's own segment
+    pop dx                          ; DX = the shadow again
+    jnc .tmat
+%ifdef APP_SMALL
+    xor ax, ax                      ; no pool: the bottom rung's game, the
+    mov byte [tk_shkb], 16          ; shadow alone ([tk_tmpl] = 0 below)
+    jmp short .tmat
+%else
+    call OSAPI_MEM_FREE             ; no template: the shadow back, and the
+    jmp short .noshadow             ; bracket refused as for no shadow at all
+%endif
 
 ; -----------------------------------------------------------------------------
 ; tk_cga_pal - CGA palette 1, high intensity: cyan / magenta / white on black

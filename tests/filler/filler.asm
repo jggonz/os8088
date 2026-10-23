@@ -133,6 +133,37 @@ fl_ask:
     ret
 
 ; -----------------------------------------------------------------------------
+; fl_take - 'T': the heap taken EMPTY rather than low. One claim of the
+; largest run, again, while there is a run and a slot to hold it. For a row
+; whose subject is a claim SMALLER than fl_fill leaves (FL_LEAVE): MIDIRack's
+; 5 KB speaker ring and the sound driver's 4 KB pool (KERN-MEGA-PLAN 14.59).
+; Press a round of fill-and-ask first, so the arena is packed; a purgeable
+; claim the answer counts as free is shed by the claim and taken with it
+; -----------------------------------------------------------------------------
+fl_take:
+    push ax
+    push bx
+    push dx
+.l:
+    mov bx, [fl_nheld]
+    cmp bx, FL_HOLD
+    jae .out
+    call OSAPI_MEM_AVAIL        ; AX = largest run KB
+    or ax, ax
+    jz .out
+    call OSAPI_MEM_CLAIM
+    jc .out
+    shl bx, 1
+    mov [bx+fl_seg], dx
+    inc word [fl_nheld]
+    jmp short .l
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; fl_onkey - W_ONKEY: any key makes one round of asks, and 'S' makes HALF a one
 ; in:  AL = ASCII, AH = scan, SI = window; the gfx lock is HELD
 ;
@@ -146,7 +177,8 @@ fl_ask:
 ; was refused for want of the room the fill had just taken.
 ;
 ; So a row that arrives at a fresh arena presses any key (fill, then ask), and
-; a row that has already built the arena it wants presses 'S'.
+; a row that has already built the arena it wants presses 'S'. 'T' takes what
+; is left (fl_take) and asks nothing.
 ; -----------------------------------------------------------------------------
 fl_onkey:
     push ax
@@ -158,9 +190,15 @@ fl_onkey:
     or al, 0x20                 ; either case
     cmp al, 's'
     je .ask                     ; ...ask only: the arena is the row's
+    cmp al, 't'
+    jne .fill
+    call fl_take                ; ...take the rest, ask nothing
+    jmp short .paint
+.fill:
     call fl_fill                ; mop up whatever the LAST round's compaction
 .ask:
     call fl_ask                 ; freed, and only then ask again
+.paint:
     call fl_paint               ; THE GFX LOCK IS HELD in a key callback
                                 ; (SPEC.md 13), so the window is redrawn here
                                 ; rather than through a repaint request - and

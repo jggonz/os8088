@@ -265,13 +265,26 @@ def main():
         # whole session it would be counting somebody else's instruction; armed
         # from the Proceed click it can only be reached by kern_dos, and the
         # recorded widths below say so out loud.
-        runs_at = lambda mm, _r: int.from_bytes(                # noqa: E731
-            mm.readseg(KD_SEG, syms["dsk_rah_runs"], 2), "little")
+        # ...AND THE ARM IS NOT ENOUGH: the handoff runs kernel code between
+        # the click and the replacement, and once a kernel size pass moved an
+        # instruction that IS executed in that window onto this address the
+        # first "width" was 2135, the kernel's own byte. So a hit counts only
+        # while the bytes under the breakpoint are kern_dos's own.
+        with open(KDBIN, "rb") as f:
+            kdimg = f.read()
+        lt = syms["kd_entry.loadtry"]
+        mine = kdimg[lt:lt + 3]
+
+        def runs_at(mm, _r):
+            if bytes(mm.readseg(KD_SEG, lt, 3)) != mine:
+                return None                 # somebody else's instruction
+            return int.from_bytes(
+                mm.readseg(KD_SEG, syms["dsk_rah_runs"], 2), "little")
         with os88marty.bp_trace(m, trybp, on_hit=runs_at) as tr:
             mo.click(*alert_button(m, base, dm, 1))             # Proceed
             rs = wait_text(m, "READY", secs=240,
                            what="the run under kern_dos")
-        widths = [h["hit"] for h in tr.hits]
+        widths = [h["hit"] for h in tr.hits if h["hit"] is not None]
 
         # --- what the program itself says ------------------------------------
         for want in ("os8088 DOS gate - BIG.EXE",

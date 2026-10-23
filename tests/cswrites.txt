@@ -1,0 +1,89 @@
+# tests/cswrites.txt - the CS-write registry (docs/plans/KERN-MEGA-PLAN.md 2.4)
+#
+# Real mode lets code treat its own segment as data: `mov [cs:x], ax` writes
+# through CS, and `push cs / pop ds` makes DS the code segment. 286 PROTECTED
+# MODE allows neither. A code segment is never writable, and DS loaded from
+# CS is read-only, so both fault on the first store. kern_mega shares most of
+# kernel/ with kern_big (KERN-MEGA-PLAN 7), so these are the sites its M1 wave
+# converts, and this file stops the number growing until then.
+#
+# ONE LINE PER FILE: <writes> <pairs> <path>  # <reason>
+#
+# tests/unit/t_cswrite.py is the gate and says exactly what counts. A file not
+# in this list may use neither idiom. A file in it may not exceed its counts,
+# and may not fall below them either: a conversion lowers the line, so the diff
+# shows the work was done. `t_cswrite.py --list` prints every site with its
+# SECTION, which is the M1 worklist.
+#
+# THE SECTION DECIDES THE CONVERSION, so the reasons below are grouped by it:
+#   .boot2         stage 2 of the boot, which runs in real mode before
+#                  kern_mega switches. These can stay as they are, if the
+#                  switch is placed after them
+#   .mod*          an on-demand MODULE writing its own image, which SPEC.md
+#                  2.8 allows (docs/plans/MODULE-SELFCONTAIN-PLAN.md). This is
+#                  ~390 of the 473 writes, so the CS-write problem is mostly a
+#                  module problem, and kern_mega keeps its modules resident
+#                  (KERN-MEGA-PLAN 4)
+#   .text / .cold  resident code that kern_mega runs in protected mode
+#
+# A SITE ON AN ARM KERN_MEGA NEVER ASSEMBLES IS NOT COUNTED - inside `%ifndef
+# KERN_MEGA`, or the `%else` of `%ifdef KERN_MEGA` - because that is real
+# mode's own spelling of something kern_mega does another way, which is what a
+# conversion leaves behind. So these counts are what kern_mega STILL gets
+# wrong, and every line of `.text`/`.cold` below that is not a knob is a #GP
+# on a real 286 - and QEMU will not show it, because QEMU does not enforce
+# a code segment's read-only bit (KERN-MEGA-PLAN 9).
+#
+# CONVERTING A MODULE: `push cs` becomes PUSH_CSDATA and `op [cs:x], ...`
+# becomes `CSDO op [CSEG x], ...` (kernel/kernel.asm), both byte-identical off
+# kern_mega. CTRL.DRV - ctrl.inc, shutdown.inc, the settings macros in
+# driver.inc and desksc.inc's .modc half - was the first, after the Victory
+# 286's Control Panel faulted saving SYSTEM.CFG. A `[CSEG x]` outside CSDO
+# counts as a write.
+#
+# THIS IS A RATCHET, NOT A CLEAN GATE, for t_textrules.py's reason. It starts
+# at the tree's count, because kern_big is correct as it stands and the only
+# failure it can prevent today is a NEW site.
+
+# --- resident: knob-only arms ------------------------------------------------
+15 0 kernel/sched.inc  # sch_isr under KFZTRACE=1, a knob: the heartbeat's IP capture (khb_*) writes kernel variables before DS is the kernel's
+4 1 kernel/font.inc  # an audit counter %macro (GFXAUDIT=1, a knob) stores through CS while DS is the caller's, and one pair is in the .boot2 font probe
+2 0 kernel/vga12.inc  # the BAND=1 1bpp band pen (a knob): state through CS while DS is a source band
+5 0 kernel/hbmark.inc  # DOSRMARK=1's resume trace (%macro), which no shipped kernel assembles
+
+# --- real mode by construction ----------------------------------------------
+1 4 kernel/mega.inc  # mega_svc's real-mode half and mega_r286, where a 286 comes back after its reset: DS = KERNEL_SEG while CR0.PE is clear, where it IS the segment; mega_capc, the capture stub an IRQ reflection installs in the IVT, which runs only in that real-mode window; and mega_strcal, which loads the CODE selector into ES ON PURPOSE so that its two probe writes fault (KERN-MEGA-PLAN 10.3 item 54.1) - neither one is ever made
+0 2 kernel/hbstub.inc  # the hibernate resume stub, staged in the text framebuffer and run with no kernel at all
+0 1 kernel/disk.inc  # the boot overlay (.ovl): mount-time setup, before mega_enter
+13 1 kernel/spinner.inc  # the boot spinner's %macro state, drawn from IRQ0 inside int 13h (SPEC.md 15.3.8) during the boot
+37 3 kernel/splash.inc  # the loading screen's state, all of it in stage 2 (SPEC.md 2.9.4)
+3 2 kernel/vidsel.inc  # the adapter pick, in stage 2 and the boot overlay
+0 4 kernel/desksc.inc  # the boot half's scan (.boot2), in real mode before mega_enter; CTRL.DRV's half is PUSH_CSDATA/CSDO now
+
+# --- .mod*: an on-demand module writing its own image -----------------------
+28 10 kernel/hiber.inc  # HIBER.DRV (.modh); real mode by design and replaced on kern_mega (KERN-MEGA-PLAN 2.6) - -24 for the DOS trip's own path, which kern_mega DOES run in protected mode (hbm_dosrun step 3c, hbm_extat, hbm_sweep, hbm_drvsusp, hbm_xcap: ~310 mega_gpw fixups a trip, now CSDO, KERN-MEGA-PLAN 14.46). The hibernate's own nine (hbm_wrimg, hbm_ptrfix_set, the ask's paint) stay: one fixup each a hibernate, against the 77 bytes CSDO would add - which took the image's claim over a KB (MODH_UNPAD's dead zone, 10KB -> 11KB while it is loaded)
+0 1 kernel/megados.inc  # mega_dropr, kern_mega's DOS park: REAL MODE, between leaving protected mode and the loader stub, with no kernel left to run
+
+# --- drivers: DS/ES = the driver's own image (no driver writes through CS) ---
+0 5 drivers/hdd/inst.inc  # ES = the installer's own buffer for int 13h; a driver-SDK answer for kern_mega is a drivers/os88drv.inc decision (tools/abi.lock.json)
+0 1 drivers/hdd/ipkg.inc  # hd_il_send: ES = KERNEL_SEG for INSTALL's log proc, the package callback convention. On kern_mega 0x0060 is the kernel's CODE selector, readable and not writable, and in_onlog reads through ES and stores nothing; HDDTOOL.DRV has no way to name MEGA_SEL_KDATA, which is inst.inc's os88drv.inc decision again (KERN-MEGA-PLAN 14.67)
+0 3 drivers/net/pktdrv.inc  # pk_recv: DS = the driver's own receive buffer, for a packet driver calling in
+0 1 drivers/net/lplink.inc  # ES = the driver's own buffer
+0 1 drivers/usbmouse/usbmouse.asm  # the CH375 poll points DS at its own image
+0 1 drivers/thmpal/thmpal.asm  # the palette driver's own table, through DS
+16 4 drivers/vesa/vesa.asm  # VESA.DRV's state and verb buffers, through CS. kern_mega builds without VID_EXT (kernel.asm, SPEC.md 120.3), so it has no VESA row and never loads this image
+
+# --- apps/pixel: PiXEL, the package and its parts (KERN-MEGA-PLAN 14.40) ----
+# Zero writes through CS since 14.40: a part's own words go through
+# [cs:PXP_SELF] (apps/pixel/pxpart.inc rule 6). What is left is a segment
+# register loaded with a code segment and only READ through
+0 1 apps/pixel/pxsave.inc  # px_ask: ES = KERNEL_SEG so os88ui_ask can READ the window's caption; nothing is stored through it
+0 1 apps/pixel/pxview.inc  # px_texpand: DS = CS back after the view claim's copy, for READS of [px_spread] and [px_tdepth]; no store through it
+
+# --- apps/pixelstein: PIXELSTEIN 3D (KERN-MEGA-PLAN 14.50) ------------------
+# px_compose stores its per-column memory through ES = our DS since 14.50, and
+# the column driver's sprite-post patch goes through part 1's data segment
+# (px_drvpm_post) wherever part 1's CS is a code selector. What is left runs
+# only where CS IS the data: a real-mode kernel, or an instrument build.
+3 0 apps/pixelstein/pxgen.inc  # px_drv_tpl's two patch stores (`mov byte [cs:bp]`), which px_gen_init lays only when [px_gencs] is part 1's data segment - every real-mode kernel; kern_mega gets px_drvpm_post over them - and PXPROBE's `inc word [cs:px_pr_lad]`, tests/pxsperf.py --probe's instrument build, which nothing ships
+0 2 apps/pixelstein/pxwin.inc  # px_lock_clip and px_w4_clip: ES = KERNEL_SEG to READ the window's W_FLAGS and hand OSAPI_WM_CLIP_SET the window; nothing is stored through it

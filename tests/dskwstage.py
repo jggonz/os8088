@@ -681,14 +681,18 @@ def run(img, apps, machine, want_bug, verbose):
         was_busy = m.read(busy, 1)[0]
         m.write(busy, b"\x01")
         m.write(straddle_dst, bytes([POISON]) * 4096)
+        # THE WHOLE FILE in whole clusters, which is NOT "two clusters": the
+        # 360KB system disk's are 512 bytes (SPEC.md 19.3.2), and two of
+        # those are 1,024 of the file's 2,000
+        whole = -(-FSIZE // clb) * clb
         r, hits = c.call("dskw_read_at_x", watch=(BNC, UNBNC),
                          si=name_at(m, "BNC.TST"),
-                         es=straddle_dst >> 4, bx=0, cx=2 * clb, dx=0, ax=0)
+                         es=straddle_dst >> 4, bx=0, cx=whole, dx=0, ax=0)
         m.write(busy, bytes((was_busy,)))
         bad += bounced("B2", r, hits, straddle_dst)
         if verbose:
             print("  B2 READ_AT  %d bytes into %#07x: bounce %d, unbounce %d"
-                  % (2 * clb, straddle_dst, hits[BNC], hits[UNBNC]))
+                  % (whole, straddle_dst, hits[BNC], hits[UNBNC]))
         size = r["ax"] | (r["dx"] << 16)
         if not r["flags"] & 1 and size != FSIZE:
             bad.append("B2: READ_AT delivered %d bytes of BNC.TST, want %d"

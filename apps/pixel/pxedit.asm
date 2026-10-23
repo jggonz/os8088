@@ -73,9 +73,9 @@ pe_decode:
     cld
     push ax
     mov ax, [px_svgp]               ; the resident's UI services (pxsvc.inc)
-    mov [cs:pv_sv], ax
+    PXSW mov [es:pv_sv], ax
     mov ax, [cs:PXP_PKG]
-    mov [cs:pv_sv + 2], ax
+    PXSW mov [es:pv_sv + 2], ax
     pop ax                          ; (a UI verb's AX is its argument)
     test cl, 0x40
     jz .nui
@@ -130,7 +130,7 @@ pe_palop:
     call ax                         ; the operation's tables
 .noset:
     mov ax, [cs:pe_pent + bx]
-    mov [cs:pe_fn], ax
+    PXSW mov [es:pe_fn], ax
     mov si, px_pal
     mov cx, 256
 .l:
@@ -213,7 +213,7 @@ pe_esepia:
     jbe .c
     mov al, 255
 .c:
-    mov [cs:pe_t3 + bx], al
+    PXSW mov [es:pe_t3 + bx], al
     add di, 3
     inc bx
     cmp bx, 3
@@ -277,7 +277,7 @@ pe_sbc:
     mov cx, 100
     div cx
 .f:
-    mov [cs:pe_f], ax
+    PXSW mov [es:pe_f], ax
     mov ax, [px_ep]                 ; b
     mov bx, ax
     or ax, ax
@@ -292,7 +292,7 @@ pe_sbc:
     jns .o
     neg ax
 .o:
-    mov [cs:pe_o], ax
+    PXSW mov [es:pe_o], ax
     pop dx
     pop cx
     pop bx
@@ -354,7 +354,7 @@ pe_sgam:
     jbe .s
     mov ax, 255
 .s:
-    mov [cs:pe_lut + di], al
+    PXSW mov [es:pe_lut + di], al
     inc di
     cmp di, 256
     jb .v
@@ -373,10 +373,8 @@ pe_lut3:
     push di
     push ds
     push es
-    push cs
-    pop ds
-    push cs
-    pop es
+    mov ds, [cs:PXP_SELF]
+    mov es, [cs:PXP_SELF]
     mov si, pe_lut
     mov di, pe_lut + 256
     mov cx, 256
@@ -420,7 +418,7 @@ pe_spost:
     add ax, dx
     xor dx, dx
     div cx
-    mov [cs:pe_lut + bx], al
+    PXSW mov [es:pe_lut + bx], al
     inc bx
     cmp bx, 256
     jb .v
@@ -448,7 +446,7 @@ pe_slev:
     xor ax, ax
     mov cx, 512
 .z:
-    mov [cs:si], ax
+    PXSW mov [es:si], ax
     add si, 2
     loop .z
     xor bx, bx                      ; BX = the entry: its count into the bin
@@ -466,9 +464,9 @@ pe_slev:
     shl ax, 1
     xchg ax, bx
     mov dx, [es:bx]
-    add [cs:pe_bins + si], dx
+    PXSW add [es:pe_bins + si], dx
     mov dx, [es:bx + 2]
-    adc [cs:pe_bins + si + 2], dx
+    PXSW adc [es:pe_bins + si + 2], dx
     xchg ax, bx
     pop si
     add si, 3
@@ -495,14 +493,18 @@ pe_slev:
     mov si, ax                      ; SI = the quotient's high word
     mov ax, bx
     div cx                          ; AX = its low word
-    mov [cs:pe_lon], ax
-    mov [cs:pe_lon + 2], si
+    PXSWON
+    mov [es:pe_lon], ax
+    mov [es:pe_lon + 2], si
+    PXSWOFF
     pop dx
     pop bx                          ; DX:BX = N
     sub bx, ax
     sbb dx, si
-    mov [cs:pe_hin], bx
-    mov [cs:pe_hin + 2], dx
+    PXSWON
+    mov [es:pe_hin], bx
+    mov [es:pe_hin + 2], dx
+    PXSWOFF
     ; lo: the first v whose running sum passes lo_n
     xor ax, ax
     xor dx, dx
@@ -523,7 +525,7 @@ pe_slev:
 .lof:
     shr bx, 1
     shr bx, 1
-    mov [cs:pe_lo], bl
+    PXSW mov [es:pe_lo], bl
     ; hi: the first v whose running sum reaches hi_n
     xor ax, ax
     xor dx, dx
@@ -544,7 +546,7 @@ pe_slev:
 .hif:
     shr bx, 1
     shr bx, 1
-    mov [cs:pe_hi], bl
+    PXSW mov [es:pe_hi], bl
     ; the channel's table
     pop di
     push di
@@ -572,7 +574,7 @@ pe_slev:
     sub cl, ch
     div cl
 .st:
-    mov [cs:si + bx], al
+    PXSW mov [es:si + bx], al
     inc bl
     jnz .t
     pop di
@@ -607,7 +609,8 @@ pe_tail:
     pop ax
     ret
 
-; pe_tailof - AX x BX pixels at segment CX: AX = their tail's segment.
+; pe_tailof - AX x BX pixels at segment CX: AX = their tail's segment, the
+; pixels' paragraphs up to a multiple of 8 (px_htail's: kern_mega's grid).
 ; Preserves all but AX, DX
 pe_tailof:
     mul bx
@@ -620,6 +623,8 @@ pe_tailof:
     rcr ax, 1
     loop .p
     pop cx
+    add ax, 7
+    and al, 0xF8
     add ax, cx
     ret
 
@@ -636,9 +641,9 @@ pe_layout:
     push dx
     push si
     push di
-    mov [cs:pe_op], cl
+    PXSW mov [es:pe_op], cl
     mov si, [px_cur + PXR_MW]       ; SI = sw
-    mov [cs:pe_sw], si
+    PXSW mov [es:pe_sw], si
     mov di, [px_cur + PXR_MH]       ; DI = sh
     mov [px_edw], si                ; the same size, most of them
     mov [px_edh], di
@@ -668,7 +673,7 @@ pe_layout:
     xor ax, ax
     jmp .done
 .res:
-    mov word [cs:pe_o_row], QT_SIZE ; the RGB row out, after the pages
+    PXSW mov word [es:pe_o_row], QT_SIZE ; the RGB row out, after the pages
     cmp cl, EV_RESIZE
     jne .conv
     mov ax, si                      ; dw = max(1, sw num div den)
@@ -692,7 +697,7 @@ pe_layout:
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, QT_SIZE
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_s0], ax            ; a source row's RGB: 3 sw
+    PXSW mov [es:pe_o_s0], ax        ; a source row's RGB: 3 sw
     mov bx, ax
     mov ax, si
     call pe_x3
@@ -702,7 +707,7 @@ pe_layout:
     mov bx, [px_ep]
     cmp bx, [px_ep + 2]
     jae .up
-    mov [cs:pe_o_xb], ax            ; DOWN: the bounds, dw + 1 words...
+    PXSW mov [es:pe_o_xb], ax        ; DOWN: the bounds, dw + 1 words...
     mov bx, ax
     mov ax, [px_edw]
     inc ax
@@ -710,7 +715,7 @@ pe_layout:
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_acc], ax           ; ...and the sums, 3 dw words
+    PXSW mov [es:pe_o_acc], ax       ; ...and the sums, 3 dw words
     mov bx, ax
     mov ax, [px_edw]
     call pe_x3
@@ -721,14 +726,14 @@ pe_layout:
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     jmp .tot
 .up:
-    mov [cs:pe_o_s1], ax            ; UP: a second source row...
+    PXSW mov [es:pe_o_s1], ax        ; UP: a second source row...
     mov bx, ax
     mov ax, si
     call pe_x3
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_xb], ax            ; ...the columns' places, 4 dw bytes...
+    PXSW mov [es:pe_o_xb], ax        ; ...the columns' places, 4 dw bytes...
     mov bx, ax
     mov ax, [px_edw]
     shl ax, 1
@@ -737,7 +742,7 @@ pe_layout:
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, bx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_h0], ax            ; ...and the two interpolated rows, 3 dw
+    PXSW mov [es:pe_o_h0], ax        ; ...and the two interpolated rows, 3 dw
     mov bx, ax                      ; words each
     mov ax, [px_edw]
     call pe_x3
@@ -747,7 +752,7 @@ pe_layout:
     mov dx, ax
     add ax, bx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_h1], ax
+    PXSW mov [es:pe_o_h1], ax
     add ax, dx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     jmp .tot
@@ -759,20 +764,20 @@ pe_layout:
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     call pe_x3
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_rsz], ax
+    PXSW mov [es:pe_rsz], ax
     mov bx, si
     xchg ax, bx
     call pe_x3
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     add ax, QT_SIZE
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_s0], ax
+    PXSW mov [es:pe_o_s0], ax
     add ax, bx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_s1], ax
+    PXSW mov [es:pe_o_s1], ax
     add ax, bx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_s2], ax
+    PXSW mov [es:pe_o_s2], ax
     add ax, bx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
     jmp short .tot
@@ -783,10 +788,10 @@ pe_layout:
     mov bx, ax
     add ax, QT_SIZE
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_s0], ax
+    PXSW mov [es:pe_o_s0], ax
     add ax, bx
     jc .big                         ; (a sum past 64 KB: review-w7 F7)
-    mov [cs:pe_o_acc], ax           ; ...and the blocks' sums, 3 words each
+    PXSW mov [es:pe_o_acc], ax       ; ...and the blocks' sums, 3 words each
     mov bx, ax
     mov ax, si
     add ax, PE_PIXN - 1
@@ -804,13 +809,13 @@ pe_layout:
     add ax, 15                      ; the palette, last, on a paragraph
     jc .big
     and ax, 0xFFF0
-    mov [cs:pe_o_pal], ax
+    PXSW mov [es:pe_o_pal], ax
     add ax, 768
     jc .big
 .done:
     push ax
     mov ax, [px_edw]
-    mov [cs:pe_dw], ax
+    PXSW mov [es:pe_dw], ax
     cmp ax, PX_DIMMAX               ; (a destination past 8,192 is refused
     ja .big0                        ; like a source, SPEC.md 106.8)
     cmp word [px_edh], PX_DIMMAX
@@ -888,18 +893,20 @@ pe_ops:     dw pe_rotcw, pe_rotccw, pe_rot180, pe_fliph, pe_flipv, pe_crop
 ; --- the rows ---------------------------------------------------------------------
 
 ; pe_rowp - AX = a row, BX = a master's segment, CX = its width: DX:SI = the
-; row's first byte (SI < 16). Preserves all else
+; row's first byte (SI < 128: DX on kern_mega's 8-paragraph grid, where only
+; those are segments - px_mrow's, KERN-MEGA-PLAN 14.40). Preserves all else
 pe_rowp:
     push ax
     push cx
     mul cx
     mov si, ax
-    and si, 15
+    and si, 127
     mov cl, 4
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
+    and al, 0xF8
     add ax, bx
     mov dx, ax
     pop cx
@@ -979,15 +986,19 @@ pe_tickq:
 
 ; --- the geometry: indices moved, the palette untouched ----------------------------
 
-; A QUARTER TURN: destination row y is a COLUMN of the source walked from the
-; bottom (clockwise: D[y][x] = S[sh-1-x][y]) or the top (anticlockwise:
-; D[y][x] = S[x][sw-1-y]); a step of a source row is sw = 16 q + r bytes,
-; taken on a (segment, offset < 16) pair with no division in the loop
+; A QUARTER TURN: destination row y is a COLUMN of the source (clockwise:
+; D[y][x] = S[sh-1-x][y]; anticlockwise: D[y][x] = S[x][sw-1-y]). Both walk
+; the column DOWN the source, a row's width at a time, as an OFFSET in a
+; segment that moves only by 64 KB (1000h paragraphs) when the offset
+; carries - so the segment stays on kern_mega's 8-paragraph grid, and never
+; below the master's own (KERN-MEGA-PLAN 14.40: it stepped the SEGMENT by
+; sw >> 4 paragraphs, off the grid by design). Clockwise reads the column
+; from the TOP and writes the row from its right end, DF set
 pe_rotcw:
-    mov byte [cs:pe_dir], 0
+    PXSW mov byte [es:pe_dir], 0
     jmp short pe_rot90
 pe_rotccw:
-    mov byte [cs:pe_dir], 1
+    PXSW mov byte [es:pe_dir], 1
 pe_rot90:
     xor bp, bp                      ; BP = the destination row
 .row:
@@ -998,59 +1009,36 @@ pe_rot90:
 .go:
     mov ax, bp
     call pe_drow                    ; ES:DI = it
-    mov ax, [px_cur + PXR_MH]       ; the column's first pixel: row sh - 1
-    dec ax                          ; (clockwise) or 0, column y or sw-1-y
-    mov cx, bp
-    cmp byte [cs:pe_dir], 0
-    je .cw
-    xor ax, ax
-    mov cx, [px_cur + PXR_MW]
-    dec cx
-    sub cx, bp
-.cw:
-    call pe_srow                    ; DX:SI = that row
-    add si, cx                      ; ...its column (one segment: < 8,208)
-    mov ax, si
-    mov cl, 4
-    shr ax, cl
-    add dx, ax
-    and si, 15
-    mov ax, [px_cur + PXR_MW]       ; the step: q paragraphs and r bytes
-    mov bx, ax
-    and bx, 15
-    mov [cs:pe_r], bx
-    shr ax, cl
-    mov [cs:pe_q], ax
     mov cx, [px_edw]
-    push ds
+    xor ax, ax                      ; the column's top: row 0, column y
+    mov bx, bp                      ; (clockwise) or sw-1-y
     cmp byte [cs:pe_dir], 0
-    jne .down
-.up:                                ; clockwise: up the column
+    jne .ccw
+    add di, cx                      ; clockwise: its pixels right to left
+    dec di
+    std
+    jmp short .col
+.ccw:
+    mov bx, [px_cur + PXR_MW]
+    dec bx
+    sub bx, bp
+.col:
+    call pe_srow                    ; DX:SI = row 0
+    add si, bx                      ; ...its column (SI < 128 + 8,192)
+    mov bx, [px_cur + PXR_MW]       ; BX = the step: a source row
+    push ds
     mov ds, dx
+.p:
     mov al, [si]
     stosb
-    sub si, [cs:pe_r]
-    jns .u1
-    add si, 16
-    dec dx
-.u1:
-    sub dx, [cs:pe_q]
-    loop .up
-    jmp short .rd
-.down:                              ; anticlockwise: down it
+    add si, bx
+    jnc .n
+    add dx, 0x1000                  ; the offset carried: 64 KB on
     mov ds, dx
-    mov al, [si]
-    stosb
-    add si, [cs:pe_r]
-    cmp si, 16
-    jb .d1
-    sub si, 16
-    inc dx
-.d1:
-    add dx, [cs:pe_q]
-    loop .down
-.rd:
+.n:
+    loop .p
     pop ds
+    cld
     inc bp
     call pe_tick
     jnc .row
@@ -1270,7 +1258,7 @@ pe_prep:
     je .n
     mov al, 1
 .n:
-    mov [cs:pe_nc], al
+    PXSW mov [es:pe_nc], al
     pop es
     pop di
     pop si
@@ -1434,8 +1422,10 @@ pe_expand:
     push si
     push di
     push es
-    mov [cs:pe_xbase], bx
-    mov [cs:pe_xbord], dl
+    PXSWON
+    mov [es:pe_xbase], bx
+    mov [es:pe_xbord], dl
+    PXSWOFF
     mov es, [px_ewseg]
     call pe_srow                    ; DX:SI = the indices
     mov cx, [px_cur + PXR_MW]
@@ -1464,7 +1454,7 @@ pe_expand:
     xor ah, ah
     add di, ax
 .nb:
-    mov [cs:pe_xstart], di
+    PXSW mov [es:pe_xstart], di
     mov cx, [px_cur + PXR_MW]
     mov bx, [cs:pe_o_pal]
     push ds
@@ -1550,7 +1540,7 @@ pe_conv:
     mov dl, 1
     call pe_slotof
     call pe_expand
-    mov word [cs:pe_y], 0
+    PXSW mov word [es:pe_y], 0
 .row:
     mov ax, [cs:pe_y]
     cmp ax, [px_edh]
@@ -1569,16 +1559,16 @@ pe_conv:
     dec ax                          ; (clamped: the last row again)
 .p2:
     call pe_slotof                  ; THE THREE ROWS: P2 ...
-    mov [cs:pe_p2], bx
+    PXSW mov [es:pe_p2], bx
     mov ax, [cs:pe_y]
     call pe_slotof
-    mov [cs:pe_p1], bx
+    PXSW mov [es:pe_p1], bx
     or ax, ax
     jz .p0
     dec ax
 .p0:
     call pe_slotof
-    mov [cs:pe_p0], bx
+    PXSW mov [es:pe_p0], bx
     mov bl, [cs:pe_op]              ; the kernel and the stride
     sub bl, EV_BLUR
     xor bh, bh
@@ -1589,7 +1579,7 @@ pe_conv:
     add bx, 2
 .k1:
     mov ax, [cs:pe_ktab + bx]
-    mov [cs:pe_fn], ax
+    PXSW mov [es:pe_fn], ax
     mov al, [cs:pe_nc]              ; the first sample of each: past the
     xor ah, ah                      ; border
     mov si, [cs:pe_p1]
@@ -1613,7 +1603,7 @@ pe_conv:
     pop ds
     mov ax, [cs:pe_y]
     call pe_out
-    inc word [cs:pe_y]
+    PXSW inc word [es:pe_y]
     call pe_tick
     jnc .row
     ret
@@ -1769,7 +1759,7 @@ pe_kemb3:   PE_KEMB 3
 ; Every row of a band of blocks is read before any of them is written, so it
 ; is safe in place
 pe_pixel:
-    mov word [cs:pe_y], 0           ; the band's first row
+    PXSW mov word [es:pe_y], 0       ; the band's first row
 .band:
     mov ax, [cs:pe_y]
     cmp ax, [px_cur + PXR_MH]
@@ -1782,12 +1772,12 @@ pe_pixel:
     jbe .ye
     mov ax, [px_cur + PXR_MH]
 .ye:
-    mov [cs:pe_ye], ax
+    PXSW mov [es:pe_ye], ax
     mov ax, [px_cur + PXR_MW]       ; the blocks across, and their sums
     add ax, PE_PIXN - 1
     mov cl, 3
     shr ax, cl
-    mov [cs:pe_nb], ax
+    PXSW mov [es:pe_nb], ax
     call pe_x3
     mov cx, ax                      ; 3 words a block
     push ds
@@ -1909,7 +1899,7 @@ pe_pixel:
     inc ax
     jmp short .wr
 .next:
-    mov [cs:pe_y], ax
+    PXSW mov [es:pe_y], ax
     jmp .band
 .ab1:
     mov ax, PXD_ABORT
@@ -1937,7 +1927,7 @@ pe_rsdown:
     inc bx
     cmp bx, [px_edw]
     jbe .xb
-    mov word [cs:pe_y], 0
+    PXSW mov word [es:pe_y], 0
 .row:
     mov ax, [cs:pe_y]
     cmp ax, [px_edh]
@@ -1947,7 +1937,7 @@ pe_rsdown:
 .go:
     mul word [px_cur + PXR_MH]      ; y0, y1 = max(y0 + 1, (y + 1) sh div dh)
     div word [px_edh]
-    mov [cs:pe_y0], ax
+    PXSW mov [es:pe_y0], ax
     mov ax, [cs:pe_y]
     inc ax
     mul word [px_cur + PXR_MH]
@@ -1958,7 +1948,7 @@ pe_rsdown:
     jae .y1
     mov ax, dx
 .y1:
-    mov [cs:pe_y1], ax
+    PXSW mov [es:pe_y1], ax
     mov es, [px_ewseg]              ; the sums: 3 words a column
     mov di, [cs:pe_o_acc]
     mov ax, [px_edw]
@@ -2066,7 +2056,7 @@ pe_rsdown:
     pop ds
     mov ax, [cs:pe_y]
     call pe_out
-    inc word [cs:pe_y]
+    PXSW inc word [es:pe_y]
     call pe_tick
     jc .r
     jmp .row
@@ -2086,14 +2076,14 @@ pe_rsup:
     mov cl, 8
     shr dx, cl
     div word [px_edw]
-    mov [cs:pe_sx], ax
+    PXSW mov [es:pe_sx], ax
     mov ax, [px_cur + PXR_MH]
     mov dx, ax
     mov cl, 8
     shl ax, cl
     shr dx, cl
     div word [px_edh]
-    mov [cs:pe_sy], ax
+    PXSW mov [es:pe_sy], ax
     mov es, [px_ewseg]              ; the columns: xa (word), wx, the step
     mov di, [cs:pe_o_xb]            ; to the neighbour (0 or 1)
     xor bx, bx
@@ -2108,8 +2098,10 @@ pe_rsup:
     inc bx
     cmp bx, [px_edw]
     jb .xt
-    mov word [cs:pe_ya], 0xFFFF
-    mov word [cs:pe_y], 0
+    PXSWON
+    mov word [es:pe_ya], 0xFFFF
+    mov word [es:pe_y], 0
+    PXSWOFF
 .row:
     mov ax, [cs:pe_y]
     cmp ax, [px_edh]
@@ -2120,10 +2112,10 @@ pe_rsup:
     mov cx, [cs:pe_sy]
     mov dx, [px_cur + PXR_MH]
     call pe_place
-    mov [cs:pe_wy], cl
+    PXSW mov [es:pe_wy], cl
     cmp ax, [cs:pe_ya]
     je .blend
-    mov [cs:pe_ya], ax              ; a new pair of rows: interpolated across
+    PXSW mov [es:pe_ya], ax          ; a new pair of rows: interpolated across
     mov bx, [cs:pe_o_s0]
     xor dl, dl
     call pe_expand
@@ -2198,7 +2190,7 @@ pe_rsup:
     pop ds
     mov ax, [cs:pe_y]
     call pe_out
-    inc word [cs:pe_y]
+    PXSW inc word [es:pe_y]
     call pe_tick
     jc .r
     jmp .row
@@ -2426,8 +2418,6 @@ pe_nc:      db 0
 pe_dir:     db 0
 pe_wy:      db 0
 pe_xbord:   db 0, 0
-pe_q:       dw 0
-pe_r:       dw 0
 pe_y:       dw 0
 pe_y0:      dw 0
 pe_y1:      dw 0
@@ -3271,9 +3261,9 @@ pv_room:
 pv_xbytes:
     mov ax, [px_cur + PXR_MW]
     mul word [px_cur + PXR_MH]
-    add ax, 2048 + 15
-    adc dx, 0
-    and ax, 0xFFF0
+    add ax, 2048 + 127              ; (the tail starts on 8 paragraphs:
+    adc dx, 0                       ; px_htail, KERN-MEGA-PLAN 14.40)
+    and ax, 0xFF80
     ret
 
 ; pv_xout - EV_UXOUT: CF = 0 the copy made ([px_uxms] [px_uxlen]); CF = 1

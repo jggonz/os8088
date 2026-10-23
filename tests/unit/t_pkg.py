@@ -51,14 +51,14 @@ V_APP, V_DRV, V_MOD = os88pkg.PKG_FMT, os88drv.DRV_VER, 5  # package / driver / 
 DISPATCH = bytes((0xFF, 0xD5, 0xCB))  # call bp / retf, at +12
 HEADER = 32
 ICON_END = 96
-APP_MAX_SIZE = 0xF000                # kernel/kernel.asm, apps/os88api.inc
+APP_MAX_SIZE = 0xFE00                # kernel/kernel.asm, apps/os88api.inc
 DRV_MAX = 40 * 1024                  # DRV_MAX_KB in kernel/driver.inc
 # tools/os88drv.py's own list. 0x40 is NOT a kernel driver class: it is a
 # driver's own loadable half (OS88_OVERLAY, SPEC.md 52.11), which the kernel
 # never loads - its OWNER does - and which is stamped here because the header,
 # the dispatcher and the one-claim load discipline are identical.
 DRV_CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file", 6: "point", 7: "ems",
-               8: "file2",
+               8: "file2", 9: "cd",
                0x40: "overlay"}
 MAP_MAGIC = b"O8MM"
 MOD_H_IMG, MOD_H_NENT = 8, 10
@@ -95,12 +95,16 @@ def app(blob, nm, flags, entry, image, bss):
               why="all-zero is the UNRESOLVED sentinel (SPEC.md 54.2), so the "
                   "kernel would reduce the icon after all")
         check(not any(blob[120:128]), "%s: the glyph block's reserved bytes are 0" % nm)
-    check(not (flags & 8) or not (flags & 4),
-          "%s: not both compressed and carrying parts" % nm, got=hex(flags),
-          why="a part's offset is measured from the start of the FILE and its "
-              "table lives INSIDE the image, so compressing the image and "
-              "laying out its parts are circular. os88pkg.py refuses the "
-              "combination (docs/plans/O88-COMPRESSION-PLAN.md wave 4)")
+    if flags & 0x0C == 0x0C:
+        # PARTS AND A PACKED IMAGE (SPEC.md 20.13.8): the image's own stream
+        # ends at the link word, and it has to unpack to the image exactly -
+        # what the kernel's step 6a will do with those bytes
+        plen = struct.unpack_from("<H", blob, 4)[0]
+        if check(32 < plen < image and plen <= len(blob),
+                 "%s: the packed image's length lies inside the image and "
+                 "the file" % nm, got=plen, want="33..%d" % (image - 1)):
+            check(len(os88pkg.image_unwrap(blob)) == image,
+                  "%s: the packed image unpacks to %d bytes" % (nm, image))
     lo = ICON_END if flags & 1 else HEADER
     check(lo <= entry < image, "%s: entry +0x%04X is inside the image" % (nm, entry),
           got=hex(entry), want="0x%04X..0x%04X" % (lo, image))
@@ -163,13 +167,25 @@ def header(blob, nm):
     if ver == V_MOD:
         module(blob, nm)
         return ver
-    eq(link, 0, "%s: links at org 0" % nm,
-       "a v3/v4 package owns a segment and is loaded on a paragraph boundary "
-       "(SPEC.md 20.1) - a non-zero link base is a v2 image")
+    if not (ver == V_APP and b3 & 0x0C == 0x0C):
+        eq(link, 0, "%s: links at org 0" % nm,
+           "a v3/v4 package owns a segment and is loaded on a paragraph "
+           "boundary (SPEC.md 20.1) - a non-zero link base is a v2 image, and "
+           "the one package whose link word is not zero is a parted one with "
+           "a packed image (SPEC.md 20.13.8)")
     eq(blob[12:15], DISPATCH, "%s: carries the dispatcher at +12" % nm,
        "the kernel far-calls +12 to reach every callback (SPEC.md 20.2); a "
        "package without it sends the kernel into its own data on the first paint")
-    if ver == V_APP and b3 & 4:
+    if ver == V_APP and b3 & 0x0C == 0x0C:
+        # PARTS AND A PACKED IMAGE (SPEC.md 20.13.8): the bound the kernel
+        # takes is the LINK WORD - the packed stream's length, which
+        # ld_check_hdr puts in [ld_fsz] in place of the file's - and app()
+        # holds it inside the image and the file. The FILE may be shorter
+        # than the image: MIDIRack's 36,490-byte image packs to 29,141 and
+        # its one part is 772, so the file is 29,956 (SPEC.md 105.9.5)
+        check(32 <= image <= 0xFFFF,
+              "%s: image %d fits the 16-bit field" % (nm, image), got=image)
+    elif ver == V_APP and b3 & 4:
         # FLAGS BIT 2: the file is longer than the image ON PURPOSE, and the
         # tail is the package's own to read (SPEC.md 20.12). The truncation
         # guard becomes image <= file, which is still exact about the half
@@ -270,6 +286,20 @@ def main():
             p = os.path.join(faces, f)
             if os.path.isfile(p) and f.endswith(".f88"):
                 arts[f.upper()] = read(p)
+    # ...and the OVERLAYS, same shape and the same reason (SPEC.md 20.13.5,
+    # 73.14.1): build/ovlz/<NAME>.OVL is what CC_OVLZ_RULE wrapped and what a
+    # disk carries, so it OVERRIDES the top-level cut of the same basename,
+    # which is what tools/os88ovl.py wrote and what the size checks read.
+    # SCRIBE.OVL never needed this because it rides no floppy; SHEET's
+    # CHART.OVL and MACRO.OVL are the first packed overlays on a shipped
+    # image, and without this the row reported every disk carrying them stale
+    # - naming the one failure mode it exists to catch, about a current build.
+    ovlz = os.path.join(build, "ovlz")
+    if os.path.isdir(ovlz):
+        for f in sorted(os.listdir(ovlz)):
+            q = os.path.join(ovlz, f)
+            if os.path.isfile(q):
+                arts[f.upper()] = read(q)
     # ...and the DATA files, same shape and a sharper reason (SPEC.md 20.13.5):
     # build/zdata-<fmt>/ is what os88lz wrapped and what the disk carries, and
     # it OVERRIDES a top-level file of the same basename. That is not a tidy

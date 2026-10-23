@@ -65,6 +65,14 @@ need" is something you check rather than argue yourself into:
    Check all four planes and XT cycle costs on MartyPC, and use QEMU only
    to verify the complete 320×240 display and desktop restoration.
 
+9. **Sound Blaster 16 mixer behavior** (SPEC.md §34.15). MartyPC's sound
+   card stores arbitrary mixer-register bytes but does not implement the
+   CT1745's defined-bit masks, compatibility mappings or analog attenuation.
+   Use it for the popup/Mixer's XT interaction and three adapter faces, and
+   use `mixerhost`'s independent Creative-register model for all three mixer
+   generations. `mixersb16` uses QEMU's actual SB16 mixer for stereo readback
+   and source/tone controls. Neither establishes a physical card's loudness.
+
 That is the list. **"It is quicker to type" is not on it, and neither is
 "I already know the QMP commands."** An eighth entry goes here, not into a
 row's docstring. Entries 4–7 share the shape that gets on the list easily:
@@ -81,7 +89,7 @@ cycle counter, so its waits there are host-clock loops.
 |---|---|---|
 | **MartyPC** | **the default** — any 8088 machine, any of the three adapters, any question of the form *what is the machine doing* | cycle-accurate CPU, a real BIOS ROM, modelled CGA/Hercules/VGA, and a debugger that perturbs nothing |
 | **QEMU** | the seven-item list above, and nothing else | it counts work exactly and cannot time it; SeaBIOS, no CGA, no Hercules |
-| **86Box** | a machine that is **not an 8088**, real sound cards on a period bus, a second opinion on the video probe — **and only where a person is watching**: no debugger and no automation socket | period-correct whole machines, the widest hardware library |
+| **86Box** | a machine that is **not an 8088** — the 286 reset path, an AT BIOS, an SB16 or NE1000 on a period bus — and a second opinion on the video probe. **Scriptable now**: `tools/os88box.py` drives the automation build headless (docs/86BOX.md) — screen, text, memory, keys, mouse, a fault log and a GDB stub. The macOS app the `make xt`-style targets launch is still for looking | period-correct whole machines, the widest hardware library; not cycle-accurate |
 | **the 5150** | anything with a **disk TIMING** in it, and the three defects no emulator shows | docs/FIELD-MACHINES.md |
 
 QEMU is the emulator furthest from the target — host speed, a CPU that is not
@@ -136,13 +144,15 @@ was exact, reproducible to 1.5% over three runs, and about the wrong machine.
 Counts, sector traffic, call shapes and `int 13h` batching off MartyPC's hard
 disk are exact as ever, and that is what `tests/hibernate.py` and the other
 hard-disk rows assert. **Milliseconds are not — and 86Box is where they go
-instead**, which is the one place this table's *"only where a person is
-watching"* row earns its keep rather than merely existing. 86Box models
+instead**, which is the one place this table's 86Box row earns its keep
+rather than merely existing. 86Box models
 period controllers, and its **ST-225 has been checked against a real ST-225
 spinning in the field 5150** on exactly this operation: ~2 s emulated against
 ~2 s on iron, plus a third reading off `8088VGA` with a WD controller that
 agrees (docs/reports/KERN-DOS-BUDGET-2026-09-13.md §3.2). So a hard-disk
-timing is asked of 86Box with somebody watching, or of the field machine —
+timing is asked of 86Box — with somebody watching, or through
+`tools/os88box.py`, whose `ms` is 86Box's own emulated clock and so can be
+read across an operation (docs/86BOX.md) — or of the field machine, and
 never of MartyPC, which has no answer to give.
 
 ### Which ROM did it actually load? Fingerprint it, never infer it
@@ -457,7 +467,7 @@ narrow reason belongs in `soak`.
 
 ### The host-side tests, and what each is defending
 
-`tests/unit/`, python3 only. Each exists because of a failure this tree had.
+`tests/unit/`, python3 (3.11 or newer) only. Each exists because of a failure this tree had.
 The ones to know by name:
 
 | row | what it would have caught |
@@ -573,6 +583,92 @@ python3 tools/mouse.py --screen 720x348 build/qmp.sock click X Y
 
 `HERCSEG` is a segment and `hercshot` takes the linear address. The full
 recipe and its four traps: docs/HERCULES-TESTING.md.
+
+### VESA — the packed display (SPEC.md 120), and why QEMU is the whole fixture
+
+QEMU's standard VGA (`-vga std`, the default) carries a VBE 2.0/3.0 BIOS, so
+`VESA.DRV`'s probe finds 1024x768 at 16 bits a pixel on it exactly as on a
+real card; MartyPC and every 86Box XT have **no VBE at all**, so the same
+disk on them is the negative control for free (the driver refuses, the
+desktop stays on the VGA). A VESA desktop is never screendumped through
+`-vga std` at any size other than its own: `screendump` is the mode's size,
+so `tools/mouse.py --screen 1024x768` (or `800x600`) must match the mode the
+disk asked for.
+
+```sh
+make vesatest                       # four disks: vesa.img (Auto: 1024x768x16),
+                                    # vesa8.img (the 'VM' class byte: 800x600x8),
+                                    # vesablitd.img + vxpics.img (PiXEL opened by
+                                    # an AUTOSTRT link, for the depth blit)
+python3 tests/vesa.py --png /tmp/v.png     # boot state and the first paint, a
+                                           # menu, a Disk window
+python3 tests/vesa8.py                     # the 8bpp path and the DAC
+python3 tests/vesacp.py                    # the Display page: the row cycles,
+                                           # Set Primary switches
+python3 tests/vesablitd.py                 # OSAPI_GFX_BLITD through PiXEL
+make vesabench && python3 tests/vesabench.py   # VESABENCH, behaviour only
+```
+
+**The first look found what the rows had not asked** (SPEC.md 120.5's
+second table). Two Disk windows on the 86Box 486 turned the desktop under
+them into a stripe band; Gorillas opened as a strip the width of the
+screen; the disk widget stayed on the bar. A sweep that boots every
+package on the apps disk once, through an `\AUTOSTRT` link, on the VESA
+disk and then on the VGA one, and puts the screenshots side by side, found
+the rest in an hour: the pattern body spent CX on its tile copy, the 4-bit
+blit loaded the stride over x, `OS88_PREFER`'s table was read past its end
+for kind 4, `OSAPI_FSX_CAPS` answered a kind no package knew, and the bar's
+composer cannot reach a 1024-wide bar's widget. Each has a row now that is
+red on the code as it was: `vesa` (the chevron band and the bar),
+`vesablit4` (WireBall's art, pixel for pixel), `vesapref` (Solitaire's
+width from its own source), `vesafsx` (Gorillas into a BIOS mode and back).
+The lesson is the sweep, which is `tools/os88sweep.py` now (`vesa` or
+`vga`, an output directory, a contact sheet at the end): a row asserts what
+its author thought of, and thirty-six packages at once show what nobody did.
+
+**...and the sweep's own blind spot is the first screen.** The owner then
+played Gorillas past its setup and the field was a white sky over
+buildings drawn as one-pixel combs - a screen the sweep never reaches,
+because it photographs what an autostart opens and presses nothing. The
+cause was one rule misread across the tree: `OSAPI_WM_DISPLAY` and
+`OSAPI_VIDEO` answer **DH = 8 or 16** on a packed display, and seven sites
+had spelt "colour" as `cmp dh, 4 / je` - Gorillas' 1 / 2 / 4 tables, the
+shared `os88ui.inc`'s `UI_ISMONO` and its two save-under sizers (which
+folded 16 to ONE plane and claimed a sixteenth of what `OSAPI_GFX_SAVE`
+then wrote past them), ArtfulType's panel sizer, Frotz's colour bit,
+Solitaire's pips and card back, Weave's palette, and `os88.h`'s own
+advice. The survey was a script over every `mov [x], dh` after those two
+calls and every `cmp` on what it stored (SPEC.md 120.5's package rule for
+DH is the result); the rows are `vesagor` (Gorillas played into its field:
+sky rows and solid building runs, which read 97 and 68 on the fix - the
+VGA desktop's own figures, the skyline being seeded the same - against 10
+and 14), `vesasu` (PiXEL's Save As drop-down clicked open on the packed
+desktop: the record's claim against DH x rows x columns, `mem_tab`
+agreeing and overlapping nothing) and `vesapref`'s card-back check. When a
+package is "wrong on the new display", grep what it does with DH before
+reading its drawing code.
+
+**Nothing in `SYSTEM.CFG` wants the driver by default** (SPEC.md 51.3), so
+a stock `os8088.img` never reads it; every row above boots a disk whose
+settings file already asks for it (`ethertest`'s shape). The driver is
+wanted by bit 9 of the `DW` record (8 is the CD-ROM's), and the class is the fourth byte of the
+`VM` record (ver 3): `0x8A` is 800x600x8.
+
+**Time is taken on 86Box, not QEMU.** `make 486-vesa` boots the bench's
+disks on a 486DX2/66 with a Cirrus Logic CL-GD5428 (`vm/486-vesa`: VBE 1.2,
+1 MB), the package runs and saves itself on its first paint, and the report
+is read back with `mcopy -i build/vxbench-86box.img ::VESABNCH.TXT -` (the
+target boots a scratch copy of the B: image, because the package writes to it). 86Box has
+no automation socket, so that is the whole recipe: launch, wait a minute,
+read the file, `kill -9`. What no emulator here can show: a real card's
+`4F05h` latency on a real bus, a BIOS whose window granularity is not a
+power of two, and a card whose mode list lives inside the info buffer — the
+last two are refusals the driver makes by design. **`make 486-vesa-desk` is
+the same 486 with the desktop on it**: A: is `build/vesa.img` (the shipped
+system disk with VESA.DRV already wanted and no autostart) and B: the shipped
+apps disk, so it is where a human looks at the 1024x768x16 desktop, cycles the
+Display page's Vesa row and opens PiXEL at depth. The Display page writes
+`SYSTEM.CFG` onto A:, a build product the next `make` puts back.
 
 **Every knob is tracked by a stamp file**, so a knob-built kernel is a
 different kernel and changing the knob rebuilds it, its carved modules
@@ -1449,8 +1545,12 @@ is where a kernel symbol lives.
 ## What 86Box is genuinely for
 
 **A machine that is not an 8088**, a period bus under a card rather than a
-modelled one, and a second opinion on the video probe — with a person
-watching, because it has no debugger and no automation socket. CLAUDE.md
+modelled one, and a second opinion on the video probe. **In a container it is
+`tools/os88box.py`** (docs/86BOX.md): upstream 86Box's automation socket,
+built here with this tree's fault-log patch, run headless off the same `vm/`
+profiles - so a session CAN start one and read the result, which every
+document here denied until 2026-10-19. The `make <machine>` targets below
+launch the macOS app at `$(BOX)` and are still for a person watching. CLAUDE.md
 carries the target list, one per `vm/` directory (`make xt`, `xt-640`,
 `pc5150`, `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-mfm`, `286`,
 `286-525`, `386sx`, `386`, `386-ps2`, `486`, `pentium`, and the application
@@ -1475,7 +1575,10 @@ code runs on them verbatim, so they answer whether constants sized against a
 the tracker's ring refill, Arkanoid's pacing — which neither MartyPC nor
 QEMU can.
 
-It is not installed in the web container and needs BIOS ROMs.
+`python3 tools/os88box.py build` puts it and its ROM set in a container
+(`build/86box/`, about three minutes); `vm/286-mega` is the owner's mr286
+with `mega.img` in A:, the profile the kern_mega boot loop was found on
+(KERN-MEGA-PLAN item 88).
 
 Three traps before blaming the OS: it silently clamps `mem_size` to the
 machine's maximum; a `wp://` prefix on an `fdd_0N_fn` path mounts that floppy

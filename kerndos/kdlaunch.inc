@@ -240,6 +240,60 @@ KDL_STAGE   equ 104             ; dw WHERE THE KERNEL WILL LOOK for everything
                                 ; The payload is 377 bytes today; the assert
                                 ; each side writes is what keeps it true
 
+; --- THE kern_mega TAIL (docs/plans/KERN-MEGA-DOS-PLAN.md 2.3, 6) -----------
+; The last 24 bytes of the sector, written by kern_mega's `hbm_dosrun` into
+; the STAGED block and read only by a -DKD_MEGA kern_dos. AT THE END AND NOT
+; IN THE HEADER, because the header runs to KDL_BODY with no spare byte and a
+; row moving is a KDL_VER bump: the body ends at 483 today and the assert
+; below keeps it clear of this tail. On every other build these bytes are the
+; sector's slack, which nothing reads.
+KDL_XBASE   equ 488             ; dd linear base of the XMS ARENA (section 6),
+                                ;    0 = none. 1KB-aligned, above 1MB
+KDL_XKB     equ 492             ; dw ...and its KB
+KDL_PBASE   equ 494             ; dd linear base of the PARK (section 2.3
+                                ;    step 3), 0 = no park: the kern_big route.
+                                ;    The park's own header (kernel/megados.inc)
+                                ;    carries the stub and everything it needs
+KDL_PSUM    equ 498             ; dd the distributed sum over the park and the
+                                ;    kernel's high set, taken after the copy
+KDL_PKB     equ 502             ; dw KB of conventional memory parked (from 0)
+KDL_PLOW    equ 504             ; dw the lowest PARAGRAPH left IN PLACE (12.1
+                                ;    item 5's partial park), 0 = all parked:
+                                ;    kern_dos's arena must end below it
+KDL_POUT    equ 506             ; dw ms the park's copy and sum took, carried
+                                ;    to the way back for the menu bar's line
+; --- AND WHERE THE OTHER kern_dos IS (SPEC.md 96.40.9.1, KERN-MEGA-PLAN 14.26)
+; The HMA image switches itself to part 3, the LOW one, for an EXEPACK program
+; its unpacker refuses - reading the part off the disk with its own file layer,
+; because the stub that read part 2 is gone. Two numbers are the BOX's (it
+; holds part 3's row) and two the KERNEL's (it found DOS.O88 at step 2); a
+; zero offset or cluster is a sender that did not fill them, and the switch is
+; not tried. Four bytes in the gap between the body and the park's fields, the
+; body ending at 483, and four of the park's reserve.
+KDL_L3OFF   equ 484             ; dw part 3's first file SECTOR (the box's)
+KDL_L3ZB    equ 486             ; dw ...and its PACKED bytes (the box's)
+KDL_O88CL   equ 508             ; dw DOS.O88's first cluster (the kernel's)
+KDL_O88V    equ 510             ; db ...and its volume (the kernel's)
+KDL_MRSV    equ 511             ; db reserved for the park
+%assign KDL_MTAIL 484
+
+; --- AND kern_big's HMA, on the live resume (SPEC.md 96.49.9) ---------------
+; A kern_big whose `.cold` is in the HMA - and the drivers in the pool under
+; it - runs code above 1MB that the image does not carry, so the live route
+; must know that A20 is open and those bytes are still the kernel's before it
+; jumps. The kernel says which span it summed and what it read; `kd_resume`
+; sums the same words through FFFF and takes `int 19h` on a difference - a
+; shut gate included, since FFFF:x is then conventional memory.
+; THE SAME BYTES AS THE kern_mega TAIL's XMS ARENA ABOVE, because neither
+; build writes the other's: kern_mega has no HMA image (its HMA is its own),
+; and no kern_big build has an arena or a park. Written by the KERNEL into the
+; staged block; the box never writes them and its record is zeroed bss, so a
+; kernel that does not write them hands over KDL_HOFF = 0 - nothing to check.
+KDL_HOFF    equ 488             ; dw the first HMA offset (FFFF:x) summed,
+                                ;    0 = `.cold` is not in the HMA
+KDL_HWDS    equ 490             ; dw ...the words summed from there
+KDL_HSUM    equ 492             ; dd s1, s2 (kernel/hbstage.inc's HS_HMASUM)
+
 KDL_SIG     equ 0x314C444B      ; 'KDL1', little-endian
 KDL_VER_NOW equ 5               ; what this tree writes and checks. It is a
                                 ; CONSTANT and not a literal at three sites,
@@ -327,6 +381,22 @@ KDLF_RAHM   equ 0x0700          ; DOES NOT GET** (SPEC.md 96.36.6), as
                                 ; MOVES - filling reserved bits of a word that
                                 ; is already there moves none, which is
                                 ; exactly KDL_MOUBASE's own precedent
+KDLF_LOADFIX equ 0x10           ; bit 4: LOADFIX (kern_mega's box, W4): the
+                                ; program's arena starts at 64KB at the lowest,
+                                ; DOS 5's answer to a program packed by EXEPACK
+                                ; that cannot be loaded below it with A20 open
+KDLF_LOWDOS equ 0x20            ; bit 5: kern_mega's LOW kern_dos (SPEC.md
+                                ; 96.40.9.2): the box posted part 3, the image
+                                ; assembled at 0060:0000, and the KERNEL's
+                                ; loader stub expands it there and not in the
+                                ; HMA. kern_dos itself never reads the bit -
+                                ; which image it is, it was assembled as
+KDLF_SAVE   equ 0x40            ; bit 6: kern_mega's `Save the session to
+                                ; disk first` (SPEC.md 96.40.9.3): HIBER.DRV
+                                ; writes HIBERNAT.IMG before the park, so a
+                                ; machine reset or switched off during the
+                                ; program comes back from the disk. The
+                                ; KERNEL's to act on; kern_dos never reads it
 KDLF_EXE    equ 2               ; bit 1: the box already knows it is an .EXE.
                                 ; A HINT and not an instruction - kern_dos
                                 ; still asks `dos_is_exe`, which reads the

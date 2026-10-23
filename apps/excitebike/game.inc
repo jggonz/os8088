@@ -75,6 +75,15 @@ xb_presented:
     ret
 
 ; ---- the sub-tick clock -------------------------------------------------------
+; Two entries, one per DS.  xb_clk_sample is for a caller whose DS is the package -
+; all of them but two - and is DS-relative.  xb_clk_samplef takes ANY DS: xv_sync's
+; and xc_render's full-window column loops sample with DS on the card or the
+; dictionary claim, and there it is CS-relative.  Under kern_mega CS is a read-only
+; code alias and each of those stores would be a #GP, so xb_pmset (video.inc, at the
+; top of every fullscreen bracket under CPU_F_PM) writes a `jmp short .pm` over its
+; first two bytes - one-byte instructions both, so the jump replaces them exactly -
+; and .pm takes DS = the package's own data selector for the DS entry.  A real-mode
+; kernel never sees the jump and pays nothing for it (KERN-MEGA-PLAN 14.21).
 xb_clk_sample:
     push ax
     pushf
@@ -86,13 +95,39 @@ xb_clk_sample:
     in al, 40h
     xchg al, ah
     popf
-    cmp ax, [cs:xb_pitl]            ; (CS-relative: the heavy routines call this with DS = the
-    jbe .same                       ; card or a claim, at the seams between their pieces)
-    inc word [cs:xb_subs]           ; the count went UP: one reload
+    cmp ax, [xb_pitl]
+    jbe .same
+    inc word [xb_subs]              ; the count went UP: one reload
+.same:
+    mov [xb_pitl], ax
+    pop ax
+    ret
+
+xb_clk_samplef:
+    push ax                         ; (these two bytes: xb_pmset's jump to .pm under CPU_F_PM)
+    pushf
+    cli
+    xor al, al
+    out 43h, al
+    in al, 40h
+    mov ah, al
+    in al, 40h
+    xchg al, ah
+    popf
+    cmp ax, [cs:xb_pitl]
+    jbe .same
+    inc word [cs:xb_subs]
 .same:
     mov [cs:xb_pitl], ax
     pop ax
     ret
+.pm:
+    push ds
+    mov ds, [cs:xb_self]
+    call xb_clk_sample
+    pop ds
+    ret
+    times -((xb_clk_samplef.pm - (xb_clk_samplef + 2)) >> 7) db 0  ; (the jump must be SHORT)
 
 ; AX = whole sub-ticks crossed, BX = the phase difference (signed, |BX| < XB_SUB)
 ; -> DX:AX = the span in PIT counts.  Clobbers BX, CX.

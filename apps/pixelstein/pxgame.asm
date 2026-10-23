@@ -30,7 +30,14 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'Pixelstein 3D', px_entry, OS88_F_ICON, OS88_STACK_256
+    OS88_HEADER 'Pixelstein 3D', px_entry, OS88_F_ICON, OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM
+                                    ; OS88_HIGH (KERN-MEGA-PLAN 14.48): on
+                                    ; kern_mega the WHOLE keep - this program,
+                                    ; the scratch and the byte textures - is
+                                    ; one block above 1MB, and the program
+                                    ; names its parts by px_hseg rather than
+                                    ; by a sum on its own segment. OS88_HIGHMEM:
+                                    ; the shadow is a claim it does no sum on
 
     OS88_ICON16
 %include "pxicon.inc"
@@ -306,12 +313,15 @@ PXV_ROWS0   equ 5                   ; the View row: Size 48..80 are items
 ; --- the handoff (97.9): one package, two sources - pxstein.asm writes these -
 PXH_MAGIC   equ 0
 PXH_LEV     equ 2
-PXH_GEN     equ 4
+PXH_GEN     equ 4                   ; the loader's OFFSET of the scratch part
+                                    ; past us in paragraphs, which px_hconv
+                                    ; turns into its segment (14.48)
 PXH_COLD    equ 6
 PXH_NLEV    equ 8
 PXH_LEVLEN  equ 10
 PXH_ART     equ 12                  ; the expanded art masters (97.4), 0 = none
-PXH_BT      equ 14                  ; the byte-texture part, 0 = refused
+PXH_BT      equ 14                  ; the byte-texture part, 0 = refused -
+                                    ; an offset likewise, until px_hconv
 PXH_GENLEN  equ 16                  ; the scratch part's bytes (PX_GENKB * 1024):
                                     ; the bound px_gen_build emits under
 PXH_SPR     equ 18                  ; the sprite set (97.6), 0 = refused
@@ -336,6 +346,8 @@ px_entry:
     call OSAPI_SRAND
     call OSAPI_CPU_INFO
     mov [px_tier], al
+    mov [px_cpuf], ah
+    call px_hconv                   ; the parts' offsets into segments (AX kept)
     or al, al                       ; THE SHADOW, BEFORE THE WINDOW (97.9): a
     mov ax, PX_SHKB                 ; refusal is a sentence in the window and
     jnz .shk                        ; never a black bounce - and on an 8086,
@@ -454,6 +466,124 @@ px_entry:
     ret
 
 ; -----------------------------------------------------------------------------
+; px_hconv - the loader's two OFFSETS into segments, once at entry (KERN-MEGA-
+;            PLAN 14.48): [px_hand + PXH_GEN] and PXH_BT arrive as paragraphs
+;            past the program (0 = refused) and leave as the segments every
+;            other routine reads them as, with [px_gencs] the one to FAR CALL
+;            the scratch through - our own CS when it was refused, for the
+;            bodies then run where they are. The offsets are kept for
+;            px_reloc. On kern_mega with the keep above 1MB each is a
+;            SELECTOR over its part alone (OSAPI_MEM_SUBSEG); everywhere else
+;            it is our segment plus the offset, which is op_seg's own answer
+;            and so exactly the word the loader wrote before. px_hrel is the
+;            same from the KEPT offsets and by the sum alone, for px_reloc.
+;            Preserves every register but flags
+; -----------------------------------------------------------------------------
+px_hconv:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [px_hand + PXH_GEN]     ; the offsets, kept
+    mov [px_genoff], ax
+    mov ax, [px_hand + PXH_BT]
+    mov [px_btoff], ax
+    xor bh, bh                      ; SUBSEG may answer
+    jmp short px_hrel.go
+px_hrel:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bh, 1                       ; the sum alone: we moved, so we are low
+.go:
+    mov ax, [px_genoff]
+    mov cx, PX_GENKB_CAP * 64       ; the scratch part's own paragraphs
+    mov bl, 1                       ; the CODE pair first: its data twin is
+    call px_hseg                    ; then the selector the data ask reuses
+    or ax, ax
+    jnz .gcs
+    mov ax, cs                      ; no scratch: the bodies in the image
+.gcs:
+    mov [px_gencs], ax
+    mov ax, [px_genoff]
+    dec bx                          ; BL = 0: the data
+    call px_hseg
+    mov [px_hand + PXH_GEN], ax
+    mov ax, [px_btoff]
+    mov cx, PXA_BTKB * 64
+    call px_hseg
+    mov [px_hand + PXH_BT], ax
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_hseg - AX = paragraphs past us (0 = refused, answered 0), BL = 1 to FAR
+; CALL there or 0 to read it, CX = the part's paragraphs, BH = 0 to ask
+; OSAPI_MEM_SUBSEG first -> AX = its segment: SUBSEG's selector over exactly
+; the part, or DS + AX - through OS88_CODESEL for a far call, which is the
+; segment itself on every real-mode kernel and the LDT code alias on
+; kern_mega's identity map (a part is on the 512-byte grid, SPEC.md 20.12.2).
+; Clobbers DX, flags
+px_hseg:
+    or ax, ax
+    jz .out
+    or bh, bh
+    jnz .sum
+    push bx
+    or bl, 2                        ; CX = the window's length
+    call OSAPI_MEM_SUBSEG           ; CF = 0: DX = the data selector, its
+    pop bx                          ; code twin at DX - 8
+    jc .sum
+    xchg ax, dx
+    test bl, 1
+    jz .out
+    sub ax, 8
+.out:
+    ret
+.sum:                               ; CF = 1, every register kept: the sum
+    mov dx, ds                      ; is right where we are
+    add ax, dx
+    test bl, 1
+    jz .out
+    OS88_CODESEL ax, byte [px_cpuf]
+    ret
+
+; px_hsegs - the words DERIVED from the handoff's segments: px_bseg (the
+; bodies' data, part 1 or part 0), the segment half of px_qcur, px_qcurv and
+; px_qcurh and, with part 1, of px_drvp and px_drv2p (their CODE,
+; [px_gencs]), and part 1's own copy of the byte textures' segment at
+; PXG_QTEX and of its own data segment at PXG_QDS (KERN-MEGA-PLAN 14.50).
+; px_gen_init's and px_reloc's. Preserves every register but flags
+px_hsegs:
+    push ax
+    push es
+    mov ax, [px_hand + PXH_GEN]
+    mov [px_bseg], ax
+    or ax, ax
+    jz .img
+    mov es, ax
+    mov ax, [px_gencs]
+    mov [px_drvp + 2], ax
+    mov [px_drv2p + 2], ax
+    mov ax, [px_hand + PXH_BT]
+    mov [es:PXG_QTEX], ax
+    mov [es:PXG_QDS], es            ; part 1's data, px_drvpm_tpl's (14.50)
+    jmp short .q
+.img:
+    mov [px_bseg], ds               ; refused: the bodies are in the image,
+.q:                                 ; and no driver and no PXG_QTEX
+    mov ax, [px_gencs]
+    mov [px_qcur + 2], ax
+    mov [px_qcurv + 2], ax
+    mov [px_qcurh + 2], ax
+    pop es
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; px_reloc - our region moved (SPEC.md 66.6.1, 66.6.1.2): BX = the segment it
 ;            WAS at, DX = where it is now, DS = the new one. Preserves every
 ;            register.
@@ -461,70 +591,38 @@ px_entry:
 ; NOT A `ret`, for tests/rehome's reason (rp_reloc is the model): this is a
 ; RE-HOMED program, its region is the parts carve, and the carve holds the
 ; scratch the scalers are generated into (part 1) and the byte textures
-; (part 2) beside part 0 - so the loader's handoff named two segments that
-; MOVE WITH US, and nothing in the kernel knows
-; those words exist. EVERY WORD THAT NAMES OUR OWN REGION, enumerated
-; (97.9's table), each moved by the delta when it is not 0 (a refused part
-; is 0, and a delta added to 0 is a wild segment - 66.6.1's "a proc guards
-; its zeros"):
-;   px_hand + PXH_GEN / PXH_BT                the loader's two
-;   px_bseg, and the segment half of px_qcur / px_qcurv / px_qcurh
-;                                             the bodies: part 1, or part 0
-;                                             itself when part 1 was refused
-;   px_drvp + 2, px_drv2p + 2                 the driver's two far entries
-;   [PXG_QTEX] INSIDE part 1                  the wall pass's ES: the byte
-;                                             textures' segment, copied there
-;                                             by px_gen_init - rewritten from
-;                                             the fixed PXH_BT
-; and NOT: PXH_LEV (the level stream is a lazy part since wave 4, fetched
-; into a claim of its own), PXH_ART and PXH_SPR (the masters and the sprite set are claims of
-; their OWN, slot-owned data claims the compactor never moves - the same
-; rule tests/rehome's rp_cseg follows), px_shseg (a pinned claim), px_dseg
-; (the shadow or the framebuffer), [PXG_QSPR] (the sprite set's). The
-; far-call return part 0 leaves on a stack during a compose is the other
-; half, and it is never there when this runs: the region moves only while
-; the worker is PARKED in OSAPI_TASK_ALIVE, where its stack is empty, and
-; the kernel then re-enters it at px_worker_rs (OS88_WORKER_RESTARTABLE,
-; 66.6.2); a callback or a bracket names us in [wm_pkgs], which pins us
+; (part 2) beside part 0 - so the segment words that name them MOVE WITH US,
+; and nothing in the kernel knows those words exist. EVERY WORD THAT NAMES
+; OUR OWN REGION, enumerated (97.9's table), RE-DERIVED from our new segment
+; and the loader's two offsets rather than moved by a delta (KERN-MEGA-PLAN
+; 10.3 items 47 and 50): a CODE word is an LDT alias on kern_mega, and an
+; alias moves by the delta >> 2, so adding the delta named some other
+; selector. px_hsum gives the right word on every kernel; a refused part is
+; 0 and stays 0 (66.6.1's "a proc guards its zeros"):
+;   px_hand + PXH_GEN / PXH_BT                the two parts, data
+;   px_bseg                                   the bodies' data: part 1, or
+;                                             part 0 when it was refused
+;   px_gencs, and the segment half of px_qcur / px_qcurv / px_qcurh and of
+;   px_drvp / px_drv2p                        ...and their CODE: part 1's, or
+;                                             our CS when it was refused
+;   [PXG_QTEX] INSIDE part 1                  the wall pass's ES, = PXH_BT
+;   [PXG_QDS] INSIDE part 1                   part 1's own data, = PXH_GEN
+; and NOT: PXH_LEV, PXH_ART, PXH_SPR (claims of their OWN, slot-owned data
+; claims the compactor never moves - the same rule tests/rehome's rp_cseg
+; follows), px_shseg (a claim), px_dseg (the shadow or the framebuffer),
+; [PXG_QSPR] (the sprite set's). The far-call return part 0 leaves on a stack
+; during a compose is the other half, and it is never there when this runs:
+; the region moves only while the worker is PARKED in OSAPI_TASK_ALIVE, where
+; its stack is empty, and the kernel then re-enters it at px_worker_rs
+; (OS88_WORKER_RESTARTABLE, 66.6.2); a callback or a bracket names us in
+; [wm_pkgs], which pins us. Above 1MB it is never called at all: a pool block
+; moves with no proc, its selectors unchanged (KERN-MEGA-PLAN 14.38.3)
 ; -----------------------------------------------------------------------------
 px_reloc:
-    push ax
-    push bx
-    push cx
-    push si
-    push es
-    mov ax, dx
-    sub ax, bx                      ; AX = the delta, in paragraphs
-    mov si, px_rltab
-    mov cx, PX_RLN
-.w:
-    mov bx, [si]
-    cmp word [bx], 0
-    je .n                           ; a refused part: 0, and it stays 0
-    add [bx], ax
-.n:
-    inc si
-    inc si
-    loop .w
-    mov ax, [px_hand + PXH_GEN]     ; ...and part 1's own copy of the byte
-    or ax, ax                       ; textures' segment, from the word just
-    jz .out                         ; fixed
-    mov es, ax
-    mov ax, [px_hand + PXH_BT]
-    mov [es:PXG_QTEX], ax
-.out:
     inc byte [px_moved]             ; the gate reads this: a proc declared and
-    pop es                          ; never called is 66.2's own failure
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-px_rltab:   dw px_hand + PXH_GEN, px_hand + PXH_BT
-            dw px_bseg, px_qcur + 2, px_qcurv + 2, px_qcurh + 2
-            dw px_drvp + 2, px_drv2p + 2
-PX_RLN      equ ($ - px_rltab) / 2
+                                    ; never called is 66.2's own failure
+    call px_hrel                    ; both parts, from the kept offsets...
+    jmp short px_hsegs              ; ...and every word derived from them
 
 ; =============================================================================
 ; THE WINDOW CALLBACKS - near procs, ES = KERNEL_SEG, the gfx lock held
@@ -1112,6 +1210,9 @@ px_ab10:     db 'walks a frozen world at 9.9 fps.', 0  ; quoted a frozen
     ZBUF  px_lu1, PX_COLMAX * 2
     ZBUF  px_ll0, PX_COLMAX * 2
     ZBUF  px_ll1, PX_COLMAX * 2
+%if px_ll1 - px_ltop != 7 * PX_COLMAX * 2
+%error "px_force_all fills px_ltop..px_ll1 as ONE run: keep the eight together"
+%endif
 ; --- the cast's per-frame and per-column words --------------------------------
     ZBUF  px_xpq, 8
     ZBUF  px_ypq, 8
@@ -1124,6 +1225,11 @@ px_ab10:     db 'walks a frozen world at 9.9 fps.', 0  ; quoted a frozen
     ZBUF  px_qcurv, 4               ; ...and its two pass tails
     ZBUF  px_qcurh, 4
     ZWORD px_bseg
+    ZWORD px_gencs                  ; the scratch part's CODE segment, or our
+                                    ; CS when it was refused (px_hconv)
+    ZWORD px_genoff                 ; the loader's two offsets, paragraphs past
+    ZWORD px_btoff                  ; us, kept for px_reloc (KERN-MEGA-PLAN 14.48)
+    ZBYTE px_cpuf                   ; OSAPI_CPU_INFO's AH: OS88_CODESEL's
     ZWORD px_col
     ZWORD px_qs2
     ZWORD px_tanv
@@ -1229,6 +1335,9 @@ px_gent  equ px_bstage            ; a generated height's entry, by h - IN
     ZBYTE px_sprback                ; ...the class it was built for (0xFF none)
     ZBYTE px_r0
     ZBYTE px_r1
+%if px_r1 != px_r0 + 1
+%error "px_r0 and px_r1 are written as ONE word: keep them adjacent"
+%endif
     ZBYTE px_page
     ZBYTE px_wclip
     ZBUF  px_inkt, 64

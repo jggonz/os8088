@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The C64's ROM is INSIDE the package now (SPEC.md 20.12, C64-SPEC 1.4).
+"""The C64's ROM - and its overlay - are INSIDE the package now (SPEC.md
+20.12, C64-SPEC 1.4 and 13.3).
 
     make c64disk && python3 tests/c64part.py [machine] [system-image]
 
@@ -15,10 +16,18 @@ SECOND host-test process to draw the screen a mis-copied disk showed.
 It is part 0 of C64.O88 now. All of that is deleted rather than disabled,
 because a greying may not outlive its reason (SPEC.md 47).
 
+AND THE OVERLAY IS PART 1 (C64-SPEC 13.3, SPEC.md 73.14.2). C64.OVL was the
+second sidecar, and the program read it at its first wake in every session;
+it is an EAGER part now, in the same carve read as the ROM, and its refusal
+machinery - a first-wake probe, a fence on every locked callback and an
+`Unable to load C64.OVL.` row - is deleted with it. Assertion 1 covers both
+names, assertion 2 both rows, and 5c reads the module's bytes at the segment
+the runtime bound its vectors to.
+
 FIVE ASSERTIONS, and the last is the one that says the bytes are real:
 
-  1. C64.ROM IS NOT ON THE DISK. Read out of the guest's own directory
-     listing, because that is what a user would see;
+  1. NEITHER C64.ROM NOR C64.OVL IS ON THE DISK. Read out of the guest's
+     own directory listing, because that is what a user would see;
   2. the package declares parts - version 3, flags bit 2 - and its IMAGE is
      smaller than its FILE. There is no .o88 v6 and never was;
   3. it launched: a window, and ld_status 0;
@@ -74,6 +83,7 @@ SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/c64.img"
 O88 = "build/c64.o88"
 ROM_PART = 0
+OVL_PART = 1                            # CC_OVL_ROW, the table's LAST row
 CM_RAMSEG, CM_ROMSEG = 0, 2             # apps/c64/c64cpu.inc's machine record
 C64_MATRIX = 0x0400                     # the default screen matrix
 fails = []
@@ -93,7 +103,7 @@ def run():
     S = os88sym.linear
     blob = open(os.path.join(ROOT, O88), "rb").read()
     image = u16(blob, 8)
-    rows = os88parts.rows(blob[:image])
+    rows = os88parts.image_rows(blob)   # the table is in the IMAGE (20.13.8)
     say("C64.O88: image %d, file %d, %d part(s), flags 0x%02X"
         % (image, len(blob), len(rows), blob[3]))
 
@@ -109,10 +119,23 @@ def run():
     if image >= len(blob):
         fails.append("C64.O88's image (%d) is not smaller than the file (%d) "
                      "- the ROM was not appended" % (image, len(blob)))
-    if len(rows) != 1 or rows[ROM_PART]["len"] != 20480:
-        fails.append("the part table is %r and should be one ASSET of 20,480 "
-                     "bytes - the KERNAL, BASIC and CHARGEN of C64-SPEC 1.4"
-                     % (rows,))
+    if len(rows) != 2 or rows[ROM_PART]["len"] != 20480:
+        fails.append("the part table is %r and should be an ASSET of 20,480 "
+                     "bytes - the KERNAL, BASIC and CHARGEN of C64-SPEC 1.4 - "
+                     "and the overlay's row after it" % (rows,))
+    ovl = open(os.path.join(ROOT, "build", "C64.OVL"), "rb").read()
+    if len(rows) == 2:
+        orow = rows[OVL_PART]
+        if (orow["len"] != len(ovl)
+                or orow["kind"] != os88parts.EQU["OP_SEG"]
+                or orow["flags"] & os88parts.EQU["OP_LAZY"]):
+            fails.append("the overlay's row is %r and should be an EAGER "
+                         "OP_SEG part of %d bytes - build/C64.OVL, the cut "
+                         "module (C64-SPEC 13.3)" % (orow, len(ovl)))
+        elif os88parts.part_bytes(blob, OVL_PART) != ovl:
+            fails.append("part 1 of C64.O88 does not unpack to build/C64.OVL "
+                         "- the package carries a module other than the one "
+                         "its vectors were assembled against")
 
     with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         mo = os88mouse.Mouse(marty=m)
@@ -128,6 +151,11 @@ def run():
         # --- 1. ...and the sidecar is not in the folder -------------------
         listed = [n.upper() for n, _ in dispcp.listing(m, S)]
         say("C64/ holds %r" % listed)
+        if "C64.OVL" in listed:
+            fails.append(
+                "C64.OVL is still on the disk. It is part 1 of C64.O88 now "
+                "(C64-SPEC 13.3), and a file beside the package is a second "
+                "copy of the module that nothing reads")
         if "C64.ROM" in listed:
             fails.append(
                 "C64.ROM is still on the disk. The whole point of the "
@@ -200,6 +228,22 @@ def run():
                     "carve one sector short reads correctly at the FRONT"
                     % (what, off, got.hex(), rom[off:off + 16].hex()))
 
+        # --- 5c. ...and the OVERLAY is where the runtime bound it ----------
+        # cc_ovseg is the segment every vector's far call lands in (crt0's
+        # cc_ovinit binds it from op_seg at launch, before any C runs), so
+        # the module's first and last bytes there are the claim the eager
+        # carve made good - the last window for 5a's reason.
+        oseg = u16(m.read((seg << 4) + C64.sym("cc_ovseg"), 2))
+        say("cc_ovseg %04X" % oseg)
+        for off in (0, len(ovl) - 16):
+            got = bytes(m.read((oseg << 4) + off, 16))
+            if not oseg or got != ovl[off:off + 16]:
+                fails.append(
+                    "the overlay at cc_ovseg %04X differs at offset 0x%04X: "
+                    "the guest holds %s and build/C64.OVL holds %s - every "
+                    "menu command far-calls into these bytes"
+                    % (oseg, off, got.hex(), ovl[off:off + 16].hex()))
+
         # --- and the machine is RUNNING, which is as far as this row goes -
         st = u16(m.read((seg << 4) + C64.sym("_c64_state"), 2))
         c0 = u16(m.read((seg << 4) + C64.sym("_c64_cyc_lo"), 2))
@@ -232,8 +276,9 @@ def main():
         for f in fails:
             print("  " + f)
         return 1
-    print("\nc64part: the ROM is in the package, the standard placed it and "
-          "its bytes are the ROM - PASS on %s" % MACHINE)
+    print("\nc64part: the ROM and the overlay are in the package, the "
+          "standard placed them and their bytes are right - PASS on %s"
+          % MACHINE)
     return 0
 
 

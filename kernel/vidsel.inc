@@ -28,6 +28,9 @@ VID_A_HERC  equ 1 << VID_HERC
 VID_A_CGA   equ 1 << VID_CGA
 VID_A_EGA   equ 1 << VID_EGA     ; bit 3. An EGA machine is EGA + CGA (mode 6),
                                  ; never part of an extended desktop (39.24)
+VID_A_VESA  equ 1 << VID_VESA    ; bit 4. Lit by vx_boot_x when VESA.DRV
+                                 ; attaches, and by nothing a probe can find:
+                                 ; the probe IS the driver (SPEC.md 120.2)
 
 ; SPEC.md 39.19.2's placements. TWO and not four, because the primary is
 ; always at the virtual origin, so "which monitor is on the left" is answered
@@ -372,7 +375,8 @@ section .text                   ; ...and the overlay's three end here
 ; out:      CF = 0 yes, CF = 1 no
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
-vid_avail_test:
+%macro VSW_AVAIL 1              ; %1_avail_test (KSW_SECT, kernel.asm): CTRL.DRV's
+%1 %+ _avail_test:               ; `vid`, and the boot blob's `bvs` (driver.inc)
     push ax
     push cx
     cmp al, VID_KIND_MAX + 1    ; THE RANGE CHECK ANSWERS IN CF ITSELF, and it
@@ -399,6 +403,9 @@ vid_avail_test:
     pop cx
     pop ax                      ; pop touches no flag
     ret
+%endmacro
+section .modu                   ; the Display page's (KSW_SECT, kernel.asm)
+VSW_AVAIL vid
 
 ; -----------------------------------------------------------------------------
 ; vid_equip - tell the BIOS which KIND of display this machine now has
@@ -428,7 +435,13 @@ vid_avail_test:
 ; that exists, which is the harder half to notice, because the code reads
 ; consistent with the comment right up until you grep.
 ; -----------------------------------------------------------------------------
-vid_equip:
+; VSW_EQUIP %1 - %1_equip, written once: CTRL.DRV's `vid` (vid_switch's),
+; the boot blob's `bvs` (driver.inc) and EXTD.DRV's `ext` (extmod.inc - the
+; fsx bracket's restore onto an extended desktop, which must not need the
+; panel). Three copies of 18 bytes where one resident copy was 32 to keep:
+; every caller is in one of the three images (kernel size pass 13)
+%macro VSW_EQUIP 1
+%1 %+ _equip:
     push ax
     push bx
     push ds
@@ -438,7 +451,11 @@ vid_equip:
     mov bl, 0x30                ; 11b = monochrome at B000
 .go:
     xor ax, ax                  ; the BIOS data area, by segment 0 and the
+%ifdef KERN_MEGA
+    MEGA_SEG0 ds                  ; segment 0 is the NULL selector
+%else
     mov ds, ax                  ; LINEAR offset 0x410 = 0040:0010 (a byte
+%endif
     mov al, [0x0410]            ; shorter than mov ax, 40h - size pass 9)
     and al, 0xCF
     or al, bl
@@ -447,6 +464,9 @@ vid_equip:
     pop bx
     pop ax
     ret
+%endmacro
+VSW_EQUIP vid                   ; (still `.modu`: VSW_AVAIL's section)
+section .text
 
 ; -----------------------------------------------------------------------------
 ; vid_mono_text - put the REAL mono card into 80x25 text, when int 10h cannot
@@ -582,7 +602,8 @@ vid_reboot:
 ; 2.9.6), which stage 1 reads before it jumps and kmain gives back after
 ; spl_finish - so this is drawing code that exists for exactly as long as there
 ; is a loading screen to draw on, and then stops existing. The resident cost is
-; 4 bytes (ovw_font_run_x) plus the two SPLCALL sites.
+; 4 bytes (ovw_font_run_x, since kernel size pass 13 spw_near's `call bp`
+; and no shim at all) plus the two SPLCALL sites.
 ;
 ; **That is only possible since SPEC.md 2.5.1.** The overlay used to BE the FAT
 ; window, so the first mount ate it - and drv_boot's own mount is the very
@@ -861,10 +882,13 @@ spl_mdraw:
     mov es, ax                  ; font_run_x is the ES:SI entry
     mov si, spl_mline
     mov ax, (CBLACK << 8) | CWHITE
-    call KERNEL_SEG:ovw_font_run_x  ; ONE opaque run: ink white, ground black,
+    push bp                     ; (every register kept: spw_near takes the
+    mov bp, font_run_x          ; routine in BP)
+    call KERNEL_SEG:spw_near    ; ONE opaque run: ink white, ground black,
                                 ; which is the loading screen on all three
                                 ; adapters whatever the theme says about a
                                 ; desktop that has not been drawn yet
+    pop bp
     dec byte [spl_busy]
     pop es
     pop si
@@ -990,10 +1014,26 @@ section .text
 ; mono card", the mono kinds are a SET, and a set of one is the only thing a
 ; single bit can ever encode.
 ; -----------------------------------------------------------------------------
-%if VID_KIND_MAX != VID_EGA
+%ifdef VID_EXT
+ %define VID_KIND_OK (VID_KIND_MAX == VID_VESA)
+%else
+ %define VID_KIND_OK (VID_KIND_MAX == VID_EGA)
+%endif
+; ...AND VID_VESA (4) IS ADMITTED ON THE STRENGTH OF EXACTLY THAT TEST
+; (SPEC.md 120.5): `dec` maps it to 3, so it is PLANAR to vid_bk - which
+; blanks through the Attribute Controller, the right thing for what is the
+; same VGA card in another mode - and COLOUR to thm_set, which it is. Neither
+; routine needed an arm; vid_disp_planes did (below), because a plane count is
+; the one answer that differs.
+%if !VID_KIND_OK
   %error "vid_blank, vid_blank_kind and vid_unblank_kind decide WHICH CARD by comparing against VID_HERC BY NAME and then treating `kind-1 >= 2` as PLANAR and everything else as the CGA (SPEC.md 39.18.1), vga12.inc's thm_set spells the same `kind-1 >= 2` for `is the primary a colour adapter` (SPEC.md 76.12.1), and vid_avail_test's `cmp al, VID_KIND_MAX` is the range that rests on it. A FIFTH kind is silently PLANAR to the dispatch and to the theme, and silently a CGA to vid_blank. Give it an arm in each of them before raising VID_KIND_MAX"
 %endif
-vid_blank:
+; VSW_SWITCH %1, %2, %3 - %1_blank and %1_switch, written once (KSW_SECT,
+; kernel.asm): %1 the prefix (`vid` in CTRL.DRV, `bvs` in the boot blob), %2
+; the hop a RESIDENT callee is reached through (KSWK / BSWK), %3 the prefix of
+; the wm_refit it calls (`wm` / `bvw`)
+%macro VSW_SWITCH 3
+%1 %+ _blank:
     push ax
     mov ah, [vid_kind]          ; the kind being LEFT
     cmp al, ah                  ; the same card either way - nothing to dark,
@@ -1005,7 +1045,7 @@ vid_blank:
     jne .out                    ; modes (39.11.1) and darking it is the bug
 .dark:
     mov al, ah                  ; dark the card being LEFT
-    call vid_blank_kind
+    %2 vid_blank_kind
 .out:
     pop ax
     ret
@@ -1044,15 +1084,19 @@ vid_blank:
 ;      wm_refit, because every window's frame was clamped onto the OLD screen
 ;      and a 640x480 window is off the bottom of a 640x200 one.
 ; -----------------------------------------------------------------------------
-vid_switch:
+%1 %+ _switch:
     cmp al, [vid_kind]
     je .already
-    call vid_avail_test
+    call %1 %+ _avail_test
     jc .refuse
 
-    call cur_unlazy              ; 1. the cursor's save-under is the old
-    call vid_blank              ; geometry's - and so is the tube we are
-    call wm_su_drop_all         ; walking away from, and so is every raise
+    %2 cur_unlazy               ; 1. the cursor's save-under is the old
+    call %1 %+ _blank           ; geometry's - and so is the tube we are
+%ifdef KERN_SMALL               ; walking away from, and so is every raise
+    KSWN wm_su_drop_all         ; (in this image on kern_small, KSW_SECT)
+%else
+    %2 wm_su_drop_all           ; (resident on kern_big: OSAPI_THM_SET's too)
+%endif
                                 ; cache (SPEC.md 39.14.8.1): wm_su_ck compares
                                 ; RECTS, and a window small enough to fit both
                                 ; geometries does not move while the pixels
@@ -1060,12 +1104,12 @@ vid_switch:
                                 ; plane count
 
     mov [vid_kind], al          ; 2. republish the geometry
-    call vid_equip
-    call vid_apply
-    call vid_setmode
+    call %1 %+ _equip           ; (this image's own: VSW_EQUIP)
+    %2 vid_apply
+    %2 vid_setmode
 
 %ifdef KERN_BIG
-    call vid_disp_init          ; 3. ...and the OTHER card follows the switch:
+    call %1 %+ _disp_init       ; 3. ...and the OTHER card follows the switch:
                                 ; the records, the chrome's extent and the
                                 ; desktop union all describe the arrangement
                                 ; before it until this re-runs (SPEC.md
@@ -1073,12 +1117,12 @@ vid_switch:
                                 ; wm_refit, which read what it publishes
 %endif
 %ifdef DOCK_OPT
-    call dock_geom              ; ...and the strip on its edge, which on this
+    %2 dock_geom                ; ...and the strip on its edge, which on this
                                 ; adapter may not be the edge it was on
                                 ; (SPEC.md 30.5.1)
 %endif
-    call desk_rowcalc           ; 4. the two things vid_apply does not own
-    call wm_refit
+    call COLD_SEG:desk_rowcalc_x ; 4. the two things vid_apply does not own
+    call %3 %+ _refit
 %ifdef KERN_BIG
     push ax                     ; ...and the THEME, which can be a fact about
     mov al, [thm_kind]          ; the adapter: SPEC.md 76.12's Color theme is
@@ -1092,8 +1136,8 @@ vid_switch:
                                 ; also re-forces the two painters, which the
                                 ; pair below wanted anyway
 %endif
-    call menu_force             ; ...and the two the CHROME does not: setmode
-    call dock_force             ; cleared the framebuffer, so the bar's logo
+    %2 menu_force               ; ...and the two the CHROME does not: setmode
+    %2 dock_force               ; cleared the framebuffer, so the bar's logo
                                 ; and rule and the whole dock strip are gone,
                                 ; and both modules keep a record of what they
                                 ; last put on the glass (SPEC.md 12.9/30.3).
@@ -1105,6 +1149,10 @@ vid_switch:
     clc
 .refuse:                        ; (`jc` arrives with CF = 1)
     retf
+%endmacro
+section .modu                   ; the Display page's Set Primary (KSW_SECT)
+VSW_SWITCH vid, KSWK, wm
+section .text
 
 ; =============================================================================
 ; The per-display context (SPEC.md 39.12) - kern_big only
@@ -1522,7 +1570,7 @@ vid_ctx_ptr:
 ; boundary assembles and runs wrong, and both callers are here.
 ; -----------------------------------------------------------------------------
 vid_ctx_pre:
-    mov cx, KERNEL_SEG          ; both ends are ours; the caller's ES is not
+    KDATAR cx                   ; both ends are ours; the caller's ES is not
     mov ds, cx
     mov es, cx
     call vid_ctx_ptr            ; DI = the record. It reads no memory, so
@@ -1648,7 +1696,7 @@ vid_ctx_act:
 ;
 ; in:       the live geometry, already published by vid_apply
 ; out:      [vid_ndisp] = 1, [vid_cur] = 0, display 0 captured at (0,0)
-; clobbers: flags
+; clobbers: flags, BP (spw_near's target, left in it)
 ;
 ; Called from kmain beside vid_probe_avail and NOT from vid_apply - which is the
 ; trap this module already carries a scar from. vid_apply runs from the SPLASH,
@@ -1679,7 +1727,8 @@ vid_ctx_init:
     mov es, cx
     mov word [vid_ndisp], 1     ; one display, display 0 current (a pair)
     xor al, al
-    call KERNEL_SEG:cw_vid_ctx_ptr
+    mov bp, vid_ctx_ptr         ; (spw_near's `call bp`: kmain_o, the one
+    call KERNEL_SEG:spw_near    ; caller, holds nothing in BP)
     xor ax, ax                  ; display 0 sits at the virtual origin
     mov [es:di+VID_CTX_VX], ax
     mov [es:di+VID_CTX_VY], ax
@@ -1806,9 +1855,16 @@ vid_disp_planes:
     call vid_disp_of            ; AL = the display holding it...
     call vid_kind_of            ; ...and AL = that display's adapter
     mov cx, 1
-    cmp al, VID_VGA
-    jne .out
-    mov cl, 4
+    dec al                      ; vid_bk's mapping: VGA -> FF, HERC -> 0,
+    cmp al, 2                   ; CGA -> 1, EGA -> 2, so planar is `al >= 2`
+    jb .out                     ; unsigned. VID_EGA IS PLANAR (SPEC.md 39.24):
+    mov cl, 4                   ; counted as one plane, its cache kept plane 0
+                                ; and a reveal broadcast it to all four
+%ifdef VID_EXT
+    cmp al, 3                   ; ...and VID_VESA -> 3: the DEPTH, 8 or 16
+    jne .out                    ; (SPEC.md 120.4), so a save-under over it is
+    mov cx, [vx_bpp]            ; sized in packed bytes
+%endif
 .out:
     pop di
     pop ax
@@ -1951,7 +2007,12 @@ vid_dual_ok:
 ; card, and towards it the answer is the machine's colour card, which is the
 ; VGA when there is one.
 ; -----------------------------------------------------------------------------
-vid_disp_other:
+; VSW_DISP %1, %2 - %1_disp_other and %1_disp_init, written once: CTRL.DRV's
+; `vid` and the boot blob's `bvs` (KSW_SECT, kernel.asm), %2 the hop a
+; resident callee is reached through. kmain_o and drv_boot reach the blob's,
+; the Display page and vid_switch the panel's
+%macro VSW_DISP 2
+%1 %+ _disp_other:
     mov al, VID_HERC            ; on a colour card: the other one is the mono
     cmp byte [vid_kind], VID_HERC   ; card, the only second card 39.13 admits
     jne .out
@@ -1971,8 +2032,9 @@ vid_disp_other:
 ;           second one black, [vid_ndisp] = 2, [vid_cur] = 0, display 1 banked
 ;           and placed. SINGLE: the other card dark, [vid_ndisp] = 1, the
 ;           desktop back to the primary alone. A machine vid_dual_ok refuses:
-;           untouched if nothing was live, and COLLAPSED to single if
-;           something was - see the refusal arm (SPEC.md 39.24)
+;           display 0 RE-BANKED from the live geometry if one display was
+;           live, and COLLAPSED to single if two were - see the refusal arm
+;           (SPEC.md 39.24)
 ; clobbers: flags
 ;
 ; IT IS RE-RUNNABLE AND THAT IS THE POINT (SPEC.md 39.19). It was a boot-time
@@ -2016,16 +2078,16 @@ vid_disp_other:
 ; the pointer all have to come home, because this path is reached by a user
 ; turning Extend OFF as well as by a machine booting without it.
 ; -----------------------------------------------------------------------------
-vid_disp_init:
+%1 %+ _disp_init:
     push ax
     push di
     mov ah, [vid_kind]          ; the primary, banked across the two applies -
-    call vid_disp_other         ; (AL = the other display's adapter, which is
+    call %1 %+ _disp_other      ; (AL = the other display's adapter, which is
                                 ; NOT simply the other of two kinds - see there,
                                 ; and see what a VGA's CGA bit means. Above the
                                 ; branch since size pass 9: every arm that
                                 ; goes on wants it, and vid_dual_ok keeps AL)
-    call vid_dual_ok            ; ONE load above the branch, because both arms
+    %2 vid_dual_ok              ; ONE load above the branch, because both arms
     jnc .paired                 ; below want it and vid_dual_ok keeps AH (it
                                 ; is three compares, a clc and an stc)
 
@@ -2040,27 +2102,48 @@ vid_disp_init:
     ; from, which is a desktop drawn into the wrong segment at the wrong
     ; stride. A refusal has to bring the arrangement DOWN.
     cmp byte [vid_ndisp], 1
-    je .jout                    ; nothing live: unchanged, and the boot path
-                                ; ...otherwise collapse it through the arm
-    jmp short .single           ; that already knows how. [vid_dmode] is kept:
+    je .cap                     ; one display: re-bank it, below
+    jmp short .single           ; ...otherwise collapse it through the arm
+                                ; that already knows how. [vid_dmode] is kept:
                                 ; the arrangement is impossible on THIS
                                 ; primary, not forgotten
+
+    ; --- ONE DISPLAY, AND ITS GEOMETRY MAY HAVE JUST MOVED ------------------
+    ; "nothing live: unchanged" was true of kmain's call and false of every
+    ; other: a vid_switch - the Display page's, or drv_boot applying
+    ; SYSTEM.CFG's adapter - has already run vid_apply by the time this is
+    ; reached. The paragraph above fixes exactly this staleness for the
+    ; ndisp = 2 case and stops one machine short of the commonest one: a box
+    ; with a SINGLE adapter never reaches .single, so display 0's vid_ctx kept
+    ; whatever vid_ctx_init captured at boot, for the life of the machine.
+    ;
+    ; vid_ctx is the per-display copy of the sixteen live geometry words and
+    ; the adapter kind, and one display reads it as well as two: wm_dmg_bands
+    ; clamps to its rect, the raise cache's take gates on it (vid_span_one)
+    ; and sizes itself from its kind (vid_disp_planes).
+    ;
+    ; So .cap is .single's own capture and not a second copy of it, because
+    ; the boot blob carries an expansion of this macro (driver.inc's bvs_)
+    ; and has no byte to spare. vid_desk_union runs too and is idempotent
+    ; here: one display at the origin, so it writes back the vid_w/vid_h that
+    ; vid_apply has just set from vid_cw/vid_ch.
 .paired:
     cmp byte [vid_dmode], 0
     jne .extend
 
     ; --- SINGLE (SPEC.md 39.19) ---------------------------------------------
 .single:
-    call vid_blank_kind         ; AL is still the other kind: dark its monitor
+    %2 vid_blank_kind           ; AL is still the other kind: dark its monitor
     mov word [vid_ndisp], 1     ; ...before anything can compute a union over
                                 ; a display that is no longer there: one
                                 ; display, and display 0 current (vid_cur is
                                 ; the byte after, the %error beside them)
     mov [vid_kind], ah          ; (a no-op unless a caller moved it)
-    call vid_apply              ; republishes the chrome extent AND re-homes
+    %2 vid_apply                ; republishes the chrome extent AND re-homes
+.cap:
     xor al, al                  ; the pointer onto display 0 - which is what
-    call vid_ctx_capture        ; a shrinking desktop owes it
-    call vid_desk_union         ; ...and BANK BEFORE UNION, the extend path's
+    %2 vid_ctx_capture          ; a shrinking desktop owes it
+    call %1 %+ _desk_union      ; ...and BANK BEFORE UNION, the extend path's
 .jout:
     jmp short .out              ; order: the union reads display 0's record,
                                 ; which is stale until the capture when a
@@ -2073,12 +2156,16 @@ vid_disp_init:
                                 ; still the two kinds .single wants
 .out:
 %ifdef DOCK_OPT
-    call dock_geom              ; vid_apply put the BOTTOM strip's band back
+    %2 dock_geom                ; vid_apply put the BOTTOM strip's band back
                                 ; on every arm above (SPEC.md 30.5)
 %endif
     pop di
     pop ax
     ret
+%endmacro
+section .modu                   ; the Display page's (KSW_SECT, kernel.asm)
+VSW_DISP vid, KSWK
+section .text
 
 ; -----------------------------------------------------------------------------
 ; vid_span_one - is this whole rect inside ONE display? (SPEC.md 39.14.6)
@@ -2166,11 +2253,9 @@ vid_span_one:
 ; nothing, and wm_init has not run yet - so wm_refit there would clamp records
 ; whose used bit is whatever the machine left in memory.
 ; -----------------------------------------------------------------------------
-vid_disp_relayout:
-    call vid_disp_init
-    call desk_rowcalc
-    call wm_refit
-    retf
+; (THE BODY IS CTRL.DRV's since kernel size pass 13: the Display page was its
+; one caller, and it now makes the three calls itself - ctrl.inc, the
+; arrangement's click - through its CPXK hop, with desk_rowcalc_x far)
 
 ; -----------------------------------------------------------------------------
 ; vid_desk_union - the desktop spans every display (SPEC.md 39.16)
@@ -2192,16 +2277,27 @@ vid_disp_relayout:
 ; other display is placed to its right, so a bounding box needs only the far
 ; corner.
 ; -----------------------------------------------------------------------------
-vid_desk_union:
-    call kent_di                ; = push ax/bx/cx/dx/si/di. BX is not spent:
-                                ; it is banked so the exit is kret_di's
-                                ; ladder (SPEC.md 15.1.2)
+; VSW_UNION %1, %2 - %1_desk_union, written once (kernel size pass 13): its
+; callers are vid_disp_init, in CTRL.DRV (`vid`) and the boot blob (`bvs`),
+; and EXTD.DRV's ext_two (`ext`) - the fsx bracket's restore onto an extended
+; desktop, which must not need the panel - so each image carries its own and
+; %2 is that image's hop to vid_ctx_ptr. It banked through kent_di/kret_di
+; while it was resident; an image cannot reach the ladder, so the pushes are
+; written out - the same six, the same order
+%macro VSW_UNION 2
+%1 %+ _desk_union:
+    push ax                     ; BX is not spent: banked so the exit is the
+    push bx                     ; ladder's shape (SPEC.md 15.1.2)
+    push cx
+    push dx
+    push si
+    push di
     xor cx, cx                  ; CX/DX = the far corner, exclusive
     xor dx, dx
     xor si, si
 .d:
     mov ax, si
-    call vid_ctx_ptr
+    %2 vid_ctx_ptr
     mov ax, [di+VID_CTX_VX]
     add ax, [di+VID_CTX_CW]
     cmp ax, cx
@@ -2225,6 +2321,16 @@ vid_desk_union:
     mov [vid_h], dx
     dec dx
     mov [vid_hm1], dx
-    jmp kret_di
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endmacro
+section .modu                   ; the Display page's (KSW_SECT, kernel.asm)
+VSW_UNION vid, KSWK
+section .text
 
 %endif  ; KERN_BIG

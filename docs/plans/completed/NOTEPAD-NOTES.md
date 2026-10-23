@@ -1064,7 +1064,7 @@ what a future measurement needs, not because either symptom is still live:
 
 ## 7. The latency budget
 
-**The target is one typematic repeat — ~100 ms (SPEC.md §2951).** It is the
+**The target is one typematic repeat — ~100 ms (SPEC.md §9.6.2).** It is the
 right target and not an arbitrary one: below it, a held key cannot outrun the
 editor, so nothing the user does by leaning on a key can build a backlog. It
 applies to every user-triggered interaction *except* opening a document, which

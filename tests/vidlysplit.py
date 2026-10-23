@@ -17,15 +17,15 @@ ARM layer: QEMU is the faster machine, the layer is read - so the base's
 bank goes (it needs none here) and the layer's is its whole ask, 800 KB:
 25 slots where the open took 18.
 
-ARM base: the yardstick poked impossibly fast, so this CPU is the BASE'S
-machine and the layer is not read - its bank is given back, and the base's
-stays its 256 KB.
+ARM base: key 0's CPU verdict poked in as kept and NO (98.1.9.4), so a
+play from key 1 makes this CPU the BASE'S machine and the layer is not read - its bank is given back, and the base's
+takes the whole pool (98.1.9.11): the open's 8 and 18 slots, 26.
 
 ARM diskslow - THE DISK TEST (98.1.9.3): the file's two disks set to 4000
 and 3000 KB/s, far past anything QEMU's floppy reads - so the CPU passes and
 the DISK, timed on the ring's fill, says this is the base's machine: the
 layer off, the card's reason the disk, and the layer's bank given back,
-the base's kept at its 256 KB. ARM layer is the other half of it: the
+the base's grown to the whole pool. ARM layer is the other half of it: the
 encode's 59 and 20 KB/s (286-slow has no curve, so its idle disks are
 its disks) put the line at 56, so the disk test RUNS and says
 yes - which that arm asserts, so a test that never measured cannot pass as
@@ -34,11 +34,11 @@ guest while its clock runs on, so the rate it times is not B:'s throttle
 (~200 KB/s against 64). The instrument's accuracy is vidlyplaydisk's, on
 MartyPC's cycle-exact 5150.
 
-ARM flip - THE LIVE FLIP (98.1.9.4): ARM layer with the layer's own claim
-refused (vp_lynoc, a gate's byte), so its slots are the RING claim's top -
-as many as its own claim would take (four here, out of the ring's headroom),
-its mirror (a whole slot when carved, 98.1.9.8) and its bank's bounce,
-right after the base bank's bounce: the ring that
+ARM flip - THE LAYER IS THE RING'S (98.1.9.4, 98.1.9.10): ARM layer, with
+the carve asserted - its slots the RING claim's top, as many as its own claim
+would take (four here, out of the ring's headroom), its bank's bounce, and
+its mirror the claim's slack ([vp_lymx]; a whole slot only where that slack
+was refused), right after the base bank's bounce: the ring that
 many slots fewer than the machine gave it, the layer read, and at the
 split the base's bank what this machine needs (none) plus what the ring
 lent of the header's ring ([vp_lycmp]), the layer's its 25 slots. Broken
@@ -47,6 +47,22 @@ the PAY-BACK: the header's ring poked to 10, so the carved ring (7 of 11)
 is three short of it and lends 96 KB, which the split must give back to the
 base's bank - as VP_XBMIN's 128 KB, the least bank there is, four slots,
 and the layer what is left of the ~26.
+
+EVERY ARM'S BASE BANK COPIES: QEMU is a 386, which reads an XMS bank IN
+PLACE since 98.3.18.14, chosen at the session's start before the split runs
+- so `[vp_noinp]` = 1, the gate's A/B, is written before Play.
+
+`--inplace` (with ARM layer or base) is the other half: no `[vp_noinp]`,
+so the base's bank IS the ring (`[vp_einp]` 2) - and since 98.3.18.14 a
+LAYER plays beside it. The split cannot resize a bank that is the ring, so
+each keeps what the open took: the base's 8 slots, and on the layer's
+machine the layer's 18 (where copying it gets 25), on the base's machine
+none. The play then runs to its last frame with no error and, on the
+layer's machine, the layer drawn - which needs the DISK's verdict, taken on
+a third chunk read into the in-place ring (vp_sstart's `.fill`) and timed
+there (vp_fill's vp_eread arm, which timed nothing before). Broken on purpose
+(vp_lyown storing the claim's segment as its slot count again, the defect
+this arm was written beside) the guest hangs before the play starts.
 
 Both play from KEY 1: the CPU is timed on a key, a one-bit file from its
 first frame has none, and untimed the pool is left as the open took it -
@@ -112,7 +128,12 @@ def main():
     ap.add_argument("--arm", choices=("layer", "base", "untimed",
                                       "diskslow", "flip", "flipcmp"),
                     default="layer")
+    ap.add_argument("--inplace", action="store_true",
+                    help="no [vp_noinp]: the base's bank in place, a layer "
+                         "beside it (98.3.18.14)")
     a = ap.parse_args()
+    if a.inplace and a.arm not in ("layer", "base"):
+        sys.exit("vidlysplit: --inplace is ARM layer's or base's")
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     pkg = os88build.at("build/video.o88")
@@ -204,13 +225,30 @@ def main():
             s0 = rw("vp_sel")
             q.hmp("sendkey right")
             wait(lambda: rw("vp_sel") != s0, "Right to key 1", 20)
-        if a.arm in ("flip", "flipcmp"):  # (the layer's own claim refused)
-            qpoke(q, [(base + syms["vp_lynoc"], b"\1")])
+        if a.arm == "untimed":          # (98.1.9.2's rule is a KEY-0 file's:
+            qpoke(q, [(base + syms["vp_bnb"], b"\0\0")])  # a bench is timed
+                                        # from the first frame, 98.1.9.13)
         if a.arm == "flipcmp":          # (the header's ring past the carve)
             qpoke(q, [(base + syms["vp_rneed"], b"\x0a")])
         if a.arm == "base":             # (the yardstick impossibly fast:
-            qpoke(q, [(base + syms["vp_lytl"], struct.pack("<H", 1)),
-                      (base + syms["vp_lytb"], struct.pack("<H", 1))])
+            qpoke(q, [(base + syms["vp_kytl"], struct.pack("<H", 100)),
+                      (base + syms["vp_kytlb"], struct.pack("<H", 100)),
+                      (base + syms["vp_bnb"], b"\0\0"),
+                      (base + syms["vp_lycv"], b"\2")])
+            # (and NO BENCH, 98.1.9.13: a bench verdict is any start's and
+            # timed afresh, where this arm wants key 0's kept no)
+            # (KEY 0's NO, kept for the file: a play from key 1 takes a kept
+            # verdict over its own timing, 98.1.9.4. It was an impossibly
+            # fast yardstick, 1 - but under VP_LYTMIN that is no CPU verdict
+            # at all (98.1.9.12), and QEMU decodes a key inside the 1 ms the
+            # floor is, so a yardstick alone cannot make it the base's)
+        # THE COPYING BANK (98.3.18.14): a 386 reads an XMS bank in place,
+        # and that is decided at the session's start, BEFORE vp_lysplit - so
+        # the base's bank would be the ring with [vp_xbank] 0 and the split
+        # would have no FIFO to resize. [vp_noinp], the gate's A/B, keeps
+        # the bank the split is about, as every 386 had it
+        if not a.inplace:
+            qpoke(q, [(base + syms["vp_noinp"], b"\1")])
         q.hmp("sendkey p")
         wait(lambda: rb("vp_ready") == 1, "the play", 120)
         n1, l1 = rw("vp_xbn") if rb("vp_xbank") else 0, rw("vp_lyxn")
@@ -232,10 +270,10 @@ def main():
                 bad.append("the layer is %s, its reason %d - not off for "
                            "the disk" % ("on" if rb("vp_lyon") else "off",
                                          rb("vp_lywhy")))
-            if (n1, l1) != (8, 0):
+            if (n1, l1) != (n0 + l0, 0):
                 bad.append("the base's machine by its disk kept %d slots for "
-                           "the base and %d for the layer, not 8 and 0"
-                           % (n1, l1))
+                           "the base and %d for the layer, not the whole "
+                           "pool (%d) and 0" % (n1, l1, n0 + l0))
         if a.arm in ("flip", "flipcmp"):
             k, k0, lent = rw("vp_k"), rw("vp_lyk0"), rb("vp_lyb")
             ring, lyseg, msl = rw("vp_ring"), rw("vp_lyseg"), rw("vp_msl")
@@ -243,9 +281,10 @@ def main():
             print("   the flip: %d slots lent, the ring %d of %d, the layer "
                   "at %04x (the ring %04x), %d KB of the header's ring lent"
                   % (lent, k, k0, lyseg, ring, cmp))
-            # (its slots, its MIRROR - a whole slot when carved, 98.1.9.8 -
-            # and its bank's bounce)
-            if not rb("vp_lyon") or lent != rw("vp_lyns") + 2 or \
+            # (its slots and its bank's bounce - and its MIRROR a whole
+            # slot only where the claim's slack could not have it, 98.1.9.10)
+            if not rb("vp_lyon") or lent != rw("vp_lyns") + 1 + \
+                    (0 if rb("vp_lymx") else 1) or \
                     k != k0 - lent:
                 bad.append("the flip: layer %s, %d slots lent, ring %d of "
                            "%d - not the layer read out of three"
@@ -264,6 +303,31 @@ def main():
                 bad.append("the split kept %d slots for the base (the ring "
                            "lent %d KB) and gave the layer %d, not 25"
                            % (n1, cmp, l1))
+        elif a.inplace:
+            einp, xbn = rb("vp_einp"), rw("vp_xbn")
+            lay = a.arm == "layer"
+            print("   in place: einp %d, the base's bank %d slots (the ring), "
+                  "the layer %s with %d" % (einp, xbn, "on" if rb("vp_lyon")
+                                             else "off", l1))
+            if einp != 2:
+                bad.append("the base's bank did not go in place (einp %d)"
+                           % einp)
+            elif xbn != n0 or bool(rb("vp_lyon")) != lay or \
+                    l1 != (l0 if lay else 0):
+                bad.append("in place the split kept %d slots for the base "
+                           "and %d for the layer (layer %s), not the open's "
+                           "%d and %s" % (xbn, l1, "on" if rb("vp_lyon")
+                                          else "off", n0, l0 if lay else 0))
+            wait(lambda: rb("vp_ready") == 0 and rb("vp_played") == 1,
+                 "the play to end", 240)
+            got = rw("vp_lygot")
+            print("   ended: done %d of %d, error %d, the layer drew %d"
+                  % (rw("vp_done"), r.frames, rb("vp_err"), got))
+            if rw("vp_done") != r.frames or rb("vp_err"):
+                bad.append("the play in place drew %d of %d (error %d)"
+                           % (rw("vp_done"), r.frames, rb("vp_err")))
+            if lay and not got:
+                bad.append("the layer drew nothing beside a bank in place")
         elif a.arm == "layer":
             if not rb("vp_lyon"):
                 bad.append("the layer is not read on QEMU - nothing tested")
@@ -278,10 +342,13 @@ def main():
                            % (rw("vp_lytm"), n1, l1, n0, l0))
         elif a.arm in ("flip", "flipcmp"):
             pass
-        elif rb("vp_lyon") or n1 != 8 or l1 != 0:
+        elif rb("vp_lyon") or n1 != n0 + l0 or l1 != 0:
+            # THE WHOLE POOL (98.1.9.11): the layer's bank given back and
+            # the base's grown into it, the open's two banks together
             bad.append("the base's machine (layer %s) kept %d slots for the "
-                       "base and %d for the layer, not 8 and 0"
-                       % ("on" if rb("vp_lyon") else "off", n1, l1))
+                       "base and %d for the layer, not the whole pool (%d) "
+                       "and 0" % ("on" if rb("vp_lyon") else "off", n1, l1,
+                                  n0 + l0))
         q.close()
     for b in bad:
         print("   FAIL: %s" % b)

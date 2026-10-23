@@ -669,10 +669,9 @@ te_csidisp:
     cmp al, 'l'
     jne .out
 .decset:
-    mov dl, 0
-    cmp al, 'l'
-    je .dscan
-    inc dx                          ; `h` shows it: DL = 1
+    cmp al, 'l'                     ; `h` (below `l`) shows it: DL = 1, and
+    sbb dl, dl                      ; `l` hides it: DL = 0
+    neg dl
 .dscan:
     mov cl, [te_pn]
     or cl, cl
@@ -964,10 +963,8 @@ te_f_dsr:
     pop es                          ; ...ES is the KERNEL's on a callback and
     cld                             ; te_ans is OURS (SPEC.md 20)
     mov di, te_ans
-    mov al, 0x1B
-    stosb
-    mov al, '['
-    stosb
+    mov ax, ('[' << 8) | 0x1B       ; ESC [ in one store
+    stosw
     mov ax, [con_cy]
     inc ax
     call dec_u16                    ; DS = ES here; its NUL is the next stosb's
@@ -979,9 +976,9 @@ te_f_dsr:
     mov al, 'R'
     stosb
     pop es
-    mov cx, di
-    sub cx, te_ans
     mov si, te_ans
+    mov cx, di
+    sub cx, si
     jmp te_reply
 .ok:
     mov si, te_s_dsrok

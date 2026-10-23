@@ -60,7 +60,7 @@
 
 %ifdef KERN_BIG
 
-XM_ABI_VER  equ 1               ; the private kernel<->overlay ABI, mirrored
+XM_ABI_VER  equ 2               ; the private kernel<->overlay ABI, mirrored
                                 ; in drivers/xmem/xmem.asm and passed in AH at
                                 ; DRVV_ATTACH. A KERNEL.SYS and an XMEM.DRV of
                                 ; different vintages - a half-copied floppy -
@@ -77,7 +77,9 @@ XMV_ALLOC   equ 2               ; in DX:AX = bytes, BL = owner; out CF,
 XMV_FREE    equ 4               ; in DX:AX = base, BL = owner; out CF
 XMV_COPY    equ 6               ; in ES:SI = the XMC_ block below
 XMV_RELINST equ 8               ; in AL = an instance slot being torn down
-XMV_SIZE    equ 10
+XMV_WALK    equ 10              ; in DX:DI = room for CX records; out AX
+                                ; (ABI 2: osapi_xmem_walk on kern_big)
+XMV_SIZE    equ 12
 
 ; --- the copy's parameter block (SPEC.md 41.12.2) ----------------------------
 ; BOTH ENDS TRAVEL AS 32-BIT LINEAR ADDRESSES, and that is forced rather than
@@ -109,6 +111,11 @@ XMC_SIZE    equ 12
 ; -----------------------------------------------------------------------------
 section .text
 
+%ifndef KERN_MEGA                ; kern_mega serves the pool itself (mega.inc's
+                                ; mx_*) and xm_sniff never wants the image, so
+                                ; the row, its name, xm_boot_x and xm_dsp's
+                                ; image arm are not assembled there at all
+                                ; (KERN-MEGA-PLAN 10.3 item 36)
 xm_fname:   db 'XMEM.DRV', 0
 
 xm_row:
@@ -142,6 +149,7 @@ xm_row:
                                 ; "sixteen bytes shaped like a drv_tab row" of
                                 ; SPEC.md 41.12 is about the FIELDS, which are
                                 ; unchanged and at the same offsets
+%endif
 
 xm_kb:      dw 0                ; THE GATE. KB the pool holds, and "the
                                 ; overlay is attached" - see the file header.
@@ -203,7 +211,14 @@ xm_sniff:
     jc .out                     ; no such service
     or ax, ax
     jz .out                     ; a 1MB AT
+%ifdef KERN_MEGA
+    mov [mega_extkb], ax        ; kern_mega OWNS the memory above 1MB - its
+                                ; descriptor tables and, later, the kernel
+                                ; itself (KERN-MEGA-PLAN 4) - so XMEM.DRV, the
+                                ; HMA .cold and every transport stay out
+%else
     mov byte [xm_row+DRVR_WANT], 1
+%endif
 .out:
     pop ax
     retf                        ; FAR, and the shim that used to own this
@@ -253,6 +268,7 @@ section .boot2                   ; THE BOOT OVERLAY (SPEC.md 2.5.2,
                                 ; go out through the far entries in driver.inc's
                                 ; `.cold` block, which is where every other
                                 ; cross-segment caller of them already goes
+%ifndef KERN_MEGA
 xm_boot_x:
     push ax
     push bx
@@ -352,6 +368,7 @@ xm_boot_x:
                                 ; stamped on its way past
     call COLD_SEG:drvf_drv_release            ; BX = the row; the claim goes back and
     jmp short .out              ; nothing was hooked
+%endif
 
 ; The far entry kmain used to reach xm_boot through is GONE with the move: the
 ; body is in the blob and SPLGATE1 is the crossing now (SPEC.md 2.5.2).
@@ -397,10 +414,19 @@ xm_have:
 
 ; -----------------------------------------------------------------------------
 xm_dsp:
+%ifdef KERN_MEGA
+    push es                         ; kern_mega: the pool is the kernel's own
+    KES                             ; (mega.inc, mx_*), BP a near routine in
+    call MEGA_SEL_CODE:mega_bpcall  ; `.mega`, ES = KDATA as the overlay's ES
+    pop es                          ; was. The ONLY arm: [xm_kb] is written by
+    ret                             ; mega_xminit alone, so every caller that
+                                    ; got past xm_have is in protected mode
+                                    ; with the table staged (`pop` leaves CF)
+%else
     push ds
     push es
-    push cs
-    pop es                      ; ES = KERNEL_SEG: what the image reads the
+    KES
+                                ; ES = KERNEL_SEG: what the image reads the
     mov ds, [es:xm_row+DRVR_SEG]    ; things it was handed through
     call COLD_SEG:wm_nest_pushd_x   ; SPEC.md 66.6.3 - .text, so far
     call far [es:xm_row+DRVR_DISP]
@@ -408,6 +434,7 @@ xm_dsp:
     pop ds                          ; ...and DS names the kernel again, which
     call COLD_SEG:wm_nest_pop_x     ; is the segment the pop reads
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; xm_ownbl - who is asking? (the SPEC.md 34.3 grant-stamping rule, reused)
@@ -466,6 +493,32 @@ xm_caps:
     xor cx, cx                  ; above so the sign extension is a zero, and
     mov bl, XM_MAX_BLKS         ; CWD writes no flag, so the CF this contract
     ret                         ; promises is still the `xor`'s 0
+
+%ifndef KERN_MEGA
+; -----------------------------------------------------------------------------
+; osapi_xmem_walk - slot 0x04BF's body on kern_big (SPEC.md 28.4.8): the
+;                   overlay's block table, so the Task Manager can bill the
+;                   pool to whoever holds it. ES:DI = room for CX records;
+;                   out CF = 0, AX = written. CF = 1, AX = 1 no store - the
+;                   refusal kern_big gave before it could answer
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+osapi_xmem_walk:
+    call xm_have
+    jne .go
+    mov ax, 1
+    stc
+    ret
+.go:
+    push bp
+    push dx
+    mov dx, es                  ; xm_dsp hands the image ES = KERNEL_SEG, so
+    mov bp, [xm_svc+XMV_WALK]   ; the caller's segment rides in DX
+    call xm_dsp
+    pop dx
+    pop bp
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; xm_alloc - first-fit a run of extended memory (osapi slot 0x0160's body)
@@ -585,17 +638,31 @@ xm_copy:
                                 ; pops it.
     mov [si+XMC_DIR], al
     mov ax, es                  ; the conventional end, as linear ES*16 + SI,
+%ifdef KERN_MEGA
+    inc byte [sch_lock]         ; (kern_mega: from BEFORE the base is read -
+                                ; a pool claim moves, KERN-MEGA-PLAN 14.37)
+    cmp byte [mega_on], 0       ; kern_mega in protected mode: ES is a
+    je .rmes                    ; SELECTOR, and the base is its descriptor's -
+    push cx                     ; an OS88_HIGH region or an OS88_HIGHMEM
+    call MEGA_SEL_CODE:mega_selbasef           ; claim is above 1MB, where ES x 16 was
+    pop cx                      ; conventional memory nobody named (mx_copy
+    jmp short .esb              ; checks it is the caller's)
+.rmes:
+%endif
     mov dx, 16                  ; SI being the offset now parked in BP. ONE
     mul dx                      ; mul where two shift pairs were (size pass
                                 ; 10, -5). Only a 286 or later reaches this
                                 ; line (xm_sniff), where a mul is ~21 clocks
+.esb:
     add ax, bp                  ; a REGISTER add, so SS-vs-DS does not reach it
     adc dx, 0
     mov [si+XMC_CONV], ax
     mov [si+XMC_CONV+2], dx
     call xm_ownbl
     mov [si+XMC_INST], bl       ; SI is already the block xm_dsp hands the
-    inc byte [sch_lock]         ; image at ES:SI, ES being KERNEL_SEG
+%ifndef KERN_MEGA               ; image at ES:SI, ES being KERNEL_SEG
+    inc byte [sch_lock]
+%endif
     mov bp, [xm_svc+XMV_COPY]
     call xm_dsp
     dec byte [sch_lock]         ; dec leaves CF alone
@@ -654,8 +721,8 @@ xm_release_rec:
     push es
     call inst_idx               ; AL = the instance slot, ONCE for the two
     push ax                     ; releases below (the driver eats AX)
-    push cs                     ; FIRST, AND ON EVERY MACHINE: the instance's
-    pop es                      ; EXPANDED memory (SPEC.md 107.1), which an
+    KES                         ; FIRST, AND ON EVERY MACHINE: the instance's
+                                ; EXPANDED memory (SPEC.md 107.1), which an
     mov bx, DRVC_EMS * 256 + EMSV_GONE ; 8088 can have and the store above
     call drv_pkg_call_x         ; 1MB it cannot. EMS.DRV's own door, with ES
     pop ax                      ; = the kernel (a package's call never has

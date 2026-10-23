@@ -70,9 +70,9 @@ pw_decode:
     cld
     push ax
     mov ax, [px_svgp]               ; the resident's UI services (pxsvc.inc)
-    mov [cs:pv_sv], ax
+    PXSW mov [es:pv_sv], ax
     mov ax, [cs:PXP_PKG]
-    mov [cs:pv_sv + 2], ax
+    PXSW mov [es:pv_sv + 2], ax
     pop ax                          ; (a UI verb's AX is its argument)
     test cl, 0x40
     jz .enc
@@ -83,18 +83,20 @@ pw_decode:
     jnz .size
     cmp cl, WF_N
     jae .bad
-    mov [cs:pw_sp], sp              ; where pw_abort unwinds to
+    PXSSP pw_sp                     ; where pw_abort unwinds to
     mov ax, [px_ewseg]              ; the scratch: pu_start's claim, 0
-    mov [cs:pw_dseg], ax            ; for a BMP (pw_skb)
+    PXSW mov [es:pw_dseg], ax        ; for a BMP (pw_skb)
     mov word [px_erow], 0
-    mov byte [cs:pw_gbn], 0
+    PXSW mov byte [es:pw_gbn], 0
     xor ax, ax                      ; THE RECT: the whole master (a copy's
-    mov [cs:pw_x0], ax              ; rect went with the BMP on the clipboard,
-    mov [cs:pw_y0], ax              ; SPEC.md 106.25)
+    PXSWON
+    mov [es:pw_x0], ax          ; rect went with the BMP on the clipboard,
+    mov [es:pw_y0], ax          ; SPEC.md 106.25)
+    PXSWOFF
     mov ax, [px_cur + PXR_MW]
-    mov [cs:pw_w], ax
+    PXSW mov [es:pw_w], ax
     mov ax, [px_cur + PXR_MH]
-    mov [cs:pw_h], ax
+    PXSW mov [es:pw_h], ax
     call pw_slot                    ; the first slot
     mov bl, cl
     xor bh, bh
@@ -150,7 +152,7 @@ pw_abort:
     ; there and here is abandoned (pg_fail's shape); pw_dret's retf is
     ; pw_decode's
     mov sp, [cs:pw_sp]
-    mov ds, [cs:PXP_PKG]
+    mov ds, [cs:PXP_PKGD]
     cld
     mov ax, PXD_ABORT
     stc
@@ -171,10 +173,12 @@ pw_slot:
     xor bh, bh
     shl bx, 1
     mov ax, [px_sseg + bx]
-    mov [cs:pw_ptr + 2], ax
-    mov word [cs:pw_ptr], 0
+    PXSWON
+    mov [es:pw_ptr + 2], ax
+    mov word [es:pw_ptr], 0
+    PXSWOFF
     mov ax, [px_chunk]
-    mov [cs:pw_lim], ax
+    PXSW mov [es:pw_lim], ax
     pop bx
     pop ax
     ret
@@ -185,7 +189,7 @@ pw_put:
     push es
     les di, [cs:pw_ptr]
     stosb
-    mov [cs:pw_ptr], di
+    PXSW mov [es:pw_ptr], di
     cmp di, [cs:pw_lim]
     jb .r
     call pw_flush
@@ -201,7 +205,7 @@ pw_flush:
     push ax
     push bx
     push ds
-    mov ds, [cs:PXP_PKG]
+    mov ds, [cs:PXP_PKGD]
     mov bl, [px_wslot]
     xor bh, bh
     mov ax, [cs:pw_ptr]
@@ -347,12 +351,13 @@ pw_row:
     add ax, [cs:pw_x0]
     adc dx, 0
     mov si, ax
-    and si, 15
-    mov cl, 4
+    and si, 127                     ; on kern_mega's 8-paragraph grid
+    mov cl, 4                       ; (px_mrow's, KERN-MEGA-PLAN 14.40)
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
+    and al, 0xF8
     add ax, [px_cur + PXR_MSEG]     ; re-read: the master may have moved
     mov dx, ax
     pop cx
@@ -366,7 +371,7 @@ pw_bmp8:
     mov ax, [cs:pw_w]
     add ax, 3
     and ax, 0xFFFC
-    mov [cs:pw_stride], ax
+    PXSW mov [es:pw_stride], ax
     mov si, 54 + 1024
     mov bl, 8
     call pw_bmphdr
@@ -410,7 +415,7 @@ pw_bmp24:
     call pw_x3
     add ax, 3
     and ax, 0xFFFC
-    mov [cs:pw_stride], ax
+    PXSW mov [es:pw_stride], ax
     mov si, 54
     mov bl, 24
     call pw_bmphdr
@@ -461,8 +466,10 @@ pw_x3:
 pw_bmphdr:
     mov ax, [cs:pw_stride]          ; DX:AX = the image's bytes
     mul word [cs:pw_h]
-    mov [cs:pw_img], ax
-    mov [cs:pw_img + 2], dx
+    PXSWON
+    mov [es:pw_img], ax
+    mov [es:pw_img + 2], dx
+    PXSWOFF
     mov al, 'B'
     call pw_put
     mov al, 'M'
@@ -515,7 +522,7 @@ pw_pcx:
     mov ax, [cs:pw_w]
     inc ax
     and ax, 0xFFFE
-    mov [cs:pw_stride], ax          ; bpl
+    PXSW mov [es:pw_stride], ax      ; bpl
     mov al, 10
     call pw_put
     mov al, 5
@@ -682,9 +689,9 @@ pw_gifb:
     push bx
     mov bl, [cs:pw_gbn]
     xor bh, bh
-    mov [cs:pw_gbuf + bx], al
+    PXSW mov [es:pw_gbuf + bx], al
     inc bl
-    mov [cs:pw_gbn], bl
+    PXSW mov [es:pw_gbn], bl
     cmp bl, 255
     jb .o
     call pw_gflush
@@ -705,7 +712,7 @@ pw_gflush:
     xor ch, ch
     mov si, pw_gbuf
     call pw_puts
-    mov byte [cs:pw_gbn], 0
+    PXSW mov byte [es:pw_gbn], 0
 .o:
     pop si
     pop cx
@@ -727,8 +734,10 @@ pw_pix:
     mov si, px_pal
 .e:
     xor bx, bx                      ; BX = the candidate
-    mov word [cs:pw_bd], 0xFFFF
-    mov word [cs:pw_bd + 2], 0xFFFF
+    PXSWON
+    mov word [es:pw_bd], 0xFFFF
+    mov word [es:pw_bd + 2], 0xFFFF
+    PXSWOFF
 .c:
     push bx
     mov ax, bx
@@ -758,8 +767,10 @@ pw_pix:
     cmp bp, [cs:pw_bd]
     jae .nx
 .best:
-    mov [cs:pw_bd], bp
-    mov [cs:pw_bd + 2], cx
+    PXSWON
+    mov [es:pw_bd], bp
+    mov [es:pw_bd + 2], cx
+    PXSWOFF
     mov [es:di], bl
 .nx:
     inc bx
@@ -876,7 +887,7 @@ pw_png:
     jne .ct
     xor al, al
 .ct:
-    mov [cs:pw_ctype], al
+    PXSW mov [es:pw_ctype], al
     stosb
     xor ax, ax
     stosw
@@ -894,7 +905,7 @@ pw_png:
     mov cx, 768
     call pw_chunk
 .idat:
-    mov word [cs:pw_zn], 0          ; the zlib stream
+    PXSW mov word [es:pw_zn], 0      ; the zlib stream
     mov al, 0x78
     call pw_z
     mov al, 0x01
@@ -965,8 +976,10 @@ pw_chunk:
     xor dx, dx
     call pw_putbe
     pop dx
-    mov word [cs:pw_crc], 0xFFFF
-    mov word [cs:pw_crc + 2], 0xFFFF
+    PXSWON
+    mov word [es:pw_crc], 0xFFFF
+    mov word [es:pw_crc + 2], 0xFFFF
+    PXSWOFF
     push cx
     mov cx, 4
 .t:
@@ -1011,8 +1024,10 @@ pw_crcb:
     xor dh, dh
     xor ax, [es:bx + DS_CRC]
     xor dx, [es:bx + DS_CRC + 2]
-    mov [cs:pw_crc], ax
-    mov [cs:pw_crc + 2], dx
+    PXSWON
+    mov [es:pw_crc], ax
+    mov [es:pw_crc + 2], dx
+    PXSWOFF
     pop es
     pop dx
     pop bx
@@ -1028,7 +1043,7 @@ pw_z:
     mov di, [cs:pw_zn]
     mov [es:di + DS_IDAT], al
     inc di
-    mov [cs:pw_zn], di
+    PXSW mov [es:pw_zn], di
     cmp di, PNG_IDAT
     jb .o
     call pw_zflush
@@ -1050,7 +1065,7 @@ pw_zflush:
     mov dx, [cs:pw_dseg]
     mov bx, DS_IDAT
     call pw_chunk
-    mov word [cs:pw_zn], 0
+    PXSW mov word [es:pw_zn], 0
 .o:
     pop si
     pop dx
@@ -1097,8 +1112,10 @@ df_bits:
     sub cl, 8
     jmp short .b
 .r:
-    mov [cs:df_bacc], ax
-    mov [cs:df_bn], cl
+    PXSWON
+    mov [es:df_bacc], ax
+    mov [es:df_bn], cl
+    PXSWOFF
     pop dx
     pop cx
     pop bx
@@ -1174,16 +1191,18 @@ df_deflate:
     mov cx, 4096
     rep stosw
     xor ax, ax
-    mov [cs:df_bacc], ax
-    mov [cs:df_bn], al
-    mov [cs:df_pos], ax
-    mov [cs:df_fill], ax
-    mov [cs:df_done], al
-    mov [cs:df_y], ax
-    mov word [cs:df_x], 0xFFFF      ; a row starts with its filter byte
-    mov [cs:df_s2], ax
+    PXSWON
+    mov [es:df_bacc], ax
+    mov [es:df_bn], al
+    mov [es:df_pos], ax
+    mov [es:df_fill], ax
+    mov [es:df_done], al
+    mov [es:df_y], ax
+    mov word [es:df_x], 0xFFFF  ; a row starts with its filter byte
+    mov [es:df_s2], ax
+    PXSWOFF
     inc ax
-    mov [cs:df_s1], ax
+    PXSW mov [es:df_s1], ax
     mov ax, 1                       ; BFINAL
     mov cl, 1
     call df_bits
@@ -1235,14 +1254,14 @@ df_fillwin:
     mov ax, [cs:df_y]
     cmp ax, [cs:pw_h]
     jb .b
-    mov byte [cs:df_done], 1
-    jmp short .o
+    PXSW mov byte [es:df_done], 1
+    jmp .o
 .b:
     mov bx, [cs:df_x]
     cmp bx, 0xFFFF
     jne .px
     xor al, al                      ; the filter byte
-    mov word [cs:df_x], 0
+    PXSW mov word [es:df_x], 0
     jmp short .put
 .px:
     call pw_row                     ; DX:SI = the row
@@ -1252,17 +1271,19 @@ df_fillwin:
     mov al, [si]
     pop ds
     inc bx
-    mov [cs:df_x], bx
+    PXSW mov [es:df_x], bx
     cmp bx, [cs:pw_w]
     jb .put
-    mov word [cs:df_x], 0xFFFF      ; the row's end
-    inc word [cs:df_y]
+    PXSWON
+    mov word [es:df_x], 0xFFFF  ; the row's end
+    inc word [es:df_y]
+    PXSWOFF
     call pw_tick
 .put:
     mov es, [cs:pw_dseg]
     mov di, [cs:df_fill]
     mov [es:di + DS_WIN], al
-    inc word [cs:df_fill]
+    PXSW inc word [es:df_fill]
     xor ah, ah                      ; Adler: s1 += b, s2 += s1, mod 65521
     add ax, [cs:df_s1]
     jc .c1
@@ -1271,7 +1292,7 @@ df_fillwin:
 .c1:
     sub ax, 65521
 .s1:
-    mov [cs:df_s1], ax
+    PXSW mov [es:df_s1], ax
     add ax, [cs:df_s2]
     jc .c2
     cmp ax, 65521
@@ -1279,7 +1300,7 @@ df_fillwin:
 .c2:
     sub ax, 65521
 .s2:
-    mov [cs:df_s2], ax
+    PXSW mov [es:df_s2], ax
     jmp .l
 .o:
     ret
@@ -1338,7 +1359,7 @@ df_insert:
 ; distance when it is 3 or more, else the literal
 df_step:
     mov si, [cs:df_pos]
-    mov word [cs:df_best], 0
+    PXSW mov word [es:df_best], 0
     mov ax, si
     add ax, 2
     cmp ax, [cs:df_fill]
@@ -1349,11 +1370,11 @@ df_step:
     jbe .l
     mov ax, 258
 .l:
-    mov [cs:df_lim], ax
+    PXSW mov [es:df_lim], ax
     call df_hash
     mov es, [cs:pw_dseg]
     mov bx, [es:bx + DS_HEAD]       ; BX = the candidate
-    mov byte [cs:df_chain], 8
+    PXSW mov byte [es:df_chain], 8
 .c:
     cmp bx, DF_NONE
     je .emit
@@ -1380,10 +1401,10 @@ df_step:
     sub ax, cx                      ; AX = the length
     cmp ax, [cs:df_best]
     jbe .nx
-    mov [cs:df_best], ax
+    PXSW mov [es:df_best], ax
     mov dx, si
     sub dx, bx
-    mov [cs:df_dist], dx
+    PXSW mov [es:df_dist], dx
     cmp ax, 32                      ; good enough, or as long as it can be
     jae .emit
     cmp ax, [cs:df_lim]
@@ -1392,7 +1413,7 @@ df_step:
     and bx, 4095
     shl bx, 1
     mov bx, [es:bx + DS_PREV]
-    dec byte [cs:df_chain]
+    PXSW dec byte [es:df_chain]
     jmp short .c
 .emit:
     mov ax, [cs:df_best]
@@ -1403,7 +1424,7 @@ df_step:
     xor ah, ah
     call df_lit
     call df_insert
-    inc word [cs:df_pos]
+    PXSW inc word [es:df_pos]
     ret
 .match:
     xor bx, bx                      ; the length's code: LBASE[k+1] > len
@@ -1462,7 +1483,7 @@ df_step:
     call df_insert
     inc si
     loop .i
-    mov [cs:df_pos], si
+    PXSW mov [es:df_pos], si
     ret
 
 ; df_slide - the window's top 8 KB down to its bottom; the heads and links
@@ -1494,8 +1515,10 @@ df_slide:
     inc si
     loop .r
     pop ds
-    sub word [cs:df_pos], DF_SLIDE
-    sub word [cs:df_fill], DF_SLIDE
+    PXSWON
+    sub word [es:df_pos], DF_SLIDE
+    sub word [es:df_fill], DF_SLIDE
+    PXSWOFF
     ret
 
 df_lbase:   dw 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35
@@ -2144,8 +2167,7 @@ PANELS_FS_STATUS equ 8 | 16 | 32    ; pixel.asm's PX_R_PANELS | _FS | _STATUS
 ; Said in a toast either way
 pu_copy:
     push es
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     mov di, pu_ctext                ; ES:DI, the line
     mov si, px_ival                 ; Image Info's File: the name
     call pu_tds
@@ -2238,7 +2260,7 @@ pu_tnum:
     div bx
     add dl, '0'
     dec si
-    mov [cs:si], dl
+    PXSW mov [es:si], dl
     or ax, ax
     jnz .d
 .p:

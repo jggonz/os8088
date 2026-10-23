@@ -5,7 +5,7 @@ Build the image first. --ega and --mono-smoke want a knob kernel, built into
 a PRIVATE tree so build/ stays the shipping one (CLAUDE.md's knob trap):
   make BUILD=build-ega VIDEO=ega
   OS88_TREE=$PWD/build-ega OS88_BUILD=$PWD/build-ega \
-      python3 tests/colorpresets_qemu.py --ega --image build-ega/os8088-360.img
+      python3 tests/colorpresets_qemu.py --ega --image build-ega/os8088-720.img
 and the same with `KERN_SMALL=1 VIDEO=cga` and --mono-smoke. This is not an
 EGA hardware emulation: QEMU's standard VGA runs the actual EGA BIOS mode 10h.
 The debugger calls the existing guest functions and restores CPU state and
@@ -77,6 +77,9 @@ class Guest:
         self.proc = subprocess.Popen([args.qemu, '-machine', 'pc,vmport=off',
             '-m', '640', '-vga', 'std', '-display', 'none', '-S',
             '-drive', f'file={Path(args.image).resolve()},format=raw,if=floppy',
+            # a B: floppy for a caller that wants one (tests/fmtpair.py)
+            *(['-drive', f'file={Path(args.image_b).resolve()},format=raw,if=floppy,index=1']
+              if getattr(args, 'image_b', None) else []),
             '-qmp', f'tcp:127.0.0.1:{qp},server=on,wait=off',
             '-gdb', f'tcp:127.0.0.1:{gp}', '-pidfile', self.pidfile, '-no-reboot'],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -155,6 +158,21 @@ class Guest:
     def read(self, address, size):
         return bytes.fromhex(self.rsp(f'm{address:x},{size:x}'))
 
+    def segment(self, name):
+        """The segment `name` RUNS at. `.cold` is assembled for COLD_SEG, but
+        on a machine with an HMA XMEM.DRV moves it to FFFF at boot and
+        re-points every far reference (docs/plans/HMA-PLAN.md), so a call or
+        a breakpoint aimed at the static segment lands on the dead rung and
+        the guest idles instead of returning. `[api_coldseg]` is the live one,
+        the word tests/hmacold.py reads; the offsets do not move."""
+        seg = os88sym.segment_of(name)
+        if seg == os88sym.equates()['COLD_SEG']:
+            seg = struct.unpack('<H', self.read(os88sym.linear('api_coldseg'), 2))[0]
+        return seg
+
+    def linear(self, name):
+        return self.segment(name)*16 + os88sym.syms()[name]
+
     def write(self, address, data):
         assert self.rsp(f'M{address:x},{len(data):x}:{data.hex()}') == 'OK'
 
@@ -167,8 +185,8 @@ class Guest:
         """
         saved = self.rsp('g')
         target = api if api is not None else os88sym.syms()[name]
-        seg = 0x60 if api is not None else os88sym.segment_of(name)
-        address = (os88sym.linear('cpf_cp_open') if near else 0x610)
+        seg = 0x60 if api is not None else self.segment(name)
+        address = (self.linear('cpf_cp_open') if near else 0x610)
         offset = address-seg*16 if near else 0x10
         code = (b'\xe8'+struct.pack('<H', (target-offset-3)&65535) if (seg == 0x60 and api is None) or near
                 else b'\x9a'+struct.pack('<HH', target, seg))
@@ -188,7 +206,7 @@ class Guest:
                 struct.pack_into('<I',regs,index*4,value)
         flags = struct.unpack_from('<I', regs, 9*4)[0]
         struct.pack_into('<I', regs, 9*4, flags | 0x200)
-        counted = os88sym.linear(count) if count else None
+        counted = self.linear(count) if count else None
         self.last_count = 0
         if counted is not None:
             assert self.rsp(f'Z0,{counted:x},1') == 'OK'
@@ -243,7 +261,10 @@ THM_COLOR = 2
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--qemu', default='qemu-system-i386')
-    ap.add_argument('--image', default=os88build.at('build/os8088-360.img'))
+    # 720KB and not 360KB: the row LAUNCHES PAINT.O88 out of the system disk's
+    # APPS/, and since SPEC.md 24.3.1.1 the 360KB system disk does not carry
+    # it (the Sticky Apps took its clusters); every other geometry does
+    ap.add_argument('--image', default=os88build.at('build/os8088-720.img'))
     ap.add_argument('--ega', action='store_true')
     ap.add_argument('--visual-only', action='store_true', help='skip save/reboot phase')
     ap.add_argument('--mono-smoke', action='store_true', help='small kernel forced CGA; use OS88_BUILD')

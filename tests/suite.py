@@ -315,6 +315,157 @@ FAST = [
         "which no package can reach - it belongs beside a boot or geometry "
         "change",
         needs=("nasm",)),
+    Row("romsmall", "soak", py("tests/romsmall.py"), 45.0,
+        "docs/plans/ROM-PLAN.md 3.4, wave 2: `make small`'s disks boot the same "
+        "with or without the ROM. A: the ROM cut from build/smallk is ADOPTED "
+        "- [api_coldseg] F400, the heap floor down by the cold rung, and "
+        "CTRL.DRV, a module loaded after boot, has every far reference "
+        "re-pointed by the ROM (read, not inferred: the dead RAM copy of "
+        ".cold could otherwise answer by accident). B: no ROM, nothing "
+        "changes. C, the negative control: a ROM one byte of .cold away is "
+        "refused and is no ROM. D: the 128KB floor machine, 87.5KB of heap "
+        "against 64.5 at build 387. SOAK: the subject is a 5150's ROM sockets",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/small360.img",)),
+    Row("rombig", "soak", py("tests/rombig.py"), 90.0,
+        "docs/plans/ROM-PLAN.md 3.4, wave 3: the SHIPPED kernel, kern_big, "
+        "with and without the ROM. A-C on a CGA 5150 as romsmall's A-C "
+        "(adopted to F400, floor onto COLD_RAM, CTRL.DRV re-pointed; no ROM; "
+        "a ROM one .cold byte away refused). D-E on the VGA XT, where the "
+        "planar decoder's .vgabuf rung sits ABOVE the cold rung: the ROM "
+        "moves its one segment word to the dead rung's bottom, Paint "
+        "repaints a dithered picture off the byte grid so the decoder runs, "
+        "every row it decodes is on COLD_RAM with the ROM and VGABUF_RAM "
+        "without, and the two screens are identical to the pixel. SOAK: the "
+        "subject is a 5150's ROM sockets",
+        needs=("marty", "nasm"), serial=True),
+    Row("romnodisk", "soak", py("tests/romnodisk.py"), 45.0,
+        "docs/plans/ROM-PLAN.md wave 4, SPEC.md 2.10.5: with kern_small's "
+        "ROM in, the system disk can be OUT. On the 128KB machine, A: is "
+        "swapped for a data floppy after boot, and a Save As chooser "
+        "(FDLG.DRV), the Control Panel (CTRL.DRV) and the Task Manager "
+        "(SYSTEM/TASKMGR.O88) all open - out of the ROM. The control is the "
+        "same session with no ROM, where all three refuse. SOAK: the "
+        "subject is a 5150's ROM sockets",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/small360.img", "build/muptest.img",
+               "build/smallapp/taskmgr.o88")),
+    Row("romsock", "soak", py("tests/romsock.py"), 5.0,
+        "docs/plans/ROM-PLAN.md 1.3 and 1.7: the socket-check ROM in U28-U32 "
+        "on a GLaBIOS 5150 with no disk. The BIOS must find the window as an "
+        "option ROM (55 AA, a 32KB declaration, both balance bytes), call its "
+        "init, and every socket must read ok; with nothing to boot, int 18h "
+        "must land in the ROM's own stub and not at F600:0000, which is the "
+        "middle of .cold in a kernel ROM. Negative control: one byte of U30 "
+        "wrong must read U30 BAD. SOAK: no package can reach it",
+        needs=("marty", "nasm"), serial=True),
+    Row("hmacold", "soak", py("tests/hmacold.py"), 30.0,
+        "docs/plans/HMA-PLAN.md: kern_big's .cold runs from the HMA on a "
+        "286 or better, which hands the heap the whole cold rung. WHY QEMU: "
+        "docs/TESTING.md's closed list, entry 1 - above 1MB is a 286 place "
+        "and every MartyPC machine is an 8088. A, -m 128: XMEM.DRV reads "
+        "COLDHMA.SYS and [api_coldseg] is FFFF, linear 0x100000 holds "
+        "kernel.bin's .cold, the floor is COLD_RAM + VGABUF_PARA with the "
+        "decoder's word moved down, rom_mfp names FFFF, and CTRL.DRV - read "
+        "AFTER the move - has every far reference re-pointed (read, not "
+        "inferred). B, -m 1: no XMEM, nothing changes - the negative "
+        "control. C: COLDHMA.SYS one byte of its .text hash away is refused "
+        "and is exactly B. SOAK: the subject is one driver's overlay",
+        needs=("qemu", "nasm"),
+        wants=("build/os8088.img", "build/apps.img", "build/coldhma.sys")),
+    Row("hmadrv", "soak", py("tests/hmadrv.py"), 62.0,
+        "SPEC.md 2.10.8, docs/plans/HMA-PLAN.md 5: drivers and a driver's "
+        "buffer in the pool under .cold in the HMA. WHY QEMU: the closed "
+        "list, entry 1. A, -m 128 with an SB16 and an IDE disk, SOUND + HDD "
+        "+ NET wanted: all three rows name an HMA segment with no heap held, "
+        "the tail's block table holds exactly their images, each is its "
+        "org-DRV_HMA_ORG assembly where nothing writes, HDD.DRV mounts C: "
+        "from up there and it lists HELLO.TXT, and RECORDER's demo plays on "
+        "the card out of an 8KB double buffer in the pool, or the heap "
+        "when the pool is full, to PLAY DONE; the Control Panel's Hard Disk "
+        "page loads HDDTOOL.DRV, which calls back through its HMA origin "
+        "and syncs its device table, and Install copies the whole system "
+        "onto C: from there. B, -m 1: the same drivers in the heap, C: "
+        "still mounted and the page synced - the negative control. SOAK: one "
+        "subsystem, a 286 feature",
+        needs=("qemu", "nasm"),
+        wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
+               "build/sound.hma.map", "build/hdd.hma.map",
+               "build/hddtool.map")),
+    Row("hmahiber", "soak", py("tests/hmahiber.py"), 45.0,
+        "SPEC.md 87.4 step 3b, 87.6 step 0b: hibernate carries the HMA's "
+        "driver pool. WHY QEMU: the closed list, entry 1. hmadrv's machine "
+        "booted from the FLOPPY, so C: is HDD.DRV's own volume - the "
+        "configuration whose sweep used to unload the driver serving the "
+        "image's disk. A, -m 128: Hibernate..., text mode, both files on C: "
+        "(host), QEMU killed, a fresh QEMU resumes: HDD.DRV's and NET.DRV's "
+        "rows and hb_tab records are the image's, their org-DRV_HMA_ORG code "
+        "is back in the pool, SOUND.DRV is reloaded into it, no MEM_K_HIB "
+        "claim is left, C: lists HELLO.TXT and both files are gone. B, -m 1 "
+        "on copies of the disks: `Hibernation: other build` and the pointer "
+        "deleted - the negative control. SOAK: one subsystem, a 286 feature. "
+        "NEEDS QEMU 9: the resume stub's stack is in VGA memory (87.5) and "
+        "QEMU 8 aborts on the first interrupt taken there "
+        "(os88build.qemu9(), tools/setup-qemu9.sh)",
+        needs=("qemu", "qemu9", "nasm"),
+        wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
+               "build/hdd.hma.bin", "build/net.hma.bin",
+               "build/sound.hma.map", "build/hdd.hma.map")),
+    Row("p2hiber", "soak", py("tests/p2hiber.py"), 45.0,
+        "SPEC.md 96.45.2.4, docs/plans/KERN-MEGA-PLAN.md 14.57: kern_big's "
+        "PS/2 mouse after a hibernate's REBOOT-route resume. WHY QEMU: the "
+        "closed list, entry 4 (an 8042). hmahiber's machine with the serial "
+        "mouse taken out, so QEMU's PS/2 wheel mouse is the pointer; "
+        "Hibernate..., QEMU killed, a fresh QEMU resumes: the master 8259's "
+        "IMR must be the one it hibernated with (`not [mou_line]` was 0 for "
+        "MOU_P2LINE: A8h came home 00h), mou_p2wz still 3 (QEMU's i8042 "
+        "raises IRQ12 at once, so with IRQ12 open through the re-knock "
+        "mou_p2_isr took its first ACK and the wheel came home 0) and the "
+        "pointer moving. The failing case is the HIBER.DRV before 14.57 "
+        "(--img): 2 and 3 red, verified. NEEDS QEMU 9, as hmahiber. 45s is "
+        "30 measured",
+        needs=("qemu", "qemu9", "nasm"),
+        wants=("build/os8088.img", "build/apps.img", "build/mbr.bin",
+               "build/boothd.bin", "build/kernel.sys")),
+    Row("hmadosret", "soak", py("tests/hmadosret.py"), 45.0,
+        "SPEC.md 96.49.9: the DOS live resume with `.cold` and HDD.DRV in "
+        "the HMA. WHY QEMU: the closed list, entry 1. hmadrv's machine, "
+        "booted from the floppy, so the image goes to HDD.DRV's own C:. The "
+        "route is read off 0040:00F0, kd_bda's mailbox, which only the "
+        "int 19h route writes. A, DOSHELLO.COM in the OS and then on the "
+        "whole machine ([dos_keepc] set through QEMU's GDB stub): back LIVE, "
+        "the mailbox untouched, `.cold` still FFFF and its bytes unchanged, "
+        "the box DST_RAN with 42, HDD.DRV's HMA row kept and C: listing "
+        "through it, no MEM_K_HIB left. B, DOSHMA.COM flips one word of "
+        "`.cold` under kern_dos: the negative control - kd_resume's sum "
+        "refuses, back by int 19h with the mailbox spent and 42 behind it, "
+        "and that word the build's again. Red on the kernel before (A1) and "
+        "with the compare taken out (B1, B2). SOAK: one subsystem, a 286 "
+        "feature. NEEDS QEMU 9: both routes run 87.5's stub",
+        needs=("qemu", "qemu9", "nasm"),
+        wants=("build/os8088.img", "build/coldhma.sys", "build/kdos/DOS.O88",
+               "build/recorder.o88", "build/DOSHELLO.COM",
+               "build/DOSHMA.COM")),
+    Row("romtool", "fast", py("tools/os88rom.py", "--selfcheck"), 0.3,
+        "docs/plans/ROM-PLAN.md 1.3: the ROM image builder re-derives its own "
+        "invariants - 55 AA and a 32KB declaration (40KB would send the "
+        "10/27/82 BIOS's BASIC check round all of RAM), both regions summing "
+        "to zero, the init jmp and identity pointer landing where the tail "
+        "put them, and the socket pattern matching what the ROM's own check "
+        "recomputes. Host-only, no emulator. FAST because boot/osrom.asm is "
+        "assembled here and nowhere in `all`, so this is what keeps it "
+        "assembling",
+        needs=("nasm",)),
+    Row("coldpic", "soak", py("tools/os88romfix.py", "--check"), 9.0,
+        "docs/plans/ROM-PLAN.md 3.2: `.cold` must not NAME its own segment - "
+        "no `call COLD_SEG:`, no `dw COLD_SEG`, no compare against it - so "
+        "that one image runs wherever it is found, in RAM or in a 5150's ROM "
+        "sockets. The kernel is assembled twice with .cold's code segment at "
+        "two values and every word that moves is a fixup; one INSIDE .cold "
+        "is a ROM that runs the wrong code. COLDCALL/COLDSEG_TO refuse to "
+        "assemble outside .cold, which is the other half. SOAK: a kernel "
+        "internal no package can reach",
+        needs=("nasm",)),
     Row("bootfloor", "soak", py("tests/unit/t_bootfloor.py"), 3.5,
         "stage 1's RAM floor against the kernel's own ladder (SPEC.md 2.7.1) "
         "- HEAP_PARA is INJECTED, so the two can disagree, and guard 5c used "
@@ -441,7 +592,9 @@ FAST = [
         "tools/os88midi.py's, and its ten shipped songs are read by TWO "
         "readers that share no code - the composer's checker and the "
         "reference sequencer the player's gates compare against - which must "
-        "agree on every song's length (SPEC.md 105.6.1)"),
+        "agree on every song's length (SPEC.md 105.6.1); and the colour "
+        "face's part 0 of build/midirack.o88 unpacks to exactly what "
+        "tools/os88midart.py draws (SPEC.md 105.9.5)"),
     Row("bits", "fast", py("tests/unit/t_bits.py"), 0.5,
         "TWO FLAGS THAT SHARE ONE BYTE MAY NOT SHARE A BIT (SPEC.md 96.11.10). "
         "t_mirror's sibling and the same class of gate: a flag is `NAME equ "
@@ -751,8 +904,8 @@ FAST = [
         "NOT tests/filler: a package reaches mem_claim only from inside its "
         "own callback, so the asker's own region is refused for having a "
         "frame in it and a row built that way stays green with the pin taken "
-        "out of the kernel - measured. SHEET is the control: PINME's region "
-        "must stand still WHILE SHEET'S MOVES, or the run proves nothing",
+        "out of the kernel - measured. CALC is the control: PINME's region "
+        "must stand still WHILE CALC'S MOVES, or the run proves nothing",
         wants=("build/regpin360.img",)),
     Row("drvclaim", "soak", py("tests/unit/t_drvclaim.py"), 0.1,
         "a driver's SERVICE TASK may not reach a claim door: mem_claim can "
@@ -818,6 +971,26 @@ FAST = [
         "at all",
         wants=("build/small360.img", "build/small.img",
                "build/smallapps360.img", "build/smallapps.img")),
+    Row("lzbclust", "soak", py("tests/unit/t_lzbclust.py"), 1.2,
+        "SPEC.md 20.13.5's rule for LZBPKGS: a package ships LZB only while "
+        "LZB SAVES IT A 1KB CLUSTER on the 360KB disks it rides, because the "
+        "decode costs ~4x LZ4's on every launch (+541 ms on ArtfulType's "
+        "first, measured on a 5150) and the disk only gains a whole cluster. "
+        "A package is chosen against the size it had that day and its next "
+        "edit can move it to the far side of a boundary with every build "
+        "step green - so for each listed name this re-packs build/<name>.bin "
+        "with LZ4 and fails unless the shipped LZB file takes fewer "
+        "clusters, and fails a listed name whose shipped file is not LZB at "
+        "all (the stamp or the rule come apart from the list - the first try "
+        "at the list shipped all of them LZ4 and reported up to date). Red "
+        "on purpose both ways: `mines` added to the list fails as not LZB, "
+        "and Solitaire's small arm packed LZB (3,658 bytes, 4 clusters "
+        "against LZ4's 4,067, 4) fails as saving none. `--candidates` lists "
+        "the LZ4 packages LZB would save one for, as information. SOAK and "
+        "not fast: it re-packs a dozen packages, and which compressor a "
+        "package uses is not 'did you obviously break the OS'",
+        wants=("build/artful.o88", "build/artful.bin",
+               "build/smallapp/calc.o88", "build/smallapp/tank.o88")),
     Row("ktags", "soak", py("tests/unit/t_ktags.py"), 0.1,
         "every owner tag the kernel ships has a TYPE name on the Task "
         "Manager's heap page - SPEC.md 28.4's hex fallback is for a tag this "
@@ -863,6 +1036,15 @@ FAST = [
     Row("swallow", "fast", py("tests/unit/t_swallow.py"), 0.1,
         "a statement that ended up inside a block comment: it compiles clean, "
         "runs never, and cost apps/c64 a Paste that outlived a machine reset"),
+    Row("vidext", "fast", py("tests/unit/t_vidext.py"), 0.1,
+        "the external renderer hook's inventory (SPEC.md 120.3.1): every "
+        "[vid_mono]/[vid_planes] dispatch in the kernel is registered in "
+        "tests/vidext.txt as hooked or exempt with a reason, every selector "
+        "kernel/vxabi.inc names is emitted exactly once, and VESA.DRV's jump "
+        "table answers each with a body and never the refusal stub. A new "
+        "planar body that forgot its VIDEXT would program the VGA's ports on "
+        "a packed mode and draw nothing anyone could diagnose",
+        needs=()),
     Row("drvmem", "fast", py("tests/unit/t_drvmem.py"), 0.1,
         "the Drivers page's memory column (SPEC.md 31.6.2) re-derived: every "
         "image term against the .drv this build made, every claim term against "
@@ -872,6 +1054,14 @@ FAST = [
         "by different people - the system-side size pass shrank RAMDISK.DRV "
         "and NET.DRV across a KB with no kernel edit, and every make stayed "
         "green with the page quoting 9K and 7K for drivers that claim 8 and 5"),
+    Row("installabi", "fast", py("tests/unit/t_install.py"), 0.2,
+        "SPEC.md 117: INSTALL.O88 in the ROOT of every kern_big system disk "
+        "and on no kern_small one; HD_ABI_VER the same in hddabi.inc and the "
+        "tool image the resident checks; the wizard's HDG_*/HDS_* the Install "
+        "window's HII_*/HIS_*; the kernel's DRVU_* the SDK's; and HDD.DRV "
+        "still on its 4KB rung, the door's forwarder having been paid for "
+        "inside it. Every one of these is a number in two files that fails "
+        "silently when they drift"),
     Row("pkgzrules", "fast", py("tests/unit/t_pkgzrules.py"), 1.0,
         "SPEC.md 20.13.5, 73.14.1: every .o88 and .OVL the release ships "
         "(LIVEARGS, the SHIPIMGS floppies and the capability gates) is made "
@@ -893,7 +1083,9 @@ FAST = [
         "ROM reports moves exactly ten bytes, round-trips, refuses a foreign "
         "disk, and --verify-hdd fails the CHS/BPB disagreement note 33 was; "
         "and SPEC.md 52.10.15.1: a --hdd volume carries the installer's "
-        "attributes, nothing read-only"),
+        "attributes, nothing read-only; and SPEC.md 18.7.5: a --hdd "
+        "--geometry disk past the 32-64MB band is one TotSec32, type-06h "
+        "FAT16 volume that --verify-hdd passes"),
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),
@@ -911,6 +1103,17 @@ FAST = [
         "that fits never split, a collection split only between stem groups, "
         "first fit in order, DOCS/APPDATA/CONTENTS.TXT on every disk, a "
         "no-longer-needed disk deleted, an oversized program refused"),
+    Row("guidelock", "fast", py("tests/unit/t_guidelock.py", "--warn"), 2.1,
+        "the project guide (tools/os88guide.py) is checked against what it "
+        "describes: a page whose sources changed the text a user reads since "
+        "it was stamped (tools/guide/manuals.lock.json), and a file on a "
+        "built disk with no line or no page. In THIS tier it only WARNS - "
+        "its lines start `warn:` and the runner shows them on a passing row - "
+        "so no `make` waits on documentation; `guidelock-full` is the same "
+        "check failing. Also proves the fingerprint moves for a menu item, a "
+        "C message and a tool's help text and stands for comments and code. "
+        "~2s: it walks the built disks and hashes the packages' strings",
+        needs=()),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
@@ -990,6 +1193,23 @@ FAST = [
         "build/os8088.img: the cost of the leak is paid by an unrelated row, "
         "hours later, wearing a message about the wrong subject "
         ""),
+    Row("hotpar", "fast", py("tests/unit/t_hotpar.py"), 0.1,
+        "every HOT routine - gfx_blit4, gfx_blit1_x, font_run, both mouse "
+        "ISRs, kbm_isr, cur_move, sch_isr, sch_switch, ui_task, dsk_xfer, "
+        "dsk_runcap, dsk_next_clus_x, wm_paint_all - starts at the address "
+        "PARITY it was measured at, on kern_big and (when build/smallk is "
+        "current) kern_small. On a 16-bit bus an odd word fetch is two cycles, "
+        "and a cold-code edit or a re-relaxed branch moves the hot code by an "
+        "odd amount with every row green: passes 12 and 13 each found the "
+        "whole list odd part-way through. Reads the kernel.map the build "
+        "writes, so it assembles nothing"),
+    Row("sysman", "fast", py("tests/unit/t_sysman.py"), 0.3,
+        "SPEC.md 118.2.1: System Check's manifest is written from the system "
+        "disk's INPUTS (the image depends on SYSCHECK.O88), so every manifest "
+        "file is read back off all four built system disks with a walker of "
+        "its own and held to its size and sum - and SYSTEM\\SYSCHECK.O88 is "
+        "on each while the manifest does not name it. Fails on one changed "
+        "sum, which is a fresh install System Check would call broken"),
     Row("canary", "fast", py("tests/unit/t_canary.py"), 0.1,
         "SPEC.md 18.93.1's canary offset re-derived from every shipped image's "
         "own BPB: it has to name a sector a transfer run reads AFTER the head "
@@ -1166,6 +1386,33 @@ FAST = [
         "compilers agree - `soak -k 'lmpack'`, which is what a change to "
         "either one runs",
         needs=()),
+    Row("lemdat", "fast", py("tests/unit/t_lemdat.py"), 0.6,
+        "SPEC.md 116.2's standing check, and it is a SECOND READER rather "
+        "than a repeat of the first: the 26 DOS Lemmings data files decoded "
+        "again from Lemmings.ts's semantics - its container walk, its bit "
+        "reader's RUNNING checksum, which is a stronger reading than an XOR "
+        "over the payload because the two agree only if the stream consumed "
+        "exactly the payload - against tools/os88lem.py's, which is "
+        "lemtool/lemdat.py's. 101 sections, the mask == plane 3 identity "
+        "over all 273 terrain pieces plus the tiling of VGAGR section 0 that "
+        "makes it checkable, the four special pictures at exactly 4 chunks "
+        "of 14,400, the 120-level order against BOTH reference tables, and "
+        "every converted band's header held against the bytes it claims to "
+        "carry. It has already caught two defects the converter's own "
+        "selfcheck could not see, both because it reads the ORIGINALS: four "
+        "level names are exactly 32 characters and were losing their last "
+        "letter to a terminator the field has no room for, and a geometry "
+        "that shrank was leaving a stale LEMLVn.LEM the manifest still "
+        "names. Since wave 6's second review it also holds every built "
+        "band to the LEM_KB_* claim apps/lemmings/lemload.c reads it into, "
+        "parsed out of that file, so a band that outgrows its claim fails "
+        "here and not as 'Load failed' on the machine. SKIPS with no "
+        "build/lemdata.stamp, because the data is "
+        "fetched and never committed (CONTRIBUTING.md 6) and a red row in a "
+        "fresh clone would be reporting on the box. 0.6s is wave 6's "
+        "second review's MEASURED figure (0.44s alone, 0.6s in the tier; it "
+        "was 2.4 when registered)",
+        needs=()),
     Row("movable", "fast", py("tests/unit/t_movable.py"), 0.6,
         "SPEC.md 66.6.1's ratchet: a package's region is born PINNED, so a "
         "package that never declares OS88_REGION_MOVABLE is a WALL in the "
@@ -1180,6 +1427,18 @@ FAST = [
         "and not soak on t_textrules.py's argument - it is a rule about how "
         "every package is written, so the place it belongs is in front of "
         "the next `make` rather than the next soak run"),
+    Row("moddrop", "fast", py("tests/unit/t_moddrop.py"), 0.2,
+        "SPEC.md 2.8.3's ratchet: every mod_tab row is DROPPED somewhere, "
+        "or tests/moddrop.txt says why it is held until restart. A module "
+        "nothing drops holds its claim from first use to power-off and "
+        "PINNED - exactly the bytes a module exists to give back - and "
+        "nothing refuses it, so the feature works and the heap is merely "
+        "smaller. DESK.DRV shipped that way, with 'no mod_drop anywhere' in "
+        "its own banner and a 5 KB claim priced as 1 (SPEC.md 11.103.10). "
+        "FAST and not soak, though it is about the kernel: new features keep "
+        "arriving as modules, a new mod_tab row is the one path every one of "
+        "them takes, and the place to refuse it is the next `make`. It reads "
+        "that a drop is WRITTEN; that it is reached is stiknodesk's G"),
     Row("toast", "fast", py("tests/unit/t_toast.py"), 1.1,
         "EVERY FIXED TOAST MESSAGE FITS THE BAR (SPEC.md 59.10). toast_show "
         "copies at most TOAST_MAX = 24 characters and drops the rest "
@@ -1210,6 +1469,51 @@ FAST = [
         "pixel twice and flashes on the target machine, so every call site is "
         "registered in tests/textsites.txt with a reason and the count can only "
         "go down"),
+    Row("cswrite", "fast", py("tests/unit/t_cswrite.py"), 0.5,
+        "docs/plans/KERN-MEGA-PLAN.md 2.4's ratchet: a write through CS and a "
+        "`push cs / pop ds|es` are free in real mode and a #GP in 286 "
+        "protected mode, where code is read-only. kern_mega shares most of "
+        "kernel/ with kern_big, so a new site in a shared file assembles and "
+        "runs here while it breaks a build nobody can boot yet. Every file "
+        "under kernel/ and drivers/ that uses either idiom is registered in "
+        "tests/cswrites.txt with its count and a reason, and the count can "
+        "only go down. FAST on t_textrules.py's argument - a rule about how "
+        "every kernel file is written belongs in front of the next `make`"),
+    Row("seg0", "fast", py("tests/unit/t_seg0.py"), 0.5,
+        "docs/plans/KERN-MEGA-PLAN.md 10.1 item 11's ratchet: segment 0 in DS "
+        "or ES is how real mode reads the IVT and the BIOS data area, and in "
+        "286 protected mode it is the NULL selector, #GP(0) on the first "
+        "access - the Victory 286's keyboard pointer died of it, and QEMU does "
+        "not fault on it at all. Every file under kernel/ and drivers/ that "
+        "loads one on an arm kern_mega assembles is registered in "
+        "tests/seg0.txt with its count and a reason. FAST for cswrite's "
+        "reason, on the same walker"),
+    Row("megagrid", "fast", py("tests/unit/t_megagrid.py"), 0.6,
+        "docs/plans/KERN-MEGA-PLAN.md 14.39's ratchet: under kern_mega's "
+        "protected mode only a multiple of EIGHT paragraphs is a segment, so "
+        "a far pointer normalised to one paragraph (`and si, 15`), a byte "
+        "count rounded up to paragraphs, or a one-paragraph segment step is a "
+        "fault - or an LDT alias of OTHER memory, read with no fault at all. "
+        "Every file of a package that says OS88_HIGH that builds one is "
+        "registered in tests/megagrid.txt with its count and a reason. FAST "
+        "on cswrite's argument one tree over: it is a rule about how fifty "
+        "packages are written, and the writer who breaks it has never booted "
+        "kern_mega"),
+    Row("megapkg", "fast", py("tests/unit/t_megapkg.py"), 1.6,
+        "docs/plans/KERN-MEGA-PLAN.md 14.66, the owner's rule: 'mega specific "
+        "work that more than trivially increases the disk size is gated to "
+        "mega builds only.' kern_mega-only code is under %ifdef PKG_MEGA "
+        "(apps/os88mega.inc, SPEC.md 20.18) and `make mega` builds that arm "
+        "onto kern_mega's own disks. Every SHIPPED build's live source - its "
+        "recipe's defines, through every %include - may name a kern_mega "
+        "marker (CPU_F_PM and the selector cells) only as often as "
+        "tests/megapkg.txt allows each file, with a reason, one way; no "
+        "shipped .o88 may take a part assembled -DVB_PM/-DPKG_MEGA; a "
+        "package naming PKG_MEGA has an arm in $(MEGAPKGS); and a current "
+        "build/megaapps*.img carries the arms. Red on 2e77a97e six ways "
+        "(VIDEO's vblkpm part three times, VIDEO's live CPU_F_PM/XMEM_RUN/"
+        "CODESEL, os88spkfx.inc's and MIDIRack's PM copies). FAST: host-side "
+        "and 1.6s, and the writer who breaks it never builds kern_mega"),
     Row("btngesture", "soak", py("tests/btngesture.py"), 26,
         "SPEC.md 13.7/13.8 ON THE GLASS: a standard button goes DOWN while "
         "held, comes UP when the pointer slides off it, goes down again on the "
@@ -1339,23 +1643,23 @@ FAST = [
     Row("checkreadme", "fast", py("tools/checkreadme.py", "readme.txt"), 0.1,
         "README.TXT's width and size rules - Note Pad refuses a file one byte "
         "too long and shows nothing at all"),
-    Row("readme8088", "soak", py("tests/unit/t_readme8088.py"), 0.1,
+    Row("readme8088", "fast", py("tests/unit/t_readme8088.py"), 0.1,
         "README.TXT packs to exactly 8,088 bytes, because the machine is an "
         "8088 (SPEC.md 20.13.4). A JOKE, PINNED - so NOTHING IS BROKEN when "
         "this goes red: somebody edited the manual and the number came "
         "loose, and the fix is the PROSE and never the constant in the test. "
-        "It is a size defended by nobody - no layout depends on it and a "
-        "byte either way costs the machine nothing - which is exactly why it "
-        "needs a row, or the next ordinary edit retires it silently. `soak` "
-        "and not `fast` because only an edit to that one file can break it, "
-        "so the person it is for is the person who touched it "
-        "(docs/WRITING-TESTS.md 2.1). It needs no build: the CRLF fold and "
-        "the LZ4 wrap are the two steps $(SYSDOCRAW)/$(SYSDOC) take, done "
-        "here to readme.txt itself, so a knob tree cannot make it red. The "
-        "shipped artefact is compared as well, but only when it is a FRESH "
-        "LZ4 one - `make PKGZ=` leaves it plain, `make PKGZ=lzb` leaves it "
-        "LZB, and one older than the source would report the same edit a "
-        "second time dressed as a build fault"),
+        "`fast` BY THE OWNER'S CALL AND NOT BY THE RULE: one file's business "
+        "is `soak` under docs/WRITING-TESTS.md 2.1, and in `soak` two edits "
+        "took it to 8,721 bytes and nobody saw (incident 79). Like "
+        "`kernbudget` it is the named exception, written down there so it is "
+        "not a precedent - a row does not earn `fast` by pointing at this "
+        "one. It needs no build: the CRLF fold and the LZ4 wrap are the two "
+        "steps $(SYSDOCRAW)/$(SYSDOC) take, done here to readme.txt itself, "
+        "so a knob tree cannot make it red. The shipped artefact is compared "
+        "as well, but only when it is a FRESH LZ4 one - `make PKGZ=` leaves "
+        "it plain, `make PKGZ=lzb` leaves it LZB, and one older than the "
+        "source would report the same edit a second time dressed as a build "
+        "fault"),
     Row("ovlchk", "fast", py("tools/os88ovlchk.py"), 1.4,
         "no near call crosses a section boundary - it assembles cleanly and "
         "runs wrong"),
@@ -1375,10 +1679,28 @@ FAST = [
         "is a landmine for whoever edits the TCP stack next. "
         "SOAK and not fast: every one of those markers is ETHER.DRV's "
         "own, so this is a per-driver row"),
+    Row("sheetfmtlib", "fast",
+        py("tools/os88sheetfmt.py", "--selfcheck"), 1.5,
+        "tools/os88sheetfmt.py parses what it writes - the host-side SYLK, "
+        "DIF and BIFF2 reader that gives SHEET's file formats a SECOND "
+        "OPINION (SPEC.md 81.38). It is written from the published grammars "
+        "and not from sheet.asm on purpose: a writer and a reader that share "
+        "a misunderstanding agree perfectly, and the file they agree about is "
+        "one no other program can open. This row only proves the library is "
+        "self-consistent; tests/sheetfmt.py is the one that points it at "
+        "SHEET"),
     Row("stkbalance", "fast",
-        py("tools/stkbalance.py", *_kernel_sources()), 0.7,
-        "every `ret` in the KERNEL is reached at "
-        "the depth it started at. `ch_legend` pushed SI and never popped it, so "
+        py("tools/stkbalance.py", "apps/sheet/sheet.asm", "apps/chart/chart.asm",
+           "apps/os88chart.inc", "apps/os88fp.inc", "apps/os88text.inc",
+           "apps/os88line.inc", "apps/os88img.inc",
+           "apps/scribe/scribe.asm", "apps/scribe/scdoc.inc",
+           "apps/scribe/scrtf.inc", *_kernel_sources()), 1.5,
+        "every `ret` in the KERNEL and in SHEET, CHART and the includes they "
+        "share is reached at "
+        "the depth it started at. WORD AND SCRIBE ARE IN SCOPE TOO: wd_pictload "
+        "pushed seven registers and popped six, and while Word was outside the "
+        "scope the suite stayed green as the machine went to 000E:00DF inside "
+        "the interrupt vector table. `ch_legend` pushed SI and never popped it, so "
         "its `ret` jumped to the saved register: a black canvas and a wedged "
         "app, with no crash and no message (SPEC.md 82.7.3). The walk is "
         "path-aware because a naive push-vs-pop count flags one routine in ten "
@@ -1563,6 +1885,30 @@ FULL = [
         "so it cannot answer this tier's question. It is what a change to "
         "tools/os88marty.py runs",
         needs=("marty",), serial=True),
+    Row("guidelock-full", "full", py("tests/unit/t_guidelock.py"), 2.1,
+        "the fast tier's `guidelock` row with teeth, at the owner's word: a "
+        "merge of major work must not leave a page describing text the "
+        "program no longer shows, or a shipped file with no page. Host-side "
+        "and two seconds, so it costs this tier nothing next to the boots; "
+        "paid with `python3 tools/guidelock.py stamp KEY --why ...` after "
+        "reading the page",
+        needs=()),
+    Row("megahigh", "full", py("tests/unit/t_megahigh.py"), 2.0,
+        "KERN-MEGA-PLAN 14.51/14.52, at the owner's word: OS88_HIGH and "
+        "OS88_HIGHMEM stay OPT-IN, but every package under apps/ declares "
+        "both in its class byte or excepts itself in tests/megahigh.txt "
+        "with a reason - a thing in its code that breaks above 1MB, never "
+        "'nobody looked'. t_movable.py's shape and ratchet: a line for a "
+        "package that now declares fails as stale. Decided from the source "
+        "(OS88_HEADER's 4th argument through a model of %ifdef with the "
+        "shipped recipe's defines, or a C shim's CC_STACK_CLASS) and "
+        "cross-checked against every current built image's byte 15, so the "
+        "parse cannot drift from what the kernel reads. A re-home LOADER is "
+        "not asked for OS88_HIGH, and for OS88_HIGHMEM only when its own "
+        "source claims. Red, both tried: OS88_HIGHMEM taken out of HELLO, "
+        "and a stale line for a package that declares. FULL and not fast "
+        "because the owner asked for it there; host-side, 2s measured",
+        needs=()),
     Row("bootsmoke", "full", py("tests/bootsmoke.py"), 20.0,
         "does it still reach a desktop on both 1bpp adapters - the widest "
         "reach per second of any test here",
@@ -1733,6 +2079,32 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("wirefleetlink", "soak", py("tests/wirefleetlink.py"), 100.0,
+        "WireFleet two UART peers: turn rules, private fleets, lost result, save/load/reconnect, duplicate commands/chat, malformed frames, victory and cleanup (SPEC.md 114/115)",
+        needs=("qemu", "nasm", "pil"), wants=("build/wireflet.img", "build/os8088.img"), timeout=300),
+    Row("wirefleetsystem", "soak", py("tests/wirefleetsystem.py"), 120.0,
+        "WireFleet on 8088s: original 8250 lease and forced cleanup, CGA color fullscreen and return, saved-record validation, finite speaker/AdLib/SB cues (SPEC.md 114/115)",
+        needs=("marty", "nasm", "pil"), wants=("build/wireflet360.img", "build/wireflet720.img", "build/os8088-360.img", "build/os8088-720.img"), timeout=300),
+    Row("wirefleetart", "soak", py("tests/wirefleet.py", "--art"), 8.0,
+        "WireFleet generated tiles: reproducibility, palette/bounds, distinct color/mono shot shapes (SPEC.md 114); "
+        "the 16 effect stamps in three forms, the song and the Sound Blaster clips (114.11)",
+        needs=("pil",)),
+    Row("wfdraw", "soak", py("tests/wfdraw.py"), 120.0,
+        "WireFleet's colour face priced in drawing calls (SPEC.md 114.10): five "
+        "seconds of the automatic search draws nothing, each gesture under a "
+        "ceiling a repaint blows through, and the cached picture pixel-identical "
+        "to a forced full repaint. The 4.77 MHz VGA XT",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/wireflet360.img")),
+    Row("wfdrawherc", "soak", py("tests/wfdraw.py", "--herc"), 120.0,
+        "wfdraw on the Hercules 5150: 114.2's mono face, the same idle, ceilings "
+        "and incremental-equals-repaint identity",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/wireflet360.img")),
+    Row("wirefleetdeploy", "soak", py("tests/wirefleet.py"), 80.0,
+        "WireFleet on VGA/CGA/Hercules: native deployment, bounds/overlap refusal, rotation, removal, auto, Ready, release/cancel and About (SPEC.md 114)",
+        needs=("marty", "nasm", "pil"),
+        wants=("build/wireflet360.img", "build/os8088-360.img"), timeout=240),
     Row("wireballphysics", "soak", py("tests/wireball.py", "--physics"), 65.0,
         "WireBall 8088 physics: center/end contact, paddle motion, ball extent, "
         "rally acceleration, swept end contact and remaining substep motion (SPEC.md 109)",
@@ -1844,7 +2216,7 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=300),
     Row("weavecanvas", "soak", py("tests/weavecanvas.py"), 10.0,
         "WEAVE-SPEC 12.1.3: the SHIPPING apps/weave/wspr.inc and "
-        "apps/weave/wwork.inc - WEAVE.WSM's composer and frame loop - run in "
+        "apps/weave/wwork.inc - the canvas core's composer and frame loop - run in "
         "a raw-QEMU BOOT SECTOR with SS != DS and no OS under them, diffed "
         "case by case against the model's own canvas composer. It is the one "
         "differential in this family whose ORACLE HAD TO BE WRITTEN: every "
@@ -1931,7 +2303,8 @@ SOAK = [
         "WEAVE-SPEC 1.7.1 and 12.3: LOOM's PREVIEW PANE against "
         "`weavesim --render --preview`. Wave 7 draws the pane with WEAVE's "
         "own flow walk and WEAVE's own component painter, compiled a second "
-        "time into LOOM.WPV - a second RESIDENT segment (1.2.4) - and "
+        "time into the preview module - a second RESIDENT segment, part 0 "
+        "of LOOM.O88 (1.2.4) - and "
         "NOTHING ELSE IN THIS FAMILY ENTERS THAT MODULE AT ALL: weavegfx "
         "reads the runtime's window and every assertion it makes would pass "
         "with the pane blank. Because the two images run the same TEXT "
@@ -1975,7 +2348,7 @@ SOAK = [
     Row("weavegame", "soak", py("tests/weavegame.py"), 50.0,
         "WEAVE-SPEC 6.10, 12.3, 14: PONG.WAB under MartyPC, and it asks "
         "wireflick's two questions of a sprite canvas "
-        "(SPEC.md 78.9). HOW MANY GFX CALLS A FRAME, read out of WEAVE.WSM's "
+        "(SPEC.md 78.9). HOW MANY GFX CALLS A FRAME, read out of the canvas core's "
         "own frames and blits counters - the only honest way to price a "
         "redraw here (CLAUDE.md: a redraw costs what it CALLS), and 14 "
         "prices a two-sprite frame at 2-4. WHAT THE GLASS SHOWED between the "
@@ -2011,11 +2384,11 @@ SOAK = [
         "`marty` for the boot. 1,500s MEASURED, and it is eleven LAUNCHES rather "
         "than one session: each project is its own instance (WEAVE-SPEC 1.4) "
         "and they cannot all be open at once, so every one costs a package "
-        "load - 55KB of LOOM plus 43KB of LOOM.OVL off an emulated floppy - "
+        "load - LOOM.O88 and its overlay part off an emulated floppy - "
         "and that read is the whole of the time. It is the price of asking "
         "the question on the target rather than on the host",
         needs=("marty", "cc"), serial=True, timeout=3000,
-        wants=("build/loom.o88", "build/LOOM.OVL")),
+        wants=("build/loom.o88",)),
     Row("weavefuzz", "soak", py("tests/weavefuzz.py"), 180.0,
         "a thousand DAMAGED projects through both packers, asking the two "
         "questions a fixture cannot: did they agree about whether it is a "
@@ -2073,6 +2446,43 @@ SOAK = [
         "row must stay exactly as it was",
         needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img", "build/hdd.bin")),
+    Row("cdrom", "soak", py("tests/cdrom.py", "--disc"), 45.0,
+        "SPEC.md 119: CDROM.DRV on QEMU's 386 with build/cdfix.iso as the "
+        "secondary master. The row loads and finds the drive at 170h unit 0; "
+        "the CD-ROM zone opens and every folder lists what tools/os88cdiso.py "
+        "(the reference) says - mangled 8.3 names, two levels down and back "
+        "up through `..`, a directory longer than a sector; MINES.O88 "
+        "launches off the CD; and BIG.BIN (100,001 generated bytes) copied "
+        "to B: is byte-identical on the host",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/cdromtest.img", "build/cdfix.iso", "build/cdrom.bin")),
+    Row("cdromsim", "soak", py("tests/cdrom.py", "--sim"), 30.0,
+        "SPEC.md 119.3.5/119.6 on QEMU, whose drive holds no audio: the "
+        "gate's CDROM.DRV (-DCDSIM_AUDIO) gives the one-track disc three "
+        "audio tracks; the root lists TRACK02..04.CDA, and double-clicking "
+        "TRACK02.CDA opens CDRack through its .CDA association, which "
+        "reads the file's 44 bytes (byte-compared with SPEC.md 119.3.5's "
+        "layout), stands on track 2 and - QEMU refusing every audio command - "
+        "says the drive plays no audio",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/cdromsim.img", "build/cdfix.iso", "build/cdrack.bin")),
+    Row("cdromempty", "soak", py("tests/cdrom.py", "--empty"), 20.0,
+        "SPEC.md 119.3: the same machine with the CD-ROM drive EMPTY - the "
+        "row still loads and the zone is on the desktop, a double-click "
+        "mounts nothing (FERR_NODISK), and A: still opens after it",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/cdromtest.img", "build/apps.img", "build/cdrom.bin")),
+    Row("btnmove", "soak", py("tests/btnmove.py"), 20.0,
+        "SPEC.md 20.5.1.3.5: a standard button answers where its window IS "
+        "after a drag. A drag replays the window and never paints it "
+        "(11.96.12.0), and the Timer lays its rects out in W_PAINT and "
+        "nowhere else - so it is dragged twice, pressing Stop and then Start "
+        "at the place each is now DRAWN, and [tm_run] must follow both. Red "
+        "with the library's rebase out (the rect still reads the window's "
+        "old place and the press lands on nothing)",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img",
+               "build/timer.bin")),
     Row("timerrace", "soak", py("tests/timerrace.py"), 30.0,
         "SPEC.md 13.9.2: ui_timer_pass asks again, UNDER the gfx lock, "
         "whether the window it is about to call still exists - gfx_lock can "
@@ -2130,6 +2540,17 @@ SOAK = [
         "A double-click must open TeXPad - it toasted 'Load failed'. Then "
         "HELLO.ZZZ, which nothing declares: the search runs and the verdict "
         "is the old one",
+        needs=("marty",), serial=True),
+    Row("assocflush", "soak", py("tests/assocflush.py"), 170.0,
+        "SPEC.md 54.7.6: what the machine learns is written BACK to the "
+        "volume's ASSOC.DAT. Five boots, every answer read off the floppy "
+        "the guest wrote: a cold B:\\APPS is ONE flush whose rows equal "
+        "os88disk's own builder; browsing it again is none; one new package "
+        "and seventeen cost the flush the same reads (the capture, 54.7.6.2); "
+        "the next boot knows .TEX and .HTM from B:\\MEDIA and reads a third "
+        "as much; a program found by a SWEEP has its row corrected; a full "
+        "disk is tried once a session. Red with the harvest's asc_learn, the "
+        "capture, the location trigger or [asc_wno] taken out",
         needs=("marty",), serial=True),
     Row("assocvol", "soak", py("tests/assocvol.py"), 21.0,
         "SPEC.md 54.3.3, 98.4.7: a .V88 on a bare B: with VIDEO.O88 in "
@@ -2386,6 +2807,258 @@ SOAK = [
         "the table goes 4 claims to 2 and this row names it. Needs `make "
         "mseg`.",
         needs=("marty", "nasm"), serial=True, wants=("build/mseg.img",)),
+    # THE REALDMG CORE ROWS UNDER A QEMU THAT LOSES SAHF'S FLAGS run one guest
+    # instruction a block (tests/rdgcore/rdgqemu.py tcg_args, QEMU 11.0.2 on an
+    # M1), five to twelve times slower than their declared seconds, which stay
+    # a correct QEMU's. Their timeouts are the backstop for that arm: gbcpu
+    # took 266s and rdgstatic 304s there against 230 and 126.
+    Row("gbcpu", "soak", py("tests/gbcpu.py"), 50.0,
+        "REALDMG's SM83 core (docs/REALDMG-SPEC.md) against Blargg's eleven "
+        "cpu_instrs ROMs, the combined MBC1 one, instr_timing, mem_timing and "
+        "halt_bug, and the 24 of Mooneye's DMG acceptance tests it passes - "
+        "each booted BARE through tests/rdgcore/rdghost.asm with no os8088 "
+        "under the core, the verdict read off the link port, Blargg's text at "
+        "A000 or Mooneye's registers. The ROMs are fetched by "
+        "tools/getgbtest.py at pinned SHA-256s and never committed. NEGATIVE CONTROL: DAA made a no-op must make "
+        "01-special fail. Then tools/gbprof/gbrmw.asm, ours: the "
+        "recompiler's read-modify-writes of (HL) on WRAM against TMA, a store "
+        "through (HL) that takes an interrupt, and an HRAM routine rewritten "
+        "once translated - with its own control, the interpreter's DEC (HL) "
+        "broken, which must part the two sides. And tools/gbprof/gbflags.py's "
+        "generated sequences, the recompiler's dead flags (REALDMG-SPEC "
+        "16.1.2): their sum with it must be the interpreter's, and its "
+        "control (RT_DEADBUG, a flag's read unseen) must make them differ. And "
+        "tools/gbprof/gbpop.asm, POPs out of a ROM bank as Pokemon's VBlank "
+        "copy does (pop_slow, REALDMG-SPEC 5), interpreted and translated, "
+        "with POP BC's branch to it taken out as the control. WHY QEMU: a correctness gate, and QEMU counts work "
+        "exactly - the cycle counts instr_timing checks are the core's own. "
+        "SOAK: one package's core",
+        needs=("qemu", "nasm", "rgbds"), timeout=660),
+    Row("rdgstatic", "soak", py("tests/rdgstatic.py"), 24.0,
+        "REALDMG's Static recompiler (docs/REALDMG-SPEC.md section 16.8): "
+        "cpu_instrs, instr_timing, mem_timing and tools/gbprof/gbrmw.asm each "
+        "run TWICE bare through tests/rdgcore/rdghost.asm - a first pass "
+        "recording the profile, then the game again from its start with the "
+        "profile translated before it runs and the block table fixed - and "
+        "both passes must pass with NOTHING translated after the switch. "
+        "Then the first ROM with recording broken: an empty profile, fixed, "
+        "still translates nothing. NEGATIVE CONTROL: the table never fixed "
+        "must translate in the second pass. Then the cache's SECOND SEGMENT "
+        "(section 16.2.1), both segments squeezed to 1KB so the code fills "
+        "them: every ROM Static again, and cpu_instrs translated as it runs "
+        "moving into the second twice; NEGATIVE CONTROL: rt_exit chaining "
+        "across the segments must fail. WHY QEMU: a correctness gate, "
+        "counted, not timed. SOAK: one package's core",
+        needs=("qemu", "nasm", "rgbds"), timeout=360),
+    Row("gbacid", "soak", py("tests/rdgcore/rdgacid.py"), 3.0,
+        "REALDMG's renderer (apps/realdmg/rdgppu.inc, docs/REALDMG-SPEC.md "
+        "section 13) against dmg-acid2's reference picture, all 23,040 pixels: "
+        "the window's line counter, the ten-sprite limit, sprite priority by X "
+        "then OAM index, the flips, 8x16 sprites, colour-0 priority and the "
+        "mid-frame LCDC writes the raster log carries. It is what found that "
+        "STAT interrupts had never fired. NEGATIVE CONTROL: LDH (n),A made a "
+        "no-op must lose the picture. WHY QEMU: counted, not timed. SOAK: one "
+        "package's renderer",
+        needs=("qemu", "nasm")),
+    Row("gbwindow", "soak", py("tests/gbwindow.py"), 75.0,
+        "REALDMG.O88 in a window (docs/REALDMG-SPEC.md section 14): dmg-acid2 "
+        "opened from the Disk window through its association, the frame "
+        "counter in the package's view advancing, and the window's content "
+        "against the reference PIXEL FOR PIXEL on both writers - the four "
+        "greys through OSAPI_GFX_BLITP on VGA (rendered frame) and the 2x2 "
+        "ordered dither through OSAPI_GFX_BLIT1 on a Hercules and a CGA (their "
+        "VRAM: MartyPC's rendered Hercules frame is cropped). Each then takes "
+        "Machine > Full Screen (sections 15 and 15.1, the plan's gbfsx gate): "
+        "VGA's mode 0Dh, the Hercules page at 2x2 and CGA's 320x200 in four "
+        "colours, each against the SAME reference, frames advancing in there, "
+        "and Esc back to a desktop whose window shows the picture again. "
+        "On VGA the window is checked again under Machine > Interlace: On "
+        "and Scrolling. "
+        "NEGATIVE CONTROL: the reference mirrored must not match. SOAK: one "
+        "package",
+        needs=("marty", "nasm"),
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("gbkeys", "soak", py("tests/gbkeys.py"), 66.0,
+        "REALDMG's Machine > Controls... (docs/REALDMG-SPEC.md section 14.2) "
+        "on VGA and on a CGA, driven by its own layout: a click on A lights "
+        "the box and the next key typed (Q) is A's, read out of rw_keymap; "
+        "F1 is refused and the wait goes on, Esc stops it; B takes A's key "
+        "and the two change places; the GAME reads the new map out of S_JOY "
+        "(Q held is B, Z is A, X nothing); REALDMG.CFG version 3 keeps it, "
+        "read off the floppy as the guest left it (os88flush); Default puts "
+        "the shipped map back; and on the CGA the window is whole above the "
+        "dock. Measured 66s. BROKEN ON PURPOSE (the reserved check taken out) "
+        "it goes red at F1. SOAK: one package",
+        needs=("marty", "nasm"),
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("gbdamage", "soak", py("tests/gbdamage.py"), 32.0,
+        "RealDMG's damage renderer (docs/REALDMG-SPEC.md section 13.2) against "
+        "its whole one: the bare harness's MODE 6 under QEMU composes every "
+        "third frame both ways and counts the pictures that differ - gbclock's "
+        "frame counter (ours), and with $OS88_GB_ROMS Super Mario Land and "
+        "Kirby. Without the map-row marks it fails on 497 frames of 500. "
+        "Each again INTERLACED (section 13.2), On, Scrolling and Doubled, composed every "
+        "frame as the package does and twice on a checked one: without the "
+        "lines a call left being composed by the next it fails on 151-499. "
+        "SOAK: one package",
+        needs=("qemu", "nasm", "rgbds"), timeout=450),
+    Row("gbdemo", "soak", py("tests/gbdemo.py"), 30.0,
+        "RealDMG's 5150 demo (docs/plans/REALDMG-PLAN.md section 6, wave 8's "
+        "gate): GBDEMO.GB (tools/gbours.py, ours) taken full screen by Alt+Enter "
+        "on MartyPC's IBM 5150 with a Hercules (and back out by a second), its "
+        "frame counter against 60 guest seconds - "
+        "which must be 1.00 of real time to two places - and the frames drawn "
+        "a second off the F1 line, reported. With the draw clock always due "
+        "the picture takes the machine and the game falls to 0.39. SOAK: one "
+        "package",
+        needs=("marty", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("gbship", "soak", py("tests/gbship.py"), 15.0,
+        "RealDMG's SHIPPED cartridge (SPEC.md 24.6, docs/REALDMG-SPEC.md "
+        "section 19): apps/realdmg/GBDEMO.GB is committed so `make` needs no "
+        "rgbds, so it is rebuilt by tools/gbours.py and compared byte for "
+        "byte; the LZ4-packed MEDIA/GBDEMO.GB on emu360, apps and apps120 "
+        "must unwrap to it; and the shipped 360KB pair boots on MartyPC's "
+        "5150, the packed cartridge is double-clicked and RealDMG's own "
+        "frame counter must run. With rw_load forced onto the bank cache's "
+        "raw read the package never starts and the row is red. SOAK: one "
+        "package",
+        needs=("marty", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088-360.img",
+               "build/emu360.img", "build/apps.img", "build/apps120.img")),
+    Row("gblog", "soak", py("tests/gblog.py"), 20.0,
+        "REALDMG.O88's log to file (docs/REALDMG-SPEC.md section 14.1): "
+        "GBDEMO.GB on MartyPC's 5150 Hercules, two logs - one by the menu, "
+        "with Pause on and off inside it, one at the close - read on the host "
+        "beside REALDMG.O88 as GBDEMO00.LOG and GBDEMO01.LOG: the head naming "
+        "the game and the machine, PAUSE and GO, at least eight records with "
+        "rising seconds, frames drawn and the demo's full speed outside the "
+        "pause. With no record counted no file is written and the row says "
+        "so. SOAK: one package",
+        needs=("marty", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("gbsound", "soak", py("tests/gbsound.py"), 15.0,
+        "REALDMG.O88's speaker (docs/REALDMG-SPEC.md section 17) on MartyPC's "
+        "VGA XT, against GBTONE.GB (tools/gbours.py, ours): channel 1 at 440 "
+        "Hz, its DAC switched off, then channel 2 at 880 Hz with a length of "
+        "64 - the capture (MARTYPC_WAV) must hold the two tones, silence "
+        "between them and nothing after the second, whose length counter ends "
+        "it. Breaking the counter leaves 880 Hz running and the row says so. "
+        "SOAK: one package",
+        needs=("marty", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("gbspeed", "soak", py("tests/gbspeed.py"), 32.0,
+        "REALDMG.O88's Machine > Speed (docs/REALDMG-SPEC.md section 15.2) on "
+        "MartyPC's VGA XT, against CLOCK0.GB (tools/gbclock.py's do-nothing "
+        "variant, ours): ~100% of a Game Boy's frames at the default, 75% after "
+        "two picks, and 75% again with the window closed and the game opened "
+        "anew - kept for the game in REALDMG.CFG. Without the clock's scaling "
+        "the 75% reads 101%, without rw_spdgame the reopened game 103%. "
+        "SOAK: one package",
+        needs=("marty", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("gbfm", "soak", py("tests/gbfm.py"), 25.0,
+        "REALDMG.O88's four channels on the FM chip (docs/REALDMG-SPEC.md "
+        "section 17.1), on MartyPC's VGA XT with a Sound Blaster: GBFM.GB "
+        "(tools/gbprof/gbfm.asm, ours) starts both squares, the wave and the "
+        "noise; the package must hold the chip, its shadow of each channel's "
+        "A0h/B0h must be the F-number the Game Boy's own formulas give, "
+        "SOUND.DRV's opl_b0 must agree, and the card's capture must sound - "
+        "square 1 alone peaking at 440 Hz with its octave under a quarter of "
+        "that (odd harmonics, a square's). Without the claim the speaker plays "
+        "and the row fails on all four channels. SOAK: one package",
+        needs=("marty", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088-360.img")),
+    Row("gbheader", "soak", py("tests/gbheader.py"), 45.0,
+        "REALDMG.O88 reading a cartridge's header before it runs it "
+        "(docs/REALDMG-SPEC.md section 10), on MartyPC's VGA XT: CLOCK0.GB "
+        "copies with the checksum wrong, the Color-only flag and an MBC7 are "
+        "each refused with their own toast (the MBC7 used to run with no MBC "
+        "at all), a .GBC copy opens by its extension and runs, and GBJOY.GB "
+        "(tools/gbprof/gbjoy.asm, ours), asleep in HALT with only the joypad "
+        "interrupt enabled, wakes once a press of B (section 7). Without "
+        "rw_hdrchk nothing is refused; without IF bit 4 it never wakes. "
+        "SOAK: one package",
+        needs=("marty", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("gbstate", "soak", py("tests/gbstate.py"), 40.0,
+        "REALDMG.O88's save states (docs/REALDMG-SPEC.md section 10.4). The "
+        "bare harness's MODE 13 under QEMU takes a state 200 frames before the "
+        "end and puts it back - into a machine just reset, and into the one "
+        "that ran on with its translated code kept - and the same 200 frames "
+        "must end on the same picture and memory: gbclock's counter, and with "
+        "$OS88_GB_ROMS Super Mario Land and Kirby (leaving the clocks out of "
+        "rdg_stapply's table turns both games red). Then the package on "
+        "MartyPC's VGA XT: 3 and F5 write CLOCK0.SS3 (34,816 bytes, read back "
+        "off the floppy), F8 takes the frame counter back to the save (without "
+        "rdg_stapply it does not), an empty slot changes nothing - in the window "
+        "and in full screen. SOAK: one package",
+        needs=("qemu", "marty", "nasm", "rgbds"), timeout=540,
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("gbsave", "soak", py("tests/gbsave.py"), 40.0,
+        "REALDMG.O88's battery RAM and MBC3 clock (docs/REALDMG-SPEC.md "
+        "section 10.1) on MartyPC's VGA XT, against GBSAVE.GB (tools/gbours.py, "
+        "ours): four RAM banks counted and told apart, the clock counting game "
+        "time, the close writing GBSAVE.SAV beside the game (32KB and VBA's "
+        "48-byte clock trailer, read on the host), and a second boot reading "
+        "the counters and the clock back. SOAK: one package",
+        needs=("marty", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088-720.img")),
+    Row("rdgspeed286", "soak", py("tests/rdgspeed286.py"), 1200.0,
+        "REALDMG's game speed on 86Box's 286 with 2MB (docs/plans/REALDMG-PLAN.md "
+        "wave 4): Super Mario Land and Kirby's Dream Land started and walked right, "
+        "in the window and full screen, the game's frames against 20 emulated "
+        "seconds and the frames drawn off the package's F1 line. ASSERTS each "
+        "runs (frames advance, >= 10% of real time) and REPORTS the speed - "
+        "86Box is not cycle-accurate, so a speed is a measurement and not a "
+        "gate. The games are the owner's: $OS88_GB_ROMS, or the runner SKIPS "
+        "it. SOAK: one package, and 86Box's",
+        needs=("86box", "gbroms", "nasm"),
+        wants=("build/realdmg.o88", "build/os8088.img")),
+    Row("gbreplay", "soak", py("tests/gbreplay.py"), 420.0,
+        "REALDMG's replays (docs/REALDMG-SPEC.md section 10.5) on 86Box's 286, "
+        "in the window and in full screen (the canvas, the recompiler, the "
+        "page flips): GBPAD.GB (tools/gbours.py, ours) folds the buttons and "
+        "the frame into a sum every VBlank; F6 records a scripted play from "
+        "slot 1, F6 writes GAME.RP1, F7 plays it and it must END IN STEP - the "
+        "machine at the play's end the one the recording ended on - and F7 "
+        "again with that sum changed under the play must end OUT OF STEP, or "
+        "the comparison could see nothing. SOAK: one package, and 86Box's",
+        needs=("86box", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088.img")),
+    Row("gbbank", "soak", py("tests/gbbank.py"), 150.0,
+        "REALDMG's bank cache (docs/REALDMG-SPEC.md section 10.3) on 86Box's "
+        "286 with 4MB: GBBANK.GB (tools/gbours.py, ours), a 1MB MBC5 cartridge "
+        "that switches among all 64 banks in an LFSR's order and checks each "
+        "by its bytes and by a routine run from 4000-7FFF. ASSERTS the cache "
+        "took it with fewer slots than banks, banks were fetched, switches "
+        "kept coming, and not one read the wrong bank - with the fetch's copy "
+        "taken out it reads 255 wrong. MartyPC is an 8088 with no extended "
+        "memory, so 86Box's. SOAK: one package, and 86Box's",
+        needs=("86box", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088.img")),
+    Row("gbhifreq", "soak", py("tests/gbhifreq.py"), 20.0,
+        "REALDMG's speaker asked for 131,072 Hz (docs/REALDMG-SPEC.md section "
+        "17) on 86Box's 286: GBTONE.GB ends with square channel 1 at x = 7FFh, "
+        "where 131,072 / (2048 - x) divides by 1. ASSERTS the core's frames keep "
+        "climbing after the note - without rw_sound's range check the divide "
+        "error restarts the div for ever and they stop at 151, which is how the "
+        "compatibility sweep's Alleyway hung the package on pause. A 286 because "
+        "an 8088's divide error returns past the div and hides it. SOAK: one "
+        "package, and 86Box's",
+        needs=("86box", "nasm", "rgbds"),
+        wants=("build/realdmg.o88", "build/os8088.img")),
+    Row("gbtrace", "soak", py("tests/gbtrace.py"), 130.0,
+        "REALDMG's core against Peanut-GB (pinned by tools/gbprof.py), the "
+        "registers AND the M-cycle clock compared before each of the first "
+        "1,000,000 instructions of cpu_instrs (tools/gbtrace.py; the wave 1 "
+        "measurement is 10,000,000 and twenty minutes). The reference is "
+        "corrected in two places Peanut-GB is not the hardware - LY falls "
+        "behind time, and an interrupt dispatch costs nothing - each named "
+        "in tools/gbprof/gbtrace.c. NEGATIVE CONTROL: JR NZ made a no-op must "
+        "differ. WHY QEMU: the core's trace is counted, not timed. SOAK: one "
+        "package's core",
+        needs=("qemu", "nasm")),
     Row("c64part", "soak", py("tests/c64part.py"), 30.0,
         "THE FIRST REAL CONSUMER of the parts standard (SPEC.md 20.12, and "
         "C64-SPEC 1.4): C64.ROM - 20,480 bytes of KERNAL, BASIC and "
@@ -2409,19 +3082,25 @@ SOAK = [
         "row failing for a reason it does not name. VERIFIED TO FAIL - a "
         "package truncated by one sector gives ld_status 4 and no window, "
         "because op_read now refuses a run that arrives short. Needs `make "
-        "c64disk`, so it needs the C toolchain.",
+        "c64disk`, so it needs the C toolchain. AND THE OVERLAY IS PART 1 "
+        "(C64-SPEC 13.3, SPEC.md 73.14.2): C64.OVL must not be in the folder "
+        "either, the table must carry its EAGER OP_SEG row unpacking to "
+        "build/C64.OVL, and the module's first and last 16 bytes must be at "
+        "cc_ovseg in the guest - the segment every vector far-calls.",
         needs=("marty", "cc"), serial=True,
         wants=("build/c64.img",)),
     Row("apple2part", "soak", py("tests/apple2part.py"), 30.0,
-        "c64part's shape one machine along (SPEC.md 20.12, APPLE2-SPEC 1.5), "
-        "and the difference is that APPLE2 never had a sidecar to convert: "
+        "c64part's shape one machine along (SPEC.md 20.12, APPLE2-SPEC 1.5): "
         "the 14,848 bytes of Applesoft, the Autostart Monitor, the character "
-        "generator and the Disk II boot ROM have been part 0 since wave 1, so "
-        "what this row defends is that the shape STAYED that way. SIX "
-        "ASSERTIONS - APPLE2.ROM is not a file in the folder, read out of the "
+        "generator and the Disk II boot ROM have been part 0 since wave 1, "
+        "and the overlay is part 1 since APPLE2-SPEC 15.5.1 (SPEC.md "
+        "73.14.2). SEVEN ASSERTIONS - neither APPLE2.ROM nor APPLE2.OVL is a "
+        "file in the folder, read out of the "
         "guest's own listing (and WELCOME.BAS is, because the folder is the "
         "binding shape); the package declares parts, its image is smaller "
-        "than its file and the one part is an ASSET of exactly 14,848; it "
+        "than its file, part 0 is an eager ASSET of exactly 14,848 that "
+        "unpacks to the pinned ROM and part 1 a LAZY SEGMENT that unpacks to "
+        "build/APPLE2.OVL; it "
         "launched; os88_part_seg(0) is the segment the C put in a2_m.romseg "
         "and it is at or above $0D00, below which the core's `romseg - "
         "($D000 >> 4)` fetch bias underflows silently; the carve is SHRUNK "
@@ -2435,9 +3114,12 @@ SOAK = [
         "than some other Apple II ROM; and BOTH DISPLAY TABLES EXIST after "
         "os88_main and before any wake, which is the negative control for "
         "keeping the chargen decode and the 7-bit reverse table off the "
-        "overlay (APPLE2-SPEC 7.3) - a disk with no APPLE2.OVL has to be a "
-        "program whose MENUS refuse, not a window that draws nothing. It also "
-        "says the 6502 is RUNNING and not jammed, and stops there: what the "
+        "overlay (APPLE2-SPEC 7.3) - a session whose overlay cannot be "
+        "fetched has to be a program whose MENUS refuse, not a window that "
+        "draws nothing. It says the 6502 is RUNNING and not jammed, and that "
+        "the FIRST WAKE FETCHED the overlay - a2_ovl_res 1, the row "
+        "OP_FETCHED, a claim of exactly ceil(len/1KB) holding build/APPLE2.OVL "
+        "byte for byte - and stops there: what the "
         "machine puts ON THE GLASS belongs to the driven QMP runs and to "
         "a2uitest. Needs `make apple2disk`, so it needs the C toolchain and "
         "the pinned ROM fetch.",
@@ -2594,6 +3276,19 @@ SOAK = [
         "time anything could report it. The instrument is [ld_status] read "
         "out of the guest, so it answers for all three adapters out of one "
         "run. Shares build/pkgbig.img with the pkgbig row - `make pkgbig`.",
+        needs=("marty",), serial=True, wants=("build/pkgbig.img",)),
+    Row("pkgmax", "soak", py("tests/pkgmax.py"), 15.0,
+        "SPEC.md 20.1.1: a package of EXACTLY APP_MAX_SIZE (0xFE00) loads, "
+        "runs and closes. Over 63KB the region is a whole 64KB claim, the one "
+        "size two 16-bit words in the loader used to wrap on - "
+        "mem_bytes_kb_x's `add ax, 1023` answered 0 KB, and ld_alloc's "
+        "I_SIZE = KB << 10 read 0, which is how the instance table says "
+        "BUILT-IN. PKGMAX.O88 (tests/pkgbig/pkgmax.asm) is image + bss = "
+        "0xFE00 to the byte and marks the last byte of its bss. Asserts off "
+        "guest state: LD_OK and a window; a PACKAGE instance with I_SIZE "
+        "0xFFFF (saturated); one 4,096-paragraph claim owned by it; the mark "
+        "at segment:0xFDFF; and nothing left after the close box. Shares "
+        "build/pkgbig.img with pkgbig and pkgfence - `make pkgbig`.",
         needs=("marty",), serial=True, wants=("build/pkgbig.img",)),
     Row("clipkeep", "soak", py("tests/clipkeep.py"), 40.0,
         "SPEC.md 11.96.18: a wholly covered window keeps its raise cache when"
@@ -2818,7 +3513,7 @@ SOAK = [
         "1942 desktop splash: native color/contour pixels, XT paint timing, "
         "player selection, help, dragging, direct launch and resume on three adapters",
         needs=("marty", "nasm", "pil"), wants=("build/1942-360.img", "build/1942.SFX", "build/os8088-360.img")),
-    Row("1942sound", "soak", py("tests/n1942sound.py"), 905.0,
+    Row("1942sound", "soak", py("tests/n1942sound.py"), 751.5,
         "XT speaker, AdLib-only and Sound Blaster FM/PCM: overlapping music/effects, "
         "all cartridge cues, rests/loops, pause/mute/resume, route preference, "
         "claim refusal, DMA sample bytes/priority, missing-bank fallback, exit/error cleanup, WAV output and guest cycle costs",
@@ -2836,8 +3531,11 @@ SOAK = [
         "GFX files (magic, length, checksum, record directory, every tile, "
         "band column, collision row, class, top picture, pose mask, font "
         "glyph, palette), the three EXF1 splash files packet by packet and "
-        "the generated NASM. The budgets and negative controls are the "
-        "excitebikeselfcheck row's. No emulator, nothing external",
+        "the generated NASM - and each of the six parts of the built "
+        "EXCBIKE.O88, unpacked, is the art file its XB_P_* line names "
+        "(SPEC.md 102.10; a swapped EXB_PARTS order fails it). The budgets "
+        "and negative controls are the excitebikeselfcheck row's. No "
+        "emulator, nothing external",
         needs=("nasm",), wants=("build/excitebike360.img",)),
     Row("excitebikeselfcheck", "soak", ["python3", "tools/excitebike_assets.py", "--selfcheck"], 2.0,
         "the compiler's own gate: every hard budget of plan 12.5 printed with "
@@ -2884,14 +3582,16 @@ SOAK = [
         "CHIPSET1/2.TXT without the help, the pane scrolls, Benchmark restores the foot, "
         "Quit closes REDLINE",
         needs=("marty", "nasm"), wants=("build/redline360.img", "build/os8088-360.img")),
-    Row("rltune", "soak", py("tests/rltune.py"), 77.0,
+    Row("rltune", "soak", py("tests/rltune.py"), 81.0,
         "REDLINE's chipset write path in the OS on QEMU's AT (SPEC.md 103.6.3-103.6.5): "
         "on the Tune tab an FE3600 nothing detects is picked, Target Mfg spec and Tune "
         "confirm and set R4 10, Fastest tested sweeps to 4 and sets it unasked, the state "
-        "field following both, Save setting writes REDLINE.CFG to the "
-        "BOOT disk's APPDATA with this BIOS's fingerprint, Quit closes it, and RLAPPLY.O88 "
+        "field following both, Apply on boot writes REDLINE.CFG to the "
+        "BOOT disk's APPDATA with this BIOS's fingerprint and \\AUTOSTRT\\RLAPPLY.LNK "
+        "beside it (SPEC.md 26.10.6), Quit closes it, and RLAPPLY.O88 "
         "from A:\\SYSTEM toasts its verdict before and after the Save and leaves no "
-        "window. QEMU by name: "
+        "window - and a REBOOT toasts `Chipset setting applied` with nobody touching "
+        "anything, the bar seen empty first so 5b's toast cannot pass for it. QEMU by name: "
         "the path is refused on an 8088, where 63h is the PPI",
         needs=("nasm", "qemu"), wants=("build/os8088.img", "build/redline.img")),
     Row("redlinemodern", "soak", py("tests/redline.py", "--modern"), 15.0,
@@ -3080,7 +3780,7 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("isotronflow", "soak", py("tests/isotron.py", "--flow", "all"), 90.0,
-        "isoTron's FLOW driven through its UI (SPEC.md 108.13.6), MartyPC's "
+        "isoTron's FLOW driven through its UI (SPEC.md 108.13.5), MartyPC's "
         "XT-VGA: the title's own lines over the void and the block-letter word "
         "the model's; `1` - a real key - starts a STORED game (it_tflags SEED, "
         "BOT, FAST, HOLD) and EVERY round's arena is SWEPT in: at its first "
@@ -3405,7 +4105,8 @@ SOAK = [
         needs=("marty", "nasm"), timeout=600,
         wants=("build/excitebike360.img", "build/os8088-360.img")),
     Row("excitebikecustomherc", "soak", py("tests/excitebike_flow.py", "--custom", "--adapter", "herc"), 55.0,
-        "EXCITEBIKE wave 6, excitebikecustom on the Hercules (the scratch disks carry EXBH.GFX too)",
+        "EXCITEBIKE wave 6, excitebikecustom on the Hercules (the scratch disks' package carries "
+        "EXBH.GFX as a part, SPEC.md 102.10)",
         needs=("marty", "nasm"), timeout=600,
         wants=("build/excitebike360.img", "build/os8088-360.img")),
     Row("excitebikeaiherc", "soak", py("tests/excitebike_flow.py", "--ai", "--collide", "--adapter", "herc"), 90.0,
@@ -3475,7 +4176,8 @@ SOAK = [
     Row("excitebikegeomhost", "soak", py("tests/excitebike_geom.py", "--host"), 4.0,
         "EXCITEBIKE wave 7 (SPEC.md 102.8.2), no emulator: all four standalone floppies (1.44MB, 720KB, "
         "1.2MB, 360KB) walked by tests/unit/t_image.py's FAT12 reader - deliberately not os88disk's - and "
-        "each must be the geometry its name says, carry exactly the eight files of the package in the root "
+        "each must be the geometry its name says, carry exactly the two files of the package in the root (the art is parts of EXCBIKE.O88, "
+        "SPEC.md 102.10) "
         "with every chain whole and the right length, and the same bytes in all four; EXCBIKE.O88 is the "
         "built package. Negative control: a FAT entry damaged in EXCBIKE.O88's chain fails the same walk. "
         "The 1.2MB floppy is only walked: no MartyPC machine has a 5.25 inch HD drive",
@@ -3498,7 +4200,7 @@ SOAK = [
     Row("excitebikelowmem", "soak", py("tests/excitebike_geom.py", "--lowmem"), 70.0,
         "EXCITEBIKE wave 7 (SPEC.md 102.8.3): a 256KB XT (os8088_5150_cga_gla_256k) holds one Excitebike; "
         "a SECOND window opens (the code is shared) and Enter on it is REFUSED with `NOT ENOUGH MEMORY` "
-        "on the glass - xb_error 3 and xb_nomem 1, not the `EXB?.GFX MISSING` an unrelated refusal "
+        "on the glass - xb_error 3 and xb_nomem 1, not the `CANNOT LOAD THE RACE` an unrelated refusal "
         "printed - with every claim the attempt made freed (the program's claims are what they were; a "
         "purgeable cache is the desktop's own) and the window still answering H. Guards the bug it found: "
         "the small 17KB sprite claim, taken when the big one is refused, was reported as a failed load "
@@ -3538,7 +4240,7 @@ SOAK = [
         wants=("build/drmario360.img", "build/os8088-360.img")),
     Row("drmariofront", "soak", py("tests/drmario_front.py"), 110.0,
         "DrMarco's splash and help (SPEC.md 100) on VGA, CGA and Hercules: "
-        "the DRMARCO.* front screens from the committed art, navigation, "
+        "the front-screen parts from the committed art, navigation, "
         "title music and restoration, with XT paint timings. Measured 75s CPU",
         needs=("marty", "pil"), serial=True,
         wants=("build/drmario360.img", "build/os8088-360.img")),
@@ -3584,12 +4286,28 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-720.img", "build/apps720.img")),
     Row("midiracksb", "soak", py("tests/midirack.py", "--arm", "sb"), 60.0,
-        "MIDIRack's synth on the Sound Blaster (SPEC.md 105.8.4): the grant "
-        "ring this DSP needs, no underrun after the first, the stream at its "
+        "MIDIRack's synth on the Sound Blaster (SPEC.md 105.8.4): the "
+        "external ring this DSP 2.1 plays in place (the grant ring on one "
+        "without auto-init), no underrun after the first, the stream at its "
         "rate by the guest's own clock, and the pitch agreement and its "
         "negative control",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("midiracksbmem", "soak", py("tests/midirack.py", "--arm", "sbmem"),
+        70.0,
+        "MIDIRack's two rings live only while they play (SPEC.md 105.8.4, "
+        "105.8.3; KERN-MEGA-PLAN 14.55, 14.59): the card's external ring in "
+        "the claim map during a play and gone at Stop; the speaker's held "
+        "through a pause, gone at the Stop after it and at Esc in the "
+        "bracket, and not held while the card plays; tests/filler under "
+        "17 KB and the card's Play is on the GRANT ring and consuming; the "
+        "filler's T takes the rest and the card's Play and the speaker's are "
+        "REFUSED with their messages, nothing open or held; the filler "
+        "closed, both play again. Red with the card's ring kept at Stop, "
+        "with the grant fallback out, and with either speaker-ring free out",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/midirack.o88",
+               "build/filler.o88")),
     Row("midiracksbrate", "soak", py("tests/midirack.py", "--arm", "sb",
                                      "--rate", "2"), 60.0,
         "MIDIRack's Settings rate reaching the card (SPEC.md 105.7.1, "
@@ -3976,8 +4694,9 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("shutdown", "soak", py("tests/shutdown.py"), 120.0,
         "Shut Down confirms, Escape and Cancel preserve the desktop, sliding "
-        "off cancels a press, settings flush, and OS ticks stop while the "
-        "BIOS clock and splash pixels animate on VGA, CGA and Hercules",
+        "off cancels a press, settings flush, OS ticks stop while the BIOS "
+        "clock and splash pixels animate, and Ctrl-Alt-Del still warm-resets "
+        "back into the kernel, on VGA, CGA and Hercules",
         needs=("marty",), serial=True),
     Row("splashspin", "soak", py("tests/splashspin.py"), 20.0,
         "Does the logo turn on the WALL CLOCK? (SPEC.md 15.3.6) The composed "
@@ -4048,6 +4767,143 @@ SOAK = [
         "closed list - MartyPC is an 8088 and has no 8042 to test",
         needs=("qemu", "nasm"), serial=True, timeout=420,
         wants=("build/os8088.img", "build/apps.img")),
+    Row("wheelps2", "soak", py("tests/wheelps2.py"), 56.0,
+        "Does SPEC.md 9.9.8's knock put a PS/2 wheel mouse in four-byte mode, "
+        "and does its Z byte reach the wheel's level (10.4)? ps2mouse.py's "
+        "machine: mou_p2wz 3 with mou_p2id still the reset's 0, the pointer "
+        "EXACT on a pixel in four-byte framing, then - with a menu held so "
+        "nothing consumes it - [mou_whl] +4 for four notches toward the "
+        "user, -2 after six away (a level that sums), 0 once the menu "
+        "closes, and six keys intact through the knock's extra commands. "
+        "Seen red for real: a knock reading its table through the wrong "
+        "segment failed safe to three bytes and this row named it. QEMU on "
+        "the closed list (entry 4)",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img")),
+    Row("vesa", "soak", py("tests/vesa.py"), 60.0,
+        "The packed-pixel display (SPEC.md 120): QEMU's standard VGA carries "
+        "a VBE BIOS, so VESA.DRV's probe finds 1024x768x16 and the desktop "
+        "switches onto it before the first paint. Boots build/vesa.img (`make "
+        "vesatest`: the shipped kernel and driver on a disk whose SYSTEM.CFG "
+        "wants bit 8), asserts vid_kind 4, vid_ext 1, 1024x768, vid_planes 16 "
+        "and a clean driver row, then a 1024x768 screendump: the menu bar and "
+        "the dock painted, the desktop's 50% dither present - every pixel "
+        "through the driver's fill, gray, text, icon and cursor bodies; then "
+        "the File menu down and up, A: opened, and B:\\APPS opened - twenty "
+        "files, so the list draws its chevron band through the PATTERN body, "
+        "and the desktop's left margin must still be the checkerboard after "
+        "it (the body spent CX on its tile copy and drew 65,433 pixels a row; "
+        "found on the 86Box 486 by eye). QEMU "
+        "by name on CLAUDE.md's closed list: MartyPC and the 86Box XTs have "
+        "no VBE, and are the negative control for free. SOAK and not full: a "
+        "feature no 8088 can reach, on a disk of its own",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
+    Row("vesa8", "soak", py("tests/vesa8.py"), 45.0,
+        "The packed display at 8 BITS A PIXEL, and the 'VE' key's round trip "
+        "(SPEC.md 120.2.3): build/vesa8.img's SYSTEM.CFG names the 800x600x8 "
+        "class, so the driver takes QEMU's mode 0103h over Auto's "
+        "1024x768x16. Asserts vid_kind 4, 800x600, vid_planes 8, then the "
+        "screendump: the menu bar and the dither through the DAC's first "
+        "sixteen - white reads back white and black black - and a Disk "
+        "window double-clicked open. QEMU by name, vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/vesa8.img")),
+    Row("vesacp", "soak", py("tests/vesacp.py"), 60.0,
+        "Choosing a VESA mode on the Display page (SPEC.md 120.6): on the "
+        "1024x768x16 desktop, the Control Panel's Display page lists the "
+        "VESA row at the four-row pitch; a click on it while it is the "
+        "pending choice CYCLES the class (CFG_VE 0 -> the first record -> "
+        "the second, the label on the glass changing each time and a "
+        "longer label's tail erased); Set Primary sends VXV_PICK and "
+        "switches - 640x480x8, vx_class 0x84, a 640x480 screendump. QEMU "
+        "by name, vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
+        wants=("build/os8088.img", "build/apps.img", "build/vesa.img")),
+    Row("vesablitd", "soak", py("tests/vesablitd.py"), 90.0,
+        "A package at the display's depth (SPEC.md 120.7, 106.27): "
+        "build/vesablitd.img is vesa.img plus an AUTOSTRT link to CITY.PCX "
+        "on B: (build/vxpics.img: PiXEL and the picture), so the machine "
+        "boots straight into PiXEL on the 1024x768x16 desktop. Asserts "
+        "PiXEL's RGB565 table is its palette's quantisation, the view claim "
+        "is the 31 KB layout, and the glass holds 64 or more colours "
+        "outside the sixteen, every one a palette entry as the card renders "
+        "565 - the rows through OSAPI_GFX_BLITD. QEMU by name, vesa's "
+        "reason",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/apps.img", "build/vesablitd.img",
+               "build/vxpics.img", "build/pixel.o88")),
+    Row("vesablit4", "soak", py("tests/vesablit4.py"), 90.0,
+        "A package's 4-bit blit on the packed display, pixel for pixel "
+        "(SPEC.md 120.3): build/vesablit4.img is vesa.img plus an AUTOSTRT "
+        "link to WIREBALL.O88 on the apps disk, so the machine boots into "
+        "WireBall's front page, whose title art is one 416x104 "
+        "OSAPI_GFX_BLIT4 of checked-in art. Finds the block on the glass by "
+        "its own rows and asserts every pixel is the EGA colour its nibble "
+        "names, as the card renders 565. The driver as first shipped loaded "
+        "the stride over the block's x and drew it as a window of palette "
+        "noise. QEMU by name, vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/apps.img", "build/vesablit4.img",
+               "build/wireball.o88")),
+    Row("vesafsx", "soak", py("tests/vesafsx.py"), 90.0,
+        "A fullscreen bracket from the packed desktop and back (SPEC.md "
+        "120.5, 53): build/vesafsx.img is vesa.img plus an AUTOSTRT link to "
+        "GORILLAS.O88, so the machine boots into Gorillas at 1024x768x16; "
+        "Alt+Enter enters its bracket, which reads OSAPI_FSX_CAPS's DL - the "
+        "screendump must be 640x480 (mode 12h, the VGA arm) - and Escape "
+        "brings the VESA mode and the checkerboard back. The kernel as first "
+        "shipped answered kind 4, Gorillas took the native surface and drew "
+        "planar onto the packed desktop (the owner's report). QEMU by name, "
+        "vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/apps.img", "build/vesafsx.img",
+               "build/gorillas.o88")),
+    Row("vesapref", "soak", py("tests/vesapref.py"), 90.0,
+        "A package's OS88_PREFER on the packed display (SPEC.md 120.5, "
+        "11.100.1): build/vesapref.img is vesa.img plus an AUTOSTRT link to "
+        "SOLITAIR.O88; Solitaire's table must be as wide as its own SOL_PW_B, "
+        "the VGA row of its three-entry table, which the kernel takes for "
+        "every kind past CGA. As first shipped only EGA folded, kind 4 read "
+        "past the table and nine packages opened at the sizes found there. "
+        "QEMU by name, vesa's reason",
+        needs=("qemu", "nasm"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/apps.img", "build/vesapref.img",
+               "build/solitair.o88")),
+    Row("vesagor", "soak", py("tests/vesagor.py"), 90.0,
+        "Gorillas' field on the packed desktop (SPEC.md 120.5, the package "
+        "rule for DH): build/vesafsx.img's autostart opens Gorillas on the "
+        "1024x768x16 desktop, eight Enters play the setup through, and the "
+        "screendump must show a CBLUE sky edge to edge and buildings in solid "
+        "runs. Gorillas read OSAPI_WM_DISPLAY's DH = 16 as none of its 1 / 2 / 4 "
+        "tables and blitted 2-bit rows as 4-bit: a white sky and comb "
+        "buildings. QEMU by name, vesa's reason",
+        wants=("build/os8088.img", "build/apps.img", "build/vesafsx.img",
+               "build/gorillas.o88")),
+    Row("vesasu", "soak", py("tests/vesasu.py"), 120.0,
+        "a drop-down's save-under claim on the packed desktop is sized for "
+        "the depth (SPEC.md 120.5, 13.14.2): PiXEL on CITY.PCX off "
+        "build/vesablitd.img, Ctrl+S, the Save As card's format drop-down "
+        "clicked open; the record's claim must hold DH x rows x byte columns "
+        "of the list with DH = 16, mem_tab must agree and overlap nothing, "
+        "and Escape must give it back. apps/os88ui.inc's sizer folded 16 to "
+        "ONE plane and OSAPI_GFX_SAVE wrote fifteen sixteenths of the list "
+        "past the claim. QEMU by name, vesa's reason",
+        wants=("build/os8088.img", "build/apps.img", "build/vesablitd.img",
+               "build/vxpics.img", "build/pixel.o88")),
+    Row("vesabench", "soak", py("tests/vesabench.py"), 150.0,
+        "VESABENCH's correctness run (SPEC.md 120.8): build/vesabench.img "
+        "and build/vesabnc8.img each open VESABNCH.O88 off build/vxbench.img "
+        "through an AUTOSTRT link; the package runs its rows on its first "
+        "paint - one BIOS window read, three fills, the depth blit against "
+        "the nibble one, a text row, the report page - and saves "
+        "VESABNCH.TXT, which the row reads back with mtools. Asserts the "
+        "mode named, a number on every row and BLITD DRAWN; the times are "
+        "QEMU's and are printed, not judged - 86Box's 486 is where they are "
+        "taken (docs/reports/VESA-BENCH-486-2026-10-22.md). QEMU by name",
+        needs=("qemu", "nasm", "mtools"), serial=True, timeout=600,
+        wants=("build/os8088.img", "build/apps.img", "build/vesabench.img",
+               "build/vesabnc8.img", "build/vxbench.img")),
     Row("vmmouse", "soak", py("tests/vmmouse.py"), 45.0,
         "The VMware absolute pointer (SPEC.md 9.11), the browser's grabless "
         "mouse - and the one CI gate a browser-only feature gets. QEMU's pc "
@@ -4171,7 +5027,13 @@ SOAK = [
         "key table and the holds are exact again, the BENCH (key 1's decode "
         "timed, 27.46 ms against its model's 27.04) passing this machine; "
         "and with the yardstick poked impossibly fast the bench says no - "
-        "nothing of the layer drawn, the base's screen, the card saying why",
+        "nothing of the layer drawn, the base's screen, the card saying why. "
+        "Every arm reads the layer out of the RING claim's top (98.1.9.10), "
+        "and the bench's no leaves the ring a layerless play gets, to the "
+        "slot. Broken on purpose (vp_lyunc a bare ret) it FAILS. And a "
+        "yardstick of 20 us - a black key 0's, 98.1.9.12 - gives the bench "
+        "NO verdict rather than a no: 'Layer off: not timed', red without "
+        "the floor",
         needs=("marty", "nasm", "ffmpeg"), serial=True, timeout=600,
         wants=("build/os8088-360.img", "build/video.o88")),
     Row("vidlyplaystream", "soak", py("tests/vidlyplay.py", "--stream"),
@@ -4189,27 +5051,13 @@ SOAK = [
         "layer for 40, off a 360 KB floppy: the ring's fill timed on the "
         "hook's clock must read the floppy at 9 to 18 KB/s (it reads 13), "
         "refuse the layer for the disk, play the base's screen at every "
-        "hold and say 'Layer off: disk N KB/s, its 39' on the card. Broken "
+        "hold and say 'Layer off: disk N KB/s, its 39' on the card, the "
+        "slots given back to the ring after three chunks. Broken "
         "on purpose (vp_lydisk not called) the layer is drawn and it FAILS",
         needs=("marty", "nasm", "ffmpeg"), serial=True, timeout=600,
         wants=("build/os8088-360.img", "build/video.o88")),
-    Row("vidlyplayflip", "soak", py("tests/vidlyplay.py", "--flip"), 45.0,
-        "SPEC.md 98.1.9.4: THE LIVE FLIP on MartyPC's 5150 - vidlyplay's "
-        "every arm with the layer's own claim refused (vp_lynoc), so its "
-        "slots are lent by the ring: every hold the layered decode byte for "
-        "byte, from the start and from key 1, and the bench's no giving the "
-        "slots back. Broken on purpose (vp_lycarve not called) it FAILS",
-        needs=("marty", "nasm", "ffmpeg"), serial=True, timeout=600,
-        wants=("build/os8088-360.img", "build/video.o88")),
-    Row("vidlyplaydiskflip", "soak", py("tests/vidlyplay.py", "--disk",
-                                        "--flip"), 25.0,
-        "SPEC.md 98.1.9.4: the flip GIVEN BACK on the disk's no after three "
-        "chunks of the ring's fill - the ring's own K again, the base's "
-        "holds exact and the card naming the floppy's rate",
-        needs=("marty", "nasm", "ffmpeg"), serial=True, timeout=600,
-        wants=("build/os8088-360.img", "build/video.o88")),
     Row("vidlyplaynoroom", "soak", py("tests/vidlyplay.py", "--noroom"), 25.0,
-        "SPEC.md 98.1.9.4: the flip REFUSED - the claim refused and the "
+        "SPEC.md 98.1.9.4: the carve REFUSED - the "
         "ring capped at five, too small to lend: the base exact and the "
         "card's line 4 'Layer off: no room, N KB short'",
         needs=("marty", "nasm", "ffmpeg"), serial=True, timeout=600,
@@ -4243,13 +5091,34 @@ SOAK = [
     Row("vidlysplit", "soak", py("tests/vidlysplit.py"), 60.0,
         "SPEC.md 98.1.9.2: the XMS pool split AFTER the CPU is timed - QEMU is the faster machine: the base's bank (it needs none) given up and the layer's its whole 800 KB ask, 25 slots where the open took 18. "
         "Broken on purpose (vp_lysplit not called) the layer and base arms "
-        "FAIL with the open's 8 and 18",
+        "FAIL with the open's 8 and 18. Every arm writes [vp_noinp] before "
+        "Play: QEMU's 386 reads an XMS bank in place (98.3.18.14), chosen "
+        "before the split, which then has no FIFO to resize",
         needs=("qemu", "nasm", "ffmpeg"), serial=True,
         wants=("build/video.o88", "build/os8088.img")),
     Row("vidlysplitbase", "soak", py("tests/vidlysplit.py", "--arm", "base"), 60.0,
-        "SPEC.md 98.1.9.2: the XMS pool split AFTER the CPU is timed - the yardstick poked so this CPU is the base's: the layer's bank given back, the base's kept at its 256 KB. "
+        "SPEC.md 98.1.9.2: the XMS pool split AFTER the CPU is timed - key 0's CPU verdict poked in as a kept no, so this CPU is the base's: the layer's bank given back, the base's taking the whole pool, the open's 8 and 18 slots (98.1.9.11). "
         "Broken on purpose (vp_lysplit not called) the layer and base arms "
         "FAIL with the open's 8 and 18",
+        needs=("qemu", "nasm", "ffmpeg"), serial=True,
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidlysplitinplace", "soak", py("tests/vidlysplit.py", "--inplace"),
+        90.0,
+        "SPEC.md 98.3.18.14: a LAYER beside a base bank read IN PLACE "
+        "(no [vp_noinp], QEMU's 386): [vp_einp] 2, the disk's verdict taken "
+        "on a third chunk read into the in-place ring and timed there (both "
+        "new), the layer read with the open's 18 slots of bank - the split "
+        "cannot resize a bank that is the ring, so the base keeps its 8 - "
+        "and the play to its last frame with no error and the layer drawn. "
+        "Broken on purpose (vp_lyown's segment-as-count defect put back) "
+        "the guest hangs before the play starts",
+        needs=("qemu", "nasm", "ffmpeg"), serial=True,
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidlysplitinplacebase", "soak", py("tests/vidlysplit.py", "--inplace",
+                                            "--arm", "base"), 90.0,
+        "SPEC.md 98.3.18.14: vidlysplitinplace on the BASE's machine (key "
+        "0's no kept): the layer off and its bank given back, the base's "
+        "bank in place at the open's 8 slots, the play whole",
         needs=("qemu", "nasm", "ffmpeg"), serial=True,
         wants=("build/video.o88", "build/os8088.img")),
     Row("vidlysplituntimed", "soak", py("tests/vidlysplit.py", "--arm", "untimed"), 60.0,
@@ -4263,15 +5132,15 @@ SOAK = [
         "file's two disks set to 4000 and 3000 KB/s, past anything QEMU's "
         "floppy reads, so the CPU passes and the disk says this is the "
         "base's machine: the layer off for its disk and the layer's bank "
-        "given back, the base's kept at 8 slots. QEMU carries the logic, "
+        "given back, the base's grown to the whole pool. QEMU carries the logic, "
         "not the rate (vidlyplaydisk's). Broken on purpose (vp_lydisk not "
         "called) it FAILS with 0 and 25",
         needs=("qemu", "nasm", "ffmpeg"), serial=True,
         wants=("build/video.o88", "build/os8088.img")),
     Row("vidlysplitflip", "soak", py("tests/vidlysplit.py", "--arm", "flip"), 35.0,
-        "SPEC.md 98.1.9.4: THE LIVE FLIP with XMS (QEMU) - the layer's own "
-        "claim refused, its two slots, its own mirror (98.1.9.8) and its "
-        "bank's bounce the ring claim's top, past the ring's own slots, its "
+        "SPEC.md 98.1.9.10: THE LAYER IS THE RING'S, with XMS (QEMU) - its "
+        "slots, its bank's bounce and its mirror (the claim's slack) the "
+        "ring claim's top, past the ring's own slots, its "
         "mirror and the base bank's bounce; "
         "the layer read and the split as vidlysplit's. Broken on purpose "
         "(vp_lycarve not called) the layer is not read and it FAILS",
@@ -4288,7 +5157,9 @@ SOAK = [
         "-m 2's pool, is read RING, then the LAYER's slots, then the base's "
         "BANK - held before frame 20 on a throttled B:, the bank never takes "
         "a chunk while the layer's slots have room. Broken on purpose (the "
-        "reader's order put back) it FAILS; vidlyorderbank is its control",
+        "reader's order put back) it FAILS; vidlyorderbank is its control. "
+        "Both write [vp_noinp] before Play, the bank COPYING: QEMU's 386 "
+        "reads an XMS bank in place (98.3.18.14), with no FIFO to order",
         needs=("qemu", "nasm", "ffmpeg"), serial=True,
         wants=("build/video.o88", "build/os8088.img")),
     Row("vidlyorderbank", "soak", py("tests/vidlyorder.py", "--arm",
@@ -4305,7 +5176,17 @@ SOAK = [
         "512 --layer-prefill all: the prefill fills the slots and the bank "
         "with the whole layer and holds (vp_pfwait), B: is BLANKED, and the "
         "play must draw all 89 layer records with none missed, each slot "
-        "fed from the bank as the hook let it go",
+        "fed from the bank as the hook let it go. The base, held whole, "
+        "decodes IN PLACE on the 386 and the row asserts it (98.3.18.14): "
+        "it was red there until vp_lyown stopped storing its claim's segment "
+        "as the layer's slot count and an in-place hold's fill read and "
+        "timed the disk for the layer's verdict (vp_xfillt)",
+        needs=("qemu", "nasm", "ffmpeg"), serial=True, timeout=400,
+        wants=("build/os8088.img", "build/video.o88")),
+    Row("vidlybankcopy", "soak", py("tests/vidlybank.py", "--copy"), 60.0,
+        "SPEC.md 98.1.9, 98.3.18.14: vidlybank with the base COPYING out of "
+        "its hold ([vp_noinp] = 1 before Play) - the path every 386 took "
+        "before a 386 went in place, kept gated beside it",
         needs=("qemu", "nasm", "ffmpeg"), serial=True, timeout=400,
         wants=("build/os8088.img", "build/video.o88")),
     Row("vidlybanknone", "soak", py("tests/vidlybank.py", "--arm",
@@ -4446,15 +5327,37 @@ SOAK = [
     Row("ovlhigh", "soak", py("tests/ovlhigh.py"), 20.0,
         "docs/plans/HEAP-UNPIN-PLAN.md 2.1.1 item 1: a C package's OVERLAY is "
         "claimed from the TOP (SPEC.md 50.3.2 - its base is a CS) and declares "
-        "itself movable. CWORD.OVL is 18,565 bytes, bigger than every kernel "
-        "module put together, and it took the low door for as long as overlays "
-        "have existed. It reads MC_HI, the placement and MC_RLOC out of "
-        "mem_tab, because a declaration mem_movable REFUSED looks identical "
-        "from inside the package (SPEC.md 66.5.6.2). Verified to fail in both "
-        "halves: the low door reddens three checks, dropping the declaration "
-        "reddens the fourth",
+        "itself movable. CWORD's is 14,106 bytes, bigger than every kernel "
+        "module put together. Since SPEC.md 73.14.2 it is an EAGER PART of "
+        "CWORD.O88, so the row finds the claim holding build/CWORD.OVL's bytes "
+        "after the LAUNCH (the decode checked byte for byte), reads MC_HI, the "
+        "placement and MC_RLOC out of mem_tab - a declaration mem_movable "
+        "REFUSED looks identical from inside the package (SPEC.md 66.5.6.2) - "
+        "and that an overlay call (F5) claims nothing more",
         needs=("marty", "cc"), serial=True,
-        wants=("build/cword360.img",)),
+        wants=("build/cword360.img", "build/CWORD.OVL")),
+    Row("lemmings", "soak", py("tests/lemmings.py"), 100.0,
+        "SPEC.md 116.12's boot-and-screendump row: LEMMINGS from the Disk "
+        "window by NAME, Play on Fun 1 into the bracket - the preview in "
+        "mode 12h (told from the desktop by its black top margin, not by its "
+        "size, which they share), the level in 0Dh - and then wave 6's "
+        "carried finding A on the glass: with the game PAUSED the world "
+        "cannot move, so its rows are dumped with the pointer at rest, the "
+        "pointer is swept from 26 places in the world (every x & 7 phase) "
+        "diagonally into the skill panel and the corner and brought back, "
+        "and the world's rows must be IDENTICAL - the defect was an 8x14 "
+        "block of another place's terrain restored into the air by a "
+        "save-under whose tail byte a compose had not brought up to date. "
+        "Then Esc to the postview in 12h and Esc to the launcher window, "
+        "which must be back. QEMU, because it is a behaviour row and asserts "
+        "no speed; a SCRATCH copy of the disk, because a played level writes "
+        "LEMMINGS.SAV. Needs `cc` and the fetched data (wants= builds the "
+        "disk, or the row SKIPS). 100s is its first passing run MEASURED "
+        "here (99s wall, wave 6). NOT run red: its negative control is "
+        "lemtest's leaving-the-world row, which goes red with 64 stale "
+        "pixels on the code before the fix",
+        needs=("qemu", "cc"), serial=True,
+        wants=("build/lemmings.img",)),
     Row("cmemmove", "soak", py("tests/cmemmove.py"), 110.0,
         "A C PACKAGE DECLARES A CLAIM MOVABLE and the compactor moves it "
         "(docs/plans/HEAP-UNPIN-PLAN.md 2.1.1 item 3). os88_mem_claim was the "
@@ -4577,7 +5480,7 @@ SOAK = [
         "A package's REGION moves and the package keeps working (SPEC.md "
         "66.6.1). 66.6 said since it was written that a region can never move "
         "because its base IS its CS; this is the door open. FOUR PACKAGES and "
-        "each has a job - PAINT takes the ceiling, SHEET goes under it and is "
+        "each has a job - PAINT takes the ceiling, NOTEPAD goes under it and is "
         "the one that has to move, FILLER takes the arena down to a few tens "
         "of KB, and closing PAINT leaves the hole. tests/filler is an "
         "instrument with NO assertions of its own, which heapfrag cannot be: "
@@ -4745,6 +5648,15 @@ SOAK = [
         "(docs/MARTYPC-DEBUG.md).",
         needs=("marty",), serial=True,
         wants=("build/kdos/DOS.O88", "build/kernel.sys", "build/hiber.drv")),
+    Row("kdnomouse", "soak", py("tests/kdmouse.py", "--nomouse"), 45.0,
+        "DISABLE THE MOUSE MEANS NO MOUSE (SPEC.md 96.36.8): kdmouse's "
+        "handoff with the box ticked, and INT 33h's reset must answer AX = 0 "
+        "- 33h an iret, the vector DOS leaves with no driver loaded - where a "
+        "still pointer claiming to be a mouse answers FFFF. VERIFIED TO FAIL "
+        "with kdentry.inc's .mou33 jump made unconditional: ax=FFFF. 28s "
+        "measured on MartyPC.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/dosmou360.img")),
     Row("kdmouse", "soak", py("tests/kdmouse.py"), 120.0,
         "THE SAME QUESTION WITH NO KERNEL ON THE MACHINE (SPEC.md 96.45). "
         "`dosmouse` above is a TRANSLATION gate - the kernel owns the "
@@ -5234,6 +6146,22 @@ SOAK = [
         "written to for a year is where a too-fragmented part would first "
         "show up. Host-side, one second, and it reads THE SHIPPED SYSTEM DISK: since SPEC.md 96.44.5 flipped $(SYSROOT) to the parted package there is no gate disk to read instead, so this row also answers `did a shipped floppy lose kern_dos`.",
         wants=("build/os8088-360.img", "build/kerndos.bin")),
+    Row("kbdburst", "soak", py("tests/kbdburst.py"), 30.0,
+        "A SCRIPTED KEY BURST MUST NOT NEST int 09h (SPEC.md 9.8.2). An agent "
+        "sent 70 Backspaces into Font Viewer with m.key() and no advance "
+        "between, and the UI task's stack - and ~1KB of .lowbss beneath it - "
+        "filled with GLaBIOS int 09h frames, each interrupted a few "
+        "instructions after the ROM's sti. It was the HARNESS: MartyPC took a "
+        "queued key per machine.run() call and handed each byte to the PPI "
+        "the instant the last was acknowledged, and `advance` calls run() "
+        "every 0.25 ms. No keyboard's serial line can do that, and the ROM's "
+        "acknowledge-to-iret window is ~190 us, so the kernel needs nothing; "
+        "tools/martypc/patches/14-keyboard-byte-pacing.patch paces bytes to "
+        "one a millisecond. Legs: a 10-key burst deletes EXACTLY 10 (pacing "
+        "must not drop keys), the 70-key burst on Inconsol survives with the "
+        "BIOS buffer drained, and one more paced key still lands. Red on a "
+        "MartyPC built without patch 14 (leg B stops in sch_stkdie).",
+        needs=("marty",)),
     Row("kdkbd", "soak", py("tests/kdkbd.py"), 60.0,
         "KERN_DOS KEEPS THE BIOS KEY BUFFER OFF FULL (SPEC.md 96.50). "
         "Reported off an 86Box 386: hold a direction key in Prince of Persia "
@@ -5928,6 +6856,22 @@ SOAK = [
         "two answers that trace showed DOS giving and us refusing.",
         needs=("marty",),
         wants=("build/os8088-360.img", "build/condev360.img")),
+    Row("call5", "soak", py("tests/call5.py"), 30.0,
+        "CP/M'S CALL 5 DISPATCHES ON CL AND COMES BACK (KERN-MEGA-DOS-PLAN "
+        "10.5 defect 3). PSP:5 is a far call DOS aims so that segment x 16 + "
+        "offset is its own dispatcher; the box aimed it at PSP:0050, the DOS "
+        "2+ far gate, which takes AH where CP/M passes CL and returns FAR to "
+        "PSP:000A, a data field - so CALL 5 had never served CP/M on any "
+        "kernel. It reaches `dos_cpm` now on every host. CALL5.COM, run with "
+        "B: current, exits with function 19h's answer through CALL 5, which "
+        "is 1 and is produced by nothing but a dispatched, returning call - "
+        "the pre-fix box exits 0 (AH is 0 at entry, so its first CALL 5 is a "
+        "terminate), on both legs: the windowed box, where the segment fits "
+        "a word, and kern_dos, where it goes below 0 and the call lands "
+        "through the 1MB wrap as IBM DOS 3.30's does. kern_mega's HMA run is "
+        "the third way and is Bochs's.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/call5360.img")),
     Row("dosgap", "soak", py("tests/dosgap.py"), 25.0,
         "A WRITE PAST THE END OF A FILE THE SAME HANDLE CREATED (SPEC.md "
         "96.11.6.3). Microsoft Works could not save a document - `Cannot "
@@ -6664,7 +7608,7 @@ SOAK = [
         "command or file name` (the stem is looked up ONLY when a document "
         "follows it, and without that rule every unresolved word on the "
         "machine reaches the package launcher); a typo WITH a tail answers "
-        "`Cannot open NOTPAD`, naming the half that was wrong rather than "
+        "`Bad command or file name: NOTPAD`, the no-tail answer naming the half that was wrong rather than "
         "sending the user to look at the document; OPEN of an unclaimed "
         "extension refuses in words, there being no window to look at; and a "
         "program on ANOTHER volume is asserted NEITHER way, which is a "
@@ -6922,8 +7866,10 @@ SOAK = [
         "88 cases, the summary line read out of FPTEST's own bss. The "
         "float library Sheet and Chart compute with; fp_i2a, fp_a2i and "
         "fp_cmpab (whose AX AND flags are both checked) gained cases here. "
-        "Red on purpose two ways: a wrong expectation, and fps_cmpab's flags "
-        "disagreeing with its AX",
+        "84.10's ln/exp/pow/trig layer is gated OUT of this build "
+        "(OS88FP_NOTRANS, FP_NO_POW) - 84.11.2's 38 series cases are not in "
+        "the tree. Red on purpose two ways: a wrong expectation, and "
+        "fps_cmpab's flags disagreeing with its AX",
         needs=("marty",), serial=True,
         wants=("build/fptest.o88",)),
     Row("imgtest", "soak", py("tests/imgtest.py"), 135.0,
@@ -7172,6 +8118,35 @@ SOAK = [
         needs=("marty",),
         wants=("build/smallapps360.img", "build/small360.img"),
         serial=True),
+    Row("sheetdel", "soak", py("tests/sheetdel.py"), 120.0,
+        "SPEC.md 81.79: File > Delete, and the No that must not delete. The "
+        "kernel file dialog has only OPEN and SAVE modes, so the picker is an "
+        "Open and a flag tells sh_ondlg what was meant by it - which makes "
+        "two things worth gating. NO MUST NOT DELETE is the check with the "
+        "teeth: a build that ignored the answer would still pass the Yes "
+        "check. And the flag is cleared BEFORE the alert goes up, so a "
+        "dismissed alert cannot leave the next Open behaving like a Delete. "
+        "The third check is the trap that was avoided: sh_ondlg copies the "
+        "chosen name into sh_name, the OPEN DOCUMENT's own name, so a Delete "
+        "needed a buffer of its own or Save afterwards would have written "
+        "over the file just deleted. Read off the VOLUME, because 'is the "
+        "file gone' is a question about the disk",
+        needs=("marty",), serial=True),
+    Row("sheetcalc", "soak", py("tests/sheetcalc.py"), 120.0,
+        "SPEC.md 81.78: Calculation: Manual really leaves a formula STALE, "
+        "and Options > Calculate Now catches it up. sh_drawgrid re-evaluates "
+        "every formula cell on EVERY repaint, so Manual is not a label on a "
+        "no-op - it is what a big sheet on a 4.77MHz 8088 needs, and "
+        "Calculate Now is then the only way back. Until 81.78 that command "
+        "was only the third choice inside the Calculation dialog; Excel has "
+        "it on the Options menu too. "
+        "THE MIDDLE CHECK IS THE ONE WITH TEETH: B1 must still read 2 after "
+        "A1 becomes 5, because a build where Manual did nothing would show 6 "
+        "there and still pass the last check. Read off the GLASS by the "
+        "kernel's own glyphs, because the record's cached value is precisely "
+        "what Manual leaves stale - reading the record would be reading the "
+        "thing under test",
+        needs=("marty",), serial=True),
     Row("tanksmall", "soak", py("tests/tanksmall.py"), 30.0,
         "SPEC.md 85.3.5.1: TANK's APP_SMALL arm plays on the 128KB floor"
         "machine - the claim is GRANTED off its ladder, and the HUD template's"
@@ -8140,7 +9115,7 @@ SOAK = [
         "Measured 20s",
         needs=("marty",), serial=True),
     Row("vgacolor", "soak", py("tests/vgacolor.py"), 40.0,
-        "SPEC.md 39.28/31.10.4: Force Color. MartyPC's VGA booted with a "
+        "SPEC.md 39.30/31.10.4: Force Color. MartyPC's VGA booted with a "
         "PVGA1A's 'monochrome display' verdict planted at drvf_drv_mounted "
         "(40:89h summing + mono, the live DAC summed grey): the box CLEAR "
         "leaves it grey, a click on the Display page's box puts the EGA "
@@ -8837,6 +9812,21 @@ SOAK = [
         "open, because a move shuts that window. VERIFIED RED with .selmove's "
         "FS_CLKT store taken out (the Audio Player launched on one click).",
         needs=("marty",), serial=True),
+    Row("autostart", "soak", py("tests/autostart.py"), 50.0,
+        "SPEC.md 26.10: LINKS and AUTOSTART on kern_big, off "
+        "`make autostarttest`'s disk. A: the boot opens every link in the "
+        "boot volume's \\AUTOSTRT - the Task Manager is up with nobody "
+        "touching anything, and a file named like a link and not one stops "
+        "nothing. B: A:\\CALC.LNK, double-clicked, starts the Calculator "
+        "off B: (an absolute volume, through assoc_run_x). C: Shift held "
+        "through the boot says `Autostart skipped` and starts nothing. D: "
+        "an Alt-drop of B:\\APPS\\CALC.O88 on its '..' leaves it there "
+        "and writes B:\\CALC.LNK, which starts the Calculator. VERIFIED "
+        "RED three ways: as_boot's folder test jumped past (A and C), "
+        "as_boot's Shift test inverted (A and C), fm_dgdrop's Alt test "
+        "jumped past (D alone - the drag MOVES the package).",
+        needs=("marty",), serial=True,
+        wants=("build/autostart360.img", "build/astapps360.img")),
     Row("msel", "soak", py("tests/msel.py"), 55.0,
         "SPEC.md 22.27: MULTI-SELECT in a Disk window (kern_big). Ctrl+click "
         "adds and removes one entry, Shift+click takes the run from the "
@@ -8963,6 +9953,15 @@ SOAK = [
         "SPEC.md 27.7.6.1/27.7.2: scrolling a note whose height is still being"
         "counted neither freezes the machine nor blanks half the scroll bar.",
         needs=("marty",), serial=True),
+    Row("wheel", "soak", py("tests/wheel.py"), 30.0,
+        "SPEC.md 9.5.5/10.4/13.18: a serial IntelliMouse's wheel (MartyPC "
+        "patch 15 sends the MZ fourth byte) scrolls the FRONT window three "
+        "lines a notch - the Disk window (a kernel window: +2 notches = 6 "
+        "rows, -1 = back 3, the selection left alone) and Note Pad (+3 = 9 "
+        "rows, -5 clamped at 0, not read unsigned). Red with the nibble "
+        "decode removed; needs `make marty` built with patch 15",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img")),
     Row("pkgthumb-np", "soak", py("tests/pkgthumb.py", "notepad"), 50.0,
         "SPEC.md 13.10.7: the thumb gesture inside a PACKAGE - Note Pad.",
         needs=("marty",), serial=True,
@@ -8996,7 +9995,11 @@ SOAK = [
         wants=("build/word.o88", "build/WELCOME.DOC")),
     Row("scsize", "soak", py("tests/scsize.py"), 140.0,
         "SPEC.md 95.13: SCRIBE's first size pass, and the only row that drives "
-        "SCRIBE at all. SCRIBE.OVL's claim is SC_OVKB; .DOC and .RTF Save As "
+        "SCRIBE at all. SPEC.md 95.8.8's PARTS leg: SCRIBE.O88 is one file, "
+        "the loader re-homes into part 0, I_SIZE is SC_P1ORG, the region's "
+        "claim covers part 1 and holds build/scribe.p1.bin byte for byte at "
+        "SC_P1ORG, the region is movable and the only other claims are the "
+        "document's three (SCRIBE.OVL's own claim is gone); .DOC and .RTF Save As "
         "and re-open give the same document back (the .DOC writer's FKP page "
         "and the RTF reader's stack are arms of one union with Insert > "
         "Picture's row and Sort's arrays); a picture's claim is exactly its "
@@ -9006,11 +10009,10 @@ SOAK = [
         "big' instead, which is how the leg goes red there; and Sort is a "
         "permutation and idempotent; two Undos (a cold command) end in the "
         "cold commands' shared epilogue. Every leg prints a digest, so a "
-        "build of another tree (--src/--pkg/--ovl) can be compared line for "
+        "build of another tree (--src/--pkg) can be compared line for "
         "line: the base tree printed the same eleven, and failed TOOBIG.",
         needs=("marty",), serial=True,
-        wants=("build/scribe.o88", "build/ovlz/SCRIBE.OVL",
-               "build/WELCOME.DOC")),
+        wants=("build/scribe.o88", "build/WELCOME.DOC")),
     Row("wdcaret", "soak", py("tests/wdcaret.py"), 110.0,
         "SPEC.md 27.4.6: a caret move lays the note out ONCE. Leg A counts "
         "wd_walk calls inside one keystroke and requires 1 - the change "
@@ -9299,7 +10301,7 @@ SOAK = [
         "at the API cells; a change that repaints more than it changed "
         "fails with the counts beside the budget",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/PIXEL.GFX",
+        wants=("build/pixel.o88",
                "build/os8088-360.img")),
     Row("pxdraw", "soak", py("tests/pxdraw.py"), 200.0,
         "PiXEL's redraw priced in drawing calls (SPEC.md 106.15), on the "
@@ -9315,7 +10317,7 @@ SOAK = [
         "(106.25): a frame's calls under 12, and the stopped frame's glass "
         "identical to a repaint",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/PIXEL.GFX",
+        wants=("build/pixel.o88",
                "build/os8088-360.img")),
     Row("pxdrawvga", "soak", py("tests/pxdraw.py", "--machine",
                                 "os8088_xt_vga"), 200.0,
@@ -9324,7 +10326,7 @@ SOAK = [
         "same ceilings and the same incremental-equals-repaint identity, "
         "compared as the card rasterised it in colour",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/PIXEL.GFX",
+        wants=("build/pixel.o88",
                "build/os8088-360.img")),
     Row("pxfolder", "soak", py("tests/pxfolder.py"), 300.0,
         "SPEC.md 106.21 on the VGA XT with a 720 KB B:: a folder of seven "
@@ -9339,7 +10341,7 @@ SOAK = [
         "What survived of pxthumb when the filmstrip, its thumbnails and "
         "PIXEL.THC were withdrawn (2026-10-06)",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/PIXEL.GFX",
+        wants=("build/pixel.o88",
                "build/os8088-360.img")),
     Row("pxfsx", "soak", py("tests/pxfsx.py"), 1500.0,
         "SPEC.md 106.23, PiXEL's full screen, on MartyPC's VGA XT, CGA 5150 "
@@ -9356,7 +10358,7 @@ SOAK = [
         "mode's colours and whole render are timed by the guest's cycle "
         "counter and printed",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/PIXEL.GFX",
+        wants=("build/pixel.o88",
                "build/os8088-360.img")),
     Row("pxedithost", "soak", py("tests/pxedit.py", "--host-only"), 13.0,
         "SPEC.md 106.24, PiXEL's editing, the HOST LEG: the EDIT part "
@@ -9377,7 +10379,7 @@ SOAK = [
         "Zoom click, the Eyedropper's pin in Image Info, the Rotate tool. "
         "Each operation's guest time is printed",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/PIXEL.GFX", "build/os8088.img")),
+        wants=("build/pixel.o88", "build/os8088.img")),
     Row("pxsavehost", "soak", py("tests/pxsave.py", "--host-only"), 14.0,
         "SPEC.md 106.24, PiXEL's Save As, the HOST LEG: the WRITE part "
         "(build/pxwrite.bin) under Unicorn - 336 files over every format, "
@@ -9398,7 +10400,7 @@ SOAK = [
         "over 32K and a selection's BMP on the clipboard; and a disk too "
         "full for the save, which leaves the old file and no temporary",
         needs=("marty", "nasm"), serial=True,
-        wants=("build/pixel.o88", "build/PIXEL.GFX", "build/os8088.img")),
+        wants=("build/pixel.o88", "build/os8088.img")),
     Row("pxbench", "soak", py("tests/pxbench.py"), 700.0,
         "SPEC.md 106.17 on the 5150 with a CGA: the TIME, in guest cycles from "
         "breakpoints, of opening MOUNTAIN.BMP (24-bit: the cube's ordered "
@@ -9543,8 +10545,17 @@ SOAK = [
         "nothing but OSAPI_VOL_SYS. The unit rows either side of it check the "
         "disk (`fonts`) and the bytes (`pkg`) and neither runs the walk; a "
         "walk that fails is SILENT, because face 0 is the kernel's own cell "
-        "and a Font menu one item long looks like a Font menu",
+        "and a Font menu one item long looks like a Font menu. On the 360KB "
+        "system disk, which has no faces since SPEC.md 24.3.1.5, this is the "
+        "SECOND rung: the faces found on the package's own volume",
         needs=("marty",), wants=("build/bench360.img",)),
+    Row("facescan144", "soak", py("tests/facescan.py", "--machine",
+                                  "os8088_xt_vga_144", "--sys",
+                                  "build/os8088.img", "--bench",
+                                  "build/bench.img"), 18.0,
+        "SPEC.md 19.8: facescan's FIRST rung - the faces in SYSTEM/FONTS on "
+        "the 1.44MB system disk, the package on a B: that has none.",
+        needs=("marty",), wants=("build/bench.img",)),
     Row("fmbtn", "soak", py("tests/fmbtn.py"), 60.0,
         "SPEC.md 22.18: the Disk window's two header buttons fire on the"
         "RELEASE.",
@@ -9606,7 +10617,9 @@ SOAK = [
         "read, so the manual was installed EXPANDED with its directory hint "
         "gone while every file too big for the buffer was copied raw and "
         "correctly. The tree check passes either way; only the bytes say "
-        "which happened, and one FAT reader reads both sides. It ERASES the "
+        "which happened, and one FAT reader reads both sides. And the fresh "
+        "VBR must carry a serial (SPEC.md 18.8.2.1) - it was 0 on every "
+        "install, red with hd_bpb_fill's two stores taken out. It ERASES the "
         "VHD.",
         needs=("marty",), serial=True, timeout=1200),
     Row("instassoc", "soak", py("tests/instassoc.py"), 85.0,
@@ -9658,6 +10671,26 @@ SOAK = [
         "on os8088_5150_herc_hdd_gla, the same 29 its CGA twin passes. Same "
         "body as `hibernate`, one argument apart. MartyPC.",
         needs=("marty",), serial=True, timeout=1500),
+    Row("hibsumok", "soak", py("tests/hibernate.py", "--sum", "clean"),
+        35.0,
+        "SPEC.md 87.4.1's POSITIVE CONTROL: Mines is open across the "
+        "hibernate, so the programs' sum covers a region (the About box the "
+        "plain row uses is a built-in and the sum skips it), the machine is "
+        "powered off between the write and the resume, and Mines comes back "
+        "where it was. Without it the damaged arm could pass by refusing "
+        "every image. MartyPC.",
+        needs=("marty",), serial=True, timeout=1500),
+    Row("hibsumbad", "soak", py("tests/hibernate.py", "--sum", "damaged"),
+        50.0,
+        "SPEC.md 87.4.1 BROKEN ON PURPOSE: the same session with 1KB of "
+        "Mines's region flipped inside HIBERNAT.IMG on the host between the "
+        "two boots. The restored kernel must refuse at hbm_wake 3a - its "
+        "sentence on the text page, nothing resumed - delete the pointer and "
+        "the image, and a key must give an ordinary boot. ITS FIRST RUN WAS RED "
+        "FOR A REAL REASON: hbm_psum read mem_tab through DS, and mem_tab is "
+        "LOW_SEG's, so the sum covered nothing on both sides and a damaged "
+        "image resumed. MartyPC.",
+        needs=("marty",), serial=True, timeout=1500),
     Row("instrest", "soak", py("tests/instrest.py"), 120.0,
         "SPEC.md 52.10.6.1: the installer's ACTION BUTTON reads Install and "
         "then Restart, there is no third button, and clicking it at the end "
@@ -9673,6 +10706,21 @@ SOAK = [
         "table (instrest's apparatus). Opens the installer and writes "
         "nothing. Measured 132s for the three boots, serially.",
         needs=("marty",), serial=True, timeout=900),
+    Row("install", "soak", py("tests/install.py"), 400.0,
+        "SPEC.md 117: the INSTALL WIZARD drives the Control Panel's own "
+        "engine. On MartyPC's XT-IDE XT it launches A:\\INSTALL.O88, walks "
+        "every page by its own buttons (reading the page out of the "
+        "package's memory after each click), picks ERASE over DOS with the "
+        "Down key, installs both disks - with the progress widget required ON "
+        "THE GLASS while it copies, read off the CGA framebuffer (SPEC.md "
+        "12.8.6: the wizard's clip region used to hide it) - then DRAGS the "
+        "window and presses Next where it now is (SPEC.md 11.96.12.0: a drag "
+        "is not a repaint), and checks the partition on the host; "
+        "closes and checks HDDTOOL.DRV was given back (DRVU_DONE); plants a "
+        "user file; boots C: and runs C:\\INSTALL.O88 again - UPGRADE, os8088 "
+        "found and picked, Erase greyed - and checks the file kept, the "
+        "kernel the floppy's and the MBR committed; then boots C: once more.",
+        needs=("marty", "mtools"), serial=True, timeout=2400),
     Row("instkeep", "soak", py("tests/instkeep.py"), 200.0,
         "SPEC.md 52.10.15: an install that KEEPS the volume's files. The "
         "fixture is MartyPC's DOS 3.3 partition with two holes punched and a "
@@ -9682,6 +10730,16 @@ SOAK = [
         "and the VBR's BOOTHD_KOFS/KSECS naming it - then boots C:, upgrades "
         "the booted-from volume IN PLACE with the system disk in B:, and "
         "boots it again.",
+        needs=("marty", "mtools"), serial=True, timeout=1500),
+    Row("instimg", "soak", py("tests/instimg.py"), 145.0,
+        "SPEC.md 52.10.17: an install whose two disks are MOUNTED IMAGES on "
+        "the hard disk. mtools plants SYS.IMG and APPS.IMG, each with a "
+        "marker only it carries, in MartyPC's DOS partition; a floppy install "
+        "keeps them; then C: boots with a blank in A: and nothing in B:, both "
+        "images are double-clicked into drives and Install runs onto C: "
+        "keeping files. Both markers must arrive and C: must boot. `--from` "
+        "a system disk built before 52.10.17 is the break: no system disk "
+        "is found and the commit never comes. Measured 143s.",
         needs=("marty", "mtools"), serial=True, timeout=1500),
     Row("instcross", "soak", py("tests/instcross.py"), 240.0,
         "SPEC.md 52.10.16: an install ACROSS BUILDS from a machine booted off "
@@ -9980,8 +11038,9 @@ SOAK = [
         "loader's step 5 for an OS88_F_DESK package and by a Sticky App's QUERY. "
         "absent: the shipped 360KB system disk with a Sticky App row "
         "to DESKCAL.O88 and DESK.DRV mdel'd (asserted gone on the host) - "
-        "the boot still relaunches the calendar (stik_boot is resident), it "
-        "comes up TITLED (no WF_DESK, a title bar), mod_tab's MOD_DESK row "
+        "the boot still relaunches the calendar (stik_boot is resident) and "
+        "the STIK_DESKONLY build refuses, said (`No desk layer (DESK.DRV)`, "
+        "no window - the titled arm is the small build's), mod_tab's MOD_DESK row "
         "is 0 and every DKDFP slot mod_gone, and the row is kept, marked and "
         "cell-less. present, the control: the same disk with the module - a "
         "desk window, the module held, the row kept, and the module's claim "
@@ -9999,7 +11058,11 @@ SOAK = [
         "on the shipped 360KB system disk. A press on the cell loads "
         "STIKMENU.DRV and lists the disk's two Sticky Apps, DESKCAL.O88 by "
         "its CARD (name 'Desk Calendar', not running, Arrange/Hide greyed, "
-        "More live) beside STIKNOTE.O88 (SPEC.md 110.13); releasing "
+        "More live) beside STIKNOTE.O88 (SPEC.md 110.13); a drop taken with "
+        "the hand moved onto the panel during the scan has the progress "
+        "widget OFF the bar and the pointer NOT the busy clock once the "
+        "panel is up (SPEC.md 12.8.3.3, stm_thaw); a Disk window's bar "
+        "carries no Sticky Apps cell (SPEC.md 22.28.1); releasing "
         "on its row POSTS the pick and launches it as a desk window, and the "
         "module is dropped after; a release off the panel posts nothing; "
         "Hide All hides the widget and Show All brings it back; Arrange puts "
@@ -10037,7 +11100,7 @@ SOAK = [
         "double-click is refused by the package's own singleton - `Desk "
         "Calendar is open`, LD_EABORT, no write, SYSTEM.CFG unchanged; the "
         "x its hovered HANDLE reveals removes the row by name and saves a "
-        "2,456-byte "
+        "24-byte (packed, empty) "
         "DESKCAL.DAT holding its place; a reset brings nothing back.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("stikmove", "soak", py("tests/stikmove.py"), 30.0,
@@ -10072,15 +11135,16 @@ SOAK = [
         "SPEC.md 110.3: the Desk Calendar WIDGET's APPOINTMENTS, read back "
         "off the guest's own disk by tools/os88stik.py, selected the v2 way "
         "(the two-line agenda paged by its `+N more` pager). A DAMAGED "
-        "state file (count 60) opens empty and its first edit asks `Replace "
-        "damaged calendar?` with the file untouched until Yes; `9:30 "
+        "state file (count 60) opens empty, says `Calendar file damaged`, is "
+        "untouched until the first edit, whose save deletes it and writes "
+        "afresh; `9:30 "
         "Dentist`, `1230 Lunch`, `815 Gym` and `Mum's birthday` are four "
         "appointments IN ORDER, all-day first, the timed ones armed; Enter "
         "on a pressed line edits it in the field (09:30 Doctor, reminder "
-        "kept); Del asks and Yes deletes; 26 characters are refused (`At "
-        "most 25 letters`, nothing written); Delete Item picked with the "
-        "field open asks on a bar with nothing right of the app name "
-        "(SPEC.md 110.9); v2's FOCUS with a Disk window in front all along "
+        "kept); Del arms (`Delete again to confirm`), a key between disarms "
+        "and two Dels in a row delete; 26 characters are refused (`At "
+        "most 25 letters`, nothing written); Delete Item picked twice, the "
+        "first with the field open (it shuts), deletes; v2's FOCUS with a Disk window in front all along "
         "- a card-margin press hands the widget the bar and the Disk window "
         "stays wm_top, `+` opens the field in card 2's heading row and a "
         "plain line is a TASK and a timed one an appointment, losing the "
@@ -10100,29 +11164,67 @@ SOAK = [
         "box's rect and nowhere else, the box then pixel for pixel the "
         "TICKED record; the two-line list pages by `+2 more`, a text press "
         "selects and Space checks, one BLIT1 again; Clear Done Tasks greyed "
-        "`(none done)` until one is checked and leaving the unchecked one; "
-        "Del and Yes empty the list; and three again show the last one's "
+        "until one is checked and leaving the unchecked one; "
+        "Del twice empties the list; and three again show the last one's "
         "page and the pager wraps.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
-    Row("stiknote", "soak", py("tests/stiknote.py"), 120.0,
+    Row("stiknote", "soak", py("tests/stiknote.py"), 150.0,
         "SPEC.md 110.13: Sticky Note on a Hercules 5150 off the shipped 360KB "
-        "system disk - the MID layout. The pad is a desk window and its first "
-        "beat writes STIKNOTE.DAT with the welcome note; the sheet's edge "
-        "and the stack's are ink, both notches the desktop's dither and the "
-        "turned corner's diagonal ink; a pad press ticks a box (the ticked "
-        "record, the file's SN_BOX1); the arrow opens the titled editor, "
-        "New + `Groceries` + `[ ]milk` + Enter + `eggs` is two open boxes in "
-        "the file, Ctrl+T takes one away, Delete + Proceed leaves one note; "
-        "`On desktop` off hides the pad, the editor's close then ends the "
-        "program and its Sticky App row; launched again the editor opens "
-        "alone; and the Color menu is greyed `(color screen)` on 1bpp.",
+        "system disk - the MID layout, a pad over SYSTEM/APPDATA/NOTES. It "
+        "reads WELCOME.TXT (one note, its head the file's bytes) and the "
+        "first beat writes STIKNOTE.DAT v2 naming it; the sheet's edge and "
+        "the stack's are ink, both notches the desktop's dither and the "
+        "turned corner's diagonal ink; three beats with nothing armed reach "
+        "OSAPI_SYS_SNAPSHOT never; a pad press ticks a box (the ticked "
+        "record, `[x] ` in the file on the disk, timed); the arrow opens it "
+        "in Note Pad, typed text and Ctrl+S then Note Pad's close disarm the "
+        "watch within a beat and the pad shows the saved text (saved into "
+        "NOTES, not STIKAPPS; the re-read timed); with a TWIN of home in A: "
+        "(its own serial, NOTES where home's is, our own file renamed) a "
+        "tick over NOTES' bank reads it and writes nothing (110.5.1's "
+        "witness after the quiet stand); `+` makes NOTE0001.TXT and opens "
+        "it, `<` turns back (timed); Delete once says `Delete again to "
+        "confirm` and deletes nothing, twice deletes the current note's "
+        "file; and the Color menu is greyed `(color screen)` on 1bpp. Each "
+        "time is press (or the editor gone) to the visit's end off kernel "
+        "breakpoints, the motor stopped first.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
-    Row("stiknotevga", "soak", py("tests/stiknote.py", "--leg", "vga"), 70.0,
-        "SPEC.md 110.13: Sticky Note's PAPERS on a VGA XT, read off the card's "
-        "rendered framebuffer (fbuf): the TALL layout; the pad's sheet yellow "
-        "with a black edge, the editor's page yellow and its list white; "
-        "Color > Pink makes the page and the pad pink and says so in the "
-        "file, the list still white.",
+    Row("stiknotevga", "soak", py("tests/stiknote.py", "--leg", "vga"), 80.0,
+        "SPEC.md 110.13: Sticky Note's PAPERS and a FULL folder on a VGA XT, "
+        "read off the card's rendered framebuffer (fbuf): the TALL layout; "
+        "the sheet yellow with a black edge; Color > Pink makes it pink and "
+        "STIKNOTE.DAT's table says so, and the pad closed and launched again "
+        "is still pink; with 29 empty notes written into NOTES on the host "
+        "the pad counts 30 and `+` says `Notes folder is full` and makes "
+        "nothing.",
+        needs=("marty",), timeout=600, wants=("build/os8088-360.img",)),
+    Row("stiknotesmall", "soak", py("tests/stiknote.py", "--leg", "small"),
+        45.0,
+        "SPEC.md 110.13, 24.5.1: a copy of STIKNOTE.O88 carried to kern_small "
+        "by hand (B:) refuses to launch IN WORDS - `No desk layer "
+        "(DESK.DRV)`, the STIK_DESKONLY build - and opens no window. "
+        "`make small` builds its disk.",
+        needs=("marty",), timeout=300,
+        wants=("build/small360.img",)),
+    Row("deskclock", "soak", py("tests/deskclock.py"), 150.0,
+        "SPEC.md 110.14: the Desk Clock on a VGA XT off the shipped 360KB "
+        "system disk - a desk window, Medium Classic, whose dial's corners "
+        "are the desktop's dither with its phase (the ground sampled off the "
+        "glass and composed); S moves the dial a second at a time; Face > "
+        "Red LED lights it red and saves face 6; Enter opens the settings "
+        "BESIDE the clock, a tile previews on the desk (Neon's navy) and Esc "
+        "puts the Red LED back, Classic + OK keeps Classic in the file; F "
+        "shrinks the frame to the face with a plate-less tag row; the alarm "
+        "set to 07:00 in its window is saved, rings at 07:00 on the guest's "
+        "clock (the face-only frame grows for its rows) and Z snoozes it; "
+        "and a reset brings the clock back from its row, as it was.",
+        needs=("marty",), timeout=1200, wants=("build/os8088-360.img",)),
+    Row("deskclockherc", "soak", py("tests/deskclock.py", "--leg", "herc"),
+        60.0,
+        "SPEC.md 110.14: the Desk Clock on a Hercules 5150 (one plane, the MID "
+        "layout): the Red LED face lit white on black with its unlit "
+        "segments dotted, and the ground at the face's corner the desktop's "
+        "dither.",
         needs=("marty",), timeout=600, wants=("build/os8088-360.img",)),
     Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
         "SPEC.md 110.3: the Desk Calendar's 42-byte grid, read out of the "
@@ -10293,15 +11395,15 @@ SOAK = [
         "a RESET brings no calendar back (no autostart on kern_small); and "
         "opened again by hand it is where it was dragged, its data FIRED.",
         needs=("marty",), timeout=900,
-        wants=("build/small360.img", "build/smallk/kernel.bin")),
+        wants=("build/small360.img",)),
     Row("deskcalperf", "soak", py("tests/deskcalperf.py"), 63.0,
         "SPEC.md 110.6 / PERFORMANCE.md Part 5: what the Desk Calendar's "
         "gestures COST in primitive calls - a breakpoint on every drawing "
         "cell of the API table, a call counted only when its far return "
         "address is the calendar's own segment - on the VGA XT (TALL) and "
         "the 5150 CGA (COMPACT), against v2's budgets: the first paint (<= "
-        "20 calls TALL, <= 14 COMPACT), the About card's take-down (its rows "
-        "alone, fewer calls than the first paint), a day select (<= 5: the "
+        "20 calls TALL, <= 14 COMPACT), About (one toast, 0 calls on the "
+        "cards), a day select (<= 5: the "
         "two boxes and card 2), a month (<= 8), a task's tick (exactly 1), "
         "the tag's reveal and hide (1 / 3), an IDLE stretch of three beats "
         "and a minute boundary that must draw ZERO, and a reminder going off "
@@ -10325,7 +11427,7 @@ SOAK = [
         "20th's dot is ink and the 13th has none (the COMPACT box once took "
         "the dot row of the day above, SPEC.md 110.9); every gap pixel is "
         "the desktop's dither; and with the Calendar menu held down on the "
-        "widget's own bar, every item's band - the greyed `(no item)` ones "
+        "widget's own bar, every item's band - the greyed ones "
         "included - carries ink.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
@@ -10356,12 +11458,12 @@ SOAK = [
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskmodal", "soak", py("tests/deskmodal.py"), 40.0,
-        "SPEC.md 110.3, 11.103.4: a widget's MODAL QUESTION on MartyPC's "
-        "VGA XT with a Disk window in front: the widget is wm_zord[0] and "
-        "the Disk window wm_top; Del on the widget's appointment puts "
-        "`Delete this appointment?` at the TOP of wm_zord owning the bar, "
-        "the widget still at [0] under the Disk window; Yes deletes it and "
-        "the bar goes to wm_top - the Disk window, never the widget.",
+        "SPEC.md 110.3, 11.103.4: a widget's DELETE on MartyPC's VGA XT "
+        "with a Disk window in front: the widget is wm_zord[0] and the Disk "
+        "window wm_top; Del on the widget's appointment arms (`Delete again "
+        "to confirm`) and opens NO window - wm_zord unchanged, the bar the "
+        "widget's; Del again deletes it and still nothing moved. It was the "
+        "Delete QUESTION's row until the size pass took the alert out.",
         needs=("marty", "mtools"), timeout=600,
         wants=("build/os8088-360.img",)),
     Row("curdisk", "soak", py("tests/curdisk.py"), 240.0,
@@ -10418,8 +11520,9 @@ SOAK = [
         "rather than a gap because tm_hsplit counts every live record into "
         "HELD, so the ring was in the caption's total and in no column under "
         "it - which is why this row asserts the ARITHMETIC (every live record "
-        "is on a row, counted off [tm_hrows] with the headings and pads taken "
-        "out) and only then the label. A row that looked for the word DrvBuf "
+        "is in a group of the list, read off the page's own [tm_cgid] since "
+        "the heap page merged into the memory page, SPEC.md 28.4.10, and the "
+        "driver's claims in the SOUND.DRV group) and only then the label. A row that looked for the word DrvBuf "
         "alone would go green on a page that still lost the 8KB. Measured "
         "red at 3 claim rows for 4 live records with the two arms reverted, "
         "and the probe it prints on a miss found DrvImg on screen while the "
@@ -10428,7 +11531,9 @@ SOAK = [
         needs=("marty",), serial=True, timeout=900,
         wants=("build/sndmove360.img",)),
     Row("heapscrl", "soak", py("tests/heapscrl.py"), 120.0,
-        "SPEC.md 28.4.4: the Task Manager's heap page scrolls, its bar "
+        "SPEC.md 28.4.4: the Task Manager's memory page (the heap page's "
+        "list, merged into it with every group opened by +ALL, 28.4.10) "
+        "scrolls, its bar "
         "survives six refreshes of the list beside it (tm_rowr), and a scroll "
         "down and back leaves the rows byte-identical - which is what says "
         "SPEC.md 28.2's per-chunk cache is indexed by the SCREEN row and not "
@@ -10615,7 +11720,7 @@ SOAK = [
         "docs/plans/completed/GFX-EMBEDDABLE-PLAN.md. It builds nothing: `make small` "
         "is what it reads, the same tree small128 and smallboot want",
         needs=("marty",), serial=True,
-        wants=("build/small360.img", "build/smallk/kernel.bin")),
+        wants=("build/small360.img",)),
     Row("paint1blit", "soak",
         py("tests/paint1blit.py"), 90.0,
         "SPEC.md 42.23.4: the TWO paths a one-bit canvas reaches the screen"
@@ -10858,6 +11963,17 @@ SOAK = [
         "the present's 4-bank device-row arm (px_devrows' HERC branch: bank "
         "y & 3, 90 bytes a row, +5 for the box) against the reference "
         "renderer's bytes, and the WIN1 band on a 1bpp desktop",
+        needs=("marty", "nasm"), serial=True),
+    Row("pitnow", "soak", py("tests/pitnow.py"), 5.0,
+        "SPEC.md 72.15.1: apps/os88pit.inc's pit_now - the 838 ns clock "
+        "PIXELSTEIN, isoTron, MIDIRack, FTPD and ETHER.DRV's profiler share - "
+        "hammered 60,000 times from a BOOT SECTOR on the 5150 with the "
+        "kernel's mode 2 on channel 0: no read may go backwards or jump a "
+        "whole tick. A reload landing inside the cli leaves IRQ0 pending past "
+        "the tick re-read, and only the IRR check catches it; --no-irr takes "
+        "that check out and must FAIL (14 bad reads, deterministic). It is "
+        "what made pxsauto's Auto judge a 98.2 ms frame as 43.3 about one run "
+        "in twelve",
         needs=("marty", "nasm"), serial=True),
     Row("pxsauto", "soak", py("tests/pxsauto.py"), 65.0,
         "SPEC.md 97.8, 97.10, PLAN 14: the DETAIL SELECTOR, every movement, "
@@ -12066,6 +13182,28 @@ SOAK = [
         "with vp_show's OUTs skipped it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidmodexflh", "soak", py("tests/vidvga8.py", "--layout", "modex",
+                                  "--flip", "--held"), 31.0,
+        "SPEC.md 98.1.3.9: vidmodexfl's clip with HELD records - one, and a "
+        "run of two - each the next frame's top over the last one's bottom, "
+        "drawn on the back page and not shown. The glass exact at every "
+        "hold round them: a held record's shows the frame before it, the "
+        "next finishes the page and shows it, and the page brought up "
+        "after that is right only by the copy of both records' rows. "
+        "Broken on purpose it FAILS three ways: a held record shown (34, "
+        "35), the band not widened (37, 38), the copy not forced (37)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidmodexflo", "soak", py("tests/vidvga8.py", "--layout", "modex",
+                                  "--flip", "--own", "--held"), 32.0,
+        "SPEC.md 98.1.3.10, 98.3.8.7: vidmodexflh's clip AGAINST ITS OWN "
+        "PAGE (byte 37 7) - every record drawn on the back page as it "
+        "stands, none brought up, the held ones left unshown, and the "
+        "record after each key taking its rows off the glass (REC_UP). The "
+        "glass exact at every hold, keys among them; with REC_UP ignored it "
+        "FAILS before frame 38 by 480 pixels",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
     Row("vidmodexflc", "soak", py("tests/vidvga8.py", "--layout", "modex",
                                   "--flip", "--lcopy"), 35.0,
         "SPEC.md 98.3.8.1: vidmodexfl with every back page brought up by "
@@ -12192,8 +13330,10 @@ SOAK = [
         "file of three LIN80 renditions each for its screen: the screen's "
         "taken, Play a live session with no bracket, every held frame in "
         "the box across two laps, a drag followed, the rate within 10%, "
-        "Space, F to the full screen and back playing, Esc. Broken on "
-        "purpose (the blit skipped, or Live refused) it FAILS",
+        "Space, F to the full screen and back playing, Esc; then a play "
+        "that ends under a Disk window across the buttons keeps their "
+        "pictures (SPEC.md 13.8.9.1). Broken on purpose (the blit skipped, "
+        "or Live refused, or a cut picture its ground) it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidlivecga", "soak", py("tests/vidlive.py", "--screen", "cga"),
@@ -12205,7 +13345,9 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidlivevga4", "soak", py("tests/vidlive.py", "--screen", "vga4"),
-        45.0, "SPEC.md 98.3.10.4: LIVE IN COLOUR on MartyPC's VGA XT - the "
+        60.0, "SPEC.md 98.3.10.4, 98.4.5.1: LIVE IN COLOUR on MartyPC's VGA "
+        "XT - the poster healed under a Disk window before any play through "
+        "BLITP and no BLIT4, its pixels the poster's; the "
         "VGA rendition a VGA4 canvas, every hold on the RENDERED glass the "
         "decode's sixteen colours; the pass's blits BLITP and no BLIT4, "
         "uncovered and under a Disk window, where BLITP walks the clip "
@@ -12231,6 +13373,18 @@ SOAK = [
         "the banked image against the decode and EVERY PIXEL's rendered "
         "colour against the palette. Broken on purpose (vp_cgaset skipped) "
         "the colours on the glass are wrong and it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidxdisp", "soak", py("tests/vidxdisp.py"), 70.0,
+        "SPEC.md 98.3.21, 53.1.2: ANOTHER DISPLAY PLAYS IT - a Hercules "
+        "primary with a CGA extended to the right (the owner's 5150): a "
+        "CGA4 clip opened on the Hercules is playable on the CGA, the "
+        "bracket opens there in mode 4 and plays to its end, dragged onto "
+        "the CGA it plays as its own and dragged back the walk finds the "
+        "CGA again; and a one-bit CGA file, which the Hercules plays only "
+        "through the shadow, plays on the CGA in mode 6 (98.3.21.1). Broken "
+        "on purpose (the walk out, the native walk out, or fsx_run's CH "
+        "ignored) it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidcga4p", "soak", py("tests/vidcga.py", "--fmt", "cga4",
@@ -12363,6 +13517,155 @@ SOAK = [
         "sub-record's planes) the thumb comes out in colour and it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vblkemu", "soak", py("tests/vblkemu.py"), 10.0,
+        "SPEC.md 98.3.23: THE BLOCK DECODER PART on the host - "
+        "build/vblk.bin under Unicorn against a model of the VGA's Map Mask, "
+        "write mode 3 and Set/Reset: random blocks of every kind (LIN320's "
+        "FILL, TWO, EIGHT; MODEX's three; VGA4's PFILL and TWO), skip-coded "
+        "and absolute, at two origins, on every path the player takes - "
+        "straight on, a plane at a time (an EGA), and round the text box "
+        "through a callback that scribbles AX-DX as its contract allows - "
+        "each the picture tools/os88vid.py decodes, to the byte, in every "
+        "plane; SI past the lists, BP/DS/ES kept, two unknown leads CF=1. "
+        "ONE BIT too (98.3.23.1): tiles on a CGA's two banks and a "
+        "Hercules's four, straight on and round the box, the codebook "
+        "replaced in part between calls; VBV_SET keeps DI, and a tile "
+        "before any codebook and a codebook past 255 are refused. Broken "
+        "on purpose twelve ways (a quadrant's planes, b's Set/Reset, the "
+        "EGA's not, the box's colour, TWO's xor, EIGHT's c0 after a shift, "
+        "a box pixel's x, the skip's width; a tile's row, a box tile's "
+        "byte, the empty-list test, the banks) it FAILS each time",
+        needs=("nasm", "unicorn"), wants=("build/vblk.bin",)),
+    Row("vblkemupm", "soak", py("tests/vblkemu.py", "--pm"), 16.0,
+        "SPEC.md 98.3.23.2: the block decoder's PROTECTED-MODE assembly "
+        "(build/vblkpm.bin, part 1, the one kern_mega fetches) under the "
+        "same random rounds as vblkemu, called the way kern_mega calls it: "
+        "CS a second segment over the same bytes - a code alias - and "
+        "VBV_SET's ES the part's own data segment, every store mirrored "
+        "between the two. The pictures must be os88vid's to the byte AND "
+        "no store may land through CS, which on the machine is a #GP per "
+        "store. Pointed at the plain part (--part build/vblk.bin) it FAILS "
+        "naming 40-odd CS stores",
+        needs=("nasm", "unicorn"), wants=("build/vblkpm.bin",)),
+    Row("vidv2", "soak", py("tests/vidv2.py"), 25.0,
+        "SPEC.md 98.3.23: a VERSION 2 file on MartyPC's VGA XT, LIN320 - "
+        "the clip made here, its odd frames 150 blocks of every kind and "
+        "its even frames version 1's: read as version 2 with the block "
+        "decoder fetched at launch; held frames full screen against "
+        "tools/os88vid.py's decode, mode 13h's bytes out of A000; and "
+        "paused with the text up, three frame steps decoded ROUND THE BOX "
+        "through the part's callback and the next hold exact under where "
+        "the box was; the part's claim movable on the desktop and pinned "
+        "in the bracket (mem_tab's relocation proc). Broken on purpose "
+        "(vb_walk's skip a byte where a block is four, or vp_bcb writing "
+        "nothing) it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2no", "soak", py("tests/vidv2.py", "--refuse"), 20.0,
+        "SPEC.md 98.3.23, 98.1.10.1: on a CGA XT the part is FETCHED too "
+        "(every screen plays one bit), a one-bit version 2 file is "
+        "playable, and one with a seam - its LOOPREC set by hand, the "
+        "encoder will not make one - is refused 'A newer .V88 than this "
+        "player'",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2cga", "soak", py("tests/vidv2.py", "--layout", "cga"), 30.0,
+        "SPEC.md 98.3.23.1: ONE BIT on MartyPC's CGA 5150 - the clip's odd "
+        "frames 150 TILES out of a codebook kept up to date (the whole of "
+        "it at frame 0 and after every key, a slice of it in the rest), "
+        "held against tools/os88vid.py's decode in B800h's two banks, and "
+        "three steps round the text box through the part's callback. "
+        "Broken on purpose (vp_bset reading one bank) it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2herc", "soak", py("tests/vidv2.py", "--layout", "herc"), 30.0,
+        "SPEC.md 98.3.23.1: vidv2cga on the Hercules 5150 - four banks",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2shd", "soak", py("tests/vidv2.py", "--layout", "cga",
+                               "--screen", "herc"), 30.0,
+        "SPEC.md 98.3.23, 98.3.2: the CGA clip on a Hercules, THROUGH THE "
+        "SHADOW - the tiles decoded into the file's own layout at the "
+        "shadow's 0. Broken on purpose (vp_blin1 leaving the screen's "
+        "origin in BP) it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2pgmx", "soak", py("tests/vidv2.py", "--enc", "pgmx"), 60.0,
+        "SPEC.md 98.1.10.1: a clip ENCODED with --blocks on and page-ahead "
+        "on Mode X - the hidden page drawing no block - played full "
+        "screen and held against the decode, round the box too",
+        needs=("marty", "nasm", "ffmpeg"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2flmx", "soak", py("tests/vidv2.py", "--enc", "flmx"), 60.0,
+        "SPEC.md 98.1.10.1: blocks in a file FLIPPED every frame on Mode X "
+        "- the back page brought up by the last record again",
+        needs=("marty", "nasm", "ffmpeg"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2pg4", "soak", py("tests/vidv2.py", "--enc", "pg4"), 60.0,
+        "SPEC.md 98.1.10.1: blocks with page-ahead on THREE pages and the "
+        "page pool, sixteen colours on a 320 x 240 screen of their own",
+        needs=("marty", "nasm", "ffmpeg"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2lp", "soak", py("tests/vidv2.py", "--enc", "lp320"), 60.0,
+        "SPEC.md 98.1.10.1: blocks with a SEAM on LIN320 and Repeat on - "
+        "held in lap 1, straight after the seam and on round",
+        needs=("marty", "nasm", "ffmpeg"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2ly4", "soak", py("tests/vidv2.py", "--enc", "ly4"), 60.0,
+        "SPEC.md 98.1.10.1: blocks in a file with a LAYER, sixteen colours "
+        "- the layer's records drawing none",
+        needs=("marty", "nasm", "ffmpeg"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2hpa", "soak", py("tests/vidv2.py", "--enc", "hpa"), 60.0,
+        "SPEC.md 98.1.10.1: one bit's tiles with page-ahead on the "
+        "Hercules 5150 - the second page at B800h, the codebook the shown "
+        "page's encoder's alone, keys and hidden records with no block "
+        "lists",
+        needs=("marty", "nasm", "ffmpeg"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2mx", "soak", py("tests/vidv2.py", "--layout", "modex"), 25.0,
+        "SPEC.md 98.3.23: vidv2 in MODE X - the blocks a plane at a time "
+        "under the Map Mask, the glass read through the palette, and the "
+        "box's leg with each pixel's plane through the callback",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv24", "soak", py("tests/vidv2.py", "--layout", "vga4"), 40.0,
+        "SPEC.md 98.3.23: vidv2 in SIXTEEN COLOURS - PFILL and TWO by "
+        "write mode 3 full screen, round the box through vc_m3b, IN THE "
+        "WINDOW's same-mode bracket, and with [vp_m3ok] 0: the EGA's "
+        "plane-at-a-time arm, which a VGA takes as well. Broken on purpose "
+        "(vb_v2c's b in a's colour) it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2bench", "soak", py("tests/vidv2bench.py"), 240.0,
+        "SPEC.md 98.3.23: AN INSTRUMENT - what a block costs a 4.77 MHz "
+        "8088, LIN320. A clip of one kind a block frame, at 40 and 280 "
+        "blocks, played full screen on MartyPC's VGA XT with breakpoints "
+        "where the player calls the part and where it has returned: the "
+        "line through the two densities is each kind's cycles a block and "
+        "a list's own, printed beside tools/os88vid.py's blk_cost. Asserts "
+        "only that every kind was measured; the numbers go to "
+        "docs/reports/ with the date and the machine",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2benchmx", "soak", py("tests/vidv2bench.py", "--layout",
+                                   "modex"), 240.0,
+        "SPEC.md 98.3.23: vidv2bench in MODE X - FILL, TWO and EIGHT a "
+        "plane at a time under the Map Mask",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2bench4", "soak", py("tests/vidv2bench.py", "--layout",
+                                  "vga4"), 240.0,
+        "SPEC.md 98.3.23: vidv2bench in SIXTEEN COLOURS - PFILL and TWO "
+        "by write mode 3",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidv2bench1", "soak", py("tests/vidv2bench.py", "--layout",
+                                  "cga"), 240.0,
+        "SPEC.md 98.3.23.1: vidv2bench for ONE BIT's tile on the CGA 5150, "
+        "at 40 and 200 tiles, the codebook's two whole copies untimed",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
     Row("vidpal", "soak", py("tests/vidpal.py"), 110.0,
         "SPEC.md 98.1.3.2.3: A PALETTE A SCENE - a 16-colour file whose "
         "table gives each scene's first frame and sixteen, on MartyPC's VGA "
@@ -12478,7 +13781,9 @@ SOAK = [
         "SPEC.md 98.3.8.3: vidpage on MartyPC's Hercules 5150 - page 1 at "
         "B800h, allowed by 3BFh, flipped by 3B8h after the retrace; key 0 "
         "PRELOADS the first scene change and key 1 holds the second whole. "
-        "With a play from the start not taking key 0, it FAILS",
+        "With a play from the start not taking key 0, it FAILS. And page 1 "
+        "is dirtied round the canvas in the first play: every later play "
+        "must show black there, and with vp_hpg2's clear taken out it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidpagehercno", "soak", py("tests/vidpage.py", "--layout", "herc",
@@ -12492,6 +13797,135 @@ SOAK = [
         31.0,
         "SPEC.md 98.1.3.7, 98.3.8.3: vidpage in Mode X - the same clip's "
         "flips and hidden records in 256 colours on Mode X's two pages",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpage3mx", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                 "--pages", "3"), 56.0,
+        "SPEC.md 98.1.3.7.1, 98.3.8.4: PAGE-AHEAD ON N PAGES - Mode X's "
+        "three: two scene changes three frames apart, each built ahead on "
+        "a page of its own by hidden records CHAINED in the same frames, "
+        "and the last onto the page the first flip left. Every hold is the "
+        "clip, from the start and from key 1, which names page 2. With "
+        "vp_pghid's chain walk stopped after its first record, or vp_decn "
+        "showing page 0 for the page the key names, it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpage4v", "soak", py("tests/vidpage.py", "--pages", "4",
+                                "--screen", "320x200"), 100.0,
+        "SPEC.md 98.1.3.7.1, 98.3.8.4: vidpage3mx's shape on sixteen "
+        "colours' 320 x 200, whose 16,000-byte pages fit four in a plane: "
+        "three scene changes three frames apart, three pages built at once, "
+        "key 1 naming page 3",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagefmx3", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                  "--pages", "3", "--fpage"), 70.0,
+        "SPEC.md 98.1.3.7.2, 98.3.8.5: FLIPPED AND BUILT AHEAD on Mode X's "
+        "three pages - every frame drawn on a page not shown, two scene "
+        "changes built ahead, a COPY in each flip's record bringing the next "
+        "page up. Every hold exact from the start, from key 1 and with no "
+        "keys; with vp_pgcopy a bare ret it FAILS after the first flip",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagefmx4", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                  "--pages", "4", "--screen", "320x200",
+                                  "--fpage"), 70.0,
+        "SPEC.md 98.3.8.5: vidpagefmx3 on Mode X's 320 x 200, four pages - "
+        "the first change's page COPIED onto the fourth in the calm, so the "
+        "frame after its flip draws on a page already brought up. With a "
+        "BUILT page brought up anyway it FAILS at both flips",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagefmx3o", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                   "--pages", "3", "--fpage", "--own"), 70.0,
+        "SPEC.md 98.2.1.8.5, VIDEO-SEEN-PLAN 3b: vidpagefmx3's clip AGAINST "
+        "ITS OWN PAGES - every record BUILT, an ordinary frame drawn on the "
+        "back page as it stands, and every key carrying the back page. "
+        "Every hold exact from the start, from key 1 and with no keys; with "
+        "the back page left out of the keys the file is refused (a play "
+        "from keyframe 1 shows frame 31 wrong)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagefmx4o", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                   "--pages", "4", "--screen", "320x200",
+                                   "--fpage", "--own"), 70.0,
+        "VIDEO-SEEN-PLAN 3b: vidpagefmx4's four pages, the precopy in the "
+        "calm among them, against their own pages",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagefv4", "soak", py("tests/vidpage.py", "--pages", "4",
+                                 "--screen", "320x200", "--fpage"), 145.0,
+        "SPEC.md 98.3.8.5: vidpagefmx4's clip in sixteen colours on 320 x 200",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagetextf", "soak", py("tests/vidpagetext.py", "--pages", "4",
+                                   "--fpage"), 95.0,
+        "SPEC.md 98.3.8.5: the full screen's text FLIPPED AND BUILT AHEAD - "
+        "a toast on the glass across the flips, and held up across the flip "
+        "whose record copies off the glass, then ended: the box's rows on "
+        "both pages must be picture. With vo_cfix a bare ret the text is "
+        "left on the next page as picture and it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagepool4v", "soak", py("tests/vidpage.py", "--pages", "4",
+                                    "--screen", "320x200", "--pool"), 130.0,
+        "SPEC.md 98.1.3.8.1, 98.3.8.6: THE PAGE POOL - vidpage4v's clip with "
+        "keys every half second, so pages stand unchanged across keys and "
+        "are stored once, key 0's preload among them. Every hold exact from "
+        "the start, from key 1 and with no keys; with vp_kpool a bare ret "
+        "the pages it names stay the key's picture and it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagepoolf", "soak", py("tests/vidpage.py", "--pages", "4",
+                                   "--screen", "320x200", "--fpage",
+                                   "--pool"), 145.0,
+        "SPEC.md 98.3.8.6: the page pool in a file flipped and built ahead",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpage8n", "soak", py("tests/vidpage.py", "--pages", "8",
+                                "--screen", "320x200n"), 180.0,
+        "SPEC.md 98.1.3.2.5, 98.3.8.4: sixteen colours on a NARROW 320 x 200 "
+        "- rows 40 bytes apart, 0Dh's own, so a page is 8,000 bytes and a "
+        "plane holds EIGHT: seven scene changes three frames apart, seven "
+        "pages built at once. Every hold is the clip and the CRTC's Offset "
+        "reads 14h; with vp_scrset's narrow Offset left out it reads 28h and "
+        "every hold FAILS (secs measured beside three encoders)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpage6n", "soak", py("tests/vidpage.py", "--pages", "6",
+                                "--screen", "320x240n"), 150.0,
+        "SPEC.md 98.1.3.2.5: vidpage8n's shape on the NARROW 320 x 240 - "
+        "9,600-byte pages, six in a plane, on 0Dh retimed to 480 lines",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidkpart3mx", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                  "--pages", "3", "--kpart", "400"), 70.0,
+        "SPEC.md 98.1.3.8, 98.3.8.4: vidpage3mx with every key cut into "
+        "KEY PARTS (key 1 in 37), each part's band of every hidden page "
+        "chained after its lists and naming the page shown: every hold is "
+        "the clip, from the start and from key 1",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpage4mx", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                 "--pages", "4", "--screen", "320x200"),
+        60.0,
+        "SPEC.md 98.1.3.1.1, 98.3.8.4: MODE X AT 320 x 200 - 13h's 400 "
+        "lines on the unchained card, so a page is 16,000 bytes and a plane "
+        "holds four - with vidpage3mx's clip on all four. Every hold is the "
+        "clip, and the CRTC's vertical display end reads 8Fh at the first "
+        "hold of each play: MartyPC scans Mode X's 480 lines into 400, so "
+        "the glass cannot tell the heights apart and the register can. "
+        "With the 400-line table left out it FAILS on that read",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagetext4", "soak", py("tests/vidpagetext.py", "--pages", "4"),
+        45.0,
+        "SPEC.md 98.3.8.4: the full screen's text on FOUR pages - the "
+        "text's two saves follow the page shown (vo_pgsave), its box put "
+        "back where a save leaves. A toast kept up across vidpage4v's "
+        "flips and Repeat's laps: on the glass in every look but the "
+        "join's, seen on all four pages. With vo_pgsave a bare ret it is "
+        "off the glass from the second flip on and FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidpagely", "soak", py("tests/vidpage.py", "--layer"), 50.0,
@@ -12509,6 +13943,22 @@ SOAK = [
         "clip on Mode X's two pages",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidpagebn", "soak", py("tests/vidpage.py", "--layer", "--bench"),
+        50.0,
+        "SPEC.md 98.1.9.13: THE BENCH on MartyPC's VGA XT, in VGA4's planes - "
+        "vidpagely's clip carrying a bench: the player builds its own "
+        "record (the host's bench_record, length and check to the byte) and "
+        "times it decoded into the VGA's gap past every page, and every "
+        "hold is still the clip, so the bench drew nothing on the glass. "
+        "Broken on purpose (vp_bnsel's gap at the canvas) the holds FAIL",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagebnmx", "soak", py("tests/vidpage.py", "--layer", "--bench",
+                                  "--layout", "modex"), 35.0,
+        "SPEC.md 98.1.9.13: vidpagebn in Mode X - the bench's four plane "
+        "sub-records decoded past both pages",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
     Row("vidscreen", "soak", py("tests/vidscreen.py"), 160.0,
         "SPEC.md 98.1.3.2.1, 98.3.8.2: sixteen colours on a SCREEN OF ITS "
         "OWN - 320 x 200, 320 x 240, 640 x 350 and 640 x 400 - flipped, in "
@@ -12519,6 +13969,27 @@ SOAK = [
         "640 x 480, unflipped, played WITHOUT forcing the full screen. "
         "Broken on purpose (the palette not loaded, vp_show's OUTs skipped, "
         "or vp_canwin taking the window) the holds FAIL",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidposter", "soak", py("tests/vidposter.py"), 135.0,
+        "SPEC.md 98.1.3.11, 98.4.5: DESKTOP POSTERS on MartyPC, ten files "
+        "on a VGA's desktop and a CGA's, each box held to the host byte "
+        "for byte with the set and scale it chose: VGA4 of its own greys "
+        "stored at half with a custom one (the custom at open, key 1's "
+        "after Right), stored at its own size and halved, none stored "
+        "(vga4_pack's turning cell); VGA8 and CGA4 in colour; TH_SIZE's "
+        "half on a file that fits; a resident custom one; CGA4's black and "
+        "white on a CGA; colour and black and white halved twice. Broken on "
+        "purpose - the posters ignored, the size or the desktop not asked, "
+        "a halving's turn or second pass taken out - those arms FAIL",
+        needs=("marty", "nasm", "numpy"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidscreeno", "soak", py("tests/vidscreen.py", "--own"), 160.0,
+        "SPEC.md 98.1.3.10, 98.3.8.7: vidscreen's clips AGAINST THEIR OWN "
+        "PAGE on the four flipped screens (byte 37 7): drawn on the back "
+        "page as it stands, the record after a key bringing its page up off "
+        "the glass, and the 640 x 480 one unflipped as before. Every hold's "
+        "glass exact, odd and even frames apart",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidcard", "soak", py("tests/vidcard.py"), 26.0,
@@ -12644,7 +14115,10 @@ SOAK = [
         "itself, so the hold is WHOLE as the play returns and byte-for-byte "
         "the file (pmemsave). Then drive B: is changed to a BLANK floppy "
         "under the player, so the disk has nothing left to answer with: the "
-        "next key and a whole play from it must still work. Broken on "
+        "next key and a whole play from it must still work - that second "
+        "play the shipped choice for a whole hold on a 386, IN PLACE "
+        "(98.3.18.14; the row prints which), the first, started mid-load, "
+        "copying. Broken on "
         "purpose - vp_xput out of vp_fill - the hold is short at the play's "
         "end (163,840 of 973,312); vp_xrdat out of vp_rdat, the key is "
         "refused",
@@ -12660,7 +14134,10 @@ SOAK = [
         "under the held play and the furthest key frame inside ring + bank "
         "is still right, while the play dies past the bank's end. Broken on "
         "purpose - vp_bstep out of the reader's loop - the bank stays empty; "
-        "vp_bfill's head left unmoved, the play errors at frame 100; vp_bpre out of the bracket, the prefill fills nothing. The clip asks a 4 MB bank and 256 KB first (98.3.18.3): 8 slots before the first frame and Low memory, and with the gate's hold on the prefill the box says Buffering 100%, Esc cancels and Space plays from the bank with B: blank",
+        "vp_bfill's head left unmoved, the play errors at frame 100; vp_bpre out of the bracket, the prefill fills nothing. The clip asks a 4 MB bank and 256 KB first (98.3.18.3): 8 slots before the first frame and Low memory, and with the gate's hold on the prefill the box says Buffering 100%, Esc cancels and Space plays from the bank with B: blank. "
+        "Every vidbank arm writes [vp_noinp] before its first play, the bank "
+        "COPYING: QEMU's 386 reads an XMS bank in place since 98.3.18.14, "
+        "where this FIFO is not used (vidxipbank is the in place)",
         needs=("qemu", "nasm"),
         wants=("build/video.o88", "build/os8088.img")),
     Row("vidbankwin", "soak", py("tests/vidbank.py", "--arm", "win"), 75.0,
@@ -12684,11 +14161,140 @@ SOAK = [
         "fill",
         needs=("qemu", "nasm"),
         wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmsbios", "soak", py("tests/vidxms.py", "--arm", "bios"), 45.0,
+        "SPEC.md 2.10.8, 41.12: vidxms with every XMS copy through int 15h "
+        "AH=87h - XMEM.DRV built with XM_FORCE_BIOS, the 286's transport, on "
+        "QEMU's 386 - so xm_bios and the PIC it holds shut across the call "
+        "run under a row at all: the hold whole and byte-for-byte, both plays "
+        "to the last frame and both COPYING ([vp_noinp]: a 386 would decode "
+        "the whole hold in place, 98.3.18.14, and send nothing through "
+        "xm_bios). SeaBIOS restores A20 itself, so the 286 lockup "
+        "this guards is argued in SPEC.md 2.10.8 rather than reproduced",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxip", "soak", py("tests/vidxip.py"), 120.0,
+        "SPEC.md 98.3.18.11, 98.3.18.14: a file held whole in XMS decoded "
+        "IN PLACE - the SHIPPED player on QEMU's 386, which loads DS's "
+        "hidden base (apps/os88ub.inc) where a 286 runs LOADALL, against "
+        "the same player COPYING ([vp_noinp] written before Play), one flow "
+        "each: a VGA-layout clip held whole, B: blank, played to the last "
+        "frame. In place, every frame, 246 yields opening a window, the card "
+        "kinds 4 and 7, and the window's pixels identical to the copying "
+        "play's. `--sim` (no row) puts the LA_SIM test build in the in-place "
+        "leg. Broken on purpose: vp_xaddr without the hold's base never "
+        "starts; the yield sites unpatched and no yield opens; vp_ubld's "
+        "ub_set out, vp_xok fails and the play copies",
+        needs=("qemu", "nasm")),
+    Row("vidxipsnd", "soak", py("tests/vidxip.py", "--arm", "snd"), 130.0,
+        "SPEC.md 98.3.18.11: vidxip with QEMU's SB16 and a clip with sound - "
+        "the card's audio copied out of the hold through a borrow every "
+        "frame (vp_aput's VP_DSDX)",
+        needs=("qemu", "nasm")),
+    Row("vidxipahead", "soak", py("tests/vidxip.py", "--arm", "ahead"),
+        130.0,
+        "SPEC.md 98.3.18.11: vidxip with SOUND AHEAD (8 frames) and the SB16 "
+        "captured - every frame's sound a level of its own, and the two "
+        "plays' levels whole and in order: the lead read into the ring and "
+        "staged, the audio cursor's records borrowed in place",
+        needs=("qemu", "nasm")),
+    Row("vidxmsgap", "soak", py("tests/vidxms.py", "--gap", "2048"), 50.0,
+        "SPEC.md 98.3.18.12: vidxms with THE GAP written 2,048 before each "
+        "play (QEMU measures its host's noise): the ring starts 2,048 mod "
+        "4,096 from the hold inside its claim on BOTH plays - [vp_noinp] "
+        "keeps the second copying, where a 386 would take the whole hold in "
+        "place (98.3.18.14) and place no ring at all - both draw every frame, "
+        "and the hold - filled through vp_xstep's placed claims - is the "
+        "file byte for byte. vp_xgal made a `ret` takes it red",
+        needs=("qemu", "nasm")),
+    Row("vidbankgap", "soak", py("tests/vidbank.py", "--gap", "2048"), 115.0,
+        "SPEC.md 98.3.18.12: vidbank with THE GAP written 2,048 before the "
+        "play: the ring starts 2,048 mod 4,096 from the BANK, and every "
+        "screen vidbank compares is still the decode's",
+        needs=("qemu", "nasm")),
+    Row("vidxipbank", "soak", py("tests/vidxip.py", "--arm", "bank"), 120.0,
+        "SPEC.md 98.3.18.13: a 1.3 MB clip on a 2 MB QEMU, past the pool, "
+        "played through a BANK - copying ([vp_noinp]), and then by the "
+        "shipped player IN PLACE on QEMU's 386 (98.3.18.14), the card kinds "
+        "1 and 8, the ring 25 of the bank's 26 slots: every tenth frame held "
+        "and its screen compared with the reference decode (39 holds each), "
+        "because this clip's patches erase a wrong byte inside ~30 frames "
+        "and the window after the play cannot see it",
+        needs=("qemu", "nasm")),
+    Row("vidxiphd", "soak", py("tests/vidxip.py", "--hd", "--arm", "bank"),
+        150.0,
+        "SPEC.md 98.3.18.15, 52.1.4: vidxipbank with the clip on an IDE DISK, "
+        "which QEMU's SeaBIOS knows and HDD.DRV's rung 1 takes, so every "
+        "fill ARMS the driver and its sectors go straight into XMS through "
+        "ES's loaded base (os88ub.inc) - both plays must report sectors that "
+        "skipped the copy up ([vp_hsk]), and the 39 holds against the "
+        "reference decode on each are what say those bytes are right. "
+        "Broken on purpose (hd_xa_read's rep insw replaced by a read that "
+        "drops the words) the play stalls on garbage before frame 140",
+        needs=("qemu", "nasm")),
+    Row("vidxiphdhold", "soak", py("tests/vidxip.py", "--hd"), 120.0,
+        "SPEC.md 98.3.18.15: vidxip's HOLD with the clip on an IDE disk - the "
+        "hold's own fill (vp_xstep, the window's timer) armed and read "
+        "straight into XMS, then both plays out of it, the window identical",
+        needs=("qemu", "nasm")),
+    Row("vidxiphdnoharm", "soak", py("tests/vidxip.py", "--hd", "--noharm",
+                                     "--arm", "bank"), 150.0,
+        "SPEC.md 98.3.18.15: vidxiphd's A/B - the player built VP_NOHARM, "
+        "which never arms HDD.DRV: the same plays and holds, and [vp_hsk] "
+        "must stay 0, so vidxiphd's count is the arm's and not a counter "
+        "that always moves",
+        needs=("qemu", "nasm")),
+    Row("vidxipxspeed", "soak", py("tests/vidxip.py", "--xspeed"), 120.0,
+        "SPEC.md 98.3.18.15: vp_xspeed, the pool's copy priced against RAM "
+        "for vp_epref's EMS-or-XMS choice, taken at the hold's open by a "
+        "VP_XSPTEST build - no emulator here has an EMS board beside XMS, so "
+        "nothing else reaches it. [vp_xr10] measured (its value is QEMU's "
+        "host timing) and its 8 KB block given back, read off XMEM.DRV's "
+        "own table; broken on purpose (the free taken out) it fails on both",
+        needs=("qemu", "nasm")),
+    Row("vidxipbankwrap", "soak", py("tests/vidxip.py", "--arm", "bankwrap"),
+        120.0,
+        "SPEC.md 98.3.18.13: vidxipbank with the ring in place capped at 3 "
+        "slots ([vp_ekr], a gate's), so the bank's MIRROR - its last slot, "
+        "what a super-packet in slot K-1 runs on into of slot 0 - is read "
+        "every lap, thirteen of them. The mirror copied from the wrong bytes "
+        "takes it red at 36 of 39 holds",
+        needs=("qemu", "nasm")),
+    Row("vidxipbankbig", "soak", py("tests/vidxip.py", "--arm", "bankbig"),
+        150.0,
+        "SPEC.md 98.3.18.13: the bank in place for a BIGSP file (98.1.4.1), "
+        "the owner's Last Exile at --frame-cap 48, which had to copy down "
+        "because the mirror in place was one slot. The wrap arm's 3-slot "
+        "ring with full-screen 38 KB records, two of which start late in "
+        "the ring's last slot and run into the MIRROR'S SECOND slot - "
+        "mirror_reach() names them and the row refuses a clip with none. "
+        "Slot 1 not mirrored takes it red at 2 of 19 holds, the two frames "
+        "it names",
+        needs=("qemu", "nasm")),
+    Row("vidxipbanksnd", "soak", py("tests/vidxip.py", "--arm", "banksnd"),
+        110.0,
+        "SPEC.md 98.3.18.13: vidxipbankwrap with QEMU's SB16 and a clip with "
+        "sound: the card's audio copied out of the bank through a borrow "
+        "every frame, the ring wrapping, 33 holds against the decode",
+        needs=("qemu", "nasm")),
+    Row("vidxipbankdry", "soak", py("tests/vidxip.py", "--arm", "bankdry"),
+        150.0,
+        "SPEC.md 98.3.18.13: the XMS bank in place RUN DRY - a test build's "
+        "reader (VP_RDSLOW) a chunk every 12 ticks, slower than the stream, "
+        "and no holds: the play must pause, end on its last frame and leave "
+        "the window identical to the copying play's (the owner's Victory at "
+        "14 wait states, 2026-10-16)",
+        needs=("qemu", "nasm")),
+    Row("vidxipbankdrysnd", "soak", py("tests/vidxip.py", "--arm",
+                                       "bankdrysnd"), 150.0,
+        "SPEC.md 98.3.18.13: vidxipbankdry with QEMU's SB16 and a clip with "
+        "sound - the card's sound out of a bank that keeps running dry",
+        needs=("qemu", "nasm")),
     Row("vidxmsidle", "soak", py("tests/vidxms.py", "--arm", "idle"), 45.0,
         "SPEC.md 98.3.18: vidxms with no play at the start - the window's "
         "timer alone loads the file to its end (a short last chunk is what "
         "says so), with the info card out so its line 6 is drawn from the "
-        "timer; then the same blank-disk key and play",
+        "timer; then the same blank-disk key and play - the hold whole, so "
+        "the shipped choice on QEMU's 386, in place (98.3.18.14)",
         needs=("qemu", "nasm"),
         wants=("build/video.o88", "build/os8088.img")),
     Row("vidxmsnox", "soak", py("tests/vidxms.py", "--arm", "nox"), 45.0,
@@ -12955,7 +14561,7 @@ SOAK = [
         "on the same clip is short - and a fixed bank is untouched. Broken "
         "on purpose (the first pass returning nothing) it FAILS",
         needs=("ffmpeg",)),
-    Row("vencgui", "soak", py("tests/vencguitest.py"), 90.0,
+    Row("vencgui", "soak", py("tests/vencguitest.py"), 200.0,
         "SPEC.md 98.2.8: the encoder's WINDOW without a window "
         "(tools/os88vencgui.py): every os88venc option on a tab with a "
         "tooltip, the untouched form parsing to the parser's own defaults, "
@@ -12995,7 +14601,7 @@ SOAK = [
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/hdd.drv", "build/ctrl.drv",
                "build/sound.drv")),
-    Row("videnc", "soak", py("tests/videnc.py"), 370.0,
+    Row("videnc", "soak", py("tests/videnc.py"), 1300.0,
         "SPEC.md 98.2.1: the encoder front end and its budgets, host-side. "
         "ffmpeg makes a 16:9 source with a still tail and tools/os88venc.py "
         "encodes it: the canvas must be the source's shape in the Hercules "
@@ -13017,7 +14623,19 @@ SOAK = [
         "pans (98.2.1.2.1), and --bands' writes never climbing back a band "
         "(98.2.1.2.2), each red with its mechanism taken out.",
         needs=("ffmpeg",)),
-    Row("vidlayer", "soak", py("tests/vidlayer.py"), 100.0,
+    Row("vidlag", "soak", py("tests/vidlag.py"), 35.0,
+        "SPEC.md 98.2.1.1.3: the lag searched, host-side. A frame's ceiling "
+        "under the lag schedule must be the most it may take - safe and "
+        "tight to a hundredth of a period, an allowance between two calls "
+        "included (with the old 'allowance less a call' back, 17 of 31 are "
+        "not); on a clip of Mech2's shape whose bursts fixed allowances cut "
+        "5, 5, 3, 3, 3 frames, --lag 50-200 must cut no more than --lag 200, "
+        "choose more than one allowance and one below the top, and replayed "
+        "as the player schedules it fall a frame behind and never 200 ms; "
+        "--lag's spellings and a version-35 record must read as made. Broken "
+        "on purpose (the search always the top, or its worst pick) it FAILS",
+        needs=("ffmpeg",)),
+    Row("vidlayer", "soak", py("tests/vidlayer.py"), 320.0,
         "SPEC.md 98.1.9: THE LAYER, host-side - six seconds of a Mandelbrot "
         "zoom encoded for a 60 KB/s 286, plain and with --layer-disk for 240 "
         "KB/s, on VGA8's one plane and Mode X's four. The layered file's "
@@ -13154,6 +14772,20 @@ SOAK = [
         "paint and its square moves inside the content. Everything is read "
         "out of each package's own bss through its map.",
         needs=("marty",), serial=True, timeout=600),
+    Row("syscheck", "soak", py("tests/syscheck.py"), 120.0,
+        "SPEC.md 118: SYSTEM CHECK on an upgraded install. A hard-disk image "
+        "of the system disk's own files is planted with one of every "
+        "breakage 118.1 names - a package of format 8, one that is not a "
+        "package, a retired program and a retired driver, a program in two "
+        "folders, KPAD.TMP, a driver of version 9, a deleted EMS.DRV that "
+        "SYSTEM.CFG still wants, an ASSOC.DAT row for a deleted package and "
+        "an orphaned HIBERNAT.IMG - and booted from C: with an AUTOSTRT link "
+        "to SYSTEM\\SYSCHECK.O88. The scan must find each, the saved "
+        "SYSCHECK.TXT (read back on the host) must name each, and Clean Up "
+        "must remove exactly 118.8's files and nothing else.",
+        needs=("qemu", "mtools"), serial=True, timeout=600,
+        wants=("build/os8088.img", "build/apps.img", "build/syscheck.o88",
+               "build/mbr.bin", "build/boothd.bin")),
     Row("atkey", "soak", py("tests/atkey.py"), 100.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "
@@ -13284,6 +14916,255 @@ SOAK = [
         "the grid is four planes and repaints through gfx_blitp, so a window "
         "left where it opens does not reach this primitive at all.",
         needs=("marty", "nasm"), serial=True, timeout=900),
+    Row("megatrap0", "soak", py("tests/megatrap0.py"), 300.0,
+        "docs/plans/KERN-MEGA-PLAN.md 10.3 item 50: kern_mega COMPLETES a "
+        "write through CS, a far transfer through a data segment and a "
+        "segment-0 access rather than faulting on it, so a package doing one "
+        "in a loop is slow and looks like it works. MEGATRAP=1's census "
+        "(a private tree) under Bochs, thirteen OS88_HIGH packages (the three "
+        "Sticky Apps in a second boot, 14.46) started through "
+        "MEGARUN and left running; any #GP charged to an image not in the "
+        "row's ALLOW fails it, as does a refusal or a kern_mega FAULT. The "
+        "failing case is any `push cs / pop ds` and a store in one of them - "
+        "MEGACSL (tests/megacsw) is one on purpose. 300s is 277 measured, "
+        "the tree's build included",
+        needs=("bochs", "nasm")),
+    Row("megacdrom", "soak", py("tests/megacdrom.py"), 35.0,
+        "SPEC.md 119 and 34.15 under docs/plans/KERN-MEGA-PLAN.md 14.68: "
+        "CDROM.DRV, CDRack and the Mixer on kern_mega, on 86Box's 286 "
+        "(vm/286-mega-cdrom: the mr286 with an IDE CD-ROM holding "
+        "build/cdaudio.cue). CDRack started in protected mode lands above "
+        "1MB and plays - its own cr_play PLAYING and cr_secs advancing - "
+        "and the menu bar's speaker opens the quick volume, whose Open "
+        "Mixer... starts MIXER.O88 above 1MB reading the card; the fault "
+        "log charges no exception to a loaded image. Red with CDROM.DRV "
+        "from before 14.68 (--cdrom): its 0:046C tick traps on every poll "
+        "and its paragraph fold of ES:DI is #GP 9CF4, a kern_mega FAULT; "
+        "red with that SOUND.DRV (--sound): the speaker opens nothing. "
+        "86Box by name: Bochs plays no CD audio and MartyPC is an 8088. "
+        "35s is 34 measured",
+        needs=("86box",),
+        wants=("build/megacdtest.img", "build/cdaudio.cue",
+               "build/cdrack.bin", "build/mixer.bin", "build/cdrom.bin")),
+    Row("megarehome", "soak", py("tests/megarehome.py"), 120.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.44, 14.48, SPEC.md 20.12.10.9: a "
+        "RE-HOMED program whose own header says OS88_HIGH runs above 1MB on "
+        "kern_mega. Bochs at 16MB, MEGARUN starting kern_mega's DOS.O88, "
+        "SCRIBE, CLEAR SKIES, WORD and PIXELSTEIN 3D by name; the debugger "
+        "then reads the instance table, the pool and the conventional heap: "
+        "each I_SPTR an LDT selector over a pool block owned 80h | slot, "
+        "WORD's, SCRIBE's and PIXELSTEIN's claims in the pool (OS88_HIGHMEM), "
+        "no 32KB conventional claim of theirs, SKIES holding an "
+        "OSAPI_MEM_SUBSEG selector inside its block, and PIXELSTEIN's keep "
+        "over 64KB ONE block whose pair covers its image + bss alone, with "
+        "the scratch part's code/data pair and the byte textures' selector "
+        "inside it, none past its end (14.48). The failing case is WORD.O88 "
+        "from before 14.44 (no OS88_HIGH), or PXSTEIN.O88 from before 14.48: "
+        "its I_SPTR comes back a conventional segment. 120s is 99 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin")),
+    Row("megavidbig", "soak", py("tests/megavidbig.py"), 330.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.58: a BIGSP video (records past 32 "
+        "KB, SPEC.md 98.1.4.1) played from XMS on kern_mega without a fault "
+        "- the owner's Mechwarrior 2 froze the Victory 286 at its first "
+        "record past 32 KB, read in place through OSAPI_XMEM_RUN's windows "
+        "(one every 32 KB, 64 KB long), which a 38-63 KB record runs off. "
+        "Bochs, tests/vidplay.py's --big lin80 clip beside VIDEO.O88 on B:, "
+        "played with Space at 2MB (the XMS BANK) and at 16MB (the HOLD, "
+        "whole): neither may log a kern_mega FAULT. Red with VIDEO.O88 from "
+        "before 14.58 (--pkg): #GP at vd_native's rep movsw in both legs. "
+        "330s is 301 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/megak/apps/video.o88")),
+    Row("megavidv2", "soak", py("tests/megavidv2.py"), 400.0,
+        "SPEC.md 98.3.23.2: a VERSION 2 video played on kern_mega through "
+        "the block decoder's PROTECTED-MODE part with NO #GP fixup. "
+        "MEGATRAP=1's kern_mega (a private tree) under Bochs at 16MB, "
+        "tests/vidv2.py's clip with a still tail on B: beside VIDEO.O88, "
+        "once per layout (LIN320, MODEX, VGA4): Play, paused in the blocks, "
+        "three frame steps ROUND THE TEXT BOX (vp_bcb), on into the tail and "
+        "paused; Esc and Play again, the file now HELD and read IN PLACE "
+        "through OSAPI_XMEM_RUN's selectors. No step may add a trap line or "
+        "a FAULT, and the two tail pictures must be the same. Red with "
+        "--part0 (part 0 fetched under protected mode too): hundreds of "
+        "fixups a play step, vb_walk's count and vb_set's patching, and "
+        "its tails the same pictures. 400s is 339 measured",
+        needs=("bochs",),
+        wants=("build/megak/apps/video.o88", "build/vblk.bin",
+               "build/vblkpm.bin", "build/megak/apps/video.bin")),
+    Row("pxmega", "soak", py("tests/pxmega.py"), 260.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.40: PiXEL USED on kern_mega with no "
+        "#GP fixup - megatrap0 counts what a launch costs, and a decoder's "
+        "cost is in the pictures. MEGATRAP=1's census (a private tree) under "
+        "Bochs, B: holding PIXEL.O88 and apps/pixel/samples: BALLOONS.PNG "
+        "double-clicked, Space through BOUNCE.GIF (animated), CAT.GIF, "
+        "CITY.PCX, FLOWER.JPG, HOUSE.PNG, LAKE.JPG, MOUNTAIN.BMP and ROOM.JPG "
+        "(progressive), then the Rotate tool clicked with each button. Every "
+        "step adds no trap line and no kern_mega FAULT, and leaves a canvas "
+        "that is a picture and not the last. Red with pxgif.asm's pa_comp "
+        "put back to one paragraph (BOUNCE.GIF FAULTs on frame 0). 260s is "
+        "192 measured under Bochs plus the tree",
+        needs=("bochs", "nasm")),
+    Row("megadosp", "soak", py("tests/megadosp.py"), 160.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.54: the windowed DOS box's PROMPT "
+        "on kern_mega with no #GP fixup per character printed - dos_hk_tty "
+        "entered con_write with `push cs / pop ds`, so every byte of a DIR, "
+        "an ECHO or a TYPE was one completed write through the box's code "
+        "selector (20,002 for a 20,000-byte TYPE; 5.55 s against 4.02 s on "
+        "86Box's mr286). MEGATRAP=1's census (a private tree) under Bochs, "
+        "B: holding kern_mega's DOS.O88 and an 800-byte file: the launch, "
+        "ECHO of 60 characters and DIR add no trap line, TYPE at most the "
+        "two .stale fixups its buffer's free costs a command, and none a "
+        "kern_mega FAULT. Red with the `push cs / pop ds` put back "
+        "(ECHO 62, DIR 87, TYPE 802). 160s is 157 measured, the tree reused",
+        needs=("bochs", "nasm")),
+    Row("pxsmega", "soak", py("tests/pxsmega.py"), 200.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.50: PIXELSTEIN 3D PLAYED on kern_mega "
+        "with no #GP fixup - megatrap0 counts a launch, and the game's cost "
+        "was in the frames: px_compose stored its per-column memory through "
+        "CS and the column driver patched every sprite post through it, "
+        "173,932 completed traps in one scripted play before. MEGATRAP=1's "
+        "census (a private tree) under Bochs, B: holding PXSTEIN.O88: the "
+        "timedemo (T, the Mode X bracket), a new game in the window, walk, "
+        "turn, shoot, F into the bracket, the same there, Esc back. Every "
+        "step adds no trap line and no kern_mega FAULT. Red with one "
+        "px_compose `[es:` store put back to `[cs:` (thousands on the walk)",
+        needs=("bochs", "nasm")),
+    Row("megaflt", "soak", py("tests/megaflt.py"), 110.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.42: on kern_mega a fault in a "
+        "PACKAGE closes that package and not the machine. Under Bochs (a "
+        "286's segment checks), MEGARUN starts tests/megaflt's seven builds: "
+        "#UD in a timer callback, a worker holding the gfx lock reading past "
+        "its segment, #DE inside an fsx bracket with a mode set, #GP with a "
+        "claim, a timer and a tone held, #GP in the entry proc, #UD in a wake "
+        "that took the lock - each must be CLOSED for its vector, give back "
+        "what it held (the next one's entry sees the same free memory) and "
+        "leave the machine running: the control started last must answer a "
+        "key and a click from the host. The failing case is a `ret` at the "
+        "top of mega_fkill, which makes the first one fatal. 110s is 102 "
+        "measured",
+        needs=("bochs", "nasm"),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/flta.o88", "build/fltb.o88", "build/fltc.o88",
+               "build/fltd.o88", "build/flte.o88", "build/fltf.o88",
+               "build/fltz.o88")),
+    Row("megaown", "soak", py("tests/megaown.py"), 100.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.15's open item, 14.46: on kern_mega "
+        "the extended pool's compaction moves a package's OWN region while "
+        "that package is the caller. Under Bochs at 2MB, MEGAHOLE holds "
+        "three 60KB pool claims and closes itself, leaving a hole under "
+        "MEGAOWN's region; MEGAOWN fills the pool, frees every other block "
+        "and claims 64KB from its own wake handler. Its region must be at a "
+        "lower offset after the claim, every block's stamps and its own bss "
+        "and code must read back, and a second callback must say the same. "
+        "The failing case is mx_compactf pinning a package region, which "
+        "leaves it where it was. 100s is 82 measured",
+        needs=("bochs", "nasm"),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/megahole.o88", "build/megaown.o88")),
+    Row("megaovl", "soak", py("tests/megaovl.py"), 260.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.46: on kern_mega a C package's "
+        "OVERLAY is moved by a compaction and then used. Under Bochs, "
+        "MEGALOWH holds a top-down claim at the heap's ceiling so CWORD's "
+        "eager overlay carve (part 0, apps/cc/crt0.asm's cc_ovcarve) lands "
+        "under it, gives it back, and MEGALOWB (OS88_HIGH) claims everything "
+        "OSAPI_MEM_AVAIL says a compaction would leave, which only sliding "
+        "the carve up into the hole can place. The carve must be at a higher "
+        "segment after; then CWORD takes typing and File > Save As, and "
+        "C:\\DOC.RTF must hold the line. The failing case is cc_ovinit "
+        "without its OSAPI_MEM_MOVABLE: the carve is pinned. 260s is 225 "
+        "measured",
+        needs=("bochs", "nasm", "cc"),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/megalowh.o88", "build/megalowb.o88",
+               "build/cword.o88")),
+    Row("megahiber", "soak", py("tests/megahiber.py"), 300.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.5, 14.46: a hibernate and resume "
+        "on kern_mega IN PROTECTED MODE, under MEGATRAP=1's census (a "
+        "private tree). Bochs boots off C:'s boot partition with the system "
+        "files beside it, MEGAHIB holds 64KB of XMS and Mines a window, the "
+        "System menu hibernates, a second boot resumes: `kern_mega: resumed` "
+        "and MEGAHIB's 64KB must read back. The hibernate itself may take at "
+        "most 2,048 #GP fixups - the conventional picture was one write from "
+        "segment 0, the NULL selector, and took 32,512 null0 fixups in "
+        "HDD.DRV's PIO loop; hbm_xwconv takes the first cluster alone that "
+        "way. The failing case is that one write put back: 32,513. 300s is "
+        "266 measured, the tree's build included",
+        needs=("bochs", "nasm")),
+    Row("megap2hiber", "soak", py("tests/megap2hiber.py"), 200.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.57, SPEC.md 96.45.2.4: the PS/2 "
+        "mouse after a hibernate's REBOOT-route resume on kern_mega. Bochs "
+        "with an IntelliMouse (type=imps2) boots off C:, hibernates, powers "
+        "off and resumes, stopped by a breakpoint at hbm_wake's .nowz: the "
+        "slave's IMR must have IRQ12 MASKED there (the re-knock polls 60h, "
+        "and an ACK mou_p2_isr takes mid-knock leaves the device waiting for "
+        "a rate argument the F4 is spent as - the Victory 286's dead mouse), "
+        "and after the resume the master's IMR must be the one it hibernated "
+        "with (`not [mou_line]` was 0 for MOU_P2LINE: B8h came home 00h), "
+        "mou_p2wz still 3 and the pointer moving. The failing cases, each "
+        "verified: the slave mask out (8Fh at .nowz) and the MOU_P2LINE "
+        "guard out (master 00h). 200s is 160 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/mines.o88")),
+    Row("megakbtrip", "soak", py("tests/megakbtrip.py"), 360.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.61, 14.62: the keyboard INSIDE a "
+        "DOS program and the keyboard and pointer after it, over ten round "
+        "trips on kern_mega's park arm with the pointer moving across every "
+        "launch. Bochs with an IntelliMouse; tests/dostrap/kbtrip.asm "
+        "(assembled by the row) reports port 64h at entry and whether one "
+        "key arrived, on E9. The handoff masked IRQ12 with the PS/2 mouse "
+        "still reporting, so a packet byte stranded in the 8042's one "
+        "buffer and no key reached the program (`entry 64=31`). Each trip "
+        "asserts the key, the return and the pointer moving; the next trip's "
+        "typed command is the desktop's keyboard. The failing case, "
+        "verified: the tree before 14.62 (--build on a copy), 3 of 6 trips "
+        "with no key and a stray `2` typed on the seventh. 360s is 300 "
+        "measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin")),
+    Row("megapiclose", "soak", py("tests/megapiclose.py"), 450.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.63, 14.64, SPEC.md 96.45.2.5, "
+        "9.9.9: the mouse moved DURING the live resume from a DOS program "
+        "came home with the mouse AND the keyboard dead on the Victory 286 "
+        "- a byte stranded in the 8042's one buffer with its edge erased by "
+        "a BIOS that initialises the 8259 on a 286's reset path. No emulator "
+        "loses an edge, so the row builds two private trees with PICLOSE "
+        "(Makefile: both 8259s initialised on every reflection's way down, "
+        "after a window that waits for a byte). Bochs with an IntelliMouse, "
+        "KBTRIP round trips with the pointer moving from the key through "
+        "the whole return; each trip asserts the pointer moving and the next "
+        "command typed into the DOS window. RED, PICLOSE=2 (mega_kwd "
+        "compiled out): must die - it does on trip 1, pointer and keyboard "
+        "both. GREEN, PICLOSE=1: six trips clean, and E9's `8042 edge lost` "
+        "at least once (seven in the measured run). 450s is 383 measured "
+        "with both trees built",
+        needs=("bochs", "nasm"), timeout=1500),
+    Row("mousess", "soak", py("tests/mousess.py"), 20.0,
+        "SPEC.md 9.10.1: the mouse ISR's body runs on LOW_SEG whatever stack "
+        "it interrupted. SeaBIOS serves int 13h and int 16h on a stack of its "
+        "own with IF on, so the ISR can arrive with SS anywhere, and its body "
+        "reaches .lowbss through SS. tests/msstk makes the case on purpose "
+        "(SS:SP in a claim of A5h, IRQ0 masked) while mouse packets with "
+        "button edges arrive; the claim must come back untouched and a "
+        "breakpoint just past MOUPRIV_ENTER must never see a foreign SS. "
+        "VERIFIED TO FAIL on the entry before 9.10.1: 16 bytes of the claim "
+        "written at evq_buf's offset. 20s is 17 measured",
+        needs=("marty",), serial=True, wants=("build/msstk.o88",)),
+    Row("b4walk", "soak", py("tests/b4walk.py"), 40.0,
+        "SPEC.md 5.4.1.5: a gfx_blit4 a window CUTS walks the region, every "
+        "fragment a piece at the fast path's price. A dithered 200x112 block "
+        "under a Disk window moved twice, on VGA and on a Hercules: each "
+        "heal under the uncovered blit's cycles (SPEC.md 5.4.1.6's narrow "
+        "rule is what holds the second one there), no gfx_fill but one "
+        "per row of an odd-nibble column, every piece and fill inside a "
+        "fragment and the pieces tiling the region exactly, the pixels "
+        "equal to the uncovered picture - and both nibble phases met. "
+        "VERIFIED TO FAIL on the kernel before the walk (every heal 23.6x "
+        "and 600+ fills) and with the odd column's draw removed (68 and 52 "
+        "pixels). 40s is 35 measured",
+        needs=("marty",), serial=True, wants=("build/b4walk.o88",)),
     Row("blitcut", "soak", py("tests/blitcut.py"), 330.0,
         "SPEC.md 39.14.7.2: does a STRADDLING gfx_blit4 draw the same pixels "
         "cut at the seam as it does whole-virtual, and is it several times "
@@ -13358,7 +15239,689 @@ SOAK = [
         "diskclone - Clone Disk... (SPEC.md 18.99/22.21) driven end to end, "
         "with the assertion that cannot pass for the wrong reason: the two "
         "floppies read back off the guest and diffed byte for byte. Cross "
-        "drive, same drive, the un-swapped-disk guard and Esc",
+        "drive, same drive, the un-swapped-disk guard and Esc. Byte for "
+        "byte BAR BS_VolID: the copy carries a serial of its own (SPEC.md "
+        "18.8.2.1), different from the source's and from the other clone's "
+        "- red on all three with DSK_VOLID emptied",
+        needs=("marty",), serial=True),
+    Row("sheetfmt", "soak", py("tests/sheetfmt.py"), 180.0,
+        "SPEC.md 81.38: do SHEET's three file formats say what they mean? "
+        "The host authors a SYLK file from the published grammar, the guest "
+        "opens it by ASSOCIATION and saves it as BIFF3, SYLK and DIF, and "
+        "os88flush takes the floppy back so the host can read all three. "
+        "Nothing outside SHEET had ever read one of its files before this, "
+        "and it found two defects on its first run - neither visible from "
+        "inside, because in both cases the writer and the reader made the "
+        "SAME mistake and cancelled it",
+        needs=("marty",), serial=True),
+    Row("sheetdec", "soak", py("tests/sheetdec.py"), 600.0,
+        "SPEC.md 81.10.10: a formula saved in Normal format comes back as a "
+        "FORMULA. SHEET's own round trip - SYLK in, Normal out (checked by "
+        "the host's decode_rpn against the document's function table), "
+        "reopened, SYLK out - and two BIFF files the host writes the way "
+        "Excel does, BIFF3 and a BIFF4 worksheet, with the tokens SHEET's "
+        "writer never emits and eight it must refuse by keeping the value - "
+        "three of them cached with a result that is not a number at all. "
+        "It found IF losing a text branch on its way to passing",
+        needs=("marty",), serial=True),
+    Row("sheeteval", "soak", py("tests/sheeteval.py"), 240.0,
+        "SPEC.md 81.49-81.52: what SHEET's evaluator answers, checked by the "
+        "host - the row an evaluator parity gap goes into when it closes. "
+        "CHOOSE returning the value it picked (it was an integer function: "
+        "2.5 answered 2, text answered 0), a quoted ')' not counting as a "
+        "parenthesis when arguments are stepped over, the WHOLE formula "
+        "parsed (=1+2 3 answered 3) with spaces dropped where it is stored "
+        "(=A1 * ( A2 - 1 ) answered 2), the logical value, a total of "
+        "totals, and IF keeping a text branch. Each "
+        "fix fails its own cases against the binary before it",
+        needs=("marty",), serial=True),
+    Row("sheetbool", "soak", py("tests/sheetbool.py"), 300.0,
+        "SPEC.md 81.51: what SHEET's readers make of a LOGICAL value. The "
+        "host authors a DIF, a CSV, a dBASE and a BIFF3 file holding TRUE "
+        "and FALSE, SHEET opens each and saves Normal, and the BOOLERR "
+        "records say it kept a logical. Before, a BOOLERR read as 1, DIF's "
+        "TRUE indicator left the cell blank, and CSV and dBASE made labels "
+        "of them - ten of its checks fail against that binary",
+        needs=("marty",), serial=True),
+    Row("sheetxl2", "soak", py("tests/sheetxl2.py"), 420.0,
+        "SPEC.md 81.52: SHEET opens EXCEL 2.1's OWN FILES. Excel 2.1 saves "
+        "BIFF2 and the reader took BIFF3/4 only, so one opened empty. Arm A "
+        "is a BIFF2 file the host authors - every cell record, tAttr's one-"
+        "byte data, a BIFF2 STRING, the attribute bytes' formats; arm B is "
+        "three of Excel 2.1d's own sample worksheets, extracted at run time "
+        "from the user's release archive beside the repo (skipped, with a "
+        "notice, where it is absent) and compared cell by cell with what "
+        "the host reads in Excel's file. Arm B found a fold defect: a SUM "
+        "over formula cells that fold ranges of their own lost its range",
+        needs=("marty",), serial=True),
+    Row("sheetspill", "soak", py("tests/sheetspill.py"), 180.0,
+        "SPEC.md 81.54: a label wider than its column runs on into the "
+        "EMPTY cells to its right, as Excel draws it, and stops at the first "
+        "that holds anything; a formula's text RESULT runs on too. Read off "
+        "the glass: the host finds the grid by its own lines and counts ink "
+        "inside each cell. Five of its checks fail against the binary that "
+        "clipped every label to its own cell",
+        needs=("marty",), serial=True),
+    Row("sheetnumfmt", "soak", py("tests/sheetnumfmt.py"), 300.0,
+        "SPEC.md 81.55: Excel 2.1d's twenty-one number formats. SHEET had "
+        "four, and a date showed as its serial. The host writes a BIFF3 file "
+        "of twenty cells in different formats; each cell's TEXT is read off "
+        "the glass by the kernel's own glyphs, a cell formatted while EMPTY "
+        "shows its typed value by that format, and Save As Normal keeps "
+        "every format and writes Excel's 21 FORMAT records. 24 of its 27 "
+        "checks fail against the binary before",
+        needs=("marty",), serial=True),
+    Row("sheetcolw", "soak", py("tests/sheetcolw.py"), 360.0,
+        "SPEC.md 81.56: each column its own width. SHEET had one for the "
+        "whole sheet and skipped a file's COLWIDTH records. The host's SYLK "
+        "sets A to 20 and C to 3; the grid's lines are measured off the "
+        "glass and each cell's text read, a click in the narrow column must "
+        "land there, Column Width widens only its column, SYLK and Normal "
+        "carry the widths, and Insert Column moves them with their columns",
+        needs=("marty",), serial=True),
+    Row("sheetundo", "soak", py("tests/sheetundo.py"), 360.0,
+        "SPEC.md 81.57: Edit > Undo and Redo, Excel 2.1's one level. An "
+        "entry undone and redone, a paste, a clear through its dialog and an "
+        "inserted column each undone, and a format after a paste ending Undo "
+        "rather than letting it put the paste back - read off the glass, "
+        "then the saved document checked whole",
+        needs=("marty",), serial=True),
+    Row("sheetside", "soak", py("tests/sheetside.py"), 300.0,
+        "SPEC.md 81.58: Insert and Delete Row move a cell's BORDERS with it "
+        "(and its notes, by the same routine). They moved the cells alone. "
+        "With gridlines off a border is the only ink on an edge: an insert "
+        "must carry it down, a delete bring it back, deleting its own row "
+        "take it away, and the saved file keep it on its cell",
+        needs=("marty",), serial=True),
+    Row("sheetrowh", "soak", py("tests/sheetrowh.py"), 400.0,
+        "SPEC.md 81.60: each row its own height, in points as Excel keeps "
+        "it. A BIFF3 file's ROW records set the rows the glass then measures "
+        "(a default-flagged one ignored), the tall row's text sits low, a "
+        "click below the odd rows lands in its own row, Row Height takes "
+        "9.75 points and opens on the row's own height, BIFF writes the "
+        "twips back, Insert and Undo carry them, and scrolling onto a tall "
+        "row shows it whole with no blit by the standard height",
+        needs=("marty",), serial=True),
+    Row("sheetsort", "soak", py("tests/sheetsort.py"), 400.0,
+        "SPEC.md 81.61: Data > Sort orders every constant as Excel does - "
+        "numbers, labels in any case, logicals, errors, formulas by their "
+        "results - where labels, logicals and errors sat the sort out; and "
+        "an error constant survives Fill Right, Copy/Paste and typing, "
+        "which stored 0, pasted 0 and made a label",
+        needs=("marty",), serial=True),
+    Row("sheetmsub", "soak", py("tests/sheetmsub.py"), 400.0,
+        "SPEC.md 81.84: subroutines - a defined name called like a function "
+        "runs from that cell, ARGUMENT binds in the order it EXECUTES, and "
+        "RETURN's value comes back by evaluating the calling cell a second "
+        "time (INPUT's mechanism). Five shapes: a call inside an expression, "
+        "two arguments whose order is visible, a whole-statement call, a TEXT "
+        "answer, and a call inside another subroutine's RETURN - which the "
+        "design review caught losing the call until a pending call outranked "
+        "every other control in the step",
+        needs=("marty",), serial=True),
+    Row("sheetmref", "soak", py("tests/sheetmref.py"), 400.0,
+        "SPEC.md 81.85: the reference family - OFFSET, ABSREF, RELREF, "
+        "REFTEXT, TEXTREF, DEREF, SELECTION, CALLER, and ACTIVE.CELL as a "
+        "reference. A reference function answers its top-left VALUE and "
+        "leaves the reference for a reference argument that is exactly one "
+        "call to it: both halves, a range, nesting, CALLER in and out of a "
+        "subroutine, the manual's own #REF! for TEXTREF, and an expression "
+        "refused as a target",
+        needs=("marty",), serial=True),
+    Row("sheetmctl", "soak", py("tests/sheetmctl.py"), 900.0,
+        "SPEC.md 81.86: macro control - ERROR(FALSE) and ERROR(TRUE,ref), "
+        "RESTART(1) two subroutines deep, ALERT's type 1 answering OK and "
+        "Cancel, the Single Step dialog (Step, then Continue), Esc raising it "
+        "mid-loop and Halt ending the run, CANCEL.KEY(FALSE) ignoring Esc, "
+        "WAIT on the timer, and a run's dialog being modal to the sheet",
+        needs=("marty",), serial=True),
+    Row("sheetminfo", "soak", py("tests/sheetminfo.py"), 400.0,
+        "SPEC.md 81.87: macro information - thirty rows of GET.CELL, "
+        "GET.FORMULA, GET.NAME, GET.DEF, GET.NOTE, NAMES, GET.DOCUMENT, "
+        "GET.WINDOW, GET.WORKSPACE and DIRECTORY against a fixture that fixes "
+        "each answer, including a DIRECTORY walk into a folder and a refused "
+        "one that must leave the instance where it stood",
+        needs=("marty",), serial=True),
+    Row("sheetmcmd", "soak", py("tests/sheetmcmd.py"), 400.0,
+        "SPEC.md 81.88: command equivalents, slice 3a - Format (ALIGNMENT, "
+        "FORMAT.FONT, FORMAT.NUMBER, BORDER, CELL.PROTECTION, COLUMN.WIDTH, "
+        "ROW.HEIGHT), Edit (FILL.DOWN, INSERT, EDIT.DELETE, PASTE.SPECIAL, "
+        "CANCEL.COPY), Options (CALCULATION, DISPLAY, PROTECT.DOCUMENT) and "
+        "SET.DATABASE, each read back through the GET.* functions 81.87 "
+        "verified",
+        needs=("marty",), serial=True),
+    Row("sheetmcmd2", "soak", py("tests/sheetmcmd2.py"), 400.0,
+        "SPEC.md 81.89: command equivalents, slice 3b - FORMULA.GOTO/FIND/"
+        "FIND.NEXT, DEFINE/SET/DELETE.NAME, NOTE, SORT, RUN as a subroutine, "
+        "VSCROLL/VLINE/HSCROLL, SELECT.END both ways, UNLOCKED.NEXT/PREV "
+        "wrapping, SELECT.LAST.CELL, and FIND.PREV refused into ERROR's ref",
+        needs=("marty",), serial=True),
+    Row("sheetmcmd3", "soak", py("tests/sheetmcmd3.py"), 400.0,
+        "SPEC.md 81.90: command equivalents, slice 3c - FORMULA.FILL moving "
+        "relative references both ways, DATA.SERIES linear and growth, "
+        "FILE.DELETE (off the volume itself) and its refusal, SAVE.AS "
+        "writing the very file the answers are read from, and OPEN ending "
+        "the run with the other document in the window",
+        needs=("marty",), serial=True),
+    Row("sheetmfile", "soak", py("tests/sheetmfile.py"), 400.0,
+        "SPEC.md 81.91: macro text files - FOPEN/FREADLN/FREAD/FPOS/FSIZE over "
+        "a file the host wrote, a read-only channel refusing FWRITE, "
+        "FWRITELN/FWRITE and an FPOS overwrite checked as BYTES off the "
+        "volume, and #N/A for a missing file and for one bigger than a "
+        "channel's share of the module claim's tail",
+        needs=("marty",), serial=True),
+    Row("sheetmevt", "soak", py("tests/sheetmevt.py"), 400.0,
+        "SPEC.md 81.92: ON.KEY - Ctrl+Q and F7 bound to counting macros and "
+        "PRESSED with no run going, F7 unbound again, and x bound to nothing "
+        "so that typing it over a cell leaves the cell empty",
+        needs=("marty",), serial=True),
+    Row("sheetmmenu", "soak", py("tests/sheetmmenu.py"), 400.0,
+        "SPEC.md 81.95: custom menus - a menu after Help built from a range, "
+        "a command added, ticked, greyed and renamed, then USED with the "
+        "mouse (the renamed one runs, the greyed one does not); a menu too "
+        "wide for the bar refused; the custom bar made, shown and picked "
+        "from, and SHOW.BAR()/DELETE.BAR/DELETE.MENU putting SHEET's own back",
+        needs=("marty",), serial=True),
+    Row("sheetmdbox", "soak", py("tests/sheetmdbox.py"), 400.0,
+        "SPEC.md 81.96: DIALOG.BOX - a dialog described by a range, typed "
+        "at, clicked and Tabbed through, then Entered: the text, check box, "
+        "option group and number box results in the seventh column and the "
+        "answer 1; Esc and Cancel answering FALSE; OK by the mouse; and a "
+        "list box refused",
+        needs=("marty",), serial=True),
+    Row("chartname", "soak", py("tests/chartname.py"), 300.0,
+        "SPEC.md 82.15: CHART charts the range Sheet NAMED, not the lowest "
+        "column - THE FIRST TEST CHART HAS EVER HAD, and it exists because "
+        "of what that cost: the filter NEVER RAN, ct_reset_series having "
+        "zeroed ct_wantrng at the top of every reader, and 82.15 asserted the "
+        "opposite for two cycles because there was no chart row to say "
+        "otherwise. The fixture makes the two answers DIFFER - column A is "
+        "10,20,30,40, column B is 7,3,9,1 and the only name is B1:B4 - so "
+        "Automatic keeps column A and the name must keep B. Check 5a is the "
+        "control: a row that only asked whether picking a name charted "
+        "SOMETHING would have passed against the broken code, which charted "
+        "the wrong column every time. The values are deliberately not "
+        "proportional, because ch_scale would give two proportional columns "
+        "the same scaled words and only [ch_e10] would differ",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartread", "soak", py("tests/chartread.py"), 300.0,
+        "SPEC.md 82.18: CHART's THREE readers are one reader. It opens SYLK, "
+        "DIF and BIFF, and until this row only SYLK had ever been executed "
+        "by a test - chartname opens one .SLK and nothing else - so "
+        "ct_read_dif, ct_read_biff and ct_rkdec were a few hundred bytes of "
+        "record walking apiece that nothing ran. One dataset is written "
+        "three ways by the HOST (and read back with tools/os88sheetfmt.py "
+        "before the guest sees it, so a writer defect cannot pass as a "
+        "reader one) and the three readings are compared to EACH OTHER: "
+        "ct_valcnt, ct_mincol, [ch_e10] and the ct_wvals the drawing "
+        "actually runs on. Column A is 12.5, -3.25, 1000.0, 0.125 so BIFF "
+        "must carry fractions as NUMBER records while column B's whole "
+        "numbers go as RK, putting ct_rkdec under the row too. Check 4 is "
+        "why 1-3 are not enough: a decoder that drops a sign or shifts an "
+        "RK wrong still hands ct_record four numbers. Check 5 is why 4 is "
+        "not enough either - it ties the published words back to the data, "
+        "so three readers agreeing on rubble cannot pass. The BIFF file "
+        "also carries a FORMULA whose cached result is #DIV/0! (top word "
+        "0xFFFF), which 82.18 says must be skipped and had no gate. Red on "
+        "purpose five ways: ct_rkdec shifted by 1 and the DIF parse stepped "
+        "by 3 each fail 4 ALONE; dropping the per-file ct_nnames reset fails "
+        "6 alone; deleting 82.18's 0xFFFF test charts the dead cell and "
+        "fails 3 and 4; and abs() in ct_record's store - a defect SHARED by "
+        "all three readers, so they still agree - fails 5 with 4 passing. "
+        "Checks 7-8 are Data > Column (82.12), the untested twin of 82.15's "
+        "range filter: 7 on the BIFF (no names) and 8 on the SYLK (one "
+        "name), where the SAME menu item must still mean a column. 8 FAILED "
+        "the first time it ran - the handler asked whether the FILE had any "
+        "names rather than which SLOT was picked, so one name made all eight "
+        "slots names and Column B selected a name record nothing defined. "
+        "Fixed in the same commit; restoring it fails 8 alone",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartgal", "soak", py("tests/chartgal.py"), 600.0,
+        "SPEC.md 82.4/82.6: the Gallery actually DRAWS seven different "
+        "charts - THE FIRST CHART ROW THAT LOOKS AT PIXELS. chartname and "
+        "chartread both read numbers out of bss, and no amount of that can "
+        "see the drawing: a ch_draw arm that silently did nothing leaves "
+        "ct_valcnt, ct_mincol and ct_wvals all correct. It reads 82.1's "
+        "offscreen canvas (240x160 4bpp at ct_chartseg) rather than the "
+        "screen, which is the buffer both halves draw into and what Export "
+        "as BMP writes. Checks: every type drew ink; no two types drew the "
+        "SAME picture; Column and Bar are TRANSPOSED by longest-run (Excel's "
+        "naming - Bar is the horizontal one); Area carries strictly more ink "
+        "than Line, being the same walk filled to the axis; and Pie's "
+        "bounding box has an inked centre with four blank corners. Red on "
+        "purpose: ct_gal_map's Bar entry pointed at CH_T_COLUMN fails 2 and "
+        "3, and ch_draw's Area arm sent to .line fails 2 and 4 (Area==Line, "
+        "719 ink each). The canvas is read with the guest PAUSED, after it "
+        "has CHANGED from the previous type's AND the screen has settled - "
+        "all three are needed: a running guest redraws under a 19,200-byte "
+        "read, settle() alone returns before the drawing starts (the frame "
+        "is already still), and the change alone cannot tell started from "
+        "finished. An earlier version took the first picture seen twice and "
+        "loosened check 2 to a pixel threshold to tolerate a Pie that "
+        "sometimes never settled - and THAT MADE THE ROW MISS ITS OWN "
+        "MUTATION on one run. Both comparisons are exact again",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chart2ser", "soak", py("tests/chart2ser.py"), 300.0,
+        "SPEC.md 82.8/82.8.1: CHART keeps the TWO lowest columns, and "
+        "DEMOTES. chartgal proves Scatter and Combination draw differently "
+        "from the other five; this is the data model under them, which 82.8 "
+        "calls the hard half ('a data-model change, not a drawing one'). "
+        "Check 3 is why the row exists: ct_record demotes a series when a "
+        "LOWER column arrives rather than discarding it, and a SYLK in plain "
+        "row-major order never reaches that path - the lowest column is in "
+        "the first row and nothing supersedes it - so DEMOTE.SLK puts column "
+        "B in rows 0-3 and column A only in rows 4-7. Check 2 is check 1's "
+        "control: two counts would pass if both series held the same column, "
+        "and the demote path COPIES one array over the other, so the values "
+        "are what say the copy took the right source - but they have to be "
+        "read off the DEMOTED file, which is check 3a and which the first "
+        "version of this row did not have: it checked values on the "
+        "row-major file, the one that never demotes, and MISSED the "
+        "wrong-direction-copy mutation entirely. Red on purpose, twice each: "
+        "jumping over the demotion fails 3 and 3a; copying it the wrong way "
+        "round fails 3a ALONE, every count still right. ch_max2 is read on a "
+        "SCATTER because ch_prep2 runs only in the two ch_draw arms that "
+        "spend it - on the Column chart a file opens as it is still zero, "
+        "which this row first reported as a shared maximum",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartexp", "soak", py("tests/chartexp.py"), 300.0,
+        "SPEC.md 82.13: the series' decimal exponent, at both ends and in "
+        "the middle. ch_scale picks one E per series to fit signed words, "
+        "capped at CH_E10_MAX 4 and CH_E10_MIN -9, and [ch_e10] is how the "
+        "labels are told. One check per clause: positive E keeps fractions "
+        "(44.1 -> 4410 at E=2), negative E makes a large series chartable at "
+        "all (3.4e6 -> 3400 at E=-3, the section's own example), the cap "
+        "binds (0.004 wants E=6, gets 4), scaling ROUNDS rather than "
+        "truncates (0.66666e4 is 6666.6 -> 6667, and one unit is the whole "
+        "of that sentence), and [ch_e10] is left holding SERIES ONE's - "
+        "ct_finalize scales series two first for exactly that reason. Every "
+        "check asserts the WORDS as well as E, since a right exponent with "
+        "wrong words draws a correct axis against wrong bars. Red on "
+        "purpose: dropping the round fails 4 alone, raising the cap fails 3 "
+        "alone, and swapping the two ch_scale calls fails ALL FIVE - on a "
+        "one-column file ch_e10 comes back 0 with the words still right, "
+        "because scaling an empty second series writes ch_e10 too",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("sheettable", "soak", py("tests/sheettable.py"), 400.0,
+        "SPEC.md 81.114: Data > Table, the last menu command Excel 2.1d has "
+        "that SHEET did not. A result cell is the governing formula "
+        "evaluated with an input value substituted into an input cell "
+        "elsewhere on the sheet, so the assertion is the NUMBERS and the "
+        "fixture is built so no two expected values agree - a transposed "
+        "substitution cannot land on a right answer by luck. Two tables, "
+        "side by side in rows 1-3 so both can be selected by clicking: a "
+        "one-input table whose values run down the left column and formulas "
+        "across the top, and a two-input table with one corner formula. "
+        "Check 4 reads the INPUT CELLS back, which is what caught the "
+        "substitution writing to row = the value (81.114.6); check 5 names "
+        "the FIRST result of each table, which is the one and only cell the "
+        "pass stamp buys - this row first asked instead whether the four "
+        "results DIFFER, on a story about memoization repeating ONE number, "
+        "and that check PASSED on its own mutation because 0, 14, 18 and 19 "
+        "are four distinct values",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettbl2", "soak", py("tests/sheettbl2.py"), 520.0,
+        "SPEC.md 81.114.7: a Data > Table is PROTECTED and clears "
+        "all-or-nothing. sheettable proves the numbers; this proves the "
+        "thing that makes them a table - the Reference Guide's 'you cannot "
+        "edit cells inside the table' and 'you must clear all the resulting "
+        "values'. Each table outlives its run in a list carved from the "
+        "border claim, and each result cell is marked by bit 7 of the BORDER "
+        "byte, which sh_prot_blocked already fetches. THREE of its nine "
+        "checks are there because a mutation refused to fail, and each is a "
+        "shape worth keeping: (a) a cheap early-out makes every check behind "
+        "it vacuous - sh_prot_blocked returns at once on [sh_ntbl]==0, so "
+        "with ONE table the mutation that leaves cleared cells MARKED passed "
+        "all six checks, hence two tables; (b) allowed and harmless are "
+        "different facts - the check that the Formats clear went through "
+        "passed throughout the defect where that clear wiped the mark AND "
+        "both protection bits, so check 5 reads the border byte itself; (c) "
+        "a fix needs the path it exists for - the unmark on a table's drop "
+        "is unreachable through Clear > All, which removes the whole record "
+        "anyway, so check 8 clears the second table through FORMULAS, the "
+        "path 81.63 keeps the record on. Both input cells are DELIBERATELY "
+        "ABSENT from the fixture, the arm sheettable's zero-filled inputs "
+        "cannot reach. The menu is driven BY NAME out of the assembler's map "
+        "and the guest's own rects, so an inserted item cannot silently aim "
+        "it at a live neighbour the way index 8 did to three rows",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettblbiff", "soak", py("tests/sheettblbiff.py"), 520.0,
+        "SPEC.md 81.114.10: a Data > Table survives SAVE AND LOAD. Until "
+        "this stage a table saved to any format kept its NUMBERS and "
+        "silently stopped being a table. Excel writes one as a FORMULA "
+        "record per RESULT cell whose whole token array is a single tTbl, "
+        "plus one DATATABLE (0236H in BIFF3) immediately after the first "
+        "FORMULA record of the table's RANGE - which is usually the user's "
+        "own top-row formula, not a result cell. THE HOST AUTHORS THE "
+        "INPUT, which is 81's format-gate rule: a file SHEET never wrote "
+        "cannot carry a writer defect, so a reader defect has nothing to "
+        "cancel against, and that trap has been caught here twice. The "
+        "input cell is a COLUMN one deliberately: the format names a "
+        "one-input table's single cell in the FIRST pair whichever kind it "
+        "is, with option bit 2 giving the orientation, where this app keeps "
+        "the row input first and the column input second ALWAYS - so the "
+        "column shape is the one where a verbatim copy of the sixteen bytes "
+        "is wrong in BOTH directions, and it is the common shape. Check 3 "
+        "runs Calculate Now on the LOADED table, which is what says the "
+        "record was read into a working table rather than merely stored; "
+        "check 5 asserts the tTbl's own BYTES, because a check that merely "
+        "noticed the formula would not decode is satisfied by any corrupt "
+        "array at all",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettblshift", "soak", py("tests/sheettblshift.py"), 560.0,
+        "SPEC.md 81.114.9: a Data > Table's stored RECTANGLE follows the "
+        "grid. Insert/Delete Row/Column move the cells and move a result "
+        "cell's MARK with them for free - it is a bit in the border byte, "
+        "and sh_rc_sides already shifts that table - but the 16-byte table "
+        "record did not move, so a table whose sheet gained a row above it "
+        "was guarded against a rectangle one row too high. sh_rc_table is "
+        "the generic shifter for (packed row/sheet, column) records and "
+        "does NOT fit: a row inserted above moves the rectangle, one "
+        "inserted INSIDE grows it, a delete inside shrinks it, deleting the "
+        "top row takes the formulas so the table goes, and deleting an "
+        "input cell leaves nothing to substitute. Every rectangle is read "
+        "OUT OF THE RECORD, never inferred from what the guard then "
+        "allowed - the cells moving and the record moving are different "
+        "facts and the whole defect is the two disagreeing. Check 5 is "
+        "Undo, which did not carry the table list at all until this stage: "
+        "an undone Insert Row restored every cell and every mark and left "
+        "the rectangle shifted, which is a half-restoring Undo and worse "
+        "than none. Check 7 is a SORT, an arbitrary permutation, which "
+        "drops any table whose range it touches and SAYS SO on the status "
+        "line - the message is asserted too, because a table silently "
+        "ceasing to be one is found out about much later",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettblcalc", "soak", py("tests/sheettblcalc.py"), 520.0,
+        "SPEC.md 81.114.8: a Data > Table RECALCULATES, and Excel's three "
+        "modes decide when. A result cell holds a STORED value, so this "
+        "app's whole recalculation - advance [sh_pass] and let sh_eval_cell "
+        "re-evaluate lazily - does nothing for it; the table has to be "
+        "computed again, one full formula evaluation per result cell. That "
+        "cost is why Excel 2.1's Calculation dialog offers Automatic / "
+        "Automatic except Tables / Manual rather than two modes "
+        "(dialog_calculation.png is the authority), and this row drives all "
+        "three. sh_commit is the one funnel for typing, Paste, Fill and a "
+        "sort's write-back; Del and Edit > Clear bypass it and owe their "
+        "own call; Calculate Now re-runs tables WHATEVER the mode. Every "
+        "value is read out of the CELL RECORDS, which is exact for a stored "
+        "number and is what lets the row assert a table that did NOT move. "
+        "Checks 3 and 5 assert that nothing changed and are only worth "
+        "anything because 4 and 6 follow them - the later check needs the "
+        "earlier edit to have landed, so an edit that silently missed fails "
+        "the pair, where a 'nothing changed' check alone passes when the "
+        "keystroke never arrived. CHECK 7 USES SHEET 2, and exists because "
+        "a mutation refused to fail: deleting the [sh_cursheet] assignment "
+        "from the walk passed all seven checks above, every one of which "
+        "used Sheet 1 - where cursheet 0 makes the packed row equal the "
+        "plain row and the assignment is a no-op. That is the same bug "
+        "class, in the same feature, that 81.114.4 records. The sharp half "
+        "is the GHOST: Sheet 2's values can survive by not being touched, "
+        "where a cell appearing at those coordinates on Sheet 1 can only "
+        "have been written by this walk",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
+        "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
+        "to the new box. The grow box dragged in 160x24 and back out, with "
+        "the kernel's W_W/W_H, the package's sh_cw/sh_ch and the walk counts "
+        "sh_vcols/sh_vrows read each time - the counts are the claim, since "
+        "sh_geom walks slots until the pixels run out rather than reading a "
+        "number from the template. The pixel leg is 11.94.5.1's: the status "
+        "strip's rule must be solid to the NEW right edge and gone from the "
+        "old one, because every count can be right while the layout is "
+        "still drawn at the width the window ASKED for",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheetmkind", "soak", py("tests/sheetmkind.py"), 400.0,
+        "SPEC.md 81.97: the reader half - a host-written BIFF2 macro sheet "
+        "(BOF dt 0040H) whose formulas are a ptg-58H command, a variable and "
+        "a fixed extension function and RETURN, saved Normal: dt 0040H and "
+        "all four formulas back; a worksheet opened next saves as 0010H",
+        needs=("marty",), serial=True),
+    Row("sheetmtail", "soak", py("tests/sheetmtail.py"), 400.0,
+        "SPEC.md 81.98: the pulldown leaves nothing behind it - Data's panel "
+        "hangs past the window over the dock, is banked, and closing it "
+        "leaves every row below the window as it was; with the window "
+        "dragged low the panel runs off the screen, is NOT slid up, and the "
+        "bank clips at the last row",
+        needs=("marty",), serial=True),
+    Row("sheetmtailvga", "soak", py("tests/sheetmtail.py", "--card", "vga"),
+        400.0,
+        "SPEC.md 81.98.1: the pulldown's save-under on the FOUR-PLANE path "
+        "(os8088_xt_vga, 640x480): the bank is taken, closing changes nothing "
+        "the panel covered, and the bank path lands on the same pixels as a "
+        "full repaint - the A/B that caught the stale status line",
+        needs=("marty",), serial=True),
+    Row("sheetmsep", "soak", py("tests/sheetmsep.py"), 400.0,
+        "SPEC.md 81.109: every built-in pulldown carries Excel's group "
+        "separators as a hairline at row_top + 10, exactly where sh_msep "
+        "says and nowhere else, and no panel grew - 12 * n + 4, so no row "
+        "moved",
+        needs=("marty",), serial=True),
+    Row("sheetrefcyc", "soak", py("tests/sheetrefcyc.py"), 400.0,
+        "SPEC.md 81.108: Formula > Reference and F4, Excel's own - the "
+        "reference at the caret round A1 > $A$1 > A$1 > $A1 > A1, by key and "
+        "by menu, live only mid-formula, and a function's name left alone",
+        needs=("marty",), serial=True),
+    Row("sheetopts", "soak", py("tests/sheetopts.py"), 400.0,
+        "SPEC.md 81.106: the Options menu in Excel's order off the glass, "
+        "Display... (kind 1: Formulas, Gridlines) and Workspace... (kind 2: "
+        "R1C1, the reference box then reads R1C1) setting their flags, and "
+        "Formula > Reference greyed",
+        needs=("marty",), serial=True),
+    Row("sheetclip", "soak", py("tests/sheetclip.py"), 400.0,
+        "SPEC.md 81.105 (upstream issue #152): sh_repaint arms its own clip "
+        "region - Data > Chart Column opens the Chart over SHEET and then "
+        "repaints SHEET, and SHEET's ink stays out of the Chart and its "
+        "FRAME is whole (37 of 398 edge pixels without the clip)",
+        needs=("marty",), serial=True),
+    Row("sheetstatus", "soak", py("tests/sheetstatus.py"), 400.0,
+        "SPEC.md 81.104: the status bar in Excel's shape on the 1bpp CGA - "
+        "a divider down the strip at right - SH_SB_DIVX, and the indicator "
+        "INVERTED in a solid 1px-ringed black box (its gaps black), the "
+        "message still black on white",
+        needs=("marty",), serial=True),
+    Row("sheettitle", "soak", py("tests/sheettitle.py"), 400.0,
+        "SPEC.md 81.103: the window names the document - 'Sheet - <NAME>' "
+        "from the first frame for a double-clicked document (composed at "
+        "entry, never in a paint, 11.92), renamed by File > New, and the "
+        "caption strip really redrawn",
+        needs=("marty",), serial=True),
+    Row("sheetkeys", "soak", py("tests/sheetkeys.py"), 400.0,
+        "SPEC.md 81.101: the modern keyboard shortcuts on the cycle-accurate "
+        "CGA - the captions the pulldowns draw, Ctrl+C/V copy, Ctrl+Z undo, "
+        "Ctrl+X move, Ctrl+D fill, nothing pasted mid-entry, F3/Shift+F3/"
+        "Ctrl+G/F5/Ctrl+F/Ctrl+N open their dialogs, and Ctrl+S saves",
+        needs=("marty",), serial=True),
+    Row("sheetnote", "soak", py("tests/sheetnote.py"), 300.0,
+        "SPEC.md 81.119: a cell NOTE survives a save. 81.38's shape with the "
+        "ends swapped - the host cannot author a NOTE record, so the GUEST "
+        "writes the file and the HOST reads it with a ten-line parser that "
+        "knows nothing about sheet.asm, then the file goes back in. The "
+        "reader-only mutation fails ONE check while the host still finds the "
+        "record, which is what the independent parser is for",
+        needs=("marty",), serial=True),
+    Row("sheetask", "soak", py("tests/sheetask.py"), 300.0,
+        "SPEC.md 81.118: SHEET asks before it throws a workbook away - "
+        "[sh_modified] 0 on open, 1 on an entry, 0 on a save that kept "
+        "everything and 1 again after; then the CLOSE BOX refuses and puts "
+        "75.3's Save/Discard/Cancel up, and Discard closes it. The four "
+        "flag readings are what stop a stuck 1 passing the close test",
+        needs=("marty",), serial=True),
+    Row("sheetdlgclose", "soak", py("tests/sheetdlgclose.py"), 400.0,
+        "SPEC.md 81.100: a dialog's CLOSE BOX leaves its engine usable - the "
+        "list (Format Number) and input (Goto) dialogs closed by their boxes "
+        "clear their window words, and Paste Function and Define Name then "
+        "open; the kernel only HIDES an unowned window (75.1)",
+        needs=("marty",), serial=True),
+    Row("sheetdlgcga", "soak", py("tests/sheetdlgcga.py"), 400.0,
+        "SPEC.md 81.100: SHEET's tall fixed dialogs keep their height on a "
+        "CGA (WF_KEEPH, 11.93) - Gallery 169 and Border 159 rows against a "
+        "155-row band, still on the display, and closing each leaves "
+        "nothing below SHEET's window; Alignment (121 since 81.115), list "
+        "and Data Form as controls",
+        needs=("marty",), serial=True),
+    Row("sheetmtailherc", "soak",
+        py("tests/sheetmtail.py", "--card", "herc"), 400.0,
+        "SPEC.md 81.98.1: the same save-under photographs on the Hercules "
+        "machine (os8088_5150_herc_gla, 720x348): one plane, but the "
+        "four-bank interleave and 90-byte row are its own",
+        needs=("marty",), serial=True),
+    Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
+        "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
+        "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "
+        "value and the macro was gone. Byte-level on purpose: SELECT and "
+        "RETURN are checked against the tokens in a macro sheet REAL Excel "
+        "2.1d wrote, because our reader and writer can agree with each other "
+        "and both be wrong - which is why 81.68 refused to guess. Both "
+        "tables and both ptgs, and a dotted name through the lexer",
+        needs=("marty",), serial=True),
+    Row("sheetparse", "soak", py("tests/sheetparse.py"), 400.0,
+        "SPEC.md 81.82: Data > Parse splits one column at FIXED CHARACTER "
+        "POSITIONS, not at a delimiter. 'New York' must survive as one "
+        "field - Guess's rule is two spaces - and the boundaries guessed "
+        "from the FIRST cell must be applied to rows that pad differently, "
+        "which is what separates this from a per-row tokenise. Fields are "
+        "typed by their spelling as a CSV field is, and no brackets is a "
+        "refusal rather than a no-op that eats the column",
+        needs=("marty",), serial=True),
+    Row("sheetjust", "soak", py("tests/sheetjust.py"), 400.0,
+        "SPEC.md 81.81: Format > Justify re-wraps a paragraph down the left "
+        "column at the width of the WHOLE selection, a blank cell divides "
+        "the range into sections justified inside their own rows, and a "
+        "value in the left column refuses the block rather than being "
+        "skipped - with a marker cell proving the save that shows it landed",
+        needs=("marty",), serial=True),
+    Row("sheetfunc", "soak", py("tests/sheetfunc.py"), 400.0,
+        "SPEC.md 81.62: all 48 text, information and transcendental "
+        "functions, each evaluated from a formula cached with a wrong value "
+        "and read back from SHEET's SYLK save - the gate the move of the "
+        "three families into CHART.OVL was checked against, on both builds",
+        needs=("marty",), serial=True),
+    Row("sheetmacro", "soak", py("tests/sheetmacro.py"), 400.0,
+        "SPEC.md 81.63: the macro language - FOR/NEXT nested and stepping "
+        "down, WHILE with ACTIVE.CELL and SELECT(\"R[1]C\"), IF with GOTO "
+        "and BREAK (the branch not taken runs no command), FORMULA, "
+        "SET.VALUE through a name, COPY/PASTE, CLEAR, MESSAGE, RETURN, and "
+        "ALERT then INPUT pausing a run - started from Macro > Run by name "
+        "and by reference; and a macro command in a worksheet formula inert",
+        needs=("marty",), serial=True),
+    Row("sheetdb", "soak", py("tests/sheetdb.py"), 400.0,
+        "SPEC.md 81.65: the eleven DATABASE functions - DAVERAGE DCOUNT "
+        "DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP - each "
+        "evaluated from a formula cached with a wrong value and read back "
+        "from SHEET's SYLK save. The field argument by name and by number; "
+        "criteria by exact equality, prefix, wildcard (`*`/`?`) and a "
+        "relational operator (`>15`); AND across one criteria row's columns "
+        "and OR across its rows; and DCOUNT counting numbers only against "
+        "DCOUNTA counting anything non-blank, over a Fruit row whose own "
+        "Amount is deliberately the text \"N/A\"",
+        needs=("marty",), serial=True),
+    Row("sheetcell", "soak", py("tests/sheetcell.py"), 300.0,
+        "SPEC.md 81.66: CELL's nine attributes - width row col protect "
+        "address contents format prefix type - checked against the real "
+        "text of Microsoft Excel Functions and Macros. type_of_info matched "
+        "case-insensitively; reference explicit and omitted (the current "
+        "selection, after a real click); and the defaults an untouched "
+        "cell answers (\"format\" is \"G\", \"prefix\" is \"\", \"protect\" "
+        "is 1)",
+        needs=("marty",), serial=True),
+    Row("sheetmatrix", "soak", py("tests/sheetmatrix.py"), 300.0,
+        "SPEC.md 81.67: TRANSPOSE MMULT MDETERM MINVERSE, each publishing "
+        "only its array's top-left element (Sheet has no array-formula "
+        "entry) - TRANSPOSE on a label and a number, MMULT and MDETERM on "
+        "2x2 matrices, MDETERM on a 3x3 needing a real row swap and a "
+        "post-pivot elimination pass, MINVERSE against MDETERM's own "
+        "determinant, a singular 2x2 answering 0 and #NUM! from the two "
+        "respectively, and a trivial 1x1 case at each end of the size "
+        "range. LINEST LOGEST TREND GROWTH round it out, each fitted "
+        "against the host's own least squares - a straight line, an "
+        "exponential curve, the const=FALSE arm through the origin, and a "
+        "non-positive y answering #VALUE! out of fp_ln",
+        needs=("marty",), serial=True),
+    Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
+        "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
+        "computed by SHEET and checked against the host's own arithmetic. "
+        "Every formula is authored with a WRONG cached value, so a pass means "
+        "SHEET recalculated rather than echoed. Written as the gate for moving "
+        "the family into CHART.OVL, and its first two runs found what the "
+        "move did not cause: a Save wrote the STALE value of every formula "
+        "off the glass (81.48), and MIRR discounted from the wrong period - "
+        "which SPEC's own reference table had done too",
+        needs=("marty",), serial=True),
+    Row("sheetdbcmd", "soak", py("tests/sheetdbcmd.py"), 450.0,
+        "SPEC.md 81.71: Data > Find, Extract and Delete - 81.65's criteria "
+        "engine driven from the MENU, over 81.69's two defined names. Find "
+        "selecting the first matching record whole and then stepping to the "
+        "next, the item renaming itself to Exit Find, Extract copying both "
+        "matches into a range whose header names a REORDERED SUBSET of the "
+        "fields, and Delete compacting the database while the cell one row "
+        "below it stays put - which is what separates it from Edit > Delete",
+        needs=("marty",), serial=True),
+    Row("sheetrecord", "soak", py("tests/sheetrecord.py"), 450.0,
+        "SPEC.md 81.74 and 81.107: the macro recorder, and Start Recorder "
+        "greyed until a range exists and continuing the same macro over "
+        "Stop's own RETURN(). 81.68 is titled \"the way the "
+        "recorder writes them\" and this is that recorder - it emits the SAME "
+        "language 81.63 runs, so the test does not just read the cells it "
+        "wrote, it RUNS them after clearing the originals. Set Recorder, "
+        "Record with a name, a session of selects and entries recorded in "
+        "absolute R1C1, Stop writing its own RETURN(), and a redundant click "
+        "recording nothing at all",
+        needs=("marty",), serial=True),
+    Row("sheethide", "soak", py("tests/sheethide.py"), 400.0,
+        "SPEC.md 81.73: a hidden row and a hidden column - Format > Column "
+        "Width 0, Excel's own way, on the line that used to refuse it. What "
+        "this really gates is the MAPPING hiding broke: a visible slot's "
+        "real column was the scroll origin plus the slot index, and a hidden "
+        "column ends that, so sh_geom records the mapping and four routine "
+        "pairs read it back. The headers, the cell contents and the hit test "
+        "each reach it through a different one of them - a slot showing C1 "
+        "while a click on it selects B1 is what a break looks like. 81.73.2's "
+        "heading drag rides with it: the edge moves 24px and widens ONE "
+        "column by exactly that",
+        needs=("marty",), serial=True),
+    Row("sheetseries", "soak", py("tests/sheetseries.py"), 450.0,
+        "SPEC.md 81.72: Data > Series - two dialogs in sequence (the type as "
+        "a radio column, the step as a text field) over a direction derived "
+        "from the selection's shape. Linear with a FRACTIONAL step of 2.5, "
+        "which sh_pnum_at would have refused; Growth multiplying; Date: "
+        "Month rolling the month and clamping the day; Date: Year; and a "
+        "column whose first cell is a label skipped whole while the one "
+        "beside it in the same selection still fills",
+        needs=("marty",), serial=True),
+    Row("sheetform", "soak", py("tests/sheetform.py"), 450.0,
+        "SPEC.md 81.71.5: Data > Form - one record at a time, the sixth "
+        "dialog engine and the first one that lives in CHART.OVL behind "
+        "resident thunks, so this gates that arrangement as much as the "
+        "feature. The counter and the fields moving together, a field typed "
+        "over reaching the CELL, New growing DATABASE, and Close putting the "
+        "user's own selection back rather than leaving it on the last field "
+        "edited. It found `Veg` drawn over `Fruit` reading `Vegit`",
+        needs=("marty",), serial=True),
+    Row("sheetfreeze", "soak", py("tests/sheetfreeze.py"), 400.0,
+        "SPEC.md 81.70: Options > Freeze Panes. Nothing a file holds can "
+        "show a freeze, so every assertion is a cell's text read off the "
+        "glass with the kernel's own glyphs: the split refused on A1 in its "
+        "own words, then frozen at B2 and the selection driven well down "
+        "and well right - A1 still in the corner while the cell beside it "
+        "is past B1 and the cell under it past A2 - and Unfreeze letting "
+        "the corner scroll away again",
         needs=("marty",), serial=True),
     Row("fmtlow", "soak", py("tests/fmtlow.py"), 65.0,
         "fmtlow - Format Disk... reclaims a disk it cannot READ (SPEC.md "
@@ -13373,12 +15936,25 @@ SOAK = [
         "disk that it can then format (the docstring has the three ways). "
         "Measured at 60s",
         needs=("marty",), serial=True),
+    Row("fmtpair", "soak", py("tests/fmtpair.py"), 21.0,
+        "fmtpair - the formatter offers the DRIVE's two sizes whatever the "
+        "read said (SPEC.md 18.96.4): a bulk-erased 1.44MB disk was offered "
+        "1200K, 720K and 1440K on three erasures because a read of noise "
+        "can succeed. dskw_fmt_probe is called with B: holding a blank "
+        "1.44MB image, the 720KB, 1.2MB and 360KB apps disks in turn - "
+        "QEMU's auto drive type follows the image - and must answer AL = "
+        "the default and AH = the drive's other size: 0200, 0002, 0301, "
+        "0103. QEMU by docs/TESTING.md's closed list, entry 1: the pair is "
+        "an AT ROM's AH=08h answer and every MartyPC machine runs an XT ROM "
+        "that refuses it. VERIFIED RED: AH forced to 0, the old probe's, "
+        "fails 3 of 4. Measured at 21s",
+        needs=("qemu", "nasm"), serial=True),
     Row("fmtreach", "soak", py("tests/fmtreach.py"), 39.0,
         "fmtreach - a 720K format PROVES the drive reaches cylinder 79 "
         "(SPEC.md 18.96.2): dskw_fmt_reach_x writes a marker to LBA 1439, "
         "re-zeroes, reads it back and compares, and on a failure remakes the "
-        "disk 360K with 'Made 360K, not 720K'. No other row reaches it - "
-        "fmtlow formats 360K and only row 2 is checked. Arm A forces row 2 "
+        "disk 360K with 'Made 360K, not 720K'. Since 18.96.4 every format "
+        "runs the check, and row 2 is the one that falls back. Arm A forces row 2 "
         "at the confirmation on an 80-track B: and must see 160 tracks, "
         "'Formatted B:' and the marker on the host; arm B sends the reach "
         "test's read of cylinder 79 to cylinder 78 at the int 13h gate (a "
@@ -13390,7 +15966,9 @@ SOAK = [
         "byte it recognises (6 in 256) wrote a 360KB file of the 720KB disk "
         "or refused with DataError - the row's two flakes, both reproduced "
         "every time with the byte forced. On os8088_5150_cga_720b_gla. "
-        "Measured at 38-40s",
+        "Each arm's disk must carry a serial of its own, neither the "
+        "template's 0x88000888 nor the other arm's (SPEC.md 18.8.2.1) - "
+        "red on three checks with DSK_VOLID emptied. Measured at 36-40s",
         needs=("marty",), serial=True),
     Row("imgmount", "soak", py("tests/imgmount.py"), 75.0,
         "SPEC.md 18.101: a .IMG mounted as a drive by a double-click, and "
@@ -13401,20 +15979,22 @@ SOAK = [
         "are read off the DISK and not out of os8088: New Folder on the "
         "mounted drive must land in the image's own root, the image must "
         "pass os88disk --verify, and NO host sector outside the file's "
-        "clusters may change but the one holding its entry (dsk_xfer's .img "
+        "clusters may change, its entry's included (dsk_xfer's .img "
         "arm re-issues each piece on the host volume, so a run table off by "
         "one writes somebody else's data). While mounted the host file is "
-        "read-only and Delete says Protected; unmounted, its attribute and "
-        "byte 12 are back; a read-only image refuses a write as Write "
-        "protected; a stale marker mounts writable and is cleared; BAD.IMG "
+        "read-only to the FAT layer and Delete says Protected, while its "
+        "ENTRY ON THE DISK is unchanged (SPEC.md 18.101.3's virtual bit - "
+        "red with dskw_imgro's call in dskw_dbody taken out); a read-only "
+        "image refuses a write as Write protected; an earlier kernel's "
+        "stale marker mounts writable and the mount clears it; BAD.IMG "
         "is Not a disk image with no row and no MEM_K_IMG claim left. "
         "VERIFIED RED with the run table's host LBA off by one: the image "
         "does not mount and the first wait fails. Leg 8 is SPEC.md "
         "18.101.5/22.28's Disk menu: Unmount Image grey on a host window and "
         "live on the image's own, the empty space's Mount Image... opening "
         "the Open box, Disk > Mount Image... mounting what the box answered "
-        "(marked on the host through the DIALOG's folder), and Unmount Image "
-        "putting the attribute back and sending the window to the host - "
+        "(the host entry untouched), and Unmount Image sending the window "
+        "to the host - "
         "VERIFIED RED with fm_bar_gate's `inc dx` taken out. Leg 9 is the "
         "same unmount off the image's DESKTOP icon (sc_rclick; red without "
         "its `jb .vol`), and leg 0 the listing icon (18.101.6): every *.IMG "
@@ -13442,6 +16022,9 @@ SOAK = [
         "diffed: apps360.img as a FILE on a 720KB B:, written over the 360KB "
         "system disk in A:, and drive 0 read back must BE the image, every "
         "sector - with the positive control that it is not before the write. "
+        "Every sector BAR BS_VolID, which must differ from the image's "
+        "(SPEC.md 18.8.2.1), and the image file on B: must be untouched - "
+        "red with DSK_VOLID emptied. "
         "The round trip diskclone says no 360KB machine can host, on "
         "os8088_5150_cga_720b_gla. FIRST a write made to fail (the first "
         "write int 13h caught at the gate and aimed at absent drive 3) must "
@@ -13656,6 +16239,59 @@ SOAK = [
         "`fbuf`. Every cell is rendered on the HOST out of the guest's own "
         "glyph table and compared pixel for pixel",
         needs=("marty",), serial=True),
+    Row("wirechat", "soak", py("tests/wirechat.py"), 120.0,
+        "WIRECHAT end to end over a real card (SPEC.md 113.12): the test's "
+        "own fixture - a literal stdlib reading of SPEC.md 113.2 - on 8093, "
+        "and `make wirechattest`'s B: carrying the package and a "
+        "WIRECHAT.CFG aimed at it. Fifteen assertions: the join is 113.3's "
+        "request to the byte, the session goes live with the issued token, "
+        "the lobby's history is in the store in order, a HELD poll is "
+        "answered by a second session's message, a sent message is the "
+        "say's whole body and comes back marked ours, a 422's sentence "
+        "reaches the notice line with the message back in the field, Tab "
+        "asks v=1&h=1 and the store becomes room 1's, a private message "
+        "makes an unread conversation, a right press and Yes flag the "
+        "message by its seq and the fixture's X removes it, a 401 is "
+        "joined again with the same nick, and the Notifications switch is "
+        "written to the floppy's WIRECHAT.CFG. Then SPEC.md 113.2.4: x=1 on "
+        "every request, a message stored with its date, a mention in the "
+        "view marked, an A from another room marking that room and saying "
+        "who, and Tab completing @ret to @RetroAmy off the roster. QEMU by "
+        "name: MartyPC has no network card (SPEC.md 72.9).",
+        needs=("qemu",), serial=True, builds=True),
+    Row("wcdraw", "soak", py("tests/wcdraw.py"), 200.0,
+        "WireChat's redraw, priced in drawing calls (SPEC.md 113.5.1): every "
+        "far call the PACKAGE makes into a drawing cell of the API table, "
+        "per gesture - a message arriving, a member going Away, a key, a "
+        "page, a line, a status, a press on Notifications - each under a "
+        "ceiling a region repaint blows through, and the picture the slots "
+        "drew pixel-identical to a forced full repaint. MartyPC has no card, "
+        "so the window is filled by injecting replies (tests/wcprobe.py). "
+        "Hercules",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
+    Row("wcdrawcga", "soak", py("tests/wcdraw.py", "--cga"), 200.0,
+        "wcdraw on the 5150's CGA: the short layout (a one-band header, a "
+        "few pane bands) in Wired, the default and one of the two "
+        "themes one bit can draw (SPEC.md 113.5, 113.5.2)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
+    Row("wcdrawvga", "soak", py("tests/wcdraw.py", "--vga"), 200.0,
+        "wcdraw on the VGA XT in the Blue theme, picked from the Theme "
+        "menu (SPEC.md 113.5.2): the same "
+        "ceilings and the same incremental-equals-repaint identity, with "
+        "the badges, the lamps, the scroll column and the package's own "
+        "buttons in it",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
+    Row("wcdrawwired", "soak", py("tests/wcdraw.py", "--vga", "--theme", "0"),
+        200.0,
+        "wcdraw on the VGA XT in Wired, the default (SPEC.md 113.5.2): its "
+        "LEDs one OSAPI_GFX_BLITP each and the emoticons spans of their own "
+        "colour, under the same ceilings and the same incremental-equals-"
+        "repaint identity",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
     Row("telansi", "soak", py("tests/telansi.py"), 210.0,
         "SPEC.md 70.9/70.10/70.12: the ANSI-BBS PARSER on the machine, against "
         "tools/ansisim.py - the same state machine in Python, and the "
@@ -13674,6 +16310,34 @@ SOAK = [
         "name for tests/ethernet.py's reason: MartyPC has no NIC, so this "
         "package's receive path cannot be reached on it at all",
         needs=("qemu",), serial=True, builds=True),
+    Row("mixercga", "soak", py("tests/mixer.py", "--adapter", "cga"), 100.0,
+        "SPEC.md 34.15: CGA volume gestures, exact save-under restore and cleanup, "
+        "master-only popup and absent hardware, separate apps-disk Mixer and About",
+        needs=("marty", "nasm"), timeout=900,
+        wants=("build/mixer360.img", "build/mixplay.img")),
+    Row("mixerherc", "soak", py("tests/mixer.py", "--adapter", "herc"), 65.0,
+        "SPEC.md 34.15: the same volume/Mixer UI and resource checks on Hercules",
+        needs=("marty", "nasm"), timeout=600, wants=("build/mixer360.img", "build/mixplay.img")),
+    Row("mixervga", "soak", py("tests/mixer.py", "--adapter", "vga"), 65.0,
+        "SPEC.md 34.15: the same volume/Mixer UI on VGA, including its four-plane save-under",
+        needs=("marty", "nasm"), timeout=600, wants=("build/mixer360.img", "build/mixplay.img")),
+    Row("mixersb16", "soak", py("tests/mixer.py", "--adapter", "sb16"), 40.0,
+        "SPEC.md 34.15: QEMU SB16/CT1745 actual hardware readback, stereo balance, "
+        "tone controls, background playback while the popup remains open and "
+        "the complete popup/package session; MartyPC has only a raw mixer bank",
+        needs=("qemu", "nasm"), timeout=600,
+        wants=("build/mixer360.img", "build/mixplay.img")),
+    Row("mixervesa", "soak", py("tests/mixer.py", "--adapter", "vesa"), 65.0,
+        "SPEC.md 34.15/120.4: SB16 mixer controls on the 1024x768x16 packed desktop, "
+        "speaker colors/clock position, 30KB save-under, exact restore and cleanup",
+        needs=("qemu", "nasm"), timeout=600,
+        wants=("build/mixervesa.img", "build/mixplay.img")),
+    Row("mixerhost", "soak", py("tests/mixermodel.py"), 2.0,
+        "SPEC.md 34.15: the shipped mixer assembly against independent Creative "
+        "register maps, all percentages and asymmetric stereo, refusals before "
+        "writes, absent/stuck bus, IF and SS != DS, detach restoration and a "
+        "deliberately wrong register that must fail",
+        needs=("nasm", "unicorn")),
     Row("picomem", "soak", py("tests/picomem.py"), 35.0,
         "SPEC.md 34.10.1, 72.2: the driver code a PicoMEM talks to, AS IT "
         "SHIPS, under unicorn against a model of the card written from its "
@@ -13702,6 +16366,18 @@ SOAK = [
         "sweeps must read clean on a healthy card and score the last one's "
         "mistakes as port numbers, and E's verified start must need more "
         "than one start and keep the stream in the ring",
+        needs=("nasm", "unicorn")),
+    Row("xmla", "soak", py("tests/xmla.py"), 2.0,
+        "SPEC.md 41.13: XMEM.DRV's LOADALL transport, without a 286 - xm_bios, "
+        "xm_lcopy, xm_lend, xm_lainit and xm_ltrip cut out of xmem.asm with "
+        "apps/os88la.inc, under unicorn, which checks the 102-byte table at "
+        "0x800 field by field at each LOADALL and moves each borrowed rep "
+        "movsw through the caches it asked for. 96 copies both ways, 2 B to "
+        "32 KB, must land exactly with the API cells, registers and DS/ES as "
+        "they were and 16 KB a borrow; a CPU that traps 0F 05, a BIOS that "
+        "corrupts a word and a cache that does not take must each leave "
+        "[xm_lall] 0. Broken on purpose: an offset mask of 7 refuses at "
+        "attach, an SP two out fails every table",
         needs=("nasm", "unicorn")),
     Row("ethernet", "soak", py("tests/ethernet.py"), 40.0,
         "SPEC.md 72.9: ETHER.DRV up before the first paint off a SYSTEM.CFG "
@@ -13920,11 +16596,17 @@ SOAK = [
         "signature of a race whose odds move with the box. Each attempt is a "
         "COMPLETE test of the assertion, so six only lowers the chance that "
         "every sample lands badly - and CELLS below is deliberately NOT "
-        "retried, being the half that would hide a real regression",
+        "retried, being the half that would hide a real regression. OTHERS "
+        "READS tm_quiet's key and the page's pixels rather than counting "
+        "cells: since 28.4.10 another window's cache redraws one chunk and "
+        "the map, two breakpoint hits the drag-time pump lost together, and "
+        "the row read 0 + 0 over a page that had redrawn",
         needs=("marty",), serial=True),
     Row("tmowner", "soak", py("tests/tmowner.py"), 300.0,
-        "SPEC.md 28.4.5: a raise cache is listed under the PACKAGE that owns "
-        "the window, and a kernel window's stays under System. Reads the rows "
+        "SPEC.md 28.4.10: a raise cache is listed under PURGEABLE, the "
+        "kernel window's and a package's alike - it is in nobody's total, so "
+        "it is in no owner's group (it was the window's package, 28.4.5, "
+        "until the memory and heap pages merged). Reads the rows "
         "the page COMPOSES rather than the pixels, which is the only way to "
         "say which group a row is in",
         needs=("marty",), serial=True),

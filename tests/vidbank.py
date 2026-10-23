@@ -36,6 +36,11 @@ LEG swap (the instrument is tests/vidxms.py's, a disk swap):
 Step 1 also asserts the bank is the WHOLE pool (98.3.18.2.1): 26 slots,
 where the 256 KB VP_XRES kept back for others left 18 - put back, it FAILS.
 
+EVERY ARM PLAYS THE COPYING BANK: QEMU is a 386 and a 386 reads a bank in
+place since 98.3.18.14, where the FIFO this file counts is not used at all,
+so `[vp_noinp]` = 1 - the gate's A/B - is written before the first play.
+The bank in place is tests/vidxip.py's bank arms.
+
 VERIFIED TO FAIL: with `call vp_bstep` taken out of the reader's loop the
 bank stays empty (step 2), and with vp_bfill's head left unmoved step 3's
 picture differs.
@@ -129,6 +134,10 @@ def main():
     ap.add_argument("--bps", type=int, default=BPS,
                     help="B:'s throttle, bytes a second (0 none): slow "
                          "enough that the bank is seen filling")
+    ap.add_argument("--gap", type=int, default=0, metavar="G",
+                    help="[vp_xgap] written G before the play: the ring "
+                    "placed at that gap against the BANK, whatever QEMU "
+                    "measured (SPEC.md 98.3.18.12)")
     ap.add_argument("--mem", type=int, default=2,
                     help="QEMU -m (MB): the pool is what is above the first")
     a = ap.parse_args()
@@ -231,6 +240,14 @@ def main():
             sys.exit("vidbank: the clip did not open")
         if rb("vp_ok") != 1:
             sys.exit("vidbank: the player will not play the clip here")
+        # THE COPYING BANK, every arm (98.3.18.14): QEMU is a 386, and a 386
+        # reads an XMS bank IN PLACE - [vp_xbank] 0 at the session's start,
+        # the FIFO unused, the ring's slots the bank's - so every count this
+        # file reads ([vp_xcnt], the prefill against it, the card's kind 1)
+        # would be of a FIFO that is not there. [vp_noinp] is the gate's A/B,
+        # read at each session's start and written by nothing in the player,
+        # so once is every play. The bank in place is tests/vidxip.py's
+        qpoke(q, [(base + syms["vp_noinp"], b"\1")])
 
         # --- 1: a bank, not a hold
         print("   opened: %s xhave=%d" % (state(), rd("vp_xhave")))
@@ -282,9 +299,17 @@ def main():
             fast = a.arm == "spkfast"
             for leg in (("key 1",) if fast else ("frame 0", "key 1")):
                 if leg == "key 1":
-                    s0 = rw("vp_sel")
-                    q.hmp("sendkey right")
-                    wait(lambda: rw("vp_sel") != s0, "Right to key 1", 20)
+                    # STEP TO KEY 1 FROM WHERE THE LAST PLAY STOPPED, one
+                    # confirmed key at a time. The frame-0 leg's Esc lands
+                    # however far the guest got after its 30 frames - the
+                    # stop, the reads and the sendkey between are HOST round
+                    # trips - and on a loaded box that was frame 282, the
+                    # last key, where one Right has nowhere to go
+                    while rw("vp_sel") != 1:
+                        s0 = rw("vp_sel")
+                        q.hmp("sendkey %s" % ("right" if s0 < 1 else "left"))
+                        wait(lambda: rw("vp_sel") != s0,
+                             "a step from key %d toward key 1" % s0, 20)
                 qpoke(q, [(base + syms["vp_played"], b"\0")])
                 q.hmp("sendkey p")
                 wait(lambda: rb("vp_ready") == 1, "the play to start", 120)
@@ -415,6 +440,8 @@ def main():
         # (the bank HELD at the prefill's slots until the pause: F can take
         # guest seconds to land, and the bank must still have room then)
         qpoke(q, [(base + syms["vp_bhold"], b"\1")])
+        if a.gap:
+            poke("vp_xgap", a.gap)
         q.hmp("sendkey p")
         said = set()
 
@@ -425,6 +452,16 @@ def main():
         wait(filling, "the play to start", 120)
         q.hmp("stop")
         pfn, cnt0, done0 = rw("vp_pfn"), rw("vp_xcnt"), rw("vp_done")
+        g = rw("vp_xgap")
+        if g:                           # THE GAP (98.3.18.12): the ring G
+            ring, clm = rw("vp_ring"), rw("vp_rclm")    # mod 2G from the bank
+            off = ((ring << 4) - u32(q.read(base + syms["vp_xbase"], 4))) \
+                % (2 * g)
+            print("   the gap: G %d, ring %04X in its claim at %04X, %d mod "
+                  "%d from the bank" % (g, ring, clm, off, 2 * g))
+            if off != g or not clm <= ring < clm + (2 * g >> 4):
+                bad.append("the ring is %d mod %d from the bank, not %d"
+                           % (off, 2 * g, g))
         ask = (rw("vp_hxb"), rw("vp_hxp"))
         toast = rb("vo_toast")
         q.hmp("cont")

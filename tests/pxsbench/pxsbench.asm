@@ -2285,6 +2285,7 @@ pb_run:
                                     ; step since wave 3, so bench360.img did
                                     ; not build and the row SKIPped (SPEC.md
                                     ; 97.10). Every byte here is two (bl_out)
+%define BL_NOINTRO                  ; no "it saves" banner: this one never saves (benchlib)
 %include "benchlib.inc"
 
 ; =============================================================================

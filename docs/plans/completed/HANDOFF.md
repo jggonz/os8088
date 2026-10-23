@@ -12,7 +12,7 @@ survived a casual look, and most were failures of the *harness*, not the code.
 ## 1. The target
 
 **Every user-triggered interaction except opening a document should finish
-inside one typematic repeat, ~100 ms** (SPEC.md §2951). Below that, a held key
+inside one typematic repeat, ~100 ms** (SPEC.md §9.6.2). Below that, a held key
 cannot outrun the editor and no backlog can build.
 
 Measured on MartyPC's cycle-accurate 4.77MHz 8088, README.TXT (15,428

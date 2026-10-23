@@ -123,7 +123,7 @@ def main():
     check(len(raw) <= MAXZ, "build/pxstein.o88 is %d bytes, <= %d" % (len(raw), MAXZ))
     blob = os88pkg.image_unwrap(raw)
     image = blob[8] | (blob[9] << 8)
-    rows = os88parts.rows(blob[:image])
+    rows = os88parts.rows(blob[:image])   # blob is image_unwrap's (20.13.8)
     run = os88parts.run_sectors(rows)       # the recipe's own reader
     print("   parts: %s" % ", ".join("%d:%s len %d flags %d" % (i, "SEG" if r["kind"] == 0
           else "ASSET", r["len"], r["flags"]) for i, r in enumerate(rows)))

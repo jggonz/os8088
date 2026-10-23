@@ -1346,6 +1346,37 @@ at_sb_thumb:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; at_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = window ptr;
+; lock held. WHEEL_STEPS lines a notch - the bar's own line, the one its arrow
+; boxes step - clamped as at_sb_repeat clamps and handed to at_scroll_to, so
+; one notch (three lines) rides its OSAPI_GFX_SCROLL path and a top that did
+; not move draws nothing. Only the full-screen editor has a page and a bar to
+; scroll: the splash has neither, and an alert owns the input as it owns keys.
+; -----------------------------------------------------------------------------
+at_onwheel:
+    cmp byte [at_fs], 0
+    je .out
+    cmp byte [at_modal], 0
+    jne .out
+    push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
+    pop es
+    mov dx, WHEEL_STEPS
+    imul dx
+    add ax, [at_top]
+    jns .lo
+    xor ax, ax
+.lo:
+    xchg ax, dx                     ; DX = the wanted top...
+    call at_maxtop
+    cmp dx, ax
+    jae .go                         ; ...past the last: the last
+    xchg ax, dx
+.go:
+    jmp at_scroll_to
+.out:
+    ret
+
 ; =============================================================================
 ; The clipboard (SPEC.md 46.6.1): the SYSTEM one (SPEC.md 55), not a buffer of
 ; our own - a Writer-mode copy is already canonical markdown, which is exactly

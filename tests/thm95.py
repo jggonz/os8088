@@ -20,7 +20,7 @@ Five legs, every one on MartyPC's 4.77 MHz 8088:
      it (SPEC.md 76.14.5).
   B. Hercules, the same kernel: the 1bpp row - a white button face, the black
      X, the dither desktop - and the click-open menu once.
-  C. VGA, the SHIPPED kernel: Windows is a title style of Color now, not a
+  C. VGA, the SHIPPED kernel: Windows is a title style of Color as well as a
      Theme-page row (SPEC.md 76.14.10), so Color, Customize... and the
      chooser's Windows radio mount WIN95.DRV and hook every door; Return
      keeps it, and the Theme page's Bright unhooks them all and drops the
@@ -34,7 +34,7 @@ Five legs, every one on MartyPC's 4.77 MHz 8088:
 Break it on purpose: swap regions 2 and 5 in wn_hit (A's close leg fails),
 drop the evq_drain from wn_stick's .close (A's off-click raises the Disk
 window), move wn_stick's click test after its `.drag` test (A's right-click
-runs item 0), or take ui_lit_xor's clip out (A's light paints the cover).
+runs item 0), or take ui_lit_go's clip out (A's light paints the cover).
 """
 import argparse
 import statistics
@@ -62,8 +62,8 @@ BLACK, NAVY, TEAL, LGRAY, DGRAY, WHITE = ((0, 0, 0), (0, 0, 170),
                                           (85, 85, 85), (255, 255, 255))
 THM_COLOR, THM_WIN = 2, 3
 TV_SY, TV_SPITCH = 3 + 8 * 11 + 8 + 10, 16  # thmpal.asm: the style radios
-DOORS = ("wm_draw_title_b", "wm_hit_ttl_b", "wm_grow_glyph_b", "kret_ret",
-         "wmz_crect_b")
+DOORS = ("wm_draw_title_b", "wm_hit_ttl_b", "wm_grow_paint.glyph",
+         "cw_kretf", "wmz_crect_b")
 
 
 def fail(msg):
@@ -476,7 +476,8 @@ def pick(m, mo, row):
 
 def customize(m, mo, ui, eq):
     """Color, then Customize... beside it: THMPAL.DRV's chooser, up and found.
-    Customize is live only while Color is (SPEC.md 76.14.10)."""
+    Customize is live wherever Color is offered (SPEC.md 76.14.10); picking
+    Color first makes the chooser's opening kind Color."""
     pick(m, mo, 2)
     wait(m, lambda: kind(m) == THM_COLOR, "the Color row to take")
     wx, wy = dispcp._cp_win(m, m.sym)
@@ -521,8 +522,19 @@ def leg_c(eq, folder):
         if modseg(m, eq):
             fail("C: Bright left WIN95.DRV claimed")
         at_rest(m, "C Bright")
+        pick(m, mo, 3)                      # the page's own Windows row
+        wait(m, lambda: kind(m) == THM_WIN, "the Windows row to take")
+        hooked(m, eq, "C Windows row")
+        if not m.read(m.sym("thm_cstrp"), 1)[0] & 4:
+            fail("C: the Windows row left the style bit clear")
+        pick(m, mo, 2)                      # ...and Color is plain Color
+        wait(m, lambda: kind(m) == THM_COLOR, "the Color row to take")
+        if m.read(m.sym("thm_cstrp"), 1)[0] & 4:
+            fail("C: the Color row left the Windows style bit set")
+        at_rest(m, "C Color")
         print("   the Windows style hooks five doors to the module, Bright "
-              "puts them back")
+              "puts them back, and the page's Windows and Color rows agree "
+              "with it")
 
 
 def leg_d(eq, folder):

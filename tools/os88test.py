@@ -143,6 +143,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -272,6 +273,11 @@ def capabilities():
         caps.add("marty")
     if shutil.which("qemu-system-i386") or shutil.which("qemu-system-x86_64"):
         caps.add("qemu")
+    # ...and one that survives an interrupt taken on a stack in VGA memory,
+    # which QEMU 8 does not (os88build.qemu9() has the defect). Only a row
+    # that RESUMES a hibernate under QEMU needs it.
+    if os88build.qemu9():
+        caps.add("qemu9")
     # The BINARY, not the directory: build/cc exists from the moment
     # tools/setup-cc.sh starts cloning, so a half-finished or failed setup
     # would grant the capability and turn a skip into a confusing build
@@ -288,12 +294,30 @@ def capabilities():
     # card no emulator here carries - the PicoMEM (tests/picomem.py).
     if os88build.have_unicorn():
         caps.add("unicorn")
+    # Bochs and its X tools, for the one row that boots kern_mega there
+    # (tests/megatrap0.py): QEMU checks no segment on a data access, so a
+    # #GP census under it counts nothing (docs/BOCHS.md)
+    if os88build.have_bochs():
+        caps.add("bochs")
     # the owner's XDC video streams, for `vidbench`, whose only subject they
     # are. Not in the tree and never can be (copyrighted), so a box without
     # $OS88_XDC_SAMPLES pointing at them SKIPS the row; it used to run, skip
     # itself and exit 0, which scored `ok` in 0.1s against 34s declared.
     if os88build.have_xdc():
         caps.add("xdc")
+    # the owner's two Game Boy cartridges, for `rdgspeed286` - never in the
+    # tree, so $OS88_GB_ROMS names them or the row SKIPS (have_gbroms) - and
+    # the automation-enabled 86Box that row times them on, which is built on
+    # demand (`python3 tools/os88box.py build`) and not by `make deps`.
+    if os88build.have_gbroms():
+        caps.add("gbroms")
+    if os88build.have_86box():
+        caps.add("86box")
+    # rgbds at tools/gbclock.py's pinned commit, for `gbsound`, whose ROM is
+    # ours and assembled on the box (tools/gbours.py). Built on demand and
+    # with the network, so its absence is a SKIP rather than a fetch.
+    if os88build.have_rgbds():
+        caps.add("rgbds")
     # ffmpeg AND numpy, the encoder front end's (tools/os88venc.py, SPEC.md
     # 98.2.1). Nothing in the build needs either, so they are a capability
     # and not a dependency, and `make deps` does not install ffmpeg's
@@ -301,6 +325,10 @@ def capabilities():
     if shutil.which("ffmpeg") and shutil.which("ffprobe") and \
             os88build.have_numpy():
         caps.add("ffmpeg")
+    # ...and numpy alone, for a row that builds its fixtures with the
+    # encoder's picture code but never runs ffmpeg (tests/vidposter.py).
+    if os88build.have_numpy():
+        caps.add("numpy")
     # mtools, which tests/instkeep.py plants a user's files with on a copy of
     # the fixture partition (SPEC.md 52.10.15) - a HOST-side FAT writer that
     # is not os88disk.py, so the fixture is not built by the tree under test.
@@ -520,6 +548,30 @@ def charge(results, par, ser, conc, j, mj):
     return lanes(par, j) + sum(cost(r) for r in ser) + lanes(conc, mj)
 
 
+# **A BOCHS ROW GETS AN X DISPLAY OF ITS OWN.** tools/os88bochs.py drives
+# Bochs through xdotool on one Xvfb display and refuses a second machine on
+# it, so two Bochs rows in parallel lanes on one display failed each other -
+# `soak -k megarehome -k megaflt` went 0/2 together and 2/2 apart. Each row
+# takes a free display from this pool for its life ($OS88_BOCHS_DISPLAY,
+# which os88bochs.py and os88bochsui.py read), and the pool starts above
+# the default :99 and the numbers agents pick by hand.
+_BOCHS_LOCK = threading.Lock()
+_BOCHS_FREE = list(range(110, 118))
+
+
+def _bochs_display():
+    while True:
+        with _BOCHS_LOCK:
+            if _BOCHS_FREE:             # (an Xvfb a previous row left
+                return _BOCHS_FREE.pop(0)   # on it is reused, not a clash)
+        time.sleep(1)
+
+
+def _bochs_free(n):
+    with _BOCHS_LOCK:
+        _BOCHS_FREE.append(n)
+
+
 def run_row(row, caps, strict, verbose, unbuilt=()):
     missing = set(row.needs) - caps
     if missing and not strict:
@@ -538,14 +590,23 @@ def run_row(row, caps, strict, verbose, unbuilt=()):
                       "needs " + ",".join(want) + ", which would not build")
 
     t0 = time.time()
+    disp = _bochs_display() if "bochs" in row.needs else None
+    env = None
+    if disp is not None:
+        env = dict(os.environ, OS88_BOCHS_DISPLAY=":%d" % disp)
     try:
-        p = subprocess.Popen(row.cmd, cwd=ROOT, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True)
-    except OSError as e:
-        return Result(row, False, False, time.time() - t0, str(e), "could not run")
-    so, se, cpu, timed_out = _communicate(p, row.timeout,
-                                          getattr(row, "cpus", 1),
-                                          "qemu" not in row.needs)
+        try:
+            p = subprocess.Popen(row.cmd, cwd=ROOT, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True, env=env)
+        except OSError as e:
+            return Result(row, False, False, time.time() - t0, str(e),
+                          "could not run")
+        so, se, cpu, timed_out = _communicate(p, row.timeout,
+                                              getattr(row, "cpus", 1),
+                                              "qemu" not in row.needs)
+    finally:
+        if disp is not None:
+            _bochs_free(disp)
     out = so + se
     ok = p.returncode == 0 and not timed_out
     reason = "" if ok else "exit %d" % p.returncode
@@ -943,6 +1004,14 @@ def main():
                         % (YELLOW, 100.0 * res.secs / res.row.secs,
                            res.row.secs, OFF))
             print("%s ok %s %-28s %5.1fs%s" % (GREEN, OFF, res.row.name, res.secs, slip))
+            # A row may pass and still have something to say: a line it
+            # starts with "warn:" is shown even when the row is ok, so a gate
+            # the fast tier only REPORTS (the guide lock) is heard on every
+            # `make` without holding one up.
+            if res.output and not a.verbose:
+                for line in res.output.splitlines():
+                    if line.startswith("warn:"):
+                        print("%s       | %s%s" % (YELLOW, line, OFF))
         else:
             print("%sFAIL%s %-28s %5.1fs  %s" % (RED, OFF, res.row.name, res.secs, res.reason))
         if res.output and (a.verbose or not (res.ok or res.skipped)):

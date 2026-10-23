@@ -64,10 +64,15 @@
 ; Addressing a blob that exceeds 64KB (BEVERLY.MOD is 116,085 bytes) on an
 ; 8086: nothing ever offsets more than 64KB from one base. The header is
 ; within blobseg's first 1084 bytes; pattern p lives at segment
-; blobseg + 67 + 64*p, offset 12 (1084 + 1024*p = ((67 + 64*p) << 4) + 12);
-; each sample gets a normalized base seg = blobseg + (start >> 4),
-; off = start & 15, with its play length capped at MPM_MAXSMP bytes so
-; off + position (+ one mix step) can never wrap a 16-bit offset.
+; blobseg + 64 + 64*p, offset 60 (1084 + 1024*p = ((64 + 64*p) << 4) + 60);
+; each sample gets a base seg = blobseg + 8*(start >> 7), off = start & 127,
+; with its play length capped at MPM_MAXSMP bytes so off + position (+ one
+; mix step) can never wrap a 16-bit offset. Every segment is a whole number
+; of 128-byte GRANULES from the claim, Tracker's layout (trkplay.inc): on
+; kern_mega a conventional segment is a descriptor only on the 8-paragraph
+; grid (KERN-MEGA-PLAN 10.1 item 18), and the old paragraph steps - 67 + 64p
+; and start >> 4 - landed between descriptors and faulted on every row. Real
+; mode reads the same bytes either way.
 ;
 ; Timing (research-ft2-reference): tick rate = BPM*2/5 Hz, speed = ticks
 ; per row; mpm_gen renders [mpm_spt] = mixrate*5/(2*BPM) samples per tick.
@@ -78,6 +83,8 @@
 ; conversion pass: out = 128 + (sum >> 2).
 ; =============================================================================
 
+MPM_PSEG   equ 64                ; pattern 0's segment, paragraphs into the blob
+MPM_POFF   equ 60                ; ...and its first cell's offset in it
 MPM_MAXSMP  equ 60000            ; per-sample play-length cap, bytes: keeps
                                 ; off + pos + step*chunk < 65536 in the mixer
                                 ; even at a 4000 Hz mix rate (step int <= 7)
@@ -114,8 +121,8 @@ MPM_DSMP   equ 38                ; b: ...and sample
 MPM_CHSZ   equ 40
 
 ; --- sample table entry (bss, 12 bytes x 31) -----------------------------------
-MPS_SEG    equ 0                 ; w: normalized base segment
-MPS_OFF    equ 2                 ; w: base offset 0..15
+MPS_SEG    equ 0                 ; w: base segment, on the granule grid
+MPS_OFF    equ 2                 ; w: base offset 0..127
 MPS_PLEN   equ 4                 ; w: play length, bytes (0 = unplayable)
 MPS_LLEN   equ 6                 ; w: loop length, bytes (0 = one-shot)
 MPS_LSTART equ 8                 ; w: loop start, bytes (kept for reference)
@@ -322,16 +329,26 @@ mpm_load:
     ; normalized base from the running 32-bit start
     mov ax, [mpm_run_lo]
     mov dx, [mpm_run_hi]
+    mov bx, [mpm_blobseg]
+    test bl, 4                  ; a selector: the claim, at the start itself
+    jz .gran                    ; (mpm_patseg)
+    mov [di+MPS_OFF], ax
+    mov [di+MPS_SEG], bx
+    jmp short .placed
+.gran:
     mov bx, ax
-    and bx, 15
+    and bx, 127
     mov [di+MPS_OFF], bx
-    mov cx, 4
+    mov cx, 7
 .sh4:
     shr dx, 1
     rcr ax, 1
-    loop .sh4                   ; AX = start >> 4 (hi bits beyond 20 only on
-    add ax, [mpm_blobseg]        ; hostile files whose samples are unplayable)
+    loop .sh4                   ; AX = start >> 7, GRANULES (hi bits beyond 20
+    mov cl, 3                   ; only on hostile files whose samples are
+    shl ax, cl                  ; unplayable) - 8 paragraphs each
+    add ax, [mpm_blobseg]
     mov [di+MPS_SEG], ax
+.placed:
     ; effective length = min(stated, bytes remaining in file, MPM_MAXSMP)
     mov ax, [mpm_bloblen_lo]
     mov dx, [mpm_bloblen_hi]
@@ -670,12 +687,10 @@ mpm_cell2txt:
     cmp di, [mpm_npat]           ; DI = pattern number against the WORD count
     jae .no
     ; ES = pattern segment, SI = cell offset
-    mov bx, di
-    mov cl, 6
-    shl bx, cl                  ; pattern * 64 paragraphs
-    add bx, 67
-    add bx, [mpm_blobseg]
-    mov es, bx
+    push ax
+    mov ax, di
+    call mpm_patseg
+    pop ax
     mov bl, al
     xor bh, bh
     mov cl, 4
@@ -686,7 +701,7 @@ mpm_cell2txt:
     shl bx, 1
     shl bx, 1                   ; ch * 4
     add si, bx
-    add si, 12
+    add si, [mpm_pbase]
     ; decode
     mov al, [es:si]             ; b0
     mov ah, [es:si+1]           ; b1
@@ -1458,6 +1473,33 @@ mpm_nextrow:
 ; mpm_readrow - tick 0: read the four cells of (pattern, row), trigger notes,
 ; run tick-0 effects
 ; -----------------------------------------------------------------------------
+; mpm_patseg - pattern AX's segment, and the offset of its first cell
+; (KERN-MEGA-PLAN 14.13; Tracker's mp_patseg). A conventional blob is whole
+; 128-byte granules from the claim; a blob that came back a SELECTOR (bit 2,
+; the LDT) is 62KB or less (mpp_claimsel) and is the claim itself, the cell at
+; its absolute 1084 + 1024p.
+; in:  AX = a pattern number already checked against [mpm_npat]
+; out: ES = its segment, [mpm_pbase] = row 0 channel 0's offset in it
+; clobbers AX and CL
+mpm_patseg:
+    test byte [mpm_blobseg], 4
+    jnz .flat
+    mov cl, 6
+    shl ax, cl                  ; pattern * 64 paragraphs
+    add ax, MPM_PSEG
+    add ax, [mpm_blobseg]
+    mov es, ax
+    mov word [mpm_pbase], MPM_POFF
+    ret
+.flat:
+    mov cl, 10
+    shl ax, cl                  ; pattern * 1024 bytes
+    add ax, MPM_PSEG * 16 + MPM_POFF
+    mov [mpm_pbase], ax
+    mov es, [mpm_blobseg]
+    ret
+
+; -----------------------------------------------------------------------------
 mpm_readrow:
     ; ES = pattern segment for the whole row
     mov al, [mpm_pattern]
@@ -1467,11 +1509,7 @@ mpm_readrow:
     xor ax, ax                   ; The count is a word, so this compare is one
 .pok:                            ; too - a byte compare against P = 256 reads
                                  ; as 0 and forces EVERY pattern to 0
-    mov cl, 6
-    shl ax, cl
-    add ax, 67
-    add ax, [mpm_blobseg]
-    mov es, ax
+    call mpm_patseg
     mov word [mpm_crec], mpm_chans
     mov byte [mpm_curc], 0
 .ch:
@@ -1487,7 +1525,7 @@ mpm_readrow:
     shl ax, 1
     shl ax, 1
     add si, ax
-    add si, 12
+    add si, [mpm_pbase]
     ; decode into mpm_wper / mpm_wsmp / MPM_EFF / MPM_PARM
     mov al, [es:si]             ; b0
     mov ah, [es:si+1]
@@ -2328,6 +2366,7 @@ mpme_song:   db 'Bad song data', 0
     MPPW mpm_outp                    ; mpm_gen output cursor
     MPPW mpm_chunk                   ; current mix chunk, samples
     MPPW mpm_crec                    ; current channel record
+    MPPW mpm_pbase                   ; mpm_patseg: the pattern's first cell
     MPPW mpm_climit                  ; mixer scratch: position limit
     MPPW mpm_cloopl                  ;   loop length
     MPPW mpm_cstepi                  ;   step int

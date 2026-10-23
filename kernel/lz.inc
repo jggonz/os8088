@@ -193,6 +193,24 @@ lz_decomp_big:
     cld
     or di, di
     jnz .early                  ; the precondition, checked rather than assumed
+%ifdef KERN_MEGA
+    push ax                     ; kern_mega: an OUTPUT in a pool selector - an
+    mov ax, es                  ; OS88_HIGHMEM claim or an OS88_HIGH region,
+    test al, 4                  ; 64KB at most and with no segment beyond it -
+    jz .esok                    ; takes 64KB at most. More is refused here
+    cmp ax, MEGA_LDT_FREE0 * 8  ; rather than bumped onto conventional memory
+    jb .esok                    ; at 0FFF0h, which is what lz_dbump would make
+    cmp bx, 1                   ; of the selector (KERN-MEGA-PLAN 13.6)
+    jb .esok
+    ja .esbad
+    or dx, dx
+    jz .esok
+.esbad:
+    pop ax
+    jmp short .early
+.esok:
+    pop ax
+%endif
     cmp al, LZ_LZB
     ja .early                   ; neither format (the dispatch below is left
                                 ; one of two, and needs no refusal of its own
@@ -288,7 +306,20 @@ lz_at:
     jns .arm                    ; SI in the low half: nothing to slide
     and si, 0x7FFF
     mov ax, ds
+%ifdef KERN_MEGA
+    test al, 4                  ; kern_mega: an LDT selector (a buffer above
+    jz .idn                     ; 1MB) slides by its descriptor, not by
+    push dx                     ; arithmetic (mega_slidef)
+    mov dx, 0x0800
+    call KERNEL_SEG:mega_slidef
+    pop dx
+    jmp short .sl
+.idn:
+%endif
     add ax, 0x0800              ; 32KB is 2,048 paragraphs
+%ifdef KERN_MEGA
+.sl:
+%endif
     mov ds, ax
     dec byte [bp+LZ_F_K]
 .arm:
@@ -365,7 +396,19 @@ lz_cross:
 ; clobbers: AX
 lz_dbump:
     mov ax, es
+%ifdef KERN_MEGA
+    call KERNEL_SEG:mega_s2segf ; kern_mega: ES is a selector - the segment it
+    cmp ax, 0xFFFF              ; stands for, 64KB on, and a selector for THAT,
+    je .stay                    ; which may be the scratch one (mega.inc). A
+    add ax, 0x1000              ; base above 1MB has no segment and keeps ES:
+    call KERNEL_SEG:mega_oddsegf ; the entry let exactly 64KB in, and its last
+    mov es, ax                  ; byte is what wraps DI here
+.stay:
+    inc byte [bp+LZ_F_BUMP]
+    ret
+%else
     add ax, 0x1000
+%endif
     mov es, ax
     inc byte [bp+LZ_F_BUMP]     ; ...and the match-offset bound stops being a
     ret                         ; compare from here on (LZ_F_BUMP): a count of

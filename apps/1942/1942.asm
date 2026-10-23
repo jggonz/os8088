@@ -1,12 +1,18 @@
 ; Native 1942 remake for os8088. SPEC 101; no NES CPU interpreter.
 %include "os88api.inc"
-OS88_HEADER '1942', n_entry, 1, OS88_STACK_256
+OS88_HEADER '1942', n_entry, 1 | OS88_F_PARTS, OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM
 OS88_ICON16
     dw 0x0180,0x0990,0x1db8,0x1db8,0x1db8,0x7ffe,0xffff,0x1ff8
     dw 0x1db8,0x1998,0x1998,0x1998,0x1998,0x1ff8,0x0990,0x0180
     dw 0x0180,0x0990,0x1db8,0x1db8,0x1db8,0x7ffe,0xffff,0x1ff8
     dw 0x1db8,0x1998,0x1998,0x1998,0x1998,0x1ff8,0x0990,0x0180
 OS88_ICON16_END
+; Every graphics bank, scene and the sampled effects are PARTS of this file
+; (SPEC.md 101.2, 20.12), each fetched only when its adapter is on the glass -
+; they were twelve sidecar files beside the package. Nothing asks op_lazyok:
+; a refused fetch is the asset error n_exclusive already reports.
+%define OP_NO_LAZYOK
+%include "os88parts.inc"
 %macro SAVE 0
     push ax
     push bx
@@ -29,18 +35,12 @@ OS88_ICON16_END
 %endmacro
 
 n_entry:
-    mov ax, N_CANVAS_KB
-    call OSAPI_MEM_CLAIM
-    jc .out
-    mov [n_canvas], dx
-    mov ax, N_GFX_KB
-    call OSAPI_MEM_CLAIM
-    jc .out
-    mov [n_graphics], dx
-    mov ax, N_GFX2_KB
-    call OSAPI_MEM_CLAIM
-    jc .out
-    mov [n_graphics2],dx
+    call op_load                    ; SI is the kernel's: the name, FIRST.
+                                    ; Every part is lazy, so this is the copy
+    mov ax, N_CANVAS_KB             ; The sprite banks are fetched on the way
+    call OSAPI_MEM_CLAIM            ; into fullscreen and dropped on the way
+    jc .out                         ; out (n_loadgfx, n_dropgfx), so the
+    mov [n_canvas], dx              ; desktop holds the canvas and nothing else
     mov si, n_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -88,15 +88,36 @@ n_about:
     call os88ui_about
     jmp n_popall
 ; Shared SAVE/RESTORE for routines off the per-sprite and per-frame paths:
-; "call n_pushall" at entry, "jmp n_popall" for RESTORE+ret. Not re-entrant
-; across the two instructions that touch n_pushret, which nothing interrupts
-; into (this package has no ISR and no worker).
+; "call n_pushall" at entry, "jmp n_popall" for RESTORE+ret. The frame is
+; SAVE's to the word, built under the return address on the stack itself: it
+; used to park that address in a word written through CS, which kern_mega
+; completes with a fault on every call (KERN-MEGA-PLAN item 56). Flags kept.
 n_pushall:
-    pop word [cs:n_pushret]
-    SAVE
-    jmp [cs:n_pushret]
-n_popall:
-    RESTORE
+    ; STKBALANCE-NET: +8 - banks SAVE's eight words on the CALLER's stack; n_popall pops them
+    push bp                         ; [ret][bp]
+    mov bp,sp
+    xchg ax,[bp+2]                  ; [ax][bp], AX = the return address
+    xchg bx,[bp]                    ; [ax][bx], BX = the caller's BP
+    push cx
+    push dx
+    push si
+    push di
+    push bx                         ; ...BP, where SAVE puts it
+    push es
+    push ax
+    mov ax,[bp+2]
+    mov bx,[bp]
+    mov bp,[bp-10]
+    ret
+n_popall:                           ; RESTORE, spelled out so the stack
+    pop es                          ; walk sees n_pushall's eight words go
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 %include "front.inc"
 
@@ -249,6 +270,7 @@ n_assetfailed:
     mov byte [n_error], 2
 n_exit:
     call n_audio_close
+    call n_dropgfx
     mov byte [n_infs], 0
     ret
 
@@ -256,7 +278,8 @@ n_tpl: dw 52,32,452,284,n_title,n_paint,n_key,n_click
 OS88_PREFER n_pref,452,284,452,284,452,154
 n_title: db '1942',0
 n_errmsg: db 'Fullscreen requires a VGA or CGA display.',0
-n_asseterr: db 'Missing or damaged 1942 graphics files.',0
+n_asseterr: db 'The 1942 graphics could not be loaded.',0
+n_memerr: db 'Not enough memory for the 1942 graphics.',0
 n_ablines: dw n_title,n_credit,n_credit2,n_credit3,0
 n_credit: db 'Native remake for os8088',0
 n_credit2: db '1942 original game: Capcom (1985)',0
@@ -280,13 +303,12 @@ n_msgresume: db 'P TO RESUME',0
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %include "os88ui.inc"
-%assign NBSS 0
+%assign NBSS OP_BSS                 ; the parts standard's bss comes first
 %macro VAR 2
     %1 equ os88_image_end + NBSS
     %assign NBSS NBSS + %2
 %endmacro
 VAR n_abon,1
-VAR n_pushret,2
 VAR n_frontstatic,1
 VAR n_frontready,2
 VAR n_frontband,2
@@ -297,6 +319,7 @@ VAR n_frontkind,1
 VAR n_frontwant,1
 VAR n_fronthelp,1
 VAR n_frontlbl,1
+VAR n_labels,4*N_FRONT_LABEL       ; the four rendered menu labels (101.5)
 VAR n_canvas,2
 VAR n_win,2
 VAR n_seed,2
@@ -344,6 +367,8 @@ VAR n_wavey,2
 ; state, zero bytes (an alias) in the original-art build that never uses it.
 VAR n_graphics,2
 VAR n_graphics2,2
+VAR n_graphicsc,2                  ; ...the two banks' CODE selectors
+VAR n_graphics2c,2
 VAR n_scene,2
 VAR n_bank,2
 VAR n_page,2
@@ -362,7 +387,6 @@ VAR n_cacheptr,2
 VAR n_compiled,1
 VAR n_blitptr,4
 VAR n_record,2
-VAR n_plane,2
 VAR n_vorigin,2
 VAR n_scroll,2
 VAR n_worldy,2*N_ROM

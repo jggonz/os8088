@@ -664,14 +664,44 @@ sbl_go_on:
 ; stream underrun-paused and stop expecting IRQs; the refill task resumes
 ; with sbl_go_on once data reappears (SPEC.md 34.5, the underrun contract).
 ; =============================================================================
+; SBL_DSCS reg16, reg8low - DS = this image's DATA segment, derived from CS
+; at the moment of the interrupt. On every real-mode kernel that is CS itself
+; (`push cs / pop ds`'s value: a heap claim is 512-aligned, so bit 2 is clear,
+; and an image COLDHMA placed in the HMA - F400h and up, PARAGRAPH-granular, so
+; bit 2 is anything - is caught first by the F000h test); on kern_mega CS is
+; the image's read-only LDT code alias (S >> 2) | 4 and the data segment is
+; (CS & ~7) << 2 (mega_cs2ds's rule for an image below A000h) - or, for an
+; image placed ABOVE 1MB (OS88_DRV_HIGHOK, KERN-MEGA-PLAN item 82), CS is an
+; allocator pair's code half and the data half is CS + 8. DERIVED
+; and never banked: the compactor may move a hooked, idle image and rewrite the
+; IRQ vectors to follow it (SPEC.md 66.6.3.1) without telling the driver, so a
+; segment banked at the hook would send the next block's ISR into freed memory
+; (KERN-MEGA-PLAN 10.3 item 57's correction). Clobbers reg16 and flags
+%macro SBL_DSCS 2
+    mov %1, cs
+    cmp %1, 0xF000              ; the HMA (SPEC.md 2.10.8): a paragraph, never
+    jae %%rm                    ; a selector - kern_mega's stop below 4000h
+    test %2, 4
+    jz %%rm
+    cmp %1, 0x2800              ; MEGA_LDT_FREE0 * 8: an image ABOVE 1MB
+    jb %%alias                  ; (KERN-MEGA-PLAN item 82) runs in an
+    add %1, 8                   ; allocator PAIR, whose data half is the code
+    jmp short %%rm              ; half + 8
+%%alias:
+    and %2, 0xF8
+    shl %1, 1
+    shl %1, 1
+%%rm:
+    mov ds, %1
+%endmacro
+
 sbl_isr:
     push ax
     push bx
     push dx
     push ds
     push es
-    push cs
-    pop ds                      ; DS = OUR segment: an ISR that lives in a
+    SBL_DSCS ax, al             ; DS = OUR segment: an ISR that lives in a
     cld                         ; driver has to point DS at itself, and every
                                 ; byte it touches below is ours (SPEC.md 51.2)
 
@@ -830,8 +860,7 @@ sbl_stub_c:
     push dx
     push ds
     mov ah, al                  ; AH = candidate index (AL becomes scratch)
-    push cs
-    pop ds                      ; DS = ours, like sbl_isr's
+    SBL_DSCS dx, dl             ; DS = ours, like sbl_isr's
     or ah, ah                   ; candidate 0 (IRQ 7) first proves it is not
     jnz .accept                 ; the 8259's spurious-IRQ-7 artifact:
     mov al, 0x0B                ; OCW3 - the next 0x20 read returns the
@@ -2148,6 +2177,7 @@ sbl_fill_guard:
     jz .dsh                     ; verb 0 having committed it)
     mov di, [sbl_half]
 .dsh:
+    add di, [sbl_sbase]         ; ...from the buffer's first offset
     pushf
     cli
     cmp byte [sbl_str_act], 1   ; verify INSIDE the window, before any
@@ -2379,6 +2409,7 @@ sbl_drain_half:
     jz .src
     add si, SBL_RHALF
 .src:
+    add si, [sbl_sbase]         ; ...from the buffer's first offset
     mov di, [sbl_str_off]       ; DI = grant + progress: the destination
     add di, [sbl_consumed]
     mov cx, [sbl_total]
@@ -2673,17 +2704,27 @@ sbl_dma_get:
     push ax
     push cx
     push dx
+    mov ax, SBL_DMASZ           ; THE HMA FIRST (SPEC.md 2.10.8): on a 286 with
+    call OSAPI_MEM_HMA          ; `.cold` up there, 8KB the heap never sees -
+    jnc .got                    ; one 64KB physical page, as the chip needs
     mov ax, SBL_WANT
     mov cx, ax
     call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment
     jc .fail
+    xor ax, ax                  ; (a heap claim starts at its offset 0)
+.got:
     mov [sbl_seg], dx
+    mov [sbl_sbase], ax         ; ...and every CPU access is from AX on
+    push ax
     mov ax, dx                  ; ...and the two words the base decides: the
     mov cl, 4                   ; buffer's offset inside its 64KB physical
     shl ax, cl                  ; page (the low 16 bits of base x 16)...
-    mov [sbl_dmaoff], ax
     mov cl, 12                  ; ...and which page that is
     shr dx, cl
+    pop cx
+    add ax, cx                  ; ...from the block's first offset, which
+    adc dl, 0                   ; carries into the page above 1MB
+    mov [sbl_dmaoff], ax
     mov [sbl_page], dl
     clc
 .fail:                          ; (CF = 1 from the claim)
@@ -2702,7 +2743,13 @@ sbl_dma_put:
     mov dx, [sbl_seg]
     or dx, dx
     jz .out
-    call OSAPI_MEM_FREE
+    push ax
+    xor ax, ax                  ; an HMA block: AX = 0 gives DX back - and
+    call OSAPI_MEM_HMA          ; CF = 1 for anything that is not one, a heap
+    pop ax                      ; claim's segment being below F000 and no
+    jnc .gone                   ; block's ever (SPEC.md 2.10.8): the heap's
+    call OSAPI_MEM_FREE         ; free is then the answer
+.gone:
     mov word [sbl_seg], 0
 .out:
     pop dx
@@ -3417,6 +3464,9 @@ sbl_xcnt:     dw 0              ;   length - 1 (verb 0 sets all three)
 sbl_seg:      dw 0              ; the double buffer and record ring, page-
                                 ;   safe, held only while a stream that is
                                 ;   NOT direct is open (SPEC.md 34.5.2)
+sbl_sbase:    dw 0              ; ...and its first OFFSET there: 0 in the
+                                ;   heap, DRV_HMA_ORG in the HMA (SPEC.md
+                                ;   2.10.8), whose blocks have no offset 0
 sbl_poolseg:  dw 0              ; the STAGING POOL's own claim, 0 = not held.
                                 ;   Taken on the first grant, released with
                                 ;   the last (sbl_pool_get/put)

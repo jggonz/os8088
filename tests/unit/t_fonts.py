@@ -39,9 +39,14 @@ sys.path.insert(0, str(HERE))
 from harness import check, eq, done                        # noqa: E402
 import t_image                                             # noqa: E402
 
-# Every shipped SYSTEM image. The apps disks carry no faces at all - a face is
-# the machine's and not an application's (SPEC.md 19.8) - so they are not here.
-IMAGES = ["os8088.img", "os8088-720.img", "os8088-120.img", "os8088-360.img"]
+# Every image that carries the faces: the three larger SYSTEM images, and at
+# 360KB the OFFICE disk rather than the system one (SPEC.md 24.3.1.5) - the
+# Desk Clock took the room, and ty_gofonts falls back to the program's own
+# volume, which is where the programs that set type ride at that geometry.
+IMAGES = ["os8088.img", "os8088-720.img", "os8088-120.img", "office360.img"]
+# ...and the images that must carry NONE, because one there would be a copy
+# nothing reads when the office disk is in B: (the system disk's walk wins)
+NOFACES = ["os8088-360.img"]
 
 FONTS_AT = "SYSTEM/FONTS/"
 LICENCE = "LICENSE TXT"          # SPEC.md 6.4.1: it rides WITH the faces
@@ -122,6 +127,19 @@ for img in IMAGES:
           "%s: the root has no FONTS folder" % img,
           "SPEC.md 19.8.1 moved it INTO SYSTEM/ for the root's sake - the "
           "boot floppy's own window is what a person opens", got=root_folders)
+
+for img in NOFACES:
+    p = ROOT / "build" / img
+    if not p.exists():
+        check(False, "%s exists" % img, "`make` first")
+        continue
+    v = t_image.Vol(p.read_bytes(), img)
+    got = sorted(path + n.decode("ascii", "replace")
+                 for path, n, _a, _c, _s in v.walk()
+                 if n[8:].strip() == b"F88" or path == FONTS_AT)
+    eq(got, [], "%s: no faces at all (SPEC.md 24.3.1.5)" % img,
+       "the 360KB system disk gave SYSTEM/FONTS to office360.img for the "
+       "Desk Clock's room")
 
 # --- and the other end of the contract ---------------------------------------
 # ty_gofonts descends by NAME, one ty_dive per component, and the names are

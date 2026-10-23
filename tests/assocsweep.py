@@ -26,7 +26,7 @@ naming the volume.  Two machines, one leg each:
   floppy  a floppy boot, the document in A:\\ (a stub - only its NAME asks
           for TRACKER), the program in B:\\APPS on the apps disk.  ASSERTS no
           volume is mounted twice: a folder move on a volume the locate has
-          just mounted is a word (fcp_goto), not a boot-sector re-read.  It was
+          just mounted is a word (dsk_goto), not a boot-sector re-read.  It was
           four mounts, A: and B: twice each; it is two.
 
   four    the field's own three-disk layout on the four-drive 5150: A:

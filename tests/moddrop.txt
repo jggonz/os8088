@@ -1,0 +1,12 @@
+# tests/moddrop.txt - modules held until restart ON PURPOSE (SPEC.md 2.8.3)
+#
+# An on-demand module is read into a heap claim when its feature is asked for,
+# and what it buys is that the claim is given back when the feature is done.
+# tests/unit/t_moddrop.py fails the build for a mod_tab row nothing drops -
+# unless it has a line here, which is the argument written down.
+#
+# ONE LINE PER MODULE: MOD_X  # what holds it, and what would let it go
+#
+# The list turns ONE WAY: a line for a module that has a drop is a failure.
+# It is EMPTY today. DESK.DRV was the one module held to restart, and SPEC.md
+# 11.103.10's drop rule retired it.

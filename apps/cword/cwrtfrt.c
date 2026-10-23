@@ -46,6 +46,8 @@
  *                     byte, a word, a flag, and the two resets - including
  *                     the one that catches the mistake cwrtfio.c warns about,
  *                     that \plain must NOT come out underlined
+ *   5  formats        every attribute and paragraph format the editor
+ *                     can set survives a save and a load (73.12.4)
  * ==========================================================================*/
 
 #include <stdio.h>
@@ -151,6 +153,120 @@ static int check_roundtrip(void)
     }
     printf("cwrtfrt: ok 1 round trip      %d chars -> %d bytes of RTF -> %d chars\n",
            keepn, n, cw_len);
+    return 0;
+}
+
+/* --- every format the editor can set ---------------------------------------
+ * SPEC.md 73.12.4: word underline, double underline, small caps and hidden
+ * text, and every paragraph format - alignment, spacing, space before and the
+ * three indents, a hanging indent among them - written and read back to the
+ * byte, MARKS INCLUDED: a mark's byte is a dictionary index, so it is the
+ * dictionary entry's six fields that are compared, not the index itself. The
+ * last paragraph has no mark and carries the typing format, cw_pap_now. */
+static const char *rt_ftext =
+    "Word under, double under, small caps, hidden.\n"
+    "Centred and double spaced.\n"
+    "Hanging indent, open space before.\n"
+    "\n"
+    "Right aligned, one and a half, right indent.\n"
+    "Justified last paragraph";
+
+static int check_formats(void)
+{
+    static char  keep[CW_DOC_MAX];
+    static unsigned char keepa[CW_DOC_MAX];
+    static unsigned char kal[CW_PAP_MAX], ksp[CW_PAP_MAX], kop[CW_PAP_MAX];
+    static unsigned char kli[CW_PAP_MAX], kri[CW_PAP_MAX];
+    static signed char kfi[CW_PAP_MAX];
+    int keepn, keepnow, n, i, para, a, e, k, got;
+
+    cw_doc_clear();
+    cw_pap_n = 1;
+    para = 0;
+    for (i = 0; rt_ftext[i] != 0; i++) {
+        a = 0;
+        if (i < 10)
+            a = CW_A_WUL;
+        else if (i < 24)
+            a = CW_A_DUL;
+        else if (i < 36)
+            a = CW_A_SCAP | CW_A_BOLD;
+        else if (i < 44)
+            a = CW_A_HID | CW_A_ITAL;
+        if (rt_ftext[i] == '\n') {
+            if (para == 0)
+                e = 0;
+            else if (para == 1)
+                e = ovl_pap_find(CW_AL_CENTER, 2, 0, 0, 0, 0);
+            else if (para == 2)
+                e = ovl_pap_find(CW_AL_LEFT, 0, 1, 5, -5, 0);
+            else if (para == 3)
+                e = 0;
+            else
+                e = ovl_pap_find(CW_AL_RIGHT, 1, 0, 0, 0, 7);
+            para++;
+            cw_buf[cw_len] = '\n';
+            cw_att[cw_len] = (unsigned char)e;
+            cw_len++;
+            continue;
+        }
+        ovl_put((unsigned char)rt_ftext[i], a);
+    }
+    cw_pap_now = ovl_pap_find(CW_AL_JUST, 0, 0, 12, 0, 0);
+
+    keepn = cw_len;
+    memcpy(keep, cw_buf, keepn);
+    memcpy(keepa, cw_att, keepn);
+    memcpy(kal, cw_pap_al, CW_PAP_MAX); memcpy(ksp, cw_pap_sp, CW_PAP_MAX);
+    memcpy(kop, cw_pap_op, CW_PAP_MAX); memcpy(kli, cw_pap_li, CW_PAP_MAX);
+    memcpy(kfi, cw_pap_fi, CW_PAP_MAX); memcpy(kri, cw_pap_ri, CW_PAP_MAX);
+    keepnow = cw_pap_now;
+
+    n = ovl_rtf_build();
+    if (n < 0) {
+        fail("5 formats: the writer overflowed");
+        return 5;
+    }
+    cw_doc_clear();
+    cw_pap_now = 0;
+    if (ovl_rtf_parse(n) != CW_RTF_OK || cw_len != keepn) {
+        cw_rtf[n] = 0;
+        printf("cwrtfrt: %s\n", cw_rtf);
+        fail("5 formats: the reader refused or lost text");
+        return 5;
+    }
+    for (i = 0; i <= keepn; i++) {
+        if (i < keepn && cw_buf[i] != keep[i]) {
+            fail("5 formats: text");
+            return 5;
+        }
+        if (i < keepn && keep[i] != '\n') {
+            if (cw_att[i] != keepa[i]) {
+                printf("cwrtfrt: attr %d is %d, expected %d ('%c')\n",
+                       i, cw_att[i], keepa[i], keep[i]);
+                fail("5 formats: a character attribute did not survive");
+                return 5;
+            }
+            continue;
+        }
+        k = (i < keepn) ? keepa[i] : keepnow;
+        got = (i < keepn) ? cw_att[i] : cw_pap_now;
+        if (cw_pap_al[got] != kal[k] || cw_pap_sp[got] != ksp[k] ||
+            cw_pap_op[got] != kop[k] || cw_pap_li[got] != kli[k] ||
+            cw_pap_fi[got] != kfi[k] || cw_pap_ri[got] != kri[k]) {
+            cw_rtf[n] = 0;
+            printf("cwrtfrt: %s\n", cw_rtf);
+            printf("cwrtfrt: paragraph ending at %d: al %d sp %d op %d li %d "
+                   "fi %d ri %d, expected %d %d %d %d %d %d\n", i,
+                   cw_pap_al[got], cw_pap_sp[got], cw_pap_op[got],
+                   cw_pap_li[got], cw_pap_fi[got], cw_pap_ri[got],
+                   kal[k], ksp[k], kop[k], kli[k], kfi[k], kri[k]);
+            fail("5 formats: a paragraph format did not survive");
+            return 5;
+        }
+    }
+    printf("cwrtfrt: ok 5 formats         7 attributes and 6 paragraph "
+           "formats, %d bytes of RTF\n", n);
     return 0;
 }
 
@@ -456,6 +572,8 @@ int main(void)
         rc = check_refusals();
     if (rc == 0)
         rc = check_props();
+    if (rc == 0)
+        rc = check_formats();
 
     if (rc != 0 || fails != 0) {
         printf("cwrtfrt: FAILED (check %d)\n", rc);

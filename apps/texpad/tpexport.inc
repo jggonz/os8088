@@ -214,13 +214,6 @@ tp_xw_sns:
     xchg si, di
     ret
 
-tp_xw_cr:
-    push ax
-    mov al, 10
-    call tp_xw_al
-    pop ax
-    ret
-
 tp_mark_obj:
     ; AX = obj number 1-based: its offset is where the file is now. AX kept.
     push bx

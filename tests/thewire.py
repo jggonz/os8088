@@ -1673,7 +1673,7 @@ def main():
             # being typed here, so adding a part to the fixture cannot leave
             # this reading an old number (tests/pkgrun.py does the same walk).
             blob = open(os88build.at("build/mseg.o88"), "rb").read()
-            nparts = len(os88parts.rows(blob[:blob[8] | (blob[9] << 8)]))
+            nparts = len(os88parts.image_rows(blob))
             wantttl = "MSEG %d/%d OK" % (nparts, nparts)
             if ttl != wantttl:
                 no("the archive launched %r and its program entry is %s, "

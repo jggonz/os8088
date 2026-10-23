@@ -353,7 +353,7 @@ eth_setdown:
 ; release-fired; what changed is that the DRAW goes through the control.
 eu_btlbl: dw 0
 eu_btflg: dw 0
-eu_btrec: dw 0, eu_btlbl, eu_btflg, 1, 0, 0, 0, 0
+eu_btrec: dw 0, eu_btlbl, eu_btflg, 1, 0, 0, 0, 0, 0, 0, 0, 0
 
 eth_draw_btns:
     push bx

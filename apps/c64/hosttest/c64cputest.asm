@@ -2135,6 +2135,12 @@ exit:                               ; AL -> isa-debug-exit: code = AL*2+1
 
 section .data
 fails:      dw 0
+; c64mem.inc's _c64_copy_row reads the C's row buffer and screen-code table
+; (c64kbd.c's statics), and this harness includes c64mem.inc whole - so they
+; are defined here as c64memtest.asm defines them. Nothing in this harness
+; calls _c64_copy_row; without them the gate does not assemble at all.
+_c64_scrow: times 40 db 0
+_c64_sctab: times 128 db 0
 pp_ddr:     db 0x2F
 pp_data:    db 0x37
 neg_map:    db 0

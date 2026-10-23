@@ -30,12 +30,18 @@
 ;                                lodsb, which would clobber A
 ;     SP         BP              every stack access is `[ds:bp]`: [bp] alone
 ;                                would address SS, which is LOW_SEG here
-;     IX IY AF' BC' DE' HL' I R IFF IM   the register file _rc_z, reached
-;                                with cs:
+;     IX IY AF' BC' DE' HL' I R IFF IM   the register file _rc_z, READ
+;                                with cs: and WRITTEN with es:
 ;     (scratch)  BX              the dispatch index, and free inside a handler
 ;     DS         the 64KB Z80 claim, for the whole of rc_run; SS the task's
-;                stack, CS this package - so a static is [cs:x], Z80 memory
-;                is [x], and nothing here ever loads ES. The core's own hot
+;                stack, CS this package and ES this package too, loaded once
+;                at rc_run's door - so a static is read as [cs:x] and written
+;                as [es:x], and Z80 memory is [x]. Two names for one segment
+;                because under kern_mega (CPU_F_PM) CS is the region's
+;                read-only CODE alias: a [cs:x] store is a #GP the kernel
+;                completes, which was every IX/IY write, every EXX and every
+;                slice's exit (KERN-MEGA-PLAN 10.3). One prefix byte either
+;                way, so the real-mode kernels run the same clocks. The hot
 ;                scratch (the slice budget, the CB/DD operands) is in the
 ;                Z80's top 16 bytes, [0xFFF0..] - see RC_ZS_* below for why
 ;
@@ -141,6 +147,9 @@ _rc_run:
     mov bp, sp
     mov ax, [bp+4]                  ; n
     push ds
+    push es                         ; ...and ES = the package, for the run:
+    push ds                         ; every WRITE to a static is [es:x], never
+    pop es                          ; [cs:x] (see the register plan)
     mov ds, [cs:_rc_z+RZ_SEG]
     mov [RC_ZS_CNT], ax
     mov ax, [cs:_rc_z+RZ_AF]
@@ -153,27 +162,28 @@ _rc_run:
 
 ; the three ways out. rc_exit packs the registers and answers the reason.
 rc_slice_out:
-    mov word [cs:_rc_z+RZ_REASON], RC_RUN_SLICE
+    mov word [es:_rc_z+RZ_REASON], RC_RUN_SLICE
     jmp short rc_exit
 rc_trap_bios:                       ; RST 08h: SI is past the RST
-    mov word [cs:_rc_z+RZ_REASON], RC_RUN_BIOS
+    mov word [es:_rc_z+RZ_REASON], RC_RUN_BIOS
     jmp short rc_exit
 rc_trap_bdos:                       ; RST 10h
-    mov word [cs:_rc_z+RZ_REASON], RC_RUN_BDOS
+    mov word [es:_rc_z+RZ_REASON], RC_RUN_BDOS
     jmp short rc_exit
 h_halt:                             ; 76: PC stays ON the HALT (cpu1.h --PC)
     dec si
-    mov word [cs:_rc_z+RZ_REASON], RC_RUN_HALT
+    mov word [es:_rc_z+RZ_REASON], RC_RUN_HALT
 rc_exit:
-    mov [cs:_rc_z+RZ_AF], ax
-    mov [cs:_rc_z+RZ_BC], cx
-    mov [cs:_rc_z+RZ_DE], dx
-    mov [cs:_rc_z+RZ_HL], di
-    mov [cs:_rc_z+RZ_PC], si
-    mov [cs:_rc_z+RZ_SP], bp
+    mov [es:_rc_z+RZ_AF], ax
+    mov [es:_rc_z+RZ_BC], cx
+    mov [es:_rc_z+RZ_DE], dx
+    mov [es:_rc_z+RZ_HL], di
+    mov [es:_rc_z+RZ_PC], si
+    mov [es:_rc_z+RZ_SP], bp
     mov ax, [RC_ZS_CNT]
-    mov [cs:_rc_z+RZ_CNT], ax
+    mov [es:_rc_z+RZ_CNT], ax
     mov ax, [cs:_rc_z+RZ_REASON]
+    pop es
     pop ds
     pop bp
     ret
@@ -467,7 +477,7 @@ h_%2_x:
 ; it; done twice around the body
 %macro IXSWAP 0
     mov bx, [RC_ZS_IXP]
-    xchg di, [cs:bx]
+    xchg di, [es:bx]
 %endmacro
 
 ; =============================================================================
@@ -737,11 +747,11 @@ h_pop_af:   mov ax, [ds:bp]
             jmp rc_next
 h_ex_de_hl: xchg dx, di
             jmp rc_next
-h_ex_af:    xchg ax, [cs:_rc_z+RZ_AF2]
+h_ex_af:    xchg ax, [es:_rc_z+RZ_AF2]
             jmp rc_next
-h_exx:      xchg cx, [cs:_rc_z+RZ_BC2]
-            xchg dx, [cs:_rc_z+RZ_DE2]
-            xchg di, [cs:_rc_z+RZ_HL2]
+h_exx:      xchg cx, [es:_rc_z+RZ_BC2]
+            xchg dx, [es:_rc_z+RZ_DE2]
+            xchg di, [es:_rc_z+RZ_HL2]
             jmp rc_next
 h_ex_sp_hl: xchg di, [ds:bp]
             jmp rc_next
@@ -839,9 +849,9 @@ h_ccf:      test ah, 1                ; H = the old C, C inverted, N = 0
 .was0:      and ah, 0C4h
             or ah, 1
             jmp rc_next
-h_di:       mov word [cs:_rc_z+RZ_IFF], 0
+h_di:       mov word [es:_rc_z+RZ_IFF], 0
             jmp rc_next
-h_ei:       mov word [cs:_rc_z+RZ_IFF], 3
+h_ei:       mov word [es:_rc_z+RZ_IFF], 3
             jmp rc_next
 
 ; --- 16-bit arithmetic --------------------------------------------------------
@@ -1305,10 +1315,10 @@ d_ld_ix_nn_: IXSWAP
             IXSWAP
             jmp rc_next
 d_inc_ix:   mov bx, [RC_ZS_IXP]
-            inc word [cs:bx]
+            inc word [es:bx]
             jmp rc_next
 d_dec_ix:   mov bx, [RC_ZS_IXP]
-            dec word [cs:bx]
+            dec word [es:bx]
             jmp rc_next
 d_pop_ix:   IXSWAP
             mov di, [ds:bp]
@@ -1412,7 +1422,7 @@ d_cb:       call rc_ixea              ; DD CB d op
 %endmacro
 %macro DX_LD_X_R 2                      ; LD IXH/IXL, %1
             mov bx, [RC_ZS_IXP]
-            mov [cs:bx+%2], %1
+            mov [es:bx+%2], %1
             jmp rc_next
 %endmacro
 %macro DX_ALU 2                         ; ALU A, IXH/IXL  (%1 = the ALU_ macro)
@@ -1442,27 +1452,27 @@ d_ld_xl_a:  DX_LD_X_R al, 0
 d_ld_xh_xl: mov bx, [RC_ZS_IXP]
             push cx
             mov cl, [cs:bx]
-            mov [cs:bx+1], cl
+            mov [es:bx+1], cl
             pop cx
             jmp rc_next
 d_ld_xl_xh: mov bx, [RC_ZS_IXP]
             push cx
             mov cl, [cs:bx+1]
-            mov [cs:bx], cl
+            mov [es:bx], cl
             pop cx
             jmp rc_next
 d_ld_xh_n:  mov bx, [RC_ZS_IXP]
             push cx
             mov cl, [si]
             inc si
-            mov [cs:bx+1], cl
+            mov [es:bx+1], cl
             pop cx
             jmp rc_next
 d_ld_xl_n:  mov bx, [RC_ZS_IXP]
             push cx
             mov cl, [si]
             inc si
-            mov [cs:bx], cl
+            mov [es:bx], cl
             pop cx
             jmp rc_next
 d_inc_xh:   mov bx, [RC_ZS_IXP]
@@ -1651,17 +1661,17 @@ e_retn:     mov bx, [cs:_rc_z+RZ_IFF]   ; IFF1 = IFF2, then RET
             and bx, 0201h
             or bl, bh
             and bx, 3
-            mov [cs:_rc_z+RZ_IFF], bx
+            mov [es:_rc_z+RZ_IFF], bx
             jmp h_ret
-e_im0:      mov word [cs:_rc_z+RZ_IM], 0
+e_im0:      mov word [es:_rc_z+RZ_IM], 0
             jmp rc_next
-e_im1:      mov word [cs:_rc_z+RZ_IM], 1
+e_im1:      mov word [es:_rc_z+RZ_IM], 1
             jmp rc_next
-e_im2:      mov word [cs:_rc_z+RZ_IM], 2
+e_im2:      mov word [es:_rc_z+RZ_IM], 2
             jmp rc_next
-e_ld_i_a:   mov [cs:_rc_z+RZ_I], al
+e_ld_i_a:   mov [es:_rc_z+RZ_I], al
             jmp rc_next
-e_ld_r_a:   mov [cs:_rc_z+RZ_R], al
+e_ld_r_a:   mov [es:_rc_z+RZ_R], al
             jmp rc_next
 ; LD A,I / LD A,R: S Z from the value, H = N = 0, P/V = IFF2, C kept
 e_ld_a_i:   mov al, [cs:_rc_z+RZ_I]

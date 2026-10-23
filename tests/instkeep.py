@@ -98,8 +98,13 @@ def check(vhd):
         if got != want:
             bad.append("%s was not kept (%s)" % (
                 path, "missing" if got is None else "%d bytes" % len(got)))
-    for p in ("COMMAND.COM", "IO.SYS", "SYSTEM/TASKMGR.O88", "APPS",
-              "SYSTEM/FONTS/TALLX.F88"):
+    # A TYPEFACE ONLY WHERE THE FLOPPY HAS ONE: the 360KB system disk gave
+    # SYSTEM/FONTS to office360.img (SPEC.md 24.3.1.5), so an install off it
+    # has none to copy - which that section says in as many words
+    fonts = any(q.startswith("SYSTEM/FONTS/") for q in ID.Vol(open(
+        os88build.at("build/os8088-360.img"), "rb").read()).tree())
+    for p in ("COMMAND.COM", "IO.SYS", "SYSTEM/TASKMGR.O88", "APPS") + (
+            ("SYSTEM/FONTS/TALLX.F88",) if fonts else ()):
         if p not in tree:
             bad.append("%s is missing" % p)
     if "KPAD.TMP" in tree:

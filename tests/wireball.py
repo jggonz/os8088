@@ -71,8 +71,10 @@ def settle(m, **kw):
 
 
 class Machine(Qemu):
-    def __init__(self, directory, index):
+    def __init__(self, directory, index, *, app='wireball', filename='WIREBALL.O88', disk=None, prefix='wb_', ps2=False):
         self.directory = directory
+        self.app = app
+        self.varprefix = prefix
         self.linkport = 1-index
         self.linkpath = str(directory / f'link{index}.sock')
         self.gdbpath = str(directory / f'gdb{index}.sock')
@@ -80,9 +82,13 @@ class Machine(Qemu):
         path = str(directory / f'qmp{index}.sock')
         args = ['qemu-system-i386', '-machine', 'pc,vmport=off,pcspk-audiodev=speaker', '-audiodev', f'wav,id=speaker,path={directory / ("speaker" + str(index) + ".wav")}', '-m', '16M', '-serial', 'none', '-parallel', 'none',
                 '-drive', f'file={artifact("os8088.img")},if=floppy,index=0,format=raw,snapshot=on',
-                '-drive', f'file={(DISK_OVERRIDE or artifact("wireball.img"))},if=floppy,index=1,format=raw,snapshot=on',
+                '-drive', f'file={(disk or DISK_OVERRIDE or artifact("wireball.img"))},if=floppy,index=1,format=raw,snapshot=on',
                 '-boot', 'a', '-display', 'none', '-nic', 'none',
-                '-chardev', 'msmouse,id=mouse', '-device', f'isa-serial,chardev=mouse,index={1-self.linkport}',
+                # ps2: the pointer is the i8042's and the other UART is a
+                # silent null modem with nothing on it, so BOTH ports are
+                # free and a desktop serial game has to find the right one.
+                '-chardev', 'null,id=mouse' if ps2 else 'msmouse,id=mouse',
+                '-device', f'isa-serial,chardev=mouse,index={1-self.linkport}',
                 '-chardev', f'socket,id=link,path={self.linkpath},server=on,wait=off',
                 '-device', f'isa-serial,chardev=link,index={self.linkport}',
                 '-qmp', f'unix:{path},server=on,wait=off',
@@ -105,11 +111,11 @@ class Machine(Qemu):
         assert os88qemu.acted(self, lambda: bool(dispcp.win_list(self, S)),
                              secs=8, what='Disk B window'), 'double-click did not open Disk B'
         wx, wy = dispcp.win_rect(self, S, dispcp.win_list(self, S)[-1])[:2]
-        dispcp.open_named(self, self.mo, S, settle, wx, wy, 'WIREBALL.O88')
+        dispcp.open_named(self, self.mo, S, settle, wx, wy, filename)
         assert os88qemu.acted(self, lambda: dispapps.pkg_seg(self, 0) is not None,
                              secs=8, what='WireBall loaded'), 'package did not load'
         self.seg = dispapps.pkg_seg(self, 0)[1]
-        self.sy = dispapps._map('wireball')
+        self.sy = dispapps._map(app)
         self.base = self.sy['os88_image_end']
         self.bss_size = int.from_bytes(self.readseg(self.seg, 10, 2), 'little')
 
@@ -124,7 +130,7 @@ class Machine(Qemu):
         # The filename uses launch index, which is the complementary link-port index.
         capture = self.directory / ('speaker' + str(1-self.linkport) + '.wav')
         if capture.exists() and capture.stat().st_size > 44:
-            shutil.copyfile(capture, artifact('wireball-speaker-' + str(1-self.linkport) + '.wav'))
+            shutil.copyfile(capture, artifact(self.app + '-speaker-' + str(1-self.linkport) + '.wav'))
         if hasattr(self, 'tmp'):
             shutil.rmtree(self.tmp, ignore_errors=True)
         if hasattr(self, 'log') and not self.log.closed:
@@ -152,7 +158,7 @@ class Machine(Qemu):
                 s.settimeout(10)
                 s.connect(self.gdbpath)
                 for name, value, n in values:
-                    address = (self.seg << 4) + self.sy['wb_' + name]
+                    address = (self.seg << 4) + self.sy[self.varprefix + name]
                     data = value.to_bytes(n, 'little')
                     payload = f'M{address:x},{n:x}:{data.hex()}'.encode()
                     s.sendall(b'$' + payload + b'#' + f'{sum(payload) & 255:02x}'.encode())
@@ -222,6 +228,8 @@ class Cable:
         self.enabled = True
         self.stop = threading.Event()
         self.counts = [0, 0]
+        self.observed = [bytearray(), bytearray()]
+        self.filter = None       # optional byte-stream fault fixture, same UART bridge
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
@@ -235,8 +243,11 @@ class Cable:
                     if not data:
                         return
                     self.counts[event.data] += len(data)
+                    self.observed[event.data].extend(data)
                     if self.enabled:
-                        self.sockets[1-event.data].sendall(data)
+                        out = self.filter(event.data, data) if self.filter else data
+                        if out:
+                            self.sockets[1-event.data].sendall(out)
 
     def inject(self, destination, data):
         self.sockets[destination].sendall(data)

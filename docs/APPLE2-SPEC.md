@@ -150,6 +150,19 @@ with a toast, before a sector was read.
 `OP_ASSET` rather than `OP_SEGMENT` because nothing in it is far-called: the
 core reaches it by segment arithmetic.
 
+**And it is `OP_COMP`, since the overlay joined it (section 15.5.1).** The row
+was plain while it was the only part; the overlay's row is compressed, which
+puts `op_unpack` and the LZ4 walk in the image whether or not the ROM uses
+them, so a plain ROM was 2,108 bytes of disk paid to keep code that was
+already resident idle. Packed it is **12,740 bytes against 14,848 - four
+sectors off `APPLE2.O88` for no image byte** (`apple2.bin` is 30,386 either
+way). `op_unpack` walks the run down into the unpacked layout and `op_seg`
+answers the same `op_base + slack` it answered before, so everything below -
+the CHARGEN decode, the shrink, `tests/apple2part.py`'s arithmetic - is
+unchanged. What it costs is the decode at launch, ~40 cycles an output byte
+(SPEC.md 20.13), about 0.12 s of a 4.77MHz 8088 against four sectors fewer
+inside the same read.
+
 **`APP_MAX_SIZE` bounds the primary segment's image plus bss, not the FILE**
 (`C64-SPEC §1.4`'s correction), so the ROM is **0 bytes of image**. The file
 on disk is image + 14,848.
@@ -2061,10 +2074,10 @@ few per cent of real speed on the target.
 
 | field | carries |
 |---|---|
-| message area | refusals, the overlay's `Unable to load APPLE2.OVL.`, **the speaker's stated fact - `Square-wave tones only.`, 23 cells, said ONCE the first time the machine makes a noise, or the first time it makes one this build cannot turn into a tone (section 8)** - the speaker's refusal `The speaker is busy.`, the two mute picks' `Muted.` / `Unmuted.` (the port's own pick-says-what-it-did idiom, beside `Stopped.` and `Warp off.`), the foreign mode's three refusals (`No colour on this screen.`, `No memory for colour.`, `The screen refused it.`) and - from the Disk II wave - the sentence that says the drive is spinning and names Ctrl-Reset as the way to `]` |
-| speed | the **measured** percentage of a 1.02 MHz Apple II, right-aligned at the row's last cells, **drawn only while the message area is clear**, and **drawn only while the 6502 is RUNNING** - a jammed machine's field goes blank rather than freezing on the last window's figure, which would be a number about a machine that is not running (SPEC.md 47). There is no column a message and a widget can both have - the mode fields hold 0-15 and `Unable to load APPLE2.OVL.` is 26 glyphs, which reaches cell 41 exactly - so the choice is which one loses, and a message is transient where a speed figure is not news; narrowing the message cap to 19 instead would truncate the one message a user most needs to read whole. It is counted in **64-cycle units with the remainder carried**, because 1,020,484 cycles a second does not fit the 16-bit `int` this C has and a truncation that dropped up to 63 cycles a slice would misreport by ~0.4 % on a machine taking sixty slices a second |
+| message area | refusals, the overlay's `Unable to load commands.` (`Unable to load APPLE2.OVL.` until section 15.5.1), **the speaker's stated fact - `Square-wave tones only.`, 23 cells, said ONCE the first time the machine makes a noise, or the first time it makes one this build cannot turn into a tone (section 8)** - the speaker's refusal `The speaker is busy.`, the two mute picks' `Muted.` / `Unmuted.` (the port's own pick-says-what-it-did idiom, beside `Stopped.` and `Warp off.`), the foreign mode's three refusals (`No colour on this screen.`, `No memory for colour.`, `The screen refused it.`) and - from the Disk II wave - the sentence that says the drive is spinning and names Ctrl-Reset as the way to `]` |
+| speed | the **measured** percentage of a 1.02 MHz Apple II, right-aligned at the row's last cells, **drawn only while the message area is clear**, and **drawn only while the 6502 is RUNNING** - a jammed machine's field goes blank rather than freezing on the last window's figure, which would be a number about a machine that is not running (SPEC.md 47). There is no column a message and a widget can both have - the mode fields hold 0-15 and the widest message is 26 glyphs (`Unable to load APPLE2.OVL.` when this was written, `Cannot read the clipboard.` since section 15.5.1 shortened it), which reaches cell 41 exactly - so the choice is which one loses, and a message is transient where a speed figure is not news; narrowing the message cap to 19 instead would truncate the one message a user most needs to read whole. It is counted in **64-cycle units with the remainder carried**, because 1,020,484 cycles a second does not fit the 16-bit `int` this C has and a truncation that dropped up to 63 cycles a slice would misreport by ~0.4 % on a machine taking sixty slices a second |
 | ...and **THE UNIT DOUBLES RATHER THAN THE COUNT SATURATING** | this is the field's own history and it binds. Its first form simply stopped accumulating - `if (a2_c64u < 60000u)` - and the one-second denominator is `876 x 18 / 100` = 157, so the largest per cent the arithmetic could produce was **383**: 380 %, 400 %, 1,000 % and 3,000 % all printed the same number, `pct > 9999` was unreachable dead code, and 383 is what wave 2's own screendumps show on a host that runs the core at some thousands of per cent. The count now holds units of `64 << a2_csh` cycles; when it would pass 32,767 it is halved and the shift goes up, so nothing is dropped at any speed, and the fold undoes the shift on **quotient and remainder both** (`(q << sh) + ((r << sh) / den)`) - dividing by a shifted denominator loses a third of the answer. `a2_csh` caps at 6, which holds 13,300 % of a one-second window, and the 9,999 % clamp fires first and is therefore REACHABLE. **`hosttest/a2uitest.c` is the gate**: seven machine speeds from 3 % to 6,000 % driven through the arithmetic and checked against what each should read, plus a 12,000 % case that must clamp. A field that reads the same for two very different machine speeds is the whole thing being tested |
-| video mode | the live mode: `TEXT` / `LORES` / `HIRES` at cells 0-4, plus `MIXED` at 6-10 and **`PG2`** at 12-14. `PG2` and not `PAGE2`, and it is arithmetic rather than taste: the message area starts at cell **16** because `Unable to load APPLE2.OVL.` is 26 glyphs and the row is 42, so the mode fields hold cells 0-15 and the third field has **four**. `PAGE2` is five |
+| video mode | the live mode: `TEXT` / `LORES` / `HIRES` at cells 0-4, plus `MIXED` at 6-10 and **`PG2`** at 12-14. `PG2` and not `PAGE2`, and it is arithmetic rather than taste: the message area starts at cell **16** because the widest message is 26 glyphs (it was `Unable to load APPLE2.OVL.`; it is `Cannot read the clipboard.`) and the row is 42, so the mode fields hold cells 0-15 and the third field has **four**. `PAGE2` is five |
 | drive | the motor lamp and `%02d/%02d` of current track and current byte over 256 - **the Disk II follow-up PR** |
 
 Every message literal in `apps/apple2/*.c` is walked against the row's cell
@@ -3954,7 +3967,7 @@ imaginary headroom in the follow-up's arithmetic.
 | `apps/apple2/a2band.inc` | the three composers and the row primitives (section 7.3) | yes |
 | `apps/apple2/a2nib.inc` | the 6-and-2 encoder (the follow-up PR) - **assembly and resident** | yes |
 | `apps/apple2/a2fsx.inc` | **WAVE 5 WROTE IT**: `a2_fsx_row`'s three phase Bs (a masked glyph row, MII's lo-res CLUT, MII's artifact rule flattened into a 128-entry table), `a2_fsx_put` - the span compare one geometry along, and ONE routine for all three writers - `a2_fsx_init`, `a2_fsx_dac` and `a2_fsx_key`, which is the bracket's whole input path and is assembly because there is no `int 16h` in the C SDK and a bracket may not use the event ladder | yes |
-| `apps/apple2/apple2.asm` | the shim, and nothing else belongs in it: `CC_PKG_NAME 'APPLE2'`; `CC_HAS_ONKEY` / `ONCLICK` / `ABOUT` / `ONWAKE` / `MENUS` / `FDLG` / `OVL` / `PARTS` / `ICON` (**no `WORKER`**, and **`CC_ASSOC` only from the wave that makes Load Program work**, section 12); `%include cc/crt0.asm`, then `CC_PARTS_BEGIN 1` / `OS88_PART OP_ASSET` / `CC_PARTS_END`, then `apple2.gen.asm`, then `a2cpu.inc`, `a2mem.inc`, `a2band.inc`, `a2nib.inc` and `a2fsx.inc`, then `CC_IMAGE_END`. **`a2cpu.inc` comes first** because it declares the register file and the scratch layout the other two address through | yes |
+| `apps/apple2/apple2.asm` | the shim, and nothing else belongs in it: `CC_PKG_NAME 'APPLE2'`; `CC_HAS_ONKEY` / `ONCLICK` / `ABOUT` / `ONWAKE` / `MENUS` / `FDLG` / `OVL` / `PARTS` / `ICON` (**no `WORKER`**, and **`CC_ASSOC` only from the wave that makes Load Program work**, section 12); `%include cc/crt0.asm`, then `CC_PARTS_BEGIN 2` / `OS88_PART OP_ASSET, OP_COMP` / `CC_OVL_ROW` / `CC_PARTS_END` (section 15.5.1; `CC_OVL_PART`, `CC_OVL_LAZY` and `OP_NO_LAZYOK` defined above the include), then `apple2.gen.asm`, then `a2cpu.inc`, `a2mem.inc`, `a2band.inc`, `a2nib.inc` and `a2fsx.inc`, then `CC_IMAGE_END`. **`a2cpu.inc` comes first** because it declares the register file and the scratch layout the other two address through | yes |
 | `apps/apple2/a2assoc.inc` | the build-time association block (section 12) | yes |
 | `apps/apple2/icon.inc` | a 16x16 1-bit icon **drawn for this port** - not Apple's rainbow mark, which is trade dress | yes |
 | `apps/apple2/COPYING`, `README.TXT` | section 1.3 - **from wave 1** | - |
@@ -3967,19 +3980,27 @@ resident**, because resolving it is a claim and a `FILE_READ` - a floppy seek,
 fence, and the **WAKE**, which holds no lock, is what retries the load; and
 **the `.OVL` cannot be loaded from `os88_main`** - there is no instance yet -
 so the first `ovl_*` call is `ovl_a2_init()` from the **first wake**, printing
-`Unable to load APPLE2.OVL.` on the status row and toasting when it refuses.
+`Unable to load commands.` on the status row when it refuses (section 15.5.1:
+the module is part 1 of `APPLE2.O88` now, and `op_fetch` has already toasted
+the reason).
 
 **ONE SENTENCE FOR ONE CONDITION, AND THE TOAST IS SAID ONCE.** `a2_ovl_ready`
 had a second string of its own - `No APPLE2.OVL yet.` - that **no user could
 ever read**: it clears `a2_ovl_asked`, so the very next wake re-runs the probe
 and the probe overwrites the row before a tick has passed. The wave shipped a
 message nothing could show, and its `yet` was a promise where SPEC.md 47 asks
-for the fact; both routes say `Unable to load APPLE2.OVL.` now. The ROW is
-said on every menu pick, because the row is the answer to what the user just
-did; the TOAST is an announcement and is made once (`a2_ovl_told`), where it
-used to repeat per pick.
+for the fact; both routes say one sentence now - `Unable to load APPLE2.OVL.`
+until section 15.5.1, `Unable to load commands.` since, because there is no
+such file any more and what refuses is the commands. The ROW is said on every
+menu pick, because the row is the answer to what the user just did. The
+package's own once-only TOAST (`a2_ovl_told`) went with the file: a lazy
+part's refusal is `op_fetch`'s, which toasts the parts standard's sentence -
+`Not enough memory`, `No disk to read from` - before the call answers 0, so a
+second toast would only replace the reason with the consequence. A retry that
+fails toasts again, once per pick, and the fact CAN have changed in between.
 
-**AND THE TOAST IS 21 CHARACTERS, BECAUSE `TOAST_MAX` IS 24**
+**AND THE TOAST WAS 21 CHARACTERS, BECAUSE `TOAST_MAX` IS 24** (it is gone
+since section 15.5.1, and the record of why it was cut stays)
 (`kernel/toast.inc:85`) and a longer one is TRUNCATED rather than refused.
 `APPLE2: no APPLE2.OVL beside the program - the menu commands will refuse`
 reached the glass as **`APPLE2: no APPLE2.OVL be`** - 76 characters of which
@@ -4018,6 +4039,65 @@ pixels, for ever. So both answer `int`, `os88_paint` fences the pair with
 **the card down**: the latch cleared, the hold range emptied, and the panel's
 rect handed on as damage before the flush draws it.
 
+### 15.5.1 The overlay is PART 1 of `APPLE2.O88` - lazy, and why
+
+**The owner's ask**: a file the program needs and the user never opens is a
+sidecar, it scrolls past in every listing, and a copy that takes the package
+and leaves it behind is a program whose every command refuses. `APPLE2.OVL`
+was exactly that, so it rides inside the package now, by SPEC.md 73.14.2's
+mechanism: `CC_OVL_PART` and `CC_OVL_LAZY` in the shim, `CC_OVL_ROW` as the
+LAST row of the table the ROM already had, and `part` as `CC_PACKAGE`'s fifth
+argument. `WELCOME.BAS` is a document and `COPYING` a licence, and both stay
+files.
+
+**LAZY, AND NOT BECAUSE A SESSION CAN GO WITHOUT IT.** The first-wake probe
+(`ovl_a2_init`) fetches the module in every session - which is exactly when
+the file form read it - so the usual reason for lazy is absent and the usual
+reason for eager (one read at launch instead of two) is present. What decides
+it is section 1.5's SHRINK: an eager row is read into the carve BEHIND the
+ROM, and `os88_main` shrinks the carve to the head slack plus the main ROM the
+moment the CHARGEN is decoded. The eager arm would therefore have had to give
+the shrink up and keep an 18-19KB carve for the whole session, pinned (73.14.2.1:
+a carve that also holds the package's own parts stays pinned, and
+`a2_m.romseg` IS a banked `os88_part_seg`). Lazy is a 4KB claim of its own,
+taken bottom-up by `op_fetch` and declared movable the moment it is bound, and
+the ROM's carve still shrinks to 12KB. Measured on the MartyPC 5150 after the
+first wake: the carve 768 paragraphs, the overlay 256 paragraphs (exactly
+`ceil(3,403 / 1KB)` - `op_fetch` shrinks its read window to the part), the
+module's bytes equal to `build/APPLE2.OVL`.
+
+| | file form (before) | EAGER (measured, not taken) | **LAZY (shipped)** |
+|---|---:|---:|---:|
+| image + bss | 29,548 + 13,940 | 29,734 + 13,940 | **30,386 + 13,938** |
+| RAM after the first wake: carve + overlay | 12 + 4 KB | 18-19 + 0 KB, pinned, no shrink | **12 + 4 KB**, overlay movable |
+| reads at launch | the carve, then the `.OVL` at the first wake | one | the carve, then part 1 at the first wake |
+| `APPLE2.O88` on a disk | 36,352 + `APPLE2.OVL` 2,372 - two files, 76 sectors | 39,223 | **37,684 - one file, 74 sectors** (with the ROM `OP_COMP`, section 1.5) |
+| a refusal | `Unable to load APPLE2.OVL.` + `APPLE2: no APPLE2.OVL` | the LAUNCH refuses | `op_fetch`'s toast + `Unable to load commands.` |
+
+The lazy arm's +838 image bytes are 73.14.2.1's price for `op_fetch`,
+`op_drop`, the home bracket and the binder - the price CWORD measured as +924
+- less the 50 bytes the deleted toast and its flag took with them. The bss is
+2 bytes smaller: the file form's `cc_ovseg` word (the lazy arm's is the row's
+own `zkb`) and `a2_ovl_told` went, the bracket's three bytes came. **The ROM's `OP_COMP` is the other half of the
+disk figure** (section 1.5): without it the one file was 78 sectors, two more
+than the pair, and with it four fewer - on every geometry the folder is **two
+clusters smaller** than with the pair (`apple2360.img` and `apple2720.img` 74
+-> 72 of their clusters, `apple2.img` and `apple2120.img` 142 -> 140) and one
+directory entry shorter.
+
+**THE HOME BRACKET CLOSES THE FOLDER RULE.** `cc_ovneed` stands where the
+package was launched from for the fetch (SPEC.md 73.14.2.1), so a `.BAS`
+opened from another folder no longer opens a program whose every command
+refuses; the old rule that `APPLE2.O88` and `APPLE2.OVL` share a folder
+(section 16.2) is gone with the file.
+
+**The negative control stays meaningful.** A disk with no `APPLE2.OVL` cannot
+exist any more, but a session whose part 1 cannot be FETCHED can - no 4KB to
+spare, or the program's floppy out of a one-drive machine at the first wake -
+and section 7.3's rule is unchanged for it: the CHARGEN decode and the reverse
+table stay resident, so that session is a running Apple II whose menu
+commands refuse, not a window that draws nothing.
+
 **Every file above exists from wave 1, the stubs included**, and every one is
 a **written prerequisite** in the Makefile (`APPLE2SRC`, `APPLE2INC`): make
 cannot see through a `#include` or a `%include`, a file a later wave adds is a
@@ -4034,7 +4114,7 @@ like a change that did nothing.
 |---|---|
 | package name | `APPLE2` |
 | source | `apps/apple2/` |
-| shipped files | `APPLE2.O88` (with the ROM as part 0), `APPLE2.OVL` |
+| shipped files | `APPLE2.O88` (with the ROM as part 0 and the overlay as part 1, section 15.5.1) |
 | window title | `Apple II Plus Emulator` |
 | About panel, first row | `Apple II Plus Emulator` (AppleWin `source/Common.h:50`, `TITLE_APPLE_2_PLUS` - the same string as the window title; the leading `The` and the "MII's model row" citation were wave 3's and are corrected in wave 4) |
 | menu-set `AM_NAME` | `Apple II+` |
@@ -4051,17 +4131,17 @@ across all four surfaces in wave 7.
 ### 16.2 Disks
 
 **Four geometries**, each `os88disk.py --verify`'d in the recipe, each
-carrying **`APPLE2.O88` + `APPLE2.OVL` + `WELCOME.BAS` + `README.TXT` +
-`COPYING` in ONE folder `APPLE2/`** - five files, since wave 7 added the
-listing. The whole folder is **90,538 bytes**, which `--verify` reports as
-**93 of a 360KB disk's 354 clusters**, the folder's own directory cluster
-included.
+carrying **`APPLE2.O88` + `WELCOME.BAS` + `README.TXT` + `COPYING` in ONE
+folder `APPLE2/`** - four files since section 15.5.1 took `APPLE2.OVL` inside
+the package (five from wave 7, when the listing joined). `--verify` reports
+**72 of a 360KB disk's 354 clusters** at the conversion (74 with the pair),
+the folder's own directory cluster included.
 
-**One folder, and it is a correctness requirement rather than a layout
-choice**: SPEC.md 73.14 resolves an overlay in the **launched-from**
-directory, and a document double-click leaves that directory on the
-document's - so all of them are one folder or every menu command refuses
-politely.
+**One folder, and it is no longer a correctness requirement**: it was, while
+SPEC.md 73.14 resolved `APPLE2.OVL` in the instance's current directory and a
+document double-click left that on the document's. The overlay is a part now
+and is fetched from where the package was launched (section 15.5.1), so the
+folder is the distributed shape and nothing more.
 
 **`COPYING` travels with the binary.** The floppy is the distributed form of a
 GPL-2-or-later program. **If space ever runs out, the licence stays and the
@@ -4165,7 +4245,7 @@ published screendumps of the double-click route on the target machine.
 
 ### 16.3 The Makefile
 
-`$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL))` with the ROM part;
+`$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL,$(BUILD)/apple2-rom/APPLE2.ROM,part))` - the ROM part, then the overlay as the last `--part` (section 15.5.1; `build/APPLE2.OVL` is still written, as the plain cut the host tools read, and no `$(CC_OVLZ)` copy is made);
 `APPLE2SRC` and `APPLE2INC` as **written** prerequisites naming every included
 file; `build/apple2-rom/APPLE2.ROM` with **exactly ONE owner - the Makefile
 rule** - because `build.sh` reads it and writing it from the stamp recipe
@@ -4688,7 +4768,7 @@ requires **exactly** these keys, no more and no less.
 | `kind` | **0** (Applications), as C64 and RUNCPM are |
 | `tier` | **3** (`486+`), from the MEASURED 0.54% of section 16.4.1 - 0.41% when the record was written, and section 4.3.1's slice controller does not move a tier that is about a machine being USABLE rather than about a decimal - the same tier the C64 takes, for the same honest reason. A judgement, and the release skill asks for every tier touched to be flagged as reviewable in the PR |
 | `flags` | `["new"]` - only `new` and `floppy_only` are manifest-settable |
-| `files` | `APPLE2.O88`, `APPLE2.OVL`, `WELCOME.BAS`, `{name: APPLE2.TXT, source: apps/apple2/README.TXT}`, `{name: COPYING.A2, source: apps/apple2/COPYING}` - five, because the folder is the binding shape (section 16.2) and a listing nobody can open is a file that should not be published. A bare string is taken from `<os-repo>/build/`, which is where the first three live; `files[0]` must be exactly `<STEM>.O88` |
+| `files` | `APPLE2.O88`, `WELCOME.BAS`, `{name: APPLE2.TXT, source: apps/apple2/README.TXT}`, `{name: COPYING.A2, source: apps/apple2/COPYING}` - **four since section 15.5.1** (the record in os8088-web's `data/wire.json` named `APPLE2.OVL` as well and has to drop it at the next publish; it is not in this tree), because the folder is the binding shape (section 16.2) and a listing nobody can open is a file that should not be published. A bare string is taken from `<os-repo>/build/`, which is where the first three live; `files[0]` must be exactly `<STEM>.O88` |
 | `summary` | one sentence, printable ASCII, the site card's |
 | `description` | **pre-wrapped by the writer to 5 lines of 27 characters** - single spaces, no word longer than 27. This is the field the machine draws |
 | `page` | an HTML fragment that says **honestly what an XT does and does not do, and that colour is a VGA feature** |
@@ -4709,7 +4789,7 @@ with its ROM inside - 10,240 bytes of headroom, where the planned figure was
 
 | what | where |
 |---|---|
-| the package bytes | `public/wire/pkg/APPLE2.O88`, `APPLE2.OVL`, `WELCOME.BAS`, `APPLE2.TXT`, `COPYING.A2` |
+| the package bytes | `public/wire/pkg/APPLE2.O88`, `WELCOME.BAS`, `APPLE2.TXT`, `COPYING.A2` (`APPLE2.OVL` until section 15.5.1) |
 
 **AND THE README AND THE LICENCE ARE PUBLISHED UNDER NAMES OF THEIR OWN,
 WHICH IS NOT A PREFERENCE.** `public/wire/pkg/` is ONE FLAT DIRECTORY shared
@@ -4732,7 +4812,8 @@ the four wrongly - including the one the GPL notice points at - on the one
 route where the reader cannot check by looking at the floppy they were given.
 It now names both Wire names in the `COPYING` entry, and it says what actually
 has to share a folder: **`APPLE2.O88` and `APPLE2.OVL`, plus `WELCOME.BAS` for
-the double-click route**. The licence is a document nobody but the reader
+the double-click route** - and since section 15.5.1 there is no `APPLE2.OVL`
+to keep beside it, and the README says only what a failed fetch looks like. The licence is a document nobody but the reader
 opens and may sit wherever it lands. **The floppy build was never affected**;
 only the Wire route was.
 

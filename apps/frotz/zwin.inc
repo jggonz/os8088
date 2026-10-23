@@ -1374,6 +1374,18 @@ zw_notice:
     call zh_puts                    ; whole point: a halt has to reach the host
     call zh_nl
 %endif
+    cmp byte [zf_state], ZFS_NONE   ; NO STORY: there is no text window to put
+    jne .story                      ; it in. It goes under the splash's lines,
+    mov [zf_why], si                ; where a repaint keeps it - it was set
+    mov si, [zf_win]                ; hard against the title bar, a scroll bar
+    or si, si                       ; beside it with nothing to scroll, and the
+    jz .out                         ; next uncover drew the splash over it.
+    mov al, CWHITE                  ; Only the UI task gets here (the worker
+    call OSAPI_SET_COLOR            ; has a story by definition), lock held;
+    call zw_clear                   ; no window yet and the first paint draws
+    call zf_splash                  ; it
+    jmp short .out
+.story:
     mov byte [zw_nomore], 1
     mov bl, [zw_style]
     mov byte [zw_style], ZST_ROMAN
@@ -1395,6 +1407,7 @@ zw_notice:
     call zw_newline
     mov [zw_style], bl
     mov byte [zw_nomore], 0
+.out:
     pop si
     pop bx
     pop ax

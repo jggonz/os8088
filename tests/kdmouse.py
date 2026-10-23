@@ -55,6 +55,8 @@ import os88ui                                                  # noqa: E402
 SYS = "build/os8088-360.img"
 MOU = "build/dosmou360.img"
 MACH = "os8088_5150_cga_gla"
+CK_ON = 10                              # OS88UI_CK_ON, a box's 0/1 byte
+NOMOUSE = "--nomouse" in sys.argv       # tick Disable the mouse first
 
 
 def fail(msg):
@@ -162,6 +164,14 @@ def main():
         os88marty.settle(m)
         if kdhand.rec(m, pseg, dm, kdhand.RD_SEL) != kdhand.WHOLE:
             fail("clicking the Shut down the OS arm did not pick it")
+        if NOMOUSE:
+            # --- ...and Disable the mouse, which is live now the arm is the
+            # pick (SPEC.md 96.36.9): one press ticks it.
+            bx1, by1, _, _ = dosmap.rect(m, pseg, dm, "dos_mmou")
+            mo.click(bx1 + 4, by1 + 5)
+            os88marty.settle(m)
+            if m.read(base + dm["dos_mmou"] + CK_ON, 1)[0] != 1:
+                fail("pressing Disable the mouse did not tick it")
         # --- ...back to the main page, and the program's name ---------------
         # The path box has to be CLICKED first and the extension is part of
         # the name - tests/kdmix.py carries both reasons, and both fail as a
@@ -180,6 +190,18 @@ def main():
         # --- 2. the driver is THERE ------------------------------------------
         line = wait_line(m, "RESET")
         f = fields(line)
+        if NOMOUSE:
+            # **NO DRIVER, SO NO MOUSE** (SPEC.md 96.36.8): 33h is an iret,
+            # which leaves AX = 0 - the answer DOS gives with none loaded.
+            # A still pointer that claims to be a mouse answers FFFF here.
+            if f.get("ax", "").upper() not in ("0", "0000"):
+                fail("with Disable the mouse ticked INT 33h AX=0 answered "
+                     "ax=%s - a driver claimed present (SPEC.md 96.36.8)"
+                     % f.get("ax"))
+            print("kdmouse: Disable the mouse -> %s" % line)
+            print("kdmouse: ok - with the mouse disabled no driver is "
+                  "reported")
+            return 0
         if f.get("ax", "").upper() != "FFFF":
             fail("INT 33h AX=0 answered ax=%s, not FFFF (SPEC.md 96.10)"
                  % f.get("ax"))

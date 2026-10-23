@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MIDIRack's colour button faces (SPEC.md 105.9.5): draw them, pack them.
 
-    python3 tools/os88midart.py -o build/mrart.bin [--png preview.png]
+    python3 tools/os88midart.py -o build/mrfaces.bin [--png preview.png]
     python3 tools/os88midart.py --selfcheck
 
 The transport's five buttons - Prev, Play, Pause, Stop, Next - each in three
@@ -9,8 +9,10 @@ states (up, pressed, greyed), as PLANAR 4bpp pictures in the standard 16
 colours: what OSAPI_GFX_BLITP puts on a VGA or an EGA with one `rep movsb` a
 plane a row (SPEC.md 5.4.3), so a face costs one call and a few milliseconds
 on the 8088 where a blit of packed pixels would cost thirty. The package
-carries them as a LAZY part of MIDIRACK.O88 (SPEC.md 20.12.4) and fetches them
-only on a colour display - a Hercules or a CGA never reads a byte of this.
+carries them as a LAZY, COMPRESSED part of MIDIRACK.O88 (SPEC.md 20.12.4) -
+`-o` writes the part, and the Makefile hands it to os88pkg.py with --part -
+and reads it only on a colour display: a Hercules or a CGA never reads a byte
+of this.
 
 Everything is drawn HERE, in code, and nothing is hand-painted: an icon is a
 shape (a triangle, a bar, a square) given a one-pixel black outline and a
@@ -26,11 +28,17 @@ them and the right 4 are white paper, so five faces side by side at a pitch
 of 48 are five buttons with a 4-pixel gap - and a window's content origin is
 already on the grid (SPEC.md 11.94).
 
-The file is the fifteen faces in order, button-major (Prev up, Prev pressed,
-Prev greyed, Play up, ...), each four planes of FACE_H rows of FACE_W / 8
-bytes - plane 0 first, bit 7 leftmost, a set bit meaning that bit of the
-pixel's colour index. apps/midirack/midirack.asm states the same four numbers
-(MRA_W, MRA_H, MRA_NB, MRA_NS) and the build compares them (--check-asm).
+build() draws the fifteen faces button-major (Prev up, Prev pressed, Prev
+greyed, Play up, ...), each four planes of FACE_H rows of FACE_W / 8 bytes -
+plane 0 first, bit 7 leftmost, a set bit meaning that bit of the pixel's
+colour index; the package's claim holds them STATE-major (the five up, the
+five pressed, the five greyed). THE FILE CARRIES FIVE OF THEM (apps size pass
+2): the up faces and a short recipe (pack), and the package makes the
+pressed and greyed ten at load (mra_derive, SPEC.md 105.9.5) - which
+derive_pressed() and derive_greyed() are line for line, held by the
+selfcheck to the fifteen face() draws. apps/midirack/midirack.asm states the
+numbers both sides use (the MRA_ block) and the build compares them
+(--check-asm).
 """
 import argparse
 import os
@@ -218,6 +226,112 @@ def build():
     return imgs, b''.join(planar(i) for i in imgs)
 
 
+# --- the FILE: five faces, and the package makes the other ten ---------------
+# A pressed face is its up face moved a pixel down and right inside a pressed
+# frame; a greyed one is its up face with the contents wiped to the face's
+# grey and the icon's shape and the label's ink embossed - white a pixel down
+# and right, dark grey on top, as face() paints them. So the file carries the
+# five UP faces and a short recipe, and the package derives the other ten at
+# load (mra_derive, SPEC.md 105.9.5); derive_*() below are its loops line for
+# line, and the selfcheck holds them to the fifteen face() draws.
+ROW = FACE_W // 8                   # bytes a plane row
+PL = FACE_H * ROW                   # bytes a plane
+# pressed: rows PR_CONST are the frame alone (the file's, per plane); rows
+# SH0..SH1-1 are the up face's row above, a pixel right, with the pixels
+# FIX0 / FIX5 name in the row's first and last byte set to the frame's
+PR_CONST = (1, 2, FACE_H - 2)
+SH0, SH1 = 3, FACE_H - 2
+FIX0 = (0, 1, 2)                    # black, the shadow, the face's grey
+FIX5 = (BTN_W - 2, BTN_W - 1, BTN_W)    # the grey, the frame, the paper
+A0 = 0xFF & ~sum(0x80 >> x for x in FIX0)
+A5 = 0xFF & ~sum(0x80 >> (x - 40) for x in FIX5)
+# greyed: rows G0..G1-1 are wiped inside RECT_X (to LGRAY) and there the
+# shape is the up face's COLOURED pixels above row GB and its BLACK ones from
+# it; row G1 takes only the shadow of the row above
+G0, GB, G1 = 2, LABEL_Y - 1, FACE_H - 3
+RECT_X = (2, BTN_W - 4)
+
+
+def _rect():
+    return bytes(sum(0x80 >> (x & 7) for x in range(RECT_X[0], RECT_X[1] + 1)
+                     if x >> 3 == b) for b in range(ROW))
+
+
+def pack():
+    """The part: the five up faces, then the pressed frame's rows (plane
+    by plane, PR_CONST's order), the two fixed bytes' pixels per plane (FIX0
+    then FIX5), and the greyed wipe's row mask."""
+    imgs, _ = build()
+    ups = b''.join(planar(imgs[i * len(STATES)]) for i in range(len(BUTTONS)))
+    pr = planar(imgs[1])                    # any pressed face: the frame
+    rec = bytearray()
+    for p in range(4):
+        for y in PR_CONST:
+            rec += pr[p * PL + y * ROW:p * PL + y * ROW + ROW]
+    for p in range(4):
+        rec.append(pr[p * PL + SH0 * ROW] & ~A0 & 0xFF)
+        rec.append(pr[p * PL + SH0 * ROW + ROW - 1] & ~A5 & 0xFF)
+    return ups + bytes(rec) + _rect()
+
+
+def _shr1(row):
+    """A row a pixel right, a zero in at the left (rcr from a clear carry)."""
+    out, c = bytearray(), 0
+    for b in row:
+        out.append((b >> 1) | (c << 7))
+        c = b & 1
+    return out
+
+
+def derive_pressed(up, rec):
+    out = bytearray(up)
+    for p in range(4):
+        for i, y in enumerate(PR_CONST):
+            a = (p * len(PR_CONST) + i) * ROW
+            out[p * PL + y * ROW:p * PL + y * ROW + ROW] = rec[a:a + ROW]
+        o0 = rec[4 * len(PR_CONST) * ROW + 2 * p]
+        o5 = rec[4 * len(PR_CONST) * ROW + 2 * p + 1]
+        for y in range(SH0, SH1):
+            r = _shr1(up[p * PL + (y - 1) * ROW:p * PL + y * ROW])
+            r[0] = r[0] & A0 | o0
+            r[ROW - 1] = r[ROW - 1] & A5 | o5
+            out[p * PL + y * ROW:p * PL + y * ROW + ROW] = r
+    return bytes(out)
+
+
+def derive_greyed(up, rect):
+    out = bytearray(up)
+    kp = bytes(ROW)
+    for y in range(G0, G1 + 1):
+        u = [up[p * PL + y * ROW:p * PL + y * ROW + ROW] for p in range(4)]
+        r = rect if y < G1 else bytes(ROW)
+        k = bytearray(ROW)
+        for j in range(ROW):
+            a = u[0][j] | u[1][j] | u[2][j] | u[3][j]
+            lg = u[0][j] & u[1][j] & u[2][j] & ~u[3][j] & 0xFF
+            k[j] = ((a & ~lg) if y < GB else ~a) & r[j] & 0xFF
+        w = _shr1(kp)
+        for p in range(4):
+            for j in range(ROW):
+                if p < 3:
+                    d = (u[p][j] | r[j] | w[j]) & ~k[j]
+                else:
+                    d = (u[p][j] & ~r[j]) | w[j] | k[j]
+                out[p * PL + y * ROW + j] = d & 0xFF
+        kp = bytes(k)
+    return bytes(out)
+
+
+def unpack(data):
+    """The fifteen faces, button-major, out of the file - as the package does."""
+    nb = len(BUTTONS)
+    ups = [data[i * FACE_BYTES:(i + 1) * FACE_BYTES] for i in range(nb)]
+    rec = data[nb * FACE_BYTES:len(data) - ROW]
+    rect = data[len(data) - ROW:]
+    return b''.join(u + derive_pressed(u, rec) + derive_greyed(u, rect)
+                    for u in ups)
+
+
 # --- the preview ------------------------------------------------------------
 def png(path, imgs, zoom=4):
     cols = len(STATES)
@@ -250,11 +364,15 @@ def check_asm(path):
     """The four numbers the package states, against ours."""
     src = open(path).read()
     want = {'MRA_W': FACE_W, 'MRA_H': FACE_H, 'MRA_NB': len(BUTTONS),
-            'MRA_NS': len(STATES)}
+            'MRA_NS': len(STATES), 'MRA_SH0': SH0, 'MRA_SH1': SH1,
+            'MRA_PR1': PR_CONST[0], 'MRA_PR2': PR_CONST[1],
+            'MRA_PR3': PR_CONST[2], 'MRA_A0': A0, 'MRA_A5': A5,
+            'MRA_G0': G0, 'MRA_GB': GB, 'MRA_G1': G1,
+            'MRA_FSIZE': len(pack())}
     bad = []
     for k, v in want.items():
-        m = re.search(r'^%s\s+equ\s+(\d+)' % k, src, re.M)
-        if not m or int(m.group(1)) != v:
+        m = re.search(r'^%s\s+equ\s+(0x[0-9A-Fa-f]+|\d+)' % k, src, re.M)
+        if not m or int(m.group(1), 0) != v:
             bad.append('%s is %s, the art is %d' % (k, m and m.group(1), v))
     return bad
 
@@ -278,6 +396,13 @@ def selfcheck():
     a, b = build()[1], data                 # deterministic
     if a != b:
         errs.append('two builds differ')
+    f = pack()                              # the file makes the fifteen
+    if unpack(f) != data:
+        errs.append('the five faces and the recipe do not make the fifteen')
+    bad = bytearray(f)                      # ...and a NEGATIVE control: one
+    bad[len(f) - 1] ^= 0x10                 # bit of the recipe moved must
+    if unpack(bytes(bad)) == data:          # be caught
+        errs.append('the derivation check cannot fail')
     up = imgs[0]                            # a NEGATIVE control: a face with
     up[5][FACE_W - 1] = BLACK               # a pixel in its gap must be caught
     if all(c == WHITE for c in up[5][BTN_W:]):
@@ -305,10 +430,11 @@ def main():
             return 1
     imgs, data = build()
     if a.out:
+        out = pack()
         with open(a.out, 'wb') as f:
-            f.write(data)
-        print('os88midart: %d faces, %d bytes -> %s'
-              % (len(imgs), len(data), a.out))
+            f.write(out)
+        print('os88midart: %d faces of %d, %d bytes -> %s'
+              % (len(BUTTONS), len(imgs), len(out), a.out))
     if a.png:
         png(a.png, imgs)
     return 0

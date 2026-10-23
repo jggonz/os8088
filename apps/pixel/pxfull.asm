@@ -22,9 +22,10 @@
 ;              rows put it (drawn when its percent moved); FFFFh: off
 ;   FSV_MSG    DI = a line in the package: the bottom band says it
 ;
-; DS IS THE PART inside every routine below `pxf_decode` (push cs / pop ds,
-; SPEC.md 106.5's rule 1: the part's OWN data), and the package is reached
-; through [PXP_PKG] - stamped by the resident before every call, never kept
+; DS IS THE PART inside every routine below `pxf_decode` (mov ds, [cs:
+; PXP_SELF], SPEC.md 106.5's rules 1 and 6: the part's OWN data, through its
+; data segment), and the package is reached through [PXP_PKGD] - stamped by
+; the resident before every call, never kept
 ; past one. The master is re-read at every row, as the window's renderer
 ; re-reads it (106.8): a compaction may move it between two calls.
 ;
@@ -79,15 +80,14 @@ pxf_decode:
     jne .link
     cld
     mov ax, [px_fsrec]              ; what every verb reads of the package,
-    mov [cs:pxf_rec], ax            ; banked into the part's own
+    PXSW mov [es:pxf_rec], ax        ; banked into the part's own
     mov al, [px_dither]
-    mov [cs:pxf_dith], al
+    PXSW mov [es:pxf_dith], al
     mov al, [px_slon]
-    mov [cs:pxf_slon], al
+    PXSW mov [es:pxf_slon], al
     mov al, [px_fskind]
-    mov [cs:pxf_vkind], al
-    push cs
-    pop ds
+    PXSW mov [es:pxf_vkind], al
+    mov ds, [cs:PXP_SELF]
     cmp cl, FSV_POLL                ; the frame's own verb first
     je .poll
     cmp cl, FSV_ENTER
@@ -397,10 +397,9 @@ pxf_l1:
 ; master size. Preserves BP
 pxf_getpal:
     push ds
-    mov ds, [cs:PXP_PKG]
+    mov ds, [cs:PXP_PKGD]
     mov si, px_pal
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     mov di, pxf_pal
     mov cx, 384
     rep movsw
@@ -408,23 +407,25 @@ pxf_getpal:
     mov si, pxf_pal                 ; cut's to read a channel by
 .ch:
     mov al, [cs:si]
-    mov [cs:pxf_pch + bx], al
+    PXSW mov [es:pxf_pch + bx], al
     mov al, [cs:si + 1]
-    mov [cs:pxf_pch + 256 + bx], al
+    PXSW mov [es:pxf_pch + 256 + bx], al
     mov al, [cs:si + 2]
-    mov [cs:pxf_pch + 512 + bx], al
+    PXSW mov [es:pxf_pch + 512 + bx], al
     add si, 3
     inc bx
     cmp bx, 256
     jb .ch
     mov bx, [cs:pxf_rec]
     mov ax, [bx + PXR_MW]
-    mov [cs:pxf_mw], ax
+    PXSW mov [es:pxf_mw], ax
     mov cx, [bx + PXR_MH]
-    mov [cs:pxf_mh], cx
+    PXSW mov [es:pxf_mh], cx
     mul cx                          ; DX:AX = the pixels
-    mov [cs:pxf_npx], ax
-    mov [cs:pxf_npx + 2], dx
+    PXSWON
+    mov [es:pxf_npx], ax
+    mov [es:pxf_npx + 2], dx
+    PXSWOFF
     add ax, 15                      ; the tail: their paragraphs past the base
     adc dx, 0
     mov cx, 4
@@ -432,6 +433,8 @@ pxf_getpal:
     shr dx, 1
     rcr ax, 1
     loop .p
+    add ax, 7                       ; ...up to a multiple of 8, px_htail's
+    and al, 0xF8                    ; (kern_mega's grid, KERN-MEGA-PLAN 14.40)
     add ax, [bx + PXR_MSEG]
     mov ds, ax
     xor si, si
@@ -1769,10 +1772,9 @@ pxf_div:
 ; when it is among the folder's
 pxf_capname:
     push ds
-    mov ds, [cs:PXP_PKG]
+    mov ds, [cs:PXP_PKGD]
     mov si, [cs:pxf_rec]            ; PXR_NAME is the record's first field
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     mov di, pxf_cap
     mov cx, 12
 .n:
@@ -1834,10 +1836,9 @@ pxf_dec:
 ; two seconds (rows of the band only: no render of the picture)
 pxf_msg:
     push ds
-    mov ds, [cs:PXP_PKG]
+    mov ds, [cs:PXP_PKGD]
     mov si, di
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     mov di, pxf_cap
     mov cx, 90
 .c:
@@ -1873,7 +1874,7 @@ pxf_prog:
     ret
 .on:
     push ds
-    mov ds, [PXP_PKG]
+    mov ds, [PXP_PKGD]
     mov ax, [px_srcdone]
     mov bx, [px_cur + PXR_SH]       ; (px_cur is the one decoding)
     pop ds
@@ -2490,7 +2491,7 @@ pxf_slice:
 pxf_mseg:
     push bx
     push ds
-    mov ds, [cs:PXP_PKG]
+    mov ds, [cs:PXP_PKGD]
     mov bx, [cs:pxf_rec]
     mov ax, [bx + PXR_MSEG]
     pop ds
@@ -2581,12 +2582,13 @@ pxf_sample:
     add ax, [pxf_acc + 2]           ; ...and its first column
     adc dx, 0
     mov si, ax
-    and si, 15
-    mov cx, 4
+    and si, 127                     ; to 8 paragraphs, not 1: a segment on
+    mov cx, 4                       ; kern_mega's grid (KERN-MEGA-PLAN 14.40)
 .p:
     shr dx, 1
     rcr ax, 1
     loop .p
+    and al, 0xF8
     mov bx, ax                      ; BX = paragraphs
     call pxf_mseg
     add ax, bx
@@ -2934,8 +2936,7 @@ pxf_flush:
     mov bx, [pxf_sy]
     add bx, [pxf_bandy]
     mov cx, [pxf_W]
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     mov si, pxf_band
     cmp byte [pxf_p4], 0
     jne .p4

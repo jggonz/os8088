@@ -40,8 +40,9 @@ leave `[cs_wldnow]` right and draw another country. So every flight also holds
 the overlay, vocabulary and world, to what `tools/csworlds.py` assembles for
 that world; and after the last flight's way out, the UNION to the title bands
 the program read back into it - which since SPEC.md 88.10.7.1 is the KEPT
-packed copy in `cs_artz` exact, then the title and the plane in use expanded and
-NOTHING ELSE, then each of the other bands as a repaint draws it.
+packed copy in `cs_artz` exact (in the image since 88.10.7.2, so it is held to
+build/csartz.bin), then the title and the plane in use expanded and NOTHING
+ELSE, then each of the other bands as a repaint draws it.
 """
 import argparse
 import os
@@ -192,8 +193,8 @@ def main():
                 m.advance(frames=60)
                 m.run()
 
-        # ...AND THE TITLE BANDS (SPEC.md 88.10.7, 88.10.7.1). The art stream
-        # is KEPT packed in cs_artz from the launch on, and a band is expanded
+        # ...AND THE TITLE BANDS (SPEC.md 88.10.7, 88.10.7.1, 88.10.7.2). The
+        # packed bands are cs_artz, in the image, and a band is expanded
         # into the union only when it is first DRAWN after a flight - so the
         # way out leaves exactly the title and the aeroplane in use, and each
         # of the other four arrives when a repaint asks for it. cs_kx is the
@@ -202,10 +203,7 @@ def main():
         # assert the old one.
         m.pause()
         art = open(os.path.join(ROOT, "build", "csart.bin"), "rb").read()
-        csz = open(os.path.join(ROOT, "build", "csw.z"), "rb").read()
-        wof = [int.from_bytes(m.readseg(seg, mp["cs_wstroff"] + 2 * i, 2),
-                              "little") for i in range(11)]
-        kept = csz[wof[9]:wof[10]]
+        kept = open(os.path.join(ROOT, "build", "csartz.bin"), "rb").read()
         nb = (mp["cs_artzoff"] - mp["cs_artroff"]) // 2 - 1
         roff = [int.from_bytes(m.readseg(seg, mp["cs_artroff"] + 2 * i, 2),
                                "little") for i in range(nb + 1)]
@@ -224,13 +222,12 @@ def main():
                      and have[roff[i]:roff[i + 1]] != art[roff[i]:roff[i + 1]]]
             return ok, wrong
 
-        zok = r.byte("cs_artzok")
         zhave = m.readseg(seg, mp["cs_artz"], len(kept))
-        if not zok or zhave != kept:
+        if zhave != kept:
             bad.append("the kept bands")
-            print("  FAIL kept bands: [cs_artzok] %d, %d of %d bytes of cs_artz "
-                  "differ from csw.z's art stream (SPEC.md 88.10.7.1)"
-                  % (zok, sum(x != y for x, y in zip(zhave, kept)), len(kept)))
+            print("  FAIL kept bands: %d of %d bytes of cs_artz differ from "
+                  "build/csartz.bin (SPEC.md 88.10.7.2)"
+                  % (sum(x != y for x, y in zip(zhave, kept)), len(kept)))
         else:
             print("  ok   bands kept packed in cs_artz, %d bytes exact"
                   % len(kept))

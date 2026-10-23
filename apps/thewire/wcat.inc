@@ -110,10 +110,15 @@ WIRE_NMAX   equ 255             ; the format's ceiling. WIRE_CATMAX is the
                                 ; with no sidecar table at all - and it is
                                 ; what keeps WIRE_HDR + WIRE_REC*i inside 16
                                 ; bits, which the reader's addressing needs
-WIRE_LEVEL  equ 2               ; what THIS reader installs (SPEC.md 92.2):
+WIRE_LEVEL  equ 3               ; what THIS reader installs (SPEC.md 92.2):
                                 ; 1 = plain records and version 1 archives,
-                                ; 2 = version 2 archives too (92.13.1). A
-                                ; record whose WC_NEEDW is higher is greyed
+                                ; 2 = version 2 archives too (92.13.1), 3 =
+                                ; a package that far-calls a cell at or past
+                                ; 0x046D too (92.2's cell fence: the level is
+                                ; this kernel's API table generation, and
+                                ; tools/os88wire.py's WIRE_CELL_LEVELS is
+                                ; where it is cut). A record whose WC_NEEDW
+                                ; is higher is greyed
 WIRE_SCMAX  equ 32              ; sidecars per record (8 before SPEC.md 92.2's
                                 ; v1.0.20261002.1 note; nothing is sized by it)
 

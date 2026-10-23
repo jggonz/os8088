@@ -50,7 +50,7 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'MODPLUG', mpp_entry, 1, OS88_STACK_256
+    OS88_HEADER 'MODPLUG', mpp_entry, 1, OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM
                                 ; THE WORKER'S STACK, declared
                                 ; rather than defaulted (SPEC.md 8.7):
                                 ; static 98 for mpp_worker
@@ -1155,6 +1155,8 @@ mpp_load_name:
     mov [mpp_capk], ax
     call OSAPI_MEM_CLAIM            ; AX = KB -> DX = base segment, CF on refusal
     jc .nomem
+    call mpp_claimsel
+    jc .nomem
     mov [mpp_modseg], dx
 
     mov ax, [mpp_capk]              ; DX:CX = capacity in BYTES = KB * 1024
@@ -1256,6 +1258,33 @@ mpp_load_name:
     ret
 
 ; -----------------------------------------------------------------------------
+; mpp_claimsel - the module claim at DX came back a SELECTOR (KERN-MEGA-PLAN
+; 14.13: kern_mega, a claim of 64KB or less, bit 2 the LDT) - Tracker's
+; trk_claimsel. Its limit is the claim, where a segment reads garbage past its
+; end, and the mixer's bounds assume a position limit of 64,015 or less: so a
+; module of 62KB or less gets a whole 64KB selector and is addressed flat
+; (mpm_patseg), and one of 63 or 64KB is claimed at 65KB, which is
+; conventional by the contract and takes the granules.
+; in:  DX = the claim, [mpp_capk] its KB; out: CF=0 DX = the claim to use,
+;      [mpp_capk] its KB; CF=1 the second claim was refused (nothing held)
+; -----------------------------------------------------------------------------
+mpp_claimsel:
+    test dl, 4
+    jz .ok
+    call OSAPI_MEM_FREE
+    mov ax, 64
+    cmp word [mpp_capk], 62
+    jbe .re
+    inc ax
+.re:
+    mov [mpp_capk], ax
+    call OSAPI_MEM_CLAIM
+    ret
+.ok:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; mpp_trim - hand back the part of the claim the file did not need
 ; in:  [mpp_modseg], [mpm_bloblen_*]; preserves every register
 ;
@@ -1294,6 +1323,8 @@ mpp_trim:
     cmp ax, [mpp_capk]
     jae .out                        ; the file filled it: nothing to give back
     mov dx, [mpp_modseg]
+    test dl, 4                      ; a selector keeps its 64KB: every offset
+    jnz .out                        ; the mixer can form is inside it
     call OSAPI_MEM_REGROW
     jc .out                         ; refused: keep the oversized claim, which
     mov [mpp_modseg], dx            ; costs heap and breaks nothing
@@ -2294,7 +2325,7 @@ mpp_ab3: db 'Interface ported from ModPlug Player V2', 0
 mpp_ab4: db 'by Volkan Orhan - modplugplayer.org, GPLv3', 0
 mpp_ab5: db 0
 mpp_ab6: db 'Replayer: 4-channel ProTracker, 8-bit mono.', 0
-mpp_ab7: db 'Not libopenmpt - see SPEC.md 56.1.', 0
+mpp_ab7: db 'Not libopenmpt: its own replayer.', 0
 mpp_ab8: db 0
 mpp_ab9: db 'Ported by Jorge Gonzalez', 0
 

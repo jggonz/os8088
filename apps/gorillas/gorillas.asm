@@ -2,7 +2,7 @@
 ; Gameplay adapted from the supplied Microsoft QBasic Gorillas (1990).
 ; Native renderer and fixed-point simulation; no BASIC runtime required.
 %include "os88api.inc"
-OS88_HEADER 'GORILLAS', gr_entry, 1, OS88_STACK_256
+OS88_HEADER 'GORILLAS', gr_entry, 1, OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM
 OS88_ICON16
     dw 0,0x0f00,0x1f80,0x1680,0x1f80,0x3fc0,0x7fe0,0xef70
     dw 0xcf30,0xcf30,0x1f80,0x1980,0x3180,0x73c0,0,0
@@ -412,6 +412,10 @@ gr_layout:
     mov [gr_height], dx
     mov bx, [gr_win]
     call OSAPI_WM_DISPLAY
+    cmp dl, VID_VESA            ; a packed display (SPEC.md 120.5) is the VGA
+    jne .told                   ; family at 8 or 16 bits a pixel, and every
+    mov dx, (4 << 8) | VID_VGA  ; table here is 1 / 2 / 4: the desktop is its
+.told:                          ; sixteen colours and gfx_blit4 takes them
     mov [gr_kind], dl
     mov [gr_depth], dh
     jmp short .scale
@@ -663,6 +667,10 @@ gr_city:
     ; Clearing the scene invalidates the HUD character cache too.
     call gr_clear               ; ...and leaves AX = 0, ES = DS
     mov [gr_aipower], ax
+    mov [gr_aiangle], ax        ; a new skyline: the opponent forgets it all
+    mov [gr_ailast], ax
+    mov [gr_ailo], ax
+    mov [gr_aihi], ax
     mov [gr_state], al
     mov [gr_saved], al
     mov [gr_sunhit], al
@@ -815,6 +823,7 @@ gr_city:
     call gr_gorilla
     call gr_sun
     call gr_windarrow
+    call gr_guidescene          ; gr_city's callers paint the whole scene
     call gr_hud
     jmp gr_bgmlevel
 
@@ -1330,6 +1339,7 @@ gr_selectpaint:
     ret
 
 gr_hudpaint:
+    call gr_guideshow
     call gr_hud
     xor si, si
     mov di, 96
@@ -1567,6 +1577,7 @@ gr_vgatext:
 
  ; Reference equations in a Q6 scene, shared with computer prediction.
 gr_fire:
+    call gr_guidehide           ; before the banana can collide with a dot
     mov byte [gr_state], 1
     mov byte [gr_saved], 0
     mov word [gr_age], 0
@@ -1679,12 +1690,12 @@ gr_tick:
     sar ax, cl
     mov cx, ax
     or ch, ch                   ; x outside 0..255, either side
-    jnz .miss
+    jnz .away
     cmp word [gr_pyhi], 0
     jl .next                    ; signed 32-bit height: high lunar arcs
-    jg .miss
+    jg .away
     cmp dx, 116
-    jge .miss
+    jge .away
     cmp dx, 24
     jl .next                    ; flight above scene is legal
     ; Bound the lookup, then test actual gorilla ink, including self-hits.
@@ -1733,6 +1744,8 @@ gr_tick:
     call gr_banana
 .out:
     ret
+.away:
+    call gr_ailearn             ; CX = where it left the scene
 .miss:
     call gr_sunreset
     xor byte [gr_turn], 1
@@ -1744,6 +1757,7 @@ gr_tick:
     mov [gr_edit], al
     jmp gr_hudpaint
 .terrain:
+    call gr_aiterrain
     mov al, 7
     call gr_blaststart
     mov si, gr_musicimpact
@@ -2669,6 +2683,7 @@ gr_sin:
 %include "grphysics.inc"
 %include "grplay.inc"
 %include "grai.inc"
+%include "grguide.inc"
 %include "grfront.inc"
 %include "grmusic.inc"
 %include "grbgm.inc"
@@ -2708,19 +2723,22 @@ VAR gr_insun, 1
 VAR gr_scores, 2
 VAR gr_target, 1
 VAR gr_players, 1
-VAR gr_aipower, 2
-VAR gr_aierror, 2
-VAR gr_aibest, 2
-VAR gr_aix, 2
-VAR gr_aiy, 2
-VAR gr_aiyhi, 2
-VAR gr_aivx, 2
-VAR gr_aivy, 2
-VAR gr_aigrem, 2
-VAR gr_aiwrem, 2
-VAR gr_aixrem, 2
-VAR gr_aiyrem, 2
-VAR gr_aitarget, 2
+VAR gr_aipower, 2              ; worker ticks spent thinking this turn
+VAR gr_aiangle, 2              ; this skyline's arc; 0 until the first throw
+VAR gr_ailast, 2               ; the power of its latest throw
+VAR gr_ailo, 2                 ; strongest throw that fell short, 0 none
+VAR gr_aihi, 2                 ; weakest throw that flew past, 0 none
+VAR gr_guide, 1                ; setup's aim guide choice
+VAR gr_guideat, 2              ; angle+512*turn drawn, 0FFFFh none
+VAR gr_guidedots, 1            ; dots in the scene now
+VAR gr_guideowed, 1            ; gr_guidebox needs a repaint
+VAR gr_guidequiet, 1           ; a whole-scene paint follows: no blit
+VAR gr_guidebox, 8             ; x0, y0, x1, y1 logical, inclusive
+VAR gr_guidesave, 4*GR_GUIDEN  ; x word, y byte, ink underneath byte
+VAR gr_guidex, 2
+VAR gr_guidey, 2
+VAR gr_guidec, 2
+VAR gr_guides, 2
 VAR gr_name1, 11
 VAR gr_name2, 11
 VAR gr_setupfield, 1

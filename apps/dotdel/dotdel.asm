@@ -49,7 +49,7 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'DOTDEL', dd_entry, 1, OS88_STACK_256
+    OS88_HEADER 'DOTDEL', dd_entry, 1, OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM
                                 ; the worker's stack class (SPEC.md 8.7):
                                 ; dd_worker's own chain is 5 deep and its
                                 ; deepest leaf is dd_blit_actor, which pushes
@@ -449,7 +449,13 @@ dd_onkey:
     push di
     push bp
     push es
+    cmp byte [dd_abon], 0           ; the About card is up: a key takes it
+    je .cmd                         ; down and is SPENT, as a click is
+    call dd_abdismiss               ; (SPEC.md 93's "any click, key or menu
+    jmp short .out                  ; pick"), or Enter starts a game under it
+.cmd:
     call dd_key_common
+.out:
     pop es
     pop bp
     pop di

@@ -82,6 +82,11 @@ fi
 
 have_libudev() { pkg-config --exists libudev 2>/dev/null; }
 have_pil() { python3 -c 'from PIL import Image' >/dev/null 2>&1; }
+# 3.11, not merely "a python3": tools/guidelock.py, which every `make` runs,
+# and tools/os88guide.py import tomllib, which entered the stdlib in 3.11.
+have_py() {
+    python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1
+}
 
 missing_list() {
     command -v nasm            >/dev/null 2>&1 || echo nasm
@@ -105,6 +110,7 @@ missing_list() {
     # `PIL.Image` and not `PIL`: the package imports on an interpreter its C
     # extension was not built for, and only the extension says so.
     have_pil || echo python3-pil
+    have_py || echo python3
 }
 
 report() {
@@ -128,9 +134,14 @@ status() {
         && report qemu "$(qemu-system-i386 --version 2>/dev/null | head -1)" \
         || report qemu "MISSING - docs/TESTING.md's seven QEMU-only cases:
                      the 286/386 rows, the PS/2 mouse, the RTC write half"
-    command -v python3 >/dev/null 2>&1 \
-        && report python3 "$(python3 -V 2>&1)" \
-        || report python3 "MISSING - every tool in tools/"
+    if have_py; then
+        report python3 "$(python3 -V 2>&1)"
+    elif command -v python3 >/dev/null 2>&1; then
+        report python3 "$(python3 -V 2>&1) - TOO OLD: tools/ needs 3.11+
+                     (tomllib), so every \`make\` fails"
+    else
+        report python3 "MISSING - every tool in tools/"
+    fi
     if command -v inform6 >/dev/null 2>&1; then
         report inform6 "$(inform6 -h 2>&1 \
             | sed -n 's/.*Inform \([0-9][0-9.]*\).*/\1/p' | head -1)"
@@ -263,6 +274,15 @@ for pkg in $MISSING; do
         }
         ;;
     pkg-config) : ;;   # installed alongside libudev-dev above
+    python3)
+        # The archive's python3 is the distribution's, and an older release's
+        # (jammy's 3.10) is too old however it is installed - so install it,
+        # and if it still fails the gate say what is wanted rather than
+        # pretend: a 3.11+ FIRST IN PATH as `python3`, which `make` runs.
+        say "==> installing python3  (3.11 or newer)"
+        apt_install python3 || :
+        have_py || warn "setup-linux.sh: python3 is $(python3 -V 2>&1 || echo absent), and tools/ needs 3.11+ (tomllib); install one and put it first in PATH as python3"
+        ;;
     python3-pil)
         # The archive's Pillow is built for the ARCHIVE'S python3, and the
         # `python3` on PATH need not be that one: this container runs a

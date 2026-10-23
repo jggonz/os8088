@@ -1,0 +1,11 @@
+# The 86Box build this instrument is pinned to. Edit and re-run build.sh to
+# move it; that is a deliberate act, not maintenance (see build.sh). The pin
+# must carry upstream's automation socket (doc/specifications/automation.md,
+# merged 2026-10 as PR #8402's parent series) - an older 86Box has none.
+repo=https://github.com/86Box/86box.git
+commit=2738aef142a6385df33e82065bea9b335e4663e5
+roms=https://github.com/86Box/roms.git
+roms_commit=c69660478eeab51a1ad32e586841bca878f292d0
+# 86Box is GPL-2.0-or-later and its ROM set is a separate collection; neither
+# is vendored here. build.sh fetches both into build/86box/, which is
+# gitignored like the rest of build/.

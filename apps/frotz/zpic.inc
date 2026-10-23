@@ -422,7 +422,7 @@ zp_draw:
     mov bp, [zp_stride]             ; BP is a VALUE here, never a base - it
                                     ; addresses SS if it is dereferenced
     mov es, [zp_bseg]               ; ES is ours for this call: no stub is
-    xor si, si                      ; involved, and the block starts a segment
+    mov si, [zp_boff]               ; involved
     call OSAPI_GFX_BLIT4
 .out:
     pop es                          ; the story segment back, before the VM
@@ -453,7 +453,8 @@ zp_reason:
 ; zp_find - locate a picture's directory entry and unpack it, checking every
 ;           field against the file it came out of
 ; in:  AX = picture number
-; out: CF=0 and [zp_w]/[zp_h]/[zp_stride]/[zp_bseg] set; CF=1 no such picture.
+; out: CF=0 and [zp_w]/[zp_h]/[zp_stride]/[zp_bseg]/[zp_boff] set; CF=1 no such
+;      picture.
 ;      Preserves every register.
 ;
 ; The validation is not paranoia about our own tool. The archive is a file on
@@ -529,14 +530,7 @@ zp_find:
 .inside:
     pop dx
     pop ax
-    mov cl, 4
-    shr ax, cl                      ; offset >> 4, in two halves because a
-    mov cl, 12                      ; 20-bit shift has no 8086 instruction
-    shl dx, cl
-    or ax, dx
-    add ax, [zp_seg]
-    mov [zp_bseg], ax
-    clc
+    call zp_place
     jmp short .out
 .no2:
     pop dx
@@ -545,6 +539,39 @@ zp_find:
     stc
 .out:
     jmp zf_pop7
+
+; zp_place - [zp_bseg]:[zp_boff], the block at file offset DX:AX of length BX,
+; as a SEGMENT and an OFFSET (KERN-MEGA-PLAN 14.13). A selector - an archive of
+; 64KB or less, high on kern_mega - is the claim at the offset itself;
+; anything else is whole 128-byte granules from the claim, the grid
+; kern_mega's conventional descriptors sit on (the paragraph step this was
+; faulted there) and the same bytes real mode always read.
+; out: CF=0 placed; CF=1 the start plus the length would wrap SI
+; clobbers AX, BX, CX, DX (zp_find's own, saved)
+zp_place:
+    mov cx, [zp_seg]
+    test cl, 4
+    jnz .flat
+    push ax
+    mov cx, 7
+.g:
+    shr dx, 1
+    rcr ax, 1
+    loop .g
+    mov cl, 3
+    shl ax, cl
+    add ax, [zp_seg]
+    mov cx, ax
+    pop ax
+    and ax, 127
+    add bx, ax
+    jc .out                         ; CF=1
+.flat:
+    mov [zp_bseg], cx
+    mov [zp_boff], ax
+    clc
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; zp_mkname - derive "<story base>.<ext>" into [zp_name]

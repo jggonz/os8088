@@ -21,9 +21,9 @@
  *
  *   cw_rsym[]        Opus/RTFTBL.H:169-467  rgszRtfSym[]  (the names, sorted)
  *                    Opus/RTFTBL.H:995-1330 rgrsymWord[]  (val/fPassVal/rac/arg)
- *                    - 76 of Opus's 287 rows, kept in Opus's own sort order
+ *                    - 77 of Opus's 287 rows, kept in Opus's own sort order
  *   cw_rrb[]         Opus/RTFTBL.H:1394-1580 rgrrbWord[]  (rrba/pgc/b/w)
- *                    - 40 of Opus's 141 rows; the `w` defaults are Opus's
+ *                    - 41 of Opus's 141 rows; the `w` defaults are Opus's
  *                      values unchanged, the `b` offsets are cword's own
  *                      record layouts (see cwrtftbl.h) except where noted
  *   ovl_rtf_lookup()  Opus/rtfsubs.c:89-127  C_FSearchRgrsym() - ported
@@ -31,7 +31,7 @@
  *   notes
  *
  * The rest of the account - what the tables mean, why the keyword set is
- * frozen at 76, what was narrowed to 16 bits and what that costs, and why
+ * frozen at 77, what was narrowed to 16 bits and what that costs, and why
  * Opus's bit-position WARNING cannot bite here - is in cwrtftbl.h. Read that
  * first; this file is the data.
  *
@@ -179,6 +179,7 @@ const struct CW_RSYM cw_rsym[] = {
     { "s",            0,                     CW_RAC_CHNGPROP,            CW_IRRB_S         },
     { "sa",           0,                     CW_RAC_CHNGPROP,            CW_IRRB_SA        },
     { "sb",           0,                     CW_RAC_CHNGPROP,            CW_IRRB_SB        },
+    { "scaps",        0,                     CW_RAC_CHNGPROP,            CW_IRRB_SCAPS     },
     { "sl",           0,                     CW_RAC_CHNGPROP,            CW_IRRB_SL        },
     { "strike",       0,                     CW_RAC_CHNGPROP,            CW_IRRB_STRIKE    },
     { "stylesheet",   0,                     CW_RAC_SCANBYDEST,          0                 }, /* diverges (1) */
@@ -260,6 +261,8 @@ const struct CW_RRB cw_rrb[] = {
 /* CW_IRRB_BLUE     \blue   */ { CW_RRB_AP(CW_RRBA_SPEC, CW_PGC_RIS),  CW_RIS_O_CBLUE,       0              },
 /* CW_IRRB_DEFF     \deff   */ { CW_RRB_AP(CW_RRBA_SPEC, CW_PGC_RIS),  CW_RIS_O_DEFF,        0              },
 /* CW_IRRB_ASTERISK \*      */ { CW_RRB_AP(CW_RRBA_BYTE, CW_PGC_RIS),  CW_RIS_O_FNEXTISDEST, 1              },
+
+/* CW_IRRB_SCAPS    \scaps  */ { CW_RRB_AP(CW_RRBA_BIT,  CW_PGC_CHAR), CW_CHP_BIT_SMALLCAPS, CW_CHP_W_GRPF  },
 
 /* CW_IRRB_IGNORE           */ { CW_RRB_AP(CW_RRBA_SPEC, CW_PGC_PARA), 0,                    0              }
 };
@@ -388,7 +391,7 @@ int ovl_rrb_w(int irrb)          { return cw_rrb[irrb].w; }
  * Opus, done from the source and not from the table, and they are the only
  * check here that can catch a value that was copied wrong. They are spot
  * checks and they are honest about it: 26 keyword rows and 12 property rows of
- * 76 and 40. What they cover is every rac, every rrba, every value class
+ * 77 and 41. What they cover is every rac, every rrba, every value class
  * (character codes, justification, underline, charset, font family, twips) and
  * every row where Opus's own value is surprising.
  *
@@ -501,6 +504,9 @@ static const struct CW_XRRB cw_xrrb[] = {
      * iwordCfVanish }. Same bit (RTF.H:199 ibitCfVanish 7), written generically
      * here because cword has no fields to coordinate with. */
     { CW_IRRB_V,        CW_RRBA_BIT,  CW_PGC_CHAR, CW_CHP_BIT_VANISH,    0     },
+    /* { rrbaBit, pgcChar, ibitCfSmallCaps, iwordCfSmallCaps } - RTF.H's
+     * ibitCfSmallCaps 5, in the same flag word as bold */
+    { CW_IRRB_SCAPS,    CW_RRBA_BIT,  CW_PGC_CHAR, CW_CHP_BIT_SMALLCAPS, 0     },
     /* DIVERGENCE (3): Opus has { rrbaSpec, pgcChar, cof(hps), 24 } with the
      * comment "we use RTF default 24, not Opus hpsDefault (20)". The 24 is the
      * part that matters and it is unchanged. */
@@ -536,7 +542,7 @@ static const char * const cw_xabsent[] = {
     "trowd", "cellx", "cell", "row", "intbl",       /* tables: not supported */
     "sect", "sectd", "cols",                        /* sections: not supported */
     "brdrs", "box", "xe", "tc", "field", "fldrslt", /* the RTFRARE.C trap      */
-    "outl", "scaps", "mac", "pca",                  /* dropped deliberately    */
+    "outl", "mac", "pca",                           /* dropped deliberately    */
     "bb", "par2", "u", "q", "ulx", "fsx", "",       /* near misses             */
     "B", "PAR"                                      /* case: RTF is lower case */
 };

@@ -58,6 +58,10 @@ kd_resume:
     je .no                      ; ...and no wake address is the same answer
                                 ; from the other side: a kernel too old to
                                 ; carry one (KDL_VER's whole job)
+%ifndef KD_MEGA
+    call kdr_hma                ; 0. what the image does not carry (96.49.9)
+    jc .no
+%endif
 
     ; --- 1. the volume the image is on, and the image ------------------------
     mov al, [si+KDL_HBVOL]
@@ -336,6 +340,59 @@ kd_resume:
 .no:
     stc
     ret
+
+%ifndef KD_MEGA
+; -----------------------------------------------------------------------------
+; kdr_hma - WHAT THE IMAGE DOES NOT CARRY (SPEC.md 96.49.9)
+; in:  SI -> the launch block; out: CF = 0 go on, CF = 1 take int 19h.
+; Clobbers AX, BX, CX, DX
+;
+; A kern_big whose `.cold` is in the HMA comes back into code above 1MB:
+; `hbm_wake`'s step 0b is a far call into the HMA image's tail, and the whole
+; cold path runs from FFFF. The image is conventional memory, so those bytes
+; are whatever the DOS program left - it may have written up there, or shut
+; A20 (an AT BIOS's int 15h AH=87h can). The span the kernel summed at the
+; handoff is summed again, and a difference is int 19h, where XMEM.DRV
+; installs `.cold` afresh and the session comes back the long way.
+;
+; **THE SUM IS ALSO THE GATE'S TEST, so there is no A20 code here.** With the
+; line shut FFFF:x is 0000:x-16 - kern_dos's own image and the program's
+; arena - and those words do not add up to `.cold`'s; a shut gate refuses
+; exactly as a written one does. Opening it first would rescue only a program
+; that shut A20 and left `.cold` alone - and the one that shuts it, an AH=87h
+; user, took the BIOS's AH=88h figure at its word and writes from 1MB up, the
+; HMA itself. ~70 bytes for that case would put kern_dos over its rung and
+; cost every DOS program a kilobyte (kdlayout.inc), so it takes the long way
+; home instead. (The drivers' pool under `.cold` is not summed: the image
+; carries it and `hbm_wake`'s step 0b copies it back, written or not.)
+; kd_resume asks FIRST, so a refusal costs no disk read. KDL_HOFF 0 is a
+; `.cold` in RAM or in a ROM, which no program can have moved.
+; -----------------------------------------------------------------------------
+kdr_hma:
+    mov cx, [si+KDL_HWDS]
+    push si
+    mov si, [si+KDL_HOFF]
+    or si, si
+    jz .out0                    ; (CF = 0 from the `or`)
+    push ds
+    mov ax, 0xFFFF
+    mov ds, ax
+    cld
+    HS_HMASUM                   ; BX = s1, DX = s2
+    pop ds
+    pop si
+    cmp bx, [si+KDL_HSUM]
+    jne .bad
+    cmp dx, [si+KDL_HSUM + 2]
+    je .out                     ; (CF = 0 from the equal compare)
+.bad:
+    stc
+.out:
+    ret
+.out0:
+    pop si
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; kd_stageseg - the text framebuffer, as a segment

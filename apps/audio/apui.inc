@@ -16,6 +16,9 @@
     APBUF apu_t2, 8                 ; "MM:SS" scratch (total)
     APW   apu_ox                   ; cached content origin
     APW   apu_oy
+APU_PBX1 equ 46                    ; the progress bar's fixed edges (content
+APU_PBY1 equ 31                    ; coords); [apu_pbx2] is the one that
+APU_PBY2 equ 39                    ; follows the window
 apu_l_noname: db '(no file)', 0
 apu_l_plhdr:  db 'Playlist:', 0
 
@@ -47,42 +50,29 @@ apu_layout:
     mov word [apu_ch], 210
 .have:
 
-    ; progress bar: x 46 .. w-46, y 31 .. 39
-    mov word [apu_pbx1], 46
+    ; progress bar: x APU_PBX1 .. w-46, y APU_PBY1 .. APU_PBY2 - only its
+    ; right edge follows the window
     mov ax, cx
     sub ax, 46
     mov [apu_pbx2], ax
-    mov word [apu_pby1], 31
-    mov word [apu_pby2], 39
 
     ; 7 buttons across x 4 .. w-4 on row y 46..62
-    mov ax, cx
+    xchg ax, cx
     sub ax, 8                      ; usable width
-    mov bx, 7
+    mov cx, 7
     xor dx, dx
-    div bx                         ; AX = per-button pitch
-    mov [apu_bpitch], ax
-    xor di, di                     ; button index
-    xor si, si                     ; running x = 4
-    mov si, 4
+    div cx                         ; AX = per-button pitch
+    mov bx, apu_rects
+    mov si, 4                      ; running x
 .brow:
-    cmp di, 7
-    jae .bdone
-    mov bx, di
-    mov cl, 3
-    shl bx, cl                     ; * 8 bytes per rect
-    add bx, apu_rects
     mov [bx+0], si                 ; x1
     mov word [bx+2], 46            ; y1
-    mov ax, si
-    add ax, [apu_bpitch]
-    sub ax, 3                      ; small gap
-    mov [bx+4], ax                 ; x2
+    add si, ax                     ; the next one's x1...
+    lea dx, [si-3]                 ; ...less a small gap is this one's x2
+    mov [bx+4], dx
     mov word [bx+6], 62            ; y2
-    add si, [apu_bpitch]
-    inc di
-    jmp .brow
-.bdone:
+    add bx, 8
+    loop .brow
     jmp ap_ret6
 
 ; =============================================================================
@@ -112,40 +102,42 @@ apu_time_str:
     push ax
     push bx
     push dx
-    push di
     xor dx, dx
     mov bx, 60
     div bx                         ; AX = minutes, DX = seconds
     cmp ax, 99
     jbe .mok
-    mov ax, 99
+    mov al, 99
 .mok:
-    ; minutes -> two digits
-    push dx
-    xor dx, dx
-    mov bx, 10
-    div bx                         ; AX = tens, DX = ones
-    add al, '0'
-    mov [di], al
-    mov ax, dx
-    add al, '0'
-    mov [di+1], al
+    aam                            ; AH = tens, AL = ones (AAM ignores AH)
+    add ax, '00'
+    xchg al, ah
+    mov [di], ax                   ; "MM"
     mov byte [di+2], ':'
-    pop dx                         ; seconds
-    mov ax, dx
-    xor dx, dx
-    mov bx, 10
-    div bx
-    add al, '0'
-    mov [di+3], al
-    mov ax, dx
-    add al, '0'
-    mov [di+4], al
+    xchg ax, dx                    ; AL = seconds, < 60
+    aam
+    add ax, '00'
+    xchg al, ah
+    mov [di+3], ax                 ; "SS"
     mov byte [di+5], 0
-    pop di
     pop dx
     pop bx
     pop ax
+    ret
+
+; apu_run6 / apu_run - SI = text at CONTENT x CX (6 for apu_run6), y DX:
+; one FONT_RUN, ink 0 on paper 15 (SPEC.md 6.6). Preserves all but AX
+apu_run6:
+    mov cx, 6
+apu_run:
+    push cx
+    push dx
+    add cx, [apu_ox]
+    add dx, [apu_oy]
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    pop dx
+    pop cx
     ret
 
 ; =============================================================================
@@ -156,7 +148,7 @@ apu_progress:
     push cx
     push dx
     mov cx, [apu_pbx2]
-    sub cx, [apu_pbx1]            ; CX = bar width in px
+    sub cx, APU_PBX1              ; CX = bar width in px
     dec cx
     or cx, cx
     jle .zero
@@ -227,21 +219,13 @@ apu_draw:
     jnc .havename
     mov si, apu_l_noname
 .havename:
-    mov cx, [apu_ox]
-    add cx, 6
-    mov dx, [apu_oy]
-    add dx, 4
-    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
-    call OSAPI_FONT_RUN
+    mov dx, 4
+    call apu_run6
 
     ; --- status line -------------------------------------------------
     mov si, [ap_msg]
-    mov cx, [apu_ox]
-    add cx, 6
-    mov dx, [apu_oy]
-    add dx, 16
-    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
-    call OSAPI_FONT_RUN
+    mov dx, 16
+    call apu_run6
 
     ; --- time + bar -------------------------------------------------
     call apu_draw_time_full
@@ -354,12 +338,8 @@ apu_draw_stats:
     push di
 %ifndef APROF
     mov si, aps_none
-    mov cx, [apu_ox]
-    add cx, 6
-    mov dx, [apu_oy]
-    add dx, 6
-    mov ax, 0x0F00
-    call OSAPI_FONT_RUN
+    mov dx, 6
+    call apu_run6
     jmp .out
 %else
     mov word [aps_row], 4
@@ -801,31 +781,23 @@ apu_draw_time_full:
     call apu_time_str
 
     mov si, apu_t1
-    mov cx, [apu_ox]
-    add cx, 6
-    mov dx, [apu_oy]
-    add dx, 31
-    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
-    call OSAPI_FONT_RUN
+    mov dx, 31
+    call apu_run6
 
     mov si, apu_t2
-    mov cx, [apu_ox]
-    add cx, [apu_cw]
+    mov cx, [apu_cw]
     sub cx, 40
-    mov dx, [apu_oy]
-    add dx, 31
-    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
-    call OSAPI_FONT_RUN
+    call apu_run
 
     ; bar frame
     mov ax, [apu_ox]
-    add ax, [apu_pbx1]
+    add ax, APU_PBX1
     mov bx, [apu_oy]
-    add bx, [apu_pby1]
+    add bx, APU_PBY1
     mov cx, [apu_ox]
     add cx, [apu_pbx2]
     mov dx, [apu_oy]
-    add dx, [apu_pby2]
+    add dx, APU_PBY2
     call OSAPI_GFX_FRAME
 
     call apu_draw_bar_fill
@@ -840,43 +812,25 @@ apu_draw_bar_fill:
     push dx
     ; interior white
     mov ax, [apu_ox]
-    add ax, [apu_pbx1]
-    inc ax
+    add ax, APU_PBX1 + 1
     mov bx, [apu_oy]
-    add bx, [apu_pby1]
-    inc bx
+    add bx, APU_PBY1 + 1
     mov cx, [apu_ox]
     add cx, [apu_pbx2]
     dec cx
     mov dx, [apu_oy]
-    add dx, [apu_pby2]
-    dec dx
-    push ax
-    push cx
+    add dx, APU_PBY2 - 1
     call apu_penw     ; helper below
-    call OSAPI_GFX_FILL
-    pop cx
-    pop ax
-    ; filled part
+    call OSAPI_GFX_FILL           ; (every OSAPI slot preserves its inputs)
+    ; filled part: the same rows, x1 .. x1 + filled, in black
+    mov cx, ax
     call apu_progress             ; AX = filled px
-    or ax, ax
-    jz .done
-    push ax
-    mov ax, [apu_ox]
-    add ax, [apu_pbx1]
-    inc ax                        ; x1
-    pop cx
-    add cx, ax                    ; x2 = x1 + filled
-    mov bx, [apu_oy]
-    add bx, [apu_pby1]
-    inc bx
-    mov dx, [apu_oy]
-    add dx, [apu_pby2]
-    dec dx
+    xchg ax, cx                   ; AX = x1, CX = filled
     call apu_penb
+    jcxz .done
+    add cx, ax                    ; x2 = x1 + filled
     call OSAPI_GFX_FILL
 .done:
-    call apu_penb
     pop dx
     pop cx
     pop bx
@@ -902,18 +856,15 @@ apu_draw_bar_delta:
     jb .full
     je .done                      ; only the clock moved
     mov cx, [apu_ox]
-    add cx, [apu_pbx1]
-    inc cx                        ; x1 of the interior
+    add cx, APU_PBX1 + 1          ; x1 of the interior
     add ax, cx                    ; x2 = x1 + new
     add cx, bx
     inc cx                        ; x1 + old + 1
     xchg ax, cx                   ; AX = left edge, CX = right edge
     mov bx, [apu_oy]
-    add bx, [apu_pby1]
-    inc bx
+    add bx, APU_PBY1 + 1
     mov dx, [apu_oy]
-    add dx, [apu_pby2]
-    dec dx
+    add dx, APU_PBY2 - 1
     call apu_penb
     call OSAPI_GFX_FILL
     jmp .done
@@ -972,46 +923,32 @@ apu_draw_buttons:
     push si
     push di
     call apu_baim                  ; the record, and the ABSOLUTE rects
-    xor di, di
+    mov bx, apu_btrec
+    xor di, di                     ; the button's flag word, 0..12
 .b:
-    cmp di, 7
-    jae .done
-    ; rect -> absolute in a local 4-word buffer
-    mov bx, di
-    mov cl, 3
-    shl bx, cl
-    add bx, apu_rects
-    mov cl, 3
-    ; label + flags
-    mov si, di
-    add si, si
-    mov si, [apu_blabs + si]
-    xor cx, cx                     ; CX = OS88UI_* flags (via DI later)
+    xor cx, cx                     ; CX = OS88UI_* flags
     ; Shuffle / Repeat show the pressed look when toggled on
-    cmp di, AP_B_SHUF
+    cmp di, AP_B_SHUF * 2
     jne .nsh
     cmp byte [ap_shuffle], 0
     je .nsh
     mov cx, OS88UI_LATCH           ; **LATCHED, NOT PRESSED** (SPEC.md
 .nsh:                              ; 20.5.1.4): these two say "this setting is
-    cmp di, AP_B_REP               ; ON", where OS88UI_DOWN now means "a press
+    cmp di, AP_B_REP * 2           ; ON", where OS88UI_DOWN now means "a press
     jne .ndr                       ; is live on this control THIS INSTANT" and
     cmp byte [ap_repeat], 0        ; belongs to the library. They draw the same
     je .ndr                        ; picture, which is why one flag served
     mov cx, OS88UI_LATCH           ; both until the press state stopped being
 .ndr:                              ; the caller's
-    push di
-    mov si, di                     ; the flag into the group's own array, so
-    add si, si                     ; the painter and the record agree
-    mov [apu_bflg+si], cx
-    mov bx, apu_btrec
-    mov ax, di
+    mov [apu_bflg+di], cx          ; the flag into the group's own array, so
+    mov ax, di                     ; the painter and the record agree
+    shr ax, 1
     inc ax                         ; the record's indices are one-based
-    call os88ui_btn
-    pop di
+    call os88ui_btn                ; (preserves every register)
     inc di
-    jmp .b
-.done:
+    inc di
+    cmp di, 7 * 2
+    jb .b
     jmp ap_ret6
 
     OS88UI_BTNREC apu_btrec, apu_arects, apu_blabs, apu_bflg, 7
@@ -1027,46 +964,32 @@ apu_draw_list:
     push si
     push di
     mov si, apu_l_plhdr
-    mov cx, [apu_ox]
-    add cx, 6
-    mov dx, [apu_oy]
-    add dx, 68
-    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
-    call OSAPI_FONT_RUN
+    mov dx, 68
+    call apu_run6
 
-    call apl_count
-    mov [apu_ln], ax
     xor di, di                     ; row index
+    mov dx, 78                     ; ...and its content y, 8 px a row
 .row:
-    cmp di, [apu_ln]
-    jae .done
     mov ax, di
-    mov bx, 8
-    mul bx
-    add ax, 78
-    cmp ax, [apu_ch]
+    cmp al, [apl_n]
+    jae .done
+    cmp dx, [apu_ch]
     jae .done                      ; below the content
-    mov dx, [apu_oy]
-    add dx, ax                     ; DX = row y
-    mov cx, [apu_ox]
-    add cx, 8
     ; marker for the current entry
     mov si, apu_sp
-    mov ax, di
     cmp al, [apl_cur]
     jne .nomark
     mov si, apu_gt
 .nomark:
-    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
-    call OSAPI_FONT_RUN
+    mov cx, 8
+    call apu_run
     ; the name
     mov ax, di
     call apl_entptr               ; BX = &entry
     mov si, bx
-    mov cx, [apu_ox]
-    add cx, 20
-    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
-    call OSAPI_FONT_RUN
+    mov cx, 20
+    call apu_run
+    add dx, 8
     inc di
     jmp .row
 .done:
@@ -1074,41 +997,6 @@ apu_draw_list:
 
 apu_sp: db ' ', 0
 apu_gt: db '>', 0
-
-; =============================================================================
-; apu_hit - a content-relative click point -> AL = AP_B_* or AP_B_NONE
-; in:  CX = x (content-relative), DX = y (content-relative)
-;
-; The buttons tile the row gap-free: column = (x - 4) / pitch, so a click
-; anywhere on the row lands on a button and there is no 3px dead lane between
-; two of them (found on the glass).
-; =============================================================================
-apu_hit:
-    push bx
-    push dx
-    ; y must be on the transport row (rects[0] carries y1/y2 for all seven)
-    cmp dx, [apu_rects+2]
-    jb .none
-    cmp dx, [apu_rects+6]
-    ja .none
-    mov ax, cx
-    cmp ax, [apu_rects+0]              ; left edge of button 0
-    jb .none
-    sub ax, [apu_rects+0]
-    cmp word [apu_bpitch], 0
-    je .none
-    xor dx, dx
-    div word [apu_bpitch]             ; AX = column
-    cmp ax, 7
-    jae .none
-    pop dx
-    pop bx
-    ret
-.none:
-    mov ax, AP_B_NONE
-    pop dx
-    pop bx
-    ret
 
 ; -----------------------------------------------------------------------------
 ; apu_baim - aim the record and build the group's ABSOLUTE rects
@@ -1118,42 +1006,23 @@ apu_hit:
 ; aimed only where the painter goes is a record that is not aimed when a press
 ; arrives, and rects built only by the painter are stale the moment the window
 ; moves. apu_rects is the content-relative description and this is the screen
-; one; apu_hit used to be a THIRD, answering by dividing the row by a pitch.
+; one; apu_hit used to be a THIRD, answering by dividing the row by a pitch,
+; and it is gone (nothing had called it since the library took the press).
 ; -----------------------------------------------------------------------------
 apu_baim:
     push ax
     push bx
-    push cx
-    push si
-    push di
-    xor di, di
-.r:
-    cmp di, 7
-    jae .done
-    mov bx, di
-    mov cl, 3
-    shl bx, cl
-    mov si, bx
-    add si, apu_arects
-    add bx, apu_rects
-    mov ax, [bx+0]
+    xor bx, bx                     ; seven rects, {x1,y1,x2,y2}: an x then
+.r:                                ; a y, fourteen times
+    mov ax, [apu_rects+bx]
     add ax, [apu_ox]
-    mov [si+0], ax
-    mov ax, [bx+2]
+    mov [apu_arects+bx], ax
+    mov ax, [apu_rects+bx+2]
     add ax, [apu_oy]
-    mov [si+2], ax
-    mov ax, [bx+4]
-    add ax, [apu_ox]
-    mov [si+4], ax
-    mov ax, [bx+6]
-    add ax, [apu_oy]
-    mov [si+6], ax
-    inc di
-    jmp short .r
-.done:
-    pop di
-    pop si
-    pop cx
+    mov [apu_arects+bx+2], ax
+    add bx, 4
+    cmp bx, 7 * 8
+    jb .r
     pop bx
     pop ax
     ret
@@ -1162,5 +1031,3 @@ apu_baim:
                                    ; drawn control and the clickable control
                                    ; are one description (SPEC.md 22's fm_hit)
     APBUF apu_bflg, 14             ; ...and its seven flag words
-    APW   apu_bpitch
-    APW   apu_ln

@@ -40,6 +40,13 @@
 ; =============================================================================
 
 %define NETPKG_DRIVER           ; netpkg.inc's constants, not its client half
+%define OS88_DRV_HICLAIM         ; ...and its socket pool there too (item 83:
+                                ; sk_seg is only ever loaded, and sk_reloc
+                                ; is the one store a move needs)
+%define OS88_DRV_HIGHOK          ; kern_mega may run this image above 1MB
+                                ; (KERN-MEGA-PLAN item 82: no paragraph
+                                ; arithmetic on its own segment, no BIOS or
+                                ; DMA buffer in it)
 %include "os88drv.inc"
 %include "netpkg.inc"
 
@@ -342,8 +349,11 @@ eth_dropall:
     jb  .kill
     mov al, TF_RST | TF_ACK
     push cx
-    xor cx, cx
-    call tcp_out
+    push dx                     ; DL is the slot: the RST carries SND.NXT,
+    mov dx, [bx+SKO_TXS]        ; SND.UNA past what is in flight, as tcp_ack
+    xor cx, cx                  ; does - a peer takes a reset at no other
+    call tcp_out                ; sequence number (RFC 5961)
+    pop dx
     pop cx
 .kill:
     mov byte [bx+SKO_TS], TS_CLOSED
@@ -565,6 +575,7 @@ eth_v_state:
 %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %define OS88UI_NOGCHECK       ; radios only: no check picture (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard control (SPEC.md 20.5.1)...
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"         ; ...and the one-line field the Setup window is
 %include "etherui.inc"
 %include "ethcfg.inc"           ; ...and the Setup window behind it (72.7)

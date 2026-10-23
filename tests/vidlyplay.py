@@ -40,19 +40,22 @@ line 4 naming the rate the ring's fill was timed at - between 9 and 18 KB/s
 for a 360 KB floppy on a cycle-exact 5150, which is the instrument's own
 check (QEMU's floppy stalls the guest and cannot be timed, 98.1.9.3).
 
---flip runs any arm with the layer's OWN claim refused (vp_lynoc, a gate's
-byte): its slots are then the ring claim's top (98.1.9.4, THE LIVE FLIP),
-and every hold must still be exact - the layered decode where the layer is
-read out of the carved slots, and with --disk the BASE's where the disk's
-"no" after three chunks gave the slots back to the ring and copied its
-mirror up to the ring's whole end. Each play's first hold says the flip
-was taken: [vp_lyfl] set, and either [vp_lyb] the slots lent (read) or
-[vp_k] the ring's own again (given back).
+THE LAYER IS THE RING'S (98.1.9.10): every arm reads it out of the ring
+claim's top, and every hold must still be exact - the layered decode where
+the layer is read out of the carved slots, and the BASE's where a no gave
+them back (the disk's after three chunks, which copies the ring's mirror up
+to its whole end; the bench's, before the fill). Each play's first hold
+says so: [vp_lyb] the slots lent where the layer is read, and where it is
+not, none lent and [vp_k] the ring's own again. And the ring the bench's no
+leaves is THE RING A LAYERLESS PLAY GETS, to the slot - the 'no layer'
+play's - which is the whole point of 98.1.9.10: a layer this machine does
+not read costs it nothing. (Broken on purpose - vp_lyunc a bare `ret` - it
+FAILS on both.)
 
---noroom is the flip REFUSED: the layer's claim refused and the ring capped
-at five slots ([vp_kmax]), so lending two would leave it under four - the
-base plays alone, exact at every hold, and the card's line 4 says why:
-'Layer off: no room, N KB short' (98.1.9.4).
+--noroom is the carve REFUSED: the ring capped at five slots ([vp_kmax]),
+so lending two would leave it under four - the base plays alone, exact at
+every hold, and the card's line 4 says why: 'Layer off: no room, N KB
+short' (98.1.9.4).
 
 --stream is the other shape: six seconds banked in 64 KB, so the layer
 is many times its two slots and the reader must refill them during the
@@ -136,7 +139,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stream", action="store_true")
     ap.add_argument("--disk", action="store_true")
-    ap.add_argument("--flip", action="store_true")
     ap.add_argument("--noroom", action="store_true")
     a = ap.parse_args()
     global STOPS
@@ -192,9 +194,7 @@ def main():
             def ww(n, v):
                 m.write(base + syms[n], struct.pack("<H", v))
 
-            if a.flip or a.noroom:      # (the layer's own claim refused)
-                m.write(base + syms["vp_lynoc"], b"\1")
-            if a.noroom:                # (...and a ring too small to lend)
+            if a.noroom:                # (a ring too small to lend)
                 ww("vp_kmax", 5)
             flips = []
 
@@ -312,10 +312,17 @@ def main():
                     bad.append("the card's line 4 is %r, not %r"
                                % (line4(), want4))
             else:
-                if not a.stream and not a.flip:
+                until(lambda: rb("vp_loaded") == 1, "the clip's header")
+                bnb0 = rw("vp_bnb")             # (THE BENCH's word, which
+                if not bnb0:                    # the encoder now writes:
+                    bad.append("the clip carries no bench (98.1.9.13)")
+                if not a.stream:
                     # NO VERDICT IS THE BASE (98.1.9.7): no disk words, no
-                    # key from frame 0 - nothing has said yes
+                    # key from frame 0 - nothing has said yes. A KEY-0 file's
+                    # rule: the bench is off for it, a bench needing no key
+                    ww("vp_bnb", 0)
                     play("base", "no verdict")
+                    ww("vp_bnb", bnb0)
                     try:
                         until(lambda: line4() == "Layer off: not timed",
                               "the card's no-verdict line", 20.0)
@@ -334,6 +341,24 @@ def main():
                 play("layered", "the layer")
                 if rw("vp_lygot") == 0:
                     bad.append("the player drew no layer record")
+                # THE BENCH (98.1.9.13): from frame 0, with no key to time -
+                # the player's own record, the host's to the byte, timed
+                # against the 5150's model of it
+                want = vid.bench_record(0, False)
+                got = (rb("vp_bnon"), rw("vp_bnlen"), rw("vp_bnsum"))
+                tm, md = rw("vp_lytm"), rw("vp_bnb")
+                print("   the bench: on %d, %d bytes, check %04x (the host's "
+                      "%d, %04x); %.2f ms on this machine, %.2f modelled "
+                      "(%+.1f%%)" % (got + (len(want), vid.bench_sum(want),
+                                            tm / 100.0, md / 100.0,
+                                            100.0 * (tm - md) / md)))
+                if got != (1, len(want), vid.bench_sum(want)):
+                    bad.append("the bench was %r, not on with the host's "
+                               "record" % (got,))
+                elif not 0.9 * md <= tm <= 1.1 * md:
+                    bad.append("the bench timed %d against its model's %d: "
+                               "more than 10%% apart on the cycle-exact 5150"
+                               % (tm, md))
                 # THE CARD SAYS SO (line 4 after a play that read a layer)
                 want = "Layer drew %d, %d missed, %d late" % (
                     rw("vp_lygot"), rw("vp_lymis"), rw("vp_lyskp"))
@@ -383,23 +408,57 @@ def main():
                                    "own model (%d against %d)"
                                    % (rw("vp_lytm"), rw("vp_lytl")))
                     # --- 5: THE BENCH SAYS NO (98.1.9): the layer's machine
-                    # poked impossibly fast, so this CPU is the base's - the
-                    # layer is not read, the screen is the BASE's, the card says
-                    ytl = m.read(base + syms["vp_lytl"], 4)
-                    ww("vp_lytl", 1)
-                    ww("vp_lytb", 1)
-                    n0 = rw("vp_ploads")
-                    m.key("ArrowRight")
-                    until(lambda: rw("vp_ploads") > n0, "Right to pick key 1 again")
-                    if rw("vp_sel") != 1:
-                        m.key("ArrowLeft")
-                        until(lambda: rw("vp_sel") == 1, "back to key 1")
+                    # poked impossibly fast - but no faster than the least
+                    # yardstick the bench judges by (VP_LYTMIN, 1 ms,
+                    # 98.1.9.12), against this machine's 27 - so this CPU is
+                    # the base's: the layer is not read, the screen is the
+                    # BASE's, the card says
+
+                    def pick_key1(what):
+                        n0 = rw("vp_ploads")
+                        m.key("ArrowRight")
+                        until(lambda: rw("vp_ploads") > n0, what)
+                        if rw("vp_sel") != 1:
+                            m.key("ArrowLeft")
+                            until(lambda: rw("vp_sel") == 1, "back to key 1")
+                    # --- 6 first: A YARDSTICK TOO SMALL TO TELL A CPU BY
+                    # (98.1.9.12) - the owner's Mechwarrior 2, whose key 0 is
+                    # 16 bytes of black and modelled at 20 us on BOTH
+                    # machines. The bench must give NO verdict rather than a
+                    # no: with no disk words in this clip, 98.1.9.7's 'not
+                    # timed'. Red without the floor: 'key 27 ms, its 0'
+                    ww("vp_bnb", 0)                 # (key 0's rule: no bench)
+                    kyt = m.read(base + syms["vp_kytl"], 4)
+                    ww("vp_kytl", 2)
+                    ww("vp_kytlb", 2)
+                    pick_key1("Right to pick key 1 for the tiny yardstick")
+                    play("base", "a yardstick too small", ks)
+                    try:
+                        until(lambda: line4() == "Layer off: not timed",
+                              "the card's no-verdict line", 20.0)
+                    except Exception:
+                        pass
+                    print("   the card's line 4: %r (bench %d)"
+                          % (line4(), rw("vp_lytm")))
+                    if rw("vp_lygot") or line4() != "Layer off: not timed":
+                        bad.append("a 20 us yardstick: %d layer records drawn, "
+                                   "the card's line 4 %r, not 'Layer off: not "
+                                   "timed' - the bench judged a key it cannot "
+                                   "tell a CPU by" % (rw("vp_lygot"), line4()))
+                    m.write(base + syms["vp_kytl"], kyt)
+                    # ...and the BENCH's no (98.1.9.13): its two words at the
+                    # least it judges by, against this machine's ~58 ms
+                    bnl0 = rw("vp_bnl")
+                    ww("vp_bnb", 100)
+                    ww("vp_bnl", 100)
+                    pick_key1("Right to pick key 1 again")
                     play("base", "the bench saying no", ks)
                     if not rb("vp_lyoff") or rw("vp_lygot"):
                         bad.append("the bench said yes to a machine past its line "
                                    "(off %d, %d drawn)" % (rb("vp_lyoff"),
                                                            rw("vp_lygot")))
-                    want4 = "Layer off: key %d ms, its 0" % (rw("vp_lytm") // 100)
+                    want4 = "Layer off: bench %d ms, its 1" % (
+                        rw("vp_lytm") // 100)
                     try:
                         until(lambda: line4() == want4, "the card's bench line",
                               20.0)
@@ -409,14 +468,15 @@ def main():
                     if line4() != want4:
                         bad.append("the card's line 4 is %r, not %r"
                                    % (line4(), want4))
-                    m.write(base + syms["vp_lytl"], ytl)
-    if a.flip:
+                    ww("vp_bnb", bnb0)
+                    ww("vp_bnl", bnl0)
+    if not a.noroom:
+        rings = dict((f[0], f[3]) for f in flips)
         for label, fl, lent, k, k0, on in flips:
             if label == "no layer":
                 continue
             if not fl:
-                bad.append("%s: the layer's claim was refused and no flip "
-                           "was taken" % label)
+                bad.append("%s: no layer to place was seen" % label)
             elif on and not lent:
                 bad.append("%s: the layer read with no slots lent" % label)
             elif not on and (lent or k != k0):
@@ -424,6 +484,19 @@ def main():
                            "slots still lent" % (label, k, k0, lent))
         if not flips or not any(f[5] for f in flips) and not a.disk:
             bad.append("no play read the layer out of the lent slots")
+        # THE NO COSTS NOTHING (98.1.9.10): the ring the bench's no gave
+        # back is the ring the same heap gives a play with no layer at all
+        if "the bench saying no" in rings and "no layer" in rings:
+            print("   the ring after the bench's no: %d slots; with no "
+                  "layer: %d" % (rings["the bench saying no"],
+                                 rings["no layer"]))
+            if rings["the bench saying no"] != rings["no layer"]:
+                bad.append("the bench's no left a ring of %d slots where a "
+                           "play with no layer gets %d"
+                           % (rings["the bench saying no"], rings["no layer"]))
+        elif not a.disk and not a.stream:
+            bad.append("the bench's no and the layerless play were not both "
+                       "seen (%s)" % sorted(rings))
     if bad:
         print("\nvidlyplay: FAIL")
         for x in bad:

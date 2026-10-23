@@ -750,11 +750,9 @@ rd_io:
     mov ax, [rd_n+2]
     mov [rd_io_len+2], ax
 
-    mov ax, [rd_bufo]           ; fold the paragraphs into the segment once up
-    mov cl, 4                   ; front, so the per-piece fold below only ever
-    shr ax, cl                  ; has one extent's worth to carry
-    add [rd_bufs], ax
-    and word [rd_bufo], 15
+    call rd_fold                ; fold the paragraphs into the segment once up
+                                ; front, so the per-piece fold below only ever
+                                ; has one extent's worth to carry
 
     mov ax, [rd_off]            ; walk to the extent the offset is inside:
     mov dx, [rd_off+2]          ; DX:AX / extb, and the remainder is where in
@@ -814,11 +812,7 @@ rd_io:
 .moved:
     mov ax, [rd_io_n]
     add [rd_bufo], ax           ; ...and normalise, because a big file walks
-    mov ax, [rd_bufo]           ; off the end of this segment and into the next
-    mov cl, 4
-    shr ax, cl
-    add [rd_bufs], ax
-    and word [rd_bufo], 15
+    call rd_fold                ; off the end of this segment and into the next
 
     mov ax, [rd_io_n]
     sub [rd_io_len], ax
@@ -878,3 +872,29 @@ rd_free_ext:
     pop cx
     pop bx
     ret
+
+; rd_fold - [rd_bufs]:[rd_bufo] normalised to an offset under 16 - unless the
+; segment is a kern_mega pool SELECTOR (CPU_F_PM banked at attach, and 2800h
+; and up with bit 2 set: this image placed above 1MB, KERN-MEGA-PLAN item 82),
+; whose base is no paragraph, and then the offset carries on inside it. The
+; only such buffer is the seed's, read out of this image and far under 64KB.
+; On a real-mode kernel the same VALUE is an ordinary paragraph - a packed
+; file's destination is any one (SPEC.md 18.4.1) - so it folds, always, as
+; rd_io's wrap guard needs. Clobbers AX, CL
+rd_fold:
+    mov ax, [rd_bufs]
+    test byte [rd_cpuf], CPU_F_PM
+    jz .fold
+    test al, 4
+    jz .fold
+    cmp ax, 0x2800
+    jae .out
+.fold:
+    mov ax, [rd_bufo]
+    mov cl, 4
+    shr ax, cl
+    add [rd_bufs], ax
+    and word [rd_bufo], 15
+.out:
+    ret
+

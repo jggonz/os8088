@@ -66,7 +66,7 @@ def callsites(defines=("KERN_BIG",), build="build"):
     boot from `dsk_boot_from_x` to `spl_finish` would be ONE row named after
     the gate - the failure the paragraph below calls invisible, one level up.
     So kmain_o's own call sites are read too, and their return addresses are
-    in the BLOB, which stage 2 lands at `HEAP_SEG` and holds until
+    in the BLOB, which stage 2 lands at `BLOB_SEG_AT` and holds until
     `mem_unblob_x`: `HEAP_SEG*16` plus the label's offset out of the map.
 
     The RETURN address and not the call's own, because that is the address
@@ -194,6 +194,11 @@ def callsites(defines=("KERN_BIG",), build="build"):
             # KERNEL_SEG:cw_vid_disp_init`), and the phase is still
             # vid_disp_init's.
             name = re.sub(r"^(?:cw|ovw|spw)_", "", name)
+            # ...and the blob's OWN copy of a CTRL.DRV routine is named for
+            # the panel's: `bvs_disp_init` is VSW_DISP expanded into the blob
+            # (kernel.asm's KSW_SECT, kernel size pass 13), and the phase is
+            # still vid_disp_init's
+            name = re.sub(r"^bvs_", "vid_", name)
             out.append((base(emit[i + 1][0]), name))
         return out
 
@@ -203,7 +208,8 @@ def callsites(defines=("KERN_BIG",), build="build"):
         # The listing's address is SECTION-relative (os88sym's header); the
         # label's own value out of the map is the blob offset, and the first
         # byte kmain_o emits is at that label.
-        heap = os88sym.equates(defines)["HEAP_SEG"]   # splash_entry's reason
+        eq = os88sym.equates(defines)   # splash_entry's reason
+        heap = eq.get("BLOB_SEG_AT", eq["HEAP_SEG"])
         lab = os88sym.syms(defines)["kmain_o"]
         first = bodies["kmain_o"][0][0]
         inner = sites(bodies["kmain_o"],
@@ -272,9 +278,11 @@ def splash_entry(defines=("KERN_BIG",)):
     splash that costs nothing while the sector loop swallows its ~225 ms.
     `.boot2` has no segment of its own in the map (os88sym refuses to place
     it), and it does not need one: stage 1 reads the blob to the heap's floor,
-    which is `HEAP_SEG`.
+    which is `BLOB_SEG_AT` - `HEAP_SEG`, lifted by BLOB_LIFT where `.cold` is
+    the top rung (SPEC.md 2.10.3).
     """
-    return (os88sym.equates(defines)["HEAP_SEG"] * 16
+    eq = os88sym.equates(defines)
+    return (eq.get("BLOB_SEG_AT", eq["HEAP_SEG"]) * 16
             + os88sym.syms(defines)["spl_tick"])
 
 

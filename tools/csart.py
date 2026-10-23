@@ -635,10 +635,10 @@ def emit(path, title, planes):
 
     The six bands are 10,480 bytes of a 60KB segment and they are the largest
     block in the package that no frame ever reads - the title page draws them
-    and the fsx bracket never does. So they are the last STREAM of csw.z:
-    tools/csworlds.py packs them beside the worlds with the same LZ4 the
-    kernel's OSAPI_DECOMP reads, and the program expands them into the bss
-    union it shares with the bracket's own tables (SPEC.md 88.10.7). This
+    and the fsx bracket never does. So tools/csworlds.py packs them band by
+    band with the same LZ4 the kernel's OSAPI_DECOMP reads, into csartz.bin,
+    which the program INCBINs and expands a band at a time into the bss union
+    it shares with the bracket's own tables (SPEC.md 88.10.7, 88.10.7.2). This
     script used to pack them itself and csload.asm to expand them itself,
     and the two had to agree about the format for ever; ONE COMPRESSOR now.
     A band is a bitmap and holds no pointer, so nothing needs relocating: what
@@ -657,11 +657,10 @@ def emit(path, title, planes):
              "; The aircraft bands share ONE frame and a plane record names",
              "; the one it is drawn from in CSP_ART (SPEC.md 88.10.1).",
              ";",
-             "; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). They are the",
-             "; LAST stream of csw.z - the raw bands this same script writes with",
-             "; --raw, which tools/csworlds.py packs band by band beside the",
-             "; worlds (88.10.7, 88.10.7.1) - so the program's image carries the",
-             "; offsets and nothing else. The program keeps that stream packed",
+             "; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). This same",
+             "; script writes them raw with --raw, tools/csworlds.py packs them",
+             "; band by band into csartz.bin (88.10.7.1, 88.10.7.2), and the",
+             "; program INCBINs that beside these offsets. It keeps them packed",
              "; and expands each band into the bss UNION it shares with the",
              "; bracket's own tables when it is first drawn, and every blit",
              "; reads ES:offset with ES out of cs_artes exactly as it did when",
@@ -707,8 +706,8 @@ def main(argv):
     ap.add_argument("--preview", help="write PNG previews into this directory")
     ap.add_argument("--zoom", type=int, default=4)
     ap.add_argument("--raw", help="write the RAW bands here - the bytes "
-                                  "tools/csworlds.py packs as csw.z's last "
-                                  "stream (SPEC.md 88.10.7)")
+                                  "tools/csworlds.py packs into csartz.bin "
+                                  "(SPEC.md 88.10.7.2)")
     a = ap.parse_args(argv)
     title = ("cs_art_title", title_art())
     planes = [("cs_art_c172", plane_art(art_c172)),      # in cs_planes' order,

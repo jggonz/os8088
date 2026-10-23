@@ -412,7 +412,7 @@ def main():
         # --- a marginal floppy: B:'s reads fail, from the kernel's int 13h --
         at = S("dsk_xfer.attempt")
         i13 = at + m.read(at, 200).index(b"\xCD\x13") + 2   # after the int
-        gto = S("fcpf_fcp_goto")
+        gto = S("dskf_dsk_goto")
 
         seenhops = []
 

@@ -10,6 +10,9 @@ gr_clear:
     mov di, gr_hudchars
     mov cx, 256
     rep stosw
+    mov [gr_guidedots], al      ; any aim guide went with the scene
+    mov [gr_guideowed], al
+    mov word [gr_guideat], 0ffffh
     ret
 
 gr_intro:
@@ -41,6 +44,7 @@ gr_setup:
     mov byte [gr_target], 3
     mov byte [gr_players], 2
     mov byte [gr_bgmenabled], 1
+    mov byte [gr_guide], 0
     mov si, gr_default1         ; both defaults into both names: each pair
     mov di, gr_name1            ; is adjacent, 11 bytes apart
     mov cx, 22
@@ -81,9 +85,12 @@ gr_inputpage:
     mov cx, 9*8
     mov bp, 32-9
     call gr_textspan
-    cmp byte [gr_setupfield], 5
-    jne .input
     mov si, gr_musichelp
+    cmp byte [gr_setupfield], 5
+    je .help
+    mov si, gr_guidehelp
+    jb .input
+.help:
     mov dx, 112
     call gr_fronttext
 .input:
@@ -229,7 +236,7 @@ gr_frontkey:
     cmp bx, 10
     jae .out
     cmp byte [gr_setupfield], 5
-    je .append
+    jae .append
     cmp byte [gr_setupfield], 0
     je .count
     cmp byte [gr_setupfield], 3
@@ -285,7 +292,7 @@ gr_frontkey:
     jmp gr_frontflush
 .next:
     inc byte [gr_setupfield]
-    cmp byte [gr_setupfield], 6
+    cmp byte [gr_setupfield], 7
     jae .chosen
     jmp gr_nextinput
 .chosen:
@@ -327,7 +334,7 @@ gr_frontapes:
 gr_frontanswer:
     mov al, [gr_setupfield]
     cmp al, 5
-    jne .notmusic
+    jb .notmusic                ; 5 music and 6 aim guide: Yes or No
     mov al, [gr_input]
     or al, 20h
     mov bl, 1
@@ -356,7 +363,12 @@ gr_frontanswer:
     or ah, ah
     jnz .badmusic
 .musicstore:
-    mov [gr_bgmenabled], bl
+    mov di, gr_bgmenabled
+    cmp byte [gr_setupfield], 5
+    je .yesno
+    mov di, gr_guide
+.yesno:
+    mov [di], bl
     clc
     ret
 .badmusic:
@@ -663,8 +675,8 @@ gr_help3: db ' Arrow direction = wind flow.',0
 gr_help4: db ' Arrow length = wind strength.',0
 gr_continue: db '   Press any key for setup',0
 gr_setuptitle: db '         GAME SETUP',0
-gr_questions: dw gr_qplayers, gr_qname, gr_qname, gr_qpoints, gr_qgravity, gr_qmusic
-gr_defaults: dw gr_defplayers, gr_default1, gr_defname2, gr_defpoints, gr_defgravity, gr_defmusic+9
+gr_questions: dw gr_qplayers, gr_qname, gr_qname, gr_qpoints, gr_qgravity, gr_qmusic, gr_qguide
+gr_defaults: dw gr_defplayers, gr_default1, gr_defname2, gr_defpoints, gr_defgravity, gr_defmusic+9, gr_defguide
 gr_qname: db 'Name of Player 1 (10 characters)',0   ; digit set per question
 gr_qpoints: db 'First to how many points? 1-99',0
 gr_qgravity: db 'Gravity: 0.001 to 9999.999',0
@@ -672,6 +684,9 @@ gr_qmusic: db 'Gameplay music? Yes or No',0
 gr_defmusic: db 'Default: Yes (Y/N also accepted)',0   ; the prefix of every default
 gr_musichelp: db 'M toggles music during gameplay',0
 gr_badmusic: db 'Enter Yes or No (Y/N).',0
+gr_qguide: db 'Show aim guides? Yes or No',0
+gr_defguide: db 'No (Y/N also accepted)',0
+gr_guidehelp: db 'Dots show the angle of a throw',0
 gr_yes: db 'yes',0
 gr_no: db 'no',0
 gr_defname2: db 'Player 2 / Computer',0

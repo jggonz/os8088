@@ -868,6 +868,9 @@ at_scan:
     pop cx
     ret
 
+%ifdef NOATRESPAN                   ; its one caller is that knob's arm, so the
+                                    ; default build stopped assembling it in
+                                    ; apps size pass 2 (it had shipped dead)
 ; -----------------------------------------------------------------------------
 ; at_respan - recompute the span nibble over [at_sclst, at_scpos)
 ; out: [at_scspan] = the nibble at at_scpos; clobbers AX/DL
@@ -893,6 +896,7 @@ at_respan:
     pop si
     pop bx
     ret
+%endif                              ; NOATRESPAN
 
 ; -----------------------------------------------------------------------------
 ; at_span - update the inline-span nibble for one character

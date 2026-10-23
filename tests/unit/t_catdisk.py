@@ -56,7 +56,7 @@ from t_image import Vol, read                             # noqa: E402
 ASC_MAGIC = b"OS88AC"
 ASC_HDR, ASC_ROW = 16, 88          # a VERSION 2 row (SPEC.md 54.3.2)
 
-DISKS = ["office360.img", "network360.img", "games360.img"]
+DISKS = ["office360.img", "network360.img", "games360.img", "emu360.img"]
 
 # Passed with --folder on all three, so they exist whatever ships into them.
 FOLDERS = ["MEDIA", "SYSTEM", "SYSTEM/APPDATA"]

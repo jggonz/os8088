@@ -61,11 +61,18 @@ bits 16
                                 ; .COM is ours at all
 
 %include "doscall.inc"              ; CORE_ORG - where the core has to land
+%define OP_NO_LAZYOK                ; ...and no op_lazyok: the core is fetched
+                                    ; ONCE, here, and op_fetch's own toast is
+                                    ; the answer - there is no menu item to
+                                    ; grey ahead of it (SPEC.md 20.12.9.2)
 %include "os88parts.inc"
 
 DOS_PART_BOX  equ 0             ; the box - a whole .o88 image (20.12.10)
 DOS_PART_CORE equ 1             ; ...the INT 21h core, which goes INSIDE it
 DOS_PART_KD   equ 2             ; ...and kern_dos, which nothing here reads
+%ifdef DOS_MEGA
+DOS_PART_KDL  equ 3             ; ...and kern_mega's LOW kern_dos (SPEC.md
+%endif                          ; 96.40.9.2), which nothing here reads either
 
 ; --- the handoff, at the head of the BOX's bss (SPEC.md 20.12.10.2) ---------
 ; ONE PACKAGE, TWO SOURCES: `apps/dos/dos.asm` declares these and this file is
@@ -78,7 +85,12 @@ DOS_PART_KD   equ 2             ; ...and kern_dos, which nothing here reads
 ; spelled exactly as they were and moves only the base.
 DSLH_KDROW   equ 0              ; OP_ROW bytes, copied as they lie
 DSLH_COREROW equ OP_ROW         ; ...and the CORE's beside it (SPEC.md 96.44.5)
+%ifndef DOS_MEGA
 DSLH_SIZE    equ OP_ROW * 2
+%else
+DSLH_KDLROW  equ OP_ROW * 2     ; ...and kern_mega's low kern_dos (96.40.9.2)
+DSLH_SIZE    equ OP_ROW * 3
+%endif
 
 LD_H_IMG    equ 8               ; ...and the two header fields this file reads
 LD_H_BSS    equ 10              ; them at, which are the FORMAT's and not ours
@@ -178,7 +190,31 @@ dsl_core:
 ; in:  SI = the launched file's name in KERNEL_SEG, ES = KERNEL_SEG
 ; out: CF=0 and BX = 0 (no window of ours); CF=1 = the launch is torn down
 ; -----------------------------------------------------------------------------
+%ifdef DOS_MEGA
+    db 'KMEG'                       ; the mark kernel/megados.inc's mega_pkgok
+                                    ; looks for (KERN-MEGA-DOS-PLAN 12.1 item 4)
+%endif
 dsl_entry:
+%ifdef DOS_MEGA
+    ; **A kern_mega DOS.O88 ON ANY OTHER KERNEL REFUSES** (docs/plans/
+    ; KERN-MEGA-DOS-PLAN.md 12.1 item 4): its box has no windowed arm and its
+    ; only route parks the machine above 1MB, which only kern_mega can do.
+    ; Asked first, so nothing is read before the answer.
+    call OSAPI_CPU_INFO             ; AH = CPU_F_*; every register but AX kept
+    test ah, CPU_F_PM
+    jnz dsl_pmok
+    push es
+    push ds
+    pop es
+    mov si, dsl_s_notpm
+    xor cx, cx
+    call OSAPI_TOAST
+    pop es
+    stc
+    ret
+dsl_s_notpm: db "DOS.O88 is kern_mega's", 0
+dsl_pmok:
+%endif
     call op_load                    ; sizes first and reads nothing if it will
     jc .no                          ; not fit (20.12); a toast has said why
 
@@ -214,6 +250,12 @@ dsl_entry:
     add di, DSLH_COREROW            ; **AND THE CORE'S**, because the stub reads
     mov si, dsl_crow                ; BOTH on the way to arm 3 (SPEC.md
     call dsl_cpy                    ; 96.44.5.4): kern_dos's image has a hole
+%ifdef DOS_MEGA
+    mov di, [es:LD_H_IMG]
+    add di, DSLH_KDLROW             ; ...and the LOW kern_dos's, which the box
+    mov al, DOS_PART_KDL            ; posts instead of part 2's when its HMA
+    call dsl_row                    ; box is unticked (SPEC.md 96.40.9.2)
+%endif
                                     ; where the core goes, and only this image
                                     ; knows where either one sits in the file.
                                     ; Out of the stash and not the table: the
@@ -235,7 +277,11 @@ dsl_entry:
     ret                             ; op_load has already said why in a toast
 
 ; --- the table, and the standard's own code after it (SPEC.md 20.12.3) ------
+%ifndef DOS_MEGA
     OS88_PARTS_BEGIN 3
+%else
+    OS88_PARTS_BEGIN 4
+%endif
       OS88_PART OP_SEG,   OP_COMP   ; 0 THE BOX: a whole .o88 image, its bss
                                     ;   shipped inside it because the kernel
                                     ;   does not zero a part (20.12.10).
@@ -259,6 +305,11 @@ dsl_entry:
                                     ;   360KB system disk otherwise, and the
                                     ;   pairing is what SPEC.md 20.12.7.4 had
                                     ;   to unrefuse
+%ifdef DOS_MEGA
+      OS88_PART OP_ASSET, OP_COMP | OP_LAZY
+                                    ; 3 kern_mega's LOW kern_dos (SPEC.md
+                                    ;   96.40.9.2), part 2's twin at 0060:0000
+%endif
     OS88_PARTS_END
 
     OS88_BSS OP_BSS + DSL_BSS

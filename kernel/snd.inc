@@ -48,6 +48,10 @@
 ; The FM / background-PCM / input bits went with the hardware that had them.
 SND_CAP_TONE     equ 01h        ; square voice: freq on/off
 SND_CAP_PCM_EXCL equ 08h        ; CPU-paced PCM out - exclusive clip contract
+SNDV_MIXICON    equ 10         ; sndpkg.inc, held equal by t_mirror
+SNDV_MIXPOP     equ 11         ; kernel-private mixer UI verbs (34.15)
+SNDV_MIXICON_THEME equ 12      ; themed icon, legacy verb 10 remains available
+SND_CAP_MIXER    equ 0200h      ; physical mixer, independent of sound tier
 SND_CAP_LPTDAC   equ 0100h      ; a Covox, announced by the user's tier -
                                 ; the driver's bit, read by the Sound page's
                                 ; dot (ctrl.inc) and nothing resident (34.14)
@@ -791,6 +795,20 @@ osapi_snd_stream:
                                 ; never written, and the app staged a demo
                                 ; into a buffer that did not exist.
 .have:
+%ifdef KERN_MEGA
+    test al, ~4 & 0xFF          ; kern_mega: an EXTERNAL ring (verb 0 or 4)
+    jnz .ringok                 ; in a POOL selector - an OS88_HIGHMEM claim -
+    test ah, 2                  ; is above 1MB, where no 8237 reaches. The
+    jz .ringok                  ; DMA claim cells stay conventional, so only
+    test di, 4                  ; a plain claim can arrive here
+    jz .ringok                  ; (SND_OPENF_EXT = 2)
+    cmp di, MEGA_LDT_FREE0 * 8
+    jb .ringok
+    mov ax, 2
+    stc
+    ret
+.ringok:
+%endif
     push bx
     push bp
     mov bx, es                  ; BX = the CALLER'S SEGMENT, which verbs 5 and
@@ -1015,9 +1033,26 @@ spk_off:
     push ds
     xor ax, ax
     mov [spk_seg], ax
+%ifdef KERN_MEGA
+    cmp byte [ss:mega_pm], 0    ; protected mode: IRQ0 is IDT gate 20h, and
+    je .rmv                     ; the IVT's cell is the BIOS's, for a
+    push es                     ; reflection - so the GATE goes back to
+    mov ax, MEGA_SEL_IDT        ; sch_isr (the door wrote it, 34.11.1.1)
+    mov es, ax
+    mov word [es:MEGA_PIC_BASE*8], sch_isr
+    mov word [es:MEGA_PIC_BASE*8+2], KERNEL_SEG
+    pop es
+    jmp short .vdone
+.rmv:
+    MEGA_SEG0 ds                  ; segment 0 is the NULL selector
+%else
     mov ds, ax                  ; IRQ0 back to sch_isr
+%endif
     mov word [0x20], sch_isr
     mov [0x22], cs
+%ifdef KERN_MEGA
+.vdone:
+%endif
     pop ds
     mov ax, [spk_rdsv]          ; ...and channel 0 to the bracket's rate
     mov [sch_rdiv], ax
@@ -1050,6 +1085,30 @@ spk_off:
 osapi_fsx_spk:
     cmp al, 1
     je spk_off
+%ifdef KERN_MEGA
+    cmp byte [ss:mega_pm], 0    ; kern_mega in protected mode: IRQ0 is IDT
+    je .rm                      ; gate 20h and the IVT's cell is the BIOS's,
+    cmp al, 2                   ; so the caller cannot write its own vector.
+    mov ax, 1                   ; AL = 2 asks the DOOR to (34.11.1.1); AL = 0
+    jne spk_off.err             ; there is the real-mode contract, refused
+    call .open                  ; as before so an older library falls back
+    jc .pmo
+    push ax
+    push es
+    mov ax, MEGA_SEL_IDT        ; IRQ0's gate: the caller's ISR, its CODE
+    mov es, ax                  ; selector BX banked in [spk_seg] by .open
+    mov [es:MEGA_PIC_BASE*8], si
+    mov ax, [spk_seg]
+    mov [es:MEGA_PIC_BASE*8+2], ax
+    pop es
+    pop ax
+    mov cx, KERNEL_SEG          ; ...and the chain: the kernel's IRQ0, the
+    mov dx, sch_isr             ; gate's own target before (KERNEL_SEG is a
+.pmo:                           ; code selector there)
+    ret
+.rm:
+.open:
+%endif
     mov ax, 1                   ; SPK_E_NOTRATE
     cmp byte [sch_fast], SCH_RATE ; a rate bracket's own divisor to trim
     jne spk_off.err
@@ -1062,6 +1121,9 @@ osapi_fsx_spk:
                                 ; clip or a tone is refused while it is (34.1)
     call spk_pwm_on             ; ch2 as the PWM (34.4), gate and speaker on
     mov bx, dx                  ; BX = N
+%ifdef KERN_MEGA
+    mov [spk_n], dx             ; ...for a reflection to put back (mega_svc)
+%endif
     mov ax, [sch_rdiv]          ; the bracket's own divisor, banked for the
     mov [spk_rdsv], ax          ; close...
     xor dx, dx
@@ -1155,6 +1217,11 @@ spk_seg:       resw 1           ; THE SAMPLE ISR's segment (34.11) - the
                                 ; vector and read back by nothing, so it is
                                 ; not kept
 spk_rdsv:      resw 1           ;   the bracket's own divisor, back at close
+%ifdef KERN_MEGA
+spk_n:         resw 1           ; kern_mega: the sample's PIT count, so a
+                                ; reflected BIOS call can run channel 0 at
+                                ; the ROM's rate and put it back (mega_svc)
+%endif
 %endif
 %if snd_town_inst - snd_town_pri != 1
   %error "snd_town_inst must follow snd_town_pri: snd_tone_req stores DL:DH as one word"

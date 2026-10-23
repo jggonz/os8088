@@ -281,8 +281,7 @@ def expand_entities(s, fname, line):
             i = semi + 1
         else:
             raise PackError(fname, line, "&%s: not one of &lt; &gt; &amp; "
-                            "&quot; - the entity set is closed "
-                            "(WEAVE-SPEC 3.1)" % (body if body else ""))
+                            "&quot; - the entity set is closed" % (body if body else ""))
     return "".join(out)
 
 
@@ -374,8 +373,7 @@ class WmlScanner:
             if self.lit("="):
                 self.adv(1)
                 if not self.lit('"'):
-                    self.err('attribute values are double-quoted '
-                             "(WEAVE-SPEC 3.1)")
+                    self.err('attribute values are double-quoted')
                 self.adv(1)
                 end = self.t.find('"', self.i)
                 if end < 0:
@@ -403,8 +401,7 @@ class WmlScanner:
                 self.adv(2)
                 m = NAME_RE.match(self.t, self.i)
                 if not m or m.group(0).lower() != node.name:
-                    self.err("</%s> closes <%s> - tags must nest "
-                             "(WEAVE-SPEC 3.1)"
+                    self.err("</%s> closes <%s> - tags must nest"
                              % (m.group(0) if m else "", node.name), cl)
                 self.adv(len(m.group(0)))
                 self.skip_ws()
@@ -431,21 +428,19 @@ def unknown_attr_error(fname, line, elem, attr):
         if attr in ("onhover", "onmouseover", "onmouseout", "onmousemove"):
             raise PackError(fname, line, "%s: no hover exists; pointer "
                             "movement reaches a package only between press "
-                            "and release (SPEC.md 13.7)" % attr)
+                            "and release" % attr)
         if attr in WK:
-            raise PackError(fname, line, '%s: no event "%s" exists on it '
-                            "(WEAVE-SPEC 3.3)" % (elem, attr))
+            raise PackError(fname, line, '%s: no event "%s" exists on it' % (elem, attr))
         raise PackError(fname, line, "%s: no hover exists; pointer movement "
-                        "reaches a package only between press and release "
-                        "(SPEC.md 13.7)" % attr)
+                        "reaches a package only between press and release" % attr)
     if "color" in attr or attr in ("fg", "bg", "font", "size"):
         # 9.2.1 amended the exclusion and the sentence had to follow it: a
         # palette exists now, on the canvas and nowhere else, and a refusal
         # that says "there are no colors" to somebody looking at PONG.WML is
         # a refusal they cannot look up.
         raise PackError(fname, line, "%s: no color here; a palette is a "
-                        "canvas's (WEAVE-SPEC 9.2.1) - grey rounds to black "
-                        "on 1bpp (SPEC.md 39.4)" % attr)
+                        "canvas's - grey rounds to black "
+                        "on 1bpp" % attr)
     raise PackError(fname, line, '%s: no such attribute "%s"; style is '
                     "bold/invert/align only - two of three adapters are 1bpp"
                     % (elem, attr))
@@ -464,9 +459,9 @@ class Interner:
     def intern(self, s, line):
         if not 1 <= len(s) <= 255:
             raise PackError(self.fname, line, "empty string: an atom is "
-                            "1..255 bytes (WEAVE-SPEC 2.7)"
+                            "1..255 bytes"
                             if not s else "string is %d bytes; the cap is "
-                            "255 (WEAVE-SPEC 2.7)" % len(s))
+                            "255" % len(s))
         if s in self.ids:
             return self.ids[s]
         if len(self.strings) >= APP_ATOM_MAX:
@@ -532,7 +527,7 @@ def _int_attr(fname, elem, attr, val, line, lo, hi, signed=False):
 def _bool_attr(fname, elem, attr, val, line):
     if val not in ("0", "1"):
         raise PackError(fname, line, '%s: %s="%s" is not a boolean - bare '
-                        'or "1"/"0" (WEAVE-SPEC 3.1)' % (elem, attr, val))
+                        'or "1"/"0"' % (elem, attr, val))
     return int(val)
 
 
@@ -551,8 +546,7 @@ class Analyzer:
 
     def run(self, root):
         if root.name != "app":
-            self.err(root.line, "<%s>: the document element is <app> "
-                     "(WEAVE-SPEC 3.2)" % root.name)
+            self.err(root.line, "<%s>: the document element is <app>" % root.name)
         self.check_attrs(root)
         app = self.app
         name, ln = root.attrs.get("name", (None, root.line))
@@ -560,7 +554,7 @@ class Analyzer:
             self.err(root.line, 'app: attribute "name" is required')
         if not 1 <= len(name) <= 15:
             self.err(ln, 'app: name="%s" is %d chars; the header field is '
-                     "15 (WEAVE-SPEC 2.2)" % (name, len(name)))
+                     "15" % (name, len(name)))
         app.name = name
         if "vm" in root.attrs:
             app.vm_kb = _int_attr(self.fname, "app", "vm",
@@ -577,16 +571,16 @@ class Analyzer:
             else:
                 self.script(child)
         if not 1 <= len(app.cards) <= 8:
-            self.err(root.line, "%d cards; an app has 1..8 (WEAVE-SPEC 3.2)"
+            self.err(root.line, "%d cards; an app has 1..8"
                      % len(app.cards))
         if len(app.menus) > 5:
-            self.err(root.line, "%d menus; MENU_APPMAX is 5 (SPEC.md 12.2)" % len(app.menus))
+            self.err(root.line, "%d menus; MENU_APPMAX is 5" % len(app.menus))
         ngrid = sum(1 for c in app.comps if c.tag == "grid")
         ncanv = sum(1 for c in app.comps if c.tag == "canvas")
         if ngrid > 1 or ncanv > 1:
             self.err(root.line, "%d grids, %d canvases; at most one of each "
                      "- each owns a dedicated claim and the cap is 8 per "
-                     "owner (SPEC.md 50.2)" % (ngrid, ncanv))
+                     "owner" % (ngrid, ncanv))
         # radio groups need >= 2 members (WEAVE-SPEC 11.3)
         groups = {}
         for c in app.comps:
@@ -603,10 +597,10 @@ class Analyzer:
 
     def reject_elem(self, node, parent):
         if node.name in ELEM_ATTRS or node.name in ("app",):
-            self.err(node.line, "<%s>: not a child of <%s> (WEAVE-SPEC 3.2)"
+            self.err(node.line, "<%s>: not a child of <%s>"
                      % (node.name, parent))
         self.err(node.line, "<%s>: not a Weave element; the inventory is "
-                 "closed (WEAVE-SPEC 3.2)" % node.name)
+                 "closed" % node.name)
 
     def check_attrs(self, node):
         legal = list(ELEM_ATTRS.get(node.name, []))
@@ -646,7 +640,7 @@ class Analyzer:
             val, ln = node.attrs["align"]
             if val not in ALIGNS:
                 self.err(ln, 'align: no such alignment "%s"; left/center/'
-                         "right (WEAVE-SPEC 3.3)" % val)
+                         "right" % val)
             comp.style |= ALIGNS[val] << 2
         for attr, bit in (("br", CF_BREAK), ("hidden", CF_HIDDEN),
                           ("disabled", CF_DISABLED)):
@@ -684,8 +678,7 @@ class Analyzer:
         comp.comp_id = self.next_comp
         self.next_comp += 1
         if self.next_comp > 251:
-            self.err(node.line, "251 components; comp_id is one byte, 1..250"
-                     " (WEAVE-SPEC 2.5)")
+            self.err(node.line, "251 components; comp_id is one byte, 1..250")
         self.common(comp, node)
         self.app.comps.append(comp)
         fn = getattr(self, "el_" + node.name)
@@ -788,14 +781,14 @@ class Analyzer:
             if "oncommand" in child.attrs:
                 self.err(child.attrs["oncommand"][1],
                          "item: oncommand is a menu item's; a list fires "
-                         "onselect (WEAVE-SPEC 3.3)")
+                         "onselect")
             s = child.content(self.fname)
             if not s:
                 self.err(child.line, "item: an empty list item")
             comp.items.append(self.atoms.intern(s, child.line))
         if len(comp.items) > 64:
             self.err(node.line, "%d list items; the blob count byte caps at "
-                     "64 (WEAVE-SPEC 2.6.1)" % len(comp.items))
+                     "64" % len(comp.items))
         if comp.items:
             comp.props.append((WK["ITEMS"], PK_BLOB,
                                ("blob", bytes([len(comp.items)]
@@ -827,7 +820,7 @@ class Analyzer:
         h = _int_attr(self.fname, "canvas", "h", *node.attrs["h"], 32, 160)
         if w % 8:
             self.err(node.attrs["w"][1], 'canvas: w="%d" is not a multiple '
-                     "of 8 - bands are byte-aligned (WEAVE-SPEC 3.3)" % w)
+                     "of 8 - bands are byte-aligned" % w)
         # 6.10.7's palette, PRESENT -> PROP: the three colour attributes emit
         # a record whenever they are written, even at their default, which is
         # `walls`'s rule and not `tick`'s. Two packers agree about "was it
@@ -864,15 +857,13 @@ class Analyzer:
         for ev in ("onkey", "oncollide", "onwall", "onscore", "ontick"):
             self.event(comp, node, ev)
         if WK["ontick"] in comp.events and tick < 1:
-            self.err(node.line, 'canvas: ontick requires tick="1" or more '
-                     "(WEAVE-SPEC 3.3)")
+            self.err(node.line, 'canvas: ontick requires tick="1" or more')
         for child in node.children:
             if child.name != "sprite":
                 self.reject_elem(child, "canvas")
             comp.sprites.append(self.component(child))
         if len(comp.sprites) > 16:
-            self.err(node.line, "%d sprites; a canvas composes 16 at most "
-                     "(WEAVE-SPEC 6.10)" % len(comp.sprites))
+            self.err(node.line, "%d sprites; a canvas composes 16 at most" % len(comp.sprites))
         # 6.10.7: SPEC.md 5.4.2.2's FOURTH refusal, decided here so that it is
         # never a band that silently does not arrive. Every pair the composer
         # can hand GFX_BLIT1 is (paper, some ink), and they are all known now.
@@ -887,16 +878,14 @@ class Analyzer:
             return default
         name, ln = node.attrs[attr]
         if name not in COLOR:
-            self.err(ln, '%s: %s="%s" is not one of the sixteen colours '
-                     "(WEAVE-SPEC 6.10.7)" % (elem, attr, name))
+            self.err(ln, '%s: %s="%s" is not one of the sixteen colours' % (elem, attr, name))
         return COLOR[name]
 
     def check_pen(self, node, attr, ink, paper, line):
         if pen_legal(paper, ink):
             return
         self.err(line, 'canvas: paper="%s" against %s="%s": the two share no '
-                 "plane either way and GFX_BLIT1 refuses the pair "
-                 "(SPEC.md 5.4.2.2)"
+                 "plane either way and GFX_BLIT1 refuses the pair"
                  % (PALETTE[paper], attr, PALETTE[ink]))
 
     def el_sprite(self, comp, node):
@@ -1023,8 +1012,7 @@ def parse_wsp(text, fname):
             if w % 8 or not 8 <= w <= 64 or not 1 <= h <= 64 \
                     or not 1 <= nf <= 8:
                 raise PackError(fname, lineno, "sprite %s: w a multiple of "
-                                "8 in 8..64, h 1..64, frames 1..8 "
-                                "(WEAVE-SPEC 3.6)" % name)
+                                "8 in 8..64, h 1..64, frames 1..8" % name)
             if any(s.name == name for s in sprites):
                 raise PackError(fname, lineno, "sprite %s: defined twice"
                                 % name)
@@ -1042,7 +1030,7 @@ def parse_wsp(text, fname):
     close_sprite(lineno)
     if len(sprites) > 16:
         raise PackError(fname, lineno, "%d sprites; the section count byte "
-                        "caps at 16 (WEAVE-SPEC 2.11)" % len(sprites))
+                        "caps at 16" % len(sprites))
     return sprites
 
 
@@ -1071,7 +1059,7 @@ def parse_number_16_16(tok, fname, line):
         raise PackError(fname, line, '"%s" is not a number' % tok)
     sign, ip, fp = m.group(1), int(m.group(2)), m.group(3) or ""
     if ip > 32767:
-        raise PackError(fname, line, "%s: |value| < 32768 (WEAVE-SPEC 5.1)"
+        raise PackError(fname, line, "%s: |value| < 32768"
                         % tok)
     if len(fp) > 4:
         # WEAVE-SPEC 5.1: the fifth decimal place is below 16.16's own
@@ -1079,7 +1067,7 @@ def parse_number_16_16(tok, fname, line):
         # do is make two parsers disagree about the rounding.
         raise PackError(fname, line,
                         "%s: at most 4 fraction digits; 16.16 resolves to "
-                        "1/65536 (WEAVE-SPEC 5.1)" % tok)
+                        "1/65536" % tok)
     frac = 0
     if fp:
         d = 10 ** len(fp)
@@ -1536,7 +1524,7 @@ def js_tokenize(text, fname, interner):
                         out.append(e)
                     else:
                         raise PackError(fname, start, '\\%s: the escapes '
-                                        'are \\" \\\\ \\n (WEAVE-SPEC 4.2)'
+                                        'are \\" \\\\ \\n'
                                         % e)
                     i += 2
                 else:
@@ -1549,8 +1537,7 @@ def js_tokenize(text, fname, interner):
             v = int(m.group(0))
             if v > 32767:
                 raise PackError(fname, line, "%d: numbers are 0..32767; "
-                                "16-bit int is THE number type "
-                                "(WEAVE-SPEC 4.1)" % v)
+                                "16-bit int is THE number type" % v)
             toks.append(Tok("num", v, line))
             i += m.end()
         elif ch.isalpha() or ch == "_":
@@ -1604,7 +1591,7 @@ def js_collect(toks, fname):
 
     def declare_name(t, name):
         if name in BUILTIN:
-            err(t, "%s: shadows a builtin (WEAVE-SPEC 4.6.5)" % name)
+            err(t, "%s: shadows a builtin" % name)
         if name in prog.gindex or name in prog.fnindex:
             err(t, "%s: declared twice" % name)
 
@@ -1624,7 +1611,7 @@ def js_collect(toks, fname):
                 err(toks[i], "var: ';' expected")
             i += 1
             if len(prog.globals) >= 128:
-                err(t, "129 globals; the table is 128 (WEAVE-SPEC 4.2)")
+                err(t, "129 globals; the table is 128")
             prog.gindex[nt.val] = len(prog.globals)
             prog.globals.append((nt.val, init, nt.line))
         elif t.kind == "kw" and t.val == "function":
@@ -1650,7 +1637,7 @@ def js_collect(toks, fname):
                 params.append(toks[i].val)
                 i += 1
             if len(params) > 8:
-                err(nt, "%s: %d parameters; the cap is 8 (WEAVE-SPEC 4.2)"
+                err(nt, "%s: %d parameters; the cap is 8"
                     % (nt.val, len(params)))
             i += 1
             if toks[i].val != "{":
@@ -1668,14 +1655,14 @@ def js_collect(toks, fname):
                 i += 1
             i += 1
             if len(prog.funcs) >= 128:
-                err(t, "129 functions; the table is 128 (WEAVE-SPEC 4.2)")
+                err(t, "129 functions; the table is 128")
             fn = JsFunc(nt.val, params, (start, i - 1), nt.line,
                         len(prog.funcs))
             prog.fnindex[nt.val] = fn.index
             prog.funcs.append(fn)
         else:
             err(t, "top level is declarations only - handlers are the only "
-                "entry points (WEAVE-SPEC 4.1)")
+                "entry points")
     return prog
 
 
@@ -1698,11 +1685,10 @@ def js_initexpr(toks, i, fname):
             raise PackError(fname, t.line, "array(<size>) expected")
         n = toks[i + 2].val
         if not 1 <= n <= 2048:
-            raise PackError(fname, t.line, "array(%d): size is 1..2048 "
-                            "(WEAVE-SPEC 4.2)" % n)
+            raise PackError(fname, t.line, "array(%d): size is 1..2048" % n)
         return ("array", n), i + 4
     raise PackError(fname, t.line, "an initializer is a constant: number, "
-                    "string, true/false, null, array(n) (WEAVE-SPEC 4.2)")
+                    "string, true/false, null, array(n)")
 
 
 # --- WJS: code generation (WEAVE-SPEC 4.6's pinned templates) ----------------
@@ -1735,14 +1721,14 @@ class FnCompiler:
                 if nt.val in self.localslot:
                     self.err(nt, "%s: declared twice" % nt.val)
                 if nt.val in BUILTIN:
-                    self.err(nt, "%s: shadows a builtin (WEAVE-SPEC 4.6.5)"
+                    self.err(nt, "%s: shadows a builtin"
                              % nt.val)
                 self.localslot[nt.val] = len(self.localslot)
                 j += 1
             j += 1
         if len(self.localslot) > 16:
             self.err(toks[fn.body[0]], "%s: %d locals; the cap is 16, "
-                     "parameters included (WEAVE-SPEC 4.2)"
+                     "parameters included"
                      % (fn.name, len(self.localslot)))
         fn.nlocals = len(self.localslot)
 
@@ -1820,8 +1806,7 @@ class FnCompiler:
             return ("fn", self.prog.fnindex[n])
         if n in BUILTIN:
             return ("builtin", BUILTIN[n])
-        self.err(tok, "%s: not a local, global, component id or function "
-                 "(WEAVE-SPEC 4.2)" % n)
+        self.err(tok, "%s: not a local, global, component id or function" % n)
 
     def push_value(self, tok):
         kind, v = self.resolve(tok)
@@ -1835,7 +1820,7 @@ class FnCompiler:
             self.op("PUSHI", v)
         elif kind == "fn":
             self.err(tok, "%s: a function is not a value; it is named only "
-                     "as a callback argument (WEAVE-SPEC 4.6.6)" % tok.val)
+                     "as a callback argument" % tok.val)
         else:
             self.err(tok, "%s: a builtin is called, not read" % tok.val)
         return kind, v
@@ -1847,7 +1832,7 @@ class FnCompiler:
         atom = METHOD_ARITY_NAMES.get(name) if method \
             else PROP_ATOMS.get(name)
         if atom is None:
-            self.err(tok, 'no such %s "%s" (WEAVE-SPEC 2.7.1)'
+            self.err(tok, 'no such %s "%s"'
                      % ("method" if method else "property", name))
         if base is not None and base[0] == "comp":
             tag = self.ctx["ctype_of"].get(base[1], "app")
@@ -1855,7 +1840,7 @@ class FnCompiler:
             ok = atom in (surf["methods"] if method
                           else (surf["set"] if writing else surf["get"]))
             if not ok:
-                self.err(tok, '%s: a %s has no %s "%s" (WEAVE-SPEC 6)'
+                self.err(tok, '%s: a %s has no %s "%s"'
                          % (name, tag,
                             "method" if method else
                             ("writable property" if writing else "property"),
@@ -2222,8 +2207,7 @@ class FnCompiler:
                     self.op("GETP", atom)
                 base = None
             elif tv == "(":
-                self.err(t, "only a function or builtin name is called "
-                         "(WEAVE-SPEC 4.6.5)")
+                self.err(t, "only a function or builtin name is called")
             else:
                 return
 
@@ -2254,8 +2238,7 @@ class FnCompiler:
             b = BUILTIN[name]
             _, lo, hi = BUILTINS[b]
             if name == "array":
-                self.err(t, "array: legal only as a var initializer "
-                         "(WEAVE-SPEC 8.1)")
+                self.err(t, "array: legal only as a var initializer")
             argc = 0
             while self.pv() != ")":
                 if argc:
@@ -2264,7 +2247,7 @@ class FnCompiler:
                     cb = self.take()
                     if cb.kind != "id" or cb.val not in self.prog.fnindex:
                         self.err(cb, "%s: the callback names a top-level "
-                                 "function (WEAVE-SPEC 4.6.6)" % name)
+                                 "function" % name)
                     self.op("PUSHI", self.prog.fnindex[cb.val])
                 else:
                     self.expr()
@@ -2312,8 +2295,7 @@ def compile_wjs(prog, toks, fname, ctx):
     start = None
     if inits:
         if len(prog.funcs) >= 128:
-            raise PackError(fname, 1, "129 functions; the table is 128 "
-                            "(WEAVE-SPEC 4.2)")
+            raise PackError(fname, 1, "129 functions; the table is 128")
         fn = JsFunc("(init)", [], (0, 0), 0, len(prog.funcs))
         b = bytearray()
         for g, init in inits:
@@ -5868,7 +5850,7 @@ def selfcheck(verbose=False):
     rej('<app name="x"><card id="m"><button onhover="f">b</button>'
         "</card></app>",
         "onhover: no hover exists; pointer movement reaches a package only "
-        "between press and release (SPEC.md 13.7)", "hover sentence")
+        "between press and release", "hover sentence")
     rej('<app name="x"><card id="m"><label style="red">t</label>'
         "</card></app>",
         'style: no such style "red"', "style vocabulary sentence")
@@ -6594,12 +6576,8 @@ def catalog_text(geometry, loom):
     o.append("")
     o.append("WEAVE\\  THE RUNTIME AND THE PROGRAMS")
     o.append("-" * 28)
-    o.append("  WEAVE.O88   the runtime itself")
-    o.append("  WEAVE.OVL   the part of it that loads on demand. Without")
-    o.append("              this file beside it, no bundle opens at all.")
-    o.append("  WEAVE.WSM   the canvas core, read only by a bundle that")
-    o.append("              draws sprites. PONG needs it; the other two do")
-    o.append("              not.")
+    o.append("  WEAVE.O88   the runtime itself - one file, carrying the")
+    o.append("              parts it loads on demand inside it.")
     for name, what in WEAVE_CATALOG_BUNDLES:
         o.append("  %-12s%s" % (name, what))
     o.append("")
@@ -6607,44 +6585,42 @@ def catalog_text(geometry, loom):
         o.append("LOOM\\  THE EDITOR AND THE SOURCES")
         o.append("-" * 28)
         o.append("  LOOM.O88    edit a program and build its bundle, here, on")
-        o.append("  LOOM.OVL    this machine. Double-click a .WML below,")
-        o.append("  LOOM.WPV    press ^P to pack it and use View > Preview to")
+        o.append("              this machine. Double-click a .WML below,")
+        o.append("              press ^P to pack it and use View > Preview to")
         o.append("              see the card before you run it. Then")
         o.append("              double-click the .WAB it wrote, in this")
-        o.append("              folder - WEAVE's three files are here too,")
-        o.append("              so that it opens where Pack put it.")
+        o.append("              folder: WEAVE opens it from WEAVE\\.")
         o.append("  What the three programs in WEAVE\\ were built from. Pack")
         o.append("  writes a new bundle beside its sources, in this folder,")
         o.append("  and leaves WEAVE\\'s copy as it was.")
         for name, files in WEAVE_CATALOG_SOURCES:
             o.append("    %-8s%s" % (name, files))
         o.append("")
-        o.append("WHY EACH FOLDER IS WHOLE")
+        o.append("YOUR OWN PROGRAMS")
         o.append("-" * 28)
-        o.append("  A program opened by double-clicking a file looks for its")
-        o.append("  own companion files in THAT file's folder. So a bundle")
-        o.append("  lives beside the runtime, a source beside the editor,")
-        o.append("  and LOOM\\ carries a second copy of the runtime for the")
-        o.append("  bundles it builds. Sources in a folder of their own open")
-        o.append("  the editor without the half of itself that does the")
-        o.append("  work; a bundle on its own does the same to the runtime.")
-        o.append("  Both were tried. Keep your own programs in LOOM\\ too,")
-        o.append("  or copy this whole disk and edit the copy.")
+        o.append("  Keep them anywhere on this disk - in LOOM\\, or in a")
+        o.append("  folder of their own. WEAVE and LOOM each load what they")
+        o.append("  need from their own file, so a source opens LOOM and a")
+        o.append("  bundle opens WEAVE wherever it is. Leave WEAVE.O88 and")
+        o.append("  LOOM.O88 on the disk, though: they are the programs.")
         o.append("")
     else:
         o.append("THE EDITOR IS NOT ON THIS DISK")
         o.append("-" * 28)
-        o.append("  LOOM and the demo sources are on the 720KB, 1.2MB and")
-        o.append("  1.44MB builds of this disk; this geometry has no room")
-        o.append("  for them. `make loomdisk` builds a disk of the editor's")
-        o.append("  own in all four sizes.")
+        o.append("  LOOM and the demo sources are on the larger sizes of")
+        o.append("  this disk and on the LOOM disk; this one has no room")
+        o.append("  for them.")
         o.append("")
+    # **A USER'S NOTE, NOT A BUILD NOTE.** This said `BUNDLES=` in the
+    # Makefile puts your own on a disk - true, and a developer's instruction
+    # on a floppy whose reader has no Makefile. BUNDLES= is the Makefile's
+    # own business and its comment says so there (WEAVE-SPEC §13.1)
     o.append("YOUR OWN BUNDLES")
     o.append("-" * 28)
-    o.append("  BUNDLES='path/to/MYAPP.WAB' in the Makefile puts your own on")
-    o.append("  a disk of your own, beside these. They must already be valid")
-    o.append("  8.3 names, and the geometry still has to hold them - the")
-    o.append("  disk build says so if it does not.")
+    o.append("  A .WAB is an ordinary file. Copy one onto this disk with")
+    o.append("  the Disk window, like any other file, and double-click it:")
+    o.append("  WEAVE opens it. Its name has to be a plain 8.3 name, such")
+    o.append("  as MYAPP.WAB.")
     o.append("")
     o.append("This is the %dKB disk." % geometry)
     return "\r\n".join(o) + "\r\n"

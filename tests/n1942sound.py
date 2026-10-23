@@ -31,7 +31,11 @@ def check_capture(out,backend,sampled):
 
 
 def guest(backend,off,code):
-    sampled=backend=='sb' and N.rom_build() is not None
+    # SPEC.md 101: DSP 2+ plays the bundled 1942.SFX part on ANY build. This
+    # was `and N.rom_build() is not None`, and a tree with no cartridge then
+    # expected no PCM - which n_pcm_open's refusal of a two-piece heap
+    # (KERN-MEGA-PLAN 14.55.3) satisfied on every run.
+    sampled=backend=='sb'
     ds=driver_symbols()
     out=N.ROOT/'build/1942-proof';out.mkdir(exist_ok=True)
     os.environ['MARTYPC_WAV']=str(out/('audio-'+backend))
@@ -133,6 +137,21 @@ def guest(backend,off,code):
                 g.fixture();g.put('flightphase',0);g.put('grace',60000)
                 bank=(N.ROOT/'build/1942.SFX').read_bytes()
                 for sid,offset,length in ((18,16,1024),(19,1040,3072),(20,4112,4096)):
+                    # The music under the sample has to be one that is still
+                    # PLAYING when it is read, or a clear key bit says nothing
+                    # about PCM. fixture() starts slot 4, which on a build with
+                    # no cartridge is tools/1942data.py's 24-tick placeholder
+                    # jingle: it has ended by the second sample (musicptr 0,
+                    # musicfreq 0), so this leg failed on every non-ROM build
+                    # once n_pcm_open stopped refusing the bank (KERN-MEGA-PLAN
+                    # 14.55.3) and it ran at all. Slot 14 is the generated
+                    # gameplay score on BOTH builds - it loops and starts on a
+                    # held 440 Hz, so restarting it here leaves exactly one
+                    # note keyed on whichever build this is - and asserting
+                    # that BEFORE the sample starts is what keeps a fixture
+                    # that has gone quiet from reading as a PCM defect again.
+                    call('music',ax=14);call('audio')
+                    assert g.get('musicfreq') and driver('opl_b0')[0]&32,'fixture: no music held'
                     call('audio_quiet');call('effect',ax=sid)
                     pcm_cost.append(call('audio'))
                     assert g.get('pcmactive',1)==1 and driver('sbl_str_act')==b'\x01'
@@ -156,9 +175,15 @@ def guest(backend,off,code):
                 assert g.get('pcmpending',1)==3
                 call('audio');assert g.get('pcmlen')==4096
                 call('audio_quiet')
-                # An absent optional bank is a playable FM fallback.
-                call('pcm_close');at=g.base+code['n_pcmfile'];saved=m.read(at,1)
-                m.write(at,b'Z');call('pcm_open');assert g.get('pcmseg')==0
+                # An unreadable bank is a playable FM fallback. The bank was a
+                # 1942.SFX sidecar named by n_pcmfile, and "absent" was a
+                # poked name; it is part N_P_SFX of 1942.O88 now (SPEC.md
+                # 101), so the way it fails is the graphics leg's below - the
+                # row's offset moved past the file's end, and op_fetch refuses.
+                call('pcm_close')
+                at=g.base+code['op_table']+10+8*code['N_P_SFX']+2
+                saved=m.read(at,2);m.write(at,b'\xff\xff')
+                call('pcm_open');assert g.get('pcmseg')==0
                 call('effect',ax=18);call('audio');assert g.get('effectfreq')==180
                 m.write(at,saved)
                 # Driver refusal (invalid external-ring flags) also falls back
@@ -199,7 +224,8 @@ def guest(backend,off,code):
             assert g.get('audiofm',1)==(backend!='speaker')
             # Failed graphics load after acquiring FM must also release it.
             m.bp_exec();m.key('Escape');m.run();N.M.ui_done(m)
-            at=g.base+code['n_vfile'];saved=m.read(at,1);m.write(at,b'Z')
+            at=g.base+code['op_table']+10+8*code['N_P_V']+2     # past the file's end
+            saved=m.read(at,2);m.write(at,b'\xff\xff')
             m.key('Enter');m.run()
             N.M.until(m,lambda _:g.get('error',1)==2 and g.get('infs',1)==0,'bad bank cleanup',limit=60)
             N.M.ui_done(m);quiet()

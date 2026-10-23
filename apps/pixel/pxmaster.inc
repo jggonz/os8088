@@ -39,6 +39,8 @@ px_htail:
     shr dx, 1
     rcr ax, 1
     loop .p
+    add ax, 7                       ; ...up to a multiple of 8: a segment on
+    and al, 0xF8                    ; kern_mega's grid (KERN-MEGA-PLAN 14.40)
     add ax, [px_cur + PXR_MSEG]
     mov es, ax
     pop dx
@@ -50,6 +52,7 @@ px_htail:
 ; px_mreloc - the master's relocation proc (SPEC.md 66): BX = where a claim
 ; WAS, DX = where it is. Either master - the picture shown, or the one a
 ; cancel would put back - is ours to re-base; nothing else derives from it.
+; The view, the undo hold and the colour face's pictures share the proc.
 ; Called inside the allocator: it may not claim, draw or yield
 ; =============================================================================
 px_mreloc:
@@ -66,8 +69,13 @@ px_mreloc:
     mov [px_vseg], dx
 .u:
     cmp [px_urec + PXR_MSEG], bx    ; ...and the master undo holds, or the
-    jne .out                        ; shown one's copy of its own name
+    jne .a                          ; shown one's copy of its own name
     mov [px_urec + PXR_MSEG], dx    ; (SPEC.md 106.24)
+.a:
+    cmp [pxa_seg], bx               ; ...and the colour face's pictures,
+    jne .out                        ; whose row's zkb is the claim op_drop
+    mov [pxa_seg], dx               ; would free (SPEC.md 106.16)
+    mov [PXA_ROW + OP_R_ZKB], dx
 .out:
     ret
 
@@ -287,6 +295,17 @@ px_mkb:
     pop bx
     ret
 
+; PX_WGRID - DX (paragraphs into the work claim) up to a multiple of 8. Every
+; sub-buffer below is loaded into ES as [px_wseg] + its offset, and the claim
+; is 512-aligned, so this keeps each of them a multiple of 8 paragraphs: on
+; kern_mega only those are segments (the identity map, KERN-MEGA-PLAN 3.1) -
+; any other value is a #GP or, with bit 2 set, an LDT alias at another base.
+; At most 7 paragraphs a buffer, nothing on any other kernel
+%macro PX_WGRID 0
+    add dx, 7
+    and dl, 0xF8
+%endmacro
+
 ; px_wkb - the WORK claim's KB for scale CL at [px_tmw] (SPEC.md 106.9): the
 ; quantiser's pages, the row buffer, the accumulators below 1/1, a PCX line,
 ; a KB of the decoder's tables. Sets the sub-buffers' offsets - [px_wo_acc]
@@ -323,6 +342,7 @@ px_wkb:
     mov cl, 4
     shr ax, cl
     mov dx, ax                      ; DX = paragraphs so far
+    PX_WGRID
     mov [px_wo_acc], dx
     cmp byte [px_tscl], 0           ; THE ACCUMULATORS: mw words a channel
     je .noacc
@@ -339,6 +359,7 @@ px_wkb:
     shr ax, cl
     add dx, ax
 .noacc:
+    PX_WGRID
     mov [px_wo_lin], dx             ; A PCX LINE (0 for anything else)
     mov ax, [px_dlinsz]
     add ax, 15
@@ -346,8 +367,10 @@ px_wkb:
     mov cl, 3
     shr ax, cl
     add dx, ax
+    PX_WGRID
     mov [px_wo_lut], dx             ; THE TABLES: a KB...
     add dx, 1024 / 16 + 1
+    PX_WGRID
     mov [px_wo_dec], dx             ; ...a decoder part's scratch (106.18),
     mov bl, [px_tscl]               ; what the part needs at this scale
     xor bh, bh                      ; (106.19)...
@@ -433,6 +456,9 @@ px_claims:
     mov [px_cur + PXR_SCL], cl
     mov [px_cur + PXR_DSCL], cl
     call px_mkb                     ; AX = master KB, px_tmw/tmh
+    call px_artroom                 ; UNDER PRESSURE the face's pictures go
+    jc .again                       ; (SPEC.md 106.16), and the scale is
+                                    ; asked again without them
     mov [px_cur + PXR_MKB], ax
     mov bx, [px_tmw]
     mov [px_cur + PXR_MW], bx
@@ -760,19 +786,22 @@ px_emit:
     pop es
     jmp px_progress                 ; pxpump.inc: abort, liveness, the wake
 
-; px_mrow - AX = a master row: ES:DI = its first byte. Preserves all else
+; px_mrow - AX = a master row: ES:DI = its first byte, DI < 128 - the
+; address normalised to EIGHT paragraphs and not one, as PX_WGRID says why
+; (pxplan, pxtools and pxview's master addresses the same). Preserves all else
 px_mrow:
     push ax
     push dx
     mul word [px_cur + PXR_MW]      ; DX:AX = its offset
     mov di, ax
-    and di, 15
+    and di, 127                    ; normalised to 8 paragraphs (PX_WGRID)
     push cx
     mov cl, 4
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
+    and al, 0xF8                    ; a segment kern_mega can load
     pop cx
     add ax, [px_cur + PXR_MSEG]     ; re-read: the master may have moved
     mov es, ax

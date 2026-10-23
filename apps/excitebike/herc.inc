@@ -133,23 +133,24 @@ xh_chain_end:
     ret
 
 ; n rows (CX, 1..50) from SI (words, contiguous, in the dictionary claim) to the ring's
-; row BX of [xc_bank] at this column ([xc_x2], [xc_rw] set by the caller).  DS = the dictionary
-; claim, ES = the card.  The run is split where the ring wraps (a course of at most 1,637 columns
-; never reaches it: 90 x 49 + 2 x 1,682 is 7,774 of 8,192 - it is kept for the day a track is longer).
+; row BX of the bank at this column, the column's constants in xh_col's frame (BP: [bp] the
+; bank, [bp + 2] rw, [bp + 4] x2).  DS = the dictionary claim, ES = the card.  The run is
+; split where the ring wraps (a course of at most 1,637 columns never reaches it: 90 x 49 +
+; 2 x 1,682 is 7,774 of 8,192 - it is kept for the day a track is longer).
 xh_run:
-    add ax, [cs:xc_x2]              ; AX = 90 x BX, passed by the caller as an immediate (no mul)
+    add ax, [bp + 4]                ; AX = 90 x BX, passed by the caller as an immediate (no mul)
     mov di, ax
-    cmp bx, [cs:xc_rw]
+    cmp bx, [bp + 2]
     jb .before
     and di, 1fffh                   ; wholly past the wrap: a - 8192
-    add di, [cs:xc_bank]
+    add di, [bp]
     jmp .one
 .before:
     mov dx, bx
     add dx, cx
-    cmp dx, [cs:xc_rw]
+    cmp dx, [bp + 2]
     ja .split
-    add di, [cs:xc_bank]
+    add di, [bp]
 .one:
     mov ax, cx
     shl ax, 1
@@ -159,12 +160,12 @@ xh_run:
     call ax
     ret
 .split:
-    mov dx, [cs:xc_rw]
+    mov dx, [bp + 2]
     sub dx, bx                      ; the rows before the wrap
     sub cx, dx
     push cx
     mov cx, dx
-    add di, [cs:xc_bank]
+    add di, [bp]
     mov ax, cx
     shl ax, 1
     shl ax, 1
@@ -173,36 +174,23 @@ xh_run:
     call ax
     pop cx
     mov ax, 90
-    mul word [cs:xc_rw]
-    add ax, [cs:xc_x2]
+    mul word [bp + 2]
+    add ax, [bp + 4]
     and ax, 1fffh
-    add ax, [cs:xc_bank]
+    add ax, [bp]
     mov di, ax
     jmp .one
 
-; the per-column constants: x2 = 2x, rw = the first row whose address wraps.  AX = x
-xh_setx:
-    mov [cs:xc_x], ax
-    shl ax, 1
-    mov [cs:xc_x2], ax
-    mov ax, 8192 + 89
-    sub ax, [cs:xc_x2]
-    xor dx, dx
-    mov cx, 90
-    div cx
-    mov [cs:xc_rw], ax
-    ret
-
 ; one bank of the entering column: 16 top rows, 32 band rows, 2 HUD rows (black)
 %macro XH_BANK 1
-    mov word [cs:xc_bank], %1 * 2000h
-    mov si, [cs:xc_tb]
+    mov word [bp], %1 * 2000h
+    mov si, [bp + 8]
     add si, %1 * 32
     xor bx, bx
     mov cx, 16
     xor ax, ax
     call xh_run
-    mov si, [cs:xc_bb]
+    mov si, [bp + 6]
     add si, %1 * 64
     mov bx, 16
     mov cx, 32
@@ -217,27 +205,40 @@ xh_setx:
 
 ; -----------------------------------------------------------------------------
 ; xh_col - the whole entering column x (AX): 200 lines, four banks, the HUD's eight lines
-; black.  DS = dictionary claim, ES = the card.
+; black.  DS = dictionary claim, ES = the card.  The column's constants are a frame on the
+; stack, as cga.inc's xc_col keeps them and for its reason (KERN-MEGA-PLAN 14.21): [bp + 8]
+; the top strip, [bp + 6] the band strip, [bp + 4] x2 = 2x, [bp + 2] rw, [bp] the bank.
 ; -----------------------------------------------------------------------------
 xh_col:
-    call xh_setx
-    mov bx, [cs:xc_x]
+    push bp
+    mov bx, ax
     and bx, XB_TOPW - 1
     mov cl, 7
     shl bx, cl
     add bx, XC_TOP
-    mov [cs:xc_tb], bx
-    mov bx, [cs:xc_x]
-    mov al, [cs:bx + xb_cid]
-    xor ah, ah
-    mov cl, 8
-    shl ax, cl
-    add ax, XC_BAND
-    mov [cs:xc_bb], ax
+    push bx                         ; [bp + 8] the top strip
+    mov bx, ax
+    mov dh, [cs:bx + xb_cid]        ; DX = the band strip: cid << 8 + XC_BAND
+    xor dl, dl
+    add dx, XC_BAND
+    push dx                         ; [bp + 6]
+    shl ax, 1
+    push ax                         ; [bp + 4] x2
+    mov cx, ax
+    mov ax, 8192 + 89
+    sub ax, cx
+    xor dx, dx
+    mov cx, 90
+    div cx
+    push ax                         ; [bp + 2] rw: the first row whose address wraps
+    push ax                         ; [bp] the bank (XH_BANK stores it)
+    mov bp, sp
     XH_BANK 0
     XH_BANK 1
     XH_BANK 2
     XH_BANK 3
+    add sp, 10
+    pop bp
     ret
 
 ; the HUD's image lines 1..7 (line 0 is black over black): the ring offset of the row each is

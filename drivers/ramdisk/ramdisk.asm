@@ -36,6 +36,9 @@
 ; the trap apps/modplug shipped with until it was caught.
 ; =============================================================================
 
+%define OS88_DRV_HIGHOK          ; kern_mega may run this image above 1MB
+                                ; (KERN-MEGA-PLAN item 82): rd_fold leaves a
+                                ; selector's offset unfolded
 %include "os88drv.inc"
 %include "rdpkg.inc"            ; the package ABI - the same file the PACKAGE
                                 ; includes, so the two ends cannot drift
@@ -176,6 +179,8 @@ rd_entry:
 ; [rd_cwd] is 0 because the image was loaded a moment ago.
 ; -----------------------------------------------------------------------------
 rd_attach:
+    call OSAPI_CPU_INFO         ; AH = the flags, for rd_fold: CPU_F_PM is
+    mov [rd_cpuf], ah           ; the one fact a segment's VALUE cannot give
     mov si, rd_svc
     clc
     ret
@@ -247,7 +252,7 @@ rd_d_readme:
     db 'This volume has no sectors.', 13, 10
     db 'Its contents come from RAMDISK.DRV answering', 13, 10
     db 'questions about FILES - no BPB, no FAT, and', 13, 10
-    db 'no int 13h anywhere behind it (SPEC.md 62.9).', 13, 10
+    db 'no int 13h anywhere behind it.', 13, 10
 rd_d_readme_end:
 
 rd_d_notes:
@@ -577,6 +582,8 @@ rd_ctabkb:  dw 0                ; ...and what the table costs
 rd_vol:     db 0xFF             ; the volume index we registered, FF = none
 rd_cwd:     db 0                ; the folder we are standing in, 0 = the root
 rd_err:     db 0                ; the last RDERR_*, for the page to report
+rd_cpuf:    db 0                ; OSAPI_CPU_INFO's AH, banked at attach: only
+                                ; under CPU_F_PM is a segment a selector
 
 ; --- scratch: an operation's own words ---------------------------------------
 rd_n:       dw 0, 0             ; bytes this operation is about to move,

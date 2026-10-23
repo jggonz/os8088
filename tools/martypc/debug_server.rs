@@ -2152,7 +2152,19 @@ fn mouse(machine: &mut Machine, req: &Value) -> Value {
     }
     let l = req.get("l").and_then(Value::as_bool).unwrap_or(false);
     let r = req.get("r").and_then(Value::as_bool).unwrap_or(false);
+    // `wz` - WHEEL notches, positive toward the user (patch 15). A request
+    // carrying one sends ONE IntelliMouse packet with no motion: the wheel
+    // and a move are never mixed, as a real MZ mouse reports them apart only
+    // by coincidence and the guest decodes them apart by construction.
+    let wz = req.get("wz").and_then(Value::as_i64).unwrap_or(0);
+    if !(-8..=7).contains(&wz) {
+        return err("wz must be -8..7: an MZ packet carries a signed nibble");
+    }
     match machine.mouse_mut() {
+        Some(m) if wz != 0 => {
+            m.wheel(l, r, wz as i8);
+            json!({"ok": true, "cycles": cycles})
+        }
         Some(m) => {
             m.set_speed(1.0);
             m.update(l, r, dx as f32, dy as f32);

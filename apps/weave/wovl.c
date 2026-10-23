@@ -1,8 +1,9 @@
 /* ============================================================================
  * os8088 - apps/weave/wovl.c
  *
- * WEAVE.OVL - the runtime's one overlay (WEAVE-SPEC 1.2, SPEC.md
- * 73.14). #included by apps/weave/weave.c.
+ * THE OVERLAY - the runtime's one overlay (WEAVE-SPEC 1.2, SPEC.md
+ * 73.14), part 1 of WEAVE.O88 since 73.14.2 (it shipped as the file
+ * WEAVE.OVL until then). #included by apps/weave/weave.c.
  *
  * WHAT LIVES HERE AND WHAT MAY NOT. WEAVE-SPEC 1.2: "refusable, UI-task-only
  * command paths - verbose bundle diagnostics, About, state import/export
@@ -12,7 +13,7 @@
  * a keystroke may not.
  *
  * THE MARKING IS THE WHOLE MECHANISM. A function whose name begins `ovl_` has
- * its CODE emitted into `.modc` and shipped as WEAVE.OVL; every global,
+ * its CODE emitted into `.modc` and carried as a lazy part; every global,
  * literal and bss byte it names stays resident and DS-relative, and
  * tools/cc8086.py turns the calls into far calls both ways. Nothing else about
  * these functions is special - they name resident statics, resident string
@@ -22,10 +23,10 @@
  *   - NEVER take the address of an ovl_* function. The address of a function
  *     that is not resident is not a thing; cc8086.py refuses it by name.
  *   - A REFUSED LOAD RETURNS 0, and 0 has to mean "it did not happen"
- *     (apps/cc/crt0.asm). The overlay is resolved in the app's CURRENT
- *     directory, and after a double-click that is the DOCUMENT's folder
- *     (SPEC.md 54.9, 19.2.1) - which is why WEAVE.OVL ships in the same folder
- *     as the bundles and the package, and not in one of its own.
+ *     (apps/cc/crt0.asm). The part is fetched out of WEAVE.O88 from the
+ *     folder the package was LAUNCHED from (SPEC.md 73.14.2's home bracket),
+ *     so a bundle in any folder opens - it was a file resolved in the
+ *     DOCUMENT's folder, which is why the runtime used to ship twice.
  *
  * IT SHIPS FROM DAY ONE rather than when the runtime outgrows 55,000 bytes,
  * for two reasons. WEAVE-SPEC 1.2 names it as a piece of the family, and

@@ -58,7 +58,7 @@
  *    A `static` declared inside a function reads correctly and is the idiom.
  *    Two things it costs you, because nothing will remind you: it is not
  *    re-entrant (your worker and your callbacks share it, and they pre-empt
- *    each other), and it is spent against the 60KB ceiling rather than
+ *    each other), and it is spent against the 63.5KB ceiling rather than
  *    against the stack.
  *
  * 2. ES BELONGS TO THE KERNEL. Every callback is entered with ES = KERNEL_SEG
@@ -116,17 +116,13 @@
  *     sound app in assembly (apps/tracker is the reference).
  *   OSAPI_XMEM_*                          every argument and answer is a
  *     32-bit linear base, and there is no 32-bit type here (rule 4). The one
- *     part of the API that C genuinely cannot hold.
- *   OSAPI_FSX_PAGE / FSX_SURF             the other two slots of the exclusive
- *     bracket (SPEC.md 53.10, 53.7.1). PAGE spends FSI_PAGES, which only Mode
- *     X and Hercules have; SURF answers the rect a SAME-MODE bracket owns on a
- *     two-display desktop, and a bracket that sets a mode has collapsed the
- *     desktop and is (0,0,w,h). The four below are the bracket itself and ARE
- *     wrapped - os88_fsx_caps/run/mode/wait - because none of the bracket's
- *     rules is checkable from C and all of them are stated where the one
- *     function that obeys them lives (docs/APPLE2-SPEC.md section 13.3).
- *     (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md 11.2, is a different
- *     thing again and is os88_fullscreen() below.)
+ *     part of the API that C genuinely cannot hold - OSAPI_XMEM_SEL included,
+ *     whose input is the same base.
+ *   OSAPI_MEM_CODESEL                     the selector to FAR CALL code in a
+ *     claim (KERN-MEGA-PLAN 12.2). C cannot far-call through a selector it
+ *     holds, and the one C path that far-calls into a claim - the overlay
+ *     (SPEC.md 73.14) - is crt0's, which converts with OS88_CODESEL. Listed
+ *     rather than wrapped; a thunk is a dozen lines if a C caller appears.
  *   OSAPI_GFX_LSTEP / LSTEPV              RETIRED - a stock kernel carries the
  *     cells and no body and answers CF=1 (SPEC.md 5.12.6). The resumable walk
  *     is apps/os88gfx.inc's `GFXE_WALK` now, which is NASM and so out of C's
@@ -237,7 +233,10 @@ struct os88_video {                              /* OSAPI_VIDEO, SPEC.md 39.2 */
     int kind;                                    /* OS88_VID_VGA / HERC / CGA
                                                   * / EGA - but ask BPP, not
                                                   * this (SPEC.md 39.24) */
-    int bpp;                                     /* 4 or 1 - see os88_gfx_pen */
+    int bpp;                                     /* 4 or 1 - and 8 or 16 on a
+                                                  * packed VESA display (SPEC.md
+                                                  * 120.5): colour is >= 4,
+                                                  * never == 4. os88_gfx_pen */
 };
 
 struct os88_find {                               /* OSAPI_FILE_FIND, 19.7.1 */
@@ -329,7 +328,7 @@ typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
 #define OS88_VID_HERC  1
 #define OS88_VID_CGA   2
 #define OS88_VID_EGA   3                         /* 640x350x16 - VGA's planar
-                                                  * path, so test .bpp == 4
+                                                  * path, so test .bpp >= 4
                                                   * for "colour", never this */
 
 #define OS88_CPU_8086  0                         /* os88_cpu() - the target */
@@ -338,6 +337,10 @@ typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
 
 #define OS88_CUR_ARROW 0                         /* os88_wm_cursor() */
 #define OS88_CUR_CROSS 1
+
+#define OS88_WHEEL_STEPS 3                       /* = WHEEL_STEPS: the LINES
+                                                  * one wheel notch scrolls
+                                                  * (SPEC.md 13.18.2) */
 
 /* os88_file_dlg()'s mode, and os88_onfile()'s first argument.
  *
@@ -400,11 +403,14 @@ typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
  *                                       unsigned size_lo, unsigned size_hi,
  *                                       void *win);
  *   CC_HAS_WORKER     void  os88_worker(void *win);
+ *   CC_HAS_ONTIMER    void  os88_ontimer(void *win);      (13.9 - see below)
  *   CC_HAS_ONWAKE     void  os88_onwake(void *win);       (74.1 - see below)
  *   CC_HAS_ONCLOSE    int   os88_onclose(void *win);      (75.1 - see below)
+ *   CC_HAS_ONWHEEL    void  os88_onwheel(int notches, void *win);
+ *                                                         (13.18 - see below)
  *
  * ...AND ONE OF THEM GATES THE OTHER DIRECTION, which is why it is listed
- * apart from the twelve above rather than among them:
+ * apart from the fourteen above rather than among them:
  *
  *   CC_HAS_FSX        no callback at all - it assembles the four
  *                     os88_fsx_*() THUNKS (SPEC.md 53, the exclusive
@@ -490,6 +496,23 @@ void os88_onwake(void *win);
  *
  * Needs CC_HAS_ONCLOSE, and os88_wm_onclose() to install it. */
 int os88_onclose(void *win);
+
+/* os88_onwheel - the mouse WHEEL (SPEC.md 13.18), installed by
+ * os88_wm_onwheel(). `notches` is SIGNED and POSITIVE TOWARD THE USER: scroll
+ * the view DOWN, the top row increasing. It is os88_onkey()'s environment
+ * exactly - the UI task, the gfx lock HELD, billed to you - and it reaches the
+ * window a KEY would reach (the front one), WHEREVER THE POINTER IS; ask
+ * os88_mouse() if your window has more than one thing that scrolls and you
+ * want the one under it.
+ *
+ * ONE CALL, HOWEVER MANY NOTCHES: the turns since the UI task last ran
+ * arrive SUMMED, so move the view by notches * OS88_WHEEL_STEPS lines in ONE
+ * move and repaint once (SPEC.md 10.4) - take the path your scroll bar's
+ * arrow already takes, with the count in hand, never a loop of single steps.
+ * A turn against an end must draw NOTHING: clamp first and return when the
+ * position did not change. kern_small has no wheel and never calls it, so a
+ * package needs no branch for that machine. Needs CC_HAS_ONWHEEL. */
+void os88_onwheel(int notches, void *win);
 
 /* os88_worker - your one background task (SPEC.md 20.6), started by
  * os88_task_spawn() from a callback. IT MUST NEVER RETURN: call
@@ -801,6 +824,11 @@ void os88_wm_onclose(void *win);
 void os88_wm_onwake(void *win);                  /* 74.1 - install
                                                   * os88_onwake(); needs
                                                   * CC_HAS_ONWAKE */
+void os88_wm_onwheel(void *win);                 /* 13.18 - install
+                                                  * os88_onwheel(); needs
+                                                  * CC_HAS_ONWHEEL. Does
+                                                  * nothing on kern_small,
+                                                  * which has no wheel */
 
 /* os88_wm_wake - post the kick (SPEC.md 74.1): os88_onwake() runs on the UI
  * task, lock free, a few event-loop passes later. Any context - a callback,
@@ -906,6 +934,30 @@ int os88_fsx_wait(int kind);                     /* ...and it is the PRESENT
 #define OS88_FSI_MODE   14                       /* byte: the id, echoed */
 #define OS88_FSI_SIZE   16
 
+/* The three the bracket's FOUR do not cover, wrapped for LEMMINGS (SPEC.md
+ * 114) and gated like every thunk by the C's own use set (SPEC.md 73.9.1),
+ * so a package that names none of them carries none of them. */
+int os88_fsx_page(int page);                     /* show FSI_PAGES' page n,
+                                                  * latched at retrace and
+                                                  * waited for (53.10): 0 =
+                                                  * on the glass, -1 = no
+                                                  * bracket, no mode, or one
+                                                  * page */
+int os88_fsx_surf(struct os88_rect *r);          /* the rect the bracket
+                                                  * OWNS (53.7.1), inclusive
+                                                  * like every rect here - on
+                                                  * a two-display SAME-MODE
+                                                  * bracket it is not at 0,0.
+                                                  * 0 = filled, -1 = none */
+
+/* Read the keyboard inside the bracket - no event is dispatched there and the
+ * contract is that the app polls (53.1). wait == 0 peeks and answers 0 when
+ * nothing is there. The answer is (scan << 8) | ascii. It uses the enhanced
+ * BIOS pair where the BIOS says it has one (0040:0096 bit 4) and the original
+ * pair where it does not - so F11 and F12 arrive on an AT and are ABSENT on an
+ * 83-key XT, which is a fact to grey with (SPEC.md 47) rather than a defect. */
+int os88_fsx_key(int wait);
+
 /* --- tasks and time (SPEC.md 8, 20.6) ------------------------------------- */
 void os88_task_yield(void);
 void os88_task_sleep(int ticks);                 /* 18 ticks ~ 1 second */
@@ -983,12 +1035,14 @@ int os88_snd_tone(int hz, int ticks, int prio);  /* hz 0 = off, ticks 0 = until
  * "where my Save As went" is just a Save.
  *
  * The 32-bit count the slots take is capped at 16 bits here, which costs
- * nothing a package can reach: your image and bss together cap at 60KB, and
+ * nothing a package can reach: your image and bss together cap at 63.5KB, and
  * anything bigger belongs in a claim, which the _seg forms read into.
  * A _seg base MUST BE 512-BYTE ALIGNED (SPEC.md 2.1.1: every disk-visible
  * base is): a claim's own base is (the kernel's guard 6b - KB-granular
  * blocks from a 512-aligned heap), and so is any offset into it that is a
- * multiple of 0x200 (seg + 0x20, + 0x40, ...) - but seg + 0x10 is NOT, and
+ * multiple of 0x200 (seg + 0x20, + 0x40, ...; on kern_mega an OS88_HIGHMEM
+ * package's claim is a selector and takes no arithmetic at all - use the
+ * _segoff forms below) - but seg + 0x10 is NOT, and
  * int 13h answers a run that then straddles a 64KB physical page with
  * error 09h on real hardware, which QEMU never shows. Read to an aligned
  * offset and move the bytes yourself if they must sit elsewhere (SPEC.md
@@ -999,6 +1053,14 @@ unsigned os88_file_read(const char *name, void *buf, unsigned cap);
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
 int os88_file_write(const char *name, const void *buf, unsigned count);
 int os88_file_write_seg(const char *name, unsigned seg, unsigned count);
+/* ...and at an OFFSET into the claim, a multiple of 512 like the base. THE
+ * WAY to name part of a claim: `seg + 0x20` is arithmetic on the segment,
+ * and on kern_mega a claim of an OS88_HIGHMEM package is a SELECTOR, which
+ * arithmetic breaks - claim + offset does not (KERN-MEGA-PLAN 14.12) */
+unsigned os88_file_read_segoff(const char *name, unsigned seg, unsigned off,
+                               unsigned cap);
+int os88_file_write_segoff(const char *name, unsigned seg, unsigned off,
+                           unsigned count);
 int os88_file_append(const char *name, const void *buf, unsigned count);
 
 /* os88_file_read_at - ONE CHUNK of a file, by byte offset (18.4.4), and the
@@ -1121,6 +1183,19 @@ int os88_arg_file(char *name13, struct os88_place *p);
  * this pads them. Your icon becomes the mark its documents carry. */
 int os88_assoc_set(const char *ext, const char *stem);
 
+/* os88_assoc_flush - bring volume vol's ASSOC.DAT up to date with the
+ * packages on it (54.7.6): after copying packages onto a disk, so the next
+ * boot knows their icons, their extensions and where they are. flags is 0
+ * (incremental) or the OS88_ASSOC_* bits: FULL reads every package the old
+ * cache did not hold; NOFLUSH|HOLD loads the writer and keeps it (call it
+ * BEFORE replacing system files), NOFLUSH alone releases it - on every way
+ * out. Returns 0, or -1 if it could not (a full or write-protected disk, no
+ * system disk, kern_small). */
+#define OS88_ASSOC_FULL    1
+#define OS88_ASSOC_HOLD    2
+#define OS88_ASSOC_NOFLUSH 4
+int os88_assoc_flush(int vol, int flags);
+
 /* The batch bracket (18.9.3): between these two a floppy may reuse its banked
  * BPB instead of re-reading LBA 0 at every volume switch - one call and one
  * revolution per switch, on a copy or an install. It nests, and any
@@ -1130,7 +1205,7 @@ void os88_batch_begin(void);
 void os88_batch_end(void);
 
 /* --- memory beyond your region (SPEC.md 50.3) ----------------------------
- * Your image and bss together cap at 60KB (APP_MAX_SIZE), and a C package
+ * Your image and bss together cap at 63.5KB (APP_MAX_SIZE), and a C package
  * meets that two to four times sooner than an assembly one. Anything bigger
  * is a claim: os88_mem_claim() answers a SEGMENT, which the _seg file calls
  * take and os88_peek()/os88_poke() reach a byte at a time. The kernel frees
@@ -1142,6 +1217,13 @@ unsigned os88_mem_regrow(unsigned seg, int kb);  /* 0 = refused and the old
                                                   * claim is untouched;
                                                   * otherwise the base NOW,
                                                   * which may have MOVED */
+/* os88_mem_huge - a claim of ANY size (SPEC.md 50.3.5): 0 = refused, else its
+ * first segment or selector; os88_mem_huge_step() is what to add to it for
+ * each 64KB - 0x1000 for a conventional claim, 8 for a run of selectors above
+ * 1MB on kern_mega. base + k * step is the one segment arithmetic a claim
+ * allows; 0x1000 is only the conventional step */
+unsigned os88_mem_huge(int kb);
+unsigned os88_mem_huge_step(void);
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
 

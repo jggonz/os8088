@@ -231,6 +231,7 @@ ap_onkey:                          ; AL = ascii, AH = scancode; SI = window
 .prev:
     call ap_cmd_prev
 .rep:
+ap_rep5:                           ; (ap_oncmd's tail too: the same five pops)
     call apu_repaint
     pop di
     pop si
@@ -286,13 +287,7 @@ ap_oncmd:                          ; AL = item, AH = menu; SI = window
     ; item 0..6 map directly onto the AP_B_* command ids
     call ap_dispatch_btn
 .rep:
-    call apu_repaint
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp ap_rep5
 
 ; =============================================================================
 ap_about:                          ; SI = window; gfx lock held
@@ -323,9 +318,7 @@ ap_onwake:                         ; SI = window
     cmp byte [ap_first_paint], 0
     je .no_first
     mov byte [ap_first_paint], 0
-    call OSAPI_GFX_LOCK
-    call apu_repaint
-    call OSAPI_GFX_UNLOCK
+    call ap_lrepaint
 .no_first:
 
     ; 1. the disk-refill handshake (time-critical: do it first)
@@ -347,8 +340,7 @@ ap_onwake:                         ; SI = window
     je .noend
     call OSAPI_GFX_LOCK
     call ap_autoadvance
-    call apu_repaint
-    call OSAPI_GFX_UNLOCK
+    call ap_repunlock
 .noend:
 
     ; 3. the launch document, once (SPEC.md 54.10) - double-click means "play
@@ -362,8 +354,7 @@ ap_onwake:                         ; SI = window
     mov bl, [ap_arg_vol]
     mov al, AP_ADD_CUR | AP_ADD_PLAY
     call ap_add_file
-    call apu_repaint
-    call OSAPI_GFX_UNLOCK
+    call ap_repunlock
 .noarg:
 
     ; 4. a would-be second instance may have queued a document for us
@@ -379,9 +370,7 @@ ap_onwake:                         ; SI = window
 %ifdef AP_HANDOFF
     call ap_que_poll
     jc .noque
-    call OSAPI_GFX_LOCK
-    call apu_repaint
-    call OSAPI_GFX_UNLOCK
+    call ap_lrepaint
 .noque:
 %endif
 %ifdef APROF
@@ -393,6 +382,15 @@ ap_onwake:                         ; SI = window
 .nodump:
 %endif
     jmp ap_ret6
+
+; ap_lrepaint - a repaint from outside the gfx lock (ap_onwake's): take it,
+; repaint, give it back. ap_repunlock is the second half, for a holder
+ap_lrepaint:
+    call OSAPI_GFX_LOCK
+ap_repunlock:
+    call apu_repaint
+    call OSAPI_GFX_UNLOCK
+    ret
 
 ; =============================================================================
 ap_onclose:                        ; SI = window; gfx lock held
@@ -417,23 +415,26 @@ ap_onfile:
     mov si, di
     mov di, ap_dlgname
     mov cx, 13
-.cn:
-    mov al, [es:si]
-    mov [di], al
-    or al, al
-    jz .cnd
-    inc si
-    inc di
-    dec cx
-    jnz .cn
-.cnd:
-    mov byte [ap_dlgname+13], 0
+    call ap_kcopy
     call OSAPI_FILE_HERE            ; DX = current dir cluster, BL = drive
     mov si, ap_dlgname
     ; Open adds and selects; it starts the track ONLY if nothing is playing
     ; (SPEC.md 86.3) - it must not interrupt the current song.
     mov al, AP_ADD_CUR | AP_ADD_IDLE
     call ap_add_file
-.rep:
     call apu_repaint
     jmp ap_ret6
+
+; ap_kcopy - the NUL string at ES:SI into DS:DI, at most CX characters, and a
+; NUL after them. CX >= 1. Clobbers AL, CX, SI, DI
+ap_kcopy:
+    mov al, [es:si]
+    or al, al
+    jz .z
+    mov [di], al
+    inc si
+    inc di
+    loop ap_kcopy
+.z:
+    mov byte [di], 0
+    ret

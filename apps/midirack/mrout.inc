@@ -51,7 +51,9 @@ MRW_TAIL    equ 18                  ; ticks a finished song rings on (~1 s)
     MRB mrb_hand                    ; its stream handle
     MRB mrb_open                    ; a stream is open
     MRW mrb_rate
-    MRW mrk_seg                     ; the speaker's ring claim
+    MRW mrk_seg                     ; the speaker's ring claim: held ONLY
+                                    ; while a speaker or Covox session is
+                                    ; open - playing or paused (mrk_rfree)
     MRW mrk_rate
     MRB mrk_on                      ; a speaker session (its ring holds it)
     MRB mrk_exit                    ; why the bracket ended: MRX_*
@@ -68,7 +70,10 @@ MRW_TAIL    equ 18                  ; ticks a finished song rings on (~1 s)
 ; session's start - the polled Covox's ring, the speaker's PWM table (read
 ; once, by mry_open, as it builds mry_otab), and the Sound Blaster grant
 ; ring's staging half (mrb_half, below)
-    MRBUF mrk_pring, OS88SPK_PRL    ; the polled ring, in our own segment
+mrk_pring   equ mr_ztail            ; the polled ring, in our own segment -
+                                    ; and a FOURTH tenant before any of
+                                    ; them: the image's tail, read once at
+                                    ; entry (midirack.asm, SPEC.md 105.6.1)
 mrk_map     equ mrk_pring           ; the PWM table, for the synth's
     MRW mr_pblo                     ; FM/tone: the PIT the song started at
     MRW mr_pbhi
@@ -195,9 +200,11 @@ mro_play:
 .rt:
     call mro_rewind
     call mro_clock0
-    call mro_worker
-    jc .no
-    jmp short .go
+.wk:
+    call mro_worker                 ; NO TASK SLOT: what was opened is CLOSED
+    jnc .go                         ; before the refusal - mro_close while
+    call mro_close                  ; [mr_out] still names it - so a refused
+    jmp short .no                   ; start holds no chip, stream or ring
 .ntone:
     cmp al, MRO_SB
     je .card
@@ -208,9 +215,7 @@ mro_play:
 .card:
     call mrb_start
     jc .no
-    call mro_worker
-    jc .no
-    jmp short .go
+    jmp short .wk
 .nsb:
     mov byte [mr_state], MR_ST_PLAY ; THE SPEAKER OR THE COVOX: the bracket
     call mrk_start                  ; (it returns when the user leaves it)
@@ -402,8 +407,9 @@ mro_close:
     call mrm_close
     jmp short .done
 .n3:
-    mov byte [mrk_on], 0            ; the speaker's (or Covox's) session is over
-.done:
+    mov byte [mrk_on], 0            ; the speaker's (or Covox's) session is
+    call mrk_rfree                  ; over, and its ring given back (a PAUSED
+.done:                              ; one still held it)
     mov byte [mr_out], MRO_NONE
     mov byte [mr_ended], 0
     mov byte [mr_tail], 0
@@ -726,14 +732,27 @@ mrb_alloff:
     je mwt_alloff
     jmp mry_alloff
 
-; mrb_tc - AX = TOTAL, DX = CONS, of whichever ring
+; mrb_tc - AX = TOTAL, DX = CONS, of whichever ring - and 0, 0 when there is
+; NO ring. The external ring is freed at every stop (mrb_rfree), and this is
+; the one reader a task other than the UI's can reach then: mr_elapsed asks it
+; from the worker's mrw_draw, which runs OUTSIDE [mr_inpass] and so outside
+; mro_drain's guarantee, on any [mr_out] it read before mro_close cleared it.
+; The segment is read ONCE into a register and tested: a stale non-zero one is
+; a read of freed conventional memory (a wrong second on the bar, for a frame),
+; a zero one would be ES = 0 - the interrupt table on kern_big and a null
+; selector, #GP on the first read, on kern_mega
 mrb_tc:
     cmp byte [mrb_grant], 0
     jne .g
     push es
-    mov es, [mrb_seg]
+    mov ax, [mrb_seg]
+    mov dx, ax
+    or ax, ax
+    jz .none                        ; (AX = DX = 0: no lead, nothing played)
+    mov es, ax
     mov ax, [es:MRB_RL+SND_EXT_TOTAL]
     mov dx, [es:MRB_RL+SND_EXT_CONS]
+.none:
     pop es
     ret
 .g:
@@ -774,7 +793,12 @@ mrb_put1:
     ; (falls into mrb_span1)
 
 ; mrb_span1 - one span into the external ring at TOTAL; TOTAL moved LAST
-; (the block IRQ reads it)
+; (the block IRQ reads it). NO ZERO TEST, and none is needed: its callers are
+; mrb_start's pre-roll, straight after the claim, and the worker's mrw_sb,
+; which runs only inside [mr_inpass] with [mr_seqon] set - and mro_close
+; clears [mr_seqon] and waits out [mr_inpass] (mro_drain) BEFORE mrb_close
+; frees the ring, so no pass that writes here can be in flight or begin once
+; it is gone
 mrb_span1:
     push ax
     push cx
@@ -835,9 +859,23 @@ mrb_half1:
     ret
 
 ; -----------------------------------------------------------------------------
-; mrb_start - the synth onto the card: an external ring claimed (once,
-; page-safe and high, SPEC.md 34.5.3) and opened, or - refused for want of
-; auto-init - a grant ring. UI task. out: CF = 1, [mr_msg] says why
+; mrb_start - the synth onto the card: an external ring claimed (page-safe,
+; SPEC.md 34.5.3 - from the top, and on kern_mega from the bottom) and opened,
+; or - refused for want of auto-init - a grant ring. UI task. out: CF = 1,
+; [mr_msg] says why.
+;
+; THE RING IS CLAIMED AT EVERY PLAY AND FREED AT EVERY STOP (SPEC.md 105.8.4,
+; KERN-MEGA-PLAN 14.55): mrb_close gives it back, and so does every refusal
+; below and a grant ring, which never reads it. It was claimed at the first
+; play and held to the window's close - 17 KB pinned for a session that may
+; play once. The price is a page-safe claim per play, which a fragmented heap
+; can refuse - and A REFUSED CLAIM IS NOT A REFUSED PLAY (KERN-MEGA-PLAN
+; 14.59): the grant ring is tried next, exactly as for a DSP without
+; auto-init, and it degrades by tier (16, 8, 4 KB of the driver's pool). Only
+; when that is refused too is the play refused with mr_s_ringmem, and the
+; next Play asks again. The caps word cannot say "no auto-init" (no SND_CAP_
+; bit does), so the claim is still made on an SB 1.x - and refused or not,
+; that machine reaches the grant ring either way
 ; -----------------------------------------------------------------------------
 mrb_start:
     push ax
@@ -856,9 +894,8 @@ mrb_start:
     mov ax, (MRB_RL + 16 + 1023) / 1024
     mov cx, ax
     call OSAPI_MEM_CLAIM_DMA_HI
-    mov word [mr_msg], mr_s_nomem
-    jc .no
-    mov [mrb_seg], dx
+    jc .have                        ; REFUSED: no external ring, [mrb_seg]
+    mov [mrb_seg], dx               ; still 0 - the grant ring plays (.grant)
 .have:
     cmp byte [mr_out], MRO_WT       ; the WAVETABLE's rate and voices
     jne .syn                        ; (mrwt.inc), else the synth's
@@ -905,6 +942,8 @@ mrb_start:
 .pdone:
     call mro_rewind
     mov byte [mr_seqon], 1
+    cmp word [mrb_seg], 0           ; the claim was refused: straight to the
+    je .grant                       ; grant ring, nothing to pre-roll into
     mov es, [mrb_seg]
     xor ax, ax
     mov [es:MRB_RL+SND_EXT_TOTAL], ax
@@ -914,10 +953,11 @@ mrb_start:
     mov ax, [mrb_pre]
     cmp [es:MRB_RL+SND_EXT_TOTAL], ax
     jb .pre
+    call OSAPI_SND_CAPS             ; FIRST: BL is one of its OUTPUTS, and
     mov bl, SND_OPENF_RING + SND_OPENF_EXT + (MRB_RLCODE << SND_OPENF_RLSH)
-    call OSAPI_SND_CAPS
-    test ax, SND_CAP_EXTBLK
-    jz .blk
+    test ax, SND_CAP_EXTBLK         ; the flags built in BL before it came
+    jz .blk                         ; back 81h - no EXT, no ring size - so
+                                    ; every play took the grant ring
     or bl, 2 << SND_OPENF_BLKSH     ; 512-byte blocks: a pause is prompt
 .blk:
     xor al, al
@@ -932,11 +972,17 @@ mrb_start:
     jz .opened
     cmp al, 7                       ; no auto-init: the grant ring
     jne .refused
+.grant:
     call mrb_grantopen
-    jnc .opened
+    jnc .gok
+    mov word [mr_msg], mr_s_ringmem ; refused with NO external ring: the
+    cmp word [mrb_seg], 0           ; heap funded neither, which is memory,
+    je .no                          ; not the card
 .refused:
     mov word [mr_msg], mr_s_sberr
     jmp short .no
+.gok:
+    call mrb_rfree                  ; ...which never reads the external one
 .opened:
     mov [mrb_hand], ah
     mov byte [mrb_open], 1
@@ -944,6 +990,7 @@ mrb_start:
     jmp short .out
 .no:
     mov byte [mr_seqon], 0
+    call mrb_rfree                  ; a refused play holds nothing
     stc
 .out:
     pop es
@@ -1030,8 +1077,11 @@ mrb_gfree:
     pop ax
     ret
 
-; mrb_close - the stream closed (verb 2: UI task), and a grant given back.
-; The external ring's claim is kept for the next play
+; mrb_close - the stream closed (verb 2: UI task), a grant given back, and
+; the external ring FREED (SPEC.md 105.8.4). The order is the argument: the
+; caller, mro_close, has already drained the worker (mro_drain), so nothing
+; is making spans; verb 2 then stops the card, so nothing is reading the ring;
+; only then is it given back
 mrb_close:
     push ax
     cmp byte [mrb_open], 0
@@ -1043,6 +1093,21 @@ mrb_close:
 .g:
     call mrb_gfree
     pop ax
+    ; (falls into mrb_rfree)
+
+; mrb_rfree - the external ring given back, if it is held. [mrb_seg] is
+; zeroed BEFORE the free, so a reader that tests it (mrb_tc) sees either no
+; ring or a block that is still conventional memory, never a segment that
+; names nothing. Every register kept
+mrb_rfree:
+    push dx
+    xor dx, dx
+    xchg dx, [mrb_seg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+.out:
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1177,23 +1242,11 @@ mr_lptinfo:
     pop ax
     ret
 
-; mro_free - every claim the outputs hold, given back (the window's close)
+; mro_free - every claim the outputs hold, given back (the window's close).
+; mro_close has freed both rings already; this is the belt to its braces
 mro_free:
-    push dx
-    mov dx, [mrb_seg]
-    or dx, dx
-    jz .k
-    call OSAPI_MEM_FREE
-    mov word [mrb_seg], 0
-.k:
-    mov dx, [mrk_seg]
-    or dx, dx
-    jz .out
-    call OSAPI_MEM_FREE
-    mov word [mrk_seg], 0
-.out:
-    pop dx
-    ret
+    call mrb_rfree
+    jmp mrk_rfree
 
 ; =============================================================================
 ; THE SPEAKER, in a bracket (SPEC.md 105.8.3)
@@ -1205,9 +1258,18 @@ mrk_hook:
     ret
 
 ; -----------------------------------------------------------------------------
-; mrk_start - a speaker session from the song's start: the ring (once), the
-; pulse table, the synth through it, then the bracket. UI task, lock held.
-; out: CF = 1 refused before any sound ([mr_msg])
+; mrk_start - a speaker session from the song's start: the ring, the pulse
+; table, the synth through it, then the bracket. UI task, lock held.
+; out: CF = 1 refused before any sound ([mr_msg]), nothing held
+;
+; THE RING LIVES FOR ONE SESSION (KERN-MEGA-PLAN 14.59, the owner's call): it
+; is claimed here, on the ISR's road only - a polled Covox plays out of our
+; own image and claims nothing, and no other output ever reaches this - and
+; freed at the session's end: mrk_bracket's on any exit that is not a pause
+; (a stop, the song's end, a skip, a refusal), mro_close's on every road out
+; of a paused one. It was claimed at the first play and held to the window's
+; close, 5 KB pinned through a whole session of Sound Blaster or FM. A refused
+; claim is a refused Play, mr_s_spkmem, and the next Play asks again
 ; -----------------------------------------------------------------------------
 mrk_start:
     push ax
@@ -1253,7 +1315,7 @@ mrk_start:
     jne .have
     mov ax, (MRK_RL + 272 + 1023) / 1024
     call OSAPI_MEM_CLAIM
-    mov word [mr_msg], mr_s_nomem
+    mov word [mr_msg], mr_s_spkmem
     jc .no
     mov [mrk_seg], dx
 .have:
@@ -1302,13 +1364,20 @@ mrk_start:
     xor ax, ax
     mov [es:MRK_RL+SND_EXT_TOTAL], ax
     mov [es:MRK_RL+SND_EXT_CONS], ax
+    push ds                         ; ES OFF THE RING before the bracket:
+    pop es                          ; mrk_bracket FREES it on the way out, and
+                                    ; a free's API return reloads the ES it
+                                    ; was called with - on kern_mega a freed
+                                    ; LDT selector, a #GP fixup (14.53). Nothing
+                                    ; in the bracket reads through ES as given
     mov byte [mrk_on], 1
     mov byte [mr_seqon], 1
     call mrk_bracket
     clc
     jmp short .out
 .no:
-    stc
+    call mrk_rfree                  ; a refusal holds nothing (os88spk_init's
+    stc                             ; comes after the claim)
 .out:
     pop es
     pop di
@@ -1360,7 +1429,16 @@ mrk_bracket:
     mov cx, FSXF_RATE
     mov dx, 0xFFFF                  ; a period ~ a tick: the fewest entries
     mov di, mrk_hook
+%ifdef MR_SPKDIAG
+    mov word [mrk_dspk], 0xFFFF
+%endif
     call OSAPI_FSX_RUN
+%ifdef MR_SPKDIAG
+    pushf
+    pop word [mrk_dfx]
+    mov [mrk_dfa], ax
+    call mrk_diag
+%endif
     mov byte [mr_seqon], 0
     mov al, [mrk_exit]
     cmp al, MRX_DESK
@@ -1374,6 +1452,7 @@ mrk_bracket:
 .nd:
     mov byte [mr_state], MR_ST_STOP
     mov byte [mrk_on], 0
+    call mrk_rdone                  ; the session is over: its ring freed
     cmp al, MRX_STOP
     jne .ns
     mov word [mr_msg], mr_s_stopped
@@ -1405,6 +1484,71 @@ mrk_bracket:
     pop ax
     ret
 
+%ifdef MR_SPKDIAG
+; mrk_diag - MR_SPKDIAG: a refused speaker play says which door refused it.
+; Every register kept
+mrk_diag:
+    cmp word [mr_msg], mr_s_spkbusy
+    jne .out
+    push ax
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov di, mr_spkdbuf
+    mov si, mr_s_spkdiag
+    call .str
+    mov ax, [mrk_dfx]
+    call .hex
+    mov si, mr_s_spkd2
+    call .str
+    mov ax, [mrk_dfa]
+    call .hex
+    mov si, mr_s_spkd3
+    call .str
+    mov ax, [mrk_dspk]
+    call .hex
+    xor al, al
+    stosb
+    mov word [mr_msg], mr_spkdbuf
+    pop es
+    pop di
+    pop si
+    pop ax
+.out:
+    ret
+.str:
+    lodsb
+    or al, al
+    jz .sr
+    stosb
+    jmp short .str
+.sr:
+    ret
+.hex:
+    push cx
+    mov cx, 4
+.hl:
+    push cx
+    mov cl, 4
+    rol ax, cl
+    pop cx
+    push ax
+    and al, 15
+    add al, '0'
+    cmp al, '9'
+    jbe .hd
+    add al, 7
+.hd:
+    stosb
+    pop ax
+    loop .hl
+    pop cx
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; mrk_main - THE BRACKET'S BODY. DS = CS, SI = our window
 ; -----------------------------------------------------------------------------
@@ -1417,6 +1561,9 @@ mrk_main:
     jnc .pre
     call os88spk_go
     jnc .go
+%ifdef MR_SPKDIAG
+    mov [mrk_dspk], ax
+%endif
     mov word [mr_msg], mr_s_spkbusy
     mov byte [mrk_exit], MRX_ERR
     ret
@@ -1636,18 +1783,67 @@ mrk_fill:
 mrk_xlat:
     ret
 
+; mrk_rdone - a session's end (mrk_bracket, the bracket left for good): what
+; the ring holds and never played is taken off the synth's sample count, so
+; mr_elapsed - which finds no ring after this - still reads where the sound
+; stopped, then the ring is freed. No ISR reads it: os88spk_stop closed the
+; door in mrk_main before OSAPI_FSX_RUN returned (or os88spk_go never opened
+; it). A polled session holds no ring, and its queue stays os88spk's.
+; Every register kept
+mrk_rdone:
+    push ax
+    push es
+    mov ax, [mrk_seg]
+    or ax, ax
+    jz .f
+    mov es, ax
+    mov ax, [es:MRK_RL+SND_EXT_TOTAL]
+    sub ax, [es:MRK_RL+SND_EXT_CONS]
+    sub [mry_slo], ax
+    sbb word [mry_shi], 0
+.f:
+    pop es
+    pop ax
+    ; (falls into mrk_rfree)
+
+; mrk_rfree - the speaker's ring given back, if it is held: [mrk_seg] zeroed
+; BEFORE the free (mrb_rfree's shape), so a reader that tests it sees either
+; no ring or a block it may still read. Every register kept
+mrk_rfree:
+    push dx
+    xor dx, dx
+    xchg dx, [mrk_seg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+.out:
+    pop dx
+    ret
+
 %if OS88SPK_PRL % MRY_SPAN
 %error "the polled ring is whole spans: mry_span wraps to offset 0, not to it"
 %endif
 
 ; mrk_queued - AX = samples made and not yet played, ES = the external ring's
-; segment (a polled session's queue is os88spk's, in our own image)
+; segment (a polled session's queue is os88spk's, in our own image) - and AX
+; = 0 with ES UNTOUCHED when there is no ring: a session's ring is freed at
+; its end (mrk_rdone), and mr_elapsed still asks for a stopped play's clock.
+; ES is never loaded with 0, which is a null selector and #GP on kern_mega.
+; Every reader is the UI task's or holds the gfx lock (mru_changed, the
+; worker's one lock-free door to mr_elapsed, never asks for a bracket output,
+; whose clock moves only inside the bracket where every other task is
+; frozen), and every free is the UI task's with the lock held - so a reader
+; never sees the ring go between its test and its read
 mrk_queued:
     cmp byte [mrk_pol], 0
     jne .p
-    mov es, [mrk_seg]
+    mov ax, [mrk_seg]
+    or ax, ax
+    jz .none
+    mov es, ax
     mov ax, [es:MRK_RL+SND_EXT_TOTAL]
     sub ax, [es:MRK_RL+SND_EXT_CONS]
+.none:
     ret
 .p:
     push ds

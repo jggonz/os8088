@@ -4,8 +4,8 @@
  * #included by cword.c - one translation unit (SPEC.md 73.1) - but NOT in the
  * same segment as the rest of it. Every function here is named `ovl_*`, which
  * is the whole of the marking that puts its code in `.modc` and ships it as
- * CWORD.OVL beside CWORD.O88 (SPEC.md 73.14). The module is read into a heap
- * claim the first time one of these is called and stays for the session.
+ * PART 0 of CWORD.O88 (SPEC.md 73.14, 73.14.2). The module is read into a heap
+ * claim at launch, right behind the image, and stays for the session.
  *
  * WHY THIS IS THE LINE. A package's image and bss share 61,440 bytes and that
  * ceiling IS the segment (SPEC.md 33). What decides which side of the line a
@@ -82,13 +82,21 @@ static const struct cw_ctl cw_dc_para[] = {
     { CWK_RADIO, 16,  5, 0, 12,  "Double" },
     { CWK_CHECK, 16,  6, 0, 20,  "Space Before" },
     { CWK_LABEL, 33,  2, 0, 0,   "Indents" },
-    { CWK_EDIT,  40,  3, 5, 30,  "Left" },
-    { CWK_EDIT,  40,  4, 5, 31,  "First" },
-    { CWK_EDIT,  40,  5, 5, 32,  "Right" },
+    /* pap.des's three boxes, each with its label, and in INCHES as Word shows
+     * them: the ruler's cell is 1/10 inch, so 5 cells is 0.5". They used to
+     * be three edits with no label, no buffer behind them - every one showed
+     * cw_num, whatever number had last been formatted - and a keystroke went
+     * nowhere (ovl_edit_buf answered 0). */
+    { CWK_LABEL, 34,  3, 0, 0,   "From Left:" },
+    { CWK_EDIT,  46,  3, 6, 30,  "" },
+    { CWK_LABEL, 34,  4, 0, 0,   "First Line:" },
+    { CWK_EDIT,  46,  4, 6, 31,  "" },
+    { CWK_LABEL, 34,  5, 0, 0,   "From Right:" },
+    { CWK_EDIT,  46,  5, 6, 32,  "" },
     { CWK_BUTTON,36,  8, 8, 200, "OK" },
     { CWK_BUTTON,46,  8, 8, 201, "Cancel" }
 };
-#define CW_NC_PARA 17
+#define CW_NC_PARA 20
 
 /* --- Search and Replace (Opus dlg/search.des, replace.des) ---------------
  * The real dialog's feature set less the regular expressions, which Word 1.1
@@ -129,6 +137,19 @@ static const struct cw_ctl cw_dc_goto[] = {
     { CWK_BUTTON,20,  4, 8, 201, "Cancel" }
 };
 #define CW_NC_GOTO 5
+
+/* --- Replace's Confirm Changes: one match at a time (Opus replace.des) ----
+ * The match is selected in the document and this asks about it. The panel
+ * stands at the top or the bottom of the window, whichever half the match is
+ * NOT in, so the text it is asking about stays readable. */
+static const struct cw_ctl cw_dc_conf[] = {
+    { CWK_LABEL,  1,  0, 0, 0,   "Replace" },
+    { CWK_LABEL,  2,  2, 0, 0,   "Replace this occurrence?" },
+    { CWK_BUTTON, 4,  4, 8, 207, "Yes" },
+    { CWK_BUTTON,14,  4, 8, 208, "No" },
+    { CWK_BUTTON,24,  4, 8, 201, "Cancel" }
+};
+#define CW_NC_CONF 5
 
 /* --- the save-changes prompt, which is Word's own wording ---------------- */
 static const struct cw_ctl cw_dc_ask[] = {
@@ -177,6 +198,9 @@ static const struct cw_ctl cw_dc_about[] = {
 /* --- the dialog's live state, all resident bss --------------------------- */
 static int  cw_d_n;                     /* controls in the open dialog */
 static int  cw_d_focus;
+static int  cw_d_fresh;                 /* the focused edit's text is SELECTED:
+                                         * the first key replaces it, as a
+                                         * dialog box's does on Windows */
 static int  cw_d_x;                     /* the panel, in pixels */
 static int  cw_d_y;
 static int  cw_d_w;
@@ -195,12 +219,20 @@ static int  cw_d_confirm;
 static char cw_d_find[32];
 static char cw_d_repl[32];
 static char cw_d_page[8];
+static char cw_d_lis[8];                /* the three indents, as typed */
+static char cw_d_fis[8];
+static char cw_d_ris[8];
+static int  cw_d_rat;                   /* Confirm Changes: the match asked
+                                         * about, and how many were replaced */
+static int  cw_d_rn;
 
 /* The control table of the open dialog. A POINTER TO const DATA, which is
  * exactly the sort of thing that must not be an overlay function's address -
  * it is data, it is resident, and the module reads it through DS like
  * everything else. */
 static const struct cw_ctl *cw_d_c;
+
+static void ovl_tenths(char *d, int v);  /* below, beside ovl_atoi */
 
 /* ==========================================================================
  * DRAWING A PANEL
@@ -223,7 +255,11 @@ static const char *ovl_ctl_text(int i)
             return cw_d_repl;
         if (id == 42)
             return cw_d_page;
-        return cw_num;
+        if (id == 30)
+            return cw_d_lis;
+        if (id == 31)
+            return cw_d_fis;
+        return cw_d_ris;
     }
     if (cw_d_c[i].kind == CWK_LABEL && id == 1)
         return cw_fname[0] ? cw_fname : "Document";
@@ -292,10 +328,26 @@ static void ovl_ctl_draw(int i)
     }
     w = cw_d_c[i].w * 8;
     if (k == CWK_EDIT) {
+        int n;
+
         os88_set_color(OS88_WHITE);
         os88_gfx_fill(x, y - 1, x + w + 3, y + 8);
         os88_set_color(OS88_BLACK);
         os88_gfx_frame(x, y - 1, x + w + 3, y + 8);
+        n = (int)os88_strlen(ovl_ctl_text(i));
+        if (i == cw_d_focus && cw_d_fresh && n > 0) {
+            /* SELECTED, so typing replaces it: the text inverted and the rest
+             * of the box blank - two runs side by side, no cell twice */
+            if (n > cw_d_c[i].w)
+                n = cw_d_c[i].w;
+            cw_pad(cw_rt, ovl_ctl_text(i), n);
+            os88_font_run(x + 2, y, cw_rt, OS88_WHITE, OS88_BLACK);
+            if (n < cw_d_c[i].w) {
+                cw_pad(cw_rt, "", cw_d_c[i].w - n);
+                os88_font_run(x + 2 + n * 8, y, cw_rt, OS88_BLACK, OS88_WHITE);
+            }
+            return;
+        }
         cw_pad(cw_rt, ovl_ctl_text(i), cw_d_c[i].w);
         os88_font_run(x + 2, y, cw_rt, OS88_BLACK, OS88_WHITE);
         return;
@@ -351,6 +403,11 @@ static void ovl_panel(void)
      * this is insurance rather than the mechanism - but it is the cheap kind:
      * two words, and it makes "a dialog is up" indistinguishable from any
      * other reason the glass stopped being ours. */
+    if (cw_dlg == CW_DLG_CONFIRM)
+        return;                         /* this one is taken off by repainting
+                                         * only what it covered (ovl_conf_down),
+                                         * because it comes and goes once per
+                                         * match and a full repaint is 1.8 s */
     cw_sh_ok = 0;
     cw_car_on = 0;
 }
@@ -392,6 +449,12 @@ int ovl_dlg_open(void *win, int which)
         cw_d_li = cw_pap_li[p];
         cw_d_fi = cw_pap_fi[p];
         cw_d_ri = cw_pap_ri[p];
+        ovl_tenths(cw_d_lis, cw_d_li);
+        ovl_tenths(cw_d_fis, cw_d_fi);
+        ovl_tenths(cw_d_ris, cw_d_ri);
+        break;
+    case CW_DLG_CONFIRM:
+        cw_d_c = cw_dc_conf;  cw_d_n = CW_NC_CONF;  rows = 6;
         break;
     case CW_DLG_FIND:
         cw_d_c = cw_dc_find;  cw_d_n = CW_NC_FIND;  rows = 9;
@@ -438,7 +501,18 @@ int ovl_dlg_open(void *win, int which)
     if (cw_d_y < cw_org.y + 2)
         cw_d_y = cw_org.y + 2;
 
+    if (which == CW_DLG_CONFIRM) {
+        /* away from the match: the bottom of the text if it is in the top
+         * half, else the top */
+        p = cw_row_of(cw_cur);
+        if (p >= 0 && p < cw_rows / 2)
+            cw_d_y = cw_org.y + cw_sz.h - cw_d_h - 4;
+        else
+            cw_d_y = cw_ty;
+    }
+
     cw_d_focus = ovl_first_focus();
+    cw_d_fresh = 1;
     cw_caret_off();
     ovl_panel();
     (void)win;
@@ -467,6 +541,54 @@ static int ovl_atoi(const char *s)
     for (i = 0; s[i] >= '0' && s[i] <= '9'; i++)
         v = v * 10 + (s[i] - '0');
     return v;
+}
+
+/* An indent in the ruler's cells (1/10 inch) as the inches Word's dialog
+ * shows - 5 is 0.5", -5 is -0.5" - and back, rounding a second decimal away.
+ * A sign is kept, because a hanging indent is a negative first line. */
+static void ovl_tenths(char *d, int v)
+{
+    int n;
+
+    n = 0;
+    if (v < 0) {
+        d[n++] = '-';
+        v = 0 - v;
+    }
+    os88_utoa((unsigned)(v / 10), cw_num);
+    os88_strcpy(d + n, cw_num, 6);
+    n = (int)os88_strlen(d);
+    d[n++] = '.';
+    d[n++] = (char)('0' + v % 10);
+    d[n++] = '"';
+    d[n] = 0;
+}
+
+static int ovl_untenths(const char *s)
+{
+    int i;
+    int v;
+    int neg;
+
+    i = 0;
+    neg = 0;
+    while (s[i] == ' ')
+        i++;
+    if (s[i] == '-') {
+        neg = 1;
+        i++;
+    }
+    v = 0;
+    for (; s[i] >= '0' && s[i] <= '9'; i++) {
+        if (v < 100)
+            v = v * 10 + (s[i] - '0') * 10;
+    }
+    if (s[i] == '.' && s[i + 1] >= '0' && s[i + 1] <= '9') {
+        v = v + (s[i + 1] - '0');
+        if (s[i + 2] >= '5' && s[i + 2] <= '9')
+            v++;
+    }
+    return neg ? 0 - v : v;
 }
 
 /* --- the search, which is the one piece of Opus's search.c that ports: the
@@ -557,6 +679,11 @@ static int ovl_replace_all(void *win)
     m = (int)os88_strlen(cw_d_repl);
     if (n == 0)
         return 0;
+    if (ovl_search(0) < 0) {
+        cw_toast("Search text not found.");
+        return 0;
+    }
+    cw_u_mark(CW_U_CMD);                /* the whole Replace is one Undo */
     count = 0;
     at = 0;
     for (;;) {
@@ -595,6 +722,94 @@ static int ovl_replace_all(void *win)
     return count;
 }
 
+/* ==========================================================================
+ * CONFIRM CHANGES (Opus replace.des's fConfirm)
+ *
+ * Replace with the box ticked asks about each match in turn: the match is
+ * SELECTED in the text and a small panel asks Yes / No / Cancel - Y, N and
+ * Esc from the keyboard. It used to be a box that did nothing, every match
+ * replaced with no question (SPEC.md 73.12.4). The whole session is ONE Undo.
+ * ========================================================================*/
+
+/* Take the confirm panel off by repainting only what it covered - the text
+ * rows under it and any chrome it reached - and leave the selection on. The
+ * menu's own close does exactly this, and is the same routine. */
+static void ovl_conf_down(void)
+{
+    cw_sel_xor();                       /* the match stayed SELECTED under the
+                                         * question - it is what is being asked
+                                         * about - so it comes off first, and
+                                         * cw_uncover() puts it back over the
+                                         * rows it repaints */
+    cw_uncover(cw_d_x, cw_d_y, cw_d_x + cw_d_w, cw_d_y + cw_d_h);
+}
+
+/* The next match from `from`, selected and asked about; or the end of the
+ * session, reported. out: 1 = the panel is up, 0 = it is not. */
+static int ovl_conf_next(void *win, int from)
+{
+    int at;
+
+    at = (from <= cw_len) ? ovl_search(from) : -1;
+    if (at < 0) {
+        cw_dlg = 0;
+        if (cw_d_rn == 0) {
+            cw_toast("No changes made.");
+        } else {
+            os88_utoa((unsigned)cw_d_rn, cw_num);
+            os88_strcpy(cw_tmp, cw_num, sizeof(cw_tmp));
+            os88_strcpy(cw_tmp + os88_strlen(cw_tmp), " replaced",
+                        sizeof(cw_tmp) - os88_strlen(cw_tmp));
+            cw_toast(cw_tmp);
+        }
+        return 0;
+    }
+    cw_d_rat = at;
+    cw_sel_xor();                       /* the old selection off ... */
+    cw_sel_on = 0;
+    cw_cur = at;
+    cw_show(win, -2, 0, 0);             /* ...the caret there, scrolled to */
+    cw_caret_off();
+    cw_anchor = at + (int)os88_strlen(cw_d_find);
+    cw_sel_on = 1;
+    cw_sel_xor();                       /* ...and the match selected */
+    ovl_dlg_open(win, CW_DLG_CONFIRM);
+    return 1;
+}
+
+/* Y or N on the panel. */
+static int ovl_conf_answer(void *win, int yes)
+{
+    int at;
+    int n;
+    int m;
+    int i;
+    int a;
+
+    ovl_conf_down();
+    cw_dlg = 0;
+    at = cw_d_rat;
+    n = (int)os88_strlen(cw_d_find);
+    if (!yes)
+        return ovl_conf_next(win, at + 1);
+    m = (int)os88_strlen(cw_d_repl);
+    cw_sel_xor();
+    cw_sel_on = 0;
+    a = cw_att[at] & CW_A_CHP;
+    for (i = 0; i < n; i++)
+        cw_remove(at);
+    cw_cur = at;
+    for (i = 0; i < m; i++) {
+        if (!cw_insert(cw_d_repl[i], a))
+            break;
+        cw_cur++;
+    }
+    cw_d_rn++;
+    cw_touch();
+    cw_show(win, at, at + i, i - n);
+    return ovl_conf_next(win, at + i);
+}
+
 /* out: 1 = the panel stays up, 0 = it has come down and the caller clears
  * cw_dlg. Everything that closes goes through here, so the repaint that takes
  * the panel off the glass is written once. */
@@ -609,10 +824,25 @@ static int ovl_dlg_end(void *win, int ok)
     if (ok) {
         switch (which) {
         case CW_DLG_CHAR:
+            if (cw_sel_on)
+                cw_u_mark(CW_U_CMD);    /* two passes, one Undo */
+            cw_u_hold = 1;
             ovl_chp_apply(win, cw_d_attr, 1);
             ovl_chp_apply(win, (~cw_d_attr) & CW_A_CHP, 3);
+            cw_u_hold = 0;
             break;
         case CW_DLG_PARA:
+            cw_d_li = ovl_untenths(cw_d_lis);
+            cw_d_fi = ovl_untenths(cw_d_fis);
+            cw_d_ri = ovl_untenths(cw_d_ris);
+            if (cw_d_li < 0)
+                cw_d_li = 0;
+            if (cw_d_ri < 0)
+                cw_d_ri = 0;
+            if (cw_d_fi < 0 - cw_d_li)
+                cw_d_fi = 0 - cw_d_li;  /* a first line left of the page */
+            if (cw_d_fi > 100)
+                cw_d_fi = 100;
             ovl_pap_apply(win, cw_d_al, cw_d_sp, cw_d_op, cw_d_li, cw_d_fi,
                          cw_d_ri);
             break;
@@ -630,8 +860,21 @@ static int ovl_dlg_end(void *win, int ok)
             return 0;
         case CW_DLG_REPLACE:
             cw_redraw_all(win);
-            ovl_replace_all(win);
-            return 0;
+            cw_d_back = 0;              /* Replace has no direction: it is the
+                                         * whole document, top to bottom */
+            if (!cw_d_confirm) {
+                ovl_replace_all(win);
+                return 0;
+            }
+            if (cw_d_find[0] == 0)
+                return 0;
+            if (ovl_search(0) < 0) {
+                cw_toast("Search text not found.");
+                return 0;
+            }
+            cw_u_mark(CW_U_CMD);        /* the whole session is one Undo */
+            cw_d_rn = 0;
+            return ovl_conf_next(win, 0);
         case CW_DLG_GOTO:
             at = ovl_atoi(cw_d_page);
             if (at < 1)
@@ -708,6 +951,12 @@ static char *ovl_edit_buf(int i)
         return cw_d_repl;
     if (id == 42)
         return cw_d_page;
+    if (id == 30)
+        return cw_d_lis;
+    if (id == 31)
+        return cw_d_fis;
+    if (id == 32)
+        return cw_d_ris;
     return 0;
 }
 
@@ -750,6 +999,19 @@ static void ovl_toggle(int i)
     }
 }
 
+/* Cancel, Esc: each kind of panel has its own way down. */
+static int ovl_cancel(void *win)
+{
+    if (cw_dlg == CW_DLG_CONFIRM) {
+        ovl_conf_down();
+        cw_d_rat = cw_len + 1;          /* past everything: the session ends */
+        return ovl_conf_next(win, cw_d_rat);
+    }
+    if (cw_dlg >= CW_DLG_SAVE_NEW)
+        return ovl_ask_end(win, 0);
+    return ovl_dlg_end(win, 0);
+}
+
 static int ovl_button(void *win, int id)
 {
     switch (id) {
@@ -763,11 +1025,31 @@ static int ovl_button(void *win, int id)
         return ovl_ask_end(win, 1);
     case 206:
         return ovl_ask_end(win, 2);
+    case 207:                           /* Confirm Changes: Yes */
+        return ovl_conf_answer(win, 1);
+    case 208:                           /* ...No */
+        return ovl_conf_answer(win, 0);
     default:                            /* Cancel */
-        if (cw_dlg >= CW_DLG_SAVE_NEW)
-            return ovl_ask_end(win, 0);
-        return ovl_dlg_end(win, 0);
+        return ovl_cancel(win);
     }
+}
+
+/* Move the keyboard focus to control i: the rule under the old one off and
+ * under the new one on, and an edit's text SELECTED on the way in - so the
+ * edit losing the focus is drawn plain and the one gaining it inverted. */
+static void ovl_refocus(int i)
+{
+    int was;
+
+    was = cw_d_focus;
+    ovl_focus_mark(was, 0);
+    cw_d_focus = i;
+    cw_d_fresh = 1;
+    if (was != i && cw_d_c[was].kind == CWK_EDIT)
+        ovl_ctl_draw(was);
+    if (cw_d_c[i].kind == CWK_EDIT)
+        ovl_ctl_draw(i);
+    ovl_focus_mark(i, 1);
 }
 
 int ovl_dlg_click(void *win, int x, int y)
@@ -789,9 +1071,7 @@ int ovl_dlg_click(void *win, int x, int y)
             continue;
         if (cw_d_c[i].kind == CWK_BUTTON)
             return ovl_button(win, cw_d_c[i].id);
-        ovl_focus_mark(cw_d_focus, 0);
-        cw_d_focus = i;
-        ovl_focus_mark(cw_d_focus, 1);
+        ovl_refocus(i);
         ovl_toggle(i);
         return 1;
     }
@@ -805,10 +1085,23 @@ int ovl_dlg_key(void *win, int ascii, int scan)
     int n;
     int i;
 
-    if (scan == 0x01) {                 /* Esc = Cancel, always */
-        if (cw_dlg >= CW_DLG_SAVE_NEW)
-            return ovl_ask_end(win, 0);
-        return ovl_dlg_end(win, 0);
+    if (scan == 0x01)                   /* Esc = Cancel, always */
+        return ovl_cancel(win);
+
+    /* THE QUESTIONS ANSWER TO THEIR LETTERS: Y, N and C on the save prompt
+     * (Yes, No, Cancel - the buttons' own initials, as Windows' message box
+     * takes them) and Y and N on Confirm Changes. N used to do nothing on the
+     * save prompt, which left a mouse the only way to say No. */
+    if (cw_dlg >= CW_DLG_CONFIRM) {
+        i = ascii;
+        if (i >= 'a' && i <= 'z')
+            i = i - 32;
+        if (i == 'Y')
+            return ovl_button(win, (cw_dlg == CW_DLG_CONFIRM) ? 207 : 205);
+        if (i == 'N')
+            return ovl_button(win, (cw_dlg == CW_DLG_CONFIRM) ? 208 : 206);
+        if (i == 'C')
+            return ovl_cancel(win);
     }
     if (ascii == 13) {                  /* Enter presses the focused button,
                                          * or the dialog's default one */
@@ -824,17 +1117,17 @@ int ovl_dlg_key(void *win, int ascii, int scan)
         int step;
 
         step = (scan == CW_K_UP) ? -1 : 1;
-        ovl_focus_mark(cw_d_focus, 0);
+        n = cw_d_focus;
         for (;;) {
-            cw_d_focus = cw_d_focus + step;
-            if (cw_d_focus < 0)
-                cw_d_focus = cw_d_n - 1;
-            if (cw_d_focus >= cw_d_n)
-                cw_d_focus = 0;
-            if (cw_d_c[cw_d_focus].kind != CWK_LABEL)
+            n = n + step;
+            if (n < 0)
+                n = cw_d_n - 1;
+            if (n >= cw_d_n)
+                n = 0;
+            if (cw_d_c[n].kind != CWK_LABEL)
                 break;
         }
-        ovl_focus_mark(cw_d_focus, 1);
+        ovl_refocus(n);
         for (i = 0; i < cw_d_n; i++) {
             if (cw_d_c[i].kind == CWK_BUTTON)
                 ovl_ctl_draw(i);        /* the focus frame moved */
@@ -851,6 +1144,15 @@ int ovl_dlg_key(void *win, int ascii, int scan)
         if (b == 0)
             return 1;
         n = (int)os88_strlen(b);
+        if (cw_d_fresh && (ascii == 8 || (ascii >= 32 && ascii <= 126))) {
+            b[0] = 0;                   /* the selected text is replaced */
+            n = 0;
+            cw_d_fresh = 0;
+            if (ascii == 8) {
+                ovl_ctl_draw(cw_d_focus);
+                return 1;
+            }
+        }
         if (ascii == 8) {
             if (n > 0)
                 b[n - 1] = 0;
@@ -913,6 +1215,7 @@ int ovl_file_load(void *win, const char *name, unsigned lo, unsigned hi)
     cw_sel_on = 0;
     cw_ext = 0;
     cw_mod = 0;
+    cw_u_ok = 0;                        /* nothing to undo into */
     os88_strcpy(cw_fname, name, sizeof(cw_fname));
     ovl_retitle(win);
     return 1;
@@ -989,6 +1292,7 @@ int ovl_util(void *win, int which)
     int swapped;
     int guard;
 
+    cw_u_mark(CW_U_CMD);
     if (cw_sel_on) {
         cw_sel_bounds();
         a = cw_para_start(cw_w_end);

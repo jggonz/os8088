@@ -88,7 +88,7 @@ XMS_PART = 5                        # a SEMANTIC index and not derivable; the
 
 def _parts():
     blob = open(O88, "rb").read()
-    return len(os88parts.rows(blob[:blob[8] | (blob[9] << 8)]))
+    return len(os88parts.image_rows(blob))
 fails = []
 
 

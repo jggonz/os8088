@@ -66,28 +66,34 @@ N_ROUTE equ N_WORLD+8
 N_MAPS equ N_ROUTE+256
 N_META equ N_MAPS+23*240
 N_TILES equ N_META+1024
-n_worldfile: db 'WORLD.V42',0
-n_worldcfile: db 'WORLD.C42',0
-; Keep the checksum table named for the damage-rejection regression fixture.
-n_scenesums: dw N_WORLD_V_SUM,N_WORLD_C_SUM
+; The world is a fetched part (N_P_SCENE, +1 for CGA), copied into the upper
+; half of the canvas where n_worldrow reads it and dropped at once.
 n_scenecheck:
     cmp word [n_scene],0ffffh
     jne .stage
     call n_loading
-    mov ax,[n_canvas]
-    add ax,N_WORLD/16
-    mov es,ax
-    mov si,n_worldfile
+    mov al,N_P_SCENE
     mov cx,N_WORLD_V_SIZE
-    mov bp,[n_scenesums]
     cmp byte [n_cga],0
     je .read
-    mov si,n_worldcfile
+    inc ax
     mov cx,N_WORLD_C_SIZE
-    mov bp,[n_scenesums+2]
 .read:
+    push cx
+    push ax
     call n_readbank
+    pop ax
+    pop cx
     jc .bad
+    push ds
+    push es
+    mov es,[n_canvas]              ; an OFFSET into the canvas, which may be a
+    pop ds                         ; kern_mega selector (OS88_HIGHMEM)
+    xor si,si
+    mov di,N_WORLD
+    rep movsb
+    pop ds
+    call op_drop
     mov word [n_scene],0
     mov ax,[n_stage]
     cmp ax,[n_scrollstage]
@@ -181,35 +187,35 @@ n_worldrow:
     add ax,[n_worldpage]
     mov bx,ax
     mov ds,[n_canvas]
-    xor ax,ax
+    pop es                         ; ES = our own DS, pushed above: it is the
+    push es                        ; scanline's segment and our variables'. Not
+    xor ax,ax                      ; CS, whose words kern_mega cannot write
     mov al,[N_ROUTE+bx]
     cmp al,2
     jne .map
-    cmp byte [cs:n_bossmade],0
+    cmp byte [es:n_bossmade],0
     je .map
-    cmp byte [cs:n_bosslive],0
+    cmp byte [es:n_bosslive],0
     jne .map
     mov al,1
 .map:
     mov bx,240
     mul bx
     add ax,N_MAPS
-    add ax,[cs:n_rowmap]
-    mov [cs:n_rowmap],ax
-    push cs
-    pop es
+    add ax,[es:n_rowmap]
+    mov [es:n_rowmap],ax
     mov di,n_scanline
     mov bp,16
-    cmp byte [cs:n_cga],0
+    cmp byte [es:n_cga],0
     jne .packed
 .meta:
-    mov si,[cs:n_rowmap]
+    mov si,[es:n_rowmap]
     xor bx,bx
     mov bl,[si]
-    inc word [cs:n_rowmap]
+    inc word [es:n_rowmap]
     shl bx,1
     shl bx,1
-    add bx,[cs:n_rowhalf]
+    add bx,[es:n_rowhalf]
     mov dx,[N_META+bx]
     call .tile
     mov dl,dh
@@ -218,16 +224,16 @@ n_worldrow:
     jnz .meta
     jmp .done
 .packed:
-    mov ax,[cs:n_logicalrow]
+    mov ax,[es:n_logicalrow]
     and ax,15
     mov bx,5
     mul bx
     mov dx,ax
 .cmeta:
-    mov si,[cs:n_rowmap]
+    mov si,[es:n_rowmap]
     xor ax,ax
     lodsb
-    mov [cs:n_rowmap],si
+    mov [es:n_rowmap],si
     mov bx,80
     push dx
     mul bx
@@ -249,7 +255,7 @@ n_worldrow:
     mov bl,dl
     mov cl,6
     shl bx,cl
-    add bx,[cs:n_rowtile]
+    add bx,[es:n_rowtile]
     lea si,[N_TILES+bx]
     movsw
     movsw

@@ -1128,11 +1128,11 @@ xb_custom_load:
     mov [xb_cn], ax
     mov cx, ax
     push ds
+    push ds
+    pop es                          ; ES = ours (DS's: kern_mega's CS is read-only)
     mov ds, [cs:xb_cseg]
     xor si, si
     mov di, xb_cbuf
-    push cs
-    pop es
     cld
     rep movsb
     pop ds

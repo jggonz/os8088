@@ -21,7 +21,8 @@
 ; load with a Drivers-page line, not a wrong answer at the first poll.
 ; =============================================================================
 
-VMM_ABI_VER equ 1               ; bump on ANY change to the contract below
+VMM_ABI_VER equ 2               ; bump on ANY change to the contract below
+                                ; (2: CL carries the wheel, SPEC.md 9.12.8)
 
 ; --- the verbs, past DRVV_* -------------------------------------------------
 ; DRVV_ATTACH (0) and DRVV_DETACH (1) are the shared ones and mean what
@@ -35,7 +36,9 @@ VMMV_READ   equ 16              ; one report out of the queue. Well clear of
 ;   CF = 1                nothing queued; stop asking this pass
 ;   CF = 0                a report:
 ;     AX = x, BX = y      RAW, 0..0xFFFF, unscaled - the kernel owns [vid_w]
-;     CL                  buttons, in mouse_btn's own bits: 1 = left, 2 = right
+;     CL                  bits 0-1 the buttons (1 = left, 2 = right), bits 2-7
+;                         the wheel: signed notches since the last report,
+;                         positive toward the user (SPEC.md 9.12.8)
 ;     CH                  0 = AX/BX are an absolute POSITION
 ;                         1 = ...a signed relative DELTA (v86 sends these while
 ;                             the host pointer is locked)

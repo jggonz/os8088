@@ -955,9 +955,11 @@ zx_jrel:
     push ax
     push cx
     mov ax, si                      ; SI is now the true offset MINUS 0x10000,
-    mov cl, 4                       ; so its top 12 bits are paragraphs the
-    shr ax, cl                      ; segment is owed
-    and si, 15
+    mov cl, 7                       ; so its top 9 bits are GRANULES the
+    shr ax, cl                      ; segment is owed (zm_map's unit)
+    mov cl, 3
+    shl ax, cl
+    and si, 127
     mov cx, es
     sub cx, 0x1000                  ; ...less the 64KB SI wrapped by
     add ax, cx
@@ -2021,15 +2023,20 @@ zx_verify:
     inc si
     add di, bx
     loop .byte
+    test byte [zf_sseg], 4          ; a selector: SI walks the whole story
+    jnz .walked                     ; (zm_map), and never wraps inside it
     push ax
-    mov ax, si                      ; move SI's whole paragraphs into ES
-    mov cl, 4
+    mov ax, si                      ; move SI's whole GRANULES into ES (8
+    mov cl, 7                       ; paragraphs each: zm_map's unit)
     shr ax, cl
+    mov cl, 3
+    shl ax, cl
     mov cx, es
     add ax, cx
     mov es, ax
-    and si, 15
+    and si, 127
     pop ax
+.walked:
     call zx_unlock
     call zi_yield                   ; OSAPI_TASK_ALIVE + a yield, lock free
     call zx_lock

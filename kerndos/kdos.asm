@@ -28,6 +28,9 @@ bits 16
                                     ; the reservation below needs long before
                                     ; `dos.asm` is included (SPEC.md 96.44.5)
 %include "kdlayout.inc"
+%ifdef KD_HMA
+    org KD_ORG                      ; the image at FFFF:0010 (kdlayout.inc)
+%endif
 %include "kdlaunch.inc"             ; the launch block's layout and its list;
                                     ; emits nothing until a consumer asks
 
@@ -84,11 +87,11 @@ kd_lbsz: dw KDL_SIZE                ; KD_H_LBSZ
 ; disk nothing, the row being OP_COMP, and cost this image the slack in
 ; CORE_MAX, which is the one number that keeps them honest.
 %ifdef DOS_EXTCORE                  ; ...only when the core really IS a part
-%if $ - $$ > CORE_ORG
+%if $ - $$ > CORE_ORG - KD_ORG
   %error "kern_dos's fixed header reached CORE_ORG - the header is a contract \
 with the stub (kdlayout.inc) and cannot move, so CORE_ORG has to rise"
 %endif
-    times CORE_ORG - ($ - $$) db 0
+    times CORE_ORG - KD_ORG - ($ - $$) db 0  ; CORE_ORG is an OFFSET in KD_SEG
     times CORE_MAX + CORE_BSS_SIZE db 0
 %endif
 
@@ -96,8 +99,26 @@ with the stub (kdlayout.inc) and cannot move, so CORE_ORG has to rise"
 %include "dskwin.inc"
 %include "disk.inc"
 %include "diskw.inc"
+%ifdef KD_HMA                       ; os88api.inc's own KERNEL_SEG (0x0060,
+ %undef KERNEL_SEG                  ; which nothing here calls) may stand for
+%endif                              ; the length of dos.asm; the disk layer's
 %include "dos.asm"                  ; the DOS core, whole and unedited
+%ifdef KD_HMA                       ; is ours again after it (kdlayout.inc)
+ %define KERNEL_SEG KD_SEG
+%endif
 %include "kdback.inc"               ; ...over the kernel's disk layer
+%ifdef KD_MEGA
+%include "kdxms.inc"                ; ...and kern_mega's XMS door: the arena,
+                                    ; the int 15h filter (SPEC.md 96.15.4)
+%include "kdpark.inc"               ; ...and the way back to its park
+                                    ; (docs/plans/KERN-MEGA-DOS-PLAN.md 2.3)
+%endif
+%ifdef KD_HMA
+%include "kdhma.inc"                ; ...and the HMA arm's low half (W4)
+%include "kdxpack.inc"              ; ...and EXEPACK unpacked by the loader,
+                                    ; the arm that runs a program with A20
+                                    ; open (SPEC.md 96.40.9.1)
+%endif
 %include "hbstage.inc"              ; SPEC.md 87.5's staging map, shared as
                                     ; SOURCE with kernel/hiber.inc (96.49)
 %include "kdmouse.inc"              ; INT 33h's pointer (SPEC.md 96.45): the
@@ -169,4 +190,13 @@ the whole of kern_dos has about 39KB before the 600KB target is missed \
 ; buffers AND leave room for KD_STACK to grow down into.
 %if KD_S_LOWBSS > KD_STACK
  %error "kern_dos's .lowbss buffers reach the stack - raise KD_LOW_KB"
+%endif
+
+; ...and on the HMA arm, the A20 proof's own word: mega_a20t, kdh_tchk and
+; kdpark flip FFFF:FFF0 against 0000:FFE0, which is only a test of the GATE
+; while no byte of the image or its bss is there (KERN-MEGA-DOS-PLAN 10.5).
+%ifdef KD_HMA
+ %if KD_ORG + KIMG_SIZE > 0xFFF0
+  %error "kern_dos's HMA image reaches FFFF:FFF0, the word the A20 proof flips"
+ %endif
 %endif

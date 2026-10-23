@@ -722,7 +722,19 @@ sp_bbody:                           ; 4 KB read from [sp_bseg]:0
     push cx
     push si
     push ds
+    cmp word [sp_bseg], 0           ; kern_mega in protected mode: segment 0
+    jne .rd                         ; is the NULL selector and the bank is
+    push ax                         ; read from 0100h instead, 4KB in -
+    call OSAPI_CPU_INFO             ; which is still bank 0, and still RAM
+    test ah, CPU_F_PM
+    pop ax
+    jz .rd
+    mov si, 0x0100                  ; (an identity selector there, on the grid)
+    mov ds, si
+    jmp short .z
+.rd:
     mov ds, [sp_bseg]
+.z:
     xor si, si
     mov cx, 2048
     cld
@@ -734,6 +746,7 @@ sp_bbody:                           ; 4 KB read from [sp_bseg]:0
 
 %include "os88spk.inc"
 %include "os88spkfx.inc"
+%define BL_INTRO_HOW 'press S'      ; benchlib's banner - there is no Bench menu
 %include "benchlib.inc"
 
 ; =============================================================================

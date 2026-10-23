@@ -18,6 +18,7 @@ struct os88_menuset { const char *name; int oncmd; int nmenus;
 #define OS88_MBAR_H   20
 #define OS88_BLACK     0
 #define OS88_WHITE    15
+#define OS88_DGRAY     8
 #define OS88_VID_VGA   0
 #define OS88_VID_HERC  1
 #define OS88_VID_CGA   2
@@ -86,12 +87,16 @@ int  os88_task_restartable(int on);   /* SPEC.md 66.6.2 - a stub here:
                                        * the host has no heap to compact */
 void os88_task_alive(void *win);
 int  os88_peek(unsigned seg, unsigned off);
+unsigned os88_mem_claim(int kb);        /* Undo's snapshot: a static block */
+int  os88_mem_movable(unsigned seg, int on);
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
 int os88_file_write(const char *name, const void *buf, unsigned count);
 int os88_ferr(void);
 int os88_file_dlg(int mode, void *win, const char *defname);
 int os88_arg_file(char *name13, struct os88_place *p);
 int os88_file_goto(struct os88_place *p);
+int os88_file_goto_q_mark(unsigned clus, int vol);
+void os88_wm_onwake(void *win);
 int os88_assoc_set(const char *ext, const char *stem);
 int os88_clip_put(const void *text, unsigned len);
 int os88_clip_get(void *buf, unsigned cap);

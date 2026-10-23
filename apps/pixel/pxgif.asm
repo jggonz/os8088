@@ -57,10 +57,11 @@ pg_info:
     jne .link
     cmp word [10], PXL_BSS
     jne .link
-    mov ax, [px_svgp]               ; the resident's UI services (pxsvc.inc)
-    mov [cs:pv_sv], ax
+    mov es, [cs:PXP_SELF]           ; (pxpart.inc rule 6: our words through
+    mov ax, [px_svgp]               ; ES, never CS) the resident's UI
+    mov [es:pv_sv], ax              ; services (pxsvc.inc)
     mov ax, [cs:PXP_PKG]
-    mov [cs:pv_sv + 2], ax
+    mov [es:pv_sv + 2], ax
     cld
     mov bl, cl
     and bx, 3
@@ -157,32 +158,35 @@ pg_decode:
     jne .ctx                        ; are the context's, whatever DI says
     mov di, px_k
 .ctx:
-    mov [cs:pg_ctx], di
-    mov [cs:pg_pkg], ds
+    mov es, [cs:PXP_SELF]           ; ES = this part's own words (pxpart.inc
+    mov [es:pg_ctx], di             ; rule 6), until DS is
+    mov ax, ds
+    mov [es:pg_pkg], ax
     mov ax, [di + PXK_SW]
-    mov [cs:pg_sw], ax
+    mov [es:pg_sw], ax
     mov ax, [di + PXK_SH]
-    mov [cs:pg_sh], ax
+    mov [es:pg_sh], ax
     mov al, [di + PXK_SCL]
-    mov [cs:pg_scl], al
+    mov [es:pg_scl], al
     mov ax, [di + PXK_RSEG]
-    mov [cs:pg_rseg], ax
+    mov [es:pg_rseg], ax
     mov ax, [di + PXK_DSEG]
-    mov [cs:pg_dseg], ax
+    mov [es:pg_dseg], ax
     mov ax, [di + PXK_SPAL]
-    mov [cs:pg_spal], ax
-    xor bx, bx                      ; the services, as far pointers
-    xor si, si
-.svc:
+    mov [es:pg_spal], ax
+    mov dx, [cs:PXP_PKG]            ; the services, as far pointers through
+    xor bx, bx                      ; the package's CODE selector: through
+    xor si, si                      ; its data segment each is a #GP a row
+.svc:                               ; on kern_mega
     mov ax, [di + PXK_SVC + bx]
-    mov [cs:pg_svc + si], ax
-    mov [cs:pg_svc + si + 2], ds
+    mov [es:pg_svc + si], ax
+    mov [es:pg_svc + si + 2], dx
     add si, 4
     inc bx
     inc bx
     cmp bx, 10
     jb .svc
-    push cs
+    push es
     pop ds                          ; DS = this part, for the whole decode
     cld
     mov [pg_sp], sp                 ; ...and the way out from any depth
@@ -1031,7 +1035,9 @@ pa_peek:
 ; x2, y2 inclusive, x1 FFFFh when none of it is on the screen. CS's words
 ; throughout (the UI task calls it too). Preserves all but AX, BX, CX, DX
 pa_crect:
-    mov word [cs:pa_cr], 0xFFFF
+    push es
+    mov es, [cs:PXP_SELF]           ; (pxpart.inc rule 6)
+    mov word [es:pa_cr], 0xFFFF
     mov ax, [cs:pg_left]
     cmp ax, [cs:pg_sw]
     jae .x
@@ -1056,11 +1062,12 @@ pa_crect:
     mov dx, [cs:pg_sh]
 .c2:
     dec dx
-    mov [cs:pa_cr], ax
-    mov [cs:pa_cr + 2], bx
-    mov [cs:pa_cr + 4], cx
-    mov [cs:pa_cr + 6], dx
+    mov [es:pa_cr], ax
+    mov [es:pa_cr + 2], bx
+    mov [es:pa_cr + 4], cx
+    mov [es:pa_cr + 6], dx
 .x:
+    pop es
     ret
 
 ; pa_ticks - AX = a delay in hundredths: AX = ticks of 18.2 a second - less
@@ -1378,7 +1385,8 @@ pa_dispose:
 
 ; pa_rows - [pa_t]'s rows of the master: [pa_op] 0 filled with the
 ; background index, 1 copied into the backup, 2 copied back from it (the
-; backup at AN_GTAB in the animation's claim, a row after a row). DS = CS.
+; backup at AN_GTAB in the animation's claim, a row after a row). DS = this
+; part's data (pg_decode's, the worker's).
 ; Clobbers AX, BX, CX, DX, SI, DI, ES
 pa_rows:
     mov bx, [pa_t + 2]
@@ -1391,12 +1399,13 @@ pa_rows:
     add ax, [pa_t]
     adc dx, 0
     mov di, ax
-    and di, 15
-    mov cl, 4
+    and di, 127                     ; on kern_mega's 8-paragraph grid
+    mov cl, 4                       ; (px_mrow's, KERN-MEGA-PLAN 14.40)
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
+    and al, 0xF8                    ; a segment kern_mega can load
     mov es, [pg_pkg]
     add ax, [es:px_cur + PXR_MSEG]  ; (re-read: it moves only at a park)
     mov cx, [pa_t + 4]
@@ -1413,8 +1422,8 @@ pa_rows:
 .save:
     push ds                         ; 1: master -> backup
     mov si, di
-    mov di, [cs:pa_bk]
-    add [cs:pa_bk], cx
+    mov di, [pa_bk]
+    add [pa_bk], cx
     mov es, [es:px_anseg]
     mov ds, ax
     rep movsb
@@ -1422,8 +1431,8 @@ pa_rows:
     jmp short .n
 .back:
     push ds                         ; 2: backup -> master
-    mov si, [cs:pa_bk]
-    add [cs:pa_bk], cx
+    mov si, [pa_bk]
+    add [pa_bk], cx
     mov ds, [es:px_anseg]
     mov es, ax
     rep movsb
@@ -1763,13 +1772,14 @@ pa_comp:
     add ax, bx
     adc dx, 0
     mov di, ax
-    and di, 15
-    push cx
+    and di, 127                     ; on kern_mega's 8-paragraph grid
+    push cx                         ; (px_mrow's, KERN-MEGA-PLAN 14.40)
     mov cl, 4
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
+    and al, 0xF8                    ; a segment kern_mega can load
     pop cx
     mov es, [pg_pkg]
     add ax, [es:px_cur + PXR_MSEG]
@@ -2267,50 +2277,53 @@ av_paint:
     call OSAPI_WM_CLIP_SET
     jc .x
     PSV SV_MQHIDE
+    push es
+    mov es, [cs:PXP_SELF]           ; the rect: our words (pxpart.inc rule 6)
     mov si, px_vcan + VW_HS         ; across: the first screen column of x1,
     mov cx, [px_vcan + VW_DW]       ; the last of x2
     mov ax, [px_anrect]
     call av_m2s
     add ax, [px_vcan + VW_IX]
-    mov [cs:av_r], ax
+    mov [es:av_r], ax
     mov ax, [px_anrect + 4]
     inc ax
     call av_m2s
     add ax, [px_vcan + VW_IX]
     dec ax
-    mov [cs:av_r + 4], ax
+    mov [es:av_r + 4], ax
     mov si, px_vcan + VW_VS         ; down
     mov cx, [px_vcan + VW_DH]
     mov ax, [px_anrect + 2]
     call av_m2s
     add ax, [px_vcan + VW_IY]
-    mov [cs:av_r + 2], ax
+    mov [es:av_r + 2], ax
     mov ax, [px_anrect + 6]
     inc ax
     call av_m2s
     add ax, [px_vcan + VW_IY]
     dec ax
-    mov [cs:av_r + 6], ax
-    mov ax, [cs:av_r]               ; inside the canvas
+    mov [es:av_r + 6], ax
+    mov ax, [es:av_r]               ; inside the canvas
     cmp ax, [px_cvx1]
     jge .a
     mov ax, [px_cvx1]
 .a:
-    mov cx, [cs:av_r + 4]
+    mov cx, [es:av_r + 4]
     cmp cx, [px_cvx2]
     jle .c
     mov cx, [px_cvx2]
 .c:
-    mov bx, [cs:av_r + 2]
+    mov bx, [es:av_r + 2]
     cmp bx, [px_midy1]
     jge .b
     mov bx, [px_midy1]
 .b:
-    mov dx, [cs:av_r + 6]
+    mov dx, [es:av_r + 6]
     cmp dx, [px_midy2]
     jle .d
     mov dx, [px_midy2]
 .d:
+    pop es
     cmp ax, cx
     jg .ns
     cmp bx, dx

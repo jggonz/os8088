@@ -219,7 +219,7 @@ def guest_leg(machine):
     size = 1440 if big else 360
     sysdisk = "build/os8088.img" if big else "build/os8088-360.img"
     DISK = M.scratch_disk("build/pxsave.img", "build/pixel.o88",
-                          "build/PIXEL.GFX", "apps/pixel/samples/CITY.PCX",
+                          "apps/pixel/samples/CITY.PCX",
                           "apps/pixel/samples/CAT.GIF", size=size)
     city = open("apps/pixel/samples/CITY.PCX", "rb").read()
     q = P.decode(city, "PCX")
@@ -508,9 +508,7 @@ def full_leg(machine):
     # measured where scratch_disk will read them, and the filler is this
     # process's own - a plain "build/pxfill.bin" was written into the
     # checkout and then looked for in the frozen tree, which had none.
-    ins = [os88build.at(f) for f in
-           ("build/pixel.o88", "build/PIXEL.GFX")] + \
-        ["apps/pixel/samples/CITY.PCX"]
+    ins = [os88build.at("build/pixel.o88"), "apps/pixel/samples/CITY.PCX"]
     used = sum((os.path.getsize(f) + 1023) // 1024 for f in ins) * 1024
     fill = os.path.join(pxtmp.private("pxfill", folder=True), "PXFILL.BIN")
     n = max(cap - used - 20 * 1024 - (512 if big else 1024) * 4, 0)

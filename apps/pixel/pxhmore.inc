@@ -71,8 +71,9 @@ ph_more:
     jmp short .out
 .flat:
     mov bx, ax
-    and bx, 15                      ; the paragraph's place
-    and ax, 0xFFF0
+    and bx, 127                     ; the place in 8 paragraphs: a segment
+    and ax, 0xFF80                  ; on kern_mega's grid (KERN-MEGA-PLAN
+                                    ; 14.40), the same bytes everywhere
     mov [px_k + PXK_HPOS], bx
     mov [px_k + PXK_HBASE], ax
     mov [px_k + PXK_HBASE + 2], dx

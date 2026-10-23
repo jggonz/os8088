@@ -33,12 +33,23 @@ and the shipped src/rom/pmbios.bin's multiplexer, disassembled).
       only on a card, an address write to 388h at least twice in any 4s
       while a channel is keyed, none while nothing is, and sbl_tick still
       reached every tick (PM_KEEPT past the firmware's window goes red).
+  vs  VIDSND (tests/vidbench/vidsnd.asm), the bench, on picomem.inc under
+      PM_CORE: the DSP SOUND.DRV left on is switched OFF before it is
+      configured again, the port is the first of pm_sbports to answer a
+      reset (CMS on 220h moves it to 240h), [vs_irq] is pm_irq, the card's
+      own line is never offered, no F2h discovery is written, vs_isr goes
+      on the SB line and the multiplexer's vector is left alone, a racing
+      channel 1 stays masked across the next start, and the exit switches
+      the DSP off. The bench's routines are CUT OUT of vidsnd.asm, not
+      copied.
 
 Broken on purpose (each measured): the old ne2000.inc puts the PicoMEM's
 ring at 0x20 - the transmit comes from outside the card's RAM and every
 receive lands outside it, which is the field report exactly (tx counted, rx
 never); taking the %ifdef PICOMEM skip out of sbl_f_irqdisc makes the sb leg
-FAIL on the probe running and the SB line never being hooked.
+FAIL on the probe running and the SB line never being hooked; taking
+vs_pmup's pm_undo out makes the vs leg FAIL 23 checks, the card refusing
+every port while the driver's DSP is still on.
 
 Needs nasm and the `unicorn` Python module (pip install unicorn).
 """
@@ -567,6 +578,184 @@ def leg_sb(tmp):
               "both lines open at the 8259 (mask %02X)" % st["pic"])
         check(box.rd("sbl_oldvec", 4) == DEFVEC[0].to_bytes(2, "little") +
               DEFVEC[1].to_bytes(2, "little"), "the SB line's old vector saved")
+
+
+# =============================================================================
+# leg vs - VIDSND's PicoMEM path (tests/vidbench/vidsnd.asm's header)
+# =============================================================================
+def vsslice(tmp):
+    """vs_pmup (with sbl_drqmask above it), vs_reset, vs_hook, vs_dma and
+    vs_race, cut out of vidsnd.asm as they ship: each from its label to the
+    next top-level one"""
+    src = open(os.path.join(HERE, "vidbench", "vidsnd.asm")).read().splitlines()
+    want = ("sbl_drqmask", "vs_pmup", "vs_reset", "vs_hook", "vs_dma",
+            "vs_race")
+    out, take = [], False
+    for line in src:
+        m = re.match(r"([A-Za-z_][A-Za-z0-9_]*):", line)
+        if m:
+            take = m.group(1) in want
+        elif line.startswith("%"):
+            take = False
+        if take:
+            out.append(line)
+    for w in want:
+        assert any(l.startswith(w + ":") for l in out), "slice lost " + w
+    with open(os.path.join(tmp, "vsslice.inc"), "w") as f:
+        f.write("\n".join(out) + "\n")
+
+
+def leg_vs(tmp):
+    vsslice(tmp)
+    image, syms = assemble(tmp, os.path.join(HERE, "picomem", "vshx.asm"),
+                           [os.path.join(ROOT, "drivers", "sound"), tmp],
+                           "vshx")
+    # (the card's own IRQ, CMS on 220h, channel 1 racing). The DSP is ON at
+    # 220h to begin with - SOUND.DRV's detach leaves it so - and this model
+    # refuses ANY install while it is on (PORTUSED), the strictest reading of
+    # the firmware: VIDSND must switch it off before it can configure it
+    for pmirq, cms, race in ((7, False, True), (5, False, False),
+                             (7, True, True), (None, False, False)):
+        print("vs: %s" % (("PicoMEM on IRQ %d%s, channel 1 %s, the DSP left "
+                           "on by the driver" % (pmirq, ", CMS on 220h" if cms
+                                                 else "", "RACING" if race
+                                                 else "paced"))
+                          if pmirq else "no PicoMEM in the machine"))
+        st = {"pic": 0xFF, "ramp": 0x37, "args": [0, 0], "cmds": [],
+              "pmw": 0, "dma": [], "cnt": 0x3FFF * 1.0, "ff": 0,
+              "on": 0x220 if pmirq else None, "rst": {}, "dspw": []}
+
+        def inb(p):
+            if p == 0x21:
+                return st["pic"]
+            if p == 0x08:           # the 8237's status: pm_runaway never
+                st["tc08"] = st.get("tc08", 0) + 1      # reads it (leg_sb)
+                return 0
+            if p == 0x61:           # port B, the bus cycle pm_runaway paces
+                st["cnt"] -= 1.0 if race else 0.0       # itself by - leg_sb's
+                return 0            # model, which this leg had not followed
+            if p == 0x03:
+                v = int(st["cnt"]) & 0xFFFF
+                st["ff"] ^= 1
+                return v & 0xFF if st["ff"] else v >> 8
+            if pmirq and p == 0x2A3:
+                st["ramp"] = (st["ramp"] + 1) & 0xFF
+                return st["ramp"]
+            if pmirq and p == 0x2A0:
+                return 0
+            if pmirq and p in (0x2A1, 0x2A2):
+                return st["args"][p - 0x2A1]
+            on = st["on"]
+            if on and p == on + 0x0E:
+                return 0x80             # the DSP has a byte: AAh after reset
+            if on and p == on + 0x0A:
+                return 0xAA
+            return 0xFF
+
+        def outb(p, v):
+            if p == 0x21:
+                st["pic"] = v
+            elif p == 0x0C:
+                st["ff"] = 0
+            elif p in (0x02, 0x03, 0x0A, 0x0B, 0x83):
+                st["dma"].append((p, v))
+            elif 0x2A0 <= p <= 0x2A2:
+                st["pmw"] += 1
+                if not pmirq:
+                    return
+                if p != 0x2A0:
+                    st["args"][p - 0x2A1] = v
+                    return
+                arg = st["args"][0] | (st["args"][1] << 8)
+                st["cmds"].append((v, arg))
+                ans = 0
+                if v == 0x77 and (arg & 0xFF) == pmirq:
+                    ans = 1
+                if v == 0x78 and arg > 1 and st["on"]:
+                    ans = 0x10      # the strict model: installed means taken
+                if v == 0x78 and arg > 1 and cms and \
+                        0x220 >> 3 <= arg >> 3 <= 0x22F >> 3:
+                    ans = 0x10
+                if v == 0x78 and arg == 0:
+                    st["on"] = None
+                if v == 0x78 and arg > 1 and ans == 0:
+                    st["on"] = arg
+                st["args"] = [ans & 0xFF, ans >> 8]
+            elif (p & 0xFF0F) == 0x020C:
+                st["dspw"].append(v)    # a DSP command: F2h would be the probe
+
+        def int13(box):
+            mu = box.mu
+            if mu.reg_read(UC_X86_REG_AX) == 0x6000 and \
+                    mu.reg_read(UC_X86_REG_DX) == 0x1234:
+                mu.reg_write(UC_X86_REG_AX, 0x2A0)
+                mu.reg_write(UC_X86_REG_BX, BIOS)
+                mu.reg_write(UC_X86_REG_CX, (pmirq << 8) | 0x0F)
+                mu.reg_write(UC_X86_REG_DX, 0xAA55)
+
+        box = Box(image, syms, inb, outb, int13 if pmirq else None)
+        for line in (3, 5, 7):
+            cell = (8 + line) * 4
+            vec = (PMVEC, BIOS) if line == pmirq else DEFVEC
+            box.put(cell, vec[0].to_bytes(2, "little") +
+                    vec[1].to_bytes(2, "little"))
+        box.put(0x46C, b"\0\0")
+        box.go(0x100)
+        if not pmirq:
+            check(box.b("res_al") == 0, "no PicoMEM: vs_pmup answers 0, so "
+                  "the bench takes its old path")
+            check(st["pmw"] == 0 and box.int13_calls == 0,
+                  "no PicoMEM: not one write to 2A0h..2A2h, no int 13h")
+            box.go("entry_dma")
+            box.go("entry_race")
+            check(box.b("sbl_drqmask") == 0 and (0x0A, 0x01) in st["dma"],
+                  "no PicoMEM: channel 1 unmasked as before (%s)" % st["dma"])
+            continue
+        sb_irq = 5 if pmirq == 7 else 7
+        want = 0x240 if cms else 0x220
+        onoff = [a for c, a in st["cmds"] if c == 0x78]
+        offered = [a & 0xFF for c, a in st["cmds"] if c == 0x77]
+        check(box.b("res_al") == 1, "vs_pmup: configured (AL %d)"
+              % box.b("res_al"))
+        check(0 in onoff and onoff.index(0) < len(onoff) - 1 and
+              onoff[-1] == want, "the DSP switched OFF, then on at %03Xh "
+              "(on/off asked %s)" % (want, ["%03X" % a for a in onoff]))
+        check(box.w("vs_port") == want and st["on"] == want,
+              "the port found by a reset is the one installed (%03Xh)"
+              % box.w("vs_port"))
+        check(box.b("vs_irq") == sb_irq and box.b("pm_irq") == sb_irq,
+              "the SB line is pm_irq, %d" % box.b("vs_irq"))
+        check(pmirq not in offered, "the card's own line never offered "
+              "(offered %s)" % offered)
+        check(0xF2 not in st["dspw"], "no F2h: discovery never ran "
+              "(DSP writes %s)" % st["dspw"])
+        check(st["pic"] & (1 << pmirq) == 0, "the card's line is open")
+        box.go("entry_hook")
+        cell = lambda n: (int.from_bytes(box.lin((8 + n) * 4, 2), "little"),
+                          int.from_bytes(box.lin((8 + n) * 4 + 2, 2), "little"))
+        check(cell(sb_irq) == (syms["vs_isr"], SEG),
+              "vs_isr on IRQ %d's vector" % sb_irq)
+        check(cell(pmirq) == (PMVEC, BIOS), "the multiplexer's vector "
+              "untouched (%04X:%04X)" % (cell(pmirq)[1], cell(pmirq)[0]))
+        check(st["pic"] & ((1 << pmirq) | (1 << sb_irq)) == 0,
+              "both lines open at the 8259 (mask %02X)" % st["pic"])
+        st["dma"] = []
+        box.go("entry_dma")
+        st["dma"] = []                  # vs_dma masks first itself: only
+        box.go("entry_race")            # what pm_runaway wrote counts
+        check(box.b("sbl_drqmask") == (4 if race else 0) and
+              (((0x0A, 0x05) in st["dma"]) == race),
+              "channel 1 %s (sbl_drqmask %d)" % (
+                  "RACING: masked" if race else "paced: left open",
+                  box.b("sbl_drqmask")))
+        st["dma"] = []
+        box.go("entry_dma")
+        unm = [v for p, v in st["dma"] if p == 0x0A][-1:]
+        check(unm == ([5] if race else [1]), "the next start's unmask %s "
+              "(%s)" % ("KEEPS it masked" if race else "opens it", unm))
+        box.go("entry_off")
+        check(st["cmds"][-1] == (0x78, 0) and st["on"] is None,
+              "the exit switches the DSP off for SOUND.DRV's resume")
 
 
 # =============================================================================
@@ -1603,12 +1792,15 @@ def leg_pmdma(tmp):
 
 
 def main():
-    legs = sys.argv[1:] or ["ne", "sb", "kern", "mouse", "pmdma", "pmsnd"]
+    legs = sys.argv[1:] or ["ne", "sb", "vs", "kern", "mouse", "pmdma",
+                           "pmsnd"]
     with tempfile.TemporaryDirectory() as tmp:
         if "ne" in legs:
             leg_ne(tmp)
         if "sb" in legs:
             leg_sb(tmp)
+        if "vs" in legs:
+            leg_vs(tmp)
         if "kern" in legs:
             leg_kern(tmp)
         if "mouse" in legs:

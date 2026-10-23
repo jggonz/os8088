@@ -52,12 +52,14 @@
 
 ; Feature bits in [cpu_feat]. Mirrored in the osapi_cpu_info contract
 ; (SPEC.md 20.3): bit 0 A20 verified open, bit 1 HMA claimed, bit 2 unreal
-; mode armed, bit 3 a coprocessor socketed (SPEC.md 84.6). Module-private -
+; mode armed, bit 3 a coprocessor socketed (SPEC.md 84.6), bit 4 kern_mega's
+; protected mode (docs/plans/KERN-MEGA-PLAN.md 12.1). Module-private -
 ; SPEC.md 3 does not carry them.
 CPU_F_A20       equ 0x01
 CPU_F_HMA       equ 0x02
 CPU_F_UNREAL    equ 0x04
 CPU_F_X87       equ 0x08
+CPU_F_PM        equ 0x10            ; kern_mega in protected mode (mega_enter)
 
 
 cpu_tier        db CPU_8086     ; the published tier (SPEC.md 41.1). .text,

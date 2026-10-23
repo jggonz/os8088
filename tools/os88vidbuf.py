@@ -2,7 +2,8 @@
 """os88vidbuf - what a stream's read-ahead would buy, with and without XMS.
 
     python3 tools/os88vidbuf.py CLIP.V88 [--profile 286-speeddemon] [--media KB/s]
-        [--pio MS] [--xcopy MS] [--ring K] [--xms KB ...] [--wait S ...]
+        [--pio MS] [--xcopy MS] [--up MS] [--down MS] [--ring K]
+        [--xms KB ...] [--wait S ...]
         [--minrate] [--deficit KB/s ...] [--cache FILE]
 
 AN INSTRUMENT, not a gate: docs/plans/VIDEO-XMS-PLAN.md's numbers come off
@@ -35,6 +36,13 @@ THE MACHINE, per millisecond step:
     row has been run on one (VIDEO-XMS-PLAN 3.2)
   - a frame due whose super-packet is not drawable is a STALL: the clock
     waits (with a card, a pause), and the stall's length is counted
+
+--up and --down price the two copies apart (both default to --xcopy). A
+--down of 0 is a bank the hook DECODES IN PLACE rather than copies out of:
+docs/plans/LOADALL-PLAN.md's 286 design, where the drain is a LOADALL that
+points DS's hidden base at the bank and the fill is still a copy up. It is
+an approximation in one direction only: a chunk still waits for ring room
+before the hook may reach it, which the in-place design does not.
 
 --minrate bisects the slowest MEDIA rate that plays with no stall, for each
 --xms and --wait. --deficit is the ENCODER's side (VIDEO-XMS-PLAN 5): the
@@ -101,7 +109,10 @@ class Play:
                  wait=None, step=0.001, cache=0.0):
         self.sps, self.us, self.fps = sps, us, fps
         self.K, self.M = ring, int(xms_kb * KB) // CHUNK
-        self.media, self.pio, self.xcopy = media, pio, xcopy
+        self.media, self.pio = media, pio
+        # xcopy is one figure for both copies, or (up, down) apart
+        self.up, self.down = xcopy if isinstance(xcopy, tuple) else \
+            (xcopy, xcopy)
         self.wait, self.step, self.cache = wait, step, cache
         total = sps[-1][0] + sps[-1][1]
         self.nchunk = (total + CHUNK - 1) // CHUNK
@@ -167,13 +178,13 @@ class Play:
                     room_ring = ring_hi < lo + self.K and \
                         ring_hi < self.nchunk
                     if room_ring and bank_lo < bank_hi:
-                        op = ["down", 0.0, CHUNK / KB * self.xcopy / 1e3]
+                        op = ["down", 0.0, CHUNK / KB * self.down / 1e3]
                     elif room_ring and disk < self.nchunk:
                         op = ["ring", CHUNK / KB, 0.0]
                     elif self.M and bank_hi - bank_lo < self.M and \
                             disk < self.nchunk:
                         op = ["bank", CHUNK / KB,
-                              CHUNK / KB * self.xcopy / 1e3]
+                              CHUNK / KB * self.up / 1e3]
                     else:
                         break
                 if op[1] > 0:
@@ -280,6 +291,12 @@ def main():
                     help="CPU a disk KB costs, ms (default: the profile's)")
     ap.add_argument("--xcopy", type=float, default=None,
                     help="CPU an XMS KB costs, ms (default: the profile's)")
+    ap.add_argument("--up", type=float, default=None,
+                    help="CPU a KB copied UP into the bank costs, ms "
+                         "(default: --xcopy)")
+    ap.add_argument("--down", type=float, default=None,
+                    help="CPU a KB copied DOWN out of the bank costs, ms "
+                         "(default: --xcopy; 0: decoded in place)")
     ap.add_argument("--dcache", type=float, default=0.0,
                     help="KB the DRIVE reads ahead on its own while the "
                          "CPU is busy (0: an MFM drive; a 1990s IDE drive "
@@ -333,9 +350,11 @@ def main():
     us = decode_us(r, a.profile, a.cache)
     pio = a.pio if a.pio is not None else PIO.get(a.profile, 0.0)
     xc = a.xcopy if a.xcopy is not None else XCOPY.get(a.profile, 0.4)
+    xc = (a.up if a.up is not None else xc,
+          a.down if a.down is not None else xc)
     print("\nPLAYER on %s: decode the profile's, disk %.3f ms/KB of CPU, "
-          "XMS copy %.3f ms/KB; ring %d slots; drive cache %d KB"
-          % (a.profile, pio, xc, a.ring, a.dcache))
+          "XMS copy up %.3f / down %.3f ms/KB; ring %d slots; drive cache "
+          "%d KB" % (a.profile, pio, xc[0], xc[1], a.ring, a.dcache))
     for w in [None if x == "full" else float(x) for x in a.wait]:
         for x in a.xms:
             R = minrate(sps, us, fps, a.ring, x, pio, xc, w, a.tol, a.dcache)

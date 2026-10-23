@@ -193,6 +193,14 @@ def stage2_calls(start, spt, heads, nsec_blob, k):
 # which is why it is not the cylinder count alone. 720KB is the tight one: an
 # eleventh blob sector is free on every geometry and a twelfth costs 720KB a
 # call (`--sectors 12`).
+#
+# **SPEC.md 26.10.5 TOOK THE BLOB TO ELEVEN SECTORS AND MOVED NONE OF THESE.**
+# On the kernel it was written against the eleventh pushed 720KB's read over a
+# cylinder (11 -> 12 calls, +213 ms measured, and the owner took it); on the
+# kernel it landed on, the same sector costs no call anywhere - os88boot on
+# os8088_5150_herc_sb_720_gla reads the loader in 14 int 13h either way, 5,889
+# against 5,930 ms. Which way it falls is the KERNEL's length and not the
+# blob's, so the next kernel that grows may move this row, with a reason.
 STAGE2 = {
     "os8088-360.img": 11,
     "os8088-720.img": 11,

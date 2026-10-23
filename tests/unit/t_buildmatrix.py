@@ -288,6 +288,25 @@ KNOBS = [
     # assembly, or half the trace goes unassembled.
     ("dosrmark",    ["DOSRMARK=1"]),
     ("dosrmark-kd", ["DOSRMARK=1"], "kerndos.bin"),
+    # `PICLOSE=` (docs/plans/KERN-MEGA-PLAN.md 14.64) is kern_mega's alone -
+    # the reflection's real-mode window loses every pending 8259 edge - so
+    # both of its arms are assembled ON kern_mega: 1 with the tick's lost-edge
+    # watchdog (mega_kwd), 2 with it compiled out. tests/megapiclose.py is
+    # the gate that uses them; these rows also assemble KERN_MEGA itself
+    ("piclose",     ["KERN_MEGA=1", "PICLOSE=1"]),
+    ("piclose-nowd", ["KERN_MEGA=1", "PICLOSE=2"]),
+    # `MEGATRAP=1` is kern_mega's trap census (KERN-MEGA-PLAN 10.3, track 4;
+    # `make megatrap` builds its tree, megatrap0 is its row) - here so the
+    # arm keeps assembling.
+    ("megatrap",    ["KERN_MEGA=1", "MEGATRAP=1"]),
+    # `MEGADIAG=1` is kern_mega's field readings on the menu bar (KERN-MEGA-
+    # PLAN 14.65; `make megadiag` builds its disks) - the NMI, RST, FDC
+    # RESET, RFL, Q and DOSP lines, the native floppy's toasts and the
+    # handoff record's hex, none of which a shipped kern_mega shows. Nothing
+    # else assembles that arm. The kernel and HIBER.DRV both carry it
+    # (hbm_d1why is hiber.inc's), so both are built.
+    ("megadiag",    ["KERN_MEGA=1", "MEGADIAG=1"]),
+    ("megadiag-hb", ["KERN_MEGA=1", "MEGADIAG=1"], "hiber.drv"),
     # The LOOK/measurement knobs, which nothing else builds at all. Each
     # switches a whole path in or out - and BAND is now the only thing that
     # assembles the COMPOSED title bar at all, because SPEC.md 5.9.6 sent it
@@ -370,6 +389,10 @@ KNOBS = [
     # gate; this row is, and it costs seconds.
     ("moudiag",     ["MOUDIAG=1"]),
     ("nounal",      ["NOUNAL=1"]),
+    # NOVIDEXT= is SPEC.md 120.3's A/B: kern_big with no external renderer
+    # hook, no VID_VESA kind and no VESA.DRV row - the kernel the hook's
+    # resident cost is measured against, and the only build of its arms
+    ("novidext",    ["NOVIDEXT=1"]),
     ("lddiag",      ["LDDIAG=1"]),
     ("drvdiag",     ["DRVDIAG=1"]),
     # The three this PR added and nothing else names: NOFLUSHR is SPEC.md

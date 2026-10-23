@@ -28,7 +28,7 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'IMGTEST', it_entry
+    OS88_HEADER 'IMGTEST', it_entry, 0, OS88_HIGH | OS88_HIGHMEM
 
 IT_W        equ 300
 IT_ROWH     equ 9

@@ -20,7 +20,11 @@ tools/os88venc.py encodes it three ways. Four questions:
    by the wave 0 model on its actual bytes, is under the per-frame ceiling,
    and a replay of both buckets never goes below empty. And the FIRST
    KEYFRAME is a whole picture, exactly its target (SPEC.md 98.2.9's
-   pre-roll): a half-painted key 0 is where a colour play starts.
+   pre-roll): a half-painted key 0 is where a colour play starts - and
+   on a FLIPPED Mode X file for a 286 over noise, where frame 0 overflows
+   the record and frame 1 the CPU's ceiling, key 0 is at frame 2 or later
+   and exact (98.2.9.2). Broken on purpose - preroll() not charging its
+   frames - key 0 is at frame 1 and hundreds of pixels short.
    3b. OWED TIME (98.2.1.1): a cut every fifth frame, a 30% ceiling and
    `--owe 1.6`. Frames must run past their period (or this tests nothing),
    and the silent hook's schedule replayed from the file never finds three
@@ -31,7 +35,10 @@ tools/os88venc.py encodes it three ways. Four questions:
    the look-ahead and the error as seen (the defaults) must flicker back at
    most half as much as with neither, and be no worse as seen; and the
    header names the ring its reserve banks in - 3 slots at 16 KB, 8 at the
-   default 192 (98.1.1). 3d. --aim size (98.2.1.4) at the default budget
+   default 192 (98.1.1). 3c'. THE LOOK-AHEAD'S FLOOR (98.2.1.2): a pixel
+   bright now and dark in the two frames after - the owner's headlights -
+   must outrank dark road at --lookahead-floor 0.5, and rank below it at 0
+   (the defect, so the leg is seen to tell them apart). 3d. --aim size (98.2.1.4) at the default budget
    must be 5% smaller than as asked, and still converge on the still.
 4. DOES IT CONVERGE? Two seconds of a still picture after the motion: the
    last frame on screen must be the target, the errors the budget left all
@@ -61,6 +68,23 @@ tools/os88venc.py encodes it three ways. Four questions:
 5i. PAGE-AHEAD PRUNED (98.2.1.8.2): one build forced to have hurt - rescue
    ships a third pass one flip short, off two passes and the plain file,
    always three passes and a page-ahead file; the passes are counted.
+5j. PAGE-AHEAD ON N PAGES (98.2.1.8.4): stills whose cuts come in pairs
+   two frames apart, on the 5150: --pages 3 must write byte 37 = 4,
+   verify from every key and cut fewer frames than --pages 2; --pages 4 on
+   Mode X's 320 x 200 with keys a second apart and --page-keys started
+   must leave a page whose build has not begun out of a key and still
+   verify. Broken on purpose - the scene rule off
+   (PA_SCENE 1), or a page left out of a key flipped to before it is whole
+   - the first cuts as many frames as two pages and the second fails its
+   verify.
+5k. FLIPPED AND BUILT AHEAD (98.2.1.8.5): 5j's pairs flipped every frame -
+   on the 5150 four pages with the copy made in the calm, on the 486
+   three with it in the flip's record: byte-37-5 files that verify and cut
+   fewer frames than flipped alone. Broken on purpose - the calm's copy
+   left out (PA_COPY_OK where the copy is paid at the flip on the 286 too)
+   - the 5150 leg builds nothing it can flip to and FAILS. And --flip-own
+   on the 486's three pages (VIDEO-SEEN-PLAN 3b): every record BUILT, a
+   byte-37-5 file that verifies from every key, cutting no more.
 8. DOES COMPOSITE DIFFUSION SEE THE MODEL? A picture rendered through the
    model from known nibbles, in runs of 2 to 6 cells, must come back as 90%
    or more of them (94% measured). Without the lookahead - a cell judged as
@@ -84,8 +108,12 @@ tools/os88venc.py encodes it three ways. Four questions:
    5g. DOES A FLIPPED FILE KEEP UP? (98.2.1.1.1) A noisy pan flipped on
    the 486 at 90% / 140%, replayed as the player runs it - a call every
    half period off the card, one frame a call - must leave no frame a
-   whole frame behind. Without the flip schedule (the ceiling the peak
-   alone) 68 are.
+   whole frame behind at `--lag 0`. Without the flip schedule (the ceiling
+   the peak alone) 68 are. At `--lag 125` (98.2.1.1.2) the picture may
+   fall behind, and must never fall as far as the lag. 5g'. --flip-own
+   (98.1.3.10): the pan without its noise on 286-speeddemon is byte 37 7,
+   verifies, carries REC_UP only after keys, is late nowhere in the
+   player's schedule, and cuts fewer frames than --flip (3 against 16).
 
 Broken on purpose - the measured retry in Encoder.frame skipped, so a
 frame is chosen by the per-span estimate alone - question 3 FAILS naming
@@ -316,6 +344,224 @@ def main():
                  / period, low[0], low[1]))
         if not cut:
             bad.append("the tight profile cut nothing: it tests nothing")
+        # --- 3b: THE DEGRADE LADDER (--ladder, VIDEO-SEEN-PLAN 3a): the
+        # tight encode again with one rung, a slower rate - it decides at
+        # the stretches the budgets would cut, the file is a valid one, and
+        # it cuts fewer frames than the encode without it; and a rung that
+        # is not one is refused
+        cut0 = res["cuts"]
+        path, rl, _ = run("tightlad", "--preset", "herc", "--disk", "20000",
+                          "--avg", "0.30", "--peak", "0.50", "--owe", "0",
+                          "--rate", "5512", "--profile", "floppy",
+                          "--reserve", "16", "--ladder", "slow:1/2")
+        vid.verify_v88(path)
+        lad = rl.get("ladder") or {}
+        print("   3b: --ladder slow:1/2 at 20 KB/s, 30%%/50%%: %d stretches "
+              "decided (%s), %d frames cut and %d held, against %d cut "
+              "without it" % (sum(lad.values()), ", ".join(
+                  "rung %d: %d" % kv for kv in sorted(lad.items())),
+                  rl["cuts"], rl["holds"], cut0))
+        if not lad.get(1) or rl["cuts"] >= cut0:
+            bad.append("--ladder slow:1/2 decided %r and cut %d frames "
+                       "against %d" % (lad, rl["cuts"], cut0))
+        # ...and A CUT RUNG (2026-10-17): cut:100 accepts any breakage, so
+        # put first every stretch stops there - cut, nothing held, the
+        # slower rate behind it never tried; cut:0 is not a rung
+        path, rc, _ = run("tightcut", "--preset", "herc", "--disk", "20000",
+                          "--avg", "0.30", "--peak", "0.50", "--owe", "0",
+                          "--rate", "5512", "--profile", "floppy",
+                          "--reserve", "16", "--ladder", "cut:100,slow:1/2")
+        vid.verify_v88(path)
+        lc = rc.get("ladder") or {}
+        print("   3b: --ladder cut:100,slow:1/2: %d stretches decided (%s), "
+              "%d held" % (sum(lc.values()), ", ".join(
+                  "rung %d: %d" % kv for kv in sorted(lc.items())),
+                  rc["holds"]))
+        if not lc.get(1) or set(lc) - {0, 1} or rc["holds"]:
+            bad.append("--ladder cut:100,slow:1/2 decided %r and held %d"
+                       % (lc, rc["holds"]))
+        for no in ("slow:2", "cut:0"):
+            try:
+                venc.degrade_parse(no)
+                bad.append("--ladder %s was taken" % no)
+            except vid.V88Error:
+                pass
+        # --- 3c': THE SPEED PASS'S MODE X WRITES (VIDEO-SEEN-PLAN 3a):
+        # modex_subs over whole arrays against the loop it replaced, on
+        # canvases of flat groups, pairs, noise and changes of every shape
+        rng = np.random.default_rng(7)
+        gx = vid.Geom(vid.LAY_MODEX, 80, 60)
+        same_subs = 0
+        for t in range(12):
+            pal = rng.integers(0, 2 + t * 20, 256)
+            cvx = pal[rng.integers(0, 256, (60, 80))]
+            cvx = np.repeat(cvx, 4, 1) if t % 3 == 0 else \
+                np.repeat(pal[rng.integers(0, 256, (60, 160))], 2, 1) \
+                if t % 3 == 1 else pal[rng.integers(0, 256, (60, 320))]
+            chx = rng.random((60, 320)) < (0.05 + 0.08 * t)
+            cvb = cvx.astype(np.uint8).tobytes()
+            same_subs += vid.modex_subs(cvb, chx.ravel().tolist(), gx) == \
+                vid.modex_subs_loop(cvb, chx.ravel().tolist(), gx)
+        print("   3c': Mode X writes over arrays: %d of 12 canvases the same "
+              "as the loop's" % same_subs)
+        if same_subs != 12:
+            bad.append("modex_subs differs from modex_subs_loop on %d of 12"
+                       % (12 - same_subs))
+        # --- 3c: COARSE CELLS ON A PLANAR SCREEN (98.2.5.2, 2026-10-17):
+        # a clip whose scene changes half way, on Mode X with no palette a
+        # scene - the scene pass finds the change, the cut it would be is
+        # drawn in 4x1 cells, the file is a valid one; and on a Hercules
+        # (a packed screen) no scene pass and no cells, the same bytes as
+        # --coarse-cut off
+        src2 = os.path.join(tmp, "scene.mkv")
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+             "testsrc2=size=320x180:rate=24:duration=1", "-f", "lavfi",
+             "-i", "mandelbrot=size=320x180:rate=24,trim=duration=1",
+             "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v]", "-map",
+             "[v]", "-c:v", "ffv1", src2], check=True)
+
+        def run2(name, *args):
+            a2 = venc.parser().parse_args(
+                [src2, os.path.join(tmp, name + ".V88"), "--quiet",
+                 "--audio", "none"] + list(args))
+            return a2.out, venc.encode(a2, [])
+        # (page-ahead off: with it the change is built ahead and flipped
+        # to, and the cells are only its fallback - 98.2.5.2)
+        tight = ("--disk", "150000", "--avg", "1.0", "--peak", "1.0",
+                 "--owe", "0", "--profile", "floppy", "--reserve", "16",
+                 "--page-ahead", "off")
+        p_on, r_on = run2("mxon", "--preset", "modex", *tight)
+        p_off, r_off = run2("mxoff", "--preset", "modex", "--coarse-cut",
+                            "off", *tight)
+        vid.verify_v88(p_on)
+        # (--screen 320x240 on Mode X is its own screen, the default - the
+        # same frames as no --screen, where it was refused: the owner)
+        p_240, _ = run2("mx240", "--preset", "modex", "--coarse-cut", "off",
+                        "--screen", "320x240", *tight)
+        same240 = [bytes(x) for x, a_, i_ in vid.Reader(p_240).records()] \
+            == [bytes(x) for x, a_, i_ in vid.Reader(p_off).records()]
+        print("   3c: --screen 320x240 on Mode X: the frames %s no --screen's"
+              % ("the same as" if same240 else "NOT the same as"))
+        if not same240:
+            bad.append("--screen 320x240 on Mode X is not the default")
+        h_on, rh_on = run2("hgon", "--preset", "herc", *tight)
+        h_off, rh_off = run2("hgoff", "--preset", "herc", "--coarse-cut",
+                             "off", *tight)
+        same = [bytes(x) for x, a_, i_ in vid.Reader(h_on).records()] == \
+            [bytes(x) for x, a_, i_ in vid.Reader(h_off).records()]
+        # (the records: the options block differs by the option itself)
+        print("   3c: a scene change on Mode X: cells %s, the view %.1f%% "
+              "broken, %.1f%% at its worst (off: cells %s, %.1f%%, %.1f%%); "
+              "on a Hercules cells %s, the frames %s --coarse-cut off's" % (
+                  r_on["cells"], 100 * r_on["q_seen"],
+                  100 * r_on["q_seen_worst"], r_off["cells"],
+                  100 * r_off["q_seen"], 100 * r_off["q_seen_worst"],
+                  rh_on["cells"],
+                  "the same as" if same else "NOT the same as"))
+        # ...and AT ANY CUT (coarseany, 2026-10-17): the ladder's rung on
+        # the same Mode X run draws cells at stretches inside the first
+        # shot too - more cells than the one scene change - and is left
+        # out on the Hercules
+        # (at --lookahead-floor 0: the floor's cut draws this clip's
+        # stretches better than 4x1 cells, so the ladder rightly takes none
+        # and the rung would go untested - 3c' is the floor's own leg)
+        p_any, r_any = run2("mxany", "--preset", "modex", "--ladder",
+                            "coarseany:4x1", "--lookahead-floor", "0",
+                            *tight)
+        vid.verify_v88(p_any)
+        h_any, rh_any = run2("hgany", "--preset", "herc", "--ladder",
+                             "coarseany:4x1", "--lookahead-floor", "0",
+                             *tight)
+        print("   3c: --ladder coarseany:4x1 on Mode X: cells %s, decided %s;"
+              " on a Hercules cells %s, decided %s" % (
+                  r_any["cells"], r_any["ladder"], rh_any["cells"],
+                  rh_any["ladder"]))
+        # ...and MIX: only the tiles the budget cannot draw in cells - the
+        # rest at full detail, so its frames are fewer pixels off
+        p_mix, r_mix = run2("mxmix", "--preset", "modex", "--ladder",
+                            "coarseany:mix", *tight)
+        vid.verify_v88(p_mix)
+        print("   3c: --ladder coarseany:mix on Mode X: cells %s, decided %s"
+              % (r_mix["cells"], r_mix["ladder"]))
+        if not r_mix["cells"].get("mix"):
+            bad.append("--ladder coarseany:mix drew no mixed frame: %r"
+                       % r_mix["cells"])
+        if r_any["cells"].get("4x1", 0) < 2 or rh_any["cells"]:
+            bad.append("--ladder coarseany:4x1: Mode X cells %r, Hercules "
+                       "%r" % (r_any["cells"], rh_any["cells"]))
+        if not r_on["cells"].get("4x1") or r_off["cells"] or \
+                r_on["q_seen"] >= r_off["q_seen"] or \
+                r_on["q_seen_worst"] >= r_off["q_seen_worst"] or \
+                rh_on["cells"] or not same:
+            bad.append("coarse cells on a planar screen: Mode X %r (off %r), "
+                       "view %.4f against %.4f, Hercules %r, same bytes %s"
+                       % (r_on["cells"], r_off["cells"], r_on["q_seen"],
+                          r_off["q_seen"], rh_on["cells"], same))
+        # --- 3e: THE ENCODE SPREAD OVER THE CORES (98.2.1, the speed pass's
+        # second round, 2026-10-17): the ladder's trials (TrialPool), page-
+        # ahead's pass without the holds beside the one with them (PassBg)
+        # and the picture's measure (Meter) each in other processes - and
+        # the file and the report the ones the same encode makes with all
+        # three made here, in order. --jobs 4 both times (it is in the
+        # options record); the serial run has the three switched off. Each
+        # is counted as having RUN, or a parallel encode that fell back to
+        # the serial one would pass
+        import contextlib
+        import io
+        made = {"trial": 0, "pass": 0, "meter": 0}
+        k_tp, k_mf, k_pa = venc.trial_pool, venc.meter_for, \
+            venc.pass_alongside
+
+        def tp(*x):
+            r = k_tp(*x)
+            made["trial"] += r is not None
+            return r
+
+        def mf(*x):
+            r = k_mf(*x)
+            made["meter"] += r is not None
+            return r
+
+        def pa_(*x):
+            r = k_pa(*x)
+            made["pass"] += bool(r)
+            return r
+        par = {}
+        try:
+            for arm in ("serial", "parallel"):
+                if arm == "serial":
+                    venc.trial_pool = venc.meter_for = lambda *x: None
+                    venc.pass_alongside = lambda *x: False
+                else:
+                    venc.trial_pool, venc.meter_for, venc.pass_alongside = \
+                        tp, mf, pa_
+                a3 = venc.parser().parse_args(
+                    [src2, os.path.join(tmp, "par%s.V88" % arm), "--audio",
+                     "none", "--jobs", "4", "--preset", "modex",
+                     "--ladder", "coarseany:4x1,cut:5",
+                     "--lookahead-floor", "0"] + list(tight[:-2]))
+                fo = io.StringIO()
+                with contextlib.redirect_stdout(fo):
+                    venc.encode(a3, None)
+                with open(a3.out, "rb") as fv:
+                    par[arm] = (fv.read(), fo.getvalue())
+        finally:
+            venc.trial_pool, venc.meter_for, venc.pass_alongside = \
+                k_tp, k_mf, k_pa
+        print("   3e: the encode over the cores - trial pools %d, passes "
+              "alongside %d, meters %d; the file %s, the report %s the "
+              "serial encode's" % (
+                  made["trial"], made["pass"], made["meter"],
+                  "the same as" if par["serial"][0] == par["parallel"][0]
+                  else "NOT the same as",
+                  "the same as" if par["serial"][1] == par["parallel"][1]
+                  else "NOT the same as"))
+        if not all(made.values()) or par["serial"] != par["parallel"]:
+            bad.append("the encode over the cores: ran %r, the file %s, the "
+                       "report %s" % (made, par["serial"][0] ==
+                                      par["parallel"][0],
+                                      par["serial"][1] == par["parallel"][1]))
         # --- 3a: W*H for WxH (98.2.1): accepted, and recorded as WxH
         pa = venc.parser().parse_args([src, "o.V88", "--box", "640*480",
                                        "--detail", "2*1", "--screen",
@@ -332,6 +578,71 @@ def main():
                 bad.append("--audio speaker took %s" % extra[0])
             except vid.V88Error:
                 print("   --audio speaker refuses %s" % extra[0])
+        # --- 3a'': the DESKTOP POSTERS' choices (98.1.3.11): a file of its
+        # own colours too wide for the window stores each key's at half
+        # and a custom one off the clip; `off` with a custom one stores it
+        # alone; a file the window holds, in the desktop's own colours,
+        # needs none, and one bit's none either; 256 colours store colour,
+        # CGA's colours both sets; --desktop-size half on a file that fits
+        # stores at half and says it is the Preview's size; and a Live
+        # file asked for a smaller Preview is refused
+        K, C, M, CU, SZ = (vid.TH_KEYS, vid.TH_COLOUR, vid.TH_MONO,
+                           vid.TH_CUSTOM, vid.TH_SIZE)
+
+        def thumbs(name, *args):
+            p_, r2, k2 = run(name, *args, "--end", "1")
+            r_ = vid.Reader(p_)
+            return r_, r2, r_.thumb
+        r_, rd, th = thumbs("desk-own", "--preset", "vga4-full", "--palette",
+                            "clip16", "--poster-image", "@0.5")
+        nk = len(r_.keys)
+        for name, got, want in (
+                ("own colours at %d x %d" % (rd["w"], rd["h"]),
+                 th and th[1:],
+                 (nk + 1, rd["w"] // 2, (rd["h"] + 1) // 2, 2, K | C | CU)),
+                ("off with a custom one",
+                 (lambda t: t and (t[1], t[5]))(thumbs(
+                     "desk-off", "--preset", "vga4-full", "--palette",
+                     "clip16", "--desktop-posters", "off",
+                     "--poster-image", "@0.5")[2]), (1, C | CU)),
+                ("the desktop's colours, fitting",
+                 thumbs("desk-std", "--preset", "vga4")[2], None),
+                ("one bit", thumbs("desk-mono", "--preset", "herc")[2],
+                 None),
+                ("256 colours", thumbs("desk-v8", "--preset", "vga8")[2][4:],
+                 (1, K | C)),
+                ("CGA's four", thumbs("desk-c4", "--preset", "cga4")[2][4:],
+                 (1, K | C | M)),
+                ("--desktop-size half",
+                 thumbs("desk-half", "--preset", "vga4", "--desktop-size",
+                        "half")[2][4:], (2, K | C | SZ))):
+            print("   desktop posters, %s: %r (want %r)" % (name, got, want))
+            if got != want:
+                bad.append("desktop posters, %s: %r, not %r"
+                           % (name, got, want))
+        # ...and --desktop-clip (the owner's Mechwarrior 2: a ground a few
+        # levels off black was a field of dots): a near-black cell is black
+        # SOLID, and with the clip at 0 the same field lights a grid
+        nb = np.full((40, 64, 3), 6 * 63 / 255.0)     # (6 levels up)
+        for c, want in ((16.0, True), (0.0, False)):
+            for kind, fn in (("colour", vid.desktop_poster_rgb),
+                             ("mono", vid.desktop_mono_rgb)):
+                lit = sum(1 for b in fn(nb, 64, 40, 1, c) if b)
+                ok = (lit == 0) == want
+                print("   --desktop-clip %g, %s, a ground 6 levels off "
+                      "black: %d bytes lit" % (c, kind, lit))
+                if not ok:
+                    bad.append("--desktop-clip %g lit %d bytes of a %s "
+                               "near-black ground" % (c, lit, kind))
+        try:
+            run("desk-live", "--preset", "vga4", "--live", "vga",
+                "--desktop-size", "half", "--end", "1")
+            bad.append("--desktop-size half was taken with --live")
+        except vid.V88Error as e:
+            print("   --desktop-size half with --live: refused (%s)" % e)
+            if "--desktop-size" not in str(e):
+                bad.append("--desktop-size half with --live refused for "
+                           "another reason: %s" % e)
         # --- 3b: --avg auto (98.2.1.5) - the per-frame ceiling on a profile
         # with a disk curve, the profile's own average on one without, and
         # the record holds the SHARE it came to, never the word
@@ -364,6 +675,34 @@ def main():
         if not k0 or kpic != keep[k0].tobytes():
             bad.append("the first keyframe (frame %d) is not a whole "
                        "picture: no pre-roll" % k0)
+        # ...and the pre-roll is COUNTED with each frame charged (98.2.9.2):
+        # a FLIPPED Mode X file on a 286 - the owner's Last Exile, whose
+        # key 0 came out with black holes - where frame 0 overflows the
+        # record and frame 1 the CPU's ceiling, which a dry run that never
+        # spent its budgets (nor owed the back page) called exact
+        nsrc = os.path.join(tmp, "noise.mkv")
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+             "testsrc2=size=320x180:rate=30:duration=1,noise=alls=100",
+             "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=22050",
+             "-t", "1", "-c:v", "ffv1", "-c:a", "pcm_s16le", nsrc],
+            check=True)         # (the sound's share is part of what cuts)
+        a = venc.parser().parse_args(
+            [nsrc, os.path.join(tmp, "prefl.V88"), "--quiet", "--preset",
+             "modex", "--profile", "286-speeddemon", "--flip",
+             "--flip-hold", "empty", "--end", "1"])
+        pkeep = []
+        venc.encode(a, pkeep)
+        r = vid.Reader(a.out)
+        k0 = r.keys[0][0]
+        wrong = sum(1 for x, y in zip(vid.decode_at(r, k0),
+                                      pkeep[k0].tobytes()) if x != y)
+        print("   flipped Mode X on a 286: key 0 at frame %d, %d pixels "
+              "short of its target" % (k0, wrong))
+        if k0 < 2 or wrong:
+            bad.append("flipped Mode X: key 0 at frame %d is %d pixels short "
+                       "of a whole picture: the pre-roll counted short"
+                       % (k0, wrong))
         for f, c in over[:3]:
             bad.append("frame %d costs %.1f%% of its period, over the 50%% "
                        "ceiling" % (f, 100 * c / period))
@@ -384,7 +723,7 @@ def main():
         a = venc.parser().parse_args(
             [cuts, os.path.join(tmp, "owed.V88"), "--quiet", "--preset",
              "herc-full", "--disk", "200000", "--avg", "0.50", "--peak",
-             "0.30", "--owe", "1.6", "--rate", "5512"])
+             "0.30", "--owe", "1.6", "--rate", "5512", "--lag", "0"])
         res = venc.encode(a, [])
         r = vid.Reader(a.out)
         ov, drops, behind, run2 = hook_schedule(
@@ -421,6 +760,30 @@ def main():
             bad.append("the look-ahead flickered %.1f against %.1f, error "
                        "%.4f against %.4f" % (q1["q_flick"], q0["q_flick"],
                                               q1["q_vis"], q0["q_vis"]))
+        # --- 3c': THE LOOK-AHEAD'S FLOOR (98.2.1.2): value() on two pixels
+        # of a dark screen - a headlight now that the two frames after leave
+        # dark, and road that stays. Unfloored the frames after take the
+        # headlight below nothing and the road is drawn instead
+        import types
+        import numpy as np
+        E = venc.Encoder
+        dark = np.zeros((1, 2), np.float32)
+        now = np.array([[255, 30]], np.float32)
+        nxt = np.array([[0, 30]], np.float32)
+        worth = {}
+        for fl in (0.0, venc.parser().parse_args([src, "x"]).lookahead_floor):
+            st = types.SimpleNamespace(
+                spix=lambda: (None, dark), tpix=lambda T: (None, T),
+                dist=E.dist, vis=False, edges=0.0, attend=0.0, look=2,
+                future=[nxt, nxt], lfloor=fl)
+            worth[fl] = E.value(st, now)[0]
+        print("   look-ahead floor: headlight / road worth %s"
+              % ", ".join("%.1f / %.1f at %g" % (w[0], w[1], fl)
+                          for fl, w in sorted(worth.items())))
+        (f0, w0), (f1, w1) = sorted(worth.items())
+        if f1 != 0.5 or w0[0] >= w0[1] or w1[0] <= w1[1]:
+            bad.append("the look-ahead floor: default %g, headlight / road "
+                       "%s" % (f1, worth))
         # ...and the ring the stream assumes, in its header (98.1.1): the
         # slots less TWO hold the reserve (98.2.1.3), so a 16 KB reserve
         # wants 4 - a 2-slot ring banks nothing - and the default 192 KB 8
@@ -1020,12 +1383,15 @@ def main():
     P = venc.PROFILES["486-dx2-66"]
     t, sub = venc.profile_table(P, vid.LAY_MODEX)
     kk = P["lcopy_us"] * vid.HZ / 1e6 * P["speed"]
-    for sched in (True, False):
-        out = os.path.join(ftmp, "f%d.V88" % sched)
+    # (--lag 0: the one-frame schedule, so a frame a whole one behind is
+    # late; the third arm is the lag's own, 98.2.1.1.2 - behind by up to
+    # --lag and never as far as it)
+    for sched in (True, False, "lag"):
+        out = os.path.join(ftmp, "f%s.V88" % sched)
         args = venc.parser().parse_args(
             [noisy, out, "--quiet", "--preset", "modex", "--profile", "486-dx2-66",
              "--flip", "--rate", "22050", "--avg", "9", "--peak", "14",
-             "--fit", "fill"])
+             "--fit", "fill", "--lag", "125" if sched == "lag" else "0"])
         if not sched:                   # broken on purpose: no schedule
             real = venc.EncoderX.begin
             venc.EncoderX.begin = lambda self: (real(self), setattr(
@@ -1038,7 +1404,7 @@ def main():
         r = vid.Reader(out)
         q = vid.HZ / r.fps * P["speed"]
         aud = venc.CYC_AUDIO * r.abytes + venc.HOOK_CYC
-        end, late, prev, over = 0.0, 0, None, 0
+        end, late, prev, over, most = 0.0, 0, None, 0, 0.0
         for i, (rec, _, _) in enumerate(r.records()):
             c = vid.cycles_of(rec, True, table=t, sub=sub,
                               sub2=r.g.sub2) + aud
@@ -1053,8 +1419,21 @@ def main():
             prev = rec
             start = math.ceil(max(i * q, end) / (q / 2) - 1e-9) * (q / 2)
             late += start - i * q >= q
+            most = max(most, (start - i * q) / q)
             over += c > q
             end = start + c
+        if sched == "lag":
+            allow = 0.125 * r.fps
+            print("   5g: flipped at 90%% / 140%%, --lag 125 (%.1f frames): %d "
+                  "frames over their period, the picture %.2f frames behind "
+                  "at most" % (allow, over, most))
+            if most >= allow:
+                bad.append("the lag: %.2f frames behind, past --lag's %.1f"
+                           % (most, allow))
+            if most < 1:
+                bad.append("the lag: never a frame behind at --lag 125 - the "
+                           "leg tests nothing")
+            continue
         print("   5g: flipped at 90%% / 140%%%s: %d frames over their period, "
               "%d late in the player's schedule"
               % ("" if sched else ", NO schedule", over, late))
@@ -1063,12 +1442,73 @@ def main():
         if not sched and not late:
             bad.append("the flip schedule: without it nothing is late - the "
                        "leg tests nothing")
+    # --- 5g': AGAINST ITS OWN PAGE (98.1.3.10, VIDEO-SEEN-PLAN 3b): the
+    # pan WITHOUT its noise flipped on 286-speeddemon, where the decode is
+    # what cuts, with --flip and with --flip-own (on the noisy pan the disk
+    # cuts and the two draw the same: 71 cut against 72). The own file is byte 37 7, verifies
+    # (the record after each key bringing its page up WHOLE), carries
+    # REC_UP after every key and on no other record, is late nowhere in
+    # the player's schedule priced as vp_owndec plays it - its record, and
+    # the copy where REC_UP says - and cuts FEWER frames than the flip that
+    # brings every page up
+    pan = os.path.join(ftmp, "pan.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "testsrc2=size=960x240:rate=24:duration=3", "-f", "lavfi", "-i",
+         "sine=frequency=440:sample_rate=22050:duration=3", "-vf",
+         "crop=320:240:'mod(n*24,640)':0",
+         "-c:v", "ffv1", "-c:a", "pcm_s16le", pan], check=True)
+    oarm = {}
+    P = venc.PROFILES["286-speeddemon"]
+    t, sub = venc.profile_table(P, vid.LAY_MODEX)
+    kk = P["lcopy_us"] * vid.HZ / 1e6 * P["speed"]
+    for own in (False, True):
+        out = os.path.join(ftmp, "own%d.V88" % own)
+        args = venc.parser().parse_args(
+            [pan, out, "--quiet", "--preset", "modex", "--profile",
+             "286-speeddemon", "--flip", "--rate", "22050", "--lag", "0"] +
+            (["--flip-own"] if own else []))
+        res = venc.encode(args)
+        vid.verify_v88(out)
+        r = vid.Reader(out)
+        oarm[own] = (round(res["cutf"] * r.frames), r)
+    cut0, cut1 = oarm[False][0], oarm[True][0]
+    r = oarm[True][1]
+    keys = {e[0] for e in r.keys}
+    q = vid.HZ / r.fps * P["speed"]
+    aud = venc.CYC_AUDIO * r.abytes + venc.HOOK_CYC
+    end = late = 0
+    upf = []
+    for i, (rec, _, _) in enumerate(r.records()):
+        c = vid.cycles_of(rec, True, table=t, sub=sub, sub2=r.g.sub2) + aud
+        y0, y1 = struct.unpack_from("<HH", rec, 2)
+        if y1 & vid.REC_UP:
+            upf.append(i)
+            c += ((y1 & ~vid.REC_UP) - (y0 & ~vid.REC_HELD)) * 80 * kk + \
+                venc.CYC_LCOPY0
+        start = math.ceil(max(i * q, end) / (q / 2) - 1e-9) * (q / 2)
+        late += start - i * q >= q
+        end = start + c
+    print("   5g': --flip cuts %d frames, --flip-own %d (byte 37 %s); REC_UP "
+          "on frames %s after keys %s; %d late in the player's schedule"
+          % (cut0, cut1, 7 if r.own else "?", upf, sorted(keys), late))
+    if not r.own:
+        bad.append("--flip-own made a file that is not against its own page")
+    if any(f - 1 not in keys for f in upf):
+        bad.append("--flip-own: REC_UP on a record that does not follow a "
+                   "key: %s" % upf)
+    if late:
+        bad.append("--flip-own: %d frames late in the player's schedule"
+                   % late)
+    if not cut0 or cut1 >= cut0:
+        bad.append("--flip-own cut %d frames against --flip's %d: the decode "
+                   "it saves bought nothing" % (cut1, cut0))
     shutil.rmtree(ftmp, ignore_errors=True)
     # --- 5h: PAGE-AHEAD BY DEFAULT (98.2.1.8.1): Mode X, five stills with a
     # hard cut between them, on 286-fast - a whole new 320 x 180 picture is
     # past one record, so each cut is a target. Left at its default the
     # file must be page-ahead and KEPT, flipping; --page-ahead off must be
-    # plain; and a page pass made WORSE on purpose (page_compare forced to
+    # plain; and a page pass made WORSE on purpose (page_verdict forced to
     # say so) must be DROPPED for the plain encode
     ptmp = tempfile.mkdtemp()
     cuts = os.path.join(ptmp, "cuts.mkv")
@@ -1089,18 +1529,22 @@ def main():
 
     def penc(name, *extra):
         out = os.path.join(ptmp, name + ".V88")
+        # (--pages 2: these legs are the two-page builder's, and the
+        # default is MAX - three on Mode X; 5j is the N-page one)
         res = venc.encode(venc.parser().parse_args(
             [cuts, out, "--quiet", "--preset", "modex", "--profile",
-             "286-fast", "--audio", "none", "--fit", "fill"] + list(extra)))
+             "286-fast", "--audio", "none", "--fit", "fill", "--pages",
+             "2"] + list(extra)))
         return vid.Reader(out), res
     rd, resd = penc("default")
     ro, _ = penc("off", "--page-ahead", "off")
-    real = venc.page_compare
-    venc.page_compare = lambda p, b, *m: (["the test's say-so"], [])
+    real = venc.page_verdict
+    venc.page_verdict = lambda p, b: (False, ["the test's say-so"], [],
+                                      "the test's say-so")
     try:
         rw_, _ = penc("worse")
     finally:
-        venc.page_compare = real
+        venc.page_verdict = real
     fl = (resd.get("page") or {}).get("flips", 0)
     print("   5h: page-ahead by default %s with %d flips; off %s; a worse "
           "page pass %s" % ("ON" if rd.page else "off", fl,
@@ -1114,6 +1558,77 @@ def main():
     if rw_.page:
         bad.append("page-ahead: a page pass that made the picture worse "
                    "was kept")
+    # --- 5h': THE VIEW AS SEEN DECIDES (98.2.1.8.1, the owner's GasGas,
+    # 2026-10-17): a page pass whose view is a third less broken ships
+    # though the whole screen's mean came out a hair worse; one whose view
+    # is worse does not, whatever else it bettered; and one whose view
+    # gains by breaking for longer - the seconds a tenth broken worse by
+    # more than a frame - does not either
+    plain_r = dict(fps=20.0, q_seen=0.039, q_seen_broken=0.70, q_broken=0.7,
+                   q_vis=0.0040, q_worst=0.020, cutf=0.10)
+    cases = (("better view, worse mean", dict(plain_r, q_seen=0.026,
+                                              q_vis=0.0042, q_worst=0.024,
+                                              cutf=0.09), True),
+             ("worse view", dict(plain_r, q_seen=0.040, q_vis=0.001,
+                                 cutf=0.01), False),
+             ("better view, broken longer", dict(plain_r, q_seen=0.030,
+                                                 q_seen_broken=0.80), False),
+             ("better view, a frame longer", dict(plain_r, q_seen=0.030,
+                                                  q_seen_broken=0.75), True))
+    got = [(n, venc.page_verdict(r, plain_r)[0]) for n, r, _ in cases]
+    print("   5h': page-ahead's verdict - %s" % ", ".join(
+        "%s: %s" % (n, "ships" if k else "dropped") for n, k in got))
+    for (n, r, want), (_, k) in zip(cases, got):
+        if k != want:
+            bad.append("page-ahead's verdict on '%s' %s" % (
+                n, "shipped it" if k else "dropped it"))
+    # --- 5h'': THE PALETTE GOES ON WITH THE PICTURE (98.1.3.2.3, the
+    # owner's GasGasQ, 2026-10-18: 14 of its 34 scene changes showed the
+    # old picture in the new sixteen for a frame): four hard-cut stills,
+    # VGA16 on a screen of its own with a palette a scene, page-ahead and
+    # --ladder slow:1/2 - so a scene's first frame is HELD in the replay,
+    # which writes nothing on the page shown. No palette may go on a frame
+    # that neither writes nor flips the page shown, and at least one must
+    # have been moved past a held frame, or the clip held none and this
+    # tests nothing. Before the fix: frame 63's palette on a held frame
+    sp = os.path.join(ptmp, "pcuts.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "testsrc2=size=640x360:rate=20:duration=0.05,tpad=stop_mode=clone:"
+         "stop_duration=1", "-f", "lavfi", "-i",
+         "mandelbrot=size=640x360:rate=20,trim=duration=0.05,tpad=stop_mode="
+         "clone:stop_duration=1", "-f", "lavfi", "-i",
+         "smptehdbars=size=640x360:rate=20:duration=0.05,tpad=stop_mode="
+         "clone:stop_duration=1", "-f", "lavfi", "-i",
+         "cellauto=s=640x360:rate=20,trim=duration=1.05", "-filter_complex",
+         "[0:v][1:v][2:v][3:v]concat=n=4:v=1:a=0[v]", "-map", "[v]",
+         "-c:v", "ffv1", sp], check=True)
+    spo = os.path.join(ptmp, "pcuts.V88")
+    spr = venc.encode(venc.parser().parse_args(
+        [sp, spo, "--quiet", "--preset", "vga4", "--screen", "640x400",
+         "--palette", "colour16", "--scene-palettes", "--audio", "none",
+         "--profile", "286-fast", "--disk", "120000", "--ladder",
+         "slow:1/2"]), None)
+    rs = vid.Reader(spo)
+    pat = {f for f, _ in rs.pev if f}
+    untouched = []
+    for f, surf, rec, at_, i in vid.v88_frames(rs):
+        n_, y0, y1 = struct.unpack_from("<HHH", rec, 0)
+        if f in pat and not (y0 & vid.REC_FLIP) and \
+                (y0 & 0x7FFF) == (y1 & ~vid.REC_HID & 0x7FFF):
+            untouched.append(f)
+    # (moved: a scene whose palette is not at its first frame - shots'
+    # "f" - but after it)
+    starts = [sh["f"] for sh in (spr.get("shots") or []) if sh["f"]]
+    moved = sum(1 for f0 in starts if f0 not in pat and
+                any(f0 < f < f0 + 4 for f in pat))
+    print("   5h'': page-ahead %s, %d palettes: %d on a page left as it was, "
+          "%d moved past a held frame" % ("on" if rs.page else "OFF",
+                                          len(pat), len(untouched), moved))
+    if not rs.page or untouched or not moved:
+        bad.append("the palette and the picture: page-ahead %s, palettes on "
+                   "untouched pages at %r, %d moved past a hold"
+                   % (rs.page, untouched, moved))
     # --- 5h.1: NO READABLE KEY 0, NO PAGE-AHEAD (98.1.3.7; the owner's
     # GASGAS4, 2026-10-14): a page-ahead file's key 0 is the hidden page's
     # first picture, and a key 0 the player cannot read left that page
@@ -1134,7 +1649,7 @@ def main():
                    "was made page-ahead")
     # --- 5i: PAGE-AHEAD PRUNED (98.2.1.8.2): the same clip, with ONE build
     # said to have made its own stretch worse (page_hurt forced) and the
-    # whole page pass said to be worse than the plain encode (page_compare
+    # whole page pass said to be worse than the plain encode (page_verdict
     # forced on its FIRST call only, so every later comparison is real).
     # rescue must run a third pass and ship it, one flip short; off must
     # run none and ship the plain file; always, with nothing forced worse,
@@ -1152,11 +1667,11 @@ def main():
     def first_worse():
         seen = []
 
-        def cmp(p, b, *m):
+        def cmp(p, b):
             if not seen:
                 seen.append(1)
-                return ["the test's say-so"], []
-            return real(p, b, *m)
+                return False, ["the test's say-so"], [], "the test's say-so"
+            return real(p, b)
         return cmp
     arms = {}
     venc._encode = counted
@@ -1165,13 +1680,13 @@ def main():
         for arm in ("rescue", "off", "always"):
             del calls[:]
             if arm != "always":
-                venc.page_compare = first_worse()
+                venc.page_verdict = first_worse()
             r, res = penc("prune_" + arm, "--page-prune", arm)
-            venc.page_compare = real
+            venc.page_verdict = real
             arms[arm] = (bool(r.page), (res.get("page") or {})
                          .get("flips", 0), len(calls))
     finally:
-        venc._encode, venc.page_hurt, venc.page_compare = \
+        venc._encode, venc.page_hurt, venc.page_verdict = \
             real_e, real_h, real
     print("   5i: %d builds; rescue %s; off %s; always %s (page-ahead, "
           "flips, passes)" % (len(starts), arms["rescue"], arms["off"],
@@ -1190,7 +1705,376 @@ def main():
             arms["always"][1] not in (fl, fl - 1):
         bad.append("page-ahead prune: always gave %s, not a page-ahead file "
                    "from three passes" % (arms["always"],))
+    # --- 5j: PAGE-AHEAD ON N PAGES (98.2.1.8.4): stills whose hard cuts
+    # come in PAIRS two frames apart, on the 5150 - too close for one
+    # hidden page to be rebuilt between them, and one cut run on this
+    # machine, so the second is a target only by the SCENE rule. Three
+    # pages must come out a byte-37-4 file that verifies from every key and
+    # cuts fewer frames than two; four on Mode X's 320 x 200, keys a second
+    # apart and --page-keys started, must leave a page out of a key and still
+    # verify - a page left out is unknown until rebuilt whole, and a play
+    # from that key shows the stream's frames or verify says which it did not
+    pairs = os.path.join(ptmp, "pairs.mkv")
+    srcs = ("testsrc2", "mandelbrot", "mandelbrot=start_scale=0.3:",
+            "rgbtestsrc", "mandelbrot=start_x=-0.75:start_y=0.1:",
+            "mandelbrot=start_scale=0.05:", "testsrc2")
+    long_, short_ = 1.5, 0.04
+    args, n = [], 0
+    for i, src in enumerate(srcs):
+        name, _, opt = src.partition("=")
+        d = long_ if i % 3 == 0 else short_
+        args += ["-f", "lavfi", "-i", "%s=%ssize=320x180:rate=24,trim="
+                 "duration=0.05,tpad=stop_mode=clone:stop_duration=%g"
+                 % (name, opt, d)]
+        n += 1
+    subprocess.run(["ffmpeg", "-v", "error"] + args + [
+        "-filter_complex", "".join("[%d:v]" % i for i in range(n)) +
+        "concat=n=%d:v=1:a=0[v]" % n, "-map", "[v]", "-c:v", "ffv1", pairs],
+        check=True)
+
+    def nenc(name, *extra):
+        out = os.path.join(ptmp, name + ".V88")
+        res = venc.encode(venc.parser().parse_args(
+            [pairs, out, "--quiet", "--preset", "modex", "--profile",
+             "5150-st225", "--audio", "none", "--fit", "fill",
+             "--page-ahead", "on"] + list(extra)))
+        vid.verify_v88(out)
+        return vid.Reader(out), res
+    try:
+        r2, res2 = nenc("pages2", "--pages", "2")
+        r3, res3 = nenc("pages3", "--pages", "3")
+        r4, res4 = nenc("pages4", "--pages", "4", "--screen", "320x200",
+                        "--keysecs", "1", "--page-keys", "started")
+        n4 = (res4.get("page") or {})
+        print("   5j: cut %d on two pages, %d on three (%s, %d pages); four "
+              "on 320 x 200: %s, %d pages, %d flips, %d idle pages left out "
+              "of keys" % (res2["cuts"], res3["cuts"],
+                           "N-page" if r3.mpage else "NOT N-page", r3.pages,
+                           "N-page" if r4.mpage else "NOT N-page", r4.pages,
+                           n4.get("flips", 0), n4.get("dropped", 0)))
+        if not r3.mpage or r3.pages != 3 or r2.mpage:
+            bad.append("N pages: --pages 3 wrote %s, --pages 2 %s" % (
+                r3.pages if r3.mpage else "no N-page file",
+                "an N-page file" if r2.mpage else "a two-page one"))
+        if res3["cuts"] >= res2["cuts"]:
+            bad.append("N pages: three pages cut %d frames, two %d - close "
+                       "cuts are what more pages are for"
+                       % (res3["cuts"], res2["cuts"]))
+        if not r4.mpage or r4.pages != 4 or r4.screen != vid.SCR_320X200 or \
+                not n4.get("flips") or not n4.get("dropped"):
+            bad.append("N pages: four on Mode X's 320 x 200 gave %d pages, "
+                       "screen %d, %d flips, %d pages left out of keys"
+                       % (r4.pages, r4.screen, n4.get("flips", 0),
+                          n4.get("dropped", 0)))
+    except vid.V88Error as e:
+        bad.append("N pages: %s" % e)
+    # --- 5k: FLIPPED AND BUILT AHEAD (98.2.1.8.5): the same pairs, every
+    # frame flipped. On the 5150 a whole-canvas copy is two and a half
+    # periods, so on Mode X's 320 x 200 four pages the copy is made in the
+    # calm and a flip lands on a back page already brought up; on the 486
+    # three pages pay it in the flip's own record. Each must be a byte-37-5 file that
+    # verifies - every page brought up is the page shown - and cut fewer
+    # frames than the same flipped file without building ahead
+    try:
+        def fenc(name, prof, *extra):
+            out = os.path.join(ptmp, name + ".V88")
+            res = venc.encode(venc.parser().parse_args(
+                [pairs, out, "--quiet", "--preset", "modex", "--profile",
+                 prof, "--audio", "none", "--fit", "fill", "--flip"] +
+                list(extra)))
+            vid.verify_v88(out)
+            return vid.Reader(out), res
+        for prof, pg, scr_, want in (("5150-st225", "4", "320x200",
+                                      "precopied"),
+                                     ("486-dx2-66", "3", None, "copies")):
+            sx = ["--screen", scr_] if scr_ else []
+            rf0, resf0 = fenc("flip" + pg, prof, *sx)
+            rf, resf = fenc("fpage" + pg, prof, "--page-ahead", "on",
+                            "--pages", pg, *sx)
+            nf = resf.get("page") or {}
+            print("   5k: %s, %s pages flipped: cut %d, built ahead %d - %d "
+                  "flips, %d onto a precopied page, %d with a copy, %d "
+                  "refused" % (prof, pg, resf0["cuts"], resf["cuts"],
+                               nf.get("flips", 0), nf.get("precopied", 0),
+                               nf.get("copies", 0), nf.get("refused", 0)))
+            if not getattr(rf, "fpage", False) or rf.pages != int(pg) or \
+                    not nf.get(want) or resf["cuts"] >= resf0["cuts"]:
+                bad.append("flipped and built ahead, %s on %s pages: %s, "
+                           "%d %s, cut %d against %d"
+                           % (prof, pg, "byte 37 = 5" if getattr(
+                               rf, "fpage", False) else "NOT byte 37 = 5",
+                              nf.get(want, 0), want, resf["cuts"],
+                              resf0["cuts"]))
+        # ...and AGAINST ITS OWN PAGES (--flip-own, VIDEO-SEEN-PLAN 3b): the
+        # 486's three pages with every record BUILT - drawn on its page as
+        # it stands, nothing brought up - and every key carrying the back
+        # page, so it verifies from every key; it cuts no more than the
+        # file that brings its pages up (0 against 1 measured)
+        ro, reso = fenc("fpage3own", "486-dx2-66", "--page-ahead", "on",
+                        "--pages", "3", "--flip-own")
+        nb = sum(1 for rec, _, _ in ro.records()
+                 if struct.unpack_from("<H", rec, 4)[0] & vid.REC_BUILT)
+        print("   5k: 486-dx2-66, 3 pages flipped against their own: cut %d "
+              "(built ahead %d), %d of %d records built"
+              % (reso["cuts"], resf["cuts"], nb, ro.frames))
+        if not getattr(ro, "fpage", False) or nb != ro.frames or \
+                reso["cuts"] > resf["cuts"]:
+            bad.append("flipped and built ahead against its own pages: %s, "
+                       "%d of %d records built, cut %d against %d"
+                       % ("byte 37 = 5" if getattr(ro, "fpage", False) else
+                          "NOT byte 37 = 5", nb, ro.frames, reso["cuts"],
+                          resf["cuts"]))
+    except vid.V88Error as e:
+        bad.append("flipped and built ahead: %s" % e)
     shutil.rmtree(ptmp, ignore_errors=True)
+    # --- 5l: SOUND AHEAD ON AUTO, ON A READER A LITTLE SLOWER (98.2.1.3,
+    # the owner's T69): a busy 4 s clip at a disk it fits IN STEP at the
+    # profile's own rate - no frame leans - but not 10% under it, which is
+    # where T69's reader ran and its card went dry. Auto must carry the
+    # sound ahead; with AHEAD_SLACK 0, the Auto before it, it must not -
+    # so the leg is about the slack and not a clip that leans anyway
+    stmp = tempfile.mkdtemp()
+    try:
+        busy = os.path.join(stmp, "busy.mkv")
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+             "mandelbrot=size=320x240:rate=24,trim=duration=4", "-f",
+             "lavfi", "-i", "sine=frequency=440:duration=4:sample_rate=22050",
+             "-shortest", "-c:v", "ffv1", "-c:a", "pcm_s16le", busy],
+            check=True)
+
+        def senc(name):
+            out = os.path.join(stmp, name + ".V88")
+            venc.encode(venc.parser().parse_args(
+                [busy, out, "--quiet", "--preset", "vga4", "--profile",
+                 "286-picomem1", "--disk", "540000"]))
+            return bool(vid.Reader(out).flags_ & vid.F_AHEAD)
+        slack = venc.AHEAD_SLACK
+        on = senc("slack")
+        venc.AHEAD_SLACK = 0.0
+        try:
+            off = senc("noslack")
+        finally:
+            venc.AHEAD_SLACK = slack
+        print("   5l: sound ahead on Auto at 540,000 B/s - %s with %d%% of "
+              "slack, %s without" % ("carried" if on else "OFF",
+                                    round(100 * slack),
+                                    "carried" if off else "off"))
+        if not on:
+            bad.append("sound ahead on Auto: a clip that fits in step only "
+                       "at the profile's disk was written in step")
+        if off:
+            bad.append("sound ahead on Auto: the clip leans with no slack "
+                       "at all, so the leg tests nothing")
+    except vid.V88Error as e:
+        bad.append("sound ahead on Auto: %s" % e)
+    shutil.rmtree(stmp, ignore_errors=True)
+    # --- 5m: THE POSTERS MADE AGAIN (98.1.3.11.1, the owner's GasGas,
+    # 2026-10-19: an hour and a half of page-ahead encode made with the
+    # wrong --desktop-posters). A 16-colour file with a palette a scene,
+    # encoded with mono posters and with colour ones: --posters-only on the
+    # mono file must give the colour one's pictures byte for byte (a bigger
+    # table, so after the file's end), and back to mono on a copy of the
+    # colour one the mono one's (smaller: in place), the stream untouched
+    # either way and the stored options saying so; off takes the table
+    # away. Then spk_reshape on a speaker file with posters must leave them
+    # readable - its options block was given the room up to the stream, the
+    # table in it, and zeroed it
+    mtmp = tempfile.mkdtemp()
+    try:
+        msrc = os.path.join(mtmp, "src.mkv")
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+             "testsrc2=size=320x240:rate=24:duration=3", "-f", "lavfi", "-i",
+             "sine=frequency=440:duration=3:sample_rate=22050", "-shortest",
+             "-c:v", "ffv1", "-c:a", "pcm_s16le", msrc], check=True)
+        mo = ["--quiet", "--preset", "vga4", "--profile", "286-picomem1",
+              "--scene-palettes", "--palette", "colour16", "--screen",
+              "640x400", "--box", "640x400"]
+
+        def menc(name, *extra):
+            out = os.path.join(mtmp, name + ".V88")
+            venc.encode(venc.parser().parse_args([msrc, out] + mo +
+                                                 list(extra)))
+            return out
+
+        def redo(path, out, posters):
+            return venc.reposter(venc.parser().parse_args(
+                ["--posters-only", path, out, "--desktop-posters", posters]),
+                say=lambda *x: None)
+
+        def pics(path):
+            r = vid.Reader(path)
+            return None if r.thumb is None else \
+                [r.thumb_pic(i) for i in range(r.thumb[1])]
+
+        def stream(path):
+            return [rec for rec, _, _ in vid.Reader(path).records()]
+        fm, fc = menc("mono", "--desktop-posters", "mono"), \
+            menc("colour", "--desktop-posters", "colour")
+        f1 = os.path.join(mtmp, "m2c.V88")
+        redo(fm, f1, "colour")
+        f2 = os.path.join(mtmp, "c2m.V88")
+        redo(fc, f2, "mono")
+        f3 = os.path.join(mtmp, "off.V88")
+        redo(fc, f3, "off")
+        at = [vid.Reader(f).thumb[0]
+              for f in (fc, f1, f2)]
+        opt = [vid.Reader(f).options()["o"].get("desktop_posters")
+               for f in (f1, f2, f3)]
+        print("   5m: posters again - mono to colour at %d (the encode's %d), "
+              "colour to mono at %d; options %s" % (at[1], at[0], at[2], opt))
+        for f in (f1, f2, f3):
+            vid.verify_v88(f)
+        if pics(f1) != pics(fc) or pics(f2) != pics(fm) or \
+                pics(f3) is not None:
+            bad.append("--posters-only: the pictures are not the encode's "
+                       "(%s, %s, off %s)" % (pics(f1) == pics(fc),
+                                             pics(f2) == pics(fm),
+                                             pics(f3) is None))
+        if at[2] != at[0] or at[1] <= at[0]:
+            bad.append("--posters-only: a smaller table not in place, or a "
+                       "bigger one not after the end (%s)" % at)
+        if stream(f1) != stream(fm) or stream(f2) != stream(fc):
+            bad.append("--posters-only changed the stream")
+        if opt != ["colour", "mono", "off"]:
+            bad.append("--posters-only: the stored options say %s" % opt)
+        fs = menc("spk", "--audio", "speaker", "--desktop-posters", "colour")
+        f4 = os.path.join(mtmp, "spk2.V88")
+        vid.spk_reshape(fs, f4)
+        try:
+            ok = pics(f4) == pics(fs)
+        except vid.V88Error as e:
+            ok = False
+            print("   5m: spk_reshape: %s" % e)
+        if not ok:
+            bad.append("spk_reshape lost a file's desktop posters")
+        # ...and three files the GasGas did not have (PR #277's review): a
+        # key-poster table with no key kept wrote flags every Reader
+        # refused; a 16-colour file in the desktop's own sixteen had no
+        # palette to slice; a resident file's options, its last block, had
+        # no room before a stream and raised
+        g1 = vid.Geom(vid.LAY_LIN80, 8, 16)
+        g4 = vid.Geom(vid.LAY_LIN80, 8, 16, bitplanes=True)
+        g4.sub2 = True
+
+        def wr(g, pf):
+            w = vid.Writer(g, 1500, 100, vid.AUD_NONE, 0, pf, title="5m",
+                           keysecs=100.0)
+            surf, prev = g.surface(), bytes(g.w * g.h)
+            for f in range(6):
+                cv = bytes((1 + (x // 4 + y + f) % 15) if g.bitplanes else
+                           (0xFF if (x + y + f) % 3 == 0 else 0)
+                           for y in range(g.h) for x in range(
+                               g.w if g.bitplanes else g.wb))
+                if g.bitplanes:
+                    g.put(surf, cv)
+                    w.frame(vid.vga4_subs(cv, prev, g), surf)
+                    prev = cv
+                    continue
+                ch = [b + x for y, b in enumerate(g.base)
+                      for x in range(g.wb) if surf[b + x] != cv[y * g.wb + x]]
+                for y, b in enumerate(g.base):
+                    surf[b:b + g.wb] = cv[y * g.wb:(y + 1) * g.wb]
+                w.frame(vid.spans(ch, surf, g), surf)
+            return w
+        w = wr(g1, vid.PF_MONO1)
+        w.key0 = 100                    # (past the last frame: no key)
+        w.thumbs = dict(scale=1, flags=vid.TH_KEYS | vid.TH_MONO,
+                        make=None, custom=None)
+        f5 = os.path.join(mtmp, "nokey.V88")
+        w.write(f5)
+        f6 = os.path.join(mtmp, "std16.V88")
+        wr(g4, vid.PF_VGA4).write(f6)
+        redo(f6, f6, "colour")
+        f7 = os.path.join(mtmp, "res.V88")
+        vid.write_resident(f7, [wr(g1, vid.PF_MONO1)], title="5m",
+                           opts=vid.pack_options({
+                               "v": venc.OPTS_VERSION, "src": "5m",
+                               "o": {"desktop_posters": "auto"}}))
+        redo(f7, f7, "mono")
+        for f in (f5, f6, f7):
+            vid.verify_v88(f)
+        r7 = vid.Reader(f7)
+        if vid.Reader(f5).thumb is not None or not pics(f6) or \
+                not pics(f7) or r7.optsat + r7.optslen != \
+                os.path.getsize(f7) or \
+                r7.options()["o"].get("desktop_posters") != "mono":
+            bad.append("--posters-only: a keyless table %s, desktop-colour "
+                       "posters %s, resident posters %s and options %s"
+                       % (vid.Reader(f5).thumb, bool(pics(f6)),
+                          bool(pics(f7)), r7.options()["o"].get(
+                              "desktop_posters")))
+    except vid.V88Error as e:
+        bad.append("--posters-only: %s" % e)
+    shutil.rmtree(mtmp, ignore_errors=True)
+    # --- 5n: A SCENE CHANGE THE BUDGET CANNOT DRAW, NAMED AND JOINED, AND
+    # THE LADDER BY TIME (98.1.3.2.3.3, 98.2.1.10; the owner's GasGas,
+    # 2026-10-19). Three stills of very different colours, page-ahead off so
+    # a change is drawn as a cut: the report must name both changes with
+    # what they leave (the first well past 2%), --scene-join at the first
+    # one's time must leave one palette change, a time with no change near
+    # it must be refused before a frame is encoded, and a ladder that only
+    # cuts with --ladder-at slow:1/2 over the first change must slow a
+    # stretch THERE and nowhere else
+    jtmp = tempfile.mkdtemp()
+    try:
+        three = os.path.join(jtmp, "three.mkv")
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+             "testsrc2=size=640x360:rate=20:duration=2", "-f", "lavfi",
+             "-i", "mandelbrot=size=640x360:rate=20,trim=duration=2", "-f",
+             "lavfi", "-i", "smptehdbars=size=640x360:rate=20:duration=2",
+             "-f", "lavfi", "-i", "sine=frequency=440:duration=6:"
+             "sample_rate=22050", "-filter_complex",
+             "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]", "-map", "[v]", "-map",
+             "3:a", "-shortest", "-c:v", "ffv1", "-c:a", "pcm_s16le", three],
+            check=True)
+        jo = ["--quiet", "--preset", "vga4", "--box", "640x400", "--screen",
+              "640x400", "--palette", "colour16", "--scene-palettes",
+              "--profile", "286-picomem1", "--fps", "20", "--page-ahead",
+              "off"]
+
+        def jenc(name, *extra):
+            out = os.path.join(jtmp, name + ".V88")
+            res = venc.encode(venc.parser().parse_args([three, out] + jo +
+                                                       list(extra)))
+            return vid.Reader(out), res
+        r0, res0 = jenc("plain")
+        left = res0.get("pev_left") or []
+        fps = r0.fps
+        print("   5n: the changes left %s" % ", ".join(
+            "%.2f s %.0f%%" % (f / fps, 100 * sh) for f, sh in left))
+        if len(left) != 2 or left[0][1] < venc.PEV_RESIDUE:
+            bad.append("the scene changes' residue: %s" % left)
+        else:
+            t = "%.2f" % (left[0][0] / fps)
+            rj, _ = jenc("joined", "--scene-join", t)
+            pv0, pvj = [f for f, p in r0.pev], [f for f, p in rj.pev]
+            print("   5n: palettes at %s, joined at %s: %s" % (pv0, t, pvj))
+            if len(pvj) != len(pv0) - 1 or left[0][0] in pvj:
+                bad.append("--scene-join %s: palettes at %s from %s"
+                           % (t, pvj, pv0))
+        try:
+            jenc("nowhere", "--scene-join", "3.0")
+            bad.append("--scene-join 3.0, a second from any change, was "
+                       "taken")
+        except vid.V88Error:
+            pass
+        _, rl = jenc("ranged", "--ladder", "cut:100", "--ladder-at",
+                     "1.9-2.6=slow:1/2")
+        st = [x for x in rl.get("vstretch") or []   # (the SLOWED ones: a
+              if x[2] < fps - 0.5]      # cut rung's stretch is at the rate)
+        print("   5n: --ladder-at 1.9-2.6=slow:1/2: %s, slowed %s"
+              % (rl.get("ladder_at"), st))
+        if not any(li for (ri, li), c in (rl.get("ladder_at") or {}).items()
+                   if c) or not st or any(not 1.9 * fps - 1 <= k < 2.6 * fps
+                                          for k, _, _ in st):
+            bad.append("--ladder-at: the range's ladder %s, slowed %s"
+                       % (rl.get("ladder_at"), st))
+    except vid.V88Error as e:
+        bad.append("scene join and the ladder by time: %s" % e)
+    shutil.rmtree(jtmp, ignore_errors=True)
     # --- 6: ADPCM4's exact search
     rnd = np.random.default_rng(7)
     t = np.arange(22050) / 11025.0

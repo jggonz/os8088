@@ -112,7 +112,7 @@ def boot(machine, heap, run_dir):
         return
     if fseg_seen != {heap}:
         fail.append("%s: the kernel read [spl_fseg] = %s while the splash was "
-                    "live and its own HEAP_SEG is %04X. SPEC.md 52.10.2.1: the "
+                    "live and its own blob segment is %04X. SPEC.md 52.10.2.1: the "
                     "volume boot record was built from a different define set "
                     "than the kernel it loads"
                     % (machine, sorted("%04X" % v for v in fseg_seen), heap))
@@ -133,8 +133,11 @@ def main():
     global KNOBTREE, DEFINES
     KNOBTREE = os88build.tree(*KNOBS).apply()
     DEFINES = KNOBTREE.defines  # ...and apply() has already set the default
-    heap = os88sym.equates(DEFINES)["HEAP_SEG"]
-    print("  the knob kernel's HEAP_SEG is %04X" % heap)
+    # the BLOB's segment, which is HEAP_SEG lifted by BLOB_LIFT where `.cold`
+    # is the top rung (SPEC.md 2.10.3) - what the VBR is told and [spl_fseg]
+    eq = os88sym.equates(DEFINES)
+    heap = eq.get("BLOB_SEG_AT", eq["HEAP_SEG"])
+    print("  the knob kernel's blob segment is %04X" % heap)
 
     # ONE RUN TREE FOR THE INSTALL AND BOTH BOOTS. The install and the
     # boots are different machines - the install needs the system floppy

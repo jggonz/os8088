@@ -65,6 +65,9 @@ def u16(b, i=0):
     return struct.unpack_from("<H", b, i)[0]
 
 
+OWN = False                             # --own: VIDEO-SEEN-PLAN 3b's records
+
+
 def clip(tmp, scr):
     rnd = random.Random(1613)
     g = vid.Geom(vid.LAY_LIN80, W // 8, H, bitplanes=True)
@@ -87,7 +90,7 @@ def clip(tmp, scr):
     out = os.path.join(tmp, "SCR%d.V88" % scr)
     vid.encode_canvases(cvs, g, out, FPS, vid.PF_VGA4, pal,
                         "vidscreen clip", keysecs=2.0, poster=1,
-                        flip=scr != 0, screen=scr)
+                        flip=scr != 0, screen=scr, own=OWN and scr != 0)
     vid.verify_v88(out)
     return out
 
@@ -133,6 +136,9 @@ def one(scr, machine, syms, pkg, tmp, bad):
                 rb("vp_ok"))
         print("   format %d, screen %d, flip %d, page %d, mode %d, shadow "
               "%d, ok %d" % got1)
+        if rb("vp_own") != int(OWN and scr != 0):
+            bad.append("%s: the player's own-page flag is %d"
+                       % (name, rb("vp_own")))
         if got1 != want1:
             bad.append("%s: the player read it as %r, not %r"
                        % (name, got1, want1))
@@ -198,14 +204,21 @@ def one(scr, machine, syms, pkg, tmp, bad):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
-    ap.add_argument("--screen", action="append",
-                    choices=[v[0] for v in vid.SCREENS.values()])
+    # (not the NARROW two: this clip flips every frame, which they refuse -
+    # their pages are page-ahead's, and vidpage8n / vidpage6n play them)
+    wide = [v[0] for k, v in vid.SCREENS.items() if k not in vid.NARROW]
+    ap.add_argument("--screen", action="append", choices=wide)
+    ap.add_argument("--own", action="store_true",
+                    help="the flipped screens' clips AGAINST THEIR OWN PAGE "
+                    "(byte 37 7, VIDEO-SEEN-PLAN 3b)")
     a = ap.parse_args()
+    global OWN
+    OWN = a.own
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     pkg = os88build.at("build/video.o88")
     bad = []
-    names = a.screen or [v[0] for v in vid.SCREENS.values()]
+    names = a.screen or wide
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         for nm in names:
             one(vid.SCREEN_BY_NAME[nm], a.machine, syms, pkg, tmp, bad)

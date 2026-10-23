@@ -613,12 +613,14 @@ sch_rhook:
     xchg ax, [sch_rpend]        ; AX = the periods owed, and none after (IF=0)
     mov si, [sch_rwin]          ; the window record lives for the bracket
     mov bp, [sch_rbp]
-    push cs
-    pop es
+    KES
     mov ds, [si+W_SEG]          ; the package's own segment...
+%ifdef KERN_MEGA
+    MEGA_PCALL [cs:si+W_DISP], [cs:si+W_SEG]               ; W_SEG is DATA; the call wants its code alias
+%else
     call far [cs:si+W_DISP]     ; ...and its dispatcher, which near-calls BP
-    push cs
-    pop ds
+%endif
+    KDS
     cli                         ; the hook may have sti'd
     sub word [sch_rbusy], 0x0101
 .skip:
@@ -641,7 +643,11 @@ sched_stop:
     push es
 
     xor ax, ax
+%ifdef KERN_MEGA
+    MEGA_SEG0 es                  ; segment 0 is the NULL selector
+%else
     mov es, ax
+%endif
     mov si, sch_old08           ; the saved vector, word by word, onto 0:20h
     mov di, 0x20                ; (DF = 0 by SPEC.md 1)
     pushf
@@ -803,8 +809,13 @@ sch_idle_start:
     mov cx, SCH_IDLE_STK        ; the smallest class: its own footprint is 4
                                 ; bytes and the rest is the floor (SPEC.md 8.7)
     mov dx, 0x00FF              ; DL -> T_INST = 0xFF, "owns no instance"
-    call KERNEL_SEG:cw_task_spawn ; FAR: `.boot2` -> resident, through the shim
-    jc .out                       ; driver.inc already needed
+%ifdef KERN_SMALL                ; FAR: `.ovl` -> resident. kern_small has no
+    mov bp, task_spawn          ; other caller, so spw_near's `call bp` (kmain_o
+    call KERNEL_SEG:spw_near    ; holds nothing in BP); kern_big shares the
+%else                           ; shim driver.inc's task path needs anyway
+    call KERNEL_SEG:cw_task_spawn
+%endif
+    jc .out
     mov [sch_idleslot], al      ; the ONE identifier for the idle task: the
                                 ; scan skips this index and the fallback picks
                                 ; it, and both need the index anyway.
@@ -1032,9 +1043,17 @@ task_spawn:
 ; validates - so they are one body rather than two that look alike.
 ; -----------------------------------------------------------------------------
 sch_frame:
+%ifdef KERN_MEGA
+    call mega_frame_ds          ; kern_mega: DS = the segment's DATA selector
+%else                           ; (the kernel's alias for the kernel's own)
     mov ax, bp
+%endif
     stosw                       ; DS  = the task's own segment
+%ifdef KERN_MEGA
+    mov ax, [cs:k_dsel]         ; ...and ES the kernel's DATA, not its code
+%else
     mov ax, KERNEL_SEG
+%endif
     stosw                       ; ES  = the kernel, always (SPEC.md 20.1)
     xor ax, ax
     stosw                       ; BP
@@ -1049,6 +1068,9 @@ sch_frame:
     mov ax, si
     stosw                       ; IP  = entry
     mov ax, bp
+%ifdef KERN_MEGA
+    call mega_frame_cs          ; ...and CS its CODE alias (kernel/mega.inc)
+%endif
     stosw                       ; CS  = the task's own segment
     mov ax, 0x0202
     stosw                       ; FLAGS: IF=1, reserved bit 1 set
@@ -1323,7 +1345,7 @@ task_debit:
     ret
 
 ; -----------------------------------------------------------------------------
-; sched_mode_set - select the scheduling mode (SPEC.md 8.2)
+; cp_schset - sched_mode_set, select the scheduling mode (SPEC.md 8.2)
 ;
 ; Normalises the flag to 0/1 and hands the incoming mode a full watchdog
 ; budget by clearing the hold counter. Both stores are single bytes made
@@ -1351,8 +1373,15 @@ task_debit:
 ; in:       AL = 0 pre-emptive, any non-zero = cooperative
 ; out:      nothing
 ; clobbers: flags (every register preserved, AL included)
+;
+; NOT RESIDENT (kernel size pass 13): its two callers are the settings reader
+; in the boot blob, which writes the two stores out (driver.inc's %1_unpack -
+; its range test has already normalised AL), and the Control Panel's
+; Scheduling radio, so the body is CTRL.DRV's: cp_schset, the panel half. An
+; image's DS is KERNEL_SEG like the kernel's own, so nothing else changes.
 ; -----------------------------------------------------------------------------
-sched_mode_set:
+section .modu
+cp_schset:
     push ax
     pushf
     cli                         ; no tick between the two stores
@@ -1365,7 +1394,8 @@ sched_mode_set:
                                 ; the incoming mode starts with a full budget
     popf
     pop ax
-    retf
+    ret
+section .text
 
 ; -----------------------------------------------------------------------------
 ; sched_mode_get - read the current scheduling mode (SPEC.md 8.2)
@@ -1803,7 +1833,7 @@ task_yield:
     jz .noyvmm
     push ds
     push ax
-    mov ax, KERNEL_SEG
+    KDATAR ax
     mov ds, ax
     call vmm_poll
     pop ax
@@ -1829,8 +1859,7 @@ task_yield:
     push bp
     push es
     push ds
-    push cs                     ; caller's DS is on the stack; we need ours
-    pop ds
+    KDS                         ; caller's DS is on the stack; we need ours
                                 ; NO sch_account HERE (SPEC.md 8.1.1). It used
                                 ; to charge the slice unconditionally, and on a
                                 ; machine with one runnable task that is 500
@@ -1861,8 +1890,7 @@ sch_isr:
     push bp
     push es
     push ds
-    push cs
-    pop ds
+    KDS
 %ifdef KBD_DIAG
     call kbg_irq0               ; KBDDIAG=1 (SPEC.md 9.8.1): inside a bracket,
 %endif                          ; the keyboard's hardware state, each tick
@@ -2300,8 +2328,8 @@ sch_isr:
 %if spl_quiet - spl_busy != 1
   %error "sch_isr tests [spl_busy] and [spl_quiet] as one word: viddet.inc must keep spl_quiet directly after spl_busy"
 %endif
-    cmp word [spl_fseg], COLD_SEG   ; the blob has been given back (2.9.5)
-    jbe .nospl
+    cmp word [spl_fseg], 0   ; the blob has been given back (2.9.5)
+    je .nospl
     inc byte [spl_busy]
     mov word [spl_ifp], splf_anim
     mov ax, [spl_fseg]
@@ -2514,8 +2542,7 @@ sch_stkdie:
     ; reports. Silent, it is indistinguishable from a wild jump; one solid bar
     ; and a task number turn it into a diagnosis a photograph can carry.
     ; Registers are free: the next instruction halts for ever.
-    push cs
-    pop ds
+    KDS
     mov bx, [vid_rseg]
     or bx, bx
     jz .nomark                  ; no adapter yet: nothing to say it on
@@ -2686,7 +2713,12 @@ sch_dphex2:
 
 sch_s_over: db 'STACK OVERFLOW  TASK ', 0   ; grep the tree for this sentence
 sch_s_sp:   db '  SP ', 0                ; and SPEC.md 8.8 is the first hit
-sch_s_in:   db '  ', 0
+sch_s_in    equ fm_s_colsp + 1  ; '  ', 0 - the tail of the Disk window's
+                                ; ':  ' (files.inc), both .text (kernel size
+                                ; pass 13)
+%ifdef KERN_BIG
+            db 0                ; PARITY PAD (kernel size pass 13):
+%endif                          ; wm_paint_all at an even shift on kern_big
 sch_s_ui:   db 'UI TASK', 0
 
 ; -----------------------------------------------------------------------------
@@ -2793,6 +2825,9 @@ sch_clsbytes:
     dw 256                      ;    Bounce, a driver's stream task
     dw SCH_STACK                ; 4: the largest, asked for on purpose
 SCH_NCLASS  equ ($ - sch_clsbytes) / 2
+%if SCH_NCLASS > 0x3F
+  %error "sched: LD_H_CLASS is 6 bits - bits 7 and 6 are OS88_HIGH and OS88_HIGHMEM - and inst_pkg_spawn masks it with 3Fh"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sch_switch - common switch path (module-internal)

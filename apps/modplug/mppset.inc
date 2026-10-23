@@ -961,7 +961,7 @@ mpps_s_g1:       db 'Interface ported from ModPlug Player V2', 0
 mpps_s_g2:       db 'by Volkan Orhan - modplugplayer.org, GPLv3', 0
 mpps_s_replayer: db 'Replayer', 0
 mpps_s_g3:       db '4-channel ProTracker, 8-bit mono output.', 0
-mpps_s_g4:       db 'Not libopenmpt - see SPEC.md 56.1.', 0
+mpps_s_g4:       db 'Not libopenmpt: its own replayer.', 0
 mpps_s_settings: db 'Settings', 0
 mpps_s_saveimm:  db 'Save Immediately (No Settings File)', 0
 

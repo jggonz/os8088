@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import os88build as _B   # noqa: E402
 
-PKGDIR = _B.at("build")         # the package is the shipped one, in build/
+PKGDIR = _B.at("build")         # the small disks are in build/
 _B.use_build("build/smallk")    # ...the kernel kern_small's (os88sym)
 os.environ.setdefault("OS88_DEFINES", "KERN_SMALL")
 
@@ -77,20 +77,22 @@ def check(cond, what):
     return cond
 
 
-def image_size():
-    b = open(os.path.join(PKGDIR, "deskcal.bin"), "rb").read()
-    return struct.unpack_from("<H", b, 8)[0]
+def image_size(m, seg):
+    """The image as LOADED - its header's +8, read off the guest: the small
+    disks carry the SMALL build (build/smallapp/), a different size from
+    build/deskcal.bin's, and the bss is placed after the image"""
+    return struct.unpack("<H", bytes(m.readseg(seg, 8, 2)))[0]
 
 
 class Cal(object):
     def __init__(self, ui, tmp):
         self.ui, self.m, self.tmp = ui, ui.m, tmp
-        self.image = image_size()
         w = ui.path("A:/STIKAPPS/DESKCAL.O88")
         check(w is not None and w.title == TITLE, "the calendar opened")
         self.w = w
         self.wseg = struct.unpack_from("<H", self.m.read(
             ui._S("wm_wins") + w.i * geom.WIN_SIZE + geom.W_SEG, 2))[0]
+        self.image = image_size(self.m, self.wseg)
 
     def bss(self, off, n=1):
         return self.m.readseg(self.wseg, self.image + off, n)
@@ -129,7 +131,7 @@ class Cal(object):
         v = os88flush.Volume(open(out, "rb").read())
         try:
             return D.parse_dat(v.read("SYSTEM/APPDATA/DESKCAL.DAT"),
-                               D.DESKCAL_PAYLEN, D.DESKCAL_PAYVER)
+                               D.DESKCAL_PAYLEN, D.DESKCAL_PAYVER, packed=True)
         except Exception:
             return None
 

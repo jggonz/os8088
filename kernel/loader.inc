@@ -240,6 +240,9 @@ ld_lname_cp:
 ld_unreserve:
     push bx
     mov di, [ld_rec]
+%ifdef KERN_BIG
+    COLDCALL desk_drop_x        ; ld_alloc's early IF_DESK off, and DESK.DRV
+%endif                          ; with it if nobody else is a widget (11.103.10)
     call KERNEL_SEG:cw_xm_release_rec   ; DI = the record
     call ld_slot
     call mem_free_owner_x
@@ -247,6 +250,19 @@ ld_unreserve:
     or bx, bx
     jz .out
     call mem_free_owner_x
+%ifdef KERN_MEGA
+    test byte [ld_base], 4      ; a region placed ABOVE 1MB (ld_hi): its
+    jz .lo                      ; pair and pool block
+    push ax
+    push dx
+    call ld_slot
+    mov dl, bl
+    mov ax, [ld_base]
+    call MEGA_SEL_CODE:mega_pkghifree
+    pop dx
+    pop ax
+.lo:
+%endif
     mov word [ld_base], 0
 .out:
     pop bx
@@ -255,8 +271,15 @@ ld_unreserve:
 ; -----------------------------------------------------------------------------
 ; ld_hdr_ok - the .o88 FAMILY's header prologue (SPEC.md 20.1/20.2/51.1)
 ; in:  ES:SI -> the header, AL = the format version this loader accepts
-; out: CF = 0 well formed, CF = 1 malformed
-; clobbers: flags
+; out: CF = 0 well formed; CF = 1 malformed, with AL = LD_EVER when the
+;      magic is ours and the VERSION is not (SPEC.md 20.2.0) and LD_EBAD for
+;      anything else - ld_check_hdr's two answers, so it reads them as they
+;      come. The driver loader and the re-home arm ignore AL on the refusal
+; clobbers: AX, flags - and [ld_fsz], with a PACKAGE's non-zero link word
+;      (SPEC.md 20.13.8). AH is dead at all three callers: ld_check_hdr and
+;      drv_check document AX clobbered, and the re-home arm's next call,
+;      ld_hdr_size, writes it. Nothing reads [ld_fsz] after the re-home's
+;      check: steps 3 to 6a are its only readers, all behind it
 ;
 ; ONE BODY FOR TWO LOADERS. A package header and a driver header agree on
 ; every field this tests - magic 0, version 2, link 4, the three dispatcher
@@ -275,19 +298,41 @@ ld_unreserve:
 ; -----------------------------------------------------------------------------
 ld_hdr_ok:
     cmp word [es:si+LD_H_MAGIC], 0x384F      ; 'O','8'
-    jne .no
+    jne ld_hdr_size.bad
     cmp [es:si+LD_H_VER], al                 ; 6 = package, 7 = driver: the
-    jne .no                                  ; two gates SPEC.md 51.1 wants
-    cmp word [es:si+LD_H_LINK], 0            ; org 0 or it is not v3
-    jne .no
+    mov al, LD_EVER                          ; two gates SPEC.md 51.1 wants -
+    jne ld_hdr_size.stc                      ; and an 'O8' file of ANOTHER
+                                             ; format is the one refusal that
+                                             ; says why (LD_EVER, SPEC.md
+                                             ; 20.2.0). `mov` writes no flag,
+                                             ; so the compare still decides.
+                                             ; It was a second routine that
+                                             ; re-read both fields after this
+                                             ; one refused (kernel size pass 12)
+    mov ax, [es:si+LD_H_LINK]                ; org 0 or it is not v3 -
+    or ax, ax                                ; UNLESS it is a PACKAGE whose
+    jz .disp                                 ; flags carry BOTH bit 2 and bit
+    cmp byte [es:si+LD_H_VER], PKG_FMT       ; 3: then the word is the packed
+    jne ld_hdr_size.bad                      ; IMAGE's length, because with
+    mov [ld_fsz], ax                         ; parts the file is not it
+    mov word [ld_fsz+2], 0                   ; (SPEC.md 20.13.8) - and it
+    mov al, [es:si+LD_H_FLAGS]               ; BECOMES [ld_fsz] here, for
+    not al                                   ; ld_check_hdr's ladder. A driver,
+    test al, 0x0C                            ; or any other combination, is
+    jnz ld_hdr_size.bad                      ; refused as it always was
+.disp:                                       ; (the store before the flags
+                                             ; test is free: a refusal ends
+                                             ; the load, and nothing reads
+                                             ; [ld_fsz] after one). `mov`
+                                             ; and not the 5-byte `and`: the
+                                             ; byte keeps the FAT walk below
+                                             ; at an even shift (pass 13)
     cmp word [es:si+LD_H_DISP], 0D5FFh       ; call bp
-    jne .no
+    jne ld_hdr_size.bad
     cmp byte [es:si+LD_H_DISP+2], 0CBh       ; retf - and without the pair the
-    je .yes                                  ; kernel's first call in jumps
-.no:                                         ; into the image's data
-    stc
-.yes:                                        ; (equal is CF = 0, the answer)
-    ret
+    jne ld_hdr_size.bad                      ; kernel's first call in jumps
+    ret                                      ; into the image's data (equal
+                                             ; is CF = 0, the answer)
 
 ; -----------------------------------------------------------------------------
 ; ld_expand - turn the compressed file step 6 read HIGH into the image
@@ -351,14 +396,14 @@ ld_hdr_size:
     mov ax, [es:si+LD_H_ENTRY]  ; ...and the entry is INSIDE the image, which
     cmp ax, LD_HDR_SIZE         ; the re-home arm did not ask before this body
     jb .bad                     ; was shared and now does
-    cmp ax, [ld_img]
-    jae .bad
-    mov [ld_ent], ax
-    clc
-    ret
+    cmp [ld_img], ax            ; ...asked image-first, so the `jbe` not
+    jbe .bad                    ; taken leaves CF = 0 and is the answer: the
+    mov [ld_ent], ax            ; `clc` it needed the other way round is gone
+    ret                         ; (kernel size pass 12)
 .bad:                           ; ...and BOTH REFUSALS ARE ld_check_hdr's TOO:
     mov al, LD_EBAD             ; its own ladder above jumps here rather than
-    stc                         ; carrying a second pair four bytes long
+.stc:                           ; carrying a second pair four bytes long - and
+    stc                         ; so are ld_hdr_ok's, the body just above
     ret
 .toobig:
     mov al, LD_EBIG
@@ -369,7 +414,7 @@ ld_hdr_size:
 ; ld_check_hdr - validate a .o88 v3 header (module-internal)
 ; in:  ES:SI -> 32 readable header bytes; [ld_fsz] = the file's byte count
 ; out: CF = 0 and [ld_img]/[ld_bss]/[ld_ent] filled, or CF = 1 and
-;      AL = LD_EBAD / LD_EBIG
+;      AL = LD_EBAD / LD_EBIG / LD_EVER
 ; clobbers: AX, DX
 ;
 ; ES:SI AND NOT DS:SI, which is what drv_check and mod_check have always
@@ -391,9 +436,20 @@ ld_hdr_size:
 ld_check_hdr:
     mov al, PKG_FMT             ; magic, version, link and the dispatcher, in
     call ld_hdr_ok              ; the body the driver loader shares. v1/v2
-    jc ld_hdr_ver               ; files - and any built for another API
+    jc .out                     ; files - and any built for another API
                                 ; table (SPEC.md 20.2.0) - fail on the version,
-                                ; never a far call into cells that moved
+                                ; never a far call into cells that moved: AL
+                                ; is LD_EVER or LD_EBAD as ld_hdr_ok leaves it
+    ; A PARTED PACKAGE WITH A PACKED IMAGE (SPEC.md 20.13.8): ld_hdr_ok has
+    ; let a non-zero link word through only beside flags bits 2 AND 3, and it
+    ; is the packed image's length - the one figure everything below reads
+    ; [ld_fsz] for, the size ladder, step 6's R and read and step 6a's stream.
+    ; So it simply BECOMES [ld_fsz] - ld_hdr_ok stores it, the link word
+    ; being in AX there already (kernel size pass 13, -7) - and every test
+    ; after this is the plain compressed package's, unchanged: a length at or
+    ; past the image still takes the ladder's refusal, and zero (bits 2 and
+    ; 3, no length) does too, the file being longer than the image with the
+    ; compression bits set.
     mov ax, [es:si+LD_H_IMG]
     cmp ax, LD_HDR_SIZE
     jb ld_hdr_size.bad                                 ; image smaller than the header
@@ -418,18 +474,23 @@ ld_check_hdr:
     ; ONE BIT IS THE WHOLE OF WHAT THE KERNEL LEARNS about a package's parts.
     mov dx, [ld_fsz+2]
     or dx, dx
+    mov dl, [es:si+LD_H_FLAGS]              ; DL = the flags, for the four
+                                            ; tests below: `mov` writes no
+                                            ; flag, so the `or` decides the
+                                            ; jump, and the high word is spent
+                                            ; (kernel size pass 12)
     jz .lowword                             ; under 64KB: compare exactly
-    test byte [es:si+LD_H_FLAGS], 4
+    test dl, 4
     jz ld_hdr_size.toobig
     jmp short .notover
 .lowword:
     cmp ax, [ld_fsz]
     je .notover                             ; exact
     ja .over                                ; the image runs PAST the file
-    test byte [es:si+LD_H_FLAGS], 4         ; short of it: parts, or truncated
+    test dl, 4                              ; short of it: parts, or truncated
     jz ld_hdr_size.bad
 .notover:                                   ; ...AND THE COMPRESSION BITS ARE
-    test byte [es:si+LD_H_FLAGS], 0x18      ; A LIE ON EVERY ARM BUT .over
+    test dl, 0x18                           ; A LIE ON EVERY ARM BUT .over
     jnz ld_hdr_size.bad                                ; (SPEC.md 20.13.2). Step 6 reads a
     jmp short .imgok                        ; compressed file at R =
                                             ; roundup512(image - file), a plain
@@ -444,7 +505,7 @@ ld_check_hdr:
                                             ; it as LZB, which is non-zero and
                                             ; takes that same path
 .over:                                      ; ...which is COMPRESSION (SPEC.md
-    test byte [es:si+LD_H_FLAGS], 8         ; 20.13.2): `image` keeps meaning
+    test dl, 8                              ; 20.13.2): `image` keeps meaning
     jz ld_hdr_size.bad                                 ; the UNPACKED bytes, so the file
                                             ; is legitimately shorter. Without
                                             ; the bit it is a truncated file
@@ -470,22 +531,6 @@ ld_check_hdr:
                                             ; which is a refusal by the right
                                             ; route
 .out:
-    ret
-
-; --- ld_hdr_ver - ld_hdr_ok refused: is the FORMAT the reason? -------------
-; An os8088 package - the 'O8' magic - whose format byte is not ours is the
-; refusal a normal user actually meets: a program copied off an older disk, or
-; fetched for a newer system. It answers LD_EVER, which reads `Wrong os8088
-; version` on every build (SPEC.md 20.2.0), because the user can act on it.
-; Anything else ld_hdr_ok refuses stays LD_EBAD. AL is still PKG_FMT here -
-; ld_hdr_ok only reads it.
-ld_hdr_ver:
-    cmp word [es:si+LD_H_MAGIC], 0x384F
-    jne ld_hdr_size.bad
-    cmp [es:si+LD_H_VER], al
-    je ld_hdr_size.bad              ; the format is ours: something else is wrong
-    mov al, LD_EVER
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -985,6 +1030,9 @@ ld_run_body_x:
     shr ax, cl                  ; the prefix in PARAGRAPHS...
     mov cx, es
     add ax, cx                  ; ...is where the body's segment starts
+%ifdef KERN_MEGA
+    call KERNEL_SEG:mega_oddsegf ; off the identity grid: a selector for it
+%endif
     pop cx
     sub cx, bx                  ; the body's length
     sub dx, bx                  ; ...and what it must produce
@@ -1027,6 +1075,54 @@ ld_run_body_x:
                                 ; frees the region itself when the entry proc
                                 ; aborts, and is near - both are .cold
 
+%ifdef KERN_MEGA
+; -----------------------------------------------------------------------------
+; ld_hi - a package whose header says OS88_HIGH, in protected mode: its region
+;         moves ABOVE 1MB before its bss is zeroed or any of it runs
+;         (KERN-MEGA-PLAN 13.3 step 4). It arrived in an ordinary conventional
+;         claim - off the disk, expanded, or copied by OSAPI_PKG_START - and
+;         mega_pkghif copies the whole region into a code/data pair; the
+;         conventional claim goes back and [ld_base] becomes the pair's DATA
+;         selector, which step 9 publishes as I_SPTR. No room above 1MB, no
+;         LDT entry: it simply stays low, which is not a refusal
+; in:  ES = [ld_base] = the region. out: ES = [ld_base], moved or not
+; clobbers: AX, BX, CX, DX, DI, flags
+;
+; ld_hicx is the same with CX = the BYTES to move, for step 8a's re-homed
+; program (SPEC.md 20.12.10.9): its region is the carve's KEEP, which is not
+; [ld_need] - that word is the program's image + bss by then, and the keep is
+; the program plus every part it reads (Word's and Scribe's part 1 CODE).
+; ld_hisi is a keep OVER 64KB (KERN-MEGA-PLAN 14.48, PIXELSTEIN 3D's): CX =
+; its PARAGRAPHS and SI = the bytes the pair covers, the program's own image
+; + bss - the parts past them are reached through OSAPI_MEM_SUBSEG's
+; selectors. Clobbers SI as well
+; -----------------------------------------------------------------------------
+ld_hi:
+    mov cx, [ld_need]
+ld_hicx:
+    xor si, si                  ; SI = 0: CX is the bytes, one segment
+ld_hisi:
+    cmp byte [ss:mega_pm], 0
+    je .out
+    test byte [es:LD_H_CLASS], 0x80     ; OS88_HIGH
+    jz .out
+    mov di, [ld_rec]            ; ld_slot answers off DI, the RECORD - which
+    call ld_slot                ; it is not at ld_start's head; step 7 sets DI
+                                ; itself. BX = the slot
+    mov dl, bl
+    mov ax, [ld_base]
+    call MEGA_SEL_CODE:mega_pkghif ; AX = the pair's data selector
+    jc .out
+    push ax
+    mov dx, [ld_base]           ; the conventional claim goes back
+    call mem_free_x             ; (BX = the slot, its owner)
+    pop ax
+    mov [ld_base], ax
+    mov es, ax
+.out:
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; ld_alloc - steps 4 and 5: size the region and reserve it, together with the
 ;            instance record that OWNS it (SPEC.md 21, 21.5)
@@ -1042,16 +1138,18 @@ ld_alloc:
     mov ax, [ld_img]            ; need = roundup512(img + bss)
     add ax, [ld_bss]            ; <= APP_MAX_SIZE, and NOW that is enforced:
     add ax, 511                 ; ld_check_hdr's `jc` above is what makes both
-                                ; of these adds overflow-free, so `<= 0xF000 +
-                                ; 511: no 16-bit overflow` is a fact rather
-                                ; than the assumption it was
+                                ; of these adds overflow-free, so `<= 0xFE00 +
+                                ; 511 = 0xFFFF: no 16-bit overflow` is a fact
+                                ; rather than the assumption it was - and it
+                                ; is exactly WHY APP_MAX_SIZE is 0xFE00
+                                ; (SPEC.md 20.1.1)
     and ax, 0FE00h              ; ...and down to the 512 boundary. `>>9 <<9`
                                 ; through CL is the same operation in six
                                 ; bytes instead of three, and clobbers CL
                                 ;
                                 ; NO SECOND BOUND TEST, and no `.big2`: with
                                 ; the fence repaired this value is at most
-                                ; 0xF000 by construction, so `cmp ax,
+                                ; 0xFE00 by construction, so `cmp ax,
                                 ; APP_MAX_SIZE / ja .big2` was code that
                                 ; could not run. It was also the one exit
                                 ; here reached by a `ja` rather than a `jc`,
@@ -1070,9 +1168,10 @@ ld_alloc:
 %ifdef KERN_BIG
     test byte [ld_cfmt], LD_F_DESK >> 3
     jz .rec                     ; OS88_F_DESK (SPEC.md 11.103.9, 30): the LAST
-    call desk_need              ; (DESK.DRV first, ABOVE the region claimed
+    COLDCALL desk_need          ; (DESK.DRV first, ABOVE the region claimed
                                 ; below - SPEC.md 11.103.10; CF is not ours:
-                                ; a refusal is the entry proc's QUERY's)
+                                ; a refusal is the entry proc's QUERY's;
+                                ; FAR, being QUERY's own body)
     mov di, inst_tab + INST_MAX * I_RECSZ ; free record, scanning down, so
 .dscan:                         ; the widget's empty tile position is at the
     sub di, I_RECSZ             ; far end of the strip. None free: inst_alloc
@@ -1095,8 +1194,14 @@ ld_alloc:
                                 ; mem_claim's own granularity then guarantees
     call ld_slot                ; BX = the owner word: this record's slot
     call mem_claim_hi_x ; from the TOP down, away from the data claims
-    jc .nomem                   ; growing up from the bottom (SPEC.md 50.3)
+    jc .nodrv                   ; growing up from the bottom (SPEC.md 50.3)
     mov [ld_base], dx
+%ifdef KERN_BIG
+    test byte [ld_cfmt], LD_F_DESK >> 3
+    jz .nodesk                  ; a widget ON ITS WAY: desk_drop_x counts it
+    or byte [di+I_FLAGS], IF_DESK   ; from here, unpublished, so a widget's
+.nodesk:                        ; worker dying mid-launch keeps the image the
+%endif                          ; entry proc is about to call (11.103.10)
 %ifndef KERN_SMALL
     mov word [ld_rehome], 0     ; NO RE-HOME UNTIL ONE IS ASKED FOR, and it is
                                 ; cleared HERE rather than by the arm that
@@ -1126,12 +1231,26 @@ ld_alloc:
                                 ; path. Too large a value widens a security
                                 ; fence, silently. Loosen either contract and
                                 ; this line has to come back.
+    sbb ax, 0                   ; ...and SATURATED: a region over 63KB is a
+                                ; 64KB claim, and 64 << 10 is 0 in a word,
+                                ; which is what I_SIZE says for a BUILT-IN
+                                ; (inst_icon_ptr, inst_sweep_seg). The bit
+                                ; the shift pushed out is in CF, so a 64KB
+                                ; region reads 0xFFFF and every smaller one
+                                ; is untouched (SPEC.md 20.1.1). Both fences
+                                ; test `< I_SIZE`, so this refuses offset
+                                ; 0xFFFF alone, which image + bss <= 0xFE00
+                                ; already does
     mov [ld_need], ax
     clc                         ; `shl ax, cl` above WRITES CF, and this
     ret                         ; routine's answer is CF - it was the caller's
                                 ; fall-through before the split, where the
                                 ; flag went nowhere
-.nomem:
+.nodrv:
+%ifdef KERN_BIG
+    COLDCALL desk_drop_x        ; the region refused AFTER desk_need: DI is
+%endif                          ; the unpublished record, IF_DESK clear, so
+.nomem:                         ; DESK.DRV goes unless a live widget holds it
     mov al, LD_ENOMEM
     stc
     ret
@@ -1151,6 +1270,9 @@ ld_alloc:
 ; pipeline.
 ; -----------------------------------------------------------------------------
 ld_start:
+%ifdef KERN_MEGA
+    call ld_hi                  ; OS88_HIGH: the region above 1MB, first
+%endif
     ; --- 7. zero the package bss ------------------------------------------------
     mov di, [ld_img]            ; ...and ES is STILL the region here too
     mov cx, [ld_bss]
@@ -1199,6 +1321,13 @@ ld_start:
     push word [snd_inst]        ; the outer dispatch's stamp
     mov di, [ld_rec]
     call KERNEL_SEG:cw_snd_disp_set     ; DI = record: this instance is asking
+%ifdef KERN_MEGA
+    call mega_pkgok             ; kern_big's DOS.O88 refuses here, in a toast
+    jnc .pkgok                  ; raised under this launch's stamp, so step
+    pop word [snd_inst]         ; 10 keeps it (kernel/megados.inc)
+    jmp .abort
+.pkgok:
+%endif
 
     mov bp, [ld_ent]            ; ...and NOTHING assembles a far pointer here:
                                 ; [ld_fp] is PKG_DISP for the life of the
@@ -1231,7 +1360,16 @@ ld_start:
                                 ; loaded, and [ld_base] names that one for
                                 ; mem_frameless
     mov ds, [ld_base]           ; DS = the package's own segment, read through
+%ifdef KERN_MEGA
+    call COLD_SEG:mega_pcin_n   ; kern_mega's CATCH: a fault in the entry
+                                ; proc comes back here as a refusal, CF = 1
+                                ; (KERN-MEGA-PLAN 14.42, mega_fkill)
+    MEGA_PCALL [es:ld_fp], [es:ld_base] ; the CODE alias (kernel/mega.inc)
+..@mega_pcret_l:
+    call COLD_SEG:mega_pcout_n  ; (needs no DS: the frame names the task)
+%else
     call far [es:ld_fp]         ; DS while DS still names the kernel and
+%endif
     pop ds                      ; loaded in one instruction - the ordering
                                 ; this step's contract wants. The far pointer
                                 ; is then read through ES, the only register
@@ -1293,10 +1431,13 @@ ld_start:
     pop es
 %ifdef KERN_BIG
     test byte [bx+W_FLAGS+1], WF_DESK >> 8
-    jz .ndesk                   ; the window it RETURNS is a widget: the
-    or byte [di+I_FLAGS], IF_DESK   ; instance is tile-less (SPEC.md 11.103.9).
-.ndesk:                         ; Here and not in MAKE, so a Sticky App returning an
-%endif                          ; ordinary window keeps the tile it needs
+    jnz .isdesk                 ; the window it RETURNS is a widget: the
+    COLDCALL desk_drop_x        ; instance is tile-less (SPEC.md 11.103.9).
+    jmp short .ndesk            ; Here and not in MAKE, so a Sticky App
+.isdesk:                        ; returning an ordinary window keeps the tile
+    or byte [di+I_FLAGS], IF_DESK   ; it needs - and an ordinary window is not
+.ndesk:                         ; a widget, so ld_alloc's early mark comes off
+%endif                          ; and DESK.DRV goes if nobody is one (11.103.10)
     mov bp, inst_bind_win
     call ct_cw_mem_disp         ; DI = record, BX = window (from the entry)
     mov byte [di+I_STATE], 1    ; publish - the LAST record write
@@ -1440,21 +1581,25 @@ ld_start:
     ; both the bound and where the carve's tail is cut - so a keep that would
     ; cut into the program's own image + bss is refused here, by the same
     ; compare, rather than trusted
-    mov ax, [ld_rehsz]
-    mov cx, 0xFFFF              ; CX = the keep: the carve WHOLE...
-    or ax, ax
-    jnz .rhbytes
-    mov ax, dx                  ; ...or the loader's, against the program in
-    add ax, 15                  ; PARAGRAPHS - image + bss is under
-    mov cl, 4                   ; APP_MAX_SIZE by ld_hdr_size, so the
-    shr ax, cl                  ; rounding cannot carry
+    ;
+    ; Both are asked of AX = image + bss - 1, which ld_hdr_size's entry bound
+    ; keeps above 0: `dx > bytes` is `dx - 1 >= bytes`, and the keep's
+    ; `ceil(dx / 16) > paragraphs` is `(dx - 1) >> 4 >= paragraphs`, so one
+    ; `jae` serves both and the round-up add is gone (kernel size pass 12)
+    mov cx, [ld_rehsz]
+    mov ax, dx
+    dec ax
+    jcxz .rhkeep                ; 0 = the KEEP form
+    cmp ax, cx                  ; ...or BYTES, and then CX = the keep: the
+    mov cx, 0xFFFF              ; carve WHOLE (`mov` writes no flag)
+    jmp short .rhbnd
+.rhkeep:
+    mov cl, 4                   ; ...or the loader's, against the program in
+    shr ax, cl                  ; PARAGRAPHS
     mov cx, [ld_rehkp]
     cmp ax, cx
-    jmp short .rhbnd
-.rhbytes:
-    cmp dx, ax
 .rhbnd:
-    ja .abort                   ; CX survives to mem_reown_x: ld_slot banks it
+    jae .abort                  ; CX survives to mem_reown_x: ld_slot banks it
     mov [ld_need], dx           ; **I_SIZE, AND IT IS NOT OPTIONAL.** Step 9
                                 ; publishes this word and ld_alloc left the
                                 ; LOADER's region size in it - so without this
@@ -1541,7 +1686,19 @@ ld_start:
                                 ; re-owned carve is on the same owner word now
                                 ; and must not go with it. AX is still
                                 ; [ld_rehome]: both calls preserve it
+%ifdef KERN_MEGA
+    test dl, 4                  ; A LOADER PLACED ABOVE 1MB (ld_hi) is a pool
+    jz .rhlo                    ; block and a code/data pair, not a mem_tab
+    push ax                     ; record: mem_free_x would find nothing, the
+    mov ax, dx                  ; carry was never read, and the block and two
+    mov dl, bl                  ; LDT entries leaked on every launch until
+    call MEGA_SEL_CODE:mega_pkghifree  ; ld_hi had no LDT left (KERN-MEGA-PLAN
+    pop ax                      ; 14.14). ld_unreserve's own arm, here
+    jmp short .rhfreed
+.rhlo:
+%endif
     call mem_free_x
+.rhfreed:
     mov word [ld_rehome], 0     ; ONCE, AND THIS IS THE INSTRUCTION THAT SAYS
                                 ; SO. The cell's own "already asked" test only
                                 ; stops a second CALL; without this the test
@@ -1553,6 +1710,33 @@ ld_start:
                                 ; aborts. tests/rehome.py caught it
     mov [ld_base], ax           ; ...AND [ld_fp+2] IS THIS WORD, so step 8's
                                 ; `call far [es:ld_fp]` now reaches the part
+%ifdef KERN_MEGA
+    ; --- 8b. RE-HOME HIGH (SPEC.md 20.12.10.9, KERN-MEGA-PLAN 14.38/14.44):
+    ; a program whose OWN header says OS88_HIGH leaves conventional memory
+    ; here, exactly as an OS88_HIGH package does at step 7 - its region is
+    ; the carve's KEEP, so only the KEEP form (AX = 0 at the cell) qualifies,
+    ; and only a keep of one segment: a pair's limit is 64KB, and what is
+    ; past it would need a selector of its own (14.38.4 S4). Anything else,
+    ; or no room above 1MB, and it runs low as before - not a refusal.
+    ; ld_hicx tests protected mode and the bit; [ld_base] comes back as the
+    ; pair's DATA selector, so .call8's far call and step 9's I_SPTR follow
+    cmp word [ld_rehsz], 0      ; the KEEP form only...
+    jne .rhnohi
+    mov cx, [ld_rehkp]          ; CX = the keep, in paragraphs
+    mov es, ax                  ; ES = the program, whose class byte is read
+    cmp cx, 0x0FFF
+    ja .rhbig                   ; ...over one segment: KERN-MEGA-PLAN 14.48
+    shl cx, 1                   ; paragraphs -> bytes
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    call ld_hicx
+    jmp short .rhnohi
+.rhbig:                         ; ONE pool block of the whole keep, the pair
+    mov si, [ld_need]           ; over the program's own image + bss alone
+    call ld_hisi                ; (the parts past it are SUBSEG's)
+.rhnohi:
+%endif
     push ds
     pop es                      ; ES = KERNEL_SEG for that far call: the entry
     jmp .call8                  ; proc's contract does not promise it back
@@ -1802,7 +1986,7 @@ ld_pkg_byname:
                                 ; caller stands, and the caller is the one who
                                 ; told us the document's own dir and volume
                                 ; anyway (both are banked above)
-    call COLD_SEG:assoc_run_x   ; **CALLED, NOT POSTED**: this slot already
+    COLDCALL assoc_run_x        ; **CALLED, NOT POSTED**: this slot already
                                 ; requires the UI task with the gfx lock FREE
                                 ; (21.5), which is the context assoc_run
                                 ; wants - so there is nothing to defer to.
@@ -1811,6 +1995,13 @@ ld_pkg_byname:
     xor al, al                  ; it reported its own verdict to the user
     ret                         ; (ld_say_status) - 21.5.3's thinner answer
 .nodoc:
+%ifdef OS88_SHORTCUTS
+    call lnk_is                 ; ...but a LINK is opened by nothing, being
+    jne .ebad                   ; followed (SPEC.md 26.10.3): on to
+    mov al, ASSOC_FIND          ; assoc_run, which knows - with the search
+    jmp short .have             ; for a program, should it not be ours. The
+.ebad:                          ; equal compare cleared CF for .have's `jc`
+%endif
     mov al, LD_EBAD             ; the one thing the caller could not know:
     ret                         ; nothing on this machine opens it
 %else
@@ -1983,6 +2174,10 @@ osapi_pkg_rehome_x:
                                 ; arm having only one [ld_base] to free by
     or dx, dx                   ; a segment of 0 is the heap's own "no claim"
     jz .no                      ; and can never be a part's base
+%ifdef KERN_MEGA
+    test dl, 4                  ; kern_mega: a pool selector (an OS88_HIGHMEM
+    jnz .no                     ; claim) has no code half and no heap record,
+%endif                          ; and the re-home runs code at its base
     mov [ld_rehome], dx
     mov [ld_rehsz], ax          ; 0 = the KEEP form, and then...
     mov [ld_rehkp], cx          ; ...this is its figure (SPEC.md 20.12.10.5).

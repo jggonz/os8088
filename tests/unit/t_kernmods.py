@@ -65,7 +65,11 @@ import kernsize                                           # noqa: E402
 # prints them, exactly as `--modules -DKERN_SMALL` prints kern_small's.
 KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
              "vmmouse.inc",
-             "kbddiag.inc")     # KBDDIAG=1 (SPEC.md 9.8.1)
+             "kbddiag.inc",     # KBDDIAG=1 (SPEC.md 9.8.1)
+             "mega.inc")        # vmmouse.inc's shape: all of it inside
+                                # %ifdef KERN_MEGA, so its bytes are on the
+                                # mega variant's row (`--build build/megak
+                                # --modules`, KERN-MEGA-PLAN 14.45)
 
 # ...and a second reason for a zero row, which is NOT a knob: a file whose
 # whole contribution is an on-demand module IMAGE (SPEC.md 2.8).  Those
@@ -76,7 +80,9 @@ KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
 # row) and so measures somewhere; compress.inc is the first that is PURELY
 # the image, and its resident half lives on mod.inc's and files.inc's rows.
 # A file joining this list is saying "nothing of this is in KERNEL.SYS".
-IMAGE_ONLY = ("compress.inc", "dockmod.inc")
+# ascw.inc (SPEC.md 54.7.6.4) is the third: FORMAT.DRV's ASSOC.DAT flush,
+# whose resident half is the one `dw ascw_flush_x` on diskw.inc's row.
+IMAGE_ONLY = ("compress.inc", "dockmod.inc", "ascw.inc")
 
 # ...and a THIRD reason for a zero row, which is neither a knob nor an image:
 # a file whose whole contribution is a MACRO.  `mouproto.inc` (SPEC.md 9.5) is

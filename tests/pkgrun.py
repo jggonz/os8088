@@ -198,7 +198,7 @@ def seg_of(ui, want, settled=True):
 def mseg_parts():
     """MSEG.O88's own part count, out of its part table."""
     blob = open(os88build.at("build/mseg.o88"), "rb").read()
-    return len(os88parts.rows(blob[:blob[8] | (blob[9] << 8)]))
+    return len(os88parts.image_rows(blob))
 
 
 def mseg_title(ui):

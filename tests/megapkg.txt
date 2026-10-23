@@ -1,0 +1,82 @@
+# tests/megapkg.txt - the kern_mega code a SHIPPED build is allowed to carry
+# (docs/plans/KERN-MEGA-PLAN.md 14.66, SPEC.md 20.18)
+#
+# The owner's rule: "mega specific work that more than trivially increases
+# the disk size is gated to mega builds only." kern_mega-only code goes under
+# `%ifdef PKG_MEGA` (apps/os88mega.inc) and `make mega` builds that arm onto
+# kern_mega's own disks; the shipped builds - every apps disk, every
+# geometry - carry none of it. tests/unit/t_megapkg.py (fast tier) is the
+# gate: it walks every shipped build's LIVE source (the shipped recipe's
+# defines, PKG_MEGA and KERN_MEGA unset, through every %include) and counts
+# the code lines naming a kern_mega marker - CPU_F_PM, OSAPI_MEM_CODESEL,
+# OSAPI_MEM_SUBSEG, OSAPI_XMEM_RUN, OS88_CODESEL - per FILE, the most any one
+# shipped build makes live.
+#
+# ONE LINE PER FILE: <path> <sites>  # <reason>
+#
+# A file not listed may have no site. A listed one must have EXACTLY its
+# count: the registry turns one way, so gating a site away lowers its line in
+# the same diff. A reason says what the site is for and why it is not the
+# arm's: the FAIL-SAFE (what keeps a shipped build correct when somebody puts
+# the ordinary apps disk in a kern_mega machine), or TRIVIAL (a handful of
+# bytes that make the same code right on every kernel - a far call through a
+# code alias that OSAPI_MEM_CODESEL answers as DX itself in real mode).
+# "It was easier" is not one: bytes on every 8088's disk are the cost.
+
+# --- the fail-safes ---------------------------------------------------------
+
+apps/os88spk.inc 1              # THE SHIPPED BUILD REFUSING THE TIER:
+    # os88spk_go's `test ah, CPU_F_PM / jnz .pm`, where .pm is a bare
+    # `stc` in a build without PKG_MEGA. The protected-mode ISR copies are
+    # the arm's (~900 bytes of each of Audio, Tracker, MIDIRack and the Video
+    # Player); without them the real-mode ISRs would store through CS a
+    # sample at a time, a fault each, so the PCM tier refuses and the package
+    # plays another way. 15 bytes of image (measured on Audio)
+drivers/hdd/hdxms.inc 1         # HDD.DRV's fill straight into XMS refused
+    # under protected mode (hd_xa_arm): its loaded-base trick loads DS =
+    # FFFFh, which is a #GP there (KERN-MEGA-PLAN 14.16). A correctness
+    # refusal every build needs - HDD.DRV is one driver on every kernel's
+    # disk - and ~10 bytes
+drivers/ramdisk/rdstore.inc 1   # RAMDISK.DRV's paragraph fold (rd_fold)
+    # skipped for a pool selector ONLY under CPU_F_PM: on a real-mode kernel
+    # a segment of that VALUE is an ordinary paragraph, and an unfolded one
+    # wraps a transfer over 64KB to the START of the caller's segment with
+    # CF=0. A correctness test every build needs, ~10 bytes with its bank
+
+# --- trivial: one far call through a code alias -----------------------------
+
+apps/1942/video.inc 2           # the compiled sprites' far-call selector:
+    # OSAPI_MEM_CODESEL answers DX itself on a real-mode kernel, so these are
+    # two cell calls that are right on every kernel, and on kern_mega they
+    # are the difference between a far call and a fault per sprite
+apps/excitebike/sprite.inc 1    # the compiled poses' far-call selector,
+    # 1942's shape: one OSAPI_MEM_CODESEL at load, DX itself in real mode
+apps/excitebike/video.inc 1     # xb_pmset: the sample clock's jump re-aimed
+    # at its .pm arm under CPU_F_PM, once a bracket; a real-mode kernel
+    # returns at the test. ~20 bytes
+apps/os88stik.inc 1             # the Sticky Apps' callback far pointer: its
+    # segment through OSAPI_MEM_CODESEL (KERN-MEGA-PLAN 14.46.3), DX itself
+    # in real mode - the widget library on every kernel's system disk
+apps/os88partsbody.inc 1        # op_cseg (OP_WANT_CSEG, PiXEL alone): a
+    # code part's far-call selector, OS88_CODESEL a no-op in real mode
+apps/cc/crt0.asm 1              # the C runtime's overlay vectors through
+    # the overlay claim's code alias (cc_ovbind), OS88_CODESEL - a no-op in
+    # real mode - in every C package with an overlay
+apps/loom/lmpv.inc 1            # LOOM's preview module far-called through
+    # its code alias, OS88_CODESEL; LOOM rides its own disk, no apps disk
+apps/pixelstein/pxgame.asm 2    # px_hseg: OSAPI_MEM_SUBSEG and its code
+    # twin, with the paragraph sum as the CF=1 fallback every real-mode
+    # kernel takes - PIXELSTEIN 3D's re-homed program addressing its own parts
+    # (KERN-MEGA-PLAN 14.48). ~40 bytes; the program is on the games disks
+apps/skies/skies.asm 1          # cs_xpand's OSAPI_MEM_SUBSEG, ~25 bytes,
+    # with the granule-aligned sum as the CF=1 path every real-mode kernel
+    # takes (KERN-MEGA-PLAN 14.44). Gating it would take OS88_HIGH off the
+    # shipped header with it, for 25 bytes
+apps/taskmgr/taskmgr.asm 1      # the Task Manager telling the truth about
+    # kern_mega's memory: under CPU_F_PM extended memory is RAM and a region
+    # above 1MB reads HIGH (KERN-MEGA-PLAN 13.6) - four tests of the byte
+    # this one sets, and behind them ~180 bytes of display code only
+    # kern_mega in protected mode reaches (tm_mpair2/tm_mfig2, tm_xnames,
+    # tm_s_rampm, the [tm_pm] arms of the RAM line and tm_sqox; measured off
+    # the 9.4KB package's listing at PR #299's review). Without the tests the
+    # shipped copy on the system disk would print a selector as a segment

@@ -33,13 +33,13 @@
 ;
 ; THE WHOLE LIBRARY IS RESIDENT, and that is a decision rather than an
 ; oversight. ty_putn, ty_flush and ty_advof ARE the redraw path, so they could
-; never have gone to CWORD.OVL (SPEC.md 73.14 splits by frequency); ty_scan and
+; never have gone to the overlay (SPEC.md 73.14 splits by frequency); ty_scan and
 ; ty_open could have, and moving them would have meant a `%ifdef` through
 ; apps/os88type.inc - a file apps/word and tests/facetest also include - to
 ; sort its own labels into two sections. The room came from this program's own
 ; once-per-command code instead (SPEC.md 73.12.2), which is code this package
-; owns, and the side effect is worth having: THE FONT LIST WORKS ON A DISK WITH
-; NO CWORD.OVL ON IT.
+; owns. (The side effect it used to buy - a Font list that worked on a disk
+; with no CWORD.OVL on it - is moot now the overlay is a part, SPEC.md 73.14.2.)
 ; =============================================================================
 
 section .text

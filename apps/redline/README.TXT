@@ -71,7 +71,10 @@ and the 8-bit read, and the chipset's data book turns the two into a wait
 count - so it is right after a reboot, or after RLAPPLY, too. The buttons:
 
   Tune          sets the Target.
-  Save setting  writes SYSTEM\APPDATA\REDLINE.CFG on the BOOT disk.
+  Apply on boot writes SYSTEM\APPDATA\REDLINE.CFG on the BOOT disk, and
+              \AUTOSTRT\RLAPPLY.LNK beside it, so RLAPPLY puts the
+              setting back at every boot. Hold Shift while the machine
+              boots to skip it; delete the link to stop it for good.
   Save report   writes the page to CHIPSET1.TXT, CHIPSET2.TXT...
   Quit          closes REDLINE.
 
@@ -86,7 +89,7 @@ Bus clock x2. If you have one, Tune and Save report: that report is what
 makes it supported. What Fastest tested cannot read back - video
 writes, the keyboard controller, the clock chip, serial ports, an 8-bit
 disk card - is why Mfg spec is there: if anything misbehaves, Tune to it,
-or reset, and keep backups before you Save a tuned setting. A chipset the
+or reset, and keep backups before you Apply a tuned setting on boot. A chipset the
 probes did not find asks once before the first write, and one nobody has
 run Tune on yet warns once before the first sweep: the worst a sweep
 itself does is hang the machine until a reset. Save report

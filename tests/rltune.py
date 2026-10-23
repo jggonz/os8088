@@ -7,7 +7,7 @@ port 63h is the 8255's control register, so a write there would reconfigure
 the keyboard's PPI. MartyPC is an 8088. QEMU's 386 is an AT, where 63h, 72h
 and 73h decode to nothing that matters, so the FE3600 row's writes land
 harmlessly and the whole flow - the Tune tab, pick, Target, confirm, Tune,
-Save setting, RLAPPLY - can run on the real package. What it cannot show is
+Apply on boot, RLAPPLY - can run on the real package. What it cannot show is
 a TIMING: no read ever goes wrong in QEMU and no R4 makes anything faster, so
 Tune keeps the book's value (or, on a jitter, a step below it). The sweep's
 verdicts - wrong reads, no gain, nothing to time - are tests/csprobe.py's,
@@ -20,9 +20,11 @@ Asserted:
   2. Target Fastest tested and Tune SETS what it kept - method 3, no alert
      (the question it used to ask is gone, 103.6.3) - and the state field
      names that value: `Mfg spec: 10 waits`, or `Tuned: n waits` below it.
-  3. Save setting (K) writes SYSTEM\\APPDATA\\REDLINE.CFG on the BOOT disk,
+  3. Apply on boot (K) writes SYSTEM\\APPDATA\\REDLINE.CFG on the BOOT disk,
      and its bytes are 103.6.4's layout with this machine's fingerprint - the
-     CRC of the BIOS read out of the guest, its date and its model byte.
+     CRC of the BIOS read out of the guest, its date and its model byte - and
+     \\AUTOSTRT\\RLAPPLY.LNK beside it, the link that starts RLAPPLY at every
+     boot (SPEC.md 26.10.6), byte for byte tools/os88lnk.py's.
   4. Quit (Q) on the Tune tab closes REDLINE.
   5. RLAPPLY.O88 (103.6.5), launched from A:\SYSTEM before the Save, toasts
      `No REDLINE.CFG to apply` and leaves no window; after it, `Chipset
@@ -248,7 +250,7 @@ def main():
         if stat(p) != want:
             fails.append("the state field read %r after Tune, want %r" % (stat(p), want))
         say("2. Tune kept R4 %d and set it, method 3, no question, %r" % (fast, want))
-        # 3. Save setting, then the file on the BOOT image
+        # 3. Apply on boot, then the files on the BOOT image
         key(m, "k")
         until("Save", lambda: p.b("cs_saved") == b"\1", 60)
         settle(m)
@@ -270,6 +272,22 @@ def main():
             fails.append("REDLINE.CFG on the boot disk is %r, want %r" % (got, want))
         else:
             say("3. Save: %s REDLINE.CFG, fingerprint %04X" % (where, crc16(bios)))
+        # ...AND APPLY ON BOOT's link (SPEC.md 26.10.6): \AUTOSTRT\RLAPPLY.LNK
+        # on the same disk, naming SYSTEM\RLAPPLY.O88 on its own volume
+        import os88lnk
+        lnk = None
+        for folder, name, attr, clus, length in v.walk():
+            if name == b"RLAPPLY LNK":
+                chain, _ = v.chain(clus)
+                lnk = b"".join(v.blob[v.cluster_lba(c) * 512:
+                                      (v.cluster_lba(c) + v.spc) * 512]
+                               for c in chain)[:length]
+                lwhere = folder
+        if lnk != os88lnk.make("SYSTEM\\RLAPPLY.O88"):
+            fails.append("Apply on boot left %r as RLAPPLY.LNK, want the link "
+                         "to SYSTEM\\RLAPPLY.O88" % (lnk,))
+        else:
+            say("3b. Apply on boot: %s RLAPPLY.LNK -> SYSTEM\\RLAPPLY.O88" % (lwhere,))
         av = Vol(open(APPIMG, "rb").read(), APPIMG)
         if any(n == b"REDLINE CFG" for _, n, _, _, _ in av.walk()):
             fails.append("REDLINE.CFG landed on B: as well (OD_BOOTVOL)")
@@ -291,6 +309,18 @@ def main():
         state.clear()
         rlapply(m, mo, "Chipset setting applied", state)
         say("5b. RLAPPLY with REDLINE.CFG saved: Chipset setting applied")
+        # 6. ...AND THE REBOOT DOES IT WITH NOBODY TOUCHING ANYTHING (SPEC.md
+        # 26.10.5): the link 3b checked is in the boot disk's \AUTOSTRT, so
+        # the boot opens it and RLAPPLY's toast is on the bar. The bar is seen
+        # EMPTY first - the kernel zeroes .bss at boot - so the toast 5b left
+        # cannot pass for this one
+        m.hmp("system_reset")
+        until("the reboot to zero .bss, the toast 5b left with it",
+              lambda: toast(m) == "", 60)
+        until("the reboot's autostart toast", lambda: toast(m) ==
+              "Chipset setting applied", 90)
+        say("6. reboot: \\AUTOSTRT\\RLAPPLY.LNK ran RLAPPLY - "
+            "Chipset setting applied")
     finally:
         try:
             m.quit()

@@ -497,7 +497,7 @@ static void lm_paint_empty(void)
      * the sentence is worth. */
     lm_row(0, "LOOM - no project open.");
     lm_row(2, "File > Open Project... opens a .WML; a double-click on a .WML");
-    lm_row(3, "or a .WJS opens its project directly (WEAVE-SPEC 1.5, 11.2).");
+    lm_row(3, "or a .WJS opens its project directly.");
 }
 
 /* lm_repaint - draw the content.
@@ -648,6 +648,20 @@ void os88_onkey(int ascii, int scan, void *win)
     lm_ed_key(ascii, scan);
 }
 
+/* W_ONWHEEL (SPEC.md 13.18) - os88_onkey()'s environment, and the editor is
+ * the one thing in this window that scrolls. The sidebar is a fixed list, and
+ * the Preview pane draws and does not arm (1.7): its lists live inside
+ * LOOM.WPV, whose verbs have no scroll, so a turn there is swallowed exactly
+ * as a click there is. */
+void os88_onwheel(int notches, void *win)
+{
+    if (lm_state != LM_ST_EDIT)
+        return;
+    if (!lm_layout(win))
+        return;
+    lm_ed_wheel(notches);
+}
+
 void os88_oncmd(int item, int menu, void *win)
 {
     if (menu == 0) {
@@ -709,14 +723,14 @@ void os88_onfile(int mode, const char *name, unsigned size_lo,
          * not two (apps/weave/wload.c's "two ways in, one decision", said
          * about creating instead of opening). */
         if (!ovl_newproj(name)) {
-            lm_say("LOOM.OVL is missing; a project cannot be created.");
+            lm_say("LOOM could not load its overlay; a project cannot be created.");
             lm_repaint(win, 1);
             return;
         }
         name = lm_argname;
     }
     if (!ovl_openproj(win, name))
-        lm_say("LOOM.OVL is missing; a project cannot be opened.");
+        lm_say("LOOM could not load its overlay; a project cannot be opened.");
     lm_repaint(win, 1);                 /* over the LAST state - see lm_repaint */
 }
 
@@ -727,7 +741,7 @@ void os88_about(void *win)
      * LOOM.OVL draws nothing at all here and leaves the window alone - which
      * is the honest degradation, and it is why the answer is tested. */
     if (!ovl_about())
-        lm_say("LOOM.OVL is missing; About cannot be shown.");
+        lm_say("LOOM could not load its overlay; About cannot be shown.");
     lm_repaint(win, 1);
 }
 
@@ -882,6 +896,10 @@ void *os88_main(void)
      * and the kernel simply never asks it. The symptom is a close box that
      * throws away the user's work in silence. */
     os88_wm_onclose(win);
+
+    /* ...and the mouse WHEEL (SPEC.md 13.18), the same kind of side table.
+     * kern_small has no wheel and the cell does nothing there. */
+    os88_wm_onwheel(win);
 
     /* THE LAUNCH DOCUMENT (SPEC.md 54.5). Read-and-clear, so it is banked
      * here and spent in the first paint. os88_arg_file() cannot hand back the

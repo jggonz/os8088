@@ -28,7 +28,9 @@ that are testable rather than assertable by inspection:
     field machine (PERFORMANCE.md Part 2, ~756us a drawing call).
 
 WHAT IT WOULD CATCH, all verified red by breaking the source on purpose:
-a ring drawn with UI_FRAME (corners light); a press on the already-picked row
+a ring drawn with UI_FRAME (corners light); the first cut's square with one
+pixel nipped off each corner (no bridging pixel - SPEC.md 13.17.1, the field's
+"ticked square"); a press on the already-picked row
 counted as a move; a greyed row accepting a press; radhit repainting the group.
 """
 import argparse
@@ -168,12 +170,21 @@ def main():
         corners = [r[0][0], r[0][BOX - 1], r[BOX - 1][0], r[BOX - 1][BOX - 1]]
         check(not any(corners),
               "all four corners CLEAR - it is not a rectangle")
-        check(all(r[0][c] for c in range(1, BOX - 1)), "top run is ink")
-        check(all(r[BOX - 1][c] for c in range(1, BOX - 1)),
+        check(all(r[0][c] for c in range(2, BOX - 2)), "top run is ink")
+        check(all(r[BOX - 1][c] for c in range(2, BOX - 2)),
               "bottom run is ink")
-        check(all(r[q][0] for q in range(1, BOX - 1)), "left run is ink")
-        check(all(r[q][BOX - 1] for q in range(1, BOX - 1)),
+        check(all(r[q][0] for q in range(2, BOX - 2)), "left run is ink")
+        check(all(r[q][BOX - 1] for q in range(2, BOX - 2)),
               "right run is ink")
+        # ...and ROUND, not a square with its corners nipped (SPEC.md
+        # 13.17.1): each side stops two short and one pixel bridges the
+        # corner. The nipped square passes every check above and fails these
+        e = BOX - 1
+        bridge = [r[1][1], r[1][e - 1], r[e - 1][1], r[e - 1][e - 1]]
+        check(all(bridge), "a pixel bridges each corner")
+        beside = [r[0][1], r[1][0], r[0][e - 1], r[1][e],
+                  r[e][1], r[e - 1][0], r[e][e - 1], r[e - 1][e]]
+        check(not any(beside), "...and the side runs stop two short of it")
         # ...and it is CENTRED: the ring's middle row and the label's agree to
         # the half pixel (the label sits (pitch - 7) >> 1 below the row's top)
         ring_mid = (ry - ay) * 2 + BOX - 1

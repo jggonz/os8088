@@ -8,8 +8,11 @@
 ; DS IS THE DESTINATION for the whole of px_compose - the ladders store with
 ; no segment override, which is the instruction the bench priced (97.3: DS =
 ; the destination) - so everything of this package's own is read through CS,
-; which is the same segment as its DS (SPEC.md 20.1). A `[bp]` operand would
-; address SS; every one below carries the `cs:` that puts it right.
+; which is the same segment as its DS (SPEC.md 20.1), and STORED THROUGH ES,
+; which px_compose sets to our DS: on kern_mega CS is a code selector and a
+; store through it is a #GP (KERN-MEGA-PLAN 14.50), where a read is legal. A
+; `[bp]` operand would address SS; every one below carries the `cs:` or
+; `es:` that puts it right.
 ;
 ; Per column, Flat: a column whose four bytes did not move is skipped whole;
 ; one whose TONE stood (mat and side) and whose wall is tall enough to keep
@@ -44,15 +47,27 @@
 ; clobbers everything but DS
 ; -----------------------------------------------------------------------------
 px_compose:
-    mov byte [px_r0], 0xFF
-    mov byte [px_r1], 0
+    mov word [px_r0], 0x00FF        ; px_r0 = 0xFF, px_r1 = 0 (one store:
+                                    ; pxgame.asm keeps the two adjacent)
     mov word [px_qp], PXG_Q         ; the draw queue, empty (97.3)
 %ifdef PXPROBE
     mov word [px_pr_lad], 0         ; tests/pxsperf.py --probe's counters:
     mov word [px_pr_skip], 0        ; ladder entries and columns skipped
 %endif                              ; this frame (the queue's length is
                                     ; readable off px_qp in every build)
-    mov es, [px_hand + PXH_GEN]     ; ES = part 1 for the queue's entries
+    push ds                         ; ES = OURS for the column loop (KERN-
+    pop es                          ; MEGA-PLAN 14.50): every store into our
+    cld                             ; own words below is `es:` - the same
+                                    ; prefix byte and the same clocks as the
+                                    ; `cs:` it was, and a data segment on
+                                    ; kern_mega, where CS is a code selector
+                                    ; and each `cs:` store was a #GP the
+                                    ; kernel completed (~9 a changed column,
+                                    ; 2,500 a second of play on Bochs). The
+                                    ; READS stay `cs:`, which is legal. The
+                                    ; queue's entries swap ES to part 1 for
+                                    ; their four STOSWs (.tnofloor), and
+                                    ; .done takes it for the driver
     mov ax, [px_dbase]              ; the frame's column base, summed ONCE:
     add ax, [px_cbias]              ; the page's base (Mode X alternates it)
     mov [px_cbase], ax              ; and px_x0 - 256 - the band's first byte
@@ -77,7 +92,7 @@ px_compose:
     shl di, 1                       ; two bytes a column at Low res
 .b1:
     add di, [cs:px_cbase]
-    mov [cs:px_cdi], di
+    mov [es:px_cdi], di
     mov si, bx
     add si, [cs:px_pgofs]           ; this page's memory of the column
     cmp byte [cs:px_rung], PXR_TEX  ; THE DEFAULT RUNG IS ASKED FIRST: one
@@ -107,14 +122,14 @@ px_compose:
     cmp dl, [cs:px_lside + si]
     jne .fchg
 %ifdef PXPROBE
-    inc word [cs:px_pr_skip]
+    inc word [es:px_pr_skip]
 %endif
     jmp .next
 .fchg:
-    mov [cs:px_ltop + si], al
-    mov [cs:px_lbot + si], ah
+    mov [es:px_ltop + si], al
+    mov [es:px_lbot + si], ah
     mov dl, [cs:px_gen]             ; THE COLUMN WAS WRITTEN THIS FRAME
-    mov [cs:px_cwrote + bp], dl         ; (97.6: a standing sprite's post and
+    mov [es:px_cwrote + bp], dl         ; (97.6: a standing sprite's post and
                                     ; the weapon are redrawn over it)
     mov bl, al                      ; the dirty rows: min(t, lt)..max(b, lb)
     cmp bl, cl                      ; (BX is free until .next: BP holds the
@@ -123,7 +138,7 @@ px_compose:
 .f1:
     cmp bl, [cs:px_r0]
     jae .f2
-    mov [cs:px_r0], bl
+    mov [es:px_r0], bl
 .f2:
     mov bl, ah
     cmp bl, ch
@@ -132,7 +147,7 @@ px_compose:
 .f3:
     cmp bl, [cs:px_r1]
     jbe .f4
-    mov [cs:px_r1], bl
+    mov [es:px_r1], bl
 .f4:
     mov dl, [cs:px_mat + bp]
     mov dh, [cs:px_side + bp]
@@ -165,8 +180,8 @@ px_compose:
     cmp bl, PX_GEOMIN
     jae .fgeo
 .ftone:
-    mov [cs:px_lmat + si], dl
-    mov [cs:px_lside + si], dh
+    mov [es:px_lmat + si], dl
+    mov [es:px_lside + si], dh
     cmp al, cl                      ; the wall shrank from the top: the
     jbe .noceil                     ; ceiling back over [lt, t)
     push ax
@@ -317,13 +332,13 @@ px_compose:
     push dx
     push cx
     mov al, [cs:px_gen]             ; the column was written (97.6)
-    mov [cs:px_cwrote + bp], al
+    mov [es:px_cwrote + bp], al
     mov al, [cs:px_lu0 + si]        ; the upper run against last frame's
     mov ah, [cs:px_lu1 + si]
-    mov [cs:px_lu0 + si], cl
-    mov [cs:px_lu1 + si], ch
+    mov [es:px_lu0 + si], cl
+    mov [es:px_lu1 + si], ch
     mov dx, cx
-    mov byte [cs:px_wclip], 0
+    mov byte [es:px_wclip], 0
     call px_wrun
     pop cx
     pop dx
@@ -331,11 +346,11 @@ px_compose:
     push si
     mov al, ch                      ; the lower run, clipped past the upper's
     inc al                          ; end: those rows are the upper's this
-    mov [cs:px_wclip], al           ; frame (the horizon keeps the two apart
+    mov [es:px_wclip], al           ; frame (the horizon keeps the two apart
     mov al, [cs:px_ll0 + si]        ; everywhere else - 97.3)
     mov ah, [cs:px_ll1 + si]
-    mov [cs:px_ll0 + si], dl
-    mov [cs:px_ll1 + si], dh
+    mov [es:px_ll0 + si], dl
+    mov [es:px_ll1 + si], dh
     call px_wrun
     pop si
     jmp .next                       ; (the first cut fell into the Textured
@@ -379,21 +394,21 @@ px_compose:
     cmp dl, [cs:px_lu + si]
     jne .tchg
 %ifdef PXPROBE
-    inc word [cs:px_pr_skip]
+    inc word [es:px_pr_skip]
 %endif
     jmp .next
 .tchg:
-    mov [cs:px_ltop + si], al
-    mov [cs:px_lbot + si], ah
-    mov [cs:px_lu + si], dl
+    mov [es:px_ltop + si], al
+    mov [es:px_lbot + si], ah
+    mov [es:px_lu + si], dl
     mov dl, [cs:px_gen]             ; the column was written (97.6)
-    mov [cs:px_cwrote + bp], dl
+    mov [es:px_cwrote + bp], dl
     mov dl, [cs:px_h + bx]
-    mov [cs:px_lh + si], dl
+    mov [es:px_lh + si], dl
     mov dl, [cs:px_mat + bx]
-    mov [cs:px_lmat + si], dl
+    mov [es:px_lmat + si], dl
     mov dl, [cs:px_side + bx]
-    mov [cs:px_lside + si], dl
+    mov [es:px_lside + si], dl
     mov bl, al                      ; the dirty rows: min(t, lt)..max(b, lb)
     cmp bl, cl
     jbe .t1
@@ -401,7 +416,7 @@ px_compose:
 .t1:
     cmp bl, [cs:px_r0]
     jae .t2
-    mov [cs:px_r0], bl
+    mov [es:px_r0], bl
 .t2:
     mov bl, ah
     cmp bl, ch
@@ -410,7 +425,7 @@ px_compose:
 .t3:
     cmp bl, [cs:px_r1]
     jbe .t4
-    mov [cs:px_r1], bl
+    mov [es:px_r1], bl
 .t4:
     ; THE ONE-ROW END TAKES px_pix, NOT THE LADDER (px_wrun's idiom, 97.5):
     ; the generated heights step by 2 up to 80, so top = (80 - h) >> 1
@@ -463,7 +478,13 @@ px_compose:
     add bx, [cs:px_gsc]
     mov ax, [cs:bx]
     mov di, [cs:px_qp]
-    mov [es:di], ax
+    mov dx, es                      ; ES = part 1 for the entry's four words,
+    mov es, [cs:px_hand + PXH_GEN]  ; ours again after them from DX, free
+    stosw                           ; here (KERN-MEGA-PLAN 14.50: the stores
+                                    ; above are ES's now, and STOSW - 1 byte
+                                    ; for a 3-to-6-byte store - pays for the
+                                    ; swap on the 8088; push/pop was 22 clk
+                                    ; a column dearer than the two moves)
     mov al, [cs:px_mat + bp]
     dec al                          ; material 1 is slot 0
     mov ah, al
@@ -482,13 +503,14 @@ px_compose:
     mov cl, 5
     shl bx, cl                      ; column * 32 (per COLUMN, not per pixel)
     add ax, bx
-    mov [es:di + 2], ax
+    stosw
     mov ax, [cs:px_cdi]
     add ax, 256
-    mov [es:di + 4], ax
-    mov word [es:di + 6], 0         ; a wall never patches (97.3)
-    add di, PXG_QSZ
-    mov [cs:px_qp], di
+    stosw
+    xor ax, ax                      ; a wall never patches (97.3)
+    stosw
+    mov es, dx
+    mov [es:px_qp], di              ; (DI moved PXG_QSZ, four words)
 .next:
     mov bx, bp
     inc bx
@@ -501,6 +523,7 @@ px_compose:
     mov di, [cs:px_qp]
     cmp di, PXG_Q
     je .noq
+    mov es, [cs:px_hand + PXH_GEN]
     mov [es:PXG_QEND], di
     call far [cs:px_drvp]
 .noq:
@@ -554,11 +577,11 @@ px_wrun:
 .o1:
     cmp bl, [cs:px_r0]
     jae .o2
-    mov [cs:px_r0], bl
+    mov [es:px_r0], bl
 .o2:
     cmp bh, [cs:px_r1]
     jbe .o3
-    mov [cs:px_r1], bh
+    mov [es:px_r1], bh
 .o3:
     push dx
     mov bx, [cs:px_inkc]
@@ -590,11 +613,11 @@ px_wrun:
     ja .out                         ; nothing of this run is ours
     cmp bl, [cs:px_r0]              ; the dirty rows
     jae .r0
-    mov [cs:px_r0], bl
+    mov [es:px_r0], bl
 .r0:
     cmp bh, [cs:px_r1]
     jbe .r1
-    mov [cs:px_r1], bh
+    mov [es:px_r1], bh
 .r1:
     cmp dl, [cs:px_wclip]           ; the new run, clipped
     jae .nc
@@ -717,39 +740,20 @@ px_ground:
 px_force_all:
     push ax
     push cx
+    push si
     push di
     push es
     push ds
     pop es
     cld
-    mov di, px_ltop
-    mov cx, 2 * PX_COLMAX
-    xor al, al
-    rep stosb
-    mov di, px_lbot
-    mov cx, 2 * PX_COLMAX
-    mov al, PX_ROWS - 1
-    rep stosb
-    mov di, px_lmat                 ; a material no level can hold, so no
-    mov cx, 2 * PX_COLMAX           ; Flat column reads as unchanged (97.5)
-    mov al, 0xFF
-    rep stosb
-    mov di, px_lu0
-    mov cx, 2 * PX_COLMAX
-    xor al, al
-    rep stosb
-    mov di, px_lu1
-    mov cx, 2 * PX_COLMAX
-    mov al, PX_HORIZON - 1
-    rep stosb
-    mov di, px_ll0
-    mov cx, 2 * PX_COLMAX
-    mov al, PX_HORIZON
-    rep stosb
-    mov di, px_ll1
-    mov cx, 2 * PX_COLMAX
-    mov al, PX_ROWS - 1
-    rep stosb
+    mov di, px_ltop                 ; THE EIGHT ARRAYS ARE ONE RUN, each
+    mov si, px_fa_fill              ; 2 * PX_COLMAX (pxgame.asm keeps them
+.fill:                              ; in this order and asserts it), so one
+    lodsb                           ; loop over their fills - and px_lside,
+    mov cx, 2 * PX_COLMAX           ; which neither skip reaches once lmat
+    rep stosb                       ; mismatches, takes one it never reads
+    cmp si, px_fa_fill + 8          ; (42 bytes under seven stosb blocks,
+    jb .fill                        ; KERN-MEGA-PLAN 14.50)
     mov byte [px_force], 1
     mov word [px_lnsc], 0           ; ...and no sprite stands on either
     mov word [px_wdrawn], 0xFFFF    ; page's glass, nor the weapon (97.6):
@@ -757,9 +761,13 @@ px_force_all:
                                     ; nothing is owed an erase
     pop es
     pop di
+    pop si
     pop cx
     pop ax
     ret
+; ltop, lbot, lmat (a material no level can hold, so no Flat column reads as
+; unchanged - 97.5), lside, lu0, lu1, ll0, ll1
+px_fa_fill: db 0, PX_ROWS - 1, 0xFF, 0xFF, 0, PX_HORIZON - 1, PX_HORIZON, PX_ROWS - 1
 
 ; -----------------------------------------------------------------------------
 ; px_frame_begin - is there a frame to draw, and if so cast and compose it
@@ -819,8 +827,8 @@ px_frame_begin:
     mov [px_twait], ax              ; no wait charged yet (px_wait_*)
     mov [px_twait + 2], ax
     mov byte [px_fworld], 0
-    mov byte [px_r0], 0xFF          ; no view row written yet: a frame that
-    mov byte [px_r1], 0             ; draws only the bar presents only it
+    mov word [px_r0], 0x00FF        ; no view row written yet: a frame that
+                                    ; draws only the bar presents only it
     call px_modex_hud               ; (Mode X: the bar alone may not flip)
     ; THE OWED WORK IS TAKEN, AND ITS FLAGS CLEARED, HERE - before the frame
     ; draws a pixel, as wave 1 cleared them: a force poked or a resize taken
@@ -1022,11 +1030,12 @@ px_rows_widen:
 ; clobbers everything but DS
 ; -----------------------------------------------------------------------------
 px_fade_draw:
-    mov byte [px_r0], 0
-    mov byte [px_r1], PX_ROWS - 1
+    mov word [px_r0], (PX_ROWS - 1) << 8   ; rows 0..PX_ROWS - 1
     mov ax, [px_dbase]
     add ax, [px_cbias]
     mov [px_cbase], ax
+    push ds                         ; ES = ours: px_cdi is stored through
+    pop es                          ; it (px_compose's rule, 14.50)
     push ds
     push bp
     mov ds, [px_dseg]
@@ -1038,7 +1047,7 @@ px_fade_draw:
     shl di, 1
 .b1:
     add di, [cs:px_cbase]
-    mov [cs:px_cdi], di
+    mov [es:px_cdi], di
     xor al, al
     mov cx, PX_ROWS
     mov bx, [cs:px_inkw]

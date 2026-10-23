@@ -156,16 +156,17 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         fails.append("FLAG: the window does not carry WF_OWNBG, so the kernel "
                      "is still filling its content white before every paint")
 
-    # The HEAP page: the densest of the three and the one PERFORMANCE.md
-    # prices. Cycling needs the window frontmost, which it is.
+    # The MEMORY page: the densest, and the one PERFORMANCE.md prices - the
+    # heap page it was measured on is part of it since SPEC.md 28.4.10.
+    # Cycling needs the window frontmost, which it is.
     for _ in range(4):
-        if view(m, seg) == 2:
+        if view(m, seg) == 1:
             break
         mo.click(w.x + 20, w.y + TITLE_H + 40)      # left of the scroll bar
         mo.to(*dispcorner.PARK)
         tick(m)
-    if view(m, seg) != 2:
-        fails.append("could not reach the heap page (view %d)" % view(m, seg))
+    if view(m, seg) != 1:
+        fails.append("could not reach the memory page (view %d)" % view(m, seg))
     x1, y1, x2, y2 = w.content
     box = (x2 - x1 + 1) * (y2 - y1 + 1)
 

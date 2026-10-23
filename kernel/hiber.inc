@@ -73,13 +73,43 @@ HBP_DOS     equ 16              ; db 1 = THIS WAS NOT THE USER LEAVING THE
                                 ; not one of them, because it describes the
                                 ; OCCASION and not the machine
 HBP_PAD     equ 17              ; db 0
+%ifndef KERN_MEGA
 HBP_SIZE    equ 18              ; front of it are hbm_ptrfix, one description
+%else
+; kern_mega's pointer is TEN BYTES LONGER, which is also what keeps the two
+; kernels apart: each reads exactly HBP_SIZE bytes and refuses any other size,
+; and both have one BUILD_NUM at a commit (KERN-MEGA-DOS-PLAN 8.2 item 4)
+HBP_XFLG    equ 18              ; db 1 = written in PROTECTED MODE: the image
+                                ; is whole 32KB chunks and an EXTENDED SECTION
+                                ; follows it (hbm_xwrite)
+HBP_XSUM    equ 20              ; dd that section's Fletcher sums, s1 then s2
+HBP_XLEN    equ 24              ; dd ...and its bytes on the disk
+HBP_SIZE    equ 28
+HBX_CHUNK   equ 32768           ; the bounce and the file's chunk: a multiple
+HBX_KB      equ HBX_CHUNK / 1024    ; of every cluster (<= 32KB, mount rule 8)
+HBX_HMAX    equ (512 - 12) / 8  ; the runs the section's head can list: 12
+                                ; bytes, then 8 a run, in ONE sector, the
+                                ; runs' data starting at 512 (hbm_xwrite) -
+                                ; 62, where the pool's table holds 96 blocks
+%if 12 + HBX_HMAX * 8 > 512
+  %error "hbm_xwrite: the section's head and its run list are one sector"
+%endif
+%endif
 
 %include "hbstage.inc"        ; SPEC.md 87.5's staging map, shared as SOURCE
                               ; with kerndos/kdresume.inc (SPEC.md 96.49)
 %ifdef DOSR_MARK
   %include "hbmark.inc"       ; ...and the trace, which hbm_wake stamps 500
 %endif                        ; lines before hbstub.inc is included
+; HBM_HMACHK - a kernel whose `.cold` can be ADOPTED into the HMA (COLDHMA.SYS,
+; docs/plans/HMA-PLAN.md), so the DOS handoff sums what runs up there for the
+; live route (SPEC.md 96.49.9). kern_big alone: kern_small's `.cold` has no
+; HMA image and kern_mega's HMA is its own
+%ifdef KERN_BIG
+  %ifdef ROM_ADOPT
+    %define HBM_HMACHK 1
+  %endif
+%endif
 
 ; --- the DOS handoff's own fields (SPEC.md 96.40.1) -------------------------
 ; They sit ABOVE HS_SLAVE and BELOW HS_IVT, which the DOS stub never uses: it
@@ -98,6 +128,11 @@ KDS_CPLEN   equ 0x043A          ; dd the CORE part's packed bytes
 KDS_CDELTA  equ 0x043E          ; dw paragraphs from the run's base to
                                 ; kern_dos's own stream
 KDS_CORG    equ 0x0440          ; dw where the core lands in KD_SEG
+%ifdef KERN_MEGA
+KDS_KSEG    equ 0x044A          ; dw kern_mega: the stub's own pick of
+KDS_KORG    equ 0x044C          ; dw kern_dos's segment and origin, HMA or LOW
+                                ; (96.40.9.2) - above HS_TICK0's dword
+%endif
 KDS_LB      equ 0x0500          ; db[512] the launch block, on HS_IVT's ground
 KDS_TMPSEG  equ 0x1000          ; 64KB up: above kern_dos's image, which starts
                                 ; at KD_SEG and is 46KB, so the stream and the
@@ -108,7 +143,13 @@ KDS_TMPSEG  equ 0x1000          ; 64KB up: above kern_dos's image, which starts
 ; tests/unit/t_mirror.py is what keeps them honest: a name defined in more than
 ; one place has to agree everywhere, and these three are the whole of what the
 ; kernel needs to know about a machine it is handing over to.
+%ifndef KERN_MEGA
 KD_SEG      equ 0x0060          ; linear 0x00600, above the IVT and the BDA
+KD_ORG      equ 0               ; ...and the image at its offset 0
+%else
+KD_SEG      equ 0xFFFF          ; kern_mega's kern_dos is in the HMA (KD_HMA,
+KD_ORG      equ 0x10            ; kerndos/kdlayout.inc): FFFF:0010, 100000h
+%endif
 KD_H_LBP    equ 4               ; dw: where the launch block goes
 KD_H_LBSZ   equ 6               ; dw: ...and how many bytes of it there are
 KDL_SIZE    equ 512             ; ...which is one sector
@@ -137,6 +178,11 @@ KDL_STAGE   equ 104             ; dw WHERE THE KERNEL WILL LOOK on the way back
                                 ; byte is the DOS PROGRAM's (SPEC.md 96.49.6).
                                 ; 0 = a kernel too old to say, and `kd_resume`
                                 ; falls back to asking
+KDL_HOFF    equ 488             ; dw the HMA span the live resume re-sums -
+KDL_HWDS    equ 490             ; dw its words - and what this side read
+KDL_HSUM    equ 492             ; dd (SPEC.md 96.49.9). In the kern_mega
+                                ; tail's XMS bytes, which no kern_big build
+                                ; writes. MIRRORED in kerndos/kdlaunch.inc
 KDL_VROW    equ 6
 KDL_VMAX    equ 8
 KDL_MOULINE equ 27              ; db ...and its bit in the master 8259's mask.
@@ -154,6 +200,21 @@ KDLF_NOMOUSE equ 8              ; ...and bit 3, which is the box's and is read
                                 ; gathered it, so a package cannot say "no
                                 ; pointer" by writing a zero there (SPEC.md
                                 ; 96.36.8)
+%ifdef KERN_MEGA
+KDLF_LOWDOS equ 0x20            ; ...and bit 5, the box's and read by THIS
+                                ; module's stub: kern_dos is part 3, the LOW
+                                ; image, expanded at 0060:0000 rather than in
+                                ; the HMA (SPEC.md 96.40.9.2)
+KDLF_SAVE   equ 0x40            ; ...and bit 6, the box's and read by
+                                ; hbm_dosrun: HIBERNAT.IMG before the park
+                                ; (SPEC.md 96.40.9.3). MIRRORED
+KD_LSEG     equ 0x0060          ; ...where that image goes, with KD_ORG 0
+KDL_O88CL   equ 508             ; dw DOS.O88's first cluster and...
+KDL_O88V    equ 510             ; db ...its volume, for the HMA image to read
+                                ; part 3 itself (SPEC.md 96.40.9.1): step 2
+                                ; finds the file and is the one place both
+                                ; are known. MIRRORED in kerndos/kdlaunch.inc
+%endif
 KDL_DPT     equ 16              ; db[11] in the block: the DISKETTE PARAMETER
 KDL_DPT_LEN equ 11              ; TABLE, the one field the box cannot fill.
                                 ; `hbm_dosrun` patches it into the STAGED copy
@@ -336,7 +397,8 @@ hb_probe_x:
     call COLD_SEG:dkf_dsk_chdir_q
     jc .back
     mov si, hb_s_ptr
-    call COLD_SEG:drvf_drv_find ; the directory sectors themselves
+    mov bp, drv_find            ; (wm_cbd: kmain_o holds nothing in BP)
+    call COLD_SEG:wm_cbd        ; the directory sectors themselves
     jc .back
     mov byte [ui_rebootq], UI_RBQ_ASK
 .back:
@@ -500,13 +562,35 @@ hb_pick1:                       ; is volume CL one? out: CF = 0 and AL = CL
 ; and cell 0 is the System menu in every application - so every menu title on
 ; the bar dropped the System menu.
 ; -----------------------------------------------------------------------------
+%ifdef KERN_MEGA
+HB_XMIN_KB equ (MPK_HDR + 512 + MEGA_IDT_LIN + 256 * 8 - MEGA_GDT_LIN + 1023) / 1024
+%endif                          ; the header, the section's head, the tables
 hb_ok_x:
     push bx
     push cx                     ; ...and these two, for the reason above
     push dx
-    call COLD_SEG:hb_pick_x     ; the volume a hibernate would go to
+    COLDCALL hb_pick_x          ; the volume a hibernate would go to
     mov bx, menu_s_hibernh      ; ...none: '(no disk)'. A `mov` writes no
     jc .set                     ; flag, so the string can be chosen first
+%ifdef VID_EXT
+    mov bx, menu_s_hibervx      ; a VESA primary (SPEC.md 120.4): an image
+    cmp byte [vid_kind], VID_VESA   ; carrying [vid_kind] = 4 into a machine
+    je .set                     ; whose driver has not attached would arm
+%endif                          ; nothing and draw nothing - greyed, with why
+%ifdef KERN_MEGA
+    test byte [cpu_feat], CPU_F_PM  ; protected mode: the image carries the
+    jz .rm                      ; pool (hbm_xwrite), so a block the store has
+    mov ax, [mem_top]           ; given out is not a reason (KERN-MEGA-DOS-
+    mov cl, 6                   ; PLAN 8, wave W5) - but a resume stages the
+    shr ax, cl                  ; WHOLE picture in the pool, so a pool smaller
+    add ax, HB_XMIN_KB          ; than conventional memory and the tables is
+    mov bx, menu_s_hibernr      ; a refusal hbm_xplan is certain to make: a
+    cmp ax, [xm_kb]             ; 1MB AT (10.5 lesser). A FACT, never a
+    ja .set                     ; guess: it greys only what must refuse
+    mov bx, menu_s_hiber
+    jmp short .set
+.rm:
+%endif
     call KERNEL_SEG:HB_API_XCAPS    ; BL = free block-table entries; on a
     cmp bl, XM_MAX_BLKS         ; machine with no store, all of them
     mov bx, menu_s_hiber        ; ...and the STRING, because ui_loc_gate is
@@ -689,6 +773,93 @@ modh_e_perform: call hbm_perform
 modh_e_open:    call hbm_open
                 retf
 
+; hbm_p2rd - one byte from the 8042's output buffer, BOUNDED (a device that
+; never answers costs a 65,536-poll wait, not a hang); AL = the byte, or the
+; status if none came. CX preserved
+hbm_p2rd:
+    push cx
+    xor cx, cx
+.w:
+    in  al, 0x64
+    test al, 0x01
+    jnz .got
+    loop .w
+    pop cx
+    ret
+.got:
+    in  al, 0x60
+    pop cx
+    ret
+
+%ifdef KERN_BIG
+; hbm_kbak - the KEYBOARD's answer to a command, BOUNDED like hbm_p2rd; a byte
+; the AUX device sent (status bit 5) is read and dropped rather than taken for
+; it. AL = the byte, or the status if none came. CX preserved
+hbm_kbak:
+    push cx
+    xor cx, cx
+.w:
+    in  al, 0x64
+    test al, 0x01
+    jz .n
+    test al, 0x20               ; `in` writes no flag, so ZF is still bit 5's
+    in  al, 0x60
+    jz .x
+.n:
+    loop .w
+.x:
+    pop cx
+    ret
+
+; hbm_kstrand - a byte the 8042 holds that NO INTERRUPT WILL EVER TAKE, read
+; and dropped (KERN-MEGA-PLAN 14.62). The controller has one output buffer for
+; both devices and holds IRQ1 or IRQ12 high while a byte waits in it, so a
+; byte whose edge was lost - an 8259 initialised under it, its line's
+; interrupt off in the command byte when it arrived, the line masked when it
+; came and the latch reset since - keeps both devices silent for good. A byte
+; whose request IS latched at the 8259 (IRR; the controller is given a few
+; polls to raise it) is left for its ISR. The desktop's own state at the end
+; of the return, whatever the program or a package left. AX clobbered
+hbm_kstrand:
+    pushf
+    cli
+    push cx
+    mov cx, 4                   ; four strands at most: then it is live traffic
+.l:
+    in  al, 0x64
+    test al, 0x01
+    jz .x
+    mov ah, al
+    push cx
+    mov cx, 64                  ; the controller's own lag from OBF to its pin
+.s:
+    in  al, 0x64
+    loop .s
+    pop cx
+    mov al, 0x0A                ; OCW3: read the IRR
+    test ah, 0x20
+    jnz .aux
+    out 0x20, al
+    in  al, 0x20
+    test al, 0x02               ; IRQ1 requested: int 09h will take it
+    jmp short .q
+.aux:
+    out 0xA0, al
+    in  al, 0xA0
+    test al, 0x10               ; IRQ12 requested: int 74h will take it
+.q:
+    jnz .x
+    in  al, 0x60
+    loop .l
+.x:
+    pop cx
+    popf
+    ret
+%endif
+
+hbm_knk     db 0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF2 ; mou_p2knk's (SPEC.md 9.9.8)
+hbm_knk_n   equ $ - hbm_knk
+
 ; --- near doors to the far calls this image makes most (SPEC.md 2.6): a far
 ; --- call is five bytes and a near one three, so each door pays for itself by
 ; --- its third site. Every one is `call far` / `ret` and preserves exactly
@@ -803,6 +974,79 @@ hbm_toast:
     pop es
     pop cx
     ret
+
+%ifdef MEGA_DIAG
+; -----------------------------------------------------------------------------
+; hbm_d1why - "Not our handoff record" as a field reading (KERN-MEGA-PLAN 10.3
+; item 54.2): `H ssss:oooo bbbbbbbb rrr`, the pointer DOS.O88 posted, the
+; first four bytes found there read DIRECTLY (no string op, nothing that can
+; fault - a good record reads 4B444831, 'KDH1'), and mega_strcal's REP MOVS
+; figures for SI, DI and CX. Built in hbm_dosrec, whose copy has just failed.
+; TOAST_MAX is 24 and this is 24. DS = KERNEL. out: SI = the string. Clobbers
+; AX, CX, DI, ES
+; -----------------------------------------------------------------------------
+hbm_d1why:
+    PUSH_CSDATA
+    pop es
+    mov di, hbm_dosrec
+    mov ax, 'H '
+    stosw
+    mov ax, [hb_dosseg]
+    call hbm_dhx4
+    mov al, ':'
+    stosb
+    mov ax, [hb_dosoff]
+    call hbm_dhx4
+    mov al, ' '
+    stosb
+    push si
+    push ds
+    mov si, [hb_dosoff]
+    mov ds, [hb_dosseg]
+    mov cx, 4
+.b:
+    mov al, [si]                ; DS = THE POSTER'S segment, on purpose
+    inc si
+    call hbm_dhx2
+    loop .b
+    pop ds
+    mov al, ' '
+    stosb
+    mov si, mega_sdr
+    mov cx, 3
+.r:
+    mov al, [si]                ; DS = the kernel's: mega_sdr is its data
+    inc si
+    add al, '0'
+    stosb
+    loop .r
+    xor al, al
+    stosb
+    pop si
+    mov si, hbm_dosrec
+    ret
+hbm_dhx4:                       ; AX as four hex digits at ES:DI
+    xchg al, ah
+    call hbm_dhx2
+    xchg al, ah
+hbm_dhx2:                       ; AL as two
+    push ax
+    push cx
+    mov cl, 4
+    shr al, cl
+    call hbm_dhx1
+    pop cx
+    pop ax
+    and al, 0x0F
+hbm_dhx1:
+    add al, '0'
+    cmp al, '9'
+    jbe .d
+    add al, 7
+.d:
+    stosb
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; hbm_origin - the window's content origin
@@ -1195,6 +1439,84 @@ hbm_findimg:
 ;      left at the root of [hb_vol]: a caller standing elsewhere brackets
 ;      this with drv_vol_bank/back.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; hbm_psum - the sparse sum over what the PROGRAMS hold (SPEC.md 87.4.1)
+; in:  DS = KERNEL_SEG
+; out: AX = s1, DX = s2: one word in every 256 bytes of every conventional
+;      heap record a live PACKAGE instance owns, its place in the line
+;      stepping 34 bytes (mod 256) a sample, Fletcher's two running sums
+;      mod 65536. ~2,500 reads for 640KB, a few ms on a 4.77 MHz 8088
+; clobbers: nothing else
+;
+; THE PROGRAMS AND NOT THE MACHINE, and that is the measurement and not a
+; shortcut: the image is written LIVE, through the file layer, so the
+; kernel's own memory - the FAT and directory buffers the write updates,
+; the stack it runs on, the BDA, whatever an interrupt counts - is not the
+; same at any one instant as the bytes the disk got. A whole-memory sum
+; refuses good images. What no code touches between this read and the
+; transfer is a package's: [sch_lock] stops its workers and the UI task is
+; the writer, so no callback runs. A record above 1MB (kern_mega's
+; selectors) is not in this image and the park's own sum covers it
+; -----------------------------------------------------------------------------
+hbm_psum:
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, 1                   ; s1 from 1, so zeroed memory is not a match
+    xor dx, dx                  ; for a sum over memory that was not zero
+    xor bp, bp
+    mov si, mem_tab             ; .lowbss: LOW_SEG, which is SS here (the UI
+.rec:                           ; task's stack, and hbm_wake's)
+    mov cx, [ss:si+MC_SEG]
+    jcxz .next
+    cmp cx, [mem_top]
+    jae .next
+%ifdef KERN_MEGA
+    test cl, 4                  ; a selector: above 1MB
+    jnz .next
+%endif
+    mov di, [ss:si+MC_OWN]
+    cmp di, INST_MAX
+    jae .next                   ; the kernel's, a driver's
+%if I_RECSZ != 32
+  %error "hbm_psum: inst_tab's stride is a shift by 5"
+%endif
+    push cx
+    mov cl, 5
+    shl di, cl
+    pop cx
+    add di, inst_tab
+    cmp byte [di+I_STATE], 0
+    je .next
+    test byte [di+I_KIND], KIND_PKG
+    jz .next                    ; a built-in's: the kernel writes it
+    mov bx, [ss:si+MC_PARA]
+.line:
+    cmp bx, 16
+    jb .next                    ; a part line at the end is not sampled
+    mov es, cx
+    add ax, [es:bp]
+    add dx, ax
+    add bp, 34
+    and bp, 0xFE
+    add cx, 16
+    sub bx, 16
+    jmp short .line
+.next:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX * MC_SIZE
+    jb .rec
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
 hbm_forget:
     push ax
     push dx
@@ -1428,9 +1750,9 @@ hbm_perform:
 ; -----------------------------------------------------------------------------
 ; hbm_wrimg - THE IMAGE AND ITS POINTER, and nothing after them (87.4 steps 1-6)
 ; in:  AL = what HBP_DOS is to say: 0 the user is leaving, 1 a DOS handoff
-; out: CF = 0 written. CF = 1 not, and the caller owns the unwind - the lock,
-;      [sch_lock] and the detached drivers are STILL TAKEN either way, because
-;      both callers go on holding them
+; out: CF = 0 written. CF = 1 not, SI = the refusal, and the caller owns the
+;      unwind - the lock, [sch_lock] and the detached drivers are STILL TAKEN
+;      either way, because both callers go on holding them
 ;
 ; Factored because docs/plans/KERN-DOS-PLAN.md 8 has a second customer: the DOS
 ; handoff writes an image so that the machine has somewhere to come back to,
@@ -1444,6 +1766,9 @@ hbm_wrimg:
                                 ; rather than the machine
     mov byte [cs:hbm_dosheld], 1    ; ...both taken below, and given back by
                                     ; neither arm
+%ifdef HMA_DRV
+    mov word [cs:hbm_hseg], 0   ; no pool copy yet: .no frees only a real one
+%endif
     call hbm_vbn                    ; where the user stands, for a refusal
     mov si, hb_drvmask          ; 1. the hardware drivers go, and are noted:
     mov byte [cs:hbm_spm], 0    ; THE HIBERNATE'S OWN SWEEP IS TODAY'S SKIP
@@ -1456,6 +1781,11 @@ hbm_wrimg:
                                 ; spend - both callers reload what they use
     call hbm_lock               ; 2. held from here: the machine is one
     inc byte [sch_lock]         ;    instant from here on - and only NOW
+    cmp word [ser_row], 0xffff
+    je .serialclear
+    mov si, hbm_s_serial
+    jmp .nos                   ; unwind the same locks and suspended drivers
+.serialclear:
     call hbm_root               ; 3. the root of the disk the boot picked:
     jc .no                      ;    the detach yields, and a task that took
                                 ;    the turn could have moved the current
@@ -1465,18 +1795,55 @@ hbm_wrimg:
                                 ;    outlived its question would otherwise
                                 ;    name the NEW image with the old session's
                                 ;    wake address (SPEC.md 87.3)
+%ifdef HMA_DRV
+    call hbm_hsave              ; 3b. the HMA's pool, into a claim the image
+    mov si, hbm_s_nomem         ;    carries - last, so nothing but the write
+    jc .nos                     ;    runs between the copy and the picture
+%endif
                                 ; 4. (SPEC.md 87.4) - [hb_sp] was banked at
                                 ;    the top, and where the restored kernel
                                 ;    enters goes straight into the pointer at
                                 ;    step 6 (HBP_WAKE): the .bss copy that
                                 ;    used to be taken here was never read
-    call hbm_nimg               ; 5. the image: all of memory, one write
+%ifdef KERN_MEGA
+    test byte [cpu_feat], CPU_F_PM  ; kern_mega in protected mode: a volume
+    jz .rimg                    ; of 512-byte clusters is refused first -
+    mov si, hbm_s_clus          ; hbm_xwconv puts chunk 0 right from 40h
+    cmp byte [dsk_spc], 1       ; past its first CLUSTER, and 40h cannot
+    je .nos                     ; reach linear 200h. Then the list of what
+    call hbm_xplan              ; is above 1MB, and whether a resume could
+    jc .no                      ; place it, BEFORE the picture - which then
+.rimg:                          ; includes the masks and the wake address
+%endif
+    call hbm_psum               ; 5. THE PROGRAMS' SUM, taken here, the last
+    CSDO mov [CSEG hbm_psv], ax ;    instant before the write: nothing that
+    CSDO mov [CSEG hbm_psv + 2], dx ; runs from here touches a program's
+                                ;    memory, so the image holds what this
+                                ;    read (SPEC.md 87.4.1). Into this image,
+                                ;    so it is written with it
+    call hbm_nimg               ;    ...and the image: all of memory, one write
     xor bx, bx
     mov es, bx
     call hbm_imgsize            ; DX:AX = bytes
+%ifdef KERN_MEGA
+    test byte [cpu_feat], CPU_F_PM
+    jz .rsz
+    call hbm_xconv              ; ...in whole chunks, so the section appends,
+    call hbm_xwconv             ; and a chunk a call (below)
+    jmp short .rwrote
+.rsz:
+%endif
     mov cx, ax
     call COLD_SEG:dwf_dskw_write
+.rwrote:
     jc .no
+%ifdef KERN_MEGA
+    test byte [cpu_feat], CPU_F_PM
+    jz .rptr
+    call hbm_xwrite             ; 5b. the extended section, after it
+    jc .no
+.rptr:
+%endif
     call hbm_ptrfix_set         ; 6. the pointer, beside it: the fixed
     mov word [cs:hbm_ptrfix + HBP_WAKE], hbm_wake   ; head's live fields, and
     mov [cs:hbm_ptrfix + HBP_WAKE + 2], cs          ; the wake address. The
@@ -1491,6 +1858,11 @@ hbm_wrimg:
     pop ax                      ; (CF = 0 from the `jc`)
     ret
 .no:
+    mov si, hbm_s_failed        ; SI = the refusal, which hbm_hib toasts
+.nos:
+%ifdef HMA_DRV
+    call hbm_hfree              ; ...and the pool's copy goes with it
+%endif
     pop ax
     stc
     ret
@@ -1498,11 +1870,15 @@ hbm_wrimg:
 hbm_hib:
     xor al, al                  ; HBP_DOS = 0: this IS the user leaving
     call hbm_wrimg
-    jc .fail
+    jc hbm_hibfail
+    mov si, hbm_s_off
+; hbm_bye - SI = the sentence: text mode, the sentence, a key, and the reboot
+;           path's tail. Never returns. hbm_hib's step 7, and hbm_wake's
+;           refusal of an image whose programs did not read back (87.4.1)
+hbm_bye:
     call hbm_kbdrain            ; 7. a key typed during the write is not the
     mov bp, vid_reboot
     call hbm_kd                   ;    answer; text mode, the sentence, a key
-    mov si, hbm_s_off
     call hbm_tty
     xor ah, ah
     int 0x16
@@ -1522,14 +1898,15 @@ hbm_hib:
     int 0x19                        ; kernel's generic BP trampoline and the
     jmp $                           ; int 19h is ours to issue
 %endif
-.fail:
+hbm_hibfail:                        ; hbm_hib's: the write did not happen
+    push si                     ; hbm_wrimg's refusal
     mov byte [cs:hbm_dosheld], 0
     dec byte [sch_lock]
     call hbm_unlock              
     call hbm_reload             ; the drivers come back
     call hbm_vbk                   
     mov byte [hb_mode], HB_M_ASK
-    mov si, hbm_s_failed
+    pop si
     call hbm_toast
     call hbm_winback
     mov sp, [hb_sp]
@@ -1584,6 +1961,136 @@ hbm_tty:
     pop ax
     ret
 
+%ifdef HMA_DRV
+; -----------------------------------------------------------------------------
+; hbm_hsave - THE HMA'S POOL, INTO THE IMAGE (SPEC.md 87.4 step 3b)
+; in:  the sweep done, the lock and [sch_lock] held; [cs:hbm_hseg] = 0
+; out: CF = 0 and [cs:hbm_hseg] = the copy's MEM_K_HIB claim, or 0 when
+;      there is nothing to carry; CF = 1 no room for the copy. HBP_PAD is the
+;      table's bytes or 0. Clobbers AX, BX, CX, DX, SI, DI, BP, ES
+;
+; The image is conventional memory and nothing above 1MB is in it, so a
+; driver the HMA holds - a kept class, HDD.DRV or NET.DRV - would come back
+; as a row naming an empty segment. One claim, the table and then every
+; live block in record order, and the image carries it at no cost: it is
+; written with the rest of memory. hbm_wake's step 0b copies it back.
+; -----------------------------------------------------------------------------
+hbm_hsave:
+    mov byte [cs:hbm_ptrfix + HBP_PAD], 0
+    cmp word [api_coldseg], HMA_SEG
+    jne .none                   ; `.cold` is not in the HMA: there is no pool
+    mov al, ROMF_HTAB
+    call far [rom_mfp]          ; DX:AX = the table, CX = its bytes
+    jc .none
+    push dx
+    push ax
+    mov es, dx
+    mov si, ax
+    mov di, cx                  ; DI = the copy's bytes: the table...
+    push cx
+.sum:
+    cmp word [es:si], 0
+    je .snext
+    add di, [es:si+2]           ; ...and every live block (paragraphs, so
+.snext:                         ; even, and the pool is under 64KB)
+    add si, 6
+    sub cx, 6
+    ja .sum
+    pop cx
+    cmp di, cx
+    je .empty                   ; no live block: the wake resets the pool
+    lea ax, [di + 1023]
+    push cx
+    mov cl, 10
+    shr ax, cl                  ; AX = KB
+    pop cx
+    mov bx, MEM_K_HIB
+    mov bp, mem_claim_x
+    call hbm_cb                 ; DX = its segment
+    mov bx, dx
+    pop ax
+    pop dx
+    jc .out                     ; CF = 1: no room for the copy
+    mov [cs:hbm_hseg], bx
+    mov [cs:hbm_ptrfix + HBP_PAD], cl
+    xor bp, bp                  ; ...into the claim
+    call hbm_hcopy
+    jmp short .none
+.empty:
+    pop ax
+    pop dx
+.none:
+    clc
+.out:
+    ret
+
+; hbm_hcopy - the pool's table and its live blocks, between the tail and the
+;             claim at BX (SPEC.md 87.4 step 3b, 87.6 step 0b)
+; in:  DX:AX = the tail's table (ROMF_HTAB), CX = its bytes, BX = the claim;
+;      BP = 0 into the claim, 1 back out of it
+; out: nothing; clobbers AX, CX, DX, SI, DI, ES
+hbm_hcopy:
+    push ds
+    mov si, ax                  ; DX:SI = the table, BX:0 its copy - first,
+    xor di, di                  ; so the walk below reads the claim's records
+    push cx                     ; either way round
+    call hbm_hmove
+    pop cx                      ; CX = where the copy's records stop
+    mov dx, HMA_SEG             ; a block's bytes are FFFF:base
+    xor ax, ax
+.rec:
+    push cx
+    mov es, bx
+    mov si, ax
+    mov cx, [es:si+2]
+    mov si, [es:si]
+    or si, si                   ; base 0 = a free record
+    jz .skip
+    call hbm_hmove
+.skip:
+    pop cx
+    add ax, 6
+    cmp ax, cx
+    jb .rec
+    pop ds
+    ret
+
+; hbm_hmove - CX bytes (even) between DX:SI and BX:DI, BP saying which way;
+;             DI is past them after. One block whole between two interrupts.
+;             Clobbers CX, SI, DS, ES
+hbm_hmove:
+    pushf
+    cli
+    shr cx, 1
+    or bp, bp
+    jnz .back
+    mov ds, dx
+    mov es, bx
+    rep movsw
+    popf
+    ret
+.back:
+    mov ds, bx
+    mov es, dx
+    xchg si, di
+    rep movsw
+    xchg si, di
+    popf
+    ret
+
+; hbm_hfree - the copy's claim back, if there is one. Clobbers BX, DX, BP
+hbm_hfree:
+    xor dx, dx
+    xchg dx, [cs:hbm_hseg]
+    or dx, dx
+    jz .out
+    mov bx, MEM_K_HIB
+    mov bp, mem_free_x
+    call hbm_cb
+.out:
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; hbm_sweep / hbm_reload - the drivers that own hardware (SPEC.md 87.4 step 2)
 ; in:  nothing; UI task, NO lock held (an unload waits on its worker)
@@ -1606,6 +2113,7 @@ hbm_tty:
 ; RAM disk, and both are things a DOS program WANTS rather than fights -
 ; neither owns a chip anyone is about to take. The caller's third is 96.23.6.
 ; DRVC_EMS is a board's memory with packages holding pages of it (107.6).
+; DRVC_CD is a read-only volume a DOS program may be reading (119.1).
 ;
 ; ...AND THE CALLER MAY HAVE ASKED FOR ONE OF THEM ANYWAY (SPEC.md 51.11.4).
 ; [cs:hbm_spm] is the slot's BL, bit 1<<class: a set bit does not ADD a class
@@ -1615,13 +2123,20 @@ hbm_tty:
 ; nothing for it. It is MODULE data, so the whole feature is resident-free.
 hbm_sweep:
     mov word [si], 0
-    mov byte [cs:hbm_swn], 0
+    CSDO mov byte [CSEG hbm_swn], 0
     xor cx, cx
 .row:
     mov al, cl
     call COLD_SEG:drvf_drv_row  ; BX = the row
     cmp word [bx+DRVR_SEG], 0
     je .next
+%ifdef VID_EXT
+    cmp bx, vesa_row            ; THE DISPLAY'S RENDERER STAYS (SPEC.md 120.4):
+    je .next                    ; a suspend that took it would leave every
+                                ; drawing body calling nothing. A hibernate
+                                ; never reaches here with it - hb_ok refuses
+                                ; while VID_VESA is the kind
+%endif
     mov al, [bx+DRVR_CLASS]
     cmp al, DRVC_DISK
     je .asked                   ; memory and the ROM's int 13h: it stays...
@@ -1630,13 +2145,19 @@ hbm_sweep:
     cmp al, DRVC_FILE2
     je .asked                   ; the RAM disk: memory, and it stays - and
                                 ; 1 << 8 is 0 in CH, so no caller can name it
+    cmp al, DRVC_CD
+    je .asked                   ; the CD-ROM: a volume DOS may be reading, and
+                                ; no IRQ or DMA a program could want (119.1)
     cmp al, DRVC_EMS
     je .asked                   ; the EMS board: memory with holders, and a
                                 ; fresh attach would sign every page and remap
                                 ; the quarters under them (SPEC.md 107.6)
     cmp al, dl
     jne .take                   ; ...and the caller's own
-.asked:                         ; ...unless this call named it (51.11.4)
+.asked:                         ; ...unless this call named it (51.11.4).
+                                ; A driver in the HMA follows its class like
+                                ; a heap one: hbm_hsave carries the pool in
+                                ; the image (SPEC.md 87.4 step 3b)
     push cx                     ; CL is the ROW and the shift wants the CLASS,
     mov cl, al                  ; so the index is banked for four instructions
     mov ch, 1
@@ -1666,7 +2187,7 @@ hbm_sweep:
     mov [es:di+DQ_C], cx
     mov byte [es:di+DQ_FLAGS], 1
     add di, DQ_SIZE
-    inc byte [cs:hbm_swn]
+    CSDO inc byte [CSEG hbm_swn]
 .noinfo:
     pop cx
 .unload:
@@ -1691,18 +2212,21 @@ hbm_reload:
 ; in:  DX = the rows; out: nothing; clobbers DX
 hbm_reload_m:
     push ax
+    push bx
     push cx
     xor cx, cx
 .row:
     shr dx, 1
     jnc .next
     mov al, cl
-    call COLD_SEG:drvf_drv_load ; failures show on the Drivers page, as at boot
+    call COLD_SEG:drvf_drv_row  ; BX = the row hdl_load takes
+    call hdl_load               ; failures show on the Drivers page, as at boot
 .next:
     inc cx
     cmp cx, DRV_MAX
     jb .row
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -1714,7 +2238,7 @@ hbm_reload_m:
 ; out: CX = records written (0 on a resume); CF = 0 - the sweep cannot refuse
 ; -----------------------------------------------------------------------------
 hbm_drvsusp:
-    mov [cs:hbm_spm], bl        ; THE SLOT'S OWN BL, still in the register the
+    CSDO mov [CSEG hbm_spm], bl        ; THE SLOT'S OWN BL, still in the register the
                                 ; caller put it in (SPEC.md 51.11.4) - banked
                                 ; HERE, in the module, on both verbs. Writing
                                 ; it on the resume too is what stops one
@@ -1772,10 +2296,37 @@ hbm_ask:
     repe cmpsw
     pop ds                      ; ...and a pop does not touch cmpsw's ZF
     jne .stale
+%ifdef HMA_DRV
+    mov cl, [cs:hbm_ptrbuf + HBP_PAD]   ; THE HMA POOL THE IMAGE CARRIES
+    or cl, cl                   ; (SPEC.md 87.3): its table goes back over
+    jz .htab                    ; this boot's tail at the wake, where nothing
+    mov al, ROMF_HTAB           ; can refuse - so the tail is asked HERE,
+    call far [rom_mfp]          ; before the teardown. The fixed head has
+    jc .stale                   ; already said `.cold` is in the HMA (FF)
+    cmp cl, [cs:hbm_ptrbuf + HBP_PAD]
+    jne .stale
+.htab:
+%endif
+%ifdef KERN_MEGA
+    mov al, [cs:hbm_ptrbuf + HBP_XFLG]  ; THE MODE IS THE IMAGE'S: a picture
+    test byte [cpu_feat], CPU_F_PM  ; of protected mode needs this boot to
+    jz .rmode                   ; have switched, and one of real mode needs
+    xor al, 1                   ; it not to have (KERN-MEGA-DOS-PLAN 8.3
+.rmode:                         ; step 1)
+    or al, al
+    jz .mode
+    mov si, hbm_s_mode
+    jmp .drop
+.mode:
+%endif
     call hbm_findimg            ; ...which is mounted: the pointer came from it
     jc .lost                    ; DX:CX = the image's size on the disk
     mov bx, dx                  ; ...banked, because hbm_imgsize answers in
+%ifndef KERN_MEGA
     call hbm_imgsize            ; DX:AX and is documented to preserve CX
+%else
+    call hbm_xisz               ; (kern_mega: the image the pointer describes)
+%endif
     cmp cx, ax
     jne .lost
     cmp bx, dx
@@ -1843,7 +2394,15 @@ hbm_ask:
 hbm_dosbda:
     xor ax, ax
     mov [hb_dosakb], ax
+%ifdef KERN_MEGA
+    mov ax, MPK_RESETCODE       ; kern_mega: a DOS image with no code in the
+                                ; BDA is 14.43's, from a machine RESET during
+                                ; the program (kern_dos goes home by the park
+                                ; and writes no mailbox) - W7's code, so the
+                                ; box says so rather than nothing at all
+%else
     dec ax
+%endif
     mov [hb_doscode], ax        ; KDH_NOCODE, asserted at hb_probe_x
     mov ax, KDB_SEG
     mov es, ax
@@ -1871,8 +2430,34 @@ hbm_ptrfix_set:
     mov [cs:hbm_ptrfix + HBP_MEMTOP], ax
     mov al, [vid_kind]
     mov [cs:hbm_ptrfix + HBP_VID], al
+%ifdef ROM_ADOPT
+    ; ...and WHERE `.cold` RUNS, in the pad byte the head always compared as
+    ; 0 (docs/plans/ROM-PLAN.md 3.4.5): the HIGH BYTE of [api_coldseg], which
+    ; is the RAM rung's on a machine that kept it, F4 when a ROM adopted the
+    ; kernel and FF when XMEM.DRV put it in the HMA (docs/plans/HMA-PLAN.md).
+    ; An image hibernated with `.cold` in either has every far reference
+    ; pointing there and its cold rung is heap, so resumed where `.cold` is
+    ; anywhere else it would run into nothing; three places, so a byte that
+    ; only said "not in RAM" could not refuse the pair that matters. Same
+    ; build is already the head's BUILD_NUM, and a ROM or an HMA image this
+    ; boot installed is one that proved itself this kernel's - so an HMA
+    ; image resumes onto the HMA its own build filled, byte for byte the same.
+    mov al, [api_coldseg + 1]
+    mov [cs:hbm_ptrfix + HBP_VID + 1], al
+%endif
     ret
 
+%ifdef KERN_MEGA
+; hbm_xisz - out: DX:AX = the image's bytes as the pointer in hbm_ptrbuf
+;            describes it: hbm_imgsize's, or whole chunks and the section
+hbm_xisz:
+    cmp byte [cs:hbm_ptrbuf + HBP_XFLG], 0
+    je hbm_imgsize
+    call hbm_xconv
+    add ax, [cs:hbm_ptrbuf + HBP_XLEN]
+    adc dx, [cs:hbm_ptrbuf + HBP_XLEN + 2]
+    ret
+%endif
 ; hbm_imgsize - out: DX:AX = [mem_top] * 16, the bytes an image must have
 hbm_imgsize:
     push cx
@@ -1898,6 +2483,12 @@ hbm_res:
     jc hbm_res_f
     call hbm_findimg            ; BX = its first cluster
     jc hbm_res_f
+%ifdef KERN_MEGA
+    test byte [cpu_feat], CPU_F_PM
+    jz .kbres
+    jmp hbm_xres                ; protected mode: through a block above 1MB
+.kbres:
+%endif
     push bx
     call hbm_xcap               ; 2. sized for THIS volume, not the worst one
     mov bx, MEM_K_HIB
@@ -1991,7 +2582,7 @@ hbm_res:
 ; It does not come back. The machine it hands over has no kernel in it.
 ; -----------------------------------------------------------------------------
 hbm_dosrun:
-    mov byte [cs:hbm_dosheld], 0    ; module BSS is not zeroed: only hbm_wrimg
+    CSDO mov byte [CSEG hbm_dosheld], 0    ; module BSS is not zeroed: only hbm_wrimg
                                     ; below may say the locks are held
     ; --- 1. the record, where the poster left it (SPEC.md 96.40) -----------
     ; It is copied into the MODULE's own data and every read of it carries a
@@ -2007,8 +2598,12 @@ hbm_dosrun:
                                 ; and it copies 543 bytes of somebody else's
                                 ; bss over the record
     mov ds, [hb_dosseg]
-    push cs
-    pop es
+    PUSH_CSDATA                 ; ES = OUR DATA: `push cs` everywhere but
+    pop es                      ; kern_mega, whose CS is a read-only alias -
+                                ; there the copy went through mega_gpw's
+                                ; fault-and-restart, which a real 286 runs
+                                ; differently from the 386 every emulator
+                                ; here is (KERN-MEGA-PLAN 10.3 item 54.2)
     mov di, hbm_dosrec
     mov cx, KDH_SIZE
     rep movsb
@@ -2017,6 +2612,24 @@ hbm_dosrun:
     jne .b1
     cmp word [cs:hbm_dosrec + KDH_MAGIC + 2], KDH_SIG >> 16
     jne .b1
+%ifdef OS88_IMG
+    ; --- ...AND NO DISK IMAGE MOUNTED (SPEC.md 18.101.3) -------------------
+    ; A mounted image's file is read-only only VIRTUALLY - dskw_imgro, in a
+    ; FAT layer kern_dos does not assemble - so a DOS program given the whole
+    ; machine could delete or replace it, and the session coming home would
+    ; write the drive into clusters another file now owns. Refused here,
+    ; with nothing taken yet, by the row walk dsk_img_next makes
+    mov bx, dsk_vtab
+.imgrow:
+    cmp byte [bx+DV_KIND], DVK_DRV
+    jne .imgnx
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    je .bimg
+.imgnx:
+    add bx, DV_SIZE
+    cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
+    jb .imgrow
+%endif
 
     ; --- 3c. THE VOLUME TABLE, WHICH WAS HARD-CODED OVER THERE (96.46) ------
     ; `kern_dos` assumed A: and B: as BIOS units 0 and 1 and every other row
@@ -2062,9 +2675,9 @@ hbm_dosrun:
     ; on a driver banks nothing at all and every read of that disk over there
     ; is aimed with 9 sectors and 2 heads.
     mov ax, [dsk_bootspt]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_HDSPT], ax
+    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_HDSPT], ax
     mov ax, [dsk_boothds]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_HDHDS], ax
+    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_HDHDS], ax
     ; --- AND WHETHER A RUN MAY CROSS A HEAD (SPEC.md 96.44.14) ------------
     ; The LOADER settled that with a canary over its own transfer and nothing
     ; over there can ask it again - kern_dos has no stage 2 and no canary - so
@@ -2078,7 +2691,7 @@ hbm_dosrun:
     je .nocyl
     inc ax
 .nocyl:
-    mov [cs:hbm_dosrec + KDH_LB + KDL_CYLRUN], al
+    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_CYLRUN], al
     ; A ROW IS FOUR REGISTERS and every arm below only says which: AL the
     ; kind, AH the unit, DX:CX the partition base - stored by one tail. BX
     ; walks `dsk_vtab` and BP `dsk_vbase`, each at its own stride.
@@ -2127,9 +2740,9 @@ hbm_dosrun:
     jne .vkind                  ; a booted-from fixed disk's own stands: there
     push ax                     ; is ONE pair for the whole table, and the
     mov ax, [hb_spt]            ; volume the machine booted from is the one it
-    mov [cs:hbm_dosrec + KDH_LB + KDL_HDSPT], ax    ; is most about
+    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_HDSPT], ax    ; is most about
     mov ax, [hb_heads]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_HDHDS], ax
+    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_HDHDS], ax
     pop ax
     jmp short .vkind
 .vbios:
@@ -2139,18 +2752,18 @@ hbm_dosrun:
 .vkind:
     mov al, DVK_BIOS
 .vput:
-    mov [cs:di], ax             ; kind, unit
-    mov [cs:di+2], cx           ; ...base
-    mov [cs:di+4], dx
+    CSDO mov [CSEG di], ax             ; kind, unit
+    CSDO mov [CSEG di+2], cx           ; ...base
+    CSDO mov [CSEG di+4], dx
     add bx, DV_SIZE
     add bp, 4
     add di, KDL_VROW
     inc si
     cmp si, KDL_VMAX
     jb .vrow
-    mov byte [cs:hbm_dosrec + KDH_LB + KDL_NVOL], KDL_VMAX
+    CSDO mov byte [CSEG hbm_dosrec + KDH_LB + KDL_NVOL], KDL_VMAX
     mov al, [dsk_bootvol]
-    mov [cs:hbm_dosrec + KDH_LB + KDL_BOOTV], al
+    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_BOOTV], al
 
     ; --- 2. stand where DOS.O88 is, and find it -----------------------------
     call hbm_vbn                        ; hbm_enter's first half: bank where
@@ -2180,6 +2793,15 @@ hbm_dosrun:
     mov bp, dskw_stat_x         ; ...and BY NAME off the directory (SPEC.md
     call hbm_cb                 ; 18.4), not out of the global listing: one
     jc .b3                      ; far call where find-then-stage was two, and
+%ifdef KERN_MEGA
+    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_O88CL], bx    ; ...and WHERE DOS.O88 IS,
+    mov al, [cs:hbm_dosrec + KDH_VOL]               ; for the HMA kern_dos to
+    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_O88V], al     ; read part 3 off it on a
+                                        ; refused EXEPACK switch (96.40.9.1).
+                                        ; CSDO, as step 3c's own writes are:
+                                        ; each was a mega_gpw fixup until
+                                        ; KERN-MEGA-PLAN 14.46
+%endif
     push bx                     ; BX is the entry's first cluster - NOT the
                                 ; FAT record's own 26 (SPEC.md 96.37.1 item 4).
                                 ; ON THE STACK until step 3's walk: every
@@ -2230,6 +2852,76 @@ hbm_dosrun:
     ; with the whole machine, and that still happens - it is the coming back
     ; that is lost, and `KDLF_HIBER` staying clear is what says so all the way
     ; down to `kd_leave`.
+%ifdef KERN_MEGA
+    ; --- kern_mega: THE PARK in place of the image (docs/plans/
+    ; KERN-MEGA-DOS-PLAN.md 2.3, kernel/megados.inc). hbm_wrimg's own first
+    ; half - the hardware drivers swept and noted, the lock, [sch_lock] - and
+    ; then the snapshot, which returns twice: AL = 0 now, on to the drop; AL =
+    ; 1 when the DOS program has exited and the session is back, which is
+    ; where the image's wake address would have brought a kern_big machine.
+    ; THE CLAIM COMES FIRST, so a machine with no room above 1MB refuses with
+    ; nothing torn down.
+    test byte [cpu_feat], CPU_F_PM
+    jz .kbimg
+    ; --- ...AND, WHEN THE BOX ASKS, THE IMAGE AS WELL (KERN-MEGA-PLAN 14.43,
+    ; KERN-MEGA-DOS-PLAN 12.1 answer 2): `Save the session to disk first`.
+    ; The park lives in RAM, so a program that hangs the machine, or a power
+    ; cycle, loses it; HIBERNAT.IMG does not. It is kern_big's arm-3 image
+    ; (hbm_wrimg, AL = 1), written through W5's protected-mode writer, and it
+    ; comes back three ways: a warm reset still recovers the PARK first (W7,
+    ; faster and the newer of the two), a cold one finds the pointer and
+    ; resumes the image with no question (hbm_ask's HBP_DOS arm), and a
+    ; normal return spends it at hbm_wake's step 5 - `hbm_forget` there
+    ; already deletes both files on every wake, the park's included, so no
+    ; stale image survives a trip that came home.
+    ;
+    ; BEFORE THE CLAIM, because the claim takes the XMS arena - everything
+    ; the pool has left - and the image carries every pool block in use: the
+    ; arena in the picture is a section the size of the pool, which no resume
+    ; could place beside itself. So a claim refused AFTER the write is an
+    ; unwind (.b9), where the park alone refuses with nothing torn down.
+    ; hb_pick's answer is the predicate the box greys on (dos_hasfixed); a
+    ; tick carried by a shortcut onto a machine with no fixed disk parks.
+    test word [cs:hbm_dosrec + KDH_LB + KDL_FLAGS], KDLF_SAVE
+    jz .nosave
+    call COLD_SEG:hb_pick_x
+    jc .nosave
+    mov [hb_vol], al
+    mov al, 1                   ; HBP_DOS = 1: no question at the resume
+    call hbm_wrimg              ; the sweep, the lock, [sch_lock], the image
+    jc .b8
+    call MEGA_SEL_CODE:mega_dosclaimf
+    jc .b9
+    jmp short .held
+.nosave:
+    call MEGA_SEL_CODE:mega_dosclaimf
+    jc .b7
+    CSDO mov byte [CSEG hbm_dosheld], 1
+    call hbm_vbn
+    mov si, hb_drvmask
+    CSDO mov byte [CSEG hbm_spm], 0
+    xor dx, dx
+    xor di, di
+    call hbm_sweep
+    call hbm_lock
+    inc byte [sch_lock]
+.held:
+    call hbm_psum               ; THE PROGRAMS' SUM, as hbm_wrimg's step 5
+    CSDO mov [CSEG hbm_psv], ax ; takes it for an image: hbm_wake 3a checks
+    CSDO mov [CSEG hbm_psv + 2], dx ; it on this way home too, and without
+                                ; it every trip compared against a stale
+                                ; figure and refused (KERN-MEGA-PLAN 14.22).
+                                ; Before the snapshot, so the park holds it
+    call MEGA_SEL_CODE:mega_dosparkf   ; AL = 1: back from DOS
+    or al, al
+    jnz .parkback
+    mov byte [mega_dparked], 1  ; ...AND NOTHING IS TORN DOWN after it (the
+    jmp .noimg                  ; byte is kernel data, which the restore puts
+.parkback:                      ; back to 0: hbm_down)
+    call MEGA_SEL_CODE:mega_dosfreef
+    jmp hbm_wake
+.kbimg:
+%endif
     call COLD_SEG:hb_pick_x     ; is there a fixed disk at all? THE predicate
     jc .noimg                   ; (SPEC.md 87.2), so what greys, what is probed
     mov [hb_vol], al            ; and what is written cannot disagree
@@ -2250,6 +2942,8 @@ hbm_dosrun:
     ; settled. They go
     ; into the RECORD's copy and not the stage's, for `KDLF_HIBER`'s own
     ; reason immediately below - step 5 copies the record over the stage.
+    ; WITH `.cold` IN THE HMA TOO (SPEC.md 96.49.9): step 5 sums what runs up
+    ; there, and kd_resume sums it again before it jumps.
     mov word [cs:bx+KDL_WAKE], hbm_wake ; ...exactly what hbm_wrimg put in
     mov [cs:bx+KDL_WAKE + 2], cs        ; the pointer, and from the same place
     mov [cs:bx+KDL_KSEG], ds    ; DS IS KERNEL_SEG in this module (SPEC.md 2.8)
@@ -2384,6 +3078,43 @@ hbm_dosrun:
     mov word [es:KDS_TSEG], KDS_TMPSEG  ; where the PACKED stream lands: above
                                         ; the image it expands to, so the two
                                         ; never meet
+%ifdef HBM_HMACHK
+    ; --- ...AND WHAT RUNS ABOVE 1MB, for the live route (SPEC.md 96.49.9) ---
+    ; The image is conventional memory. The drivers in the HMA's pool come
+    ; back out of it (hbm_hsave's copy, hbm_wake's step 0b), but `.cold` and
+    ; the HMA image's own code are trusted to be where they were - and a DOS
+    ; program may have written there, or shut A20. So the span is summed HERE,
+    ; after hbm_down and the last thing that writes the tail's block table,
+    ; and kd_resume takes int 19h on a difference: XMEM.DRV then installs
+    ; `.cold` again, which is the route that never needed this. The span is
+    ; COLD_VSTART up to the tail's block table, which is the first byte above
+    ; it that changes; a door that will not say where that is (CF = 1) gets
+    ; `.cold` alone summed. A ROM's `.cold` is not in the HMA: KDL_HOFF is 0.
+    xor bx, bx                  ; KDL_HOFF 0: nothing above 1MB to check
+    cmp word [api_coldseg], HMA_SEG
+    jne .hmaput
+    mov al, ROMF_HTAB
+    call far [rom_mfp]          ; AX = the table's offset in FFFF
+    jnc .hmaend
+    mov ax, cold_end
+.hmaend:
+    sub ax, COLD_VSTART
+    shr ax, 1
+    mov [es:KDS_LB + KDL_HWDS], ax
+    xchg ax, cx                 ; CX = words
+    push ds
+    mov si, HMA_SEG
+    mov ds, si
+    mov si, COLD_VSTART
+    cld
+    HS_HMASUM                   ; BX = s1, DX = s2
+    pop ds
+    mov [es:KDS_LB + KDL_HSUM], bx
+    mov [es:KDS_LB + KDL_HSUM + 2], dx
+    mov bx, COLD_VSTART
+.hmaput:
+    mov [es:KDS_LB + KDL_HOFF], bx
+%endif
 
     ; --- 6. the VECTORS the ROM is about to need (SPEC.md 96.40.2) ----------
     ; `sched_unhook` is exactly this and cannot be called: it falls into
@@ -2397,8 +3128,60 @@ hbm_dosrun:
     ; any time after the handover vectors into kern_dos's image at `kbm_isr`'s
     ; KERNEL offset - which is SPEC.md 9.6.5's hard freeze one segment along,
     ; and `kd_leave` ends on `int 16h`.
+%ifdef KERN_BIG
+    ; **THE PS/2 MOUSE IS QUIETED FIRST, OR THE PROGRAM'S KEYBOARD IS DEAD**
+    ; (KERN-MEGA-PLAN 14.62). `mouse_unhook` masks IRQ12 and then sends 0xA7,
+    ; and the device is left REPORTING - only its clock is held. A byte it
+    ; sent in between, or one it had in flight, lands in the 8042's one output
+    ; buffer with IRQ12 masked for the whole program (the handover masks it),
+    ; so nobody ever reads it and the controller sends NOTHING from the
+    ; keyboard either: the program runs on with no keys at all. Bochs, with
+    ; the pointer moving across a launch: `KBTRIP entry 64=31` (OBF, AUX) on
+    ; 6 trips of 12, and not one key. So the device is told to stop (0xF5,
+    ; what POST leaves it as; hbm_wake's 0xF4 undoes it on the way home), its
+    ; 0xFA found behind any packet already queued, with IRQ12 masked so the
+    ; poll is the only reader...
+    cmp byte [mou_p2], 0
+    je .p2q
+    pushf
+    cli
+    in  al, 0xA1
+    or  al, MOU_P2SL
+    out 0xA1, al
+    popf
+    mov al, 0xD4
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, 0xF5
+    mov bp, mou_p2dw
+    call hbm_kd
+    mov cx, 256                 ; bounded: a real device has one packet in
+.p2f5:                          ; flight; Bochs's mouse queues more, and 64
+                                ; let a long move's tail reach the program as a
+                                ; key (megakbtrip trip 1: `key 4300`)
+    call hbm_p2rd
+    cmp al, 0xFA
+    loopne .p2f5
+.p2q:
+%endif
     mov bp, mouse_unhook
     call hbm_kd                 ; int 09h, int 0Ch/0Bh, int 74h, the UARTs
+%ifdef KERN_BIG
+    ; ...and after the 0xA7, the buffer emptied of any AUX byte still in it
+    ; (a keyboard byte is left for int 09h: IRQ1 is open)
+    cmp byte [cpu_tier], CPU_8086   ; an XT's 64h is no 8042 (9.9.2)
+    je .p2d
+    mov cx, 0x1000
+.p2dr:
+    in  al, 0x64
+    and al, 0x21
+    cmp al, 0x21
+    jne .p2dn
+    in  al, 0x60
+.p2dn:
+    loop .p2dr
+.p2d:
+%endif
     mov bp, snd_unhook
     call hbm_kd                 ; 61h bits 0-1 back to their boot state
 
@@ -2414,32 +3197,92 @@ hbm_dosrun:
     out 0x40, al
 
     ; --- 7. the ROM's int 08h back, the kernel's IRQs masked, and go --------
+%ifdef KERN_MEGA
+    test byte [cpu_feat], CPU_F_PM
+    jz .kbhand
+    call hbm_stageseg
+    jmp MEGA_SEL_CODE:mega_dosgo   ; out of protected mode (kernel/megados.inc)
+.kbhand:
+%endif
     jmp hbm_handover            ; 87.5 step 5, factored. A JUMP for the reason
                                 ; hbm_res's is one: nothing returns from it
-; **A REFUSAL SAYS WHICH STEP, and that is not only for the bring-up.** Six
-; things can go wrong before the machine is torn down and they are six
-; different repairs: a stale record, a folder that has moved, a DOS.O88 that
-; is not there, a volume int 13h cannot reach, no heap for the extent list,
-; and a part too fragmented to hand over. `kern_dos could not be reached` is
-; true of all six and useful for none, and these strings are MODULE bytes -
-; the machine pays nothing for them until it asks.
-.b1:
-    mov si, hbm_s_d1
+; **A REFUSAL SAYS WHICH STEP, and that is not only for the bring-up.** Seven
+; things can go wrong before the machine is torn down and they are seven
+; different repairs: a stale record, a disk image still mounted, a folder that
+; has moved, a DOS.O88 that is not there, a volume int 13h cannot reach, no
+; heap for the extent list, and a part too fragmented to hand over. `kern_dos
+; could not be reached` is true of all seven and useful for none, and these
+; strings are MODULE bytes - the machine pays nothing for them until it asks.
+%ifdef KERN_MEGA
+ %define HBM_BADV .badv         ; kern_mega: a refusal after hbm_vbn gives
+%else                           ; back what was taken (KERN-MEGA-DOS-PLAN
+ %define HBM_BADV .bad          ; 10.4 item 3)
+%endif
+%ifdef OS88_IMG
+.bimg:                          ; before hbm_vbn: nothing to give back
+    mov si, hbm_s_dimg
     jmp short .bad
+%endif
+.b1:
+%ifdef MEGA_DIAG
+    call hbm_d1why              ; SI = `H ssss:oooo bbbbbbbb rrr`: what was
+    jmp short .bad              ; posted, what is there, and the 286 restart
+%else                           ; figures (KERN-MEGA-PLAN 10.3 item 54.2) -
+    mov si, hbm_s_d1            ; MEGADIAG=1's field reading; the shipped
+    jmp short .bad              ; kern_mega says kern_big's sentence (14.65)
+%endif
 .b2:
     mov si, hbm_s_d2
-    jmp short .bad
+    jmp short HBM_BADV
 .b3:
     mov si, hbm_s_d3
-    jmp short .bad
+    jmp short HBM_BADV
 .b4:
     mov si, hbm_s_d4
-    jmp short .bad
+    jmp short HBM_BADV
 .b5:
     mov si, hbm_s_d5
-    jmp short .bad
+    jmp short HBM_BADV
 .b6:
     mov si, hbm_s_d6
+%ifdef KERN_MEGA
+    jmp short .badv
+.b9:                            ; the image is written and the park refused:
+    call hbm_forget             ; nothing goes to DOS, so neither file stays
+    mov si, hbm_s_d7
+    jmp short .b8s
+.b8:                            ; the image could not be written
+    mov si, hbm_s_d8
+.b8s:                           ; ...and hbm_wrimg's lock, [sch_lock] and
+    push si                     ; detached drivers are given back, as
+    xor dx, dx                  ; hbm_hibfail gives them - less its mode
+    xchg dx, [hb_xseg]          ; byte, since no Hibernate window asked
+    or dx, dx                   ; (hbf_dropck keeps the module while it is
+    jz .b8x                     ; not GONE)
+    mov bx, MEM_K_HIB
+    mov bp, mem_free_x
+    call hbm_cb
+.b8x:
+    CSDO mov byte [CSEG hbm_dosheld], 0
+    dec byte [sch_lock]
+    call hbm_unlock
+    call hbm_reload
+    call hbm_vbk
+    pop si
+    jmp short .bad
+.b7:
+    mov si, hbm_s_d7
+.badv:                          ; the extent list, if it was claimed, and the
+    xor dx, dx                  ; user's own volume back: every retry of a
+    xchg dx, [hb_xseg]          ; refused handoff leaked a claim and left the
+    or dx, dx                   ; user in DOS.O88's folder
+    jz .nox
+    mov bx, MEM_K_HIB
+    mov bp, mem_free_x
+    call hbm_cb
+.nox:
+    call hbm_vbk
+%endif
 .bad:
     mov word [hb_dosseg], 0
     call hbm_toast
@@ -2526,15 +3369,15 @@ hbm_extat:
     xor di, di
     mov word [hb_nx], 0
     mov si, ax                  ; SI = the cluster in hand
-    mov [cs:hbm_xskip], cx
-    mov [cs:hbm_xtake], bx
+    CSDO mov [CSEG hbm_xskip], cx
+    CSDO mov [CSEG hbm_xtake], bx
 .clus:
     mov al, [dsk_spc]
     xor ah, ah
     mov dx, ax                  ; DX = this cluster's sectors
     cmp [cs:hbm_xskip], dx
     jb .here                    ; the part starts inside this cluster
-    sub [cs:hbm_xskip], dx      ; ...or past it: step over, reading nothing
+    CSDO sub [CSEG hbm_xskip], dx      ; ...or past it: step over, reading nothing
     jmp .next                   ; (near: SPEC.md 18.7.5's high word took the
 .here:                          ; short one out of reach)
     mov ax, si
@@ -2545,7 +3388,7 @@ hbm_extat:
     mov bx, [dsk_c2hi]          ; ...in 32 bits: the volume-relative LBA's own
     adc bx, 0                   ; high word (SPEC.md 18.7.5)
     sub dx, [cs:hbm_xskip]      ; DX = sectors of this cluster we want
-    mov word [cs:hbm_xskip], 0
+    CSDO mov word [CSEG hbm_xskip], 0
     add ax, [hb_base]           ; DX:AX would be the absolute LBA, and the
     adc bx, [hb_base + 2]       ; high half is BX because DX is in use
     cmp dx, [cs:hbm_xtake]
@@ -2571,9 +3414,9 @@ hbm_extat:
 .grown:
     add ax, dx
     adc bx, 0
-    mov [cs:hbm_nextlo], ax
-    mov [cs:hbm_nexthi], bx
-    sub [cs:hbm_xtake], dx
+    CSDO mov [CSEG hbm_nextlo], ax
+    CSDO mov [CSEG hbm_nexthi], bx
+    CSDO sub [CSEG hbm_xtake], dx
     jz .done
 .next:
     mov ax, si
@@ -2600,8 +3443,23 @@ hbm_extat:
 hbm_down:
     push si
     push cx
+%ifdef KERN_MEGA
+    ; **A PARK IS TORN DOWN BEFORE ITS SNAPSHOT AND NOT AFTER IT.** The park
+    ; checksums the kernel's state above 1MB IN PLACE - the tables, the
+    ; drivers' and modules' images - and restores only conventional memory, so
+    ; whatever changes up there after the snapshot is a changed session: the
+    ; drivers the sweep leaves loaded (disk, cable, RAM disk, EMS: none owns a
+    ; chip kern_dos runs into) were unloaded HERE, freeing their selectors and
+    ; images above 1MB under a restored kernel that still believes in them, and
+    ; the stub refused every trip ("wrote over the parked session") once
+    ; packages-high wave P4 put driver images up there. They come back as they
+    ; were instead, and the panel with them
+    cmp byte [mega_dparked], 0
+    jne .nodown
+%endif
     call COLD_SEG:cpf_cp_flush_close    ; the panel's settings
     call COLD_SEG:drv_shutdown_x        ; the drivers
+.nodown:
     ; The lock and [sch_lock] may already be ours - `hbm_wrimg` takes both and
     ; gives neither back - so this cannot simply take them again. **AND
     ; `[sch_lock]` IS NOT THE WAY TO ASK**: `dsk_xfer` raises it around every
@@ -2727,7 +3585,7 @@ hbm_xcap:
 .cap:
     mov bx, HS_XSTRIDE          ; ...as bytes, for the walk's own stop test
     mul bx
-    mov [cs:hbm_xlim], ax
+    CSDO mov [CSEG hbm_xlim], ax
     add ax, 1023                ; ...and as whole KB, for the claim
     mov cl, 10
     shr ax, cl
@@ -2735,6 +3593,904 @@ hbm_xcap:
     pop cx
     pop bx
     ret
+
+%ifdef KERN_MEGA
+; =============================================================================
+; HIBERNATE IN PROTECTED MODE (kern_mega; docs/plans/KERN-MEGA-DOS-PLAN.md 8,
+; wave W5). The conventional image is written as on every other kernel - one
+; dskw_write from linear 0, through the reflected int 13h - but rounded up to
+; whole HBX_CHUNKs, and an EXTENDED SECTION is appended after it: a 512-byte
+; head ('HIBX', the run count, the section's bytes, each run's linear base and
+; length) and then the runs - the GDT, LDT and IDT as one, and every block the
+; XMEM pool has given out - copied down through a 32KB bounce. Its Fletcher
+; sums go in the pointer, which is written last.
+;
+; The resume reads the WHOLE FILE into one staging block above 1MB, placed
+; clear of every block the image had and every block this boot holds, and
+; enters the park stub over it (kernel/megapark.inc): the stub copies the runs
+; to where the image had them, then conventional memory, then jumps to
+; mega_hbwake through the image's own tables. Nothing of it leaves protected
+; mode, on either CPU.
+; =============================================================================
+
+; hbm_xwconv - the conventional picture in protected mode: DX:AX bytes from
+; linear 0, a whole number of HBX_CHUNKs, into the image file - the same
+; bytes in the same file as one write from segment 0, which is what it was.
+; But segment 0 is the NULL selector, so every word HDD.DRV's PIO loop moved
+; out of the first 64KB was a mega_null0 fixup, two exceptions each: 32,512
+; lines of MEGATRAP's census a hibernate (KERN-MEGA-PLAN 14.46). The identity
+; map starts at segment 40h (GDT entry 8) and only the IVT's 1KB has no other
+; way in, so: chunk 0 is WRITTEN for its size from 40h (its first cluster
+; wrong, for a moment), every later chunk APPENDED from its own identity
+; segment n x 800h, and then chunk 0 is put right in place with two
+; write-ats - the first CLUSTER from segment 0 (an offset must be a cluster
+; multiple: 1,024 fixups at 2KB), the rest of the chunk from 40h. An append
+; needs a whole number of clusters already in the file, which is why chunk 0
+; is not simply split. out: CF. Clobbers AX, BX, CX, DX, SI, ES
+hbm_xwconv:
+    shl dx, 1                   ; CX = the chunks: (DX:AX) >> 15
+    rol ax, 1
+    and ax, 1
+    or ax, dx
+    push ax
+    call hbm_nimg               ; SI = the name (AX and DL spent)
+    mov ax, 0x40
+    mov es, ax
+    xor bx, bx
+    xor dx, dx
+    mov cx, HBX_CHUNK
+    call COLD_SEG:dwf_dskw_write    ; chunk 0's SIZE
+    pop cx
+    jc .out
+    mov ax, HBX_CHUNK / 16      ; chunk 1's segment
+.ap:
+    dec cx
+    jz .fix
+    push cx
+    push ax
+    mov es, ax
+    call hbm_nimg
+    xor bx, bx
+    mov cx, HBX_CHUNK
+    call COLD_SEG:dwf_dskw_append
+    pop ax
+    pop cx
+    jc .out
+    add ax, HBX_CHUNK / 16
+    jmp short .ap
+.fix:
+    mov al, [dsk_spc]           ; AX = the volume's cluster in bytes
+    xor ah, ah
+    mov cl, 9
+    shl ax, cl
+    push ax
+    dec ax                      ; linear 0's selector over that cluster: the
+    call hbm_xlow               ; fixup runs each instruction through LOW0,
+    call hbm_nimg               ; which stops at 4FFh on purpose (mega.inc)
+    xor bx, bx
+    mov es, bx                  ; the first cluster, from linear 0
+    pop cx
+    push cx
+    xor ax, ax
+    xor dx, dx                  ; at offset 0
+    call COLD_SEG:dwf_dskw_write_at
+    pushf
+    mov ax, 0x04FF              ; ...and back
+    call hbm_xlow
+    popf
+    pop ax                      ; AX = the cluster = the offset of the rest
+    jc .out
+    cmp ax, HBX_CHUNK
+    jae .ok                     ; a cluster as big as the chunk: all done
+    push ax
+    call hbm_nimg
+    pop ax
+    mov bx, ax
+    sub bx, 0x400               ; 40h:BX = linear AX
+    mov cx, HBX_CHUNK
+    sub cx, ax
+    mov dx, 0x40
+    mov es, dx
+    xor dx, dx                  ; DX:AX = the offset
+    call COLD_SEG:dwf_dskw_write_at
+    jc .out
+.ok:
+    clc
+.out:
+    ret
+
+; hbm_xlow - MEGA_SEL_LOW0's limit = AX. Every register kept
+hbm_xlow:
+    push di
+    push es
+    push ax
+    mov di, MEGA_SEL_WIN            ; the GDT, as data
+    mov es, di
+    mov [es:MEGA_SEL_LOW0], ax
+    pop ax
+    pop es
+    pop di
+    ret
+
+; hbm_xconv - out: DX:AX = the conventional image's bytes on the disk, which
+;             is [mem_top] x 16 up to a whole HBX_CHUNK. Preserves every other
+;             register
+hbm_xconv:
+    push cx
+    mov ax, [mem_top]
+    add ax, HBX_CHUNK / 16 - 1
+    and ax, -(HBX_CHUNK / 16)
+    mov dx, ax
+    mov cl, 4
+    shl ax, cl
+    mov cl, 12
+    shr dx, cl
+    pop cx
+    ret
+
+; hbm_xneed - out: AX = KB a resume's staging block needs for the image the
+;             list describes ([mega_hbxl] its section's bytes): the header,
+;             the conventional image and the section, both in whole chunks.
+;             Clobbers CX, DX
+hbm_xneed:
+    mov ax, [mega_hbxl]
+    mov dx, [mega_hbxl + 2]
+    add ax, HBX_CHUNK - 1
+    adc dx, 0
+    mov cl, 15                  ; DX:AX >> 15: whole chunks
+    shr ax, cl
+    shl dx, 1
+    or ax, dx
+    mov cl, 5                   ; ...as KB
+    shl ax, cl
+    push ax
+    call hbm_xconv
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx
+    pop cx
+    add ax, cx
+    add ax, MPK_HDR / 1024
+    ret
+
+; hbm_pses - ES = the PARK'S SCRATCH (MEGA_SEL_PSCR, megados.inc's MPS_*),
+; where the list of runs is built: not in `.text` since KERN-MEGA-PLAN 14.45.
+; Every register but ES kept
+hbm_pses:
+    push ax
+    mov ax, MEGA_SEL_PSCR
+    mov es, ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hbm_xplan - BEFORE THE PICTURE: the masks and the wake address the image is
+;             to wake with, the list of what is above 1MB, and whether a
+;             resume could place all of it in one block beside it
+; out: CF = 0 with [mega_dncpy] runs in the park's scratch's list (MPS_REG:
+;      {dd -, dd to, dd bytes}),
+;      run 0 the tables, and [mega_hbxl] = the section's bytes; CF = 1 a
+;      resume would have no room, or the runs are more than HBX_HMAX.
+;      Clobbers AX BX CX DX SI DI
+; -----------------------------------------------------------------------------
+hbm_xplan:
+    in al, 0x21                 ; the masks the image wakes with: the
+    mov [mega_dimr1], al        ; hardware drivers' lines are already
+    in al, 0xA1                 ; masked by the sweep
+    mov [mega_dimr2], al
+    mov word [mega_hbwk], hbm_wake  ; ...and where (mega_hbwake's far jump)
+    mov [mega_hbwk + 2], cs
+    push es
+    call hbm_pses               ; the list is the park's scratch's
+    mov di, MPS_REG             ; run 0: the GDT, the LDT and the IDT, which
+    mov word [es:di+4], MEGA_GDT_LIN & 0xFFFF  ; are one range. `.cold`'s copy
+    mov word [es:di+6], MEGA_GDT_LIN >> 16     ; is not in it: a code selector,
+    mov word [es:di+8], (MEGA_IDT_LIN + 256 * 8 - MEGA_GDT_LIN) & 0xFFFF
+    mov word [es:di+10], (MEGA_IDT_LIN + 256 * 8 - MEGA_GDT_LIN) >> 16
+    mov word [mega_hbxl], (512 + MEGA_IDT_LIN + 256 * 8 - MEGA_GDT_LIN) & 0xFFFF
+    mov word [mega_hbxl + 2], (512 + MEGA_IDT_LIN + 256 * 8 - MEGA_GDT_LIN) >> 16
+    add di, MPK_CPYSZ           ; so KERNEL.SYS's bytes, as a boot makes them
+    mov si, mx_tab
+.mx:
+    mov ax, [ss:si+MX_KB]          ; every block the pool has given out, the
+    or ax, ax                   ; kernel's own among them (track 1's modules
+    jz .next                    ; and caches: hbm_wake flushes the caches)
+    mov dx, ax
+    mov cl, 10
+    shl ax, cl
+    mov cl, 6
+    shr dx, cl
+    mov [es:di+8], ax
+    mov [es:di+10], dx
+    add [mega_hbxl], ax
+    adc [mega_hbxl + 2], dx
+    mov ax, [ss:si+MX_OFF]
+    mov dx, ax
+    mov cl, 10
+    shl ax, cl
+    mov cl, 6
+    shr dx, cl
+    add dx, MEGA_XPOOL >> 16
+    mov [es:di+4], ax
+    mov [es:di+6], dx
+    add di, MPK_CPYSZ
+.next:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .mx
+    mov ax, di
+    sub ax, MPS_REG
+    mov cl, MPK_CPYSZ
+    div cl
+    xor ah, ah
+    mov [mega_dncpy], ax
+    pop es
+    cmp ax, HBX_HMAX + 1        ; more runs than the head has room to list:
+    jae .full                   ; run 0's bytes would land on the list's tail
+    call hbm_xneed              ; AX = KB
+    jmp hbm_xfit                ; CF
+.full:
+    stc                         ; ...refused BEFORE the picture, not an
+    ret                         ; image that is written and cannot resume
+
+; -----------------------------------------------------------------------------
+; hbm_xfit - a place in the pool for AX KB clear of every run the list names
+;            (but run 0, which is below the pool) and every block this kernel
+;            holds now - first fit, from the bottom
+; out: CF = 0 with AX = its offset in KB from the pool's base; CF = 1 none.
+;      Every other register kept
+; -----------------------------------------------------------------------------
+hbm_xfit:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call hbm_pses               ; (the list: the scratch's)
+    mov bx, ax                  ; BX = KB wanted
+    xor ax, ax                  ; AX = the candidate
+.again:
+    mov si, MPS_REG + MPK_CPYSZ
+    mov cx, [mega_dncpy]
+    dec cx
+.img:
+    jcxz .live
+    push cx
+    mov dx, [es:si+6]              ; DX = the run's offset in the pool, in KB
+    sub dx, MEGA_XPOOL >> 16
+    mov cl, 6
+    shl dx, cl
+    mov di, [es:si+4]
+    mov cl, 10
+    shr di, cl
+    or dx, di
+    mov di, [es:si+8]              ; DI = ...and its end
+    shr di, cl
+    push dx
+    mov dx, [es:si+10]
+    mov cl, 6
+    shl dx, cl
+    or di, dx
+    pop dx
+    pop cx
+    add di, dx
+    call .ov
+    jc .again
+    add si, MPK_CPYSZ
+    dec cx
+    jmp short .img
+.live:
+    mov si, mx_tab
+.lv:
+    mov di, [ss:si+MX_KB]
+    or di, di
+    jz .lvn
+    mov dx, [ss:si+MX_OFF]
+    add di, dx
+    call .ov
+    jc .again
+.lvn:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .lv
+    mov dx, ax
+    add dx, bx
+    jc .no
+    cmp dx, [xm_kb]
+    ja .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+.ov:                            ; [DX, DI) against [AX, AX + BX): CF = 1
+    cmp ax, di                  ; and the candidate moved past it when they
+    jae .ovn                    ; meet
+    push ax
+    add ax, bx
+    cmp dx, ax
+    pop ax
+    jae .ovn
+    mov ax, di
+    stc
+    ret
+.ovn:
+    clc
+    ret
+
+; hbm_xsum - [mega_dsum] += Fletcher's sums over the bounce, ES:0 for
+;            HBX_CHUNK bytes, mod 65535. Clobbers AX CX DX SI
+hbm_xsum:
+    mov ax, [mega_dsum]
+    mov dx, [mega_dsum + 2]
+    push ds
+    push es
+    pop ds
+    xor si, si
+    mov cx, HBX_CHUNK / 2
+.l:
+    add ax, [si]
+    adc ax, 0
+    add dx, ax
+    adc dx, 0
+    inc si
+    inc si
+    loop .l
+    pop ds
+    mov [mega_dsum], ax
+    mov [mega_dsum + 2], dx
+    ret
+
+; hbm_xbounce - the 32KB bounce, conventional and page-safe like every claim:
+;               out CF = 0 with ES = DX = its segment and [mega_hbbl] its
+;               linear base; CF = 1 none. Clobbers AX BX CX BP
+hbm_xbounce:
+    mov ax, HBX_KB
+    mov bx, MEM_K_HIB
+    mov bp, mem_claim_x
+    call hbm_cb                 ; DX = its segment
+    jc .out
+    mov es, dx
+    mov ax, dx
+    mov cl, 4
+    shl ax, cl
+    mov [mega_hbbl], ax
+    mov ax, dx
+    mov cl, 12
+    shr ax, cl
+    mov [mega_hbbl + 2], ax
+.out:
+    ret
+
+; hbm_xfree - the bounce at DX back. Clobbers BX BP
+hbm_xfree:
+    mov bx, MEM_K_HIB
+    mov bp, mem_free_x
+    jmp hbm_cb
+
+; hbm_xup - CX bytes (even) from linear [mega_xsrc] to linear [mega_xdst],
+;           under the kernel's copy. Clobbers AX BX CX DX SI DI BP
+hbm_xup:
+    mov bp, mega_lincopy
+    jmp hbm_kd
+
+; -----------------------------------------------------------------------------
+; hbm_xwrite - THE EXTENDED SECTION, after the conventional image (5b)
+; in:  hbm_xplan's list; the lock and [sch_lock] held, as hbm_wrimg has them
+; out: CF = 0 appended and the pointer's three fields set; CF = 1 not.
+;      Clobbers AX BX CX DX SI DI BP ES
+; -----------------------------------------------------------------------------
+hbm_xwrite:
+    call hbm_xbounce            ; AFTER the picture, so the image does not
+    jnc .got                    ; hold it
+    ret
+.got:
+    push dx                     ; for the free
+    xor ax, ax
+    mov [mega_dsum], ax
+    mov [mega_dsum + 2], ax
+    mov [mega_hbxd], ax
+    mov [mega_hbxd + 2], ax
+    xor di, di                  ; --- the head, at the front of chunk 0 -------
+    mov cx, 256
+    rep stosw
+    mov word [es:0], 'HI'
+    mov word [es:2], 'BX'
+    mov cx, [mega_dncpy]
+    mov [es:4], cx
+    mov ax, [xm_kb]             ; the pool the runs were cut from, which a
+    mov [es:6], ax              ; resume holds its own against
+    mov ax, [mega_hbxl]
+    mov [es:8], ax
+    mov ax, [mega_hbxl + 2]
+    mov [es:10], ax
+    push ds
+    mov ax, MEGA_SEL_PSCR       ; (the list: the park's scratch's)
+    mov ds, ax
+    mov si, MPS_REG + 4
+    mov di, 12
+.hd:
+    movsw                       ; to, then bytes
+    movsw
+    movsw
+    movsw
+    add si, MPK_CPYSZ - 8
+    loop .hd
+    pop ds
+    mov word [mega_hbf], 512
+    mov si, MPS_REG             ; --- the runs, through the bounce ------------
+    mov cx, [mega_dncpy]
+.run:
+    push cx
+    push es                     ; (the bounce, around the scratch's list)
+    call hbm_pses
+    mov ax, [es:si+4]
+    mov [mega_hbs], ax
+    mov ax, [es:si+6]
+    mov [mega_hbs + 2], ax
+    mov ax, [es:si+8]
+    mov [mega_hbr], ax
+    mov ax, [es:si+10]
+    mov [mega_hbr + 2], ax
+    pop es
+.chunk:
+    mov cx, HBX_CHUNK
+    sub cx, [mega_hbf]          ; the room left in the bounce...
+    mov ax, [mega_hbr]
+    cmp word [mega_hbr + 2], 0
+    jne .take
+    or ax, ax
+    jz .rnext                   ; ...and this run is done
+    cmp ax, cx
+    jae .take
+    mov cx, ax
+.take:
+    push si
+    push cx
+    mov ax, [mega_hbs]
+    mov [mega_xsrc], ax
+    mov ax, [mega_hbs + 2]
+    mov [mega_xsrc + 2], ax
+    mov ax, [mega_hbbl]
+    mov dx, [mega_hbbl + 2]
+    add ax, [mega_hbf]
+    adc dx, 0
+    mov [mega_xdst], ax
+    mov [mega_xdst + 2], dx
+    call hbm_xup
+    pop cx
+    pop si
+    add [mega_hbs], cx
+    adc word [mega_hbs + 2], 0
+    sub [mega_hbr], cx
+    sbb word [mega_hbr + 2], 0
+    add [mega_hbf], cx
+    cmp word [mega_hbf], HBX_CHUNK
+    jb .chunk
+    call .flush
+    jnc .chunk
+    pop cx
+    jmp short .fail
+.rnext:
+    pop cx
+    add si, MPK_CPYSZ
+    dec cx
+    jz .tail
+    jmp .run
+.tail:
+    mov di, [mega_hbf]          ; the last chunk, zeros to its end
+    or di, di
+    jz .done
+    mov cx, HBX_CHUNK
+    sub cx, di
+    shr cx, 1
+    xor ax, ax
+    rep stosw
+    call .flush
+    jc .fail
+.done:
+    CSDO mov byte [CSEG hbm_ptrfix + HBP_XFLG], 1
+    mov ax, [mega_dsum]
+    CSDO mov [CSEG hbm_ptrfix + HBP_XSUM], ax
+    mov ax, [mega_dsum + 2]
+    CSDO mov [CSEG hbm_ptrfix + HBP_XSUM + 2], ax
+    mov ax, [mega_hbxd]
+    CSDO mov [CSEG hbm_ptrfix + HBP_XLEN], ax
+    mov ax, [mega_hbxd + 2]
+    CSDO mov [CSEG hbm_ptrfix + HBP_XLEN + 2], ax
+    pop dx
+    call hbm_xfree
+    clc
+    ret
+.fail:
+    pop dx
+    call hbm_xfree
+    stc
+    ret
+.flush:                         ; the bounce, summed and appended
+    push si
+    call hbm_xsum
+    call hbm_nimg               ; SI = the name
+    xor bx, bx
+    mov cx, HBX_CHUNK
+    call COLD_SEG:dwf_dskw_append
+    pop si
+    jc .fret
+    add word [mega_hbxd], HBX_CHUNK
+    adc word [mega_hbxd + 2], 0
+    mov word [mega_hbf], 0
+    clc
+.fret:
+    ret
+
+; -----------------------------------------------------------------------------
+; hbm_xruns - the image's runs, as hbm_xres read them into MPS_REG, against
+;             THIS boot (KERN-MEGA-DOS-PLAN 10.5 defect 5): run 0 is exactly
+;             the tables' range, and every other run is whole KB, not empty,
+;             and inside the pool this kernel found - [xm_kb] KB from
+;             MEGA_XPOOL - so a damaged or foreign section refuses before the
+;             stub copies a byte. hbm_xfit's KB arithmetic rests on this too
+; out: CF = 1 refuse. Clobbers AX BX CX DX SI
+; -----------------------------------------------------------------------------
+%if MEGA_XPOOL & 0xFFFF
+ %error "hbm_xruns takes the pool's base to be 64KB-aligned"
+%endif
+hbm_xruns:
+    push es
+    call hbm_pses               ; (the list: the scratch's)
+    call .go                    ; CF, kept by the pop
+    pop es
+    ret
+.go:
+    mov si, MPS_REG
+    cmp word [es:si+4], MEGA_GDT_LIN & 0xFFFF
+    jne .no
+    cmp word [es:si+6], MEGA_GDT_LIN >> 16
+    jne .no
+    cmp word [es:si+8], (MEGA_IDT_LIN + 256 * 8 - MEGA_GDT_LIN) & 0xFFFF
+    jne .no
+    cmp word [es:si+10], (MEGA_IDT_LIN + 256 * 8 - MEGA_GDT_LIN) >> 16
+    jne .no
+    mov cx, [mega_dncpy]
+.r:
+    dec cx
+    jz .ok
+    add si, MPK_CPYSZ
+    mov ax, [es:si+4]
+    mov dx, [es:si+6]
+    sub dx, MEGA_XPOOL >> 16
+    jb .no                      ; below the pool
+    call .kb
+    jc .no
+    mov bx, ax                  ; BX = where it starts, in KB
+    mov ax, [es:si+8]
+    mov dx, [es:si+10]
+    call .kb
+    jc .no
+    or ax, ax
+    jz .no
+    add ax, bx
+    jc .no
+    cmp ax, [xm_kb]
+    jbe .r
+.no:
+    stc
+    ret
+.ok:
+    clc
+    ret
+.kb:                            ; DX:AX bytes -> AX KB; CF = 1 not whole KB
+    test ax, 0x3FF              ; or 64MB or more: DX counts 64KB, so
+    jnz .kbno                   ; 3FFh is the last that shifts into a word
+    cmp dx, 0x3FF
+    ja .kbno
+    push cx
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx
+    pop cx
+    clc
+    ret
+.kbno:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hbm_xclaim - the resume's staging block into mx_tab as the kernel's own, at
+;              the place hbm_xfit found, so nothing the file read does can be
+;              handed it. Nothing frees it on the way in: the stub puts back
+;              the image's mx_tab over this one
+; in:  AX = its offset in KB from the pool's base
+; out: CF = 1 the table is full. AX kept; clobbers CX DX
+; -----------------------------------------------------------------------------
+hbm_xclaim:
+    push bx
+    push di
+    mov di, mx_tab
+.f:
+    cmp word [ss:di+MX_KB], 0
+    je .t
+    add di, MX_BLKSZ
+    cmp di, mx_tab_end
+    jb .f
+    stc
+    jmp short .o
+.t:
+    push ax
+    mov bx, ax
+    call hbm_xneed              ; AX = its KB
+    pushf
+    cli
+    mov [ss:di+MX_OFF], bx
+    mov byte [ss:di+MX_OWN], MX_KOWN
+    mov word [ss:di+MX_SEL], 0
+    mov [ss:di+MX_KB], ax          ; ...last: a non-zero size is the claim
+    popf
+    pop ax
+    clc
+.o:
+    pop di
+    pop bx
+    ret
+
+; hbm_xunclm - a refused resume's staging claim back, found by [mega_dpbase]
+; (0 = none was made). Clobbers AX CX DX SI
+hbm_xunclm:
+    mov ax, [mega_dpbase]
+    mov dx, [mega_dpbase + 2]
+    mov cx, ax
+    or cx, dx
+    jz .o
+    sub dx, MEGA_XPOOL >> 16
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx                   ; AX = its KB offset
+    mov si, mx_tab
+.s:
+    cmp word [ss:si+MX_KB], 0
+    je .n
+    cmp byte [ss:si+MX_OWN], MX_KOWN
+    jne .n
+    cmp [ss:si+MX_OFF], ax
+    jne .n
+    mov word [ss:si+MX_KB], 0
+    ret
+.n:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .s
+.o:
+    ret
+
+; -----------------------------------------------------------------------------
+; hbm_xres - THE RESUME, kern_mega in protected mode (jumped to from hbm_res,
+;            the image found and the pointer in hbm_ptrbuf)
+; -----------------------------------------------------------------------------
+hbm_xres:
+    call hbm_xbounce
+    jnc .got
+    jmp hbm_res.fail
+.got:
+    mov [hb_xseg], dx           ; ...where .refuse finds it
+    xor ax, ax                  ; no staging claim yet: .refuse frees the one
+    mov [mega_dpbase], ax       ; mega_dpbase names, and a stale base could
+    mov [mega_dpbase + 2], ax   ; name a block somebody else has since
+    inc byte [sch_lock]         ; the kernel's copy has two descriptors
+    call hbm_xconv              ; --- the section's head, first --------------
+    call .rd
+    jc .bad1
+    cmp word [es:0], 'HI'
+    jne .bad1
+    cmp word [es:2], 'BX'
+    jne .bad1
+    mov cx, [es:4]
+    jcxz .bad1
+    cmp cx, MPK_CMAX
+    ja .bad1
+    mov ax, [es:6]              ; THE POOL IT WAS CUT FROM, against this
+    or ax, ax                   ; boot's (KERN-MEGA-DOS-PLAN 10.5 defect 5):
+    jz .bad1                    ; the restored kernel believes the image's
+    cmp ax, [xm_kb]             ; [xm_kb] and its runs live in it, so less
+    jbe .nok                    ; memory now - a SIMM out, a BIOS setting -
+    dec byte [sch_lock]         ; is a refusal, not a copy into memory that
+    mov si, hbm_s_d7            ; is not there ('No room above 1MB')
+    jmp .refuse
+.bad1:
+    jmp .bad
+.nok:
+    mov [mega_dncpy], cx
+    mov word [mega_dnreg], 0    ; the stub sums nothing: hbm_xsum has
+    mov si, 12
+    mov di, MPS_REG + 4
+    push ds
+    push es
+    push es
+    pop ds                      ; DS = the bounce, ES = the park's scratch
+    call hbm_pses
+.hd:
+    movsw
+    movsw
+    movsw
+    movsw
+    add di, MPK_CPYSZ - 8
+    loop .hd
+    pop es
+    pop ds
+    call hbm_xruns              ; ...each run, against the tables and the pool
+    jc .bad
+    mov ax, [cs:hbm_ptrbuf + HBP_XLEN]  ; --- the block -----------------------
+    mov [mega_hbxl], ax
+    mov ax, [cs:hbm_ptrbuf + HBP_XLEN + 2]
+    mov [mega_hbxl + 2], ax
+    call hbm_xneed
+    call hbm_xfit               ; AX = its KB offset in the pool
+    jnc .placed
+    dec byte [sch_lock]
+    mov si, hbm_s_d7            ; 'No room above 1MB'
+    jmp .refuse
+.placed:
+    call hbm_xclaim             ; CLAIMED for the read below: a cache that
+    jnc .claimed                ; takes a pool block while the file comes in
+    dec byte [sch_lock]         ; must not take this one (10.5 lesser)
+    mov si, hbm_s_d7
+    jmp .refuse
+.claimed:
+    mov dx, ax
+    mov cl, 10
+    shl ax, cl
+    mov cl, 6
+    shr dx, cl
+    add dx, MEGA_XPOOL >> 16
+    mov [mega_dpbase], ax
+    mov [mega_dpbase + 2], dx
+    call hbm_xconv              ; each run's FROM: the block, the header, the
+    add ax, MPK_HDR + 512       ; image and the section's head, and the runs
+    adc dx, 0                   ; before it
+    add ax, [mega_dpbase]
+    adc dx, [mega_dpbase + 2]
+    push es
+    call hbm_pses               ; (the list: the scratch's)
+    mov si, MPS_REG
+    mov cx, [mega_dncpy]
+.fr:
+    mov [es:si], ax
+    mov [es:si+2], dx
+    add ax, [es:si+8]
+    adc dx, [es:si+10]
+    add si, MPK_CPYSZ
+    loop .fr
+    pop es
+    xor ax, ax                  ; --- the whole file, chunk by chunk, into it
+    mov [mega_dsum], ax
+    mov [mega_dsum + 2], ax
+    mov [mega_hbs], ax          ; the file offset
+    mov [mega_hbs + 2], ax
+.chunk:
+    call hbm_xconv              ; DX:AX = the image's end, where the section
+    mov bx, ax                  ; and its sum begin
+    mov cx, dx
+    add ax, [mega_hbxl]
+    adc dx, [mega_hbxl + 2]
+    cmp ax, [mega_hbs]
+    jne .more
+    cmp dx, [mega_hbs + 2]
+    jne .more
+    jmp .read
+.more:
+    push bx
+    push cx
+    mov ax, [mega_hbs]
+    mov dx, [mega_hbs + 2]
+    call .rd
+    pop cx
+    pop bx
+    jc .bad
+    mov ax, [mega_hbs + 2]      ; ...summed from the image's end on
+    cmp ax, cx
+    jb .nosum
+    ja .sum
+    mov ax, [mega_hbs]
+    cmp ax, bx
+    jb .nosum
+.sum:
+    call hbm_xsum
+.nosum:
+    mov ax, [mega_hbbl]
+    mov [mega_xsrc], ax
+    mov ax, [mega_hbbl + 2]
+    mov [mega_xsrc + 2], ax
+    mov ax, [mega_hbs]
+    mov dx, [mega_hbs + 2]
+    add ax, MPK_HDR
+    adc dx, 0
+    add ax, [mega_dpbase]
+    adc dx, [mega_dpbase + 2]
+    mov [mega_xdst], ax
+    mov [mega_xdst + 2], dx
+    mov cx, HBX_CHUNK
+    call hbm_xup
+    add word [mega_hbs], HBX_CHUNK
+    adc word [mega_hbs + 2], 0
+    jmp .chunk
+.bad:
+    dec byte [sch_lock]
+    mov si, hbm_s_lost
+.refuse:
+    push si
+    call hbm_xunclm             ; the staging block, if it was claimed
+    mov dx, [hb_xseg]
+    call hbm_xfree
+    mov word [hb_xseg], 0
+    call hbm_vbk
+    mov byte [hb_mode], HB_M_RESUME
+    pop si
+    call hbm_toast
+    call hbm_winback
+    mov sp, [hb_sp]
+    ret
+.read:
+    mov ax, [mega_dsum]         ; THE SUM, against the pointer's: a byte of
+    cmp ax, [cs:hbm_ptrbuf + HBP_XSUM]  ; the section changed on the disk is
+    jne .bad                    ; a refusal, not a machine that wakes wrong
+    mov ax, [mega_dsum + 2]
+    cmp ax, [cs:hbm_ptrbuf + HBP_XSUM + 2]
+    jne .bad
+    mov ax, [mem_top]           ; the KB the stub puts back
+    mov cl, 6
+    shr ax, cl
+    mov [mega_dpkb], ax
+    ; --- the fresh kernel goes: hbm_down's order, with no stub to stage ------
+    call COLD_SEG:cpf_cp_flush_close
+    call COLD_SEG:drv_shutdown_x
+    call hbm_lock
+    mov bp, vid_reboot          ; text mode: hbm_wake's cells are in its page
+    call hbm_kd
+    call hbm_stageseg
+    mov si, clk_sec             ; the fresh boot's clock, as hbm_res stages it
+    mov di, HS_CLK
+    mov cx, 5
+    rep movsw
+    mov ax, [hb_doscode]
+    mov [es:HS_DOSCODE], ax
+    mov di, HS_KSEG
+    mov ax, ds
+    stosw
+    mov ax, [hb_dosakb]
+    stosw
+    mov ax, 0xFFFF              ; HS_TICK0: the clock above is current
+    stosw
+    stosw
+    call MEGA_SEL_CODE:mega_hbgof  ; ...and does not come back
+.rd:                            ; HBX_CHUNK at file offset DX:AX into ES:0.
+    push ax                     ; CF = 1 unless all of it came
+    push dx
+    call hbm_nimg
+    pop dx
+    pop ax
+    xor bx, bx
+    mov cx, HBX_CHUNK
+    call COLD_SEG:dwf_dskw_read_at
+    jc .rdo
+    cmp ax, HBX_CHUNK
+    je .rdo                     ; (CF = 0 from the equal compare)
+    stc
+.rdo:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; hbm_wake - the restored kernel wakes up here (SPEC.md 87.6)
@@ -2756,6 +4512,31 @@ hbm_wake:
     HBMARKAT HM_WCOL, 'W'       ; black hole rather than a fault
 %endif
     cld
+%ifdef HMA_DRV
+    ; --- 0b. THE HMA'S POOL, BEFORE ANYTHING CAN RUN IN IT (SPEC.md 87.6) ---
+    ; The image names its HMA drivers' segments - their drv_tab rows, the
+    ; class pairs, a window's W_DISP - and the boot that resumed us has emptied
+    ; the pool (drv_shutdown_x at hbm_down). hbm_hsave copied the table and
+    ; every live block into [hbm_hseg], which the image carried, so they go
+    ; back to the bases they were at, with IF = 0 still: `.cold` and the tail
+    ; are this build's again (the fixed head's pad byte) and A20 is as the
+    ; fresh XMEM.DRV left it, open. No copy is the old HRESET.
+    cmp word [api_coldseg], HMA_SEG
+    jne .nohma
+    mov bx, [cs:hbm_hseg]
+    or bx, bx
+    jz .hreset
+    mov al, ROMF_HTAB
+    call far [rom_mfp]          ; DX:AX = the tail's table, CX = its bytes
+    jc .hreset                  ; (hbm_ask asked it already)
+    mov bp, 1                   ; ...out of the claim
+    call hbm_hcopy
+    jmp short .nohma
+.hreset:
+    mov al, ROMF_HRESET
+    call far [rom_mfp]
+.nohma:
+%endif
     ; --- 1. THE PIT, WHICH THE HANDOVER PUT BACK IN THE ROM'S MODE ----------
     ; SPEC.md 8.1: the kernel runs channel 0 in MODE 2 with divisor 0, so the
     ; IRQ rate stays 18.2065 Hz and the counter decrements by ONE per input
@@ -2837,7 +4618,11 @@ hbm_wake:
     jz .clkdone                 ; 0xFFFFFFFF: the clock above is current
     push es
     xor bx, bx
+%ifdef KERN_MEGA
+    MEGA_SEG0 es                ; (segment 0 is the NULL selector there)
+%else
     mov es, bx
+%endif
     mov bx, [es:0x046C]         ; the ROM's own tick, now
     mov cx, [es:0x046E]
     pop es
@@ -2902,6 +4687,24 @@ hbm_wake:
 %ifdef OS88_BIGVOL
     mov [dsk_lbahi], ax         ; ...and its LBA's high word, which only its
 %endif                          ; .out spends (SPEC.md 18.7.5)
+    ; 3a. THE PROGRAMS' MEMORY IS WHAT WAS WRITTEN (SPEC.md 87.4.1) --------
+    ; The same sum over the same records hbm_wrimg took it over, on the
+    ; memory the stub has just read back. Here and not in the stub, because
+    ; the records are the image's own and so is the figure, and because a
+    ; refusal needs the file layer to discard the image: the caches are
+    ; dropped above, so it reads the disk as it is. A wrong, truncated or
+    ; cross-linked image comes back as somebody else's bytes under a program,
+    ; and a session that resumed on them would be a crash at best
+    call hbm_psum
+    cmp ax, [cs:hbm_psv]
+    jne .psbad
+    cmp dx, [cs:hbm_psv + 2]
+    je .psok
+.psbad:
+    call hbm_forget             ; the pointer and the image go, so the next
+    mov si, hbm_s_psbad         ; boot is an ordinary one rather than the same
+    jmp hbm_bye                 ; refusal again
+.psok:
     ; ...AND THE EXTENT LIST THE PICTURE WAS TAKEN OVER (SPEC.md 87.6.1).
     ; `mem_pinseg` one level up: a word that was true of the machine that
     ; wrote the image and is meaningless in the machine that reads it - except
@@ -2927,6 +4730,9 @@ hbm_wake:
     call hbm_cb         
     mov word [hb_xseg], 0
 .noxs:
+%ifdef HMA_DRV
+    call hbm_hfree              ; ...and the HMA pool's copy, spent at 0b
+%endif
     call KERNEL_SEG:fpg_end     ; ...and the progress widget it had up
     ; 3c. THE MAILBOX, WHILE THERE STILL IS ONE (SPEC.md 96.41.3) -----------
     ; **THE STAGING AREA IS THE DESKTOP'S FRAMEBUFFER ON TWO ADAPTERS OF
@@ -2991,7 +4797,20 @@ hbm_wake:
     ; IRQ4 makes a different question from the port's own row. It is 0 on a
     ; machine that never settled, and `not 0` is 0xFF, so the `and` below is
     ; then a no-op and needs no branch to be safe.
+    ;
+    ; **BUT IT IS 0xFF ON EVERY MACHINE WHOSE POINTER IS ON NO SERIAL LINE**
+    ; (KERN-MEGA-PLAN 14.57): MOU_P2LINE, which a PS/2 mouse and a pointing
+    ; driver both settle with, is 0xFF precisely so that 9.5.2.1's guard masks
+    ; both serial lines - and `not 0xFF` is 0, so this `and` UNMASKED THE
+    ; WHOLE MASTER 8259 after every resume on such a machine: IRQ 3, 4, 5 and
+    ; 7 open on lines the session had masked (read in Bochs: B8h before the
+    ; hibernate, 00h after it). A PS/2 or driver-fed pointer has no line here
+    ; to give back, so it skips the block.
     mov cl, [mou_line]
+%ifdef KERN_BIG
+    cmp cl, MOU_P2LINE
+    je .noline
+%endif
     not cl
     pushf
     cli
@@ -2999,6 +4818,9 @@ hbm_wake:
     and al, cl
     out 0x21, al
     popf
+%ifdef KERN_BIG
+.noline:
+%endif
 %ifdef KERN_BIG
     ; --- ...AND THE OTHER SOCKET, WHICH IS THE SAME DEFECT WITH THREE
     ; TEARDOWNS INSTEAD OF ONE (SPEC.md 96.45.2.2). Step 6's `mouse_unhook`
@@ -3014,8 +4836,89 @@ hbm_wake:
     ; mouse was the live pointer. A serial machine runs none of this, and
     ; neither does one whose PS/2 mouse had already LOST the contest, which
     ; `mou_lockon` retires through the same `mou_p2_off`.
+    ;
+    ; --- ...BUT FIRST THE KEYBOARD, WHICH IS THE 8042'S OTHER HALF AND HAD NO
+    ; GUARD AT ALL (SPEC.md 96.45.2.3). The 0xAE at the foot of the block
+    ; below only runs where a PS/2 MOUSE was the live pointer, and a DOS
+    ; program owns the whole 8042 while it runs: one that leaves the keyboard
+    ; interface disabled (0xAD, or bit 4 of the command byte), IRQ1 off in the
+    ; command byte (bit 0), or the KEYBOARD told to stop scanning (0xF5) brings
+    ; a machine with a PS/2 keyboard and a serial mouse home with a dead
+    ; keyboard and nothing to say why. The bank already exists, taken by
+    ; `mou_p2_init` at boot, so this puts back EXACTLY what the boot left the
+    ; controller holding: `[mou_p2cmdr]` (the BIOS's own byte) where the probe
+    ; gave up after reading it, and `[mou_p2cmd0]` where a PS/2 mouse went
+    ; live and later lost the contest (`mou_p2_off`'s byte), each behind the
+    ; 0xA7 that road sent too. Then the interface on and the keyboard
+    ; scanning, its 0xFA collected with IRQ1 masked so `int 09h` never sees
+    ; it. Where a PS/2 mouse IS live the block below writes its own command
+    ; byte and this skips to the enables. Idempotent on the reboot route,
+    ; which POST and `mou_p2_init` left in this state already
+    cmp byte [cpu_tier], CPU_8086   ; an XT's keyboard is an 8255 (9.9.2)
+    je .kbunm
+    pushf
+    cli
+    in  al, 0x21                ; IRQ1 masked: the 0xFA below is OURS
+    or  al, MOU_P2KIRQ
+    out 0x21, al
+    popf
+    cmp byte [mou_p2], 0
+    jne .kbon                   ; the block below writes the byte
+    cmp byte [mou_p2st], 2
+    jb .kbon                    ; the boot never read one: nothing to put back
+    mov al, 0xA7                ; the aux port as the boot left it - off
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, [mou_p2cmdr]
+    cmp byte [mou_p2st], 9
+    jb .kbcb
+    mov al, [mou_p2cmd0]
+.kbcb:
+    mov bp, mou_p2wcmd
+    call hbm_kd
+.kbon:
+    mov al, 0xAE                ; the keyboard interface on...
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, 0xF4                ; ...and the keyboard scanning (0xF5 undone)
+    mov bp, mou_p2dw
+    call hbm_kd
+    call hbm_kbak               ; its 0xFA, off the buffer before IRQ1 opens
+.kbunm:
+    pushf                       ; ...AND IRQ1 AT THE 8259 ON EVERY MACHINE: the
+    cli                         ; live route's mask is the one kd_resume
+    in  al, 0x21                ; sampled AS THE PROGRAM LEFT IT, and a
+    and al, 0xFF & ~MOU_P2KIRQ  ; desktop never runs with its keyboard masked
+    out 0x21, al
+    popf
     cmp byte [mou_p2], 0
     je .nop2
+    ; **IRQ12 MASKED AT THE SLAVE FOR THE WHOLE RE-ARM** (KERN-MEGA-PLAN
+    ; 14.57). Everything below reads the device's replies off 60h by POLLING
+    ; and says so - *"IRQ12 is still masked at the slave"* - which is true of
+    ; the live route (mou_p2_off masked it before kd_resume sampled the mask)
+    ; and FALSE of the reboot route: hbm_handover samples the FRESH boot's
+    ; mask, whose PS/2 mouse is live, and kern_mega's mega_hbwake puts back
+    ; the image's, whose mouse was live too. So with IF on since step 1,
+    ; `mou_p2_isr` RACED the poll for every ACK of the wheel's knock. On a real
+    ; 8042 the IRQ pin follows OBF by a few of the controller's own
+    ; instructions, so either side can win any one byte: the poll takes F5's
+    ; ACK, the ISR takes F3's, the knock gives up with the DEVICE still
+    ; waiting for its sample-rate argument - and the F4 below is spent as
+    ; that argument. Reporting stays off: the PS/2 mouse is dead after the
+    ; resume and the keyboard is fine (the Victory 286 on kern_mega, 14.56).
+    ; QEMU raises IRQ12 with OBF, so its ISR wins every byte: the knock fails
+    ; at its first ACK and the wheel is lost (wz 0 on a device in four-byte
+    ; mode) rather than the pointer; Bochs raises it a timer tick later, so
+    ; its poll wins every byte and nothing shows at all. The unmask at the foot of the block is the one that was always
+    ; meant, and mou_p2_init's own probe holds the same mask for the same
+    ; reason (its "IRQ12 MASKED BEFORE ANYTHING IS ASKED")
+    pushf
+    cli
+    in  al, 0xA1
+    or  al, MOU_P2SL
+    out 0xA1, al
+    popf
     mov al, 0xA8                ; the auxiliary interface back on - 0xA7 undone
     mov bp, mou_p2cw
     call hbm_kd                
@@ -3023,13 +4926,94 @@ hbm_wake:
     and al, 0xDF                ; off the same banked BIOS byte: the aux clock
     or  al, 0x02 | MOU_P2KOFF   ; on, and IRQ12 armed AT THE CONTROLLER
     mov bp, mou_p2wcmd
-    call hbm_kd                
+    call hbm_kd
+    ; ...AND THE WHEEL'S KNOCK AGAIN (SPEC.md 9.9.8). A power-off hibernate
+    ; brings the device back from POST in three-byte mode, and a DOS mouse
+    ; driver may have reset it - and a decoder still counting to four on a
+    ; three-byte stream is a pointer gone mad, not one that lost its wheel.
+    ; The replies ARE collected here, unlike 0xF4's: IRQ12 is still masked at
+    ; the slave and the keyboard is off, so 60h is ours, and the last one is
+    ; the ID. Not 3 any more: the decoder goes back to three bytes. The device
+    ; is NOT silent here, as it is after the boot's reset: 0xF4 is still in
+    ; force (or the DOS driver's), so 0xF5 stops it first, its 0xFA is found
+    ; behind any packet already in flight, and 60h is drained before the
+    ; replies are read by position - each of which must be 0xFA, as
+    ; mou_p2dev insists at boot
+    cmp byte [mou_p2wz], 0
+    je .nowz
+    push si
+    push cx
+    mov al, 0xD4
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, 0xF5                ; reporting off...
+    mov bp, mou_p2dw
+    call hbm_kd
+    mov cx, 8                   ; ...its ACK, BOUNDED: a packet's three or
+.f5:                            ; four bytes may come first
+    call hbm_p2rd
+    cmp al, 0xFA
+    loopne .f5                  ; `loop` writes no flag: ZF is the compare's
+    jne .wzno
+    mov cx, 16                  ; mou_p2flush's drain (that one is the
+.dr:                            ; overlay's): 60h empty before the knock
+    in  al, 0x64
+    test al, 0x01
+    jz .drx
+    in  al, 0x60
+    loop .dr
+.drx:
+    mov si, hbm_knk
+    mov cx, hbm_knk_n
+.knk:
+    mov al, 0xD4
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, [cs:si]             ; THIS IMAGE'S copy: the kernel's, mou_p2knk,
+    inc si                      ; went with the boot overlay
+    mov bp, mou_p2dw
+    call hbm_kd
+    call hbm_p2rd               ; its ACK, and nothing else will do
+    cmp al, 0xFA
+    jne .wzno
+    loop .knk
+    call hbm_p2rd               ; ...and 0xF2's ID
+    cmp al, 3
+    je .wzok
+.wzno:
+    mov byte [mou_p2wz], 0
+.wzok:
+    pop cx
+    pop si
+.nowz:
     mov al, 0xD4                ; ...and 0xF4 to the DEVICE, because 0xA7 left
     mov bp, mou_p2cw            ; it unclocked and a device that is not
     call hbm_kd                 ; reporting is a live line with nothing on it.
-    mov al, 0xF4                ; The ACK is not collected - `mou_p2flush` is
-    mov bp, mou_p2dw            ; the overlay's, both writers time out on their
-    call hbm_kd                 ; own, and the ISR discards a stray 0xFA anyway
+    mov al, 0xF4
+    mov bp, mou_p2dw
+    call hbm_kd
+    ; **ITS ACK IS COLLECTED, here, with IRQ12 still masked** (KERN-MEGA-PLAN
+    ; 14.62). It was left for the ISR to discard - and the next thing this
+    ; routine does is step 4's int 10h, which on a 286 is a CPU RESET whose
+    ; BIOS can re-initialise the 8259 (mega_r286): an 0xFA landing in that
+    ; window has its edge erased, and a byte nobody reads leaves the keyboard
+    ; and the mouse dead together. Bounded: hbm_p2rd gives up on its own
+    push cx
+    mov cx, 4
+.f4:
+    call hbm_p2rd
+    cmp al, 0xFA
+    loopne .f4
+    pop cx
+    mov al, 0xAE                ; ...AND THE KEYBOARD BACK, which is
+    mov bp, mou_p2cw            ; mou_p2_init's own last step: the command
+    call hbm_kd                 ; byte above is its PROBE-WINDOW value, bit 4
+                                ; (MOU_P2KOFF) set, so without this the PS/2
+                                ; mouse came home working and the keyboard
+                                ; dead - found on a 286 after a DOS run and
+                                ; reproduced in Bochs, whose mouse is PS/2 too
+                                ; (the Victory 286, KERN-MEGA-PLAN 10.3 item
+                                ; 54.3)
     pushf
     cli
     in  al, 0xA1                ; IRQ12 at the SLAVE...
@@ -3041,6 +5025,14 @@ hbm_wake:
     popf
     mov byte [mou_p2], 1
 .nop2:
+    ; ...AND THE 8042 LEFT WITH NOTHING STRANDED IN IT, now that the vectors
+    ; and the masks are back (KERN-MEGA-PLAN 14.62): the keyboard's half and
+    ; the mouse's above leave the controller as the session needs it, and a
+    ; byte with no interrupt behind it would still keep both devices dead
+    cmp byte [cpu_tier], CPU_8086   ; an XT's 64h is no 8042 (9.9.2)
+    je .nokst
+    call hbm_kstrand
+.nokst:
 %endif
     ; 4. the desktop, the way fsx_restore gets it back (SPEC.md 53) - before
     ;    any disk work, so the progress widget has a graphics mode to draw in
@@ -3118,6 +5110,8 @@ hbm_wake:
     ; `hbm_hib`'s failure unwind calls `hbm_reload` to undo a detach that never
     ; became an image, and a suspender standing behind THAT one still holds its
     ; rows and is still going to ask for them.
+    ;
+    ; (The HMA's pool is already the image's: step 0b, before the `sti`.)
     mov dx, [hb_drvmask]
     or dx, [hb_susp]
     mov word [hb_susp], 0
@@ -3330,7 +5324,23 @@ kds_stub:
     ; those zeros straight over the core that had just arrived, and the machine
     ; jumps into a table of `jmp near 0`. The other order costs nothing at all:
     ; neither stream is read twice and neither lands anywhere different.
+%ifndef KERN_MEGA
     mov ax, KD_SEG
+%else
+    ; **WHICH kern_dos, AND SO WHERE** (SPEC.md 96.40.9.2): the box posted
+    ; the HMA image (FFFF:0010) or the LOW one (0060:0000) and says which in
+    ; the launch block it staged. Picked once and kept in two cells, because
+    ; the expansion, the launch block's copy and the jump all want it
+    mov ax, KD_SEG
+    mov dx, KD_ORG
+    test word [KDS_LB + KDL_FLAGS], KDLF_LOWDOS
+    jz .kdhma
+    mov ax, KD_LSEG
+    xor dx, dx
+.kdhma:
+    mov [KDS_KSEG], ax
+    mov [KDS_KORG], dx
+%endif
     mov es, ax
     mov cx, [KDS_PLEN]          ; ONE BLOCK EACH, because os88pkg.py caps a
     mov ax, [KDS_TSEG]          ; part at 64KB (SPEC.md 20.12)
@@ -3338,29 +5348,48 @@ kds_stub:
     push ds                     ; paragraphs into the run the extents brought
     mov ds, ax                  ; in, the core's occupying the front of it
     xor si, si
+%ifndef KERN_MEGA
     call kds_expand             ; DS:SI -> ES:0, CX packed bytes
+%else
+    mov di, [cs:KDS_KORG]       ; ...to FFFF:0010 on kern_mega: the HMA, and
+    call kds_expand_at          ; A20 is open (the kernel leaves it so) - or
+%endif                          ; to 0060:0000, the low image
     pop ds
     ; --- ...and then the core, into the hole kern_dos just left -------------
+%ifndef KERN_MEGA
     mov ax, [KDS_CORG]          ; CORE_ORG, which is 512-aligned, so the shift
     mov cl, 4                   ; is exact and there is no intra-paragraph
     shr ax, cl                  ; remainder for kds_expand's DI to carry
     add ax, KD_SEG
     mov es, ax
+%endif
     mov cx, [KDS_CPLEN]
     push ds
     mov ds, [cs:KDS_TSEG]       ; the core's stream IS the run's own base
     xor si, si
+%ifndef KERN_MEGA
     call kds_expand
+%else
+    mov di, [cs:KDS_CORG]       ; FFFF:CORE_ORG: the segment cannot move up
+    call kds_expand_at          ; past FFFF, so the OFFSET carries it - and
+%endif                          ; 0060:CORE_ORG is the same place as kern_big's
     pop ds
 
     ; --- 3. the launch block, into the image that just arrived --------------
     ; kern_dos's first eight bytes are a fixed header (kerndos/kdlayout.inc):
     ; a near jump and a word saying where the block goes. The stub has no
     ; symbol table, which is why that word is there.
+%ifndef KERN_MEGA
     mov ax, KD_SEG
     mov es, ax
-    mov di, [es:KD_H_LBP]
-    mov cx, [es:KD_H_LBSZ]
+    mov di, [es:KD_ORG + KD_H_LBP]
+    mov cx, [es:KD_ORG + KD_H_LBSZ]
+%else
+    mov es, [cs:KDS_KSEG]
+    mov bx, [cs:KDS_KORG]
+    mov di, [es:bx + KD_H_LBP]
+    mov cx, [es:bx + KD_H_LBSZ]
+%endif
     shr cx, 1
     mov si, KDS_LB
     push ds
@@ -3368,7 +5397,13 @@ kds_stub:
     pop ds
     rep movsw
     pop ds
-    jmp KD_SEG:0x0000           ; ...and away. Its header jumps to the entry
+%ifndef KERN_MEGA
+    jmp KD_SEG:KD_ORG           ; ...and away. Its header jumps to the entry
+%else
+    push word [cs:KDS_KSEG]     ; ...and away, to whichever image it is
+    push word [cs:KDS_KORG]
+    retf
+%endif
 
 .fail:
     mov ah, 0x02                ; the cursor to row 8 first, hbs_stub's reason:
@@ -3415,6 +5450,7 @@ kds_stub:
 ; read through `cs:` because the match copy below owns DS.
 kds_expand:
     xor di, di
+kds_expand_at:                  ; ...or from DI (kern_mega's HMA image)
     add cx, si                  ; the stream's end...
     mov ax, [si]
     add si, 2                   ; ...past the T word
@@ -3492,6 +5528,10 @@ kds_stub_end:
 
 %include "hbstub.inc"         ; ...and the stub's body, in THIS host's
                               ; `.modh` - the section is the includer's
+%ifdef KERN_MEGA
+%include "megapark.inc"       ; ...and kern_mega's PARK stub, which the kernel
+                              ; copies out of this image (kernel/megados.inc)
+%endif
 
 ; =============================================================================
 ; The image's own data (SPEC.md 2.8.6): strings read through CS, and the
@@ -3507,6 +5547,15 @@ hbm_s_d3:       db 'DOS.O88 is not there now', 0
 hbm_s_d4:       db 'The ROM cannot read it', 0
 hbm_s_d5:       db 'No room for the extents', 0
 hbm_s_d6:       db 'kern_dos too scattered', 0
+%ifdef OS88_IMG
+hbm_s_dimg:     db 'Unmount the image first', 0
+%endif
+%ifdef KERN_MEGA
+hbm_s_d7:       db 'No room above 1MB', 0
+hbm_s_d8:       db 'Could not save to disk', 0   ; 14.43's image
+hbm_s_mode:     db 'Hibernation: other mode', 0
+hbm_s_clus:     db 'Disk clusters too small', 0  ; 512 bytes, protected mode
+%endif
 
 hbm_ptrfix:     db 'HIB1'      ; THE POINTER FILE as hbm_wrimg writes it,
                 dw BUILD_NUM    ; and its fixed head as hbm_ask compares it -
@@ -3514,7 +5563,14 @@ hbm_ptrfix:     db 'HIB1'      ; THE POINTER FILE as hbm_wrimg writes it,
                 dw 0            ; [mem_top], filled by hbm_ptrfix_set
                 db 0, 0         ; ...[vid_kind], and the pad
                 dd 0            ; HBP_WAKE, hbm_wrimg's
-                db 0, 0         ; HBP_DOS, hbm_wrimg's; and HBP_PAD
+                db 0, 0         ; HBP_DOS, hbm_wrimg's; and HBP_PAD, the
+                                ; HMA pool's table bytes the image carries
+                                ; (hbm_hsave), 0 = none - which hbm_ask asks
+                                ; the tail about before the teardown
+%ifdef KERN_MEGA
+                db 0, 0         ; HBP_XFLG and a pad, hbm_wrimg's
+                dd 0, 0         ; HBP_XSUM and HBP_XLEN, hbm_xwrite's
+%endif
 %if $ - hbm_ptrfix != HBP_SIZE
   %error "hbm_ptrfix is the pointer file, HBP_SIZE bytes"
 %endif
@@ -3546,9 +5602,20 @@ hbm_s_bdis: db 'Discard', 0         ; than choosing between four (NULs pad)
 hbm_s_nobios: db 'Needs a BIOS hard disk', 0
 hbm_s_noroom: db 'Not enough room on disk', 0
 hbm_s_failed: db 'Hibernate failed', 0
+hbm_s_serial: db 'Disconnect serial before hibernating',0
+%ifdef HMA_DRV
+hbm_s_nomem:  db 'Not enough memory', 0  ; the HMA pool's copy (87.4 step 3b)
+%endif
 hbm_s_stale:  db 'Hibernation: other build', 0
 hbm_s_lost:   db 'Hibernation: unreadable', 0
 
+hbm_psv:    dw 0, 0             ; the programs' sum, s1 and s2 (hbm_psum):
+                                ; written into this image by hbm_wrimg and
+                                ; read back out of the restored one
+hbm_s_psbad: db 13, 10, 'Resume failed: the programs', 39, ' memory did not read', 13, 10
+            db 'back as it was saved. The hibernated session has been', 13, 10
+            db 'deleted.', 13, 10, 13, 10
+            db 'Press any key to restart.', 13, 10, 0
 hbm_s_off:  db 13, 10, 'os8088 has hibernated.', 13, 10, 13, 10
             db 'It is now safe to switch the machine off.', 13, 10
             db 'Press any key to restart it.', 13, 10, 0
@@ -3580,6 +5647,12 @@ hbm_swn:        resb 1          ; hbm_sweep's record count, across the ask
 hbm_spm:        resb 1          ; OSAPI_DRV_SUSPEND's class mask (SPEC.md
                                 ; 51.11.4), banked by hbm_drvsusp off the
                                 ; slot's own BL - the kernel keeps nothing
+%ifdef HMA_DRV
+hbm_hseg:       resw 1          ; the HMA pool's copy (hbm_hsave), 0 = none:
+                                ; written before the picture, so the restored
+                                ; hbm_wake reads what the hibernate wrote -
+                                ; hbm_ptrbuf's reasoning, one boot further
+%endif
 
 %endif                          ; --- kern_small has NO hibernate at all,
                                 ; and so no module and no mod_tab row

@@ -5717,8 +5717,7 @@ int main(void)
      * corpus of zero literals is a failure and not a pass. */
     {
         static const char *msgs[] = {
-            "No APPLE2.OVL yet.",
-            "Unable to load APPLE2.OVL.",
+            "Unable to load commands.",
             "No bands here - text only.",
             "Another window has it.",
             "6502: JAM at $FFFF",       /* THE WIDEST FORM, and it is here
@@ -5753,9 +5752,9 @@ int main(void)
             "The clipboard is empty.",
             "No memory for the paste.",
             "Cannot read the clipboard.",   /* 26 of 26 - the widest of the
-                                             * wave, and it shares the cap
-                                             * with `Unable to load
-                                             * APPLE2.OVL.` */
+                                             * wave, at the status row's
+                                             * message-area cap (section
+                                             * 9) */
             "Pasting 2048 bytes only.",     /* A2_PASTEMAX, spelled out */
             "Not an Applesoft program.",
             "No heap for the program.",

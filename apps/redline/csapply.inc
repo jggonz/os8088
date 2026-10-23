@@ -30,7 +30,7 @@ CS_CFG_MAXK equ 8
 CS_CFG_HDR  equ 24
 CS_CFG_SZ   equ CS_CFG_HDR + 2 * CS_CFG_MAXK
 
-; Why an Apply refused: cs_cfg_load's AL, RLAPPLY's ra_says index
+; Why an Apply refused: cs_cfg_load's AL, which of RLAPPLY's toasts
 CSA_OK      equ 0
 CSA_NOFILE  equ 1                   ; no REDLINE.CFG in SYSTEM\APPDATA
 CSA_BADFILE equ 2                   ; not one we wrote
@@ -41,11 +41,26 @@ CSA_KNOB    equ 6                   ; a knob the row does not have
 
 cs_cfgname: db 'REDLINE.CFG', 0
 cs_cfgsig:  db 'RLCFG', 0, 0, 0
+%ifdef CS_APPLY_ONLY
+; RLAPPLY keeps both of its own in BSS - CS_APPLY_BSS bytes after its image,
+; zeroed by the loader, which is all they ever were in the image - and has no
+; in-place stamp, writing nothing
+cs_cfg      equ os88_image_end
+cs_cfgap    equ os88_image_end + CS_CFG_SZ
+CS_APPLY_BSS equ CS_CFG_SZ + 2
+%else
 cs_cfgip:   db 0                    ; os88data.inc's in-place stamp
 cs_cfg:     times CS_CFG_SZ db 0
-cs_cfgrow:  db 0                    ; the row the file names, once checked
+ %ifdef CS_LOADER
+cs_cfgap:   dw 0                    ; the checked row's apply proc
+ %else
+            db 0                    ; REDLINE's: read by nothing (it was the
+                                    ; loader's row number, cs_cfgrow)
+ %endif
+%endif
 
 
+%ifndef CS_APPLY_ONLY               ; Save is REDLINE's: RLAPPLY never writes
 ; -----------------------------------------------------------------------------
 ; cs_cfg_new - start a setting for row AL, method AH, in cs_cfg, stamped with
 ; this machine's fingerprint (cs_identify has run). Knobs: cs_cfg_knob.
@@ -131,20 +146,21 @@ cs_cfg_save:
     pop cx
     pop bx
     ret
+%endif                              ; !CS_APPLY_ONLY
 
 %ifdef CS_LOADER
+CS_FP_SZ    equ 11                  ; cs_crc, cs_date, cs_model: one run
+    times (cs_model - cs_crc) - (CS_FP_SZ - 1) db 0     ; ...asserted: both
+    times (CS_FP_SZ - 1) - (cs_model - cs_crc) db 0     ; refuse a gap
 ; -----------------------------------------------------------------------------
 ; cs_cfg_load - read REDLINE.CFG and check it against THIS machine.
-; out: CF = 0, AL = CSA_OK and [cs_cfgrow] = its row; or CF = 1, AL = CSA_*.
-; Writes nothing to any chipset. cs_identify must have run.
+; out: CF = 0, AL = CSA_OK and [cs_cfgap] = its row's apply proc; or CF = 1,
+; AL = CSA_*.
+; Writes nothing to any chipset. [cs_tier] and cs_fingerprint must be done
+; (cs_identify does both). Clobbers BX, CX, DX, SI, DI and ES (= DS): its one
+; caller, RLAPPLY's entry, keeps nothing across it
 ; -----------------------------------------------------------------------------
 cs_cfg_load:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     push ds
     pop es
     mov bx, cs_cfg
@@ -152,15 +168,15 @@ cs_cfg_load:
     xor dx, dx
     mov si, cs_cfgname
     call od_read                    ; DX:AX = the file's size
-    mov cl, CSA_NOFILE
     jnc .read
     cmp ax, FERR_NOENT
-    je .no
-    mov cl, CSA_BADFILE             ; there, and too big to be ours
-    jmp .no
+    mov dl, CSA_NOFILE              ; (DL is the answer from here on: CX
+    je .no                          ; is the compares')
+    mov dl, CSA_BADFILE             ; there, and too big to be ours
+    jmp short .no
 .read:
-    mov cl, CSA_BADFILE
     or dx, dx
+    mov dl, CSA_BADFILE
     jnz .no
     cmp ax, CS_CFG_HDR + 2
     jb .no
@@ -168,88 +184,59 @@ cs_cfg_load:
     ja .no
     mov si, cs_cfgsig
     mov di, cs_cfg
-    push cx
     mov cx, 8
     cld
     repe cmpsb
-    pop cx
     jne .no
-    mov bl, [cs_cfg + 11]           ; 1..8 knobs, and exactly that long
-    or bl, bl
-    jz .no
-    cmp bl, CS_CFG_MAXK
-    ja .no
-    xor bh, bh
-    shl bx, 1
+    mov bl, [cs_cfg + 11]           ; n knobs, and exactly that long: a
+    xor bh, bh                      ; length of 24 + 2n inside the 26..40
+    shl bx, 1                       ; above is n = 1..8 and nothing else
     add bx, CS_CFG_HDR
     cmp ax, bx
     jne .no
-    mov cl, CSA_BOARD               ; THE FINGERPRINT: every field
-    mov ax, [cs_crc]
-    cmp ax, [cs_cfg + 12]
+    mov dl, CSA_BOARD               ; THE FINGERPRINT: every field. The CRC,
+    mov si, cs_crc                  ; the date and the model byte are 11
+    mov di, cs_cfg + 12             ; bytes in the same order in csrows.inc
+    mov cx, CS_FP_SZ                ; as in the file (+12, +14, +22), so it
+    repe cmpsb                      ; is one compare
     jne .no
-    mov si, cs_date
-    mov di, cs_cfg + 14
-    push cx
-    mov cx, 8
-    repe cmpsb
-    pop cx
-    jne .no
-    mov al, [cs_model]
-    cmp al, [cs_cfg + 22]
-    jne .no
-    mov cl, CSA_CPU
+    mov dl, CSA_CPU
     cmp byte [cs_tier], CPU_8086
     je .no
-    mov cl, CSA_ROW                 ; a row we know, that can write
+    mov dl, CSA_ROW                 ; a row we know, that can write
     mov ax, [cs_cfg + 8]
     mov si, cs_rows
-    xor bx, bx
 .row:
-    cmp bx, CS_NROWS
+    cmp si, cs_rows_end
     jae .no
     cmp ax, [si + CSR_CODE]
     je .found
     add si, CSR_SIZE
-    inc bx
     jmp short .row
 .found:
-    cmp word [si + CSR_APPLY], 0
-    je .no
-    mov [cs_cfgrow], bl
+    mov ax, [si + CSR_APPLY]
+    or ax, ax
+    jz .no
+    mov [cs_cfgap], ax
     mov al, CSA_OK
     clc
     jmp short .out
 .no:
-    mov al, cl
+    mov al, dl
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; cs_cfg_apply - put the checked setting back: every knob through its row's
 ; apply proc. out: CF = 0 set; CF = 1 AL = CSA_KNOB (and the knobs before
-; the refused one ARE set - a row orders its own knobs, 103.6.2)
+; the refused one ARE set - a row orders its own knobs, 103.6.2). Clobbers
+; BX, CX, SI and DI, as cs_cfg_load does
 cs_cfg_apply:
-    push bx
-    push cx
-    push si
-    push di
-    mov al, [cs_cfgrow]
-    xor ah, ah
-    mov bl, CSR_SIZE
-    mul bl
-    mov bx, ax
-    mov di, [cs_rows + bx + CSR_APPLY]
+    mov di, [cs_cfgap]
     xor ch, ch
     mov cl, [cs_cfg + 11]
     mov si, cs_cfg + CS_CFG_HDR
-    cmp byte [cs_cfgrow], CS_W7     ; the WD76C10: locked as the BIOS left it?
+    cmp di, cs_ap_w7                ; the WD76C10: locked as the BIOS left it?
     jne .k                          ; Once, BEFORE the first knob - each access
     pushf                           ; closes behind it, so a sample after one
     cli                             ; reads locked - and cs_id_w7's way: FC72h
@@ -278,10 +265,6 @@ cs_cfg_apply:
     mov al, CSA_KNOB
     stc
 .out:
-    pop di
-    pop si
-    pop cx
-    pop bx
     ret
 
 %endif                              ; CS_LOADER

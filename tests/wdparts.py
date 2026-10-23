@@ -70,7 +70,7 @@ if p1 != image[u16(image, 8):]:
     sys.exit("build/word.p1.bin is not the tail of this tree's word.asm - "
              "run `make build/word.o88`")
 DISK = "build/wdpartsgate.img"
-M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC")
+M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 S = lambda n: m.sym(n)
 
 with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:

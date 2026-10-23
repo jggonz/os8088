@@ -29,7 +29,47 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'CHART', ct_entry
+    OS88_HEADER 'CHART', ct_entry, OS88_F_ICON, OS88_HIGH | OS88_HIGHMEM
+
+; --- embedded 16x16 icon: a bar chart, three bars rising on an L of axes -------
+; Sheet's page underlay, so the two read as one family on the desktop. Chart
+; was the one shipped package with no icon at all, which made it the one
+; package the mount re-read on every visit to its folder: an iconless package
+; never takes a row in the icon store (SPEC.md 54.7.4, 54.7.6.4).
+    OS88_ICON16
+    dw 0x0000                       ; 16 mask rows (white underlay)
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x0000
+    dw 0x0000                       ; 16 data rows (black pixels)
+    dw 0x0000
+    dw 0x2000                       ; the value axis
+    dw 0x2030                       ; ...and the tallest bar's top
+    dw 0x2030
+    dw 0x21B0                       ; the middle bar joins
+    dw 0x21B0
+    dw 0x21B0
+    dw 0x21B0
+    dw 0x2DB0                       ; ...and the shortest
+    dw 0x2DB0
+    dw 0x2DB0
+    dw 0x2DB0
+    dw 0x3FFC                       ; the category axis
+    dw 0x0000
+    dw 0x0000
+    OS88_ICON16_END
 
 ; --- shared chart geometry constants (see apps/os88chart.inc's own header -
 ; equ constants can't be forward-referenced, and that file's CODE has to
@@ -121,6 +161,9 @@ ct_entry:
     push si
     push di
     push es
+    call ct_labels_cols                 ; the Data menu says "Column A".. until
+                                        ; a file gives it names to say instead
+                                        ; (82.16, the shape SPEC.md 68.10 sets)
     call fp_init                        ; stage 4.6: before the first claim,
                                         ; for the reason sheet.asm's own call
                                         ; states - it decides which arithmetic
@@ -307,11 +350,38 @@ ct_oncmd:
 ; a file that was just read.
 .data:
     xor ah, ah
-    mov [ct_wantcol], ax                ; 0 = Automatic, else the 1-based column
-    cmp byte [ct_name], 0
-    je .ret                             ; nothing open: the choice is
-    mov ax, ct_s_nocol                  ; remembered for the next Open
-    jmp ct_load_show
+    or ax, ax
+    jz .dauto                           ; Automatic clears both, whichever the
+                                        ; eight slots are currently showing
+    cmp al, [ct_nnames]                 ; THE SLOT DECIDES, NOT THE FILE. This
+    ja .dcol                            ; tested `cmp byte [ct_nnames], 0`, so
+                                        ; one name in the file made all EIGHT
+                                        ; slots names - including the ones
+                                        ; ct_labels_names leaves saying
+                                        ; "Column B".."Column H", which 82.15
+                                        ; says keep their column label "so a
+                                        ; half-filled menu still says what the
+                                        ; rest are". Picking one stored a
+                                        ; wantrng of 2..8 and selected a name
+                                        ; record no file ever defined. AL is
+                                        ; the 1-based slot, so `ja` is
+                                        ; "past the last name"
+    mov [ct_wantrng], ax                ; the slots are NAMES: chart that range
+    mov word [ct_wantcol], 0
+    jmp short .dshow
+.dcol:
+    mov [ct_wantcol], ax                ; the slots are COLUMNS, as before
+    mov word [ct_wantrng], 0
+    jmp short .dshow
+.dauto:
+    mov word [ct_wantcol], 0
+    mov word [ct_wantrng], 0
+.dshow:
+    cmp byte [ct_name], 0               ; nothing open: the choice is
+    je .ret                             ; remembered for the next Open.
+    mov ax, ct_s_nocol                  ; ct_load_show is what ct_reread was
+    jmp ct_load_show                    ; before the merge - read, render,
+                                         ; paint, and say AX if nothing charted
 
 ; --- Gallery: pick a type and redraw what is already loaded -------------------
 ; The item index maps to CH_T_* through this table rather than by arithmetic,
@@ -425,9 +495,10 @@ ct_ondlg:
     call ct_takename
     pop di
     pop si
-    mov word [ct_wantcol], 0
-    mov ax, ct_s_noval
-    call ct_load_show
+    mov word [ct_wantcol], 0            ; a newly opened file starts on
+    mov word [ct_wantrng], 0            ; Automatic, whatever the last one
+    mov ax, ct_s_noval                  ; used - and on ITS names, not the
+    call ct_load_show                   ; last file's (82.15)
     pop cx
     pop ax
     ret
@@ -451,7 +522,10 @@ ct_load_show:
     mov bx, si
     call ct_read_by_ext                 ; CF=1: SI = what went wrong
     jc .say
-    call ct_render
+    call ct_labels_names                ; whatever the file just said it HAS
+    call ct_render                      ; (82.15) - both callers, which is
+                                         ; where ct_reread had it before the
+                                         ; merge folded the two tails into one
     mov si, bx
     call ct_paint
     cmp word [ct_valcnt], 0
@@ -551,6 +625,26 @@ ct_read_by_ext:
     xor dx, dx                          ; both series start empty: ct_t2cnt
     mov [ct_tcnt], dx                   ; is written only inside ct_record, so
     mov [ct_t2cnt], dx                  ; zeroing just ct_tcnt carried the
+    mov [ct_nnames], dl                 ; ...AND THE NAMES BELONG TO THIS FILE
+                                        ; (82.17): this used to sit in
+                                        ; ct_read_sylk alone, so a BIFF or DIF
+                                        ; file loaded after a SYLK one offered
+                                        ; the SYLK file's ranges in a document
+                                        ; that did not have them.
+                                        ;
+                                        ; ct_wantrng IS NOT RESET HERE, AND
+                                        ; THAT IS THE FIX. The fork's deleted
+                                        ; ct_reset_series zeroed it, and every
+                                        ; reader called that FIRST - so Data >
+                                        ; <a name> set the request, re-read,
+                                        ; and ct_record then tested a zero and
+                                        ; filtered nothing. 82.15 says the
+                                        ; filter admits only cells inside the
+                                        ; rectangle; it never ran once. There
+                                        ; is no chart row in tests/suite.py,
+                                        ; which is why. ct_ondlg clears it for
+                                        ; a NEW file, which is the only place
+                                        ; that wants it cleared
                                         ; PREVIOUS file's second column into
                                         ; this one's chart. ct_mincol and
                                         ; ct_mincol2 need nothing: a count of
@@ -836,7 +930,39 @@ ct_i32_dbl:
 ct_record:
     push cx
     push si
-    push di
+    push di                             ; upstream's, for the whole routine -
+                                         ; so the range filter below uses DI
+                                         ; freely and owes no pair of its own
+    ; Data > <a name>: only what is INSIDE the rectangle is a candidate, and
+    ; the two-lowest-column logic below then picks within it - which for the
+    ; usual one-column name is that column and nothing else.
+    cmp word [ct_wantrng], 0
+    je .nornq
+    push dx
+    mov di, [ct_wantrng]
+    dec di
+    mov dx, CT_NAME_REC
+    push ax
+    mov ax, di
+    mul dx
+    add ax, ct_names
+    add ax, CT_NAME_MAX + 1
+    mov di, ax
+    pop ax
+    cmp ax, [di]                        ; the corners are stored normalised by
+    jb .rngno                           ; Sheet's own sh_normrange before they
+    cmp ax, [di+4]                      ; are written, so a plain pair of
+    ja .rngno                           ; range tests is enough here
+    cmp bx, [di+2]
+    jb .rngno
+    cmp bx, [di+6]
+    ja .rngno
+    pop dx
+    jmp .anycol                         ; inside: no column filter on top
+.rngno:
+    pop dx                              ; .out pops di/si/cx, so this owes
+    jmp .out                            ; nothing further
+.nornq:
     mov cx, [ct_wantcol]                ; Data > Column: anything to the LEFT of
     jcxz .anycol                        ; the chosen column is not a candidate,
     dec cx                              ; so the chosen one becomes the lowest
@@ -1082,7 +1208,9 @@ ct_rkdec:
 ;
 ; CX is the walk's end bound for the whole walk: the NUMBER path's eight-byte
 ; copy is four moves rather than a counted loop, so nothing here needs CX as
-; a counter - which is why ct_biffend, the bound's banked copy, is gone.
+; a counter - which is why ct_biffend, the bound's banked copy, is gone. The
+; DEFINEDNAME path is the one that does want a counter, and it borrows CX
+; under a push of its own rather than banking the bound again.
 ; -----------------------------------------------------------------------------
 ct_read_biff:
     push ax
@@ -1104,9 +1232,106 @@ ct_read_biff:
     cmp ax, 0x027E                      ; RK cell record
     je .isrk
     cmp ax, 0x0203                      ; NUMBER: eight bytes of IEEE-754,
-    jne .skip                           ; verbatim, and the ONLY way a value
-                                        ; that is not an exact small integer
-                                        ; reaches a BIFF file at all
+    je .isnum                           ; verbatim, and the ONLY way a value
+    cmp ax, 0x0206                      ; that is not an exact small integer
+    je .isfml                           ; reaches a BIFF file at all. FORMULA
+    cmp ax, 0x0406                      ; (BIFF3) and its BIFF4 twin carry the
+    je .isfml                           ; CACHED RESULT at the same offset, so
+    cmp ax, 0x0218                      ; they are read the same way (82.18)
+    je .isname                          ; DEFINEDNAME: a named range, the same
+    jmp .skip                           ; thing SYLK's NN carries (82.17)
+.isname:
+    ; ------------------------------------------------------------------
+    ; DEFINEDNAME, the BIFF twin of the NN record ct_parse_nn reads
+    ; (82.17). Body: flags(2) shortcut(1) ln(1) sz(2) name(ln) tokens(sz).
+    ; The only token array this understands is a lone tAreaR - which is the
+    ; only one Sheet writes, and the only one that IS a rectangle.
+    ; ------------------------------------------------------------------
+    mov al, [ct_nnames]
+    cmp al, CT_NAME_CAP
+    jae .skip                           ; the menu has no slot left for it
+    push dx
+    mov ax, si
+    add ax, 6
+    jc .nmbad
+    cmp ax, cx                    
+    ja .nmbad
+    mov bl, [es:si+3]                   ; ln
+    xor bh, bh
+    or bx, bx
+    jz .nmbad
+    cmp bx, CT_NAME_MAX
+    ja .nmbad                           ; longer than the menu can show: the
+                                        ; name is dropped, not clipped, so a
+                                        ; slot never claims a range it is not
+    mov ax, [es:si+4]                   ; sz
+    cmp ax, 7
+    jne .nmbad
+    mov ax, si
+    add ax, 6
+    add ax, bx
+    add ax, 7
+    jc .nmbad
+    cmp ax, cx                    
+    ja .nmbad
+    push si
+    push cx
+    mov cl, [ct_nnames]                 ; where this record's TEXT goes
+    xor ch, ch
+    mov ax, cx
+    mov di, CT_NAME_REC
+    mul di
+    add ax, ct_names
+    mov di, ax
+    add si, 6
+    mov cx, bx
+.nmcopy:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .nmcopy
+    mov byte [di], 0
+    cmp byte [es:si], 0x25              ; tAreaR - the absolute form. tAreaN
+    jne .nmpop                          ; (2DH) is relative to a cell this
+                                        ; reader does not have
+    mov ax, [es:si+5]                   ; first column
+    xor ah, ah
+    mov [ct_nm_c1], ax
+    mov ax, [es:si+1]                   ; first row, less the two relative bits
+    and ax, 0x3FFF
+    mov [ct_nm_r1], ax
+    mov ax, [es:si+6]                   ; the far corner: column in AX, row in
+    xor ah, ah                          ; DX, which is ct_name_store's contract
+    mov dx, [es:si+3]
+    and dx, 0x3FFF
+    call ct_name_store
+.nmpop:
+    pop cx
+    pop si
+.nmbad:
+    pop dx
+    jmp .skip
+
+.isfml:
+    ; A FORMULA's cached result sits where NUMBER's value does, so the only
+    ; new thing is telling a NUMBER apart from a STRING, a BOOLEAN or an
+    ; ERROR: BIFF marks those by setting the cached double's TOP WORD to
+    ; 0xFFFF, which no finite double has. Sheet writes exactly that for a
+    ; #DIV/0! or a text result (81.24.3), and charting the bytes underneath
+    ; one would plot a NaN's mantissa as a data point.
+    cmp dx, 16                          ; row/col/xf + eight + grbit
+    jb .skip
+    mov ax, si
+    add ax, dx
+    jc .skip
+    cmp ax, cx
+    ja .skip
+    cmp word [es:si+12], 0xFFFF         ; the cached result's top word
+    je .skip                            ; not a number: nothing to plot
+                                        ; ...and then exactly as a NUMBER:
+.isnum:
     cmp dx, 14                          ; too short to hold row/col/xf plus
     jb .skip                            ; the eight bytes
     mov ax, si                          ; the whole record must be in the
@@ -1166,6 +1391,316 @@ ct_read_biff:
 ; sh_parsecrec makes). Records (row,col,value) for ct_finalize, capped at
 ; ct_record, which keeps only the lowest column.
 ; -----------------------------------------------------------------------------
+; =============================================================================
+; NAMED RANGES (stage 4.6) - the ranges Sheet defined, read out of the file.
+;
+; Sheet's Formula > Define Name... binds a name to a rectangle and writes it as
+; SYLK's own NN record (81.29.1). This app reads them and offers them in the
+; Data menu in place of Column A..H, so a chart is of "SALES" rather than of
+; "whatever the lowest column turned out to be".
+;
+; IT IS A RELABELLING, NOT A SECOND MENU. The Data menu's eight slots are
+; filled at startup with "Column A".."Column H" and overwritten with the names
+; when a file supplies any - the same relabel-in-place idiom Sheet's Options
+; menu uses. A second menu would have to be built at runtime, and the kernel's
+; menu set is a static structure (SPEC.md 13.5).
+; =============================================================================
+CT_NAME_MAX  equ 12                   ; matches Sheet's SH_NAME_MAX
+CT_NAME_CAP  equ 8                    ; the Data menu has eight slots to give
+CT_NAME_REC  equ CT_NAME_MAX + 1 + 8  ; text + NUL + two corners
+
+; -----------------------------------------------------------------------------
+; ct_labels_cols - put "Column A".."Column H" back in the eight slots. Called
+; at startup and whenever a file defines no names, so the menu never shows the
+; names of a file that is no longer open.
+; -----------------------------------------------------------------------------
+ct_labels_cols:
+    push ax
+    push cx
+    push si
+    push di
+    xor cx, cx
+.each:
+    mov ax, cx
+    mov di, CT_NAME_MAX + 1
+    push dx
+    xor dx, dx
+    mul di
+    pop dx
+    add ax, ct_labels
+    mov di, ax
+    mov si, ct_s_columnsp
+.copy:
+    mov al, [si]
+    or al, al
+    jz .name
+    mov [di], al
+    inc si
+    inc di
+    jmp .copy
+.name:
+    mov al, cl
+    add al, 'A'
+    mov [di], al
+    mov byte [di+1], 0
+    inc cx
+    cmp cx, CT_NAME_CAP
+    jb .each
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_labels_names - put the loaded names in the slots, and "Column X" in any
+; slot past the last name so a half-filled menu says what the rest still are.
+; -----------------------------------------------------------------------------
+ct_labels_names:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    call ct_labels_cols                 ; the tail keeps its column label
+    xor cx, cx
+.each:
+    cmp cl, [ct_nnames]
+    jae .out
+    mov ax, cx
+    mov di, CT_NAME_MAX + 1
+    push dx
+    xor dx, dx
+    mul di
+    pop dx
+    add ax, ct_labels
+    mov di, ax
+    mov ax, cx
+    mov bx, CT_NAME_REC
+    push dx
+    xor dx, dx
+    mul bx
+    pop dx
+    add ax, ct_names
+    mov si, ax
+.copy:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .next
+    inc si
+    inc di
+    jmp .copy
+.next:
+    inc cx
+    cmp cx, CT_NAME_CAP
+    jb .each
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_parse_nn - one "NN;N<name>;E<ref>" line into the name table.
+; in: SI just past "NN;", BX = the line end. ES = the file buffer.
+;
+; The reference is absolute R1C1 - "R1C1:R4C1" - which is what Sheet writes
+; and the only form this reads: a name is a fixed place, so there is no
+; relative form to accept. Anything it cannot parse is skipped rather than
+; guessed at, and a file with no NN records simply has no names.
+; -----------------------------------------------------------------------------
+ct_parse_nn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, [ct_nnames]
+    cmp al, CT_NAME_CAP
+    jae .out                            ; the menu has no slot left for it
+    xor ah, ah
+    mov cx, CT_NAME_REC
+    mul cx
+    add ax, ct_names
+    mov di, ax                          ; DI = this record
+    cmp byte [es:si], 'N'
+    jne .out
+    inc si
+    xor cx, cx
+.nm:
+    cmp si, bx
+    jae .out
+    mov al, [es:si]
+    cmp al, ';'
+    je .nmdone
+    cmp cx, CT_NAME_MAX
+    jae .nmskip                         ; longer than we hold: keep the head,
+    mov [di], al                        ; which is what the menu can show
+    inc di
+    inc cx
+.nmskip:
+    inc si
+    jmp .nm
+.nmdone:
+    or cx, cx
+    jz .out                             ; an empty name is not a name
+    mov byte [di], 0
+    inc si                              ; past the ';'
+    cmp si, bx
+    jae .out
+    cmp byte [es:si], 'E'
+    jne .out
+    inc si
+    call ct_rd_r1c1                     ; the near corner
+    jc .out
+    mov [ct_nm_c1], ax
+    mov [ct_nm_r1], dx
+    cmp si, bx
+    jae .single
+    cmp byte [es:si], ':'
+    jne .single
+    inc si
+    call ct_rd_r1c1
+    jc .out
+    jmp .have
+.single:
+    mov ax, [ct_nm_c1]                  ; "R1C1" with no second corner names
+    mov dx, [ct_nm_r1]                  ; one cell, which is a 1x1 rectangle
+.have:
+    call ct_name_store
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_name_store - commit the record ct_nnames indexes, whose NAME the caller
+; has already copied in. in: ct_nm_c1/ct_nm_r1 = the near corner, AX = the far
+; corner's column, DX = its row. Bumps ct_nnames. Preserves everything.
+;
+; Shared by the SYLK and the BIFF readers so the two cannot store the same
+; name differently, which is the whole risk of a second reader.
+;
+; DX IS THE FAR CORNER'S ROW and `mul` writes DX:AX, so the record's own
+; address cannot be computed with it live. Both halves are banked across the
+; multiply; without the DX save the row stored was the multiply's high word,
+; which is zero - every named range came out one row tall and charted its
+; first cell alone.
+; -----------------------------------------------------------------------------
+ct_name_store:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ax
+    push dx
+    mov cl, [ct_nnames]
+    xor ch, ch
+    mov ax, cx
+    mov si, CT_NAME_REC
+    mul si
+    add ax, ct_names
+    add ax, CT_NAME_MAX + 1
+    mov di, ax
+    pop dx
+    pop ax
+    mov cx, [ct_nm_c1]
+    mov [di], cx
+    mov cx, [ct_nm_r1]
+    mov [di+2], cx
+    mov [di+4], ax
+    mov [di+6], dx
+    inc byte [ct_nnames]
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_rd_r1c1 - read "R<n>C<n>" at ES:SI. out: DX = 0-based row, AX = 0-based
+; col, SI past it; CF=1 if it is not that shape.
+; -----------------------------------------------------------------------------
+ct_rd_r1c1:
+    push cx
+    cmp byte [es:si], 'R'
+    jne .bad
+    inc si
+    call ct_rd_uint
+    jc .bad
+    or cx, cx
+    jz .bad                             ; R0 is not a row: R1C1 is 1-based
+    dec cx
+    mov dx, cx
+    cmp byte [es:si], 'C'
+    jne .bad
+    inc si
+    call ct_rd_uint
+    jc .bad
+    or cx, cx
+    jz .bad
+    dec cx
+    mov ax, cx
+    pop cx
+    clc
+    ret
+.bad:
+    pop cx
+    stc
+    ret
+
+; ct_rd_uint - decimal digits at ES:SI -> CX, SI advanced. CF=1 if there were
+; none at all.
+ct_rd_uint:
+    push ax
+    push dx
+    xor cx, cx
+    xor dx, dx                          ; DX = how many digits were seen
+.d:
+    mov al, [es:si]
+    cmp al, '0'
+    jb .done
+    cmp al, '9'
+    ja .done
+    sub al, '0'
+    push ax
+    mov ax, cx
+    push dx
+    mov dx, 10
+    mul dx
+    pop dx
+    mov cx, ax
+    pop ax
+    xor ah, ah
+    add cx, ax
+    inc dx
+    inc si
+    jmp .d
+.done:
+    or dx, dx
+    jz .bad
+    pop dx
+    pop ax
+    clc
+    ret
+.bad:
+    pop dx
+    pop ax
+    stc
+    ret
+
 ct_read_sylk:
     push ax
     push bx
@@ -1193,6 +1728,18 @@ ct_read_sylk:
     sub ax, si
     cmp ax, 2
     jb .advance
+    cmp byte [es:si], 'N'               ; NN;N<name>;E<ref> - a DEFINED NAME
+    jne .notnn                          ; (81.29.1), which this app offers in
+    cmp byte [es:si+1], 'N'             ; the Data menu instead of a column
+    jne .advance
+    cmp byte [es:si+2], ';'
+    jne .advance
+    push si
+    add si, 3
+    call ct_parse_nn
+    pop si
+    jmp .advance
+.notnn:
     cmp byte [es:si], 'C'
     jne .advance
     cmp byte [es:si+1], ';'
@@ -1498,16 +2045,21 @@ ct_name_app: db 'Chart', 0
 ; index, so it is offered as a choice rather than guessed (SPEC.md 82.11).
 ; Automatic is the old behaviour and stays the default.
 ct_m_data:   db 'Data', 0
-ct_i_data:   dw ct_it_auto, ct_it_ca, ct_it_cb, ct_it_cc, ct_it_cd, ct_it_ce, ct_it_cf, ct_it_cg, ct_it_ch
+; THE EIGHT SLOTS ARE BUFFERS, not strings. They hold "Column A".."Column H"
+; until a file defines names (81.29.1), and the names after that - the kernel
+; re-reads an item's text every time the menu drops, so relabelling in place
+; is enough and no menu has to be rebuilt (82.15).
+ct_i_data:   dw ct_it_auto
+             dw ct_labels + 0 * (CT_NAME_MAX + 1)
+             dw ct_labels + 1 * (CT_NAME_MAX + 1)
+             dw ct_labels + 2 * (CT_NAME_MAX + 1)
+             dw ct_labels + 3 * (CT_NAME_MAX + 1)
+             dw ct_labels + 4 * (CT_NAME_MAX + 1)
+             dw ct_labels + 5 * (CT_NAME_MAX + 1)
+             dw ct_labels + 6 * (CT_NAME_MAX + 1)
+             dw ct_labels + 7 * (CT_NAME_MAX + 1)
 ct_it_auto:  db 'Automatic', 0
-ct_it_ca:    db 'Column A', 0
-ct_it_cb:    db 'Column B', 0
-ct_it_cc:    db 'Column C', 0
-ct_it_cd:    db 'Column D', 0
-ct_it_ce:    db 'Column E', 0
-ct_it_cf:    db 'Column F', 0
-ct_it_cg:    db 'Column G', 0
-ct_it_ch:    db 'Column H', 0
+ct_s_columnsp: db 'Column ', 0
 ct_s_nocol:  db 'No data in that column.', 0
 
 ct_m_file:   db 'File', 0
@@ -1560,12 +2112,27 @@ ct_s_noval:    db 'No numeric data found.', 0
 %define FP_NO_FLOOR                    ; printed here, and no formula is
 %define FP_NO_I2X                      ; evaluated. 943 bytes of image and
 %define FP_NO_SUB                      ; 52 of the scratch below
+%define OS88FP_NOTRANS                  ; ...and 84.10's logarithms and
+                                        ; trigonometry with them: Chart plots
+                                        ; what a file gave it and evaluates
+                                        ; nothing, so fp_ln/exp/pow and the
+                                        ; four trig functions are dead weight
+                                        ; here. The guard was added for PLAN
+                                        ; (81.75) and nothing had taken it;
+                                        ; the merge made it load-bearing,
+                                        ; fp_ln calling the very fp_sub and
+                                        ; fp_i2a/fp_i2b the lines above drop
+%define FP_NO_POW                       ; ...and fp_pow, which nothing here
+                                        ; calls either - and with it the
+                                        ; fp_e0..fp_ek scratch (84.8)
 %define CH_NO_BMPWRITE                 ; the export is ct_flip's, in place
 %include "os88fp.inc"                  ; stage 4.6: the readers meet real
                                        ; decimals now (a BIFF NUMBER record IS
                                        ; an IEEE-754 double), and ch_scale
                                        ; below needs it. Before os88chart.inc,
                                        ; which calls into it.
+                              ; chart module: loader, shims, verbs (82.16)
+
 %include "os88chart.inc"
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
@@ -1576,7 +2143,7 @@ ct_s_noval:    db 'No numeric data found.', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 479
+    OS88_BSS 758
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1702,7 +2269,17 @@ ct_t2cnt    equ ct_mincol2 + 2      ; ...and how many cells it has
 ct_wantcol  equ ct_t2cnt + 2        ; word: 0 = chart the lowest
                                              ; column, else the 1-based column
                                              ; Data > Column asked for
-fp_as             equ ct_wantcol + 2   ; --- os88fp.inc's caller-declared
+ct_wantrng  equ ct_wantcol + 2       ; word: 0 = no named range, else the
+                                     ; 1-based name Data asked for (82.15)
+ct_nnames   equ ct_wantrng + 2       ; byte: names read out of this file
+ct_names    equ ct_nnames + 1        ; CT_NAME_CAP records
+ct_labels   equ ct_names + CT_NAME_CAP * CT_NAME_REC  ; the Data menu's eight
+                                     ; slots, relabelled in place
+ct_nm_c1    equ ct_labels + CT_NAME_CAP * (CT_NAME_MAX + 1)
+ct_nm_r1    equ ct_nm_c1 + 2         ; ct_parse_nn's near corner, banked
+                                     ; across the far one's parse
+
+fp_as             equ ct_nm_r1 + 2   ; --- os88fp.inc's caller-declared
 fp_bs             equ fp_as + 1        ; storage, exactly as its header lists
 fp_ae             equ fp_bs + 1        ; it and exactly as sheet.asm declares
 fp_be             equ fp_ae + 2        ; it
@@ -1729,7 +2306,10 @@ fp_sgn            equ fp_tmp + 2       ; fp_atof's sign. fp_dig/fp_d10/fp_nd
 fp_hw             equ fp_sgn + 2       ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
-fp_sw             equ fp_x2 + 10       ; where the status word lands
+fp_sw             equ fp_x2 + 10       ; where the status word lands.
+                                       ; fp_e0..fp_ek (84.10's scratch) are
+                                       ; not here: FP_NO_POW above dropped
+                                       ; fp_pow, the last routine naming them
 ct_abon     equ fp_sw + 2   ; byte: the About card is up (SPEC.md 20.5.1)
 ct_bss_end  equ ct_abon + 1
 

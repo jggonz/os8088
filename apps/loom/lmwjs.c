@@ -321,7 +321,7 @@ static int lmj_push(int kind, int aux, int line, int val, unsigned off)
 
     if (lmj_ntok >= LM_MAXTOK) {
         lm_perr(LM_SLOT_WJS, line, "the script is over 1280 tokens; this "
-                "machine packs that many (WEAVE-SPEC 11.4)");
+                "machine packs that many");
         return 0;
     }
     r = lmj_trow(lmj_ntok);
@@ -405,8 +405,7 @@ static int ovl_tokenize(void)
                             lmw_msg[m] = (char) (e ? e : ' ');
                             lmw_msg[m + 1] = 0;
                         }
-                        lm_cat(lmw_msg, ": the escapes are \\\" \\\\ \\n "
-                               "(WEAVE-SPEC 4.2)");
+                        lm_cat(lmw_msg, ": the escapes are \\\" \\\\ \\n");
                         lm_perr(LM_SLOT_WJS, start, lmw_msg);
                         return 0;
                     }
@@ -422,7 +421,7 @@ static int ovl_tokenize(void)
             }
             if (lm_sbn == 0) {
                 lm_perr(LM_SLOT_WJS, start, "empty string: an atom is 1..255 "
-                        "bytes (WEAVE-SPEC 2.7)");
+                        "bytes");
                 return 0;
             }
             a = ovl_intern(LM_SLOT_WJS, start);
@@ -461,7 +460,7 @@ static int ovl_tokenize(void)
                     lmw_msg[m] = 0;
                 }
                 lm_cat(lmw_msg, ": numbers are 0..32767; 16-bit int is THE "
-                       "number type (WEAVE-SPEC 4.1)");
+                       "number type");
                 lm_perr(LM_SLOT_WJS, lmj_line, lmw_msg);
                 return 0;
             }
@@ -642,7 +641,7 @@ static int lmj_declare(int t)
     if (lmj_builtin(t) >= 0) {
         lmj_m0("");
         lmj_mtok(t);
-        lm_cat(lmw_msg, ": shadows a builtin (WEAVE-SPEC 4.6.5)");
+        lm_cat(lmw_msg, ": shadows a builtin");
         lmj_err(t, lmw_msg);
         return 0;
     }
@@ -711,7 +710,7 @@ static int lmj_initexpr(int i)
         if (n < 1 || n > 2048) {
             lmj_m0("array(");
             lm_catn(lmw_msg, n);
-            lm_cat(lmw_msg, "): size is 1..2048 (WEAVE-SPEC 4.2)");
+            lm_cat(lmw_msg, "): size is 1..2048");
             lmj_err(t, lmw_msg);
             return -1;
         }
@@ -720,7 +719,7 @@ static int lmj_initexpr(int i)
         return i + 4;
     }
     lmj_err(t, "an initializer is a constant: number, string, true/false, "
-            "null, array(n) (WEAVE-SPEC 4.2)");
+            "null, array(n)");
     return -1;
 }
 
@@ -765,8 +764,7 @@ static int ovl_collect(void)
             }
             i++;
             if (lm_nglob >= LM_MAXGLOB) {
-                lmj_err(nt, "129 globals; the table is 128 "
-                        "(WEAVE-SPEC 4.2)");
+                lmj_err(nt, "129 globals; the table is 128");
                 return 0;
             }
             r = lmj_grow(lm_nglob);
@@ -830,8 +828,7 @@ static int ovl_collect(void)
                     lmj_mtok(nt);
                     lm_cat(lmw_msg, ": ");
                     lm_catn(lmw_msg, nargs);
-                    lm_cat(lmw_msg, " parameters; the cap is 8 "
-                           "(WEAVE-SPEC 4.2)");
+                    lm_cat(lmw_msg, " parameters; the cap is 8");
                     lmj_err(nt, lmw_msg);
                     return 0;
                 }
@@ -865,8 +862,7 @@ static int ovl_collect(void)
             }
             i++;
             if (lm_nfunc >= LM_MAXFUNC) {
-                lmj_err(nt, "129 functions; the table is 128 "
-                        "(WEAVE-SPEC 4.2)");
+                lmj_err(nt, "129 functions; the table is 128");
                 return 0;
             }
             r = lmj_frow(lm_nfunc);
@@ -881,7 +877,7 @@ static int ovl_collect(void)
             continue;
         }
         lmj_err(i, "top level is declarations only - handlers are the only "
-                "entry points (WEAVE-SPEC 4.1)");
+                "entry points");
         return 0;
     }
     return 1;
@@ -926,7 +922,7 @@ static void lmc_emit(unsigned v)
         if (!lm_failed())
             lm_perr(LM_SLOT_WJS, lmj_tline(lmc_i),
                     "the compiled script is over 6144 bytes; this machine "
-                    "packs that much (WEAVE-SPEC 11.4)");
+                    "packs that much");
         lmc_fail = 1;
         return;
     }
@@ -1124,8 +1120,7 @@ static int lmc_resolve(int t)
     }
     lmj_m0("");
     lmj_mtok(t);
-    lm_cat(lmw_msg, ": not a local, global, component id or function "
-           "(WEAVE-SPEC 4.2)");
+    lm_cat(lmw_msg, ": not a local, global, component id or function");
     lmj_err(t, lmw_msg);
     lmc_fail = 1;
     return LMR_NONE;
@@ -1153,7 +1148,7 @@ static int lmc_push_value(int t)
         lmj_m0("");
         lmj_mtok(t);
         lm_cat(lmw_msg, ": a function is not a value; it is named only as a "
-               "callback argument (WEAVE-SPEC 4.6.6)");
+               "callback argument");
         lmj_err(t, lmw_msg);
         lmc_fail = 1;
         break;
@@ -1217,7 +1212,7 @@ static int lmc_prop_atom(int ptok, int basekind, int basev, int writing,
         lmj_m0("no such ");
         lm_cat(lmw_msg, method ? "method \"" : "property \"");
         lmj_mtok(ptok);
-        lm_cat(lmw_msg, "\" (WEAVE-SPEC 2.7.1)");
+        lm_cat(lmw_msg, "\"");
         lmj_err(ptok, lmw_msg);
         lmc_fail = 1;
         return 0;
@@ -1235,7 +1230,7 @@ static int lmc_prop_atom(int ptok, int basekind, int basev, int writing,
             lm_cat(lmw_msg, method ? "method \""
                           : (writing ? "writable property \"" : "property \""));
             lmj_mtok(ptok);
-            lm_cat(lmw_msg, "\" (WEAVE-SPEC 6)");
+            lm_cat(lmw_msg, "\"");
             lmj_err(ptok, lmw_msg);
             lmc_fail = 1;
             return 0;
@@ -1337,8 +1332,7 @@ static void lmc_call(int t)
         return;
     if (b >= 0) {
         if (b == 11) {              /* array() (8.1) */
-            lmj_err(t, "array: legal only as a var initializer "
-                    "(WEAVE-SPEC 8.1)");
+            lmj_err(t, "array: legal only as a var initializer");
             lmc_fail = 1;
             return;
         }
@@ -1353,7 +1347,7 @@ static void lmc_call(int t)
                 if (fi < 0) {
                     lmj_m0(lmj_bname[b]);
                     lm_cat(lmw_msg, ": the callback names a top-level "
-                           "function (WEAVE-SPEC 4.6.6)");
+                           "function");
                     lmj_err(cb, lmw_msg);
                     lmc_fail = 1;
                     return;
@@ -1500,8 +1494,7 @@ static void lmc_suffixes(int basekind, int basev)
             }
             basekind = LMR_NONE;
         } else if (lmj_ispunct(lmc_i, LMP_LPAR)) {
-            lmj_err(lmc_i, "only a function or builtin name is called "
-                    "(WEAVE-SPEC 4.6.5)");
+            lmj_err(lmc_i, "only a function or builtin name is called");
             lmc_fail = 1;
             return;
         } else {
@@ -1847,7 +1840,7 @@ static void lmc_while(void)
         return;
     jz = lmc_jfwd(OP_JZ);
     if (lmc_nloop >= LMC_MAXLOOP) {
-        lmj_err(lmc_i, "loops nest 8 deep in one function (WEAVE-SPEC 11.4)");
+        lmj_err(lmc_i, "loops nest 8 deep in one function");
         lmc_fail = 1;
         return;
     }
@@ -1912,7 +1905,7 @@ static void lmc_for(void)
     step_end = lmc_i;
     lmc_i++;                        /* ')' */
     if (lmc_nloop >= LMC_MAXLOOP) {
-        lmj_err(lmc_i, "loops nest 8 deep in one function (WEAVE-SPEC 11.4)");
+        lmj_err(lmc_i, "loops nest 8 deep in one function");
         lmc_fail = 1;
         return;
     }
@@ -1997,7 +1990,7 @@ static void lmc_statement(void)
         if (isbrk) {
             int L = lmc_nloop - 1;
             if (lmc_brkn[L] >= LMC_MAXPAT) {
-                lmj_err(t, "16 breaks in one loop (WEAVE-SPEC 11.4)");
+                lmj_err(t, "16 breaks in one loop");
                 lmc_fail = 1;
                 return;
             }
@@ -2009,7 +2002,7 @@ static void lmc_statement(void)
                 lmc_jback(OP_JMP, (unsigned) lmc_contat[L]);
             } else {
                 if (lmc_contn[L] >= LMC_MAXPAT) {
-                    lmj_err(t, "16 continues in one loop (WEAVE-SPEC 11.4)");
+                    lmj_err(t, "16 continues in one loop");
                     lmc_fail = 1;
                     return;
                 }
@@ -2106,7 +2099,7 @@ static int lmc_compile_fn(int fi)
         if (lmj_builtin(j + 1) >= 0) {
             lmj_m0("");
             lmj_mtok(j + 1);
-            lm_cat(lmw_msg, ": shadows a builtin (WEAVE-SPEC 4.6.5)");
+            lm_cat(lmw_msg, ": shadows a builtin");
             lmj_err(j + 1, lmw_msg);
             return 0;
         }
@@ -2134,8 +2127,7 @@ static int lmc_compile_fn(int fi)
         }
         lm_cat(lmw_msg, ": ");
         lm_catn(lmw_msg, lmc_locn);
-        lm_cat(lmw_msg, " locals; the cap is 16, parameters included "
-               "(WEAVE-SPEC 4.2)");
+        lm_cat(lmw_msg, " locals; the cap is 16, parameters included");
         lmj_err(body0, lmw_msg);
         return 0;
     }
@@ -2289,8 +2281,7 @@ int ovl_wjs_gen(void)
     if (ninit) {
         unsigned r;
         if (lm_nfunc >= LM_MAXFUNC) {
-            lm_perr(LM_SLOT_WJS, 1, "129 functions; the table is 128 "
-                    "(WEAVE-SPEC 4.2)");
+            lm_perr(LM_SLOT_WJS, 1, "129 functions; the table is 128");
             return 0;
         }
         lmc_base = lmc_cur;

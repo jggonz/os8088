@@ -2,7 +2,7 @@
 %include "os88api.inc"
 RL_ROWS equ 25
 RL_RUNS equ 3
-    OS88_HEADER 'REDLINE', rl_entry, OS88_F_ICON
+    OS88_HEADER 'REDLINE', rl_entry, OS88_F_ICON, OS88_HIGH | OS88_HIGHMEM
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A tachometer: the dial's rim, three ticks, the RED LINE as a filled band on
@@ -88,6 +88,8 @@ rl_entry:
     mov bx, [rl_win]
     mov ax, ru_press
     call OSAPI_WM_ONCLICK           ; refresh geometry, then enter SDK dispatch
+    mov ax, ru_wheel                ; SPEC.md 13.18: the mouse wheel scrolls
+    call OSAPI_WM_ONWHEEL           ; the pane under the pointer
     mov si, rl_intro
     call bl_sline
     mov si, rl_hint
@@ -1027,6 +1029,8 @@ rl_blit4:
 %include "redline/baseline-herc.inc"
 %include "redline/baseline-vga.inc"
 ; Share the proven timing/report machinery with the developer harnesses.
+%define BL_NOINTRO                  ; no "it saves" banner: users read this, and
+                                    ; rl_frontclock keeps rows by index (benchlib)
 %include "benchlib.inc"
 %include "redline/ui.inc"
 %define OS88UI_NOGLYPH
@@ -1036,6 +1040,7 @@ rl_blit4:
 %include "os88ui.inc"
 %define OD_BOOTVOL                  ; REDLINE.CFG is RLAPPLY's (103.6.4)
 %include "os88data.inc"
+%include "os88link.inc"           ; Apply on boot's autostart link (26.10)
 %include "redline/csrows.inc"
 %include "redline/csfe.inc"
 %include "redline/csknob.inc"
@@ -1212,7 +1217,6 @@ rl_convkb: dw 0
 rl_extkb: dw 0
 rl_ramtotal: dq 0
 rl_ramkb: dd 0
-rl_mapentry: times 24 db 0
 rl_free: dw 0
 rl_largest: dw 0
 rl_xfree: dw 0

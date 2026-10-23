@@ -34,23 +34,53 @@ n_frontgeom:
 
 ; The cache is 24 independent six-row bands (12 on compact mono CGA).
 ; VGA: four native planes followed by the packed fallback, 2592 bytes/band.
-; Mono: one native plane, 336 bytes/band (12 trailing pad bytes). Both strides are paragraph aligned.
-N_FRONT_END equ 24*2592            ; end of the splash cache in the canvas claim
+; Mono: one native plane, 336 bytes/band (12 trailing pad bytes). The STRIDES
+; are 2688 and 384, multiples of 128 bytes and not just of a paragraph: a band
+; is handed to OSAPI_DECOMP at ES:0, and kern_mega's protected mode names
+; memory in 8-paragraph steps (docs/plans/KERN-MEGA-PLAN.md 3), so a 162- or
+; 21-paragraph stride put most bands' segments where it cannot reach them.
+N_FRONT_VSTRIDE equ 2688            ; ...in bytes
+N_FRONT_MSTRIDE equ 384
+N_FRONT_END equ 24*2688            ; end of the splash cache in the canvas claim
 N_FRONT_LABEL equ 24*16           ; one rendered menu label (n_frontlabel)
+; ES = the canvas and AX = the current band's OFFSET in it; clobbers DX. An
+; offset and not a segment, because under kern_mega an OS88_HIGHMEM canvas is
+; a selector over exactly its 63KB, and no arithmetic on one names a band.
 n_frontsegment:
     mov ax,[n_frontband]
-    mov bx,21
+    mov dx,N_FRONT_MSTRIDE
     cmp byte [n_frontwant],1
     jne .mono
-    mov bx,162
+    mov dx,N_FRONT_VSTRIDE
 .mono:
-    mul bx
-    add ax,[n_canvas]
-    mov es,ax
+    mul dx                         ; 23 x 2688 is 61,824: DX = 0
+    mov es,[n_canvas]
     ret
 
+; Expand band [n_frontband] into its place in the canvas; CF=1 = not loaded.
+; OSAPI_DECOMP writes at ES:0 only (its offset bound), so the band is named by
+; a SEGMENT there: the canvas plus whole 128-byte granules, which kern_mega's
+; identity map names as well. A kern_mega pool SELECTOR (an OS88_HIGHMEM
+; claim, bit 2 - a conventional claim is 512-aligned and never has it) names
+; no band but the first, so there the band is expanded into a scratch claim of
+; its own and copied in. Clobbers AX,BX,CX,DX,SI,DI.
 n_frontload:
-    call n_frontsegment
+    call n_frontsegment            ; ES = the canvas, AX = the band's offset
+    push ax
+    test byte [n_canvas],4
+    jz .granule
+    mov ax,3                       ; the widest band is 2,592 bytes
+    call OSAPI_MEM_CLAIM
+    jc .noscratch
+    mov es,dx
+    jmp short .expand
+.granule:
+    mov cl,4
+    shr ax,cl
+    mov dx,es
+    add ax,dx
+    mov es,ax
+.expand:
     xor bx,bx
     mov bl,[n_frontwant]
     dec bx
@@ -70,7 +100,33 @@ n_frontload:
     xor di,di
     xor bx,bx
     mov al,OSAPI_LZ_LZ4
-    call OSAPI_DECOMP
+    call OSAPI_DECOMP              ; ES:DI = one past the band
+    mov cx,di
+    pop di                         ; the band's offset in the canvas
+    mov dx,es                      ; ...and the scratch claim, if there is one
+    jc .refused
+    test byte [n_canvas],4
+    jz .out                        ; (CF = 0) expanded in place
+    push ds
+    mov es,[n_canvas]
+    mov ds,dx
+    xor si,si
+    shr cx,1                       ; both band sizes are even
+    rep movsw
+    pop ds
+    call OSAPI_MEM_FREE
+    clc
+.out:
+    ret
+.refused:
+    test byte [n_canvas],4
+    jz .fail
+    call OSAPI_MEM_FREE
+.fail:
+    stc
+    ret
+.noscratch:
+    pop ax                         ; (CF = 1, the claim's refusal)
     ret
 n_frontsources: dw n_front_vga,n_front_herc,n_front_cga
 
@@ -142,7 +198,7 @@ n_fronttimer:
 
 n_frontblit:
     call n_frontsegment
-    xor si,si
+    xchg si,ax                     ; ES:SI = the band
     mov bx,[n_frontband]
     mov ax,bx
     shl bx,1
@@ -168,9 +224,11 @@ n_frontblit:
     ret
 .color:
     mov di,N_FRONT_PLANE | 4000h
+    push si
     call OSAPI_GFX_BLITP
+    pop si
     jnc .out
-    mov si,N_FRONT_PACKED
+    add si,N_FRONT_PACKED
     shl bp,1
     shl bp,1
     call OSAPI_GFX_BLIT4
@@ -237,8 +295,10 @@ n_frontmenu:
     je .footertext
     mov si,n_errmsg
     cmp byte [n_error],2
-    jne .footertext
+    jb .footertext
     mov si,n_asseterr
+    je .footertext
+    mov si,n_memerr
 .footertext:
     mov ax,120
     call .text
@@ -305,22 +365,24 @@ n_frontpointer:
 ; BX = label*2 -> ES:SI = its 192-pixel 1bpp bitmap (24 bytes a row, 8 rows
 ; a scale step). The tool used to store all eight renders; they are built from
 ; an 8x8 glyph subset of the game font, a glyph row doubled nibble by nibble at
-; scale 2. All four go into the sprite claim, which is free scratch on the
-; desktop, and stay there until the scale changes or n_launch hands the claim
-; back to n_loadgfx - so a cached repaint blits exactly what it used to.
+; scale 2. All four live in n_labels, in our own bss, and stay there until the
+; scale changes - so a cached repaint blits exactly what it used to. They were
+; in the sprite claim while that was the session's; the banks are fetched
+; parts now, here only inside the bracket (SPEC.md 101.1).
 n_frontlabel:
     push bx
+    push ds
+    pop es
     mov al,[n_frontscale]
     cmp al,[n_frontlbl]
     je .ready
     mov [n_frontlbl],al
-    mov es,[n_graphics]
-    xor di,di
+    mov di,n_labels
     xor ax,ax
     mov cx,4*N_FRONT_LABEL/2
     rep stosw
     mov si,n_front_one             ; the four strings lie back to back
-    xor di,di
+    mov di,n_labels
 .label:
     push di
 .char:
@@ -369,14 +431,14 @@ n_frontlabel:
 .endlabel:
     pop di
     add di,N_FRONT_LABEL
-    cmp di,4*N_FRONT_LABEL
+    cmp di,n_labels+4*N_FRONT_LABEL
     jb .label
 .ready:
     pop bx
-    mov es,[n_graphics]
     mov ax,N_FRONT_LABEL/2
     mul bx
-    mov si,ax
+    add ax,n_labels
+    xchg si,ax
     ret
 n_frontdbl: db 00h,03h,0ch,0fh,30h,33h,3ch,3fh,0c0h,0c3h,0cch,0cfh,0f0h,0f3h,0fch,0ffh
 n_fronthint: db '1/2 SELECT   ENTER START   H CONTROLS',0
@@ -501,6 +563,8 @@ n_launch:
     call OSAPI_FSX_CAPS
     test ax,(1 << FSXM_MODEX) | (1 << FSXM_CGA320)
     jz .error
+    call n_fsxroom                 ; the parts are fetched inside the bracket,
+    jc .nomem                      ; where a toast cannot be drawn: ask here
     cmp byte [n_state],1
     je .resume
     call n_new
@@ -508,14 +572,17 @@ n_launch:
     mov byte [n_error],0
     mov byte [n_fronthelp],0
     mov byte [n_frontkind],0
-    mov byte [n_frontlbl],0        ; n_loadgfx reuses the label scratch
     mov ax,n_exclusive
     mov bx,[n_win]
     mov cx,FSXF_FASTTICK
     call OSAPI_FSX_RUN
     jnc .paint
 .error:
-    mov byte [n_error],1
+    mov al,1
+    db 0x3D                        ; cmp ax,imm16 swallows the two-byte mov
+.nomem:
+    mov al,3
+    mov [n_error],al
 .paint:
     call n_frontprepare
     mov bx,[n_win]

@@ -46,6 +46,10 @@
 ; not stream.
 ; =============================================================================
 
+%define OS88_DRV_HIGHOK          ; kern_mega may run this image above 1MB
+                                ; (KERN-MEGA-PLAN item 82: no paragraph
+                                ; arithmetic on its own segment, no BIOS or
+                                ; DMA buffer in it)
 %include "os88drv.inc"
 %define NETPKG_DRIVER           ; the constants, not the client half
 %include "netpkg.inc"           ; the SOCKET ABI (SPEC.md 62.11) - the same

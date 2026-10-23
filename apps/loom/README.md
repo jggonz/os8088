@@ -36,7 +36,7 @@ package's own header and explicitly **not** the contract.
 | `lmwjs.c` | the WJS compiler and code generator (WEAVE-SPEC §4) — in the overlay |
 | `lmsheet.c` | the FX pre-compiler and the sprite reader (WEAVE-SPEC §5 and WEAVE-SPEC §3.6) — in the overlay |
 | `lmwrite.c` | the resolve pass and the bundle writer (WEAVE-SPEC §2) — in the overlay. **This is where byte identity is either true or not** |
-| `lmovl.c` | `LOOM.OVL`'s remaining tenants: About and New Project |
+| `lmovl.c` | the overlay's remaining tenants: About and New Project |
 | `lmui.inc` | the alert, the scroll bar, the two claim movers, the line scanner and the glass shadow's comparator (assembly) |
 | `lmpool.py` | a host pass over the compiled assembly: lays `loom.h`'s PHASE STORE - four pack passes' private tables - from one base. `.bss` only; the code is the code `tools/cc8086.py` checked. Its first job, folding a string literal SmallerC emitted twice (or as the tail of a longer one) onto one copy, is every C package's now (`tools/ccpeep.py`, SPEC.md 73.15) |
 | `icon.inc` | the 16×16 icon: a loom — beams, warp threads and a shuttle |
@@ -57,11 +57,12 @@ editor. `^P` packs `FORM.WAB` beside it; the demo bundles the host packer
 produced are on the same disk, so the two can be compared without leaving the
 machine.
 
-The floppy carries `LOOM.O88` + `LOOM.OVL`, `WEAVE.O88` + `WEAVE.OVL` +
-`WEAVE.WSM`, the three host-packed demo bundles **and the three demo project
-sources** — because a pack gate has to have a project on the machine to open,
-and because the runtime has to be on the same disk for `^R` to close the loop.
-All three geometries fit; the 360KB one uses 187 of its 354 clusters.
+The floppy carries `LOOM.O88` and `WEAVE.O88` - each ONE file, its overlay
+and its second module carried inside it as parts (WEAVE-SPEC §1.2.5) - the
+three host-packed demo bundles **and the three demo project sources** —
+because a pack gate has to have a project on the machine to open, and because
+the runtime has to be on the same disk for `^R` to close the loop. All four
+geometries fit; the 360KB one uses 113 of its 354 clusters.
 
 `--folder SYSTEM/APPDATA` is in the disk recipe on purpose (SPEC.md §19.9):
 `LOOM.CFG` holds the last project's folder and the last file slot, on the
@@ -73,7 +74,8 @@ A disk without the folder is not an error — the preference is simply not kept.
 SPEC.md §73.14 splits by **frequency**, not by size: a keystroke's path stays
 resident and a menu command's can go out, because a menu command may refuse
 and a keystroke may not. So the four compilers, the bundle writer, About, New
-Project and the project open are all `ovl_*` and ship in `LOOM.OVL`; the
+Project and the project open are all `ovl_*` and ship in the overlay, part 1
+of `LOOM.O88`; the
 editor, the sidebar, the claims, **and Save** are resident. Save is the one
 worth arguing: it is reachable from the menu, from `^S` and from the close
 guard's alert, and a Save that could not happen because the module had gone

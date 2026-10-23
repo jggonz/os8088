@@ -55,7 +55,7 @@
 %define CC_HAS_WORKER               ; void os88_worker(void *) - the game loop,
                                     ; hired by os88_paint (the gfx lock has to
                                     ; be held, so os88_main cannot do it)
-%define CC_STACK_CLASS OS88_STACK_256 ; the worker asks for 256: a 384
+%define CC_STACK_CLASS OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM ; the worker asks for 256: a 384
                                     ; request can be REFUSED when both 384
                                     ; slices are held (docs/PACCMAN-PORT-PLAN.md)
                                     ; and NOT: CC_HAS_ONCLICK,

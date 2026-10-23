@@ -8,8 +8,8 @@ CYLINDER 0, so on a 40-track drive it formats, mounts and then lies about its
 size. dskw_fmt_reach_x is the check: after a row-2 (720K) format it writes a
 marker to the volume's LAST sector (LBA 1439, cylinder 79), re-zeroes the
 buffer, reads the sector back and compares. A failure re-formats the disk as
-360K and says 'Made 360K, not 720K'. No other row reaches that code: fmtlow
-formats 360K, and only row 2 is checked.
+360K and says 'Made 360K, not 720K'. Since SPEC.md 18.96.4 every format runs the
+check (fmtlow's 360K reaches LBA 719), but row 2 is the one that FALLS BACK.
 
 TWO ARMS, one boot each, on os8088_5150_cga_720b_gla (an 80-track B:):
 
@@ -71,6 +71,7 @@ MACHINE = "os8088_5150_cga_720b_gla"
 SYS = "build/os8088-360.img"
 LAST = 1439                     # 720K: 2 x 80 x 9 sectors, the last LBA
 OK, BAD = "Formatted B:", "Made 360K, not 720K"
+TEMPLATE = 0x88000888            # dskw_fmt_t2's BS_VolID: the BASE only
 
 
 # THE ASSEMBLER'S VALUES, not a regex over the source: FS_SIZE is
@@ -112,7 +113,13 @@ def arm(wrong, tmp):
         row = m.read(m.sym("fm_fmtrow"), 1)[0]
         check(row == 3, "arm %s: the probe offers 360K (no AH=08h)" % tag,
               "", got=row, want=3)
-        m.write(m.sym("fm_fmtrow"), bytes([2]))   # the user's Space: 720K
+        # the user's Space on an EXTERNAL 9-sector drive: 720K, with 360K
+        # the other size. This fixture's GLaBIOS answers no AH=08h, so the
+        # probe leaves fm_fmtalt at 0FFh and offers no Space - poke BOTH
+        # bytes Space swaps, because the reach test falls back to 360K only
+        # where 360K is the drive's other format (SPEC.md 18.96.4)
+        m.write(m.sym("fm_fmtrow"), bytes([2]))
+        m.write(m.sym("fm_fmtalt"), bytes([3]))
 
         seen = {"tracks": 0, "rd79": 0, "wr79": 0}
 
@@ -177,8 +184,17 @@ def arm(wrong, tmp):
           "arm %s: B: on the host is an empty %s volume"
           % (tag, "360KB" if wrong else "720KB"), "",
           got=ls.strip()[-120:], want=want + " cluster(s) free")
+    img = open(out, "rb").read()
+    vid = int.from_bytes(img[39:43], "little") if len(img) >= 512 else None
+    print("  BS_VolID %s" % ("%08X" % vid if vid is not None else "(none)"))
+    check(len(img) >= 512 and img[38] == 0x29 and vid != TEMPLATE,
+          "arm %s: the format stamped a serial of this disk's own" % tag,
+          "SPEC.md 18.8.2.1: DSK_VOLID adds the moment to dskw_fmt_t2's "
+          "0x88000888. The template's value here is every disk this machine "
+          "formats signing alike, which a quiet mount cannot tell apart",
+          got="%08X" % vid if vid is not None else None,
+          want="not %08X" % TEMPLATE)
     if not wrong:
-        img = open(out, "rb").read()
         mark = img[LAST * 512:LAST * 512 + 6]
         got = mark.hex() if len(mark) == 6 else \
             "(the file is %d bytes, short of sector 1439)" % len(img)
@@ -186,12 +202,19 @@ def arm(wrong, tmp):
               "arm A: sector 1439 carries the marker - its own LBA, three "
               "times", "dskw_fmt_reach_x writes it and reads it back",
               got=got, want=(LAST.to_bytes(2, "little") * 3).hex())
+    return vid
 
 
 tmp = tempfile.mkdtemp(prefix="fmtreach-")
 try:
-    arm(False, tmp)
-    arm(True, tmp)
+    va = arm(False, tmp)
+    vb = arm(True, tmp)
+    check(va != vb, "two disks formatted here carry DIFFERENT serials",
+          "SPEC.md 18.8.2.1 - the regression this asserts is the one the "
+          "stamp exists for: two formats, two disks, two identities",
+          got=("%08X" % va if va is not None else None,
+               "%08X" % vb if vb is not None else None),
+          want="two different values")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

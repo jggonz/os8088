@@ -26,14 +26,13 @@
 ; reads into anyway (SPEC.md 86.5.2) - no 16 KB of bss for a header.
 ;
 ; Output (module bss, prefix apw_):
-;   apw_ok      1 = the record is valid
 ;   apw_fmt     AP_FMT_PCM8 / AP_FMT_ADPCM
 ;   apw_rate    Hz (one of apw_rates)
 ;   apw_balign  nBlockAlign
 ;   apw_spb     wSamplesPerBlock (ADPCM; 1 for PCM8)
 ;   apw_datoff  dword: byte offset of the first audio byte in the file
 ;   apw_datlen  dword: data-chunk length, clamped to the file
-;   apw_err     -> NUL reason string when apw_ok = 0
+;   apw_err     -> NUL reason string when the parse refused (CF = 1)
 ; =============================================================================
 
 APW_WINDOWS equ 4                   ; cluster windows the walk may read in all
@@ -58,14 +57,14 @@ apw_s_fmt:    db 'fmt '
 apw_s_data:   db 'data'
 apw_s_spk:    db 'o8sp'
 
-apw_rates:    dw 8000, 11025, 16000, 22050, 24000, 32000, 44100, 0
+apw_rates:    dw 8000, 11025, 16000, 22050, 24000, 32000, 44100
+APW_NRATES equ ($ - apw_rates) / 2
 
 ; =============================================================================
 ; apw_parse - parse the named WAV
 ; in:  SI -> NUL 8.3 name in THIS segment (current directory already set)
 ;      DX:AX = the file's total size in bytes
-; out: apw_ok = 1 and the record filled, or apw_ok = 0 with apw_err set.
-;      CF = 1 when rejected.
+; out: CF = 0 and the record filled, or CF = 1 with apw_err set.
 ; clobbers: AX..DI  (top-level call from a UI callback, after ap_ensure_bufs)
 ; =============================================================================
 apw_parse:
@@ -75,7 +74,6 @@ apw_parse:
     mov [apw_name], si
     mov [apw_flen], ax
     mov [apw_flen+2], dx
-    mov byte [apw_ok], 0
     mov byte [apw_gotfmt], 0
     mov byte [apw_spk], 0
 
@@ -113,6 +111,23 @@ apw_parse:
     mov word [apw_lpos], 12         ; logical file position of the cursor
     mov word [apw_lpos+2], 0
 
+    jmp short .walk
+
+; the head's refusals (each tail is a MOV and a short JMP: an 8086 Jcc
+; reaches 127 bytes, and one that cannot costs a JMP NEAR besides)
+.eio:     mov ax, apw_e_io
+          jmp short .err0
+.eclu:    mov ax, apw_e_clu
+          jmp short .err0
+.eshort:  mov ax, apw_e_short
+          jmp short .err0
+.eriff:   mov ax, apw_e_riff
+.err0:
+    mov [apw_err], ax
+    stc
+    pop es
+    ret
+
 ; -----------------------------------------------------------------------------
 .walk:
     mov ax, [apw_pos]
@@ -123,110 +138,29 @@ apw_parse:
     jc .slidefail
     jmp .walk
 .havehdr:
-    mov bx, [apw_pos]
-    mov [apw_ckid], bx
+    mov si, [apw_pos]               ; SI = BX = the chunk, in the window, for
+    mov bx, si                      ; the whole of this step
     mov ax, [es:bx+4]
     mov dx, [es:bx+6]
     mov [apw_cksz], ax
     mov [apw_cksz+2], dx
 
-    mov si, bx
-    mov di, apw_s_fmt
-    call apw_cmp4
+    mov di, apw_s_fmt               ; the three ids we know, four bytes apart
+    call apw_cmp4                   ; (apw_cmp4 preserves every register)
     je .isfmt
-    mov si, [apw_ckid]
-    mov di, apw_s_data
+    add di, apw_s_data - apw_s_fmt
     call apw_cmp4
     je .isdata
-    mov si, [apw_ckid]
-    mov di, apw_s_spk
+    add di, apw_s_spk - apw_s_data
     call apw_cmp4
     jne .skip
-    cmp word [apw_cksz], 4          ; 'o8sp' (SPEC.md 86.21): shaped for the
+    cmp ax, 4                       ; 'o8sp' (SPEC.md 86.21): shaped for the
     jb .skip                        ; speaker on the host - kind 1 samples,
-    mov bx, [apw_ckid]              ; kind 2 the counts themselves. A chunk
-    mov al, [es:bx+8]               ; cut short is ignored, not trusted
-    cmp al, 2
+    mov al, [es:bx+8]               ; kind 2 the counts themselves. A chunk
+    cmp al, 2                       ; cut short is ignored, not trusted
     ja .skip
     mov [apw_spk], al
     jmp .skip
-
-; --- fmt ------------------------------------------------------------------
-.isfmt:
-    mov ax, [apw_cksz]
-    cmp ax, 16
-    jb .eblk
-    mov bx, [apw_pos]
-    add bx, 8
-    add bx, ax                      ; end of fmt body in window coords
-    jc .ebig                        ; ...a size that wrapped the word is too big
-    cmp bx, [apw_winlen]
-    ja .ebig                        ; a fmt we cannot fully see
-    mov bx, [apw_pos]               ; -> fmt body, at +8
-    mov ax, [es:bx+8+0]
-    mov [apw_tag], ax
-    mov ax, [es:bx+8+2]
-    cmp ax, 1
-    jne .echan
-    mov ax, [es:bx+8+6]             ; nSamplesPerSec high word
-    or ax, ax
-    jnz .erate
-    mov ax, [es:bx+8+4]
-    mov [apw_rate], ax
-    mov ax, [es:bx+8+12]
-    mov [apw_balign], ax
-    mov ax, [es:bx+8+14]
-    mov [apw_bits], ax
-    mov word [apw_spb], 1
-    cmp word [apw_tag], 0x0011
-    jne .fmtdone
-    cmp word [apw_cksz], 20
-    jb .espb
-    mov ax, [es:bx+8+18]
-    mov [apw_spb], ax
-.fmtdone:
-    mov byte [apw_gotfmt], 1
-    jmp .skip
-
-; --- data ----------------------------------------------------------------
-.isdata:
-    cmp byte [apw_gotfmt], 0
-    je .enofmt
-    mov ax, [apw_lpos]
-    mov dx, [apw_lpos+2]
-    add ax, 8
-    adc dx, 0
-    mov [apw_datoff], ax
-    mov [apw_datoff+2], dx
-    mov ax, [apw_cksz]
-    mov dx, [apw_cksz+2]
-    mov [apw_datlen], ax
-    mov [apw_datlen+2], dx
-    ; clamp data end to the file length
-    mov ax, [apw_datoff]
-    mov dx, [apw_datoff+2]
-    add ax, [apw_datlen]
-    adc dx, [apw_datlen+2]
-    jc .datclamp                   ; past 4 GB: the sum wrapped, so the
-                                   ; compare below would pass it unclamped
-    cmp dx, [apw_flen+2]
-    jb .datok
-    ja .datclamp
-    cmp ax, [apw_flen]
-    jbe .datok
-.datclamp:
-    mov ax, [apw_flen]
-    mov dx, [apw_flen+2]
-    sub ax, [apw_datoff]
-    sbb dx, [apw_datoff+2]
-    mov [apw_datlen], ax
-    mov [apw_datlen+2], dx
-.datok:
-    call apw_validate
-    jc .out
-    mov byte [apw_ok], 1
-    clc
-    jmp .out
 
 ; --- skip an unrecognised chunk (or fmt, once consumed) -----------------
 .skip:
@@ -234,7 +168,7 @@ apw_parse:
     mov dx, [apw_cksz+2]
     add ax, 8
     adc dx, 0
-    test byte [apw_cksz], 1        ; RIFF pad byte on an odd body
+    test al, 1                     ; RIFF pad byte on an odd body (8 is even)
     jz .nopad
     add ax, 1
     adc dx, 0
@@ -248,12 +182,11 @@ apw_parse:
     adc [apw_lpos+2], dx
     or dx, dx
     jnz .slidenow
-    mov bx, [apw_pos]
-    add bx, ax
+    add ax, [apw_pos]
     jc .slidenow                    ; the sum wrapped (a 64 KB tag block): past
-    cmp bx, [apw_winlen]            ; the window, not inside it
+    cmp ax, [apw_winlen]            ; the window, not inside it
     ja .slidenow
-    mov [apw_pos], bx
+    mov [apw_pos], ax
     jmp .walk
 .slidenow:
     call apw_slide
@@ -271,113 +204,144 @@ apw_parse:
     ja .enodat
     cmp ax, [apw_flen]
     jae .enodat
-    jmp .ebig
+    ; (falls into .ebig)
 
-.eclu:
-    mov word [apw_err], apw_e_clu
-    jmp .out
-.eio:
-    mov word [apw_err], apw_e_io
-    jmp .out
+; the walk's refusals
+.ebig:    mov ax, apw_e_big
+          jmp .err
+.enodat:  mov ax, apw_e_nodat
+          jmp .err
+
+; --- fmt ------------------------------------------------------------------
+.isfmt:
+    cmp ax, 16
+    jb .eblk
+    add ax, bx
+    jc .ebig                        ; ...a size that wrapped the word is too big
+    add ax, 8                       ; end of fmt body in window coords
+    jc .ebig
+    cmp ax, [apw_winlen]
+    ja .ebig                        ; a fmt we cannot fully see
+    mov ax, [es:bx+8+0]             ; -> fmt body, at +8
+    mov [apw_tag], ax
+    cmp word [es:bx+8+2], 1
+    jne .echan
+    cmp word [es:bx+8+6], 0         ; nSamplesPerSec high word
+    jne .erate
+    mov ax, [es:bx+8+4]
+    mov [apw_rate], ax
+    mov ax, [es:bx+8+12]
+    mov [apw_balign], ax
+    mov ax, [es:bx+8+14]
+    mov [apw_bits], ax
+    mov word [apw_spb], 1
+    cmp word [apw_tag], 0x0011
+    jne .fmtdone
+    cmp word [apw_cksz], 20
+    jb .espb
+    mov ax, [es:bx+8+18]
+    mov [apw_spb], ax
+.fmtdone:
+    mov byte [apw_gotfmt], 1
+    jmp .skip
+
+; ...and the record's
+.echan:   mov ax, apw_e_chan
+          jmp short .err
+.erate:   mov ax, apw_e_rate
+          jmp short .err
+.etag:    mov ax, apw_e_tag
+          jmp short .err
+.ebits:   mov ax, apw_e_bits
+          jmp short .err
+.espb:    mov ax, apw_e_spb
+          jmp short .err
+.enofmt:  mov ax, apw_e_nofmt
+          jmp short .err
+.eblk:    mov ax, apw_e_blk
+.err:
+    mov [apw_err], ax
+    stc
 .out:
     pop es
-    mov al, [apw_ok]
-    or al, al
-    jnz .ret_ok
-    stc
-    ret
-.ret_ok:
-    clc
     ret
 
-; the refusal tails, each sets apw_err and falls into .out with apw_ok = 0
-.eshort:  mov word [apw_err], apw_e_short
-          jmp .out
-.eriff:   mov word [apw_err], apw_e_riff
-          jmp .out
-.enofmt:  mov word [apw_err], apw_e_nofmt
-          jmp .out
-.enodat:  mov word [apw_err], apw_e_nodat
-          jmp .out
-.ebig:    mov word [apw_err], apw_e_big
-          jmp .out
-.echan:   mov word [apw_err], apw_e_chan
-          jmp .out
-.erate:   mov word [apw_err], apw_e_rate
-          jmp .out
-.eblk:    mov word [apw_err], apw_e_blk
-          jmp .out
-.espb:    mov word [apw_err], apw_e_spb
-          jmp .out
 
-; =============================================================================
-; apw_validate - final field checks; sets apw_fmt.  CF on refusal (apw_err).
-; =============================================================================
-apw_validate:
-    ; --- format tag -> apw_fmt -------------------------------------------
+.datok:
+    ; --- the final field checks: format tag -> apw_fmt ---------------------
+    mov ax, [apw_balign]            ; (for ADPCM)
+    mov cx, [apw_bits]
     cmp word [apw_tag], 0x0001
     je .pcm
     cmp word [apw_tag], 0x0011
-    je .adpcm
-    mov word [apw_err], apw_e_tag
-    stc
-    ret
-.pcm:
-    cmp word [apw_bits], 8
-    je .pcmok
-    mov word [apw_err], apw_e_bits
-    stc
-    ret
-.pcmok:
-    mov byte [apw_fmt], AP_FMT_PCM8
-    ; PCM blockalign is normally 1; tolerate anything <= 4, treat as 1
-    jmp .rate
-.adpcm:
-    cmp word [apw_bits], 4
-    je .adpb
-    mov word [apw_err], apw_e_bits
-    stc
-    ret
-.adpb:
+    jne .etag
+    cmp cx, 4
+    jne .ebits
     mov byte [apw_fmt], AP_FMT_ADPCM
     ; blockalign: 8 <= balign <= APD_BLKMAX, and (balign-4)*2 + 1 == spb.
     ; Below 8, 2048 input bytes can yield under 2048 samples, and apd_pull's
     ; 4-byte block header is not resumable across a dry ring.
-    mov ax, [apw_balign]
     cmp ax, 8
-    jb .eblk2
+    jb .eblk
     cmp ax, APD_BLKMAX
-    ja .eblk2
+    ja .eblk
     sub ax, 4
     add ax, ax
     inc ax                         ; AX = derived samples/block
     cmp ax, [apw_spb]
-    je .rate
-    mov word [apw_err], apw_e_spb
-    stc
-    ret
-.eblk2:
-    mov word [apw_err], apw_e_blk
-    stc
-    ret
-
+    jne .espb
+    jmp short .rate
+.pcm:
+    cmp cx, 8
+    jne .ebits
+    mov byte [apw_fmt], AP_FMT_PCM8
+    ; PCM blockalign is normally 1; tolerate anything, treat as 1
 .rate:
-    mov si, apw_rates
-.rl:
-    mov ax, [si]
-    or ax, ax
-    jz .erate2
-    cmp ax, [apw_rate]
-    je .rok
-    add si, 2
-    jmp .rl
-.erate2:
-    mov word [apw_err], apw_e_rate
-    stc
-    ret
-.rok:
+    push ds
+    pop es                         ; (.out restores the caller's ES)
+    mov ax, [apw_rate]
+    mov di, apw_rates
+    mov cx, APW_NRATES
+    cld
+    repne scasw
+    jne .erate
     clc
-    ret
+    jmp .out
+
+; --- data ----------------------------------------------------------------
+.isdata:
+    cmp byte [apw_gotfmt], 0
+    je .enofmt
+    mov ax, [apw_lpos]
+    mov dx, [apw_lpos+2]
+    add ax, 8
+    adc dx, 0
+    mov [apw_datoff], ax
+    mov [apw_datoff+2], dx
+    mov cx, [apw_cksz]
+    mov bx, [apw_cksz+2]
+    mov [apw_datlen], cx
+    mov [apw_datlen+2], bx
+    ; clamp data end to the file length
+    add ax, cx
+    adc dx, bx
+    jc .datclamp                   ; past 4 GB: the sum wrapped, so the
+                                   ; compare below would pass it unclamped
+    cmp dx, [apw_flen+2]
+    jb .dgo
+    ja .datclamp
+    cmp ax, [apw_flen]
+    jbe .dgo
+.datclamp:
+    mov ax, [apw_flen]
+    mov dx, [apw_flen+2]
+    sub ax, [apw_datoff]
+    sbb dx, [apw_datoff+2]
+    mov [apw_datlen], ax
+    mov [apw_datlen+2], dx
+.dgo:
+    jmp .datok                     ; (the checks sit by their refusals)
+
 
 ; =============================================================================
 ; apw_readwin - read apw_rdcap bytes at apw_winb (cluster-aligned) into the
@@ -461,23 +425,14 @@ apw_slide:
 ;            when equal.  preserves every register except flags.
 ; =============================================================================
 apw_cmp4:
-    push ax
     push si
     push di
     push cx
+    xchg si, di                    ; CMPSB compares DS:SI with ES:DI
     mov cx, 4
-.l:
-    mov al, [es:si]
-    cmp al, [di]
-    jne .done
-    inc si
-    inc di
-    loop .l
-    ; CX reached 0 -> ZF is already set by the LOOP fall-through; force it
-    xor al, al
-.done:
+    cld
+    repe cmpsb
     pop cx
     pop di
     pop si
-    pop ax
     ret

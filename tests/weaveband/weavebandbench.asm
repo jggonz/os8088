@@ -516,6 +516,7 @@ wb_ident:
     ret
 
 %include "weave/wband.inc"          ; THE THING MEASURED - the package's own
+%define BL_NOINTRO                  ; no "it saves" banner: this one never saves (benchlib)
 %include "benchlib.inc"
 
 ; =============================================================================

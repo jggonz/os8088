@@ -12,7 +12,7 @@ moves and keeps working. Nothing until now proved the refusal.
 
 WHY IT NEEDS AN INSTRUMENT, AND WHY THAT INSTRUMENT IS NOT THE FILLER. The
 subject has to be BOTH declared movable and worker-owning, and no shipped
-package is: SHEET declares and hires nobody, every package that hires a worker
+package is: CALC declares and hires nobody, every package that hires a worker
 declares nothing. The obvious move is to give `tests/filler` both, and it does
 not work - a package reaches `mem_claim` only from inside its OWN callback, so
 when the filler's forcing ask triggers a compaction `[wm_pkgd]` is 1 and
@@ -29,28 +29,28 @@ paint, count relocations. The declaration is checked here rather than assumed
 identical from inside the package (SPEC.md 66.5.6.2) and would make every
 assertion below vacuous.
 
-WHY SHEET IS STILL IN THE ROOM. "The region did not move" is worth nothing on
+WHY CALC IS STILL IN THE ROOM. "The region did not move" is worth nothing on
 its own - it is also what a pass that never ran says, and what a pass with
-nowhere to move anything says. SHEET is the control: it is declared, it owns no
+nowhere to move anything says. CALC is the control: it is declared, it owns no
 worker, and it sits in the same arena, so the run asserts PINME's region stood
-still WHILE SHEET'S MOVED. One without the other is not a result.
+still WHILE CALC'S MOVED. One without the other is not a result.
 
 WHY TWO PAINTS, AND IT IS THE OTHER HALF OF THE EXPERIMENT. The first version
 of this row was ALSO a false green for a second, unrelated reason, and it is
 regmove.py's own stated one a step along: a region is claimed top-down, so
 whichever package opens into the top of a hole lands flush against the ceiling
 and CANNOT MOVE whatever any predicate says. The subject needs a hole ABOVE it.
-So two Paint instances are opened as spacers - one above SHEET, one between
-SHEET and PINME - and closing both leaves exactly that shape:
+So two Paint instances are opened as spacers - one above CALC, one between
+CALC and PINME - and closing both leaves exactly that shape:
 
-    ceiling [ PAINT#1 ][ SHEET ][ PAINT#2 ][ PINME ] ......... free
-    closed  [  hole   ][ SHEET ][  hole   ][ PINME ] ......... free
-    then    [ FILLER  ][ SHEET ][  hole   ][ PINME ][ fill ] 8KB
+    ceiling [ PAINT#1 ][ CALC ][ PAINT#2 ][ PINME ] ......... free
+    closed  [  hole   ][ CALC ][  hole   ][ PINME ] ......... free
+    then    [ FILLER  ][ CALC ][  hole   ][ PINME ][ fill ] 8KB
 
 The filler opens LAST, into the top of the first hole, and its fill takes the
 low arena down to 8KB - so the free space is three runs and an ask bigger than
 any of them is one only a merge can answer. The descending pass then has
-somewhere to put SHEET (assertion 4) and somewhere it WOULD put PINME
+somewhere to put CALC (assertion 4) and somewhere it WOULD put PINME
 (assertion 3). With the `I_TASK` test removed from `mem_frameless`, PINME packs
 up into the second hole and the row goes red, which is the check that says this
 row is worth having (docs/WRITING-TESTS.md 1).
@@ -64,7 +64,7 @@ FOUR ASSERTIONS:
   3. THE FILLER'S REGION DID NOT MOVE, and `fl_reloc` was never called - the
      second is what tells "it did not move" from "it moved and the kernel
      skipped the proc", which are the same base only by luck;
-  4. SHEET'S REGION DID - so the pass ran, reached the descending arm, and was
+  4. CALC'S REGION DID - so the pass ran, reached the descending arm, and was
      capable of moving a region in this very arena.
 
 BREAK IT ON PURPOSE (docs/WRITING-TESTS.md 1): take the `I_TASK` test out of
@@ -190,17 +190,17 @@ def main():
             w = [x for x in os88geom.windows(m, S) if x.i == w.i][0]
             return seg, w
 
-        # ceiling [ PAINT#1 ][ SHEET ][ PAINT#2 ][ PINME ] - see the header
+        # ceiling [ PAINT#1 ][ CALC ][ PAINT#2 ][ PINME ] - see the header
         p1_seg, p1 = open_named("PAINT.O88", 6, (8, 22))
         raise_disk()
-        sh_seg, sh = open_named("SHEET.O88", 8, (8, 60))
+        ca_seg, ca = open_named("CALC.O88", 8, (8, 60))
         raise_disk()
         p2_seg, p2 = open_named("PAINT.O88", 6, (8, 98))
         raise_disk()
         pm_seg, pm = open_named("PINME.O88", 5, (8, 136))
-        print("paint1 %04x   sheet %04x   paint2 %04x   pinme %04x"
-              % (p1_seg, sh_seg, p2_seg, pm_seg))
-        if not (p1_seg > sh_seg > p2_seg > pm_seg):
+        print("paint1 %04x   calc %04x   paint2 %04x   pinme %04x"
+              % (p1_seg, ca_seg, p2_seg, pm_seg))
+        if not (p1_seg > ca_seg > p2_seg > pm_seg):
             print("FAIL: the regions are not stacked in open order, so "
                   "closing the two Paints does not make the two holes this "
                   "row is about")
@@ -245,9 +245,9 @@ def main():
             m.key("KeyA")
             try:                        # the first move, bounded by what an
                 os88marty.until(        # idle box's pause gave it...
-                    m, lambda _: pkg_seg(m, S, "Sheet")[0] not in (sh_seg,
-                                                                   None),
-                    "Sheet's region to move", poll=0.25,
+                    m, lambda _: pkg_seg(m, S, "Calculator")[0]
+                    not in (ca_seg, None),
+                    "Calc's region to move", poll=0.25,
                     guest=6 * os88marty.GUEST_PACE)
             except os88marty.MartyError:
                 pass                    # ...press again
@@ -256,11 +256,11 @@ def main():
             os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
                               what="the compaction")
             os88marty.settle(m)
-            if pkg_seg(m, S, "Sheet")[0] not in (sh_seg, None):
+            if pkg_seg(m, S, "Calculator")[0] not in (ca_seg, None):
                 break
 
         pm_now = pkg_seg(m, S, "PinMe")[0]
-        sh_now = pkg_seg(m, S, "Sheet")[0]
+        ca_now = pkg_seg(m, S, "Calculator")[0]
         nreloc = u16(pm_bss(m, pm_now or pm_seg, PM_NRELOC))
         ok3 = pm_now == pm_seg and nreloc == 0
         print("  3 pinme region STAYED      %s"
@@ -271,12 +271,12 @@ def main():
                              nreloc)))
         bad += not ok3
 
-        moved = sh_now is not None and sh_now != sh_seg
-        print("  4 sheet region MOVED       %s"
+        moved = ca_now is not None and ca_now != ca_seg
+        print("  4 calc region MOVED        %s"
               % ("%04x -> %04x, so the pass ran and could move a region"
-                 % (sh_seg, sh_now) if moved else
+                 % (ca_seg, ca_now) if moved else
                  "NO (%s) <-- the pass moved nothing, so assertion 3 proves "
-                 "nothing either" % ("%04x" % sh_now if sh_now else "GONE")))
+                 "nothing either" % ("%04x" % ca_now if ca_now else "GONE")))
         bad += not moved
 
         print("VERDICT:", "OK" if not bad else "%d PROBLEM(S)" % bad)

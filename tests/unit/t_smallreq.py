@@ -36,7 +36,7 @@ argument `tests/unit/t_appsmall.py`'s own disk walk makes: the Makefile is
 what is being checked, so asking the Makefile is asking the defendant.
 
 **The two halves are shaped differently on purpose.** Drivers are an
-ALLOWLIST - `kern_small` ships exactly five `.DRV` files and they are all its
+ALLOWLIST - `kern_small` ships exactly six `.DRV` files and they are all its
 own on-demand kernel modules - because a driver added to `$(DRIVERS)` two
 years from now must fail here without anyone remembering to add a row.
 Packages and data files are a DENYLIST with a reason per row, because there
@@ -83,7 +83,7 @@ IMGS = ["build/small360.img", "build/small.img",
         "build/smallapps360.img", "build/smallapps.img"]
 
 # The ONLY .DRV files legal on a small floppy: `$(SMALLDRIVERS)` is `$(KMODS)`
-# plus `$(SMALLMODS)` and NOT ONE ORDINARY DRIVER. These five are not drivers
+# plus `$(SMALLMODS)` and NOT ONE ORDINARY DRIVER. These six are not drivers
 # at all in the sense the Drivers page means - they are this kernel's own code
 # cut out of its own binary by tools/os88mod.py (SPEC.md 2.8), and they are
 # `.DRV` only because os88disk.py stamps that extension read-only+hidden+system
@@ -93,19 +93,28 @@ IMGS = ["build/small360.img", "build/small.img",
 # HDD.DRV, NET.DRV, ETHER.DRV, RAMDISK.DRV, RAMPAGE.DRV, HDDTOOL.DRV,
 # XMEM.DRV, SAVER.DRV and VMMOUSE.DRV are all out today, and so is the
 # eleventh one nobody has written.
-DRV_OK = {"CTRL.DRV", "FORMAT.DRV", "DISKOPS.DRV", "FILECP.DRV", "FDLG.DRV"}
+DRV_OK = {"CTRL.DRV", "FORMAT.DRV", "DISKOPS.DRV", "FILECP.DRV", "FDLG.DRV",
+          "SERIAL.DRV"}  # SPEC.md 115: on-demand kernel module on both kernels
 
 # (8.3 name, why it may not be on a small floppy). One row per SPEC.md 24.5
 # ground; the § is in the reason so a failure sends the reader to the argument
 # and not to this file.
 FORBIDDEN = {
+    # 24.5.1 - the owner's decision, a ground of its own: a program whose JOB
+    # the machine cannot do
+    "STIKNOTE.O88": "no desk layer and no associations on kern_small, so a "
+                    "Sticky Note there is a window showing one note that can "
+                    "neither live on the desk nor open it in Note Pad - Note "
+                    "Pad, worse (SPEC.md 24.5.1, 110.13)",
     # 24.5 - the driver is not in $(SMALLDRIVERS)
     "BROWSER.O88":  "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "FTPD.O88":     "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "TELNET.O88":   "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "THEWIRE.O88":  "ETHER.DRV is in no small driver set (SPEC.md 24.5, 92)",
+    "WIRECHAT.O88": "ETHER.DRV is in no small driver set (SPEC.md 24.5, 113)",
     "TRACKER.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "AUDIO.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
+    "MIXER.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34.15)",
     "MIDIRACK.O88": "SOUND.DRV is in no small driver set, and its speaker "
                     "synth is an FSXF_RATE bracket (SPEC.md 24.5, 105)",
     # 24.5 - a claim the floor machine cannot fund, made where it cannot refuse
@@ -128,9 +137,6 @@ FORBIDDEN = {
                     "56,333 bytes (37,720 since the apps size pass, unmeasured) in ONE claim against a 53,760-byte arena, so "
                     "it is `Load failed` before it can refuse in its own words "
                     "(SPEC.md 24.5, 100)",
-    "DRMARCO.VGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
-    "DRMARCO.HRC":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
-    "DRMARCO.CGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
     # DOTDEL.O88 IS NOT A ROW. It was omitted beside SKIES on a ground that
     # SPEC.md 5.4.2.5.1 withdrew (kern_small has a `gfx_blit1` body now), and
     # SPEC.md 24.5.5 is the measurement that put it back on the floppy. A name

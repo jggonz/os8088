@@ -177,11 +177,22 @@ void os88_gfx_fill(int x1, int y1, int x2, int y2)
  * On a 1bpp adapter the kernel's own decoder thresholds; that path is modelled
  * but never audited, because the program only reaches it if os88_gfx_blit1
  * refused, which is a kern_small kernel. */
+/* hc_badw - blits ASKED FOR with no width. The kernel's gfx_blitp does not
+ * refuse a negative one (its wrap test is a sum, and x + w - 1 of a negative
+ * w lands on the screen), so a band composed for a CLEAN span - dmin 28,
+ * dmax 0, -27 columns - was one `rep movsb` of ~64KB a plane a row across the
+ * whole framebuffer. The stubs below refuse or draw nothing for it, which is
+ * exactly why they count it: a model that quietly survives the call is the
+ * one place it cannot be seen. */
+static unsigned hc_badw;
+
 void os88_gfx_blit4(const void *pix, int stride, int x, int y, int w, int h)
 {
     const unsigned char *p = (const unsigned char *) pix;
     int r, c, v;
     hc_blit4++;
+    if (w <= 0 || h <= 0)
+        hc_badw++;
     for (r = 0; r < h; r++)
         for (c = 0; c < w; c++) {
             v = p[r * stride + (c >> 1)];
@@ -199,6 +210,8 @@ int os88_gfx_blit1(const void *bits, int stride, int x, int y, int w, int rows)
 {
     const unsigned char *p = (const unsigned char *) bits;
     int r, c, b;
+    if (w <= 0 || rows <= 0)
+        hc_badw++;
     if (hg_blit1_refuse)
         return -1;
     if ((x & 7) || (w & 7) || rows < 1 || rows > 255)
@@ -225,6 +238,8 @@ int os88_gfx_blitp(const void *planes, int plane_step, int stride,
 
     if (probe)
         hc_probe++;
+    else if (w <= 0 || rows <= 0)
+        hc_badw++;
     if (hg_bpp == 1                     /* four planes is not a Hercules    */
         || (x & 7)                      /* x off the byte grid              */
         || w <= 0 || rows <= 0
@@ -1525,6 +1540,14 @@ static void hg_raise_about(void)
     pmc_about_up = 1;
 }
 
+/* ...and what a Full Screen toggle does in it: wm_fullscreen repaints the
+ * window whole, pmc_repaint composes every band inside that callback and
+ * CLEANS them all. Reduced to its effect on the damage model. */
+static void hg_repaint_whole(void)
+{
+    pmc_clean();
+}
+
 static void drive_lockbreak(void *win)
 {
     unsigned breaks, want;
@@ -1603,6 +1626,24 @@ static void drive_lockbreak(void *win)
     pmc_dirty_all();
     pmc_flush(win, 0);
     audit("after the card stopped a break");
+
+    /* AND THE ROW IS RE-TESTED AFTER THE RE-LOCK. Full Screen mid-game: the
+     * UI task's whole repaint ran in the break and cleaned every band, so the
+     * span the worker tested before it let go is clean when it comes back -
+     * and drawing it anyway asked for a band of -27 columns, which the
+     * kernel's gfx_blitp turned into garbage across the whole screen. */
+    pmc_dirty_all();
+    cost_reset();
+    hc_badw = 0;
+    hg_on_yield = hg_repaint_whole;
+    pmc_flush(win, 1);
+    hg_on_yield = 0;
+    if (hc_badw != 0)
+        fail("the worker drew a span the repaint in its break had cleaned");
+    if (pmc_n_bands != PMC_HOLD_BANDS)
+        fail("the worker drew bands after a repaint in its break cleaned them");
+    printf("  %-26s %u band(s) of 36, %u with no width\n",
+           "repainted mid-break", pmc_n_bands, hc_badw);
 
     /* WHAT THE FIRST CHUNK ACTUALLY HOLDS, IN MILLISECONDS, and it is not four
      * bands. os88_worker brackets the WHOLE of pmc_frame in one

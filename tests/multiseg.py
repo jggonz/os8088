@@ -56,8 +56,9 @@ def _image_of(rel):
     (docs/plans/SOAK-PARALLEL.md 14.2), which is a FileNotFoundError at IMPORT time
     naming a file the row correctly declared.
     """
-    blob = open(os88build.at(rel), "rb").read()
-    return blob[:blob[8] | (blob[9] << 8)]
+    import os88pkg
+    blob = os88pkg.image_unwrap(open(os88build.at(rel), "rb").read())
+    return blob[:blob[8] | (blob[9] << 8)]      # packed or not (20.13.8)
 
 
 # THE COMPRESSED FIXTURE IS THE SAME PACKAGE (SPEC.md 20.12.7): `--comp`

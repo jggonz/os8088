@@ -65,6 +65,8 @@ UNREGISTERED = {
                    "(docs/WRITING-TESTS.md 2.1)",
 
     # --- library and support code, not tests ---
+    "wcprobe.py": "WireChat's guest reader and reply injector (SPEC.md "
+                  "113.5.1) - tests/wcdraw.py's, mrprobe's shape",
     "mrprobe.py": "MIDIRack's guest reader (SPEC.md 105.11) - the running "
                   "package's variables by NAME, for tests/midirack.py; "
                   "library, not a test",
@@ -127,6 +129,10 @@ UNREGISTERED = {
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
     "npbench.inc": "a benchmark body, %included",
+    "glass.py": "reading SHEET's grid off the 1bpp screen - its lines, and "
+                "a cell's text by the kernel's own glyphs - for the gates "
+                "whose subject is what is drawn (SPEC.md 81.54, 81.55); "
+                "library, imported by them, not a test",
     "fatdel.py": "deletes one file anywhere in a FAT12 image, a sub-folder "
                  "too, which tools/os88fat.py's `del` refuses - imported by "
                  "assocstale.py to take a program out from under the "
@@ -209,6 +215,26 @@ UNREGISTERED = {
     #     two-build session rather than a row (the knob itself is kept alive
     #     by t_buildmatrix; this is the behaviour half) ---
     "heapsame.py": "A/B gate - needs `make HEAPCOMPACT=0` as a reference build",
+
+    # --- an INSTRUMENT rather than a gate: it produces a TABLE for a person
+    #     to read, has no pass or fail, and takes minutes ---
+    "lembenchmarty.py": "runs tests/lembench on MartyPC and writes a PNG of the "
+                       "bench's own screen for a person to read (SPEC.md "
+                       "116.7.1). It needs `make lembench` AND build/martypc, "
+                       "takes ~5 minutes a machine, and has no assertion in "
+                       "it at all - what it produces is the microsecond table "
+                       "SPEC.md and PERFORMANCE.md quote. tools/os88boot.py "
+                       "is the same kind of thing one directory along",
+    "lemplaymarty.py": "PLAYS the shipped LEMMINGS off build/lemmings360.img "
+                       "on MartyPC and reads the game's own state by symbol "
+                       "for the final pass's table (SPEC.md 116.7, "
+                       "PERFORMANCE.md Set 161): int 13h calls of a launch "
+                       "and of the in-bracket retry, the preview picture's "
+                       "time, game frames a second quiet and busy, the "
+                       "loop's pass, module crossings a frame. It needs the "
+                       "fetched data, `make lemmingsdisk` and build/martypc, "
+                       "takes minutes a machine, and asserts only that it "
+                       "reached each state - lembenchmarty.py's kind",
     "swcolsame.py": "A/B gate - needs `make NOCOLFAST=1` as a reference build",
     # pkgthumb.py IS registered (four rows). Its `frotz` mode is not one of
     # them: a Z-machine interpreter needs a STORY, and the two ways to get one

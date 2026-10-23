@@ -44,6 +44,7 @@ OUT = os.path.join(ROOT, "docs", "INDEX.md")
 # fails the run by name (see build()) rather than being filed under a heading
 # nobody reads. Add the prefix here when a slot is added there.
 GROUPS = [
+    ("Serial ports", ["115"], ["SERIAL"]),
     ("Windows", ["11", "20"],
      ["WM_", "ABOUT_SET"]),
     ("Packages and the desktop", ["21", "26", "110"],
@@ -95,6 +96,11 @@ GROUP_NOTES = {
 # added and this list was not, so the index that exists to answer "does this
 # already exist?" answered no about a file that did.
 INCLUDES = [
+    ("os88mixui.inc", "34.15",
+     "The hardware mixer family\'s mechanical slider: an opaque band with a "
+     "recessed track, scale, ridged thumb, caption and percentage, shared by "
+     "SOUND.DRV and MIXER.O88. mixui_hit maps the pointer and mixui_scale "
+     "retains stereo balance."),
     ("os88ui.inc", "13, 75",
      "Buttons, check boxes, radio dots, scroll bars, group boxes, the "
      "standard alert, the standard About card and the drop-down. Opt into "
@@ -107,7 +113,9 @@ INCLUDES = [
      "OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a button whose "
      "face the PACKAGE paints, keeping the library's press gesture, is `%define "
      "OS88UI_BOWN` and the `OS88UI_OWN` flag (SPEC.md 13.8.10); a package with "
-     "no check box or radio sheds that code with `%define OS88UI_NOGLYPH`."),
+     "no check box or radio sheds that code with `%define OS88UI_NOGLYPH`, "
+     "and one whose every button is a picture sheds the caption, ink and "
+     "default-ring paths with `%define OS88UI_BIMGONLY`."),
     ("os88alt.inc", "11.2.1.1",
      "Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - "
      "where no event is dispatched, so the kernel's synthesised keystroke "
@@ -135,7 +143,14 @@ INCLUDES = [
      "`STIK_LAYOUT`s (picked by the screen's height) and a card painter "
      "(`stik_slabs` + `STIK_COMPOSE` into os88gfx.inc's band), it owns every "
      "other pixel, the gestures, the hover and focus states and the titled "
-     "fallback on kern_small."),
+     "fallback on kern_small. A kern_big widget (`STIK_DESKONLY`) that adds "
+     "`%define STIK_LIB` before its OS88_HEADER carries none of the code: "
+     "it far-calls the ONE copy in DESK.DRV (§110.15)."),
+    ("os88stikc.inc", "110.15",
+     "The Sticky App library's CLIENT, and you do not include it: "
+     "os88stik.inc does for a package built `%define STIK_LIB` - the "
+     "descriptor's values, the thunks into DESK.DRV's copy, the trampoline "
+     "the library calls back through, and the bind in `stik_load`."),
     ("os88line.inc", "83",
      "A one-line text field: caret, horizontal scroll, focus, click-to-position "
      "and the editing keys. The caller owns a 20-byte block."),
@@ -146,10 +161,39 @@ INCLUDES = [
      "A 4bpp offscreen canvas and all seven chart types - area, bar, column, "
      "line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 "
      "and Sheet's chart window."),
+    ("os88chartbss.inc", "82",
+     "The ch_* working set os88chart.inc runs on, declared once instead of "
+     "hand-copied into both callers. Set `CH_BSS_BASE` to where the block "
+     "goes and carry on from `CH_BSS_END`."),
+    ("os88chartovl.inc", "82.16",
+     "The resident half of the CHART.OVL split: loader, verb dispatch and the "
+     "shims os88chart.inc calls back out through. Only a package that %defines "
+     "CH_OVERLAY needs it - today that is SHEET alone."),
     ("os88fp.inc", "84",
      "IEEE-754 double arithmetic in software, with an 8087 path chosen at run "
      "time. Parse, format, add, subtract, multiply, divide, compare, sqrt, "
      "trunc, floor, round."),
+    ("os88xgap.inc", "41.14",
+     "Where a buffer that copies to and from XMS should START: `xg_gap` times "
+     "8 KB copies at six gaps against a block the caller owns and answers G, "
+     "half a page-interleaved board's period, or 0. Place by (conventional - "
+     "extended) mod 2G = G. Measured, never assumed - the period is the "
+     "board's DRAM page."),
+    ("os88la.inc", "41.13",
+     "LOADALL on a 286: memory above 1 MB read and written IN PLACE through "
+     "a hidden segment base, as one BORROW of the API table at physical "
+     "0x800 inside one cli window (`la_capture`, `la_probe`, `la_borrow`, "
+     "`la_restore`). Tier 1 only, behind the INT 6 probe. XMEM.DRV's tier-1 "
+     "copy is built on it, so a package that only wants bytes moved wants "
+     "OSAPI_XMEM_COPY, not this."),
+    ("os88ub.inc", "41.15",
+     "A 386's segment BASE loaded where it is wanted: `ub_set` puts DS's "
+     "and/or ES's hidden base at any linear address through a moment of "
+     "protected mode, limit 64 KB, so 16-bit code reads and writes extended "
+     "memory unchanged until the register is next loaded. The 386's answer "
+     "to os88la.inc, under the same cli rule. Tier 2 only. XMEM.DRV's "
+     "tier-2 copy is built on it, so a package that only wants bytes moved "
+     "wants OSAPI_XMEM_COPY, not this."),
     ("os88lzw.inc", "106.18",
      "LZW DECODE, GIF's flavour: Paint's reader with Paint taken out - a code "
      "past the table or a non-root after a Clear is refused, a chain cannot "
@@ -174,6 +218,13 @@ INCLUDES = [
      "os88spkfx.inc's tables - the soft clip's curve, the level gains, the "
      "peak-to-level table - GENERATED by `tools/os88spkfx.py gen`; never "
      "edited by hand, and t_spkfx holds it to the model."),
+    ("os88mega.inc", "20.18",
+     "A package's KERN_MEGA ARM: what it assembles only for kern_mega goes "
+     "under `%ifdef PKG_MEGA`, which no shipped build defines - `make mega` "
+     "builds that arm onto kern_mega's own disks. `OS88_MEGA_REFUSE`, the "
+     "first line of an entry proc, is the shipped build refusing to start on "
+     "a protected-mode kernel when every path it has assumes real mode. "
+     "tests/unit/t_megapkg.py holds every shipped build to it."),
     ("os88spk.inc", "34.11",
      "PCM through the PC SPEAKER, with no card, from inside your own "
      "FSXF_RATE bracket: the ring player on OSAPI_FSX_SPK. The ring is the "
@@ -196,6 +247,15 @@ INCLUDES = [
      "OS88SOCK_STATE` makes it ask NETV_STATE as well (ZF=1 = no NSTF_SOCK), "
      "for a package whose every `net_find` wants that. The verbs "
      "themselves are `drivers/net/netpkg.inc`'s."),
+    ("os88flat.inc", "20.5.3",
+     "The FLAT vocabulary for a colour face on a 4bpp display: a card with a "
+     "title (`flat_card`), a status lamp (`flat_lamp`), a check box in one "
+     "BLIT1 (`flat_check`), an `OS88UI_OWN` button painter with a per-button "
+     "face colour and pressed/greyed looks (`flat_btn`, `%define FLAT_BCAP` / "
+     "`FLAT_BSTY`) and a double-size bold caption with an icon in one BLIT1 "
+     "(`flat_big`, over os88gfx.inc's band). Each element writes a pixel once. "
+     "WireFleet's colour face (114.10) is the worked example; MIDIRack's "
+     "bevelled face (105.9.5) is the other look."),
     ("os88gfx.inc", "5.12",
      "The EMBEDDABLE graphics library: drawing code that lives in the PACKAGE "
      "rather than in the kernel, taken one capability at a time. `%define "
@@ -234,6 +294,12 @@ INCLUDES = [
      "folder's cluster, rewrite a file of unchanged length in ONE sector with "
      "`OSAPI_FILE_WRITE_AT`, and put the instance back on every path out. For "
      "a high-score table or a settings file; five packages carry it."),
+    ("os88link.inc", "26.10.6",
+     "LINKS and AUTOSTART: `OS88_LINK` lays down a 50-byte `.LNK` record and "
+     "`ol_autostart` writes it into `\\AUTOSTRT` on the BOOT volume, making "
+     "the folder if need be, so the program it names is opened at every boot "
+     "(Shift held skips it). Over os88data.inc's walk, so it needs "
+     "`OD_BOOTVOL`; REDLINE's Apply on boot is the worked example."),
     ("os88pit.inc", "72.15.1",
      "`pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, "
      "good for an hour before it wraps. Sub-tick timing for a profiler."),
@@ -437,7 +503,7 @@ def packages():
     # only", which is the one thing neither is
     shipped = set(re.findall(r"\$\(BUILD\)/([a-z0-9]+)\.o88",
                              make_expand("$(ALLAPPSFILES) $(SYSAPPS) "
-                                         "$(STIKAPPS)", mvars)))
+                                         "$(STIKAPPS) $(SYSTOOLS)", mvars)))
     retired = set()
     rp = os.path.join(ROOT, "apps", "RETIRED.txt")
     if os.path.exists(rp):

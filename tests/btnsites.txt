@@ -38,7 +38,7 @@
                                    # card's row, the alert's, and os88ui_kbtn
 
 # --- packages ---------------------------------------------------------------
-10 apps/sheet/sheet.asm            # five dialog pairs, a record each
+15 apps/sheet/sheet.asm            # seven dialog engines, a record each
 4 apps/dos/dos.asm                 # the bar's two and the Setup page's two,
                                    # one record repointed per page
 1 apps/ftpd/ftpd.asm               # Start/Stop, Setup, Done - one shared body (fd_btn_draw)
@@ -60,10 +60,19 @@
                                    # Cancel while it is up, drawn by index
                                    # (SPEC.md 105.9, 105.9.2)
 1 apps/calc/calc.asm               # the keypad, staged one key at a time
-3 apps/timer/timer.asm             # Start/Stop/Reset through the record (SPEC.md
-                                   # 111.2): the painter, and tm_act's two after a
-                                   # Start or Stop traded pens. The kernel's Timer kind
-                                   # was the one kernel caller until SPEC.md 14.8
+1 apps/wirechat/wirechat.asm      # wc_btn: Set status, Search, :), Send and Add friend through the record (SPEC.md 113.5), one call beside it
+1 apps/install/install.asm         # Back/Next/Cancel through the record (SPEC.md
+                                   # 117.2): ONE loop in in_btns, which the painter
+                                   # and a selection's hint redraw both reach
+1 apps/cdrack/cdrack.asm           # thirteen buttons through one record with its OWN
+                                   # painter (SPEC.md 119.6.4): cr_regrey draws them,
+                                   # os88ui_btnup fires them
+1 apps/timer/timer.asm             # Start/Stop/Reset through the record (SPEC.md
+                                   # 111.2): ONE loop in tm_flags, which the painter
+                                   # (all three) and a Start or Stop that traded pens
+                                   # (the first two) both reach (SPEC.md 111.6).
+                                   # The kernel's Timer kind was the one kernel
+                                   # caller until SPEC.md 14.8
 1 apps/paint/paint.asm             # Apply
 1 apps/piano/piano.asm             # its two buttons. The KEYS keep the press
                                    # and must - a note is SPEC.md 13.6's safe
@@ -125,3 +134,6 @@
 1 kernel/shutdown.inc              # modal confirmation; release inside the armed control
 5 apps/wireball/wbfront.inc        # splash play/help/sound controls; SDK init installs press/drag/release, launch only on release
 1 apps/browser/brdownload.inc     # Cancel/Close control; SDK arm/track/release and action only on button-up
+1 apps/wirefleet/wfvideo.inc      # deployment controls; SDK init installs press/drag/release, shared model predicates refuse disabled actions
+1 apps/wirefleet/wfcolor.inc      # the colour face's controls (SPEC.md 114.10): the same record, OS88UI_OWN painted by os88flat.inc's flat_btn; SDK arm/track/release
+1 apps/syscheck/ui.inc          # System Check's Scan/Details/Save Report/Clean Up/Quit through one record (SPEC.md 118.6); SDK init installs press/drag/release

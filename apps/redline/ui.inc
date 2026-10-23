@@ -1686,11 +1686,11 @@ ru_progress_update:
     add bx, 18
     mov cx, [ru_x]
     add cx, [ru_w]
-    sub cx, 8
-    mov dx, [ru_y]
-    add dx, 124
-    push ax
-    mov al, CWHITE
+    dec cx                          ; to the content's LAST column: the run's
+    mov dx, [ru_y]                  ; first label (rl_running, 57 cells at
+    add dx, 124                     ; x 316) runs to the window's edge, and a
+    push ax                         ; fill stopping 8px short left its last
+    mov al, CWHITE                  ; glyph standing beside every later label
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FILL
@@ -1858,6 +1858,88 @@ ru_press:
     jmp os88ui_btnclick             ; SDK owns every other press
 .done:
     ret
+; -----------------------------------------------------------------------------
+; ru_wheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = the window, gfx
+; lock held. WHEEL_STEPS lines a notch, in the line each view's own keys count
+; in, and down the path those keys take - so nothing new repaints anything:
+;   Tune tab   cs_pane through ru_spto, behind cs_tabkey's rule that a turn
+;              takes an open list down first and does nothing else
+;   Detailed   bl_top and bl_clamp, bl_key's own, and rl_paint ONLY when the
+;              top moved (the key repaints on every press; a wheel against the
+;              end would be a whole report for nothing)
+;   Compare    Results, its only pane
+;   Summary    the pane UNDER THE POINTER - Snapshot or Details in the right
+;              column, split at Snapshot's frame - and Results anywhere else,
+;              which is where the paging keys already go
+; ru_spto clamps and repaints only on a move, so a turn against an end draws
+; nothing. A run in progress takes no wheel, as it takes no key.
+; -----------------------------------------------------------------------------
+ru_wheel:
+    cmp byte [rl_busy], 0
+    jne .ret
+    mov [rl_win], si                ; (rl_key's first act too)
+    mov dx, WHEEL_STEPS
+    imul dx
+    xchg ax, di                     ; DI = the signed lines
+    cmp byte [cs_tab], 0
+    jne .tune
+    cmp byte [ru_view], 1
+    je .report
+    cmp byte [rl_ran], 0            ; nothing to scroll before a run
+    je .ret
+    call ru_geometry
+    mov bx, ru_pres
+    cmp byte [ru_view], 0
+    jne .go                         ; Compare
+    call OSAPI_MOUSE                ; CX, DX = the pointer
+    mov ax, [ru_x]
+    add ax, [ru_split]
+    cmp cx, ax
+    jb .go                          ; the left column
+    sub ax, [ru_split]
+    add ax, [ru_w]
+    cmp cx, ax
+    jae .go                         ; ...or off the window altogether
+    mov ax, [ru_y]
+    cmp dx, ax
+    jb .go
+    add ax, [ru_h]
+    cmp dx, ax
+    jae .go
+    mov bx, ru_psnap
+    cmp dx, [bx+SP_SB+6]            ; down to Snapshot's frame...
+    jbe .go
+    mov bx, ru_pdet                 ; ...and Details below it
+.go:
+    mov ax, [bx+SP_TOP]
+    add ax, di                      ; signed: ru_spto clamps both ends
+    jmp ru_spto
+.tune:
+    call cs_drclose
+    jc cs_redraw                    ; the list came down: that was the turn
+    call ru_clip
+    jc .ret
+    call ru_geometry
+    mov bx, cs_pane
+    jmp short .go
+.report:
+    mov ax, [bl_top]
+    push ax
+    add ax, di
+    jns .top
+    xor ax, ax
+.top:
+    mov [bl_top], ax
+    call bl_clamp
+    pop ax
+    cmp ax, [bl_top]
+    je .ret
+    call ru_clip
+    jc .ret
+    jmp rl_paint
+.ret:
+    ret
+
 ru_drag:
     push bx
     call ru_geometry

@@ -85,6 +85,20 @@ ROWS = [
 ]
 
 
+def close_menu(ui, w):
+    """The cell that holds Close: the APP-NAME cell (SPEC.md 12.7), which is
+    the window's title only when the package titles its window by its own
+    name. The Browser's is 'os8088 Web Browser' over a 'Browser' cell since
+    #253, and a pick by title found no such menu."""
+    cells = ui.menus()
+    if any(c[0].upper() == w.title.upper() for c in cells):
+        return w.title
+    for title, _x0, _x1, items in cells:
+        if any(t == "Close" for t, _ok in items):
+            return title
+    return w.title
+
+
 def run():
     fails = []
     with os88ui.boot(ROOT + "/build/os8088-360.img",
@@ -194,11 +208,11 @@ def run():
             # whole screen (Artful's New does), and a menu pick cannot reach a
             # window that is not there any more.
             try:
-                ui.menu_pick(w.title, "Close")
+                ui.menu_pick(close_menu(ui, w), "Close")
             except Exception:
                 m.key("Escape")
                 os88marty.settle(m)
-                ui.menu_pick(w.title, "Close")
+                ui.menu_pick(close_menu(ui, w), "Close")
             ui.settle()
 
     for f in fails:

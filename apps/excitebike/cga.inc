@@ -273,22 +273,23 @@ xc_chain_end:
     ret
 
 ; n rows (CX, 1..100) from SI (words, contiguous, in the dictionary claim) to the
-; ring's row BX of [xc_bank] at this column ([xc_x2], [xc_rw] set by the caller).
-; DS = the dictionary claim, ES = B800.  The run is split where the ring wraps.
+; ring's row BX of the bank at this column, the column's constants in xc_col's frame
+; (BP: [bp] the bank, [bp + 2] rw, [bp + 4] x2).  DS = the dictionary claim, ES = B800.
+; The run is split where the ring wraps.
 xc_run:
-    add ax, [cs:xc_x2]              ; AX = 80 x BX, passed by the caller as an immediate (no mul)
+    add ax, [bp + 4]                ; AX = 80 x BX, passed by the caller as an immediate (no mul)
     mov di, ax
-    cmp bx, [cs:xc_rw]
+    cmp bx, [bp + 2]
     jb .before
     and di, 1fffh                   ; wholly past the wrap: a - 8192
-    add di, [cs:xc_bank]
+    add di, [bp]
     jmp .one
 .before:
     mov dx, bx
     add dx, cx
-    cmp dx, [cs:xc_rw]
+    cmp dx, [bp + 2]
     ja .split
-    add di, [cs:xc_bank]
+    add di, [bp]
 .one:
     mov ax, cx
     shl ax, 1
@@ -298,12 +299,12 @@ xc_run:
     call ax
     ret
 .split:
-    mov dx, [cs:xc_rw]
+    mov dx, [bp + 2]
     sub dx, bx                      ; the rows before the wrap
     sub cx, dx
     push cx
     mov cx, dx
-    add di, [cs:xc_bank]
+    add di, [bp]
     mov ax, cx
     shl ax, 1
     shl ax, 1
@@ -312,54 +313,51 @@ xc_run:
     call ax
     pop cx
     mov ax, 80
-    mul word [cs:xc_rw]
-    add ax, [cs:xc_x2]
+    mul word [bp + 2]
+    add ax, [bp + 4]
     and ax, 1fffh
-    add ax, [cs:xc_bank]
+    add ax, [bp]
     mov di, ax
     jmp .one
 
-; the per-column constants: x2 = 2x, rw = the first row whose address wraps
-; AX = x
-xc_setx:
-    mov [cs:xc_x], ax
-    shl ax, 1
-    mov [cs:xc_x2], ax
-    mov ax, 8192 + 79
-    sub ax, [cs:xc_x2]
-    xor dx, dx
-    mov cx, 80
-    div cx
-    mov [cs:xc_rw], ax
-    ret
-
 ; -----------------------------------------------------------------------------
 ; xc_col - the whole entering column x (AX): 200 lines, both banks, the HUD's
-; eight lines black.  DS = dictionary claim, ES = B800.
+; eight lines black.  DS = dictionary claim, ES = B800.  The column's constants are
+; a frame on the STACK, which every kernel can write: they lived in our segment and
+; were stored through CS, and kern_mega's CS is a read-only code alias, every store
+; a #GP (KERN-MEGA-PLAN 14.21).  [bp + 8] the top strip, [bp + 6] the band strip,
+; [bp + 4] x2 = 2x, [bp + 2] rw = the first row whose address wraps, [bp] the bank.
 ; -----------------------------------------------------------------------------
 xc_col:
-    call xc_setx
-    mov bx, [cs:xc_x]
+    push bp
+    mov bx, ax
     and bx, XB_TOPW - 1
     mov cl, 7
     shl bx, cl
     add bx, XC_TOP
-    mov [cs:xc_tb], bx
-    mov bx, [cs:xc_x]
-    mov al, [cs:bx + xb_cid]
-    xor ah, ah
-    mov cl, 8
-    shl ax, cl
-    add ax, XC_BAND
-    mov [cs:xc_bb], ax
+    push bx                         ; [bp + 8] the top strip
+    mov bx, ax
+    mov dh, [cs:bx + xb_cid]        ; DX = the band strip: cid << 8 + XC_BAND
+    xor dl, dl
+    add dx, XC_BAND
+    push dx                         ; [bp + 6]
+    shl ax, 1
+    push ax                         ; [bp + 4] x2
+    mov cx, ax
+    mov ax, 8192 + 79
+    sub ax, cx
+    xor dx, dx
+    mov cx, 80
+    div cx
+    push ax                         ; [bp + 2] rw
     xor ax, ax
-    mov [cs:xc_bank], ax
-    mov si, [cs:xc_tb]
+    push ax                         ; [bp] the bank: the even lines first
+    mov bp, sp
+    mov si, [bp + 8]
     xor bx, bx
     mov cx, 32
-    xor ax, ax
-    call xc_run                     ; top, even lines: rows 0-31
-    mov si, [cs:xc_bb]
+    call xc_run                     ; top, even lines: rows 0-31 (AX = 0)
+    mov si, [bp + 6]
     mov bx, 32
     mov cx, 64
     mov ax, 80 * 32
@@ -369,14 +367,14 @@ xc_col:
     mov cx, 4
     mov ax, 80 * 96
     call xc_run                     ; HUD, even lines: rows 96-99
-    mov word [cs:xc_bank], 2000h
-    mov si, [cs:xc_tb]
+    mov word [bp], 2000h
+    mov si, [bp + 8]
     add si, 64
     xor bx, bx
     mov cx, 32
     xor ax, ax
     call xc_run
-    mov si, [cs:xc_bb]
+    mov si, [bp + 6]
     add si, 128
     mov bx, 32
     mov cx, 64
@@ -387,6 +385,8 @@ xc_col:
     mov cx, 4
     mov ax, 80 * 96
     call xc_run
+    add sp, 10
+    pop bp
     ret
 
 ; -----------------------------------------------------------------------------
@@ -580,8 +580,8 @@ xc_fill:
     mul cx
     mov [xc_bo], ax                 ; the band part's first box row, in words
     push ds
-    push cs
-    pop es
+    push ds
+    pop es                          ; ES = the box buffer (ours: DS, as CS is read-only on kern_mega)
     mov ds, [cs:xc_dseg]
     mov dx, [cs:xc_bw]
     shl dx, 1
@@ -670,14 +670,12 @@ xc_draw:
     shl cx, 1
     sub dx, cx                      ; byte offset in the row
     add dx, ax                      ; DX = the row pointer, first byte
-    push cs
-    pop es
+    push ds
+    pop es                          ; ES = the box (ours: DS's selector, which kern_mega lets us write)
     mov ax, [cs:xs_ctab + bx]       ; a hot pose has its code (sprite.inc's xs_compile, SPEC.md 102.7.2):
     test ax, ax                     ; the same bytes written by straight-line code, ~2.3x faster
     jz .interp
-    mov [cs:xs_cfar], ax
-    mov ax, [cs:xb_sprseg]
-    mov [cs:xs_cfar + 2], ax
+    mov [xs_cfar], ax               ; (+2 is the claim's CODE selector, set once by xb_spr_load)
     mov di, dx                      ; DI = the first row pointer, DX = the box's stride, ES = the box
     mov dx, [cs:xc_stride]
     call far [cs:xs_cfar]
@@ -705,8 +703,8 @@ xc_draw:
     add dx, [cs:xc_stride]
     dec bp
     jnz .row
-    push cs
-    pop ds
+    push es
+    pop ds                          ; (ES is still ours)
 xc_draw_end:
     ret
 
@@ -875,13 +873,13 @@ xc_place:
     mov si, [cs:xb_bikes + bp + 4]
     cmp si, XB_WORLD_ROWS * 8 - XB_POSE_H
     ja .no
-    mov byte [cs:xc_pedge], 0
+    mov byte [xc_pedge], 0          ; (DS = the package: every caller's)
     test ax, ax
     js .edge
     cmp cx, [cs:xc_wb]
     jbe .clip
 .edge:
-    mov byte [cs:xc_pedge], 1
+    mov byte [xc_pedge], 1
 .clip:
     mov di, cx                      ; one past the last byte, clipped to the picture
     cmp di, [cs:xc_wb]
@@ -955,8 +953,8 @@ xc_drawc:
     mov ax, [xc_gy]
     sub ax, [xc_by0]
     mov [xc_dr], ax                 ; the box line of the sprite's row 0 (signed)
-    push cs
-    pop es
+    push ds
+    pop es                          ; ES = the box, and our variables below (DS is the claim's)
     mov ds, [cs:xb_sprseg]
     mov si, [bx]
     mov bp, XB_POSE_H
@@ -986,8 +984,8 @@ xc_drawc:
 .hi:
     cmp ax, dx
     jge .skip                       ; none of this span is in the box
-    mov [cs:xc_te], dx
-    mov [cs:xc_cnt], cx
+    mov [es:xc_te], dx
+    mov [es:xc_cnt], cx
     push ax
     push bx
     mov ax, [cs:xc_dr]
@@ -1018,10 +1016,10 @@ xc_drawc:
     shl cx, 1
     add si, cx
 .next:
-    inc word [cs:xc_dr]
+    inc word [es:xc_dr]
     dec bp
     jnz .row
-    push cs
+    push es
     pop ds
     ret
 
@@ -1454,27 +1452,27 @@ xc_t2:
     mov ah, cl
     out dx, ax
     mov es, [xc_vseg]
-    push ds
-    mov ds, [xc_dseg]
-    cmp byte [cs:xc_full], 0
+    cmp byte [xc_full], 0
     jne .all
-    mov cx, [cs:xc_new]
-    sub cx, [cs:xc_k]               ; the old S
-    add cx, [cs:xc_wc1]             ; ...the first entering column
+    mov cx, [xc_new]
+    sub cx, [xc_k]                  ; the old S
+    add cx, [xc_wc1]                ; ...the first entering column
     inc cx
     jmp .lim
 .all:
-    mov cx, [cs:xc_new]
+    mov cx, [xc_new]
 .lim:
-    mov ax, [cs:xc_new]
-    add ax, [cs:xc_wc1]
-    mov [cs:xc_xl], ax
+    mov ax, [xc_new]
+    add ax, [xc_wc1]
+    mov [xc_xl], ax                 ; (stored while DS is ours: kern_mega's CS is read-only)
+    push ds
+    mov ds, [xc_dseg]
 .entering:
     cmp cx, [cs:xc_xl]
     ja .entered
     cmp byte [cs:xc_full], 0
     je .nosamp
-    call xb_clk_sample              ; a full window write is 40 columns of ~9k
+    call xb_clk_samplef             ; a full window write is 40 columns of ~9k (DS: the claim)
 .nosamp:
     push cx
     mov ax, cx

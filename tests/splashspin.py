@@ -37,7 +37,7 @@ because a frame is 16.7 ms and a tick is 55. It is not a tolerance on the
 mechanism - a build whose angle is the notch count misses by far more than one
 position, and MAX_OFF below is what says so.
 
-It reads `[spl_cos]` out of `.boot2`, whose segment is HEAP_SEG - stage 2
+It reads `[spl_cos]` out of `.boot2`, whose segment is BLOB_SEG_AT - stage 2
 copies itself to the heap's floor before it reads a sector (SPEC.md 2.9.5), so
 the blob's address is a kernel constant for the whole boot. `splashbar.py`
 carries the same paragraph and for the same reason.
@@ -95,7 +95,7 @@ def main():
     for n in ("spl_cos", "spl_cos_tab", "spl_done"):
         assert sect[n] == ".boot2", (n, sect[n])
     eq = os88sym.equates()
-    blob = eq["HEAP_SEG"]
+    blob = eq.get("BLOB_SEG_AT", eq["HEAP_SEG"])   # SPEC.md 2.10.3's lift
     shift = eq["SPL_SPINSH"]
     off_cos = os88sym.syms()["spl_cos"]
     off_done = os88sym.syms()["spl_done"]

@@ -104,10 +104,11 @@ pj_head:
     push si
     push bp
     push es
-    mov [cs:pj_hsp], sp
-    mov es, [di + PXK_HSEG]
+    mov es, [cs:PXP_SELF]           ; (pxpart.inc rule 6: our words through
+    mov [es:pj_hsp], sp             ; a data segment, never CS)
     mov ax, [di + PXK_HLEN]
-    mov [cs:pj_hlen], ax
+    mov [es:pj_hlen], ax
+    mov es, [di + PXK_HSEG]
     mov si, [di + PXK_HPOS]
     mov ax, si
     or ax, [di + PXK_HBASE]
@@ -353,7 +354,7 @@ pj_exif:
     jb .out
     add si, 10                      ; SI = the TIFF header
     sub bp, 6                       ; BP = its bytes
-    mov byte [cs:pj_mm], 0
+    PXSW mov byte [es:pj_mm], 0
     cmp word [es:si], 'II'
     jne .mm
     cmp word [es:si + 2], 0x002A
@@ -364,7 +365,7 @@ pj_exif:
     jne .no
     cmp word [es:si + 2], 0x2A00
     jne .no
-    mov byte [cs:pj_mm], 1
+    PXSW mov byte [es:pj_mm], 1
 .ord:
     mov bx, 4
     call pj_g32                     ; DX:AX = IFD0's offset
@@ -449,16 +450,15 @@ pj_g32:
 ; or HEAD's .fail
 ; =============================================================================
 pj_sofhead:
-    mov byte [cs:pj_fprog], 0
+    PXSW mov byte [es:pj_fprog], 0
     cmp al, 0xC2
     jne .np
-    mov byte [cs:pj_fprog], 1
+    PXSW mov byte [es:pj_fprog], 1
 .np:
     push di
     mov di, pj_fr                   ; the frame's fields, in this part
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:PXP_SELF]
     mov dx, PXD_HEAD                ; a refusal "bad header" is HEAD's
     add si, 4
     sub cx, 2
@@ -817,7 +817,7 @@ pj_dsc:
     push si
     push di
     push ds
-    mov [cs:pj_dscl], cl
+    PXSW mov [es:pj_dscl], cl
     mov ax, [cs:pj_fr + JF_W]       ; 0 wide or high at the scale: not
     shr ax, cl                      ; usable (wave-4 review F3)
     or ax, ax                       ; (a shift by 0 sets no flag)
@@ -827,9 +827,8 @@ pj_dsc:
     or ax, ax
     jz .no0
     mov al, [di + JP_ORIENT]
-    mov [cs:pj_fr + JF_OR], al
-    push cs
-    pop ds
+    PXSW mov [es:pj_fr + JF_OR], al
+    mov ds, [cs:PXP_SELF]
     mov di, pj_fr
     mov al, cl
     call pj_layout                  ; AX = the segment's bytes, CF too many
@@ -840,6 +839,9 @@ pj_dsc:
     mov si, ax                      ; SI = its paragraphs
     cmp byte [pj_fprog], 0
     je .yes
+    add si, 7 + 8                   ; a progressive store starts on kern_
+    and si, 0xFFF8                  ; mega's 8-paragraph grid, after its 8
+                                    ; paragraphs of bounce (pj_fsizes)
     cmp byte [pj_dscl], 2
     jb .no
     call pj_stsize                  ; AX = the store's paragraphs, CF
@@ -997,6 +999,9 @@ pj_stsize:
 .p16:
     or dx, dx
     jnz .no
+    add ax, 7                       ; ...up to a multiple of 8, so each
+    jc .no                          ; component's store is a segment on
+    and al, 0xF8                    ; kern_mega's grid (KERN-MEGA-PLAN 14.40)
     add si, ax
     jc .no
     add bp, 2
@@ -1103,6 +1108,16 @@ JV_BPE      equ 0xA6                ; word: the MCU program's end (pj_bprog)
 JV_BPI      equ 0xA8                ; word: its block being decoded
 JV_BOFF     equ 0xAA                ; byte: the bit position's bits taken
                                     ; of JV_CPOS's byte (a baseline scan)
+JV_U        equ 0xAC                ; word: pj_id8's column, then its row -
+                                    ; written in the IDCT's loop, so here and
+                                    ; not in the part's image: a store through
+                                    ; CS is a #GP fixup on kern_mega each time
+                                    ; (KERN-MEGA-PLAN 10.3, the trap census)
+JV_HI       equ 0xAE                ; byte: pj_hfill's entry being filled
+JV_PBB      equ 0xB0                ; word: THE BLOCK'S BOUNCE, kern_mega's
+JV_PBSEG    equ 0xB2                ; 1/4 store (pj_pblock .pm4): its
+JV_PBOFF    equ 0xB4                ; segment, and the block's group and
+                                    ; place there (KERN-MEGA-PLAN 14.40)
 JV_FR       equ 0x100               ; JF_SZ: the frame, and its layout
 
 JP_SEGMAX   equ JS_CLEANSZ + JS_GUARD   ; a table segment's bytes at most
@@ -1116,16 +1131,26 @@ pj_decode:
     push ds
     push es
     cld
+    mov ax, cs                      ; KERN_MEGA (CS is not our data segment
+    cmp ax, [cs:PXP_SELF]           ; there): the progressive store's 1/4
+    je .rm                          ; blocks through a bounce (pj_pblock)
+    push ds
+    mov ds, [cs:PXP_SELF]
+    mov word [pj_pblock.pa], 0xEB | ((pj_pblock.pm4 - pj_pblock.pa - 2) << 8)
+    mov word [pj_pblock.out], 0xEB | ((pj_pblock.pmout - pj_pblock.out - 2) << 8)
+    mov word [pj_oblk.pa], 0xEB | ((pj_oblk.pmo - pj_oblk.pa - 2) << 8)
+    pop ds
+.rm:
     mov es, [di + PXK_DSEG]         ; ES = the scratch
-    mov [cs:pj_dseg], es
     mov [es:JV_PKG], ds
     mov [es:JV_CTX], di
-    xor bx, bx
-    xor si, si
-.svc:
+    mov dx, [cs:PXP_PKG]            ; the services through the package's
+    xor bx, bx                      ; CODE selector: through its data
+    xor si, si                      ; segment a far call is a #GP on
+.svc:                               ; kern_mega
     mov ax, [di + PXK_SVC + bx]
     mov [es:JV_SVC + si], ax
-    mov [es:JV_SVC + si + 2], ds
+    mov [es:JV_SVC + si + 2], dx
     add si, 4
     add bx, 2
     cmp bx, 2 * PXS_N
@@ -1153,8 +1178,11 @@ pj_decode:
     mov [es:JV_FSZ + 2], ax
     push es
     pop ds                          ; DS = ES = the scratch, for good
-    mov [cs:pj_dsp], sp             ; the way out from any depth
-    mov byte [cs:pj_gb], 0          ; (a refusal's give-back: this decode's)
+    mov es, [cs:PXP_SELF]
+    mov [es:pj_dsp], sp             ; the way out from any depth
+    mov byte [es:pj_gb], 0          ; (a refusal's give-back: this decode's)
+    push ds
+    pop es
     call pj_body
     clc
     jmp short pj_dret
@@ -1241,7 +1269,7 @@ pj_body:
     cmp al, 0xD7
     jbe .m
 .seg:
-    mov [cs:pj_mk], al
+    PXSW mov [es:pj_mk], al
     call pj_seglen                  ; CX = the segment's bytes
     mov al, [cs:pj_mk]
     call pj_istab                   ; a table, a frame, a scan: read whole
@@ -1306,7 +1334,7 @@ pj_body:
     mov ax, PXD_BIG
     jmp pj_dfail
 .lok:
-    mov [cs:pj_vend], ax
+    PXSW mov [es:pj_vend], ax
     call pj_fsizes
     jmp .m
 .sos:
@@ -1425,10 +1453,14 @@ pj_fsizes:
     mov di, JV_FR
     call pj_stsize                  ; JL_SB: each component's paragraphs
     mov ax, [cs:pj_vend]            ; the store starts past the segment's
-    add ax, 15                      ; variable part
-    mov cl, 4
-    shr ax, cl
-    add ax, [cs:pj_dseg]
+    add ax, 127                     ; variable part, on kern_mega's 8-
+    mov cl, 4                       ; paragraph grid (KERN-MEGA-PLAN 14.40;
+    shr ax, cl                      ; HEAD's pj_dsc sized it so)
+    and al, 0xF8
+    mov dx, ds                      ; (DS: the scratch)
+    add ax, dx
+    mov [JV_PBB], ax                ; the bounce (pj_pblock .pm4), and the
+    add ax, 8                       ; store after it
     xor bx, bx
 .sb:
     mov dx, ax
@@ -1641,8 +1673,10 @@ pj_dqt:
     ja .bad
     cmp al, 3
     ja .bad
-    mov [cs:pj_qp], ah
-    mov [cs:pj_th], al
+    PXSWON
+    mov [es:pj_qp], ah
+    mov [es:pj_th], al
+    PXSWOFF
     mov bl, al
     xor bh, bh
     mov cl, 7
@@ -1681,7 +1715,7 @@ pj_dqt:
     mov al, 1
     shl al, cl
     or [JV_QHAVE], al
-    jmp short .t
+    jmp .t
 .bad:
     jmp pj_data
 
@@ -1710,8 +1744,10 @@ pj_dht:
     add di, 16
     cmp di, dx
     ja .bad
-    mov [cs:pj_tc], ah
-    mov [cs:pj_th], al
+    PXSWON
+    mov [es:pj_tc], ah
+    mov [es:pj_th], al
+    PXSWOFF
     call pj_hsum                    ; AX = the counts' sum
     cmp ax, 256
     ja .bad
@@ -1829,14 +1865,14 @@ pj_hbuild:
     mov bx, 512
     mul bx
     add ax, JS_HDC
-    mov [cs:pj_tpg], ax
+    PXSW mov [es:pj_tpg], ax
     add ax, 256                     ; the DC table's length page
     jmp short .clr
 .acp:
     mov bx, 1280
     mul bx
     add ax, JS_HAC
-    mov [cs:pj_tpg], ax
+    PXSW mov [es:pj_tpg], ax
     add ax, JA_LEN                  ; the AC table's length and advance
     mov di, ax                      ; pages: an entry no short code fills
     mov cx, 128                     ; is LEN 0 and ADV JA_SPEC (pj_blk)
@@ -1921,7 +1957,7 @@ pj_hfill:
     jmp .out
 .ac:
     ; for each index: a magnitude whose bits fit too makes the entry WHOLE
-    mov [cs:pj_hi], al              ; (the index's low byte = the entry's)
+    mov [JV_HI], al              ; (the index's low byte = the entry's)
 .e:
     mov [bx + JA_RS], dh
     mov al, dh
@@ -1935,7 +1971,7 @@ pj_hfill:
     mov [bx + JA_LEN], ah
     mov cl, 8
     sub cl, ah
-    mov al, [cs:pj_hi]
+    mov al, [JV_HI]
     xor ah, ah
     shr ax, cl
     mov cl, dh
@@ -1967,7 +2003,7 @@ pj_hfill:
     mov byte [bx + JA_VHI], 0
 .nx:
     inc bx
-    inc byte [cs:pj_hi]
+    inc byte [JV_HI]
     dec si
     jnz .e
 .out:
@@ -2585,7 +2621,7 @@ pj_tomark:
     push bx
     push cx
     push di
-    mov [cs:pj_skr], al
+    PXSW mov [es:pj_skr], al
 .again:
     cmp byte [JV_ENDED], 0
     jne .have
@@ -2712,9 +2748,9 @@ pj_bprog:
 .c:
     mov al, [JV_SC + bx + JS_CI]
     call pj_cset                    ; pj_cpl, JV_ST, pj_ch, pj_cv, JV_MLT
-    mov byte [cs:pj_v], 0
+    PXSW mov byte [es:pj_v], 0
 .v:
-    mov byte [cs:pj_h], 0
+    PXSW mov byte [es:pj_h], 0
 .h:
     mov al, [JV_SC + bx + JS_CI]
     xor ah, ah
@@ -2747,11 +2783,11 @@ pj_bprog:
     mul byte [JV_FR + JL_N]
     mov [di + JB_STEP], ax
     add di, JB_SZ
-    inc byte [cs:pj_h]
+    PXSW inc byte [es:pj_h]
     mov al, [cs:pj_h]
     cmp al, [cs:pj_ch]
     jb .h
-    inc byte [cs:pj_v]
+    PXSW inc byte [es:pj_v]
     mov al, [cs:pj_v]
     cmp al, [cs:pj_cv]
     jb .v
@@ -2911,9 +2947,12 @@ pj_blk:
     cmp ax, [JV_MLT]
     je .m
     mov [JV_MLT], ax                ; the value loops' multipliers: their
-    mov [cs:pj_va0.imul + 2], ax    ; `imul`s' displacements, PATCHED - a
-    mov [cs:pj_va1.imul + 2], ax    ; call and a jump before any of them is
-    mov [cs:pj_va2.imul + 2], ax    ; fetched (px_quant's precedent)
+    push ds                         ; `imul`s' displacements, PATCHED - a
+    mov ds, [cs:PXP_SELF]           ; call and a jump before any of them is
+    mov [pj_va0.imul + 2], ax       ; fetched (px_quant's precedent) - and
+    mov [pj_va1.imul + 2], ax       ; through this part's DATA segment, the
+    mov [pj_va2.imul + 2], ax       ; same bytes: CS takes no store on
+    pop ds                          ; kern_mega (KERN-MEGA-PLAN 14.40)
 .m:
     mov ax, [ds:bp + JB_DCS]
     mov [JV_SLOWP], ax
@@ -3099,7 +3138,7 @@ pj_sk:
     jae .spec
     mov al, [bx + JA_RS - JA_LEN]   ; a WHOLE coefficient past 63: its
     and al, 15                      ; magnitude given back to the cut-short
-    mov [cs:pj_gb], al              ; test, as the reference refuses its
+    PXSW mov [es:pj_gb], al          ; test, as the reference refuses its
     jmp pj_badb                     ; place before reading it
 .spec:
     cmp byte [bx + JA_RS - JA_LEN], 0   ; EOB, its code taken: the block's
@@ -3157,7 +3196,7 @@ pj_va%1:
 %endif
     mov al, [bx + JA_RS - JA_LEN]   ; ...past 63: its magnitude given back
     and al, 15
-    mov [cs:pj_gb], al
+    PXSW mov [es:pj_gb], al
     jmp pj_badb
 .spec:
     cmp byte [bx + JA_RS - JA_LEN], 0   ; EOB (pj_sk's test)
@@ -3614,16 +3653,16 @@ pj_id4:
 ; holds anything every row is its first value - the butterflies would give
 ; exactly those (SPEC.md 106.19)
 pj_id8:
-    xor ax, ax                      ; [pj_u] = u x 2
-    mov [cs:pj_u], ax
+    xor ax, ax                      ; [JV_U] = u x 2
+    mov [JV_U], ax
 .col:
-    mov cx, [cs:pj_u]
+    mov cx, [JV_U]
     shr cl, 1
     mov al, [JV_MASK + 1]
     shr al, cl
     test al, 1
     jnz .full
-    mov bx, [cs:pj_u]
+    mov bx, [JV_U]
     mov ax, [JS_D + bx]
 %assign k 0
 %rep 8
@@ -3632,28 +3671,28 @@ pj_id8:
 %endrep
     jmp .nc
 .full:
-    mov si, [cs:pj_u]
+    mov si, [JV_U]
     lea di, [si + JS_WS]
     add si, JS_D
     AAN 16
     AANCOL
 .nc:
-    add word [cs:pj_u], 2
-    cmp word [cs:pj_u], 16
+    add word [JV_U], 2
+    cmp word [JV_U], 16
     jae .rows
     jmp .col
 .rows:
     mov di, [JV_PL]
     test byte [JV_MASK], 0xFE
     jz .dc
-    mov word [cs:pj_u], JS_WS       ; [pj_u] = the row
+    mov word [JV_U], JS_WS          ; [JV_U] = the row
 .row:
-    mov si, [cs:pj_u]
+    mov si, [JV_U]
     AAN 2
     AANROW
     add di, [JV_ST]
-    add word [cs:pj_u], 16
-    cmp word [cs:pj_u], JS_WS + 128
+    add word [JV_U], 16
+    cmp word [JV_U], JS_WS + 128
     jae .done
     jmp .row
 .done:
@@ -3826,14 +3865,14 @@ pj_cset:
     mov [JV_MLT], ax
     shl bx, 1
     mov ax, [JV_FR + JL_PL + bx]
-    mov [cs:pj_cpl], ax
+    PXSW mov [es:pj_cpl], ax
     mov ax, [JV_FR + JL_ST + bx]
     mov [JV_ST], ax
     shl bx, 1
     mov al, [JV_FR + JF_C + bx + JC_H]
-    mov [cs:pj_ch], al
+    PXSW mov [es:pj_ch], al
     mov al, [JV_FR + JF_C + bx + JC_V]
-    mov [cs:pj_cv], al
+    PXSW mov [es:pj_cv], al
     pop bx
     pop ax
     ret
@@ -4044,10 +4083,16 @@ pj_conv:
     mov [JV_X], cx
     test byte [JV_PF], JPF_RGB
     jnz .rgb
-    mov [cs:.cr0 + 2], ax           ; Cr's place from Cb's: PATCHED, a row
-    mov [cs:.cr1 + 2], ax           ; before it is fetched
-    mov [cs:.cr2 + 2], ax
-    mov [cs:.cr3 + 2], ax
+    cmp ax, [cs:.cr0 + 2]           ; Cr's place from Cb's: PATCHED, a row
+    je .crok                        ; before it is fetched - when it moved,
+    push ds                         ; which is the first row: through the
+    mov ds, [cs:PXP_SELF]           ; part's data segment (pj_blk's)
+    mov [.cr0 + 2], ax
+    mov [.cr1 + 2], ax
+    mov [.cr2 + 2], ax
+    mov [.cr3 + 2], ax
+    pop ds
+.crok:
     add cx, si
     mov [JV_X], cx                  ; [JV_X] = the Y row's end
     push word [JV_CX]               ; the chroma pointer, on the stack
@@ -4268,8 +4313,10 @@ pj_progscan:
     xor ah, ah                      ; bits (wave-4 review F6)
     mul word [JV_FR + JF_MCUX]
     mul word [JV_MY]
-    mov [cs:pj_rbi], ax
-    mov [cs:pj_rbi + 2], dx
+    PXSWON
+    mov [es:pj_rbi], ax
+    mov [es:pj_rbi + 2], dx
+    PXSWOFF
     mov word [JV_MX], 0
 .bx:
     mov ax, [cs:pj_rbi]             ; bi = by (mcux H) + bx
@@ -4376,9 +4423,9 @@ pj_pprog:
     xor ah, ah
     mul word [JV_FR + JF_MCUX]
     mov cx, ax                      ; CX = mcux H
-    mov byte [cs:pj_v], 0
+    PXSW mov byte [es:pj_v], 0
 .v:
-    mov byte [cs:pj_h], 0
+    PXSW mov byte [es:pj_h], 0
 .h:
     mov [di + PB_SC], bx
     mov al, [cs:pj_v]
@@ -4397,11 +4444,11 @@ pj_pprog:
     mov word [di + PB_ROW], 0
     mov word [di + PB_ROWH], 0
     add di, PB_SZ
-    inc byte [cs:pj_h]
+    PXSW inc byte [es:pj_h]
     mov al, [cs:pj_h]
     cmp al, [cs:pj_ch]
     jb .h
-    inc byte [cs:pj_v]
+    PXSW inc byte [es:pj_v]
     mov al, [cs:pj_v]
     cmp al, [cs:pj_cv]
     jb .v
@@ -4559,7 +4606,37 @@ pj_pblock:
     mov bp, [JV_BI]
     cmp byte [JV_SCL], 3
     je .s8
-    add ax, bp                      ; (1/4: under F000h blocks, a word)
+.pa:                                ; PATCHED on kern_mega to `jmp short
+    add ax, bp                      ; .pm4` (pj_decode): (1/4: under F000h
+    xor bp, bp                      ; blocks, a word)
+    jmp short .s
+.pm4:                               ; KERN_MEGA'S 1/4 (KERN-MEGA-PLAN 14.40):
+    mov dx, bp                      ; a block is a paragraph of the store and
+    and dl, 0xF8                    ; the code below addresses it at ES:0 -
+    add ax, dx                      ; which is a segment only every eighth
+    sub bp, dx                      ; block there. So the block's group of
+    shl bp, 1                       ; eight (a segment on the grid) and its
+    shl bp, 1                       ; place in it are banked, the block is
+    shl bp, 1                       ; copied into eight paragraphs of its
+    shl bp, 1                       ; own, decoded at ES:0 there and copied
+    mov [JV_PBSEG], ax              ; back at .out. Real mode never comes
+    mov [JV_PBOFF], bp              ; here: .pa is not patched
+    mov dx, [JV_PBB]
+    push ds
+    push si
+    push di
+    push cx
+    mov ds, ax
+    mov si, bp
+    mov es, dx
+    xor di, di
+    mov cx, 8
+    rep movsw
+    pop cx
+    pop di
+    pop si
+    pop ds
+    mov ax, dx
     xor bp, bp
     jmp short .s
 .s8:
@@ -4573,8 +4650,9 @@ pj_pblock:
     shr cx, 1
     rcr dx, 1
     pop cx
-    and bp, 7
-    shl bp, 1
+    and dl, 0xF8                    ; eight paragraphs at a time: kern_mega's
+    and bp, 63                      ; grid (KERN-MEGA-PLAN 14.40), the word's
+    shl bp, 1                       ; place in the offset
     add ax, dx
 .s:
     mov es, ax
@@ -4634,12 +4712,35 @@ pj_pblock:
     jmp short .out
 .acr:
     call pj_acrb
-.out:
-    mov [JV_CPOS], si
+.out:                               ; PATCHED on kern_mega to `jmp short
+    mov [JV_CPOS], si               ; .pmout` (pj_decode)
+.outr:
     mov [JV_BOFF], cl
     pop es
     pop bx
     ret
+.pmout:                             ; kern_mega: the bounce back into the
+    mov [JV_CPOS], si               ; store, at 1/4 (.pm4)
+    cmp byte [JV_SCL], 3
+    je .outr
+    push ds
+    push si
+    push di
+    push cx
+    mov es, [JV_PBSEG]
+    mov di, [JV_PBOFF]
+    mov ds, [JV_PBB]
+    xor si, si
+    mov cx, 8
+    rep movsw
+    pop cx
+    pop di
+    pop si
+    pop ds
+    jmp short .outr
+%if (pj_pblock.pm4 - pj_pblock.pa - 2) > 127 || (pj_pblock.pmout - pj_pblock.out - 2) > 127
+  %error "pj_pblock's kern_mega patches are short jumps"
+%endif
 
 ; pj_rbits - AL = n, 1..15: AX = the next n bits as they are, taken.
 ; SI/CL live. Preserves BX, DX, DI, BP; clobbers CH
@@ -4790,7 +4891,7 @@ pj_acfb:
 .badgb:
     mov al, [bx + JA_RS - JA_LEN]
     and al, 15
-    mov [cs:pj_gb], al
+    PXSW mov [es:pj_gb], al
 .bad:
     jmp pj_badb
 
@@ -5085,7 +5186,7 @@ pj_acrb:
     dec word [JV_EOBRUN]
     ret
 .badgb:
-    mov [cs:pj_gb], ah
+    PXSW mov [es:pj_gb], ah
 .bad:
     jmp pj_badb
 
@@ -5103,14 +5204,14 @@ pj_output:
     mov al, [cs:pj_ch]              ; bpl = mcux H; the band's first block
     xor ah, ah                      ; my V bpl
     mul word [JV_FR + JF_MCUX]
-    mov [cs:pj_bpl], ax
+    PXSW mov [es:pj_bpl], ax
     mov al, [cs:pj_cv]
     xor ah, ah
     mul word [JV_MY]
     mul word [cs:pj_bpl]
     mov [JV_BI], ax
     mov [JV_BIH], dx
-    mov byte [cs:pj_v], 0
+    PXSW mov byte [es:pj_v], 0
 .v:
     mov al, [cs:pj_v]               ; the row of blocks' place: v N rows
     mul byte [JV_FR + JL_N]
@@ -5128,7 +5229,7 @@ pj_output:
     add [JV_PL], ax
     pop cx
     loop .b
-    inc byte [cs:pj_v]
+    PXSW inc byte [es:pj_v]
     mov al, [cs:pj_v]
     cmp al, [cs:pj_cv]
     jb .v
@@ -5154,7 +5255,9 @@ pj_oblk:
     mov si, [JV_MLT]
     cmp byte [JV_SCL], 3
     je .o8
-    add ax, bp                      ; 1/4: a paragraph a block
+.pa:                                ; PATCHED on kern_mega to `jmp short
+    add ax, bp                      ; .pmo` (pj_decode): 1/4, a paragraph a
+.oc:                                ; block
     mov es, ax
     mov ax, [es:0]
     imul word [si]
@@ -5174,6 +5277,29 @@ pj_oblk:
     push ds
     pop es
     jmp pj_id2
+.pmo:                               ; kern_mega: the block through the bounce
+    mov dx, bp                      ; (pj_pblock .pm4's), read only
+    and dl, 0xF8
+    add ax, dx
+    sub bp, dx
+    mov cl, 4
+    shl bp, cl
+    mov dx, [JV_PBB]
+    push ds
+    push si                         ; (SI: the multipliers)
+    mov ds, ax
+    mov si, bp
+    mov es, dx
+    xor di, di
+    mov cx, 4
+    rep movsw
+    pop si
+    pop ds
+    mov ax, dx
+    jmp short .oc
+%if (pj_oblk.pmo - pj_oblk.pa - 2) > 127
+  %error "pj_oblk's kern_mega patch is a short jump"
+%endif
 .o8:
     mov cx, [JV_BIH]                ; 1/8: a word a block, bi >> 3 from 32
     mov dx, bp                      ; bits
@@ -5183,9 +5309,10 @@ pj_oblk:
     rcr dx, 1
     shr cx, 1
     rcr dx, 1
+    and dl, 0xF8                    ; (pj_pblock's: on the grid)
     add ax, dx
     mov es, ax
-    and bp, 7
+    and bp, 63
     shl bp, 1
     mov ax, [es:bp]
     imul word [si]
@@ -5237,13 +5364,11 @@ pj_mm:      db 0                    ; HEAD: EXIF is big-endian
 pj_dscl:    db 0                    ; HEAD: the scale being priced
 pj_fr:      times JF_SZ db 0        ; HEAD: the frame
 pj_dsp:     dw 0                    ; DECODE: the stack at pj_body's call
-pj_dseg:    dw 0                    ; DECODE: the scratch
 pj_mk:      db 0                    ; the marker being read
 pj_qp:      db 0                    ; DQT: the precision
 pj_tc:      db 0                    ; DHT: the class...
 pj_th:      db 0                    ; ...and number
 pj_tpg:     dw 0                    ; ...its fast table
-pj_hi:      db 0                    ; ...the entry being filled
 pj_skr:     db 0                    ; pj_tomark: pass an RSTn over
 pj_cpl:     dw 0                    ; pj_cset: the component's plane
 pj_ch:      db 0                    ; ...its H...
@@ -5254,7 +5379,6 @@ pj_bpl:     dw 0                    ; the output pass's blocks a row
 pj_rbi:     dd 0                    ; a non-interleaved scan's row's first
 pj_vend:    dw 0                    ; the scratch's variable part's end
 pj_gb:      db 0                    ; bits a refusal gives back
-pj_u:       dw 0                    ; pj_id8: the column, then the row
 pj_vartab:  dw JS_VAR + 12 * 256, JS_VAR + 3 * 256, JS_VAR, JS_VAR
 
 %include "pxplan.inc"                ; the plans: shared source (106.20)

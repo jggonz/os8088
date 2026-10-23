@@ -8,7 +8,8 @@
  *
  * #included into apps/c64/c64.c - ONE translation unit (SPEC.md 73.1).
  *
- * ovl_*: the body runs once per Smart attach, so it lives in C64.OVL. The
+ * ovl_*: the body runs once per Smart attach, so it lives in the overlay -
+ * part 1 of C64.O88 since C64-SPEC 13.3, read at launch with the ROM. The
  * CALLBACK that reaches it - os88_onfile - is RESIDENT, because the runtime
  * reaches a callback by a near offset (13.3), and it refuses by SIZE before
  * the disk is touched.
@@ -38,24 +39,21 @@
  * says what it did and nothing claims to have run anything.
  * ==========================================================================*/
 
-/* AND ITS 0 MEANS ONE THING ONLY: THE RUNTIME REFUSED THE LOAD.
- * c64cmd.c's header rule - every body returns 1, so a 0 at a call site can
- * only be no C64.OVL on the disk, a stale module or no heap - applies here
- * too, and this function used to break it: its four own refusals, each of
- * which has ALREADY been said on the status row, also answered 0. A caller
- * therefore could not act on the answer even if it read it, and os88_onfile
- * did not read it at all - so a runtime refusal on Smart attach reached the
- * toast only, under a WF_FULL window where the toast is not where the user is
- * looking (9.8, 13.3). */
-static int ovl_load_prg(const char *name, unsigned size_lo)
+/* IT ANSWERS NOTHING. Every refusal it has of its own - too short, no heap,
+ * a short read, an end past $FFFF - is said on the status row (9.8's
+ * both-routes rule, through c64_say), and the module it runs in is an EAGER
+ * part that was in memory before os88_main ran (C64-SPEC 13.3), so there is
+ * no runtime refusal left for a caller to read either. It used to answer 1
+ * for its own refusals and 0 for the runtime's, back when a disk could be
+ * missing C64.OVL. */
+static void ovl_load_prg(const char *name, unsigned size_lo)
 {
     static char msg[C64_MSGMAX];
     unsigned seg, kb, got, load, n;
 
     if (size_lo < 3) {
         c64_say("PRG too short.");
-        return 1;                            /* SAID. 0 is the runtime's
-                                             * refusal alone (the header) */
+        return;
     }
     /* CEILING IN 16 BITS, and this is not the obvious `(size + 1023) >> 10`:
      * `size_lo` is `unsigned` and that is SIXTEEN bits on the target, so the
@@ -67,15 +65,13 @@ static int ovl_load_prg(const char *name, unsigned size_lo)
     seg = os88_mem_claim((int)kb);
     if (seg == 0) {
         c64_say("PRG: no heap for it.");
-        return 1;                            /* SAID. 0 is the runtime's
-                                             * refusal alone (the header) */
+        return;
     }
     got = os88_file_read_seg(name, seg, size_lo);
     if (got != size_lo) {
         os88_mem_free(seg);
         c64_say("PRG: cannot read it.");
-        return 1;                            /* SAID. 0 is the runtime's
-                                             * refusal alone (the header) */
+        return;
     }
     /* the two-byte load address, little-endian, and the refusal 11.3 states:
      * a file whose end passes $FFFF is refused with the fact */
@@ -94,8 +90,7 @@ static int ovl_load_prg(const char *name, unsigned size_lo)
         if ((unsigned)(n - 1) > (unsigned)(0xFFFFu - load)) {
             os88_mem_free(seg);
             c64_say("PRG runs past $FFFF.");
-            return 1;                            /* SAID. 0 is the runtime's
-                                                 * refusal alone (the header) */
+            return;
         }
     c64_zzcopy_in(load, seg, 2, n);
     os88_mem_free(seg);
@@ -106,5 +101,4 @@ static int ovl_load_prg(const char *name, unsigned size_lo)
     os88_strcpy(msg, "Loaded ", sizeof(msg));
     os88_strcpy(msg + os88_strlen(msg), name, 14);
     c64_say(msg);
-    return 1;
 }

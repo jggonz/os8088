@@ -110,3 +110,17 @@ SND_FM_CLAIM equ 5              ; CL = 0 OPL2 mode / 1 OPL3 mode where the chip
 SND_OPL2     equ 2
 SND_OPL3     equ 3
 SND_FM_TONECH equ 8             ; the one channel no claim covers (SPEC.md 34.8)
+
+; Hardware mixer (SPEC.md 34.15). INFO's mask is the authority; unsupported
+; channels and percentages above 100 refuse without writing a port.
+SNDV_MIXINFO equ 7              ; AL=chip 1/2/3, CX=channel bitmap
+SNDV_MIXGET  equ 8              ; AL=channel -> CL=L, CH=R %, DL=flags
+SNDV_MIXSET  equ 9              ; AL=channel, CL=L, CH=R %
+SNDV_MIXICON equ 10             ; CX=x, lock held: 24x16 opaque bar icon
+SNDV_MIXPOP  equ 11             ; CX=x, UI task, no lock: quick volume
+SNDV_MIXICON_THEME equ 12       ; CX=x, AL=bar background, AH=ink, lock held
+SNDE_NOMIX   equ 7
+SNDE_MIXARG  equ 8
+MIX_STEREO  equ 1
+MIX_TONE    equ 2
+MIX_NCHAN   equ 9

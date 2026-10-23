@@ -40,5 +40,44 @@ WHAT MATTERS IN VIDBENCH.TXT
                   drawing it. OK/BAD per frame: BAD and
                   the timing does not count.
 
-VIDDISK.O88 (X, E, R, W) and VIDEOD.O88 - the player
-with the long info card - are here too.
+VIDDISK.O88 (X, E, R, W, C, L) and VIDEOD.O88 - the
+player with the long info card - are here too.
+
+LOADALL: VIDDISK.O88, PRESS L
+-----------------------------
+docs/plans/LOADALL-PLAN.md section 8. Whether this
+286 can read and write its extended memory IN PLACE
+with the undocumented LOADALL instruction, and what
+that costs. Needs memory above 1 MB. Under a minute.
+The report is saved here as VDLALL1.TXT - each run
+takes the next number, VDLALL2.TXT and on.
+
+It READS the hard disk (the IDE drive at 1F0h, from
+cylinder 20, as C does) and writes nothing to it.
+
+IF THE MACHINE FREEZES at "probing LOADALL": reset,
+boot again and press M instead of L - the same run
+with the one byte of the table nobody has seen work
+on a real chip changed. Say which key froze.
+
+If you can, run it a SECOND time with Tracker or
+MIDIRack playing through the Sound Blaster in the
+background, and say whether the sound broke up, and
+which numbered report that run was.
+
+WHAT MATTERS IN VDLALLn.TXT
+  LOADALL                ran, or TRAPPED (not usable)
+  caches, below 1 MB     ok, or nothing below runs
+  A20 before / after     open or SHUT
+  32K read in place      ok, or nothing below counts
+  ...and 1 KB off        must say "differs"
+  32K written in place   ok
+  a borrow, no work      what one use of LOADALL costs
+  LOADALL / XMEM_COPY    the same copies both ways
+  read 32K above / below whether memory past 1 MB is
+                         slower than below it
+  64 sectors into XMS    ok: the disk read straight
+                         into extended memory
+  64-sector cmd rows     plain against into XMS
+  borrows of 1 .. 8      how many sectors the drive
+                         hands over without a pause

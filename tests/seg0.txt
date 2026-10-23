@@ -1,0 +1,39 @@
+# tests/seg0.txt - segment 0 in DS or ES (docs/plans/KERN-MEGA-PLAN.md 10.1 item 11)
+#
+# Real mode reads the IVT and the BIOS data area through segment 0 and a
+# linear offset. In 286 protected mode 0 is the NULL selector: loading it is
+# legal and the first access through it is #GP(0) - and QEMU does not fault on
+# it, so no emulator here can find one of these. tests/unit/t_seg0.py counts
+# the loads on the arms kern_mega assembles and holds them to this list: a file
+# not in it may have none, and a count may neither rise nor be left too high.
+# MEGA_SEG0 (kernel/kernel.asm) is the conversion.
+#
+# ONE LINE PER FILE: <sites> <path>  # <reason>
+
+# --- real mode by construction: the boot, before mega_enter -------------------
+3 kernel/mouse.inc  # mouse_init's port probe and identify window (.boot2)
+1 kernel/sched.inc  # sched_init's vector install (.boot2)
+2 kernel/splash.inc  # the loading screen (.boot2)
+2 kernel/disk.inc  # the boot overlay's mount-time setup (.ovl)
+1 kernel/desksc.inc  # sc_walk's ES = 0 "no document" SENTINEL (.cold), which nothing reads through
+1 kernel/font.inc  # FONT_PICK, font_init's int 10h AH=11h probe at boot (ES = 0 for "no answer")
+4 kernel/kernel.asm  # kmain's boot timer, read at the first desktop frame - before mega_enter - and BOOT_MARK=1's three (a knob)
+3 kernel/mega.inc  # mega_a20t, the A20 probe mega_enter runs before it switches; and mega_capon/mega_capoff, which swap IVT entries inside an IRQ reflection's real-mode window
+1 kernel/hbstub.inc  # the hibernate resume stub, run with no kernel at all
+4 kernel/hiber.inc  # HIBER.DRV (.modh), real mode by design and replaced on kern_mega (KERN-MEGA-PLAN 2.6) - -1 for hbm_wake's ROM tick, which kern_mega reads in protected mode at every return from a DOS trip (MEGA_SEG0), and +1 for hbm_xwconv's first CLUSTER of the hibernate's picture, which is the only way to the IVT a file write has: segment 0 with LOW0 stretched over the cluster, 1,024 fixups where the whole first 64KB took 32,512 (KERN-MEGA-PLAN 14.46)
+
+# --- sentinels: ES = 0 as "none", never read through ----------------------------
+1 kernel/stikmenu.inc  # stm_a_launch: ES = 0, no document, for ldf_ld_pkg_start
+1 drivers/net/pktdrv.inc  # pk_recv's refusal: ES:DI = 0:0 is the packet-driver ABI's "no buffer"
+
+# --- knob-only ---------------------------------------------------------------------
+1 kernel/bootprof.inc  # BOOTPROF=1's table
+2 kernel/kbddiag.inc  # KBDDIAG=1's recorder
+
+# --- drivers: a driver-SDK question for kern_mega (KERN-MEGA-PLAN 10.1) -------------
+2 drivers/sound/sb.inc  # sbl_unhook and sbl_f_irqdisc. IRQ DISCOVERY IS DEFERRED TO THE FIRST STREAM, so on kern_mega it runs in protected mode: mega_null0 completes each segment-0 access (a trap apiece) and mega_ivt_sync carries the vector it hooks into the IDT (KERN-MEGA-PLAN 10.3 item 17), so a Sound Blaster stream plays; the sites stay because a driver cannot name MEGA_SEG0
+1 drivers/sound/picomem.inc  # pm_init's IVT check, at attach - the boot's real mode, unless the driver is loaded later from the Control Panel
+2 drivers/usbmouse/usbmouse.asm  # attach and detach hooking int 33h's vector
+1 drivers/hdd/hdxms.inc  # hd_xa_a20, HDD.DRV's XMS ring: its own A20 probe through 0000 and FFFF
+3 drivers/xmem/xmem.asm  # XMEM.DRV, which kern_mega does not ship (its A20 and HMA work is mega_enter's)
+1 kernel/megados.inc  # mega_wrprobe's A20 test through 0000 and FFFF: the boot blob, REAL MODE, before mega_enter has switched

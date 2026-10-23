@@ -23,9 +23,9 @@
 ; Addressing a blob that exceeds 64KB (BEVERLY.MOD is 116,085 bytes) on an
 ; 8086: nothing ever offsets more than 64KB from one base. The header is
 ; within blobseg's first 1084 bytes; pattern p lives at segment
-; blobseg + 67 + 64*p, offset 12 (1084 + 1024*p = ((67 + 64*p) << 4) + 12);
-; each sample gets a normalized base seg = blobseg + (start >> 4),
-; off = start & 15, with its play length capped at MP_MAXSMP bytes so
+; blobseg + 64 + 64*p, offset 60 (1084 + 1024*p = ((64 + 64*p) << 4) + 60);
+; each sample gets a normalized base seg = blobseg + 8 * (start >> 7),
+; off = start & 127, with its play length capped at MP_MAXSMP bytes so
 ; off + position (+ one mix step) can never wrap a 16-bit offset.
 ;
 ; Timing (research-ft2-reference): tick rate = BPM*2/5 Hz, speed = ticks
@@ -37,6 +37,12 @@
 ; conversion pass: out = 128 + (sum >> 2).
 ; =============================================================================
 
+MP_PSEG    equ 64               ; pattern 0, paragraphs into the blob, and the
+MP_POFF    equ 60               ; offset in that segment: whole 128-byte
+                                ; GRANULES, so every segment derived from the
+                                ; blob is an identity selector on kern_mega
+                                ; (KERN-MEGA-PLAN 10.1 item 18; 67 and 12 were
+                                ; the paragraph split of the same 1084)
 MP_MAXSMP  equ 60000            ; per-sample play-length cap, bytes: keeps
                                 ; off + pos + step*chunk < 65536 in the mixer
                                 ; even at a 4000 Hz mix rate (step int <= 7)
@@ -174,12 +180,11 @@ mp_volsel:
 mp_load:
     mov byte [mp_loaded], 0
     ; -- 1: L >= 1084 ------------------------------------------------------
-    cmp word [mp_bloblen_hi], 0
-    jne .lenok
-    cmp word [mp_bloblen_lo], 1084
-    jae .lenok
-    jmp .e_notmod
-.lenok:
+    mov ax, [mp_bloblen_lo]
+    sub ax, 1084
+    mov ax, [mp_bloblen_hi]
+    sbb ax, 0
+    jc .e_notmod                ; a borrow out of the 32-bit L - 1084
     mov es, [mp_blobseg]
     ; -- 3: magic at 1080 in {M.K., M!K!, 4CHN, FLT4} ------------------------
     mov ax, [es:1080]
@@ -203,11 +208,12 @@ mp_load:
     ret
 .magic:
     ; -- title: 20 hostile bytes -> mp_title, printable, NUL-terminated ------
+    ; (the reads are `es lodsb`: DF = 0 is every callback's (SPEC.md 1))
     xor si, si
     mov di, mp_title
     mov cx, 20
 .tl:
-    mov al, [es:si]
+    es lodsb
     cmp al, 32
     jb .tdone                   ; NUL (or any control byte) ends the title
     cmp al, 126
@@ -215,21 +221,15 @@ mp_load:
     mov al, '.'
 .tkeep:
     mov [di], al
-    inc si
     inc di
     loop .tl
 .tdone:
     mov byte [di], 0
     ; -- 4/5: song length 1..128, restart < songlen else 0 -------------------
     mov al, [es:950]
-    or al, al
-    jz .e_song
-    cmp al, 128
-    jbe .slok
-.e_song:
-    mov ax, mpe_song
-    jmp .err
-.slok:
+    dec al                      ; 1..128 -> 0..127, the only values that
+    js .e_song                  ; leave the sign clear
+    inc ax
     mov [mp_songlen], al
     mov ah, [es:951]
     cmp ah, al
@@ -241,21 +241,19 @@ mp_load:
     mov si, 952
     mov di, mp_orders
     mov cx, 128
-    xor ah, ah                  ; AH = running max
+    xor dx, dx                  ; DL = running max, DH = 0
 .ol:
-    mov al, [es:si]
+    es lodsb
     mov [di], al
-    cmp al, ah
-    jbe .onx
-    mov ah, al
-.onx:
-    inc si
     inc di
+    cmp al, dl
+    jbe .onx
+    mov dl, al
+.onx:
     loop .ol
-    mov al, ah
-    xor ah, ah
+    xchg ax, dx
     inc ax                      ; AX = P (1..256)
-    mov [mp_t1], ax
+    mov bp, ax                  ; BP = P, until the extent has passed
     ; extent = 1084 + 1024*P (32-bit), must be <= L
     call trk_tobytes            ; DX:AX = P<<10
     add ax, 1084
@@ -267,12 +265,14 @@ mp_load:
     jbe .extok
 .e_trunc:
     mov ax, mpe_trunc
-    jmp .err
+    jmp short .err
+.e_song:
+    mov ax, mpe_song
+    jmp short .err
 .extok:
     mov [mp_run_lo], ax         ; 32-bit running sample start offset
     mov [mp_run_hi], dx
-    mov ax, [mp_t1]
-    mov [mp_npat], ax           ; P is 1..256 and the count is a WORD for the
+    mov [mp_npat], bp           ; P is 1..256 and the count is a WORD for the
                                 ; 256 (SPEC.md 45.5.1). It read AL while the
                                 ; app refused any file over 128KB, because
                                 ; 1084 + 1024*P <= 131072 forces P <= 126 -
@@ -281,53 +281,32 @@ mp_load:
     mov si, 20                  ; SI = the header in the blob, 30 bytes each
     mov di, mp_smptab           ; DI = its table entry; neither is written by
 .sm:                            ; the body, so both just walk
-    ; length in words, big-endian -> DX:AX = bytes (17-bit)
-    mov ax, [es:si+22]
-    xchg al, ah
-    xor dx, dx
-    shl ax, 1
-    adc dx, 0                   ; DX:AX = stated byte length
-    mov [mp_t2], ax             ; stated length lo
-    mov [mp_t3], dx             ; ...hi
-    ; finetune + volume
-    mov al, [es:si+24]
-    and al, 0x0F
-    mov [di+MS_FINE], al
-    mov al, [es:si+25]
-    cmp al, 64
-    jbe .vok
-    mov al, 64
-.vok:
-    mov [di+MS_VOL], al
-    ; loop start / length, words BE -> bytes, each capped at 0xFFFF
-    mov ax, [es:si+26]
-    xchg al, ah
-    shl ax, 1
-    jnc .lsok
-    mov ax, 0xFFFF              ; >64K start: lands >= plen -> loop disabled
-.lsok:
-    mov [mp_t4], ax             ; ls bytes
-    mov ax, [es:si+28]
-    xchg al, ah
-    shl ax, 1
-    jnc .llok
-    mov ax, 0xFFFF
-.llok:
-    mov [mp_t5], ax             ; ll bytes
     ; normalized base from the running 32-bit start
     mov ax, [mp_run_lo]
     mov dx, [mp_run_hi]
+    mov bx, [mp_blobseg]
+%ifdef PKG_MEGA                 ; (a selector: the kern_mega arm's, 14.66)
+    test bl, 4                  ; a selector: the claim, at the start itself
+    jz .gran                    ; (mp_patseg)
+    mov [di+MS_OFF], ax
+    mov [di+MS_SEG], bx
+    jmp short .placed
+.gran:
+%endif
     mov bx, ax
-    and bx, 15
+    and bx, 127
     mov [di+MS_OFF], bx
-    mov cx, 4
+    mov cx, 7
 .sh4:
     shr dx, 1
     rcr ax, 1
-    loop .sh4                   ; AX = start >> 4 (hi bits beyond 20 only on
-    add ax, [mp_blobseg]        ; hostile files whose samples are unplayable)
+    loop .sh4                   ; AX = start >> 7, GRANULES (hi bits beyond 20
+    mov cl, 3                   ; only on hostile files whose samples are
+    shl ax, cl                  ; unplayable) - 8 paragraphs each
+    add ax, [mp_blobseg]
     mov [di+MS_SEG], ax
-    ; effective length = min(stated, bytes remaining in file, MP_MAXSMP)
+.placed:
+    ; available = bytes remaining in the file from the start, capped 0xFFFF
     mov ax, [mp_bloblen_lo]
     mov dx, [mp_bloblen_hi]
     sub ax, [mp_run_lo]
@@ -340,37 +319,64 @@ mp_load:
 .zavail:
     xor ax, ax
 .haveav:
-    ; AX = available (capped 0xFFFF); stated in mp_t3:mp_t2
-    cmp word [mp_t3], 0
-    jne .lenset                 ; stated >= 64K: available (in AX) wins
-    cmp ax, [mp_t2]
-    jbe .lenset                 ; ...and so it does when it is the smaller
-    mov ax, [mp_t2]
+    xchg ax, bp                 ; BP = available
+    ; length in words, big-endian -> DX:AX = bytes (17-bit), and the running
+    ; start advances by this STATED length (the file layout)
+    mov ax, [es:si+22]
+    xchg al, ah
+    xor dx, dx
+    shl ax, 1
+    rcl dx, 1                   ; DX:AX = stated byte length
+    add [mp_run_lo], ax
+    adc [mp_run_hi], dx
+    ; effective length = min(stated, available, MP_MAXSMP)
+    or dx, dx
+    jnz .lenav                  ; stated >= 64K: available wins
+    cmp ax, bp
+    jb .lenset                  ; ...and so it does when it is the smaller
+.lenav:
+    mov ax, bp
 .lenset:
     cmp ax, MP_MAXSMP
     jbe .capok
     mov ax, MP_MAXSMP
 .capok:
-    mov [mp_t6], ax             ; elen
-    ; advance the running start by the STATED length (the file layout)
-    mov ax, [mp_t2]
-    mov dx, [mp_t3]
-    add [mp_run_lo], ax
-    adc [mp_run_hi], dx
+    xchg ax, bp                 ; BP = elen
+    ; finetune + volume
+    mov al, [es:si+24]
+    and al, 0x0F
+    mov [di+MS_FINE], al
+    mov al, [es:si+25]
+    cmp al, 64
+    jbe .vok
+    mov al, 64
+.vok:
+    mov [di+MS_VOL], al
+    ; loop start / length, words BE -> bytes, each capped at 0xFFFF
+    mov cx, [es:si+26]
+    xchg cl, ch
+    shl cx, 1
+    jnc .lsok
+    mov cx, 0xFFFF              ; >64K start: lands >= plen -> loop disabled
+.lsok:                          ; CX = ls bytes
+    mov bx, [es:si+28]
+    xchg bl, bh
+    shl bx, 1
+    jnc .llok
+    mov bx, 0xFFFF
+.llok:                          ; BX = ll bytes
     ; loop fix-ups on elen
-    mov ax, [mp_t4]             ; ls
-    mov bx, [mp_t5]             ; ll
-    mov cx, [mp_t6]             ; elen
-    cmp ax, cx
+    cmp cx, bp
     jae .oneshot                ; loop starts past the data: no loop
+    mov ax, cx
     add ax, bx                  ; ls + ll (17-bit possible)
     jc .trim
-    cmp ax, cx
+    cmp ax, bp
     jbe .lfit
 .trim:
-    mov bx, cx
-    sub bx, [mp_t4]             ; ll = elen - ls
-    mov ax, cx                  ; loop end = elen
+    mov bx, bp
+    sub bx, cx                  ; ll = elen - ls
+    mov ax, bp                  ; loop end = elen
 .lfit:
     or bx, bx
     jz .oneshot                 ; zero loop length: one-shot over full elen
@@ -380,14 +386,13 @@ mp_load:
                                 ; 1-word loop at a nonzero start DOES loop
     mov [di+MS_PLEN], ax        ; play length = loop end
     mov [di+MS_LLEN], bx
-    mov ax, [mp_t4]
-    mov [di+MS_LSTART], ax
-    jmp .snext
+    mov [di+MS_LSTART], cx
+    jmp short .snext
 .oneshot:
-    mov ax, [mp_t6]
-    mov [di+MS_PLEN], ax
-    mov word [di+MS_LLEN], 0
-    mov word [di+MS_LSTART], 0
+    mov [di+MS_PLEN], bp
+    xor ax, ax
+    mov [di+MS_LLEN], ax
+    mov [di+MS_LSTART], ax
 .snext:
     add si, 30
     add di, MS_SZ
@@ -401,8 +406,7 @@ mp_load:
                                 ; mode's format (SPEC.md 45.9)
     ; -- done ----------------------------------------------------------------
     mov word [mp_songpos], 0    ; ...and mp_row, the byte after it
-    mov bx, [mp_orders]         ; BL = orders[0]
-    mov al, bl
+    mov al, [mp_orders]
     mov [mp_pattern], al
     mov byte [mp_loaded], 1
     clc
@@ -419,8 +423,8 @@ mp_load:
 ; -----------------------------------------------------------------------------
 mp_vtbuild:
     mov di, mp_voltab
-    mov byte [mp_tvol], 1 << TRK_VSH    ; row 1: silence is not stored
-    mov cl, 6
+    mov ch, 1 << TRK_VSH        ; CH = the row's volume; row 1: silence is
+    mov cl, 6                   ; not stored
     cmp byte [mp_xt], 0
     je .vt_v
     mov cl, 8
@@ -428,18 +432,18 @@ mp_vtbuild:
     xor bx, bx                  ; BL = source byte 0..255
 .vt_b:
     mov al, bl
-    imul byte [mp_tvol]         ; AX = (int8)b * vol
+    imul ch                     ; AX = (int8)b * vol
     sar ax, cl
     mov [di], al
     inc di
     inc bl
     jnz .vt_b
 %if TRK_VSH
-    add byte [mp_tvol], 1 << TRK_VSH    ; one row per 1 << TRK_VSH volumes
+    add ch, 1 << TRK_VSH        ; one row per 1 << TRK_VSH volumes
 %else
-    inc byte [mp_tvol]
+    inc ch
 %endif
-    cmp byte [mp_tvol], 65
+    cmp ch, 65
     jb .vt_v
     ret
 
@@ -633,11 +637,7 @@ mp_timeat:
     jb .pok
     xor ax, ax
 .pok:
-    mov cl, 6
-    shl ax, cl
-    add ax, 67
-    add ax, [mp_blobseg]
-    mov es, ax
+    call mp_patseg
     pop bx
     mov al, bh
     mov bh, 0FFh                ; no break seen in this pattern yet
@@ -646,7 +646,7 @@ mp_timeat:
     xor ah, ah
     mov cl, 4
     shl ax, cl
-    add ax, 12
+    add ax, [mp_pbase]
     mov di, ax                  ; ES:DI = the row's first cell
     mov ch, 4
 .cell:
@@ -942,12 +942,10 @@ mp_cellptr:
 
 ; mp_cellp - the address arithmetic, unchecked (both callers have checked)
 mp_cellp:
-    mov bx, di
-    mov cl, 6
-    shl bx, cl                  ; pattern * 64 paragraphs
-    add bx, 67
-    add bx, [mp_blobseg]
-    mov es, bx
+    push ax
+    mov ax, di
+    call mp_patseg
+    pop ax
     mov bl, al
     xor bh, bh
     mov cl, 4
@@ -958,8 +956,39 @@ mp_cellp:
     shl bx, 1
     shl bx, 1                   ; ch * 4
     add si, bx
-    add si, 12
+    add si, [mp_pbase]
     ret
+
+; mp_patseg - pattern AX's segment, and the offset of its first cell
+; (KERN-MEGA-PLAN 14.13). A blob that is conventional - every machine but
+; kern_mega, and kern_mega's blobs over 64KB - is whole 128-byte granules
+; from the claim (MP_PSEG / MP_POFF); a blob that came back a SELECTOR (bit 2,
+; the LDT) is 62KB or less (trk_claimsel) and is the claim itself, the cell at
+; its absolute 1084 + 1024p.
+; in:  AX = a pattern number already checked against [mp_npat]
+; out: ES = its segment, [mp_pbase] = row 0 channel 0's offset in it
+; clobbers AX and CL
+mp_patseg:
+%ifdef PKG_MEGA                 ; (a selector: the kern_mega arm's, 14.66)
+    test byte [mp_blobseg], 4
+    jnz .flat
+%endif
+    mov cl, 6
+    shl ax, cl                  ; pattern * 64 paragraphs
+    add ax, MP_PSEG
+    add ax, [mp_blobseg]
+    mov es, ax
+    mov word [mp_pbase], MP_POFF
+    ret
+%ifdef PKG_MEGA
+.flat:
+    mov cl, 10
+    shl ax, cl                  ; pattern * 1024 bytes
+    add ax, MP_PSEG * 16 + MP_POFF
+    mov [mp_pbase], ax
+    mov es, [mp_blobseg]
+    ret
+%endif
 
 ; =============================================================================
 ; mp_cell2txt - in AL = row 0..63, AH = channel 0..3, DI = pattern number;
@@ -1670,11 +1699,7 @@ mp_readrow:
     xor ax, ax                  ; The count is a word, so this compare is one
 .pok:                           ; too - a byte compare against P = 256 reads
                                 ; as 0 and forces EVERY pattern to 0
-    mov cl, 6
-    shl ax, cl
-    add ax, 67
-    add ax, [mp_blobseg]
-    mov es, ax
+    call mp_patseg
     mov word [mp_crec], mp_chans
     mov byte [mp_curc], 0
 .ch:
@@ -1690,7 +1715,7 @@ mp_readrow:
     shl ax, 1
     shl ax, 1
     add si, ax
-    add si, 12
+    add si, [mp_pbase]
     ; decode into mp_wper / mp_wsmp / MP_EFF / MP_PARM
     mov al, [es:si]             ; b0
     mov ah, [es:si+1]
@@ -2500,7 +2525,6 @@ mpe_song:   db 'Bad song data', 0
   %error "mp_tick..mp_posjmp must be six bytes in a row: mp_start and mp_setpos zero them in words"
 %endif
     TRKB mp_curc                    ; channel loop counter
-    TRKB mp_tvol                    ; volume-table build counter
     TRKB mp_xt                      ; XT mode (SPEC.md 45.9): 0 = default
     TRKB mp_first                   ; XT chunk: next audible channel stores
     TRKW mp_spt                     ; samples per tick
@@ -2509,6 +2533,7 @@ mpe_song:   db 'Bad song data', 0
     TRKW mp_outp                    ; mp_gen output cursor
     TRKW mp_chunk                   ; current mix chunk, samples
     TRKW mp_crec                    ; current channel record
+    TRKW mp_pbase                   ; mp_patseg: the pattern's first cell
     TRKW mp_climit                  ; mixer scratch: position limit
     TRKW mp_cloopl                  ;   loop length
     TRKW mp_cstepi                  ;   step int
@@ -2518,12 +2543,6 @@ mpe_song:   db 'Bad song data', 0
     TRKB mp_wsmp                    ;   sample
     TRKW mp_run_lo                  ; loader: running 32-bit sample offset
     TRKW mp_run_hi
-    TRKW mp_t1                      ; loader scratch
-    TRKW mp_t2
-    TRKW mp_t3
-    TRKW mp_t4
-    TRKW mp_t5
-    TRKW mp_t6
     TRKBUF mp_orders, 128           ; the order table, copied out of the blob
     TRKBUF mp_smptab, MS_SZ * 31    ; the validated sample table
     TRKBUF mp_chans, MP_CHSZ * 4    ; the four channel records

@@ -1,0 +1,15 @@
+# tests/megagrid.txt - segments OS88_HIGH packages build OFF kern_mega's
+# 8-paragraph grid (tests/unit/t_megagrid.py; docs/plans/KERN-MEGA-PLAN.md
+# 10.3 items 59 and 63, 14.39)
+#
+#   <sites> <path>  # <reason>
+#
+# Under kern_mega's protected mode only a multiple of 8 paragraphs is an
+# identity selector, so a segment built by one-paragraph arithmetic faults or
+# loads an LDT alias of other memory. A file here may not GROW, and a count
+# that falls must be lowered in the same commit. The SDK rule is apps/
+# os88api.inc's: normalise to EIGHT paragraphs (`and si, 127`), never one.
+
+# --- kern_mega's DOS.O88 says OS88_HIGH (KERN-MEGA-PLAN 14.44), which brings
+#     apps/dos/ into scope: its five sites are NOT in the part that says it
+5 apps/dos/dos.asm  # dos_mcb_split, dos_mcb_join and dos_mcb_resize - the DOS arena's MCB chain, inside %ifndef DOS_EXTCORE: the program part (dosp.bin) is assembled -DDOS_EXTCORE and does not contain it, and the core that does (doscore.asm, part 1) runs it on the DOS program's arena under kern_dos in REAL mode, after the trip has left protected mode - never on a segment of its own

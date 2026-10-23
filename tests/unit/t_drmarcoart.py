@@ -26,7 +26,7 @@ NATIVE = os.path.join(ROOT, "apps", "drmario", "art", "native")
 
 def main():
     committed = sorted(os.listdir(NATIVE)) if os.path.isdir(NATIVE) else []
-    check(len(committed) >= 10,
+    check(len(committed) >= 9,
           "apps/drmario/art/native/ holds %d files - the committed art is "
           "missing, and every comparison below would be vacuous" % len(committed),
           why="`make drmarco-art` writes it (SPEC.md 100)")

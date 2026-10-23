@@ -102,6 +102,27 @@ start:
     int 0x21                    ; real DOS program does, so it costs the gate
                                 ; nothing in realism
 
+%ifdef HMAPOKE
+    ; --- 5a. ONE WORD OF `.cold`, FLIPPED (SPEC.md 96.49.9) -----------------
+    ; tests/hmadosret.py's negative control: a kern_big whose `.cold` is in
+    ; the HMA, and a program that writes there before it exits - what an
+    ; int 15h AH=87h user does to the first megabyte up. The live resume
+    ; must refuse it and come home by int 19h, where XMEM.DRV installs `.cold`
+    ; afresh. ONLY UNDER kern_dos: the windowed run is inside os8088, whose
+    ; `.cold` this IS, so the int 08h vector decides - the scheduler's at
+    ; 0060 while windowed, the ROM's once kern_dos has the machine (the
+    ; handoff puts it back and kern_dos takes nothing at 08h).
+    push ds
+    xor ax, ax
+    mov ds, ax
+    cmp word [0x0022], 0xC000
+    jb .nopoke
+    dec ax                      ; DS = FFFF: the HMA, A20 as the kernel left it
+    mov ds, ax
+    not word [HMAPOKE]
+.nopoke:
+    pop ds
+%endif
 %ifdef MODESET
     ; --- 5b. A BIOS MODE SET ON THE WAY OUT (SPEC.md 96.49.6) --------------
     ; The BDA's video mode byte at 0040:0049 belongs to the DOS PROGRAM, and

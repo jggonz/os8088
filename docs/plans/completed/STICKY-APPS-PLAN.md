@@ -125,7 +125,7 @@ Zero-kernel registers only when the DAT says `OPEN = 0`. Here is the failure seq
 | Content click on a background window | **Confirmed**. It is raised and the click is swallowed (`ui.inc:456-462`). |
 | Hibernate question posted before ui_task | **Confirmed**. `hb_probe_x` posts `UI_RBQ_ASK` (`hiber.inc:341`) and step 0 of ui_task spends it (`ui.inc:85-98`). `hiber.inc:420` can also post `UI_RBQ_DOSRUN`. "`[ui_rebootq]` ≠ 0 → stand down" covers both. |
 | Discard runs with the gfx lock **held** | **Confirmed** (`hiber.inc:1113-1150`, `hbm_act`). So user-first is right: a Discard re-launch has to be **posted** (`CMD_STIK`), not called. |
-| Section numbering | §106 is the highest used top-level section and §104 was never used. **Take §107** (renumbered §110 when main took 107 first - the hazard the renumber check below names). No section registry exists under docs/. |
+| Section numbering | §106 is the highest used top-level section and section 104 was never used. **Take §107** (renumbered §110 when main took 107 first - the hazard the renumber check below names). No section registry exists under docs/. |
 | Rung headroom [measured, `tools/kernsize.py`] | kern_big image rung **200 B left**, cold rung **462 left**, low 34, footprint 59 steps spare. kern_small was not measured (no `build/smallk` in this worktree). |
 | `OSAPI_WM_OWNSEG` (0x03BF) | **Exists**. It answers DX = the segment owning window slot AL, so a package-side singleton is possible. |
 | `TESTIMG` | **Exists** (`Makefile:13667`). `make test TESTIMG=<img>` boots a chosen A: disk. That is what the screenshots use. |

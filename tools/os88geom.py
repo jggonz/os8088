@@ -139,7 +139,7 @@ _MIRROR = {
     # kernel with the OTHER arm's %ifdef folded out rather than taking the
     # first `equ` in the file - which is what it did, and which made the guard
     # agree with itself while every kern_small script decoded garbage.
-    "WIN_SIZE": ("kernel/wm.inc", {"big": 72, "small": 65}),
+    "WIN_SIZE": ("kernel/wm.inc", {"big": 74, "small": 65}),
     "MAX_WIN": ("kernel/wm.inc", {"big": 12, "small": 6}),
     # kernel/driver.inc - a driver row (SPEC.md 51.2). DRVR_SEG is "is it
     # loaded", which is the only way a host-side script can SEE a driver
@@ -207,6 +207,7 @@ _MIRROR = {
     "I_WIN": ("kernel/instance.inc", 4),
     "I_SPTR": ("kernel/instance.inc", 6),
     "I_SIZE": ("kernel/instance.inc", 8),
+    "KIND_PKG": ("kernel/instance.inc", 0x80),
     "I_ICON": ("kernel/instance.inc", 10),
     "I_NAME": ("kernel/instance.inc", 12),
     "I_CYC": ("kernel/instance.inc", 28),
@@ -246,6 +247,7 @@ _MIRROR = {
     "DVK_BIOS": ("kernel/disk.inc", 0),
     "DVK_DRV": ("kernel/disk.inc", 1),
     "DVK_FREE": ("kernel/disk.inc", 0xFF),
+    "DRVC_IMG": ("kernel/disk.inc", {"big": 0x41}),  # a mounted image's row (18.101): OS88_IMG, big only
     # kernel/files.inc - a Disk window's list (SPEC.md 22)
     "FM_ROW_Y0": ("kernel/files.inc", 22),
     "FM_ROW_H": ("kernel/files.inc", 16),
@@ -377,6 +379,11 @@ _MIRROR = {
     "VID_CTX_CW": ("kernel/vidsel.inc", {"big": 14}),
     "VID_CTX_CH": ("kernel/vidsel.inc", {"big": 16}),
     "VID_NDISP_MAX": ("kernel/vidsel.inc", {"big": 2}),
+    # kernel/viddet.inc - the packed display's kind (SPEC.md 120), kern_big
+    # only: VESA.DRV's renderer is assembled out of kern_small, so the enum
+    # stops at EGA there. The three VESA rows (tests/vesa.py, vesa8.py,
+    # vesacp.py) wait on [vid_kind] reaching it
+    "VID_VESA": ("kernel/viddet.inc", {"big": 4}),
 
     # --- found by the unmirrored() audit, not by anyone noticing -------------
     #
@@ -394,7 +401,7 @@ _MIRROR = {
     # which is one of the five host tools that WRITE SHIPPED BYTES, so a drift
     # there does not fail a test - it stamps a package against the wrong
     # ceiling.
-    "APP_MAX_SIZE": ("kernel/kernel.asm", 61440),
+    "APP_MAX_SIZE": ("kernel/kernel.asm", 65024),
     "WCR_SZ": ("kernel/kernel.asm", 8),
     "CP_RX": ("kernel/ctrl.inc", 96),
     "CP_IDRV": ("kernel/ctrl.inc", {"big": 2}),   # no Drivers page on small
@@ -433,7 +440,20 @@ _MIRROR = {
     # which a gate writes to [ui_rebootq] to reach the last instruction before
     # int 19h (tests/fddpark.py, tests/usbmouse.py's detach leg)
     "UI_RBQ_NOFLUSH": ("kernel/ui.inc", 2),
+    # kernel/kernel.asm - where a DRIVER's offsets start when it runs from the
+    # HMA (SPEC.md 2.10.8): a drv_tab row naming a segment at or above
+    # DRV_HMA_SEG has its header at SEG:DRV_HMA_ORG, never SEG:0. A harness
+    # that reads a driver's variables wants drv_base() below, not seg << 4
+    "DRV_HMA_ORG": ("kernel/kernel.asm", 0xC000),
+    "DRV_HMA_SEG": ("kernel/kernel.asm", 0xF000),
 }
+
+
+def drv_base(seg):
+    """The linear address a driver's org-0 offsets are relative to, for the
+    segment its drv_tab row names: SEG:0 in the heap, SEG:DRV_HMA_ORG in the
+    HMA (SPEC.md 2.10.8). Add a symbol's offset from the driver's map."""
+    return (seg << 4) + (DRV_HMA_ORG if seg >= DRV_HMA_SEG else 0)
 
 def _armval(name):
     """This arm's value for a mirrored constant, or None if it has none."""

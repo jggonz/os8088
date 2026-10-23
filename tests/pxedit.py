@@ -126,7 +126,7 @@ def host_leg():
             p.w16("px_edseg", 0)
             ds = seg
         else:
-            ds = p.claim(dw * dh + 2048 + 16)
+            ds = p.claim(dw * dh + 2048 + 128)   # (the tail on the 8-paragraph grid)
             p.w16("px_edseg", ds)
         ax, cf = p.decode(EV[name])
         if cf:
@@ -204,7 +204,7 @@ def guest_leg(machine):
     from pxsyms import pkg_syms, instance, u16
     syms, image = pkg_syms()
     DISK = "build/pxedit.img"
-    M.scratch_disk(DISK, "build/pixel.o88", "build/PIXEL.GFX",
+    M.scratch_disk(DISK, "build/pixel.o88",
                    "apps/pixel/samples/CITY.PCX")
     city = open("apps/pixel/samples/CITY.PCX", "rb").read()
     q = P.decode(city, "PCX")

@@ -1092,8 +1092,9 @@ static void a2_status(void)
         a2_st_put(12, "PG2");               /* `PG2` AND NOT `PAGE2`, AND IT
                                              * IS ARITHMETIC (section 9): the
                                              * message area starts at cell 16
-                                             * because `Unable to load
-                                             * APPLE2.OVL.` is 26 glyphs and
+                                             * because the widest message
+                                             * (`Cannot read the clipboard.`)
+                                             * is 26 glyphs and
                                              * the row is 42, so the mode
                                              * fields have cells 0-15. HIRES
                                              * takes 0-4 and MIXED 6-10, which
@@ -1106,8 +1107,8 @@ static void a2_status(void)
      *
      * IT SITS AT THE RIGHT-HAND END AND YIELDS TO A MESSAGE. The row is 42
      * cells; the mode fields hold 0-15 and the message area starts at 16
-     * because `Unable to load APPLE2.OVL.` is 26 glyphs and 16 + 26 = 42
-     * exactly. So there is no column a message and a widget can both have,
+     * because the widest message, `Cannot read the clipboard.`, is 26 glyphs
+     * and 16 + 26 = 42 exactly. So there is no column a message and a widget can both have,
      * and the choice is which one loses: a message is transient and a speed
      * figure is not news, so the figure is drawn only when the message area
      * is clear. That also keeps the message-length gate's cap at 26 rather

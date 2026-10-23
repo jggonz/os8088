@@ -159,6 +159,10 @@ The `%define`s: `CC_HAS_ONKEY`, `CC_HAS_ONCLICK`, `CC_HAS_ONMOUSEUP`,
 install it with `os88_wm_onwake()`, post it with `os88_wm_wake()` from any
 context, and it runs on the UI task where the file slots are legal, taking the
 lock itself for whatever it draws; `apps/runcpm` is the worked example),
+`CC_HAS_ONWHEEL` (§13.18: `os88_onwheel(notches, win)` - the mouse wheel,
+signed notches positive toward the user, summed since the last UI pass;
+install it with `os88_wm_onwheel()` and scroll `notches * OS88_WHEEL_STEPS`
+lines in one move. `apps/loom` and `apps/weave` are the worked examples),
 `CC_HAS_OVL` (the overlay, below), `CC_HAS_PARTS` (embedded parts, §20.12),
 `CC_STACK_CLASS` (the worker's stack class, an `OS88_STACK_*` from the SDK,
 §8.7), plus `CC_ICON` to name an embedded icon file and `CC_ASSOC` to name an
@@ -183,8 +187,10 @@ $(eval $(call CC_PACKAGE,myapp,myapp))
 ```
 
 gives you `build/myapp.raw.asm`, `build/myapp.gen.asm`, `build/myapp.bin` and
-`build/myapp.o88`. A third argument names an overlay file (`CWORD.OVL`, below)
-and a fourth lists embedded part files (§20.12). Add a disk rule and a phony
+`build/myapp.o88`. A third argument names an overlay file (`CWORD.OVL`, below),
+a fourth lists embedded part files (§20.12), and a fifth, `part`, carries the
+overlay INSIDE the package as its last part instead of as a file beside it
+(§73.14.2, below). Add a disk rule and a phony
 target beside the `cword` ones.
 
 If your `.c` `#include`s other files, or your shim `%include`s an `.inc`,
@@ -206,7 +212,7 @@ which reads exactly like a change that did nothing.
 make cc-smoke                          the SDK's smoke test  -> build/ccsmoke.img
 make chello                            the capability gate   -> build/chello.img, chello360.img
 make covl                              the overlay gate      -> build/covl.img, covl360.img
-make cword                             the application       -> build/cword.o88 + CWORD.OVL
+make cword                             the application       -> build/cword.o88 (overlay inside)
 make cworddisk                         ...and its floppy in all four geometries
 make test TESTAPPS=build/cword.img     boot it in QEMU, B: = that floppy
 make 386-c-word                        boot it on a period 386 in 86Box
@@ -295,7 +301,7 @@ void draw(void) { static char tmp[80]; f(tmp); } /* the fix                 */
   that triggers a paint of your second window shares it, and so do your UI
   task and your worker, which pre-empt each other. Own the aliasing
   deliberately or do not share the buffer between the two contexts.
-- **It is spent against the 60KB ceiling** rather than against the stack.
+- **It is spent against the 63.5KB ceiling** rather than against the stack.
 
 ### Rule 2 — no string instructions; ES belongs to the kernel
 
@@ -501,13 +507,13 @@ push-immediate sites, so the first row is not something to expect.
 
 ## What it costs: size
 
-`APP_MAX_SIZE` is **0xF000 = 61,440 bytes** and it bounds the image, the bss
-**and their sum**. `ld_check_hdr` enforces all three on every load and
+`APP_MAX_SIZE` is **0xFE00 = 65,024 bytes** (SPEC.md 20.1.1; it was 61,440)
+and it bounds the image, the bss **and their sum**. `ld_check_hdr` enforces all three on every load and
 `os88pkg.py` on every build.
 
 **A C package meets that ceiling two to four times sooner than an assembly
 one.** Read it as a design input: **a C package is a small package**, and a
-feature that wants the whole 60KB is a feature to write in assembly.
+feature that wants the whole 63.5KB is a feature to write in assembly.
 
 What follows in practice:
 
@@ -534,8 +540,9 @@ What follows in practice:
 os88pkg: 'CWORD' entry=+0x0020 image=36326 bss=24533 icon=no assoc=0 -> build/cword.o88
 ```
 
-`cword` is 60,859 of 61,440 — **99%, with 581 spare** — and another 18,565
-bytes of its code are in `CWORD.OVL`. That is what the next section is about.
+`cword` was 60,859 of 61,440 — **99%, with 581 spare** — when this was first
+written, with another 18,565 bytes of its code in its overlay (55,076 and
+14,106 today, §73.12). That is what the next section is about.
 
 **Track this from your first commit**, not at the end.
 
@@ -594,6 +601,17 @@ as the `.OVL`. Put the split where the FREQUENCY divides rather than where the
 size does: everything a keystroke touches stays resident, and everything a
 menu command touches can go out. `tests/covl` (`make covl`) is the capability
 gate and the smallest complete example.
+
+**Ship the module INSIDE the package, not beside it** (SPEC.md 73.14.2):
+`%define CC_OVL_PART` in the shim and `part` as `CC_PACKAGE`'s fifth argument
+(`$(eval $(call CC_PACKAGE,cword,cword,CWORD.OVL,,part))`) make the module the
+last row of the package's parts table, so the disk carries one file and a copy
+cannot separate them. It is read at LAUNCH by default, which is right for a
+module nearly every session uses (CWORD's); `%define CC_OVL_LAZY` fetches it
+on the first call instead, from the folder the package was launched from
+(COVL's). A package with a parts table of its own adds `CC_OVL_ROW` as that
+table's LAST row. Without `CC_OVL_PART` nothing changes and the `.OVL` ships
+beside the package, as it always did.
 
 ---
 

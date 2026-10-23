@@ -53,6 +53,18 @@ PZ_DSYM     equ 0xB280              ; 32 words
 PZ_LENS     equ 0xB2C0              ; 320 lengths, then the code-length
 PZ_CLL      equ PZ_LENS + 320       ; code's 19
 PZ_OFFS     equ 0xB420              ; 16 words: a build's offsets
+PZ_VBIAS    equ 0xB414              ; INFLATE'S OWN WORDS, in the 13 bytes
+PZ_VFINAL   equ 0xB416              ; before PZ_OFFS: [pz_bias] and
+                                    ; [pz_final], read and written with DS
+                                    ; = the scratch - never through CS,
+                                    ; which takes no store on kern_mega
+%if PZ_VFINAL >= PZ_LENS + 320 + 19 && PZ_VFINAL < PZ_OFFS
+%else
+  %error "inflate's words are not in the gap before PZ_OFFS"
+%endif
+%if PZ_VBIAS < PZ_LENS + 320 + 19
+  %error "inflate's words are not in the gap before PZ_OFFS"
+%endif
 PZ_CB       equ 0xB440              ; the CLEAN input: the image data's
 PZ_CBSZ     equ 1024                ; bytes, de-chunked (pz_cfill)...
 PZ_CBGRD    equ 64                  ; ...and zeros past the data's end
@@ -104,7 +116,7 @@ pz_head:
     call pz_dimok
     jc .dims
     mov [di + PXK_SW], ax
-    mov [cs:pz_w], ax
+    PXSW mov [es:pz_w], ax
     mov ax, [es:22]
     xchg al, ah
     cmp word [es:20], 0
@@ -112,11 +124,13 @@ pz_head:
     call pz_dimok
     jc .dims
     mov [di + PXK_SH], ax
-    mov [cs:pz_h], ax
+    PXSW mov [es:pz_h], ax
     mov al, [es:24]                 ; the depth...
     mov ah, [es:25]                 ; ...and the colour type
-    mov [cs:pz_depth], al
-    mov [cs:pz_ct], ah
+    PXSWON
+    mov [es:pz_depth], al
+    mov [es:pz_ct], ah
+    PXSWOFF
     mov bx, pz_types
 .t:
     cmp byte [cs:bx], 0xFF
@@ -130,7 +144,7 @@ pz_head:
     jmp short .t
 .tok:
     mov cl, [cs:bx + 2]             ; the channels
-    mov [cs:pz_ch], cl
+    PXSW mov [es:pz_ch], cl
     mov ch, [cs:bx + 3]             ; the row format
     mov [di + PXK_RF], ch
     mov ax, [es:26]                 ; compression and filter method 0...
@@ -139,13 +153,13 @@ pz_head:
     mov al, [es:28]                 ; ...and interlace 0 or 1
     cmp al, 1
     ja .pack
-    mov [cs:pz_il], al
+    PXSW mov [es:pz_il], al
     mov ah, PK_DEFL
     add ah, al
     mov [di + PXK_PACK], ah
     mov al, [cs:pz_depth]           ; bits a pixel
     mul cl
-    mov [cs:pz_bitsp], al
+    PXSW mov [es:pz_bitsp], al
     mov [di + PXK_BITS], al
     shr al, 1                       ; the filter's byte step: max(1, bits/8)
     shr al, 1
@@ -153,11 +167,11 @@ pz_head:
     jnz .bpp
     inc al
 .bpp:
-    mov [cs:pz_bpp], al
+    PXSW mov [es:pz_bpp], al
     mov ax, [cs:pz_w]
     call pz_rowbytes                ; AX = a row's bytes, CF = too many
     jc .big
-    mov [cs:pz_rowb], ax
+    PXSW mov [es:pz_rowb], ax
     shl ax, 1                       ; the scratch: the window, its tables,
     add ax, 16 + 15                 ; and two rows with eight zero bytes
     rcr ax, 1                       ; before each (a carry is bit 16)
@@ -254,24 +268,27 @@ pz_types:
 pz_decode:
     push bp
     push ds
-    mov [cs:pz_ctx], di
-    mov [cs:pz_pkg], ds
+    mov es, [cs:PXP_SELF]           ; ES = our own words (pxpart.inc rule 6)
+    mov [es:pz_ctx], di
+    mov ax, ds
+    mov [es:pz_pkg], ax
     mov al, [di + PXK_SCL]
-    mov [cs:pz_scl], al
+    mov [es:pz_scl], al
     mov ax, [di + PXK_RSEG]
-    mov [cs:pz_rseg], ax
+    mov [es:pz_rseg], ax
     mov ax, [di + PXK_DSEG]
-    mov [cs:pz_wseg], ax
+    mov [es:pz_wseg], ax
     add ax, PZ_WPARA
-    mov [cs:pz_xseg], ax
+    mov [es:pz_xseg], ax
     mov ax, [di + PXK_SPAL]
-    mov [cs:pz_spal], ax
-    xor bx, bx                      ; the services, as far pointers
-    xor si, si
-.svc:
+    mov [es:pz_spal], ax
+    mov dx, [cs:PXP_PKG]            ; the services, as far pointers through
+    xor bx, bx                      ; the package's CODE selector: through
+    xor si, si                      ; its data segment each is a #GP a row
+.svc:                               ; on kern_mega
     mov ax, [di + PXK_SVC + bx]
-    mov [cs:pz_svc + si], ax
-    mov [cs:pz_svc + si + 2], ds
+    mov [es:pz_svc + si], ax
+    mov [es:pz_svc + si + 2], dx
     add si, 4
     inc bx
     inc bx
@@ -279,16 +296,16 @@ pz_decode:
     jb .svc
     cld
     xor ax, ax
-    mov [cs:pz_wend], ax
-    mov [cs:pz_dry], al
-    mov [cs:pz_pad], al
-    mov [cs:pz_badf], al
-    mov [cs:pz_trn], ax
-    mov [cs:pz_tkind], al
-    mov [cs:pz_hplte], al
-    mov [cs:pz_tabk], al
+    mov [es:pz_wend], ax
+    mov [es:pz_dry], al
+    mov [es:pz_pad], al
+    mov [es:pz_badf], al
+    mov [es:pz_trn], ax
+    mov [es:pz_tkind], al
+    mov [es:pz_hplte], al
+    mov [es:pz_tabk], al
     xor si, si                      ; DS:SI = no window yet: the first read
-    mov [cs:pz_sp], sp              ; takes one
+    mov [es:pz_sp], sp              ; takes one
     call pz_body
     jmp short pz_ret
 
@@ -370,7 +387,7 @@ pz_body:
     mov cx, 8
 .h:
     call pz_rawb
-    mov [cs:di], al
+    PXSW mov [es:di], al
     inc di
     loop .h
     mov ax, [cs:pz_chk]             ; the length, big-endian: DX:AX
@@ -420,23 +437,30 @@ pz_body:
     mov ax, PXD_DATA
     jmp pz_fail
 .idat:
-    mov [cs:pz_left], ax            ; the image data starts here
-    mov [cs:pz_left + 2], dx
+    PXSWON
+    mov [es:pz_left], ax        ; the image data starts here
+    mov [es:pz_left + 2], dx
+    PXSWOFF
     call pz_setpal                  ; palette and transparency, K_PAL
     call pz_plan                    ; the passes, the bytes they need
     ; --- inflate's registers ---------------------------------------------
-    mov [cs:pz_ids], ds             ; the ring's position, for pz_cfill
-    mov [cs:pz_isi], si
+    push ax
+    mov ax, ds                      ; via AX, never `, ds` (pxpart.inc)
+    PXSW mov [es:pz_ids], ax         ; the ring's position, for pz_cfill
+    pop ax
+    PXSW mov [es:pz_isi], si
     mov ax, [cs:pz_wseg]
     mov ds, ax                      ; DS = ES = the scratch, for good
     mov es, ax
     mov si, PZ_CB                   ; the bit position: an empty buffer,
-    mov [cs:pz_cend], si            ; its limit there (the first read
+    PXSW mov [es:pz_cend], si        ; its limit there (the first read
     xor cl, cl                      ; fills it)
     mov dx, si
     xor di, di
-    mov [cs:pz_rd], di
-    mov [cs:pz_hav], di
+    PXSWON
+    mov [es:pz_rd], di
+    mov [es:pz_hav], di
+    PXSWOFF
     call pz_budget                  ; BP
     mov al, 8                       ; zlib: CM 8, CINFO <= 7, the check,
     call pz_bits                    ; no dictionary
@@ -483,8 +507,10 @@ pz_plte:
     or dx, dx
     pop cx                          ; CX = the bytes
     jnz .bad
-    mov [cs:pz_npal], ax
-    mov byte [cs:pz_hplte], 1
+    PXSWON
+    mov [es:pz_npal], ax
+    mov byte [es:pz_hplte], 1
+    PXSWOFF
     push es
     push di
     mov es, [cs:pz_pkg]
@@ -508,13 +534,13 @@ pz_plte:
 
 ; pz_trns - tRNS of AX (<= 256) bytes into [pz_trns]
 pz_trns:
-    mov [cs:pz_trn], ax
+    PXSW mov [es:pz_trn], ax
     mov cx, ax
     xor di, di
     jcxz .out
 .b:
     call pz_rawb
-    mov [cs:pz_trnb + di], al
+    PXSW mov [es:pz_trnb + di], al
     inc di
     loop .b
 .out:
@@ -551,7 +577,11 @@ pz_setpal:
     jbe .n
     mov cx, ax
 .n:
-    jcxz .pal
+    jcxz .far572
+    jmp short .far572c
+.far572:
+    jmp .pal
+.far572c:
     mov di, [cs:pz_spal]
     xor bx, bx
 .e:
@@ -577,8 +607,10 @@ pz_setpal:
     jne .pal
     mov ax, [cs:pz_trnb]
     xchg al, ah
-    mov [cs:pz_tgrey], ax
-    mov byte [cs:pz_tkind], 1
+    PXSWON
+    mov [es:pz_tgrey], ax
+    mov byte [es:pz_tkind], 1
+    PXSWOFF
     jmp short .pal
 .rgb:
     cmp byte [cs:pz_ct], 2
@@ -589,12 +621,12 @@ pz_setpal:
 .k:
     mov ax, [cs:pz_trnb + bx]
     xchg al, ah
-    mov [cs:pz_trgb + bx], ax
+    PXSW mov [es:pz_trgb + bx], ax
     inc bx
     inc bx
     cmp bx, 6
     jb .k
-    mov byte [cs:pz_tkind], 2
+    PXSW mov byte [es:pz_tkind], 2
 .pal:
     pop di
     pop es
@@ -646,14 +678,16 @@ pz_blend:
 pz_plan:
     push es
     xor ax, ax
-    mov [cs:pz_remain], ax
-    mov [cs:pz_remain + 2], ax
-    mov [cs:pz_ptot], ax
-    mov [cs:pz_rdone], ax
-    mov byte [cs:pz_pass], 7        ; a plain picture: the table's eighth row
+    PXSWON
+    mov [es:pz_remain], ax
+    mov [es:pz_remain + 2], ax
+    mov [es:pz_ptot], ax
+    mov [es:pz_rdone], ax
+    mov byte [es:pz_pass], 7    ; a plain picture: the table's eighth row
+    PXSWOFF
     cmp byte [cs:pz_il], 0
     je .one
-    mov byte [cs:pz_pass], 0
+    PXSW mov byte [es:pz_pass], 0
     mov al, [cs:pz_scl]             ; Adam7 below 1/1: its odd rows, 2^(s-1)
     or al, al                       ; a block
     jz .one
@@ -666,24 +700,26 @@ pz_plan:
     mov [es:bx + PXK_RBLK], al
 .one:
     mov al, [cs:pz_pass]
-    mov [cs:pz_p0], al
+    PXSW mov [es:pz_p0], al
 .p:
     call pz_pdims                   ; this pass's pw, ph, prb
     mov ax, [cs:pz_prb]
     inc ax
     mul word [cs:pz_ph]
-    add [cs:pz_remain], ax
-    adc [cs:pz_remain + 2], dx
+    PXSWON
+    add [es:pz_remain], ax
+    adc [es:pz_remain + 2], dx
+    PXSWOFF
     mov ax, [cs:pz_ph]
-    add [cs:pz_ptot], ax
+    PXSW add [es:pz_ptot], ax
     cmp byte [cs:pz_pass], 7
     jae .done
-    inc byte [cs:pz_pass]
+    PXSW inc byte [es:pz_pass]
     cmp byte [cs:pz_pass], 7
     jb .p
 .done:
     mov al, [cs:pz_p0]              ; ...and back to the first
-    mov [cs:pz_pass], al
+    PXSW mov [es:pz_pass], al
     call pz_pstart
     pop es
     ret
@@ -700,30 +736,30 @@ pz_pdims:
     shl bx, 1
     mov al, [cs:pz_a7 + bx]
     xor ah, ah
-    mov [cs:pz_x0], ax
+    PXSW mov [es:pz_x0], ax
     mov al, [cs:pz_a7 + bx + 1]
-    mov [cs:pz_y0], ax
+    PXSW mov [es:pz_y0], ax
     mov al, [cs:pz_a7 + bx + 2]
-    mov [cs:pz_dxs], al
+    PXSW mov [es:pz_dxs], al
     mov al, [cs:pz_a7 + bx + 3]
-    mov [cs:pz_dys], al
+    PXSW mov [es:pz_dys], al
     mov ax, [cs:pz_w]               ; pw = (w - x0 + dx - 1) >> dxs
     mov bx, [cs:pz_x0]
     mov cl, [cs:pz_dxs]
     call pz_pcount
-    mov [cs:pz_pw], ax
+    PXSW mov [es:pz_pw], ax
     mov ax, [cs:pz_h]
     mov bx, [cs:pz_y0]
     mov cl, [cs:pz_dys]
     call pz_pcount
-    mov [cs:pz_ph], ax
+    PXSW mov [es:pz_ph], ax
     cmp word [cs:pz_pw], 0          ; an empty pass has no rows at all
     jne .r
-    mov word [cs:pz_ph], 0
+    PXSW mov word [es:pz_ph], 0
 .r:
     mov ax, [cs:pz_pw]
     call pz_rowbytes                ; never more than the full row's
-    mov [cs:pz_prb], ax
+    PXSW mov [es:pz_prb], ax
     pop cx
     pop bx
     pop ax
@@ -761,15 +797,17 @@ pz_pstart:
     jne .go
     cmp byte [cs:pz_pass], 6
     jae .none
-    inc byte [cs:pz_pass]
+    PXSW inc byte [es:pz_pass]
     jmp short .l
 .go:
-    mov word [cs:pz_j], 0
-    mov byte [cs:pz_ftwant], 1
-    mov word [cs:pz_cur], 8         ; the two rows, eight zero bytes before
+    PXSWON
+    mov word [es:pz_j], 0
+    mov byte [es:pz_ftwant], 1
+    mov word [es:pz_cur], 8     ; the two rows, eight zero bytes before
+    PXSWOFF
     mov ax, [cs:pz_rowb]            ; each: the guards are never written
     add ax, 16
-    mov [cs:pz_prev], ax
+    PXSW mov [es:pz_prev], ax
     mov es, [cs:pz_xseg]
     xor di, di
     mov cx, [cs:pz_rowb]            ; both rows and both guards: 2 x rowb
@@ -804,7 +842,7 @@ pz_next:
     mov ax, es
     mov ds, ax
     add cx, si
-    mov [cs:pz_wend], cx
+    PXSW mov [es:pz_wend], cx
 .out:
     pop es
     pop cx
@@ -956,18 +994,23 @@ pz_cfill:
 .r2:
     mov cx, ax
     COPYCX
-    sub [cs:pz_left], ax
-    sbb word [cs:pz_left + 2], 0
+    PXSWON
+    sub [es:pz_left], ax
+    sbb word [es:pz_left + 2], 0
+    PXSWOFF
     sub bx, ax
     jnz .run
-    mov [cs:pz_isi], si
-    mov [cs:pz_ids], ds
+    PXSW mov [es:pz_isi], si
+    push ax
+    mov ax, ds                      ; via AX, never `, ds` (pxpart.inc)
+    PXSW mov [es:pz_ids], ax
+    pop ax
     pop ds
 .full:
-    mov [cs:pz_cend], di
+    PXSW mov [es:pz_cend], di
     mov dx, di
     sub dx, 16
-    jmp short .out
+    jmp .out
 .win:
     call pz_next                    ; the ring's next window
     jnc .run
@@ -984,7 +1027,7 @@ pz_cfill:
 .hd:
     call pz_rawq
     jc .endd
-    mov [cs:di], al
+    PXSW mov [es:di], al
     inc di
     loop .hd
     pop di
@@ -996,20 +1039,25 @@ pz_cfill:
     xchg al, ah
     test ah, 0x80
     jnz .end
-    mov [cs:pz_left + 2], ax
+    PXSW mov [es:pz_left + 2], ax
     mov ax, [cs:pz_chk + 2]
     xchg al, ah
-    mov [cs:pz_left], ax
+    PXSW mov [es:pz_left], ax
     jmp .run                        ; (a zero-length IDAT: the next)
 .endd:
     pop di
 .end:
-    mov [cs:pz_isi], si             ; THE DATA'S END: zeros after it
-    mov [cs:pz_ids], ds
+    PXSW mov [es:pz_isi], si         ; THE DATA'S END: zeros after it
+    push ax
+    mov ax, ds                      ; via AX, never `, ds` (pxpart.inc)
+    PXSW mov [es:pz_ids], ax
+    pop ax
     pop ds
-    mov byte [cs:pz_dry], 1
-    mov [cs:pz_cend], di
-    mov [cs:pz_dend], di
+    PXSWON
+    mov byte [es:pz_dry], 1
+    mov [es:pz_cend], di
+    mov [es:pz_dend], di
+    PXSWOFF
     mov cx, PZ_CBGRD / 2
     xor ax, ax
     rep stosw
@@ -1029,16 +1077,20 @@ pz_cfill:
     jnz .t                          ; none taken the decode goes on - and
     ret                             ; asks here again at its next step
 .t:
-    mov [cs:pz_bsi], si
-    mov [cs:pz_bcl], cl
+    PXSWON
+    mov [es:pz_bsi], si
+    mov [es:pz_bcl], cl
+    PXSWOFF
     mov ax, PXD_TRUNC
     jmp pz_fail
 
 ; pz_bank - the position into [pz_bsi]/[pz_bcl], for pz_padused. Preserves
 ; all
 pz_bank:
-    mov [cs:pz_bsi], si
-    mov [cs:pz_bcl], cl
+    PXSWON
+    mov [es:pz_bsi], si
+    mov [es:pz_bcl], cl
+    PXSWOFF
     ret
 
 ; =============================================================================
@@ -1130,8 +1182,10 @@ pz_walk:
     push bp
     xor di, di                      ; DI = the code so far
     xor bp, bp                      ; BP = the first code of this length
-    mov word [cs:pz_widx], 0        ; ...and its first symbol's index
-    mov byte [cs:pz_wlen], 1
+    PXSWON
+    mov word [es:pz_widx], 0    ; ...and its first symbol's index
+    mov byte [es:pz_wlen], 1
+    PXSWOFF
 .l:
     mov al, 1
     call pz_bits
@@ -1143,17 +1197,17 @@ pz_walk:
     add bx, ax
     mov ax, [bx]                    ; the codes of this length
     pop bx
-    mov [cs:pz_wcnt], ax
+    PXSW mov [es:pz_wcnt], ax
     mov ax, di
     sub ax, bp
     cmp ax, [cs:pz_wcnt]
     jb .found
     mov ax, [cs:pz_wcnt]
-    add [cs:pz_widx], ax
+    PXSW add [es:pz_widx], ax
     add bp, ax
     shl bp, 1
     shl di, 1
-    inc byte [cs:pz_wlen]
+    PXSW inc byte [es:pz_wlen]
     cmp byte [cs:pz_wlen], 15
     jbe .l
     pop bp
@@ -1181,7 +1235,7 @@ pz_inflate:
 .block:
     mov al, 1
     call pz_bits
-    mov [cs:pz_final], al
+    mov [PZ_VFINAL], al
     mov al, 2
     call pz_bits
     cmp al, 1
@@ -1195,11 +1249,11 @@ pz_inflate:
     cmp byte [cs:pz_tabk], 1
     je .go
     call pz_fixed
-    mov byte [cs:pz_tabk], 1
+    PXSW mov byte [es:pz_tabk], 1
     jmp short .go
 .dyn:
     call pz_dynhdr
-    mov byte [cs:pz_tabk], 2
+    PXSW mov byte [es:pz_tabk], 2
     jmp short .go
 .stored:
     call pz_stored
@@ -1225,7 +1279,7 @@ pz_inflate:
     dec bp
     jnz .sym
 .slow:                              ; the budget is spent (or overspent by
-    add bp, [cs:pz_bias]            ; a copy): the extraction's own
+    add bp, [PZ_VBIAS]            ; a copy): the extraction's own
     and di, 0x7FFF
     or bp, bp
     jg .go
@@ -1253,7 +1307,7 @@ pz_inflate:
     xor bx, bx                      ; the extraction's is the least
     mov ax, bp
 .g4:
-    mov [cs:pz_bias], bx
+    mov [PZ_VBIAS], bx
     mov bp, ax
     jmp short .sym
 .lt8:
@@ -1497,11 +1551,11 @@ pz_inflate:
     add ax, bx
     jmp .dist
 .eob:
-    add bp, [cs:pz_bias]            ; BP = the extraction's budget again
+    add bp, [PZ_VBIAS]            ; BP = the extraction's budget again
     and di, 0x7FFF
 .eobt:
-    mov word [cs:pz_bias], 0
-    cmp byte [cs:pz_final], 0
+    mov word [PZ_VBIAS], 0
+    cmp byte [PZ_VFINAL], 0
     jne .short
     jmp .block
 .short:
@@ -1519,7 +1573,7 @@ pz_stored:
 .al:
     mov al, 16
     call pz_bits
-    mov [cs:pz_slen], ax
+    PXSW mov [es:pz_slen], ax
     mov al, 16
     call pz_bits
     not ax
@@ -1533,7 +1587,7 @@ pz_stored:
     call pz_bits
     stosb
     and di, 0x7FFF
-    dec word [cs:pz_slen]
+    PXSW dec word [es:pz_slen]
     dec bp
     jnz .copy
     call pz_extract
@@ -1566,11 +1620,15 @@ pz_fixed:
     pop di
     pop cx
     call pz_bank
-    mov word [cs:pz_bl], PZ_LENS
-    mov word [cs:pz_bnum], 288
+    PXSWON
+    mov word [es:pz_bl], PZ_LENS
+    mov word [es:pz_bnum], 288
+    PXSWOFF
     call pz_buildl
-    mov word [cs:pz_bl], PZ_LENS + 288
-    mov word [cs:pz_bnum], 32
+    PXSWON
+    mov word [es:pz_bl], PZ_LENS + 288
+    mov word [es:pz_bnum], 32
+    PXSWOFF
     call pz_buildd
     ret
 
@@ -1581,15 +1639,15 @@ pz_dynhdr:
     mov al, 5
     call pz_bits
     add ax, 257
-    mov [cs:pz_nlen], ax
+    PXSW mov [es:pz_nlen], ax
     mov al, 5
     call pz_bits
     inc ax
-    mov [cs:pz_ndist], ax
+    PXSW mov [es:pz_ndist], ax
     mov al, 4
     call pz_bits
     add ax, 4
-    mov [cs:pz_ncode], ax
+    PXSW mov [es:pz_ncode], ax
     cmp word [cs:pz_nlen], 286
     ja .bad
     cmp word [cs:pz_ndist], 30
@@ -1617,11 +1675,13 @@ pz_dynhdr:
     jb .cl
     pop di
     call pz_bank
-    mov word [cs:pz_bl], PZ_CLL     ; ...built COMPLETE into the distance
-    mov word [cs:pz_bnum], 19       ; code's arrays
-    mov byte [cs:pz_bcmp], 1
+    PXSWON
+    mov word [es:pz_bl], PZ_CLL ; ...built COMPLETE into the distance
+    mov word [es:pz_bnum], 19   ; code's arrays
+    mov byte [es:pz_bcmp], 1
+    PXSWOFF
     call pz_buildd
-    mov byte [cs:pz_bcmp], 0
+    PXSW mov byte [es:pz_bcmp], 0
     xor bx, bx                      ; BX = lengths read
 .len:
     mov ax, [cs:pz_nlen]
@@ -1665,11 +1725,11 @@ pz_dynhdr:
     add ax, 3
     push ax
     mov al, [es:PZ_LENS + bx - 1]
-    mov [cs:pz_rv], al
+    PXSW mov [es:pz_rv], al
     pop ax
     jmp short .fill
 .z:
-    mov byte [cs:pz_rv], 0
+    PXSW mov byte [es:pz_rv], 0
     push bx
     cmp al, 17
     jne .z18
@@ -1686,7 +1746,7 @@ pz_dynhdr:
 .fill:                              ; AX repeats of [pz_rv], within bounds
     push ax
     add ax, bx
-    mov [cs:pz_rt], ax
+    PXSW mov [es:pz_rt], ax
     mov ax, [cs:pz_nlen]
     add ax, [cs:pz_ndist]
     cmp [cs:pz_rt], ax
@@ -1708,13 +1768,15 @@ pz_dynhdr:
     cmp byte [es:PZ_LENS + 256], 0
     je .bad
     call pz_bank
-    mov word [cs:pz_bl], PZ_LENS
-    mov [cs:pz_bnum], bx
+    PXSWON
+    mov word [es:pz_bl], PZ_LENS
+    mov [es:pz_bnum], bx
+    PXSWOFF
     call pz_buildl
     add bx, PZ_LENS
-    mov [cs:pz_bl], bx
+    PXSW mov [es:pz_bl], bx
     mov ax, [cs:pz_ndist]
-    mov [cs:pz_bnum], ax
+    PXSW mov [es:pz_bnum], ax
     call pz_buildd
     ret
 
@@ -1723,19 +1785,23 @@ pz_dynhdr:
 ; over-subscribed, or incomplete where that is not allowed. Preserve all
 pz_buildl:
     push ax
-    mov word [cs:pz_bprim], PZ_LPRIM
-    mov word [cs:pz_bcnt], PZ_LCNT
-    mov word [cs:pz_bsub], PZ_LSUB
-    mov byte [cs:pz_bsubn], PZ_LNSUB
-    mov byte [cs:pz_blit], 0x80
+    PXSWON
+    mov word [es:pz_bprim], PZ_LPRIM
+    mov word [es:pz_bcnt], PZ_LCNT
+    mov word [es:pz_bsub], PZ_LSUB
+    mov byte [es:pz_bsubn], PZ_LNSUB
+    mov byte [es:pz_blit], 0x80
+    PXSWOFF
     jmp short pz_build
 pz_buildd:
     push ax
-    mov word [cs:pz_bprim], PZ_DPRIM
-    mov word [cs:pz_bcnt], PZ_DCNT
-    mov word [cs:pz_bsub], PZ_DSUB
-    mov byte [cs:pz_bsubn], PZ_DNSUB
-    mov byte [cs:pz_blit], 0
+    PXSWON
+    mov word [es:pz_bprim], PZ_DPRIM
+    mov word [es:pz_bcnt], PZ_DCNT
+    mov word [es:pz_bsub], PZ_DSUB
+    mov byte [es:pz_bsubn], PZ_DNSUB
+    mov byte [es:pz_blit], 0
+    PXSWOFF
 pz_build:
     push bx
     push cx
@@ -1824,7 +1890,7 @@ pz_build:
     rep stosw
     xor si, si                      ; SI = the symbol index (x 2)
     xor dx, dx                      ; DX = the code
-    mov byte [cs:pz_blen], 1
+    PXSW mov byte [es:pz_blen], 1
 .len:
     mov bl, [cs:pz_blen]
     xor bh, bh
@@ -1876,11 +1942,11 @@ pz_build:
     loop .code
 .nextl:
     shl dx, 1
-    inc byte [cs:pz_blen]
+    PXSW inc byte [es:pz_blen]
     cmp byte [cs:pz_blen], 9
     jbe .len
     ; --- codes of ten bits and more: a sub-table each nine-bit prefix ------
-    mov byte [cs:pz_bnsub], 0
+    PXSW mov byte [es:pz_bnsub], 0
 .len2:
     mov bl, [cs:pz_blen]
     xor bh, bh
@@ -1924,7 +1990,7 @@ pz_build:
     mov al, [cs:pz_bnsub]           ; a new sub-table - or, when they are all
     cmp al, [cs:pz_bsubn]           ; spent, this prefix is the walk's
     jae .skip
-    inc byte [cs:pz_bnsub]
+    PXSW inc byte [es:pz_bnsub]
     mov ah, 0xC0
     mov [bx], ax
     push ax
@@ -1944,7 +2010,7 @@ pz_build:
     mov cl, 7
     shl ax, cl
     add ax, [cs:pz_bsub]
-    mov [cs:pz_bsb], ax
+    PXSW mov [es:pz_bsb], ax
     mov cl, [cs:pz_blen]            ; its bits past nine, reversed
     sub cl, 9
     mov ax, 1
@@ -1979,7 +2045,7 @@ pz_build:
     jmp .code2
 .next2:
     shl dx, 1
-    inc byte [cs:pz_blen]
+    PXSW inc byte [es:pz_blen]
     cmp byte [cs:pz_blen], 15
     jbe .len2
     pop ds
@@ -2019,43 +2085,44 @@ pz_extract:
     push dx
     push si
     push ds
-    mov ax, di                      ; what is new
-    sub ax, [cs:pz_rd]
+    mov ds, [cs:PXP_SELF]           ; DS = our own words, through the whole
+    mov ax, di                      ; extraction (pxpart.inc rule 6)
+    sub ax, [pz_rd]
     and ax, 0x7FFF
-    mov [cs:pz_pend], ax
-    cmp word [cs:pz_hav], 0x8000    ; ...and the window's fill
+    mov [pz_pend], ax
+    cmp word [pz_hav], 0x8000    ; ...and the window's fill
     jae .l
-    add [cs:pz_hav], ax
-    cmp word [cs:pz_hav], 0x8000
+    add [pz_hav], ax
+    cmp word [pz_hav], 0x8000
     jbe .l
-    mov word [cs:pz_hav], 0x8000
+    mov word [pz_hav], 0x8000
 .l:
-    mov ax, [cs:pz_pend]
+    mov ax, [pz_pend]
     or ax, ax
     jz .fin
-    cmp byte [cs:pz_ftwant], 0
+    cmp byte [pz_ftwant], 0
     je .data
-    mov bx, [cs:pz_rd]              ; a scanline's filter byte
+    mov bx, [pz_rd]              ; a scanline's filter byte
     mov al, [es:bx]
-    mov [cs:pz_ft], al
+    mov [pz_ft], al
     inc bx
     and bx, 0x7FFF
-    mov [cs:pz_rd], bx
-    dec word [cs:pz_pend]
-    mov byte [cs:pz_ftwant], 0
-    mov word [cs:pz_fill], 0
-    sub word [cs:pz_remain], 1
-    sbb word [cs:pz_remain + 2], 0
+    mov [pz_rd], bx
+    dec word [pz_pend]
+    mov byte [pz_ftwant], 0
+    mov word [pz_fill], 0
+    sub word [pz_remain], 1
+    sbb word [pz_remain + 2], 0
     jmp short .l
 .data:
-    mov cx, [cs:pz_prb]             ; this chunk: the new bytes, what the
-    sub cx, [cs:pz_fill]            ; row lacks, and the window's run
+    mov cx, [pz_prb]             ; this chunk: the new bytes, what the
+    sub cx, [pz_fill]            ; row lacks, and the window's run
     cmp ax, cx
     jbe .t1
     mov ax, cx
 .t1:
     mov cx, 0x8000
-    sub cx, [cs:pz_rd]
+    sub cx, [pz_rd]
     cmp ax, cx
     jbe .t2
     mov ax, cx
@@ -2063,30 +2130,33 @@ pz_extract:
     mov cx, ax
     push es
     push di
-    mov si, [cs:pz_rd]
-    mov di, [cs:pz_cur]
-    add di, [cs:pz_fill]
+    mov si, [pz_rd]
+    mov di, [pz_cur]
+    add di, [pz_fill]
+    push word [pz_xseg]
     push es
-    pop ds
-    mov es, [cs:pz_xseg]
+    pop ds                          ; DS = the window...
+    pop es                          ; ...ES the scanlines
     COPYCX
     pop di
     pop es
+    mov ds, [cs:PXP_SELF]
     and si, 0x7FFF
-    mov [cs:pz_rd], si
-    add [cs:pz_fill], ax
-    sub [cs:pz_pend], ax
-    sub [cs:pz_remain], ax
-    sbb word [cs:pz_remain + 2], 0
-    mov ax, [cs:pz_fill]
-    cmp ax, [cs:pz_prb]
+    mov [pz_rd], si
+    add [pz_fill], ax
+    sub [pz_pend], ax
+    sub [pz_remain], ax
+    sbb word [pz_remain + 2], 0
+    mov ax, [pz_fill]
+    cmp ax, [pz_prb]
     jb .l
     push es                         ; a whole scanline
     push di
     call pz_row
     pop di
     pop es
-    mov byte [cs:pz_ftwant], 1
+    mov ds, [cs:PXP_SELF]
+    mov byte [pz_ftwant], 1
     jmp .l
 .fin:
     pop ds
@@ -2107,17 +2177,18 @@ pz_row:
     pop es
     call pz_unfilter
     call pz_out                     ; to the emitter (or progress only)
-    mov ax, [cs:pz_cur]             ; this row is the next one's previous
-    xchg ax, [cs:pz_prev]
-    mov [cs:pz_cur], ax
-    inc word [cs:pz_rdone]
-    inc word [cs:pz_j]
-    mov ax, [cs:pz_j]
-    cmp ax, [cs:pz_ph]
+    mov ds, [cs:PXP_SELF]           ; DS = our own words (rule 6)
+    mov ax, [pz_cur]             ; this row is the next one's previous
+    xchg ax, [pz_prev]
+    mov [pz_cur], ax
+    inc word [pz_rdone]
+    inc word [pz_j]
+    mov ax, [pz_j]
+    cmp ax, [pz_ph]
     jb .ret
-    cmp byte [cs:pz_pass], 6        ; the pass is done: the next with rows
+    cmp byte [pz_pass], 6        ; the pass is done: the next with rows
     jae .end
-    inc byte [cs:pz_pass]
+    inc byte [pz_pass]
     call pz_pstart
     jnc .ret
 .end:
@@ -2191,7 +2262,7 @@ pz_unfilter:
     je .paeth
     or al, al
     jz .out
-    mov byte [cs:pz_badf], 1
+    PXSW mov byte [es:pz_badf], 1
 .out:
     ret
 .sub:                               ; (two a turn: the loop's own cost
@@ -2287,7 +2358,7 @@ pz_out:
     mov cl, [cs:pz_dys]
     shl ax, cl
     add ax, [cs:pz_y0]
-    mov [cs:pz_y], ax
+    PXSW mov [es:pz_y], ax
     cmp byte [cs:pz_il], 0
     je .plain
     cmp byte [cs:pz_scl], 0
@@ -2413,7 +2484,7 @@ pz_conv:
 .x1:
     mov di, ax
 .go:
-    mov [cs:pz_step], bx
+    PXSW mov [es:pz_step], bx
     mov al, [cs:pz_depth]
     cmp cl, 3
     je .idx
@@ -2452,18 +2523,18 @@ pz_conv:
     mov bl, cl
     xor bh, bh
     mov al, [cs:pz_gscale + bx]     ; a grey's scale, by its depth
-    mov [cs:pz_gs], al
+    PXSW mov [es:pz_gs], al
     pop bx
 .b:
     or dh, dh
     jnz .b1
     lodsb
-    mov [cs:pz_cb], al              ; the byte the samples come out of
+    PXSW mov [es:pz_cb], al          ; the byte the samples come out of
     mov dh, 8
 .b1:
     mov al, [cs:pz_cb]
     rol al, cl
-    mov [cs:pz_cb], al
+    PXSW mov [es:pz_cb], al
     and al, dl
     sub dh, cl
     cmp byte [cs:pz_ct], 3
@@ -2646,7 +2717,7 @@ pz_conv:
     add bx, dx
     mov al, [si + bx]
     pop bx
-    mov [cs:pz_al], al
+    PXSW mov [es:pz_al], al
     mov ah, al
     mov al, [si]
     call pz_blend
@@ -2733,7 +2804,6 @@ pz_trnb:    times 256 db 0
 pz_tkind:   db 0                    ; 0 none, 1 a grey key, 2 an RGB key
 pz_tgrey:   dw 0
 pz_trgb:    times 3 dw 0
-pz_final:   db 0                    ; inflate
 pz_tabk:    db 0                    ; the tables built: 1 fixed, 2 dynamic
 pz_rd:      dw 0
 pz_hav:     dw 0
@@ -2759,7 +2829,6 @@ pz_bnsub:   db 0
 pz_bsb:     dw 0
 pz_remain:  dd 0                    ; the rows: the bytes still wanted
 pz_pend:    dw 0
-pz_bias:    dw 0                    ; inflate's budget: the extraction's less BP
 pz_ptot:    dw 0
 pz_rdone:   dw 0
 pz_pass:    db 0

@@ -446,9 +446,9 @@ int ovl_pack(void);
 /* ============================================================================
  * THE SEAM TO LOOM.WPV (WEAVE-SPEC 1.2.4)
  *
- * apps/loom/lmpv.inc's five routines. The module is a SECOND RESIDENT SEGMENT
- * holding WEAVE's flow walk and WEAVE's component painter, read once when
- * Preview is first opened; apps/weave/wpvabi.inc is the contract and
+ * apps/loom/lmpv.inc's two routines. The module is a SECOND RESIDENT SEGMENT
+ * holding WEAVE's flow walk and WEAVE's component painter, PART 0 of
+ * LOOM.O88, fetched once when Preview is first opened; apps/weave/wpvabi.inc is the contract and
  * apps/weave/wpvabi.h its C side, guarded in both assemblies.
  *
  * lpv_call() answers 0 with no module bound, which is the same "it did not
@@ -457,10 +457,10 @@ int ovl_pack(void);
  * ==========================================================================*/
 unsigned lpv_call(unsigned verb, unsigned a, unsigned b, unsigned c);
 void     lpv_bindmod(unsigned seg);     /* 0 = forget it */
-int      lpv_kb(void);                  /* the claim, in KB: image + bss */
-unsigned lpv_bytes(void);               /* WPV_SIZE, to check the read */
-int      lpv_stamp(unsigned seg);       /* 0 ok, 1 not ours/truncated,
-                                         * 2 stale (ABI, size or bss) */
+int      w_partfetch(int part);         /* a lazy part, from HOME: 0 / -1
+                                         * (apps/weave/wfetch.inc) */
+#define LM_WPVPART 0                    /* the module's row in the parts
+                                         * table (apps/loom/loom.asm) */
 
 /* ============================================================================
  * THE IDE'S OWN STATE

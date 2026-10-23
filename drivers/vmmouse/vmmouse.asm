@@ -338,6 +338,11 @@ vmm_rbody:
     rcl  cl, 1                  ; byte's: CF = 0x10 (right) in first...
     shr  al, 1
     rcl  cl, 1                  ; ...then 0x20 (left) under it: CL = L | R<<1
+    shl  dl, 2                  ; ...and DL, the WHEEL, signed and positive
+    or   cl, dl                 ; toward the user, into CL's top six bits:
+                                ; mou_apply's tail takes it from there (SPEC.md
+                                ; 9.11.4). A 386 instruction is fine here - so
+                                ; is everything else in this file
     shr  eax, 17                ; CF = RELATIVE_PACKET (0x00010000): v86 sends
     adc  ch, 0                  ; these while the host pointer is LOCKED (the
                                 ; user hit "capture pointer"). Not needed

@@ -30,6 +30,10 @@
 ; handle's run, and first fit asks the eight handles instead (em_alloc).
 ; =============================================================================
 
+%define OS88_DRV_HIGHOK          ; kern_mega may run this image above 1MB
+                                ; (KERN-MEGA-PLAN item 82: no paragraph
+                                ; arithmetic on its own segment, no BIOS or
+                                ; DMA buffer in it)
 %include "os88drv.inc"
 
     OS88_DRIVER 'EMS', DRVC_EMS, em_entry, em_svc_end - em_svc

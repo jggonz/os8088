@@ -91,6 +91,18 @@ AM_P      equ 14
 AM_CNT    equ 16
 AM_REASON equ 18
 
+; THE PACKAGE'S DATA SEGMENT, banked by every door in from C (_a2_run,
+; _a2_bread) while DS still holds it, for the I/O handlers to put back - not
+; `mov ax,cs / mov ds,ax`, because under kern_mega (CPU_F_PM) CS is the
+; region's read-only CODE alias and every C store in a handler would be a #GP
+; the kernel completes. The C64's core had the same two idioms and they were
+; 57,168 #GPs of a few seconds of the ] prompt here, measured under Bochs
+; (KERN-MEGA-PLAN 10.3). Banked per call so a region move between two calls is
+; never stale; outside the struct, so the C's view of a2_m is unchanged.
+section .bss
+a2_pkgds:
+    resw 1
+
 section .text
 
 ; --- what _a2_run answers (APPLE2-SPEC section 4.2) --------------------------
@@ -276,6 +288,7 @@ _a2_run:
     push ds                         ; [bp-6] the PACKAGE segment
     push es                         ; [bp-8] KERNEL_SEG (SPEC.md 20.4)
     sub sp, 12                      ; the CT_* scratch
+    mov [a2_pkgds], ds              ; DS-relative: the package's, still
 
     mov ax, [bp+4]
     mov si, [cs:_a2_m+AM_RAMSEG]
@@ -403,31 +416,38 @@ a2_expire:
     mov word [A2_SCR_BASE + A2_SCR_CARRY], 0
     add [A2_SCR_BASE + A2_SCR_DEAD], bx
     pop bx
-    mov word [cs:_a2_m+AM_REASON], A2_RUN_SLICE
+    mov es, [bp-6]                  ; ES = the package (see a2_out)
+    mov word [es:_a2_m+AM_REASON], A2_RUN_SLICE
     jmp short a2_out
 
 o_jam:
     dec si                          ; PC points AT the opcode that jammed
-    mov word [cs:_a2_m+AM_REASON], A2_RUN_JAM
+    mov es, [bp-6]
+    mov word [es:_a2_m+AM_REASON], A2_RUN_JAM
 
 ; DS is still the RAM claim here, so the countdown is read before it goes.
+; THE STATE GOES BACK THROUGH ES, NOT CS: both paths in load ES with the
+; package segment run() banked at [bp-6] - free here, the pop below restores
+; the kernel's - because a CS: write is a #GP per store under kern_mega
+; (a2_pkgds above). One prefix byte either way, so nothing moves on any
+; real-mode kernel but the reason the bytes are right.
 a2_out:
-    mov [cs:_a2_m+AM_PC], si
+    mov [es:_a2_m+AM_PC], si
     mov bx, [A2_SCR_BASE + A2_SCR_DEAD]
-    mov [cs:_a2_m+AM_CNT], bx
+    mov [es:_a2_m+AM_CNT], bx
     mov bx, di
     and bx, 0x00FF
-    mov [cs:_a2_m+AM_S], bx
+    mov [es:_a2_m+AM_S], bx
     mov bl, al
     xor bh, bh
-    mov [cs:_a2_m+AM_A], bx
+    mov [es:_a2_m+AM_A], bx
     mov bl, cl
-    mov [cs:_a2_m+AM_X], bx
+    mov [es:_a2_m+AM_X], bx
     mov bl, dl
-    mov [cs:_a2_m+AM_Y], bx
+    mov [es:_a2_m+AM_Y], bx
     call a2_getp                   ; -> BL, and BH is the scratch it uses
     xor bh, bh
-    mov [cs:_a2_m+AM_P], bx
+    mov [es:_a2_m+AM_P], bx
     mov ax, [cs:_a2_m+AM_REASON]
     add sp, 12
     pop es
@@ -586,8 +606,7 @@ a2_io_rd_bx:                       ; BX = address -> DH; BX preserved
     push dx
     push bx
     push bx                         ; the cdecl argument
-    mov ax, cs
-    mov ds, ax
+    mov ds, [cs:a2_pkgds]           ; the package's DATA segment
     call _a2_io_rd
     add sp, 2
     mov cl, al                      ; CX is on the stack: CL is free
@@ -619,8 +638,7 @@ a2_io_wr_bx:                       ; BX = address, DH = value; both preserved
     xor ah, ah
     push ax                         ; the value
     push bx                         ; the address
-    mov ax, cs
-    mov ds, ax
+    mov ds, [cs:a2_pkgds]
     call _a2_io_wr
     add sp, 4
     pop bx
@@ -2135,6 +2153,7 @@ _a2_bread:
     push cx
     push dx
     mov bx, [bp+4]
+    mov [a2_pkgds], ds              ; a2_rd_bx may reach the I/O handlers
     mov ds, [cs:_a2_m+AM_RAMSEG]
     call a2_rd_bx
     mov al, dh

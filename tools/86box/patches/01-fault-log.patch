@@ -1,0 +1,107 @@
+diff --git a/src/cpu/x86.c b/src/cpu/x86.c
+index 8d8635c..22933b5 100644
+--- a/src/cpu/x86.c
++++ b/src/cpu/x86.c
+@@ -18,6 +18,7 @@
+ #include <stdarg.h>
+ #include <stdint.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <wchar.h>
+ 
+@@ -484,7 +485,9 @@ softresetx86(void)
+ {
+     if (soft_reset_mask)
+         return;
+-
++    /* os8088: a shutdown (triple fault) or a reset pulse, and where the CPU was */
++    if (getenv("OS88_FAULTLOG") && (getenv("OS88_FAULTLOG")[0] == '1'))
++        fprintf(stderr, "OS88SOFTRESET at %04X:%04X msw %X\n", CS, cpu_state.oldpc, msw);
+     reset_common(0);
+ }
+ 
+diff --git a/src/cpu/x86seg.c b/src/cpu/x86seg.c
+index 101b7e7..d6aa52b 100644
+--- a/src/cpu/x86seg.c
++++ b/src/cpu/x86seg.c
+@@ -174,6 +174,19 @@ x86_doabrt_2386(int x86_abrt)
+ x86_doabrt(int x86_abrt)
+ #endif
+ {
++    /* os8088: OS88_FAULTLOG=1 prints every exception the CPU raises, before
++       it is delivered (tools/86box/patches/01-fault-log.patch). */
++    {
++        static int os88_on = -1;
++        static int os88_n  = 0;
++        if (os88_on < 0)
++            os88_on = getenv("OS88_FAULTLOG") && (getenv("OS88_FAULTLOG")[0] == '1');
++        if (os88_on && (os88_n < 100000)) {
++            os88_n++;
++            fprintf(stderr, "OS88ABRT %d at %04X:%04X err %04X msw %X ss %04X sp %04X ds %04X es %04X\n",
++                    x86_abrt, CS, cpu_state.oldpc, abrt_error, msw, SS, SP, DS, ES);
++        }
++    }
+     cpu_state.pc             = cpu_state.oldpc;
+     cpu_state.seg_cs.access  = (oldcpl << 5) | 0x80;
+     cpu_state.seg_cs.ar_high = 0x10;
+diff --git a/src/cpu/x86seg_common.c b/src/cpu/x86seg_common.c
+index e224d96..e43982c 100644
+--- a/src/cpu/x86seg_common.c
++++ b/src/cpu/x86seg_common.c
+@@ -94,9 +94,23 @@ x86gen(void)
+     x86_int(1);
+ }
+ 
++/* os8088: with OS88_FAULTLOG=1 every fault RAISED says why, in 86Box's own
++   words - the string each call site passes and nothing else reads
++   (tools/86box/patches/01-fault-log.patch) */
++static void
++os88_why(const char *kind, const char *s, uint16_t error)
++{
++    static int on = -1;
++    if (on < 0)
++        on = getenv("OS88_FAULTLOG") && (getenv("OS88_FAULTLOG")[0] == '1');
++    if (on)
++        fprintf(stderr, "OS88WHY %s err %04X %s\n", kind, error, s ? s : "");
++}
++
+ void
+ x86gpf(UNUSED(char *s), uint16_t error)
+ {
++    os88_why("#GP", s, error);
+     cpu_state.abrt = ABRT_GPF;
+     abrt_error     = error;
+ }
+@@ -104,6 +118,7 @@ x86gpf(UNUSED(char *s), uint16_t error)
+ void
+ x86gpf_expected(UNUSED(char *s), uint16_t error)
+ {
++    os88_why("#GP", s, error);
+     cpu_state.abrt = ABRT_GPF | ABRT_EXPECTED;
+     abrt_error     = error;
+ }
+@@ -111,6 +126,7 @@ x86gpf_expected(UNUSED(char *s), uint16_t error)
+ void
+ x86ss(UNUSED(char *s), uint16_t error)
+ {
++    os88_why("#SS", s, error);
+     cpu_state.abrt = ABRT_SS;
+     abrt_error     = error;
+ }
+@@ -118,6 +134,7 @@ x86ss(UNUSED(char *s), uint16_t error)
+ void
+ x86ts(UNUSED(char *s), uint16_t error)
+ {
++    os88_why("#TS", s, error);
+     cpu_state.abrt = ABRT_TS;
+     abrt_error     = error;
+ }
+@@ -125,6 +142,7 @@ x86ts(UNUSED(char *s), uint16_t error)
+ void
+ x86np(UNUSED(char *s), uint16_t error)
+ {
++    os88_why("#NP", s, error);
+     cpu_state.abrt = ABRT_NP;
+     abrt_error     = error;
+ }

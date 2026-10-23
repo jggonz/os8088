@@ -96,8 +96,7 @@ SNP_H_PLUS  equ 1
 SNP_H_OPEN  equ 2
 SNP_H_PREV  equ 3
 SNP_H_NEXT  equ 4
-SNP_H_BOX   equ 5
-SNP_H_EDIT  equ 6               ; (the rest of the card: nothing - a press
+SNP_H_BOX   equ 5               ; (the rest of the card: nothing - a press
                                 ; there only hands the widget the bar)
 
 ; snp_geo - DI = this layout's geometry. Every other register kept
@@ -123,16 +122,13 @@ snp_widths:
 ; card over it while it is up there
 ; -----------------------------------------------------------------------------
 snp_paint:
-    mov byte [snp_dirty], 0
-    call stik_paint
-    jmp sn_abdraw
+    jmp stik_paint
 
 ; snp_redraw - the card again, whole, outside a paint (lock held)
 snp_redraw:
     push bx
     push dx
     push di
-    mov byte [snp_dirty], 0
     call snp_geo
     xor bx, bx
     mov dl, [di + SNPG_H]
@@ -255,15 +251,17 @@ snp_pcard:
 ; snp_put - card rows BX..DX of the slab at [snp_ba] onto the glass. A desk
 ; window's top SNP_S rows leave the notch at the right to the desktop, its
 ; bottom SNP_S the one at the left - a blit from face x 4, off the byte grid,
-; which kern_big's BLIT1 takes (SPEC.md 5.4.2.8) and a desk window is only
-; ever on kern_big
+; which kern_big's BLIT1 takes (SPEC.md 5.4.2.8). The pad is ONLY ever a
+; desk window (STIK_DESKONLY: no titled fallback, whose notches were paper)
 snp_put:
+%ifndef STIK_DESKONLY
     test byte [stik_wf], STIK_W_DESK
     jnz .desk
     mov cx, STIK_FACE_W         ; titled: the notches are paper
     xor ax, ax
     jmp snp_blit
 .desk:
+%endif
     call snp_geo
     mov al, [di + SNPG_H]
     xor ah, ah
@@ -565,12 +563,18 @@ snp_vis:
     stc
     ret
 
-; sn_glyphs - BX glyphs of DS:SI at band x CX, band y DX, in [gfxe_tsty]. out
+; sn_glyphs - BX bytes of DS:SI at band x CX, band y DX, in [gfxe_tsty]: a
+; byte outside 32..126 is not drawn and takes no cell (Note Pad drops it). out
 ; CX past them; AX, BX, SI, DI, BP spent
 sn_glyphs:
     or bx, bx
     jz .r
     lodsb
+    dec bx
+    cmp al, ' '
+    jb sn_glyphs
+    cmp al, 126
+    ja sn_glyphs
     push si
     push bx
     push dx
@@ -578,7 +582,6 @@ sn_glyphs:
     pop dx
     pop bx
     pop si
-    dec bx
     jmp short sn_glyphs
 .r:
     ret
@@ -590,7 +593,7 @@ snp_title:
     jc .r
     sub dx, [sn_t2]
     mov cx, SNP_TTX
-    cmp byte [STIK_PAY + SNP_N], 0
+    cmp byte [sn_n], 0
     je .none
     call sn_tend                ; AX = its length
     or ax, ax
@@ -602,7 +605,7 @@ snp_title:
     mov bx, ax
     push dx
     push cx
-    call sn_cur
+    call sn_txt
     pop cx
     pop dx
     jmp sn_glyphs
@@ -620,7 +623,7 @@ snp_body:
     call snp_geo
     mov dl, [di + SNPG_B0]
     xor dh, dh
-    cmp byte [STIK_PAY + SNP_N], 0
+    cmp byte [sn_n], 0
     jne .lines
     call snp_vis                ; --- no notes: what to do about it
     jc .e2
@@ -700,7 +703,7 @@ snp_line:
 
 ; snp_foot - `<  n / N  >` and the arrow, with a note to show
 snp_foot:
-    cmp byte [STIK_PAY + SNP_N], 0
+    cmp byte [sn_n], 0
     je .r
     call snp_geo
     mov dl, [di + SNPG_FY]
@@ -741,14 +744,14 @@ snp_foot:
 sn_count:
     push di
     mov di, sn_line
-    mov al, [STIK_PAY + SNP_CUR]
+    mov al, [sn_cur]
     inc ax
     call sn_dec
     mov ax, ' ' | ('/' << 8)
     stosw
     mov al, ' '
     stosb
-    mov al, [STIK_PAY + SNP_N]
+    mov al, [sn_n]
     call sn_dec
     mov byte [di], 0
     mov ax, di
@@ -781,8 +784,7 @@ sn_dec:
 ; release is on the same thing (SPEC.md 13.5's slide-off)
 ; -----------------------------------------------------------------------------
 snp_oncard:
-    call sn_abdismiss
-    jc .none
+    call sn_age                 ; an event: Delete's latch one older
     call snp_hit
     mov [snp_press], al
     ret
@@ -802,8 +804,6 @@ snp_oncardup:
     jne .r                      ; slid off
     cmp al, SNP_H_BOX
     je .box
-    cmp al, SNP_H_EDIT
-    ja .r
     xor ah, ah
     mov bx, ax
     shl bx, 1
@@ -811,22 +811,9 @@ snp_oncardup:
 .r:
     ret
 .box:
-    call sn_vtick               ; SI = the marker
-    push word [sn_t1]           ; (sn_edit's status redraw spends the
-    call sn_edit                ; scratch words)
-    pop word [sn_t1]
-    mov byte [snp_dirty], 0     ; ...drawn now, not at the beat
-    call snp_rline              ; [sn_t1] = the pad's line
-    jmp sne_rptr
+    jmp sn_flip                 ; the walk on the box's line, [sn_t1] it
 
-snp_acts:   dw sn_new, sne_show, sn_prev, sn_next, 0, sne_show
-
-; sn_vtick - the walk's box paragraph's marker toggled: SI = it
-sn_vtick:
-    mov si, [it_p]
-    dec si
-    xor byte [si], SN_BOX0 ^ SN_BOX1
-    ret
+snp_acts:   dw sn_new, sn_open, sn_prev, sn_next
 
 ; snp_hit - CX, DX card-relative: AL = what is there, SNP_H_*; on a box the
 ; walk is left on its line and [sn_t1] = the line
@@ -838,7 +825,7 @@ snp_hit:
     call snp_geo
     mov al, SNP_H_NONE
     call .plus
-    cmp byte [STIK_PAY + SNP_N], 0
+    cmp byte [sn_n], 0
     je .x                       ; no notes: `+` is the only thing
 .some:
     cmp al, SNP_H_PLUS
@@ -944,10 +931,9 @@ snp_rline:
     ret
 
 ; snp_onkey - W_ONKEY while the pad owns the keys: Left and Right page, Enter
-; opens the editor, Ctrl+N a new note
+; opens the note, Del deletes it (twice), Ctrl+N a new one
 snp_onkey:
-    call sn_abdismiss
-    jc .r
+    call sn_age
     cmp ah, KSC_LEFT
     jne .k1
     jmp sn_prev
@@ -956,10 +942,14 @@ snp_onkey:
     jne .k2
     jmp sn_next
 .k2:
-    cmp al, 13
+    cmp ah, KSC_DEL
     jne .k3
-    jmp sne_show
+    jmp sn_askdel
 .k3:
+    cmp al, 13
+    jne .k4
+    jmp sn_open
+.k4:
     cmp al, SN_C_NEW
     jne .r
     jmp sn_new

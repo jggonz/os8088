@@ -171,7 +171,9 @@ def errcases():
 
 
 def build_disk(projects, errs):
-    files = [os.path.join(BUILD, "loom.o88"), os.path.join(BUILD, "LOOM.OVL")]
+    # ONE FILE: the overlay and the preview module are PARTS of LOOM.O88
+    # (SPEC.md 73.14.2, WEAVE-SPEC 1.2.4), so there is nothing to put beside it
+    files = [os.path.join(BUILD, "loom.o88")]
     for stem, _ in projects:
         for ext in ("WML", "WJS", "WFX", "WSP"):
             p = os.path.join(PROJ, "%s.%s" % (stem, ext))
@@ -267,7 +269,7 @@ def main():
         # os88fixture.need is the same `make`, and it does NOTHING when the runner has
         # already built the artefact (Row(wants=...) and os88test's prebuild).
         # That is what lets this row drop builds=True and share the lane.
-        os88fixture.need("build/loom.o88", "build/LOOM.OVL")
+        os88fixture.need("build/loom.o88")
     if not os.path.isfile(os.path.join(BUILD, "loom.o88")):
         print("weavepack: SKIP - build/loom.o88 is not here; the C toolchain "
               "(tools/setup-cc.sh) is what builds it")
@@ -278,7 +280,7 @@ def main():
     errs = errcases()
     if not check(build_disk(projects, errs), "the pack disk builds",
                  "one 360KB floppy - the geometry the machine's drives "
-                 "actually have: LOOM.O88, LOOM.OVL and the seven "
+                 "actually have: LOOM.O88 and the seven "
                  "flattened projects (WEAVE-SPEC 11.2's stem rule)"):
         done("weavepack")
         return

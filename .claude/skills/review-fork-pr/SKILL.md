@@ -19,6 +19,11 @@ Invoking this skill **authorises the multi-agent orchestration below** — the
 "ultracode"). Every decision that is the user's comes back through
 `AskUserQuestion`; everything else you decide and record.
 
+It also authorises **one outward-facing write**: step 1's kickoff comment on
+the PR, telling the contributor the review has started. That comment is the
+only thing written to the PR, the fork or the user's repo before step 6's
+gate; everything else waits for the user's answer there.
+
 Three files travel with this skill:
 
 | file | what |
@@ -71,6 +76,32 @@ gh pr view <N> --json comments --jq '.comments[] | "=== " + .author.login + " ==
 
 State the shape back to the user in two or three lines (who, what, how big,
 how far behind `main`, what conflicts) before you go further.
+
+Then tell the contributor, **before any reviewing starts** — without it they
+push to a head you are halfway through reading, and on a large PR they hear
+nothing for hours. Same reader as step 9's comment: the contributor,
+semi-technical, in a browser, no blame. Write it to a file in the session
+scratchpad and post it with `gh pr comment <N> --body-file <file>`:
+
+```markdown
+Hi @<owner> — thanks for this one. We're starting the maintainer review of this PR now.
+
+What happens next:
+
+- We'll fetch the branch, check it against the current `main`, and build and boot both kernels before reading anything.
+- A team of reviewers will go through it by subsystem, with an eye on memory safety, anything `main` had that the branch might have lost, redraw cost on a 4.77 MHz XT, disk and file-format integrity, and the package/driver ABI.
+- If we find things worth fixing, we'll push the fixes as separate commits to `<headRef>` (maintainer edits are enabled, thank you) and explain each one in a follow-up comment here.
+
+Given the size (<changedFiles> files), this will take a while. If you plan to push more commits in the meantime, that's fine — we re-fetch before pushing and never force-push your branch — but a quick note here helps us avoid reviewing a head that's about to change.
+```
+
+If `maintainer_can_modify` is false, the third bullet becomes step 9's
+fallback — *"If we find things worth fixing, we'll put them in a separate
+pull request on our repository that carries all of your commits plus ours,
+and explain each one in a follow-up comment here"* — and the closing
+sentence's *"we re-fetch before pushing and never force-push your branch"*
+becomes *"we re-fetch your branch before opening it"*. The bullet states the
+recommended route; if step 3 takes another, step 9's comment says so.
 
 ## 2. Preflight
 
@@ -226,7 +257,7 @@ Present, in the chat and in this order:
 5. **The plan**: fix these, verify like this, push there, comment that.
 
 Then `AskUserQuestion`. Nothing is written to the fork, the PR, or the user's
-repo before that answer. If the user says "fix all high and medium", that is
+repo before that answer, except step 1's kickoff comment. If the user says "fix all high and medium", that is
 the authorisation for step 7 and no further asking is needed unless a fix
 turns into a design decision.
 

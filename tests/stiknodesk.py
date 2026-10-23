@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""SPEC.md 11.103.10: with NO DESK.DRV on the system disk, a Sticky App row still
-comes up at boot - as a TITLED widget - and its row is kept.
+"""SPEC.md 11.103.10: with NO DESK.DRV on the system disk, the Desk Calendar's
+row is still RELAUNCHED at boot - and the calendar, built STIK_DESKONLY for
+kern_big, refuses in its own words (SPEC.md 110.7) - and its row is kept.
 
     make && python3 tests/stiknodesk.py [--only absent|present|bdrive]
 
@@ -12,10 +13,11 @@ asserts on the host that the file is gone from it and was on the original,
 so a fixture that never had the module cannot pass for one that lost it.
 
   absent  DESK.DRV deleted:
-    A  the boot reaches the desktop and the Desk Calendar is UP - stik_boot is
-       resident (SPEC.md 110.4), so the relaunch does not need the module;
-    B  it is TITLED: no WF_DESK, a title bar (not WF_FULL) - its QUERY was
-       refused (mod_need found no file) and it took kern_small's path;
+    A  the boot reaches the desktop and stik_boot RELAUNCHED the calendar -
+       it is resident (SPEC.md 110.4), so the relaunch does not need the
+       module - and the calendar REFUSED: its QUERY was refused (mod_need
+       found no file), it says `No desk layer (DESK.DRV)` and no window is
+       up. The titled fallback is the SMALL build's (stiksmall);
     C  the module is NOT held: mod_tab's MOD_DESK row is 0 and every DKDFP
        slot still names mod_gone;
     D  its row is KEPT: still the Sticky App row (+3 = 'D'), with no desktop cell -
@@ -36,20 +38,26 @@ so a fixture that never had the module cannot pass for one that lost it.
     A  the calendar is up, B a DESK window (WF_DESK, no title bar), C the
        module HELD (the row's segment non-zero, the hover slot not mod_gone),
        D the row kept the same way, E the volume put back the same way, and
-    F  the module's 1 KB claim is ABOVE the calendar's region: the loader's
+    F  the module's claim is ABOVE the calendar's region: the loader's
        step 5 took it for an OS88_F_DESK package BEFORE the region, so a
        closed widget's region is not stranded above a pinned island
-       (SPEC.md 11.103.10).
+       (SPEC.md 11.103.10), and
+    G  closing that widget - the LAST one - gives the claim back:
+       desk_drop_x, in app_close_win's task-less branch (a STIK_DESKONLY
+       calendar hires no worker), finds no IF_DESK record left, so the MOD_DESK row is 0 and every DKDFP slot
+       names mod_gone again (SPEC.md 11.103.10's lifetime).
   bdrive  `present` with the row on B: (a second copy of the shipped disk in
        the B: drive) - every claim again, and E is the DRIVE half of the
        pair: the boot ends on A:, where it was, and not mounted on B:.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): move stik_boot's loop into
-DESK.DRV (the cut design's first draft) and `absent` A fails - no window at
-all; drop desk_need's save of drv_vol_cwd / drv_vol_drv and E fails on both
-legs; take the loader's step-5 `call desk_need` out and `present` F fails; make osapi_wm_desk_x's QUERY answer CF = 0 without mod_need and
-`absent` B fails (MAKE then refuses into a desk-sized titled frame, and
-`present` C fails: nothing loads the image).
+DESK.DRV (the cut design's first draft) and `absent` A fails - nothing is
+relaunched, so nothing refuses; drop desk_need's save of drv_vol_cwd / drv_vol_drv and E fails on both
+legs; take the loader's step-5 `call desk_need` out and `present` F fails;
+take app_close_win's `call COLD_SEG:desk_drop_x` out and `present` G fails
+(the image is held to restart, as it was before the drop rule); make osapi_wm_desk_x's QUERY answer CF = 0 without mod_need and
+`absent` A fails (a window comes up), and `present` C fails: nothing loads
+the image.
 """
 import os
 import shutil
@@ -159,19 +167,21 @@ def leg(name, tmp):
         ui = os88ui.UI(m)
         ui.up(limit=180.0)
         os88marty.no_saver(m)
-        print(" A: the boot relaunched the calendar")
-        w = ui.wait_window(TITLE, limit=120)
-        check(w is not None, "the Desk Calendar is up")
-        f = w.flags
-        print(" B: %s" % ("TITLED - its QUERY was refused" if absent
-                          else "a DESK window"))
-        desk = bool(f & geom.WF_DESK)
-        full = bool(f & geom.WF_FULL)
         if absent:
-            check(not desk and not full,
-                  "no WF_DESK and a title bar (W_FLAGS %#06x)" % f)
+            print(" A: the boot relaunched the calendar, and it refused")
+            txt = ui.wait_toast(says="DESK.DRV", limit=60)
+            check(txt == "No desk layer (DESK.DRV)", "it says %r" % txt)
+            os88marty.guest_sleep(m, 2.0)
+            check(not [o for o in ui.windows() if o.title == TITLE],
+                  "and no Desk Calendar window is up")
         else:
-            check(desk, "WF_DESK, the widget (W_FLAGS %#06x)" % f)
+            print(" A: the boot relaunched the calendar")
+            w = ui.wait_window(TITLE, limit=120)
+            check(w is not None, "the Desk Calendar is up")
+            f = w.flags
+            print(" B: a DESK window")
+            check(bool(f & geom.WF_DESK),
+                  "WF_DESK, the widget (W_FLAGS %#06x)" % f)
         print(" C: the module %s" % ("is not held" if absent else "is held"))
         seg = struct.unpack("<H", bytes(m.read(
             ui._S("mod_tab") + MOD_DESK * MODR_SIZE, 2)))[0]
@@ -212,6 +222,19 @@ def leg(name, tmp):
             wseg = struct.unpack("<H", bytes(m.read(rec + geom.W_SEG, 2)))[0]
             check(seg > wseg, "the module at %#06x, the calendar's region at "
                   "%#06x" % (seg, wseg))
+            print(" G: the last widget closed, DESK.DRV goes with it")
+            ui.close(w)
+            os88marty.guest_sleep(m, 1.0)
+            seg2 = struct.unpack("<H", bytes(m.read(
+                ui._S("mod_tab") + MOD_DESK * MODR_SIZE, 2)))[0]
+            raw = bytes(m.read(ui._S("DKDFP"), DKD_NENT * 4))
+            back = [struct.unpack_from("<HH", raw, k * 4)
+                    for k in range(DKD_NENT)]
+            check(seg2 == 0, "mod_tab's MOD_DESK row is 0 again (%#06x): "
+                  "the 5 KB claim is given back" % seg2)
+            check(all((sg << 4) + off == gone for off, sg in back),
+                  "every DKDFP slot names mod_gone again (%r)"
+                  % ["%05X" % ((sg << 4) + off) for off, sg in back])
 
 
 def main():

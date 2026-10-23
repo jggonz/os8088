@@ -122,6 +122,7 @@ wb_paint:
     call OSAPI_GFX_BLIT4
     jmp .body
 .mono:
+    call wb_monobuild
     mov si, wb_artmono
     mov bp, WB_ART_W/8
     cmp dx, WB_ART_H
@@ -149,6 +150,145 @@ wb_paint:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; The 1bpp title strip ships as a residual (tools/wbfront.py, SPEC.md 109.4):
+; each pixel is its colour's dither level against the 4x4 Bayer cell, XOR
+; the shipped byte. Rebuilt in place once per instance, on the first
+; monochrome paint, so a colour display never pays for it - and a compact
+; strip, which draws only the even rows, rebuilds only row phases 0 and 2.
+; The scratch is the UART state, which only a serial match's wb_openports
+; establishes and which is all rewritten before it is read.
+; In: DX = the strip's drawn height. Keeps every register.
+WB_MONO_P equ wb_ports           ; 16 high-nibble masks, 16 low-nibble masks
+WB_MONO_T equ wb_ports+32        ; 256: a colour byte's two pixels, both phases
+WB_MONO_TODO equ wb_ports+288    ; row phases still to rebuild, bit 0 next
+    times -(WP_SIZE*2 < 289) db 0  ; the scratch fits the UART state
+wb_monobuild:
+    push ax
+    mov al, 0x0f
+    cmp dx, WB_ART_H
+    je .need
+    mov al, 0x05
+.need:
+    mov ah, [wb_monodone]
+    or [wb_monodone], al
+    not ah
+    and al, ah
+    jz .none
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [WB_MONO_TODO], al
+    xor bp, bp                   ; BP = the row phase, 0..3
+.phase:
+    shr byte [WB_MONO_TODO], 1
+    jnc .next
+    mov bx, bp
+    shl bx, 1
+    shl bx, 1
+    add bx, wb_artbayer          ; BX = this phase's four thresholds
+    mov si, wb_artlevel
+    mov di, WB_MONO_P
+    mov cx, 16
+.level:
+    lodsb
+    xor dx, dx                   ; DH = high-nibble pixel, DL = low-nibble
+    cmp al, [bx]
+    jbe .p1
+    or dh, 0x88
+.p1:
+    cmp al, [bx+1]
+    jbe .p2
+    or dl, 0x44
+.p2:
+    cmp al, [bx+2]
+    jbe .p3
+    or dh, 0x22
+.p3:
+    cmp al, [bx+3]
+    jbe .p4
+    or dl, 0x11
+.p4:
+    mov [di], dh
+    mov [di+16], dl
+    inc di
+    loop .level
+    mov si, WB_MONO_P            ; DI = WB_MONO_P+16 = the low masks
+.high:
+    mov bx, WB_MONO_P+16
+    mov cl, 16
+.low:
+    mov al, [bx]
+    or al, [si]
+    mov [di+16], al              ; WB_MONO_T + high*16 + low
+    inc bx
+    inc di
+    loop .low
+    inc si
+    cmp si, WB_MONO_P+16
+    jb .high
+    mov ax, WB_ART_W/8
+    mul bp
+    mov di, ax
+    add di, wb_artmono
+    shl ax, 1
+    shl ax, 1
+    mov si, ax
+    add si, wb_artcolor
+    mov bx, WB_MONO_T
+    mov dx, WB_ART_H/4
+.row:
+    push dx                      ; the rows left; DX is scratch below
+    mov cx, WB_ART_W/8
+.byte:
+    lodsw                        ; colour bytes 0 and 1 of this mono byte
+    mov dx, ax
+    or dx, [si]                  ; ...and 2 and 3: all black predicts black,
+    jz .black                    ; so the residual already is the pixel
+    xlat
+    xchg al, ah
+    xlat                         ; AH = T[byte 0], AL = T[byte 1]
+    and ax, 0xc030
+    or ah, al
+    mov dl, ah
+    lodsw
+    xlat
+    xchg al, ah
+    xlat
+    and ax, 0x0c03
+    or al, ah
+    or al, dl
+    xor [di], al
+    inc di
+    loop .byte
+    jmp short .rowdone
+.black:
+    inc si
+    inc si
+    inc di
+    loop .byte
+.rowdone:
+    pop dx
+    add si, 3*WB_ART_W/2
+    add di, 3*WB_ART_W/8
+    dec dx
+    jnz .row
+.next:
+    inc bp
+    cmp bp, 4
+    jb .phase
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+.none:
     pop ax
     ret
 
@@ -278,34 +418,31 @@ wb_onkey:
     cmp al, 27
     jne .key
     cmp byte [wb_help], 0
-    je .out
-    jmp .help
+    jne .help
+.out:
+    ret
 .key:
     or al, 0x20
     cmp al, 's'
     je .serial
     cmp al, 'l'
     je .practice
-    cmp al, 'h'
-    je .help
     cmp al, 'm'
     je .sound
-.out:
-    ret
+    cmp al, 'h'
+    jne .out
+.help:
+    xor byte [wb_help], 1
+    jmp wb_frontupdate
 .serial:
     xor al, al
     jmp wb_launch
 .practice:
     mov al, 1
     jmp wb_launch
-.help:
-    xor byte [wb_help], 1
-    call wb_frontupdate
-    ret
 .sound:
     call wb_sound_toggle
-    call wb_frontsoundupdate
-    ret
+    jmp wb_frontsoundupdate
 
 wb_buttonup:
     push cx
@@ -314,28 +451,11 @@ wb_buttonup:
     pop dx
     pop cx
     mov bx, wb_btrec
-    call os88ui_btnup
-    cmp al, 1
-    je .serial
-    cmp al, 2
-    je .practice
-    cmp al, 3
-    je .help
-    cmp al, 4
-    je .sound
-    ret
-.serial:
-    xor al, al
-    jmp wb_launch
-.practice:
-    mov al, 1
-    jmp wb_launch
-.help:
-    xor byte [wb_help], 1
-    jmp wb_frontupdate
-.sound:
-    call wb_sound_toggle
-    jmp wb_frontsoundupdate
+    call os88ui_btnup           ; AX = fired button + 1, or 0
+    xchg bx, ax
+    mov al, [bx+wb_btnkeys]     ; a fired button is its own key's action
+    jmp wb_onkey.key
+wb_btnkeys: db 0,'slhm'
 wb_buttondrag:
     push cx
     push dx

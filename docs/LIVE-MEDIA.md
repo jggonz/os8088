@@ -68,10 +68,11 @@ added and does not reach this image (§80.6).
 The build is deterministic: the same source produces byte-identical images,
 so a checksum comparison against a release is meaningful.
 
-For a device-first chooser covering all built floppy, USB and CD images,
-run `make imager`. See [os8088 imager](IMAGER.md) for discovery, media
-requirements and verification. The original `make burn` guide below remains
-available for the two live images.
+On a Mac, `make imager` is the tool for putting any of them on real media:
+it finds the attached floppy drives, flash drives and CD burners and offers
+the images that fit each. [os8088 imager](IMAGER.md) is its guide.
+`make burn`, the older guide below, does the same for the two live images
+only, and stays for anyone used to it.
 
 ## Writing the USB stick
 
@@ -82,11 +83,18 @@ available for the two live images.
 ### On a Mac — the guided way (recommended)
 
 ```
-make burn
+make imager
 ```
 
-`tools/os88burn.py`, an interactive guide that makes the dangerous step
-hard to get wrong:
+`tools/os88imager.py` lists the devices it could write, then the images
+that fit the one you choose; [IMAGER.md](IMAGER.md) walks through it. A
+stick for a period machine with an XTIDE card is where it matters most: it
+asks what geometry the card's ROM will report and writes the image for it
+(below, and §80.5).
+
+`make burn` (`tools/os88burn.py`) is the older guide, for the live USB
+image and the live CD alone. It works the same way and makes the dangerous
+step just as hard to get wrong:
 
 ```
 os8088 live media writer (SPEC.md 80)
@@ -111,7 +119,7 @@ os8088 live media writer (SPEC.md 80)
   Type the disk's identifier (disk4) to confirm, anything else aborts:
 ```
 
-Three things it does that a raw copy command does not:
+Three things both do that a raw copy command does not:
 
 - **It only lists disks that could be the right answer.** A drive appears
   only if it is on the USB bus, external, and not the disk macOS is
@@ -162,10 +170,10 @@ raw, byte for byte, not "converted".
 
 ## Burning the CD
 
-**On a Mac**, `make burn` again — option 2 burns when a burner is attached
-(`drutil list` sees it) and says so when none is. It uses Apple's own
-`hdiutil burn`, which verifies the disc after burning. By hand, the same
-thing is:
+**On a Mac**, `make imager` again — choose the burner, then `os8088.iso`;
+it burns with Apple's `drutil`, verification on. `make burn`'s option 2
+does the same with `hdiutil burn`, which verifies the disc after burning,
+and says so when no burner is attached. By hand, the same thing is:
 
 ```
 hdiutil burn os8088.iso
@@ -242,8 +250,8 @@ survive reboots; on the CD, saving refuses — the disc is read-only).
    stick — some BIOSes refuse large drives on the legacy path.
 4. **It boots but C: is missing or empty:** the bytes on the stick are not
    the image — an interrupted write, or a fake-capacity stick that dropped
-   the tail. Rewrite it; `make burn`'s read-back verify catches this class
-   of failure at write time.
+   the tail. Rewrite it; the read-back verify in `make imager` (and in
+   `make burn`) catches this class of failure at write time.
 
 ## How it works
 

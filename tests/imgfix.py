@@ -175,8 +175,9 @@ def build_set(outdir):
 
       TEST.IMG   360KB, FRAGMENTED into three runs stored out of order
       RO.IMG     360KB, contiguous, READ-ONLY on the host (the user's)
-      STALE.IMG  360KB, contiguous, wearing the MOUNTED marker a machine that
-                 stopped mid-mount leaves (read-only + byte 12 = IMG_MARK)
+      STALE.IMG  360KB, contiguous, wearing the MOUNTED marker an EARLIER
+                 kernel left on a file it was stopped under (read-only + byte
+                 12 = IMG_MARK); a mount now clears it (SPEC.md 18.101.3)
       BAD.IMG    4KB of zeros: a whole number of sectors and no FAT at all
 
     Answers (path, {name: runs}).
@@ -215,8 +216,8 @@ def build_set(outdir):
     return host, out
 
 
-IMG_MARK = 0xC1                 # kernel/diskops.inc's, byte 12 of a mounted
-                                # file's directory entry (SPEC.md 18.101.3)
+IMG_MARK = 0xC1                 # kernel/diskops.inc's: byte 12 of a file an
+                                # EARLIER kernel mounted (SPEC.md 18.101.3)
 
 
 if __name__ == "__main__":

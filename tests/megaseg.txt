@@ -1,0 +1,45 @@
+# tests/megaseg.txt - kern_mega's overhead in the kernel's 64KB segment
+# (docs/plans/KERN-MEGA-SEGMENTS-PLAN.md W0)
+#
+# The bytes kern_mega's `.text` + `.bss` carry beyond kern_big's, as
+# tools/os88megaseg.py measures them off the two maps. `make mega` fails when
+# the figure is above the number below. Every byte here is a byte kern_big can
+# no longer grow by before kern_mega overflows, so it only goes up for code
+# that has to run in REAL mode after the switch - the reflection's window, the
+# 286 reset landing, the drop into DOS - or for data a shared routine reads
+# through DS. Code that runs only in protected mode belongs in `.mega`.
+#
+# Raise it with a line saying what needed the room, and lower it whenever a
+# change takes kern_mega bytes out.
+#
+# 2026-10-20: 5,931 at the end of W2/W3 (was 17,299 before `.mega`)
+# 2026-10-20: +4, mega_putsf - mega_tell's lines are kernel DATA, which
+#             `.mega`'s CS cannot read, so they go to E9 through the low writer
+# 2026-10-20: -4, KERN-MEGA-PLAN 14.39 - MOUPRIV_ENTER sets SS on every
+#             kernel, which costs kern_big an entry byte twice over and two
+#             parity pads that kern_mega's same-size entry does not need
+# 2026-10-20: +4, KERN-MEGA-PLAN 14.42 - mega_tcall, `call bp / retf`: how
+#             mega_fkdo and mega_fkill (`.mega`) reach the near .text routines
+#             a forced close is made of (gfx_lock, inst_unwin, wm_hide, ...)
+# 2026-10-21: -1,378, KERN-MEGA-PLAN 14.45 - W3's rest: the park's three
+#             buffers (the list, the KB map, the header's cells; 894 bytes)
+#             in the tail of `.mega`'s rung through their own selector, and
+#             mega_enter's real-mode refusals, the A20 gate and the task test
+#             in `.cold`, the debug port's lines folded into the toasts' own
+# 2026-10-21: -232, KERN-MEGA-PLAN 14.49 - mx_tab (192 bytes at 24
+#             entries) into LOW_SEG through SS, at 96 entries, and
+#             mega_lincopy's body into `.mega` (mx_lcopy) behind a four-byte
+#             near door and a six-byte far one
+# 2026-10-21: +22, KERN-MEGA-PLAN 14.62 - mega_kdrain and its two calls: the
+#             8042 emptied right after an ICW1, in mega_r286 (a 286's reset
+#             landing, real mode) and mega_dropr (the drop into DOS, real
+#             mode). Both run where `.mega` cannot be reached
+# 2026-10-21: -322, KERN-MEGA-PLAN 14.65 - the menu bar's field readings
+#             (NMI, RST, FDC RESET, RFL, Q, DOSP) behind MEGADIAG=1: their
+#             strings and the counters' .bss were the kernel segment's
+# 2026-10-22: +6, the main merge's menu-bar volume (SPEC.md 34.15) -
+#             ui_volume_service, SOUND.DRV's bridge into the UI task, loads
+#             DS and ES with KDS/KES rather than push cs/pop: it runs in
+#             protected mode, where CS is readable code, so each load reads
+#             [cs:k_dsel] - five bytes against two, byte-identical on kern_big
+4029

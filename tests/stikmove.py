@@ -68,8 +68,6 @@ ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 TITLE = "Desk Calendar"
 TEMPLATE = (375, 42)            # the default place: face (640 - 264, 42)
-STIK_ST = os88stik.stik_st_off(os88stik.DESKCAL_STIK_BSS, os88stik.DESKCAL_PAYLEN)
-HDR = os88stik.stik_hdr_off(os88stik.DESKCAL_STIK_BSS)
 STIK_S_ROW, STIK_S_DIRTY = 2, 16
 
 fails = []
@@ -97,6 +95,14 @@ def image_size():
     return struct.unpack_from("<H", b, 8)[0]
 
 
+def state_off():
+    """stik_st and the header AS KNOWN, past the image: the kern_big build
+    keeps both in its Sticky App block (SPEC.md 110.15)"""
+    so = os88stik.state_off(os88stik.DESKCAL_LIB, os88stik.DESKCAL_STIK_BSS,
+                            os88stik.DESKCAL_PAYLEN, image_size())
+    return so["st"], so["hdr"]
+
+
 def wseg_of(ui, w):
     return struct.unpack_from("<H", ui.m.read(
         ui._S("wm_wins") + w.i * geom.WIN_SIZE + geom.W_SEG, 2))[0]
@@ -106,6 +112,7 @@ def move_leg(tmp, machine, template, drag, screen):
     sysimg = os.path.join(tmp, "os8088-360.img")
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), sysimg)
     image = image_size()
+    STIK_ST, HDR = state_off()
 
     with os88ui.boot(sysimg, machine=machine) as ui:
         m = ui.m
@@ -141,7 +148,7 @@ def move_leg(tmp, machine, template, drag, screen):
         try:
             d = os88stik.parse_dat(volume(m, tmp).read(
                 "SYSTEM/APPDATA/DESKCAL.DAT"), os88stik.DESKCAL_PAYLEN,
-                os88stik.DESKCAL_PAYVER)
+                os88stik.DESKCAL_PAYVER, packed=True)
         except Exception as e:
             d = {"pos": False, "x": None, "y": None, "screen": None,
                  "err": str(e)}
@@ -193,6 +200,7 @@ def anchor_leg(tmp):
     sysimg = os.path.join(tmp, "os8088-360.img")
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), sysimg)
     image = image_size()
+    STIK_ST, HDR = state_off()
     fixture = os88stik.dat(os88stik.deskcal(), x=SAVED[0], y=SAVED[1],
                           screen=SAVED_SCREEN)
     src = os.path.join(tmp, "DESKCAL.DAT")

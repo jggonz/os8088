@@ -21,7 +21,10 @@
 MRL_MAX     equ 64                  ; entries
 MRL_ENT     equ 16
 
-    MRBUF mrl_ent, MRL_MAX * MRL_ENT
+mrl_ent     equ mrk_pring + OS88SPK_PRL ; the bss's second buffer: the
+                                    ; image's tail runs on into it (an
+                                    ; entry is only read below [mrl_n],
+                                    ; and written whole first)
     MRB mrl_n                       ; entries
     MRB mrl_sel                     ; the highlighted one (and what Play plays)
     MRB mrl_top                     ; the first row on show
@@ -583,7 +586,7 @@ mrl_ffind:
     ret
 
 ; -----------------------------------------------------------------------------
-; mrl_dry - the song walked end to end with NO output (SPEC.md 105.5.5):
+; mrl_dry - the song walked end to end with NO output (SPEC.md 105.4):
 ; its length in ms, its measures, the first program of every channel, its
 ; notes and its first text. Then rewound, and its tick-0 events played dry
 ; too, so the window shows the tempo and the instruments it starts with.

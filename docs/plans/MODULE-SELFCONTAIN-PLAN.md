@@ -596,6 +596,20 @@ had passed the frame-only move, which is the opposite of 6.4's finding about
 the frame and worth knowing: the row can see most of this state, just not the
 descent stack.
 
+**RESOLVED in kernel size pass 13** (`docs/plans/completed/ksp13/wkfs.md`),
+without the bisect, by asking which RESIDENT code reads the state rather than
+which image code does - the question the check above is blind to, because a
+resident reader's operand is `[x]` on both builds and so names no module data.
+Two did: the four `fcp_go*` doors were resident `.cold` and read `fcp_dcwd`,
+`fcp_fsclus`, `fcp_fdclus`, `fcp_cwd`, `fcp_drv` and `fcp_ddrv` through DS -
+which is a wrong FOLDER on the first file (*"GUIDE.TEX is not in B:\"*) - and
+`fm_paste_res` and `fmv_reload_all` read `[fcp_err]`, `[fcp_op]`, `[fcp_drv]`,
+`[fcp_ddrv]` and `fcp_fname` AFTER `fcp_fin` has dropped the image - which is
+the FERR off a zeroed claim. So the doors became image code (kern_small
+.cold -28), and the scalars nothing resident reads - 44 bytes, through one
+`FCV()` accessor - went into `.modpb` (kern_small .bss -44); the readers'
+words, the operation record and the two 13-byte names (DS pointers) stay.
+
 ### 6.3 What W4 came to, and the trap that makes the rest of it smaller
 
 **`drv_status_x`: `.cold` 39,256 → 39,216, −40 on `kern_big`** (−4 on

@@ -11,8 +11,9 @@ kernel's mod_tab row, its labels' offsets os88sym's - so every assertion is
 about what the module DECIDED, not about pixels:
 
   A  a press on the 'Sticky Apps' cell loads STIKMENU.DRV and drops a panel
-     listing the system disk's TWO Sticky Apps (DESKCAL.O88 and, since
-     SPEC.md 110.13, STIKNOTE.O88), each row a pick: DESKCAL.O88 on the boot
+     listing the system disk's THREE Sticky Apps (DESKCAL.O88 and, since
+     SPEC.md 110.13 and 110.14, STIKNOTE.O88 and DESKCLOK.O88), each row a
+     pick: DESKCAL.O88 on the boot
      volume, its card's name 'Desk Calendar', not running, '0 active';
      Arrange and Hide greyed (no widget), More live;
   B  releasing on its row POSTS the pick and LAUNCHES it: a desk window
@@ -25,8 +26,16 @@ about what the module DECIDED, not about pixels:
      4), right of the drive zones' column;
   F  picking the RUNNING row closes it - through app_close_win, so its own
      negotiator removes its Sticky App row from the desktop table.
+  C  ...and the drop it releases off is taken with the hand moved DOWN onto
+     the panel while the module loads and scans - where the busy clock arms
+     (cur_busy_on refuses only on the bar's own rows): once the panel is up
+     the progress widget is OFF the bar and the pointer is NOT the clock
+     (SPEC.md 12.8.3.3, stm_thaw - the menu's hold is interactive, so the
+     freeze ends where the disk work does, not at the unlock);
+  H  a Disk window's bar carries no 'Sticky Apps' cell - that menu is the
+     desktop's (SPEC.md 22.28.1).
   G  a second boot with six more Sticky Apps - one-sector stubs, a header
-     and a card - lists eight, PAGED (a page smaller than eight and a pager
+     and a card - lists nine, PAGED (a page smaller than nine and a pager
      row); a release on the pager turns to page 2 and the panel STAYS UP;
      a click off it then closes it with nothing posted.
 
@@ -34,7 +43,10 @@ about what the module DECIDED, not about pixels:
 OS88_F_STIK and A fails (no card, nothing listed); make stm_track_x drop the
 image whatever the track answered and B fails (the posted act finds
 mod_gone); call wm_close_req instead of app_close_win in stm_a_close and F's
-row check fails (the negotiator is cleared before the close).
+row check fails (the negotiator is cleared before the close); take stm_thaw
+out of stm_loadpics and C reads [fpg_on] 1 and the clock as the shape (both
+measured on the kernel before it); put menu_s_stik back in fm_menus and H
+fails.
 """
 import os
 import shutil
@@ -126,6 +138,16 @@ class Menu:
                      y=struct.unpack_from("<H", raw, i * SL_SIZE + SL_Y)[0])
                 for i in range(n)]
 
+    def drop_moving(self):
+        """Press the cell and move the hand DOWN at once, button held, so it
+        is over the panel's rows while the module loads and scans - the case
+        the busy clock arms in. Waits for the panel."""
+        self.ui.mo.to(self.cell(), geom.MBAR_H // 2)
+        self.ui.mo._edge(True)
+        self.ui.mo.to(self.cell() + 40, 120, l=True)
+        self.ui._wait(lambda: self.base() and self.b("stm_live"),
+                      "the Sticky Apps panel to drop", T)
+
     def release_on(self, slabs, k):
         """Move onto slab k with the button held, see it highlighted, let go."""
         x = (self.w("stm_x1") + self.w("stm_x2")) // 2
@@ -215,7 +237,7 @@ def paging(tmp):
         subprocess.run(["mcopy", "-o", "-i", img, f,
                         "::/STIKAPPS/PAGE%d.O88" % k], check=True, env=env,
                        stdout=subprocess.DEVNULL)
-    print("G: eight Sticky Apps page")
+    print("G: nine Sticky Apps page")
     with os88marty.launch(img, machine=os88marty.machine(
             "os8088_xt_vga", None), boot=True) as m:
         ui = os88ui.UI(m)
@@ -224,7 +246,7 @@ def paging(tmp):
         menu = Menu(m, ui)
         slabs = menu.drop()
         n, shown = menu.b("stm_n"), menu.b("stm_shown")
-        check(n == 8, "eight listed (%d)" % n)
+        check(n == 9, "nine listed (%d)" % n)
         check(menu.b("stm_paged") == 1 and shown < n,
               "paged: %d a page of %d" % (shown, n))
         pg = [i for i, s in enumerate(slabs) if s["kind"] == SK_PAGE]
@@ -259,9 +281,10 @@ def main():
             print("A: the panel lists the Desk Calendar by its card")
             slabs = menu.drop()
             ents = entries(menu)
-            check(len(ents) == 2 and sorted(e["file"] for e in ents)
-                  == [b"DESKCAL.O88", b"STIKNOTE.O88"],
-                  "two Sticky Apps listed, the calendar and Sticky Note "
+            check(len(ents) == 3 and sorted(e["file"] for e in ents)
+                  == [b"DESKCAL.O88", b"DESKCLOK.O88", b"STIKNOTE.O88"],
+                  "three Sticky Apps listed, the calendar, the clock and "
+                  "Sticky Note "
                   "(%r)" % [e["file"] for e in ents])
             k = [i for i, e in enumerate(ents)
                  if e["file"] == b"DESKCAL.O88"]
@@ -276,9 +299,9 @@ def main():
                 check(e["run"] == 0, "it is not running")
             check(menu.b("stm_nrun") == 0, "'No Sticky Apps active'")
             apps = [i for i, s in enumerate(slabs) if s["kind"] == SK_APP]
-            check(len(apps) == 2 and all(slabs[a]["flags"] & SF_SEL
+            check(len(apps) == 3 and all(slabs[a]["flags"] & SF_SEL
                                          for a in apps),
-                  "two app rows, each a pick")
+                  "three app rows, each a pick")
             check(slabs[item(slabs, IT_ARR)]["flags"] & SF_DIS and
                   slabs[item(slabs, IT_HIDE)]["flags"] & SF_DIS and
                   slabs[item(slabs, IT_MORE)]["flags"] & SF_SEL,
@@ -294,8 +317,15 @@ def main():
             menu.gone()
             check(True, "...and STIKMENU.DRV was dropped after the act")
 
-            print("C: a release off the panel picks nothing")
-            menu.drop()
+            print("C: the freeze ends with the scan; a release off the "
+                  "panel picks nothing")
+            menu.drop_moving()
+            check(ui._byte("fpg_on") == 0, "the progress widget is off the "
+                  "bar while the panel is up ([fpg_on] %d)"
+                  % ui._byte("fpg_on"))
+            check(ui._byte("cur_shape") != EQ["CUR_BUSYSH"],
+                  "the pointer is not the busy clock (cur_shape %d)"
+                  % ui._byte("cur_shape"))
             menu.release_off()
             menu.gone()
             check(ui._word("ui_pcmd") == 0, "nothing posted")
@@ -344,6 +374,15 @@ def main():
             check(not is_open(ui, TITLE), "the Desk Calendar is closed")
             check(not stik_rows(m, ui),
                   "its own negotiator removed its Sticky App row")
+
+            print("H: a Disk window's bar is its own")
+            check(any(c[0] == "Sticky Apps" for c in ui.menus()),
+                  "the desktop's bar carries 'Sticky Apps'")
+            dw = ui.open_drive("A")
+            bar = [c[0] for c in ui.menus()]
+            check("Sticky Apps" not in bar and "Disk" in bar,
+                  "a Disk window's bar does not (%r)" % bar)
+            ui.close(dw)
         paging(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

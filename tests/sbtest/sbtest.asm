@@ -59,6 +59,12 @@ SB_CONT_W equ 188                   ; content: 190 outer - 2px borders
 SB_CONT_H equ 81                    ; 100 outer - TITLE_H - 1px border
 
 SB_CHUNK  equ 800                   ; one staged chunk (100 square periods)
+%ifndef SBTEST_RATE
+%define SBTEST_RATE 8000
+%endif
+%ifndef SBTEST_CHUNKS
+%define SBTEST_CHUNKS 20
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sb_entry - package entry point (SPEC.md 20.2)
@@ -121,7 +127,7 @@ sb_onclick:
     push si
     cmp byte [sb_openf], 0
     jne .close
-    mov cx, 0x1414                  ; CH = CL = 20 chunks: 16,000 B granted
+    mov cx, SBTEST_CHUNKS * 0101h    ; CH = CL: fully staged playback
     call sb_start                   ; and staged = 2 s at 8 kHz
     jmp .repaint
 .close:
@@ -270,7 +276,7 @@ sb_start:
     mov ax, 0x0000                  ; verb 0 open-out: fully staged
     mov si, [sb_gtmp]
     mov cx, [sb_ttmp]
-    mov dx, 8000
+    mov dx, SBTEST_RATE
     call OSAPI_SND_STREAM           ; out AL = err, AH = handle
     or al, al
     jnz .freefail

@@ -710,9 +710,9 @@ static void c64_tier_init(void)
  *
  * AND A MESSAGE OWNS THE ROW'S 40 FIELD CELLS - NOT THE ROW. The alternative,
  * measured above, is a seven-character message area, and the messages this
- * port has to show - `C64.ROM missing - see README.TXT` (1.4),
- * `Unable to load C64.OVL.` (13.3), `Cannot start the closer - try again.` -
- * are 32, 23 and 36. The two LAMPS at 320 and 328 are drawn under a message
+ * port has had to show - `C64.ROM missing - see README.TXT` (1.4, before the
+ * ROM was a part), `Unable to load C64.OVL.` (13.3, before the overlay was
+ * one), `Cannot start the closer - try again.` - were 32, 23 and 36. The two LAMPS at 320 and 328 are drawn under a message
  * as well, because `P` is the one indicator that exists to report the pause
  * state and `Paused.` is a message: hiding it left the lamp off the glass for
  * exactly as long as the machine was in the state it reports, and a machine

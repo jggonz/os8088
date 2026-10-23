@@ -153,7 +153,7 @@ class PxPart:
         return [tuple(b[3 * i:3 * i + 3]) for i in range(256)]
 
     def set_master(self, m, w, h, counts=None, tail=2048):
-        seg = self.claim(w * h + 15 + tail)
+        seg = self.claim(w * h + 127 + tail)
         self.seg_write(seg, m)
         self.w16("px_cur", w, self.PXR_MW)
         self.w16("px_cur", h, self.PXR_MH)
@@ -165,7 +165,9 @@ class PxPart:
 
     @staticmethod
     def tail_of(seg, w, h):
-        return seg + (w * h + 15) // 16
+        # the pixels' paragraphs up to a multiple of 8: a segment on
+        # kern_mega's grid (pxmaster.inc's px_htail, KERN-MEGA-PLAN 14.40)
+        return seg + ((w * h + 15) // 16 + 7 & ~7)
 
     # --- a call ---------------------------------------------------------------
     def vector(self, k):
@@ -178,6 +180,10 @@ class PxPart:
         stub = b"\x9A" + struct.pack("<HH", self.vector(vec), PART) + b"\xF4"
         mu.mem_write(STUB * 16, stub)
         mu.mem_write(PART * 16 + 4, struct.pack("<H", PKG))     # PXP_PKG
+        # PXP_SELF and PXP_PKGD (apps/pixel/pxpart.inc rule 6): the part's
+        # and the package's DATA segments, which on a real-mode kernel are
+        # the segments themselves
+        mu.mem_write(PART * 16 + 16, struct.pack("<HH", PART, PKG))
         for r, v in ((UC_X86_REG_AX, ax), (UC_X86_REG_BX, bx),
                      (UC_X86_REG_CX, cx), (UC_X86_REG_DX, dx),
                      (UC_X86_REG_SI, si), (UC_X86_REG_DI, di),

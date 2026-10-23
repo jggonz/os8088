@@ -764,6 +764,25 @@ H_LYBKS = 506                   # THE BASE'S DISK WITH NOTHING DECODING
                                 # decodes beside. 0: the CPU alone
 H_LYIDL = 508                   # ...and the LAYER machine's, the same way.
                                 # The test runs only with both
+H_BENCHL = 510                  # THE BENCH (98.1.9.13): u16 bench_record()'s
+                                # decode modelled on the LAYER's machine, 10
+                                # us - with a layer and a bench, else 0
+R_BENCH = 62                    # ...and the rendition slot's u16: the same on
+                                # the machine the file was made for. 0 none:
+                                # the player times key 0 as it always did.
+                                # NO FLAG - an older player reads neither
+BENCH_SPAN = 192                # every write inside 192 bytes: the least
+                                # off-screen gap the player decodes it into
+                                # (CGA's after bank 0) - video.asm's VP_BNSPAN
+# (list, bytes a change, changes, absolute): the generic mix, tuned so that
+# its 286:486 ratio sits within 3% of a VGA8 and a VGA4 file's own frames
+# (98.1.9.13's table) - and video.asm's vp_bnmix, byte for byte
+BENCH_MIX = ((0, 1, 400, 0), (0, 1, 120, 1), (1, 2, 300, 0), (2, 3, 200, 0),
+             (3, 4, 160, 0), (4, 5, 100, 0), (5, 6, 100, 0), (6, 16, 100, 0),
+             (6, 40, 40, 0), (7, 16, 120, 0), (7, 64, 40, 0))
+BENCH_CMIX = ((6, 16, 60, 0),)  # ...and a SUB2 file's colour sub-record: a
+                                # VGA4 play's write mode 3 (98.1.3.2.4), card-
+                                # bound and ~18% of one's decode on a 286
 L_EMPTY = b"\x02\x00"           # a frame the layer has nothing for
 L_CONT = 0x8040                 # THE LAYER'S STREAM IS CONTINUOUS (98.1.9.8):
                                 # a record for every frame, end to end from a
@@ -809,6 +828,34 @@ REC_FLIP = 0x8000               # ...a record's y0: drawn on the HIDDEN page,
 REC_HID = 0x8000                # ...a record's y1: a hidden-page record
                                 # follows its lists, inside its len
 FLIP_PAGE = 3                   # (rendition byte 37: 2 flipped, 3 page-ahead)
+FLIP_MPAGE = 4                  # PAGE-AHEAD ON N PAGES (98.1.3.7.1): byte 37
+R_PAGES = 39                    # ...and byte 39 N, the pages it uses, 3..8
+MPAGE_MAX = 8
+PG_SHIFT = 12                   # ...a record's y0 bits 12-14 a PAGE, its rows
+PG_BITS = 0x7000                # bits 0-11
+ROW_MASK = 0x0FFF
+HID_MORE = 0x8000               # ...a hidden record's y1: another follows
+FLIP_FPAGE = 5                  # FLIPPED AND BUILT AHEAD (98.1.3.7.2): byte
+                                # 37 5, every frame record flips, on byte
+                                # 39's N pages
+FLIP_HELD = 6                   # FLIPPED WITH HELD RECORDS (98.1.3.9): byte 37
+                                # 2's every frame flipped, but a frame record
+                                # with REC_HELD is drawn on the back page and
+                                # NOT shown - the next is drawn on it too
+REC_HELD = 0x8000               # ...a frame record's y0 bit 15 there
+FLIP_OWN = 7                    # FLIPPED, EACH RECORD AGAINST ITS OWN PAGE
+                                # (VIDEO-SEEN-PLAN 3b): byte 37 6's file, but
+                                # a frame record is a change against the
+                                # page it is drawn on - the frame two back,
+                                # or the held one - drawn on it as it
+                                # stands, so no page is ever brought up...
+REC_UP = 0x1000                 # ...except a record with y1 bit 12: its page
+                                # first takes the record's rows y0..y1 off
+                                # the glass (the record after a key)
+REC_BUILT = 0x1000              # ...a frame record's y1: its page was BUILT
+                                # ahead, drawn on as it stands, not brought up
+COPY_LEN = 6                    # ...a COPY: a hidden record with y0 bit 15,
+                                # its header alone, y1 bits 12-14 the source
 F_KPARTS = 16384                # KEYS IN PARTS (98.1.3.8): a key past one
                                 # read is several key records back to back,
                                 # each a band of the screen and one read
@@ -817,9 +864,13 @@ KEY_PART = 32768                # ...a read, at most: two clusters of any
 KEY_MORE = 0x8000               # ...a key part's y0: another part follows,
                                 # and this one's last two bytes, inside its
                                 # len, are the next read's
+F_KPOOL = 32768                 # THE PAGE POOL (98.1.3.8.1): a page picture
+                                # several keys carry is stored once, after
+                                # the key records, and each key names it
+REF_LEN = 12                    # ...a key's reference: len y0 y1 at(32) n
 F_KNOWN = F_RESIDENT | F_LOOPREC | F_REPEAT | F_LIVE | F_RUNS | F_SPKPWM \
     | F_SPKMUL | F_AHEAD | F_BIGSP | F_KLEADS | F_PALEV | F_SUB2 | F_PAGE \
-    | F_KPARTS | F_SCREEN
+    | F_KPARTS | F_SCREEN | F_KPOOL
 
 # THE OPTIONS A FILE WAS MADE WITH (98.1.1.4): the header's bytes 26-31
 # point at a block the ENCODER wrote - every option it used, deflated - so
@@ -1179,13 +1230,23 @@ LAYOUT_ALIASES = {"txt": "text-80x100", "text": "text-80x25"}
 # every one of them is LIN80's layout and its two pages fit a plane's 64 KB:
 # name, pixels across, rows, pixel aspect
 SCR_480, SCR_320X200, SCR_320X240, SCR_640X350, SCR_640X400 = 0, 1, 2, 3, 4
+SCR_320X200N, SCR_320X240N = 5, 6
 SCREENS = {
     SCR_480: ("640x480", 640, 480, (1, 1)),
     SCR_320X200: ("320x200", 320, 200, (5, 6)),     # mode 0Dh
     SCR_320X240: ("320x240", 320, 240, (1, 1)),     # 0Dh on 480 lines
     SCR_640X350: ("640x350", 640, 350, (35, 48)),   # 12h on 350 (mode 10h's)
     SCR_640X400: ("640x400", 640, 400, (5, 6)),     # 12h on 400 lines
-}
+    SCR_320X200N: ("320x200n", 320, 200, (5, 6)),   # 1 and 2 NARROW: rows
+    SCR_320X240N: ("320x240n", 320, 240, (1, 1)),   # 40 bytes apart, eight
+}                                                   # and six pages (98.1.3.2.5)
+NARROW = (SCR_320X200N, SCR_320X240N)
+
+
+def screen_stride(screen):
+    """A VGA4 screen's row in plane bytes: LIN80's 80, or a NARROW screen's
+    40 (98.1.3.2.5)"""
+    return 40 if screen in NARROW else 80
 SCREEN_BY_NAME = {v[0]: k for k, v in SCREENS.items()}
 R_SCREEN = 38
 # a VGA4 file's own palette (98.1.3.2.1): the first 16 of the 256 entries,
@@ -1337,6 +1398,249 @@ PAL_BYTES = 768                 # VGA8's palette: 256 x (r, g, b), 0..63
 BAYER4 = (0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5)
 
 
+# VERSION 2: BLOCKS (SPEC.md 98.1.10). A block is four canvas rows from
+# a row that is a multiple of 4; its payload stands for every byte of them.
+# VIDEO.O88 plays them through its block decoder part (98.3.23), one bit's
+# codebook included; every player before it refuses version 2.
+V88_V2 = 2
+BLK_LEAD = 0x20                 # the first block lead of a planar record
+BLK_PFILL, BLK_TWO = 0x20, 0x21                 # VGA4: a dithered fill, two
+BLK_FILL8, BLK_TWO8, BLK_EIGHT8 = 0x20, 0x21, 0x22      # MODEX: Video-1's
+NBLISTS = 3                     # LIN320: three block lists after RUNL, the
+                                # same three kinds
+# a kind's payload bytes and its width in bytes on the surface, by name
+BLK_KIND = {"pfill": (2, 1), "two": (5, 1), "fill8": (1, 4), "two8": (4, 4),
+            "eight8": (10, 4), "mfill": (1, 1), "mtwo": (4, 1),
+            "meight": (10, 1), "tile": (1, 2)}
+VGA4_LEADS = {BLK_PFILL: "pfill", BLK_TWO: "two"}
+MODEX_LEADS = {BLK_FILL8: "mfill", BLK_TWO8: "mtwo", BLK_EIGHT8: "meight"}
+LIN320_LISTS = ("fill8", "two8", "eight8")
+
+
+def pfill_masks(m):
+    """PFILL's four row masks at mix level m (0..16): pixel x of row r is
+    colour a where BAYER4[r * 4 + x mod 4] < m - the high bit leftmost"""
+    out = []
+    for r in range(4):
+        v = 0
+        for x in range(8):
+            if BAYER4[r * 4 + (x & 3)] < m:
+                v |= 0x80 >> x
+        out.append(v)
+    return out
+
+
+PFILL_MASKS = [pfill_masks(m) for m in range(17)]
+
+
+def blk_rows(g, a):
+    """A block's four row addresses (SPEC.md 98.1.10), or V88Error for an
+    address that is not a block's top-left on this canvas"""
+    if not 0 <= a < 65536 or not g.valid[a]:
+        raise V88Error("a block at %04x is off the canvas" % a)
+    y0 = g.rowof[a]
+    if y0 % 4 or y0 + 4 > g.h:
+        raise V88Error("a block at %04x starts on row %d" % (a, y0))
+    x = a - g.base[y0]
+    return [g.base[y0 + r] + x for r in range(4)]
+
+
+def to_blocks(ents, width, abs_below=ABS_BELOW):
+    """A block list (SPEC.md 98.1.10) of `ents`, [(address, payload)]:
+    version 1's segments, a skip from the end of the last block's top row"""
+    out = bytearray()
+    clusters, cur, end = [], [], None
+    for a, pay in sorted(ents):
+        if cur and (not 0 <= a - end <= 255 or len(cur) == 127):
+            clusters.append(cur)
+            cur = []
+        cur.append((a, pay))
+        end = a + width
+    if cur:
+        clusters.append(cur)
+    pool = []
+    for c in clusters:
+        if len(c) < abs_below:
+            pool += c
+            continue
+        out += bytes([len(c)]) + struct.pack("<H", c[0][0])
+        e = c[0][0]
+        for a, pay in c:
+            out += bytes([a - e]) + pay
+            e = a + width
+    for i in range(0, len(pool), 127):
+        part = pool[i:i + 127]
+        out.append(0x80 | len(part))
+        for a, pay in part:
+            out += struct.pack("<H", a) + pay
+    out.append(0)
+    return bytes(out)
+
+
+ONEBIT_LAYOUTS = (LAY_CGA, LAY_HERC)
+
+
+def v2_lists(bl, g):
+    """A linear version 2 record's block lists (98.1.10), after RUNL:
+    LIN320's three, or one bit's codebook and its tiles"""
+    if g.layout == LAY_LIN320:
+        out = b""
+        for kind in LIN320_LISTS:
+            out += to_blocks([(a, pay) for a, pay, k in bl if k == kind], 4)
+        return out
+    if g.layout not in ONEBIT_LAYOUTS:
+        raise V88Error("version 2 on layout %d" % g.layout)
+    cb = [(a, pay) for a, pay, k in bl if k == "cbook"]
+    if len(cb) > 1:
+        raise V88Error("two codebooks in one record")
+    out = struct.pack("<H", 0)
+    if cb:
+        first, data = cb[0]
+        n = len(data) // 8
+        if len(data) % 8 or not 1 <= n <= 256 or first + n > 256:
+            raise V88Error("a codebook of %d bytes from %d" % (len(data),
+                                                              first))
+        out = struct.pack("<HB", n, first) + data
+    return out + to_blocks([(a, pay) for a, pay, k in bl if k == "tile"], 2)
+
+
+def walk_cbook(data, si):
+    """A one-bit record's codebook (98.1.10): (first, entries, index past)"""
+    if si + 2 > len(data):
+        raise V88Error("a codebook runs off the end of its record")
+    n = data[si] | data[si + 1] << 8
+    if not n:
+        return None, b"", si + 2
+    first = data[si + 2] if si + 2 < len(data) else 0
+    ent = bytes(data[si + 3:si + 3 + 8 * n])
+    if n > 256 or first + n > 256 or len(ent) != 8 * n:
+        raise V88Error("a codebook of %d from %d" % (n, first))
+    return first, ent, si + 3 + 8 * n
+
+
+def walk_blocks(data, si, plen, width):
+    """A block list at data[si:]: ([(address, payload)], index past it,
+    skip segments, absolute entries). A count of 80h is an empty segment,
+    as in version 1's lists"""
+    out, segs, nabs = [], 0, 0
+    try:
+        while True:
+            n = data[si]
+            si += 1
+            if n == 0:
+                break
+            if n & 0x80:
+                for _ in range(n & 0x7F):
+                    a = data[si] | data[si + 1] << 8
+                    pay = bytes(data[si + 2:si + 2 + plen])
+                    if len(pay) != plen:
+                        raise IndexError
+                    out.append((a, pay))
+                    si += 2 + plen
+                    nabs += 1
+                continue
+            a = data[si] | data[si + 1] << 8
+            si += 2
+            segs += 1
+            for _ in range(n):
+                a += data[si]
+                pay = bytes(data[si + 1:si + 1 + plen])
+                if len(pay) != plen:
+                    raise IndexError
+                out.append((a, pay))
+                si += 1 + plen
+                a += width
+    except IndexError:
+        raise V88Error("a block list runs off the end of its record")
+    return out, si, segs, nabs
+
+
+def vga4_block(lead, pay):
+    """A VGA4 block's four rows as (plane bytes per row): [[p0..p3] x 4]"""
+    ab = pay[0]
+    a, b = ab >> 4, ab & 15
+    if lead == BLK_PFILL:
+        if pay[1] > 16:
+            raise V88Error("a dithered fill's level of %d" % pay[1])
+        masks = PFILL_MASKS[pay[1]]
+    else:
+        masks = list(pay[1:5])
+    rows = []
+    for m in masks:
+        rows.append([(m if a >> p & 1 else 0) | (~m & 0xFF if b >> p & 1
+                                                  else 0) for p in range(4)])
+    return rows
+
+
+def v8_block(kind, pay):
+    """A VGA8 block's 16 pixels, row-major (Video-1's three kinds: LIN320's
+    and MODEX's payloads are the same)"""
+    if kind in ("fill8", "mfill"):
+        return [pay[0]] * 16
+    mask = pay[0] | pay[1] << 8
+    if kind in ("two8", "mtwo"):
+        return [pay[2] if mask >> i & 1 else pay[3] for i in range(16)]
+    px = []
+    for i in range(16):
+        r, x = divmod(i, 4)
+        q = (r >> 1) * 2 + (x >> 1)
+        px.append(pay[2 + 2 * q] if mask >> i & 1 else pay[3 + 2 * q])
+    return px
+
+
+def csl_copy(t, n):
+    """A codebook's copy into the player's table: a slice of n bytes, into
+    RAM (an ESTIMATE at the screen's price, which is higher)"""
+    return t[4][0] + t[4][1] * n if n else 0
+
+
+# WHAT A BLOCK MEASURED (docs/reports/VIDEO-BLOCKS-PLAYER-2026-10-20.md):
+# cycles a block on MartyPC's 4.77 MHz XT VGA, the slope through 40 and 280
+# random blocks of one kind a frame (tests/vidv2bench.py), divided by what
+# the model below charged on the 8088's own table. blk_cost's SHAPE carries
+# a price to another profile's table; this factor makes the 8088's the
+# measured one. The TILE is one bit's, on MartyPC's CGA 5150 (the same to
+# the cycle on its Hercules one, through the generic walk that came before
+# its own: 539 and 541)
+BLK_MEASURED = {"fill8": 470.2, "two8": 1096.7, "eight8": 2018.8,
+                "mfill": 370.6, "mtwo": 799.2, "meight": 1465.2,
+                "pfill": 843.8, "two": 741.0, "tile": 395.4}
+
+
+def blk_cost(kind, table=None, sub=CYC_SUB, wm3=WM3_BYTE):
+    """A block's decode in the model's cycles: the shape below, built from
+    the table's own terms (a slice's set-up and its byte, a run's byte, a
+    Map Mask OUT, a write mode 3 byte) so a machine's measured table prices
+    a block as it prices a span, times the factor that makes the 8088's
+    price the one MEASURED in the player (BLK_MEASURED)"""
+    est = _blk_est(kind, table, sub, wm3)
+    if kind not in BLK_MEASURED:
+        return est
+    return est * BLK_MEASURED[kind] / _blk_est(kind, cyc_table(), CYC_SUB,
+                                               WM3_BYTE)
+
+
+def _blk_est(kind, table, sub, wm3):
+    fr, sg, ab, cp, csl, crn = cyc_table() if table is None else table
+    if kind in ("pfill", "two"):        # Set/Reset twice, eight AND-stores
+        return csl[0] + 8 * (csl[1] + wm3) + 2 * sub
+    if kind == "fill8":                 # four rows of four, word stores
+        return csl[0] + 16 * crn[1]
+    if kind == "two8":                  # a nibble's mask a row, two colours
+        return csl[0] + 24 * csl[1]
+    if kind == "eight8":
+        return 2 * csl[0] + 24 * csl[1]
+    if kind == "mfill":                 # one OUT, four stores
+        return sub + csl[0] + 4 * csl[1]
+    if kind == "mtwo":                  # two OUTs a row
+        return 8 * sub + csl[0] + 8 * csl[1]
+    if kind == "meight":                # four a row
+        return 16 * sub + csl[0] + 16 * csl[1]
+    if kind == "tile":                  # 8 bytes from the codebook
+        return csl[0] + 10 * csl[1]
+    raise ValueError(kind)
+
+
 def vga8_lum16(pal):
     """The player's luma of each palette entry, 0..16 (SPEC.md 98.4):
     (77 r + 150 g + 29 b) >> 8 on the DAC's six bits, then x 17 + 32 >> 6"""
@@ -1413,10 +1717,15 @@ class Geom:
     """A canvas on a layout: where each row starts in the surface's memory
     image, which addresses belong to the canvas, and which row each is."""
 
-    def __init__(self, layout, wb, h, bitplanes=False):
+    def __init__(self, layout, wb, h, bitplanes=False, stride=None):
         if layout not in LAYOUTS:
             raise V88Error("layout %d is not one of SPEC.md 98.1.2's" % layout)
-        banks, stride, rows, self.name = LAYOUTS[layout]
+        banks, lstride, rows, self.name = LAYOUTS[layout]
+        # (a NARROW screen's rows, 98.1.3.2.5: LIN80's bit-planes 40 apart)
+        if stride is not None and (layout != LAY_LIN80 or not bitplanes or
+                                   stride not in (40, 80)):
+            raise V88Error("a stride of %r: a VGA4 file's 40 or 80" % stride)
+        stride = stride or lstride
         if not (1 <= wb <= stride and 1 <= h <= rows):
             raise V88Error("a %d x %d canvas does not fit %s (%d x %d)"
                            % (wb, h, self.name, stride, rows))
@@ -1437,6 +1746,29 @@ class Geom:
             for x in range(wb):
                 self.rowof[b + x] = y
 
+    def _np(self):
+        """numpy, for VGA4's bit-planes, with each plane's byte of each
+        canvas byte's address (4, h, wb) - or None: the loops below are the
+        same answer, a pixel at a time (2026-10-18: a two-page file's
+        verify_v88 took a canvas each page each frame, 0.11 s apiece, and
+        sat 15 minutes on the owner's Bad Carrot)"""
+        if getattr(self, "_pidx", None) is None:
+            try:
+                import numpy as np
+            except ImportError:
+                self._pidx = False
+                return None
+            if self.w != self.wb * 8:
+                self._pidx = False
+                return None
+            self._pidx = (np.arange(4)[:, None, None] * PLANE +
+                          np.asarray(self.base)[None, :, None] +
+                          np.arange(self.wb)[None, None, :])
+        if self._pidx is False:
+            return None
+        import numpy as np
+        return np
+
     def surface(self):
         """A black surface image: 64 KB, or a plane of it each for MODEX"""
         return bytearray(PLANE * self.planes)
@@ -1447,6 +1779,12 @@ class Geom:
         if self.planes == 1:
             return b"".join(bytes(surf[b:b + self.wb]) for b in self.base)
         if self.bitplanes:          # VGA4: bit x of each plane, a pixel
+            np = self._np()
+            if np is not None:
+                bits = np.unpackbits(np.frombuffer(surf, np.uint8)[
+                    self._pidx], axis=2)
+                return (bits[0] | bits[1] << 1 | bits[2] << 2 |
+                        bits[3] << 3).tobytes()
             w, out = self.w, bytearray(self.w * self.h)
             for y, b in enumerate(self.base):
                 for xb in range(self.wb):
@@ -1468,6 +1806,11 @@ class Geom:
                 surf[b:b + self.wb] = cv[y * self.wb:(y + 1) * self.wb]
             return
         if self.bitplanes:
+            np = self._np()
+            if np is not None:
+                sv = np.frombuffer(surf, np.uint8)
+                sv[self._pidx] = vga4_packed(np, cv, self)
+                return
             for y, b in enumerate(self.base):
                 row = cv[y * self.w:(y + 1) * self.w]
                 for p in range(4):
@@ -1542,7 +1885,7 @@ def band_of(ops, g):
     return y0, y1
 
 
-def record(ops, g, audio=b"", limit=SP_MAX * SECTOR - 4):
+def record(ops, g, audio=b"", limit=SP_MAX * SECTOR - 4, v2=None):
     """A frame record; `limit` is a super-packet's room, or a keyframe's
     (65,535: its length is a word, and it rides in no super-packet). None
     MEASURES: the encoder's attempt at a frame, which is never written -
@@ -1555,6 +1898,12 @@ def record(ops, g, audio=b"", limit=SP_MAX * SECTOR - 4):
         # carries its list map, and a lead past 0Fh is write mode 3
         body, every = bytearray(), []
         for mask, sub in ops:
+            if sub and mask >= BLK_LEAD:    # VERSION 2's blocks (98.1.10):
+                body.append(mask)           # a lead and one block list
+                body += to_blocks([(a, pay) for a, pay, run in sub], 1)
+                for a, pay, run in sub:     # (the band: all four rows)
+                    every += [(r, b"\0", False) for r in blk_rows(g, a)]
+                continue
             if sub:
                 if not 1 <= mask <= (0x1F if g.sub2 and g.bitplanes
                                      else 0x0F):
@@ -1566,8 +1915,21 @@ def record(ops, g, audio=b"", limit=SP_MAX * SECTOR - 4):
         lists = bytes(body)
         y0, y1 = band_of(every, g)
     else:
+        # VERSION 2 (98.1.10): a block rides in `ops` as (address, payload,
+        # its kind's name), where a span has its run flag; a frame record
+        # of a version 2 file has its block lists whether or not it uses
+        # them, and a key (v2=False) has none
+        bl = [o for o in ops if isinstance(o[2], str)]
+        if bl:
+            ops = [o for o in ops if not isinstance(o[2], str)]
         lists, e, s = to_lists(ops)
-        y0, y1 = band_of(ops, g)
+        if getattr(g, "v2", False) if v2 is None else v2:
+            lists += v2_lists(bl, g)
+        elif bl:
+            raise V88Error("a block in a version 1 record")
+        rows = [(r, b"\0", False) for a, pay, k in bl if k != "cbook"
+                for r in blk_rows(g, a)]
+        y0, y1 = band_of(ops + rows, g)
     n = REC_HDR + len(lists) + len(audio)
     if limit is not None and n > limit:
         raise V88Error("a record of %d bytes cannot fit %s" % (
@@ -1606,15 +1968,17 @@ def delta_ops(surf, base, g):
     return spans(changed, surf, g)
 
 
-def page_record(ops, hidden, g, flip=False, limit=SP_MAX * SECTOR - 4):
+def page_record(ops, hidden, g, flip=False, limit=SP_MAX * SECTOR - 4,
+                v2=None):
     """PAGE-AHEAD (98.1.3.7): a record of `ops` - with REC_FLIP, drawn on
     the hidden page and then shown - and, when `hidden` writes anything,
     the hidden page's own record after its lists, inside its len. No audio:
-    the caller appends it, after both"""
-    rec = bytearray(record(ops, g, limit=limit))
+    the caller appends it, after both. `v2` False: a key's, whose records
+    carry no block lists, the hidden one's included (98.1.10)"""
+    rec = bytearray(record(ops, g, limit=limit, v2=v2))
     n, y0, y1 = struct.unpack_from("<HHH", rec, 0)
     if hidden and (g.planes == 1 or any(sub for m, sub in hidden)):
-        rec += record(hidden, g, limit=limit)
+        rec += record(hidden, g, limit=limit, v2=v2)
         y1 |= REC_HID
     if flip:
         y0 |= REC_FLIP
@@ -1624,6 +1988,141 @@ def page_record(ops, hidden, g, flip=False, limit=SP_MAX * SECTOR - 4):
             "its length word"))
     struct.pack_into("<HHH", rec, 0, min(len(rec), 65535), y0, y1)
     return bytes(rec)
+
+
+def page_bytes(layout, screen):
+    """A page of a screen with more than one (98.1.3.7.1): Mode X's 19,200
+    plane bytes or 320 x 200's 16,000 (98.1.3.1.1), a Hercules's 32 KB, a
+    VGA4 screen's rows x 80 (98.1.3.2.1)"""
+    if layout == LAY_MODEX:
+        return 16000 if screen == SCR_320X200 else 19200
+    if layout == LAY_HERC:
+        return 0x8000
+    return SCREENS[screen][2] * screen_stride(screen)
+
+
+def mpage_record(ops, hidden, g, flip=None, kpage=None,
+                 limit=SP_MAX * SECTOR - 4, built=False, copies=(), v2=None):
+    """PAGE-AHEAD ON N PAGES (98.1.3.7.1): a record of `ops` - with `flip`
+    a page, drawn on that page and then shown; with `kpage`, a KEY naming
+    the page shown after it - and the hidden records of `hidden`, a list of
+    (page, ops), chained after its lists inside its len, each naming its
+    page. A page whose ops write nothing is left out. No audio: the caller
+    appends it, after them all. FLIPPED AND BUILT AHEAD (98.1.3.7.2):
+    `built`, the flip's page drawn on as it stands; `copies`, a list of
+    (destination, source, y0, y1), COPY records after the hidden ones"""
+    rec = bytearray(record(ops, g, limit=limit, v2=v2))
+    n, y0, y1 = struct.unpack_from("<HHH", rec, 0)
+    if y0 > ROW_MASK or y1 > ROW_MASK:
+        raise V88Error("rows %d..%d past an N-page record's 4,095"
+                       % (y0, y1))
+    hs = [(p, h) for p, h in (hidden or ())
+          if h and (g.planes == 1 or any(sub for m, sub in h))]
+    pages = [p for p, h in hs]
+    if len(set(pages)) != len(pages) or \
+            any(not 0 <= p < MPAGE_MAX for p in pages):
+        raise V88Error("hidden records on pages %r" % (pages,))
+    cps = list(copies or ())
+    for i, (p, h) in enumerate(hs):
+        hr = bytearray(record(h, g, limit=limit, v2=v2))
+        hn, hy0, hy1 = struct.unpack_from("<HHH", hr, 0)
+        struct.pack_into("<HH", hr, 2, hy0 | (p << PG_SHIFT),
+                         hy1 | (HID_MORE if i + 1 < len(hs) or cps else 0))
+        rec += hr
+    for i, (d, src, c0, c1) in enumerate(cps):
+        if not (0 <= d < MPAGE_MAX and 0 <= src < MPAGE_MAX and d != src and
+                0 <= c0 < c1 <= g.h) or d in pages or \
+                d in [x[0] for x in cps[:i]]:
+            raise V88Error("a copy of rows %d..%d of page %d onto %d"
+                           % (c0, c1, src, d))
+        rec += struct.pack("<HHH", COPY_LEN, c0 | (d << PG_SHIFT) | REC_FLIP,
+                           c1 | (src << PG_SHIFT) |
+                           (HID_MORE if i + 1 < len(cps) else 0))
+    if hs or cps:
+        y1 |= REC_HID
+    if built:
+        if flip is None or flip is False:
+            raise V88Error("a record built ahead that does not flip")
+        y1 |= REC_BUILT
+    if flip is not None and flip is not False:
+        if kpage is not None:
+            raise V88Error("a keyframe that flips")
+        y0 |= REC_FLIP | (flip << PG_SHIFT)
+    elif kpage is not None:
+        y0 |= kpage << PG_SHIFT
+    if limit is not None and len(rec) > limit:
+        raise V88Error("a record of %d bytes cannot fit %s" % (
+            len(rec), "a super-packet" if limit < 65534 else
+            "its length word"))
+    struct.pack_into("<HHH", rec, 0, min(len(rec), 65535), y0, y1)
+    return bytes(rec)
+
+
+def mpage_parts(rec, g, npages, fpage=False, kref=False, key=False):
+    """An N-page record (98.1.3.7.1) as (flip, page, its own record with
+    its tail and the bits cleared, [(page, hidden record)]): `page` is the
+    page a flip shows, or a key's page shown after it, else 0. With
+    `fpage` (98.1.3.7.2) a fifth, BUILT, and a COPY in the list as (its
+    destination, (source, y0, y1)); with `kref` a key's last part's
+    REFERENCE to the page pool as (its page, ("ref", at, n)), 98.1.3.8.1"""
+    n, y0, y1 = struct.unpack_from("<HHH", rec, 0)
+    flip, pg = bool(y0 & REC_FLIP), (y0 & PG_BITS) >> PG_SHIFT
+    built = bool(y1 & REC_BUILT) if fpage else False
+    if y1 & PG_BITS & ~(REC_BUILT if fpage else 0) or pg >= npages:
+        raise V88Error("a record on page %d of %d" % (pg, npages))
+    own = bytearray(rec)
+    struct.pack_into("<HH", own, 2, y0 & ROW_MASK, y1 & ROW_MASK)
+    if not y1 & REC_HID:
+        return (flip, pg, bytes(own), [], built) if fpage else \
+            (flip, pg, bytes(own), [])
+    e0 = e = lists_end(own, g, key)
+    hs, seen = [], set()
+    while True:
+        if e + REC_HDR > n:
+            raise V88Error("a hidden-page record past its record's end")
+        hn, hy0, hy1 = struct.unpack_from("<HHH", rec, e)
+        hp = (hy0 & PG_BITS) >> PG_SHIFT
+        if kref and hy0 & REC_FLIP:     # A REFERENCE (98.1.3.8.1)
+            if hn != REF_LEN or e + hn > n or hp >= npages or hp in seen or \
+                    hy0 & ROW_MASK or hy1 & ~HID_MORE & 0xFFFF:
+                raise V88Error("a page pool reference of %d bytes at %d "
+                               "(page %d)" % (hn, e, hp))
+            at, rn = struct.unpack_from("<IH", rec, e + 6)
+            seen.add(hp)
+            hs.append((hp, ("ref", at, rn)))
+            e += hn
+            if not hy1 & HID_MORE:
+                break
+            continue
+        if fpage and hy0 & REC_FLIP:    # A COPY (98.1.3.7.2): its header
+            src = (hy1 & PG_BITS) >> PG_SHIFT   # alone
+            c0, c1 = hy0 & ROW_MASK, hy1 & ROW_MASK
+            if hn != COPY_LEN or e + hn > n or hp >= npages or \
+                    src >= npages or src == hp or hp in seen or \
+                    not c0 < c1 <= g.h:
+                raise V88Error("a copy of rows %d..%d of page %d onto page "
+                               "%d at %d" % (c0, c1, src, hp, e))
+            seen.add(hp)
+            hs.append((hp, (src, c0, c1)))
+            e += hn
+            if not hy1 & HID_MORE:
+                break
+            continue
+        if hn < REC_HDR + 1 or e + hn > n or hy0 & REC_FLIP or \
+                hy1 & PG_BITS or hp >= npages or hp in seen:
+            raise V88Error("a hidden-page record of %d bytes at %d (page "
+                           "%d)" % (hn, e, hp))
+        seen.add(hp)
+        hr = bytearray(rec[e:e + hn])
+        struct.pack_into("<HH", hr, 2, hy0 & ROW_MASK, hy1 & ROW_MASK)
+        hs.append((hp, bytes(hr)))
+        e += hn
+        if not hy1 & HID_MORE:
+            break
+    own = own[:e0] + own[e:]
+    struct.pack_into("<H", own, 0, n - (e - e0))
+    return (flip, pg, bytes(own), hs, built) if fpage else \
+        (flip, pg, bytes(own), hs)
 
 
 def _ops_cut(ops, lo, hi, planar):
@@ -1643,7 +2142,8 @@ def _ops_any(ops, planar):
     return any(sub for m, sub in ops) if planar else bool(ops)
 
 
-def key_record(ops, g, hidden=None, page=False, ref=0, part=KEY_PART):
+def key_record(ops, g, hidden=None, page=False, ref=0, part=KEY_PART,
+               kpage=None):
     """A KEYFRAME's bytes (98.1.3, 98.1.3.8): its record - with `page`, a
     page-ahead key's, `hidden` the hidden page's difference after its lists
     - when it and the `ref` bytes the writer appends after it (an ADPCM4
@@ -1656,11 +2156,17 @@ def key_record(ops, g, hidden=None, page=False, ref=0, part=KEY_PART):
 
     def one(lo, hi):
         o = _ops_cut(ops, lo, hi, planar)
+        if kpage is not None:           # N PAGES (98.1.3.7.1): (page, ops)s
+            hs = [(p, _ops_cut(h, lo, hi, planar)) for p, h in hidden or ()]
+            return mpage_record(o, hs, g, kpage=kpage, limit=None,
+                                v2=False), \
+                _ops_any(o, planar) or any(_ops_any(h, planar)
+                                           for p, h in hs if h)
         if page:
             h = _ops_cut(hidden, lo, hi, planar) if hidden else hidden
-            return page_record(o, h, g, limit=None), \
+            return page_record(o, h, g, limit=None, v2=False), \
                 _ops_any(o, planar) or bool(h and _ops_any(h, planar))
-        return record(o, g, limit=None), _ops_any(o, planar)
+        return record(o, g, limit=None, v2=False), _ops_any(o, planar)
     whole = one(0, 0x10000)[0]
     if part is None or len(whole) + ref <= part:
         return whole
@@ -1691,6 +2197,45 @@ def key_record(ops, g, hidden=None, page=False, ref=0, part=KEY_PART):
             struct.pack_into("<HH", r, 0, len(r), y0 | KEY_MORE)
         out += r
     return bytes(out)
+
+
+def key_refs(krec, refs, g):
+    """A key's bytes with REFERENCES to the page pool (98.1.3.8.1) - a list
+    of (page, at, n) - after its last part's hidden records, and where each
+    one's `at` is in the bytes returned"""
+    if not refs:
+        return krec, []
+    off = 0
+    while True:                         # (the last part)
+        n, y0 = struct.unpack_from("<HH", krec, off)
+        if not y0 & KEY_MORE:
+            break
+        off += n
+    last = bytearray(krec[off:])
+    n, y0, y1 = struct.unpack_from("<HHH", last, 0)
+    if y1 & REC_HID:                    # (the chain's last entry links on)
+        own = bytearray(last)
+        struct.pack_into("<HH", own, 2, y0 & ROW_MASK, y1 & ROW_MASK)
+        e = lists_end(own, g)
+        while True:
+            hn, hy0, hy1 = struct.unpack_from("<HHH", last, e)
+            if not hy1 & HID_MORE:
+                struct.pack_into("<H", last, e + 4, hy1 | HID_MORE)
+                break
+            e += hn
+    tail = bytes(last[n:])              # (nothing: the writer's ADPCM4
+    last = last[:n]                     # byte comes after this)
+    at = []
+    for i, (p, a, rn) in enumerate(refs):
+        at.append(off + len(last) + 6)
+        last += struct.pack("<HHHIH", REF_LEN, REC_FLIP | (p << PG_SHIFT),
+                            HID_MORE if i + 1 < len(refs) else 0, a, rn)
+    struct.pack_into("<HHH", last, 0, len(last), y0, y1 | REC_HID)
+    head = bytearray(krec[:off])
+    if off:                             # (the part before names this read,
+        struct.pack_into("<H", head, off - 2,   # which the references
+                         len(last) + len(tail))  # have just made longer)
+    return bytes(head) + bytes(last) + tail, at
 
 
 def key_split(krec):
@@ -1734,17 +2279,17 @@ def key_reads(krec):
         off += n
 
 
-def page_parts(rec, g):
+def page_parts(rec, g, key=False):
     """A page-ahead record (98.1.3.7) as (flip, its own record with its
     tail - audio, or a key's reference - and the bits cleared, the hidden
-    page's record or None)"""
+    page's record or None). A `key`'s records carry no blocks (98.1.10)"""
     n, y0, y1 = struct.unpack_from("<HHH", rec, 0)
     flip, hid = bool(y0 & REC_FLIP), bool(y1 & REC_HID)
     own = bytearray(rec)
     struct.pack_into("<HH", own, 2, y0 & ~REC_FLIP, y1 & ~REC_HID)
     if not hid:
         return flip, bytes(own), None
-    e = lists_end(own, g)
+    e = lists_end(own, g, key)
     if e + REC_HDR > n:
         raise V88Error("a hidden-page record past its record's end")
     hn, hy0, hy1 = struct.unpack_from("<HHH", rec, e)
@@ -1766,8 +2311,19 @@ def keyframe_ops(surf, g):
     return spans(changed, surf, g)
 
 
+def vga4_packed(np, cv, g):
+    """A VGA4 canvas's four planes as a (4, h, wb) array: bit 7 of a byte
+    the leftmost of its eight pixels"""
+    c = np.frombuffer(bytes(cv), np.uint8).reshape(g.h, g.wb, 8)
+    return np.stack([np.packbits(c >> p & 1, axis=2)[..., 0]
+                     for p in range(4)])
+
+
 def vga4_planes(cv, g):
     """A VGA4 canvas's four plane images, each g.wb x g.h bytes, dense"""
+    np = g._np()
+    if np is not None:
+        return [bytearray(x.tobytes()) for x in vga4_packed(np, cv, g)]
     out = [bytearray(g.wb * g.h) for _ in range(4)]
     w = g.w
     for y in range(g.h):
@@ -1827,23 +2383,389 @@ def vga4_xlat(palette):
 
 def vga4_pack(cv, w, h, step=1, xlat=None):
     """The canvas as OSAPI_GFX_BLIT4 takes it - two pixels a byte, the
-    left in the high nibble - every `step`-th pixel of every `step`-th row,
+    left in the high nibble - one pixel of each `step` x `step` cell,
     through `xlat` (vga4_xlat) for a file of its own colours: the player's
-    vp_v4pack, byte for byte"""
+    vp_v4pack, byte for byte. WHICH pixel of the cell turns with the
+    output's position (98.4.5, 2026-10-18): its row ox mod step down, its
+    column oy mod step across - so a checkerboard, a 16-colour picture's
+    50% grey, comes out a checkerboard where the cell's corner every time
+    took one colour of it and left a poster black with a white dot (the
+    owner's T69)"""
     ow, oh = w // step, (h + step - 1) // step
     obw = (ow + 1) // 2
     out = bytearray(obw * oh)
     for oy in range(oh):
-        row = cv[oy * step * w:(oy * step + 1) * w]
         for ox in range(ow):
-            v = row[ox * step] & 15
+            sy = min(h - 1, oy * step + ox % step)
+            v = cv[sy * w + ox * step + oy % step] & 15
             if xlat:
                 v = xlat[v]
             out[oy * obw + ox // 2] |= v << 4 if not ox & 1 else v
     return bytes(out), obw, ow, oh
 
 
+# DESKTOP POSTERS (98.1.3.11, 2026-10-18): the picture the Preview's box
+# shows for each key - and a CUSTOM one - made here and blitted as it
+# stands: the key's canvas in its own colours, each cell of `scale` x
+# `scale` of the Preview's pixels averaged, then error-diffused onto the
+# desktop's sixteen (a COLOUR set, packed for OSAPI_GFX_BLIT4) or onto
+# black and white (a MONO set, OSAPI_GFX_BLIT1's rows, 1 = white). The
+# slot's six bytes: a stream's at 40 (a resident file's block fields), a
+# resident file's at 56 (a stream's scene palettes)
+R_THUMB = 40                    # u32 the table's offset, u8 the scale (1, 2
+R_THUMBR = 56                   # or 4), u8 the flags
+THUMB_FMT = "<IBB"
+TH_CUSTOM = 1                   # flags: a CUSTOM picture after the keys'
+TH_KEYS = 2                     # ...a picture a key
+TH_COLOUR = 4                   # ...each picture in the desktop's sixteen
+TH_MONO = 8                     # ...and/or in black and white
+TH_SIZE = 16                    # ...the scale is the Preview's own choice:
+                                # its box is never larger
+TH_FLAGS = 31
+THUMB_MAX = 65535               # a picture's bytes, unpacked: one segment
+TH_ENT = "<IHBB"                # an entry: offset, packed bytes, packing
+                                # (PK_NONE, PK_LZ4), 0. Picture-major: each
+                                # picture's colour entry, then its mono one
+_DESK_LUT = {}
+
+
+def thumb_dims(pixfmt, g, rowscale=1):
+    """The Preview's picture at the video's own size, (width, rows) in
+    pixels - the player's vp_pwb x 8 by vp_ph (98.4): a CGA4 or C160 byte
+    is two of its bytes, a C512 or TEXT cell four pixels, VGA8's rows its
+    row scale's and its width its pixels, TEXT's four rows a cell"""
+    if pixfmt == PF_VGA8:
+        return g.w, g.h * rowscale
+    if pixfmt in (PF_CGA4, PF_C160):
+        return g.wb * 4, g.h
+    if pixfmt in (PF_C512, PF_TEXT):
+        return g.wb * 2, g.h * (4 if pixfmt == PF_TEXT else 1)
+    return g.wb * 8, g.h
+
+
+def canvas_rgb(pixfmt, cv, g, palette=None, cgapal=None, rowscale=1,
+               font=None):
+    """A canvas (as Geom.canvas gives it) as the Preview sees it at its own
+    size, an (rows, width, 3) array of six-bit RGB: one bit as black and
+    white, VGA8 and VGA4 through `palette` (VGA4's sixteen, the desktop's
+    when None), CGA4 through `cgapal`'s four, C160 and C512's attributes
+    as the sixteen two pixels wide, TEXT each cell's quarters between its
+    two colours by the glyph's share of them"""
+    import numpy as np
+    pw, ph = thumb_dims(pixfmt, g, rowscale)
+    s16 = np.frombuffer(STD16, np.uint8).astype(np.float64).reshape(16, 3)
+    c = np.frombuffer(bytes(cv), np.uint8)
+    wb, h = g.wb, g.h
+    if pixfmt in (PF_MONO1, PF_CGACOMP):
+        bits = np.unpackbits(c[:wb * h].reshape(h, wb), axis=1)
+        return np.repeat(bits[:, :, None] * 63.0, 3, axis=2)
+    if pixfmt in (PF_VGA8, PF_VGA4):
+        pal = np.frombuffer(bytes(palette or STD16), np.uint8).astype(
+            np.float64).reshape(-1, 3)
+        idx = c[:g.w * h].reshape(h, g.w)
+        if pixfmt == PF_VGA4:
+            idx = idx & 15
+        out = pal[idx]
+        return np.repeat(out, rowscale, axis=0) if pixfmt == PF_VGA8 \
+            else out
+    if pixfmt == PF_CGA4:
+        cols = np.array([s16[k] for k in cga4_colours(cgapal)])
+        b = c[:wb * h].reshape(h, wb)
+        v = np.stack([(b >> (6 - 2 * i)) & 3 for i in range(4)], axis=2)
+        return cols[v.reshape(h, wb * 4)]
+    if pixfmt in (PF_C160, PF_C512):
+        if pixfmt == PF_C512:           # (its attributes, C160's bytes)
+            c = c[:wb * h].reshape(h, wb)[:, 1::2].reshape(-1)
+            wb //= 2
+        b = c[:wb * h].reshape(h, wb)
+        v = np.stack([b >> 4, b >> 4, b & 15, b & 15], axis=2)
+        return s16[v.reshape(h, wb * 4)]
+    if pixfmt == PF_TEXT:
+        import os88txtfont
+        out = np.zeros((ph, pw, 3))
+        cells, q = wb // 2, {}
+        for y in range(h):
+            for x in range(cells):
+                ch, at = cv[y * wb + 2 * x], cv[y * wb + 2 * x + 1]
+                if ch not in q:
+                    q[ch] = os88txtfont.quads(ch, font)
+                fg, bg = s16[at & 15], s16[at >> 4]
+                for qi, n in enumerate(q[ch]):
+                    yy, xx = y * 4 + (qi >> 1) * 2, x * 4 + (qi & 1) * 2
+                    out[yy:yy + 2, xx:xx + 2] = (bg * (16 - n) + fg * n) / 16
+        return out
+    raise V88Error("no Preview picture for pixel format %d" % pixfmt)
+
+
+def _cells(rgb, w, h, scale):
+    """rgb averaged over `scale` x `scale` cells: (ow, oh, means) - the
+    last row of cells padded with the last row, as vga4_pack's rows round"""
+    import numpy as np
+    ow, oh = w // scale, (h + scale - 1) // scale
+    rgb = np.asarray(rgb, np.float64)
+    pad = oh * scale - h
+    if pad:
+        rgb = np.concatenate([rgb, np.repeat(rgb[-1:], pad, axis=0)])
+    m = rgb[:oh * scale, :ow * scale].reshape(oh, scale, ow, scale,
+                                             rgb.shape[2]).mean(axis=(1, 3))
+    return ow, oh, m
+
+
+def desktop_poster(cv, w, h, palette, scale, xlat=None, clip=0.0):
+    """A VGA4 canvas (a pixel a byte, values 0..15 in `palette`'s six-bit
+    sixteen) as its COLOUR desktop poster at `scale`"""
+    import numpy as np
+    fp = np.frombuffer(bytes(palette[:48]), np.uint8).astype(
+        np.float64).reshape(16, 3)
+    a = np.frombuffer(bytes(cv), np.uint8)[:w * h].reshape(h, w) & 15
+    return desktop_poster_rgb(fp[a], w, h, scale, clip)
+
+
+def _desk_lut():
+    """The nearest of the desktop's sixteen to each of the 64^3 colours"""
+    import numpy as np
+    lt = _DESK_LUT.get("q")
+    if lt is None:
+        std = np.frombuffer(STD16, np.uint8).astype(np.int32).reshape(16, 3)
+        g6 = np.arange(64, dtype=np.int32)
+        cube = np.stack(np.meshgrid(g6, g6, g6, indexing="ij"), -1)
+        d = ((cube[..., None, :] - std) ** 2).sum(-1)
+        lt = _DESK_LUT["q"] = d.argmin(-1).astype(np.uint8).tobytes()
+    return lt
+
+
+def desktop_poster_rgb(rgb, w, h, scale, clip=0.0):
+    """A picture in six-bit RGB, an (h, w, 3) array, as a COLOUR desktop
+    poster at `scale` (98.1.3.11): packed as vga4_pack packs, each output
+    pixel its cell's mean colour, error-diffused (Floyd-Steinberg) onto
+    STD16 - but a cell within `clip` levels (0..255, as --clip counts them)
+    on every channel of its nearest is that colour SOLID, and passes on no
+    error: a near-black ground is black, not a field of dots. -> the
+    packed bytes"""
+    import numpy as np
+    ow, oh, m = _cells(rgb, w, h, scale)
+    lt = _desk_lut()
+    std = np.frombuffer(STD16, np.uint8).astype(np.float64).reshape(16, 3)
+    mi = np.clip(np.rint(m), 0, 63).astype(np.int64)
+    nk = np.frombuffer(lt, np.uint8)[(mi[..., 0] << 12) | (mi[..., 1] << 6) |
+                                     mi[..., 2]]
+    if clip:
+        solid = (np.abs(m - std[nk]).max(-1) <= clip * 63.0 / 255.0).tolist()
+    else:
+        solid = None
+    nk = nk.tolist()
+    sr, sg, sb = STD16[0::3], STD16[1::3], STD16[2::3]
+    obw = (ow + 1) // 2
+    out = bytearray(obw * oh)
+    R, G, B = (m[..., c].tolist() for c in range(3))
+    for y in range(oh):
+        r0, g0, b0 = R[y], G[y], B[y]
+        last = y + 1 == oh
+        if not last:
+            r1, g1, b1 = R[y + 1], G[y + 1], B[y + 1]
+        o = y * obw
+        for x in range(ow):
+            if solid is not None and solid[y][x]:
+                k = nk[y][x]
+                if x & 1:
+                    out[o + (x >> 1)] |= k
+                else:
+                    out[o + (x >> 1)] = k << 4
+                continue
+            r, g_, b = r0[x], g0[x], b0[x]
+            ri = 0 if r < 0 else 63 if r > 63 else int(r + 0.5)
+            gi = 0 if g_ < 0 else 63 if g_ > 63 else int(g_ + 0.5)
+            bi = 0 if b < 0 else 63 if b > 63 else int(b + 0.5)
+            k = lt[(min(ri, 63) << 12) | (min(gi, 63) << 6) | min(bi, 63)]
+            er, eg, eb = r - sr[k], g_ - sg[k], b - sb[k]
+            if x + 1 < ow:
+                r0[x + 1] += er * 0.4375
+                g0[x + 1] += eg * 0.4375
+                b0[x + 1] += eb * 0.4375
+            if not last:
+                if x:
+                    r1[x - 1] += er * 0.1875
+                    g1[x - 1] += eg * 0.1875
+                    b1[x - 1] += eb * 0.1875
+                r1[x] += er * 0.3125
+                g1[x] += eg * 0.3125
+                b1[x] += eb * 0.3125
+                if x + 1 < ow:
+                    r1[x + 1] += er * 0.0625
+                    g1[x + 1] += eg * 0.0625
+                    b1[x + 1] += eb * 0.0625
+            if x & 1:
+                out[o + (x >> 1)] |= k
+            else:
+                out[o + (x >> 1)] = k << 4
+    return bytes(out)
+
+
+def desktop_mono_rgb(rgb, w, h, scale, clip=0.0):
+    """The same picture as a MONO desktop poster at `scale` (98.1.3.11):
+    each cell's mean luma - the player's, (77 r + 150 g + 29 b) >> 8 on the
+    six bits - error-diffused onto black and white, OSAPI_GFX_BLIT1's rows
+    of (width + 7) / 8 bytes, the leftmost pixel bit 7, 1 = white. A cell
+    within `clip` levels of black or white is it, SOLID, as the colour
+    poster's are"""
+    import numpy as np
+    rgb = np.asarray(rgb, np.float64)
+    lum = (77 * rgb[..., 0] + 150 * rgb[..., 1] + 29 * rgb[..., 2]) / 256.0
+    ow, oh, m = _cells(lum[..., None], w, h, scale)
+    c6 = clip * 63.0 / 255.0
+    solid = (np.where(m[..., 0] <= c6, 0, np.where(m[..., 0] >= 63 - c6, 1,
+                                                   -1)).tolist()
+             if clip else None)
+    L = m[..., 0].tolist()
+    obw = (ow + 7) // 8
+    out = bytearray(obw * oh)
+    for y in range(oh):
+        r0 = L[y]
+        last = y + 1 == oh
+        r1 = None if last else L[y + 1]
+        o = y * obw
+        for x in range(ow):
+            if solid is not None and solid[y][x] >= 0:
+                if solid[y][x]:
+                    out[o + (x >> 3)] |= 0x80 >> (x & 7)
+                continue
+            v = r0[x]
+            on = v >= 31.5
+            e = v - (63.0 if on else 0.0)
+            if x + 1 < ow:
+                r0[x + 1] += e * 0.4375
+            if r1 is not None:
+                if x:
+                    r1[x - 1] += e * 0.1875
+                r1[x] += e * 0.3125
+                if x + 1 < ow:
+                    r1[x + 1] += e * 0.0625
+            if on:
+                out[o + (x >> 3)] |= 0x80 >> (x & 7)
+    return bytes(out)
+
+
+def thumb_size(kind, ow, oh):
+    """A desktop poster's bytes: COLOUR ("c") packed two pixels a byte,
+    MONO ("m") eight"""
+    return ((ow + 1) // 2 if kind == "c" else (ow + 7) // 8) * oh
+
+
+def thumb_kinds(flags):
+    """The sets a table carries, in their entry order"""
+    return [k for k, b in (("c", TH_COLOUR), ("m", TH_MONO)) if flags & b]
+
+
+def thumb_block(th, keys, at, pw, ph):
+    """A Writer's DESKTOP POSTERS as stored (98.1.3.11): `th` is
+    Writer.thumbs - dict(scale, flags, make(canvas, kind) -> bytes,
+    custom {kind: bytes}) - and the table goes at `at`. -> (bytes, the
+    slot's six-byte tuple), or (b"", the tuple) for a size and nothing
+    else"""
+    import os88lz
+    ts, fl = th["scale"], th["flags"]
+    if ts not in (1, 2, 4) or fl & ~TH_FLAGS:
+        raise V88Error("desktop posters at a scale of %r, flags %r"
+                       % (ts, fl))
+    kinds = thumb_kinds(fl)
+    if bool(kinds) != bool(fl & (TH_KEYS | TH_CUSTOM)):
+        raise V88Error("desktop posters with sets %r and flags %d"
+                       % (kinds, fl))
+    pics = []
+    if fl & TH_KEYS:
+        for k, r, c in keys:
+            pics += [th["make"](c, kd) for kd in kinds]
+    if fl & TH_CUSTOM:
+        pics += [th["custom"][kd] for kd in kinds]
+    ow, oh = pw // ts, (ph + ts - 1) // ts
+    for i, p_ in enumerate(pics):
+        if len(p_) != thumb_size(kinds[i % len(kinds)], ow, oh):
+            raise V88Error("a desktop poster is not %d x %d" % (ow, oh))
+        if len(p_) > THUMB_MAX:
+            raise V88Error("a desktop poster of %d x %d is %d bytes: %d at "
+                           "most" % (ow, oh, len(p_), THUMB_MAX))
+    if not pics:                        # (no key kept: the flags may not
+        if fl & TH_SIZE:                # promise pictures, or every Reader
+            return b"", (0, ts, TH_SIZE)    # refuses the file)
+        return b"", (0, 0, 0)
+    ents, data = [], b""
+    o0 = at + struct.calcsize(TH_ENT) * len(pics)
+    for p_ in pics:
+        z = os88lz.compress(p_, os88lz.LZ4)
+        pk, body = (PK_LZ4, z) if len(z) < len(p_) else (PK_NONE, p_)
+        ents.append(struct.pack(TH_ENT, o0 + len(data), len(body), pk, 0))
+        data += body
+    return b"".join(ents) + data, (at, ts, fl)
+
+
+def packed_half(pk, ow, oh):
+    """A packed COLOUR desktop poster (vga4_pack's rows) halved as
+    vga4_pack halves a canvas - one pixel of each 2 x 2 cell, turning with
+    the output's position: the player's vp_dphalf, for a box the layout
+    shows at half a stored poster's scale -> (bytes, its width, rows)"""
+    obw = (ow + 1) // 2
+    nw, nh = ow // 2, (oh + 1) // 2
+    nbw = (nw + 1) // 2
+    out = bytearray(nbw * nh)
+    for y in range(nh):
+        for x in range(nw):
+            sy = min(oh - 1, 2 * y + (x & 1))
+            sx = 2 * x + (y & 1)
+            b = pk[sy * obw + sx // 2]
+            v = b >> 4 if not sx & 1 else b & 15
+            out[y * nbw + x // 2] |= v << 4 if not x & 1 else v
+    return bytes(out), nw, nh
+
+
 def modex_subs(cv, changed, g):
+    """modex_subs_loop's writes, worked out over whole arrays (the encoder
+    speed pass, VIDEO-SEEN-PLAN 3a: the loop was 43 ms a frame on a 320 x
+    180 canvas and the encoder asks it several times a frame). The same
+    classification - a group of one colour, a pair, a plane's own - and the
+    same spans; `tests/videnc.py` holds the two to the same answer"""
+    import numpy as np
+    w, h, wb = g.w, g.h, g.wb
+    G = np.frombuffer(bytes(cv), np.uint8)[:h * w].reshape(h, wb, 4)
+    C = np.asarray(changed, dtype=bool)[:h * w].reshape(h, wb, 4)
+    n = C.sum(2)
+    any_ = n > 0
+    addr = np.asarray(g.base, np.int64)[:h, None] + np.arange(wb)[None, :]
+    grpm = any_ & (n >= 2) & (G == G[:, :, :1]).all(2)
+    rest = any_ & ~grpm
+    ga = addr[grpm]
+    gsa = np.zeros(PLANE, np.uint8)
+    gsa[ga] = G[:, :, 0][grpm]
+    gsurf = bytearray(gsa.tobytes())
+    psurf = []
+    for p_ in range(4):
+        ps = np.zeros(PLANE, np.uint8)
+        ps[addr.ravel()] = G[:, :, p_].ravel()
+        psurf.append(bytearray(ps.tobytes()))
+    pv = [np.frombuffer(bytes(g.valid), np.uint8).copy() for _ in range(4)]
+    for p_ in range(4):
+        pv[p_][ga] = 0
+    pair, psv, per = {}, {}, [None] * 4
+    for hh in (0, 2):
+        pm = rest & C[:, :, hh] & C[:, :, hh + 1] & \
+            (G[:, :, hh] == G[:, :, hh + 1])
+        pa = addr[pm]
+        pair[hh] = pa.tolist()
+        sv = np.zeros(PLANE, np.uint8)
+        sv[pa] = G[:, :, hh][pm]
+        psv[hh] = bytearray(sv.tobytes())
+        pv[hh][pa] = 0
+        pv[hh + 1][pa] = 0
+        for p_ in (hh, hh + 1):
+            per[p_] = addr[rest & ~pm & C[:, :, p_]].tolist()
+    pvalid = [bytearray(v.tobytes()) for v in pv]
+    return [(0x0F, spans(ga.tolist(), gsurf, g, gaps=False)),
+            (0x03, spans(pair[0], psv[0], g, gaps=False)),
+            (0x0C, spans(pair[2], psv[2], g, gaps=False))] + \
+        [(1 << p_, spans(per[p_], psurf[p_], g, valid=pvalid[p_]))
+         for p_ in range(4)]
+
+
+def modex_subs_loop(cv, changed, g):
     """A MODEX frame's writes (98.1.3.1): the canvas `cv` (a pixel a byte)
     at the pixels `changed` flags. An aligned group of four pixels of ONE
     colour with two or more of them changed is one byte under Map Mask 0Fh
@@ -1955,7 +2877,8 @@ class Writer:
                  credits="", aspect=None, keysecs=KEY_SECS, palette=None,
                  rowscale=1, flip=False, loop=None, repeat=False,
                  cgapal=None, spk=False, live=None, spkp=1, ahead=0,
-                 kcap=65535, spcap=SP_MAX, screen=SCR_480, page=False):
+                 kcap=65535, spcap=SP_MAX, screen=SCR_480, page=False,
+                 pages=2, own=False):
         # `spcap`: a super-packet's sectors at most - SP_MAX, or past it
         # (BIGSP, 98.1.4.1) up to SP_BIG for a stream played in the bracket
         if not SP_MAX <= spcap <= SP_BIG or (spcap > SP_MAX and
@@ -1982,6 +2905,10 @@ class Writer:
         self.live = live
         self.pev = None                 # [(frame, 48 bytes)], 98.1.3.2.3
         self.opts = None                # the options block, 98.1.1.4
+        # DESKTOP POSTERS (98.1.3.11): None, or (scale, make, custom) - each
+        # key's canvas made into its poster by make(canvas), and a CUSTOM
+        # poster's packed bytes or None
+        self.thumbs = None
         self.xbank = self.xpre = 0      # the bank's ask (98.3.18.3), KB
         if ahead and (audio_fmt == AUD_NONE or live is not None or
                       not 1 <= ahead <= 255 or ahead * abytes > AHEAD_MAX):
@@ -2030,26 +2957,61 @@ class Writer:
                            "else")
         self.cgapal = cgapal
         if screen not in SCREENS or (screen and (
-                pixfmt != PF_VGA4 or live is not None or
+                not (pixfmt == PF_VGA4 or (g.layout == LAY_MODEX and
+                                           screen == SCR_320X200)) or
+                live is not None or
                 g.w > SCREENS[screen][1] or g.h > SCREENS[screen][2])):
-            raise V88Error("screen %r: a VGA4 file's, not Live, and the "
-                           "canvas inside it (98.1.3.2.1)" % (screen,))
+            raise V88Error("screen %r: a VGA4 file's, or Mode X's 320 x 200 "
+                           "(98.1.3.1.1), not Live, and the canvas inside "
+                           "it (98.1.3.2.1)" % (screen,))
         self.screen = screen
+        if pixfmt == PF_VGA4 and g.stride != screen_stride(screen):
+            raise V88Error("screen %r with rows %d bytes apart: a NARROW "
+                           "screen's are 40, every other's 80 (98.1.3.2.5)"
+                           % (screen, g.stride))
+        if flip and screen in NARROW:
+            raise V88Error("a NARROW screen is never flipped every frame "
+                           "(98.1.3.2.5)")
         if flip and not (g.layout == LAY_MODEX or screen):
             raise V88Error("page flipping is Mode X's, or a VGA4 file's on "
                            "a screen of its own (98.3.8)")
-        self.flip = flip
+        # FLIPPED AND BUILT AHEAD (98.1.3.7.2): every frame flipped AND
+        # page-ahead, on three pages or more - a VGA's, never a Hercules's
+        self.fpage = bool(flip and page and pages > 2 and
+                          g.layout != LAY_HERC)
+        self.flip = flip and not self.fpage
         # PAGE-AHEAD (98.1.3.7): the two pages a flipped play has, but a
         # flip only where the encoder built a frame ahead - full screen, a
         # stream, no lap (the seam would join pages it does not know). A
         # REPEAT is fine: its wrap is to key 0, which builds both pages
-        if page and (flip or not (g.layout in (LAY_MODEX, LAY_HERC) or
-                                  screen) or
+        if page and ((flip and not self.fpage) or
+                     not (g.layout in (LAY_MODEX, LAY_HERC) or screen) or
                      live is not None or loop is not None):
             raise V88Error("page-ahead is Mode X's, a Hercules's, or a VGA4 "
                            "file's on a screen of its own: not flipped every "
                            "frame, not Live, no loop (98.1.3.7)")
         self.page = page
+        # EACH RECORD AGAINST ITS OWN PAGE (FLIP_OWN, VIDEO-SEEN-PLAN 3b): a
+        # file flipped every frame, a stream with no lap (the seam would
+        # join the two pages' pictures, which differ)
+        if own and (not self.flip or loop is not None or live is not None):
+            raise V88Error("a flipped file against its own page is flipped "
+                           "every frame, a stream with no loop and not Live "
+                           "(VIDEO-SEEN-PLAN 3b)")
+        self.own = bool(own)
+        # N PAGES (98.1.3.7.1): page-ahead past the second page, on a screen
+        # whose plane holds them - Mode X or a VGA4 screen of its own
+        if pages != 2 and (not page or not 3 <= pages <= MPAGE_MAX or
+                           g.layout == LAY_HERC or
+                           pages * page_bytes(g.layout, screen) > 0x10000):
+            raise V88Error("page-ahead on %d pages: 3 to %d, Mode X's or a "
+                           "VGA4 screen's of its own, and all of them in a "
+                           "plane's 64 KB (98.1.3.7.1)" % (pages, MPAGE_MAX))
+        self.pages = pages
+        self.mpage = pages > 2
+        self.kpool = True               # THE PAGE POOL (98.1.3.8.1), where
+        self.kpg = {}                   # it saves bytes; a writer's choice
+        self.pool = []
         if rowscale not in (1, 2) or (rowscale > 1 and
                                       g.layout not in VGA8_LAYOUTS):
             raise V88Error("a row scale of %d: 1, or 2 on a VGA8 layout"
@@ -2089,6 +3051,7 @@ class Writer:
         self.loop, self.repeat = loop, repeat
         self.loop_surf = self.loop_audio = self.last = None
         self.ybase = 0                  # (98.3.18.9)
+        self.bench = (0, 0)             # (98.1.9.13: base's, layer's)
         self.lrecs = None               # THE LAYER (98.1.9): a record or
         self.layer = None               # L_EMPTY a frame, and (kbs, ram, pre)
 
@@ -2106,11 +3069,29 @@ class Writer:
             ops, self.g, limit=L_RECMAX))
 
     def frame(self, ops, surf, audio=b"", hidden=None, flip=False,
-              hsurf=None):
+              hsurf=None, hsurfs=None, shown=0, built=False, copies=(),
+              held=False, up=None):
         """`ops` are the frame's writes, already applied to `surf`. PAGE-
         AHEAD (98.1.3.7): `flip`, they were drawn on the page that is shown
         from this frame on; `hidden`, the hidden page's writes after them,
-        and `hsurf` that page after them (what a key carries of it)"""
+        and `hsurf` that page after them (what a key carries of it).
+        ON N PAGES (98.1.3.7.1): `flip` is the page drawn on and shown (or
+        None), `hidden` a list of (page, ops), `shown` the page shown after
+        the frame and `hsurfs` every page by its number after it - what a
+        key carries of each that is not the page shown. FLIPPED AND BUILT
+        AHEAD (98.1.3.7.2): `flip` on every frame, `built` its page drawn
+        on as it stands, `copies` (destination, source, y0, y1) COPYs after
+        the hidden records - and `hsurfs` leaving out the page the next
+        frame is drawn on (it is the key's own picture after a seek)"""
+        if self.mpage:
+            return self._mframe(ops, surf, audio, hidden, flip, hsurfs,
+                                shown, built, copies)
+        if built or copies:
+            raise V88Error("a record built ahead or a copy, in a file not "
+                           "flipped and built ahead (98.1.3.7.2)")
+        if held and (not self.flip or len(self.recs) == self.loop):
+            raise V88Error("a HELD record outside a flipped file, or at its "
+                           "loop (98.1.3.9)")
         if (hidden or flip) and not self.page:
             raise V88Error("a hidden page's record in a file without "
                            "page-ahead")
@@ -2126,14 +3107,41 @@ class Writer:
                         limit=self.spcap * SECTOR - 4) if self.page else
             record(ops, self.g, limit=self.spcap * SECTOR - 4), audio,
             limit=self.spcap * SECTOR - 4)
-        if self.flip and len(rec) > PREV_MAX and self.spcap == SP_MAX:
+        if self.flip and not self.own and len(rec) > PREV_MAX and \
+                self.spcap == SP_MAX:
             raise V88Error("frame %d is %d bytes, past a flipped play's %d"
                            % (k, len(rec), PREV_MAX))
+        if up is not None:              # (FLIP_OWN: its page brought up, by
+            if not self.own:            # the copy of its rows off the glass)
+                raise V88Error("a record that brings its page up, outside a "
+                               "file against its own page")
+            rec = bytearray(rec)
+            y0, y1 = struct.unpack_from("<HH", rec, 2)
+            u0, u1 = up
+            if y1 <= y0:
+                y0, y1 = u0, u1
+            else:
+                y0, y1 = min(y0, u0), max(y1, u1)
+            struct.pack_into("<HH", rec, 2, y0, y1 | REC_UP)
+            rec = bytes(rec)
+        if held:                        # (98.1.3.9: drawn, not shown)
+            rec = bytearray(rec)
+            rec[3] |= REC_HELD >> 8
+            rec = bytes(rec)
+            self.held = True
         self.recs.append(rec)
         self.last = surf
         if k == self.loop:
             self.loop_surf, self.loop_audio = bytes(surf), audio
-        if k >= self.key0 and (k - self.key0) % self.keyint == 0:
+        # (a key is the picture SHOWN: one due on a held frame is the next
+        # frame's, which shows what it was drawing - 98.1.3.9)
+        due = k >= self.key0 and (k - self.key0) % self.keyint == 0
+        if held:
+            self.kheld = getattr(self, "kheld", False) or due
+            due = False
+        elif getattr(self, "kheld", False):
+            due, self.kheld = True, False
+        if due:
             kop = keyframe_ops(surf, self.g)
             try:
                 # 65,535 is the table's length word; an ADPCM4 file's
@@ -2163,6 +3171,73 @@ class Writer:
                 # still plays from the start, and seeks to the ones it has
                 self.skipped = getattr(self, "skipped", 0) + 1
 
+    def _mframe(self, ops, surf, audio, hidden, flip, hsurfs, shown,
+                built=False, copies=()):
+        """frame() on N pages (98.1.3.7.1), and flipped (98.1.3.7.2)"""
+        if len(audio) != self.abytes:
+            raise V88Error("frame %d has %d audio bytes, not %d"
+                           % (len(self.recs), len(audio), self.abytes))
+        k = len(self.recs)
+        if k >= FRAMES_MAX:
+            raise V88Error("frame %d: a file is %d frames at most"
+                           % (k, FRAMES_MAX))
+        if flip is False:
+            flip = None
+        if self.fpage and flip is None:
+            raise V88Error("frame %d does not flip, in a file flipped and "
+                           "built ahead (98.1.3.7.2)" % k)
+        if (built or copies) and not self.fpage:
+            raise V88Error("frame %d: built ahead or a copy, in a file not "
+                           "flipped and built ahead" % k)
+        if any(d == shown or not 0 <= src < self.pages or
+               not 0 <= d < self.pages for d, src, c0, c1 in copies or ()):
+            raise V88Error("frame %d: a copy onto page %r with page %d "
+                           "shown" % (k, [c[0] for c in copies], shown))
+        last = getattr(self, "mshown", 0)
+        if not 0 <= shown < self.pages or \
+                (flip is None and shown != last) or \
+                (flip is not None and (flip != shown or flip == last)):
+            raise V88Error("frame %d: page %d shown after page %d, flip %r"
+                           % (k, shown, last, flip))
+        if any(p == shown or not 0 <= p < self.pages
+               for p, h in hidden or ()):
+            raise V88Error("frame %d: a hidden record on page %r with page "
+                           "%d shown" % (k, [p for p, h in hidden], shown))
+        self.mshown = shown
+        lim = self.spcap * SECTOR - 4
+        rec = self.with_runs(mpage_record(ops, hidden, self.g, flip,
+                                          limit=lim, built=built,
+                                          copies=copies), audio, limit=lim)
+        self.recs.append(rec)
+        self.last = surf
+        if k == self.loop:              # (a gate's: no writer loops one)
+            self.loop_surf, self.loop_audio = bytes(surf), audio
+        if k >= self.key0 and (k - self.key0) % self.keyint == 0:
+            if hsurfs is None or shown not in hsurfs:
+                raise V88Error("frame %d: an N-page key without its pages"
+                               % k)
+            try:
+                ref = int(self.audio_fmt == AUD_ADPCM4)
+                klim = 65535 - ref
+                # the shown page's key, onto every page, and each other
+                # page's difference from it after its lists
+                # (a page left out of `hsurfs` holds the key's own picture
+                # after a seek: the caller's to treat as unknown, 98.1.3.7.1)
+                hs = [(p, delta_ops(hsurfs[p], surf, self.g))
+                      for p in sorted(hsurfs) if p != shown and
+                      self.g.canvas(hsurfs[p]) != self.g.canvas(surf)]
+                krec = key_record(keyframe_ops(surf, self.g), self.g, hs,
+                                  True, ref, self.kpart, kpage=shown)
+                if key_reads(krec)[0] > klim + ref:
+                    raise V88Error("a key past its length word")
+                self.keys.append((k, krec, self.g.canvas(surf)))
+                # (THE PAGE POOL's, 98.1.3.8.1: the pages it carries, by
+                # picture, for write() to share between keys)
+                self.kpg[k] = (shown, {p: bytes(self.g.canvas(hsurfs[p]))
+                                       for p, h in hs})
+            except V88Error:
+                self.skipped = getattr(self, "skipped", 0) + 1
+
     def with_runs(self, rec, audio=b"", limit=SP_MAX * SECTOR - 4):
         """A record made without its audio: its runs after the lists if the
         file is live, then the audio"""
@@ -2175,6 +3250,53 @@ class Writer:
         out = bytearray(rec + audio)
         struct.pack_into("<H", out, 0, n)
         return bytes(out)
+
+    def pool_keys(self):
+        """THE PAGE POOL (98.1.3.8.1): a page picture two keys or more carry
+        stored once, and each such key made again naming it - placeholders
+        for where it lands, which write() puts in (`krefs`). Not on a file
+        whose keys are one whole read (a page-ahead lap's, kpart None)"""
+        self.pool, self.krefs = [], {}
+        if not (self.mpage and getattr(self, "kpool", False) and
+                self.kpart is not None and len(self.keys) > 1):
+            return
+        import hashlib
+        g = self.g
+        cnt = {}
+        for k, (shown, pcs) in self.kpg.items():
+            for cv in pcs.values():
+                hv = hashlib.md5(cv).digest()
+                cnt[hv] = cnt.get(hv, 0) + 1
+        pidx, out = {}, []
+        ref = int(self.audio_fmt == AUD_ADPCM4)
+        for k, krec, c in self.keys:
+            shown, pcs = self.kpg[k]
+            share = [p for p, cv in pcs.items()
+                     if cnt[hashlib.md5(cv).digest()] > 1]
+            if not share:
+                out.append((k, krec, c))
+                continue
+            surf = g.surface()
+            g.put(surf, c)
+            hs, refs = [], []
+            for p in sorted(pcs):
+                ps = g.surface()
+                g.put(ps, pcs[p])
+                if p in share:
+                    hv = hashlib.md5(pcs[p]).digest()
+                    if hv not in pidx:
+                        pidx[hv] = len(self.pool)
+                        self.pool.append(key_record(keyframe_ops(ps, g), g,
+                                                    part=self.kpart))
+                    refs.append((p, pidx[hv]))
+                else:
+                    hs.append((p, delta_ops(ps, surf, g)))
+            kr = key_record(keyframe_ops(surf, g), g, hs, True, ref,
+                            self.kpart - REF_LEN * len(refs), kpage=shown)
+            kr, at = key_refs(kr, [(p, 0, 0) for p, i in refs], g)
+            self.krefs[k] = [(a, i) for a, (p, i) in zip(at, refs)]
+            out.append((k, kr, c))
+        self.keys = out
 
     def keep_keys(self, keys, lead, poster):
         """WHICH KEYS THE TABLE KEEPS (98.1.1, 98.1.8): `keys` with each
@@ -2226,9 +3348,10 @@ class Writer:
         if len(lr) != len(self.recs) or self.layer is None:
             raise V88Error("a layer of %d records for %d frames"
                            % (len(lr), len(self.recs)))
-        if self.live is not None or self.flip:
+        if self.live is not None or self.flip or self.mpage:
             raise V88Error("a layer is a stream's, played unflipped in the "
-                           "bracket: not Live, not flipped (98.1.9)")
+                           "bracket: not Live, not flipped, not on N pages "
+                           "(98.1.9, 98.1.3.7.1)")
         # ON A 32 KB BOUNDARY (98.1.9): the player reads it in 32 KB chunks
         # at a cluster multiple, and the file cannot know the cluster of the
         # disk it will be played from - 32 KB is one of every FAT volume's
@@ -2271,8 +3394,13 @@ class Writer:
         # the stream: greedy super-packets, then chained
         sps, where = [], []          # where[f] = (super-packet, index)
         cur, size = [], 4
-        for r in self.recs:
-            if cur and size + len(r) > self.spcap * SECTOR:
+        # (a key names the record after it by its index in the super-packet,
+        # a byte: one that would land past 255 starts a super-packet of its
+        # own - a stream of small records only, and nothing else moves)
+        knext = set(k + 1 for k, r, c in self.keys)
+        for f_, r in enumerate(self.recs):
+            if cur and (size + len(r) > self.spcap * SECTOR or
+                        (len(cur) > 255 and f_ in knext)):
                 sps.append(cur)
                 cur, size = [], 4
             where.append((len(sps), len(cur)))
@@ -2281,6 +3409,7 @@ class Writer:
         sps.append(cur)
         sps_l = sps
         secs = [-(-(4 + sum(len(r) for r in sp)) // SECTOR) for sp in sps]
+        self.pool_keys()
         keys = self.keys
         if self.audio_fmt == AUD_ADPCM4:
             # THE REFERENCE BYTE (98.1.1.1): the sample the decoder holds at
@@ -2307,7 +3436,9 @@ class Writer:
         # is judged by its picture alone - getattr, so a Writer made before
         # the attribute (a test's) writes them apart too
         apart = bool(A) and getattr(self, "kleads", KLEADS_APART)
-        kparts = any(len(key_reads(r)) > 1 for k, r, c in keys)
+        kparts = any(len(key_reads(r)) > 1 for k, r, c in keys) or \
+            bool(self.pool)             # (98.1.3.8.1: a pool's file reads
+                                        # its keys as KPARTS's do)
         if kparts and A:
             apart = True        # (98.1.3.8: a key in parts has its lead
                                 # apart - its entry is its first read)
@@ -2364,7 +3495,8 @@ class Writer:
             raise V88Error("%d keyframes: %d at most" % (nk, KEYS_MAX))
         ktab = -(-16 * nk // SECTOR) * SECTOR if nk else 0
         krec = sum(len(r) + len(leads.get(k, b"")) for k, r, c in keys) + \
-            len(seam) + len(lead0)            # (apart or not, the same bytes)
+            len(seam) + len(lead0) + \
+            sum(len(r) for r in self.pool)    # (apart or not, the same bytes)
         pal = SECTOR if self.palette else 0     # the palette: sector 1
         # A PALETTE A SCENE (98.1.3.2.3): its table after the palette's two
         # sectors, before the keyframe table
@@ -2396,7 +3528,16 @@ class Writer:
         # of the player's ever reaches it
         opts = self.opts or b""
         oat = kbase + -(-krec // SECTOR) * SECTOR
-        s0 = oat + -(-len(opts) // SECTOR) * SECTOR
+        # ...and THE DESKTOP POSTERS (98.1.3.11) in sectors of their own
+        # after it: a table of an entry a key, then the custom one, then
+        # their bytes - read only by a Preview that knows them
+        thb, thdr = b"", None
+        tat = oat + -(-len(opts) // SECTOR) * SECTOR
+        if self.thumbs is not None:         # (98.1.3.11)
+            thb, thdr = thumb_block(self.thumbs, keys, tat, *thumb_dims(
+                self.pixfmt, g, self.rowscale))
+            self.thumb_bytes = len(thb)
+        s0 = tat + -(-len(thb) // SECTOR) * SECTOR
         spoff, o = [], s0
         for n in secs:
             spoff.append(o)
@@ -2411,6 +3552,7 @@ class Writer:
             b = struct.pack("<HH", len(sp), nxt) + b"".join(sp)
             stream += b + bytes(secs[i] * SECTOR - len(b))
         kt, kr, o = bytearray(), bytearray(), kbase
+        kpatch = []
         for k, r, c in keys:
             if k + 1 < len(self.recs):
                 spi, idx = where[k + 1]
@@ -2424,6 +3566,8 @@ class Writer:
                                                         # behind it)
             kt += struct.pack("<IIHIBB", k, o, key_reads(r2)[0], sp_at,
                               sp_n, idx)      # (98.1.3.8: its first read)
+            for a, pi in self.krefs.get(k, ()):     # (the pool's names,
+                kpatch.append((len(kr) + a, pi))    # filled in below)
             kr += r2
             o += len(r2)
         loopblk = b""
@@ -2448,6 +3592,14 @@ class Writer:
             for k, r, c in keys:
                 kr += leads[k]
                 o += len(leads[k])
+        if self.pool:                   # THE PAGE POOL (98.1.3.8.1), and
+            pat = []                    # every key's names of it
+            for r in self.pool:
+                pat.append((o, key_reads(r)[0]))
+                kr += r
+                o += len(r)
+            for at, pi in kpatch:
+                struct.pack_into("<IH", kr, at, *pat[pi])
         if poster is None:
             poster = next((i for i, (k, r, c) in enumerate(keys)
                            if not flat(c)), 0 if nk else 0xFFFF)
@@ -2464,11 +3616,18 @@ class Writer:
             | (F_PALEV if pevb else 0) \
             | (F_SUB2 if self.g.sub2 else 0) \
             | (F_PAGE if self.page else 0) \
-            | (F_KPARTS if kparts else 0) \
+            | (F_KPARTS if kparts or self.pool else 0) \
+            | (F_KPOOL if self.pool else 0) \
             | (F_SCREEN if self.screen else 0) \
             | (F_BIGSP if max(secs) > SP_MAX or (self.flip and max(
                 len(r) for r in self.recs + [seam]) > PREV_MAX) else 0)
-        struct.pack_into("<HHIHHBBH", hdr, 4, 1, flags, len(self.recs),
+        v2 = getattr(self, "v2", False)     # BLOCKS (98.1.10)
+        if v2 and (flags & (F_RESIDENT | F_LIVE) or (
+                flags & F_LOOPREC and self.g.layout in ONEBIT_LAYOUTS)):
+            raise V88Error("blocks (98.1.10) with Live, a resident file or "
+                           "one bit's seam")
+        struct.pack_into("<HHIHHBBH", hdr, 4, V88_V2 if v2 else 1, flags,
+                         len(self.recs),
                          self.rate,
                          self.spf, self.audio_fmt, 1, self.abytes)
         struct.pack_into("<HB", hdr, 20, *pit_rate(self.rate, self.spf))
@@ -2483,6 +3642,8 @@ class Writer:
         struct.pack_into("<HH", hdr, H_XBANK, min(self.xbank, 0xFFFE),
                          self.xpre)
         struct.pack_into("<H", hdr, H_YBASE, min(65535, self.ybase))
+        struct.pack_into("<H", hdr, 192 + R_BENCH, min(65535, self.bench[0]))
+        struct.pack_into("<H", hdr, H_BENCHL, min(65535, self.bench[1]))
         for off, size, text in ((32, 48, self.title), (80, 96, self.credits)):
             t = text.encode("ascii", "replace")[:size - 1]
             hdr[off:off + len(t)] = t
@@ -2494,10 +3655,14 @@ class Writer:
                          max((max(key_reads(r)) + (0 if apart else
                                                    len(leads.get(k, b"")))
                               for k, r, c in keys), default=0))
-        struct.pack_into("<IBBB", hdr, 224, pal,
+        struct.pack_into("<IBBBB", hdr, 224, pal,
                          self.rowscale if self.rowscale > 1 else 0,
-                         2 if self.flip else FLIP_PAGE if self.page else 0,
-                         self.screen)
+                         (FLIP_OWN if self.own else
+                          FLIP_HELD if getattr(self, "held", False) else 2)
+                         if self.flip else FLIP_FPAGE if self.fpage else
+                         FLIP_MPAGE if self.mpage else
+                         FLIP_PAGE if self.page else 0,
+                         self.screen, self.pages if self.mpage else 0)
         if self.cgapal is not None:
             hdr[192 + R_CGAPAL] = self.cgapal
         if self.live is not None:
@@ -2507,13 +3672,16 @@ class Writer:
         hdr[LOOP_AT:LOOP_AT + len(loopblk)] = loopblk
         if opts:
             struct.pack_into("<IH", hdr, H_OPTS, oat, len(opts))
+        if thdr is not None:
+            struct.pack_into(THUMB_FMT, hdr, 192 + R_THUMB, *thdr)
         front = bytes(hdr)
         if self.palette:
             front += self.palette + bytes(2 * SECTOR - PAL_BYTES)
         front += pevb + bytes(ptab - len(pevb))
         out = front + kt + bytes(ktab - len(kt)) + kr + \
             bytes(oat - kbase - len(kr)) + opts + \
-            bytes(s0 - oat - len(opts)) + stream
+            bytes(tat - oat - len(opts)) + thb + \
+            bytes(s0 - tat - len(thb)) + stream
         lstat = None
         if self.lrecs is not None:
             out, lstat = self.write_layer(bytearray(out), keys)
@@ -2532,13 +3700,29 @@ def blit_cost(rows, nbytes, planes=1):
     return BLIT_CALL + rows * planes * (BLIT_ROW + nbytes * BLIT_BYTE)
 
 
-def lists_end(rec, g):
+def lists_end(rec, g, key=False):
     """The offset past a record's lists - its ten, or a planar record's
-    sub-records and the 0 after them"""
+    sub-records and the 0 after them - and VERSION 2's blocks with them
+    (98.1.10): a planar record's block leads among its sub-records, and a
+    linear frame record's block lists after RUNL. A `key` record has none"""
     if g.planes == 1:
-        return walk_lists(bytearray(65536), rec, REC_HDR)
+        si = walk_lists(bytearray(65536), rec, REC_HDR)
+        if getattr(g, "v2", False) and not key:
+            if g.layout == LAY_LIN320:
+                for kind in LIN320_LISTS:
+                    si = walk_blocks(rec, si, BLK_KIND[kind][0], 4)[1]
+            else:
+                si = walk_cbook(rec, si)[2]
+                si = walk_blocks(rec, si, 1, 2)[1]
+        return si
     si = REC_HDR
     while rec[si]:
+        if rec[si] >= BLK_LEAD:
+            kind = (VGA4_LEADS if g.bitplanes else MODEX_LEADS).get(rec[si])
+            if kind is None:
+                raise V88Error("a block lead %02x" % rec[si])
+            si = walk_blocks(rec, si + 1, BLK_KIND[kind][0], 1)[1]
+            continue
         si = walk_sub(bytearray(65536), rec, si + 1, g)
     return si + 1
 
@@ -2762,6 +3946,17 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
         apk, apack = packed(audio)
         aoff = base + len(body)
         body += pad(apk)
+    thdrs = []                          # DESKTOP POSTERS (98.1.3.11), each
+    for ri, w in enumerate(writers):    # rendition's after the sound
+        th = getattr(w, "thumbs", None)
+        if th is None:
+            thdrs.append(None)
+            continue
+        thb, thdr = thumb_block(th, w.keys, base + len(body), *thumb_dims(
+            w.pixfmt, w.g, w.rowscale))
+        w.thumb_bytes = len(thb)
+        body += pad(thb)
+        thdrs.append(thdr)
     hdr[0:4] = V88_SIG
     flags = F_RESIDENT | (F_LOOPREC if loop is not None else 0) | \
         (F_REPEAT if repeat else 0) | \
@@ -2796,6 +3991,8 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
             hdr[so + R_CGAPAL] = w.cgapal
         if live is not None or targets is not None:
             hdr[so + R_TARGET] = (live or targets)[ri]
+        if thdrs[ri] is not None:
+            struct.pack_into(THUMB_FMT, hdr, so + R_THUMBR, *thdrs[ri])
     if loop is not None:
         struct.pack_into("<I", hdr, LOOP_AT, loop)
     if opts:                    # the OPTIONS block (98.1.1.4), last: every
@@ -2919,9 +4116,15 @@ class Reader:
             raise V88Error("%s: not a .V88 (no signature)" % path)
         (ver, flags, self.frames, self.rate, self.spf, self.audio,
          self.nrend, self.abytes) = struct.unpack_from("<HHIHHBBH", d, 4)
-        if ver != 1 or flags & ~F_KNOWN:
+        if ver not in (1, V88_V2) or flags & ~F_KNOWN:
             raise V88Error("version %d, flags %04x: this reader knows "
-                           "version 1 and flags %04x" % (ver, flags, F_KNOWN))
+                           "versions 1 and 2 and flags %04x"
+                           % (ver, flags, F_KNOWN))
+        self.v2 = ver == V88_V2         # BLOCKS (98.1.10)
+        self.cb = self.cbset = None     # (one bit's codebook, as played)
+        self.cbn = 0
+        if self.v2 and flags & (F_RESIDENT | F_LIVE):
+            raise V88Error("version 2 with flags %04x (98.1.10)" % flags)
         self.flags = self.flags_ = flags
         if not 1 <= self.frames <= FRAMES_MAX or self.spf < 1 or \
                 self.rate < 1:
@@ -3022,27 +4225,64 @@ class Reader:
         elif self.cgapal:
             raise V88Error("a CGA palette byte in a %s file"
                            % PF_NAMES[self.pixfmt])
-        self.g = Geom(layout, wb, h, bitplanes=self.pixfmt == PF_VGA4)
+        # (a NARROW screen's rows are 40 bytes apart, 98.1.3.2.5: the screen
+        # byte, read here and checked below, says the canvas's geometry)
+        nscr = d[self.slot + R_SCREEN]
+        self.g = Geom(layout, wb, h, bitplanes=self.pixfmt == PF_VGA4,
+                      stride=40 if self.pixfmt == PF_VGA4 and
+                      layout == LAY_LIN80 and nscr in NARROW else None)
+        self.g.v2 = self.v2             # (98.1.10: what record() writes)
         if flags & F_SUB2 and self.g.planes > 1:  # 98.1.3.2.4: a planar
             self.g.sub2 = True      # rendition's (a Live file's one-bit
                                     # renditions beside it have no sub-records)
-        pal, rs, fl, scr = struct.unpack_from("<IBBB", d, self.slot + 32)
+        pal, rs, fl, scr, npg = struct.unpack_from("<IBBBB", d,
+                                                   self.slot + 32)
         self.rowscale = rs or 1
         if scr not in SCREENS or (scr and (
                 not flags & F_SCREEN or
-                self.pixfmt != PF_VGA4 or self.resident or self.live or
+                not (self.pixfmt == PF_VGA4 or (layout == LAY_MODEX and
+                                                scr == SCR_320X200)) or
+                self.resident or self.live or
                 self.g.w > SCREENS[scr][1] or h > SCREENS[scr][2])):
-            raise V88Error("a screen byte of %d (98.1.3.2.1)" % scr)
+            raise V88Error("a screen byte of %d (98.1.3.2.1, 98.1.3.1.1)"
+                           % scr)
         self.screen = scr
-        if fl not in (0, 1, 2, FLIP_PAGE) or (
+        self.own = fl == FLIP_OWN       # (VIDEO-SEEN-PLAN 3b: and every record
+        self.held = fl in (FLIP_HELD, FLIP_OWN)     # against its own page)
+        if self.held:                   # (98.1.3.9: a flipped file, with
+            fl = 2                      # HELD records)
+        if self.own and flags & F_LOOPREC:
+            raise V88Error("a flipped file against its own page with a loop")
+        pg = fl in (FLIP_PAGE, FLIP_MPAGE, FLIP_FPAGE)
+        if fl not in (0, 1, 2, FLIP_PAGE, FLIP_MPAGE, FLIP_FPAGE) or (
                 fl >= 2 and not (layout == LAY_MODEX or scr or (
                     fl == FLIP_PAGE and layout == LAY_HERC))) or \
-                (fl == FLIP_PAGE) != bool(flags & F_PAGE) or \
-                (fl == FLIP_PAGE and flags & (F_RESIDENT | F_LIVE |
-                                              F_LOOPREC)):
+                pg != bool(flags & F_PAGE) or \
+                (pg and flags & (F_RESIDENT | F_LIVE | F_LOOPREC)):
             raise V88Error("a flip byte of %d on layout %d" % (fl, layout))
+        if fl in (2, FLIP_FPAGE) and scr in NARROW:
+            raise V88Error("a NARROW screen flipped every frame (98.1.3.2.5)")
+        # N PAGES (98.1.3.7.1): byte 39, 3..8 of them in a plane's 64 KB
+        if (fl in (FLIP_MPAGE, FLIP_FPAGE)) != bool(npg) or (npg and (
+                not 3 <= npg <= MPAGE_MAX or
+                npg * page_bytes(layout, scr) > 0x10000)):
+            raise V88Error("%d pages with a flip byte of %d (98.1.3.7.1)"
+                           % (npg, fl))
         self.flip = fl == 2
-        self.page = fl == FLIP_PAGE     # PAGE-AHEAD (98.1.3.7)
+        if self.v2 and (self.pixfmt not in (PF_MONO1, PF_CGACOMP, PF_VGA8,
+                                            PF_VGA4) or
+                        (self.pixfmt < PF_VGA8 and flags & F_LOOPREC)):
+            raise V88Error("version 2 in pixel format %d%s (98.1.10)" % (
+                self.pixfmt, " with a seam" if flags & F_LOOPREC else ""))
+        self.page = pg                  # PAGE-AHEAD (98.1.3.7)
+        if getattr(self, "kpool", False) and not (
+                fl in (FLIP_MPAGE, FLIP_FPAGE) and self.kparts):
+            raise V88Error("a page pool in a file not on N pages in parts "
+                           "(98.1.3.8.1)")
+        self.mpage = fl in (FLIP_MPAGE, FLIP_FPAGE)  # ...ON N PAGES
+        self.fpage = fl == FLIP_FPAGE   # (98.1.3.7.1), FLIPPED (98.1.3.7.2)
+        self.flast = None               # ...its last record's own, played
+        self.pages = npg or 2
         # BIGSP (98.1.4.1): super-packets to SP_BIG sectors, in a stream
         # played in the bracket - never RESIDENT, LIVE or flipped
         self.spcap = SP_BIG if flags & F_BIGSP else SP_MAX
@@ -3103,7 +4343,9 @@ class Reader:
                 raise V88Error("the palette table's frame 0 is not the "
                                "header's palette")
             self.pev = pv
-        elif pev_at or pev_n:
+        elif (pev_at or pev_n) and not self.resident:
+            # (a resident file's bytes 56..61 are its DESKTOP POSTERS',
+            # 98.1.3.11: a scene's palette is a stream's alone)
             raise V88Error("a palette table with no PALEV flag")
         self.aspect = (an, ad)
         if self.resident:
@@ -3150,6 +4392,7 @@ class Reader:
         # KEYS IN PARTS (98.1.3.8): never RESIDENT (a resident file's keys
         # are in its block), and a key's lead apart if it has one
         self.kparts = bool(flags & F_KPARTS)
+        self.kpool = bool(flags & F_KPOOL)  # (98.1.3.8.1: N pages, parts)
         if self.kparts and (self.resident or self.live or
                             (flags & F_AHEAD and not flags & F_KLEADS)):
             raise V88Error("keys in parts with %s (98.1.3.8)" % (
@@ -3170,6 +4413,37 @@ class Reader:
         dz = dz[:H_LAYER] + bytes(LAYER_LEN) + dz[H_LAYER + LAYER_LEN:]
         self.ybase = struct.unpack_from("<H", d, H_YBASE)[0]
         dz = dz[:H_YBASE] + bytes(2) + dz[H_YBASE + 2:]
+        # THE BENCH (98.1.9.13): the rendition's word and the header's
+        self.bench = (struct.unpack_from("<H", d, self.slot + R_BENCH)[0],
+                      struct.unpack_from("<H", d, H_BENCHL)[0])
+        # DESKTOP POSTERS (98.1.3.11): the slot's six bytes - a stream's at
+        # 40, a resident file's at 56. A stream whose 46..51 are not zero
+        # has the first layout's twelve (the morning of 2026-10-18), which
+        # no player reads now: ignored, as a player ignores it
+        self.thumb, self.thumb_legacy = None, False
+        tso = self.slot + (R_THUMBR if self.resident else R_THUMB)
+        if not self.resident and any(d[self.slot + 46:self.slot + 52]):
+            self.thumb_legacy = True
+        else:
+            tat, ts, tf = struct.unpack_from(THUMB_FMT, d, tso)
+            if tat or ts or tf:
+                kinds = thumb_kinds(tf)
+                npic = (self.nkeys if tf & TH_KEYS else 0) + \
+                    (1 if tf & TH_CUSTOM else 0)
+                tn = npic * len(kinds)
+                tw, th_ = thumb_dims(self.pixfmt, self.g, self.rowscale)
+                tw, th_ = tw // max(ts, 1), (th_ + max(ts, 1) - 1) // \
+                    max(ts, 1)
+                if ts not in (1, 2, 4) or tf & ~TH_FLAGS or \
+                        bool(kinds) != bool(npic) or \
+                        any(thumb_size(k, tw, th_) > THUMB_MAX
+                            for k in kinds) or \
+                        (tn and not tat) or (tat and not tn) or \
+                        tat + struct.calcsize(TH_ENT) * tn > len(d):
+                    raise V88Error("desktop posters at %d: a scale of %d, "
+                                   "flags %d (98.1.3.11)" % (tat, ts, tf))
+                self.thumb = (tat, tn, tw, th_, ts, tf)
+        dz = dz[:H_BENCHL] + bytes(2) + dz[H_BENCHL + 2:]
         self.lyord = d[H_LYORD]
         self.lyneed = struct.unpack_from("<H", d, H_LYNEED)[0]
         dz = dz[:H_LYORD] + bytes(4) + dz[H_LYORD + 4:]
@@ -3188,6 +4462,14 @@ class Reader:
                               else "a value past 1"))
         if self.ybase and self.resident:
             raise V88Error("a yardstick in a resident file (98.3.18.9)")
+        if self.bench[0] and not bench_ok(self.pixfmt, self.g.layout,
+                                          self.resident, self.live) or \
+                self.bench[1] and not (self.bench[0] and struct.unpack_from(
+                    "<I", d, H_LAYER)[0]):
+            raise V88Error("a bench of %d and %d where %s (98.1.9.13)" % (
+                self.bench + ("the layer's is with no layer or no base's"
+                              if self.bench[1] else
+                              "the rendition cannot carry one",)))
         if not self.lsp0:
             if d[H_LAYER:H_LAYER + LAYER_LEN] != bytes(LAYER_LEN):
                 raise V88Error("a layer's words with no layer (98.1.9)")
@@ -3195,7 +4477,8 @@ class Reader:
             raise V88Error("a layer in the padded super-packets of before "
                            "98.1.9.8, which nothing reads any more: "
                            "re-encode it")
-        elif (self.resident or self.live or self.lsp0 % SLOT or
+        elif (self.resident or self.live or self.mpage or
+              self.lsp0 % SLOT or
               self.lsp0 < self.sp0 or self.lsp0n != L_CONT or
               self.lsp0 + 2 > len(d) or not self.lkbs or
               not self.lram or not 2 <= self.lmax <= L_RECMAX or
@@ -3307,13 +4590,21 @@ class Reader:
                            % (o - self.lsp0))
 
     def apply(self, surf, rec, key=False, check=True, layer=False,
-              part=False):
+              part=False, noblk=False):
         """Decode one record onto `surf`; with `check`, enforce the WRITER's
         rules too (SPEC.md 98.1.3): canvas-only, no byte written twice,
         rows inside y0..y1, audio exact. A key IN PARTS (98.1.3.8) is each
-        part in turn, `part` the ones before the last, which end in nothing"""
+        part in turn, `part` the ones before the last, which end in nothing.
+        `noblk`: a key's hidden record, which like the key carries no
+        version 2 blocks (98.1.10)"""
         g = self.g
         n, y0, y1 = struct.unpack_from("<HHH", rec, 0)
+        if getattr(self, "held", False) and not key:
+            y0 &= ~REC_HELD             # (a HELD record's bit, 98.1.3.9)
+        upb = False
+        if getattr(self, "own", False) and not key:
+            upb = bool(y1 & REC_UP)     # (VIDEO-SEEN-PLAN 3b's bring-up: its
+            y1 &= ~REC_UP               # band is the copy's rows too)
         if key and y0 & KEY_MORE:
             if not self.kparts:
                 raise V88Error("a key in parts in a file without KPARTS")
@@ -3344,10 +4635,62 @@ class Reader:
             writes.append((di, m))
         if g.planes == 1:
             end = walk_lists(surf, rec, REC_HDR, write if check else None)
+            if self.v2 and not (key or noblk) and \
+                    g.layout in ONEBIT_LAYOUTS:
+                # ONE BIT's codebook and tiles (98.1.10)
+                first, ent, end = walk_cbook(rec, end)
+                self.cbn = 0 if first is None else len(ent) // 8
+                if first is not None:
+                    if self.cb is None:
+                        self.cb = bytearray(2048)
+                        self.cbset = bytearray(256)
+                    self.cb[first * 8:first * 8 + len(ent)] = ent
+                    self.cbset[first:first + len(ent) // 8] = \
+                        b"\x01" * (len(ent) // 8)
+                ents, end, _, _ = walk_blocks(rec, end, 1, 2)
+                bseen = set()
+                for a, pay in ents:
+                    i = pay[0]
+                    if self.cb is None or not self.cbset[i]:
+                        raise V88Error("a tile names entry %d of no "
+                                       "codebook" % i)
+                    for r, ra in enumerate(blk_rows(g, a)):
+                        if check:
+                            bounds(ra, 2)
+                            if any(seens[0][ra:ra + 2]) or ra in bseen or \
+                                    ra + 1 in bseen:
+                                raise V88Error("a tile's byte at %04x "
+                                               "written twice" % ra)
+                            bseen.update((ra, ra + 1))
+                            wrote[0] += 2
+                        surf[ra:ra + 2] = self.cb[i * 8 + 2 * r:
+                                                  i * 8 + 2 * r + 2]
+            elif self.v2 and not (key or noblk):    # VERSION 2's blocks
+                if g.layout != LAY_LIN320:
+                    raise V88Error("version 2 on layout %d" % g.layout)
+                bseen = set()
+                for kind in LIN320_LISTS:
+                    ents, end, _, _ = walk_blocks(rec, end,
+                                                  BLK_KIND[kind][0], 4)
+                    for a, pay in ents:
+                        rows = blk_rows(g, a)
+                        px = v8_block(kind, pay)
+                        for r, ra in enumerate(rows):
+                            if check:
+                                bounds(ra, 4)
+                                if any(seens[0][ra:ra + 4]) or \
+                                        any(x in bseen for x in
+                                            range(ra, ra + 4)):
+                                    raise V88Error("a block's byte at %04x "
+                                                   "written twice" % ra)
+                                bseen.update(range(ra, ra + 4))
+                                wrote[0] += 4
+                            surf[ra:ra + 4] = bytes(px[r * 4:r * 4 + 4])
         else:                       # 98.1.3.1: a Map Mask, then its lists
             si, mv = REC_HDR, memoryview(surf)
             m3 = {}                 # (SUB2) a byte -> the masks written to it
             m3on = False
+            blkon, bseen = False, set()     # (version 2's blocks, 98.1.10)
             while True:
                 if si >= len(rec):
                     raise V88Error("the sub-records run off their record")
@@ -3358,6 +4701,8 @@ class Reader:
                 if mask >= SUB2_WM3 and g.sub2 and g.bitplanes and \
                         mask < SUB2_WM3 + 16:
                     # WRITE MODE 3 (98.1.3.2.4): one colour, its bytes masks
+                    if blkon:
+                        raise V88Error("a sub-record after a block one")
                     if key:
                         raise V88Error("a keyframe with a write mode 3 "
                                        "sub-record")
@@ -3383,6 +4728,39 @@ class Reader:
                         wm3_apply(surf, di, sc[di:di + m], mask - SUB2_WM3)
                     si = end
                     continue
+                if mask >= BLK_LEAD and self.v2:
+                    # VERSION 2's BLOCKS (98.1.10): after every other kind
+                    leads = VGA4_LEADS if g.bitplanes else MODEX_LEADS
+                    if key or noblk or mask not in leads:
+                        raise V88Error("a block lead of %02x%s" % (
+                            mask, " in a keyframe" if key or noblk else ""))
+                    kind = leads[mask]
+                    ents, si, _, _ = walk_blocks(rec, si, BLK_KIND[kind][0],
+                                                 1)
+                    blkon = True
+                    for a, pay in ents:
+                        rows = blk_rows(g, a)
+                        if check:
+                            for ra in rows:
+                                bounds(ra, 1)
+                                if any(sn[ra] for sn in seens) or \
+                                        ra in m3 or ra in bseen:
+                                    raise V88Error("a block's byte at %04x "
+                                                   "written twice" % ra)
+                                bseen.add(ra)
+                            wrote[0] += 4
+                        if g.bitplanes:
+                            for ra, pv in zip(rows, vga4_block(mask, pay)):
+                                for pp in range(4):
+                                    surf[pp * PLANE + ra] = pv[pp]
+                        else:
+                            px = v8_block(kind, pay)
+                            for r, ra in enumerate(rows):
+                                for pp in range(4):
+                                    surf[pp * PLANE + ra] = px[r * 4 + pp]
+                    continue
+                if blkon:
+                    raise V88Error("a sub-record after a block one")
                 if mask > 15:
                     raise V88Error("a Map Mask of %02x" % mask)
                 if m3on:
@@ -3411,15 +4789,107 @@ class Reader:
             else 0 if layer else self.abytes
         if tail != want:
             raise V88Error("%d bytes follow the lists, not %d" % (tail, want))
-        if check and not wrote[0] and y0 != y1:
+        if check and not wrote[0] and y0 != y1 and not upb:
             raise V88Error("an empty record with a band %d..%d" % (y0, y1))
         return rec[end:]
+
+    def thumb_at(self, pic, kind):
+        """The entry of DESKTOP POSTER `pic` (key pic's, or past the keys
+        the custom one) in set `kind` ("c" or "m"), or None for none"""
+        if self.thumb is None:
+            return None
+        tat, tn, tw, th_, ts, tf = self.thumb
+        kinds = thumb_kinds(tf)
+        if kind not in kinds:
+            return None
+        if not tf & TH_KEYS:
+            pic -= self.nkeys
+        i = pic * len(kinds) + kinds.index(kind)
+        return i if 0 <= i < tn else None
+
+    def thumb_pic(self, i):
+        """DESKTOP POSTER entry `i` (98.1.3.11), unpacked: vga4_pack's rows
+        of the desktop's sixteen, or OSAPI_GFX_BLIT1's of black and white,
+        at the table's scale"""
+        if self.thumb is None:
+            raise V88Error("no desktop posters")
+        tat, tn, tw, th_, ts, tf = self.thumb
+        if not 0 <= i < tn:
+            raise V88Error("desktop poster %d of %d" % (i, tn))
+        kinds = thumb_kinds(tf)
+        off, n, pk, z = struct.unpack_from(
+            TH_ENT, self.d, tat + struct.calcsize(TH_ENT) * i)
+        want = thumb_size(kinds[i % len(kinds)], tw, th_)
+        if z or pk not in (PK_NONE, PK_LZ4) or off + n > len(self.d) or \
+                not n or off < tat + struct.calcsize(TH_ENT) * tn or \
+                (pk == PK_NONE and n != want):
+            raise V88Error("desktop poster %d: %d bytes at %d, packing %d"
+                           % (i, n, off, pk))
+        body = bytes(self.d[off:off + n])
+        if pk == PK_NONE:
+            return body
+        import os88lz
+        try:
+            out = os88lz.decompress(body, os88lz.LZ4, want)
+        except Exception as e:
+            raise V88Error("desktop poster %d does not unpack: %s" % (i, e))
+        if len(out) != want:
+            raise V88Error("desktop poster %d unpacks to %d bytes, not %d"
+                           % (i, len(out), want))
+        return bytes(out)
+
+    def own_rows(self, rec):
+        """FLIP_OWN: a frame record's (held, the rows its page is brought
+        up by - None, or (y0, y1) off the glass)"""
+        y0, y1 = struct.unpack_from("<HH", rec, 2)
+        return bool(y0 & REC_HELD), ((y0 & ~REC_HELD, y1 & ~REC_UP)
+                                     if y1 & REC_UP else None)
+
+    def own_copy(self, dst, src, y0, y1):
+        """...those rows of the canvas, every plane, page `src` onto `dst`"""
+        g = self.g
+        for p in range(g.planes):
+            o = p * PLANE
+            for y in range(max(0, y0), min(g.h, y1)):
+                b = o + g.base[y]
+                dst[b:b + g.wb] = src[b:b + g.wb]
+
+    def apply_own(self, pages, vis, rec, check=True):
+        """FLIPPED AGAINST ITS OWN PAGE (FLIP_OWN, VIDEO-SEEN-PLAN 3b): one
+        frame record onto the page the glass is not showing, as it stands -
+        its rows first copied off the glass where it says so - which is then
+        shown unless the record is HELD, the next one then drawn on it too.
+        -> (the page shown after it, the page drawn on)"""
+        held, up = self.own_rows(rec)
+        d = vis ^ 1
+        if up is not None:
+            self.own_copy(pages[d], pages[vis], *up)
+        self.apply(pages[d], rec, check=check)
+        return (vis if held else d), pages[d]
 
     def apply_page(self, pages, vis, rec, check=True):
         """PAGE-AHEAD (98.1.3.7): one frame record onto two pages, `vis`
         the one shown. A FLIP record is drawn on the hidden page, which is
         then shown; a hidden-page record after its lists goes onto the page
-        hidden after it. (the page shown now, the record's tail)"""
+        hidden after it. (the page shown now, the record's tail)
+        ON N PAGES (98.1.3.7.1) `pages` are all N by number: a flip names
+        the page it shows, each hidden record its own"""
+        if self.fpage:
+            return self._fpage(pages, vis, rec, check)
+        if self.mpage:
+            flip, pg, own, hs = mpage_parts(rec, self.g, self.pages)
+            if flip:
+                if pg == vis:
+                    raise V88Error("a flip onto the page shown")
+                vis = pg
+            elif pg:
+                raise V88Error("a page in a record that does not flip")
+            tail = self.apply(pages[vis], own, check=check)
+            for hp, hrec in hs:
+                if hp == vis:
+                    raise V88Error("a hidden record on the page shown")
+                self.apply(pages[hp], hrec, check=check, layer=True)
+            return vis, tail
         flip, own, hrec = page_parts(rec, self.g)
         if flip:
             vis ^= 1
@@ -3427,6 +4897,95 @@ class Reader:
         if hrec is not None:
             self.apply(pages[vis ^ 1], hrec, check=check, layer=True)
         return vis, tail
+
+    def _fpage(self, pages, vis, rec, check):
+        """apply_page FLIPPED AND BUILT AHEAD (98.1.3.7.2): every record is
+        drawn on the page it names, which is then shown. Unless BUILT, that
+        page is first BROUGHT UP - the last record's own lists onto it
+        again (`flast`; none after a key) - and must then be the page shown,
+        byte for byte, because a player may bring it up by copying the last
+        record's rows off the glass instead. Then its hidden records and
+        COPYs, in order"""
+        g = self.g
+        flip, pg, own, hs, built = mpage_parts(rec, g, self.pages, True)
+        if not flip or pg == vis:
+            raise V88Error("a record on page %d with page %d shown, in a "
+                           "file flipped every frame" % (pg, vis))
+        if not built:
+            if self.flast is not None:
+                self.apply(pages[pg], self.flast, check=False)
+            if check and g.canvas(pages[pg]) != g.canvas(pages[vis]):
+                raise V88Error("page %d brought up is not page %d, the page "
+                               "shown (98.1.3.7.2)" % (pg, vis))
+        tail = self.apply(pages[pg], own, check=check)
+        vis = pg
+        for hp, x in hs:
+            if hp == vis:
+                raise V88Error("a hidden record or a copy on the page shown")
+            if isinstance(x, tuple):    # A COPY: whole rows, every plane
+                src, c0, c1 = x
+                for p in range(g.planes):
+                    o = p * PLANE
+                    for y in range(c0, c1):
+                        b = o + g.base[y]
+                        pages[hp][b:b + g.wb] = pages[src][b:b + g.wb]
+            else:
+                self.apply(pages[hp], x, check=check, layer=True)
+        self.flast = own
+        return vis, tail
+
+    def key_view(self, krec, check=True):
+        """A page-ahead key's pages BY NUMBER and the page shown after it:
+        (pages, shown, tail) - on two pages, page 0 shown (98.1.3.7); on N,
+        the page its parts name (98.1.3.7.1)"""
+        if not self.mpage:
+            ps, tail = self.key_pages(krec, check)
+            return ps, 0, tail
+        pages = [self.g.surface() for _ in range(self.pages)]
+        ps = key_split(krec)
+        if len(ps) > 1 and not self.kparts:
+            raise V88Error("a key in parts in a file without KPARTS")
+        shown = None
+        held, named = set(), {}
+        for i, p in enumerate(ps):
+            flip, pg, own, hs = mpage_parts(
+                p, self.g, self.pages, kref=self.kpool and i + 1 == len(ps),
+                key=True)
+            for hp, x in hs:
+                if isinstance(x, tuple):
+                    named[hp] = x
+                else:
+                    held.add(hp)
+            hs = [(hp, x) for hp, x in hs if not isinstance(x, tuple)]
+            if flip:
+                raise V88Error("a keyframe that flips")
+            if shown is not None and pg != shown:
+                raise V88Error("a key's parts name pages %d and %d"
+                               % (shown, pg))
+            shown = pg
+            last = i + 1 == len(ps)
+            for n, surf in enumerate(pages):
+                t = self.apply(surf, own, key=True,
+                               check=check and n == pg, part=not last)
+                if n == pg:
+                    tail = t
+            for hp, hrec in hs:
+                if hp == pg:
+                    raise V88Error("a key's hidden record on its page shown")
+                self.apply(pages[hp], hrec, check=check, layer=True,
+                           noblk=True)
+        for hp, (kind, at, n) in sorted(named.items()):
+            # A PAGE FROM THE POOL (98.1.3.8.1): black, then the picture
+            if hp == shown or hp in held:
+                raise V88Error("a key names page %d from the pool and %s"
+                               % (hp, "shows it" if hp == shown
+                                  else "carries it too"))
+            pages[hp] = self.g.surface()
+            pp = self.pool_pic(at, n)
+            for q in pp:            # (each part a record of its own, with
+                self.apply(pages[hp], q, check=check, layer=True,  # no tail
+                           noblk=True)      # - and, a key's, no blocks)
+        return pages, shown, tail
 
     def key_pages(self, krec, check=True):
         """...and a page-ahead key: its own record onto black on BOTH pages,
@@ -3436,14 +4995,14 @@ class Reader:
         if len(ps) > 1 and not self.kparts:
             raise V88Error("a key in parts in a file without KPARTS")
         for i, p in enumerate(ps):
-            flip, own, hrec = page_parts(p, self.g)
+            flip, own, hrec = page_parts(p, self.g, key=True)
             if flip:
                 raise V88Error("a keyframe that flips")
             last = i + 1 == len(ps)
             tail = self.apply(a, own, key=True, check=check, part=not last)
             self.apply(b, own, key=True, check=False, part=not last)
             if hrec is not None:
-                self.apply(b, hrec, check=check, layer=True)
+                self.apply(b, hrec, check=check, layer=True, noblk=True)
         return [a, b], tail
 
     def _unpack(self, at, what):
@@ -3567,6 +5126,23 @@ class Reader:
                            "of %d" % (self.optslen, self.optsat, len(self.d)))
         return unpack_options(self.d[self.optsat:self.optsat + self.optslen])
 
+    def pool_pic(self, at, n):
+        """A page pool picture (98.1.3.8.1) at `at`, its first read `n`: its
+        parts, each read checked as a key's are"""
+        total = at
+        while True:
+            if n < REC_HDR + 1 or n > KEY_PART + 1 or total + n > len(self.d):
+                raise V88Error("a page pool picture at %d runs off the file"
+                               % at)
+            if not struct.unpack_from("<H", self.d, total + 2)[0] & KEY_MORE:
+                break
+            if struct.unpack_from("<H", self.d, total)[0] != n:
+                raise V88Error("a page pool picture's part of a read of %d"
+                               % n)
+            total += n
+            n = struct.unpack_from("<H", self.d, total - 2)[0]
+        return key_split(self.d[at:total + n])
+
     def key(self, i):
         k, off, n, spo, spn, idx = self.keys[i]
         rec = self.d[off:off + n]
@@ -3661,8 +5237,9 @@ def key_at(r, f):
 
 def set_poster(path, frame):
     """THE POSTER, CHANGED IN PLACE (98.2.11): every rendition's poster word
-    (slot + 14) set to its key_at(`frame`), and nothing else in the file
-    touched. A poster is a keyframe INDEX, and renditions need not share
+    (slot + 14) set to its key_at(`frame`) - and a custom desktop poster
+    let go (98.1.3.11), the key being what the box is to show - and
+    nothing else in the file touched. A poster is a keyframe INDEX, and renditions need not share
     their keys, so each is placed by the frame rather than by the index.
     The file is re-read whole afterwards, every rendition; returns the
     posters written."""
@@ -3675,6 +5252,17 @@ def set_poster(path, frame):
         if i is None:
             raise V88Error("rendition %d has no keyframes to be a poster" % ri)
         struct.pack_into("<H", d, r.slot + 14, i)
+        if r.thumb is not None and r.thumb[5] & TH_CUSTOM:
+            # (a CUSTOM poster, 98.1.3.11, is what the box shows at open:
+            # a key set as the poster is what it shows instead, so the
+            # entries are let go - their bytes stay, named by nothing; and
+            # a table that held nothing else names nothing at all)
+            tat, tn, tw, th_, ts, tf = r.thumb
+            tf &= ~TH_CUSTOM
+            if not tf & TH_KEYS:
+                tat, tf = 0, tf & TH_SIZE
+            struct.pack_into(THUMB_FMT, d, r.slot + (
+                R_THUMBR if r.resident else R_THUMB), tat, ts, tf)
         posters.append(i)
     with open(path, "r+b") as f:
         f.write(d[:SECTOR])
@@ -3841,11 +5429,21 @@ def _reshape_options(d, r, changed):
     """A streamed file's stored options (98.1.1.4) with `changed` put in,
     written into the sectors the block has before the stream (bytes `d`,
     patched in place); the block and its pointer cleared when the new one
-    does not fit, or the old one does not read"""
+    does not fit, or the old one does not read. A resident file's go at
+    the end of `d`, still the last block"""
     if not r.optsat:
         return
     import os88venc                     # (the schema is the encoder's)
-    room = r.sp0 - r.optsat
+    # ...up to the stream, or to a DESKTOP POSTERS table between them
+    # (98.1.3.11): before 2026-10-19 the room ran to the stream whatever
+    # was there, and a reshaped file's posters were zeroed under a table
+    # that still named them
+    end = r.sp0
+    for ri in range(r.nrend):
+        t = Reader(r.path, ri).thumb if ri else r.thumb
+        if t is not None and r.optsat < t[0] < end:
+            end = t[0]
+    room = end - r.optsat
     try:
         o = os88venc.opts_migrate(r.options())[0]
         doc = r.options()
@@ -3854,6 +5452,14 @@ def _reshape_options(d, r, changed):
                              "src": doc.get("src", ""), "o": o})
     except V88Error:
         blob = b""
+    if r.resident:                      # (98.1.7: the file's LAST block,
+        d[r.optsat:r.optsat + r.optslen] = bytes(r.optslen)  # so no room
+        if r.optsat + r.optslen == len(d):  # of its own - the old one
+            del d[r.optsat:]            # zeroed, or dropped when still last,
+        at = len(d) if blob else 0      # and the new one after whatever the
+        d[len(d):] = blob               # caller put at the end: posters)
+        struct.pack_into("<IH", d, H_OPTS, at, len(blob))
+        return
     if not 0 < len(blob) <= room:
         blob = b""
     d[r.optsat:r.optsat + room] = blob + bytes(room - len(blob))
@@ -3861,7 +5467,7 @@ def _reshape_options(d, r, changed):
 
 
 def cycles_of(rec, planar=False, layout=None, table=None, sub=CYC_SUB,
-              sub2=False, wm3=WM3_BYTE):
+              sub2=False, wm3=WM3_BYTE, bitplanes=True, blocks=False):
     """The wave 0 model's cycles for one record, writing CGA's screen: the
     frame's fixed cost, a set-up per skip segment, each entry by its list,
     and an absolute entry's extra address. A MODEX record's sub-records
@@ -3873,11 +5479,34 @@ def cycles_of(rec, planar=False, layout=None, table=None, sub=CYC_SUB,
     once"""
     t = cyc_table(layout) if table is None else table
     if not planar:
-        return _cycles_lists(rec, REC_HDR, t[0], t)[1]
+        si, c = _cycles_lists(rec, REC_HDR, t[0], t)
+        # VERSION 2's (98.1.10): LIN320's three lists - in a FRAME record,
+        # which has at least their three ends after the ten; a key, priced
+        # through the same door, has at most its ADPCM byte
+        if blocks == "onebit" and len(rec) - si >= NBLISTS:
+            first, ent, si = walk_cbook(rec, si)
+            c += csl_copy(t, len(ent))
+            ents, si, segs, nabs = walk_blocks(rec, si, 1, 2)
+            c += len(ents) * blk_cost("tile", t, sub, wm3) + segs * t[1] + \
+                nabs * t[2]
+        elif blocks and len(rec) - si >= NBLISTS:
+            for kind in LIN320_LISTS:
+                ents, si, segs, nabs = walk_blocks(rec, si,
+                                                   BLK_KIND[kind][0], 4)
+                c += len(ents) * blk_cost(kind, t, sub, wm3) + \
+                    segs * t[1] + nabs * t[2]
+        return c
     c, si, m3 = t[0], REC_HDR, False
     while rec[si]:
         c += sub
         lead = rec[si]
+        if lead >= BLK_LEAD:            # VERSION 2's blocks (98.1.10)
+            kind = (VGA4_LEADS if bitplanes else MODEX_LEADS)[lead]
+            ents, si, segs, nabs = walk_blocks(rec, si + 1,
+                                               BLK_KIND[kind][0], 1)
+            c += len(ents) * blk_cost(kind, t, sub, wm3) + segs * t[1] + \
+                nabs * t[2]
+            continue
         if not sub2:
             si, c = _cycles_lists(rec, si + 1, c, t)
             continue
@@ -3962,6 +5591,82 @@ def _cycles_lists(data, si, c, t, lmap=None):
     except IndexError:
         raise V88Error("the lists run off the end of their record")
     return si, c
+
+
+def _bench_lists(mix, div):
+    """bench_record's ten lists: each row of `mix` (list, bytes, changes,
+    absolute) in list order, its changes >> div, every write inside
+    BENCH_SPAN and every byte of it 0"""
+    out = bytearray()
+    for k in range(NLISTS):
+        for kk, n, num, ab in mix:
+            if kk != k:
+                continue
+            num >>= div
+            chg = bytes(n) if k <= L_P6 else bytes([n]) + (
+                bytes(n) if k == L_SLICE else b"\0")
+            if ab:
+                a = 0
+                while num:
+                    c = min(num, 127)
+                    num -= c
+                    out.append(0x80 | c)
+                    for _ in range(c):
+                        out += struct.pack("<H", a) + chg
+                        a += 3
+                        if a + n > BENCH_SPAN:
+                            a = 0
+                continue
+            per = min(127, (BENCH_SPAN - n) // (n + 1) + 1)
+            while num:
+                c = min(num, per)
+                num -= c
+                out += bytes((c, 0, 0))
+                for i in range(c):
+                    out += (b"\1" if i else b"\0") + chg
+        out.append(0)
+    return out
+
+
+def bench_record(planar, sub2):
+    """THE BENCH (98.1.9.13): the record the player decodes to time itself,
+    which it builds itself - video.asm's vp_bngen, byte for byte. `planar`
+    is 0, 1 (MODEX) or 2 (VGA4): four sub-records, a plane each, a quarter
+    of the mix in each, and with SUB2 a list map before each and a colour
+    sub-record after them"""
+    if not planar:
+        body = _bench_lists(BENCH_MIX, 0)
+    else:
+        body = bytearray()
+        for m in (1, 2, 4, 8):
+            body.append(m)
+            if sub2:
+                body += struct.pack("<H", (1 << NLISTS) - 1)
+            body += _bench_lists(BENCH_MIX, 2)
+        if planar == 2 and sub2:
+            body.append(SUB2_WM3)
+            body += struct.pack("<H", (1 << NLISTS) - 1)
+            body += _bench_lists(BENCH_CMIX, 0)
+        body.append(0)
+    return struct.pack("<HHH", REC_HDR + len(body), 0, 1) + bytes(body)
+
+
+def bench_sum(rec):
+    """The player's check on what it built ([vp_bnsum]): each byte added to
+    the word rotated left one"""
+    s = 0
+    for b in rec:
+        s = (((s << 1) | (s >> 15)) & 0xFFFF) + b & 0xFFFF
+    return s
+
+
+def bench_ok(pixfmt, layout, resident, live):
+    """Whether a rendition carries a bench: one the player decodes natively
+    into the layouts' off-screen gaps (98.1.9.13) - not the text screens',
+    not a resident block or a Live file"""
+    return (not resident and not live and
+            pixfmt in (PF_MONO1, PF_CGACOMP, PF_VGA8, PF_VGA4, PF_CGA4) and
+            layout in (LAY_CGA, LAY_HERC, LAY_LIN80, LAY_LIN320, LAY_MODEX))
 
 
 # --------------------------------------------------------------------------
@@ -4559,28 +6264,54 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
 def encode_canvases(canvases, g, out, fps, pixfmt=PF_MONO1, palette=None,
                     title="", keysecs=KEY_SECS, poster=None, rowscale=1,
                     flip=False, loop=None, repeat=False, cgapal=None,
-                    screen=SCR_480, pev=None, subs=None, kpart=KEY_PART):
+                    screen=SCR_480, pev=None, subs=None, kpart=KEY_PART,
+                    held=(), own=False, thumbs=None, resident=False):
     """encode_frames for canvases already in hand (bytes, g.wb a row) - the
     only way to make a VGA8 file without a video (SPEC.md 98.2): silent,
     every changed byte. `pev`: a palette a scene's table (98.1.3.2.3).
     `subs(cv, prev, g)`: a VGA4 frame's sub-records in place of vga4_subs'
-    (a SUB2 file's colour ones, 98.1.3.2.4)"""
+    (a SUB2 file's colour ones, 98.1.3.2.4). `held`: the frames whose
+    records are HELD (98.1.3.9, a flipped file's) - drawn, not shown.
+    `own`: flipped with each record against its own page (FLIP_OWN), the
+    record after a key bringing its page up by the rows that differ.
+    `thumbs`: the writer's DESKTOP POSTERS (98.1.3.11), as Writer.thumbs
+    takes them. `resident`: written as a RESIDENT file (98.1.7)"""
     rate, spf = max(1, round(fps * 100)), 100
     wr = Writer(g, rate, spf, AUD_NONE, 0, pixfmt, title=title,
                 keysecs=keysecs, palette=palette, rowscale=rowscale,
                 flip=flip, loop=loop, repeat=repeat, cgapal=cgapal,
-                screen=screen)
+                screen=screen, own=own)
     wr.pev = pev
     wr.kpart = kpart
+    wr.thumbs = thumbs
     surf = g.surface()
     prev = g.canvas(surf)
-    for cv in canvases:
+    if own:
+        pcv, vis = [prev, prev], 0
+        for k, cv in enumerate(canvases):
+            d, up = vis ^ 1, None
+            if wr.keys and wr.keys[-1][0] == k - 1:
+                rows = [y for y in range(g.h)
+                        if pcv[d][y * g.w:(y + 1) * g.w] !=
+                        pcv[vis][y * g.w:(y + 1) * g.w]]
+                if rows:
+                    up = (rows[0], rows[-1] + 1)
+                    pcv[d] = pcv[vis]
+            ops = (subs or vga4_subs)(cv, pcv[d], g) if g.bitplanes else \
+                modex_subs(cv, [a != b for a, b in zip(cv, pcv[d])], g)
+            pcv[d] = cv
+            g.put(surf, cv)
+            wr.frame(ops, surf, held=k in held, up=up)
+            if k not in held:
+                vis = d
+        return wr.write(out, poster)
+    for k, cv in enumerate(canvases):
         if g.planes > 1:
             ops = (subs or vga4_subs)(cv, prev, g) if g.bitplanes else \
                 modex_subs(cv, [a != b for a, b in zip(cv, prev)], g)
             g.put(surf, cv)
             prev = cv
-            wr.frame(ops, surf)
+            wr.frame(ops, surf, held=k in held)
             continue
         changed = []
         for y, b in enumerate(g.base):
@@ -4592,6 +6323,9 @@ def encode_canvases(canvases, g, out, fps, pixfmt=PF_MONO1, palette=None,
                     changed.append(b + x)
             surf[b:b + g.wb] = row
         wr.frame(spans(changed, surf, g), surf)
+    if resident:
+        return write_resident(out, [wr], posters=None if poster is None
+                              else [poster])
     return wr.write(out, poster)
 
 
@@ -4652,18 +6386,58 @@ def v88_frames(r, check=True):
     each record; and the stream's own totals against the header's."""
     surf = r.g.surface()
     f = 0
-    pages, vis = [surf, r.g.surface()], 0
+    r.cb = r.cbset = None               # (98.1.10: a play's codebook)
+    pages, vis = [surf] + [r.g.surface() for _ in range(r.pages - 1)], 0
     k0 = r.keys[0][0] if r.page and r.keys else None
+    kset = {e[0] for e in r.keys}
+    r.flast = None
     for rec, at, i in r.records():
-        if r.page:                  # (98.1.3.7: the page shown, and the
+        if r.mpage:                 # (98.1.3.7.1: every page by number)
+            vis, _ = r.apply_page(pages, vis, rec, check=check)
+            if f == k0:             # key 0 PRELOADS every page it carries
+                kp, kvis, _ = r.key_view(r.key(0)[1], check=False)
+                if kvis != vis:
+                    raise V88Error("key 0 shows page %d; the stream page %d"
+                                   % (kvis, vis))
+                for n in range(r.pages):
+                    if n != vis:
+                        pages[n][:] = kp[n]
+                r.flast = None      # (a play from it brings nothing up)
+            r.mpages, r.vis = pages, vis
+            r.hidden = None
+            yield f, pages[vis], rec, at, i
+        elif r.page:                # (98.1.3.7: the page shown, and the
             vis, _ = r.apply_page(pages, vis, rec, check=check)
             if f == k0:             # every play starts at key 0, whose
                 kp, _ = r.key_pages(r.key(0)[1], check=False)  # hidden
                 pages[vis ^ 1][:] = kp[1]   # page is PRELOADED (98.1.3.7)
             r.hidden = pages[vis ^ 1]   # other for a key's check)
             yield f, pages[vis], rec, at, i
+        elif getattr(r, "own", False):  # (VIDEO-SEEN-PLAN 3b: two pages,
+            if check and f - 1 in kset:     # each record against its own)
+                # A SEEK lands on a key with the key on both pages, and a
+                # play through it has the frame before on the page drawn
+                # next: the record after a key brings that page up to the
+                # glass WHOLE, or the two plays draw different pictures
+                tmp = bytearray(pages[vis ^ 1])
+                up = r.own_rows(rec)[1]
+                if up is not None:
+                    r.own_copy(tmp, pages[vis], *up)
+                if r.g.canvas(tmp) != r.g.canvas(pages[vis]):
+                    raise V88Error("frame %d, after a key, does not bring its "
+                                   "page up to the glass (VIDEO-SEEN-PLAN 3b)"
+                                   % f)
+            vis, drawn = r.apply_own(pages, vis, rec, check=check)  # each
+            r.hidden = pages[vis ^ 1]   # record against its own)
+            yield f, drawn, rec, at, i
         else:
             r.apply(surf, rec, check=check)
+            if r.v2 and r.g.layout in ONEBIT_LAYOUTS and check and \
+                    (f == 0 or f - 1 in kset) and r.cbn != 256:
+                raise V88Error("frame %d carries %d codebook entries, not "
+                               "256: a play from %s would have none "
+                               "(98.1.10)" % (f, r.cbn, "the start" if not
+                                              f else "key %d" % (f - 1)))
             yield f, surf, rec, at, i
         f += 1
     if f != r.frames:
@@ -4764,10 +6538,20 @@ def cmd_info(a):
             print("   %s%s%s" % (
                 "screen %s, full screen; " % SCREENS[r.screen][0]
                 if r.screen else "full screen; " if r.palette and
-                r.pixfmt == PF_VGA4 else "", "two pages, flipped"
-                if r.flip else "two pages, page-ahead (%d flips)" % sum(
-                    1 for rec, _, _ in r.records()
-                    if struct.unpack_from("<H", rec, 2)[0] & REC_FLIP)
+                r.pixfmt == PF_VGA4 else "",
+                "two pages, flipped, each record against its own page"
+                if getattr(r, "own", False) else "two pages, flipped"
+                if r.flip else "%d pages, flipped and built ahead%s" % (
+                    r.pages, (lambda nb: ", every record against its own "
+                              "page" if nb == r.frames else
+                              " (%d built flips)" % nb)(sum(
+                        1 for rec, _, _ in r.records()
+                        if struct.unpack_from("<H", rec, 4)[0] & REC_BUILT)))
+                if getattr(r, "fpage", False) else
+                "%s pages, page-ahead (%d flips)" % (
+                    r.pages if r.mpage else "two", sum(
+                        1 for rec, _, _ in r.records()
+                        if struct.unpack_from("<H", rec, 2)[0] & REC_FLIP))
                 if r.page else "one page",
                 "; its own 16 colours%s" % (
                     ", a palette for each of %d scenes" % len(r.pev)
@@ -4791,6 +6575,10 @@ def cmd_info(a):
             lyb = len(r.d) - r.lsp0     # of the file, its key table in it
             print("   layer %d bytes = %.1f KB/s, read only by a machine "
                   "that plays it" % (lyb, lyb / 1024.0 / secs))
+        if r.bench[0]:
+            print("   bench (98.1.9.13): %.2f ms on its machine%s"
+                  % (r.bench[0] / 100.0, ", %.2f on the layer's"
+                     % (r.bench[1] / 100.0) if r.bench[1] else ""))
         print("   %d keyframes, poster %s; front matter %d bytes"
               % (r.nkeys, r.poster if r.poster != 0xFFFF else "none", r.sp0))
         print("   CPU (wave 0 model, CGA screen): mean %.1f%%, worst %.1f%% "
@@ -4813,34 +6601,51 @@ def palette_at(r, n):
 
 
 def decode_at(r, n):
-    """The canvas after frame `n`, through the keyframe at or before it."""
+    """The canvas after frame `n`, through the keyframe at or before it -
+    the one SHOWN: through a HELD record's run, the frame before it
+    (98.1.3.9)."""
     if not 0 <= n < r.frames:
         raise V88Error("frame %d of %d" % (n, r.frames))
     surf = r.g.surface()
-    pages, vis = [surf, r.g.surface()], 0
+    pages, vis = [surf] + [r.g.surface() for _ in range(r.pages - 1)], 0
     f = 0
+    r.flast = None
     best = [i for i, e in enumerate(r.keys) if e[0] <= n]
     if best:
         k, rec, spo, spn, idx = r.key(best[-1])
-        if r.page:                  # (98.1.3.7: both pages)
+        if r.mpage:                 # (98.1.3.7.1: every page, by number,
+            pages, vis, _ = r.key_view(rec)     # and the one it shows)
+            surf = pages[vis]
+            r.flast = None          # (98.1.3.7.2: nothing to bring up)
+        elif r.page:                # (98.1.3.7: both pages)
             pages, _ = r.key_pages(rec)
             surf = pages[0]
         else:
             r.apply(surf, rec, key=True)
+            pages[1][:] = surf          # (a key is onto both pages)
         if k == n:
             return r.g.canvas(surf)
         f = k + 1
         src = r.after_key(r.keys[best[-1]])
     else:
         src = r.records()
-    for rec, _, _ in src:
+    shown = None                    # (98.1.3.9: what the glass shows
+    for rec, _, _ in src:           # through a run of HELD records)
+        held = getattr(r, "held", False) and \
+            struct.unpack_from("<H", rec, 2)[0] & REC_HELD
+        if held and shown is None:
+            shown = bytes(surf)
+        elif not held:
+            shown = None
         if r.page:
             vis, _ = r.apply_page(pages, vis, rec)
             surf = pages[vis]
+        elif getattr(r, "own", False):  # (VIDEO-SEEN-PLAN 3b)
+            vis, surf = r.apply_own(pages, vis, rec)
         else:
             r.apply(surf, rec)
         if f == n:
-            return r.g.canvas(surf)
+            return r.g.canvas(shown if shown is not None else surf)
         f += 1
     raise V88Error("the stream ended before frame %d" % n)
 
@@ -4954,7 +6759,10 @@ def verify_v88(path, against=None, rend=None):
             if r.sound(f) != (want_audio[f] if want_audio
                               else xdc_audio(pk[f], hdr)):
                 raise V88Error("frame %d's audio differs from XDC's" % f)
-        if r.page:
+        if r.mpage:                     # (98.1.3.7.1: the page shown,
+            seen.append((hash(bytes(g.canvas(surf))), r.vis, tuple(
+                hash(bytes(g.canvas(pg))) for pg in r.mpages)))  # and all)
+        elif r.page:
             seen.append((hash(bytes(g.canvas(surf))),
                          hash(bytes(g.canvas(r.hidden)))))
         if f in kat:
@@ -4962,7 +6770,16 @@ def verify_v88(path, against=None, rend=None):
             kmax = max(kmax, max(key_reads(krec)) +
                        (0 if r.kleadat else len(r.key_lead(kat[f]))))
             kb = g.surface()
-            if r.page:                  # (98.1.3.7: and the hidden page,
+            if r.mpage:                 # (98.1.3.7.1: the page it names
+                kp, kvis, _ = r.key_view(krec)  # is the page shown, and
+                if kvis != r.vis:               # the rest as for two)
+                    raise V88Error("keyframe %d shows page %d; the stream "
+                                   "page %d" % (kat[f], kvis, r.vis))
+                kb = kp[kvis]
+                if any(g.canvas(kp[n]) != g.canvas(r.mpages[n])
+                       for n in range(r.pages) if n != kvis):
+                    later.append(kat[f])
+            elif r.page:                # (98.1.3.7: and the hidden page,
                 kp, _ = r.key_pages(krec)   # or one a play from the key
                 kb = kp[0]                  # comes back to the stream from)
                 if g.canvas(kp[1]) != g.canvas(r.hidden):
@@ -4978,6 +6795,20 @@ def verify_v88(path, against=None, rend=None):
         # SHOW what the stream shows, frame for frame, until both its pages
         # are the stream's again
         e = r.keys[i]
+        if r.mpage:                     # (98.1.3.7.1: by number, from the
+            pages, vis, _ = r.key_view(r.key(i)[1])     # page it shows)
+            r.flast = None
+            f = e[0] + 1
+            for rec, _, _ in r.after_key(e):
+                vis, _ = r.apply_page(pages, vis, rec, check=False)
+                hv = tuple(hash(bytes(g.canvas(pg))) for pg in pages)
+                if hv[vis] != seen[f][0] or vis != seen[f][1]:
+                    raise V88Error("a play from keyframe %d shows frame %d "
+                                   "wrong" % (i, f))
+                if hv == seen[f][2]:
+                    break
+                f += 1
+            continue
         pages, _ = r.key_pages(r.key(i)[1])
         vis, f = 0, e[0] + 1
         for rec, _, _ in r.after_key(e):
@@ -4992,6 +6823,9 @@ def verify_v88(path, against=None, rend=None):
             f += 1
     if r.lsp0:
         verify_layer(r)
+    if r.thumb is not None:             # (98.1.3.11: every desktop poster
+        for i in range(r.thumb[1]):     # unpacks to its size)
+            r.thumb_pic(i)
     sp_secs = {}
     at, n = r.sp0, r.sp0n
     while n:
@@ -5767,6 +7601,335 @@ def selfcheck():
             expect_fail("hidden record past its record", pq,
                         lambda d: d[:hat] + struct.pack("<H", 4000) +
                         d[hat + 2:], "hidden-page record")
+        # PAGE-AHEAD ON N PAGES (98.1.3.7.1): four pages by number - three
+        # scene changes each built ahead on a page of its own, two of them
+        # in the same frames (a chain), keys naming the page they show and
+        # carrying each page that is not it - read back from the start and
+        # from every key, then the same on Mode X's 320 x 200 (98.1.3.1.1),
+        # and the hostile files refused
+        def mpage_clip(g, mk, scenes, cuts, builds, **kw):
+            """`cuts`: frame -> the page it flips to; `builds`: page ->
+            (scene, first frame, last frame), its rows a frame in turn"""
+            kp = kw.pop("kpart", None)
+            w = Writer(g, 1500, 100, AUD_NONE, 0, mk, keysecs=0.2,
+                       page=True, **kw)
+            if kp is not None:
+                w.kpart = kp
+            P = [g.surface() for _ in range(w.pages)]
+            cvs, s0 = [], 0
+            for f in range(12):
+                cv = bytearray(scenes[sum(1 for c in cuts if c <= f)])
+                cv[(f % g.h) * g.wb + 1] = (f * 3) % 16
+                cvs.append(bytes(cv))
+            for f in range(12):
+                flip = cuts.get(f)
+                if flip is not None:
+                    s0 = flip
+                ops = mk_ops(g, cvs[f], g.canvas(P[s0]))
+                g.put(P[s0], cvs[f])
+                hid = []
+                for pg, (sc, a, b) in sorted(builds.items()):
+                    if a <= f <= b and pg != s0:
+                        rows = -(-g.h // (b - a + 1))
+                        new = bytearray(g.canvas(P[pg]))
+                        r0 = (f - a) * rows
+                        new[r0 * g.wb:(r0 + rows) * g.wb] = \
+                            scenes[sc][r0 * g.wb:(r0 + rows) * g.wb]
+                        hid.append((pg, mk_ops(g, bytes(new),
+                                               g.canvas(P[pg]))))
+                        g.put(P[pg], bytes(new))
+                w.frame(ops, P[s0], hidden=hid, flip=flip, shown=s0,
+                        hsurfs=dict(enumerate(P)))
+            return w, cvs
+
+        def mk_ops(g, cv, base):
+            if g.bitplanes:
+                return vga4_subs(cv, base, g)
+            return modex_subs(cv, [a != b for a, b in zip(cv, base)], g)
+        gm = Geom(LAY_LIN80, 4, 16, bitplanes=True)
+        scn = [bytes([(i * k + k) % 16 for i in range(32 * 16)])
+               for k in (1, 3, 5, 7)]
+        cuts = {4: 1, 6: 2, 9: 3}
+        builds = {1: (1, 0, 2), 2: (2, 1, 4), 3: (3, 2, 7)}
+        wm, cvm = mpage_clip(gm, PF_VGA4, scn, cuts, builds,
+                             palette=pals[0] + bytes(PAL_BYTES - 48),
+                             screen=SCR_320X200, pages=4)
+        pm = os.path.join(tmp, "MPAGE.V88")
+        wm.write(pm, 0)
+        try:
+            verify_v88(pm)
+            rm = Reader(pm)
+            chains = sum(1 for rec, _, _ in rm.records()
+                         if len(mpage_parts(rec, gm, 4)[3]) > 1)
+            if not rm.mpage or rm.pages != 4 or not chains or \
+                    any(decode_at(rm, f) != cvm[f] for f in range(12)):
+                fails.append("an N-page file did not read back as written")
+        except V88Error as e:
+            fails.append("an N-page file: %s" % e)
+        gx = Geom(LAY_MODEX, 40, 20)
+        scx = [bytes([(i * k + 7 * k) % 256 for i in range(gx.w * gx.h)])
+               for k in (1, 3, 5, 7)]
+        try:
+            wx, cvx = mpage_clip(gx, PF_VGA8, scx, cuts, builds,
+                                 palette=bytes(range(64)) * 12,
+                                 screen=SCR_320X200, pages=4)
+            px = os.path.join(tmp, "MPAGEMX.V88")
+            wx.write(px, 0)
+            verify_v88(px)
+            rx = Reader(px)
+            if not rx.mpage or rx.screen != SCR_320X200 or \
+                    any(decode_at(rx, f) != cvx[f] for f in range(12)):
+                fails.append("a Mode X 320 x 200 file on four pages did not "
+                             "read back as written")
+        except V88Error as e:
+            fails.append("a Mode X 320 x 200 file on four pages: %s" % e)
+        try:
+            Writer(gx, 1500, 100, AUD_NONE, 0, PF_VGA8, page=True,
+                   palette=bytes(range(64)) * 12, pages=4)
+            fails.append("four Mode X pages at 320 x 240 were written")
+        except V88Error:
+            pass
+        # NARROW (98.1.3.2.5): sixteen colours with rows 40 bytes apart,
+        # eight pages at 320 x 200 - the last one used - read back, and the
+        # canvas of an 80-byte stride and a flipped NARROW file refused
+        gn = Geom(LAY_LIN80, 4, 16, bitplanes=True, stride=40)
+        scnn = [bytes([(i * k + k) % 16 for i in range(32 * 16)])
+                for k in (1, 3, 5, 7, 9)]
+        npal = pals[0] + bytes(PAL_BYTES - 48)
+        try:
+            wn, cvn = mpage_clip(gn, PF_VGA4, scnn, {3: 1, 5: 2, 7: 3, 9: 7},
+                                 {1: (1, 0, 2), 2: (2, 0, 4), 3: (3, 1, 6),
+                                  7: (4, 2, 8)}, palette=npal,
+                                 screen=SCR_320X200N, pages=8)
+            pn = os.path.join(tmp, "MPAGEN.V88")
+            wn.write(pn, 0)
+            verify_v88(pn)
+            rn = Reader(pn)
+            if not rn.mpage or rn.pages != 8 or rn.g.stride != 40 or \
+                    rn.screen != SCR_320X200N or \
+                    any(decode_at(rn, f) != cvn[f] for f in range(12)):
+                fails.append("a NARROW file on eight pages did not read back "
+                             "as written")
+        except V88Error as e:
+            fails.append("a NARROW file on eight pages: %s" % e)
+        # FLIPPED AND BUILT AHEAD (98.1.3.7.2): four pages, every frame
+        # flipped - page 2 built toward the first scene change and COPIED
+        # onto page 3 in the calm, so the frame after the flip draws on a
+        # page already brought up; page 0 built toward the second and a
+        # COPY in the flip's own record bringing page 1 up - with keys
+        # leaving out the page the next frame is drawn on. Read back from
+        # the start and from every key; and its two breaks refused
+        gf = Geom(LAY_LIN80, 4, 16, bitplanes=True)
+        scf = [bytes([(i * k + 2 * k) % 16 for i in range(32 * 16)])
+               for k in (1, 3, 5)]
+        sched = {0: (1, False, [(2, 1, 0, 6)], []),
+                 1: (0, False, [(2, 1, 6, 11)], []),
+                 2: (1, False, [(2, 1, 11, 16)], []),
+                 3: (0, False, [], [(3, 2, 0, 8)]),
+                 4: (1, False, [], [(3, 2, 8, 16)]),
+                 5: (0, False, [], []),
+                 6: (2, True, [], []),
+                 7: (3, False, [(0, 2, 0, 6)], []),
+                 8: (2, False, [(0, 2, 6, 12)], []),
+                 9: (3, False, [(0, 2, 12, 16)], []),
+                 10: (0, True, [], [(1, 0, 0, 16)]),
+                 11: (1, False, [], [])}
+        wf = Writer(gf, 1500, 100, AUD_NONE, 0, PF_VGA4, keysecs=0.2,
+                    page=True, flip=True, pages=4, screen=SCR_320X200,
+                    palette=npal)
+        PF = [gf.surface() for _ in range(4)]
+        cvf, shown = [], 0
+        for f in range(12):
+            cv = bytearray(scf[(f >= 6) + (f >= 10)])
+            cv[(f % gf.h) * gf.wb * 8 + 3] = (f * 5 + 1) % 16
+            cvf.append(bytes(cv))
+        for f in range(12):
+            pg, built, hb, cps = sched[f]
+            if not built:               # (brought up: the page shown)
+                gf.put(PF[pg], gf.canvas(PF[shown]))
+            ops = mk_ops(gf, cvf[f], gf.canvas(PF[pg]))
+            gf.put(PF[pg], cvf[f])
+            shown = pg
+            hid = []
+            for hp, sc, r0, r1 in hb:
+                new = bytearray(gf.canvas(PF[hp]))
+                rb = gf.wb * 8
+                new[r0 * rb:r1 * rb] = scf[sc][r0 * rb:r1 * rb]
+                hid.append((hp, mk_ops(gf, bytes(new), gf.canvas(PF[hp]))))
+                gf.put(PF[hp], bytes(new))
+            for d_, src, c0, c1 in cps:
+                cv_d = bytearray(gf.canvas(PF[d_]))
+                rb = gf.wb * 8
+                cv_d[c0 * rb:c1 * rb] = gf.canvas(PF[src])[c0 * rb:c1 * rb]
+                gf.put(PF[d_], bytes(cv_d))
+            nxt = sched.get(f + 1)
+            carry = {n: PF[n] for n in range(4)
+                     if not (nxt and not nxt[1] and n == nxt[0])}
+            wf.frame(ops, PF[pg], hidden=hid, flip=pg, shown=pg,
+                     hsurfs=carry, built=built, copies=cps)
+        pf_ = os.path.join(tmp, "FPAGE.V88")
+        try:
+            wf.write(pf_, 0)
+            verify_v88(pf_)
+            rf = Reader(pf_)
+            if not rf.fpage or rf.pages != 4 or len(rf.keys) < 3 or \
+                    any(decode_at(rf, f) != cvf[f] for f in range(12)):
+                fails.append("a file flipped and built ahead did not read "
+                             "back as written")
+            o, bat, cat = rf.sp0 + 4, None, None
+            for rec, at, i in rf.records():
+                n0, y0, y1 = struct.unpack_from("<HHH", rec, 0)
+                if y1 & REC_BUILT:
+                    fl_, pg_, own_, hs_, b_ = mpage_parts(rec, gf, 4, True)
+                    if bat is None:
+                        bat = o
+                    elif hs_ and cat is None:
+                        own2 = bytearray(rec)
+                        struct.pack_into("<HH", own2, 2, y0 & ROW_MASK,
+                                         y1 & ROW_MASK)
+                        cat = o + lists_end(own2, gf)
+                o += len(rec)
+            if bat is None or cat is None:
+                fails.append("the flipped built-ahead file has no built "
+                             "record or copy to break")
+            else:
+                # the first built flip brought up as an ordinary one
+                expect_fail("built flip brought up", pf_, lambda d:
+                            d[:bat + 5] + bytes([d[bat + 5] & 0xEF]) +
+                            d[bat + 6:], "brought up is not")
+                # the second flip's COPY onto the page it shows (from page
+                # 2: the copy's own source is that page)
+                expect_fail("copy onto the page shown", pf_, lambda d:
+                            d[:cat + 3] + bytes([d[cat + 3] & 0x8F]) +
+                            d[cat + 4:cat + 5] +
+                            bytes([d[cat + 5] & 0x8F | 0x20]) + d[cat + 6:],
+                            "on the page shown")
+        except V88Error as e:
+            fails.append("a file flipped and built ahead: %s" % e)
+        for what, kw in (("an 80-byte canvas on a NARROW screen",
+                          dict(screen=SCR_320X200N, page=True, pages=8,
+                               g=gm)),
+                         ("a NARROW screen flipped every frame",
+                          dict(screen=SCR_320X200N, flip=True, g=gn))):
+            try:
+                Writer(kw.pop("g"), 1500, 100, AUD_NONE, 0, PF_VGA4,
+                       palette=npal, **kw)
+                fails.append("%s was written" % what)
+            except V88Error:
+                pass
+        rm = Reader(pm)
+        r37 = rm.slot + 37              # (the slot's byte 37, and 39)
+        expect_fail("N-page file of 9 pages", pm, lambda d: d[:r37 + 2] +
+                    bytes([9]) + d[r37 + 3:], "pages with a flip byte")
+        expect_fail("N-page count in a two-page file", pm, lambda d:
+                    d[:r37] + bytes([FLIP_PAGE]) + d[r37 + 1:],
+                    "pages with a flip byte")
+        o, hat, fat = rm.sp0 + 4, None, None
+        for rec, at, i in rm.records():
+            n0, y0, y1 = struct.unpack_from("<HHH", rec, 0)
+            if y1 & REC_HID and hat is None and not y0 & REC_FLIP:
+                own = bytearray(rec)
+                struct.pack_into("<HH", own, 2, y0 & ROW_MASK, y1 & ROW_MASK)
+                hat = o + lists_end(own, gm)
+            if y0 & REC_FLIP and fat is None:
+                fat = o
+            o += len(rec)
+        if hat is None or fat is None:
+            fails.append("the N-page file has no hidden record or flip to "
+                         "break")
+        else:
+            # a hidden record onto page 0, the page shown before any flip
+            expect_fail("hidden record on the page shown", pm, lambda d:
+                        d[:hat + 3] + bytes([d[hat + 3] & 0x8F]) +
+                        d[hat + 4:], "on the page shown")
+            # the first flip onto page 0, the page already shown
+            expect_fail("flip onto the page shown", pm, lambda d:
+                        d[:fat + 3] + bytes([d[fat + 3] & 0x8F]) +
+                        d[fat + 4:], "onto the page shown")
+        # ...and a pool that MATTERS: page 1 built whole by frame 2, carried
+        # unchanged by keys 3 and 6, flipped to at frame 8 - so a play from
+        # key 6 shows frame 8 right only if the pool's picture was read
+        try:
+            wq, cvq = mpage_clip(gm, PF_VGA4, scn, {8: 1}, {1: (1, 0, 2)},
+                                 palette=pals[0] + bytes(PAL_BYTES - 48),
+                                 screen=SCR_320X200, pages=4)
+            pq = os.path.join(tmp, "POOL.V88")
+            wq.write(pq, 0)
+            verify_v88(pq)
+            rq = Reader(pq)
+            k6 = [i for i, e in enumerate(rq.keys) if e[0] == 6]
+            named = []
+            if k6:
+                lp = key_split(rq.key(k6[0])[1])[-1]
+                named = [hp for hp, x in mpage_parts(
+                    lp, gm, 4, kref=rq.kpool)[3] if isinstance(x, tuple)]
+            if not rq.kpool or 1 not in named or \
+                    any(decode_at(rq, f) != cvq[f] for f in range(12)):
+                fails.append("a page pool's picture did not read back as "
+                             "written (key 6 names %r)" % (named,))
+        except V88Error as e:
+            fails.append("a page pool: %s" % e)
+        # ...and that pool in a file whose keys are IN PARTS (98.1.3.8): the
+        # references lengthen a key's last part, so the part before it must
+        # name the longer read - a stale word reads the last part short, and
+        # its chain runs past the bytes read
+        try:
+            wq, cvq = mpage_clip(gm, PF_VGA4, scn, {8: 1}, {1: (1, 0, 2)},
+                                 palette=pals[0] + bytes(PAL_BYTES - 48),
+                                 screen=SCR_320X200, pages=4, kpart=200)
+            pq = os.path.join(tmp, "POOLP.V88")
+            wq.write(pq, 0)
+            verify_v88(pq)
+            rq = Reader(pq)
+            k6 = [i for i, e in enumerate(rq.keys) if e[0] == 6]
+            ps = key_split(rq.key(k6[0])[1]) if k6 else []
+            named = [hp for hp, x in mpage_parts(
+                ps[-1], gm, 4, kref=rq.kpool)[3]
+                if isinstance(x, tuple)] if ps else []
+            if not rq.kpool or len(ps) < 2 or 1 not in named or \
+                    any(decode_at(rq, f) != cvq[f] for f in range(12)):
+                fails.append("a page pool with keys in parts did not read "
+                             "back as written (key 6: %d parts, names %r)"
+                             % (len(ps), named))
+        except (V88Error, struct.error) as e:
+            fails.append("a page pool with keys in parts: %s" % e)
+        # THE PAGE POOL (98.1.3.8.1): this file's keys name pages from it -
+        # a reference past the file, one naming the page its key shows, and
+        # one in a file without KPOOL must each be refused
+        rat = None
+        for ki in range(rm.nkeys):
+            off = rm.keys[ki][1]
+            while struct.unpack_from("<H", rm.d, off + 2)[0] & KEY_MORE:
+                off += struct.unpack_from("<H", rm.d, off)[0]
+            n0, y0, y1 = struct.unpack_from("<HHH", rm.d, off)
+            own = bytearray(rm.d[off:off + n0])
+            struct.pack_into("<HH", own, 2, y0 & ROW_MASK, y1 & ROW_MASK)
+            e = lists_end(own, gm) if y1 & REC_HID else n0
+            while e < n0:
+                hn, hy0, hy1 = struct.unpack_from("<HHH", rm.d, off + e)
+                if hy0 & REC_FLIP:
+                    rat, rshown = off + e, (y0 & PG_BITS) >> PG_SHIFT
+                    break
+                e += hn
+            if rat is not None:
+                break
+        if not rm.kpool or rat is None:
+            fails.append("the N-page file has no page pool reference to "
+                         "break")
+        else:
+            expect_fail("pool reference past the file", pm, lambda d:
+                        d[:rat + 6] + struct.pack("<I", len(d)) +
+                        d[rat + 10:], "runs off the file")
+            expect_fail("pool reference on the page shown", pm, lambda d:
+                        d[:rat + 3] + bytes([0x80 | rshown << 4]) +
+                        d[rat + 4:], "from the pool and shows it")
+            expect_fail("pool reference without KPOOL", pm, lambda d:
+                        d[:7] + bytes([d[7] & 0x7F]) + d[8:],
+                        "hidden-page record")
+        kat = rm.keys[1][1]             # (key 1's first part's y0: a page
+        expect_fail("key naming another page", pm, lambda d:  # it carries,
+                    d[:kat + 3] + bytes([d[kat + 3] ^ 0x30]) + d[kat + 4:],
+                    "page")             # or one the stream does not show)
         # SUB2 (98.1.3.2.4): list maps, and a colour sub-record's masks in
         # write mode 3 - a frame of plane stores and one of each, read back
         # to the pixel, and the four ways a writer could break the rules
@@ -5873,6 +8036,54 @@ def selfcheck():
                 fails.append("a C160 file with SUB2 set read differently")
         except V88Error as e:
             fails.append("a C160 file with SUB2 set was refused: %s" % e)
+        # EACH RECORD AGAINST ITS OWN PAGE (byte 37 7, VIDEO-SEEN-PLAN 3b):
+        # a Mode X clip of small changes, a scene change, keys and held
+        # records reads back frame for frame - a held frame showing the one
+        # before it - and the same clip with the record after each key NOT
+        # bringing its page up is refused, which is what a seek would show
+        go = Geom(LAY_MODEX, 40, 20)
+        ocv, cur, oheld = [], bytearray(go.w * go.h), {5, 6, 17, 30}
+        for k in range(40):
+            for _ in range(rnd.randrange(0, 60)):
+                cur[rnd.randrange(len(cur))] = rnd.randrange(256)
+            if k % 13 == 7:
+                cur = bytearray(rnd.randrange(256) for _ in range(len(cur)))
+            ocv.append(bytes(cur))
+        po = os.path.join(tmp, "OWN.V88")
+        try:
+            encode_canvases(ocv, go, po, 15, pixfmt=PF_VGA8,
+                            palette=bytes(range(64)) * 12, keysecs=0.6,
+                            flip=True, held=oheld, own=True)
+            verify_v88(po)
+            ro = Reader(po)
+            want, last = [], bytes(len(ocv[0]))
+            for k in range(40):
+                last = last if k in oheld else ocv[k]
+                want.append(last)
+            ups = sum(1 for rec, _, _ in ro.records()
+                      if struct.unpack_from("<H", rec, 4)[0] & REC_UP)
+            if not ro.own or len(ro.keys) < 3 or ups < len(ro.keys) - 1 or \
+                    any(decode_at(ro, f) != want[f] for f in range(40)):
+                fails.append("a file against its own page did not read back "
+                             "as written")
+            fr = Writer.frame
+            try:
+                Writer.frame = lambda self, *x, **kw: fr(
+                    self, *x, **dict(kw, up=None))
+                encode_canvases(ocv, go, po + ".bad", 15, pixfmt=PF_VGA8,
+                                palette=bytes(range(64)) * 12, keysecs=0.6,
+                                flip=True, held=oheld, own=True)
+            finally:
+                Writer.frame = fr
+            expect_fail("a record after a key not bringing its page up",
+                        po + ".bad", lambda d: d, "bring its page up")
+        except V88Error as e:
+            fails.append("a file against its own page: %s" % e)
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            fails += _v2_selfcheck(tmp, expect_fail)
+        except V88Error as e:
+            fails.append("version 2: %s" % e)
     for f in fails:
         print("os88vid --selfcheck: FAIL - %s" % f)
     if not fails:
@@ -5882,9 +8093,161 @@ def selfcheck():
               "a resident file's blocks "
               "round-trip, CGA4, C160, C512 and TEXT round-trip, a palette "
               "a scene and a page-ahead file round-trip, a live file's "
-              "blit runs cover its writes, and twenty-nine corruptions "
-              "were refused")
+              "blit runs cover its writes, a file against its own page "
+              "round-trips, VERSION 2's blocks decode as 98.1.10 says on "
+              "VGA4, LIN320, Mode X, CGA and Hercules, and thirty-six "
+              "corruptions were refused")
     return 1 if fails else 0
+
+
+def _v2_selfcheck(tmp, expect_fail):
+    """VERSION 2 (SPEC.md 98.1.10): a frame of each block kind on every
+    layout that has them, its picture computed here from the SECTION's
+    words and not from the decoder's helpers; then what a reader refuses"""
+    fails = []
+    pal = bytes(range(64)) * 12
+
+    def wr_for(g, pf, keysecs=60.0):
+        g.v2 = True
+        w = Writer(g, 1500, 100, AUD_NONE, 0, pf, title="v2",
+                   palette=pal if pf == PF_VGA8 else None, keysecs=keysecs)
+        w.v2 = True
+        return w
+
+    def check(name, out, want):
+        try:
+            verify_v88(out)
+            r = Reader(out)
+            for f, cv in enumerate(want):
+                if decode_at(r, f) != cv:
+                    fails.append("version 2 %s: frame %d decodes wrong"
+                                 % (name, f))
+        except V88Error as e:
+            fails.append("version 2 %s: %s" % (name, e))
+
+    # VGA4: a dithered fill at block (0, 0) and TWO at (4, 1)
+    g = Geom(LAY_LIN80, 4, 8, bitplanes=True)
+    wr = wr_for(g, PF_VGA4)
+    cv = [0] * (g.w * g.h)
+    a_, b_, m = 9, 2, 8
+    for r in range(4):
+        for x in range(8):
+            cv[r * g.w + x] = a_ if BAYER4[r * 4 + x % 4] < m else b_
+    tm = (0xF0, 0x0F, 0xAA, 0x55)
+    for r in range(4):
+        for x in range(8):
+            cv[(4 + r) * g.w + 8 + x] = 5 if tm[r] >> (7 - x) & 1 else 12
+    surf = g.surface()
+    g.put(surf, bytes(cv))
+    wr.frame([(BLK_PFILL, [(g.base[0], bytes([a_ << 4 | b_, m]), False)]),
+              (BLK_TWO, [(g.base[4] + 1, bytes([5 << 4 | 12]) + bytes(tm),
+                          False)])], surf)
+    out = os.path.join(tmp, "v2vga4.v88")
+    wr.write(out)
+    check("VGA4", out, [bytes(cv)])
+    expect_fail("version 2 file read as version 1", out,
+                lambda d: d.__setitem__(4, 1) or d, "Map Mask of 20")
+    # LIN320: FILL at (0, 0), TWO at (0, 4), EIGHT at (4, 0)
+    g = Geom(LAY_LIN320, 8, 8)
+    wr = wr_for(g, PF_VGA8)
+    cv = bytearray(64)
+    for r in range(4):
+        for x in range(4):
+            cv[r * 8 + x] = 7
+    mk = 0x8421                         # bit 4r + x: the diagonal
+    for r in range(4):
+        for x in range(4):
+            cv[r * 8 + 4 + x] = 30 if mk >> (4 * r + x) & 1 else 40
+    pairs = ((1, 2), (3, 4), (5, 6), (7, 8))    # LT, RT, LB, RB
+    mk8 = 0x0F0F
+    for r in range(4):
+        for x in range(4):
+            q = (r // 2) * 2 + x // 2
+            c1, c0 = pairs[q]
+            cv[(4 + r) * 8 + x] = c1 if mk8 >> (4 * r + x) & 1 else c0
+    surf = g.surface()
+    g.put(surf, bytes(cv))
+    wr.frame([(0, b"\x07", "fill8"),
+              (4, struct.pack("<HBB", mk, 30, 40), "two8"),
+              (g.base[4], struct.pack("<H", mk8) + bytes(sum(pairs, ())),
+               "eight8")],
+             surf)
+    out = os.path.join(tmp, "v2lin320.v88")
+    wr.write(out)
+    check("LIN320", out, [bytes(cv)])
+    # MODEX: pixel x of a block's row is plane x
+    g = Geom(LAY_MODEX, 2, 4)
+    wr = wr_for(g, PF_VGA8)
+    cv = bytearray(32)
+    for r in range(4):
+        for x in range(4):
+            cv[r * 8 + 4 + x] = 30 if mk >> (4 * r + x) & 1 else 40
+    surf = g.surface()
+    g.put(surf, bytes(cv))
+    wr.frame([(BLK_TWO8, [(1, struct.pack("<HBB", mk, 30, 40), False)])],
+             surf)
+    out = os.path.join(tmp, "v2modex.v88")
+    wr.write(out)
+    check("Mode X", out, [bytes(cv)])
+    # ONE BIT on CGA and Hercules: a codebook at frames 0 and 1 (the record
+    # after key 0), a tile at each frame
+    for lay in (LAY_CGA, LAY_HERC):
+        g = Geom(lay, 4, 8)
+        wr = wr_for(g, PF_MONO1)
+        ent = bytes(range(0x11, 0x19))
+        cb = bytes(8) + ent + bytes(8 * 254)
+        want, surf = [], g.surface()
+        for f, (tx, ty) in enumerate(((0, 0), (1, 1))):
+            cv = bytearray(g.canvas(surf))
+            for r in range(4):
+                cv[(ty * 4 + r) * 4 + tx * 2:(ty * 4 + r) * 4 + tx * 2 + 2] \
+                    = ent[2 * r:2 * r + 2]
+            g.put(surf, bytes(cv))
+            wr.frame([(0, cb, "cbook"),
+                      (g.base[ty * 4] + tx * 2, b"\x01", "tile")], surf)
+            want.append(bytes(cv))
+        out = os.path.join(tmp, "v2bit%d.v88" % lay)
+        wr.write(out)
+        check("one bit, layout %d" % lay, out, want)
+    # ...and what is refused: a tile with no codebook, and the record after
+    # a key with none
+    g = Geom(LAY_CGA, 4, 8)
+    wr = wr_for(g, PF_MONO1)
+    surf = g.surface()
+    wr.frame([(0, b"\x00", "tile")], surf)
+    bad = os.path.join(tmp, "v2nocb.v88")
+    wr.write(bad)
+    expect_fail("version 2 tile with no codebook", bad, lambda d: d,
+                "no codebook")
+    wr = wr_for(g, PF_MONO1)
+    surf = g.surface()
+    wr.frame([(0, bytes(2048), "cbook")], surf)
+    wr.frame([], surf)
+    bad = os.path.join(tmp, "v2nokcb.v88")
+    wr.write(bad)
+    expect_fail("version 2 record after a key with no codebook", bad,
+                lambda d: d, "codebook entries")
+    # a block on a row that is not a multiple of 4: the writer refuses it
+    g = Geom(LAY_LIN320, 8, 8)
+    try:
+        record([(g.base[1], b"\x07", "fill8")], g, v2=True)
+        fails.append("a version 2 block on row 1 was written")
+    except V88Error:
+        pass
+    # a block over a byte the lists wrote
+    g = Geom(LAY_LIN320, 8, 8)
+    wr = wr_for(g, PF_VGA8)
+    surf = g.surface()
+    surf[0] = 7
+    wr.frame([(0, b"\x07", False), (0, b"\x07", "fill8")], surf)
+    bad = os.path.join(tmp, "v2twice.v88")
+    try:
+        wr.write(bad)
+        expect_fail("version 2 block over a list's byte", bad, lambda d: d,
+                    "written twice")
+    except V88Error as e:
+        fails.append("version 2 overlap fixture: %s" % e)
+    return fails
 
 
 def main():

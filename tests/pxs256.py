@@ -84,6 +84,22 @@ def main():
         g.force_all_poke()
         m.run()
         g.wait_frames(1, limit=240.0)
+        # ...AND THAT FRAME MAY BE THE ONE IN FLIGHT AT THE POKE (KERN-MEGA-
+        # PLAN 14.50): the pause can land after this frame's px_spr_gather,
+        # and px_frames then counts a frame whose candidates were gathered
+        # BEFORE the dog stood there - a breakpoint at px_frame_end with the
+        # poke made at px_compose reads [] there and the dog one frame
+        # later. The forced frame the poke owes follows it at once, so the
+        # dog is waited FOR, in guest time: a 1-frame wait read the race as
+        # a failure whenever the host poll caught the gap between the two
+        # frames, which is a loaded box (it failed in 14.48's soak and
+        # passed 5 of 5 alone). Gone wrong for real, this still fails, at
+        # the guest budget
+        try:
+            os88marty.until(m, lambda mm: any(c[2] == 3 for c in g.candidates()),
+                            "the dog among the candidates", poll=0.2, limit=60.0)
+        except os88marty.MartyError:
+            pass
         cand = g.candidates()
         check(any(c[2] == 3 for c in cand), "(c) a dog 1.5 tiles ahead is a candidate (%s)" % cand)
         wd = g.word("px_wdrawn")

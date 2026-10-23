@@ -6,7 +6,13 @@
 The first apps size pass changed four things in SCRIBE that no row covered,
 because no row drove SCRIBE at all:
 
-  OVL       SCRIBE.OVL is loaded at entry into a claim of exactly SC_OVKB KB
+  PARTS     SCRIBE.O88 is ONE FILE (SPEC.md 95.8.8): the loader re-homes into
+            part 0, I_SIZE is SC_P1ORG, the region's own claim runs past
+            part 1's end, the bytes at program:SC_P1ORG are build/scribe.p1.bin
+            exactly, and the region is declared movable. It replaced a leg
+            that checked SCRIBE.OVL's own claim, which no longer exists; the
+            legs below are what RUN part 1 - every format reader and writer
+            and the picture decoder are in it
   ROUND     .DOC and .RTF Save As and re-open give back the SAME document,
             text and CHP bytes both. The .DOC writer's FKP page and banks
             and the RTF reader's group stack are arms of one union with
@@ -31,7 +37,7 @@ because no row drove SCRIBE at all:
             keypad 6 and types a '6' rather than selecting
 
 Every leg prints a digest of the document bytes it ended on, so the same run
-against a build of another tree (--src, --pkg, --ovl) can be compared line
+against a build of another tree (--src, --pkg) can be compared line
 for line: the base and this tree must print the same digests.
 """
 import argparse
@@ -51,8 +57,7 @@ import os88marty as M          # noqa: E402
 import os88ui                  # noqa: E402
 import os88geom                # noqa: E402
 import heapmap                 # noqa: E402
-import os88pkg                 # noqa: E402
-import os88lz                  # noqa: E402
+import os88parts               # noqa: E402
 
 u16 = lambda b, i=0: b[i] | (b[i + 1] << 8)      # noqa: E731
 FAIL = []
@@ -83,6 +88,16 @@ def pkg_syms(src):
         return out, open(os.path.join(d, "p.bin"), "rb").read()[:32]
 
 
+def pkg_tail(src):
+    """Part 1 as this tree assembles it: the bytes past the header's image."""
+    with tempfile.TemporaryDirectory(dir="build") as d:
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+                        "-I", src + "/", "-o", os.path.join(d, "p.bin"),
+                        os.path.join(src, "scribe.asm")], check=True)
+        b = open(os.path.join(d, "p.bin"), "rb").read()
+        return b[u16(b, 8):]
+
+
 def bmp4(w, h, seed):
     """A 4bpp bottom-up BMP, w x h, a deterministic pattern."""
     stride = ((w + 1) // 2 + 3) & ~3
@@ -105,23 +120,19 @@ def main():
     # more content than a 200-line CGA window has (sc_dgopen refuses with a toast)
     ap.add_argument("--src", default="apps/scribe")
     ap.add_argument("--pkg", default="build/scribe.o88")
-    ap.add_argument("--ovl", default="build/ovlz/SCRIBE.OVL")
     a = ap.parse_args()
 
-    # THE PAIR MUST BE ONE BUILD. SCRIBE.OVL addresses the package's bss and
-    # vector table by offset, so another build's loaded and read a document of
-    # nothing; it cost this row's first run on the ladder. The package refuses
-    # one now (SPEC.md 95.8.7) - which here would read as an overlay that
-    # never loads - so the same comparison is made first and named: the
-    # module's word 0 against the immediate sc_ovload compares it with.
+    # PART 1 MUST BE THIS TREE'S. It is the tail of scribe.asm's assembly,
+    # laid down at SC_P1ORG of the program's own segment, so a package built
+    # from another tree puts code at offsets this tree's map does not name
+    # and every leg below would be reading the wrong bytes. Said up front and
+    # named, rather than discovered as a document of nothing.
     syms, head = pkg_syms(a.src)
-    img = os88pkg.image_unwrap(open(a.pkg, "rb").read())
-    mod = os88lz.cz_unwrap(open(a.ovl, "rb").read())
-    at = syms.get("sc_ovload.stimm")    # absent on a pre-stamp --src tree
-    want, have = (u16(img, at - 2) if at else None), u16(mod)
-    if at and want != have:
-        print("scsize: %s carries build stamp %04X and %s %04X - not one "
-              "build (`make scribe` brings both)" % (a.pkg, want, a.ovl, have))
+    p1org = syms["sc_p1org"]
+    p1 = os88parts.part_bytes(open(a.pkg, "rb").read(), 1)
+    if bytes(p1) != pkg_tail(a.src):
+        print("scsize: part 1 of %s is not the tail of %s/scribe.asm - "
+              "`make scribe`" % (a.pkg, a.src))
         return 1
     tmp = tempfile.mkdtemp(prefix="scsize-", dir="build")
     small = bmp4(64, 48, 1)
@@ -129,11 +140,9 @@ def main():
     assert 62 * 1024 < len(big) < 65536, len(big)
     open(os.path.join(tmp, "SCP.BMP"), "wb").write(small)
     open(os.path.join(tmp, "SCBIG.BMP"), "wb").write(big)
-    disk = M.scratch_disk("build/scsize.img", a.pkg, a.ovl,
+    disk = M.scratch_disk("build/scsize.img", a.pkg,
                           "build/WELCOME.DOC", os.path.join(tmp, "SCP.BMP"),
                           os.path.join(tmp, "SCBIG.BMP"), size=360)
-    ovkb = int([L.split()[2] for L in open(os.path.join(a.src, "scribe.asm"))
-                if L.startswith("SC_OVKB")][0])
     print("== SCRIBE's claims and shared scratch (SPEC.md 95.13), %s, %s =="
           % (a.machine, a.src))
     with os88ui.boot("build/os8088-360.img", apps=disk, machine=a.machine) as ui:
@@ -205,13 +214,33 @@ def main():
                     "the save of " + name, poll=0.3, limit=600)
             idle("save " + name)
 
-        M.until(m, lambda _: W("sc_ovseg"), "SCRIBE.OVL at entry", poll=0.3,
-                limit=120)
         idle("launch")
-        ov = [c for c in claims() if c.seg == W("sc_ovseg")]
-        check("OVL: loaded at entry into a claim of SC_OVKB = %d KB" % ovkb,
-              len(ov) == 1 and ov[0].para == ovkb * 64,
-              "%r" % [(c.seg, c.para) for c in ov])
+        seg = base >> 4
+        rec = next(m.read(S("inst_tab") + i * os88geom.I_RECSZ,
+                          os88geom.I_RECSZ) for i in range(12)
+                   if u16(m.read(S("inst_tab") + i * os88geom.I_RECSZ,
+                                 os88geom.I_RECSZ), os88geom.I_SPTR) == seg)
+        isize = u16(rec, os88geom.I_SIZE)
+        check("PARTS: I_SIZE is SC_P1ORG = %d" % p1org, isize == p1org,
+              "I_SIZE = %d - the region the program declared (20.12.10.4)"
+              % isize)
+        reg = [c for c in claims() if c.seg == seg]
+        need = (p1org + len(p1) + 15) // 16
+        check("PARTS: the region's claim holds part 1 too",
+              reg and reg[0].para >= need,
+              "claim at %04X is %s paragraphs, part 1 ends at paragraph %d"
+              % (seg, reg[0].para if reg else "missing", need))
+        got = bytes(m.read(base + p1org, len(p1)))
+        bad = [i for i in range(len(p1)) if got[i] != p1[i]]
+        check("PARTS: program:SC_P1ORG holds part 1, byte for byte", not bad,
+              "%d of %d bytes differ, first at +%d"
+              % (len(bad), len(p1), bad[0] if bad else 0))
+        check("PARTS: the region is declared movable (MC_RLOC)",
+              reg and not reg[0].pinned, "the claim is pinned - the stamp "
+              "SCRIBE.OVL needed is back, or OS88_REGION_MOVABLE is gone")
+        check("PARTS: no claim but the document, CHP and PAP",
+              len(mine()) == 3, "%r - SCRIBE.OVL's SC_OVKB claim was the "
+              "fourth" % mine())
 
         # --- ROUND ---------------------------------------------------------
         open_doc("WELCOME.DOC")

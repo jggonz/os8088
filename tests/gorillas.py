@@ -192,8 +192,8 @@ def key(m, name):
         M.ui_done(m, cap=.5)
 
 
-def setup(m, points=5, music=''):
-    """Accept default names/gravity, choose music, and skip the optional dance."""
+def setup(m, points=5, music='', guide=''):
+    """Accept default names/gravity, choose music and aim guide, skip the dance."""
     p = m.gorillas_probe
     if p.b('state') == 4:
         key(m, 'Space')
@@ -212,6 +212,12 @@ def setup(m, points=5, music=''):
     assert b'Gameplay music? Yes or No' in p.data('hudchars', 512)
     assert b'M toggles music during gameplay' in p.data('hudchars', 512)
     for ch in music:
+        key(m, 'Key' + ch.upper())
+    key(m, 'Enter')
+    wait(m, lambda: p.b('setupfield') == 6, 'aim guide setup')
+    assert b'Show aim guides? Yes or No' in p.data('hudchars', 512)
+    assert b'Dots show the angle of a throw' in p.data('hudchars', 512)
+    for ch in guide:
         key(m, 'Key' + ch.upper())
     key(m, 'Enter')
     wait(m, lambda: p.b('state') == 6, 'intro choice')

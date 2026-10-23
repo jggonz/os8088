@@ -644,6 +644,11 @@ um_run:
     call um_rdata
     cmp al, 3                   ; boot layout: buttons, dx, dy (and maybe more)
     jb .out
+    jz .nowhl                   ; ...and the more is the WHEEL, when there is
+    mov ah, [um_buf+3]          ; a fourth byte - which the boot protocol
+    neg ah                      ; permits rather than requires. HID counts it
+    mov [um_whl], ah            ; positive AWAY from the user; the kernel's
+.nowhl:                         ; notch is positive toward (SPEC.md 9.12.8)
     call OSAPI_GET_TICKS
     mov [um_lrep], ax
     ; FALL THROUGH into um_report
@@ -672,9 +677,15 @@ um_report:
     jne .feed
     mov dx, ax
     or dx, bx
+    or dl, [um_whl]             ; ...and turns no wheel
     jz .none                    ; moves nothing, changes nothing: not fed
 .feed:
     mov [um_btn], cl
+    xor dl, dl
+    xchg dl, [um_whl]           ; the wheel, SPENT, into CL's top six bits
+    shl dl, 1                   ; (SPEC.md 9.12.8): a PicoMEM report and a
+    shl dl, 1                   ; release never set it, so they carry none
+    or cl, dl
     call OSAPI_MOUSE_FEED
 .none:
     ret
@@ -1101,6 +1112,7 @@ um_nenum    db 0                ; write both. Failed enumerations of this device
 um_stop     db 0                ; detach raised it: the worker exits
 um_alive    db 0                ; a worker exists (set at spawn)
 um_btn      db 0                ; the buttons the kernel was last told
+um_whl      db 0                ; the wheel this report carries, 0 for none
 um_lrep     dw 0                ; the tick of the last report
 um_pm       db 0                ; 1 = the PicoMEM backend (SPEC.md 9.12.7)
 um_old33    dw 0, 0             ; ...and the int 33h it chains to

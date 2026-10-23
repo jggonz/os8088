@@ -5,7 +5,7 @@
 
 QEMU has no Hercules card, so the 720x348 renderer cannot be screendumped
 there (MartyPC models one and `os88marty.py shot` reads it back directly;
-86Box has no automation socket - docs/HERCULES-TESTING.md).
+86Box's Hercules is readable through tools/os88box.py - docs/86BOX.md).
 This reads the framebuffer straight out of guest memory instead and applies
 the same banked layout the kernel writes with (SPEC.md 39.3), which verifies
 everything except the 6845 programming and the physical display: the stride,

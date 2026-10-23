@@ -96,7 +96,7 @@ ex_head:
     push di
     push es
     push bp
-    mov [cs:ex_hsp], sp             ; (ex_hfail's way out from any depth)
+    PXSSP ex_hsp                     ; (ex_hfail's way out from any depth)
     cmp word [8], PXL_IMAGE         ; THE STAMP (106.20)
     jne .link
     cmp word [10], PXL_BSS
@@ -104,14 +104,16 @@ ex_head:
     cmp byte [di + PXK_HCNT], 0     ; the first call of a walk
     jne .res
     mov byte [di + PXK_HCNT], 1
-    mov byte [cs:ex_ph], 0
+    PXSW mov byte [es:ex_ph], 0
 .res:
     mov ax, [di + PXK_HBASE]        ; the head's window, [hlo, hhi): from the
     mov dx, [di + PXK_HBASE + 2]    ; offset asked for (HPOS), not from its
     add ax, [di + PXK_HPOS]         ; cluster's start, and 2,048 bytes at
     adc dx, 0                       ; most - pixelsim's head is the 2,048
-    mov [cs:ex_hlo], ax             ; bytes FROM that offset, so the heads
-    mov [cs:ex_hlo + 2], dx         ; a walk counts are its, on a volume of
+    PXSWON
+    mov [es:ex_hlo], ax         ; bytes FROM that offset, so the heads
+    mov [es:ex_hlo + 2], dx     ; a walk counts are its, on a volume of
+    PXSWOFF
     mov bx, [di + PXK_HLEN]         ; any cluster
     sub bx, [di + PXK_HPOS]
     cmp bx, EX_HEADMAX
@@ -120,8 +122,10 @@ ex_head:
 .hl:
     add ax, bx
     adc dx, 0
-    mov [cs:ex_hhi], ax
-    mov [cs:ex_hhi + 2], dx
+    PXSWON
+    mov [es:ex_hhi], ax
+    mov [es:ex_hhi + 2], dx
+    PXSWOFF
     mov al, [px_cur + PXR_FMT]
     cmp al, PXF_TIFF
     jne .i
@@ -289,9 +293,8 @@ ex_run:
     mov ax, [di + PXK_HSEG]
     mov di, [cs:ex_rdst]            ; ES:DI = the TABLE's place for them
     add di, [cs:ex_rdone]
-    add [cs:ex_rdone], cx
-    push cs
-    pop es
+    PXSW add [es:ex_rdone], cx
+    mov es, [cs:PXP_SELF]
     mov ds, ax                      ; DS:SI = the head's
     cld
     rep movsb
@@ -391,10 +394,10 @@ tf_p0:
     cmp word [di + PXK_HLEN], 8
     jb .bad
     mov ax, [es:0]
-    mov byte [cs:ex_be], 0
+    PXSW mov byte [es:ex_be], 0
     cmp ax, 'II'
     je .o
-    inc byte [cs:ex_be]
+    PXSW inc byte [es:ex_be]
     cmp ax, 'MM'
     jne .bad
 .o:
@@ -409,12 +412,16 @@ tf_p0:
     cmp ax, 8
     jb .bad
 .i:
-    mov [cs:tf_ifd], ax
-    mov [cs:tf_ifd + 2], dx
+    PXSWON
+    mov [es:tf_ifd], ax
+    mov [es:tf_ifd + 2], dx
+    PXSWOFF
     xor ax, ax
-    mov [cs:tf_have], ax
-    mov [cs:tf_tiled], al
-    mov byte [cs:ex_ph], 1
+    PXSWON
+    mov [es:tf_have], ax
+    mov [es:tf_tiled], al
+    mov byte [es:ex_ph], 1
+    PXSWOFF
     jmp short tf_p1
 .bad:
     jmp ex_badh
@@ -430,8 +437,10 @@ tf_p1:
     jz .bad
     cmp ax, 170
     ja .bad
-    mov [cs:tf_n], ax
-    mov byte [cs:ex_ph], 2
+    PXSWON
+    mov [es:tf_n], ax
+    mov byte [es:ex_ph], 2
+    PXSWOFF
     jmp short tf_p2
 .bad:
     jmp ex_badh
@@ -439,7 +448,7 @@ tf_p1:
 ; --- 2: the whole IFD from ONE head, scanned: nothing read through a head ------
 tf_p2:
     mov ax, [cs:tf_n]               ; 2 + 12 n bytes
-    mov [cs:tf_cnt], ax
+    PXSW mov [es:tf_cnt], ax
     mov cx, 12
     mul cx
     add ax, 2
@@ -461,8 +470,8 @@ tf_p2:
     jb .nx
     cmp ax, 324
     ja .nx
-    mov byte [cs:tf_tiled], 1
-    jmp short .nx
+    PXSW mov byte [es:tf_tiled], 1
+    jmp .nx
 .slot:
     shr bx, 1                       ; BX = the slot
     push si
@@ -473,7 +482,7 @@ tf_p2:
     cmp ax, 4
     jne .bad
 .ty:
-    mov [cs:tf_ty + bx], al
+    PXSW mov [es:tf_ty + bx], al
     add si, 2
     call ex_d                       ; its count: not 0
     mov cx, ax
@@ -483,23 +492,27 @@ tf_p2:
     push ax
     mov ax, 1
     shl ax, cl
-    or [cs:tf_have], ax
+    PXSW or [es:tf_have], ax
     pop ax
     shl bx, 1
     shl bx, 1
-    mov [cs:tf_cn + bx], ax
-    mov [cs:tf_cn + bx + 2], dx
+    PXSWON
+    mov [es:tf_cn + bx], ax
+    mov [es:tf_cn + bx + 2], dx
+    PXSWOFF
     mov ax, [es:si + 4]             ; the entry's own four bytes, as they are
-    mov [cs:tf_rw + bx], ax
+    PXSW mov [es:tf_rw + bx], ax
     mov ax, [es:si + 6]
-    mov [cs:tf_rw + bx + 2], ax
+    PXSW mov [es:tf_rw + bx + 2], ax
     pop si
 .nx:
     add si, 12
-    dec word [cs:tf_cnt]
+    PXSW dec word [es:tf_cnt]
     jnz .e
-    mov byte [cs:tf_vi], 0
-    mov byte [cs:ex_ph], 3
+    PXSWON
+    mov byte [es:tf_vi], 0
+    mov byte [es:ex_ph], 3
+    PXSWOFF
     jmp short tf_p3
 .bad:
     pop si                          ; (the entry's place)
@@ -512,7 +525,7 @@ tf_p3:
     xor bh, bh
     cmp bx, TS_N
     jb .v
-    mov byte [cs:ex_ph], 4
+    PXSW mov byte [es:ex_ph], 4
     jmp tf_p4
 .v:
     cmp bl, TS_SOFF                 ; (the three arrays are read later)
@@ -528,10 +541,12 @@ tf_p3:
     xor bh, bh
     shl bx, 1
     shl bx, 1
-    mov [cs:tf_v + bx], ax
-    mov [cs:tf_v + bx + 2], dx
+    PXSWON
+    mov [es:tf_v + bx], ax
+    mov [es:tf_v + bx + 2], dx
+    PXSWOFF
 .nx:
-    inc byte [cs:tf_vi]
+    PXSW inc byte [es:tf_vi]
     jmp short tf_p3
 
 ; tf_has - BX = a slot: ZF = 0 when the IFD had it. Preserves all
@@ -566,14 +581,12 @@ tf_first:
     cmp cx, 2
     jne .far
 .in:
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     lea si, [bx + tf_rw]
     jmp short .val
 .far:
     push cx
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     lea si, [bx + tf_rw]
     call ex_d                       ; DX:AX = where
     pop cx
@@ -629,12 +642,12 @@ tf_p4:
     mov dx, [cs:tf_v + 4 * TS_W + 2]
     call ex_dim
     jc .dims
-    mov [cs:tf_w], ax
+    PXSW mov [es:tf_w], ax
     mov ax, [cs:tf_v + 4 * TS_H]
     mov dx, [cs:tf_v + 4 * TS_H + 2]
     call ex_dim
     jc .dims
-    mov [cs:tf_h], ax
+    PXSW mov [es:tf_h], ax
     cmp byte [cs:tf_tiled], 0       ; tiles
     jne .pack
     mov bx, TS_COMP                 ; compression 1, 5 or 32773
@@ -647,7 +660,7 @@ tf_p4:
     cmp ax, 32773
     jne .pack
 .c:
-    mov [cs:tf_comp], ax
+    PXSW mov [es:tf_comp], ax
     mov bx, TS_PHOT                 ; photometric present, 0..3
     call tf_has
     jz .badh
@@ -655,7 +668,7 @@ tf_p4:
     jc .depth
     cmp ax, 3
     ja .depth
-    mov [cs:tf_phot], al
+    PXSW mov [es:tf_phot], al
     mov bx, TS_FILL                 ; FillOrder 1
     call tf_w16
     jc .pack
@@ -681,19 +694,19 @@ tf_p4:
 .rh:
     mov ax, [cs:tf_h]
 .r:
-    mov [cs:tf_rps], ax
+    PXSW mov [es:tf_rps], ax
     mov bx, TS_BPS                  ; the bits and the samples (words, or a
     call tf_w16                     ; kind that is not read)
     jnc .b
     mov ax, 0xFFFF
 .b:
-    mov [cs:tf_bits], ax
+    PXSW mov [es:tf_bits], ax
     mov bx, TS_SPP
     call tf_w16
     jnc .sp
     mov ax, 0xFFFF
 .sp:
-    mov [cs:tf_spp], ax
+    PXSW mov [es:tf_spp], ax
     mov bx, TS_PLAN                 ; planar: 1, or 2 with one sample
     call tf_w16
     jc .pack
@@ -707,7 +720,7 @@ tf_p4:
     mov bx, TS_PRED                 ; predictor: 1, or 2 on 8-bit samples
     call tf_w16
     jc .pack
-    mov [cs:tf_pred], al
+    PXSW mov [es:tf_pred], al
     cmp ax, 1
     je .k
     cmp ax, 2
@@ -739,7 +752,7 @@ tf_p4:
     jne .depth
 .kok:
     mul cl                          ; the row: ceil(w x bits x samples / 8)
-    mov [cs:tf_bps], al             ; (at most 8,192 x 32 bits: 32 KB)
+    PXSW mov [es:tf_bps], al         ; (at most 8,192 x 32 bits: 32 KB)
     mul word [cs:tf_w]
     add ax, 7
     adc dx, 0
@@ -748,7 +761,7 @@ tf_p4:
     mov cl, 13
     shl dx, cl
     or ax, dx
-    mov [cs:tf_rb], ax
+    PXSW mov [es:tf_rb], ax
     cmp byte [cs:tf_phot], 3
     jne .strips
     ; --- PALETTE: the ColorMap present, SHORT, 3 x 2^bits of them -------------
@@ -760,7 +773,7 @@ tf_p4:
     mov cl, [cs:tf_bits]
     mov ax, 1
     shl ax, cl
-    mov [cs:tf_ne], ax
+    PXSW mov [es:tf_ne], ax
     mov dx, ax
     shl ax, 1
     add ax, dx                      ; 3 x 2^bits
@@ -770,8 +783,7 @@ tf_p4:
     jne .badh
     shl ax, 1                       ; its bytes, from ONE head
     mov cx, ax
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     mov si, tf_rw + 4 * TS_CMAP
     call ex_d
     call ex_need                    ; ES:SI = R's values, then G's, then B's
@@ -806,7 +818,7 @@ tf_p4:
     div word [cs:tf_rps]
     cmp ax, EX_STRIPS
     ja .big
-    mov [cs:tf_ns], ax
+    PXSW mov [es:tf_ns], ax
     cmp word [cs:tf_cn + 4 * TS_SOFF + 2], 0
     jne .c1
     cmp [cs:tf_cn + 4 * TS_SOFF], ax
@@ -817,8 +829,10 @@ tf_p4:
     cmp [cs:tf_cn + 4 * TS_SCNT], ax
     jb .badh
 .c2:
-    mov word [cs:ex_rdone], 0
-    mov byte [cs:ex_ph], 5
+    PXSWON
+    mov word [es:ex_rdone], 0
+    mov byte [es:ex_ph], 5
+    PXSWOFF
     jmp tf_p5
 .badh:
     jmp ex_badh
@@ -839,14 +853,16 @@ tf_p4:
 ; entry's own bytes when count x size <= 4, else a RUN through heads ---------
 tf_p5:
     mov bx, TS_SOFF
-    mov word [cs:ex_rdst], ex_table
+    PXSW mov word [es:ex_rdst], ex_table
     call tf_arr
-    mov word [cs:ex_rdone], 0
-    mov byte [cs:ex_ph], 6
+    PXSWON
+    mov word [es:ex_rdone], 0
+    mov byte [es:ex_ph], 6
+    PXSWOFF
     jmp short tf_p6
 tf_p6:
     mov bx, TS_SCNT
-    mov word [cs:ex_rdst], ex_table + EX_CNTS
+    PXSW mov word [es:ex_rdst], ex_table + EX_CNTS
     call tf_arr
     jmp tf_order
 
@@ -856,7 +872,7 @@ tf_p6:
 ; but DI
 tf_arr:
     mov al, [cs:tf_ty + bx]
-    mov [cs:tf_aty], al
+    PXSW mov [es:tf_aty], al
     mov cx, [cs:tf_ns]              ; CX = the run's bytes: n x size
     shl cx, 1
     cmp al, 3
@@ -879,21 +895,19 @@ tf_arr:
 .own:
     mov si, [cs:ex_rdst]            ; the four bytes, copied
     mov ax, [cs:tf_rw + bx]
-    mov [cs:si], ax
+    PXSW mov [es:si], ax
     mov ax, [cs:tf_rw + bx + 2]
-    mov [cs:si + 2], ax
+    PXSW mov [es:si + 2], ax
     jmp short .conv
 .run:
     push cx
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     lea si, [bx + tf_rw]
     call ex_d                       ; DX:AX = where the values are
     pop cx
     call ex_run
 .conv:
-    push cs                         ; the values to dwords, in place -
-    pop es                          ; backwards for SHORTs, which widen
+    mov es, [cs:PXP_SELF]            ; the values to dwords, in place - backwards for SHORTs, which widen
     mov cx, [cs:tf_ns]
     cmp byte [cs:tf_aty], 3
     jne .lc
@@ -906,8 +920,10 @@ tf_arr:
     add bx, [cs:ex_rdst]
 .ws:
     call ex_w
-    mov [cs:bx], ax
-    mov word [cs:bx + 2], 0
+    PXSWON
+    mov [es:bx], ax
+    mov word [es:bx + 2], 0
+    PXSWOFF
     sub si, 2
     sub bx, 4
     loop .ws
@@ -916,8 +932,10 @@ tf_arr:
     mov si, [cs:ex_rdst]
 .wl:
     call ex_d
-    mov [cs:si], ax
-    mov [cs:si + 2], dx
+    PXSWON
+    mov [es:si], ax
+    mov [es:si + 2], dx
+    PXSWOFF
     add si, 4
     loop .wl
     ret
@@ -962,7 +980,7 @@ tf_order:
     shr bp, 1
     shr bp, 1
     shr bp, 1
-    mov word [cs:tf_raw], 0
+    PXSW mov word [es:tf_raw], 0
     mov ax, [cs:tf_comp]
     cmp ax, 1
     je .pk
@@ -971,14 +989,14 @@ tf_order:
     jne .pk
     mov dl, PK_LZW                  ; ...after the LZW's tables
     add bp, LZW_KB * 64
-    mov word [cs:tf_raw], LZW_KB * 1024
+    PXSW mov word [es:tf_raw], LZW_KB * 1024
 .pk:
     mov ch, [cs:tf_bps]
     mov ax, [cs:tf_w]
     mov bx, [cs:tf_h]
     xor dh, dh
     call ex_ans
-    mov byte [cs:tf_alpha], 0       ; RGBA: the fourth sample is alpha when
+    PXSW mov byte [es:tf_alpha], 0   ; RGBA: the fourth sample is alpha when
     cmp byte [cs:tf_spp], 4         ; ExtraSamples says 1 or 2
     jne .x
     mov bx, TS_XS
@@ -990,7 +1008,7 @@ tf_order:
     dec ax
     cmp ax, 1
     ja .x
-    mov byte [cs:tf_alpha], 1
+    PXSW mov byte [es:tf_alpha], 1
 .x:
     jmp ex_hok
 .pack:
@@ -1001,7 +1019,7 @@ tf_order:
 ; ICO and CUR (SPEC.md 106.25)
 ; =============================================================================
 ic_head:
-    mov byte [cs:ex_be], 0
+    PXSW mov byte [es:ex_be], 0
     mov bl, [cs:ex_ph]
     xor bh, bh
     shl bx, 1
@@ -1016,7 +1034,7 @@ ic_p0:
     cmp word [es:0], 0              ; reserved 0, type 1 or 2, 1..127 images
     jne .bad
     mov ax, [es:2]
-    mov [cs:ic_type], al
+    PXSW mov [es:ic_type], al
     dec ax
     cmp ax, 1
     ja .bad
@@ -1028,7 +1046,7 @@ ic_p0:
     mov ax, 16                      ; the directory's end: 6 + 16 n
     mul cx
     add ax, 6
-    mov [cs:ic_dsz], ax
+    PXSW mov [es:ic_dsz], ax
     cmp word [di + PXK_FSZ + 2], 0  ; the file must hold it
     jne .h
     cmp ax, [di + PXK_FSZ]
@@ -1036,10 +1054,12 @@ ic_p0:
 .h:
     mov si, 6                       ; THE IMAGE: the largest w x h, then the
     xor bx, bx                      ; larger bits (a CUR's are 0), the first
-    mov word [cs:ic_kwh], 0         ; on a tie. BX = the best's entry
-    mov word [cs:ic_kwh + 2], 0
-    mov word [cs:ic_kb], 0
-    mov byte [cs:ic_first], 1
+    PXSWON
+    mov word [es:ic_kwh], 0     ; on a tie. BX = the best's entry
+    mov word [es:ic_kwh + 2], 0
+    mov word [es:ic_kb], 0
+    mov byte [es:ic_first], 1
+    PXSWOFF
 .e:
     mov al, [es:si]                 ; w x h, a byte of 0 being 256
     xor ah, ah
@@ -1073,10 +1093,12 @@ ic_p0:
     cmp bx, [cs:ic_kb]
     jbe .no
 .take:
-    mov [cs:ic_kwh], ax
-    mov [cs:ic_kwh + 2], dx
-    mov [cs:ic_kb], bx
-    mov byte [cs:ic_first], 0
+    PXSWON
+    mov [es:ic_kwh], ax
+    mov [es:ic_kwh + 2], dx
+    mov [es:ic_kb], bx
+    mov byte [es:ic_first], 0
+    PXSWOFF
     pop bx
     mov bx, si                      ; (the best entry's place)
     jmp short .nx
@@ -1084,7 +1106,11 @@ ic_p0:
     pop bx
 .nx:
     add si, 16
-    loop .e
+    loop .far1081
+    jmp short .far1081c
+.far1081:
+    jmp .e
+.far1081c:
     mov ax, [es:bx + 12]            ; its offset: past the directory...
     mov dx, [es:bx + 14]
     or dx, dx
@@ -1092,15 +1118,17 @@ ic_p0:
     cmp ax, [cs:ic_dsz]
     jb .bad
 .of:
-    mov [cs:ic_off], ax
-    mov [cs:ic_off + 2], dx
+    PXSWON
+    mov [es:ic_off], ax
+    mov [es:ic_off + 2], dx
+    PXSWOFF
     cmp dx, [di + PXK_FSZ + 2]      ; ...and inside the file
     jb .in
     ja .short
     cmp ax, [di + PXK_FSZ]
     jae .short
 .in:
-    mov byte [cs:ex_ph], 1
+    PXSW mov byte [es:ex_ph], 1
     jmp short ic_p1
 .bad:
     jmp ex_badh
@@ -1129,8 +1157,10 @@ ic_p1:
     cmp ax, 124
     jne .bad
 .ok:
-    mov [cs:ic_hsz], ax
-    mov byte [cs:ex_ph], 2
+    PXSWON
+    mov [es:ic_hsz], ax
+    mov byte [es:ex_ph], 2
+    PXSWOFF
     jmp short ic_p2
 .bad:
     jmp ex_badh
@@ -1145,7 +1175,7 @@ ic_p2:
     mov dx, [es:si + 6]
     call ex_dim
     jc .dims
-    mov [cs:ic_w], ax
+    PXSW mov [es:ic_w], ax
     mov ax, [es:si + 8]             ; height: not negative, even...
     mov dx, [es:si + 10]
     test dh, 0x80
@@ -1156,11 +1186,11 @@ ic_p2:
     rcr ax, 1
     call ex_dim
     jc .dims
-    mov [cs:ic_hh], ax
+    PXSW mov [es:ic_hh], ax
     cmp word [es:si + 12], 1        ; planes 0 or 1
     ja .bad
     mov ax, [es:si + 14]            ; bits 1, 4, 8, 24, 32
-    mov [cs:ic_bits], al
+    PXSW mov [es:ic_bits], al
     cmp ax, 1
     je .bk
     cmp ax, 4
@@ -1175,7 +1205,7 @@ ic_p2:
     mov ax, [es:si + 16]            ; compression 0
     or ax, [es:si + 18]
     jnz .pack
-    mov word [cs:ic_ne], 0
+    PXSW mov word [es:ic_ne], 0
     cmp byte [cs:ic_bits], 8        ; a palette: ClrUsed, or 2^bits; no more
     ja .np
     mov cl, [cs:ic_bits]
@@ -1192,9 +1222,9 @@ ic_p2:
     ja .bad
     mov bx, ax
 .all:
-    mov [cs:ic_ne], bx
+    PXSW mov [es:ic_ne], bx
 .np:
-    mov byte [cs:ex_ph], 3
+    PXSW mov byte [es:ex_ph], 3
     jmp short ic_p3
 .bad:
     jmp ex_badh
@@ -1249,8 +1279,10 @@ ic_p3:
     xor dx, dx
     add ax, [cs:ic_off]
     adc dx, [cs:ic_off + 2]
-    mov [cs:ic_xo], ax
-    mov [cs:ic_xo + 2], dx
+    PXSWON
+    mov [es:ic_xo], ax
+    mov [es:ic_xo + 2], dx
+    PXSWOFF
     mov al, [cs:ic_bits]            ; a row's bytes: ((w x bits + 31) / 32) x 4
     xor ah, ah
     mul word [cs:ic_w]
@@ -1263,14 +1295,14 @@ ic_p3:
     or ax, dx
     shl ax, 1
     shl ax, 1
-    mov [cs:ic_stride], ax
+    PXSW mov [es:ic_stride], ax
     mov ax, [cs:ic_w]               ; ...the mask's: ((w + 31) / 32) x 4
     add ax, 31
     mov cl, 5
     shr ax, cl
     shl ax, 1
     shl ax, 1
-    mov [cs:ic_ms], ax
+    PXSW mov [es:ic_ms], ax
     cmp byte [cs:ic_bits], 32       ; 32 bits: the alpha is the mask
     je ic_done
     mul word [cs:ic_hh]             ; the mask's bytes: 8,192 at most
@@ -1278,9 +1310,11 @@ ic_p3:
     jnz .big
     cmp ax, EX_TABLE
     ja .big
-    mov [cs:ic_msz], ax
-    mov word [cs:ex_rdone], 0
-    mov byte [cs:ex_ph], 4
+    PXSWON
+    mov [es:ic_msz], ax
+    mov word [es:ex_rdone], 0
+    mov byte [es:ex_ph], 4
+    PXSWOFF
     jmp short ic_p4
 .big:
     mov ax, PXD_BIG
@@ -1293,7 +1327,7 @@ ic_p4:
     add ax, [cs:ic_xo]
     adc dx, [cs:ic_xo + 2]
     mov cx, [cs:ic_msz]
-    mov word [cs:ex_rdst], ex_table
+    PXSW mov word [es:ex_rdst], ex_table
     call ex_run
 ; ic_done - the answers
 ic_done:
@@ -1367,7 +1401,7 @@ ic_png:
 ; IFF: ILBM and PBM (SPEC.md 106.25) - big-endian, a chunk at a time to BODY
 ; =============================================================================
 lb_head:
-    mov byte [cs:ex_be], 1
+    PXSW mov byte [es:ex_be], 1
     mov bl, [cs:ex_ph]
     xor bh, bh
     shl bx, 1
@@ -1383,7 +1417,7 @@ lb_p0:
     jne .bad
     cmp word [es:2], 'RM'
     jne .bad
-    mov byte [cs:lb_pbm], 0
+    PXSW mov byte [es:lb_pbm], 0
     cmp word [es:8], 'IL'
     jne .p
     cmp word [es:10], 'BM'
@@ -1394,15 +1428,17 @@ lb_p0:
     jne .bad
     cmp word [es:10], 'M '
     jne .bad
-    mov byte [cs:lb_pbm], 1
+    PXSW mov byte [es:lb_pbm], 1
 .ok:
     xor ax, ax
-    mov [cs:lb_bm], al
-    mov [cs:lb_cmap], al
-    mov [cs:lb_camg], ax
-    mov word [cs:lb_pos], 12
-    mov [cs:lb_pos + 2], ax
-    mov byte [cs:ex_ph], 1
+    PXSWON
+    mov [es:lb_bm], al
+    mov [es:lb_cmap], al
+    mov [es:lb_camg], ax
+    mov word [es:lb_pos], 12
+    mov [es:lb_pos + 2], ax
+    mov byte [es:ex_ph], 1
+    PXSWOFF
     jmp short lb_p1
 .bad:
     jmp ex_badh
@@ -1415,13 +1451,17 @@ lb_p1:
     call ex_need
     add ax, 8                       ; its data
     adc dx, 0
-    mov [cs:lb_d], ax
-    mov [cs:lb_d + 2], dx
+    PXSWON
+    mov [es:lb_d], ax
+    mov [es:lb_d + 2], dx
+    PXSWOFF
     push si
     add si, 4
     call ex_d
-    mov [cs:lb_sz], ax
-    mov [cs:lb_sz + 2], dx
+    PXSWON
+    mov [es:lb_sz], ax
+    mov [es:lb_sz + 2], dx
+    PXSWOFF
     pop si
     mov ax, [es:si]                 ; its id
     mov dx, [es:si + 2]
@@ -1434,14 +1474,14 @@ lb_p1:
     cmp word [cs:lb_sz], 20
     jb .bad
 .bm:
-    mov byte [cs:ex_ph], 2
+    PXSW mov byte [es:ex_ph], 2
     jmp lb_p2
 .c:
     cmp ax, 'CM'
     jne .g
     cmp dx, 'AP'
     jne .nx
-    mov byte [cs:lb_cmap], 1        ; CMAP: min(size / 3, 256) entries
+    PXSW mov byte [es:lb_cmap], 1    ; CMAP: min(size / 3, 256) entries
     mov ax, [cs:lb_sz]
     mov dx, [cs:lb_sz + 2]
     mov cx, 3
@@ -1453,10 +1493,10 @@ lb_p1:
 .c256:
     mov ax, 256
 .ck:
-    mov [cs:lb_k], ax
+    PXSW mov [es:lb_k], ax
     or ax, ax
     jz .c0
-    mov byte [cs:ex_ph], 3
+    PXSW mov byte [es:ex_ph], 3
     jmp lb_p3
 .c0:
     call lb_pal0                    ; (a CMAP of no entries: all black)
@@ -1471,7 +1511,7 @@ lb_p1:
     cmp word [cs:lb_sz], 4
     jb .nx
 .cg:
-    mov byte [cs:ex_ph], 4
+    PXSW mov byte [es:ex_ph], 4
     jmp lb_p4
 .b:
     cmp ax, 'BO'
@@ -1503,9 +1543,11 @@ lb_next:
     mov ax, 0xFFFF
     mov dx, ax
 .p:
-    mov [cs:lb_pos], ax
-    mov [cs:lb_pos + 2], dx
-    mov byte [cs:ex_ph], 1
+    PXSWON
+    mov [es:lb_pos], ax
+    mov [es:lb_pos + 2], dx
+    mov byte [es:ex_ph], 1
+    PXSWOFF
     jmp lb_p1
 
 ; lb_pal0 - [px_spal] all black. Preserves all
@@ -1537,19 +1579,21 @@ lb_p2:
     xor dx, dx
     call ex_dim
     jc .dims
-    mov [cs:lb_w], ax
+    PXSW mov [es:lb_w], ax
     add si, 2
     call ex_w                       ; height
     call ex_dim
     jc .dims
-    mov [cs:lb_h], ax
+    PXSW mov [es:lb_h], ax
     mov al, [es:si + 6]             ; planes, masking, compression
-    mov [cs:lb_planes], al
+    PXSW mov [es:lb_planes], al
     mov al, [es:si + 7]
-    mov [cs:lb_mask], al
+    PXSW mov [es:lb_mask], al
     mov al, [es:si + 8]
-    mov [cs:lb_comp], al
-    mov byte [cs:lb_bm], 1
+    PXSWON
+    mov [es:lb_comp], al
+    mov byte [es:lb_bm], 1
+    PXSWOFF
     jmp lb_next
 .dims:
     mov ax, PXD_DIMS
@@ -1586,19 +1630,19 @@ lb_p4:
     call ex_need
     add si, 2
     call ex_w                       ; (its low word holds EHB and HAM)
-    mov [cs:lb_camg], ax
+    PXSW mov [es:lb_camg], ax
     jmp lb_next
 
 ; lb_end - BODY: the checks, the palette, the answers
 lb_end:
     mov ax, [cs:lb_d]
-    mov [cs:lb_body], ax
+    PXSW mov [es:lb_body], ax
     mov ax, [cs:lb_d + 2]
-    mov [cs:lb_body + 2], ax
+    PXSW mov [es:lb_body + 2], ax
     mov ax, [cs:lb_sz]
-    mov [cs:lb_bsize], ax
+    PXSW mov [es:lb_bsize], ax
     mov ax, [cs:lb_sz + 2]
-    mov [cs:lb_bsize + 2], ax
+    PXSW mov [es:lb_bsize + 2], ax
     cmp byte [cs:lb_comp], 1        ; compression 0 or 1
     ja .pack
     mov al, [cs:lb_planes]
@@ -1618,7 +1662,7 @@ lb_end:
     mov cl, al                      ; THE PALETTE: 2^planes (PBM 256)
     mov ax, 1
     shl ax, cl
-    mov [cs:lb_ne], ax
+    PXSW mov [es:lb_ne], ax
     cmp byte [cs:lb_cmap], 0
     jne .cut
     mov cx, ax                      ; no CMAP: greys, i x 255 / (n - 1)
@@ -1683,7 +1727,7 @@ lb_end:
     mov cl, 4
     shr ax, cl
     shl ax, 1
-    mov [cs:lb_pb], ax
+    PXSW mov [es:lb_pb], ax
     mov cl, [cs:lb_planes]
     cmp byte [cs:lb_mask], 1
     jne .nm
@@ -1692,7 +1736,7 @@ lb_end:
     xor ch, ch
     mul cx
 .rl:
-    mov [cs:lb_rl], ax
+    PXSW mov [es:lb_rl], ax
     add ax, 15
     mov cl, 4
     shr ax, cl
@@ -1738,7 +1782,7 @@ mc_head:
     mov ax, 128
 .st:
     add ax, 512                     ; the file holds the header at least
-    mov [cs:mc_off], ax
+    PXSW mov [es:mc_off], ax
     cmp word [di + PXK_FSZ + 2], 0
     jne .ok
     cmp ax, [di + PXK_FSZ]
@@ -1771,25 +1815,33 @@ ex_decode:
     push es
     push bp
     push ds
-    mov [cs:ex_dsp], sp
+    PXSSP ex_dsp
     cmp word [8], PXL_IMAGE
     jne .link
     cmp word [10], PXL_BSS
     jne .link
     mov ax, [di + PXK_SVC + 2 * PXS_EMIT]   ; the two services, far
-    mov [cs:ex_emitf], ax
-    mov [cs:ex_emitf + 2], ds
+    PXSW mov [es:ex_emitf], ax
+    push ax
+    mov ax, [cs:PXP_PKG]            ; the package's CODE selector: through
+    PXSW mov [es:ex_emitf + 2], ax  ; its data segment a far call is a
+    pop ax                          ; #GP a row on kern_mega
     mov ax, [di + PXK_SVC + 2 * PXS_RING]
-    mov [cs:ex_ringf], ax
-    mov [cs:ex_ringf + 2], ds
+    PXSW mov [es:ex_ringf], ax
+    push ax
+    mov ax, [cs:PXP_PKG]            ; the package's CODE selector: through
+    PXSW mov [es:ex_ringf + 2], ax  ; its data segment a far call is a
+    pop ax                          ; #GP a row on kern_mega
     mov ax, [di + PXK_RSEG]
-    mov [cs:ex_rseg], ax
+    PXSW mov [es:ex_rseg], ax
     mov ax, [di + PXK_DSEG]
-    mov [cs:ex_dseg], ax
+    PXSW mov [es:ex_dseg], ax
     xor ax, ax
-    mov [cs:ex_lim], al
-    mov [cs:ex_rmode], al
-    mov [cs:ex_y], ax
+    PXSWON
+    mov [es:ex_lim], al
+    mov [es:ex_rmode], al
+    mov [es:ex_y], ax
+    PXSWOFF
     cld
     mov al, [px_cur + PXR_FMT]
     cmp al, PXF_TIFF
@@ -1886,9 +1938,11 @@ ex_rskip:
 ; ex_setlim - DX:AX = the bytes the stream may give from here (a strip's, a
 ; BODY's): past them is `cut short`. Preserves all
 ex_setlim:
-    mov [cs:ex_left], ax
-    mov [cs:ex_left + 2], dx
-    mov byte [cs:ex_lim], 1
+    PXSWON
+    mov [es:ex_left], ax
+    mov [es:ex_left + 2], dx
+    mov byte [es:ex_lim], 1
+    PXSWOFF
     ret
 
 ; ex_rb - AL = the next byte, inside the bound; its end, or the file's, is
@@ -1896,8 +1950,10 @@ ex_setlim:
 ex_rb:
     cmp byte [cs:ex_lim], 0
     je .go
-    sub word [cs:ex_left], 1
-    sbb word [cs:ex_left + 2], 0
+    PXSWON
+    sub word [es:ex_left], 1
+    sbb word [es:ex_left + 2], 0
+    PXSWOFF
     jc .sh
 .go:
     push si
@@ -1929,8 +1985,10 @@ ex_short_d:
 ex_rdn:
     cmp byte [cs:ex_lim], 0
     je .go
-    sub [cs:ex_left], cx
-    sbb word [cs:ex_left + 2], 0
+    PXSWON
+    sub [es:ex_left], cx
+    sbb word [es:ex_left + 2], 0
+    PXSWOFF
     jc ex_short_d
 .go:
     push ax
@@ -1979,7 +2037,11 @@ ex_rle:
     push bx
     push cx
 .l:
-    jcxz .x
+    jcxz .far1982
+    jmp short .far1982c
+.far1982:
+    jmp .x
+.far1982c:
     cmp byte [cs:ex_rmode], 0
     jne .have
     call ex_rb                      ; a control byte
@@ -1990,16 +2052,20 @@ ex_rle:
     mov ax, 257
     sub al, bl
     sbb ah, 0
-    mov [cs:ex_rcnt], ax
+    PXSW mov [es:ex_rcnt], ax
     call ex_rb
-    mov [cs:ex_rval], al
-    mov byte [cs:ex_rmode], 2
+    PXSWON
+    mov [es:ex_rval], al
+    mov byte [es:ex_rmode], 2
+    PXSWOFF
     jmp short .have
 .lit:
     inc al                          ; a literal: n + 1 bytes
     xor ah, ah
-    mov [cs:ex_rcnt], ax
-    mov byte [cs:ex_rmode], 1
+    PXSWON
+    mov [es:ex_rcnt], ax
+    mov byte [es:ex_rmode], 1
+    PXSWOFF
 .have:
     mov bx, [cs:ex_rcnt]            ; BX = this piece: min(the run, CX)
     cmp bx, cx
@@ -2007,7 +2073,7 @@ ex_rle:
     mov bx, cx
 .k:
     sub cx, bx
-    sub [cs:ex_rcnt], bx
+    PXSW sub [es:ex_rcnt], bx
     push cx
     mov cx, bx
     cmp byte [cs:ex_rmode], 1
@@ -2021,8 +2087,8 @@ ex_rle:
     pop cx
     cmp word [cs:ex_rcnt], 0        ; the run spent: the next control
     jne .l
-    mov byte [cs:ex_rmode], 0
-    jmp short .l
+    PXSW mov byte [es:ex_rmode], 0
+    jmp .l
 .x:
     pop cx
     pop bx
@@ -2041,7 +2107,7 @@ ex_emit:
     mov dx, bx
     call far [cs:ex_emitf]
     jc ex_dfail
-    inc word [cs:ex_y]
+    PXSW inc word [es:ex_y]
     pop dx
     pop bx
     pop ax
@@ -2145,7 +2211,7 @@ ex_blend:
 ; TIFF's DECODE: the strips in order, a row at a time
 ; =============================================================================
 tf_dec:
-    mov word [cs:tf_si], 0
+    PXSW mov word [es:tf_si], 0
 .strip:
     mov bx, [cs:tf_si]
     cmp bx, [cs:tf_ns]
@@ -2166,8 +2232,10 @@ tf_dec:
     jbe .r
     mov ax, [cs:tf_rps]
 .r:
-    mov [cs:tf_left], ax
-    mov byte [cs:ex_rmode], 0       ; (a PackBits stream is a strip's)
+    PXSWON
+    mov [es:tf_left], ax
+    mov byte [es:ex_rmode], 0   ; (a PackBits stream is a strip's)
+    PXSWOFF
     cmp word [cs:tf_comp], 5
     je .lzw
 .row:
@@ -2188,17 +2256,16 @@ tf_dec:
 .lzw:
     call tf_lzw
 .nx:
-    inc word [cs:tf_si]
+    PXSW inc word [es:tf_si]
     jmp .strip
 
 ; tf_lzw - the strip's rows from ONE LZW stream: its strings fill them in
 ; order (tf_lrun), and it is done when the last is whole; the End code or
 ; the strip's bytes before that are `cut short`
 tf_lzw:
-    mov word [cs:tf_rpos], 0
+    PXSW mov word [es:tf_rpos], 0
     push ds
-    push cs
-    pop ds                          ; (the LZW's state is this part's)
+    mov ds, [cs:PXP_SELF]            ; (the LZW's state is this part's)
     mov es, [ex_dseg]
     mov al, 8
     call lzw_decode
@@ -2217,7 +2284,7 @@ tf_lzw:
 ; ES, BP
 tf_lfill:
     push ds
-    mov ds, [cs:PXP_PKG]
+    mov ds, [cs:PXP_PKGD]
     mov ax, [cs:ex_left]            ; AX = what the strip has left, at most
     cmp word [cs:ex_left + 2], 0    ; the room
     jne .r
@@ -2246,8 +2313,10 @@ tf_lfill:
 .n:
     mov cx, bx
     add [px_rpos], bx
-    sub [cs:ex_left], bx
-    sbb word [cs:ex_left + 2], 0
+    PXSWON
+    sub [es:ex_left], bx
+    sbb word [es:ex_left + 2], 0
+    PXSWOFF
     push cx
     mov ds, [px_rsegc]
     rep movsb
@@ -2270,7 +2339,7 @@ tf_lrun:
     mov cx, ax
     mov di, [cs:tf_raw]
     add di, [cs:tf_rpos]
-    add [cs:tf_rpos], ax
+    PXSW add [es:tf_rpos], ax
     push ds
     push es
     pop ds
@@ -2281,7 +2350,7 @@ tf_lrun:
     mov ax, [cs:tf_rpos]
     cmp ax, [cs:tf_rb]
     jb .more
-    mov word [cs:tf_rpos], 0
+    PXSW mov word [es:tf_rpos], 0
     call tf_rowdone
     cmp word [cs:tf_left], 0
     je .done
@@ -2383,7 +2452,7 @@ tf_rowdone:
     loop .al
 .em:
     call ex_emit
-    dec word [cs:tf_left]
+    PXSW dec word [es:tf_left]
     pop es
     pop ds
     pop bp
@@ -2404,7 +2473,7 @@ ic_dec:
     mov ax, [cs:ic_xo]
     mov dx, [cs:ic_xo + 2]
     call ex_rskip
-    mov word [cs:ic_r], 0
+    PXSW mov word [es:ic_r], 0
 .row:
     mov ax, [cs:ic_r]
     cmp ax, [cs:ic_hh]
@@ -2414,10 +2483,10 @@ ic_dec:
     mov bx, [cs:ic_hh]              ; the source row: bottom-up
     dec bx
     sub bx, ax
-    mov [cs:ex_y], bx
+    PXSW mov [es:ex_y], bx
     mul word [cs:ic_ms]             ; its mask row
     add ax, ex_table
-    mov [cs:ic_mrow], ax
+    PXSW mov [es:ic_mrow], ax
     mov es, [cs:ex_dseg]            ; its bytes
     xor di, di
     mov cx, [cs:ic_stride]
@@ -2471,7 +2540,7 @@ ic_dec:
     jmp short .rn
 .rc:
     push ds
-    mov ds, [cs:PXP_PKG]
+    mov ds, [cs:PXP_PKGD]
     mov al, [px_spal + di]
     mov [es:si], al
     mov al, [px_spal + di + 1]
@@ -2524,7 +2593,7 @@ ic_dec:
 .em:
     pop ds
     call ex_emit
-    inc word [cs:ic_r]
+    PXSW inc word [es:ic_r]
     jmp .row
 
 ; ic_masked - BX = a pixel: ZF = 0 when the AND mask's row [ic_mrow] has its

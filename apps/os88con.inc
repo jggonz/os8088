@@ -60,7 +60,8 @@
 ; A FIXED 80x25 buffer of (character, IBM attribute) pairs - text VRAM's own
 ; layout, so a full-screen renderer is a move and not a translation - plus:
 ;
-;   con_putc / con_clear / con_scrollup / con_scrolldown
+;   con_putc / con_clear / con_scrollup / con_scrolldown (CON_NOSCROLLDOWN
+;                                            drops the last)
 ;   con_mark / con_markall / con_markcur     the dirty-ROW bitmap
 ;   con_rows_owed                            draw what is owed, and clear it
 ;   con_row / con_compose / con_emit         one row: buffer -> band -> glass
@@ -1301,7 +1302,12 @@ con_scrollup:
 ; is "rows the buffer has moved UP", which is the one direction the windowed
 ; blit and the text-mode `rep movsw` are both written for, so this marks
 ; instead.
+;
+; `%define CON_NOSCROLLDOWN` leaves it out, for a carrier that never scrolls
+; down - the DOS box's teletype only ever scrolls up (SPEC.md 96.44.16.1).
+; The default emits it, so a carrier that does not say so is unchanged.
 ; -----------------------------------------------------------------------------
+%ifndef CON_NOSCROLLDOWN
 con_scrolldown:
     push ax
     push bx
@@ -1334,6 +1340,7 @@ con_scrolldown:
     pop bx
     pop ax
     ret
+%endif                              ; CON_NOSCROLLDOWN
 
 %ifdef CON_TTY
 ; =============================================================================

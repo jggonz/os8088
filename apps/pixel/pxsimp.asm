@@ -88,7 +88,7 @@ ps_head:
     mov ax, PXD_LINK
     jmp short .out
 .l:
-    mov [cs:ps_ctx], di
+    PXSW mov [es:ps_ctx], di
     mov es, [px_hseg]
     mov al, [px_cur + PXR_FMT]
     mov bx, ps_hdtab
@@ -166,11 +166,17 @@ ps_decode:
     jmp short .out
 .l:
     mov ax, [di + PXK_SVC + 2 * PXS_EMIT]   ; the two services, far
-    mov [cs:ps_emitf], ax
-    mov [cs:ps_emitf + 2], ds
+    PXSW mov [es:ps_emitf], ax
+    push ax
+    mov ax, [cs:PXP_PKG]            ; the package's CODE selector: through
+    PXSW mov [es:ps_emitf + 2], ax  ; its data segment a far call is a
+    pop ax                          ; #GP a row on kern_mega
     mov ax, [di + PXK_SVC + 2 * PXS_RING]
-    mov [cs:ps_ringf], ax
-    mov [cs:ps_ringf + 2], ds
+    PXSW mov [es:ps_ringf], ax
+    push ax
+    mov ax, [cs:PXP_PKG]            ; the package's CODE selector: through
+    PXSW mov [es:ps_ringf + 2], ax  ; its data segment a far call is a
+    pop ax                          ; #GP a row on kern_mega
     mov bl, [di + PXK_PRIV]
     cmp bl, DF_PIX
     jbe .df
@@ -477,8 +483,7 @@ px_hbmp:
     mov si, px_m888
 .dm:
     push es
-    push cs                         ; (this part's own tables: through CS)
-    pop es
+    mov es, [cs:PXP_SELF]            ; (this part's own tables: through CS)
     call px_masks
     pop es
 .fin:
@@ -694,8 +699,7 @@ px_hpcx:
     cmp byte [es:1], 3
     jne .hp
     push es                         ; ...or os8088's, for a version-3 file
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     mov si, px_ega
     call px_pal16
     pop es
@@ -754,9 +758,11 @@ ps_tail:
     mov dx, [px_cur + PXR_FSIZE + 2]
     sub ax, 769
     sbb dx, 0
-    mov [cs:ps_ttail], ax
-    mov [cs:ps_ttail + 2], dx
-    mov word [cs:ps_tgot], 0
+    PXSWON
+    mov [es:ps_ttail], ax
+    mov [es:ps_ttail + 2], dx
+    mov word [es:ps_tgot], 0
+    PXSWOFF
     cmp byte [px_rflat], 0
     jne .flat
 .chunk:                             ; the cluster holding byte [ps_ttail] +
@@ -791,7 +797,7 @@ ps_tail:
 .cp:
     mov di, px_tbuf
     add di, [cs:ps_tgot]
-    add [cs:ps_tgot], cx
+    PXSW add [es:ps_tgot], cx
     add si, [px_hcap]               ; (the spare cluster's place)
     sub si, [px_clsz]
 .cl:
@@ -807,12 +813,13 @@ ps_tail:
     mov ax, [cs:ps_ttail]
     mov dx, [cs:ps_ttail + 2]
     mov si, ax
-    and si, 15
+    and si, 127                     ; to 8 paragraphs, not 1 (PX_WGRID)
     mov cl, 4
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
+    and al, 0xF8                    ; a segment kern_mega can load
     add ax, [px_flatseg]
     mov es, ax
     mov di, px_tbuf
@@ -1344,8 +1351,7 @@ px_hpix:
     mov byte [px_dfmt], DF_PIX
     mov byte [px_dtop], 1
     push es
-    push cs
-    pop es
+    mov es, [cs:PXP_SELF]
     mov si, px_ega
     call px_pal16
     pop es
@@ -1973,7 +1979,7 @@ px_pcxconv:
     mov cx, [px_cur + PXR_SW]
     mov bl, [px_dbpp]
     mov bh, [px_dnpl]
-    mov [cs:ps_dnpl], bh            ; (the package's, before DS moves)
+    PXSW mov [es:ps_dnpl], bh        ; (the package's, before DS moves)
     mov ds, ax                      ; DS:SI = the line
     xor si, si
     xor di, di

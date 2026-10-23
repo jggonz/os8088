@@ -288,6 +288,14 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
     os88marty.settle(m)
     m.write(S("toast_buf"), b"\0")          # ...so the previous verdict cannot
     row = dispcp.row_of(m, S, name)         # be read as this one's
+    # ...AND row_of IS AN ENTRY, NOT A ROW ON THE GLASS. Once the Calculator
+    # has opened over the Disk window the list is scrolled by one, and this
+    # used to click the entry's index as a screen row: leg 4 compressed
+    # CALC.O88 (which happened to be packed already, so it read as a pass)
+    # and leg 5 compressed RAWCOPY.TXT. Folders-first (SPEC.md 19.4) put SUB
+    # at the top and made it reachable. scroll_to brings the entry into view
+    # and answers its VISIBLE row.
+    row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, row)
     x, y = dispcp.row_xy(wx, wy, row)
     # **AND THE PREVIOUS CALL ALSO CLICKED IN THIS WINDOW.** Two selections
     # inside the kernel's double-click window are a DOUBLE-CLICK, which opens
@@ -699,7 +707,8 @@ def main():
         # that can be one item out and look right.
         m.write(S("toast_buf"), b"\0")
         row = dispcp.row_of(m, S, "PACKED.TXT")
-        rx, ry = dispcp.row_xy(wx, wy, row)
+        row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, row)
+        rx, ry = dispcp.row_xy(wx, wy, row)     # (a VISIBLE row: compress's)
         mo.click(rx, ry)        # RAISE THE DISK WINDOW FIRST. Two Calculator
         os88marty.settle(m)     # instances are on screen by now (3a and 7a),
                                 # and a right-press goes to whatever is under

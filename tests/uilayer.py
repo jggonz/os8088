@@ -99,7 +99,12 @@ def arm_old(m, mo, ui):
     rx, ry = ui.row_xy(win, row)
     mo.dblclick(rx, ry, settle=0)
     os88marty.settle(m)
-    row = [r[0] for r in ui.listing()].index("CALC.O88")
+    # ...SCROLLED INTO VIEW, which both arms pay alike: apps360.img's APPS
+    # now lists Artful and Audio ahead of it, so CALC.O88 is the SIXTH row of
+    # a window that shows five, and the listing index clicked the blank line
+    # beneath the list. scroll_to answers the VISIBLE row, as `ui.open` uses
+    row = ui.scroll_to([r[0] for r in ui.listing()].index("CALC.O88"),
+                       win=win)
     rx, ry = ui.row_xy(win, row)
     mo.dblclick(rx, ry, settle=0)
     os88marty.settle(m)
@@ -258,7 +263,7 @@ def main():
         print("   ratio  :  %.2fx host, %.2fx guest"
               % (bh / ah if ah else 0, bc / ac if ac else 0))
         check(astate == bstate,
-              "both arms reach the same desktop: %r" % (bstate,))
+              "both arms reach the same desktop: %r against %r" % (bstate, astate))
         # NOT a tight bound. What is being refused is a REGRESSION - a layer
         # that confirms by settling anyway would land at ~1.0 and a slower one
         # above it. The win measured here is ~0.4x, so 0.9 has margin for a

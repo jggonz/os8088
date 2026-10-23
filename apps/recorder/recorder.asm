@@ -51,7 +51,7 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'RECORDER', rc_entry, 1
+    OS88_HEADER 'RECORDER', rc_entry, 1, OS88_HIGH | OS88_HIGHMEM
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A microphone: rounded capsule, holder arc, stem and base. The mask is the

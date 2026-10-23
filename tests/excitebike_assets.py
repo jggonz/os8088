@@ -18,7 +18,10 @@ the format's own description (docs, SPEC.md 102.2):
   3. EXBSPL.VGA/.HRC/.CGA: the EXF1 rows decoded packet by packet and
      compared with the rows the layer renderer produces;
   4. the generated NASM: every constant equals the file it describes, and each
-     track's run-length stream expands to the piece list it came from.
+     track's run-length stream expands to the piece list it came from;
+  5. when build/excbike.o88 is built, each of its six parts, unpacked, is the
+     art file its XB_P_* line names (SPEC.md 102.10) - the guest no longer
+     checks which file it was handed, so the pairing is checked here.
 """
 import filecmp
 import os
@@ -311,6 +314,27 @@ def main():
             want.append(0xFF)
             m = re.search(r"^exb_script_%s: db ([0-9,]+)" % re.escape(n), scr, re.M)
             check(m is not None and [int(v) for v in m.group(1).split(",")] == want, "script %s bytes" % n)
+
+        # ---- the PARTS (SPEC.md 102.10): the six art files are rows of EXCBIKE.O88's own part
+        # table, and the package finds each by its XB_P_* index while the Makefile's EXB_PARTS
+        # decides which file went where. Nothing on the guest checks the pairing any more (no
+        # magic, no checksum), so it is checked here: every part of the BUILT package, unpacked,
+        # is the file a fresh compile writes under the name its XB_P_* line gives.
+        pkg = os.path.join(ROOT, "build", "excbike.o88")
+        if os.path.exists(pkg):
+            import os88parts
+            src = open(os.path.join(ROOT, "apps", "excitebike", "excitebike.asm")).read()
+            idx = {int(i): name for i, name in
+                   re.findall(r"^XB_P_\w+\s+equ (\d+)\s+;\s+(EXB\S+)", src, re.M)}
+            check(sorted(idx) == list(range(6)) and len(set(idx.values())) == 6,
+                  "six XB_P_* parts, one per art file: %s" % idx)
+            raw = open(pkg, "rb").read()
+            check(len(os88parts.image_rows(raw)) == 6, "EXCBIKE.O88 carries six parts")
+            for i, name in sorted(idx.items()):
+                check(os88parts.part_bytes(raw, i) == files[name],
+                      "part %d of build/excbike.o88 is %s" % (i, name))
+        else:
+            print("note: build/excbike.o88 is not built, the part pairing is not checked")
     if FAILED:
         print("excitebike_assets: %d FAILED" % len(FAILED))
         return 1

@@ -7,7 +7,7 @@
 ; line this gate exists for.
 ;
 ; CC_HAS_OVL is what turns the mechanism on: crt0.asm declares the .modc
-; section, the loader, the stamp check and the binder only when it is defined,
+; section, the loader and the binder only when it is defined,
 ; so a package that does not use overlays assembles byte for byte as it did
 ; before they existed. The compiled C refuses to assemble WITHOUT it if it has
 ; any ovl_* function - tools/cc8086.py emits a %error saying so - which is the
@@ -15,14 +15,17 @@
 ; already have.
 ; =============================================================================
 
-%define CC_PKG_NAME 'COVL'          ; <= 15 chars, and the stem of COVL.OVL:
-                                    ; crt0.asm builds the module's file name
-                                    ; out of this and '.OVL', so the disk and
-                                    ; the loader cannot disagree about it
+%define CC_PKG_NAME 'COVL'          ; <= 15 chars: the name in the header
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *)
 %define CC_HAS_ONCLICK              ; void os88_onclick(int, int, void *)
 %define CC_HAS_OVL                  ; ...and this package has ovl_* functions
+%define CC_OVL_PART                 ; ...carried as a PART of COVL.O88
+%define CC_OVL_LAZY                 ; ...and fetched on the first call into it
+                                    ; (SPEC.md 73.14.2). CWORD is the EAGER
+                                    ; arm's consumer, so this gate is the LAZY
+                                    ; one's: op_fetch, the home bracket and
+                                    ; the row-word relocation proc
 
 %include "cc/crt0.asm"
 

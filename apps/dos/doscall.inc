@@ -62,7 +62,8 @@ CORE_ORG    equ 0x0080
 ; opposite sides, so growing either one costs the other. This is a rung the
 ; CORE alone spends, both hosts read, and whose slack is one number in one
 ; place. Measured at the wave, with the assertion in `apps/dos/doscore.asm`.
-CORE_MAX    equ 15312            ; +512 for SPEC.md 96.7.2's stack swap and
+%ifndef DOS_MEGA
+CORE_MAX    equ 15392            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; 96.12.5's name truncation, which are 214
                                 ; bytes between them against 89 of slack. The
                                 ; two are the Playroom's whole report: a gate
@@ -84,6 +85,34 @@ CORE_MAX    equ 15312            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; (SPEC.md 96.7.3, 96.44.15): the core fell
                                 ; to 15,311, so the kilobyte came back and
                                 ; one more with it - KD_IMG_KB 35 -> 33
+                                ; +32 for SPEC.md 96.30.9: `CD \A\B` walks
+                                ; the folder part (dsh_cdto, +30) and a CD
+                                ; that fails goes back to where it stood
+                                ; (+8), against 8 of slack. 15,342 used,
+                                ; kept a multiple of 16
+                                ; +48 for CP/M's CALL 5 (dos_cpm, and
+                                ; dos_psp_make aiming PSP:5 at it), which the
+                                ; HMA run had and the PSP:0050 gate never
+                                ; served: 15,391 used
+%else                           ; **kern_mega's core is 67 bytes longer**:
+CORE_MAX    equ 16064            ; SPEC.md 96.15.4's extended-to-extended
+%endif                          ; move (dos_xms_move's `.bothx`), 15,409 used.
+                                ; +80, kept a multiple of 16, and paid ONLY by
+                                ; kern_mega's DOS.O88 - both of its hosts
+                                ; reserve the hole, so it is 80 bytes of each.
+                                ; +128 for that move's overlap, which XMS
+                                ; guarantees and one forward pass broke
+                                ; (KERN-MEGA-DOS-PLAN 10.4 item 1): 15,550 used
+                                ; +64 for CP/M's CALL 5 on the HMA run,
+                                ; dos_cpm and its PSP arm (KERN-MEGA-DOS-PLAN
+                                ; 10.5 defect 3), the handler paragraph-aligned
+                                ; +64 for dos_hvec and its five callers, every
+                                ; far address the core publishes routed
+                                ; through a low slot (10.5 defect 4): 15,645
+                                ; +384 on the other track for the rest of the
+                                ; XMS surface - 0Ch-0Fh, 08h's largest block,
+                                ; 0Bh's handle bounds (SPEC.md 96.15.4): the
+                                ; two met at the merge, 16,027 used
 ; ...and the core's bss sits directly above its code, at the same offset in
 ; every host, which is what SPEC.md 96.44.2 requires of every `DBSS` cell.
 ; --- THE CORE'S BLOCK IS A BUDGET, NOT A SUM (SPEC.md 96.44.2) --------------
@@ -93,8 +122,16 @@ CORE_MAX    equ 15312            ; +512 for SPEC.md 96.7.2's stack swap and
 ; rather than derived, the way `KERN_BUDGET` is, and the slack is what a later
 ; core cell is spent out of.
 %ifndef CORE_BSS_SIZE               ; `-DCORE_BSS_SIZE=n` is how the budget is
-CORE_BSS_SIZE equ 3507              ; probed: bisect on it and the assertion
-%endif                              ; below names the exact figure
+ %ifndef DOS_MEGA                   ; probed: bisect on it and the assertion
+CORE_BSS_SIZE equ 3507              ; below names the exact figure
+ %else                              ; kern_mega's +2 is `dos_hslot`, the HMA
+CORE_BSS_SIZE equ 3511              ; host's slot maker (KERN-MEGA-DOS-PLAN
+                                    ; 10.5 defect 4), and +2 again for
+                                    ; DHK_XUNP, the child's EXEPACK hook
+                                    ; (SPEC.md 96.40.9.1) - DHK_NENT 7 -> 8
+                                    ; grows dos_hkv on kern_mega alone
+ %endif
+%endif
                                     ;
                                     ;   3,251 the core's cells at W9b
                                     ;      +8 96.44.3's four host hooks

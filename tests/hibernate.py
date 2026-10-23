@@ -105,9 +105,11 @@ MACHINE = "os8088_xt_hdd"
 
 # kernel/hiber.inc, kernel/instance.inc - the module's own constants
 HB_M_ASK, HB_M_BUSY, HB_M_RESUME, HB_M_GONE = 0, 1, 2, 3
-KIND_ABOUT, KIND_HIBER = 0, 5
+KIND_ABOUT, KIND_HIBER = 0, 3   # kernel/instance.inc - it was 5 until
+                                # Timer and Bounce left the kernel (#264)
 I_RECSZ, INST_MAX = 32, 12
-I_STATE, I_KIND, I_WIN = 0, 2, 4
+I_STATE, I_KIND, I_WIN, I_SPTR = 0, 2, 4, 6
+KIND_PKG = 0x80
 W_FLAGS = 0
 from os88geom import WIN_SIZE, MAX_WIN                    # noqa: E402
 
@@ -153,7 +155,8 @@ def fixture():
          "--mbr", _B.at("build/mbr.bin"),
          "--file", "HIBER.DRV=" + _B.at("build/hiber.drv"),
          "--file", "CTRL.DRV=" + _B.at("build/ctrl.drv"),
-         "--file", "HDD.DRV=" + _B.at("build/hdd.drv")])
+         "--file", "HDD.DRV=" + _B.at("build/hdd.drv"),
+         "--file", "MINES.O88=" + _B.at("build/mines.o88")])
 
 
 def floppy():
@@ -548,11 +551,109 @@ def pass_discard(driver):
     check(not img_present(), "...and so is HIBERNAT.IMG")
 
 
+def text_screen(m):
+    """The text page's characters, as a string (CGA/VGA's B800)."""
+    return bytes(m.readseg(0xB800, 0, 4000)[0::2]).decode("latin1")
+
+
+def pkg_seg(m):
+    """The one live PACKAGE instance's region segment, or None."""
+    b = m.read(m.sym("inst_tab"), I_RECSZ * INST_MAX)
+    for i in range(INST_MAX):
+        r = b[i * I_RECSZ:(i + 1) * I_RECSZ]
+        if r[I_STATE] == 1 and r[I_KIND] & KIND_PKG:
+            return struct.unpack_from("<H", r, I_SPTR)[0]
+    return None
+
+
+def damage_image(linear, n):
+    """Flip N bytes of HIBERNAT.IMG at file offset LINEAR, in the VHD on the
+    host - the image is memory from linear 0 - so a resume reads somebody
+    else's bytes under the program that was there. Read and written with a
+    FAT reader that is not the kernel's."""
+    import instdeep
+    end = time.time() + 30.0            # the emulator's last writes reach the
+    while True:                         # host file on its own schedule (wrote)
+        blob = bytearray(open(VHD, "rb").read())
+        base = int.from_bytes(blob[446 + 8:446 + 12], "little") * 512
+        vol = instdeep.Vol(bytes(blob[base:]))
+        ent = [e for e in vol.entries(0) if e[0] == "HIBERNAT.IMG"][0]
+        chain = vol.chain(ent[2])
+        clus = vol.bps * vol.spc
+        if len(chain) * clus >= ent[3] or time.time() >= end:
+            break
+        time.sleep(0.5)
+    check(linear + n <= min(ent[3], len(chain) * clus),
+          "the damage lands inside HIBERNAT.IMG",
+          got=(hex(linear), ent[3], len(chain) * clus))
+    for k in range(n):
+        o = linear + k
+        c = chain[o // clus]
+        at = base + (vol.data_lba + (c - 2) * vol.spc) * vol.bps + o % clus
+        blob[at] ^= 0x5A
+    open(VHD, "wb").write(bytes(blob))
+
+
+def pass_sum(driver, damage):
+    """SPEC.md 87.4.1: a PROGRAM is open across the hibernate, so the sum
+    covers something. Clean, it resumes with the program back; damaged on
+    the host between the two boots, the restored kernel refuses, discards the
+    session and boots an ordinary desktop."""
+    import os88ui
+    from os88mouse import Mouse
+    with boot(driver) as m:
+        mo = Mouse(marty=m)
+        ui = os88ui.UI(m, mouse=mo)
+        ui.path("C:/MINES.O88")
+        seg = pkg_seg(m)
+        check(seg is not None, "Mines is open before hibernating", got=seg)
+        hibernate(m, mo, mouse=True)
+    ok, have = wrote(["HIBERNAT.PTR", "HIBERNAT.IMG"])
+    check(ok, "both files are on the disk after power-off", got=have)
+    if damage:
+        damage_image(seg * 16 + 0x20, 1024)     # four sampled lines, and
+                                                # inside a region at the top
+    with boot(driver) as m:
+        mo = Mouse(marty=m)
+        M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
+                "the fresh boot to ask the question", poll=1.0, limit=240)
+        quiet(m)
+        if not damage:
+            answer(m, mo, "[hb_resumes] to reach 1",
+                   lambda mm: word(mm, "hb_resumes") == 1)
+            quiet(m)
+            check(pkg_seg(m) == seg, "Mines came back where it was",
+                  got=pkg_seg(m), want=seg)
+            check(byte(m, "sch_lock") == 0, "sch_lock is down again",
+                  got=byte(m, "sch_lock"), want=0)
+            return
+        answer(m, mo, "the refusal's sentence",
+               lambda mm: M.video_is_text(mm.video())
+               and "Resume failed: the programs" in text_screen(mm))
+        check(word(m, "hb_resumes") == 0, "nothing was resumed",
+              got=word(m, "hb_resumes"), want=0)
+        m.key("Space")
+        M.until(m, lambda mm: not M.video_is_text(mm.video())
+                and byte(mm, "sch_lock") == 0,
+                "an ordinary boot after the refusal", poll=1.0, limit=240)
+        quiet(m)
+        check(byte(m, "hb_mode") != HB_M_RESUME,
+              "...which does not ask the question again",
+              got=byte(m, "hb_mode"))
+        check(pkg_seg(m) is None, "...and has no program open")
+    check(not ptr_present(), "HIBERNAT.PTR was deleted by the refusal")
+    check(not img_present(), "...and so was HIBERNAT.IMG")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--driver", action="store_true",
                     help="boot from a floppy and reach the disk through HDD.DRV")
     ap.add_argument("--only", choices=["resume", "discard"])
+    ap.add_argument("--sum", choices=["clean", "damaged"],
+                    help="SPEC.md 87.4.1 instead: a program open across the "
+                         "hibernate, its image left alone or damaged on the "
+                         "host before the resume")
     ap.add_argument("--machine",
                     help="another 8088 with a fixed disk. The one that matters "
                          "is os8088_5150_herc_hdd_gla, whose staging area is at "
@@ -565,6 +666,10 @@ def main():
         fixture()
         if a.driver:
             floppy()
+        if a.sum:
+            pass_sum(a.driver, a.sum == "damaged")
+            done("hibernate sum " + a.sum)
+            return
         if a.only != "discard":
             pass_resume(a.driver)
         if a.only != "resume":

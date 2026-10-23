@@ -129,7 +129,7 @@ class Anim:
         self.rseg = p.claim(8192 + 16)
         self.dseg = p.claim(LZW_KB * 1024 + 16)
         self.ring = p.claim(self.win + 16)
-        self.mseg = p.claim(self.sw * self.sh + 2048 + 16)
+        self.mseg = p.claim(self.sw * self.sh + 2048 + 128)   # (the tail on the grid)
         self.master = bytearray(self.sw * self.sh)
         p.wbytes("px_spal", b"\0" * 768)
         for f, v in (("SW", self.sw), ("SH", self.sh), ("SCL", 0),

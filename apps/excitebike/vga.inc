@@ -178,8 +178,8 @@ xv_lcbits: db ((XV_LC >> 8) & 1) | (((XV_LC >> 9) & 1) << 1)
 xv_dicts:
     SAVE
     mov es, [xb_fsi + FSI_SEG]
-    mov byte [cs:xv_mm], 1
-    mov word [cs:xv_po], 0
+    mov byte [xv_mm], 1             ; (DS = ours: kern_mega's CS is read-only)
+    mov word [xv_po], 0
 .plane:
     mov dx, 3c4h
     mov ah, [cs:xv_mm]
@@ -230,8 +230,8 @@ xv_dicts:
     cmp dx, XB_TOPW
     jb .tc
     pop ds
-    shl byte [cs:xv_mm], 1
-    add word [cs:xv_po], 8
+    shl byte [xv_mm], 1             ; (DS is ours again)
+    add word [xv_po], 8
     cmp byte [cs:xv_mm], 16
     jb .plane
     mov dx, 3c4h
@@ -295,7 +295,7 @@ xv_copy:
 ; DIFFER need writing.
 ; -----------------------------------------------------------------------------
 xv_col:
-    mov [cs:xv_x], ax
+    push ax                         ; the column x, for the band below (xv_runs keeps nothing else)
     mov di, [cs:xv_pbase]
     add di, ax
     mov bp, di                      ; the page's line 0 of this column
@@ -314,7 +314,7 @@ xv_col:
     mov bx, ax
     call xv_runs
     ; the band: line 64 on
-    mov bx, [cs:xv_x]
+    pop bx
     mov al, [cs:bx + xb_cid]
     xor ah, ah
     mov di, ax                      ; (the column id, kept for the skip pair below)
@@ -363,19 +363,17 @@ xv_col:
 ; when it is new or the jump is a screen or more (no skip: its cells are
 ; anybody's).  Write mode 1: the latches are the copy.
 ; -----------------------------------------------------------------------------
+; DS = the package on entry and exit: every store is made before DS moves to the
+; card (kern_mega's CS is read-only, KERN-MEGA-PLAN 14.21).
 xv_sync:
-    push ds
     XV_GC 5, 1
-    mov ax, [cs:xb_fsi + FSI_SEG]
-    mov ds, ax
-    mov es, ax
-    mov ax, [cs:xb_S]
+    mov ax, [xb_S]
     xor bh, bh
-    mov bl, [cs:xv_pg]
+    mov bl, [xv_pg]
     shl bx, 1
-    mov cx, [cs:xv_pgS + bx]
-    mov [cs:xv_pgS + bx], ax
-    mov byte [cs:xv_skip], 1
+    mov cx, [xv_pgS + bx]
+    mov [xv_pgS + bx], ax
+    mov byte [xv_skip], 1
     cmp cx, 0ffffh
     je .full
     cmp ax, cx
@@ -388,26 +386,30 @@ xv_sync:
     add cx, 40                      ; the columns cx+40 .. S+39 entered
     jmp .go
 .full:
-    mov byte [cs:xv_skip], 0
-    mov byte [cs:xb_bigframe], 1
+    mov byte [xv_skip], 0
+    mov byte [xb_bigframe], 1
     mov cx, ax
 .go:
     add ax, 39
-    mov [cs:xv_xlast], ax
+    mov [xv_xlast], ax
+    push ds
+    mov ax, [xb_fsi + FSI_SEG]
+    mov ds, ax
+    mov es, ax
 .col:
     mov ax, cx
     push cx
     call xv_col
     cmp byte [cs:xv_skip], 0
     jne .nosamp
-    call xb_clk_sample              ; a full window write (no skip lists: a jump, the first frames) is
+    call xb_clk_samplef             ; a full window write (no skip lists: a jump, the first frames) is
 .nosamp:                            ; 40 columns of ~6k: keep the sub-tick clock seen.  The steady state's
     pop cx                          ; few columns (skip lists) are far under a sub-tick and pay nothing
     inc cx
     cmp cx, [cs:xv_xlast]
     jbe .col
-.out:
     pop ds
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -417,41 +419,41 @@ xv_sync:
 ; arithmetic is done ONCE a footprint; a column then costs a shift or two and the
 ; copies (~150 clocks + 37 a line).
 ; -----------------------------------------------------------------------------
+; DS = the package on entry and exit, and through each footprint's arithmetic:
+; only its column loop runs with DS on the card, keeping the column in BX and the
+; columns left in DL (kern_mega's CS is read-only, KERN-MEGA-PLAN 14.21).
 xv_erase:
-    push ds
-    mov bl, [cs:xv_pg]
+    mov bl, [xv_pg]
     xor bh, bh
-    mov cl, [cs:xv_fpn + bx]
+    mov cl, [xv_fpn + bx]
     or cl, cl
     jz .out
-    mov byte [cs:xv_fpn + bx], 0
-    mov [cs:xv_left], cl
+    mov byte [xv_fpn + bx], 0
+    mov [xv_left], cl
     XV_GC 5, 1
-    mov ax, [cs:xb_fsi + FSI_SEG]
-    mov ds, ax
-    mov es, ax
+    mov es, [xb_fsi + FSI_SEG]
     mov si, bx
     mov cl, 5                       ; 32 bytes a page: eight footprints of four bytes
     shl si, cl
     add si, xv_fp
-    mov [cs:xv_fpp], si
+    mov [xv_fpp], si
 .fp:
-    test byte [cs:xv_left], 1       ; every second footprint (~10k clocks): a page with one pays nothing
+    test byte [xv_left], 1          ; every second footprint (~10k clocks): a page with one pays nothing
     jnz .nosamp
     call xb_clk_sample
 .nosamp:
-    mov si, [cs:xv_fpp]
-    mov ax, [cs:si]
-    mov [cs:xv_x], ax
+    mov si, [xv_fpp]
+    mov ax, [si]
+    mov [xv_x], ax
     xor ah, ah
-    mov al, [cs:si + 2]
-    mov [cs:xv_y], ax
-    mov al, [cs:si + 3]
-    mov [cs:xv_nw], al
-    add word [cs:xv_fpp], 4
+    mov al, [si + 2]
+    mov [xv_y], ax
+    mov al, [si + 3]
+    mov [xv_nw], al
+    add word [xv_fpp], 4
     ; the lines of the top strip: min(24, 64 - y) from line y; of the band:
     ; from max(y, 64) to y + 24
-    mov ax, [cs:xv_y]
+    mov ax, [xv_y]
     xor cx, cx
     cmp ax, 64
     jae .notop
@@ -461,8 +463,8 @@ xv_erase:
     jbe .notop
     mov cx, XB_POSE_H
 .notop:
-    mov [cs:xv_nt], cx              ; 0 when the footprint starts in the band
-    mov ax, [cs:xv_y]
+    mov [xv_nt], cx                 ; 0 when the footprint starts in the band
+    mov ax, [xv_y]
     mov bx, ax
     add bx, XB_POSE_H               ; the end line
     mov dx, 64
@@ -474,21 +476,25 @@ xv_erase:
     ja .nb
     xor bx, bx
 .nb:
-    mov [cs:xv_nb], bx
-    mov [cs:xv_b0], ax
+    mov [xv_nb], bx
+    mov [xv_b0], ax
     ; destination bases (line 0 of the column x = 0) and source offsets
-    mov ax, [cs:xv_y]
+    mov ax, [xv_y]
     mov cx, 40
     mul cx
-    add ax, [cs:xv_pbase]
-    mov [cs:xv_dt], ax
-    mov ax, [cs:xv_b0]
+    add ax, [xv_pbase]
+    mov [xv_dt], ax
+    mov ax, [xv_b0]
     mov cx, 40
     mul cx
-    add ax, [cs:xv_pbase]
-    mov [cs:xv_db], ax
+    add ax, [xv_pbase]
+    mov [xv_db], ax
+    mov bx, [xv_x]                  ; BX = the column, DL = the columns left (xv_copy keeps both)
+    mov dl, [xv_nw]
+    push ds
+    push es
+    pop ds                          ; DS = ES = the card for the latch copies
 .column:
-    mov bx, [cs:xv_x]
     cmp word [cs:xv_nt], 0
     je .band
     mov ax, bx
@@ -507,7 +513,6 @@ xv_erase:
 .band:
     cmp word [cs:xv_nb], 0
     je .next
-    mov bx, [cs:xv_x]
     mov ah, [cs:bx + xb_cid]        ; cid << 7 = cid << 8 >> 1
     xor al, al
     shr ax, 1
@@ -519,13 +524,13 @@ xv_erase:
     mov cx, [cs:xv_nb]
     call xv_copy
 .next:
-    inc word [cs:xv_x]
-    dec byte [cs:xv_nw]
+    inc bx
+    dec dl
     jnz .column
-    dec byte [cs:xv_left]
+    pop ds
+    dec byte [xv_left]
     jnz .fp
 .out:
-    pop ds
     ret
 
 ; -----------------------------------------------------------------------------
@@ -565,9 +570,9 @@ xv_sprites:
 ; BP = the bike's record offset (preserved)
 xv_bike:
     push bp
-    mov al, [cs:xb_bikes + bp + 6]  ; the rider's colour is a per-bike variable
-    mov [cs:xv_ink + 1], al
-    mov ax, [cs:xb_bikes + bp + 2]  ; x pixels; even phases only
+    mov al, [ds:xb_bikes + bp + 6]  ; the rider's colour is a per-bike variable
+    mov [xv_ink + 1], al
+    mov ax, [ds:xb_bikes + bp + 2]  ; x pixels; even phases only
     and ax, 0fffeh
     mov dx, ax
     and dx, 7                       ; DX = the phase 0,2,4,6
@@ -583,17 +588,17 @@ xv_bike:
     jle .cull                       ; wholly left of the page
     cmp ax, 40
     jge .cull                       ; wholly right of it
-    cmp word [cs:xb_bikes + bp + 4], XB_WORLD_ROWS * 8 - XB_POSE_H
+    cmp word [ds:xb_bikes + bp + 4], XB_WORLD_ROWS * 8 - XB_POSE_H
     ja .cull                        ; nor one that would reach the HUD's lines
     ; the part of it on the page (SPEC.md 102.7.4): the footprint is the columns [max(ax,0), min(cx,40))
-    mov [cs:xv_c0], ax
-    mov byte [cs:xv_edge], 0
+    mov [xv_c0], ax
+    mov byte [xv_edge], 0
     test ax, ax
     js .edge
     cmp cx, 40
     jbe .inside
 .edge:
-    mov byte [cs:xv_edge], 1
+    mov byte [xv_edge], 1
 .inside:
     mov bx, cx                      ; BX = one past the last column, clipped
     cmp bx, 40
@@ -606,14 +611,14 @@ xv_bike:
     xor cx, cx
 .lo:
     sub bx, cx                      ; BL = the footprint's width
-    add ax, [cs:xb_S]               ; the world column of the sprite's byte 0 (the page column)
-    mov [cs:xv_x0], ax
-    add cx, [cs:xb_S]
-    mov [cs:xv_x], cx               ; ...and of the footprint's first
-    mov [cs:xv_nw], bl
-    mov ax, [cs:xb_bikes + bp + 4]
-    mov [cs:xv_y], ax
-    mov al, [cs:xb_bikes + bp + 1]  ; the (pose, phase) blob
+    add ax, [xb_S]                  ; the world column of the sprite's byte 0 (the page column)
+    mov [xv_x0], ax
+    add cx, [xb_S]
+    mov [xv_x], cx                  ; ...and of the footprint's first
+    mov [xv_nw], bl
+    mov ax, [ds:xb_bikes + bp + 4]
+    mov [xv_y], ax
+    mov al, [ds:xb_bikes + bp + 1]  ; the (pose, phase) blob
     xor ah, ah
     shl ax, 1
     shl ax, 1
@@ -622,43 +627,43 @@ xv_bike:
     shl ax, 1
     mov bx, ax                      ; index * 2 into the sprite claim's table
     call xv_fp_add
-    mov ax, [cs:xv_y]
+    mov ax, [xv_y]
     mov cx, 40
     mul cx
-    add ax, [cs:xv_pbase]
-    add ax, [cs:xv_x0]              ; (the sprite's byte 0: off the page's edge for an edge rider, which
+    add ax, [xv_pbase]
+    add ax, [xv_x0]                 ; (the sprite's byte 0: off the page's edge for an edge rider, which
     mov di, ax                      ; never writes there: xv_bike's clipping loop skips those records)
-    mov ax, [cs:xb_fsi + FSI_SEG]
+    mov ax, [xb_fsi + FSI_SEG]
     mov es, ax
-    cmp byte [cs:xv_edge], 0
+    cmp byte [xv_edge], 0
     jne .interp                     ; (an edge rider takes the clipping loop below)
-    mov ax, [cs:xs_ctab + bx]       ; a hot pose has its code (sprite.inc's xs_compile_v): the same writes
+    mov ax, [xs_ctab + bx]          ; a hot pose has its code (sprite.inc's xs_compile_v): the same writes
     test ax, ax                     ; as the record loop below, ~45 clocks a (byte, layer) pair against ~85
     jz .interp
-    mov [cs:xs_cfar], ax
-    mov ax, [cs:xb_sprseg]
-    mov [cs:xs_cfar + 2], ax
+    mov [xs_cfar], ax               ; (+2 is the claim's CODE selector, set once by xb_spr_load)
     mov dx, 3ceh
     mov al, 8                       ; GC index 8 = bit mask; the code writes its data port a record at a time
     out dx, al
     inc dx
-    mov bl, [cs:xv_ink + 1]         ; BL = the rider's colour (layer 1); the other layers' are in the code
-    call far [cs:xs_cfar]
+    mov bl, [xv_ink + 1]            ; BL = the rider's colour (layer 1); the other layers' are in the code
+    call far [xs_cfar]
     jmp .cull
 .interp:
+    push ds
     mov ds, [cs:xb_sprseg]
     mov si, [bx]                    ; the blob
-    mov byte [cs:xv_lay], 0
+    xor bp, bp                      ; BP = the layer << 8 | its colour (layer 0 first)
 .layer:
     lodsw                           ; the layer's record count
     or ax, ax
     jz .empty
     mov cx, ax
-    mov bl, [cs:xv_lay]
+    mov bx, bp
+    mov bl, bh
     xor bh, bh
-    mov bl, [cs:xv_ink + bx]
-    xor bh, bh
-    mov bp, bx                      ; BP = the layer's colour
+    mov al, [cs:xv_ink + bx]
+    mov ah, bl
+    mov bp, ax                      ; ...and its colour now (AL of every `mov ax, bp` below)
     mov dx, 3ceh
     mov al, 8                       ; GC index 8 = bit mask; the data port then takes
     out dx, al                      ; one byte a record
@@ -678,23 +683,22 @@ xv_bike:
     lodsw                           ; is not on the page.  An offset is 40 x row + byte and 40 is a multiple
     mov bx, ax                      ; of four, so the byte (0..3) is offset & 3
     lodsb
-    mov [cs:xv_msk], al
-    mov ax, bx
-    and ax, 3
-    add ax, [cs:xv_c0]
-    cmp ax, 40
+    mov ah, al                      ; AH = the mask
+    mov al, bl
+    and al, 3
+    add al, [cs:xv_c0]              ; (a byte is enough: the column is -3 .. 42)
+    cmp al, 40
     jae .skip                       ; (a negative column is a large unsigned one)
-    mov al, [cs:xv_msk]
+    mov al, ah
     out dx, al
     mov ax, bp
     xchg al, [es:bx + di]
 .skip:
     loop .recc
 .empty:
-    inc byte [cs:xv_lay]
-    cmp byte [cs:xv_lay], 4
+    add bp, 100h                    ; the next layer (the colour is under 100h)
+    cmp bp, 400h
     jb .layer
-    push cs
     pop ds
 .cull:
     pop bp
@@ -703,11 +707,11 @@ xv_bike:
 ; append (column, line, bytes) to this page's footprint list
 xv_fp_add:
     push bx
-    mov bl, [cs:xv_pg]
+    mov bl, [xv_pg]
     xor bh, bh
-    mov cl, [cs:xv_fpn + bx]
+    mov cl, [xv_fpn + bx]
     xor ch, ch
-    inc byte [cs:xv_fpn + bx]
+    inc byte [xv_fpn + bx]
     mov di, bx
     push cx
     mov cl, 5
@@ -717,12 +721,12 @@ xv_fp_add:
     shl cx, 1
     add di, cx
     add di, xv_fp
-    mov ax, [cs:xv_x]
-    mov [cs:di], ax
-    mov al, [cs:xv_y]
-    mov [cs:di + 2], al
-    mov al, [cs:xv_nw]
-    mov [cs:di + 3], al
+    mov ax, [xv_x]
+    mov [di], ax
+    mov al, [xv_y]
+    mov [di + 2], al
+    mov al, [xv_nw]
+    mov [di + 3], al
     pop bx
     ret
 
@@ -732,10 +736,10 @@ xv_fp_add:
 ; page).  Plain write mode 0, all four planes: ink 15 on 0.
 ; -----------------------------------------------------------------------------
 xv_hud:
-    mov al, [cs:xb_huddirty]
+    mov al, [xb_huddirty]
     or al, al
     je .out
-    mov byte [cs:xb_huddirty], 0
+    mov byte [xb_huddirty], 0
     push es
     mov cx, XB_HUDLEN
     xor bx, bx

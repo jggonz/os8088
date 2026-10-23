@@ -123,18 +123,23 @@ zm_map:
     push cx
     or dx, dx
     jnz .hi
+.lo:
     mov bx, ax                      ; < 64KB: one segment reaches all of it
     mov es, [zf_sseg]
     jmp short .out
 .hi:
-    mov bx, ax
-    and bx, 15                      ; offset = A & 15
-    mov cl, 4
-    shr ax, cl                      ; low 12 bits of A >> 4
-    mov cl, 12
-    shl dx, cl                      ; the high nibbles into bits 12..15
-    or ax, dx
-    add ax, [zf_sseg]               ; segment = base + (A >> 4)
+    test byte [zf_sseg], 4          ; a SELECTOR (KERN-MEGA-PLAN 14.13) is a
+    jnz .lo                         ; story of 64KB or less in a 64KB claim:
+    mov bx, ax                      ; past its end it reads garbage, as here
+    and bx, 127                     ; offset = A & 127: a 128-byte GRANULE,
+    mov cl, 7                       ; so the segment is a multiple of 8
+    shr ax, cl                      ; paragraphs along and an identity selector
+    mov cl, 9                       ; on kern_mega (KERN-MEGA-PLAN 10.1 item
+    shl dx, cl                      ; 18). Real mode reads the same byte
+    or ax, dx                       ; AX = A >> 7
+    mov cl, 3
+    shl ax, cl                      ; ...in paragraphs
+    add ax, [zf_sseg]               ; segment = base + 8 x (A >> 7)
     mov es, ax
 .out:
     pop cx
@@ -239,6 +244,9 @@ zm_pb16:
     mov es, [zf_sseg]
     mov di, ax
     mov [es:di], bl
+    cmp ax, ZMH_FLAGS2 + 1          ; the transcription bit's byte: stream 2
+    jne .out                        ; follows it (zt_f2sync)
+    call zt_f2sync
 .out:
     pop es
     pop di
@@ -259,6 +267,11 @@ zm_pw16:
     mov di, ax
     mov [es:di], bh                 ; big-endian
     mov [es:di+1], bl
+    cmp ax, ZMH_FLAGS2 + 1          ; a word over $11 - at $10 or at $11 -
+    ja .out                         ; carries the transcription bit: stream 2
+    cmp ax, ZMH_FLAGS2              ; follows it (zt_f2sync)
+    jb .out
+    call zt_f2sync
 .out:
     pop es
     pop di
@@ -269,7 +282,7 @@ zm_pw16:
 ; =============================================================================
 ; zm_seek - point the live PC at a story address
 ; in:  DX:AX = story address
-; out: ES:SI addresses it, with SI in 0..15
+; out: ES:SI addresses it, with SI in 0..127 (a granule: zm_map)
 ;
 ; SI is deliberately left tiny rather than taking zm_map's <64K arm: the PC
 ; walks forward with `lods` and wants the whole 32KB window ahead of it before
@@ -283,14 +296,22 @@ zm_addr:
     push cx
     push dx
     mov si, ax
-    and si, 15
-    mov cl, 4
+    test byte [zf_sseg], 4          ; a selector: the claim, at the address
+    jz .gran                        ; itself (zm_map)
+    mov es, [zf_sseg]
+    jmp short .out
+.gran:
+    and si, 127                     ; a GRANULE, as zm_map
+    mov cl, 7
     shr ax, cl
-    mov cl, 12
+    mov cl, 9
     shl dx, cl
     or ax, dx
+    mov cl, 3
+    shl ax, cl
     add ax, [zf_sseg]
     mov es, ax
+.out:
     pop dx
     pop cx
     pop ax
@@ -348,6 +369,8 @@ zm_inimg:
 zm_norm:
     cmp si, 0x8000
     jb .out
+    test byte [zf_sseg], 4          ; a selector reaches the whole story
+    jnz .out                        ; from one base (zm_map)
     push ax
     sub si, 0x8000
     mov ax, es
@@ -674,7 +697,7 @@ zm_setup:
                                     ; one 8x8 font can honestly offer
                                     ; (docs/plans/completed/FROTZ-PLAN.md 5.1)
     cmp byte [zm_bpp], 4
-    jne .f1nc
+    jb .f1nc                        ; (8 or 16 on a packed display: colour too)
     or al, 00000001b                ; bit 0: colours, on VGA only. On a 1bpp
 .f1nc:                              ; adapter every colour rounds to black,
                                     ; white or a dither (SPEC.md 39.4) and a
@@ -689,9 +712,11 @@ zm_setup:
 
     ; --- Flags 2: the story asks, and the interpreter clears what it cannot -
     mov al, [es:ZMH_FLAGS2 + 1]
-    and al, 11111010b               ; bit 0: transcription starts off, and this
-                                    ;        is the "Rst" the Standard means by
-                                    ;        surviving a restart (11.1.2)
+    and al, 11111010b               ; bit 0: transcription - cleared here and
+                                    ;        put back below by zt_f2keep when
+                                    ;        stream 2 is on, which is the "Rst"
+                                    ;        of 11.1: it survives a restart or a
+                                    ;        restore, and a new story starts off
                                     ; bit 2: no screen redraw is pending yet
     cmp byte [zf_ver], 6
     je .f2w
@@ -702,6 +727,8 @@ zm_setup:
                                     ; to clear if no archive is beside the story
 .f2w:
     mov [es:ZMH_FLAGS2 + 1], al
+    call zt_f2keep                  ; ...unless stream 2 is on: a restart or a
+                                    ; restore keeps it (11.1's "Rst")
     mov al, [es:ZMH_FLAGS2]
     and al, 11111110b               ; bit 8: menus. There are none.
     mov [es:ZMH_FLAGS2], al

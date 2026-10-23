@@ -1,6 +1,6 @@
-; Desktop splash and help (SPEC.md 102.4).  The window paints a disk-resident
-; picture - EXBSPL.VGA, .HRC or .CGA, EXF1 rows, compiled by
-; tools/excitebike_assets.py - as native desktop pixels, decoded one bounded
+; Desktop splash and help (SPEC.md 102.4).  The window paints a picture held in
+; a PART of the package (SPEC.md 102.10) - EXBSPL.VGA, .HRC or .CGA, EXF1 rows,
+; compiled by tools/excitebike_assets.py - as native desktop pixels, decoded one bounded
 ; 16-row batch at a time and blitted with OSAPI_GFX_BLITP / BLIT1 (no per-pixel
 ; conversion, no text baked into the art: the menu is font_run over a reserved
 ; black area).  The window timer reveals it a band a tick so the first paint
@@ -188,65 +188,20 @@ xb_frontload:
     cmp bl, [xb_artkind]
     je .out
     mov [xb_artkind], bl
-    dec bx
-    shl bx, 1
-    shl bx, 1
-    mov si, [xb_artfiles+bx]
-    mov cx, [xb_artfiles+bx+2]
-    mov [xb_artsize], cx
-    mov dx, [xb_artseg]
-    or dx, dx
+    mov dx, [xb_artseg]             ; the screen for the class we leave: only
+    or dx, dx                       ; one splash is ever resident
     jz .claim
     call OSAPI_MEM_FREE
 .claim:
     mov word [xb_artseg], 0
-    mov ax, cx
-    add ax, 1023
-    push cx
-    mov cl, 10
-    shr ax, cl
-    pop cx
-    call OSAPI_MEM_CLAIM
-    jc .out
+    mov al, [xb_artparts - 1 + bx]
+    call xb_partget                 ; claimed, read and expanded (video.inc)
+    jc .out                         ; ...or the label says 'Graphics unavailable'
+    mov [xb_artsize], cx            ; the decoder bounds every packet by it
     mov [xb_artseg], dx
-    mov es, dx
-    xor bx, bx
-    xor dx, dx
-    call OSAPI_FILE_READ
-    jc .bad
-    or dx, dx
-    jnz .bad
-    cmp ax, [xb_artsize]
-    jne .bad
-    cmp word [es:0], 'EX'
-    jne .bad
-    cmp word [es:2], 'F1'
-    jne .bad
-    cmp word [es:4], 432
-    jne .bad
-    mov ax, [xb_frontheight]
-    cmp byte [xb_frontcolor], 0
-    je .height
-    mov ax, 264
-.height:
-    cmp ax, [es:6]
-    jne .bad
-    mov ax, 1
-    cmp byte [xb_frontcolor], 0
-    je .depth
-    mov al, 4
-.depth:
-    cmp ax, [es:8]
-    jne .bad
-    mov dx, [xb_artseg]
     mov ax, xb_artreloc
     call OSAPI_MEM_MOVABLE
 .out: ret
-.bad:
-    mov dx, [xb_artseg]
-    call OSAPI_MEM_FREE
-    mov word [xb_artseg], 0
-    ret
 xb_artreloc:
     mov [xb_artseg], dx
     ret
@@ -396,7 +351,7 @@ xb_frontpacked:
     RESTORE
     ret
 
-; Bounds-check input and output for every packet from the supporting file.
+; Bounds-check input and output for every packet of the splash part.
 xb_frontunpack:
     mov di, xb_queue
 ; ES:SI input, DS:DI output. Exchange segments once per row so the 8088 can
@@ -535,11 +490,8 @@ xb_fronttext:
     RESTORE
     ret
 
-xb_artfiles: dw xb_artvga,EXB_FRONT_VGA_SIZE,xb_artherc,EXB_FRONT_HRC_SIZE,xb_artcga,EXB_FRONT_CGA_SIZE
-xb_artvga: db 'EXBSPL.VGA',0
-xb_artherc: db 'EXBSPL.HRC',0
-xb_artcga: db 'EXBSPL.CGA',0
-xb_artmissing: db 'Graphics unavailable: keep EXBSPL.* together',0
+xb_artparts: db XB_P_SPLV, XB_P_SPLH, XB_P_SPLC     ; kind 1, 2, 3
+xb_artmissing: db 'Graphics unavailable',0
 xb_artloading: db 'LOADING ARTWORK...',0
 ; label table: x (pixels), y (rows of the 132-row art; doubled on tall
 ; displays), ink, string.  The menu sits in the black box the art reserves.
@@ -567,7 +519,7 @@ xb_frontfs: db 'ALT+ENTER  FULL SCREEN',0
 xb_frontnote: db 'FIVE COURSES, TWO LAPS',0
 xb_frontunsupported: db 'VGA, CGA OR HERC ONLY',0
 xb_errmode: db 'FULL SCREEN REFUSED',0
-xb_errfiles: db 'EXB?.GFX MISSING',0
+xb_errfiles: db 'CANNOT LOAD THE RACE',0
 xb_errmem: db 'NOT ENOUGH MEMORY',0
 xb_helptitle: db 'H O W  T O  R I D E',0
 xb_helpgoal: db 'BEAT THE CLOCK. WATCH THE HEAT.',0

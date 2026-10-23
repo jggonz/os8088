@@ -232,47 +232,69 @@ os88spk_go:
                                     ; of nothing but the door itself
     pushf
     cli
-    push ax                         ; A DRY RING PLAYS A RUN OF SILENCE,
-    push cx                         ; OS88SPK_DRYN samples a grant: one
-    push di                         ; sample a grant made the grant's event
-    push es                         ; every pulse, ~400 cycles more each,
-    push cs                         ; and a producer the ring had outrun
-    pop es                          ; was then starved by the very pulses it
-    mov di, os88spk_silb            ; was behind - and never caught up
-    mov al, [cs:os88spk_sil]        ; (SPEC.md 34.11.2)
-    mov cx, OS88SPK_DRYN
-    cld
-    rep stosb
+    push cx                         ; A DRY RING PLAYS A RUN OF SILENCE,
+    push es                         ; OS88SPK_DRYN samples a grant: one
+    push cs                         ; sample a grant made the grant's event
+    pop es                          ; every pulse, ~400 cycles more each,
+    mov di, os88spk_silb            ; and a producer the ring had outrun
+    mov al, [cs:os88spk_sil]        ; was then starved by the very pulses it
+    mov cx, OS88SPK_DRYN            ; was behind - and never caught up
+    cld                             ; (SPEC.md 34.11.2). (AX is an output
+    rep stosb                       ; and DI was saved on the way in)
     pop es
-    pop di
     pop cx
-    pop ax
     mov word [cs:os88spk_rp], os88spk_silb  ; the first sample a silent one,
     mov [cs:os88spk_rp+2], cs       ; and its event the first grant
-    mov byte [cs:os88spk_dry], 1
-    mov word [cs:os88spk_g], 1
-    mov word [cs:os88spk_left], 1
-    mov word [cs:os88spk_kr], 1     ; ...which ends a period: K and the
+    mov ax, 1
+    mov [cs:os88spk_dry], al
+    mov [cs:os88spk_g], ax
+    mov [cs:os88spk_left], ax
+    mov [cs:os88spk_kr], ax         ; ...which ends a period: K and the
     popf                            ; chain are set by then, below
     mov dx, [cs:os88spk_n]
-    mov si, os88spk_isr
+%ifdef PKG_MEGA
+    mov si, os88spk_isr             ; SI the real-mode copy, DI the protected-
+    mov di, os88spk_isrp            ; mode one (34.11.1.1): both are patched
+%else
+    mov si, os88spk_isr             ; (the protected-mode copy is the kern_mega
+%endif                              ; arm's alone: KERN-MEGA-PLAN 14.66)
     mov ax, [cs:os88spk_lptp]
     or ax, ax
     jz .spk
     mov [cs:os88spk_isrd.port+1], ax ; A COVOX (SPEC.md 34.14): its port is
+%ifdef PKG_MEGA
+    mov [cs:os88spk_isrdp.port+1], ax ; the ISR's own immediate
+    mov si, os88spk_isrd
+    mov di, os88spk_isrdp
+%else
     mov si, os88spk_isrd            ; the ISR's own immediate
+%endif
     jmp short .one
 .spk:
     mov al, [cs:os88spk_pp]
     cmp al, 1
     je .one
     mov byte [cs:os88spk_isrm.j+1], os88spk_isrm.whole - (os88spk_isrm.j + 2)
+%ifdef PKG_MEGA
+    mov byte [cs:os88spk_isrmp.j+1], os88spk_isrmp.whole - (os88spk_isrmp.j + 2)
+%endif
     mov al, [cs:os88spk_sil]        ; PULSES A SAMPLE (34.11.7): the first
     mov [cs:os88spk_isrm.hv+1], al  ; entry a whole one, and the half path
+%ifdef PKG_MEGA
+    mov [cs:os88spk_isrmp.hv+1], al ; silence until it has a count
+    mov si, os88spk_isrm
+    mov di, os88spk_isrmp
+%else
                                     ; silence until it has a count
     mov si, os88spk_isrm
+%endif
 .one:
     mov bx, cs                      ; the ISR's segment, for the door
+    push ax
+    call OSAPI_CPU_INFO             ; protected mode: the door writes IRQ0's
+    test ah, CPU_F_PM               ; GATE, and the copy that writes its state
+    pop ax                          ; through its data selector plays - in the
+    jnz .pm                         ; kern_mega arm (PKG_MEGA); refused in this
     xor al, al
     pushf                           ; IF = 0 FROM THE DOOR until IRQ0 is the
     cli                             ; ISR's and channel 0 counts N (34.11.1)
@@ -289,6 +311,7 @@ os88spk_go:
     xchg ax, [0x22]
     mov [cs:os88spk_chain+2], ax
     pop ds
+.pit:
     mov al, 0x34                    ; channel 0 at N, a sample an IRQ0: mode
     out 0x43, al                    ; 2, lobyte then hibyte - exactly the N
     mov ax, [cs:os88spk_n]          ; the door trimmed the period to, or
@@ -308,6 +331,31 @@ os88spk_go:
     popf
     xor ax, ax
     jmp short .out
+%ifndef PKG_MEGA
+.pm:                                ; PROTECTED MODE WITHOUT THE kern_mega ARM
+    stc                             ; (KERN-MEGA-PLAN 14.66): refused, so the
+    jmp short .out                  ; package plays another way or not at all.
+                                    ; This copy's ISRs write their state through
+                                    ; CS, which kern_mega completes a fault a
+                                    ; SAMPLE - thousands a second
+%else
+.pm:
+    mov [cs:os88spk_dsel], ds       ; the ISRs' DATA selector: ours
+    mov si, di                      ; the protected-mode copy, whose GATE the
+    mov al, 2                       ; door writes (AL = 2): it answers AX = K
+    pushf                           ; and CX:DX = the kernel's IRQ0 to chain.
+    cli                             ; FLAGS on top for .pit's popf, as on the
+    push cx                         ; .one path - CX under them
+    call OSAPI_FSX_SPK
+    jc .pmno
+    mov [cs:os88spk_kn], ax
+    mov [cs:os88spk_chain], dx
+    mov [cs:os88spk_chain+2], cx
+    pop cx
+    jmp short .pit
+.pmno:
+    pop cx
+%endif
 .no:
     popf
     stc
@@ -335,6 +383,48 @@ os88spk_stop:
     clc
     ret
 
+; THE ISR FAMILY, ASSEMBLED TWICE (SPEC.md 34.11.1.1). %1 is the segment its
+; STATE is written through, %2 the labels' suffix, %3 = 1 the protected-mode
+; copy: there CS is a read-only code alias, so a `mov [cs:x], ...` traps into
+; the kernel on every sample. The real-mode copy is byte for byte what this
+; family always was, so kern_big pays no cycle for the second one
+%macro OS88SPK_ISRS 3
+; -----------------------------------------------------------------------------
+; os88spk_isrd - os88spk_isr for a COVOX (SPEC.md 34.14): the sample out of the
+; parallel port's data register instead of a count into channel 2. DX is the
+; one more register, and the port is the `mov`'s own immediate, written by
+; os88spk_go - so nothing is read per sample that os88spk_isr does not read.
+; The event paths are os88spk_isr's, entered with its three words pushed
+; -----------------------------------------------------------------------------
+os88spk_isrd%2:
+%if %3
+    push es                         ; THE PROTECTED-MODE COPY (34.11.1.1):
+    mov es, [cs:os88spk_dsel]       ; its state written through its DATA
+%endif                              ; selector, CS being read-only there
+    push ax
+    push si
+    push ds
+    push dx
+    cld                             ; (os88spk_isr's reason)
+    lds si, [cs:os88spk_rp]
+    lodsb                           ; a sample, unsigned
+.port:
+    mov dx, 0x0378                  ; (the port, patched in)
+    out dx, al                      ; ...and the voltage
+    pop dx
+    mov [%1:os88spk_rp], si
+    dec word [%1:os88spk_left]
+    jz os88spk_isr%2.ev               ; (in front of os88spk_isr: in reach)
+    mov al, 0x20
+    out 0x20, al
+    pop ds
+    pop si
+    pop ax
+%if %3
+    pop es
+%endif
+    iret
+
 ; -----------------------------------------------------------------------------
 ; os88spk_isr - IRQ0, once a sample: the vector is ours while the door is open,
 ; so this is entered with the interrupt frame alone, IF = 0, on whatever stack
@@ -344,7 +434,11 @@ os88spk_stop:
 ; period's last sample goes to the kernel's IRQ0 instead, which does the EOI,
 ; the tick and the hook. Measured, not guessed: SPEC.md 34.11
 ; -----------------------------------------------------------------------------
-os88spk_isr:
+os88spk_isr%2:
+%if %3
+    push es                         ; THE PROTECTED-MODE COPY (34.11.1.1):
+    mov es, [cs:os88spk_dsel]       ; its state written through its DATA
+%endif                              ; selector, CS being read-only there
     push ax
     push si
     push ds
@@ -352,26 +446,32 @@ os88spk_isr:
     lds si, [cs:os88spk_rp]
     lodsb                           ; a PWM count, 1..N-1
     out 0x42, al                    ; ...and the pulse
-    mov [cs:os88spk_rp], si
-    dec word [cs:os88spk_left]
+    mov [%1:os88spk_rp], si
+    dec word [%1:os88spk_left]
     jz .ev
     mov al, 0x20                    ; (auto-EOI would save these two, and
     out 0x20, al                    ; is refused: SPEC.md 34.11.6)
     pop ds
     pop si
     pop ax
+%if %3
+    pop es
+%endif
     iret
 .ev:                                ; THE GRANT IS SPENT
     mov ax, [cs:os88spk_kr]
     sub ax, [cs:os88spk_g]          ; the period's samples after it
     jz .per
-    mov [cs:os88spk_kr], ax
-    call os88spk_grant              ; more of the same period
+    mov [%1:os88spk_kr], ax
+    call os88spk_grant%2              ; more of the same period
     mov al, 0x20
     out 0x20, al
     pop ds
     pop si
     pop ax
+%if %3
+    pop es
+%endif
     iret
 .per:                               ; A RATE PERIOD, played: the next one's
     mov ax, [cs:os88spk_kn]         ; samples granted, and the entry the
@@ -386,11 +486,14 @@ os88spk_isr:
     pop bx
     pop dx
 .k1:
-    mov [cs:os88spk_kr], ax
-    call os88spk_grant
+    mov [%1:os88spk_kr], ax
+    call os88spk_grant%2
     pop ds
     pop si
     pop ax
+%if %3
+    pop es
+%endif
     jmp far [cs:os88spk_chain]
 
 ; -----------------------------------------------------------------------------
@@ -403,71 +506,48 @@ os88spk_isr:
 ; a whole pulse cheaper than a counter byte (34.11.7.1). The event paths
 ; are os88spk_isr's, entered with the same three words pushed
 ; -----------------------------------------------------------------------------
-os88spk_isrm:
+os88spk_isrm%2:
+%if %3
+    push es                         ; THE PROTECTED-MODE COPY (34.11.1.1):
+    mov es, [cs:os88spk_dsel]       ; its state written through its DATA
+%endif                              ; selector, CS being read-only there
 .j:
     jmp short .whole                ; (the displacement is the toggle: the
 .half:                              ; whole path points it here, this path
     push ax                         ; back there)
-    mov byte [cs:.j+1], .whole - (.j + 2)
+    mov byte [%1:.j+1], .whole - (.j + 2)
 .hv:
     mov al, 0                       ; (the whole path's count, patched in)
     out 0x42, al
     mov al, 0x20
     out 0x20, al
     pop ax
+%if %3
+    pop es
+%endif
     iret
 .whole:
     push ax
-    mov byte [cs:.j+1], .half - (.j + 2)
+    mov byte [%1:.j+1], .half - (.j + 2)
     push si
     push ds
     cld                             ; (os88spk_isr's reason)
     lds si, [cs:os88spk_rp]
     lodsb                           ; a PWM count, made for N / pulses
     out 0x42, al
-    mov [cs:.hv+1], al
-    mov [cs:os88spk_rp], si
-    dec word [cs:os88spk_left]
-    jz .ev
+    mov [%1:.hv+1], al
+    mov [%1:os88spk_rp], si
+    dec word [%1:os88spk_left]
+    jz os88spk_isr%2.ev               ; (in a short jump's reach)
     mov al, 0x20
     out 0x20, al
     pop ds
     pop si
     pop ax
+%if %3
+    pop es
+%endif
     iret
-.ev:
-    jmp os88spk_isr.ev
-
-; -----------------------------------------------------------------------------
-; os88spk_isrd - os88spk_isr for a COVOX (SPEC.md 34.14): the sample out of the
-; parallel port's data register instead of a count into channel 2. DX is the
-; one more register, and the port is the `mov`'s own immediate, written by
-; os88spk_go - so nothing is read per sample that os88spk_isr does not read.
-; The event paths are os88spk_isr's, entered with its three words pushed
-; -----------------------------------------------------------------------------
-os88spk_isrd:
-    push ax
-    push si
-    push ds
-    push dx
-    cld                             ; (os88spk_isr's reason)
-    lds si, [cs:os88spk_rp]
-    lodsb                           ; a sample, unsigned
-.port:
-    mov dx, 0x0378                  ; (the port, patched in)
-    out dx, al                      ; ...and the voltage
-    pop dx
-    mov [cs:os88spk_rp], si
-    dec word [cs:os88spk_left]
-    jz .ev
-    mov al, 0x20
-    out 0x20, al
-    pop ds
-    pop si
-    pop ax
-    iret
-.ev:
-    jmp os88spk_isr.ev
 
 ; -----------------------------------------------------------------------------
 ; os88spk_grant - IF = 0: what the last grant played added to CONS, and the
@@ -480,9 +560,9 @@ os88spk_isrd:
 ; event.
 ; clobbers AX, SI, DS
 ; -----------------------------------------------------------------------------
-os88spk_grant:
+os88spk_grant%2:
     push bx
-    call os88spk_acct               ; DS:BX -> TOTAL, CONS after it
+    call os88spk_acct%2               ; DS:BX -> TOTAL, CONS after it
     mov ax, [bx]
     sub ax, [bx+2]                  ; queued
     jz .dry
@@ -499,32 +579,32 @@ os88spk_grant:
     jbe .set
     mov ax, bx
 .set:
-    mov [cs:os88spk_rp], si
-    mov [cs:os88spk_rp+2], ds
-    mov byte [cs:os88spk_dry], 0
+    mov [%1:os88spk_rp], si
+    mov [%1:os88spk_rp+2], ds
+    mov byte [%1:os88spk_dry], 0
 .g:
-    mov [cs:os88spk_g], ax
-    mov [cs:os88spk_left], ax
+    mov [%1:os88spk_g], ax
+    mov [%1:os88spk_left], ax
     pop bx
     ret
 .dry:
 %ifdef OS88SPK_DRYCNT               ; A FIELD DIAGNOSTIC (the package's to
     cmp byte [cs:os88spk_dry], 0    ; define): how often the ring ran dry -
     jne .dd                         ; a stretch counted once - and for how
-    inc word [cs:os88spk_dryg]      ; many samples, which were silence and
+    inc word [%1:os88spk_dryg]      ; many samples, which were silence and
 .dd:                                ; not counted as played: the clock stood
 %endif
-    mov word [cs:os88spk_rp], os88spk_silb
-    mov [cs:os88spk_rp+2], cs
-    mov byte [cs:os88spk_dry], 1
+    mov word [%1:os88spk_rp], os88spk_silb
+    mov [%1:os88spk_rp+2], cs
+    mov byte [%1:os88spk_dry], 1
     mov ax, OS88SPK_DRYN            ; a run of silence, the period's end the
     cmp ax, [cs:os88spk_kr]         ; sooner
 %ifdef OS88SPK_DRYCNT
     jbe .dn
     mov ax, [cs:os88spk_kr]
 .dn:
-    add [cs:os88spk_dryn], ax
-    adc word [cs:os88spk_dryn+2], 0
+    add [%1:os88spk_dryn], ax
+    adc word [%1:os88spk_dryn+2], 0
     jmp short .g
 %else
     jbe .g
@@ -534,7 +614,7 @@ os88spk_grant:
 
 ; os88spk_acct - IF = 0: the grant's played samples into CONS (none, for a dry
 ; one), and the grant closed. out DS:BX -> TOTAL. clobbers AX
-os88spk_acct:
+os88spk_acct%2:
     mov ds, [cs:os88spk_rseg]
     mov bx, [cs:os88spk_rl]
     mov ax, [cs:os88spk_g]
@@ -544,15 +624,26 @@ os88spk_acct:
     add [bx+2], ax
 .z:
     xor ax, ax
-    mov [cs:os88spk_g], ax
-    mov [cs:os88spk_left], ax
+    mov [%1:os88spk_g], ax
+    mov [%1:os88spk_left], ax
     ret
+
+%endmacro
+    OS88SPK_ISRS cs, , 0
+%ifdef PKG_MEGA
+    OS88SPK_ISRS es, p, 1           ; (kern_mega's arm alone, KERN-MEGA-PLAN 14.66)
+%endif
 
 os88spk_rp:     dw 0, 0             ; the next count, far
 os88spk_left:   dw 0                ; the grant's samples not yet played
 os88spk_g:      dw 0                ; the grant, as made
 os88spk_kr:     dw 0                ; the period's samples after the grant...
 os88spk_kn:     dw 0                ; ...and a period's (K, the door's)
+%ifdef PKG_MEGA
+os88spk_dsel:   dw 0                ; protected mode: our DATA selector, for
+                                    ; the ISRs' state (os88spk_isrp and its
+                                    ; family, 34.11.1.1)
+%endif
 os88spk_chain:  dw 0, 0             ; the kernel's IRQ0, far: what the vector
                                     ; held when os88spk_go took it
 os88spk_sil:    db 0                ; a dry grant's count: the table's middle

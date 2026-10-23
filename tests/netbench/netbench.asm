@@ -529,6 +529,7 @@ nb_shr12:
     pop cx
     ret
 
+%define BL_INTRO_HOW 'press W'      ; benchlib's banner - S zeroes the profiler
 %include "benchlib.inc"
 
 NB_C_CALLS  equ 10              ; the columns, and nb_s_hdr is laid out to

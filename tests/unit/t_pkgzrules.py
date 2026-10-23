@@ -201,7 +201,13 @@ def main():
     shipped = {p for p in shipped if p.startswith(bdir + "/")}
 
     # THE NEGATIVE CONTROL: two rules broken in memory must both be caught.
-    for name in ("frotz.o88", "LOOM.OVL"):
+    # Only FROTZ's has to be SHIPPED: its control strikes a flag from a rule
+    # the shipped set reaches. The second control names $(BUILD)/LOOM.OVL
+    # directly - the plain cut, which still has a rule (an empty one, beside
+    # loom.o88's) - and asks whether a disk naming it would be caught; since
+    # SPEC.md 73.14.2 made the overlay a part of LOOM.O88 no disk ships it,
+    # which is the point rather than a gap in the control.
+    for name in ("frotz.o88",):
         check(any(b(n) in shipped for n in (name, "ovlz/" + name)),
               "the negative control's subject %s is shipped" % name,
               why="the control below would prove nothing about a file "

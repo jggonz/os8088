@@ -80,7 +80,21 @@
     ; own bytes, too - tools/os88pkg.py refuses whole-file compression on a
     ; parted package, so the shipped DOS.O88 would give back 5,425 bytes of it
     ; (docs/reports/KERN-DOS-PART-COST-2026-09-14.md).
+ %ifdef DOS_MEGA
+    ; ...and kern_mega's says OS88_HIGH: it is a RE-HOMED program (DOSLOAD
+    ; is its loader), so on kern_mega its keep - this image and its bss, the
+    ; INT 21h core copied in at CORE_ORG - goes above 1MB before it runs
+    ; (SPEC.md 20.12.10.9, KERN-MEGA-PLAN 14.44). kern_big's DOS.O88 is
+    ; built without DOS_MEGA and stays byte-identical. OS88_HIGHMEM too
+    ; (KERN-MEGA-PLAN 14.52): on kern_mega every launch is the whole
+    ; machine (dos_mem_fix), so dos_run's arena claim is never reached, and
+    ; what the bit moves above 1MB - the packet driver's buffers, the
+    ; prompt's DIR and COPY buffers, os88ui's save-under - is only ever
+    ; loaded into ES or handed to a kernel slot
+    OS88_HEADER 'DOS', dos_entry, 3 | OS88_F_GLYPH | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
+ %else
     OS88_HEADER 'DOS', dos_entry, 3 | OS88_F_GLYPH | OS88_F_PARTS
+ %endif
 %else
     OS88_HEADER 'DOS', dos_entry, 3 | OS88_F_GLYPH
 %endif
@@ -175,6 +189,13 @@ DOS_KDKB    equ 42                  ; ...and what `kern_dos` keeps below the
                                     ; the mount buffers and the stack -
                                     ; `LOW_SEG + KD_LOW_KB * 64` over there,
                                     ; in KB
+%ifdef DOS_MEGA
+DOS_KDKB_HMA equ 9                  ; ...on kern_mega with kern_dos in the HMA
+                                    ; (SPEC.md 96.40.9): only the FAT window,
+                                    ; the mount buffers and the stack stay low
+DOS_KDKB_LOW equ 45                 ; ...and with it LOW (96.40.9.2): kern_mega's
+                                    ; image rung, which is not kern_big's
+%endif
 DOS_PG_FLOOR equ MEM_PG_HIGH
 
 ; --- the arena's shape, in PARAGRAPHS (SPEC.md 96.3) -------------------------
@@ -422,6 +443,13 @@ LNK_BX_NONET equ 0x02               ; OFF its default, so a zero byte is the
 LNK_BX_NOMOU equ 0x04               ; page as a double click opens it: Hard
                                     ; drives and Network ticked, Disable the
                                     ; mouse NOT - and NOMOU is that box ticked
+LNK_BX_NOHMA equ 0x08               ; ...and kern_mega's `Load DOS in the HMA`
+                                    ; (SPEC.md 96.40.9.2), ticked by default,
+                                    ; so set = UNTICKED. A box with no such row
+                                    ; ignores the bit, and drops it on a save
+LNK_BX_SAVE equ 0x10                ; ...and its `Save the session to disk`
+                                    ; (96.40.9.3), UNticked by default, so set
+                                    ; = TICKED
 LNK_MAX     equ 512                 ; what one may be, read or written
 
 ; --- THE PAGES (SPEC.md 96.32.2) ---------------------------------------------
@@ -546,9 +574,23 @@ DOS_MSUBX   equ 12                  ; ...and the subsections' indent, which is
                                     ; lines up under its arm's ring. A literal
                                     ; for DOS_MRADSZ's reason: os88ui.inc is
                                     ; included at the END of this file
+%ifndef DOS_MEGA
 DOS_MHDDY   equ 46                  ; [x] Hard drives (Up to NNK) - arm 0's
 DOS_MNETY   equ 59                  ; [x] Network (Up to NNK)
 DOS_MFLDY   equ 72                  ; Limit: [____] K
+%else
+DOS_MSAVY   equ 38                  ; [ ] Save the session to disk - the
+                                    ; park's own option, under the line that
+                                    ; says what will happen (KERN-MEGA-PLAN
+                                    ; 14.43, SPEC.md 96.40.9.3). kern_mega's
+                                    ; page has no radio, so its rows take the
+                                    ; slack the radio's gaps left: these three
+                                    ; move down 5 and the block still ends at
+                                    ; the mouse row's 115, inside CGA's 118
+DOS_MHDDY   equ 51
+DOS_MNETY   equ 64
+DOS_MFLDY   equ 77                  ; ...whose 12 rows end at 88, under HMAY
+%endif
 DOS_MFLDW   equ 48                  ; ...and the box's width. os88line_cols
 DOS_MFLDX   equ 56                  ; resolves 48 to FIVE columns against this
 DOS_MFLDKX  equ 4                   ; block's own 8-aligned origin - the four
@@ -565,6 +607,11 @@ DOS_MFLDKX  equ 4                   ; block's own 8-aligned origin - the four
                                     ; percentage. 4px keeps the letter's own
                                     ; cell 8-aligned, which is font_run's fast
                                     ; path (SPEC.md 6.1)
+%ifdef DOS_MEGA
+DOS_MHMAY   equ 91                  ; [x] Load DOS in the HMA - kern_mega's,
+                                    ; on the row its absent radio's second
+                                    ; heading would have taken (96.40.9.2)
+%endif
 DOS_MMOUY   equ 104                 ; [ ] Disable the mouse     - arm 1's, AND
                                     ; the greyed arm's REASON, which takes the
                                     ; same row: an arm that cannot be picked
@@ -760,6 +807,12 @@ DER_HAND    equ 8                   ; ARM 3 WAS REFUSED, AND IT IS NEVER ABOUT
                                     ; does no sizing at all - it tears the
                                     ; kernel out and hands the program ~600K,
                                     ; so anything DOS could launch will launch
+DER_RESET   equ 9                   ; kern_mega (DOS_MEGA's table only): the
+                                    ; session came back from a warm reset
+                                    ; (KERN-MEGA-DOS-PLAN 10.3.1, W7) and the
+                                    ; program never returned a code. The
+                                    ; kernel's mega_wrprobe stages it as
+                                    ; MPK_RESETCODE
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 
 ; -----------------------------------------------------------------------------
@@ -770,6 +823,11 @@ DER_HAND    equ 8                   ; ARM 3 WAS REFUSED, AND IT IS NEVER ABOUT
 ; ARG_FILE is READ-AND-CLEAR and its name lives in the KERNEL segment, so it
 ; is copied out through ES before anything else is called (SPEC.md 54.5).
 ; -----------------------------------------------------------------------------
+%ifdef DOS_MEGA
+    db 'KMEG'                       ; kern_mega's mark: kernel/megados.inc's
+                                    ; mega_pkgok refuses a 'DOS' package whose
+                                    ; entry is not preceded by it (12.1 item 4)
+%endif
 dos_entry:
     push ax
     push cx
@@ -805,7 +863,7 @@ dos_entry:
     ; **AND ES IS BANKED, WHICH IS THE ONE THAT BIT.** ES arrives holding
     ; KERNEL_SEG (SPEC.md 20.1) and OSAPI_ARG_FILE below answers with an SI
     ; into THAT segment and does not reload it - it is documented as read
-    ; through the ES a package proc was entered with (SPEC.md 74240). Every
+    ; through the ES a package proc was entered with (SPEC.md 54.5). Every
     ; OSAPI slot preserves ES, so the entry proc can rely on it across
     ; wm_create and about_set; op_load is OUR code and clobbers it. Without
     ; this pair the name copy below reads RDSUM.COM's 13 bytes out of the
@@ -853,7 +911,11 @@ dos_entry:
                                     ; opens this box exactly nothing
 %endif
 
+%ifdef DOS_MEGA                     ; (kern_mega: the proc keeps dos_dsel,
+    OS88_REGION_MOVABLE dos_reloc   ; dos_hk_tty's DS, KERN-MEGA-PLAN 14.54)
+%else
     OS88_REGION_MOVABLE             ; **AND OUR REGION MAY MOVE** (SPEC.md
+%endif
                                     ; 96.35, 66.6.1), which is the half of the
                                     ; arena recovery that is ours. The sound
                                     ; driver sits ABOVE us on the heap, so the
@@ -2731,17 +2793,56 @@ dos_psp_make:
     mov bx, ax
     shr bx, cl                      ; (CL is still 4)
     mov [es:0x06], ax
-    mov ax, [dos_ldpsp]
+    ; A REAL CP/M ENTRY, ON EVERY HOST (KERN-MEGA-DOS-PLAN 10.5 defect 3 and
+    ; its owner's question). PSP:0050 is the DOS 2+ far gate (`int 21h /
+    ; retf`), which takes AH where CP/M passes CL and returns FAR to PSP:000A,
+    ; a data field - so a CALL 5 aimed at it never served CP/M on any kernel.
+    ; dos_cpm below is paragraph-aligned, so it is CS:dos_cpm written with the
+    ; size field as the offset: segment = CS + dos_cpm/16 - offset/16.
+    ;   * It fits a word: the windowed box (a heap region, above 64KB).
+    ;   * It goes below 0: kern_dos low in memory. The segment wraps, and the
+    ;     call reaches dos_cpm through the 1MB wrap - which is where the old
+    ;     field's own wrap took a low PSP, and how IBM DOS 3.30's CALL 5 works.
+    ;   * It goes above FFFFh: kern_mega's HMA run, where CS = FFFFh. A block
+    ;     whose offset reaches back far enough still fits; a smaller one keeps
+    ;     the old field and its wrap, the one case the HMA cannot express.
+    mov dx, dos_cpm
+    shr dx, cl                      ; (CL is still 4)
+    mov ax, cs
+    add ax, dx
+    jc .cpmhi                       ; CS + dos_cpm/16 past FFFFh
+    sub ax, bx                      ; (a borrow is the wrap, and is taken)
+    jmp short .cpmset
+.cpmhi:
+    sub ax, bx
+    jc .cpmset                      ; borrowed back under 10000h: it fits
+    mov ax, [dos_ldpsp]             ; ...and otherwise the old field
     add ax, 5
     sub ax, bx
+.cpmset:
     mov [es:0x08], ax
 .cpmnone:
+%ifndef DOS_MEGA
     mov word [es:di+0x0A], dos_int22 ; the terminate address, which DOS copies
     mov [es:di+0x0C], cs            ; out of the vectors it is about to hook
     mov word [es:di+0x0E], dos_iret
     mov [es:di+0x10], cs
     mov word [es:di+0x12], dos_int24
     mov [es:di+0x14], cs
+%else                               ; ...and on the HMA run a CHILD's exit
+    mov ax, dos_int22               ; restores 22h-24h from these, so they are
+    call dos_hvec                   ; slots too (dos_hvec)
+    mov [es:di+0x0A], ax
+    mov [es:di+0x0C], dx
+    mov ax, dos_iret
+    call dos_hvec
+    mov [es:di+0x0E], ax
+    mov [es:di+0x10], dx
+    mov ax, dos_int24
+    call dos_hvec
+    mov [es:di+0x12], ax
+    mov [es:di+0x14], dx
+%endif
     mov ax, [dos_parent]            ; the PARENT's PSP, which AH=4Bh's child
     or ax, ax                       ; reads to find who launched it
     jnz .haveparent
@@ -2828,6 +2929,52 @@ dos_psp_make:
     pop bx
     pop ax
     ret
+
+%ifdef DOS_MEGA
+; dos_hvec - AX = a handler in this segment: DX:AX = the far address to
+; PUBLISH for it (KERN-MEGA-DOS-PLAN 10.5 defect 4). On the HMA run that is
+; the host's low trampoline, through `dos_hslot`, so a vector, a PSP field or
+; an entry point a program is handed re-proves A20 before it reaches FFFF;
+; everywhere else it is CS:AX. DS = this segment; nothing else is touched.
+dos_hvec:
+    mov dx, cs
+    cmp dx, 0xFFFF
+    jne .r
+    cmp word [dos_hslot], 0
+    je .r
+    call [dos_hslot]
+.r:
+    ret
+
+%endif
+
+; dos_cpm - CP/M's CALL 5 (KERN-MEGA-DOS-PLAN 10.5 defect 3), on every host:
+; the far call dos_psp_make aims at it from PSP:5. Entered with CS = whatever
+; segment that call reached it through and IP = the PSP's size field, so the
+; body is POSITION-INDEPENDENT and names nothing by address. CL = the function
+; (CP/M's 0..24h, which DOS's AH numbering shares); anything above answers
+; AL = 0, as DOS does. On the stack are the far return the PSP:5 call pushed
+; (PSP:000A) and, above it, the program's own NEAR return - so the way back is
+; that near address under the PSP's CS: the far return's IP is overwritten
+; with it, and `retf 2` drops it.
+    align 16
+dos_cpm:
+    cmp cl, 0x24
+    ja .none
+    mov ah, cl
+    int 0x21
+    jmp short .ret
+.none:
+    xor al, al
+.ret:
+    push bp
+    mov bp, sp                      ; [bp+2] IP 000Ah, [bp+4] the PSP,
+    push ax                         ; [bp+6] the near return
+    mov ax, [bp+6]
+    mov [bp+2], ax
+    pop ax
+    pop bp
+    retf 2
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -5096,7 +5243,22 @@ DHK_TXT     equ 12                  ; the TEXT SCREEN the mouse cursor may draw
                                     ; every pixel and B800 is the kernel's, so
                                     ; the cursor is a `kern_dos` capability and
                                     ; the absent hook is how that is spelled
+%ifdef DOS_MEGA
+DHK_XUNP    equ 14                  ; **A CHILD, UNPACKED BY THE HMA HOST**
+                                    ; (SPEC.md 96.40.9.1): a launcher's EXEPACK
+                                    ; child runs its own unpacker below 64KB
+                                    ; with A20 open, which fails - so the HMA
+                                    ; kern_dos unpacks it in place first, the
+                                    ; same `kd_xunp` as the top-level program.
+                                    ; Best effort: absent, or refused, the
+                                    ; child's own unpacker runs (SPEC.md
+                                    ; 96.40.9.1). Only kern_mega's HMA host
+                                    ; fills it; it is `%ifdef DOS_MEGA` so
+                                    ; kern_big's core is byte-identical
+DHK_NENT    equ 8
+%else
 DHK_NENT    equ 7
+%endif
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 dos_be_goto:
@@ -5481,6 +5643,9 @@ dos_hk_bind:
     mov word [dos_hkv + DHK_TXT],  dos_hk_txt
     mov word [dos_hkv + DHK_CLAIM], dos_hk_claim
     mov word [dos_hkv + DHK_FREE],  dos_hk_free
+%ifdef DOS_MEGA
+    mov [dos_dsel], ds              ; ...and the DS dos_hk_tty loads (14.54)
+%endif
     pop ax
     ret
 
@@ -5519,9 +5684,18 @@ dos_hk_tty:
     cmp byte [cs:dos_inbr], 0
     jne .rom                        ; inside the bracket the ROM's teletype IS
     push ds                         ; the machine's own screen
-    push cs                         ; ...and the console arm needs OUR DS for
-    pop ds                          ; real, con_scr and every byte of the
-    call con_write                  ; library being DS-relative
+%ifdef DOS_MEGA
+    mov ds, [cs:dos_dsel]           ; ...and the console arm needs OUR DS for
+%else                               ; real, con_scr and every byte of the
+    push cs                         ; library being DS-relative. **kern_mega
+    pop ds                          ; LOADS IT, it does not copy CS**: there
+%endif                              ; CS is a read-only CODE selector, and
+                                    ; `push cs / pop ds` made con_write's
+                                    ; first store a #GP that mega_gpw
+                                    ; completed - ONE PER BYTE PRINTED, every
+                                    ; DIR row and TYPE of the prompt's
+                                    ; (KERN-MEGA-PLAN 14.54)
+    call con_write
                                     ; IT DRAWS NOTHING HERE: a verb that
                                     ; printed a directory would take the gfx
                                     ; lock per character. dos_con_run spends
@@ -5538,6 +5712,20 @@ dos_hk_tty:
 .rom:
     stc
     ret
+%ifdef DOS_MEGA
+; dos_dsel - OUR DATA SELECTOR, for dos_hk_tty's `mov ds, [cs:dos_dsel]`:
+; written through DS by dos_hk_bind (which runs with it) and again by
+; dos_reloc when a conventional region moves; read through CS, which is
+; readable. A pool region keeps its selectors when it moves (mx_compactf),
+; so only the conventional fallback ever rewrites it (KERN-MEGA-PLAN 14.54)
+dos_dsel    dw 0
+dos_reloc:                          ; BX = the base it WAS at, DX = where it
+    push ds                         ; is now - on kern_mega a conventional
+    mov ds, dx                      ; segment is its own DATA selector
+    mov [dos_dsel], dx
+    pop ds
+    ret
+%endif
 
 ; --- dos_hk_txt - DHK_TXT: the text screen the mouse cursor may draw on ------
 ; out: ES = the segment, BX = columns, DX = rows, CF=1 = there is none
@@ -6506,64 +6694,6 @@ dos_keeph:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_btn_rect - the page button's rect, into dos_brect
-; in:  BX = the window; out: dos_brect filled; every register preserved
-;
-; BOTTOM RIGHT of the content on both pages, so the button does not move when
-; the page does - a control that jumps under the pointer is one the user
-; clicks by accident.
-; -----------------------------------------------------------------------------
-dos_btn_rect:
-    push ax
-    push cx
-    push dx
-    push si
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    mov si, dos_brect
-    mov cx, ax
-    add cx, 8 + DOS_FLDW - DOS_BTNW
-    mov [si+0], cx
-    add cx, DOS_BTNW
-    mov [si+4], cx
-    mov cx, dx
-    add cx, DOS_BTNY
-    mov [si+2], cx
-    add cx, DOS_BTNH
-    mov [si+6], cx
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_sav_rect - the Save Shortcut button's rect, into dos_srect
-; in:  BX = the window; every register preserved
-; -----------------------------------------------------------------------------
-dos_sav_rect:
-    push ax
-    push cx
-    push dx
-    push si
-    call OSAPI_WM_CONTENT
-    mov si, dos_srect
-    mov cx, ax
-    add cx, 8
-    mov [si+0], cx
-    add cx, DOS_SAVW
-    mov [si+4], cx
-    mov cx, dx
-    add cx, DOS_BTNY
-    mov [si+2], cx
-    add cx, DOS_BTNH
-    mov [si+6], cx
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; dos_sav_go - the Save Shortcut button was pressed
 ; in:  BX = the window
 ;
@@ -6938,6 +7068,16 @@ dos_mck_place:
     mov ax, dos_l_mmou
     mov dx, DOS_MMOUY
     call dos_mck1
+%ifdef DOS_MEGA
+    mov si, dos_mhma
+    mov ax, dos_l_mhma
+    mov dx, DOS_MHMAY
+    call dos_mck1
+    mov si, dos_msav
+    mov ax, dos_l_msav
+    mov dx, DOS_MSAVY
+    call dos_mck1
+%endif
     pop di
     pop si
     pop dx
@@ -7004,6 +7144,15 @@ dos_mck_di:
     mov di, OS88UI_DIS              ; **AND A SUBSECTION BELONGS TO ITS ARM**
     cmp bx, dos_mmou                ; (SPEC.md 96.36.9): a box whose arm is not
     jne .arm0                       ; the pick cannot be used, so it is greyed
+%ifdef DOS_MEGA
+    xor di, di                      ; ...BUT kern_mega's page draws no radio
+    jmp short .out                  ; (KERN-MEGA-DOS-PLAN 12.1 item 1): every
+                                    ; launch is the whole machine and
+                                    ; KDLF_NOMOUSE is honoured on it, while
+                                    ; [dos_keepc] stays arm 0 for the drivers'
+                                    ; rows - so the arm test greyed this box for
+                                    ; good (KERN-MEGA-PLAN 14.43's finding)
+%endif
     cmp byte [dos_keepc], DOS_MEM_WHOLE ; - and a press on it falls through to
     jne .out                        ; the radio, which picks that arm
     xor di, di                      ; (96.36.4). Two clicks, and the first one
@@ -7349,12 +7498,22 @@ dos_handoff:
     rep movsb
     pop di
 
-    mov ax, [dos_kdrow + OP_R_OFF]  ; the part's first file SECTOR, which is
+%ifdef DOS_MEGA
+    mov si, dos_kdrow               ; WHICH kern_dos: the HMA one, or with the
+    cmp byte [dos_mhma + OS88UI_CK_ON], 0   ; box unticked the LOW one, part 3
+    jne .hma                        ; (SPEC.md 96.40.9.2)
+    mov si, dos_kdlrow
+.hma:
+ %define DOS_KDR si
+%else
+ %define DOS_KDR dos_kdrow
+%endif
+    mov ax, [DOS_KDR + OP_R_OFF]    ; the part's first file SECTOR, which is
     mov [di+KDH_POFF], ax           ; what os88pkg.py wrote there
-    mov ax, [dos_kdrow + OP_R_ZKB]  ; ...and on an OP_COMP row this word is the
+    mov ax, [DOS_KDR + OP_R_ZKB]    ; ...and on an OP_COMP row this word is the
     mov [di+KDH_PLEN], ax           ; PACKED length (SPEC.md 20.12.7)
     mov word [di+KDH_PLEN+2], 0
-    mov ax, [dos_kdrow + OP_R_LEN]
+    mov ax, [DOS_KDR + OP_R_LEN]
     mov [di+KDH_ULEN], ax
     mov word [di+KDH_ULEN+2], 0
     mov ax, [dos_corerow + OP_R_OFF]    ; ...AND THE CORE PART'S THREE (SPEC.md
@@ -7434,6 +7593,20 @@ dos_hasfixed:
     stc
     ret
 
+%ifdef DOS_MEGA
+; dos_msav_di - DI = OS88UI_DIS when there is no fixed disk the save box's
+; image could go to (dos_hasfixed, hb_pick's own test), else 0. Every other
+; register preserved. Asked per paint and per press: a walk of eight rows,
+; and a disk mounted mid-session ungreys it at the next paint
+dos_msav_di:
+    xor di, di
+    call dos_hasfixed
+    jnc .out
+    mov di, OS88UI_DIS
+.out:
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; dos_wholeask - THE ONE DELIBERATELY DESTRUCTIVE THING THIS BOX DOES (96.42)
 ; in:  the wake handler's context - UI task, the gfx lock NOT held
@@ -7456,6 +7629,11 @@ dos_hasfixed:
 ; wake handler does not have it (SPEC.md 74.1).
 ; -----------------------------------------------------------------------------
 dos_wholeask:
+%ifdef DOS_MEGA
+    clc                         ; kern_mega PARKS the session above 1MB
+    ret                         ; (KERN-MEGA-DOS-PLAN 2.4): it comes back with
+%endif                          ; or without a fixed disk, so there is no loss
+                                ; to warn about
     cmp byte [dos_keepc], DOS_MEM_WHOLE
     jne .no
     cmp byte [dos_wok], DOS_W_YES
@@ -7562,6 +7740,21 @@ dos_lbfill:
     mov ax, KDLF_REBOOT                     ; W6 is the other arm: with no
                                             ; hibernation image to come back
                                             ; to, the machine restarts (§9)
+%ifdef DOS_MEGA
+    cmp byte [dos_lfix], 0                  ; LOADFIX (kerndos/kdlaunch.inc),
+    je .nolfix                              ; once: the next launch is an
+    or ax, KDLF_LOADFIX                     ; ordinary one unless it says so
+    mov byte [dos_lfix], 0
+.nolfix:
+    cmp byte [dos_mhma + OS88UI_CK_ON], 0   ; ...and kern_dos LOW, so the
+    jne .hmadone                            ; KERNEL's stub expands it at
+    or ax, KDLF_LOWDOS                      ; 0060:0000 and not in the HMA
+.hmadone:                                   ; (SPEC.md 96.40.9.2)
+    cmp byte [dos_msav + OS88UI_CK_ON], 0   ; ...and the image before the
+    je .savdone                             ; park (96.40.9.3). HIBER.DRV asks
+    or ax, KDLF_SAVE                        ; hb_pick itself, so a tick a
+.savdone:                                   ; shortcut carried here parks
+%endif
     cmp byte [dos_mmou+OS88UI_CK_ON], 0     ; ...and the page's own two bits
     je .wantmou                             ; (SPEC.md 96.36.8, 96.36.6): the
     or ax, KDLF_NOMOUSE                     ; pointer, which the KERNEL has to
@@ -7580,6 +7773,13 @@ dos_lbfill:
 .rahdone:
     pop bx
     mov [di+KDL_FLAGS], ax
+%ifdef DOS_MEGA
+    mov ax, [dos_kdlrow + OP_R_OFF]         ; ...and WHERE THE LOW kern_dos IS,
+    mov [di+KDL_L3OFF], ax                  ; whichever one is posted: the HMA
+    mov ax, [dos_kdlrow + OP_R_ZKB]         ; image reads part 3 itself for an
+    mov [di+KDL_L3ZB], ax                   ; EXEPACK program its unpacker
+                                            ; refuses (SPEC.md 96.40.9.1)
+%endif
     mov word [di+KDL_TLEN], KDL_MINE
     mov word [di+KDL_WAKE + 2], 0           ; ...and the live resume's, whose
                                             ; zero SEGMENT is what kd_resume
@@ -7663,6 +7863,15 @@ KDL_MINE equ KDL_ACC
 dos_mem_fix:
     push si
     mov byte [dos_keepc+1], 0
+%ifdef DOS_MEGA
+    ; **ON kern_mega THERE IS ONE ARM** (docs/plans/KERN-MEGA-DOS-PLAN.md
+    ; 12.1 item 1): the program cannot run inside a protected-mode kernel, so
+    ; every launch is the whole machine and the page draws no radio at all.
+    ; A pick from a .LNK written on kern_big is not demoted, it is PROMOTED.
+    mov byte [dos_keepc], DOS_MEM_WHOLE
+    pop si
+    ret
+%endif
     cmp byte [dos_keepc], DOS_MEM_WHOLE
     jb .out
     ja .demote                      ; ...and anything ABOVE the last arm is a
@@ -7842,7 +8051,15 @@ dos_mem_arena:
     mov ax, [dos_skbuf + SK_KERN]
     add ax, [dos_skbuf + SK_HEAP]
     add ax, DOS_LOWKB
+%ifndef DOS_MEGA
     sub ax, DOS_KDKB                ; ...less kern_dos's own resident span
+%else
+    sub ax, DOS_KDKB_HMA            ; ...less kern_dos's own resident span,
+    cmp byte [dos_mhma + OS88UI_CK_ON], 0   ; which on kern_mega is the HMA
+    jne .kdhma                      ; arm's or the LOW one's (96.40.9.2)
+    sub ax, DOS_KDKB_LOW - DOS_KDKB_HMA
+.kdhma:
+%endif
     sub ax, DSH_CPKB                ; ...and the buffer COPY and TYPE share
     call dos_cache_kb               ; ...and the rung the dial is asking for
     sub ax, cx
@@ -8070,10 +8287,18 @@ dos_paint_mem:
     pop bx
 
     push bx                         ; ...and the choice itself, FIRST of the
+%ifdef DOS_MEGA
+    mov bx, [dos_mx]                ; **ON kern_mega THERE IS NO CHOICE**
+    mov dx, [dos_my]                ; (KERN-MEGA-DOS-PLAN 12.1 item 1): one
+    add dx, DOS_MRADY               ; line saying what will happen, where the
+    mov si, dos_l_mpark             ; radio stood, and no control to click
+    call dos_line
+%else
     call dos_mrad_place             ; controls because its subsections are the
     mov bx, dos_mrad                ; ground the rest of them stand on
     xor di, di
     call os88ui_rad
+%endif
     pop bx
 
     ; --- ARM 0's subsection: the two drivers, and the limit ------------------
@@ -8131,6 +8356,15 @@ dos_paint_mem:
     mov bx, dos_mmou
     call dos_mck_di                 ; greyed while arm 0 is the pick (96.36.9)
     call os88ui_chk
+%ifdef DOS_MEGA
+    mov bx, dos_mhma                ; ...and kern_mega's HMA box, which has no
+    xor di, di                      ; arm to belong to and nothing to grey on:
+    call os88ui_chk                 ; this DOS.O88 runs only in protected mode,
+                                    ; where both kern_dos images can run
+    call dos_msav_di                ; ...and the save box, greyed where no
+    mov bx, dos_msav                ; fixed disk could hold the image
+    call os88ui_chk                 ; (SPEC.md 47: a fact, hb_pick's)
+%endif
     jmp short .nowhy
 .why:
     mov bx, [dos_mx]                ; a caption explaining a control that is
@@ -8175,23 +8409,6 @@ dos_paint_mem:
     pop bx
     pop ax
     clc
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_btn_lbl - SI = what the page button should SAY, for the page that is up
-; out: SI; every other register preserved
-;
-; It names WHERE IT GOES and not where you are, which is what a cycle needs: a
-; button labelled with the current page is one the user has to press to find
-; out what it does.
-; -----------------------------------------------------------------------------
-dos_btn_lbl:
-    push bx
-    xor bh, bh
-    mov bl, [dos_page]
-    shl bl, 1
-    mov si, [dos_btn_tab+bx]
-    pop bx
     ret
 
 ; in:  AX = 0..65535, DI -> five bytes inside a literal; clobbers nothing
@@ -8258,8 +8475,8 @@ dos_mem_numn:                       ; in a check box's own label. The widths are
 ; -----------------------------------------------------------------------------
 dos_mem_take:
     call dos_mem_parse
-    call dos_mem_fix                ; ...and the arm, which is the other half
-    ret                             ; of this block (SPEC.md 96.36.1)
+    jmp  dos_mem_fix                ; ...and the arm, which is the other half
+                                    ; of this block (SPEC.md 96.36.1)
 
 ; -----------------------------------------------------------------------------
 ; dos_mem_parse - the limit field's digits -> [dos_memkb] (0 = no limit)
@@ -8404,6 +8621,27 @@ dos_click_mem:
     jc .notck                       ; itself is greyed - the row is carrying
     mov bx, dos_mmou                ; the REASON there (96.36.8)
     call dos_mck_hit
+%ifdef DOS_MEGA
+    jnc .ckhit
+    push cx                         ; ...and the HMA box (96.40.9.2), live
+    push dx                         ; whenever the page is
+    mov bx, dos_mhma
+    mov cx, [dos_mpx]
+    mov dx, [dos_mpy]
+    call os88ui_chkhit
+    jnc .hmahit
+    push di
+    call dos_msav_di                ; ...and the save box, not offered greyed
+    or di, di                       ; (47 rule 6)
+    pop di
+    stc
+    jnz .hmahit
+    mov bx, dos_msav
+    call os88ui_chkhit
+.hmahit:
+    pop dx
+    pop cx
+%endif
     jc .notck
 .ckhit:
     pop bx                          ; the box redrew itself, but the ARENA row
@@ -8439,6 +8677,9 @@ dos_click_mem:
 .notfld:
     mov cx, [dos_mpx]
     mov dx, [dos_mpy]
+%ifdef DOS_MEGA
+    jmp short .out                  ; no radio on kern_mega (12.1 item 1)
+%endif
     call dos_mrad_place             ; ...AND THE ARM LAST, which is what
     push bx                         ; anything inside a subsection that no
     mov bx, dos_mrad                ; control of its own claimed belongs to.
@@ -8758,40 +8999,6 @@ dos_key:
     pop cx
     pop bx
     clc
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_erow_focus - the environment row with the caret, rect placed for drawing
-; in:  BX = the window; out: SI = the block, or 0
-;
-; The rect has to be re-placed before the field is drawn OR hit, because
-; os88line's rect is in SCREEN coordinates and the window moves - which is
-; dos_fld_place's note, one page along.
-; -----------------------------------------------------------------------------
-dos_erow_focus:
-    push ax
-    push cx
-    push dx
-    push di
-    xor cx, cx
-.r:
-    push cx
-    call dos_erow
-    cmp byte [si+LN_FOCUS], 0
-    jne .got
-    pop cx
-    inc cx
-    cmp cx, DOS_ENVN
-    jb .r
-    xor si, si
-    jmp short .out
-.got:
-    pop cx
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -9426,6 +9633,11 @@ dos_fld_init:
     mov byte [dos_mhdd + OS88UI_CK_ON], 1   ; ...and the three boxes, which are
     mov byte [dos_mnet + OS88UI_CK_ON], 1   ; TICKED by default: a tick is
     mov byte [dos_mmou + OS88UI_CK_ON], 0   ; "leave it as it is" on the two
+%ifdef DOS_MEGA
+    mov byte [dos_mhma + OS88UI_CK_ON], 1   ; (and kern_dos in the HMA, which
+                                            ; is the arena kern_mega shipped)
+    mov byte [dos_msav + OS88UI_CK_ON], 0   ; ...and the park alone: the image
+%endif                                      ; costs the trip its write
                                     ; drivers and "do something" on the mouse,
                                     ; so the default state of all three is the
                                     ; machine as the user already has it
@@ -9871,8 +10083,18 @@ dos_lnk_mem:
     or al, LNK_BX_NONET
 .bmou:
     cmp byte [dos_mmou + OS88UI_CK_ON], 0
-    je .bput
+    je .bhma
     or al, LNK_BX_NOMOU
+.bhma:
+%ifdef DOS_MEGA
+    cmp byte [dos_mhma + OS88UI_CK_ON], 0
+    jne .bsav
+    or al, LNK_BX_NOHMA
+.bsav:
+    cmp byte [dos_msav + OS88UI_CK_ON], 0
+    je .bput
+    or al, LNK_BX_SAVE
+%endif
 .bput:
     xor ah, ah                      ; ...and the pad, zero
     stosw
@@ -10244,30 +10466,6 @@ dos_ceq:
 %endif                              ; DOS_EXTCORE
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 
-; --- dos_lnk_skip - step SI over one StringData ------------------------------
-dos_lnk_skip:
-    push ax
-    mov ax, [dos_lend]
-    sub ax, si
-    cmp ax, 2
-    jb .no
-    mov ax, [dos_lbuf+si]           ; the character count
-    add si, 2
-    push bx
-    mov bx, [dos_lend]
-    sub bx, si
-    cmp ax, bx                      ; ...against what is LEFT, never against
-    pop bx                          ; the buffer (SPEC.md 20.8 rule 2)
-    ja .no
-    add si, ax
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
-
 ; --- dos_lnk_take - one StringData -> dos_sbuf, NUL-terminated --------------
 dos_lnk_take:
     push di
@@ -10495,6 +10693,22 @@ dos_lnk_boxes:
     shr al, 1
     shr al, 1
     mov [dos_mmou + OS88UI_CK_ON], al
+%ifdef DOS_MEGA
+    mov al, ah                      ; the HMA: set = UNTICKED (96.40.9.2)
+    and al, LNK_BX_NOHMA
+    xor al, LNK_BX_NOHMA
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    mov [dos_mhma + OS88UI_CK_ON], al
+    mov al, ah                      ; ...and the save box: set = TICKED
+    and al, LNK_BX_SAVE             ; (96.40.9.3)
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    mov [dos_msav + OS88UI_CK_ON], al
+%endif
     pop ax
     ret
 
@@ -10724,7 +10938,6 @@ dos_ttl:    db 'DOS', 0
 dos_l_args: db 'Arguments:', 0
 dos_l_envb: db 'Environment:', 0    ; ...and the rows under it are NAME=VALUE,
                                     ; one to a line (SPEC.md 96.32.2.1)
-dos_l_done: db 'Done', 0
 dos_l_retb: db 'Return', 0          ; --- the setup area's furniture (96.32.2)
 dos_l_tset: db 'Setup', 0           ; ...and its name, which the title row
                                     ; shows and the bar's own button carries -
@@ -10744,12 +10957,6 @@ dos_bt_setl: dw dos_l_retb, dos_l_savb      ; DOS_BT_RET, DOS_BT_SAV
 ; opaque font_run, which is dos_fmt_exit's shape: a number assembled anywhere
 ; else needs a second store to reach the line, and a second pass over the
 ; pixels is what SPEC.md 6.1 exists to stop.
-dos_l_memb: db 'Memory', 0
-; ...and WHERE THE BUTTON GOES from each page, indexed by DOS_PAGE_*
-dos_btn_tab:
-    dw dos_l_envb                   ; main -> environment
-    dw dos_l_memb                   ; environment -> memory
-    dw dos_l_done                   ; memory -> back to the main page
 dos_l_meml: db 'Limit:', 0
 dos_l_memk: db 'K', 0                ; ...and the UNIT, drawn hard against the
                                      ; field's right edge (SPEC.md 96.36.10.1).
@@ -10758,6 +10965,11 @@ dos_l_memk: db 'K', 0                ; ...and the UNIT, drawn hard against the
                                      ; page alone - KB, paragraphs, or a
                                      ; percentage of the arena above it
 dos_l_memc: db 'Disk cache:', 0
+%ifdef DOS_MEGA
+dos_l_mpark: db 'Parks the OS above 1MB', 0  ; the one arm kern_mega has
+dos_l_mhma:  db 'Load DOS in the HMA', 0     ; ...and where kern_dos runs
+dos_l_msav:  db 'Save the session to disk', 0    ; ...and HIBERNAT.IMG first
+%endif
 ; --- THE ARENA, drawn as ONE opaque run with its digits inside it -----------
 ; dos_mem_num patches [dos_marn] in place and the line is drawn in a single
 ; font_run, which is dos_fmt_exit's shape: a number assembled anywhere else
@@ -10808,7 +11020,11 @@ dos_mnetk:  db '  K)', 0             ; they are build-time constants and a
                                      ; re-derives every drv_memk term, and a
                                      ; third digit would be dropped in SILENCE
                                      ; by dos_mem_numn's `dec cx / jz .out`
+%ifndef DOS_MEGA
 DOS_MCKW    equ 23                  ; the longest of the two, in cells
+%else
+DOS_MCKW    equ 24                  ; ...and kern_mega's save box, a cell more
+%endif
                                     ;
                                     ; **`Up to`, because the box is a REQUEST**
                                     ; (SPEC.md 96.36.7.1): it is never greyed
@@ -10950,6 +11166,9 @@ dos_errs:
                                     ; yet.`, was 27 bytes no path could reach.
                                     ; The SLOT stays, because DER_* is an index
     dw dos_e_badexe, dos_e_fit, dos_e_hand
+%ifdef DOS_MEGA
+    dw dos_e_reset                  ; DER_RESET: kern_mega's W7
+%endif
 dos_e_goto:  db 'Its folder could not be opened.', 0
 dos_e_mem:   db 'Not enough memory.', 0
 dos_e_hand:  db 'A handover is already under way.', 0
@@ -10957,6 +11176,9 @@ dos_e_read:  db 'It could not be read.', 0
 dos_e_big:   db 'Too large for one segment.', 0
 dos_e_fsx:   db 'The screen is already in use.', 0
 dos_e_badexe: db 'Its .EXE header is malformed.', 0
+%ifdef DOS_MEGA
+dos_e_reset: db 'The machine was restarted while it ran.', 0
+%endif
 dos_e_fit:   db 'Not enough RAM - try Setup, "Shut down the OS".', 0
                                     ; **IT SAID DOS 3.30'S OWN WORDS**,
                                     ; `Program too big to fit in memory.`,
@@ -11367,8 +11589,17 @@ dos_m33_arm:
     mov [dos_m33old], ax            ; with the packet driver up is its own tick
     mov ax, [es:0x08*4+2]           ; (96.23.4) - two hooks compose, because
     mov [dos_m33old+2], ax          ; both chain what they found
+%ifndef DOS_MEGA
     mov word [es:0x08*4], dos_m33_tick
     mov [es:0x08*4+2], cs
+%else
+    push dx
+    mov ax, dos_m33_tick
+    call dos_hvec                   ; a tick that finds A20 shut must not
+    mov [es:0x08*4], ax             ; land in wrapped low memory
+    mov [es:0x08*4+2], dx
+    pop dx
+%endif
     mov byte [dos_m33hk], 1
     popf
     pop es
@@ -12348,6 +12579,9 @@ OS88_PARTS_END
 %include "os88parts.inc"
 dos_kdrow   equ dos_hbss + DOS_B_KDROW   ; the HOST's block (SPEC.md 96.44.5)
 dos_corerow equ dos_hbss + DOS_B_COREROW
+%ifdef DOS_MEGA
+dos_kdlrow  equ dos_hbss + DOS_B_KDLROW
+%endif
 %endif
 
 %include "dosnetabi.inc"             ; the cable translation's numbers, EARLY
@@ -12556,6 +12790,10 @@ DOS_CBASE   equ os88_image_end
     HBSS DOS_B_KDROW, 8          ; kind, flags, dw off, dw len, dw zkb
     HBSS DOS_B_COREROW, 8        ; ...and the CORE part's, beside it - the stub
                                  ; reads both (SPEC.md 96.44.5.4)
+%ifdef DOS_MEGA
+    HBSS DOS_B_KDLROW, 8         ; ...and kern_mega's LOW kern_dos, part 3,
+                                 ; beside them (SPEC.md 96.40.9.2)
+%endif
     ; --- THE CONSOLE BAND (SPEC.md 96.32), four words dos_con_geom fills and
     ;     the console wave reads. Not banked "for one paint" like the line
     ;     above: they are the answer to a question about the WINDOW, so
@@ -12576,7 +12814,7 @@ DOS_CBASE   equ os88_image_end
     HBSS DOS_B_TVOL,  1          ; dos_path_take's scratch: the parsed volume
     HBSS DOS_B_TNAME, 13         ; and name, held apart until the walk has
                                  ; agreed, so a typo cannot half-commit
-DOS_BTREC_SZ equ 16              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
+DOS_BTREC_SZ equ 24              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
                                  ; and it has to be one: this block is laid
                                  ; out thousands of lines before os88ui.inc is
                                  ; included, so the real constant is not
@@ -12598,7 +12836,6 @@ DOS_BTREC_SZ equ 16              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
     HBSS DOS_B_NCELL, 2          ; glyph cells the edits have redrawn...
     HBSS DOS_B_NKEY,  2          ; ...over this many keystrokes
     HBSS DOS_B_PAGE,  1          ; which page is up (DOS_PAGE_*)
-    HBSS DOS_B_BRECT, 8          ; the page button's rect, x1 y1 x2 y2
     HBSS DOS_B_BTREC, DOS_BTREC_SZ  ; the standard button record (20.5.1.4),
                                  ; REPOINTED per page by dos_place - one
                                  ; record, because only one page is ever up.
@@ -12646,6 +12883,10 @@ DOS_BTREC_SZ equ 16              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
     HBSS DOS_B_MHDD,  DOS_MCKSZ  ; the two driver boxes (SPEC.md 96.36.7):
     HBSS DOS_B_MNET,  DOS_MCKSZ  ; Hard Drives and Network, arm 0's
     HBSS DOS_B_MMOU,  DOS_MCKSZ  ; ...and Disable the mouse, arm 1's (96.36.8)
+%ifdef DOS_MEGA
+    HBSS DOS_B_MHMA,  DOS_MCKSZ  ; ...and Load DOS in the HMA (96.40.9.2)
+    HBSS DOS_B_MSAV,  DOS_MCKSZ  ; ...and Save the session to disk (96.40.9.3)
+%endif
     HBSS DOS_B_MSKB,  SYSKB_SIZE ; OSAPI_SYS_KB's buffer, for arm 1's own
                                  ; estimate (SPEC.md 96.36.3)
     HBSS DOS_B_MHKB,  2          ; word: what each class is holding, out of
@@ -14004,6 +14245,17 @@ dos_exec_load:
     jnc .com
     call dos_exe_setup              ; sets [dos_isexe] itself
     jc .bad
+%ifdef DOS_MEGA
+    ; **AN EXEPACK CHILD, UNPACKED BY THE HOST** (SPEC.md 96.40.9.1). The HMA
+    ; host runs with A20 open, so a child's own unpacker wraps below 64KB; the
+    ; hook is `kd_xunp`, which unpacks it in place against the same [dos_exe_*]
+    ; `dos_exe_setup` just filled. Best effort - absent (the box, kern_big) or
+    ; a child it refuses runs its own unpacker, which works when the allocator
+    ; placed it at or above 64KB. The hook preserves every register.
+    cmp word [dos_hkv + DHK_XUNP], 0
+    je .psp
+    call word [dos_hkv + DHK_XUNP]
+%endif
     jmp short .psp
 .com:
     mov byte [dos_isexe], 0
@@ -14154,6 +14406,7 @@ XMS_NH      equ 8
 XH_BASE     equ 0                   ; dword: what the kernel handed back
 XH_KB       equ 4                   ; word
 XH_USED     equ 6
+XH_LOCK     equ 7                   ; byte: lock count (kern_mega's 0Ch/0Dh)
 XH_SIZE     equ 8
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -14188,12 +14441,26 @@ dos_int2f:
     pop bp
     iret
 .entry:
+%ifndef DOS_MEGA
     mov bx, dos_xms_ent
     pop ds
     pop bp
     push cs
     pop es
     iret
+%else
+    push ax
+    push dx
+    mov ax, dos_xms_ent
+    call dos_hvec                   ; ES:BX, through a slot on the HMA run
+    mov bx, ax
+    mov es, dx
+    pop dx
+    pop ax
+    pop ds
+    pop bp
+    iret
+%endif
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -14227,6 +14494,23 @@ dos_xms_ent:
     push cs
     pop ds
 
+%ifdef DOS_MEGA
+    ; kern_mega's door is the one a 286 DOS extender meets, and KERN-MEGA-DOS-
+    ; PLAN 10.4 found what it lacked: the largest free block (08h's AX is not
+    ; the total once a block sits mid-arena), the block's size kept so a move
+    ; is bounded by its HANDLE (0Bh), and lock, unlock, information and
+    ; resize (0Ch-0Fh), which answered "not implemented"
+    cmp ah, 0x08
+    je .mquery
+    cmp ah, 0x09
+    je .malloc
+    cmp ah, 0x0C
+    jb .mstd
+    cmp ah, 0x0F
+    ja .mstd
+    jmp .mlock
+.mstd:
+%endif
     cmp ah, 0x00
     je .ver
     cmp ah, 0x08
@@ -14276,6 +14560,7 @@ dos_xms_ent:
     mov [si+XH_BASE], ax
     mov [si+XH_BASE+2], dx
     mov byte [si+XH_USED], 1
+.ahandle:
     mov dx, si
     sub dx, dos_xmstab
     mov ax, XH_SIZE
@@ -14303,6 +14588,12 @@ dos_xms_ent:
     mov ax, dx
     call dos_xms_row                ; SI = its row
     jc .badh
+%ifdef DOS_MEGA
+    cmp byte [si+XH_LOCK], 0        ; a LOCKED block is not freed (XMS ABh)
+    je .mfree
+    jmp .mlocked
+.mfree:
+%endif
     mov ax, [si+XH_BASE]
     mov dx, [si+XH_BASE+2]
     call dos_be_xfree
@@ -14327,6 +14618,121 @@ dos_xms_ent:
     pop ds
     pop bp
     retf
+%ifdef DOS_MEGA
+.mquery:                            ; 08h: AX = largest, DX = total, KB
+    push cx
+    push si
+    push di
+    xor di, di
+    call dos_be_xcaps               ; AX = total, DI = largest (kern_dos)
+    jnc .mqok
+    xor ax, ax
+    xor di, di
+.mqok:
+    mov dx, ax
+    mov ax, di
+    pop di
+    pop si
+    pop cx
+    xor bl, bl
+    or dx, dx
+    jnz .out
+    mov bl, 0xA0                    ; "all extended memory is allocated"
+    jmp short .out
+.malloc:                            ; 09h, with the block's KB kept
+    push dx
+    call dos_xms_new                ; SI = a free row
+    jc .mnoh
+    push si
+    mov ax, dx
+    mov dx, 1024
+    mul dx
+    call dos_be_xalloc
+    pop si
+    jc .mnor
+    mov [si+XH_BASE], ax
+    mov [si+XH_BASE+2], dx
+    pop word [si+XH_KB]
+    mov byte [si+XH_USED], 1
+    mov byte [si+XH_LOCK], 0
+    jmp .ahandle
+.mnoh:
+    pop dx
+    jmp .nohand
+.mnor:
+    pop dx
+    jmp .noroom
+.mlock:                             ; 0Ch-0Fh: DX = the handle
+    push ax
+    mov ax, dx
+    call dos_xms_row                ; SI = its row
+    pop ax
+    jnc .mrow
+    jmp .badh
+.mrow:
+    cmp ah, 0x0D
+    je .munl
+    jb .mlk
+    cmp ah, 0x0E
+    je .minfo
+    cmp byte [si+XH_LOCK], 0        ; 0Fh, BX = the new KB: a SHRINK is a new
+    jne .mlocked                    ; figure for the bound and nothing moves;
+    cmp bx, [si+XH_KB]              ; a growth is refused, the block having
+    ja .mbig                        ; neighbours in the arena
+    mov [si+XH_KB], bx
+    jmp short .mok
+.mbig:
+    xor ax, ax
+    mov bl, 0xA0
+    jmp .out
+.mlocked:
+    xor ax, ax
+    mov bl, 0xAB                    ; "the block is locked"
+    jmp .out
+.mlk:                               ; 0Ch: DX:BX = its linear address
+    cmp byte [si+XH_LOCK], 0xFF
+    je .mlkov
+    inc byte [si+XH_LOCK]
+    mov bx, [si+XH_BASE]
+    mov dx, [si+XH_BASE+2]
+    mov ax, 1
+    jmp .out
+.mlkov:
+    xor ax, ax
+    mov bl, 0xAC                    ; "lock count overflow"
+    jmp .out
+.munl:                              ; 0Dh
+    cmp byte [si+XH_LOCK], 0
+    je .munlno
+    dec byte [si+XH_LOCK]
+.mok:
+    mov ax, 1
+    xor bl, bl
+    jmp .out
+.munlno:
+    xor ax, ax
+    mov bl, 0xAA                    ; "the block is not locked"
+    jmp .out
+.minfo:                             ; 0Eh: BH = locks, BL = free handles,
+    push cx                         ; DX = KB
+    push si
+    mov si, dos_xmstab
+    mov cx, XMS_NH
+    xor bl, bl
+.mfh:
+    cmp byte [si+XH_USED], 0
+    jne .mfn
+    inc bl
+.mfn:
+    add si, XH_SIZE
+    loop .mfh
+    pop si
+    pop cx
+    mov bh, [si+XH_LOCK]
+    mov dx, [si+XH_KB]
+    mov ax, 1
+    jmp .out
+%endif
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -14383,6 +14789,45 @@ dos_xms_row:
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
+%ifdef DOS_MEGA
+; dos_xms_fits - SI = a handle's row, DX:AX = an offset into it: CF=1 when
+; offset + [dos_xmlen] runs past the block's [XH_KB] (XMS 0Bh's A4h/A6h; a
+; move bounded by the ARENA could reach the next handle's block). Clobbers
+; AX, DX
+dos_xms_fits:
+    push bx
+    push cx
+    add ax, [dos_xmlen]
+    adc dx, [dos_xmlen+2]
+    jc .no
+    mov bx, [si+XH_KB]              ; BX:CX = the block's bytes
+    mov cx, bx
+    push cx
+    mov cl, 6
+    shr bx, cl
+    pop cx
+    push ax
+    mov ax, cx
+    mov cl, 10
+    shl ax, cl
+    mov cx, ax
+    pop ax
+    cmp dx, bx
+    ja .no
+    jb .yes
+    cmp ax, cx
+    ja .no
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop bx
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; dos_xms_move - AH=0Bh's body
 ; in:  the caller's DS:SI -> the move block; [bp] = the caller's DS
@@ -14433,6 +14878,12 @@ dos_xms_move:
     mov ax, [dos_xmsh]
     call dos_xms_row
     jc .badsh
+%ifdef DOS_MEGA
+    mov ax, [dos_xmso]              ; ...and the move inside the HANDLE
+    mov dx, [dos_xmso+2]
+    call dos_xms_fits
+    jc .badso
+%endif
     mov ax, [si+XH_BASE]
     mov dx, [si+XH_BASE+2]
     add ax, [dos_xmso]
@@ -14449,6 +14900,12 @@ dos_xms_move:
     jz .bothc
     call dos_xms_row
     jc .baddh
+%ifdef DOS_MEGA
+    mov ax, [dos_xmdo]
+    mov dx, [dos_xmdo+2]
+    call dos_xms_fits
+    jc .baddo
+%endif
     mov ax, [si+XH_BASE]
     mov dx, [si+XH_BASE+2]
     add ax, [dos_xmdo]
@@ -14489,7 +14946,14 @@ dos_xms_move:
     adc word [dos_xmlin+2], 0
     add [dos_xmcon], cx             ; a 32KB step cannot carry a paragraph-
     jnc .chunk                      ; aligned offset past 64KB by more than
-    add word [dos_xmcon+2], 0x1000  ; one segment's worth
+%ifdef DOS_MEGA                     ; one segment's worth
+    cmp byte [dos_xmdir], 2         ; ...unless the source is LINEAR, which on
+    jne .segstep                    ; kern_mega it is for an extended-to-
+    inc word [dos_xmcon+2]          ; extended move (SPEC.md 96.15.4): then the
+    jmp short .chunk                ; carry is one 64KB step of the high word
+.segstep:
+%endif
+    add word [dos_xmcon+2], 0x1000
     jmp short .chunk
 .done:
     clc
@@ -14497,12 +14961,56 @@ dos_xms_move:
 .bothc:
     mov bl, 0x8E                    ; conventional to conventional: a program
     jmp short .err                  ; with two far pointers can `movsb`
+%ifdef DOS_MEGA
+    ; --- extended -> extended, kern_mega only (SPEC.md 96.15.4) -------------
+    ; kern_dos's transport is int 15h AH=87h, which moves between two linear
+    ; addresses directly, so the refusal below is lifted there: DI = 2 says
+    ; "ES:SI is the source's LINEAR address, ES its high word" and the chunk
+    ; loop above steps it linearly. The windowed box never runs on kern_mega
+    ; (KERN-MEGA-DOS-PLAN 12.1 item 1), so OSAPI_XMEM_COPY never sees a 2
+.bothx:
+    mov ax, [dos_xmdh]
+    call dos_xms_row
+    jc .baddh
+    mov ax, [dos_xmdo]
+    mov dx, [dos_xmdo+2]
+    call dos_xms_fits
+    jc .baddo
+    mov ax, [si+XH_BASE]
+    mov dx, [si+XH_BASE+2]
+    add ax, [dos_xmdo]
+    adc dx, [dos_xmdo+2]
+    mov [dos_xmlin], ax             ; the destination, linear
+    mov [dos_xmlin+2], dx
+    mov ax, [dos_xmsh]
+    call dos_xms_row
+    jc .badsh
+    mov ax, [dos_xmso]
+    mov dx, [dos_xmso+2]
+    call dos_xms_fits
+    jc .badso
+    mov ax, [si+XH_BASE]
+    mov dx, [si+XH_BASE+2]
+    add ax, [dos_xmso]
+    adc dx, [dos_xmso+2]            ; ...and the source, linear, into the
+    mov word [dos_xmdir], 2         ; slot the conventional end takes
+    jmp .ovl                        ; ...unless it overlaps (below the ret)
+%else
 .bothx:
     mov bl, 0x8E                    ; ...and extended to extended has no slot
     jmp short .err
+%endif
 .badsh:
     mov bl, 0xA3
     jmp short .err
+%ifdef DOS_MEGA
+.badso:
+    mov bl, 0xA4                    ; "invalid source offset"
+    jmp short .err
+.baddo:
+    mov bl, 0xA6                    ; "invalid destination offset"
+    jmp short .err
+%endif
 .baddh:
     mov bl, 0xA5
     jmp short .err
@@ -14523,6 +15031,77 @@ dos_xms_move:
     pop cx
     pop ax
     ret
+%ifdef DOS_MEGA
+.ovl:
+    ; AN OVERLAP WITH THE SOURCE FIRST is a move XMS GUARANTEES (function
+    ; 0Bh), and one forward pass of 87h - itself a forward `rep movsw` -
+    ; copies the first words over the rest (KERN-MEGA-DOS-PLAN 10.4 item 1).
+    ; So it goes TAIL FIRST, in chunks no longer than the distance between
+    ; the ends, each of which then cannot overlap itself
+    mov bx, [dos_xmlin]
+    mov cx, [dos_xmlin+2]
+    sub bx, ax
+    sbb cx, dx                      ; CX:BX = destination - source
+    jb .fwd                         ; the destination first: forward is right
+    cmp cx, [dos_xmlen+2]
+    ja .fwd
+    jb .back
+    cmp bx, [dos_xmlen]
+    jae .fwd                        ; ...and so is no overlap at all
+.back:
+    or cx, cx
+    jnz .bcap32
+    cmp bx, 32768
+    jbe .bcap
+.bcap32:
+    mov bx, 32768
+.bcap:
+    cmp bx, 1                       ; ONE BYTE APART cannot be split into word
+    je .bkerr                       ; moves (KERN-MEGA-DOS-PLAN 10.5's review):
+                                    ; A8h, XMS's own "invalid overlap"
+    and bl, 0xFE                    ; whole words: 87h moves words
+    jz .fwd                         ; the same address: nothing moves
+    mov [dos_xmcon], ax             ; the source's base, kept
+    mov [dos_xmcon+2], dx
+.bk:
+    mov ax, [dos_xmlen]
+    mov dx, [dos_xmlen+2]
+    mov cx, bx
+    or dx, dx
+    jnz .bkn
+    or ax, ax
+    jz .bkd
+    cmp ax, cx
+    jae .bkn
+    mov cx, ax
+.bkn:
+    sub [dos_xmlen], cx             ; what is left is the head; this chunk is
+    sbb word [dos_xmlen+2], 0       ; the bytes after it
+    mov ax, [dos_xmcon]
+    mov dx, [dos_xmcon+2]
+    add ax, [dos_xmlen]
+    adc dx, [dos_xmlen+2]
+    mov es, dx
+    mov si, ax
+    mov ax, [dos_xmlin]
+    mov dx, [dos_xmlin+2]
+    add ax, [dos_xmlen]
+    adc dx, [dos_xmlen+2]
+    mov di, 2
+    push bx
+    push cx
+    call dos_be_xcopy
+    pop cx
+    pop bx
+    jc .bkerr
+    jmp short .bk
+.bkd:
+    jmp .done
+.bkerr:
+    jmp .ioerr
+.fwd:
+    jmp .run
+%endif
 %endif                              ; DOS_EXTCORE
 
 
@@ -14908,11 +15487,13 @@ dos_pkt_hchk:
     sub ax, dos_pkt_htab            ; below the table wraps to a huge unsigned,
     cmp ax, PKT_NHAND * PKT_HSIZE   ; so one compare catches both ends
     jae .no
-    xor dx, dx
-    mov cx, PKT_HSIZE               ; ...and it must be ON a row boundary, not
-    div cx                          ; merely inside the table
-    or dx, dx
-    jnz .no
+    mov dl, PKT_HSIZE               ; ...and it must be ON a row boundary, not
+    div dl                          ; merely inside the table: AX is under 28,
+    or ah, ah                       ; so a BYTE divide, AH = the remainder.
+    jnz .no                         ; (It was `div cx`, and CX is the CLIENT's
+                                    ; - get_address's buffer size, read after
+                                    ; this returns - which it overwrote with 7;
+                                    ; SPEC.md 96.44.16)
     cmp byte [bx+PKT_HUSED], 0
     je .no
     pop dx
@@ -18139,6 +18720,9 @@ dos_fh_fill:
                                     ; how far back BS may rub (SPEC.md 96.33.3)
     HBSS DOS_B_CMDN,    2           ; ...and how much of dsh_line is typed
 
+%ifdef DOS_MEGA                     ; both hosts of one build, so not rule 1's
+    DBSS DOS_B_HSLOT,   2           ; the HMA host's slot maker (dos_hvec), or
+%endif                              ; 0 - and LAST, so no cell before it moves
 ; **AND THE HOST'S BLOCK IS THE PACKAGE'S OWN bss** (SPEC.md 96.44.5). It was
 ; `CORE_BSS_SIZE + HB` - the core's cells first and the host's after them,
 ; both inside the package's bss - and since the core became a PART its cells
@@ -18199,6 +18783,11 @@ DOS_BSS_SIZE equ HB
                                     ; which is one pick out of a SHORT LIST of
                                     ; widths - a radio of five would be 80 px
                                     ; of a column that has 155
+%define OS88UI_NODRGEST             ; ...which is press-press (dos_click_mem ->
+                                    ; os88ui_drpress both ways) and is never
+                                    ; taken down from outside, so its drag,
+                                    ; release and close are out (SPEC.md
+                                    ; 13.14.7, apps size pass 2b)
 %define OS88UI_ABOUT                ; ...and the About card (SPEC.md 96.51).
                                     ; dos_about was a bare `ret` for the whole
                                     ; of this package's life, so the kernel put
@@ -18218,6 +18807,9 @@ DOS_BSS_SIZE equ HB
 %if DOS_BTREC_SZ != OS88UI_BT_SIZE
  %error "DOS_BTREC_SZ mirrors OS88UI_BT_SIZE and they have drifted - the HBSS block is laid out before this include, so the size must be written twice; fix the literal"
 %endif
+%define OS88LINE_NOSET              ; the fields are filled in place and
+                                    ; resynced (96.21.1), never replaced
+                                    ; (apps size pass 2b)
 %include "os88line.inc"
 %endif
 ; --- THE CONSOLE (SPEC.md 96.33), telnet's screen as a shared include -------
@@ -18241,6 +18833,8 @@ DOS_BSS_SIZE equ HB
                                     ; of them the 80x25 shadow and the 8x8 font,
                                     ; which are .bss and so are a KB of the
                                     ; image rung apiece
+%define CON_NOSCROLLDOWN            ; ...and no con_scrolldown: a teletype
+                                    ; only scrolls UP (SPEC.md 96.44.16.1)
 %define CON_TTY                     ; CR, LF, BS, TAB and BEL, because there is
                                     ; no ANSI parser over this one (SPEC.md
                                     ; 96.33.1) - and con_open, since the
@@ -18393,7 +18987,6 @@ DOS_BT_RUN equ 2
 DOS_BT_RET equ 1                       ; the Setup page: 'Return', then 'Save
 DOS_BT_SAV equ 2                       ; Shortcut' - a different page, so the
                                        ; numbers may repeat
-dos_brect equ dos_hbss + DOS_B_BRECT   ; the page button's rect
 dos_btrec equ dos_hbss + DOS_B_BTREC   ; ...and the button group's record
 %endif
 %ifndef KD_BACKEND
@@ -18458,6 +19051,10 @@ dos_mnet equ dos_hbss + DOS_B_MNET
 %endif
 %ifndef KD_BACKEND
 dos_mmou equ dos_hbss + DOS_B_MMOU   ; ...and the mouse's (96.36.8)
+%ifdef DOS_MEGA
+dos_mhma equ dos_hbss + DOS_B_MHMA   ; ...and kern_mega's HMA box (96.40.9.2)
+dos_msav equ dos_hbss + DOS_B_MSAV   ; ...and its save box (96.40.9.3)
+%endif
 %endif
 %ifndef KD_BACKEND
 dos_skbuf equ dos_hbss + DOS_B_MSKB  ; OSAPI_SYS_KB's buffer (96.36.3)
@@ -18502,6 +19099,9 @@ dos_m33lx   equ DOS_CBASE + DOS_B_M33LX
 dos_m33ly   equ DOS_CBASE + DOS_B_M33LY
 dos_m33lb   equ DOS_CBASE + DOS_B_M33LB
 dos_m33hk   equ DOS_CBASE + DOS_B_M33HK
+%ifdef DOS_MEGA
+dos_hslot   equ DOS_CBASE + DOS_B_HSLOT
+%endif
 dos_m33bsy  equ DOS_CBASE + DOS_B_M33BSY
 dos_m33shw  equ DOS_CBASE + DOS_B_M33SHW  ; --- the text cursor (96.10.5) ---
 dos_m33x0   equ DOS_CBASE + DOS_B_M33X0  ; --- the window (96.10.7) -------

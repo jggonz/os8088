@@ -518,7 +518,9 @@ px_rnext:
 ; =============================================================================
 ; THE SERVICES a decoder PART far-calls on the worker (SPEC.md 106.18). Each
 ; sets DS to the package itself - a part calls `call far` with its own
-; registers - and answers with retf. Every one checks what it is handed and
+; registers - and answers with retf. DS is [cs:px_dsel], which px_pstamp
+; keeps, and not CS: on kern_mega CS is our CODE selector, and a store
+; through a DS loaded from it is a #GP a row (KERN-MEGA-PLAN 14.40). Every one checks what it is handed and
 ; does nothing with what is out of range rather than trust a part
 ; =============================================================================
 px_kst:     dw px_ks_next, px_ks_emit, px_ks_scat, px_ks_tick, px_ks_pal
@@ -529,8 +531,7 @@ px_kst:     dw px_ks_next, px_ks_emit, px_ks_scat, px_ks_tick, px_ks_pal
 ; else
 px_ks_next:
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:px_dsel]            ; ours (px_pstamp): CS takes no store
     push ax
     push si
     mov si, [px_rpos]
@@ -562,8 +563,7 @@ px_ks_next:
 ; out CF = 1 AX = PXD_ABORT or a refusal. Keeps all but AX
 px_ks_emit:
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:px_dsel]
     push bx
     push cx
     push dx
@@ -596,8 +596,7 @@ px_ks_emit:
 ; would); BX and DX as K_EMIT's. CF/AX as K_EMIT's
 px_ks_scat:
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:px_dsel]
     push bx
     push cx
     push dx
@@ -670,8 +669,7 @@ px_ks_scat:
 ; copied, clipped to the master. CF/AX as K_EMIT's
 px_ks_cols:
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:px_dsel]
     push bx
     push cx
     push dx
@@ -821,8 +819,7 @@ px_qrun:
 ; and [px_rsegc] on to the next window. CF = 1 at the end. Keeps all
 px_ks_ring:
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:px_dsel]
     call px_rnext
     pop ds
     retf
@@ -830,8 +827,7 @@ px_ks_ring:
 ; K_TICK - AX = the progress, without a row. CF/AX as K_EMIT's
 px_ks_tick:
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:px_dsel]
     mov [px_srcdone], ax
     call px_progress
     pop ds
@@ -840,8 +836,7 @@ px_ks_tick:
 ; K_PAL - the palette is known (SPEC.md 106.18). CF/AX as px_tables'
 px_ks_pal:
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:px_dsel]
     push bx
     push cx
     push dx
@@ -1194,8 +1189,9 @@ px_open:
     call px_refusal                 ; "BMP: depth not read"
     call px_compose
     call px_shown
-    inc word [px_ndone]             ; an open has ended (a test waits on it)
-.out:
+    call px_artback                 ; the face's pictures, if the claims took
+    inc word [px_ndone]             ; them (SPEC.md 106.16), BEFORE the open
+.out:                               ; is said to have ended
     pop es
     pop di
     pop si
@@ -1396,9 +1392,10 @@ px_finish:
     mov al, PX_R_CANVAS | PX_R_PANELS
     call px_regdraw
 .out:
-    inc word [px_ndone]             ; an open has ended (a test waits on it)
-    pop dx
-    pop ax
+    call px_artback                 ; the face's pictures, if the open took
+    inc word [px_ndone]             ; them (SPEC.md 106.16), and only THEN has
+    pop dx                          ; it ended: their read is a disk read on
+    pop ax                          ; the UI task, part of this open
     ret
 
 ; px_cancel - Esc, or Stop: the worker stops at its next row or refill and

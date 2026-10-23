@@ -62,15 +62,12 @@ left in build/, and a stale disk runs an earlier build's package while every
 assertion below reports on this one. `full` is the tier that is allowed to
 build (tools/os88test.py), and `make` is what knows whether anything is stale.
 
-WHY THE RUNTIME AND ITS BUNDLES SHARE ONE FOLDER, AND WHY THIS ROW OPENS IT
-FIRST. WEAVE.OVL, WEAVE.WSM and the .WAB bundles ride the WEAVE/ folder beside
-WEAVE.O88 (WEAVE-SPEC 11.2): a double-click on a bundle leaves the launched
-instance's current directory on the DOCUMENT's (SPEC.md 54.9), and the overlay
-is resolved in that directory (SPEC.md 73.14) - so a bundle in a folder
-without the runtime opens a program whose every overlay path then refuses,
-politely and inexplicably. The disk's other folder, LOOM/, is the IDE and the
-demo sources (and a second copy of the runtime, for the bundles Pack writes
-there); weaveprev points FOLDER at it.
+WHY THIS ROW OPENS THE WEAVE/ FOLDER FIRST. The .WAB bundles ride the WEAVE/
+folder beside WEAVE.O88 (WEAVE-SPEC 11.2), whose overlay and canvas core are
+PARTS of it now, fetched from the folder it was launched from (SPEC.md
+73.14.2) - so the folder is where the demo bundles are, not a rule the
+runtime needs. The disk's other folder, LOOM/, is the IDE and the demo
+sources; weaveprev points FOLDER at it.
 
 So `_open_bundle` is two double-clicks and not one - the folder, then the
 file - and both go through open_named, which re-reads the listing before it

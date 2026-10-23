@@ -82,6 +82,7 @@ import argparse
 import errno
 import json
 import os
+import shutil
 import re
 import socket
 import sys
@@ -1110,6 +1111,25 @@ class Marty:
                           "args": {"dx": dx, "dy": dy, "l": l, "r": r}})
         return rr
 
+    def wheel(self, notches, l=False, r=False, gap=0.12):
+        """Turn the WHEEL `notches`, positive TOWARD THE USER (SPEC.md 10.4).
+
+        Needs MartyPC with patch 15 (tools/martypc/patches): each request is
+        ONE Microsoft IntelliMouse packet, four bytes, its fourth byte's low
+        nibble the wheel - so a turn is split into packets of at most 7, each
+        followed by `gap` GUEST seconds, because a packet sent while the
+        last is still on the 1200-baud line is dropped (os88mouse.py's GAP).
+        l/r are the buttons HELD through it, so a turn is never a click.
+        """
+        left = int(notches)
+        while left:
+            n = max(-7, min(7, left))
+            rr = self.cmd(cmd="mouse", dx=0, dy=0, l=l, r=r, wz=n)
+            self._log.append({"cycles": rr.get("cycles", 0), "kind": "wheel",
+                              "args": {"wz": n, "l": l, "r": r}})
+            left -= n
+            pace(self, gap)
+
     def history(self):
         return self.cmd(cmd="history")["history"]
 
@@ -2079,6 +2099,48 @@ def _private_run_dir(base, tag):
     return inst
 
 
+
+ROM_AT = 0xF4000                # docs/plans/ROM-PLAN.md 1.3: U28-U32
+
+
+def _stage_rom(inst, base, rom):
+    """Give ONE instance a ROM in the 5150's spare sockets (ROM-PLAN 1.3).
+
+    MartyPC adds an optional "custom" ROM feature to every machine type and
+    loads it when martypc.toml's `custom_roms` is on - which the shared tree's
+    is. So a romset providing "custom" in the SHARED configs would land on
+    every test machine; it goes in this instance's instead. `configs/` and
+    `media/roms/` stop being symlinks here and become real directories of
+    symlinks, plus one rom definition and one ROM file - the rest of the tree
+    is still shared and still read-only. Matched by FILENAME, which MartyPC's
+    manifest allows, so a ROM rebuilt per run needs no md5 written down.
+    """
+    if not os.path.isfile(rom):
+        raise MartyError("no ROM image at %s - `python3 tools/os88rom.py`" % rom)
+
+    def unshare(rel):
+        dst = os.path.join(inst, rel)
+        src = os.path.join(base, rel)
+        if os.path.islink(dst):
+            os.remove(dst)
+        os.makedirs(dst, exist_ok=True)
+        for name in sorted(os.listdir(src)) if os.path.isdir(src) else []:
+            if not os.path.lexists(os.path.join(dst, name)):
+                os.symlink(os.path.join(src, name), os.path.join(dst, name))
+        return dst
+
+    unshare("configs")
+    os.remove(os.path.join(inst, "configs", "rom_definitions"))
+    defs = unshare(os.path.join("configs", "rom_definitions"))
+    roms = unshare(os.path.join("media", "roms"))
+    name = "os8088_user_rom.bin"
+    shutil.copyfile(rom, os.path.join(roms, name))
+    with open(os.path.join(defs, "os8088_user_rom.toml"), "w") as f:
+        f.write('[[romset]]\nalias = "os8088_user_rom"\npriority = 100\n'
+                'provides = ["custom"]\nrom = [\n'
+                '    { filename = "%s", addr = 0x%05X, size = %d },\n]\n'
+                % (name, ROM_AT, os.path.getsize(rom)))
+
 MBAR_H = 20                     # SPEC.md 12: the same on every adapter
 
 
@@ -2226,7 +2288,15 @@ def no_saver(m):
         until(m, booted, "the boot to apply its settings before the saver "
               "is turned off", poll=0.05, guest=300.0)
     m.write(S("ss_idle"), b"\0\0")
-    m.write(S("ss_mins"), b"\0")
+    # [ss_mins] is kern_big's alone since kernel size pass 13: kern_small reads
+    # no SYSTEM.CFG and carries no ss_mins2idle, so nothing there can put the
+    # period back and [ss_idle] is the whole of the setting
+    try:
+        mins = S("ss_mins")
+    except KeyError:
+        mins = None
+    if mins is not None:
+        m.write(mins, b"\0")
 
 
 def _syms():
@@ -3358,6 +3428,24 @@ def until(m, cond, what="that condition", poll=1.0, limit=600.0, guest=None):
         time.sleep(poll)
 
 
+def faces(folder="SYSTEM/FONTS"):
+    """The typefaces as os88disk arguments, for a row's own scratch disk.
+
+    The 360KB system disk carries no SYSTEM/FONTS since SPEC.md 24.3.1.5 -
+    they went to office360.img - and a program that sets type (Word, Scribe,
+    ArtfulType, PiXEL) looks on its OWN volume when the system disk has none
+    (apps/os88type.inc's ty_gofonts). So a row that boots os8088-360.img with
+    its program on a scratch B: puts the faces there, or its Font list is the
+    one built-in face and every leg about a chosen face is vacuous.
+    """
+    import glob
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    return ["%s:%s" % (folder, f) for f in
+            sorted(glob.glob(os.path.join(here, "..", "build", "faces",
+                                          "*.f88")))]
+
+
 def scratch_disk(path, *files, **kw):
     """Build a row's scratch floppy, and REBUILD it when an input has moved.
 
@@ -3480,7 +3568,7 @@ def _sweep_sidecars(d):
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
            run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
-           card=None, label=None, detach=False):
+           card=None, label=None, detach=False, rom=None):
     """Start a FRESH martypc_headless on `image` and return a booted Marty.
 
     `image` and `apps` are paths to floppy images (fd:0 and fd:1). `boot` is
@@ -3546,6 +3634,18 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     reap()
     _warn_oversubscribed(1)
 
+    # $OS88_ROM puts a ROM in U28-U32 for EVERY launch that did not name one
+    # (docs/plans/ROM-PLAN.md 5, SPEC.md 2.10): any row then runs as the
+    # with-ROM arm of an A/B it never had to be written for. A ROM is cut
+    # against one kernel and refuses every other, so a row booting the other
+    # kernel simply runs without one - it is the operator's to point the
+    # right ROM at the right rows. `rom=False` opts a row OUT (a row whose
+    # no-ROM arm is the point: tests/romnodisk.py's control).
+    if rom is None and os.environ.get("OS88_ROM"):
+        rom = os.environ["OS88_ROM"]
+    if rom is False:
+        rom = None
+
     if label is None:
         label = os.path.basename(getattr(sys.modules.get("__main__"),
                                          "__file__", "") or "os88marty")
@@ -3564,7 +3664,13 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     if run_dir is None:
         run_dir = _private_run_dir(base, tag)   # ...which is also the run tree
         private = True
+        if rom is not None:
+            _stage_rom(run_dir, base, _build.at(rom))
     else:
+        if rom is not None:
+            raise MartyError("rom= needs a private run tree: it rewrites "
+                             "that tree's configs/ and media/roms/, and a "
+                             "caller-staged run_dir is shared")
         # A caller staging its own tree keeps its own isolation. Nothing here
         # can give it any: two runs in one directory share one media/floppies.
         # It is still REGISTERED, because `instances` and `reap` are about

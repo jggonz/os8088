@@ -133,7 +133,7 @@ def main():
         sys.exit("dostype: %s will not build:\n%s" % (APPS, r.stdout + r.stderr))
 
     notes = [b"line %03d of the notes" % i for i in range(1, 401)]
-    want = "os8088 is free software, under the MIT licence."
+    want = "os8088 is free software under the MIT licence."
 
     with os88ui.boot(os88build.at(SYS), apps=os88build.at(APPS)) as ui:
         m = ui.m

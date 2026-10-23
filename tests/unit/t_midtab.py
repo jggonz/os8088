@@ -20,10 +20,13 @@ ever boots.
 
 AND THE COLOUR FACE'S PICTURES (SPEC.md 105.9.5): tools/os88midart.py's own
 selfcheck - deterministic, every label with air in its button, every face's
-gap left paper - and the four numbers midirack.asm states about the file
-(MRA_W, MRA_H, MRA_NB, MRA_NS) held to the generator's, so a package that
-reads MIDIRACK.GFX at a stride the art was not drawn at fails here and not
-as a sheared button on a VGA.
+gap left paper - and the numbers midirack.asm states about the part (MRA_W,
+MRA_H, MRA_NB, MRA_NS and the derivation's) held to the generator's, so a
+package that reads its faces at a stride the art was not drawn at fails here
+and not as a sheared button on a VGA. And when build/midirack.o88 is built,
+its part 0 - the faces, an OP_COMP | OP_LAZY row since they stopped being
+MIDIRACK.GFX beside it - must unpack to exactly what the generator draws, so
+a package packed with a stale part fails here too.
 
 Broken on purpose (a byte changed in mrtab.inc, or a song truncated) it FAILS.
 """
@@ -97,6 +100,24 @@ def main():
         if r.returncode != 0:
             print("t_midtab: os88midart.py %s refused:\n%s%s" %
                   (args[0], r.stdout, r.stderr))
+            ok = False
+    o88 = os.path.join(ROOT, "build", "midirack.o88")
+    if os.path.exists(o88):
+        import os88parts
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import os88midart
+        raw = open(o88, "rb").read()
+        try:
+            got = os88parts.part_bytes(raw, 0)
+        except (IndexError, ValueError) as e:
+            got = None
+            print("t_midtab: build/midirack.o88 has no faces part: %s" % e)
+        if got is not None and got != os88midart.pack():
+            print("t_midtab: build/midirack.o88's part 0 is not the faces "
+                  "tools/os88midart.py draws (%d bytes against %d)" %
+                  (len(got), len(os88midart.pack())))
+            got = None
+        if got is None:
             ok = False
     print("t_midtab: %s (%d songs, both readers)" %
           ("ok" if ok else "FAIL", len(files)))

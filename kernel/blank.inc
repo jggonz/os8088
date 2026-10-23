@@ -128,11 +128,10 @@ SSV_BUSY    equ 4               ; may your image be freed? Out: CF = 1 = no,
 ; reads as a decision, rather than as a zero somebody has to go and confirm.
 ; -----------------------------------------------------------------------------
 blk_t0      dw 0                ; [ticks] when the current idle period began
-blk_on      db 0                ; is the desktop off the glass right now? TRUE
-                                ; FOR BOTH ANSWERS - a gated signal and a
-                                ; running animation are the same thing to
-                                ; blk_wake, which is what keeps SPEC.md 64.2's
-                                ; whole input rule one test
+                                ; [blk_on] - is the desktop off the glass
+                                ; right now? - is in viddet.inc, the byte
+                                ; after [spl_live], so fpg_arm asks both in
+                                ; one word (kernel size pass 12)
 blk_act     db 0                ; mou_isr saw a packet; the UI task spends it
 
 ; -----------------------------------------------------------------------------
@@ -148,16 +147,23 @@ blk_act     db 0                ; mou_isr saw a packet; the UI task spends it
 ; [ss_mins] is the one that does work on both: zero disables the whole feature,
 ; animation and blanker alike, and everything else is the idle period.
 ; -----------------------------------------------------------------------------
+; **THE CARRY ARGUMENT ABOVE IS kern_big's** (kernel size pass 13): kern_small
+; reads and writes no SYSTEM.CFG at all (SPEC.md 51.5) and has no saver page,
+; so nothing there ever named these three bytes - its [ss_idle] keeps its
+; resting BLK_IDLE for ever - and they are kern_big's with the rest of ss_pub.
+%ifdef KERN_BIG
 ss_pub:
 ss_modes    db SS_M_ALL         ; which modes the picker may choose from
 ss_secs     db 30               ; seconds one mode runs before another is
                                 ; picked - the whole point of a screen saver
                                 ; being that nothing sits still
 ss_mins     db SS_MINS          ; minutes of idle before it starts; 0 = never
-%ifdef KERN_BIG
 ss_post     db 0                ; the settings window changed something and
                                 ; the UI task owes it work (SPEC.md 79.7)
-%endif
+%else
+            db 0                ; PARITY on kern_small (kernel size pass 13):
+%endif                          ; three bytes out here would leave wm_clip_rows
+                                ; and ui_task at an odd shift
 
 ss_idle     dw BLK_IDLE         ; [ss_mins] in TICKS, which is the unit
                                 ; blk_pass compares in. Derived, by
@@ -338,6 +344,11 @@ blk_pass:
                                 ; with no record behind it, and the window -
                                 ; ftpd's, mid-transfer, first among them -
                                 ; was deaf for the rest of its life
+%ifdef KERN_BIG
+    mov word [mou_whl], 0       ; ...and a WHEEL notch is dropped with it: one
+%endif                          ; a poll or a later byte added beside the wake
+                                ; would scroll the window a pass later, unseen
+                                ; (SPEC.md 64.2; ui_task's arm drops the rest)
     ; THE BUFFER BELOW IS BORROWED, AND HERE IS THE WHOLE OF WHY IT IS SAFE.
     ; fsx_evtmp is fsx_restore's drain scratch. Both drains run on the UI task
     ; and can never be live at once - fsx_run refuses any other task in code
@@ -536,10 +547,14 @@ section .cold
 ; which fails structurally rather than proportionally, in the one place in
 ; this file that can multiply at all. SS_MAXMIN is what a word of ticks holds.
 ;
-; Both builds: the period is a setting on kern_small too (see ss_pub).
+; kern_big's ALONE now: its three callers - SYSTEM.CFG's reader
+; (through wm_cbd), ss_set_x and the blanker's wake - are all kern_big's,
+; and kern_small, which reads no SYSTEM.CFG and has no saver, keeps [ss_idle]
+; at its resting BLK_IDLE for ever (kernel size pass 13, -23 there).
 ; -----------------------------------------------------------------------------
 SS_MAXMIN   equ 59              ; 59 x 1092 = 64,428, inside a word
 
+%ifdef KERN_BIG
 ss_mins2idle:
     push ax
     push dx
@@ -561,8 +576,13 @@ ss_mins2idle:
     pop dx
     pop ax
     ret
+%else
+    nop                         ; PARITY, never executed (kernel size pass 13):
+                                ; an odd 23 out of kern_small's .cold would put
+                                ; dsk_xfer and the FAT walk at an odd shift
+%endif
+%ifdef KERN_BIG                 ; ...and the saver's own entries, below
 
-%ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
 ; ss_call - one verb into the overlay (module internal)
 ; in:  AL = SSV_*, every other register that verb's own argument
@@ -649,6 +669,27 @@ ss_start_x:
     stc                         ; the refusal, set BEFORE the branch so that
     je .out                     ; the two ways out share one `ret`. `stc`
                                 ; writes no ZF, so the compare still reads
+    ; ...AND A WINDOW THAT ASKED FOR QUIET IS A REFUSAL TOO (SPEC.md 79.10):
+    ; blank instead. WF_QUIET, set through OSAPI_WM_QUIET by a program working
+    ; in the background - FTPD while it serves. A session draws on the UI task
+    ; a frame a pass, and that is the task such a program's disk half runs on;
+    ; a gated signal costs nothing. A free record is all zeros (wm_destroy),
+    ; so the walk needs no used-bit test, and it runs once a SESSION, not once
+    ; a frame. Written here and not as ss_quiet, its one caller, and walked by
+    ; the POINTER against its end rather than by a count, so the `jb` that
+    ; keeps going is also the CF = 0 that falls out (kernel size pass 12)
+    push bx
+    mov bx, wm_wins + W_FLAGS + 1
+.q:
+    test byte [bx], WF_QUIET >> 8
+    stc                         ; `stc` writes no ZF: the test still reads
+    jnz .qx
+    add bx, WIN_SIZE
+    cmp bx, wm_wins + W_FLAGS + 1 + MAX_WIN * WIN_SIZE
+    jb .q                       ; ...and falling out of it is CF = 0
+.qx:
+    pop bx
+    jc .out
     call ct_cw_gfx_lock
     mov al, SSV_START
     call ss_open
@@ -883,14 +924,9 @@ ssf_frame:      cmp byte [blk_sv], 0    ; blk_pass's gate, on this side of the
                                 ; and the only caller is here
 .none:
                 retf
-ssf_cfg:        mov al, SSV_CFG ; ss_cfg_x was a two-instruction wrapper with
-                call ss_open    ; exactly ONE caller - this - and it is named
-                retf            ; in no dw table, no OSAPI slot and nowhere in
-                                ; SPEC.md, unlike ss_set_x/ss_start_x/
-                                ; ss_stop_x. So it is this routine's own two
-                                ; instructions now. ctrl.inc:2399's `call
-                                ; COLD_SEG:ssf_cfg` is the external entry and
-                                ; does not move
+; (ssf_cfg - `mov al, SSV_CFG / call ss_open / retf` - went in kernel size
+; pass 13: its one caller, the Control Panel's saver button, makes the two
+; instructions itself through CTRL.DRV's CPXC hop)
 %endif
 
 section .text

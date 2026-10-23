@@ -87,14 +87,20 @@ def _bss(m, seg, name):
 
 def _canvas(m, seg):
     """(bad bytes, total, w, h, stride) - a blank canvas is all 0xFF past
-    the 128-byte DIB header pt_bmp_hdr stamps at the front."""
+    the DIB header pt_bmp_hdr stamps at the front ([pt_hdrsz] bytes).
+
+    The pixels are read from [pt_base] + [pt_hdrsz] and NOT off the row
+    table: since KERN-MEGA-PLAN 14.13 a canvas that fits one segment is laid
+    out flat, so `pt_rowoff[0]` is row 0's whole offset - the LAST row in the
+    file - where it used to be the 0..127 bytes into a granule that this read
+    happened to start near."""
     base, stride = _bss(m, seg, "pt_base"), _bss(m, seg, "pt_stride")
-    ch, r0 = _bss(m, seg, "pt_ch"), _bss(m, seg, "pt_rowoff")
-    n, d, off = stride * ch, b"", (base << 4) + r0
+    ch, hdr = _bss(m, seg, "pt_ch"), _bss(m, seg, "pt_hdrsz")
+    n, d, off = stride * ch, b"", (base << 4) + hdr
     while len(d) < n:
         d += m.read(off + len(d), min(32768, n - len(d)))
-    c = collections.Counter(d[128:])
-    return (len(d) - 128 - c.get(0xFF, 0), n, _bss(m, seg, "pt_cw"), ch,
+    c = collections.Counter(d)
+    return (len(d) - c.get(0xFF, 0), n, _bss(m, seg, "pt_cw"), ch,
             stride, c.most_common(2))
 
 

@@ -63,7 +63,7 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'isoTron', it_entry, 1, OS88_STACK_192
+    OS88_HEADER 'isoTron', it_entry, 1, OS88_STACK_192 | OS88_HIGH | OS88_HIGHMEM
                                 ; the worker's stack class (SPEC.md 8.7):
                                 ; tools/stkdepth.py prices it_worker's
                                 ; deepest static chain at 40 bytes (a
@@ -165,6 +165,17 @@ IT_TA23     equ IT_TA01 + 512   ; planes 0-1 and 2-3 of a canvas byte as the
 IT_TB01     equ IT_TA23 + 512   ; left (TA) or the right (TB) half of a
 IT_TB23     equ IT_TB01 + 512   ; device byte
 IT_CLAIMEND equ IT_TB23 + 512
+; it_praw4p's per-row state, in the gap after the strip: the row loop runs
+; with DS = this claim, so these are plain stores. They were the package's
+; own words through CS: - a write through a code segment, which on kern_mega
+; is one #GP fixup per strip row (KERN-MEGA-PLAN 10.3, the trap census)
+IT_PDST     equ IT_STRIP + IT_STRIPSZ   ; word: the strip row's plane 0
+IT_PST1     equ IT_PDST + 2     ; word: DI's step past one strip row...
+IT_PST2     equ IT_PDST + 4     ; word: ...and past two
+IT_PLAST    equ IT_PDST + 6     ; byte: the logical row last converted
+%if IT_PLAST >= IT_MLUT
+  %error "it_praw4p's row state runs into the mono tables"
+%endif
 IT_CLAIMKB  equ (IT_CLAIMEND + 1023) / 1024
 IT_CANVKB   equ (64000 + 1023) / 1024   ; the canvas claim: 63 KB
 %if IT_CLAIMEND > 65535
@@ -1072,11 +1083,9 @@ it_s_nomem3: db ' KB.', 0
     WORDV it_pn                     ; source's first byte, the strip row
     WORDV it_pps
     WORDV it_psrc
-    WORDV it_pdst
-    WORDV it_pend                   ; ...the strip's end row
-    WORDV it_pst1                   ; ...DI's step past one strip row, two
-    WORDV it_pst2
-    BYTEV it_plast                  ; ...and the logical row it last converted
+    WORDV it_pend                   ; ...the strip's end row (and IT_PDST,
+                                    ; IT_PST1/2 and IT_PLAST, in the work
+                                    ; claim: written inside the row loop)
     BUFV  it_rmap, IT_HCMAX         ; device row -> logical row
     BUFV  it_rfirst, 2 * (IT_CROWS + 1) ; logical row -> first device row
     BUFV  it_xcol, 2 * IT_CCOLS     ; canvas column -> its first byte

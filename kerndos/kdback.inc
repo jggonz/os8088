@@ -266,13 +266,18 @@ dos_k_path:
 ; the whole of it behind.
 dos_k_copy:
 dos_k_move:
+%ifndef KD_MEGA
 dos_k_xcopy:
 ; ...and the store above 1MB (SPEC.md 41), which needs a driver, a CPU tier
 ; and a probe, none of which a 4.77MHz 8088 has and all of which are
-; resident bytes against the 39KB (KERN-DOS-PLAN §1).
+; resident bytes against the 39KB (KERN-DOS-PLAN §1). ON kern_mega THE FOUR
+; ARE REAL - the arena the kernel hands over, kerndos/kdxms.inc (SPEC.md
+; 96.15.4) - and the labels are that file's. They emit no byte here, so the
+; refusing build is byte-identical either way.
 dos_k_xcaps:
 dos_k_xalloc:
 dos_k_xfree:
+%endif
 kd_k_refuse:
     stc
     ret

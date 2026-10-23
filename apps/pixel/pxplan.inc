@@ -13,8 +13,9 @@
 ; THE INCLUDER IS LINKED against the package (build/pxlink.inc): [px_pal],
 ; [px_plan], [px_cur + ...], [px_abort], [px_onworker] and [px_win] are
 ; the package's own, through DS as the vector is entered. This file's
-; scratch and tables are the part's, through CS (apps/pixel/pxpart.inc's
-; rule 1). tools/pixelsim.py's plan_fast is the search, check for check.
+; tables are the part's, through CS (apps/pixel/pxpart.inc's rule 1), and
+; its scratch the part's too, written through ES = [cs:PXP_SELF] (rule 6).
+; tools/pixelsim.py's plan_fast is the search, check for check.
 ; =============================================================================
 
 ; pl_plans - PXV_PLANS's body: DS = the package. [px_plan] := the 4bpp plans
@@ -50,8 +51,7 @@ pl_plans:
     jne .pal
 .ship:
     push ds                         ; the shipped plans: this part's, CS
-    push cs
-    pop ds
+    mov ds, [cs:PXP_SELF]
     mov cx, 768 / 2
     rep movsw
     pop ds
@@ -152,6 +152,10 @@ pl_plan1:
     push si
     push di
     push bp
+    push es
+    mov es, [cs:PXP_SELF]           ; ES = this part's own data: the PS_*
+                                    ; scratch below is written through it,
+                                    ; never through CS (pxpart.inc rule 6)
     ; --- twelve weighted squares: w (T - 85 l)^2 ------------------------------
     xor bx, bx                      ; BX = the channel
     mov di, PS_WSQ
@@ -182,8 +186,8 @@ pl_plan1:
 .w3:
     mov dx, bp
 .w1:
-    mov [cs:di], ax
-    mov [cs:di + 2], dx
+    mov [es:di], ax
+    mov [es:di + 2], dx
     add di, 4
     sub cx, 85
     mov ax, di                      ; four a channel: (DI - PS_WSQ) & 15
@@ -194,31 +198,31 @@ pl_plan1:
     cmp bx, 3
     jb .sq
     ; --- c1: the nearest of the sixteen, three lookups each ------------------
-    mov word [cs:PS_BE], 0xFFFF
-    mov word [cs:PS_BE + 2], 0xFFFF
+    mov word [es:PS_BE], 0xFFFF
+    mov word [es:PS_BE + 2], 0xFFFF
     push si
     xor si, si                      ; SI = the candidate x 3
     xor cx, cx                      ; CL = the candidate
     xor bx, bx                      ; (BH stays 0)
 .c1:
     mov bl, [cs:pl_egal4 + si]         ; its levels, as dword offsets
-    mov ax, [cs:PS_WSQ + bx]
-    mov dx, [cs:PS_WSQ + bx + 2]
+    mov ax, [es:PS_WSQ + bx]
+    mov dx, [es:PS_WSQ + bx + 2]
     mov bl, [cs:pl_egal4 + si + 1]
-    add ax, [cs:PS_WSQ + 16 + bx]
-    adc dx, [cs:PS_WSQ + 16 + bx + 2]
+    add ax, [es:PS_WSQ + 16 + bx]
+    adc dx, [es:PS_WSQ + 16 + bx + 2]
     mov bl, [cs:pl_egal4 + si + 2]
-    add ax, [cs:PS_WSQ + 32 + bx]
-    adc dx, [cs:PS_WSQ + 32 + bx + 2]
-    cmp dx, [cs:PS_BE + 2]             ; strictly less: the lower index wins a tie
+    add ax, [es:PS_WSQ + 32 + bx]
+    adc dx, [es:PS_WSQ + 32 + bx + 2]
+    cmp dx, [es:PS_BE + 2]             ; strictly less: the lower index wins a tie
     ja .c1n
     jb .c1y
-    cmp ax, [cs:PS_BE]
+    cmp ax, [es:PS_BE]
     jae .c1n
 .c1y:
-    mov [cs:PS_BE], ax
-    mov [cs:PS_BE + 2], dx
-    mov [cs:PS_C1], cl
+    mov [es:PS_BE], ax
+    mov [es:PS_BE + 2], dx
+    mov [es:PS_C1], cl
 .c1n:
     add si, 3
     inc cl
@@ -226,30 +230,30 @@ pl_plan1:
     jb .c1
     pop si
     ; --- E0 = 256 D(c1), the pure colour; dd, 64 dd and w dd k ----------------
-    mov ax, [cs:PS_BE]
-    mov dx, [cs:PS_BE + 2]
+    mov ax, [es:PS_BE]
+    mov dx, [es:PS_BE + 2]
     mov dh, dl                      ; x 256
     mov dl, ah
     mov ah, al
     xor al, al
-    mov [cs:PS_BE], ax
-    mov [cs:PS_BE + 2], dx
-    mov al, [cs:PS_C1]
-    mov [cs:PS_BC], al
-    mov byte [cs:PS_BT], 0
-    mov byte [cs:PS_CAND], 0
+    mov [es:PS_BE], ax
+    mov [es:PS_BE + 2], dx
+    mov al, [es:PS_C1]
+    mov [es:PS_BC], al
+    mov byte [es:PS_BT], 0
+    mov byte [es:PS_CAND], 0
     xor ah, ah
     mov bx, ax
     shl bx, 1
     add bx, ax                      ; BX = c1 x 3: its levels, to PS_L1
     mov ax, [cs:pl_egalev + bx]
-    mov [cs:PS_L1], ax
+    mov [es:PS_L1], ax
     mov al, [cs:pl_egalev + bx + 2]
-    mov [cs:PS_L1 + 2], al
+    mov [es:PS_L1 + 2], al
     xor bx, bx                      ; BX = the channel
     mov di, PS_WKD
 .dd:
-    mov al, [cs:PS_L1 + bx]
+    mov al, [es:PS_L1 + bx]
     mov ah, 85
     mul ah
     mov cx, ax
@@ -263,7 +267,7 @@ pl_plan1:
     mov cl, 6
     shl ax, cl
     pop cx
-    mov [cs:PS_D64 + bx], ax           ; 64 dd
+    mov [es:PS_D64 + bx], ax           ; 64 dd
     pop bx
     mov ax, cx                      ; w dd
     cmp bl, 2
@@ -274,39 +278,39 @@ pl_plan1:
     jne .wd
     shl ax, 1                       ; 6 dd
 .wd:
-    mov word [cs:di + 6], 0            ; k = 0
-    mov [cs:di + 8], ax                ; 1
+    mov word [es:di + 6], 0            ; k = 0
+    mov [es:di + 8], ax                ; 1
     mov cx, ax
     add cx, ax
-    mov [cs:di + 10], cx               ; 2
+    mov [es:di + 10], cx               ; 2
     add cx, ax
-    mov [cs:di + 12], cx               ; 3
+    mov [es:di + 12], cx               ; 3
     neg ax
-    mov [cs:di + 4], ax                ; -1
+    mov [es:di + 4], ax                ; -1
     mov cx, ax
     add cx, ax
-    mov [cs:di + 2], cx                ; -2
+    mov [es:di + 2], cx                ; -2
     add cx, ax
-    mov [cs:di], cx                    ; -3
+    mov [es:di], cx                    ; -3
     add di, 14
     inc bx
     cmp bx, 3
     jb .dd
     ; --- the pairs, by K ---------------------------------------------------------
-    mov byte [cs:PS_J], 0
+    mov byte [es:PS_J], 0
 .pair:
-    mov al, [cs:PS_C1]
+    mov al, [es:PS_C1]
     mov ah, 15
     mul ah
-    add al, [cs:PS_J]
+    add al, [es:PS_J]
     adc ah, 0
     mov bx, ax
     mov si, ax                      ; the pair's k indices: 3 a pair
     shl si, 1
     add si, ax
-    mov [cs:PS_PI], si
+    mov [es:PS_PI], si
     mov al, [cs:px_pordk + bx]
-    mov [cs:PS_K], al
+    mov [es:PS_K], al
     mov dl, [cs:px_pord + bx]          ; DL = c2
     mov bl, al                      ; the penalty: past the best, and every
     xor bh, bh                      ; later K is as far
@@ -314,24 +318,24 @@ pl_plan1:
     shl bx, 1
     mov ax, [cs:px_pk578 + bx]
     mov cx, [cs:px_pk578 + bx + 2]
-    cmp cx, [cs:PS_BE + 2]
+    cmp cx, [es:PS_BE + 2]
     jb .p1
     ja .p0
-    cmp ax, [cs:PS_BE]
+    cmp ax, [es:PS_BE]
     jbe .p1
 .p0:
     jmp .done
 .p1:
-    mov [cs:PS_E], ax
-    mov [cs:PS_E + 2], cx
-    mov si, [cs:PS_PI]                 ; S = sum w dd k, through the pair's k
+    mov [es:PS_E], ax
+    mov [es:PS_E + 2], cx
+    mov si, [es:PS_PI]                 ; S = sum w dd k, through the pair's k
     mov bl, [cs:px_pki + si]           ; indices (px_pki: (k + 3) x 2 each)
     xor bh, bh
-    mov cx, [cs:PS_WKD + bx]
+    mov cx, [es:PS_WKD + bx]
     mov bl, [cs:px_pki + si + 1]
-    add cx, [cs:PS_WKD + 14 + bx]
+    add cx, [es:PS_WKD + 14 + bx]
     mov bl, [cs:px_pki + si + 2]
-    add cx, [cs:PS_WKD + 28 + bx]
+    add cx, [es:PS_WKD + 28 + bx]
     or cx, cx
     jg .s
     jmp .next                       ; S <= 0: away from the target
@@ -343,7 +347,7 @@ pl_plan1:
     shl ax, 1
     rcl dx, 1
     loop .s64
-    mov bl, [cs:PS_K]
+    mov bl, [es:PS_K]
     xor bh, bh
     shl bx, 1
     mov cx, [cs:px_pk85 + bx]
@@ -363,28 +367,28 @@ pl_plan1:
     push ax
     mov ah, 85                      ; X = 85 t, and k X for k = -3..3
     mul ah
-    mov word [cs:PS_KX + 6], 0
-    mov [cs:PS_KX + 8], ax
+    mov word [es:PS_KX + 6], 0
+    mov [es:PS_KX + 8], ax
     mov cx, ax
     add cx, ax
-    mov [cs:PS_KX + 10], cx
+    mov [es:PS_KX + 10], cx
     add cx, ax
-    mov [cs:PS_KX + 12], cx
+    mov [es:PS_KX + 12], cx
     neg ax
-    mov [cs:PS_KX + 4], ax
+    mov [es:PS_KX + 4], ax
     mov cx, ax
     add cx, ax
-    mov [cs:PS_KX + 2], cx
+    mov [es:PS_KX + 2], cx
     add cx, ax
-    mov [cs:PS_KX], cx
+    mov [es:PS_KX], cx
     pop cx                          ; CL = t
     ; --- E = the penalty + w r'^2, G, R, B, dropped once past the best ------
 %macro PXP_TERM 2                   ; channel, weight
-    mov si, [cs:PS_PI]
+    mov si, [es:PS_PI]
     mov bl, [cs:px_pki + si + %1]
     xor bh, bh
-    mov ax, [cs:PS_D64 + 2 * %1]
-    sub ax, [cs:PS_KX + bx]            ; r = 64 dd - 85 k t
+    mov ax, [es:PS_D64 + 2 * %1]
+    sub ax, [es:PS_KX + bx]            ; r = 64 dd - 85 k t
     sar ax, 1
     sar ax, 1                       ; r' = r >> 2
     imul ax                         ; DX:AX = r'^2
@@ -405,14 +409,14 @@ pl_plan1:
     shl ax, 1
     rcl dx, 1
   %endif
-    add ax, [cs:PS_E]
-    adc dx, [cs:PS_E + 2]
-    mov [cs:PS_E], ax
-    mov [cs:PS_E + 2], dx
-    cmp dx, [cs:PS_BE + 2]
+    add ax, [es:PS_E]
+    adc dx, [es:PS_E + 2]
+    mov [es:PS_E], ax
+    mov [es:PS_E + 2], dx
+    cmp dx, [es:PS_BE + 2]
     jb %%in
     ja %%out
-    cmp ax, [cs:PS_BE]
+    cmp ax, [es:PS_BE]
     jbe %%in
 %%out:
     jmp .next
@@ -422,37 +426,38 @@ pl_plan1:
     PXP_TERM 0, 3
     PXP_TERM 2, 1
     ; DX:AX = E <= the best: better, or a tie the lower c2 wins
-    mov bx, [cs:PS_J]                  ; BL = the pair's place in the order
+    mov bx, [es:PS_J]                  ; BL = the pair's place in the order
     xor bh, bh
-    mov al, [cs:PS_C1]
+    mov al, [es:PS_C1]
     mov ah, 15
     mul ah
     add bx, ax
     mov bl, [cs:px_pord + bx]          ; BL = c2
-    mov ax, [cs:PS_E]
-    cmp dx, [cs:PS_BE + 2]
+    mov ax, [es:PS_E]
+    cmp dx, [es:PS_BE + 2]
     jb .take
-    cmp ax, [cs:PS_BE]
+    cmp ax, [es:PS_BE]
     jb .take
-    cmp byte [cs:PS_CAND], 0           ; equal: only a pair ties a pair
+    cmp byte [es:PS_CAND], 0           ; equal: only a pair ties a pair
     je .next
-    cmp bl, [cs:PS_BC]
+    cmp bl, [es:PS_BC]
     jae .next
 .take:
-    mov [cs:PS_BE], ax
-    mov [cs:PS_BE + 2], dx
-    mov [cs:PS_BC], bl
-    mov [cs:PS_BT], cl
-    mov byte [cs:PS_CAND], 1
+    mov [es:PS_BE], ax
+    mov [es:PS_BE + 2], dx
+    mov [es:PS_BC], bl
+    mov [es:PS_BT], cl
+    mov byte [es:PS_CAND], 1
 .next:
-    inc byte [cs:PS_J]
-    cmp byte [cs:PS_J], 15
+    inc byte [es:PS_J]
+    cmp byte [es:PS_J], 15
     jae .done
     jmp .pair
 .done:
-    mov al, [cs:PS_C1]
-    mov ah, [cs:PS_BC]
-    mov dl, [cs:PS_BT]
+    mov al, [es:PS_C1]
+    mov ah, [es:PS_BC]
+    mov dl, [es:PS_BT]
+    pop es
     pop bp
     pop di
     pop si
@@ -646,6 +651,8 @@ pl_htail:
     shr dx, 1
     rcr ax, 1
     loop .p
+    add ax, 7                       ; ...up to a multiple of 8: a segment on
+    and al, 0xF8                    ; kern_mega's grid (KERN-MEGA-PLAN 14.40)
     add ax, [px_cur + PXR_MSEG]
     mov es, ax
     pop dx
@@ -792,12 +799,13 @@ pl_hcount:
     mov ax, dx                      ; the row: (y w) of the master, re-read
     mul word [px_cur + PXR_MW]      ; each row (the master moves)
     mov di, ax
-    and di, 15
+    and di, 127                    ; normalised to 8 paragraphs (PX_WGRID)
     mov cl, 4
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
+    and al, 0xF8                    ; a segment kern_mega can load
     add ax, [px_cur + PXR_MSEG]
     mov si, ax                      ; SI:DI = the row
     call pl_htail                   ; ES = the tail

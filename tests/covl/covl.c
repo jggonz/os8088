@@ -4,7 +4,7 @@
  * THE CAPABILITY GATE FOR C OVERLAYS (SPEC.md 73.14). tests/chello proved a
  * compiled package can hold a window; this one proves a compiled package can
  * hold a window while half of its code is in a SECOND SEGMENT, read off the
- * floppy on demand.
+ * floppy on demand - out of COVL.O88 itself, since SPEC.md 73.14.2.
  *
  * It is under tests/ because it proves a capability rather than being one
  * (CLAUDE.md: everything in apps/ ships, nothing in tests/ does).
@@ -48,10 +48,12 @@
  *     make test TESTAPPS=build/covl.img
  *     ...double-click Disk B, then COVL.O88, then press SPACE.
  *
- * The disk carries COVL.O88 and COVL.OVL. Delete the second one from the
- * image and press SPACE: the refusal path is the other half of the design -
- * a toast naming the missing file, `Loaded: no`, and a call that answers 0
- * without happening (SPEC.md 47).
+ * The disk carries COVL.O88 alone: the module is its LAZY part (SPEC.md
+ * 73.14.2), fetched by the first SPACE from the folder the package was
+ * launched from. The refusal path is the other half of the design - take the
+ * floppy out before the first SPACE, or launch it where the heap cannot hold
+ * the module, and it is the parts standard's toast, `Loaded: no`, and a call
+ * that answers 0 without happening (SPEC.md 47).
  * ==========================================================================*/
 
 #include "os88.h"

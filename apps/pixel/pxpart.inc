@@ -30,6 +30,27 @@
 ;      that runs on PiXEL's worker (later waves) could reach neither anyway.
 ;   4. IT RETURNS CF. CF = 0 success with the verb's own outputs; CF = 1 and
 ;      AX = a PXE_* number.
+;   5. A SEGMENT REGISTER GOES INTO ITS OWN WORDS THROUGH AX. `mov [cs:x], ds`
+;      is the one store rule 1 makes wrong on kern_mega: CS is read-only
+;      there, the kernel completes a CS: store by running it with DS swapped
+;      to the part's own data segment (mega_gpw), and `, ds` then stores THAT
+;      segment - a service table naming the part, a ring position in its own
+;      image. So `push ax / mov ax, ds / mov [cs:x], ax / pop ax`, which is
+;      the same value on every kernel (KERN-MEGA-PLAN 10.3, the census).
+;   6. ITS OWN VARIABLES THROUGH [cs:PXP_SELF], NEVER THROUGH CS. Rule 1 is
+;      for READING: on kern_mega CS is a code selector, which no store may
+;      go through, so `mov [cs:x], ax` and a store after `push cs / pop ds`
+;      are each a #GP the kernel completes for a few hundred cycles
+;      (KERN-MEGA-PLAN 14.40: 55,000 of them opening one PNG). PXP_SELF is
+;      the part's own DATA segment, stamped by the resident before every
+;      call as PXP_PKG is: `mov ds, [cs:PXP_SELF]` replaces `push cs / pop
+;      ds`, and a store into the part's variables goes through whichever
+;      segment register holds it (`push es / mov es, [cs:PXP_SELF] / ...
+;      [es:x] ... / pop es` where DS is taken). On every real-mode kernel
+;      it is CS's own value, so the same binary is the same program there.
+;      PXP_PKGD is the same for the PACKAGE: its data segment, where
+;      PXP_PKG is its code - a far call goes through PXP_PKG, a `mov ds`
+;      takes PXP_PKGD.
 ;
 ; The resident's half - fetch, validate, stamp, far call, drop - is px_pcall
 ; and px_pdrop in apps/pixel/pixel.asm, and tests/pxparts.py is its gate.
@@ -50,14 +71,20 @@ PXP_PKG     equ 4                   ; word: THE PACKAGE'S SEGMENT, written by
                                     ; the resident immediately before every
                                     ; call (rule 2 above)
 PXP_VEC     equ 6                   ; PXP_NVEC words: near offsets in the part
-PXP_HDRSZ   equ 6
+PXP_SELF    equ PXP_VEC + 2 * 5     ; word: THE PART'S OWN DATA SEGMENT, and
+PXP_PKGD    equ PXP_SELF + 2        ; word: THE PACKAGE'S - both written by
+                                    ; the resident before every call with
+                                    ; PXP_PKG (rule 6 above). After the
+                                    ; vectors, so no offset before them moved
+PXP_HDRSZ   equ PXP_PKGD + 2
 
 PXP_SIGVAL  equ 'PX'                ; as `dw 'PX'`: 'P' at +0, 'X' at +1
-PXP_ABIVER  equ 4                   ; 2 since wave 3 added PXV_HEAD, 3
+PXP_ABIVER  equ 5                   ; 2 since wave 3 added PXV_HEAD, 3
                                     ; since wave 4 added the flags, the
                                     ; scratch a scale, heads past the first
                                     ; and K_COLS (SPEC.md 106.19), 4 PLANS
-                                    ; (106.20)
+                                    ; (106.20), 5 PXP_SELF and PXP_PKGD
+                                    ; (KERN-MEGA-PLAN 14.40)
 
 ; --- the vectors, in this order in every part ---------------------------------
 PXV_INIT    equ 0                   ; out AX = PXP_PROBE. Nothing else: it is
@@ -76,6 +103,69 @@ PXV_PLANS   equ 4                   ; a decoder's PLANS: [px_plan] for the
                                     ; task; a part that is not one answers
                                     ; PXE_NOTSUP
 PXV_N       equ 5
+
+; THE THREE BELOW ARE kern_mega's SPELLING ALONE (KERN-MEGA-PLAN 14.40,
+; 14.66). Under protected mode a part's CS is a read-only code alias, so a
+; store into its own words goes through ES = PXP_SELF, its data segment;
+; that is the PKG_MEGA arm, `make mega`'s PIXEL.O88. The SHIPPED build is
+; assembled without PKG_MEGA and each site is the store through CS it was -
+; 290 PXSW sites and 70 runs across the parts, ~2.5KB of the parts' image -
+; which on kern_mega is a fault the kernel completes (mega_gpw): right, and
+; slow, which is what the arm is for.
+;
+; PXSW insn - ONE STORE into the part's own words, where no segment register
+; holds them (rule 6): `PXSW mov [es:pz_y], ax`. ES is borrowed for the one
+; instruction and given back, so the flags the store sets survive and nothing
+; else changes - 2 bytes of stack and ~45 cycles on an 8088, which is why the
+; hot paths load a register once instead and this is for the cold ones (an
+; operation's start, a header, a row's bookkeeping). The instruction may not
+; name ES, SP or the stack (`pop` is written out by hand)
+%macro PXSW 1+
+%ifdef PKG_MEGA
+    push es
+    mov es, [cs:PXP_SELF]
+    %1
+    pop es
+%else
+  %define es cs                     ; THE SHIPPED BUILD (KERN-MEGA-PLAN 14.66):
+    %1                              ; the store through CS it was before
+  %undef es                         ; 14.40, `[es:` spelled `[cs:` - 7 bytes
+%endif                              ; and ~45 cycles less a site
+%endmacro
+
+; PXSWON / PXSWOFF - PXSW's bracket around a RUN of stores into the part's
+; own words, one ES load for all of them: every instruction between names
+; its destination [es:...] and may not name ES, SP or the stack
+%macro PXSWON 0
+%ifdef PKG_MEGA
+    push es
+    mov es, [cs:PXP_SELF]
+%else
+  %define es cs                     ; (the shipped build: every [es:...] up to
+%endif                              ; PXSWOFF a store through CS, as PXSW's)
+%endmacro
+%macro PXSWOFF 0
+%ifdef PKG_MEGA
+    pop es
+%else
+  %undef es
+%endif
+%endmacro
+
+; PXSSP var - [var] := SP as it is here, in the part's own words (PXSW's,
+; for the one store PXSW cannot make: its own push moves SP). Clobbers the
+; flags
+%macro PXSSP 1
+%ifdef PKG_MEGA
+    push es
+    mov es, [cs:PXP_SELF]
+    mov [es:%1], sp
+    add word [es:%1], 2             ; (the SP before the push above)
+    pop es
+%else
+    mov [cs:%1], sp                 ; (the shipped build's, as PXSW's)
+%endif
+%endmacro
 
 PXP_PROBE   equ 0x5850 ^ 0x1D06     ; PXV_INIT's answer, which no register a
                                     ; caller set up could already hold
@@ -103,6 +193,11 @@ PXE_BADPART equ 4                   ; THE RESIDENT'S: it was fetched and is
     dw %3                       ; +10 PXV_INFO
     dw %4                       ; +12 PXV_HEAD
     dw %5                       ; +14 PXV_PLANS
+    dw 0                        ; +16 PXP_SELF, the resident's to write
+    dw 0                        ; +18 PXP_PKGD, likewise
+%if PXV_N != 5
+  %error "PXP_SELF follows the vectors: move it with PXV_N"
+%endif
 %endmacro
 
 ; =============================================================================

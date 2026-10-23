@@ -51,12 +51,20 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'Pixelstein 3D', pxl_entry, OS88_F_ICON | OS88_F_PARTS, OS88_STACK_DEFAULT
+    OS88_HEADER 'Pixelstein 3D', pxl_entry, OS88_F_ICON | OS88_F_PARTS, OS88_STACK_DEFAULT | OS88_HIGHMEM
+                                    ; OS88_HIGHMEM (KERN-MEGA-PLAN 14.48): the
+                                    ; claims this makes for the program - the
+                                    ; sprite set, and the two lazy parts that
+                                    ; op_hilift moves after their fetch - may
+                                    ; be above 1MB; the program does no sum
+                                    ; on any of them
 
     OS88_ICON16                     ; the SAME icon the program carries (the
 %include "pxicon.inc"               ; Disk window draws this one before the
     OS88_ICON16_END                 ; launch, the dock the program's after)
 
+%define OP_WANT_HIFETCH             ; the lazy parts out of conventional
+                                    ; memory once fetched (os88parts.inc)
 %include "os88parts.inc"
 %include "pxlev.inc"                ; for PXL_NLEV alone: the level count is
                                     ; the generator's and read here rather
@@ -115,7 +123,12 @@ PX_GENKB     equ 50                 ; part 1: tools/pxsgen.py --sizes reads
 PXH_MAGIC  equ 0                    ; word: 'PX' - the loader ran
 PXH_LEV    equ 2                    ; word: the level stream's segment (its
                                     ; own claim since wave 4, not the carve)
-PXH_GEN    equ 4                    ; word: the scratch part's segment, 0 = refused
+PXH_GEN    equ 4                    ; word: the scratch part's PARAGRAPHS past
+                                    ; the program, 0 = refused - an OFFSET and
+                                    ; not a segment, so the program can name
+                                    ; it ABOVE 1MB as well (OSAPI_MEM_SUBSEG,
+                                    ; KERN-MEGA-PLAN 14.48); it turns both
+                                    ; into segments at its entry
 PXH_COLD   equ 6                    ; word: the cold part's segment (97.9), 0 = none
 PXH_NLEV   equ 8                    ; word: levels in the stream
 PXH_LEVLEN equ 10                   ; word: the level stream's length in bytes
@@ -123,7 +136,8 @@ PXH_LEVLEN equ 10                   ; word: the level stream's length in bytes
                                     ; program holds the stream's own lengths
                                     ; to (97.7)
 PXH_ART    equ 12                   ; word: the expanded art masters' claim, 0 = none
-PXH_BT     equ 14                   ; word: the byte-texture part's segment, 0 = refused
+PXH_BT     equ 14                   ; word: the byte-texture part's OFFSET
+                                    ; likewise, 0 = refused
 PXH_GENLEN equ 16                   ; word: the scratch part's length in bytes
                                     ; (PX_GENKB * 1024): the bound the
                                     ; program generates under (97.3)
@@ -154,6 +168,19 @@ pxl_art:
     jc .out
     mov al, PX_PART_ART
     call op_seg                     ; AX = the masters, at the claim's base
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; pxl_off - part AL's place as PARAGRAPHS past the program (BP), or 0 when the
+;           part was refused: op_seg's answer less the program's, which the
+;           keep leaves where it is (KERN-MEGA-PLAN 14.48)
+; -----------------------------------------------------------------------------
+pxl_off:
+    call op_seg
+    or ax, ax
+    jz .out
+    sub ax, bp
 .out:
     ret
 
@@ -246,6 +273,7 @@ pxl_entry:
     or ax, ax
     jz .no
     mov es, ax                      ; ES = where the program is
+    mov bp, ax                      ; ...and BP, for the two offsets below
     mov di, [es:LD_H_IMG]           ; its bss begins here, which the part's
                                     ; own header says
     mov word [es:di+PXH_MAGIC], 'PX'
@@ -256,11 +284,11 @@ pxl_entry:
     mov ax, [si+OP_R_LEN]           ; its length is what bounds every length
     mov [es:di+PXH_LEVLEN], ax      ; READ OUT OF the stream (97.7)
     mov al, PX_PART_GEN             ; 0 when the optional row was refused:
-    call op_seg                     ; op_seg answers 0 for a part that is not
+    call pxl_off                    ; op_seg answers 0 for a part that is not
     mov [es:di+PXH_GEN], ax         ; there, and the program falls back to
                                     ; its own copy of the bodies (97.2.1)
     mov al, PX_PART_BT
-    call op_seg
+    call pxl_off
     mov [es:di+PXH_BT], ax          ; ...and to the Flat rung without this
     mov ax, [pxl_sseg]
     mov [es:di+PXH_SPR], ax         ; ...and to boxes for sprites without this

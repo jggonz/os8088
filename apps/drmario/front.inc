@@ -1,6 +1,5 @@
 ; Disk-resident game artwork. The idle fullscreen font cache holds up to 16
 ; decoded rows; mode entry rebuilds it. dm_queue holds clipped fallback pixels.
-%include "dm-front.inc"
 dm_frontgeom:
     mov bx, [dm_win]
     call OSAPI_WM_DISPLAY
@@ -96,79 +95,45 @@ dm_fronttick:
     call dm_frontlabels
 .out: ret
 
+; The kind IS the part: 1 + its row in the table, which puts the VGA screen
+; LAST because it pads most to its sector and the last part is not padded.
 dm_frontload:
-    xor bx, bx
+    mov bx, 3                   ; 3 = DRMARCO.VGA, colour
     cmp byte [dm_frontcolor], 0
     jne .kind
-    inc bx
+    dec bx                      ; 2 = DRMARCO.CGA, one bit at 132 rows
     cmp byte [dm_frontscale], 2
-    je .kind
-    inc bx
+    jne .kind
+    dec bx                      ; 1 = DRMARCO.HRC, one bit at 264
 .kind:
-    inc bx
-    cmp bl, [dm_artkind]
+    mov al, [dm_artkind]
+    cmp bl, al
     je .out
     mov [dm_artkind], bl
-    dec bx
-    shl bx, 1
-    shl bx, 1
-    mov si, [dm_artfiles+bx]
-    mov cx, [dm_artfiles+bx+2]
-    mov [dm_artsize], cx
-    mov dx, [dm_artseg]
-    or dx, dx
-    jz .claim
-    call OSAPI_MEM_FREE
-.claim:
-    mov word [dm_artseg], 0
-    mov ax, cx
-    add ax, 1023
-    push cx
-    mov cl, 10
-    shr ax, cl
-    pop cx
-    call OSAPI_MEM_CLAIM
+    dec ax                      ; the screen for the class we left - a no-op
+    call op_drop                ; when there is none: kind 0 is row 255, and
+    mov word [dm_artseg], 0     ; a failed fetch left its row unfetched
+    lea ax, [bx-1]
+    push ax
+    call op_fetch               ; claims, reads and expands; a refusal has
+    pop ax                      ; already been toasted
     jc .out
+    call op_row
+    mov [dm_artrow], si
+    mov cx, [si+OP_R_LEN]       ; the UNPACKED length, which the row
+    mov [dm_artsize], cx        ; decoder bounds every packet by
+    call op_seg
+    xchg ax, dx
     mov [dm_artseg], dx
-    mov es, dx
-    xor bx, bx
-    xor dx, dx
-    call OSAPI_FILE_READ
-    jc .bad
-    or dx, dx
-    jnz .bad
-    cmp ax, [dm_artsize]
-    jne .bad
-    cmp word [es:0], 'DM'
-    jne .bad
-    cmp word [es:2], 'F1'
-    jne .bad
-    cmp word [es:4], 432
-    jne .bad
-    mov ax, [dm_frontheight]
-    cmp byte [dm_frontcolor], 0
-    je .height
-    mov ax, 264
-.height:
-    cmp ax, [es:6]
-    jne .bad
-    mov ax, 1
-    cmp byte [dm_frontcolor], 0
-    je .depth
-    mov al, 4
-.depth:
-    cmp ax, [es:8]
-    jne .bad
-    mov dx, [dm_artseg]
     mov ax, dm_artreloc
     call OSAPI_MEM_MOVABLE
 .out: ret
-.bad:
-    mov dx, [dm_artseg]
-    call OSAPI_MEM_FREE
-    mov word [dm_artseg], 0
-    ret
+; The row's zkb is the claim op_drop frees, so it moves with dm_artseg.
 dm_artreloc:
+    push si
+    mov si, [dm_artrow]
+    mov [si+OP_R_ZKB], dx
+    pop si
     mov [dm_artseg], dx
     ret
 
@@ -184,8 +149,8 @@ dm_frontband:
     mov bx, [dm_win]
     call OSAPI_WM_CLIP_SET   ; real ownership clip, including during W_PAINT
     jc .ret
-    ; Native planar copying refuses a region clip. Only disarm it after
-    ; proving this entire band belongs to us; covered bands keep clipping.
+    ; A band wholly ours disarms the clip, so BLITP copies it in one piece;
+    ; a covered band keeps it, and BLITP walks it (DI bit 14 below).
     mov dx, ax
     add dx, [dm_fronty]
     dec dx
@@ -250,10 +215,10 @@ dm_frontband:
     mov bp, [dm_frontstride]
     cmp byte [dm_frontcolor], 0
     je .mono
-    mov di, 54
+    mov di, 54 | 0x4000         ; the plane step, walking a clip (5.4.3.6)
     call OSAPI_GFX_BLITP
     jnc .row
-    ; Region clipping/display seams: convert and draw one row at a time.
+    ; Refused (a display seam, kern_small): convert and draw a row at a time.
     mov word [dm_frontptr], dm_fontvga
 .fallback:
     mov si, [dm_frontptr]
@@ -316,7 +281,7 @@ dm_frontpacked:
     RESTORE
     ret
 
-; Bounds-check input and output for every packet from the supporting file.
+; Bounds-check input and output for every packet of the front-screen part.
 dm_frontunpack:
     mov di, dm_queue
 ; ES:SI input, DS:DI output. Exchange segments once per row so the 8088 can
@@ -482,11 +447,13 @@ dm_fronttext:
     RESTORE
     ret
 
-dm_artfiles: dw dm_artvga,DM_FRONT_VGA_SIZE,dm_artherc,DM_FRONT_HRC_SIZE,dm_artcga,DM_FRONT_CGA_SIZE
-dm_artvga: db 'DRMARCO.VGA',0
-dm_artherc: db 'DRMARCO.HRC',0
-dm_artcga: db 'DRMARCO.CGA',0
-dm_artmissing: db 'Graphics unavailable: keep DRMARCO.* together',0
+dm_artmissing: db 'Graphics unavailable',0
+; Part table rows, in --part order (the Makefile's DM_PARTS): kind - 1.
+OS88_PARTS_BEGIN 3
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; 0  DRMARCO.HRC
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; 1  DRMARCO.CGA
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; 2  DRMARCO.VGA
+OS88_PARTS_END
 dm_artloading: db 'LOADING ARTWORK...',0
 dm_splashlabels:
     dw 128,87,CWHITE,dm_frontstart

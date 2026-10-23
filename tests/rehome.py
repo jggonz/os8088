@@ -48,6 +48,8 @@ import os88build
 import os88mouse
 import os88sym
 import os88geom
+import os88parts
+import os88pkg
 import heapmap
 from os88pkg import PKG_FMT
 import dispcp
@@ -73,7 +75,10 @@ def say(msg):
 # than against themselves.
 pkg = open(os88build.at("build/rehome.o88"), "rb").read()
 LD_IMG = struct.unpack_from("<H", pkg, 8)[0]
-P0_OFF = (LD_IMG + 511) // 512 * 512
+# PART 0's SECTOR IS THE TABLE'S, not roundup512(image): since SPEC.md 20.13.8
+# a parted package's image may itself be packed, and then the parts start
+# where the PACKED image ends
+P0_OFF = os88parts.image_rows(pkg)[0]["off"] * 512
 P0_IMG, P0_BSS = struct.unpack_from("<HH", pkg, P0_OFF + 8)
 say("build: loader image %d, part 0 at file+%d, its image %d + bss %d = %d"
     % (LD_IMG, P0_OFF, P0_IMG, P0_BSS, P0_IMG + P0_BSS))
@@ -86,9 +91,10 @@ if pkg[P0_OFF:P0_OFF + 2] != b"O8" or pkg[P0_OFF + 2] != PKG_FMT:
 # finds it; off is in sectors and len in bytes, and nothing here is
 # compressed, so part i sits (off_i - off_0) sectors up from part 0 - the
 # disk's layout, which op_seg's fast path reads too (20.12.7).
-_t = pkg.index(b"O88PARTS")
-ROWS = [struct.unpack_from("<BBHHH", pkg, _t + 10 + 8 * i)
-        for i in range(pkg[_t + 8])]
+_img = os88pkg.image_unwrap(pkg)     # the table is in the IMAGE (20.13.8)
+_t = _img.index(b"O88PARTS")
+ROWS = [struct.unpack_from("<BBHHH", _img, _t + 10 + 8 * i)
+        for i in range(_img[_t + 8])]
 _eager = [r for r in ROWS if r[2] and not (r[1] & 8)]      # filed, not LAZY
 KEEP = (_eager[-1][2] - _eager[0][2]) * 32 + (_eager[-1][3] + 15) // 16
 # ...and where the carve ENDED before the kernel cut it: op_claim reads from
