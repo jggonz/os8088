@@ -217592,7 +217592,10 @@ wall time. Reduced-rate STANDARD does strictly less work than full rate, so
 the cheapest valid STANDARD rung is probed first: if it fails every dearer
 STANDARD rung is skipped unprobed, and if it passes Original is tried, then
 Half. XT Standard and XT Fast follow the same way. An 8088 therefore probes
-Quarter, XT Standard and XT Fast and never Original or Half. A rung whose
+Quarter, XT Standard and XT Fast and never Original or Half. **The bound is
+the timed probe's alone**: the part's fetch, the XT part's OPEN, the priming
+and the warm-up granule around it are not bounded, and on an XT a rung costs
+4.7 to 5.8 s, 16 s for the three before the dialog (§121.11.5). A rung whose
 OPEN fails (out of memory among the reasons) counts as failed. Results are
 cached per (fingerprint, rung, device: the format bits and the rate cap), so
 a second play of a track asks no probe.
@@ -217884,7 +217887,12 @@ after the decoder's parts are dropped.
 | the stage | 2 x max(8 KB, cluster), or 2 x max(4 KB, cluster) under XT, inside the ring's claim | converting |
 
 **XT Standard's conversion measured 386 KB = 395,264 bytes** on QEMU with the
-shipped package and the real XT part (`xtmp3eng`'s `xtpeak` leg): the region
+shipped package and the real XT part (`xtmp3eng`'s `xtpeak` leg), and the
+same on MartyPC's XT (`xtmp3xt`). **Calibration does not stay inside it**:
+through the ladder's three probes the peak read 402 KB = 411,648 bytes on
+MartyPC and 396 KB on 86Box's XT and 286, a probe holding the XT part
+unshrunk through its OPEN beside the work, the probe's ring and the card's
+grant (§121.13). The conversion's figure is the region
 54, the carve 37, the part 29, its work 236, ring and PCM 18.5 and the stage
 8 on a 2 KB-cluster disk, plus claim rounding. The first attempt, with the
 ring held through OPEN and a separate stage, ran out of memory at 421 KB.
@@ -217913,7 +217921,7 @@ claim that failed, with no minimum stated (§121.13). On the ladder, a rung
 whose OPEN cannot claim simply fails its probe, so a short machine reaches
 Decode first and stops there.
 
-### 121.11 Measured (part figures shipped; end-to-end and period machines are FIELD's)
+### 121.11 Measured (shipped, on emulators; real hardware and listening are TBD)
 
 Speeds are audio seconds a wall second ("x real"). Nothing is claimed real
 time unless it sustained correct-speed playback with the device's overhead
@@ -217962,10 +217970,10 @@ on the song, about 6%.
 On the song XT Standard's time goes to the product rows (28.7%), matrixing
 (25.9%), the long IMDCT (19.7%), its window fused with the overlap (10.1%),
 requantisation and stereo (6.4%) and antialias (4.5%). **Nothing on an XT is
-real time**, as §121.5 expects: by these figures a 3-minute 11 kHz song
-converts in about 18 minutes with XT Standard, 16 with Fast, 15 with Turbo
-and 10 with Speech, decode only. The end-to-end figure, with FRONT and the
-disk, is §121.11.5's.
+real time**, as §121.5 expects. By these figures alone a 3-minute 11 kHz
+song would convert in about 18 minutes with XT Standard and 10 with Speech;
+the whole player, measured end to end, takes about three times that
+(§121.11.5).
 
 #### 121.11.3 OPEN on the 8088 (MartyPC)
 
@@ -217996,25 +218004,78 @@ Listening notes for each rung through a real card and speaker: **TBD
 (FIELD)**. The study's listening WAVs (`docs/xtmp3/listen/`) stand in for the
 XT profiles, the target's output being the model's to the byte.
 
-#### 121.11.5 End to end, on period machines (FIELD; docs/xtmp3/FIELD.md)
+#### 121.11.5 End to end, on period machines (measured; docs/xtmp3/FIELD.md, PERFORMANCE.md Set 162)
 
-The rows below are what FIELD measures: the shipped package, a real track,
-the real FRONT, disk and device. Until a row is filled, the "part only"
-column is the nearest figure already measured, and it OVERSTATES the
-machine: it leaves out FRONT, the feed and the disk.
+The shipped package doing what a user does: open a track, let Auto
+calibrate, decode first or play live, finalise, play the finished WAV. Two
+fixtures: AFTERHRS (MPEG-2.5, 11,025 Hz mono, 24 kbps) and C128 (MPEG-1,
+44.1 kHz L/R stereo, 128 kbps). **The XT is MartyPC's**
+`os8088_xt_vga_hdd_sb`: an IBM 5160, an 8088 at 4.77 MHz, 640 KB, VGA, an
+XT-IDE fixed disk with no mechanics, and a DSP 2.01; every figure is guest
+cycles, and every converted WAV is bit-exact to the models (`xtmp3xt`).
+**The rest are 86Box's** interpreter (cycle-approximate), each booting from
+a floppy, figures from the guest's own `pit_now`; 86Box cannot be keyed, so
+no conversion is timed there and a decode-first verdict stops at the dialog.
 
-| machine | Auto picks (NEONDRV / NIGHTSIG / AFTERHRS) | live x real of that rung | conversion of AFTERHRS (10 s) | XT Standard OPEN | peak | part only, measured |
+| machine | track | probes (x real) | Auto's decision | what ran | peak |
+|---|---|---|---|---|---|
+| 4.77 MHz XT, DSP 2.01 (MartyPC) | AFTERHRS | Original 0.03, XT Standard 0.11, XT Fast 0.11 | Decode first, on XT STANDARD | the conversion at **0.0552x end to end** (182.8 s for 10.09 s) | 395,264 B converting; **411,648 B calibrating** |
+| | C128 | Quarter 0.01 (no XT rung: its output would be 44.1 kHz, above a DSP 2.01) | Decode first, on QUARTER | the conversion at **0.0117x** | 204,800 B |
+| 4.77 MHz XT, SB 2.0 (86Box, floppy only) | AFTERHRS | Original 0.03, XT Standard 0.11, XT Fast 0.12 | Decode first, on XT FAST | the dialog: no hard drive | 396 KB |
+| | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog | 178 KB |
+| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.30, XT Standard 0.73, XT Fast 0.80 | Decode first, on ORIGINAL | the dialog | 396 KB (calibrating) |
+| | C128 | Quarter 0.16, XT Standard 0.10, XT Fast 0.21 | Decode first, on QUARTER | the dialog | 396 KB |
+| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.21 | **live XT STANDARD**, 11,025 Hz mono 8-bit | one underrun, stepped to XT FAST | 358 KB |
+| | C128 | Quarter 0.37, XT Standard 0.51, XT Fast 0.59 | Decode first, on QUARTER | the dialog | 358 KB |
+| 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 2.99 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 156 KB |
+| | C128 | Quarter 0.98, XT Standard 1.48 | live XT STANDARD at 44,100 Hz mono 8-bit | **Error: Out of memory**, nothing plays (§121.13) | 358 KB |
+| Pentium 133 MHz, SB16 (86Box) | AFTERHRS | Original 4.65 | **live ORIGINAL** | no underrun | 156 KB |
+| | C128 | Original 0.84, Half 1.18, Quarter 1.30 | **live QUARTER**, 11,025 Hz stereo 16-bit | no underrun | 173 KB |
+
+**The XT's conversions** (MartyPC, AFTERHRS unless named):
+
+| rung | the job | of which setup / loop / finalisation | end to end | the loop alone | the part alone (§121.11.2) | peak |
 |---|---|---|---|---|---|---|
-| IBM 5150, 4.77 MHz 8088, 640 KB, ST-225 (MartyPC) | TBD | TBD | TBD | TBD | TBD | XT Standard 0.166x; Quarter 0.141x; OPEN 2.96 s |
-| 286 (86Box) | TBD | TBD | TBD | TBD | TBD | none |
-| 386 (86Box) | TBD | TBD | TBD | TBD | TBD | none |
-| 486 (86Box) | TBD | TBD | TBD | TBD | TBD | none |
+| XT Standard | 182.81 s | 4.59 (fetch 1.05, OPEN 3.32) / 172.39 / 5.84 | **0.0552x** | 0.0585x | 0.166x | 395,264 B |
+| XT Fast | 169.30 s | 3.88 / 159.58 / 5.83 | **0.0596x** | 0.0632x | 0.183x | 346,112 B |
+| XT Speech (5,512 Hz) | 118.34 s | 3.62 / 108.88 / 5.83 | **0.0853x** | 0.0927x | 0.297x | 317,440 B |
+| Quarter (C128) | 127.73 s | 0.33 / 121.53 / 5.86 | **0.0117x** | 0.0123x | 0.027x | 204,800 B |
 
-| the face on a 4.77 MHz XT | cost |
+**The whole player is about three times slower than its decoder** on an XT:
+a 3-minute 11 kHz song converts in about 54 minutes on XT Standard, 50 on
+XT Fast and 35 on XT Speech, where the part alone said 18 and 10. **The face
+is why**: in the XT Standard loop the backend part is 38.1% of the cycles,
+FRONT 8.0%, and the face 44.5% (16.1% the package's own drawing code, 28.4%
+the kernel's drawing), because the needles and the BUFFER gauge keep
+animating behind the progress window. Without them the loop would run at
+about 0.105x, an estimate from the shares. A 44.1 kHz stereo song on an XT
+with a DSP 2.x converts on Quarter: about 4.3 hours for three minutes. The
+disk share (about 1%) and finalisation's 5.8 s are floors: MartyPC's XT-IDE
+has no seek or rotation.
+
+**Calibration on the XT** took 16.10 s to the decision on AFTERHRS (each
+rung 4.7 to 5.8 s: the part's fetch about 1.05 s, the XT part's OPEN 2.4 to
+3.3 s, the priming, an untimed warm-up granule, and only then the bounded
+probe) and 4.32 s on C128; 27.0 s on 86Box's floppy-only XT. §121.5's bound
+holds for the timed probe alone.
+
+**The face on the 4.77 MHz VGA XT** (MartyPC; its VGA wait states are a
+model, the CPU side credible):
+
+| what | cost |
 |---|---|
-| a needle's box copy and BLIT4 (VGA) | TBD (FIELD) |
-| the knob's canvas | TBD (FIELD) |
-| a colour dial face, built once a mode a paint (4,704 pixels) | TBD (FIELD) |
+| one needle's redraw (the canvas box, one BLIT4) | median 136-187 ms by leg; 111-299 ms in all |
+| a dial or the knob with nothing to draw | 0.07-0.17 ms |
+| one knob redraw at READY | 400 ms |
+| one `x3f_update` while a finished WAV plays | median 159-279 ms, up to 486 ms |
+| the face's share of the machine while a finished WAV plays | 53.7-54.7% at 11 kHz, 73.5% at 5.5 kHz |
+| the face's share of a conversion's cycles | 44.5% |
+| a colour dial face's first build | not timed separately |
+
+A finished WAV played through the card on every leg with no GRANULE, no
+backend part resident and no underrun. **Listening notes: TBD**; nothing
+was listened to on any machine. No real 5150, XT, 286, 386, 486 or Pentium
+has run XTMP3.
 
 #### 121.11.6 The gates
 
@@ -218027,6 +218088,7 @@ machine: it leaves out FRONT, the feed and the disk.
 | `x3xtexact` | soak, QEMU | the XT part behind the shipping front end: **51 of 51 exact**; a damaged constant is reported at its first differing sample |
 | `x3xtunit` | soak, Unicorn | the XT part's contract, expansion, refusals and split paths, with OPEN's half overwritten after OPEN |
 | `xtmp3eng` | soak, QEMU | the engine's eleven legs over the stub and the real XT part (§121.5, §121.7, §121.10) |
+| `xtmp3xt` | soak, MartyPC | the shipped package end to end on a 4.77 MHz XT: every conversion's WAV bit-exact to the models off the VHD, the 400,000-byte conversion peak, and a finished WAV's play with no GRANULE and no underrun (§121.11.5) |
 | `sndfmt`, `sndfmtmarty` | soak | SOUND.DRV's 16-bit and stereo streams (§34.5.5) |
 
 MartyPC confirmed both parts bit-exact on an 8088 core as well (eight
@@ -218096,6 +218158,25 @@ third-party audio in them.
 
 **Open:**
 
+- **The face halves an XT's conversion** (§121.11.5): 44.5% of the loop's
+  cycles go to needles and a gauge that animate behind the progress window.
+  Resting them while converting on an 8088 is measured headroom from 0.0585x
+  to about 0.105x.
+- **The decode-first estimate is about twice too optimistic on an XT**: the
+  dialog said `About 01:31` and the job took 3:03, because the probe times
+  the decoder and not the face or finalisation.
+- **Calibration exceeds 400,000 bytes** (411,648 on MartyPC); only a
+  conversion's peak is asserted.
+- **A rung that runs out of memory ends in ERROR** rather than stepping on,
+  and Auto does not ask whether a live XT rung's working set fits before
+  choosing it: a 486 on 44.1 kHz stereo picks XT Standard live and stops on
+  `Error: Out of memory`, so it plays that file not at all.
+- **The offline pick sits on a knife edge on an XT**: XT Fast measured 11
+  (x100) on MartyPC and 12 on 86Box against `X3_OFFMAX`'s 12, so the same
+  machine class converts on XT Standard under one instrument and XT Fast
+  under the other.
+- **The 286 plays neither fixture live**: its best 11 kHz probe is XT Fast
+  at 0.80x against the 1.25x margin.
 - **No minimum is stated when memory is short** (§121.10): the player
   should refuse in its own words with the figure it needs, §24.5's shape.
 - **Live XT Standard with a sound card** is unmeasured against 400,000
@@ -218114,5 +218195,7 @@ third-party audio in them.
   delete, batch approval over two tracks, a read-only fixed volume, the SB
   Pro's stereo path, seeking a live stream on a real decoder, and the
   speaker path's sound.
-- **Not measured**: everything in §121.11.5, the face's cost on an XT, and
-  a listening pass of each rung on a real card.
+- **Not measured**: any real machine, a real hard disk's share of a
+  conversion, the face on CGA and Hercules on an XT, a conversion on
+  86Box, the cause of the 386's one underrun, and a listening pass of each
+  rung.

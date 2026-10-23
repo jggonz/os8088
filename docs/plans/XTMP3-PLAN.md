@@ -72,8 +72,11 @@ story's own verification has been run and its evidence is in the PR.
   and MartyPC.
   *Status: every transition is verified over the stub backend (`xtmp3eng`'s
   `ladder` and `slowdown`), and MartyPC's VGA XT takes the shipped package
-  to Decode first with XT Standard (the guide's capture). The measurements
-  on 86Box and MartyPC are FIELD's (SPEC §121.11.5).*
+  to Decode first with XT Standard (the guide's capture). Measured by FIELD
+  on MartyPC's XT and 86Box's XT, 286, 386, 486 and Pentium (SPEC §121.11.5,
+  `xtmp3xt`); left open by what that found - calibration over 400,000
+  bytes, out-of-memory ending in ERROR, an XT estimate twice too short
+  (§121.13).*
 - [ ] **S9 Decode first.** The drive dialog covers multiple fixed volumes,
   read-only volumes, no hard drive and too little space. Then the Save
   dialog, the disk estimate, conversion with progress, measured speed and
@@ -91,9 +94,9 @@ story's own verification has been run and its evidence is in the PR.
   *Status: SPEC §121 rewritten as shipped with §121.12's disk placement;
   the guide manual and song pages; the disks (`make xtmp3disk`, the music
   disk, the 1.44MB and 1.2MB apps disks, the live media); INDEX, README and
-  the screenshots in `docs/xtmp3/s10-*.png` (the docs track). Open: §121.11's
-  period-machine rows (FIELD), a PERFORMANCE set, suite rows for the face,
-  the soak union and `test-full`.*
+  the screenshots in `docs/xtmp3/s10-*.png` (the docs track); §121.11.5's
+  period-machine figures and PERFORMANCE.md Set 162 (FIELD). Open: listening,
+  real hardware, a suite row for the face, the soak union and `test-full`.*
 
 ## How the work is fanned out
 

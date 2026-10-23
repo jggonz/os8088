@@ -120,9 +120,11 @@ file. Nothing else on the disk is touched. If the disk fills, the disk goes
 away, or the MP3 changes while it is being decoded, decoding stops with the
 reason and nothing plays.
 
-On an IBM PC or XT at 4.77 MHz, decoding takes several times the song's own
-length: around twenty minutes for a three-minute song at 11 kHz with XT
-Standard. The Decode First window gives its own estimate before you start.
+On an IBM PC or XT at 4.77 MHz, decoding takes many times the song's own
+length: close to an hour for a three-minute song at 11 kHz with XT Standard,
+and longer for a CD-rate stereo song. The Decode First window gives an
+estimate before you start, and on an XT the job can take twice as long as
+it says.
 
 With more songs waiting in the queue, the switch **Queue too: No** /
 **Queue too: Yes** decides whether the next songs are decoded into the same
