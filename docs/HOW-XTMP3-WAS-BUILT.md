@@ -1011,6 +1011,27 @@ the XT rungs on a 44.1 kHz source to run perhaps 2x to 3x faster than at
 live, and the 386DX's near 1x to 1.5x, which is borderline. The 286 and the
 XT are not expected to change.
 
+**Measured afterwards: the estimate was wrong.** It is left above so the
+miss stays visible. One 86Box run each, on round 6 (7fd79cd2):
+
+| machine | track | XT Standard probe before (÷1) | after (÷4) | Auto now |
+|---|---|---|---|---|
+| 486DX2/66 | C128 | 1.15x | **1.27x** | **live XT STANDARD ÷4**, 11,025 Hz mono, no underrun |
+| 386DX/25 | C128 | 0.47x | 0.63x | still Decode First (on Quarter) |
+| 286/12.5 | C128 | 0.10x | 0.28x | still Decode First (on Quarter) |
+| 286/12.5 | AFTERHRS | 0.73x | 0.71x | still Decode First; an 11 kHz source is not divided |
+
+The ÷4 rung was 1.1x to 1.3x faster than ÷1 on these machines, not 2x to
+3x (the 286's was 2.8x, from a slow start). On a 128 kbps stereo stream the
+front end dominates: Huffman decoding of both channels, at full rate. It
+does not shrink with the divisor, and the estimate charged too little to
+it. It was enough to take the 486 over the 1.25x margin, which is what the
+request needed, though with little headroom. It was not enough for the
+386DX, so the owner's 386SX will still decode 44.1 kHz songs first. A
+lighter stream, such as NEONDRV at 56 kbps, has less front end and should
+do better (estimate). XT Fast is not divided, because it would need new
+generated kernels, so in Auto it is tried only on 8 to 12 kHz sources.
+
 ## 2026-10-23 — round 6: XT Standard divided by its source
 
 The owner asked for this at the machine: "On machines that are powerful
