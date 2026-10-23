@@ -91,7 +91,7 @@ x3p_fretv:  dw x3p_fret
 ; x3p_reftext - AL = X3REF_* -> SI = its NUL name, CF = 1 for 0
 ; =============================================================================
 x3p_reftext:
-    cmp al, X3REF_NOSYN
+    cmp al, X3REF_PACKED
     ja .no
     or al, al
     jz .no
@@ -107,11 +107,12 @@ x3p_reftext:
 .no:
     stc
     ret
-x3p_reft:   dw x3p_rf1, x3p_rf2, x3p_rf3, x3p_rf4
+x3p_reft:   dw x3p_rf1, x3p_rf2, x3p_rf3, x3p_rf4, x3p_rf5
 x3p_rf1:    db 'FREE FORMAT', 0
 x3p_rf2:    db 'LAYER I', 0
 x3p_rf3:    db 'LAYER II', 0
 x3p_rf4:    db 'NO MPEG AUDIO', 0
+x3p_rf5:    db 'PACKED FILE', 0
 
 %include "x3phdr.inc"              ; the header, shared with the FRONT part
 
@@ -1168,6 +1169,8 @@ x3p_strip:
 ; in:  SI -> NUL 8.3 name, BL = volume, DX = folder cluster, DI -> X3I
 ; out: CF = 0 the record complete; CF = 1 AX = FERR_* / X3E_MEM
 ; =============================================================================
+X3P_PTAIL   equ 4096                ; a 32 KB cluster's read lands this far in
+                                    ; (x3p_probe): room for a request's tail
 x3p_probe:
     push bx
     push cx
@@ -1202,7 +1205,7 @@ x3p_probe:
     cmp word [x3p_pfind+14], OSAPI_FT_DIR
     jae .nofile
     test byte [x3p_pfind+22], OSAPI_FIND_CZ
-    jnz .nofile                     ; stored compressed: not a byte stream
+    jnz .packed                     ; stored compressed: not a byte stream
     ; the buffer: max(4 KB, 2 clusters) - every request of x3p_open is at
     ; most 4 KB, and a cluster-aligned read of that must cover it
     call OSAPI_FILE_DFREE           ; BX = sectors a cluster
@@ -1212,20 +1215,24 @@ x3p_probe:
     dec ax
     not ax
     mov [x3p_pclbm], ax
-    mov ax, [x3p_pclb]              ; 2 clusters, 8 KB at least, 32 KB at most
-    cmp ax, 16384                   ; (a 32 KB cluster's request that
-    jae .b32                        ; straddles one is not answered: the
-    shl ax, 1                       ; probe then gives up, no title)
+    mov word [x3p_pboff], 0
+    mov ax, [x3p_pclb]              ; 2 clusters, 8 KB at least
+    cmp ax, 16384
+    ja .b32
+    shl ax, 1
     cmp ax, X3_FIRST_READ * 2
     jae .b
     mov ax, X3_FIRST_READ * 2
-    jmp short .b
-.b32:
-    mov ax, 32768
 .b:
     mov [x3p_pbsz], ax
     mov cl, 10
     shr ax, cl
+    jmp short .claim
+.b32:                               ; 32 KB CLUSTERS: two are past a segment,
+    mov word [x3p_pbsz], 32768      ; so ONE is read 4 KB in, and a request
+    mov word [x3p_pboff], X3P_PTAIL ; that runs past it is answered with its
+    mov ax, 32768 / 1024 + X3P_PTAIL / 1024     ; tail moved down in front
+.claim:                             ; of the next one (.rd): 36 KB
     call OSAPI_MEM_CLAIM            ; AX = KB
     jc .nomem
     mov [x3p_pseg], dx
@@ -1248,6 +1255,42 @@ x3p_probe:
     jnc .k
     xor cx, cx
 .k:
+    add bx, [x3p_pboff]             ; BX = X's place in the buffer
+    cmp word [x3p_pboff], 0         ; A 32 KB CLUSTER whose end the request
+    je .call                        ; passes (and the file goes on): its tail
+    mov di, [x3p_pinfo]             ; moved down in front of the next
+    cmp cx, [di+X3I_WANTN]          ; cluster, read 4 KB in
+    jae .call
+    mov ax, cx
+    add ax, bx
+    cmp ax, X3P_PTAIL + 32768
+    jb .call                        ; (the cluster was the file's last)
+    push cx
+    push ds
+    mov es, [x3p_pseg]
+    mov ds, [x3p_pseg]
+    mov si, bx
+    mov di, X3P_PTAIL
+    sub di, cx                      ; the tail (< 4 KB: a request is at most
+    mov bx, di                      ; 4 KB) ends where the next cluster begins
+    cld
+    rep movsb
+    pop ds
+    pop cx
+    push bx
+    push cx
+    mov ax, [x3p_pwant]
+    mov dx, [x3p_pwant+2]
+    and ax, [x3p_pclbm]
+    add ax, 32768
+    adc dx, 0
+    call x3p_pread                  ; CX = the next cluster's bytes
+    mov ax, cx
+    pop cx
+    pop bx
+    jc .rderr
+    add cx, ax
+.call:
     mov ax, [x3p_pwant]
     mov dx, [x3p_pwant+2]
     mov es, [x3p_pseg]
@@ -1259,11 +1302,20 @@ x3p_probe:
     jz .giveup
     mov ax, [di+X3I_WANT]
     mov dx, [di+X3I_WANT+2]
-    jmp short .rd
+    jmp .rd
 .giveup:
     mov byte [di+X3I_REF], X3REF_NOSYN
 .done:
     call .free
+    call .back
+    clc
+    jmp short .out
+.packed:                            ; A PACKED FILE is refused by name - Play
+    mov di, [x3p_pinfo]             ; says so (x3_trk_open) - and never read
+    mov ax, [x3p_pfind+18]
+    mov dx, [x3p_pfind+20]
+    call x3p_inew
+    mov byte [di+X3I_REF], X3REF_PACKED
     call .back
     clc
     jmp short .out
@@ -1324,6 +1376,7 @@ x3p_pread:
 .n:
     mov es, [x3p_pseg]
     mov bx, di
+    add bx, [x3p_pboff]             ; (4 KB in, on a 32 KB cluster)
     mov si, [x3p_pname]
     mov ax, [x3p_ppos]
     mov dx, [x3p_ppos+2]
@@ -1712,6 +1765,7 @@ x3p_seekpos:
     X3B x3p_pclb, 2                 ; ...the cluster, mask...
     X3B x3p_pclbm, 2
     X3B x3p_pbsz, 2                 ; ...the buffer's size, segment...
+    X3B x3p_pboff, 2                ; ...where a read lands in it...
     X3B x3p_pseg, 2
     X3B x3p_ppos, 4                 ; ...its file offset...
     X3B x3p_pwant, 4                ; ...the offset x3p_open asked for...

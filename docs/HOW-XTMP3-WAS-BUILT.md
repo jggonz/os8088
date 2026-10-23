@@ -500,3 +500,86 @@ the estimate.
 **Tested where:** MartyPC (cycles) and 86Box (its emulated clock); QEMU
 only to watch the report file get written. No real machine has run any of
 it.
+
+## 2026-10-22 — the real decoders, end to end
+
+Phase 3 put the STANDARD and XT parts behind the engine and asked one thing
+of every leg: that what comes out be held to the reference, sample for
+sample, not listened to.
+
+**How the card was heard.** QEMU's SB16 writes what it plays to a `wav`
+audiodev, and the audiodev was set to the STREAM's own rate, so QEMU's mixer
+resamples nothing. A capture is then searched for `tools/x3sim.py`'s PCM for
+the same file and divisor, and compared whole. The first run of the first
+leg, 44.1 kHz stereo on Original as 16-bit stereo, was exact: 66,150 frames
+of 66,150, at capture offset 0, the two channels distinct. So were 22.05 kHz
+stereo and Half by override.
+
+**Observed.** The 8-bit cases were where QEMU had to be read before the
+decoder could be. QEMU 11 widens an unsigned 8-bit sample `u` to
+`(u - 127) x 257`, not `(u - 128) << 8`. Read back through that table, an
+SB16 with no 16-bit channel played x3sim's high byte XOR 80h exactly, and a
+DSP 2.01 played x3sim's mono downmix exactly - once the capture was taken at
+the 22,222 Hz its time constant really gives, not the 22,050 asked for.
+
+The 8-bit stereo leg also found two engine defects on its first run. A
+DSP 4.xx without a 16-bit channel was treated as an SB Pro and held to
+22,050 Hz a channel, so Original was skipped; and a skipped Original jumped
+straight to the cheaper rung that had passed, Quarter, without trying Half.
+Both are fixed, and the leg now plays Original in 8-bit stereo.
+
+**"Original never calls the XT kernels"** is proved three ways: a fetch
+counter a part (`x3_nfetch`) reads 0 for the XT part after every Original
+leg; the STANDARD part's map has no `x3x_` label; and none of the XT tables'
+generator bytes occur in it.
+
+**The seek.** The engine's pre-roll was 2 frames. Held to x3sim decoding
+from the same offset with the same reset, it was exact; held to an
+uninterrupted decode, it was not. A host study answered how much pre-roll a
+seek needs: over 749 seeks into 33 fixtures, 2 frames reproduced the
+uninterrupted decode 15.8% of the time, 4 frames 92.5%, 6 frames all of
+them. The reservoir reaches back up to 511 bytes, which at low bitrates is
+several frames, and short blocks chain their overlap. `X3_PREROLL` is 6 now,
+and the seek leg's output is identical to an uninterrupted decode from the
+first sample after it.
+
+**The XT path, end to end.** XT Standard set by the user, decoded first to a
+QEMU hard disk: the finished WAV is byte for byte `tools/x3simxt.py`'s,
+111,215 bytes. It then played on the card with no decoder resident and
+seeked directly. Its part was fetched once, not twice: a job whose rung is
+the probe's now keeps the probe's OPEN and only RESETs.
+
+**The ceiling on any disk.** The engine had left two holes in §121.10's
+400,000 bytes: a live XT play with a card, and a destination whose clusters
+are larger than 4 KB. The buffers are now planned after OPEN, from what the
+heap says is left (`x3_plan`). Under the XT backend the card gets the 8 KB
+grant at any rate, and a conversion's stage is ONE cluster where two do not
+fit. Measured: live with a card 387 KB; conversions to 8 and 16 KB clusters
+385 KB. A 32 KB cluster cannot hold XT Standard at all - its work alone
+leaves 34 KB, and one cluster plus the look-ahead and the PCM is 39 - so it
+is refused by name, and XT Fast converts there at 387 KB. The plan also
+found a deadlock no leg had met: an XT's 16 KB look-ahead over a 16 KB
+cluster can never take another gulp, so the look-ahead now holds two of the
+source's clusters at least.
+
+**A step down is no longer a click.** A rung change changes the card's rate
+or format, so the stream must re-open. The old stream now ends on a
+32-frame ramp to silence, published as its last half, and the new rung's
+first 32 frames rise from silence; the position handed across is the last
+REAL sample's, not the ramp's.
+
+**The paths no one had taken**, each a leg now: a source changed during a
+conversion (the job fails with the reason, nothing left behind); Decoded
+Files deleting XTMP3's own WAV and leaving someone else's that a record
+named; an approved batch converting the second track with no dialog; a
+read-only fixed volume (a CD through CDROM.DRV - QEMU's IDE has no
+write-protect for a hard disk); an lz4-packed MP3 refused by name.
+
+**The speaker could not be heard on QEMU, and the Covox could.** QEMU's
+pcspk only synthesises a PIT mode-3 square, so its capture of the speaker
+bracket was empty. The same bracket on a Covox writes each sample to the
+LPT data port, and QEMU traces those writes: 32,724 bytes in 45 seconds,
+every one the finished WAV's own, in order.
+
+**Tested where.** QEMU, every figure; the `xtmp3live` and `xtmp3eng` rows.
+No timing here is an 8088's: the FIELD track measures the real machines.

@@ -49,10 +49,16 @@ beyond it:
   main data where it lies.
 - **x3pars.inc reaches the FRONT part's data through ES**, with DS the
   package's own (the first version of x3gran.inc said DS; corrected).
-- **A packed MP3 is refused by the probe.** `OSAPI_FILE_READ_AT` and
+- **A packed MP3 is refused by name.** `OSAPI_FILE_READ_AT` and
   `READ_SEQ` deliver a packed file raw (SPEC.md 20.14.3), so an `.MP3`
-  stored lz4-wrapped cannot be streamed. `make` wraps data files by explicit
-  rule only, so an MP3 rides plain unless a rule is added (S10's disks).
+  stored lz4-wrapped cannot be streamed. The probe answers it with a
+  refusal of its own, `X3REF_PACKED` = 5 (`'PACKED FILE'`, x3gran.inc - an
+  equate added, no part's bytes moved), and the engine's open refuses it
+  with `The MP3 is stored packed` (the integration track: `OSAPI_FILE_FIND`'s
+  `OSAPI_FIND_CZ` bit, read in `x3_trk_open`); it was a silent probe failure
+  and then noise. `make` wraps data files by explicit rule only, and the
+  DOCS track keeps MP3s out of PKGZ; xtmp3eng's `packed` leg makes one with
+  `tools/os88lz.py --wrap` and holds the sentence.
 
 ## 2. The STANDARD backend
 
@@ -215,7 +221,7 @@ with STANDARD on an XT, a 3-minute 11 kHz mono track takes about
 | the primary: image + bss | 19,670 + 10,213 = 29,883 | after the face's art moved to its part; of which x3pars.inc **4,023 of code and tables and 362 of bss** (a 256-byte X3I record for the queue's probe among them). It was 5,491 + 389 until the frame loop moved into the FRONT part (the primary is the package's tightest segment) |
 | FRONT part (eager, in the carve) | 24,509 | 9,048 fixed data (the record 5,228, the main-data buffer 1,968, the frame 1,448, side information and scalefactors), the Huffman tables 8,924, the frame loop and the granule code the rest; 8,982 packed on the disk |
 | STANDARD part (lazy, op_fetch) | 57,732 | code 38,702 (the generated DCT-32/16/8 and windows are most of it), tables 4,860 (x3std.bin from P43M on), state 14,170: xr 4,608, the reorder's copy 2,304, overlap 2,304, the two rings 4,096, the regrouped IMDCT window 336; 22,533 packed |
-| the probe's transient claim | 8,192 (2 clusters, 32 KB at most) | UI task, freed before it returns |
+| the probe's transient claim | 8,192 (2 clusters, 32 KB at most; 36 KB on a 32 KB cluster) | UI task, freed before it returns |
 
 **The STANDARD path's peak**, the engine's rings and the sound driver's
 grant excluded (they are the engine track's to add): the primary 29,883 +
@@ -236,9 +242,14 @@ XT's own path, and the XT backend's part replaces it rather than joining it
   exercised by a row: x3sim has no seek, and S8's live playback is its
   first user.
 - **CRC is parsed and not checked** (SPEC §121.2), as in x3sim.
-- **A 32 KB-cluster volume**: the probe's buffer is capped at 32 KB, so a
-  request that straddles one such cluster is not answered and the probe
-  gives up (no title). Only 1-2 GB FAT16 partitions have such clusters.
+- **A 32 KB-cluster volume** (integration track): two clusters are past a
+  segment, so the probe claims 36 KB and reads ONE cluster 4 KB in
+  (`X3P_PTAIL`); a request that runs past its end has the cluster's tail
+  (under 4 KB: a request is at most 4 KB) moved down in front of it and the
+  next cluster read after, so every request is answered and the queue shows
+  the title and the duration. (Playback from such a volume is refused by
+  name in the engine: an MP3's look-ahead holds two of the source's
+  clusters, ENGINE.md section 3.)
 - **Further speed** would come from a register-allocated DCT (its adds load
   and store every operand) and dct9, about 10% together by estimate; the
   multiplies themselves are the floor.

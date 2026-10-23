@@ -467,7 +467,7 @@ FAST = [
         "figures were measured on, entry for entry. Soak because it "
         "rebuilds the corpus with numpy (seconds, not a fast row)",
         needs=("numpy",)),
-    Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 420.0,
+    Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 900.0,
         "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
         "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "
         "X3STUB.CFG), on QEMU because what is asserted is behaviour: the "
@@ -480,10 +480,21 @@ FAST = [
         "temp, a disk filled mid-write, stale and incomplete caches "
         "refused, no fixed disk, two writable volumes, a finished WAV "
         "through the SB16 with no decoder resident, pause/resume - and, on "
-        "the SHIPPED package with the real XT part, an XT Standard "
-        "conversion whose measured working set (X3S_PEAK) stays at or under "
-        "SPEC.md 121.10's 400,000 bytes",
-        needs=("qemu", "nasm", "mtools"), serial=True, timeout=1500,
+        "the SHIPPED package with the real XT part, XT Standard's working "
+        "set (X3S_PEAK) at or under SPEC.md 121.10's 400,000 bytes - "
+        "converting (its part fetched ONCE: the probe's OPEN reused with a "
+        "RESET) and live on an SB16 (the 8 KB grant) - and on 8, 16 and "
+        "32 KB-cluster fixed disks (x3_plan's single stage; XT Standard "
+        "refused by name on 32 KB, XT Fast converting there), every WAV "
+        "byte-exact to tools/x3simxt.py. Then the paths no leg had taken: a "
+        "source changed DURING a conversion, Decoded Files deleting only "
+        "XTMP3's own WAV, an approved batch over two tracks, a read-only "
+        "fixed volume (a CD through CDROM.DRV), an lz4-packed MP3 refused "
+        "by name, the queue's probe across a 32 KB cluster's end, and the "
+        "finished file's actual bytes reaching a Covox (QEMU's trace of "
+        "the LPT data port; its pcspk renders no PWM)",
+        needs=("qemu", "nasm", "mtools", "numpy"), serial=True,
+        timeout=2700,
         wants=("build/xtmp3s.o88", "build/xtmp3s.bin", "build/xtmp3.o88",
                "build/xtmp3.bin", "build/os8088.img",
                "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
@@ -508,6 +519,26 @@ FAST = [
         wants=("build/xtmp3.o88", "build/xtmp3.bin", "build/x3xt.bin",
                "build/x3front.bin", "build/sound.drv", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys")),
+    Row("xtmp3live", "soak", py("tests/xtmp3live.py"), 300.0,
+        "XTMP3 with its REAL decoders end to end on QEMU's SB16 (SPEC.md "
+        "121.3-121.7, docs/xtmp3/ENGINE.md), the card captured by the wav "
+        "audiodev at the STREAM's own rate and held SAMPLE FOR SAMPLE to "
+        "tools/x3sim.py: Original on 44.1 kHz and 22.05 kHz stereo as "
+        "16-bit stereo (the channels distinct), Half by override, 8-bit "
+        "stereo on an SB16 with no 16-bit DMA and 8-bit mono on a DSP 2.01 "
+        "(labelled DEVICE, through the documented conversion and the mono "
+        "downmix) - the XT part never fetched under Original (x3_nfetch, "
+        "and the STANDARD part's map holds no XT label or table bytes); a "
+        "live seek, whose output after X3_PREROLL frames is x3sim's from the "
+        "offset the engine aimed at, and identical to an uninterrupted "
+        "decode; and XT Standard decoded first to a hard disk, the WAV "
+        "byte-exact to tools/x3simxt.py, played on the card with no decoder "
+        "resident and seeked directly",
+        needs=("qemu", "nasm", "mtools", "numpy"), serial=True, timeout=900,
+        wants=("build/xtmp3.o88", "build/xtmp3.bin", "build/os8088.img",
+               "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
+               "build/boothd.bin", "build/kernel.sys", "build/x3stdp.bin",
+               "build/XTGEN.BIN")),
     Row("romtool", "fast", py("tools/os88rom.py", "--selfcheck"), 0.3,
         "docs/plans/ROM-PLAN.md 1.3: the ROM image builder re-derives its own "
         "invariants - 55 AA and a 32KB declaration (40KB would send the "
