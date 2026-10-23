@@ -315,6 +315,51 @@ Against `lame --decode` the figures equal the float ones, except:
 - **X12K32 on Speech (27.4 dB)**: lame's full rate, decimated, is a
   different filter from the reduced rate.
 
+## 8.1 XT Standard divided by its source (2026-10-23)
+
+XT Standard's divisor is now its source's: 1 at 8-12 kHz, 2 at 16-24 kHz
+and 4 at 32-48 kHz (SPEC.md 121.4). Before this, a 44.1 kHz song decoded at
+full rate on every XT rung, and a machine able to play it live at 11 kHz
+went to Decode First.
+
+**No new kernels were needed.** XT Standard at a divisor IS the XT Speech
+profile at that divisor: the same 16 window terms on the kept phases, Lee
+16 or 8, and the byte-split stages. The model agrees bit for bit (`std` and
+`speech` at 2 and at 4 hash the same on M16, NIGHTSIG and AFTERHRS), so the
+engine opens profile 3 when XT Standard is divided (`x3_rungprof`). The part
+had refused the speech tables on MPEG-1 and wanted 2 on MPEG-2.5 and 4 on
+MPEG-2. It now runs them at 2 or 4 on any version, and XT Speech's own rule
+is the engine's.
+
+**Golden.** `tools/x3simxt.py` names the case `stdd`: 10 new lines in
+tests/xtmp3/X3XT.txt (5 at 2, 5 at 4). The 51 old lines are unchanged, and
+`x3xtexact` runs all 61 bit-exact on QEMU.
+
+**Quality** against the float decode at the same divisor
+(`x3simxt.quality`; `int-r6-quality.json` in the integration track's
+reports):
+
+| fixture | rate | divisor | SNR | peak | DC | XT Standard at 1 |
+|---|---|---|---|---|---|---|
+| M16 | 16,000 | 2 | 32.3 dB | 2.3 | -0.02 | 31.5 dB |
+| NIGHTSIG | 22,050 | 2 | 33.1 | 4.7 | -0.03 | 32.9 |
+| M22 | 22,050 | 2 | 32.2 | 2.6 | -0.04 | 31.5 |
+| M24 | 24,000 | 2 | 33.0 | 2.4 | -0.03 | 32.7 |
+| IS22 | 22,050 | 2 | 33.6 | 2.5 | -0.02 | 33.4 |
+| MONO44 | 44,100 | 4 | 34.0 | 3.2 | -0.01 | 33.4 |
+| NEONDRV | 44,100 | 4 | 34.1 | 6.0 | -0.00 | 33.7 |
+| ISMS44 | 44,100 | 4 | 32.0 | 1.4 | -0.01 | 31.2 |
+| C128 | 44,100 | 4 | 33.5 | 2.4 | -0.01 | 32.9 |
+| BBADSIDE | 44,100 | 4 | 32.0 | 2.7 | -0.01 | 31.3 |
+
+Peak and DC are in 8-bit LSBs. The float decode at the same divisor,
+rounded to 8 bits, measures 34.3-39.1 dB.
+
+**XT Fast is not divided.** Its window at 2 or 4 would need generated
+kernels and Lee 16/8 constants that the fast pack does not expand. So in
+Auto it remains an 8-12 kHz rung. On a faster source it would cost more
+than XT Standard divided, which is asked first.
+
 ## 9. Open items
 
 1. **The engine's claim order and the shrink** (section 6) decide whether

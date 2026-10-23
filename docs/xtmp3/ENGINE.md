@@ -198,6 +198,17 @@ Original failed. Then XT Standard and XT Fast are tried in the same way. An
 8088 therefore probes three rungs (Quarter, XT Standard, XT Fast) and never
 Original or Half.
 
+**XT Standard is divided by its source** (`X3_DIVSRC` in `x3_rungs`;
+`x3_rungdiv`): 1 at 8-12 kHz, 2 at 16-24 kHz, 4 at 32-48 kHz. Divided, it
+opens the XT part with profile 3, the speech tables, which are the same
+output bit for bit (`x3_rungprof`, docs/xtmp3/XT.md 8.1). **XT Fast is
+asked in Auto only on an 8-12 kHz source**, because it has no divided
+kernels. XT Speech is refused on a 32-48 kHz source, a rule that was the
+part's and is now the engine's (`x3l_okc`). So a 44.1 kHz song's ladder is
+Quarter, then XT Standard at 4, then Decode first, and **Decode first is
+reached only when no live rung at or above the floor passed** (SPEC.md
+121.5).
+
 **A probe** decodes the actual track from its start, with no pre-roll to pay
 and the reservoir genuinely empty. It times, with `pit_now`, the front end,
 GRANULE, and the feed's copy into the card's ring (verb 6). The disk's share
@@ -728,7 +739,7 @@ is asserted): each leg boots its own private QEMU with its own disks under
 
 | leg | asserts |
 |---|---|
-| `ladder` | five machines by stub speed: capable stays Original; middling takes Half or Quarter; slower Quarter; XT-class reaches Decode first with Original and Half never probed, within 6 s of guest time; hopeless the same, within 4 s (it measured 1.4 to 1.8) |
+| `ladder` | six machines by stub speed: capable stays Original; middling takes Half or Quarter; slower Quarter; **xt44**, every STANDARD rung short and XT Standard passing on the 44.1 kHz song, plays LIVE XT Standard at 4 (11,025 Hz) with XT Fast never asked; XT-class reaches Decode first with Original and Half never probed, within 6 s of guest time; hopeless the same, within 4 s (it measured 1.4 to 1.8) |
 | `slowdown` | at 1.05x the windows step Original to Half with no underrun; at 0.60x one step, at most one underrun; never back up; position monotonic. Then the underrun rule, through the stub's hook (`X3SB_UNDAT`/`X3SB_UNDN`, counted as the card's own): one at 4x keeps Original and raises the low water to 3/4; two in one window step to Half |
 | `conv` | drive dialog, Save dialog, the WAV's every field and its frame count on the host, the finished file plays, a second Play reuses the cache with no granule, no probe and no part |
 | `cancel` | Esc mid-conversion: READY, the temp file gone, nothing else touched |
