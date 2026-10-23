@@ -1308,8 +1308,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "9d3238b0",
-  "strings": "7089350595429c29",
-  "why": "the Decode First list greys a 32 KB-cluster disk under XT Standard (said so); the probe-start and card-ring changes and the test-only x3rep.inc are below the page's level of detail"
+  "stamped": "0013ea61",
+  "strings": "ab9ffd36c184f5d9",
+  "why": "checked: parts fetched from the launch folder, a misreport now 'Cannot read its decoder', a live XT 4 KB gulp and early refill, an underrun at headroom keeping the rung, a queued title retried when idle, STEREO's space, and the test-only X3REPORT and stub hooks - all below the page's level of detail; 'falls behind' still describes the step"
  }
 }
