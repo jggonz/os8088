@@ -39,9 +39,17 @@ page. Then these keys move through it:
 | `Up`, `Down` | Scroll one line |
 | `PgUp`, `PgDn`, `Space` | Scroll one window |
 | `Home`, `End` | Go to the top or the bottom |
-| `Tab` | Move to the next field of a form |
+| `Tab` | Move through the address bar, the fields of a form and the links |
 | `Return` | Submit the form you are typing in |
 | `Esc` | Take the keyboard away from the location bar |
+| `Ctrl+O`, `Ctrl+L` | Open a page, or go to the location bar |
+| `Ctrl+S` | Save the page |
+| `Ctrl+R`, `F5` | Fetch the page again |
+| `Ctrl+A`, `Ctrl+C` | Select everything in the bar or the page, and copy it |
+| `Ctrl+D` | Bookmark the page, or remove its bookmark |
+| `Ctrl+U` | View the page's source |
+
+**Help > Keyboard Shortcuts...** lists them.
 
 The scroll bar on the right works with the mouse: click its arrows, click
 above or below the thumb to move a window at a time, or drag the thumb.
@@ -103,8 +111,36 @@ proxy.
 A form shows its text fields as boxes. Click one, or press `Tab` to reach it,
 and type. Press `Return` or click the form's button to send it. Check boxes,
 radio buttons and drop-down choices work too: click a choice to change it. A
-password field or a file field shows **[unsupported]**: with no encryption
-the Browser does not send a password over the network.
+password field hides what you type, and the Browser warns that the page is
+not secure, because a password sent over `http` is not encrypted. A file field
+shows **[unsupported]**.
+
+## Links, selections and the right button
+
+Drag across the page to select text. Click a link and press `Return`, or
+press `Tab` until the link is chosen, to follow it from the keyboard. The
+right button opens a small menu: on a link it offers **Open Link**, **Copy
+Link** and **Save Link As...**, on selected text **Copy**, and elsewhere
+**Save Page As...** and **View Source**. **View Source** shows the page as the
+server sent it, and **Close Source** returns to the page.
+
+## Bookmarks
+
+Press `Ctrl+D` to bookmark the page you are reading, and again to remove its
+bookmark. The **Bookmarks** menu lists up to eight saved pages: pick one to go
+there. A page loaded from a disk cannot be bookmarked. Bookmarks are kept in
+the file `BROWSE.DAT` in the `SYSTEM/APPDATA` folder and are there the next
+time you start.
+
+## Downloads
+
+A link to something the Browser cannot show as a page, such as a text file, a
+picture or an archive, opens the **Downloads** window instead of a page. It
+asks where to save the file, then shows the file's name and address, how much
+has arrived, a progress bar, the speed and the time left. **Cancel** stops the
+transfer and removes the part that arrived. When the file is complete, **Close**
+closes the window and the file stays where you saved it. **File > Downloads**
+opens the window again.
 
 ## The menus
 
@@ -113,10 +149,13 @@ the Browser does not send a password over the network.
 | File > Open... | Open a page from a disk |
 | File > Open Location... | Put the keyboard in the location bar to type an address |
 | File > Save As... | Save the page as the server sent it, as HTML |
+| File > Downloads | Show the Downloads window |
 | Go > Top | Go to the top of the page |
 | Go > Bottom | Go to the bottom of the page |
 | Go > Reload | Fetch the page again, like the Reload button |
 | History | The last eight pages you visited. Pick one to go back to it |
+| Bookmarks | Your saved pages. Pick one to go there |
+| Help > Keyboard Shortcuts... | The keys the Browser answers to |
 | Browser > About Browser | Who made it |
 | Browser > Close | Close this Browser |
 
@@ -177,9 +216,10 @@ The toolbar says **Saved**, or **Save failed**. With no page loaded it says
 
 ## Good to know
 
-- A page is cut off after 32 KB of HTML, and the toolbar says **Page
-  truncated**. Past 200 links it says **Links limited**. A table shows at
-  most eight columns, and a page at most four forms.
+- A long page is kept for as long as the machine has memory to spare, and
+  then cut off, with **Page truncated** in the toolbar. Past 400 links it says
+  **Links limited**. A table shows at most eight columns, and a page at most
+  eight forms.
 - An address can be up to 159 characters long. A longer one answers **URL
   too long**.
 - The Browser follows up to three redirects from a server. More answer **Too
