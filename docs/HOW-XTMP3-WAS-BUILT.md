@@ -1010,3 +1010,39 @@ the XT rungs on a 44.1 kHz source to run perhaps 2x to 3x faster than at
 ÷1. That would put the 486's XT Standard on C128 near 2.5x to 3.5x, which is
 live, and the 386DX's near 1x to 1.5x, which is borderline. The 286 and the
 XT are not expected to change.
+
+## 2026-10-23 — round 6: XT Standard divided by its source
+
+The owner asked for this at the machine: "On machines that are powerful
+enough, I don't want the player to decompress to disk and instead play from
+disk and decompress in realtime." The integration track built it the same
+day.
+
+**It needed fewer new parts than expected.** XT Standard at a divisor turned
+out to be XT Speech's tables at that divisor: the same 16 window terms on
+the kept phases, and the same Lee 16 or 8. `tools/x3simxt.py` hashed `std`
+and `speech` at 2 and at 4 to the same bytes. So no kernel was written.
+- The part stopped refusing the speech tables on MPEG-1 and on an MPEG-2
+  stream at 2.
+- The engine now gives XT Standard the source's divisor (1, 2 or 4) and
+  opens profile 3 when it divides.
+- Ten golden lines joined the 51, and all 61 are bit-exact in QEMU.
+- Against the float model at the same divisor the divided XT Standard
+  measures 32.0-34.1 dB. That is at or above XT Standard undivided on the
+  same files.
+- XT Fast does need new kernels to divide, so it stays an 8-12 kHz rung.
+
+**86Box, one run each.**
+- **The 486DX2/66 now plays C128 live** on XT Standard at 4: 11,025 Hz mono,
+  no underrun, the song played out. Before, it asked for a drive.
+- **The 386DX and the 286 still decode first on C128.** XT Standard at 4
+  probed 0.63x and 0.28x.
+- **The 286 on AFTERHRS is unchanged**, as it must be, because an 11 kHz
+  song is not divided.
+
+**The section before this one predicted 2x to 3x from the divisor, and the
+486 gained about 10%** (1.15x to 1.27x). On a 128 kbps stereo stream the
+front end does not shrink with the output. Huffman decoding of two
+channels' 576 lines a granule, at 76.6 granules a second, is the bulk of
+the cost, and the divisor only cuts what follows it. That is enough for the
+486, which crossed the 1.25x line, and not enough for the 386.

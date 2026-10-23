@@ -36,7 +36,7 @@ import x3simxt as SX     # noqa: E402
 BUILD = B.BUILD
 FIXDIR = B.FIXDIR
 DIR_SECTORS = 16
-PNUM = {'std': 0, 'fast': 1, 'turbo': 2, 'speech': 3}
+PNUM = {'std': 0, 'fast': 1, 'turbo': 2, 'speech': 3, 'stdd': 3}  # stdd: the speech tables
 
 
 def build():

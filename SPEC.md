@@ -217561,7 +217561,19 @@ is probed. Both backends reproduce their model BIT-EXACTLY (§121.11.6).
   XT Standard (16 window terms an output), XT Fast (8), XT Turbo (4,
   experimental, not in Auto) and XT Speech (16 terms at the divisor whose
   output lands near 5.5 kHz: 2 on an MPEG-2.5 source, 4 on an MPEG-2 one,
-  refused on MPEG-1). The exact definitions are docs/xtmp3/XT-STUDY.md §5
+  refused on MPEG-1). **XT Standard's divisor is its source's**: 1 at 8-12
+  kHz, 2 at 16-24 kHz, 4 at 32-48 kHz, so its output lands near 11 kHz and
+  never under the floor. Divided, it IS the XT Speech tables at that divisor
+  (the same 16 terms on the kept phases and the same Lee 16/8; std at a
+  divisor and speech at it are one output, bit for bit). The part runs those
+  tables at 2 or 4 on any MPEG version, and `tools/x3simxt.py` names the
+  case `stdd` (10 golden lines in tests/xtmp3/X3XT.txt, all bit-exact in
+  `x3xtexact`). Against the float decode at the same divisor it measures
+  32.0-34.1 dB, peak 1.4-6.0 LSB, DC within 0.03 LSB, over the ten 16-48 kHz
+  fixtures. That is at or above XT Standard undivided on the same files
+  (31.2-33.7). **XT Fast is not divided**: its window at 2 and 4 needs
+  kernels and Lee 16/8 constants its pack does not have, so in Auto it
+  stays an 8-12 kHz rung. The exact definitions are docs/xtmp3/XT-STUDY.md §5
   and `tools/x3simxt.py`. **What the target settled that the study left
   open** (docs/xtmp3/XT.md §1): requantisation is one linear path for every
   profile, an exact table for `|ix| <= 15` and pow43 scaled to Q13 above it;
@@ -217584,8 +217596,18 @@ is probed. Both backends reproduce their model BIT-EXACTLY (§121.11.6).
 
 Auto takes the first rung that calibrates real time on THIS machine with this
 device: **Original** (STANDARD, divisor 1), **Half** (STANDARD, 2),
-**Quarter** (STANDARD, 4), **XT Standard**, **XT Fast**, and then **Decode
-first** (§121.7). XT Turbo and XT Speech are the user's explicit choices only.
+**Quarter** (STANDARD, 4), **XT Standard** (divided by its source: 1, 2 or
+4, §121.4), **XT Fast** (8-12 kHz sources only), and then **Decode first**
+(§121.7). XT Turbo and XT Speech are the user's explicit choices only.
+**Decode first is chosen ONLY when no live rung at or above the floor
+passes**, never on a machine where one does. An explicit D (or the menu)
+still converts at the user's quality, and a machine with no card still
+converts. Before the divisor, every XT rung decoded a 44.1 kHz song at
+full rate, so a machine able to play it at 11 kHz went to Decode first.
+86Box's 486DX2/66 on C128 probed Quarter 0.98, XT Standard 1.15 and XT Fast
+1.17 (§121.11.5). `xtmp3eng`'s `ladder/xt44` is the rule over the stub: a
+middling machine with a 44.1 kHz song plays live XT Standard at 4 (11,025
+Hz), and XT Fast is never asked.
 A rung whose output rate the device cannot play is skipped rather than tried,
 and so is a rung whose output would fall below `X3_FLOOR` = 8,000 Hz while
 the source is above it, so an 11,025 Hz track never auto-halves to 5,512 Hz.
@@ -217593,8 +217615,9 @@ Device format limits (8-bit, mono, a top rate) are applied at the feed and
 shown as the DEVICE's (the LCD's format line adds `DEVICE`), separately from
 any CPU step-down. `x3_rungs` maps each rung to (backend, profile, divisor):
 Original (STD, 0, 1), Half (STD, 0, 2), Quarter (STD, 0, 4), XT Standard
-(XT, 0, 1), XT Fast (XT, 1, 1), XT Turbo (XT, 2, 1), XT Speech (XT, 3, set
-by the source).
+(XT, 0, `X3_DIVSRC`: the source's - and at 2 or 4 OPEN takes profile 3,
+`x3_rungprof`), XT Fast (XT, 1, 1), XT Turbo (XT, 2, 1), XT Speech (XT, 3,
+set by the source; refused on a 32-48 kHz source).
 
 **Calibration** decodes the actual track from its start, timed by
 `pit_now`: the front end, GRANULE, and the feed's copy into the card's ring,
@@ -218174,12 +218197,12 @@ replace.
 | | C128 | Quarter 0.01 (no XT rung: its output would be 44.1 kHz, above a DSP 2.01) | Decode first, on QUARTER | the conversion at **0.0117x** | 204,800 B |
 | 4.77 MHz XT, SB 2.0 (86Box, floppy only) | AFTERHRS | XT Standard 0.05 (an 8086 probes it alone) | Decode first, on XT STANDARD | the dialog: no hard drive; calibration 10.08 s | 381 KB |
 | | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog; 7.89 s | 179 KB |
-| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.30, XT Standard 0.73, XT Fast 0.78 | Decode first, on ORIGINAL | the dialog; 9.28 s | 381 KB (calibrating) |
-| | C128 | Quarter 0.15, XT Standard 0.10, XT Fast 0.21 | Decode first, on QUARTER | the dialog; 7.62 s | 381 KB |
+| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.39, XT Standard 0.71, XT Fast 0.78 (round 6; before 0.30, 0.73, 0.78) | Decode first, on ORIGINAL | the dialog; 11.43 s | 383 KB (calibrating) |
+| | C128 | Quarter 0.16, XT Standard at 4 0.28 (round 6; before: Quarter 0.15, XT Standard 0.10, XT Fast 0.21) | Decode first, on QUARTER | the dialog; 6.67 s | 307 KB |
 | 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **no underrun** with a 4 KB gulp asked for as soon as it fits (§121.6; xtmp3/int round 4: calibration 6.20 s, probe 2.02x). It was one underrun, stepped to XT FAST, on round 3's 16 KB grant with a refill every half ring (calibration 5.76 s), and 11 on round 2's 8 KB grant | 350 KB |
-| | C128 | Quarter 0.37, XT Standard 0.47, XT Fast 0.51 | Decode first, on QUARTER | the dialog; 7.15 s | 343 KB |
+| | C128 | Quarter 0.37, XT Standard at 4 0.63 (round 6; before: Quarter 0.37, XT Standard 0.47, XT Fast 0.51) | Decode first, on QUARTER | the dialog; 5.44 s | 269 KB |
 | 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 3.08 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 157 KB |
-| | C128 | Quarter 0.97, XT Standard 1.15, XT Fast 1.16 (round 3; round 2 0.98, 1.15, 1.17) | **Decode first, on QUARTER** - no rung passes 1.25x | the dialog; **no "Out of memory"** (it was, at 55a051b4, after XT Standard probed 1.48x); the fall-through was not reached; round 3's probe that no longer pays a face redraw did not move it | 344 KB |
+| | C128 | Quarter 0.97, **XT Standard at 4 1.27** (round 6, xtmp3/int; before: Quarter 0.97, XT Standard 1.15, XT Fast 1.16, Decode first) | **live XT STANDARD at 4**, 11,025 Hz mono 8-bit | **no underrun**, the song played out; calibration 4.00 s | 275 KB |
 | Pentium 133 MHz, SB16 (86Box) | AFTERHRS | Original 4.88 | **live ORIGINAL** | no underrun | 157 KB |
 | | C128 | Original 0.75, Half 0.98, Quarter 1.30 | **live QUARTER**, 11,025 Hz stereo 16-bit | no underrun | 174 KB |
 

@@ -451,3 +451,32 @@ cases once each, with the same disks and procedure.
   redraw gives the same figures to the hundredth: 0.97, 1.15 and 1.16
   against 0.98, 1.15 and 1.17. So the drop from 55a051b4's 1.48x on XT
   Standard is not the face. It is still untraced.
+
+### 7.4 Round 6: XT Standard divided by its source (the integration track)
+
+At the owner's request ("on machines that are powerful enough ... play from
+disk and decompress in realtime"), XT Standard now takes its divisor from
+the source: 4 on C128's 44.1 kHz, 1 on AFTERHRS's 11 kHz (SPEC.md 121.4).
+Decode first is reached only when no live rung passes (121.5). The
+integration track re-ran four cases once each, with FIELD's X3REPORT disks
+and `tools/x3field.py` (`int-r6-field-a.json` and `int-r6-field-b.json` in
+its reports).
+
+| machine | track | probes, before | Auto, before | probes, round 6 | Auto, round 6 | underruns | peak |
+|---|---|---|---|---|---|---|---|
+| 486DX2/66, SB16 | C128 | Quarter 0.97, XT Std 1.15, XT Fast 1.16 | Decode first (Quarter) | Quarter 0.97, **XT Std at 4 1.27** | **live XT STANDARD at 4**, 11,025 Hz mono 8-bit | **0** (played out) | 275 KB |
+| 386DX/25, SB16 | C128 | Quarter 0.37, XT Std 0.47, XT Fast 0.51 | Decode first (Quarter) | Quarter 0.37, XT Std at 4 0.63 | Decode first (Quarter) | - | 269 KB |
+| 286/12.5, SB16 | AFTERHRS | Original 0.30, XT Std 0.73, XT Fast 0.78 | Decode first (Original) | Original 0.39, XT Std 0.71, XT Fast 0.78 | Decode first (Original) | - | 383 KB |
+| 286/12.5, SB16 | C128 | Quarter 0.15, XT Std 0.10, XT Fast 0.21 | Decode first (Quarter) | Quarter 0.16, XT Std at 4 0.28 | Decode first (Quarter) | - | 307 KB |
+
+- **The 486 now plays the 44.1 kHz song live**, which was the request.
+  XT Standard at 4 is 1.27x against 1.15x undivided, so the gain is
+  smaller than the divisor suggests. A 128 kbps stereo stream's front end
+  (Huffman, two channels, then the downmix) does not shrink with the
+  output.
+- **The 386 and the 286 still decode first on C128.** XT Standard at 4
+  reaches 0.63x and 0.28x, and nothing else is cheaper. On AFTERHRS the
+  286 is unchanged, as it must be: an 11 kHz source is not divided.
+- XT Fast is no longer asked on a 44.1 kHz song. It has no divided kernels
+  (docs/xtmp3/XT.md 8.1).
+

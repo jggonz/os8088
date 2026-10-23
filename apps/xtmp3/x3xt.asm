@@ -2269,8 +2269,11 @@ x3x_opentail:
     mov [cs:x3x_fmt], cl
     mov ax, [es:di + X3O_GAIN]
     mov [cs:x3x_gain], ax
-    ; the stream: version 1, 2 or 25, rate index 0..2; XT Speech's divisor
-    ; is its source's (SPEC.md 121.4): 2 on MPEG-2.5, 4 on MPEG-2
+    ; the stream: version 1, 2 or 25, rate index 0..2. The SPEECH tables run
+    ; at 2 or 4 on ANY version: XT Speech's own rule (2 on MPEG-2.5, 4 on
+    ; MPEG-2) is the engine's, and XT Standard divided by its source (2 on
+    ; MPEG-2, 4 on MPEG-1, SPEC.md 121.4) is these tables too - 16 terms on
+    ; the kept phases, bit for bit std at that divisor (tools/x3simxt.py)
     mov ax, X3E_RECORD
     mov cl, [es:di + X3O_VER]
     mov ch, [es:di + X3O_SRI]
@@ -2285,19 +2288,6 @@ x3x_opentail:
 .verok:
     mov [cs:x3x_over], cl
     mov [cs:x3x_osri], ch
-    cmp byte [cs:x3x_prof], X3X_P_SPEECH
-    jne .divok
-    mov ax, X3E_DIV
-    mov ch, 2
-    cmp cl, 25
-    je .spd
-    mov ch, 4
-    cmp cl, 2
-    jne .bad                        ; MPEG-1: no 4-6 kHz output there
-.spd:
-    cmp ch, [cs:x3x_div]
-    jne .bad
-.divok:
     ; the segments: NSEG of them, none zero
     mov ax, X3E_MEM
     mov cl, [cs:si]

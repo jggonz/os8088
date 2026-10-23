@@ -75,13 +75,14 @@ stepping down only as far as the computer needs.
 | Original | The song as it was made, in stereo where the card allows | A fast computer |
 | Half | Half the sample rate: the top of the treble is gone | A computer a little too slow for Original |
 | Quarter | A quarter of the rate: a radio-like sound | A computer slower again |
-| XT Standard | A shortcut decoder built for slow PCs: 8-bit mono, close to any 8-bit player | An XT, usually through Decode First |
+| XT Standard | A shortcut decoder built for slow PCs: 8-bit mono, close to any 8-bit player, about 11,000 samples a second whatever the song's rate | An XT, usually through Decode First, and a 386 or 486 playing a CD-quality song |
 | XT Fast | Like XT Standard, a little rougher and a little quicker | An XT that needs the time |
 | XT Turbo | Quicker still, with audible whistles on pure tones | Only when you choose it |
 | XT Speech | Narrow, muffled sound, quick to decode | Spoken word on low-rate files, only when you choose it |
 
 Automatic choice never lowers a song below 8,000 samples a second, so an
-11 kHz song is never halved on its own.
+11 kHz song is never halved on its own. It asks you to decode first only
+when no quality can play live on this computer.
 
 **Q** or **Options > Quality** chooses a quality yourself. Each press moves
 to the next one, and the item shows the current choice. A quality you chose
