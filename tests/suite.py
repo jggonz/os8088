@@ -467,14 +467,14 @@ FAST = [
         "figures were measured on, entry for entry. Soak because it "
         "rebuilds the corpus with numpy (seconds, not a fast row)",
         needs=("numpy",)),
-    Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 900.0,
+    Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 1200.0,
         "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
         "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "
         "X3STUB.CFG), on QEMU because what is asserted is behaviour: the "
         "ladder on five machines (capable stays Original; middling Half or "
         "Quarter; slower Quarter; an XT-class one Decode first; a hopeless "
         "one bounded in time), a mid-track slowdown stepping down ONCE and "
-        "never back, Decode first end to end (the drive dialog, the Save "
+        "never back, and an underrun at 4x kept while two in a window step, Decode first end to end (the drive dialog, the Save "
         "dialog, the WAV's fields and length on the host, the cache reused "
         "with no granule decoded), Esc cancelling and deleting only its "
         "temp, a disk filled mid-write, stale and incomplete caches "
@@ -483,7 +483,7 @@ FAST = [
         "the SHIPPED package with the real XT part, XT Standard's working "
         "set (X3S_PEAK) at or under SPEC.md 121.10's 400,000 bytes - "
         "converting (its part fetched ONCE: the probe's OPEN reused with a "
-        "RESET) and live on an SB16 (the 8 KB grant) - and on 8, 16 and "
+        "RESET) and live on an SB16 (the 16 KB grant, a 4 KB gulp) - and on 8, 16 and "
         "32 KB-cluster fixed disks (x3_plan's single stage; XT Standard "
         "refused by name on 32 KB, XT Fast converting there), every WAV "
         "byte-exact to tools/x3simxt.py. Then the paths no leg had taken: a "
@@ -492,7 +492,11 @@ FAST = [
         "fixed volume (a CD through CDROM.DRV), an lz4-packed MP3 refused "
         "by name, the queue's probe across a 32 KB cluster's end, and the "
         "finished file's actual bytes reaching a Covox (QEMU's trace of "
-        "the LPT data port; its pcspk renders no PWM)",
+        "the LPT data port; its pcspk renders no PWM). And the package's "
+        "parts fetched from its launch folder with the song on another "
+        "drive (offvol) and in another folder of the same one (offdir), "
+        "live and converting, and a queued song whose probe was not had "
+        "given its title when idle (qagain)",
         needs=("qemu", "nasm", "mtools", "numpy"), serial=True,
         timeout=2700,
         wants=("build/xtmp3s.o88", "build/xtmp3s.bin", "build/xtmp3.o88",

@@ -217626,8 +217626,16 @@ on to the next rung or to Decode first - never an error (`xtmp3eng`'s
 format bits and the rate cap), so a second play of a track asks no probe.
 
 **While playing live**, a 32-granule window under 1.10x counts as slow; two
-in a row, or one underrun, step DOWN one rung (`X3R_STEP`), and a window at
-or above 1.10x clears the count. A step is a RE-OPEN (every rung below
+in a row step DOWN one rung (`X3R_STEP`), and a window at or above 1.10x
+clears the count. **An underrun is a reason to re-evaluate, not a step**
+(`x3_under`): it steps only when the decode is what is short - this window's
+speed so far (from 4 granules), else the last whole window's, else the
+rung's probe, under 1.10x - or when it is the second underrun inside one
+32-granule window. Otherwise it is the disk's (a read holds `sch_lock`, and
+the card plays its ring alone through it): counted, the rung kept, and the
+look-ahead's refill asked for earlier, at 3/4 of its ring rather than half.
+`xtmp3eng`'s `slowdown` leg injects them through the stub's hook: one at 4x
+is kept, two in a window step. A step is a RE-OPEN (every rung below
 Original changes the card's rate or format): the old stream ends on a
 32-frame ramp to silence published as its last half, the card plays it out,
 the rung below opens at the last REAL sample and pre-rolls `X3_PREROLL` = 6
@@ -217640,8 +217648,8 @@ frame for 3.2% of them, 2 for 15.8%, 4 for 92.5% and 6 for all
 bitrates, and short blocks chain their overlap). **Nothing ever steps back
 up**, and an override
 (Options > Quality) shows `(set)` and is never stepped. The disk's time is
-not in a live window: a disk that cannot keep up shows as an underrun, and
-the underrun steps. An underrun while playing a FINISHED file is a disk or
+not in a live window: a disk that cannot keep up shows as underruns, and
+two in a window step. An underrun while playing a FINISHED file is a disk or
 device fault, counted, and never a reason to decode with more loss.
 **Without a card** there is nothing live to choose (§121.6), and the probes
 become the conversion's estimate: the offline pick (`x3l_offpick`) is the
@@ -217675,7 +217683,7 @@ QEMU's SB16 and finds it sample for sample.
 |---|---|
 | under `X3_RINGHI` = 32,000 | SOUND.DRV's grant (verb 7): 16 KB, else 8 |
 | 32,000 or more | an EXTERNAL ring (`SND_OPENF_EXT`, §34.5.3): 32 KB of the package's own plus the control words, claimed DMA-safe, written directly. The pool tops out at 16 KB, which is 93 ms of 44.1 kHz 16-bit stereo |
-| any, under the XT backend | the 16 KB grant with the look-ahead made smaller to fit, else the 8 KB grant (`x3_plan`); never the external ring: the 400,000 bytes hold the card's ring too (§121.10). The 16 KB is 1.5 s of 11 kHz where 8 is 0.74, and a smaller look-ahead makes a floppy's gulp shorter |
+| any, under the XT backend | the 16 KB grant with the look-ahead made smaller to fit, else the 8 KB grant (`x3_plan`); never the external ring: the 400,000 bytes hold the card's ring too (§121.10). The 16 KB is 1.5 s of 11 kHz where 8 is 0.74. Live or probing, a gulp is 4 KB (`X3_RDXT`, or one cluster where that is more), at most two `int 13h` calls, and one is asked for as soon as it fits (the low water is the ring less a gulp): a read holds `sch_lock`, and a floppy's motor stops 2 s after its last read, so a refill a half ring apart paid the spin-up. 86Box's 386 underran once that way, on the first refill 2.7 s after the prime, and not at all with it |
 
 **The feed** (`x3_feed`, the worker, lock-free) is §86.5's pattern: verb 3's
 consumed count is the clock, and up to `X3_MAXFEED` = 8 halves of `X3_HALF`
@@ -218149,7 +218157,7 @@ replace.
 | | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog; 7.89 s | 179 KB |
 | 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.30, XT Standard 0.73, XT Fast 0.78 | Decode first, on ORIGINAL | the dialog; 9.28 s | 381 KB (calibrating) |
 | | C128 | Quarter 0.15, XT Standard 0.10, XT Fast 0.21 | Decode first, on QUARTER | the dialog; 7.62 s | 381 KB |
-| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **one underrun**, stepped to XT FAST (round 3: the 16 KB grant, an 8 KB look-ahead; it was 11 on round 2's 8 KB grant, one at 55a051b4); calibration 5.76 s | 350 KB |
+| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **no underrun** with a 4 KB gulp asked for as soon as it fits (§121.6; xtmp3/int round 4: calibration 6.20 s, probe 2.02x). It was one underrun, stepped to XT FAST, on round 3's 16 KB grant with a refill every half ring (calibration 5.76 s), and 11 on round 2's 8 KB grant | 350 KB |
 | | C128 | Quarter 0.37, XT Standard 0.47, XT Fast 0.51 | Decode first, on QUARTER | the dialog; 7.15 s | 343 KB |
 | 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 3.08 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 157 KB |
 | | C128 | Quarter 0.97, XT Standard 1.15, XT Fast 1.16 (round 3; round 2 0.98, 1.15, 1.17) | **Decode first, on QUARTER** - no rung passes 1.25x | the dialog; **no "Out of memory"** (it was, at 55a051b4, after XT Standard probed 1.48x); the fall-through was not reached; round 3's probe that no longer pays a face redraw did not move it | 344 KB |
@@ -218306,10 +218314,13 @@ third-party audio in them.
 
 **Open:**
 
-- **The compact layouts print `STEREO44.1 kHz`**: STEREO is two characters
-  longer than MONO and runs into the rate.
-- **A queued song's title can stay its file stem** while a slow rung plays
-  (seen on QEMU's Hercules build under XT FAST).
+- **A queued song's title waits for the player to be idle** when its probe
+  is not had beside a live stream (`QEF_AGAIN`): the row shows the file's
+  stem until then, or until the song opens and its own tag is taken. Seen on
+  QEMU's Hercules build under XT FAST, whose framebuffer at 7000h leaves a
+  448 KB machine; that the probe's 8 KB buffer was the claim refused there
+  is inferred, not re-run on that build (`xtmp3eng`'s `qagain` leg refuses
+  it through the stub's hook).
 - **The offline pick sits on a knife edge on an XT**: XT Fast measured 11
   (x100) on MartyPC and 12 on 86Box against `X3_OFFMAX`'s 12, so the same
   machine class converts on XT Standard under one instrument and XT Fast
@@ -218333,10 +218344,12 @@ third-party audio in them.
   at 4-7, and never on a quiet host: QEMU's SB16 plays in host real time
   while a starved guest runs slow, and that stream's lead between a refill
   request and an empty card is about 240 ms. Not reproduced, not changed.
-- **86Box's 386 still underruns once** live on XT Standard from a floppy,
-  on round 3's 16 KB grant with an 8 KB look-ahead (§121.11.5; 11 times on
-  round 2's 8 KB grant), and the underrun steps it to XT Fast. When, and
-  why with 2.14x of headroom, is not measured: the report counts it.
+- **86Box's 386 plays XT Standard live with no underrun** from a floppy
+  (11 on round 2's 8 KB grant, 1 on round 3's 16 KB one, which stepped it to
+  XT Fast). The report placed the one at granule 58 of 194, the card run
+  dry, at the first refill 2.7 s after the prime - past the BIOS's 2 s motor
+  timeout; with a refill asked for as soon as a 4 KB gulp fits (§121.6), 0.
+  The motor is the inference; the A/B is one run each.
 - **The 720KB disks** carry XTMP3 only on `make xtmp3disk`; whether it rides
   the third primary 720KB disk is the owner's call.
 - **Not re-run on the shipped build**: of the 86Box matrix, round 3 re-ran
@@ -218347,5 +218360,4 @@ third-party audio in them.
 - **Untested**: the SB Pro's stereo path.
 - **Not measured**: any real machine, a real hard disk's share of a
   conversion, the face on CGA and Hercules on an XT, a conversion on
-  86Box, the cause of the 386's one underrun, the SB Pro's stereo on its
-  own card, and a listening pass of each rung.
+  86Box, the SB Pro's stereo on its own card, and a listening pass of each rung.

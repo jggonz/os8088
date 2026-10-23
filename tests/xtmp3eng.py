@@ -1846,6 +1846,62 @@ def leg_qagain():
         r.done()
 
 
+def leg_offdir():
+    """THE SAME DRIVE, ANOTHER FOLDER (the owner's 86Box XT: XTMP3 in
+    C:\\XTMP3, the song in C:\\MEDIA, 'Needs 330K has 520K'): the package at
+    C:'s root, the song in C:\\MEDIA, queued through File > Add to Queue,
+    whose dialog opens in MEDIA (SPEC.md 38.10). Played, Auto fetches
+    STANDARD and plays live - a fetch that follows the carve's read rides
+    os88_rseq's cursor and never looks the name up - and a forced XT
+    Standard, whose part is read by NAME, converts"""
+    leg = "offdir"
+    r = Rig(leg, sb=True, stub=False,
+            hd=[(HD0_GEO, ["MEDIA:" + fixture(NEON)],
+                 ["SYSTEM/APPDATA", "MEDIA"], 0)])
+    try:
+        lst = ["MEDIA", "SYSTEM", "X3STUB.CFG", "XTMP3.O88"]
+        if not check(leg, "XTMP3 opens from C:'s root",
+                     r.open_file("C", "XTMP3.O88", lst)):
+            return
+        if not check(leg, "File > Add to Queue", r.menu_pick("File", 1)):
+            return
+        r.until(lambda: struct.unpack("<H", r.read(S("fdlg_win"), 2))[0],
+                "the Open dialog", 20)
+        wp = struct.unpack("<H", r.read(S("fdlg_win"), 2))[0]
+        wx, wy = struct.unpack("<HH", r.read(geom.KERNEL_SEG * 16 + wp + 2, 4))
+        time.sleep(1.5)
+        xmcheck.dblclick(r.sock, wx + 70, wy + 47 + 16)  # '..', then the song
+        r.until(lambda: r.b("x3_qn") == 1, "the queue of one", 20)
+        if not check(leg, "C:\\MEDIA\\%s queued" % NEON, r.b("x3_qn") == 1):
+            return
+        r.key("spc")
+        states = []
+        r.until(lambda: states.append(r.st()["state"]) or
+                r.st()["md"] in (MD_LIVE, MD_CHOOSE) or
+                r.st()["state"] == ST_ERROR, "Auto's decision", 90, 0.2)
+        s = r.st()
+        nf = list(r.rd("x3_nfetch", 5))
+        check(leg, "plays LIVE, STANDARD fetched from C:\\ (no Decode First, "
+              "no ERROR)", s["md"] == MD_LIVE and ST_ERROR not in states and
+              nf[2] >= 1, "md %d qual %s '%s', fetches %s" % (
+                  s["md"], QNAME[s["qual"]], r.errtext(), nf))
+        r.key("s")                          # the XT part: its fetch does not
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 20)
+        for _ in range(Q_XTSTD):            # follow the carve's read, so the
+            r.key("q")                      # file is found by NAME (the
+            time.sleep(0.4)                 # owner's case: 'Needs 330 KB')
+        r.key("d")
+        conv_flow(r, leg)
+        s = r.st()
+        nf = list(r.rd("x3_nfetch", 5))
+        check(leg, "a forced XT STANDARD converts and plays, the XT part "
+              "fetched from C:\\", s["state"] == ST_FILE and nf[3] >= 1,
+              "state %d md %d '%s', fetches %s" % (
+                  s["state"], s["md"], r.errtext(), nf))
+    finally:
+        r.done()
+
+
 LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "cancel": leg_cancel, "full": leg_full, "stale": leg_stale,
         "novol": leg_novol, "twovol": leg_twovol, "playwav": leg_playwav,
@@ -1854,7 +1910,7 @@ LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox,
         "probe32": leg_probe32, "shortmem": leg_shortmem,
         "rungfail": leg_rungfail, "offvol": leg_offvol,
-        "qagain": leg_qagain}
+        "qagain": leg_qagain, "offdir": leg_offdir}
 
 
 def main():

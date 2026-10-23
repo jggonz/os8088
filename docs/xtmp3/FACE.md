@@ -91,7 +91,11 @@ duration), `x3_e_qdrop` AL, `x3_e_qclear`.
 name, its volume and folder cluster (`OSAPI_FILE_HERE` at the dialog's
 answer, `OSAPI_ARG_FILE`'s pair at a launch), a duration word (FFFFh =
 unknown, shown `--:--`), an estimate flag, and a 40-character title that is
-the name's stem until the parser (S5) writes the tag's.
+the name's stem until the parser (S5) writes the tag's. A probe that was
+not had (no heap for its buffer beside a live stream) flags the entry
+`QEF_AGAIN` (40h), asked again when the player is idle; the song's own open
+takes its tag too. The compact layouts' channel word starts at x = 256, so
+`STEREO` (36 of 42 pixels) keeps a space before the rate at 298.
 
 ## Meters (SPEC.md 121.8's honesty)
 
