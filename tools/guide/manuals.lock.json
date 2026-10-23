@@ -1308,8 +1308,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "e680ff37",
+  "stamped": "305b14e6",
   "strings": "222c4f61704cd4f5",
-  "why": "checked: an approved batch's mode, below the page's detail"
+  "why": "the quality table now says XT Standard plays about 11,000 samples a second from any song and is a 386/486's live rung for CD-quality songs; Decode First is asked only when nothing plays live"
  }
 }
