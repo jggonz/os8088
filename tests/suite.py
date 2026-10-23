@@ -16721,6 +16721,34 @@ SOAK = [
         "76.14.13, 76.14.14). Forced EGA/CGA variants remain available through "
         "script options.",
         needs=("qemu", "nasm", "pil"), serial=True),
+    Row("x3model", "soak", py("tools/x3sim.py", "--check"), 0.8,
+        "XTMP3's numerics (SPEC.md 121.4) in under a second: the 37 committed "
+        "fixtures against FIXTURES.txt's SHA-256s, the STANDARD table blob "
+        "against the formula each table comes from (tools/x3tables.py "
+        "--selfcheck: every Huffman codeword through its lookup table, the "
+        "pow43 rounding, the 32-bit bounds the merged IMDCT and the window "
+        "rely on, two generations byte-identical), and the integer model's "
+        "PCM for five cases against tests/xtmp3/X3SIM.txt - the bytes "
+        "x3std.asm must reproduce, so a model change that moves them is a "
+        "change to the port's contract and has to be written down with "
+        "`--golden`. SOAK and not fast: it is one package's",
+        needs=("numpy",)),
+    Row("x3golden", "soak", py("tools/x3sim.py", "--check-all"), 55.0,
+        "x3model's golden check over all 141 cases - every decodable fixture "
+        "at divisors 1, 2 and 4, and every stereo one downmixed at 1 and 4 "
+        "(SPEC.md 121.4): the whole of the port's bit-exact target, "
+        "recomputed",
+        needs=("numpy",)),
+    Row("x3compare", "soak", py("tools/x3sim.py", "--compare"), 75.0,
+        "XTMP3's STANDARD integer model against `lame --decode` (mpglib) on "
+        "every fixture at the source rate - RMS <= 4 LSB, peak <= 32 LSB, "
+        "SNR >= 60 dB above -40 dBFS (docs/xtmp3/NUMERICS.md 4) - and against "
+        "its own float reference at divisors 2 and 4 and for the mono "
+        "downmix; every malformed fixture ends "
+        "in its documented refusal or recovery with no exception, and the "
+        "garbage, tag and VBRI variants decode to the clean stream's PCM "
+        "exactly. SKIPS without LAME",
+        needs=("numpy", "lame")),
 ]
 
 
