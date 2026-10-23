@@ -204,7 +204,8 @@ with it (`OSAPI_ARG_FILE`), queued and played.
 ## The art (`tools/os88x3art.py`)
 
 **The pictures are a PART of XTMP3.O88, not the primary's data** (SPEC.md
-20.12): row `X3_PART_ART` (0) of xtmp3.asm's part table, `OP_ASSET`, eager
+20.12): row `X3PART_ART` (1) of xtmp3.asm's part table - the STANDARD
+track's, FRONT before it and the lazy STANDARD row after - `OP_ASSET`, eager
 (every adapter draws from it at the first paint), `OP_COMP` (LZ4 on the
 disk: 12,985 bytes from 4,789). The entry proc calls `op_load` first and
 banks the part's segment in `[x3_artseg]` once (`x3f_artseg`: the carve's
@@ -247,15 +248,17 @@ inside its canvas and every scale mark on its face.
 
 | | bytes |
 |---|---|
-| `XTMP3.O88` image (the primary) | 14,882 (26,496 with the art in it) |
-| bss | 9,851 (the parts standard's 102 and `x3_artseg` added) |
+| `XTMP3.O88` image (the primary), the face alone | 14,882 (26,496 with the art in it) |
+| ...with the STANDARD track's front end merged | 21,128 (33,995 with the art in it) |
+| bss, the face alone | 9,851 (the parts standard's 102 and `x3_artseg` added) |
 | the ART part | 12,985 unpacked, 4,789 on the disk (LZ4) |
 | ...the largest parts of it | digit sets 4,584; dials 3,192; knobs 2,082; fonts 1,616 |
 | the file | 18,101 (16,671 when the art was image) |
 
-`OP_COMP` costs the primary 383 bytes of the standard's unpacker (14,499
-without it) and saves 8,196 on the disk; `%define X3_ARTFLAGS` in
-x3face.inc is the switch. bss: the state record 68, the queue 1,920, two
+`OP_COMP` saves 8,196 bytes on the disk; the unpacker it needs is the
+parts standard's, already there for the decoder's compressed rows (alone,
+the face paid 383 bytes for it). `%define X3_ARTFLAGS` in x3face.inc is the
+switch. bss: the state record 68, the queue 1,920, two
 colour dial faces 4,704, the band/canvas 2,720, keys and the rest. No kernel
 byte.
 
