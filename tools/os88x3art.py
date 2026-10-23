@@ -579,10 +579,11 @@ KNOB_R = 26.0
 # THE HAND FINISH: the master's indicator (a white groove, outlined, at 12
 # o'clock - rows 19..32, columns 30..33) is taken out, since the package
 # draws it at the volume's angle. Its pixels are refilled from the same rows
-# four columns away on its own side - an even offset, so the dither's phase
-# is kept - and the patch is written down here rather than drawn by hand.
+# two columns away on its own side - an even offset, so the dither's phase
+# is kept, and near, so the shading runs on across it - and the patch is
+# written down here rather than drawn by hand.
 KNOB_GROOVE = (30, 19, 33, 32)          # x1, y1, x2, y2, inclusive, master grid
-KNOB_FIX = [(32, 31, LGRAY)]            # ...and a black speck the refill carried
+KNOB_FIX = []                           # ...and any speck the refill carried
 
 
 def knob_master():
@@ -591,7 +592,7 @@ def knob_master():
     out = [list(r) for r in g]
     for y in range(y1, y2 + 1):
         for x in range(x1, x2 + 1):
-            src = x - 4 if x < (x1 + x2 + 1) / 2 else x + 4
+            src = x - 2 if x < (x1 + x2 + 1) / 2 else x + 2
             out[y][x] = g[y][src]
     for x, y, c in KNOB_FIX:
         out[y][x] = c

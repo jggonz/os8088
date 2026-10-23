@@ -639,8 +639,16 @@ x3_dlg:
 x3_a_remove:
     mov al, [x3_qsel]
     call x3_qdel
-    clc
-    ret
+; x3_a_recue - with nothing under way, the LCD shows the selection
+x3_a_recue:
+    call x3_playing
+    je x3_a_none
+    call x3_busy
+    je x3_a_none
+    mov al, [x3_qsel]
+    cmp al, 0xFF
+    je x3_a_none
+    jmp x3_e_cue
 x3_a_clear:
     call x3_e_qclear
     mov byte [x3_qn], 0
@@ -1445,7 +1453,7 @@ x3_tcol:                            ; COLOUR - xtmp3-color.png
     db CLGRAY, CBLACK, CWHITE, CDGRAY, CBLACK       ; GND EDGE HI SH LABEL
     db CBLACK, CDGRAY, CLCYAN, CLGREEN, CWHITE      ; LCD RIM TTL TIM TOT
     db CWHITE, CLCYAN                               ; FMT RATE
-    db CLGRAY, D_DITHER + 0, CBLACK                 ; PBFRM PBFG PBBG
+    db CWHITE, D_DITHER + 0, CBLACK                 ; PBFRM PBFG PBBG
     db CLGRAY, CBLACK, CDGRAY, CBLACK, CLGREEN      ; KEY INK DIS ON ONI
     db CDGRAY                                       ; BEZEL
     db CWHITE, CBLACK, CBLUE, CWHITE                ; QBOX QTXT QSEL QSELT

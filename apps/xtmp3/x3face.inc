@@ -641,12 +641,12 @@ x3f_e_total:
     jc .out
     mov di, x3f_tbuf
     mov word [di], '/ '
+    cmp ax, 0x7FFF                  ; (none: its bit 14 is not the estimate's)
+    je .dash
     test ah, 0x40
     jz .sl
     mov byte [di+1], '~'
 .sl:
-    cmp ax, 0x7FFF
-    je .dash
     and ah, 0x3F
 .dash:
     add di, 2
@@ -1659,9 +1659,13 @@ x3f_e_qsb:
     xor ch, ch
     mov bx, [si+QG_N]
     xor dx, dx                      ; DX = the thumb's top in it
+    jcxz .none                      ; an empty queue: the trough alone
     cmp cx, bx
     ja .some
     mov bx, di                      ; it all fits: the thumb is the trough
+    jmp short .draw
+.none:
+    xor bx, bx
     jmp short .draw
 .some:
     push ax
@@ -2229,8 +2233,8 @@ x3_dfull:
     DRECT R_EDGE, 425, 113, 488, 113
     DCSTR x3_fcapsb, x3_s_output, 400, 110, X3_SCREW
     ; the grilles, and the knob's printed parts
-    DPIC x3art_grillf, 312, 148, X3_SCREW
-    DPIC x3art_grillf, 446, 148, X3_SCREW
+    DPIC x3art_grillf, 312, 154, X3_SCREW
+    DPIC x3art_grillf, 446, 154, X3_SCREW
     dw D_KNOBTX
     ; the screws between the deck and the queue
     DPIC x3art_screw, 3, 229, X3_SCREW
@@ -2305,17 +2309,17 @@ x3_dmid:
     DFRAME R_PBFRM, 42, 89, 281, 100
     DRECT R_EDGE, 236, 136, 236, 157
     DRECT R_HI, 237, 136, 237, 157
-    DFRAME R_EDGE, 307, 26, 396, 71
-    DFRAME R_BEZEL, 308, 27, 395, 70
-    DFRAME R_BEZEL, 309, 28, 394, 69
-    DFRAME R_EDGE, 402, 26, 491, 71
-    DFRAME R_BEZEL, 403, 27, 490, 70
-    DFRAME R_BEZEL, 404, 28, 489, 69
-    DRECT R_EDGE, 312, 84, 374, 84
-    DRECT R_EDGE, 425, 84, 488, 84
-    DCSTR x3_fcapsb, x3_s_output, 400, 81, X3_SCREW
-    DPIC x3art_grillm, 312, 108, X3_SCREW
-    DPIC x3art_grillm, 446, 108, X3_SCREW
+    DFRAME R_EDGE, 307, 24, 396, 69
+    DFRAME R_BEZEL, 308, 25, 395, 68
+    DFRAME R_BEZEL, 309, 26, 394, 67
+    DFRAME R_EDGE, 402, 24, 491, 69
+    DFRAME R_BEZEL, 403, 25, 490, 68
+    DFRAME R_BEZEL, 404, 26, 489, 67
+    DRECT R_EDGE, 312, 83, 374, 83
+    DRECT R_EDGE, 425, 83, 488, 83
+    DCSTR x3_fcapsb, x3_s_output, 400, 80, X3_SCREW
+    DPIC x3art_grillm, 312, 112, X3_SCREW
+    DPIC x3art_grillm, 446, 112, X3_SCREW
     dw D_KNOBTX
     DPIC x3art_screwm, 3, 166, X3_SCREW
     DPIC x3art_screwm, X3_FW - 12, 166, X3_SCREW
@@ -2352,12 +2356,12 @@ x3_bmid:
     X3BTN 246, 135, 52, 26
 
 x3_dgmid:
-    dw 310, 405, 29, X3ART_DIALM_H
+    dw 310, 405, 27, X3ART_DIALM_H
     dw x3art_dialm_k, x3art_dialm_r, x3art_dialm_bw, x3art_ndm
     dw X3ART_NM_PX, X3ART_NM_PY, x3art_dsm_vu, x3art_dsm_buf
-    dw 74, 322, 417, 56
+    dw 71, 322, 417, 56
 x3_kgmid:
-    dw 360, 102, X3ART_KCM_W, X3ART_KCM_H, X3ART_KCM_KX, X3ART_KCM_KY
+    dw 360, 100, X3ART_KCM_W, X3ART_KCM_H, X3ART_KCM_KX, X3ART_KCM_KY
     dw x3art_knobm_p0, x3art_knobm_p1, x3art_knobm_bw, X3ART_KNOBM_H
     dw x3art_kim, x3art_krm
 x3_qgmid:
