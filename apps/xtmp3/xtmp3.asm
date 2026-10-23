@@ -54,9 +54,16 @@
 %define OP_WANT_CSEG                ; a part is far-called through its CODE
 %include "os88parts.inc"            ; selector (op_cseg), read through op_seg
 X3PART_FRONT equ 0                  ; the shared front end, eager
-X3PART_STD   equ 1                  ; the STANDARD reconstruction, lazy
+X3PART_ART   equ 1                  ; the face's pictures and fonts, eager
+                                    ; (the face track: x3face.inc's art part)
+X3PART_STD   equ 2                  ; the STANDARD reconstruction, lazy
                                     ; (the XT track's rows follow: see the
                                     ; table at the foot of this file)
+; --- the XT track (S7): its one part ---------------------------------------------
+X3PART_XT    equ 3                  ; the XT reconstruction, lazy: x3xt.asm,
+                                    ; carrying XTGEN.BIN inside itself (OPEN
+                                    ; expands its tables from it; x3gran.inc's
+                                    ; OPEN record has no slot for an asset)
 
 X3_TICK     equ 5                   ; ticks between passes: the demo's clock,
                                     ; and the needles' 3.6 a second
@@ -168,6 +175,7 @@ x3_entry:
     jnc .parts
     jmp x3_ret
 .parts:
+    call x3f_artseg                 ; the face's pictures' segment
     ; ---
     call OSAPI_ARG_FILE             ; an .MP3? CF = 1: launched empty
     jc .plain
@@ -1683,16 +1691,18 @@ x3_ab1:     db 'XTMP3 for os8088', 0
 x3_ab2:     db 'MP3 at the best quality', 0
 x3_ab3:     db 'this machine can sustain', 0
 
-%include "x3art.inc"
+%include "x3art.inc"                ; the art part's offsets (os88x3art.py)
 
 ; --- THE PARTS TABLE (SPEC.md 20.12.3; the STANDARD track's rows) ------------------
 ; os88pkg.py lays the parts out after the image in this order, from the Makefile's
-; --part arguments: build/x3front.bin and build/x3stdp.bin, both lz4.
-    OS88_PARTS_BEGIN 2
+; --part arguments: build/x3front.bin, build/x3art.bin, build/x3stdp.bin and
+; build/x3xt.bin, all lz4.
+    OS88_PARTS_BEGIN 4
       OS88_PART OP_SEG, OP_COMP             ; X3PART_FRONT: x3front.asm
+      OS88_PART OP_ASSET, X3_ARTFLAGS       ; X3PART_ART: tools/os88x3art.py
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; X3PART_STD: x3std.asm
-      ; >>> the XT track's rows go here (x3xt.asm and its pack), lazy, with
-      ; their X3PART_* numbers beside X3PART_STD's and the count above <<<
+      ; --- the XT track's row (S7) ---
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; X3PART_XT: x3xt.asm (+ XTGEN.BIN)
     OS88_PARTS_END
 
 %define OS88UI_ABOUT
@@ -1707,6 +1717,7 @@ x3_ab3:     db 'this machine can sustain', 0
 %assign X3B_AT X3B_AT + (%2)
 %endmacro
     X3B x3_st, X3S_SIZE             ; THE STATE RECORD (x3face.inc)
+    X3B x3_artseg, 2                ; the art part's segment (x3f_artseg)
     X3B x3_win, 2                   ; our window
     X3B x3_lp, 2                    ; the layout record
     X3B x3_pband, 2                 ; the primary's desktop band

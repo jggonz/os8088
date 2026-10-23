@@ -768,19 +768,27 @@ def granule_stats(items, roles=("eval",), names=None):
                     if nzm[18 * sb - 8:18 * sb + 8].any():
                         nb += 1
             acc["aa_bound"].append(nb)
+            acc["short"].append(int(it.bt[g] == 2))
+            last = np.nonzero(nzm)[0]
+            last = last[-1] + 1 if len(last) else 0
+            acc["maxsb"].append(int((last + 17) // 18))
+            gst = getattr(it, "gstat", None)
+            if gst is not None:
+                # the stream's own big_values and count1 region (x3sim)
+                sg = gst[g] or {"ix_le1": 0, "ix_le15": 0, "ix_gt15": 0,
+                                "pairs": 0, "quads": 0, "bv_end": 0}
+                for k in ("ix_le1", "ix_le15", "ix_gt15", "pairs", "quads", "bv_end"):
+                    acc[k].append(sg[k])
+                continue
             nzv = ix[nzm]
             acc["ix_le1"].append(int((nzv <= 1).sum()))
             acc["ix_le15"].append(int(((nzv > 1) & (nzv <= 15)).sum()))
             acc["ix_gt15"].append(int((nzv > 15).sum()))
-            acc["short"].append(int(it.bt[g] == 2))
-            last = np.nonzero(nzm)[0]
-            last = last[-1] + 1 if len(last) else 0
             big = np.nonzero(ix[:last] > 1)[0]
             bvend = (big[-1] + 2) // 2 * 2 if len(big) else 0
             acc["bv_end"].append(int(bvend))
             acc["pairs"].append(bvend // 2)
             acc["quads"].append(int(math.ceil((last - bvend) / 4.0)) if last > bvend else 0)
-            acc["maxsb"].append(int((last + 17) // 18))
     return {k: round(float(np.mean(v)), 2) for k, v in acc.items() if v}
 
 
@@ -1833,6 +1841,9 @@ class FixtureItem(Item):
     def __init__(self, x3sim, path):
         self.name = os.path.basename(path)
         self.role = "eval"
+        if hasattr(x3sim, "granules"):
+            self._from_hook(x3sim, path)
+            return
         data = open(path, "rb").read()
         TB = x3sim.TB
         lens = []
@@ -1894,6 +1905,64 @@ class FixtureItem(Item):
         finally:
             TB.huff_decode = orig
         self.huff_lens = lens
+        pcm, rate, _, _ = x3sim.decode_file(data, model="float", div=1, mono=True)
+        self.x3sim_float = pcm[:, 0].astype(np.float64) / 32768.0
+        self._ref = {}
+        self.x = None
+
+    def _from_hook(self, x3sim, path):
+        """x3sim.granules(): the numerics track's read-only view (xr as int
+        Q28 in subband order, short blocks interleaved [3k + w]; ix in
+        bitstream order; real code lengths; big_values and nlines)."""
+        Xs, bts, gst, lens = [], [], [], []
+        self.mixed = 0
+        prev_bt = 0
+        for d in x3sim.granules(path):
+            if d.get("ch", 0) != 0:
+                continue                    # the XT fixtures are mono
+            self.sr = d["rate"]
+            X = np.zeros((32, 18))
+            st = None
+            if d["verdict"] == "ok" and d.get("ok", True):
+                xr = np.asarray(d["xr"], dtype=np.float64) / float(1 << d["xr_q"])
+                bt = d["block_type"] if d["win_switch"] else 0
+                if d["win_switch"] and d["mixed"]:
+                    self.mixed += 1
+                if bt == 2:
+                    Y = xr.reshape(32, 18)
+                    for w in range(3):
+                        X[:, 6 * w:6 * w + 6] = Y[:, w::3]
+                else:
+                    X = xr.reshape(32, 18)
+                ix = np.abs(np.asarray(d["ix"], dtype=np.int64))
+                nzv = ix[ix != 0]
+                quads = (d["nlines"] - 2 * d["big_values"]) // 4
+                st = {"ix_le1": int((nzv <= 1).sum()),
+                      "ix_le15": int(((nzv > 1) & (nzv <= 15)).sum()),
+                      "ix_gt15": int((nzv > 15).sum()),
+                      "pairs": int(d["big_values"]), "quads": int(max(quads, 0)),
+                      "bv_end": int(2 * d["big_values"])}
+                lens += [(L, t in (32, 33)) for t, L in d["codes"]]
+            else:
+                bt = 3 if prev_bt in (1, 2) else 0
+            prev_bt = bt
+            Xs.append(X)
+            bts.append(bt)
+            gst.append(st)
+        self.Xq = np.array(Xs)
+        self.bt = np.array(bts)
+        # positions from the lines themselves (subband order, this study's
+        # layout); values and regions from the stream (gst)
+        self.IX = (np.abs(self.Xq) > 0).astype(np.int64)
+        self.gstat = gst
+        self.huff_lens = lens
+        self.kbps = None
+        data = open(path, "rb").read()
+        try:
+            st0 = x3sim.Stream(data)
+            self.kbps = st0.h0.bitrate
+        except Exception:
+            pass
         pcm, rate, _, _ = x3sim.decode_file(data, model="float", div=1, mono=True)
         self.x3sim_float = pcm[:, 0].astype(np.float64) / 32768.0
         self._ref = {}
