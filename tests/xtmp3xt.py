@@ -45,9 +45,11 @@ Legs:
           is reached while the door is open, and the kernel is left clean
   c128    C128.MP3 (44.1 kHz L/R stereo, 128 kbps, 1.5 s): the ladder's
           verdict and probes on this machine - the selection matrix's XT
-          row - and the conversion it chooses: the DSP 2.01 plays nothing
-          above 22,222 Hz, so no XT rung is tried and Quarter (11,025 Hz,
-          the downmix) converts, bit-exact to tools/x3sim.py's model
+          row - and the conversion it chooses: XT Standard takes its
+          divisor from the source (SPEC.md 121.4, round 6), /4 here, so it
+          converts at 11,025 Hz mono - which a DSP 2.01 plays - bit-exact to
+          tools/x3simxt.py --profile std at that divisor (it was Quarter
+          before round 6, no XT rung's 44.1 kHz output being playable)
 
 BROKEN ON PURPOSE: `--expect fast` holds the std leg's XT Standard WAV to
 XT Fast's model and FAILS at the first differing sample - which is what
@@ -514,7 +516,10 @@ def model_pcm(fixture, rung, och):
     data = open(os.path.join(FIX, fixture), "rb").read()
     if rung >= Q_XTSTD:
         import x3simxt as X
-        pcm, rate, dec = X.decode(data, PROFILE[rung])
+        prof = PROFILE[rung]
+        if prof == "std" and X.stdd_div(S.Stream(data).h0.rate):
+            prof = "stdd"                   # XT Standard divided (round 6)
+        pcm, rate, dec = X.decode(data, prof)
         d, p = S.trim_counts(S.Stream(data).info)
         d //= dec.div
         p //= dec.div
@@ -995,7 +1000,7 @@ SAMPLES = {}
 # for the 44.1 kHz one the DSP 2.01 plays nothing above 22,222 Hz, so no XT
 # rung (whose output is the source's rate) is even tried, and the cheapest
 # STANDARD rung, Quarter at 11,025 Hz, is what converts
-OFFLINE = {"std": Q_XTSTD, "c128": 3}
+OFFLINE = {"std": Q_XTSTD, "c128": Q_XTSTD}     # c128: XT Standard at /4 (round 6)
 
 
 def main():
