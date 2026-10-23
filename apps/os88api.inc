@@ -616,6 +616,11 @@ SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
 SND_CAP_EXTBLK   equ 80h         ; verb 0 honours SND_OPENF_BLKSH
                                  ; (SPEC.md 34.5.3)
 SND_CAP_MIXER    equ 0200h       ; readable hardware mixer (SPEC.md 34.15)
+SND_CAP_STEREO   equ 0400h       ; verb 11 takes SND_FMT_STEREO: an SB Pro
+                                 ; (DSP 3.xx, 4,000..22,050 Hz a channel) or
+                                 ; an SB16 (SPEC.md 34.5.5)
+SND_CAP_PCM16    equ 0800h       ; verb 11 takes SND_FMT_16: an SB16 with a
+                                 ; 16-bit DMA channel (SPEC.md 34.5.5)
 SND_CAP_LPTDAC   equ 0100h       ; a COVOX on a parallel port (SPEC.md 34.14):
                                  ; the user picked the Covox tier on the Sound
                                  ; page and a port answered. Not a streaming
@@ -635,6 +640,18 @@ SND_V_PPOS       equ 9
 ; DSP halted mid-block, and verb 1 with the total resumes it as it resumes an
 ; underrun (SPEC.md 34.5.4). AX = 7 for any other stream
 SND_V_PAUSE      equ 10
+
+; verb 11 sets the FORMAT of this instance's NEXT verb 0 (SPEC.md 34.5.5), in
+; the same UI callback right before it: AH = SND_FMT_* bits (0 = 8-bit mono,
+; and drops a format held). Out AX = 0 held / 2 the card cannot play it here
+; (test SND_CAP_STEREO / SND_CAP_PCM16 first) / 7 a bad bit - and 7 from a
+; driver older than the verb. Verb 0 then takes a RING only (else 7), every
+; count stays in BYTES (frames = bytes >> 0/1/2), a 16-bit ring's physical
+; base must be even (else 7), and the SB16's half is 4,096 at any rate
+SND_V_FMT        equ 11
+SND_FMT_STEREO   equ 1           ; left, right interleaved, left first
+SND_FMT_16       equ 2           ; signed 16-bit little-endian (silence 0);
+                                 ; clear = unsigned 8-bit (silence 80h)
 
 ; stream states returned by OSAPI_SND_STREAM verb 3 (SPEC.md 20.3/34.5)
 SND_ST_PLAYING   equ 0

@@ -6077,6 +6077,42 @@ $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin tools/os88pkg.py
 $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
 
+# SNDFMT: SPEC.md 34.5.5's gate - stereo and 16-bit streams, verb 11. Never
+# shipped. It runs itself from a window timer, so the QEMU leg boots a system
+# disk whose \AUTOSTRT links B:\SNDFMT.O88 and needs no mouse; the MartyPC
+# leg (a DSP 2.01, which must refuse) opens it from the 360KB B: by name.
+#   make sndfmttest && python3 tests/sndfmt.py
+.PHONY: sndfmttest
+sndfmttest: $(BUILD)/sndfmtsys.img $(BUILD)/sndfmt.img $(BUILD)/sndfmt360.img \
+            $(BUILD)/mixer360.img
+
+$(BUILD)/sndfmt.bin: tests/sndfmt/sndfmt.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/sndfmt/sndfmt.asm
+	@echo "sndfmt: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sndfmt.o88: $(BUILD)/sndfmt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sndfmt.bin -o $@
+
+$(BUILD)/sndfmt.img: $(BUILD)/sndfmt.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sndfmt.o88
+
+$(BUILD)/sndfmt360.img: $(BUILD)/sndfmt.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/sndfmt.o88
+
+$(BUILD)/sfmtlnk/SNDFMT.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/sfmtlnk
+	python3 tools/os88lnk.py $@ 'SNDFMT.O88' --vol B
+
+# ...with the mixer gate's SYSTEM.CFG, which WANTS the sound driver (every
+# row is not-wanted by default, SPEC.md 51.3); the MartyPC leg boots that
+# gate's own 360KB disk, build/mixer360.img, for the same reason
+$(BUILD)/sndfmtsys.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/mixercfg/SYSTEM.CFG $(BUILD)/sfmtlnk/SNDFMT.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/sfmtlnk/SNDFMT.LNK \
+		--folder SYSTEM/APPDATA
+
 # The same fixture with 4.8 seconds staged: QMP and floppy activity must
 # leave audio still playing when the volume popup opens. Default SBTEST
 # remains byte-identical; this arm is only the mixer's background-service leg.

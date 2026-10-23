@@ -67766,7 +67766,9 @@ it with the other PCM bits.
 
 It exists because the absence was a defect with a field report: Tracker
 offered 44 kHz on every machine, an SB 2.0 (DSP 2.01) refused it, and the
-reason never reached the user (§45.10.1).
+reason never reached the user (§45.10.1). Two more bits of the same kind,
+`SND_CAP_STEREO` (0400h) and `SND_CAP_PCM16` (0800h), say which stream
+formats verb 11 will take (§34.5.5).
 
 #### 34.2.2 A patch-load names ITS channel — the recorded bug
 
@@ -68266,6 +68268,170 @@ a pause that waited for it to run dry would sound for up to a ring's worth -
   likes; the ENDED fallback is for a card that stops by itself.
 
 **Cost: 65 bytes** of the driver (6,565 → 6,630), inside its 7KB claim.
+
+#### 34.5.5 Stereo and 16-bit streams (verb 11)
+
+A ring stream may be **8-bit stereo, 16-bit mono or 16-bit stereo** where the
+card plays them. Every stream before this section was 8-bit unsigned mono and
+still is: nothing below changes a byte that reaches the card for a caller that
+does not ask. XTMP3's Original rung (§121.6) is the first consumer.
+
+**The format is a verb of its own, not a verb-0 flag, because verb 0 has no
+bit left.** `AH` bits 0-3 are `RING`, `EXT`, `ADPCM4` and `FORCE` and bits 4-7
+are an external ring's size and block codes (§34.5.3); and no register is free
+on every path into verb 0 either - the kernel banks the rate into `BX` and
+stamps `DH`, `BP` names the proc, `DI` is an external ring's segment. Reading
+bits 4-7 as a format for a GRANT ring would have meant one bit meaning two
+things by mode. So:
+
+**Verb 11, `SND_V_FMT`**: `AH` = the format of the NEXT verb 0 this instance
+makes.
+
+| bit | name | set | clear |
+|---|---|---|---|
+| 0 | `SND_FMT_STEREO` (1) | frames are left, right interleaved, left first | mono |
+| 1 | `SND_FMT_16` (2) | samples are 16-bit signed little-endian, silence `0000h` | 8-bit unsigned, silence `80h` |
+
+It answers `AX = 0`, `CF = 0` and holds the format; `AX = 2` when this card
+cannot play it (the caps bits below are the test, read the same way); `AX = 7`
+for any other bit; `AX = 4` with no card (the slot's own). **A driver from
+before this section answers 7, bad verb** - which is the refusal a package
+reads it by. A refusal holds nothing and drops a format already held, and
+`AH = 0` drops one deliberately.
+
+**The held format is spent by the calling instance's next verb 0, whatever
+verb 0 answers** (a busy or a rate refusal spends it too). It is stamped with
+the instance: another instance's verb 0 drops it and opens 8-bit mono, and an
+instance's release (`DSV_RELINST`) drops one it left. Verb 11 is
+UI-callback-only, like the opens, and is called in the SAME callback right
+before verb 0: §20.3's serialization of the opens on the UI task is what makes
+a two-call open safe.
+
+**Two caps bits** (`OSAPI_SND_CAPS`), published by `snd_sb_pub` at attach and
+at `DRVV_TIER`'s "on", withdrawn with the other PCM bits by the tier's "off":
+
+| DSP | card | `SND_CAP_STEREO` (0400h) | `SND_CAP_PCM16` (0800h) |
+|---|---|---|---|
+| < 3.00 | SB, SB 2.0 | no | no |
+| 3.xx | SB Pro | when its CT1345 mixer answered (§34.15): the stereo switch is a mixer bit | no |
+| ≥ 4.00 | SB16 | yes | when mixer register `81h` names a 16-bit DMA channel (5, 6 or 7) **and** a second 8237 answers at `C0h`-`DFh` |
+
+The second test is a write and a read-back of that channel's address
+register, masked: an SB16 in an XT's 8-bit slot reports DMA 5 from its mixer
+and there is no controller to program, and a stream that can never transfer
+would end on the watchdog instead of being refused. A Vibra-class card with
+no high channel plays 16-bit through the 8-bit one in Creative's own drivers;
+that path is not taken here, so such a card gets `STEREO` and not `PCM16`.
+
+**What verb 0 does with a held format:**
+
+- **A ring only.** A linear open answers 7, because its tail pad is 8-bit
+  silence; `ADPCM4` with a format answers 7. Grant rings and external rings
+  (§34.5.3) both take a format, and each plays DIRECT or double-buffered by
+  §34.5.2's three tests exactly as an 8-bit ring does.
+- **SB Pro (DSP 3.xx), 8-bit stereo: the doubled-rate rule.** The DSP
+  alternates channels byte by byte, so its time constant is for TWICE the
+  rate and the regime is chosen by that doubled byte rate: up to 22,222
+  bytes a second the legacy `1Ch` with 2,048-byte halves, above it
+  high-speed `90h` with 4,096 and the rounded TC (§34.5) - so the per-channel
+  range is **4,000 to 22,050 Hz**, and 22,050 plays at 21,739. Mixer `0Eh`
+  bit 1 (stereo) is set for the stream and bit 5 (output filter OFF) with it:
+  the SB Pro's output filter is one fixed low-pass ahead of both channels,
+  and a stereo stream up to 22 kHz a channel is what it would cut. `0Eh` goes
+  back to the byte it held at close. **And the first byte goes left:**
+  before the auto-init transfer verb 0 plays ONE byte single-cycle (`14h`,
+  length 0), the ring's own first byte, so the DSP's channel toggle starts
+  on the left - the procedure Linux's `sb8` driver follows, citing Creative's
+  programming guide (3-23). Its IRQ is taken by the ISR's spurious leg
+  (`[sbl_prime]`) and waited for at most three ticks; a card that never
+  raises it is acknowledged by hand and the open goes on.
+- **SB16 (DSP 4.xx): the 4.xx commands at every rate.** `41h` with the FRAME
+  rate (the card interleaves, so no doubling), **5,000 to 44,100 Hz**, and
+  `C6h` (8-bit, ch 1) or `B6h` (16-bit, the high channel) with mode `20h` for
+  stereo and `10h` for signed. The half is 4,096 BYTES at every rate - so
+  `RL` ≥ 8,192 and verb 0's `CX` ≥ 4,096 - and `SND_OPENF_BLKSH` shifts it as
+  ever. Pause is `D5h`, continue `D6h` and the auto-init exit `D9h` on the
+  16-bit side; the block IRQ is acknowledged at **`2xFh`**, which the ISR reads
+  in place of `2xEh` while a 16-bit stream is open.
+- **16-bit DMA.** The 8237 at `C0h`-`DFh` counts WORDS and addresses them:
+  the address register holds the physical address shifted right one (bit 15
+  is A16), the page register (`8Bh`/`89h`/`8Ah` for 5/6/7) A17 up, the count
+  is words - 1, and a transfer cannot cross a 128KB boundary. A ring inside
+  one 64KB page (§34.5.2's test, unchanged) is inside one 128KB block too, so
+  the boundary needs nothing new; the ring's PHYSICAL BASE must be EVEN, and
+  verb 0 answers 7 when it is not - grant the ring first, or behind
+  even-sized grants. `RL` is a power of two, so no sample straddles the wrap.
+- **A rate outside the card's range answers 2; a format the card cannot play
+  answers 2 at verb 11.** Nothing is ever clamped, narrowed to mono or played
+  as 8 bits.
+
+**Every count is BYTES**, exactly as before: `RL`, verb 0's `CX`, verb 1's
+total, verbs 3 and 9's `DX`, `SND_EXT_TOTAL` / `SND_EXT_CONS`, the half and
+the shift `BLKSH` applies to it. A frame is 1, 2 or 4 bytes (mono 8-bit;
+stereo 8-bit or mono 16-bit; stereo 16-bit), so **frames = bytes >> 0, 1 or
+2**, and a producer feeds whole frames. Verb 9 reads the high channel's word
+count for a 16-bit stream and doubles it, so it stays exact.
+
+**Cost** and the evidence are §34.5.5.1's.
+
+#### 34.5.5.1 What it cost, and what proved it
+
+**+689 bytes of `SOUND.DRV`'s image, 11,134 → 11,823, and that CROSSES A
+CLAIM RUNG: the driver's heap claim goes from 11KB to 12KB** on every machine
+that loads it, card or no card. The rung was 130 bytes away, so no version of
+this feature fitted under it; the image sits 465 bytes inside the new one. No
+kernel byte, and kern_small ships no `SOUND.DRV` (§34.0).
+
+| where | bytes |
+|---|---|
+| the 16-bit channel's programming (`sbl_hdma_auto`) and the SB Pro stereo preliminaries (`sbl_pro_st`) | 184 |
+| verb 0: the held format, its gates, the watchdog's frame count, the even base, the commit | 135 |
+| finding a programmable high channel (`sbl_hdma_find`) | 96 |
+| `sbl_hw_start`: `B6h`, the mode byte, which channel | 52 |
+| close (`D9h`, the high channel masked, `2xFh`, `0Eh` restored) | 51 |
+| verb 11 and its row | 46 |
+| verb 9's word count | 37 |
+| the ISR (`2xFh` through `[sbl_ackp]`, the primer's leg), halt and continue | 32 |
+| caps, the page-register table, release, attach, state | 56 |
+
+The Drivers page's column (`DRVM_IMG_SND`, `kernel/driver.inc`) says 12 with
+it, and `t_drvmem` is what said so. What every 8-bit mono stream costs: the
+ISR reads its ACK port out of a word (`mov dx, [sbl_ackp]`) where it added
+`0Eh` to the base, which is shorter and no slower; `sbl_halt` and
+`sbl_go_on` test one byte before `D0h`/`D4h`; the card is sent the same bytes
+in the same order.
+
+**What proved it** - `tests/sndfmt/sndfmt.asm`, a package that runs itself
+off its window timer, and `tests/sndfmt.py`, rows `sndfmt` and
+`sndfmtmarty`:
+
+- **QEMU's SB16** (DSP 4.05, DMA 1 and 5), booted from a disk whose
+  `\AUTOSTRT` starts the package, the card's own output captured by QEMU's
+  `wav` audiodev at the stream's 22,050 Hz in two 16-bit channels so nothing
+  resamples it. Both caps bits published; the four refusals (an unknown bit
+  7, a linear open 7, 4,500 Hz 2, a ring at an odd offset 7); then five
+  streams, each opened, PLAYING at its end and at its byte rate by verb 9,
+  and each heard on the right side: 16-bit stereo (left 344.5 Hz at 8,000,
+  right 1,378 Hz at 600 - the right channel's residual **0.3**, 63 dB under
+  a tone at -35 dBFS, where the 8-bit stereo phase's residual is 70-83, the
+  quantising noise of eight bits), 8-bit stereo, 16-bit mono, 16-bit stereo
+  on an **external** ring fed by memory writes alone, and 16-bit stereo left
+  unfed until the ISR halted it (`D5h`; verb 9 read state 1) and then fed,
+  when it resumed (`D6h`) and played its remaining ticks' worth with the
+  tones whole across the seam. Each channel carries the OTHER side's
+  frequency 57 dB or more under its own tone - and what there is is a
+  harmonic of the sine table's rounding, not crosstalk. 46 checks.
+- **MartyPC's Sound Blaster, a DSP 2.01**: neither bit, verb 11 answers 2 for
+  every format and 7 for an unknown bit, and the refused verb 11 held
+  nothing - the same linear, 4,500 Hz and odd-offset opens then succeed as
+  8-bit mono. 13 checks.
+
+**Not proved here**: the SB Pro path. No emulator in this tree asserts on an
+SB Pro (86Box carries one to listen to, and cannot be driven headless -
+docs/TESTING.md), so the stereo switch, the filter bypass, the doubled rate
+and the primer are written to Creative's documented behaviour and wait for
+a listen. Nor real SB16 hardware, a Vibra, or an SB16 in an 8-bit slot,
+whose refusal is the read-back test above.
 
 ### 34.6 Recording and staging — back, as a driver
 
@@ -217322,11 +217488,14 @@ to decode with more loss.
 Through `OSAPI_SND_STREAM` (§34.5): 8-bit unsigned mono on every Sound
 Blaster, at the rung's rate, the card's ceiling permitting (22,222 Hz below
 DSP 3.00, 44,100 Hz on SB Pro and SB16 with `SND_CAP_PCM_HI`). **Where
-SOUND.DRV offers 16-bit and stereo streams (planned for §34.5, in the same
-PR), Original uses them.** A machine with no card plays a FINISHED file
-through the PC speaker or a Covox the way the Audio Player does (§86.21),
-inside its bracket, and never decodes MP3 live into the speaker. Silence is
-128. Underruns play silence, are counted, and never leave a DC step.
+SOUND.DRV offers 16-bit and stereo streams (§34.5.5: `SND_CAP_STEREO` on an SB
+Pro or SB16, `SND_CAP_PCM16` on an SB16 with a high DMA channel, chosen with
+verb 11 before the open), Original uses them**: 16-bit stereo where both bits
+are set, 8-bit stereo where only `STEREO` is, at the source's rate within the
+card's stereo range (22,050 Hz a channel on an SB Pro). A machine with no
+card plays a FINISHED file through the PC speaker or a Covox the way the Audio
+Player does (§86.21), inside its bracket, and never decodes MP3 live into the
+speaker. Silence is 128 (0 on a 16-bit stream). Underruns play silence, are counted, and never leave a DC step.
 
 ### 121.7 Decode first: choose a drive, convert the whole track, then play (pinned)
 
