@@ -262,15 +262,14 @@ switch. bss: the state record 68, the queue 1,920, two
 colour dial faces 4,704, the band/canvas 2,720, keys and the rest. No kernel
 byte.
 
-## Where it ships (temporary)
+## Where it ships
 
-On the **1.44MB apps disk only** (`APPS:` first in `$(APPSIMG)`'s recipe, not
-in `$(APPS_TOOLS)`), and on the live media (`$(LIVEPKGARGS)`), because
-`t_livefull` holds the live volume to the 1.44MB disk. S10 decides the
-disks; `make KERN_SMALL=1` builds it. On kern_small `x3d_bput` retries a
-refused off-grid `OSAPI_GFX_BLIT1` on the byte grid (the x & 7 pixels before
-the field laid in its paper) - untested there, since kern_small shipping is
-S10's call.
+Decided in S10: SPEC.md §121.12. The face track's temporary placement (the
+1.44MB apps disk and the live media, by an argument of their own) is gone;
+XTMP3.O88 is in `$(APPS_TOOLS)` like every other application, and
+kern_small's disks leave it off (`$(SMALLOMIT)`), so `x3d_bput`'s retry of
+a refused off-grid BLIT1 on the byte grid, kern_small's path, ships on no
+disk.
 
 ## Not yet seen, and why
 
