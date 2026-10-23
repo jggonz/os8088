@@ -583,3 +583,19 @@ every one the finished WAV's own, in order.
 
 **Tested where.** QEMU, every figure; the `xtmp3live` and `xtmp3eng` rows.
 No timing here is an 8088's: the FIELD track measures the real machines.
+
+### Later: the contract caught up with the last two tracks
+
+FIELD's numbers and the integration track's fixes arrived after the
+documents. The contract now says what changed between them. At 55a051b4 an
+XT converted AFTER HOURS at 0.0552x, because the face's animated needles took
+44.5% of the loop. With the dials resting while it converts, the shipped
+build does it at 0.0946x, and the face takes 9.8%. Calibration went from
+three probes and 16.1 s to one probe and 6.4 s. Its peak went from 411,648
+bytes to 396,288, inside the ceiling. A machine without the memory now says
+`Needs 390 KB, has 300 KB` instead of `Out of memory`. The drive dialog
+gives no time, since the probe's estimate was half the real one. The
+progress window says `About mm:ss left` once it has measured itself. The
+manual's "close to an hour" became "about half an hour". The guide's
+MartyPC shots were retaken: the queue row now shows `~00:10`, and the
+quality field has room for `(set)`.
