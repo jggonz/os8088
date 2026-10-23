@@ -43,8 +43,20 @@ The UI task's `W_ONWAKE` (`x3_onwake`) answers each bit and clears it:
 the Audio Player's own source (section 8). Its size is the backend's
 (`x3_lasize`). It is 32 KB, except 16 KB under the XT backend: that
 machine's whole working set is 400,000 bytes (section 6), and 16 KB of
-128 kbps is a second ahead of a decoder that slow. `AP_LA_SZ`, `AP_LA_MASK`
-and `AP_LA_LOW` are words, which aplook.inc reads unchanged.
+128 kbps is a second ahead of a decoder that slow. `AP_LA_SZ`, `AP_LA_MASK`,
+`AP_LA_LOW` and `AP_RD_CHUNK` (the gulp's cap, `x3_rdmax`) are words, which
+aplook.inc reads unchanged. `x3_lasize` sets the cap to `X3_RDMAX` (32 KB,
+FAT16's largest cluster) and the low water to half the ring.
+
+**A live XT stream's gulp** (`x3_plan`, a card and the XT backend, live or
+probing): 4 KB (`X3_RDXT`, or one cluster where that is more), and the low
+water is the ring less a gulp, so a refill is asked for as soon as one fits.
+A read holds `sch_lock`, so the card plays its ring alone through it: 8
+sectors are one `int 13h` call, two across a cylinder, which the 16 KB
+grant's 1.49 s of 11 kHz outlasts. And a refill every gulp's worth of audio
+keeps a floppy's motor turning: the BIOS stops it 2 s after a read, and
+86Box's 386 underran once on the first refill after the prime, 2.7 s on,
+with the half-ring low water (one run), and not at all with this (one run).
 
 The ring shares **one claim** with two other buffers: one granule's PCM
 (`X3_PCMSZ` = 2,304 bytes, room `X3_PCMRES` = 2,560 so what follows is
@@ -110,8 +122,8 @@ sleeps. At 11 kHz mono 8-bit it sleeps on about 13 KB of a 16 KB grant.
 (`x3_drvund` debounces it), unless the last half is already in, in which case
 it is the end of the stream. A feed that has nothing to publish closes the
 stream on a 32-frame ramp to silence (`X3_RAMP`) rather than a DC step. A
-live underrun is also a step down (section 3). On a finished file it is
-counted as a disk or device fault and never steps (§121.5).
+live underrun is a reason to re-evaluate (section 3). On a finished file it
+is counted as a disk or device fault and never steps (§121.5).
 
 **States** (`x3_md` behind `x3_st`'s state): `MD_CHECK` (calibrating, "Checking
 performance"), `MD_LIVE`, `MD_FILE` (a finished WAV on the card), `MD_SPK` (a
@@ -260,8 +272,16 @@ frames and the new ring's first fill. It is a short silence with no click,
 not the seamless switch §121.5's "at the next granule boundary" pictures.
 
 The disk's time is not in a live window. A read stalls the worker while the
-ring plays on, so a disk that cannot keep up shows as an underrun, and the
-underrun steps down by itself.
+ring plays on, so a disk that cannot keep up shows as underruns.
+
+**An underrun re-evaluates** (`x3_under`, §121.5): it steps only when the
+decode is short - `x3_wspeed`: this window's speed from 4 granules, else
+the last whole window's (`X3S_SPEED`), else the rung's probe, under
+`X3_SLOW` - or when it is the second inside one window (`x3_wund`, cleared
+by a closing window and a new rung). Otherwise it is the disk's: the rung is
+kept and the low water raised to 3/4 of the ring (never lowered), until the
+ring is sized again. The X3REPORT build records the first underrun's
+`x3_grans` and its kind (`U` the card ran dry, `S` the look-ahead starved).
 
 **Without a card** there is nothing live to choose (§121.6: MP3 is never
 decoded into the speaker), and the same probes become the conversion's
@@ -701,7 +721,7 @@ is asserted): each leg boots its own private QEMU with its own disks under
 | leg | asserts |
 |---|---|
 | `ladder` | five machines by stub speed: capable stays Original; middling takes Half or Quarter; slower Quarter; XT-class reaches Decode first with Original and Half never probed, within 6 s of guest time; hopeless the same, within 4 s (it measured 1.4 to 1.8) |
-| `slowdown` | at 1.05x the windows step Original to Half with no underrun; at 0.60x one step, at most one underrun; never back up; position monotonic |
+| `slowdown` | at 1.05x the windows step Original to Half with no underrun; at 0.60x one step, at most one underrun; never back up; position monotonic. Then the underrun rule, through the stub's hook (`X3SB_UNDAT`/`X3SB_UNDN`, counted as the card's own): one at 4x keeps Original and raises the low water to 3/4; two in one window step to Half |
 | `conv` | drive dialog, Save dialog, the WAV's every field and its frame count on the host, the finished file plays, a second Play reuses the cache with no granule, no probe and no part |
 | `cancel` | Esc mid-conversion: READY, the temp file gone, nothing else touched |
 | `full` | a disk filled mid-write: the error, the temp gone, nothing played |
@@ -710,7 +730,7 @@ is asserted): each leg boots its own private QEMU with its own disks under
 | `twovol` | two writable volumes, the second chosen, the WAV lands there |
 | `playwav` | a finished WAV on the SB16: no decoder resident, no granule, no underrun, the square's frequency in the capture |
 | `pause` | pause, resume, rewind |
-| `xtpeak` | the SHIPPED package with the real XT part, no card: XT Standard set by Q, Decode First, the conversion finishes, `X3S_PEAK` x 1024 <= 400,000 (385 KB), and the XT part is fetched ONCE (the probe's OPEN reused); then LIVE on an SB16: the 16 KB grant with an 8 KB look-ahead, never the external ring, 387 KB |
+| `xtpeak` | the SHIPPED package with the real XT part, no card: XT Standard set by Q, Decode First, the conversion finishes, `X3S_PEAK` x 1024 <= 400,000 (385 KB), and the XT part is fetched ONCE (the probe's OPEN reused); then LIVE on an SB16: the 16 KB grant with an 8 KB look-ahead, never the external ring, a 4 KB gulp, no underrun, 388 KB |
 | `xtclu` | three boots, the destination D: a FAT16 volume of 8, 16 and 32 KB clusters (sparse images, the least FAT16 that has them): XT Standard converts to 8 and 16 KB with ONE stage half, 385 KB, its WAV byte-exact to x3simxt; on 32 KB the drive dialog greys D: (`32 KB clusters`) for XT Standard and Decode and Play refuses it, and XT Fast converts there (two 32 KB halves, 387 KB), byte-exact |
 | `chgsrc` | a byte of the source's first 16 KB changed on the host DURING a (stub-slowed) conversion: `The MP3 changed meanwhile`, nothing plays, no .TMP or .WAV left |
 | `dfdel` | two boots: a conversion, then on the host a second index record naming OTHER.WAV (a WAV whose chunk is not `xtm3`) and an unrelated KEEP.TXT; File > Decoded Files, Delete, Proceed, twice: XTMP3's WAV is deleted, OTHER.WAV STAYS, KEEP.TXT untouched, both records gone |
@@ -719,6 +739,9 @@ is asserted): each leg boots its own private QEMU with its own disks under
 | `packed` | an MP3 wrapped by `tools/os88lz.py --wrap`: ERROR `The MP3 is stored packed`, no decoder fetched |
 | `shortmem` | an XT-class ladder (the stub) on a machine the test hook says HAS 300 KB: ERROR `Needs 390 KB, has 300 KB`, and the drive dialog never opened |
 | `rungfail` | Original calibrates (4x) but its live start is refused as out of memory (the stub's hook): the ladder stores it at 0 and plays HALF, with no ERROR on the way |
+| `offvol` | the SHIPPED package on B:, the song on C: with an SB16: a part is fetched standing in the launch folder (`x3_fetchhome`), so Auto plays live on Original with STANDARD fetched; then a forced XT Standard converts onto C: and plays. Red without the bracket (`Cannot read its decoder`: a fetch that fails while `x3_fits` says the machine has room is not reported as memory) |
+| `offdir` | the same drive, another folder (the owner's 86Box XT: C:\XTMP3 and C:\MEDIA): the package at C:'s root, the song in C:\MEDIA through File > Add to Queue. STANDARD's fetch follows the carve's read and rides `os88_rseq`'s cursor, so it never looks the name up and played even before the fix; the forced XT Standard's part is read by NAME, and without the bracket refused (`Cannot read its decoder`, the old `Needs ... KB`) |
+| `qagain` | a song queued (File > Add to Queue) while live, its probe refused by the stub's hook (`X3SB_QFAIL`): the row keeps the stem flagged `QEF_AGAIN`, and the tag's title arrives once the player is idle (`x3_qagain`) |
 | `probe32` | an MP3 whose first frame sits 200 bytes short of 32 KB, on a 32 KB-cluster C:: the queue's probe reads its title and x3sim's duration across the cluster's end, and Play refuses it by name (`Its disk's clusters are too large`) |
 | `covox` | the finished file's ACTUAL SOUND with no card: QEMU's pcspk renders only a PIT mode-3 square (its capture of the speaker bracket was EMPTY), so the Covox tier (SYSTEM.CFG, LPT1): every byte written to the LPT data port traced (`-trace parallel_ioport_write`) and the WAV's samples found there, in order, one for one - 32,724 identical in 45 s, QEMU running the bracket's 11 kHz IRQ0 slowly |
 

@@ -2304,6 +2304,8 @@ x3_under:
     shr ax, 1
     neg ax
     add ax, [x3_lasz]
+    cmp ax, [x3_lalw]               ; (never lower: a live XT's is the ring
+    jbe .pop                        ; less a gulp already, x3_plan)
     mov [x3_lalw], ax               ; (one word: the UI task reads it whole)
     X3LOG 'K', ax
     jmp short .pop
@@ -3900,6 +3902,14 @@ x3_plan:
     mov ax, [ap_clu]
 .rdx:
     mov [x3_rdmax], ax
+    neg ax                          ; ...and a gulp asked for as soon as one
+    add ax, [x3_lasz]               ; fits (the low water the ring less a
+    cmp ax, [x3_lalw]               ; gulp, where that is above half): a
+    jbe .fok                        ; refill every gulp's worth of audio, not
+    mov [x3_lalw], ax               ; every half ring - so the floppy's motor,
+                                    ; off 2 s after a read, is still turning
+                                    ; (86Box's 386: the one underrun was the
+                                    ; first refill, 2.7 s after the prime)
 .fok:
     clc
 .out:

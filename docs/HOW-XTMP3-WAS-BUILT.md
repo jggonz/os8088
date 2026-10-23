@@ -726,3 +726,49 @@ in these pictures.
 
 **Tested where.** QEMU only: VGA, the `VIDEO=` knob kernels and
 `tools/hercshot.py`. No soak row and no `test-full` was run.
+
+## 2026-10-23 — the 386's one underrun, and the docs track's last three
+
+**The 386 on 86Box.** Live XT Standard from a floppy underran 11 times on
+the 8 KB card ring and once on the 16 KB one, and each time the underrun
+stepped a machine with 2x headroom down to XT Fast. The integration track
+made three changes, one run of `tools/x3field.py` each, on the field track's
+X3REPORT disks:
+
+| change | underruns | rung at the end |
+|---|---|---|
+| a live XT gulp capped at 4 KB (two `int 13h` calls at most) | 1 | XT FAST |
+| ...and an underrun at 1.10x or better keeps the rung | 1 | XT STANDARD |
+| ...and a refill asked for as soon as a gulp fits | **0** | XT STANDARD |
+
+The second run's report said when: the first underrun was at granule 58 of
+194, with the card run dry. That is about 2.7 s in, when the first refill
+after the prime fell due under a half-ring low water. The BIOS turns a
+floppy's motor off 2 s after a read, so that refill paid the spin-up as
+well as the read. Asking for a 4 KB gulp whenever one fits makes a refill
+every 1.3 s of 24 kbps, and the motor never stops. The motor is the
+inference; the evidence is the A/B, one run on each side.
+
+**An underrun is a reason to re-evaluate, not a step** (SPEC.md 121.5), in
+the owner's words "rather than repeatedly masking a sustained CPU deficit".
+A stall at 2x headroom is I/O. So `x3_under` steps only when the window's
+measured speed is under 1.10x, or on a second underrun inside one 32-granule
+window. The stub's hook injects underruns by granule, so the `slowdown` leg
+proves both arms on QEMU.
+
+**The docs track's three.** The C: song (the lazy part read by name in the
+wrong folder) was fixed earlier the same night. Then the owner hit the same
+misreport on an 86Box XT ('Needs 330 KB, has 520 KB') with both files on
+C:, in C:\XTMP3 and C:\MEDIA, which the first leg had not covered. The
+`offdir` leg found why it is not every fetch: a part that follows the
+carve's read rides `os88_rseq`'s cursor and never looks its name up, so
+STANDARD played from another folder even before the fix, while the XT
+part, which is read by NAME, did not. That leg's forced XT Standard
+conversion is red without the fix and green with it. The compact layouts' channel
+word moved six pixels left, so `STEREO` keeps a space. The Hercules title
+was a probe that never retried. The relocated framebuffer leaves QEMU's
+Hercules build 448 KB, and next to a live XT stream the probe's 8 KB buffer
+was evidently refused. The engine then kept the stem for good. A failed
+probe now flags its entry, which is asked again when the player is idle,
+and a song's own open takes its tag. The `qagain` leg refuses the probe
+through the hook. The Hercules build itself was not re-run here.
