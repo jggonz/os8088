@@ -214,6 +214,14 @@ def decode(rep):
         "underruns": int(rep["UNDER"], 16),
         "peak_kb": int(rep["PEAK"], 16),
         "granules": int(rep["GRANS"], 16),
+        "ring": ("card %d, look-ahead %d, gulp %d" % tuple(
+            int(rep[k], 16) for k in ("RING", "LA", "RD")))
+        if "RD" in rep else None,
+        "first_underrun": ("granule %d, %s" % (
+            int(rep["UG"], 16), {0x55: "the card ran dry",
+                                 0x53: "the look-ahead starved"}.get(
+                int(rep["UK"], 16), "kind %s" % rep["UK"])))
+        if int(rep.get("UK", "0"), 16) else None,
     }
 
 

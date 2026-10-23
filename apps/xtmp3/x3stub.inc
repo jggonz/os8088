@@ -21,5 +21,14 @@ X3SB_HAS    equ 22                  ;   dw    KB this machine HAS for XTMP3
 X3SB_FAILR  equ 24                  ;   db    a rung (X3Q_*) whose LIVE start is
                                     ;         refused as out of memory (the
                                     ;         card's ring), 0 = none
-X3SB_CFGSZ  equ 26
+X3SB_UNDAT  equ 26                  ;   dw    a live granule (from the rung's
+                                    ;         open) where the engine counts an
+                                    ;         underrun as if the card ran dry...
+X3SB_UNDN   equ 28                  ;   db    ...this many, 4 granules apart
+                                    ;         (x3_window; 0 = none) - the
+                                    ;         underrun RULE's test, not a stall
+X3SB_QFAIL  equ 29                  ;   db    1 = the queue's probe is not had
+                                    ;         while a stream is live, as on a
+                                    ;         small heap (x3_e_qadd)
+X3SB_CFGSZ  equ 30
 %endif

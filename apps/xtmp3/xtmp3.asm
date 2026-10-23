@@ -120,6 +120,7 @@ QE_VOL      equ 13                  ; byte: its volume
 QE_DIR      equ 14                  ; word: its folder's cluster
 QE_DUR      equ 16                  ; word: seconds, FFFFh unknown
 QE_FLAGS    equ 18                  ; byte: X3SF_EST for an estimated duration
+QEF_AGAIN   equ 0x40                ; QE_FLAGS: its probe was not had (x3_qagain)
 QE_TITLE    equ 19                  ; 41: the title shown (the file's name until
 QE_SIZE     equ 60                  ;     the parser, S5, reads its tags)
 

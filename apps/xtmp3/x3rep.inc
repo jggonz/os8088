@@ -35,6 +35,12 @@
 ;   MD mm QUAL qq RATE rrrr CHANS cc BITS bb FLAGS ff
 ;                               the mode and x3_st's output, at the write
 ;   UNDER uuuu PEAK pppp GRANS gggg
+;   RING rrrr LA llll RD dddd UG gggg UK kk
+;                               the card's ring (x3_rsz), the look-ahead
+;                               (x3_lasz) and its gulp cap (x3_rdmax), bytes;
+;                               the first underrun's x3_grans and kind (55h
+;                               'U' the card ran dry, 53h 'S' the look-ahead
+;                               starved; 0 none)
 ;   FREE0 kkkk AVAIL kkkk LARGEST kkkk
 ;                               the heap's free KB at launch (x3_free0), and
 ;                               OSAPI_MEM_AVAIL's total and largest run now
@@ -49,7 +55,7 @@
 ; the whole report.
 ; =============================================================================
 
-X3R_BUFSZ   equ 256
+X3R_BUFSZ   equ 384                 ; the longest report (an ERR, OFFLINE) is ~350
 
 x3r_s_name: db 'X3REPORT.TXT', 0
 x3r_s_head: db 'X3REPORT 1', 13, 10, 'EVENT ', 0
@@ -72,6 +78,11 @@ x3r_s_flg:  db ' FLAGS ', 0
 x3r_s_und:  db 13, 10, 'UNDER ', 0
 x3r_s_peak: db ' PEAK ', 0
 x3r_s_gran: db ' GRANS ', 0
+x3r_s_ring: db 13, 10, 'RING ', 0
+x3r_s_la:   db ' LA ', 0
+x3r_s_rd:   db ' RD ', 0
+x3r_s_ug:   db ' UG ', 0
+x3r_s_uk:   db ' UK ', 0
 x3r_s_free: db 13, 10, 'FREE0 ', 0
 x3r_s_avl:  db ' AVAIL ', 0
 x3r_s_lrg:  db ' LARGEST ', 0
@@ -254,6 +265,26 @@ x3r_write:
     call x3_put
     mov ax, [x3_grans]
     call x3c_hex4
+    mov si, x3r_s_ring
+    call x3_put
+    mov ax, [x3_rsz]
+    call x3c_hex4
+    mov si, x3r_s_la
+    call x3_put
+    mov ax, [x3_lasz]
+    call x3c_hex4
+    mov si, x3r_s_rd
+    call x3_put
+    mov ax, [x3_rdmax]
+    call x3c_hex4
+    mov si, x3r_s_ug
+    call x3_put
+    mov ax, [x3r_ugr]
+    call x3c_hex4
+    mov si, x3r_s_uk
+    call x3_put
+    mov al, [x3r_ukind]
+    call x3c_hex2
     mov si, x3r_s_free
     call x3_put
     mov ax, [x3_free0]
@@ -332,5 +363,7 @@ x3r_write:
     X3B x3r_ev, 1                   ; the event being written
     X3B x3r_off, 1                  ; EVENT D: x3l_offpick's rung
     X3B x3r_st, 1                   ; od_write's state byte
+    X3B x3r_ugr, 2                  ; x3_under: the first underrun's granule
+    X3B x3r_ukind, 1                ; ...and its kind ('U' card, 'S' starved)
     X3B x3r_buf, X3R_BUFSZ          ; the text
 %endmacro
