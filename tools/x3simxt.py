@@ -111,8 +111,32 @@ def speech_div(rate):
     return None
 
 
+def stdd_div(rate):
+    """XT Standard's divisor from its source (SPEC.md 121.4, 121.5): the
+    output near 11 kHz and never under the 8 kHz floor - 2 at 16-24 kHz, 4 at
+    32-48 kHz. An 8-12 kHz source is XT Standard at 1 ('std'), so 'stdd'
+    names only the divided cases."""
+    if 16000 <= rate <= 24000:
+        return 2
+    if rate >= 32000:
+        return 4
+    return None
+
+
 def profile_div(profile, rate):
-    return speech_div(rate) if profile == 'speech' else 1
+    if profile == 'speech':
+        return speech_div(rate)
+    if profile == 'stdd':
+        return stdd_div(rate)
+    return 1
+
+
+def table_profile(profile):
+    """The tables a profile decodes with. 'stdd' - XT Standard divided - IS
+    XT Speech's: the same 16 window terms on the kept phases, the same Lee
+    16/8 and byte-split stages (std at a divisor and speech at it are one
+    output, bit for bit); only the divisor's rule differs."""
+    return 'speech' if profile == 'stdd' else profile
 
 
 # =============================================================================
@@ -524,8 +548,8 @@ def decode(path_or_bytes, profile):
         raise S.Refused(st.refused)
     div = profile_div(profile, st.h0.rate)
     if div is None:
-        raise S.Refused('XT SPEECH: SOURCE RATE')
-    dec = XTDecoder(profile, div)
+        raise S.Refused('XT %s: SOURCE RATE' % profile.upper())
+    dec = XTDecoder(table_profile(profile), div)
     out = [dec.granule(h, chans, plan) for h, chans, plan in records(data)]
     pcm = np.concatenate(out) if out else np.zeros(0, np.uint8)
     return pcm, st.h0.rate // div, dec
@@ -549,7 +573,7 @@ def golden_cases():
     out = []
     for name in GOLDEN_FIXTURES:
         rate = S.Stream(open(os.path.join(S.FIXDIR, name), 'rb').read()).h0.rate
-        for p in ('std', 'fast', 'turbo', 'speech'):
+        for p in ('std', 'fast', 'turbo', 'speech', 'stdd'):
             if profile_div(p, rate) is not None:
                 out.append((name, p))
     return out
@@ -595,7 +619,7 @@ def read_golden():
 
 
 QUICK = (('X8K16.MP3', 'std'), ('X11K24.MP3', 'fast'), ('M16.MP3', 'speech'),
-         ('IS22.MP3', 'turbo'))
+         ('IS22.MP3', 'turbo'), ('C128.MP3', 'stdd'))
 
 
 def check(full=False):
@@ -628,7 +652,8 @@ def _err(a, ref):
                 dc=float(np.mean(e)) if n else 0.0, rms=float(np.sqrt(pe)))
 
 
-def quality(profiles=('std', 'fast', 'turbo', 'speech'), names=GOLDEN_FIXTURES, out=None):
+def quality(profiles=('std', 'fast', 'turbo', 'speech', 'stdd'), names=GOLDEN_FIXTURES,
+            out=None):
     rows = []
     cache = os.path.join(os.path.dirname(GOLDEN), '..', '..', 'build', 'x3lame')
     for name in names:
@@ -681,7 +706,7 @@ def quality(profiles=('std', 'fast', 'turbo', 'speech'), names=GOLDEN_FIXTURES, 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--decode', metavar='FILE')
-    ap.add_argument('--profile', default='std', choices=sorted(PROFILES))
+    ap.add_argument('--profile', default='std', choices=sorted(PROFILES) + ['stdd'])
     ap.add_argument('--out', metavar='WAV')
     ap.add_argument('--check', action='store_true')
     ap.add_argument('--all', action='store_true')
