@@ -979,7 +979,27 @@ br_req:
     call br_rputs
     mov si, br_host
     call br_rputs
+    cmp byte [br_reqpost], 0
+    je .cookie
+    cmp byte [br_cookievalid], 0    ; a POST's body is the tail: add the Cookie
+    je .cookie                      ; header only if the tail still fits after
+    mov ax, br_r_endbody - br_r_posttail + 7
+    add ax, [br_un]                 ; it (header, length digits, CRLFCRLF, body)
+    add ax, di
+    mov si, br_cookievalue
+.cklen:
+    cmp byte [si], 0
+    je .ckfit
+    inc si
+    inc ax
+    jmp short .cklen
+.ckfit:
+    add ax, 10                      ; "\r\nCookie: "
+    cmp ax, bx
+    ja .aftck             ; no room: omit it, keep the body whole
+.cookie:
     call br_reqcookie              ; one bounded session cookie, host-isolated
+.aftck:
     cmp byte [br_reqpost], 0
     je .gettail
     mov si, br_r_posttail
@@ -1134,6 +1154,10 @@ br_take:
     cmp byte [br_fin], 7            ; after a refused growth, drain and discard
     je .step                        ; the rest of the body to close the socket
     mov di, [br_nlen]
+    cmp word [br_srcemshnd], 0
+    je .bst
+    and di, EMS_PAGE-1              ; EMS: the page mapped into quarter zero
+.bst:
     mov [es:di], al
     inc word [br_nlen]
     jnz .step
@@ -1707,6 +1731,9 @@ br_cookiebyte:
     cmp al, '/'
     jne .attrignore
     mov byte [br_ckattrstate], 6
+    mov byte [br_ckpathbuf], '/'    ; the slash is part of the path: seed it
+    mov byte [br_ckpathbuf+1], 0
+    mov word [br_ckattrlen], 1
     jmp .out
 .pathquoted:
     mov byte [br_ckattrstate], 8
@@ -1719,6 +1746,9 @@ br_cookiebyte:
     cmp al, '/'
     jne .attrignore
     mov byte [br_ckattrstate], 9
+    mov byte [br_ckpathbuf], '/'    ; ...for the quoted form too
+    mov byte [br_ckpathbuf+1], 0
+    mov word [br_ckattrlen], 1
     jmp .out
 .pathvalue:
     cmp al, ';'
@@ -2222,6 +2252,8 @@ br_streamparse:
     jne .out
     cmp byte [br_parse_started], 3  ; storage already refused this output prefix
     je .out
+    cmp byte [br_fin], 7            ; growth refused: br_fin must stay 7, and the
+    je .out                         ; parse below would overwrite it with 0
     mov ax, [br_nlen]
     mov [br_srclen], ax
     mov ax, [br_nlen_hi]

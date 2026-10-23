@@ -1794,6 +1794,8 @@ br_dl_step:
     mov byte [br_dl_state], DL_HEAD
     jmp .out
 .head:
+    cmp byte [br_nstate], BN_SEND   ; br_rxb still holds the page's unsent request
+    je .out
     mov cx, BR_CHUNK
     call br_dl_recv
     jc .retry
@@ -1911,6 +1913,8 @@ br_dl_step:
 .recvbody:
     or cx, cx
     jz .finishbody
+    cmp byte [br_nstate], BN_SEND   ; ...see .head: do not receive over it
+    je .out
     call br_dl_recv
     jc .retry
     or cx, cx

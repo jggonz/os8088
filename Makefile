@@ -6831,6 +6831,7 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/browser/br15.inc apps/browser/brdownload.inc \
                       apps/browser/brdownload_bss.inc \
                       apps/browser/brdownload_const.inc \
+                      apps/browser/brdocmarks.inc \
                       apps/browser/brdownload_paint.inc \
                       apps/browser/brcopyselection.inc \
                       apps/os88parts.inc apps/os88partsbody.inc \
@@ -7822,6 +7823,7 @@ $(BUILD)/browser.part.bin: $(BUILD)/browser.bin \
                            apps/browser/brdownload_part.asm \
                            apps/browser/brdownload_paint.inc \
                            apps/browser/brdownload_const.inc \
+                           apps/browser/brdocmarks.inc \
                            apps/browser/brcopyselection.inc \
                            tools/brdlsyms.py apps/os88api.inc | $(BUILD)
 	python3 tools/brdlsyms.py $(BUILD)/browser.map \

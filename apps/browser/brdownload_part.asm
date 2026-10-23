@@ -21,11 +21,5 @@ BR_PATHMAX  equ 96
 %include "brdownload_paint.inc"
 
 ; This optional UI command is called only by the foreground package task.
-D_LNK1 equ 14
-D_CMETA equ 15
-D_PARA equ 10
-D_BR equ 11
-D_ROW equ 12
-D_CELL equ 13
-D_NBSP equ 3
+%include "brdocmarks.inc"
 %include "brcopyselection.inc"

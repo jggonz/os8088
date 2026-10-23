@@ -34,6 +34,8 @@ br_copyselection:
     call OSAPI_CLIP_PUT
     jmp .out
 .page:
+    cmp byte [br_docems], 0         ; an EMS arena has no br_docseg to walk, and
+    jne .out                        ; this scan holds 16-bit offsets, not br_docmap's
     mov ax, [br_selanch]
     mov bx, [br_selend]
     cmp ax, bx
