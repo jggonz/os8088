@@ -1726,6 +1726,8 @@ br_build:
 .markstore:
     push ax
     mov ax, si
+    sub ax, [br_lmapofs]            ; the line's logical document offset,
+    add ax, [br_lbase]              ; as .nh converts it
     dec ax                          ; source offset of this visible cell
     cmp byte [br_tfocus], 3
     jne .selmark
@@ -2587,6 +2589,8 @@ br_onkey:
     call br_ldraw
     jmp .out
 .selectpage:
+    cmp word [br_doclen_hi], 0
+    jne .out                        ; selection holds low words only
     mov byte [br_selkind], 1
     mov word [br_selanch], 0
     mov ax, [br_doclen]
@@ -2800,6 +2804,10 @@ br_tablink:
     push di
     push es
     mov [br_tlinkidx], ax
+    cmp byte [br_docems], 0
+    jne .no                         ; EMS page: br_docseg is 0, not a segment
+    cmp word [br_doclen_hi], 0
+    jne .no
     mov es, [br_docseg]
     xor si, si
 .scan:
@@ -4466,6 +4474,8 @@ br_page_click:
 %ifdef OS88UI_SBDRAG
     cmp byte [br_nodrag], 0
     jne .follow
+    cmp word [br_hofs_hi], 0
+    jne .follow                     ; selection holds low words only
     mov [br_selclick], ax
     mov byte [br_seldrag], 0
     mov byte [br_selkind], 1
@@ -4587,6 +4597,8 @@ br_page_click:
 %ifdef OS88UI_SBDRAG
     cmp byte [br_nodrag], 0
     jne .out
+    cmp word [br_hofs_hi], 0
+    jne .out                        ; selection holds low words only
     mov byte [br_selkind], 1
     mov byte [br_selmode], 1
     mov word [br_selclick], 0FFFFh
@@ -7291,6 +7303,7 @@ br_srcmap:
     mov cx, bx
     cld
     rep movsb
+    push es
     pop ds                          ; restore the Browser data segment
     pop bx
     mov si, br_rxb
@@ -9562,6 +9575,7 @@ br_layout:
 .empty:
     mov word [br_doclen], 0
     mov word [br_doclen_hi], 0
+    xor dx, dx
 .shrink:
     ; Without expansion memory, the line index is the usable page limit.
     ; Discard unindexed formatted bytes and return their conventional claim.
@@ -9570,7 +9584,9 @@ br_layout:
     shl bx, cl                      ; high word in bytes -> KiB
     mov ax, [br_doclen]
     add ax, 1023
-    adc bx, 0
+    jnc .shrinkkb
+    add bx, 64                      ; the carry is 64 KiB, not 1
+.shrinkkb:
     mov cl, 10
     shr ax, cl
     add bx, ax
@@ -11100,8 +11116,11 @@ br_base:
     mov si, br_basescratch
     call br_resolve
     jc .out
-    mov ax, [br_upos]
+    mov ax, [br_lnkw]
+    add ax, [br_upos]
+    jc .out
     inc ax
+    jc .out
     call br_linkensure
     jc .out
     mov dx, [br_lnkw]
@@ -11224,6 +11243,7 @@ br_recordanchor:
 
 ; in: DI = attribute-name pointer, ES = current source span
 br_saveanchor:
+    push es                         ; the copy below reloads ES
     cmp byte [br_anchorcount], BR_ANCHORMAX
     jae .out
     call br_getattr
@@ -11282,6 +11302,7 @@ br_saveanchor:
     mov [br_lnkw], di
     inc byte [br_anchorcount]
 .out:
+    pop es
     ret
 
 ; in: ES:SI = fragment or URL fragment; out: br_top is set and
@@ -12195,6 +12216,7 @@ br_button:
     cmp al, BR_SUBMAX
     jae .out
     mov dl, al
+    mov [br_buttoncur], dl          ; before br_srcabs clobbers DX
     xor ah, ah
     mov bl, BR_SUBSZ
     mul bl
@@ -12213,7 +12235,6 @@ br_button:
     mov [bx+SUB_AEND], ax
     mov [bx+SUB_AEND+2], dx
     pop si
-    mov [br_buttoncur], dl
     inc byte [br_subn]
     mov al, D_B1
     call br_put
@@ -13211,7 +13232,7 @@ br_submit:
     mov es, [br_lnkseg]
     mov dl, [br_formowner+bx]
     call br_targetroute
-    jc .out
+    jc .outes
 .targetok:
     xor ah, ah
     mov bx, ax
@@ -13437,6 +13458,8 @@ br_submit:
     mov byte [br_post], 0
 .out:                               ; br_resolve refused and has already said
     jmp br_pop6                     ; why on the status line
+.outes:                             ; br_targetroute refused, ES still pushed
+    jmp br_pop7
 
 ; Resolve a form action against the BASE HREF saved for its owning document.
 ; The host/path globals are borrowed only for this resolution and restored on
