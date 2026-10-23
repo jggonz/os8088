@@ -6945,11 +6945,19 @@ br_parse:
     jmp .loop
 .rewindpartial:
     cmp byte [br_commentmode], 0
-    jne .savepartial               ; comment scanner already consumed this window
+    jne .rewindchk                 ; comment scanner already consumed this window
     dec si                          ; leave '<' or '&' for the next receive
-    jmp short .savepartial
+    jmp short .rewindchk
 .rewindbyte:
     dec si                          ; the UTF-8 lead byte starts the next slice
+.rewindchk:
+    cmp byte [br_parse_final], 0
+    je .savepartial
+    cmp byte [br_winseam], 0
+    je .savepartial
+    cmp si, [br_srcstart]
+    jbe .savepartial
+    jmp .window                     ; final parse, EMS stage seam: restage here
 .savepartial:
     mov ax, si
     sub ax, [br_srcstart]
@@ -7020,7 +7028,10 @@ br_tokutf8:
     cmp bx, [br_srcwinlen]
     jb .ready
     cmp byte [br_parse_final], 0
-    jne .ready
+    je .await
+    call br_seamwait                ; a stage seam is not the end of the file
+    jnc .ready
+.await:
     stc
     jmp short .out
 .ready:
@@ -7044,14 +7055,15 @@ br_toktag:
     mov ax, bx
     add ax, 3
     cmp ax, [br_srcwinlen]
-    jae .incomplete
+    ja .ordinary                    ; under three bytes: no `<!--` to look for
     cmp byte [es:bx], '!'
     jne .ordinary
     cmp byte [es:bx+1], '-'
     jne .ordinary
     cmp byte [es:bx+2], '-'
     jne .ordinary
-    add bx, 3                       ; comment body follows `<!--`
+    inc bx                          ; search from the `--` of `<!--`, so
+                                    ; `<!-->` closes as br_skipcomment has it
 .comment:
     mov ax, bx
     add ax, 2
@@ -7068,21 +7080,21 @@ br_toktag:
     jmp .comment
 .comment_incomplete:
     cmp byte [br_parse_final], 0
-    jne .ready
+    je .cmtgo
+    cmp byte [br_winseam], 0
+    je .ready                       ; real EOF: the legacy recovery
+.cmtgo:
     mov byte [br_commentmode], 1
     mov byte [br_commentmatch], 0
     cmp word [br_srcwinlen], 2
     jb .commentconsumed
     mov di, [br_srcwinlen]
-    sub di, 2
-    cmp byte [es:di], '-'
-    jne .commentconsumed
-    cmp byte [es:di+1], '-'
-    jne .onehyphen
-    mov byte [br_commentmatch], 2
-    jmp short .commentconsumed
-.onehyphen:
+    cmp byte [es:di-1], '-'
+    jne .commentconsumed            ; last byte is not a hyphen: no match
     mov byte [br_commentmatch], 1
+    cmp byte [es:di-2], '-'
+    jne .commentconsumed
+    mov byte [br_commentmatch], 2
 .commentconsumed:
     mov si, [br_srcwinlen]
     stc
@@ -7112,6 +7124,8 @@ br_toktag:
 .incomplete:
     cmp byte [br_parse_final], 0
     je .wait
+    call br_seamwait                ; a stage seam is not the end of the file
+    jc .wait
     mov byte [br_tokbad], 1
     jmp short .ready
 .wait:
@@ -7124,6 +7138,25 @@ br_toktag:
     pop di
     pop bx
     pop ax
+    ret
+
+; CF=1 when the final parse hit a stage seam and the token (SI is just past
+; its first byte) does not already start the window - rewinding to the token
+; and restaging then makes progress. Otherwise CF=0: treat the end as EOF.
+br_seamwait:
+    cmp byte [br_winseam], 0
+    je .no
+    push ax
+    mov ax, si
+    sub ax, [br_srcstart]
+    cmp ax, 1
+    pop ax
+    ja .yes
+.no:
+    clc
+    ret
+.yes:
+    stc
     ret
 
 ; Continue an HTML comment from the receive cursor. Only a trailing `-` or
@@ -7199,7 +7232,10 @@ br_tokent:
     jmp .scan
 .incomplete:
     cmp byte [br_parse_final], 0
-    jne .ready
+    je .await
+    call br_seamwait                ; a stage seam is not the end of the file
+    jnc .ready
+.await:
     stc
     jmp short .out
 .ready:
@@ -7239,6 +7275,7 @@ br_srcmap:
     add ax, [br_srcseg]
     mov es, ax
     mov [br_srcstart], si
+    mov byte [br_winseam], 0
     mov word [br_srcwinlen], 0xC000
     mov ax, [br_srclen]
     sub ax, [br_srcpos]
@@ -7292,6 +7329,17 @@ br_srcmap:
     jbe .stage
     mov bx, BR_CHUNK
 .stage:
+    mov ax, [br_srclen]
+    sub ax, [br_srcpos]
+    mov dx, [br_srclen_hi]
+    sbb dx, [br_srcpos+2]           ; DX:AX = bytes remaining
+    sub ax, bx
+    sbb dx, 0
+    or ax, dx
+    mov byte [br_winseam], 0
+    jz .seamset                     ; the stage reaches the real end
+    inc byte [br_winseam]           ; more source follows: a seam, not EOF
+.seamset:
     push bx                         ; bounded bytes in the staged source slice
     push si                         ; source offset within the mapped frame
     push es                         ; source EMS frame
@@ -8913,7 +8961,8 @@ br_skipelem:
     jne .scan
     mov byte [br_skipraw], 1
     mov byte [br_skipmatch], 0
-    jmp short .scan
+    jmp short .out                  ; br_skiprawscan owns the body, so a
+                                    ; close tag split at the seam is matched
 .stylecheck:
     cmp byte [br_tname+1], 't'
     jne .scan
@@ -8927,6 +8976,7 @@ br_skipelem:
     jne .scan
     mov byte [br_skipraw], 2
     mov byte [br_skipmatch], 0
+    jmp short .out
 .scan:
 .loop:
     cmp si, [br_srcwinlen]
@@ -14393,7 +14443,8 @@ br_skipmatch     equ br_skipraw + 1     ; close-tag prefix length / 80h tail
 br_commentmode   equ br_skipmatch + 1   ; incremental <!-- ... --> scan
 br_commentmatch equ br_commentmode + 1  ; trailing hyphen count, 0..2
 br_tokbad        equ br_commentmatch + 1 ; final non-comment `<` recovery
-br_rootbaseoff   equ br_tokbad + 1      ; link-arena offset, FFFFh = document URL
+br_winseam       equ br_tokbad + 1      ; window end is an EMS stage seam, not EOF
+br_rootbaseoff   equ br_winseam + 1     ; link-arena offset, FFFFh = document URL
 br_roottargetoff equ br_rootbaseoff + 2 ; BASE TARGET string, FFFFh = none
 br_frametargetoff equ br_roottargetoff + 2 ; eight BASE TARGET offsets
 br_framenameoff equ br_frametargetoff + 16 ; retained FRAME NAME offsets
