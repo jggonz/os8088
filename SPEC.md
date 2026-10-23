@@ -68376,10 +68376,10 @@ count for a 16-bit stream and doubles it, so it stays exact.
 
 #### 34.5.5.1 What it cost, and what proved it
 
-**+691 bytes of `SOUND.DRV`'s image, 11,134 → 11,825, and that CROSSES A
+**+689 bytes of `SOUND.DRV`'s image, 11,134 → 11,823, and that CROSSES A
 CLAIM RUNG: the driver's heap claim goes from 11KB to 12KB** on every machine
 that loads it, card or no card. The rung was 130 bytes away, so no version of
-this feature fitted under it; the image sits 463 bytes inside the new one. No
+this feature fitted under it; the image sits 465 bytes inside the new one. No
 kernel byte, and kern_small ships no `SOUND.DRV` (§34.0).
 
 | where | bytes |
@@ -68391,7 +68391,7 @@ kernel byte, and kern_small ships no `SOUND.DRV` (§34.0).
 | close (`D9h`, the high channel masked, `2xFh`, `0Eh` restored) | 51 |
 | verb 11 and its row | 46 |
 | verb 9's word count | 37 |
-| the ISR (`2xFh` through `[sbl_ackp]`, the primer's leg), halt and continue | 34 |
+| the ISR (`2xFh` through `[sbl_ackp]`, the primer's leg), halt and continue | 32 |
 | caps, the page-register table, release, attach, state | 56 |
 
 The Drivers page's column (`DRVM_IMG_SND`, `kernel/driver.inc`) says 12 with
