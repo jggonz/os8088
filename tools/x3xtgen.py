@@ -576,11 +576,6 @@ def const_tables():
     L.append('x3x_tw:       ; per i: -tw1, -tw0, tw1 (Q15): z[9+i], z[8-i]')
     for i in range(9):
         L.append('    dw %d, %d, %d' % (-TW1[i], -TW0[i], TW1[i]))
-    # short band widths per (version, sr_idx): version 1, 2, 25 at 0, 3, 6
-    L.append('x3x_sfbs:     ; 13 short-band widths, (version, rate) 1/0..2, 2/0..2, 2.5/0..2')
-    for v in (1, 2, 25):
-        for r in range(3):
-            L.append('    db %s' % ', '.join(str(w) for w in ISO.SFB_SHORT[(v, r)]))
     Q = TB.STD
     L.append('x3x_p43f:     dw %s' % ', '.join(str(v) for v in Q.P43_F))
     L.append('x3x_p43m:')
@@ -624,6 +619,14 @@ def profile_data(profile):
     fl = fl32_chain(expanded(profile))
     out.append('X3X_%s_FL32_LO equ 0%04Xh' % (P, fl & 0xFFFF))
     out.append('X3X_%s_FL32_HI equ 0%04Xh' % (P, fl >> 16))
+    # CAPS' block (x3gran.inc X3C_NSEG, X3C_PARA[6], X3C_TKB): the segments in
+    # OPEN's order - the window segments, SY, H1, H2 - each its own claim
+    paras_ = [paras(nb) for _, nb in L['segs']]
+    tkb = (sum(len(b) for b in expanded(profile)) + 1023) // 1024
+    out.append('x3x_%s_caps:   ; db segments, 6 dw paragraphs, dw KB of tables' % profile)
+    out.append('    db %d' % len(paras_))
+    out.append('    dw %s' % ', '.join(str(v) for v in paras_ + [0] * (6 - len(paras_))))
+    out.append('    dw %d' % tkb)
     out.append('x3x_%s_wsegs:  ; per window segment: paragraph offset, rows, ring offset, ring bytes, row list' % profile)
     for g, s in enumerate(L['win']):
         out.append('    dw %d, %d, %d, %d, x3x_%s_rows%d' % (

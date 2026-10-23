@@ -6316,9 +6316,11 @@ $(BUILD)/x3stdp.bin: apps/xtmp3/x3std.asm $(X3PARTDEP) | $(BUILD)
 	@echo "x3stdp: $(call FILESIZE,$@) bytes"
 
 # --- XTMP3's XT BACKEND (S7; SPEC.md 121.3, 121.4, 121.10; docs/xtmp3/XT.md):
-# x3xt.asm is a far-called OP_SEG part and XTGEN.BIN its generator input, an
-# asset its OPEN expands into the profile's table pack (tools/x3xttab.py's
-# recurrences, a Fletcher-32 checked against the generator's).
+# x3xt.asm is a far-called OP_SEG part carrying XTGEN.BIN, its generator
+# input, inside itself (x3gran.inc's OPEN record has no slot for an asset);
+# its OPEN expands the profile's table pack into the segments it is handed
+# (tools/x3xttab.py's recurrences, a Fletcher-32 checked against the
+# generator's).
 # build/x3xtk.inc is what tools/x3xtgen.py assembles for it - the claim's
 # layout, Lee's DCTs, each profile's window pass, the IMDCT row blocks -
 # after x3xttab's and its own --selfcheck; both are standard library only,
@@ -6332,7 +6334,8 @@ $(BUILD)/x3xtk.inc: $(X3XTGENDEPS) | $(BUILD)
 $(BUILD)/XTGEN.BIN: $(X3XTGENDEPS) | $(BUILD)
 	python3 tools/x3xtgen.py --xtgen $@
 
-$(BUILD)/x3xt.bin: apps/xtmp3/x3xt.asm $(BUILD)/x3xtk.inc | $(BUILD)
+$(BUILD)/x3xt.bin: apps/xtmp3/x3xt.asm apps/xtmp3/x3gran.inc $(BUILD)/x3xtk.inc \
+                   $(BUILD)/XTGEN.BIN | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/xtmp3/ -I $(BUILD)/ -o $@ apps/xtmp3/x3xt.asm
 	@echo "x3xt:   $(call FILESIZE,$@) bytes"
 

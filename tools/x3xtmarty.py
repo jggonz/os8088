@@ -41,10 +41,10 @@ import x3xttab as XT       # noqa: E402
 
 HZ = 4772727.0
 PART_SEG = 0x1000
-GEN_SEG = 0x2000
 CLAIM_SEG = 0x2200
-REC_SEG = 0x6000
-OUT_SEG = 0x6200
+REC_SEG = 0x8000
+OUT_SEG = 0x8200
+ARG_SEG = 0x8300
 STUB = 0x0500
 PNUM = {'std': 0, 'fast': 1, 'turbo': 2, 'speech': 3}
 
@@ -52,6 +52,7 @@ PNUM = {'std': 0, 'fast': 1, 'turbo': 2, 'speech': 3}
 def build(d, fast_min=None):
     inc = os.path.join(d, 'x3xtk.inc')
     G.emit(inc)
+    G.xtgen(os.path.join(d, 'XTGEN.BIN'))
     if fast_min is not None:            # a measurement of the IMDCT switch
         t = open(inc).read().replace('X3X_FAST_MIN equ %d' % G.FAST_MIN,
                                      'X3X_FAST_MIN equ %d' % fast_min)
@@ -63,6 +64,8 @@ def build(d, fast_min=None):
     out = os.path.join(d, 'x3xt.bin')
     subprocess.run(['nasm', '-f', 'bin', '-w+error', '-I', os.path.join(ROOT, 'apps', 'xtmp3') + '/',
                     '-I', d + '/', '-o', out, wrap], check=True)
+    global IMAGE
+    IMAGE = open(out, 'rb').read()
     sym = {}
     for line in open(mp):
         w = line.split()
@@ -74,7 +77,12 @@ def build(d, fast_min=None):
     return open(out, 'rb').read(), sym
 
 
-def stub(verb, ax=0, bx=0, cx=0, dx=0, si=0, di=0, ds=0, es=0):
+IMAGE = b''
+
+
+def stub(verb, ax=0, bx=0, cx=0, dx=0, si=0, di=0, ds=PART_SEG, es=0):
+    """Load the registers, far-call the verb through the part header's
+    vector (x3gran.inc: DS = the part's segment), stop on `done`."""
     b = bytearray()
     b += b'\xFA'                                    # cli
     b += b'\xB8' + struct.pack('<H', 0x7000) + b'\x8E\xD0'   # mov ax,7000h / mov ss,ax
@@ -87,7 +95,7 @@ def stub(verb, ax=0, bx=0, cx=0, dx=0, si=0, di=0, ds=0, es=0):
     b += b'\xBB' + struct.pack('<H', bx)
     b += b'\xB9' + struct.pack('<H', cx)
     b += b'\xB8' + struct.pack('<H', ax)
-    b += b'\x9A' + struct.pack('<HH', 3 * verb, PART_SEG)
+    b += b'\x9A' + struct.pack('<HH', struct.unpack_from('<H', IMAGE, 6 + 2 * verb)[0], PART_SEG)
     done = len(b)
     b += b'\x90\xEB\xFD'                            # done: nop / jmp done
     return bytes(b), STUB + done
@@ -105,9 +113,25 @@ class Bench:
         self.m, self.image, self.sym = m, image, sym
         m.pause()
         m.write(PART_SEG * 16, image)
-        m.write(GEN_SEG * 16, XT.gen_input())
         self.base = 0
         self.base = self.call(5)[0]                  # CLOSE: the stub alone
+
+    def open(self, prof, div, ver, sri, trace=None):
+        """CAPS, the segments laid end to end from CLAIM_SEG, then OPEN."""
+        m = self.m
+        m.pause()
+        self.call(0, ax=PNUM[prof] | (div << 8), cx=1, es=ARG_SEG, di=0)
+        c = bytes(m.read(ARG_SEG * 16, 18))
+        nseg = c[1]
+        paras = struct.unpack_from('<6H', c, 2)[:nseg]
+        segs, at = [], CLAIM_SEG
+        for p_ in paras:
+            segs.append(at)
+            at += p_
+        rec = struct.pack('<BBBBBBBBHBB', PNUM[prof], div, 1, 1, 1, ver, sri, 0, 0, nseg, 0)
+        rec += struct.pack('<6H', *(list(segs) + [0] * (6 - nseg)))
+        m.write(ARG_SEG * 16, rec)
+        return self.call(1, trace=trace, es=ARG_SEG, di=0)
 
     def call(self, verb, trace=None, **regs):
         m = self.m
@@ -229,8 +253,9 @@ def run(args):
             for prof in args.profile:
                 div = 2 if prof == 'speech' else 1
                 tr = [(sym[n], n) for n in OMARK]
-                cyc, r, hits = b.call(1, trace=tr, ax=PNUM[prof] | (div << 8), es=GEN_SEG,
-                                      dx=CLAIM_SEG)
+                h0 = S.Stream(open(os.path.join(S.FIXDIR, args.fixture[0]), 'rb').read()).h0
+                ver = 25 if prof == 'speech' and div == 2 else h0.version
+                cyc, r, hits = b.open(prof, div, ver if prof != 'speech' else 25, h0.sr_idx, trace=tr)
                 top, fl = open_stages(hits)
                 ok = not (r['flags'] & 1) if 'flags' in r else None
                 res['open'][prof] = {'cycles': cyc, 'seconds': cyc / HZ, 'regions': top,
@@ -243,9 +268,7 @@ def run(args):
                     pdiv = SX.profile_div(prof, st.h0.rate)
                     if pdiv is None:
                         continue
-                    if pdiv != div:
-                        b.call(1, ax=PNUM[prof] | (pdiv << 8), es=GEN_SEG, dx=CLAIM_SEG)
-                    b.call(2)                       # RESET
+                    b.open(prof, pdiv, st.h0.version, st.h0.sr_idx)
                     dec = SX.XTDecoder(prof, pdiv)
                     if args.fastmin is not None:
                         dec.fast_min = args.fastmin
